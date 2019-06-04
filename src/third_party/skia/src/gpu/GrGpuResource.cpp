@@ -21,10 +21,10 @@ static inline GrResourceCache* get_resource_cache(GrGpu* gpu) {
 }
 
 GrGpuResource::GrGpuResource(GrGpu* gpu)
-    : fExternalFlushCntWhenBecamePurgeable(0)
-    , fGpu(gpu)
+    : fGpu(gpu)
     , fGpuMemorySize(kInvalidGpuMemorySize)
     , fBudgeted(SkBudgeted::kNo)
+    , fShouldPurgeImmediately(false)
     , fRefsWrappedObjects(false)
     , fUniqueID(CreateUniqueID()) {
     SkDEBUGCODE(fCacheArrayIndex = -1);
@@ -32,14 +32,16 @@ GrGpuResource::GrGpuResource(GrGpu* gpu)
 
 void GrGpuResource::registerWithCache(SkBudgeted budgeted) {
     SkASSERT(fBudgeted == SkBudgeted::kNo);
+    SkASSERT(!fShouldPurgeImmediately);
     fBudgeted = budgeted;
     this->computeScratchKey(&fScratchKey);
     get_resource_cache(fGpu)->resourceAccess().insertResource(this);
 }
 
-void GrGpuResource::registerWithCacheWrapped() {
+void GrGpuResource::registerWithCacheWrapped(bool purgeImmediately) {
     SkASSERT(fBudgeted == SkBudgeted::kNo);
     // Currently resources referencing wrapped objects are not budgeted.
+    fShouldPurgeImmediately = purgeImmediately;
     fRefsWrappedObjects = true;
     get_resource_cache(fGpu)->resourceAccess().insertResource(this);
 }
@@ -116,17 +118,6 @@ GrContext* GrGpuResource::getContext() {
     } else {
         return nullptr;
     }
-}
-
-void GrGpuResource::didChangeGpuMemorySize() const {
-    if (this->wasDestroyed()) {
-        return;
-    }
-
-    size_t oldSize = fGpuMemorySize;
-    SkASSERT(kInvalidGpuMemorySize != oldSize);
-    fGpuMemorySize = kInvalidGpuMemorySize;
-    get_resource_cache(fGpu)->resourceAccess().didChangeGpuMemorySize(this, oldSize);
 }
 
 void GrGpuResource::removeUniqueKey() {

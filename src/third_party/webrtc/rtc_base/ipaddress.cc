@@ -9,26 +9,19 @@
  */
 
 #if defined(WEBRTC_POSIX)
-#include <sys/types.h>
-#include <sys/socket.h>
 #include <netinet/in.h>
+#include <sys/socket.h>
 #ifdef OPENBSD
 #include <netinet/in_systm.h>
 #endif
 #ifndef __native_client__
 #include <netinet/ip.h>
 #endif
-#include <arpa/inet.h>
 #include <netdb.h>
-#include <unistd.h>
 #endif
 
-#include <stdio.h>
-
 #include "rtc_base/byteorder.h"
-#include "rtc_base/checks.h"
 #include "rtc_base/ipaddress.h"
-#include "rtc_base/logging.h"
 #include "rtc_base/nethelpers.h"
 #include "rtc_base/stringutils.h"
 
@@ -39,8 +32,8 @@
 namespace rtc {
 
 // Prefixes used for categorizing IPv6 addresses.
-static const in6_addr kV4MappedPrefix = {{{0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-                                           0xFF, 0xFF, 0}}};
+static const in6_addr kV4MappedPrefix = {
+    {{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xFF, 0xFF, 0}}};
 static const in6_addr k6To4Prefix = {{{0x20, 0x02, 0}}};
 static const in6_addr kTeredoPrefix = {{{0x20, 0x01, 0x00, 0x00}}};
 static const in6_addr kV4CompatibilityPrefix = {{{0}}};
@@ -48,7 +41,8 @@ static const in6_addr k6BonePrefix = {{{0x3f, 0xfe, 0}}};
 static const in6_addr kPrivateNetworkPrefix = {{{0xFD}}};
 
 static bool IPIsHelper(const IPAddress& ip,
-                       const in6_addr& tomatch, int length);
+                       const in6_addr& tomatch,
+                       int length);
 static in_addr ExtractMappedAddress(const in6_addr& addr);
 
 uint32_t IPAddress::v4AddressAsHostOrderInteger() const {
@@ -73,8 +67,7 @@ size_t IPAddress::Size() const {
   return 0;
 }
 
-
-bool IPAddress::operator==(const IPAddress &other) const {
+bool IPAddress::operator==(const IPAddress& other) const {
   if (family_ != other.family_) {
     return false;
   }
@@ -87,15 +80,15 @@ bool IPAddress::operator==(const IPAddress &other) const {
   return family_ == AF_UNSPEC;
 }
 
-bool IPAddress::operator!=(const IPAddress &other) const {
+bool IPAddress::operator!=(const IPAddress& other) const {
   return !((*this) == other);
 }
 
-bool IPAddress::operator >(const IPAddress &other) const {
+bool IPAddress::operator>(const IPAddress& other) const {
   return (*this) != other && !((*this) < other);
 }
 
-bool IPAddress::operator <(const IPAddress &other) const {
+bool IPAddress::operator<(const IPAddress& other) const {
   // IPv4 is 'less than' IPv6
   if (family_ != other.family_) {
     if (family_ == AF_UNSPEC) {
@@ -110,7 +103,7 @@ bool IPAddress::operator <(const IPAddress &other) const {
   switch (family_) {
     case AF_INET: {
       return NetworkToHost32(u_.ip4.s_addr) <
-          NetworkToHost32(other.u_.ip4.s_addr);
+             NetworkToHost32(other.u_.ip4.s_addr);
     }
     case AF_INET6: {
       return memcmp(&u_.ip6.s6_addr, &other.u_.ip6.s6_addr, 16) < 0;
@@ -162,11 +155,10 @@ std::string IPAddress::ToSensitiveString() const {
       std::string result;
       result.resize(INET6_ADDRSTRLEN);
       in6_addr addr = ipv6_address();
-      size_t len =
-          rtc::sprintfn(&(result[0]), result.size(), "%x:%x:%x:x:x:x:x:x",
-                        (addr.s6_addr[0] << 8) + addr.s6_addr[1],
-                        (addr.s6_addr[2] << 8) + addr.s6_addr[3],
-                        (addr.s6_addr[4] << 8) + addr.s6_addr[5]);
+      size_t len = snprintf(&(result[0]), result.size(), "%x:%x:%x:x:x:x:x:x",
+                            (addr.s6_addr[0] << 8) + addr.s6_addr[1],
+                            (addr.s6_addr[2] << 8) + addr.s6_addr[3],
+                            (addr.s6_addr[4] << 8) + addr.s6_addr[5]);
       result.resize(len);
       return result;
     }
@@ -195,17 +187,17 @@ IPAddress IPAddress::AsIPv6Address() const {
   return IPAddress(v6addr);
 }
 
-bool InterfaceAddress::operator==(const InterfaceAddress &other) const {
+bool InterfaceAddress::operator==(const InterfaceAddress& other) const {
   return ipv6_flags_ == other.ipv6_flags() &&
-    static_cast<const IPAddress&>(*this) == other;
+         static_cast<const IPAddress&>(*this) == other;
 }
 
-bool InterfaceAddress::operator!=(const InterfaceAddress &other) const {
+bool InterfaceAddress::operator!=(const InterfaceAddress& other) const {
   return !((*this) == other);
 }
 
 const InterfaceAddress& InterfaceAddress::operator=(
-  const InterfaceAddress& other) {
+    const InterfaceAddress& other) {
   ipv6_flags_ = other.ipv6_flags_;
   static_cast<IPAddress&>(*this) = other;
   return *this;
@@ -223,8 +215,8 @@ std::string InterfaceAddress::ToString() const {
 static bool IPIsPrivateNetworkV4(const IPAddress& ip) {
   uint32_t ip_in_host_order = ip.v4AddressAsHostOrderInteger();
   return ((ip_in_host_order >> 24) == 10) ||
-      ((ip_in_host_order >> 20) == ((172 << 4) | 1)) ||
-      ((ip_in_host_order >> 16) == ((192 << 8) | 168));
+         ((ip_in_host_order >> 20) == ((172 << 4) | 1)) ||
+         ((ip_in_host_order >> 16) == ((192 << 8) | 168));
 }
 
 static bool IPIsPrivateNetworkV6(const IPAddress& ip) {
@@ -283,8 +275,7 @@ bool IPFromString(const std::string& str, IPAddress* out) {
   return true;
 }
 
-bool IPFromString(const std::string& str, int flags,
-                  InterfaceAddress* out) {
+bool IPFromString(const std::string& str, int flags, InterfaceAddress* out) {
   IPAddress ip;
   if (!IPFromString(str, &ip)) {
     return false;
@@ -416,9 +407,7 @@ int CountIPMaskBits(IPAddress mask) {
       bits = (i * 32);
       break;
     }
-    default: {
-      return 0;
-    }
+    default: { return 0; }
   }
   if (word_to_count == 0) {
     return bits;
@@ -431,12 +420,18 @@ int CountIPMaskBits(IPAddress mask) {
   // This could also be written word_to_count &= -word_to_count, but
   // MSVC emits warning C4146 when negating an unsigned number.
   word_to_count &= ~word_to_count + 1;  // Isolate lowest set bit.
-  if (word_to_count) zeroes--;
-  if (word_to_count & 0x0000FFFF) zeroes -= 16;
-  if (word_to_count & 0x00FF00FF) zeroes -= 8;
-  if (word_to_count & 0x0F0F0F0F) zeroes -= 4;
-  if (word_to_count & 0x33333333) zeroes -= 2;
-  if (word_to_count & 0x55555555) zeroes -= 1;
+  if (word_to_count)
+    zeroes--;
+  if (word_to_count & 0x0000FFFF)
+    zeroes -= 16;
+  if (word_to_count & 0x00FF00FF)
+    zeroes -= 8;
+  if (word_to_count & 0x0F0F0F0F)
+    zeroes -= 4;
+  if (word_to_count & 0x33333333)
+    zeroes -= 2;
+  if (word_to_count & 0x55555555)
+    zeroes -= 1;
 
   return bits + (32 - zeroes);
 }

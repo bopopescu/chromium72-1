@@ -53,8 +53,9 @@ const SkColor kHeaderTextColorNormal = SkColorSetARGB(0x7f, 0, 0, 0);
 
 const SkColor kMobileNotConnectedXIconColor = SkColorSetRGB(0xb2, 0xb2, 0xb2);
 
-const int kTrayIconSize = 16;
 const SkColor kTrayIconColor = SK_ColorWHITE;
+const SkColor kOobeTrayIconColor = gfx::kGoogleGrey600;
+
 const int kMenuIconSize = 20;
 const SkColor kMenuIconColor = gfx::kChromeIconGrey;
 const SkColor kMenuIconColorDisabled = SkColorSetA(gfx::kChromeIconGrey, 0x61);
@@ -65,7 +66,6 @@ const int kMenuEdgeEffectivePadding =
     kMenuExtraMarginFromLeftEdge + (kMenuButtonSize - kMenuIconSize) / 2;
 
 const int kHitRegionPadding = 4;
-const int kSeparatorWidth = 1;
 
 const SkColor kMenuSeparatorColor = SkColorSetA(SK_ColorBLACK, 0x1F);
 
@@ -76,5 +76,17 @@ const int kTrayPopupInkDropInset = 4;
 const int kTrayPopupInkDropCornerRadius = 2;
 
 const int kTrayPopupSystemInfoRowHeight = 40;
+
+static_assert(kTrayMenuWidth == kUnifiedFeaturePodHorizontalSidePadding * 2 +
+                                    kUnifiedFeaturePodHorizontalMiddlePadding *
+                                        (kUnifiedFeaturePodItemsInRow - 1) +
+                                    kUnifiedFeaturePodSize.width() *
+                                        kUnifiedFeaturePodItemsInRow,
+              "Total feature pod width does not match kTrayMenuWidth");
+
+// static
+int TrayConstants::GetTrayIconSize() {
+  return kUnifiedTrayIconSize;
+}
 
 }  // namespace ash

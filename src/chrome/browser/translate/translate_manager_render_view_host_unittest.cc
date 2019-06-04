@@ -22,6 +22,7 @@
 #include "chrome/browser/infobars/infobar_service.h"
 #include "chrome/browser/renderer_context_menu/render_view_context_menu_test_util.h"
 #include "chrome/browser/translate/chrome_translate_client.h"
+#include "chrome/browser/translate/translate_fake_page.h"
 #include "chrome/browser/translate/translate_service.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/translate/translate_bubble_factory.h"
@@ -55,7 +56,6 @@
 #include "content/public/browser/notification_registrar.h"
 #include "content/public/browser/notification_types.h"
 #include "content/public/browser/web_contents.h"
-#include "content/public/common/browser_side_navigation_policy.h"
 #include "content/public/common/url_constants.h"
 #include "content/public/test/navigation_simulator.h"
 #include "content/public/test/test_renderer_host.h"
@@ -65,8 +65,11 @@
 #include "net/url_request/url_fetcher_delegate.h"
 #include "net/url_request/url_request_status.h"
 #include "net/url_request/url_request_test_util.h"
+#include "services/network/public/cpp/weak_wrapper_shared_url_loader_factory.h"
+#include "services/network/test/test_url_loader_factory.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "third_party/blink/public/web/web_context_menu_data.h"
+#include "ui/base/page_transition_types.h"
 #include "url/gurl.h"
 
 namespace {
@@ -119,63 +122,6 @@ class MockTranslateBubbleFactory : public TranslateBubbleFactory {
   DISALLOW_COPY_AND_ASSIGN(MockTranslateBubbleFactory);
 };
 
-class FakePageImpl : public translate::mojom::Page {
- public:
-  FakePageImpl()
-      : called_translate_(false),
-        called_revert_translation_(false),
-        binding_(this) {}
-  ~FakePageImpl() override {}
-
-  translate::mojom::PagePtr BindToNewPagePtr() {
-    binding_.Close();
-    translate_callback_pending_.Reset();
-    translate::mojom::PagePtr page;
-    binding_.Bind(mojo::MakeRequest(&page));
-    return page;
-  }
-
-  // translate::mojom::Page implementation.
-  void Translate(const std::string& translate_script,
-                 const std::string& source_lang,
-                 const std::string& target_lang,
-                 TranslateCallback callback) override {
-    // Ensure pending callback gets called.
-    if (translate_callback_pending_) {
-      std::move(translate_callback_pending_)
-          .Run(true, "", "", translate::TranslateErrors::NONE);
-    }
-
-    called_translate_ = true;
-    source_lang_ = source_lang;
-    target_lang_ = target_lang;
-
-    translate_callback_pending_ = std::move(callback);
-  }
-
-  void RevertTranslation() override { called_revert_translation_ = true; }
-
-  void PageTranslated(bool cancelled,
-                      const std::string& source_lang,
-                      const std::string& target_lang,
-                      translate::TranslateErrors::Type error) {
-    std::move(translate_callback_pending_)
-        .Run(cancelled, source_lang, target_lang, error);
-  }
-
-  bool called_translate_;
-  base::Optional<std::string> source_lang_;
-  base::Optional<std::string> target_lang_;
-  bool called_revert_translation_;
-
- private:
-  TranslateCallback translate_callback_pending_;
-
-  mojo::Binding<translate::mojom::Page> binding_;
-
-  DISALLOW_COPY_AND_ASSIGN(FakePageImpl);
-};
-
 }  // namespace
 
 // An observer that keeps track of whether a navigation entry was committed.
@@ -215,9 +161,12 @@ class TranslateManagerRenderViewHostTest
       : pref_callback_(
             base::Bind(&TranslateManagerRenderViewHostTest::OnPreferenceChanged,
                        base::Unretained(this))),
+        test_shared_loader_factory_(
+            base::MakeRefCounted<network::WeakWrapperSharedURLLoaderFactory>(
+                &test_url_loader_factory_)),
         infobar_observer_(this) {}
 
-#if !defined(USE_AURA)
+#if !defined(USE_AURA) && !defined(OS_MACOSX)
   // Ensure that we are testing under the bubble UI.
   // TODO(groby): Remove once the bubble is enabled by default everywhere.
   // http://crbug.com/507442
@@ -282,7 +231,7 @@ class TranslateManagerRenderViewHostTest
       return infobar->translate_step();
     }
   }
-#endif  // defined(USE_AURA)
+#endif  // defined(USE_AURA) && !defined(OS_MACOSX)
 
   // Simulates navigating to a page and getting the page contents and language
   // for that navigation.
@@ -365,7 +314,7 @@ class TranslateManagerRenderViewHostTest
         NULL;
   }
 
-#if !defined(USE_AURA)
+#if !defined(USE_AURA) && !defined(OS_MACOSX)
   // If there is 1 infobar and it is a translate infobar, closes it and returns
   // true.  Returns false otherwise.
   bool CloseTranslateInfoBar() {
@@ -404,7 +353,7 @@ class TranslateManagerRenderViewHostTest
       return true;
     }
   }
-#endif  // defined(USE_AURA)
+#endif  // defined(USE_AURA) && !defined(OS_MACOSX)
 
   void ReloadAndWait(bool successful_reload) {
     NavEntryCommittedObserver nav_observer(web_contents());
@@ -418,8 +367,9 @@ class TranslateManagerRenderViewHostTest
     // Ensures it is really handled a reload.
     const content::LoadCommittedDetails& nav_details =
         nav_observer.load_committed_details();
-    EXPECT_TRUE(nav_details.entry != NULL);  // There was a navigation.
-    EXPECT_EQ(content::NAVIGATION_TYPE_EXISTING_PAGE, nav_details.type);
+    EXPECT_TRUE(nav_details.entry);  // There was a navigation.
+    EXPECT_TRUE(ui::PageTransitionCoreTypeIs(
+        ui::PAGE_TRANSITION_RELOAD, nav_details.entry->GetTransitionType()));
 
     // The TranslateManager class processes the navigation entry committed
     // notification in a posted task; process that task.
@@ -436,7 +386,7 @@ class TranslateManagerRenderViewHostTest
     params.spellcheck_enabled = false;
     params.is_editable = false;
     params.page_url =
-        web_contents()->GetController().GetActiveEntry()->GetURL();
+        web_contents()->GetController().GetLastCommittedEntry()->GetURL();
 #if defined(OS_MACOSX)
     params.writing_direction_default = 0;
     params.writing_direction_left_to_right = 0;
@@ -467,13 +417,13 @@ class TranslateManagerRenderViewHostTest
     // Clears the translate script so it is fetched every time and sets the
     // expiration delay to a large value by default (in case it was zeroed in a
     // previous test).
-    TranslateService::InitializeForTesting();
+    TranslateService::InitializeForTesting(
+        network::mojom::ConnectionType::CONNECTION_WIFI);
     translate::TranslateDownloadManager* download_manager =
         translate::TranslateDownloadManager::GetInstance();
     download_manager->ClearTranslateScriptForTesting();
     download_manager->SetTranslateScriptExpirationDelay(60 * 60 * 1000);
-    download_manager->set_request_context(new net::TestURLRequestContextGetter(
-        base::ThreadTaskRunnerHandle::Get()));
+    download_manager->set_url_loader_factory(test_shared_loader_factory_);
 
     InfoBarService::CreateForWebContents(web_contents());
     ChromeTranslateClient::CreateForWebContents(web_contents());
@@ -492,21 +442,20 @@ class TranslateManagerRenderViewHostTest
   }
 
   void SimulateTranslateScriptURLFetch(bool success) {
-    net::TestURLFetcher* fetcher = url_fetcher_factory_.GetFetcherByID(
-        translate::TranslateScript::kFetcherId);
-    ASSERT_TRUE(fetcher);
-    net::Error error = success ? net::OK : net::ERR_FAILED;
-    fetcher->set_url(fetcher->GetOriginalURL());
-    fetcher->set_status(net::URLRequestStatus::FromError(error));
-    fetcher->set_response_code(success ? 200 : 500);
-    fetcher->delegate()->OnURLFetchComplete(fetcher);
+    GURL url = translate::TranslateDownloadManager::GetInstance()
+                   ->script()
+                   ->GetTranslateScriptURL();
+    test_url_loader_factory_.AddResponse(
+        url.spec(), std::string(),
+        success ? net::HTTP_OK : net::HTTP_INTERNAL_SERVER_ERROR);
+    base::RunLoop().RunUntilIdle();
+
+    test_url_loader_factory_.ClearResponses();
   }
 
   void SimulateSupportedLanguagesURLFetch(
       bool success,
       const std::vector<std::string>& languages) {
-    net::Error error = success ? net::OK : net::ERR_FAILED;
-
     std::string data;
     if (success) {
       data = base::StringPrintf(
@@ -521,14 +470,17 @@ class TranslateManagerRenderViewHostTest
       }
       data += "}}";
     }
-    net::TestURLFetcher* fetcher = url_fetcher_factory_.GetFetcherByID(
-        translate::TranslateLanguageList::kFetcherId);
-    ASSERT_TRUE(fetcher != NULL);
-    fetcher->set_url(fetcher->GetOriginalURL());
-    fetcher->set_status(net::URLRequestStatus::FromError(error));
-    fetcher->set_response_code(success ? 200 : 500);
-    fetcher->SetResponseString(data);
-    fetcher->delegate()->OnURLFetchComplete(fetcher);
+    GURL url = translate::TranslateDownloadManager::GetInstance()
+                   ->language_list()
+                   ->LanguageFetchURLForTesting();
+    EXPECT_TRUE(test_url_loader_factory_.IsPending(url.spec()));
+    test_url_loader_factory_.AddResponse(
+        url.spec(), data,
+        success ? net::HTTP_OK : net::HTTP_INTERNAL_SERVER_ERROR);
+    EXPECT_FALSE(test_url_loader_factory_.IsPending(url.spec()));
+    base::RunLoop().RunUntilIdle();
+
+    test_url_loader_factory_.ClearResponses();
   }
 
   void SetPrefObserverExpectation(const char* path) {
@@ -538,7 +490,8 @@ class TranslateManagerRenderViewHostTest
   PrefChangeRegistrar::NamedChangeCallback pref_callback_;
 
  private:
-  net::TestURLFetcherFactory url_fetcher_factory_;
+  network::TestURLLoaderFactory test_url_loader_factory_;
+  scoped_refptr<network::SharedURLLoaderFactory> test_shared_loader_factory_;
 
   // The infobars that have been removed.
   // WARNING: the pointers point to deleted objects, use only for comparison.
@@ -638,7 +591,7 @@ TEST_F(TranslateManagerRenderViewHostTest, FetchLanguagesFromTranslateServer) {
 // The following tests depend on the translate infobar. They should be ported to
 // use the translate bubble. On Aura there is no infobar so the tests are not
 // compiled.
-#if !defined(USE_AURA)
+#if !defined(USE_AURA) && !defined(OS_MACOSX)
 TEST_F(TranslateManagerRenderViewHostTest, NormalTranslate) {
   // See BubbleNormalTranslate for corresponding bubble UX testing.
   if (TranslateService::IsTranslateBubbleEnabled())
@@ -1325,8 +1278,9 @@ TEST_F(TranslateManagerRenderViewHostTest, NeverTranslateSitePref) {
   PrefService* prefs = profile->GetPrefs();
   PrefChangeRegistrar registrar;
   registrar.Init(prefs);
-  registrar.Add(translate::TranslatePrefs::kPrefTranslateSiteBlacklist,
-                pref_callback_);
+  registrar.Add(
+      translate::TranslatePrefs::kPrefTranslateSiteBlacklistDeprecated,
+      pref_callback_);
   std::unique_ptr<translate::TranslatePrefs> translate_prefs(
       ChromeTranslateClient::CreateTranslatePrefs(prefs));
   EXPECT_FALSE(translate_prefs->IsSiteBlacklisted(host));
@@ -1334,7 +1288,7 @@ TEST_F(TranslateManagerRenderViewHostTest, NeverTranslateSitePref) {
       ChromeTranslateClient::GetTranslateAcceptLanguages(profile);
   EXPECT_TRUE(translate_prefs->CanTranslateLanguage(accept_languages, "fr"));
   SetPrefObserverExpectation(
-      translate::TranslatePrefs::kPrefTranslateSiteBlacklist);
+      translate::TranslatePrefs::kPrefTranslateSiteBlacklistDeprecated);
   translate_prefs->BlacklistSite(host);
   EXPECT_TRUE(translate_prefs->IsSiteBlacklisted(host));
   EXPECT_TRUE(translate_prefs->CanTranslateLanguage(accept_languages, "fr"));
@@ -1349,7 +1303,7 @@ TEST_F(TranslateManagerRenderViewHostTest, NeverTranslateSitePref) {
 
   // Remove the site from the blacklist.
   SetPrefObserverExpectation(
-      translate::TranslatePrefs::kPrefTranslateSiteBlacklist);
+      translate::TranslatePrefs::kPrefTranslateSiteBlacklistDeprecated);
   translate_prefs->RemoveSiteFromBlacklist(host);
   EXPECT_FALSE(translate_prefs->IsSiteBlacklisted(host));
   EXPECT_TRUE(translate_prefs->CanTranslateLanguage(accept_languages, "fr"));
@@ -1695,8 +1649,8 @@ TEST_F(TranslateManagerRenderViewHostTest, BubbleNormalTranslate) {
   EXPECT_EQ(TranslateBubbleModel::VIEW_STATE_TRANSLATING,
             bubble->GetViewState());
 
-  // Simulate the translate script being retrieved (it only needs to be done
-  // once in the test as it is cached).
+  // Set up a simulation of the translate script being retrieved (it only
+  // needs to be done once in the test as it is cached).
   SimulateTranslateScriptURLFetch(true);
 
   // Simulate the render notifying the translation has been done.
@@ -1768,4 +1722,4 @@ TEST_F(TranslateManagerRenderViewHostTest, BubbleUnknownLanguage) {
   EXPECT_EQ(TranslateBubbleModel::VIEW_STATE_TRANSLATING,
             bubble->GetViewState());
 }
-#endif  // defined(USE_AURA)
+#endif  // defined(USE_AURA) && !defined(OS_MACOSX)

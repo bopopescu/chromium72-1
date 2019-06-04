@@ -26,6 +26,7 @@
 #include "third_party/blink/renderer/modules/webgl/webgl_rendering_context.h"
 
 #include <memory>
+#include "base/numerics/checked_math.h"
 #include "gpu/command_buffer/client/gles2_interface.h"
 #include "third_party/blink/public/platform/platform.h"
 #include "third_party/blink/public/platform/web_graphics_context_3d_provider.h"
@@ -43,6 +44,7 @@
 #include "third_party/blink/renderer/modules/webgl/ext_shader_texture_lod.h"
 #include "third_party/blink/renderer/modules/webgl/ext_srgb.h"
 #include "third_party/blink/renderer/modules/webgl/ext_texture_filter_anisotropic.h"
+#include "third_party/blink/renderer/modules/webgl/khr_parallel_shader_compile.h"
 #include "third_party/blink/renderer/modules/webgl/oes_element_index_uint.h"
 #include "third_party/blink/renderer/modules/webgl/oes_standard_derivatives.h"
 #include "third_party/blink/renderer/modules/webgl/oes_texture_float.h"
@@ -64,7 +66,6 @@
 #include "third_party/blink/renderer/modules/webgl/webgl_draw_buffers.h"
 #include "third_party/blink/renderer/modules/webgl/webgl_lose_context.h"
 #include "third_party/blink/renderer/platform/graphics/gpu/drawing_buffer.h"
-#include "third_party/blink/renderer/platform/wtf/checked_numeric.h"
 
 namespace blink {
 
@@ -92,16 +93,17 @@ CanvasRenderingContext* WebGLRenderingContext::Factory::Create(
     const CanvasContextCreationAttributesCore& attrs) {
   bool using_gpu_compositing;
   std::unique_ptr<WebGraphicsContext3DProvider> context_provider(
-      CreateWebGraphicsContext3DProvider(host, attrs, 1,
-                                         &using_gpu_compositing));
+      CreateWebGraphicsContext3DProvider(
+          host, attrs, Platform::kWebGL1ContextType, &using_gpu_compositing));
   if (!ShouldCreateContext(context_provider.get()))
     return nullptr;
 
-  WebGLRenderingContext* rendering_context = new WebGLRenderingContext(
-      host, std::move(context_provider), using_gpu_compositing, attrs);
+  WebGLRenderingContext* rendering_context =
+      MakeGarbageCollected<WebGLRenderingContext>(
+          host, std::move(context_provider), using_gpu_compositing, attrs);
   if (!rendering_context->GetDrawingBuffer()) {
     host->HostDispatchEvent(
-        WebGLContextEvent::Create(EventTypeNames::webglcontextcreationerror,
+        WebGLContextEvent::Create(event_type_names::kWebglcontextcreationerror,
                                   "Could not create a WebGL context."));
     return nullptr;
   }
@@ -113,8 +115,8 @@ CanvasRenderingContext* WebGLRenderingContext::Factory::Create(
 
 void WebGLRenderingContext::Factory::OnError(HTMLCanvasElement* canvas,
                                              const String& error) {
-  canvas->DispatchEvent(WebGLContextEvent::Create(
-      EventTypeNames::webglcontextcreationerror, error));
+  canvas->DispatchEvent(*WebGLContextEvent::Create(
+      event_type_names::kWebglcontextcreationerror, error));
 }
 
 WebGLRenderingContext::WebGLRenderingContext(
@@ -126,7 +128,7 @@ WebGLRenderingContext::WebGLRenderingContext(
                                 std::move(context_provider),
                                 using_gpu_compositing,
                                 requested_attributes,
-                                1) {}
+                                Platform::kWebGL1ContextType) {}
 
 void WebGLRenderingContext::SetCanvasGetContextResult(
     RenderingContext& result) {
@@ -158,6 +160,8 @@ void WebGLRenderingContext::RegisterContextExtensions() {
   RegisterExtension<EXTTextureFilterAnisotropic>(
       ext_texture_filter_anisotropic_, kApprovedExtension, kBothPrefixes);
   RegisterExtension<EXTsRGB>(exts_rgb_);
+  RegisterExtension<KHRParallelShaderCompile>(khr_parallel_shader_compile_,
+                                              kDraftExtension);
   RegisterExtension<OESElementIndexUint>(oes_element_index_uint_);
   RegisterExtension<OESStandardDerivatives>(oes_standard_derivatives_);
   RegisterExtension<OESTextureFloat>(oes_texture_float_);
@@ -194,6 +198,7 @@ void WebGLRenderingContext::Trace(blink::Visitor* visitor) {
   visitor->Trace(ext_shader_texture_lod_);
   visitor->Trace(ext_texture_filter_anisotropic_);
   visitor->Trace(exts_rgb_);
+  visitor->Trace(khr_parallel_shader_compile_);
   visitor->Trace(oes_element_index_uint_);
   visitor->Trace(oes_standard_derivatives_);
   visitor->Trace(oes_texture_float_);

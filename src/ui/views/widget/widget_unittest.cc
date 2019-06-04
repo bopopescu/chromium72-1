@@ -16,11 +16,12 @@
 #include "ui/compositor/layer_animation_observer.h"
 #include "ui/compositor/scoped_animation_duration_scale_mode.h"
 #include "ui/compositor/scoped_layer_animation_settings.h"
+#include "ui/events/event_observer.h"
 #include "ui/events/event_utils.h"
 #include "ui/events/test/event_generator.h"
 #include "ui/gfx/geometry/point.h"
 #include "ui/gfx/native_widget_types.h"
-#include "ui/views/bubble/bubble_dialog_delegate.h"
+#include "ui/views/bubble/bubble_dialog_delegate_view.h"
 #include "ui/views/controls/textfield/textfield.h"
 #include "ui/views/event_monitor.h"
 #include "ui/views/test/native_widget_factory.h"
@@ -32,6 +33,7 @@
 #include "ui/views/widget/root_view.h"
 #include "ui/views/widget/widget_deletion_observer.h"
 #include "ui/views/widget/widget_removals_observer.h"
+#include "ui/views/widget/widget_utils.h"
 #include "ui/views/window/dialog_delegate.h"
 #include "ui/views/window/native_frame_view.h"
 
@@ -640,17 +642,8 @@ TEST_F(WidgetWithDestroyedNativeViewTest, Test) {
 
 class WidgetObserverTest : public WidgetTest, public WidgetObserver {
  public:
-  WidgetObserverTest()
-      : active_(nullptr),
-        widget_closed_(nullptr),
-        widget_activated_(nullptr),
-        widget_shown_(nullptr),
-        widget_hidden_(nullptr),
-        widget_bounds_changed_(nullptr),
-        widget_to_close_on_hide_(nullptr) {
-  }
-
-  ~WidgetObserverTest() override {}
+  WidgetObserverTest() = default;
+  ~WidgetObserverTest() override = default;
 
   // Set a widget to Close() the next time the Widget being observed is hidden.
   void CloseOnNextHide(Widget* widget) {
@@ -721,16 +714,16 @@ class WidgetObserverTest : public WidgetTest, public WidgetObserver {
   const Widget* widget_bounds_changed() const { return widget_bounds_changed_; }
 
  private:
-  Widget* active_;
+  Widget* active_ = nullptr;
 
-  Widget* widget_closed_;
-  Widget* widget_activated_;
-  Widget* widget_deactivated_;
-  Widget* widget_shown_;
-  Widget* widget_hidden_;
-  Widget* widget_bounds_changed_;
+  Widget* widget_closed_ = nullptr;
+  Widget* widget_activated_ = nullptr;
+  Widget* widget_deactivated_ = nullptr;
+  Widget* widget_shown_ = nullptr;
+  Widget* widget_hidden_ = nullptr;
+  Widget* widget_bounds_changed_ = nullptr;
 
-  Widget* widget_to_close_on_hide_;
+  Widget* widget_to_close_on_hide_ = nullptr;
 };
 
 // This test appears to be flaky on Mac.
@@ -741,17 +734,14 @@ class WidgetObserverTest : public WidgetTest, public WidgetObserver {
 #endif
 
 TEST_F(WidgetObserverTest, MAYBE_ActivationChange) {
-  WidgetAutoclosePtr toplevel(CreateTopLevelPlatformWidget());
   WidgetAutoclosePtr toplevel1(NewWidget());
   WidgetAutoclosePtr toplevel2(NewWidget());
 
   toplevel1->Show();
   toplevel2->Show();
-
   reset();
 
   toplevel1->Activate();
-
   RunPendingMessages();
   EXPECT_EQ(toplevel1.get(), widget_activated());
 
@@ -947,6 +937,65 @@ TEST_F(WidgetObserverTest, WidgetBoundsChangedNative) {
   // No bounds change when closing.
   widget->CloseNow();
   EXPECT_FALSE(widget_bounds_changed());
+}
+
+namespace {
+
+class MoveTrackingTestDesktopWidgetDelegate : public TestDesktopWidgetDelegate {
+ public:
+  int move_count() const { return move_count_; }
+
+  // WidgetDelegate:
+  void OnWidgetMove() override { ++move_count_; }
+
+ private:
+  int move_count_ = 0;
+};
+
+}  // namespace
+
+// An extension to the WidgetBoundsChangedNative test above to ensure move
+// notifications propagate to the WidgetDelegate.
+TEST_F(WidgetObserverTest, OnWidgetMovedWhenOriginChangesNative) {
+  MoveTrackingTestDesktopWidgetDelegate delegate;
+  Widget::InitParams params = CreateParams(Widget::InitParams::TYPE_WINDOW);
+  delegate.InitWidget(params);
+  Widget* widget = delegate.GetWidget();
+  widget->Show();
+  widget->SetBounds(gfx::Rect(100, 100, 300, 200));
+
+  const int moves_during_init = delegate.move_count();
+
+#if defined(OS_WIN)
+  // Windows reliably notifies twice per origin change. https://crbug.com/864938
+  constexpr int kDeltaPerMove = 2;
+#else
+  constexpr int kDeltaPerMove = 1;
+#endif
+
+  // Resize without changing origin. No move.
+  widget->SetBounds(gfx::Rect(100, 100, 310, 210));
+  EXPECT_EQ(moves_during_init, delegate.move_count());
+
+  // Move without changing size. Moves.
+  widget->SetBounds(gfx::Rect(110, 110, 310, 210));
+  EXPECT_EQ(moves_during_init + kDeltaPerMove, delegate.move_count());
+
+  // Changing both moves.
+  widget->SetBounds(gfx::Rect(90, 90, 330, 230));
+  EXPECT_EQ(moves_during_init + 2 * kDeltaPerMove, delegate.move_count());
+
+  // Just grow vertically. On Mac, this changes the AppKit origin since it is
+  // from the bottom left of the screen, but there is no move as far as views is
+  // concerned.
+  widget->SetBounds(gfx::Rect(90, 90, 330, 240));
+  // No change.
+  EXPECT_EQ(moves_during_init + 2 * kDeltaPerMove, delegate.move_count());
+
+  // For a similar reason, move the widget down by the same amount that it grows
+  // vertically. The AppKit origin does not change, but it is a move.
+  widget->SetBounds(gfx::Rect(90, 100, 330, 250));
+  EXPECT_EQ(moves_during_init + 3 * kDeltaPerMove, delegate.move_count());
 }
 
 // Test correct behavior when widgets close themselves in response to visibility
@@ -1650,6 +1699,8 @@ TEST_F(WidgetTest, EventHandlersOnRootView) {
   EXPECT_EQ(0, h1.GetEventCount(ui::ET_MOUSEWHEEL));
   EXPECT_EQ(0, view->GetEventCount(ui::ET_MOUSEWHEEL));
   EXPECT_EQ(0, h2.GetEventCount(ui::ET_MOUSEWHEEL));
+
+  root_view->RemovePreTargetHandler(&h1);
 }
 
 TEST_F(WidgetTest, SynthesizeMouseMoveEvent) {
@@ -1673,7 +1724,7 @@ TEST_F(WidgetTest, SynthesizeMouseMoveEvent) {
 
   gfx::Point cursor_location(5, 5);
   ui::test::EventGenerator generator(
-      IsMus() ? widget->GetNativeWindow() : GetContext(),
+      IsMus() ? GetRootWindow(widget.get()) : GetContext(),
       widget->GetNativeWindow());
   generator.MoveMouseTo(cursor_location);
 
@@ -1730,7 +1781,7 @@ TEST_F(WidgetTest, MouseEventDispatchWhileTouchIsDown) {
   event_count_view->AddPostTargetHandler(&consumer);
 
   ui::test::EventGenerator generator(
-      IsMus() ? widget->GetNativeWindow() : GetContext(),
+      IsMus() ? GetRootWindow(widget) : GetContext(),
       widget->GetNativeWindow());
   generator.PressTouch();
   generator.ClickLeftButton();
@@ -1756,13 +1807,14 @@ TEST_F(WidgetTest, MousePressCausesCapture) {
   widget->GetRootView()->AddChildView(event_count_view);
 
   // No capture has been set.
-  EXPECT_EQ(nullptr, internal::NativeWidgetPrivate::GetGlobalCapture(
-                         widget->GetNativeView()));
+  EXPECT_EQ(
+      gfx::kNullNativeView,
+      internal::NativeWidgetPrivate::GetGlobalCapture(widget->GetNativeView()));
 
   MousePressEventConsumer consumer;
   event_count_view->AddPostTargetHandler(&consumer);
   ui::test::EventGenerator generator(
-      IsMus() ? widget->GetNativeWindow() : GetContext(),
+      IsMus() ? GetRootWindow(widget) : GetContext(),
       widget->GetNativeWindow());
   generator.PressLeftButton();
 
@@ -1817,15 +1869,16 @@ TEST_F(WidgetTest, CaptureDuringMousePressNotOverridden) {
   event_count_view->SetBounds(0, 0, 300, 300);
   widget->GetRootView()->AddChildView(event_count_view);
 
-  EXPECT_EQ(nullptr, internal::NativeWidgetPrivate::GetGlobalCapture(
-                         widget->GetNativeView()));
+  EXPECT_EQ(
+      gfx::kNullNativeView,
+      internal::NativeWidgetPrivate::GetGlobalCapture(widget->GetNativeView()));
 
   Widget* widget2 = CreateTopLevelNativeWidget();
   // Gives explicit capture to |widget2|
   CaptureEventConsumer consumer(widget2);
   event_count_view->AddPostTargetHandler(&consumer);
   ui::test::EventGenerator generator(
-      IsMus() ? widget->GetNativeWindow() : GetContext(),
+      IsMus() ? GetRootWindow(widget) : GetContext(),
       widget->GetNativeWindow());
   // This event should implicitly give capture to |widget|, except that
   // |consumer| will explicitly set capture on |widget2|.
@@ -1843,57 +1896,98 @@ TEST_F(WidgetTest, CaptureDuringMousePressNotOverridden) {
   widget->CloseNow();
 }
 
-class ClosingEventHandler : public View {
+class ClosingEventObserver : public ui::EventObserver {
  public:
-  explicit ClosingEventHandler(Widget* widget) : widget_(widget) {}
+  explicit ClosingEventObserver(Widget* widget) : widget_(widget) {}
 
-  // ui::EventHandler:
-  void OnMouseEvent(ui::MouseEvent* event) override {
-    // Don't close twice if closing the Widget generates a capture update event.
-    if (event->type() != ui::ET_MOUSE_CAPTURE_CHANGED)
+  // ui::EventObserver:
+  void OnEvent(const ui::Event& event) override {
+    // Guard against attempting to close the widget twice.
+    if (widget_)
       widget_->CloseNow();
+    widget_ = nullptr;
   }
 
  private:
   Widget* widget_;
 
-  DISALLOW_COPY_AND_ASSIGN(ClosingEventHandler);
+  DISALLOW_COPY_AND_ASSIGN(ClosingEventObserver);
+};
+
+class ClosingView : public View {
+ public:
+  explicit ClosingView(Widget* widget) : widget_(widget) {}
+
+  // View:
+  void OnEvent(ui::Event* event) override {
+    // Guard against closing twice and writing to freed memory.
+    if (widget_ && event->type() == ui::ET_MOUSE_PRESSED) {
+      Widget* widget = widget_;
+      widget_ = nullptr;
+      widget->CloseNow();
+    }
+  }
+
+ private:
+  Widget* widget_;
+
+  DISALLOW_COPY_AND_ASSIGN(ClosingView);
 };
 
 // Ensures that when multiple objects are intercepting OS-level events, that one
 // can safely close a Widget that has capture.
 TEST_F(WidgetTest, DestroyedWithCaptureViaEventMonitor) {
-  // On Mus, a CHECK(!details.dispatcher_destroyed) is hit in the EventGenerator
-  // call below. TODO(crbug/799428): Investigate.
-  if (IsMus())
-    return;
-
   Widget* widget = CreateTopLevelNativeWidget();
   TestWidgetObserver observer(widget);
   widget->Show();
   widget->SetSize(gfx::Size(300, 300));
 
-  // We need two ClosingEventHandler (both will try to close the Widget). On Mac
+  // ClosingView and ClosingEventObserver both try to close the Widget. On Mac
   // the order that EventMonitors receive OS events is not deterministic. If the
   // one installed via SetCapture() sees it first, the event is swallowed (so
   // both need to try). Note the regression test would only fail when the
   // SetCapture() handler did _not_ swallow the event, but it still needs to try
   // to close the Widget otherwise it will be left open, which fails elsewhere.
-  ClosingEventHandler* view_handler = new ClosingEventHandler(widget);
-  widget->GetContentsView()->AddChildView(view_handler);
-  widget->SetCapture(view_handler);
+  ClosingView* closing_view = new ClosingView(widget);
+  widget->GetContentsView()->AddChildView(closing_view);
+  widget->SetCapture(closing_view);
 
-  ClosingEventHandler monitor_handler(widget);
-  auto monitor = EventMonitor::CreateApplicationMonitor(&monitor_handler);
+  ClosingEventObserver closing_event_observer(widget);
+  auto monitor = EventMonitor::CreateApplicationMonitor(
+      &closing_event_observer, widget->GetNativeWindow(),
+      {ui::ET_MOUSE_PRESSED});
 
   ui::test::EventGenerator generator(
-      IsMus() ? widget->GetNativeWindow() : GetContext(),
+      IsMus() ? GetRootWindow(widget) : GetContext(),
       widget->GetNativeWindow());
   generator.set_target(ui::test::EventGenerator::Target::APPLICATION);
 
   EXPECT_FALSE(observer.widget_closed());
   generator.PressLeftButton();
   EXPECT_TRUE(observer.widget_closed());
+}
+
+// Widget used to destroy itself when OnNativeWidgetDestroyed is called.
+class TestNativeWidgetDestroyedWidget : public Widget {
+ public:
+  // Overridden from NativeWidgetDelegate:
+  void OnNativeWidgetDestroyed() override;
+};
+
+void TestNativeWidgetDestroyedWidget::OnNativeWidgetDestroyed() {
+  Widget::OnNativeWidgetDestroyed();
+  delete this;
+}
+
+// Verifies that widget destroyed itself in OnNativeWidgetDestroyed does not
+// crash in ASan.
+TEST_F(WidgetTest, WidgetDestroyedItselfDoesNotCrash) {
+  TestDesktopWidgetDelegate delegate(new TestNativeWidgetDestroyedWidget);
+  Widget::InitParams params = CreateParams(Widget::InitParams::TYPE_WINDOW);
+  params.ownership = Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET;
+  delegate.InitWidget(params);
+  delegate.GetWidget()->Show();
+  delegate.GetWidget()->CloseNow();
 }
 
 // Verifies WindowClosing() is invoked correctly on the delegate when a Widget
@@ -1963,11 +2057,6 @@ TEST_F(WidgetWindowTitleTest, SetWindowTitleChanged_DesktopNativeWidget) {
 #endif  // !OS_CHROMEOS
 
 TEST_F(WidgetTest, WidgetDeleted_InOnMousePressed) {
-  // TODO: test uses GetContext(), which is not applicable to aura-mus.
-  // http://crbug.com/663809.
-  if (IsMus())
-    return;
-
   Widget* widget = new Widget;
   Widget::InitParams params =
       CreateParams(views::Widget::InitParams::TYPE_POPUP);
@@ -1978,10 +2067,14 @@ TEST_F(WidgetTest, WidgetDeleted_InOnMousePressed) {
   widget->SetSize(gfx::Size(100, 100));
   widget->Show();
 
-  ui::test::EventGenerator generator(GetContext(), widget->GetNativeWindow());
+  ui::test::EventGenerator generator(
+      IsMus() ? GetRootWindow(widget) : GetContext(),
+      widget->GetNativeWindow());
 
   WidgetDeletionObserver deletion_observer(widget);
-  generator.ClickLeftButton();
+  generator.PressLeftButton();
+  if (deletion_observer.IsWidgetAlive())
+    generator.ReleaseLeftButton();
   EXPECT_FALSE(deletion_observer.IsWidgetAlive());
 
   // Yay we did not crash!
@@ -2233,6 +2326,14 @@ TEST_F(WidgetTest, NoCrashOnWidgetDelete) {
   Widget::InitParams params = CreateParams(Widget::InitParams::TYPE_POPUP);
   params.ownership = Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET;
   widget->Init(params);
+}
+
+TEST_F(WidgetTest, NoCrashOnResizeConstraintsWindowTitleOnPopup) {
+  std::unique_ptr<Widget> widget(new Widget);
+  Widget::InitParams params = CreateParams(Widget::InitParams::TYPE_POPUP);
+  params.ownership = Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET;
+  widget->Init(params);
+  widget->OnSizeConstraintsChanged();
 }
 
 // Tests that we do not crash when a Widget is destroyed before it finishes
@@ -3306,7 +3407,7 @@ TEST_F(WidgetTest, MouseEventTypesViaGenerator) {
   widget->Show();
 
   ui::test::EventGenerator generator(GetContext(), widget->GetNativeWindow());
-  generator.set_current_location(gfx::Point(20, 20));
+  generator.set_current_screen_location(gfx::Point(20, 20));
 
   generator.ClickLeftButton();
   EXPECT_EQ(1, view->GetEventCount(ui::ET_MOUSE_PRESSED));
@@ -4001,7 +4102,7 @@ class CompositingWidgetTest : public views::test::WidgetTest {
       const Widget::InitParams::WindowOpacity opacity) {
     for (const auto& widget_type : widget_types_) {
 #if defined(OS_MACOSX)
-      // Tooltips are native on Mac. See BridgedNativeWidget::Init.
+      // Tooltips are native on Mac. See BridgedNativeWidgetImpl::Init.
       if (widget_type == Widget::InitParams::TYPE_TOOLTIP)
         continue;
 #elif defined(OS_WIN)

@@ -17,37 +17,6 @@
 
 namespace webrtc {
 
-// Used to specify which enum counter type we're incrementing in
-// MetricsObserverInterface::IncrementEnumCounter.
-enum PeerConnectionEnumCounterType {
-  kEnumCounterAddressFamily,
-  // For the next 2 counters, we track them separately based on the "first hop"
-  // protocol used by the local candidate. "First hop" means the local candidate
-  // type in the case of non-TURN candidates, and the protocol used to connect
-  // to the TURN server in the case of TURN candidates.
-  kEnumCounterIceCandidatePairTypeUdp,
-  kEnumCounterIceCandidatePairTypeTcp,
-
-  kEnumCounterAudioSrtpCipher,
-  kEnumCounterAudioSslCipher,
-  kEnumCounterVideoSrtpCipher,
-  kEnumCounterVideoSslCipher,
-  kEnumCounterDataSrtpCipher,
-  kEnumCounterDataSslCipher,
-  kEnumCounterDtlsHandshakeError,
-  kEnumCounterIceRegathering,
-  kEnumCounterIceRestart,
-  kEnumCounterKeyProtocol,
-  kEnumCounterSdpSemanticRequested,
-  kEnumCounterSdpSemanticNegotiated,
-  kEnumCounterKeyProtocolMediaType,
-  kEnumCounterSdpFormatReceived,
-  // The next 2 counters log the value of srtp_err_status_t defined in libsrtp.
-  kEnumCounterSrtpUnprotectError,
-  kEnumCounterSrtcpUnprotectError,
-  kPeerConnectionEnumCounterMax
-};
-
 // Currently this contains information related to WebRTC network/transport
 // information.
 
@@ -110,12 +79,17 @@ enum IceCandidatePairType {
   kIceCandidatePairPrflxSrflx,
   kIceCandidatePairPrflxRelay,
 
-  // The following 4 types tell whether local and remote hosts have private or
-  // public IP addresses.
+  // The following 9 types tell whether local and remote hosts have hostname,
+  // private or public IP addresses.
   kIceCandidatePairHostPrivateHostPrivate,
   kIceCandidatePairHostPrivateHostPublic,
   kIceCandidatePairHostPublicHostPrivate,
   kIceCandidatePairHostPublicHostPublic,
+  kIceCandidatePairHostNameHostName,
+  kIceCandidatePairHostNameHostPrivate,
+  kIceCandidatePairHostNameHostPublic,
+  kIceCandidatePairHostPrivateHostName,
+  kIceCandidatePairHostPublicHostName,
   kIceCandidatePairMax
 };
 
@@ -168,26 +142,18 @@ enum SdpFormatReceived {
   kSdpFormatReceivedMax
 };
 
-class MetricsObserverInterface : public rtc::RefCountInterface {
- public:
-  // |type| is the type of the enum counter to be incremented. |counter|
-  // is the particular counter in that type. |counter_max| is the next sequence
-  // number after the highest counter.
-  virtual void IncrementEnumCounter(PeerConnectionEnumCounterType type,
-                                    int counter,
-                                    int counter_max) {}
-
-  // This is used to handle sparse counters like SSL cipher suites.
-  // TODO(guoweis): Remove the implementation once the dependency's interface
-  // definition is updated.
-  virtual void IncrementSparseEnumCounter(PeerConnectionEnumCounterType type,
-                                          int counter);
-
-  virtual void AddHistogramSample(PeerConnectionMetricsName type,
-                                  int value) = 0;
+// Metric for counting the outcome of adding an ICE candidate
+enum AddIceCandidateResult {
+  kAddIceCandidateSuccess,
+  kAddIceCandidateFailClosed,
+  kAddIceCandidateFailNoRemoteDescription,
+  kAddIceCandidateFailNullCandidate,
+  kAddIceCandidateFailNotValid,
+  kAddIceCandidateFailNotReady,
+  kAddIceCandidateFailInAddition,
+  kAddIceCandidateFailNotUsable,
+  kAddIceCandidateMax
 };
-
-typedef MetricsObserverInterface UMAObserver;
 
 }  // namespace webrtc
 

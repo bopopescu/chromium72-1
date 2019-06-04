@@ -29,7 +29,6 @@
 
 #include "third_party/blink/renderer/core/editing/serializers/serialization.h"
 
-#include "third_party/blink/renderer/bindings/core/v8/exception_state.h"
 #include "third_party/blink/renderer/core/css/css_identifier_value.h"
 #include "third_party/blink/renderer/core/css/css_property_value_set.h"
 #include "third_party/blink/renderer/core/css/css_value.h"
@@ -39,8 +38,8 @@
 #include "third_party/blink/renderer/core/dom/comment.h"
 #include "third_party/blink/renderer/core/dom/context_features.h"
 #include "third_party/blink/renderer/core/dom/document_fragment.h"
+#include "third_party/blink/renderer/core/dom/document_init.h"
 #include "third_party/blink/renderer/core/dom/element_traversal.h"
-#include "third_party/blink/renderer/core/dom/exception_code.h"
 #include "third_party/blink/renderer/core/dom/node_traversal.h"
 #include "third_party/blink/renderer/core/dom/range.h"
 #include "third_party/blink/renderer/core/editing/editing_strategy.h"
@@ -63,6 +62,7 @@
 #include "third_party/blink/renderer/core/html/html_table_element.h"
 #include "third_party/blink/renderer/core/html_names.h"
 #include "third_party/blink/renderer/core/layout/layout_object.h"
+#include "third_party/blink/renderer/platform/bindings/exception_state.h"
 #include "third_party/blink/renderer/platform/bindings/runtime_call_stats.h"
 #include "third_party/blink/renderer/platform/bindings/v8_per_isolate_data.h"
 #include "third_party/blink/renderer/platform/weborigin/kurl.h"
@@ -71,10 +71,10 @@
 
 namespace blink {
 
-using namespace HTMLNames;
+using namespace html_names;
 
 class AttributeChange {
-  DISALLOW_NEW_EXCEPT_PLACEMENT_NEW();
+  DISALLOW_NEW();
 
  public:
   AttributeChange() : name_(g_null_atom, g_null_atom, g_null_atom) {}
@@ -130,7 +130,7 @@ static HTMLElement* AncestorToRetainStructureAndAppearanceForBlock(
   if (!common_ancestor_block)
     return nullptr;
 
-  if (common_ancestor_block->HasTagName(tbodyTag) ||
+  if (common_ancestor_block->HasTagName(kTbodyTag) ||
       IsHTMLTableRowElement(*common_ancestor_block))
     return Traversal<HTMLTableElement>::FirstAncestor(*common_ancestor_block);
 
@@ -243,7 +243,7 @@ static HTMLElement* HighestAncestorToWrapMarkup(
               Position::FirstPositionInNode(special_common_ancestor
                                                 ? *special_common_ancestor
                                                 : *common_ancestor),
-              aTag)))
+              kATag)))
     special_common_ancestor = enclosing_anchor;
 
   return special_common_ancestor;
@@ -471,8 +471,8 @@ static void FillContainerFromString(ContainerNode* paragraph,
   string.Split('\t', true, tab_list);
   StringBuilder tab_text;
   bool first = true;
-  size_t num_entries = tab_list.size();
-  for (size_t i = 0; i < num_entries; ++i) {
+  wtf_size_t num_entries = tab_list.size();
+  for (wtf_size_t i = 0; i < num_entries; ++i) {
     const String& s = tab_list[i];
 
     // append the non-tab textual part
@@ -551,7 +551,7 @@ DocumentFragment* CreateFragmentFromText(const EphemeralRange& context,
     fragment->AppendChild(document.createTextNode(string));
     if (string.EndsWith('\n')) {
       HTMLBRElement* element = HTMLBRElement::Create(document);
-      element->setAttribute(classAttr, AppleInterchangeNewline);
+      element->setAttribute(kClassAttr, AppleInterchangeNewline);
       fragment->AppendChild(element);
     }
     return fragment;
@@ -573,15 +573,15 @@ DocumentFragment* CreateFragmentFromText(const EphemeralRange& context,
 
   Vector<String> list;
   string.Split('\n', true, list);  // true gets us empty strings in the list
-  size_t num_lines = list.size();
-  for (size_t i = 0; i < num_lines; ++i) {
+  wtf_size_t num_lines = list.size();
+  for (wtf_size_t i = 0; i < num_lines; ++i) {
     const String& s = list[i];
 
     Element* element = nullptr;
     if (s.IsEmpty() && i + 1 == num_lines) {
       // For last line, use the "magic BR" rather than a P.
       element = HTMLBRElement::Create(document);
-      element->setAttribute(classAttr, AppleInterchangeNewline);
+      element->setAttribute(kClassAttr, AppleInterchangeNewline);
     } else {
       if (use_clones_of_enclosing_block)
         element = block->CloneWithoutChildren();
@@ -616,7 +616,7 @@ DocumentFragment* CreateFragmentForInnerOuterHTML(
       fragment->ParseXML(markup, context_element, parser_content_policy);
   if (!was_valid) {
     exception_state.ThrowDOMException(
-        kSyntaxError,
+        DOMExceptionCode::kSyntaxError,
         "The provided markup is invalid XML, and "
         "therefore cannot be inserted into an XML "
         "document.");

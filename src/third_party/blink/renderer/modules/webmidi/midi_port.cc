@@ -37,6 +37,7 @@
 #include "third_party/blink/renderer/core/frame/use_counter.h"
 #include "third_party/blink/renderer/modules/webmidi/midi_access.h"
 #include "third_party/blink/renderer/modules/webmidi/midi_connection_event.h"
+#include "third_party/blink/renderer/platform/wtf/functional.h"
 
 using midi::mojom::PortState;
 
@@ -192,18 +193,13 @@ void MIDIPort::Trace(blink::Visitor* visitor) {
   ContextLifecycleObserver::Trace(visitor);
 }
 
-void MIDIPort::TraceWrappers(ScriptWrappableVisitor* visitor) const {
-  visitor->TraceWrappers(access_);
-  EventTargetWithInlineData::TraceWrappers(visitor);
-}
-
 void MIDIPort::OpenAsynchronously(ScriptPromiseResolver* resolver) {
   // The frame should exist, but it may be already detached and the execution
   // context may be lost here.
   if (!GetExecutionContext())
     return;
 
-  UseCounter::Count(*ToDocument(GetExecutionContext()),
+  UseCounter::Count(*To<Document>(GetExecutionContext()),
                     WebFeature::kMIDIPortOpen);
   DCHECK_NE(0u, running_open_count_);
   running_open_count_--;
@@ -245,13 +241,6 @@ ScriptPromise MIDIPort::Accept(ScriptState* script_state) {
                                   script_state->GetIsolate()));
 }
 
-ScriptPromise MIDIPort::Reject(ScriptState* script_state,
-                               ExceptionCode ec,
-                               const String& message) {
-  return ScriptPromise::RejectWithDOMException(
-      script_state, DOMException::Create(ec, message));
-}
-
 void MIDIPort::SetStates(PortState state, ConnectionState connection) {
   DCHECK(state != PortState::DISCONNECTED ||
          connection != kConnectionStateOpen);
@@ -259,8 +248,8 @@ void MIDIPort::SetStates(PortState state, ConnectionState connection) {
     return;
   state_ = state;
   connection_ = connection;
-  DispatchEvent(MIDIConnectionEvent::Create(this));
-  access_->DispatchEvent(MIDIConnectionEvent::Create(this));
+  DispatchEvent(*MIDIConnectionEvent::Create(this));
+  access_->DispatchEvent(*MIDIConnectionEvent::Create(this));
 }
 
 }  // namespace blink

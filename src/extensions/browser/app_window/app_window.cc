@@ -20,6 +20,7 @@
 #include "build/build_config.h"
 #include "components/web_modal/web_contents_modal_dialog_manager.h"
 #include "content/public/browser/browser_context.h"
+#include "content/public/browser/file_select_listener.h"
 #include "content/public/browser/invalidate_type.h"
 #include "content/public/browser/keyboard_event_processing_result.h"
 #include "content/public/browser/navigation_entry.h"
@@ -58,13 +59,6 @@
 #if !defined(OS_MACOSX)
 #include "components/prefs/pref_service.h"
 #include "extensions/browser/pref_names.h"
-#endif
-
-#if defined(OS_WEBOS)
-#include "base/command_line.h"
-#include "extensions/common/switches.h"
-#include "ui/aura/window.h"
-#include "ui/aura/window_tree_host.h"
 #endif
 
 using content::BrowserContext;
@@ -260,14 +254,6 @@ void AppWindow::Init(const GURL& url,
                      AppWindowContents* app_window_contents,
                      content::RenderFrameHost* creator_frame,
                      const CreateParams& params) {
-#if defined(OS_WEBOS)
-  base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
-  if (command_line->HasSwitch(switches::kWebOSAppId)) {
-    std::string app_id = command_line->GetSwitchValueASCII(switches::kWebOSAppId);
-    SetApplicationId(app_id);
-  }
-#endif
-
   // Initialize the render interface and web contents
   app_window_contents_.reset(app_window_contents);
   app_window_contents_->Initialize(browser_context(), creator_frame, url);
@@ -297,8 +283,11 @@ void AppWindow::Init(const GURL& url,
 
   // Windows cannot be always-on-top in fullscreen mode for security reasons.
   cached_always_on_top_ = new_params.always_on_top;
-  if (new_params.state == ui::SHOW_STATE_FULLSCREEN)
+  if (new_params.state == ui::SHOW_STATE_FULLSCREEN &&
+      !ExtensionsBrowserClient::Get()->IsScreensaverInDemoMode(
+          extension_id())) {
     new_params.always_on_top = false;
+  }
 
   requested_alpha_enabled_ = new_params.alpha_enabled;
   is_ime_window_ = params.is_ime_window;
@@ -308,14 +297,6 @@ void AppWindow::Init(const GURL& url,
   AppWindowClient* app_window_client = AppWindowClient::Get();
   native_app_window_.reset(
       app_window_client->CreateNativeAppWindow(this, &new_params));
-
-#if defined(OS_WEBOS)
-  if (command_line->HasSwitch(extensions::switches::kWebOSAppId)) {
-    ui::Compositor* compositor = GetNativeWindow()->GetHost()->compositor();
-    if (compositor)
-      compositor->SetVisible(false);
-  }
-#endif
 
   helper_.reset(new AppWebContentsHelper(
       browser_context_, extension_id_, web_contents(), app_delegate_.get()));
@@ -343,9 +324,7 @@ void AppWindow::Init(const GURL& url,
     else if (new_params.state == ui::SHOW_STATE_MINIMIZED)
       Minimize();
 
-    // Panels are not activated by default.
-    Show(window_type_is_panel() || !new_params.focused ? SHOW_INACTIVE
-                                                       : SHOW_ACTIVE);
+    Show(new_params.focused ? SHOW_ACTIVE : SHOW_INACTIVE);
   }
 
   OnNativeWindowChanged();
@@ -367,17 +346,18 @@ AppWindow::~AppWindow() {
 void AppWindow::RequestMediaAccessPermission(
     content::WebContents* web_contents,
     const content::MediaStreamRequest& request,
-    const content::MediaResponseCallback& callback) {
+    content::MediaResponseCallback callback) {
   DCHECK_EQ(AppWindow::web_contents(), web_contents);
-  helper_->RequestMediaAccessPermission(request, callback);
+  helper_->RequestMediaAccessPermission(request, std::move(callback));
 }
 
 bool AppWindow::CheckMediaAccessPermission(
     content::RenderFrameHost* render_frame_host,
     const GURL& security_origin,
     content::MediaStreamType type) {
-  DCHECK_EQ(AppWindow::web_contents(),
-            content::WebContents::FromRenderFrameHost(render_frame_host));
+  DCHECK_EQ(web_contents(),
+            content::WebContents::FromRenderFrameHost(render_frame_host)
+                ->GetOutermostWebContents());
   return helper_->CheckMediaAccessPermission(render_frame_host, security_origin,
                                              type);
 }
@@ -425,7 +405,7 @@ content::KeyboardEventProcessingResult AppWindow::PreHandleKeyboardEvent(
   return content::KeyboardEventProcessingResult::NOT_HANDLED;
 }
 
-void AppWindow::HandleKeyboardEvent(
+bool AppWindow::HandleKeyboardEvent(
     WebContents* source,
     const content::NativeWebKeyboardEvent& event) {
   // If the window is currently fullscreen and not forced, ESC should leave
@@ -434,10 +414,10 @@ void AppWindow::HandleKeyboardEvent(
   if (event.windows_key_code == ui::VKEY_ESCAPE && IsFullscreen() &&
       !IsForcedFullscreen()) {
     Restore();
-    return;
+    return true;
   }
 
-  native_app_window_->HandleKeyboardEvent(event);
+  return native_app_window_->HandleKeyboardEvent(event);
 }
 
 void AppWindow::RequestToLockMouse(WebContents* web_contents,
@@ -463,6 +443,16 @@ bool AppWindow::TakeFocus(WebContents* source, bool reverse) {
   return app_delegate_->TakeFocus(source, reverse);
 }
 
+gfx::Size AppWindow::EnterPictureInPicture(const viz::SurfaceId& surface_id,
+                                           const gfx::Size& natural_size) {
+  return app_delegate_->EnterPictureInPicture(web_contents(), surface_id,
+                                              natural_size);
+}
+
+void AppWindow::ExitPictureInPicture() {
+  app_delegate_->ExitPictureInPicture();
+}
+
 bool AppWindow::OnMessageReceived(const IPC::Message& message,
                                   content::RenderFrameHost* render_frame_host) {
   bool handled = true;
@@ -475,17 +465,6 @@ bool AppWindow::OnMessageReceived(const IPC::Message& message,
 
 void AppWindow::RenderViewCreated(content::RenderViewHost* render_view_host) {
   app_delegate_->RenderViewCreated(render_view_host);
-}
-
-void AppWindow::DidFirstVisuallyNonEmptyPaint() {
-#if defined(OS_WEBOS)
-  base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
-  if (command_line->HasSwitch(extensions::switches::kWebOSAppId)) {
-    ui::Compositor* compositor = GetNativeWindow()->GetHost()->compositor();
-    if (compositor)
-      compositor->SetVisible(true);
-  }
-#endif
 }
 
 void AppWindow::SetOnFirstCommitOrWindowClosedCallback(
@@ -756,8 +735,12 @@ void AppWindow::SetAlwaysOnTop(bool always_on_top) {
   // As a security measure, do not allow fullscreen windows or windows that
   // overlap the taskbar to be on top. The property will be applied when the
   // window exits fullscreen and moves away from the taskbar.
-  if (!IsFullscreen() && !IntersectsWithTaskbar())
+  if ((!IsFullscreen() ||
+       ExtensionsBrowserClient::Get()->IsScreensaverInDemoMode(
+           extension_id())) &&
+      !IntersectsWithTaskbar()) {
     native_app_window_->SetAlwaysOnTop(always_on_top);
+  }
 
   OnNativeWindowChanged();
 }
@@ -911,23 +894,16 @@ content::ColorChooser* AppWindow::OpenColorChooser(
   return app_delegate_->ShowColorChooser(web_contents, initial_color);
 }
 
-void AppWindow::RunFileChooser(content::RenderFrameHost* render_frame_host,
-                               const content::FileChooserParams& params) {
-  if (window_type_is_panel()) {
-    // Panels can't host a file dialog, abort. TODO(stevenjb): allow file
-    // dialogs to be unhosted but still close with the owning web contents.
-    // crbug.com/172502.
-    LOG(WARNING) << "File dialog opened by panel.";
-    return;
-  }
-
-  app_delegate_->RunFileChooser(render_frame_host, params);
+void AppWindow::RunFileChooser(
+    content::RenderFrameHost* render_frame_host,
+    std::unique_ptr<content::FileSelectListener> listener,
+    const blink::mojom::FileChooserParams& params) {
+  app_delegate_->RunFileChooser(render_frame_host, std::move(listener), params);
 }
 
-bool AppWindow::IsPopupOrPanel(const WebContents* source) const { return true; }
-
-void AppWindow::MoveContents(WebContents* source, const gfx::Rect& pos) {
-  native_app_window_->SetBounds(pos);
+void AppWindow::SetContentsBounds(WebContents* source,
+                                  const gfx::Rect& bounds) {
+  native_app_window_->SetBounds(bounds);
 }
 
 void AppWindow::NavigationStateChanged(content::WebContents* source,
@@ -1110,9 +1086,7 @@ AppWindow::CreateParams AppWindow::LoadDefaults(CreateParams params)
 SkRegion* AppWindow::RawDraggableRegionsToSkRegion(
     const std::vector<DraggableRegion>& regions) {
   SkRegion* sk_region = new SkRegion;
-  for (std::vector<DraggableRegion>::const_iterator iter = regions.begin();
-       iter != regions.end();
-       ++iter) {
+  for (auto iter = regions.cbegin(); iter != regions.cend(); ++iter) {
     const DraggableRegion& region = *iter;
     sk_region->op(
         region.bounds.x(),

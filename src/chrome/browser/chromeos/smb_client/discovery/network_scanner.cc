@@ -37,11 +37,15 @@ NetworkScanner::NetworkScanner() = default;
 NetworkScanner::~NetworkScanner() = default;
 
 void NetworkScanner::FindHostsInNetwork(FindHostsCallback callback) {
+  DCHECK(!running_);
+
   if (locators_.empty()) {
     // Fire the callback immediately if there are no registered HostLocators.
     std::move(callback).Run(false /* success */, HostMap());
     return;
   }
+
+  running_ = true;
 
   const uint32_t request_id = AddNewRequest(std::move(callback));
   for (const auto& locator : locators_) {
@@ -84,11 +88,11 @@ void NetworkScanner::AddHostsToResults(uint32_t request_id,
 
   HostMap& existing_hosts = request_iter->second.hosts_found;
   for (const auto& new_host : new_hosts) {
-    const Hostname& new_hostname = new_host.first;
+    const Hostname& new_hostname = base::ToLowerASCII(new_host.first);
     const Address& new_ip = new_host.second;
 
     if (!HostExists(existing_hosts, new_hostname)) {
-      existing_hosts.insert(new_host);
+      existing_hosts.insert(std::pair<Hostname, Address>(new_hostname, new_ip));
     } else if (existing_hosts[new_hostname] != new_ip) {
       LOG(WARNING) << "Different addresses found for host: " << new_hostname;
       LOG(WARNING) << existing_hosts[new_hostname] << ":" << new_ip;
@@ -118,6 +122,7 @@ void NetworkScanner::FireCallbackIfFinished(uint32_t request_id) {
     found_hosts_ = std::move(info.hosts_found);
     find_hosts_returned_ = true;
 
+    running_ = false;
     std::move(info.callback).Run(true /* success */, found_hosts_);
   }
 }

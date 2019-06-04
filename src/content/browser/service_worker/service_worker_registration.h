@@ -15,6 +15,7 @@
 #include "base/macros.h"
 #include "base/memory/ref_counted.h"
 #include "base/single_thread_task_runner.h"
+#include "base/time/time.h"
 #include "content/browser/service_worker/service_worker_version.h"
 #include "content/common/content_export.h"
 #include "content/common/service_worker/service_worker_types.h"
@@ -36,16 +37,16 @@ class ServiceWorkerActivationTest;
 // facilitate multiple controllees being associated with the same registration.
 class CONTENT_EXPORT ServiceWorkerRegistration
     : public base::RefCounted<ServiceWorkerRegistration>,
-      public ServiceWorkerVersion::Listener {
+      public ServiceWorkerVersion::Observer {
  public:
   using StatusCallback =
-      base::OnceCallback<void(ServiceWorkerStatusCode status)>;
+      base::OnceCallback<void(blink::ServiceWorkerStatusCode status)>;
 
   class CONTENT_EXPORT Listener {
    public:
     virtual void OnVersionAttributesChanged(
         ServiceWorkerRegistration* registration,
-        ChangedVersionAttributesMask changed_mask,
+        blink::mojom::ChangedServiceWorkerObjectsMaskPtr changed_mask,
         const ServiceWorkerRegistrationInfo& info) {}
     virtual void OnUpdateViaCacheChanged(
         ServiceWorkerRegistration* registation) {}
@@ -66,7 +67,7 @@ class CONTENT_EXPORT ServiceWorkerRegistration
       base::WeakPtr<ServiceWorkerContextCore> context);
 
   int64_t id() const { return registration_id_; }
-  const GURL& pattern() const { return pattern_; }
+  const GURL& scope() const { return scope_; }
   blink::mojom::ServiceWorkerUpdateViaCache update_via_cache() const {
     return update_via_cache_;
   }
@@ -91,7 +92,7 @@ class CONTENT_EXPORT ServiceWorkerRegistration
   // state. If you require an ACTIVATED version, use
   // ServiceWorkerContextWrapper::FindReadyRegistration* to get a registration
   // with such a version. Alternatively, use
-  // ServiceWorkerVersion::Listener::OnVersionStateChanged to wait for the
+  // ServiceWorkerVersion::Observer::OnVersionStateChanged to wait for the
   // ACTIVATING version to become ACTIVATED.
   ServiceWorkerVersion* active_version() const {
     return active_version_.get();
@@ -105,8 +106,8 @@ class CONTENT_EXPORT ServiceWorkerRegistration
     return installing_version_.get();
   }
 
-  bool has_installed_version() const {
-    return active_version() || waiting_version();
+  ServiceWorkerVersion* newest_installed_version() const {
+    return waiting_version() ? waiting_version() : active_version();
   }
 
   const blink::mojom::NavigationPreloadState navigation_preload_state() const {
@@ -119,7 +120,8 @@ class CONTENT_EXPORT ServiceWorkerRegistration
   virtual void RemoveListener(Listener* listener);
   void NotifyRegistrationFailed();
   void NotifyUpdateFound();
-  void NotifyVersionAttributesChanged(ChangedVersionAttributesMask mask);
+  void NotifyVersionAttributesChanged(
+      blink::mojom::ChangedServiceWorkerObjectsMaskPtr mask);
 
   ServiceWorkerRegistrationInfo GetInfo();
 
@@ -162,11 +164,18 @@ class CONTENT_EXPORT ServiceWorkerRegistration
   base::Time last_update_check() const { return last_update_check_; }
   void set_last_update_check(base::Time last) { last_update_check_ = last; }
 
+  // The delay for self-updating service workers, to prevent them from running
+  // forever (see https://crbug.com/805496).
+  base::TimeDelta self_update_delay() const { return self_update_delay_; }
+  void set_self_update_delay(const base::TimeDelta& delay) {
+    self_update_delay_ = delay;
+  }
+
   // Unsets the version and deletes its resources. Also deletes this
   // registration from storage if there is no longer a stored version.
   void DeleteVersion(const scoped_refptr<ServiceWorkerVersion>& version);
 
-  void RegisterRegistrationFinishedCallback(const base::Closure& callback);
+  void RegisterRegistrationFinishedCallback(base::OnceClosure callback);
   void NotifyRegistrationFinished();
 
   void SetTaskRunnerForTest(
@@ -185,9 +194,9 @@ class CONTENT_EXPORT ServiceWorkerRegistration
 
   void UnsetVersionInternal(
       ServiceWorkerVersion* version,
-      ChangedVersionAttributesMask* mask);
+      blink::mojom::ChangedServiceWorkerObjectsMask* mask);
 
-  // ServiceWorkerVersion::Listener override.
+  // ServiceWorkerVersion::Observer override.
   void OnNoControllees(ServiceWorkerVersion* version) override;
   void OnNoWork(ServiceWorkerVersion* version) override;
 
@@ -204,21 +213,21 @@ class CONTENT_EXPORT ServiceWorkerRegistration
       scoped_refptr<ServiceWorkerVersion> activating_version);
   void DispatchActivateEvent(
       scoped_refptr<ServiceWorkerVersion> activating_version,
-      ServiceWorkerStatusCode start_worker_status);
+      blink::ServiceWorkerStatusCode start_worker_status);
   void OnActivateEventFinished(
       scoped_refptr<ServiceWorkerVersion> activating_version,
-      ServiceWorkerStatusCode status);
+      blink::ServiceWorkerStatusCode status);
 
-  void OnDeleteFinished(ServiceWorkerStatusCode status);
+  void OnDeleteFinished(blink::ServiceWorkerStatusCode status);
 
   // This method corresponds to the [[ClearRegistration]] algorithm.
   void Clear();
 
   void OnRestoreFinished(StatusCallback callback,
                          scoped_refptr<ServiceWorkerVersion> version,
-                         ServiceWorkerStatusCode status);
+                         blink::ServiceWorkerStatusCode status);
 
-  const GURL pattern_;
+  const GURL scope_;
   blink::mojom::ServiceWorkerUpdateViaCache update_via_cache_;
   const int64_t registration_id_;
   bool is_deleted_;
@@ -227,6 +236,7 @@ class CONTENT_EXPORT ServiceWorkerRegistration
   bool should_activate_when_ready_;
   blink::mojom::NavigationPreloadState navigation_preload_state_;
   base::Time last_update_check_;
+  base::TimeDelta self_update_delay_;
   int64_t resources_total_size_bytes_;
 
   // This registration is the primary owner of these versions.
@@ -234,8 +244,8 @@ class CONTENT_EXPORT ServiceWorkerRegistration
   scoped_refptr<ServiceWorkerVersion> waiting_version_;
   scoped_refptr<ServiceWorkerVersion> installing_version_;
 
-  base::ObserverList<Listener> listeners_;
-  std::vector<base::Closure> registration_finished_callbacks_;
+  base::ObserverList<Listener>::Unchecked listeners_;
+  std::vector<base::OnceClosure> registration_finished_callbacks_;
   base::WeakPtr<ServiceWorkerContextCore> context_;
   scoped_refptr<base::SingleThreadTaskRunner> task_runner_;
 

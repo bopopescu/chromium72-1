@@ -4,11 +4,12 @@
 
 #include "ui/keyboard/container_fullscreen_behavior.h"
 
+#include "ui/aura/window.h"
+
 namespace keyboard {
 
-ContainerFullscreenBehavior::ContainerFullscreenBehavior(
-    KeyboardController* controller)
-    : ContainerFullWidthBehavior(controller) {}
+ContainerFullscreenBehavior::ContainerFullscreenBehavior(Delegate* delegate)
+    : ContainerFullWidthBehavior(delegate) {}
 
 ContainerFullscreenBehavior::~ContainerFullscreenBehavior() {}
 
@@ -26,13 +27,16 @@ void ContainerFullscreenBehavior::SetCanonicalBounds(
 
 gfx::Rect ContainerFullscreenBehavior::GetOccludedBounds(
     const gfx::Rect& visual_bounds_in_screen) const {
-  // TODO(https://crbug.com/826617): Get occluded bounds from IME.
-  NOTIMPLEMENTED_LOG_ONCE();
-  return {};
+  return occluded_bounds_;
 }
 
-ContainerType ContainerFullscreenBehavior::GetType() const {
-  return ContainerType::FULLSCREEN;
+mojom::ContainerType ContainerFullscreenBehavior::GetType() const {
+  return mojom::ContainerType::kFullscreen;
+}
+
+void ContainerFullscreenBehavior::SetOccludedBounds(
+    const gfx::Rect& occluded_bounds) {
+  occluded_bounds_ = occluded_bounds;
 }
 
 }  //  namespace keyboard

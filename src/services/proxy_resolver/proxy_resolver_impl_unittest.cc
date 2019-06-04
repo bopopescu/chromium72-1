@@ -12,6 +12,7 @@
 #include "base/run_loop.h"
 #include "base/test/scoped_task_environment.h"
 #include "mojo/public/cpp/bindings/binding.h"
+#include "net/base/completion_once_callback.h"
 #include "net/base/net_errors.h"
 #include "net/base/proxy_server.h"
 #include "net/proxy_resolution/mock_proxy_resolver.h"
@@ -50,9 +51,8 @@ class TestRequestClient : public mojom::ProxyResolverRequestClient {
   void ReportResult(int32_t error, const net::ProxyInfo& results) override;
   void Alert(const std::string& message) override;
   void OnError(int32_t line_number, const std::string& message) override;
-  void ResolveDns(
-      std::unique_ptr<net::HostResolver::RequestInfo> request_info,
-      net::interfaces::HostResolverRequestClientPtr client) override;
+  void ResolveDns(std::unique_ptr<net::HostResolver::RequestInfo> request_info,
+                  mojom::HostResolverRequestClientPtr client) override;
 
   // Mojo error handler.
   void OnConnectionError();
@@ -97,7 +97,7 @@ void TestRequestClient::OnError(int32_t line_number,
 
 void TestRequestClient::ResolveDns(
     std::unique_ptr<net::HostResolver::RequestInfo> request_info,
-    net::interfaces::HostResolverRequestClientPtr client) {}
+    mojom::HostResolverRequestClientPtr client) {}
 
 void TestRequestClient::OnConnectionError() {
   event_waiter_.NotifyEvent(CONNECTION_ERROR);
@@ -111,16 +111,17 @@ class MockProxyResolverV8Tracing : public net::ProxyResolverV8Tracing {
     bool cancelled = false;
     void Complete(int result) {
       DCHECK(!callback_.is_null());
-      callback_.Run(result);
-      callback_.Reset();
+      std::move(callback_).Run(result);
     }
 
     bool WasCompleted() { return callback_.is_null(); }
 
-    void SetCallback(net::CompletionCallback callback) { callback_ = callback; }
+    void SetCallback(net::CompletionOnceCallback callback) {
+      callback_ = std::move(callback);
+    }
 
    private:
-    net::CompletionCallback callback_;
+    net::CompletionOnceCallback callback_;
   };
 
   class RequestImpl : public net::ProxyResolver::Request {
@@ -152,7 +153,7 @@ class MockProxyResolverV8Tracing : public net::ProxyResolverV8Tracing {
   // ProxyResolverV8Tracing overrides.
   void GetProxyForURL(const GURL& url,
                       net::ProxyInfo* results,
-                      const net::CompletionCallback& callback,
+                      net::CompletionOnceCallback callback,
                       std::unique_ptr<net::ProxyResolver::Request>* request,
                       std::unique_ptr<Bindings> bindings) override;
 
@@ -170,14 +171,14 @@ class MockProxyResolverV8Tracing : public net::ProxyResolverV8Tracing {
 void MockProxyResolverV8Tracing::GetProxyForURL(
     const GURL& url,
     net::ProxyInfo* results,
-    const net::CompletionCallback& callback,
+    net::CompletionOnceCallback callback,
     std::unique_ptr<net::ProxyResolver::Request>* request,
     std::unique_ptr<Bindings> bindings) {
   pending_jobs_.push_back(base::WrapUnique(new Job()));
   auto* pending_job = pending_jobs_.back().get();
   pending_job->url = url;
   pending_job->results = results;
-  pending_job->SetCallback(callback);
+  pending_job->SetCallback(std::move(callback));
   request->reset(new RequestImpl(pending_job, this));
 }
 

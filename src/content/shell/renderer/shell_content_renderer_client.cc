@@ -44,15 +44,15 @@ namespace content {
 namespace {
 
 // A test service which can be driven by browser tests for various reasons.
-class TestServiceImpl : public mojom::TestService {
+class TestRendererServiceImpl : public mojom::TestService {
  public:
-  explicit TestServiceImpl(mojom::TestServiceRequest request)
+  explicit TestRendererServiceImpl(mojom::TestServiceRequest request)
       : binding_(this, std::move(request)) {
     binding_.set_connection_error_handler(base::BindOnce(
-        &TestServiceImpl::OnConnectionError, base::Unretained(this)));
+        &TestRendererServiceImpl::OnConnectionError, base::Unretained(this)));
   }
 
-  ~TestServiceImpl() override {}
+  ~TestRendererServiceImpl() override {}
 
  private:
   void OnConnectionError() { delete this; }
@@ -76,6 +76,10 @@ class TestServiceImpl : public mojom::TestService {
     NOTREACHED();
   }
 
+  void DoCrashImmediately(DoCrashImmediatelyCallback callback) override {
+    NOTREACHED();
+  }
+
   void CreateFolder(CreateFolderCallback callback) override { NOTREACHED(); }
 
   void GetRequestorName(GetRequestorNameCallback callback) override {
@@ -89,12 +93,12 @@ class TestServiceImpl : public mojom::TestService {
 
   mojo::Binding<mojom::TestService> binding_;
 
-  DISALLOW_COPY_AND_ASSIGN(TestServiceImpl);
+  DISALLOW_COPY_AND_ASSIGN(TestRendererServiceImpl);
 };
 
-void CreateTestService(mojom::TestServiceRequest request) {
+void CreateRendererTestService(mojom::TestServiceRequest request) {
   // Owns itself.
-  new TestServiceImpl(std::move(request));
+  new TestRendererServiceImpl(std::move(request));
 }
 
 }  // namespace
@@ -109,7 +113,8 @@ void ShellContentRendererClient::RenderThreadStarted() {
 
   auto registry = std::make_unique<service_manager::BinderRegistry>();
   registry->AddInterface<mojom::TestService>(
-      base::Bind(&CreateTestService), base::ThreadTaskRunnerHandle::Get());
+      base::Bind(&CreateRendererTestService),
+      base::ThreadTaskRunnerHandle::Get());
   registry->AddInterface<mojom::PowerMonitorTest>(
       base::Bind(&PowerMonitorTestImpl::MakeStrongBinding,
                  base::Passed(std::make_unique<PowerMonitorTestImpl>())),
@@ -132,8 +137,7 @@ void ShellContentRendererClient::PrepareErrorPage(
     RenderFrame* render_frame,
     const blink::WebURLRequest& failed_request,
     const blink::WebURLError& error,
-    std::string* error_html,
-    base::string16* error_description) {
+    std::string* error_html) {
   if (error_html && error_html->empty()) {
     *error_html =
         "<head><title>Error</title></head><body>Could not load the requested "
@@ -150,8 +154,7 @@ void ShellContentRendererClient::PrepareErrorPageForHttpStatusError(
     const blink::WebURLRequest& failed_request,
     const GURL& unreachable_url,
     int http_status,
-    std::string* error_html,
-    base::string16* error_description) {
+    std::string* error_html) {
   if (error_html) {
     *error_html =
         "<head><title>Error</title></head><body>Server returned HTTP status " +
@@ -184,20 +187,6 @@ void ShellContentRendererClient::DidInitializeWorkerContextOnWorkerThread(
           switches::kExposeInternalsForTesting)) {
     blink::WebTestingSupport::InjectInternalsObject(context);
   }
-}
-
-bool ShellContentRendererClient::ShouldFork(blink::WebLocalFrame* frame,
-                                            const GURL& url,
-                                            const std::string& http_method,
-                                            bool is_initial_navigation,
-                                            bool is_server_redirect,
-                                            bool* send_referrer) {
-  if (base::CommandLine::ForCurrentProcess()->HasSwitch(
-          switches::kContentShellAlwaysFork)) {
-    *send_referrer = true;
-    return true;
-  }
-  return false;
 }
 
 #if BUILDFLAG(ENABLE_MOJO_CDM)

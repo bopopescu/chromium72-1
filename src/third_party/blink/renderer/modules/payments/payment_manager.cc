@@ -8,19 +8,20 @@
 #include "third_party/blink/renderer/bindings/core/v8/script_promise.h"
 #include "third_party/blink/renderer/core/dom/dom_exception.h"
 #include "third_party/blink/renderer/modules/payments/payment_instruments.h"
-#include "third_party/blink/renderer/modules/serviceworkers/service_worker_registration.h"
+#include "third_party/blink/renderer/modules/service_worker/service_worker_registration.h"
 #include "third_party/blink/renderer/platform/bindings/script_state.h"
+#include "third_party/blink/renderer/platform/wtf/functional.h"
 
 namespace blink {
 
 PaymentManager* PaymentManager::Create(
     ServiceWorkerRegistration* registration) {
-  return new PaymentManager(registration);
+  return MakeGarbageCollected<PaymentManager>(registration);
 }
 
 PaymentInstruments* PaymentManager::instruments() {
   if (!instruments_)
-    instruments_ = new PaymentInstruments(manager_);
+    instruments_ = MakeGarbageCollected<PaymentInstruments>(manager_);
   return instruments_;
 }
 

@@ -51,23 +51,35 @@ class ArcNotificationManager
   void OnNotificationUpdated(arc::mojom::ArcNotificationDataPtr data) override;
   void OnNotificationRemoved(const std::string& key) override;
   void OpenMessageCenter() override;
+  void CloseMessageCenter() override;
+  void OnDoNotDisturbStatusUpdated(
+      arc::mojom::ArcDoNotDisturbStatusPtr status) override;
+  void OnLockScreenSettingUpdated(
+      arc::mojom::ArcLockScreenNotificationSettingPtr setting) override;
+  void ProcessUserAction(
+      arc::mojom::ArcNotificationUserActionDataPtr data) override;
 
   // Methods called from ArcNotificationItem:
   void SendNotificationRemovedFromChrome(const std::string& key);
   void SendNotificationClickedOnChrome(const std::string& key);
-  void SendNotificationButtonClickedOnChrome(const std::string& key,
-                                             int button_index);
   void CreateNotificationWindow(const std::string& key);
   void CloseNotificationWindow(const std::string& key);
   void OpenNotificationSettings(const std::string& key);
+  void OpenNotificationSnoozeSettings(const std::string& key);
   bool IsOpeningSettingsSupported() const;
   void SendNotificationToggleExpansionOnChrome(const std::string& key);
+  void SetDoNotDisturbStatusOnAndroid(bool enabled);
+  void CancelPress(const std::string& key);
+  void SetNotificationConfiguration();
 
  private:
   // Helper class to own MojoChannel and ConnectionHolder.
   class InstanceOwner;
 
   bool ShouldIgnoreNotification(arc::mojom::ArcNotificationData* data);
+
+  void PerformUserAction(uint32_t id, bool open_message_center);
+  void CancelUserAction(uint32_t id);
 
   // Invoked when |get_app_id_callback_| gets back the app id.
   void OnGotAppId(arc::mojom::ArcNotificationDataPtr data,
@@ -76,12 +88,17 @@ class ArcNotificationManager
   std::unique_ptr<ArcNotificationManagerDelegate> delegate_;
   const AccountId main_profile_id_;
   message_center::MessageCenter* const message_center_;
+  const std::unique_ptr<message_center::MessageCenterObserver>
+      do_not_disturb_manager_;
 
   using ItemMap =
       std::unordered_map<std::string, std::unique_ptr<ArcNotificationItem>>;
   ItemMap items_;
 
   bool ready_ = false;
+
+  // If any remote input is focused, its key is stored. Otherwise, empty.
+  std::string previously_focused_notification_key_;
 
   std::unique_ptr<InstanceOwner> instance_owner_;
 

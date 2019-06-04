@@ -15,18 +15,8 @@
 #define ENABLE_SYNC_CALL_RESTRICTIONS 0
 #endif
 
-class ChromeSelectFileDialogFactory;
-
 namespace sync_preferences {
 class PrefServiceSyncable;
-}
-
-namespace content {
-class BlinkTestController;
-}
-
-namespace display {
-class ForwardingDisplayDelegate;
 }
 
 namespace leveldb {
@@ -37,9 +27,10 @@ namespace prefs {
 class PersistentPrefStoreClient;
 }
 
-namespace views {
-class ClipboardMus;
-}
+namespace ui {
+class ClipboardClient;
+class HostContextFactoryPrivate;
+}  // namespace ui
 
 namespace viz {
 class HostFrameSinkManager;
@@ -92,25 +83,15 @@ class MOJO_CPP_BINDINGS_EXPORT SyncCallRestrictions {
   // Incognito pref service instances are created synchronously.
   friend class sync_preferences::PrefServiceSyncable;
   friend class mojo::ScopedAllowSyncCallForTesting;
-  // For file open and save dialogs created synchronously.
-  friend class ::ChromeSelectFileDialogFactory;
+  // For synchronous system clipboard access.
+  friend class ui::ClipboardClient;
   // For destroying the GL context/surface that draw to a platform window before
   // the platform window is destroyed.
   friend class viz::HostFrameSinkManager;
-  // Allow for layout test pixel dumps.
-  friend class content::BlinkTestController;
+  // For preventing frame swaps of wrong size during resize on Windows.
+  // (https://crbug.com/811945)
+  friend class ui::HostContextFactoryPrivate;
   // END ALLOWED USAGE.
-
-  // BEGIN USAGE THAT NEEDS TO BE FIXED.
-  // In the non-mus case, we called blocking OS functions in the ui::Clipboard
-  // implementation which weren't caught by sync call restrictions. Our blocking
-  // calls to mus, however, are.
-  friend class views::ClipboardMus;
-  // In ash::Shell::Init() it assumes that NativeDisplayDelegate will be
-  // synchronous at first. In mushrome ForwardingDisplayDelegate uses a
-  // synchronous call to get the display snapshots as a workaround.
-  friend class display::ForwardingDisplayDelegate;
-  // END USAGE THAT NEEDS TO BE FIXED.
 
 #if ENABLE_SYNC_CALL_RESTRICTIONS
   static void IncreaseScopedAllowCount();
@@ -132,7 +113,7 @@ class MOJO_CPP_BINDINGS_EXPORT SyncCallRestrictions {
 
    private:
 #if ENABLE_SYNC_CALL_RESTRICTIONS
-    base::ThreadRestrictions::ScopedAllowWait allow_wait_;
+    base::ScopedAllowBaseSyncPrimitivesOutsideBlockingScope allow_wait_;
 #endif
 
     DISALLOW_COPY_AND_ASSIGN(ScopedAllowSyncCall);

@@ -21,6 +21,11 @@
 
 #include <stdint.h>
 
+#include <algorithm>
+#include <array>
+#include <string>
+#include <vector>
+
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/location.h"
@@ -28,6 +33,8 @@
 #include "base/run_loop.h"
 #include "base/single_thread_task_runner.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/test/bind_test_util.h"
+#include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_task_environment.h"
 #include "base/threading/thread_task_runner_handle.h"
 #include "components/history/core/browser/history_database_params.h"
@@ -56,11 +63,6 @@ class HistoryServiceTest : public testing::Test {
 
   ~HistoryServiceTest() override {}
 
-  void OnMostVisitedURLsAvailable(const MostVisitedURLList* url_list) {
-    most_visited_urls_ = *url_list;
-    base::RunLoop::QuitCurrentWhenIdleDeprecated();
-  }
-
  protected:
   friend class BackendDelegate;
 
@@ -83,17 +85,15 @@ class HistoryServiceTest : public testing::Test {
 
     // Make sure we don't have any event pending that could disrupt the next
     // test.
-    base::ThreadTaskRunnerHandle::Get()->PostTask(
-        FROM_HERE, base::RunLoop::QuitCurrentWhenIdleClosureDeprecated());
-    base::RunLoop().Run();
+    base::RunLoop().RunUntilIdle();
   }
 
   void CleanupHistoryService() {
     DCHECK(history_service_);
 
+    base::RunLoop run_loop;
     history_service_->ClearCachedDataForContextID(nullptr);
-    history_service_->SetOnBackendDestroyTask(
-        base::RunLoop::QuitCurrentWhenIdleClosureDeprecated());
+    history_service_->SetOnBackendDestroyTask(run_loop.QuitClosure());
     history_service_->Cleanup();
     history_service_.reset();
 
@@ -101,24 +101,26 @@ class HistoryServiceTest : public testing::Test {
     // moving to the next test. Note: if this never terminates, somebody is
     // probably leaking a reference to the history backend, so it never calls
     // our destroy task.
-    base::RunLoop().Run();
+    run_loop.Run();
   }
 
   // Fills the query_url_row_ and query_url_visits_ structures with the
   // information about the given URL and returns true. If the URL was not
   // found, this will return false and those structures will not be changed.
   bool QueryURL(history::HistoryService* history, const GURL& url) {
+    base::RunLoop run_loop;
     history_service_->QueryURL(
-        url,
-        true,
-        base::Bind(&HistoryServiceTest::SaveURLAndQuit, base::Unretained(this)),
+        url, true,
+        base::BindOnce(&HistoryServiceTest::SaveURLAndQuit,
+                       base::Unretained(this), run_loop.QuitClosure()),
         &tracker_);
-    base::RunLoop().Run();  // Will be exited in SaveURLAndQuit.
+    run_loop.Run();  // Will be exited in SaveURLAndQuit.
     return query_url_success_;
   }
 
   // Callback for HistoryService::QueryURL.
-  void SaveURLAndQuit(bool success,
+  void SaveURLAndQuit(base::OnceClosure done,
+                      bool success,
                       const URLRow& url_row,
                       const VisitVector& visits) {
     query_url_success_ = success;
@@ -129,28 +131,49 @@ class HistoryServiceTest : public testing::Test {
       query_url_row_ = URLRow();
       query_url_visits_.clear();
     }
-    base::RunLoop::QuitCurrentWhenIdleDeprecated();
+    std::move(done).Run();
   }
 
   // Fills in saved_redirects_ with the redirect information for the given URL,
   // returning true on success. False means the URL was not found.
   void QueryRedirectsFrom(history::HistoryService* history, const GURL& url) {
+    base::RunLoop run_loop;
     history_service_->QueryRedirectsFrom(
         url,
-        base::Bind(&HistoryServiceTest::OnRedirectQueryComplete,
-                   base::Unretained(this)),
+        base::BindRepeating(&HistoryServiceTest::OnRedirectQueryComplete,
+                            base::Unretained(this), run_loop.QuitClosure()),
         &tracker_);
-    base::RunLoop().Run();  // Will be exited in *QueryComplete.
+    run_loop.Run();  // Will be exited in *QueryComplete.
   }
 
   // Callback for QueryRedirects.
-  void OnRedirectQueryComplete(const history::RedirectList* redirects) {
+  void OnRedirectQueryComplete(base::OnceClosure done,
+                               const history::RedirectList* redirects) {
     saved_redirects_.clear();
     if (!redirects->empty()) {
       saved_redirects_.insert(
           saved_redirects_.end(), redirects->begin(), redirects->end());
     }
-    base::RunLoop::QuitCurrentWhenIdleDeprecated();
+    std::move(done).Run();
+  }
+
+  void QueryMostVisitedURLs() {
+    const int kResultCount = 20;
+    const int kDaysBack = 90;
+
+    base::RunLoop run_loop;
+    history_service_->QueryMostVisitedURLs(
+        kResultCount, kDaysBack,
+        base::BindRepeating(&HistoryServiceTest::OnQueryMostVisitedURLsComplete,
+                            base::Unretained(this), run_loop.QuitClosure()),
+        &tracker_);
+    run_loop.Run();  // Will be exited in *QueryComplete.
+  }
+
+  void OnQueryMostVisitedURLsComplete(base::OnceClosure done,
+                                      const MostVisitedURLList* url_list) {
+    most_visited_urls_ = *url_list;
+    std::move(done).Run();
   }
 
   base::ScopedTempDir temp_dir_;
@@ -495,13 +518,8 @@ TEST_F(HistoryServiceTest, MostVisitedURLs) {
       url1, base::Time::Now(), context_id, 0, GURL(),
       history::RedirectList(), ui::PAGE_TRANSITION_TYPED,
       history::SOURCE_BROWSED, false);
-  history_service_->QueryMostVisitedURLs(
-      20,
-      90,
-      base::Bind(&HistoryServiceTest::OnMostVisitedURLsAvailable,
-                 base::Unretained(this)),
-      &tracker_);
-  base::RunLoop().Run();
+
+  QueryMostVisitedURLs();
 
   EXPECT_EQ(2U, most_visited_urls_.size());
   EXPECT_EQ(url0, most_visited_urls_[0].url);
@@ -512,13 +530,8 @@ TEST_F(HistoryServiceTest, MostVisitedURLs) {
       url2, base::Time::Now(), context_id, 0, GURL(),
       history::RedirectList(), ui::PAGE_TRANSITION_TYPED,
       history::SOURCE_BROWSED, false);
-  history_service_->QueryMostVisitedURLs(
-      20,
-      90,
-      base::Bind(&HistoryServiceTest::OnMostVisitedURLsAvailable,
-                 base::Unretained(this)),
-      &tracker_);
-  base::RunLoop().Run();
+
+  QueryMostVisitedURLs();
 
   EXPECT_EQ(3U, most_visited_urls_.size());
   EXPECT_EQ(url0, most_visited_urls_[0].url);
@@ -530,13 +543,8 @@ TEST_F(HistoryServiceTest, MostVisitedURLs) {
       url2, base::Time::Now(), context_id, 0, GURL(),
       history::RedirectList(), ui::PAGE_TRANSITION_TYPED,
       history::SOURCE_BROWSED, false);
-  history_service_->QueryMostVisitedURLs(
-      20,
-      90,
-      base::Bind(&HistoryServiceTest::OnMostVisitedURLsAvailable,
-                 base::Unretained(this)),
-      &tracker_);
-  base::RunLoop().Run();
+
+  QueryMostVisitedURLs();
 
   EXPECT_EQ(3U, most_visited_urls_.size());
   EXPECT_EQ(url2, most_visited_urls_[0].url);
@@ -548,13 +556,8 @@ TEST_F(HistoryServiceTest, MostVisitedURLs) {
       url1, base::Time::Now(), context_id, 0, GURL(),
       history::RedirectList(), ui::PAGE_TRANSITION_TYPED,
       history::SOURCE_BROWSED, false);
-  history_service_->QueryMostVisitedURLs(
-      20,
-      90,
-      base::Bind(&HistoryServiceTest::OnMostVisitedURLsAvailable,
-                 base::Unretained(this)),
-      &tracker_);
-  base::RunLoop().Run();
+
+  QueryMostVisitedURLs();
 
   EXPECT_EQ(3U, most_visited_urls_.size());
   EXPECT_EQ(url1, most_visited_urls_[0].url);
@@ -567,13 +570,8 @@ TEST_F(HistoryServiceTest, MostVisitedURLs) {
       url4, base::Time::Now(), context_id, 0, GURL(),
       redirects, ui::PAGE_TRANSITION_TYPED,
       history::SOURCE_BROWSED, false);
-  history_service_->QueryMostVisitedURLs(
-      20,
-      90,
-      base::Bind(&HistoryServiceTest::OnMostVisitedURLsAvailable,
-                 base::Unretained(this)),
-      &tracker_);
-  base::RunLoop().Run();
+
+  QueryMostVisitedURLs();
 
   EXPECT_EQ(4U, most_visited_urls_.size());
   EXPECT_EQ(url1, most_visited_urls_[0].url);
@@ -719,8 +717,8 @@ void CheckDirectiveProcessingResult(
 
   base::PlatformThread::Sleep(base::TimeDelta::FromMilliseconds(100));
   base::ThreadTaskRunnerHandle::Get()->PostTask(
-      FROM_HERE, base::Bind(&CheckDirectiveProcessingResult, timeout,
-                            change_processor, num_changes));
+      FROM_HERE, base::BindOnce(&CheckDirectiveProcessingResult, timeout,
+                                change_processor, num_changes));
 }
 
 // Create a delete directive for a few specific history entries,
@@ -751,8 +749,7 @@ TEST_F(HistoryServiceTest, ProcessGlobalIdDeleteDirective) {
           .ToInternalValue());
   global_id_directive->set_start_time_usec(3);
   global_id_directive->set_end_time_usec(10);
-  directives.push_back(
-      syncer::SyncData::CreateRemoteData(1, entity_specs, base::Time()));
+  directives.push_back(syncer::SyncData::CreateRemoteData(1, entity_specs));
 
   // 2nd directive.
   global_id_directive->Clear();
@@ -761,8 +758,7 @@ TEST_F(HistoryServiceTest, ProcessGlobalIdDeleteDirective) {
           .ToInternalValue());
   global_id_directive->set_start_time_usec(13);
   global_id_directive->set_end_time_usec(19);
-  directives.push_back(
-      syncer::SyncData::CreateRemoteData(2, entity_specs, base::Time()));
+  directives.push_back(syncer::SyncData::CreateRemoteData(2, entity_specs));
 
   syncer::FakeSyncChangeProcessor change_processor;
   EXPECT_FALSE(history_service_
@@ -779,9 +775,9 @@ TEST_F(HistoryServiceTest, ProcessGlobalIdDeleteDirective) {
   // processing finishes.
   base::ThreadTaskRunnerHandle::Get()->PostTask(
       FROM_HERE,
-      base::Bind(&CheckDirectiveProcessingResult,
-                 base::Time::Now() + base::TimeDelta::FromSeconds(10),
-                 &change_processor, 2));
+      base::BindOnce(&CheckDirectiveProcessingResult,
+                     base::Time::Now() + base::TimeDelta::FromSeconds(10),
+                     &change_processor, 2));
   base::RunLoop().RunUntilIdle();
   EXPECT_TRUE(QueryURL(history_service_.get(), test_url));
   ASSERT_EQ(5, query_url_row_.visit_count());
@@ -829,15 +825,13 @@ TEST_F(HistoryServiceTest, ProcessTimeRangeDeleteDirective) {
           ->mutable_time_range_directive();
   time_range_directive->set_start_time_usec(2);
   time_range_directive->set_end_time_usec(5);
-  directives.push_back(
-      syncer::SyncData::CreateRemoteData(1, entity_specs, base::Time()));
+  directives.push_back(syncer::SyncData::CreateRemoteData(1, entity_specs));
 
   // 2nd directive.
   time_range_directive->Clear();
   time_range_directive->set_start_time_usec(8);
   time_range_directive->set_end_time_usec(10);
-  directives.push_back(
-      syncer::SyncData::CreateRemoteData(2, entity_specs, base::Time()));
+  directives.push_back(syncer::SyncData::CreateRemoteData(2, entity_specs));
 
   syncer::FakeSyncChangeProcessor change_processor;
   EXPECT_FALSE(history_service_
@@ -854,9 +848,9 @@ TEST_F(HistoryServiceTest, ProcessTimeRangeDeleteDirective) {
   // directive processing finishes.
   base::ThreadTaskRunnerHandle::Get()->PostTask(
       FROM_HERE,
-      base::Bind(&CheckDirectiveProcessingResult,
-                 base::Time::Now() + base::TimeDelta::FromSeconds(10),
-                 &change_processor, 2));
+      base::BindOnce(&CheckDirectiveProcessingResult,
+                     base::Time::Now() + base::TimeDelta::FromSeconds(10),
+                     &change_processor, 2));
   base::RunLoop().RunUntilIdle();
   EXPECT_TRUE(QueryURL(history_service_.get(), test_url));
   ASSERT_EQ(3, query_url_row_.visit_count());
@@ -876,4 +870,56 @@ TEST_F(HistoryServiceTest, ProcessTimeRangeDeleteDirective) {
   EXPECT_EQ(2, syncer::SyncDataRemote(sync_changes[1].sync_data()).GetId());
 }
 
+// Helper to add a page with specified days back in the past.
+void AddPageInThePast(HistoryService* history,
+                      const std::string& url_spec,
+                      int days_back) {
+  const GURL url(url_spec);
+  base::Time time_in_the_past =
+      base::Time::Now() - base::TimeDelta::FromDays(days_back);
+  history->AddPage(url, time_in_the_past, nullptr, 0, GURL(),
+                   history::RedirectList(), ui::PAGE_TRANSITION_LINK,
+                   history::SOURCE_BROWSED, false);
+}
+
+// Helper to contain a callback and run loop logic.
+int GetMonthlyHostCountHelper(HistoryService* history,
+                              base::CancelableTaskTracker* tracker) {
+  base::RunLoop run_loop;
+  int count = 0;
+  history->CountUniqueHostsVisitedLastMonth(
+      base::BindLambdaForTesting([&](HistoryCountResult result) {
+        count = result.count;
+        run_loop.Quit();
+      }),
+      tracker);
+  run_loop.Run();
+  return count;
+}
+
+// Counts hosts visited in the last month.
+TEST_F(HistoryServiceTest, CountMonthlyVisitedHosts) {
+  base::HistogramTester histogram_tester;
+  HistoryService* history = history_service_.get();
+  ASSERT_TRUE(history);
+
+  AddPageInThePast(history, "http://www.google.com/", 0);
+  EXPECT_EQ(1, GetMonthlyHostCountHelper(history, &tracker_));
+
+  AddPageInThePast(history, "http://www.google.com/foo", 1);
+  AddPageInThePast(history, "https://www.google.com/foo", 5);
+  AddPageInThePast(history, "https://www.gmail.com/foo", 10);
+  // Expect 2 because only host part of URL counts.
+  EXPECT_EQ(2, GetMonthlyHostCountHelper(history, &tracker_));
+
+  AddPageInThePast(history, "https://www.gmail.com/foo", 31);
+  // Count should not change since URL added is older than a month.
+  EXPECT_EQ(2, GetMonthlyHostCountHelper(history, &tracker_));
+
+  AddPageInThePast(history, "https://www.yahoo.com/foo", 29);
+  EXPECT_EQ(3, GetMonthlyHostCountHelper(history, &tracker_));
+
+  // The time required to compute host count is reported on each computation.
+  histogram_tester.ExpectTotalCount("History.DatabaseMonthlyHostCountTime", 4);
+}
 }  // namespace history

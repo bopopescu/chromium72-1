@@ -25,7 +25,6 @@
 
 #include "third_party/blink/renderer/core/dom/dom_implementation.h"
 
-#include "third_party/blink/renderer/bindings/core/v8/exception_state.h"
 #include "third_party/blink/renderer/core/css/css_style_sheet.h"
 #include "third_party/blink/renderer/core/css/media_list.h"
 #include "third_party/blink/renderer/core/css/style_sheet_contents.h"
@@ -51,6 +50,7 @@
 #include "third_party/blink/renderer/core/loader/frame_loader.h"
 #include "third_party/blink/renderer/core/page/page.h"
 #include "third_party/blink/renderer/core/svg_names.h"
+#include "third_party/blink/renderer/platform/bindings/exception_state.h"
 #include "third_party/blink/renderer/platform/graphics/image.h"
 #include "third_party/blink/renderer/platform/network/mime/content_type.h"
 #include "third_party/blink/renderer/platform/network/mime/mime_type_registry.h"
@@ -84,9 +84,9 @@ XMLDocument* DOMImplementation::createDocument(
   XMLDocument* doc = nullptr;
   DocumentInit init =
       DocumentInit::Create().WithContextDocument(document_->ContextDocument());
-  if (namespace_uri == SVGNames::svgNamespaceURI) {
+  if (namespace_uri == svg_names::kNamespaceURI) {
     doc = XMLDocument::CreateSVG(init);
-  } else if (namespace_uri == HTMLNames::xhtmlNamespaceURI) {
+  } else if (namespace_uri == html_names::xhtmlNamespaceURI) {
     doc = XMLDocument::CreateXHTML(
         init.WithRegistrationContext(document_->RegistrationContext()));
   } else {
@@ -262,8 +262,10 @@ Document* DOMImplementation::createDocument(const String& type,
         init, plugin_data->PluginBackgroundColorForMimeType(type));
   }
   // multipart/x-mixed-replace is only supported for images.
-  if (Image::SupportsType(type) || type == "multipart/x-mixed-replace")
+  if (MIMETypeRegistry::IsSupportedImageResourceMIMEType(type) ||
+      type == "multipart/x-mixed-replace") {
     return ImageDocument::Create(init);
+  }
 
   // Check to see if the type can be played by our media player, if so create a
   // MediaDocument

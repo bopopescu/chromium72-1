@@ -8,13 +8,15 @@
 #include <utility>
 
 #include "components/apdu/apdu_command.h"
+#include "device/fido/fido_constants.h"
 #include "device/fido/fido_parsing_utils.h"
 
 namespace device {
 
 bool IsConvertibleToU2fRegisterCommand(
     const CtapMakeCredentialRequest& request) {
-  if (request.user_verification_required() || request.resident_key_supported())
+  if (request.user_verification() == UserVerificationRequirement::kRequired ||
+      request.resident_key_required())
     return false;
 
   const auto& public_key_credential_info =
@@ -41,7 +43,7 @@ base::Optional<std::vector<uint8_t>> ConvertToU2fRegisterCommand(
 
   return ConstructU2fRegisterCommand(
       fido_parsing_utils::CreateSHA256Hash(request.rp().rp_id()),
-      request.client_data_hash());
+      request.client_data_hash(), request.is_individual_attestation());
 }
 
 base::Optional<std::vector<uint8_t>> ConvertToU2fCheckOnlySignCommand(
@@ -63,27 +65,23 @@ base::Optional<std::vector<uint8_t>> ConvertToU2fSignCommand(
   if (!IsConvertibleToU2fSignCommand(request))
     return base::nullopt;
 
-  auto application_parameter =
+  const auto& application_parameter =
       application_parameter_type == ApplicationParameterType::kPrimary
           ? fido_parsing_utils::CreateSHA256Hash(request.rp_id())
-          : std::vector<uint8_t>();
+          : request.alternative_application_parameter().value_or(
+                std::array<uint8_t, kRpIdHashLength>());
 
-  return ConstructU2fSignCommand(std::move(application_parameter),
+  return ConstructU2fSignCommand(application_parameter,
                                  request.client_data_hash(), key_handle,
                                  check_only);
 }
 
-base::Optional<std::vector<uint8_t>> ConstructU2fRegisterCommand(
-    base::span<const uint8_t> application_parameter,
-    base::span<const uint8_t> challenge_parameter,
+std::vector<uint8_t> ConstructU2fRegisterCommand(
+    base::span<const uint8_t, kU2fApplicationParamLength> application_parameter,
+    base::span<const uint8_t, kU2fChallengeParamLength> challenge_parameter,
     bool is_individual_attestation) {
-  if (application_parameter.size() != kU2fParameterLength ||
-      challenge_parameter.size() != kU2fParameterLength) {
-    return base::nullopt;
-  }
-
   std::vector<uint8_t> data;
-  data.reserve(challenge_parameter.size() + application_parameter.size());
+  data.reserve(kU2fChallengeParamLength + kU2fApplicationParamLength);
   fido_parsing_utils::Append(&data, challenge_parameter);
   fido_parsing_utils::Append(&data, application_parameter);
 
@@ -97,18 +95,16 @@ base::Optional<std::vector<uint8_t>> ConstructU2fRegisterCommand(
 }
 
 base::Optional<std::vector<uint8_t>> ConstructU2fSignCommand(
-    base::span<const uint8_t> application_parameter,
-    base::span<const uint8_t> challenge_parameter,
+    base::span<const uint8_t, kU2fApplicationParamLength> application_parameter,
+    base::span<const uint8_t, kU2fChallengeParamLength> challenge_parameter,
     base::span<const uint8_t> key_handle,
     bool check_only) {
-  if (application_parameter.size() != kU2fParameterLength ||
-      challenge_parameter.size() != kU2fParameterLength ||
-      key_handle.size() > kMaxKeyHandleLength) {
+  if (key_handle.size() > kMaxKeyHandleLength) {
     return base::nullopt;
   }
 
   std::vector<uint8_t> data;
-  data.reserve(challenge_parameter.size() + application_parameter.size() + 1 +
+  data.reserve(kU2fChallengeParamLength + kU2fApplicationParamLength + 1 +
                key_handle.size());
   fido_parsing_utils::Append(&data, challenge_parameter);
   fido_parsing_utils::Append(&data, application_parameter);
@@ -123,7 +119,7 @@ base::Optional<std::vector<uint8_t>> ConstructU2fSignCommand(
   return command.GetEncodedCommand();
 }
 
-base::Optional<std::vector<uint8_t>> ConstructBogusU2fRegistrationCommand() {
+std::vector<uint8_t> ConstructBogusU2fRegistrationCommand() {
   return ConstructU2fRegisterCommand(kBogusAppParam, kBogusChallenge);
 }
 

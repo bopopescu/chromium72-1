@@ -17,6 +17,7 @@
 #include "components/prefs/pref_change_registrar.h"
 
 class Browser;
+class BrowserNonClientFrameView;
 class Tab;
 struct TabRendererData;
 
@@ -59,47 +60,42 @@ class BrowserTabStripController : public TabStripController,
   void ToggleSelected(int model_index) override;
   void AddSelectionFromAnchorTo(int model_index) override;
   void CloseTab(int model_index, CloseTabSource source) override;
-  void ToggleTabAudioMute(int model_index) override;
   void ShowContextMenuForTab(Tab* tab,
                              const gfx::Point& p,
                              ui::MenuSourceType source_type) override;
   int HasAvailableDragActions() const override;
   void OnDropIndexUpdate(int index, bool drop_before) override;
   bool IsCompatibleWith(TabStrip* other) const override;
+  NewTabButtonPosition GetNewTabButtonPosition() const override;
   void CreateNewTab() override;
   void CreateNewTabWithLocation(const base::string16& loc) override;
-  bool IsIncognito() override;
   void StackedLayoutMaybeChanged() override;
+  bool IsSingleTabModeAvailable() override;
   void OnStartedDraggingTabs() override;
   void OnStoppedDraggingTabs() override;
+  bool IsFrameCondensed() const override;
+  bool HasVisibleBackgroundTabShapes() const override;
+  bool EverHasVisibleBackgroundTabShapes() const override;
+  bool ShouldPaintAsActiveFrame() const override;
+  bool CanDrawStrokes() const override;
+  SkColor GetFrameColor(
+      BrowserNonClientFrameView::ActiveState active_state =
+          BrowserNonClientFrameView::kUseCurrent) const override;
   SkColor GetToolbarTopSeparatorColor() const override;
+  int GetTabBackgroundResourceId(
+      BrowserNonClientFrameView::ActiveState active_state,
+      bool* has_custom_image) const override;
   base::string16 GetAccessibleTabName(const Tab* tab) const override;
   Profile* GetProfile() const override;
 
   // TabStripModelObserver implementation:
-  void TabInsertedAt(TabStripModel* tab_strip_model,
-                     content::WebContents* contents,
-                     int model_index,
-                     bool is_active) override;
-  void TabDetachedAt(content::WebContents* contents,
-                     int model_index,
-                     bool was_active) override;
-  void ActiveTabChanged(content::WebContents* old_contents,
-                        content::WebContents* new_contents,
-                        int index,
-                        int reason) override;
-  void TabSelectionChanged(TabStripModel* tab_strip_model,
-                           const ui::ListSelectionModel& old_model) override;
-  void TabMoved(content::WebContents* contents,
-                int from_model_index,
-                int to_model_index) override;
+  void OnTabStripModelChanged(
+      TabStripModel* tab_strip_model,
+      const TabStripModelChange& change,
+      const TabStripSelectionChange& selection) override;
   void TabChangedAt(content::WebContents* contents,
                     int model_index,
                     TabChangeType change_type) override;
-  void TabReplacedAt(TabStripModel* tab_strip_model,
-                     content::WebContents* old_contents,
-                     content::WebContents* new_contents,
-                     int model_index) override;
   void TabPinnedStateChanged(TabStripModel* tab_strip_model,
                              content::WebContents* contents,
                              int model_index) override;
@@ -117,6 +113,9 @@ class BrowserTabStripController : public TabStripController,
     NEW_TAB,
     EXISTING_TAB
   };
+
+  BrowserNonClientFrameView* GetFrameView();
+  const BrowserNonClientFrameView* GetFrameView() const;
 
   // Returns the TabRendererData for the specified tab.
   TabRendererData TabRendererDataFromModel(content::WebContents* contents,

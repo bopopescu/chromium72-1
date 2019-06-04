@@ -122,7 +122,7 @@ void DeviceToDeviceAuthenticator::OnKeyPairGenerated(
                  weak_ptr_factory_.GetWeakPtr()));
 }
 
-std::unique_ptr<base::Timer> DeviceToDeviceAuthenticator::CreateTimer() {
+std::unique_ptr<base::OneShotTimer> DeviceToDeviceAuthenticator::CreateTimer() {
   return std::make_unique<base::OneShotTimer>();
 }
 
@@ -134,14 +134,14 @@ void DeviceToDeviceAuthenticator::OnHelloMessageCreated(
     return;
   }
 
-  PA_LOG(INFO) << "Sending [Initiator Hello] message.";
+  PA_LOG(VERBOSE) << "Sending [Initiator Hello] message.";
 
   // Add a timeout for receiving the [Responder Auth] message as a guard.
   timer_ = CreateTimer();
   timer_->Start(
       FROM_HERE, base::TimeDelta::FromSeconds(kResponderAuthTimeoutSeconds),
-      base::Bind(&DeviceToDeviceAuthenticator::OnResponderAuthTimedOut,
-                 weak_ptr_factory_.GetWeakPtr()));
+      base::BindOnce(&DeviceToDeviceAuthenticator::OnResponderAuthTimedOut,
+                     weak_ptr_factory_.GetWeakPtr()));
 
   // Send the [Initiator Hello] message to the remote device.
   state_ = State::SENT_HELLO;
@@ -163,8 +163,8 @@ void DeviceToDeviceAuthenticator::OnResponderAuthValidated(
     return;
   }
 
-  PA_LOG(INFO) << "Successfully validated [Responder Auth]! "
-               << "Sending [Initiator Auth]...";
+  PA_LOG(VERBOSE) << "Successfully validated [Responder Auth]! "
+                  << "Sending [Initiator Auth]...";
   state_ = State::VALIDATED_RESPONDER_AUTH;
   session_keys_ = session_keys;
 
@@ -208,7 +208,7 @@ void DeviceToDeviceAuthenticator::Succeed() {
   DCHECK(state_ == State::SENT_INITIATOR_AUTH);
   DCHECK(!session_keys_.initiator_encode_key().empty());
   DCHECK(!session_keys_.responder_encode_key().empty());
-  PA_LOG(INFO) << "Authentication succeeded!";
+  PA_LOG(VERBOSE) << "Authentication succeeded!";
 
   state_ = State::AUTHENTICATION_SUCCESS;
   connection_->RemoveObserver(this);
@@ -235,8 +235,8 @@ void DeviceToDeviceAuthenticator::OnMessageReceived(
     const WireMessage& message) {
   if (state_ == State::SENT_HELLO &&
       message.feature() == std::string(Authenticator::kAuthenticationFeature)) {
-    PA_LOG(INFO) << "Received [Responder Auth] message, payload_size="
-                 << message.payload().size();
+    PA_LOG(VERBOSE) << "Received [Responder Auth] message, payload_size="
+                    << message.payload().size();
     state_ = State::RECEIVED_RESPONDER_AUTH;
     timer_.reset();
     responder_auth_message_ = message.payload();

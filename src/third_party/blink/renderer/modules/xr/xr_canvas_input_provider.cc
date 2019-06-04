@@ -4,7 +4,8 @@
 
 #include "third_party/blink/renderer/modules/xr/xr_canvas_input_provider.h"
 
-#include "third_party/blink/renderer/core/events/mouse_event.h"
+#include "third_party/blink/renderer/core/dom/events/event_listener.h"
+#include "third_party/blink/renderer/core/events/pointer_event.h"
 #include "third_party/blink/renderer/core/html/canvas/html_canvas_element.h"
 #include "third_party/blink/renderer/modules/xr/xr_device.h"
 #include "third_party/blink/renderer/modules/xr/xr_frame_provider.h"
@@ -25,12 +26,15 @@ class XRCanvasInputEventListener : public EventListener {
     return this == &that;
   }
 
-  void handleEvent(ExecutionContext* execution_context, Event* event) override {
+  void Invoke(ExecutionContext* execution_context, Event* event) override {
     if (!input_provider_->ShouldProcessEvents())
       return;
 
-    if (event->type() == EventTypeNames::click) {
-      input_provider_->OnClick(ToMouseEvent(event));
+    if (event->type() == event_type_names::kPointerdown) {
+      input_provider_->OnPointerDown(ToPointerEvent(event));
+    } else if (event->type() == event_type_names::kPointerup ||
+               event->type() == event_type_names::kPointercancel) {
+      input_provider_->OnPointerUp(ToPointerEvent(event));
     }
   }
 
@@ -49,28 +53,36 @@ XRCanvasInputProvider::XRCanvasInputProvider(XRSession* session,
                                              HTMLCanvasElement* canvas)
     : session_(session), canvas_(canvas) {
   listener_ = new XRCanvasInputEventListener(this);
-  canvas->addEventListener(EventTypeNames::click, listener_);
+  canvas->addEventListener(event_type_names::kPointerdown, listener_);
+  canvas->addEventListener(event_type_names::kPointerup, listener_);
+  canvas->addEventListener(event_type_names::kPointercancel, listener_);
 }
 
 XRCanvasInputProvider::~XRCanvasInputProvider() {
-  Stop();
 }
 
 void XRCanvasInputProvider::Stop() {
   if (!listener_) {
     return;
   }
-  canvas_->removeEventListener(EventTypeNames::click, listener_);
+  canvas_->removeEventListener(event_type_names::kPointerdown, listener_);
+  canvas_->removeEventListener(event_type_names::kPointerup, listener_);
+  canvas_->removeEventListener(event_type_names::kPointercancel, listener_);
   canvas_ = nullptr;
   listener_ = nullptr;
 }
 
 bool XRCanvasInputProvider::ShouldProcessEvents() {
-  // Don't process canvas gestures if there's an active exclusive session.
-  return !(session_->device()->frameProvider()->exclusive_session());
+  // Don't process canvas gestures if there's an active immersive session.
+  return !(session_->device()->frameProvider()->immersive_session());
 }
 
-void XRCanvasInputProvider::OnClick(MouseEvent* event) {
+void XRCanvasInputProvider::OnPointerDown(PointerEvent* event) {
+  UpdateInputSource(event);
+  session_->OnSelectStart(input_source_);
+}
+
+void XRCanvasInputProvider::OnPointerUp(PointerEvent* event) {
   UpdateInputSource(event);
   session_->OnSelect(input_source_);
   ClearInputSource();
@@ -80,13 +92,13 @@ XRInputSource* XRCanvasInputProvider::GetInputSource() {
   return input_source_;
 }
 
-void XRCanvasInputProvider::UpdateInputSource(MouseEvent* event) {
+void XRCanvasInputProvider::UpdateInputSource(PointerEvent* event) {
   if (!canvas_)
     return;
 
   if (!input_source_) {
-    input_source_ = new XRInputSource(session_, 0);
-    input_source_->SetPointerOrigin(XRInputSource::kOriginScreen);
+    input_source_ = MakeGarbageCollected<XRInputSource>(session_, 0);
+    input_source_->SetTargetRayMode(XRInputSource::kScreen);
   }
 
   // Get the event location relative to the canvas element.
@@ -115,11 +127,6 @@ void XRCanvasInputProvider::Trace(blink::Visitor* visitor) {
   visitor->Trace(canvas_);
   visitor->Trace(listener_);
   visitor->Trace(input_source_);
-}
-
-void XRCanvasInputProvider::TraceWrappers(
-    blink::ScriptWrappableVisitor* visitor) const {
-  visitor->TraceWrappers(input_source_);
 }
 
 }  // namespace blink

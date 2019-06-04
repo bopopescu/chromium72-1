@@ -19,6 +19,8 @@ import org.robolectric.annotation.Config;
 import org.robolectric.shadows.ShadowApplication;
 
 import org.chromium.base.CommandLine;
+import org.chromium.base.task.AsyncTask;
+import org.chromium.base.task.test.CustomShadowAsyncTask;
 import org.chromium.base.test.BaseRobolectricTestRunner;
 
 import java.io.IOException;
@@ -35,7 +37,7 @@ import java.util.Map;
  * Unit tests (run on host) for {@link org.chromium.chrome.browser.media.remote.MediaUrlResolver}.
  */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
+@Config(manifest = Config.NONE, shadows = {CustomShadowAsyncTask.class})
 public class MediaUrlResolverTest {
     // Constants copied from MediaUrlResolver. Don't use the copies in MediaUrlResolver
     // since we want the tests to detect if these are changed or corrupted.
@@ -294,7 +296,7 @@ public class MediaUrlResolverTest {
      * @throws MalformedURLException
      */
     @Test
-    public void testMediaUrlResolver_validMpeg4CompatibleCORS() throws MalformedURLException {
+    public void testMediaUrlResolver_validMpeg4CompatibleCors() throws MalformedURLException {
         // If a compatible CORS header returned, a valid mpeg4 URI is playable and unchanged.
         Uri uri = Uri.parse("http://example.com/test.mp4");
         HashMap<String, List<String>> corsHeaders = new HashMap<String, List<String>>();
@@ -312,7 +314,7 @@ public class MediaUrlResolverTest {
      * @throws MalformedURLException
      */
     @Test
-    public void testMediaUrlResolver_validMpeg4InompatilbeCORS() throws MalformedURLException {
+    public void testMediaUrlResolver_validMpeg4InompatilbeCors() throws MalformedURLException {
         // If an incompatible CORS header returned, a valid mpeg4 URI is not playable but unchanged.
         Uri uri = Uri.parse("http://example.com/test.mp4");
         HashMap<String, List<String>> corsHeaders = new HashMap<String, List<String>>();
@@ -331,7 +333,7 @@ public class MediaUrlResolverTest {
      * @throws MalformedURLException
      */
     @Test
-    public void testMediaUrlResolver_validHLSNoCORS() throws MalformedURLException {
+    public void testMediaUrlResolver_validHLSNoCors() throws MalformedURLException {
         // A valid mpeg4 URI is playable and unchanged.
         Uri uri = Uri.parse("http://example.com/test.m3u8");
         TestDelegate delegate =  resolveUri(uri, null, 200, null, null, false);
@@ -382,7 +384,7 @@ public class MediaUrlResolverTest {
             void recordResultHistogram(int result) {
             }
         };
-        resolver.execute();
+        resolver.executeOnExecutor(AsyncTask.SERIAL_EXECUTOR);
         ShadowApplication.runBackgroundTasks();
 
         return delegate;

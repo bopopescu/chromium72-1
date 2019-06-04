@@ -15,6 +15,7 @@
 #include "ui/gfx/geometry/point_conversions.h"
 #include "ui/gfx/geometry/vector2d_f.h"
 #include "ui/views/animation/ink_drop_util.h"
+#include "ui/views/style/platform_style.h"
 
 namespace {
 
@@ -160,19 +161,6 @@ FloodFillInkDropRipple::~FloodFillInkDropRipple() {
   // Explicitly aborting all the animations ensures all callbacks are invoked
   // while this instance still exists.
   AbortAllAnimations();
-}
-
-void FloodFillInkDropRipple::HostSizeChanged(const gfx::Size& new_size) {
-  root_layer_.SetBounds(CalculateClipBounds(new_size, clip_insets_));
-  switch (target_ink_drop_state()) {
-    case InkDropState::ACTION_PENDING:
-    case InkDropState::ALTERNATE_ACTION_PENDING:
-    case InkDropState::ACTIVATED:
-      painted_layer_.SetTransform(GetMaxSizeTargetTransform());
-      break;
-    default:
-      break;
-  }
 }
 
 void FloodFillInkDropRipple::SnapToActivated() {
@@ -447,8 +435,10 @@ float FloodFillInkDropRipple::MaxDistanceToCorners(
 
 // Returns the InkDropState sub animation duration for the given |state|.
 base::TimeDelta FloodFillInkDropRipple::GetAnimationDuration(int state) {
-  if (!gfx::Animation::ShouldRenderRichAnimation())
+  if (!PlatformStyle::kUseRipples ||
+      !gfx::Animation::ShouldRenderRichAnimation()) {
     return base::TimeDelta();
+  }
 
   int state_override = state;
   // Override the requested state if needed.

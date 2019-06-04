@@ -12,6 +12,7 @@
 #include "base/files/scoped_temp_dir.h"
 #include "base/macros.h"
 #include "base/message_loop/message_loop.h"
+#include "base/optional.h"
 #include "base/run_loop.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/test/test_simple_task_runner.h"
@@ -27,11 +28,8 @@
 #include "crypto/sha2.h"
 #include "net/http/http_status_code.h"
 #include "net/traffic_annotation/network_traffic_annotation_test_helper.h"
-#include "net/url_request/test_url_fetcher_factory.h"
-#include "net/url_request/url_fetcher.h"
-#include "net/url_request/url_fetcher_delegate.h"
-#include "net/url_request/url_request_status.h"
-#include "net/url_request/url_request_test_util.h"
+#include "services/network/public/cpp/weak_wrapper_shared_url_loader_factory.h"
+#include "services/network/test/test_url_loader_factory.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "url/gurl.h"
 
@@ -63,45 +61,6 @@ const PolicyDetails kPolicyDetails[] = {
 
 const char kCacheKey[] = "data";
 
-// A variant of net::FakeURLFetcherFactory that makes it an error to request a
-// fetcher for an unknown URL.
-class FakeURLFetcherFactory : public net::FakeURLFetcherFactory {
- public:
-  FakeURLFetcherFactory();
-  ~FakeURLFetcherFactory() override;
-
-  // net::FakeURLFetcherFactory:
-  std::unique_ptr<net::URLFetcher> CreateURLFetcher(
-      int id,
-      const GURL& url,
-      net::URLFetcher::RequestType request_type,
-      net::URLFetcherDelegate* delegate,
-      net::NetworkTrafficAnnotationTag traffic_annotation) override;
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(FakeURLFetcherFactory);
-};
-
-FakeURLFetcherFactory::FakeURLFetcherFactory()
-    : net::FakeURLFetcherFactory(NULL) {
-}
-
-FakeURLFetcherFactory::~FakeURLFetcherFactory() {
-}
-
-std::unique_ptr<net::URLFetcher> FakeURLFetcherFactory::CreateURLFetcher(
-    int id,
-    const GURL& url,
-    net::URLFetcher::RequestType request_type,
-    net::URLFetcherDelegate* delegate,
-    net::NetworkTrafficAnnotationTag traffic_annotation) {
-  std::unique_ptr<net::URLFetcher> fetcher =
-      net::FakeURLFetcherFactory::CreateURLFetcher(
-          id, url, request_type, delegate, traffic_annotation);
-  EXPECT_TRUE(fetcher);
-  return fetcher;
-}
-
 }  // namespace
 
 class CloudExternalDataManagerBaseTest : public testing::Test {
@@ -129,15 +88,14 @@ class CloudExternalDataManagerBaseTest : public testing::Test {
 
   void SetFakeResponse(const std::string& url,
                        const std::string& repsonse_data,
-                       net::HttpStatusCode response_code,
-                       net::URLRequestStatus::Status status);
+                       net::HttpStatusCode response_code);
 
   base::MessageLoop message_loop_;
   base::ScopedTempDir temp_dir_;
   std::unique_ptr<ResourceCache> resource_cache_;
   MockCloudPolicyStore cloud_policy_store_;
-  scoped_refptr<net::TestURLRequestContextGetter> request_content_getter_;
-  FakeURLFetcherFactory fetcher_factory_;
+  network::TestURLLoaderFactory test_url_loader_factory_;
+  scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory_;
 
   std::unique_ptr<CloudExternalDataManagerBase> external_data_manager_;
 
@@ -153,8 +111,9 @@ CloudExternalDataManagerBaseTest::CloudExternalDataManagerBaseTest() {
 
 void CloudExternalDataManagerBaseTest::SetUp() {
   ASSERT_TRUE(temp_dir_.CreateUniqueTempDir());
-  resource_cache_.reset(
-      new ResourceCache(temp_dir_.GetPath(), message_loop_.task_runner()));
+  resource_cache_.reset(new ResourceCache(temp_dir_.GetPath(),
+                                          message_loop_.task_runner(),
+                                          /* max_cache_size */ base::nullopt));
   SetUpExternalDataManager();
 
   // Set |kStringPolicy| to a string value.
@@ -174,8 +133,9 @@ void CloudExternalDataManagerBaseTest::SetUp() {
                         crypto::SHA256HashString(k20ByteData)));
   cloud_policy_store_.NotifyStoreLoaded();
 
-  request_content_getter_ =
-      new net::TestURLRequestContextGetter(base::ThreadTaskRunnerHandle::Get());
+  url_loader_factory_ =
+      base::MakeRefCounted<network::WeakWrapperSharedURLLoaderFactory>(
+          &test_url_loader_factory_);
 
   policy_details_.SetDetails(kStringPolicy, &kPolicyDetails[0]);
   policy_details_.SetDetails(k10BytePolicy, &kPolicyDetails[1]);
@@ -189,9 +149,8 @@ void CloudExternalDataManagerBaseTest::TearDown() {
 }
 
 void CloudExternalDataManagerBaseTest::SetUpExternalDataManager() {
-  external_data_manager_.reset(new CloudExternalDataManagerBase(
-      policy_details_.GetCallback(), message_loop_.task_runner(),
-      message_loop_.task_runner()));
+  external_data_manager_ = std::make_unique<CloudExternalDataManagerBase>(
+      policy_details_.GetCallback(), message_loop_.task_runner());
   external_data_manager_->SetExternalDataStore(
       std::make_unique<CloudExternalDataStore>(
           kCacheKey, message_loop_.task_runner(), resource_cache_.get()));
@@ -242,16 +201,14 @@ void CloudExternalDataManagerBaseTest::FetchAll() {
 void CloudExternalDataManagerBaseTest::SetFakeResponse(
     const std::string& url,
     const std::string& response_data,
-    net::HttpStatusCode response_code,
-    net::URLRequestStatus::Status status) {
-  fetcher_factory_.SetFakeResponse(
-      GURL(url), response_data, response_code, status);
+    net::HttpStatusCode response_code) {
+  test_url_loader_factory_.AddResponse(url, response_data, response_code);
 }
 
 // Verifies that when no valid external data reference has been set for a
 // policy, the attempt to retrieve the external data fails immediately.
 TEST_F(CloudExternalDataManagerBaseTest, FailToFetchInvalid) {
-  external_data_manager_->Connect(request_content_getter_);
+  external_data_manager_->Connect(url_loader_factory_);
 
   // Attempt to retrieve external data for |kStringPolicy|, which is a string
   // policy that does not reference any external data.
@@ -291,9 +248,8 @@ TEST_F(CloudExternalDataManagerBaseTest, FailToFetchInvalid) {
 // further download attempts.
 TEST_F(CloudExternalDataManagerBaseTest, DownloadAndCache) {
   // Serve valid external data for |k10BytePolicy|.
-  SetFakeResponse(k10BytePolicyURL, k10ByteData, net::HTTP_OK,
-                  net::URLRequestStatus::SUCCESS);
-  external_data_manager_->Connect(request_content_getter_);
+  SetFakeResponse(k10BytePolicyURL, k10ByteData, net::HTTP_OK);
+  external_data_manager_->Connect(url_loader_factory_);
 
   // Retrieve external data for |k10BytePolicy|. Verify that a download happens
   // and the callback is invoked with the downloaded data.
@@ -305,7 +261,7 @@ TEST_F(CloudExternalDataManagerBaseTest, DownloadAndCache) {
   ResetCallbackData();
 
   // Stop serving external data for |k10BytePolicy|.
-  fetcher_factory_.ClearFakeResponses();
+  test_url_loader_factory_.ClearResponses();
 
   // Retrieve external data for |k10BytePolicy| again. Verify that no download
   // is attempted but the callback is still invoked with the expected data,
@@ -347,18 +303,16 @@ TEST_F(CloudExternalDataManagerBaseTest, DownloadAndCache) {
 // served from the cache without further download attempts.
 TEST_F(CloudExternalDataManagerBaseTest, DownloadAndCacheAll) {
   // Serve valid external data for |k10BytePolicy| and |k20BytePolicy|.
-  SetFakeResponse(k10BytePolicyURL, k10ByteData, net::HTTP_OK,
-                  net::URLRequestStatus::SUCCESS);
-  SetFakeResponse(k20BytePolicyURL, k20ByteData, net::HTTP_OK,
-                  net::URLRequestStatus::SUCCESS);
-  external_data_manager_->Connect(request_content_getter_);
+  SetFakeResponse(k10BytePolicyURL, k10ByteData, net::HTTP_OK);
+  SetFakeResponse(k20BytePolicyURL, k20ByteData, net::HTTP_OK);
+  external_data_manager_->Connect(url_loader_factory_);
 
   // Request that external data referenced by all policies be downloaded.
   FetchAll();
   base::RunLoop().RunUntilIdle();
 
   // Stop serving external data for |k10BytePolicy| and |k20BytePolicy|.
-  fetcher_factory_.ClearFakeResponses();
+  test_url_loader_factory_.ClearResponses();
 
   // Retrieve external data for |k10BytePolicy| and |k20BytePolicy|. Verify that
   // no downloads are attempted but the callbacks are still invoked with the
@@ -421,9 +375,8 @@ TEST_F(CloudExternalDataManagerBaseTest, DownloadAfterConnect) {
 
   // Serve valid external data for |k10BytePolicy| and allow the
   // external_data_manager_ to perform downloads.
-  SetFakeResponse(k10BytePolicyURL, k10ByteData, net::HTTP_OK,
-                  net::URLRequestStatus::SUCCESS);
-  external_data_manager_->Connect(request_content_getter_);
+  SetFakeResponse(k10BytePolicyURL, k10ByteData, net::HTTP_OK);
+  external_data_manager_->Connect(url_loader_factory_);
 
   // Verify that a download happens and the callback is invoked with the
   // downloaded data.
@@ -441,9 +394,8 @@ TEST_F(CloudExternalDataManagerBaseTest, DownloadError) {
   // Make attempts to download the external data for |k20BytePolicy| fail with
   // an error.
   SetFakeResponse(k20BytePolicyURL, std::string(),
-                  net::HTTP_INTERNAL_SERVER_ERROR,
-                  net::URLRequestStatus::FAILED);
-  external_data_manager_->Connect(request_content_getter_);
+                  net::HTTP_INTERNAL_SERVER_ERROR);
+  external_data_manager_->Connect(url_loader_factory_);
 
   // Attempt to retrieve external data for |k20BytePolicy|. Verify that the
   // callback is not invoked as the download attempt fails and the request
@@ -479,8 +431,7 @@ TEST_F(CloudExternalDataManagerBaseTest, DownloadError) {
 
   // Serve external data for |k20BytePolicy| that does not match the hash
   // specified in its current external data reference.
-  SetFakeResponse(k20BytePolicyURL, k10ByteData, net::HTTP_OK,
-                  net::URLRequestStatus::SUCCESS);
+  SetFakeResponse(k20BytePolicyURL, k10ByteData, net::HTTP_OK);
 
   // Attempt to retrieve external data for |k20BytePolicy| again. Verify that
   // no callback is invoked still as the downloaded succeeds but returns data
@@ -530,7 +481,7 @@ TEST_F(CloudExternalDataManagerBaseTest, LoadFromCache) {
 
   // Instantiate an external_data_manager_ that uses the primed cache.
   SetUpExternalDataManager();
-  external_data_manager_->Connect(request_content_getter_);
+  external_data_manager_->Connect(url_loader_factory_);
 
   // Retrieve external data for |k10BytePolicy|. Verify that no download is
   // attempted but the callback is still invoked with the expected data, served
@@ -608,7 +559,7 @@ TEST_F(CloudExternalDataManagerBaseTest, PruneCacheOnChange) {
 
   // Instantiate an ExternalDataManager that uses the primed cache.
   SetUpExternalDataManager();
-  external_data_manager_->Connect(request_content_getter_);
+  external_data_manager_->Connect(url_loader_factory_);
 
   // Modify the external data reference for |k20BytePolicy|.
   SetExternalDataReference(
@@ -651,9 +602,8 @@ TEST_F(CloudExternalDataManagerBaseTest, CacheCorruption) {
   SetUpExternalDataManager();
   // Serve external data for |k10BytePolicy| that exceeds the maximal external
   // data size allowed for that policy.
-  SetFakeResponse(k10BytePolicyURL, k20ByteData, net::HTTP_OK,
-                  net::URLRequestStatus::SUCCESS);
-  external_data_manager_->Connect(request_content_getter_);
+  SetFakeResponse(k10BytePolicyURL, k20ByteData, net::HTTP_OK);
+  external_data_manager_->Connect(url_loader_factory_);
 
   // Modify the external data reference for |k10BytePolicy| to match the
   // external data being served.
@@ -672,8 +622,7 @@ TEST_F(CloudExternalDataManagerBaseTest, CacheCorruption) {
   ResetCallbackData();
 
   // Serve valid external data for |k20BytePolicy|.
-  SetFakeResponse(k20BytePolicyURL, k20ByteData, net::HTTP_OK,
-                  net::URLRequestStatus::SUCCESS);
+  SetFakeResponse(k20BytePolicyURL, k20ByteData, net::HTTP_OK);
 
   // Retrieve external data for |k20BytePolicy|. Verify that the callback is
   // invoked with the valid downloaded data, not the invalid data in the cache.
@@ -718,12 +667,10 @@ TEST_F(CloudExternalDataManagerBaseTest, PolicyChangeWhileDownloadPending) {
   // Make attempts to download the external data for |k10BytePolicy| and
   // |k20BytePolicy| fail with an error.
   SetFakeResponse(k10BytePolicyURL, std::string(),
-                  net::HTTP_INTERNAL_SERVER_ERROR,
-                  net::URLRequestStatus::FAILED);
+                  net::HTTP_INTERNAL_SERVER_ERROR);
   SetFakeResponse(k20BytePolicyURL, std::string(),
-                  net::HTTP_INTERNAL_SERVER_ERROR,
-                  net::URLRequestStatus::FAILED);
-  external_data_manager_->Connect(request_content_getter_);
+                  net::HTTP_INTERNAL_SERVER_ERROR);
+  external_data_manager_->Connect(url_loader_factory_);
 
   // Attempt to retrieve external data for |k10BytePolicy| and |k20BytePolicy|.
   // Verify that no callbacks are invoked as the download attempts fail and the
@@ -746,9 +693,8 @@ TEST_F(CloudExternalDataManagerBaseTest, PolicyChangeWhileDownloadPending) {
   ResetCallbackData();
 
   // Serve valid external data for |k20BytePolicy|.
-  fetcher_factory_.ClearFakeResponses();
-  SetFakeResponse(k20BytePolicyURL, k10ByteData, net::HTTP_OK,
-                  net::URLRequestStatus::SUCCESS);
+  test_url_loader_factory_.ClearResponses();
+  SetFakeResponse(k20BytePolicyURL, k10ByteData, net::HTTP_OK);
 
   // Modify the external data reference for |k20BytePolicy| to match the
   // external data now being served. Verify that the callback is invoked with

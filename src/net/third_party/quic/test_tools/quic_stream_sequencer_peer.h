@@ -8,7 +8,7 @@
 #include "base/macros.h"
 #include "net/third_party/quic/core/quic_packets.h"
 
-namespace net {
+namespace quic {
 
 class QuicStreamSequencer;
 
@@ -16,6 +16,8 @@ namespace test {
 
 class QuicStreamSequencerPeer {
  public:
+  QuicStreamSequencerPeer() = delete;
+
   static size_t GetNumBufferedBytes(QuicStreamSequencer* sequencer);
 
   static QuicStreamOffset GetCloseOffset(QuicStreamSequencer* sequencer);
@@ -24,12 +26,9 @@ class QuicStreamSequencerPeer {
 
   static void SetFrameBufferTotalBytesRead(QuicStreamSequencer* sequencer,
                                            QuicStreamOffset total_bytes_read);
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(QuicStreamSequencerPeer);
 };
 
 }  // namespace test
-}  // namespace net
+}  // namespace quic
 
 #endif  // NET_THIRD_PARTY_QUIC_TEST_TOOLS_QUIC_STREAM_SEQUENCER_PEER_H_

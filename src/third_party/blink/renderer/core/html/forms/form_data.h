@@ -45,7 +45,7 @@ class Blob;
 class HTMLFormElement;
 class ScriptState;
 
-// Typedef from FormData.idl:
+// Typedef from form_data.idl:
 typedef FileOrUSVString FormDataEntryValue;
 
 class CORE_EXPORT FormData final
@@ -54,13 +54,22 @@ class CORE_EXPORT FormData final
   DEFINE_WRAPPERTYPEINFO();
 
  public:
-  static FormData* Create(HTMLFormElement* form = nullptr) {
-    return new FormData(form);
+  static FormData* Create() { return MakeGarbageCollected<FormData>(); }
+  static FormData* Create(ExceptionState& exception_state) {
+    return MakeGarbageCollected<FormData>();
   }
+  static FormData* Create(HTMLFormElement* form,
+                          ExceptionState& exception_state);
 
   static FormData* Create(const WTF::TextEncoding& encoding) {
-    return new FormData(encoding);
+    return MakeGarbageCollected<FormData>(encoding);
   }
+
+  explicit FormData(const WTF::TextEncoding&);
+  // Clones form_data.  This clones |form_data.entries_| Vector, but
+  // doesn't clone entries in it because they are immutable.
+  FormData(const FormData& form_data);
+  FormData();
   void Trace(blink::Visitor*) override;
 
   // FormData IDL interface.
@@ -83,8 +92,10 @@ class CORE_EXPORT FormData final
   class Entry;
   const HeapVector<Member<const Entry>>& Entries() const { return entries_; }
   size_t size() const { return entries_.size(); }
-  void append(const String& name, int value);
   void append(const String& name, Blob*, const String& filename = String());
+  void AppendFromElement(const String& name, int value);
+  void AppendFromElement(const String& name, File* file);
+  void AppendFromElement(const String& name, const String& value);
 
   // This flag is true if this FormData is created with a <form>, and its
   // associated elements contain a non-empty password field.
@@ -96,13 +107,11 @@ class CORE_EXPORT FormData final
   scoped_refptr<EncodedFormData> EncodeMultiPartFormData();
 
  private:
-  explicit FormData(const WTF::TextEncoding&);
-  explicit FormData(HTMLFormElement*);
   void SetEntry(const Entry*);
   IterationSource* StartIteration(ScriptState*, ExceptionState&) override;
 
   WTF::TextEncoding encoding_;
-  // Entry pointers in m_entries never be nullptr.
+  // Entry pointers in entries_ never be nullptr.
   HeapVector<Member<const Entry>> entries_;
   bool contains_password_data_ = false;
 };

@@ -33,6 +33,7 @@ class CORE_EXPORT ImageResourceInfo : public GarbageCollectedMixin {
   virtual bool IsSchedulingReload() const = 0;
   virtual const ResourceResponse& GetResponse() const = 0;
   virtual bool ShouldShowPlaceholder() const = 0;
+  virtual bool ShouldShowLazyImagePlaceholder() const = 0;
   virtual bool IsCacheValidator() const = 0;
   virtual bool SchedulingReloadOrShouldReloadBrokenPlaceholder() const = 0;
   enum DoesCurrentFrameHaveSingleSecurityOrigin {
@@ -57,6 +58,8 @@ class CORE_EXPORT ImageResourceInfo : public GarbageCollectedMixin {
       ResourceFetcher*,
       const KURL&,
       const AtomicString& initiator_name) = 0;
+
+  virtual void LoadDeferredImage(ResourceFetcher* fetcher) = 0;
 
   void Trace(blink::Visitor* visitor) override {}
 };

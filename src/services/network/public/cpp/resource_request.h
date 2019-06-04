@@ -11,6 +11,7 @@
 #include "base/component_export.h"
 #include "base/memory/ref_counted.h"
 #include "base/optional.h"
+#include "base/unguessable_token.h"
 #include "net/base/request_priority.h"
 #include "net/http/http_request_headers.h"
 #include "net/url_request/url_request.h"
@@ -69,8 +70,26 @@ struct COMPONENT_EXPORT(NETWORK_CPP_BASE) ResourceRequest {
   // Additional HTTP request headers.
   net::HttpRequestHeaders headers;
 
+  // 'X-Requested-With' header value. Some consumers want to set this header,
+  // but such internal headers must be ignored by CORS checks (which run inside
+  // Network Service), so the value is stored here (rather than in |headers|)
+  // and later populated in the headers after CORS check.
+  // TODO(toyoshim): Remove it once PPAPI is deprecated.
+  std::string requested_with_header;
+
+  // 'X-Client-Data' header value. See comments for |requested_with_header|
+  // above, too.
+  // TODO(toyoshim): Consider to rename this to have a chrome specific prefix
+  // such as 'Chrome-' instead of 'X-', and to add 'Chrome-' prefixed header
+  // names into the forbidden header name list.
+  std::string client_data_header;
+
   // net::URLRequest load flags (0 by default).
   int load_flags = 0;
+
+  // If false, calls set_allow_credentials(false) on the
+  // net::URLRequest.
+  bool allow_credentials = true;
 
   // If this request originated from a pepper plugin running in a child
   // process, this identifies which process it came from. Otherwise, it
@@ -104,8 +123,8 @@ struct COMPONENT_EXPORT(NETWORK_CPP_BASE) ResourceRequest {
   bool is_external_request = false;
 
   // A policy to decide if CORS-preflight fetch should be performed.
-  mojom::CORSPreflightPolicy cors_preflight_policy =
-      mojom::CORSPreflightPolicy::kConsiderPreflight;
+  mojom::CorsPreflightPolicy cors_preflight_policy =
+      mojom::CorsPreflightPolicy::kConsiderPreflight;
 
   // Indicates which frame (or worker context) the request is being loaded into.
   // -1 corresponds to kInvalidServiceWorkerProviderId.
@@ -123,15 +142,23 @@ struct COMPONENT_EXPORT(NETWORK_CPP_BASE) ResourceRequest {
   // about this.
   bool skip_service_worker = false;
 
-  // The request mode passed to the ServiceWorker.
-  mojom::FetchRequestMode fetch_request_mode =
-      mojom::FetchRequestMode::kSameOrigin;
+  // https://fetch.spec.whatwg.org/#concept-request-mode
+  // Used mainly by CORS handling (out-of-blink CORS), CORB, Service Worker.
+  // CORS handling needs a proper origin (including a unique opaque origin).
+  // Hence a request with kSameOrigin, kCors, or kCorsWithForcedPreflight should
+  // have a non-null request_initiator.
+  mojom::FetchRequestMode fetch_request_mode = mojom::FetchRequestMode::kNoCors;
 
-  // The credentials mode passed to the ServiceWorker.
+  // https://fetch.spec.whatwg.org/#concept-request-credentials-mode
+  // Used mainly by CORS handling (out-of-blink CORS), Service Worker.
+  // If this member is kOmit, then DO_NOT_SAVE_COOKIES, DO_NOT_SEND_COOKIES,
+  // and DO_NOT_SEND_AUTH_DATA must be set on load_flags.
   mojom::FetchCredentialsMode fetch_credentials_mode =
-      mojom::FetchCredentialsMode::kOmit;
+      mojom::FetchCredentialsMode::kInclude;
 
-  // The redirect mode used in Fetch API.
+  // https://fetch.spec.whatwg.org/#concept-request-redirect-mode
+  // Used mainly by CORS handling (out-of-blink CORS), Service Worker.
+  // This member must be kFollow as long as |fetch_request_mode| is kNoCors.
   mojom::FetchRedirectMode fetch_redirect_mode =
       mojom::FetchRedirectMode::kFollow;
 
@@ -150,12 +177,6 @@ struct COMPONENT_EXPORT(NETWORK_CPP_BASE) ResourceRequest {
 
   // Optional resource request body (may be null).
   scoped_refptr<ResourceRequestBody> request_body;
-
-  // If true, then the response body will be downloaded to a file and the path
-  // to that file will be provided in ResponseInfo::download_file_path.
-  // Deprecated and not supported by the network service code.
-  // TODO(mek): Remove this flag once all usage of it is gone (XHR and PPAPI).
-  bool download_to_file = false;
 
   // True if the request can work after the fetch group is terminated.
   // https://fetch.spec.whatwg.org/#request-keepalive-flag
@@ -177,7 +198,7 @@ struct COMPONENT_EXPORT(NETWORK_CPP_BASE) ResourceRequest {
   bool do_not_prompt_for_login = false;
 
   // The routing id of the RenderFrame.
-  int render_frame_id = 0;
+  int render_frame_id = MSG_ROUTING_NONE;
 
   // True if |frame_id| is the main frame of a RenderView.
   bool is_main_frame = false;
@@ -203,8 +224,48 @@ struct COMPONENT_EXPORT(NETWORK_CPP_BASE) ResourceRequest {
   // about this.
   int previews_state = 0;
 
-  // Wether or not the initiator of this request is a secure context.
+  // Whether or not the initiator of this request is a secure context.
   bool initiated_in_secure_context = false;
+
+  // Whether or not this request (including redirects) should be upgraded to
+  // HTTPS due to an Upgrade-Insecure-Requests requirement.
+  bool upgrade_if_insecure = false;
+
+  // True when the request is revalidating.
+  // Some users, notably blink, has its own cache. This flag is set to exempt
+  // some CORS logic for a revalidating request.
+  bool is_revalidating = false;
+
+  // The profile ID of network conditions to throttle the network request.
+  base::Optional<base::UnguessableToken> throttling_profile_id;
+
+  // Headers that will be added pre and post cache if the network context uses
+  // the custom proxy for this request. The custom proxy is used for requests
+  // that match the custom proxy config, and would otherwise be made direct.
+  net::HttpRequestHeaders custom_proxy_pre_cache_headers;
+  net::HttpRequestHeaders custom_proxy_post_cache_headers;
+
+  // Whether to use the alternate proxies set in the custom proxy config.
+  bool custom_proxy_use_alternate_proxy_list = false;
+
+  // See https://fetch.spec.whatwg.org/#concept-request-window
+  //
+  // This is an opaque id of the original requestor of the resource, which might
+  // be different to the current requestor which is |render_frame_id|. For
+  // example, if a navigation for window "abc" is intercepted by a service
+  // worker, which re-issues the request via fetch, the re-issued request has
+  // |render_frame_id| of MSG_ROUTING_NONE (the service worker) and |window_id|
+  // of "abc". This is used for, e.g., client certificate selection. It's
+  // important that this id be unguessable so renderers cannot impersonate
+  // other renderers.
+  //
+  // This may be empty when the original requestor is the current requestor or
+  // is not a window. When it's empty, use |render_frame_id| instead. In
+  // practical terms, it's empty for requests that didn't go through a service
+  // worker, or if the original requestor is not a window. When the request
+  // goes through a service worker, the id is
+  // ServiceWorkerProviderHost::fetch_request_window_id.
+  base::Optional<base::UnguessableToken> fetch_window_id;
 };
 
 }  // namespace network

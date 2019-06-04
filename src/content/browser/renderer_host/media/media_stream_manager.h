@@ -49,6 +49,7 @@
 #include "content/common/content_export.h"
 #include "content/common/media/media_devices.h"
 #include "content/common/media/media_stream_controls.h"
+#include "content/public/browser/desktop_media_id.h"
 #include "content/public/browser/media_request_state.h"
 #include "content/public/common/media_stream_request.h"
 #include "media/base/video_facing.h"
@@ -156,6 +157,7 @@ class CONTENT_EXPORT MediaStreamManager
   // will be returned if the users deny the access.
   std::string MakeMediaAccessRequest(int render_process_id,
                                      int render_frame_id,
+                                     int requester_id,
                                      int page_request_id,
                                      const StreamControls& controls,
                                      const url::Origin& security_origin,
@@ -168,6 +170,7 @@ class CONTENT_EXPORT MediaStreamManager
   // is set to receive device stopped notifications.
   void GenerateStream(int render_process_id,
                       int render_frame_id,
+                      int requester_id,
                       int page_request_id,
                       const StreamControls& controls,
                       MediaDeviceSaltAndOrigin salt_and_origin,
@@ -175,21 +178,28 @@ class CONTENT_EXPORT MediaStreamManager
                       GenerateStreamCallback generate_stream_cb,
                       DeviceStoppedCallback device_stopped_cb);
 
+  // Cancel an open request identified by |page_request_id| for the given frame.
+  // Must be called on the IO thread.
   void CancelRequest(int render_process_id,
                      int render_frame_id,
+                     int requester_id,
                      int page_request_id);
 
-  // Cancel an open request identified by |label|.
+  // Cancel an open request identified by |label|. Must be called on the IO
+  // thread.
   void CancelRequest(const std::string& label);
 
   // Cancel all requests for the given |render_process_id| and
-  // |render_frame_id|.
-  void CancelAllRequests(int render_process_id, int render_frame_id);
+  // |render_frame_id|. Must be called on the IO thread.
+  void CancelAllRequests(int render_process_id,
+                         int render_frame_id,
+                         int requester_id);
 
   // Closes the stream device for a certain render frame. The stream must have
-  // been opened by a call to GenerateStream.
+  // been opened by a call to GenerateStream. Must be called on the IO thread.
   void StopStreamDevice(int render_process_id,
                         int render_frame_id,
+                        int requester_id,
                         const std::string& device_id,
                         int session_id);
 
@@ -199,6 +209,7 @@ class CONTENT_EXPORT MediaStreamManager
   // request is identified using string returned to the caller.
   void OpenDevice(int render_process_id,
                   int render_frame_id,
+                  int requester_id,
                   int page_request_id,
                   const std::string& device_id,
                   MediaStreamType type,
@@ -218,7 +229,7 @@ class CONTENT_EXPORT MediaStreamManager
                                    std::string* device_id) const;
 
   // Find |device_id| in the list of |requests_|, and returns its session id,
-  // or MediaStreamDevice::kNoId if not found.
+  // or MediaStreamDevice::kNoId if not found. Must be called on the IO thread.
   int VideoDeviceIdToSessionId(const std::string& device_id) const;
 
   // Called by UI to make sure the device monitor is started so that UI receive
@@ -283,6 +294,7 @@ class CONTENT_EXPORT MediaStreamManager
 
   // Set whether the capturing is secure for the capturing session with given
   // |session_id|, |render_process_id|, and the MediaStreamType |type|.
+  // Must be called on the IO thread.
   void SetCapturingLinkSecured(int render_process_id,
                                int session_id,
                                content::MediaStreamType type,
@@ -295,7 +307,7 @@ class CONTENT_EXPORT MediaStreamManager
 
   // This method is called when an audio or video device is removed. It makes
   // sure all MediaStreams that use a removed device are stopped and that the
-  // render process is notified.
+  // render process is notified. Must be called on the IO thread.
   void StopRemovedDevice(MediaDeviceType type,
                          const MediaDeviceInfo& media_device_info);
 
@@ -347,20 +359,32 @@ class CONTENT_EXPORT MediaStreamManager
   void DeleteRequest(const std::string& label);
   // Prepare the request with label |label| by starting device enumeration if
   // needed.
-  void SetupRequest(const std::string& label);
+  void SetUpRequest(const std::string& label);
   // Prepare |request| of type MEDIA_DEVICE_AUDIO_CAPTURE and/or
   // MEDIA_DEVICE_VIDEO_CAPTURE for being posted to the UI by parsing
   // StreamControls for requested device IDs.
-  bool SetupDeviceCaptureRequest(DeviceRequest* request,
+  bool SetUpDeviceCaptureRequest(DeviceRequest* request,
                                  const MediaDeviceEnumeration& enumeration);
-  // Prepare |request| of type MEDIA_TAB_AUDIO_CAPTURE and/or
-  // MEDIA_TAB_VIDEO_CAPTURE for being posted to the UI by parsing
-  // StreamControls for requested tab capture IDs.
-  bool SetupTabCaptureRequest(DeviceRequest* request);
-  // Prepare |request| of type MEDIA_DESKTOP_AUDIO_CAPTURE and/or
-  // MEDIA_DESKTOP_VIDEO_CAPTURE for being posted to the UI by parsing
+  // Prepare |request| of type MEDIA_DISPLAY_CAPTURE.
+  bool SetUpDisplayCaptureRequest(DeviceRequest* request);
+  // Prepare |request| of type MEDIA_GUM_DESKTOP_AUDIO_CAPTURE and/or
+  // MEDIA_GUM_DESKTOP_VIDEO_CAPTURE for being posted to the UI by parsing
   // StreamControls for the requested desktop ID.
-  bool SetupScreenCaptureRequest(DeviceRequest* request);
+  bool SetUpScreenCaptureRequest(DeviceRequest* request);
+  // Resolve the random device ID of tab capture on UI thread before proceeding
+  // with the tab capture UI request.
+  bool SetUpTabCaptureRequest(DeviceRequest* request, const std::string& label);
+  DesktopMediaID ResolveTabCaptureDeviceIdOnUIThread(
+      const std::string& capture_device_id,
+      int requesting_process_id,
+      int requesting_frame_id,
+      const GURL& origin);
+  // Prepare |request| of type MEDIA_GUM_TAB_AUDIO_CAPTURE and/or
+  // MEDIA_GUM_TAB_VIDEO_CAPTURE for being posted to the UI after the
+  // requested tab capture IDs are resolved from registry.
+  void FinishTabCaptureRequestSetupWithDeviceId(
+      const std::string& label,
+      const DesktopMediaID& device_id);
   // Called when a request has been setup and devices have been enumerated if
   // needed.
   void ReadOutputParamsAndPostRequestToUI(
@@ -370,7 +394,6 @@ class CONTENT_EXPORT MediaStreamManager
   // Called when audio output parameters have been read if needed.
   void PostRequestToUI(
       const std::string& label,
-      DeviceRequest* request,
       const MediaDeviceEnumeration& enumeration,
       const base::Optional<media::AudioParameters>& output_parameters);
   // Returns true if a device with |device_id| has already been requested with

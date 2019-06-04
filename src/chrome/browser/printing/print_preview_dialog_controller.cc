@@ -28,8 +28,8 @@
 #include "chrome/browser/ui/webui/print_preview/print_preview_ui.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/url_constants.h"
+#include "chrome/grit/generated_resources.h"
 #include "components/guest_view/browser/guest_view_base.h"
-#include "components/printing/browser/print_manager_utils.h"
 #include "components/web_modal/web_contents_modal_dialog_host.h"
 #include "content/public/browser/host_zoom_map.h"
 #include "content/public/browser/navigation_controller.h"
@@ -40,7 +40,12 @@
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_contents_delegate.h"
+#include "ui/base/l10n/l10n_util.h"
 #include "ui/web_dialogs/web_dialog_delegate.h"
+
+#if defined(OS_WIN) && defined(GOOGLE_CHROME_BUILD)
+#include "chrome/browser/conflicts/module_database_win.h"
+#endif
 
 using content::NavigationController;
 using content::WebContents;
@@ -56,6 +61,7 @@ class PrintPreviewDialogDelegate : public ui::WebDialogDelegate {
 
   ui::ModalType GetDialogModalType() const override;
   base::string16 GetDialogTitle() const override;
+  base::string16 GetAccessibleDialogTitle() const override;
   GURL GetDialogContentURL() const override;
   void GetWebUIMessageHandlers(
       std::vector<WebUIMessageHandler*>* handlers) const override;
@@ -87,6 +93,10 @@ ui::ModalType PrintPreviewDialogDelegate::GetDialogModalType() const {
 base::string16 PrintPreviewDialogDelegate::GetDialogTitle() const {
   // Only used on Windows? UI folks prefer no title.
   return base::string16();
+}
+
+base::string16 PrintPreviewDialogDelegate::GetAccessibleDialogTitle() const {
+  return l10n_util::GetStringUTF16(IDS_PRINT_PREVIEW_TITLE);
 }
 
 GURL PrintPreviewDialogDelegate::GetDialogContentURL() const {
@@ -160,6 +170,10 @@ PrintPreviewDialogController* PrintPreviewDialogController::GetInstance() {
 
 // static
 void PrintPreviewDialogController::PrintPreview(WebContents* initiator) {
+#if defined(OS_WIN) && defined(GOOGLE_CHROME_BUILD)
+  ModuleDatabase::GetInstance()->DisableThirdPartyBlocking();
+#endif
+
   if (initiator->ShowingInterstitialPage() || initiator->IsCrashed())
     return;
 
@@ -192,7 +206,7 @@ WebContents* PrintPreviewDialogController::GetPrintPreviewForContents(
     WebContents* contents) const {
   // |preview_dialog_map_| is keyed by the preview dialog, so if find()
   // succeeds, then |contents| is the preview dialog.
-  PrintPreviewDialogMap::const_iterator it = preview_dialog_map_.find(contents);
+  auto it = preview_dialog_map_.find(contents);
   if (it != preview_dialog_map_.end())
     return contents;
 
@@ -210,7 +224,7 @@ WebContents* PrintPreviewDialogController::GetPrintPreviewForContents(
 
 WebContents* PrintPreviewDialogController::GetInitiator(
     WebContents* preview_dialog) {
-  PrintPreviewDialogMap::iterator it = preview_dialog_map_.find(preview_dialog);
+  auto it = preview_dialog_map_.find(preview_dialog);
   return (it != preview_dialog_map_.end()) ? it->second : nullptr;
 }
 
@@ -250,7 +264,7 @@ bool PrintPreviewDialogController::IsPrintPreviewURL(const GURL& url) {
 
 void PrintPreviewDialogController::EraseInitiatorInfo(
     WebContents* preview_dialog) {
-  PrintPreviewDialogMap::iterator it = preview_dialog_map_.find(preview_dialog);
+  auto it = preview_dialog_map_.find(preview_dialog);
   if (it == preview_dialog_map_.end())
     return;
 
@@ -266,7 +280,7 @@ void PrintPreviewDialogController::OnRendererProcessClosed(
   // |preview_dialog_map_| because RemoveFoo() can change |preview_dialog_map_|.
   std::vector<WebContents*> closed_initiators;
   std::vector<WebContents*> closed_preview_dialogs;
-  for (PrintPreviewDialogMap::iterator iter = preview_dialog_map_.begin();
+  for (auto iter = preview_dialog_map_.begin();
        iter != preview_dialog_map_.end(); ++iter) {
     WebContents* preview_dialog = iter->first;
     WebContents* initiator = iter->second;
@@ -377,7 +391,6 @@ WebContents* PrintPreviewDialogController::CreatePrintPreviewDialog(
   content::HostZoomMap::Get(preview_dialog->GetSiteInstance())
       ->SetZoomLevelForHostAndScheme(print_url.scheme(), print_url.host(), 0);
   PrintViewManager::CreateForWebContents(preview_dialog);
-  CreateCompositeClientIfNeeded(preview_dialog);
   extensions::ChromeExtensionWebContentsObserver::CreateForWebContents(
       preview_dialog);
 

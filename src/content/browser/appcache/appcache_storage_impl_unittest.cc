@@ -254,7 +254,7 @@ class AppCacheStorageImplTest : public testing::Test {
                        storage::GetQuotaSettingsFunc()),
           async_(false) {}
 
-    void GetUsageAndQuota(const GURL& origin,
+    void GetUsageAndQuota(const url::Origin& /* origin */,
                           StorageType type,
                           UsageAndQuotaCallback callback) override {
       EXPECT_EQ(StorageType::kTemporary, type);
@@ -375,7 +375,9 @@ class AppCacheStorageImplTest : public testing::Test {
 
   // Test harness --------------------------------------------------
 
-  AppCacheStorageImplTest() { request_delegate_.set_quit_on_complete(false); }
+  AppCacheStorageImplTest() {
+    request_delegate_.set_on_complete(base::DoNothing());
+  }
 
   template <class Method>
   void RunTestOnIOThread(Method method) {

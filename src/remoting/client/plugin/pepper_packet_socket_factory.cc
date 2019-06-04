@@ -159,11 +159,10 @@ class UdpPacketSocket : public rtc::AsyncPacketSocket {
   DISALLOW_COPY_AND_ASSIGN(UdpPacketSocket);
 };
 
-UdpPacketSocket::PendingPacket::PendingPacket(
-    const void* buffer,
-    int buffer_size,
-    const pp::NetAddress& address)
-    : data(new net::IOBufferWithSize(buffer_size)),
+UdpPacketSocket::PendingPacket::PendingPacket(const void* buffer,
+                                              int buffer_size,
+                                              const pp::NetAddress& address)
+    : data(base::MakeRefCounted<net::IOBufferWithSize>(buffer_size)),
       address(address),
       retried(true) {
   memcpy(data->data(), buffer, buffer_size);
@@ -394,7 +393,7 @@ void UdpPacketSocket::HandleReadResult(int result, pp::NetAddress address) {
     rtc::SocketAddress socket_address;
     PpNetAddressToSocketAddress(address, &socket_address);
     SignalReadPacket(this, &receive_buffer_[0], result, socket_address,
-                     rtc::CreatePacketTime(0));
+                     rtc::TimeMicros());
   } else if (result != PP_ERROR_ABORTED) {
     LOG(ERROR) << "Received error when reading from UDP socket: " << result;
   }

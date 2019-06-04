@@ -13,7 +13,7 @@
 #include "net/third_party/quic/platform/api/quic_export.h"
 #include "net/third_party/quic/platform/api/quic_string.h"
 
-namespace net {
+namespace quic {
 
 class CommonCertSets;
 class KeyExchange;
@@ -168,6 +168,8 @@ class QUIC_EXPORT_PRIVATE QuicCryptoConfig {
   static const char kForwardSecureLabel[];
 
   QuicCryptoConfig();
+  QuicCryptoConfig(const QuicCryptoConfig&) = delete;
+  QuicCryptoConfig& operator=(const QuicCryptoConfig&) = delete;
   ~QuicCryptoConfig();
 
   // Key exchange methods. The following two members' values correspond by
@@ -181,11 +183,8 @@ class QUIC_EXPORT_PRIVATE QuicCryptoConfig {
   QuicTagVector tb_key_params;
 
   const CommonCertSets* common_cert_sets;
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(QuicCryptoConfig);
 };
 
-}  // namespace net
+}  // namespace quic
 
 #endif  // NET_THIRD_PARTY_QUIC_CORE_CRYPTO_CRYPTO_HANDSHAKE_H_

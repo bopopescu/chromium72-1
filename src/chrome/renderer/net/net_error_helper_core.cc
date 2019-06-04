@@ -15,6 +15,7 @@
 #include "base/bind.h"
 #include "base/callback.h"
 #include "base/command_line.h"
+#include "base/feature_list.h"
 #include "base/i18n/rtl.h"
 #include "base/json/json_reader.h"
 #include "base/json/json_value_converter.h"
@@ -28,17 +29,22 @@
 #include "base/strings/string_util.h"
 #include "base/values.h"
 #include "build/build_config.h"
+#include "chrome/common/chrome_features.h"
 #include "components/error_page/common/error_page_params.h"
 #include "components/strings/grit/components_strings.h"
 #include "components/url_formatter/url_formatter.h"
 #include "content/public/common/content_switches.h"
 #include "content/public/common/url_constants.h"
+#include "content/public/renderer/render_thread.h"
 #include "net/base/escape.h"
 #include "net/base/net_errors.h"
 #include "third_party/blink/public/platform/web_string.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "url/gurl.h"
 #include "url/url_constants.h"
+
+using OfflineContentOnNetErrorFeatureState =
+    error_page::LocalizedError::OfflineContentOnNetErrorFeatureState;
 
 namespace {
 
@@ -368,8 +374,8 @@ void ReportAutoReloadSuccess(const error_page::Error& error, size_t count) {
   if (error.domain() != error_page::Error::kNetErrorDomain)
     return;
   base::UmaHistogramSparse("Net.AutoReload.ErrorAtSuccess", -error.reason());
-  UMA_HISTOGRAM_COUNTS("Net.AutoReload.CountAtSuccess",
-                       static_cast<base::HistogramBase::Sample>(count));
+  UMA_HISTOGRAM_COUNTS_1M("Net.AutoReload.CountAtSuccess",
+                          static_cast<base::HistogramBase::Sample>(count));
   if (count == 1) {
     base::UmaHistogramSparse("Net.AutoReload.ErrorAtFirstSuccess",
                              -error.reason());
@@ -380,8 +386,8 @@ void ReportAutoReloadFailure(const error_page::Error& error, size_t count) {
   if (error.domain() != error_page::Error::kNetErrorDomain)
     return;
   base::UmaHistogramSparse("Net.AutoReload.ErrorAtStop", -error.reason());
-  UMA_HISTOGRAM_COUNTS("Net.AutoReload.CountAtStop",
-                       static_cast<base::HistogramBase::Sample>(count));
+  UMA_HISTOGRAM_COUNTS_1M("Net.AutoReload.CountAtStop",
+                          static_cast<base::HistogramBase::Sample>(count));
 }
 
 // Tracks navigation correction service usage in UMA to enable more in depth
@@ -424,7 +430,10 @@ struct NetErrorHelperCore::ErrorPageInfo {
         show_cached_copy_button_in_page(false),
         download_button_in_page(false),
         is_finished_loading(false),
-        auto_reload_triggered(false) {}
+        auto_reload_triggered(false),
+        offline_content_feature_state(
+            OfflineContentOnNetErrorFeatureState::kDisabled),
+        auto_fetch_allowed(false) {}
 
   // Information about the failed page load.
   error_page::Error error;
@@ -466,6 +475,13 @@ struct NetErrorHelperCore::ErrorPageInfo {
   // True if the auto-reload timer has fired and a reload is or has been in
   // flight.
   bool auto_reload_triggered;
+
+  // State of the offline content on net error page feature. Only enabled if
+  // the feature is enabled, and the error page is an offline error.
+  OfflineContentOnNetErrorFeatureState offline_content_feature_state;
+
+  // True if auto-fetch-on-dino-page is enabled and allowed for this error page.
+  bool auto_fetch_allowed;
 };
 
 NetErrorHelperCore::NavigationCorrectionParams::NavigationCorrectionParams() {}
@@ -510,15 +526,21 @@ NetErrorHelperCore::NetErrorHelperCore(Delegate* delegate,
       can_show_network_diagnostics_dialog_(false),
       auto_reload_enabled_(auto_reload_enabled),
       auto_reload_visible_only_(auto_reload_visible_only),
-      auto_reload_timer_(new base::Timer(false, false)),
+      auto_reload_timer_(new base::OneShotTimer()),
       auto_reload_paused_(false),
       auto_reload_in_flight_(false),
       uncommitted_load_started_(false),
-      // TODO(ellyjones): Make online_ accurate at object creation.
-      online_(true),
+      online_(content::RenderThread::Get()->IsOnline()),
       visible_(is_visible),
       auto_reload_count_(0),
-      navigation_from_button_(NO_BUTTON) {}
+      navigation_from_button_(NO_BUTTON)
+#if defined(OS_ANDROID)
+      ,
+      page_auto_fetcher_helper_(
+          std::make_unique<PageAutoFetcherHelper>(delegate->GetRenderFrame()))
+#endif
+{
+}
 
 NetErrorHelperCore::~NetErrorHelperCore() {
   if (committed_error_page_info_ &&
@@ -576,8 +598,13 @@ void NetErrorHelperCore::OnStartLoad(FrameType frame_type, PageType page_type) {
 
   // If there's no pending error page information associated with the page load,
   // or the new page is not an error page, then reset pending error page state.
-  if (!pending_error_page_info_ || page_type != ERROR_PAGE)
+  if (!pending_error_page_info_ || page_type != ERROR_PAGE) {
     CancelPendingFetches();
+  } else {
+    // Halt auto-reload if it's currently scheduled. OnFinishLoad will trigger
+    // auto-reload if appropriate.
+    PauseAutoReloadTimer();
+  }
 }
 
 void NetErrorHelperCore::OnCommitLoad(FrameType frame_type, const GURL& url) {
@@ -593,6 +620,12 @@ void NetErrorHelperCore::OnCommitLoad(FrameType frame_type, const GURL& url) {
   // calls OnCommitLoad once for each in-page navigation (like a fragment
   // change) with no corresponding OnStartLoad.
   uncommitted_load_started_ = false;
+
+#if defined(OS_ANDROID)
+  // Don't need this state. It will be refreshed if another error page is
+  // loaded.
+  available_content_helper_.Reset();
+#endif
 
   // Track if an error occurred due to a page button press.
   // This isn't perfect; if (for instance), the server is slow responding
@@ -660,6 +693,25 @@ void NetErrorHelperCore::OnFinishLoad(FrameType frame_type) {
   delegate_->EnablePageHelperFunctions(
       static_cast<net::Error>(committed_error_page_info_->error.reason()));
 
+#if defined(OS_ANDROID)
+  if (committed_error_page_info_->offline_content_feature_state ==
+      OfflineContentOnNetErrorFeatureState::kEnabledList) {
+    available_content_helper_.FetchAvailableContent(base::BindOnce(
+        &Delegate::OfflineContentAvailable, base::Unretained(delegate_)));
+  } else if (committed_error_page_info_->offline_content_feature_state ==
+             OfflineContentOnNetErrorFeatureState::kEnabledSummary) {
+    available_content_helper_.FetchSummary(
+        base::BindOnce(&Delegate::OfflineContentSummaryAvailable,
+                       base::Unretained(delegate_)));
+  }
+
+  if (committed_error_page_info_->auto_fetch_allowed) {
+    page_auto_fetcher_helper_->TrySchedule(
+        false, base::BindOnce(&Delegate::SetAutoFetchState,
+                              base::Unretained(delegate_)));
+  }
+#endif  // OS_ANDROID
+
   if (committed_error_page_info_->needs_load_navigation_corrections) {
     // If there is another pending error page load, |fix_url| should have been
     // cleared.
@@ -705,13 +757,15 @@ void NetErrorHelperCore::PrepareErrorPage(FrameType frame_type,
     bool show_saved_copy_button_in_page;
     bool show_cached_copy_button_in_page;
     bool download_button_in_page;
+    OfflineContentOnNetErrorFeatureState offline_content_feature_state;
+    bool auto_fetch_allowed;
     if (error_html) {
       delegate_->GenerateLocalizedErrorPage(
           error, is_failed_post,
           false /* No diagnostics dialogs allowed for subframes. */, nullptr,
           &reload_button_in_page, &show_saved_copy_button_in_page,
           &show_cached_copy_button_in_page, &download_button_in_page,
-          error_html);
+          &offline_content_feature_state, &auto_fetch_allowed, error_html);
     }
   }
 }
@@ -748,6 +802,15 @@ void NetErrorHelperCore::OnSetNavigationCorrectionInfo(
   navigation_correction_params_.search_url = search_url;
 }
 
+void NetErrorHelperCore::OnEasterEggHighScoreReceived(int high_score) {
+  if (!committed_error_page_info_ ||
+      !committed_error_page_info_->is_finished_loading) {
+    return;
+  }
+
+  delegate_->InitializeErrorPageEasterEggHighScore(high_score);
+}
+
 void NetErrorHelperCore::PrepareErrorPageForMainFrame(
     ErrorPageInfo* pending_error_page_info,
     std::string* error_html) {
@@ -778,7 +841,9 @@ void NetErrorHelperCore::PrepareErrorPageForMainFrame(
         &pending_error_page_info->reload_button_in_page,
         &pending_error_page_info->show_saved_copy_button_in_page,
         &pending_error_page_info->show_cached_copy_button_in_page,
-        &pending_error_page_info->download_button_in_page, error_html);
+        &pending_error_page_info->download_button_in_page,
+        &pending_error_page_info->offline_content_feature_state,
+        &pending_error_page_info->auto_fetch_allowed, error_html);
   }
 }
 
@@ -839,7 +904,9 @@ void NetErrorHelperCore::OnNavigationCorrectionsFetched(
         &pending_error_page_info_->reload_button_in_page,
         &pending_error_page_info_->show_saved_copy_button_in_page,
         &pending_error_page_info_->show_cached_copy_button_in_page,
-        &pending_error_page_info_->download_button_in_page, &error_html);
+        &pending_error_page_info_->download_button_in_page,
+        &pending_error_page_info_->offline_content_feature_state,
+        &pending_error_page_info_->auto_fetch_allowed, &error_html);
   } else {
     // Since |navigation_correction_params| in |pending_error_page_info_| is
     // NULL, this won't trigger another attempt to load corrections.
@@ -966,6 +1033,13 @@ bool NetErrorHelperCore::ShouldSuppressErrorPage(FrameType frame_type,
   return true;
 }
 
+#if defined(OS_ANDROID)
+void NetErrorHelperCore::SetPageAutoFetcherHelperForTesting(
+    std::unique_ptr<PageAutoFetcherHelper> page_auto_fetcher_helper) {
+  page_auto_fetcher_helper_ = std::move(page_auto_fetcher_helper);
+}
+#endif
+
 void NetErrorHelperCore::ExecuteButtonPress(Button button) {
   // If there's no committed error page, should not be invoked.
   DCHECK(committed_error_page_info_);
@@ -996,6 +1070,7 @@ void NetErrorHelperCore::ExecuteButtonPress(Button button) {
       return;
     case EASTER_EGG:
       RecordEvent(error_page::NETWORK_ERROR_EASTER_EGG_ACTIVATED);
+      delegate_->RequestEasterEggHighScore();
       return;
     case SHOW_CACHED_COPY_BUTTON:
       RecordEvent(error_page::NETWORK_ERROR_PAGE_CACHED_COPY_BUTTON_CLICKED);
@@ -1049,4 +1124,37 @@ void NetErrorHelperCore::TrackClick(int tracking_id) {
   delegate_->SendTrackingRequest(
       committed_error_page_info_->navigation_correction_params->url,
       request_body);
+}
+
+void NetErrorHelperCore::LaunchOfflineItem(const std::string& id,
+                                           const std::string& name_space) {
+#if defined(OS_ANDROID)
+  available_content_helper_.LaunchItem(id, name_space);
+#endif
+}
+
+void NetErrorHelperCore::LaunchDownloadsPage() {
+#if defined(OS_ANDROID)
+  available_content_helper_.LaunchDownloadsPage();
+#endif
+}
+
+void NetErrorHelperCore::SavePageForLater() {
+#if defined(OS_ANDROID)
+  page_auto_fetcher_helper_->TrySchedule(
+      /*user_requested=*/true, base::BindOnce(&Delegate::SetAutoFetchState,
+                                              base::Unretained(delegate_)));
+#endif
+}
+
+void NetErrorHelperCore::CancelSavePage() {
+#if defined(OS_ANDROID)
+  page_auto_fetcher_helper_->CancelSchedule();
+#endif
+}
+
+void NetErrorHelperCore::ListVisibilityChanged(bool is_visible) {
+#if defined(OS_ANDROID)
+  available_content_helper_.ListVisibilityChanged(is_visible);
+#endif
 }

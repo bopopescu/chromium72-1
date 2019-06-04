@@ -8,15 +8,16 @@
 #include "base/memory/scoped_refptr.h"
 #include "components/payments/mojom/payment_request_data.mojom-blink.h"
 #include "mojo/public/cpp/bindings/binding.h"
-#include "third_party/blink/public/platform/modules/payments/payment_request.mojom-blink.h"
+#include "third_party/blink/public/mojom/payments/payment_request.mojom-blink.h"
+#include "third_party/blink/renderer/bindings/core/v8/active_script_wrappable.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_promise.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_value.h"
 #include "third_party/blink/renderer/core/dom/context_lifecycle_observer.h"
 #include "third_party/blink/renderer/core/dom/events/event_target.h"
 #include "third_party/blink/renderer/modules/modules_export.h"
-#include "third_party/blink/renderer/modules/payments/payment_completer.h"
 #include "third_party/blink/renderer/modules/payments/payment_method_data.h"
 #include "third_party/blink/renderer/modules/payments/payment_options.h"
+#include "third_party/blink/renderer/modules/payments/payment_state_resolver.h"
 #include "third_party/blink/renderer/modules/payments/payment_updater.h"
 #include "third_party/blink/renderer/platform/bindings/script_wrappable.h"
 #include "third_party/blink/renderer/platform/heap/handle.h"
@@ -32,13 +33,14 @@ class ExceptionState;
 class ExecutionContext;
 class PaymentAddress;
 class PaymentDetailsInit;
+class PaymentResponse;
 class ScriptPromiseResolver;
 class ScriptState;
 
 class MODULES_EXPORT PaymentRequest final
     : public EventTargetWithInlineData,
       public payments::mojom::blink::PaymentRequestClient,
-      public PaymentCompleter,
+      public PaymentStateResolver,
       public PaymentUpdater,
       public ContextLifecycleObserver,
       public ActiveScriptWrappable<PaymentRequest> {
@@ -48,15 +50,20 @@ class MODULES_EXPORT PaymentRequest final
 
  public:
   static PaymentRequest* Create(ExecutionContext*,
-                                const HeapVector<PaymentMethodData>&,
-                                const PaymentDetailsInit&,
+                                const HeapVector<Member<PaymentMethodData>>&,
+                                const PaymentDetailsInit*,
                                 ExceptionState&);
   static PaymentRequest* Create(ExecutionContext*,
-                                const HeapVector<PaymentMethodData>&,
-                                const PaymentDetailsInit&,
-                                const PaymentOptions&,
+                                const HeapVector<Member<PaymentMethodData>>&,
+                                const PaymentDetailsInit*,
+                                const PaymentOptions*,
                                 ExceptionState&);
 
+  PaymentRequest(ExecutionContext*,
+                 const HeapVector<Member<PaymentMethodData>>&,
+                 const PaymentDetailsInit*,
+                 const PaymentOptions*,
+                 ExceptionState&);
   ~PaymentRequest() override;
 
   ScriptPromise show(ScriptState*);
@@ -67,8 +74,10 @@ class MODULES_EXPORT PaymentRequest final
   const String& shippingOption() const { return shipping_option_; }
   const String& shippingType() const { return shipping_type_; }
 
-  DEFINE_ATTRIBUTE_EVENT_LISTENER(shippingaddresschange);
-  DEFINE_ATTRIBUTE_EVENT_LISTENER(shippingoptionchange);
+  DEFINE_ATTRIBUTE_EVENT_LISTENER(shippingaddresschange,
+                                  kShippingaddresschange);
+  DEFINE_ATTRIBUTE_EVENT_LISTENER(shippingoptionchange, kShippingoptionchange);
+  DEFINE_ATTRIBUTE_EVENT_LISTENER(paymentmethodchange, kPaymentmethodchange);
 
   ScriptPromise canMakePayment(ScriptState*);
 
@@ -79,11 +88,13 @@ class MODULES_EXPORT PaymentRequest final
   const AtomicString& InterfaceName() const override;
   ExecutionContext* GetExecutionContext() const override;
 
-  // PaymentCompleter:
+  // PaymentStateResolver:
   ScriptPromise Complete(ScriptState*, PaymentComplete result) override;
+  ScriptPromise Retry(ScriptState*, const PaymentValidationErrors*) override;
 
   // PaymentUpdater:
-  void OnUpdatePaymentDetails(const ScriptValue& details_script_value) override;
+  void OnUpdatePaymentDetails(const AtomicString& event_type,
+                              const ScriptValue& details_script_value) override;
   void OnUpdatePaymentDetailsFailure(const String& error) override;
 
   void Trace(blink::Visitor*) override;
@@ -100,12 +111,6 @@ class MODULES_EXPORT PaymentRequest final
   };
 
  private:
-  PaymentRequest(ExecutionContext*,
-                 const HeapVector<PaymentMethodData>&,
-                 const PaymentDetailsInit&,
-                 const PaymentOptions&,
-                 ExceptionState&);
-
   // LifecycleObserver:
   void ContextDestroyed(ExecutionContext*) override;
 
@@ -113,6 +118,7 @@ class MODULES_EXPORT PaymentRequest final
   void OnShippingAddressChange(
       payments::mojom::blink::PaymentAddressPtr) override;
   void OnShippingOptionChange(const String& shipping_option_id) override;
+  void OnPayerDetailChange(payments::mojom::blink::PayerDetailPtr) override;
   void OnPaymentResponse(payments::mojom::blink::PaymentResponsePtr) override;
   void OnError(payments::mojom::blink::PaymentErrorReason) override;
   void OnComplete() override;
@@ -126,14 +132,22 @@ class MODULES_EXPORT PaymentRequest final
   // Clears the promise resolvers and closes the Mojo connection.
   void ClearResolversAndCloseMojoConnection();
 
-  PaymentOptions options_;
+  // Returns the resolver for the current pending accept promise that should
+  // be resolved if the user accepts or aborts the payment request.
+  // The pending promise can be [[acceptPromise]] or [[retryPromise]] in the
+  // spec.
+  ScriptPromiseResolver* GetPendingAcceptPromiseResolver() const;
+
+  Member<const PaymentOptions> options_;
   Member<PaymentAddress> shipping_address_;
+  Member<PaymentResponse> payment_response_;
   String id_;
   String shipping_option_;
   String shipping_type_;
   HashSet<String> method_names_;
-  Member<ScriptPromiseResolver> show_resolver_;
+  Member<ScriptPromiseResolver> accept_resolver_;
   Member<ScriptPromiseResolver> complete_resolver_;
+  Member<ScriptPromiseResolver> retry_resolver_;
   Member<ScriptPromiseResolver> abort_resolver_;
   Member<ScriptPromiseResolver> can_make_payment_resolver_;
   payments::mojom::blink::PaymentRequestPtr payment_provider_;

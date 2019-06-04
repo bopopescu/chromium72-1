@@ -37,11 +37,14 @@ class WebGLProgram final : public WebGLSharedPlatform3DObject {
   DEFINE_WRAPPERTYPEINFO();
 
  public:
+  explicit WebGLProgram(WebGLRenderingContextBase*);
   ~WebGLProgram() override;
 
   static WebGLProgram* Create(WebGLRenderingContextBase*);
 
   bool LinkStatus(WebGLRenderingContextBase*);
+
+  bool CompletionStatus(WebGLRenderingContextBase*);
 
   unsigned LinkCount() const { return link_count_; }
 
@@ -71,11 +74,8 @@ class WebGLProgram final : public WebGLSharedPlatform3DObject {
   bool DetachShader(WebGLShader*);
 
   void Trace(blink::Visitor*) override;
-  void TraceWrappers(ScriptWrappableVisitor*) const override;
 
  protected:
-  explicit WebGLProgram(WebGLRenderingContextBase*);
-
   void DeleteObjectImpl(gpu::gles2::GLES2Interface*) override;
 
  private:
@@ -95,6 +95,7 @@ class WebGLProgram final : public WebGLSharedPlatform3DObject {
 
   TraceWrapperMember<WebGLShader> vertex_shader_;
   TraceWrapperMember<WebGLShader> fragment_shader_;
+  TraceWrapperMember<WebGLShader> compute_shader_;
 
   bool info_valid_;
 

@@ -24,7 +24,7 @@
 #include "third_party/blink/public/platform/task_type.h"
 #include "third_party/blink/public/web/web_navigation_policy.h"
 #include "third_party/blink/public/web/web_triggering_event_info.h"
-#include "ui/accessibility/ax_modes.h"
+#include "ui/accessibility/ax_mode.h"
 
 namespace blink {
 class AssociatedInterfaceProvider;
@@ -231,6 +231,12 @@ class CONTENT_EXPORT RenderFrame : public IPC::Listener,
                                size_t offset,
                                const gfx::Range& range) = 0;
 
+  // Notifies the frame's RenderView that the zoom has changed.
+  virtual void SetZoomLevel(double zoom_level) = 0;
+
+  // Returns the page's zoom level from the frame's RenderView.
+  virtual double GetZoomLevel() const = 0;
+
   // Adds |message| to the DevTools console.
   virtual void AddMessageToConsole(ConsoleMessageLevel level,
                                    const std::string& message) = 0;
@@ -246,8 +252,21 @@ class CONTENT_EXPORT RenderFrame : public IPC::Listener,
   // Whether or not this frame is currently pasting.
   virtual bool IsPasting() const = 0;
 
-  // Returns the current visibility of the frame.
-  virtual blink::mojom::PageVisibilityState GetVisibilityState() const = 0;
+  // Returns true if the current visibility of the frame is to be overridden
+  // from the state requested from brower visibility IPCs. If true, then the
+  // kPrerender visibility state should replace it.
+  virtual bool ShouldOverrideVisibilityAsPrerender() const = 0;
+
+  // Loads specified |html| to this frame. |base_url| is used to resolve
+  // relative urls in the document.
+  // |replace_current_item| should be true if we load html instead of the
+  // existing page. In this case |unreachable_url| might be the original url
+  // which did fail loading.
+  virtual void LoadHTMLString(const std::string& html,
+                              const GURL& base_url,
+                              const std::string& text_encoding,
+                              const GURL& unreachable_url,
+                              bool replace_current_item) = 0;
 
   // If PlzNavigate is enabled, returns true in between teh time that Blink
   // requests navigation until the browser responds with the result.
@@ -267,10 +286,6 @@ class CONTENT_EXPORT RenderFrame : public IPC::Listener,
 
   virtual scoped_refptr<network::SharedURLLoaderFactory>
   GetURLLoaderFactory() = 0;
-
-#if defined(USE_NEVA_APPRUNTIME)
-  virtual void ResetStateToMarkNextPaintForContainer() {};
-#endif
 
  protected:
   ~RenderFrame() override {}

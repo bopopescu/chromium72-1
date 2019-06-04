@@ -33,8 +33,7 @@ class TOutputTraverser : public TIntermTraverser
   public:
     TOutputTraverser(TInfoSinkBase &out)
         : TIntermTraverser(true, false, false), mOut(out), mIndentDepth(0)
-    {
-    }
+    {}
 
   protected:
     void visitSymbol(TIntermSymbol *) override;
@@ -96,7 +95,7 @@ void TOutputTraverser::visitSymbol(TIntermSymbol *node)
         mOut << "'" << node->getName() << "' ";
     }
     mOut << "(symbol id " << node->uniqueId().get() << ") ";
-    mOut << "(" << node->getCompleteString() << ")";
+    mOut << "(" << node->getType() << ")";
     mOut << "\n";
 }
 
@@ -107,7 +106,7 @@ bool TOutputTraverser::visitSwizzle(Visit visit, TIntermSwizzle *node)
     node->writeOffsetsAsXYZW(&mOut);
     mOut << ")";
 
-    mOut << " (" << node->getCompleteString() << ")";
+    mOut << " (" << node->getType() << ")";
     mOut << "\n";
     return true;
 }
@@ -262,7 +261,7 @@ bool TOutputTraverser::visitBinary(Visit visit, TIntermBinary *node)
             mOut << "<unknown op>";
     }
 
-    mOut << " (" << node->getCompleteString() << ")";
+    mOut << " (" << node->getType() << ")";
 
     mOut << "\n";
 
@@ -345,7 +344,7 @@ bool TOutputTraverser::visitUnary(Visit visit, TIntermUnary *node)
             break;
     }
 
-    mOut << " (" << node->getCompleteString() << ")";
+    mOut << " (" << node->getType() << ")";
 
     mOut << "\n";
 
@@ -370,15 +369,14 @@ void TOutputTraverser::visitFunctionPrototype(TIntermFunctionPrototype *node)
 {
     OutputTreeText(mOut, node, getCurrentIndentDepth());
     OutputFunction(mOut, "Function Prototype", node->getFunction());
-    mOut << " (" << node->getCompleteString() << ")";
+    mOut << " (" << node->getType() << ")";
     mOut << "\n";
     size_t paramCount = node->getFunction()->getParamCount();
     for (size_t i = 0; i < paramCount; ++i)
     {
         const TVariable *param = node->getFunction()->getParam(i);
         OutputTreeText(mOut, node, getCurrentIndentDepth() + 1);
-        mOut << "parameter: " << param->name() << " (" << param->getType().getCompleteString()
-             << ")";
+        mOut << "parameter: " << param->name() << " (" << param->getType() << ")";
     }
 }
 
@@ -447,7 +445,7 @@ bool TOutputTraverser::visitAggregate(Visit visit, TIntermAggregate *node)
             break;
     }
 
-    mOut << " (" << node->getCompleteString() << ")";
+    mOut << " (" << node->getType() << ")";
 
     mOut << "\n";
 
@@ -475,7 +473,7 @@ bool TOutputTraverser::visitTernary(Visit visit, TIntermTernary *node)
     OutputTreeText(mOut, node, getCurrentIndentDepth());
 
     mOut << "Ternary selection";
-    mOut << " (" << node->getCompleteString() << ")\n";
+    mOut << " (" << node->getType() << ")\n";
 
     ++mIndentDepth;
 

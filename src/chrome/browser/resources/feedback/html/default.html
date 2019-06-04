@@ -10,7 +10,7 @@
 <script src="chrome://resources/js/load_time_data.js"></script>
 <script src="chrome://resources/js/i18n_template_no_process.js"></script>
 <script src="chrome://resources/js/util.js"></script>
-<script src="../js/data.js"></script>
+<script src="../js/feedback_util.js"></script>
 <script src="../js/take_screenshot.js"></script>
 <script src="../js/topbar_handlers.js"></script>
 <script src="../js/feedback.js"></script>
@@ -81,6 +81,13 @@
       </span>
     </div>
 <if expr="chromeos">
+    <!-- Bluetooth Logs (Googler Internal Only) -->
+    <div id="bluetooth-checkbox-container" class="checkbox-field-container"
+      hidden>
+      <input id="bluetooth-logs-checkbox" type="checkbox" checked>
+      <label id="bluetooth-info-label"
+        i18n-values=".innerHTML:bluetooth-logs-info"></label>
+    </div>
     <!-- Performance Feedback -->
     <div id="performance-info-area" hidden>
       <input id="performance-info-checkbox" type="checkbox">

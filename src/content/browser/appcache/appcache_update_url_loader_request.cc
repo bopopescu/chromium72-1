@@ -94,8 +94,7 @@ int AppCacheUpdateJob::UpdateURLLoaderRequest::Cancel() {
 }
 
 void AppCacheUpdateJob::UpdateURLLoaderRequest::OnReceiveResponse(
-    const network::ResourceResponseHead& response_head,
-    network::mojom::DownloadedTempFilePtr downloaded_file) {
+    const network::ResourceResponseHead& response_head) {
   response_ = response_head;
 
   // TODO(ananta/michaeln)
@@ -123,12 +122,6 @@ void AppCacheUpdateJob::UpdateURLLoaderRequest::OnReceiveRedirect(
   fetcher_->OnReceivedRedirect(redirect_info);
 }
 
-void AppCacheUpdateJob::UpdateURLLoaderRequest::OnDataDownloaded(
-    int64_t data_len,
-    int64_t encoded_data_len) {
-  NOTIMPLEMENTED();
-}
-
 void AppCacheUpdateJob::UpdateURLLoaderRequest::OnUploadProgress(
     int64_t current_position,
     int64_t total_size,
@@ -151,8 +144,9 @@ void AppCacheUpdateJob::UpdateURLLoaderRequest::OnStartLoadingResponseBody(
 
   handle_watcher_.Watch(
       handle_.get(), MOJO_HANDLE_SIGNAL_READABLE,
-      base::Bind(&AppCacheUpdateJob::UpdateURLLoaderRequest::StartReading,
-                 base::Unretained(this)));
+      base::BindRepeating(
+          &AppCacheUpdateJob::UpdateURLLoaderRequest::StartReading,
+          base::Unretained(this)));
 
   // Initiate a read from the pipe if we have a pending Read() request.
   MaybeStartReading();

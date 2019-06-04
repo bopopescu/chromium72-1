@@ -35,15 +35,16 @@ const int kMaxStrokeGapWhenWritingMs = 1000;
 }  // namespace
 
 MetalayerMode::MetalayerMode(Delegate* delegate)
-    : CommonPaletteTool(delegate), weak_factory_(this) {
+    : CommonPaletteTool(delegate),
+      weak_factory_(this) {
   Shell::Get()->AddPreTargetHandler(this);
-  Shell::Get()->voice_interaction_controller()->AddObserver(this);
+  Shell::Get()->voice_interaction_controller()->AddLocalObserver(this);
   Shell::Get()->highlighter_controller()->AddObserver(this);
 }
 
 MetalayerMode::~MetalayerMode() {
   Shell::Get()->highlighter_controller()->RemoveObserver(this);
-  Shell::Get()->voice_interaction_controller()->RemoveObserver(this);
+  Shell::Get()->voice_interaction_controller()->RemoveLocalObserver(this);
   Shell::Get()->RemovePreTargetHandler(this);
 }
 
@@ -206,7 +207,8 @@ void MetalayerMode::UpdateView() {
 
   highlight_view_->SetEnabled(selectable());
 
-  TrayPopupItemStyle style(TrayPopupItemStyle::FontStyle::DETAILED_VIEW_LABEL);
+  TrayPopupItemStyle style(TrayPopupItemStyle::FontStyle::DETAILED_VIEW_LABEL,
+                           false /* use_unified_theme */);
   style.set_color_style(highlight_view_->enabled()
                             ? TrayPopupItemStyle::ColorStyle::ACTIVE
                             : TrayPopupItemStyle::ColorStyle::DISABLED);
@@ -219,7 +221,7 @@ void MetalayerMode::UpdateView() {
 
 void MetalayerMode::OnMetalayerSessionComplete() {
   Shell::Get()->highlighter_controller()->UpdateEnabledState(
-      HighlighterEnabledState::kDisabledBySessionEnd);
+      HighlighterEnabledState::kDisabledBySessionComplete);
 }
 
 }  // namespace ash

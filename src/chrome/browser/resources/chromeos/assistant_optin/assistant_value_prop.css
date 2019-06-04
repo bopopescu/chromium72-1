@@ -8,103 +8,74 @@
   margin: auto;
 }
 
-#retry-button,
-#more-button,
-#next-button {
-  display: none;
+#intro-text {
+  padding: 0 8px 16px 0;
 }
 
-.value-prop-error #retry-button,
-.value-prop-loading #more-button,
-.value-prop-loading #next-button,
-.value-prop-loaded #more-button,
-.value-prop-loaded #next-button,
-.value-prop-more #next-button {
-  display: block;
+#value-prop-container {
+  border-right: 1px solid rgb(218, 220, 224);
+  width: 50%;
 }
 
-#loading-container,
-#error-container,
-#view-container,
-#more-container {
-  height: 372px;
-  overflow: hidden;
-  padding: 48px 48px 0 48px;
-  position: absolute;
-  visibility: hidden;
-  width: 480px;
+#consents-container {
+  padding-left: 24px;
+  width: 50%;
 }
 
-#view-container {
-  padding-top: 32px;
+#user-name {
+  color: #757575;
+  padding-left: 8px;
 }
 
-.value-prop-loading-animation #loading-container,
-.value-prop-loaded #view-container,
-.value-prop-error #error-container,
-.value-prop-more #more-container {
-  overflow-y: scroll;
-  visibility: visible;
+#footer-text {
+  color: #757575;
+  padding-top: 16px;
 }
 
-.value-prop-loading #retry-button,
-.value-prop-loading #more-button,
-.value-prop-loading #skip-button,
-.value-prop-loading #next-button {
-  pointer-events: none;
+#user-image {
+  border-radius: 50%;
+  height: 20px;
 }
 
-.title {
-  font-size: 18px;
-  padding-bottom: 10px;
+.oobe-popup {
+  border-radius: 8px;
+  box-shadow: unset;
+  width: 512px;
 }
 
-.sub-title {
-  font-size: 12px;
-  padding: 8px 0 8px 0;
-}
-
-.content {
-  color: rgba(0, 0, 0, .54);
-  font-size: 11px;
-  padding-bottom: 10px;
-}
-
-.line {
-  background-color: rgba(0, 0, 0, .14);
-  height: 1px;
-  margin: 8px 0 8px 0;
-}
-
-#footer {
-  color: rgba(0, 0, 0, .54);
-  font-size: 11px;
-  padding-top: 4px;
-}
-
-#loading-message {
-  color: rgba(0, 0, 0, .54);
-  font-size: 12px;
-  line: 17px;
-  padding: 168px 0 0 0;
-}
-
-paper-progress {
-  --paper-progress-active-color: rgb(66, 133, 244);
-  --paper-progress-container-color: #CEE0FC;
-  --paper-progress-secondary-color: rgb(66, 133, 244);
-  display: block;
-  height: 3px;
-  padding: 4px 0 0 0;
+#overlay-text {
+  box-sizing: border-box;
+  font-size: 13px;
+  margin: auto;
+  min-height: 200px;
+  padding: 16px;
   width: 100%;
 }
 
-#skip-button {
-  color: rgb(66, 133, 244);
+#overlay-title-text {
+  font-size: 15px;
 }
 
-#retry-button,
-#more-button,
-#next-button {
-  -webkit-margin-end: 18px;
+#overlay-additional-info-text {
+  color: rgb(128, 134, 139);
+  line-height: 20px;
+  padding-top: 20px;
+}
+
+#overlay-close-button {
+  margin-right: 0;
+}
+
+#close-button-text {
+  padding: 0 16px 0 16px;
+}
+
+.button-strip {
+  display: flex;
+  justify-content: flex-end;
+  margin: 16px;
+}
+
+oobe-text-button[disabled] {
+  pointer-events: none;
 }

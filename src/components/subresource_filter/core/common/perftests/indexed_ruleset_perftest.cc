@@ -46,7 +46,7 @@ class IndexedRulesetPerftest : public testing::Test {
 
     unindexed_path_ = dir_path.AppendASCII(
         "components/subresource_filter/core/common/perftests/"
-        "data/UnindexedRules_7.54");
+        "data/UnindexedRules_8.0");
 
     ASSERT_TRUE(scoped_dir_.CreateUniqueTempDir());
     base::FilePath indexed_path =
@@ -58,9 +58,8 @@ class IndexedRulesetPerftest : public testing::Test {
     base::File indexed_file =
         base::File(indexed_path, base::File::FLAG_OPEN | base::File::FLAG_READ);
     ASSERT_TRUE(indexed_file.IsValid());
-    auto ruleset =
-        base::MakeRefCounted<subresource_filter::MemoryMappedRuleset>(
-            std::move(indexed_file));
+    auto ruleset = subresource_filter::MemoryMappedRuleset::CreateAndInitialize(
+        std::move(indexed_file));
     filter_tool_ = std::make_unique<FilterTool>(std::move(ruleset), &output_);
   }
 

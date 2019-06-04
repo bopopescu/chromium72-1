@@ -49,10 +49,10 @@ class TabletModeClient : public ash::mojom::TabletModeClient,
   bool ShouldTrackBrowser(Browser* browser) override;
 
   // TabStripModelObserver:
-  void TabInsertedAt(TabStripModel* tab_strip_model,
-                     content::WebContents* contents,
-                     int index,
-                     bool foreground) override;
+  void OnTabStripModelChanged(
+      TabStripModel* tab_strip_model,
+      const TabStripModelChange& change,
+      const TabStripSelectionChange& selection) override;
 
   // Flushes the mojo pipe to ash.
   void FlushForTesting();
@@ -82,8 +82,8 @@ class TabletModeClient : public ash::mojom::TabletModeClient,
   // Keeps the interface pipe alive to receive mojo return values.
   ash::mojom::TabletModeControllerPtr tablet_mode_controller_;
 
-  base::ObserverList<TabletModeClientObserver, true /* check_empty */>
-      observers_;
+  base::ObserverList<TabletModeClientObserver,
+                     true /* check_empty */>::Unchecked observers_;
 
   DISALLOW_COPY_AND_ASSIGN(TabletModeClient);
 };

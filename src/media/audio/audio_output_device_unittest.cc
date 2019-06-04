@@ -13,7 +13,8 @@
 #include "base/callback.h"
 #include "base/macros.h"
 #include "base/memory/ptr_util.h"
-#include "base/memory/shared_memory.h"
+#include "base/memory/shared_memory_mapping.h"
+#include "base/memory/unsafe_shared_memory_region.h"
 #include "base/single_thread_task_runner.h"
 #include "base/sync_socket.h"
 #include "base/task_runner.h"
@@ -21,12 +22,12 @@
 #include "base/threading/thread_task_runner_handle.h"
 #include "build/build_config.h"
 #include "media/audio/audio_sync_reader.h"
-#include "mojo/public/cpp/system/platform_handle.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 using base::CancelableSyncSocket;
-using base::SharedMemory;
+using base::UnsafeSharedMemoryRegion;
+using base::WritableSharedMemoryMapping;
 using base::SyncSocket;
 using testing::_;
 using testing::DoAll;
@@ -76,33 +77,16 @@ class MockAudioOutputIPC : public AudioOutputIPC {
                void(AudioOutputIPCDelegate* delegate,
                     int session_id,
                     const std::string& device_id));
-  MOCK_METHOD2(CreateStream,
-               void(AudioOutputIPCDelegate* delegate,
-                    const AudioParameters& params));
+  MOCK_METHOD3(
+      CreateStream,
+      void(AudioOutputIPCDelegate* delegate,
+           const AudioParameters& params,
+           const base::Optional<base::UnguessableToken>& processing_id));
   MOCK_METHOD0(PlayStream, void());
   MOCK_METHOD0(PauseStream, void());
   MOCK_METHOD0(CloseStream, void());
   MOCK_METHOD1(SetVolume, void(double volume));
 };
-
-// Converts a new-style shared memory region to a old-style shared memory
-// handle using a mojo::ScopedSharedBufferHandle that supports both types.
-// TODO(https://crbug.com/844508): get rid of this when AudioOutputDevice shared
-// memory refactor is done.
-base::SharedMemoryHandle ToSharedMemoryHandle(
-    base::UnsafeSharedMemoryRegion region) {
-  mojo::ScopedSharedBufferHandle buffer_handle =
-      mojo::WrapUnsafeSharedMemoryRegion(std::move(region));
-  base::SharedMemoryHandle memory_handle;
-  mojo::UnwrappedSharedMemoryHandleProtection protection;
-  size_t memory_length = 0;
-  auto result = mojo::UnwrapSharedMemoryHandle(
-      std::move(buffer_handle), &memory_handle, &memory_length, &protection);
-  DCHECK_EQ(result, MOJO_RESULT_OK);
-  DCHECK_EQ(protection,
-            mojo::UnwrappedSharedMemoryHandleProtection::kReadWrite);
-  return memory_handle;
-}
 
 }  // namespace.
 
@@ -115,9 +99,11 @@ class AudioOutputDeviceTest : public testing::Test {
   void StartAudioDevice();
   void CallOnStreamCreated();
   void StopAudioDevice();
-  void CreateDevice(const std::string& device_id);
+  void CreateDevice(const std::string& device_id,
+                    base::TimeDelta timeout = kAuthTimeout);
   void SetDevice(const std::string& device_id);
-  void CheckDeviceStatus(OutputDeviceStatus device_status);
+
+  MOCK_METHOD1(OnDeviceInfoReceived, void(OutputDeviceInfo));
 
  protected:
   base::test::ScopedTaskEnvironment task_env_{
@@ -131,7 +117,8 @@ class AudioOutputDeviceTest : public testing::Test {
  private:
   int CalculateMemorySize();
 
-  SharedMemory shared_memory_;
+  UnsafeSharedMemoryRegion shared_memory_region_;
+  WritableSharedMemoryMapping shared_memory_mapping_;
   CancelableSyncSocket browser_socket_;
   CancelableSyncSocket renderer_socket_;
 
@@ -149,15 +136,16 @@ AudioOutputDeviceTest::~AudioOutputDeviceTest() {
   audio_device_ = nullptr;
 }
 
-void AudioOutputDeviceTest::CreateDevice(const std::string& device_id) {
+void AudioOutputDeviceTest::CreateDevice(const std::string& device_id,
+                                         base::TimeDelta timeout) {
   // Make sure the previous device is properly cleaned up.
   if (audio_device_)
     StopAudioDevice();
 
   audio_output_ipc_ = new NiceMock<MockAudioOutputIPC>();
-  audio_device_ = new AudioOutputDevice(base::WrapUnique(audio_output_ipc_),
-                                        task_env_.GetMainThreadTaskRunner(), 0,
-                                        device_id, kAuthTimeout);
+  audio_device_ = new AudioOutputDevice(
+      base::WrapUnique(audio_output_ipc_), task_env_.GetMainThreadTaskRunner(),
+      AudioSinkParameters(0, device_id), timeout);
 }
 
 void AudioOutputDeviceTest::SetDevice(const std::string& device_id) {
@@ -178,11 +166,6 @@ void AudioOutputDeviceTest::SetDevice(const std::string& device_id) {
                             &callback_);
 }
 
-void AudioOutputDeviceTest::CheckDeviceStatus(OutputDeviceStatus status) {
-  DCHECK(!task_env_.GetMainThreadTaskRunner()->BelongsToCurrentThread());
-  EXPECT_EQ(status, audio_device_->GetOutputDeviceInfo().device_status());
-}
-
 void AudioOutputDeviceTest::ReceiveAuthorization(OutputDeviceStatus status) {
   device_status_ = status;
   if (device_status_ != OUTPUT_DEVICE_STATUS_OK)
@@ -195,7 +178,7 @@ void AudioOutputDeviceTest::ReceiveAuthorization(OutputDeviceStatus status) {
 
 void AudioOutputDeviceTest::StartAudioDevice() {
   if (device_status_ == OUTPUT_DEVICE_STATUS_OK)
-    EXPECT_CALL(*audio_output_ipc_, CreateStream(audio_device_.get(), _));
+    EXPECT_CALL(*audio_output_ipc_, CreateStream(audio_device_.get(), _, _));
   else
     EXPECT_CALL(callback_, OnRenderError());
 
@@ -207,8 +190,11 @@ void AudioOutputDeviceTest::CallOnStreamCreated() {
   const uint32_t kMemorySize =
       ComputeAudioOutputBufferSize(default_audio_parameters_);
 
-  ASSERT_TRUE(shared_memory_.CreateAndMapAnonymous(kMemorySize));
-  memset(shared_memory_.memory(), 0xff, kMemorySize);
+  shared_memory_region_ = base::UnsafeSharedMemoryRegion::Create(kMemorySize);
+  ASSERT_TRUE(shared_memory_region_.IsValid());
+  shared_memory_mapping_ = shared_memory_region_.Map();
+  ASSERT_TRUE(shared_memory_mapping_.IsValid());
+  memset(shared_memory_mapping_.memory(), 0xff, kMemorySize);
 
   ASSERT_TRUE(CancelableSyncSocket::CreatePair(&browser_socket_,
                                                &renderer_socket_));
@@ -219,14 +205,12 @@ void AudioOutputDeviceTest::CallOnStreamCreated() {
   SyncSocket::TransitDescriptor audio_device_socket_descriptor;
   ASSERT_TRUE(renderer_socket_.PrepareTransitDescriptor(
       base::GetCurrentProcessHandle(), &audio_device_socket_descriptor));
-  base::SharedMemoryHandle duplicated_memory_handle =
-      shared_memory_.handle().Duplicate();
-  ASSERT_TRUE(duplicated_memory_handle.IsValid());
+  base::UnsafeSharedMemoryRegion duplicated_memory_region =
+      shared_memory_region_.Duplicate();
+  ASSERT_TRUE(duplicated_memory_region.IsValid());
 
-  // TODO(erikchen): This appears to leak the SharedMemoryHandle.
-  // https://crbug.com/640840.
   audio_device_->OnStreamCreated(
-      duplicated_memory_handle,
+      std::move(duplicated_memory_region),
       SyncSocket::UnwrapHandle(audio_device_socket_descriptor),
       /*playing_automatically*/ false);
   task_env_.FastForwardBy(base::TimeDelta());
@@ -310,9 +294,9 @@ TEST_F(AudioOutputDeviceTest, AuthorizationFailsBeforeInitialize_NoError) {
   // Clear audio device set by fixture.
   StopAudioDevice();
   audio_output_ipc_ = new NiceMock<MockAudioOutputIPC>();
-  audio_device_ = new AudioOutputDevice(base::WrapUnique(audio_output_ipc_),
-                                        task_env_.GetMainThreadTaskRunner(), 0,
-                                        kDefaultDeviceId, kAuthTimeout);
+  audio_device_ = new AudioOutputDevice(
+      base::WrapUnique(audio_output_ipc_), task_env_.GetMainThreadTaskRunner(),
+      AudioSinkParameters(0, kDefaultDeviceId), kAuthTimeout);
   EXPECT_CALL(
       *audio_output_ipc_,
       RequestDeviceAuthorization(audio_device_.get(), 0, kDefaultDeviceId));
@@ -347,6 +331,57 @@ TEST_F(AudioOutputDeviceTest, AuthorizationTimedOut) {
   task_env_.FastForwardBy(base::TimeDelta());
 }
 
+TEST_F(AudioOutputDeviceTest, GetOutputDeviceInfoAsync_Error) {
+  CreateDevice(kUnauthorizedDeviceId, base::TimeDelta());
+  EXPECT_CALL(*audio_output_ipc_,
+              RequestDeviceAuthorization(audio_device_.get(), 0,
+                                         kUnauthorizedDeviceId));
+  audio_device_->RequestDeviceAuthorization();
+  audio_device_->GetOutputDeviceInfoAsync(base::BindOnce(
+      &AudioOutputDeviceTest::OnDeviceInfoReceived, base::Unretained(this)));
+  task_env_.FastForwardBy(base::TimeDelta());
+
+  OutputDeviceInfo info;
+  constexpr auto kExpectedStatus = OUTPUT_DEVICE_STATUS_ERROR_NOT_AUTHORIZED;
+  EXPECT_CALL(*this, OnDeviceInfoReceived(_))
+      .WillOnce(testing::SaveArg<0>(&info));
+  ReceiveAuthorization(kExpectedStatus);
+
+  task_env_.FastForwardUntilNoTasksRemain();
+  EXPECT_EQ(kExpectedStatus, info.device_status());
+  EXPECT_EQ(kUnauthorizedDeviceId, info.device_id());
+  EXPECT_TRUE(
+      AudioParameters::UnavailableDeviceParams().Equals(info.output_params()));
+
+  audio_device_->Stop();
+  task_env_.FastForwardBy(base::TimeDelta());
+}
+
+TEST_F(AudioOutputDeviceTest, GetOutputDeviceInfoAsync_Okay) {
+  CreateDevice(kDefaultDeviceId, base::TimeDelta());
+  EXPECT_CALL(
+      *audio_output_ipc_,
+      RequestDeviceAuthorization(audio_device_.get(), 0, kDefaultDeviceId));
+  audio_device_->RequestDeviceAuthorization();
+  audio_device_->GetOutputDeviceInfoAsync(base::BindOnce(
+      &AudioOutputDeviceTest::OnDeviceInfoReceived, base::Unretained(this)));
+  task_env_.FastForwardBy(base::TimeDelta());
+
+  OutputDeviceInfo info;
+  constexpr auto kExpectedStatus = OUTPUT_DEVICE_STATUS_OK;
+  EXPECT_CALL(*this, OnDeviceInfoReceived(_))
+      .WillOnce(testing::SaveArg<0>(&info));
+  ReceiveAuthorization(kExpectedStatus);
+
+  task_env_.FastForwardUntilNoTasksRemain();
+  EXPECT_EQ(kExpectedStatus, info.device_status());
+  EXPECT_EQ(kDefaultDeviceId, info.device_id());
+  EXPECT_TRUE(default_audio_parameters_.Equals(info.output_params()));
+
+  audio_device_->Stop();
+  task_env_.FastForwardBy(base::TimeDelta());
+}
+
 namespace {
 
 // This struct collects useful stuff without doing anything magical. It is used
@@ -369,12 +404,11 @@ struct TestEnvironment {
     time_stamp = base::TimeTicks::Now();
 
 #if defined(OS_FUCHSIA)
-    // Raise the timeout limits to reduce bot flakiness.
-    // Fuchsia's task scheduler suffers from bad jitter on systems running many
-    // tests simultaneously on nested virtualized deployments (e.g. test bots),
-    // leading some read operations to randomly timeout.
+    // TODO(https://crbug.com/838367): Fuchsia bots use nested virtualization,
+    // which can result in unusually long scheduling delays, so allow a longer
+    // timeout.
     reader->set_max_wait_timeout_for_test(
-        base::TimeDelta::FromMilliseconds(50));
+        base::TimeDelta::FromMilliseconds(250));
 #endif
   }
 
@@ -386,7 +420,13 @@ struct TestEnvironment {
 
 }  // namespace
 
-TEST_F(AudioOutputDeviceTest, VerifyDataFlow) {
+#if defined(ADDRESS_SANITIZER)
+// TODO(crbug.com/903696): Flaky, at least on CrOS ASAN.
+#define MAYBE_VerifyDataFlow DISABLED_VerifyDataFlow
+#else
+#define MAYBE_VerifyDataFlow VerifyDataFlow
+#endif
+TEST_F(AudioOutputDeviceTest, MAYBE_VerifyDataFlow) {
   // The test fixture isn't used in this test, but we still have to clean up
   // after it.
   StopAudioDevice();
@@ -397,8 +437,8 @@ TEST_F(AudioOutputDeviceTest, VerifyDataFlow) {
   TestEnvironment env(params);
   auto* ipc = new MockAudioOutputIPC();  // owned by |audio_device|.
   auto audio_device = base::MakeRefCounted<AudioOutputDevice>(
-      base::WrapUnique(ipc), task_env_.GetMainThreadTaskRunner(), 0,
-      kDefaultDeviceId, kAuthTimeout);
+      base::WrapUnique(ipc), task_env_.GetMainThreadTaskRunner(),
+      AudioSinkParameters(0, kDefaultDeviceId), kAuthTimeout);
 
   // Start a stream.
   audio_device->RequestDeviceAuthorization();
@@ -406,15 +446,15 @@ TEST_F(AudioOutputDeviceTest, VerifyDataFlow) {
   audio_device->Start();
   EXPECT_CALL(*ipc, RequestDeviceAuthorization(audio_device.get(), 0,
                                                kDefaultDeviceId));
-  EXPECT_CALL(*ipc, CreateStream(audio_device.get(), _));
+  EXPECT_CALL(*ipc, CreateStream(audio_device.get(), _, _));
   EXPECT_CALL(*ipc, PlayStream());
   task_env_.RunUntilIdle();
   Mock::VerifyAndClear(ipc);
   audio_device->OnDeviceAuthorized(OUTPUT_DEVICE_STATUS_OK, params,
                                    kDefaultDeviceId);
-  audio_device->OnStreamCreated(
-      ToSharedMemoryHandle(env.reader->TakeSharedMemoryRegion()),
-      env.renderer_socket.Release(), /*playing_automatically*/ false);
+  audio_device->OnStreamCreated(env.reader->TakeSharedMemoryRegion(),
+                                env.renderer_socket.Release(),
+                                /*playing_automatically*/ false);
 
   task_env_.RunUntilIdle();
   // At this point, the callback thread should be running. Send some data over
@@ -459,23 +499,23 @@ TEST_F(AudioOutputDeviceTest, CreateNondefaultDevice) {
   TestEnvironment env(params);
   auto* ipc = new MockAudioOutputIPC();  // owned by |audio_device|.
   auto audio_device = base::MakeRefCounted<AudioOutputDevice>(
-      base::WrapUnique(ipc), task_env_.GetMainThreadTaskRunner(), 0,
-      kNonDefaultDeviceId, kAuthTimeout);
+      base::WrapUnique(ipc), task_env_.GetMainThreadTaskRunner(),
+      AudioSinkParameters(0, kNonDefaultDeviceId), kAuthTimeout);
 
   audio_device->RequestDeviceAuthorization();
   audio_device->Initialize(params, &env.callback);
   audio_device->Start();
   EXPECT_CALL(*ipc, RequestDeviceAuthorization(audio_device.get(), 0,
                                                kNonDefaultDeviceId));
-  EXPECT_CALL(*ipc, CreateStream(audio_device.get(), _));
+  EXPECT_CALL(*ipc, CreateStream(audio_device.get(), _, _));
   EXPECT_CALL(*ipc, PlayStream());
   task_env_.RunUntilIdle();
   Mock::VerifyAndClear(ipc);
   audio_device->OnDeviceAuthorized(OUTPUT_DEVICE_STATUS_OK, params,
                                    kNonDefaultDeviceId);
-  audio_device->OnStreamCreated(
-      ToSharedMemoryHandle(env.reader->TakeSharedMemoryRegion()),
-      env.renderer_socket.Release(), /*playing_automatically*/ false);
+  audio_device->OnStreamCreated(env.reader->TakeSharedMemoryRegion(),
+                                env.renderer_socket.Release(),
+                                /*playing_automatically*/ false);
 
   audio_device->Stop();
   EXPECT_CALL(*ipc, CloseStream());
@@ -494,8 +534,8 @@ TEST_F(AudioOutputDeviceTest, CreateBitStreamStream) {
   TestEnvironment env(params);
   auto* ipc = new MockAudioOutputIPC();  // owned by |audio_device|.
   auto audio_device = base::MakeRefCounted<AudioOutputDevice>(
-      base::WrapUnique(ipc), task_env_.GetMainThreadTaskRunner(), 0,
-      kNonDefaultDeviceId, kAuthTimeout);
+      base::WrapUnique(ipc), task_env_.GetMainThreadTaskRunner(),
+      AudioSinkParameters(0, kNonDefaultDeviceId), kAuthTimeout);
 
   // Start a stream.
   audio_device->RequestDeviceAuthorization();
@@ -503,15 +543,15 @@ TEST_F(AudioOutputDeviceTest, CreateBitStreamStream) {
   audio_device->Start();
   EXPECT_CALL(*ipc, RequestDeviceAuthorization(audio_device.get(), 0,
                                                kNonDefaultDeviceId));
-  EXPECT_CALL(*ipc, CreateStream(audio_device.get(), _));
+  EXPECT_CALL(*ipc, CreateStream(audio_device.get(), _, _));
   EXPECT_CALL(*ipc, PlayStream());
   task_env_.RunUntilIdle();
   Mock::VerifyAndClear(ipc);
   audio_device->OnDeviceAuthorized(OUTPUT_DEVICE_STATUS_OK, params,
                                    kNonDefaultDeviceId);
-  audio_device->OnStreamCreated(
-      ToSharedMemoryHandle(env.reader->TakeSharedMemoryRegion()),
-      env.renderer_socket.Release(), /*playing_automatically*/ false);
+  audio_device->OnStreamCreated(env.reader->TakeSharedMemoryRegion(),
+                                env.renderer_socket.Release(),
+                                /*playing_automatically*/ false);
 
   task_env_.RunUntilIdle();
   // At this point, the callback thread should be running. Send some data over
@@ -539,7 +579,9 @@ TEST_F(AudioOutputDeviceTest, CreateBitStreamStream) {
     EXPECT_EQ(kBitstreamFrames, test_bus->GetBitstreamFrames());
     EXPECT_EQ(kBitstreamDataSize, test_bus->GetBitstreamDataSize());
     for (size_t i = 0; i < kBitstreamDataSize / sizeof(float); ++i) {
-      EXPECT_EQ(kAudioData, test_bus->channel(0)[i]);
+      // Note: if all of these fail, the bots will behave strangely due to the
+      // large amount of text output. Assert is used to avoid this.
+      ASSERT_EQ(kAudioData, test_bus->channel(0)[i]);
     }
   }
 

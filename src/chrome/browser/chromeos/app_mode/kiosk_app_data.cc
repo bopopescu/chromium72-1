@@ -11,7 +11,7 @@
 #include "base/json/json_writer.h"
 #include "base/macros.h"
 #include "base/memory/ref_counted_memory.h"
-#include "base/task_scheduler/post_task.h"
+#include "base/task/post_task.h"
 #include "base/values.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/chromeos/app_mode/kiosk_app_data_delegate.h"
@@ -24,6 +24,7 @@
 #include "chrome/browser/profiles/profile.h"
 #include "components/prefs/pref_service.h"
 #include "components/prefs/scoped_user_pref_update.h"
+#include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/common/service_manager_connection.h"
 #include "extensions/browser/extension_system.h"
@@ -83,7 +84,7 @@ class KioskAppData::CrxLoader : public extensions::SandboxedUnpackerClient {
         crx_file_(crx_file),
         success_(false),
         task_runner_(base::CreateSequencedTaskRunnerWithTraits(
-            {base::MayBlock(), base::TaskPriority::BACKGROUND,
+            {base::MayBlock(), base::TaskPriority::BEST_EFFORT,
              base::TaskShutdownBehavior::SKIP_ON_SHUTDOWN})) {}
 
   void Start() {
@@ -161,8 +162,8 @@ class KioskAppData::CrxLoader : public extensions::SandboxedUnpackerClient {
                    << temp_dir_.GetPath().value();
     }
 
-    BrowserThread::PostTask(
-        BrowserThread::UI, FROM_HERE,
+    base::PostTaskWithTraits(
+        FROM_HERE, {BrowserThread::UI},
         base::BindOnce(&CrxLoader::NotifyFinishedOnUIThread, this));
   }
 
@@ -220,13 +221,12 @@ class KioskAppData::WebstoreDataParser
   }
 
   // WebstoreInstallHelper::Delegate overrides:
-  void OnWebstoreParseSuccess(const std::string& id,
-                              const SkBitmap& icon,
-                              base::DictionaryValue* parsed_manifest) override {
-    // Takes ownership of |parsed_manifest|.
-    extensions::Manifest manifest(
-        extensions::Manifest::INVALID_LOCATION,
-        std::unique_ptr<base::DictionaryValue>(parsed_manifest));
+  void OnWebstoreParseSuccess(
+      const std::string& id,
+      const SkBitmap& icon,
+      std::unique_ptr<base::DictionaryValue> parsed_manifest) override {
+    extensions::Manifest manifest(extensions::Manifest::INVALID_LOCATION,
+                                  std::move(parsed_manifest));
 
     if (!IsValidKioskAppManifest(manifest)) {
       ReportFailure();
@@ -309,8 +309,8 @@ void KioskAppData::LoadFromInstalledApp(Profile* profile,
       app, kIconSize, ExtensionIconSet::MATCH_BIGGER);
   extensions::ImageLoader::Get(profile)->LoadImageAsync(
       app, image, gfx::Size(kIconSize, kIconSize),
-      base::Bind(&KioskAppData::OnExtensionIconLoaded,
-                 weak_factory_.GetWeakPtr()));
+      base::BindOnce(&KioskAppData::OnExtensionIconLoaded,
+                     weak_factory_.GetWeakPtr()));
 }
 
 void KioskAppData::SetCachedCrx(const base::FilePath& crx_file) {

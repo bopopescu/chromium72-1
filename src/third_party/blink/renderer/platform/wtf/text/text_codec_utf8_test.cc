@@ -30,6 +30,7 @@
 
 #include "third_party/blink/renderer/platform/wtf/text/text_codec_utf8.h"
 
+#include <limits>
 #include <memory>
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/renderer/platform/wtf/text/text_codec.h"
@@ -46,14 +47,15 @@ TEST(TextCodecUTF8, DecodeAscii) {
   std::unique_ptr<TextCodec> codec(NewTextCodec(encoding));
 
   const char kTestCase[] = "HelloWorld";
-  size_t test_case_size = sizeof(kTestCase) - 1;
+  wtf_size_t test_case_size = sizeof(kTestCase) - 1;
 
   bool saw_error = false;
   const String& result =
-      codec->Decode(kTestCase, test_case_size, kDataEOF, false, saw_error);
+      codec->Decode(kTestCase, test_case_size, FlushBehavior::kDataEOF,
+                    false, saw_error);
   EXPECT_FALSE(saw_error);
   ASSERT_EQ(test_case_size, result.length());
-  for (size_t i = 0; i < test_case_size; ++i) {
+  for (wtf_size_t i = 0; i < test_case_size; ++i) {
     EXPECT_EQ(kTestCase[i], result[i]);
   }
 }
@@ -64,11 +66,12 @@ TEST(TextCodecUTF8, DecodeChineseCharacters) {
 
   // "Kanji" in Chinese characters.
   const char kTestCase[] = "\xe6\xbc\xa2\xe5\xad\x97";
-  size_t test_case_size = sizeof(kTestCase) - 1;
+  wtf_size_t test_case_size = sizeof(kTestCase) - 1;
 
   bool saw_error = false;
   const String& result =
-      codec->Decode(kTestCase, test_case_size, kDataEOF, false, saw_error);
+      codec->Decode(kTestCase, test_case_size, FlushBehavior::kDataEOF,
+                    false, saw_error);
   EXPECT_FALSE(saw_error);
   ASSERT_EQ(2u, result.length());
   EXPECT_EQ(0x6f22U, result[0]);
@@ -80,10 +83,25 @@ TEST(TextCodecUTF8, Decode0xFF) {
   std::unique_ptr<TextCodec> codec(NewTextCodec(encoding));
 
   bool saw_error = false;
-  const String& result = codec->Decode("\xff", 1, kDataEOF, false, saw_error);
+  const String& result =
+      codec->Decode("\xff", 1, FlushBehavior::kDataEOF, false, saw_error);
   EXPECT_TRUE(saw_error);
   ASSERT_EQ(1u, result.length());
   EXPECT_EQ(0xFFFDU, result[0]);
+}
+
+TEST(TextCodecUTF8, DecodeOverflow) {
+  TextEncoding encoding("UTF-8");
+  std::unique_ptr<TextCodec> codec(NewTextCodec(encoding));
+
+  // Prime the partial sequence buffer.
+  bool saw_error = false;
+  codec->Decode("\x80", 1, FlushBehavior::kDoNotFlush, false, saw_error);
+  EXPECT_FALSE(saw_error);
+
+  EXPECT_DEATH(codec->Decode(nullptr, std::numeric_limits<wtf_size_t>::max(),
+                             FlushBehavior::kDataEOF, false, saw_error),
+               "");
 }
 
 }  // namespace

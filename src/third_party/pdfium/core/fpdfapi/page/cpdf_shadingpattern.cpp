@@ -33,7 +33,7 @@ CPDF_ShadingPattern::CPDF_ShadingPattern(CPDF_Document* pDoc,
     : CPDF_Pattern(pDoc, bShading ? nullptr : pPatternObj, parentMatrix),
       m_bShadingObj(bShading),
       m_pShadingObj(pPatternObj) {
-  assert(document());
+  ASSERT(document());
   if (!bShading) {
     m_pShadingObj = pattern_obj()->GetDict()->GetDirectObjectFor("Shading");
     SetPatternToFormMatrix();
@@ -63,16 +63,16 @@ bool CPDF_ShadingPattern::Load() {
   if (m_ShadingType != kInvalidShading)
     return true;
 
-  CPDF_Dictionary* pShadingDict =
+  const CPDF_Dictionary* pShadingDict =
       m_pShadingObj ? m_pShadingObj->GetDict() : nullptr;
   if (!pShadingDict)
     return false;
 
   m_pFunctions.clear();
-  CPDF_Object* pFunc = pShadingDict->GetDirectObjectFor("Function");
+  const CPDF_Object* pFunc = pShadingDict->GetDirectObjectFor("Function");
   if (pFunc) {
-    if (CPDF_Array* pArray = pFunc->AsArray()) {
-      m_pFunctions.resize(std::min<size_t>(pArray->GetCount(), 4));
+    if (const CPDF_Array* pArray = pFunc->AsArray()) {
+      m_pFunctions.resize(std::min<size_t>(pArray->size(), 4));
       for (size_t i = 0; i < m_pFunctions.size(); ++i)
         m_pFunctions[i] = CPDF_Function::Load(pArray->GetDirectObjectAt(i));
     } else {

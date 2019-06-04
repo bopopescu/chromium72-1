@@ -53,7 +53,7 @@ inline ProcessingInstruction::ProcessingInstruction(Document& document,
 ProcessingInstruction* ProcessingInstruction::Create(Document& document,
                                                      const String& target,
                                                      const String& data) {
-  return new ProcessingInstruction(document, target, data);
+  return MakeGarbageCollected<ProcessingInstruction>(document, target, data);
 }
 
 ProcessingInstruction::~ProcessingInstruction() = default;
@@ -81,14 +81,17 @@ Node::NodeType ProcessingInstruction::getNodeType() const {
 }
 
 Node* ProcessingInstruction::Clone(Document& factory, CloneChildrenFlag) const {
-  // FIXME: Is it a problem that this does not copy m_localHref?
+  // FIXME: Is it a problem that this does not copy local_href_?
   // What about other data members?
   return Create(factory, target_, data_);
 }
 
 void ProcessingInstruction::DidAttributeChanged() {
-  if (sheet_)
+  if (sheet_) {
+    if (sheet_->IsLoading())
+      RemovePendingSheet();
     ClearSheet();
+  }
 
   String href;
   String charset;
@@ -151,12 +154,15 @@ void ProcessingInstruction::Process(const String& href, const String& charset) {
     return;
 
   ResourceLoaderOptions options;
-  options.initiator_info.name = FetchInitiatorTypeNames::processinginstruction;
+  options.initiator_info.name =
+      fetch_initiator_type_names::kProcessinginstruction;
   FetchParameters params(ResourceRequest(GetDocument().CompleteURL(href)),
                          options);
   loading_ = true;
   if (is_xsl_) {
     DCHECK(RuntimeEnabledFeatures::XSLTEnabled());
+    params.MutableResourceRequest().SetFetchRequestMode(
+        network::mojom::FetchRequestMode::kSameOrigin);
     XSLStyleSheetResource::Fetch(params, GetDocument().Fetcher(), this);
   } else {
     params.SetCharset(charset.IsEmpty() ? GetDocument().Encoding()
@@ -177,8 +183,7 @@ bool ProcessingInstruction::IsLoading() const {
 bool ProcessingInstruction::SheetLoaded() {
   if (!IsLoading()) {
     if (!DocumentXSLT::SheetLoaded(GetDocument(), this))
-      GetDocument().GetStyleEngine().RemovePendingSheet(*this,
-                                                        style_engine_context_);
+      RemovePendingSheet();
     return true;
   }
   return false;
@@ -234,9 +239,9 @@ void ProcessingInstruction::NotifyFinished(Resource* resource) {
 }
 
 Node::InsertionNotificationRequest ProcessingInstruction::InsertedInto(
-    ContainerNode* insertion_point) {
+    ContainerNode& insertion_point) {
   CharacterData::InsertedInto(insertion_point);
-  if (!insertion_point->isConnected())
+  if (!insertion_point.isConnected())
     return kInsertionDone;
 
   String href;
@@ -250,17 +255,20 @@ Node::InsertionNotificationRequest ProcessingInstruction::InsertedInto(
   return kInsertionDone;
 }
 
-void ProcessingInstruction::RemovedFrom(ContainerNode* insertion_point) {
+void ProcessingInstruction::RemovedFrom(ContainerNode& insertion_point) {
   CharacterData::RemovedFrom(insertion_point);
-  if (!insertion_point->isConnected())
+  if (!insertion_point.isConnected())
     return;
 
   // No need to remove XSLStyleSheet from StyleEngine.
   if (!DocumentXSLT::ProcessingInstructionRemovedFromDocument(GetDocument(),
                                                               this)) {
     GetDocument().GetStyleEngine().RemoveStyleSheetCandidateNode(
-        *this, *insertion_point);
+        *this, insertion_point);
   }
+
+  if (IsLoading())
+    RemovePendingSheet();
 
   if (sheet_) {
     DCHECK_EQ(sheet_->ownerNode(), this);
@@ -273,10 +281,12 @@ void ProcessingInstruction::RemovedFrom(ContainerNode* insertion_point) {
 
 void ProcessingInstruction::ClearSheet() {
   DCHECK(sheet_);
-  if (sheet_->IsLoading())
-    GetDocument().GetStyleEngine().RemovePendingSheet(*this,
-                                                      style_engine_context_);
   sheet_.Release()->ClearOwnerNode();
+}
+
+void ProcessingInstruction::RemovePendingSheet() {
+  GetDocument().GetStyleEngine().RemovePendingSheet(*this,
+                                                    style_engine_context_);
 }
 
 void ProcessingInstruction::Trace(blink::Visitor* visitor) {

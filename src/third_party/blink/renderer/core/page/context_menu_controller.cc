@@ -32,7 +32,7 @@
 
 #include "third_party/blink/public/platform/web_menu_source_type.h"
 #include "third_party/blink/public/web/web_context_menu_data.h"
-#include "third_party/blink/public/web/web_frame_client.h"
+#include "third_party/blink/public/web/web_local_frame_client.h"
 #include "third_party/blink/public/web/web_plugin.h"
 #include "third_party/blink/public/web/web_text_check_client.h"
 #include "third_party/blink/renderer/core/dom/document.h"
@@ -46,6 +46,7 @@
 #include "third_party/blink/renderer/core/events/mouse_event.h"
 #include "third_party/blink/renderer/core/exported/web_plugin_container_impl.h"
 #include "third_party/blink/renderer/core/frame/local_frame.h"
+#include "third_party/blink/renderer/core/frame/picture_in_picture_controller.h"
 #include "third_party/blink/renderer/core/frame/settings.h"
 #include "third_party/blink/renderer/core/frame/web_local_frame_impl.h"
 #include "third_party/blink/renderer/core/html/forms/html_form_element.h"
@@ -97,7 +98,7 @@ void ContextMenuController::DocumentDetached(Document* document) {
 }
 
 void ContextMenuController::HandleContextMenuEvent(MouseEvent* mouse_event) {
-  DCHECK(mouse_event->type() == EventTypeNames::contextmenu);
+  DCHECK(mouse_event->type() == event_type_names::kContextmenu);
   LocalFrame* frame = mouse_event->target()->ToNode()->GetDocument().GetFrame();
   LayoutPoint location(mouse_event->AbsoluteLocation());
   if (ShowContextMenu(frame, location, mouse_event->GetMenuSourceType()))
@@ -178,7 +179,7 @@ bool ContextMenuController::ShouldShowContextMenuFromTouch(
 }
 
 bool ContextMenuController::ShowContextMenu(LocalFrame* frame,
-                                            const LayoutPoint& location,
+                                            const LayoutPoint& point,
                                             WebMenuSourceType source_type) {
   // Displaying the context menu in this function is a big hack as we don't
   // have context, i.e. whether this is being invoked via a script or in
@@ -190,20 +191,21 @@ bool ContextMenuController::ShowContextMenu(LocalFrame* frame,
 
   HitTestRequest::HitTestRequestType type =
       HitTestRequest::kReadOnly | HitTestRequest::kActive;
-  HitTestResult r(type, location);
+  HitTestLocation location(point);
+  HitTestResult result(type, location);
   if (frame)
-    r = frame->GetEventHandler().HitTestResultAtPoint(location, type);
-  if (!r.InnerNodeOrImageMapImage())
+    result = frame->GetEventHandler().HitTestResultAtLocation(location, type);
+  if (!result.InnerNodeOrImageMapImage())
     return false;
 
-  hit_test_result_ = r;
-  r.SetToShadowHostIfInRestrictedShadowRoot();
+  hit_test_result_ = result;
+  result.SetToShadowHostIfInRestrictedShadowRoot();
 
-  LocalFrame* selected_frame = r.InnerNodeFrame();
+  LocalFrame* selected_frame = result.InnerNodeFrame();
 
   WebContextMenuData data;
-  data.mouse_position = selected_frame->View()->ContentsToViewport(
-      r.RoundedPointInInnerNodeFrame());
+  data.mouse_position = selected_frame->View()->FrameToViewport(
+      result.RoundedPointInInnerNodeFrame());
 
   data.edit_flags = ComputeEditFlags(
       *selected_frame->GetDocument(),
@@ -212,10 +214,10 @@ bool ContextMenuController::ShowContextMenu(LocalFrame* frame,
 
   // Links, Images, Media tags, and Image/Media-Links take preference over
   // all else.
-  data.link_url = r.AbsoluteLinkURL();
+  data.link_url = result.AbsoluteLinkURL();
 
-  if (r.InnerNode()->IsHTMLElement()) {
-    HTMLElement* html_element = ToHTMLElement(r.InnerNode());
+  if (result.InnerNode()->IsHTMLElement()) {
+    HTMLElement* html_element = ToHTMLElement(result.InnerNode());
     if (!html_element->title().IsEmpty()) {
       data.title_text = html_element->title();
     } else {
@@ -223,38 +225,50 @@ bool ContextMenuController::ShowContextMenu(LocalFrame* frame,
     }
   }
 
-  if (IsHTMLCanvasElement(r.InnerNode())) {
+  if (IsHTMLCanvasElement(result.InnerNode())) {
     data.media_type = WebContextMenuData::kMediaTypeCanvas;
     data.has_image_contents = true;
-  } else if (!r.AbsoluteImageURL().IsEmpty()) {
-    data.src_url = r.AbsoluteImageURL();
+  } else if (!result.AbsoluteImageURL().IsEmpty()) {
+    data.src_url = result.AbsoluteImageURL();
     data.media_type = WebContextMenuData::kMediaTypeImage;
     data.media_flags |= WebContextMenuData::kMediaCanPrint;
 
     // An image can be null for many reasons, like being blocked, no image
     // data received from server yet.
-    data.has_image_contents = r.GetImage() && !r.GetImage()->IsNull();
+    data.has_image_contents = result.GetImage() && !result.GetImage()->IsNull();
     data.is_placeholder_image =
-        r.GetImage() && r.GetImage()->IsPlaceholderImage();
+        result.GetImage() && result.GetImage()->IsPlaceholderImage();
     if (data.has_image_contents &&
-        IsHTMLImageElement(r.InnerNodeOrImageMapImage())) {
+        IsHTMLImageElement(result.InnerNodeOrImageMapImage())) {
       HTMLImageElement* image_element =
-          ToHTMLImageElement(r.InnerNodeOrImageMapImage());
+          ToHTMLImageElement(result.InnerNodeOrImageMapImage());
       if (image_element && image_element->CachedImage()) {
         data.image_response = WrappedResourceResponse(
             image_element->CachedImage()->GetResponse());
       }
     }
-  } else if (!r.AbsoluteMediaURL().IsEmpty()) {
-    data.src_url = r.AbsoluteMediaURL();
+  } else if (!result.AbsoluteMediaURL().IsEmpty() ||
+             result.GetMediaStreamDescriptor()) {
+    if (!result.AbsoluteMediaURL().IsEmpty())
+      data.src_url = result.AbsoluteMediaURL();
 
-    // We know that if absoluteMediaURL() is not empty, then this
-    // is a media element.
-    HTMLMediaElement* media_element = ToHTMLMediaElement(r.InnerNode());
+    // We know that if absoluteMediaURL() is not empty or element has a media
+    // stream descriptor, then this is a media element.
+    HTMLMediaElement* media_element = ToHTMLMediaElement(result.InnerNode());
     if (IsHTMLVideoElement(*media_element)) {
-      data.media_type = WebContextMenuData::kMediaTypeVideo;
-      if (media_element->SupportsPictureInPicture())
+      // A video element should be presented as an audio element when it has an
+      // audio track but no video track.
+      if (media_element->HasAudio() && !media_element->HasVideo())
+        data.media_type = WebContextMenuData::kMediaTypeAudio;
+      else
+        data.media_type = WebContextMenuData::kMediaTypeVideo;
+      if (media_element->SupportsPictureInPicture()) {
         data.media_flags |= WebContextMenuData::kMediaCanPictureInPicture;
+        if (PictureInPictureController::From(media_element->GetDocument())
+                .IsPictureInPictureElement(media_element)) {
+          data.media_flags |= WebContextMenuData::kMediaPictureInPicture;
+        }
+      }
     } else if (IsHTMLAudioElement(*media_element))
       data.media_type = WebContextMenuData::kMediaTypeAudio;
 
@@ -265,6 +279,8 @@ bool ContextMenuController::ShowContextMenu(LocalFrame* frame,
       data.media_flags |= WebContextMenuData::kMediaPaused;
     if (media_element->muted())
       data.media_flags |= WebContextMenuData::kMediaMuted;
+    if (media_element->SupportsLoop())
+      data.media_flags |= WebContextMenuData::kMediaCanLoop;
     if (media_element->Loop())
       data.media_flags |= WebContextMenuData::kMediaLoop;
     if (media_element->SupportsSave())
@@ -280,9 +296,9 @@ bool ContextMenuController::ShowContextMenu(LocalFrame* frame,
       data.media_flags |= WebContextMenuData::kMediaCanToggleControls;
     if (media_element->ShouldShowControls())
       data.media_flags |= WebContextMenuData::kMediaControls;
-  } else if (IsHTMLObjectElement(*r.InnerNode()) ||
-             IsHTMLEmbedElement(*r.InnerNode())) {
-    LayoutObject* object = r.InnerNode()->GetLayoutObject();
+  } else if (IsHTMLObjectElement(*result.InnerNode()) ||
+             IsHTMLEmbedElement(*result.InnerNode())) {
+    LayoutObject* object = result.InnerNode()->GetLayoutObject();
     if (object && object->IsLayoutEmbeddedContent()) {
       WebPluginContainerImpl* plugin_view =
           ToLayoutEmbeddedContent(object)->Plugin();
@@ -292,7 +308,8 @@ bool ContextMenuController::ShowContextMenu(LocalFrame* frame,
         WebPlugin* plugin = plugin_view->Plugin();
         data.link_url = plugin->LinkAtPosition(data.mouse_position);
 
-        HTMLPlugInElement* plugin_element = ToHTMLPlugInElement(r.InnerNode());
+        HTMLPlugInElement* plugin_element =
+            ToHTMLPlugInElement(result.InnerNode());
         data.src_url =
             plugin_element->GetDocument().CompleteURL(plugin_element->Url());
 
@@ -362,15 +379,25 @@ bool ContextMenuController::ShowContextMenu(LocalFrame* frame,
   // If source_type is |kMenuSourceAdjustSelection| or
   // |kMenuSourceAdjustSelectionReset| we know the original HitTestResult in
   // SelectionController passed the inside check already, so let it pass.
-  if (r.IsSelected() || source_type == kMenuSourceAdjustSelection ||
+  if (result.IsSelected(location) ||
+      source_type == kMenuSourceAdjustSelection ||
       source_type == kMenuSourceAdjustSelectionReset) {
     data.selected_text = selected_frame->SelectedText();
     WebRange range =
         selected_frame->GetInputMethodController().GetSelectionOffsets();
     data.selection_start_offset = range.StartOffset();
+    // TODO(crbug.com/850954): Remove redundant log after we identified the
+    // issue.
+    CHECK_GE(data.selection_start_offset, 0)
+        << "Log issue against https://crbug.com/850954\n"
+        << "data.selection_start_offset: " << data.selection_start_offset
+        << "\nrange: [" << range.StartOffset() << ", " << range.EndOffset()
+        << "]\nVisibleSelection: "
+        << selected_frame->Selection()
+               .ComputeVisibleSelectionInDOMTreeDeprecated();
   }
 
-  if (r.IsContentEditable()) {
+  if (result.IsContentEditable()) {
     data.is_editable = true;
     SpellChecker& spell_checker = selected_frame->GetSpellChecker();
 
@@ -405,35 +432,38 @@ bool ContextMenuController::ShowContextMenu(LocalFrame* frame,
         WebContextMenuData::kCheckableMenuItemChecked;
   }
 
-  data.referrer_policy = static_cast<WebReferrerPolicy>(
-      selected_frame->GetDocument()->GetReferrerPolicy());
+  data.referrer_policy = selected_frame->GetDocument()->GetReferrerPolicy();
 
   if (menu_provider_) {
     // Filter out custom menu elements and add them into the data.
     data.custom_items = menu_provider_->PopulateContextMenu();
   }
 
-  if (auto* anchor = ToHTMLAnchorElementOrNull(r.URLElement())) {
+  if (auto* anchor = ToHTMLAnchorElementOrNull(result.URLElement())) {
     // Extract suggested filename for same-origin URLS for saving file.
     const SecurityOrigin* origin =
         selected_frame->GetSecurityContext()->GetSecurityOrigin();
     if (origin->CanReadContent(anchor->Url())) {
       data.suggested_filename =
-          anchor->FastGetAttribute(HTMLNames::downloadAttr);
+          anchor->FastGetAttribute(html_names::kDownloadAttr);
     }
 
     // If the anchor wants to suppress the referrer, update the referrerPolicy
     // accordingly.
     if (anchor->HasRel(kRelationNoReferrer))
-      data.referrer_policy = kWebReferrerPolicyNever;
+      data.referrer_policy = network::mojom::ReferrerPolicy::kNever;
 
     data.link_text = anchor->innerText();
   }
 
   // Find the input field type.
-  if (auto* input = ToHTMLInputElementOrNull(r.InnerNode())) {
-    if (input->type() == InputTypeNames::password)
+  if (auto* input = ToHTMLInputElementOrNull(result.InnerNode())) {
+    if (input->type() == input_type_names::kPassword)
       data.input_field_type = WebContextMenuData::kInputFieldTypePassword;
+    else if (input->type() == input_type_names::kNumber)
+      data.input_field_type = WebContextMenuData::kInputFieldTypeNumber;
+    else if (input->type() == input_type_names::kTel)
+      data.input_field_type = WebContextMenuData::kInputFieldTypeTelephone;
     else if (input->IsTextField())
       data.input_field_type = WebContextMenuData::kInputFieldTypePlainText;
     else
@@ -445,8 +475,8 @@ bool ContextMenuController::ShowContextMenu(LocalFrame* frame,
   IntRect anchor;
   IntRect focus;
   selected_frame->Selection().ComputeAbsoluteBounds(anchor, focus);
-  anchor = selected_frame->View()->ContentsToViewport(anchor);
-  focus = selected_frame->View()->ContentsToViewport(focus);
+  anchor = selected_frame->View()->FrameToViewport(anchor);
+  focus = selected_frame->View()->FrameToViewport(focus);
   int left = std::min(focus.X(), anchor.X());
   int top = std::min(focus.Y(), anchor.Y());
   int right = std::max(focus.X() + focus.Width(), anchor.X() + anchor.Width());

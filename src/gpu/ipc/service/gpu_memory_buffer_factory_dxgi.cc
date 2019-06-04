@@ -6,9 +6,9 @@
 #include <wrl.h>
 #include <vector>
 #include "base/trace_event/trace_event.h"
-#include "gpu/GLES2/gl2extchromium.h"
 #include "ui/gfx/buffer_format_util.h"
 #include "ui/gl/gl_angle_util_win.h"
+#include "ui/gl/gl_bindings.h"
 #include "ui/gl/gl_image_dxgi.h"
 
 namespace gpu {
@@ -99,10 +99,9 @@ ImageFactory* GpuMemoryBufferFactoryDXGI::AsImageFactory() {
 
 scoped_refptr<gl::GLImage>
 GpuMemoryBufferFactoryDXGI::CreateImageForGpuMemoryBuffer(
-    const gfx::GpuMemoryBufferHandle& handle,
+    gfx::GpuMemoryBufferHandle handle,
     const gfx::Size& size,
     gfx::BufferFormat format,
-    unsigned internalformat,
     int client_id,
     SurfaceHandle surface_handle) {
   if (handle.type != gfx::DXGI_SHARED_HANDLE)
@@ -114,16 +113,6 @@ GpuMemoryBufferFactoryDXGI::CreateImageForGpuMemoryBuffer(
   if (!image->Initialize(std::move(handle_owner)))
     return nullptr;
   return image;
-}
-
-scoped_refptr<gl::GLImage> GpuMemoryBufferFactoryDXGI::CreateAnonymousImage(
-    const gfx::Size& size,
-    gfx::BufferFormat format,
-    gfx::BufferUsage usage,
-    unsigned internalformat,
-    bool* is_cleared) {
-  NOTIMPLEMENTED();
-  return nullptr;
 }
 
 unsigned GpuMemoryBufferFactoryDXGI::RequiredTextureType() {

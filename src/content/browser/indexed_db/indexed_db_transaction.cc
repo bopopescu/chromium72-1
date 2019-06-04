@@ -106,7 +106,7 @@ IndexedDBTransaction::IndexedDBTransaction(
     int64_t id,
     IndexedDBConnection* connection,
     const std::set<int64_t>& object_store_ids,
-    blink::WebIDBTransactionMode mode,
+    blink::mojom::IDBTransactionMode mode,
     IndexedDBBackingStore::Transaction* backing_store_transaction)
     : id_(id),
       object_store_ids_(object_store_ids),
@@ -135,7 +135,7 @@ IndexedDBTransaction::~IndexedDBTransaction() {
   DCHECK(!processing_event_queue_);
 }
 
-void IndexedDBTransaction::ScheduleTask(blink::WebIDBTaskType type,
+void IndexedDBTransaction::ScheduleTask(blink::mojom::IDBTaskType type,
                                         Operation task) {
   DCHECK_NE(state_, COMMITTING);
   if (state_ == FINISHED)
@@ -143,7 +143,7 @@ void IndexedDBTransaction::ScheduleTask(blink::WebIDBTaskType type,
 
   timeout_timer_.Stop();
   used_ = true;
-  if (type == blink::kWebIDBTaskTypeNormal) {
+  if (type == blink::mojom::IDBTaskType::Normal) {
     task_queue_.push(std::move(task));
     ++diagnostics_.tasks_scheduled;
   } else {
@@ -381,19 +381,19 @@ leveldb::Status IndexedDBTransaction::CommitPhaseTwo() {
     uint64_t size_kb = transaction_->GetTransactionSize() / 1024;
     // All histograms record 1KB to 1GB.
     switch (mode_) {
-      case blink::kWebIDBTransactionModeReadOnly:
+      case blink::mojom::IDBTransactionMode::ReadOnly:
         UMA_HISTOGRAM_MEDIUM_TIMES(
             "WebCore.IndexedDB.Transaction.ReadOnly.TimeActive", active_time);
         UMA_HISTOGRAM_COUNTS_1M(
             "WebCore.IndexedDB.Transaction.ReadOnly.SizeOnCommit2", size_kb);
         break;
-      case blink::kWebIDBTransactionModeReadWrite:
+      case blink::mojom::IDBTransactionMode::ReadWrite:
         UMA_HISTOGRAM_MEDIUM_TIMES(
             "WebCore.IndexedDB.Transaction.ReadWrite.TimeActive", active_time);
         UMA_HISTOGRAM_COUNTS_1M(
             "WebCore.IndexedDB.Transaction.ReadWrite.SizeOnCommit2", size_kb);
         break;
-      case blink::kWebIDBTransactionModeVersionChange:
+      case blink::mojom::IDBTransactionMode::VersionChange:
         UMA_HISTOGRAM_MEDIUM_TIMES(
             "WebCore.IndexedDB.Transaction.VersionChange.TimeActive",
             active_time);
@@ -525,10 +525,10 @@ void IndexedDBTransaction::ProcessTaskQueue() {
   // Otherwise, start a timer in case the front-end gets wedged and
   // never requests further activity. Read-only transactions don't
   // block other transactions, so don't time those out.
-  if (mode_ != blink::kWebIDBTransactionModeReadOnly) {
-    timeout_timer_.Start(
-        FROM_HERE, GetInactivityTimeout(),
-        base::Bind(&IndexedDBTransaction::Timeout, ptr_factory_.GetWeakPtr()));
+  if (mode_ != blink::mojom::IDBTransactionMode::ReadOnly) {
+    timeout_timer_.Start(FROM_HERE, GetInactivityTimeout(),
+                         base::BindOnce(&IndexedDBTransaction::Timeout,
+                                        ptr_factory_.GetWeakPtr()));
   }
   processing_event_queue_ = false;
 }
@@ -553,7 +553,7 @@ void IndexedDBTransaction::CloseOpenCursors() {
 void IndexedDBTransaction::AddPendingObserver(
     int32_t observer_id,
     const IndexedDBObserver::Options& options) {
-  DCHECK_NE(mode(), blink::kWebIDBTransactionModeVersionChange);
+  DCHECK_NE(mode(), blink::mojom::IDBTransactionMode::VersionChange);
   pending_observers_.push_back(std::make_unique<IndexedDBObserver>(
       observer_id, object_store_ids_, options));
 }
@@ -571,18 +571,18 @@ void IndexedDBTransaction::RemovePendingObservers(
 
 void IndexedDBTransaction::AddObservation(
     int32_t connection_id,
-    ::indexed_db::mojom::ObservationPtr observation) {
+    blink::mojom::IDBObservationPtr observation) {
   auto it = connection_changes_map_.find(connection_id);
   if (it == connection_changes_map_.end()) {
     it = connection_changes_map_
-             .insert(std::make_pair(
-                 connection_id, ::indexed_db::mojom::ObserverChanges::New()))
+             .insert(std::make_pair(connection_id,
+                                    blink::mojom::IDBObserverChanges::New()))
              .first;
   }
   it->second->observations.push_back(std::move(observation));
 }
 
-::indexed_db::mojom::ObserverChangesPtr*
+blink::mojom::IDBObserverChangesPtr*
 IndexedDBTransaction::GetPendingChangesForConnection(int32_t connection_id) {
   auto it = connection_changes_map_.find(connection_id);
   if (it != connection_changes_map_.end())

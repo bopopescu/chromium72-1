@@ -10,6 +10,7 @@
 
 #include <stddef.h>
 
+#include <cstdint>
 #include <memory>
 
 #include "base/macros.h"
@@ -33,6 +34,8 @@ class SPDY_EXPORT_PRIVATE HpackDecoderAdapter {
  public:
   friend test::HpackDecoderAdapterPeer;
   HpackDecoderAdapter();
+  HpackDecoderAdapter(const HpackDecoderAdapter&) = delete;
+  HpackDecoderAdapter& operator=(const HpackDecoderAdapter&) = delete;
   ~HpackDecoderAdapter();
 
   // Called upon acknowledgement of SETTINGS_HEADER_TABLE_SIZE.
@@ -149,8 +152,6 @@ class SPDY_EXPORT_PRIVATE HpackDecoderAdapter {
   // moment because HandleControlFrameHeadersStart won't be called if a handler
   // is not being provided by the caller.
   bool header_block_started_;
-
-  DISALLOW_COPY_AND_ASSIGN(HpackDecoderAdapter);
 };
 
 }  // namespace spdy

@@ -12,8 +12,10 @@
 #include "base/files/file_util.h"
 #include "base/optional.h"
 #include "base/strings/string_util.h"
-#include "base/task_scheduler/post_task.h"
+#include "base/task/post_task.h"
+#include "components/crx_file/crx_verifier.h"
 #include "components/update_client/utils.h"
+#include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
 #include "crypto/sha2.h"
 #include "extensions/browser/content_verifier.h"
@@ -35,13 +37,14 @@ void InstallUpdateCallback(content::BrowserContext* context,
                            const std::string& extension_id,
                            const std::string& public_key,
                            const base::FilePath& unpacked_dir,
+                           bool install_immediately,
                            UpdateClientCallback update_client_callback) {
   // Note that error codes are converted into custom error codes, which are all
   // based on a constant (see ToInstallerResult). This means that custom codes
   // from different embedders may collide. However, for any given extension ID,
   // there should be only one embedder, so this should be OK from Omaha.
   ExtensionSystem::Get(context)->InstallUpdate(
-      extension_id, public_key, unpacked_dir,
+      extension_id, public_key, unpacked_dir, install_immediately,
       base::BindOnce(
           [](UpdateClientCallback callback,
              const base::Optional<CrxInstallError>& error) {
@@ -71,23 +74,25 @@ void UpdateDataProvider::Shutdown() {
   browser_context_ = nullptr;
 }
 
-std::vector<std::unique_ptr<update_client::CrxComponent>>
-UpdateDataProvider::GetData(const ExtensionUpdateDataMap& update_crx_component,
+std::vector<base::Optional<update_client::CrxComponent>>
+UpdateDataProvider::GetData(bool install_immediately,
+                            const ExtensionUpdateDataMap& update_crx_component,
                             const std::vector<std::string>& ids) {
-  std::vector<std::unique_ptr<update_client::CrxComponent>> data;
+  std::vector<base::Optional<update_client::CrxComponent>> data;
   if (!browser_context_)
     return data;
   const ExtensionRegistry* registry = ExtensionRegistry::Get(browser_context_);
   const ExtensionPrefs* extension_prefs = ExtensionPrefs::Get(browser_context_);
   for (const auto& id : ids) {
     const Extension* extension = registry->GetInstalledExtension(id);
-    data.push_back(extension ? std::make_unique<update_client::CrxComponent>()
-                             : nullptr);
+    data.push_back(extension
+                       ? base::make_optional<update_client::CrxComponent>()
+                       : base::nullopt);
     if (!extension)
       continue;
     DCHECK_NE(0u, update_crx_component.count(id));
     const ExtensionUpdateData& extension_data = update_crx_component.at(id);
-    update_client::CrxComponent* crx_component = data.back().get();
+    auto& crx_component = data.back();
     std::string pubkey_bytes;
     base::Base64Decode(extension->public_key(), &pubkey_bytes);
     crx_component->pk_hash.resize(crypto::kSHA256Length, 0);
@@ -98,8 +103,12 @@ UpdateDataProvider::GetData(const ExtensionUpdateDataMap& update_crx_component,
                                  : extension->version();
     crx_component->allows_background_download = false;
     crx_component->requires_network_encryption = true;
+    crx_component->crx_format_requirement =
+        extension->from_webstore()
+            ? crx_file::VerifierFormat::CRX3_WITH_PUBLISHER_PROOF
+            : crx_file::VerifierFormat::CRX2_OR_CRX3;
     crx_component->installer = base::MakeRefCounted<ExtensionInstaller>(
-        id, extension->path(),
+        id, extension->path(), install_immediately,
         base::BindOnce(&UpdateDataProvider::RunInstallCallback, this));
     if (!ExtensionsBrowserClient::Get()->IsExtensionEnabled(id,
                                                             browser_context_)) {
@@ -126,23 +135,25 @@ void UpdateDataProvider::RunInstallCallback(
     const std::string& extension_id,
     const std::string& public_key,
     const base::FilePath& unpacked_dir,
+    bool install_immediately,
     UpdateClientCallback update_client_callback) {
   VLOG(3) << "UpdateDataProvider::RunInstallCallback " << extension_id << " "
           << public_key;
 
   if (!browser_context_) {
     base::PostTaskWithTraits(
-        FROM_HERE, {base::TaskPriority::BACKGROUND, base::MayBlock()},
+        FROM_HERE, {base::TaskPriority::BEST_EFFORT, base::MayBlock()},
         base::BindOnce(base::IgnoreResult(&base::DeleteFile), unpacked_dir,
                        true));
     return;
   }
 
-  content::BrowserThread::GetTaskRunnerForThread(content::BrowserThread::UI)
-      ->PostTask(FROM_HERE,
-                 base::BindOnce(InstallUpdateCallback, browser_context_,
-                                extension_id, public_key, unpacked_dir,
-                                std::move(update_client_callback)));
+  base::CreateSingleThreadTaskRunnerWithTraits({content::BrowserThread::UI})
+      ->PostTask(
+          FROM_HERE,
+          base::BindOnce(InstallUpdateCallback, browser_context_, extension_id,
+                         public_key, unpacked_dir, install_immediately,
+                         std::move(update_client_callback)));
 }
 
 }  // namespace extensions

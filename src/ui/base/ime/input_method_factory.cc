@@ -9,19 +9,18 @@
 #include "build/build_config.h"
 #include "ui/base/ime/mock_input_method.h"
 #include "ui/base/ui_base_features.h"
-#include "ui/base/ui_base_neva_switches.h"
 #include "ui/gfx/switches.h"
 
 #if defined(OS_CHROMEOS)
 #include "ui/base/ime/input_method_chromeos.h"
 #elif defined(OS_WIN)
-#include "ui/base/ime/input_method_win.h"
+#include "ui/base/ime/input_method_win_imm32.h"
 #include "ui/base/ime/input_method_win_tsf.h"
 #elif defined(OS_MACOSX)
 #include "ui/base/ime/input_method_mac.h"
-// Removed defined(USE_X11) for ozone-wayland port
-#elif defined(USE_AURA)
-#include "ui/base/ime/neva/input_method_auralinux_neva.h"
+#elif defined(OS_FUCHSIA)
+#include "ui/base/ime/input_method_fuchsia.h"
+#elif defined(USE_AURA) && (defined(USE_X11) || defined(USE_OZONE))
 #include "ui/base/ime/input_method_auralinux.h"
 #else
 #include "ui/base/ime/input_method_minimal.h"
@@ -62,15 +61,13 @@ std::unique_ptr<InputMethod> CreateInputMethod(
 #elif defined(OS_WIN)
   if (base::FeatureList::IsEnabled(features::kTSFImeSupport))
     return std::make_unique<InputMethodWinTSF>(delegate, widget);
-  return std::make_unique<InputMethodWin>(delegate, widget);
+  return std::make_unique<InputMethodWinImm32>(delegate, widget);
 #elif defined(OS_MACOSX)
   return std::make_unique<InputMethodMac>(delegate);
-// Removed defined(USE_X11) for ozone-wayland port
-#elif defined(USE_AURA)
-  if (base::CommandLine::ForCurrentProcess()->HasSwitch(switches::kEnableNevaIme))
-    return std::make_unique<InputMethodAuraLinuxNeva>(delegate, widget);
-  else
-    return std::make_unique<InputMethodAuraLinux>(delegate);
+#elif defined(OS_FUCHSIA)
+  return std::make_unique<InputMethodFuchsia>(delegate);
+#elif defined(USE_AURA) && (defined(USE_X11) || defined(USE_OZONE))
+  return std::make_unique<InputMethodAuraLinux>(delegate);
 #else
   return std::make_unique<InputMethodMinimal>(delegate);
 #endif

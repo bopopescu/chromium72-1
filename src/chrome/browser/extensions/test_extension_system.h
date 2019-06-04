@@ -28,6 +28,7 @@ class BrowserContext;
 
 namespace service_manager {
 class Connector;
+class Service;
 class TestConnectorFactory;
 }  // namespace service_manager
 
@@ -77,6 +78,7 @@ class TestExtensionSystem : public ExtensionSystem {
   void InstallUpdate(const std::string& extension_id,
                      const std::string& public_key,
                      const base::FilePath& temp_dir,
+                     bool install_immediately,
                      InstallUpdateCallback install_update_callback) override;
   bool FinishDelayedInstallationIfReady(const std::string& extension_id,
                                         bool install_immediately) override;
@@ -108,6 +110,9 @@ class TestExtensionSystem : public ExtensionSystem {
   OneShotEvent ready_;
   std::unique_ptr<service_manager::TestConnectorFactory> connector_factory_;
   std::unique_ptr<service_manager::Connector> connector_;
+
+  std::unique_ptr<service_manager::Service> data_decoder_;
+  std::unique_ptr<service_manager::Service> unzip_service_;
 
 #if defined(OS_CHROMEOS)
   std::unique_ptr<chromeos::ScopedTestUserManager> test_user_manager_;

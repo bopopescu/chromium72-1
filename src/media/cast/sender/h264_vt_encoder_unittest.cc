@@ -6,7 +6,6 @@
 
 #include "base/bind.h"
 #include "base/bind_helpers.h"
-#include "base/command_line.h"
 #include "base/containers/queue.h"
 #include "base/macros.h"
 #include "base/memory/ref_counted.h"
@@ -51,8 +50,6 @@ class MediaTestSuite : public base::TestSuite {
 
 void MediaTestSuite::Initialize() {
   base::TestSuite::Initialize();
-  base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
-  command_line->AppendSwitch(switches::kEnableInbandTextTracks);
   media::InitializeMediaLibrary();
 }
 
@@ -194,6 +191,8 @@ void CreateFrameAndMemsetPlane(VideoFrameFactory* const video_frame_factory) {
 
 class TestPowerSource : public base::PowerMonitorSource {
  public:
+  void Shutdown() override {}
+
   void GenerateSuspendEvent() {
     ProcessPowerEvent(SUSPEND_EVENT);
     base::RunLoop().RunUntilIdle();
@@ -304,7 +303,7 @@ TEST_F(H264VideoToolboxEncoderTest, DISABLED_CheckFrameMetadataSequence) {
 // Failed on mac_chromium_rel_ng trybot. http://crbug.com/627260
 TEST_F(H264VideoToolboxEncoderTest, DISABLED_CheckFramesAreDecodable) {
   VideoDecoderConfig config(
-      kCodecH264, H264PROFILE_MAIN, frame_->format(), COLOR_SPACE_UNSPECIFIED,
+      kCodecH264, H264PROFILE_MAIN, frame_->format(), VideoColorSpace(),
       VIDEO_ROTATION_0, frame_->coded_size(), frame_->visible_rect(),
       frame_->natural_size(), EmptyExtraData(), Unencrypted());
   scoped_refptr<EndToEndFrameChecker> checker(new EndToEndFrameChecker(config));

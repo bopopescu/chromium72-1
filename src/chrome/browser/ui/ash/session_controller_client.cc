@@ -18,6 +18,7 @@
 #include "chrome/browser/app_mode/app_mode_utils.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/chrome_notification_types.h"
+#include "chrome/browser/chromeos/login/demo_mode/demo_session.h"
 #include "chrome/browser/chromeos/login/ui/user_adding_screen.h"
 #include "chrome/browser/chromeos/login/user_flow.h"
 #include "chrome/browser/chromeos/login/users/chrome_user_manager.h"
@@ -99,9 +100,13 @@ ash::mojom::UserSessionPtr UserToUserSession(const User& user) {
   session->user_info->display_email = user.display_email();
   session->user_info->is_ephemeral =
       UserManager::Get()->IsUserNonCryptohomeDataEphemeral(user.GetAccountId());
+  session->user_info->has_gaia_account = user.has_gaia_account();
+  const AccountId& owner_id = UserManager::Get()->GetOwnerAccountId();
+  session->user_info->is_device_owner =
+      owner_id.is_valid() && owner_id == user.GetAccountId();
   if (profile) {
-    session->user_info->service_user_id =
-        content::BrowserContext::GetServiceUserIdFor(profile);
+    session->user_info->service_instance_group =
+        content::BrowserContext::GetServiceInstanceGroupFor(profile);
     session->user_info->is_new_profile = profile->IsNewProfile();
   }
 
@@ -169,6 +174,7 @@ SessionControllerClient::SessionControllerClient()
   SessionManager::Get()->AddObserver(this);
   UserManager::Get()->AddSessionStateObserver(this);
   UserManager::Get()->AddObserver(this);
+  chromeos::LoginState::Get()->AddObserver(this);
 
   registrar_.Add(this, chrome::NOTIFICATION_APP_TERMINATING,
                  content::NotificationService::AllSources());
@@ -201,6 +207,7 @@ SessionControllerClient::~SessionControllerClient() {
         ->RemoveObserver(this);
   }
 
+  chromeos::LoginState::Get()->RemoveObserver(this);
   SessionManager::Get()->RemoveObserver(this);
   UserManager::Get()->RemoveObserver(this);
   UserManager::Get()->RemoveSessionStateObserver(this);
@@ -467,8 +474,7 @@ void SessionControllerClient::OnSessionStateChanged() {
     // Assistant is initialized only once when primary user logs in.
     if (chromeos::switches::IsAssistantEnabled()) {
       AssistantClient::Get()->MaybeInit(
-          content::BrowserContext::GetConnectorFor(
-              ProfileManager::GetPrimaryUserProfile()));
+          ProfileManager::GetPrimaryUserProfile());
     }
 #endif
   }
@@ -482,6 +488,10 @@ void SessionControllerClient::OnCustodianInfoChanged() {
       supervised_user_profile_);
   if (user)
     SendUserSession(*user);
+}
+
+void SessionControllerClient::LoggedInStateChanged() {
+  SendUserSession(*UserManager::Get()->GetActiveUser());
 }
 
 void SessionControllerClient::Observe(
@@ -565,6 +575,8 @@ void SessionControllerClient::SendSessionInfoIfChanged() {
   info->can_lock_screen = CanLockScreen();
   info->should_lock_screen_automatically = ShouldLockScreenAutomatically();
   info->is_running_in_app_mode = chrome::IsRunningInAppMode();
+  info->is_demo_session =
+      chromeos::DemoSession::Get() && chromeos::DemoSession::Get()->started();
   info->add_user_session_policy = GetAddUserSessionPolicy();
   info->state = session_manager->session_state();
 

@@ -7,7 +7,7 @@
  *  - WelcomeBanner
  *  - AuthFailBanner
  * @param {DirectoryModel} directoryModel The model.
- * @param {VolumeManagerWrapper} volumeManager The manager.
+ * @param {!VolumeManager} volumeManager The manager.
  * @param {Document} document HTML document.
  * @param {boolean} showWelcome True if the welcome banner can be shown.
  * @constructor
@@ -212,7 +212,7 @@ Banners.prototype.prepareAndShowWelcomeBanner_ = function(type, messageId) {
   if (!this.document_.querySelector('link[drive-welcome-style]')) {
     var style = this.document_.createElement('link');
     style.rel = 'stylesheet';
-    style.href = 'foreground/css/drive_welcome.css';
+    style.href = constants.DRIVE_WELCOME_CSS;
     style.setAttribute('drive-welcome-style', '');
     this.document_.head.appendChild(style);
   }
@@ -240,8 +240,6 @@ Banners.prototype.prepareAndShowWelcomeBanner_ = function(type, messageId) {
   var more;
   if (this.usePromoWelcomeBanner_) {
     var welcomeTitle = str('DRIVE_WELCOME_TITLE_ALTERNATIVE');
-    if (util.boardIs('link'))
-      welcomeTitle = str('DRIVE_WELCOME_TITLE_ALTERNATIVE_1TB');
     title.textContent = welcomeTitle;
     more = util.createChild(links, '', 'a');
     more.href = str('GOOGLE_DRIVE_REDEEM_URL');
@@ -388,14 +386,8 @@ Banners.prototype.checkSpaceAndMaybeShowWelcomeBanner_ = function() {
       this.usePromoWelcomeBanner_ = false;
     }
 
-    // Choose the offer basing on the board name. The default one is 100 GB.
     var offerSize = 100;  // In GB.
     var offerServiceId = 'drive.cros.echo.1';
-
-    if (util.boardIs('link')) {
-      offerSize = 1024;  // 1 TB.
-      offerServiceId = 'drive.cros.echo.2';
-    }
 
     // Perform asynchronous tasks in parallel.
     var group = new AsyncUtil.Group();
@@ -498,10 +490,11 @@ Banners.prototype.showWelcomeBanner_ = function(type) {
  */
 Banners.prototype.onDirectoryChanged_ = function(event) {
   var rootVolume = this.volumeManager_.getVolumeInfo(event.newDirEntry);
-  var previousRootVolume = event.previousDirEntry ?
-      this.volumeManager_.getVolumeInfo(event.previousDirEntry) : null;
   if (!rootVolume)
     return;
+  var previousRootVolume = event.previousDirEntry ?
+      this.volumeManager_.getVolumeInfo(event.previousDirEntry) :
+      null;
 
   // Show (or hide) the low space warning.
   this.maybeShowLowSpaceWarning_(rootVolume);
@@ -551,12 +544,12 @@ Banners.prototype.isLowSpaceWarningTarget_ = function(volumeInfo) {
  * @private
  */
 Banners.prototype.privateOnDirectoryChanged_ = function(event) {
-  if (!this.directoryModel_.getCurrentDirEntry())
+  var currentDirEntry = this.directoryModel_.getCurrentDirEntry();
+  if (!currentDirEntry)
     return;
-
-  var currentDirEntry = assert(this.directoryModel_.getCurrentDirEntry());
-  var currentVolume = currentDirEntry &&
-      this.volumeManager_.getVolumeInfo(currentDirEntry);
+  var currentVolume = this.volumeManager_.getVolumeInfo(currentDirEntry);
+  if (!currentVolume)
+    return;
   var eventVolume = this.volumeManager_.getVolumeInfo(event.entry);
   if (currentVolume === eventVolume) {
     // The file system we are currently on is changed.
@@ -671,6 +664,7 @@ Banners.prototype.showLowDownloadsSpaceWarning_ = function(show) {
 
     var close = this.document_.createElement('div');
     close.className = 'banner-close';
+    close.tabIndex = 0;
     box.appendChild(close);
     close.addEventListener('click', function() {
       var values = {};

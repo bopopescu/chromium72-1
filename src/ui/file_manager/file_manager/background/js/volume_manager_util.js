@@ -50,15 +50,20 @@ volumeManagerUtil.validateError = function(error) {
 };
 
 /**
- * Builds the VolumeInfo data from VolumeMetadata.
- * @param {VolumeMetadata} volumeMetadata Metadata instance for the volume.
+ * Builds the VolumeInfo data from chrome.fileManagerPrivate.VolumeMetadata.
+ * @param {chrome.fileManagerPrivate.VolumeMetadata} volumeMetadata Metadata
+ * instance for the volume.
  * @return {!Promise<!VolumeInfo>} Promise settled with the VolumeInfo instance.
  */
 volumeManagerUtil.createVolumeInfo = function(volumeMetadata) {
   var localizedLabel;
   switch (volumeMetadata.volumeType) {
     case VolumeManagerCommon.VolumeType.DOWNLOADS:
-      localizedLabel = str('DOWNLOADS_DIRECTORY_LABEL');
+      if (util.isMyFilesVolumeEnabled()) {
+        localizedLabel = str('MY_FILES_ROOT_LABEL');
+      } else {
+        localizedLabel = str('DOWNLOADS_DIRECTORY_LABEL');
+      }
       break;
     case VolumeManagerCommon.VolumeType.DRIVE:
       localizedLabel = str('DRIVE_DIRECTORY_LABEL');
@@ -81,9 +86,7 @@ volumeManagerUtil.createVolumeInfo = function(volumeMetadata) {
       localizedLabel = str('LINUX_FILES_ROOT_LABEL');
       break;
     case VolumeManagerCommon.VolumeType.ANDROID_FILES:
-      // TODO(fukino): This volume label is temporary. Internationalize the
-      // label after we have a UI spec for it.
-      localizedLabel = 'Android Files';
+      localizedLabel = str('ANDROID_FILES_ROOT_LABEL');
       break;
     default:
       // TODO(mtomasz): Calculate volumeLabel for all types of volumes in the
@@ -93,7 +96,9 @@ volumeManagerUtil.createVolumeInfo = function(volumeMetadata) {
       break;
   }
 
-  console.debug('Requesting file system.');
+  console.debug(
+      'Requesting file system: ' + volumeMetadata.volumeType + ' ' +
+      volumeMetadata.volumeId);
   return util.timeoutPromise(
       new Promise(function(resolve, reject) {
         chrome.fileSystem.requestFileSystem(
@@ -152,8 +157,8 @@ volumeManagerUtil.createVolumeInfo = function(volumeMetadata) {
           fileSystem.root.createReader().readEntries(
               function() { /* do nothing */ },
               function(error) {
-                console.error(
-                    'Triggering full feed fetch is failed: ' +
+                console.warn(
+                    'Triggering full feed fetch has failed: ' +
                     error.name);
               });
         }
@@ -175,10 +180,11 @@ volumeManagerUtil.createVolumeInfo = function(volumeMetadata) {
        * @param {*} error
        */
       function(error) {
-        console.error('Failed to mount a file system: ' +
+        console.warn('Failed to mount a file system: ' +
             volumeMetadata.volumeId + ' because of: ' +
             (error.stack || error));
-        volumeManagerUtil.reportMountError(volumeMetadata, error);
+
+        // TODO(crbug/847729): Report a mount error via UMA.
 
         return new VolumeInfoImpl(
             /** @type {VolumeManagerCommon.VolumeType} */
@@ -194,40 +200,4 @@ volumeManagerUtil.createVolumeInfo = function(volumeMetadata) {
             /** @type {VolumeManagerCommon.FileSystemType} */
             (volumeMetadata.diskFileSystemType), volumeMetadata.iconSet);
       });
-};
-
-/**
- * Reports a mount error to analytics in the form of
- * "mount {errorType} {volumeType}", like
- * "mount timeout(resolveIsolatedEntries) provided:ZipUnpacker".
- * Note that errorType and volumeType must be an element of fixed set of strings
- * to avoid sending dynamic strings to analytics.
- *
- * @param {VolumeMetadata} volumeMetadata
- * @param {*} error
- */
-volumeManagerUtil.reportMountError = function(volumeMetadata, error) {
-  var errorType = 'error';
-  if (error instanceof Error) {
-    if (error.message.startsWith(
-        volumeManagerUtil.TIMEOUT_STR_REQUEST_FILE_SYSTEM)) {
-      errorType = volumeManagerUtil.TIMEOUT_STR_REQUEST_FILE_SYSTEM;
-    }
-    if (error.message.startsWith(
-        volumeManagerUtil.TIMEOUT_STR_RESOLVE_ISOLATED_ENTRIES)) {
-      errorType = volumeManagerUtil.TIMEOUT_STR_RESOLVE_ISOLATED_ENTRIES;
-    }
-  }
-  var volumeType = volumeMetadata.volumeType;
-  if (volumeMetadata.volumeType === VolumeManagerCommon.VolumeType.PROVIDED) {
-    volumeType +=
-        ':' + metrics.getFileSystemProviderName(volumeMetadata.providerId);
-  }
-  var description = 'mount ' + errorType + ' ' + volumeType;
-  var fatal =
-      volumeMetadata.volumeType === VolumeManagerCommon.VolumeType.DOWNLOADS ||
-      volumeMetadata.volumeType === VolumeManagerCommon.VolumeType.DRIVE;
-
-  if (window.background && window.background.tracker)
-    window.background.tracker.sendException(description, fatal);
 };

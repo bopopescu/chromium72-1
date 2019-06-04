@@ -10,7 +10,7 @@
 #include "base/logging.h"
 #include "base/memory/ptr_util.h"
 #include "base/numerics/checked_math.h"
-#include "base/trace_event/trace_event_argument.h"
+#include "base/trace_event/traced_value.h"
 #include "cc/layers/layer_impl.h"
 #include "cc/trees/clip_node.h"
 #include "cc/trees/effect_node.h"
@@ -374,9 +374,19 @@ gfx::Vector2dF StickyPositionOffset(TransformTree* tree, TransformNode* node) {
     scroll_position -= transform_node->snap_amount;
   }
 
-  gfx::RectF clip(
-      scroll_position,
-      gfx::SizeF(property_trees.scroll_tree.container_bounds(scroll_node->id)));
+  gfx::RectF clip = constraint.constraint_box_rect;
+  clip.Offset(scroll_position.x(), scroll_position.y());
+
+  // The clip region may need to be offset by the outer viewport bounds, e.g. if
+  // the top bar hides/shows. Position sticky should never attach to the inner
+  // viewport since it shouldn't be affected by pinch-zoom.
+  DCHECK(!scroll_node->scrolls_inner_viewport);
+  if (scroll_node->scrolls_outer_viewport) {
+    clip.set_width(clip.width() +
+                   property_trees.outer_viewport_container_bounds_delta().x());
+    clip.set_height(clip.height() +
+                    property_trees.outer_viewport_container_bounds_delta().y());
+  }
 
   gfx::Vector2dF ancestor_sticky_box_offset;
   if (sticky_data->nearest_node_shifting_sticky_box !=
@@ -774,7 +784,7 @@ void EffectTree::UpdateIsDrawn(EffectNode* node, EffectNode* parent_node) {
   // Exceptions:
   // 1) Nodes that contribute to copy requests, whether hidden or not, must be
   //    drawn.
-  // 2) Nodes that have a background filter.
+  // 2) Nodes that have a backdrop filter.
   // 3) Nodes with animating screen space opacity on main thread or pending tree
   //    are drawn if their parent is drawn irrespective of their opacity.
   if (node->has_copy_request || node->cache_render_surface)
@@ -782,7 +792,7 @@ void EffectTree::UpdateIsDrawn(EffectNode* node, EffectNode* parent_node) {
   else if (EffectiveOpacity(node) == 0.f &&
            (!node->has_potential_opacity_animation ||
             property_trees()->is_active) &&
-           node->background_filters.IsEmpty())
+           node->backdrop_filters.IsEmpty())
     node->is_drawn = false;
   else if (parent_node)
     node->is_drawn = parent_node->is_drawn;
@@ -982,12 +992,13 @@ void EffectTree::TakeCopyRequestsAndTransformToSurface(
       // copy of the exact source pixels. If the adjustment to the scale ratio
       // would produce out-of-range values, drop the copy request.
       if (request->is_scaled() || request->has_result_selection()) {
-        float scale_from_x = request->scale_from().x() * surface_rect.width();
-        float scale_from_y = request->scale_from().y() * surface_rect.height();
-        if (std::isnan(scale_from_x) ||
-            !base::IsValueInRangeForNumericType<int>(scale_from_x) ||
-            std::isnan(scale_from_y) ||
-            !base::IsValueInRangeForNumericType<int>(scale_from_y)) {
+        float scale_from_x_f = request->scale_from().x() * surface_rect.width();
+        float scale_from_y_f =
+            request->scale_from().y() * surface_rect.height();
+        if (std::isnan(scale_from_x_f) ||
+            !base::IsValueInRangeForNumericType<int>(scale_from_x_f) ||
+            std::isnan(scale_from_y_f) ||
+            !base::IsValueInRangeForNumericType<int>(scale_from_y_f)) {
           continue;
         }
         int scale_to_x = request->scale_to().x();
@@ -998,8 +1009,15 @@ void EffectTree::TakeCopyRequestsAndTransformToSurface(
                  .AssignIfValid(&scale_to_y)) {
           continue;
         }
-        request->SetScaleRatio(gfx::Vector2d(gfx::ToRoundedInt(scale_from_x),
-                                             gfx::ToRoundedInt(scale_from_y)),
+        int scale_from_x = gfx::ToRoundedInt(scale_from_x_f);
+        int scale_from_y = gfx::ToRoundedInt(scale_from_y_f);
+        if (scale_from_x <= 0 || scale_from_y <= 0 || scale_to_x <= 0 ||
+            scale_to_y <= 0) {
+          // Transformed scaling ratio became illegal. Drop the request to
+          // provide an empty response.
+          continue;
+        }
+        request->SetScaleRatio(gfx::Vector2d(scale_from_x, scale_from_y),
                                gfx::Vector2d(scale_to_x, scale_to_y));
       }
 
@@ -1154,6 +1172,21 @@ bool EffectTree::CreateOrReuseRenderSurfaces(
   return render_surfaces_changed;
 }
 
+bool EffectTree::ClippedHitTestRegionIsRectangle(int effect_id) const {
+  const EffectNode* effect_node = Node(effect_id);
+  for (; effect_node->id != kContentsRootNodeId;
+       effect_node = Node(effect_node->target_id)) {
+    gfx::Transform to_target;
+    if (!property_trees()->GetToTarget(effect_node->transform_id,
+                                       effect_node->target_id, &to_target) ||
+        !to_target.Preserves2dAxisAlignment())
+      return false;
+    if (effect_node->mask_layer_id != Layer::INVALID_ID)
+      return false;
+  }
+  return true;
+}
+
 void TransformTree::UpdateNodeAndAncestorsHaveIntegerTranslations(
     TransformNode* node,
     TransformNode* parent_node) {
@@ -1235,6 +1268,14 @@ void ScrollTree::CopyCompleteTreeState(const ScrollTree& other) {
 }
 #endif
 
+ScrollNode* ScrollTree::FindNodeFromElementId(ElementId id) {
+  auto iterator = property_trees()->element_id_to_scroll_node_index.find(id);
+  if (iterator == property_trees()->element_id_to_scroll_node_index.end())
+    return nullptr;
+
+  return Node(iterator->second);
+}
+
 const ScrollNode* ScrollTree::FindNodeFromElementId(ElementId id) const {
   auto iterator = property_trees()->element_id_to_scroll_node_index.find(id);
   if (iterator == property_trees()->element_id_to_scroll_node_index.end())
@@ -1264,14 +1305,7 @@ void ScrollTree::clear() {
 
 gfx::ScrollOffset ScrollTree::MaxScrollOffset(int scroll_node_id) const {
   const ScrollNode* scroll_node = Node(scroll_node_id);
-  gfx::SizeF scroll_bounds =
-      gfx::SizeF(scroll_node->bounds.width(), scroll_node->bounds.height());
-
-  if (scroll_node->scrolls_inner_viewport) {
-    scroll_bounds.Enlarge(
-        property_trees()->inner_viewport_scroll_bounds_delta().x(),
-        property_trees()->inner_viewport_scroll_bounds_delta().y());
-  }
+  gfx::SizeF scroll_bounds = this->scroll_bounds(scroll_node_id);
 
   if (!scroll_node->scrollable || scroll_bounds.IsEmpty())
     return gfx::ScrollOffset();
@@ -1294,6 +1328,16 @@ gfx::ScrollOffset ScrollTree::MaxScrollOffset(int scroll_node_id) const {
   max_offset.Scale(1 / scale_factor);
   max_offset.SetToMax(gfx::ScrollOffset());
   return max_offset;
+}
+
+gfx::SizeF ScrollTree::scroll_bounds(int scroll_node_id) const {
+  const ScrollNode* scroll_node = Node(scroll_node_id);
+  gfx::SizeF bounds(scroll_node->bounds);
+  if (scroll_node->scrolls_inner_viewport) {
+    const auto& delta = property_trees()->inner_viewport_scroll_bounds_delta();
+    bounds.Enlarge(delta.x(), delta.y());
+  }
+  return bounds;
 }
 
 void ScrollTree::OnScrollOffsetAnimated(ElementId id,
@@ -1381,9 +1425,21 @@ const SyncedScrollOffset* ScrollTree::GetSyncedScrollOffset(
   return it != synced_scroll_offset_map_.end() ? it->second.get() : nullptr;
 }
 
+gfx::Vector2dF ScrollTree::ClampScrollToMaxScrollOffset(
+    ScrollNode* node,
+    LayerTreeImpl* layer_tree_impl) {
+  gfx::ScrollOffset old_offset = current_scroll_offset(node->element_id);
+  gfx::ScrollOffset clamped_offset =
+      ClampScrollOffsetToLimits(old_offset, *node);
+  gfx::Vector2dF delta = clamped_offset.DeltaFrom(old_offset);
+  if (!delta.IsZero())
+    ScrollBy(node, delta, layer_tree_impl);
+  return delta;
+}
+
 const gfx::ScrollOffset ScrollTree::current_scroll_offset(ElementId id) const {
   if (property_trees()->is_main_thread) {
-    ScrollOffsetMap::const_iterator it = scroll_offset_map_.find(id);
+    auto it = scroll_offset_map_.find(id);
     return it != scroll_offset_map_.end() ? it->second : gfx::ScrollOffset();
   }
   return GetSyncedScrollOffset(id)
@@ -1391,11 +1447,45 @@ const gfx::ScrollOffset ScrollTree::current_scroll_offset(ElementId id) const {
              : gfx::ScrollOffset();
 }
 
+const gfx::ScrollOffset ScrollTree::GetPixelSnappedScrollOffset(
+    int scroll_node_id) const {
+  const ScrollNode* scroll_node = Node(scroll_node_id);
+  DCHECK(scroll_node);
+  gfx::ScrollOffset offset = current_scroll_offset(scroll_node->element_id);
+
+  const TransformNode* transform_node =
+      property_trees()->transform_tree.Node(scroll_node->transform_id);
+  DCHECK(offset == transform_node->scroll_offset)
+      << "Transform node scroll offset does not match the actual offset, this "
+         "means the snapped_amount calculation will be incorrect";
+
+  if (transform_node->scrolls) {
+    // If necessary perform a update for this node to ensure snap amount is
+    // accurate. This method is used by scroll timeline, so it is possible for
+    // it to get called before transform tree has gone through a full update
+    // cycle so this node snap amount may be stale.
+    if (transform_node->needs_local_transform_update)
+      property_trees()->transform_tree.UpdateTransforms(transform_node->id);
+
+    offset.set_x(offset.x() - transform_node->snap_amount.x());
+    offset.set_y(offset.y() - transform_node->snap_amount.y());
+  }
+
+  return offset;
+}
+
 gfx::ScrollOffset ScrollTree::PullDeltaForMainThread(
-    SyncedScrollOffset* scroll_offset) {
+    SyncedScrollOffset* scroll_offset,
+    bool use_fractional_deltas) {
   DCHECK(property_trees()->is_active);
+
+  // Once this setting is enabled, all the complicated rounding logic below can
+  // go away.
+  if (use_fractional_deltas)
+    return scroll_offset->PullDeltaForMainThread();
+
   // TODO(flackr): We should pass the fractional scroll deltas when Blink fully
-  // supports fractional scrolls.
+  // supports fractional scrolls. crbug.com/414283.
   // TODO(flackr): We should ideally round the fractional scrolls in the same
   // direction as the scroll will be snapped but for common cases this is
   // equivalent to rounding to the nearest integer offset.
@@ -1415,26 +1505,25 @@ gfx::ScrollOffset ScrollTree::PullDeltaForMainThread(
   return delta;
 }
 
-void ScrollTree::CollectScrollDeltas(
-    ScrollAndScaleSet* scroll_info,
-    ElementId inner_viewport_scroll_element_id) {
+void ScrollTree::CollectScrollDeltas(ScrollAndScaleSet* scroll_info,
+                                     ElementId inner_viewport_scroll_element_id,
+                                     bool use_fractional_deltas) {
   DCHECK(!property_trees()->is_main_thread);
   for (auto map_entry : synced_scroll_offset_map_) {
     gfx::ScrollOffset scroll_delta =
-        PullDeltaForMainThread(map_entry.second.get());
+        PullDeltaForMainThread(map_entry.second.get(), use_fractional_deltas);
 
-    gfx::Vector2d scroll_delta_vector(scroll_delta.x(), scroll_delta.y());
     ElementId id = map_entry.first;
 
     if (!scroll_delta.IsZero()) {
       if (id == inner_viewport_scroll_element_id) {
         // Inner (visual) viewport is stored separately.
         scroll_info->inner_viewport_scroll.element_id = id;
-        scroll_info->inner_viewport_scroll.scroll_delta = scroll_delta_vector;
+        scroll_info->inner_viewport_scroll.scroll_delta = scroll_delta;
       } else {
         LayerTreeHostCommon::ScrollUpdateInfo scroll;
         scroll.element_id = id;
-        scroll.scroll_delta = scroll_delta_vector;
+        scroll.scroll_delta = scroll_delta;
         scroll_info->scrolls.push_back(scroll);
       }
     }
@@ -1442,8 +1531,11 @@ void ScrollTree::CollectScrollDeltas(
 }
 
 void ScrollTree::CollectScrollDeltasForTesting() {
+  LayerTreeSettings settings;
+  bool use_fractional_deltas = settings.commit_fractional_scroll_deltas;
+
   for (auto map_entry : synced_scroll_offset_map_) {
-    PullDeltaForMainThread(map_entry.second.get());
+    PullDeltaForMainThread(map_entry.second.get(), use_fractional_deltas);
   }
 }
 

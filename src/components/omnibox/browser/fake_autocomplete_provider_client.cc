@@ -15,6 +15,7 @@
 #include "components/omnibox/browser/in_memory_url_index.h"
 #include "components/omnibox/browser/in_memory_url_index_test_util.h"
 #include "components/omnibox/browser/shortcuts_backend.h"
+#include "components/search_engines/search_terms_data.h"
 #include "components/search_engines/template_url_service.h"
 
 FakeAutocompleteProviderClient::FakeAutocompleteProviderClient(
@@ -43,6 +44,9 @@ FakeAutocompleteProviderClient::~FakeAutocompleteProviderClient() {
   // its destructor.
   GetInMemoryURLIndex()->Shutdown();
   set_in_memory_url_index(nullptr);
+  // History service can have its own thread. So we need to explicitly shut down
+  // it to prevent memory leaks.
+  GetHistoryService()->Shutdown();
   // Note that RunUntilIdle() must still be called after this, from
   // whichever task model is being used, probably ScopedTaskEnvironment,
   // or there will be memory leaks.
@@ -63,11 +67,6 @@ bookmarks::BookmarkModel* FakeAutocompleteProviderClient::GetBookmarkModel() {
 
 InMemoryURLIndex* FakeAutocompleteProviderClient::GetInMemoryURLIndex() {
   return in_memory_url_index_.get();
-}
-
-const SearchTermsData& FakeAutocompleteProviderClient::GetSearchTermsData()
-    const {
-  return search_terms_data_;
 }
 
 scoped_refptr<ShortcutsBackend>

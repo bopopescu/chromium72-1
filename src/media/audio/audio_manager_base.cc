@@ -180,14 +180,10 @@ AudioOutputStream* AudioManagerBase::MakeAudioOutputStream(
     const std::string& device_id,
     const LogCallback& log_callback) {
   CHECK(GetTaskRunner()->BelongsToCurrentThread());
+  DCHECK(params.IsValid());
 
   if (base::CommandLine::ForCurrentProcess()->HasSwitch(
           switches::kFailAudioStreamCreation)) {
-    return nullptr;
-  }
-
-  if (!params.IsValid()) {
-    DLOG(ERROR) << "Audio parameters are invalid";
     return nullptr;
   }
 
@@ -253,6 +249,7 @@ AudioInputStream* AudioManagerBase::MakeAudioInputStream(
   if (!params.IsValid() || (params.channels() > kMaxInputChannels) ||
       device_id.empty()) {
     DLOG(ERROR) << "Audio parameters are invalid for device " << device_id;
+    VLOG(1) << params.AsHumanReadableString();
     return nullptr;
   }
 
@@ -348,6 +345,11 @@ AudioOutputStream* AudioManagerBase::MakeAudioOutputStreamProxy(
 
     // Ensure we only pass on valid output parameters.
     if (output_params.IsValid()) {
+      if (params.effects() & AudioParameters::MULTIZONE) {
+        // Never turn off the multizone effect even if it is not preferred.
+        output_params.set_effects(output_params.effects() |
+                                  AudioParameters::MULTIZONE);
+      }
       if (params.effects() != output_params.effects()) {
         // Turn off effects that weren't requested.
         output_params.set_effects(params.effects() & output_params.effects());
@@ -582,8 +584,8 @@ void AudioManagerBase::InitializeDebugRecording() {
     // AudioManager is deleted on the audio thread, so it's safe to post
     // unretained.
     GetTaskRunner()->PostTask(
-        FROM_HERE, base::Bind(&AudioManagerBase::InitializeDebugRecording,
-                              base::Unretained(this)));
+        FROM_HERE, base::BindOnce(&AudioManagerBase::InitializeDebugRecording,
+                                  base::Unretained(this)));
     return;
   }
 

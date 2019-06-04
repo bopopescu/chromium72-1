@@ -247,6 +247,13 @@ cvox.CommandStore.CMD_WHITELIST = {
       {announce: true, msgId: 'previous_granularity', category: 'navigation'},
   'nextGranularity':
       {announce: true, msgId: 'next_granularity', category: 'navigation'},
+  'previousAtGranularity': {
+    announce: true,
+    msgId: 'previous_at_granularity',
+    category: 'navigation'
+  },
+  'nextAtGranularity':
+      {announce: true, msgId: 'next_at_granularity', category: 'navigation'},
 
   'previousCharacter': {
     backward: true,
@@ -347,6 +354,9 @@ cvox.CommandStore.CMD_WHITELIST = {
   'moveToStartOfLine': {forward: true, announce: true},
   'moveToEndOfLine': {backward: true, announce: true},
 
+  'jumpToDetails':
+      {announce: false, msgId: 'jump_to_details', category: 'navigation'},
+
   'readFromHere': {
     forward: true,
     announce: false,
@@ -428,6 +438,8 @@ cvox.CommandStore.CMD_WHITELIST = {
     'disallowOOBE': true,
     category: 'help_commands'
   },
+  'showTtsSettings':
+      {announce: false, msgId: 'show_tts_settings', category: 'help_commands'},
   'toggleBrailleCaptions':
       {announce: false, msgId: 'braille_captions', category: 'help_commands'},
   'reportIssue': {
@@ -811,8 +823,8 @@ cvox.CommandStore.CMD_WHITELIST = {
       {announce: false, msgId: 'pause_all_media', category: 'information'},
 
   // Scrolling actions.
-  'scrollBackward': {msgId: 'action_scroll_backward'},
-  'scrollForward': {msgId: 'action_scroll_forward'},
+  'scrollBackward': {msgId: 'action_scroll_backward_description'},
+  'scrollForward': {msgId: 'action_scroll_forward_description'},
 
   // Math specific commands.
   'toggleSemantics':

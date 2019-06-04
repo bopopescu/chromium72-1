@@ -3,7 +3,7 @@
 // found in the LICENSE file.
 
 // This file has been auto-generated from the Jinja2 template
-// third_party/blink/renderer/bindings/templates/interface.cpp.tmpl
+// third_party/blink/renderer/bindings/templates/interface.cc.tmpl
 // by the script code_generator_v8.py.
 // DO NOT MODIFY!
 
@@ -11,13 +11,14 @@
 #include "third_party/blink/renderer/bindings/tests/results/core/v8_array_buffer.h"
 
 #include "base/memory/scoped_refptr.h"
-#include "third_party/blink/renderer/bindings/core/v8/exception_state.h"
 #include "third_party/blink/renderer/bindings/core/v8/idl_types.h"
 #include "third_party/blink/renderer/bindings/core/v8/native_value_traits_impl.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_array_buffer.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_dom_configuration.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_shared_array_buffer.h"
 #include "third_party/blink/renderer/core/execution_context/execution_context.h"
+#include "third_party/blink/renderer/platform/bindings/exception_messages.h"
+#include "third_party/blink/renderer/platform/bindings/exception_state.h"
 #include "third_party/blink/renderer/platform/bindings/runtime_call_stats.h"
 #include "third_party/blink/renderer/platform/bindings/v8_object_constructor.h"
 #include "third_party/blink/renderer/platform/wtf/get_ptr.h"
@@ -30,7 +31,7 @@ namespace blink {
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wglobal-constructors"
 #endif
-const WrapperTypeInfo V8ArrayBuffer::wrapperTypeInfo = {
+const WrapperTypeInfo V8ArrayBuffer::wrapper_type_info = {
     gin::kEmbedderBlink,
     nullptr,
     nullptr,
@@ -47,7 +48,7 @@ const WrapperTypeInfo V8ArrayBuffer::wrapperTypeInfo = {
 // This static member must be declared by DEFINE_WRAPPERTYPEINFO in TestArrayBuffer.h.
 // For details, see the comment of DEFINE_WRAPPERTYPEINFO in
 // platform/bindings/ScriptWrappable.h.
-const WrapperTypeInfo& TestArrayBuffer::wrapper_type_info_ = V8ArrayBuffer::wrapperTypeInfo;
+const WrapperTypeInfo& TestArrayBuffer::wrapper_type_info_ = V8ArrayBuffer::wrapper_type_info;
 
 // not [ActiveScriptWrappable]
 static_assert(
@@ -66,32 +67,19 @@ TestArrayBuffer* V8ArrayBuffer::ToImpl(v8::Local<v8::Object> object) {
   DCHECK(object->IsArrayBuffer());
   v8::Local<v8::ArrayBuffer> v8buffer = object.As<v8::ArrayBuffer>();
   if (v8buffer->IsExternal()) {
-    const WrapperTypeInfo* wrapperTypeInfo = ToWrapperTypeInfo(object);
-    CHECK(wrapperTypeInfo);
-    CHECK_EQ(wrapperTypeInfo->gin_embedder, gin::kEmbedderBlink);
+    const WrapperTypeInfo* wrapper_type = ToWrapperTypeInfo(object);
+    CHECK(wrapper_type);
+    CHECK_EQ(wrapper_type->gin_embedder, gin::kEmbedderBlink);
     return ToScriptWrappable(object)->ToImpl<TestArrayBuffer>();
   }
 
   // Transfer the ownership of the allocated memory to an ArrayBuffer without
   // copying.
-  v8::ArrayBuffer::Contents v8Contents = v8buffer->Externalize();
-  WTF::ArrayBufferContents::AllocationKind kind = WTF::ArrayBufferContents::AllocationKind::kNormal;
-  switch (v8Contents.AllocationMode()) {
-    case v8::ArrayBuffer::Allocator::AllocationMode::kNormal:
-      kind = WTF::ArrayBufferContents::AllocationKind::kNormal;
-      break;
-    case v8::ArrayBuffer::Allocator::AllocationMode::kReservation:
-      kind = WTF::ArrayBufferContents::AllocationKind::kReservation;
-      break;
-    default:
-      NOTREACHED();
-  };
-  WTF::ArrayBufferContents::DataHandle data(v8Contents.AllocationBase(),
-                                            v8Contents.AllocationLength(),
-                                            v8Contents.Data(),
-                                            v8Contents.ByteLength(),
-                                            kind,
-                                            WTF::ArrayBufferContents::FreeMemory);
+  v8::ArrayBuffer::Contents v8_contents = v8buffer->Externalize();
+  WTF::ArrayBufferContents::DataHandle data(v8_contents.Data(),
+                                            v8_contents.ByteLength(),
+                                            v8_contents.Deleter(),
+                                            v8_contents.DeleterData());
   WTF::ArrayBufferContents contents(std::move(data), WTF::ArrayBufferContents::kNotShared);
   TestArrayBuffer* buffer = TestArrayBuffer::Create(contents);
   v8::Local<v8::Object> associatedWrapper = buffer->AssociateWithWrapper(v8::Isolate::GetCurrent(), buffer->GetWrapperTypeInfo(), object);
@@ -100,17 +88,19 @@ TestArrayBuffer* V8ArrayBuffer::ToImpl(v8::Local<v8::Object> object) {
   return buffer;
 }
 
-TestArrayBuffer* V8ArrayBuffer::ToImplWithTypeCheck(v8::Isolate* isolate, v8::Local<v8::Value> value) {
+TestArrayBuffer* V8ArrayBuffer::ToImplWithTypeCheck(
+    v8::Isolate* isolate, v8::Local<v8::Value> value) {
   return value->IsArrayBuffer() ? ToImpl(v8::Local<v8::Object>::Cast(value)) : nullptr;
 }
 
-TestArrayBuffer* NativeValueTraits<TestArrayBuffer>::NativeValue(v8::Isolate* isolate, v8::Local<v8::Value> value, ExceptionState& exceptionState) {
-  TestArrayBuffer* nativeValue = V8ArrayBuffer::ToImplWithTypeCheck(isolate, value);
-  if (!nativeValue) {
-    exceptionState.ThrowTypeError(ExceptionMessages::FailedToConvertJSValue(
+TestArrayBuffer* NativeValueTraits<TestArrayBuffer>::NativeValue(
+    v8::Isolate* isolate, v8::Local<v8::Value> value, ExceptionState& exception_state) {
+  TestArrayBuffer* native_value = V8ArrayBuffer::ToImplWithTypeCheck(isolate, value);
+  if (!native_value) {
+    exception_state.ThrowTypeError(ExceptionMessages::FailedToConvertJSValue(
         "ArrayBuffer"));
   }
-  return nativeValue;
+  return native_value;
 }
 
 }  // namespace blink

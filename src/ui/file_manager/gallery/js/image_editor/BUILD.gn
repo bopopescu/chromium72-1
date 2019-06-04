@@ -3,8 +3,9 @@
 # found in the LICENSE file.
 
 import("//third_party/closure_compiler/compile_js.gni")
+import("//third_party/closure_compiler/js_unit_tests.gni")
 
-js_type_check("closure_compile") {
+js_type_check("closure_compile_module") {
   deps = [
     ":commands",
     ":exif_encoder",
@@ -44,6 +45,15 @@ js_library("exif_encoder") {
     "../../../file_manager/foreground/js/metadata:metadata_item",
   ]
   externs_list = [ "../../../externs/exif_entry.js" ]
+}
+
+js_unittest("exif_encoder_unittest") {
+  deps = [
+    ":exif_encoder",
+    ":test_util",
+    "../../../file_manager/foreground/js/metadata:exif_parser",
+    "//ui/webui/resources/js:webui_resource_test",
+  ]
 }
 
 js_library("filter") {
@@ -110,6 +120,16 @@ js_library("image_encoder") {
   ]
 }
 
+js_unittest("image_encoder_unittest") {
+  deps = [
+    ":image_encoder",
+    ":test_util",
+    "../../../file_manager/foreground/js/metadata:metadata_parser",
+    "//ui/file_manager/base/js:test_error_reporting",
+  ]
+  externs_list = [ "../../../externs/metadata_worker_window.js" ]
+}
+
 js_library("image_loader") {
   deps = [
     ":image_util",
@@ -153,9 +173,17 @@ js_library("image_view") {
     ":image_util",
     ":viewport",
     "..:gallery_item",
-    "../../../file_manager/common/js:metrics",
+    "../../../file_manager/common/js:metrics_base",
     "../../../file_manager/foreground/js:thumbnail_loader",
     "//ui/webui/resources/js:assert",
+  ]
+}
+
+js_unittest("image_view_unittest") {
+  deps = [
+    ":image_view",
+    "..:mock_gallery_item",
+    "//ui/webui/resources/js:webui_resource_test",
   ]
 }
 
@@ -166,5 +194,22 @@ js_library("viewport") {
   deps = [
     ":image_util",
     "//ui/webui/resources/js/cr:event_target",
+  ]
+}
+
+js_unit_tests("unit_tests") {
+  deps = [
+    ":exif_encoder_unittest",
+    ":image_encoder_unittest",
+    ":image_view_unittest",
+  ]
+  mocks = [ "../../../file_manager/foreground/js/metadata/metadata_dispatcher_mock_deps.js" ]
+}
+
+group("closure_compile") {
+  testonly = true
+  deps = [
+    ":closure_compile_module",
+    ":unit_tests_type_check",
   ]
 }

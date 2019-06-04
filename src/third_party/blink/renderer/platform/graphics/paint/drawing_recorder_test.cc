@@ -9,6 +9,8 @@
 #include "third_party/blink/renderer/platform/graphics/paint/paint_controller_test.h"
 #include "third_party/blink/renderer/platform/testing/fake_display_item_client.h"
 
+using testing::ElementsAre;
+
 namespace blink {
 
 using DrawingRecorderTest = PaintControllerTestBase;
@@ -22,9 +24,9 @@ TEST_F(DrawingRecorderTest, Nothing) {
   GraphicsContext context(GetPaintController());
   InitRootChunk();
   DrawNothing(context, client, kForegroundType);
-  GetPaintController().CommitNewDisplayItems();
-  EXPECT_DISPLAY_LIST(GetPaintController().GetDisplayItemList(), 1,
-                      TestDisplayItem(client, kForegroundType));
+  CommitAndFinishCycle();
+  EXPECT_THAT(GetPaintController().GetDisplayItemList(),
+              ElementsAre(IsSameId(&client, kForegroundType)));
   EXPECT_FALSE(static_cast<const DrawingDisplayItem&>(
                    GetPaintController().GetDisplayItemList()[0])
                    .GetPaintRecord());
@@ -35,9 +37,9 @@ TEST_F(DrawingRecorderTest, Rect) {
   GraphicsContext context(GetPaintController());
   InitRootChunk();
   DrawRect(context, client, kForegroundType, kBounds);
-  GetPaintController().CommitNewDisplayItems();
-  EXPECT_DISPLAY_LIST(GetPaintController().GetDisplayItemList(), 1,
-                      TestDisplayItem(client, kForegroundType));
+  CommitAndFinishCycle();
+  EXPECT_THAT(GetPaintController().GetDisplayItemList(),
+              ElementsAre(IsSameId(&client, kForegroundType)));
 }
 
 TEST_F(DrawingRecorderTest, Cached) {
@@ -46,11 +48,11 @@ TEST_F(DrawingRecorderTest, Cached) {
   InitRootChunk();
   DrawNothing(context, client, kBackgroundType);
   DrawRect(context, client, kForegroundType, kBounds);
-  GetPaintController().CommitNewDisplayItems();
+  CommitAndFinishCycle();
 
-  EXPECT_DISPLAY_LIST(GetPaintController().GetDisplayItemList(), 2,
-                      TestDisplayItem(client, kBackgroundType),
-                      TestDisplayItem(client, kForegroundType));
+  EXPECT_THAT(GetPaintController().GetDisplayItemList(),
+              ElementsAre(IsSameId(&client, kBackgroundType),
+                          IsSameId(&client, kForegroundType)));
 
   InitRootChunk();
   DrawNothing(context, client, kBackgroundType);
@@ -58,27 +60,11 @@ TEST_F(DrawingRecorderTest, Cached) {
 
   EXPECT_EQ(2, NumCachedNewItems());
 
-  GetPaintController().CommitNewDisplayItems();
+  CommitAndFinishCycle();
 
-  EXPECT_DISPLAY_LIST(GetPaintController().GetDisplayItemList(), 2,
-                      TestDisplayItem(client, kBackgroundType),
-                      TestDisplayItem(client, kForegroundType));
-}
-
-template <typename T>
-FloatRect DrawAndGetCullRect(PaintController& controller,
-                             const DisplayItemClient& client,
-                             const T& bounds) {
-  {
-    // Draw some things which will produce a non-null picture.
-    GraphicsContext context(controller);
-    DrawingRecorder recorder(context, client, kBackgroundType, bounds);
-    context.DrawRect(EnclosedIntRect(FloatRect(bounds)));
-  }
-  controller.CommitNewDisplayItems();
-  const auto& drawing = static_cast<const DrawingDisplayItem&>(
-      controller.GetDisplayItemList()[0]);
-  return FloatRect(drawing.VisualRect());
+  EXPECT_THAT(GetPaintController().GetDisplayItemList(),
+              ElementsAre(IsSameId(&client, kBackgroundType),
+                          IsSameId(&client, kForegroundType)));
 }
 
 }  // namespace

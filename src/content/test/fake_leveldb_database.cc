@@ -78,6 +78,10 @@ void FakeLevelDBDatabase::DeletePrefixed(const std::vector<uint8_t>& key_prefix,
   std::move(callback).Run(leveldb::mojom::DatabaseError::OK);
 }
 
+void FakeLevelDBDatabase::RewriteDB(RewriteDBCallback callback) {
+  std::move(callback).Run(leveldb::mojom::DatabaseError::OK);
+}
+
 void FakeLevelDBDatabase::Write(
     std::vector<leveldb::mojom::BatchedOperationPtr> operations,
     WriteCallback callback) {
@@ -234,6 +238,10 @@ void FakeLevelDBDatabase::IteratorNext(const base::UnguessableToken& iterator,
 void FakeLevelDBDatabase::IteratorPrev(const base::UnguessableToken& iterator,
                                        IteratorPrevCallback callback) {
   NOTREACHED();
+}
+
+void FakeLevelDBDatabase::FlushBindingsForTesting() {
+  bindings_.FlushForTesting();
 }
 
 std::vector<std::pair<std::vector<uint8_t>, std::vector<uint8_t>>>

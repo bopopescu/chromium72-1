@@ -8,8 +8,8 @@
  *  be found in the AUTHORS file in the root of the source tree.
  */
 
-#ifndef TEST_ACM_RANDOM_H_
-#define TEST_ACM_RANDOM_H_
+#ifndef VPX_TEST_ACM_RANDOM_H_
+#define VPX_TEST_ACM_RANDOM_H_
 
 #include <assert.h>
 
@@ -32,6 +32,12 @@ class ACMRandom {
     const uint32_t value =
         random_.Generate(testing::internal::Random::kMaxRange);
     return (value >> 15) & 0xffff;
+  }
+
+  int16_t Rand13Signed(void) {
+    // Use 13 bits: values between 4095 and -4096.
+    const uint32_t value = random_.Generate(8192);
+    return static_cast<int16_t>(value) - 4096;
   }
 
   int16_t Rand9Signed(void) {
@@ -73,4 +79,4 @@ class ACMRandom {
 
 }  // namespace libvpx_test
 
-#endif  // TEST_ACM_RANDOM_H_
+#endif  // VPX_TEST_ACM_RANDOM_H_

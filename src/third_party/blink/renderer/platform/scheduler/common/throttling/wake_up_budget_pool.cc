@@ -7,7 +7,7 @@
 #include <cstdint>
 
 #include "third_party/blink/renderer/platform/scheduler/common/throttling/task_queue_throttler.h"
-#include "third_party/blink/renderer/platform/scheduler/util/tracing_helper.h"
+#include "third_party/blink/renderer/platform/scheduler/common/tracing_helper.h"
 
 namespace blink {
 namespace scheduler {
@@ -37,7 +37,7 @@ void WakeUpBudgetPool::SetWakeUpDuration(base::TimeDelta duration) {
 void WakeUpBudgetPool::RecordTaskRunTime(TaskQueue* queue,
                                          base::TimeTicks start_time,
                                          base::TimeTicks end_time) {
-  budget_pool_controller_->UpdateQueueThrottlingState(end_time, queue);
+  budget_pool_controller_->UpdateQueueSchedulingLifecycleState(end_time, queue);
 }
 
 bool WakeUpBudgetPool::CanRunTasksAt(base::TimeTicks moment,
@@ -92,7 +92,7 @@ void WakeUpBudgetPool::OnQueueNextWakeUpChanged(
     TaskQueue* queue,
     base::TimeTicks now,
     base::TimeTicks desired_run_time) {
-  budget_pool_controller_->UpdateQueueThrottlingState(now, queue);
+  budget_pool_controller_->UpdateQueueSchedulingLifecycleState(now, queue);
 }
 
 void WakeUpBudgetPool::OnWakeUp(base::TimeTicks now) {

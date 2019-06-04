@@ -5,6 +5,19 @@
 'use strict';
 
 /**
+ * When step by step tests are enabled, turns on automatic step() calls. Note
+ * that if step() is defined at the time of this call, invoke it to start the
+ * test auto-stepping ball rolling.
+ */
+function autoStep() {
+  window.autostep = window.autostep || false;
+  if (!autostep)
+    autostep = true;
+  if (autostep && typeof window.step == 'function')
+    window.step();
+}
+
+/**
  * Class to manipulate the window in the remote extension.
  *
  * @param {string} extensionId ID of extension to be manipulated.
@@ -12,16 +25,29 @@
  */
 function RemoteCall(extensionId) {
   this.extensionId_ = extensionId;
+
+  /**
+   * Tristate holding the cached result of isStepByStepEnabled_().
+   * @type{?bool}
+   */
+  this.cachedStepByStepEnabled_ = null;
 }
 
 /**
  * Checks whether step by step tests are enabled or not.
+ * @private
  * @return {Promise<bool>}
  */
-RemoteCall.isStepByStepEnabled = function() {
-  return new Promise(function(fulfill) {
+RemoteCall.prototype.isStepByStepEnabled_ = function() {
+  if (this.cachedStepByStepEnabled_ != null)
+    return Promise.resolve(this.cachedStepByStepEnabled_);
+
+  return new Promise((fulfill) => {
     chrome.commandLinePrivate.hasSwitch(
-        'enable-file-manager-step-by-step-tests', fulfill);
+        'enable-file-manager-step-by-step-tests', (/** bool */ result) => {
+          this.cachedStepByStepEnabled_ = result;
+          fulfill(result);
+        });
   });
 };
 
@@ -37,41 +63,42 @@ RemoteCall.isStepByStepEnabled = function() {
  * @return {Promise} Promise to be fulfilled with the result of the remote
  *     utility.
  */
-RemoteCall.prototype.callRemoteTestUtil =
-    function(func, appId, args, opt_callback) {
-  return RemoteCall.isStepByStepEnabled().then(function(stepByStep) {
-    if (!stepByStep)
-      return false;
-    return new Promise(function(onFulfilled) {
-      console.info('Executing: ' + func + ' on ' + appId + ' with args: ');
-      console.info(args);
-      console.info('Type step() to continue...');
-      window.step = function() {
-        window.step = null;
-        onFulfilled(stepByStep);
-      };
-    });
-  }).then(function(stepByStep) {
-    return new Promise(function(onFulfilled) {
-      chrome.runtime.sendMessage(
-          this.extensionId_,
-          {
-            func: func,
-            appId: appId,
-            args: args
-          },
-          {},
-          function(var_args) {
-            if (stepByStep) {
-              console.info('Returned value:');
-              console.info(JSON.stringify(arguments));
-            }
-            if (opt_callback)
-              opt_callback.apply(null, arguments);
-            onFulfilled(arguments[0]);
-          });
-    }.bind(this));
-  }.bind(this));
+RemoteCall.prototype.callRemoteTestUtil = function(
+    func, appId, args, opt_callback) {
+  return this.isStepByStepEnabled_()
+      .then((stepByStep) => {
+        if (!stepByStep)
+          return false;
+        return new Promise((onFulfilled) => {
+          console.info('Executing: ' + func + ' on ' + appId + ' with args: ');
+          console.info(args);
+          if (window.autostep !== true) {
+            console.info('Type step() to continue...');
+            window.step = function() {
+              window.step = null;
+              onFulfilled(stepByStep);
+            };
+          } else {
+            console.info('Auto calling step() ...');
+            onFulfilled(stepByStep);
+          }
+        });
+      })
+      .then((stepByStep) => {
+        return new Promise((onFulfilled) => {
+          chrome.runtime.sendMessage(
+              this.extensionId_, {func: func, appId: appId, args: args}, {},
+              function(var_args) {
+                if (stepByStep) {
+                  console.info('Returned value:');
+                  console.info(JSON.stringify(var_args));
+                }
+                if (opt_callback)
+                  opt_callback.apply(null, arguments);
+                onFulfilled(arguments[0]);
+              });
+        });
+      });
 };
 
 /**
@@ -157,60 +184,103 @@ RemoteCall.prototype.waitForWindowGeometry = function(windowId, width, height) {
 /**
  * Waits for the specified element appearing in the DOM.
  * @param {string} windowId Target window ID.
- * @param {string} query Query string for the element.
- * @param {string=} opt_iframeQuery Query string for the iframe containing the
- *     element.
+ * @param {string|!Array<string>} query Query to specify the element.
+ *     If query is an array, |query[0]| specifies the first
+ *     element(s), |query[1]| specifies elements inside the shadow DOM of
+ *     the first element, and so on.
  * @return {Promise} Promise to be fulfilled when the element appears.
  */
-RemoteCall.prototype.waitForElement = function(
-    windowId, query, opt_iframeQuery) {
+RemoteCall.prototype.waitForElement = function(windowId, query) {
+  return this.waitForElementStyles(windowId, query, []);
+};
+
+/**
+ * Waits for the specified element appearing in the DOM.
+ * @param {string} windowId Target window ID.
+ * @param {string|!Array<string>} query Query to specify the element.
+ *     If query is an array, |query[0]| specifies the first
+ *     element(s), |query[1]| specifies elements inside the shadow DOM of
+ *     the first element, and so on.
+ * @param {!Array<string>} styleNames List of CSS property name to be
+ *     obtained. NOTE: Causes element style re-calculation.
+ * @return {Promise} Promise to be fulfilled when the element appears.
+ */
+RemoteCall.prototype.waitForElementStyles = function(
+    windowId, query, styleNames) {
   var caller = getCaller();
-  return repeatUntil(function() {
-    return this.callRemoteTestUtil(
-        'queryAllElements',
-        windowId,
-        [query, opt_iframeQuery]
-    ).then(function(elements) {
-      if (elements.length > 0)
-        return elements[0];
-      else
-        return pending(
-            caller, 'Element %s (maybe in iframe %s) is not found.', query,
-            opt_iframeQuery);
+  return repeatUntil(() => {
+    return this
+        .callRemoteTestUtil(
+            'deepQueryAllElements', windowId, [query, styleNames])
+        .then(function(elements) {
+          if (elements.length > 0)
+            return elements[0];
+          return pending(caller, 'Element %s is not found.', query);
+        });
+  });
+};
+
+/**
+ * Waits for a remote test function to return a specific result.
+ *
+ * @param {string} funcName Name of remote test function to be executed.
+ * @param {string} windowId Target window ID.
+ * @param {function(Object): boolean|Object} expectedResult An value to be
+ *     checked against the return value of |funcName| or a callabck that
+ *     receives the return value of |funcName| and returns true if the result
+ *     is the expected value.
+ * @param {?Array<*>} args Arguments to be provided to |funcName| when executing
+ *     it.
+ * @return {Promise} Promise to be fulfilled when the |expectedResult| is
+ *     returned from |funcName| execution.
+ */
+RemoteCall.prototype.waitFor = function(
+    funcName, windowId, expectedResult, args) {
+  const caller = getCaller();
+  args = args || [];
+  return repeatUntil(() => {
+    return this.callRemoteTestUtil(funcName, windowId, args).then((result) => {
+      if (typeof expectedResult === 'function' && expectedResult(result))
+        return result;
+      if (expectedResult === result)
+        return result;
+      const msg = 'waitFor: Waiting for ' +
+          `${funcName} to return ${expectedResult}, ` +
+          `but got ${JSON.stringify(result)}.`;
+      return pending(caller, msg);
     });
-  }.bind(this));
+  });
 };
 
 /**
  * Waits for the specified element leaving from the DOM.
  * @param {string} windowId Target window ID.
- * @param {string} query Query string for the element.
- * @param {string=} opt_iframeQuery Query string for the iframe containing the
- *     element.
+ * @param {string|!Array<string>} query Query to specify the element.
+ *     If query is an array, |query[0]| specifies the first
+ *     element(s), |query[1]| specifies elements inside the shadow DOM of
+ *     the first element, and so on.
  * @return {Promise} Promise to be fulfilled when the element is lost.
  */
-RemoteCall.prototype.waitForElementLost = function(
-    windowId, query, opt_iframeQuery) {
+RemoteCall.prototype.waitForElementLost = function(windowId, query) {
   var caller = getCaller();
   return repeatUntil(function() {
-    return this.callRemoteTestUtil(
-        'queryAllElements',
-        windowId,
-        [query, opt_iframeQuery]
-    ).then(function(elements) {
-      if (elements.length > 0)
-        return pending(caller, 'Elements %j is still exists.', elements);
-      return true;
-    });
+    return this.callRemoteTestUtil('deepQueryAllElements', windowId, [query])
+        .then(function(elements) {
+          if (elements.length > 0)
+            return pending(caller, 'Elements %j is still exists.', elements);
+          return true;
+        });
   }.bind(this));
 };
 
 /**
  * Sends a fake key down event.
  * @param {string} windowId Window ID.
- * @param {string} query Query for the target element.
+ * @param {string|!Array<string>} query Query to specify the element.
+ *     If query is an array, |query[0]| specifies the first
+ *     element(s), |query[1]| specifies elements inside the shadow DOM of
+ *     the first element, and so on.
  * @param {string} key DOM UI Events Key value.
- * @param {string} keyIdentifer Key identifier.
  * @param {boolean} ctrlKey Control key flag.
  * @param {boolean} shiftKey Shift key flag.
  * @param {boolean} altKey Alt key flag.
@@ -218,10 +288,9 @@ RemoteCall.prototype.waitForElementLost = function(
  *     result.
  */
 RemoteCall.prototype.fakeKeyDown =
-    function(windowId, query, key, keyIdentifer, ctrlKey, shiftKey, altKey) {
+    function(windowId, query, key, ctrlKey, shiftKey, altKey) {
   var resultPromise = this.callRemoteTestUtil(
-      'fakeKeyDown', windowId,
-      [query, key, keyIdentifer, ctrlKey, shiftKey, altKey]);
+      'fakeKeyDown', windowId, [query, key, ctrlKey, shiftKey, altKey]);
   return resultPromise.then(function(result) {
     if (result)
       return true;
@@ -373,9 +442,8 @@ RemoteCallFilesApp.prototype.waitUntilTaskExecutes = function(
  */
 RemoteCallFilesApp.prototype.checkNextTabFocus =
     function(windowId, elementId) {
-  return remoteCall.callRemoteTestUtil('fakeKeyDown',
-                                       windowId,
-                                       ['body', 'Tab', 'U+0009', false]).then(
+  return remoteCall.callRemoteTestUtil(
+      'fakeKeyDown', windowId, ['body', 'Tab', false, false, false]).then(
   function(result) {
     chrome.test.assertTrue(result);
     return remoteCall.callRemoteTestUtil('getActiveElement',
@@ -405,13 +473,122 @@ RemoteCallFilesApp.prototype.checkNextTabFocus =
 RemoteCallFilesApp.prototype.waitUntilCurrentDirectoryIsChanged = function(
     windowId, expectedPath) {
   var caller = getCaller();
-  return repeatUntil(function () {
-    return this.callRemoteTestUtil('getBreadcrumbPath', windowId, []).then(
-      function(path) {
-        if(path !== expectedPath)
-          return pending(caller, 'Expected path is %s', expectedPath);
-      });
+  return repeatUntil(function() {
+    return this.callRemoteTestUtil('getBreadcrumbPath', windowId, [])
+        .then(function(path) {
+          if (path !== expectedPath) {
+            return pending(
+                caller, 'Expected path is %s got %s', expectedPath, path);
+          }
+        });
   }.bind(this));
+};
+
+/**
+ * Expands tree item.
+ */
+RemoteCallFilesApp.prototype.expandTreeItemInDirectoryTree = function(
+    windowId, query) {
+  return this.waitForElement(windowId, query)
+      .then(() => {
+        return this.callRemoteTestUtil(
+            'queryAllElements', windowId, [`${query}[expanded]`]);
+      })
+      .then(elements => {
+        // If it's already expanded, do nothing.
+        if (elements.length > 0)
+          return;
+
+        // Focus to directory tree.
+        return this.callRemoteTestUtil('focus', windowId, ['#directory-tree'])
+            .then(() => {
+              // Expand directory volume.
+              return this.callRemoteTestUtil(
+                  'fakeMouseClick', windowId, [`${query} .expand-icon`]);
+            });
+      });
+};
+
+/**
+ * Expands directory tree for specified path.
+ */
+RemoteCallFilesApp.prototype.expandDirectoryTreeFor = function(
+    windowId, path, volumeType = 'downloads') {
+  return this.expandDirectoryTreeForInternal_(
+      windowId, path.split('/'), 0, volumeType);
+};
+
+/**
+ * Internal function for expanding directory tree for specified path.
+ */
+RemoteCallFilesApp.prototype.expandDirectoryTreeForInternal_ = function(
+    windowId, components, index, volumeType) {
+  if (index >= components.length - 1)
+    return Promise.resolve();
+
+  if (index === 0) {
+    return this.expandVolumeInDirectoryTree(windowId, volumeType).then(() => {
+      return this.expandDirectoryTreeForInternal_(
+          windowId, components, index + 1, volumeType);
+    });
+  }
+  const path = `/${components.slice(1, index + 1).join('/')}`;
+  return this
+      .expandTreeItemInDirectoryTree(
+          windowId, `[full-path-for-testing="${path}"]`)
+      .then(() => {
+        return this.expandDirectoryTreeForInternal_(
+            windowId, components, index + 1, volumeType);
+      });
+};
+
+/**
+ * Expands download volume in directory tree.
+ */
+RemoteCallFilesApp.prototype.expandDownloadVolumeInDirectoryTree = function(
+    windowId) {
+  return this.expandVolumeInDirectoryTree(windowId, 'downloads');
+};
+
+/**
+ * Expands download volume in directory tree.
+ */
+RemoteCallFilesApp.prototype.expandVolumeInDirectoryTree = function(
+    windowId, volumeType) {
+  return this.expandTreeItemInDirectoryTree(
+      windowId, `[volume-type-for-testing="${volumeType}"]`);
+};
+
+/**
+ * Navigates to specified directory on the specified volume by using directory
+ * tree.
+ */
+RemoteCallFilesApp.prototype.navigateWithDirectoryTree = function(
+    windowId, path, rootLabel, volumeType = 'downloads') {
+  return this.expandDirectoryTreeFor(windowId, path, volumeType)
+      .then(() => {
+        // Select target path.
+        return this.callRemoteTestUtil(
+            'fakeMouseClick', windowId, [`[full-path-for-testing="${path}"]`]);
+      })
+      .then(() => {
+        // Entries within Drive starts with /root/ but it isn't displayed in the
+        // breadcrubms used by waitUntilCurrentDirectoryIsChanged.
+        path = path.replace(/^\/root/, '')
+                   .replace(/^\/team_drives/, '')
+                   .replace(/^\/Computers/, '');
+
+        // TODO(lucmult): Remove this once MyFilesVolume is rolled out.
+        // Remove /Downloads duplication when MyFilesVolume is enabled.
+        if (volumeType == 'downloads' && path.startsWith('/Downloads') &&
+            rootLabel.endsWith('/Downloads')) {
+          rootLabel = rootLabel.replace('/Downloads', '');
+        }
+
+        // Wait until the Files app is navigated to the path.
+        return this.waitUntilCurrentDirectoryIsChanged(
+            windowId, `/${rootLabel}${path}`);
+      });
 };
 
 /**
@@ -449,27 +626,29 @@ RemoteCallGallery.prototype.waitForSlideImage =
 
   return repeatUntil(function() {
     var query = '.gallery[mode="slide"] .image-container > .image';
-    return Promise.all([
-        this.waitForElement(windowId, '.filename-spacer input'),
-        this.waitForElement(windowId, query)
-    ]).then(function(args) {
-      var nameBox = args[0];
-      var image = args[1];
-      var actual = {};
-      if (width && image)
-        actual.width = image.imageWidth;
-      if (height && image)
-        actual.height = image.imageHeight;
-      if (name && nameBox)
-        actual.name = nameBox.value;
+    return Promise
+        .all([
+          this.waitForElement(windowId, '#rename-input'),
+          this.waitForElementStyles(windowId, query, ['any'])
+        ])
+        .then(function(args) {
+          var nameBox = args[0];
+          var image = args[1];
+          var actual = {};
+          if (width && image)
+            actual.width = image.imageWidth;
+          if (height && image)
+            actual.height = image.imageHeight;
+          if (name && nameBox)
+            actual.name = nameBox.value;
 
-      if (!chrome.test.checkDeepEq(expected, actual)) {
-        return pending(
-            caller, 'Slide mode state, expected is %j, actual is %j.', expected,
-            actual);
-      }
-      return actual;
-    });
+          if (!chrome.test.checkDeepEq(expected, actual)) {
+            return pending(
+                caller, 'Slide mode state, expected is %j, actual is %j.',
+                expected, actual);
+          }
+          return actual;
+        });
   }.bind(this));
 };
 
@@ -483,7 +662,10 @@ RemoteCallGallery.prototype.changeNameAndWait = function(windowId, newName) {
 /**
  * Shorthand for clicking an element.
  * @param {AppWindow} appWindow Application window.
- * @param {string} query Query for the element.
+ * @param {string|!Array<string>} query Query to specify the element.
+ *     If query is an array, |query[0]| specifies the first
+ *     element(s), |query[1]| specifies elements inside the shadow DOM of
+ *     the first element, and so on.
  * @param {Promise} Promise to be fulfilled with the clicked element.
  */
 RemoteCallGallery.prototype.waitAndClickElement = function(windowId, query) {

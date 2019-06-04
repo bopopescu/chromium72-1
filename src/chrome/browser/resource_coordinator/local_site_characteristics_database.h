@@ -5,13 +5,13 @@
 #ifndef CHROME_BROWSER_RESOURCE_COORDINATOR_LOCAL_SITE_CHARACTERISTICS_DATABASE_H_
 #define CHROME_BROWSER_RESOURCE_COORDINATOR_LOCAL_SITE_CHARACTERISTICS_DATABASE_H_
 
-#include <string>
 #include <vector>
 
 #include "base/callback.h"
 #include "base/macros.h"
 #include "base/optional.h"
 #include "chrome/browser/resource_coordinator/site_characteristics.pb.h"
+#include "url/origin.h"
 
 class SiteCharacteristicsProto;
 
@@ -25,6 +25,9 @@ class LocalSiteCharacteristicsDatabase {
   // initialization has failed.
   using ReadSiteCharacteristicsFromDBCallback = base::OnceCallback<void(
       base::Optional<SiteCharacteristicsProto> site_characteristic_proto)>;
+  using GetDatabaseSizeCallback =
+      base::OnceCallback<void(base::Optional<int64_t> num_rows,
+                              base::Optional<int64_t> on_disk_size_kb)>;
 
   LocalSiteCharacteristicsDatabase() = default;
   virtual ~LocalSiteCharacteristicsDatabase() {}
@@ -33,21 +36,24 @@ class LocalSiteCharacteristicsDatabase {
   // to initialize |site_characteristic_proto|. Calls |callback| to indicate
   // whether or not the initialization has been successful.
   virtual void ReadSiteCharacteristicsFromDB(
-      const std::string& site_origin,
+      const url::Origin& origin,
       ReadSiteCharacteristicsFromDBCallback callback) = 0;
 
   // Store an entry in the database, create it if it doesn't exist and update it
   // if it does.
   virtual void WriteSiteCharacteristicsIntoDB(
-      const std::string& site_origin,
+      const url::Origin& origin,
       const SiteCharacteristicsProto& site_characteristic_proto) = 0;
 
   // Removes some entries from the database.
   virtual void RemoveSiteCharacteristicsFromDB(
-      const std::vector<std::string>& site_origins) = 0;
+      const std::vector<url::Origin>& site_origins) = 0;
 
   // Clear the database, removes every entries that it contains.
   virtual void ClearDatabase() = 0;
+
+  // Retrieve the size of the database.
+  virtual void GetDatabaseSize(GetDatabaseSizeCallback callback) = 0;
 };
 
 }  // namespace resource_coordinator

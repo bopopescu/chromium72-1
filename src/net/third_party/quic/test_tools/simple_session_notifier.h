@@ -8,7 +8,7 @@
 #include "net/third_party/quic/core/session_notifier_interface.h"
 #include "testing/gmock/include/gmock/gmock.h"
 
-namespace net {
+namespace quic {
 
 class QuicConnection;
 
@@ -63,7 +63,7 @@ class SimpleSessionNotifier : public SessionNotifierInterface {
   void RetransmitFrames(const QuicFrames& frames,
                         TransmissionType type) override;
   bool IsFrameOutstanding(const QuicFrame& frame) const override;
-  bool HasPendingCryptoData() const override;
+  bool HasUnackedCryptoData() const override;
 
  private:
   struct StreamState {
@@ -138,6 +138,6 @@ class SimpleSessionNotifier : public SessionNotifierInterface {
 
 }  // namespace test
 
-}  // namespace net
+}  // namespace quic
 
 #endif  // NET_THIRD_PARTY_QUIC_TEST_TOOLS_SIMPLE_SESSION_NOTIFIER_H_

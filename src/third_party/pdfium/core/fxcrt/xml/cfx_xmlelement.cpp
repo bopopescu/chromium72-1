@@ -13,11 +13,8 @@
 #include "core/fxcrt/xml/cfx_xmlchardata.h"
 #include "core/fxcrt/xml/cfx_xmldocument.h"
 #include "core/fxcrt/xml/cfx_xmltext.h"
-#include "third_party/base/ptr_util.h"
-#include "third_party/base/stl_util.h"
 
-CFX_XMLElement::CFX_XMLElement(const WideString& wsTag)
-    : CFX_XMLNode(), name_(wsTag) {
+CFX_XMLElement::CFX_XMLElement(const WideString& wsTag) : name_(wsTag) {
   ASSERT(!name_.IsEmpty());
 }
 
@@ -76,20 +73,18 @@ WideString CFX_XMLElement::GetNamespaceURI() const {
 
 WideString CFX_XMLElement::GetTextData() const {
   CFX_WideTextBuf buffer;
-
   for (CFX_XMLNode* pChild = GetFirstChild(); pChild;
        pChild = pChild->GetNextSibling()) {
-    if (pChild->GetType() == FX_XMLNODE_Text ||
-        pChild->GetType() == FX_XMLNODE_CharData) {
-      buffer << static_cast<CFX_XMLText*>(pChild)->GetText();
-    }
+    CFX_XMLText* pText = ToXMLText(pChild);
+    if (pText)
+      buffer << pText->GetText();
   }
   return buffer.MakeString();
 }
 
 void CFX_XMLElement::Save(
     const RetainPtr<IFX_SeekableWriteStream>& pXMLStream) {
-  ByteString bsNameEncoded = name_.UTF8Encode();
+  ByteString bsNameEncoded = name_.ToUTF8();
 
   pXMLStream->WriteString("<");
   pXMLStream->WriteString(bsNameEncoded.AsStringView());
@@ -98,7 +93,7 @@ void CFX_XMLElement::Save(
     // Note, the space between attributes is added by AttributeToString which
     // writes a blank as the first character.
     pXMLStream->WriteString(
-        AttributeToString(it.first, it.second).UTF8Encode().AsStringView());
+        AttributeToString(it.first, it.second).ToUTF8().AsStringView());
   }
 
   if (!GetFirstChild()) {
@@ -125,11 +120,8 @@ CFX_XMLElement* CFX_XMLElement::GetFirstChildNamed(
 CFX_XMLElement* CFX_XMLElement::GetNthChildNamed(const WideStringView& name,
                                                  size_t idx) const {
   for (auto* child = GetFirstChild(); child; child = child->GetNextSibling()) {
-    if (child->GetType() != FX_XMLNODE_Element)
-      continue;
-
-    CFX_XMLElement* elem = static_cast<CFX_XMLElement*>(child);
-    if (elem->name_ != name)
+    CFX_XMLElement* elem = ToXMLElement(child);
+    if (!elem || elem->name_ != name)
       continue;
     if (idx == 0)
       return elem;

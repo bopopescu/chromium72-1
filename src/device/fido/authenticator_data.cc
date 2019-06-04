@@ -6,6 +6,8 @@
 
 #include <utility>
 
+#include "components/cbor/reader.h"
+#include "components/cbor/writer.h"
 #include "device/fido/attested_credential_data.h"
 #include "device/fido/fido_parsing_utils.h"
 
@@ -13,45 +15,64 @@ namespace device {
 
 namespace {
 
-constexpr size_t kApplicationParameterLength = 32;
-constexpr size_t kAuthDataCounterLength = 4;
-constexpr size_t kAaguidOffset =
-    32 /* RP ID hash */ + 1 /* flags */ + 4 /* signature counter */;
+constexpr size_t kAttestedCredentialDataOffset =
+    kRpIdHashLength + kFlagsLength + kSignCounterLength;
 
 }  // namespace
 
 // static
 base::Optional<AuthenticatorData> AuthenticatorData::DecodeAuthenticatorData(
     base::span<const uint8_t> auth_data) {
-  if (auth_data.size() < kAaguidOffset)
+  if (auth_data.size() < kAttestedCredentialDataOffset)
     return base::nullopt;
-  std::vector<uint8_t> application_parameter(
-      auth_data.data(), auth_data.data() + kApplicationParameterLength);
-  uint8_t flag_byte = auth_data[kApplicationParameterLength];
-  std::vector<uint8_t> counter(
-      auth_data.data() + kApplicationParameterLength + 1,
-      auth_data.data() + kApplicationParameterLength + 1 +
-          kAuthDataCounterLength);
-  auto attested_credential_data =
-      AttestedCredentialData::DecodeFromCtapResponse(
-          auth_data.subspan(kAaguidOffset));
+  auto application_parameter = auth_data.first<kRpIdHashLength>();
+  uint8_t flag_byte = auth_data[kRpIdHashLength];
+  auto counter =
+      auth_data.subspan<kRpIdHashLength + kFlagsLength, kSignCounterLength>();
 
-  return AuthenticatorData(std::move(application_parameter), flag_byte,
-                           std::move(counter),
-                           std::move(attested_credential_data));
+  auth_data = auth_data.subspan(kAttestedCredentialDataOffset);
+  base::Optional<AttestedCredentialData> attested_credential_data;
+  if (flag_byte & static_cast<uint8_t>(Flag::kAttestation)) {
+    auto maybe_result =
+        AttestedCredentialData::ConsumeFromCtapResponse(auth_data);
+    if (!maybe_result) {
+      return base::nullopt;
+    }
+    std::tie(attested_credential_data, auth_data) = std::move(*maybe_result);
+  }
+
+  base::Optional<cbor::Value> extensions;
+  if (flag_byte & static_cast<uint8_t>(Flag::kExtensionDataIncluded)) {
+    extensions = cbor::Reader::Read(auth_data);
+    if (!extensions || !extensions->is_map()) {
+      return base::nullopt;
+    }
+  } else if (!auth_data.empty()) {
+    return base::nullopt;
+  }
+
+  return AuthenticatorData(application_parameter, flag_byte, counter,
+                           std::move(attested_credential_data),
+                           std::move(extensions));
 }
 
 AuthenticatorData::AuthenticatorData(
-    std::vector<uint8_t> application_parameter,
+    base::span<const uint8_t, kRpIdHashLength> application_parameter,
     uint8_t flags,
-    std::vector<uint8_t> counter,
-    base::Optional<AttestedCredentialData> data)
-    : application_parameter_(std::move(application_parameter)),
+    base::span<const uint8_t, kSignCounterLength> counter,
+    base::Optional<AttestedCredentialData> data,
+    base::Optional<cbor::Value> extensions)
+    : application_parameter_(
+          fido_parsing_utils::Materialize(application_parameter)),
       flags_(flags),
-      counter_(std::move(counter)),
-      attested_data_(std::move(data)) {
-  // TODO(kpaulhamus): use std::array for these small, fixed-sized vectors.
-  CHECK_EQ(counter_.size(), 4u);
+      counter_(fido_parsing_utils::Materialize(counter)),
+      attested_data_(std::move(data)),
+      extensions_(std::move(extensions)) {
+  DCHECK(!extensions_ || extensions_->is_map());
+  DCHECK_EQ((flags_ & static_cast<uint8_t>(Flag::kExtensionDataIncluded)) != 0,
+            !!extensions_);
+  DCHECK_EQ(((flags_ & static_cast<uint8_t>(Flag::kAttestation)) != 0),
+            !!attested_data_);
 }
 
 AuthenticatorData::AuthenticatorData(AuthenticatorData&& other) = default;
@@ -72,12 +93,21 @@ std::vector<uint8_t> AuthenticatorData::SerializeToByteArray() const {
   fido_parsing_utils::Append(&authenticator_data, application_parameter_);
   authenticator_data.insert(authenticator_data.end(), flags_);
   fido_parsing_utils::Append(&authenticator_data, counter_);
+
   if (attested_data_) {
     // Attestations are returned in registration responses but not in assertion
     // responses.
     fido_parsing_utils::Append(&authenticator_data,
                                attested_data_->SerializeAsBytes());
   }
+
+  if (extensions_) {
+    const auto maybe_extensions = cbor::Writer::Write(*extensions_);
+    if (maybe_extensions) {
+      fido_parsing_utils::Append(&authenticator_data, *maybe_extensions);
+    }
+  }
+
   return authenticator_data;
 }
 

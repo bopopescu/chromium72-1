@@ -111,6 +111,11 @@ void FakeModelTypeSyncBridge::Store::RemoveData(const std::string& key) {
   data_store_.erase(key);
 }
 
+void FakeModelTypeSyncBridge::Store::ClearAllData() {
+  data_change_count_++;
+  data_store_.clear();
+}
+
 void FakeModelTypeSyncBridge::Store::RemoveMetadata(const std::string& key) {
   metadata_change_count_++;
   metadata_store_.erase(key);
@@ -195,6 +200,11 @@ void FakeModelTypeSyncBridge::DeleteItem(const std::string& key) {
   }
 }
 
+void FakeModelTypeSyncBridge::MimicBugToLooseItemWithoutNotifyingProcessor(
+    const std::string& key) {
+  db_->RemoveData(key);
+}
+
 std::unique_ptr<MetadataChangeList>
 FakeModelTypeSyncBridge::CreateMetadataChangeList() {
   return std::make_unique<InMemoryMetadataChangeList>();
@@ -218,7 +228,8 @@ base::Optional<ModelError> FakeModelTypeSyncBridge::MergeSyncData(
     if (storage_key.empty()) {
       storage_key = GetStorageKeyImpl(change.data());
       if (base::ContainsKey(keys_to_ignore_, storage_key)) {
-        change_processor()->UntrackEntity(change.data());
+        change_processor()->UntrackEntityForClientTagHash(
+            change.data().client_tag_hash);
       } else {
         change_processor()->UpdateStorageKey(change.data(), storage_key,
                                              metadata_change_list.get());
@@ -295,13 +306,16 @@ void FakeModelTypeSyncBridge::GetData(StorageKeyList keys,
 
   auto batch = std::make_unique<MutableDataBatch>();
   for (const std::string& key : keys) {
-    DCHECK(db_->HasData(key)) << "No data for " << key;
-    batch->Put(key, CopyEntityData(db_->GetData(key)));
+    if (db_->HasData(key)) {
+      batch->Put(key, CopyEntityData(db_->GetData(key)));
+    } else {
+      DLOG(WARNING) << "No data for " << key;
+    }
   }
   std::move(callback).Run(std::move(batch));
 }
 
-void FakeModelTypeSyncBridge::GetAllData(DataCallback callback) {
+void FakeModelTypeSyncBridge::GetAllDataForDebugging(DataCallback callback) {
   if (error_next_) {
     error_next_ = false;
     change_processor()->ReportError({FROM_HERE, "boom"});
@@ -347,10 +361,22 @@ ConflictResolution FakeModelTypeSyncBridge::ResolveConflict(
   return std::move(*conflict_resolution_);
 }
 
+ModelTypeSyncBridge::StopSyncResponse
+FakeModelTypeSyncBridge::ApplyStopSyncChanges(
+    std::unique_ptr<MetadataChangeList> delete_metadata_change_list) {
+  ModelTypeSyncBridge::ApplyStopSyncChanges(
+      std::move(delete_metadata_change_list));
+  return stop_sync_response_;
+}
+
 void FakeModelTypeSyncBridge::SetConflictResolution(
     ConflictResolution resolution) {
   conflict_resolution_ =
       std::make_unique<ConflictResolution>(std::move(resolution));
+}
+
+void FakeModelTypeSyncBridge::SetStopSyncResponse(StopSyncResponse response) {
+  stop_sync_response_ = response;
 }
 
 void FakeModelTypeSyncBridge::ErrorOnNextCall() {

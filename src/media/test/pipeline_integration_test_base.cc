@@ -59,7 +59,7 @@ static std::vector<std::unique_ptr<VideoDecoder>> CreateVideoDecodersForTest(
     CreateVideoDecodersCB prepend_video_decoders_cb) {
   std::vector<std::unique_ptr<VideoDecoder>> video_decoders;
 
-  if (!prepend_video_decoders_cb.is_null()) {
+  if (prepend_video_decoders_cb) {
     video_decoders = prepend_video_decoders_cb.Run();
     DCHECK(!video_decoders.empty());
   }
@@ -69,8 +69,7 @@ static std::vector<std::unique_ptr<VideoDecoder>> CreateVideoDecodersForTest(
 #endif
 
 #if BUILDFLAG(ENABLE_AV1_DECODER)
-  if (base::FeatureList::IsEnabled(kAv1Decoder))
-    video_decoders.push_back(std::make_unique<AomVideoDecoder>(media_log));
+  video_decoders.push_back(std::make_unique<AomVideoDecoder>(media_log));
 #endif
 
 #if BUILDFLAG(ENABLE_FFMPEG_VIDEO_DECODERS)
@@ -85,7 +84,7 @@ static std::vector<std::unique_ptr<AudioDecoder>> CreateAudioDecodersForTest(
     CreateAudioDecodersCB prepend_audio_decoders_cb) {
   std::vector<std::unique_ptr<AudioDecoder>> audio_decoders;
 
-  if (!prepend_audio_decoders_cb.is_null()) {
+  if (prepend_audio_decoders_cb) {
     audio_decoders = prepend_audio_decoders_cb.Run();
     DCHECK(!audio_decoders.empty());
   }
@@ -131,7 +130,6 @@ PipelineIntegrationTestBase::PipelineIntegrationTestBase()
       ended_(false),
       pipeline_status_(PIPELINE_OK),
       last_video_frame_format_(PIXEL_FORMAT_UNKNOWN),
-      last_video_frame_color_space_(COLOR_SPACE_UNSPECIFIED),
       current_duration_(kInfiniteDuration),
       renderer_factory_(new RendererFactoryImpl(this)) {
   ResetVideoHash();
@@ -177,7 +175,7 @@ void PipelineIntegrationTestBase::DemuxerEncryptedMediaInitDataCB(
     EmeInitDataType type,
     const std::vector<uint8_t>& init_data) {
   DCHECK(!init_data.empty());
-  CHECK(!encrypted_media_init_data_cb_.is_null());
+  CHECK(encrypted_media_init_data_cb_);
   encrypted_media_init_data_cb_.Run(type, init_data);
 }
 
@@ -199,7 +197,7 @@ void PipelineIntegrationTestBase::OnEnded() {
   ended_ = true;
   pipeline_status_ = PIPELINE_OK;
   if (on_ended_closure_)
-    base::ResetAndReturn(&on_ended_closure_).Run();
+    std::move(on_ended_closure_).Run();
 }
 
 bool PipelineIntegrationTestBase::WaitUntilOnEnded() {
@@ -225,7 +223,7 @@ void PipelineIntegrationTestBase::OnError(PipelineStatus status) {
   pipeline_status_ = status;
   pipeline_->Stop();
   if (on_error_closure_)
-    base::ResetAndReturn(&on_error_closure_).Run();
+    std::move(on_error_closure_).Run();
 }
 
 PipelineStatus PipelineIntegrationTestBase::StartInternal(
@@ -400,7 +398,7 @@ void PipelineIntegrationTestBase::FailTest(PipelineStatus status) {
 void PipelineIntegrationTestBase::QuitAfterCurrentTimeTask(
     base::TimeDelta quit_time,
     base::OnceClosure quit_closure) {
-  if (pipeline_->GetMediaTime() >= quit_time ||
+  if (!pipeline_ || pipeline_->GetMediaTime() >= quit_time ||
       pipeline_status_ != PIPELINE_OK) {
     std::move(quit_closure).Run();
     return;
@@ -440,11 +438,12 @@ void PipelineIntegrationTestBase::CreateDemuxer(
 #if BUILDFLAG(ENABLE_FFMPEG)
   demuxer_ = std::unique_ptr<Demuxer>(new FFmpegDemuxer(
       scoped_task_environment_.GetMainThreadTaskRunner(), data_source_.get(),
-      base::Bind(&PipelineIntegrationTestBase::DemuxerEncryptedMediaInitDataCB,
-                 base::Unretained(this)),
+      base::BindRepeating(
+          &PipelineIntegrationTestBase::DemuxerEncryptedMediaInitDataCB,
+          base::Unretained(this)),
       base::Bind(&PipelineIntegrationTestBase::DemuxerMediaTracksUpdatedCB,
                  base::Unretained(this)),
-      &media_log_));
+      &media_log_, true));
 #endif
 }
 
@@ -524,9 +523,7 @@ std::unique_ptr<Renderer> PipelineIntegrationTestBase::CreateRenderer(
 void PipelineIntegrationTestBase::OnVideoFramePaint(
     const scoped_refptr<VideoFrame>& frame) {
   last_video_frame_format_ = frame->format();
-  int result;
-  if (frame->metadata()->GetInteger(VideoFrameMetadata::COLOR_SPACE, &result))
-    last_video_frame_color_space_ = static_cast<ColorSpace>(result);
+  last_video_frame_color_space_ = frame->ColorSpace();
   if (!hashing_enabled_ || last_frame_ == frame)
     return;
   last_frame_ = frame;

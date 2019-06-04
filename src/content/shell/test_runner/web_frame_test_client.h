@@ -9,7 +9,7 @@
 #include <string>
 
 #include "base/macros.h"
-#include "third_party/blink/public/web/web_frame_client.h"
+#include "third_party/blink/public/web/web_local_frame_client.h"
 
 namespace test_runner {
 
@@ -18,11 +18,12 @@ class WebFrameTestProxyBase;
 class WebTestDelegate;
 class WebViewTestProxyBase;
 
-// WebFrameTestClient implements WebFrameClient interface, providing behavior
-// expected by tests.  WebFrameTestClient ends up used by WebFrameTestProxy
-// which coordinates forwarding WebFrameClient calls either to
-// WebFrameTestClient or to the product code (i.e. to RenderFrameImpl).
-class WebFrameTestClient : public blink::WebFrameClient {
+// WebFrameTestClient implements WebLocalFrameClient interface, providing
+// behavior expected by tests.  WebFrameTestClient ends up used by
+// WebFrameTestProxy which coordinates forwarding WebLocalFrameClient calls
+// either to WebFrameTestClient or to the product code (i.e. to
+// RenderFrameImpl).
+class WebFrameTestClient : public blink::WebLocalFrameClient {
  public:
   // Caller has to ensure that all arguments (|delegate|,
   // |web_view_test_proxy_base_| and so forth) live longer than |this|.
@@ -31,8 +32,12 @@ class WebFrameTestClient : public blink::WebFrameClient {
                      WebFrameTestProxyBase* web_frame_test_proxy_base);
 
   ~WebFrameTestClient() override;
+  bool ShouldContinueNavigation(const blink::WebNavigationInfo& info);
 
-  // WebFrameClient overrides needed by WebFrameTestProxy.
+  static void PrintFrameDescription(WebTestDelegate* delegate,
+                                    blink::WebLocalFrame* frame);
+
+  // WebLocalFrameClient overrides needed by WebFrameTestProxy.
   void RunModalAlertDialog(const blink::WebString& message) override;
   bool RunModalConfirmDialog(const blink::WebString& message) override;
   bool RunModalPromptDialog(const blink::WebString& message,
@@ -40,7 +45,9 @@ class WebFrameTestClient : public blink::WebFrameClient {
                             blink::WebString* actual_value) override;
   bool RunModalBeforeUnloadDialog(bool is_reload) override;
   void PostAccessibilityEvent(const blink::WebAXObject& object,
-                              blink::WebAXEvent event) override;
+                              ax::mojom::Event event) override;
+  void MarkWebAXObjectDirty(const blink::WebAXObject& obj,
+                            bool subtree) override;
   void DidChangeSelection(bool is_selection_empty) override;
   void DidChangeContents() override;
   blink::WebPlugin* CreatePlugin(const blink::WebPluginParams& params) override;
@@ -51,47 +58,29 @@ class WebFrameTestClient : public blink::WebFrameClient {
                               unsigned source_line,
                               const blink::WebString& stack_trace) override;
   void DownloadURL(const blink::WebURLRequest& request,
+                   blink::WebLocalFrameClient::CrossOriginRedirects
+                       cross_origin_redirect_behavior,
                    mojo::ScopedMessagePipeHandle blob_url_token) override;
-  void LoadErrorPage(int reason) override;
-  void DidStartProvisionalLoad(blink::WebDocumentLoader* loader,
-                               blink::WebURLRequest& request) override;
-  void DidReceiveServerRedirectForProvisionalLoad() override;
-  void DidFailProvisionalLoad(const blink::WebURLError& error,
-                              blink::WebHistoryCommitType commit_type) override;
-  void DidCommitProvisionalLoad(const blink::WebHistoryItem& history_item,
-                                blink::WebHistoryCommitType history_type,
-                                blink::WebGlobalObjectReusePolicy) override;
-  void DidFinishSameDocumentNavigation(
-      const blink::WebHistoryItem& history_item,
-      blink::WebHistoryCommitType history_type,
-      bool content_initiated) override;
   void DidReceiveTitle(const blink::WebString& title,
                        blink::WebTextDirection direction) override;
   void DidChangeIcon(blink::WebIconURL::Type icon_type) override;
-  void DidFinishDocumentLoad() override;
-  void DidHandleOnloadEvents() override;
   void DidFailLoad(const blink::WebURLError& error,
                    blink::WebHistoryCommitType commit_type) override;
-  void DidFinishLoad() override;
+  void DidStartLoading() override;
   void DidStopLoading() override;
-  void DidDetectXSS(const blink::WebURL& insecure_url,
-                    bool did_block_entire_page) override;
   void DidDispatchPingLoader(const blink::WebURL& url) override;
   void WillSendRequest(blink::WebURLRequest& request) override;
   void DidReceiveResponse(const blink::WebURLResponse& response) override;
-  blink::WebNavigationPolicy DecidePolicyForNavigation(
-      const blink::WebFrameClient::NavigationPolicyInfo& info) override;
   void CheckIfAudioSinkExistsAndIsAuthorized(
       const blink::WebString& sink_id,
-      blink::WebSetSinkIdCallbacks* web_callbacks) override;
-  blink::WebSpeechRecognizer* SpeechRecognizer() override;
+      std::unique_ptr<blink::WebSetSinkIdCallbacks> web_callbacks) override;
   void DidClearWindowObject() override;
-  bool RunFileChooser(const blink::WebFileChooserParams& params,
-                      blink::WebFileChooserCompletion* completion) override;
   blink::WebEffectiveConnectionType GetEffectiveConnectionType() override;
 
  private:
   TestRunner* test_runner();
+  void HandleWebAccessibilityEvent(const blink::WebAXObject& obj,
+                                   const char* event_name);
 
   // Borrowed pointers to other parts of Layout Tests state.
   WebTestDelegate* delegate_;

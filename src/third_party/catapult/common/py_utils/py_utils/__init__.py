@@ -4,6 +4,8 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
+from __future__ import print_function
+
 import functools
 import inspect
 import os
@@ -74,8 +76,8 @@ _AddDirToPythonPath(os.path.join(GetCatapultDir(), 'third_party', 'mox3'))
 _AddDirToPythonPath(
     os.path.join(GetCatapultDir(), 'third_party', 'pyfakefs'))
 
-from devil.utils import timeout_retry
-from devil.utils import reraiser_thread
+from devil.utils import timeout_retry  # pylint: disable=wrong-import-position
+from devil.utils import reraiser_thread  # pylint: disable=wrong-import-position
 
 
 # Decorator that adds timeout functionality to a function.
@@ -100,7 +102,7 @@ def TimeoutDeco(func, default_timeout):
     try:
       return timeout_retry.Run(func, timeout, 0, args=args)
     except reraiser_thread.TimeoutError:
-      print '%s timed out.' % func.__name__
+      print('%s timed out.' % func.__name__)
       return False
   return RunWithTimeout
 

@@ -25,6 +25,23 @@ EMPTY_ANDROID_MANIFEST_PATH = os.path.join(
     _SOURCE_ROOT, 'build', 'android', 'AndroidManifest.xml')
 
 
+# A variation of this lists also exists in:
+# //base/android/java/src/org/chromium/base/LocaleUtils.java
+# //ui/android/java/src/org/chromium/base/LocalizationUtils.java
+CHROME_TO_ANDROID_LOCALE_MAP = {
+    'en-GB': 'en-rGB',
+    'en-US': 'en-rUS',
+    'es-419': 'es-rUS',
+    'fil': 'tl',
+    'he': 'iw',
+    'id': 'in',
+    'pt-PT': 'pt-rPT',
+    'pt-BR': 'pt-rBR',
+    'yi': 'ji',
+    'zh-CN': 'zh-rCN',
+    'zh-TW': 'zh-rTW',
+}
+
 # Represents a line from a R.txt file.
 _TextSymbolEntry = collections.namedtuple('RTextEntry',
     ('java_type', 'resource_type', 'name', 'value'))
@@ -197,7 +214,7 @@ def CreateRJavaFiles(srcjar_dir, package, main_r_txt_file,
   packages = list(extra_res_packages)
   r_txt_files = list(extra_r_txt_files)
 
-  if package not in packages:
+  if package and package not in packages:
     # Sometimes, an apk target and a resources target share the same
     # AndroidManifest.xml and thus |package| will already be in |packages|.
     packages.append(package)
@@ -312,7 +329,11 @@ public final class R {
         public static final {{ e.java_type }} {{ e.name }} = {{ e.value }};
         {% endfor %}
         {% for e in non_final_resources[resource_type] %}
+            {% if e.value != '0' %}
         public static {{ e.java_type }} {{ e.name }} = {{ e.value }};
+            {% else %}
+        public static {{ e.java_type }} {{ e.name }};
+            {% endif %}
         {% endfor %}
     }
     {% endfor %}
@@ -386,11 +407,22 @@ def ExtractDeps(dep_zips, deps_dir):
 
 
 class _ResourceBuildContext(object):
-  """A temporary directory for packaging and compiling Android resources."""
-  def __init__(self):
+  """A temporary directory for packaging and compiling Android resources.
+
+  Args:
+    temp_dir: Optional root build directory path. If None, a temporary
+      directory will be created, and removed in Close().
+  """
+  def __init__(self, temp_dir=None):
     """Initialized the context."""
     # The top-level temporary directory.
-    self.temp_dir = tempfile.mkdtemp()
+    if temp_dir:
+      self.temp_dir = temp_dir
+      self.remove_on_exit = False
+    else:
+      self.temp_dir = tempfile.mkdtemp()
+      self.remove_on_exit = True
+
     # A location to store resources extracted form dependency zip files.
     self.deps_dir = os.path.join(self.temp_dir, 'deps')
     os.mkdir(self.deps_dir)
@@ -405,14 +437,15 @@ class _ResourceBuildContext(object):
 
   def Close(self):
     """Close the context and destroy all temporary files."""
-    shutil.rmtree(self.temp_dir)
+    if self.remove_on_exit:
+      shutil.rmtree(self.temp_dir)
 
 
 @contextlib.contextmanager
-def BuildContext():
+def BuildContext(temp_dir=None):
   """Generator for a _ResourceBuildContext instance."""
   try:
-    context = _ResourceBuildContext()
+    context = _ResourceBuildContext(temp_dir)
     yield context
   finally:
     context.Close()
@@ -432,11 +465,16 @@ def ResourceArgsParser():
 
   build_utils.AddDepfileOption(output_opts)
 
-  input_opts.add_argument('--android-sdk-jars', required=True,
-                        help='Path to the android.jar file.')
+  input_opts.add_argument('--include-resources', required=True, action="append",
+                        help='Paths to arsc resource files used to link '
+                             'against. Can be specified multiple times.')
 
   input_opts.add_argument('--aapt-path', required=True,
                          help='Path to the Android aapt tool')
+
+  input_opts.add_argument('--aapt2-path',
+                          help='Path to the Android aapt2 tool. If in different'
+                          ' directory from --aapt-path.')
 
   input_opts.add_argument('--dependencies-res-zips', required=True,
                     help='Resources zip archives from dependents. Required to '
@@ -468,7 +506,11 @@ def HandleCommonOptions(options):
     options: the result of parse_args() on the parser returned by
         ResourceArgsParser(). This function updates a few common fields.
   """
-  options.android_sdk_jars = build_utils.ParseGnList(options.android_sdk_jars)
+  options.include_resources = [build_utils.ParseGnList(r) for r in
+                               options.include_resources]
+  # Flatten list of include resources list to make it easier to use.
+  options.include_resources = [r for resources in options.include_resources
+                               for r in resources]
 
   options.dependencies_res_zips = (
       build_utils.ParseGnList(options.dependencies_res_zips))
@@ -485,3 +527,6 @@ def HandleCommonOptions(options):
         build_utils.ParseGnList(options.extra_r_text_files))
   else:
     options.extra_r_text_files = []
+
+  if not options.aapt2_path:
+    options.aapt2_path = options.aapt_path + '2'

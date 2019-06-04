@@ -13,10 +13,7 @@
 #include "api/audio/audio_frame.h"
 #include "audio/utility/audio_frame_operations.h"
 #include "common_audio/resampler/include/push_resampler.h"
-#include "common_audio/signal_processing/include/signal_processing_library.h"
-#include "common_types.h"  // NOLINT(build/include)
 #include "rtc_base/checks.h"
-#include "rtc_base/logging.h"
 
 namespace webrtc {
 namespace voe {
@@ -68,9 +65,9 @@ void RemixAndResample(const int16_t* src_data,
   // how much to zero here; or 2) make resampler accept a hint that the input is
   // zeroed.
   const size_t src_length = samples_per_channel * audio_ptr_num_channels;
-  int out_length = resampler->Resample(audio_ptr, src_length,
-                                       dst_frame->mutable_data(),
-                                       AudioFrame::kMaxDataSizeSamples);
+  int out_length =
+      resampler->Resample(audio_ptr, src_length, dst_frame->mutable_data(),
+                          AudioFrame::kMaxDataSizeSamples);
   if (out_length == -1) {
     FATAL() << "Resample failed: audio_ptr = " << audio_ptr
             << ", src_length = " << src_length

@@ -8,15 +8,13 @@
 #define CORE_FXCRT_XML_CFX_XMLELEMENT_H_
 
 #include <map>
-#include <memory>
-#include <vector>
 
 #include "core/fxcrt/fx_string.h"
 #include "core/fxcrt/xml/cfx_xmlnode.h"
 
 class CFX_XMLDocument;
 
-class CFX_XMLElement : public CFX_XMLNode {
+class CFX_XMLElement final : public CFX_XMLNode {
  public:
   explicit CFX_XMLElement(const WideString& wsTag);
   ~CFX_XMLElement() override;
@@ -26,7 +24,7 @@ class CFX_XMLElement : public CFX_XMLNode {
   CFX_XMLNode* Clone(CFX_XMLDocument* doc) override;
   void Save(const RetainPtr<IFX_SeekableWriteStream>& pXMLStream) override;
 
-  WideString GetName() const { return name_; }
+  const WideString& GetName() const { return name_; }
 
   const std::map<WideString, WideString>& GetAttributes() const {
     return attrs_;
@@ -50,8 +48,20 @@ class CFX_XMLElement : public CFX_XMLNode {
  private:
   WideString AttributeToString(const WideString& name, const WideString& value);
 
-  WideString name_;
+  const WideString name_;
   std::map<WideString, WideString> attrs_;
 };
+
+inline CFX_XMLElement* ToXMLElement(CFX_XMLNode* pNode) {
+  return pNode && pNode->GetType() == FX_XMLNODE_Element
+             ? static_cast<CFX_XMLElement*>(pNode)
+             : nullptr;
+}
+
+inline const CFX_XMLElement* ToXMLElement(const CFX_XMLNode* pNode) {
+  return pNode && pNode->GetType() == FX_XMLNODE_Element
+             ? static_cast<const CFX_XMLElement*>(pNode)
+             : nullptr;
+}
 
 #endif  // CORE_FXCRT_XML_CFX_XMLELEMENT_H_

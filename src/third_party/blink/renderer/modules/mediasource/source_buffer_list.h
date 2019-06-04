@@ -37,8 +37,8 @@
 
 namespace blink {
 
+class EventQueue;
 class SourceBuffer;
-class MediaElementEventQueue;
 
 class SourceBufferList final : public EventTargetWithInlineData,
                                public ContextClient {
@@ -47,24 +47,26 @@ class SourceBufferList final : public EventTargetWithInlineData,
 
  public:
   static SourceBufferList* Create(ExecutionContext* context,
-                                  MediaElementEventQueue* async_event_queue) {
-    return new SourceBufferList(context, async_event_queue);
+                                  EventQueue* async_event_queue) {
+    return MakeGarbageCollected<SourceBufferList>(context, async_event_queue);
   }
+
+  SourceBufferList(ExecutionContext*, EventQueue*);
   ~SourceBufferList() override;
 
   unsigned length() const { return list_.size(); }
 
-  DEFINE_ATTRIBUTE_EVENT_LISTENER(addsourcebuffer);
-  DEFINE_ATTRIBUTE_EVENT_LISTENER(removesourcebuffer);
+  DEFINE_ATTRIBUTE_EVENT_LISTENER(addsourcebuffer, kAddsourcebuffer);
+  DEFINE_ATTRIBUTE_EVENT_LISTENER(removesourcebuffer, kRemovesourcebuffer);
 
   SourceBuffer* item(unsigned index) const {
     return (index < list_.size()) ? list_[index].Get() : nullptr;
   }
 
   void Add(SourceBuffer*);
-  void insert(size_t position, SourceBuffer*);
+  void insert(wtf_size_t position, SourceBuffer*);
   void Remove(SourceBuffer*);
-  size_t Find(SourceBuffer* buffer) { return list_.Find(buffer); }
+  wtf_size_t Find(SourceBuffer* buffer) { return list_.Find(buffer); }
   bool Contains(SourceBuffer* buffer) {
     return list_.Find(buffer) != kNotFound;
   }
@@ -79,11 +81,9 @@ class SourceBufferList final : public EventTargetWithInlineData,
   void Trace(blink::Visitor*) override;
 
  private:
-  SourceBufferList(ExecutionContext*, MediaElementEventQueue*);
-
   void ScheduleEvent(const AtomicString&);
 
-  Member<MediaElementEventQueue> async_event_queue_;
+  Member<EventQueue> async_event_queue_;
 
   HeapVector<Member<SourceBuffer>> list_;
 };

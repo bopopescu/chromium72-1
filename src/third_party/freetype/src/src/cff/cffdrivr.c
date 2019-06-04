@@ -1,19 +1,19 @@
-/***************************************************************************/
-/*                                                                         */
-/*  cffdrivr.c                                                             */
-/*                                                                         */
-/*    OpenType font driver implementation (body).                          */
-/*                                                                         */
-/*  Copyright 1996-2018 by                                                 */
-/*  David Turner, Robert Wilhelm, and Werner Lemberg.                      */
-/*                                                                         */
-/*  This file is part of the FreeType project, and may only be used,       */
-/*  modified, and distributed under the terms of the FreeType project      */
-/*  license, LICENSE.TXT.  By continuing to use, modify, or distribute     */
-/*  this file you indicate that you have read the license and              */
-/*  understand and accept it fully.                                        */
-/*                                                                         */
-/***************************************************************************/
+/****************************************************************************
+ *
+ * cffdrivr.c
+ *
+ *   OpenType font driver implementation (body).
+ *
+ * Copyright 1996-2018 by
+ * David Turner, Robert Wilhelm, and Werner Lemberg.
+ *
+ * This file is part of the FreeType project, and may only be used,
+ * modified, and distributed under the terms of the FreeType project
+ * license, LICENSE.TXT.  By continuing to use, modify, or distribute
+ * this file you indicate that you have read the license and
+ * understand and accept it fully.
+ *
+ */
 
 
 #include <ft2build.h>
@@ -49,14 +49,14 @@
 #include FT_DRIVER_H
 
 
-  /*************************************************************************/
-  /*                                                                       */
-  /* The macro FT_COMPONENT is used in trace mode.  It is an implicit      */
-  /* parameter of the FT_TRACE() and FT_ERROR() macros, used to print/log  */
-  /* messages during execution.                                            */
-  /*                                                                       */
+  /**************************************************************************
+   *
+   * The macro FT_COMPONENT is used in trace mode.  It is an implicit
+   * parameter of the FT_TRACE() and FT_ERROR() macros, used to print/log
+   * messages during execution.
+   */
 #undef  FT_COMPONENT
-#define FT_COMPONENT  trace_cffdriver
+#define FT_COMPONENT  cffdriver
 
 
   /*************************************************************************/
@@ -72,38 +72,42 @@
   /*************************************************************************/
 
 
-  /*************************************************************************/
-  /*                                                                       */
-  /* <Function>                                                            */
-  /*    cff_get_kerning                                                    */
-  /*                                                                       */
-  /* <Description>                                                         */
-  /*    A driver method used to return the kerning vector between two      */
-  /*    glyphs of the same face.                                           */
-  /*                                                                       */
-  /* <Input>                                                               */
-  /*    face        :: A handle to the source face object.                 */
-  /*                                                                       */
-  /*    left_glyph  :: The index of the left glyph in the kern pair.       */
-  /*                                                                       */
-  /*    right_glyph :: The index of the right glyph in the kern pair.      */
-  /*                                                                       */
-  /* <Output>                                                              */
-  /*    kerning     :: The kerning vector.  This is in font units for      */
-  /*                   scalable formats, and in pixels for fixed-sizes     */
-  /*                   formats.                                            */
-  /*                                                                       */
-  /* <Return>                                                              */
-  /*    FreeType error code.  0 means success.                             */
-  /*                                                                       */
-  /* <Note>                                                                */
-  /*    Only horizontal layouts (left-to-right & right-to-left) are        */
-  /*    supported by this function.  Other layouts, or more sophisticated  */
-  /*    kernings, are out of scope of this method (the basic driver        */
-  /*    interface is meant to be simple).                                  */
-  /*                                                                       */
-  /*    They can be implemented by format-specific interfaces.             */
-  /*                                                                       */
+  /**************************************************************************
+   *
+   * @Function:
+   *   cff_get_kerning
+   *
+   * @Description:
+   *   A driver method used to return the kerning vector between two
+   *   glyphs of the same face.
+   *
+   * @Input:
+   *   face ::
+   *     A handle to the source face object.
+   *
+   *   left_glyph ::
+   *     The index of the left glyph in the kern pair.
+   *
+   *   right_glyph ::
+   *     The index of the right glyph in the kern pair.
+   *
+   * @Output:
+   *   kerning ::
+   *     The kerning vector.  This is in font units for
+   *     scalable formats, and in pixels for fixed-sizes
+   *     formats.
+   *
+   * @Return:
+   *   FreeType error code.  0 means success.
+   *
+   * @Note:
+   *   Only horizontal layouts (left-to-right & right-to-left) are
+   *   supported by this function.  Other layouts, or more sophisticated
+   *   kernings, are out of scope of this method (the basic driver
+   *   interface is meant to be simple).
+   *
+   *   They can be implemented by format-specific interfaces.
+   */
   FT_CALLBACK_DEF( FT_Error )
   cff_get_kerning( FT_Face     ttface,          /* TT_Face */
                    FT_UInt     left_glyph,
@@ -124,32 +128,36 @@
   }
 
 
-  /*************************************************************************/
-  /*                                                                       */
-  /* <Function>                                                            */
-  /*    cff_glyph_load                                                     */
-  /*                                                                       */
-  /* <Description>                                                         */
-  /*    A driver method used to load a glyph within a given glyph slot.    */
-  /*                                                                       */
-  /* <Input>                                                               */
-  /*    slot        :: A handle to the target slot object where the glyph  */
-  /*                   will be loaded.                                     */
-  /*                                                                       */
-  /*    size        :: A handle to the source face size at which the glyph */
-  /*                   must be scaled, loaded, etc.                        */
-  /*                                                                       */
-  /*    glyph_index :: The index of the glyph in the font file.            */
-  /*                                                                       */
-  /*    load_flags  :: A flag indicating what to load for this glyph.  The */
-  /*                   FT_LOAD_??? constants can be used to control the    */
-  /*                   glyph loading process (e.g., whether the outline    */
-  /*                   should be scaled, whether to load bitmaps or not,   */
-  /*                   whether to hint the outline, etc).                  */
-  /*                                                                       */
-  /* <Return>                                                              */
-  /*    FreeType error code.  0 means success.                             */
-  /*                                                                       */
+  /**************************************************************************
+   *
+   * @Function:
+   *   cff_glyph_load
+   *
+   * @Description:
+   *   A driver method used to load a glyph within a given glyph slot.
+   *
+   * @Input:
+   *   slot ::
+   *     A handle to the target slot object where the glyph
+   *     will be loaded.
+   *
+   *   size ::
+   *     A handle to the source face size at which the glyph
+   *     must be scaled, loaded, etc.
+   *
+   *   glyph_index ::
+   *     The index of the glyph in the font file.
+   *
+   *   load_flags ::
+   *     A flag indicating what to load for this glyph.  The
+   *     FT_LOAD_??? constants can be used to control the
+   *     glyph loading process (e.g., whether the outline
+   *     should be scaled, whether to load bitmaps or not,
+   *     whether to hint the outline, etc).
+   *
+   * @Return:
+   *   FreeType error code.  0 means success.
+   */
   FT_CALLBACK_DEF( FT_Error )
   cff_glyph_load( FT_GlyphSlot  cffslot,      /* CFF_GlyphSlot */
                   FT_Size       cffsize,      /* CFF_Size      */
@@ -301,7 +309,7 @@
 
 
   /*
-   *  GLYPH DICT SERVICE
+   * GLYPH DICT SERVICE
    *
    */
 
@@ -340,7 +348,7 @@
         FT_ERROR(( "cff_get_glyph_name:"
                    " cannot get glyph name from a CFF2 font\n"
                    "                   "
-                   " without the `PSNames' module\n" ));
+                   " without the `psnames' module\n" ));
         error = FT_THROW( Missing_Module );
         goto Exit;
       }
@@ -351,7 +359,7 @@
       FT_ERROR(( "cff_get_glyph_name:"
                  " cannot get glyph name from CFF & CEF fonts\n"
                  "                   "
-                 " without the `PSNames' module\n" ));
+                 " without the `psnames' module\n" ));
       error = FT_THROW( Missing_Module );
       goto Exit;
     }
@@ -407,7 +415,7 @@
         FT_ERROR(( "cff_get_name_index:"
                    " cannot get glyph index from a CFF2 font\n"
                    "                   "
-                   " without the `PSNames' module\n" ));
+                   " without the `psnames' module\n" ));
         return 0;
       }
     }
@@ -445,7 +453,7 @@
 
 
   /*
-   *  POSTSCRIPT INFO SERVICE
+   * POSTSCRIPT INFO SERVICE
    *
    */
 
@@ -592,7 +600,7 @@
 
 
   /*
-   *  POSTSCRIPT NAME SERVICE
+   * POSTSCRIPT NAME SERVICE
    *
    */
 
@@ -681,7 +689,7 @@
 
 
   /*
-   *  CID INFO SERVICE
+   * CID INFO SERVICE
    *
    */
   static FT_Error
@@ -787,7 +795,7 @@
         goto Fail;
       }
 
-      if ( glyph_index > cff->num_glyphs )
+      if ( glyph_index >= cff->num_glyphs )
       {
         error = FT_THROW( Invalid_Argument );
         goto Fail;
@@ -817,7 +825,7 @@
 
 
   /*
-   *  PROPERTY SERVICE
+   * PROPERTY SERVICE
    *
    */
 
@@ -831,7 +839,7 @@
 #ifdef TT_CONFIG_OPTION_GX_VAR_SUPPORT
 
   /*
-   *  MULTIPLE MASTER SERVICE
+   * MULTIPLE MASTER SERVICE
    *
    */
 
@@ -856,6 +864,30 @@
 
 
     return mm->get_mm_blend( FT_FACE( face ), num_coords, coords );
+  }
+
+
+  static FT_Error
+  cff_set_mm_weightvector( CFF_Face   face,
+                           FT_UInt    len,
+                           FT_Fixed*  weightvector )
+  {
+    FT_Service_MultiMasters  mm = (FT_Service_MultiMasters)face->mm;
+
+
+    return mm->set_mm_weightvector( FT_FACE( face ), len, weightvector );
+  }
+
+
+  static FT_Error
+  cff_get_mm_weightvector( CFF_Face   face,
+                           FT_UInt*   len,
+                           FT_Fixed*  weightvector )
+  {
+    FT_Service_MultiMasters  mm = (FT_Service_MultiMasters)face->mm;
+
+
+    return mm->get_mm_weightvector( FT_FACE( face ), len, weightvector );
   }
 
 
@@ -908,22 +940,24 @@
   FT_DEFINE_SERVICE_MULTIMASTERSREC(
     cff_service_multi_masters,
 
-    (FT_Get_MM_Func)        NULL,                   /* get_mm         */
-    (FT_Set_MM_Design_Func) NULL,                   /* set_mm_design  */
-    (FT_Set_MM_Blend_Func)  cff_set_mm_blend,       /* set_mm_blend   */
-    (FT_Get_MM_Blend_Func)  cff_get_mm_blend,       /* get_mm_blend   */
-    (FT_Get_MM_Var_Func)    cff_get_mm_var,         /* get_mm_var     */
-    (FT_Set_Var_Design_Func)cff_set_var_design,     /* set_var_design */
-    (FT_Get_Var_Design_Func)cff_get_var_design,     /* get_var_design */
-    (FT_Set_Instance_Func)  cff_set_instance,       /* set_instance   */
+    (FT_Get_MM_Func)             NULL,                    /* get_mm              */
+    (FT_Set_MM_Design_Func)      NULL,                    /* set_mm_design       */
+    (FT_Set_MM_Blend_Func)       cff_set_mm_blend,        /* set_mm_blend        */
+    (FT_Get_MM_Blend_Func)       cff_get_mm_blend,        /* get_mm_blend        */
+    (FT_Get_MM_Var_Func)         cff_get_mm_var,          /* get_mm_var          */
+    (FT_Set_Var_Design_Func)     cff_set_var_design,      /* set_var_design      */
+    (FT_Get_Var_Design_Func)     cff_get_var_design,      /* get_var_design      */
+    (FT_Set_Instance_Func)       cff_set_instance,        /* set_instance        */
+    (FT_Set_MM_WeightVector_Func)cff_set_mm_weightvector, /* set_mm_weightvector */
+    (FT_Get_MM_WeightVector_Func)cff_get_mm_weightvector, /* get_mm_weightvector */
 
-    (FT_Get_Var_Blend_Func) cff_get_var_blend,      /* get_var_blend  */
-    (FT_Done_Blend_Func)    cff_done_blend          /* done_blend     */
+    (FT_Get_Var_Blend_Func)      cff_get_var_blend,       /* get_var_blend       */
+    (FT_Done_Blend_Func)         cff_done_blend           /* done_blend          */
   )
 
 
   /*
-   *  METRICS VARIATIONS SERVICE
+   * METRICS VARIATIONS SERVICE
    *
    */
 
@@ -967,7 +1001,7 @@
 
 
   /*
-   *  CFFLOAD SERVICE
+   * CFFLOAD SERVICE
    *
    */
 

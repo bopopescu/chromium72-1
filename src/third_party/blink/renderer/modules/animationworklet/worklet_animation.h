@@ -6,20 +6,22 @@
 #define THIRD_PARTY_BLINK_RENDERER_MODULES_ANIMATIONWORKLET_WORKLET_ANIMATION_H_
 
 #include "base/optional.h"
-#include "third_party/blink/renderer/bindings/core/v8/serialization/serialized_script_value.h"
 #include "third_party/blink/renderer/bindings/modules/v8/document_timeline_or_scroll_timeline.h"
 #include "third_party/blink/renderer/core/animation/animation.h"
 #include "third_party/blink/renderer/core/animation/animation_effect_owner.h"
 #include "third_party/blink/renderer/core/animation/keyframe_effect.h"
 #include "third_party/blink/renderer/core/animation/worklet_animation_base.h"
+#include "third_party/blink/renderer/modules/animationworklet/worklet_animation_options.h"
 #include "third_party/blink/renderer/modules/modules_export.h"
 #include "third_party/blink/renderer/platform/animation/compositor_animation.h"
 #include "third_party/blink/renderer/platform/animation/compositor_animation_client.h"
 #include "third_party/blink/renderer/platform/animation/compositor_animation_delegate.h"
+#include "third_party/blink/renderer/platform/graphics/animation_worklet_mutators_state.h"
 
 namespace blink {
 
 class AnimationEffectOrAnimationEffectSequence;
+class SerializedScriptValue;
 
 // The main-thread controller for a single AnimationWorklet animator instance.
 //
@@ -42,26 +44,35 @@ class MODULES_EXPORT WorkletAnimation : public WorkletAnimationBase,
 
  public:
   static WorkletAnimation* Create(
+      ScriptState*,
       String animator_name,
       const AnimationEffectOrAnimationEffectSequence&,
       ExceptionState&);
   static WorkletAnimation* Create(
+      ScriptState*,
       String animator_name,
       const AnimationEffectOrAnimationEffectSequence&,
       DocumentTimelineOrScrollTimeline,
       ExceptionState&);
   static WorkletAnimation* Create(
+      ScriptState*,
       String animator_name,
       const AnimationEffectOrAnimationEffectSequence&,
       DocumentTimelineOrScrollTimeline,
       scoped_refptr<SerializedScriptValue>,
       ExceptionState&);
 
+  WorkletAnimation(WorkletAnimationId id,
+                   const String& animator_name,
+                   Document&,
+                   const HeapVector<Member<KeyframeEffect>>&,
+                   AnimationTimeline*,
+                   scoped_refptr<SerializedScriptValue>);
   ~WorkletAnimation() override = default;
 
   AnimationTimeline* timeline() { return timeline_; }
   String playState();
-  void play();
+  void play(ExceptionState& exception_state);
   void cancel();
 
   // AnimationEffectOwner implementation:
@@ -82,7 +93,8 @@ class MODULES_EXPORT WorkletAnimation : public WorkletAnimationBase,
 
   // WorkletAnimationBase implementation.
   void Update(TimingUpdateReason) override;
-  bool UpdateCompositingState() override;
+  void UpdateCompositingState() override;
+  void InvalidateCompositingState() override;
 
   // CompositorAnimationClient implementation.
   CompositorAnimation* GetCompositorAnimation() const override {
@@ -97,43 +109,72 @@ class MODULES_EXPORT WorkletAnimation : public WorkletAnimationBase,
   void Dispose();
 
   Document* GetDocument() const override { return document_.Get(); }
+  AnimationTimeline* GetTimeline() const override { return timeline_; }
   const String& Name() { return animator_name_; }
 
-  const scoped_refptr<SerializedScriptValue> Options() { return options_; }
   KeyframeEffect* GetEffect() const override;
+  const WorkletAnimationId& GetWorkletAnimationId() const override {
+    return id_;
+  }
+  bool IsActiveAnimation() const override;
+
+  void UpdateInputState(AnimationWorkletDispatcherInput* input_state) override;
+  void SetOutputState(
+      const AnimationWorkletOutput::AnimationState& state) override;
 
   void Trace(blink::Visitor*) override;
 
  private:
-  WorkletAnimation(const String& animator_name,
-                   Document&,
-                   const HeapVector<Member<KeyframeEffect>>&,
-                   AnimationTimeline*,
-                   scoped_refptr<SerializedScriptValue>);
   void DestroyCompositorAnimation();
 
   // Attempts to start the animation on the compositor side, returning true if
-  // it succeeds or false otherwise. If false is returned and failure_message
-  // was non-null, failure_message may be filled with an error description.
-  bool StartOnCompositor(String* failure_message);
+  // it succeeds or false otherwise. If false is returned and the animation
+  // cannot be started on main.
+  bool StartOnCompositor();
+  void StartOnMain();
+  bool CheckCanStart(String* failure_message);
+  void SetStartTimeToNow();
 
   // Updates a running animation on the compositor side.
   void UpdateOnCompositor();
 
+  std::unique_ptr<cc::AnimationOptions> CloneOptions() const {
+    return options_ ? options_->Clone() : nullptr;
+  }
+
+  void SetPlayState(const Animation::AnimationPlayState& state) {
+    play_state_ = state;
+  }
+  base::Optional<double> CurrentTime() const;
+
   unsigned sequence_number_;
+
+  WorkletAnimationId id_;
 
   const String animator_name_;
   Animation::AnimationPlayState play_state_;
+  Animation::AnimationPlayState last_play_state_;
   // Start time in ms.
-  base::Optional<double> start_time_;
+  base::Optional<base::TimeDelta> start_time_;
+  Vector<base::Optional<base::TimeDelta>> local_times_;
+  // We use this to skip updating if current time has not changed since last
+  // update.
+  base::Optional<base::TimeDelta> last_current_time_;
 
   Member<Document> document_;
 
   HeapVector<Member<KeyframeEffect>> effects_;
   Member<AnimationTimeline> timeline_;
-  scoped_refptr<SerializedScriptValue> options_;
+  std::unique_ptr<WorkletAnimationOptions> options_;
 
   std::unique_ptr<CompositorAnimation> compositor_animation_;
+  bool running_on_main_thread_;
+
+  // Tracks whether any KeyframeEffect associated with this WorkletAnimation has
+  // been invalidated and needs to be restarted. Used to avoid unnecessarily
+  // restarting the effect on the compositor. When true, a call to
+  // |UpdateOnCompositor| will update the effect on the compositor.
+  bool effect_needs_restart_;
 };
 
 }  // namespace blink

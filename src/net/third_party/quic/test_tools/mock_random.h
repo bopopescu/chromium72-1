@@ -5,11 +5,10 @@
 #ifndef NET_THIRD_PARTY_QUIC_TEST_TOOLS_MOCK_RANDOM_H_
 #define NET_THIRD_PARTY_QUIC_TEST_TOOLS_MOCK_RANDOM_H_
 
-#include "base/compiler_specific.h"
 #include "base/macros.h"
 #include "net/third_party/quic/core/crypto/quic_random.h"
 
-namespace net {
+namespace quic {
 namespace test {
 
 class MockRandom : public QuicRandom {
@@ -17,14 +16,14 @@ class MockRandom : public QuicRandom {
   // Initializes base_ to 0xDEADBEEF.
   MockRandom();
   explicit MockRandom(uint32_t base);
+  MockRandom(const MockRandom&) = delete;
+  MockRandom& operator=(const MockRandom&) = delete;
 
   // QuicRandom:
   // Fills the |data| buffer with a repeating byte, initially 'r'.
   void RandBytes(void* data, size_t len) override;
   // Returns base + the current increment.
   uint64_t RandUint64() override;
-  // Does nothing.
-  void Reseed(const void* additional_entropy, size_t entropy_len) override;
 
   // ChangeValue increments |increment_|. This causes the value returned by
   // |RandUint64| and the byte that |RandBytes| fills with, to change.
@@ -33,11 +32,9 @@ class MockRandom : public QuicRandom {
  private:
   uint32_t base_;
   uint8_t increment_;
-
-  DISALLOW_COPY_AND_ASSIGN(MockRandom);
 };
 
 }  // namespace test
-}  // namespace net
+}  // namespace quic
 
 #endif  // NET_THIRD_PARTY_QUIC_TEST_TOOLS_MOCK_RANDOM_H_

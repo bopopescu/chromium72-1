@@ -8,6 +8,7 @@
 
 #include "components/download/public/common/download_url_loader_factory_getter.h"
 #include "components/download/public/common/stream_handle_input_stream.h"
+#include "components/download/public/common/url_download_request_handle.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
 
 namespace network {
@@ -26,12 +27,9 @@ class URLLoaderStatusMonitor : public network::mojom::URLLoaderClient {
   ~URLLoaderStatusMonitor() override = default;
 
   // network::mojom::URLLoaderClient
-  void OnReceiveResponse(
-      const network::ResourceResponseHead& head,
-      network::mojom::DownloadedTempFilePtr downloaded_file) override {}
+  void OnReceiveResponse(const network::ResourceResponseHead& head) override {}
   void OnReceiveRedirect(const net::RedirectInfo& redirect_info,
                          const network::ResourceResponseHead& head) override {}
-  void OnDataDownloaded(int64_t data_length, int64_t encoded_length) override {}
   void OnUploadProgress(int64_t current_position,
                         int64_t total_size,
                         OnUploadProgressCallback callback) override {}
@@ -62,17 +60,18 @@ std::unique_ptr<ResourceDownloader> ResourceDownloader::BeginDownload(
     std::unique_ptr<network::ResourceRequest> request,
     scoped_refptr<download::DownloadURLLoaderFactoryGetter>
         url_loader_factory_getter,
+    const URLSecurityPolicy& url_security_policy,
     const GURL& site_url,
     const GURL& tab_url,
     const GURL& tab_referrer_url,
-    uint32_t download_id,
+    bool is_new_download,
     bool is_parallel_request,
     const scoped_refptr<base::SingleThreadTaskRunner>& task_runner) {
   auto downloader = std::make_unique<ResourceDownloader>(
       delegate, std::move(request), params->render_process_host_id(),
       params->render_frame_host_routing_id(), site_url, tab_url,
-      tab_referrer_url, download_id, task_runner,
-      std::move(url_loader_factory_getter));
+      tab_referrer_url, is_new_download, task_runner,
+      std::move(url_loader_factory_getter), url_security_policy);
 
   downloader->Start(std::move(params), is_parallel_request);
   return downloader;
@@ -94,11 +93,12 @@ ResourceDownloader::InterceptNavigationResponse(
     network::mojom::URLLoaderClientEndpointsPtr url_loader_client_endpoints,
     scoped_refptr<download::DownloadURLLoaderFactoryGetter>
         url_loader_factory_getter,
+    const URLSecurityPolicy& url_security_policy,
     const scoped_refptr<base::SingleThreadTaskRunner>& task_runner) {
   auto downloader = std::make_unique<ResourceDownloader>(
       delegate, std::move(resource_request), render_process_id, render_frame_id,
-      site_url, tab_url, tab_referrer_url, download::DownloadItem::kInvalidId,
-      task_runner, std::move(url_loader_factory_getter));
+      site_url, tab_url, tab_referrer_url, true, task_runner,
+      std::move(url_loader_factory_getter), url_security_policy);
   downloader->InterceptResponse(std::move(response), std::move(url_chain),
                                 cert_status,
                                 std::move(url_loader_client_endpoints));
@@ -113,13 +113,14 @@ ResourceDownloader::ResourceDownloader(
     const GURL& site_url,
     const GURL& tab_url,
     const GURL& tab_referrer_url,
-    uint32_t download_id,
+    bool is_new_download,
     const scoped_refptr<base::SingleThreadTaskRunner>& task_runner,
     scoped_refptr<download::DownloadURLLoaderFactoryGetter>
-        url_loader_factory_getter)
+        url_loader_factory_getter,
+    const URLSecurityPolicy& url_security_policy)
     : delegate_(delegate),
       resource_request_(std::move(resource_request)),
-      download_id_(download_id),
+      is_new_download_(is_new_download),
       render_process_id_(render_process_id),
       render_frame_id_(render_frame_id),
       site_url_(site_url),
@@ -127,6 +128,7 @@ ResourceDownloader::ResourceDownloader(
       tab_referrer_url_(tab_referrer_url),
       delegate_task_runner_(task_runner),
       url_loader_factory_getter_(std::move(url_loader_factory_getter)),
+      url_security_policy_(url_security_policy),
       weak_ptr_factory_(this) {}
 
 ResourceDownloader::~ResourceDownloader() = default;
@@ -144,6 +146,7 @@ void ResourceDownloader::Start(
           download_url_parameters->GetSaveInfo()),
       is_parallel_request, download_url_parameters->is_transient(),
       download_url_parameters->fetch_error_body(),
+      download_url_parameters->follow_cross_origin_redirects(),
       download_url_parameters->request_headers(),
       download_url_parameters->request_origin(),
       download_url_parameters->download_source(),
@@ -182,14 +185,14 @@ void ResourceDownloader::InterceptResponse(
       false, /* is_parallel_request */
       false, /* is_transient */
       false, /* fetch_error_body */
+      true,  /* follow_cross_origin_redirects */
       download::DownloadUrlParameters::RequestHeadersType(),
       std::string(), /* request_origin */
       download::DownloadSource::NAVIGATION, std::move(url_chain));
 
   // Simulate on the new URLLoaderClient calls that happened on the old client.
   response->head.cert_status = cert_status;
-  url_loader_client_->OnReceiveResponse(
-      response->head, network::mojom::DownloadedTempFilePtr());
+  url_loader_client_->OnReceiveResponse(response->head);
 
   // Bind the new client.
   url_loader_client_binding_ =
@@ -200,13 +203,16 @@ void ResourceDownloader::InterceptResponse(
 void ResourceDownloader::OnResponseStarted(
     std::unique_ptr<DownloadCreateInfo> download_create_info,
     mojom::DownloadStreamHandlePtr stream_handle) {
-  download_create_info->download_id = download_id_;
+  download_create_info->request_handle.reset(new UrlDownloadRequestHandle(
+      weak_ptr_factory_.GetWeakPtr(), base::SequencedTaskRunnerHandle::Get()));
+  download_create_info->is_new_download = is_new_download_;
   download_create_info->guid = guid_;
   download_create_info->site_url = site_url_;
   download_create_info->tab_url = tab_url_;
   download_create_info->tab_referrer_url = tab_referrer_url_;
   download_create_info->render_process_id = render_process_id_;
   download_create_info->render_frame_id = render_frame_id_;
+  download_create_info->has_user_gesture = resource_request_->has_user_gesture;
 
   delegate_task_runner_->PostTask(
       FROM_HERE,
@@ -218,7 +224,28 @@ void ResourceDownloader::OnResponseStarted(
 }
 
 void ResourceDownloader::OnReceiveRedirect() {
-  url_loader_->FollowRedirect(base::nullopt);
+  url_loader_->FollowRedirect(base::nullopt, base::nullopt, base::nullopt);
+}
+
+void ResourceDownloader::OnResponseCompleted() {
+  Destroy();
+}
+
+bool ResourceDownloader::CanRequestURL(const GURL& url) {
+  return url_security_policy_
+             ? url_security_policy_.Run(render_process_id_, url)
+             : true;
+}
+
+void ResourceDownloader::CancelRequest() {
+  Destroy();
+}
+
+void ResourceDownloader::Destroy() {
+  delegate_task_runner_->PostTask(
+      FROM_HERE,
+      base::BindOnce(&UrlDownloadHandler::Delegate::OnUrlDownloadStopped,
+                     delegate_, this));
 }
 
 }  // namespace download

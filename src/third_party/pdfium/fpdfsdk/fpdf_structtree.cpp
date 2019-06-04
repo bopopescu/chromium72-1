@@ -20,7 +20,7 @@ unsigned long WideStringToBuffer(const WideString& str,
   if (str.IsEmpty())
     return 0;
 
-  ByteString encodedStr = str.UTF16LE_Encode();
+  ByteString encodedStr = str.ToUTF16LE();
   const unsigned long len = encodedStr.GetLength();
   if (buffer && len <= buflen)
     memcpy(buffer, encodedStr.c_str(), len);
@@ -37,7 +37,7 @@ FPDF_StructTree_GetForPage(FPDF_PAGE page) {
 
   // Caller takes onwership.
   return FPDFStructTreeFromCPDFStructTree(
-      CPDF_StructTree::LoadPage(pPage->GetDocument(), pPage->GetFormDict())
+      CPDF_StructTree::LoadPage(pPage->GetDocument(), pPage->GetDict())
           .release());
 }
 
@@ -84,7 +84,7 @@ FPDF_EXPORT int FPDF_CALLCONV
 FPDF_StructElement_GetMarkedContentID(FPDF_STRUCTELEMENT struct_element) {
   CPDF_StructElement* elem =
       CPDFStructElementFromFPDFStructElement(struct_element);
-  CPDF_Object* p =
+  const CPDF_Object* p =
       (elem && elem->GetDict()) ? elem->GetDict()->GetObjectFor("K") : nullptr;
   return p && p->IsNumber() ? p->GetInteger() : -1;
 }
@@ -95,7 +95,9 @@ FPDF_StructElement_GetType(FPDF_STRUCTELEMENT struct_element,
                            unsigned long buflen) {
   CPDF_StructElement* elem =
       CPDFStructElementFromFPDFStructElement(struct_element);
-  return elem ? WideStringToBuffer(elem->GetType().UTF8Decode(), buffer, buflen)
+  return elem ? WideStringToBuffer(
+                    WideString::FromUTF8(elem->GetType().AsStringView()),
+                    buffer, buflen)
               : 0;
 }
 
@@ -105,9 +107,10 @@ FPDF_StructElement_GetTitle(FPDF_STRUCTELEMENT struct_element,
                             unsigned long buflen) {
   CPDF_StructElement* elem =
       CPDFStructElementFromFPDFStructElement(struct_element);
-  return elem
-             ? WideStringToBuffer(elem->GetTitle().UTF8Decode(), buffer, buflen)
-             : 0;
+  return elem ? WideStringToBuffer(
+                    WideString::FromUTF8(elem->GetTitle().AsStringView()),
+                    buffer, buflen)
+              : 0;
 }
 
 FPDF_EXPORT int FPDF_CALLCONV

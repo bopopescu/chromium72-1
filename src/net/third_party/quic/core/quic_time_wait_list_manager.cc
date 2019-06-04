@@ -22,15 +22,7 @@
 #include "net/third_party/quic/platform/api/quic_ptr_util.h"
 #include "net/third_party/quic/platform/api/quic_socket_address.h"
 
-namespace net {
-
-namespace {
-
-// Stateless reset token used in IETF public reset packet.
-// TODO(fayang): use a real stateless reset token instead of a hard code one.
-const QuicUint128 kStatelessResetToken = 1010101;
-
-}  // namespace
+namespace quic {
 
 // A very simple alarm that just informs the QuicTimeWaitListManager to clean
 // up old connection_ids. This alarm should be cancelled and deleted before
@@ -40,6 +32,8 @@ class ConnectionIdCleanUpAlarm : public QuicAlarm::Delegate {
   explicit ConnectionIdCleanUpAlarm(
       QuicTimeWaitListManager* time_wait_list_manager)
       : time_wait_list_manager_(time_wait_list_manager) {}
+  ConnectionIdCleanUpAlarm(const ConnectionIdCleanUpAlarm&) = delete;
+  ConnectionIdCleanUpAlarm& operator=(const ConnectionIdCleanUpAlarm&) = delete;
 
   void OnAlarm() override {
     time_wait_list_manager_->CleanUpOldConnectionIds();
@@ -48,8 +42,6 @@ class ConnectionIdCleanUpAlarm : public QuicAlarm::Delegate {
  private:
   // Not owned.
   QuicTimeWaitListManager* time_wait_list_manager_;
-
-  DISALLOW_COPY_AND_ASSIGN(ConnectionIdCleanUpAlarm);
 };
 
 // This class stores pending public reset packets to be sent to clients.
@@ -67,6 +59,8 @@ class QuicTimeWaitListManager::QueuedPacket {
       : server_address_(server_address),
         client_address_(client_address),
         packet_(std::move(packet)) {}
+  QueuedPacket(const QueuedPacket&) = delete;
+  QueuedPacket& operator=(const QueuedPacket&) = delete;
 
   const QuicSocketAddress& server_address() const { return server_address_; }
   const QuicSocketAddress& client_address() const { return client_address_; }
@@ -76,20 +70,18 @@ class QuicTimeWaitListManager::QueuedPacket {
   const QuicSocketAddress server_address_;
   const QuicSocketAddress client_address_;
   std::unique_ptr<QuicEncryptedPacket> packet_;
-
-  DISALLOW_COPY_AND_ASSIGN(QueuedPacket);
 };
 
 QuicTimeWaitListManager::QuicTimeWaitListManager(
     QuicPacketWriter* writer,
     Visitor* visitor,
-    QuicConnectionHelperInterface* helper,
+    const QuicClock* clock,
     QuicAlarmFactory* alarm_factory)
     : time_wait_period_(
           QuicTime::Delta::FromSeconds(FLAGS_quic_time_wait_list_seconds)),
       connection_id_clean_up_alarm_(
           alarm_factory->CreateAlarm(new ConnectionIdCleanUpAlarm(this))),
-      clock_(helper->GetClock()),
+      clock_(clock),
       writer_(writer),
       visitor_(visitor) {
   SetConnectionIdCleanUpAlarm();
@@ -101,17 +93,13 @@ QuicTimeWaitListManager::~QuicTimeWaitListManager() {
 
 void QuicTimeWaitListManager::AddConnectionIdToTimeWait(
     QuicConnectionId connection_id,
-    ParsedQuicVersion version,
     bool ietf_quic,
-    bool connection_rejected_statelessly,
+    TimeWaitAction action,
     std::vector<std::unique_ptr<QuicEncryptedPacket>>* termination_packets) {
-  if (connection_rejected_statelessly) {
-    DCHECK(termination_packets != nullptr && !termination_packets->empty())
-        << "Connections that were rejected statelessly must "
-        << "have a close packet.  connection_id = " << connection_id;
-  }
+  DCHECK(action != SEND_TERMINATION_PACKETS || termination_packets != nullptr);
+  DCHECK(action != DO_NOTHING || ietf_quic);
   int num_packets = 0;
-  ConnectionIdMap::iterator it = connection_id_map_.find(connection_id);
+  auto it = connection_id_map_.find(connection_id);
   const bool new_connection_id = it == connection_id_map_.end();
   if (!new_connection_id) {  // Replace record if it is reinserted.
     num_packets = it->second.num_packets;
@@ -120,9 +108,8 @@ void QuicTimeWaitListManager::AddConnectionIdToTimeWait(
   TrimTimeWaitListIfNeeded();
   DCHECK_LT(num_connections(),
             static_cast<size_t>(FLAGS_quic_time_wait_list_max_connections));
-  ConnectionIdData data(num_packets, version, ietf_quic,
-                        clock_->ApproximateNow(),
-                        connection_rejected_statelessly);
+  ConnectionIdData data(num_packets, ietf_quic, clock_->ApproximateNow(),
+                        action);
   if (termination_packets != nullptr) {
     data.termination_packets.swap(*termination_packets);
   }
@@ -135,13 +122,6 @@ void QuicTimeWaitListManager::AddConnectionIdToTimeWait(
 bool QuicTimeWaitListManager::IsConnectionIdInTimeWait(
     QuicConnectionId connection_id) const {
   return QuicContainsKey(connection_id_map_, connection_id);
-}
-
-ParsedQuicVersion QuicTimeWaitListManager::GetQuicVersionFromConnectionId(
-    QuicConnectionId connection_id) {
-  ConnectionIdMap::iterator it = connection_id_map_.find(connection_id);
-  DCHECK(it != connection_id_map_.end());
-  return (it->second).version;
 }
 
 void QuicTimeWaitListManager::OnBlockedWriterCanWrite() {
@@ -162,7 +142,7 @@ void QuicTimeWaitListManager::ProcessPacket(
   QUIC_DLOG(INFO) << "Processing " << connection_id << " in time wait state.";
   // TODO(satyamshekhar): Think about handling packets from different client
   // addresses.
-  ConnectionIdMap::iterator it = connection_id_map_.find(connection_id);
+  auto it = connection_id_map_.find(connection_id);
   DCHECK(it != connection_id_map_.end());
   // Increment the received packet count.
   ConnectionIdData* connection_data = &it->second;
@@ -172,21 +152,24 @@ void QuicTimeWaitListManager::ProcessPacket(
     return;
   }
 
-  if (!connection_data->termination_packets.empty()) {
-    if (connection_data->connection_rejected_statelessly) {
-      QUIC_DVLOG(3)
-          << "Time wait list sending previous stateless reject response "
-          << "for connection " << connection_id;
-    }
-    for (const auto& packet : connection_data->termination_packets) {
-      SendOrQueuePacket(QuicMakeUnique<QueuedPacket>(
-          server_address, client_address, packet->Clone()));
-    }
-    return;
+  switch (connection_data->action) {
+    case SEND_TERMINATION_PACKETS:
+      if (connection_data->termination_packets.empty()) {
+        QUIC_BUG << "There are no termination packets.";
+        return;
+      }
+      for (const auto& packet : connection_data->termination_packets) {
+        SendOrQueuePacket(QuicMakeUnique<QueuedPacket>(
+            server_address, client_address, packet->Clone()));
+      }
+      return;
+    case SEND_STATELESS_RESET:
+      SendPublicReset(server_address, client_address, connection_id,
+                      connection_data->ietf_quic);
+      return;
+    case DO_NOTHING:
+      DCHECK(connection_data->ietf_quic);
   }
-
-  SendPublicReset(server_address, client_address, connection_id,
-                  connection_data->ietf_quic);
 }
 
 void QuicTimeWaitListManager::SendVersionNegotiationPacket(
@@ -224,6 +207,7 @@ void QuicTimeWaitListManager::SendPublicReset(
   // TODO(satyamshekhar): generate a valid nonce for this connection_id.
   packet.nonce_proof = 1010101;
   packet.client_address = client_address;
+  GetEndpointId(&packet.endpoint_id);
   // Takes ownership of the packet.
   SendOrQueuePacket(QuicMakeUnique<QueuedPacket>(server_address, client_address,
                                                  BuildPublicReset(packet)));
@@ -261,6 +245,13 @@ bool QuicTimeWaitListManager::WriteToWire(QueuedPacket* queued_packet) {
       queued_packet->packet()->data(), queued_packet->packet()->length(),
       queued_packet->server_address().host(), queued_packet->client_address(),
       nullptr);
+
+  // If using a batch writer and the packet is buffered, flush it.
+  if (writer_->IsBatchMode() && result.status == WRITE_STATUS_OK &&
+      result.bytes_written == 0) {
+    result = writer_->Flush();
+  }
+
   if (result.status == WRITE_STATUS_BLOCKED) {
     // If blocked and unbuffered, return false to retry sending.
     DCHECK(writer_->IsWriteBlocked());
@@ -301,7 +292,7 @@ bool QuicTimeWaitListManager::MaybeExpireOldestConnection(
   if (connection_id_map_.empty()) {
     return false;
   }
-  ConnectionIdMap::iterator it = connection_id_map_.begin();
+  auto it = connection_id_map_.begin();
   QuicTime oldest_connection_id_time = it->second.time_added;
   if (oldest_connection_id_time > expiration_time) {
     // Too recent, don't retire.
@@ -334,15 +325,13 @@ void QuicTimeWaitListManager::TrimTimeWaitListIfNeeded() {
 
 QuicTimeWaitListManager::ConnectionIdData::ConnectionIdData(
     int num_packets,
-    ParsedQuicVersion version,
     bool ietf_quic,
     QuicTime time_added,
-    bool connection_rejected_statelessly)
+    TimeWaitAction action)
     : num_packets(num_packets),
-      version(version),
       ietf_quic(ietf_quic),
       time_added(time_added),
-      connection_rejected_statelessly(connection_rejected_statelessly) {}
+      action(action) {}
 
 QuicTimeWaitListManager::ConnectionIdData::ConnectionIdData(
     ConnectionIdData&& other) = default;
@@ -351,7 +340,7 @@ QuicTimeWaitListManager::ConnectionIdData::~ConnectionIdData() = default;
 
 QuicUint128 QuicTimeWaitListManager::GetStatelessResetToken(
     QuicConnectionId connection_id) const {
-  return kStatelessResetToken;
+  return connection_id;
 }
 
-}  // namespace net
+}  // namespace quic

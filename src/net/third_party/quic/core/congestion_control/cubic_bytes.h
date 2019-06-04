@@ -17,7 +17,7 @@
 #include "net/third_party/quic/platform/api/quic_clock.h"
 #include "net/third_party/quic/platform/api/quic_export.h"
 
-namespace net {
+namespace quic {
 
 namespace test {
 class CubicBytesTest;
@@ -26,6 +26,8 @@ class CubicBytesTest;
 class QUIC_EXPORT_PRIVATE CubicBytes {
  public:
   explicit CubicBytes(const QuicClock* clock);
+  CubicBytes(const CubicBytes&) = delete;
+  CubicBytes& operator=(const CubicBytes&) = delete;
 
   void SetNumConnections(int num_connections);
 
@@ -94,10 +96,8 @@ class QUIC_EXPORT_PRIVATE CubicBytes {
 
   // Last congestion window in packets computed by cubic function.
   QuicByteCount last_target_congestion_window_;
-
-  DISALLOW_COPY_AND_ASSIGN(CubicBytes);
 };
 
-}  // namespace net
+}  // namespace quic
 
 #endif  // NET_THIRD_PARTY_QUIC_CORE_CONGESTION_CONTROL_CUBIC_BYTES_H_

@@ -11,6 +11,7 @@
 #include "base/bind.h"
 #include "base/memory/ref_counted.h"
 #include "base/memory/ref_counted_memory.h"
+#include "base/no_destructor.h"
 #include "base/strings/string_util.h"
 #include "base/threading/thread_checker.h"
 #include "base/time/time.h"
@@ -21,94 +22,129 @@
 #include "services/tracing/public/cpp/tracing_features.h"
 #include "services/tracing/public/mojom/constants.mojom.h"
 
-#if defined(OS_ANDROID) || defined(OS_LINUX) || defined(OS_MACOSX)
+#if defined(OS_ANDROID) || defined(OS_LINUX) || defined(OS_MACOSX) || \
+    defined(OS_WIN)
+#define PERFETTO_AVAILABLE
 #include "services/tracing/public/cpp/perfetto/producer_client.h"
+#include "services/tracing/public/cpp/perfetto/trace_event_data_source.h"
+#include "third_party/perfetto/include/perfetto/tracing/core/trace_writer.h"
+#include "third_party/perfetto/protos/perfetto/trace/chrome/chrome_trace_event.pbzero.h"
+#include "third_party/perfetto/protos/perfetto/trace/trace_packet.pbzero.h"
 #endif
 
 namespace {
 
 const char kTraceEventLabel[] = "traceEvents";
 
+tracing::TraceEventAgent* g_trace_event_agent;
+
 }  // namespace
 
 namespace tracing {
 
-#if defined(OS_ANDROID) || defined(OS_LINUX) || defined(OS_MACOSX)
-class PerfettoTraceEventAgent : public TraceEventAgent {
- public:
-  explicit PerfettoTraceEventAgent(service_manager::Connector* connector) {
-    mojom::PerfettoServicePtr perfetto_service;
-    connector->BindInterface(mojom::kServiceName, &perfetto_service);
+#if defined(PERFETTO_AVAILABLE)
 
-    producer_client_ = std::make_unique<ProducerClient>();
-    producer_client_->CreateMojoMessagepipes(base::BindOnce(
-        [](mojom::PerfettoServicePtr perfetto_service,
-           mojom::ProducerClientPtr producer_client_pipe,
-           mojom::ProducerHostRequest producer_host_pipe) {
-          perfetto_service->ConnectToProducerHost(
-              std::move(producer_client_pipe), std::move(producer_host_pipe));
-        },
-        std::move(perfetto_service)));
-  }
+namespace {
 
-  ~PerfettoTraceEventAgent() override {
-    ProducerClient::DeleteSoon(std::move(producer_client_));
-  }
+void InitializeProducerClient(service_manager::Connector* connector) {
+  mojom::PerfettoServicePtr perfetto_service;
+  connector->BindInterface(mojom::kServiceName, &perfetto_service);
 
- private:
-  std::unique_ptr<ProducerClient> producer_client_;
-};
+  ProducerClient* client = ProducerClient::Get();
+  client->CreateMojoMessagepipes(base::BindOnce(
+      [](mojom::PerfettoServicePtr perfetto_service,
+         mojom::ProducerClientPtr producer_client_pipe,
+         mojom::ProducerHostRequest producer_host_pipe) {
+        perfetto_service->ConnectToProducerHost(std::move(producer_client_pipe),
+                                                std::move(producer_host_pipe));
+      },
+      std::move(perfetto_service)));
+
+  client->AddDataSource(TraceEventDataSource::GetInstance());
+}
+
+void AddPerfettoMetadataGeneratorFunction(
+    TraceEventAgent::MetadataGeneratorFunction generator) {
+  // Instantiate and register the metadata data source on the first
+  // call.
+  static TraceEventMetadataSource* metadata_source = []() {
+    static base::NoDestructor<TraceEventMetadataSource> instance;
+    ProducerClient::Get()->AddDataSource(instance.get());
+    return instance.get();
+  }();
+
+  metadata_source->AddGeneratorFunction(generator);
+}
+
+}  // namespace
+
 #endif
 
 // static
 std::unique_ptr<TraceEventAgent> TraceEventAgent::Create(
     service_manager::Connector* connector,
     bool request_clock_sync_marker_on_android) {
-  if (TracingUsesPerfettoBackend()) {
-#if defined(OS_ANDROID) || defined(OS_LINUX) || defined(OS_MACOSX)
-    return std::make_unique<PerfettoTraceEventAgent>(connector);
-#else
-    LOG(FATAL) << "Perfetto is not yet available for this platform.";
-    return nullptr;
+
+#if defined(PERFETTO_AVAILABLE)
+  InitializeProducerClient(connector);
 #endif
-  } else {
-    return std::make_unique<TraceEventAgentImpl>(
-        connector, request_clock_sync_marker_on_android);
-  }
+
+  return std::make_unique<TraceEventAgent>(
+      connector, request_clock_sync_marker_on_android);
 }
 
-TraceEventAgent::TraceEventAgent() = default;
-
-TraceEventAgent::~TraceEventAgent() = default;
-
-TraceEventAgentImpl::TraceEventAgentImpl(
-    service_manager::Connector* connector,
-    bool request_clock_sync_marker_on_android)
+TraceEventAgent::TraceEventAgent(service_manager::Connector* connector,
+                                 bool request_clock_sync_marker_on_android)
     : BaseAgent(connector,
                 kTraceEventLabel,
                 mojom::TraceDataType::ARRAY,
 #if defined(OS_ANDROID)
-                request_clock_sync_marker_on_android),
+                request_clock_sync_marker_on_android,
 #else
-                false),
+                false,
 #endif
+                base::trace_event::TraceLog::GetInstance()->process_id()),
       enabled_tracing_modes_(0) {
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
+  DCHECK(!g_trace_event_agent);
+  g_trace_event_agent = this;
 }
 
-TraceEventAgentImpl::~TraceEventAgentImpl() {
+TraceEventAgent::~TraceEventAgent() {
+  g_trace_event_agent = nullptr;
   DCHECK(!trace_log_needs_me_);
 }
 
-void TraceEventAgentImpl::AddMetadataGeneratorFunction(
+void TraceEventAgent::RequestClockSyncMarker(
+    const std::string& sync_id,
+    Agent::RequestClockSyncMarkerCallback callback) {
+#if defined(OS_ANDROID)
+  base::trace_event::TraceLog::GetInstance()->AddClockSyncMetadataEvent();
+  std::move(callback).Run(base::TimeTicks(), base::TimeTicks());
+#else
+  NOTREACHED();
+#endif
+}
+
+void TraceEventAgent::GetCategories(GetCategoriesCallback callback) {
+  std::vector<std::string> category_vector;
+  base::trace_event::TraceLog::GetInstance()->GetKnownCategoryGroups(
+      &category_vector);
+  std::move(callback).Run(base::JoinString(category_vector, ","));
+}
+
+void TraceEventAgent::AddMetadataGeneratorFunction(
     MetadataGeneratorFunction generator) {
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
   metadata_generator_functions_.push_back(generator);
+#if defined(PERFETTO_AVAILABLE)
+  AddPerfettoMetadataGeneratorFunction(generator);
+#endif
 }
 
-void TraceEventAgentImpl::StartTracing(const std::string& config,
-                                       base::TimeTicks coordinator_time,
-                                       StartTracingCallback callback) {
+void TraceEventAgent::StartTracing(const std::string& config,
+                                   base::TimeTicks coordinator_time,
+                                   StartTracingCallback callback) {
   DCHECK(!recorder_);
 #if defined(__native_client__)
   // NaCl and system times are offset by a bit, so subtract some time from
@@ -126,7 +162,7 @@ void TraceEventAgentImpl::StartTracing(const std::string& config,
   std::move(callback).Run(true);
 }
 
-void TraceEventAgentImpl::StopAndFlush(mojom::RecorderPtr recorder) {
+void TraceEventAgent::StopAndFlush(mojom::RecorderPtr recorder) {
   DCHECK(!recorder_);
   recorder_ = std::move(recorder);
   base::trace_event::TraceLog::GetInstance()->SetDisabled(
@@ -138,36 +174,18 @@ void TraceEventAgentImpl::StopAndFlush(mojom::RecorderPtr recorder) {
       recorder_->AddMetadata(std::move(*metadata));
   }
   trace_log_needs_me_ = true;
-  base::trace_event::TraceLog::GetInstance()->Flush(base::Bind(
-      &TraceEventAgentImpl::OnTraceLogFlush, base::Unretained(this)));
+  base::trace_event::TraceLog::GetInstance()->Flush(
+      base::Bind(&TraceEventAgent::OnTraceLogFlush, base::Unretained(this)));
 }
 
-void TraceEventAgentImpl::RequestClockSyncMarker(
-    const std::string& sync_id,
-    Agent::RequestClockSyncMarkerCallback callback) {
-#if defined(OS_ANDROID)
-  base::trace_event::TraceLog::GetInstance()->AddClockSyncMetadataEvent();
-  std::move(callback).Run(base::TimeTicks(), base::TimeTicks());
-#else
-  NOTREACHED();
-#endif
-}
-
-void TraceEventAgentImpl::RequestBufferStatus(
+void TraceEventAgent::RequestBufferStatus(
     RequestBufferStatusCallback callback) {
   base::trace_event::TraceLogStatus status =
       base::trace_event::TraceLog::GetInstance()->GetStatus();
   std::move(callback).Run(status.event_capacity, status.event_count);
 }
 
-void TraceEventAgentImpl::GetCategories(GetCategoriesCallback callback) {
-  std::vector<std::string> category_vector;
-  base::trace_event::TraceLog::GetInstance()->GetKnownCategoryGroups(
-      &category_vector);
-  std::move(callback).Run(base::JoinString(category_vector, ","));
-}
-
-void TraceEventAgentImpl::OnTraceLogFlush(
+void TraceEventAgent::OnTraceLogFlush(
     const scoped_refptr<base::RefCountedString>& events_str,
     bool has_more_events) {
   if (!events_str->data().empty())

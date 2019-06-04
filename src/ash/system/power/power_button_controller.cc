@@ -9,12 +9,10 @@
 #include <utility>
 
 #include "ash/accelerators/accelerator_controller.h"
-#include "ash/public/cpp/ash_features.h"
 #include "ash/public/cpp/ash_switches.h"
 #include "ash/public/cpp/shell_window_ids.h"
 #include "ash/session/session_controller.h"
 #include "ash/shell.h"
-#include "ash/shell_port.h"
 #include "ash/shutdown_reason.h"
 #include "ash/system/power/power_button_display_controller.h"
 #include "ash/system/power/power_button_menu_item_view.h"
@@ -78,6 +76,11 @@ std::unique_ptr<views::Widget> CreateMenuWidget() {
   gfx::Rect widget_bounds =
       display::Screen::GetScreen()->GetPrimaryDisplay().bounds();
   menu_widget->SetBounds(widget_bounds);
+
+  // Enable arrow key in FocusManager. Arrow right/left and down/up triggers
+  // the same focus movement as tab/shift+tab.
+  menu_widget->GetFocusManager()->set_arrow_key_traversal_enabled_for_widget(
+      true);
   return menu_widget;
 }
 
@@ -145,9 +148,7 @@ class PowerButtonController::ActiveWindowWidgetController
 
 PowerButtonController::PowerButtonController(
     BacklightsForcedOffSetter* backlights_forced_off_setter)
-    : arrow_key_traversal_initially_enabled_(
-          views::FocusManager::arrow_key_traversal_enabled()),
-      backlights_forced_off_setter_(backlights_forced_off_setter),
+    : backlights_forced_off_setter_(backlights_forced_off_setter),
       lock_state_controller_(Shell::Get()->lock_state_controller()),
       tick_clock_(base::DefaultTickClock::GetInstance()),
       backlights_forced_off_observer_(this),
@@ -164,11 +165,11 @@ PowerButtonController::PowerButtonController(
   Shell::Get()->display_configurator()->AddObserver(this);
   backlights_forced_off_observer_.Add(backlights_forced_off_setter);
   Shell::Get()->tablet_mode_controller()->AddObserver(this);
-  ShellPort::Get()->AddLockStateObserver(this);
+  Shell::Get()->lock_state_controller()->AddObserver(this);
 }
 
 PowerButtonController::~PowerButtonController() {
-  ShellPort::Get()->RemoveLockStateObserver(this);
+  Shell::Get()->lock_state_controller()->RemoveObserver(this);
   if (Shell::Get()->tablet_mode_controller())
     Shell::Get()->tablet_mode_controller()->RemoveObserver(this);
   Shell::Get()->display_configurator()->RemoveObserver(this);
@@ -213,7 +214,7 @@ void PowerButtonController::OnPowerButtonEvent(
     const base::TimeTicks& timestamp) {
   if (down) {
     force_off_on_button_up_ = false;
-    if (in_tablet_mode_) {
+    if (UseTabletBehavior()) {
       force_off_on_button_up_ = true;
 
       // When the system resumes in response to the power button being pressed,
@@ -244,7 +245,7 @@ void PowerButtonController::OnPowerButtonEvent(
       return;
     }
 
-    if (!in_tablet_mode_) {
+    if (!UseTabletBehavior()) {
       StartPowerMenuAnimation();
     } else {
       base::TimeDelta timeout = screen_off_when_power_button_down_
@@ -269,22 +270,20 @@ void PowerButtonController::OnPowerButtonEvent(
     power_button_menu_timer_.Stop();
     pre_shutdown_timer_.Stop();
 
-    const bool menu_was_opened = IsMenuOpened();
-    if (!in_tablet_mode_) {
-      // Cancel the menu animation if it's still ongoing when the button is
-      // released on a laptop-mode device.
-      if (menu_was_opened && !show_menu_animation_done_) {
-        static_cast<PowerButtonMenuScreenView*>(menu_widget_->GetContentsView())
-            ->ScheduleShowHideAnimation(false);
-        up_state |= UP_SHOWING_ANIMATION_CANCELLED;
-      }
-
-      // If the button is tapped (i.e. not held long enough to start the
-      // cancellable shutdown animation) while the menu is open, dismiss the
-      // menu.
-      if (menu_shown_when_power_button_down_ && pre_shutdown_timer_was_running)
-        DismissMenu();
+    const bool menu_was_partially_opened =
+        IsMenuOpened() && !show_menu_animation_done_;
+    // Cancel the menu animation if it's still ongoing when the button is
+    // released.
+    if (menu_was_partially_opened) {
+      static_cast<PowerButtonMenuScreenView*>(menu_widget_->GetContentsView())
+          ->ScheduleShowHideAnimation(false);
+      up_state |= UP_SHOWING_ANIMATION_CANCELLED;
     }
+
+    // If the button is tapped (i.e. not held long enough to start the
+    // cancellable shutdown animation) while the menu is open, dismiss the menu.
+    if (menu_shown_when_power_button_down_ && pre_shutdown_timer_was_running)
+      DismissMenu();
 
     // Ignore the event if it comes too soon after the last one.
     if (timestamp - previous_up_time <= kIgnoreRepeatedButtonUpDelay)
@@ -295,7 +294,7 @@ void PowerButtonController::OnPowerButtonEvent(
         up_state |= UP_MENU_TIMER_WAS_RUNNING;
       if (pre_shutdown_timer_was_running)
         up_state |= UP_PRE_SHUTDOWN_TIMER_WAS_RUNNING;
-      if (menu_was_opened)
+      if (show_menu_animation_done_)
         up_state |= UP_MENU_WAS_OPENED;
       UpdatePowerButtonEventUMAHistogram(up_state);
     }
@@ -303,8 +302,9 @@ void PowerButtonController::OnPowerButtonEvent(
     if (screen_off_when_power_button_down_ || !force_off_on_button_up_)
       return;
 
-    if (menu_timer_was_running || (menu_shown_when_power_button_down_ &&
-                                   pre_shutdown_timer_was_running)) {
+    if (menu_timer_was_running || menu_was_partially_opened ||
+        (menu_shown_when_power_button_down_ &&
+         pre_shutdown_timer_was_running)) {
       display_controller_->SetBacklightsForcedOff(true);
       LockScreenIfRequired();
     }
@@ -350,8 +350,10 @@ void PowerButtonController::DismissMenu() {
 
   show_menu_animation_done_ = false;
   active_window_widget_controller_.reset();
-  views::FocusManager::set_arrow_key_traversal_enabled(
-      arrow_key_traversal_initially_enabled_);
+}
+
+void PowerButtonController::StopForcingBacklightsOff() {
+  display_controller_->SetBacklightsForcedOff(false);
 }
 
 void PowerButtonController::OnDisplayModeChanged(
@@ -454,6 +456,10 @@ void PowerButtonController::OnLockStateEvent(
     lock_button_down_ = false;
 }
 
+bool PowerButtonController::UseTabletBehavior() const {
+  return in_tablet_mode_ || force_tablet_power_button_;
+}
+
 void PowerButtonController::StopTimersAndDismissMenu() {
   pre_shutdown_timer_.Stop();
   power_button_menu_timer_.Stop();
@@ -491,6 +497,7 @@ void PowerButtonController::ProcessCommandLine() {
                      ? ButtonType::LEGACY
                      : ButtonType::NORMAL;
   observe_accelerometer_events_ = cl->HasSwitch(switches::kAshEnableTabletMode);
+  force_tablet_power_button_ = cl->HasSwitch(switches::kForceTabletPowerButton);
 
   ParsePowerButtonPositionSwitch();
 }
@@ -515,9 +522,6 @@ void PowerButtonController::LockScreenIfRequired() {
 
 void PowerButtonController::SetShowMenuAnimationDone() {
   show_menu_animation_done_ = true;
-  // Enable arrow key in FocusManager. Arrow right/left and down/up triggers
-  // the same focus movement as tab/shift+tab.
-  views::FocusManager::set_arrow_key_traversal_enabled(true);
   pre_shutdown_timer_.Start(FROM_HERE, kStartShutdownAnimationTimeout, this,
                             &PowerButtonController::OnPreShutdownTimeout);
 }
@@ -569,13 +573,11 @@ void PowerButtonController::ParsePowerButtonPositionSwitch() {
 
 void PowerButtonController::UpdatePowerButtonEventUMAHistogram(
     uint32_t up_state) {
-  if (up_state & UP_SHOWING_ANIMATION_CANCELLED) {
+  if (up_state & UP_SHOWING_ANIMATION_CANCELLED)
     RecordPressInLaptopModeHistogram(PowerButtonPressType::kTapWithoutMenu);
-  }
 
-  if (up_state & UP_MENU_TIMER_WAS_RUNNING) {
+  if (up_state & UP_MENU_TIMER_WAS_RUNNING)
     RecordPressInTabletModeHistogram(PowerButtonPressType::kTapWithoutMenu);
-  }
 
   if (menu_shown_when_power_button_down_) {
     if (up_state & UP_PRE_SHUTDOWN_TIMER_WAS_RUNNING) {

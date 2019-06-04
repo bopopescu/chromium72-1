@@ -18,7 +18,10 @@
 #include <vector>
 
 #include "api/candidate.h"
+#include "api/crypto/cryptooptions.h"
+#include "api/media_transport_interface.h"
 #include "api/peerconnectioninterface.h"
+#include "logging/rtc_event_log/rtc_event_log.h"
 #include "media/sctp/sctptransportinternal.h"
 #include "p2p/base/dtlstransport.h"
 #include "p2p/base/p2ptransportchannel.h"
@@ -31,8 +34,7 @@
 #include "rtc_base/asyncinvoker.h"
 #include "rtc_base/constructormagic.h"
 #include "rtc_base/refcountedobject.h"
-#include "rtc_base/sigslot.h"
-#include "rtc_base/sslstreamadapter.h"
+#include "rtc_base/third_party/sigslot/sigslot.h"
 
 namespace rtc {
 class Thread;
@@ -41,8 +43,7 @@ class PacketTransportInternal;
 
 namespace webrtc {
 
-class JsepTransportController : public sigslot::has_slots<>,
-                                public rtc::MessageHandler {
+class JsepTransportController : public sigslot::has_slots<> {
  public:
   // Used when the RtpTransport/DtlsTransport of the m= section is changed
   // because the section is rejected or BUNDLE is enabled.
@@ -56,7 +57,8 @@ class JsepTransportController : public sigslot::has_slots<>,
     virtual bool OnTransportChanged(
         const std::string& mid,
         RtpTransportInternal* rtp_transport,
-        cricket::DtlsTransportInternal* dtls_transport) = 0;
+        cricket::DtlsTransportInternal* dtls_transport,
+        MediaTransportInterface* media_transport) = 0;
   };
 
   struct Config {
@@ -67,7 +69,7 @@ class JsepTransportController : public sigslot::has_slots<>,
     rtc::SSLProtocolVersion ssl_max_version = rtc::SSL_PROTOCOL_DTLS_12;
     // |crypto_options| is used to determine if created DTLS transports
     // negotiate GCM crypto suites or not.
-    rtc::CryptoOptions crypto_options;
+    webrtc::CryptoOptions crypto_options;
     PeerConnectionInterface::BundlePolicy bundle_policy =
         PeerConnectionInterface::kBundlePolicyBalanced;
     PeerConnectionInterface::RtcpMuxPolicy rtcp_mux_policy =
@@ -77,6 +79,15 @@ class JsepTransportController : public sigslot::has_slots<>,
     // Used to inject the ICE/DTLS transports created externally.
     cricket::TransportFactoryInterface* external_transport_factory = nullptr;
     Observer* transport_observer = nullptr;
+    bool active_reset_srtp_params = false;
+    RtcEventLog* event_log = nullptr;
+
+    // Optional media transport factory (experimental). If provided it will be
+    // used to create media_transport and will be used to send / receive
+    // audio and video frames instead of RTP. Note that currently
+    // media_transport co-exists with RTP / RTCP transports and uses the same
+    // underlying ICE transport.
+    MediaTransportFactory* media_transport_factory = nullptr;
   };
 
   // The ICE related events are signaled on the |signaling_thread|.
@@ -84,6 +95,7 @@ class JsepTransportController : public sigslot::has_slots<>,
   JsepTransportController(rtc::Thread* signaling_thread,
                           rtc::Thread* network_thread,
                           cricket::PortAllocator* port_allocator,
+                          AsyncResolverFactory* async_resolver_factory,
                           Config config);
   virtual ~JsepTransportController();
 
@@ -104,6 +116,9 @@ class JsepTransportController : public sigslot::has_slots<>,
       const std::string& mid) const;
   cricket::DtlsTransportInternal* GetRtcpDtlsTransport(
       const std::string& mid) const;
+
+  MediaTransportInterface* GetMediaTransport(const std::string& mid) const;
+  MediaTransportState GetMediaTransportState(const std::string& mid) const;
 
   /*********************
    * ICE-related methods
@@ -143,15 +158,22 @@ class JsepTransportController : public sigslot::has_slots<>,
   std::unique_ptr<rtc::SSLCertChain> GetRemoteSSLCertChain(
       const std::string& mid) const;
   // Get negotiated role, if one has been negotiated.
-  rtc::Optional<rtc::SSLRole> GetDtlsRole(const std::string& mid) const;
+  absl::optional<rtc::SSLRole> GetDtlsRole(const std::string& mid) const;
 
   // TODO(deadbeef): GetStats isn't const because all the way down to
   // OpenSSLStreamAdapter, GetSslCipherSuite and GetDtlsSrtpCryptoSuite are not
   // const. Fix this.
   bool GetStats(const std::string& mid, cricket::TransportStats* stats);
-  void SetMetricsObserver(webrtc::MetricsObserverInterface* metrics_observer);
 
   bool initial_offerer() const { return initial_offerer_ && *initial_offerer_; }
+
+  void SetActiveResetSrtpParams(bool active_reset_srtp_params);
+
+  // Allows to overwrite the settings from config. You may set or reset the
+  // media transport factory on the jsep transport controller, as long as you
+  // did not call 'GetMediaTransport' or 'MaybeCreateJsepTransport'. Once Jsep
+  // transport is created, you can't change this setting.
+  void SetMediaTransportFactory(MediaTransportFactory* media_transport_factory);
 
   // All of these signals are fired on the signaling thread.
 
@@ -160,6 +182,11 @@ class JsepTransportController : public sigslot::has_slots<>,
   // Else if all connected => connected,
   // Else => connecting
   sigslot::signal1<cricket::IceConnectionState> SignalIceConnectionState;
+
+  sigslot::signal1<PeerConnectionInterface::PeerConnectionState>
+      SignalConnectionState;
+  sigslot::signal1<PeerConnectionInterface::IceConnectionState>
+      SignalStandardizedIceConnectionState;
 
   // If all transports done gathering => complete,
   // Else if any are gathering => gathering,
@@ -175,9 +202,9 @@ class JsepTransportController : public sigslot::has_slots<>,
 
   sigslot::signal1<rtc::SSLHandshakeError> SignalDtlsHandshakeError;
 
- private:
-  void OnMessage(rtc::Message* pmsg) override;
+  sigslot::signal<> SignalMediaTransportStateChanged;
 
+ private:
   RTCError ApplyDescription_n(bool local,
                               SdpType type,
                               const cricket::SessionDescription* description);
@@ -201,8 +228,8 @@ class JsepTransportController : public sigslot::has_slots<>,
       const std::vector<int>& encrypted_extension_ids,
       int rtp_abs_sendtime_extn_id);
 
-  rtc::Optional<std::string> bundled_mid() const {
-    rtc::Optional<std::string> bundled_mid;
+  absl::optional<std::string> bundled_mid() const {
+    absl::optional<std::string> bundled_mid;
     if (bundle_group_ && bundle_group_->FirstContentName()) {
       bundled_mid = *(bundle_group_->FirstContentName());
     }
@@ -239,7 +266,20 @@ class JsepTransportController : public sigslot::has_slots<>,
   cricket::JsepTransport* GetJsepTransportByName(
       const std::string& transport_name);
 
-  RTCError MaybeCreateJsepTransport(const cricket::ContentInfo& content_info);
+  // Creates jsep transport. Noop if transport is already created.
+  // Transport is created either during SetLocalDescription (|local| == true) or
+  // during SetRemoteDescription (|local| == false). Passing |local| helps to
+  // differentiate initiator (caller) from answerer (callee).
+  RTCError MaybeCreateJsepTransport(bool local,
+                                    const cricket::ContentInfo& content_info);
+
+  // Creates media transport if config wants to use it, and pre-shared key is
+  // provided in content info. It modifies the config to disable media transport
+  // if pre-shared key is not provided.
+  std::unique_ptr<webrtc::MediaTransportInterface> MaybeCreateMediaTransport(
+      const cricket::ContentInfo& content_info,
+      bool local,
+      cricket::IceTransportInternal* ice_transport);
   void MaybeDestroyJsepTransport(const std::string& mid);
   void DestroyAllJsepTransports_n();
 
@@ -279,11 +319,11 @@ class JsepTransportController : public sigslot::has_slots<>,
   void OnTransportGatheringState_n(cricket::IceTransportInternal* transport);
   void OnTransportCandidateGathered_n(cricket::IceTransportInternal* transport,
                                       const cricket::Candidate& candidate);
-  void OnTransportCandidatesRemoved(const cricket::Candidates& candidates);
   void OnTransportCandidatesRemoved_n(cricket::IceTransportInternal* transport,
                                       const cricket::Candidates& candidates);
   void OnTransportRoleConflict_n(cricket::IceTransportInternal* transport);
   void OnTransportStateChanged_n(cricket::IceTransportInternal* transport);
+  void OnMediaTransportStateChanged_n();
 
   void UpdateAggregateStates_n();
 
@@ -292,6 +332,7 @@ class JsepTransportController : public sigslot::has_slots<>,
   rtc::Thread* const signaling_thread_ = nullptr;
   rtc::Thread* const network_thread_ = nullptr;
   cricket::PortAllocator* const port_allocator_ = nullptr;
+  AsyncResolverFactory* const async_resolver_factory_ = nullptr;
 
   std::map<std::string, std::unique_ptr<cricket::JsepTransport>>
       jsep_transports_by_name_;
@@ -299,25 +340,30 @@ class JsepTransportController : public sigslot::has_slots<>,
   // (BaseChannel/SctpTransport) and the JsepTransport underneath.
   std::map<std::string, cricket::JsepTransport*> mid_to_transport_;
 
-  // Aggregate state for Transports.
+  // Aggregate states for Transports.
+  // standardized_ice_connection_state_ is intended to replace
+  // ice_connection_state, see bugs.webrtc.org/9308
   cricket::IceConnectionState ice_connection_state_ =
       cricket::kIceConnectionConnecting;
+  PeerConnectionInterface::IceConnectionState
+      standardized_ice_connection_state_ =
+          PeerConnectionInterface::kIceConnectionNew;
+  PeerConnectionInterface::PeerConnectionState combined_connection_state_ =
+      PeerConnectionInterface::PeerConnectionState::kNew;
   cricket::IceGatheringState ice_gathering_state_ = cricket::kIceGatheringNew;
 
   Config config_;
   const cricket::SessionDescription* local_desc_ = nullptr;
   const cricket::SessionDescription* remote_desc_ = nullptr;
-  rtc::Optional<bool> initial_offerer_;
+  absl::optional<bool> initial_offerer_;
 
-  rtc::Optional<cricket::ContentGroup> bundle_group_;
+  absl::optional<cricket::ContentGroup> bundle_group_;
 
   cricket::IceConfig ice_config_;
   cricket::IceRole ice_role_ = cricket::ICEROLE_CONTROLLING;
   uint64_t ice_tiebreaker_ = rtc::CreateRandomId64();
   rtc::scoped_refptr<rtc::RTCCertificate> certificate_;
   rtc::AsyncInvoker invoker_;
-
-  webrtc::MetricsObserverInterface* metrics_observer_ = nullptr;
 
   RTC_DISALLOW_COPY_AND_ASSIGN(JsepTransportController);
 };

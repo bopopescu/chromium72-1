@@ -13,9 +13,9 @@
 #include "base/feature_list.h"
 #include "base/logging.h"
 #include "base/macros.h"
+#include "base/stl_util.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/threading/sequenced_task_runner_handle.h"
-#include "base/trace_event/trace_event.h"
 #include "content/child/child_process.h"
 #include "content/public/common/content_features.h"
 #include "content/renderer/media/stream/media_stream_constraints_util_video_device.h"
@@ -50,7 +50,7 @@ void MediaStreamVideoSource::AddTrack(
     const VideoCaptureDeliverFrameCB& frame_callback,
     const ConstraintsCallback& callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  DCHECK(std::find(tracks_.begin(), tracks_.end(), track) == tracks_.end());
+  DCHECK(!base::ContainsValue(tracks_, track));
   tracks_.push_back(track);
   secure_tracker_.Add(track, true);
 
@@ -86,8 +86,7 @@ void MediaStreamVideoSource::RemoveTrack(MediaStreamVideoTrack* video_track,
                                          base::OnceClosure callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   {
-    std::vector<MediaStreamVideoTrack*>::iterator it =
-        std::find(tracks_.begin(), tracks_.end(), video_track);
+    auto it = std::find(tracks_.begin(), tracks_.end(), video_track);
     DCHECK(it != tracks_.end());
     tracks_.erase(it);
   }
@@ -126,7 +125,7 @@ void MediaStreamVideoSource::RemoveTrack(MediaStreamVideoTrack* video_track,
       // stopping a source with StopSource() can have side effects that affect
       // sources created after that StopSource() call, but before the actual
       // stop takes place. See http://crbug.com/778039.
-      StopForRestart(base::BindOnce(&MediaStreamVideoSource::DidRemoveLastTrack,
+      StopForRestart(base::BindOnce(&MediaStreamVideoSource::DidStopSource,
                                     weak_factory_.GetWeakPtr(),
                                     std::move(callback)));
       if (state_ == STOPPING_FOR_RESTART || state_ == STOPPED_FOR_RESTART) {
@@ -139,7 +138,7 @@ void MediaStreamVideoSource::RemoveTrack(MediaStreamVideoTrack* video_track,
         FinalizeStopSource();
       } else {
         // If the source does not support restarting, call StopSource()
-        // to ensure stop on this task. DidRemoveLastTrack() will be called on
+        // to ensure stop on this task. DidStopSource() will be called on
         // another task even if the source does not support restarting, as
         // StopForRestart() always posts a task to run its callback.
         StopSource();
@@ -152,11 +151,10 @@ void MediaStreamVideoSource::RemoveTrack(MediaStreamVideoTrack* video_track,
   }
 }
 
-void MediaStreamVideoSource::DidRemoveLastTrack(base::OnceClosure callback,
-                                                RestartResult result) {
+void MediaStreamVideoSource::DidStopSource(base::OnceClosure callback,
+                                           RestartResult result) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   DCHECK(callback);
-  DCHECK(tracks_.empty());
   DCHECK_EQ(Owner().GetReadyState(),
             blink::WebMediaStreamSource::kReadyStateEnded);
   if (result == RestartResult::IS_STOPPED) {
@@ -313,6 +311,19 @@ MediaStreamVideoSource::GetCurrentCaptureParams() const {
   return base::Optional<media::VideoCaptureParams>();
 }
 
+void MediaStreamVideoSource::DoChangeSource(
+    const MediaStreamDevice& new_device) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  DVLOG(1) << "MediaStreamVideoSource::DoChangeSource: "
+           << ", new device id = " << new_device.id
+           << ", session id = " << new_device.session_id;
+  if (state_ != STARTED) {
+    return;
+  }
+
+  ChangeSourceImpl(new_device);
+}
+
 void MediaStreamVideoSource::DoStopSource() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   DVLOG(3) << "DoStopSource()";
@@ -407,11 +418,14 @@ void MediaStreamVideoSource::UpdateTrackSettings(
   // Calculate resulting frame size if the source delivers frames
   // according to the current format. Note: Format may change later.
   gfx::Size desired_size;
-  VideoTrackAdapter::CalculateTargetSize(false /* is_rotated */,
-                                         GetCurrentFormat()->frame_size,
-                                         adapter_settings, &desired_size);
-  track->SetTargetSizeAndFrameRate(desired_size.width(), desired_size.height(),
-                                   adapter_settings.max_frame_rate);
+  if (VideoTrackAdapter::CalculateDesiredSize(
+          false /* is_rotated */, GetCurrentFormat()->frame_size,
+          adapter_settings, &desired_size)) {
+    track->SetTargetSizeAndFrameRate(desired_size.width(),
+                                     desired_size.height(),
+                                     adapter_settings.max_frame_rate());
+  }
+  track->SetTrackAdapterSettings(adapter_settings);
 }
 
 MediaStreamVideoSource::PendingTrackInfo::PendingTrackInfo(

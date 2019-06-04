@@ -36,15 +36,13 @@
 #include "third_party/blink/public/platform/platform.h"
 #include "third_party/blink/public/platform/task_type.h"
 #include "third_party/blink/public/platform/web_scroll_into_view_params.h"
-#include "third_party/blink/renderer/bindings/core/v8/exception_messages.h"
-#include "third_party/blink/renderer/bindings/core/v8/exception_state.h"
 #include "third_party/blink/renderer/bindings/modules/v8/rendering_context.h"
+#include "third_party/blink/renderer/core/accessibility/ax_object_cache.h"
 #include "third_party/blink/renderer/core/css/css_font_selector.h"
+#include "third_party/blink/renderer/core/css/css_property_names.h"
 #include "third_party/blink/renderer/core/css/css_property_value_set.h"
 #include "third_party/blink/renderer/core/css/resolver/style_resolver.h"
 #include "third_party/blink/renderer/core/css/style_engine.h"
-#include "third_party/blink/renderer/core/css_property_names.h"
-#include "third_party/blink/renderer/core/dom/ax_object_cache.h"
 #include "third_party/blink/renderer/core/dom/events/event.h"
 #include "third_party/blink/renderer/core/events/mouse_event.h"
 #include "third_party/blink/renderer/core/frame/settings.h"
@@ -56,6 +54,7 @@
 #include "third_party/blink/renderer/modules/canvas/canvas2d/canvas_style.h"
 #include "third_party/blink/renderer/modules/canvas/canvas2d/hit_region.h"
 #include "third_party/blink/renderer/modules/canvas/canvas2d/path_2d.h"
+#include "third_party/blink/renderer/platform/bindings/exception_state.h"
 #include "third_party/blink/renderer/platform/fonts/font_cache.h"
 #include "third_party/blink/renderer/platform/fonts/text_run_paint_info.h"
 #include "third_party/blink/renderer/platform/graphics/canvas_2d_layer_bridge.h"
@@ -93,14 +92,14 @@ class CanvasRenderingContext2DAutoRestoreSkCanvas {
       CanvasRenderingContext2D* context)
       : context_(context), save_count_(0) {
     DCHECK(context_);
-    PaintCanvas* c = context_->DrawingCanvas();
+    cc::PaintCanvas* c = context_->DrawingCanvas();
     if (c) {
       save_count_ = c->getSaveCount();
     }
   }
 
   ~CanvasRenderingContext2DAutoRestoreSkCanvas() {
-    PaintCanvas* c = context_->DrawingCanvas();
+    cc::PaintCanvas* c = context_->DrawingCanvas();
     if (c)
       c->restoreToCount(save_count_);
     context_->ValidateStateStack();
@@ -147,7 +146,7 @@ CanvasRenderingContext2D::~CanvasRenderingContext2D() = default;
 
 void CanvasRenderingContext2D::ValidateStateStack() const {
 #if DCHECK_IS_ON()
-  if (PaintCanvas* sk_canvas = ExistingDrawingCanvas()) {
+  if (cc::PaintCanvas* sk_canvas = ExistingDrawingCanvas()) {
     // The canvas should always have an initial save frame, to support
     // resetting the top level matrix and clip.
     DCHECK_GT(sk_canvas->getSaveCount(), 1);
@@ -169,6 +168,12 @@ bool CanvasRenderingContext2D::IsAccelerated() const {
   return layer_bridge->IsAccelerated();
 }
 
+bool CanvasRenderingContext2D::IsOriginTopLeft() const {
+  // Accelerated 2D contexts have the origin of coordinates on the bottom left,
+  // except if they are single buffered (needed for front buffer rendering).
+  return !IsAccelerated() || canvas()->ResourceProvider()->IsSingleBuffered();
+}
+
 bool CanvasRenderingContext2D::IsComposited() const {
   return IsAccelerated();
 }
@@ -188,7 +193,7 @@ void CanvasRenderingContext2D::LoseContext(LostContextMode lost_mode) {
   if (context_lost_mode_ != kNotLostContext)
     return;
   context_lost_mode_ = lost_mode;
-  if (context_lost_mode_ == kSyntheticLostContext && canvas()) {
+  if (context_lost_mode_ == kSyntheticLostContext && Host()) {
     Host()->DiscardResourceProvider();
   }
   dispatch_context_lost_event_timer_.StartOneShot(TimeDelta(), FROM_HERE);
@@ -223,8 +228,8 @@ void CanvasRenderingContext2D::Trace(blink::Visitor* visitor) {
 
 void CanvasRenderingContext2D::DispatchContextLostEvent(TimerBase*) {
   if (canvas() && ContextLostRestoredEventsEnabled()) {
-    Event* event = Event::CreateCancelable(EventTypeNames::contextlost);
-    canvas()->DispatchEvent(event);
+    Event* event = Event::CreateCancelable(event_type_names::kContextlost);
+    canvas()->DispatchEvent(*event);
     if (event->defaultPrevented()) {
       context_restorable_ = false;
     }
@@ -268,8 +273,8 @@ void CanvasRenderingContext2D::DispatchContextRestoredEvent(TimerBase*) {
   Reset();
   context_lost_mode_ = kNotLostContext;
   if (ContextLostRestoredEventsEnabled()) {
-    Event* event(Event::Create(EventTypeNames::contextrestored));
-    canvas()->DispatchEvent(event);
+    Event* event(Event::Create(event_type_names::kContextrestored));
+    canvas()->DispatchEvent(*event);
   }
 }
 
@@ -310,7 +315,7 @@ void CanvasRenderingContext2D::Reset() {
 }
 
 void CanvasRenderingContext2D::RestoreCanvasMatrixClipStack(
-    PaintCanvas* c) const {
+    cc::PaintCanvas* c) const {
   RestoreMatrixClipStack(c);
 }
 
@@ -351,7 +356,8 @@ void CanvasRenderingContext2D::ScrollPathIntoViewInternal(const Path& path) {
 
   // We first map canvas coordinates to layout coordinates.
   LayoutRect path_rect(bounding_rect);
-  IntRect canvas_rect = layout_box->AbsoluteContentBox();
+  LayoutRect canvas_rect = layout_box->PhysicalContentBoxRect();
+  canvas_rect.MoveBy(LayoutPoint(layout_box->LocalToAbsolute()));
   path_rect.SetX(
       (canvas_rect.X() + path_rect.X() * canvas_rect.Width() / Width()));
   path_rect.SetY(
@@ -360,7 +366,7 @@ void CanvasRenderingContext2D::ScrollPathIntoViewInternal(const Path& path) {
   path_rect.SetHeight((path_rect.Height() * canvas_rect.Height() / Height()));
 
   // Then we clip the bounding box to the canvas visible range.
-  path_rect.Intersect(LayoutRect(canvas_rect));
+  path_rect.Intersect(canvas_rect);
 
   bool is_horizontal_writing_mode =
       canvas()->EnsureComputedStyle()->IsHorizontalWritingMode();
@@ -413,7 +419,7 @@ void CanvasRenderingContext2D::SnapshotStateForFilter() {
   ModifiableState().SetFontForFilter(AccessFont());
 }
 
-PaintCanvas* CanvasRenderingContext2D::DrawingCanvas() const {
+cc::PaintCanvas* CanvasRenderingContext2D::DrawingCanvas() const {
   if (isContextLost())
     return nullptr;
   if (canvas()->GetOrCreateCanvas2DLayerBridge())
@@ -421,7 +427,7 @@ PaintCanvas* CanvasRenderingContext2D::DrawingCanvas() const {
   return nullptr;
 }
 
-PaintCanvas* CanvasRenderingContext2D::ExistingDrawingCanvas() const {
+cc::PaintCanvas* CanvasRenderingContext2D::ExistingDrawingCanvas() const {
   if (IsPaintable())
     return canvas()->GetCanvas2DLayerBridge()->Canvas();
   return nullptr;
@@ -551,8 +557,9 @@ void CanvasRenderingContext2D::setFont(const String& new_font) {
   ModifiableState().SetUnparsedFont(new_font_safe_copy);
 }
 
-void CanvasRenderingContext2D::DidProcessTask() {
-  CanvasRenderingContext::DidProcessTask();
+void CanvasRenderingContext2D::DidProcessTask(
+    const base::PendingTask& pending_task) {
+  CanvasRenderingContext::DidProcessTask(pending_task);
   // This should be the only place where canvas() needs to be checked for
   // nullness because the circular refence with HTMLCanvasElement means the
   // canvas and the context keep each other alive. As long as the pair is
@@ -650,7 +657,7 @@ HitTestCanvasResult* CanvasRenderingContext2D::GetControlAndIdIfHitRegionExists(
   FloatPoint local_pos =
       box->AbsoluteToLocal(FloatPoint(location), kUseTransforms);
   if (box->HasBorderOrPadding())
-    local_pos.Move(-box->ContentBoxOffset());
+    local_pos.Move(-box->PhysicalContentBoxOffset());
   float scaleWidth = box->ContentWidth().ToFloat() == 0.0f
                          ? 1.0f
                          : canvas()->width() / box->ContentWidth();
@@ -796,7 +803,7 @@ void CanvasRenderingContext2D::DrawTextInternal(
   // to 0, for example), so update style before grabbing the drawingCanvas.
   canvas()->GetDocument().UpdateStyleAndLayoutTreeForNode(canvas());
 
-  PaintCanvas* c = DrawingCanvas();
+  cc::PaintCanvas* c = DrawingCanvas();
   if (!c)
     return;
 
@@ -836,7 +843,7 @@ void CanvasRenderingContext2D::DrawTextInternal(
   text_run.SetNormalizeSpace(true);
   // Draw the item text at the correct point.
   FloatPoint location(clampTo<float>(x),
-                      clampTo<float>(y + GetFontBaseline(font_metrics)));
+                      clampTo<float>(y + GetFontBaseline(*font_data)));
   double font_width = font.Width(text_run);
 
   bool use_max_width = (max_width && *max_width < font_width);
@@ -883,7 +890,7 @@ void CanvasRenderingContext2D::DrawTextInternal(
 
   Draw(
       [&font, &text_run_paint_info, &location](
-          PaintCanvas* c, const PaintFlags* flags)  // draw lambda
+          cc::PaintCanvas* c, const PaintFlags* flags)  // draw lambda
       {
         font.DrawBidiText(c, text_run_paint_info, location,
                           Font::kUseFallbackIfFontNotReady, kCDeviceScaleFactor,
@@ -904,24 +911,30 @@ const Font& CanvasRenderingContext2D::AccessFont() {
 void CanvasRenderingContext2D::SetIsHidden(bool hidden) {
   if (IsPaintable())
     canvas()->GetCanvas2DLayerBridge()->SetIsHidden(hidden);
-  if (hidden) {
+  if (hidden)
     PruneLocalFontCache(0);
-  }
 }
 
 bool CanvasRenderingContext2D::IsTransformInvertible() const {
   return GetState().IsTransformInvertible();
 }
 
+AffineTransform CanvasRenderingContext2D::Transform() const {
+  return GetState().Transform();
+}
+
 cc::Layer* CanvasRenderingContext2D::CcLayer() const {
   return IsPaintable() ? canvas()->GetCanvas2DLayerBridge()->Layer() : nullptr;
 }
 
-void CanvasRenderingContext2D::getContextAttributes(
-    CanvasRenderingContext2DSettings& settings) const {
-  settings.setAlpha(CreationAttributes().alpha);
-  settings.setColorSpace(ColorSpaceAsString());
-  settings.setPixelFormat(PixelFormatAsString());
+CanvasRenderingContext2DSettings*
+CanvasRenderingContext2D::getContextAttributes() const {
+  CanvasRenderingContext2DSettings* settings =
+      CanvasRenderingContext2DSettings::Create();
+  settings->setAlpha(CreationAttributes().alpha);
+  settings->setColorSpace(ColorSpaceAsString());
+  settings->setPixelFormat(PixelFormatAsString());
+  return settings;
 }
 
 void CanvasRenderingContext2D::drawFocusIfNeeded(Element* element) {
@@ -1009,30 +1022,30 @@ void CanvasRenderingContext2D::UpdateElementAccessibility(const Path& path,
   ax_object_cache->SetCanvasObjectBounds(canvas(), element, element_rect);
 }
 
-void CanvasRenderingContext2D::addHitRegion(const HitRegionOptions& options,
+void CanvasRenderingContext2D::addHitRegion(const HitRegionOptions* options,
                                             ExceptionState& exception_state) {
-  if (options.id().IsEmpty() && !options.control()) {
-    exception_state.ThrowDOMException(kNotSupportedError,
+  if (options->id().IsEmpty() && !options->control()) {
+    exception_state.ThrowDOMException(DOMExceptionCode::kNotSupportedError,
                                       "Both id and control are null.");
     return;
   }
 
-  if (options.control() &&
-      !canvas()->IsSupportedInteractiveCanvasFallback(*options.control())) {
-    exception_state.ThrowDOMException(kNotSupportedError,
+  if (options->control() &&
+      !canvas()->IsSupportedInteractiveCanvasFallback(*options->control())) {
+    exception_state.ThrowDOMException(DOMExceptionCode::kNotSupportedError,
                                       "The control is neither null nor a "
                                       "supported interactive canvas fallback "
                                       "element.");
     return;
   }
 
-  Path hit_region_path = options.hasPath() ? options.path()->GetPath() : path_;
+  Path hit_region_path = options->path() ? options->path()->GetPath() : path_;
 
-  PaintCanvas* c = DrawingCanvas();
+  cc::PaintCanvas* c = DrawingCanvas();
 
   if (hit_region_path.IsEmpty() || !c || !GetState().IsTransformInvertible() ||
       c->isClipEmpty()) {
-    exception_state.ThrowDOMException(kNotSupportedError,
+    exception_state.ThrowDOMException(DOMExceptionCode::kNotSupportedError,
                                       "The specified path has no pixels.");
     return;
   }
@@ -1042,7 +1055,7 @@ void CanvasRenderingContext2D::addHitRegion(const HitRegionOptions& options,
   if (GetState().HasClip()) {
     hit_region_path.IntersectPath(GetState().GetCurrentClipPath());
     if (hit_region_path.IsEmpty()) {
-      exception_state.ThrowDOMException(kNotSupportedError,
+      exception_state.ThrowDOMException(DOMExceptionCode::kNotSupportedError,
                                         "The specified path has no pixels.");
     }
   }
@@ -1051,8 +1064,8 @@ void CanvasRenderingContext2D::addHitRegion(const HitRegionOptions& options,
     hit_region_manager_ = HitRegionManager::Create();
 
   // Remove previous region (with id or control)
-  hit_region_manager_->RemoveHitRegionById(options.id());
-  hit_region_manager_->RemoveHitRegionByControl(options.control());
+  hit_region_manager_->RemoveHitRegionById(options->id());
+  hit_region_manager_->RemoveHitRegionByControl(options->control());
 
   HitRegion* hit_region = HitRegion::Create(hit_region_path, options);
   Element* element = hit_region->Control();

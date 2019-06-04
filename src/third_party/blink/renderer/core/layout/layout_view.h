@@ -28,9 +28,8 @@
 #include "third_party/blink/renderer/core/layout/hit_test_result.h"
 #include "third_party/blink/renderer/core/layout/layout_block_flow.h"
 #include "third_party/blink/renderer/core/layout/layout_state.h"
+#include "third_party/blink/renderer/core/scroll/scrollable_area.h"
 #include "third_party/blink/renderer/platform/heap/handle.h"
-#include "third_party/blink/renderer/platform/pod_free_list_arena.h"
-#include "third_party/blink/renderer/platform/scroll/scrollable_area.h"
 
 namespace blink {
 
@@ -63,8 +62,9 @@ class CORE_EXPORT LayoutView final : public LayoutBlockFlow {
 
   // hitTest() will update layout, style and compositing first while
   // hitTestNoLifecycleUpdate() does not.
-  bool HitTest(HitTestResult&);
-  bool HitTestNoLifecycleUpdate(HitTestResult&);
+  bool HitTest(const HitTestLocation& location, HitTestResult&);
+  bool HitTestNoLifecycleUpdate(const HitTestLocation& location,
+                                HitTestResult&);
 
   // Returns the total count of calls to HitTest, for testing.
   unsigned HitTestCount() const { return hit_test_count_; }
@@ -136,15 +136,15 @@ class CORE_EXPORT LayoutView final : public LayoutBlockFlow {
       const LayoutBoxModelObject* ancestor,
       TransformState&,
       VisualRectFlags = kDefaultVisualRectFlags) const override;
-  LayoutSize OffsetForFixedPosition(bool include_pending_scroll = false) const;
+  LayoutSize OffsetForFixedPosition() const;
 
   void InvalidatePaintForViewAndCompositedLayers();
 
-  void Paint(const PaintInfo&, const LayoutPoint&) const override;
-  void PaintBoxDecorationBackground(const PaintInfo&,
-                                    const LayoutPoint&) const override;
+  void Paint(const PaintInfo&) const override;
+  void PaintBoxDecorationBackground(
+      const PaintInfo&,
+      const LayoutPoint& paint_offset) const override;
 
-  void ClearSelection();
   void CommitPendingSelection();
 
   void AbsoluteRects(Vector<IntRect>&,
@@ -158,14 +158,23 @@ class CORE_EXPORT LayoutView final : public LayoutBlockFlow {
       OverlayScrollbarClipBehavior =
           kIgnorePlatformOverlayScrollbarSize) const override;
 
+  // If either direction has a non-auto mode, the other must as well.
+  void SetAutosizeScrollbarModes(ScrollbarMode h_mode, ScrollbarMode v_mode);
+  ScrollbarMode AutosizeHorizontalScrollbarMode() const {
+    return autosize_h_scrollbar_mode_;
+  }
+  ScrollbarMode AutosizeVerticalScrollbarMode() const {
+    return autosize_v_scrollbar_mode_;
+  }
+
   void CalculateScrollbarModes(ScrollbarMode& h_mode,
                                ScrollbarMode& v_mode) const;
 
-  void DispatchFakeMouseMoveEventSoon(EventHandler&) override;
+  void MayUpdateHoverWhenContentUnderMouseChanged(EventHandler&) override;
 
   LayoutState* GetLayoutState() const { return layout_state_; }
 
-  void UpdateHitTestResult(HitTestResult&, const LayoutPoint&) override;
+  void UpdateHitTestResult(HitTestResult&, const LayoutPoint&) const override;
 
   ViewFragmentationContext* FragmentationContext() const {
     return fragmentation_context_.get();
@@ -227,20 +236,40 @@ class CORE_EXPORT LayoutView final : public LayoutBlockFlow {
   // It is very likely you do not want to call this method.
   void SetShouldDoFullPaintInvalidationForViewAndAllDescendants();
 
-  void SetShouldDoFullPaintInvalidationOnResizeIfNeeded(bool width_changed,
-                                                        bool height_changed);
-
-  // The document scrollbar is always on the right, even in RTL. This is to
-  // prevent it from moving around on navigations.
-  // TODO(skobes): This is not quite the ideal behavior, see
-  // http://crbug.com/250514 and http://crbug.com/249860.
-  bool ShouldPlaceBlockDirectionScrollbarOnLogicalLeft() const override {
-    return false;
-  }
+  bool ShouldPlaceBlockDirectionScrollbarOnLogicalLeft() const override;
 
   LayoutRect DebugRect() const override;
 
-  IntSize ScrolledContentOffset() const override;
+  // Returns the coordinates of find-in-page scrollbar tickmarks.  These come
+  // from DocumentMarkerController, unless overridden by SetTickmarks.
+  Vector<IntRect> GetTickmarks() const;
+
+  // Sets the coordinates of find-in-page scrollbar tickmarks, bypassing
+  // DocumentMarkerController.  This is used by the PDF plugin.
+  void OverrideTickmarks(const Vector<IntRect>&);
+
+  // Issues a paint invalidation on the layout viewport's vertical scrollbar
+  // (which is responsible for painting the tickmarks).
+  void InvalidatePaintForTickmarks();
+
+  bool RecalcOverflow() override;
+
+  // The visible background area, in the local coordinates. The view background
+  // will be painted in this rect. It's also the positioning area of fixed-
+  // attachment backgrounds.
+  LayoutRect BackgroundRect() const { return OverflowClipRect(LayoutPoint()); }
+
+  // The previous BackgroundRect after the previous paint invalidation.
+  LayoutRect PreviousBackgroundRect() const {
+    DCHECK_EQ(GetDocument().Lifecycle().GetState(),
+              DocumentLifecycle::kInPrePaint);
+    return previous_background_rect_;
+  }
+  void SetPreviousBackgroundRect(const LayoutRect& r) const {
+    DCHECK_EQ(GetDocument().Lifecycle().GetState(),
+              DocumentLifecycle::kInPrePaint);
+    previous_background_rect_ = r;
+  }
 
  private:
   void MapLocalToAncestor(
@@ -302,6 +331,16 @@ class CORE_EXPORT LayoutView final : public LayoutBlockFlow {
   unsigned hit_test_count_;
   unsigned hit_test_cache_hits_;
   Persistent<HitTestCache> hit_test_cache_;
+
+  // FrameViewAutoSizeInfo controls scrollbar appearance manually rather than
+  // relying on layout. These members are used to override the ScrollbarModes
+  // calculated from style. kScrollbarAuto disables the override.
+  ScrollbarMode autosize_h_scrollbar_mode_;
+  ScrollbarMode autosize_v_scrollbar_mode_;
+
+  Vector<IntRect> tickmarks_override_;
+
+  mutable LayoutRect previous_background_rect_;
 };
 
 DEFINE_LAYOUT_OBJECT_TYPE_CASTS(LayoutView, IsLayoutView());

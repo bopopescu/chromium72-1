@@ -4,16 +4,17 @@
 
 #include "chrome/browser/extensions/updater/extension_update_client_base_browsertest.h"
 
+#include "base/bind.h"
 #include "base/path_service.h"
 #include "base/run_loop.h"
-#include "base/task_scheduler/post_task.h"
+#include "base/task/post_task.h"
 #include "base/test/scoped_feature_list.h"
 #include "chrome/browser/chrome_browser_main.h"
 #include "chrome/browser/chrome_browser_main_extra_parts.h"
 #include "chrome/browser/extensions/browsertest_util.h"
-#include "components/update_client/url_request_post_interceptor.h"
+#include "components/update_client/protocol_handler.h"
+#include "components/update_client/url_loader_post_interceptor.h"
 #include "content/public/browser/browser_context.h"
-#include "content/public/browser/browser_thread.h"
 #include "extensions/browser/updater/update_service.h"
 #include "extensions/browser/updater/update_service_factory.h"
 #include "extensions/common/extension_features.h"
@@ -30,22 +31,33 @@ class TestChromeUpdateClientConfig
     : public extensions::ChromeUpdateClientConfig {
  public:
   TestChromeUpdateClientConfig(content::BrowserContext* context,
+                               bool use_JSON,
                                const std::vector<GURL>& update_url,
                                const std::vector<GURL>& ping_url)
       : extensions::ChromeUpdateClientConfig(context),
+        use_JSON_(use_JSON),
         update_url_(update_url),
         ping_url_(ping_url) {}
 
+  // Overrides for update_client::Configurator.
   std::vector<GURL> UpdateUrl() const final { return update_url_; }
 
   std::vector<GURL> PingUrl() const final { return ping_url_; }
 
   bool EnabledCupSigning() const final { return false; }
 
+  std::unique_ptr<update_client::ProtocolHandlerFactory>
+  GetProtocolHandlerFactory() const final {
+    if (use_JSON_)
+      return std::make_unique<update_client::ProtocolHandlerFactoryJSON>();
+    return std::make_unique<update_client::ProtocolHandlerFactoryXml>();
+  }
+
  protected:
   ~TestChromeUpdateClientConfig() override = default;
 
  private:
+  bool use_JSON_ = false;
   std::vector<GURL> update_url_;
   std::vector<GURL> ping_url_;
 
@@ -105,33 +117,39 @@ class UpdateClientCompleteEventWaiter
 
 }  // namespace
 
-ExtensionUpdateClientBaseTest::ExtensionUpdateClientBaseTest() {}
+ExtensionUpdateClientBaseTest::ExtensionUpdateClientBaseTest(bool use_JSON)
+    : https_server_for_update_(net::EmbeddedTestServer::TYPE_HTTPS),
+      https_server_for_ping_(net::EmbeddedTestServer::TYPE_HTTPS),
+      use_JSON_(use_JSON) {}
 
 ExtensionUpdateClientBaseTest::~ExtensionUpdateClientBaseTest() {}
 
 std::vector<GURL> ExtensionUpdateClientBaseTest::GetUpdateUrls() const {
-  return {GURL("https://updatehost/service/update")};
+  return {https_server_for_update_.GetURL("/updatehost/service/update")};
 }
 
 std::vector<GURL> ExtensionUpdateClientBaseTest::GetPingUrls() const {
-  return {GURL("https://pinghost/service/ping")};
+  return {https_server_for_ping_.GetURL("/pinghost/service/ping")};
 }
 
 ConfigFactoryCallback
 ExtensionUpdateClientBaseTest::ChromeUpdateClientConfigFactory() const {
   return base::BindRepeating(
       [](const std::vector<GURL>& update_url, const std::vector<GURL>& ping_url,
-         content::BrowserContext* context)
+         bool use_JSON, content::BrowserContext* context)
           -> scoped_refptr<ChromeUpdateClientConfig> {
         return base::MakeRefCounted<TestChromeUpdateClientConfig>(
-            context, update_url, ping_url);
+            context, use_JSON, update_url, ping_url);
       },
-      GetUpdateUrls(), GetPingUrls());
+      GetUpdateUrls(), GetPingUrls(), use_JSON_);
 }
 
 void ExtensionUpdateClientBaseTest::SetUp() {
+  ASSERT_TRUE(https_server_for_update_.InitializeAndListen());
+  ASSERT_TRUE(https_server_for_ping_.InitializeAndListen());
+
   scoped_feature_list_.InitAndEnableFeature(
-      features::kNewExtensionUpdaterService);
+      extensions_features::kNewExtensionUpdaterService);
   ChromeUpdateClientConfig::SetChromeUpdateClientConfigFactoryForTesting(
       ChromeUpdateClientConfigFactory());
   ExtensionBrowserTest::SetUp();
@@ -153,33 +171,31 @@ void ExtensionUpdateClientBaseTest::SetUpOnMainThread() {
   ASSERT_TRUE(update_service_);
 }
 
-void ExtensionUpdateClientBaseTest::SetUpNetworkInterceptors() {
-  auto io_thread = content::BrowserThread::GetTaskRunnerForThread(
-      content::BrowserThread::IO);
-  ASSERT_TRUE(io_thread);
+void ExtensionUpdateClientBaseTest::TearDownOnMainThread() {
+  get_interceptor_.reset();
+}
 
+void ExtensionUpdateClientBaseTest::SetUpNetworkInterceptors() {
   const auto update_urls = GetUpdateUrls();
   ASSERT_TRUE(!update_urls.empty());
   const GURL update_url = update_urls.front();
-  update_interceptor_factory_ =
-      std::make_unique<update_client::URLRequestPostInterceptorFactory>(
-          update_url.scheme(), update_url.host(), io_thread);
-  update_interceptor_ = update_interceptor_factory_->CreateInterceptor(
-      base::FilePath::FromUTF8Unsafe(update_url.path()));
+
+  update_interceptor_ =
+      std::make_unique<update_client::URLLoaderPostInterceptor>(
+          update_urls, &https_server_for_update_);
+  https_server_for_update_.StartAcceptingConnections();
 
   const auto ping_urls = GetPingUrls();
   ASSERT_TRUE(!ping_urls.empty());
   const GURL ping_url = ping_urls.front();
-  ping_interceptor_factory_ =
-      std::make_unique<update_client::URLRequestPostInterceptorFactory>(
-          ping_url.scheme(), ping_url.host(), io_thread);
-  ping_interceptor_ = ping_interceptor_factory_->CreateInterceptor(
-      base::FilePath::FromUTF8Unsafe(ping_url.path()));
 
-  get_interceptor_ = std::make_unique<net::LocalHostTestURLRequestInterceptor>(
-      io_thread, base::CreateTaskRunnerWithTraits(
-                     {base::MayBlock(), base::TaskPriority::BACKGROUND,
-                      base::TaskShutdownBehavior::SKIP_ON_SHUTDOWN}));
+  ping_interceptor_ = std::make_unique<update_client::URLLoaderPostInterceptor>(
+      ping_urls, &https_server_for_ping_);
+  https_server_for_ping_.StartAcceptingConnections();
+
+  get_interceptor_ =
+      std::make_unique<content::URLLoaderInterceptor>(base::BindRepeating(
+          &ExtensionUpdateClientBaseTest::OnRequest, base::Unretained(this)));
 }
 
 update_client::UpdateClient::Observer::Events
@@ -191,6 +207,15 @@ ExtensionUpdateClientBaseTest::WaitOnComponentUpdaterCompleteEvent(
   update_service_->RemoveUpdateClientObserver(&waiter);
 
   return event;
+}
+
+bool ExtensionUpdateClientBaseTest::OnRequest(
+    content::URLLoaderInterceptor::RequestParams* params) {
+  if (params->url_request.url.host() != "localhost")
+    return false;
+
+  get_interceptor_count_++;
+  return callback_ && callback_.Run(params);
 }
 
 }  // namespace extensions

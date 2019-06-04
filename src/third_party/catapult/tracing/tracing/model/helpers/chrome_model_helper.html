@@ -10,6 +10,7 @@ found in the LICENSE file.
 <link rel="import" href="/tracing/model/helpers/chrome_browser_helper.html">
 <link rel="import" href="/tracing/model/helpers/chrome_gpu_helper.html">
 <link rel="import" href="/tracing/model/helpers/chrome_renderer_helper.html">
+<link rel="import" href="/tracing/model/helpers/telemetry_helper.html">
 
 <script>
 'use strict';
@@ -33,6 +34,13 @@ tr.exportTo('tr.model.helpers', function() {
         tr.model.helpers.ChromeGpuHelper.isGpuProcess);
     if (gpuProcesses.length !== 1) return undefined;
     return gpuProcesses[0];
+  }
+
+  function findTelemetrySurfaceFlingerProcess(model) {
+    const surfaceFlingerProcesses = model.getAllProcesses(
+        process => (process.name === 'SurfaceFlinger'));
+    if (surfaceFlingerProcesses.length !== 1) return undefined;
+    return surfaceFlingerProcesses[0];
   }
 
   function ChromeModelHelper(model) {
@@ -62,7 +70,11 @@ tr.exportTo('tr.model.helpers', function() {
       this.rendererHelpers_[rendererHelper.pid] = rendererHelper;
     }, this);
 
+    this.surfaceFlingerProcess_ = findTelemetrySurfaceFlingerProcess(model);
+
     this.chromeBounds_ = undefined;
+
+    this.telemetryHelper_ = new tr.model.helpers.TelemetryHelper(this);
   }
 
   ChromeModelHelper.guid = tr.b.GUID.allocateSimple();
@@ -111,31 +123,8 @@ tr.exportTo('tr.model.helpers', function() {
       return this.rendererHelpers_;
     },
 
-
-    // TODO(dproy): Remove this when loading_metric supports all renderers.
-    // https://github.com/catapult-project/catapult/issues/2820
-    /**
-     * Returns the renderer with the largest PID that is not the Chrome tracing
-     * UI.
-     *
-     * This is a very hacky approach to find the "target" renderer in metrics
-     * calculation. Often in Telemetry tests we are only interested in
-     * calculating metrics for the page opened by the automated testing system,
-     * but there's currently no reliable way to find this renderer. One useful
-     * heuristic is that the page Telemetry opens is opened after all the other
-     * renderers in Chrome were opened, and therefore has the largest PID.
-     */
-    get rendererWithLargestPid() {
-      let largestPid = -1;
-      for (const pid in this.rendererHelpers) {
-        const rendererHelper = this.rendererHelpers[pid];
-        if (rendererHelper.isChromeTracingUI) continue;
-        if (pid > largestPid) largestPid = pid;
-      }
-
-      if (largestPid === -1) return undefined;
-
-      return this.rendererHelpers[largestPid];
+    get surfaceFlingerProcess() {
+      return this.surfaceFlingerProcess_;
     },
 
     /**
@@ -165,6 +154,10 @@ tr.exportTo('tr.model.helpers', function() {
       }
 
       return this.chromeBounds_;
+    },
+
+    get telemetryHelper() {
+      return this.telemetryHelper_;
     }
   };
 

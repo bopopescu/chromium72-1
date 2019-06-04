@@ -4,7 +4,7 @@
 
 #include "components/safe_browsing/triggers/suspicious_site_trigger.h"
 
-#include "base/test/histogram_tester.h"
+#include "base/test/metrics/histogram_tester.h"
 #include "base/test/test_simple_task_runner.h"
 #include "components/prefs/testing_pref_service.h"
 #include "components/safe_browsing/common/safe_browsing_prefs.h"
@@ -42,7 +42,6 @@ class SuspiciousSiteTriggerTest : public content::RenderViewHostTestHarness {
     safe_browsing::RegisterProfilePrefs(prefs_.registry());
     prefs_.SetBoolean(prefs::kSafeBrowsingExtendedReportingOptInAllowed, true);
     prefs_.SetBoolean(prefs::kSafeBrowsingScoutReportingEnabled, true);
-    prefs_.SetBoolean(prefs::kSafeBrowsingScoutGroupSelected, true);
   }
 
   void CreateTrigger(bool monitor_mode) {

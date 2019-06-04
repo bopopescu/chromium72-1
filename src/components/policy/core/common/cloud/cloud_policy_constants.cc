@@ -10,9 +10,6 @@
 #include "base/logging.h"
 #include "build/build_config.h"
 #include "components/policy/core/common/policy_switches.h"
-#include "components/policy/proto/device_management_backend.pb.h"
-
-namespace em = enterprise_management;
 
 namespace policy {
 
@@ -59,6 +56,8 @@ const char kValueRequestTokenEnrollment[] = "register_browser";
 const char kValueRequestChromeDesktopReport[] = "chrome_desktop_report";
 const char kValueRequestInitialEnrollmentStateRetrieval[] =
     "device_initial_enrollment_state";
+const char kValueRequestUploadPolicyValidationReport[] =
+    "policy_validation_report";
 
 const char kChromeDevicePolicyType[] = "google/chromeos/device";
 #if defined(OS_CHROMEOS)

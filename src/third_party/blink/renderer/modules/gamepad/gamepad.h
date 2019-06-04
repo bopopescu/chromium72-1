@@ -27,6 +27,7 @@
 #define THIRD_PARTY_BLINK_RENDERER_MODULES_GAMEPAD_GAMEPAD_H_
 
 #include "device/gamepad/public/cpp/gamepad.h"
+#include "third_party/blink/renderer/core/dom/dom_high_res_time_stamp.h"
 #include "third_party/blink/renderer/modules/gamepad/gamepad_button.h"
 #include "third_party/blink/renderer/modules/gamepad/gamepad_haptic_actuator.h"
 #include "third_party/blink/renderer/modules/gamepad/gamepad_pose.h"
@@ -41,7 +42,9 @@ class Gamepad final : public ScriptWrappable {
   DEFINE_WRAPPERTYPEINFO();
 
  public:
-  static Gamepad* Create() { return new Gamepad; }
+  static Gamepad* Create() { return MakeGarbageCollected<Gamepad>(); }
+
+  Gamepad();
   ~Gamepad() override;
 
   typedef Vector<double> DoubleVector;
@@ -55,8 +58,8 @@ class Gamepad final : public ScriptWrappable {
   bool connected() const { return connected_; }
   void SetConnected(bool val) { connected_ = val; }
 
-  unsigned long long timestamp() const { return timestamp_; }
-  void SetTimestamp(unsigned long long val) { timestamp_ = val; }
+  DOMHighResTimeStamp timestamp() const { return timestamp_; }
+  void SetTimestamp(DOMHighResTimeStamp val) { timestamp_ = val; }
 
   const String& mapping() const { return mapping_; }
   void SetMapping(const String& val) { mapping_ = val; }
@@ -86,12 +89,10 @@ class Gamepad final : public ScriptWrappable {
   void Trace(blink::Visitor*) override;
 
  private:
-  Gamepad();
-
   String id_;
   unsigned index_;
   bool connected_;
-  unsigned long long timestamp_;
+  DOMHighResTimeStamp timestamp_;
   String mapping_;
   DoubleVector axes_;
   GamepadButtonVector buttons_;

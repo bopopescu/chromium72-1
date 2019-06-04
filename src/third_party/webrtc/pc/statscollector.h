@@ -69,8 +69,7 @@ class StatsCollector {
   // of filling in |reports|.  As is, there's a requirement that the caller
   // uses |reports| immediately without allowing any async activity on
   // the thread (message handling etc) and then discard the results.
-  void GetStats(MediaStreamTrackInterface* track,
-                StatsReports* reports);
+  void GetStats(MediaStreamTrackInterface* track, StatsReports* reports);
 
   // Prepare a local or remote SSRC report for the given ssrc. Used internally
   // in the ExtractStatsFromList template.
@@ -107,9 +106,10 @@ class StatsCollector {
       std::unique_ptr<rtc::SSLCertificateStats> cert_stats);
 
   StatsReport* AddConnectionInfoReport(const std::string& content_name,
-      int component, int connection_id,
-      const StatsReport::Id& channel_report_id,
-      const cricket::ConnectionInfo& info);
+                                       int component,
+                                       int connection_id,
+                                       const StatsReport::Id& channel_report_id,
+                                       const cricket::ConnectionInfo& info);
 
   void ExtractDataInfo();
   void ExtractSessionInfo();
@@ -128,9 +128,8 @@ class StatsCollector {
 
   // Helper method to get the id for the track identified by ssrc.
   // |direction| tells if the track is for sending or receiving.
-  bool GetTrackIdBySsrc(uint32_t ssrc,
-                        std::string* track_id,
-                        StatsReport::Direction direction);
+  absl::string_view GetTrackIdBySsrc(uint32_t ssrc,
+                                     StatsReport::Direction direction);
 
   // Helper method to update the timestamp of track records.
   void UpdateTrackReports();

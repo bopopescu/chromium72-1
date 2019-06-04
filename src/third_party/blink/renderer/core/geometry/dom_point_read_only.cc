@@ -4,13 +4,13 @@
 
 #include "third_party/blink/renderer/core/geometry/dom_point_read_only.h"
 
-#include "third_party/blink/renderer/bindings/core/v8/exception_state.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_value.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_object_builder.h"
 #include "third_party/blink/renderer/core/geometry/dom_matrix_init.h"
 #include "third_party/blink/renderer/core/geometry/dom_matrix_read_only.h"
 #include "third_party/blink/renderer/core/geometry/dom_point.h"
 #include "third_party/blink/renderer/core/geometry/dom_point_init.h"
+#include "third_party/blink/renderer/platform/bindings/exception_state.h"
 
 namespace blink {
 
@@ -18,7 +18,7 @@ DOMPointReadOnly* DOMPointReadOnly::Create(double x,
                                            double y,
                                            double z,
                                            double w) {
-  return new DOMPointReadOnly(x, y, z, w);
+  return MakeGarbageCollected<DOMPointReadOnly>(x, y, z, w);
 }
 
 ScriptValue DOMPointReadOnly::toJSONForBinding(
@@ -31,11 +31,12 @@ ScriptValue DOMPointReadOnly::toJSONForBinding(
   return result.GetScriptValue();
 }
 
-DOMPointReadOnly* DOMPointReadOnly::fromPoint(const DOMPointInit& other) {
-  return new DOMPointReadOnly(other.x(), other.y(), other.z(), other.w());
+DOMPointReadOnly* DOMPointReadOnly::fromPoint(const DOMPointInit* other) {
+  return MakeGarbageCollected<DOMPointReadOnly>(other->x(), other->y(),
+                                                other->z(), other->w());
 }
 
-DOMPoint* DOMPointReadOnly::matrixTransform(DOMMatrixInit& other,
+DOMPoint* DOMPointReadOnly::matrixTransform(DOMMatrixInit* other,
                                             ExceptionState& exception_state) {
   DOMMatrixReadOnly* matrix =
       DOMMatrixReadOnly::fromMatrix(other, exception_state);

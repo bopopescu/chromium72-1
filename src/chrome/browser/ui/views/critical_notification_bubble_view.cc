@@ -9,13 +9,14 @@
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/lifetime/application_lifetime.h"
 #include "chrome/browser/ui/browser_dialogs.h"
-#include "chrome/browser/ui/views/harmony/chrome_layout_provider.h"
-#include "chrome/browser/upgrade_detector.h"
+#include "chrome/browser/ui/views/chrome_layout_provider.h"
+#include "chrome/browser/upgrade_detector/upgrade_detector.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/grit/chromium_strings.h"
 #include "chrome/grit/generated_resources.h"
 #include "chrome/grit/locale_settings.h"
 #include "components/prefs/pref_service.h"
+#include "components/strings/grit/components_strings.h"
 #include "ui/accessibility/ax_node_data.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/resource/resource_bundle.h"
@@ -115,7 +116,7 @@ bool CriticalNotificationBubbleView::Accept() {
 base::string16 CriticalNotificationBubbleView::GetDialogButtonLabel(
     ui::DialogButton button) const {
   return l10n_util::GetStringUTF16(button == ui::DIALOG_BUTTON_CANCEL
-                                       ? IDS_CRITICAL_NOTIFICATION_DISMISS
+                                       ? IDS_CANCEL
                                        : IDS_CRITICAL_NOTIFICATION_RESTART);
 }
 

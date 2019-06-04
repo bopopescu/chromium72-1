@@ -32,7 +32,7 @@
 
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/blink/public/web/web_frame_client.h"
+#include "third_party/blink/public/web/web_local_frame_client.h"
 #include "third_party/blink/public/web/web_settings.h"
 #include "third_party/blink/public/web/web_view.h"
 #include "third_party/blink/renderer/core/frame/frame_test_helpers.h"
@@ -49,7 +49,7 @@ namespace blink {
 namespace {
 
 class LocalFrameMockWebFrameClient
-    : public FrameTestHelpers::TestWebFrameClient {
+    : public frame_test_helpers::TestWebFrameClient {
  public:
   ~LocalFrameMockWebFrameClient() override = default;
 
@@ -63,17 +63,13 @@ class LocalFrameClientImplTest : public testing::Test {
         .WillByDefault(Return(WebString()));
 
     helper_.Initialize(&web_frame_client_);
-    // FIXME: http://crbug.com/363843. This needs to find a better way to
-    // not create graphics layers.
-    helper_.GetWebView()->GetSettings()->SetAcceleratedCompositingEnabled(
-        false);
   }
 
   void TearDown() override {
     // Tearing down the WebView by resetting the helper will call
     // UserAgentOverride() in order to store the information for detached
     // requests.
-    EXPECT_CALL(WebFrameClient(), UserAgentOverride());
+    EXPECT_CALL(WebLocalFrameClient(), UserAgentOverride());
     helper_.Reset();
   }
 
@@ -85,14 +81,16 @@ class LocalFrameClientImplTest : public testing::Test {
 
   WebLocalFrameImpl* MainFrame() { return helper_.LocalMainFrame(); }
   Document& GetDocument() { return *MainFrame()->GetFrame()->GetDocument(); }
-  LocalFrameMockWebFrameClient& WebFrameClient() { return web_frame_client_; }
+  LocalFrameMockWebFrameClient& WebLocalFrameClient() {
+    return web_frame_client_;
+  }
   LocalFrameClient& GetLocalFrameClient() {
     return *ToLocalFrameClientImpl(MainFrame()->GetFrame()->Client());
   }
 
  private:
   LocalFrameMockWebFrameClient web_frame_client_;
-  FrameTestHelpers::WebViewHelper helper_;
+  frame_test_helpers::WebViewHelper helper_;
 };
 
 TEST_F(LocalFrameClientImplTest, UserAgentOverride) {
@@ -100,13 +98,13 @@ TEST_F(LocalFrameClientImplTest, UserAgentOverride) {
   const WebString override_user_agent = WebString::FromUTF8("dummy override");
 
   // Override the user agent and make sure we get it back.
-  EXPECT_CALL(WebFrameClient(), UserAgentOverride())
+  EXPECT_CALL(WebLocalFrameClient(), UserAgentOverride())
       .WillOnce(Return(override_user_agent));
   EXPECT_TRUE(override_user_agent.Equals(UserAgent()));
-  Mock::VerifyAndClearExpectations(&WebFrameClient());
+  Mock::VerifyAndClearExpectations(&WebLocalFrameClient());
 
   // Remove the override and make sure we get the original back.
-  EXPECT_CALL(WebFrameClient(), UserAgentOverride())
+  EXPECT_CALL(WebLocalFrameClient(), UserAgentOverride())
       .WillOnce(Return(WebString()));
   EXPECT_TRUE(default_user_agent.Equals(UserAgent()));
 }

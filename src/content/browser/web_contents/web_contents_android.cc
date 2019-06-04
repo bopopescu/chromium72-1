@@ -6,6 +6,7 @@
 
 #include <stdint.h>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "base/android/callback_android.h"
@@ -18,10 +19,10 @@
 #include "base/lazy_instance.h"
 #include "base/logging.h"
 #include "base/metrics/user_metrics.h"
-#include "base/task_scheduler/post_task.h"
+#include "base/task/post_task.h"
+#include "base/threading/scoped_blocking_call.h"
 #include "content/browser/accessibility/browser_accessibility_android.h"
 #include "content/browser/accessibility/browser_accessibility_manager_android.h"
-#include "content/browser/android/content_view_core.h"
 #include "content/browser/android/java/gin_java_bridge_dispatcher_host.h"
 #include "content/browser/frame_host/interstitial_page_impl.h"
 #include "content/browser/media/android/browser_media_player_manager.h"
@@ -142,7 +143,7 @@ void AXTreeSnapshotCallback(const ScopedJavaGlobalRef<jobject>& callback,
 
 std::string CompressAndSaveBitmap(const std::string& dir,
                                   const SkBitmap& bitmap) {
-  base::AssertBlockingAllowed();
+  base::ScopedBlockingCall scoped_blocking_call(base::BlockingType::WILL_BLOCK);
 
   std::vector<unsigned char> data;
   if (!gfx::JPEGCodec::Encode(bitmap, 85, &data)) {
@@ -469,13 +470,23 @@ void WebContentsAndroid::ScrollFocusedEditableNodeIntoView(
   frame->GetFrameInputHandler()->ScrollFocusedEditableNodeIntoRect(gfx::Rect());
 }
 
+void WebContentsAndroid::SelectWordAroundCaretAck(bool did_select,
+                                                  int start_adjust,
+                                                  int end_adjust) {
+  RenderWidgetHostViewAndroid* rwhva = GetRenderWidgetHostViewAndroid();
+  if (rwhva)
+    rwhva->SelectWordAroundCaretAck(did_select, start_adjust, end_adjust);
+}
+
 void WebContentsAndroid::SelectWordAroundCaret(
     JNIEnv* env,
     const JavaParamRef<jobject>& obj) {
-  RenderViewHost* host = web_contents_->GetRenderViewHost();
-  if (!host)
+  RenderFrameHostImpl* frame = web_contents_->GetFocusedFrame();
+  if (!frame)
     return;
-  host->SelectWordAroundCaret();
+  frame->GetFrameInputHandler()->SelectWordAroundCaret(
+      base::BindOnce(&WebContentsAndroid::SelectWordAroundCaretAck,
+                     weak_factory_.GetWeakPtr()));
 }
 
 void WebContentsAndroid::AdjustSelectionByCharacterOffset(
@@ -644,7 +655,7 @@ void WebContentsAndroid::SetOverscrollRefreshHandler(
           overscroll_refresh_handler));
 }
 
-void WebContentsAndroid::GetContentBitmap(
+void WebContentsAndroid::WriteContentBitmapToDisk(
     JNIEnv* env,
     const JavaParamRef<jobject>& obj,
     jint width,
@@ -769,7 +780,6 @@ void WebContentsAndroid::OnFinishGetContentBitmap(
     const std::string& path,
     const SkBitmap& bitmap) {
   JNIEnv* env = base::android::AttachCurrentThread();
-  ScopedJavaLocalRef<jobject> java_bitmap;
   if (!bitmap.drawsNothing()) {
     auto task_runner = base::CreateSequencedTaskRunnerWithTraits(
         {base::MayBlock(), base::TaskShutdownBehavior::SKIP_ON_SHUTDOWN});
@@ -843,18 +853,33 @@ void WebContentsAndroid::OnScaleFactorChanged(
   if (rwhva) {
     // |SendScreenRects()| indirectly calls GetViewSize() that asks Java layer.
     web_contents_->SendScreenRects();
-    rwhva->SynchronizeVisualProperties();
+    rwhva->SynchronizeVisualProperties(cc::DeadlinePolicy::UseDefaultDeadline(),
+                                       base::nullopt);
   }
 }
 
-int WebContentsAndroid::GetTopControlsShrinkBlinkHeightPixForTesting(
+void WebContentsAndroid::SetFocus(JNIEnv* env,
+                                  const JavaParamRef<jobject>& obj,
+                                  jboolean focused) {
+  WebContentsViewAndroid* view =
+      static_cast<WebContentsViewAndroid*>(web_contents_->GetView());
+  view->SetFocus(focused);
+}
+
+bool WebContentsAndroid::IsBeingDestroyed(JNIEnv* env,
+                                          const JavaParamRef<jobject>& obj) {
+  return web_contents_->IsBeingDestroyed();
+}
+
+void WebContentsAndroid::SetDisplayCutoutSafeArea(
     JNIEnv* env,
-    const JavaParamRef<jobject>& obj) {
-  RenderWidgetHostViewAndroid* rwhva = GetRenderWidgetHostViewAndroid();
-  float scale = web_contents_->GetNativeView()->GetDipScale();
-  return (rwhva && rwhva->DoBrowserControlsShrinkBlinkSize())
-             ? rwhva->GetTopControlsHeight() * scale
-             : 0;
+    const base::android::JavaParamRef<jobject>& obj,
+    int top,
+    int left,
+    int bottom,
+    int right) {
+  web_contents()->SetDisplayCutoutSafeArea(
+      gfx::Insets(top, left, bottom, right));
 }
 
 }  // namespace content

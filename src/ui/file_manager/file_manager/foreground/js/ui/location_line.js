@@ -7,7 +7,7 @@
  *
  * @extends {cr.EventTarget}
  * @param {!Element} breadcrumbs Container element for breadcrumbs.
- * @param {!VolumeManagerWrapper} volumeManager Volume manager.
+ * @param {!VolumeManager} volumeManager Volume manager.
  * @constructor
  */
 function LocationLine(breadcrumbs, volumeManager) {
@@ -60,7 +60,7 @@ LocationLine.prototype.replaceRootName_ = function(url, newRoot) {
 
 /**
  * Get components for the path of entry.
- * @param {!Entry|!FakeEntry} entry An entry.
+ * @param {!Entry|!FilesAppEntry} entry An entry.
  * @return {!Array<!LocationLine.PathComponent>} Components.
  * @private
  */
@@ -81,10 +81,21 @@ LocationLine.prototype.getComponents_ = function(entry) {
   // Add volume component.
   var displayRootUrl = locationInfo.volumeInfo.displayRoot.toURL();
   var displayRootFullPath = locationInfo.volumeInfo.displayRoot.fullPath;
+
+  var prefixEntry = locationInfo.volumeInfo.prefixEntry;
+  if (prefixEntry) {
+    components.push(new LocationLine.PathComponent(
+        prefixEntry.name, prefixEntry.toURL(), prefixEntry));
+  }
   if (locationInfo.rootType === VolumeManagerCommon.RootType.DRIVE_OTHER) {
     // When target path is a shared directory, volume should be shared with me.
-    displayRootUrl = this.replaceRootName_(displayRootUrl, '/other');
-    displayRootFullPath = '/other';
+    const match = entry.fullPath.match(/\/\.files-by-id\/\d+\//);
+    if (match) {
+      displayRootFullPath = match[0];
+    } else {
+      displayRootFullPath = '/other';
+    }
+    displayRootUrl = this.replaceRootName_(displayRootUrl, displayRootFullPath);
     var sharedWithMeFakeEntry = locationInfo.volumeInfo.fakeEntries[
         VolumeManagerCommon.RootType.DRIVE_SHARED_WITH_ME];
     components.push(new LocationLine.PathComponent(
@@ -95,6 +106,11 @@ LocationLine.prototype.getComponents_ = function(entry) {
       locationInfo.rootType === VolumeManagerCommon.RootType.TEAM_DRIVE) {
     displayRootUrl = this.replaceRootName_(
         displayRootUrl, VolumeManagerCommon.TEAM_DRIVES_DIRECTORY_PATH);
+    components.push(new LocationLine.PathComponent(
+        util.getRootTypeLabel(locationInfo), displayRootUrl));
+  } else if (locationInfo.rootType === VolumeManagerCommon.RootType.COMPUTER) {
+    displayRootUrl = this.replaceRootName_(
+        displayRootUrl, VolumeManagerCommon.COMPUTERS_DIRECTORY_PATH);
     components.push(new LocationLine.PathComponent(
         util.getRootTypeLabel(locationInfo), displayRootUrl));
   } else {
@@ -108,6 +124,10 @@ LocationLine.prototype.getComponents_ = function(entry) {
           VolumeManagerCommon.TEAM_DRIVES_DIRECTORY_PATH)) {
     relativePath = entry.fullPath.slice(
         VolumeManagerCommon.TEAM_DRIVES_DIRECTORY_PATH.length);
+  } else if (entry.fullPath.startsWith(
+                 VolumeManagerCommon.COMPUTERS_DIRECTORY_PATH)) {
+    relativePath = entry.fullPath.slice(
+        VolumeManagerCommon.COMPUTERS_DIRECTORY_PATH.length);
   }
   if (relativePath.indexOf('/') === 0) {
     relativePath = relativePath.slice(1);
@@ -144,6 +164,7 @@ LocationLine.prototype.update_ = function(components) {
     // Add a component.
     var component = components[i];
     var button = document.createElement('button');
+    button.id = 'breadcrumb-path-' + i;
     button.classList.add(
         'breadcrumb-path', 'entry-name', 'imitate-paper-button');
     var nameElement = document.createElement('div');
@@ -351,8 +372,8 @@ LocationLine.prototype.onClick_ = function(index, event) {
  * Path component.
  * @param {string} name Name.
  * @param {string} url Url.
- * @param {FakeEntry=} opt_fakeEntry Fake entry should be set when this
- *     component represents fake entry.
+ * @param {FilesAppEntry=} opt_fakeEntry Fake entry should be set when
+ *     this component represents fake entry.
  * @constructor
  * @struct
  */
@@ -364,12 +385,12 @@ LocationLine.PathComponent = function(name, url, opt_fakeEntry) {
 
 /**
  * Resolve an entry of the component.
- * @return {!Promise<!Entry|!FakeEntry>} A promise which is resolved with an
- *     entry.
+ * @return {!Promise<!Entry|!FilesAppEntry>} A promise which is
+ *     resolved with an entry.
  */
 LocationLine.PathComponent.prototype.resolveEntry = function() {
   if (this.fakeEntry_)
-    return /** @type {!Promise<!Entry|!FakeEntry>} */ (
+    return /** @type {!Promise<!Entry|!FilesAppEntry>} */ (
         Promise.resolve(this.fakeEntry_));
   else
     return new Promise(

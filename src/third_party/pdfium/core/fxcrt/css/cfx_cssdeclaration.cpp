@@ -6,6 +6,8 @@
 
 #include "core/fxcrt/css/cfx_cssdeclaration.h"
 
+#include <utility>
+
 #include "core/fxcrt/css/cfx_csscolorvalue.h"
 #include "core/fxcrt/css/cfx_csscustomproperty.h"
 #include "core/fxcrt/css/cfx_cssenumvalue.h"
@@ -28,7 +30,9 @@ bool ParseCSSNumber(const wchar_t* pszValue,
                     int32_t iValueLen,
                     float& fValue,
                     CFX_CSSNumberType& eUnit) {
-  ASSERT(pszValue && iValueLen > 0);
+  ASSERT(pszValue);
+  ASSERT(iValueLen > 0);
+
   int32_t iUsedLen = 0;
   fValue = FXSYS_wcstof(pszValue, iValueLen, &iUsedLen);
   if (iUsedLen <= 0)
@@ -55,7 +59,9 @@ bool CFX_CSSDeclaration::ParseCSSString(const wchar_t* pszValue,
                                         int32_t iValueLen,
                                         int32_t* iOffset,
                                         int32_t* iLength) {
-  ASSERT(pszValue && iValueLen > 0);
+  ASSERT(pszValue);
+  ASSERT(iValueLen > 0);
+
   *iOffset = 0;
   *iLength = iValueLen;
   if (iValueLen >= 2) {
@@ -72,7 +78,8 @@ bool CFX_CSSDeclaration::ParseCSSString(const wchar_t* pszValue,
 bool CFX_CSSDeclaration::ParseCSSColor(const wchar_t* pszValue,
                                        int32_t iValueLen,
                                        FX_ARGB* dwColor) {
-  ASSERT(pszValue && iValueLen > 0);
+  ASSERT(pszValue);
+  ASSERT(iValueLen > 0);
   ASSERT(dwColor);
 
   if (*pszValue == '#') {

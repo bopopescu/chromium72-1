@@ -28,6 +28,11 @@ def core_frag_shader_without_version():
     return 'void main() { int temp = gl_SampleID; }'
 
 
+def hlsl_compute_shader_with_barriers():
+    # Use "main" to avoid the need for -fentry-point
+    return 'void main() { AllMemoryBarrierWithGroupSync(); }'
+
+
 @inside_glslc_testsuite('OptionStd')
 class TestStdNoArg(expect.ErrorMessage):
     """Tests -std alone."""
@@ -52,6 +57,7 @@ class TestStdEqSpaceArg(expect.ErrorMessage):
     glslc_args = ['-c', '-std=', '450core', shader]
     expected_error = ["glslc: error: invalid value '' in '-std='\n"]
 
+
 # TODO(dneto): The error message changes with different versions of glslang.
 @inside_glslc_testsuite('OptionStd')
 class TestMissingVersionAndStd(expect.ErrorMessageSubstr):
@@ -68,6 +74,39 @@ class TestMissingVersionButHavingStd(expect.ValidObjectFile):
 
     shader = FileShader(core_frag_shader_without_version(), '.frag')
     glslc_args = ['-c', '-std=450core', shader]
+
+
+@inside_glslc_testsuite('OptionStd')
+class TestGLSL460(expect.ValidObjectFile):
+    """Tests that GLSL version 4.6 is supported."""
+
+    shader = FileShader(core_frag_shader_without_version(), '.frag')
+    glslc_args = ['-c', '-std=460', shader]
+
+
+@inside_glslc_testsuite('OptionStd')
+class TestGLSL460Core(expect.ValidObjectFile):
+    """Tests that GLSL version 4.6 core profile is supported."""
+
+    shader = FileShader(core_frag_shader_without_version(), '.frag')
+    glslc_args = ['-c', '-std=460core', shader]
+
+
+@inside_glslc_testsuite('OptionStd')
+class TestESSL320(expect.ValidObjectFile):
+    """Tests that ESSL version 3.2 is supported."""
+
+    shader = FileShader(core_frag_shader_without_version(), '.frag')
+    glslc_args = ['-c', '-std=320es', shader]
+
+
+@inside_glslc_testsuite('OptionStd')
+class TestStdIgnoredInHlsl(expect.ValidObjectFile):
+    """Tests HLSL compilation ignores -std."""
+
+    # Compute shaders are not available in OpenGL 150
+    shader = FileShader(hlsl_compute_shader_with_barriers(), '.comp')
+    glslc_args = ['-c', '-x', 'hlsl', '-std=150', shader]
 
 
 @inside_glslc_testsuite('OptionStd')
@@ -112,11 +151,11 @@ class TestMultipleFiles(expect.ValidObjectFileWithWarning):
     shader2 = FileShader(core_vert_shader_without_version(), '.vert')
     shader3 = FileShader(
         '#version 310 es\n' + core_frag_shader_without_version(), '.frag')
-    glslc_args = ['-c', '-std=450compatibility', shader1, shader2, shader3]
+    glslc_args = ['-c', '-std=450core', shader1, shader2, shader3]
 
     expected_warning = [
         shader3, ': warning: (version, profile) forced to be (450, '
-        'compatibility), while in source code it is (310, es)\n'
+        'core), while in source code it is (310, es)\n'
         '1 warning generated.\n']
 
 
@@ -257,7 +296,7 @@ class TestVersionMissingProfile(expect.ErrorMessage):
     glslc_args = ['-c', '-std=310', shader]
 
     expected_error = [
-        shader, ': error: #version: versions 300 and 310 require ',
+        shader, ': error: #version: versions 300, 310, and 320 require ',
         "specifying the 'es' profile\n1 error generated.\n"]
 
 

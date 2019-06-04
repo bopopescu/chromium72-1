@@ -9,6 +9,7 @@
 
 #include "mojo/public/cpp/bindings/binding.h"
 #include "third_party/blink/renderer/platform/heap/handle.h"
+#include "third_party/blink/renderer/platform/timer.h"
 #include "third_party/blink/renderer/platform/wtf/vector.h"
 
 namespace blink {
@@ -41,7 +42,7 @@ class SensorProxyImpl final : public SensorProxy,
       device::mojom::blink::SensorConfigurationPtr) override;
   double GetDefaultFrequency() const override;
   std::pair<double, double> GetFrequencyLimits() const override;
-  void ReportError(ExceptionCode code, const String& message) override;
+  void ReportError(DOMExceptionCode code, const String& message) override;
   void Suspend() override;
   void Resume() override;
 

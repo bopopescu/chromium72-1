@@ -14,10 +14,8 @@
 #include "ui/aura/env_observer.h"
 #include "ui/aura/window_observer.h"
 #include "ui/base/ime/text_input_client.h"
-#include "ui/base/ime/text_input_flags.h"
 #include "ui/base/ime/text_input_type.h"
 #include "ui/gfx/geometry/rect.h"
-#include "ui/keyboard/keyboard_controller.h"
 #include "ui/keyboard/keyboard_controller_observer.h"
 
 namespace aura {
@@ -56,9 +54,11 @@ class ArcImeService : public KeyedService,
 
   class ArcWindowDelegate {
    public:
-    virtual ~ArcWindowDelegate() {}
-    virtual bool IsExoWindow(const aura::Window* window) const = 0;
-    virtual bool IsArcWindow(const aura::Window* window) const = 0;
+    virtual ~ArcWindowDelegate() = default;
+    // Checks the |window| is a transient child of an ARC window.
+    // This method assumes passed |window| is already attached to window
+    // hierarchy.
+    virtual bool IsInArcAppWindow(const aura::Window* window) const = 0;
     virtual void RegisterFocusObserver() = 0;
     virtual void UnregisterFocusObserver() = 0;
     virtual ui::InputMethod* GetInputMethodForWindow(
@@ -85,11 +85,13 @@ class ArcImeService : public KeyedService,
                        aura::Window* lost_focus) override;
 
   // Overridden from ArcImeBridge::Delegate:
-  void OnTextInputTypeChanged(ui::TextInputType type) override;
+  void OnTextInputTypeChanged(ui::TextInputType type,
+                              bool is_personalized_learning_allowed,
+                              int flags) override;
   void OnCursorRectChanged(const gfx::Rect& rect,
                            bool is_screen_coordinates) override;
   void OnCancelComposition() override;
-  void ShowImeIfNeeded() override;
+  void ShowVirtualKeyboardIfEnabled() override;
   void OnCursorRectChangedWithSurroundingText(
       const gfx::Rect& rect,
       const gfx::Range& text_range,
@@ -137,7 +139,7 @@ class ArcImeService : public KeyedService,
   bool IsTextEditCommandEnabled(ui::TextEditCommand command) const override;
   void SetTextEditCommandForNextKeyEvent(ui::TextEditCommand command) override {
   }
-  const std::string& GetClientSourceInfo() const override;
+  ukm::SourceId GetClientSourceForMetrics() const override;
   bool ShouldDoLearning() override;
 
   // Normally, the default device scale factor is used to convert from DPI to
@@ -163,6 +165,9 @@ class ArcImeService : public KeyedService,
   std::unique_ptr<ArcImeBridge> ime_bridge_;
   std::unique_ptr<ArcWindowDelegate> arc_window_delegate_;
   ui::TextInputType ime_type_;
+  // The flag is the bit map of ui::TextInputFlags.
+  int ime_flags_;
+  bool is_personalized_learning_allowed_;
   gfx::Rect cursor_rect_;
   bool has_composition_text_;
   gfx::Range text_range_;
@@ -170,10 +175,6 @@ class ArcImeService : public KeyedService,
   gfx::Range selection_range_;
 
   aura::Window* focused_arc_window_ = nullptr;
-
-  keyboard::KeyboardController* keyboard_controller_;
-
-  bool is_focus_observer_installed_;
 
   DISALLOW_COPY_AND_ASSIGN(ArcImeService);
 };

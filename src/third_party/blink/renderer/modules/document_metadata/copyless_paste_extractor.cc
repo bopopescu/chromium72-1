@@ -9,6 +9,7 @@
 #include <utility>
 
 #include "third_party/blink/public/platform/modules/document_metadata/copyless_paste.mojom-blink.h"
+#include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/dom/element_traversal.h"
 #include "third_party/blink/renderer/core/frame/local_frame.h"
 #include "third_party/blink/renderer/core/html/html_element.h"
@@ -16,6 +17,7 @@
 #include "third_party/blink/renderer/platform/histogram.h"
 #include "third_party/blink/renderer/platform/instrumentation/tracing/trace_event.h"
 #include "third_party/blink/renderer/platform/json/json_parser.h"
+#include "third_party/blink/renderer/platform/json/json_values.h"
 #include "third_party/blink/renderer/platform/wtf/text/atomic_string.h"
 #include "third_party/blink/renderer/platform/wtf/text/string_builder.h"
 #include "third_party/blink/renderer/platform/wtf/vector.h"
@@ -43,11 +45,11 @@ constexpr int kMaxDepth = 4;
 // Some strings are very long, and we don't currently use those, so limit string
 // length to something reasonable to avoid undue pressure on Icing. Note that
 // App Indexing supports strings up to length 20k.
-constexpr int kMaxStringLength = 200;
+constexpr wtf_size_t kMaxStringLength = 200;
 // Enforced by App Indexing, so stop processing early if possible.
-constexpr size_t kMaxNumFields = 20;
+constexpr wtf_size_t kMaxNumFields = 20;
 // Enforced by App Indexing, so stop processing early if possible.
-constexpr size_t kMaxRepeatedSize = 100;
+constexpr wtf_size_t kMaxRepeatedSize = 100;
 
 constexpr char kJSONLDKeyType[] = "@type";
 constexpr char kJSONLDKeyGraph[] = "@graph";
@@ -99,7 +101,7 @@ bool parseRepeatedValue(const JSONArray& arr,
     default:
       break;
   }
-  for (size_t j = 0; j < std::min(arr.size(), kMaxRepeatedSize); ++j) {
+  for (wtf_size_t j = 0; j < std::min(arr.size(), kMaxRepeatedSize); ++j) {
     const JSONValue* innerVal = arr.at(j);
     if (innerVal->GetType() != type) {
       // App Indexing doesn't support mixed types. If there are mixed
@@ -155,7 +157,7 @@ void extractEntity(const JSONObject& val, Entity& entity, int recursionLevel) {
     type = "Thing";
   }
   entity.type = type;
-  for (size_t i = 0; i < std::min(val.size(), kMaxNumFields); ++i) {
+  for (wtf_size_t i = 0; i < std::min(val.size(), kMaxNumFields); ++i) {
     PropertyPtr property = Property::New();
     const JSONObject::Entry& entry = val.at(i);
     property->name = entry.first;
@@ -229,7 +231,7 @@ void extractTopLevelEntity(const JSONObject& val, Vector<EntityPtr>& entities) {
 
 void extractEntitiesFromArray(const JSONArray& arr,
                               Vector<EntityPtr>& entities) {
-  for (size_t i = 0; i < arr.size(); ++i) {
+  for (wtf_size_t i = 0; i < arr.size(); ++i) {
     const JSONValue* val = arr.at(i);
     if (val->GetType() == JSONValue::ValueType::kTypeObject) {
       extractTopLevelEntity(*(JSONObject::Cast(val)), entities);
@@ -253,8 +255,8 @@ enum ExtractionStatus { kOK, kEmpty, kParseFailure, kWrongType, kCount };
 ExtractionStatus extractMetadata(const Element& root,
                                  Vector<EntityPtr>& entities) {
   for (Element& element : ElementTraversal::DescendantsOf(root)) {
-    if (element.HasTagName(HTMLNames::scriptTag) &&
-        element.getAttribute(HTMLNames::typeAttr) == "application/ld+json") {
+    if (element.HasTagName(html_names::kScriptTag) &&
+        element.getAttribute(html_names::kTypeAttr) == "application/ld+json") {
       std::unique_ptr<JSONValue> json = ParseJSON(element.textContent());
       if (!json) {
         LOG(ERROR) << "Failed to parse json.";
@@ -294,9 +296,9 @@ WebPagePtr CopylessPasteExtractor::extract(const Document& document) {
   WebPagePtr page = WebPage::New();
 
   // Traverse the DOM tree and extract the metadata.
-  double start_time = CurrentTimeTicksInSeconds();
+  TimeTicks start_time = CurrentTimeTicks();
   ExtractionStatus status = extractMetadata(*html, page->entities);
-  double elapsed_time = CurrentTimeTicksInSeconds() - start_time;
+  TimeDelta elapsed_time = CurrentTimeTicks() - start_time;
 
   DEFINE_STATIC_LOCAL(EnumerationHistogram, status_histogram,
                       ("CopylessPaste.ExtractionStatus", kCount));
@@ -306,12 +308,12 @@ WebPagePtr CopylessPasteExtractor::extract(const Document& document) {
     DEFINE_STATIC_LOCAL(
         CustomCountHistogram, extractionHistogram,
         ("CopylessPaste.ExtractionFailedUs", 1, 1000 * 1000, 50));
-    extractionHistogram.Count(1e6 * elapsed_time);
+    extractionHistogram.CountMicroseconds(elapsed_time);
     return nullptr;
   }
   DEFINE_STATIC_LOCAL(CustomCountHistogram, extractionHistogram,
                       ("CopylessPaste.ExtractionUs", 1, 1000 * 1000, 50));
-  extractionHistogram.Count(1e6 * elapsed_time);
+  extractionHistogram.CountMicroseconds(elapsed_time);
 
   page->url = document.Url();
   page->title = document.title();

@@ -40,6 +40,12 @@ def _MakeStorySet():
                        name='http://www.ro.com/'))
   return story_set
 
+def _MakePageTestResults(reporter):
+  results = page_test_results.PageTestResults(progress_reporter=reporter)
+  results.telemetry_info.benchmark_name = 'bench'
+  results.telemetry_info.benchmark_start_epoch = 123
+  results.telemetry_info.benchmark_descriptions = 'foo'
+  return results
 
 class GTestProgressReporterTest(
     base_test_results_unittest.BaseTestResultsUnittest):
@@ -58,9 +64,7 @@ class GTestProgressReporterTest(
   def testSingleSuccessPage(self):
     test_story_set = _MakeStorySet()
 
-    results = page_test_results.PageTestResults(
-        progress_reporter=self._reporter)
-    results.telemetry_info.benchmark_name = 'bench'
+    results = _MakePageTestResults(self._reporter)
     results.WillRunPage(test_story_set.stories[0])
     self._fake_timer.SetTime(0.007)
     results.DidRunPage(test_story_set.stories[0])
@@ -74,9 +78,7 @@ class GTestProgressReporterTest(
   def testSingleSuccessPageWithGroupingKeys(self):
     test_story_set = _MakeStorySet()
 
-    results = page_test_results.PageTestResults(
-        progress_reporter=self._reporter)
-    results.telemetry_info.benchmark_name = 'bench'
+    results = _MakePageTestResults(self._reporter)
     results.WillRunPage(test_story_set.stories[4])
     self._fake_timer.SetTime(0.007)
     results.DidRunPage(test_story_set.stories[4])
@@ -90,9 +92,7 @@ class GTestProgressReporterTest(
   def testSingleFailedPage(self):
     test_story_set = _MakeStorySet()
 
-    results = page_test_results.PageTestResults(
-        progress_reporter=self._reporter)
-    results.telemetry_info.benchmark_name = 'bench'
+    results = _MakePageTestResults(self._reporter)
     results.WillRunPage(test_story_set.stories[0])
     results.Fail('test fails')
     results.DidRunPage(test_story_set.stories[0])
@@ -109,9 +109,7 @@ class GTestProgressReporterTest(
   def testSingleFailedPageWithGroupingKeys(self):
     test_story_set = _MakeStorySet()
 
-    results = page_test_results.PageTestResults(
-        progress_reporter=self._reporter)
-    results.telemetry_info.benchmark_name = 'bench'
+    results = _MakePageTestResults(self._reporter)
     results.WillRunPage(test_story_set.stories[4])
     results.Fail('test fails')
     results.DidRunPage(test_story_set.stories[4])
@@ -127,9 +125,7 @@ class GTestProgressReporterTest(
 
   def testSingleSkippedPage(self):
     test_story_set = _MakeStorySet()
-    results = page_test_results.PageTestResults(
-        progress_reporter=self._reporter)
-    results.telemetry_info.benchmark_name = 'bench'
+    results = _MakePageTestResults(self._reporter)
     results.WillRunPage(test_story_set.stories[0])
     self._fake_timer.SetTime(0.007)
     results.Skip('Page skipped for testing reason')
@@ -139,15 +135,14 @@ class GTestProgressReporterTest(
     expected = ('[ RUN      ] bench/http://www.foo.com/\n'
                 '===== SKIPPING TEST http://www.foo.com/:'
                 ' Page skipped for testing reason =====\n'
-                '[       OK ] bench/http://www.foo.com/ (7 ms)\n'
-                '[  PASSED  ] 1 test.\n\n')
+                '[  SKIPPED ] bench/http://www.foo.com/ (7 ms)\n'
+                '[  PASSED  ] 0 tests.\n'
+                '[  SKIPPED ] 1 test.\n\n')
     self.assertEquals(expected, ''.join(self._output_stream.getvalue()))
 
   def testPassAndFailedPages(self):
     test_story_set = _MakeStorySet()
-    results = page_test_results.PageTestResults(
-        progress_reporter=self._reporter)
-    results.telemetry_info.benchmark_name = 'bench'
+    results = _MakePageTestResults(self._reporter)
 
     results.WillRunPage(test_story_set.stories[0])
     self._fake_timer.SetTime(0.007)
@@ -199,9 +194,7 @@ class GTestProgressReporterTest(
 
   def testStreamingResults(self):
     test_story_set = _MakeStorySet()
-    results = page_test_results.PageTestResults(
-        progress_reporter=self._reporter)
-    results.telemetry_info.benchmark_name = 'bench'
+    results = _MakePageTestResults(self._reporter)
 
     results.WillRunPage(test_story_set.stories[0])
     self._fake_timer.SetTime(0.007)
@@ -223,9 +216,7 @@ class GTestProgressReporterTest(
     test_story_set = _MakeStorySet()
     self._reporter = gtest_progress_reporter.GTestProgressReporter(
         self._output_stream, output_skipped_tests_summary=True)
-    results = page_test_results.PageTestResults(
-        progress_reporter=self._reporter)
-    results.telemetry_info.benchmark_name = 'bench'
+    results = _MakePageTestResults(self._reporter)
     results.WillRunPage(test_story_set.stories[0])
     self._fake_timer.SetTime(0.007)
     results.Skip('Page skipped for testing reason')
@@ -235,8 +226,9 @@ class GTestProgressReporterTest(
     expected = ('[ RUN      ] bench/http://www.foo.com/\n'
                 '===== SKIPPING TEST http://www.foo.com/:'
                 ' Page skipped for testing reason =====\n'
-                '[       OK ] bench/http://www.foo.com/ (7 ms)\n'
-                '[  PASSED  ] 1 test.\n'
+                '[  SKIPPED ] bench/http://www.foo.com/ (7 ms)\n'
+                '[  PASSED  ] 0 tests.\n'
+                '[  SKIPPED ] 1 test.\n'
                 '\n'
                 'Skipped pages:\n'
                 'bench/http://www.foo.com/\n'

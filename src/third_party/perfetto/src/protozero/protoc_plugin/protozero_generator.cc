@@ -45,6 +45,30 @@ using google::protobuf::UpperString;
 
 namespace {
 
+struct FileDescriptorComp {
+  bool operator()(const FileDescriptor* lhs, const FileDescriptor* rhs) const {
+    int comp = lhs->name().compare(rhs->name());
+    GOOGLE_CHECK(comp != 0 || lhs == rhs);
+    return comp < 0;
+  }
+};
+
+struct DescriptorComp {
+  bool operator()(const Descriptor* lhs, const Descriptor* rhs) const {
+    int comp = lhs->full_name().compare(rhs->full_name());
+    GOOGLE_CHECK(comp != 0 || lhs == rhs);
+    return comp < 0;
+  }
+};
+
+struct EnumDescriptorComp {
+  bool operator()(const EnumDescriptor* lhs, const EnumDescriptor* rhs) const {
+    int comp = lhs->full_name().compare(rhs->full_name());
+    GOOGLE_CHECK(comp != 0 || lhs == rhs);
+    return comp < 0;
+  }
+};
+
 inline std::string ProtoStubName(const FileDescriptor* proto) {
   return StripSuffixString(proto->name(), ".proto") + ".pbzero";
 }
@@ -246,6 +270,7 @@ class GeneratorJob {
         "#define $guard$\n\n"
         "#include <stddef.h>\n"
         "#include <stdint.h>\n\n"
+        "#include \"perfetto/base/export.h\"\n"
         "#include \"perfetto/protozero/proto_field_descriptor.h\"\n"
         "#include \"perfetto/protozero/message.h\"\n",
         "greeting", greeting, "guard", guard);
@@ -276,16 +301,6 @@ class GeneratorJob {
                       ProtoStubName(dependency));
     }
     stub_cc_->Print("\n");
-
-    if (messages_.size() > 0) {
-      stub_cc_->Print(
-          "namespace {\n"
-          "  static const ::protozero::ProtoFieldDescriptor "
-          "kInvalidField = {\"\", "
-          "::protozero::ProtoFieldDescriptor::Type::TYPE_INVALID, "
-          "0, false};\n"
-          "}\n\n");
-    }
 
     // Print namespaces.
     for (const std::string& ns : namespaces_) {
@@ -523,11 +538,13 @@ class GeneratorJob {
       }
       stub_cc_->Print(
           "default:\n"
-          "  return &kInvalidField;\n");
+          "  return "
+          "::protozero::ProtoFieldDescriptor::GetInvalidInstance();\n");
       stub_cc_->Outdent();
       stub_cc_->Print("}\n");
     } else {
-      stub_cc_->Print("return &kInvalidField;\n");
+      stub_cc_->Print(
+          "return ::protozero::ProtoFieldDescriptor::GetInvalidInstance();\n");
     }
     stub_cc_->Outdent();
     stub_cc_->Print("}\n\n");
@@ -535,7 +552,7 @@ class GeneratorJob {
 
   void GenerateMessageDescriptor(const Descriptor* message) {
     stub_h_->Print(
-        "class $name$ : public ::protozero::Message {\n"
+        "class PERFETTO_EXPORT $name$ : public ::protozero::Message {\n"
         " public:\n",
         "name", GetCppClassName(message));
     stub_h_->Indent();
@@ -609,10 +626,11 @@ class GeneratorJob {
   std::vector<const Descriptor*> messages_;
   std::vector<const EnumDescriptor*> enums_;
 
-  std::set<const FileDescriptor*> public_imports_;
-  std::set<const FileDescriptor*> private_imports_;
-  std::set<const Descriptor*> referenced_messages_;
-  std::set<const EnumDescriptor*> referenced_enums_;
+  // The custom *Comp comparators are to ensure determinism of the generator.
+  std::set<const FileDescriptor*, FileDescriptorComp> public_imports_;
+  std::set<const FileDescriptor*, FileDescriptorComp> private_imports_;
+  std::set<const Descriptor*, DescriptorComp> referenced_messages_;
+  std::set<const EnumDescriptor*, EnumDescriptorComp> referenced_enums_;
 };
 
 }  // namespace

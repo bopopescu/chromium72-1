@@ -16,7 +16,7 @@
 #include "net/third_party/quic/platform/api/quic_string.h"
 #include "net/third_party/quic/platform/api/quic_string_piece.h"
 
-namespace net {
+namespace quic {
 
 // ProofSource is an interface by which a QUIC server can obtain certificate
 // chains and signatures that prove its identity.
@@ -26,14 +26,13 @@ class QUIC_EXPORT_PRIVATE ProofSource {
   // certificates.
   struct QUIC_EXPORT_PRIVATE Chain : public QuicReferenceCounted {
     explicit Chain(const std::vector<QuicString>& certs);
+    Chain(const Chain&) = delete;
+    Chain& operator=(const Chain&) = delete;
 
     const std::vector<QuicString> certs;
 
    protected:
     ~Chain() override;
-
-   private:
-    DISALLOW_COPY_AND_ASSIGN(Chain);
   };
 
   // Details is an abstract class which acts as a container for any
@@ -141,6 +140,6 @@ class QUIC_EXPORT_PRIVATE ProofSource {
       std::unique_ptr<SignatureCallback> callback) = 0;
 };
 
-}  // namespace net
+}  // namespace quic
 
 #endif  // NET_THIRD_PARTY_QUIC_CORE_CRYPTO_PROOF_SOURCE_H_

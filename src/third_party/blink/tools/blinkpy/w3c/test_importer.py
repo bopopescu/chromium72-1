@@ -19,17 +19,18 @@ import re
 
 from blinkpy.common.net.buildbot import current_build_link
 from blinkpy.common.net.git_cl import GitCL
+from blinkpy.common.net.network_transaction import NetworkTimeout
 from blinkpy.common.path_finder import PathFinder
 from blinkpy.common.system.log_utils import configure_logging
 from blinkpy.w3c.chromium_exportable_commits import exportable_commits_over_last_n_commits
-from blinkpy.w3c.common import read_credentials, is_testharness_baseline, is_file_exportable
+from blinkpy.w3c.common import read_credentials, is_testharness_baseline, is_file_exportable, WPT_GH_URL
 from blinkpy.w3c.directory_owners_extractor import DirectoryOwnersExtractor
 from blinkpy.w3c.import_notifier import ImportNotifier
 from blinkpy.w3c.local_wpt import LocalWPT
 from blinkpy.w3c.test_copier import TestCopier
 from blinkpy.w3c.wpt_expectations_updater import WPTExpectationsUpdater
 from blinkpy.w3c.wpt_github import WPTGitHub
-from blinkpy.w3c.wpt_manifest import WPTManifest
+from blinkpy.w3c.wpt_manifest import WPTManifest, BASE_MANIFEST_NAME
 from blinkpy.web_tests.models.test_expectations import TestExpectations, TestExpectationParser
 from blinkpy.web_tests.port.base import Port
 
@@ -39,7 +40,7 @@ TIMEOUT_SECONDS = 210 * 60
 
 # Sheriff calendar URL, used for getting the ecosystem infra sheriff to TBR.
 ROTATIONS_URL = 'https://build.chromium.org/deprecated/chromium/all_rotations.js'
-TBR_FALLBACK = 'qyearsley'
+TBR_FALLBACK = 'robertma'
 
 _log = logging.getLogger(__file__)
 
@@ -83,6 +84,10 @@ class TestImporter(object):
         if options.verbose:
             # Print out the full output when executive.run_command fails.
             self.host.executive.error_output_limit = None
+
+        if options.auto_update and options.auto_upload:
+            _log.error('--auto-upload and --auto-update cannot be used together.')
+            return 1
 
         if not self.checkout_is_okay():
             return 1
@@ -145,10 +150,6 @@ class TestImporter(object):
         # TODO(crbug.com/800570 robertma): Re-enable it once we fix the bug.
         # self._delete_orphaned_baselines()
 
-        # TODO(qyearsley): Consider running the imported tests with
-        # `run_web_tests.py --reset-results external/wpt` to get some baselines
-        # before the try jobs are started.
-
         _log.info('Updating TestExpectations for any removed or renamed tests.')
         self.update_all_test_expectations_files(self._list_deleted_tests(), self._list_renamed_tests())
 
@@ -157,13 +158,13 @@ class TestImporter(object):
             return 0
 
         if self._only_wpt_manifest_changed():
-            _log.info('Only WPT_BASE_MANIFEST.json was updated; skipping the import.')
+            _log.info('Only manifest was updated; skipping the import.')
             return 0
 
         self._commit_changes(commit_message)
         _log.info('Changes imported and committed.')
 
-        if not options.auto_update:
+        if not options.auto_upload and not options.auto_update:
             return 0
 
         self._upload_cl()
@@ -171,6 +172,9 @@ class TestImporter(object):
 
         if not self.update_expectations_for_cl():
             return 1
+
+        if not options.auto_update:
+            return 0
 
         if not self.run_commit_queue_for_cl():
             return 1
@@ -244,16 +248,21 @@ class TestImporter(object):
             self.git_cl.run(['set-close'])
             return False
 
-        if self.git_cl.all_success(cq_try_results):
-            _log.info('CQ appears to have passed; trying to commit.')
-            self.git_cl.run(['upload', '-f', '--send-mail'])  # Turn off WIP mode.
-            self.git_cl.run(['set-commit'])
-            self.git_cl.wait_for_closed_status()
+        if not self.git_cl.all_success(cq_try_results):
+            _log.error('CQ appears to have failed; aborting.')
+            self.git_cl.run(['set-close'])
+            return False
+
+        _log.info('CQ appears to have passed; trying to commit.')
+        self.git_cl.run(['upload', '-f', '--send-mail'])  # Turn off WIP mode.
+        self.git_cl.run(['set-commit'])
+
+        if self.git_cl.wait_for_closed_status():
             _log.info('Update completed.')
             return True
 
+        _log.error('Cannot submit CL; aborting.')
         self.git_cl.run(['set-close'])
-        _log.error('CQ appears to have failed; aborting.')
         return False
 
     def blink_try_bots(self):
@@ -270,6 +279,9 @@ class TestImporter(object):
             '--ignore-exportable-commits', action='store_true',
             help='do not check for exportable commits that would be clobbered')
         parser.add_argument('-r', '--revision', help='target wpt revision')
+        parser.add_argument(
+            '--auto-upload', action='store_true',
+            help='upload a CL, update expectations, but do NOT trigger CQ')
         parser.add_argument(
             '--auto-update', action='store_true',
             help='upload a CL, update expectations, and trigger CQ')
@@ -323,12 +335,11 @@ class TestImporter(object):
             _log.info('Applying exportable commit locally:')
             _log.info(commit.url())
             _log.info('Subject: %s', commit.subject().strip())
-            # TODO(qyearsley): We probably don't need to know about
-            # corresponding PRs at all anymore, although this information
-            # could still be useful for reference.
+            # Log a note about the corresponding PR.
+            # This might not be necessary, and could potentially be removed.
             pull_request = self.wpt_github.pr_for_chromium_commit(commit)
             if pull_request:
-                _log.info('PR: https://github.com/w3c/web-platform-tests/pull/%d', pull_request.number)
+                _log.info('PR: %spull/%d', WPT_GH_URL, pull_request.number)
             else:
                 _log.warning('No pull request found.')
             error = local_wpt.apply_patch(commit.format_patch())
@@ -363,7 +374,7 @@ class TestImporter(object):
         manifest_path = self.fs.join(self.dest_path, 'MANIFEST.json')
         assert self.fs.exists(manifest_path)
         manifest_base_path = self.fs.normpath(
-            self.fs.join(self.dest_path, '..', 'WPT_BASE_MANIFEST.json'))
+            self.fs.join(self.dest_path, '..', BASE_MANIFEST_NAME))
         self.copyfile(manifest_path, manifest_base_path)
         self.chromium_git.add_list([manifest_base_path])
 
@@ -387,7 +398,7 @@ class TestImporter(object):
     def _only_wpt_manifest_changed(self):
         changed_files = self.chromium_git.changed_files()
         wpt_base_manifest = self.fs.relpath(
-            self.fs.join(self.dest_path, '..', 'WPT_BASE_MANIFEST.json'),
+            self.fs.join(self.dest_path, '..', BASE_MANIFEST_NAME),
             self.finder.chromium_base())
         return changed_files == [wpt_base_manifest]
 
@@ -408,9 +419,10 @@ class TestImporter(object):
 
         baselines = self.fs.files_under(self.dest_path, file_filter=is_baseline_filter)
 
-        # TODO(qyearsley): Factor out the manifest path to a common location.
-        # TODO(qyearsley): Factor out the manifest reading from here and Port
-        # to WPTManifest.
+        # Note about possible refactoring:
+        #  - the manifest path could be factored out to a common location, and
+        #  - the logic for reading the manifest could be factored out from here
+        # and the Port class.
         manifest_path = self.finder.path_from_layout_tests('external', 'wpt', 'MANIFEST.json')
         manifest = WPTManifest(self.fs.read_text_file(manifest_path))
         wpt_urls = manifest.all_urls()
@@ -497,6 +509,9 @@ class TestImporter(object):
         if directory_owners:
             description += self._format_directory_owners(directory_owners) + '\n\n'
 
+        # Prevent FindIt from auto-reverting import CLs.
+        description += 'NOAUTOREVERT=true\n'
+
         # Move any No-Export tag to the end of the description.
         description = description.replace('No-Export: true', '')
         description = description.replace('\n\n\n\n', '\n\n')
@@ -528,7 +543,11 @@ class TestImporter(object):
         return username or TBR_FALLBACK
 
     def _fetch_ecosystem_infra_sheriff_username(self):
-        content = self.host.web.get_binary(ROTATIONS_URL)
+        try:
+            content = self.host.web.get_binary(ROTATIONS_URL)
+        except NetworkTimeout:
+            _log.error('Cannot fetch %s', ROTATIONS_URL)
+            return ''
         data = json.loads(content)
         today = datetime.date.fromtimestamp(self.host.time()).isoformat()
         index = data['rotations'].index('ecosystem_infra')
@@ -551,7 +570,7 @@ class TestImporter(object):
 
         This is the same as invoking the `wpt-update-expectations` script.
         """
-        _log.info('Adding test expectations lines to LayoutTests/TestExpectations.')
+        _log.info('Adding test expectations lines to TestExpectations.')
         expectation_updater = WPTExpectationsUpdater(self.host)
         self.rebaselined_tests, self.new_test_expectations = expectation_updater.update_expectations()
 

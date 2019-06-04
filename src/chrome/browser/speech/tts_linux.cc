@@ -13,8 +13,9 @@
 #include "base/macros.h"
 #include "base/memory/singleton.h"
 #include "base/synchronization/lock.h"
-#include "base/task_scheduler/post_task.h"
-#include "chrome/browser/speech/tts_platform.h"
+#include "base/task/post_task.h"
+#include "chrome/browser/speech/tts_platform_impl.h"
+#include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/common/content_switches.h"
 #include "library_loaders/libspeechd.h"
@@ -33,19 +34,20 @@ struct SPDChromeVoice {
 
 }  // namespace
 
+// TODO(katie): Move to content/browser/speech.
 class TtsPlatformImplLinux : public TtsPlatformImpl {
  public:
   bool PlatformImplAvailable() override;
   bool Speak(int utterance_id,
              const std::string& utterance,
              const std::string& lang,
-             const VoiceData& voice,
-             const UtteranceContinuousParameters& params) override;
+             const content::VoiceData& voice,
+             const content::UtteranceContinuousParameters& params) override;
   bool StopSpeaking() override;
   void Pause() override;
   void Resume() override;
   bool IsSpeaking() override;
-  void GetVoices(std::vector<VoiceData>* out_voices) override;
+  void GetVoices(std::vector<content::VoiceData>* out_voices) override;
 
   void OnSpeechEvent(SPDNotificationType type);
 
@@ -102,7 +104,7 @@ TtsPlatformImplLinux::TtsPlatformImplLinux()
     return;
 
   base::PostTaskWithTraits(
-      FROM_HERE, {base::MayBlock(), base::TaskPriority::BACKGROUND},
+      FROM_HERE, {base::MayBlock(), base::TaskPriority::BEST_EFFORT},
       base::Bind(&TtsPlatformImplLinux::Initialize, base::Unretained(this)));
 }
 
@@ -167,8 +169,8 @@ bool TtsPlatformImplLinux::Speak(
     int utterance_id,
     const std::string& utterance,
     const std::string& lang,
-    const VoiceData& voice,
-    const UtteranceContinuousParameters& params) {
+    const content::VoiceData& voice,
+    const content::UtteranceContinuousParameters& params) {
   if (!PlatformImplAvailable()) {
     error_ = kNotSupportedError;
     return false;
@@ -180,8 +182,7 @@ bool TtsPlatformImplLinux::Speak(
   float pitch = params.pitch > 3 ? 3 : params.pitch;
   pitch = params.pitch < 0.334 ? 0.334 : pitch;
 
-  std::map<std::string, SPDChromeVoice>::iterator it =
-      all_native_voices_->find(voice.name);
+  auto it = all_native_voices_->find(voice.name);
   if (it != all_native_voices_->end()) {
     libspeechd_loader_.spd_set_output_module(conn_, it->second.module.c_str());
     libspeechd_loader_.spd_set_synthesis_voice(conn_, it->second.name.c_str());
@@ -234,7 +235,7 @@ bool TtsPlatformImplLinux::IsSpeaking() {
 }
 
 void TtsPlatformImplLinux::GetVoices(
-    std::vector<VoiceData>* out_voices) {
+    std::vector<content::VoiceData>* out_voices) {
   if (!all_native_voices_.get()) {
     all_native_voices_.reset(new std::map<std::string, SPDChromeVoice>());
     char** modules = libspeechd_loader_.spd_list_modules(conn_);
@@ -266,46 +267,48 @@ void TtsPlatformImplLinux::GetVoices(
     }
   }
 
-  for (std::map<std::string, SPDChromeVoice>::iterator it =
-           all_native_voices_->begin();
-       it != all_native_voices_->end();
-       it++) {
-    out_voices->push_back(VoiceData());
-    VoiceData& voice = out_voices->back();
+  for (auto it = all_native_voices_->begin(); it != all_native_voices_->end();
+       ++it) {
+    out_voices->push_back(content::VoiceData());
+    content::VoiceData& voice = out_voices->back();
     voice.native = true;
     voice.name = it->first;
-    voice.events.insert(TTS_EVENT_START);
-    voice.events.insert(TTS_EVENT_END);
-    voice.events.insert(TTS_EVENT_CANCELLED);
-    voice.events.insert(TTS_EVENT_MARKER);
-    voice.events.insert(TTS_EVENT_PAUSE);
-    voice.events.insert(TTS_EVENT_RESUME);
+    voice.events.insert(content::TTS_EVENT_START);
+    voice.events.insert(content::TTS_EVENT_END);
+    voice.events.insert(content::TTS_EVENT_CANCELLED);
+    voice.events.insert(content::TTS_EVENT_MARKER);
+    voice.events.insert(content::TTS_EVENT_PAUSE);
+    voice.events.insert(content::TTS_EVENT_RESUME);
   }
 }
 
 void TtsPlatformImplLinux::OnSpeechEvent(SPDNotificationType type) {
-  TtsController* controller = TtsController::GetInstance();
+  // hummmmmm
+  content::TtsController* controller = content::TtsController::GetInstance();
   switch (type) {
   case SPD_EVENT_BEGIN:
-    controller->OnTtsEvent(utterance_id_, TTS_EVENT_START, 0, std::string());
+    controller->OnTtsEvent(utterance_id_, content::TTS_EVENT_START, 0,
+                           std::string());
     break;
   case SPD_EVENT_RESUME:
-    controller->OnTtsEvent(utterance_id_, TTS_EVENT_RESUME, 0, std::string());
+    controller->OnTtsEvent(utterance_id_, content::TTS_EVENT_RESUME, 0,
+                           std::string());
     break;
   case SPD_EVENT_END:
-    controller->OnTtsEvent(
-        utterance_id_, TTS_EVENT_END, utterance_.size(), std::string());
+    controller->OnTtsEvent(utterance_id_, content::TTS_EVENT_END,
+                           utterance_.size(), std::string());
     break;
   case SPD_EVENT_PAUSE:
-    controller->OnTtsEvent(
-        utterance_id_, TTS_EVENT_PAUSE, utterance_.size(), std::string());
+    controller->OnTtsEvent(utterance_id_, content::TTS_EVENT_PAUSE,
+                           utterance_.size(), std::string());
     break;
   case SPD_EVENT_CANCEL:
-    controller->OnTtsEvent(
-        utterance_id_, TTS_EVENT_CANCELLED, 0, std::string());
+    controller->OnTtsEvent(utterance_id_, content::TTS_EVENT_CANCELLED, 0,
+                           std::string());
     break;
   case SPD_EVENT_INDEX_MARK:
-    controller->OnTtsEvent(utterance_id_, TTS_EVENT_MARKER, 0, std::string());
+    controller->OnTtsEvent(utterance_id_, content::TTS_EVENT_MARKER, 0,
+                           std::string());
     break;
   }
 }
@@ -317,9 +320,8 @@ void TtsPlatformImplLinux::NotificationCallback(
   // be in a separate thread.
   if (!BrowserThread::CurrentlyOn(BrowserThread::UI)) {
     current_notification_ = type;
-    BrowserThread::PostTask(
-        BrowserThread::UI,
-        FROM_HERE,
+    base::PostTaskWithTraits(
+        FROM_HERE, {BrowserThread::UI},
         base::Bind(&TtsPlatformImplLinux::OnSpeechEvent,
                    base::Unretained(TtsPlatformImplLinux::GetInstance()),
                    type));
@@ -338,10 +340,11 @@ void TtsPlatformImplLinux::IndexMarkCallback(size_t msg_id,
   // be in a separate thread.
   if (!BrowserThread::CurrentlyOn(BrowserThread::UI)) {
     current_notification_ = state;
-    BrowserThread::PostTask(BrowserThread::UI, FROM_HERE,
+    base::PostTaskWithTraits(
+        FROM_HERE, {BrowserThread::UI},
         base::Bind(&TtsPlatformImplLinux::OnSpeechEvent,
-        base::Unretained(TtsPlatformImplLinux::GetInstance()),
-        state));
+                   base::Unretained(TtsPlatformImplLinux::GetInstance()),
+                   state));
   }
 }
 
@@ -353,6 +356,6 @@ TtsPlatformImplLinux* TtsPlatformImplLinux::GetInstance() {
 }
 
 // static
-TtsPlatformImpl* TtsPlatformImpl::GetInstance() {
+TtsPlatform* TtsPlatform::GetInstance() {
   return TtsPlatformImplLinux::GetInstance();
 }

@@ -8,13 +8,15 @@
 #include "base/bind_helpers.h"
 #include "base/command_line.h"
 #include "base/files/file_path.h"
-#include "base/test/histogram_tester.h"
+#include "base/task/post_task.h"
+#include "base/test/metrics/histogram_tester.h"
 #include "content/browser/bad_message.h"
 #include "content/browser/frame_host/frame_tree.h"
 #include "content/browser/frame_host/render_frame_message_filter.h"
 #include "content/browser/web_contents/web_contents_impl.h"
 #include "content/common/frame_messages.h"
 #include "content/common/render_frame_message_filter.mojom.h"
+#include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/render_process_host.h"
 #include "content/public/common/content_switches.h"
@@ -126,6 +128,32 @@ IN_PROC_BROWSER_TEST_F(RenderFrameMessageFilterBrowserTest, Cookies) {
   EXPECT_EQ("B=2; D=4", GetCookieFromJS(web_contents_http->GetMainFrame()));
 }
 
+// Ensure "priority" cookie option is settable via document.cookie.
+IN_PROC_BROWSER_TEST_F(RenderFrameMessageFilterBrowserTest, CookiePriority) {
+  ASSERT_TRUE(embedded_test_server()->Start());
+
+  struct {
+    std::string param;
+    net::CookiePriority priority;
+  } cases[] = {{"name=value", net::COOKIE_PRIORITY_DEFAULT},
+               {"name=value;priority=Low", net::COOKIE_PRIORITY_LOW},
+               {"name=value;priority=Medium", net::COOKIE_PRIORITY_MEDIUM},
+               {"name=value;priority=High", net::COOKIE_PRIORITY_HIGH}};
+
+  for (auto test_case : cases) {
+    GURL url = embedded_test_server()->GetURL("/set_document_cookie.html?" +
+                                              test_case.param);
+    NavigateToURL(shell(), url);
+    std::vector<net::CanonicalCookie> cookies =
+        GetCanonicalCookies(shell()->web_contents()->GetBrowserContext(), url);
+
+    EXPECT_EQ(1u, cookies.size());
+    EXPECT_EQ("name", cookies[0].Name());
+    EXPECT_EQ("value", cookies[0].Value());
+    EXPECT_EQ(test_case.priority, cookies[0].Priority());
+  }
+}
+
 // SameSite cookies (that aren't marked as http-only) should be available to
 // JavaScript.
 IN_PROC_BROWSER_TEST_F(RenderFrameMessageFilterBrowserTest, SameSiteCookies) {
@@ -206,7 +234,7 @@ IN_PROC_BROWSER_TEST_F(RenderFrameMessageFilterBrowserTest,
   {
     RenderProcessHostKillWaiter iframe_kill_waiter(iframe->GetProcess());
 
-    BrowserThread::GetTaskRunnerForThread(BrowserThread::IO)
+    base::CreateSingleThreadTaskRunnerWithTraits({BrowserThread::IO})
         ->PostTask(FROM_HERE,
                    base::BindOnce(
                        [](RenderFrameHost* frame) {
@@ -236,7 +264,7 @@ IN_PROC_BROWSER_TEST_F(RenderFrameMessageFilterBrowserTest,
     RenderProcessHostKillWaiter main_frame_kill_waiter(
         tab->GetMainFrame()->GetProcess());
 
-    BrowserThread::GetTaskRunnerForThread(BrowserThread::IO)
+    base::CreateSingleThreadTaskRunnerWithTraits({BrowserThread::IO})
         ->PostTask(FROM_HERE, base::BindOnce(
                                   [](RenderFrameHost* frame) {
                                     GetFilterForProcess(frame->GetProcess())
@@ -278,8 +306,101 @@ IN_PROC_BROWSER_TEST_F(RenderFrameMessageFilterBrowserTest, RenderProcessGone) {
   // left the RPH and its connection alive, and the Wait below would hang.
   EXPECT_EQ(bad_message::RFMF_RENDERER_FAKED_ITS_OWN_DEATH, kill_waiter.Wait());
 
-  ASSERT_FALSE(web_rfh->GetProcess()->HasConnection());
+  ASSERT_FALSE(web_rfh->GetProcess()->IsInitializedAndNotDead());
   ASSERT_FALSE(web_rfh->IsRenderFrameLive());
+}
+
+class WaitingCookieStore : public net::CookieMonster {
+ public:
+  WaitingCookieStore() : CookieMonster(nullptr, nullptr, nullptr) {}
+
+  void GetCookieListWithOptionsAsync(const GURL& url,
+                                     const net::CookieOptions& options,
+                                     GetCookieListCallback callback) override {
+    callback_ = std::move(callback);
+  }
+
+  void Finish() { std::move(callback_).Run({}); }
+
+ private:
+  GetCookieListCallback callback_;
+};
+
+class CookieStoreContentBrowserClient : public ContentBrowserClient {
+ public:
+  ~CookieStoreContentBrowserClient() override {
+    BrowserThread::DeleteSoon(BrowserThread::IO, FROM_HERE,
+                              std::move(cookie_store_));
+  }
+
+  net::CookieStore* OverrideCookieStoreForURL(
+      const GURL& url,
+      ResourceContext* context) override {
+    if (!cookie_store_)
+      cookie_store_ = std::make_unique<WaitingCookieStore>();
+    return cookie_store_.get();
+  }
+
+  bool AllowGetCookie(const GURL& url,
+                      const GURL& first_party,
+                      const net::CookieList& cookie_list,
+                      ResourceContext* context,
+                      int render_process_id,
+                      int render_frame_id) override {
+    num_allow_get_cookie_calls_++;
+    return false;
+  }
+
+  void FinishGetCookieList() {
+    base::PostTaskWithTraits(
+        FROM_HERE, {BrowserThread::IO},
+        base::BindOnce(&WaitingCookieStore::Finish,
+                       base::Unretained(cookie_store_.get())));
+  }
+
+  int num_allow_get_cookie_calls() const { return num_allow_get_cookie_calls_; }
+
+ private:
+  int num_allow_get_cookie_calls_ = 0;
+  std::unique_ptr<WaitingCookieStore> cookie_store_;
+};
+
+IN_PROC_BROWSER_TEST_F(RenderFrameMessageFilterBrowserTest,
+                       CookieCallbackAfterProfileDestroyed) {
+  CookieStoreContentBrowserClient browser_client;
+  content::ContentBrowserClient* old_browser_client =
+      content::SetBrowserClientForTesting(&browser_client);
+
+  ASSERT_TRUE(embedded_test_server()->Start());
+  NavigateToURL(shell(), embedded_test_server()->GetURL("/title1.html"));
+
+  base::RunLoop run_loop;
+  WebContentsImpl* web_contents =
+      static_cast<WebContentsImpl*>(shell()->web_contents());
+  FrameTreeNode* root = web_contents->GetFrameTree()->root();
+  base::PostTaskWithTraits(
+      FROM_HERE, {BrowserThread::IO},
+      base::BindOnce(
+          [](RenderFrameHost* frame, base::RunLoop* run_loop) {
+            GetFilterForProcess(frame->GetProcess())
+                ->GetCookies(
+                    frame->GetRoutingID(), GURL("http://127.0.0.1/"),
+                    GURL("http://127.0.0.1/"),
+                    base::BindOnce([](base::RunLoop* run_loop,
+                                      const std::string&) { run_loop->Quit(); },
+                                   run_loop));
+          },
+          root->current_frame_host(), &run_loop));
+
+  shell()->Close();
+  base::RunLoop().RunUntilIdle();
+
+  int num_calls = browser_client.num_allow_get_cookie_calls();
+  browser_client.FinishGetCookieList();
+  run_loop.Run();
+  EXPECT_EQ(num_calls, browser_client.num_allow_get_cookie_calls());
+
+  content::SetBrowserClientForTesting(old_browser_client);
 }
 
 }  // namespace content

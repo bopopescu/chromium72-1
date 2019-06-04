@@ -19,13 +19,15 @@
 #include "base/observer_list.h"
 #include "base/optional.h"
 #include "base/time/time.h"
+#include "base/values.h"
 #include "components/policy/core/common/cloud/cloud_policy_constants.h"
+#include "components/policy/core/common/cloud/cloud_policy_validator.h"
 #include "components/policy/core/common/remote_commands/remote_command_job.h"
 #include "components/policy/policy_export.h"
 #include "components/policy/proto/device_management_backend.pb.h"
 
-namespace net {
-class URLRequestContextGetter;
+namespace network {
+class SharedURLLoaderFactory;
 }
 
 namespace policy {
@@ -33,6 +35,7 @@ namespace policy {
 class DeviceManagementRequestJob;
 class DeviceManagementService;
 class SigningService;
+class DMAuth;
 
 // Implements the core logic required to talk to the device management service.
 // Also keeps track of the current state of the association with the service,
@@ -58,14 +61,20 @@ class POLICY_EXPORT CloudPolicyClient {
   using StatusCallback = base::Callback<void(bool status)>;
 
   // A callback for available licenses request. If the operation succeeded,
-  // |success| is true, and |map| contains available licenses.
-  using LicenseRequestCallback =
-      base::Callback<void(bool success, const LicenseMap& map)>;
+  // |status| is DM_STATUS_SUCCESS, and |map| contains available licenses.
+  using LicenseRequestCallback = base::Callback<void(
+      DeviceManagementStatus status,
+      const LicenseMap& map)>;
 
   // A callback which receives fetched remote commands.
-  using RemoteCommandCallback = base::Callback<void(
+  using RemoteCommandCallback = base::OnceCallback<void(
       DeviceManagementStatus,
       const std::vector<enterprise_management::RemoteCommand>&)>;
+
+  // A callback for fetching device robot OAuth2 authorization tokens.
+  // Only occurs during enrollment, after the device is registered.
+  using RobotAuthCodeCallback =
+      base::OnceCallback<void(DeviceManagementStatus, const std::string&)>;
 
   // A callback which fetches device dm_token based on user affiliation.
   // Should be called once per registration.
@@ -85,11 +94,6 @@ class POLICY_EXPORT CloudPolicyClient {
     // successful completion of registration and unregistration requests.
     virtual void OnRegistrationStateChanged(CloudPolicyClient* client) = 0;
 
-    // Called when a request for device robot OAuth2 authorization tokens
-    // returns successfully. Only occurs during enrollment. Optional
-    // (default implementation is a noop).
-    virtual void OnRobotAuthCodesFetched(CloudPolicyClient* client);
-
     // Indicates there's been an error in a previously-issued request.
     virtual void OnClientError(CloudPolicyClient* client) = 0;
   };
@@ -103,13 +107,14 @@ class POLICY_EXPORT CloudPolicyClient {
   // requests. |device_dm_token_callback| is used to retrieve device DMToken for
   // affiliated users. Could be null if it's not possible to use
   // device DMToken for user policy fetches.
-  CloudPolicyClient(const std::string& machine_id,
-                    const std::string& machine_model,
-                    const std::string& brand_code,
-                    DeviceManagementService* service,
-                    scoped_refptr<net::URLRequestContextGetter> request_context,
-                    SigningService* signing_service,
-                    DeviceDMTokenCallback device_dm_token_callback);
+  CloudPolicyClient(
+      const std::string& machine_id,
+      const std::string& machine_model,
+      const std::string& brand_code,
+      DeviceManagementService* service,
+      scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
+      SigningService* signing_service,
+      DeviceDMTokenCallback device_dm_token_callback);
   virtual ~CloudPolicyClient();
 
   // Sets the DMToken, thereby establishing a registration with the server. A
@@ -128,7 +133,7 @@ class POLICY_EXPORT CloudPolicyClient {
       enterprise_management::DeviceRegisterRequest::Flavor flavor,
       enterprise_management::DeviceRegisterRequest::Lifetime lifetime,
       enterprise_management::LicenseType::LicenseTypeEnum license_type,
-      const std::string& auth_token,
+      std::unique_ptr<DMAuth> auth,
       const std::string& client_id,
       const std::string& requisition,
       const std::string& current_state_key);
@@ -141,6 +146,7 @@ class POLICY_EXPORT CloudPolicyClient {
       enterprise_management::DeviceRegisterRequest::Flavor flavor,
       enterprise_management::DeviceRegisterRequest::Lifetime lifetime,
       enterprise_management::LicenseType::LicenseTypeEnum license_type,
+      std::unique_ptr<DMAuth> auth,
       const std::string& pem_certificate_chain,
       const std::string& client_id,
       const std::string& requisition,
@@ -165,10 +171,22 @@ class POLICY_EXPORT CloudPolicyClient {
   // requests and the latest request will eventually trigger notifications.
   virtual void FetchPolicy();
 
+  // Upload a policy validation report to the server. Like FetchPolicy, this
+  // method requires that the client is in a registered state. This method
+  // should only be called if the policy was rejected (e.g. validation or
+  // serialization error).
+  virtual void UploadPolicyValidationReport(
+      CloudPolicyValidatorBase::Status status,
+      const std::vector<ValueValidationIssue>& value_validation_issues,
+      const std::string& policy_type,
+      const std::string& policy_token);
+
   // Requests OAuth2 auth codes for the device robot account. The client being
   // registered is a prerequisite to this operation and this call will CHECK if
   // the client is not in registered state.
-  virtual void FetchRobotAuthCodes(const std::string& auth_token);
+  // The |callback| will be called when the operation completes.
+  virtual void FetchRobotAuthCodes(std::unique_ptr<DMAuth> auth,
+                                   RobotAuthCodeCallback callback);
 
   // Sends an unregistration request to the server.
   virtual void Unregister();
@@ -234,28 +252,27 @@ class POLICY_EXPORT CloudPolicyClient {
       std::unique_ptr<RemoteCommandJob::UniqueIDType> last_command_id,
       const std::vector<enterprise_management::RemoteCommandResult>&
           command_results,
-      const RemoteCommandCallback& callback);
+      RemoteCommandCallback callback);
 
   // Sends a device attribute update permission request to the server, uses
-  // OAuth2 token |auth_token| to identify user who requests a permission to
-  // name a device, calls a |callback| from the enrollment screen to indicate
-  // whether the device naming prompt should be shown.
-  void GetDeviceAttributeUpdatePermission(const std::string& auth_token,
+  // |auth| to identify user who requests a permission to name a device, calls
+  // a |callback| from the enrollment screen to indicate whether the device
+  // naming prompt should be shown.
+  void GetDeviceAttributeUpdatePermission(std::unique_ptr<DMAuth> auth,
                                           const StatusCallback& callback);
 
   // Sends a device naming information (Asset Id and Location) to the
-  // device management server, uses OAuth2 token |auth_token| to identify user
-  // who names a device, the |callback| will be called when the operation
-  // completes.
-  void UpdateDeviceAttributes(const std::string& auth_token,
+  // device management server, uses |auth| to identify user who names a device,
+  // the |callback| will be called when the operation completes.
+  void UpdateDeviceAttributes(std::unique_ptr<DMAuth> auth,
                               const std::string& asset_id,
                               const std::string& location,
                               const StatusCallback& callback);
 
-  // Requests a list of licenses available for enrollment. Uses OAuth2 token
-  // |auth_token| to identify user who issues the request, the |callback| will
+  // Requests a list of licenses available for enrollment. Uses |auth| to
+  // identify user who issues the request, the |callback| will
   // be called when the operation completes.
-  void RequestAvailableLicenses(const std::string& auth_token,
+  void RequestAvailableLicenses(std::unique_ptr<DMAuth> auth,
                                 const LicenseRequestCallback& callback);
 
   // Sends a GCM id update request to the DM server. The server will
@@ -308,8 +325,17 @@ class POLICY_EXPORT CloudPolicyClient {
   // Whether the client is registered with the device management service.
   bool is_registered() const { return !dm_token_.empty(); }
 
+  // Whether the client requires reregistration with the device management
+  // service.
+  bool requires_reregistration() const {
+    return !reregistration_dm_token_.empty();
+  }
+
   const std::string& dm_token() const { return dm_token_; }
   const std::string& client_id() const { return client_id_; }
+  const base::DictionaryValue* configuration_seed() const {
+    return configuration_seed_.get();
+  };
 
   // The device mode as received in the registration request.
   DeviceMode device_mode() const { return device_mode_; }
@@ -332,10 +358,6 @@ class POLICY_EXPORT CloudPolicyClient {
     return status_;
   }
 
-  const std::string& robot_api_auth_code() const {
-    return robot_api_auth_code_;
-  }
-
   // Returns the invalidation version that was used for the last FetchPolicy.
   // Observers can call this method from their OnPolicyFetched method to
   // determine which at which invalidation version the policy was fetched.
@@ -343,10 +365,13 @@ class POLICY_EXPORT CloudPolicyClient {
     return fetched_invalidation_version_;
   }
 
-  scoped_refptr<net::URLRequestContextGetter> GetRequestContext();
+  scoped_refptr<network::SharedURLLoaderFactory> GetURLLoaderFactory();
 
   // Returns the number of active requests.
   int GetActiveRequestCountForTest() const;
+
+  void SetURLLoaderFactoryForTesting(
+      scoped_refptr<network::SharedURLLoaderFactory> factory);
 
  protected:
   // A set of (policy type, settings entity ID) pairs to fetch.
@@ -366,7 +391,9 @@ class POLICY_EXPORT CloudPolicyClient {
   void OnRetryRegister(DeviceManagementRequestJob* job);
 
   // Callback for siganture of requests.
-  void OnRegisterWithCertificateRequestSigned(bool success,
+  void OnRegisterWithCertificateRequestSigned(
+      std::unique_ptr<DMAuth> auth,
+      bool success,
       enterprise_management::SignedData signed_data);
 
   // Callback for registration requests.
@@ -383,6 +410,7 @@ class POLICY_EXPORT CloudPolicyClient {
 
   // Callback for robot account api authorization requests.
   void OnFetchRobotAuthCodesCompleted(
+      RobotAuthCodeCallback callback,
       DeviceManagementStatus status,
       int net_error,
       const enterprise_management::DeviceManagementResponse& response);
@@ -412,7 +440,7 @@ class POLICY_EXPORT CloudPolicyClient {
   // Callback for remote command fetch requests.
   void OnRemoteCommandsFetched(
       const DeviceManagementRequestJob* job,
-      const RemoteCommandCallback& callback,
+      RemoteCommandCallback callback,
       DeviceManagementStatus status,
       int net_error,
       const enterprise_management::DeviceManagementResponse& response);
@@ -455,7 +483,6 @@ class POLICY_EXPORT CloudPolicyClient {
   // Observer notification helpers.
   void NotifyPolicyFetched();
   void NotifyRegistrationStateChanged();
-  void NotifyRobotAuthCodesFetched();
   void NotifyClientError();
 
   // Data necessary for constructing policy requests.
@@ -466,12 +493,12 @@ class POLICY_EXPORT CloudPolicyClient {
   std::vector<std::string> state_keys_to_upload_;
 
   std::string dm_token_;
+  std::unique_ptr<base::DictionaryValue> configuration_seed_;
   DeviceMode device_mode_ = DEVICE_MODE_NOT_SET;
   std::string client_id_;
   base::Time last_policy_timestamp_;
   int public_key_version_ = -1;
   bool public_key_version_valid_ = false;
-  std::string robot_api_auth_code_;
   // Device DMToken for affiliated user policy requests.
   // Retrieved from |device_dm_token_callback_| on registration.
   std::string device_dm_token_;
@@ -507,11 +534,17 @@ class POLICY_EXPORT CloudPolicyClient {
 
   DeviceDMTokenCallback device_dm_token_callback_;
 
-  base::ObserverList<Observer, true> observers_;
-  scoped_refptr<net::URLRequestContextGetter> request_context_;
+  base::ObserverList<Observer, true>::Unchecked observers_;
+
+  scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory_;
 
  private:
   void SetClientId(const std::string& client_id);
+
+  // Used to store a copy of the previously used |dm_token_|. This is used
+  // during re-registration, which gets triggered by a failed policy fetch with
+  // error |DM_STATUS_SERVICE_DEVICE_NOT_FOUND|.
+  std::string reregistration_dm_token_;
 
   // Used to create tasks which run delayed on the UI thread.
   base::WeakPtrFactory<CloudPolicyClient> weak_ptr_factory_;

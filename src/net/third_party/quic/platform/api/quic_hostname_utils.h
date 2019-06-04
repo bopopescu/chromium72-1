@@ -10,10 +10,12 @@
 #include "net/third_party/quic/platform/api/quic_string_piece.h"
 #include "net/third_party/quic/platform/impl/quic_hostname_utils_impl.h"
 
-namespace net {
+namespace quic {
 
 class QUIC_EXPORT_PRIVATE QuicHostnameUtils {
  public:
+  QuicHostnameUtils() = delete;
+
   // Returns true if the sni is valid, false otherwise.
   //  (1) disallow IP addresses;
   //  (2) check that the hostname contains valid characters only; and
@@ -23,11 +25,8 @@ class QUIC_EXPORT_PRIVATE QuicHostnameUtils {
   // Convert hostname to lowercase and remove the trailing '.'.
   // WARNING: mutates |hostname| in place and returns |hostname|.
   static char* NormalizeHostname(char* hostname);
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(QuicHostnameUtils);
 };
 
-}  // namespace net
+}  // namespace quic
 
 #endif  // NET_THIRD_PARTY_QUIC_PLATFORM_API_QUIC_HOSTNAME_UTILS_H_

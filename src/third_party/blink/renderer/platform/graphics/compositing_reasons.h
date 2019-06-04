@@ -82,11 +82,7 @@ using CompositingReasons = uint64_t;
   V(LayerForAncestorClippingMask)                                             \
   V(LayerForScrollingBlockSelection)                                          \
   /* Composited layer painted on top of all other layers as decoration. */    \
-  V(LayerForDecoration)                                                       \
-                                                                              \
-  /* Composited elements with inline transforms trigger assumed overlap so    \
-  that we can update their transforms quickly. */                             \
-  V(InlineTransform)
+  V(LayerForDecoration)
 
 class PLATFORM_EXPORT CompositingReason {
  private:
@@ -124,11 +120,16 @@ class PLATFORM_EXPORT CompositingReason {
         k3DTransform | kBackfaceVisibilityHidden | kComboActiveAnimation |
         kTransitionProperty | kWillChangeCompositingHint | kBackdropFilter,
 
-    kComboAllDirectReasons =
-        kComboAllDirectStyleDeterminedReasons | kVideo | kCanvas | kPlugin |
-        kIFrame | kScrollDependentPosition | kOverflowScrollingTouch |
-        kOverflowScrollingParent | kOutOfFlowClipping | kVideoOverlay |
-        kRootScroller,
+    kComboAllDirectNonStyleDeterminedReasons =
+        kVideo | kCanvas | kPlugin | kIFrame | kOverflowScrollingParent |
+        kOutOfFlowClipping | kVideoOverlay | kRoot | kRootScroller |
+        kScrollDependentPosition | kScrollTimelineTarget,
+
+    kComboAllDirectReasons = kComboAllDirectStyleDeterminedReasons |
+                             kComboAllDirectNonStyleDeterminedReasons,
+
+    kComboAllCompositedScrollingDeterminedReasons =
+        kScrollDependentPosition | kOverflowScrollingTouch,
 
     kComboCompositedDescendants =
         kTransformWithCompositedDescendants | kIsolateCompositedDescendants |
@@ -142,7 +143,7 @@ class PLATFORM_EXPORT CompositingReason {
 
     kComboAllStyleDeterminedReasons = kComboAllDirectStyleDeterminedReasons |
                                       kComboCompositedDescendants |
-                                      kCombo3DDescendants | kInlineTransform,
+                                      kCombo3DDescendants,
 
     kComboSquashableReasons =
         kOverlap | kAssumedOverlap | kOverflowScrollingParent,

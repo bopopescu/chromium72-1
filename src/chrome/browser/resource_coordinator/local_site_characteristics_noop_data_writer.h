@@ -21,10 +21,15 @@ class LocalSiteCharacteristicsNoopDataWriter
   // SiteCharacteristicsDataWriter:
   void NotifySiteLoaded() override;
   void NotifySiteUnloaded() override;
+  void NotifySiteVisibilityChanged(TabVisibility visibility) override;
   void NotifyUpdatesFaviconInBackground() override;
   void NotifyUpdatesTitleInBackground() override;
   void NotifyUsesAudioInBackground() override;
   void NotifyUsesNotificationsInBackground() override;
+  void NotifyLoadTimePerformanceMeasurement(
+      base::TimeDelta load_duration,
+      base::TimeDelta cpu_usage_estimate,
+      uint64_t private_footprint_kb_estimate) override;
 
  private:
   DISALLOW_COPY_AND_ASSIGN(LocalSiteCharacteristicsNoopDataWriter);

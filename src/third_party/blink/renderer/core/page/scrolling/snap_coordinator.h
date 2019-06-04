@@ -31,6 +31,8 @@ class CORE_EXPORT SnapCoordinator final
     : public GarbageCollectedFinalized<SnapCoordinator> {
  public:
   static SnapCoordinator* Create();
+
+  explicit SnapCoordinator();
   ~SnapCoordinator();
   void Trace(blink::Visitor* visitor) {}
 
@@ -44,25 +46,24 @@ class CORE_EXPORT SnapCoordinator final
   // Calculate the SnapAreaData for the specific snap area in its snap
   // container.
   SnapAreaData CalculateSnapAreaData(const LayoutBox& snap_area,
-                                     const LayoutBox& snap_container,
-                                     const LayoutRect& area_rect,
-                                     const FloatPoint& max_position);
+                                     const LayoutBox& snap_container);
 
   // Called by LocalFrameView::PerformPostLayoutTasks(), so that the snap data
   // are updated whenever a layout happens.
   void UpdateAllSnapContainerData();
   void UpdateSnapContainerData(const LayoutBox&);
 
-  // Called by ScrollManager::HandleGestureScrollEnd() to animate to the snap
-  // position for the current scroll on the specific direction if there is
-  // a valid snap position.
-  void PerformSnapping(const LayoutBox& snap_container,
-                       bool did_scroll_x,
-                       bool did_scroll_y);
-  FloatPoint GetSnapPositionForPoint(const LayoutBox& snap_container,
-                                     const FloatPoint& natural_position,
-                                     bool did_scroll_x,
-                                     bool did_scroll_y);
+  // SnapForEndPosition() and SnapForDirection() return true if snapping was
+  // performed, and false otherwise.
+  bool SnapForEndPosition(const LayoutBox& snap_container,
+                          bool scrolled_x,
+                          bool scrolled_y) const;
+  bool SnapForDirection(const LayoutBox& snap_container,
+                        const ScrollOffset& delta) const;
+
+  base::Optional<FloatPoint> GetSnapPosition(
+      const LayoutBox& snap_container,
+      const SnapSelectionStrategy& strategy) const;
 
 #ifndef NDEBUG
   void ShowSnapAreaMap();
@@ -72,7 +73,8 @@ class CORE_EXPORT SnapCoordinator final
 
  private:
   friend class SnapCoordinatorTest;
-  explicit SnapCoordinator();
+  bool PerformSnapping(const LayoutBox& snap_container,
+                       const SnapSelectionStrategy& strategy) const;
 
   HashMap<const LayoutBox*, SnapContainerData> snap_container_map_;
   DISALLOW_COPY_AND_ASSIGN(SnapCoordinator);

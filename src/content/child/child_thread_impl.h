@@ -31,11 +31,10 @@
 #include "mojo/public/cpp/bindings/associated_binding.h"
 #include "mojo/public/cpp/bindings/associated_binding_set.h"
 #include "services/tracing/public/cpp/trace_event_agent.h"
+#include "third_party/blink/public/mojom/associated_interfaces/associated_interfaces.mojom.h"
 
 #if defined(OS_WIN)
 #include "content/public/common/font_cache_win.mojom.h"
-#elif defined(OS_MACOSX)
-#include "content/common/font_loader_mac.mojom.h"
 #endif
 
 namespace IPC {
@@ -45,11 +44,10 @@ class SyncMessageFilter;
 }  // namespace IPC
 
 namespace mojo {
-namespace edk {
-class IncomingBrokerClientInvitation;
-class OutgoingBrokerClientInvitation;
+class OutgoingInvitation;
+namespace core {
 class ScopedIPCSupport;
-}  // namespace edk
+}  // namespace core
 }  // namespace mojo
 
 namespace content {
@@ -62,16 +60,16 @@ class CONTENT_EXPORT ChildThreadImpl
       virtual public ChildThread,
       private base::FieldTrialList::Observer,
       public mojom::RouteProvider,
-      public mojom::AssociatedInterfaceProvider,
+      public blink::mojom::AssociatedInterfaceProvider,
       public mojom::ChildControl {
  public:
   struct CONTENT_EXPORT Options;
 
   // Creates the thread.
-  ChildThreadImpl();
+  explicit ChildThreadImpl(base::RepeatingClosure quit_closure);
   // Allow to be used for single-process mode and for in process gpu mode via
   // options.
-  explicit ChildThreadImpl(const Options& options);
+  ChildThreadImpl(base::RepeatingClosure quit_closure, const Options& options);
   // ChildProcess::main_thread() is reset after Shutdown(), and before the
   // destructor, so any subsystem that relies on ChildProcess::main_thread()
   // must be terminated before Shutdown returns. In particular, if a subsystem
@@ -89,11 +87,6 @@ class CONTENT_EXPORT ChildThreadImpl
 #if defined(OS_WIN)
   void PreCacheFont(const LOGFONT& log_font) override;
   void ReleaseCachedFonts() override;
-#elif defined(OS_MACOSX)
-  bool LoadFont(const base::string16& font_name,
-                float font_point_size,
-                mojo::ScopedSharedBufferHandle* out_font_data,
-                uint32_t* out_font_id) override;
 #endif
   void RecordAction(const base::UserMetricsAction& action) override;
   void RecordComputedAction(const std::string& action) override;
@@ -173,10 +166,6 @@ class CONTENT_EXPORT ChildThreadImpl
 
   bool IsInBrowserProcess() const;
 
-#if defined(OS_MACOSX)
-  virtual mojom::FontLoaderMac* GetFontLoaderMac();
-#endif
-
  private:
   class ChildThreadMessageRouter : public IPC::MessageRouter {
    public:
@@ -198,38 +187,36 @@ class CONTENT_EXPORT ChildThreadImpl
 
   // We create the channel first without connecting it so we can add filters
   // prior to any messages being received, then connect it afterwards.
-  void ConnectChannel(mojo::edk::IncomingBrokerClientInvitation* invitation);
+  void ConnectChannel();
 
   // IPC message handlers.
 
   void EnsureConnected();
 
   // mojom::RouteProvider:
-  void GetRoute(
-      int32_t routing_id,
-      mojom::AssociatedInterfaceProviderAssociatedRequest request) override;
+  void GetRoute(int32_t routing_id,
+                blink::mojom::AssociatedInterfaceProviderAssociatedRequest
+                    request) override;
 
-  // mojom::AssociatedInterfaceProvider:
+  // blink::mojom::AssociatedInterfaceProvider:
   void GetAssociatedInterface(
       const std::string& name,
-      mojom::AssociatedInterfaceAssociatedRequest request) override;
+      blink::mojom::AssociatedInterfaceAssociatedRequest request) override;
 
 #if defined(OS_WIN)
   mojom::FontCacheWin* GetFontCacheWin();
 #endif
 
-  std::unique_ptr<mojo::edk::ScopedIPCSupport> mojo_ipc_support_;
+  std::unique_ptr<mojo::core::ScopedIPCSupport> mojo_ipc_support_;
   std::unique_ptr<ServiceManagerConnection> service_manager_connection_;
 
   mojo::BindingSet<mojom::ChildControl> child_control_bindings_;
   mojo::AssociatedBinding<mojom::RouteProvider> route_provider_binding_;
-  mojo::AssociatedBindingSet<mojom::AssociatedInterfaceProvider, int32_t>
+  mojo::AssociatedBindingSet<blink::mojom::AssociatedInterfaceProvider, int32_t>
       associated_interface_provider_bindings_;
   mojom::RouteProviderAssociatedPtr remote_route_provider_;
 #if defined(OS_WIN)
   mojom::FontCacheWinPtr font_cache_win_ptr_;
-#elif defined(OS_MACOSX)
-  mojom::FontLoaderMacPtr font_loader_mac_ptr_;
 #endif
 
   std::unique_ptr<IPC::SyncChannel> channel_;
@@ -249,6 +236,9 @@ class CONTENT_EXPORT ChildThreadImpl
 
   // TaskRunner to post tasks to the main thread.
   scoped_refptr<base::SingleThreadTaskRunner> main_thread_runner_;
+
+  // Used to quit the main thread.
+  base::RepeatingClosure quit_closure_;
 
   std::unique_ptr<base::PowerMonitor> power_monitor_;
 
@@ -278,7 +268,7 @@ struct ChildThreadImpl::Options {
   bool connect_to_browser;
   scoped_refptr<base::SingleThreadTaskRunner> browser_process_io_runner;
   std::vector<IPC::MessageFilter*> startup_filters;
-  mojo::edk::OutgoingBrokerClientInvitation* broker_client_invitation;
+  mojo::OutgoingInvitation* mojo_invitation;
   std::string in_process_service_request_token;
   scoped_refptr<base::SingleThreadTaskRunner> ipc_task_runner;
 

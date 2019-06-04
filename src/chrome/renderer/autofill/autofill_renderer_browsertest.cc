@@ -20,9 +20,9 @@
 #include "content/public/common/content_switches.h"
 #include "content/public/renderer/render_frame.h"
 #include "content/public/renderer/render_view.h"
-#include "mojo/public/cpp/bindings/binding_set.h"
-#include "services/service_manager/public/cpp/interface_provider.h"
+#include "mojo/public/cpp/bindings/associated_binding_set.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "third_party/blink/public/common/associated_interfaces/associated_interface_provider.h"
 #include "third_party/blink/public/platform/web_string.h"
 #include "third_party/blink/public/platform/web_url_request.h"
 #include "third_party/blink/public/platform/web_vector.h"
@@ -55,7 +55,7 @@ class FakeContentAutofillDriver : public mojom::AutofillDriver {
   FakeContentAutofillDriver() : called_field_change_(false) {}
   ~FakeContentAutofillDriver() override {}
 
-  void BindRequest(mojom::AutofillDriverRequest request) {
+  void BindRequest(mojom::AutofillDriverAssociatedRequest request) {
     bindings_.AddBinding(this, std::move(request));
   }
 
@@ -99,7 +99,8 @@ class FakeContentAutofillDriver : public mojom::AutofillDriver {
   void QueryFormFieldAutofill(int32_t id,
                               const FormData& form,
                               const FormFieldData& field,
-                              const gfx::RectF& bounding_box) override {}
+                              const gfx::RectF& bounding_box,
+                              bool autoselect_first_suggestion) override {}
 
   void HidePopup() override {}
 
@@ -126,7 +127,7 @@ class FakeContentAutofillDriver : public mojom::AutofillDriver {
   // Records data received via FormSeen() call.
   std::unique_ptr<std::vector<FormData>> forms_;
 
-  mojo::BindingSet<mojom::AutofillDriver> bindings_;
+  mojo::AssociatedBindingSet<mojom::AutofillDriver> bindings_;
 };
 
 }  // namespace
@@ -146,17 +147,17 @@ class AutofillRendererTest : public ChromeRenderViewTest {
 
     // We only use the fake driver for main frame
     // because our test cases only involve the main frame.
-    service_manager::InterfaceProvider* remote_interfaces =
-        view_->GetMainRenderFrame()->GetRemoteInterfaces();
-    service_manager::InterfaceProvider::TestApi test_api(remote_interfaces);
-    test_api.SetBinderForName(
+    blink::AssociatedInterfaceProvider* remote_interfaces =
+        view_->GetMainRenderFrame()->GetRemoteAssociatedInterfaces();
+    remote_interfaces->OverrideBinderForTesting(
         mojom::AutofillDriver::Name_,
-        base::Bind(&AutofillRendererTest::BindAutofillDriver,
-                   base::Unretained(this)));
+        base::BindRepeating(&AutofillRendererTest::BindAutofillDriver,
+                            base::Unretained(this)));
   }
 
-  void BindAutofillDriver(mojo::ScopedMessagePipeHandle handle) {
-    fake_driver_.BindRequest(mojom::AutofillDriverRequest(std::move(handle)));
+  void BindAutofillDriver(mojo::ScopedInterfaceEndpointHandle handle) {
+    fake_driver_.BindRequest(
+        mojom::AutofillDriverAssociatedRequest(std::move(handle)));
   }
 
   FakeContentAutofillDriver fake_driver_;
@@ -188,19 +189,22 @@ TEST_F(AutofillRendererTest, SendForms) {
 
   FormFieldData expected;
 
-  expected.name = ASCIIToUTF16("firstname");
+  expected.id_attribute = ASCIIToUTF16("firstname");
+  expected.name = expected.id_attribute;
   expected.value = base::string16();
   expected.form_control_type = "text";
   expected.max_length = WebInputElement::DefaultMaxLength();
   EXPECT_FORM_FIELD_DATA_EQUALS(expected, forms[0].fields[0]);
 
-  expected.name = ASCIIToUTF16("middlename");
+  expected.id_attribute = ASCIIToUTF16("middlename");
+  expected.name = expected.id_attribute;
   expected.value = base::string16();
   expected.form_control_type = "text";
   expected.max_length = WebInputElement::DefaultMaxLength();
   EXPECT_FORM_FIELD_DATA_EQUALS(expected, forms[0].fields[1]);
 
-  expected.name = ASCIIToUTF16("lastname");
+  expected.id_attribute = ASCIIToUTF16("lastname");
+  expected.name = expected.id_attribute;
   expected.value = base::string16();
   expected.form_control_type = "text";
   expected.autocomplete_attribute = "off";
@@ -208,7 +212,8 @@ TEST_F(AutofillRendererTest, SendForms) {
   EXPECT_FORM_FIELD_DATA_EQUALS(expected, forms[0].fields[2]);
   expected.autocomplete_attribute = std::string();  // reset
 
-  expected.name = ASCIIToUTF16("state");
+  expected.id_attribute = ASCIIToUTF16("state");
+  expected.name = expected.id_attribute;
   expected.value = ASCIIToUTF16("?");
   expected.form_control_type = "select-one";
   expected.max_length = 0;
@@ -249,15 +254,18 @@ TEST_F(AutofillRendererTest, SendForms) {
   expected.form_control_type = "text";
   expected.max_length = WebInputElement::DefaultMaxLength();
 
-  expected.name = ASCIIToUTF16("second_firstname");
+  expected.id_attribute = ASCIIToUTF16("second_firstname");
+  expected.name = expected.id_attribute;
   expected.value = ASCIIToUTF16("Bob");
   EXPECT_FORM_FIELD_DATA_EQUALS(expected, forms[0].fields[0]);
 
-  expected.name = ASCIIToUTF16("second_lastname");
+  expected.id_attribute = ASCIIToUTF16("second_lastname");
+  expected.name = expected.id_attribute;
   expected.value = ASCIIToUTF16("Hope");
   EXPECT_FORM_FIELD_DATA_EQUALS(expected, forms[0].fields[1]);
 
-  expected.name = ASCIIToUTF16("second_email");
+  expected.id_attribute = ASCIIToUTF16("second_email");
+  expected.name = expected.id_attribute;
   expected.value = ASCIIToUTF16("bobhope@example.com");
   EXPECT_FORM_FIELD_DATA_EQUALS(expected, forms[0].fields[2]);
 }
@@ -351,13 +359,15 @@ TEST_F(AutofillRendererTest, DynamicallyAddedUnownedFormElements) {
 
   FormFieldData expected;
 
-  expected.name = ASCIIToUTF16("EMAIL_ADDRESS");
+  expected.id_attribute = ASCIIToUTF16("EMAIL_ADDRESS");
+  expected.name = expected.id_attribute;
   expected.value.clear();
   expected.form_control_type = "text";
   expected.max_length = WebInputElement::DefaultMaxLength();
   EXPECT_FORM_FIELD_DATA_EQUALS(expected, forms[0].fields[7]);
 
-  expected.name = ASCIIToUTF16("PHONE_HOME_WHOLE_NUMBER");
+  expected.id_attribute = ASCIIToUTF16("PHONE_HOME_WHOLE_NUMBER");
+  expected.name = expected.id_attribute;
   expected.value.clear();
   expected.form_control_type = "text";
   expected.max_length = WebInputElement::DefaultMaxLength();

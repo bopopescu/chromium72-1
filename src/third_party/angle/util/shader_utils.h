@@ -7,14 +7,15 @@
 #ifndef SAMPLE_UTIL_SHADER_UTILS_H
 #define SAMPLE_UTIL_SHADER_UTILS_H
 
-#include <export.h>
-#include <GLES3/gl31.h>
-#include <GLES3/gl3.h>
-#include <GLES2/gl2.h>
-#include <GLES2/gl2ext.h>
 #include <EGL/egl.h>
 #include <EGL/eglext.h>
+#include <GLES2/gl2.h>
+#include <GLES2/gl2ext.h>
+#include <GLES3/gl3.h>
+#include <GLES3/gl31.h>
+#include <export.h>
 
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -27,13 +28,13 @@ CompileProgramWithTransformFeedback(const std::string &vsSource,
                                     const std::string &fsSource,
                                     const std::vector<std::string> &transformFeedbackVaryings,
                                     GLenum bufferMode);
-ANGLE_EXPORT GLuint
-CompileProgramWithGSAndTransformFeedback(const std::string &vsSource,
-                                         const std::string &gsSource,
-                                         const std::string &fsSource,
-                                         const std::vector<std::string> &transformFeedbackVaryings,
-                                         GLenum bufferMode);
+
 ANGLE_EXPORT GLuint CompileProgram(const std::string &vsSource, const std::string &fsSource);
+
+ANGLE_EXPORT GLuint CompileProgram(const std::string &vsSource,
+                                   const std::string &fsSource,
+                                   const std::function<void(GLuint)> &preLinkCallback);
+
 ANGLE_EXPORT GLuint CompileProgramWithGS(const std::string &vsSource,
                                          const std::string &gsSource,
                                          const std::string &fsSource);
@@ -82,6 +83,9 @@ ANGLE_EXPORT const char *UniformColor();
 // A shader that fills with 100% opaque red.
 ANGLE_EXPORT const char *Red();
 
+// A shader that fills with 100% opaque green.
+ANGLE_EXPORT const char *Green();
+
 // A shader that fills with 100% opaque blue.
 ANGLE_EXPORT const char *Blue();
 
@@ -101,6 +105,10 @@ ANGLE_EXPORT const char *Zero();
 
 // A shader that sets gl_Position to attribute a_position.
 ANGLE_EXPORT const char *Simple();
+
+// A shader that simply passes through attribute a_position, setting it to gl_Position and varying
+// v_position.
+ANGLE_EXPORT const char *Passthrough();
 
 }  // namespace vs
 
@@ -127,6 +135,10 @@ ANGLE_EXPORT const char *Zero();
 // A shader that sets gl_Position to attribute a_position.
 ANGLE_EXPORT const char *Simple();
 
+// A shader that simply passes through attribute a_position, setting it to gl_Position and varying
+// v_position.
+ANGLE_EXPORT const char *Passthrough();
+
 }  // namespace vs
 
 namespace fs
@@ -139,4 +151,4 @@ ANGLE_EXPORT const char *Red();
 }  // namespace essl31_shaders
 }  // namespace angle
 
-#endif // SAMPLE_UTIL_SHADER_UTILS_H
+#endif  // SAMPLE_UTIL_SHADER_UTILS_H

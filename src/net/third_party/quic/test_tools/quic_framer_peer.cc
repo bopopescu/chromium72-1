@@ -8,9 +8,8 @@
 #include "net/third_party/quic/core/quic_packets.h"
 #include "net/third_party/quic/platform/api/quic_map_util.h"
 
-using std::string;
 
-namespace net {
+namespace quic {
 namespace test {
 
 // static
@@ -59,18 +58,37 @@ bool QuicFramerPeer::AppendIetfStreamFrame(QuicFramer* framer,
 }
 
 // static
+bool QuicFramerPeer::ProcessCryptoFrame(QuicFramer* framer,
+                                        QuicDataReader* reader,
+                                        QuicCryptoFrame* frame) {
+  return framer->ProcessCryptoFrame(reader, frame);
+}
+
+// static
+bool QuicFramerPeer::AppendCryptoFrame(QuicFramer* framer,
+                                       const QuicCryptoFrame& frame,
+                                       QuicDataWriter* writer) {
+  return framer->AppendCryptoFrame(frame, writer);
+}
+
+// static
 bool QuicFramerPeer::ProcessIetfAckFrame(QuicFramer* framer,
                                          QuicDataReader* reader,
-                                         uint8_t frame_type,
+                                         uint64_t frame_type,
                                          QuicAckFrame* ack_frame) {
   return framer->ProcessIetfAckFrame(reader, frame_type, ack_frame);
 }
 
 // static
-bool QuicFramerPeer::AppendIetfAckFrame(QuicFramer* framer,
-                                        const QuicAckFrame& frame,
-                                        QuicDataWriter* writer) {
-  return framer->AppendIetfAckFrame(frame, writer);
+bool QuicFramerPeer::AppendIetfAckFrameAndTypeByte(QuicFramer* framer,
+                                                   const QuicAckFrame& frame,
+                                                   QuicDataWriter* writer) {
+  return framer->AppendIetfAckFrameAndTypeByte(frame, writer);
+}
+// static
+size_t QuicFramerPeer::GetIetfAckFrameSize(QuicFramer* framer,
+                                           const QuicAckFrame& frame) {
+  return framer->GetIetfAckFrameSize(frame);
 }
 
 // static
@@ -101,9 +119,8 @@ bool QuicFramerPeer::ProcessIetfConnectionCloseFrame(
 bool QuicFramerPeer::ProcessApplicationCloseFrame(
     QuicFramer* framer,
     QuicDataReader* reader,
-    const uint8_t frame_type,
     QuicApplicationCloseFrame* frame) {
-  return framer->ProcessApplicationCloseFrame(reader, frame_type, frame);
+  return framer->ProcessApplicationCloseFrame(reader, frame);
 }
 
 // static
@@ -269,6 +286,22 @@ bool QuicFramerPeer::ProcessNewConnectionIdFrame(
 }
 
 // static
+bool QuicFramerPeer::AppendRetireConnectionIdFrame(
+    QuicFramer* framer,
+    const QuicRetireConnectionIdFrame& frame,
+    QuicDataWriter* writer) {
+  return framer->AppendRetireConnectionIdFrame(frame, writer);
+}
+
+// static
+bool QuicFramerPeer::ProcessRetireConnectionIdFrame(
+    QuicFramer* framer,
+    QuicDataReader* reader,
+    QuicRetireConnectionIdFrame* frame) {
+  return framer->ProcessRetireConnectionIdFrame(reader, frame);
+}
+
+// static
 void QuicFramerPeer::SwapCrypters(QuicFramer* framer1, QuicFramer* framer2) {
   for (int i = ENCRYPTION_NONE; i < NUM_ENCRYPTION_LEVELS; i++) {
     framer1->encrypter_[i].swap(framer2->encrypter_[i]);
@@ -295,10 +328,14 @@ QuicEncrypter* QuicFramerPeer::GetEncrypter(QuicFramer* framer,
 }
 
 // static
-void QuicFramerPeer::SetLastPacketIsIetfQuic(QuicFramer* framer,
-                                             bool last_packet_is_ietf_quic) {
-  framer->last_packet_is_ietf_quic_ = last_packet_is_ietf_quic;
+size_t QuicFramerPeer::ComputeFrameLength(
+    QuicFramer* framer,
+    const QuicFrame& frame,
+    bool last_frame_in_packet,
+    QuicPacketNumberLength packet_number_length) {
+  return framer->ComputeFrameLength(frame, last_frame_in_packet,
+                                    packet_number_length);
 }
 
 }  // namespace test
-}  // namespace net
+}  // namespace quic

@@ -25,6 +25,11 @@ class FakeWebGraphicsContext3DProvider : public WebGraphicsContext3DProvider {
         image_decode_cache_(cache ? cache : &stub_image_decode_cache_) {
     sk_sp<const GrGLInterface> gl_interface(GrGLCreateNullInterface());
     gr_context_ = GrContext::MakeGL(std::move(gl_interface));
+    // enable all gpu features.
+    for (unsigned feature = 0; feature < gpu::NUMBER_OF_GPU_FEATURE_TYPES;
+         ++feature) {
+      gpu_feature_info_.status_values[feature] = gpu::kGpuFeatureStatusEnabled;
+    }
   }
   ~FakeWebGraphicsContext3DProvider() override = default;
 
@@ -33,6 +38,7 @@ class FakeWebGraphicsContext3DProvider : public WebGraphicsContext3DProvider {
   const gpu::Capabilities& GetCapabilities() const override {
     return capabilities_;
   }
+  void SetCapabilities(const gpu::Capabilities& c) { capabilities_ = c; }
 
   const gpu::GpuFeatureInfo& GetGpuFeatureInfo() const override {
     return gpu_feature_info_;
@@ -40,15 +46,16 @@ class FakeWebGraphicsContext3DProvider : public WebGraphicsContext3DProvider {
 
   viz::GLHelper* GetGLHelper() override { return nullptr; }
 
-  bool IsSoftwareRendering() const override { return false; }
-
   gpu::gles2::GLES2Interface* ContextGL() override { return gl_; }
+  gpu::webgpu::WebGPUInterface* WebGPUInterface() override { return nullptr; }
 
   bool BindToCurrentThread() override { return false; }
   void SetLostContextCallback(base::Closure) override {}
   void SetErrorMessageCallback(
       base::RepeatingCallback<void(const char*, int32_t id)>) override {}
-  cc::ImageDecodeCache* ImageDecodeCache() override {
+  cc::ImageDecodeCache* ImageDecodeCache(
+      SkColorType color_type,
+      sk_sp<SkColorSpace> color_space) override {
     return image_decode_cache_;
   }
 

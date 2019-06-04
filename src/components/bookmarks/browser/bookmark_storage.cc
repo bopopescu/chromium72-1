@@ -15,8 +15,8 @@
 #include "base/json/json_reader.h"
 #include "base/json/json_string_value_serializer.h"
 #include "base/metrics/histogram_macros.h"
+#include "base/numerics/safe_conversions.h"
 #include "base/sequenced_task_runner.h"
-#include "base/threading/thread_restrictions.h"
 #include "base/time/time.h"
 #include "components/bookmarks/browser/bookmark_codec.h"
 #include "components/bookmarks/browser/bookmark_model.h"
@@ -59,7 +59,6 @@ void AddBookmarksToIndex(BookmarkLoadDetails* details,
 }  // namespace
 
 void LoadBookmarks(const base::FilePath& path, BookmarkLoadDetails* details) {
-  base::AssertBlockingAllowed();
   bool load_index = false;
   bool bookmark_file_exists = base::PathExists(path);
   if (bookmark_file_exists) {
@@ -74,10 +73,13 @@ void LoadBookmarks(const base::FilePath& path, BookmarkLoadDetails* details) {
       // Building the index can take a while, so we do it on the background
       // thread.
       int64_t max_node_id = 0;
+      std::string sync_metadata_str;
       BookmarkCodec codec;
       TimeTicks start_time = TimeTicks::Now();
-      codec.Decode(details->bb_node(), details->other_folder_node(),
-                   details->mobile_folder_node(), &max_node_id, *root);
+      codec.Decode(*root, details->bb_node(), details->other_folder_node(),
+                   details->mobile_folder_node(), &max_node_id,
+                   &sync_metadata_str);
+      details->set_sync_metadata_str(std::move(sync_metadata_str));
       details->set_max_id(std::max(max_node_id, details->max_id()));
       details->set_computed_checksum(codec.computed_checksum());
       details->set_stored_checksum(codec.stored_checksum());
@@ -114,6 +116,10 @@ void LoadBookmarks(const base::FilePath& path, BookmarkLoadDetails* details) {
   }
 
   details->CreateUrlIndex();
+
+  UMA_HISTOGRAM_COUNTS_100000(
+      "Bookmarks.Count.OnProfileLoad",
+      base::saturated_cast<int>(details->url_index()->UrlCount()));
 }
 
 // BookmarkLoadDetails ---------------------------------------------------------
@@ -155,11 +161,7 @@ bool BookmarkLoadDetails::LoadExtraNodes() {
 }
 
 void BookmarkLoadDetails::CreateUrlIndex() {
-  url_index_ = std::make_unique<UrlIndex>(std::move(root_node_));
-}
-
-std::unique_ptr<UrlIndex> BookmarkLoadDetails::owned_url_index() {
-  return std::move(url_index_);
+  url_index_ = base::MakeRefCounted<UrlIndex>(std::move(root_node_));
 }
 
 BookmarkPermanentNode* BookmarkLoadDetails::CreatePermanentNode(
@@ -218,9 +220,9 @@ void BookmarkStorage::ScheduleSave() {
     case BACKUP_NONE:
       backup_state_ = BACKUP_DISPATCHED;
       sequenced_task_runner_->PostTaskAndReply(
-          FROM_HERE, base::Bind(&BackupCallback, writer_.path()),
-          base::Bind(&BookmarkStorage::OnBackupFinished,
-                     weak_factory_.GetWeakPtr()));
+          FROM_HERE, base::BindOnce(&BackupCallback, writer_.path()),
+          base::BindOnce(&BookmarkStorage::OnBackupFinished,
+                         weak_factory_.GetWeakPtr()));
       return;
     case BACKUP_DISPATCHED:
       // Currently doing a backup which will call this function when done.
@@ -247,7 +249,8 @@ void BookmarkStorage::BookmarkModelDeleted() {
 
 bool BookmarkStorage::SerializeData(std::string* output) {
   BookmarkCodec codec;
-  std::unique_ptr<base::Value> value(codec.Encode(model_));
+  std::unique_ptr<base::Value> value(
+      codec.Encode(model_, model_->client()->EncodeBookmarkSyncMetadata()));
   JSONStringValueSerializer serializer(output);
   serializer.set_pretty_print(true);
   return serializer.Serialize(*(value.get()));

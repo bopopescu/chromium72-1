@@ -52,8 +52,9 @@ class GetAPINatives : public ObjectBackedNativeHandler {
   GetAPINatives(ScriptContext* context,
                 NativeExtensionBindingsSystem* bindings_system)
       : ObjectBackedNativeHandler(context), bindings_system_(bindings_system) {
-    DCHECK_EQ(base::FeatureList::IsEnabled(features::kNativeCrxBindings),
-              !!bindings_system);
+    DCHECK_EQ(
+        base::FeatureList::IsEnabled(extensions_features::kNativeCrxBindings),
+        !!bindings_system);
   }
   ~GetAPINatives() override {}
 
@@ -64,7 +65,7 @@ class GetAPINatives : public ObjectBackedNativeHandler {
                       const v8::FunctionCallbackInfo<v8::Value>& args) {
       CHECK_EQ(1, args.Length());
       CHECK(args[0]->IsString());
-      std::string api_name = gin::V8ToString(args[0]);
+      std::string api_name = gin::V8ToString(context->isolate(), args[0]);
       v8::Local<v8::Object> api;
       if (bindings_system) {
         api = bindings_system->GetAPIObjectForTesting(context, api_name);
@@ -160,7 +161,7 @@ ModuleSystemTestEnvironment::ModuleSystemTestEnvironment(
   context_->v8_context()->Enter();
   assert_natives_ = new AssertNatives(context_);
 
-  if (base::FeatureList::IsEnabled(features::kNativeCrxBindings))
+  if (base::FeatureList::IsEnabled(extensions_features::kNativeCrxBindings))
     bindings_system_ = std::make_unique<NativeExtensionBindingsSystem>(nullptr);
 
   {
@@ -244,7 +245,10 @@ v8::Local<v8::Object> ModuleSystemTestEnvironment::CreateGlobal(
   v8::EscapableHandleScope handle_scope(isolate_);
   v8::Local<v8::Object> object = v8::Object::New(isolate_);
   isolate_->GetCurrentContext()->Global()->Set(
-      v8::String::NewFromUtf8(isolate_, name.c_str()), object);
+      v8::String::NewFromUtf8(isolate_, name.c_str(),
+                              v8::NewStringType::kInternalized)
+          .ToLocalChecked(),
+      object);
   return handle_scope.Escape(object);
 }
 

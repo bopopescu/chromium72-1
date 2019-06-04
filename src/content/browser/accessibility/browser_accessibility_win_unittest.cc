@@ -12,6 +12,7 @@
 #include <utility>
 
 #include "base/macros.h"
+#include "base/test/scoped_task_environment.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/win/scoped_bstr.h"
 #include "base/win/scoped_variant.h"
@@ -36,7 +37,8 @@ class BrowserAccessibilityTest : public testing::Test {
 
  private:
   void SetUp() override;
-
+  
+  base::test::ScopedTaskEnvironment task_environment_;
   content::TestBrowserThreadBundle thread_bundle_;
 
   DISALLOW_COPY_AND_ASSIGN(BrowserAccessibilityTest);
@@ -166,13 +168,10 @@ TEST_F(BrowserAccessibilityTest, TestChildrenChange) {
   text2.id = 2;
   text2.role = ax::mojom::Role::kStaticText;
   text2.SetName("new text");
-  AXEventNotificationDetails param;
-  param.event_type = ax::mojom::Event::kChildrenChanged;
-  param.update.nodes.push_back(text2);
-  param.id = text2.id;
-  std::vector<AXEventNotificationDetails> events;
-  events.push_back(param);
-  manager->OnAccessibilityEvents(events);
+  AXEventNotificationDetails event_bundle;
+  event_bundle.updates.resize(1);
+  event_bundle.updates[0].nodes.push_back(text2);
+  manager->OnAccessibilityEvents(event_bundle);
 
   // Query for the text IAccessible and verify that it now returns "new text"
   // as its value.
@@ -232,13 +231,10 @@ TEST_F(BrowserAccessibilityTest, TestChildrenChangeNoLeaks) {
   // Notify the BrowserAccessibilityManager that the div node and its children
   // were removed and ensure that only one BrowserAccessibility instance exists.
   root.child_ids.clear();
-  AXEventNotificationDetails param;
-  param.event_type = ax::mojom::Event::kChildrenChanged;
-  param.update.nodes.push_back(root);
-  param.id = root.id;
-  std::vector<AXEventNotificationDetails> events;
-  events.push_back(param);
-  manager->OnAccessibilityEvents(events);
+  AXEventNotificationDetails event_bundle;
+  event_bundle.updates.resize(1);
+  event_bundle.updates[0].nodes.push_back(root);
+  manager->OnAccessibilityEvents(event_bundle);
 
   // Delete the manager and test that all BrowserAccessibility instances are
   // deleted.
@@ -332,7 +328,7 @@ TEST_F(BrowserAccessibilityTest, TestTextBoundaries) {
       ToBrowserAccessibilityWin(root_obj->PlatformGetChild(0))->GetCOM();
   ASSERT_NE(nullptr, text_field_obj);
 
-  long text_len;
+  LONG text_len;
   EXPECT_EQ(S_OK, text_field_obj->get_nCharacters(&text_len));
 
   base::win::ScopedBstr text;
@@ -344,8 +340,8 @@ TEST_F(BrowserAccessibilityTest, TestTextBoundaries) {
   EXPECT_STREQ(L"One ", text);
   text.Reset();
 
-  long start;
-  long end;
+  LONG start;
+  LONG end;
   EXPECT_EQ(S_OK, text_field_obj->get_textAtOffset(
       1, IA2_TEXT_BOUNDARY_CHAR, &start, &end, text.Receive()));
   EXPECT_EQ(1, start);
@@ -414,7 +410,7 @@ TEST_F(BrowserAccessibilityTest, TestTextBoundaries) {
 TEST_F(BrowserAccessibilityTest, TestSimpleHypertext) {
   const std::string text1_name = "One two three.";
   const std::string text2_name = " Four five six.";
-  const long text_name_len = text1_name.length() + text2_name.length();
+  const LONG text_name_len = text1_name.length() + text2_name.length();
 
   ui::AXNodeData text1;
   text1.id = 11;
@@ -440,7 +436,7 @@ TEST_F(BrowserAccessibilityTest, TestSimpleHypertext) {
   BrowserAccessibilityComWin* root_obj =
       ToBrowserAccessibilityWin(manager->GetRoot())->GetCOM();
 
-  long text_len;
+  LONG text_len;
   EXPECT_EQ(S_OK, root_obj->get_nCharacters(&text_len));
   EXPECT_EQ(text_name_len, text_len);
 
@@ -448,7 +444,7 @@ TEST_F(BrowserAccessibilityTest, TestSimpleHypertext) {
   EXPECT_EQ(S_OK, root_obj->get_text(0, text_name_len, text.Receive()));
   EXPECT_EQ(text1_name + text2_name, base::UTF16ToUTF8(base::string16(text)));
 
-  long hyperlink_count;
+  LONG hyperlink_count;
   EXPECT_EQ(S_OK, root_obj->get_nHyperlinks(&hyperlink_count));
   EXPECT_EQ(0, hyperlink_count);
 
@@ -461,7 +457,7 @@ TEST_F(BrowserAccessibilityTest, TestSimpleHypertext) {
   EXPECT_EQ(E_INVALIDARG, root_obj->get_hyperlink(text_name_len + 1,
                                                   hyperlink.GetAddressOf()));
 
-  long hyperlink_index;
+  LONG hyperlink_index;
   EXPECT_EQ(S_FALSE, root_obj->get_hyperlinkIndex(0, &hyperlink_index));
   EXPECT_EQ(-1, hyperlink_index);
   // Invalid arguments should not be modified.
@@ -492,7 +488,7 @@ TEST_F(BrowserAccessibilityTest, TestComplexHypertext) {
   const base::string16 embed(1, BrowserAccessibilityComWin::kEmbeddedCharacter);
   const base::string16 root_hypertext =
       text1_name + embed + text2_name + embed + embed + embed;
-  const long root_hypertext_len = root_hypertext.length();
+  const LONG root_hypertext_len = root_hypertext.length();
 
   ui::AXNodeData text1;
   text1.id = 11;
@@ -553,7 +549,7 @@ TEST_F(BrowserAccessibilityTest, TestComplexHypertext) {
   BrowserAccessibilityComWin* root_obj =
       ToBrowserAccessibilityWin(manager->GetRoot())->GetCOM();
 
-  long text_len;
+  LONG text_len;
   EXPECT_EQ(S_OK, root_obj->get_nCharacters(&text_len));
   EXPECT_EQ(root_hypertext_len, text_len);
 
@@ -562,7 +558,7 @@ TEST_F(BrowserAccessibilityTest, TestComplexHypertext) {
   EXPECT_STREQ(root_hypertext.c_str(), text);
   text.Reset();
 
-  long hyperlink_count;
+  LONG hyperlink_count;
   EXPECT_EQ(S_OK, root_obj->get_nHyperlinks(&hyperlink_count));
   EXPECT_EQ(4, hyperlink_count);
 
@@ -613,7 +609,7 @@ TEST_F(BrowserAccessibilityTest, TestComplexHypertext) {
   hyperlink.Reset();
   hypertext.Reset();
 
-  long hyperlink_index;
+  LONG hyperlink_index;
   EXPECT_EQ(S_FALSE, root_obj->get_hyperlinkIndex(0, &hyperlink_index));
   EXPECT_EQ(-1, hyperlink_index);
   // Invalid arguments should not be modified.
@@ -659,15 +655,12 @@ TEST_F(BrowserAccessibilityTest, TestCreateEmptyDocument) {
   tree1_2.role = ax::mojom::Role::kTextField;
 
   // Process a load complete.
-  std::vector<AXEventNotificationDetails> params;
-  params.push_back(AXEventNotificationDetails());
-  AXEventNotificationDetails* msg = &params[0];
-  msg->event_type = ax::mojom::Event::kLoadComplete;
-  msg->update.root_id = tree1_1.id;
-  msg->update.nodes.push_back(tree1_1);
-  msg->update.nodes.push_back(tree1_2);
-  msg->id = tree1_1.id;
-  manager->OnAccessibilityEvents(params);
+  AXEventNotificationDetails event_bundle;
+  event_bundle.updates.resize(1);
+  event_bundle.updates[0].root_id = tree1_1.id;
+  event_bundle.updates[0].nodes.push_back(tree1_1);
+  event_bundle.updates[0].nodes.push_back(tree1_2);
+  manager->OnAccessibilityEvents(event_bundle);
 
   // Save for later comparison.
   BrowserAccessibility* acc1_2 = manager->GetFromID(2);
@@ -689,13 +682,12 @@ TEST_F(BrowserAccessibilityTest, TestCreateEmptyDocument) {
   tree2_2.id = 3;
   tree2_2.role = ax::mojom::Role::kButton;
 
-  msg->update.nodes.clear();
-  msg->update.nodes.push_back(tree2_1);
-  msg->update.nodes.push_back(tree2_2);
-  msg->id = tree2_1.id;
+  event_bundle.updates[0].nodes.clear();
+  event_bundle.updates[0].nodes.push_back(tree2_1);
+  event_bundle.updates[0].nodes.push_back(tree2_2);
 
   // Fire another load complete.
-  manager->OnAccessibilityEvents(params);
+  manager->OnAccessibilityEvents(event_bundle);
 
   BrowserAccessibility* acc2_2 = manager->GetFromID(3);
 
@@ -947,7 +939,7 @@ TEST_F(BrowserAccessibilityTest, TestValueAttributeInTextControls) {
 }
 
 TEST_F(BrowserAccessibilityTest, TestWordBoundariesInTextControls) {
-  const base::string16 line1(L"This is a very long line of text that ");
+  const base::string16 line1(L"This is a very LONG line of text that ");
   const base::string16 line2(L"should wrap on more than one lines ");
   const base::string16 text(line1 + line2);
 
@@ -1662,10 +1654,8 @@ TEST_F(BrowserAccessibilityTest, TestTextAttributesInContentEditables) {
   text_before.role = ax::mojom::Role::kStaticText;
   text_before.AddState(ax::mojom::State::kEditable);
   text_before.SetName("Before ");
-  text_before.AddIntAttribute(
-      ax::mojom::IntAttribute::kTextStyle,
-      static_cast<int32_t>(ax::mojom::TextStyle::kTextStyleBold) |
-          static_cast<int32_t>(ax::mojom::TextStyle::kTextStyleItalic));
+  text_before.AddTextStyle(ax::mojom::TextStyle::kBold);
+  text_before.AddTextStyle(ax::mojom::TextStyle::kItalic);
 
   ui::AXNodeData link;
   link.id = 4;
@@ -1674,9 +1664,7 @@ TEST_F(BrowserAccessibilityTest, TestTextAttributesInContentEditables) {
   link.AddState(ax::mojom::State::kFocusable);
   link.AddState(ax::mojom::State::kLinked);
   link.SetName("lnk");
-  link.AddIntAttribute(
-      ax::mojom::IntAttribute::kTextStyle,
-      static_cast<int32_t>(ax::mojom::TextStyle::kTextStyleUnderline));
+  link.AddTextStyle(ax::mojom::TextStyle::kUnderline);
 
   ui::AXNodeData link_text;
   link_text.id = 5;
@@ -1685,9 +1673,7 @@ TEST_F(BrowserAccessibilityTest, TestTextAttributesInContentEditables) {
   link_text.AddState(ax::mojom::State::kFocusable);
   link_text.AddState(ax::mojom::State::kLinked);
   link_text.SetName("lnk");
-  link_text.AddIntAttribute(
-      ax::mojom::IntAttribute::kTextStyle,
-      static_cast<int32_t>(ax::mojom::TextStyle::kTextStyleUnderline));
+  link_text.AddTextStyle(ax::mojom::TextStyle::kUnderline);
 
   // The name "lnk" is misspelled.
   std::vector<int32_t> marker_types{
@@ -2491,12 +2477,10 @@ TEST_F(BrowserAccessibilityTest, TestIAccessible2Relations) {
   std::vector<int32_t> labelledby_ids = {3};
   child1.AddIntListAttribute(ax::mojom::IntListAttribute::kLabelledbyIds,
                              labelledby_ids);
-  AXEventNotificationDetails event;
-  event.event_type = ax::mojom::Event::kAriaAttributeChanged;
-  event.update.nodes.push_back(child1);
-  event.id = child1.id;
-  std::vector<AXEventNotificationDetails> events = {event};
-  manager->OnAccessibilityEvents(events);
+  AXEventNotificationDetails event_bundle;
+  event_bundle.updates.resize(1);
+  event_bundle.updates[0].nodes.push_back(child1);
+  manager->OnAccessibilityEvents(event_bundle);
 
   EXPECT_HRESULT_SUCCEEDED(ax_child1->GetCOM()->get_nRelations(&n_relations));
   EXPECT_EQ(2, n_relations);

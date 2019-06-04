@@ -31,24 +31,28 @@
 #ifndef THIRD_PARTY_BLINK_PUBLIC_WEB_WEB_WIDGET_CLIENT_H_
 #define THIRD_PARTY_BLINK_PUBLIC_WEB_WEB_WIDGET_CLIENT_H_
 
+#include "services/network/public/mojom/referrer_policy.mojom-shared.h"
 #include "third_party/blink/public/platform/web_common.h"
 #include "third_party/blink/public/platform/web_drag_operation.h"
 #include "third_party/blink/public/platform/web_intrinsic_sizing_info.h"
 #include "third_party/blink/public/platform/web_layer_tree_view.h"
 #include "third_party/blink/public/platform/web_point.h"
 #include "third_party/blink/public/platform/web_rect.h"
-#include "third_party/blink/public/platform/web_referrer_policy.h"
 #include "third_party/blink/public/platform/web_screen_info.h"
 #include "third_party/blink/public/platform/web_touch_action.h"
 #include "third_party/blink/public/web/web_meaningful_layout.h"
 #include "third_party/blink/public/web/web_navigation_policy.h"
 #include "third_party/blink/public/web/web_text_direction.h"
 
-namespace blink {
+class SkBitmap;
 
+namespace gfx {
+class Point;
+}
+
+namespace blink {
 class WebDragData;
 class WebGestureEvent;
-class WebImage;
 class WebString;
 class WebWidget;
 struct WebCursorInfo;
@@ -62,11 +66,6 @@ class WebWidgetClient {
 
   // Called when a region of the WebWidget needs to be re-painted.
   virtual void DidInvalidateRect(const WebRect&) {}
-
-  // Attempt to initialize compositing view for this widget. If successful,
-  // returns a valid WebLayerTreeView which is owned by the
-  // WebWidgetClient.
-  virtual WebLayerTreeView* InitializeLayerTreeView() { return nullptr; }
 
   // FIXME: Remove all overrides of this.
   virtual bool AllowsBrokenNullLayerTreeView() const { return false; }
@@ -112,10 +111,6 @@ class WebWidgetClient {
   // Called when a tooltip should be shown at the current cursor position.
   virtual void SetToolTipText(const WebString&, WebTextDirection hint) {}
 
-  // Called to query information about the screen where this widget is
-  // displayed.
-  virtual WebScreenInfo GetScreenInfo() { return WebScreenInfo(); }
-
   // Requests to lock the mouse cursor. If true is returned, the success
   // result will be asynchronously returned via a single call to
   // WebWidget::didAcquirePointerLock() or
@@ -142,6 +137,9 @@ class WebWidgetClient {
                              const WebFloatPoint& position_in_viewport,
                              const WebFloatSize& velocity_in_viewport,
                              const cc::OverscrollBehavior& behavior) {}
+
+  // Called to update if pointerrawmove events should be sent.
+  virtual void HasPointerRawMoveEventHandlers(bool) {}
 
   // Called to update if touch events should be sent.
   virtual void HasTouchEventHandlers(bool) {}
@@ -176,11 +174,15 @@ class WebWidgetClient {
   virtual void ConvertWindowToViewport(WebFloatRect* rect) {}
 
   // Called when a drag-and-drop operation should begin.
-  virtual void StartDragging(WebReferrerPolicy,
+  virtual void StartDragging(network::mojom::ReferrerPolicy,
                              const WebDragData&,
                              WebDragOperationsMask,
-                             const WebImage& drag_image,
-                             const WebPoint& drag_image_offset) {}
+                             const SkBitmap& drag_image,
+                             const gfx::Point& drag_image_offset) {}
+
+  // Double tap zooms a rect in the main-frame renderer.
+  virtual void AnimateDoubleTapZoomInMainFrame(const blink::WebPoint& point,
+                                               const blink::WebRect& bounds) {}
 };
 
 }  // namespace blink

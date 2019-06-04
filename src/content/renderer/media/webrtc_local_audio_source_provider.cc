@@ -8,7 +8,7 @@
 
 #include "base/logging.h"
 #include "content/public/renderer/render_frame.h"
-#include "content/renderer/media/audio_device_factory.h"
+#include "content/renderer/media/audio/audio_device_factory.h"
 #include "media/base/audio_fifo.h"
 #include "media/base/audio_parameters.h"
 #include "third_party/blink/public/platform/web_audio_source_provider_client.h"
@@ -39,10 +39,11 @@ WebRtcLocalAudioSourceProvider::WebRtcLocalAudioSourceProvider(
       blink::WebLocalFrame::FrameForCurrentContext();
   RenderFrame* const render_frame = RenderFrame::FromWebFrame(web_frame);
   if (render_frame) {
-    int sample_rate = AudioDeviceFactory::GetOutputDeviceInfo(
-                          render_frame->GetRoutingID(), 0, std::string())
-                          .output_params()
-                          .sample_rate();
+    int sample_rate =
+        AudioDeviceFactory::GetOutputDeviceInfo(render_frame->GetRoutingID(),
+                                                media::AudioSinkParameters())
+            .output_params()
+            .sample_rate();
     sink_params_.Reset(media::AudioParameters::AUDIO_PCM_LOW_LATENCY,
                        media::CHANNEL_LAYOUT_STEREO, sample_rate,
                        kWebAudioRenderBufferSize);

@@ -26,10 +26,7 @@ class GLSLTest : public ANGLETest
         setConfigAlphaBits(8);
     }
 
-    virtual void SetUp()
-    {
-        ANGLETest::SetUp();
-    }
+    virtual void SetUp() { ANGLETest::SetUp(); }
 
     std::string GenerateVaryingType(GLint vectorSize)
     {
@@ -57,7 +54,8 @@ class GLSLTest : public ANGLETest
         }
         else
         {
-            sprintf(buff, "varying %s v%d[%d];\n", GenerateVaryingType(vectorSize).c_str(), id, arraySize);
+            sprintf(buff, "varying %s v%d[%d];\n", GenerateVaryingType(vectorSize).c_str(), id,
+                    arraySize);
         }
 
         return std::string(buff);
@@ -77,7 +75,8 @@ class GLSLTest : public ANGLETest
         {
             for (int i = 0; i < arraySize; i++)
             {
-                sprintf(buff, "\t v%d[%d] = %s(1.0);\n", id, i, GenerateVaryingType(vectorSize).c_str());
+                sprintf(buff, "\t v%d[%d] = %s(1.0);\n", id, i,
+                        GenerateVaryingType(vectorSize).c_str());
                 returnString += buff;
             }
         }
@@ -106,11 +105,22 @@ class GLSLTest : public ANGLETest
         }
     }
 
-    void GenerateGLSLWithVaryings(GLint floatCount, GLint floatArrayCount, GLint vec2Count, GLint vec2ArrayCount, GLint vec3Count, GLint vec3ArrayCount,
-                                  GLint vec4Count, GLint vec4ArrayCount, bool useFragCoord, bool usePointCoord, bool usePointSize,
-                                  std::string* fragmentShader, std::string* vertexShader)
+    void GenerateGLSLWithVaryings(GLint floatCount,
+                                  GLint floatArrayCount,
+                                  GLint vec2Count,
+                                  GLint vec2ArrayCount,
+                                  GLint vec3Count,
+                                  GLint vec3ArrayCount,
+                                  GLint vec4Count,
+                                  GLint vec4ArrayCount,
+                                  bool useFragCoord,
+                                  bool usePointCoord,
+                                  bool usePointSize,
+                                  std::string *fragmentShader,
+                                  std::string *vertexShader)
     {
-        // Generate a string declaring the varyings, to share between the fragment shader and the vertex shader.
+        // Generate a string declaring the varyings, to share between the fragment shader and the
+        // vertex shader.
         std::string varyingDeclaration;
 
         unsigned int varyingCount = 0;
@@ -303,7 +313,7 @@ class GLSLTest : public ANGLETest
 
         // Set gl_FragColor, and use special variables if requested
         fragmentShader->append("\tgl_FragColor = retColor");
-        
+
         if (useFragCoord)
         {
             fragmentShader->append(" + gl_FragCoord");
@@ -317,15 +327,26 @@ class GLSLTest : public ANGLETest
         fragmentShader->append(";\n}");
     }
 
-    void VaryingTestBase(GLint floatCount, GLint floatArrayCount, GLint vec2Count, GLint vec2ArrayCount, GLint vec3Count, GLint vec3ArrayCount,
-                         GLint vec4Count, GLint vec4ArrayCount, bool useFragCoord, bool usePointCoord, bool usePointSize, bool expectSuccess)
+    void VaryingTestBase(GLint floatCount,
+                         GLint floatArrayCount,
+                         GLint vec2Count,
+                         GLint vec2ArrayCount,
+                         GLint vec3Count,
+                         GLint vec3ArrayCount,
+                         GLint vec4Count,
+                         GLint vec4ArrayCount,
+                         bool useFragCoord,
+                         bool usePointCoord,
+                         bool usePointSize,
+                         bool expectSuccess)
     {
         std::string fragmentShaderSource;
         std::string vertexShaderSource;
 
-        GenerateGLSLWithVaryings(floatCount, floatArrayCount, vec2Count, vec2ArrayCount, vec3Count, vec3ArrayCount,
-                                 vec4Count, vec4ArrayCount, useFragCoord, usePointCoord, usePointSize,
-                                 &fragmentShaderSource, &vertexShaderSource);
+        GenerateGLSLWithVaryings(floatCount, floatArrayCount, vec2Count, vec2ArrayCount, vec3Count,
+                                 vec3ArrayCount, vec4Count, vec4ArrayCount, useFragCoord,
+                                 usePointCoord, usePointSize, &fragmentShaderSource,
+                                 &vertexShaderSource);
 
         GLuint program = CompileProgram(vertexShaderSource, fragmentShaderSource);
 
@@ -461,6 +482,7 @@ class GLSLTest : public ANGLETest
         glDeleteShader(fs);
 
         const std::string &errorMessage = QueryErrorMessage(program);
+        printf("%s\n", errorMessage.c_str());
 
         EXPECT_NE(std::string::npos, errorMessage.find(expectedErrorType));
         EXPECT_NE(std::string::npos, errorMessage.find(expectedVariableFullName));
@@ -478,18 +500,12 @@ class GLSLTestNoValidation : public GLSLTest
 
 class GLSLTest_ES3 : public GLSLTest
 {
-    void SetUp() override
-    {
-        ANGLETest::SetUp();
-    }
+    void SetUp() override { ANGLETest::SetUp(); }
 };
 
 class GLSLTest_ES31 : public GLSLTest
 {
-    void SetUp() override
-    {
-        ANGLETest::SetUp();
-    }
+    void SetUp() override { ANGLETest::SetUp(); }
 };
 
 TEST_P(GLSLTest, NamelessScopedStructs)
@@ -518,11 +534,6 @@ TEST_P(GLSLTest, ScopedStructsOrderBug)
     // TODO(geofflang): Find out why this doesn't compile on AMD OpenGL drivers
     // (http://anglebug.com/1291)
     ANGLE_SKIP_TEST_IF(IsDesktopOpenGL() && (IsOSX() || !IsNVIDIA()));
-
-    // TODO(lucferron): Support for inner scoped structs being redeclared in inner scopes
-    // This bug in glslang is preventing us from supporting this use case for now.
-    // https://github.com/KhronosGroup/glslang/issues/1358
-    ANGLE_SKIP_TEST_IF(IsVulkan());
 
     const std::string fragmentShaderSource =
         R"(precision mediump float;
@@ -638,7 +649,7 @@ TEST_P(GLSLTest, ElseIfRewriting)
     drawQuad(program, "a_position", 0.5f);
 
     EXPECT_PIXEL_EQ(0, 0, 255, 0, 0, 255);
-    EXPECT_PIXEL_EQ(getWindowWidth()-1, 0, 0, 255, 0, 255);
+    EXPECT_PIXEL_EQ(getWindowWidth() - 1, 0, 0, 255, 0, 255);
 }
 
 TEST_P(GLSLTest, TwoElseIfRewriting)
@@ -1308,15 +1319,16 @@ TEST_P(GLSLTest, MaxVaryingVec2Arrays)
     VaryingTestBase(0, 0, 0, maxVec2Arrays, 0, 0, 0, 0, false, false, false, true);
 }
 
-// Verify shader source with a fixed length that is less than the null-terminated length will compile.
+// Verify shader source with a fixed length that is less than the null-terminated length will
+// compile.
 TEST_P(GLSLTest, FixedShaderLength)
 {
     GLuint shader = glCreateShader(GL_FRAGMENT_SHADER);
 
     const std::string appendGarbage = "abcasdfasdfasdfasdfasdf";
-    const std::string source = "void main() { gl_FragColor = vec4(0, 0, 0, 0); }" + appendGarbage;
-    const char *sourceArray[1] = { source.c_str() };
-    GLint lengths[1] = { static_cast<GLint>(source.length() - appendGarbage.length()) };
+    const std::string source   = "void main() { gl_FragColor = vec4(0, 0, 0, 0); }" + appendGarbage;
+    const char *sourceArray[1] = {source.c_str()};
+    GLint lengths[1]           = {static_cast<GLint>(source.length() - appendGarbage.length())};
     glShaderSource(shader, static_cast<GLsizei>(ArraySize(sourceArray)), sourceArray, lengths);
     glCompileShader(shader);
 
@@ -1331,7 +1343,7 @@ TEST_P(GLSLTest, NegativeShaderLength)
     GLuint shader = glCreateShader(GL_FRAGMENT_SHADER);
 
     const char *sourceArray[1] = {essl1_shaders::fs::Red()};
-    GLint lengths[1] = { -10 };
+    GLint lengths[1]           = {-10};
     glShaderSource(shader, static_cast<GLsizei>(ArraySize(sourceArray)), sourceArray, lengths);
     glCompileShader(shader);
 
@@ -1358,15 +1370,13 @@ TEST_P(GLSLTest, MixedShaderLengths)
 {
     GLuint shader = glCreateShader(GL_FRAGMENT_SHADER);
 
-    const char *sourceArray[] =
-    {
+    const char *sourceArray[] = {
         "void main()",
         "{",
         "    gl_FragColor = vec4(0, 0, 0, 0);",
         "}",
     };
-    GLint lengths[] =
-    {
+    GLint lengths[] = {
         -10,
         1,
         static_cast<GLint>(strlen(sourceArray[2])),
@@ -1387,21 +1397,11 @@ TEST_P(GLSLTest, ZeroShaderLength)
 {
     GLuint shader = glCreateShader(GL_FRAGMENT_SHADER);
 
-    const char *sourceArray[] =
-    {
-        "adfasdf",
-        "34534",
-        "void main() { gl_FragColor = vec4(0, 0, 0, 0); }",
-        "",
-        "asdfasdfsdsdf",
+    const char *sourceArray[] = {
+        "adfasdf", "34534", "void main() { gl_FragColor = vec4(0, 0, 0, 0); }", "", "asdfasdfsdsdf",
     };
-    GLint lengths[] =
-    {
-        0,
-        0,
-        -1,
-        0,
-        0,
+    GLint lengths[] = {
+        0, 0, -1, 0, 0,
     };
     ASSERT_EQ(ArraySize(sourceArray), ArraySize(lengths));
 
@@ -1826,6 +1826,45 @@ TEST_P(GLSLTest, TextureLOD)
     glDeleteShader(shader);
 }
 
+// Test to verify the a shader can have a sampler unused in a vertex shader
+// but used in the fragment shader.
+TEST_P(GLSLTest, VerifySamplerInBothVertexAndFragmentShaders)
+{
+    const std::string vs = R"(
+        attribute vec2 position;
+        varying mediump vec2 texCoord;
+        uniform sampler2D tex;
+        void main()
+        {
+            gl_Position = vec4(position, 0, 1);
+            texCoord = position * 0.5 + vec2(0.5);
+        })";
+
+    const std::string fs = R"(
+        varying mediump vec2 texCoord;
+        uniform sampler2D tex;
+        void main()
+        {
+            gl_FragColor = texture2D(tex, texCoord);
+        })";
+
+    GLuint program = CompileProgram(vs, fs);
+    EXPECT_NE(0u, program);
+
+    // Initialize basic red texture.
+    const std::vector<GLColor> redColors(4, GLColor::red);
+    GLTexture texture;
+    glBindTexture(GL_TEXTURE_2D, texture);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 2, 2, 0, GL_RGBA, GL_UNSIGNED_BYTE, redColors.data());
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    ASSERT_GL_NO_ERROR();
+
+    drawQuad(program, "position", 0.0f);
+
+    EXPECT_PIXEL_RECT_EQ(0, 0, getWindowWidth(), getWindowHeight(), GLColor::red);
+}
+
 // Test that two constructors which have vec4 and mat2 parameters get disambiguated (issue in
 // HLSL).
 TEST_P(GLSLTest_ES3, AmbiguousConstructorCall2x2)
@@ -1956,10 +1995,6 @@ TEST_P(GLSLTest_ES3, InitGlobalArrayWithArrayIndexing)
 // Test that index-constant sampler array indexing is supported.
 TEST_P(GLSLTest, IndexConstantSamplerArrayIndexing)
 {
-    // TODO(lucferron): Samplers array support.
-    // http://anglebug.com/2462
-    ANGLE_SKIP_TEST_IF(IsVulkan());
-
     ANGLE_SKIP_TEST_IF(IsD3D11_FL93());
 
     const std::string fragmentShaderSource =
@@ -2871,6 +2906,9 @@ TEST_P(GLSLTest_ES3, UninitializedNamelessStructInForInitStatement)
 // Test that uninitialized global variables are initialized to 0.
 TEST_P(WebGLGLSLTest, InitUninitializedGlobals)
 {
+    // http://anglebug.com/2862
+    ANGLE_SKIP_TEST_IF(IsAndroid() && IsAdreno() && IsOpenGLES());
+
     const std::string &fragmentShader =
         "precision mediump float;\n"
         "int result;\n"
@@ -2909,6 +2947,113 @@ TEST_P(WebGLGLSLTest, UninitializedNamelessStructInGlobalScope)
         "}\n";
 
     ANGLE_GL_PROGRAM(program, essl1_shaders::vs::Simple(), fragmentShader);
+    drawQuad(program.get(), essl1_shaders::PositionAttrib(), 0.5f, 1.0f, true);
+    EXPECT_PIXEL_COLOR_EQ(0, 0, GLColor::green);
+}
+
+// Tests nameless struct uniforms.
+TEST_P(GLSLTest, EmbeddedStructUniform)
+{
+    const char kFragmentShader[] = R"(precision mediump float;
+uniform struct { float q; } b;
+void main()
+{
+    gl_FragColor = vec4(1, 0, 0, 1);
+    if (b.q == 0.5)
+    {
+        gl_FragColor = vec4(0, 1, 0, 1);
+    }
+})";
+
+    ANGLE_GL_PROGRAM(program, essl1_shaders::vs::Simple(), kFragmentShader);
+    glUseProgram(program);
+    GLint uniLoc = glGetUniformLocation(program, "b.q");
+    ASSERT_NE(-1, uniLoc);
+    glUniform1f(uniLoc, 0.5f);
+
+    drawQuad(program.get(), essl1_shaders::PositionAttrib(), 0.5f, 1.0f, true);
+    EXPECT_PIXEL_COLOR_EQ(0, 0, GLColor::green);
+}
+
+// Tests that rewriting samplers in structs doesn't mess up indexing.
+TEST_P(GLSLTest, SamplerInStructMemberIndexing)
+{
+    const char kVertexShader[] = R"(attribute vec2 position;
+varying vec2 texCoord;
+void main()
+{
+    gl_Position = vec4(position, 0, 1);
+    texCoord = position * 0.5 + vec2(0.5);
+})";
+
+    const char kFragmentShader[] = R"(precision mediump float;
+struct S { sampler2D samp; bool b; };
+uniform S uni;
+varying vec2 texCoord;
+void main()
+{
+    if (uni.b)
+    {
+        gl_FragColor = texture2D(uni.samp, texCoord);
+    }
+    else
+    {
+        gl_FragColor = vec4(1, 0, 0, 1);
+    }
+})";
+
+    ANGLE_GL_PROGRAM(program, kVertexShader, kFragmentShader);
+    glUseProgram(program);
+
+    GLint bLoc = glGetUniformLocation(program, "uni.b");
+    ASSERT_NE(-1, bLoc);
+    GLint sampLoc = glGetUniformLocation(program, "uni.samp");
+    ASSERT_NE(-1, sampLoc);
+
+    glUniform1i(bLoc, 1);
+
+    std::array<GLColor, 4> kGreenPixels = {
+        {GLColor::green, GLColor::green, GLColor::green, GLColor::green}};
+
+    GLTexture tex;
+    glBindTexture(GL_TEXTURE_2D, tex);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 2, 2, 0, GL_RGBA, GL_UNSIGNED_BYTE,
+                 kGreenPixels.data());
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    ASSERT_GL_NO_ERROR();
+
+    drawQuad(program, "position", 0.5f);
+    ASSERT_GL_NO_ERROR();
+
+    EXPECT_PIXEL_COLOR_EQ(0, 0, GLColor::green);
+}
+
+// Tests two nameless struct uniforms.
+TEST_P(GLSLTest, TwoEmbeddedStructUniforms)
+{
+    const char kFragmentShader[] = R"(precision mediump float;
+uniform struct { float q; } b, c;
+void main()
+{
+    gl_FragColor = vec4(1, 0, 0, 1);
+    if (b.q == 0.5 && c.q == 1.0)
+    {
+        gl_FragColor = vec4(0, 1, 0, 1);
+    }
+})";
+
+    ANGLE_GL_PROGRAM(program, essl1_shaders::vs::Simple(), kFragmentShader);
+    glUseProgram(program);
+
+    GLint uniLocB = glGetUniformLocation(program, "b.q");
+    ASSERT_NE(-1, uniLocB);
+    glUniform1f(uniLocB, 0.5f);
+
+    GLint uniLocC = glGetUniformLocation(program, "c.q");
+    ASSERT_NE(-1, uniLocC);
+    glUniform1f(uniLocC, 1.0f);
+
     drawQuad(program.get(), essl1_shaders::PositionAttrib(), 0.5f, 1.0f, true);
     EXPECT_PIXEL_COLOR_EQ(0, 0, GLColor::green);
 }
@@ -3084,15 +3229,103 @@ TEST_P(GLSLTest_ES3, VaryingStructUsedInFragmentShader)
     EXPECT_PIXEL_COLOR_EQ(0, 0, GLColor::green);
 }
 
+// This test covers passing a struct containing a sampler as a function argument.
+TEST_P(GLSLTest, StructsWithSamplersAsFunctionArg)
+{
+    // Shader failed to compile on Android. http://anglebug.com/2114
+    ANGLE_SKIP_TEST_IF(IsAndroid() && IsAdreno() && IsOpenGLES());
+
+    const char kFragmentShader[] = R"(precision mediump float;
+struct S { sampler2D samplerMember; };
+uniform S uStruct;
+uniform vec2 uTexCoord;
+vec4 foo(S structVar)
+{
+    return texture2D(structVar.samplerMember, uTexCoord);
+}
+void main()
+{
+    gl_FragColor = foo(uStruct);
+})";
+
+    ANGLE_GL_PROGRAM(program, essl1_shaders::vs::Simple(), kFragmentShader);
+
+    // Initialize the texture with green.
+    GLTexture tex;
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, tex);
+    GLubyte texData[] = {0u, 255u, 0u, 255u};
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, texData);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    ASSERT_GL_NO_ERROR();
+
+    // Draw
+    glUseProgram(program);
+    GLint samplerMemberLoc = glGetUniformLocation(program, "uStruct.samplerMember");
+    ASSERT_NE(-1, samplerMemberLoc);
+    glUniform1i(samplerMemberLoc, 0);
+    GLint texCoordLoc = glGetUniformLocation(program, "uTexCoord");
+    ASSERT_NE(-1, texCoordLoc);
+    glUniform2f(texCoordLoc, 0.5f, 0.5f);
+
+    drawQuad(program, essl1_shaders::PositionAttrib(), 0.5f);
+    ASSERT_GL_NO_ERROR();
+
+    EXPECT_PIXEL_COLOR_EQ(1, 1, GLColor::green);
+}
+
+// This test covers passing a struct containing a sampler as a function argument.
+TEST_P(GLSLTest, StructsWithSamplersAsFunctionArgWithPrototype)
+{
+    // Shader failed to compile on Android. http://anglebug.com/2114
+    ANGLE_SKIP_TEST_IF(IsAndroid() && IsAdreno() && IsOpenGLES());
+
+    const char kFragmentShader[] = R"(precision mediump float;
+struct S { sampler2D samplerMember; };
+uniform S uStruct;
+uniform vec2 uTexCoord;
+vec4 foo(S structVar);
+vec4 foo(S structVar)
+{
+    return texture2D(structVar.samplerMember, uTexCoord);
+}
+void main()
+{
+    gl_FragColor = foo(uStruct);
+})";
+
+    ANGLE_GL_PROGRAM(program, essl1_shaders::vs::Simple(), kFragmentShader);
+
+    // Initialize the texture with green.
+    GLTexture tex;
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, tex);
+    GLubyte texData[] = {0u, 255u, 0u, 255u};
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, texData);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    ASSERT_GL_NO_ERROR();
+
+    // Draw
+    glUseProgram(program);
+    GLint samplerMemberLoc = glGetUniformLocation(program, "uStruct.samplerMember");
+    ASSERT_NE(-1, samplerMemberLoc);
+    glUniform1i(samplerMemberLoc, 0);
+    GLint texCoordLoc = glGetUniformLocation(program, "uTexCoord");
+    ASSERT_NE(-1, texCoordLoc);
+    glUniform2f(texCoordLoc, 0.5f, 0.5f);
+
+    drawQuad(program, essl1_shaders::PositionAttrib(), 0.5f);
+    ASSERT_GL_NO_ERROR();
+
+    EXPECT_PIXEL_COLOR_EQ(1, 1, GLColor::green);
+}
 // This test covers passing an array of structs containing samplers as a function argument.
 TEST_P(GLSLTest, ArrayOfStructsWithSamplersAsFunctionArg)
 {
     // Shader failed to compile on Android. http://anglebug.com/2114
     ANGLE_SKIP_TEST_IF(IsAndroid() && IsAdreno() && IsOpenGLES());
-
-    // TODO(lucferron): Sampler arrays support
-    // http://anglebug.com/2462
-    ANGLE_SKIP_TEST_IF(IsVulkan());
 
     const std::string &fragmentShader =
         "precision mediump float;\n"
@@ -3145,9 +3378,8 @@ TEST_P(GLSLTest, StructWithSamplerArrayAsFunctionArg)
     // Shader failed to compile on Android. http://anglebug.com/2114
     ANGLE_SKIP_TEST_IF(IsAndroid() && IsAdreno() && IsOpenGLES());
 
-    // TODO(lucferron): Sampler arrays support
-    // http://anglebug.com/2462
-    ANGLE_SKIP_TEST_IF(IsVulkan());
+    // TODO(jmadill): Fix on Android if possible. http://anglebug.com/2703
+    ANGLE_SKIP_TEST_IF(IsAndroid() && IsVulkan());
 
     const std::string &fragmentShader =
         "precision mediump float;\n"
@@ -3194,6 +3426,238 @@ TEST_P(GLSLTest, StructWithSamplerArrayAsFunctionArg)
     EXPECT_PIXEL_COLOR_EQ(1, 1, GLColor::green);
 }
 
+// This test covers passing nested structs containing a sampler as a function argument.
+TEST_P(GLSLTest, NestedStructsWithSamplersAsFunctionArg)
+{
+    // Shader failed to compile on Android. http://anglebug.com/2114
+    ANGLE_SKIP_TEST_IF(IsAndroid() && IsAdreno() && IsOpenGLES());
+
+    const char kFragmentShader[] = R"(precision mediump float;
+struct S { sampler2D samplerMember; };
+struct T { S nest; };
+uniform T uStruct;
+uniform vec2 uTexCoord;
+vec4 foo2(S structVar)
+{
+    return texture2D(structVar.samplerMember, uTexCoord);
+}
+vec4 foo(T structVar)
+{
+    return foo2(structVar.nest);
+}
+void main()
+{
+    gl_FragColor = foo(uStruct);
+})";
+
+    ANGLE_GL_PROGRAM(program, essl1_shaders::vs::Simple(), kFragmentShader);
+
+    // Initialize the texture with green.
+    GLTexture tex;
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, tex);
+    GLubyte texData[] = {0u, 255u, 0u, 255u};
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, texData);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    ASSERT_GL_NO_ERROR();
+
+    // Draw
+    glUseProgram(program);
+    GLint samplerMemberLoc = glGetUniformLocation(program, "uStruct.nest.samplerMember");
+    ASSERT_NE(-1, samplerMemberLoc);
+    glUniform1i(samplerMemberLoc, 0);
+    GLint texCoordLoc = glGetUniformLocation(program, "uTexCoord");
+    ASSERT_NE(-1, texCoordLoc);
+    glUniform2f(texCoordLoc, 0.5f, 0.5f);
+
+    drawQuad(program, essl1_shaders::PositionAttrib(), 0.5f);
+    ASSERT_GL_NO_ERROR();
+
+    EXPECT_PIXEL_COLOR_EQ(1, 1, GLColor::green);
+}
+
+// This test covers passing a compound structs containing a sampler as a function argument.
+TEST_P(GLSLTest, CompoundStructsWithSamplersAsFunctionArg)
+{
+    // Shader failed to compile on Android. http://anglebug.com/2114
+    ANGLE_SKIP_TEST_IF(IsAndroid() && IsAdreno() && IsOpenGLES());
+
+    const char kFragmentShader[] = R"(precision mediump float;
+struct S { sampler2D samplerMember; bool b; };
+uniform S uStruct;
+uniform vec2 uTexCoord;
+vec4 foo(S structVar)
+{
+    if (structVar.b)
+        return texture2D(structVar.samplerMember, uTexCoord);
+    else
+        return vec4(1, 0, 0, 1);
+}
+void main()
+{
+    gl_FragColor = foo(uStruct);
+})";
+
+    ANGLE_GL_PROGRAM(program, essl1_shaders::vs::Simple(), kFragmentShader);
+
+    // Initialize the texture with green.
+    GLTexture tex;
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, tex);
+    GLubyte texData[] = {0u, 255u, 0u, 255u};
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, texData);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    ASSERT_GL_NO_ERROR();
+
+    // Draw
+    glUseProgram(program);
+    GLint samplerMemberLoc = glGetUniformLocation(program, "uStruct.samplerMember");
+    ASSERT_NE(-1, samplerMemberLoc);
+    glUniform1i(samplerMemberLoc, 0);
+    GLint texCoordLoc = glGetUniformLocation(program, "uTexCoord");
+    ASSERT_NE(-1, texCoordLoc);
+    glUniform2f(texCoordLoc, 0.5f, 0.5f);
+    GLint bLoc = glGetUniformLocation(program, "uStruct.b");
+    ASSERT_NE(-1, bLoc);
+    glUniform1i(bLoc, 1);
+
+    drawQuad(program, essl1_shaders::PositionAttrib(), 0.5f);
+    ASSERT_GL_NO_ERROR();
+
+    EXPECT_PIXEL_COLOR_EQ(1, 1, GLColor::green);
+}
+
+// This test covers passing nested compound structs containing a sampler as a function argument.
+TEST_P(GLSLTest, NestedCompoundStructsWithSamplersAsFunctionArg)
+{
+    // Shader failed to compile on Android. http://anglebug.com/2114
+    ANGLE_SKIP_TEST_IF(IsAndroid() && IsAdreno() && IsOpenGLES());
+
+    const char kFragmentShader[] = R"(precision mediump float;
+struct S { sampler2D samplerMember; bool b; };
+struct T { S nest; bool b; };
+uniform T uStruct;
+uniform vec2 uTexCoord;
+vec4 foo2(S structVar)
+{
+    if (structVar.b)
+        return texture2D(structVar.samplerMember, uTexCoord);
+    else
+        return vec4(1, 0, 0, 1);
+}
+vec4 foo(T structVar)
+{
+    if (structVar.b)
+        return foo2(structVar.nest);
+    else
+        return vec4(1, 0, 0, 1);
+}
+void main()
+{
+    gl_FragColor = foo(uStruct);
+})";
+
+    ANGLE_GL_PROGRAM(program, essl1_shaders::vs::Simple(), kFragmentShader);
+
+    // Initialize the texture with green.
+    GLTexture tex;
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, tex);
+    GLubyte texData[] = {0u, 255u, 0u, 255u};
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, texData);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    ASSERT_GL_NO_ERROR();
+
+    // Draw
+    glUseProgram(program);
+    GLint samplerMemberLoc = glGetUniformLocation(program, "uStruct.nest.samplerMember");
+    ASSERT_NE(-1, samplerMemberLoc);
+    glUniform1i(samplerMemberLoc, 0);
+    GLint texCoordLoc = glGetUniformLocation(program, "uTexCoord");
+    ASSERT_NE(-1, texCoordLoc);
+    glUniform2f(texCoordLoc, 0.5f, 0.5f);
+
+    GLint bLoc = glGetUniformLocation(program, "uStruct.b");
+    ASSERT_NE(-1, bLoc);
+    glUniform1i(bLoc, 1);
+
+    GLint nestbLoc = glGetUniformLocation(program, "uStruct.nest.b");
+    ASSERT_NE(-1, nestbLoc);
+    glUniform1i(nestbLoc, 1);
+
+    drawQuad(program, essl1_shaders::PositionAttrib(), 0.5f);
+    ASSERT_GL_NO_ERROR();
+
+    EXPECT_PIXEL_COLOR_EQ(1, 1, GLColor::green);
+}
+
+// Same as the prior test but with reordered struct members.
+TEST_P(GLSLTest, MoreNestedCompoundStructsWithSamplersAsFunctionArg)
+{
+    // Shader failed to compile on Android. http://anglebug.com/2114
+    ANGLE_SKIP_TEST_IF(IsAndroid() && IsAdreno() && IsOpenGLES());
+
+    const char kFragmentShader[] = R"(precision mediump float;
+struct S { bool b; sampler2D samplerMember; };
+struct T { bool b; S nest; };
+uniform T uStruct;
+uniform vec2 uTexCoord;
+vec4 foo2(S structVar)
+{
+    if (structVar.b)
+        return texture2D(structVar.samplerMember, uTexCoord);
+    else
+        return vec4(1, 0, 0, 1);
+}
+vec4 foo(T structVar)
+{
+    if (structVar.b)
+        return foo2(structVar.nest);
+    else
+        return vec4(1, 0, 0, 1);
+}
+void main()
+{
+    gl_FragColor = foo(uStruct);
+})";
+
+    ANGLE_GL_PROGRAM(program, essl1_shaders::vs::Simple(), kFragmentShader);
+
+    // Initialize the texture with green.
+    GLTexture tex;
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, tex);
+    GLubyte texData[] = {0u, 255u, 0u, 255u};
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, texData);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    ASSERT_GL_NO_ERROR();
+
+    // Draw
+    glUseProgram(program);
+    GLint samplerMemberLoc = glGetUniformLocation(program, "uStruct.nest.samplerMember");
+    ASSERT_NE(-1, samplerMemberLoc);
+    glUniform1i(samplerMemberLoc, 0);
+    GLint texCoordLoc = glGetUniformLocation(program, "uTexCoord");
+    ASSERT_NE(-1, texCoordLoc);
+    glUniform2f(texCoordLoc, 0.5f, 0.5f);
+
+    GLint bLoc = glGetUniformLocation(program, "uStruct.b");
+    ASSERT_NE(-1, bLoc);
+    glUniform1i(bLoc, 1);
+
+    GLint nestbLoc = glGetUniformLocation(program, "uStruct.nest.b");
+    ASSERT_NE(-1, nestbLoc);
+    glUniform1i(nestbLoc, 1);
+
+    drawQuad(program, essl1_shaders::PositionAttrib(), 0.5f);
+    ASSERT_GL_NO_ERROR();
+
+    EXPECT_PIXEL_COLOR_EQ(1, 1, GLColor::green);
+}
 // Test that a global variable declared after main() works. This is a regression test for an issue
 // in global variable initialization.
 TEST_P(WebGLGLSLTest, GlobalVariableDeclaredAfterMain)
@@ -4286,6 +4750,444 @@ TEST_P(GLSLTest_ES3, AssignAssignmentToSwizzled)
     EXPECT_PIXEL_COLOR_EQ(0, 0, GLColor::white);
 }
 
+// Test a fragment shader that returns inside if (that being the only branch that actually gets
+// executed). Regression test for http://anglebug.com/2325
+TEST_P(GLSLTest, IfElseIfAndReturn)
+{
+    const std::string &vertexShader =
+        R"(attribute vec4 a_position;
+        varying vec2 vPos;
+        void main()
+        {
+            gl_Position = a_position;
+            vPos = a_position.xy;
+        })";
+
+    const std::string &fragmentShader =
+        R"(precision mediump float;
+        varying vec2 vPos;
+        void main()
+        {
+            if (vPos.x < 1.0) // This colors the whole canvas green
+            {
+                gl_FragColor = vec4(0, 1, 0, 1);
+                return;
+            }
+            else if (vPos.x < 1.1) // This should have no effect
+            {
+                gl_FragColor = vec4(1, 0, 0, 1);
+            }
+        })";
+
+    ANGLE_GL_PROGRAM(program, vertexShader, fragmentShader);
+    drawQuad(program.get(), "a_position", 0.5f);
+    EXPECT_PIXEL_COLOR_EQ(0, 0, GLColor::green);
+}
+
+// Tests that PointCoord behaves the same betweeen a user FBO and the back buffer.
+TEST_P(GLSLTest, PointCoordConsistency)
+{
+    // On Intel Windows OpenGL drivers PointCoord appears to be flipped when drawing to the
+    // default framebuffer. http://anglebug.com/2805
+    ANGLE_SKIP_TEST_IF(IsIntel() && IsWindows() && IsOpenGL());
+
+    // AMD's OpenGL drivers may have the same issue. http://anglebug.com/1643
+    ANGLE_SKIP_TEST_IF(IsAMD() && IsWindows() && IsOpenGL());
+
+    constexpr char kPointCoordVS[] = R"(attribute vec2 position;
+uniform vec2 viewportSize;
+void main()
+{
+   gl_Position = vec4(position, 0, 1);
+   gl_PointSize = viewportSize.x;
+})";
+
+    constexpr char kPointCoordFS[] = R"(void main()
+{
+    gl_FragColor = vec4(gl_PointCoord.xy, 0, 1);
+})";
+
+    ANGLE_GL_PROGRAM(program, kPointCoordVS, kPointCoordFS);
+    glUseProgram(program);
+
+    GLint uniLoc = glGetUniformLocation(program, "viewportSize");
+    ASSERT_NE(-1, uniLoc);
+    glUniform2f(uniLoc, getWindowWidth(), getWindowHeight());
+
+    // Draw to backbuffer.
+    glDrawArrays(GL_POINTS, 0, 1);
+    ASSERT_GL_NO_ERROR();
+
+    std::vector<GLColor> backbufferData(getWindowWidth() * getWindowHeight());
+    glReadPixels(0, 0, getWindowWidth(), getWindowHeight(), GL_RGBA, GL_UNSIGNED_BYTE,
+                 backbufferData.data());
+
+    GLTexture tex;
+    glBindTexture(GL_TEXTURE_2D, tex);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, getWindowWidth(), getWindowHeight(), 0, GL_RGBA,
+                 GL_UNSIGNED_BYTE, nullptr);
+
+    GLFramebuffer fbo;
+    glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, tex, 0);
+    ASSERT_GL_NO_ERROR();
+    ASSERT_GLENUM_EQ(GL_FRAMEBUFFER_COMPLETE, glCheckFramebufferStatus(GL_FRAMEBUFFER));
+
+    // Draw to user FBO.
+    glDrawArrays(GL_POINTS, 0, 1);
+    ASSERT_GL_NO_ERROR();
+
+    std::vector<GLColor> userFBOData(getWindowWidth() * getWindowHeight());
+    glReadPixels(0, 0, getWindowWidth(), getWindowHeight(), GL_RGBA, GL_UNSIGNED_BYTE,
+                 userFBOData.data());
+
+    ASSERT_GL_NO_ERROR();
+    ASSERT_EQ(userFBOData.size(), backbufferData.size());
+    EXPECT_EQ(userFBOData, backbufferData);
+}
+
+bool SubrectEquals(const std::vector<GLColor> &bigArray,
+                   const std::vector<GLColor> &smallArray,
+                   int bigSize,
+                   int offset,
+                   int smallSize)
+{
+    int badPixels = 0;
+    for (int y = 0; y < smallSize; y++)
+    {
+        for (int x = 0; x < smallSize; x++)
+        {
+            int bigOffset   = (y + offset) * bigSize + x + offset;
+            int smallOffset = y * smallSize + x;
+            if (bigArray[bigOffset] != smallArray[smallOffset])
+                badPixels++;
+        }
+    }
+    return badPixels == 0;
+}
+
+// Tests that FragCoord behaves the same betweeen a user FBO and the back buffer.
+TEST_P(GLSLTest, FragCoordConsistency)
+{
+    constexpr char kFragCoordShader[] = R"(uniform mediump vec2 viewportSize;
+void main()
+{
+    gl_FragColor = vec4(gl_FragCoord.xy / viewportSize, 0, 1);
+})";
+
+    ANGLE_GL_PROGRAM(program, essl1_shaders::vs::Simple(), kFragCoordShader);
+    glUseProgram(program);
+
+    GLint uniLoc = glGetUniformLocation(program, "viewportSize");
+    ASSERT_NE(-1, uniLoc);
+    glUniform2f(uniLoc, getWindowWidth(), getWindowHeight());
+
+    // Draw to backbuffer.
+    drawQuad(program, essl1_shaders::PositionAttrib(), 0.5);
+    ASSERT_GL_NO_ERROR();
+
+    std::vector<GLColor> backbufferData(getWindowWidth() * getWindowHeight());
+    glReadPixels(0, 0, getWindowWidth(), getWindowHeight(), GL_RGBA, GL_UNSIGNED_BYTE,
+                 backbufferData.data());
+
+    GLTexture tex;
+    glBindTexture(GL_TEXTURE_2D, tex);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, getWindowWidth(), getWindowHeight(), 0, GL_RGBA,
+                 GL_UNSIGNED_BYTE, nullptr);
+
+    GLFramebuffer fbo;
+    glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, tex, 0);
+    ASSERT_GL_NO_ERROR();
+    ASSERT_GLENUM_EQ(GL_FRAMEBUFFER_COMPLETE, glCheckFramebufferStatus(GL_FRAMEBUFFER));
+
+    // Draw to user FBO.
+    drawQuad(program, essl1_shaders::PositionAttrib(), 0.5);
+    ASSERT_GL_NO_ERROR();
+
+    std::vector<GLColor> userFBOData(getWindowWidth() * getWindowHeight());
+    glReadPixels(0, 0, getWindowWidth(), getWindowHeight(), GL_RGBA, GL_UNSIGNED_BYTE,
+                 userFBOData.data());
+
+    ASSERT_GL_NO_ERROR();
+    ASSERT_EQ(userFBOData.size(), backbufferData.size());
+    EXPECT_EQ(userFBOData, backbufferData)
+        << "FragCoord should be the same to default and user FBO";
+
+    // Repeat the same test but with a smaller viewport.
+    ASSERT_EQ(getWindowHeight(), getWindowWidth());
+    const int kQuarterSize = getWindowWidth() >> 2;
+    glViewport(kQuarterSize, kQuarterSize, kQuarterSize * 2, kQuarterSize * 2);
+
+    glClearColor(1.0f, 0.0f, 0.0f, 1.0f);
+    glClear(GL_COLOR_BUFFER_BIT);
+    drawQuad(program, essl1_shaders::PositionAttrib(), 0.5);
+
+    std::vector<GLColor> userFBOViewportData(kQuarterSize * kQuarterSize * 4);
+    glReadPixels(kQuarterSize, kQuarterSize, kQuarterSize * 2, kQuarterSize * 2, GL_RGBA,
+                 GL_UNSIGNED_BYTE, userFBOViewportData.data());
+
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glClear(GL_COLOR_BUFFER_BIT);
+    drawQuad(program, essl1_shaders::PositionAttrib(), 0.5);
+
+    std::vector<GLColor> defaultFBOViewportData(kQuarterSize * kQuarterSize * 4);
+    glReadPixels(kQuarterSize, kQuarterSize, kQuarterSize * 2, kQuarterSize * 2, GL_RGBA,
+                 GL_UNSIGNED_BYTE, defaultFBOViewportData.data());
+    ASSERT_GL_NO_ERROR();
+    EXPECT_EQ(userFBOViewportData, defaultFBOViewportData)
+        << "FragCoord should be the same to default and user FBO even with a custom viewport";
+
+    // Check that the subrectangles are the same between the viewport and non-viewport modes.
+    EXPECT_TRUE(SubrectEquals(userFBOData, userFBOViewportData, getWindowWidth(), kQuarterSize,
+                              kQuarterSize * 2));
+    EXPECT_TRUE(SubrectEquals(backbufferData, defaultFBOViewportData, getWindowWidth(),
+                              kQuarterSize, kQuarterSize * 2));
+}
+
+// Ensure that using defined in a macro works in this simple case. This mirrors a dEQP test.
+TEST_P(GLSLTest, DefinedInMacroSucceeds)
+{
+    constexpr char kVS[] = R"(precision mediump float;
+attribute highp vec4 position;
+varying vec2 out0;
+
+void main()
+{
+#define AAA defined(BBB)
+
+#if !AAA
+    out0 = vec2(0.0, 1.0);
+#else
+    out0 = vec2(1.0, 0.0);
+#endif
+    gl_Position = position;
+})";
+
+    constexpr char kFS[] = R"(precision mediump float;
+varying vec2 out0;
+void main()
+{
+    gl_FragColor = vec4(out0, 0, 1);
+})";
+
+    ANGLE_GL_PROGRAM(program, kVS, kFS);
+    drawQuad(program, "position", 0.5f);
+    EXPECT_PIXEL_COLOR_EQ(0, 0, GLColor::green);
+}
+
+// Validate the defined operator is evaluated when the macro is called, not when defined.
+TEST_P(GLSLTest, DefinedInMacroWithUndef)
+{
+    constexpr char kVS[] = R"(precision mediump float;
+attribute highp vec4 position;
+varying vec2 out0;
+
+void main()
+{
+#define BBB 1
+#define AAA defined(BBB)
+#undef BBB
+
+#if AAA
+    out0 = vec2(1.0, 0.0);
+#else
+    out0 = vec2(0.0, 1.0);
+#endif
+    gl_Position = position;
+})";
+
+    constexpr char kFS[] = R"(precision mediump float;
+varying vec2 out0;
+void main()
+{
+    gl_FragColor = vec4(out0, 0, 1);
+})";
+
+    ANGLE_GL_PROGRAM(program, kVS, kFS);
+    drawQuad(program, "position", 0.5f);
+    EXPECT_PIXEL_COLOR_EQ(0, 0, GLColor::green);
+}
+
+// Validate the defined operator is evaluated when the macro is called, not when defined.
+TEST_P(GLSLTest, DefinedAfterMacroUsage)
+{
+    constexpr char kVS[] = R"(precision mediump float;
+attribute highp vec4 position;
+varying vec2 out0;
+
+void main()
+{
+#define AAA defined(BBB)
+#define BBB 1
+
+#if AAA
+    out0 = vec2(0.0, 1.0);
+#else
+    out0 = vec2(1.0, 0.0);
+#endif
+    gl_Position = position;
+})";
+
+    constexpr char kFS[] = R"(precision mediump float;
+varying vec2 out0;
+void main()
+{
+    gl_FragColor = vec4(out0, 0, 1);
+})";
+
+    ANGLE_GL_PROGRAM(program, kVS, kFS);
+    drawQuad(program, "position", 0.5f);
+    EXPECT_PIXEL_COLOR_EQ(0, 0, GLColor::green);
+}
+
+// Test generating "defined" by concatenation when a macro is called. This is not allowed.
+TEST_P(GLSLTest, DefinedInMacroConcatenationNotAllowed)
+{
+    constexpr char kVS[] = R"(precision mediump float;
+attribute highp vec4 position;
+varying vec2 out0;
+
+void main()
+{
+#define BBB 1
+#define AAA(defi, ned) defi ## ned(BBB)
+
+#if AAA(defi, ned)
+    out0 = vec2(0.0, 1.0);
+#else
+    out0 = vec2(1.0, 0.0);
+#endif
+    gl_Position = position;
+})";
+
+    constexpr char kFS[] = R"(precision mediump float;
+varying vec2 out0;
+void main()
+{
+    gl_FragColor = vec4(out0, 0, 1);
+})";
+
+    GLuint program = CompileProgram(kVS, kFS);
+    EXPECT_EQ(0u, program);
+    glDeleteProgram(program);
+}
+
+// Test using defined in a macro parameter name. This is not allowed.
+TEST_P(GLSLTest, DefinedAsParameterNameNotAllowed)
+{
+    constexpr char kVS[] = R"(precision mediump float;
+attribute highp vec4 position;
+varying vec2 out0;
+
+void main()
+{
+#define BBB 1
+#define AAA(defined) defined(BBB)
+
+#if AAA(defined)
+    out0 = vec2(0.0, 1.0);
+#else
+    out0 = vec2(1.0, 0.0);
+#endif
+    gl_Position = position;
+})";
+
+    constexpr char kFS[] = R"(precision mediump float;
+varying vec2 out0;
+void main()
+{
+    gl_FragColor = vec4(out0, 0, 1);
+})";
+
+    GLuint program = CompileProgram(kVS, kFS);
+    EXPECT_EQ(0u, program);
+    glDeleteProgram(program);
+}
+
+// Ensure that defined in a macro is no accepted in WebGL.
+TEST_P(WebGLGLSLTest, DefinedInMacroFails)
+{
+    constexpr char kVS[] = R"(precision mediump float;
+attribute highp vec4 position;
+varying float out0;
+
+void main()
+{
+#define AAA defined(BBB)
+
+#if !AAA
+    out0 = 1.0;
+#else
+    out0 = 0.0;
+#endif
+    gl_Position = dEQP_Position;
+})";
+
+    constexpr char kFS[] = R"(precision mediump float;
+varying float out0;
+void main()
+{
+    gl_FragColor = vec4(out0, 0, 0, 1);
+})";
+
+    GLuint program = CompileProgram(kVS, kFS);
+    EXPECT_EQ(0u, program);
+    glDeleteProgram(program);
+}
+
+// Simple test using a define macro in WebGL.
+TEST_P(WebGLGLSLTest, DefinedGLESSymbol)
+{
+    constexpr char kVS[] = R"(void main()
+{
+    gl_Position = vec4(1, 0, 0, 1);
+})";
+
+    constexpr char kFS[] = R"(#if defined(GL_ES)
+precision mediump float;
+void main()
+{
+    gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0);
+}
+#else
+foo
+#endif
+)";
+
+    ANGLE_GL_PROGRAM(program, kVS, kFS);
+}
+
+// Tests constant folding of non-square 'matrixCompMult'.
+TEST_P(GLSLTest_ES3, NonSquareMatrixCompMult)
+{
+    constexpr char kFS[] = R"(#version 300 es
+precision mediump float;
+
+const mat4x2 matA = mat4x2(2.0, 4.0, 8.0, 16.0, 32.0, 64.0, 128.0, 256.0);
+const mat4x2 matB = mat4x2(1.0/2.0, 1.0/4.0, 1.0/8.0, 1.0/16.0, 1.0/32.0, 1.0/64.0, 1.0/128.0, 1.0/256.0);
+
+out vec4 color;
+
+void main()
+{
+    mat4x2 result = matrixCompMult(matA, matB);
+    vec2 vresult = result * vec4(1.0, 1.0, 1.0, 1.0);
+    if (vresult == vec2(4.0, 4.0))
+    {
+        color = vec4(0.0, 1.0, 0.0, 1.0);
+    }
+    else
+    {
+        color = vec4(1.0, 0.0, 0.0, 1.0);
+    }
+})";
+
+    ANGLE_GL_PROGRAM(program, essl3_shaders::vs::Simple(), kFS);
+    drawQuad(program, essl3_shaders::PositionAttrib(), 0.5f, 1.0f, true);
+    EXPECT_PIXEL_COLOR_EQ(0, 0, GLColor::green);
+}
+
 // Use this to select which configurations (e.g. which renderer, which GLES major version) these
 // tests should be run against.
 ANGLE_INSTANTIATE_TEST(GLSLTest,
@@ -4293,14 +5195,25 @@ ANGLE_INSTANTIATE_TEST(GLSLTest,
                        ES2_D3D11(),
                        ES2_D3D11_FL9_3(),
                        ES2_OPENGL(),
-                       ES2_VULKAN(),
                        ES3_OPENGL(),
                        ES2_OPENGLES(),
-                       ES3_OPENGLES());
+                       ES3_OPENGLES(),
+                       ES2_VULKAN());
 
-// Use this to select which configurations (e.g. which renderer, which GLES major version) these tests should be run against.
+ANGLE_INSTANTIATE_TEST(GLSLTestNoValidation,
+                       ES2_D3D9(),
+                       ES2_D3D11(),
+                       ES2_D3D11_FL9_3(),
+                       ES2_OPENGL(),
+                       ES3_OPENGL(),
+                       ES2_OPENGLES(),
+                       ES3_OPENGLES(),
+                       ES2_VULKAN());
+
+// Use this to select which configurations (e.g. which renderer, which GLES major version) these
+// tests should be run against.
 ANGLE_INSTANTIATE_TEST(GLSLTest_ES3, ES3_D3D11(), ES3_OPENGL(), ES3_OPENGLES());
 
-ANGLE_INSTANTIATE_TEST(WebGLGLSLTest, ES2_D3D11(), ES2_OPENGL(), ES2_OPENGLES());
+ANGLE_INSTANTIATE_TEST(WebGLGLSLTest, ES2_D3D11(), ES2_OPENGL(), ES2_OPENGLES(), ES2_VULKAN());
 
 ANGLE_INSTANTIATE_TEST(GLSLTest_ES31, ES31_D3D11(), ES31_OPENGL(), ES31_OPENGLES());

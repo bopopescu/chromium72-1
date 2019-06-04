@@ -31,6 +31,7 @@
 #include "third_party/blink/renderer/bindings/core/v8/active_script_wrappable.h"
 #include "third_party/blink/renderer/modules/webaudio/audio_node.h"
 #include "third_party/blink/renderer/platform/audio/audio_bus.h"
+#include "third_party/blink/renderer/platform/heap/persistent.h"
 #include "third_party/blink/renderer/platform/wtf/forward.h"
 #include "third_party/blink/renderer/platform/wtf/vector.h"
 
@@ -59,12 +60,12 @@ class ScriptProcessorHandler final : public AudioHandler {
   ~ScriptProcessorHandler() override;
 
   // AudioHandler
-  void Process(size_t frames_to_process) override;
+  void Process(uint32_t frames_to_process) override;
   void Initialize() override;
 
-  size_t BufferSize() const { return buffer_size_; }
+  uint32_t BufferSize() const { return static_cast<uint32_t>(buffer_size_); }
 
-  void SetChannelCount(unsigned long, ExceptionState&) override;
+  void SetChannelCount(unsigned, ExceptionState&) override;
   void SetChannelCountMode(const String&, ExceptionState&) override;
 
   unsigned NumberOfOutputChannels() const override {
@@ -91,8 +92,8 @@ class ScriptProcessorHandler final : public AudioHandler {
 
   // These Persistent don't make reference cycles including the owner
   // ScriptProcessorNode.
-  PersistentHeapVector<Member<AudioBuffer>> input_buffers_;
-  PersistentHeapVector<Member<AudioBuffer>> output_buffers_;
+  CrossThreadPersistent<HeapVector<Member<AudioBuffer>>> input_buffers_;
+  CrossThreadPersistent<HeapVector<Member<AudioBuffer>>> output_buffers_;
 
   size_t buffer_size_;
   unsigned buffer_read_write_index_;
@@ -126,32 +127,31 @@ class ScriptProcessorNode final
   // The value chosen must carefully balance between latency and audio quality.
   static ScriptProcessorNode* Create(BaseAudioContext&, ExceptionState&);
   static ScriptProcessorNode* Create(BaseAudioContext&,
-                                     size_t buffer_size,
+                                     size_t requested_buffer_size,
                                      ExceptionState&);
   static ScriptProcessorNode* Create(BaseAudioContext&,
-                                     size_t buffer_size,
+                                     size_t requested_buffer_size,
                                      unsigned number_of_input_channels,
                                      ExceptionState&);
   static ScriptProcessorNode* Create(BaseAudioContext&,
-                                     size_t buffer_size,
+                                     size_t requested_buffer_size,
                                      unsigned number_of_input_channels,
                                      unsigned number_of_output_channels,
                                      ExceptionState&);
 
-  DEFINE_ATTRIBUTE_EVENT_LISTENER(audioprocess);
-  size_t bufferSize() const;
-
-  // ScriptWrappable
-  bool HasPendingActivity() const final;
-
-  void Trace(blink::Visitor* visitor) override { AudioNode::Trace(visitor); }
-
- private:
   ScriptProcessorNode(BaseAudioContext&,
                       float sample_rate,
                       size_t buffer_size,
                       unsigned number_of_input_channels,
                       unsigned number_of_output_channels);
+
+  DEFINE_ATTRIBUTE_EVENT_LISTENER(audioprocess, kAudioprocess);
+  uint32_t bufferSize() const;
+
+  // ScriptWrappable
+  bool HasPendingActivity() const final;
+
+  void Trace(blink::Visitor* visitor) override { AudioNode::Trace(visitor); }
 };
 
 }  // namespace blink

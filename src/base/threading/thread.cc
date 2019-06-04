@@ -96,7 +96,7 @@ bool Thread::StartWithOptions(const Options& options) {
   if (!options.message_pump_factory.is_null())
     type = MessageLoop::TYPE_CUSTOM;
 
-  message_loop_timer_slack_ = options.timer_slack;
+  timer_slack_ = options.timer_slack;
   std::unique_ptr<MessageLoop> message_loop_owned =
       MessageLoop::CreateUnbound(type, options.message_pump_factory);
   message_loop_ = message_loop_owned.get();
@@ -225,11 +225,6 @@ PlatformThreadId Thread::GetThreadId() const {
   return id_;
 }
 
-PlatformThreadHandle Thread::GetThreadHandle() const {
-  AutoLock lock(thread_lock_);
-  return thread_;
-}
-
 bool Thread::IsRunning() const {
   // TODO(gab): Fix improper usage of this API (http://crbug.com/629139) and
   // enable this check.
@@ -302,14 +297,14 @@ void Thread::ThreadMain() {
   DCHECK(message_loop_);
   std::unique_ptr<MessageLoop> message_loop(message_loop_);
   message_loop_->BindToCurrentThread();
-  message_loop_->SetTimerSlack(message_loop_timer_slack_);
+  message_loop_->SetTimerSlack(timer_slack_);
 
 #if defined(OS_POSIX) && !defined(OS_NACL)
   // Allow threads running a MessageLoopForIO to use FileDescriptorWatcher API.
   std::unique_ptr<FileDescriptorWatcher> file_descriptor_watcher;
-  if (MessageLoopForIO::IsCurrent()) {
-    file_descriptor_watcher.reset(new FileDescriptorWatcher(
-        static_cast<MessageLoopForIO*>(message_loop_)));
+  if (MessageLoopCurrentForIO::IsSet()) {
+    file_descriptor_watcher.reset(
+        new FileDescriptorWatcher(message_loop_->task_runner()));
   }
 #endif
 

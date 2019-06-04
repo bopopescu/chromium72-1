@@ -69,29 +69,27 @@ class CONTENT_EXPORT RendererWebMediaPlayerDelegate
       int delegate_id,
       const viz::SurfaceId&,
       const gfx::Size&,
-      blink::WebMediaPlayer::PipWindowOpenedCallback) override;
+      blink::WebMediaPlayer::PipWindowOpenedCallback,
+      bool show_play_pause_button) override;
   void DidPictureInPictureModeEnd(int delegate_id, base::OnceClosure) override;
+  void DidSetPictureInPictureCustomControls(
+      int delegate_id,
+      const std::vector<blink::PictureInPictureControlInfo>& controls) override;
   void DidPictureInPictureSurfaceChange(int delegate_id,
                                         const viz::SurfaceId&,
-                                        const gfx::Size&) override;
+                                        const gfx::Size&,
+                                        bool show_play_pause_button) override;
   void RegisterPictureInPictureWindowResizeCallback(
       int player_id,
       blink::WebMediaPlayer::PipWindowResizedCallback) override;
-
-#if defined(USE_NEVA_MEDIA)
-  void OnSuppressedMediaPlay(bool) override;
-#endif
+  bool IsBackgroundMediaSuspendEnabled() override;
 
   // content::RenderFrameObserver overrides.
   void WasHidden() override;
   void WasShown() override;
   bool OnMessageReceived(const IPC::Message& msg) override;
   void OnDestruct() override;
-#if defined(VIDEO_HOLE) && defined(USE_NEVA_MEDIA)
-  // This method finally calls UpdateVideoHoleBoundary of WebMeidaPlayers
-  // ; WebMeidaPlayerNeva, MSE, and UMS.
-  void DidCommitCompositorFrame() override;
-#endif
+
   // Zeros out |idle_cleanup_interval_|, sets |idle_timeout_| to |idle_timeout|,
   // and |is_jelly_bean_| to |is_jelly_bean|. A zero cleanup interval
   // will cause the idle timer to run with each run of the message loop.
@@ -115,6 +113,8 @@ class CONTENT_EXPORT RendererWebMediaPlayerDelegate
   void OnMediaDelegateVolumeMultiplierUpdate(int player_id, double multiplier);
   void OnMediaDelegateBecamePersistentVideo(int player_id, bool value);
   void OnPictureInPictureModeEnded(int player_id);
+  void OnPictureInPictureControlClicked(int player_id,
+                                        const std::string& control_id);
   void OnPictureInPictureModeEndedAck(int player_id, int request_id);
   void OnPictureInPictureModeStartedAck(int player_id,
                                         int request_id,
@@ -151,6 +151,9 @@ class CONTENT_EXPORT RendererWebMediaPlayerDelegate
   // Flag for gating if players should ever transition to a stale state after a
   // period of inactivity.
   bool allow_idle_cleanup_ = true;
+
+  // Flag for whether players should suspend when tab is in background.
+  bool background_suspend_enabled_ = true;
 
   // Tracks which players have entered an idle state. After some period of
   // inactivity these players will be notified and become stale.

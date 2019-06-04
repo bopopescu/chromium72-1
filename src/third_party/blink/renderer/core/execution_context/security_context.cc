@@ -26,9 +26,9 @@
 
 #include "third_party/blink/renderer/core/execution_context/security_context.h"
 
+#include "third_party/blink/public/common/feature_policy/feature_policy.h"
 #include "third_party/blink/public/platform/platform.h"
 #include "third_party/blink/renderer/core/frame/csp/content_security_policy.h"
-#include "third_party/blink/renderer/platform/feature_policy/feature_policy.h"
 #include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 #include "third_party/blink/renderer/platform/weborigin/security_origin.h"
 
@@ -81,7 +81,7 @@ void SecurityContext::ApplySandboxFlags(SandboxFlags mask,
   if (IsSandboxed(kSandboxOrigin) && GetSecurityOrigin() &&
       !GetSecurityOrigin()->IsOpaque()) {
     scoped_refptr<SecurityOrigin> security_origin =
-        SecurityOrigin::CreateUniqueOpaque();
+        GetSecurityOrigin()->DeriveNewOpaqueOrigin();
     security_origin->SetOpaqueOriginIsPotentiallyTrustworthy(
         is_potentially_trustworthy);
     SetSecurityOrigin(std::move(security_origin));
@@ -104,13 +104,77 @@ String SecurityContext::addressSpaceForBindings() const {
   return "public";
 }
 
+void SecurityContext::SetFeaturePolicy(
+    std::unique_ptr<FeaturePolicy> feature_policy) {
+  // This method should be called before a FeaturePolicy has been created.
+  DCHECK(!feature_policy_);
+  feature_policy_ = std::move(feature_policy);
+}
+
+// Uses the parent enforcing policy; parsed_header and container_policy can
+// both contain report-only directives, which will be used to construct the
+// report-only policy for this context.
 void SecurityContext::InitializeFeaturePolicy(
     const ParsedFeaturePolicy& parsed_header,
     const ParsedFeaturePolicy& container_policy,
     const FeaturePolicy* parent_feature_policy) {
+  report_only_feature_policy_ = nullptr;
+  if (!HasCustomizedFeaturePolicy()) {
+    feature_policy_ = FeaturePolicy::CreateFromParentPolicy(
+        nullptr, {}, security_origin_->ToUrlOrigin());
+    return;
+  }
+
   feature_policy_ = FeaturePolicy::CreateFromParentPolicy(
-      parent_feature_policy, container_policy, security_origin_->ToUrlOrigin());
-  feature_policy_->SetHeaderPolicy(parsed_header);
+      parent_feature_policy,
+      *DirectivesWithDisposition(mojom::FeaturePolicyDisposition::kEnforce,
+                                 container_policy),
+      security_origin_->ToUrlOrigin());
+  feature_policy_->SetHeaderPolicy(*DirectivesWithDisposition(
+      mojom::FeaturePolicyDisposition::kEnforce, parsed_header));
+  if (RuntimeEnabledFeatures::FeaturePolicyReportingEnabled()) {
+    report_only_feature_policy_ = FeaturePolicy::CreateFromParentPolicy(
+        parent_feature_policy,
+        *DirectivesWithDisposition(mojom::FeaturePolicyDisposition::kReport,
+                                   container_policy),
+        security_origin_->ToUrlOrigin());
+    report_only_feature_policy_->SetHeaderPolicy(*DirectivesWithDisposition(
+        mojom::FeaturePolicyDisposition::kReport, parsed_header));
+  }
+}
+
+bool SecurityContext::IsFeatureEnabled(mojom::FeaturePolicyFeature feature,
+                                       ReportOptions report_on_failure,
+                                       const String& message) const {
+  FeatureEnabledState state = GetFeatureEnabledState(feature);
+  if (state == FeatureEnabledState::kEnabled)
+    return true;
+  if (report_on_failure == ReportOptions::kReportOnFailure &&
+      RuntimeEnabledFeatures::FeaturePolicyReportingEnabled()) {
+    ReportFeaturePolicyViolation(
+        feature,
+        (state == FeatureEnabledState::kReportOnly
+             ? mojom::FeaturePolicyDisposition::kReport
+             : mojom::FeaturePolicyDisposition::kEnforce),
+        message);
+  }
+  return (state != FeatureEnabledState::kDisabled);
+}
+
+FeatureEnabledState SecurityContext::GetFeatureEnabledState(
+    mojom::FeaturePolicyFeature feature) const {
+  // The policy should always be initialized before checking it to ensure we
+  // properly inherit the parent policy.
+  DCHECK(feature_policy_);
+
+  if (feature_policy_->IsFeatureEnabled(feature)) {
+    if (report_only_feature_policy_ &&
+        !report_only_feature_policy_->IsFeatureEnabled(feature)) {
+      return FeatureEnabledState::kReportOnly;
+    }
+    return FeatureEnabledState::kEnabled;
+  }
+  return FeatureEnabledState::kDisabled;
 }
 
 }  // namespace blink

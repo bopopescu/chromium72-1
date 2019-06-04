@@ -231,19 +231,19 @@ TEST(AXTreeTest, SerializeSimpleAXTree) {
   root.id = 1;
   root.role = ax::mojom::Role::kDialog;
   root.AddState(ax::mojom::State::kFocusable);
-  root.location = gfx::RectF(0, 0, 800, 600);
+  root.relative_bounds.bounds = gfx::RectF(0, 0, 800, 600);
   root.child_ids.push_back(2);
   root.child_ids.push_back(3);
 
   AXNodeData button;
   button.id = 2;
   button.role = ax::mojom::Role::kButton;
-  button.location = gfx::RectF(20, 20, 200, 30);
+  button.relative_bounds.bounds = gfx::RectF(20, 20, 200, 30);
 
   AXNodeData checkbox;
   checkbox.id = 3;
   checkbox.role = ax::mojom::Role::kCheckBox;
-  checkbox.location = gfx::RectF(20, 50, 200, 30);
+  checkbox.relative_bounds.bounds = gfx::RectF(20, 50, 200, 30);
 
   AXTreeUpdate initial_state;
   initial_state.root_id = 1;
@@ -321,25 +321,6 @@ TEST(AXTreeTest, SerializeAXTreeUpdate) {
       "  id=6 listItem (0, 0)-(0, 0) actions=\n"
       "id=7 button (0, 0)-(0, 0) actions=\n",
       update.ToString());
-}
-
-TEST(AXTreeTest, DeleteUnknownSubtreeFails) {
-  AXNodeData root;
-  root.id = 1;
-
-  AXTreeUpdate initial_state;
-  initial_state.root_id = 1;
-  initial_state.nodes.push_back(root);
-  AXTree tree(initial_state);
-
-  // This should fail because we're asking it to delete
-  // a subtree rooted at id=2, which doesn't exist.
-  AXTreeUpdate update;
-  update.node_id_to_clear = 2;
-  update.nodes.resize(1);
-  update.nodes[0].id = 1;
-  EXPECT_FALSE(tree.Unserialize(update));
-  ASSERT_EQ("Bad node_id_to_clear: 2", tree.error());
 }
 
 TEST(AXTreeTest, LeaveOrphanedDeletedSubtreeFails) {
@@ -942,10 +923,10 @@ TEST(AXTreeTest, GetBoundsBasic) {
   tree_update.root_id = 1;
   tree_update.nodes.resize(2);
   tree_update.nodes[0].id = 1;
-  tree_update.nodes[0].location = gfx::RectF(0, 0, 800, 600);
+  tree_update.nodes[0].relative_bounds.bounds = gfx::RectF(0, 0, 800, 600);
   tree_update.nodes[0].child_ids.push_back(2);
   tree_update.nodes[1].id = 2;
-  tree_update.nodes[1].location = gfx::RectF(100, 10, 400, 300);
+  tree_update.nodes[1].relative_bounds.bounds = gfx::RectF(100, 10, 400, 300);
   AXTree tree(tree_update);
 
   EXPECT_EQ("(0, 0) size (800 x 600)", GetBoundsAsString(tree, 1));
@@ -959,16 +940,17 @@ TEST(AXTreeTest, EmptyNodeBoundsIsUnionOfChildren) {
   tree_update.root_id = 1;
   tree_update.nodes.resize(4);
   tree_update.nodes[0].id = 1;
-  tree_update.nodes[0].location = gfx::RectF(0, 0, 800, 600);
+  tree_update.nodes[0].relative_bounds.bounds = gfx::RectF(0, 0, 800, 600);
   tree_update.nodes[0].child_ids.push_back(2);
   tree_update.nodes[1].id = 2;
-  tree_update.nodes[1].location = gfx::RectF();  // Deliberately empty.
+  tree_update.nodes[1].relative_bounds.bounds =
+      gfx::RectF();  // Deliberately empty.
   tree_update.nodes[1].child_ids.push_back(3);
   tree_update.nodes[1].child_ids.push_back(4);
   tree_update.nodes[2].id = 3;
-  tree_update.nodes[2].location = gfx::RectF(100, 10, 400, 20);
+  tree_update.nodes[2].relative_bounds.bounds = gfx::RectF(100, 10, 400, 20);
   tree_update.nodes[3].id = 4;
-  tree_update.nodes[3].location = gfx::RectF(200, 30, 400, 20);
+  tree_update.nodes[3].relative_bounds.bounds = gfx::RectF(200, 30, 400, 20);
 
   AXTree tree(tree_update);
   EXPECT_EQ("(100, 10) size (500 x 40)", GetBoundsAsString(tree, 2));
@@ -981,20 +963,21 @@ TEST(AXTreeTest, EmptyNodeNotOffscreenEvenIfAllChildrenOffscreen) {
   tree_update.root_id = 1;
   tree_update.nodes.resize(4);
   tree_update.nodes[0].id = 1;
-  tree_update.nodes[0].location = gfx::RectF(0, 0, 800, 600);
+  tree_update.nodes[0].relative_bounds.bounds = gfx::RectF(0, 0, 800, 600);
   tree_update.nodes[0].role = ax::mojom::Role::kRootWebArea;
   tree_update.nodes[0].AddBoolAttribute(
       ax::mojom::BoolAttribute::kClipsChildren, true);
   tree_update.nodes[0].child_ids.push_back(2);
   tree_update.nodes[1].id = 2;
-  tree_update.nodes[1].location = gfx::RectF();  // Deliberately empty.
+  tree_update.nodes[1].relative_bounds.bounds =
+      gfx::RectF();  // Deliberately empty.
   tree_update.nodes[1].child_ids.push_back(3);
   tree_update.nodes[1].child_ids.push_back(4);
   // Both children are offscreen
   tree_update.nodes[2].id = 3;
-  tree_update.nodes[2].location = gfx::RectF(900, 10, 400, 20);
+  tree_update.nodes[2].relative_bounds.bounds = gfx::RectF(900, 10, 400, 20);
   tree_update.nodes[3].id = 4;
-  tree_update.nodes[3].location = gfx::RectF(1000, 30, 400, 20);
+  tree_update.nodes[3].relative_bounds.bounds = gfx::RectF(1000, 30, 400, 20);
 
   AXTree tree(tree_update);
   EXPECT_FALSE(IsNodeOffscreen(tree, 2));
@@ -1008,17 +991,17 @@ TEST(AXTreeTest, GetBoundsWithTransform) {
   tree_update.root_id = 1;
   tree_update.nodes.resize(3);
   tree_update.nodes[0].id = 1;
-  tree_update.nodes[0].location = gfx::RectF(0, 0, 400, 300);
-  tree_update.nodes[0].transform.reset(new gfx::Transform());
-  tree_update.nodes[0].transform->Scale(2.0, 2.0);
+  tree_update.nodes[0].relative_bounds.bounds = gfx::RectF(0, 0, 400, 300);
+  tree_update.nodes[0].relative_bounds.transform.reset(new gfx::Transform());
+  tree_update.nodes[0].relative_bounds.transform->Scale(2.0, 2.0);
   tree_update.nodes[0].child_ids.push_back(2);
   tree_update.nodes[0].child_ids.push_back(3);
   tree_update.nodes[1].id = 2;
-  tree_update.nodes[1].location = gfx::RectF(20, 10, 50, 5);
+  tree_update.nodes[1].relative_bounds.bounds = gfx::RectF(20, 10, 50, 5);
   tree_update.nodes[2].id = 3;
-  tree_update.nodes[2].location = gfx::RectF(20, 30, 50, 5);
-  tree_update.nodes[2].transform.reset(new gfx::Transform());
-  tree_update.nodes[2].transform->Scale(2.0, 2.0);
+  tree_update.nodes[2].relative_bounds.bounds = gfx::RectF(20, 30, 50, 5);
+  tree_update.nodes[2].relative_bounds.transform.reset(new gfx::Transform());
+  tree_update.nodes[2].relative_bounds.transform->Scale(2.0, 2.0);
 
   AXTree tree(tree_update);
   EXPECT_EQ("(0, 0) size (800 x 600)", GetBoundsAsString(tree, 1));
@@ -1033,17 +1016,17 @@ TEST(AXTreeTest, GetBoundsWithContainerId) {
   tree_update.root_id = 1;
   tree_update.nodes.resize(4);
   tree_update.nodes[0].id = 1;
-  tree_update.nodes[0].location = gfx::RectF(0, 0, 800, 600);
+  tree_update.nodes[0].relative_bounds.bounds = gfx::RectF(0, 0, 800, 600);
   tree_update.nodes[0].child_ids.push_back(2);
   tree_update.nodes[1].id = 2;
-  tree_update.nodes[1].location = gfx::RectF(100, 50, 600, 500);
+  tree_update.nodes[1].relative_bounds.bounds = gfx::RectF(100, 50, 600, 500);
   tree_update.nodes[1].child_ids.push_back(3);
   tree_update.nodes[1].child_ids.push_back(4);
   tree_update.nodes[2].id = 3;
-  tree_update.nodes[2].offset_container_id = 2;
-  tree_update.nodes[2].location = gfx::RectF(20, 30, 50, 5);
+  tree_update.nodes[2].relative_bounds.offset_container_id = 2;
+  tree_update.nodes[2].relative_bounds.bounds = gfx::RectF(20, 30, 50, 5);
   tree_update.nodes[3].id = 4;
-  tree_update.nodes[3].location = gfx::RectF(20, 30, 50, 5);
+  tree_update.nodes[3].relative_bounds.bounds = gfx::RectF(20, 30, 50, 5);
 
   AXTree tree(tree_update);
   EXPECT_EQ("(120, 80) size (50 x 5)", GetBoundsAsString(tree, 3));
@@ -1057,16 +1040,16 @@ TEST(AXTreeTest, GetBoundsWithScrolling) {
   tree_update.root_id = 1;
   tree_update.nodes.resize(3);
   tree_update.nodes[0].id = 1;
-  tree_update.nodes[0].location = gfx::RectF(0, 0, 800, 600);
+  tree_update.nodes[0].relative_bounds.bounds = gfx::RectF(0, 0, 800, 600);
   tree_update.nodes[0].child_ids.push_back(2);
   tree_update.nodes[1].id = 2;
-  tree_update.nodes[1].location = gfx::RectF(100, 50, 600, 500);
+  tree_update.nodes[1].relative_bounds.bounds = gfx::RectF(100, 50, 600, 500);
   tree_update.nodes[1].AddIntAttribute(ax::mojom::IntAttribute::kScrollX, 5);
   tree_update.nodes[1].AddIntAttribute(ax::mojom::IntAttribute::kScrollY, 10);
   tree_update.nodes[1].child_ids.push_back(3);
   tree_update.nodes[2].id = 3;
-  tree_update.nodes[2].offset_container_id = 2;
-  tree_update.nodes[2].location = gfx::RectF(20, 30, 50, 5);
+  tree_update.nodes[2].relative_bounds.offset_container_id = 2;
+  tree_update.nodes[2].relative_bounds.bounds = gfx::RectF(20, 30, 50, 5);
 
   AXTree tree(tree_update);
   EXPECT_EQ("(115, 70) size (50 x 5)", GetBoundsAsString(tree, 3));
@@ -1077,15 +1060,15 @@ TEST(AXTreeTest, GetBoundsEmptyBoundsInheritsFromParent) {
   tree_update.root_id = 1;
   tree_update.nodes.resize(3);
   tree_update.nodes[0].id = 1;
-  tree_update.nodes[0].location = gfx::RectF(0, 0, 800, 600);
+  tree_update.nodes[0].relative_bounds.bounds = gfx::RectF(0, 0, 800, 600);
   tree_update.nodes[1].AddBoolAttribute(
       ax::mojom::BoolAttribute::kClipsChildren, true);
   tree_update.nodes[0].child_ids.push_back(2);
   tree_update.nodes[1].id = 2;
-  tree_update.nodes[1].location = gfx::RectF(300, 200, 100, 100);
+  tree_update.nodes[1].relative_bounds.bounds = gfx::RectF(300, 200, 100, 100);
   tree_update.nodes[1].child_ids.push_back(3);
   tree_update.nodes[2].id = 3;
-  tree_update.nodes[2].location = gfx::RectF();
+  tree_update.nodes[2].relative_bounds.bounds = gfx::RectF();
 
   AXTree tree(tree_update);
   EXPECT_EQ("(0, 0) size (800 x 600)", GetBoundsAsString(tree, 1));
@@ -1104,7 +1087,7 @@ TEST(AXTreeTest, GetBoundsCropsChildToRoot) {
   tree_update.root_id = 1;
   tree_update.nodes.resize(5);
   tree_update.nodes[0].id = 1;
-  tree_update.nodes[0].location = gfx::RectF(0, 0, 800, 600);
+  tree_update.nodes[0].relative_bounds.bounds = gfx::RectF(0, 0, 800, 600);
   tree_update.nodes[0].AddBoolAttribute(
       ax::mojom::BoolAttribute::kClipsChildren, true);
   tree_update.nodes[0].child_ids.push_back(2);
@@ -1113,16 +1096,17 @@ TEST(AXTreeTest, GetBoundsCropsChildToRoot) {
   tree_update.nodes[0].child_ids.push_back(5);
   // Cropped in the top left
   tree_update.nodes[1].id = 2;
-  tree_update.nodes[1].location = gfx::RectF(-100, -100, 150, 150);
+  tree_update.nodes[1].relative_bounds.bounds =
+      gfx::RectF(-100, -100, 150, 150);
   // Cropped in the bottom right
   tree_update.nodes[2].id = 3;
-  tree_update.nodes[2].location = gfx::RectF(700, 500, 150, 150);
+  tree_update.nodes[2].relative_bounds.bounds = gfx::RectF(700, 500, 150, 150);
   // Offscreen on the top
   tree_update.nodes[3].id = 4;
-  tree_update.nodes[3].location = gfx::RectF(50, -200, 150, 150);
+  tree_update.nodes[3].relative_bounds.bounds = gfx::RectF(50, -200, 150, 150);
   // Offscreen on the bottom
   tree_update.nodes[4].id = 5;
-  tree_update.nodes[4].location = gfx::RectF(50, 700, 150, 150);
+  tree_update.nodes[4].relative_bounds.bounds = gfx::RectF(50, 700, 150, 150);
 
   AXTree tree(tree_update);
   EXPECT_EQ("(0, 0) size (50 x 50)", GetBoundsAsString(tree, 2));
@@ -1143,32 +1127,32 @@ TEST(AXTreeTest, GetBoundsSetsOffscreenIfClipsChildren) {
   tree_update.root_id = 1;
   tree_update.nodes.resize(5);
   tree_update.nodes[0].id = 1;
-  tree_update.nodes[0].location = gfx::RectF(0, 0, 800, 600);
+  tree_update.nodes[0].relative_bounds.bounds = gfx::RectF(0, 0, 800, 600);
   tree_update.nodes[0].AddBoolAttribute(
       ax::mojom::BoolAttribute::kClipsChildren, true);
   tree_update.nodes[0].child_ids.push_back(2);
   tree_update.nodes[0].child_ids.push_back(3);
 
   tree_update.nodes[1].id = 2;
-  tree_update.nodes[1].location = gfx::RectF(0, 0, 200, 200);
+  tree_update.nodes[1].relative_bounds.bounds = gfx::RectF(0, 0, 200, 200);
   tree_update.nodes[1].AddBoolAttribute(
       ax::mojom::BoolAttribute::kClipsChildren, true);
   tree_update.nodes[1].child_ids.push_back(4);
 
   tree_update.nodes[2].id = 3;
-  tree_update.nodes[2].location = gfx::RectF(0, 0, 200, 200);
+  tree_update.nodes[2].relative_bounds.bounds = gfx::RectF(0, 0, 200, 200);
   tree_update.nodes[2].child_ids.push_back(5);
 
   // Clipped by its parent
   tree_update.nodes[3].id = 4;
-  tree_update.nodes[3].location = gfx::RectF(250, 250, 100, 100);
-  tree_update.nodes[3].offset_container_id = 2;
+  tree_update.nodes[3].relative_bounds.bounds = gfx::RectF(250, 250, 100, 100);
+  tree_update.nodes[3].relative_bounds.offset_container_id = 2;
 
   // Outside of its parent, but its parent does not clip children,
   // so it should not be offscreen.
   tree_update.nodes[4].id = 5;
-  tree_update.nodes[4].location = gfx::RectF(250, 250, 100, 100);
-  tree_update.nodes[4].offset_container_id = 3;
+  tree_update.nodes[4].relative_bounds.bounds = gfx::RectF(250, 250, 100, 100);
+  tree_update.nodes[4].relative_bounds.offset_container_id = 3;
 
   AXTree tree(tree_update);
   EXPECT_TRUE(IsNodeOffscreen(tree, 4));
@@ -1180,7 +1164,7 @@ TEST(AXTreeTest, GetBoundsUpdatesOffscreen) {
   tree_update.root_id = 1;
   tree_update.nodes.resize(5);
   tree_update.nodes[0].id = 1;
-  tree_update.nodes[0].location = gfx::RectF(0, 0, 800, 600);
+  tree_update.nodes[0].relative_bounds.bounds = gfx::RectF(0, 0, 800, 600);
   tree_update.nodes[0].role = ax::mojom::Role::kRootWebArea;
   tree_update.nodes[0].AddBoolAttribute(
       ax::mojom::BoolAttribute::kClipsChildren, true);
@@ -1190,16 +1174,16 @@ TEST(AXTreeTest, GetBoundsUpdatesOffscreen) {
   tree_update.nodes[0].child_ids.push_back(5);
   // Fully onscreen
   tree_update.nodes[1].id = 2;
-  tree_update.nodes[1].location = gfx::RectF(10, 10, 150, 150);
+  tree_update.nodes[1].relative_bounds.bounds = gfx::RectF(10, 10, 150, 150);
   // Cropped in the bottom right
   tree_update.nodes[2].id = 3;
-  tree_update.nodes[2].location = gfx::RectF(700, 500, 150, 150);
+  tree_update.nodes[2].relative_bounds.bounds = gfx::RectF(700, 500, 150, 150);
   // Offscreen on the top
   tree_update.nodes[3].id = 4;
-  tree_update.nodes[3].location = gfx::RectF(50, -200, 150, 150);
+  tree_update.nodes[3].relative_bounds.bounds = gfx::RectF(50, -200, 150, 150);
   // Offscreen on the bottom
   tree_update.nodes[4].id = 5;
-  tree_update.nodes[4].location = gfx::RectF(50, 700, 150, 150);
+  tree_update.nodes[4].relative_bounds.bounds = gfx::RectF(50, 700, 150, 150);
 
   AXTree tree(tree_update);
   EXPECT_FALSE(IsNodeOffscreen(tree, 2));
@@ -1373,22 +1357,36 @@ TEST(AXTreeTest, ReverseRelationsDoNotKeepGrowing) {
         ax::mojom::IntAttribute::kActivedescendantId, update.nodes[1].id);
     update.nodes[0].AddIntListAttribute(
         ax::mojom::IntListAttribute::kLabelledbyIds, {update.nodes[1].id});
+    update.nodes[1].AddIntAttribute(ax::mojom::IntAttribute::kMemberOfId, 1);
     update.nodes[0].child_ids.push_back(update.nodes[1].id);
     EXPECT_TRUE(tree.Unserialize(update));
   }
 
-  size_t int_size = 0;
-  for (auto& iter : tree.int_reverse_relations())
-    int_size += iter.second.size() + 1;
-  // Note: 10 is arbitary, the idea here is just that we mutated a note
-  // with a relationship 1000 times, so if we have fewer than 10 entries
-  // in the map then clearly the map isn't growing / leaking. Same below.
-  EXPECT_LT(int_size, 10U);
+  size_t map_key_count = 0;
+  size_t set_entry_count = 0;
+  for (auto& iter : tree.int_reverse_relations()) {
+    map_key_count += iter.second.size() + 1;
+    for (auto it2 = iter.second.begin(); it2 != iter.second.end(); ++it2) {
+      set_entry_count += it2->second.size();
+    }
+  }
 
-  size_t intlist_size = 0;
-  for (auto& iter : tree.intlist_reverse_relations())
-    intlist_size += iter.second.size() + 1;
-  EXPECT_LT(intlist_size, 10U);
+  // Note: 10 is arbitary, the idea here is just that we mutated the tree
+  // 1000 times, so if we have fewer than 10 entries in the maps / sets then
+  // the map isn't growing / leaking. Same below.
+  EXPECT_LT(map_key_count, 10U);
+  EXPECT_LT(set_entry_count, 10U);
+
+  map_key_count = 0;
+  set_entry_count = 0;
+  for (auto& iter : tree.intlist_reverse_relations()) {
+    map_key_count += iter.second.size() + 1;
+    for (auto it2 = iter.second.begin(); it2 != iter.second.end(); ++it2) {
+      set_entry_count += it2->second.size();
+    }
+  }
+  EXPECT_LT(map_key_count, 10U);
+  EXPECT_LT(set_entry_count, 10U);
 }
 
 TEST(AXTreeTest, SkipIgnoredNodes) {
@@ -1419,6 +1417,455 @@ TEST(AXTreeTest, SkipIgnoredNodes) {
   EXPECT_EQ(2, root->GetUnignoredChildAtIndex(2)->GetUnignoredIndexInParent());
 
   EXPECT_EQ(1, root->GetUnignoredChildAtIndex(0)->GetUnignoredParent()->id());
+}
+
+TEST(AXTreeTest, ChildTreeIds) {
+  AXTreeUpdate initial_state;
+  initial_state.root_id = 1;
+  initial_state.nodes.resize(4);
+  initial_state.nodes[0].id = 1;
+  initial_state.nodes[0].child_ids.push_back(2);
+  initial_state.nodes[0].child_ids.push_back(3);
+  initial_state.nodes[0].child_ids.push_back(4);
+  initial_state.nodes[1].id = 2;
+  initial_state.nodes[1].AddStringAttribute(
+      ax::mojom::StringAttribute::kChildTreeId, "92");
+  initial_state.nodes[2].id = 3;
+  initial_state.nodes[2].AddStringAttribute(
+      ax::mojom::StringAttribute::kChildTreeId, "93");
+  initial_state.nodes[3].id = 4;
+  initial_state.nodes[3].AddStringAttribute(
+      ax::mojom::StringAttribute::kChildTreeId, "93");
+  AXTree tree(initial_state);
+
+  auto child_tree_91_nodes =
+      tree.GetNodeIdsForChildTreeId(AXTreeID::FromString("91"));
+  EXPECT_EQ(0U, child_tree_91_nodes.size());
+
+  auto child_tree_92_nodes =
+      tree.GetNodeIdsForChildTreeId(AXTreeID::FromString("92"));
+  EXPECT_EQ(1U, child_tree_92_nodes.size());
+  EXPECT_TRUE(base::ContainsKey(child_tree_92_nodes, 2));
+
+  auto child_tree_93_nodes =
+      tree.GetNodeIdsForChildTreeId(AXTreeID::FromString("93"));
+  EXPECT_EQ(2U, child_tree_93_nodes.size());
+  EXPECT_TRUE(base::ContainsKey(child_tree_93_nodes, 3));
+  EXPECT_TRUE(base::ContainsKey(child_tree_93_nodes, 4));
+
+  AXTreeUpdate update = initial_state;
+  update.nodes[2].string_attributes.clear();
+  update.nodes[2].AddStringAttribute(ax::mojom::StringAttribute::kChildTreeId,
+                                     "92");
+  update.nodes[3].string_attributes.clear();
+
+  EXPECT_TRUE(tree.Unserialize(update));
+
+  child_tree_92_nodes =
+      tree.GetNodeIdsForChildTreeId(AXTreeID::FromString("92"));
+  EXPECT_EQ(2U, child_tree_92_nodes.size());
+  EXPECT_TRUE(base::ContainsKey(child_tree_92_nodes, 2));
+  EXPECT_TRUE(base::ContainsKey(child_tree_92_nodes, 3));
+
+  child_tree_93_nodes =
+      tree.GetNodeIdsForChildTreeId(AXTreeID::FromString("93"));
+  EXPECT_EQ(0U, child_tree_93_nodes.size());
+}
+
+// Tests PosInSet and SetSize int attributes work if assigned.
+TEST(AXTreeTest, TestSetSizePosInSetAssigned) {
+  AXTreeUpdate tree_update;
+  tree_update.root_id = 1;
+  tree_update.nodes.resize(4);
+  tree_update.nodes[0].id = 1;
+  tree_update.nodes[0].role = ax::mojom::Role::kList;
+  tree_update.nodes[0].child_ids = {2, 3, 4};
+  tree_update.nodes[1].id = 2;
+  tree_update.nodes[1].role = ax::mojom::Role::kListItem;
+  tree_update.nodes[1].AddIntAttribute(ax::mojom::IntAttribute::kPosInSet, 2);
+  tree_update.nodes[1].AddIntAttribute(ax::mojom::IntAttribute::kSetSize, 12);
+  tree_update.nodes[2].id = 3;
+  tree_update.nodes[2].role = ax::mojom::Role::kListItem;
+  tree_update.nodes[2].AddIntAttribute(ax::mojom::IntAttribute::kPosInSet, 5);
+  tree_update.nodes[2].AddIntAttribute(ax::mojom::IntAttribute::kSetSize, 12);
+  tree_update.nodes[3].id = 4;
+  tree_update.nodes[3].role = ax::mojom::Role::kListItem;
+  tree_update.nodes[3].AddIntAttribute(ax::mojom::IntAttribute::kPosInSet, 9);
+  tree_update.nodes[3].AddIntAttribute(ax::mojom::IntAttribute::kSetSize, 12);
+  AXTree tree(tree_update);
+
+  AXNode* item1 = tree.GetFromId(2);
+  EXPECT_EQ(item1->GetPosInSet(), 2);
+  EXPECT_EQ(item1->GetSetSize(), 12);
+  AXNode* item2 = tree.GetFromId(3);
+  EXPECT_EQ(item2->GetPosInSet(), 5);
+  EXPECT_EQ(item2->GetSetSize(), 12);
+  AXNode* item3 = tree.GetFromId(4);
+  EXPECT_EQ(item3->GetPosInSet(), 9);
+  EXPECT_EQ(item3->GetSetSize(), 12);
+}
+
+// Tests that PosInSet and SetSize can be calculated if not assigned.
+TEST(AXTreeTest, TestSetSizePosInSetUnassigned) {
+  AXTreeUpdate tree_update;
+  tree_update.root_id = 1;
+  tree_update.nodes.resize(4);
+  tree_update.nodes[0].id = 1;
+  tree_update.nodes[0].role = ax::mojom::Role::kList;
+  tree_update.nodes[0].child_ids = {2, 3, 4};
+  tree_update.nodes[1].id = 2;
+  tree_update.nodes[1].role = ax::mojom::Role::kListItem;
+  tree_update.nodes[2].id = 3;
+  tree_update.nodes[2].role = ax::mojom::Role::kListItem;
+  tree_update.nodes[3].id = 4;
+  tree_update.nodes[3].role = ax::mojom::Role::kListItem;
+  AXTree tree(tree_update);
+
+  AXNode* item1 = tree.GetFromId(2);
+  EXPECT_EQ(item1->GetPosInSet(), 1);
+  EXPECT_EQ(item1->GetSetSize(), 3);
+  AXNode* item2 = tree.GetFromId(3);
+  EXPECT_EQ(item2->GetPosInSet(), 2);
+  EXPECT_EQ(item2->GetSetSize(), 3);
+  AXNode* item3 = tree.GetFromId(4);
+  EXPECT_EQ(item3->GetPosInSet(), 3);
+  EXPECT_EQ(item3->GetSetSize(), 3);
+}
+
+// Tests PosInSet unassigned, while SetSize assigned in container.
+TEST(AXTreeTest, TestSetSizeAssignedInContainer) {
+  AXTreeUpdate tree_update;
+  tree_update.root_id = 1;
+  tree_update.nodes.resize(4);
+  tree_update.nodes[0].id = 1;
+  tree_update.nodes[0].role = ax::mojom::Role::kList;
+  tree_update.nodes[0].child_ids = {2, 3, 4};
+  tree_update.nodes[0].AddIntAttribute(ax::mojom::IntAttribute::kSetSize, 7);
+  tree_update.nodes[1].id = 2;
+  tree_update.nodes[1].role = ax::mojom::Role::kListItem;
+  tree_update.nodes[2].id = 3;
+  tree_update.nodes[2].role = ax::mojom::Role::kListItem;
+  tree_update.nodes[3].id = 4;
+  tree_update.nodes[3].role = ax::mojom::Role::kListItem;
+  AXTree tree(tree_update);
+
+  // Items should inherit SetSize from container if not specified.
+  AXNode* item1 = tree.GetFromId(2);
+  EXPECT_EQ(item1->GetSetSize(), 7);
+  AXNode* item2 = tree.GetFromId(3);
+  EXPECT_EQ(item2->GetSetSize(), 7);
+  AXNode* item3 = tree.GetFromId(4);
+  EXPECT_EQ(item3->GetSetSize(), 7);
+}
+
+// Tests PosInSet and SetSize on a list containing various roles.
+// Roles for items and associated container should match up.
+TEST(AXTreeTest, TestSetSizePosInSetDiverseList) {
+  AXTreeUpdate tree_update;
+  tree_update.root_id = 1;
+  tree_update.nodes.resize(9);
+  tree_update.nodes[0].id = 1;
+  tree_update.nodes[0].role = ax::mojom::Role::kList;
+  tree_update.nodes[0].child_ids = {2, 3, 4, 5, 6, 7, 8, 9};
+  tree_update.nodes[1].id = 2;
+  tree_update.nodes[1].role = ax::mojom::Role::kListItem;  // 1 of 3
+  tree_update.nodes[2].id = 3;
+  tree_update.nodes[2].role = ax::mojom::Role::kMenuItem;  // 0 of 0
+  tree_update.nodes[3].id = 4;
+  tree_update.nodes[3].role = ax::mojom::Role::kListItem;  // 2 of 3
+  tree_update.nodes[4].id = 5;
+  tree_update.nodes[4].role = ax::mojom::Role::kMenuItem;  // 0 of 0
+  tree_update.nodes[5].id = 6;
+  tree_update.nodes[5].role = ax::mojom::Role::kArticle;  // 0 of 0
+  tree_update.nodes[6].id = 7;
+  tree_update.nodes[6].role = ax::mojom::Role::kArticle;  // 0 of 0
+  tree_update.nodes[7].id = 8;
+  tree_update.nodes[7].role = ax::mojom::Role::kListItem;  // 3 of 3
+  tree_update.nodes[8].id = 9;
+  tree_update.nodes[8].role = ax::mojom::Role::kImage;  // 0 of 0
+  AXTree tree(tree_update);
+
+  AXNode* listitem1 = tree.GetFromId(2);
+  EXPECT_EQ(listitem1->GetPosInSet(), 1);
+  EXPECT_EQ(listitem1->GetSetSize(), 3);
+  AXNode* menuitem1 = tree.GetFromId(3);
+  EXPECT_EQ(menuitem1->GetPosInSet(), 0);
+  EXPECT_EQ(menuitem1->GetSetSize(), 0);
+  AXNode* listitem2 = tree.GetFromId(4);
+  EXPECT_EQ(listitem2->GetPosInSet(), 2);
+  EXPECT_EQ(listitem2->GetSetSize(), 3);
+  AXNode* menuitem2 = tree.GetFromId(5);
+  EXPECT_EQ(menuitem2->GetPosInSet(), 0);
+  EXPECT_EQ(menuitem2->GetSetSize(), 0);
+  AXNode* article1 = tree.GetFromId(6);
+  EXPECT_EQ(article1->GetPosInSet(), 0);
+  EXPECT_EQ(article1->GetSetSize(), 0);
+  AXNode* article2 = tree.GetFromId(7);
+  EXPECT_EQ(article2->GetPosInSet(), 0);
+  EXPECT_EQ(article2->GetSetSize(), 0);
+  AXNode* listitem3 = tree.GetFromId(8);
+  EXPECT_EQ(listitem3->GetPosInSet(), 3);
+  EXPECT_EQ(listitem3->GetSetSize(), 3);
+  AXNode* image = tree.GetFromId(9);
+  EXPECT_EQ(image->GetPosInSet(), 0);
+  EXPECT_EQ(image->GetSetSize(), 0);
+}
+
+// Tests PosInSet and SetSize on a nested list.
+TEST(AXTreeTest, TestSetSizePosInSetNestedList) {
+  AXTreeUpdate tree_update;
+  tree_update.root_id = 1;
+  tree_update.nodes.resize(7);
+  tree_update.nodes[0].id = 1;
+  tree_update.nodes[0].role = ax::mojom::Role::kList;
+  tree_update.nodes[0].child_ids = {2, 3, 4, 7};
+  tree_update.nodes[1].id = 2;
+  tree_update.nodes[1].role = ax::mojom::Role::kListItem;
+  tree_update.nodes[2].id = 3;
+  tree_update.nodes[2].role = ax::mojom::Role::kListItem;
+  tree_update.nodes[3].id = 4;
+  tree_update.nodes[3].role = ax::mojom::Role::kList;
+  tree_update.nodes[3].child_ids = {5, 6};
+  tree_update.nodes[4].id = 5;
+  tree_update.nodes[4].role = ax::mojom::Role::kListItem;
+  tree_update.nodes[5].id = 6;
+  tree_update.nodes[5].role = ax::mojom::Role::kListItem;
+  tree_update.nodes[6].id = 7;
+  tree_update.nodes[6].role = ax::mojom::Role::kListItem;
+  AXTree tree(tree_update);
+
+  AXNode* outer_item1 = tree.GetFromId(2);
+  EXPECT_EQ(outer_item1->GetPosInSet(), 1);
+  EXPECT_EQ(outer_item1->GetSetSize(), 3);
+  AXNode* outer_item2 = tree.GetFromId(3);
+  EXPECT_EQ(outer_item2->GetPosInSet(), 2);
+  EXPECT_EQ(outer_item2->GetSetSize(), 3);
+
+  // List object itself should not report posinset or setsize.
+  // TODO (akihiroota): Lists should report setsize in the future.
+  AXNode* inner_list = tree.GetFromId(4);
+  EXPECT_EQ(inner_list->GetPosInSet(), 0);
+  EXPECT_EQ(inner_list->GetSetSize(), 0);
+
+  AXNode* inner_item1 = tree.GetFromId(5);
+  EXPECT_EQ(inner_item1->GetPosInSet(), 1);
+  EXPECT_EQ(inner_item1->GetSetSize(), 2);
+  AXNode* inner_item2 = tree.GetFromId(6);
+  EXPECT_EQ(inner_item2->GetPosInSet(), 2);
+  EXPECT_EQ(inner_item2->GetSetSize(), 2);
+
+  AXNode* outer_item3 = tree.GetFromId(7);
+  EXPECT_EQ(outer_item3->GetPosInSet(), 3);
+  EXPECT_EQ(outer_item3->GetSetSize(), 3);
+}
+
+// Tests PosInSet can be calculated if one item specifies PosInSet, but others
+// are missing.
+TEST(AXTreeTest, TestPosInSetMissing) {
+  AXTreeUpdate tree_update;
+  tree_update.root_id = 1;
+  tree_update.nodes.resize(4);
+  tree_update.nodes[0].id = 1;
+  tree_update.nodes[0].role = ax::mojom::Role::kList;
+  tree_update.nodes[0].child_ids = {2, 3, 4};
+  tree_update.nodes[0].AddIntAttribute(ax::mojom::IntAttribute::kSetSize, 20);
+  tree_update.nodes[1].id = 2;
+  tree_update.nodes[1].role = ax::mojom::Role::kListItem;
+  tree_update.nodes[2].id = 3;
+  tree_update.nodes[2].role = ax::mojom::Role::kListItem;
+  tree_update.nodes[2].AddIntAttribute(ax::mojom::IntAttribute::kPosInSet, 13);
+  tree_update.nodes[3].id = 4;
+  tree_update.nodes[3].role = ax::mojom::Role::kListItem;
+  AXTree tree(tree_update);
+
+  // Item1 should have pos of 12, since item2 is assigned a pos of 13.
+  AXNode* item1 = tree.GetFromId(2);
+  EXPECT_EQ(item1->GetPosInSet(), 1);
+  EXPECT_EQ(item1->GetSetSize(), 20);
+  AXNode* item2 = tree.GetFromId(3);
+  EXPECT_EQ(item2->GetPosInSet(), 13);
+  EXPECT_EQ(item2->GetSetSize(), 20);
+  // Item2 should have pos of 14, since item2 is assigned a pos of 13.
+  AXNode* item3 = tree.GetFromId(4);
+  EXPECT_EQ(item3->GetPosInSet(), 14);
+  EXPECT_EQ(item3->GetSetSize(), 20);
+}
+
+// A more difficult test that invovles missing PosInSet and SetSize values.
+TEST(AXTreeTest, TestSetSizePosInSetMissingDifficult) {
+  AXTreeUpdate tree_update;
+  tree_update.root_id = 1;
+  tree_update.nodes.resize(6);
+  tree_update.nodes[0].id = 1;
+  tree_update.nodes[0].role = ax::mojom::Role::kList;
+  tree_update.nodes[0].child_ids = {2, 3, 4, 5, 6};
+  tree_update.nodes[1].id = 2;
+  tree_update.nodes[1].role = ax::mojom::Role::kListItem;  // 1 of 11
+  tree_update.nodes[2].id = 3;
+  tree_update.nodes[2].role = ax::mojom::Role::kListItem;
+  tree_update.nodes[2].AddIntAttribute(ax::mojom::IntAttribute::kPosInSet,
+                                       5);  // 5 of 11
+  tree_update.nodes[3].id = 4;
+  tree_update.nodes[3].role = ax::mojom::Role::kListItem;  // 6 of 11
+  tree_update.nodes[4].id = 5;
+  tree_update.nodes[4].role = ax::mojom::Role::kListItem;
+  tree_update.nodes[4].AddIntAttribute(ax::mojom::IntAttribute::kPosInSet,
+                                       10);  // 10 of 11
+  tree_update.nodes[5].id = 6;
+  tree_update.nodes[5].role = ax::mojom::Role::kListItem;  // 11 of 11
+  AXTree tree(tree_update);
+
+  AXNode* item1 = tree.GetFromId(2);
+  EXPECT_EQ(item1->GetPosInSet(), 1);
+  EXPECT_EQ(item1->GetSetSize(), 11);
+  AXNode* item2 = tree.GetFromId(3);
+  EXPECT_EQ(item2->GetPosInSet(), 5);
+  EXPECT_EQ(item2->GetSetSize(), 11);
+  AXNode* item3 = tree.GetFromId(4);
+  EXPECT_EQ(item3->GetPosInSet(), 6);
+  EXPECT_EQ(item3->GetSetSize(), 11);
+  AXNode* item4 = tree.GetFromId(5);
+  EXPECT_EQ(item4->GetPosInSet(), 10);
+  EXPECT_EQ(item4->GetSetSize(), 11);
+  AXNode* item5 = tree.GetFromId(6);
+  EXPECT_EQ(item5->GetPosInSet(), 11);
+  EXPECT_EQ(item5->GetSetSize(), 11);
+}
+
+// Tests that code overwrites decreasing SetSize assignments to largest of
+// assigned values.
+TEST(AXTreeTest, TestSetSizeDecreasing) {
+  AXTreeUpdate tree_update;
+  tree_update.root_id = 1;
+  tree_update.nodes.resize(4);
+  tree_update.nodes[0].id = 1;
+  tree_update.nodes[0].role = ax::mojom::Role::kList;
+  tree_update.nodes[0].child_ids = {2, 3, 4};
+  tree_update.nodes[1].id = 2;
+  tree_update.nodes[1].role = ax::mojom::Role::kListItem;  // 1 of 5
+  tree_update.nodes[2].id = 3;
+  tree_update.nodes[2].role = ax::mojom::Role::kListItem;  // 2 of 5
+  tree_update.nodes[2].AddIntAttribute(ax::mojom::IntAttribute::kSetSize, 5);
+  tree_update.nodes[3].id = 4;
+  tree_update.nodes[3].role = ax::mojom::Role::kListItem;  // 3 of 5
+  tree_update.nodes[3].AddIntAttribute(ax::mojom::IntAttribute::kSetSize, 4);
+  AXTree tree(tree_update);
+
+  AXNode* item1 = tree.GetFromId(2);
+  EXPECT_EQ(item1->GetPosInSet(), 1);
+  EXPECT_EQ(item1->GetSetSize(), 5);
+  AXNode* item2 = tree.GetFromId(3);
+  EXPECT_EQ(item2->GetPosInSet(), 2);
+  EXPECT_EQ(item2->GetSetSize(), 5);
+  AXNode* item3 = tree.GetFromId(4);
+  EXPECT_EQ(item3->GetPosInSet(), 3);
+  EXPECT_EQ(item3->GetSetSize(), 5);
+}
+
+// Tests that code overwrites decreasing PosInSet values.
+TEST(AXTreeTest, TestPosInSetDecreasing) {
+  AXTreeUpdate tree_update;
+  tree_update.root_id = 1;
+  tree_update.nodes.resize(4);
+  tree_update.nodes[0].id = 1;
+  tree_update.nodes[0].role = ax::mojom::Role::kList;
+  tree_update.nodes[0].child_ids = {2, 3, 4};
+  tree_update.nodes[1].id = 2;
+  tree_update.nodes[1].role = ax::mojom::Role::kListItem;  // 1 of 8
+  tree_update.nodes[2].id = 3;
+  tree_update.nodes[2].role = ax::mojom::Role::kListItem;  // 7 of 8
+  tree_update.nodes[2].AddIntAttribute(ax::mojom::IntAttribute::kPosInSet, 7);
+  tree_update.nodes[3].id = 4;
+  tree_update.nodes[3].role = ax::mojom::Role::kListItem;  // 8 of 8
+  tree_update.nodes[3].AddIntAttribute(ax::mojom::IntAttribute::kPosInSet, 3);
+  AXTree tree(tree_update);
+
+  AXNode* item1 = tree.GetFromId(2);
+  EXPECT_EQ(item1->GetPosInSet(), 1);
+  EXPECT_EQ(item1->GetSetSize(), 8);
+  AXNode* item2 = tree.GetFromId(3);
+  EXPECT_EQ(item2->GetPosInSet(), 7);
+  EXPECT_EQ(item2->GetSetSize(), 8);
+  AXNode* item3 = tree.GetFromId(4);
+  EXPECT_EQ(item3->GetPosInSet(), 8);
+  EXPECT_EQ(item3->GetSetSize(), 8);
+}
+
+// Tests that code overwrites duplicate PosInSet values. Note this case is
+// tricky; an update to the second element causes an update to the third
+// element.
+TEST(AXTreeTest, TestPosInSetDuplicates) {
+  AXTreeUpdate tree_update;
+  tree_update.root_id = 1;
+  tree_update.nodes.resize(4);
+  tree_update.nodes[0].id = 1;
+  tree_update.nodes[0].role = ax::mojom::Role::kList;
+  tree_update.nodes[0].child_ids = {2, 3, 4};
+  tree_update.nodes[1].id = 2;
+  tree_update.nodes[1].role = ax::mojom::Role::kListItem;  // 6 of 8
+  tree_update.nodes[1].AddIntAttribute(ax::mojom::IntAttribute::kPosInSet, 6);
+  tree_update.nodes[2].id = 3;
+  tree_update.nodes[2].role = ax::mojom::Role::kListItem;  // 7 of 8
+  tree_update.nodes[2].AddIntAttribute(ax::mojom::IntAttribute::kPosInSet, 6);
+  tree_update.nodes[3].id = 4;
+  tree_update.nodes[3].role = ax::mojom::Role::kListItem;  // 8 of 8
+  tree_update.nodes[3].AddIntAttribute(ax::mojom::IntAttribute::kPosInSet, 7);
+  AXTree tree(tree_update);
+
+  AXNode* item1 = tree.GetFromId(2);
+  EXPECT_EQ(item1->GetPosInSet(), 6);
+  EXPECT_EQ(item1->GetSetSize(), 8);
+  AXNode* item2 = tree.GetFromId(3);
+  EXPECT_EQ(item2->GetPosInSet(), 7);
+  EXPECT_EQ(item2->GetSetSize(), 8);
+  AXNode* item3 = tree.GetFromId(4);
+  EXPECT_EQ(item3->GetPosInSet(), 8);
+  EXPECT_EQ(item3->GetSetSize(), 8);
+}
+
+// Tests PosInSet and SetSize when some list items are nested in a generic
+// container.
+TEST(AXTreeTest, TestSetSizePosInSetNestedContainer) {
+  AXTreeUpdate tree_update;
+  tree_update.root_id = 1;
+  tree_update.nodes.resize(7);
+  tree_update.nodes[0].id = 1;
+  tree_update.nodes[0].role = ax::mojom::Role::kList;
+  tree_update.nodes[0].child_ids = {2, 3, 7};
+  tree_update.nodes[1].id = 2;
+  tree_update.nodes[1].role = ax::mojom::Role::kListItem;  // 1 of 4
+  tree_update.nodes[2].id = 3;
+  tree_update.nodes[2].role = ax::mojom::Role::kGenericContainer;
+  tree_update.nodes[2].child_ids = {4, 5};
+  tree_update.nodes[3].id = 4;
+  tree_update.nodes[3].role = ax::mojom::Role::kListItem;  // 2 of 4
+  tree_update.nodes[4].id = 5;
+  tree_update.nodes[4].role = ax::mojom::Role::kIgnored;
+  tree_update.nodes[4].child_ids = {6};
+  tree_update.nodes[5].id = 6;
+  tree_update.nodes[5].role = ax::mojom::Role::kListItem;  // 3 of 4
+  tree_update.nodes[6].id = 7;
+  tree_update.nodes[6].role = ax::mojom::Role::kListItem;  // 4 of 4
+  AXTree tree(tree_update);
+
+  AXNode* item1 = tree.GetFromId(2);
+  EXPECT_EQ(item1->GetPosInSet(), 1);
+  EXPECT_EQ(item1->GetSetSize(), 4);
+  AXNode* g_container = tree.GetFromId(3);
+  EXPECT_EQ(g_container->GetPosInSet(), 0);
+  EXPECT_EQ(g_container->GetSetSize(), 0);
+  AXNode* item2 = tree.GetFromId(4);
+  EXPECT_EQ(item2->GetPosInSet(), 2);
+  EXPECT_EQ(item2->GetSetSize(), 4);
+  AXNode* ignored = tree.GetFromId(5);
+  EXPECT_EQ(ignored->GetPosInSet(), 0);
+  EXPECT_EQ(ignored->GetSetSize(), 0);
+  AXNode* item3 = tree.GetFromId(6);
+  EXPECT_EQ(item3->GetPosInSet(), 3);
+  EXPECT_EQ(item3->GetSetSize(), 4);
+  AXNode* item4 = tree.GetFromId(7);
+  EXPECT_EQ(item4->GetPosInSet(), 4);
+  EXPECT_EQ(item4->GetSetSize(), 4);
 }
 
 }  // namespace ui

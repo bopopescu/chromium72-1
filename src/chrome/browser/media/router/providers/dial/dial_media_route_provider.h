@@ -20,7 +20,6 @@
 #include "chrome/browser/media/router/providers/dial/dial_activity_manager.h"
 #include "chrome/browser/media/router/providers/dial/dial_internal_message_util.h"
 #include "chrome/common/media_router/mojo/media_router.mojom.h"
-#include "content/public/common/presentation_connection_message.h"
 #include "mojo/public/cpp/bindings/binding.h"
 
 namespace url {
@@ -28,6 +27,8 @@ class Origin;
 }
 
 namespace media_router {
+
+class DataDecoder;
 
 // MediaRouteProvider for DIAL sinks.
 // DialMediaRouteProvider supports custom DIAL launch, which is a
@@ -46,10 +47,18 @@ namespace media_router {
 //    communicate with the app on the device via its own mechanism.
 class DialMediaRouteProvider : public mojom::MediaRouteProvider {
  public:
+  // |request|: Request to bind to |this|.
+  // |media_router|: Pointer to MediaRouter.
+  // |media_sink_service|: DIAL MediaSinkService providing information on sinks.
+  // |connector|: Connector object for accessing data_decoder services.
+  // |hash_token|: A per-profile value used to hash sink IDs.
+  // |task_runner|: The task runner on which |this| runs.
   DialMediaRouteProvider(
       mojom::MediaRouteProviderRequest request,
       mojom::MediaRouterPtrInfo media_router,
       DialMediaSinkServiceImpl* media_sink_service,
+      service_manager::Connector* connector,
+      const std::string& hash_token,
       const scoped_refptr<base::SequencedTaskRunner>& task_runner);
   ~DialMediaRouteProvider() override;
 
@@ -80,11 +89,9 @@ class DialMediaRouteProvider : public mojom::MediaRouteProvider {
   void TerminateRoute(const std::string& route_id,
                       TerminateRouteCallback callback) override;
   void SendRouteMessage(const std::string& media_route_id,
-                        const std::string& message,
-                        SendRouteMessageCallback callback) override;
+                        const std::string& message) override;
   void SendRouteBinaryMessage(const std::string& media_route_id,
-                              const std::vector<uint8_t>& data,
-                              SendRouteBinaryMessageCallback callback) override;
+                              const std::vector<uint8_t>& data) override;
   void StartObservingMediaSinks(const std::string& media_source) override;
   void StopObservingMediaSinks(const std::string& media_source) override;
   void StartObservingMediaRoutes(const std::string& media_source) override;
@@ -141,6 +148,8 @@ class DialMediaRouteProvider : public mojom::MediaRouteProvider {
                              const std::vector<MediaSinkInternal>& sinks,
                              const std::vector<url::Origin>& origins);
 
+  void HandleParsedRouteMessage(const MediaRoute::Id& route_id,
+                                std::unique_ptr<base::Value> message);
   void HandleClientConnect(const DialActivity& activity,
                            const MediaSinkInternal& sink);
   void SendCustomDialLaunchMessage(const MediaRoute::Id& route_id,
@@ -187,6 +196,11 @@ class DialMediaRouteProvider : public mojom::MediaRouteProvider {
 
   std::unique_ptr<DialActivityManager> activity_manager_;
   std::unique_ptr<BufferedMessageSender> message_sender_;
+
+  // Used for parsing Custom DIAL launch JSON messages.
+  std::unique_ptr<DataDecoder> data_decoder_;
+
+  DialInternalMessageUtil internal_message_util_;
 
   SEQUENCE_CHECKER(sequence_checker_);
   base::WeakPtrFactory<DialMediaRouteProvider> weak_ptr_factory_;

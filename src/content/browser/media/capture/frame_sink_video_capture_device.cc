@@ -14,16 +14,21 @@
 #include "base/memory/ref_counted.h"
 #include "base/memory/weak_ptr.h"
 #include "base/numerics/safe_conversions.h"
+#include "base/task/post_task.h"
+#include "base/threading/thread_task_runner_handle.h"
 #include "base/time/time.h"
 #include "components/viz/host/host_frame_sink_manager.h"
 #include "content/browser/compositor/surface_utils.h"
+#include "content/browser/media/capture/mouse_cursor_overlay_controller.h"
+#include "content/public/browser/browser_task_traits.h"
 #include "media/base/bind_to_current_loop.h"
 #include "media/capture/mojom/video_capture_types.mojom.h"
-#include "mojo/public/cpp/system/buffer.h"
 
 namespace content {
 
 namespace {
+
+constexpr int32_t kMouseCursorStackingIndex = 1;
 
 // Transfers ownership of an object to a std::unique_ptr with a custom deleter
 // that ensures the object is destroyed on the UI BrowserThread.
@@ -41,7 +46,7 @@ class ScopedFrameDoneHelper
     : public base::ScopedClosureRunner,
       public media::VideoCaptureDevice::Client::Buffer::ScopedAccessPermission {
  public:
-  ScopedFrameDoneHelper(base::OnceClosure done_callback)
+  explicit ScopedFrameDoneHelper(base::OnceClosure done_callback)
       : base::ScopedClosureRunner(std::move(done_callback)) {}
   ~ScopedFrameDoneHelper() final = default;
 };
@@ -49,10 +54,10 @@ class ScopedFrameDoneHelper
 }  // namespace
 
 FrameSinkVideoCaptureDevice::FrameSinkVideoCaptureDevice()
-    : cursor_renderer_(RescopeToUIThread(CursorRenderer::Create(
-          CursorRenderer::CURSOR_DISPLAYED_ON_MOUSE_MOVEMENT))),
+    : cursor_controller_(
+          RescopeToUIThread(std::make_unique<MouseCursorOverlayController>())),
       weak_factory_(this) {
-  DCHECK(cursor_renderer_);
+  DCHECK(cursor_controller_);
 }
 
 FrameSinkVideoCaptureDevice::~FrameSinkVideoCaptureDevice() {
@@ -70,7 +75,8 @@ void FrameSinkVideoCaptureDevice::AllocateAndStartWithReceiver(
   // If the device has already ended on a fatal error, abort immediately.
   if (fatal_error_message_) {
     receiver->OnLog(*fatal_error_message_);
-    receiver->OnError();
+    receiver->OnError(media::VideoCaptureError::
+                          kFrameSinkVideoCaptureDeviceAleradyEndedOnFatalError);
     return;
   }
 
@@ -78,17 +84,6 @@ void FrameSinkVideoCaptureDevice::AllocateAndStartWithReceiver(
   WillStart();
   DCHECK(!receiver_);
   receiver_ = std::move(receiver);
-
-  // Set a callback that will be run whenever the mouse moves, to trampoline
-  // back to the device thread and request a refresh frame so that the new mouse
-  // cursor location can be drawn in a new video frame.
-  BrowserThread::PostTask(
-      BrowserThread::UI, FROM_HERE,
-      base::BindOnce(&CursorRenderer::SetNeedsRedrawCallback,
-                     cursor_renderer_->GetWeakPtr(),
-                     media::BindToCurrentLoop(base::BindRepeating(
-                         &FrameSinkVideoCaptureDevice::RequestRefreshFrame,
-                         weak_factory_.GetWeakPtr()))));
 
   // Shutdown the prior capturer, if any.
   MaybeStopConsuming();
@@ -98,7 +93,7 @@ void FrameSinkVideoCaptureDevice::AllocateAndStartWithReceiver(
                           base::Unretained(this)));
 
   capturer_->SetFormat(capture_params_.requested_format.pixel_format,
-                       media::COLOR_SPACE_UNSPECIFIED);
+                       gfx::ColorSpace::CreateREC709());
   capturer_->SetMinCapturePeriod(
       base::TimeDelta::FromMicroseconds(base::saturated_cast<int64_t>(
           base::Time::kMicrosecondsPerSecond /
@@ -111,6 +106,13 @@ void FrameSinkVideoCaptureDevice::AllocateAndStartWithReceiver(
   if (target_.is_valid()) {
     capturer_->ChangeTarget(target_);
   }
+
+  base::PostTaskWithTraits(
+      FROM_HERE, {BrowserThread::UI},
+      base::BindOnce(&MouseCursorOverlayController::Start,
+                     cursor_controller_->GetWeakPtr(),
+                     capturer_->CreateOverlay(kMouseCursorStackingIndex),
+                     base::ThreadTaskRunnerHandle::Get()));
 
   receiver_->OnStarted();
 
@@ -153,11 +155,9 @@ void FrameSinkVideoCaptureDevice::Resume() {
 void FrameSinkVideoCaptureDevice::StopAndDeAllocate() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
-  // Discontinue requesting extra video frames to render mouse cursor changes.
-  BrowserThread::PostTask(
-      BrowserThread::UI, FROM_HERE,
-      base::BindOnce(&CursorRenderer::SetNeedsRedrawCallback,
-                     cursor_renderer_->GetWeakPtr(), base::RepeatingClosure()));
+  base::PostTaskWithTraits(FROM_HERE, {BrowserThread::UI},
+                           base::BindOnce(&MouseCursorOverlayController::Stop,
+                                          cursor_controller_->GetWeakPtr()));
 
   MaybeStopConsuming();
   capturer_.reset();
@@ -171,17 +171,16 @@ void FrameSinkVideoCaptureDevice::OnUtilizationReport(int frame_feedback_id,
                                                       double utilization) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
-  // Assumption: The "slot" should be valid at this point because this method
-  // will always be called before the VideoFrameReceiver signals it is done
-  // consuming the frame.
-  const auto slot_index = static_cast<size_t>(frame_feedback_id);
-  DCHECK_LT(slot_index, slots_.size());
-  slots_[slot_index].callbacks->ProvideFeedback(utilization);
+  // Assumption: The mojo InterfacePtr in |frame_callbacks_| should be valid at
+  // this point because this method will always be called before the
+  // VideoFrameReceiver signals it is done consuming the frame.
+  const auto index = static_cast<size_t>(frame_feedback_id);
+  DCHECK_LT(index, frame_callbacks_.size());
+  frame_callbacks_[index]->ProvideFeedback(utilization);
 }
 
 void FrameSinkVideoCaptureDevice::OnFrameCaptured(
-    mojo::ScopedSharedBufferHandle buffer,
-    uint32_t buffer_size,
+    base::ReadOnlySharedMemoryRegion data,
     media::mojom::VideoFrameInfoPtr info,
     const gfx::Rect& update_rect,
     const gfx::Rect& content_rect,
@@ -189,79 +188,51 @@ void FrameSinkVideoCaptureDevice::OnFrameCaptured(
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   DCHECK(callbacks);
 
-  if (!receiver_ || !buffer.is_valid()) {
+  if (!receiver_ || !data.IsValid()) {
     callbacks->Done();
     return;
   }
 
-  // Search for the next available ConsumptionState slot and bind |callbacks|
-  // there.
-  size_t slot_index = 0;
-  for (;; ++slot_index) {
-    if (slot_index == slots_.size()) {
-      // The growth of |slots_| should be bounded because the
+  // Search for the next available element in |frame_callbacks_| and bind
+  // |callbacks| there.
+  size_t index = 0;
+  for (;; ++index) {
+    if (index == frame_callbacks_.size()) {
+      // The growth of |frame_callbacks_| should be bounded because the
       // viz::mojom::FrameSinkVideoCapturer should enforce an upper-bound on the
       // number of frames in-flight.
       constexpr size_t kMaxInFlightFrames = 32;  // Arbitrarily-chosen limit.
-      DCHECK_LT(slots_.size(), kMaxInFlightFrames);
-      slots_.emplace_back();
+      DCHECK_LT(frame_callbacks_.size(), kMaxInFlightFrames);
+      frame_callbacks_.emplace_back(std::move(callbacks));
       break;
     }
-    if (!slots_[slot_index].callbacks.is_bound()) {
+    if (!frame_callbacks_[index].is_bound()) {
+      frame_callbacks_[index] = std::move(callbacks);
       break;
     }
   }
-  ConsumptionState& slot = slots_[slot_index];
-  slot.callbacks = std::move(callbacks);
-
-  // Render the mouse cursor on the video frame, but first map the shared memory
-  // into the current process in order to render the cursor.
-  mojo::ScopedSharedBufferMapping mapping = buffer->Map(buffer_size);
-  scoped_refptr<media::VideoFrame> frame;
-  if (mapping) {
-    frame = media::VideoFrame::WrapExternalData(
-        info->pixel_format, info->coded_size, info->visible_rect,
-        info->visible_rect.size(), static_cast<uint8_t*>(mapping.get()),
-        buffer_size, info->timestamp);
-    if (frame) {
-      frame->AddDestructionObserver(base::BindOnce(
-          [](mojo::ScopedSharedBufferMapping mapping) {}, std::move(mapping)));
-      if (!cursor_renderer_->RenderOnVideoFrame(frame.get(), content_rect,
-                                                &slot.undoer)) {
-        // Release |frame| now, since no "undo cursor rendering" will be needed.
-        frame = nullptr;
-      }
-    }
-  }
+  const BufferId buffer_id = static_cast<BufferId>(index);
 
   // Set the INTERACTIVE_CONTENT frame metadata.
   media::VideoFrameMetadata modified_metadata;
   modified_metadata.MergeInternalValuesFrom(info->metadata);
   modified_metadata.SetBoolean(media::VideoFrameMetadata::INTERACTIVE_CONTENT,
-                               cursor_renderer_->IsUserInteractingWithView());
+                               cursor_controller_->IsUserInteractingWithView());
   info->metadata = modified_metadata.GetInternalValues().Clone();
 
   // Pass the video frame to the VideoFrameReceiver. This is done by first
   // passing the shared memory buffer handle and then notifying it that a new
   // frame is ready to be read from the buffer.
-  media::mojom::VideoBufferHandlePtr buffer_handle =
-      media::mojom::VideoBufferHandle::New();
-  buffer_handle->set_shared_buffer_handle(std::move(buffer));
-  receiver_->OnNewBuffer(static_cast<BufferId>(slot_index),
-                         std::move(buffer_handle));
+  receiver_->OnNewBuffer(
+      buffer_id,
+      media::mojom::VideoBufferHandle::NewReadOnlyShmemRegion(std::move(data)));
   receiver_->OnFrameReadyInBuffer(
-      static_cast<BufferId>(slot_index), slot_index,
+      buffer_id, buffer_id,
       std::make_unique<ScopedFrameDoneHelper>(
           media::BindToCurrentLoop(base::BindOnce(
               &FrameSinkVideoCaptureDevice::OnFramePropagationComplete,
-              weak_factory_.GetWeakPtr(), slot_index, std::move(frame)))),
+              weak_factory_.GetWeakPtr(), buffer_id))),
       std::move(info));
-}
-
-void FrameSinkVideoCaptureDevice::OnTargetLost(
-    const viz::FrameSinkId& frame_sink_id) {
-  // This is ignored because FrameSinkVideoCaptureDevice subclasses always call
-  // OnTargetChanged() and OnTargetPermanentlyLost() to resolve lost targets.
 }
 
 void FrameSinkVideoCaptureDevice::OnStopped() {
@@ -279,19 +250,19 @@ void FrameSinkVideoCaptureDevice::OnTargetChanged(
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
   target_ = frame_sink_id;
-  // TODO(crbug.com/754872): When the frame sink is invalid, the capturer should
-  // be told there is no target. This will require a mojo API change; and will
-  // be addressed in a soon-upcoming CL.
-  if (capturer_ && frame_sink_id.is_valid()) {
-    capturer_->ChangeTarget(frame_sink_id);
+  if (capturer_) {
+    if (target_.is_valid()) {
+      capturer_->ChangeTarget(target_);
+    } else {
+      capturer_->ChangeTarget(base::nullopt);
+    }
   }
 }
 
 void FrameSinkVideoCaptureDevice::OnTargetPermanentlyLost() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
-  target_ = viz::FrameSinkId();
-
+  OnTargetChanged(viz::FrameSinkId());
   OnFatalError("Capture target has been permanently lost.");
 }
 
@@ -309,8 +280,8 @@ void FrameSinkVideoCaptureDevice::CreateCapturerViaGlobalManager(
     viz::mojom::FrameSinkVideoCapturerRequest request) {
   // Send the request to UI thread because that's where HostFrameSinkManager
   // lives.
-  BrowserThread::PostTask(
-      BrowserThread::UI, FROM_HERE,
+  base::PostTaskWithTraits(
+      FROM_HERE, {BrowserThread::UI},
       base::BindOnce(
           [](viz::mojom::FrameSinkVideoCapturerRequest request) {
             viz::HostFrameSinkManager* const manager =
@@ -339,26 +310,20 @@ void FrameSinkVideoCaptureDevice::MaybeStopConsuming() {
 }
 
 void FrameSinkVideoCaptureDevice::OnFramePropagationComplete(
-    size_t slot_index,
-    scoped_refptr<media::VideoFrame> frame) {
+    BufferId buffer_id) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  DCHECK_LT(slot_index, slots_.size());
 
   // Notify the VideoFrameReceiver that the buffer is no longer valid.
   if (receiver_) {
-    receiver_->OnBufferRetired(static_cast<BufferId>(slot_index));
-  }
-
-  // Undo the mouse cursor rendering, if any.
-  ConsumptionState& slot = slots_[slot_index];
-  if (frame) {
-    slot.undoer.Undo(frame.get());
-    frame = nullptr;
+    receiver_->OnBufferRetired(buffer_id);
   }
 
   // Notify the capturer that consumption of the frame is complete.
-  slot.callbacks->Done();
-  slot.callbacks.reset();
+  const size_t index = static_cast<size_t>(buffer_id);
+  DCHECK_LT(index, frame_callbacks_.size());
+  auto& callbacks_ptr = frame_callbacks_[index];
+  callbacks_ptr->Done();
+  callbacks_ptr.reset();
 }
 
 void FrameSinkVideoCaptureDevice::OnFatalError(std::string message) {
@@ -367,18 +332,11 @@ void FrameSinkVideoCaptureDevice::OnFatalError(std::string message) {
   fatal_error_message_ = std::move(message);
   if (receiver_) {
     receiver_->OnLog(*fatal_error_message_);
-    receiver_->OnError();
+    receiver_->OnError(media::VideoCaptureError::
+                           kFrameSinkVideoCaptureDeviceEncounteredFatalError);
   }
 
   StopAndDeAllocate();
 }
-
-FrameSinkVideoCaptureDevice::ConsumptionState::ConsumptionState() = default;
-FrameSinkVideoCaptureDevice::ConsumptionState::~ConsumptionState() = default;
-FrameSinkVideoCaptureDevice::ConsumptionState::ConsumptionState(
-    FrameSinkVideoCaptureDevice::ConsumptionState&& other) = default;
-FrameSinkVideoCaptureDevice::ConsumptionState&
-FrameSinkVideoCaptureDevice::ConsumptionState::operator=(
-    FrameSinkVideoCaptureDevice::ConsumptionState&& other) = default;
 
 }  // namespace content

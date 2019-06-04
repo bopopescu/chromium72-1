@@ -126,6 +126,7 @@ def run_benchmark(args, rest_args, histogram_results):
     cmd_args = cmd_args + [
       '--story-filter=' + filter_regex
     ]
+  rc = 1  # Set default returncode in case there is an exception.
   try:
     cmd = [sys.executable] + cmd_args + [
       '--output-dir', tempfile_dir,
@@ -167,7 +168,10 @@ def run_benchmark(args, rest_args, histogram_results):
           results, indent=2)
     valid = False
   finally:
-    shutil.rmtree(tempfile_dir)
+    # Add ignore_errors=True because otherwise rmtree may fail due to leaky
+    # processes of tests are still holding opened handles to files under
+    # |tempfile_dir|. For example, see crbug.com/865896
+    shutil.rmtree(tempfile_dir, ignore_errors=True)
 
   if not valid and num_failures == 0:
     if rc == 0:

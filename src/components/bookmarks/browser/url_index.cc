@@ -14,8 +14,6 @@ UrlIndex::UrlIndex(std::unique_ptr<BookmarkNode> root)
   AddImpl(root_.get());
 }
 
-UrlIndex::~UrlIndex() = default;
-
 void UrlIndex::Add(BookmarkNode* parent,
                    int index,
                    std::unique_ptr<BookmarkNode> node) {
@@ -73,9 +71,14 @@ void UrlIndex::GetNodesByUrl(const GURL& url,
   }
 }
 
-bool UrlIndex::HasBookmarks() {
+bool UrlIndex::HasBookmarks() const {
   base::AutoLock url_lock(url_lock_);
   return !nodes_ordered_by_url_set_.empty();
+}
+
+size_t UrlIndex::UrlCount() const {
+  base::AutoLock url_lock(url_lock_);
+  return nodes_ordered_by_url_set_.size();
 }
 
 bool UrlIndex::IsBookmarked(const GURL& url) {
@@ -99,6 +102,8 @@ void UrlIndex::GetBookmarks(std::vector<UrlAndTitle>* bookmarks) {
     last_url = url;
   }
 }
+
+UrlIndex::~UrlIndex() = default;
 
 bool UrlIndex::IsBookmarkedNoLock(const GURL& url) {
   url_lock_.AssertAcquired();

@@ -11,7 +11,6 @@
 #include "base/callback.h"
 #include "base/threading/thread_task_runner_handle.h"
 #include "base/time/time.h"
-#include "chrome/browser/chromeos/login/ui/login_display_host.h"
 #include "chrome/browser/extensions/component_loader.h"
 #include "chrome/browser/extensions/extension_service.h"
 #include "chrome/browser/profiles/profile.h"
@@ -28,19 +27,21 @@
 #include "extensions/browser/extension_system.h"
 #include "extensions/common/constants.h"
 #include "extensions/common/extension.h"
-#include "ui/aura/window.h"
-#include "ui/views/widget/widget.h"
-#include "ui/wm/core/window_util.h"
 
 namespace chromeos {
 
 namespace {
 
+// Temporarily disable Feedback in the login screen until we're able to delete
+// the signin profile once logged in. See https://crbug.com/899092.
+bool g_login_feedback_enabled = false;
+
 extensions::ComponentLoader* GetComponentLoader(
     content::BrowserContext* context) {
   extensions::ExtensionSystem* extension_system =
       extensions::ExtensionSystem::Get(context);
-  ExtensionService* extension_service = extension_system->extension_service();
+  extensions::ExtensionService* extension_service =
+      extension_system->extension_service();
   return extension_service->component_loader();
 }
 
@@ -129,7 +130,6 @@ class LoginFeedback::FeedbackWindowHandler
   bool HasFeedbackAppWindow() const;
 
   // extensions::AppWindowRegistry::Observer
-  void OnAppWindowAdded(extensions::AppWindow* app_window) override;
   void OnAppWindowRemoved(extensions::AppWindow* app_window) override;
 
  private:
@@ -156,20 +156,6 @@ bool LoginFeedback::FeedbackWindowHandler::HasFeedbackAppWindow() const {
               .empty();
 }
 
-void LoginFeedback::FeedbackWindowHandler::OnAppWindowAdded(
-    extensions::AppWindow* app_window) {
-  if (app_window->extension_id() != extension_misc::kFeedbackExtensionId)
-    return;
-
-  // Move the feedback window to the same container as the login screen and make
-  // it a transient child of the login screen.
-  views::Widget::ReparentNativeView(
-      app_window->GetNativeWindow(),
-      LoginDisplayHost::default_host()->GetNativeWindow()->parent());
-  wm::AddTransientChild(LoginDisplayHost::default_host()->GetNativeWindow(),
-                        app_window->GetNativeWindow());
-}
-
 void LoginFeedback::FeedbackWindowHandler::OnAppWindowRemoved(
     extensions::AppWindow* app_window) {
   if (app_window->extension_id() != extension_misc::kFeedbackExtensionId)
@@ -186,6 +172,16 @@ LoginFeedback::LoginFeedback(Profile* signin_profile)
     : profile_(signin_profile), weak_factory_(this) {}
 
 LoginFeedback::~LoginFeedback() {}
+
+// static
+bool LoginFeedback::IsEnabled() {
+  return g_login_feedback_enabled;
+}
+
+// static
+void LoginFeedback::EnableForTesting() {
+  g_login_feedback_enabled = true;
+}
 
 void LoginFeedback::Request(const std::string& description,
                             base::OnceClosure finished_callback) {

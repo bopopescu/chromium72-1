@@ -381,9 +381,7 @@ body.check-select #search-button > .icon {
 }
 
 body.check-select #share-menu-button > .icon {
-  background-image: -webkit-image-set(
-      url(../images/files/ui/share.png) 1x,
-      url(../images/files/ui/2x/share.png) 2x);
+  background-image: url(../images/files/ui/share.svg);
 }
 
 #delete-button > .icon {
@@ -393,9 +391,7 @@ body.check-select #share-menu-button > .icon {
 }
 
 body.check-select #delete-button > .icon {
-  background-image: -webkit-image-set(
-      url(../images/files/ui/delete.png) 1x,
-      url(../images/files/ui/2x/delete.png) 2x);
+  background-image: url(../images/files/ui/delete.svg);
 }
 
 #view-button > .icon {
@@ -445,19 +441,11 @@ body.check-select #gear-button {
 }
 
 #selection-menu-button > .icon {
-  background-image: -webkit-image-set(
-      url(../images/files/ui/menu.png) 1x,
-      url(../images/files/ui/2x/menu.png) 2x);
+  background-image: url(../images/files/ui/menu.svg);
 }
 
 body:not(.check-select) #selection-menu-button {
   display: none;
-}
-
-.cloud-import-combo-button {
-  height: 32px;
-  margin: 8px;
-  position: relative;
 }
 
 .cloud-import-combo-button > .buttons {
@@ -661,31 +649,13 @@ body.check-select #search-box {
   display: none;
 }
 
-#search-box input {
-  display: inline-block;
-  transition: width 200ms ease;
-  width: 0;
-}
-
-#search-box input::-webkit-search-cancel-button {
-  -webkit-appearance: none;
-}
-
-#search-box paper-input-container {
-  margin-top: -4px;
-}
-
-#search-box paper-input-container input::-webkit-input-placeholder {
-  color: rgba(255, 255, 255, 0.5);
-}
-
 #search-box.has-cursor,
 #search-box.has-text {
   -webkit-margin-end: 12px;
 }
 
-#search-box.has-cursor input,
-#search-box.has-text input {
+#search-box.has-cursor cr-input,
+#search-box.has-text cr-input {
   width: 202px;
 }
 
@@ -698,9 +668,8 @@ body.check-select #search-box {
   display: none;
   height: 16px;
   margin: 0;
-  position: relative;
+  position: absolute;
   right: 0;
-  top: 2px;
   visibility: hidden;
   width: 16px;
 }
@@ -828,18 +797,8 @@ html[dir='rtl'] #search-box .clear {
   color: rgb(51, 103, 214);
 }
 
-.dialog-footer input {
-  margin: 3px 0 !important;
-}
-
 .dialog-footer select {
   min-height: 21px;
-}
-
-.dialog-footer paper-input-container {
-  color: rgb(51, 51, 51);
-  padding: 4px 0;
-  width: 100%;
 }
 
 .dialog-footer select {
@@ -1713,7 +1672,7 @@ body:not([type='saveas-file']) #filename-input-box {
 
 body[type='folder'] .file,
 body[type='upload-folder'] .file,
-body[drive] .dialog-container[connection='offline'] .dim-offline {
+.dialog-container[connection='offline'] .dim-offline {
   opacity: 0.4;
 }
 
@@ -1922,6 +1881,43 @@ body[drive='error'] #unmounted-panel > .error,
   width: auto;
 }
 
+#install-linux-package-dialog {
+  min-width: 300px;
+  width: 40%;
+}
+
+#install-linux-package-dialog .cr-dialog-text {
+  min-height: 30px;
+}
+
+.install-linux-package-details-frame {
+  border: 1px solid lightgray;
+  display: block;
+  height: 150px;
+  overflow: scroll;
+  padding: 8px 10px;
+  user-select: text;
+}
+
+.install-linux-package-details-label {
+  color: #5a5a5a;
+  font-weight: 500;
+  margin-bottom: 10px;
+}
+
+.install-linux-package-detail-label {
+  color: #5a5a5a;
+  display: inline;
+  font-weight: 500;
+  margin-inline-end: 5px;
+}
+
+.install-linux-package-detail-value {
+  display: inline;
+  margin-bottom: 5px;
+  white-space: pre-wrap;
+}
+
 .drive-welcome-wrapper {
   /* drive_welcome.css will override it once loaded. */
   display: none;
@@ -2084,7 +2080,6 @@ list.autocomplete-suggestions > [lead] {
 #progress-center {
   background-color: transparent;
   border-top: 1px solid rgb(214, 214, 214);
-  overflow: hidden;
   position: relative;
   transition: background-color 300ms linear,
               border 300ms linear;
@@ -2095,7 +2090,9 @@ list.autocomplete-suggestions > [lead] {
 }
 
 #progress-center-open-view {
+  max-height: 40vh;
   opacity: 1;
+  overflow-y: auto;
   padding-top: 10px;
   transition: opacity 300ms linear;
 }
@@ -2152,6 +2149,7 @@ list.autocomplete-suggestions > [lead] {
   -webkit-padding-end: 12px;
   -webkit-padding-start: 16px;
   flex: 1 0 0;
+  overflow: hidden;
 }
 
 #progress-center .progress-bar {
@@ -2180,7 +2178,7 @@ list.autocomplete-suggestions > [lead] {
 }
 
 #progress-center .button-frame {
-  align-self: flex-end;
+  align-self: flex-start;
   flex: none;
 }
 
@@ -2254,16 +2252,7 @@ li#progress-center-close-view.error.single button.dismiss,
 
 #progress-center-close-view.quiet button.cancel,
 #progress-center li:not(.cancelable) button.cancel {
-  visibility: hidden;
-}
-
-#cloud-import-banner {
-  background: rgb(33, 150, 243);
-  color: white;
-  display: flex;
-  flex: 0 0 14px;
-  font-size: 14px;
-  padding: 20px 15px;
+  display: none;
 }
 
 .text-measure {
@@ -2286,8 +2275,13 @@ files-toggle-ripple {
   z-index: 505; /* Must be above the scroll bar (500). */
 }
 
-/* Preventing FOUC */
-paper-input-container:unresolved {
+/*
+ * Preventing FOUC
+ * TODO(dpapad): Remove :unresolved when Polymer 2 migration is complete,
+ * (crbug.com/738611).
+ */
+cr-input:unresolved,
+cr-input:not(:defined) {
   display: none;
 }
 
@@ -2302,4 +2296,9 @@ paper-input-container:unresolved {
   padding: 0 8px;
   position: absolute;
   z-index: 1000;  /* same height as files-tooltip */
+}
+
+files-toast {
+  /* Must be above the splitter (500) but below menu-like UI (550). */
+  z-index: 520;
 }

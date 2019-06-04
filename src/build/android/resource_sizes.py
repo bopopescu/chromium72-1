@@ -8,12 +8,15 @@
 More information at //docs/speed/binary_size/metrics.md.
 """
 
+from __future__ import print_function
+
 import argparse
 import collections
 from contextlib import contextmanager
 import json
 import logging
 import os
+import posixpath
 import re
 import struct
 import sys
@@ -37,6 +40,9 @@ _APK_PATCH_SIZE_ESTIMATOR_PATH = os.path.join(
 
 with host_paths.SysPath(host_paths.BUILD_COMMON_PATH):
   import perf_tests_results_helper # pylint: disable=import-error
+
+with host_paths.SysPath(host_paths.TRACING_PATH):
+  from tracing.value import convert_chart_json # pylint: disable=import-error
 
 with host_paths.SysPath(_BUILD_UTILS_PATH, 0):
   from util import build_utils # pylint: disable=import-error
@@ -99,9 +105,9 @@ _BASE_CHART = {
 }
 _DUMP_STATIC_INITIALIZERS_PATH = os.path.join(
     host_paths.DIR_SOURCE_ROOT, 'tools', 'linux', 'dump-static-initializers.py')
-# Pragma exists when enable_resource_whitelist_generation=true.
-_RC_HEADER_RE = re.compile(
-    r'^#define (?P<name>\w+) (?:_Pragma\(.*?\) )?(?P<id>\d+)$')
+# Macro definitions look like (something, 123) when
+# enable_resource_whitelist_generation=true.
+_RC_HEADER_RE = re.compile(r'^#define (?P<name>\w+).* (?P<id>\d+)\)?$')
 _RE_NON_LANGUAGE_PAK = re.compile(r'^assets/.*(resources|percent)\.pak$')
 _RE_COMPRESSED_LANGUAGE_PAK = re.compile(
     r'\.lpak$|^assets/(?!stored-locales/).*(?!resources|percent)\.pak$')
@@ -138,7 +144,7 @@ def _ExtractMainLibSectionSizesFromApk(apk_path, main_lib_path, tool_prefix):
 
     # Group any unknown section headers into the "other" group.
     for section_header, section_size in section_sizes.iteritems():
-      print "Unknown elf section header:", section_header
+      print('Unknown elf section header: %s' % section_header)
       grouped_section_sizes['other'] += section_size
 
     return grouped_section_sizes
@@ -174,23 +180,8 @@ def _ParseManifestAttributes(apk_path):
   # Dex decompression overhead varies by Android version.
   m = re.search(r'android:minSdkVersion\(\w+\)=\(type \w+\)(\w+)\n', output)
   sdk_version = int(m.group(1), 16)
-  # Pre-L: Dalvik - .odex file is simply decompressed/optimized dex file (~1x).
-  # L, M: ART - .odex file is compiled version of the dex file (~4x).
-  # N: ART - Uses Dalvik-like JIT for normal apps (~1x), full compilation for
-  #    shared apps (~4x).
-  # Actual multipliers calculated using "apk_operations.py disk-usage".
-  # Will need to update multipliers once apk obfuscation is enabled.
-  # E.g. with obfuscation, the 4.04 changes to 4.46.
-  if sdk_version < 21:
-    dex_multiplier = 1.16
-  elif sdk_version < 24:
-    dex_multiplier = 4.04
-  elif 'Monochrome' in apk_path or 'WebView' in apk_path:
-    dex_multiplier = 4.04  # compilation_filter=speed
-  else:
-    dex_multiplier = 1.17  # compilation_filter=speed-profile
 
-  return dex_multiplier, skip_extract_lib
+  return sdk_version, skip_extract_lib
 
 
 def CountStaticInitializers(so_path, tool_prefix):
@@ -252,7 +243,7 @@ def _NormalizeResourcesArsc(apk_path, num_arsc_files, num_translations,
   # If there are multiple .arsc files, use the resource packaged APK instead.
   if num_arsc_files > 1:
     if not out_dir:
-      print 'Skipping resources.arsc normalization (output directory required)'
+      print('Skipping resources.arsc normalization (output directory required)')
       return 0
     ap_name = os.path.basename(apk_path).replace('.apk', '.intermediate.ap_')
     ap_path = os.path.join(out_dir, 'gen/arsc/apks', ap_name)
@@ -342,7 +333,8 @@ class _FileGroup(object):
     return self.ComputeExtractedSize() + self.ComputeZippedSize()
 
 
-def PrintApkAnalysis(apk_filename, tool_prefix, out_dir, chartjson=None):
+def GenerateApkAnalysis(apk_filename, tool_prefix, out_dir,
+                        unknown_handler=None):
   """Analyse APK to determine size contributions of different file classes."""
   file_groups = []
 
@@ -372,15 +364,39 @@ def PrintApkAnalysis(apk_filename, tool_prefix, out_dir, chartjson=None):
   finally:
     apk.close()
 
-  dex_multiplier, skip_extract_lib = _ParseManifestAttributes(apk_filename)
+  sdk_version, skip_extract_lib = _ParseManifestAttributes(apk_filename)
+
+  # Pre-L: Dalvik - .odex file is simply decompressed/optimized dex file (~1x).
+  # L, M: ART - .odex file is compiled version of the dex file (~4x).
+  # N: ART - Uses Dalvik-like JIT for normal apps (~1x), full compilation for
+  #    shared apps (~4x).
+  # Actual multipliers calculated using "apk_operations.py disk-usage".
+  # Will need to update multipliers once apk obfuscation is enabled.
+  # E.g. with obfuscation, the 4.04 changes to 4.46.
+  speed_profile_dex_multiplier = 1.17
+  is_shared_apk = sdk_version >= 24 and (
+      'Monochrome' in apk_filename or 'WebView' in apk_filename)
+  if sdk_version < 21:
+    # JellyBean & KitKat
+    dex_multiplier = 1.16
+  elif sdk_version < 24:
+    # Lollipop & Marshmallow
+    dex_multiplier = 4.04
+  elif is_shared_apk:
+    # Oreo and above, compilation_filter=speed
+    dex_multiplier = 4.04
+  else:
+    # Oreo and above, compilation_filter=speed-profile
+    dex_multiplier = speed_profile_dex_multiplier
+
   total_apk_size = os.path.getsize(apk_filename)
-  apk_basename = os.path.basename(apk_filename)
   for member in apk_contents:
     filename = member.filename
     if filename.endswith('/'):
       continue
     if filename.endswith('.so'):
-      should_extract_lib = not (skip_extract_lib or 'crazy' in filename)
+      basename = posixpath.basename(filename)
+      should_extract_lib = not skip_extract_lib and basename.startswith('lib')
       native_code.AddZipInfo(
           member, extracted_multiplier=int(should_extract_lib))
     elif filename.endswith('.dex'):
@@ -413,79 +429,68 @@ def PrintApkAnalysis(apk_filename, tool_prefix, out_dir, chartjson=None):
       unknown.AddZipInfo(member)
 
   total_install_size = total_apk_size
+  total_install_size_android_go = total_apk_size
   zip_overhead = total_apk_size
 
   for group in file_groups:
     actual_size = group.ComputeZippedSize()
     install_size = group.ComputeInstallSize()
     uncompressed_size = group.ComputeUncompressedSize()
-
-    total_install_size += group.ComputeExtractedSize()
+    extracted_size = group.ComputeExtractedSize()
+    total_install_size += extracted_size
     zip_overhead -= actual_size
 
-    perf_tests_results_helper.ReportPerfResult(chartjson,
-                     apk_basename + '_Breakdown', group.name + ' size',
-                     actual_size, 'bytes')
-    perf_tests_results_helper.ReportPerfResult(chartjson,
-                     apk_basename + '_InstallBreakdown',
-                     group.name + ' size', install_size, 'bytes')
+    yield ('Breakdown', group.name + ' size', actual_size, 'bytes')
+    yield ('InstallBreakdown', group.name + ' size', int(install_size), 'bytes')
     # Only a few metrics are compressed in the first place.
     # To avoid over-reporting, track uncompressed size only for compressed
     # entries.
     if uncompressed_size != actual_size:
-      perf_tests_results_helper.ReportPerfResult(chartjson,
-                       apk_basename + '_Uncompressed',
-                       group.name + ' size', uncompressed_size,
-                       'bytes')
+      yield ('Uncompressed', group.name + ' size', uncompressed_size, 'bytes')
+
+    if group is java_code and is_shared_apk:
+      # Updates are compiled using quicken, but system image uses speed-profile.
+      extracted_size = uncompressed_size * speed_profile_dex_multiplier
+      total_install_size_android_go += extracted_size
+      yield ('InstallBreakdownGo', group.name + ' size',
+             actual_size + extracted_size, 'bytes')
+    else:
+      total_install_size_android_go += extracted_size
 
   # Per-file zip overhead is caused by:
   # * 30 byte entry header + len(file name)
   # * 46 byte central directory entry + len(file name)
   # * 0-3 bytes for zipalign.
-  perf_tests_results_helper.ReportPerfResult(chartjson,
-                   apk_basename + '_Breakdown', 'Zip Overhead',
-                   zip_overhead, 'bytes')
-  perf_tests_results_helper.ReportPerfResult(chartjson,
-                   apk_basename + '_InstallSize', 'APK size',
-                   total_apk_size, 'bytes')
-  perf_tests_results_helper.ReportPerfResult(chartjson,
-                   apk_basename + '_InstallSize',
-                   'Estimated installed size', total_install_size, 'bytes')
+  yield ('Breakdown', 'Zip Overhead', zip_overhead, 'bytes')
+  yield ('InstallSize', 'APK size', total_apk_size, 'bytes')
+  yield ('InstallSize', 'Estimated installed size', int(total_install_size),
+         'bytes')
+  if is_shared_apk:
+    yield ('InstallSize', 'Estimated installed size (Android Go)',
+           int(total_install_size_android_go), 'bytes')
   transfer_size = _CalculateCompressedSize(apk_filename)
-  perf_tests_results_helper.ReportPerfResult(chartjson,
-                   apk_basename + '_TransferSize',
-                   'Transfer size (deflate)', transfer_size, 'bytes')
+  yield ('TransferSize', 'Transfer size (deflate)', transfer_size, 'bytes')
 
   # Size of main dex vs remaining.
   main_dex_info = java_code.FindByPattern('classes.dex')
   if main_dex_info:
     main_dex_size = main_dex_info.file_size
-    perf_tests_results_helper.ReportPerfResult(chartjson,
-                     apk_basename + '_Specifics',
-                     'main dex size', main_dex_size, 'bytes')
+    yield ('Specifics', 'main dex size', main_dex_size, 'bytes')
     secondary_size = java_code.ComputeUncompressedSize() - main_dex_size
-    perf_tests_results_helper.ReportPerfResult(chartjson,
-                     apk_basename + '_Specifics',
-                     'secondary dex size', secondary_size, 'bytes')
+    yield ('Specifics', 'secondary dex size', secondary_size, 'bytes')
 
   # Size of main .so vs remaining.
   main_lib_info = native_code.FindLargest()
   if main_lib_info:
     main_lib_size = main_lib_info.file_size
-    perf_tests_results_helper.ReportPerfResult(chartjson,
-                     apk_basename + '_Specifics',
-                     'main lib size', main_lib_size, 'bytes')
+    yield ('Specifics', 'main lib size', main_lib_size, 'bytes')
     secondary_size = native_code.ComputeUncompressedSize() - main_lib_size
-    perf_tests_results_helper.ReportPerfResult(chartjson,
-                     apk_basename + '_Specifics',
-                     'other lib size', secondary_size, 'bytes')
+    yield ('Specifics', 'other lib size', secondary_size, 'bytes')
 
     main_lib_section_sizes = _ExtractMainLibSectionSizesFromApk(
         apk_filename, main_lib_info.filename, tool_prefix)
     for metric_name, size in main_lib_section_sizes.iteritems():
-      perf_tests_results_helper.ReportPerfResult(chartjson,
-                       apk_basename + '_MainLibInfo',
-                       metric_name, size, 'bytes')
+      yield ('MainLibInfo', metric_name, size, 'bytes')
 
   # Main metric that we want to monitor for jumps.
   normalized_apk_size = total_apk_size
@@ -494,8 +499,8 @@ def PrintApkAnalysis(apk_filename, tool_prefix, out_dir, chartjson=None):
   # Always look at uncompressed .so.
   normalized_apk_size -= native_code.ComputeZippedSize()
   normalized_apk_size += native_code.ComputeUncompressedSize()
-  # TODO(agrieve): Once we have better tooling (which can tell you where dex
-  #     size came from), change this to "ComputeExtractedSize()".
+  # Normalized dex size: size within the zip + size on disk for Android Go
+  # devices (which ~= uncompressed dex size).
   normalized_apk_size += java_code.ComputeUncompressedSize()
   # Avoid noise caused when strings change and translations haven't yet been
   # updated.
@@ -522,21 +527,36 @@ def PrintApkAnalysis(apk_filename, tool_prefix, out_dir, chartjson=None):
     normalized_apk_size += int(_NormalizeResourcesArsc(
         apk_filename, arsc.GetNumEntries(), num_arsc_translations, out_dir))
 
-  perf_tests_results_helper.ReportPerfResult(chartjson,
-                   apk_basename + '_Specifics',
-                   'normalized apk size', normalized_apk_size, 'bytes')
+  yield ('Specifics', 'normalized apk size', normalized_apk_size, 'bytes')
+  # The "file count" metric cannot be grouped with any other metrics when the
+  # end result is going to be uploaded to the perf dashboard in the HistogramSet
+  # format due to mixed units (bytes vs. zip entries) causing malformed
+  # summaries to be generated.
+  # TODO(https://crbug.com/903970): Remove this workaround if unit mixing is
+  # ever supported.
+  yield ('FileCount', 'file count', len(apk_contents), 'zip entries')
 
-  perf_tests_results_helper.ReportPerfResult(chartjson,
-                   apk_basename + '_Specifics',
-                   'file count', len(apk_contents), 'zip entries')
+  if unknown_handler is not None:
+    for info in unknown.AllEntries():
+      unknown_handler(info)
 
-  for info in unknown.AllEntries():
-    print 'Unknown entry:', info.filename, info.compress_size
+
+def PrintApkAnalysis(apk_filename, tool_prefix, out_dir, chartjson=None):
+  """Calls GenerateApkAnalysis() and report the value."""
+
+  def PrintUnknown(info):
+    print('Unknown entry: %s %d' % (info.filename, info.compress_size))
+
+  title_prefix = os.path.basename(apk_filename) + '_'
+  for data in GenerateApkAnalysis(apk_filename, tool_prefix, out_dir,
+                                  PrintUnknown):
+    title = title_prefix + data[0]
+    perf_tests_results_helper.ReportPerfResult(chartjson, title, *data[1:])
 
 
 def _AnnotatePakResources(out_dir):
   """Returns a pair of maps: id_name_map, id_header_map."""
-  print 'Looking at resources in: %s' % out_dir
+  print('Looking at resources in: %s' % out_dir)
 
   grit_headers = []
   for root, _, files in os.walk(out_dir):
@@ -554,8 +574,8 @@ def _AnnotatePakResources(out_dir):
           i = int(m.group('id'))
           name = m.group('name')
           if i in id_name_map and name != id_name_map[i]:
-            print 'WARNING: Resource ID conflict %s (%s vs %s)' % (
-                i, id_name_map[i], name)
+            print('WARNING: Resource ID conflict %s (%s vs %s)' % (
+                      i, id_name_map[i], name))
           id_name_map[i] = name
           id_header_map[i] = os.path.relpath(header, out_dir)
   return id_name_map, id_header_map
@@ -597,7 +617,7 @@ def _PrintDumpSIsCount(apk_so_name, unzipped_so, out_dir, tool_prefix):
     sis, _ = GetStaticInitializers(
         so_with_symbols_path, tool_prefix)
     for si in sis:
-      print si
+      print(si)
   else:
     raise Exception('Unstripped .so not found. Looked here: %s',
                     so_with_symbols_path)
@@ -614,18 +634,25 @@ def _CalculateCompressedSize(file_path):
   return total_size
 
 
-def _PrintDexAnalysis(apk_filename, chartjson=None):
-  sizes = method_count.ExtractSizesFromZip(apk_filename)
+def GenerateDexAnalysis(apk_filename):
+  sizes, total_size = method_count.ExtractSizesFromZip(apk_filename)
 
-  graph_title = os.path.basename(apk_filename) + '_Dex'
   dex_metrics = method_count.CONTRIBUTORS_TO_DEX_CACHE
+  cumulative_sizes = collections.defaultdict(int)
+  for classes_dex_sizes in sizes.values():
+    for key in dex_metrics:
+      cumulative_sizes[key] += classes_dex_sizes[key]
   for key, label in dex_metrics.iteritems():
-    perf_tests_results_helper.ReportPerfResult(chartjson, graph_title, label,
-                                               sizes[key], 'entries')
+    yield ('Dex', label, cumulative_sizes[key], 'entries')
 
-  graph_title = '%sCache' % graph_title
-  perf_tests_results_helper.ReportPerfResult(chartjson, graph_title, 'DexCache',
-                                             sizes['dex_cache_size'], 'bytes')
+  yield ('DexCache', 'DexCache', total_size, 'bytes')
+
+
+def _PrintDexAnalysis(apk_filename, chartjson=None):
+  title_prefix = os.path.basename(apk_filename) + '_'
+  for data in GenerateDexAnalysis(apk_filename):
+    title = title_prefix + data[0]
+    perf_tests_results_helper.ReportPerfResult(chartjson, title, *data[1:])
 
 
 def _PrintPatchSizeEstimate(new_apk, builder, bucket, chartjson=None):
@@ -678,7 +705,8 @@ def _ConfigOutDirAndToolsPrefix(out_dir):
     except EnvironmentError:
       pass
   if out_dir:
-    build_vars = build_utils.ReadBuildVars()
+    build_vars = build_utils.ReadBuildVars(
+        os.path.join(out_dir, "build_vars.txt"))
     tool_prefix = os.path.join(out_dir, build_vars['android_tool_prefix'])
   else:
     tool_prefix = ''
@@ -696,7 +724,12 @@ def main():
                          help='Location of the build artifacts.')
   argparser.add_argument('--chartjson',
                          action='store_true',
-                         help='Sets output mode to chartjson.')
+                         help='DEPRECATED. Use --output-format=chartjson '
+                              'instead.')
+  argparser.add_argument('--output-format',
+                         choices=['chartjson', 'histograms'],
+                         help='Output the results to a file in the given '
+                              'format instead of printing the results.')
   argparser.add_argument('--output-dir',
                          default='.',
                          help='Directory to save chartjson to.')
@@ -723,7 +756,11 @@ def main():
   argparser.add_argument('apk', help='APK file path.')
   args = argparser.parse_args()
 
-  chartjson = _BASE_CHART.copy() if args.chartjson else None
+  # TODO(bsheedy): Remove this once uses of --chartjson have been removed.
+  if args.chartjson:
+    args.output_format = 'chartjson'
+
+  chartjson = _BASE_CHART.copy() if args.output_format else None
   out_dir, tool_prefix = _ConfigOutDirAndToolsPrefix(args.out_dir)
   if args.dump_sis and not out_dir:
     argparser.error(
@@ -745,11 +782,30 @@ def main():
   if args.estimate_patch_size:
     _PrintPatchSizeEstimate(args.apk, args.reference_apk_builder,
                             args.reference_apk_bucket, chartjson=chartjson)
+
   if chartjson:
     results_path = os.path.join(args.output_dir, 'results-chart.json')
-    logging.critical('Dumping json to %s', results_path)
+    logging.critical('Dumping chartjson to %s', results_path)
     with open(results_path, 'w') as json_file:
       json.dump(chartjson, json_file)
+
+    # We would ideally generate a histogram set directly instead of generating
+    # chartjson then converting. However, perf_tests_results_helper is in
+    # //build, which doesn't seem to have any precedent for depending on
+    # anything in Catapult. This can probably be fixed, but since this doesn't
+    # need to be super fast or anything, converting is a good enough solution
+    # for the time being.
+    if args.output_format == 'histograms':
+      histogram_result = convert_chart_json.ConvertChartJson(results_path)
+      if histogram_result.returncode != 0:
+        logging.error('chartjson conversion failed with error: %s',
+            histogram_result.stdout)
+        return 1
+
+      histogram_path = os.path.join(args.output_dir, 'perf_results.json')
+      logging.critical('Dumping histograms to %s', histogram_path)
+      with open(histogram_path, 'w') as json_file:
+        json_file.write(histogram_result.stdout)
 
 
 if __name__ == '__main__':

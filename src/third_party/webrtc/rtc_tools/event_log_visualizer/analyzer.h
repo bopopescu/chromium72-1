@@ -31,7 +31,7 @@ class EventLogAnalyzer {
   // The EventLogAnalyzer keeps a reference to the ParsedRtcEventLogNew for the
   // duration of its lifetime. The ParsedRtcEventLogNew must not be destroyed or
   // modified while the EventLogAnalyzer is being used.
-  explicit EventLogAnalyzer(const ParsedRtcEventLogNew& log);
+  EventLogAnalyzer(const ParsedRtcEventLogNew& log, bool normalize_time);
 
   void CreatePacketGraph(PacketDirection direction, Plot* plot);
 
@@ -45,7 +45,6 @@ class EventLogAnalyzer {
 
   void CreateIncomingPacketLossGraph(Plot* plot);
 
-  void CreateIncomingDelayDeltaGraph(Plot* plot);
   void CreateIncomingDelayGraph(Plot* plot);
 
   void CreateFractionLossGraph(Plot* plot);
@@ -64,6 +63,12 @@ class EventLogAnalyzer {
   void CreatePacerDelayGraph(Plot* plot);
 
   void CreateTimestampGraph(PacketDirection direction, Plot* plot);
+  void CreateSenderAndReceiverReportPlot(
+      PacketDirection direction,
+      rtc::FunctionView<float(const rtcp::ReportBlock&)> fy,
+      std::string title,
+      std::string yaxis_label,
+      Plot* plot);
 
   void CreateAudioEncoderTargetBitrateGraph(Plot* plot);
   void CreateAudioEncoderFrameLengthGraph(Plot* plot);
@@ -76,12 +81,18 @@ class EventLogAnalyzer {
       std::map<uint32_t, std::unique_ptr<test::NetEqStatsGetter>>;
   NetEqStatsGetterMap SimulateNetEq(const std::string& replacement_file_name,
                                     int file_sample_rate_hz) const;
-  void CreateAudioJitterBufferGraph(
-      const NetEqStatsGetterMap& neteq_stats_getters,
-      Plot* plot) const;
-  void CreateNetEqStatsGraph(
+
+  void CreateAudioJitterBufferGraph(uint32_t ssrc,
+                                    const test::NetEqStatsGetter* stats_getter,
+                                    Plot* plot) const;
+  void CreateNetEqNetworkStatsGraph(
       const NetEqStatsGetterMap& neteq_stats_getters,
       rtc::FunctionView<float(const NetEqNetworkStatistics&)> stats_extractor,
+      const std::string& plot_name,
+      Plot* plot) const;
+  void CreateNetEqLifetimeStatsGraph(
+      const NetEqStatsGetterMap& neteq_stats_getters,
+      rtc::FunctionView<float(const NetEqLifetimeStatistics&)> stats_extractor,
       const std::string& plot_name,
       Plot* plot) const;
 
@@ -122,6 +133,15 @@ class EventLogAnalyzer {
     }
   }
 
+  template <typename NetEqStatsType>
+  void CreateNetEqStatsGraphInternal(
+      const NetEqStatsGetterMap& neteq_stats,
+      rtc::FunctionView<const std::vector<std::pair<int64_t, NetEqStatsType>>*(
+          const test::NetEqStatsGetter*)> data_extractor,
+      rtc::FunctionView<float(const NetEqStatsType&)> stats_extractor,
+      const std::string& plot_name,
+      Plot* plot) const;
+
   template <typename IterableType>
   void CreateAccumulatedPacketsTimeSeries(Plot* plot,
                                           const IterableType& packets,
@@ -151,7 +171,8 @@ class EventLogAnalyzer {
     return name.str();
   }
 
-  float ToCallTime(int64_t timestamp) const;
+  int64_t ToCallTimeUs(int64_t timestamp) const;
+  float ToCallTimeSec(int64_t timestamp) const;
 
   void Alert_RtpLogTimeGap(PacketDirection direction,
                            float time_seconds,
@@ -231,6 +252,7 @@ class EventLogAnalyzer {
   // First and last events of the log.
   int64_t begin_time_;
   int64_t end_time_;
+  const bool normalize_time_;
 
   // Duration (in seconds) of log file.
   float call_duration_s_;

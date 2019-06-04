@@ -10,7 +10,7 @@
 #include "third_party/blink/renderer/core/style/computed_style.h"
 
 namespace blink {
-namespace CSSLonghand {
+namespace css_longhand {
 
 const CSSValue* Zoom::ParseSingleValue(CSSParserTokenRange& range,
                                        const CSSParserContext& context,
@@ -18,13 +18,13 @@ const CSSValue* Zoom::ParseSingleValue(CSSParserTokenRange& range,
   const CSSParserToken& token = range.Peek();
   CSSValue* zoom = nullptr;
   if (token.GetType() == kIdentToken) {
-    zoom = CSSPropertyParserHelpers::ConsumeIdent<CSSValueNormal>(range);
+    zoom = css_property_parser_helpers::ConsumeIdent<CSSValueNormal>(range);
   } else {
-    zoom =
-        CSSPropertyParserHelpers::ConsumePercent(range, kValueRangeNonNegative);
+    zoom = css_property_parser_helpers::ConsumePercent(range,
+                                                       kValueRangeNonNegative);
     if (!zoom) {
-      zoom = CSSPropertyParserHelpers::ConsumeNumber(range,
-                                                     kValueRangeNonNegative);
+      zoom = css_property_parser_helpers::ConsumeNumber(range,
+                                                        kValueRangeNonNegative);
     }
   }
   if (zoom) {
@@ -48,5 +48,37 @@ const CSSValue* Zoom::CSSValueFromComputedStyleInternal(
                                    CSSPrimitiveValue::UnitType::kNumber);
 }
 
-}  // namespace CSSLonghand
+void Zoom::ApplyInitial(StyleResolverState& state) const {
+  state.SetZoom(ComputedStyleInitialValues::InitialZoom());
+}
+
+void Zoom::ApplyInherit(StyleResolverState& state) const {
+  state.SetZoom(state.ParentStyle()->Zoom());
+}
+
+void Zoom::ApplyValue(StyleResolverState& state, const CSSValue& value) const {
+  SECURITY_DCHECK(value.IsPrimitiveValue() || value.IsIdentifierValue());
+
+  if (value.IsIdentifierValue()) {
+    const CSSIdentifierValue& identifier_value = ToCSSIdentifierValue(value);
+    if (identifier_value.GetValueID() == CSSValueNormal) {
+      state.SetZoom(ComputedStyleInitialValues::InitialZoom());
+    }
+  } else if (value.IsPrimitiveValue()) {
+    const CSSPrimitiveValue& primitive_value = ToCSSPrimitiveValue(value);
+    if (primitive_value.IsPercentage()) {
+      if (float percent = primitive_value.GetFloatValue())
+        state.SetZoom(percent / 100.0f);
+      else
+        state.SetZoom(1.0f);
+    } else if (primitive_value.IsNumber()) {
+      if (float number = primitive_value.GetFloatValue())
+        state.SetZoom(number);
+      else
+        state.SetZoom(1.0f);
+    }
+  }
+}
+
+}  // namespace css_longhand
 }  // namespace blink

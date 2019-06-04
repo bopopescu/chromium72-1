@@ -8,7 +8,6 @@
 #include "ash/strings/grit/ash_strings.h"
 #include "base/macros.h"
 #include "ui/base/l10n/l10n_util.h"
-#include "ui/base/material_design/material_design_controller.h"
 #include "ui/base/resource/resource_bundle.h"
 #include "ui/views/border.h"
 #include "ui/views/controls/button/checkbox.h"
@@ -57,8 +56,7 @@ base::string16 MultiprofilesIntroDialog::GetWindowTitle() const {
 }
 
 bool MultiprofilesIntroDialog::ShouldShowCloseButton() const {
-  // Material UI has no [X] in the corner of this dialog.
-  return !ui::MaterialDesignController::IsSecondaryUiMaterial();
+  return false;
 }
 
 gfx::Size MultiprofilesIntroDialog::CalculatePreferredSize() const {

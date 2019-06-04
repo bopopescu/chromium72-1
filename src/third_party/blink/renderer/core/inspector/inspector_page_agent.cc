@@ -35,6 +35,7 @@
 #include "build/build_config.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_controller.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_regexp.h"
+#include "third_party/blink/renderer/bindings/core/v8/script_source_code.h"
 #include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/dom/document_timing.h"
 #include "third_party/blink/renderer/core/dom/dom_implementation.h"
@@ -42,7 +43,10 @@
 #include "third_party/blink/renderer/core/frame/local_frame.h"
 #include "third_party/blink/renderer/core/frame/local_frame_client.h"
 #include "third_party/blink/renderer/core/frame/local_frame_view.h"
+#include "third_party/blink/renderer/core/frame/report.h"
+#include "third_party/blink/renderer/core/frame/reporting_context.h"
 #include "third_party/blink/renderer/core/frame/settings.h"
+#include "third_party/blink/renderer/core/frame/test_report_body.h"
 #include "third_party/blink/renderer/core/frame/visual_viewport.h"
 #include "third_party/blink/renderer/core/html/html_frame_owner_element.h"
 #include "third_party/blink/renderer/core/html/imports/html_import_loader.h"
@@ -62,6 +66,7 @@
 #include "third_party/blink/renderer/core/loader/resource/script_resource.h"
 #include "third_party/blink/renderer/core/loader/scheduled_navigation.h"
 #include "third_party/blink/renderer/core/page/page.h"
+#include "third_party/blink/renderer/core/paint/paint_layer_scrollable_area.h"
 #include "third_party/blink/renderer/core/probe/core_probes.h"
 #include "third_party/blink/renderer/core/style/computed_style.h"
 #include "third_party/blink/renderer/platform/bindings/dom_wrapper_world.h"
@@ -80,15 +85,6 @@
 namespace blink {
 
 using protocol::Response;
-
-namespace PageAgentState {
-static const char kPageAgentEnabled[] = "pageAgentEnabled";
-static const char kPageAgentScriptsToEvaluateOnLoad[] =
-    "pageAgentScriptsToEvaluateOnLoad";
-static const char kScreencastEnabled[] = "screencastEnabled";
-static const char kLifecycleEventsEnabled[] = "lifecycleEventsEnabled";
-static const char kBypassCSPEnabled[] = "bypassCSPEnabled";
-}  // namespace PageAgentState
 
 namespace {
 
@@ -202,10 +198,12 @@ static bool PrepareResourceBuffer(Resource* cached_resource,
 }
 
 static bool HasTextContent(Resource* cached_resource) {
-  Resource::Type type = cached_resource->GetType();
-  return type == Resource::kCSSStyleSheet || type == Resource::kXSLStyleSheet ||
-         type == Resource::kScript || type == Resource::kRaw ||
-         type == Resource::kImportResource || type == Resource::kMainResource;
+  ResourceType type = cached_resource->GetType();
+  return type == ResourceType::kCSSStyleSheet ||
+         type == ResourceType::kXSLStyleSheet ||
+         type == ResourceType::kScript || type == ResourceType::kRaw ||
+         type == ResourceType::kImportResource ||
+         type == ResourceType::kMainResource;
 }
 
 static std::unique_ptr<TextResourceDecoder> CreateResourceTextDecoder(
@@ -240,7 +238,7 @@ static std::unique_ptr<TextResourceDecoder> CreateResourceTextDecoder(
 
 static void MaybeEncodeTextContent(const String& text_content,
                                    const char* buffer_data,
-                                   size_t buffer_size,
+                                   wtf_size_t buffer_size,
                                    String* result,
                                    bool* base64_encoded) {
   if (!text_content.IsNull() &&
@@ -271,7 +269,8 @@ static void MaybeEncodeTextContent(const String& text_content,
 
   const SharedBuffer::DeprecatedFlatData flat_buffer(std::move(buffer));
   return MaybeEncodeTextContent(text_content, flat_buffer.Data(),
-                                flat_buffer.size(), result, base64_encoded);
+                                SafeCast<wtf_size_t>(flat_buffer.size()),
+                                result, base64_encoded);
 }
 
 // static
@@ -301,11 +300,13 @@ bool InspectorPageAgent::SharedBufferContent(
     text_content = decoder->Decode(flat_buffer.Data(), flat_buffer.size());
     text_content = text_content + decoder->Flush();
   } else if (encoding.IsValid()) {
-    text_content = encoding.Decode(flat_buffer.Data(), flat_buffer.size());
+    text_content = encoding.Decode(flat_buffer.Data(),
+                                   SafeCast<wtf_size_t>(flat_buffer.size()));
   }
 
-  MaybeEncodeTextContent(text_content, flat_buffer.Data(), flat_buffer.size(),
-                         result, base64_encoded);
+  MaybeEncodeTextContent(text_content, flat_buffer.Data(),
+                         SafeCast<wtf_size_t>(flat_buffer.size()), result,
+                         base64_encoded);
   return true;
 }
 
@@ -325,7 +326,8 @@ bool InspectorPageAgent::CachedResourceContent(Resource* cached_resource,
       return false;
 
     const SharedBuffer::DeprecatedFlatData flat_buffer(std::move(buffer));
-    *result = Base64Encode(flat_buffer.Data(), flat_buffer.size());
+    *result = Base64Encode(flat_buffer.Data(),
+                           SafeCast<wtf_size_t>(flat_buffer.size()));
     *base64_encoded = true;
     return true;
   }
@@ -338,24 +340,22 @@ bool InspectorPageAgent::CachedResourceContent(Resource* cached_resource,
 
   DCHECK(cached_resource);
   switch (cached_resource->GetType()) {
-    case Resource::kCSSStyleSheet:
+    case blink::ResourceType::kCSSStyleSheet:
       MaybeEncodeTextContent(
           ToCSSStyleSheetResource(cached_resource)
               ->SheetText(nullptr, CSSStyleSheetResource::MIMETypeCheck::kLax),
           cached_resource->ResourceBuffer(), result, base64_encoded);
       return true;
-    case Resource::kScript:
+    case blink::ResourceType::kScript:
       MaybeEncodeTextContent(
-          cached_resource->ResourceBuffer()
-              ? ToScriptResource(cached_resource)->DecodedText()
-              : ToScriptResource(cached_resource)->SourceText(),
+          ToScriptResource(cached_resource)->TextForInspector(),
           cached_resource->ResourceBuffer(), result, base64_encoded);
       return true;
     default:
       String text_encoding_name =
           cached_resource->GetResponse().TextEncodingName();
       if (text_encoding_name.IsEmpty() &&
-          cached_resource->GetType() != Resource::kRaw)
+          cached_resource->GetType() != blink::ResourceType::kRaw)
         text_encoding_name = "WinLatin1";
       return InspectorPageAgent::SharedBufferContent(
           cached_resource->ResourceBuffer(),
@@ -369,68 +369,68 @@ InspectorPageAgent* InspectorPageAgent::Create(
     Client* client,
     InspectorResourceContentLoader* resource_content_loader,
     v8_inspector::V8InspectorSession* v8_session) {
-  return new InspectorPageAgent(inspected_frames, client,
-                                resource_content_loader, v8_session);
+  return MakeGarbageCollected<InspectorPageAgent>(
+      inspected_frames, client, resource_content_loader, v8_session);
 }
 
 String InspectorPageAgent::ResourceTypeJson(
     InspectorPageAgent::ResourceType resource_type) {
   switch (resource_type) {
     case kDocumentResource:
-      return protocol::Page::ResourceTypeEnum::Document;
+      return protocol::Network::ResourceTypeEnum::Document;
     case kFontResource:
-      return protocol::Page::ResourceTypeEnum::Font;
+      return protocol::Network::ResourceTypeEnum::Font;
     case kImageResource:
-      return protocol::Page::ResourceTypeEnum::Image;
+      return protocol::Network::ResourceTypeEnum::Image;
     case kMediaResource:
-      return protocol::Page::ResourceTypeEnum::Media;
+      return protocol::Network::ResourceTypeEnum::Media;
     case kScriptResource:
-      return protocol::Page::ResourceTypeEnum::Script;
+      return protocol::Network::ResourceTypeEnum::Script;
     case kStylesheetResource:
-      return protocol::Page::ResourceTypeEnum::Stylesheet;
+      return protocol::Network::ResourceTypeEnum::Stylesheet;
     case kTextTrackResource:
-      return protocol::Page::ResourceTypeEnum::TextTrack;
+      return protocol::Network::ResourceTypeEnum::TextTrack;
     case kXHRResource:
-      return protocol::Page::ResourceTypeEnum::XHR;
+      return protocol::Network::ResourceTypeEnum::XHR;
     case kFetchResource:
-      return protocol::Page::ResourceTypeEnum::Fetch;
+      return protocol::Network::ResourceTypeEnum::Fetch;
     case kEventSourceResource:
-      return protocol::Page::ResourceTypeEnum::EventSource;
+      return protocol::Network::ResourceTypeEnum::EventSource;
     case kWebSocketResource:
-      return protocol::Page::ResourceTypeEnum::WebSocket;
+      return protocol::Network::ResourceTypeEnum::WebSocket;
     case kManifestResource:
-      return protocol::Page::ResourceTypeEnum::Manifest;
+      return protocol::Network::ResourceTypeEnum::Manifest;
     case kSignedExchangeResource:
-      return protocol::Page::ResourceTypeEnum::SignedExchange;
+      return protocol::Network::ResourceTypeEnum::SignedExchange;
     case kOtherResource:
-      return protocol::Page::ResourceTypeEnum::Other;
+      return protocol::Network::ResourceTypeEnum::Other;
   }
-  return protocol::Page::ResourceTypeEnum::Other;
+  return protocol::Network::ResourceTypeEnum::Other;
 }
 
 InspectorPageAgent::ResourceType InspectorPageAgent::ToResourceType(
-    const Resource::Type resource_type) {
+    const blink::ResourceType resource_type) {
   switch (resource_type) {
-    case Resource::kImage:
+    case blink::ResourceType::kImage:
       return InspectorPageAgent::kImageResource;
-    case Resource::kFont:
+    case blink::ResourceType::kFont:
       return InspectorPageAgent::kFontResource;
-    case Resource::kAudio:
-    case Resource::kVideo:
+    case blink::ResourceType::kAudio:
+    case blink::ResourceType::kVideo:
       return InspectorPageAgent::kMediaResource;
-    case Resource::kManifest:
+    case blink::ResourceType::kManifest:
       return InspectorPageAgent::kManifestResource;
-    case Resource::kTextTrack:
+    case blink::ResourceType::kTextTrack:
       return InspectorPageAgent::kTextTrackResource;
-    case Resource::kCSSStyleSheet:
+    case blink::ResourceType::kCSSStyleSheet:
     // Fall through.
-    case Resource::kXSLStyleSheet:
+    case blink::ResourceType::kXSLStyleSheet:
       return InspectorPageAgent::kStylesheetResource;
-    case Resource::kScript:
+    case blink::ResourceType::kScript:
       return InspectorPageAgent::kScriptResource;
-    case Resource::kImportResource:
+    case blink::ResourceType::kImportResource:
     // Fall through.
-    case Resource::kMainResource:
+    case blink::ResourceType::kMainResource:
       return InspectorPageAgent::kDocumentResource;
     default:
       break;
@@ -451,31 +451,90 @@ InspectorPageAgent::InspectorPageAgent(
     : inspected_frames_(inspected_frames),
       v8_session_(v8_session),
       client_(client),
-      last_script_identifier_(0),
-      enabled_(false),
-      reloading_(false),
       inspector_resource_content_loader_(resource_content_loader),
       resource_content_loader_client_id_(
-          resource_content_loader->CreateClientId()) {}
+          resource_content_loader->CreateClientId()),
+      enabled_(&agent_state_, /*default_value=*/false),
+      screencast_enabled_(&agent_state_, /*default_value=*/false),
+      lifecycle_events_enabled_(&agent_state_, /*default_value=*/false),
+      bypass_csp_enabled_(&agent_state_, /*default_value=*/false),
+      scripts_to_evaluate_on_load_(&agent_state_,
+                                   /*default_value=*/WTF::String()),
+      worlds_to_evaluate_on_load_(&agent_state_,
+                                  /*default_value=*/WTF::String()),
+      standard_font_family_(&agent_state_, /*default_value=*/WTF::String()),
+      fixed_font_family_(&agent_state_, /*default_value=*/WTF::String()),
+      serif_font_family_(&agent_state_, /*default_value=*/WTF::String()),
+      sans_serif_font_family_(&agent_state_, /*default_value=*/WTF::String()),
+      cursive_font_family_(&agent_state_, /*default_value=*/WTF::String()),
+      fantasy_font_family_(&agent_state_, /*default_value=*/WTF::String()),
+      pictograph_font_family_(&agent_state_, /*default_value=*/WTF::String()),
+      standard_font_size_(&agent_state_, /*default_value=*/0),
+      fixed_font_size_(&agent_state_, /*default_value=*/0),
+      produce_compilation_cache_(&agent_state_, /*default_value=*/false) {}
 
 void InspectorPageAgent::Restore() {
-  if (state_->booleanProperty(PageAgentState::kPageAgentEnabled, false))
+  if (enabled_.Get())
     enable();
-  if (state_->booleanProperty(PageAgentState::kBypassCSPEnabled, false))
+  if (bypass_csp_enabled_.Get())
     setBypassCSP(true);
+  // Re-apply generic fonts overrides.
+  bool notifyGenericFontFamilyChange = false;
+  LocalFrame* frame = inspected_frames_->Root();
+  auto* settings = frame->GetSettings();
+  if (settings) {
+    auto& family_settings = settings->GetGenericFontFamilySettings();
+    if (!standard_font_family_.Get().IsNull()) {
+      family_settings.UpdateStandard(AtomicString(standard_font_family_.Get()));
+      notifyGenericFontFamilyChange = true;
+    }
+    if (!fixed_font_family_.Get().IsNull()) {
+      family_settings.UpdateFixed(AtomicString(fixed_font_family_.Get()));
+      notifyGenericFontFamilyChange = true;
+    }
+    if (!serif_font_family_.Get().IsNull()) {
+      family_settings.UpdateSerif(AtomicString(serif_font_family_.Get()));
+      notifyGenericFontFamilyChange = true;
+    }
+    if (!sans_serif_font_family_.Get().IsNull()) {
+      family_settings.UpdateSansSerif(
+          AtomicString(sans_serif_font_family_.Get()));
+      notifyGenericFontFamilyChange = true;
+    }
+    if (!cursive_font_family_.Get().IsNull()) {
+      family_settings.UpdateCursive(AtomicString(cursive_font_family_.Get()));
+      notifyGenericFontFamilyChange = true;
+    }
+    if (!fantasy_font_family_.Get().IsNull()) {
+      family_settings.UpdateFantasy(AtomicString(fantasy_font_family_.Get()));
+      notifyGenericFontFamilyChange = true;
+    }
+    if (!pictograph_font_family_.Get().IsNull()) {
+      family_settings.UpdatePictograph(
+          AtomicString(pictograph_font_family_.Get()));
+      notifyGenericFontFamilyChange = true;
+    }
+    if (notifyGenericFontFamilyChange)
+      settings->NotifyGenericFontFamilyChange();
+  }
+
+  // Re-apply default font size overrides.
+  if (settings) {
+    if (standard_font_size_.Get() != 0)
+      settings->SetDefaultFontSize(standard_font_size_.Get());
+    if (fixed_font_size_.Get() != 0)
+      settings->SetDefaultFixedFontSize(fixed_font_size_.Get());
+  }
 }
 
 Response InspectorPageAgent::enable() {
-  enabled_ = true;
-  state_->setBoolean(PageAgentState::kPageAgentEnabled, true);
+  enabled_.Set(true);
   instrumenting_agents_->addInspectorPageAgent(this);
   return Response::OK();
 }
 
 Response InspectorPageAgent::disable() {
-  enabled_ = false;
-  state_->setBoolean(PageAgentState::kPageAgentEnabled, false);
-  state_->remove(PageAgentState::kPageAgentScriptsToEvaluateOnLoad);
+  agent_state_.ClearAllFields();
   script_to_evaluate_on_load_once_ = String();
   pending_script_to_evaluate_on_load_once_ = String();
   instrumenting_agents_->removeInspectorPageAgent(this);
@@ -484,54 +543,51 @@ Response InspectorPageAgent::disable() {
 
   stopScreencast();
 
-  FinishReload();
-  return Response::OK();
-}
-
-Response InspectorPageAgent::addScriptToEvaluateOnLoad(const String& source,
-                                                       String* identifier) {
-  protocol::DictionaryValue* scripts =
-      state_->getObject(PageAgentState::kPageAgentScriptsToEvaluateOnLoad);
-  if (!scripts) {
-    std::unique_ptr<protocol::DictionaryValue> new_scripts =
-        protocol::DictionaryValue::create();
-    scripts = new_scripts.get();
-    state_->setObject(PageAgentState::kPageAgentScriptsToEvaluateOnLoad,
-                      std::move(new_scripts));
-  }
-  // Assure we don't override existing ids -- m_lastScriptIdentifier could get
-  // out of sync WRT actual scripts once we restored the scripts from the cookie
-  // during navigation.
-  do {
-    *identifier = String::Number(++last_script_identifier_);
-  } while (scripts->get(*identifier));
-  scripts->setString(*identifier, source);
-  return Response::OK();
-}
-
-Response InspectorPageAgent::removeScriptToEvaluateOnLoad(
-    const String& identifier) {
-  protocol::DictionaryValue* scripts =
-      state_->getObject(PageAgentState::kPageAgentScriptsToEvaluateOnLoad);
-  if (!scripts || !scripts->get(identifier))
-    return Response::Error("Script not found");
-  scripts->remove(identifier);
   return Response::OK();
 }
 
 Response InspectorPageAgent::addScriptToEvaluateOnNewDocument(
     const String& source,
+    Maybe<String> world_name,
     String* identifier) {
-  return addScriptToEvaluateOnLoad(source, identifier);
+  std::vector<WTF::String> keys = scripts_to_evaluate_on_load_.Keys();
+  auto result = std::max_element(
+      keys.begin(), keys.end(), [](const WTF::String& a, const WTF::String& b) {
+        return Decimal::FromString(a) < Decimal::FromString(b);
+      });
+  if (result == keys.end()) {
+    *identifier = String::Number(1);
+  } else {
+    *identifier = String::Number(Decimal::FromString(*result).ToDouble() + 1);
+  }
+
+  scripts_to_evaluate_on_load_.Set(*identifier, source);
+  worlds_to_evaluate_on_load_.Set(*identifier, world_name.fromMaybe(""));
+  return Response::OK();
 }
 
 Response InspectorPageAgent::removeScriptToEvaluateOnNewDocument(
     const String& identifier) {
-  return removeScriptToEvaluateOnLoad(identifier);
+  if (scripts_to_evaluate_on_load_.Get(identifier).IsNull())
+    return Response::Error("Script not found");
+  scripts_to_evaluate_on_load_.Clear(identifier);
+  worlds_to_evaluate_on_load_.Clear(identifier);
+  return Response::OK();
+}
+
+Response InspectorPageAgent::addScriptToEvaluateOnLoad(const String& source,
+                                                       String* identifier) {
+  return addScriptToEvaluateOnNewDocument(source, Maybe<String>(""),
+                                          identifier);
+}
+
+Response InspectorPageAgent::removeScriptToEvaluateOnLoad(
+    const String& identifier) {
+  return removeScriptToEvaluateOnNewDocument(identifier);
 }
 
 Response InspectorPageAgent::setLifecycleEventsEnabled(bool enabled) {
-  state_->setBoolean(PageAgentState::kLifecycleEventsEnabled, enabled);
+  lifecycle_events_enabled_.Set(enabled);
   if (!enabled)
     return Response::OK();
 
@@ -587,11 +643,6 @@ Response InspectorPageAgent::reload(
   pending_script_to_evaluate_on_load_once_ =
       optional_script_to_evaluate_on_load.fromMaybe("");
   v8_session_->setSkipAllPauses(true);
-  reloading_ = true;
-  inspected_frames_->Root()->Reload(optional_bypass_cache.fromMaybe(false)
-                                        ? kFrameLoadTypeReloadBypassingCache
-                                        : kFrameLoadTypeReload,
-                                    ClientRedirectPolicy::kNotClientRedirect);
   return Response::OK();
 }
 
@@ -613,7 +664,7 @@ static void CachedResourcesForDocument(Document* document,
     // agent), fonts that were referenced in CSS but never used/downloaded, etc.
     if (cached_resource->StillNeedsLoad())
       continue;
-    if (cached_resource->GetType() == Resource::kRaw && skip_xhrs)
+    if (cached_resource->GetType() == ResourceType::kRaw && skip_xhrs)
       continue;
     result.push_back(cached_resource);
   }
@@ -626,7 +677,7 @@ HeapVector<Member<Document>> InspectorPageAgent::ImportsForFrame(
   Document* root_document = frame->GetDocument();
 
   if (HTMLImportsController* controller = root_document->ImportsController()) {
-    for (size_t i = 0; i < controller->LoaderCount(); ++i) {
+    for (wtf_size_t i = 0; i < controller->LoaderCount(); ++i) {
       if (Document* document = controller->LoaderAt(i)->GetDocument())
         result.push_back(document);
     }
@@ -643,7 +694,7 @@ static HeapVector<Member<Resource>> CachedResourcesForFrame(LocalFrame* frame,
       InspectorPageAgent::ImportsForFrame(frame);
 
   CachedResourcesForDocument(root_document, result, skip_xhrs);
-  for (size_t i = 0; i < loaders.size(); ++i)
+  for (wtf_size_t i = 0; i < loaders.size(); ++i)
     CachedResourcesForDocument(loaders[i], result, skip_xhrs);
 
   return result;
@@ -659,13 +710,6 @@ Response InspectorPageAgent::getFrameTree(
     std::unique_ptr<protocol::Page::FrameTree>* object) {
   *object = BuildObjectForFrameTree(inspected_frames_->Root());
   return Response::OK();
-}
-
-void InspectorPageAgent::FinishReload() {
-  if (!reloading_)
-    return;
-  reloading_ = false;
-  v8_session_->setSkipAllPauses(false);
 }
 
 void InspectorPageAgent::GetResourceContentAfterResourcesContentLoaded(
@@ -692,7 +736,7 @@ void InspectorPageAgent::getResourceContent(
     const String& frame_id,
     const String& url,
     std::unique_ptr<GetResourceContentCallback> callback) {
-  if (!enabled_) {
+  if (!enabled_.Get()) {
     callback->sendFailure(Response::Error("Agent is not enabled."));
     return;
   }
@@ -743,7 +787,7 @@ void InspectorPageAgent::searchInResource(
     Maybe<bool> optional_case_sensitive,
     Maybe<bool> optional_is_regex,
     std::unique_ptr<SearchInResourceCallback> callback) {
-  if (!enabled_) {
+  if (!enabled_.Get()) {
     callback->sendFailure(Response::Error("Agent is not enabled."));
     return;
   }
@@ -759,7 +803,7 @@ void InspectorPageAgent::searchInResource(
 Response InspectorPageAgent::setBypassCSP(bool enabled) {
   LocalFrame* frame = inspected_frames_->Root();
   frame->GetSettings()->SetBypassCSP(enabled);
-  state_->setBoolean(PageAgentState::kBypassCSPEnabled, enabled);
+  bypass_csp_enabled_.Set(enabled);
   return Response::OK();
 }
 
@@ -788,24 +832,55 @@ void InspectorPageAgent::DidNavigateWithinDocument(LocalFrame* frame) {
 void InspectorPageAgent::DidClearDocumentOfWindowObject(LocalFrame* frame) {
   if (!GetFrontend())
     return;
+  std::vector<WTF::String> keys = scripts_to_evaluate_on_load_.Keys();
+  std::sort(keys.begin(), keys.end(),
+            [](const WTF::String& a, const WTF::String& b) {
+              return Decimal::FromString(a) < Decimal::FromString(b);
+            });
 
-  protocol::DictionaryValue* scripts =
-      state_->getObject(PageAgentState::kPageAgentScriptsToEvaluateOnLoad);
-  if (scripts) {
-    for (size_t i = 0; i < scripts->size(); ++i) {
-      auto script = scripts->at(i);
-      String script_text;
-      if (script.second->asString(&script_text))
-        frame->GetScriptController().ExecuteScriptInMainWorld(script_text);
+  HashMap<String, int> world_id_by_name;
+  for (const WTF::String& key : keys) {
+    const String source = scripts_to_evaluate_on_load_.Get(key);
+    const String world_name = worlds_to_evaluate_on_load_.Get(key);
+    if (world_name.IsEmpty()) {
+      frame->GetScriptController().ExecuteScriptInMainWorld(source);
+      continue;
     }
+
+    auto it = world_id_by_name.find(world_name);
+    int world_id = 0;
+    if (it != world_id_by_name.end()) {
+      world_id = it->value;
+    } else {
+      scoped_refptr<DOMWrapperWorld> world =
+          frame->GetScriptController().CreateNewInspectorIsolatedWorld(
+              world_name);
+      if (!world)
+        continue;
+      world_id = world->GetWorldId();
+      world_id_by_name.Set(world_name, world_id);
+
+      scoped_refptr<SecurityOrigin> security_origin =
+          frame->GetSecurityContext()->GetSecurityOrigin()->IsolatedCopy();
+      security_origin->GrantUniversalAccess();
+      DOMWrapperWorld::SetIsolatedWorldSecurityOrigin(world_id,
+                                                      security_origin);
+    }
+
+    // Note: An error event in an isolated world will never be dispatched to
+    // a foreign world.
+    v8::HandleScope handle_scope(V8PerIsolateData::MainThreadIsolate());
+    frame->GetScriptController().ExecuteScriptInIsolatedWorld(
+        world_id, source, KURL(), SanitizeScriptErrors::kSanitize);
   }
+
   if (!script_to_evaluate_on_load_once_.IsEmpty()) {
     frame->GetScriptController().ExecuteScriptInMainWorld(
         script_to_evaluate_on_load_once_);
   }
 }
 
-void InspectorPageAgent::DomContentLoadedEventFired(LocalFrame* frame) {
+void InspectorPageAgent::DOMContentLoadedEventFired(LocalFrame* frame) {
   double timestamp = CurrentTimeTicksInSeconds();
   if (frame == inspected_frames_->Root())
     GetFrontend()->domContentEventFired(timestamp);
@@ -823,7 +898,6 @@ void InspectorPageAgent::LoadEventFired(LocalFrame* frame) {
 
 void InspectorPageAgent::WillCommitLoad(LocalFrame*, DocumentLoader* loader) {
   if (loader->GetFrame() == inspected_frames_->Root()) {
-    FinishReload();
     script_to_evaluate_on_load_once_ = pending_script_to_evaluate_on_load_once_;
     pending_script_to_evaluate_on_load_once_ = String();
   }
@@ -849,11 +923,10 @@ void InspectorPageAgent::FrameDetachedFromParent(LocalFrame* frame) {
 }
 
 bool InspectorPageAgent::ScreencastEnabled() {
-  return enabled_ &&
-         state_->booleanProperty(PageAgentState::kScreencastEnabled, false);
+  return enabled_.Get() && screencast_enabled_.Get();
 }
 
-void InspectorPageAgent::FrameStartedLoading(LocalFrame* frame, FrameLoadType) {
+void InspectorPageAgent::FrameStartedLoading(LocalFrame* frame) {
   GetFrontend()->frameStartedLoading(IdentifiersFactory::FrameId(frame));
 }
 
@@ -900,8 +973,7 @@ void InspectorPageAgent::LifecycleEvent(LocalFrame* frame,
                                         DocumentLoader* loader,
                                         const char* name,
                                         double timestamp) {
-  if (!loader ||
-      !state_->booleanProperty(PageAgentState::kLifecycleEventsEnabled, false))
+  if (!loader || !lifecycle_events_enabled_.Get())
     return;
   GetFrontend()->lifecycleEvent(IdentifiersFactory::FrameId(frame),
                                 IdentifiersFactory::LoaderId(loader), name,
@@ -929,7 +1001,7 @@ void InspectorPageAgent::Did(const probe::RecalculateStyle&) {
 }
 
 void InspectorPageAgent::PageLayoutInvalidated(bool resized) {
-  if (enabled_ && client_)
+  if (enabled_.Get() && client_)
     client_->PageLayoutInvalidated(resized);
 }
 
@@ -961,7 +1033,7 @@ std::unique_ptr<protocol::Page::Frame> InspectorPageAgent::BuildObjectForFrame(
     frame_object->setParentId(IdentifiersFactory::FrameId(parent_frame));
     AtomicString name = frame->Tree().GetName();
     if (name.IsEmpty() && frame->DeprecatedLocalOwner())
-      name = frame->DeprecatedLocalOwner()->getAttribute(HTMLNames::idAttr);
+      name = frame->DeprecatedLocalOwner()->getAttribute(html_names::kIdAttr);
     frame_object->setName(name);
   }
   if (loader && !loader->UnreachableURL().IsEmpty())
@@ -1054,12 +1126,12 @@ Response InspectorPageAgent::startScreencast(Maybe<String> format,
                                              Maybe<int> max_width,
                                              Maybe<int> max_height,
                                              Maybe<int> every_nth_frame) {
-  state_->setBoolean(PageAgentState::kScreencastEnabled, true);
+  screencast_enabled_.Set(true);
   return Response::OK();
 }
 
 Response InspectorPageAgent::stopScreencast() {
-  state_->setBoolean(PageAgentState::kScreencastEnabled, false);
+  screencast_enabled_.Set(false);
   return Response::OK();
 }
 
@@ -1073,7 +1145,7 @@ Response InspectorPageAgent::getLayoutMetrics(
   main_frame->GetDocument()->UpdateStyleAndLayoutIgnorePendingStylesheets();
 
   IntRect visible_contents =
-      main_frame->View()->LayoutViewportScrollableArea()->VisibleContentRect();
+      main_frame->View()->LayoutViewport()->VisibleContentRect();
   *out_layout_viewport = protocol::Page::LayoutViewport::create()
                              .setPageX(visible_contents.X())
                              .setPageY(visible_contents.Y())
@@ -1086,12 +1158,6 @@ Response InspectorPageAgent::getLayoutMetrics(
   float page_zoom = main_frame->PageZoomFactor();
   FloatRect visible_rect = visual_viewport.VisibleRect();
   float scale = visual_viewport.Scale();
-  float scrollbar_width =
-      frame_view->LayoutViewportScrollableArea()->VerticalScrollbarWidth() /
-      scale;
-  float scrollbar_height =
-      frame_view->LayoutViewportScrollableArea()->HorizontalScrollbarHeight() /
-      scale;
 
   IntSize content_size = frame_view->GetScrollableArea()->ContentsSize();
   *out_content_size = protocol::DOM::Rect::create()
@@ -1101,20 +1167,19 @@ Response InspectorPageAgent::getLayoutMetrics(
                           .setHeight(content_size.Height())
                           .build();
 
-  *out_visual_viewport =
-      protocol::Page::VisualViewport::create()
-          .setOffsetX(
-              AdjustForAbsoluteZoom::AdjustScroll(visible_rect.X(), page_zoom))
-          .setOffsetY(
-              AdjustForAbsoluteZoom::AdjustScroll(visible_rect.Y(), page_zoom))
-          .setPageX(AdjustForAbsoluteZoom::AdjustScroll(page_offset.Width(),
-                                                        page_zoom))
-          .setPageY(AdjustForAbsoluteZoom::AdjustScroll(page_offset.Height(),
-                                                        page_zoom))
-          .setClientWidth(visible_rect.Width() - scrollbar_width)
-          .setClientHeight(visible_rect.Height() - scrollbar_height)
-          .setScale(scale)
-          .build();
+  *out_visual_viewport = protocol::Page::VisualViewport::create()
+                             .setOffsetX(AdjustForAbsoluteZoom::AdjustScroll(
+                                 visible_rect.X(), page_zoom))
+                             .setOffsetY(AdjustForAbsoluteZoom::AdjustScroll(
+                                 visible_rect.Y(), page_zoom))
+                             .setPageX(AdjustForAbsoluteZoom::AdjustScroll(
+                                 page_offset.Width(), page_zoom))
+                             .setPageY(AdjustForAbsoluteZoom::AdjustScroll(
+                                 page_offset.Height(), page_zoom))
+                             .setClientWidth(visible_rect.Width())
+                             .setClientHeight(visible_rect.Height())
+                             .setScale(scale)
+                             .build();
   return Response::OK();
 }
 
@@ -1134,19 +1199,153 @@ protocol::Response InspectorPageAgent::createIsolatedWorld(
   if (!world)
     return Response::Error("Could not create isolated world");
 
-  if (grant_universal_access.fromMaybe(false)) {
-    scoped_refptr<SecurityOrigin> security_origin =
-        frame->GetSecurityContext()->GetSecurityOrigin()->IsolatedCopy();
+  scoped_refptr<SecurityOrigin> security_origin =
+      frame->GetSecurityContext()->GetSecurityOrigin()->IsolatedCopy();
+  if (grant_universal_access.fromMaybe(false))
     security_origin->GrantUniversalAccess();
-    DOMWrapperWorld::SetIsolatedWorldSecurityOrigin(world->GetWorldId(),
-                                                    security_origin);
-  }
+  DOMWrapperWorld::SetIsolatedWorldSecurityOrigin(world->GetWorldId(),
+                                                  security_origin);
 
   LocalWindowProxy* isolated_world_window_proxy =
       frame->GetScriptController().WindowProxy(*world);
   v8::HandleScope handle_scope(V8PerIsolateData::MainThreadIsolate());
   *execution_context_id = v8_inspector::V8ContextInfo::executionContextId(
       isolated_world_window_proxy->ContextIfInitialized());
+  return Response::OK();
+}
+
+Response InspectorPageAgent::setFontFamilies(
+    std::unique_ptr<protocol::Page::FontFamilies> font_families) {
+  LocalFrame* frame = inspected_frames_->Root();
+  auto* settings = frame->GetSettings();
+  if (settings) {
+    auto& family_settings = settings->GetGenericFontFamilySettings();
+    if (font_families->hasStandard()) {
+      standard_font_family_.Set(font_families->getStandard(String()));
+      family_settings.UpdateStandard(AtomicString(standard_font_family_.Get()));
+    }
+    if (font_families->hasFixed()) {
+      fixed_font_family_.Set(font_families->getFixed(String()));
+      family_settings.UpdateFixed(AtomicString(fixed_font_family_.Get()));
+    }
+    if (font_families->hasSerif()) {
+      serif_font_family_.Set(font_families->getSerif(String()));
+      family_settings.UpdateSerif(AtomicString(serif_font_family_.Get()));
+    }
+    if (font_families->hasSansSerif()) {
+      sans_serif_font_family_.Set(font_families->getSansSerif(String()));
+      family_settings.UpdateSansSerif(
+          AtomicString(sans_serif_font_family_.Get()));
+    }
+    if (font_families->hasCursive()) {
+      cursive_font_family_.Set(font_families->getCursive(String()));
+      family_settings.UpdateCursive(AtomicString(cursive_font_family_.Get()));
+    }
+    if (font_families->hasFantasy()) {
+      fantasy_font_family_.Set(font_families->getFantasy(String()));
+      family_settings.UpdateFantasy(AtomicString(fantasy_font_family_.Get()));
+    }
+    if (font_families->hasPictograph()) {
+      pictograph_font_family_.Set(font_families->getPictograph(String()));
+      family_settings.UpdatePictograph(
+          AtomicString(pictograph_font_family_.Get()));
+    }
+    settings->NotifyGenericFontFamilyChange();
+  }
+
+  return Response::OK();
+}
+
+Response InspectorPageAgent::setFontSizes(
+    std::unique_ptr<protocol::Page::FontSizes> font_sizes) {
+  LocalFrame* frame = inspected_frames_->Root();
+  auto* settings = frame->GetSettings();
+  if (settings) {
+    if (font_sizes->hasStandard()) {
+      standard_font_size_.Set(font_sizes->getStandard(0));
+      settings->SetDefaultFontSize(standard_font_size_.Get());
+    }
+    if (font_sizes->hasFixed()) {
+      fixed_font_size_.Set(font_sizes->getFixed(0));
+      settings->SetDefaultFixedFontSize(fixed_font_size_.Get());
+    }
+  }
+
+  return Response::OK();
+}
+
+void InspectorPageAgent::ConsumeCompilationCache(
+    const ScriptSourceCode& source,
+    v8::ScriptCompiler::CachedData** cached_data) {
+  if (source.SourceLocationType() != ScriptSourceLocationType::kExternalFile)
+    return;
+  if (source.Url().IsEmpty())
+    return;
+  auto it = compilation_cache_.find(source.Url().GetString());
+  if (it == compilation_cache_.end())
+    return;
+  const protocol::Binary& data = it->value;
+  *cached_data = new v8::ScriptCompiler::CachedData(
+      data.data(), data.size(), v8::ScriptCompiler::CachedData::BufferNotOwned);
+}
+
+void InspectorPageAgent::ProduceCompilationCache(const ScriptSourceCode& source,
+                                                 v8::Local<v8::Script> script) {
+  if (!produce_compilation_cache_.Get())
+    return;
+  KURL url = source.Url();
+  if (source.Streamer())
+    return;
+  if (source.SourceLocationType() != ScriptSourceLocationType::kExternalFile)
+    return;
+  if (url.IsEmpty())
+    return;
+  String url_string = url.GetString();
+  auto it = compilation_cache_.find(url_string);
+  if (it != compilation_cache_.end())
+    return;
+  static const int kMinimalCodeLength = 1024;
+  if (source.Source().length() < kMinimalCodeLength)
+    return;
+  std::unique_ptr<v8::ScriptCompiler::CachedData> cached_data(
+      v8::ScriptCompiler::CreateCodeCache(script->GetUnboundScript()));
+  if (cached_data) {
+    // CachedData produced by CreateCodeCache always owns its buffer.
+    CHECK_EQ(cached_data->buffer_policy,
+             v8::ScriptCompiler::CachedData::BufferOwned);
+    GetFrontend()->compilationCacheProduced(
+        url_string, protocol::Binary::fromCachedData(std::move(cached_data)));
+  }
+}
+
+Response InspectorPageAgent::setProduceCompilationCache(bool enabled) {
+  produce_compilation_cache_.Set(enabled);
+  return Response::OK();
+}
+
+Response InspectorPageAgent::addCompilationCache(const String& url,
+                                                 const protocol::Binary& data) {
+  compilation_cache_.Set(url, data);
+  return Response::OK();
+}
+
+Response InspectorPageAgent::clearCompilationCache() {
+  compilation_cache_.clear();
+  return Response::OK();
+}
+
+protocol::Response InspectorPageAgent::generateTestReport(const String& message,
+                                                          Maybe<String> group) {
+  Document* document = inspected_frames_->Root()->GetDocument();
+
+  // Construct the test report.
+  TestReportBody* body = new TestReportBody(message);
+  Report* report =
+      MakeGarbageCollected<Report>("test", document->Url().GetString(), body);
+
+  // Send the test report to any ReportingObservers.
+  ReportingContext::From(document)->QueueReport(report);
+
   return Response::OK();
 }
 

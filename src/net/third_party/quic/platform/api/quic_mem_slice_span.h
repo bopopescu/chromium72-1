@@ -5,9 +5,10 @@
 #ifndef NET_THIRD_PARTY_QUIC_PLATFORM_API_QUIC_MEM_SLICE_SPAN_H_
 #define NET_THIRD_PARTY_QUIC_PLATFORM_API_QUIC_MEM_SLICE_SPAN_H_
 
+#include "net/third_party/quic/platform/api/quic_export.h"
 #include "net/third_party/quic/platform/impl/quic_mem_slice_span_impl.h"
 
-namespace net {
+namespace quic {
 
 // QuicMemSliceSpan is effectively wrapper around an array of data structures
 // used as QuicMemSlice. So it could implemented with:
@@ -34,12 +35,21 @@ class QUIC_EXPORT_PRIVATE QuicMemSliceSpan {
     return impl_.SaveMemSlicesInSendBuffer(send_buffer);
   }
 
+  // Return data of the span at |index| by the form of a QuicStringPiece.
+  QuicStringPiece GetData(int index) { return impl_.GetData(index); }
+
+  // Return the total length of the data inside the span.
+  QuicByteCount total_length() { return impl_.total_length(); }
+
+  // Return total number of slices in the span.
+  size_t NumSlices() { return impl_.NumSlices(); }
+
   bool empty() const { return impl_.empty(); }
 
  private:
   QuicMemSliceSpanImpl impl_;
 };
 
-}  // namespace net
+}  // namespace quic
 
 #endif  // NET_THIRD_PARTY_QUIC_PLATFORM_API_QUIC_MEM_SLICE_SPAN_H_

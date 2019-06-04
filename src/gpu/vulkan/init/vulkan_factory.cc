@@ -8,7 +8,11 @@
 #include <memory>
 
 #if defined(OS_ANDROID)
-#include "gpu/vulkan/vulkan_implementation_android.h"
+#include "gpu/vulkan/android/vulkan_implementation_android.h"
+#endif
+
+#if defined(OS_WIN)
+#include "gpu/vulkan/win32/vulkan_implementation_win32.h"
 #endif
 
 #if defined(USE_X11)
@@ -31,6 +35,8 @@ std::unique_ptr<VulkanImplementation> CreateVulkanImplementation() {
   return ui::OzonePlatform::GetInstance()
       ->GetSurfaceFactoryOzone()
       ->CreateVulkanImplementation();
+#elif defined(OS_WIN)
+  return std::make_unique<VulkanImplementationWin32>();
 #else
 #error Unsupported Vulkan Platform.
 #endif

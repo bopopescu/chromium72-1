@@ -4,8 +4,8 @@
 
 #include "chrome/browser/ui/views/passwords/password_save_confirmation_view.h"
 
-#include "chrome/browser/ui/views/harmony/chrome_layout_provider.h"
-#include "chrome/browser/ui/views/harmony/chrome_typography.h"
+#include "chrome/browser/ui/views/chrome_layout_provider.h"
+#include "chrome/browser/ui/views/chrome_typography.h"
 #include "chrome/grit/generated_resources.h"
 #include "components/strings/grit/components_strings.h"
 #include "ui/base/l10n/l10n_util.h"
@@ -47,7 +47,9 @@ void PasswordSaveConfirmationView::StyledLabelLinkClicked(
     const gfx::Range& range,
     int event_flags) {
   DCHECK_EQ(range, model()->save_confirmation_link_range());
-  model()->OnNavigateToPasswordManagerAccountDashboardLinkClicked();
+  model()->OnNavigateToPasswordManagerAccountDashboardLinkClicked(
+      password_manager::ManagePasswordsReferrer::
+          kPasswordGenerationConfirmation);
   CloseBubble();
 }
 

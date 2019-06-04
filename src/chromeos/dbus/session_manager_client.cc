@@ -21,9 +21,8 @@
 #include "base/path_service.h"
 #include "base/strings/string_util.h"
 #include "base/threading/thread_task_runner_handle.h"
-#include "chromeos/chromeos_paths.h"
-#include "chromeos/cryptohome/cryptohome_parameters.h"
 #include "chromeos/dbus/blocking_method_caller.h"
+#include "chromeos/dbus/cryptohome/rpc.pb.h"
 #include "chromeos/dbus/cryptohome_client.h"
 #include "chromeos/dbus/fake_session_manager_client.h"
 #include "chromeos/dbus/login_manager/arc.pb.h"
@@ -44,6 +43,8 @@ using RetrievePolicyResponseType =
     SessionManagerClient::RetrievePolicyResponseType;
 
 constexpr char kEmptyAccountId[] = "";
+// The timeout used when starting the android container is 90 seconds
+constexpr int kStartArcTimeout = 90 * 1000;
 
 // Helper to get the enum type of RetrievePolicyResponseType based on error
 // name.
@@ -193,11 +194,12 @@ class SessionManagerClientImpl : public SessionManagerClient {
                                        base::DoNothing());
   }
 
-  void StartSession(const cryptohome::Identification& cryptohome_id) override {
+  void StartSession(
+      const cryptohome::AccountIdentifier& cryptohome_id) override {
     dbus::MethodCall method_call(login_manager::kSessionManagerInterface,
                                  login_manager::kSessionManagerStartSession);
     dbus::MessageWriter writer(&method_call);
-    writer.AppendString(cryptohome_id.id());
+    writer.AppendString(cryptohome_id.account_id());
     writer.AppendString("");  // Unique ID is deprecated
     session_manager_proxy_->CallMethod(&method_call,
                                        dbus::ObjectProxy::TIMEOUT_USE_DEFAULT,
@@ -280,26 +282,27 @@ class SessionManagerClientImpl : public SessionManagerClient {
     return BlockingRetrievePolicy(descriptor, policy_out);
   }
 
-  void RetrievePolicyForUser(const cryptohome::Identification& cryptohome_id,
+  void RetrievePolicyForUser(const cryptohome::AccountIdentifier& cryptohome_id,
                              RetrievePolicyCallback callback) override {
     login_manager::PolicyDescriptor descriptor = MakeChromePolicyDescriptor(
-        login_manager::ACCOUNT_TYPE_USER, cryptohome_id.id());
+        login_manager::ACCOUNT_TYPE_USER, cryptohome_id.account_id());
     CallRetrievePolicy(descriptor, std::move(callback));
   }
 
   RetrievePolicyResponseType BlockingRetrievePolicyForUser(
-      const cryptohome::Identification& cryptohome_id,
+      const cryptohome::AccountIdentifier& cryptohome_id,
       std::string* policy_out) override {
     login_manager::PolicyDescriptor descriptor = MakeChromePolicyDescriptor(
-        login_manager::ACCOUNT_TYPE_USER, cryptohome_id.id());
+        login_manager::ACCOUNT_TYPE_USER, cryptohome_id.account_id());
     return BlockingRetrievePolicy(descriptor, policy_out);
   }
 
   void RetrievePolicyForUserWithoutSession(
-      const cryptohome::Identification& cryptohome_id,
+      const cryptohome::AccountIdentifier& cryptohome_id,
       RetrievePolicyCallback callback) override {
-    login_manager::PolicyDescriptor descriptor = MakeChromePolicyDescriptor(
-        login_manager::ACCOUNT_TYPE_SESSIONLESS_USER, cryptohome_id.id());
+    login_manager::PolicyDescriptor descriptor =
+        MakeChromePolicyDescriptor(login_manager::ACCOUNT_TYPE_SESSIONLESS_USER,
+                                   cryptohome_id.account_id());
     CallRetrievePolicy(descriptor, std::move(callback));
   }
 
@@ -337,11 +340,11 @@ class SessionManagerClientImpl : public SessionManagerClient {
     CallStorePolicy(descriptor, policy_blob, std::move(callback));
   }
 
-  void StorePolicyForUser(const cryptohome::Identification& cryptohome_id,
+  void StorePolicyForUser(const cryptohome::AccountIdentifier& cryptohome_id,
                           const std::string& policy_blob,
                           VoidDBusMethodCallback callback) override {
     login_manager::PolicyDescriptor descriptor = MakeChromePolicyDescriptor(
-        login_manager::ACCOUNT_TYPE_USER, cryptohome_id.id());
+        login_manager::ACCOUNT_TYPE_USER, cryptohome_id.account_id());
     CallStorePolicy(descriptor, policy_blob, std::move(callback));
   }
 
@@ -361,12 +364,12 @@ class SessionManagerClientImpl : public SessionManagerClient {
 
   bool SupportsRestartToApplyUserFlags() const override { return true; }
 
-  void SetFlagsForUser(const cryptohome::Identification& cryptohome_id,
+  void SetFlagsForUser(const cryptohome::AccountIdentifier& cryptohome_id,
                        const std::vector<std::string>& flags) override {
     dbus::MethodCall method_call(login_manager::kSessionManagerInterface,
                                  login_manager::kSessionManagerSetFlagsForUser);
     dbus::MessageWriter writer(&method_call);
-    writer.AppendString(cryptohome_id.id());
+    writer.AppendString(cryptohome_id.account_id());
     writer.AppendArrayOfStrings(flags);
     session_manager_proxy_->CallMethod(&method_call,
                                        dbus::ObjectProxy::TIMEOUT_USE_DEFAULT,
@@ -402,14 +405,14 @@ class SessionManagerClientImpl : public SessionManagerClient {
     writer.AppendProtoAsArrayOfBytes(request);
 
     session_manager_proxy_->CallMethod(
-        &method_call, dbus::ObjectProxy::TIMEOUT_USE_DEFAULT,
+        &method_call, kStartArcTimeout,
         base::BindOnce(&SessionManagerClientImpl::OnStartArcMiniContainer,
                        weak_ptr_factory_.GetWeakPtr(), std::move(callback)));
   }
 
   void UpgradeArcContainer(
       const login_manager::UpgradeArcContainerRequest& request,
-      UpgradeArcContainerCallback success_callback,
+      base::OnceClosure success_callback,
       UpgradeErrorCallback error_callback) override {
     DCHECK(!success_callback.is_null());
     DCHECK(!error_callback.is_null());
@@ -450,12 +453,12 @@ class SessionManagerClientImpl : public SessionManagerClient {
                        weak_ptr_factory_.GetWeakPtr(), std::move(callback)));
   }
 
-  void EmitArcBooted(const cryptohome::Identification& cryptohome_id,
+  void EmitArcBooted(const cryptohome::AccountIdentifier& cryptohome_id,
                      VoidDBusMethodCallback callback) override {
     dbus::MethodCall method_call(login_manager::kSessionManagerInterface,
                                  login_manager::kSessionManagerEmitArcBooted);
     dbus::MessageWriter writer(&method_call);
-    writer.AppendString(cryptohome_id.id());
+    writer.AppendString(cryptohome_id.account_id());
     session_manager_proxy_->CallMethod(
         &method_call, dbus::ObjectProxy::TIMEOUT_USE_DEFAULT,
         base::BindOnce(&SessionManagerClientImpl::OnVoidMethod,
@@ -470,18 +473,6 @@ class SessionManagerClientImpl : public SessionManagerClient {
     session_manager_proxy_->CallMethod(
         &method_call, dbus::ObjectProxy::TIMEOUT_USE_DEFAULT,
         base::BindOnce(&SessionManagerClientImpl::OnGetArcStartTime,
-                       weak_ptr_factory_.GetWeakPtr(), std::move(callback)));
-  }
-
-  void RemoveArcData(const cryptohome::Identification& cryptohome_id,
-                     VoidDBusMethodCallback callback) override {
-    dbus::MethodCall method_call(login_manager::kSessionManagerInterface,
-                                 login_manager::kSessionManagerRemoveArcData);
-    dbus::MessageWriter writer(&method_call);
-    writer.AppendString(cryptohome_id.id());
-    session_manager_proxy_->CallMethod(
-        &method_call, dbus::ObjectProxy::TIMEOUT_USE_DEFAULT,
-        base::BindOnce(&SessionManagerClientImpl::OnVoidMethod,
                        weak_ptr_factory_.GetWeakPtr(), std::move(callback)));
   }
 
@@ -646,7 +637,7 @@ class SessionManagerClientImpl : public SessionManagerClient {
         LOG(ERROR) << method_name
                    << " response is incorrect: " << response->ToString();
       } else {
-        sessions[cryptohome::Identification::FromString(key)] = value;
+        sessions[key] = value;
       }
     }
     std::move(callback).Run(std::move(sessions));
@@ -735,20 +726,8 @@ class SessionManagerClientImpl : public SessionManagerClient {
 
     auto reason = login_manager::ArcContainerStopReason::CRASH;
     uint32_t value = 0;
-    bool clean = false;
     if (reader.PopUint32(&value)) {
       reason = static_cast<login_manager::ArcContainerStopReason>(value);
-    } else if (reader.PopBool(&clean)) {
-      // This is for the transition period.
-      // We can think the change is virtually split into two;
-      // - bool becomes enum ArcContainerStopReason. true is mapped to
-      //   USER_REQUEST, false is to CRASH. Then,
-      // - USER_REQUEST cases are split into more precise categories.
-      // The only client of this signal, which is ArcSessionImpl, can handle
-      // this approach.
-      // TODO(b/76152951): Remove this.
-      reason = clean ? login_manager::ArcContainerStopReason::USER_REQUEST
-                     : login_manager::ArcContainerStopReason::CRASH;
     } else {
       LOG(ERROR) << "Invalid signal: " << signal->ToString();
       return;
@@ -832,7 +811,7 @@ class SessionManagerClientImpl : public SessionManagerClient {
     std::move(callback).Run(std::move(container_instance_id));
   }
 
-  void OnUpgradeArcContainer(UpgradeArcContainerCallback success_callback,
+  void OnUpgradeArcContainer(base::OnceClosure success_callback,
                              UpgradeErrorCallback error_callback,
                              dbus::Response* response,
                              dbus::ErrorResponse* error) {
@@ -844,20 +823,12 @@ class SessionManagerClientImpl : public SessionManagerClient {
                             login_manager::dbus_error::kLowFreeDisk);
       return;
     }
-
-    dbus::MessageReader reader(response);
-    base::ScopedFD server_socket;
-    if (!reader.PopFileDescriptor(&server_socket)) {
-      LOG(ERROR) << "Invalid response: " << response->ToString();
-      std::move(error_callback).Run(false);
-      return;
-    }
-    std::move(success_callback).Run(std::move(server_socket));
+    std::move(success_callback).Run();
   }
 
   dbus::ObjectProxy* session_manager_proxy_ = nullptr;
   std::unique_ptr<BlockingMethodCaller> blocking_method_caller_;
-  base::ObserverList<Observer> observers_;
+  base::ObserverList<Observer>::Unchecked observers_;
 
   // Most recent screen-lock state received from session_manager.
   bool screen_is_locked_ = false;

@@ -24,11 +24,6 @@ Polymer({
     pageVisibility: Object,
   },
 
-  listeners: {
-    'topMenu.click': 'onLinkTap_',
-    'subMenu.click': 'onLinkTap_',
-  },
-
   /** @param {!settings.Route} newRoute */
   currentRouteChanged: function(newRoute) {
     const currentPath = newRoute.path;
@@ -51,7 +46,7 @@ Polymer({
    * @param {!Event} event
    * @private
    */
-  onLinkTap_: function(event) {
+  onLinkClick_: function(event) {
     if (event.target.matches('a:not(#extensionsLink)'))
       event.preventDefault();
   },

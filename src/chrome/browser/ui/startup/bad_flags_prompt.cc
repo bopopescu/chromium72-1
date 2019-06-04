@@ -104,8 +104,8 @@ static const char* kBadFlags[] = {
     // getting the user's permission.
     switches::kUnsafelyAllowProtectedMediaIdentifierForDomain,
 
-    // This flag delays execution of base::TaskPriority::BACKGROUND tasks until
-    // shutdown. The queue of base::TaskPriority::BACKGROUND tasks can increase
+    // This flag delays execution of base::TaskPriority::BEST_EFFORT tasks until
+    // shutdown. The queue of base::TaskPriority::BEST_EFFORT tasks can increase
     // memory usage. Also, while it should be possible to use Chrome almost
     // normally with this flag, it is expected that some non-visible operations
     // such as writing user data to disk, cleaning caches, reporting metrics or
@@ -117,7 +117,7 @@ static const char* kBadFlags[] = {
 // Dangerous feature flags in about:flags for which to display a warning that
 // "stability and security will suffer".
 static const base::Feature* kBadFeatureFlagsInAboutFlags[] = {
-    &features::kSignedHTTPExchange,
+    &features::kAllowSignedHTTPExchangeCertsWithoutExtension,
 #if defined(OS_ANDROID)
     &chrome::android::kCommandLineOnNonRooted,
 #endif  // OS_ANDROID

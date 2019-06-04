@@ -13,7 +13,7 @@
 #include "net/third_party/quic/core/quic_stream_sequencer.h"
 #include "net/third_party/quic/platform/api/quic_string_piece.h"
 
-namespace net {
+namespace quic {
 
 class QuicStream;
 class QuicSession;
@@ -22,6 +22,8 @@ namespace test {
 
 class QuicStreamPeer {
  public:
+  QuicStreamPeer() = delete;
+
   static void SetWriteSideClosed(bool value, QuicStream* stream);
   static void SetStreamBytesWritten(QuicStreamOffset stream_bytes_written,
                                     QuicStream* stream);
@@ -49,13 +51,10 @@ class QuicStreamPeer {
   static void set_ack_listener(
       QuicStream* stream,
       QuicReferenceCountedPointer<QuicAckListenerInterface> ack_listener);
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(QuicStreamPeer);
 };
 
 }  // namespace test
 
-}  // namespace net
+}  // namespace quic
 
 #endif  // NET_THIRD_PARTY_QUIC_TEST_TOOLS_QUIC_STREAM_PEER_H_

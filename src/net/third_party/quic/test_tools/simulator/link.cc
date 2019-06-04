@@ -7,16 +7,14 @@
 #include "net/third_party/quic/platform/api/quic_str_cat.h"
 #include "net/third_party/quic/test_tools/simulator/simulator.h"
 
-using std::string;
-
-namespace net {
+namespace quic {
 namespace simulator {
 
 // Parameters for random noise delay.
 const uint64_t kMaxRandomDelayUs = 10;
 
 OneWayLink::OneWayLink(Simulator* simulator,
-                       string name,
+                       QuicString name,
                        UnconstrainedPortInterface* sink,
                        QuicBandwidth bandwidth,
                        QuicTime::Delta propagation_delay)
@@ -87,7 +85,7 @@ QuicTime::Delta OneWayLink::GetRandomDelay(QuicTime::Delta transfer_time) {
 }
 
 SymmetricLink::SymmetricLink(Simulator* simulator,
-                             string name,
+                             QuicString name,
                              UnconstrainedPortInterface* sink_a,
                              UnconstrainedPortInterface* sink_b,
                              QuicBandwidth bandwidth,
@@ -120,4 +118,4 @@ SymmetricLink::SymmetricLink(Endpoint* endpoint_a,
 }
 
 }  // namespace simulator
-}  // namespace net
+}  // namespace quic

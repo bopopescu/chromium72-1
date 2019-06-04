@@ -12,6 +12,8 @@
 #include "base/containers/circular_deque.h"
 #include "base/macros.h"
 #include "base/time/time.h"
+#include "base/trace_event/traced_value.h"
+#include "ui/latency/skipped_frame_tracker.h"
 
 namespace ui {
 namespace frame_metrics {
@@ -34,13 +36,75 @@ class LatencyAccelerationClient : public frame_metrics::StreamAnalyzerClient {
 
 }  // namespace frame_metrics
 
+enum class FrameMetricsSource {
+  Unknown = 0,
+  UnitTest = 1,
+  RendererCompositor = 2,
+  UiCompositor = 3,
+};
+
+enum class FrameMetricsSourceThread {
+  Unknown = 0,
+  Blink = 1,
+  RendererCompositor = 2,
+  Ui = 3,
+  UiCompositor = 4,
+  VizCompositor = 5,
+};
+
+enum class FrameMetricsCompileTarget {
+  Unknown = 0,
+  Chromium = 1,
+  SynchronousCompositor = 2,
+  Headless = 3,
+};
+
 struct FrameMetricsSettings {
+  FrameMetricsSettings() = default;
+
+  FrameMetricsSettings(FrameMetricsSource source,
+                       FrameMetricsSourceThread source_thread,
+                       FrameMetricsCompileTarget compile_target,
+                       bool trace_results_every_frame = false,
+                       size_t max_window_size = 60)
+      : source(source),
+        source_thread(source_thread),
+        compile_target(compile_target),
+        trace_results_every_frame(trace_results_every_frame),
+        max_window_size(max_window_size) {}
+
+  void set_is_frame_latency_speed_on(bool is_speed_on) {
+    is_frame_latency_speed_on_ = is_speed_on;
+  }
+  void set_is_frame_latency_acceleration_on(bool is_acceleration_on) {
+    is_frame_latency_acceleration_on_ = is_acceleration_on;
+  }
+
+  bool is_frame_latency_speed_on() const { return is_frame_latency_speed_on_; }
+  bool is_frame_latency_acceleration_on() const {
+    return is_frame_latency_acceleration_on_;
+  }
+
+  // Source configuration.
+  FrameMetricsSource source;
+  FrameMetricsSourceThread source_thread;
+  FrameMetricsCompileTarget compile_target;
+
   // This is needed for telemetry results.
-  bool trace_results_every_frame = false;
+  bool trace_results_every_frame;
 
   // Maximum window size in number of samples.
   // This is forwarded to each WindowAnalyzer.
-  size_t max_window_size = 60;
+  size_t max_window_size;
+
+  void AsValueInto(base::trace_event::TracedValue* state) const;
+
+ private:
+  // Switch for frame latency speed measurements control.
+  bool is_frame_latency_speed_on_ = false;
+
+  // Switch for frame latency acceleration measurements control.
+  bool is_frame_latency_acceleration_on_ = false;
 };
 
 // Calculates all metrics for a frame source.
@@ -49,24 +113,31 @@ struct FrameMetricsSettings {
 // Statistics will be reported automatically. Either periodically, based
 // on the client interface, or on destruction if any samples were added since
 // the last call to StartNewReportPeriod.
-class FrameMetrics {
+class FrameMetrics : public SkippedFrameTracker::Client {
  public:
-  // |source_name| must have a global lifetime for tracing and reporting
-  // purposes.
-  FrameMetrics(const FrameMetricsSettings& settings, const char* source_name);
-  virtual ~FrameMetrics();
+  explicit FrameMetrics(FrameMetricsSettings settings);
+  ~FrameMetrics() override;
 
   // Resets all data and history as if the class were just created.
   void Reset();
 
   // AddFrameProduced should be called every time a source produces a frame.
-  // The information added here affects the number of frames skipped.
+  // |source_timestamp| is when frame time in BeginFrameArgs(i.e. when the frame
+  // is produced); |amount_produced| is the expected time interval between 2
+  // consecutive frames; |amount_skipped| is number of frame skipped before
+  // producing this frame multiplies by the interval, i.e., if 1 frame is
+  // skipped in 30 fps setting, then |amount_skipped| is 33.33ms; if 1 frame is
+  // skipped in 60FPS setting, then the |amount_skipped| is 16.67ms. Note: If
+  // the FrameMetrics class is hooked up to an optional SkippedFrameTracker, the
+  // client should not call this directly.
   void AddFrameProduced(base::TimeTicks source_timestamp,
                         base::TimeDelta amount_produced,
-                        base::TimeDelta amount_skipped);
+                        base::TimeDelta amount_skipped) override;
 
   // AddFrameDisplayed should be called whenever a frame causes damage and
-  // we know when the result became visible on the display.
+  // we know when the result became visible on the display. |source_timestamp|
+  // is when frame time in BeginFrameArgs(i.e. when the frame is produced);
+  // |display_timestamp| is when the frame is displayed on screen.
   // This will affect all latency derived metrics, including latency speed,
   // latency acceleration, and latency itself.
   // If a frame is produced but not displayed, do not call this; there was
@@ -75,18 +146,25 @@ class FrameMetrics {
   void AddFrameDisplayed(base::TimeTicks source_timestamp,
                          base::TimeTicks display_timestamp);
 
+  // Compute the square root by using method described in paper:
+  // http://www.lomont.org/Math/Papers/2003/InvSqrt.pdf.
+  // It finds a result within 0.0001 and 0.1 of the true square root for |x| <
+  // 100 and |x| < 2^15 respectively. It's more than 2 times faster for Nexus 4
+  // and other lower end android devices and ~3-5% faster on desktop. Crash when
+  // x is less than 0.
+  static double FastApproximateSqrt(double x);
+
  protected:
-  void TraceProducedStats();
-  void TraceDisplayedStats();
+  void TraceStats() const;
 
   // virtual for testing.
   virtual base::TimeDelta ReportPeriod();
 
-  // Starts a new reporting period that resets the various accumulators
-  // and memory of worst regions encountered, but does not destroy recent
-  // sample history in the windowed analyzers and in the derivatives
-  // for latency speed and latency acceleration. This avoids small gaps
-  // in coverage when starting a new reporting period.
+  // Starts a new reporting period after |kDefaultReportPeriod| time that resets
+  // the various accumulators and memory of worst regions encountered, but does
+  // not destroy recent sample history in the windowed analyzers and in the
+  // derivatives for latency speed and latency acceleration. This avoids small
+  // gaps in coverage when starting a new reporting period.
   void StartNewReportPeriod();
 
   FrameMetricsSettings settings_;

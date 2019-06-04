@@ -18,62 +18,66 @@ buildflag_header("ipc_buildflags") {
 
 component("ipc") {
   sources = [
-    "ipc_channel.cc",
-    "ipc_channel.h",
-    "ipc_channel_common.cc",
-    "ipc_channel_factory.cc",
-    "ipc_channel_factory.h",
-    "ipc_channel_handle.h",
-    "ipc_channel_mojo.cc",
-    "ipc_channel_mojo.h",
-    "ipc_channel_nacl.cc",
-    "ipc_channel_nacl.h",
-    "ipc_channel_proxy.cc",
-    "ipc_channel_proxy.h",
-    "ipc_channel_reader.cc",
-    "ipc_channel_reader.h",
-    "ipc_listener.h",
-    "ipc_logging.cc",
-    "ipc_logging.h",
-    "ipc_message_macros.h",
-    "ipc_message_pipe_reader.cc",
-    "ipc_message_pipe_reader.h",
-    "ipc_message_start.h",
-    "ipc_message_templates.h",
-    "ipc_message_templates_impl.h",
+    # These are the param_traits sources needed by all platforms,
+    # including ios. The rest are added in a conditional block below.
     "ipc_message_utils.cc",
     "ipc_message_utils.h",
-    "ipc_mojo_bootstrap.cc",
-    "ipc_mojo_bootstrap.h",
     "ipc_mojo_param_traits.cc",
     "ipc_mojo_param_traits.h",
-    "ipc_sender.h",
-    "ipc_sync_channel.cc",
-    "ipc_sync_channel.h",
-    "ipc_sync_message_filter.cc",
-    "ipc_sync_message_filter.h",
-    "message_filter.cc",
-    "message_filter.h",
-    "message_filter_router.cc",
-    "message_filter_router.h",
-    "message_router.cc",
-    "message_router.h",
     "param_traits_log_macros.h",
     "param_traits_macros.h",
     "param_traits_read_macros.h",
     "param_traits_write_macros.h",
     "struct_constructor_macros.h",
-    "struct_destructor_macros.h",
-    "neva/redefined_param_traits_macros.h",
   ]
 
+  if (!is_ios) {
+    sources += [
+      # Most sources go here since ios only needs the param_traits
+      # code.
+      "ipc_channel.h",
+      "ipc_channel_common.cc",
+      "ipc_channel_factory.cc",
+      "ipc_channel_factory.h",
+      "ipc_channel_handle.h",
+      "ipc_channel_mojo.cc",
+      "ipc_channel_mojo.h",
+      "ipc_channel_proxy.cc",
+      "ipc_channel_proxy.h",
+      "ipc_channel_reader.cc",
+      "ipc_channel_reader.h",
+      "ipc_listener.h",
+      "ipc_logging.cc",
+      "ipc_logging.h",
+      "ipc_message_macros.h",
+      "ipc_message_pipe_reader.cc",
+      "ipc_message_pipe_reader.h",
+      "ipc_message_start.h",
+      "ipc_message_templates.h",
+      "ipc_message_templates_impl.h",
+      "ipc_mojo_bootstrap.cc",
+      "ipc_mojo_bootstrap.h",
+      "ipc_sender.h",
+      "ipc_sync_channel.cc",
+      "ipc_sync_channel.h",
+      "ipc_sync_message_filter.cc",
+      "ipc_sync_message_filter.h",
+      "message_filter.cc",
+      "message_filter.h",
+      "message_filter_router.cc",
+      "message_filter_router.h",
+      "message_router.cc",
+      "message_router.h",
+    ]
+  }
+
   if (is_nacl && !is_nacl_nonsfi) {
-    sources -= [ "ipc_channel.cc" ]
-  } else {
-    sources -= [
+    sources += [
       "ipc_channel_nacl.cc",
       "ipc_channel_nacl.h",
     ]
+  } else {
+    sources += [ "ipc_channel.cc" ]
   }
 
   defines = [ "IS_IPC_IMPL" ]
@@ -84,6 +88,7 @@ component("ipc") {
     ":mojom",
     ":native_handle_type_converters",
     ":param_traits",
+    "//mojo/public/cpp/base",
     "//mojo/public/cpp/bindings",
     "//mojo/public/cpp/system",
   ]
@@ -96,8 +101,6 @@ component("ipc") {
 
   deps = [
     "//base",
-    "//neva/pal:pal_gen",
-    "//mojo/public/cpp/bindings",
   ]
 
   if (enable_ipc_fuzzer) {
@@ -173,7 +176,7 @@ source_set("native_handle_type_converters") {
   ]
   public_deps = [
     ":message_support",
-    "//mojo/public/interfaces/bindings:bindings_shared__generator",
+    "//mojo/public/interfaces/bindings:bindings_headers",
   ]
 }
 
@@ -185,7 +188,7 @@ mojom_component("mojom") {
   ]
   public_deps = [
     "//mojo/public/interfaces/bindings",
-    "//mojo/public/mojom/base:read_only_buffer",
+    "//mojo/public/mojom/base",
   ]
 
   # Don't generate a variant sources since we depend on generated internal
@@ -226,8 +229,8 @@ if (!is_ios) {
     deps = [
       "//base",
       "//base/test:test_support",
-      "//mojo/edk",
-      "//mojo/edk/test:test_support",
+      "//mojo/core/embedder",
+      "//mojo/core/test:test_support",
     ]
   }
 
@@ -273,8 +276,8 @@ if (!is_ios) {
       "//base:i18n",
       "//base/test:test_support",
       "//crypto",
-      "//mojo/edk",
-      "//mojo/edk/test:test_support",
+      "//mojo/core/embedder",
+      "//mojo/core/test:test_support",
       "//testing/gtest",
     ]
 
@@ -312,9 +315,9 @@ if (!is_ios) {
       "//base",
       "//base:i18n",
       "//base/test:test_support",
-      "//mojo/edk",
-      "//mojo/edk/test:test_support",
-      "//mojo/edk/test:test_support_impl",
+      "//mojo/core/embedder",
+      "//mojo/core/test:test_support",
+      "//mojo/core/test:test_support_impl",
       "//testing/gtest",
     ]
   }
@@ -337,7 +340,7 @@ if (!is_ios) {
     deps = [
       "//base",
       "//base/test:test_support",
-      "//mojo/edk/test:test_support",
+      "//mojo/core/test:test_support",
       "//testing/gtest",
     ]
   }

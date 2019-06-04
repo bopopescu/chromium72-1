@@ -4,6 +4,7 @@
 
 #include "chrome/browser/chromeos/authpolicy/auth_policy_credentials_manager.h"
 
+#include "ash/public/cpp/notification_utils.h"
 #include "ash/public/cpp/vector_icons/vector_icons.h"
 #include "base/files/important_file_writer.h"
 #include "base/location.h"
@@ -11,7 +12,7 @@
 #include "base/path_service.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
-#include "base/task_scheduler/post_task.h"
+#include "base/task/post_task.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/chromeos/profiles/profile_helper.h"
 #include "chrome/browser/lifetime/application_lifetime.h"
@@ -233,14 +234,14 @@ void AuthPolicyCredentialsManager::OnGetUserKerberosFilesCallback(
   if (kerberos_files.has_krb5cc()) {
     base::PostTaskWithTraits(
         FROM_HERE,
-        {base::MayBlock(), base::TaskPriority::BACKGROUND,
+        {base::MayBlock(), base::TaskPriority::BEST_EFFORT,
          base::TaskShutdownBehavior::SKIP_ON_SHUTDOWN},
         base::BindOnce(&WriteFile, kKrb5CCFile, kerberos_files.krb5cc()));
   }
   if (kerberos_files.has_krb5conf()) {
     base::PostTaskWithTraits(
         FROM_HERE,
-        {base::MayBlock(), base::TaskPriority::BACKGROUND,
+        {base::MayBlock(), base::TaskPriority::BEST_EFFORT,
          base::TaskShutdownBehavior::SKIP_ON_SHUTDOWN},
         base::BindOnce(
             &WriteFile, kKrb5ConfFile,
@@ -307,7 +308,7 @@ void AuthPolicyCredentialsManager::ShowNotification(int message_id) {
                                       profile_->GetProfileUserName() +
                                       std::to_string(message_id);
   message_center::NotifierId notifier_id(
-      message_center::NotifierId::SYSTEM_COMPONENT,
+      message_center::NotifierType::SYSTEM_COMPONENT,
       kProfileSigninNotificationId);
 
   // Set |profile_id| for multi-user notification blocker.
@@ -320,10 +321,10 @@ void AuthPolicyCredentialsManager::ShowNotification(int message_id) {
           }));
 
   std::unique_ptr<message_center::Notification> notification =
-      message_center::Notification::CreateSystemNotification(
+      ash::CreateSystemNotification(
           message_center::NOTIFICATION_TYPE_SIMPLE, notification_id,
           l10n_util::GetStringUTF16(IDS_SIGNIN_ERROR_BUBBLE_VIEW_TITLE),
-          l10n_util::GetStringUTF16(message_id), gfx::Image(),
+          l10n_util::GetStringUTF16(message_id),
           l10n_util::GetStringUTF16(IDS_SIGNIN_ERROR_DISPLAY_SOURCE),
           GURL(notification_id), notifier_id, data, std::move(delegate),
           ash::kNotificationWarningIcon,
@@ -374,17 +375,6 @@ AuthPolicyCredentialsManagerFactory::GetInstance() {
   return base::Singleton<AuthPolicyCredentialsManagerFactory>::get();
 }
 
-// static
-KeyedService*
-AuthPolicyCredentialsManagerFactory::BuildForProfileIfActiveDirectory(
-    Profile* profile) {
-  const user_manager::User* user =
-      chromeos::ProfileHelper::Get()->GetUserByProfile(profile);
-  if (!user || !user->IsActiveDirectoryUser())
-    return nullptr;
-  return GetInstance()->GetServiceForBrowserContext(profile, true /* create */);
-}
-
 AuthPolicyCredentialsManagerFactory::AuthPolicyCredentialsManagerFactory()
     : BrowserContextKeyedServiceFactory(
           "AuthPolicyCredentialsManager",
@@ -392,9 +382,21 @@ AuthPolicyCredentialsManagerFactory::AuthPolicyCredentialsManagerFactory()
 
 AuthPolicyCredentialsManagerFactory::~AuthPolicyCredentialsManagerFactory() {}
 
+bool AuthPolicyCredentialsManagerFactory::ServiceIsCreatedWithBrowserContext()
+    const {
+  return true;
+}
+
 KeyedService* AuthPolicyCredentialsManagerFactory::BuildServiceInstanceFor(
     content::BrowserContext* context) const {
+  // UserManager is usually not initialized in tests.
+  if (!user_manager::UserManager::IsInitialized())
+    return nullptr;
   Profile* profile = Profile::FromBrowserContext(context);
+  const user_manager::User* user =
+      chromeos::ProfileHelper::Get()->GetUserByProfile(profile);
+  if (!user || !user->IsActiveDirectoryUser())
+    return nullptr;
   return new AuthPolicyCredentialsManager(profile);
 }
 

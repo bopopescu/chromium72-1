@@ -13,13 +13,13 @@ from telemetry.core import exceptions
 from telemetry import decorators
 from telemetry.internal.backends.chrome_inspector import devtools_http
 from telemetry.internal.backends.chrome_inspector import inspector_console
+from telemetry.internal.backends.chrome_inspector import inspector_log
 from telemetry.internal.backends.chrome_inspector import inspector_memory
 from telemetry.internal.backends.chrome_inspector import inspector_page
 from telemetry.internal.backends.chrome_inspector import inspector_runtime
 from telemetry.internal.backends.chrome_inspector import inspector_serviceworker
 from telemetry.internal.backends.chrome_inspector import inspector_storage
 from telemetry.internal.backends.chrome_inspector import inspector_websocket
-from telemetry.internal.backends.chrome_inspector import websocket
 from telemetry.util import js_template
 
 import py_utils
@@ -36,7 +36,7 @@ def _HandleInspectorWebSocketExceptions(func):
   def Inner(inspector_backend, *args, **kwargs):
     try:
       return func(inspector_backend, *args, **kwargs)
-    except (socket.error, websocket.WebSocketException,
+    except (socket.error, inspector_websocket.WebSocketException,
             inspector_websocket.WebSocketDisconnected) as e:
       inspector_backend._ConvertExceptionFromInspectorWebsocket(e)
 
@@ -69,6 +69,7 @@ class InspectorBackend(object):
     try:
       self._websocket.Connect(self.debugger_url, timeout)
       self._console = inspector_console.InspectorConsole(self._websocket)
+      self._log = inspector_log.InspectorLog(self._websocket)
       self._memory = inspector_memory.InspectorMemory(self._websocket)
       self._page = inspector_page.InspectorPage(
           self._websocket, timeout=timeout)
@@ -76,7 +77,7 @@ class InspectorBackend(object):
       self._serviceworker = inspector_serviceworker.InspectorServiceWorker(
           self._websocket, timeout=timeout)
       self._storage = inspector_storage.InspectorStorage(self._websocket)
-    except (websocket.WebSocketException, exceptions.TimeoutException,
+    except (inspector_websocket.WebSocketException, exceptions.TimeoutException,
             py_utils.TimeoutException) as e:
       self._ConvertExceptionFromInspectorWebsocket(e)
 
@@ -209,6 +210,9 @@ class InspectorBackend(object):
       timeout: The number of seconds to wait for the statement to execute.
       context_id: The id of an iframe where to execute the code; the main page
           has context_id=1, the first iframe context_id=2, etc.
+      user_gesture: Whether execution should be treated as initiated by user
+          in the UI. Code that plays media or requests fullscreen may not take
+          effects without user_gesture set to True.
       Additional keyword arguments provide values to be interpolated within
           the statement. See telemetry.util.js_template for details.
 
@@ -221,8 +225,10 @@ class InspectorBackend(object):
     # Use the default both when timeout=None or the option is ommited.
     timeout = kwargs.pop('timeout', None) or 60
     context_id = kwargs.pop('context_id', None)
+    user_gesture = kwargs.pop('user_gesture', None) or False
     statement = js_template.Render(statement, **kwargs)
-    self._runtime.Execute(statement, context_id, timeout)
+    self._runtime.Execute(statement, context_id, timeout,
+                          user_gesture=user_gesture)
 
   def EvaluateJavaScript(self, expression, **kwargs):
     """Returns the result of evaluating a given JavaScript expression.
@@ -236,6 +242,9 @@ class InspectorBackend(object):
       timeout: The number of seconds to wait for the expression to evaluate.
       context_id: The id of an iframe where to execute the code; the main page
           has context_id=1, the first iframe context_id=2, etc.
+      user_gesture: Whether execution should be treated as initiated by user
+          in the UI. Code that plays media or requests fullscreen may not take
+          effects without user_gesture set to True.
       Additional keyword arguments provide values to be interpolated within
           the expression. See telemetry.util.js_template for details.
 
@@ -248,8 +257,10 @@ class InspectorBackend(object):
     # Use the default both when timeout=None or the option is ommited.
     timeout = kwargs.pop('timeout', None) or 60
     context_id = kwargs.pop('context_id', None)
+    user_gesture = kwargs.pop('user_gesture', None) or False
     expression = js_template.Render(expression, **kwargs)
-    return self._EvaluateJavaScript(expression, context_id, timeout)
+    return self._EvaluateJavaScript(expression, context_id, timeout,
+                                    user_gesture=user_gesture)
 
   def WaitForJavaScriptCondition(self, condition, **kwargs):
     """Wait for a JavaScript condition to become truthy.
@@ -298,8 +309,21 @@ class InspectorBackend(object):
         debug_message = (
             'Exception thrown when trying to capture console output: %s' %
             repr(e))
-      raise py_utils.TimeoutException(
-          e.message + '\n' + debug_message)
+      # Rethrow with the original stack trace for better debugging.
+      raise py_utils.TimeoutException, \
+          py_utils.TimeoutException(
+              'Timeout after %ss while waiting for JavaScript:' % timeout +
+              condition + '\n' +  e.message + '\n' + debug_message), \
+          sys.exc_info()[2]
+
+
+  def AddTimelineMarker(self, marker):
+    return self.ExecuteJavaScript(
+        """
+        console.time({{ marker }});
+        console.timeEnd({{ marker }});
+        """,
+        marker=str(marker))
 
   @_HandleInspectorWebSocketExceptions
   def EnableAllContexts(self):
@@ -475,13 +499,15 @@ class InspectorBackend(object):
     information. The exact exception raised depends on |error|.
 
     Args:
-      error: An instance of socket.error or websocket.WebSocketException.
+      error: An instance of socket.error or
+        inspector_websocket.WebSocketException.
     Raises:
       exceptions.TimeoutException: A timeout occurred.
       exceptions.DevtoolsTargetCrashException: On any other error, the most
         likely explanation is that the devtool's target crashed.
     """
-    if isinstance(error, websocket.WebSocketTimeoutException):
+    # pylint: disable=redefined-variable-type
+    if isinstance(error, inspector_websocket.WebSocketException):
       new_error = exceptions.TimeoutException()
       new_error.AddDebuggingMessage(exceptions.AppCrashException(
           self.app, 'The app is probably crashed:\n'))
@@ -514,10 +540,12 @@ class InspectorBackend(object):
     error.AddDebuggingMessage('Debugger url: %s' % self.debugger_url)
 
   @_HandleInspectorWebSocketExceptions
-  def _EvaluateJavaScript(self, expression, context_id, timeout):
+  def _EvaluateJavaScript(self, expression, context_id, timeout,
+                          user_gesture=False):
     try:
-      return self._runtime.Evaluate(expression, context_id, timeout)
-    except websocket.WebSocketTimeoutException as e:
+      return self._runtime.Evaluate(expression, context_id, timeout,
+                                    user_gesture)
+    except inspector_websocket.WebSocketException as e:
       # Assume the renderer's main thread is hung. Try to use DevTools
       # to crash the target renderer process (on its IO thread) so we
       # get a minidump we can symbolize.

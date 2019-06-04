@@ -1,8 +1,0 @@
-{
-    "name": "ErrorBroadcastsFieldType",
-    "methods": [],
-    "broadcasts": "Error type",
-    "comment": [
-        "Interface's 'broadcasts' field has wrong type"
-    ]
-}

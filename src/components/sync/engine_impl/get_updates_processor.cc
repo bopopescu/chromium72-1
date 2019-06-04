@@ -40,7 +40,7 @@ SyncerError HandleGetEncryptionKeyResponse(
   bool success = false;
   if (update_response.get_updates().encryption_keys_size() == 0) {
     LOG(ERROR) << "Failed to receive encryption key from server.";
-    return SERVER_RESPONSE_VALIDATION_FAILED;
+    return SyncerError(SyncerError::SERVER_RESPONSE_VALIDATION_FAILED);
   }
   syncable::ReadTransaction trans(FROM_HERE, dir);
   syncable::NigoriHandler* nigori_handler = dir->GetNigoriHandler();
@@ -51,7 +51,9 @@ SyncerError HandleGetEncryptionKeyResponse(
            << update_response.get_updates().encryption_keys_size()
            << "encryption keys. Nigori keystore key " << (success ? "" : "not ")
            << "updated.";
-  return (success ? SYNCER_OK : SERVER_RESPONSE_VALIDATION_FAILED);
+  return (success
+              ? SyncerError(SyncerError::SYNCER_OK)
+              : SyncerError(SyncerError::SERVER_RESPONSE_VALIDATION_FAILED));
 }
 
 // Given a GetUpdates response, iterates over all the returned items and
@@ -62,9 +64,8 @@ void PartitionUpdatesByType(const sync_pb::GetUpdatesResponse& gu_response,
                             ModelTypeSet requested_types,
                             TypeSyncEntityMap* updates_by_type) {
   int update_count = gu_response.entries().size();
-  for (ModelTypeSet::Iterator it = requested_types.First(); it.Good();
-       it.Inc()) {
-    updates_by_type->insert(std::make_pair(it.Get(), SyncEntityList()));
+  for (ModelType type : requested_types) {
+    updates_by_type->insert(std::make_pair(type, SyncEntityList()));
   }
   for (int i = 0; i < update_count; ++i) {
     const sync_pb::SyncEntity& update = gu_response.entries(i);
@@ -74,7 +75,7 @@ void PartitionUpdatesByType(const sync_pb::GetUpdatesResponse& gu_response,
       continue;
     }
 
-    TypeSyncEntityMap::iterator it = updates_by_type->find(type);
+    auto it = updates_by_type->find(type);
     if (it == updates_by_type->end()) {
       DLOG(WARNING) << "Received update for unexpected type, or the type is "
                        "throttled or failed with partial failure:"
@@ -184,10 +185,10 @@ void GetUpdatesProcessor::PrepareGetUpdates(
     sync_pb::ClientToServerMessage* message) {
   sync_pb::GetUpdatesMessage* get_updates = message->mutable_get_updates();
 
-  for (ModelTypeSet::Iterator it = gu_types.First(); it.Good(); it.Inc()) {
-    UpdateHandlerMap::iterator handler_it = update_handler_map_->find(it.Get());
+  for (ModelType type : gu_types) {
+    auto handler_it = update_handler_map_->find(type);
     DCHECK(handler_it != update_handler_map_->end())
-        << "Failed to look up handler for " << ModelTypeToString(it.Get());
+        << "Failed to look up handler for " << ModelTypeToString(type);
     sync_pb::DataTypeProgressMarker* progress_marker =
         get_updates->add_from_progress_marker();
     handler_it->second->GetDownloadProgress(progress_marker);
@@ -230,7 +231,7 @@ SyncerError GetUpdatesProcessor::ExecuteDownloadUpdates(
     request_types->RemoveAll(partial_failure_data_types);
   }
 
-  if (result != SYNCER_OK) {
+  if (result.value() != SyncerError::SYNCER_OK) {
     GetUpdatesResponseEvent response_event(base::Time::Now(), update_response,
                                            result);
     cycle->SendProtocolEvent(response_event);
@@ -239,7 +240,7 @@ SyncerError GetUpdatesProcessor::ExecuteDownloadUpdates(
     // appear every 60 minutes, and then sync services will refresh the
     // authorization. Therefore SYNC_AUTH_ERROR is excluded here to reduce the
     // ERROR messages in the log.
-    if (result != SYNC_AUTH_ERROR) {
+    if (result.value() != SyncerError::SYNC_AUTH_ERROR) {
       LOG(ERROR) << "PostClientToServerMessage() failed during GetUpdates";
     }
 
@@ -269,7 +270,7 @@ SyncerError GetUpdatesProcessor::ExecuteDownloadUpdates(
                                          process_result);
   cycle->SendProtocolEvent(response_event);
 
-  DVLOG(1) << "GetUpdates result: " << process_result;
+  DVLOG(1) << "GetUpdates result: " << process_result.ToString();
 
   return process_result;
 }
@@ -283,18 +284,18 @@ SyncerError GetUpdatesProcessor::ProcessResponse(
   // The changes remaining field is used to prevent the client from looping.  If
   // that field is being set incorrectly, we're in big trouble.
   if (!gu_response.has_changes_remaining()) {
-    return SERVER_RESPONSE_VALIDATION_FAILED;
+    return SyncerError(SyncerError::SERVER_RESPONSE_VALIDATION_FAILED);
   }
 
   SyncerError result =
       ProcessGetUpdatesResponse(request_types, gu_response, status);
-  if (result != SYNCER_OK)
+  if (result.value() != SyncerError::SYNCER_OK)
     return result;
 
   if (gu_response.changes_remaining() == 0) {
-    return SYNCER_OK;
+    return SyncerError(SyncerError::SYNCER_OK);
   } else {
-    return SERVER_MORE_TO_DOWNLOAD;
+    return SyncerError(SyncerError::SERVER_MORE_TO_DOWNLOAD);
   }
 }
 
@@ -311,27 +312,25 @@ SyncerError GetUpdatesProcessor::ProcessGetUpdatesResponse(
                                  &progress_index_by_type);
   if (gu_types.Size() != progress_index_by_type.size()) {
     NOTREACHED() << "Missing progress markers in GetUpdates response.";
-    return SERVER_RESPONSE_VALIDATION_FAILED;
+    return SyncerError(SyncerError::SERVER_RESPONSE_VALIDATION_FAILED);
   }
 
   TypeToIndexMap context_by_type;
   PartitionContextMutationsByType(gu_response, gu_types, &context_by_type);
 
   // Iterate over these maps in parallel, processing updates for each type.
-  TypeToIndexMap::iterator progress_marker_iter =
-      progress_index_by_type.begin();
-  TypeSyncEntityMap::iterator updates_iter = updates_by_type.begin();
+  auto progress_marker_iter = progress_index_by_type.begin();
+  auto updates_iter = updates_by_type.begin();
   for (; (progress_marker_iter != progress_index_by_type.end() &&
           updates_iter != updates_by_type.end());
        ++progress_marker_iter, ++updates_iter) {
     DCHECK_EQ(progress_marker_iter->first, updates_iter->first);
     ModelType type = progress_marker_iter->first;
 
-    UpdateHandlerMap::iterator update_handler_iter =
-        update_handler_map_->find(type);
+    auto update_handler_iter = update_handler_map_->find(type);
 
     sync_pb::DataTypeContext context;
-    TypeToIndexMap::iterator context_iter = context_by_type.find(type);
+    auto context_iter = context_by_type.find(type);
     if (context_iter != context_by_type.end())
       context.CopyFrom(gu_response.context_mutations(context_iter->second));
 
@@ -340,7 +339,7 @@ SyncerError GetUpdatesProcessor::ProcessGetUpdatesResponse(
           update_handler_iter->second->ProcessGetUpdatesResponse(
               gu_response.new_progress_marker(progress_marker_iter->second),
               context, updates_iter->second, status_controller);
-      if (result != SYNCER_OK)
+      if (result.value() != SyncerError::SYNCER_OK)
         return result;
     } else {
       DLOG(WARNING) << "Ignoring received updates of a type we can't handle.  "
@@ -351,7 +350,7 @@ SyncerError GetUpdatesProcessor::ProcessGetUpdatesResponse(
   DCHECK(progress_marker_iter == progress_index_by_type.end() &&
          updates_iter == updates_by_type.end());
 
-  return SYNCER_OK;
+  return SyncerError(SyncerError::SYNCER_OK);
 }
 
 void GetUpdatesProcessor::ApplyUpdates(const ModelTypeSet& gu_types,

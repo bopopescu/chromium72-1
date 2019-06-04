@@ -154,12 +154,15 @@ class FastInkView::LayerTreeFrameSinkHolder
     frame.metadata.begin_frame_ack.has_damage = true;
     frame.metadata.device_scale_factor =
         holder->last_frame_device_scale_factor_;
+    frame.metadata.local_surface_id_allocation_time =
+        holder->last_local_surface_id_allocation_time_;
     std::unique_ptr<viz::RenderPass> pass = viz::RenderPass::Create();
     pass->SetNew(1, gfx::Rect(holder->last_frame_size_in_pixels_),
                  gfx::Rect(holder->last_frame_size_in_pixels_),
                  gfx::Transform());
     frame.render_pass_list.push_back(std::move(pass));
-    holder->frame_sink_->SubmitCompositorFrame(std::move(frame));
+    holder->frame_sink_->SubmitCompositorFrame(std::move(frame),
+                                               /*show_hit_test_borders=*/false);
 
     // Delete sink holder immediately if not waiting for exported resources to
     // be reclaimed.
@@ -188,7 +191,10 @@ class FastInkView::LayerTreeFrameSinkHolder
     exported_resources_[resource_id] = std::move(resource);
     last_frame_size_in_pixels_ = frame.size_in_pixels();
     last_frame_device_scale_factor_ = frame.metadata.device_scale_factor;
-    frame_sink_->SubmitCompositorFrame(std::move(frame));
+    last_local_surface_id_allocation_time_ =
+        frame.metadata.local_surface_id_allocation_time;
+    frame_sink_->SubmitCompositorFrame(std::move(frame),
+                                       /*show_hit_test_borders=*/false);
   }
 
   void DamageExportedResources() {
@@ -221,22 +227,22 @@ class FastInkView::LayerTreeFrameSinkHolder
     if (view_)
       view_->DidReceiveCompositorFrameAck();
   }
-  void DidPresentCompositorFrame(uint32_t presentation_token,
-                                 base::TimeTicks time,
-                                 base::TimeDelta refresh,
-                                 uint32_t flags) override {
+  void DidPresentCompositorFrame(
+      uint32_t presentation_token,
+      const gfx::PresentationFeedback& feedback) override {
     if (view_)
-      view_->DidPresentCompositorFrame(time, refresh, flags);
+      view_->DidPresentCompositorFrame(feedback);
   }
-  void DidDiscardCompositorFrame(uint32_t presentation_token) override {}
   void DidLoseLayerTreeFrameSink() override {
     exported_resources_.clear();
     if (root_window_)
       ScheduleDelete();
   }
+  void DidNotNeedBeginFrame() override {}
   void OnDraw(const gfx::Transform& transform,
               const gfx::Rect& viewport,
-              bool resourceless_software_draw) override {}
+              bool resourceless_software_draw,
+              bool skip_draw) override {}
   void SetMemoryPolicy(const cc::ManagedMemoryPolicy& policy) override {}
   void SetExternalTilePriorityConstraints(
       const gfx::Rect& viewport_rect,
@@ -266,6 +272,7 @@ class FastInkView::LayerTreeFrameSinkHolder
       exported_resources_;
   gfx::Size last_frame_size_in_pixels_;
   float last_frame_device_scale_factor_ = 1.0f;
+  base::TimeTicks last_local_surface_id_allocation_time_;
   aura::Window* root_window_ = nullptr;
   bool delete_pending_ = false;
 
@@ -314,7 +321,8 @@ FastInkView::FastInkView(aura::Window* container,
   // but with potential tearing. Note that we have to draw into a temporary
   // surface and copy it into GPU memory buffer to avoid flicker.
   gpu_memory_buffer_ =
-      aura::Env::GetInstance()
+      widget_->GetNativeWindow()
+          ->env()
           ->context_factory()
           ->GetGpuMemoryBufferManager()
           ->CreateGpuMemoryBuffer(buffer_size_,
@@ -396,7 +404,8 @@ void FastInkView::SubmitCompositorFrame() {
     // new instance to be created in lost context situations is acceptable and
     // keeps the code simple.
     if (!resource->context_provider) {
-      resource->context_provider = aura::Env::GetInstance()
+      resource->context_provider = widget_->GetNativeWindow()
+                                       ->env()
                                        ->context_factory()
                                        ->SharedMainThreadContextProvider();
       if (!resource->context_provider) {
@@ -423,7 +432,6 @@ void FastInkView::SubmitCompositorFrame() {
       gles2->TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
       gles2->TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
       gles2->TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-      gles2->GenMailboxCHROMIUM(resource->mailbox.name);
       gles2->ProduceTextureDirectCHROMIUM(resource->texture,
                                           resource->mailbox.name);
     }
@@ -484,12 +492,15 @@ void FastInkView::SubmitCompositorFrame() {
   frame.metadata.begin_frame_ack =
       viz::BeginFrameAck::CreateManualAckWithDamage();
   frame.metadata.device_scale_factor = device_scale_factor;
+  frame.metadata.local_surface_id_allocation_time =
+      widget_->GetNativeView()->GetLocalSurfaceIdAllocation().allocation_time();
 
   if (!presentation_callback_.is_null()) {
     // If overflow happens, we increase it again.
     if (!++presentation_token_)
       ++presentation_token_;
-    frame.metadata.presentation_token = presentation_token_;
+    frame.metadata.frame_token = presentation_token_;
+    frame.metadata.request_presentation_feedback = true;
   }
 
   viz::TextureDrawQuad* texture_quad =
@@ -497,14 +508,14 @@ void FastInkView::SubmitCompositorFrame() {
   float vertex_opacity[4] = {1.0f, 1.0f, 1.0f, 1.0f};
   gfx::RectF uv_crop(quad_rect);
   uv_crop.Scale(1.f / buffer_size_.width(), 1.f / buffer_size_.height());
-  texture_quad->SetNew(quad_state, quad_rect, quad_rect,
-                       /*needs_blending=*/true, transferable_resource.id,
-                       /*premultiplied_alpha=*/true, uv_crop.origin(),
-                       uv_crop.bottom_right(),
-                       /*background_color=*/SK_ColorTRANSPARENT, vertex_opacity,
-                       /*y_flipped=*/false,
-                       /*nearest_neighbor=*/false,
-                       /*secure_output_only=*/false);
+  texture_quad->SetNew(
+      quad_state, quad_rect, quad_rect,
+      /*needs_blending=*/true, transferable_resource.id,
+      /*premultiplied_alpha=*/true, uv_crop.origin(), uv_crop.bottom_right(),
+      /*background_color=*/SK_ColorTRANSPARENT, vertex_opacity,
+      /*y_flipped=*/false,
+      /*nearest_neighbor=*/false,
+      /*secure_output_only=*/false, ui::ProtectedVideoType::kClear);
   texture_quad->set_resource_size_in_pixels(transferable_resource.size);
   frame.resource_list.push_back(transferable_resource);
 
@@ -530,11 +541,10 @@ void FastInkView::DidReceiveCompositorFrameAck() {
   }
 }
 
-void FastInkView::DidPresentCompositorFrame(base::TimeTicks time,
-                                            base::TimeDelta refresh,
-                                            uint32_t flags) {
+void FastInkView::DidPresentCompositorFrame(
+    const gfx::PresentationFeedback& feedback) {
   DCHECK(!presentation_callback_.is_null());
-  presentation_callback_.Run(time, refresh, flags);
+  presentation_callback_.Run(feedback);
 }
 
 void FastInkView::ReclaimResource(std::unique_ptr<Resource> resource) {

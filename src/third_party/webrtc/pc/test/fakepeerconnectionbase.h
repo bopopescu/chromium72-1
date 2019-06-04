@@ -47,12 +47,6 @@ class FakePeerConnectionBase : public PeerConnectionInternal {
     return RTCError(RTCErrorType::UNSUPPORTED_OPERATION, "Not implemented");
   }
 
-  rtc::scoped_refptr<RtpSenderInterface> AddTrack(
-      MediaStreamTrackInterface* track,
-      std::vector<MediaStreamInterface*> streams) override {
-    return nullptr;
-  }
-
   bool RemoveTrack(RtpSenderInterface* sender) override { return false; }
 
   RTCErrorOr<rtc::scoped_refptr<RtpTransceiverInterface>> AddTransceiver(
@@ -75,11 +69,6 @@ class FakePeerConnectionBase : public PeerConnectionInternal {
       cricket::MediaType media_type,
       const RtpTransceiverInit& init) override {
     return RTCError(RTCErrorType::UNSUPPORTED_OPERATION, "Not implemented");
-  }
-
-  rtc::scoped_refptr<DtmfSenderInterface> CreateDtmfSender(
-      AudioTrackInterface* track) override {
-    return nullptr;
   }
 
   rtc::scoped_refptr<RtpSenderInterface> CreateSender(
@@ -151,16 +140,10 @@ class FakePeerConnectionBase : public PeerConnectionInternal {
   }
 
   void CreateOffer(CreateSessionDescriptionObserver* observer,
-                   const MediaConstraintsInterface* constraints) override {}
-
-  void CreateOffer(CreateSessionDescriptionObserver* observer,
                    const RTCOfferAnswerOptions& options) override {}
 
   void CreateAnswer(CreateSessionDescriptionObserver* observer,
                     const RTCOfferAnswerOptions& options) override {}
-
-  void CreateAnswer(CreateSessionDescriptionObserver* observer,
-                    const MediaConstraintsInterface* constraints) override {}
 
   void SetLocalDescription(SetSessionDescriptionObserver* observer,
                            SessionDescriptionInterface* desc) override {}
@@ -193,8 +176,6 @@ class FakePeerConnectionBase : public PeerConnectionInternal {
       const std::vector<cricket::Candidate>& candidates) override {
     return false;
   }
-
-  void RegisterUMAObserver(UMAObserver* observer) override {}
 
   RTCError SetBitrate(const BitrateSettings& bitrate) override {
     return RTCError(RTCErrorType::UNSUPPORTED_OPERATION, "Not implemented");
@@ -248,11 +229,9 @@ class FakePeerConnectionBase : public PeerConnectionInternal {
     return {};
   }
 
-  bool GetLocalTrackIdBySsrc(uint32_t ssrc, std::string* track_id) override {
-    return false;
-  }
-  bool GetRemoteTrackIdBySsrc(uint32_t ssrc, std::string* track_id) override {
-    return false;
+  absl::string_view GetLocalTrackIdBySsrc(uint32_t ssrc) override { return {}; }
+  absl::string_view GetRemoteTrackIdBySsrc(uint32_t ssrc) override {
+    return {};
   }
 
   sigslot::signal1<DataChannel*>& SignalDataChannelCreated() override {
@@ -266,12 +245,12 @@ class FakePeerConnectionBase : public PeerConnectionInternal {
     return {};
   }
 
-  rtc::Optional<std::string> sctp_content_name() const override {
-    return rtc::nullopt;
+  absl::optional<std::string> sctp_content_name() const override {
+    return absl::nullopt;
   }
 
-  rtc::Optional<std::string> sctp_transport_name() const override {
-    return rtc::nullopt;
+  absl::optional<std::string> sctp_transport_name() const override {
+    return absl::nullopt;
   }
 
   std::map<std::string, std::string> GetTransportNamesByMid() const override {

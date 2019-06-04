@@ -4,14 +4,19 @@
 
 #include "chrome/browser/ssl/security_state_tab_helper.h"
 
+#include "base/base64.h"
 #include "base/command_line.h"
+#include "base/feature_list.h"
 #include "base/files/file_path.h"
 #include "base/macros.h"
 #include "base/run_loop.h"
 #include "base/strings/string_split.h"
 #include "base/strings/utf_string_conversions.h"
-#include "base/test/histogram_tester.h"
+#include "base/task/post_task.h"
+#include "base/test/bind_test_util.h"
+#include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_command_line.h"
+#include "base/test/scoped_feature_list.h"
 #include "build/build_config.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/chrome_notification_types.h"
@@ -24,6 +29,7 @@
 #include "chrome/browser/ui/browser_finder.h"
 #include "chrome/browser/ui/browser_list.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
+#include "chrome/common/chrome_features.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/pref_names.h"
@@ -36,7 +42,9 @@
 #include "components/security_state/core/features.h"
 #include "components/security_state/core/security_state.h"
 #include "components/strings/grit/components_strings.h"
+#include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
+#include "content/public/browser/file_select_listener.h"
 #include "content/public/browser/interstitial_page.h"
 #include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/navigation_entry.h"
@@ -47,14 +55,16 @@
 #include "content/public/browser/security_style_explanation.h"
 #include "content/public/browser/security_style_explanations.h"
 #include "content/public/browser/ssl_status.h"
+#include "content/public/browser/storage_partition.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_contents_delegate.h"
-#include "content/public/common/file_chooser_file_info.h"
-#include "content/public/common/file_chooser_params.h"
 #include "content/public/common/page_type.h"
 #include "content/public/common/referrer.h"
+#include "content/public/common/service_manager_connection.h"
+#include "content/public/common/service_names.mojom.h"
 #include "content/public/test/browser_test_utils.h"
 #include "content/public/test/test_navigation_observer.h"
+#include "content/public/test/url_loader_interceptor.h"
 #include "net/base/net_errors.h"
 #include "net/cert/cert_status_flags.h"
 #include "net/cert/cert_verify_result.h"
@@ -62,16 +72,21 @@
 #include "net/cert/mock_cert_verifier.h"
 #include "net/cert/x509_certificate.h"
 #include "net/dns/mock_host_resolver.h"
+#include "net/http/transport_security_state_test_util.h"
 #include "net/ssl/ssl_cipher_suite_names.h"
 #include "net/ssl/ssl_connection_status_flags.h"
 #include "net/test/cert_test_util.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
+#include "net/test/embedded_test_server/http_request.h"
+#include "net/test/embedded_test_server/http_response.h"
 #include "net/test/embedded_test_server/request_handler_util.h"
 #include "net/test/test_data_directory.h"
 #include "net/test/url_request/url_request_failed_job.h"
-#include "net/test/url_request/url_request_mock_http_job.h"
 #include "net/url_request/url_request_filter.h"
 #include "net/url_request/url_request_test_util.h"
+#include "services/network/public/cpp/features.h"
+#include "services/service_manager/public/cpp/connector.h"
+#include "third_party/blink/public/mojom/choosers/file_chooser.mojom.h"
 #include "third_party/boringssl/src/include/openssl/ssl.h"
 #include "ui/base/l10n/l10n_util.h"
 
@@ -103,8 +118,7 @@ const base::FilePath::CharType kDocRoot[] =
 const char kTestCertificateIssuerName[] = "Test Root CA";
 
 bool AreCommittedInterstitialsEnabled() {
-  return base::CommandLine::ForCurrentProcess()->HasSwitch(
-      switches::kCommittedInterstitials);
+  return base::FeatureList::IsEnabled(features::kSSLCommittedInterstitials);
 }
 
 bool IsShowingInterstitial(content::WebContents* tab) {
@@ -199,34 +213,32 @@ class FileChooserDelegate : public content::WebContentsDelegate {
  public:
   // Constructs a WebContentsDelegate that mocks a file dialog.
   // The mocked file dialog will always reply that the user selected |file|.
-  explicit FileChooserDelegate(const base::FilePath& file)
-      : file_(file), file_chosen_(false) {}
-
-  // Whether the file dialog was shown.
-  bool file_chosen() const { return file_chosen_; }
+  explicit FileChooserDelegate(const base::FilePath& file,
+                               base::OnceClosure callback)
+      : file_(file), callback_(std::move(callback)) {}
 
   // Copy of the params passed to RunFileChooser.
-  content::FileChooserParams params() const { return params_; }
+  const blink::mojom::FileChooserParams& params() const { return *params_; }
 
   // WebContentsDelegate:
   void RunFileChooser(content::RenderFrameHost* render_frame_host,
-                      const content::FileChooserParams& params) override {
+                      std::unique_ptr<content::FileSelectListener> listener,
+                      const blink::mojom::FileChooserParams& params) override {
     // Send the selected file to the renderer process.
-    content::FileChooserFileInfo file_info;
-    file_info.file_path = file_;
-    std::vector<content::FileChooserFileInfo> files;
-    files.push_back(file_info);
-    render_frame_host->FilesSelectedInChooser(files,
-                                              content::FileChooserParams::Open);
+    std::vector<blink::mojom::FileChooserFileInfoPtr> files;
+    files.push_back(blink::mojom::FileChooserFileInfo::NewNativeFile(
+        blink::mojom::NativeFileInfo::New(file_, base::string16())));
+    listener->FileSelected(std::move(files), base::FilePath(),
+                           blink::mojom::FileChooserParams::Mode::kOpen);
 
-    file_chosen_ = true;
-    params_ = params;
+    params_ = params.Clone();
+    std::move(callback_).Run();
   }
 
  private:
   base::FilePath file_;
-  bool file_chosen_;
-  content::FileChooserParams params_;
+  base::OnceClosure callback_;
+  blink::mojom::FileChooserParamsPtr params_;
 
   DISALLOW_COPY_AND_ASSIGN(FileChooserDelegate);
 };
@@ -299,7 +311,7 @@ void CheckBrokenSecurityStyle(const SecurityStyleTestObserver& observer,
   net::X509Certificate* cert = browser->tab_strip_model()
                                    ->GetActiveWebContents()
                                    ->GetController()
-                                   .GetActiveEntry()
+                                   .GetVisibleEntry()
                                    ->GetSSL()
                                    .certificate.get();
   EXPECT_TRUE(cert->EqualsExcludingChain(expected_cert));
@@ -323,7 +335,7 @@ void CheckSecureCertificateExplanation(
   net::X509Certificate* cert = browser->tab_strip_model()
                                    ->GetActiveWebContents()
                                    ->GetController()
-                                   .GetActiveEntry()
+                                   .GetLastCommittedEntry()
                                    ->GetSSL()
                                    .certificate.get();
   EXPECT_TRUE(cert->EqualsExcludingChain(expected_cert));
@@ -346,35 +358,30 @@ void CheckSecureConnectionExplanation(
   int ssl_version =
       net::SSLConnectionStatusToVersion(security_info.connection_status);
   net::SSLVersionToString(&protocol, ssl_version);
-  EXPECT_EQ(l10n_util::GetStringFUTF8(IDS_STRONG_SSL_SUMMARY,
-                                      base::ASCIIToUTF16(protocol)),
-            explanation.summary);
-
   bool is_aead, is_tls13;
   uint16_t cipher_suite =
       net::SSLConnectionStatusToCipherSuite(security_info.connection_status);
   net::SSLCipherSuiteToStrings(&key_exchange, &cipher, &mac, &is_aead,
                                &is_tls13, cipher_suite);
+  // Modern configurations are always AEADs and specify groups.
   EXPECT_TRUE(is_aead);
-  EXPECT_EQ(nullptr, mac);  // The default secure cipher does not have a MAC.
-  EXPECT_FALSE(is_tls13);   // The default secure cipher is not TLS 1.3.
+  EXPECT_EQ(nullptr, mac);
+  ASSERT_NE(0, security_info.key_exchange_group);
+  const char* key_exchange_group =
+      SSL_get_curve_name(security_info.key_exchange_group);
 
-  base::string16 key_exchange_name = base::ASCIIToUTF16(key_exchange);
-  if (security_info.key_exchange_group != 0) {
-    key_exchange_name = l10n_util::GetStringFUTF16(
-        IDS_SSL_KEY_EXCHANGE_WITH_GROUP, key_exchange_name,
-        base::ASCIIToUTF16(
-            SSL_get_curve_name(security_info.key_exchange_group)));
-  }
+  // The description should summarize the settings.
+  EXPECT_NE(std::string::npos, explanation.description.find(protocol));
+  if (key_exchange == nullptr)
+    EXPECT_TRUE(is_tls13);
+  else
+    EXPECT_NE(std::string::npos, explanation.description.find(key_exchange));
+  EXPECT_NE(std::string::npos,
+            explanation.description.find(key_exchange_group));
+  EXPECT_NE(std::string::npos, explanation.description.find(cipher));
 
-  std::vector<base::string16> description_replacements;
-  description_replacements.push_back(base::ASCIIToUTF16(protocol));
-  description_replacements.push_back(key_exchange_name);
-  description_replacements.push_back(base::ASCIIToUTF16(cipher));
-  base::string16 secure_description = l10n_util::GetStringFUTF16(
-      IDS_STRONG_SSL_DESCRIPTION, description_replacements, nullptr);
-
-  EXPECT_EQ(secure_description, base::ASCIIToUTF16(explanation.description));
+  // There should be no recommendations to provide.
+  EXPECT_EQ(0u, explanation.recommendations.size());
 }
 
 // Checks that the given |explanation| contains an appropriate
@@ -408,7 +415,7 @@ void CheckSecurityInfoForSecure(
   EXPECT_EQ(pkp_bypassed, security_info.pkp_bypassed);
   EXPECT_EQ(expect_cert_error,
             net::IsCertStatusError(security_info.cert_status));
-  EXPECT_GT(security_info.security_bits, 0);
+  EXPECT_TRUE(security_info.connection_info_initialized);
   EXPECT_TRUE(!!security_info.certificate);
 }
 
@@ -426,7 +433,7 @@ void CheckSecurityInfoForNonSecure(content::WebContents* contents) {
             security_info.mixed_content_status);
   EXPECT_FALSE(security_info.scheme_is_cryptographic);
   EXPECT_FALSE(net::IsCertStatusError(security_info.cert_status));
-  EXPECT_EQ(-1, security_info.security_bits);
+  EXPECT_FALSE(security_info.connection_info_initialized);
   EXPECT_FALSE(!!security_info.certificate);
 }
 
@@ -467,7 +474,7 @@ void GetFilePathWithHostAndPortReplacement(
 GURL GetURLWithNonLocalHostname(net::EmbeddedTestServer* server,
                                 const std::string& path) {
   GURL::Replacements replace_host;
-  replace_host.SetHostStr("example.test");
+  replace_host.SetHostStr("example1.test");
   return server->GetURL(path).ReplaceComponents(replace_host);
 }
 
@@ -492,7 +499,8 @@ class SecurityStateTabHelperTest : public CertVerifierBrowserTest,
     // Browser will both run and display insecure content.
     command_line->AppendSwitch(switches::kAllowRunningInsecureContent);
     if (GetParam()) {
-      command_line->AppendSwitch(switches::kCommittedInterstitials);
+      scoped_feature_list_.InitAndEnableFeature(
+          features::kSSLCommittedInterstitials);
     }
   }
 
@@ -551,6 +559,7 @@ class SecurityStateTabHelperTest : public CertVerifierBrowserTest,
   net::EmbeddedTestServer https_server_;
 
  private:
+  base::test::ScopedFeatureList scoped_feature_list_;
   DISALLOW_COPY_AND_ASSIGN(SecurityStateTabHelperTest);
 };
 
@@ -590,7 +599,8 @@ class DidChangeVisibleSecurityStateTest
     // Browser will both run and display insecure content.
     command_line->AppendSwitch(switches::kAllowRunningInsecureContent);
     if (GetParam()) {
-      command_line->AppendSwitch(switches::kCommittedInterstitials);
+      scoped_feature_list_.InitAndEnableFeature(
+          features::kSSLCommittedInterstitials);
     }
   }
 
@@ -602,6 +612,7 @@ class DidChangeVisibleSecurityStateTest
   net::EmbeddedTestServer https_server_;
 
  private:
+  base::test::ScopedFeatureList scoped_feature_list_;
   DISALLOW_COPY_AND_ASSIGN(DidChangeVisibleSecurityStateTest);
 };
 
@@ -627,8 +638,10 @@ IN_PROC_BROWSER_TEST_P(SecurityStateTabHelperTest, HttpPage) {
             security_info.mixed_content_status);
   EXPECT_FALSE(security_info.scheme_is_cryptographic);
   EXPECT_FALSE(net::IsCertStatusError(security_info.cert_status));
+  // TODO(dmcardle): Should determine the expected value for
+  // |security_info.connection_info_initialized|. Follow up with estark.
+  // See crbug.com/780972
   EXPECT_FALSE(!!security_info.certificate);
-  EXPECT_EQ(-1, security_info.security_bits);
   EXPECT_EQ(0, security_info.connection_status);
 }
 
@@ -1049,10 +1062,11 @@ IN_PROC_BROWSER_TEST_P(SecurityStateTabHelperTest,
   EXPECT_EQ(content::SSLStatus::NORMAL_CONTENT, entry->GetSSL().content_status);
 }
 
-// Tests the security level and malicious content status for password reuse
-// threat type.
-IN_PROC_BROWSER_TEST_P(SecurityStateTabHelperTest,
-                       VerifyPasswordReuseMaliciousContentAndSecurityLevel) {
+// Tests the security level and malicious content status for sign-in password
+// reuse threat type.
+IN_PROC_BROWSER_TEST_P(
+    SecurityStateTabHelperTest,
+    VerifySignInPasswordReuseMaliciousContentAndSecurityLevel) {
   // Setup https server. This makes sure that the DANGEROUS security level is
   // not caused by any certificate error rather than the password reuse SB
   // threat type.
@@ -1070,17 +1084,19 @@ IN_PROC_BROWSER_TEST_P(SecurityStateTabHelperTest,
   ui_test_utils::NavigateToURL(browser(),
                                https_server_.GetURL("/ssl/google.html"));
   // Update security state of the current page to match
-  // SB_THREAT_TYPE_PASSWORD_REUSE.
+  // SB_THREAT_TYPE_SIGN_IN_PASSWORD_REUSE.
   safe_browsing::ChromePasswordProtectionService* service =
       safe_browsing::ChromePasswordProtectionService::
           GetPasswordProtectionService(browser()->profile());
-  service->ShowModalWarning(contents, "unused-token");
+  service->ShowModalWarning(contents, "unused-token",
+                            safe_browsing::LoginReputationClientRequest::
+                                PasswordReuseEvent::SIGN_IN_PASSWORD);
   observer.WaitForDidChangeVisibleSecurityState();
 
   security_state::SecurityInfo security_info;
   helper->GetSecurityInfo(&security_info);
   EXPECT_EQ(security_state::DANGEROUS, security_info.security_level);
-  EXPECT_EQ(security_state::MALICIOUS_CONTENT_STATUS_PASSWORD_REUSE,
+  EXPECT_EQ(security_state::MALICIOUS_CONTENT_STATUS_SIGN_IN_PASSWORD_REUSE,
             security_info.malicious_content_status);
 
   // Simulates a Gaia password change, then malicious content status will
@@ -1091,6 +1107,45 @@ IN_PROC_BROWSER_TEST_P(SecurityStateTabHelperTest,
   EXPECT_EQ(security_state::DANGEROUS, security_info.security_level);
   EXPECT_EQ(security_state::MALICIOUS_CONTENT_STATUS_SOCIAL_ENGINEERING,
             security_info.malicious_content_status);
+}
+
+// Tests the security level and malicious content status for enterprise password
+// reuse threat type.
+IN_PROC_BROWSER_TEST_P(
+    SecurityStateTabHelperTest,
+    VerifyEnterprisePasswordReuseMaliciousContentAndSecurityLevel) {
+  // Setup https server. This makes sure that the DANGEROUS security level is
+  // not caused by any certificate error rather than the password reuse SB
+  // threat type.
+  SetUpMockCertVerifierForHttpsServer(0, net::OK);
+  content::WebContents* contents =
+      browser()->tab_strip_model()->GetActiveWebContents();
+
+  SecurityStyleTestObserver observer(contents);
+
+  SecurityStateTabHelper* helper =
+      SecurityStateTabHelper::FromWebContents(contents);
+
+  ui_test_utils::NavigateToURL(browser(),
+                               https_server_.GetURL("/ssl/google.html"));
+  // Update security state of the current page to match
+  // SB_THREAT_TYPE_ENTERPRISE_PASSWORD_REUSE.
+  safe_browsing::ChromePasswordProtectionService* service =
+      safe_browsing::ChromePasswordProtectionService::
+          GetPasswordProtectionService(browser()->profile());
+  service->ShowModalWarning(contents, "unused-token",
+                            safe_browsing::LoginReputationClientRequest::
+                                PasswordReuseEvent::ENTERPRISE_PASSWORD);
+  observer.WaitForDidChangeVisibleSecurityState();
+
+  security_state::SecurityInfo security_info;
+  helper->GetSecurityInfo(&security_info);
+  EXPECT_EQ(security_state::DANGEROUS, security_info.security_level);
+  EXPECT_EQ(security_state::MALICIOUS_CONTENT_STATUS_ENTERPRISE_PASSWORD_REUSE,
+            security_info.malicious_content_status);
+
+  // Since these are non-Gaia enterprise passwords, Gaia password change won't
+  // have any impact here.
 }
 
 // Tests that the security level of ftp: URLs is always downgraded to
@@ -1122,39 +1177,91 @@ IN_PROC_BROWSER_TEST_P(SecurityStateTabHelperTest,
   EXPECT_EQ(content::SSLStatus::NORMAL_CONTENT, entry->GetSSL().content_status);
 }
 
-const char kReportURI[] = "https://report-hpkp.test";
-
 class PKPModelClientTest : public SecurityStateTabHelperTest {
  public:
+  static constexpr const char* kPKPHost = "example.test";
+
   void SetUpOnMainThread() override {
+    // This test class intentionally does not call the parent SetUpOnMainThread.
+
+    // Switch HTTPS server to use the "localhost" cert. The test mocks out cert
+    // verification results based on the used cert.
+    https_server_.SetSSLConfig(
+        net::EmbeddedTestServer::CERT_COMMON_NAME_IS_DOMAIN);
     ASSERT_TRUE(https_server_.Start());
-    url_request_context_getter_ = browser()->profile()->GetRequestContext();
-    content::BrowserThread::PostTask(
-        content::BrowserThread::IO, FROM_HERE,
-        base::BindOnce(&PKPModelClientTest::SetUpOnIOThread,
-                       base::Unretained(this)));
+
+    host_resolver()->AddIPLiteralRule(
+        kPKPHost, https_server_.GetIPLiteralString(), std::string());
+
+    EnableStaticPins();
   }
 
-  void SetUpOnIOThread() {
-    net::URLRequestContext* request_context =
-        url_request_context_getter_->GetURLRequestContext();
-    net::TransportSecurityState* security_state =
-        request_context->transport_security_state();
+  void TearDownOnMainThread() override {
+    if (base::FeatureList::IsEnabled(network::features::kNetworkService)) {
+      mojo::ScopedAllowSyncCallForTesting allow_sync_call;
 
-    base::Time expiration =
-        base::Time::Now() + base::TimeDelta::FromSeconds(10000);
+      network::mojom::NetworkServiceTestPtr network_service_test;
+      content::ServiceManagerConnection::GetForProcess()
+          ->GetConnector()
+          ->BindInterface(content::mojom::kNetworkServiceName,
+                          &network_service_test);
+      network_service_test->SetTransportSecurityStateSource(0);
+      return;
+    }
+    RunOnIOThreadBlocking(base::BindOnce(&PKPModelClientTest::CleanUpOnIOThread,
+                                         base::Unretained(this)));
 
-    net::HashValue hash(net::HASH_VALUE_SHA256);
-    memset(hash.data(), 0x99, hash.size());
-    net::HashValueVector hashes;
-    hashes.push_back(hash);
-
-    security_state->AddHPKP(https_server_.host_port_pair().host(), expiration,
-                            true, hashes, GURL(kReportURI));
+    // This test class intentionally does not call the parent
+    // TearDownOnMainThread.
   }
 
- protected:
-  scoped_refptr<net::URLRequestContextGetter> url_request_context_getter_;
+ private:
+  void EnableStaticPins() {
+    if (base::FeatureList::IsEnabled(network::features::kNetworkService)) {
+      mojo::ScopedAllowSyncCallForTesting allow_sync_call;
+
+      network::mojom::NetworkServiceTestPtr network_service_test;
+      content::ServiceManagerConnection::GetForProcess()
+          ->GetConnector()
+          ->BindInterface(content::mojom::kNetworkServiceName,
+                          &network_service_test);
+      // The tests don't depend on reporting, so the port doesn't matter.
+      network_service_test->SetTransportSecurityStateSource(80);
+
+      content::StoragePartition* partition =
+          content::BrowserContext::GetDefaultStoragePartition(
+              browser()->profile());
+      partition->GetNetworkContext()->EnableStaticKeyPinningForTesting();
+      return;
+    }
+    RunOnIOThreadBlocking(base::BindOnce(
+        &PKPModelClientTest::EnableStaticPinsOnIOThread, base::Unretained(this),
+        base::RetainedRef(browser()->profile()->GetRequestContext())));
+  }
+
+  void RunOnIOThreadBlocking(base::OnceClosure task) {
+    base::RunLoop run_loop;
+    base::PostTaskWithTraitsAndReply(FROM_HERE, {content::BrowserThread::IO},
+                                     std::move(task), run_loop.QuitClosure());
+    run_loop.Run();
+  }
+
+  void EnableStaticPinsOnIOThread(
+      scoped_refptr<net::URLRequestContextGetter> context_getter) {
+    // The tests don't depend on reporting, so the port doesn't matter.
+    transport_security_state_source_ =
+        std::make_unique<net::ScopedTransportSecurityStateSource>();
+
+    net::TransportSecurityState* state =
+        context_getter->GetURLRequestContext()->transport_security_state();
+    state->EnableStaticPinsForTesting();
+  }
+
+  void CleanUpOnIOThread() { transport_security_state_source_.reset(); }
+
+  // Only used when NetworkService is disabled. Accessed on IO thread.
+  std::unique_ptr<net::ScopedTransportSecurityStateSource>
+      transport_security_state_source_;
 };
 
 INSTANTIATE_TEST_CASE_P(, PKPModelClientTest, ::testing::Values(false, true));
@@ -1169,14 +1276,15 @@ IN_PROC_BROWSER_TEST_P(PKPModelClientTest, PKPBypass) {
   // PKP is bypassed when |is_issued_by_known_root| is false.
   verify_result.is_issued_by_known_root = false;
   verify_result.verified_cert = cert;
+  // Public key hash which does not match the value in the static pin.
   net::HashValue hash(net::HASH_VALUE_SHA256);
   memset(hash.data(), 1, hash.size());
   verify_result.public_key_hashes.push_back(hash);
 
   mock_cert_verifier()->AddResultForCert(cert, verify_result, net::OK);
 
-  ui_test_utils::NavigateToURL(browser(),
-                               https_server_.GetURL("/ssl/google.html"));
+  ui_test_utils::NavigateToURL(
+      browser(), https_server_.GetURL(kPKPHost, "/ssl/google.html"));
 
   CheckSecurityInfoForSecure(
       browser()->tab_strip_model()->GetActiveWebContents(),
@@ -1199,14 +1307,15 @@ IN_PROC_BROWSER_TEST_P(PKPModelClientTest, PKPEnforced) {
   // PKP requires |is_issued_by_known_root| to be true.
   verify_result.is_issued_by_known_root = true;
   verify_result.verified_cert = cert;
+  // Public key hash which does not match the value in the static pin.
   net::HashValue hash(net::HASH_VALUE_SHA256);
   memset(hash.data(), 1, hash.size());
   verify_result.public_key_hashes.push_back(hash);
 
   mock_cert_verifier()->AddResultForCert(cert, verify_result, net::OK);
 
-  ui_test_utils::NavigateToURL(browser(),
-                               https_server_.GetURL("/ssl/google.html"));
+  ui_test_utils::NavigateToURL(
+      browser(), https_server_.GetURL(kPKPHost, "/ssl/google.html"));
   CheckBrokenSecurityStyle(observer, net::ERR_SSL_PINNED_KEY_NOT_IN_CERT_CHAIN,
                            browser(), cert.get());
 }
@@ -1246,8 +1355,8 @@ class SecurityStateLoadingTest : public SecurityStateTabHelperTest {
   void SetUpOnMainThread() override {
     ASSERT_TRUE(embedded_test_server()->Start());
 
-    content::BrowserThread::PostTask(
-        content::BrowserThread::IO, FROM_HERE,
+    base::PostTaskWithTraits(
+        FROM_HERE, {content::BrowserThread::IO},
         base::BindOnce(&InstallLoadingInterceptor,
                        embedded_test_server()->GetURL("/title1.html").host()));
   }
@@ -1543,14 +1652,15 @@ IN_PROC_BROWSER_TEST_P(SecurityStateTabHelperTest,
   EXPECT_TRUE(base::PathService::Get(base::DIR_TEMP, &file_path));
   file_path = file_path.AppendASCII("bar");
 
+  base::RunLoop run_loop;
   // Fill out the form to refer to the test file.
   SecurityStyleTestObserver observer(contents);
   std::unique_ptr<FileChooserDelegate> delegate(
-      new FileChooserDelegate(file_path));
+      new FileChooserDelegate(file_path, run_loop.QuitClosure()));
   contents->SetDelegate(delegate.get());
   EXPECT_TRUE(
       ExecuteScript(contents, "document.getElementById('fileinput').click();"));
-  EXPECT_TRUE(delegate->file_chosen());
+  run_loop.Run();
   observer.WaitForDidChangeVisibleSecurityState();
 
   // Verify that the security state degrades as expected.
@@ -2124,6 +2234,13 @@ IN_PROC_BROWSER_TEST_P(SecurityStateTabHelperIncognitoTest,
 // TODO(estark): add console messages for the |kMarkHttpAsParameterWarning|
 // configuration of |kMarkHttpAsFeature| and update this test accordingly.
 // https://crbug.com/802921
+#if defined(OS_WIN)
+#define MAYBE_ConsoleMessageNotPrintedForAbortedNavigation \
+  DISABLED_ConsoleMessageNotPrintedForAbortedNavigation
+#else
+#define MAYBE_ConsoleMessageNotPrintedForAbortedNavigation \
+  ConsoleMessageNotPrintedForAbortedNavigation
+#endif
 IN_PROC_BROWSER_TEST_P(SecurityStateTabHelperIncognitoTest,
                        ConsoleMessageNotPrintedForAbortedNavigation) {
   base::test::ScopedFeatureList scoped_feature_list;
@@ -2389,76 +2506,10 @@ IN_PROC_BROWSER_TEST_P(DidChangeVisibleSecurityStateTest,
 // After AddNonsecureUrlHandler() is called, requests to this hostname
 // will use obsolete TLS settings.
 const char kMockNonsecureHostname[] = "example-nonsecure.test";
+const char kResponseFilePath[] = "chrome/test/data/title1.html";
 const int kObsoleteTLSVersion = net::SSL_CONNECTION_VERSION_TLS1_1;
 // ECDHE_RSA + AES_128_CBC with HMAC-SHA1
 const uint16_t kObsoleteCipherSuite = 0xc013;
-
-// A URLRequestMockHTTPJob that mocks a TLS connection with the obsolete
-// TLS settings specified in kObsoleteTLSVersion and
-// kObsoleteCipherSuite.
-class URLRequestObsoleteTLSJob : public net::URLRequestMockHTTPJob {
- public:
-  URLRequestObsoleteTLSJob(net::URLRequest* request,
-                           net::NetworkDelegate* network_delegate,
-                           const base::FilePath& file_path,
-                           scoped_refptr<net::X509Certificate> cert)
-      : net::URLRequestMockHTTPJob(request, network_delegate, file_path),
-        cert_(std::move(cert)) {}
-
-  void GetResponseInfo(net::HttpResponseInfo* info) override {
-    net::URLRequestMockHTTPJob::GetResponseInfo(info);
-    net::SSLConnectionStatusSetVersion(kObsoleteTLSVersion,
-                                       &info->ssl_info.connection_status);
-    net::SSLConnectionStatusSetCipherSuite(kObsoleteCipherSuite,
-                                           &info->ssl_info.connection_status);
-    info->ssl_info.cert = cert_;
-  }
-
- protected:
-  ~URLRequestObsoleteTLSJob() override {}
-
- private:
-  const scoped_refptr<net::X509Certificate> cert_;
-
-  DISALLOW_COPY_AND_ASSIGN(URLRequestObsoleteTLSJob);
-};
-
-// A URLRequestInterceptor that handles requests with
-// URLRequestObsoleteTLSJob jobs.
-class URLRequestNonsecureInterceptor : public net::URLRequestInterceptor {
- public:
-  URLRequestNonsecureInterceptor(const base::FilePath& base_path,
-                                 scoped_refptr<net::X509Certificate> cert)
-      : base_path_(base_path), cert_(std::move(cert)) {}
-
-  ~URLRequestNonsecureInterceptor() override {}
-
-  // net::URLRequestInterceptor:
-  net::URLRequestJob* MaybeInterceptRequest(
-      net::URLRequest* request,
-      net::NetworkDelegate* network_delegate) const override {
-    return new URLRequestObsoleteTLSJob(request, network_delegate, base_path_,
-                                        cert_);
-  }
-
- private:
-  const base::FilePath base_path_;
-  const scoped_refptr<net::X509Certificate> cert_;
-
-  DISALLOW_COPY_AND_ASSIGN(URLRequestNonsecureInterceptor);
-};
-
-// Installs a handler to serve HTTPS requests to
-// |kMockNonsecureHostname| with connections that have obsolete TLS
-// settings.
-void AddNonsecureUrlHandler(const base::FilePath& base_path,
-                            scoped_refptr<net::X509Certificate> cert) {
-  net::URLRequestFilter* filter = net::URLRequestFilter::GetInstance();
-  filter->AddHostnameInterceptor(
-      "https", kMockNonsecureHostname,
-      std::unique_ptr<net::URLRequestInterceptor>(
-          new URLRequestNonsecureInterceptor(base_path, cert)));
-}
 
 class BrowserTestNonsecureURLRequest : public InProcessBrowserTest {
  public:
@@ -2471,16 +2522,41 @@ class BrowserTestNonsecureURLRequest : public InProcessBrowserTest {
   }
 
   void SetUpOnMainThread() override {
-    base::FilePath serve_file;
-    base::PathService::Get(chrome::DIR_TEST_DATA, &serve_file);
-    serve_file = serve_file.Append(FILE_PATH_LITERAL("title1.html"));
-    content::BrowserThread::PostTask(
-        content::BrowserThread::IO, FROM_HERE,
-        base::BindOnce(&AddNonsecureUrlHandler, serve_file, cert_));
+    // Create URLLoaderInterceptor to mock a TLS connection with obsolete TLS
+    // settings specified in kObsoleteTLSVersion and kObsoleteCipherSuite.
+    url_interceptor_ = std::make_unique<content::URLLoaderInterceptor>(
+        base::BindLambdaForTesting(
+            [&](content::URLLoaderInterceptor::RequestParams* params) {
+              // Ignore non-test URLs.
+              if (params->url_request.url.host() != kMockNonsecureHostname) {
+                return false;
+              }
+
+              // Set SSLInfo to reflect an obsolete connection.
+              base::Optional<net::SSLInfo> ssl_info;
+              if (params->url_request.url.SchemeIsCryptographic()) {
+                ssl_info = net::SSLInfo();
+                net::SSLConnectionStatusSetVersion(
+                    kObsoleteTLSVersion, &ssl_info->connection_status);
+                net::SSLConnectionStatusSetCipherSuite(
+                    kObsoleteCipherSuite, &ssl_info->connection_status);
+                ssl_info->cert = cert_;
+              }
+
+              // Write the response.
+              content::URLLoaderInterceptor::WriteResponse(
+                  kResponseFilePath, params->client.get(), nullptr,
+                  std::move(ssl_info));
+
+              return true;
+            }));
   }
+
+  void TearDownOnMainThread() override { url_interceptor_.reset(); }
 
  private:
   scoped_refptr<net::X509Certificate> cert_;
+  std::unique_ptr<content::URLLoaderInterceptor> url_interceptor_;
 
   DISALLOW_COPY_AND_ASSIGN(BrowserTestNonsecureURLRequest);
 };
@@ -2504,37 +2580,24 @@ IN_PROC_BROWSER_TEST_F(
   security_state::SecurityInfo security_info;
   SecurityStateTabHelper::FromWebContents(web_contents)
       ->GetSecurityInfo(&security_info);
-  const char* protocol;
-  int ssl_version =
-      net::SSLConnectionStatusToVersion(security_info.connection_status);
-  net::SSLVersionToString(&protocol, ssl_version);
   for (const auto& explanation :
        observer.latest_explanations().secure_explanations) {
-    EXPECT_NE(l10n_util::GetStringFUTF8(IDS_STRONG_SSL_SUMMARY,
-                                        base::ASCIIToUTF16(protocol)),
+    EXPECT_NE(l10n_util::GetStringUTF8(IDS_SECURE_SSL_SUMMARY),
               explanation.summary);
   }
 
-  // Populate description string replacement with values corresponding
-  // to test constants.
-  std::vector<base::string16> description_replacements;
-  description_replacements.push_back(base::ASCIIToUTF16("TLS 1.1"));
-  description_replacements.push_back(
-      l10n_util::GetStringUTF16(IDS_SSL_AN_OBSOLETE_PROTOCOL));
-  description_replacements.push_back(base::ASCIIToUTF16("ECDHE_RSA"));
-  description_replacements.push_back(
-      l10n_util::GetStringUTF16(IDS_SSL_A_STRONG_KEY_EXCHANGE));
-  description_replacements.push_back(
-      base::ASCIIToUTF16("AES_128_CBC with HMAC-SHA1"));
-  description_replacements.push_back(
-      l10n_util::GetStringUTF16(IDS_SSL_AN_OBSOLETE_CIPHER));
-  base::string16 obsolete_description = l10n_util::GetStringFUTF16(
-      IDS_OBSOLETE_SSL_DESCRIPTION, description_replacements, nullptr);
+  // The description string should include the connection properties.
+  const content::SecurityStyleExplanation& explanation =
+      observer.latest_explanations().info_explanations[0];
+  EXPECT_NE(std::string::npos, explanation.description.find("TLS 1.1"));
+  EXPECT_NE(std::string::npos, explanation.description.find("ECDHE_RSA"));
+  EXPECT_NE(std::string::npos, explanation.description.find("AES_128_CBC"));
+  EXPECT_NE(std::string::npos, explanation.description.find("HMAC-SHA1"));
 
-  EXPECT_EQ(
-      obsolete_description,
-      base::ASCIIToUTF16(
-          observer.latest_explanations().info_explanations[0].description));
+  // There should be recommendations to fix the issues.
+  ASSERT_EQ(2u, explanation.recommendations.size());
+  EXPECT_NE(std::string::npos, explanation.recommendations[0].find("TLS 1.2"));
+  EXPECT_NE(std::string::npos, explanation.recommendations[1].find("GCM"));
 }
 
 // Tests that the Not Secure chip does not show for error pages on http:// URLs.
@@ -2687,14 +2750,14 @@ IN_PROC_BROWSER_TEST_P(SecurityStateTabHelperTest,
   EXPECT_TRUE(base::PathService::Get(base::DIR_TEMP, &file_path));
   file_path = file_path.AppendASCII("bar");
 
+  base::RunLoop run_loop;
   // Fill out the form to refer to the test file.
   std::unique_ptr<FileChooserDelegate> delegate(
-      new FileChooserDelegate(file_path));
+      new FileChooserDelegate(file_path, run_loop.QuitClosure()));
   contents->SetDelegate(delegate.get());
   EXPECT_TRUE(
       ExecuteScript(contents, "document.getElementById('fileinput').click();"));
-  EXPECT_TRUE(delegate->file_chosen());
-
+  run_loop.Run();
   observer.WaitForDidChangeVisibleSecurityState();
 
   // Verify that the security state degrades as expected.

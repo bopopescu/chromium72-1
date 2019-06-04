@@ -12,11 +12,11 @@
 #include "base/optional.h"
 #include "chrome/common/page_load_metrics/page_load_timing.h"
 #include "components/data_reduction_proxy/core/browser/data_reduction_proxy_data.h"
-#include "components/ukm/ukm_source.h"
 #include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/web_contents_observer.h"
 #include "content/public/common/resource_type.h"
 #include "net/base/host_port_pair.h"
+#include "services/metrics/public/cpp/ukm_source.h"
 #include "third_party/blink/public/platform/web_input_event.h"
 #include "url/gurl.h"
 
@@ -136,6 +136,7 @@ struct PageLoadExtraInfo {
       const base::Optional<base::TimeDelta>& page_end_time,
       const mojom::PageLoadMetadata& main_frame_metadata,
       const mojom::PageLoadMetadata& subframe_metadata,
+      const mojom::PageRenderData& main_frame_render_data,
       ukm::SourceId source_id);
 
   // Simplified version of the constructor, intended for use in tests.
@@ -209,6 +210,8 @@ struct PageLoadExtraInfo {
 
   // PageLoadMetadata for subframes of the current page load.
   const mojom::PageLoadMetadata subframe_metadata;
+
+  const mojom::PageRenderData main_frame_render_data;
 
   // UKM SourceId for the current page load.
   const ukm::SourceId source_id;
@@ -318,6 +321,13 @@ class PageLoadMetricsObserver {
   virtual ObservePolicy OnCommit(content::NavigationHandle* navigation_handle,
                                  ukm::SourceId source_id);
 
+  // OnDidInternalNavigationAbort is triggered when the main frame navigation
+  // aborts with HTTP responses that don't commit, such as HTTP 204 responses
+  // and downloads. Note that |navigation_handle| will be destroyed
+  // soon after this call. Don't hold a reference to it.
+  virtual void OnDidInternalNavigationAbort(
+      content::NavigationHandle* navigation_handle) {}
+
   // OnDidFinishSubFrameNavigation is triggered when a sub-frame of the
   // committed page has finished navigating. It has either committed, aborted,
   // was a same document navigation, or has been replaced. It is up to the
@@ -406,6 +416,22 @@ class PageLoadMetricsObserver {
       const mojom::PageLoadTiming& timing,
       const PageLoadExtraInfo& extra_info) {}
 
+  // These signatures are used to report the last candidate for each of FCP++
+  // metrics. They will be invoked at the end of page load's life time, around
+  // the time of the OnComplete callback.
+  virtual void OnLargestImagePaintInMainFrameDocument(
+      const mojom::PageLoadTiming& last_candidate,
+      const page_load_metrics::PageLoadExtraInfo& info) {}
+  virtual void OnLastImagePaintInMainFrameDocument(
+      const mojom::PageLoadTiming& last_candidate,
+      const page_load_metrics::PageLoadExtraInfo& info) {}
+  virtual void OnLargestTextPaintInMainFrameDocument(
+      const mojom::PageLoadTiming& last_candidate,
+      const page_load_metrics::PageLoadExtraInfo& info) {}
+  virtual void OnLastTextPaintInMainFrameDocument(
+      const mojom::PageLoadTiming& last_candidate,
+      const page_load_metrics::PageLoadExtraInfo& info) {}
+
   virtual void OnPageInteractive(const mojom::PageLoadTiming& timing,
                                  const PageLoadExtraInfo& extra_info) {}
 
@@ -419,6 +445,12 @@ class PageLoadMetricsObserver {
   // Invoked when new use counter features are observed across all frames.
   virtual void OnFeaturesUsageObserved(const mojom::PageLoadFeatures& features,
                                        const PageLoadExtraInfo& extra_info) {}
+
+  // Invoked when there is data use for loading a resource on the page
+  // across all frames. This only contains resources that have had new
+  // data use since the last callback.
+  virtual void OnResourceDataUseObserved(
+      const std::vector<mojom::ResourceDataUpdatePtr>& resources) {}
 
   // Invoked when a media element starts playing.
   virtual void MediaStartedPlaying(

@@ -113,11 +113,11 @@ class SrtpTransport : public RtpTransport {
   void CreateSrtpSessions();
 
   void OnRtpPacketReceived(rtc::CopyOnWriteBuffer* packet,
-                           const rtc::PacketTime& packet_time) override;
+                           int64_t packet_time_us) override;
   void OnRtcpPacketReceived(rtc::CopyOnWriteBuffer* packet,
-                            const rtc::PacketTime& packet_time) override;
+                            int64_t packet_time_us) override;
   void OnNetworkRouteChanged(
-      rtc::Optional<rtc::NetworkRoute> network_route) override;
+      absl::optional<rtc::NetworkRoute> network_route) override;
 
   // Override the RtpTransport::OnWritableState.
   void OnWritableState(rtc::PacketTransportInternal* packet_transport) override;
@@ -141,9 +141,6 @@ class SrtpTransport : public RtpTransport {
   bool MaybeSetKeyParams();
   bool ParseKeyParams(const std::string& key_params, uint8_t* key, size_t len);
 
-  void SetMetricsObserver(
-      rtc::scoped_refptr<MetricsObserverInterface> metrics_observer) override;
-
   const std::string content_name_;
 
   std::unique_ptr<cricket::SrtpSession> send_session_;
@@ -151,10 +148,10 @@ class SrtpTransport : public RtpTransport {
   std::unique_ptr<cricket::SrtpSession> send_rtcp_session_;
   std::unique_ptr<cricket::SrtpSession> recv_rtcp_session_;
 
-  rtc::Optional<cricket::CryptoParams> send_params_;
-  rtc::Optional<cricket::CryptoParams> recv_params_;
-  rtc::Optional<int> send_cipher_suite_;
-  rtc::Optional<int> recv_cipher_suite_;
+  absl::optional<cricket::CryptoParams> send_params_;
+  absl::optional<cricket::CryptoParams> recv_params_;
+  absl::optional<int> send_cipher_suite_;
+  absl::optional<int> recv_cipher_suite_;
   rtc::ZeroOnFreeBuffer<uint8_t> send_key_;
   rtc::ZeroOnFreeBuffer<uint8_t> recv_key_;
 
@@ -164,7 +161,7 @@ class SrtpTransport : public RtpTransport {
 
   int rtp_abs_sendtime_extn_id_ = -1;
 
-  rtc::scoped_refptr<MetricsObserverInterface> metrics_observer_;
+  int decryption_failure_count_ = 0;
 };
 
 }  // namespace webrtc

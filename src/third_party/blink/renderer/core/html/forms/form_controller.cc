@@ -36,14 +36,14 @@
 
 namespace blink {
 
-using namespace HTMLNames;
+using namespace html_names;
 
 static inline HTMLFormElement* OwnerFormForState(
     const HTMLFormControlElementWithState& control) {
   // Assume controls with form attribute have no owners because we restore
   // state during parsing and form owners of such controls might be
   // indeterminate.
-  return control.FastHasAttribute(formAttr) ? nullptr : control.Form();
+  return control.FastHasAttribute(kFormAttr) ? nullptr : control.Form();
 }
 
 // ----------------------------------------------------------------------------
@@ -69,17 +69,17 @@ void FormControlState::SerializeTo(Vector<String>& state_vector) const {
 
 FormControlState FormControlState::Deserialize(
     const Vector<String>& state_vector,
-    size_t& index) {
+    wtf_size_t& index) {
   if (index >= state_vector.size())
     return FormControlState(kTypeFailure);
-  size_t value_size = state_vector[index++].ToUInt();
+  unsigned value_size = state_vector[index++].ToUInt();
   if (!value_size)
     return FormControlState();
   if (index + value_size > state_vector.size())
     return FormControlState(kTypeFailure);
   FormControlState state;
   state.values_.ReserveCapacity(value_size);
-  for (size_t i = 0; i < value_size; ++i)
+  for (unsigned i = 0; i < value_size; ++i)
     state.Append(state_vector[index++]);
   return state;
 }
@@ -185,7 +185,7 @@ class SavedFormState {
  public:
   static std::unique_ptr<SavedFormState> Create();
   static std::unique_ptr<SavedFormState> Deserialize(const Vector<String>&,
-                                                     size_t& index);
+                                                     wtf_size_t& index);
   void SerializeTo(Vector<String>&) const;
   bool IsEmpty() const { return state_for_new_form_elements_.IsEmpty(); }
   void AppendControlState(const AtomicString& name,
@@ -204,7 +204,7 @@ class SavedFormState {
                                       FormElementKeyHash,
                                       FormElementKeyHashTraits>;
   FormElementStateMap state_for_new_form_elements_;
-  size_t control_state_count_;
+  wtf_size_t control_state_count_;
 
   DISALLOW_COPY_AND_ASSIGN(SavedFormState);
 };
@@ -219,11 +219,11 @@ static bool IsNotFormControlTypeCharacter(UChar ch) {
 
 std::unique_ptr<SavedFormState> SavedFormState::Deserialize(
     const Vector<String>& state_vector,
-    size_t& index) {
+    wtf_size_t& index) {
   if (index >= state_vector.size())
     return nullptr;
   // FIXME: We need String::toSizeT().
-  size_t item_count = state_vector[index++].ToUInt();
+  wtf_size_t item_count = state_vector[index++].ToUInt();
   if (!item_count)
     return nullptr;
   std::unique_ptr<SavedFormState> saved_form_state =
@@ -296,11 +296,9 @@ Vector<String> SavedFormState::GetReferencedFilePaths() const {
       continue;
     const Deque<FormControlState>& queue = form_control.value;
     for (const FormControlState& form_control_state : queue) {
-      const Vector<FileChooserFileInfo>& selected_files =
+      to_return.AppendVector(
           HTMLInputElement::FilesFromFileInputFormControlState(
-              form_control_state);
-      for (const auto& file : selected_files)
-        to_return.push_back(file.path);
+              form_control_state));
     }
   }
   return to_return;
@@ -312,14 +310,17 @@ class FormKeyGenerator final
     : public GarbageCollectedFinalized<FormKeyGenerator> {
 
  public:
-  static FormKeyGenerator* Create() { return new FormKeyGenerator; }
+  static FormKeyGenerator* Create() {
+    return MakeGarbageCollected<FormKeyGenerator>();
+  }
+
+  FormKeyGenerator() = default;
+
   void Trace(blink::Visitor* visitor) { visitor->Trace(form_to_key_map_); }
   const AtomicString& FormKey(const HTMLFormControlElementWithState&);
   void WillDeleteForm(HTMLFormElement*);
 
  private:
-  FormKeyGenerator() = default;
-
   using FormToKeyMap = HeapHashMap<Member<HTMLFormElement>, AtomicString>;
   using FormSignatureToNextIndexMap = HashMap<String, unsigned>;
   FormToKeyMap form_to_key_map_;
@@ -331,10 +332,10 @@ class FormKeyGenerator final
 static inline void RecordFormStructure(const HTMLFormElement& form,
                                        StringBuilder& builder) {
   // 2 is enough to distinguish forms in webkit.org/b/91209#c0
-  const size_t kNamedControlsToBeRecorded = 2;
+  const wtf_size_t kNamedControlsToBeRecorded = 2;
   const ListedElement::List& controls = form.ListedElements();
   builder.Append(" [");
-  for (size_t i = 0, named_controls = 0;
+  for (wtf_size_t i = 0, named_controls = 0;
        i < controls.size() && named_controls < kNamedControlsToBeRecorded;
        ++i) {
     if (!controls[i]->IsFormControlElementWithState())
@@ -354,7 +355,7 @@ static inline void RecordFormStructure(const HTMLFormElement& form,
 }
 
 static inline String FormSignature(const HTMLFormElement& form) {
-  KURL action_url = form.GetURLAttribute(actionAttr);
+  KURL action_url = form.GetURLAttribute(kActionAttr);
   // Remove the query part because it might contain volatile parameters such
   // as a session key.
   if (!action_url.IsEmpty())
@@ -403,7 +404,7 @@ void FormKeyGenerator::WillDeleteForm(HTMLFormElement* form) {
 // ----------------------------------------------------------------------------
 
 DocumentState* DocumentState::Create() {
-  return new DocumentState;
+  return MakeGarbageCollected<DocumentState>();
 }
 
 void DocumentState::Trace(blink::Visitor* visitor) {
@@ -426,7 +427,7 @@ static String FormStateSignature() {
   // attribute value of a form control. The following string literal should
   // contain some characters which are rarely used for name attribute values.
   DEFINE_STATIC_LOCAL(String, signature,
-                      ("\n\r?% Blink serialized form state version 9 \n\r=&"));
+                      ("\n\r?% Blink serialized form state version 10 \n\r=&"));
   return signature;
 }
 
@@ -506,7 +507,7 @@ void FormController::FormStatesFromStateVector(
     SavedFormStateMap& map) {
   map.clear();
 
-  size_t i = 0;
+  wtf_size_t i = 0;
   if (state_vector.size() < 1 || state_vector[i++] != FormStateSignature())
     return;
 

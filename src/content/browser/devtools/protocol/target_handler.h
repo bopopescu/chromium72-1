@@ -18,6 +18,8 @@
 namespace content {
 
 class DevToolsAgentHostImpl;
+class DevToolsRendererChannel;
+class DevToolsSession;
 class NavigationHandle;
 class NavigationThrottle;
 class RenderFrameHostImpl;
@@ -28,7 +30,20 @@ class TargetHandler : public DevToolsDomainHandler,
                       public Target::Backend,
                       public DevToolsAgentHostObserver {
  public:
-  explicit TargetHandler(bool browser_only);
+  enum class AccessMode {
+    // Only setAutoAttach is supported. Any non-related target are not
+    // accessible.
+    kAutoAttachOnly,
+    // Standard mode of operation: both auto-attach and discovery.
+    kRegular,
+    // This mode also allows advanced method like Target.exposeDevToolsProtocol,
+    // which should not be exposed on a non-browser-wide connection.
+    kBrowser
+  };
+  TargetHandler(AccessMode access_mode,
+                const std::string& owner_target_id,
+                DevToolsRendererChannel* renderer_channel,
+                DevToolsSession* root_session);
   ~TargetHandler() override;
 
   static std::vector<TargetHandler*> ForAgentHost(DevToolsAgentHostImpl* host);
@@ -39,31 +54,37 @@ class TargetHandler : public DevToolsDomainHandler,
   Response Disable() override;
 
   void DidCommitNavigation();
-  void RenderFrameHostChanged();
   std::unique_ptr<NavigationThrottle> CreateThrottleForNavigation(
       NavigationHandle* navigation_handle);
 
   // Domain implementation.
   Response SetDiscoverTargets(bool discover) override;
   Response SetAutoAttach(bool auto_attach,
-                         bool wait_for_debugger_on_start) override;
+                         bool wait_for_debugger_on_start,
+                         Maybe<bool> flatten) override;
   Response SetRemoteLocations(
       std::unique_ptr<protocol::Array<Target::RemoteLocation>>) override;
   Response AttachToTarget(const std::string& target_id,
+                          Maybe<bool> flatten,
                           std::string* out_session_id) override;
+  Response AttachToBrowserTarget(std::string* out_session_id) override;
   Response DetachFromTarget(Maybe<std::string> session_id,
                             Maybe<std::string> target_id) override;
   Response SendMessageToTarget(const std::string& message,
                                Maybe<std::string> session_id,
                                Maybe<std::string> target_id) override;
   Response GetTargetInfo(
-      const std::string& target_id,
+      Maybe<std::string> target_id,
       std::unique_ptr<Target::TargetInfo>* target_info) override;
   Response ActivateTarget(const std::string& target_id) override;
   Response CloseTarget(const std::string& target_id,
                        bool* out_success) override;
+  Response ExposeDevToolsProtocol(const std::string& target_id,
+                                  Maybe<std::string> binding_name) override;
   Response CreateBrowserContext(std::string* out_context_id) override;
-  Response DisposeBrowserContext(const std::string& context_id) override;
+  void DisposeBrowserContext(
+      const std::string& context_id,
+      std::unique_ptr<DisposeBrowserContextCallback> callback) override;
   Response GetBrowserContexts(
       std::unique_ptr<protocol::Array<String>>* browser_context_ids) override;
   Response CreateTarget(const std::string& url,
@@ -84,8 +105,7 @@ class TargetHandler : public DevToolsDomainHandler,
   void AutoDetach(DevToolsAgentHost* host);
   Response FindSession(Maybe<std::string> session_id,
                        Maybe<std::string> target_id,
-                       Session** session,
-                       bool fall_through);
+                       Session** session);
   void ClearThrottles();
 
   // DevToolsAgentHostObserver implementation.
@@ -95,15 +115,19 @@ class TargetHandler : public DevToolsDomainHandler,
   void DevToolsAgentHostDestroyed(DevToolsAgentHost* agent_host) override;
   void DevToolsAgentHostAttached(DevToolsAgentHost* agent_host) override;
   void DevToolsAgentHostDetached(DevToolsAgentHost* agent_host) override;
+  void DevToolsAgentHostCrashed(DevToolsAgentHost* agent_host,
+                                base::TerminationStatus status) override;
 
   std::unique_ptr<Target::Frontend> frontend_;
   TargetAutoAttacher auto_attacher_;
+  bool flatten_auto_attach_ = false;
   bool discover_;
   std::map<std::string, std::unique_ptr<Session>> attached_sessions_;
   std::map<DevToolsAgentHost*, Session*> auto_attached_sessions_;
   std::set<DevToolsAgentHost*> reported_hosts_;
-  int last_session_id_ = 0;
-  bool browser_only_;
+  AccessMode access_mode_;
+  std::string owner_target_id_;
+  DevToolsSession* root_session_;
   base::flat_set<Throttle*> throttles_;
   base::WeakPtrFactory<TargetHandler> weak_factory_;
 

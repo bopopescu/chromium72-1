@@ -7,7 +7,6 @@
 #ifndef XFA_FXFA_CXFA_FFDOCVIEW_H_
 #define XFA_FXFA_CXFA_FFDOCVIEW_H_
 
-#include <map>
 #include <memory>
 #include <vector>
 
@@ -47,7 +46,7 @@ class CXFA_FFDocView {
   explicit CXFA_FFDocView(CXFA_FFDoc* pDoc);
   ~CXFA_FFDocView();
 
-  CXFA_FFDoc* GetDoc() { return m_pDoc.Get(); }
+  CXFA_FFDoc* GetDoc() const { return m_pDoc.Get(); }
   int32_t StartLayout();
   int32_t DoLayout();
   void StopLayout();

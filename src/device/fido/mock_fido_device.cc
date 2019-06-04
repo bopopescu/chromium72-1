@@ -8,13 +8,59 @@
 
 #include "base/bind.h"
 #include "base/location.h"
+#include "base/strings/strcat.h"
 #include "base/threading/thread_task_runner_handle.h"
 #include "components/apdu/apdu_response.h"
+#include "device/fido/device_response_converter.h"
 #include "device/fido/fido_constants.h"
 #include "device/fido/fido_parsing_utils.h"
 #include "device/fido/fido_test_data.h"
 
 namespace device {
+
+namespace {
+AuthenticatorGetInfoResponse DefaultAuthenticatorInfo() {
+  return *ReadCTAPGetInfoResponse(test_data::kTestAuthenticatorGetInfoResponse);
+}
+}  // namespace
+
+// static
+std::unique_ptr<MockFidoDevice> MockFidoDevice::MakeU2f() {
+  return std::make_unique<MockFidoDevice>(ProtocolVersion::kU2f, base::nullopt);
+}
+
+// static
+std::unique_ptr<MockFidoDevice> MockFidoDevice::MakeCtap(
+    base::Optional<AuthenticatorGetInfoResponse> device_info) {
+  if (!device_info) {
+    device_info = DefaultAuthenticatorInfo();
+  }
+  return std::make_unique<MockFidoDevice>(ProtocolVersion::kCtap,
+                                          std::move(*device_info));
+}
+
+// static
+std::unique_ptr<MockFidoDevice>
+MockFidoDevice::MakeU2fWithGetInfoExpectation() {
+  auto device = std::make_unique<MockFidoDevice>();
+  device->StubGetId();
+  device->ExpectCtap2CommandAndRespondWith(
+      CtapRequestCommand::kAuthenticatorGetInfo, base::nullopt);
+  return device;
+}
+
+// static
+std::unique_ptr<MockFidoDevice> MockFidoDevice::MakeCtapWithGetInfoExpectation(
+    base::Optional<base::span<const uint8_t>> get_info_response) {
+  auto device = std::make_unique<MockFidoDevice>();
+  device->StubGetId();
+  if (!get_info_response) {
+    get_info_response = test_data::kTestAuthenticatorGetInfoResponse;
+  }
+  device->ExpectCtap2CommandAndRespondWith(
+      CtapRequestCommand::kAuthenticatorGetInfo, std::move(get_info_response));
+  return device;
+}
 
 // Matcher to compare the fist byte of the incoming requests.
 MATCHER_P(IsCtap2Command, expected_command, "") {
@@ -22,6 +68,15 @@ MATCHER_P(IsCtap2Command, expected_command, "") {
 }
 
 MockFidoDevice::MockFidoDevice() : weak_factory_(this) {}
+MockFidoDevice::MockFidoDevice(
+    ProtocolVersion protocol_version,
+    base::Optional<AuthenticatorGetInfoResponse> device_info)
+    : MockFidoDevice() {
+  set_supported_protocol(protocol_version);
+  if (device_info) {
+    SetDeviceInfo(std::move(*device_info));
+  }
+}
 MockFidoDevice::~MockFidoDevice() = default;
 
 void MockFidoDevice::TryWink(WinkCallback cb) {
@@ -33,66 +88,24 @@ void MockFidoDevice::DeviceTransact(std::vector<uint8_t> command,
   DeviceTransactPtr(command, cb);
 }
 
-// static
-void MockFidoDevice::NotSatisfied(const std::vector<uint8_t>& command,
-                                  DeviceCallback& cb) {
-  std::move(cb).Run(apdu::ApduResponse(
-                        std::vector<uint8_t>(),
-                        apdu::ApduResponse::Status::SW_CONDITIONS_NOT_SATISFIED)
-                        .GetEncodedResponse());
+FidoTransportProtocol MockFidoDevice::DeviceTransport() const {
+  return transport_protocol_;
 }
 
-// static
-void MockFidoDevice::WrongData(const std::vector<uint8_t>& command,
-                               DeviceCallback& cb) {
-  std::move(cb).Run(
-      apdu::ApduResponse(std::vector<uint8_t>(),
-                         apdu::ApduResponse::Status::SW_WRONG_DATA)
-          .GetEncodedResponse());
-}
-
-// static
-void MockFidoDevice::NoErrorSign(const std::vector<uint8_t>& command,
-                                 DeviceCallback& cb) {
-  std::move(cb).Run(
-      apdu::ApduResponse(
-          std::vector<uint8_t>(std::begin(test_data::kTestU2fSignResponse),
-                               std::end(test_data::kTestU2fSignResponse)),
-          apdu::ApduResponse::Status::SW_NO_ERROR)
-          .GetEncodedResponse());
-}
-
-// static
-void MockFidoDevice::NoErrorRegister(const std::vector<uint8_t>& command,
-                                     DeviceCallback& cb) {
-  std::move(cb).Run(
-      apdu::ApduResponse(
-          std::vector<uint8_t>(std::begin(test_data::kTestU2fRegisterResponse),
-                               std::end(test_data::kTestU2fRegisterResponse)),
-          apdu::ApduResponse::Status::SW_NO_ERROR)
-          .GetEncodedResponse());
-}
-
-// static
-void MockFidoDevice::SignWithCorruptedResponse(
-    const std::vector<uint8_t>& command,
-    DeviceCallback& cb) {
-  std::move(cb).Run(
-      apdu::ApduResponse(
-          std::vector<uint8_t>(
-              std::begin(test_data::kTestCorruptedU2fSignResponse),
-              std::end(test_data::kTestCorruptedU2fSignResponse)),
-          apdu::ApduResponse::Status::SW_NO_ERROR)
-          .GetEncodedResponse());
-}
-
-// static
-void MockFidoDevice::WinkDoNothing(WinkCallback& cb) {
-  std::move(cb).Run();
+base::WeakPtr<FidoDevice> MockFidoDevice::GetWeakPtr() {
+  return weak_factory_.GetWeakPtr();
 }
 
 void MockFidoDevice::ExpectWinkedAtLeastOnce() {
   EXPECT_CALL(*this, TryWinkRef(::testing::_)).Times(::testing::AtLeast(1));
+}
+
+void MockFidoDevice::StubGetId() {
+  // Use a counter to keep the device ID unique.
+  static size_t i = 0;
+  EXPECT_CALL(*this, GetId())
+      .WillRepeatedly(
+          testing::Return(base::StrCat({"mockdevice", std::to_string(i++)})));
 }
 
 void MockFidoDevice::ExpectCtap2CommandAndRespondWith(
@@ -107,6 +120,14 @@ void MockFidoDevice::ExpectCtap2CommandAndRespondWith(
 
   EXPECT_CALL(*this, DeviceTransactPtr(IsCtap2Command(command), ::testing::_))
       .WillOnce(::testing::WithArg<1>(::testing::Invoke(send_response)));
+}
+
+void MockFidoDevice::ExpectCtap2CommandAndRespondWithError(
+    CtapRequestCommand command,
+    CtapDeviceResponseCode response_code,
+    base::TimeDelta delay) {
+  std::array<uint8_t, 1> data{base::strict_cast<uint8_t>(response_code)};
+  return ExpectCtap2CommandAndRespondWith(std::move(command), data, delay);
 }
 
 void MockFidoDevice::ExpectRequestAndRespondWith(
@@ -137,8 +158,9 @@ void MockFidoDevice::ExpectRequestAndDoNotRespond(
               DeviceTransactPtr(std::move(request_as_vector), ::testing::_));
 }
 
-base::WeakPtr<FidoDevice> MockFidoDevice::GetWeakPtr() {
-  return weak_factory_.GetWeakPtr();
+void MockFidoDevice::SetDeviceTransport(
+    FidoTransportProtocol transport_protocol) {
+  transport_protocol_ = transport_protocol;
 }
 
 }  // namespace device

@@ -13,49 +13,46 @@
 #include <vector>
 
 #include "base/macros.h"
+#include "base/memory/weak_ptr.h"
 #include "chrome/browser/ui/aura/accessibility/ax_tree_source_aura.h"
 #include "ui/accessibility/ax_host_delegate.h"
 #include "ui/accessibility/ax_tree_serializer.h"
 #include "ui/views/accessibility/ax_aura_obj_cache.h"
+#include "ui/views/accessibility/ax_event_observer.h"
 
 namespace base {
 template <typename T>
 struct DefaultSingletonTraits;
 }  // namespace base
 
-namespace content {
-class BrowserContext;
-}  // namespace content
-
 namespace views {
 class AXAuraObjWrapper;
 class View;
 }  // namespace views
 
-using AuraAXTreeSerializer =
-    ui::AXTreeSerializer<views::AXAuraObjWrapper*,
-                         ui::AXNodeData,
-                         ui::AXTreeData>;
+using AuraAXTreeSerializer = ui::
+    AXTreeSerializer<views::AXAuraObjWrapper*, ui::AXNodeData, ui::AXTreeData>;
+
+struct ExtensionMsg_AccessibilityEventBundleParams;
 
 // Manages a tree of automation nodes.
 class AutomationManagerAura : public ui::AXHostDelegate,
-                              views::AXAuraObjCache::Delegate {
+                              public views::AXAuraObjCache::Delegate,
+                              public views::AXEventObserver {
  public:
   // Get the single instance of this class.
   static AutomationManagerAura* GetInstance();
 
   // Enable automation support for views.
-  void Enable(content::BrowserContext* context);
+  void Enable();
 
   // Disable automation support for views.
   void Disable();
 
-  // Handle an event fired upon a |View|.
-  void HandleEvent(content::BrowserContext* context,
-                   views::View* view,
-                   ax::mojom::Event event_type);
+  // Handle an event fired upon the root view.
+  void HandleEvent(ax::mojom::Event event_type);
 
-  void HandleAlert(content::BrowserContext* context, const std::string& text);
+  void HandleAlert(const std::string& text);
 
   // AXHostDelegate implementation.
   void PerformAction(const ui::AXActionData& data) override;
@@ -64,6 +61,15 @@ class AutomationManagerAura : public ui::AXHostDelegate,
   void OnChildWindowRemoved(views::AXAuraObjWrapper* parent) override;
   void OnEvent(views::AXAuraObjWrapper* aura_obj,
                ax::mojom::Event event_type) override;
+
+  // views::AXEventObserver:
+  void OnViewEvent(views::View* view, ax::mojom::Event event_type) override;
+
+  void set_event_bundle_callback_for_testing(
+      base::RepeatingCallback<void(ExtensionMsg_AccessibilityEventBundleParams)>
+          callback) {
+    event_bundle_callback_for_testing_ = callback;
+  }
 
  protected:
   AutomationManagerAura();
@@ -74,12 +80,13 @@ class AutomationManagerAura : public ui::AXHostDelegate,
 
   FRIEND_TEST_ALL_PREFIXES(AutomationManagerAuraBrowserTest, WebAppearsOnce);
 
+  void SendEventOnObjectById(int32_t id, ax::mojom::Event event_type);
+
   // Reset state in this manager. If |reset_serializer| is true, reset the
   // serializer to save memory.
   void Reset(bool reset_serializer);
 
-  void SendEvent(content::BrowserContext* context,
-                 views::AXAuraObjWrapper* aura_obj,
+  void SendEvent(views::AXAuraObjWrapper* aura_obj,
                  ax::mojom::Event event_type);
 
   void PerformHitTest(const ui::AXActionData& data);
@@ -100,6 +107,11 @@ class AutomationManagerAura : public ui::AXHostDelegate,
 
   std::vector<std::pair<views::AXAuraObjWrapper*, ax::mojom::Event>>
       pending_events_;
+
+  base::RepeatingCallback<void(ExtensionMsg_AccessibilityEventBundleParams)>
+      event_bundle_callback_for_testing_;
+
+  base::WeakPtrFactory<AutomationManagerAura> weak_ptr_factory_;
 
   DISALLOW_COPY_AND_ASSIGN(AutomationManagerAura);
 };

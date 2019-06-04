@@ -8,8 +8,12 @@ blink_modules_sources("gamepad") {
   sources = [
     "gamepad.cc",
     "gamepad.h",
+    "gamepad_axis_event.cc",
+    "gamepad_axis_event.h",
     "gamepad_button.cc",
     "gamepad_button.h",
+    "gamepad_button_event.cc",
+    "gamepad_button_event.h",
     "gamepad_dispatcher.cc",
     "gamepad_dispatcher.h",
     "gamepad_event.cc",
@@ -20,6 +24,8 @@ blink_modules_sources("gamepad") {
     "gamepad_list.h",
     "gamepad_pose.cc",
     "gamepad_pose.h",
+    "gamepad_shared_memory_reader.cc",
+    "gamepad_shared_memory_reader.h",
     "navigator_gamepad.cc",
     "navigator_gamepad.h",
   ]

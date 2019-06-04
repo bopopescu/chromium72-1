@@ -4,18 +4,16 @@
 
 #include "chrome/browser/ui/views/media_router/media_router_dialog_controller_views.h"
 
-#include "base/feature_list.h"
+#include <memory>
+
+#include "build/build_config.h"
+#include "chrome/browser/media/router/media_router_feature.h"
 #include "chrome/browser/ui/browser_finder.h"
-#include "chrome/browser/ui/toolbar/component_toolbar_actions_factory.h"
 #include "chrome/browser/ui/toolbar/media_router_action.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/media_router/cast_dialog_view.h"
 #include "chrome/browser/ui/views/toolbar/toolbar_view.h"
 #include "chrome/browser/ui/webui/media_router/media_router_dialog_controller_webui_impl.h"
-#include "chrome/common/chrome_features.h"
-
-DEFINE_WEB_CONTENTS_USER_DATA_KEY(
-    media_router::MediaRouterDialogControllerViews);
 
 namespace media_router {
 
@@ -23,7 +21,7 @@ namespace media_router {
 MediaRouterDialogControllerImplBase*
 MediaRouterDialogControllerImplBase::GetOrCreateForWebContents(
     content::WebContents* web_contents) {
-  if (base::FeatureList::IsEnabled(features::kViewsCastDialog)) {
+  if (ShouldUseViewsDialog()) {
     return MediaRouterDialogControllerViews::GetOrCreateForWebContents(
         web_contents);
   } else {
@@ -34,8 +32,10 @@ MediaRouterDialogControllerImplBase::GetOrCreateForWebContents(
 
 MediaRouterDialogControllerViews::~MediaRouterDialogControllerViews() {
   Reset();
-  if (CastDialogView::GetCurrentDialogWidget())
-    CastDialogView::GetCurrentDialogWidget()->RemoveObserver(this);
+  if (dialog_widget_) {
+    dialog_widget_->RemoveObserver(this);
+    dialog_widget_ = nullptr;
+  }
 }
 
 // static
@@ -49,25 +49,27 @@ MediaRouterDialogControllerViews::GetOrCreateForWebContents(
 }
 
 void MediaRouterDialogControllerViews::CreateMediaRouterDialog() {
+  base::Time dialog_creation_time = base::Time::Now();
   MediaRouterDialogControllerImplBase::CreateMediaRouterDialog();
+
+  Browser* browser = chrome::FindBrowserWithWebContents(initiator());
+  if (!browser)
+    return;
 
   ui_ = std::make_unique<MediaRouterViewsUI>();
   InitializeMediaRouterUI(ui_.get());
-
-  Browser* browser = chrome::FindBrowserWithWebContents(initiator());
-  BrowserActionsContainer* browser_actions =
-      BrowserView::GetBrowserViewForBrowser(browser)
-          ->toolbar()
-          ->browser_actions();
-  // |browser_actions| may be null in toolbar-less browser windows.
-  // TODO(takumif): Show the dialog at the top-middle of the window if the
-  // toolbar is missing.
-  if (!browser_actions)
-    return;
-  views::View* action_view = browser_actions->GetViewForId(
-      ComponentToolbarActionsFactory::kMediaRouterActionId);
-  CastDialogView::ShowDialog(action_view, ui_.get());
-  CastDialogView::GetCurrentDialogWidget()->AddObserver(this);
+  BrowserView* browser_view = BrowserView::GetBrowserViewForBrowser(browser);
+  if (browser_view->toolbar()->cast_button()) {
+    CastDialogView::ShowDialogWithToolbarAction(ui_.get(), browser,
+                                                dialog_creation_time);
+  } else {
+    CastDialogView::ShowDialogTopCentered(ui_.get(), browser,
+                                          dialog_creation_time);
+  }
+  dialog_widget_ = CastDialogView::GetCurrentDialogWidget();
+  dialog_widget_->AddObserver(this);
+  if (dialog_creation_callback_)
+    dialog_creation_callback_.Run();
 }
 
 void MediaRouterDialogControllerViews::CloseMediaRouterDialog() {
@@ -79,12 +81,23 @@ bool MediaRouterDialogControllerViews::IsShowingMediaRouterDialog() const {
 }
 
 void MediaRouterDialogControllerViews::Reset() {
-  MediaRouterDialogControllerImplBase::Reset();
-  ui_.reset();
+  // If |ui_| is null, Reset() has already been called.
+  if (ui_) {
+    MediaRouterDialogControllerImplBase::Reset();
+    ui_.reset();
+  }
 }
 
 void MediaRouterDialogControllerViews::OnWidgetClosing(views::Widget* widget) {
+  DCHECK_EQ(dialog_widget_, widget);
   Reset();
+  dialog_widget_->RemoveObserver(this);
+  dialog_widget_ = nullptr;
+}
+
+void MediaRouterDialogControllerViews::SetDialogCreationCallbackForTesting(
+    base::RepeatingClosure callback) {
+  dialog_creation_callback_ = std::move(callback);
 }
 
 MediaRouterDialogControllerViews::MediaRouterDialogControllerViews(

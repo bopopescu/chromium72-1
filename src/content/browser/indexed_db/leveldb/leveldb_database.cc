@@ -22,7 +22,7 @@
 #include "base/strings/string_piece.h"
 #include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
-#include "base/sys_info.h"
+#include "base/system/sys_info.h"
 #include "base/time/default_clock.h"
 #include "base/trace_event/memory_dump_manager.h"
 #include "base/trace_event/process_memory_dump.h"
@@ -387,7 +387,7 @@ leveldb::Status LevelDBDatabase::Remove(const StringPiece& key) {
 
   const leveldb::Status s =
       db_->Delete(write_options, leveldb_env::MakeSlice(key));
-  if (!s.IsNotFound())
+  if (!s.ok() && !s.IsNotFound())
     LOG(ERROR) << "LevelDB remove failed: " << s.ToString();
   last_modified_ = clock_->Now();
   return s;

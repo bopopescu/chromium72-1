@@ -12,12 +12,12 @@
 #include "base/macros.h"
 #include "base/memory/ptr_util.h"
 #include "base/trace_event/trace_event.h"
-#include "base/trace_event/trace_event_argument.h"
+#include "base/trace_event/traced_value.h"
 #include "cc/trees/layer_tree_frame_sink.h"
 #include "components/exo/buffer.h"
-#include "components/exo/pointer.h"
 #include "components/exo/surface_delegate.h"
 #include "components/exo/surface_observer.h"
+#include "components/exo/wm_helper.h"
 #include "components/viz/common/quads/render_pass.h"
 #include "components/viz/common/quads/shared_quad_state.h"
 #include "components/viz/common/quads/solid_color_draw_quad.h"
@@ -25,7 +25,7 @@
 #include "components/viz/common/resources/single_release_callback.h"
 #include "components/viz/service/surfaces/surface.h"
 #include "components/viz/service/surfaces/surface_manager.h"
-#include "services/ui/public/interfaces/window_tree_constants.mojom.h"
+#include "services/ws/public/mojom/window_tree_constants.mojom.h"
 #include "third_party/khronos/GLES2/gl2.h"
 #include "ui/aura/client/aura_constants.h"
 #include "ui/aura/client/drag_drop_delegate.h"
@@ -42,6 +42,7 @@
 #include "ui/gfx/geometry/size_conversions.h"
 #include "ui/gfx/gpu_memory_buffer.h"
 #include "ui/gfx/path.h"
+#include "ui/gfx/presentation_feedback.h"
 #include "ui/gfx/transform_util.h"
 #include "ui/views/widget/widget.h"
 
@@ -57,6 +58,9 @@ DEFINE_UI_CLASS_PROPERTY_KEY(Surface*, kSurfaceKey, nullptr);
 // A property key to store whether the surface should only consume
 // stylus input events.
 DEFINE_UI_CLASS_PROPERTY_KEY(bool, kStylusOnlyKey, false);
+
+// Surface Id set by the client.
+DEFINE_UI_CLASS_PROPERTY_KEY(int32_t, kClientSurfaceIdKey, 0);
 
 // Helper function that returns an iterator to the first entry in |list|
 // with |key|.
@@ -176,12 +180,6 @@ class CustomWindowTargeter : public aura::WindowTargeter {
     return surface->HitTest(local_point);
   }
 
-  std::unique_ptr<HitTestRects> GetExtraHitTestShapeRects(
-      aura::Window* window) const override {
-    Surface* surface = Surface::AsSurface(window);
-    return surface ? surface->GetHitTestShapeRects() : nullptr;
-  }
-
  private:
   DISALLOW_COPY_AND_ASSIGN(CustomWindowTargeter);
 };
@@ -191,12 +189,14 @@ class CustomWindowTargeter : public aura::WindowTargeter {
 ////////////////////////////////////////////////////////////////////////////////
 // Surface, public:
 
-Surface::Surface() : window_(new aura::Window(new CustomWindowDelegate(this))) {
-  window_->SetType(aura::client::WINDOW_TYPE_CONTROL);
+Surface::Surface()
+    : window_(std::make_unique<aura::Window>(new CustomWindowDelegate(this),
+                                             aura::client::WINDOW_TYPE_CONTROL,
+                                             WMHelper::GetInstance()->env())) {
   window_->SetName("ExoSurface");
   window_->SetProperty(kSurfaceKey, this);
   window_->Init(ui::LAYER_NOT_DRAWN);
-  window_->SetEventTargeter(base::WrapUnique(new CustomWindowTargeter));
+  window_->SetEventTargeter(std::make_unique<CustomWindowTargeter>());
   window_->set_owned_by_parent(false);
   WMHelper::GetInstance()->SetDragDropDelegate(window_.get());
 }
@@ -215,7 +215,7 @@ Surface::~Surface() {
   presentation_callbacks_.splice(presentation_callbacks_.end(),
                                  pending_presentation_callbacks_);
   for (const auto& presentation_callback : presentation_callbacks_)
-    presentation_callback.Run(base::TimeTicks(), base::TimeDelta(), 0);
+    presentation_callback.Run(gfx::PresentationFeedback());
 
   WMHelper::GetInstance()->ResetDragDropDelegate(window_.get());
 }
@@ -470,6 +470,17 @@ void Surface::SetParent(Surface* parent, const gfx::Point& position) {
     delegate_->OnSetParent(parent, position);
 }
 
+void Surface::SetClientSurfaceId(int32_t client_surface_id) {
+  if (client_surface_id)
+    window_->SetProperty(kClientSurfaceIdKey, client_surface_id);
+  else
+    window_->ClearProperty(kClientSurfaceIdKey);
+}
+
+int32_t Surface::GetClientSurfaceId() const {
+  return window_->GetProperty(kClientSurfaceIdKey);
+}
+
 void Surface::Commit() {
   TRACE_EVENT0("exo", "Surface::Commit");
 
@@ -503,6 +514,8 @@ void Surface::CommitSurfaceHierarchy(bool synchronized) {
         pending_state_.buffer_scale != state_.buffer_scale ||
         pending_state_.buffer_transform != state_.buffer_transform;
 
+    bool pending_invert_y = false;
+
     // If the current state is fully transparent, the last submitted frame will
     // not include the TextureDrawQuad for the resource, so the resource might
     // have been released and needs to be updated again.
@@ -514,19 +527,27 @@ void Surface::CommitSurfaceHierarchy(bool synchronized) {
 
     window_->SetEventTargetingPolicy(
         (state_.input_region.has_value() && state_.input_region->IsEmpty())
-            ? ui::mojom::EventTargetingPolicy::DESCENDANTS_ONLY
-            : ui::mojom::EventTargetingPolicy::TARGET_AND_DESCENDANTS);
+            ? ws::mojom::EventTargetingPolicy::DESCENDANTS_ONLY
+            : ws::mojom::EventTargetingPolicy::TARGET_AND_DESCENDANTS);
 
     // We update contents if Attach() has been called since last commit.
     if (has_pending_contents_) {
       has_pending_contents_ = false;
+
+      bool current_invert_y =
+          current_buffer_.buffer() && current_buffer_.buffer()->y_invert();
+      pending_invert_y =
+          pending_buffer_.buffer() && pending_buffer_.buffer()->y_invert();
+      if (current_invert_y != pending_invert_y)
+        needs_update_buffer_transform = true;
+
       current_buffer_ = std::move(pending_buffer_);
       if (state_.alpha)
         needs_update_resource_ = true;
     }
 
     if (needs_update_buffer_transform)
-      UpdateBufferTransform();
+      UpdateBufferTransform(pending_invert_y);
 
     // Move pending frame callbacks to the end of |frame_callbacks_|.
     frame_callbacks_.splice(frame_callbacks_.end(), pending_frame_callbacks_);
@@ -661,17 +682,6 @@ void Surface::GetHitTestMask(gfx::Path* mask) const {
   hit_test_region_.GetBoundaryPath(mask);
 }
 
-std::unique_ptr<aura::WindowTargeter::HitTestRects>
-Surface::GetHitTestShapeRects() const {
-  if (hit_test_region_.IsEmpty())
-    return nullptr;
-
-  auto rects = std::make_unique<aura::WindowTargeter::HitTestRects>();
-  for (gfx::Rect rect : hit_test_region_)
-    rects->push_back(rect);
-  return rects;
-}
-
 void Surface::SetSurfaceDelegate(SurfaceDelegate* delegate) {
   DCHECK(!delegate_ || !delegate);
   delegate_ = delegate;
@@ -802,7 +812,7 @@ void Surface::UpdateResource(LayerTreeFrameSinkHolder* frame_sink_holder) {
   }
 }
 
-void Surface::UpdateBufferTransform() {
+void Surface::UpdateBufferTransform(bool y_invert) {
   SkMatrix buffer_matrix;
   switch (state_.buffer_transform) {
     case Transform::NORMAL:
@@ -818,6 +828,8 @@ void Surface::UpdateBufferTransform() {
       buffer_matrix.setSinCos(1, 0, 0.5f, 0.5f);
       break;
   }
+  if (y_invert)
+    buffer_matrix.preScale(1, -1, 0.5f, 0.5f);
   buffer_matrix.postIDiv(state_.buffer_scale, state_.buffer_scale);
   buffer_transform_ = gfx::Transform(buffer_matrix);
 }
@@ -899,7 +911,7 @@ void Surface::AppendContentsToFrame(const gfx::Point& origin,
           uv_crop.origin(), uv_crop.bottom_right(),
           SK_ColorTRANSPARENT /* background_color */, vertex_opacity,
           false /* y_flipped */, false /* nearest_neighbor */,
-          state_.only_visible_on_secure_output);
+          state_.only_visible_on_secure_output, ui::ProtectedVideoType::kClear);
       if (current_resource_.is_overlay_candidate)
         texture_quad->set_resource_size_in_pixels(current_resource_.size);
       frame->resource_list.push_back(current_resource_);

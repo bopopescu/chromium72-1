@@ -57,6 +57,7 @@ const char kSyncPrinters[] = "sync.printers";
 const char kSyncPriorityPreferences[] = "sync.priority_preferences";
 const char kSyncReadingList[] = "sync.reading_list";
 const char kSyncSearchEngines[] = "sync.search_engines";
+const char kSyncSendTabToSelf[] = "sync.send_tab_to_self";
 const char kSyncSessions[] = "sync.sessions";
 const char kSyncSupervisedUserSettings[] = "sync.managed_user_settings";
 const char kSyncSupervisedUserSharedSettings[] =
@@ -69,6 +70,7 @@ const char kSyncSyncedNotifications[] = "sync.synced_notifications";
 const char kSyncTabs[] = "sync.tabs";
 const char kSyncThemes[] = "sync.themes";
 const char kSyncTypedUrls[] = "sync.typed_urls";
+const char kSyncUserConsents[] = "sync.user_consents";
 const char kSyncUserEvents[] = "sync.user_events";
 const char kSyncWifiCredentials[] = "sync.wifi_credentials";
 
@@ -88,10 +90,6 @@ const char kSyncEncryptionBootstrapToken[] = "sync.encryption_bootstrap_token";
 // so we don't have to do a GetKey command at restart.
 const char kSyncKeystoreEncryptionBootstrapToken[] =
     "sync.keystore_encryption_bootstrap_token";
-
-// The GUID session sync will use to identify this client, even across sync
-// disable/enable events.
-const char kSyncSessionsGUID[] = "sync.session_sync_guid";
 
 #if defined(OS_CHROMEOS)
 // A string that is used to store first-time sync startup after once sync is

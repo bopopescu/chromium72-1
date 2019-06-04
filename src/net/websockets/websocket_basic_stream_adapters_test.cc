@@ -163,7 +163,7 @@ TEST_F(WebSocketClientSocketHandleAdapterTest, Read) {
   // Buffer larger than each MockRead.
   const int kReadBufSize = 1024;
   auto read_buf = base::MakeRefCounted<IOBuffer>(kReadBufSize);
-  int rv = adapter.Read(read_buf.get(), kReadBufSize, CompletionCallback());
+  int rv = adapter.Read(read_buf.get(), kReadBufSize, CompletionOnceCallback());
   ASSERT_EQ(3, rv);
   EXPECT_EQ("foo", base::StringPiece(read_buf->data(), rv));
 
@@ -194,11 +194,11 @@ TEST_F(WebSocketClientSocketHandleAdapterTest, ReadIntoSmallBuffer) {
   // Buffer smaller than each MockRead.
   const int kReadBufSize = 2;
   auto read_buf = base::MakeRefCounted<IOBuffer>(kReadBufSize);
-  int rv = adapter.Read(read_buf.get(), kReadBufSize, CompletionCallback());
+  int rv = adapter.Read(read_buf.get(), kReadBufSize, CompletionOnceCallback());
   ASSERT_EQ(2, rv);
   EXPECT_EQ("fo", base::StringPiece(read_buf->data(), rv));
 
-  rv = adapter.Read(read_buf.get(), kReadBufSize, CompletionCallback());
+  rv = adapter.Read(read_buf.get(), kReadBufSize, CompletionOnceCallback());
   ASSERT_EQ(1, rv);
   EXPECT_EQ("o", base::StringPiece(read_buf->data(), rv));
 
@@ -209,7 +209,7 @@ TEST_F(WebSocketClientSocketHandleAdapterTest, ReadIntoSmallBuffer) {
   ASSERT_EQ(2, rv);
   EXPECT_EQ("ba", base::StringPiece(read_buf->data(), rv));
 
-  rv = adapter.Read(read_buf.get(), kReadBufSize, CompletionCallback());
+  rv = adapter.Read(read_buf.get(), kReadBufSize, CompletionOnceCallback());
   ASSERT_EQ(1, rv);
   EXPECT_EQ("r", base::StringPiece(read_buf->data(), rv));
 
@@ -231,8 +231,9 @@ TEST_F(WebSocketClientSocketHandleAdapterTest, Write) {
   EXPECT_TRUE(adapter.is_initialized());
 
   auto write_buf1 = base::MakeRefCounted<StringIOBuffer>("foo");
-  int rv = adapter.Write(write_buf1.get(), write_buf1->size(),
-                         CompletionCallback(), TRAFFIC_ANNOTATION_FOR_TESTS);
+  int rv =
+      adapter.Write(write_buf1.get(), write_buf1->size(),
+                    CompletionOnceCallback(), TRAFFIC_ANNOTATION_FOR_TESTS);
   ASSERT_EQ(3, rv);
 
   auto write_buf2 = base::MakeRefCounted<StringIOBuffer>("bar");
@@ -667,11 +668,11 @@ TEST_F(WebSocketSpdyStreamAdapterTest, Read) {
   EXPECT_FALSE(stream);
 
   // Two socket reads are concatenated by WebSocketSpdyStreamAdapter.
-  rv = adapter.Read(read_buf.get(), kReadBufSize, CompletionCallback());
+  rv = adapter.Read(read_buf.get(), kReadBufSize, CompletionOnceCallback());
   ASSERT_EQ(3, rv);
   EXPECT_EQ("bar", base::StringPiece(read_buf->data(), rv));
 
-  rv = adapter.Read(read_buf.get(), kReadBufSize, CompletionCallback());
+  rv = adapter.Read(read_buf.get(), kReadBufSize, CompletionOnceCallback());
   ASSERT_EQ(3, rv);
   EXPECT_EQ("baz", base::StringPiece(read_buf->data(), rv));
 
@@ -736,7 +737,7 @@ TEST_F(WebSocketSpdyStreamAdapterTest, CallDelegateOnCloseShouldNotCrash) {
   EXPECT_FALSE(stream);
 
   // Read remaining buffered data.  This will PostTask CallDelegateOnClose().
-  rv = adapter.Read(read_buf.get(), kReadBufSize, CompletionCallback());
+  rv = adapter.Read(read_buf.get(), kReadBufSize, CompletionOnceCallback());
   ASSERT_EQ(3, rv);
   EXPECT_EQ("bar", base::StringPiece(read_buf->data(), rv));
 
@@ -846,7 +847,7 @@ TEST_F(WebSocketSpdyStreamAdapterTest, AsyncReadAndWrite) {
   EXPECT_TRUE(data.AllWriteDataConsumed());
 }
 
-// KillerCallback will delete the adapter as part of the callback.
+// A helper class that will delete |adapter| when the callback is invoked.
 class KillerCallback : public TestCompletionCallbackBase {
  public:
   explicit KillerCallback(std::unique_ptr<WebSocketSpdyStreamAdapter> adapter)
@@ -854,8 +855,8 @@ class KillerCallback : public TestCompletionCallbackBase {
 
   ~KillerCallback() override = default;
 
-  CompletionCallback callback() {
-    return base::Bind(&KillerCallback::OnComplete, base::Unretained(this));
+  CompletionOnceCallback callback() {
+    return base::BindOnce(&KillerCallback::OnComplete, base::Unretained(this));
   }
 
  private:

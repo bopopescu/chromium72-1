@@ -10,6 +10,7 @@
 #include "base/memory/ref_counted.h"
 #include "chrome/browser/chromeos/apps/intent_helper/apps_navigation_throttle.h"
 #include "chrome/browser/chromeos/apps/intent_helper/apps_navigation_types.h"
+#include "chrome/browser/chromeos/apps/intent_helper/page_transition_util.h"
 #include "chrome/browser/chromeos/arc/arc_web_contents_data.h"
 #include "chrome/browser/chromeos/arc/intent_helper/arc_navigation_throttle.h"
 #include "chrome/browser/chromeos/external_protocol_dialog.h"
@@ -19,13 +20,11 @@
 #include "chrome/browser/ui/browser_window.h"
 #include "components/arc/arc_bridge_service.h"
 #include "components/arc/arc_service_manager.h"
-#include "components/arc/intent_helper/page_transition_util.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/page_navigator.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/referrer.h"
-#include "third_party/blink/public/platform/web_referrer_policy.h"
 #include "ui/base/page_transition_types.h"
 #include "ui/base/window_open_disposition.h"
 #include "ui/gfx/image/image.h"
@@ -36,6 +35,14 @@ using content::WebContents;
 namespace arc {
 
 namespace {
+
+// The proxy activity for launching an ARC IME's settings activity. These names
+// have to be in sync with the ones used in ArcInputMethodManagerService.java on
+// the container side. Otherwise, the picker dialog might pop up unexpectedly.
+constexpr char kPackageForOpeningArcImeSettingsPage[] =
+    "org.chromium.arc.applauncher";
+constexpr char kActivityForOpeningArcImeSettingsPage[] =
+    "org.chromium.arc.applauncher.InputMethodSettingsActivity";
 
 // Shows the Chrome OS' original external protocol dialog as a fallback.
 void ShowFallbackExternalProtocolDialog(int render_process_host_id,
@@ -70,6 +77,19 @@ bool IsChromeAnAppCandidate(
   return false;
 }
 
+// Returns true if |handlers| only contains Chrome as an app candidate for the
+// current navigation.
+bool IsChromeOnlyAppCandidate(
+    const std::vector<mojom::IntentHandlerInfoPtr>& handlers) {
+  return handlers.size() == 1 && IsChromeAnAppCandidate(handlers);
+}
+
+// Returns true if the |handler| is for opening ARC IME settings page.
+bool ForOpeningArcImeSettingsPage(const mojom::IntentHandlerInfoPtr& handler) {
+  return (handler->package_name == kPackageForOpeningArcImeSettingsPage) &&
+         (handler->activity_name == kActivityForOpeningArcImeSettingsPage);
+}
+
 // Shows |url| in the current tab.
 void OpenUrlInChrome(int render_process_host_id,
                      int routing_id,
@@ -85,7 +105,7 @@ void OpenUrlInChrome(int render_process_host_id,
   const content::OpenURLParams params(
       url,
       content::Referrer(web_contents->GetLastCommittedURL(),
-                        blink::kWebReferrerPolicyDefault),
+                        network::mojom::ReferrerPolicy::kDefault),
       WindowOpenDisposition::CURRENT_TAB, page_transition_type,
       kIsRendererInitiated);
   web_contents->OpenURL(params);
@@ -195,12 +215,15 @@ GetActionResult GetAction(
     // 2) its package is not "Chrome" but it has been marked as
     // |in_out_safe_to_bypass_ui|, this means that we trust the current tab
     // since its content was originated from ARC.
+    // 3) its package and activity are for opening ARC IME settings page. The
+    // activity is launched with an explicit user action in chrome://settings.
     if (handlers.size() == 1) {
       const GetActionResult internal_result = GetActionInternal(
           original_url, handlers[0], out_url_and_activity_name);
 
       if ((internal_result == GetActionResult::HANDLE_URL_IN_ARC &&
-           *in_out_safe_to_bypass_ui) ||
+           (*in_out_safe_to_bypass_ui ||
+            ForOpeningArcImeSettingsPage(handlers[0]))) ||
           internal_result == GetActionResult::OPEN_URL_IN_CHROME) {
         // Make sure the |in_out_safe_to_bypass_ui| flag is actually marked, its
         // maybe not important for OPEN_URL_IN_CHROME but just for consistency.
@@ -333,7 +356,7 @@ void OnIntentPickerClosed(int render_process_host_id,
                           bool safe_to_bypass_ui,
                           std::vector<mojom::IntentHandlerInfoPtr> handlers,
                           const std::string& selected_app_package,
-                          chromeos::AppType app_type,
+                          apps::mojom::AppType app_type,
                           chromeos::IntentPickerCloseReason reason,
                           bool should_persist) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
@@ -378,7 +401,7 @@ void OnIntentPickerClosed(int render_process_host_id,
     case chromeos::IntentPickerCloseReason::OPEN_APP:
       // Only ARC apps are offered in the external protocol intent picker, so if
       // the user decided to open in app the type must be ARC.
-      DCHECK_EQ(chromeos::AppType::ARC, app_type);
+      DCHECK_EQ(apps::mojom::AppType::kArc, app_type);
       DCHECK(arc_service_manager);
 
       if (should_persist) {
@@ -436,7 +459,7 @@ void OnAppIconsReceived(
     const ArcIntentHelperBridge::ActivityName activity(handler->package_name,
                                                        handler->activity_name);
     const auto it = icons->find(activity);
-    app_info.emplace_back(chromeos::AppType::ARC,
+    app_info.emplace_back(apps::mojom::AppType::kArc,
                           it != icons->end() ? it->second.icon16 : gfx::Image(),
                           handler->package_name, handler->name);
   }
@@ -481,8 +504,12 @@ void OnUrlHandlerList(int render_process_host_id,
       web_contents ? ArcIntentHelperBridge::GetForBrowserContext(
                          web_contents->GetBrowserContext())
                    : nullptr;
-  if (!instance || !intent_helper_bridge) {
-    // ARC is not running anymore. Show the Chrome OS dialog.
+
+  // We only reach here if Chrome doesn't think it can handle the URL. If ARC is
+  // not running anymore, or Chrome is the only candidate returned, show the
+  // usual Chrome OS dialog that says we cannot handle the URL.
+  if (!instance || !intent_helper_bridge ||
+      IsChromeOnlyAppCandidate(handlers)) {
     ShowFallbackExternalProtocolDialog(render_process_host_id, routing_id, url);
     return;
   }
@@ -493,7 +520,7 @@ void OnUrlHandlerList(int render_process_host_id,
                 handlers.size(), &result, safe_to_bypass_ui)) {
     if (result == GetActionResult::HANDLE_URL_IN_ARC) {
       chromeos::AppsNavigationThrottle::RecordUma(
-          std::string(), chromeos::AppType::ARC,
+          std::string(), apps::mojom::AppType::kArc,
           chromeos::IntentPickerCloseReason::PREFERRED_APP_FOUND,
           /*should_persist=*/false);
     }
@@ -525,11 +552,12 @@ bool RunArcExternalProtocolDialog(const GURL& url,
 
   // For external protocol navigation, always ignore the FROM_API qualifier.
   const ui::PageTransition masked_page_transition =
-      MaskOutPageTransition(page_transition, ui::PAGE_TRANSITION_FROM_API);
+      chromeos::MaskOutPageTransition(page_transition,
+                                      ui::PAGE_TRANSITION_FROM_API);
 
-  if (ShouldIgnoreNavigation(masked_page_transition,
-                             /*allow_form_submit=*/true,
-                             /*allow_client_redirect=*/true)) {
+  if (chromeos::ShouldIgnoreNavigation(masked_page_transition,
+                                       /*allow_form_submit=*/true,
+                                       /*allow_client_redirect=*/true)) {
     LOG(WARNING) << "RunArcExternalProtocolDialog: ignoring " << url
                  << " with PageTransition=" << masked_page_transition;
     return false;

@@ -29,6 +29,7 @@ class ScriptPromiseResolver;
 class ScriptState;
 class ScriptValue;
 class V0CustomElementRegistrationContext;
+class V8CustomElementConstructor;
 
 class CORE_EXPORT CustomElementRegistry final : public ScriptWrappable {
   DEFINE_WRAPPERTYPEINFO();
@@ -40,13 +41,8 @@ class CORE_EXPORT CustomElementRegistry final : public ScriptWrappable {
 
   CustomElementDefinition* define(ScriptState*,
                                   const AtomicString& name,
-                                  const ScriptValue& constructor,
-                                  const ElementDefinitionOptions&,
-                                  ExceptionState&);
-
-  CustomElementDefinition* define(const AtomicString& name,
-                                  CustomElementDefinitionBuilder&,
-                                  const ElementDefinitionOptions&,
+                                  V8CustomElementConstructor* constructor,
+                                  const ElementDefinitionOptions*,
                                   ExceptionState&);
 
   ScriptValue get(const AtomicString& name);
@@ -69,26 +65,28 @@ class CORE_EXPORT CustomElementRegistry final : public ScriptWrappable {
   void Entangle(V0CustomElementRegistrationContext*);
 
   void Trace(blink::Visitor*) override;
-  void TraceWrappers(ScriptWrappableVisitor*) const override;
 
  private:
-  friend class CustomElementRegistryTest;
-
   CustomElementRegistry(const LocalDOMWindow*);
+
+  CustomElementDefinition* DefineInternal(ScriptState*,
+                                          const AtomicString& name,
+                                          CustomElementDefinitionBuilder&,
+                                          const ElementDefinitionOptions*,
+                                          ExceptionState&);
 
   bool V0NameIsDefined(const AtomicString& name);
 
   void CollectCandidates(const CustomElementDescriptor&,
                          HeapVector<Member<Element>>*);
 
-  class ElementDefinitionIsRunning;
   bool element_definition_is_running_;
 
   using DefinitionList =
       HeapVector<TraceWrapperMember<CustomElementDefinition>>;
   DefinitionList definitions_;
 
-  using NameIdMap = HashMap<AtomicString, size_t>;
+  using NameIdMap = HashMap<AtomicString, CustomElementDefinition::Id>;
   NameIdMap name_id_map_;
 
   Member<const LocalDOMWindow> owner_;
@@ -107,6 +105,11 @@ class CORE_EXPORT CustomElementRegistry final : public ScriptWrappable {
   WhenDefinedPromiseMap when_defined_promise_map_;
 
   TraceWrapperMember<CustomElementReactionStack> reaction_stack_;
+
+  FRIEND_TEST_ALL_PREFIXES(
+      CustomElementTest,
+      CreateElement_TagNameCaseHandlingCreatingCustomElement);
+  friend class CustomElementRegistryTest;
 
   DISALLOW_COPY_AND_ASSIGN(CustomElementRegistry);
 };

@@ -8,7 +8,7 @@
 #include "net/third_party/quic/platform/api/quic_string.h"
 #include "net/third_party/quic/platform/api/quic_text_utils.h"
 
-namespace net {
+namespace quic {
 
 const BIO_METHOD QuicTlsAdapter::kBIOMethod = {
     0,        // type
@@ -85,7 +85,7 @@ const QuicString& QuicTlsAdapter::error_detail() const {
 }
 
 bool QuicTlsAdapter::ProcessInput(QuicStringPiece input,
-                                  Perspective perspective) {
+                                  EncryptionLevel level) {
   read_buffer_.append(input.data(), input.length());
   visitor_->OnDataAvailableForBIO();
   return true;
@@ -127,4 +127,4 @@ void QuicTlsAdapter::Flush() {
   write_buffer_.clear();
 }
 
-}  // namespace net
+}  // namespace quic

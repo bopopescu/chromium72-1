@@ -10,8 +10,12 @@
 #include "base/base64url.h"
 #include "base/files/file_util.h"
 #include "base/json/json_reader.h"
+#include "base/memory/ptr_util.h"
+#include "base/metrics/histogram_macros.h"
 #include "base/strings/string_util.h"
+#include "base/timer/elapsed_timer.h"
 #include "base/values.h"
+#include "build/build_config.h"
 #include "components/crx_file/id_util.h"
 #include "crypto/signature_verifier.h"
 #include "extensions/common/extension.h"
@@ -58,6 +62,56 @@ const DictionaryValue* FindDictionaryWithValue(const ListValue* list,
   return NULL;
 }
 
+// Helper to record UMA for results of initializing verified_contents.json file.
+// TODO(lazyboy): Merge this with ScopedUMARecorder in computed_hashes.cc.
+class ScopedUMARecorder {
+ public:
+  ScopedUMARecorder() = default;
+
+  ~ScopedUMARecorder() {
+    if (recorded_)
+      return;
+    RecordImpl(false);
+  }
+
+  void RecordSuccess() {
+    recorded_ = true;
+    RecordImpl(true);
+  }
+
+ private:
+  void RecordImpl(bool success) {
+    if (success) {
+      UMA_HISTOGRAM_TIMES(
+          "Extensions.ContentVerification.VerifiedContentsInitTime",
+          timer_.Elapsed());
+    }
+    UMA_HISTOGRAM_BOOLEAN(
+        "Extensions.ContentVerification.VerifiedContentsInitResult", success);
+  }
+
+ private:
+  base::ElapsedTimer timer_;
+  bool recorded_ = false;
+
+  DISALLOW_COPY_AND_ASSIGN(ScopedUMARecorder);
+};
+
+#if defined(OS_WIN)
+// Returns true if |path| ends with (.| )+.
+// |out_path| will contain "." and/or " " suffix removed from |path|.
+bool TrimDotSpaceSuffix(const base::FilePath::StringType& path,
+                        base::FilePath::StringType* out_path) {
+  base::FilePath::StringType::size_type trim_pos =
+      path.find_last_not_of(FILE_PATH_LITERAL(". "));
+  if (trim_pos == base::FilePath::StringType::npos)
+    return false;
+
+  *out_path = path.substr(0, trim_pos + 1);
+  return true;
+}
+#endif  // defined(OS_WIN)
+
 }  // namespace
 
 namespace extensions {
@@ -89,37 +143,44 @@ VerifiedContents::~VerifiedContents() {
 //     }
 //   ]
 // }
-bool VerifiedContents::InitFrom(const base::FilePath& path) {
+// static.
+std::unique_ptr<VerifiedContents> VerifiedContents::Create(
+    base::span<const uint8_t> public_key,
+    const base::FilePath& path) {
+  ScopedUMARecorder uma_recorder;
+  // Note: VerifiedContents constructor is private.
+  auto verified_contents = base::WrapUnique(new VerifiedContents(public_key));
   std::string payload;
-  if (!GetPayload(path, &payload))
-    return false;
+  if (!verified_contents->GetPayload(path, &payload))
+    return nullptr;
 
   std::unique_ptr<base::Value> value(base::JSONReader::Read(payload));
   if (!value.get() || !value->is_dict())
-    return false;
+    return nullptr;
   DictionaryValue* dictionary = static_cast<DictionaryValue*>(value.get());
 
   std::string item_id;
   if (!dictionary->GetString(kItemIdKey, &item_id) ||
-      !crx_file::id_util::IdIsValid(item_id))
-    return false;
-  extension_id_ = item_id;
+      !crx_file::id_util::IdIsValid(item_id)) {
+    return nullptr;
+  }
+  verified_contents->extension_id_ = item_id;
 
   std::string version_string;
   if (!dictionary->GetString(kItemVersionKey, &version_string))
-    return false;
-  version_ = base::Version(version_string);
-  if (!version_.IsValid())
-    return false;
+    return nullptr;
+  verified_contents->version_ = base::Version(version_string);
+  if (!verified_contents->version_.IsValid())
+    return nullptr;
 
-  ListValue* hashes_list = NULL;
+  ListValue* hashes_list = nullptr;
   if (!dictionary->GetList(kContentHashesKey, &hashes_list))
-    return false;
+    return nullptr;
 
   for (size_t i = 0; i < hashes_list->GetSize(); i++) {
-    DictionaryValue* hashes = NULL;
+    DictionaryValue* hashes = nullptr;
     if (!hashes_list->GetDictionary(i, &hashes))
-      return false;
+      return nullptr;
     std::string format;
     if (!hashes->GetString(kFormatKey, &format) || format != kTreeHash)
       continue;
@@ -127,23 +188,24 @@ bool VerifiedContents::InitFrom(const base::FilePath& path) {
     int block_size = 0;
     int hash_block_size = 0;
     if (!hashes->GetInteger(kBlockSizeKey, &block_size) ||
-        !hashes->GetInteger(kHashBlockSizeKey, &hash_block_size))
-      return false;
-    block_size_ = block_size;
+        !hashes->GetInteger(kHashBlockSizeKey, &hash_block_size)) {
+      return nullptr;
+    }
+    verified_contents->block_size_ = block_size;
 
     // We don't support using a different block_size and hash_block_size at
     // the moment.
-    if (block_size_ != hash_block_size)
-      return false;
+    if (verified_contents->block_size_ != hash_block_size)
+      return nullptr;
 
-    ListValue* files = NULL;
+    ListValue* files = nullptr;
     if (!hashes->GetList(kFilesKey, &files))
-      return false;
+      return nullptr;
 
-    for (size_t j = 0; j < files->GetSize(); j++) {
-      DictionaryValue* data = NULL;
+    for (size_t j = 0; j < files->GetSize(); ++j) {
+      DictionaryValue* data = nullptr;
       if (!files->GetDictionary(j, &data))
-        return false;
+        return nullptr;
       std::string file_path_string;
       std::string encoded_root_hash;
       std::string root_hash;
@@ -152,38 +214,61 @@ bool VerifiedContents::InitFrom(const base::FilePath& path) {
           !data->GetString(kRootHashKey, &encoded_root_hash) ||
           !base::Base64UrlDecode(encoded_root_hash,
                                  base::Base64UrlDecodePolicy::IGNORE_PADDING,
-                                 &root_hash))
-        return false;
+                                 &root_hash)) {
+        return nullptr;
+      }
       base::FilePath file_path =
           base::FilePath::FromUTF8Unsafe(file_path_string);
-      RootHashes::iterator i = root_hashes_.insert(std::make_pair(
-          base::ToLowerASCII(file_path.value()), std::string()));
+      base::FilePath::StringType lowercase_file_path =
+          base::ToLowerASCII(file_path.value());
+      auto i = verified_contents->root_hashes_.insert(
+          std::make_pair(lowercase_file_path, std::string()));
       i->second.swap(root_hash);
+
+#if defined(OS_WIN)
+      // Additionally store a canonicalized filename without (.| )+ suffix, so
+      // that any filename with (.| )+ suffix can be matched later, see
+      // HasTreeHashRoot() and TreeHashRootEquals().
+      base::FilePath::StringType trimmed_path;
+      if (TrimDotSpaceSuffix(lowercase_file_path, &trimmed_path))
+        verified_contents->root_hashes_.insert(
+            std::make_pair(trimmed_path, i->second));
+#endif  // defined(OS_WIN)
     }
 
     break;
   }
-  return true;
+  uma_recorder.RecordSuccess();
+  return verified_contents;
 }
 
 bool VerifiedContents::HasTreeHashRoot(
     const base::FilePath& relative_path) const {
   base::FilePath::StringType path = base::ToLowerASCII(
       relative_path.NormalizePathSeparatorsTo('/').value());
-  return root_hashes_.find(path) != root_hashes_.end();
+  if (base::ContainsKey(root_hashes_, path))
+    return true;
+
+#if defined(OS_WIN)
+  base::FilePath::StringType trimmed_path;
+  if (TrimDotSpaceSuffix(path, &trimmed_path))
+    return base::ContainsKey(root_hashes_, trimmed_path);
+#endif  // defined(OS_WIN)
+  return false;
 }
 
 bool VerifiedContents::TreeHashRootEquals(const base::FilePath& relative_path,
                                           const std::string& expected) const {
-  base::FilePath::StringType path = base::ToLowerASCII(
-      relative_path.NormalizePathSeparatorsTo('/').value());
-  std::pair<RootHashes::const_iterator, RootHashes::const_iterator> hashes =
-      root_hashes_.equal_range(path);
-  for (RootHashes::const_iterator iter = hashes.first; iter != hashes.second;
-       ++iter) {
-    if (expected == iter->second)
-      return true;
-  }
+  base::FilePath::StringType normalized_relative_path =
+      base::ToLowerASCII(relative_path.NormalizePathSeparatorsTo('/').value());
+  if (TreeHashRootEqualsImpl(normalized_relative_path, expected))
+    return true;
+
+#if defined(OS_WIN)
+  base::FilePath::StringType trimmed_relative_path;
+  if (TrimDotSpaceSuffix(normalized_relative_path, &trimmed_relative_path))
+    return TreeHashRootEqualsImpl(trimmed_relative_path, expected);
+#endif  // defined(OS_WIN)
   return false;
 }
 
@@ -317,6 +402,18 @@ bool VerifiedContents::VerifySignature(const std::string& protected_value,
     return false;
   }
   return true;
+}
+
+bool VerifiedContents::TreeHashRootEqualsImpl(
+    const base::FilePath::StringType& normalized_relative_path,
+    const std::string& expected) const {
+  std::pair<RootHashes::const_iterator, RootHashes::const_iterator> hashes =
+      root_hashes_.equal_range(normalized_relative_path);
+  for (auto iter = hashes.first; iter != hashes.second; ++iter) {
+    if (expected == iter->second)
+      return true;
+  }
+  return false;
 }
 
 }  // namespace extensions

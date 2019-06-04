@@ -22,21 +22,12 @@ class StartTest(unittest.TestCase):
     execution = quest.Start('change', 'https://isolate.server', 'isolate hash')
     self.assertEqual(execution._extra_args, ['arg'])
 
-  # TODO: Remove after there are no more jobs running RunTest quests
-  # (instead of RunTelemetryTest quests).
-  def testResultsLabel(self):
-    quest = run_test.RunTest('server', [{'key': 'value'}],
-                             ['--results-label', ''])
-    execution = quest.Start('change', 'https://isolate.server', 'isolate hash')
-    self.assertEqual(execution._extra_args, ['--results-label', 'change'])
-
 
 class FromDictTest(unittest.TestCase):
 
   def testMinimumArguments(self):
     quest = run_test.RunTest.FromDict(_BASE_ARGUMENTS)
-    expected = run_test.RunTest('server', [{'key': 'value'}],
-                                run_test._DEFAULT_EXTRA_ARGS)
+    expected = run_test.RunTest('server', [{'key': 'value'}], [])
     self.assertEqual(quest, expected)
 
   def testAllArguments(self):
@@ -44,7 +35,7 @@ class FromDictTest(unittest.TestCase):
     arguments['extra_test_args'] = '["--custom-arg", "custom value"]'
     quest = run_test.RunTest.FromDict(arguments)
 
-    extra_args = ['--custom-arg', 'custom value'] + run_test._DEFAULT_EXTRA_ARGS
+    extra_args = ['--custom-arg', 'custom value']
     expected = run_test.RunTest('server', [{'key': 'value'}], extra_args)
     self.assertEqual(quest, expected)
 
@@ -64,8 +55,7 @@ class FromDictTest(unittest.TestCase):
     arguments = dict(_BASE_ARGUMENTS)
     arguments['dimensions'] = '[{"key": "value"}]'
     quest = run_test.RunTest.FromDict(arguments)
-    expected = run_test.RunTest('server', [{'key': 'value'}],
-                                run_test._DEFAULT_EXTRA_ARGS)
+    expected = run_test.RunTest('server', [{'key': 'value'}], [])
     self.assertEqual(quest, expected)
 
   def testInvalidExtraTestArgs(self):
@@ -79,7 +69,7 @@ class FromDictTest(unittest.TestCase):
     arguments['extra_test_args'] = '--custom-arg "custom value"'
     quest = run_test.RunTest.FromDict(arguments)
 
-    extra_args = ['--custom-arg', 'custom value'] + run_test._DEFAULT_EXTRA_ARGS
+    extra_args = ['--custom-arg', 'custom value']
     expected = run_test.RunTest('server', [{'key': 'value'}], extra_args)
     self.assertEqual(quest, expected)
 
@@ -102,8 +92,37 @@ class _RunTestExecutionTest(unittest.TestCase):
                 {'key': 'pool', 'value': 'Chrome-perf-pinpoint'},
                 {'key': 'value'},
             ],
-            'execution_timeout_secs': '7200',
+            'execution_timeout_secs': '21600',
             'io_timeout_secs': '1200',
+            'caches': [
+                {
+                    'name': 'pinpoint_cache_vpython',
+                    'path': '.pinpoint_cache/vpython'
+                },
+            ],
+            'cipd_input': {
+                'client_package': mock.ANY,
+                'server': mock.ANY,
+                'packages': [
+                    {
+                        'package_name': 'infra/tools/luci/vpython/${platform}',
+                        'path': '',
+                        'version': mock.ANY,
+                    },
+                    {
+                        'package_name':
+                            'infra/tools/luci/vpython-native/${platform}',
+                        'path': '',
+                        'version': mock.ANY,
+                    },
+                ],
+            },
+            'env': [
+                {
+                    'key': 'VPYTHON_VIRTUALENV_ROOT',
+                    'value': '.pinpoint_cache/vpython',
+                },
+            ],
         },
     }
     swarming_tasks_new.assert_called_with(body)
@@ -124,8 +143,11 @@ class _RunTestExecutionTest(unittest.TestCase):
                 {'key': 'pool', 'value': 'Chrome-perf-pinpoint'},
                 {'key': 'id', 'value': 'bot id'},
             ],
-            'execution_timeout_secs': '7200',
+            'execution_timeout_secs': '21600',
             'io_timeout_secs': '1200',
+            'caches': mock.ANY,
+            'cipd_input': mock.ANY,
+            'env': mock.ANY,
         },
     }
     swarming_tasks_new.assert_called_with(body)
@@ -184,14 +206,24 @@ class RunTestFullTest(_RunTestExecutionTest):
     self.assertEqual(execution.AsDict(), {
         'completed': True,
         'exception': None,
-        'details': {
-            'bot_id': 'bot id',
-            'task_id': 'task id',
-        },
-        'result_arguments': {
-            'isolate_server': 'output isolate server',
-            'isolate_hash': 'output isolate hash',
-        },
+        'details': [
+            {
+                'key': 'bot',
+                'value': 'bot id',
+                'url': 'server/bot?id=bot id',
+            },
+            {
+                'key': 'task',
+                'value': 'task id',
+                'url': 'server/task?id=task id',
+            },
+            {
+                'key': 'isolate',
+                'value': 'output isolate hash',
+                'url': 'output isolate server/browse?'
+                       'digest=output isolate hash',
+            },
+        ],
     })
 
     # Start a second Execution on another Change. It should use the bot_id
@@ -226,7 +258,10 @@ class SwarmingTaskStatusTest(_RunTestExecutionTest):
     last_exception_line = execution.exception.splitlines()[-1]
     self.assertTrue(last_exception_line.startswith('SwarmingTaskError'))
 
-  def testTestError(self, swarming_task_result, swarming_tasks_new):
+  @mock.patch('dashboard.services.swarming.Task.Stdout')
+  def testTestError(self, swarming_task_stdout,
+                    swarming_task_result, swarming_tasks_new):
+    swarming_task_stdout.return_value = {'output': ''}
     swarming_task_result.return_value = {
         'bot_id': 'bot id',
         'exit_code': 1,
@@ -244,6 +279,35 @@ class SwarmingTaskStatusTest(_RunTestExecutionTest):
     self.assertTrue(execution.failed)
     last_exception_line = execution.exception.splitlines()[-1]
     self.assertTrue(last_exception_line.startswith('SwarmingTestError'))
+
+  @mock.patch('dashboard.services.swarming.Task.Stdout')
+  def testTestErrorWithPythonException(
+      self, swarming_task_stdout, swarming_task_result, swarming_tasks_new):
+    swarming_task_stdout.return_value = {
+        'output': """Traceback (most recent call last):
+  File "../../testing/scripts/run_performance_tests.py", line 282, in <module>
+    sys.exit(main())
+  File "../../testing/scripts/run_performance_tests.py", line 226, in main
+    benchmarks = args.benchmark_names.split(',')
+AttributeError: 'Namespace' object has no attribute 'benchmark_names'"""
+    }
+    swarming_task_result.return_value = {
+        'bot_id': 'bot id',
+        'exit_code': 1,
+        'failure': True,
+        'state': 'COMPLETED',
+    }
+    swarming_tasks_new.return_value = {'task_id': 'task id'}
+
+    quest = run_test.RunTest('server', [{'key': 'value'}], ['arg'])
+    execution = quest.Start(None, 'isolate server', 'isolate_hash')
+    execution.Poll()
+    execution.Poll()
+
+    self.assertTrue(execution.completed)
+    self.assertTrue(execution.failed)
+    last_exception_line = execution.exception.splitlines()[-1]
+    self.assertTrue(last_exception_line.startswith('AttributeError'))
 
 
 @mock.patch('dashboard.services.swarming.Tasks.New')

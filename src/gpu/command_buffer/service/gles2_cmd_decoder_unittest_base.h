@@ -24,30 +24,33 @@
 #include "gpu/command_buffer/service/gles2_cmd_decoder_mock.h"
 #include "gpu/command_buffer/service/gles2_cmd_decoder_passthrough.h"
 #include "gpu/command_buffer/service/gles2_query_manager.h"
-#include "gpu/command_buffer/service/gpu_preferences.h"
 #include "gpu/command_buffer/service/gpu_tracer.h"
 #include "gpu/command_buffer/service/image_manager.h"
 #include "gpu/command_buffer/service/mailbox_manager_impl.h"
+#include "gpu/command_buffer/service/passthrough_discardable_manager.h"
 #include "gpu/command_buffer/service/program_manager.h"
 #include "gpu/command_buffer/service/renderbuffer_manager.h"
 #include "gpu/command_buffer/service/sampler_manager.h"
 #include "gpu/command_buffer/service/service_discardable_manager.h"
 #include "gpu/command_buffer/service/shader_manager.h"
+#include "gpu/command_buffer/service/shared_image_manager.h"
 #include "gpu/command_buffer/service/test_helper.h"
 #include "gpu/command_buffer/service/texture_manager.h"
 #include "gpu/command_buffer/service/transform_feedback_manager.h"
 #include "gpu/command_buffer/service/vertex_array_manager.h"
 #include "gpu/config/gpu_driver_bug_workarounds.h"
+#include "gpu/config/gpu_preferences.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/gl/gl_mock.h"
 #include "ui/gl/gl_surface_stub.h"
 #include "ui/gl/gl_version_info.h"
 
 namespace gpu {
-namespace gles2 {
-
 class MemoryTracker;
+
+namespace gles2 {
 class MockCopyTextureResourceManager;
+class MockCopyTexImageResourceManager;
 
 class GLES2DecoderTestBase : public ::testing::TestWithParam<bool>,
                              public DecoderClient {
@@ -62,6 +65,7 @@ class GLES2DecoderTestBase : public ::testing::TestWithParam<bool>,
   void OnDescheduleUntilFinished() override;
   void OnRescheduleAfterFinished() override;
   void OnSwapBuffers(uint64_t swap_id, uint32_t flags) override;
+  void ScheduleGrContextCleanup() override {}
 
   // Template to call glGenXXX functions.
   template <typename T>
@@ -205,8 +209,8 @@ class GLES2DecoderTestBase : public ::testing::TestWithParam<bool>,
                            GLsizei count_in_header,
                            char str_end);
 
-  void set_memory_tracker(MemoryTracker* memory_tracker) {
-    memory_tracker_ = memory_tracker;
+  void set_memory_tracker(std::unique_ptr<MemoryTracker> memory_tracker) {
+    memory_tracker_ = std::move(memory_tracker);
   }
 
   struct InitState {
@@ -256,6 +260,8 @@ class GLES2DecoderTestBase : public ::testing::TestWithParam<bool>,
   uint32_t GetAndClearBackbufferClearBitsForTest() const {
     return decoder_->GetAndClearBackbufferClearBitsForTest();
   }
+
+  SharedImageManager* GetSharedImageManager() { return &shared_image_manager_; }
 
   typedef TestHelper::AttribInfo AttribInfo;
   typedef TestHelper::UniformInfo UniformInfo;
@@ -526,7 +532,9 @@ class GLES2DecoderTestBase : public ::testing::TestWithParam<bool>,
   void DoLockDiscardableTextureCHROMIUM(GLuint texture_id);
   bool IsDiscardableTextureUnlocked(GLuint texture_id);
 
-  GLvoid* BufferOffset(unsigned i) { return static_cast<int8_t*>(NULL) + (i); }
+  GLvoid* BufferOffset(unsigned i) {
+    return static_cast<int8_t*>(nullptr) + (i);
+  }
 
   template <typename Command, typename Result>
   bool IsObjectHelper(GLuint client_id) {
@@ -698,7 +706,7 @@ class GLES2DecoderTestBase : public ::testing::TestWithParam<bool>,
   TraceOutputter outputter_;
   std::unique_ptr<MockGLES2Decoder> mock_decoder_;
   std::unique_ptr<GLES2Decoder> decoder_;
-  MemoryTracker* memory_tracker_;
+  std::unique_ptr<MemoryTracker> memory_tracker_;
 
   bool surface_supports_draw_rectangle_ = false;
 
@@ -779,7 +787,7 @@ class GLES2DecoderTestBase : public ::testing::TestWithParam<bool>,
       // When a vertex array object is bound, some drivers (AMD Linux,
       // Qualcomm, etc.) have a bug where it incorrectly generates an
       // GL_INVALID_OPERATION on glVertexAttribPointer() if pointer
-      // is NULL, no buffer is bound on GL_ARRAY_BUFFER.
+      // is nullptr, no buffer is bound on GL_ARRAY_BUFFER.
       // Make sure we don't trigger this bug.
       if (bound_vertex_array_object_ != 0)
         EXPECT_TRUE(bound_array_buffer_object_ != 0);
@@ -804,11 +812,13 @@ class GLES2DecoderTestBase : public ::testing::TestWithParam<bool>,
   FramebufferCompletenessCache framebuffer_completeness_cache_;
   ImageManager image_manager_;
   ServiceDiscardableManager discardable_manager_;
+  SharedImageManager shared_image_manager_;
   scoped_refptr<ContextGroup> group_;
   MockGLStates gl_states_;
   base::MessageLoop message_loop_;
 
-  MockCopyTextureResourceManager* copy_texture_manager_;  // not owned
+  MockCopyTextureResourceManager* copy_texture_manager_;     // not owned
+  MockCopyTexImageResourceManager* copy_tex_image_blitter_;  // not owned
 };
 
 class GLES2DecoderWithShaderTestBase : public GLES2DecoderTestBase {
@@ -847,6 +857,7 @@ class GLES2DecoderPassthroughTestBase : public testing::Test,
   void OnDescheduleUntilFinished() override;
   void OnRescheduleAfterFinished() override;
   void OnSwapBuffers(uint64_t swap_id, uint32_t flags) override;
+  void ScheduleGrContextCleanup() override {}
 
   void SetUp() override;
   void TearDown() override;
@@ -928,6 +939,11 @@ class GLES2DecoderPassthroughTestBase : public testing::Test,
   PassthroughResources* GetPassthroughResources() const {
     return group_->passthrough_resources();
   }
+  SharedImageRepresentationFactory* GetSharedImageRepresentationFactory()
+      const {
+    return group_->shared_image_representation_factory();
+  }
+  SharedImageManager* GetSharedImageManager() { return &shared_image_manager_; }
   const base::circular_deque<GLES2DecoderPassthroughImpl::PendingReadPixels>&
   GetPendingReadPixels() const {
     return decoder_->pending_read_pixels_;
@@ -949,7 +965,10 @@ class GLES2DecoderPassthroughTestBase : public testing::Test,
                        GLsizeiptr size,
                        const void* data);
 
+  void DoGenTexture(GLuint client_id);
+  bool DoIsTexture(GLuint client_id);
   void DoBindTexture(GLenum target, GLuint client_id);
+  void DoDeleteTexture(GLuint client_id);
   void DoTexImage2D(GLenum target,
                     GLint level,
                     GLenum internal_format,
@@ -973,6 +992,17 @@ class GLES2DecoderPassthroughTestBase : public testing::Test,
                                  GLuint renderbuffer);
 
   void DoBindRenderbuffer(GLenum target, GLuint client_id);
+
+  void DoGetIntegerv(GLenum pname, GLint* result, size_t num_results);
+
+  void DoInitializeDiscardableTextureCHROMIUM(GLuint client_id);
+  void DoUnlockDiscardableTextureCHROMIUM(GLuint client_id);
+  void DoLockDiscardableTextureCHROMIUM(GLuint client_id);
+
+  PassthroughDiscardableManager* passthrough_discardable_texture_manager() {
+    return &passthrough_discardable_manager_;
+  }
+  ContextGroup* group() { return group_.get(); }
 
   static const size_t kSharedBufferSize = 2048;
   static const uint32_t kSharedMemoryOffset = 132;
@@ -1002,6 +1032,8 @@ class GLES2DecoderPassthroughTestBase : public testing::Test,
   FramebufferCompletenessCache framebuffer_completeness_cache_;
   ImageManager image_manager_;
   ServiceDiscardableManager discardable_manager_;
+  PassthroughDiscardableManager passthrough_discardable_manager_;
+  SharedImageManager shared_image_manager_;
 
   scoped_refptr<gl::GLSurface> surface_;
   scoped_refptr<gl::GLContext> context_;

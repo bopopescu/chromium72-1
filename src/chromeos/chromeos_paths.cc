@@ -7,7 +7,7 @@
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/path_service.h"
-#include "base/sys_info.h"
+#include "base/system/sys_info.h"
 
 namespace chromeos {
 
@@ -59,6 +59,12 @@ const base::FilePath::CharType kDeviceExtensionLocalCache[] =
 const base::FilePath::CharType kSigninProfileComponentPolicy[] =
     FILE_PATH_LITERAL("/var/cache/signin_profile_component_policy");
 
+const base::FilePath::CharType kPreinstalledComponents[] =
+    FILE_PATH_LITERAL("/mnt/stateful_partition/unencrypted/");
+
+const base::FilePath::CharType kDevicePolicyExternalDataDir[] =
+    FILE_PATH_LITERAL("/var/cache/device_policy_external_data");
+
 bool PathProvider(int key, base::FilePath* result) {
   switch (key) {
     case FILE_DEFAULT_APP_ORDER:
@@ -102,6 +108,12 @@ bool PathProvider(int key, base::FilePath* result) {
       break;
     case DIR_SIGNIN_PROFILE_COMPONENT_POLICY:
       *result = base::FilePath(kSigninProfileComponentPolicy);
+      break;
+    case DIR_PREINSTALLED_COMPONENTS:
+      *result = base::FilePath(kPreinstalledComponents);
+      break;
+    case DIR_DEVICE_POLICY_EXTERNAL_DATA:
+      *result = base::FilePath(kDevicePolicyExternalDataDir);
       break;
     default:
       return false;
@@ -150,6 +162,9 @@ void RegisterStubPathOverrides(const base::FilePath& stubs_dir) {
   base::PathService::Override(
       DIR_SIGNIN_PROFILE_COMPONENT_POLICY,
       parent.AppendASCII("stub_signin_profile_component_policy"));
+  base::PathService::Override(
+      DIR_DEVICE_POLICY_EXTERNAL_DATA,
+      parent.AppendASCII("stub_device_policy_external_data"));
 }
 
 }  // namespace chromeos

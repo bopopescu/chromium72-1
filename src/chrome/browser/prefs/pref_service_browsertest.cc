@@ -27,7 +27,7 @@
 typedef InProcessBrowserTest PreservedWindowPlacement;
 
 IN_PROC_BROWSER_TEST_F(PreservedWindowPlacement, PRE_Test) {
-  browser()->window()->SetBounds(gfx::Rect(20, 30, 400, 500));
+  browser()->window()->SetBounds(gfx::Rect(20, 30, 600, 600));
 }
 
 // Fails on Chrome OS as the browser thinks it is restarting after a crash, see
@@ -39,7 +39,7 @@ IN_PROC_BROWSER_TEST_F(PreservedWindowPlacement, PRE_Test) {
 #endif
 IN_PROC_BROWSER_TEST_F(PreservedWindowPlacement, MAYBE_Test) {
   gfx::Rect bounds = browser()->window()->GetBounds();
-  gfx::Rect expected_bounds(gfx::Rect(20, 30, 400, 500));
+  gfx::Rect expected_bounds(gfx::Rect(20, 30, 600, 600));
   ASSERT_EQ(expected_bounds.ToString(), bounds.ToString());
 }
 

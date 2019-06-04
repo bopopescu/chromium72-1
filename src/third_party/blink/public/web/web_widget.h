@@ -33,8 +33,8 @@
 
 #include "base/callback.h"
 #include "base/time/time.h"
-#include "third_party/blink/public/platform/web_browser_controls_state.h"
-#include "third_party/blink/public/platform/web_canvas.h"
+#include "cc/input/browser_controls_state.h"
+#include "cc/paint/paint_canvas.h"
 #include "third_party/blink/public/platform/web_common.h"
 #include "third_party/blink/public/platform/web_float_size.h"
 #include "third_party/blink/public/platform/web_input_event_result.h"
@@ -50,15 +50,26 @@
 
 class SkBitmap;
 
-namespace blink {
+namespace cc {
+struct ApplyViewportChangesArgs;
+}
 
+namespace gfx {
+class Point;
+}
+
+namespace blink {
 class WebCoalescedInputEvent;
 class WebLayerTreeView;
 class WebPagePopup;
-struct WebPoint;
 
 class WebWidget {
  public:
+  // Called during set up of the WebWidget to declare the WebLayerTreeView for
+  // the widget to use. This does not pass ownership, but the caller must keep
+  // the pointer valid until Close() is called.
+  virtual void SetLayerTreeView(WebLayerTreeView*) = 0;
+
   // This method closes and deletes the WebWidget.
   virtual void Close() {}
 
@@ -84,46 +95,59 @@ class WebWidget {
 
   // Called to update imperative animation state. This should be called before
   // paint, although the client can rate-limit these calls.
-  // |lastFrameTimeMonotonic| is in seconds.
+  // |last_frame_time| is in seconds.
   virtual void BeginFrame(base::TimeTicks last_frame_time) {}
+
+  // Called when a main frame time metric should be emitted, along with
+  // any metrics that depend upon the main frame total time.
+  virtual void RecordEndOfFrameMetrics(base::TimeTicks frame_begin_time) {}
 
   // Called to run through the entire set of document lifecycle phases needed
   // to render a frame of the web widget. This MUST be called before Paint,
-  // and it may result in calls to WebWidgetClient::didInvalidateRect.
-  virtual void UpdateAllLifecyclePhases() { UpdateLifecycle(); }
+  // and it may result in calls to WebWidgetClient::DidInvalidateRect.
+  // |LifecycleUpdateReason| must be used to indicate the source of the
+  // update for the purposes of metrics gathering.
+  enum class LifecycleUpdate { kLayout, kPrePaint, kAll };
+  // This must be kept coordinated with DocumentLifecycle::LifecycleUpdateReason
+  enum class LifecycleUpdateReason { kBeginMainFrame, kTest, kOther };
+  virtual void UpdateAllLifecyclePhases(LifecycleUpdateReason reason) {
+    UpdateLifecycle(LifecycleUpdate::kAll, reason);
+  }
 
-  // Selectively runs all lifecycle phases or all phases excluding paint. The
-  // latter can be used to trigger side effects of updating layout and
-  // animations if painting is not required.
-  enum class LifecycleUpdate { kPrePaint, kAll };
-  virtual void UpdateLifecycle(
-      LifecycleUpdate requested_update = LifecycleUpdate::kAll) {}
+  // UpdateLifecycle is used to update to a specific lifestyle phase, as given
+  // by |LifecycleUpdate|. To update all lifecycle phases, use
+  // UpdateAllLifecyclePhases.
+  // |LifecycleUpdateReason| must be used to indicate the source of the
+  // update for the purposes of metrics gathering.
+  virtual void UpdateLifecycle(LifecycleUpdate requested_update,
+                               LifecycleUpdateReason reason) {}
 
-  // Performs the complete set of document lifecycle phases, including updates
-  // to the compositor state except rasterization.
-  virtual void UpdateAllLifecyclePhasesAndCompositeForTesting() {}
-
-  // Synchronously rasterizes and composites a frame.
-  virtual void CompositeWithRasterForTesting() {}
+  // Synchronously performs the complete set of document lifecycle phases,
+  // including updates to the compositor state, optionally including
+  // rasterization.
+  virtual void UpdateAllLifecyclePhasesAndCompositeForTesting(bool do_raster) {}
 
   // Called to paint the rectangular region within the WebWidget
   // onto the specified canvas at (viewPort.x,viewPort.y).
   //
-  // Before calling Paint(), you must call
-  // UpdateLifecycle(LifecycleUpdate::All): this method assumes the lifecycle is
-  // clean. It is okay to call paint multiple times once the lifecycle is
+  // Before calling PaintContent(), you must call
+  // UpdateLifecycle(LifecycleUpdate::All): this method assumes the lifecycle
+  // is clean. It is okay to call paint multiple times once the lifecycle is
   // updated, assuming no other changes are made to the WebWidget (e.g., once
   // events are processed, it should be assumed that another call to
-  // UpdateLifecycle is warranted before painting again).
-  virtual void Paint(WebCanvas*, const WebRect& view_port) {}
+  // UpdateLifecycle is warranted before painting again). Paints starting from
+  // the main LayoutView's property tree state, thus ignoring any transient
+  // transormations (e.g. pinch-zoom, dev tools emulation, etc.).
+  virtual void PaintContent(cc::PaintCanvas*, const WebRect& view_port) {}
 
-  // Similar to paint() but ignores compositing decisions, squashing all
-  // contents of the WebWidget into the output given to the WebCanvas.
+  // Similar to PaintContent() but ignores compositing decisions, squashing all
+  // contents of the WebWidget into the output given to the cc::PaintCanvas.
   //
-  // Before calling PaintIgnoringCompositing(), you must call
+  // Before calling PaintContentIgnoringCompositing(), you must call
   // UpdateLifecycle(LifecycleUpdate::All): this method assumes the lifecycle is
   // clean.
-  virtual void PaintIgnoringCompositing(WebCanvas*, const WebRect&) {}
+  virtual void PaintContentIgnoringCompositing(cc::PaintCanvas*,
+                                               const WebRect&) {}
 
   // Run layout and paint of all pending document changes asynchronously.
   virtual void LayoutAndPaintAsync(base::OnceClosure callback) {}
@@ -132,15 +156,19 @@ class WebWidget {
   virtual void CompositeAndReadbackAsync(
       base::OnceCallback<void(const SkBitmap&)> callback) {}
 
+  // Runs |callback| after a new frame has been submitted to the display
+  // compositor, and the display-compositor has displayed it on screen. Forces a
+  // redraw so that a new frame is submitted.
+  virtual void RequestPresentationCallbackForTesting(
+      base::OnceClosure callback) {}
+
   // Called to inform the WebWidget of a change in theme.
   // Implementors that cache rendered copies of widgets need to re-render
   // on receiving this message
   virtual void ThemeChanged() {}
 
   // Do a hit test at given point and return the WebHitTestResult.
-  virtual WebHitTestResult HitTestResultAt(const WebPoint&) {
-    return WebHitTestResult();
-  }
+  virtual WebHitTestResult HitTestResultAt(const gfx::Point&) = 0;
 
   // Called to inform the WebWidget of an input event.
   virtual WebInputEventResult HandleInputEvent(const WebCoalescedInputEvent&) {
@@ -159,11 +187,7 @@ class WebWidget {
 
   // Applies viewport related properties during a commit from the compositor
   // thread.
-  virtual void ApplyViewportDeltas(const WebFloatSize& visual_viewport_delta,
-                                   const WebFloatSize& layout_viewport_delta,
-                                   const WebFloatSize& elastic_overscroll_delta,
-                                   float scale_factor,
-                                   float browser_controls_shown_ratio_delta) {}
+  virtual void ApplyViewportChanges(const cc::ApplyViewportChangesArgs& args) {}
 
   virtual void RecordWheelAndTouchScrollingCount(bool has_scrolled_by_wheel,
                                                  bool has_scrolled_by_touch) {}
@@ -223,15 +247,17 @@ class WebWidget {
   // but not the select popup.
   virtual WebPagePopup* GetPagePopup() const { return 0; }
 
-  // Updates browser controls constraints and current state. Allows embedder to
-  // control what are valid states for browser controls and if it should
-  // animate.
-  virtual void UpdateBrowserControlsState(WebBrowserControlsState constraints,
-                                          WebBrowserControlsState current,
-                                          bool animate) {}
-
   // Called by client to request showing the context menu.
   virtual void ShowContextMenu(WebMenuSourceType) {}
+
+  // When the WebWidget is part of a frame tree, returns the active url for
+  // main frame of that tree, if the main frame is local in that tree. When
+  // the WebWidget is of a different kind (e.g. a popup) it returns the active
+  // url for the main frame of the frame tree that spawned the WebWidget, if
+  // the main frame is local in that tree. When the relevant main frame is
+  // remote in that frame tree, then the url is not known, and an empty url is
+  // returned.
+  virtual WebURL GetURLForDebugTrace() = 0;
 
  protected:
   ~WebWidget() = default;

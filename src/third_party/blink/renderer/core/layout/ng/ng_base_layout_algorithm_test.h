@@ -28,8 +28,11 @@ class NGBaseLayoutAlgorithmTest
  protected:
   void SetUp() override;
 
-  std::pair<scoped_refptr<NGPhysicalBoxFragment>,
-            scoped_refptr<NGConstraintSpace>>
+  // Should be called before calling Layout(), if you're not using
+  // RunBlockLayoutAlgorithmForElement.
+  void AdvanceToLayoutPhase();
+
+  std::pair<scoped_refptr<const NGPhysicalBoxFragment>, NGConstraintSpace>
   RunBlockLayoutAlgorithmForElement(Element* element);
 
   scoped_refptr<const NGPhysicalBoxFragment> GetBoxFragmentByElementId(
@@ -51,14 +54,15 @@ class FragmentChildIterator {
     index_ = 0;
   }
 
-  const NGPhysicalBoxFragment* NextChild();
+  const NGPhysicalBoxFragment* NextChild(
+      NGPhysicalOffset* fragment_offset = nullptr);
 
  private:
   const NGPhysicalBoxFragment* parent_;
   unsigned index_;
 };
 
-scoped_refptr<NGConstraintSpace> ConstructBlockLayoutTestConstraintSpace(
+NGConstraintSpace ConstructBlockLayoutTestConstraintSpace(
     WritingMode writing_mode,
     TextDirection direction,
     NGLogicalSize size,

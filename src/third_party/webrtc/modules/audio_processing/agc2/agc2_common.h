@@ -13,9 +13,6 @@
 
 #include <stddef.h>
 
-#include <cmath>
-
-
 namespace webrtc {
 
 constexpr float kMinFloatS16Value = -32768.f;
@@ -35,25 +32,31 @@ constexpr float kMaxGainChangePerFrameDb =
 constexpr float kHeadroomDbfs = 1.f;
 constexpr float kMaxGainDb = 30.f;
 constexpr float kInitialAdaptiveDigitalGainDb = 8.f;
+// At what limiter levels should we start decreasing the adaptive digital gain.
+constexpr float kLimiterThresholdForAgcGainDbfs = -kHeadroomDbfs;
 
 // This parameter must be tuned together with the noise estimator.
 constexpr float kMaxNoiseLevelDbfs = -50.f;
 
-// Used in the Level Estimator for deciding when to update the speech
-// level estimate. Also used in the adaptive digital gain applier to
-// decide when to allow target gain reduction.
+// This is the threshold for speech. Speech frames are used for updating the
+// speech level, measuring the amount of speech, and decide when to allow target
+// gain reduction.
 constexpr float kVadConfidenceThreshold = 0.9f;
 
 // The amount of 'memory' of the Level Estimator. Decides leak factors.
-constexpr size_t kFullBufferSizeMs = 1000;
+constexpr size_t kFullBufferSizeMs = 1200;
 constexpr float kFullBufferLeakFactor = 1.f - 1.f / kFullBufferSizeMs;
 
 constexpr float kInitialSpeechLevelEstimateDbfs = -30.f;
 
 // Saturation Protector settings.
-constexpr float kInitialSaturationMarginDb = 17.f;
+float GetInitialSaturationMarginDb();
+float GetExtraSaturationMarginOffsetDb();
 
-constexpr size_t kPeakEnveloperSuperFrameLengthMs = 500;
+constexpr size_t kPeakEnveloperSuperFrameLengthMs = 400;
+static_assert(kFullBufferSizeMs % kPeakEnveloperSuperFrameLengthMs == 0,
+              "Full buffer size should be a multiple of super frame length for "
+              "optimal Saturation Protector performance.");
 
 constexpr size_t kPeakEnveloperBufferSize =
     kFullBufferSizeMs / kPeakEnveloperSuperFrameLengthMs + 1;

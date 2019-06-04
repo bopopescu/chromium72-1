@@ -26,13 +26,12 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/safe_browsing/safe_browsing_navigation_observer_manager.h"
 #include "chrome/browser/safe_browsing/safe_browsing_service.h"
-#include "chrome/browser/signin/signin_manager_factory.h"
+#include "chrome/browser/signin/identity_manager_factory.h"
 #include "chrome/browser/ui/app_list/app_list_util.h"
 #include "chrome/common/extensions/extension_constants.h"
 #include "chrome/common/pref_names.h"
 #include "components/crx_file/id_util.h"
 #include "components/prefs/pref_service.h"
-#include "components/signin/core/browser/signin_manager.h"
 #include "content/public/browser/gpu_feature_checker.h"
 #include "content/public/browser/storage_partition.h"
 #include "content/public/browser/web_contents.h"
@@ -42,6 +41,7 @@
 #include "extensions/common/extension.h"
 #include "net/base/load_flags.h"
 #include "net/url_request/url_request.h"
+#include "services/identity/public/cpp/identity_manager.h"
 #include "url/gurl.h"
 
 #if BUILDFLAG(ENABLE_SUPERVISED_USERS)
@@ -102,8 +102,7 @@ void PendingApprovals::PushApproval(
 std::unique_ptr<WebstoreInstaller::Approval> PendingApprovals::PopApproval(
     Profile* profile,
     const std::string& id) {
-  for (ApprovalList::iterator iter = approvals_.begin();
-       iter != approvals_.end(); ++iter) {
+  for (auto iter = approvals_.begin(); iter != approvals_.end(); ++iter) {
     if (iter->get()->extension_id == id &&
         profile->IsSameProfile(iter->get()->profile)) {
       std::unique_ptr<WebstoreInstaller::Approval> approval = std::move(*iter);
@@ -137,12 +136,12 @@ const char kWebstoreLogin[] = "extensions.webstore_login";
 
 // Error messages that can be returned by the API.
 const char kAlreadyInstalledError[] = "This item is already installed";
-const char kInvalidIconUrlError[] = "Invalid icon url";
-const char kInvalidIdError[] = "Invalid id";
-const char kInvalidManifestError[] = "Invalid manifest";
+const char kWebstoreInvalidIconUrlError[] = "Invalid icon url";
+const char kWebstoreInvalidIdError[] = "Invalid id";
+const char kWebstoreInvalidManifestError[] = "Invalid manifest";
 const char kNoPreviousBeginInstallWithManifestError[] =
     "* does not match a previous call to beginInstallWithManifest3";
-const char kUserCancelledError[] = "User cancelled install";
+const char kWebstoreUserCancelledError[] = "User cancelled install";
 const char kIncognitoError[] =
     "Apps cannot be installed in guest/incognito mode";
 const char kEphemeralAppLaunchingNotSupported[] =
@@ -202,16 +201,16 @@ WebstorePrivateBeginInstallWithManifest3Function::Run() {
 
   if (!crx_file::id_util::IdIsValid(details().id)) {
     return RespondNow(BuildResponse(api::webstore_private::RESULT_INVALID_ID,
-                                    kInvalidIdError));
+                                    kWebstoreInvalidIdError));
   }
 
   GURL icon_url;
   if (details().icon_url) {
     icon_url = source_url().Resolve(*details().icon_url);
     if (!icon_url.is_valid()) {
-      return RespondNow(BuildResponse(
-          api::webstore_private::RESULT_INVALID_ICON_URL,
-          kInvalidIconUrlError));
+      return RespondNow(
+          BuildResponse(api::webstore_private::RESULT_INVALID_ICON_URL,
+                        kWebstoreInvalidIconUrlError));
     }
   }
 
@@ -254,10 +253,10 @@ WebstorePrivateBeginInstallWithManifest3Function::Run() {
 void WebstorePrivateBeginInstallWithManifest3Function::OnWebstoreParseSuccess(
     const std::string& id,
     const SkBitmap& icon,
-    base::DictionaryValue* parsed_manifest) {
+    std::unique_ptr<base::DictionaryValue> parsed_manifest) {
   CHECK_EQ(details().id, id);
   CHECK(parsed_manifest);
-  parsed_manifest_.reset(parsed_manifest);
+  parsed_manifest_ = std::move(parsed_manifest);
   icon_ = icon;
 
   std::string localized_name =
@@ -275,15 +274,16 @@ void WebstorePrivateBeginInstallWithManifest3Function::OnWebstoreParseSuccess(
   if (!dummy_extension_.get()) {
     OnWebstoreParseFailure(details().id,
                            WebstoreInstallHelper::Delegate::MANIFEST_ERROR,
-                           kInvalidManifestError);
+                           kWebstoreInvalidManifestError);
     return;
   }
 
   // Check the management policy before the installation process begins.
   Profile* profile = chrome_details_.GetProfile();
   base::string16 policy_error;
-  bool allow = ExtensionSystem::Get(profile)->
-      management_policy()->UserMayLoad(dummy_extension_.get(), &policy_error);
+  bool allow =
+      ExtensionSystem::Get(profile)->management_policy()->UserMayInstall(
+          dummy_extension_.get(), &policy_error);
   if (!allow) {
     bool blocked_for_child = false;
 #if BUILDFLAG(ENABLE_SUPERVISED_USERS)
@@ -314,7 +314,7 @@ void WebstorePrivateBeginInstallWithManifest3Function::OnWebstoreParseSuccess(
   if (!web_contents) {
     // The browser window has gone away.
     Respond(BuildResponse(api::webstore_private::RESULT_USER_CANCELLED,
-                          kUserCancelledError));
+                          kWebstoreUserCancelledError));
     // Matches the AddRef in Run().
     Release();
     return;
@@ -399,7 +399,7 @@ void WebstorePrivateBeginInstallWithManifest3Function::HandleInstallAbort(
                                                       histogram_name.c_str());
 
   Respond(BuildResponse(api::webstore_private::RESULT_USER_CANCELLED,
-                        kUserCancelledError));
+                        kWebstoreUserCancelledError));
 }
 
 ExtensionFunction::ResponseValue
@@ -437,7 +437,7 @@ WebstorePrivateCompleteInstallFunction::Run() {
   }
 
   if (!crx_file::id_util::IdIsValid(params->expected_id))
-    return RespondNow(Error(kInvalidIdError));
+    return RespondNow(Error(kWebstoreInvalidIdError));
 
   approval_ = g_pending_approvals.Get().PopApproval(
       chrome_details_.GetProfile(), params->expected_id);
@@ -526,9 +526,9 @@ WebstorePrivateGetBrowserLoginFunction::
 ExtensionFunction::ResponseAction
 WebstorePrivateGetBrowserLoginFunction::Run() {
   GetBrowserLogin::Results::Info info;
-  info.login = SigninManagerFactory::GetForProfile(
+  info.login = IdentityManagerFactory::GetForProfile(
                    chrome_details_.GetProfile()->GetOriginalProfile())
-                   ->GetAuthenticatedAccountInfo()
+                   ->GetPrimaryAccountInfo()
                    .email;
   return RespondNow(ArgumentList(GetBrowserLogin::Results::Create(info)));
 }
@@ -689,7 +689,7 @@ WebstorePrivateGetReferrerChainFunction::Run() {
   content::WebContents* web_contents = GetSenderWebContents();
   if (!web_contents) {
     return RespondNow(ErrorWithArguments(GetReferrerChain::Results::Create(""),
-                                         kUserCancelledError));
+                                         kWebstoreUserCancelledError));
   }
 
   scoped_refptr<SafeBrowsingNavigationObserverManager>

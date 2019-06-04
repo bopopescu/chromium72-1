@@ -31,6 +31,7 @@
 
 #include "third_party/blink/renderer/core/timing/window_performance.h"
 
+#include "third_party/blink/public/platform/platform.h"
 #include "third_party/blink/public/platform/task_type.h"
 #include "third_party/blink/public/platform/web_layer_tree_view.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_value.h"
@@ -43,24 +44,18 @@
 #include "third_party/blink/renderer/core/html/html_frame_owner_element.h"
 #include "third_party/blink/renderer/core/loader/document_loader.h"
 #include "third_party/blink/renderer/core/origin_trials/origin_trials.h"
+#include "third_party/blink/renderer/core/page/chrome_client.h"
+#include "third_party/blink/renderer/core/timing/performance_element_timing.h"
 #include "third_party/blink/renderer/core/timing/performance_event_timing.h"
+#include "third_party/blink/renderer/core/timing/performance_layout_jank.h"
 #include "third_party/blink/renderer/core/timing/performance_timing.h"
 #include "third_party/blink/renderer/platform/cross_thread_functional.h"
 #include "third_party/blink/renderer/platform/loader/fetch/resource_timing_info.h"
 #include "third_party/blink/renderer/platform/runtime_enabled_features.h"
+#include "third_party/blink/renderer/platform/scheduler/public/thread_scheduler.h"
 
-static const double kLongTaskObserverThreshold = 0.05;
-
-static const char kUnknownAttribution[] = "unknown";
-static const char kAmbiguousAttribution[] = "multiple-contexts";
-static const char kSameOriginAttribution[] = "same-origin";
-static const char kSameOriginSelfAttribution[] = "self";
-static const char kSameOriginAncestorAttribution[] = "same-origin-ancestor";
-static const char kSameOriginDescendantAttribution[] = "same-origin-descendant";
-static const char kCrossOriginAncestorAttribution[] = "cross-origin-ancestor";
-static const char kCrossOriginDescendantAttribution[] =
-    "cross-origin-descendant";
-static const char kCrossOriginAttribution[] = "cross-origin-unreachable";
+static constexpr base::TimeDelta kLongTaskObserverThreshold =
+    base::TimeDelta::FromMilliseconds(50);
 
 namespace blink {
 
@@ -83,21 +78,45 @@ String GetFrameAttribute(HTMLFrameOwnerElement* frame_owner,
   return attr_value;
 }
 
-const char* SameOriginAttribution(Frame* observer_frame, Frame* culprit_frame) {
-  if (observer_frame == culprit_frame)
-    return kSameOriginSelfAttribution;
-  if (observer_frame->Tree().IsDescendantOf(culprit_frame))
-    return kSameOriginAncestorAttribution;
-  if (culprit_frame->Tree().IsDescendantOf(observer_frame))
-    return kSameOriginDescendantAttribution;
+const AtomicString& SelfKeyword() {
+  DEFINE_STATIC_LOCAL(const AtomicString, kSelfAttribution, ("self"));
+  return kSelfAttribution;
+}
+
+const AtomicString& SameOriginAncestorKeyword() {
+  DEFINE_STATIC_LOCAL(const AtomicString, kSameOriginAncestorAttribution,
+                      ("same-origin-ancestor"));
+  return kSameOriginAncestorAttribution;
+}
+
+const AtomicString& SameOriginDescendantKeyword() {
+  DEFINE_STATIC_LOCAL(const AtomicString, kSameOriginDescendantAttribution,
+                      ("same-origin-descendant"));
+  return kSameOriginDescendantAttribution;
+}
+
+const AtomicString& SameOriginKeyword() {
+  DEFINE_STATIC_LOCAL(const AtomicString, kSameOriginAttribution,
+                      ("same-origin"));
   return kSameOriginAttribution;
 }
 
-bool IsSameOrigin(String key) {
-  return key == kSameOriginAttribution ||
-         key == kSameOriginDescendantAttribution ||
-         key == kSameOriginAncestorAttribution ||
-         key == kSameOriginSelfAttribution;
+AtomicString SameOriginAttribution(Frame* observer_frame,
+                                   Frame* culprit_frame) {
+  DCHECK(IsMainThread());
+  if (observer_frame == culprit_frame)
+    return SelfKeyword();
+  if (observer_frame->Tree().IsDescendantOf(culprit_frame))
+    return SameOriginAncestorKeyword();
+  if (culprit_frame->Tree().IsDescendantOf(observer_frame))
+    return SameOriginDescendantKeyword();
+  return SameOriginKeyword();
+}
+
+bool IsSameOrigin(const AtomicString& key) {
+  DCHECK(IsMainThread());
+  return key == SameOriginKeyword() || key == SameOriginDescendantKeyword() ||
+         key == SameOriginAncestorKeyword() || key == SelfKeyword();
 }
 
 }  // namespace
@@ -143,18 +162,28 @@ PerformanceNavigation* WindowPerformance::navigation() const {
 }
 
 MemoryInfo* WindowPerformance::memory() const {
-  return MemoryInfo::Create();
+  // The performance.memory() API has been improved so that we report precise
+  // values when the process is locked to a site. The intent (which changed
+  // course over time about what changes would be implemented) can be found at
+  // https://groups.google.com/a/chromium.org/forum/#!topic/blink-dev/no00RdMnGio,
+  // and the relevant bug is https://crbug.com/807651.
+  return MemoryInfo::Create(Platform::Current()->IsLockedToSite()
+                                ? MemoryInfo::Precision::Precise
+                                : MemoryInfo::Precision::Bucketized);
+}
+
+bool WindowPerformance::shouldYield() const {
+  return ThreadScheduler::Current()->ShouldYieldForHighPriorityWork();
 }
 
 PerformanceNavigationTiming*
 WindowPerformance::CreateNavigationTimingInstance() {
-  if (!RuntimeEnabledFeatures::PerformanceNavigationTiming2Enabled())
-    return nullptr;
   if (!GetFrame())
     return nullptr;
   const DocumentLoader* document_loader =
       GetFrame()->Loader().GetDocumentLoader();
-  DCHECK(document_loader);
+  if (!document_loader)
+    return nullptr;
   ResourceTimingInfo* info = document_loader->GetNavigationTimingInfo();
   if (!info)
     return nullptr;
@@ -162,8 +191,8 @@ WindowPerformance::CreateNavigationTimingInstance() {
       PerformanceServerTiming::ParseServerTiming(*info);
   if (!server_timing.empty())
     UseCounter::Count(GetFrame(), WebFeature::kPerformanceServerTiming);
-  return new PerformanceNavigationTiming(GetFrame(), info, time_origin_,
-                                         server_timing);
+  return MakeGarbageCollected<PerformanceNavigationTiming>(
+      GetFrame(), info, time_origin_, server_timing);
 }
 
 void WindowPerformance::UpdateLongTaskInstrumentation() {
@@ -210,23 +239,27 @@ static bool CanAccessOrigin(Frame* frame1, Frame* frame2) {
  * See detailed Security doc here: http://bit.ly/2duD3F7
  */
 // static
-std::pair<String, DOMWindow*> WindowPerformance::SanitizedAttribution(
+std::pair<AtomicString, DOMWindow*> WindowPerformance::SanitizedAttribution(
     ExecutionContext* task_context,
     bool has_multiple_contexts,
     LocalFrame* observer_frame) {
+  DCHECK(IsMainThread());
   if (has_multiple_contexts) {
     // Unable to attribute, multiple script execution contents were involved.
+    DEFINE_STATIC_LOCAL(const AtomicString, kAmbiguousAttribution,
+                        ("multiple-contexts"));
     return std::make_pair(kAmbiguousAttribution, nullptr);
   }
 
-  if (!task_context || !task_context->IsDocument() ||
-      !ToDocument(task_context)->GetFrame()) {
+  Document* document = DynamicTo<Document>(task_context);
+  if (!document || !document->GetFrame()) {
     // Unable to attribute as no script was involved.
+    DEFINE_STATIC_LOCAL(const AtomicString, kUnknownAttribution, ("unknown"));
     return std::make_pair(kUnknownAttribution, nullptr);
   }
 
   // Exactly one culprit location, attribute based on origin boundary.
-  Frame* culprit_frame = ToDocument(task_context)->GetFrame();
+  Frame* culprit_frame = document->GetFrame();
   DCHECK(culprit_frame);
   if (CanAccessOrigin(observer_frame, culprit_frame)) {
     // From accessible frames or same origin, return culprit location URL.
@@ -248,24 +281,30 @@ std::pair<String, DOMWindow*> WindowPerformance::SanitizedAttribution(
         last_cross_origin_frame = frame;
       }
     }
+    DEFINE_STATIC_LOCAL(const AtomicString, kCrossOriginDescendantAttribution,
+                        ("cross-origin-descendant"));
     return std::make_pair(kCrossOriginDescendantAttribution,
                           last_cross_origin_frame->DomWindow());
   }
   if (observer_frame->Tree().IsDescendantOf(culprit_frame)) {
+    DEFINE_STATIC_LOCAL(const AtomicString, kCrossOriginAncestorAttribution,
+                        ("cross-origin-ancestor"));
     return std::make_pair(kCrossOriginAncestorAttribution, nullptr);
   }
+  DEFINE_STATIC_LOCAL(const AtomicString, kCrossOriginAttribution,
+                      ("cross-origin-unreachable"));
   return std::make_pair(kCrossOriginAttribution, nullptr);
 }
 
 void WindowPerformance::ReportLongTask(
-    double start_time,
-    double end_time,
+    base::TimeTicks start_time,
+    base::TimeTicks end_time,
     ExecutionContext* task_context,
     bool has_multiple_contexts,
     const SubTaskAttribution::EntriesVector& sub_task_attributions) {
   if (!GetFrame())
     return;
-  std::pair<String, DOMWindow*> attribution =
+  std::pair<AtomicString, DOMWindow*> attribution =
       WindowPerformance::SanitizedAttribution(
           task_context, has_multiple_contexts, GetFrame());
   DOMWindow* culprit_dom_window = attribution.second;
@@ -273,18 +312,17 @@ void WindowPerformance::ReportLongTask(
   if (!culprit_dom_window || !culprit_dom_window->GetFrame() ||
       !culprit_dom_window->GetFrame()->DeprecatedLocalOwner()) {
     AddLongTaskTiming(
-        TimeTicksFromSeconds(start_time), TimeTicksFromSeconds(end_time),
-        attribution.first, g_empty_string, g_empty_string, g_empty_string,
+        start_time, end_time, attribution.first, g_empty_string, g_empty_string,
+        g_empty_string,
         IsSameOrigin(attribution.first) ? sub_task_attributions : empty_vector);
   } else {
     HTMLFrameOwnerElement* frame_owner =
         culprit_dom_window->GetFrame()->DeprecatedLocalOwner();
     AddLongTaskTiming(
-        TimeTicksFromSeconds(start_time), TimeTicksFromSeconds(end_time),
-        attribution.first,
-        GetFrameAttribute(frame_owner, HTMLNames::srcAttr, false),
-        GetFrameAttribute(frame_owner, HTMLNames::idAttr, false),
-        GetFrameAttribute(frame_owner, HTMLNames::nameAttr, true),
+        start_time, end_time, attribution.first,
+        GetFrameAttribute(frame_owner, html_names::kSrcAttr, false),
+        GetFrameAttribute(frame_owner, html_names::kIdAttr, false),
+        GetFrameAttribute(frame_owner, html_names::kNameAttr, true),
         IsSameOrigin(attribution.first) ? sub_task_attributions : empty_vector);
   }
 }
@@ -295,16 +333,12 @@ bool WindowPerformance::ShouldBufferEventTiming() {
   return !timing() || !timing()->loadEventStart();
 }
 
-bool WindowPerformance::ObservingEventTimingEntries() {
-  return HasObserverFor(PerformanceEntry::kEvent);
-}
-
-void WindowPerformance::RegisterEventTiming(String event_type,
+void WindowPerformance::RegisterEventTiming(const AtomicString& event_type,
                                             TimeTicks start_time,
                                             TimeTicks processing_start,
                                             TimeTicks processing_end,
                                             bool cancelable) {
-  DCHECK(OriginTrials::eventTimingEnabled(GetExecutionContext()));
+  DCHECK(origin_trials::EventTimingEnabled(GetExecutionContext()));
 
   DCHECK(!start_time.is_null());
   DCHECK(!processing_start.is_null());
@@ -334,7 +368,7 @@ void WindowPerformance::RegisterEventTiming(String event_type,
 
 void WindowPerformance::ReportEventTimings(WebLayerTreeView::SwapResult result,
                                            TimeTicks timestamp) {
-  DCHECK(OriginTrials::eventTimingEnabled(GetExecutionContext()));
+  DCHECK(origin_trials::EventTimingEnabled(GetExecutionContext()));
 
   DOMHighResTimeStamp end_time = MonotonicTimeToDOMHighResTimeStamp(timestamp);
   for (const auto& entry : event_timings_) {
@@ -355,7 +389,7 @@ void WindowPerformance::ReportEventTimings(WebLayerTreeView::SwapResult result,
     if (duration_in_ms <= kEventTimingDurationThresholdInMs)
       continue;
 
-    if (ObservingEventTimingEntries()) {
+    if (HasObserverFor(PerformanceEntry::kEvent)) {
       UseCounter::Count(GetFrame(),
                         WebFeature::kEventTimingExplicitlyRequested);
       NotifyObserversOfEntry(*entry);
@@ -367,9 +401,18 @@ void WindowPerformance::ReportEventTimings(WebLayerTreeView::SwapResult result,
   event_timings_.clear();
 }
 
+void WindowPerformance::AddElementTiming(const AtomicString& name,
+                                         const IntRect& rect,
+                                         TimeTicks timestamp) {
+  DCHECK(RuntimeEnabledFeatures::ElementTimingEnabled());
+  PerformanceEntry* entry = PerformanceElementTiming::Create(
+      name, rect, MonotonicTimeToDOMHighResTimeStamp(timestamp));
+  NotifyObserversOfEntry(*entry);
+}
+
 void WindowPerformance::DispatchFirstInputTiming(
     PerformanceEventTiming* entry) {
-  DCHECK(OriginTrials::eventTimingEnabled(GetExecutionContext()));
+  DCHECK(origin_trials::EventTimingEnabled(GetExecutionContext()));
   first_input_detected_ = true;
 
   if (!entry)
@@ -383,6 +426,12 @@ void WindowPerformance::DispatchFirstInputTiming(
   DCHECK(!first_input_timing_);
   if (ShouldBufferEventTiming())
     first_input_timing_ = entry;
+}
+
+void WindowPerformance::AddLayoutJankFraction(double jank_fraction) {
+  DCHECK(RuntimeEnabledFeatures::LayoutJankAPIEnabled());
+  PerformanceEntry* entry = PerformanceLayoutJank::Create(jank_fraction);
+  NotifyObserversOfEntry(*entry);
 }
 
 }  // namespace blink

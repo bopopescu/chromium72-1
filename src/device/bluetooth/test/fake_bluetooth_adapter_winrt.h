@@ -23,8 +23,12 @@ class FakeBluetoothAdapterWinrt
               Microsoft::WRL::WinRt | Microsoft::WRL::InhibitRoOriginateError>,
           ABI::Windows::Devices::Bluetooth::IBluetoothAdapter> {
  public:
-  explicit FakeBluetoothAdapterWinrt(base::StringPiece address);
+  FakeBluetoothAdapterWinrt(
+      base::StringPiece address,
+      Microsoft::WRL::ComPtr<ABI::Windows::Devices::Radios::IRadio> radio);
   ~FakeBluetoothAdapterWinrt() override;
+
+  static uint64_t ToRawBluetoothAddress(base::StringPiece address);
 
   // IBluetoothAdapter:
   IFACEMETHODIMP get_DeviceId(HSTRING* value) override;
@@ -42,6 +46,7 @@ class FakeBluetoothAdapterWinrt
 
  private:
   uint64_t raw_address_;
+  Microsoft::WRL::ComPtr<ABI::Windows::Devices::Radios::IRadio> radio_;
 
   DISALLOW_COPY_AND_ASSIGN(FakeBluetoothAdapterWinrt);
 };

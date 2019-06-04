@@ -6,12 +6,14 @@
 #include <vector>
 
 #include "base/files/file_util.h"
+#include "base/threading/sequenced_task_runner_handle.h"
 #include "base/threading/thread_task_runner_handle.h"
 #include "content/browser/background_fetch/mock_background_fetch_delegate.h"
 #include "content/public/browser/background_fetch_description.h"
 #include "content/public/browser/background_fetch_response.h"
 #include "content/public/browser/browser_thread.h"
 #include "net/http/http_response_headers.h"
+#include "services/network/public/cpp/cors/cors.h"
 
 namespace content {
 
@@ -22,7 +24,7 @@ MockBackgroundFetchDelegate::TestResponse::~TestResponse() = default;
 MockBackgroundFetchDelegate::TestResponseBuilder::TestResponseBuilder(
     int response_code)
     : response_(std::make_unique<TestResponse>()) {
-  response_->succeeded_ = (response_code >= 200 && response_code < 300);
+  response_->succeeded = network::cors::IsOkStatus(response_code);
   response_->headers = base::MakeRefCounted<net::HttpResponseHeaders>(
       "HTTP/1.1 " + std::to_string(response_code));
 }
@@ -47,6 +49,12 @@ MockBackgroundFetchDelegate::TestResponseBuilder::SetResponseData(
   return *this;
 }
 
+MockBackgroundFetchDelegate::TestResponseBuilder&
+MockBackgroundFetchDelegate::TestResponseBuilder::MakeIndefinitelyPending() {
+  response_->pending = true;
+  return *this;
+}
+
 std::unique_ptr<MockBackgroundFetchDelegate::TestResponse>
 MockBackgroundFetchDelegate::TestResponseBuilder::Build() {
   return std::move(response_);
@@ -55,6 +63,15 @@ MockBackgroundFetchDelegate::TestResponseBuilder::Build() {
 MockBackgroundFetchDelegate::MockBackgroundFetchDelegate() {}
 
 MockBackgroundFetchDelegate::~MockBackgroundFetchDelegate() {}
+
+void MockBackgroundFetchDelegate::GetPermissionForOrigin(
+    const url::Origin& origin,
+    const ResourceRequestInfo::WebContentsGetter& wc_getter,
+    GetPermissionForOriginCallback callback) {
+  base::SequencedTaskRunnerHandle::Get()->PostTask(
+      FROM_HERE,
+      base::BindOnce(std::move(callback), BackgroundFetchPermission::ALLOWED));
+}
 
 void MockBackgroundFetchDelegate::GetIconDisplaySize(
     GetIconDisplaySizeCallback callback) {}
@@ -68,7 +85,8 @@ void MockBackgroundFetchDelegate::DownloadUrl(
     const std::string& method,
     const GURL& url,
     const net::NetworkTrafficAnnotationTag& traffic_annotation,
-    const net::HttpRequestHeaders& headers) {
+    const net::HttpRequestHeaders& headers,
+    bool has_request_body) {
   // TODO(delphick): Currently we just disallow re-using GUIDs but later when we
   // use the DownloadService, we should signal StartResult::UNEXPECTED_GUID.
   DCHECK(seen_guids_.find(guid) == seen_guids_.end());
@@ -85,14 +103,15 @@ void MockBackgroundFetchDelegate::DownloadUrl(
   std::unique_ptr<TestResponse> test_response = std::move(url_iter->second);
   url_responses_.erase(url_iter);
 
-  std::unique_ptr<BackgroundFetchResponse> response =
-      std::make_unique<BackgroundFetchResponse>(std::vector<GURL>({url}),
-                                                test_response->headers);
+  if (test_response->pending)
+    return;
 
   PostAbortCheckingTask(
       job_unique_id,
       base::BindOnce(&BackgroundFetchDelegate::Client::OnDownloadStarted,
-                     client(), job_unique_id, guid, std::move(response)));
+                     client(), job_unique_id, guid,
+                     std::make_unique<BackgroundFetchResponse>(
+                         std::vector<GURL>({url}), test_response->headers)));
 
   if (test_response->data.size()) {
     // Report progress at 50% complete.
@@ -110,7 +129,7 @@ void MockBackgroundFetchDelegate::DownloadUrl(
                        test_response->data.size()));
   }
 
-  if (test_response->succeeded_) {
+  if (test_response->succeeded) {
     base::FilePath response_path;
     if (!temp_directory_.IsValid()) {
       CHECK(temp_directory_.CreateUniqueTempDir());
@@ -130,15 +149,20 @@ void MockBackgroundFetchDelegate::DownloadUrl(
             &BackgroundFetchDelegate::Client::OnDownloadComplete, client(),
             job_unique_id, guid,
             std::make_unique<BackgroundFetchResult>(
-                base::Time::Now(), response_path, test_response->data.size())));
+                std::make_unique<BackgroundFetchResponse>(
+                    std::vector<GURL>({url}), test_response->headers),
+                base::Time::Now(), response_path,
+                base::nullopt /* blob_handle */, test_response->data.size())));
   } else {
+    auto response = std::make_unique<BackgroundFetchResponse>(
+        std::vector<GURL>({url}), test_response->headers);
+    auto result = std::make_unique<BackgroundFetchResult>(
+        std::move(response), base::Time::Now(),
+        BackgroundFetchResult::FailureReason::FETCH_ERROR);
     PostAbortCheckingTask(
         job_unique_id,
         base::BindOnce(&BackgroundFetchDelegate::Client::OnDownloadComplete,
-                       client(), job_unique_id, guid,
-                       std::make_unique<BackgroundFetchResult>(
-                           base::Time::Now(),
-                           BackgroundFetchResult::FailureReason::UNKNOWN)));
+                       client(), job_unique_id, guid, std::move(result)));
   }
 
   seen_guids_.insert(guid);
@@ -146,6 +170,18 @@ void MockBackgroundFetchDelegate::DownloadUrl(
 
 void MockBackgroundFetchDelegate::Abort(const std::string& job_unique_id) {
   aborted_jobs_.insert(job_unique_id);
+}
+
+void MockBackgroundFetchDelegate::MarkJobComplete(
+    const std::string& job_unique_id) {
+  completed_jobs_.insert(job_unique_id);
+}
+
+void MockBackgroundFetchDelegate::UpdateUI(
+    const std::string& job_unique_id,
+    const base::Optional<std::string>& title,
+    const base::Optional<SkBitmap>& icon) {
+  client()->OnUIUpdated(job_unique_id);
 }
 
 void MockBackgroundFetchDelegate::RegisterResponse(

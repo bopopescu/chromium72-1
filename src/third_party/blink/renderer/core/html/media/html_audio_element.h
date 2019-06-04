@@ -43,16 +43,18 @@ class CORE_EXPORT HTMLAudioElement final : public HTMLMediaElement {
       Document&,
       const AtomicString& src = g_null_atom);
 
+  HTMLAudioElement(Document&);
+
   bool IsHTMLAudioElement() const override { return true; }
 
   // WebMediaPlayerClient implementation.
   void MediaRemotingStarted(
       const WebString& remote_device_friendly_name) override {}
-  void PictureInPictureStopped() override {}
   void MediaRemotingStopped(WebLocalizedString::Name error_msg) override {}
-
- private:
-  HTMLAudioElement(Document&);
+  void PictureInPictureStopped() override { NOTREACHED(); }
+  void PictureInPictureControlClicked(const WebString& control_id) override {
+    NOTREACHED();
+  }
 };
 
 }  // namespace blink

@@ -6,14 +6,13 @@ package org.chromium.chrome.browser.webapps;
 
 import android.content.Context;
 import android.content.SharedPreferences;
-import android.content.pm.PackageManager;
-import android.os.AsyncTask;
 import android.text.TextUtils;
 
 import org.chromium.base.ContextUtils;
+import org.chromium.base.PackageUtils;
 import org.chromium.base.VisibleForTesting;
 import org.chromium.base.annotations.CalledByNative;
-import org.chromium.chrome.browser.banners.InstallerDelegate;
+import org.chromium.base.task.AsyncTask;
 import org.chromium.chrome.browser.browsing_data.UrlFilter;
 import org.chromium.chrome.browser.browsing_data.UrlFilterBridge;
 import org.chromium.webapk.lib.common.WebApkConstants;
@@ -111,9 +110,9 @@ public class WebappRegistry {
      * @return The storage object for the web app.
      */
     public void register(final String webappId, final FetchWebappDataStorageCallback callback) {
-        new AsyncTask<Void, Void, WebappDataStorage>() {
+        new AsyncTask<WebappDataStorage>() {
             @Override
-            protected final WebappDataStorage doInBackground(Void... nothing) {
+            protected final WebappDataStorage doInBackground() {
                 // Create the WebappDataStorage on the background thread, as this must create and
                 // open a new SharedPreferences.
                 WebappDataStorage storage = WebappDataStorage.open(webappId);
@@ -135,7 +134,8 @@ public class WebappRegistry {
                 storage.updateLastUsedTime();
                 if (callback != null) callback.onWebappDataStorageRetrieved(storage);
             }
-        }.execute();
+        }
+                .executeOnExecutor(AsyncTask.THREAD_POOL_EXECUTOR);
     }
 
     /**
@@ -177,12 +177,11 @@ public class WebappRegistry {
      * */
     public List<String> findWebApksWithPendingUpdate() {
         ArrayList<String> webApkIdsWithPendingUpdate = new ArrayList<String>();
-        PackageManager packageManager = ContextUtils.getApplicationContext().getPackageManager();
         for (HashMap.Entry<String, WebappDataStorage> entry : mStorages.entrySet()) {
             WebappDataStorage storage = entry.getValue();
             if (!TextUtils.isEmpty(storage.getPendingUpdateRequestPath())
-                    && InstallerDelegate.isInstalled(
-                               packageManager, storage.getWebApkPackageName())) {
+                    && PackageUtils.isPackageInstalled(ContextUtils.getApplicationContext(),
+                               storage.getWebApkPackageName())) {
                 webApkIdsWithPendingUpdate.add(entry.getKey());
             }
         }
@@ -232,7 +231,8 @@ public class WebappRegistry {
                 // deprecated naming scheme and that the WebApk is still installed. The former is
                 // necessary as we migrate away from the old naming scheme and garbage collect.
                 if (entry.getKey().startsWith(WebApkConstants.WEBAPK_ID_PREFIX)
-                        && isWebApkInstalled(webApkPackage)) {
+                        && PackageUtils.isPackageInstalled(
+                                   ContextUtils.getApplicationContext(), webApkPackage)) {
                     continue;
                 }
             } else if ((currentTime - storage.getLastUsedTimeMs())
@@ -297,14 +297,6 @@ public class WebappRegistry {
     static void clearWebappHistoryForUrls(UrlFilterBridge urlFilter) {
         WebappRegistry.getInstance().clearWebappHistoryForUrlsImpl(urlFilter);
         urlFilter.destroy();
-    }
-
-    /**
-     * Returns true if the given WebAPK is installed.
-     */
-    private boolean isWebApkInstalled(String webApkPackage) {
-        PackageManager packageManager = ContextUtils.getApplicationContext().getPackageManager();
-        return InstallerDelegate.isInstalled(packageManager, webApkPackage);
     }
 
     private static SharedPreferences openSharedPreferences() {

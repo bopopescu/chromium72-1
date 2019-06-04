@@ -24,15 +24,14 @@
 #include "content/public/browser/navigation_details.h"
 #include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/render_frame_host.h"
+#include "content/public/browser/render_process_host.h"
 #include "content/public/browser/render_view_host.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_contents_observer.h"
 #include "content/public/browser/web_contents_user_data.h"
 #include "net/base/net_errors.h"
+#include "services/network/public/cpp/features.h"
 #include "ui/base/page_transition_types.h"
-
-DEFINE_WEB_CONTENTS_USER_DATA_KEY(
-    page_load_metrics::MetricsWebContentsObserver);
 
 namespace page_load_metrics {
 
@@ -62,6 +61,18 @@ UserInitiatedInfo CreateUserInitiatedInfo(
 }
 
 }  // namespace
+
+// static
+void MetricsWebContentsObserver::RecordFeatureUsage(
+    content::RenderFrameHost* render_frame_host,
+    const mojom::PageLoadFeatures& new_features) {
+  content::WebContents* web_contents =
+      content::WebContents::FromRenderFrameHost(render_frame_host);
+  MetricsWebContentsObserver* observer =
+      MetricsWebContentsObserver::FromWebContents(web_contents);
+  if (observer)
+    observer->OnBrowserFeatureUsage(render_frame_host, new_features);
+}
 
 MetricsWebContentsObserver::MetricsWebContentsObserver(
     content::WebContents* web_contents,
@@ -141,15 +152,14 @@ void MetricsWebContentsObserver::RenderViewHostChanged(
 void MetricsWebContentsObserver::MediaStartedPlaying(
     const content::WebContentsObserver::MediaPlayerInfo& video_type,
     const content::WebContentsObserver::MediaPlayerId& id) {
-  content::RenderFrameHost* render_frame_host = id.first;
-  if (GetMainFrame(render_frame_host) != web_contents()->GetMainFrame()) {
+  if (GetMainFrame(id.render_frame_host) != web_contents()->GetMainFrame()) {
     // Ignore media that starts playing in a document that was navigated away
     // from.
     return;
   }
   if (committed_load_)
     committed_load_->MediaStartedPlaying(
-        video_type, render_frame_host == web_contents()->GetMainFrame());
+        video_type, id.render_frame_host == web_contents()->GetMainFrame());
 }
 
 void MetricsWebContentsObserver::WillStartNavigationRequest(
@@ -260,6 +270,11 @@ PageLoadTracker* MetricsWebContentsObserver::GetTrackerOrNullForRequest(
     if (resource_type == content::RESOURCE_TYPE_SUB_FRAME)
       return committed_load_.get();
 
+    // This was originally a DCHECK but it fails when the document load happened
+    // after client certificate selection.
+    if (!render_frame_host_or_null)
+      return nullptr;
+
     // There is a race here: a completed resource for the previously committed
     // page can arrive after the new page has committed. In this case, we may
     // attribute the resource to the wrong page load. We do our best to guard
@@ -270,13 +285,49 @@ PageLoadTracker* MetricsWebContentsObserver::GetTrackerOrNullForRequest(
     //
     // TODO(crbug.com/738577): use a DocumentId here instead, to eliminate this
     // race.
-    DCHECK(render_frame_host_or_null != nullptr);
     content::RenderFrameHost* main_frame_for_resource =
         GetMainFrame(render_frame_host_or_null);
     if (main_frame_for_resource == web_contents()->GetMainFrame())
       return committed_load_.get();
   }
   return nullptr;
+}
+void MetricsWebContentsObserver::ResourceLoadComplete(
+    content::RenderFrameHost* render_frame_host,
+    const content::GlobalRequestID& request_id,
+    const content::mojom::ResourceLoadInfo& resource_load_info) {
+  if (!base::FeatureList::IsEnabled(network::features::kNetworkService))
+    return;
+
+  if (!resource_load_info.url.SchemeIsHTTPOrHTTPS())
+    return;
+
+  PageLoadTracker* tracker = GetTrackerOrNullForRequest(
+      request_id, render_frame_host, resource_load_info.resource_type,
+      resource_load_info.load_timing_info.request_start);
+  if (tracker) {
+    // TODO(crbug.com/721403): Fill in data reduction proxy fields when this is
+    // available in the network service.
+    // int original_content_length =
+    //     was_cached ? 0
+    //                : data_reduction_proxy::util::EstimateOriginalBodySize(
+    //                      request, lofi_decider);
+    int original_content_length = 0;
+    std::unique_ptr<data_reduction_proxy::DataReductionProxyData>
+        data_reduction_proxy_data;
+
+    const content::mojom::CommonNetworkInfoPtr& network_info =
+        resource_load_info.network_info;
+    ExtraRequestCompleteInfo extra_request_complete_info(
+        resource_load_info.url, network_info->ip_port_pair.value(),
+        render_frame_host->GetFrameTreeNodeId(), resource_load_info.was_cached,
+        resource_load_info.raw_body_bytes, original_content_length,
+        std::move(data_reduction_proxy_data), resource_load_info.resource_type,
+        resource_load_info.net_error,
+        std::make_unique<net::LoadTimingInfo>(
+            resource_load_info.load_timing_info));
+    tracker->OnLoadedResource(extra_request_complete_info);
+  }
 }
 
 void MetricsWebContentsObserver::OnRequestComplete(
@@ -294,6 +345,8 @@ void MetricsWebContentsObserver::OnRequestComplete(
     base::TimeTicks creation_time,
     int net_error,
     std::unique_ptr<net::LoadTimingInfo> load_timing_info) {
+  DCHECK(!base::FeatureList::IsEnabled(network::features::kNetworkService));
+
   // Ignore non-HTTP(S) resources (blobs, data uris, etc).
   if (!url.SchemeIsHTTPOrHTTPS())
     return;
@@ -348,8 +401,10 @@ void MetricsWebContentsObserver::DidFinishNavigation(
   if (!navigation_handle->HasCommitted() &&
       navigation_handle->GetNetErrorCode() == net::ERR_ABORTED &&
       navigation_handle->GetResponseHeaders()) {
-    if (finished_nav)
+    if (finished_nav) {
+      finished_nav->DidInternalNavigationAbort(navigation_handle);
       finished_nav->StopTracking();
+    }
     return;
   }
 
@@ -588,9 +643,11 @@ MetricsWebContentsObserver::NotifyAbortedProvisionalLoadsNewNavigation(
 
 void MetricsWebContentsObserver::OnTimingUpdated(
     content::RenderFrameHost* render_frame_host,
-    const mojom::PageLoadTiming& timing,
-    const mojom::PageLoadMetadata& metadata,
-    const mojom::PageLoadFeatures& new_features) {
+    mojom::PageLoadTimingPtr timing,
+    mojom::PageLoadMetadataPtr metadata,
+    mojom::PageLoadFeaturesPtr new_features,
+    const std::vector<mojom::ResourceDataUpdatePtr>& resources,
+    mojom::PageRenderDataPtr render_data) {
   // We may receive notifications from frames that have been navigated away
   // from. We simply ignore them.
   if (GetMainFrame(render_frame_host) != web_contents()->GetMainFrame()) {
@@ -623,17 +680,21 @@ void MetricsWebContentsObserver::OnTimingUpdated(
 
   if (committed_load_) {
     committed_load_->metrics_update_dispatcher()->UpdateMetrics(
-        render_frame_host, timing, metadata, new_features);
+        render_frame_host, std::move(timing), std::move(metadata),
+        std::move(new_features), resources, std::move(render_data));
   }
 }
 
 void MetricsWebContentsObserver::UpdateTiming(
-    const mojom::PageLoadTimingPtr timing,
-    const mojom::PageLoadMetadataPtr metadata,
-    const mojom::PageLoadFeaturesPtr new_features) {
+    mojom::PageLoadTimingPtr timing,
+    mojom::PageLoadMetadataPtr metadata,
+    mojom::PageLoadFeaturesPtr new_features,
+    std::vector<mojom::ResourceDataUpdatePtr> resources,
+    mojom::PageRenderDataPtr render_data) {
   content::RenderFrameHost* render_frame_host =
       page_load_metrics_binding_.GetCurrentTargetFrame();
-  OnTimingUpdated(render_frame_host, *timing, *metadata, *new_features);
+  OnTimingUpdated(render_frame_host, std::move(timing), std::move(metadata),
+                  std::move(new_features), resources, std::move(render_data));
 }
 
 bool MetricsWebContentsObserver::ShouldTrackNavigation(
@@ -644,6 +705,22 @@ bool MetricsWebContentsObserver::ShouldTrackNavigation(
 
   return BrowserPageTrackDecider(embedder_interface_.get(), navigation_handle)
       .ShouldTrack();
+}
+
+void MetricsWebContentsObserver::OnBrowserFeatureUsage(
+    content::RenderFrameHost* render_frame_host,
+    const mojom::PageLoadFeatures& new_features) {
+  // Since this call is coming directly from the browser, it should not pass us
+  // data from frames that have already been navigated away from.
+  DCHECK_EQ(GetMainFrame(render_frame_host), web_contents()->GetMainFrame());
+
+  if (!committed_load_) {
+    RecordInternalError(ERR_BROWSER_USAGE_WITH_NO_RELEVANT_LOAD);
+    return;
+  }
+
+  committed_load_->metrics_update_dispatcher()->UpdateFeatures(
+      render_frame_host, new_features);
 }
 
 void MetricsWebContentsObserver::AddTestingObserver(TestingObserver* observer) {

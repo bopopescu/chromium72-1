@@ -47,7 +47,7 @@ CSSStyleSheetResource* CSSStyleSheetResource::Fetch(FetchParameters& params,
                                                     ResourceClient* client) {
   DCHECK_EQ(params.GetResourceRequest().GetFrameType(),
             network::mojom::RequestContextFrameType::kNone);
-  params.SetRequestContext(WebURLRequest::kRequestContextStyle);
+  params.SetRequestContext(mojom::RequestContextType::STYLE);
   CSSStyleSheetResource* resource = ToCSSStyleSheetResource(
       fetcher->RequestResource(params, CSSStyleSheetResourceFactory(), client));
   return resource;
@@ -61,15 +61,18 @@ CSSStyleSheetResource* CSSStyleSheetResource::CreateForTest(
   ResourceLoaderOptions options;
   TextResourceDecoderOptions decoder_options(
       TextResourceDecoderOptions::kCSSContent, encoding);
-  return new CSSStyleSheetResource(request, options, decoder_options);
+  return MakeGarbageCollected<CSSStyleSheetResource>(request, options,
+                                                     decoder_options);
 }
 
 CSSStyleSheetResource::CSSStyleSheetResource(
     const ResourceRequest& resource_request,
     const ResourceLoaderOptions& options,
     const TextResourceDecoderOptions& decoder_options)
-    : TextResource(resource_request, kCSSStyleSheet, options, decoder_options) {
-}
+    : TextResource(resource_request,
+                   ResourceType::kCSSStyleSheet,
+                   options,
+                   decoder_options) {}
 
 CSSStyleSheetResource::~CSSStyleSheetResource() = default;
 
@@ -90,10 +93,12 @@ void CSSStyleSheetResource::Trace(blink::Visitor* visitor) {
   TextResource::Trace(visitor);
 }
 
-ReferrerPolicy CSSStyleSheetResource::GetReferrerPolicy() const {
-  ReferrerPolicy referrer_policy = kReferrerPolicyDefault;
+network::mojom::ReferrerPolicy CSSStyleSheetResource::GetReferrerPolicy()
+    const {
+  network::mojom::ReferrerPolicy referrer_policy =
+      network::mojom::ReferrerPolicy::kDefault;
   String referrer_policy_header =
-      GetResponse().HttpHeaderField(HTTPNames::Referrer_Policy);
+      GetResponse().HttpHeaderField(http_names::kReferrerPolicy);
   if (!referrer_policy_header.IsNull()) {
     SecurityPolicy::ReferrerPolicyFromHeaderValue(
         referrer_policy_header, kDoNotSupportReferrerPolicyLegacyKeywords,
@@ -176,9 +181,7 @@ bool CSSStyleSheetResource::CanUseSheet(const CSSParserContext* parser_context,
         parser_context->CountDeprecation(
             WebFeature::kLocalCSSFileExtensionRejected);
       }
-      if (RuntimeEnabledFeatures::RequireCSSExtensionForFileEnabled()) {
-        return false;
-      }
+      return false;
     }
   }
 

@@ -29,23 +29,16 @@ var widget;
 /** @type {!DirectoryEntry} */
 var nonDcimDirectory;
 
-/**
- * @enum {string}
- */
-var MESSAGES = {
-  CLOUD_IMPORT_BUTTON_LABEL: 'Import it!',
-  CLOUD_IMPORT_ACTIVE_IMPORT_BUTTON_LABEL: 'Already importing!',
-  CLOUD_IMPORT_EMPTY_SCAN_BUTTON_LABEL: 'No new media',
-  CLOUD_IMPORT_INSUFFICIENT_SPACE_BUTTON_LABEL: 'Not enough space!',
-  CLOUD_IMPORT_SCANNING_BUTTON_LABEL: 'Scanning... ...!',
-  DRIVE_DIRECTORY_LABEL: 'My Drive',
-  DOWNLOADS_DIRECTORY_LABEL: 'Downloads'
+window.metrics = {
+  recordSmallCount: function() {},
+  recordUserAction: function() {},
+  recordValue: function() {},
+  recordBoolean: function() {},
 };
 
-// Set up string assets.
-loadTimeData.data = MESSAGES;
-
 function setUp() {
+  window.loadTimeData.getString = id => id;
+  window.loadTimeData.data = {};
   new MockChromeStorageAPI();
   new MockCommandLinePrivate();
 
@@ -332,8 +325,7 @@ function testClickDestination_ShowsDestinationAfterImportStarted(callback) {
             return mediaImporter.importResolver.promise.then(
                 function() {
                   widget.click(importer.ClickSource.DESTINATION);
-                  return
-                    environment.showImportDestinationResolver.promise;
+                  return environment.showImportDestinationResolver.promise;
                 });
           });
 
@@ -480,10 +472,13 @@ TestImportRunner.prototype.assertImportsStarted = function(expected) {
  * @constructor
  * @implements {importer.CommandInput}
  *
+ * @param {!VolumeManager} volumeManager
  * @param {!VolumeInfo} volumeInfo
  * @param {!DirectoryEntry} directory
  */
-TestControllerEnvironment = function(volumeInfo, directory) {
+TestControllerEnvironment = function(volumeManager, volumeInfo, directory) {
+  this.volumeManager = volumeManager;
+
   /** @private {!VolumeInfo} */
   this.volumeInfo_ = volumeInfo;
 
@@ -693,15 +688,11 @@ function createController(volumeType, volumeId, fileNames, currentDirectory) {
       fileNames);
 
   environment = new TestControllerEnvironment(
-      sourceVolume,
+      volumeManager, sourceVolume,
       sourceVolume.fileSystem.entries[currentDirectory]);
 
   return new importer.ImportController(
-      environment,
-      mediaScanner,
-      mediaImporter,
-      widget,
-      new TestTracker());
+      environment, mediaScanner, mediaImporter, widget);
 }
 
 /**

@@ -29,7 +29,8 @@ class AndroidVideoTrackSource : public rtc::AdaptedVideoTrackSource {
  public:
   AndroidVideoTrackSource(rtc::Thread* signaling_thread,
                           JNIEnv* jni,
-                          bool is_screencast = false);
+                          bool is_screencast,
+                          bool align_timestamps);
   ~AndroidVideoTrackSource() override;
 
   bool is_screencast() const override;
@@ -37,7 +38,7 @@ class AndroidVideoTrackSource : public rtc::AdaptedVideoTrackSource {
   // Indicates that the encoder should denoise video before encoding it.
   // If it is not set, the default configuration is used which is different
   // depending on video codec.
-  rtc::Optional<bool> needs_denoising() const override;
+  absl::optional<bool> needs_denoising() const override;
 
   // Called by the native capture observer
   void SetState(SourceState state);
@@ -46,19 +47,6 @@ class AndroidVideoTrackSource : public rtc::AdaptedVideoTrackSource {
 
   bool remote() const override;
 
-  void OnByteBufferFrameCaptured(const void* frame_data,
-                                 int length,
-                                 int width,
-                                 int height,
-                                 VideoRotation rotation,
-                                 int64_t timestamp_ns);
-
-  void OnTextureFrameCaptured(int width,
-                              int height,
-                              VideoRotation rotation,
-                              int64_t timestamp_ns,
-                              const NativeHandleImpl& handle);
-
   void OnFrameCaptured(JNIEnv* jni,
                        int width,
                        int height,
@@ -66,15 +54,20 @@ class AndroidVideoTrackSource : public rtc::AdaptedVideoTrackSource {
                        VideoRotation rotation,
                        const JavaRef<jobject>& j_video_frame_buffer);
 
-  void OnOutputFormatRequest(int width, int height, int fps);
+  void OnOutputFormatRequest(int landscape_width,
+                             int landscape_height,
+                             int portrait_width,
+                             int portrait_height,
+                             int fps);
 
  private:
   rtc::Thread* signaling_thread_;
   rtc::AsyncInvoker invoker_;
   rtc::ThreadChecker camera_thread_checker_;
   SourceState state_;
-  rtc::TimestampAligner timestamp_aligner_;
   const bool is_screencast_;
+  rtc::TimestampAligner timestamp_aligner_;
+  const bool align_timestamps_;
 };
 
 }  // namespace jni

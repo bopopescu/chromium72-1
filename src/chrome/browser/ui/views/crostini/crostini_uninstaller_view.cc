@@ -10,7 +10,7 @@
 #include "chrome/browser/chromeos/crostini/crostini_util.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser_dialogs.h"
-#include "chrome/browser/ui/views/harmony/chrome_layout_provider.h"
+#include "chrome/browser/ui/views/chrome_layout_provider.h"
 #include "chrome/grit/generated_resources.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/resource/resource_bundle.h"
@@ -27,24 +27,20 @@ namespace {
 CrostiniUninstallerView* g_crostini_uninstaller_view = nullptr;
 
 constexpr char kCrostiniUninstallResultHistogram[] = "Crostini.UninstallResult";
+constexpr char kCrostiniUninstallSourceHistogram[] = "Crostini.UninstallSource";
 
 }  // namespace
 
-// These values are persisted to logs. Entries should not be renumbered and
-// numeric values should never be reused.
-enum class CrostiniUninstallerView::UninstallResult {
-  kCancelled = 0,
-  kError = 1,
-  kSuccess = 2,
-  kCount
-};
-
-void ShowCrostiniUninstallerView(Profile* profile) {
+void crostini::ShowCrostiniUninstallerView(
+    Profile* profile,
+    crostini::CrostiniUISurface ui_surface) {
+  base::UmaHistogramEnumeration(kCrostiniUninstallSourceHistogram, ui_surface,
+                                crostini::CrostiniUISurface::kCount);
   return CrostiniUninstallerView::Show(profile);
 }
 
 void CrostiniUninstallerView::Show(Profile* profile) {
-  DCHECK(IsCrostiniUIAllowedForProfile(profile));
+  DCHECK(crostini::IsCrostiniUIAllowedForProfile(profile));
   if (!g_crostini_uninstaller_view) {
     g_crostini_uninstaller_view = new CrostiniUninstallerView(profile);
     views::DialogDelegate::CreateDialogWidget(g_crostini_uninstaller_view,
@@ -76,8 +72,7 @@ base::string16 CrostiniUninstallerView::GetDialogButtonLabel(
 
 base::string16 CrostiniUninstallerView::GetWindowTitle() const {
   const base::string16 device_type = ui::GetChromeOSDeviceName();
-  return l10n_util::GetStringFUTF16(IDS_CROSTINI_UNINSTALLER_TITLE, app_name_,
-                                    device_type);
+  return l10n_util::GetStringUTF16(IDS_CROSTINI_UNINSTALLER_TITLE);
 }
 
 bool CrostiniUninstallerView::ShouldShowCloseButton() const {
@@ -90,8 +85,8 @@ bool CrostiniUninstallerView::Accept() {
       l10n_util::GetStringUTF16(IDS_CROSTINI_UNINSTALLER_UNINSTALLING_MESSAGE));
 
   // Kick off the Crostini Remove sequence.
-  crostini::CrostiniManager::GetInstance()->RemoveCrostini(
-      profile_, kCrostiniDefaultVmName, kCrostiniDefaultContainerName,
+  crostini::CrostiniManager::GetForProfile(profile_)->RemoveCrostini(
+      crostini::kCrostiniDefaultVmName, crostini::kCrostiniDefaultContainerName,
       base::BindOnce(&CrostiniUninstallerView::UninstallCrostiniFinished,
                      weak_ptr_factory_.GetWeakPtr()));
 
@@ -100,9 +95,9 @@ bool CrostiniUninstallerView::Accept() {
   // Setting value to -1 makes the progress bar play the
   // "indeterminate animation".
   progress_bar_->SetValue(-1);
+  DialogModelChanged();
   GetWidget()->UpdateWindowTitle();
   GetWidget()->SetSize(GetWidget()->non_client_view()->GetPreferredSize());
-  DialogModelChanged();
   return false;  // Should not close the dialog
 }
 
@@ -118,10 +113,13 @@ gfx::Size CrostiniUninstallerView::CalculatePreferredSize() const {
   return gfx::Size(dialog_width, GetHeightForWidth(dialog_width));
 }
 
+// static
+CrostiniUninstallerView* CrostiniUninstallerView::GetActiveViewForTesting() {
+  return g_crostini_uninstaller_view;
+}
+
 CrostiniUninstallerView::CrostiniUninstallerView(Profile* profile)
-    : app_name_(base::ASCIIToUTF16(kCrostiniTerminalAppName)),
-      profile_(profile),
-      weak_ptr_factory_(this) {
+    : profile_(profile), weak_ptr_factory_(this) {
   views::LayoutProvider* provider = views::LayoutProvider::Get();
   SetLayoutManager(std::make_unique<views::BoxLayout>(
       views::BoxLayout::kVertical,
@@ -131,8 +129,8 @@ CrostiniUninstallerView::CrostiniUninstallerView(Profile* profile)
       views::DialogContentType::TEXT, views::DialogContentType::TEXT));
 
   const base::string16 device_type = ui::GetChromeOSDeviceName();
-  const base::string16 message = l10n_util::GetStringFUTF16(
-      IDS_CROSTINI_UNINSTALLER_BODY, app_name_, device_type);
+  const base::string16 message =
+      l10n_util::GetStringFUTF16(IDS_CROSTINI_UNINSTALLER_BODY, device_type);
   message_label_ = new views::Label(message);
   message_label_->SetMultiLine(true);
   message_label_->SetHorizontalAlignment(gfx::ALIGN_LEFT);
@@ -150,16 +148,16 @@ void CrostiniUninstallerView::HandleError(const base::string16& error_message) {
   message_label_->SetVisible(true);
   message_label_->SetText(error_message);
   progress_bar_->SetVisible(false);
-  GetWidget()->SetSize(GetWidget()->non_client_view()->GetPreferredSize());
+  DialogModelChanged();
   GetWidget()->UpdateWindowTitle();
+  GetWidget()->SetSize(GetWidget()->non_client_view()->GetPreferredSize());
   RecordUninstallResultHistogram(UninstallResult::kError);
 }
 
 void CrostiniUninstallerView::UninstallCrostiniFinished(
-    crostini::ConciergeClientResult result) {
-  if (result != crostini::ConciergeClientResult::SUCCESS) {
-    HandleError(
-        l10n_util::GetStringFUTF16(IDS_CROSTINI_UNINSTALLER_ERROR, app_name_));
+    crostini::CrostiniResult result) {
+  if (result != crostini::CrostiniResult::SUCCESS) {
+    HandleError(l10n_util::GetStringUTF16(IDS_CROSTINI_UNINSTALLER_ERROR));
     return;
   } else {
     RecordUninstallResultHistogram(UninstallResult::kSuccess);

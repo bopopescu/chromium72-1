@@ -469,9 +469,6 @@
   <message name="IDS_PAYMENTS_VALIDATION_UNSUPPORTED_CREDIT_CARD_TYPE" desc="Message displayed to user when the credit card type (e.g visa, mastercard) is not supported for this transaction.">
     This type of card isn’t supported
   </message>
-  <message name="IDS_PAYMENTS_VALIDATION_ALREADY_USED_CREDIT_CARD_NUMBER" desc="Message displayed to user when the credit card number they have entered corresponds to an existing credit card number in their user profile.">
-    This card number is already used
-  </message>
   <message name="IDS_PAYMENTS_PHONE_INVALID_VALIDATION_MESSAGE" desc="The text that informs the user that the phone number they have entered is not valid." formatter_data="android_java">
     Enter a valid phone number
   </message>
@@ -585,6 +582,9 @@
     <message name="IDS_EXTERNAL_PAYMENT_APP_LEAVE_INCOGNITO_WARNING" desc="Alert dialog text warning the user that incognito mode does not continue into external payment apps." formatter_data="android_java">
       Leaving incognito mode to pay via an external application. Continue?
     </message>
+    <message name="IDS_EXTERNAL_PAYMENT_APP_LEAVE_PRIVATE_WARNING" desc="Alert dialog text warning the user that private mode does not continue into external payment apps." formatter_data="android_java">
+      Leaving private mode to pay via an external application. Continue?
+    </message>
   </if>
 
   <!-- Payment Request section preview strings. They are slightly different on desktop and android because the pluralization and formatting code behaves differently. -->
@@ -633,5 +633,8 @@
   </message>
   <message name="IDS_PAYMENTS_ACCESSIBLE_LABEL_WITH_ERROR" desc="The format to append an error message to a screen reader string describing a profile or payment method">
     <ph name="LABEL">$1<ex>Homer Simpson 123 Fake Street</ex></ph> <ph name="ERROR">$2<ex>Phone number required</ex></ph>
+  </message>
+  <message name="IDS_PAYMENTS_ORDER_SUMMARY_ACCESSIBLE_LABEL" desc="The string used to format what the screenreader reads out for the order summary section of the Payment Sheet.">
+    Order Summary, <ph name="TOTAL_LABEL">$1<ex>Total, USD $10.00</ex></ph>, More Details
   </message>
 </grit-part>

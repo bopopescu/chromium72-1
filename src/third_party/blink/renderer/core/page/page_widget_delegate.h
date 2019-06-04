@@ -31,13 +31,15 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_PAGE_PAGE_WIDGET_DELEGATE_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_PAGE_PAGE_WIDGET_DELEGATE_H_
 
-#include "third_party/blink/public/platform/web_canvas.h"
 #include "third_party/blink/public/platform/web_coalesced_input_event.h"
 #include "third_party/blink/public/web/web_widget.h"
 #include "third_party/blink/renderer/core/core_export.h"
 
-namespace blink {
+namespace cc {
+class PaintCanvas;
+}
 
+namespace blink {
 class LocalFrame;
 class Page;
 class WebGestureEvent;
@@ -51,6 +53,7 @@ class CORE_EXPORT PageWidgetEventHandler {
  public:
   virtual void HandleMouseMove(LocalFrame& main_frame,
                                const WebMouseEvent&,
+                               const std::vector<const WebInputEvent*>&,
                                const std::vector<const WebInputEvent*>&);
   virtual void HandleMouseLeave(LocalFrame& main_frame, const WebMouseEvent&);
   virtual void HandleMouseDown(LocalFrame& main_frame, const WebMouseEvent&);
@@ -63,6 +66,7 @@ class CORE_EXPORT PageWidgetEventHandler {
   virtual WebInputEventResult HandlePointerEvent(
       LocalFrame& main_frame,
       const WebPointerEvent&,
+      const std::vector<const WebInputEvent*>&,
       const std::vector<const WebInputEvent*>&);
   virtual ~PageWidgetEventHandler() {}
 };
@@ -78,14 +82,18 @@ class CORE_EXPORT PageWidgetDelegate {
   // See comment of WebWidget::UpdateLifecycle.
   static void UpdateLifecycle(Page&,
                               LocalFrame& root,
-                              WebWidget::LifecycleUpdate requested_update);
+                              WebWidget::LifecycleUpdate requested_update,
+                              WebWidget::LifecycleUpdateReason reason);
 
   // See documents of methods with the same names in FrameView class.
-  static void Paint(Page&, WebCanvas*, const WebRect&, LocalFrame& root);
-  static void PaintIgnoringCompositing(Page&,
-                                       WebCanvas*,
-                                       const WebRect&,
-                                       LocalFrame& root);
+  static void PaintContent(Page&,
+                           cc::PaintCanvas*,
+                           const WebRect&,
+                           LocalFrame& root);
+  static void PaintContentIgnoringCompositing(Page&,
+                                              cc::PaintCanvas*,
+                                              const WebRect&,
+                                              LocalFrame& root);
   // See FIXME in the function body about nullptr |root|.
   static WebInputEventResult HandleInputEvent(
       PageWidgetEventHandler&,

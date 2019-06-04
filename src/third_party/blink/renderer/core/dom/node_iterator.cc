@@ -24,11 +24,11 @@
 
 #include "third_party/blink/renderer/core/dom/node_iterator.h"
 
-#include "third_party/blink/renderer/bindings/core/v8/exception_state.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_node_filter.h"
 #include "third_party/blink/renderer/core/dom/attr.h"
 #include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/dom/node_traversal.h"
+#include "third_party/blink/renderer/platform/bindings/exception_state.h"
 
 namespace blink {
 
@@ -185,7 +185,7 @@ void NodeIterator::UpdateForNodeRemoval(Node& removed_node,
       if (node)
         reference_node.node = node;
     } else {
-      // FIXME: This branch doesn't appear to have any LayoutTests.
+      // FIXME: This branch doesn't appear to have any web tests.
       node = NodeTraversal::Next(removed_node, root());
       // Move out from under the node being removed if the reference node is
       // a descendant of the node being removed.
@@ -204,11 +204,6 @@ void NodeIterator::Trace(blink::Visitor* visitor) {
   visitor->Trace(candidate_node_);
   ScriptWrappable::Trace(visitor);
   NodeIteratorBase::Trace(visitor);
-}
-
-void NodeIterator::TraceWrappers(ScriptWrappableVisitor* visitor) const {
-  ScriptWrappable::TraceWrappers(visitor);
-  NodeIteratorBase::TraceWrappers(visitor);
 }
 
 }  // namespace blink

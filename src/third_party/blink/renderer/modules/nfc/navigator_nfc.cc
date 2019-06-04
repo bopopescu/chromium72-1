@@ -18,7 +18,7 @@ NavigatorNFC& NavigatorNFC::From(Navigator& navigator) {
   NavigatorNFC* supplement =
       Supplement<Navigator>::From<NavigatorNFC>(navigator);
   if (!supplement) {
-    supplement = new NavigatorNFC(navigator);
+    supplement = MakeGarbageCollected<NavigatorNFC>(navigator);
     ProvideTo(navigator, supplement);
   }
   return *supplement;
@@ -37,11 +37,6 @@ NFC* NavigatorNFC::nfc(Navigator& navigator) {
 void NavigatorNFC::Trace(blink::Visitor* visitor) {
   visitor->Trace(nfc_);
   Supplement<Navigator>::Trace(visitor);
-}
-
-void NavigatorNFC::TraceWrappers(ScriptWrappableVisitor* visitor) const {
-  visitor->TraceWrappers(nfc_);
-  Supplement<Navigator>::TraceWrappers(visitor);
 }
 
 }  // namespace blink

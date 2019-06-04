@@ -13,12 +13,30 @@
 #include "chrome/browser/sync/test/integration/updated_progress_marker_checker.h"
 #include "components/browser_sync/profile_sync_service.h"
 #include "components/sync/engine/cycle/sync_cycle_snapshot.h"
+#include "components/sync/test/fake_server/fake_server.h"
 
 namespace {
 
-// Returns true if this service is disabled.
-bool IsSyncDisabled(browser_sync::ProfileSyncService* service) {
-  return !service->IsSetupInProgress() && !service->IsFirstSetupComplete();
+// Compares two serialized progress markers for equivalence to determine client
+// side progress. Some aspects of the progress markers like
+// GarbageCollectionDirectives are irrelevant for this, as they can vary between
+// requests -- for example a version_watermark could be based on request time.
+bool AreProgressMarkersEquivalent(const std::string& serialized1,
+                                  const std::string& serialized2) {
+  sync_pb::DataTypeProgressMarker marker1;
+  sync_pb::DataTypeProgressMarker marker2;
+  CHECK(marker1.ParseFromString(serialized1));
+  CHECK(marker2.ParseFromString(serialized2));
+  marker1.clear_gc_directive();
+  marker2.clear_gc_directive();
+  DCHECK(marker1.data_type_id() == marker2.data_type_id());
+
+  if (syncer::GetModelTypeFromSpecificsFieldNumber(marker1.data_type_id()) ==
+      syncer::AUTOFILL_WALLET_DATA) {
+    return fake_server::AreWalletDataProgressMarkersEquivalent(marker1,
+                                                               marker2);
+  }
+  return marker1.SerializeAsString() == marker2.SerializeAsString();
 }
 
 // Returns true if these services have matching progress markers.
@@ -26,7 +44,10 @@ bool ProgressMarkersMatch(const browser_sync::ProfileSyncService* service1,
                           const browser_sync::ProfileSyncService* service2) {
   // GetActiveDataTypes() is always empty during configuration, so progress
   // markers cannot be compared.
-  if (!service1->ConfigurationDone() || !service2->ConfigurationDone()) {
+  if (service1->GetTransportState() !=
+          syncer::SyncService::TransportState::ACTIVE ||
+      service2->GetTransportState() !=
+          syncer::SyncService::TransportState::ACTIVE) {
     return false;
   }
 
@@ -37,23 +58,20 @@ bool ProgressMarkersMatch(const browser_sync::ProfileSyncService* service1,
   const syncer::SyncCycleSnapshot& snap1 = service1->GetLastCycleSnapshot();
   const syncer::SyncCycleSnapshot& snap2 = service2->GetLastCycleSnapshot();
 
-  for (syncer::ModelTypeSet::Iterator type_it = common_types.First();
-       type_it.Good(); type_it.Inc()) {
+  for (syncer::ModelType type : common_types) {
     // Look up the progress markers.  Fail if either one is missing.
-    syncer::ProgressMarkerMap::const_iterator pm_it1 =
-        snap1.download_progress_markers().find(type_it.Get());
+    auto pm_it1 = snap1.download_progress_markers().find(type);
     if (pm_it1 == snap1.download_progress_markers().end()) {
       return false;
     }
 
-    syncer::ProgressMarkerMap::const_iterator pm_it2 =
-        snap2.download_progress_markers().find(type_it.Get());
+    auto pm_it2 = snap2.download_progress_markers().find(type);
     if (pm_it2 == snap2.download_progress_markers().end()) {
       return false;
     }
 
     // Fail if any of them don't match.
-    if (pm_it1->second != pm_it2->second) {
+    if (!AreProgressMarkersEquivalent(pm_it1->second, pm_it2->second)) {
       return false;
     }
   }
@@ -100,10 +118,6 @@ bool QuiesceStatusChangeChecker::IsExitConditionSatisfied() {
   // Check that all progress markers are up to date.
   std::vector<browser_sync::ProfileSyncService*> enabled_services;
   for (const auto& checker : checkers_) {
-    if (IsSyncDisabled(checker->service())) {
-      continue;  // Skip disabled services.
-    }
-
     enabled_services.push_back(checker->service());
 
     if (!checker->IsExitConditionSatisfied()) {

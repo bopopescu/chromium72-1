@@ -8,8 +8,8 @@
 #include <stdint.h>
 #include <utility>
 
-#include "base/sys_info.h"
-#include "base/task_scheduler/post_task.h"
+#include "base/system/sys_info.h"
+#include "base/task/post_task.h"
 #include "build/build_config.h"
 #include "components/nacl/browser/bad_message.h"
 #include "components/nacl/browser/nacl_browser.h"
@@ -18,6 +18,7 @@
 #include "components/nacl/browser/pnacl_host.h"
 #include "components/nacl/common/buildflags.h"
 #include "components/nacl/common/nacl_host_messages.h"
+#include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/plugin_service.h"
 #include "content/public/browser/render_process_host.h"
@@ -132,13 +133,10 @@ void NaClHostMessageFilter::OnLaunchNaCl(
         ppapi::PpapiPermissions(perms));
     return;
   }
-  content::BrowserThread::PostTask(
-      content::BrowserThread::UI,
-      FROM_HERE,
-      base::Bind(&NaClHostMessageFilter::LaunchNaClContinuation,
-                 this,
-                 launch_params,
-                 reply_msg));
+  base::PostTaskWithTraits(
+      FROM_HERE, {content::BrowserThread::UI},
+      base::BindOnce(&NaClHostMessageFilter::LaunchNaClContinuation, this,
+                     launch_params, reply_msg));
 }
 
 void NaClHostMessageFilter::LaunchNaClContinuation(
@@ -190,8 +188,8 @@ void NaClHostMessageFilter::LaunchNaClContinuation(
       FROM_HERE,
       {base::MayBlock(), base::TaskPriority::USER_BLOCKING,
        base::TaskShutdownBehavior::SKIP_ON_SHUTDOWN},
-      base::Bind(&NaClHostMessageFilter::BatchOpenResourceFiles, this,
-                 safe_launch_params, reply_msg, permissions));
+      base::BindOnce(&NaClHostMessageFilter::BatchOpenResourceFiles, this,
+                     safe_launch_params, reply_msg, permissions));
 }
 
 void NaClHostMessageFilter::BatchOpenResourceFiles(
@@ -224,15 +222,11 @@ void NaClHostMessageFilter::BatchOpenResourceFiles(
       break;
   }
 
-  content::BrowserThread::PostTask(
-      content::BrowserThread::IO,
-      FROM_HERE,
-      base::Bind(&NaClHostMessageFilter::LaunchNaClContinuationOnIOThread,
-                 this,
-                 launch_params,
-                 reply_msg,
-                 prefetched_resource_files,
-                 permissions));
+  base::PostTaskWithTraits(
+      FROM_HERE, {content::BrowserThread::IO},
+      base::BindOnce(&NaClHostMessageFilter::LaunchNaClContinuationOnIOThread,
+                     this, launch_params, reply_msg, prefetched_resource_files,
+                     permissions));
 }
 
 void NaClHostMessageFilter::LaunchNaClContinuationOnIOThread(

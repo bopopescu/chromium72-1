@@ -91,7 +91,7 @@ class AppWindow : public content::WebContentsDelegate,
   // Enum values should not be changed since they are used by UMA.
   enum WindowType {
     WINDOW_TYPE_DEFAULT = 0,  // Default app window.
-    WINDOW_TYPE_PANEL = 1,    // OS controlled panel window (Ash only).
+    DEPRECATED_WINDOW_TYPE_PANEL = 1,
     WINDOW_TYPE_COUNT = 2,
   };
 
@@ -218,9 +218,10 @@ class AppWindow : public content::WebContentsDelegate,
       const std::vector<DraggableRegion>& regions);
 
   // The constructor and Init methods are public for constructing a AppWindow
-  // with a non-standard render interface (e.g. v1 apps using Ash Panels).
-  // Normally AppWindow::Create should be used.
-  // Takes ownership of |app_delegate| and |delegate|.
+  // with a non-standard render interface (e.g.
+  // lock_screen_apps::StateController, ChromeAppWindowClient). Normally
+  // AppWindow::Create should be used. Takes ownership of |app_delegate| and
+  // |delegate|.
   AppWindow(content::BrowserContext* context,
             AppDelegate* app_delegate,
             const Extension* extension);
@@ -237,9 +238,6 @@ class AppWindow : public content::WebContentsDelegate,
   const std::string& extension_id() const { return extension_id_; }
   content::WebContents* web_contents() const;
   WindowType window_type() const { return window_type_; }
-  bool window_type_is_panel() const {
-    return window_type_ == WINDOW_TYPE_PANEL;
-  }
   content::BrowserContext* browser_context() const { return browser_context_; }
   const gfx::Image& custom_app_icon() const { return custom_app_icon_; }
   const GURL& app_icon_url() const { return app_icon_url_; }
@@ -290,7 +288,7 @@ class AppWindow : public content::WebContentsDelegate,
   void UpdateDraggableRegions(const std::vector<DraggableRegion>& regions);
 
   // Updates the app image to |image|. Called internally from the image loader
-  // callback. Also called externally for v1 apps using Ash Panels.
+  // callback.
   void UpdateAppIcon(const gfx::Image& image);
 
   // Enable or disable fullscreen mode. |type| specifies which type of
@@ -385,14 +383,6 @@ class AppWindow : public content::WebContentsDelegate,
     app_window_contents_ = std::move(contents);
   }
 
-  // used by neva project
-  void SetApplicationId(std::string application_id) {
-    application_id_ = application_id;
-  }
-
-  // used by neva project
-  std::string GetApplicationId() const { return application_id_; }
-
  protected:
   ~AppWindow() override;
 
@@ -409,10 +399,10 @@ class AppWindow : public content::WebContentsDelegate,
       const std::vector<blink::mojom::ColorSuggestionPtr>& suggestions)
       override;
   void RunFileChooser(content::RenderFrameHost* render_frame_host,
-                      const content::FileChooserParams& params) override;
-  bool IsPopupOrPanel(const content::WebContents* source) const override;
-  void MoveContents(content::WebContents* source,
-                    const gfx::Rect& pos) override;
+                      std::unique_ptr<content::FileSelectListener> listener,
+                      const blink::mojom::FileChooserParams& params) override;
+  void SetContentsBounds(content::WebContents* source,
+                         const gfx::Rect& bounds) override;
   void NavigationStateChanged(content::WebContents* source,
                               content::InvalidateTypes changed_flags) override;
   void EnterFullscreenModeForTab(
@@ -427,7 +417,7 @@ class AppWindow : public content::WebContentsDelegate,
   void RequestMediaAccessPermission(
       content::WebContents* web_contents,
       const content::MediaStreamRequest& request,
-      const content::MediaResponseCallback& callback) override;
+      content::MediaResponseCallback callback) override;
   bool CheckMediaAccessPermission(content::RenderFrameHost* render_frame_host,
                                   const GURL& security_origin,
                                   content::MediaStreamType type) override;
@@ -443,7 +433,7 @@ class AppWindow : public content::WebContentsDelegate,
   content::KeyboardEventProcessingResult PreHandleKeyboardEvent(
       content::WebContents* source,
       const content::NativeWebKeyboardEvent& event) override;
-  void HandleKeyboardEvent(
+  bool HandleKeyboardEvent(
       content::WebContents* source,
       const content::NativeWebKeyboardEvent& event) override;
   void RequestToLockMouse(content::WebContents* web_contents,
@@ -455,12 +445,14 @@ class AppWindow : public content::WebContentsDelegate,
       content::RenderFrameHost* frame,
       const content::BluetoothChooser::EventHandler& event_handler) override;
   bool TakeFocus(content::WebContents* source, bool reverse) override;
+  gfx::Size EnterPictureInPicture(const viz::SurfaceId& surface_id,
+                                  const gfx::Size& natural_size) override;
+  void ExitPictureInPicture() override;
 
   // content::WebContentsObserver implementation.
   bool OnMessageReceived(const IPC::Message& message,
                          content::RenderFrameHost* render_frame_host) override;
   void RenderViewCreated(content::RenderViewHost* render_view_host) override;
-  void DidFirstVisuallyNonEmptyPaint() override;
 
   // ExtensionFunctionDispatcher::Delegate implementation.
   WindowController* GetExtensionWindowController() const override;
@@ -595,9 +587,6 @@ class AppWindow : public content::WebContentsDelegate,
   // PlzNavigate: this is called when the first navigation is ready to commit or
   // when the window is closed.
   FirstCommitOrWindowClosedCallback on_first_commit_or_window_closed_callback_;
-
-  // application id that is sent to backend
-  std::string application_id_;
 
   base::WeakPtrFactory<AppWindow> image_loader_ptr_factory_;
 

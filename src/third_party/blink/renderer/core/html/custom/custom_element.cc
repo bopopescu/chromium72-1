@@ -9,6 +9,7 @@
 #include "third_party/blink/renderer/core/frame/local_dom_window.h"
 #include "third_party/blink/renderer/core/html/custom/ce_reactions_scope.h"
 #include "third_party/blink/renderer/core/html/custom/custom_element_definition.h"
+#include "third_party/blink/renderer/core/html/custom/custom_element_form_associated_callback_reaction.h"
 #include "third_party/blink/renderer/core/html/custom/custom_element_reaction_stack.h"
 #include "third_party/blink/renderer/core/html/custom/custom_element_registry.h"
 #include "third_party/blink/renderer/core/html/custom/v0_custom_element.h"
@@ -45,6 +46,37 @@ CustomElementDefinition* CustomElement::DefinitionForElement(
   return DefinitionForElementWithoutCheck(*element);
 }
 
+Vector<AtomicString>& CustomElement::EmbedderCustomElementNames() {
+  DEFINE_STATIC_LOCAL(Vector<AtomicString>, names, ());
+  return names;
+}
+
+void CustomElement::AddEmbedderCustomElementName(const AtomicString& name) {
+  DCHECK_EQ(name, name.LowerASCII());
+  DCHECK(Document::IsValidName(name)) << name;
+  DCHECK_EQ(HTMLElementType::kHTMLUnknownElement, htmlElementTypeForTag(name))
+      << name;
+  DCHECK(!IsValidName(name, false)) << name;
+
+  if (EmbedderCustomElementNames().Contains(name))
+    return;
+  EmbedderCustomElementNames().push_back(name);
+}
+
+void CustomElement::AddEmbedderCustomElementNameForTesting(
+    const AtomicString& name,
+    ExceptionState& exception_state) {
+  if (name != name.LowerASCII() || !Document::IsValidName(name) ||
+      HTMLElementType::kHTMLUnknownElement != htmlElementTypeForTag(name) ||
+      IsValidName(name, false)) {
+    exception_state.ThrowDOMException(DOMExceptionCode::kSyntaxError,
+                                      "Name cannot be used");
+    return;
+  }
+
+  AddEmbedderCustomElementName(name);
+}
+
 bool CustomElement::IsHyphenatedSpecElementName(const AtomicString& name) {
   // Even if Blink does not implement one of the related specs, (for
   // example annotation-xml is from MathML, which Blink does not
@@ -67,20 +99,19 @@ bool CustomElement::ShouldCreateCustomElement(const AtomicString& name) {
 
 bool CustomElement::ShouldCreateCustomElement(const QualifiedName& tag_name) {
   return ShouldCreateCustomElement(tag_name.LocalName()) &&
-         tag_name.NamespaceURI() == HTMLNames::xhtmlNamespaceURI;
+         tag_name.NamespaceURI() == html_names::xhtmlNamespaceURI;
 }
 
 bool CustomElement::ShouldCreateCustomizedBuiltinElement(
     const AtomicString& local_name) {
   return htmlElementTypeForTag(local_name) !=
-             HTMLElementType::kHTMLUnknownElement &&
-         RuntimeEnabledFeatures::CustomElementsBuiltinEnabled();
+         HTMLElementType::kHTMLUnknownElement;
 }
 
 bool CustomElement::ShouldCreateCustomizedBuiltinElement(
     const QualifiedName& tag_name) {
   return ShouldCreateCustomizedBuiltinElement(tag_name.LocalName()) &&
-         tag_name.NamespaceURI() == HTMLNames::xhtmlNamespaceURI;
+         tag_name.NamespaceURI() == html_names::xhtmlNamespaceURI;
 }
 
 static CustomElementDefinition* DefinitionFor(
@@ -145,7 +176,7 @@ Element* CustomElement::CreateUncustomizedOrUndefinedElementTemplate(
   // custom element state to "undefined".
   if (level == kQNameIsValid)
     element->SetCustomElementState(CustomElementState::kUndefined);
-  else if (tag_name.NamespaceURI() == HTMLNames::xhtmlNamespaceURI &&
+  else if (tag_name.NamespaceURI() == html_names::xhtmlNamespaceURI &&
            (CustomElement::IsValidName(tag_name.LocalName()) ||
             !is_value.IsNull()))
     element->SetCustomElementState(CustomElementState::kUndefined);
@@ -231,7 +262,19 @@ void CustomElement::EnqueueAttributeChangedCallback(
                                                 new_value);
 }
 
-void CustomElement::TryToUpgrade(Element* element) {
+void CustomElement::EnqueueFormAssociatedCallback(
+    Element& element,
+    HTMLFormElement* nullable_form) {
+  auto* definition = DefinitionForElementWithoutCheck(element);
+  if (definition->HasFormAssociatedCallback()) {
+    Enqueue(&element,
+            MakeGarbageCollected<CustomElementFormAssociatedCallbackReaction>(
+                definition, nullable_form));
+  }
+}
+
+void CustomElement::TryToUpgrade(Element* element,
+                                 bool upgrade_invisible_elements) {
   // Try to upgrade an element
   // https://html.spec.whatwg.org/multipage/scripting.html#concept-try-upgrade
 
@@ -245,7 +288,7 @@ void CustomElement::TryToUpgrade(Element* element) {
           registry->DefinitionFor(CustomElementDescriptor(
               is_value.IsNull() ? element->localName() : is_value,
               element->localName())))
-    definition->EnqueueUpgradeReaction(element);
+    definition->EnqueueUpgradeReaction(element, upgrade_invisible_elements);
   else
     registry->AddCandidate(element);
 }

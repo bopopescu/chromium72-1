@@ -10,13 +10,13 @@
 
 #include "modules/rtp_rtcp/source/ulpfec_receiver_impl.h"
 
+#include <string.h>
 #include <memory>
 #include <utility>
 
 #include "modules/rtp_rtcp/source/byte_io.h"
-#include "modules/rtp_rtcp/source/rtp_receiver_video.h"
-#include "rtc_base/checks.h"
 #include "rtc_base/logging.h"
+#include "rtc_base/scoped_ref_ptr.h"
 #include "system_wrappers/include/clock.h"
 
 namespace webrtc {
@@ -233,7 +233,7 @@ int32_t UlpfecReceiverImpl::ProcessReceivedFec() {
   // not modifying the vector we are currently iterating over (packets are added
   // in AddReceivedRedPacket).
   std::vector<std::unique_ptr<ForwardErrorCorrection::ReceivedPacket>>
-    received_packets;
+      received_packets;
   received_packets.swap(received_packets_);
 
   for (const auto& received_packet : received_packets) {
@@ -260,8 +260,7 @@ int32_t UlpfecReceiverImpl::ProcessReceivedFec() {
     // header, OnRecoveredPacket will recurse back here.
     recovered_packet->returned = true;
     crit_sect_.Leave();
-    recovered_packet_callback_->OnRecoveredPacket(packet->data,
-                                                  packet->length);
+    recovered_packet_callback_->OnRecoveredPacket(packet->data, packet->length);
     crit_sect_.Enter();
   }
 

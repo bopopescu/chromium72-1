@@ -15,6 +15,7 @@ import json
 import logging
 import os
 import stat
+import sys
 import unittest
 
 from devil import devil_env
@@ -31,6 +32,8 @@ from devil.utils import mock_calls
 with devil_env.SysPath(devil_env.PYMOCK_PATH):
   import mock  # pylint: disable=import-error
 
+ARM32_ABI = 'armeabi-v7a'
+ARM64_ABI = 'arm64-v8a'
 
 def Process(name, pid, ppid='1'):
   return device_utils.ProcessInfo(name=name, pid=pid, ppid=ppid)
@@ -57,12 +60,16 @@ class _MockApkHelper(object):
     self.path = path
     self.package_name = package_name
     self.perms = perms
+    self.abis = [ARM32_ABI]
 
   def GetPackageName(self):
     return self.package_name
 
   def GetPermissions(self):
     return self.perms
+
+  def GetAbis(self):
+    return self.abis
 
 
 class _MockMultipleDevicesError(Exception):
@@ -473,7 +480,7 @@ class DeviceUtils_GetPackageArchitectureTest(DeviceUtilsTest):
             'dumpsys package com.android.chrome | grep -F primaryCpuAbi'),
         ['  primaryCpuAbi=armeabi-v7a']):
       self.assertEquals(
-          'armeabi-v7a',
+          ARM32_ABI,
           self.device.GetPackageArchitecture('com.android.chrome'))
 
   def test_GetPackageArchitecture_notExists(self):
@@ -2714,7 +2721,11 @@ class DeviceUtilsHealthyDevicesTest(mock_calls.TestCase):
     test_serials = ['0123456789abcdef', 'fedcba9876543210']
     with self.assertCalls(
         (mock.call.devil.android.sdk.adb_wrapper.AdbWrapper.Devices(),
-         [_AdbWrapperMock(s) for s in test_serials])):
+         [_AdbWrapperMock(s) for s in test_serials]),
+        (mock.call.devil.android.device_utils.DeviceUtils.GetABI(),
+         ARM32_ABI),
+        (mock.call.devil.android.device_utils.DeviceUtils.GetABI(),
+         ARM32_ABI)):
       blacklist = mock.NonCallableMock(**{'Read.return_value': []})
       devices = device_utils.DeviceUtils.HealthyDevices(blacklist)
     for serial, device in zip(test_serials, devices):
@@ -2725,7 +2736,9 @@ class DeviceUtilsHealthyDevicesTest(mock_calls.TestCase):
     test_serials = ['0123456789abcdef', 'fedcba9876543210']
     with self.assertCalls(
         (mock.call.devil.android.sdk.adb_wrapper.AdbWrapper.Devices(),
-         [_AdbWrapperMock(s) for s in test_serials])):
+         [_AdbWrapperMock(s) for s in test_serials]),
+        (mock.call.devil.android.device_utils.DeviceUtils.GetABI(),
+         ARM32_ABI)):
       blacklist = mock.NonCallableMock(
           **{'Read.return_value': ['fedcba9876543210']})
       devices = device_utils.DeviceUtils.HealthyDevices(blacklist)
@@ -2738,6 +2751,10 @@ class DeviceUtilsHealthyDevicesTest(mock_calls.TestCase):
     with self.assertCalls(
         (mock.call.devil.android.sdk.adb_wrapper.AdbWrapper.Devices(),
          [_AdbWrapperMock(s) for s in test_serials]),
+        (mock.call.devil.android.device_utils.DeviceUtils.GetABI(),
+         ARM32_ABI),
+        (mock.call.devil.android.device_utils.DeviceUtils.GetABI(),
+         ARM32_ABI),
         (mock.call.devil.android.device_errors.MultipleDevicesError(mock.ANY),
          _MockMultipleDevicesError())):
       with self.assertRaises(_MockMultipleDevicesError):
@@ -2747,7 +2764,9 @@ class DeviceUtilsHealthyDevicesTest(mock_calls.TestCase):
     test_serials = ['0123456789abcdef']
     with self.assertCalls(
         (mock.call.devil.android.sdk.adb_wrapper.AdbWrapper.Devices(),
-         [_AdbWrapperMock(s) for s in test_serials])):
+         [_AdbWrapperMock(s) for s in test_serials]),
+        (mock.call.devil.android.device_utils.DeviceUtils.GetABI(),
+         ARM32_ABI)):
       devices = device_utils.DeviceUtils.HealthyDevices(device_arg=None)
     self.assertEquals(1, len(devices))
 
@@ -2757,7 +2776,7 @@ class DeviceUtilsHealthyDevicesTest(mock_calls.TestCase):
         (mock.call.devil.android.sdk.adb_wrapper.AdbWrapper.Devices(),
          [_AdbWrapperMock(s) for s in test_serials])):
       with self.assertRaises(device_errors.NoDevicesError):
-        device_utils.DeviceUtils.HealthyDevices(device_arg=None, retry=False)
+        device_utils.DeviceUtils.HealthyDevices(device_arg=None, retries=0)
 
   def testHealthyDevices_noneDeviceArg_multiple_attached_ANDROID_SERIAL(self):
     try:
@@ -2777,7 +2796,11 @@ class DeviceUtilsHealthyDevicesTest(mock_calls.TestCase):
     test_serials = ['0123456789abcdef', 'fedcba9876543210']
     with self.assertCalls(
         (mock.call.devil.android.sdk.adb_wrapper.AdbWrapper.Devices(),
-         [_AdbWrapperMock(s) for s in test_serials])):
+         [_AdbWrapperMock(s) for s in test_serials]),
+        (mock.call.devil.android.device_utils.DeviceUtils.GetABI(),
+         ARM32_ABI),
+        (mock.call.devil.android.device_utils.DeviceUtils.GetABI(),
+         ARM32_ABI)):
       devices = device_utils.DeviceUtils.HealthyDevices(device_arg=())
     self.assertEquals(2, len(devices))
 
@@ -2796,17 +2819,47 @@ class DeviceUtilsHealthyDevicesTest(mock_calls.TestCase):
         (mock.call.devil.android.sdk.adb_wrapper.AdbWrapper.Devices(),
          [_AdbWrapperMock(s) for s in test_serials])):
       with self.assertRaises(device_errors.NoDevicesError):
-        device_utils.DeviceUtils.HealthyDevices(device_arg=[], retry=False)
+        device_utils.DeviceUtils.HealthyDevices(device_arg=[], retries=0)
 
-  def testHealthyDevices_EmptyListDeviceArg_no_attached_with_retry(self):
-    test_serials = []
+  @mock.patch('time.sleep')
+  @mock.patch('devil.android.device_utils.RestartServer')
+  def testHealthyDevices_EmptyListDeviceArg_no_attached_with_retry(
+      self, mock_restart, mock_sleep):
     with self.assertCalls(
-        (mock.call.devil.android.sdk.adb_wrapper.AdbWrapper.Devices(),
-         [_AdbWrapperMock(s) for s in test_serials]),
-        (mock.call.devil.android.sdk.adb_wrapper.AdbWrapper.Devices(),
-         [_AdbWrapperMock(s) for s in test_serials])):
+        (mock.call.devil.android.sdk.adb_wrapper.AdbWrapper.Devices(), []),
+        (mock.call.devil.android.sdk.adb_wrapper.AdbWrapper.Devices(), []),
+        (mock.call.devil.android.sdk.adb_wrapper.AdbWrapper.Devices(), []),
+        (mock.call.devil.android.sdk.adb_wrapper.AdbWrapper.Devices(), []),
+        (mock.call.devil.android.sdk.adb_wrapper.AdbWrapper.Devices(), [])):
       with self.assertRaises(device_errors.NoDevicesError):
-        device_utils.DeviceUtils.HealthyDevices(device_arg=[], retry=True)
+        device_utils.DeviceUtils.HealthyDevices(device_arg=[], retries=4)
+    self.assertEquals(mock_restart.call_count, 4)
+    self.assertEquals(mock_sleep.call_args_list, [
+        mock.call(2), mock.call(4), mock.call(8), mock.call(16)])
+
+  @mock.patch('time.sleep')
+  @mock.patch('devil.android.device_utils.RestartServer')
+  def testHealthyDevices_EmptyListDeviceArg_no_attached_with_resets(
+      self, mock_restart, mock_sleep):
+    # The reset_usb import fails on windows. Mock the full import here so it can
+    # succeed like it would on linux.
+    mock_reset_import = mock.MagicMock()
+    sys.modules['devil.utils.reset_usb'] = mock_reset_import
+    with self.assertCalls(
+        (mock.call.devil.android.sdk.adb_wrapper.AdbWrapper.Devices(), []),
+        (mock.call.devil.android.sdk.adb_wrapper.AdbWrapper.Devices(), []),
+        (mock.call.devil.android.sdk.adb_wrapper.AdbWrapper.Devices(), []),
+        (mock.call.devil.android.sdk.adb_wrapper.AdbWrapper.Devices(), []),
+        (mock.call.devil.android.sdk.adb_wrapper.AdbWrapper.Devices(), [])):
+      with self.assertRaises(device_errors.NoDevicesError):
+        with mock.patch.object(
+            mock_reset_import, 'reset_all_android_devices') as mock_reset:
+          device_utils.DeviceUtils.HealthyDevices(device_arg=[], retries=4,
+                                                  enable_usb_resets=True)
+          self.assertEquals(mock_reset.call_count, 1)
+    self.assertEquals(mock_restart.call_count, 4)
+    self.assertEquals(mock_sleep.call_args_list, [
+        mock.call(2), mock.call(4), mock.call(8), mock.call(16)])
 
   def testHealthyDevices_ListDeviceArg(self):
     device_arg = ['0123456789abcdef', 'fedcba9876543210']
@@ -2817,6 +2870,33 @@ class DeviceUtilsHealthyDevicesTest(mock_calls.TestCase):
     finally:
       del os.environ['ANDROID_SERIAL']
     self.assertEquals(2, len(devices))
+
+  def testHealthyDevices_abisArg_no_matching_abi(self):
+    test_serials = ['0123456789abcdef', 'fedcba9876543210']
+    with self.assertCalls(
+        (mock.call.devil.android.sdk.adb_wrapper.AdbWrapper.Devices(),
+         [_AdbWrapperMock(s) for s in test_serials]),
+        (mock.call.devil.android.device_utils.DeviceUtils.GetABI(),
+         ARM32_ABI),
+        (mock.call.devil.android.device_utils.DeviceUtils.GetABI(),
+         ARM32_ABI)):
+      with self.assertRaises(device_errors.NoDevicesError):
+        device_utils.DeviceUtils.HealthyDevices(device_arg=[], retries=0,
+                                                abis=[ARM64_ABI])
+
+  def testHealthyDevices_abisArg_filter_on_abi(self):
+    test_serials = ['0123456789abcdef', 'fedcba9876543210']
+    with self.assertCalls(
+        (mock.call.devil.android.sdk.adb_wrapper.AdbWrapper.Devices(),
+         [_AdbWrapperMock(s) for s in test_serials]),
+        (mock.call.devil.android.device_utils.DeviceUtils.GetABI(),
+         ARM64_ABI),
+        (mock.call.devil.android.device_utils.DeviceUtils.GetABI(),
+         ARM32_ABI)):
+      devices = device_utils.DeviceUtils.HealthyDevices(device_arg=[],
+                                                        retries=0,
+                                                        abis=[ARM64_ABI])
+    self.assertEquals(1, len(devices))
 
 
 class DeviceUtilsRestartAdbdTest(DeviceUtilsTest):
@@ -3072,21 +3152,14 @@ class DeviceUtilsChangeOwner(DeviceUtilsTest):
 
 class DeviceUtilsChangeSecurityContext(DeviceUtilsTest):
 
-  def testChangeSecurityContextRecursive(self):
-    with self.assertCalls(
-        (self.call.device.RunShellCommand(
-            ['chcon', '-R', 'u:object_r:system_data_file:s0', '/path'],
-            as_root=True, check_return=True))):
-      self.device.ChangeSecurityContext('u:object_r:system_data_file:s0',
-                                        '/path', recursive=True)
 
-  def testChangeSecurityContextNonRecursive(self):
+  def testChangeSecurityContext(self):
     with self.assertCalls(
         (self.call.device.RunShellCommand(
-            ['chcon', 'u:object_r:system_data_file:s0', '/path'],
-            as_root=True, check_return=True))):
+            ['chcon', 'u:object_r:system_data_file:s0', '/path', '/path2'],
+            as_root=device_utils._FORCE_SU, check_return=True))):
       self.device.ChangeSecurityContext('u:object_r:system_data_file:s0',
-                                        '/path')
+                                        ['/path', '/path2'])
 
 if __name__ == '__main__':
   logging.getLogger().setLevel(logging.DEBUG)

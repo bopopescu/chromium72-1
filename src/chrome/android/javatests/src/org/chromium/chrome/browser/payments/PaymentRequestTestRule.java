@@ -26,6 +26,8 @@ import org.chromium.chrome.browser.ChromeFeatureList;
 import org.chromium.chrome.browser.ChromeTabbedActivity;
 import org.chromium.chrome.browser.autofill.CardUnmaskPrompt;
 import org.chromium.chrome.browser.autofill.CardUnmaskPrompt.CardUnmaskObserverForTest;
+import org.chromium.chrome.browser.modaldialog.ModalDialogProperties;
+import org.chromium.chrome.browser.modelutil.PropertyModel;
 import org.chromium.chrome.browser.payments.PaymentRequestImpl.PaymentRequestServiceObserverForTest;
 import org.chromium.chrome.browser.payments.ui.PaymentRequestSection.OptionSection;
 import org.chromium.chrome.browser.payments.ui.PaymentRequestSection.OptionSection.OptionRow;
@@ -34,10 +36,10 @@ import org.chromium.chrome.browser.payments.ui.PaymentRequestUI.PaymentRequestOb
 import org.chromium.chrome.browser.widget.prefeditor.EditorObserverForTest;
 import org.chromium.chrome.browser.widget.prefeditor.EditorTextField;
 import org.chromium.chrome.test.ChromeActivityTestRule;
-import org.chromium.content.browser.test.util.Criteria;
-import org.chromium.content.browser.test.util.CriteriaHelper;
-import org.chromium.content.browser.test.util.DOMUtils;
 import org.chromium.content_public.browser.WebContents;
+import org.chromium.content_public.browser.test.util.Criteria;
+import org.chromium.content_public.browser.test.util.CriteriaHelper;
+import org.chromium.content_public.browser.test.util.DOMUtils;
 import org.chromium.payments.mojom.PaymentDetailsModifier;
 import org.chromium.payments.mojom.PaymentItem;
 import org.chromium.payments.mojom.PaymentMethodData;
@@ -336,9 +338,10 @@ public class PaymentRequestTestRule extends ChromeActivityTestRule<ChromeTabbedA
     protected void clickCardUnmaskButtonAndWait(final int dialogButtonId, CallbackHelper helper)
             throws InterruptedException, TimeoutException {
         int callCount = helper.getCallCount();
-        ThreadUtils.runOnUiThreadBlocking(
-                (Runnable) () -> mCardUnmaskPrompt.getDialogForTest().getButton(
-                        dialogButtonId).performClick());
+        ThreadUtils.runOnUiThreadBlocking(() -> {
+            PropertyModel model = mCardUnmaskPrompt.getDialogForTest();
+            model.get(ModalDialogProperties.CONTROLLER).onClick(model, dialogButtonId);
+        });
         helper.waitForCallback(callCount);
     }
 
@@ -664,8 +667,9 @@ public class PaymentRequestTestRule extends ChromeActivityTestRule<ChromeTabbedA
             CallbackHelper helper) throws InterruptedException, TimeoutException {
         int callCount = helper.getCallCount();
         ThreadUtils.runOnUiThreadBlocking(() -> {
-            EditText editText =
-                    ((EditText) mCardUnmaskPrompt.getDialogForTest().findViewById(resourceId));
+            EditText editText = mCardUnmaskPrompt.getDialogForTest()
+                                        .get(ModalDialogProperties.CUSTOM_VIEW)
+                                        .findViewById(resourceId);
             editText.setText(input);
             editText.getOnFocusChangeListener().onFocusChange(null, false);
         });
@@ -680,9 +684,9 @@ public class PaymentRequestTestRule extends ChromeActivityTestRule<ChromeTabbedA
         int callCount = helper.getCallCount();
         ThreadUtils.runOnUiThreadBlocking(() -> {
             for (int i = 0; i < resourceIds.length; ++i) {
-                EditText editText =
-                        ((EditText) mCardUnmaskPrompt.getDialogForTest().findViewById(
-                                resourceIds[i]));
+                EditText editText = mCardUnmaskPrompt.getDialogForTest()
+                                            .get(ModalDialogProperties.CUSTOM_VIEW)
+                                            .findViewById(resourceIds[i]);
                 editText.setText(values[i]);
                 editText.getOnFocusChangeListener().onFocusChange(null, false);
             }
@@ -695,8 +699,9 @@ public class PaymentRequestTestRule extends ChromeActivityTestRule<ChromeTabbedA
             CallbackHelper helper) throws InterruptedException, TimeoutException {
         int callCount = helper.getCallCount();
         ThreadUtils.runOnUiThreadBlocking(() -> {
-            EditText editText =
-                    (EditText) mCardUnmaskPrompt.getDialogForTest().findViewById(resourceId);
+            EditText editText = mCardUnmaskPrompt.getDialogForTest()
+                                        .get(ModalDialogProperties.CUSTOM_VIEW)
+                                        .findViewById(resourceId);
             editText.requestFocus();
             editText.onEditorAction(EditorInfo.IME_ACTION_DONE);
         });
@@ -807,8 +812,10 @@ public class PaymentRequestTestRule extends ChromeActivityTestRule<ChromeTabbedA
 
     /* package */ View getCardUnmaskView() throws Throwable {
         return ThreadUtils.runOnUiThreadBlocking(
-                () -> mCardUnmaskPrompt.getDialogForTest().findViewById(
-                        R.id.autofill_card_unmask_prompt));
+                ()
+                        -> mCardUnmaskPrompt.getDialogForTest()
+                                   .get(ModalDialogProperties.CUSTOM_VIEW)
+                                   .findViewById(R.id.autofill_card_unmask_prompt));
     }
 
     @Override

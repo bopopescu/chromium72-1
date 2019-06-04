@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "base/test/histogram_tester.h"
+#include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_feature_list.h"
 #include "build/build_config.h"
 #include "chrome/app/chrome_command_ids.h"
@@ -19,7 +19,8 @@
 #include "chrome/browser/ui/extensions/app_launch_params.h"
 #include "chrome/browser/ui/extensions/application_launch.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
-#include "chrome/browser/web_applications/web_app.h"
+#include "chrome/browser/web_applications/components/web_app_helpers.h"
+#include "chrome/browser/web_applications/extensions/bookmark_app_util.h"
 #include "chrome/common/chrome_features.h"
 #include "chrome/common/extensions/manifest_handlers/app_launch_info.h"
 #include "chrome/test/base/ui_test_utils.h"
@@ -590,6 +591,33 @@ IN_PROC_BROWSER_TEST_P(BookmarkAppNavigationThrottleExperimentalLinkBrowserTest,
   ExpectNavigationResultHistogramEquals(global_histogram(), {});
 }
 
+// Tests that clicking a link to an app that isn't locally installed does not
+// open a new app window.
+IN_PROC_BROWSER_TEST_P(BookmarkAppNavigationThrottleExperimentalLinkBrowserTest,
+                       NotLocallyInstalledApp) {
+  InstallTestBookmarkApp();
+
+  // Part of the installation process (setting that this is a locally installed
+  // app) runs asynchronously. Wait for that to complete before setting locally
+  // installed to false.
+  base::RunLoop().RunUntilIdle();
+  SetBookmarkAppIsLocallyInstalled(browser()->profile(), test_bookmark_app(),
+                                   false /* is_locally_installed */);
+
+  NavigateToLaunchingPage();
+
+  const GURL app_url = https_server().GetURL(GetAppUrlHost(), GetAppUrlPath());
+  TestTabActionDoesNotOpenAppWindow(
+      app_url,
+      base::BindOnce(&ClickLinkAndWait,
+                     browser()->tab_strip_model()->GetActiveWebContents(),
+                     app_url, LinkTarget::SELF, GetParam()));
+
+  // Non-locally installed apps are not considered when looking for a target
+  // app, so it's as if there was no app installed for the URL.
+  ExpectNavigationResultHistogramEquals(global_histogram(), {});
+}
+
 // Tests that clicking a link with target="_self" to the app's app_url opens the
 // Bookmark App.
 IN_PROC_BROWSER_TEST_P(BookmarkAppNavigationThrottleExperimentalLinkBrowserTest,
@@ -1097,9 +1125,14 @@ IN_PROC_BROWSER_TEST_P(
 
 // Tests that same-origin or cross-origin apps created with window.open() from
 // another app window have an opener.
+#if defined(OS_MACOSX)
+#define MAYBE_WindowOpenInApp DISABLED_WindowOpenInApp
+#else
+#define MAYBE_WindowOpenInApp WindowOpenInApp
+#endif
 IN_PROC_BROWSER_TEST_P(
     BookmarkAppNavigationThrottleExperimentalWindowOpenBrowserTest,
-    WindowOpenInApp) {
+    MAYBE_WindowOpenInApp) {
   InstallTestBookmarkApp();
   InstallOtherTestBookmarkApp();
 
@@ -1227,14 +1260,19 @@ class BookmarkAppNavigationThrottleBaseCommonBrowserTest
     : public BookmarkAppNavigationBrowserTest {
  protected:
   void EnableFeaturesForTest(bool should_enable_link_capturing) {
+    // These tests expect that navigation to an out of scope URL will open in a
+    // new window, however, this behaviour is in the process of being changed
+    // (with the flag desktop-pwas-stay-in-window), so until the change is made
+    // permanent and these tests are removed, explicitly disable the flag.
     if (should_enable_link_capturing) {
       scoped_feature_list_.InitWithFeatures(
           {features::kDesktopPWAWindowing, features::kDesktopPWAsLinkCapturing},
-          {});
+          {features::kDesktopPWAsStayInWindow});
     } else {
       scoped_feature_list_.InitWithFeatures(
           {features::kDesktopPWAWindowing},
-          {features::kDesktopPWAsLinkCapturing});
+          {features::kDesktopPWAsLinkCapturing,
+           features::kDesktopPWAsStayInWindow});
     }
   }
 
@@ -1303,8 +1341,14 @@ IN_PROC_BROWSER_TEST_P(BookmarkAppNavigationThrottleCommonBrowserTest,
 
 // Tests that popups to out-of-scope URLs are opened in regular popup windows
 // and not in app windows.
+// TODO(crbug.com/849163) Times out flakily on MacOS.
+#if defined(OS_MACOSX)
+#define MAYBE_OutOfScopePopup DISABLED_OutOfScopePopup
+#else
+#define MAYBE_OutOfScopePopup OutOfScopePopup
+#endif
 IN_PROC_BROWSER_TEST_P(BookmarkAppNavigationThrottleCommonBrowserTest,
-                       OutOfScopePopup) {
+                       MAYBE_OutOfScopePopup) {
   InstallTestBookmarkApp();
   Browser* app_browser = OpenTestBookmarkApp();
 
@@ -1353,8 +1397,14 @@ IN_PROC_BROWSER_TEST_P(BookmarkAppNavigationThrottleCommonBrowserTest,
 }
 
 // Tests that popups to in-scope URLs are opened in App windows.
+// TODO(crbug.com/849163) Times out flakily on MacOS.
+#if defined(OS_MACOSX)
+#define MAYBE_InScopePopup DISABLED_InScopePopup
+#else
+#define MAYBE_InScopePopup InScopePopup
+#endif
 IN_PROC_BROWSER_TEST_P(BookmarkAppNavigationThrottleCommonBrowserTest,
-                       InScopePopup) {
+                       MAYBE_InScopePopup) {
   InstallTestBookmarkApp();
   Browser* app_browser = OpenTestBookmarkApp();
 
@@ -1400,7 +1450,7 @@ IN_PROC_BROWSER_TEST_P(BookmarkAppNavigationThrottleCommonBrowserTest,
 
   const Extension* app =
       ExtensionRegistry::Get(profile())->enabled_extensions().GetByID(
-          web_app::GetExtensionIdFromApplicationName(app_browser->app_name()));
+          web_app::GetAppIdFromApplicationName(app_browser->app_name()));
   EXPECT_EQ(GetAppName(), app->name());
 }
 #endif  // OS_CHROMEOS

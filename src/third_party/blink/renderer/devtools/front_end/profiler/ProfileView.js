@@ -1,6 +1,7 @@
 // Copyright 2016 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
+
 /**
  * @implements {UI.Searchable}
  * @unrestricted
@@ -8,6 +9,8 @@
 Profiler.ProfileView = class extends UI.SimpleView {
   constructor() {
     super(Common.UIString('Profile'));
+
+    this._profile = null;
 
     this._searchableView = new UI.SearchableView(this);
     this._searchableView.setPlaceholder(Common.UIString('Find by cost (>50ms), name or file'));
@@ -62,6 +65,24 @@ Profiler.ProfileView = class extends UI.SimpleView {
   }
 
   /**
+   * @param {!SDK.ProfileTreeModel} profile
+   */
+  setProfile(profile) {
+    this._profile = profile;
+    this._bottomUpProfileDataGridTree = null;
+    this._topDownProfileDataGridTree = null;
+    this._changeView();
+    this.refresh();
+  }
+
+  /**
+   * @return {?SDK.ProfileTreeModel}
+   */
+  profile() {
+    return this._profile;
+  }
+
+  /**
    * @param {!Profiler.ProfileDataGridNode.Formatter} nodeFormatter
    * @param {!Array<string>=} viewTypes
    * @protected
@@ -75,9 +96,10 @@ Profiler.ProfileView = class extends UI.SimpleView {
     ];
 
     const optionNames = new Map([
-      [Profiler.ProfileView.ViewTypes.Flame, Common.UIString('Chart')],
-      [Profiler.ProfileView.ViewTypes.Heavy, Common.UIString('Heavy (Bottom Up)')],
-      [Profiler.ProfileView.ViewTypes.Tree, Common.UIString('Tree (Top Down)')],
+      [Profiler.ProfileView.ViewTypes.Flame, ls`Chart`],
+      [Profiler.ProfileView.ViewTypes.Heavy, ls`Heavy (Bottom Up)`],
+      [Profiler.ProfileView.ViewTypes.Tree, ls`Tree (Top Down)`],
+      [Profiler.ProfileView.ViewTypes.Text, ls`Text (Top Down)`],
     ]);
 
     const options =
@@ -121,7 +143,7 @@ Profiler.ProfileView = class extends UI.SimpleView {
 
   /**
    * @override
-   * @return {!Array.<!UI.ToolbarItem>}
+   * @return {!Array<!UI.ToolbarItem>}
    */
   syncToolbarItems() {
     return [this.viewSelectComboBox, this.focusButton, this.excludeButton, this.resetButton];
@@ -133,7 +155,7 @@ Profiler.ProfileView = class extends UI.SimpleView {
   _getBottomUpProfileDataGridTree() {
     if (!this._bottomUpProfileDataGridTree) {
       this._bottomUpProfileDataGridTree = new Profiler.BottomUpProfileDataGridTree(
-          this._nodeFormatter, this._searchableView, this.profile.root, this.adjustedTotal);
+          this._nodeFormatter, this._searchableView, this._profile.root, this.adjustedTotal);
     }
     return this._bottomUpProfileDataGridTree;
   }
@@ -144,7 +166,7 @@ Profiler.ProfileView = class extends UI.SimpleView {
   _getTopDownProfileDataGridTree() {
     if (!this._topDownProfileDataGridTree) {
       this._topDownProfileDataGridTree = new Profiler.TopDownProfileDataGridTree(
-          this._nodeFormatter, this._searchableView, this.profile.root, this.adjustedTotal);
+          this._nodeFormatter, this._searchableView, this._profile.root, this.adjustedTotal);
     }
     return this._topDownProfileDataGridTree;
   }
@@ -157,6 +179,8 @@ Profiler.ProfileView = class extends UI.SimpleView {
   }
 
   refresh() {
+    if (!this.profileDataGridTree)
+      return;
     const selectedProfileNode = this.dataGrid.selectedNode ? this.dataGrid.selectedNode.profileNode : null;
 
     this.dataGrid.rootNode().removeChildren();
@@ -240,6 +264,20 @@ Profiler.ProfileView = class extends UI.SimpleView {
     return this._linkifier;
   }
 
+  _ensureTextViewCreated() {
+    if (this._textView)
+      return;
+    this._textView = new UI.SimpleView(ls`Call tree`);
+    this._textView.registerRequiredCSS('profiler/profilesPanel.css');
+    this.populateTextView(this._textView);
+  }
+
+  /**
+   * @param {!UI.SimpleView} view
+   */
+  populateTextView(view) {
+  }
+
   /**
    * @return {!PerfUI.FlameChartDataProvider}
    */
@@ -273,7 +311,7 @@ Profiler.ProfileView = class extends UI.SimpleView {
   }
 
   _changeView() {
-    if (!this.profile)
+    if (!this._profile)
       return;
 
     this._searchableView.closeSearch();
@@ -299,6 +337,11 @@ Profiler.ProfileView = class extends UI.SimpleView {
         this._sortProfile();
         this._visibleView = this.dataGrid.asWidget();
         this._searchableElement = this.profileDataGridTree;
+        break;
+      case Profiler.ProfileView.ViewTypes.Text:
+        this._ensureTextViewCreated();
+        this._visibleView = this._textView;
+        this._searchableElement = this._textView;
         break;
     }
 
@@ -377,7 +420,8 @@ Profiler.ProfileView._maxLinkLength = 30;
 Profiler.ProfileView.ViewTypes = {
   Flame: 'Flame',
   Tree: 'Tree',
-  Heavy: 'Heavy'
+  Heavy: 'Heavy',
+  Text: 'Text'
 };
 
 

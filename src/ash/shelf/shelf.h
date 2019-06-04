@@ -29,7 +29,6 @@ class MouseWheelEvent;
 namespace ash {
 
 enum class AnimationChangeType;
-class LoginShelfView;
 class ShelfBezelEventHandler;
 class ShelfLayoutManager;
 class ShelfLayoutManagerTest;
@@ -60,6 +59,11 @@ class ASH_EXPORT Shelf : public ShelfLayoutManagerObserver {
     return shelf_layout_manager_;
   }
 
+  // Returns true if the shelf is visible. Shelf can be visible in 1)
+  // SHELF_VISIBLE or 2) SHELF_AUTO_HIDE but in SHELF_AUTO_HIDE_SHOWN. See
+  // details in ShelfLayoutManager::IsVisible.
+  bool IsVisible() const;
+
   ShelfWidget* shelf_widget() { return shelf_widget_.get(); }
 
   // Returns the window showing the shelf.
@@ -74,7 +78,7 @@ class ASH_EXPORT Shelf : public ShelfLayoutManagerObserver {
   // Returns a value based on shelf alignment.
   int SelectValueForShelfAlignment(int bottom, int left, int right) const;
 
-  // Returns |horizontal| is shelf is horizontal, otherwise |vertical|.
+  // Returns |horizontal| if shelf is horizontal, otherwise |vertical|.
   int PrimaryAxisValue(int horizontal, int vertical) const;
 
   ShelfAutoHideBehavior auto_hide_behavior() const {
@@ -92,6 +96,8 @@ class ASH_EXPORT Shelf : public ShelfLayoutManagerObserver {
 
   void UpdateVisibilityState();
 
+  void MaybeUpdateShelfBackground();
+
   ShelfVisibilityState GetVisibilityState() const;
 
   int GetAccessibilityPanelHeight() const;
@@ -101,13 +107,9 @@ class ASH_EXPORT Shelf : public ShelfLayoutManagerObserver {
   int GetDockedMagnifierHeight() const;
 
   // Returns the ideal bounds of the shelf assuming it is visible.
-  gfx::Rect GetIdealBounds();
+  gfx::Rect GetIdealBounds() const;
 
   gfx::Rect GetUserWorkAreaBounds() const;
-
-  // Updates the icon position given the current window bounds. This is used
-  // when dragging panels to reposition them with respect to the other panels.
-  void UpdateIconPositionForPanel(aura::Window* window);
 
   // Returns the screen bounds of the item for the specified window. If there is
   // no item for the specified window an empty rect is returned.
@@ -141,7 +143,13 @@ class ASH_EXPORT Shelf : public ShelfLayoutManagerObserver {
 
   // Get the tray button that the system tray bubble and the notification center
   // bubble will be anchored. See also: StatusAreaWidget::GetSystemTrayAnchor()
-  TrayBackgroundView* GetSystemTrayAnchor() const;
+  TrayBackgroundView* GetSystemTrayAnchorView() const;
+
+  // Get the anchor rect that the system tray bubble and the notification center
+  // bubble will be anchored.
+  // x() and y() designates anchor point, but width() and height() are dummy.
+  // See also: BubbleDialogDelegateView::GetBubbleBounds()
+  gfx::Rect GetSystemTrayAnchorRect() const;
 
   void set_is_tablet_mode_animation_running(bool value) {
     is_tablet_mode_animation_running_ = value;
@@ -157,7 +165,6 @@ class ASH_EXPORT Shelf : public ShelfLayoutManagerObserver {
   void SetVirtualKeyboardBoundsForTesting(const gfx::Rect& bounds);
   ShelfLockingManager* GetShelfLockingManagerForTesting();
   ShelfView* GetShelfViewForTesting();
-  LoginShelfView* GetLoginShelfViewForTesting();
 
  protected:
   // ShelfLayoutManagerObserver:
@@ -184,14 +191,12 @@ class ASH_EXPORT Shelf : public ShelfLayoutManagerObserver {
   // Sets shelf alignment to bottom during login and screen lock.
   ShelfLockingManager shelf_locking_manager_;
 
-  base::ObserverList<ShelfObserver> observers_;
+  base::ObserverList<ShelfObserver>::Unchecked observers_;
 
   // Forwards mouse and gesture events to ShelfLayoutManager for auto-hide.
-  // TODO(mash): Facilitate simliar functionality in mash: crbug.com/631216
   std::unique_ptr<AutoHideEventHandler> auto_hide_event_handler_;
 
   // Forwards touch gestures on a bezel sensor to the shelf.
-  // TODO(mash): Facilitate simliar functionality in mash: crbug.com/636647
   std::unique_ptr<ShelfBezelEventHandler> bezel_event_handler_;
 
   // True while the animation to enter or exit tablet mode is running. Sometimes

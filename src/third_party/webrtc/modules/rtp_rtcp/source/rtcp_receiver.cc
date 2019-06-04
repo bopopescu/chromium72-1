@@ -19,8 +19,8 @@
 #include <vector>
 
 #include "api/video/video_bitrate_allocation.h"
+#include "api/video/video_bitrate_allocator.h"
 #include "common_types.h"  // NOLINT(build/include)
-#include "common_video/include/video_bitrate_allocator.h"
 #include "modules/rtp_rtcp/source/rtcp_packet/bye.h"
 #include "modules/rtp_rtcp/source/rtcp_packet/common_header.h"
 #include "modules/rtp_rtcp/source/rtcp_packet/compound_packet.h"
@@ -72,7 +72,7 @@ struct RTCPReceiver::PacketInformation {
   int64_t rtt_ms = 0;
   uint32_t receiver_estimated_max_bitrate_bps = 0;
   std::unique_ptr<rtcp::TransportFeedback> transport_feedback;
-  rtc::Optional<VideoBitrateAllocation> target_bitrate_allocation;
+  absl::optional<VideoBitrateAllocation> target_bitrate_allocation;
 };
 
 // Structure for handing TMMBR and TMMBN rtcp messages (RFC5104, section 3.5.4).
@@ -131,6 +131,7 @@ RTCPReceiver::RTCPReceiver(
     RtcpIntraFrameObserver* rtcp_intra_frame_observer,
     TransportFeedbackObserver* transport_feedback_observer,
     VideoBitrateAllocationObserver* bitrate_allocation_observer,
+    int report_interval_ms,
     ModuleRtpRtcp* owner)
     : clock_(clock),
       receiver_only_(receiver_only),
@@ -139,6 +140,7 @@ RTCPReceiver::RTCPReceiver(
       rtcp_intra_frame_observer_(rtcp_intra_frame_observer),
       transport_feedback_observer_(transport_feedback_observer),
       bitrate_allocation_observer_(bitrate_allocation_observer),
+      report_interval_ms_(report_interval_ms),
       main_ssrc_(0),
       remote_ssrc_(0),
       remote_sender_rtp_time_(0),
@@ -280,7 +282,8 @@ RTCPReceiver::ConsumeReceivedXrReferenceTimeInfo() {
   std::vector<rtcp::ReceiveTimeInfo> last_xr_rtis;
   last_xr_rtis.reserve(last_xr_rtis_size);
 
-  const uint32_t now_ntp = CompactNtp(clock_->CurrentNtpTime());
+  const uint32_t now_ntp =
+      CompactNtp(TimeMicrosToNtp(clock_->TimeInMicroseconds()));
 
   for (size_t i = 0; i < last_xr_rtis_size; ++i) {
     RrtrInformation& rrtr = received_rrtrs_.front();
@@ -420,9 +423,6 @@ void RTCPReceiver::HandleSenderReport(const CommonHeader& rtcp_block,
 
   UpdateTmmbrRemoteIsAlive(remote_ssrc);
 
-  TRACE_EVENT_INSTANT2(TRACE_DISABLED_BY_DEFAULT("webrtc_rtp"), "SR",
-                       "remote_ssrc", remote_ssrc, "ssrc", main_ssrc_);
-
   // Have I received RTP packets from this party?
   if (remote_ssrc_ == remote_ssrc) {
     // Only signal that we have received a SR when we accept one.
@@ -430,7 +430,7 @@ void RTCPReceiver::HandleSenderReport(const CommonHeader& rtcp_block,
 
     remote_sender_ntp_time_ = sender_report.ntp();
     remote_sender_rtp_time_ = sender_report.rtp_timestamp();
-    last_received_sr_ntp_ = clock_->CurrentNtpTime();
+    last_received_sr_ntp_ = TimeMicrosToNtp(clock_->TimeInMicroseconds());
   } else {
     // We will only store the send report from one source, but
     // we will store all the receive blocks.
@@ -454,9 +454,6 @@ void RTCPReceiver::HandleReceiverReport(const CommonHeader& rtcp_block,
   packet_information->remote_ssrc = remote_ssrc;
 
   UpdateTmmbrRemoteIsAlive(remote_ssrc);
-
-  TRACE_EVENT_INSTANT2(TRACE_DISABLED_BY_DEFAULT("webrtc_rtp"), "RR",
-                       "remote_ssrc", remote_ssrc, "ssrc", main_ssrc_);
 
   packet_information->packet_type_flags |= kRtcpRr;
 
@@ -509,10 +506,18 @@ void RTCPReceiver::HandleReportBlock(const ReportBlock& report_block,
   // If no SR has been received yet, the field is set to zero.
   // Receiver rtp_rtcp module is not expected to calculate rtt using
   // Sender Reports even if it accidentally can.
-  if (!receiver_only_ && send_time_ntp != 0) {
+
+  // TODO(nisse): Use this way to determine the RTT only when |receiver_only_|
+  // is false. However, that currently breaks the tests of the
+  // googCaptureStartNtpTimeMs stat for audio receive streams. To fix, either
+  // delete all dependencies on RTT measurements for audio receive streams, or
+  // ensure that audio receive streams that need RTT and stats that depend on it
+  // are configured with an associated audio send stream.
+  if (send_time_ntp != 0) {
     uint32_t delay_ntp = report_block.delay_since_last_sr();
     // Local NTP time.
-    uint32_t receive_time_ntp = CompactNtp(clock_->CurrentNtpTime());
+    uint32_t receive_time_ntp =
+        CompactNtp(TimeMicrosToNtp(clock_->TimeInMicroseconds()));
 
     // RTT in 1/(2^16) seconds.
     uint32_t rtt_ntp = receive_time_ntp - delay_ntp - send_time_ntp;
@@ -532,8 +537,6 @@ void RTCPReceiver::HandleReportBlock(const ReportBlock& report_block,
     packet_information->rtt_ms = rtt_ms;
   }
 
-  TRACE_COUNTER_ID1(TRACE_DISABLED_BY_DEFAULT("webrtc_rtp"), "RR_RTT",
-                    report_block.source_ssrc(), rtt_ms);
   packet_information->report_blocks.push_back(report_block_info->report_block);
 }
 
@@ -560,12 +563,12 @@ RTCPReceiver::TmmbrInformation* RTCPReceiver::GetTmmbrInformation(
   return &it->second;
 }
 
-bool RTCPReceiver::RtcpRrTimeout(int64_t rtcp_interval_ms) {
+bool RTCPReceiver::RtcpRrTimeout() {
   rtc::CritScope lock(&rtcp_receiver_lock_);
   if (last_received_rb_ms_ == 0)
     return false;
 
-  int64_t time_out_ms = kRrTimeoutIntervals * rtcp_interval_ms;
+  int64_t time_out_ms = kRrTimeoutIntervals * report_interval_ms_;
   if (clock_->TimeInMilliseconds() > last_received_rb_ms_ + time_out_ms) {
     // Reset the timer to only trigger one log.
     last_received_rb_ms_ = 0;
@@ -574,12 +577,12 @@ bool RTCPReceiver::RtcpRrTimeout(int64_t rtcp_interval_ms) {
   return false;
 }
 
-bool RTCPReceiver::RtcpRrSequenceNumberTimeout(int64_t rtcp_interval_ms) {
+bool RTCPReceiver::RtcpRrSequenceNumberTimeout() {
   rtc::CritScope lock(&rtcp_receiver_lock_);
   if (last_increased_sequence_number_ms_ == 0)
     return false;
 
-  int64_t time_out_ms = kRrTimeoutIntervals * rtcp_interval_ms;
+  int64_t time_out_ms = kRrTimeoutIntervals * report_interval_ms_;
   if (clock_->TimeInMilliseconds() >
       last_increased_sequence_number_ms_ + time_out_ms) {
     // Reset the timer to only trigger one log.
@@ -728,7 +731,8 @@ void RTCPReceiver::HandleXr(const CommonHeader& rtcp_block,
 void RTCPReceiver::HandleXrReceiveReferenceTime(uint32_t sender_ssrc,
                                                 const rtcp::Rrtr& rrtr) {
   uint32_t received_remote_mid_ntp_time = CompactNtp(rrtr.ntp());
-  uint32_t local_receive_mid_ntp_time = CompactNtp(clock_->CurrentNtpTime());
+  uint32_t local_receive_mid_ntp_time =
+      CompactNtp(TimeMicrosToNtp(clock_->TimeInMicroseconds()));
 
   auto it = received_rrtrs_ssrc_it_.find(sender_ssrc);
   if (it != received_rrtrs_ssrc_it_.end()) {
@@ -762,7 +766,7 @@ void RTCPReceiver::HandleXrDlrrReportBlock(const rtcp::ReceiveTimeInfo& rti) {
     return;
 
   uint32_t delay_ntp = rti.delay_since_last_rr;
-  uint32_t now_ntp = CompactNtp(clock_->CurrentNtpTime());
+  uint32_t now_ntp = CompactNtp(TimeMicrosToNtp(clock_->TimeInMicroseconds()));
 
   uint32_t rtt_ntp = now_ntp - delay_ntp - send_time_ntp;
   xr_rr_rtt_ms_ = CompactNtpRttToMs(rtt_ntp);
@@ -801,8 +805,6 @@ void RTCPReceiver::HandlePli(const CommonHeader& rtcp_block,
   }
 
   if (main_ssrc_ == pli.media_ssrc()) {
-    TRACE_EVENT_INSTANT0(TRACE_DISABLED_BY_DEFAULT("webrtc_rtp"), "PLI");
-
     ++packet_type_counter_.pli_packets;
     // Received a signal that we need to send a new key frame.
     packet_information->packet_type_flags |= kRtcpPli;
@@ -830,8 +832,7 @@ void RTCPReceiver::HandleTmmbr(const CommonHeader& rtcp_block,
 
     TmmbrInformation* tmmbr_info = FindOrCreateTmmbrInfo(tmmbr.sender_ssrc());
     auto* entry = &tmmbr_info->tmmbr[sender_ssrc];
-    entry->tmmbr_item = rtcp::TmmbItem(sender_ssrc,
-                                       request.bitrate_bps(),
+    entry->tmmbr_item = rtcp::TmmbItem(sender_ssrc, request.bitrate_bps(),
                                        request.packet_overhead());
     entry->last_updated_ms = clock_->TimeInMilliseconds();
 

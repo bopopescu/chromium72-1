@@ -73,18 +73,15 @@ class WebMediaPlayerDelegate {
     // controls and go fullscreen.
     virtual void OnBecamePersistentVideo(bool value) = 0;
 
-///@name USE_NEVA_MEDIA
-///@{
-    // Called when compositor committed new frame.
-    virtual void OnDidCommitCompositorFrame() {}
-///@}
-#if defined(USE_NEVA_MEDIA)
-    virtual void OnSuppressedMediaPlay(bool) {}
-#endif
-
     // Called when Picture-in-Picture mode is terminated from the
     // Picture-in-Picture window.
     virtual void OnPictureInPictureModeEnded() = 0;
+
+    // Called when a custom control is clicked on the Picture-in-Picture window.
+    // |control_id| is the identifier for its custom control. This is defined by
+    // the site that calls the web API.
+    virtual void OnPictureInPictureControlClicked(
+        const std::string& control_id) = 0;
   };
 
   // Returns true if the host frame is hidden or closed.
@@ -126,16 +123,25 @@ class WebMediaPlayerDelegate {
       int delegate_id,
       const viz::SurfaceId&,
       const gfx::Size&,
-      blink::WebMediaPlayer::PipWindowOpenedCallback) = 0;
+      blink::WebMediaPlayer::PipWindowOpenedCallback,
+      bool show_play_pause_button) = 0;
 
   // Notify that the source media player has exited Picture-in-Picture mode.
   virtual void DidPictureInPictureModeEnd(int delegate_id,
                                           base::OnceClosure) = 0;
 
+  // Notify that custom controls have been sent to be assigned to the
+  // Picture-in-Picture window.
+  virtual void DidSetPictureInPictureCustomControls(
+      int delegate_id,
+      const std::vector<blink::PictureInPictureControlInfo>&) = 0;
+
   // Notify that the media player in Picture-in-Picture had a change of surface.
-  virtual void DidPictureInPictureSurfaceChange(int delegate_id,
-                                                const viz::SurfaceId&,
-                                                const gfx::Size&) = 0;
+  virtual void DidPictureInPictureSurfaceChange(
+      int delegate_id,
+      const viz::SurfaceId&,
+      const gfx::Size&,
+      bool show_play_pause_button) = 0;
 
   // Registers a callback associated with a player that will be called when
   // receiving a notification from the browser process that the
@@ -179,6 +185,10 @@ class WebMediaPlayerDelegate {
   virtual void SetIsEffectivelyFullscreen(
       int player_id,
       blink::WebFullscreenVideoStatus fullscreen_video_status) = 0;
+
+  // Returns |true| if player should be suspended automatically when tab is
+  // in background.
+  virtual bool IsBackgroundMediaSuspendEnabled() = 0;
 
  protected:
   WebMediaPlayerDelegate() = default;

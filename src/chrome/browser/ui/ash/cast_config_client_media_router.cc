@@ -42,14 +42,9 @@ media_router::MediaRouter* GetMediaRouter() {
   return router;
 }
 
-// The media router will sometimes append " (Tab)" to the tab title. This
-// function will remove that data from the inout param |string|.
-std::string StripEndingTab(const std::string& str) {
-  static const char ending[] = " (Tab)";
-  if (base::EndsWith(str, ending, base::CompareCase::SENSITIVE))
-    return str.substr(0, str.size() - strlen(ending));
-  return str;
-}
+// "Cast for Education" extension uses this string and expects the client to
+// interpret it as "signed-in user's domain".
+constexpr char const kDefaultDomain[] = "default";
 
 }  // namespace
 
@@ -114,11 +109,13 @@ void CastDeviceCache::OnSinksReceived(const MediaSinks& sinks) {
     if (sink.name().empty())
       continue;
 
-    // Hide all sinks which have a domain (ie, castouts) to meet privacy
-    // requirements. This will be enabled once UI can display the domain. See
-    // crbug.com/624016.
-    if (sink.domain() && !sink.domain()->empty())
+    // Hide all sinks which have a non-default domain (ie, castouts) to meet
+    // privacy requirements. This will be enabled once UI can display the
+    // domain. See crbug.com/624016.
+    if (sink.domain() && !sink.domain()->empty() &&
+        sink.domain() != kDefaultDomain) {
       continue;
+    }
 
     sinks_.push_back(sink);
   }
@@ -210,7 +207,7 @@ void CastConfigClientMediaRouter::RequestDeviceRefresh() {
     for (ash::mojom::SinkAndRoutePtr& item : items) {
       if (item->sink->id == route.media_sink_id()) {
         item->route->id = route.media_route_id();
-        item->route->title = StripEndingTab(route.description());
+        item->route->title = route.description();
         item->route->is_local_source = route.is_local();
 
         // Default to a tab/app capture. This will display the media router
@@ -232,8 +229,7 @@ void CastConfigClientMediaRouter::CastToSink(ash::mojom::CastSinkPtr sink) {
   GetMediaRouter()->CreateRoute(
       media_router::MediaSourceForDesktop().id(), sink->id,
       url::Origin::Create(GURL("http://cros-cast-origin/")), nullptr,
-      std::vector<media_router::MediaRouteResponseCallback>(),
-      base::TimeDelta(), false);
+      base::DoNothing(), base::TimeDelta(), false);
 }
 
 void CastConfigClientMediaRouter::StopCasting(ash::mojom::CastRoutePtr route) {

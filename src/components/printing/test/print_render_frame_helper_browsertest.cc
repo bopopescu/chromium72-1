@@ -13,6 +13,7 @@
 #include "base/command_line.h"
 #include "base/macros.h"
 #include "base/run_loop.h"
+#include "base/stl_util.h"
 #include "base/strings/string_piece.h"
 #include "base/strings/utf_string_conversions.h"
 #include "build/build_config.h"
@@ -202,14 +203,13 @@ class PrintRenderFrameHelperTestBase : public content::RenderViewTest {
   // according to the specified settings defined in the mock render thread.
   // Verify the page count is correct.
   void VerifyPreviewPageCount(int expected_count) {
-    const IPC::Message* page_cnt_msg =
+    const IPC::Message* preview_started_message =
         render_thread_->sink().GetUniqueMessageMatching(
-            PrintHostMsg_DidGetPreviewPageCount::ID);
-    ASSERT_TRUE(page_cnt_msg);
-    PrintHostMsg_DidGetPreviewPageCount::Param post_page_count_param;
-    PrintHostMsg_DidGetPreviewPageCount::Read(page_cnt_msg,
-                                              &post_page_count_param);
-    EXPECT_EQ(expected_count, std::get<0>(post_page_count_param).page_count);
+            PrintHostMsg_DidStartPreview::ID);
+    ASSERT_TRUE(preview_started_message);
+    PrintHostMsg_DidStartPreview::Param param;
+    PrintHostMsg_DidStartPreview::Read(preview_started_message, &param);
+    EXPECT_EQ(expected_count, std::get<0>(param).page_count);
   }
 #endif  // BUILDFLAG(ENABLE_PRINT_PREVIEW)
 
@@ -291,8 +291,6 @@ class MAYBE_PrintRenderFrameHelperTest : public PrintRenderFrameHelperTestBase {
  public:
   MAYBE_PrintRenderFrameHelperTest() {}
   ~MAYBE_PrintRenderFrameHelperTest() override {}
-
-  void SetUp() override { PrintRenderFrameHelperTestBase::SetUp(); }
 
  private:
   DISALLOW_COPY_AND_ASSIGN(MAYBE_PrintRenderFrameHelperTest);
@@ -524,7 +522,7 @@ TEST_F(MAYBE_PrintRenderFrameHelperTest, PrintLayoutTest) {
   bool baseline = false;
 
   EXPECT_TRUE(print_render_thread_->printer());
-  for (size_t i = 0; i < arraysize(kTestPages); ++i) {
+  for (size_t i = 0; i < base::size(kTestPages); ++i) {
     // Load an HTML page and print it.
     LoadHTML(kTestPages[i].page);
     OnPrintPages();
@@ -618,9 +616,10 @@ class MAYBE_PrintRenderFrameHelperPreviewTest
     if (got_preview_msg) {
       PrintHostMsg_MetafileReadyForPrinting::Param preview_param;
       PrintHostMsg_MetafileReadyForPrinting::Read(preview_msg, &preview_param);
-      EXPECT_NE(0, std::get<0>(preview_param).document_cookie);
-      EXPECT_NE(0, std::get<0>(preview_param).expected_pages_count);
-      EXPECT_NE(0U, std::get<0>(preview_param).content.data_size);
+      const auto& param = std::get<0>(preview_param);
+      EXPECT_NE(0, param.document_cookie);
+      EXPECT_NE(0, param.expected_pages_count);
+      EXPECT_NE(0U, param.content.metafile_data_region.GetSize());
     }
   }
 
@@ -1150,6 +1149,29 @@ TEST_F(MAYBE_PrintRenderFrameHelperPreviewTest, PrintPreviewForSelectedText) {
   EXPECT_EQ(0, print_render_thread_->print_preview_pages_remaining());
   VerifyDidPreviewPage(true, 0);
   VerifyPreviewPageCount(1);
+  VerifyPrintPreviewCancelled(false);
+  VerifyPrintPreviewFailed(false);
+  VerifyPrintPreviewGenerated(true);
+  VerifyPagesPrinted(false);
+}
+
+// Test to verify that preview generated only for two pages.
+TEST_F(MAYBE_PrintRenderFrameHelperPreviewTest, PrintPreviewForSelectedText2) {
+  LoadHTML(kMultipageHTML);
+  GetMainFrame()->SelectRange(blink::WebRange(1, 8),
+                              blink::WebLocalFrame::kHideSelectionHandle,
+                              blink::mojom::SelectionMenuBehavior::kHide);
+
+  // Fill in some dummy values.
+  base::DictionaryValue dict;
+  CreatePrintSettingsDictionary(&dict);
+  dict.SetBoolean(kSettingShouldPrintSelectionOnly, true);
+
+  OnPrintPreview(dict);
+
+  EXPECT_EQ(0, print_render_thread_->print_preview_pages_remaining());
+  VerifyDidPreviewPage(true, 0);
+  VerifyPreviewPageCount(2);
   VerifyPrintPreviewCancelled(false);
   VerifyPrintPreviewFailed(false);
   VerifyPrintPreviewGenerated(true);

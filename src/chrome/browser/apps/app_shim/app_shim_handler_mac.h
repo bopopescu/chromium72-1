@@ -5,11 +5,18 @@
 #ifndef CHROME_BROWSER_APPS_APP_SHIM_APP_SHIM_HANDLER_MAC_H_
 #define CHROME_BROWSER_APPS_APP_SHIM_APP_SHIM_HANDLER_MAC_H_
 
+#include <memory>
 #include <string>
 #include <vector>
 
 #include "base/files/file_path.h"
 #include "chrome/common/mac/app_shim_launch.h"
+
+namespace views {
+class BridgeFactoryHost;
+}  // namespace views
+
+class AppShimHostBootstrap;
 
 namespace apps {
 
@@ -17,8 +24,18 @@ namespace apps {
 // shim processes.
 class AppShimHandler {
  public:
+  // TODO(ccameron): Remove this virtual interface and always use AppShimHost
+  // directly.
+  // https://crbug.com/896917
   class Host {
    public:
+    // Returns true if an AppShimHostBootstrap has already connected to this
+    // host.
+    virtual bool HasBootstrapConnected() const = 0;
+    // Invoked when the app shim process has finished launching. The |bootstrap|
+    // object owns the lifetime of the app shim process.
+    virtual void OnBootstrapConnected(
+        std::unique_ptr<AppShimHostBootstrap> bootstrap) = 0;
     // Invoked when the app is successfully launched.
     virtual void OnAppLaunchComplete(AppShimLaunchResult result) = 0;
     // Invoked when the app is closed in the browser process.
@@ -35,6 +52,7 @@ class AppShimHandler {
     // Allows the handler to determine which app this host corresponds to.
     virtual base::FilePath GetProfilePath() const = 0;
     virtual std::string GetAppId() const = 0;
+    virtual views::BridgeFactoryHost* GetViewsBridgeFactoryHost() const = 0;
 
    protected:
     virtual ~Host() {}
@@ -70,9 +88,8 @@ class AppShimHandler {
   // |launch_type| indicates the type of launch.
   // |files|, if non-empty, holds an array of files paths given as arguments, or
   // dragged onto the app bundle or dock icon.
-  virtual void OnShimLaunch(Host* host,
-                            AppShimLaunchType launch_type,
-                            const std::vector<base::FilePath>& files) = 0;
+  virtual void OnShimLaunch(
+      std::unique_ptr<AppShimHostBootstrap> bootstrap) = 0;
 
   // Invoked by the shim host when the connection to the shim process is closed.
   virtual void OnShimClose(Host* host) = 0;

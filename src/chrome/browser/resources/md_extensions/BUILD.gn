@@ -14,6 +14,7 @@ optimize_webui("build") {
   host = "extensions"
   html_in_files = [ "extensions.html" ]
   html_out_files = [ "vulcanized.html" ]
+  html_out_files_polymer2 = [ "vulcanized.p2.html" ]
   insert_in_head = "<base href=\"chrome://extensions\">"
   input = rebase_path("$target_gen_dir/$unpak_folder", root_build_dir)
   js_out_files = [ "crisper.js" ]
@@ -49,11 +50,14 @@ grit("flattened_resources") {
 }
 js_type_check("closure_compile") {
   deps = [
+    ":activity_log",
+    ":activity_log_item",
     ":code_section",
     ":detail_view",
     ":drag_and_drop_handler",
     ":drop_overlay",
     ":error_page",
+    ":host_permissions_toggle_list",
     ":install_warnings_dialog",
     ":item",
     ":item_behavior",
@@ -68,12 +72,13 @@ js_type_check("closure_compile") {
     ":options_dialog",
     ":pack_dialog",
     ":pack_dialog_alert",
+    ":runtime_host_permissions",
+    ":runtime_hosts_dialog",
     ":service",
     ":shortcut_input",
     ":shortcut_util",
     ":sidebar",
     ":toolbar",
-    ":view_manager",
   ]
 }
 
@@ -86,6 +91,24 @@ js_library("code_section") {
   externs_list = [ "$externs_path/developer_private.js" ]
 }
 
+js_library("activity_log_item") {
+  deps = [
+    "//ui/webui/resources/js:cr",
+  ]
+  externs_list = [ "$externs_path/activity_log_private.js" ]
+}
+
+js_library("activity_log") {
+  deps = [
+    ":activity_log_item",
+    "//ui/webui/resources/js:cr",
+  ]
+  externs_list = [
+    "$externs_path/activity_log_private.js",
+    "$externs_path/developer_private.js",
+  ]
+}
+
 js_library("detail_view") {
   deps = [
     ":item",
@@ -93,6 +116,7 @@ js_library("detail_view") {
     ":item_util",
     ":navigation_helper",
     "//ui/webui/resources/cr_elements:cr_container_shadow_behavior",
+    "//ui/webui/resources/cr_elements/cr_action_menu:cr_action_menu",
     "//ui/webui/resources/js:assert",
     "//ui/webui/resources/js:cr",
     "//ui/webui/resources/js:load_time_data",
@@ -133,6 +157,13 @@ js_library("error_page") {
     "$externs_path/developer_private.js",
     "$externs_path/metrics_private.js",
   ]
+}
+
+js_library("host_permissions_toggle_list") {
+  deps = [
+    "//ui/webui/resources/js:cr",
+  ]
+  externs_list = [ "$externs_path/developer_private.js" ]
 }
 
 js_library("install_warnings_dialog") {
@@ -225,6 +256,8 @@ js_library("load_error") {
 
 js_library("manager") {
   deps = [
+    ":activity_log",
+    ":activity_log_item",
     ":detail_view",
     ":item",
     ":item_list",
@@ -236,8 +269,8 @@ js_library("manager") {
     ":service",
     ":sidebar",
     ":toolbar",
-    ":view_manager",
     "//ui/webui/resources/cr_elements/cr_drawer:cr_drawer",
+    "//ui/webui/resources/cr_elements/cr_view_manager:cr_view_manager",
     "//ui/webui/resources/js:assert",
     "//ui/webui/resources/js:cr",
   ]
@@ -279,6 +312,22 @@ js_library("pack_dialog_alert") {
   externs_list = [ "$externs_path/developer_private.js" ]
 }
 
+js_library("runtime_host_permissions") {
+  deps = [
+    ":item",
+    ":runtime_hosts_dialog",
+  ]
+  externs_list = [ "$externs_path/developer_private.js" ]
+}
+
+js_library("runtime_hosts_dialog") {
+  deps = [
+    "//ui/webui/resources/cr_elements/cr_dialog:cr_dialog",
+    "//ui/webui/resources/cr_elements/cr_input:cr_input",
+    "//ui/webui/resources/js:load_time_data",
+  ]
+}
+
 js_library("service") {
   deps = [
     ":error_page",
@@ -292,6 +341,7 @@ js_library("service") {
     "//ui/webui/resources/js:load_time_data",
   ]
   externs_list = [
+    "$externs_path/activity_log_private.js",
     "$externs_path/developer_private.js",
     "$externs_path/management.js",
     "$externs_path/metrics_private.js",
@@ -332,12 +382,4 @@ js_library("toolbar") {
     "//ui/webui/resources/js:util",
   ]
   externs_list = [ "$externs_path/metrics_private.js" ]
-}
-
-js_library("view_manager") {
-  deps = [
-    "//ui/webui/resources/js:assert",
-    "//ui/webui/resources/js:cr",
-  ]
-  externs_list = [ "$externs_path/web_animations.js" ]
 }

@@ -14,6 +14,7 @@
 #include "compiler/translator/tree_ops/ExpandIntegerPowExpressions.h"
 #include "compiler/translator/tree_ops/PruneEmptyCases.h"
 #include "compiler/translator/tree_ops/RemoveDynamicIndexing.h"
+#include "compiler/translator/tree_ops/RewriteAtomicFunctionExpressions.h"
 #include "compiler/translator/tree_ops/RewriteElseBlocks.h"
 #include "compiler/translator/tree_ops/RewriteTexelFetchOffset.h"
 #include "compiler/translator/tree_ops/RewriteUnaryMinusOperatorInt.h"
@@ -32,8 +33,7 @@ namespace sh
 
 TranslatorHLSL::TranslatorHLSL(sh::GLenum type, ShShaderSpec spec, ShShaderOutput output)
     : TCompiler(type, spec, output)
-{
-}
+{}
 
 void TranslatorHLSL::translate(TIntermBlock *root,
                                ShCompileOptions compileOptions,
@@ -126,20 +126,39 @@ void TranslatorHLSL::translate(TIntermBlock *root,
         sh::RewriteUnaryMinusOperatorInt(root);
     }
 
+    if (getShaderVersion() >= 310)
+    {
+        sh::RewriteAtomicFunctionExpressions(root, &getSymbolTable(), getShaderVersion());
+    }
+
     sh::OutputHLSL outputHLSL(getShaderType(), getShaderVersion(), getExtensionBehavior(),
                               getSourcePath(), getOutputType(), numRenderTargets, getUniforms(),
-                              compileOptions, &getSymbolTable(), perfDiagnostics);
+                              compileOptions, getComputeShaderLocalSize(), &getSymbolTable(),
+                              perfDiagnostics);
 
     outputHLSL.output(root, getInfoSink().obj);
 
-    mUniformBlockRegisterMap   = outputHLSL.getUniformBlockRegisterMap();
-    mUniformRegisterMap        = outputHLSL.getUniformRegisterMap();
+    mShaderStorageBlockRegisterMap = outputHLSL.getShaderStorageBlockRegisterMap();
+    mUniformBlockRegisterMap       = outputHLSL.getUniformBlockRegisterMap();
+    mUniformRegisterMap            = outputHLSL.getUniformRegisterMap();
 }
 
 bool TranslatorHLSL::shouldFlattenPragmaStdglInvariantAll()
 {
     // Not necessary when translating to HLSL.
     return false;
+}
+
+bool TranslatorHLSL::hasShaderStorageBlock(const std::string &uniformBlockName) const
+{
+    return (mShaderStorageBlockRegisterMap.count(uniformBlockName) > 0);
+}
+
+unsigned int TranslatorHLSL::getShaderStorageBlockRegister(
+    const std::string &shaderStorageBlockName) const
+{
+    ASSERT(hasShaderStorageBlock(shaderStorageBlockName));
+    return mShaderStorageBlockRegisterMap.find(shaderStorageBlockName)->second;
 }
 
 bool TranslatorHLSL::hasUniformBlock(const std::string &uniformBlockName) const

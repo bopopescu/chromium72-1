@@ -4,7 +4,7 @@
 
 #include "chrome/browser/offline_pages/offline_page_request_handler.h"
 
-#include <string>
+#include <utility>
 
 #include "base/bind.h"
 #include "base/files/file_path.h"
@@ -13,8 +13,8 @@
 #include "base/metrics/histogram_functions.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/strings/string_number_conversions.h"
+#include "base/task/post_task.h"
 #include "base/task_runner_util.h"
-#include "base/task_scheduler/post_task.h"
 #include "base/threading/thread_task_runner_handle.h"
 #include "build/build_config.h"
 #include "chrome/browser/browser_process.h"
@@ -26,6 +26,7 @@
 #include "components/offline_pages/core/offline_page_model.h"
 #include "components/offline_pages/core/request_header/offline_page_header.h"
 #include "components/previews/core/previews_experiments.h"
+#include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/resource_request_info.h"
 #include "content/public/browser/web_contents.h"
@@ -299,8 +300,8 @@ void NotifyAvailableOfflinePagesOnUI(
 
   // Delegates to IO thread since OfflinePageRequestHandler should only be
   // accessed from IO thread.
-  content::BrowserThread::PostTask(
-      content::BrowserThread::IO, FROM_HERE,
+  base::PostTaskWithTraits(
+      FROM_HERE, {content::BrowserThread::IO},
       base::BindOnce(&NotifyAvailableOfflinePagesOnIO, job, candidates));
 }
 
@@ -415,10 +416,9 @@ void GetPagesToServeURL(
   }
 
   OfflinePageUtils::SelectPagesForURL(
-      web_contents->GetBrowserContext(), url, URLSearchMode::SEARCH_BY_ALL_URLS,
-      tab_id,
-      base::Bind(&SelectPagesForURLDone, url, offline_header, network_state,
-                 job, web_contents_getter));
+      web_contents->GetBrowserContext(), url, tab_id,
+      base::BindOnce(&SelectPagesForURLDone, url, offline_header, network_state,
+                     job, web_contents_getter));
 }
 
 // Do all the things needed to be done on UI thread after a trusted offline
@@ -494,6 +494,7 @@ OfflinePageRequestHandler::OfflinePageRequestHandler(
     Delegate* delegate)
     : url_(url),
       delegate_(delegate),
+      network_state_(NetworkState::CONNECTED_NETWORK),
       candidate_index_(0),
       has_range_header_(false),
       weak_ptr_factory_(this) {
@@ -505,8 +506,6 @@ OfflinePageRequestHandler::OfflinePageRequestHandler(
 
   if (extra_request_headers.HasHeader(net::HttpRequestHeaders::kRange))
     has_range_header_ = true;
-
-  network_state_ = GetNetworkState();
 }
 
 OfflinePageRequestHandler::~OfflinePageRequestHandler() {}
@@ -550,13 +549,14 @@ void OfflinePageRequestHandler::Start() {
 }
 
 void OfflinePageRequestHandler::StartAsync() {
+  network_state_ = GetNetworkState();
   if (network_state_ == NetworkState::CONNECTED_NETWORK) {
     delegate_->FallbackToDefault();
     return;
   }
 
-  content::BrowserThread::PostTask(
-      content::BrowserThread::UI, FROM_HERE,
+  base::PostTaskWithTraits(
+      FROM_HERE, {content::BrowserThread::UI},
       base::BindOnce(&GetPagesToServeURL, url_, offline_header_, network_state_,
                      delegate_->GetWebContentsGetter(),
                      delegate_->GetTabIdGetter(),
@@ -663,8 +663,8 @@ void OfflinePageRequestHandler::VisitTrustedOfflinePage() {
 
   delegate_->SetOfflinePageNavigationUIData(true /*is_offline_page*/);
 
-  content::BrowserThread::PostTask(
-      content::BrowserThread::UI, FROM_HERE,
+  base::PostTaskWithTraits(
+      FROM_HERE, {content::BrowserThread::UI},
       base::BindOnce(&VisitTrustedOfflinePageOnUI, offline_header_,
                      network_state_, delegate_->GetWebContentsGetter(),
                      GetCurrentOfflinePage(),
@@ -702,7 +702,15 @@ OfflinePageRequestHandler::GetAccessEntryPoint() const {
       return AccessEntryPoint::FILE_URL_INTENT;
     case OfflinePageHeader::Reason::CONTENT_URL_INTENT:
       return AccessEntryPoint::CONTENT_URL_INTENT;
-    default:
+    case OfflinePageHeader::Reason::PROGRESS_BAR:
+      return AccessEntryPoint::PROGRESS_BAR;
+    case OfflinePageHeader::Reason::SUGGESTION:
+      return AccessEntryPoint::NTP_SUGGESTIONS_OR_BOOKMARKS;
+    case OfflinePageHeader::Reason::NET_ERROR_SUGGESTION:
+      return AccessEntryPoint::NET_ERROR_PAGE;
+    case OfflinePageHeader::Reason::NONE:
+    case OfflinePageHeader::Reason::NET_ERROR:
+    case OfflinePageHeader::Reason::RELOAD:
       break;
   }
 
@@ -865,7 +873,7 @@ void OfflinePageRequestHandler::DidOpenForValidation(int result) {
   }
 
   if (!buffer_)
-    buffer_ = new net::IOBuffer(kMaxBufferSizeForValidation);
+    buffer_ = base::MakeRefCounted<net::IOBuffer>(kMaxBufferSizeForValidation);
 
   ReadForValidation();
 }
@@ -967,7 +975,7 @@ void OfflinePageRequestHandler::DidOpenForServing(int result) {
 }
 
 void OfflinePageRequestHandler::DidSeekForServing(int64_t result) {
-  DCHECK(result <= 0);
+  DCHECK_LE(result, 0);
 
   ReportSeekResult(result);
 
@@ -1023,9 +1031,13 @@ void OfflinePageRequestHandler::DidComputeActualDigestForServing(
   bool mismatch = actual_digest != GetCurrentOfflinePage().digest;
   ReportIntentDataChangedAfterValidation(mismatch);
   if (mismatch) {
-    delegate_->SetOfflinePageNavigationUIData(false /*is_offline_page*/);
-    content::BrowserThread::PostTask(
-        content::BrowserThread::UI, FROM_HERE,
+    // Note: Do not call delegate_->SetOfflinePageNavigationUIData to clear
+    // the offline bit since SetOfflinePageNavigationUIData is supposed to
+    // be called before the response is being received. Furthermore, there is
+    // no need to clear the offline bit since the error code should already
+    // indicate that the offline page is not loaded.
+    base::PostTaskWithTraits(
+        FROM_HERE, {content::BrowserThread::UI},
         base::Bind(&ClearOfflinePageData, delegate_->GetWebContentsGetter()));
     result = net::ERR_FAILED;
   }

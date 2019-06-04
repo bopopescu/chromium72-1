@@ -20,7 +20,7 @@ from idl_reader import IdlReader
 from utilities import (create_component_info_provider, write_file,
                        idl_filename_to_component)
 from v8_utilities import (binding_header_filename, v8_class_name,
-                          v8_class_name_or_partial, uncapitalize)
+                          v8_class_name_or_partial)
 
 # Make sure extension is .py, not .pyc or .pyo, so doesn't depend on caching
 MODULE_PYNAME = os.path.splitext(os.path.basename(__file__))[0] + '.py'
@@ -39,9 +39,9 @@ def get_install_functions(interfaces, feature_names):
         be installed on those interfaces.
     """
     return [
-        {'condition': 'OriginTrials::%sEnabled' % uncapitalize(feature_name),
+        {'condition': 'origin_trials::%sEnabled' % feature_name,
          'name': feature_name,
-         'install_method': 'install%s' % feature_name,
+         'install_method': 'Install%s' % feature_name,
          'interface_is_global': interface_info.is_global,
          'v8_class': interface_info.v8_class,
          'v8_class_or_partial': interface_info.v8_class_or_partial}
@@ -75,8 +75,7 @@ def read_idl_file(reader, idl_filename):
 
 
 def interface_is_global(interface):
-    return ('Global' in interface.extended_attributes or
-            'PrimaryGlobal' in interface.extended_attributes)
+    return 'Global' in interface.extended_attributes
 
 
 def origin_trial_features_info(info_provider, reader, idl_filenames, target_component):
@@ -162,6 +161,7 @@ def origin_trial_features_context(generator_name, feature_info):
         'core/origin_trials/origin_trials.h',
         'platform/bindings/origin_trial_features.h',
         'platform/bindings/script_state.h',
+        'platform/bindings/v8_per_context_data.h',
         # TODO(iclelland): Remove the need to explicitly include this; it is
         # here because the ContextFeatureSettings code needs it.
         'bindings/core/v8/v8_window.h',
@@ -182,7 +182,7 @@ def origin_trial_features_context(generator_name, feature_info):
     # functions to call, organized by interface.
     context['installers_by_feature'] = [
         {'name': feature_name,
-         'name_constant': 'OriginTrials::k%sTrialName' % feature_name,
+         'name_constant': 'origin_trials::k%sTrialName' % feature_name,
          'installers': get_install_functions(interfaces, [feature_name])}
         for feature_name, interfaces in types_for_feature.items()]
     context['installers_by_feature'].sort(key=lambda x: x['name'])

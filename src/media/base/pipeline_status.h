@@ -23,11 +23,7 @@ enum PipelineStatus {
   // Deprecated: PIPELINE_ERROR_URL_NOT_FOUND = 1,
   PIPELINE_ERROR_NETWORK = 2,
   PIPELINE_ERROR_DECODE = 3,
-#if defined(USE_NEVA_MEDIA)
-  PIPELINE_ERROR_DECRYPT = 4,
-#else
   // Deprecated: PIPELINE_ERROR_DECRYPT = 4,
-#endif
   PIPELINE_ERROR_ABORT = 5,
   PIPELINE_ERROR_INITIALIZATION_FAILED = 6,
   PIPELINE_ERROR_COULD_NOT_RENDER = 8,
@@ -58,15 +54,8 @@ enum PipelineStatus {
   // not exactly an 'error' per say.
   DEMUXER_ERROR_DETECTED_HLS = 22,
 
-#if defined(USE_NEVA_MEDIA)
-  // resource is released by policy action.
-  DECODER_ERROR_RESOURCE_IS_RELEASED = 23,
-
-  PIPELINE_STATUS_MAX = DECODER_ERROR_RESOURCE_IS_RELEASED,
-#else
   // Must be equal to the largest value ever logged.
   PIPELINE_STATUS_MAX = DEMUXER_ERROR_DETECTED_HLS,
-#endif
 };
 
 typedef base::Callback<void(PipelineStatus)> PipelineStatusCB;
@@ -107,7 +96,7 @@ MEDIA_EXPORT bool operator!=(const PipelineStatistics& first,
 
 // Used for updating pipeline statistics; the passed value should be a delta
 // of all attributes since the last update.
-typedef base::Callback<void(const PipelineStatistics&)> StatisticsCB;
+using StatisticsCB = base::RepeatingCallback<void(const PipelineStatistics&)>;
 
 }  // namespace media
 

@@ -39,15 +39,16 @@ import org.chromium.base.ContextUtils;
 import org.chromium.base.Log;
 import org.chromium.base.SysUtils;
 import org.chromium.base.VisibleForTesting;
-import org.chromium.blink.mojom.MediaSessionAction;
 import org.chromium.chrome.R;
 import org.chromium.chrome.browser.AppHooks;
+import org.chromium.chrome.browser.ChromeFeatureList;
 import org.chromium.chrome.browser.notifications.ChromeNotificationBuilder;
 import org.chromium.chrome.browser.notifications.NotificationBuilderFactory;
 import org.chromium.chrome.browser.notifications.NotificationConstants;
 import org.chromium.chrome.browser.notifications.NotificationUmaTracker;
 import org.chromium.chrome.browser.notifications.channels.ChannelDefinitions;
 import org.chromium.content_public.common.MediaMetadata;
+import org.chromium.media_session.mojom.MediaSessionAction;
 
 import java.util.ArrayList;
 import java.util.HashSet;
@@ -68,7 +69,7 @@ public class MediaNotificationManager {
     static final int MINIMAL_MEDIA_IMAGE_SIZE_PX = 114;
 
     @VisibleForTesting
-    static final int CUSTOM_MEDIA_SESSION_ACTION_STOP = MediaSessionAction.LAST + 1;
+    static final int CUSTOM_MEDIA_SESSION_ACTION_STOP = MediaSessionAction.MAX_VALUE + 1;
 
     // The media artwork image resolution on high-end devices.
     private static final int HIGH_IMAGE_SIZE_PX = 512;
@@ -286,10 +287,9 @@ public class MediaNotificationManager {
     // responsible for hiding it afterwards.
     private static void finishStartingForegroundService(ListenerService s) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return;
-
         ChromeNotificationBuilder builder =
                 NotificationBuilderFactory.createChromeNotificationBuilder(
-                        true /* preferCompat */, ChannelDefinitions.CHANNEL_ID_MEDIA);
+                        true /* preferCompat */, ChannelDefinitions.ChannelId.MEDIA);
         s.startForeground(s.getNotificationId(), builder.build());
     }
 
@@ -360,6 +360,8 @@ public class MediaNotificationManager {
 
         @VisibleForTesting
         void stopListenerService() {
+            // Call stopForeground to guarantee  Android unset the foreground bit.
+            stopForeground(true /* removeNotification */);
             stopSelf();
         }
 
@@ -368,7 +370,6 @@ public class MediaNotificationManager {
             if (intent == null) return false;
 
             MediaNotificationManager manager = getManager();
-
             if (manager == null || manager.mMediaNotificationInfo == null) return false;
 
             if (intent.getAction() == null) {
@@ -392,7 +393,6 @@ public class MediaNotificationManager {
                 KeyEvent event = (KeyEvent) intent.getParcelableExtra(Intent.EXTRA_KEY_EVENT);
                 if (event == null) return;
                 if (event.getAction() != KeyEvent.ACTION_DOWN) return;
-
                 switch (event.getKeyCode()) {
                     case KeyEvent.KEYCODE_MEDIA_PLAY:
                         manager.onPlay(
@@ -778,9 +778,7 @@ public class MediaNotificationManager {
         if (mService == service) return;
 
         mService = service;
-        updateNotification(true /*serviceStarting*/);
-        mNotificationUmaTracker.onNotificationShown(
-                NotificationUmaTracker.MEDIA, ChannelDefinitions.CHANNEL_ID_MEDIA);
+        updateNotification(true /*serviceStarting*/, true /*shouldLogNotification*/);
     }
 
     /**
@@ -841,7 +839,7 @@ public class MediaNotificationManager {
             updateNotificationBuilder();
             AppHooks.get().startForegroundService(createIntent());
         } else {
-            updateNotification(false);
+            updateNotification(false, false);
         }
     }
 
@@ -867,7 +865,8 @@ public class MediaNotificationManager {
             mMediaSession = null;
         }
         if (mService != null) {
-            getContext().stopService(createIntent());
+            mService.stopForeground(true /* removeNotification */);
+            mService.stopSelf();
         }
         mMediaNotificationInfo = null;
         mNotificationBuilder = null;
@@ -907,7 +906,7 @@ public class MediaNotificationManager {
     }
 
     @VisibleForTesting
-    void updateNotification(boolean serviceStarting) {
+    void updateNotification(boolean serviceStarting, boolean shouldLogNotification) {
         if (mService == null) return;
 
         if (mMediaNotificationInfo == null) {
@@ -942,12 +941,16 @@ public class MediaNotificationManager {
         } else if (!foregroundedService) {
             mService.startForeground(mMediaNotificationInfo.id, notification);
         }
+        if (shouldLogNotification) {
+            mNotificationUmaTracker.onNotificationShown(
+                    NotificationUmaTracker.SystemNotificationType.MEDIA, notification);
+        }
     }
 
     @VisibleForTesting
     void updateNotificationBuilder() {
         mNotificationBuilder = NotificationBuilderFactory.createChromeNotificationBuilder(
-                true /* preferCompat */, ChannelDefinitions.CHANNEL_ID_MEDIA);
+                true /* preferCompat */, ChannelDefinitions.ChannelId.MEDIA);
         setMediaStyleLayoutForNotificationBuilder(mNotificationBuilder);
 
         // TODO(zqzhang): It's weird that setShowWhen() doesn't work on K. Calling setWhen() to
@@ -1068,11 +1071,15 @@ public class MediaNotificationManager {
 
     private void setMediaStyleLayoutForNotificationBuilder(ChromeNotificationBuilder builder) {
         setMediaStyleNotificationText(builder);
+        // Notifications in incognito shouldn't show an icon to avoid leaking information.
+        boolean hideUserData = mMediaNotificationInfo.isPrivate
+                && ChromeFeatureList.isEnabled(
+                           ChromeFeatureList.HIDE_USER_DATA_FROM_INCOGNITO_NOTIFICATIONS);
         if (!mMediaNotificationInfo.supportsPlayPause()) {
             // Non-playback (Cast) notification will not use MediaStyle, so not
             // setting the large icon is fine.
             builder.setLargeIcon(null);
-        } else if (mMediaNotificationInfo.notificationLargeIcon != null) {
+        } else if (mMediaNotificationInfo.notificationLargeIcon != null && !hideUserData) {
             builder.setLargeIcon(mMediaNotificationInfo.notificationLargeIcon);
         } else if (!isRunningAtLeastN()) {
             if (mDefaultNotificationLargeIcon == null
@@ -1131,6 +1138,21 @@ public class MediaNotificationManager {
     }
 
     private void setMediaStyleNotificationText(ChromeNotificationBuilder builder) {
+        boolean hideUserData = mMediaNotificationInfo.isPrivate
+                && ChromeFeatureList.isEnabled(
+                           ChromeFeatureList.HIDE_USER_DATA_FROM_INCOGNITO_NOTIFICATIONS);
+        if (hideUserData) {
+            // Notifications in incognito shouldn't show what is playing to avoid leaking
+            // information.
+            builder.setContentTitle(
+                    getContext().getResources().getString(R.string.media_notification_incognito));
+            if (isRunningAtLeastN()) {
+                builder.setSubText(
+                        getContext().getResources().getString(R.string.notification_incognito_tab));
+            }
+            return;
+        }
+
         builder.setContentTitle(mMediaNotificationInfo.metadata.getTitle());
         String artistAndAlbumText = getArtistAndAlbumText(mMediaNotificationInfo.metadata);
         if (isRunningAtLeastN() || !artistAndAlbumText.isEmpty()) {

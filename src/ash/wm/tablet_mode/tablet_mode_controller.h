@@ -8,6 +8,7 @@
 #include <memory>
 
 #include "ash/ash_export.h"
+#include "ash/bluetooth_devices_observer.h"
 #include "ash/display/window_tree_host_manager.h"
 #include "ash/public/interfaces/tablet_mode.mojom.h"
 #include "ash/session/session_observer.h"
@@ -45,11 +46,9 @@ class Widget;
 
 namespace ash {
 
-class ScopedDisableInternalMouseAndKeyboard;
-class TabletModeControllerTest;
+class InternalInputDevicesEventBlocker;
 class TabletModeObserver;
 class TabletModeWindowManager;
-class TabletModeWindowManagerTest;
 
 // TabletModeController listens to accelerometer events and automatically
 // enters and exits tablet mode when the lid is opened beyond the triggering
@@ -67,9 +66,9 @@ class ASH_EXPORT TabletModeController
   // clamshell/tablet regardless of hardware orientation.
   // TODO(oshima): Move this to common place.
   enum class UiMode {
-    NONE = 0,
-    CLAMSHELL,
-    TABLETMODE,
+    kNone = 0,
+    kClamshell,
+    kTabletMode,
   };
 
   // Public so it can be used by unit tests.
@@ -78,16 +77,13 @@ class ASH_EXPORT TabletModeController
   TabletModeController();
   ~TabletModeController() override;
 
-  // True if it is possible to enter tablet mode in the current
-  // configuration. If this returns false, it should never be the case that
-  // tablet mode becomes enabled.
-  bool CanEnterTabletMode();
-
-  // TODO(jonross): Merge this with EnterTabletMode. Currently these are
+  // TODO(jonross): Merge this with AttemptEnterTabletMode. Currently these are
   // separate for several reasons: there is no internal display when running
   // unittests; the event blocker prevents keyboard input when running ChromeOS
   // on linux. http://crbug.com/362881
   // Turn the always tablet mode window manager on or off.
+  // TODO(xdai): Make it a private function. This function is not supposed to be
+  // called by an external caller except for tests.
   void EnableTabletModeWindowManager(bool should_enable);
 
   // Test if the TabletModeWindowManager is enabled or not.
@@ -107,6 +103,9 @@ class ASH_EXPORT TabletModeController
 
   // Checks if we should auto hide title bars for the |widget| in tablet mode.
   bool ShouldAutoHideTitlebars(views::Widget* widget);
+
+  // Whether the events from the internal mouse/keyboard are blocked.
+  bool AreInternalInputDeviceEventsBlocked() const;
 
   // Flushes the mojo message pipe to chrome.
   void FlushForTesting();
@@ -136,15 +135,13 @@ class ASH_EXPORT TabletModeController
   void SuspendImminent(power_manager::SuspendImminent::Reason reason) override;
   void SuspendDone(const base::TimeDelta& sleep_duration) override;
 
-  // ui::InputDeviceEventObserver::
+  // ui::InputDeviceEventObserver:
   void OnMouseDeviceConfigurationChanged() override;
+  void OnTouchpadDeviceConfigurationChanged() override;
   void OnDeviceListsComplete() override;
 
  private:
-  friend class TabletModeControllerTest;
-  friend class TabletModeWindowManagerTest;
-  friend class MultiUserWindowManagerChromeOSTest;
-  friend class VirtualKeyboardControllerTest;
+  friend class TabletModeControllerTestApi;
 
   // Used for recording metrics for intervals of time spent in
   // and out of TabletMode.
@@ -152,12 +149,6 @@ class ASH_EXPORT TabletModeController
     TABLET_MODE_INTERVAL_INACTIVE,
     TABLET_MODE_INTERVAL_ACTIVE
   };
-
-  // Set the TickClock. This is only to be used by tests that need to
-  // artificially and deterministically control the current time.
-  // This does not take the ownership of the tick_clock. |tick_clock| must
-  // outlive the TabletModeController instance.
-  void SetTickClockForTest(const base::TickClock* tick_clock);
 
   // Detect hinge rotation from base and lid accelerometers and automatically
   // start / stop tablet mode.
@@ -174,13 +165,18 @@ class ASH_EXPORT TabletModeController
   // a certain range of time before using unstable angle.
   bool CanUseUnstableLidAngle() const;
 
-  // Enables TabletModeWindowManager, and determines the current state of
-  // rotation lock.
-  void EnterTabletMode();
+  // True if it is possible to enter tablet mode in the current
+  // configuration. If this returns false, it should never be the case that
+  // tablet mode becomes enabled.
+  bool CanEnterTabletMode();
 
-  // Removes TabletModeWindowManager and resets the display rotation if there
-  // is no rotation lock.
-  void LeaveTabletMode(bool called_by_device_update);
+  // Attempts to enter tablet mode and updates the internal keyboard and
+  // touchpad.
+  void AttemptEnterTabletMode();
+
+  // Attempts to exit tablet mode and updates the internal keyboard and
+  // touchpad.
+  void AttemptLeaveTabletMode();
 
   // Record UMA stats tracking TabletMode usage. If |type| is
   // TABLET_MODE_INTERVAL_INACTIVE, then record that TabletMode has been
@@ -200,26 +196,45 @@ class ASH_EXPORT TabletModeController
   // mojom::TabletModeController:
   void SetClient(mojom::TabletModeClientPtr client) override;
 
-  // Checks whether we want to allow entering and exiting tablet mode. This
-  // returns false if the user set a flag for the software to behave in a
-  // certain way regardless of configuration.
-  bool AllowEnterExitTabletMode() const;
+  // Checks whether we want to allow change the current ui mode to tablet mode
+  // or clamshell mode. This returns false if the user set a flag for the
+  // software to behave in a certain way regardless of configuration.
+  bool AllowUiModeChange() const;
 
-  // Called when a mouse config is changed, or when a device list is
+  // Called when a pointing device config is changed, or when a device list is
   // sent from device manager. This will exit tablet mode if needed.
-  void HandleMouseAddedOrRemoved();
+  void HandlePointingDeviceAddedOrRemoved();
+
+  // Callback function of |bluetooth_devices_observer_|. Called when the
+  // bluetooth adapter or |device| changes.
+  void OnBluetoothAdapterOrDeviceChanged(device::BluetoothDevice* device);
+
+  // Update the internal mouse and keyboard event blocker |event_blocker_|
+  // according to current configuration. The internal input events should be
+  // blocked if 1) we are currently in tablet mode or 2) we are currently in
+  // laptop mode but the lid is flipped over (i.e., we are in laptop mode
+  // because of an external attached mouse).
+  void UpdateInternalInputDevicesEventBlocker();
+
+  // Returns true if the current lid angle can be detected and is in tablet mode
+  // angle range.
+  bool LidAngleIsInTabletModeRange();
 
   // The maximized window manager (if enabled).
   std::unique_ptr<TabletModeWindowManager> tablet_mode_window_manager_;
 
   // A helper class which when instantiated will block native events from the
   // internal keyboard and touchpad.
-  std::unique_ptr<ScopedDisableInternalMouseAndKeyboard> event_blocker_;
+  std::unique_ptr<InternalInputDevicesEventBlocker> event_blocker_;
 
   // Whether we have ever seen accelerometer data.
   bool have_seen_accelerometer_data_ = false;
 
-  // Whether both accelerometers are available.
+  // Whether the lid angle can be detected. If it's true, the device is a
+  // convertible device (both screen acclerometer and keyboard acclerometer are
+  // available, thus lid angle is detectable). And if it's false, the device is
+  // either a laptop device or a tablet device (only the screen acclerometer is
+  // available).
   bool can_detect_lid_angle_ = false;
 
   // Tracks time spent in (and out of) tablet mode.
@@ -247,14 +262,9 @@ class ASH_EXPORT TabletModeController
   // Last computed lid angle.
   double lid_angle_ = 0.0f;
 
-  // Tracks if the device has an external mouse. The device will
+  // Tracks if the device has an external pointing device. The device will
   // not enter tablet mode if this is true.
-  bool has_external_mouse_ = false;
-
-  // Tracks if the device would enter tablet mode, but does not because of a
-  // attached external mouse. If the external mouse is detached and this is
-  // true, we will enter tablet mode.
-  bool should_enter_tablet_mode_ = false;
+  bool has_external_pointing_device_ = false;
 
   // Tracks smoothed accelerometer data over time. This is done when the hinge
   // is approaching vertical to remove abrupt acceleration that can lead to
@@ -269,14 +279,17 @@ class ASH_EXPORT TabletModeController
   mojom::TabletModeClientPtr client_;
 
   // Tracks whether a flag is used to force ui mode.
-  UiMode force_ui_mode_ = UiMode::NONE;
+  UiMode force_ui_mode_ = UiMode::kNone;
 
   // Calls RecordLidAngle() periodically.
   base::RepeatingTimer record_lid_angle_timer_;
 
   ScopedSessionObserver scoped_session_observer_;
 
-  base::ObserverList<TabletModeObserver> tablet_mode_observers_;
+  // Observer to observe the bluetooth devices.
+  std::unique_ptr<BluetoothDevicesObserver> bluetooth_devices_observer_;
+
+  base::ObserverList<TabletModeObserver>::Unchecked tablet_mode_observers_;
 
   base::WeakPtrFactory<TabletModeController> weak_factory_;
 

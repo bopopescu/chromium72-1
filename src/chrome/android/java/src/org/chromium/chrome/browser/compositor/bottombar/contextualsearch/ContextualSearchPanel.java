@@ -8,15 +8,14 @@ import android.app.Activity;
 import android.content.Context;
 import android.graphics.Rect;
 import android.graphics.RectF;
-import android.os.Handler;
 
 import org.chromium.base.ActivityState;
 import org.chromium.base.ApiCompatibilityUtils;
 import org.chromium.base.VisibleForTesting;
 import org.chromium.chrome.R;
 import org.chromium.chrome.browser.compositor.LayerTitleCache;
-import org.chromium.chrome.browser.compositor.bottombar.OverlayContentProgressObserver;
 import org.chromium.chrome.browser.compositor.bottombar.OverlayPanel;
+import org.chromium.chrome.browser.compositor.bottombar.OverlayPanel.PanelProgressObserver;
 import org.chromium.chrome.browser.compositor.bottombar.OverlayPanelContent;
 import org.chromium.chrome.browser.compositor.bottombar.OverlayPanelManager;
 import org.chromium.chrome.browser.compositor.bottombar.OverlayPanelManager.PanelPriority;
@@ -28,7 +27,8 @@ import org.chromium.chrome.browser.contextualsearch.ContextualSearchManagementDe
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.util.FeatureUtilities;
 import org.chromium.chrome.browser.util.MathUtils;
-import org.chromium.ui.base.DeviceFormFactor;
+import org.chromium.chrome.browser.widget.ScrimView;
+import org.chromium.chrome.browser.widget.ScrimView.ScrimParams;
 import org.chromium.ui.base.LocalizationUtils;
 import org.chromium.ui.resources.ResourceManager;
 
@@ -36,12 +36,6 @@ import org.chromium.ui.resources.ResourceManager;
  * Controls the Contextual Search Panel.
  */
 public class ContextualSearchPanel extends OverlayPanel {
-
-    /**
-     * The delay after which the hide progress will be hidden.
-     */
-    private static final long HIDE_PROGRESS_BAR_DELAY = 1000 / 60 * 4;
-
     /** When using the Generic UX we never show the Arrow Icon */
     private static final float ARROW_ICON_OPACITY_GENERIC_UX = 0.f;
 
@@ -76,6 +70,18 @@ public class ContextualSearchPanel extends OverlayPanel {
      */
     private boolean mUseGenericSheetUx;
 
+    /**
+     * A ScrimView for adjusting the Status Bar's brightness when a scrim is present (when the panel
+     * is open).
+     */
+    private ScrimView mScrimView;
+
+    /**
+     * Params that configure our use of the ScrimView for adjusting the Status Bar's
+     * brightness when a scrim is present (when the panel is open).
+     */
+    private ScrimParams mScrimParams;
+
     // ============================================================================================
     // Constructor
     // ============================================================================================
@@ -103,46 +109,13 @@ public class ContextualSearchPanel extends OverlayPanel {
     @Override
     protected void initializeUiState() {
         mUseGenericSheetUx = mActivity.supportsContextualSuggestionsBottomSheet()
-                && FeatureUtilities.isContextualSuggestionsBottomSheetEnabled(
-                           DeviceFormFactor.isNonMultiDisplayContextOnTablet(mActivity));
+                && FeatureUtilities.areContextualSuggestionsEnabled(mActivity);
     }
 
     @Override
     public OverlayPanelContent createNewOverlayPanelContent() {
         return new OverlayPanelContent(mManagementDelegate.getOverlayContentDelegate(),
                 new PanelProgressObserver(), mActivity, getBarHeight());
-    }
-
-    /**
-     * Default loading animation for a panel.
-     */
-    public class PanelProgressObserver extends OverlayContentProgressObserver {
-
-        @Override
-        public void onProgressBarStarted() {
-            setProgressBarCompletion(0);
-            setProgressBarVisible(true);
-            requestUpdate();
-        }
-
-        @Override
-        public void onProgressBarUpdated(int progress) {
-            setProgressBarCompletion(progress);
-            requestUpdate();
-        }
-
-        @Override
-        public void onProgressBarFinished() {
-            // Hides the Progress Bar after a delay to make sure it is rendered for at least
-            // a few frames, otherwise its completion won't be visually noticeable.
-            new Handler().postDelayed(new Runnable() {
-                @Override
-                public void run() {
-                    setProgressBarVisible(false);
-                    requestUpdate();
-                }
-            }, HIDE_PROGRESS_BAR_DELAY);
-        }
     }
 
     // ============================================================================================
@@ -199,7 +172,7 @@ public class ContextualSearchPanel extends OverlayPanel {
     // ============================================================================================
 
     @Override
-    public void setPanelState(PanelState toState, StateChangeReason reason) {
+    public void setPanelState(PanelState toState, @StateChangeReason int reason) {
         PanelState fromState = getPanelState();
 
         mPanelMetrics.onPanelStateChanged(
@@ -262,9 +235,9 @@ public class ContextualSearchPanel extends OverlayPanel {
     // ============================================================================================
 
     @Override
-    protected void onClosed(StateChangeReason reason) {
+    protected void onClosed(@StateChangeReason int reason) {
         // Must be called before destroying Content because unseen visits should be removed from
-        // history, and if the Content gets destroyed there won't be a ContentViewCore to do that.
+        // history, and if the Content gets destroyed there won't be a Webcontents to do that.
         mManagementDelegate.onCloseContextualSearch(reason);
 
         setProgressBarCompletion(0);
@@ -274,6 +247,7 @@ public class ContextualSearchPanel extends OverlayPanel {
         super.onClosed(reason);
 
         if (mSceneLayer != null) mSceneLayer.hideTree();
+        if (mScrimView != null) mScrimView.hideScrim(false);
     }
 
     // ============================================================================================
@@ -364,7 +338,7 @@ public class ContextualSearchPanel extends OverlayPanel {
     }
 
     @Override
-    public PanelPriority getPriority() {
+    public @PanelPriority int getPriority() {
         return PanelPriority.HIGH;
     }
 
@@ -436,7 +410,7 @@ public class ContextualSearchPanel extends OverlayPanel {
     // ============================================================================================
 
     /**
-     * Notify the panel that the ContentViewCore was seen.
+     * Notify the panel that the content was seen.
      */
     public void setWasSearchContentViewSeen() {
         mPanelMetrics.setWasSearchContentViewSeen();
@@ -489,12 +463,22 @@ public class ContextualSearchPanel extends OverlayPanel {
     }
 
     /**
+     * Maximizes the Contextual Search Panel.
+     * @param reason The {@code StateChangeReason} behind the maximization.
+     */
+    @Override
+    public void maximizePanel(@StateChangeReason int reason) {
+        mShouldPromoteToTabAfterMaximizing = false;
+        super.maximizePanel(reason);
+    }
+
+    /**
      * Maximizes the Contextual Search Panel, then promotes it to a regular Tab.
      * @param reason The {@code StateChangeReason} behind the maximization and promotion to tab.
      */
-    public void maximizePanelThenPromoteToTab(StateChangeReason reason) {
+    public void maximizePanelThenPromoteToTab(@StateChangeReason int reason) {
         mShouldPromoteToTabAfterMaximizing = true;
-        maximizePanel(reason);
+        super.maximizePanel(reason);
     }
 
     /**
@@ -502,13 +486,13 @@ public class ContextualSearchPanel extends OverlayPanel {
      * @param reason The {@code StateChangeReason} behind the maximization and promotion to tab.
      * @param duration The animation duration in milliseconds.
      */
-    public void maximizePanelThenPromoteToTab(StateChangeReason reason, long duration) {
+    public void maximizePanelThenPromoteToTab(@StateChangeReason int reason, long duration) {
         mShouldPromoteToTabAfterMaximizing = true;
         animatePanelToState(PanelState.MAXIMIZED, reason, duration);
     }
 
     @Override
-    public void peekPanel(StateChangeReason reason) {
+    public void peekPanel(@StateChangeReason int reason) {
         super.peekPanel(reason);
 
         if (getPanelState() == PanelState.CLOSED || getPanelState() == PanelState.PEEKED) {
@@ -522,9 +506,14 @@ public class ContextualSearchPanel extends OverlayPanel {
     }
 
     @Override
-    public void closePanel(StateChangeReason reason, boolean animate) {
+    public void closePanel(@StateChangeReason int reason, boolean animate) {
         super.closePanel(reason, animate);
         mHasContentBeenTouched = false;
+    }
+
+    @Override
+    public void expandPanel(@StateChangeReason int reason) {
+        super.expandPanel(reason);
     }
 
     @Override
@@ -534,7 +523,7 @@ public class ContextualSearchPanel extends OverlayPanel {
     }
 
     @Override
-    public void requestPanelShow(StateChangeReason reason) {
+    public void requestPanelShow(@StateChangeReason int reason) {
         // If a re-tap is causing the panel to show when already shown, the superclass may ignore
         // that, but we want to be sure to capture search metrics for each tap.
         if (isShowing() && getPanelState() == PanelState.PEEKED) {
@@ -591,7 +580,7 @@ public class ContextualSearchPanel extends OverlayPanel {
      * @param searchTerm The string that represents the search term.
      * @param thumbnailUrl The URL of the thumbnail to display.
      * @param quickActionUri The URI for the intent associated with the quick action.
-     * @param quickActionCategory The {@link QuickActionCategory} for the quick action.
+     * @param quickActionCategory The {@code QuickActionCategory} for the quick action.
      */
     public void onSearchTermResolved(String searchTerm, String thumbnailUrl, String quickActionUri,
             int quickActionCategory) {
@@ -697,6 +686,34 @@ public class ContextualSearchPanel extends OverlayPanel {
         super.updatePanelForSizeChange();
 
         mManagementDelegate.onPanelResized();
+    }
+
+    @Override
+    protected void updateStatusBar() {
+        float maxBrightness = getMaxBasePageBrightness();
+        float minBrightness = getMinBasePageBrightness();
+        float basePageBrightness = getBasePageBrightness();
+        // Compute Status Bar alpha based on the base-page brightness range applied by the Overlay.
+        // TODO(donnd): Create a full-screen sized view and apply the black_alpha_65 color to get
+        // an exact match between the scrim and the status bar colors instead of adjusting the
+        // status bar alpha to approximate the native overlay brightness filter.
+        // Details in https://crbug.com/848922.
+        float statusBarAlpha =
+                (maxBrightness - basePageBrightness) / (maxBrightness - minBrightness);
+        if (statusBarAlpha == 0.0) {
+            if (mScrimView != null) mScrimView.hideScrim(false);
+            mScrimParams = null;
+            mScrimView = null;
+            return;
+
+        } else {
+            mScrimView = mManagementDelegate.getChromeActivity().getScrim();
+            if (mScrimParams == null) {
+                mScrimParams = new ScrimParams(null, false, true, 0, null);
+                mScrimView.showScrim(mScrimParams);
+            }
+            mScrimView.setViewAlpha(statusBarAlpha);
+        }
     }
 
     @Override

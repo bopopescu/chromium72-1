@@ -37,7 +37,6 @@
 #include "base/memory/scoped_refptr.h"
 #include "base/optional.h"
 #include "third_party/blink/renderer/bindings/core/v8/active_script_wrappable.h"
-#include "third_party/blink/renderer/bindings/core/v8/exception_state.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_promise.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_promise_property.h"
 #include "third_party/blink/renderer/core/animation/animation_effect.h"
@@ -45,12 +44,13 @@
 #include "third_party/blink/renderer/core/animation/compositor_animations.h"
 #include "third_party/blink/renderer/core/animation/document_timeline.h"
 #include "third_party/blink/renderer/core/core_export.h"
-#include "third_party/blink/renderer/core/css_property_names.h"
+#include "third_party/blink/renderer/core/css/css_property_names.h"
 #include "third_party/blink/renderer/core/dom/context_lifecycle_observer.h"
 #include "third_party/blink/renderer/core/dom/dom_exception.h"
 #include "third_party/blink/renderer/core/dom/events/event_target.h"
 #include "third_party/blink/renderer/platform/animation/compositor_animation_client.h"
 #include "third_party/blink/renderer/platform/animation/compositor_animation_delegate.h"
+#include "third_party/blink/renderer/platform/bindings/exception_state.h"
 #include "third_party/blink/renderer/platform/graphics/compositor_element_id.h"
 #include "third_party/blink/renderer/platform/heap/handle.h"
 
@@ -144,8 +144,8 @@ class CORE_EXPORT Animation final : public EventTargetWithInlineData,
   bool Limited() const { return Limited(CurrentTimeInternal()); }
   bool FinishedInternal() const { return finished_; }
 
-  DEFINE_ATTRIBUTE_EVENT_LISTENER(finish);
-  DEFINE_ATTRIBUTE_EVENT_LISTENER(cancel);
+  DEFINE_ATTRIBUTE_EVENT_LISTENER(finish, kFinish);
+  DEFINE_ATTRIBUTE_EVENT_LISTENER(cancel, kCancel);
 
   const AtomicString& InterfaceName() const override;
   ExecutionContext* GetExecutionContext() const override;
@@ -228,7 +228,7 @@ class CORE_EXPORT Animation final : public EventTargetWithInlineData,
   bool CompositorPendingForTesting() const { return compositor_pending_; }
 
  protected:
-  DispatchEventResult DispatchEventInternal(Event*) override;
+  DispatchEventResult DispatchEventInternal(Event&) override;
   void AddedEventListener(const AtomicString& event_type,
                           RegisteredEventListener&) override;
 
@@ -253,8 +253,8 @@ class CORE_EXPORT Animation final : public EventTargetWithInlineData,
   void BeginUpdatingState();
   void EndUpdatingState();
 
-  CompositorAnimations::FailureCode CheckCanStartAnimationOnCompositorInternal(
-      const base::Optional<CompositorElementIdSet>&) const;
+  CompositorAnimations::FailureCode CheckCanStartAnimationOnCompositorInternal()
+      const;
   void CreateCompositorAnimation();
   void DestroyCompositorAnimation();
   void AttachCompositorTimeline();

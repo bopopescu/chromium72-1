@@ -46,6 +46,11 @@ void ArcBridgeHostImpl::OnAppInstanceReady(mojom::AppInstancePtr app_ptr) {
   OnInstanceReady(arc_bridge_service_->app(), std::move(app_ptr));
 }
 
+void ArcBridgeHostImpl::OnAppfuseInstanceReady(
+    mojom::AppfuseInstancePtr appfuse_ptr) {
+  OnInstanceReady(arc_bridge_service_->appfuse(), std::move(appfuse_ptr));
+}
+
 void ArcBridgeHostImpl::OnAudioInstanceReady(
     mojom::AudioInstancePtr audio_ptr) {
   OnInstanceReady(arc_bridge_service_->audio(), std::move(audio_ptr));
@@ -94,6 +99,11 @@ void ArcBridgeHostImpl::OnCrashCollectorInstanceReady(
                   std::move(crash_collector_ptr));
 }
 
+void ArcBridgeHostImpl::OnDiskQuotaInstanceReady(
+    mojom::DiskQuotaInstancePtr disk_quota_ptr) {
+  OnInstanceReady(arc_bridge_service_->disk_quota(), std::move(disk_quota_ptr));
+}
+
 void ArcBridgeHostImpl::OnEnterpriseReportingInstanceReady(
     mojom::EnterpriseReportingInstancePtr enterprise_reporting_ptr) {
   OnInstanceReady(arc_bridge_service_->enterprise_reporting(),
@@ -133,6 +143,12 @@ void ArcBridgeHostImpl::OnLockScreenInstanceReady(
                   std::move(lock_screen_ptr));
 }
 
+void ArcBridgeHostImpl::OnMediaSessionInstanceReady(
+    mojom::MediaSessionInstancePtr media_session_ptr) {
+  OnInstanceReady(arc_bridge_service_->media_session(),
+                  std::move(media_session_ptr));
+}
+
 void ArcBridgeHostImpl::OnMetricsInstanceReady(
     mojom::MetricsInstancePtr metrics_ptr) {
   OnInstanceReady(arc_bridge_service_->metrics(), std::move(metrics_ptr));
@@ -169,6 +185,10 @@ void ArcBridgeHostImpl::OnOemCryptoInstanceReady(
   OnInstanceReady(arc_bridge_service_->oemcrypto(), std::move(oemcrypto_ptr));
 }
 
+void ArcBridgeHostImpl::OnPipInstanceReady(mojom::PipInstancePtr pip_ptr) {
+  OnInstanceReady(arc_bridge_service_->pip(), std::move(pip_ptr));
+}
+
 void ArcBridgeHostImpl::OnPolicyInstanceReady(
     mojom::PolicyInstancePtr policy_ptr) {
   OnInstanceReady(arc_bridge_service_->policy(), std::move(policy_ptr));
@@ -187,6 +207,11 @@ void ArcBridgeHostImpl::OnPrintInstanceReady(
 void ArcBridgeHostImpl::OnProcessInstanceReady(
     mojom::ProcessInstancePtr process_ptr) {
   OnInstanceReady(arc_bridge_service_->process(), std::move(process_ptr));
+}
+
+void ArcBridgeHostImpl::OnPropertyInstanceReady(
+    mojom::PropertyInstancePtr property_ptr) {
+  OnInstanceReady(arc_bridge_service_->property(), std::move(property_ptr));
 }
 
 void ArcBridgeHostImpl::OnRotationLockInstanceReady(

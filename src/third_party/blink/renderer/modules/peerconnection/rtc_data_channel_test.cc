@@ -11,11 +11,11 @@
 #include "base/memory/scoped_refptr.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/public/platform/web_rtc_data_channel_handler.h"
-#include "third_party/blink/renderer/bindings/core/v8/exception_state.h"
 #include "third_party/blink/renderer/core/dom/dom_exception.h"
 #include "third_party/blink/renderer/core/dom/events/event.h"
 #include "third_party/blink/renderer/core/testing/null_execution_context.h"
 #include "third_party/blink/renderer/core/typed_arrays/dom_array_buffer.h"
+#include "third_party/blink/renderer/platform/bindings/exception_state.h"
 #include "third_party/blink/renderer/platform/heap/heap.h"
 #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
 
@@ -64,7 +64,8 @@ class MockHandler final : public WebRTCDataChannelHandler {
     unsigned long old_buffered_amount = buffered_amount_;
     buffered_amount_ -= bytes;
     if (client_) {
-      client_->DidDecreaseBufferedAmount(old_buffered_amount);
+      client_->DidDecreaseBufferedAmount(
+          static_cast<unsigned>(old_buffered_amount));
     }
   }
 

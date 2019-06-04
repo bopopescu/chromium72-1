@@ -17,8 +17,8 @@
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/dom_storage_context.h"
-#include "content/public/browser/local_storage_usage_info.h"
 #include "content/public/browser/storage_partition.h"
+#include "content/public/browser/storage_usage_info.h"
 #include "net/cookies/cookie_util.h"
 #include "services/network/public/mojom/cookie_manager.mojom.h"
 #include "storage/browser/quota/special_storage_policy.h"
@@ -41,7 +41,7 @@ class SessionDataDeleter
   // session-only.
   void ClearSessionOnlyLocalStorage(
       content::StoragePartition* storage_partition,
-      const std::vector<content::LocalStorageUsageInfo>& usages);
+      const std::vector<content::StorageUsageInfo>& usages);
 
   // Takes the result of a CookieManager::GetAllCookies() method, and
   // initiates deletion of all cookies that are session only by the
@@ -104,8 +104,6 @@ void SessionDataDeleter::Run(content::StoragePartition* storage_partition) {
 
 void SessionDataDeleter::DeleteSessionOnlyOriginCookies(
     const std::vector<net::CanonicalCookie>& cookies) {
-  base::Time yesterday(base::Time::Now() - base::TimeDelta::FromDays(1));
-
   auto delete_cookie_predicate =
       storage_policy_->CreateDeleteCookieOnExitPredicate();
   DCHECK(delete_cookie_predicate);
@@ -114,17 +112,8 @@ void SessionDataDeleter::DeleteSessionOnlyOriginCookies(
     if (!delete_cookie_predicate.Run(cookie.Domain(), cookie.IsSecure())) {
       continue;
     }
-
-    // Delete a single cookie by setting its expiration time into the past.
-    cookie_manager_->SetCanonicalCookie(
-        net::CanonicalCookie(cookie.Name(), cookie.Value(), cookie.Domain(),
-                             cookie.Path(), cookie.CreationDate(), yesterday,
-                             cookie.LastAccessDate(), cookie.IsSecure(),
-                             cookie.IsHttpOnly(), cookie.SameSite(),
-                             cookie.Priority()),
-        true /* secure_source */, true /* modify_http_only */,
-        // Fire and forget
-        network::mojom::CookieManager::SetCanonicalCookieCallback());
+    // Fire and forget.
+    cookie_manager_->DeleteCanonicalCookie(cookie, base::DoNothing());
   }
 }
 
@@ -132,11 +121,11 @@ SessionDataDeleter::~SessionDataDeleter() {}
 
 void SessionDataDeleter::ClearSessionOnlyLocalStorage(
     content::StoragePartition* storage_partition,
-    const std::vector<content::LocalStorageUsageInfo>& usages) {
+    const std::vector<content::StorageUsageInfo>& usages) {
   DCHECK(storage_policy_.get());
   DCHECK(storage_policy_->HasSessionOnlyOrigins());
   for (size_t i = 0; i < usages.size(); ++i) {
-    const content::LocalStorageUsageInfo& usage = usages[i];
+    const content::StorageUsageInfo& usage = usages[i];
     if (!storage_policy_->IsStorageSessionOnly(usage.origin))
       continue;
     storage_partition->GetDOMStorageContext()->DeleteLocalStorage(

@@ -118,12 +118,6 @@ class MockHttpStream : public HttpStream {
   void GetSSLInfo(SSLInfo* ssl_info) override {}
   void GetSSLCertRequestInfo(SSLCertRequestInfo* cert_request_info) override {}
   bool GetRemoteEndpoint(IPEndPoint* endpoint) override { return false; }
-  Error GetTokenBindingSignature(crypto::ECPrivateKey* key,
-                                 TokenBindingType tb_type,
-                                 std::vector<uint8_t>* out) override {
-    ADD_FAILURE();
-    return ERR_NOT_IMPLEMENTED;
-  }
 
   // Mocked API
   int ReadResponseBody(IOBuffer* buf,
@@ -260,7 +254,7 @@ class HttpResponseBodyDrainerTest : public TestWithScopedTaskEnvironment {
   }
 
   std::unique_ptr<ProxyResolutionService> proxy_resolution_service_;
-  scoped_refptr<SSLConfigService> ssl_config_service_;
+  std::unique_ptr<SSLConfigService> ssl_config_service_;
   std::unique_ptr<HttpServerPropertiesImpl> http_server_properties_;
   MockCertVerifier cert_verifier_;
   TransportSecurityState transport_security_state_;

@@ -7,13 +7,13 @@
 
 #include <ostream>
 
-#include "net/third_party/quic/core/frames/quic_control_frame.h"
 #include "net/third_party/quic/core/quic_error_codes.h"
+#include "net/third_party/quic/core/quic_types.h"
 #include "net/third_party/quic/platform/api/quic_uint128.h"
 
-namespace net {
+namespace quic {
 
-struct QUIC_EXPORT_PRIVATE QuicNewConnectionIdFrame : public QuicControlFrame {
+struct QUIC_EXPORT_PRIVATE QuicNewConnectionIdFrame {
   QuicNewConnectionIdFrame();
   QuicNewConnectionIdFrame(QuicControlFrameId control_frame_id,
                            QuicConnectionId connection_id,
@@ -24,11 +24,14 @@ struct QUIC_EXPORT_PRIVATE QuicNewConnectionIdFrame : public QuicControlFrame {
       std::ostream& os,
       const QuicNewConnectionIdFrame& frame);
 
+  // A unique identifier of this control frame. 0 when this frame is received,
+  // and non-zero when sent.
+  QuicControlFrameId control_frame_id;
   QuicConnectionId connection_id;
   QuicConnectionIdSequenceNumber sequence_number;
   QuicUint128 stateless_reset_token;
 };
 
-}  // namespace net
+}  // namespace quic
 
 #endif  // NET_THIRD_PARTY_QUIC_CORE_FRAMES_QUIC_NEW_CONNECTION_ID_FRAME_H_

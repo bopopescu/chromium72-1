@@ -142,6 +142,13 @@ typedef uint32_t MojoInitializeFlags;
 // No flags.
 #define MOJO_INITIALIZE_FLAG_NONE ((MojoInitializeFlags)0)
 
+// The calling process will be initialized as the broker process for its IPC
+// network. Any connected graph of Mojo consumers must have exactly one broker
+// process. That process is always the first member of the network and it should
+// set this flag during initialization. Attempts to invite a broker process into
+// an existing network will always fail.
+#define MOJO_INITIALIZE_FLAG_AS_BROKER ((MojoInitializeFlags)1)
+
 // Options passed to |MojoInitialize()|.
 struct MOJO_ALIGNAS(8) MojoInitializeOptions {
   // The size of this structure, used for versioning.
@@ -149,7 +156,33 @@ struct MOJO_ALIGNAS(8) MojoInitializeOptions {
 
   // See |MojoInitializeFlags|.
   MojoInitializeFlags flags;
+
+  // Address and length of the UTF8-encoded path of a mojo_core shared library
+  // to load. If the |mojo_core_path| is null then |mojo_core_path_length| is
+  // ignored and Mojo will fall back first onto the |MOJO_CORE_LIBRARY_PATH|
+  // environment variable, and then onto the current working directory.
+  MOJO_POINTER_FIELD(const char*, mojo_core_path);
+  uint32_t mojo_core_path_length;
 };
+MOJO_STATIC_ASSERT(sizeof(MojoInitializeOptions) == 24,
+                   "MojoInitializeOptions has wrong size");
+
+// Flags passed to |MojoShutdown()| via |MojoShutdownOptions|.
+typedef uint32_t MojoShutdownFlags;
+
+// No flags.
+#define MOJO_SHUTDOWN_FLAG_NONE ((MojoShutdownFlags)0)
+
+// Options passed to |MojoShutdown()|.
+struct MOJO_ALIGNAS(8) MojoShutdownOptions {
+  // The size of this structure, used for versioning.
+  uint32_t struct_size;
+
+  // See |MojoShutdownFlags|.
+  MojoShutdownFlags flags;
+};
+MOJO_STATIC_ASSERT(sizeof(MojoShutdownOptions) == 8,
+                   "MojoShutdownOptions has wrong size");
 
 // |MojoHandleSignals|: Used to specify signals that can be watched for on a
 // handle (and which can be triggered), e.g., the ability to read or write to
@@ -168,6 +201,8 @@ struct MOJO_ALIGNAS(8) MojoInitializeOptions {
 //       execution context (e.g. in another process.) Note that this signal is
 //       maintained with best effort but may at any time be slightly out of sync
 //       with the actual location of the peer handle.
+//   |MOJO_HANDLE_SIGNAL_QUOTA_EXCEEDED| - One or more quotas set on the handle
+//       is currently exceeded.
 
 typedef uint32_t MojoHandleSignals;
 
@@ -178,6 +213,7 @@ const MojoHandleSignals MOJO_HANDLE_SIGNAL_WRITABLE = 1 << 1;
 const MojoHandleSignals MOJO_HANDLE_SIGNAL_PEER_CLOSED = 1 << 2;
 const MojoHandleSignals MOJO_HANDLE_SIGNAL_NEW_DATA_READABLE = 1 << 3;
 const MojoHandleSignals MOJO_HANDLE_SIGNAL_PEER_REMOTE = 1 << 4;
+const MojoHandleSignals MOJO_HANDLE_SIGNAL_QUOTA_EXCEEDED = 1 << 5;
 #else
 #define MOJO_HANDLE_SIGNAL_NONE ((MojoHandleSignals)0)
 #define MOJO_HANDLE_SIGNAL_READABLE ((MojoHandleSignals)1 << 0)
@@ -185,6 +221,7 @@ const MojoHandleSignals MOJO_HANDLE_SIGNAL_PEER_REMOTE = 1 << 4;
 #define MOJO_HANDLE_SIGNAL_PEER_CLOSED ((MojoHandleSignals)1 << 2)
 #define MOJO_HANDLE_SIGNAL_NEW_DATA_READABLE ((MojoHandleSignals)1 << 3);
 #define MOJO_HANDLE_SIGNAL_PEER_REMOTE ((MojoHandleSignals)1 << 4);
+#define MOJO_HANDLE_SIGNAL_QUOTA_EXCEEDED ((MojoHandleSignals)1 << 5);
 #endif
 
 // |MojoHandleSignalsState|: Returned by watch notification callbacks and

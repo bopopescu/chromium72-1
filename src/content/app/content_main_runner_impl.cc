@@ -39,9 +39,15 @@
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
 #include "base/trace_event/trace_event.h"
+#include "components/download/public/common/download_task_runner.h"
 #include "components/tracing/common/trace_startup.h"
 #include "content/app/mojo/mojo_init.h"
 #include "content/browser/browser_process_sub_thread.h"
+#include "content/browser/browser_thread_impl.h"
+#include "content/browser/scheduler/browser_task_executor.h"
+#include "content/browser/startup_data_impl.h"
+#include "content/browser/startup_helper.h"
+#include "content/common/content_constants_internal.h"
 #include "content/common/url_schemes.h"
 #include "content/public/app/content_main_delegate.h"
 #include "content/public/common/content_constants.h"
@@ -70,10 +76,12 @@
 #include <cstring>
 
 #include "base/trace_event/trace_event_etw_export_win.h"
+#include "ui/base/l10n/l10n_util_win.h"
 #include "ui/display/win/dpi.h"
 #elif defined(OS_MACOSX)
+#include "base/mac/mach_port_broker.h"
 #include "base/power_monitor/power_monitor_device_source.h"
-#include "content/browser/mach_broker_mac.h"
+#include "sandbox/mac/seatbelt_exec.h"
 #endif  // OS_WIN
 
 #if defined(OS_POSIX) || defined(OS_FUCHSIA)
@@ -96,13 +104,11 @@
 #if defined(OS_LINUX)
 #include "base/native_library.h"
 #include "base/rand_util.h"
-#include "content/common/font_config_ipc_linux.h"
 #include "services/service_manager/zygote/common/common_sandbox_support_linux.h"
 #include "third_party/blink/public/platform/web_font_render_style.h"
 #include "third_party/boringssl/src/include/openssl/crypto.h"
 #include "third_party/boringssl/src/include/openssl/rand.h"
-#include "third_party/skia/include/ports/SkFontConfigInterface.h"
-#include "third_party/skia/include/ports/SkFontMgr.h"
+#include "third_party/skia/include/core/SkFontMgr.h"
 #include "third_party/skia/include/ports/SkFontMgr_android.h"
 #include "third_party/webrtc_overrides/init_webrtc.h"  // nogncheck
 
@@ -119,6 +125,7 @@
 #endif  // OS_LINUX
 
 #if !defined(CHROME_MULTIPLE_DLL_BROWSER)
+#include "content/child/field_trial.h"
 #include "content/public/gpu/content_gpu_client.h"
 #include "content/public/renderer/content_renderer_client.h"
 #include "content/public/utility/content_utility_client.h"
@@ -147,12 +154,13 @@
 #include "services/service_manager/zygote/host/zygote_host_impl_linux.h"
 #endif
 
+#if defined(OS_ANDROID)
+#include "content/browser/android/browser_startup_controller.h"
+#endif
+
 namespace content {
 extern int GpuMain(const content::MainFunctionParams&);
 #if BUILDFLAG(ENABLE_PLUGINS)
-#if !defined(OS_LINUX)
-extern int PluginMain(const content::MainFunctionParams&);
-#endif
 extern int PpapiPluginMain(const MainFunctionParams&);
 extern int PpapiBrokerMain(const MainFunctionParams&);
 #endif
@@ -171,40 +179,6 @@ namespace {
 #define kV8SnapshotDataDescriptor kV8Snapshot32DataDescriptor
 #endif
 #endif
-
-// This sets up two singletons responsible for managing field trials. The
-// |field_trial_list| singleton lives on the stack and must outlive the Run()
-// method of the process.
-void InitializeFieldTrialAndFeatureList(
-    std::unique_ptr<base::FieldTrialList>* field_trial_list) {
-  const base::CommandLine& command_line =
-      *base::CommandLine::ForCurrentProcess();
-
-  // Initialize statistical testing infrastructure.  We set the entropy
-  // provider to nullptr to disallow non-browser processes from creating
-  // their own one-time randomized trials; they should be created in the
-  // browser process.
-  field_trial_list->reset(new base::FieldTrialList(nullptr));
-
-// Ensure any field trials in browser are reflected into the child
-// process.
-#if defined(OS_WIN)
-  base::FieldTrialList::CreateTrialsFromCommandLine(
-      command_line, switches::kFieldTrialHandle, -1);
-#elif defined(OS_POSIX) || defined(OS_FUCHSIA)
-  // On POSIX systems that use the zygote, we get the trials from a shared
-  // memory segment backed by an fd instead of the command line.
-  base::FieldTrialList::CreateTrialsFromCommandLine(
-      command_line, switches::kFieldTrialHandle,
-      service_manager::kFieldTrialDescriptor);
-#endif
-
-  std::unique_ptr<base::FeatureList> feature_list(new base::FeatureList);
-  base::FieldTrialList::CreateFeaturesFromCommandLine(
-      command_line, switches::kEnableFeatures, switches::kDisableFeatures,
-      feature_list.get());
-  base::FeatureList::SetInstance(std::move(feature_list));
-}
 
 #if defined(V8_USE_EXTERNAL_STARTUP_DATA)
 void LoadV8SnapshotFile() {
@@ -228,8 +202,9 @@ void LoadV8SnapshotFile() {
   base::ScopedFD fd =
       file_descriptor_store.MaybeTakeFD(snapshot_data_descriptor, &region);
   if (fd.is_valid()) {
-    gin::V8Initializer::LoadV8SnapshotFromFD(fd.get(), region.offset,
-                                             region.size, kSnapshotType);
+    base::File file(fd.release());
+    gin::V8Initializer::LoadV8SnapshotFromFile(std::move(file), &region,
+                                               kSnapshotType);
     return;
   }
 #endif  // OS_POSIX && !OS_MACOSX
@@ -247,8 +222,8 @@ void LoadV8NativesFile() {
   base::ScopedFD fd =
       file_descriptor_store.MaybeTakeFD(kV8NativesDataDescriptor, &region);
   if (fd.is_valid()) {
-    gin::V8Initializer::LoadV8NativesFromFD(fd.get(), region.offset,
-                                            region.size);
+    base::File file(fd.release());
+    gin::V8Initializer::LoadV8NativesFromFile(std::move(file), &region);
     return;
   }
 #endif  // OS_POSIX && !OS_MACOSX
@@ -311,10 +286,12 @@ void InitializeZygoteSandboxForBrowserProcess(
   // zygote are both disabled. It initializes the sandboxed process socket.
   SandboxHostLinux::GetInstance()->Init();
 
-  if (parsed_command_line.HasSwitch(switches::kNoZygote) &&
-      !parsed_command_line.HasSwitch(service_manager::switches::kNoSandbox)) {
-    LOG(ERROR) << "--no-sandbox should be used together with --no--zygote";
-    exit(EXIT_FAILURE);
+  if (parsed_command_line.HasSwitch(switches::kNoZygote)) {
+    if (!parsed_command_line.HasSwitch(service_manager::switches::kNoSandbox)) {
+      LOG(ERROR) << "--no-sandbox should be used together with --no--zygote";
+      exit(EXIT_FAILURE);
+    }
+    return;
   }
 
   // Tickle the zygote host so it forks now.
@@ -391,9 +368,6 @@ void PreSandboxInit() {
 #endif
   InitializeWebRtcModule();
 
-  SkFontConfigInterface::SetGlobal(
-      sk_make_sp<FontConfigIPC>(service_manager::GetSandboxFD()));
-
   // Set the android SkFontMgr for blink. We need to ensure this is done
   // before the sandbox is initialized to allow the font manager to access
   // font configuration files on disk.
@@ -432,27 +406,7 @@ void PreSandboxInit() {
 
 #endif  // OS_LINUX
 
-bool IsRootProcess() {
-  const base::CommandLine& command_line =
-      *base::CommandLine::ForCurrentProcess();
-  return command_line.GetSwitchValueASCII(switches::kProcessType).empty();
-}
-
 }  // namespace
-
-#if !defined(CHROME_MULTIPLE_DLL_CHILD)
-base::LazyInstance<ContentBrowserClient>::DestructorAtExit
-    g_empty_content_browser_client = LAZY_INSTANCE_INITIALIZER;
-#endif  //  !CHROME_MULTIPLE_DLL_CHILD
-
-#if !defined(CHROME_MULTIPLE_DLL_BROWSER)
-base::LazyInstance<ContentGpuClient>::DestructorAtExit
-    g_empty_content_gpu_client = LAZY_INSTANCE_INITIALIZER;
-base::LazyInstance<ContentRendererClient>::DestructorAtExit
-    g_empty_content_renderer_client = LAZY_INSTANCE_INITIALIZER;
-base::LazyInstance<ContentUtilityClient>::DestructorAtExit
-    g_empty_content_utility_client = LAZY_INSTANCE_INITIALIZER;
-#endif  // !CHROME_MULTIPLE_DLL_BROWSER
 
 class ContentClientInitializer {
  public:
@@ -460,41 +414,24 @@ class ContentClientInitializer {
                   ContentMainDelegate* delegate) {
     ContentClient* content_client = GetContentClient();
 #if !defined(CHROME_MULTIPLE_DLL_CHILD)
-    if (process_type.empty()) {
-      if (delegate)
-        content_client->browser_ = delegate->CreateContentBrowserClient();
-      if (!content_client->browser_)
-        content_client->browser_ = &g_empty_content_browser_client.Get();
-    }
+    if (process_type.empty())
+      content_client->browser_ = delegate->CreateContentBrowserClient();
 #endif  // !CHROME_MULTIPLE_DLL_CHILD
 
 #if !defined(CHROME_MULTIPLE_DLL_BROWSER)
     base::CommandLine* cmd = base::CommandLine::ForCurrentProcess();
     if (process_type == switches::kGpuProcess ||
         cmd->HasSwitch(switches::kSingleProcess) ||
-        (process_type.empty() && cmd->HasSwitch(switches::kInProcessGPU))) {
-      if (delegate)
-        content_client->gpu_ = delegate->CreateContentGpuClient();
-      if (!content_client->gpu_)
-        content_client->gpu_ = &g_empty_content_gpu_client.Get();
-    }
+        (process_type.empty() && cmd->HasSwitch(switches::kInProcessGPU)))
+      content_client->gpu_ = delegate->CreateContentGpuClient();
 
     if (process_type == switches::kRendererProcess ||
-        cmd->HasSwitch(switches::kSingleProcess)) {
-      if (delegate)
-        content_client->renderer_ = delegate->CreateContentRendererClient();
-      if (!content_client->renderer_)
-        content_client->renderer_ = &g_empty_content_renderer_client.Get();
-    }
+        cmd->HasSwitch(switches::kSingleProcess))
+      content_client->renderer_ = delegate->CreateContentRendererClient();
 
     if (process_type == switches::kUtilityProcess ||
-        cmd->HasSwitch(switches::kSingleProcess)) {
-      if (delegate)
-        content_client->utility_ = delegate->CreateContentUtilityClient();
-      // TODO(scottmg): http://crbug.com/237249 Should be in _child.
-      if (!content_client->utility_)
-        content_client->utility_ = &g_empty_content_utility_client.Get();
-    }
+        cmd->HasSwitch(switches::kSingleProcess))
+      content_client->utility_ = delegate->CreateContentUtilityClient();
 #endif  // !CHROME_MULTIPLE_DLL_BROWSER
   }
 };
@@ -522,10 +459,8 @@ int RunZygote(ContentMainDelegate* delegate) {
 
   std::vector<std::unique_ptr<service_manager::ZygoteForkDelegate>>
       zygote_fork_delegates;
-  if (delegate) {
-    delegate->ZygoteStarting(&zygote_fork_delegates);
-    media::InitializeMediaLibrary();
-  }
+  delegate->ZygoteStarting(&zygote_fork_delegates);
+  media::InitializeMediaLibrary();
 
 #if defined(OS_LINUX)
   PreSandboxInit();
@@ -536,8 +471,7 @@ int RunZygote(ContentMainDelegate* delegate) {
     return 1;
   }
 
-  if (delegate)
-    delegate->ZygoteForked();
+  delegate->ZygoteForked();
 
   // Zygote::HandleForkRequest may have reallocated the command
   // line so update it here with the new version.
@@ -554,8 +488,8 @@ int RunZygote(ContentMainDelegate* delegate) {
   MainFunctionParams main_params(command_line);
   main_params.zygote_child = true;
 
-  std::unique_ptr<base::FieldTrialList> field_trial_list;
-  InitializeFieldTrialAndFeatureList(&field_trial_list);
+  InitializeFieldTrialAndFeatureList();
+  delegate->PostFieldTrialInitialization();
 
   service_manager::SandboxType sandbox_type =
       service_manager::SandboxTypeFromCommandLine(command_line);
@@ -567,11 +501,7 @@ int RunZygote(ContentMainDelegate* delegate) {
       return kMainFunctions[i].function(main_params);
   }
 
-  if (delegate)
-    return delegate->RunProcess(process_type, main_params);
-
-  NOTREACHED() << "Unknown zygote process type: " << process_type;
-  return 1;
+  return delegate->RunProcess(process_type, main_params);
 }
 #endif  // BUILDFLAG(USE_ZYGOTE_HANDLE)
 
@@ -598,26 +528,20 @@ static void RegisterMainThreadFactories() {
 #if !defined(CHROME_MULTIPLE_DLL_CHILD)
 // Run the main function for browser process.
 // Returns the exit code for this process.
-int RunBrowserProcessMain(
-    const MainFunctionParams& main_function_params,
-    ContentMainDelegate* delegate,
-    std::unique_ptr<BrowserProcessSubThread> service_manager_thread) {
-  if (delegate) {
-    int exit_code = delegate->RunProcess("", main_function_params);
+int RunBrowserProcessMain(const MainFunctionParams& main_function_params,
+                          ContentMainDelegate* delegate) {
+  int exit_code = delegate->RunProcess("", main_function_params);
 #if defined(OS_ANDROID)
-    // In Android's browser process, the negative exit code doesn't mean the
-    // default behavior should be used as the UI message loop is managed by
-    // the Java and the browser process's default behavior is always
-    // overridden.
+  // In Android's browser process, the negative exit code doesn't mean the
+  // default behavior should be used as the UI message loop is managed by
+  // the Java and the browser process's default behavior is always
+  // overridden.
+  return exit_code;
+#else
+  if (exit_code >= 0)
     return exit_code;
+  return BrowserMain(main_function_params);
 #endif
-    if (exit_code >= 0)
-      return exit_code;
-  }
-  // GetServiceManagerTaskRunnerForEmbedderProcess() needs to be invoked before
-  // Run() for the browser process.
-  DCHECK(service_manager_thread);
-  return BrowserMain(main_function_params, std::move(service_manager_thread));
 }
 #endif  // !defined(CHROME_MULTIPLE_DLL_CHILD)
 
@@ -639,12 +563,9 @@ int RunOtherNamedProcessTypeMain(const std::string& process_type,
 
   for (size_t i = 0; i < base::size(kMainFunctions); ++i) {
     if (process_type == kMainFunctions[i].name) {
-      if (delegate) {
-        int exit_code =
-            delegate->RunProcess(process_type, main_function_params);
-        if (exit_code >= 0)
-          return exit_code;
-      }
+      int exit_code = delegate->RunProcess(process_type, main_function_params);
+      if (exit_code >= 0)
+        return exit_code;
       return kMainFunctions[i].function(main_function_params);
     }
   }
@@ -658,11 +579,7 @@ int RunOtherNamedProcessTypeMain(const std::string& process_type,
 #endif  // BUILDFLAG(USE_ZYGOTE_HANDLE)
 
   // If it's a process we don't know about, the embedder should know.
-  if (delegate)
-    return delegate->RunProcess(process_type, main_function_params);
-
-  NOTREACHED() << "Unknown process type: " << process_type;
-  return 1;
+  return delegate->RunProcess(process_type, main_function_params);
 }
 
 // static
@@ -682,11 +599,7 @@ ContentMainRunnerImpl::~ContentMainRunnerImpl() {
 }
 
 int ContentMainRunnerImpl::TerminateForFatalInitializationError() {
-  if (delegate_)
-    return delegate_->TerminateForFatalInitializationError();
-
-  CHECK(false);
-  return 0;
+  return delegate_->TerminateForFatalInitializationError();
 }
 
 int ContentMainRunnerImpl::Initialize(const ContentMainParams& params) {
@@ -747,17 +660,9 @@ int ContentMainRunnerImpl::Initialize(const ContentMainParams& params) {
 #endif  // !OS_ANDROID
 
   int exit_code = 0;
-  if (delegate_ && delegate_->BasicStartupComplete(&exit_code))
+  if (delegate_->BasicStartupComplete(&exit_code))
     return exit_code;
   completed_basic_startup_ = true;
-
-  // We will need to use data from resources.pak in later cl, so load the file
-  // now.
-  if (IsRootProcess()) {
-    ui::DataPack* data_pack = delegate_->LoadServiceManifestDataPack();
-    // TODO(ranj): Read manifest from this data pack.
-    ignore_result(data_pack);
-  }
 
   const base::CommandLine& command_line =
       *base::CommandLine::ForCurrentProcess();
@@ -808,14 +713,12 @@ int ContentMainRunnerImpl::Initialize(const ContentMainParams& params) {
     // It's important not to allocate the ports for processes which don't
     // register with the power monitor - see https://crbug.com/88867.
     if (process_type.empty() ||
-        (delegate_ &&
-         delegate_->ProcessRegistersWithSystemProcess(process_type))) {
+        delegate_->ProcessRegistersWithSystemProcess(process_type)) {
       base::PowerMonitorDeviceSource::AllocateSystemIOPorts();
     }
 
-    if (!process_type.empty() &&
-        (!delegate_ || delegate_->ShouldSendMachPort(process_type))) {
-      MachBroker::ChildSendTaskPortToParent();
+    if (!process_type.empty() && delegate_->ShouldSendMachPort(process_type)) {
+      base::MachPortBroker::ChildSendTaskPortToParent(kMachBootstrapName);
     }
 #endif
 
@@ -889,8 +792,7 @@ int ContentMainRunnerImpl::Initialize(const ContentMainParams& params) {
     }
 #endif  // !defined(OFFICIAL_BUILD)
 
-    if (delegate_)
-      delegate_->PreSandboxStartup();
+    delegate_->PreSandboxStartup();
 
 #if defined(OS_WIN)
     if (!InitializeSandbox(
@@ -901,11 +803,11 @@ int ContentMainRunnerImpl::Initialize(const ContentMainParams& params) {
     // Do not initialize the sandbox at this point if the V2
     // sandbox is enabled for the process type.
     bool v2_enabled = base::CommandLine::ForCurrentProcess()->HasSwitch(
-        switches::kEnableV2Sandbox);
+        sandbox::switches::kSeatbeltClientName);
 
     if (process_type == switches::kRendererProcess ||
         process_type == switches::kPpapiPluginProcess || v2_enabled ||
-        (delegate_ && delegate_->DelaySandboxInitialization(process_type))) {
+        delegate_->DelaySandboxInitialization(process_type)) {
       // On OS X the renderer sandbox needs to be initialized later in the
       // startup sequence in RendererMainPlatformDelegate::EnableSandbox().
     } else {
@@ -914,8 +816,7 @@ int ContentMainRunnerImpl::Initialize(const ContentMainParams& params) {
     }
 #endif
 
-    if (delegate_)
-      delegate_->SandboxInitialized(process_type);
+    delegate_->SandboxInitialized(process_type);
 
 #if BUILDFLAG(USE_ZYGOTE_HANDLE)
     if (process_type.empty()) {
@@ -931,7 +832,7 @@ int ContentMainRunnerImpl::Initialize(const ContentMainParams& params) {
     return -1;
 }
 
-int ContentMainRunnerImpl::Run() {
+int ContentMainRunnerImpl::Run(bool start_service_manager_only) {
   DCHECK(is_initialized_);
   DCHECK(!is_shutdown_);
   const base::CommandLine& command_line =
@@ -939,12 +840,15 @@ int ContentMainRunnerImpl::Run() {
   std::string process_type =
       command_line.GetSwitchValueASCII(switches::kProcessType);
 
+#if !defined(CHROME_MULTIPLE_DLL_BROWSER)
   // Run this logic on all child processes. Zygotes will run this at a later
   // point in time when the command line has been updated.
-  std::unique_ptr<base::FieldTrialList> field_trial_list;
   if (!process_type.empty() &&
-      process_type != service_manager::switches::kZygoteProcess)
-    InitializeFieldTrialAndFeatureList(&field_trial_list);
+      process_type != service_manager::switches::kZygoteProcess) {
+    InitializeFieldTrialAndFeatureList();
+    delegate_->PostFieldTrialInitialization();
+  }
+#endif
 
   MainFunctionParams main_params(command_line);
   main_params.ui_task = ui_task_;
@@ -958,22 +862,91 @@ int ContentMainRunnerImpl::Run() {
   RegisterMainThreadFactories();
 
 #if !defined(CHROME_MULTIPLE_DLL_CHILD)
-  // The thread used to start the ServiceManager is handed-off to
-  // BrowserMain() which may elect to promote it (e.g. to BrowserThread::IO).
-  if (process_type.empty()) {
-    return RunBrowserProcessMain(main_params, delegate_,
-                                 std::move(service_manager_thread_));
-  }
-#endif
+  if (process_type.empty())
+    return RunServiceManager(main_params, start_service_manager_only);
+#endif  // !defined(CHROME_MULTIPLE_DLL_CHILD)
 
   return RunOtherNamedProcessTypeMain(process_type, main_params, delegate_);
 }
+
+#if !defined(CHROME_MULTIPLE_DLL_CHILD)
+int ContentMainRunnerImpl::RunServiceManager(MainFunctionParams& main_params,
+                                             bool start_service_manager_only) {
+  if (is_browser_main_loop_started_)
+    return -1;
+
+  if (!service_manager_context_) {
+    if (delegate_->ShouldCreateFeatureList()) {
+      DCHECK(!field_trial_list_);
+      field_trial_list_ = SetUpFieldTrialsAndFeatureList();
+      delegate_->PostFieldTrialInitialization();
+    }
+
+    if (GetContentClient()->browser()->ShouldCreateTaskScheduler()) {
+      // Create and start the TaskScheduler early to allow upcoming code to use
+      // the post_task.h API.
+      base::TaskScheduler::Create("Browser");
+    }
+
+    delegate_->PreCreateMainMessageLoop();
+#if defined(OS_WIN)
+    if (l10n_util::GetLocaleOverrides().empty()) {
+      // Override the configured locale with the user's preferred UI language.
+      // Don't do this if the locale is already set, which is done by
+      // integration tests to ensure tests always run with the same locale.
+      l10n_util::OverrideLocaleWithUILanguageList();
+    }
+#endif
+
+    // Create a MessageLoop if one does not already exist for the current
+    // thread. This thread won't be promoted as BrowserThread::UI until
+    // BrowserMainLoop::MainMessageLoopStart().
+    if (!base::MessageLoopCurrentForUI::IsSet())
+      main_message_loop_ = std::make_unique<base::MessageLoopForUI>();
+
+    delegate_->PostEarlyInitialization(main_params.ui_task != nullptr);
+
+    if (GetContentClient()->browser()->ShouldCreateTaskScheduler()) {
+      // The FeatureList needs to create before starting the TaskScheduler.
+      StartBrowserTaskScheduler();
+    }
+
+    // Register the TaskExecutor for posting task to the BrowserThreads. It is
+    // incorrect to post to a BrowserThread before this point.
+    BrowserTaskExecutor::Create();
+
+    // The thread used to start the ServiceManager is handed-off to
+    // BrowserMain() which may elect to promote it (e.g. to BrowserThread::IO).
+    service_manager_thread_ = BrowserProcessSubThread::CreateIOThread();
+    service_manager_context_.reset(
+        new ServiceManagerContext(service_manager_thread_->task_runner()));
+    download::SetIOTaskRunner(service_manager_thread_->task_runner());
+#if defined(OS_ANDROID)
+    base::ThreadTaskRunnerHandle::Get()->PostTask(
+        FROM_HERE, base::BindOnce(&ServiceManagerStartupComplete));
+#endif
+  }
+
+  if (base::FeatureList::IsEnabled(
+          features::kAllowStartingServiceManagerOnly) &&
+      start_service_manager_only) {
+    return -1;
+  }
+
+  is_browser_main_loop_started_ = true;
+  startup_data_ = std::make_unique<StartupDataImpl>();
+  startup_data_->thread = std::move(service_manager_thread_);
+  startup_data_->service_manager_context = service_manager_context_.get();
+  main_params.startup_data = startup_data_.get();
+  return RunBrowserProcessMain(main_params, delegate_);
+}
+#endif  // !defined(CHROME_MULTIPLE_DLL_CHILD)
 
 void ContentMainRunnerImpl::Shutdown() {
   DCHECK(is_initialized_);
   DCHECK(!is_shutdown_);
 
-  if (completed_basic_startup_ && delegate_) {
+  if (completed_basic_startup_) {
     const base::CommandLine& command_line =
         *base::CommandLine::ForCurrentProcess();
     std::string process_type =
@@ -981,6 +954,11 @@ void ContentMainRunnerImpl::Shutdown() {
 
     delegate_->ProcessExiting(process_type);
   }
+
+#if !defined(CHROME_MULTIPLE_DLL_CHILD)
+  // The message loop needs to be destroyed before |exit_manager_|.
+  main_message_loop_.reset();
+#endif  // !defined(CHROME_MULTIPLE_DLL_CHILD)
 
 #if defined(OS_WIN)
 #ifdef _CRTDBG_MAP_ALLOC
@@ -993,14 +971,6 @@ void ContentMainRunnerImpl::Shutdown() {
   delegate_ = nullptr;
   is_shutdown_ = true;
 }
-
-#if !defined(CHROME_MULTIPLE_DLL_CHILD)
-scoped_refptr<base::SingleThreadTaskRunner>
-ContentMainRunnerImpl::GetServiceManagerTaskRunnerForEmbedderProcess() {
-  service_manager_thread_ = BrowserProcessSubThread::CreateIOThread();
-  return service_manager_thread_->task_runner();
-}
-#endif  // !defined(CHROME_MULTIPLE_DLL_CHILD)
 
 // static
 ContentMainRunner* ContentMainRunner::Create() {

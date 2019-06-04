@@ -49,7 +49,7 @@ class DefaultChannelIDStore::GetChannelIDTask
     : public DefaultChannelIDStore::Task {
  public:
   GetChannelIDTask(const std::string& server_identifier,
-                   const GetChannelIDCallback& callback);
+                   GetChannelIDCallback callback);
   ~GetChannelIDTask() override;
   void Run(DefaultChannelIDStore* store) override;
 
@@ -60,10 +60,8 @@ class DefaultChannelIDStore::GetChannelIDTask
 
 DefaultChannelIDStore::GetChannelIDTask::GetChannelIDTask(
     const std::string& server_identifier,
-    const GetChannelIDCallback& callback)
-    : server_identifier_(server_identifier),
-      callback_(callback) {
-}
+    GetChannelIDCallback callback)
+    : server_identifier_(server_identifier), callback_(std::move(callback)) {}
 
 DefaultChannelIDStore::GetChannelIDTask::~GetChannelIDTask() = default;
 
@@ -74,7 +72,7 @@ void DefaultChannelIDStore::GetChannelIDTask::Run(
                                 GetChannelIDCallback());
   DCHECK(err != ERR_IO_PENDING);
 
-  InvokeCallback(base::BindOnce(callback_, err, server_identifier_,
+  InvokeCallback(base::BindOnce(std::move(callback_), err, server_identifier_,
                                 std::move(key_result)));
 }
 
@@ -178,7 +176,7 @@ void DefaultChannelIDStore::DeleteForDomainsCreatedBetweenTask::Run(
 class DefaultChannelIDStore::GetAllChannelIDsTask
     : public DefaultChannelIDStore::Task {
  public:
-  explicit GetAllChannelIDsTask(const GetChannelIDListCallback& callback);
+  explicit GetAllChannelIDsTask(GetChannelIDListCallback callback);
   ~GetAllChannelIDsTask() override;
   void Run(DefaultChannelIDStore* store) override;
 
@@ -187,10 +185,9 @@ class DefaultChannelIDStore::GetAllChannelIDsTask
   GetChannelIDListCallback callback_;
 };
 
-DefaultChannelIDStore::GetAllChannelIDsTask::
-    GetAllChannelIDsTask(const GetChannelIDListCallback& callback)
-        : callback_(callback) {
-}
+DefaultChannelIDStore::GetAllChannelIDsTask::GetAllChannelIDsTask(
+    GetChannelIDListCallback callback)
+    : callback_(std::move(callback)) {}
 
 DefaultChannelIDStore::GetAllChannelIDsTask::~GetAllChannelIDsTask() = default;
 
@@ -215,17 +212,17 @@ DefaultChannelIDStore::DefaultChannelIDStore(
 int DefaultChannelIDStore::GetChannelID(
     const std::string& server_identifier,
     std::unique_ptr<crypto::ECPrivateKey>* key_result,
-    const GetChannelIDCallback& callback) {
+    GetChannelIDCallback callback) {
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
   InitIfNecessary();
 
   if (!loaded_) {
     EnqueueTask(std::unique_ptr<Task>(
-        new GetChannelIDTask(server_identifier, callback)));
+        new GetChannelIDTask(server_identifier, std::move(callback))));
     return ERR_IO_PENDING;
   }
 
-  ChannelIDMap::iterator it = channel_ids_.find(server_identifier);
+  auto it = channel_ids_.find(server_identifier);
 
   if (it == channel_ids_.end())
     return ERR_FILE_NOT_FOUND;
@@ -264,8 +261,9 @@ void DefaultChannelIDStore::DeleteAll(base::OnceClosure callback) {
 }
 
 void DefaultChannelIDStore::GetAllChannelIDs(
-    const GetChannelIDListCallback& callback) {
-  RunOrEnqueueTask(std::unique_ptr<Task>(new GetAllChannelIDsTask(callback)));
+    GetChannelIDListCallback callback) {
+  RunOrEnqueueTask(
+      std::unique_ptr<Task>(new GetAllChannelIDsTask(std::move(callback))));
 }
 
 void DefaultChannelIDStore::Flush() {
@@ -293,8 +291,7 @@ DefaultChannelIDStore::~DefaultChannelIDStore() {
 void DefaultChannelIDStore::DeleteAllInMemory() {
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
 
-  for (ChannelIDMap::iterator it = channel_ids_.begin();
-       it != channel_ids_.end(); ++it) {
+  for (auto it = channel_ids_.begin(); it != channel_ids_.end(); ++it) {
     delete it->second;
   }
   channel_ids_.clear();
@@ -312,9 +309,7 @@ void DefaultChannelIDStore::InitStore() {
 void DefaultChannelIDStore::OnLoaded(
     std::unique_ptr<std::vector<std::unique_ptr<ChannelID>>> channel_ids) {
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
-  for (std::vector<std::unique_ptr<ChannelID>>::iterator it =
-           channel_ids->begin();
-       it != channel_ids->end(); ++it) {
+  for (auto it = channel_ids->begin(); it != channel_ids->end(); ++it) {
     DCHECK(channel_ids_.find((*it)->server_identifier()) ==
            channel_ids_.end());
     std::string ident = (*it)->server_identifier();
@@ -351,9 +346,8 @@ void DefaultChannelIDStore::SyncDeleteForDomainsCreatedBetween(
     base::Time delete_end) {
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
   DCHECK(loaded_);
-  for (ChannelIDMap::iterator it = channel_ids_.begin();
-       it != channel_ids_.end();) {
-    ChannelIDMap::iterator cur = it;
+  for (auto it = channel_ids_.begin(); it != channel_ids_.end();) {
+    auto cur = it;
     ++it;
     ChannelID* channel_id = cur->second;
 
@@ -373,8 +367,7 @@ void DefaultChannelIDStore::SyncGetAllChannelIDs(
     ChannelIDList* channel_id_list) {
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
   DCHECK(loaded_);
-  for (ChannelIDMap::iterator it = channel_ids_.begin();
-       it != channel_ids_.end(); ++it)
+  for (auto it = channel_ids_.begin(); it != channel_ids_.end(); ++it)
     channel_id_list->push_back(*it->second);
 }
 
@@ -401,7 +394,7 @@ void DefaultChannelIDStore::InternalDeleteChannelID(
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
   DCHECK(loaded_);
 
-  ChannelIDMap::iterator it = channel_ids_.find(server_identifier);
+  auto it = channel_ids_.find(server_identifier);
   if (it == channel_ids_.end())
     return;  // There is nothing to delete.
 

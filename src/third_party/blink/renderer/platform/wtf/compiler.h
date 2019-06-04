@@ -29,24 +29,7 @@
 #include "base/compiler_specific.h"
 #include "build/build_config.h"
 
-#if defined(__GNUC__)
-#define GCC_VERSION \
-  (__GNUC__ * 10000 + __GNUC_MINOR__ * 100 + __GNUC_PATCHLEVEL__)
-#define GCC_VERSION_AT_LEAST(major, minor, patch) \
-  (GCC_VERSION >= (major * 10000 + minor * 100 + patch))
-#else
-/* Define this for !GCC compilers, just so we can write things like
- * GCC_VERSION_AT_LEAST(4, 1, 0). */
-#define GCC_VERSION_AT_LEAST(major, minor, patch) 0
-#endif
-
 /* ==== Compiler features ==== */
-
-/* NEVER_INLINE */
-
-// TODO(palmer): Remove this and update callers to use NOINLINE from Chromium
-// base. https://bugs.chromium.org/p/chromium/issues/detail?id=632441
-#define NEVER_INLINE NOINLINE
 
 /* OBJC_CLASS */
 
@@ -58,24 +41,22 @@
 #endif
 #endif
 
-/* WTF_PRETTY_FUNCTION */
-
-#if defined(COMPILER_GCC)
-#define WTF_PRETTY_FUNCTION __PRETTY_FUNCTION__
-#elif defined(COMPILER_MSVC)
-#define WTF_PRETTY_FUNCTION __FUNCSIG__
-#else
-#define WTF_PRETTY_FUNCTION __func__
-#endif
-
 /* NO_SANITIZE_UNRELATED_CAST - Disable runtime checks related to casts between
  * unrelated objects (-fsanitize=cfi-unrelated-cast or -fsanitize=vptr). */
 
 #if defined(__clang__)
 #define NO_SANITIZE_UNRELATED_CAST \
   __attribute__((no_sanitize("cfi-unrelated-cast", "vptr")))
+#define NO_SANITIZE_CFI_ICALL __attribute__((no_sanitize("cfi-icall")))
 #else
 #define NO_SANITIZE_UNRELATED_CAST
+#define NO_SANITIZE_CFI_ICALL
+#endif
+
+#if defined(COMPILER_MSVC)
+#define WTF_NOINLINE __declspec(noinline)
+#else
+#define WTF_NOINLINE __attribute__((noinline))
 #endif
 
 #endif /* WTF_Compiler_h */

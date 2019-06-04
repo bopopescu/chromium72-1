@@ -39,7 +39,10 @@ void DtlsSrtpTransport::SetDtlsTransports(
   // When using DTLS-SRTP, we must reset the SrtpTransport every time the
   // DtlsTransport changes and wait until the DTLS handshake is complete to set
   // the newly negotiated parameters.
-  if (IsSrtpActive() && rtp_dtls_transport != rtp_dtls_transport_) {
+  // If |active_reset_srtp_params_| is true, intentionally reset the SRTP
+  // parameter even though the DtlsTransport may not change.
+  if (IsSrtpActive() && (rtp_dtls_transport != rtp_dtls_transport_ ||
+                         active_reset_srtp_params_)) {
     ResetParams();
   }
 
@@ -297,6 +300,8 @@ void DtlsSrtpTransport::OnDtlsState(cricket::DtlsTransportInternal* transport,
                                     cricket::DtlsTransportState state) {
   RTC_DCHECK(transport == rtp_dtls_transport_ ||
              transport == rtcp_dtls_transport_);
+
+  SignalDtlsStateChange();
 
   if (state != cricket::DTLS_TRANSPORT_CONNECTED) {
     ResetParams();

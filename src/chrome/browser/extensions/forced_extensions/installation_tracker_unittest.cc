@@ -4,14 +4,16 @@
 
 #include "chrome/browser/extensions/forced_extensions/installation_tracker.h"
 
-#include "base/test/histogram_tester.h"
+#include "base/test/metrics/histogram_tester.h"
 #include "base/timer/mock_timer.h"
 #include "base/values.h"
+#include "chrome/browser/extensions/forced_extensions/installation_failures.h"
 #include "chrome/test/base/testing_profile.h"
 #include "components/prefs/pref_service.h"
 #include "components/sync_preferences/testing_pref_service_syncable.h"
 #include "content/public/test/test_browser_thread_bundle.h"
 #include "extensions/browser/extension_registry.h"
+#include "extensions/browser/install/crx_install_error.h"
 #include "extensions/browser/pref_names.h"
 #include "extensions/common/extension.h"
 #include "extensions/common/extension_builder.h"
@@ -27,6 +29,11 @@ constexpr char kExtensionUrl2[] = "url2";
 
 constexpr char kLoadTimeStats[] = "Extensions.ForceInstalledLoadTime";
 constexpr char kTimedOutStats[] = "Extensions.ForceInstalledTimedOutCount";
+constexpr char kTimedOutNotInstalledStats[] =
+    "Extensions.ForceInstalledTimedOutAndNotInstalledCount";
+constexpr char kFailureReasons[] = "Extensions.ForceInstalledFailureReason";
+constexpr char kFailureCrxInstallErrorStats[] =
+    "Extensions.ForceInstalledFailureCrxInstallError";
 }  // namespace
 
 namespace extensions {
@@ -36,9 +43,9 @@ class ForcedExtensionsInstallationTrackerTest : public testing::Test {
   ForcedExtensionsInstallationTrackerTest()
       : prefs_(profile_.GetTestingPrefService()),
         registry_(ExtensionRegistry::Get(&profile_)) {
-    auto fake_timer = std::make_unique<base::MockTimer>(true, false);
+    auto fake_timer = std::make_unique<base::MockOneShotTimer>();
     fake_timer_ = fake_timer.get();
-    tracker_ = std::make_unique<InstallationTracker>(registry_, prefs_,
+    tracker_ = std::make_unique<InstallationTracker>(registry_, &profile_,
                                                      std::move(fake_timer));
   }
 
@@ -57,7 +64,7 @@ class ForcedExtensionsInstallationTrackerTest : public testing::Test {
   ExtensionRegistry* registry_;
   base::HistogramTester histogram_tester_;
 
-  base::MockTimer* fake_timer_;
+  base::MockOneShotTimer* fake_timer_;
   std::unique_ptr<InstallationTracker> tracker_;
 
   DISALLOW_COPY_AND_ASSIGN(ForcedExtensionsInstallationTrackerTest);
@@ -74,15 +81,49 @@ TEST_F(ForcedExtensionsInstallationTrackerTest, ExtensionsInstalled) {
   tracker_->OnExtensionLoaded(&profile_, ext2.get());
   histogram_tester_.ExpectTotalCount(kLoadTimeStats, 1);
   histogram_tester_.ExpectTotalCount(kTimedOutStats, 0);
+  histogram_tester_.ExpectTotalCount(kTimedOutNotInstalledStats, 0);
+  histogram_tester_.ExpectTotalCount(kFailureReasons, 0);
+  histogram_tester_.ExpectTotalCount(kFailureCrxInstallErrorStats, 0);
 }
 
 TEST_F(ForcedExtensionsInstallationTrackerTest,
        ExtensionsInstallationTimedOut) {
   SetupForceList();
+  auto ext1 = ExtensionBuilder(kExtensionName1).SetID(kExtensionId1).Build();
+  registry_->AddEnabled(ext1.get());
   EXPECT_TRUE(fake_timer_->IsRunning());
   fake_timer_->Fire();
   histogram_tester_.ExpectTotalCount(kLoadTimeStats, 0);
   histogram_tester_.ExpectUniqueSample(kTimedOutStats, 2, 1);
+  histogram_tester_.ExpectUniqueSample(kTimedOutNotInstalledStats, 1, 1);
+  histogram_tester_.ExpectTotalCount(kFailureReasons, 1);
+  histogram_tester_.ExpectUniqueSample(
+      kFailureReasons, InstallationFailures::Reason::UNKNOWN, 1);
+  histogram_tester_.ExpectTotalCount(kFailureCrxInstallErrorStats, 0);
+}
+
+TEST_F(ForcedExtensionsInstallationTrackerTest,
+       ExtensionsInstallationTimedOutDifferentReasons) {
+  SetupForceList();
+  InstallationFailures::ReportFailure(&profile_, kExtensionId1,
+                                      InstallationFailures::Reason::INVALID_ID);
+  InstallationFailures::ReportCrxInstallError(
+      &profile_, kExtensionId2,
+      InstallationFailures::Reason::CRX_INSTALL_ERROR_OTHER,
+      CrxInstallErrorDetail::UNEXPECTED_ID);
+  EXPECT_TRUE(fake_timer_->IsRunning());
+  fake_timer_->Fire();
+  histogram_tester_.ExpectTotalCount(kLoadTimeStats, 0);
+  histogram_tester_.ExpectUniqueSample(kTimedOutStats, 2, 1);
+  histogram_tester_.ExpectUniqueSample(kTimedOutNotInstalledStats, 2, 1);
+  histogram_tester_.ExpectTotalCount(kFailureReasons, 2);
+  histogram_tester_.ExpectBucketCount(
+      kFailureReasons, InstallationFailures::Reason::INVALID_ID, 1);
+  histogram_tester_.ExpectBucketCount(
+      kFailureReasons, InstallationFailures::Reason::CRX_INSTALL_ERROR_OTHER,
+      1);
+  histogram_tester_.ExpectUniqueSample(kFailureCrxInstallErrorStats,
+                                       CrxInstallErrorDetail::UNEXPECTED_ID, 1);
 }
 
 TEST_F(ForcedExtensionsInstallationTrackerTest, NoExtensionsConfigured) {
@@ -90,6 +131,9 @@ TEST_F(ForcedExtensionsInstallationTrackerTest, NoExtensionsConfigured) {
   fake_timer_->Fire();
   histogram_tester_.ExpectTotalCount(kLoadTimeStats, 0);
   histogram_tester_.ExpectTotalCount(kTimedOutStats, 0);
+  histogram_tester_.ExpectTotalCount(kTimedOutNotInstalledStats, 0);
+  histogram_tester_.ExpectTotalCount(kFailureReasons, 0);
+  histogram_tester_.ExpectTotalCount(kFailureCrxInstallErrorStats, 0);
 }
 
 }  // namespace extensions

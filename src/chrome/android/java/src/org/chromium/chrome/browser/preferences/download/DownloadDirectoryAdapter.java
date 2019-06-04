@@ -7,20 +7,19 @@ package org.chromium.chrome.browser.preferences.download;
 import android.content.Context;
 import android.support.annotation.NonNull;
 import android.support.annotation.Nullable;
-import android.support.v4.widget.TextViewCompat;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.ViewGroup.LayoutParams;
 import android.widget.ArrayAdapter;
+import android.widget.ImageView;
 import android.widget.TextView;
 
-import org.chromium.chrome.R;
 import org.chromium.chrome.browser.download.DirectoryOption;
 import org.chromium.chrome.browser.download.DownloadDirectoryProvider;
 import org.chromium.chrome.browser.download.DownloadUtils;
 import org.chromium.chrome.browser.preferences.PrefServiceBridge;
-import org.chromium.chrome.browser.widget.TintedImageView;
+import org.chromium.chrome.download.R;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -81,11 +80,9 @@ public class DownloadDirectoryAdapter extends ArrayAdapter<Object> {
             return mErrorOptions.get(position);
         }
 
-        if (position < mCanonicalOptions.size()) {
-            return mCanonicalOptions.get(position);
-        } else {
-            return mAdditionalOptions.get(position - mCanonicalOptions.size());
-        }
+        return position < mCanonicalOptions.size()
+                ? mCanonicalOptions.get(position)
+                : mAdditionalOptions.get(position - mCanonicalOptions.size());
     }
 
     @Override
@@ -96,10 +93,9 @@ public class DownloadDirectoryAdapter extends ArrayAdapter<Object> {
     @NonNull
     @Override
     public View getView(int position, @Nullable View convertView, @NonNull ViewGroup parent) {
-        View view = convertView;
-        if (view == null) {
-            view = mLayoutInflater.inflate(R.layout.download_location_spinner_item, null);
-        }
+        View view = convertView != null
+                ? convertView
+                : mLayoutInflater.inflate(R.layout.download_location_spinner_item, null);
 
         view.setTag(position);
 
@@ -121,10 +117,9 @@ public class DownloadDirectoryAdapter extends ArrayAdapter<Object> {
     @Override
     public View getDropDownView(
             int position, @Nullable View convertView, @NonNull ViewGroup parent) {
-        View view = convertView;
-        if (view == null) {
-            view = mLayoutInflater.inflate(R.layout.download_location_spinner_dropdown_item, null);
-        }
+        View view = convertView != null
+                ? convertView
+                : mLayoutInflater.inflate(R.layout.download_location_spinner_dropdown_item, null);
 
         view.setTag(position);
 
@@ -132,17 +127,16 @@ public class DownloadDirectoryAdapter extends ArrayAdapter<Object> {
         if (directoryOption == null) return view;
 
         TextView titleText = (TextView) view.findViewById(R.id.title);
-        titleText.setText(directoryOption.name);
-
         TextView summaryText = (TextView) view.findViewById(R.id.description);
-        if (isEnabled(position)) {
-            TextViewCompat.setTextAppearance(titleText, R.style.BlackTitle1);
-            TextViewCompat.setTextAppearance(summaryText, R.style.BlackBody);
+        boolean enabled = isEnabled(position);
+
+        titleText.setText(directoryOption.name);
+        titleText.setEnabled(enabled);
+        summaryText.setEnabled(enabled);
+        if (enabled) {
             summaryText.setText(DownloadUtils.getStringForAvailableBytes(
                     mContext, directoryOption.availableSpace));
         } else {
-            TextViewCompat.setTextAppearance(titleText, R.style.BlackDisabledText1);
-            TextViewCompat.setTextAppearance(summaryText, R.style.BlackDisabledText3);
             if (mErrorOptions.isEmpty()) {
                 summaryText.setText(mContext.getText(R.string.download_location_not_enough_space));
             } else {
@@ -150,7 +144,7 @@ public class DownloadDirectoryAdapter extends ArrayAdapter<Object> {
             }
         }
 
-        TintedImageView imageView = (TintedImageView) view.findViewById(R.id.icon_view);
+        ImageView imageView = view.findViewById(R.id.icon_view);
         imageView.setVisibility(View.GONE);
 
         return view;
@@ -232,11 +226,11 @@ public class DownloadDirectoryAdapter extends ArrayAdapter<Object> {
         for (DirectoryOption dir : dirs) {
             DirectoryOption directory = (DirectoryOption) dir.clone();
             switch (directory.type) {
-                case DirectoryOption.DEFAULT_OPTION:
+                case DirectoryOption.DownloadLocationDirectoryType.DEFAULT:
                     directory.name = mContext.getString(R.string.menu_downloads);
                     mCanonicalOptions.add(directory);
                     break;
-                case DirectoryOption.ADDITIONAL_OPTION:
+                case DirectoryOption.DownloadLocationDirectoryType.ADDITIONAL:
                     String directoryName = (numOtherAdditionalDirectories > 0)
                             ? mContext.getString(org.chromium.chrome.R.string
                                                          .downloads_location_sd_card_number,
@@ -247,7 +241,7 @@ public class DownloadDirectoryAdapter extends ArrayAdapter<Object> {
                     mAdditionalOptions.add(directory);
                     numOtherAdditionalDirectories++;
                     break;
-                case DirectoryOption.ERROR_OPTION:
+                case DirectoryOption.DownloadLocationDirectoryType.ERROR:
                     directory.name =
                             mContext.getString(R.string.download_location_no_available_locations);
                     mErrorOptions.add(directory);
@@ -273,7 +267,7 @@ public class DownloadDirectoryAdapter extends ArrayAdapter<Object> {
         } else {
             mErrorOptions.add(new DirectoryOption(
                     mContext.getString(R.string.download_location_no_available_locations), null, 0,
-                    0, DirectoryOption.ERROR_OPTION));
+                    0, DirectoryOption.DownloadLocationDirectoryType.ERROR));
         }
     }
 }

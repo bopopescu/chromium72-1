@@ -4,8 +4,11 @@
 
 #include "net/third_party/quic/core/quic_constants.h"
 
-namespace net {
+namespace quic {
 
 const char* const kFinalOffsetHeaderKey = ":final-offset";
 
-}  // namespace net
+const char* const kEPIDGoogleFrontEnd = "GFE";
+const char* const kEPIDGoogleFrontEnd0 = "GFE0";
+
+}  // namespace quic

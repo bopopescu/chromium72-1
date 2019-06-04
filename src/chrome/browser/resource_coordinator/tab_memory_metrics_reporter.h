@@ -24,15 +24,13 @@ class TabMemoryMetricsReporter : public TabLoadTracker::Observer {
   TabMemoryMetricsReporter();
   ~TabMemoryMetricsReporter() override;
 
-  // Returns the singleton TabMemoryMetricsReporter instance.
-  static TabMemoryMetricsReporter* Get();
-
   void StartReporting(TabLoadTracker* tracker);
 
   void OnStartTracking(content::WebContents* web_contents,
                        LoadingState loading_state) override;
   void OnLoadingStateChange(content::WebContents* web_contents,
-                            LoadingState loading_state) override;
+                            LoadingState old_loading_state,
+                            LoadingState new_loading_state) override;
   void OnStopTracking(content::WebContents* web_contents,
                       LoadingState loading_state) override;
 
@@ -62,7 +60,7 @@ class TabMemoryMetricsReporter : public TabLoadTracker::Observer {
   };
 
   struct WebContentsDataComparator {
-    bool operator()(const WebContentsData& a, const WebContentsData& b);
+    bool operator()(const WebContentsData& a, const WebContentsData& b) const;
   };
 
   void MonitorWebContents(content::WebContents* web_contents);

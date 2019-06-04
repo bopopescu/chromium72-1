@@ -15,9 +15,10 @@
 #include "base/memory/ref_counted.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
-#include "base/task_scheduler/post_task.h"
-#include "base/task_scheduler/task_traits.h"
+#include "base/task/post_task.h"
+#include "base/task/task_traits.h"
 #include "content/public/browser/browser_context.h"
+#include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/render_process_host.h"
 #include "content/public/browser/web_contents.h"
@@ -133,7 +134,7 @@ class PlatformAppPathLauncher
       return;
 
     if (entry_paths_.empty()) {
-      LaunchWithNoLaunchData();
+      LaunchWithBasicData();
       return;
     }
 
@@ -171,17 +172,17 @@ class PlatformAppPathLauncher
          it != entry_paths_.end(); ++it) {
       if (!DoMakePathAbsolute(current_directory, &*it)) {
         LOG(WARNING) << "Cannot make absolute path from " << it->value();
-        BrowserThread::PostTask(
-            BrowserThread::UI,
-            FROM_HERE,
-            base::Bind(&PlatformAppPathLauncher::LaunchWithNoLaunchData, this));
+        base::PostTaskWithTraits(
+            FROM_HERE, {BrowserThread::UI},
+            base::BindOnce(&PlatformAppPathLauncher::LaunchWithBasicData,
+                           this));
         return;
       }
     }
 
-    BrowserThread::PostTask(BrowserThread::UI,
-                            FROM_HERE,
-                            base::Bind(&PlatformAppPathLauncher::Launch, this));
+    base::PostTaskWithTraits(
+        FROM_HERE, {BrowserThread::UI},
+        base::Bind(&PlatformAppPathLauncher::Launch, this));
   }
 
   void OnFilesValid(std::unique_ptr<std::set<base::FilePath>> directory_paths) {
@@ -193,10 +194,10 @@ class PlatformAppPathLauncher
   }
 
   void OnFilesInvalid(const base::FilePath& /* error_path */) {
-    LaunchWithNoLaunchData();
+    LaunchWithBasicData();
   }
 
-  void LaunchWithNoLaunchData() {
+  void LaunchWithBasicData() {
     // This method is required as an entry point on the UI thread.
     DCHECK_CURRENTLY_ON(BrowserThread::UI);
 
@@ -207,6 +208,8 @@ class PlatformAppPathLauncher
     std::unique_ptr<app_runtime::LaunchData> launch_data =
         std::make_unique<app_runtime::LaunchData>();
     launch_data->action_data = std::move(action_data_);
+    if (!handler_id_.empty())
+      launch_data->id = std::make_unique<std::string>(handler_id_);
 
     AppRuntimeEventRouter::DispatchOnLaunchedEvent(
         context_, app, launch_source_, std::move(launch_data));
@@ -274,7 +277,7 @@ class PlatformAppPathLauncher
     // with no launch data.
     if (!handler) {
       LOG(WARNING) << "Extension does not provide a valid file handler.";
-      LaunchWithNoLaunchData();
+      LaunchWithBasicData();
       return;
     }
 

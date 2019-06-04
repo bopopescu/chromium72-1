@@ -38,7 +38,7 @@ void VideoPainter::PaintReplaced(const PaintInfo& paint_info,
     return;
 
   GraphicsContext& context = paint_info.context;
-  LayoutRect content_rect = layout_video_.ContentBoxRect();
+  LayoutRect content_rect = layout_video_.PhysicalContentBoxRect();
   content_rect.MoveBy(paint_offset);
 
   // Video frames are only painted in software for printing or capturing node
@@ -52,11 +52,11 @@ void VideoPainter::PaintReplaced(const PaintInfo& paint_info,
   if (paint_with_foreign_layer) {
     if (cc::Layer* layer = layout_video_.MediaElement()->CcLayer()) {
       IntRect pixel_snapped_rect = PixelSnappedIntRect(content_rect);
-      layer->SetBounds(static_cast<gfx::Size>(pixel_snapped_rect.Size()));
+      layer->SetOffsetToTransformParent(
+          gfx::Vector2dF(pixel_snapped_rect.X(), pixel_snapped_rect.Y()));
+      layer->SetBounds(gfx::Size(pixel_snapped_rect.Size()));
       layer->SetIsDrawable(true);
-      RecordForeignLayer(
-          context, layout_video_, DisplayItem::kForeignLayerVideo, layer,
-          pixel_snapped_rect.Location(), pixel_snapped_rect.Size());
+      RecordForeignLayer(context, DisplayItem::kForeignLayerVideo, layer);
       return;
     }
   }
@@ -68,8 +68,10 @@ void VideoPainter::PaintReplaced(const PaintInfo& paint_info,
   if (displaying_poster || !force_software_video_paint) {
     // This will display the poster image, if one is present, and otherwise
     // paint nothing.
+    DCHECK(paint_info.PaintContainer());
     ImagePainter(layout_video_)
-        .PaintIntoRect(context, replaced_rect, content_rect);
+        .PaintIntoRect(context, replaced_rect, content_rect,
+                       paint_info.PaintContainer()->Layer());
   } else {
     PaintFlags video_flags = context.FillFlags();
     video_flags.setColor(SK_ColorBLACK);

@@ -50,8 +50,6 @@ class SkiaVarsApi(recipe_api.RecipeApi):
     if ('Win' in self.builder_cfg.get('os', '') and arch == 'x86_64'):
       self.configuration += '_x64'
 
-    self.skia_out = self.build_dir.join('out', self.configuration)
-
     self.extra_tokens = []
     if len(self.builder_cfg.get('extra_config', '')) > 0:
       if self.builder_cfg['extra_config'].startswith('SK'):
@@ -65,7 +63,8 @@ class SkiaVarsApi(recipe_api.RecipeApi):
     self.patchset = None
     self.is_trybot = False
     if (self.m.properties.get('patch_issue', '') and
-        self.m.properties.get('patch_set', '')):
+        self.m.properties.get('patch_set', '') and
+        self.m.properties.get('patch_ref', '')):
       self.is_trybot = True
       self.issue = self.m.properties['patch_issue']
       self.patchset = self.m.properties['patch_set']

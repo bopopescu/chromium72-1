@@ -551,10 +551,17 @@ GURL FixupURL(const std::string& text, const std::string& desired_tld) {
     return GURL();
   }
 
-  // Parse and rebuild about: and chrome: URLs, except about:blank.
+  // 'about:blank' is special-cased in various places in the code so it
+  // shouldn't be transformed into 'chrome://blank' as the code below will do.
+  if (base::LowerCaseEqualsASCII(scheme, url::kAboutScheme)) {
+    GURL about_url(base::ToLowerASCII(trimmed));
+    if (about_url.IsAboutBlank())
+      return about_url;
+  }
+
+  // Parse and rebuild about: and chrome: URLs.
   bool chrome_url =
-      !base::LowerCaseEqualsASCII(trimmed, url::kAboutBlankURL) &&
-      ((scheme == url::kAboutScheme) || (scheme == kChromeUIScheme));
+      (scheme == url::kAboutScheme) || (scheme == kChromeUIScheme);
 
   // For some schemes whose layouts we understand, we rebuild it.
   if (chrome_url ||

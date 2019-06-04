@@ -1,4 +1,0 @@
-rootWebArea
-++listBox
-++++listBoxOption name='1' selected=true
-++++listBoxOption name='2' selected=false

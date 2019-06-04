@@ -9,17 +9,24 @@
 #include <map>
 #include <set>
 #include <string>
+#include <utility>
 
 #include "base/callback.h"
 #include "base/command_line.h"
 #include "base/files/file_path.h"
 #include "base/lazy_instance.h"
 #include "base/logging.h"
-#include "base/sys_info.h"
-#include "base/task_scheduler/post_task.h"
-#include "base/threading/thread_restrictions.h"
+#include "base/stl_util.h"
+#include "base/strings/string_util.h"
+#include "base/system/sys_info.h"
+#include "base/task/post_task.h"
+#include "base/threading/scoped_blocking_call.h"
 #include "chrome/browser/chromeos/arc/arc_session_manager.h"
 #include "chrome/browser/chromeos/arc/policy/arc_policy_util.h"
+#include "chrome/browser/chromeos/login/configuration_keys.h"
+#include "chrome/browser/chromeos/login/demo_mode/demo_session.h"
+#include "chrome/browser/chromeos/login/demo_mode/demo_setup_controller.h"
+#include "chrome/browser/chromeos/login/oobe_configuration.h"
 #include "chrome/browser/chromeos/login/ui/login_display_host.h"
 #include "chrome/browser/chromeos/login/user_flow.h"
 #include "chrome/browser/chromeos/login/users/chrome_user_manager.h"
@@ -33,17 +40,16 @@
 #include "components/arc/arc_features.h"
 #include "components/arc/arc_prefs.h"
 #include "components/arc/arc_util.h"
+#include "components/language/core/browser/pref_names.h"
 #include "components/prefs/pref_service.h"
 #include "components/user_manager/known_user.h"
 #include "components/user_manager/user.h"
 #include "components/user_manager/user_manager.h"
+#include "third_party/icu/source/common/unicode/locid.h"
 
 namespace arc {
 
 namespace {
-
-constexpr char kLsbReleaseArcVersionKey[] = "CHROMEOS_ARC_ANDROID_SDK_VERSION";
-constexpr char kAndroidMSdkVersion[] = "23";
 
 // Contains map of profile to check result of ARC allowed. Contains true if ARC
 // allowed check was performed and ARC is allowed. If map does not contain
@@ -79,7 +85,7 @@ base::LazyInstance<std::set<AccountId>>::DestructorAtExit
 // Returns whether ARC can run on the filesystem mounted at |path|.
 // This function should run only on threads where IO operations are allowed.
 bool IsArcCompatibleFilesystem(const base::FilePath& path) {
-  base::AssertBlockingAllowed();
+  base::ScopedBlockingCall scoped_blocking_call(base::BlockingType::MAY_BLOCK);
 
   // If it can be verified it is not on ecryptfs, then it is ok.
   struct statfs statfs_buf;
@@ -99,7 +105,7 @@ FileSystemCompatibilityState GetFileSystemCompatibilityPref(
 // Stores the result of IsArcCompatibleFilesystem posted back from the blocking
 // task runner.
 void StoreCompatibilityCheckResult(const AccountId& account_id,
-                                   const base::Closure& callback,
+                                   base::OnceClosure callback,
                                    bool is_compatible) {
   if (is_compatible) {
     user_manager::known_user::SetIntegerPref(
@@ -111,7 +117,7 @@ void StoreCompatibilityCheckResult(const AccountId& account_id,
     if (GetFileSystemCompatibilityPref(account_id) != kFileSystemCompatible)
       g_known_compatible_users.Get().insert(account_id);
   }
-  callback.Run();
+  std::move(callback).Run();
 }
 
 bool IsArcMigrationAllowedInternal(const Profile* profile) {
@@ -270,6 +276,11 @@ bool IsArcAllowedForProfile(const Profile* profile) {
   return it->second;
 }
 
+bool IsArcProvisioned(const Profile* profile) {
+  return profile && profile->GetPrefs()->HasPrefPath(prefs::kArcSignedIn) &&
+         profile->GetPrefs()->GetBoolean(prefs::kArcSignedIn);
+}
+
 void ResetArcAllowedCheckForTesting(const Profile* profile) {
   g_profile_status_check.Get().erase(profile);
 }
@@ -329,18 +340,12 @@ bool IsArcCompatibleFileSystemUsedForUser(const user_manager::User* user) {
   const bool is_filesystem_compatible =
       filesystem_compatibility != kFileSystemIncompatible ||
       g_known_compatible_users.Get().count(user->GetAccountId()) != 0;
-  std::string arc_sdk_version;
-  const bool is_M = base::SysInfo::GetLsbReleaseValue(kLsbReleaseArcVersionKey,
-                                                      &arc_sdk_version) &&
-                    arc_sdk_version == kAndroidMSdkVersion;
 
-  // To run ARC we want to make sure either
-  // - Underlying file system is compatible with ARC, or
-  // - SDK version is M.
-  if (!is_filesystem_compatible && !is_M) {
+  // To run ARC we want to make sure the underlying file system is compatible
+  // with ARC.
+  if (!is_filesystem_compatible) {
     VLOG(1)
-        << "Users with SDK version (" << arc_sdk_version
-        << ") are not supported when they postponed to migrate to dircrypto.";
+        << "ARC is not supported since the user hasn't migrated to dircrypto.";
     return false;
   }
 
@@ -443,6 +448,25 @@ bool IsArcOobeOptInActive() {
   return !IsArcOptInWizardForAssistantActive();
 }
 
+bool IsArcOobeOptInConfigurationBased() {
+  // Ignore if not applicable.
+  if (!IsArcOobeOptInActive())
+    return false;
+  // Check that configuration exist.
+  auto* oobe_configuration = chromeos::OobeConfiguration::Get();
+  if (!oobe_configuration)
+    return false;
+  if (!oobe_configuration->CheckCompleted())
+    return false;
+  // Check configuration value that triggers automatic ARC TOS acceptance.
+  auto& configuration = oobe_configuration->GetConfiguration();
+  auto* auto_accept = configuration.FindKeyOfType(
+      chromeos::configuration::kArcTosAutoAccept, base::Value::Type::BOOLEAN);
+  if (!auto_accept)
+    return false;
+  return auto_accept->GetBool();
+}
+
 bool IsArcOptInWizardForAssistantActive() {
   // Check if Assistant Wizard is currently showing.
   // TODO(b/65861628): Redesign the OptIn flow since there is no longer reason
@@ -472,7 +496,8 @@ bool IsArcTermsOfServiceNegotiationNeeded(const Profile* profile) {
   // them are managed by the admin policy. Note that the ToS agreement is anyway
   // not shown in the case of the managed ARC.
   if (IsArcPlayStoreEnabledPreferenceManagedForProfile(profile) &&
-      AreArcAllOptInPreferencesIgnorableForProfile(profile)) {
+      AreArcAllOptInPreferencesIgnorableForProfile(profile) &&
+      !ShouldShowOptInForTesting()) {
     VLOG(1) << "All opt-in preferences are under managed. "
             << "Skip ARC Terms of Service negotiation.";
     return false;
@@ -493,6 +518,17 @@ bool IsArcTermsOfServiceNegotiationNeeded(const Profile* profile) {
 }
 
 bool IsArcTermsOfServiceOobeNegotiationNeeded() {
+  if (!IsPlayStoreAvailable()) {
+    VLOG(1) << "Skip ARC Terms of Service screen because Play Store is not "
+               "available on the device.";
+    return false;
+  }
+
+  // Demo mode setup flow runs before user is created, therefore this condition
+  // needs to be checked before any user related ones.
+  if (IsArcDemoModeSetupFlow())
+    return true;
+
   if (!user_manager::UserManager::Get()->IsUserLoggedIn()) {
     VLOG(1) << "Skip ARC Terms of Service screen because user is not "
             << "logged in.";
@@ -508,12 +544,6 @@ bool IsArcTermsOfServiceOobeNegotiationNeeded() {
   if (profile->GetPrefs()->IsManagedPreference(prefs::kArcEnabled) &&
       !profile->GetPrefs()->GetBoolean(prefs::kArcEnabled)) {
     VLOG(1) << "Skip ARC Terms of Service screen because ARC is disabled.";
-    return false;
-  }
-
-  if (!IsPlayStoreAvailable()) {
-    VLOG(1) << "Skip ARC Terms of Service screen because Play Store is not "
-               "available on the device.";
     return false;
   }
 
@@ -545,11 +575,15 @@ bool IsArcStatsReportingEnabled() {
   return pref;
 }
 
+bool IsArcDemoModeSetupFlow() {
+  return chromeos::DemoSetupController::IsOobeDemoSetupFlowInProgress();
+}
+
 void UpdateArcFileSystemCompatibilityPrefIfNeeded(
     const AccountId& account_id,
     const base::FilePath& profile_path,
-    const base::Closure& callback) {
-  DCHECK(!callback.is_null());
+    base::OnceClosure callback) {
+  DCHECK(callback);
 
   // If ARC is not available, skip the check.
   // This shortcut is just for merginally improving the log-in performance on
@@ -557,13 +591,13 @@ void UpdateArcFileSystemCompatibilityPrefIfNeeded(
   // without changing any functionality when, say, the code clarity becomes
   // more important in the future.
   if (!IsArcAvailable() && !IsArcKioskAvailable()) {
-    callback.Run();
+    std::move(callback).Run();
     return;
   }
 
   // If the compatibility has been already confirmed, skip the check.
   if (GetFileSystemCompatibilityPref(account_id) != kFileSystemIncompatible) {
-    callback.Run();
+    std::move(callback).Run();
     return;
   }
 
@@ -572,8 +606,9 @@ void UpdateArcFileSystemCompatibilityPrefIfNeeded(
       FROM_HERE,
       {base::MayBlock(), base::TaskPriority::USER_BLOCKING,
        base::TaskShutdownBehavior::CONTINUE_ON_SHUTDOWN},
-      base::Bind(&IsArcCompatibleFilesystem, profile_path),
-      base::Bind(&StoreCompatibilityCheckResult, account_id, callback));
+      base::BindOnce(&IsArcCompatibleFilesystem, profile_path),
+      base::BindOnce(&StoreCompatibilityCheckResult, account_id,
+                     std::move(callback)));
 }
 
 ash::mojom::AssistantAllowedState IsAssistantAllowedForProfile(
@@ -592,6 +627,9 @@ ash::mojom::AssistantAllowedState IsAssistantAllowedForProfile(
   if (profile->IsLegacySupervised())
     return ash::mojom::AssistantAllowedState::DISALLOWED_BY_SUPERVISED_USER;
 
+  if (profile->IsChild())
+    return ash::mojom::AssistantAllowedState::DISALLOWED_BY_CHILD_USER;
+
   if (chromeos::switches::IsVoiceInteractionFlagsEnabled()) {
     if (!chromeos::switches::IsVoiceInteractionLocalesSupported())
       return ash::mojom::AssistantAllowedState::DISALLOWED_BY_LOCALE;
@@ -604,6 +642,34 @@ ash::mojom::AssistantAllowedState IsAssistantAllowedForProfile(
 
     if (!IsArcAllowedForProfile(profile))
       return ash::mojom::AssistantAllowedState::DISALLOWED_BY_ARC_DISALLOWED;
+  }
+
+  if (chromeos::DemoSession::IsDeviceInDemoMode())
+    return ash::mojom::AssistantAllowedState::DISALLOWED_BY_DEMO_MODE;
+
+  if (user_manager::UserManager::Get()->IsLoggedInAsPublicAccount())
+    return ash::mojom::AssistantAllowedState::DISALLOWED_BY_PUBLIC_SESSION;
+
+  if (chromeos::switches::IsAssistantEnabled()) {
+    const std::string kAllowedLocales[] = {ULOC_US, ULOC_UK, ULOC_CANADA,
+                                           ULOC_CANADA_FRENCH};
+
+    const PrefService* prefs = profile->GetPrefs();
+    std::string pref_locale =
+        prefs->GetString(language::prefs::kApplicationLocale);
+
+    if (!pref_locale.empty()) {
+      base::ReplaceChars(pref_locale, "-", "_", &pref_locale);
+      bool disallowed = !base::ContainsValue(kAllowedLocales, pref_locale);
+
+      if (disallowed &&
+          base::CommandLine::ForCurrentProcess()
+                  ->GetSwitchValueASCII(
+                      chromeos::switches::kVoiceInteractionLocales)
+                  .find(pref_locale) == std::string::npos) {
+        return ash::mojom::AssistantAllowedState::DISALLOWED_BY_LOCALE;
+      }
+    }
   }
 
   return ash::mojom::AssistantAllowedState::ALLOWED;
@@ -635,6 +701,18 @@ ArcSupervisionTransition GetSupervisionTransition(const Profile* profile) {
       break;
   }
   return supervision_transition;
+}
+
+bool IsPlayStoreAvailable() {
+  if (ShouldArcAlwaysStartWithNoPlayStore())
+    return false;
+
+  if (!IsRobotOrOfflineDemoAccountMode())
+    return true;
+
+  // Demo Mode is the only public session scenario that can launch Play.
+  return chromeos::DemoSession::IsDeviceInDemoMode() &&
+         chromeos::switches::ShouldShowPlayStoreInDemoMode();
 }
 
 }  // namespace arc

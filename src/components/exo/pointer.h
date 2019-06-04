@@ -7,6 +7,7 @@
 
 #include <memory>
 
+#include "ash/display/window_tree_host_manager.h"
 #include "base/macros.h"
 #include "base/memory/weak_ptr.h"
 #include "base/unguessable_token.h"
@@ -27,7 +28,7 @@ class CopyOutputResult;
 }
 
 namespace ui {
-class Event;
+class LocatedEvent;
 class MouseEvent;
 }
 
@@ -84,7 +85,7 @@ class Pointer : public SurfaceTreeHost,
 
  private:
   // Returns the effective target for |event|.
-  Surface* GetEffectiveTargetForEvent(ui::Event* event) const;
+  Surface* GetEffectiveTargetForEvent(ui::LocatedEvent* event) const;
 
   // Change pointer focus to |surface|.
   void SetFocus(Surface* surface,

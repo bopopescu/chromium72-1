@@ -31,7 +31,6 @@
 #include "third_party/blink/public/web/web_element.h"
 
 #include "third_party/blink/public/platform/web_rect.h"
-#include "third_party/blink/renderer/bindings/core/v8/exception_state.h"
 #include "third_party/blink/renderer/core/dom/element.h"
 #include "third_party/blink/renderer/core/editing/editing_utilities.h"
 #include "third_party/blink/renderer/core/fullscreen/fullscreen.h"
@@ -40,13 +39,14 @@
 #include "third_party/blink/renderer/core/html/custom/v0_custom_element_processing_stack.h"
 #include "third_party/blink/renderer/core/html/forms/text_control_element.h"
 #include "third_party/blink/renderer/core/html_names.h"
+#include "third_party/blink/renderer/platform/bindings/exception_state.h"
 #include "third_party/blink/renderer/platform/graphics/image.h"
 #include "third_party/blink/renderer/platform/wtf/text/atomic_string.h"
 #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
 
 namespace blink {
 
-using namespace HTMLNames;
+using namespace html_names;
 
 bool WebElement::IsFormControlElement() const {
   return ConstUnwrap<Element>()->IsFormControlElement();
@@ -66,7 +66,7 @@ bool WebElement::IsEditable() const {
       return true;
   }
 
-  return EqualIgnoringASCIICase(element->getAttribute(roleAttr), "textbox");
+  return EqualIgnoringASCIICase(element->getAttribute(kRoleAttr), "textbox");
 }
 
 WebString WebElement::TagName() const {
@@ -80,7 +80,7 @@ bool WebElement::HasHTMLTagName(const WebString& tag_name) const {
   // createElementNS(xhtmlNS, 'input') HTMLInputElement   INPUT    input
   // createElementNS(xhtmlNS, 'INPUT') HTMLUnknownElement INPUT    INPUT
   const Element* element = ConstUnwrap<Element>();
-  return HTMLNames::xhtmlNamespaceURI == element->namespaceURI() &&
+  return html_names::xhtmlNamespaceURI == element->namespaceURI() &&
          element->localName() == String(tag_name).DeprecatedLower();
 }
 
@@ -152,11 +152,13 @@ WebRect WebElement::BoundsInViewport() const {
   return ConstUnwrap<Element>()->BoundsInViewport();
 }
 
-WebImage WebElement::ImageContents() {
+SkBitmap WebElement::ImageContents() {
   if (IsNull())
-    return WebImage();
-
-  return WebImage(Unwrap<Element>()->ImageContents(), kRespectImageOrientation);
+    return {};
+  Image* image = Unwrap<Element>()->ImageContents();
+  if (!image)
+    return {};
+  return image->AsSkBitmapForCurrentFrame(kRespectImageOrientation);
 }
 
 void WebElement::RequestFullscreen() {

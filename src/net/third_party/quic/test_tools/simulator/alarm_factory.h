@@ -8,13 +8,15 @@
 #include "net/third_party/quic/core/quic_alarm_factory.h"
 #include "net/third_party/quic/test_tools/simulator/actor.h"
 
-namespace net {
+namespace quic {
 namespace simulator {
 
 // AlarmFactory allows to schedule QuicAlarms using the simulation event queue.
 class AlarmFactory : public QuicAlarmFactory {
  public:
-  AlarmFactory(Simulator* simulator, std::string name);
+  AlarmFactory(Simulator* simulator, QuicString name);
+  AlarmFactory(const AlarmFactory&) = delete;
+  AlarmFactory& operator=(const AlarmFactory&) = delete;
   ~AlarmFactory() override;
 
   QuicAlarm* CreateAlarm(QuicAlarm::Delegate* delegate) override;
@@ -24,16 +26,14 @@ class AlarmFactory : public QuicAlarmFactory {
 
  private:
   // Automatically generate a name for a new alarm.
-  std::string GetNewAlarmName();
+  QuicString GetNewAlarmName();
 
   Simulator* simulator_;
-  std::string name_;
+  QuicString name_;
   int counter_;
-
-  DISALLOW_COPY_AND_ASSIGN(AlarmFactory);
 };
 
 }  // namespace simulator
-}  // namespace net
+}  // namespace quic
 
 #endif  // NET_THIRD_PARTY_QUIC_TEST_TOOLS_SIMULATOR_ALARM_FACTORY_H_

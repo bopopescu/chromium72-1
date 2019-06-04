@@ -5,9 +5,10 @@
 #include "chrome/browser/extensions/active_tab_permission_granter.h"
 
 #include <set>
+#include <utility>
 #include <vector>
 
-#include "base/feature_list.h"
+#include "base/no_destructor.h"
 #include "chrome/browser/extensions/extension_action_runner.h"
 #include "chrome/browser/extensions/extension_util.h"
 #include "chrome/browser/profiles/profile.h"
@@ -18,7 +19,6 @@
 #include "content/public/browser/web_contents.h"
 #include "extensions/browser/extension_registry.h"
 #include "extensions/browser/process_manager.h"
-#include "extensions/common/extension_features.h"
 #include "extensions/common/extension_messages.h"
 #include "extensions/common/permissions/permission_set.h"
 #include "extensions/common/permissions/permissions_data.h"
@@ -71,8 +71,26 @@ void SendMessageToProcesses(
     tab_process->Send(create_message.Run(false));
 }
 
-ActiveTabPermissionGranter::Delegate* g_active_tab_permission_granter_delegate =
-    nullptr;
+std::unique_ptr<ActiveTabPermissionGranter::Delegate>&
+GetActiveTabPermissionGranterDelegateWrapper() {
+  static base::NoDestructor<
+      std::unique_ptr<ActiveTabPermissionGranter::Delegate>>
+      delegate_wrapper;
+  return *delegate_wrapper;
+}
+
+ActiveTabPermissionGranter::Delegate* GetActiveTabPermissionGranterDelegate() {
+  return GetActiveTabPermissionGranterDelegateWrapper().get();
+}
+
+// Returns true if activeTab is allowed to be granted to the extension. This can
+// return false for platform-specific implementations.
+bool ShouldGrantActiveTabOrPrompt(const Extension* extension,
+                                  content::WebContents* web_contents) {
+  return !GetActiveTabPermissionGranterDelegate() ||
+         GetActiveTabPermissionGranterDelegate()->ShouldGrantActiveTabOrPrompt(
+             extension, web_contents);
+}
 
 }  // namespace
 
@@ -89,14 +107,9 @@ ActiveTabPermissionGranter::ActiveTabPermissionGranter(
 ActiveTabPermissionGranter::~ActiveTabPermissionGranter() {}
 
 // static
-ActiveTabPermissionGranter::Delegate*
-ActiveTabPermissionGranter::SetPlatformDelegate(Delegate* delegate) {
-  // Disallow setting it twice (but allow resetting - don't forget to free in
-  // that case).
-  CHECK(!g_active_tab_permission_granter_delegate || !delegate);
-  Delegate* previous_delegate = g_active_tab_permission_granter_delegate;
-  g_active_tab_permission_granter_delegate = delegate;
-  return previous_delegate;
+void ActiveTabPermissionGranter::SetPlatformDelegate(
+    std::unique_ptr<Delegate> delegate) {
+  GetActiveTabPermissionGranterDelegateWrapper() = std::move(delegate);
 }
 
 void ActiveTabPermissionGranter::GrantIfRequested(const Extension* extension) {
@@ -108,16 +121,21 @@ void ActiveTabPermissionGranter::GrantIfRequested(const Extension* extension) {
 
   const PermissionsData* permissions_data = extension->permissions_data();
 
-  bool should_grant_active_tab =
-      !g_active_tab_permission_granter_delegate ||
-      g_active_tab_permission_granter_delegate->ShouldGrantActiveTab(
-          extension, web_contents());
-  // If the extension requested all-hosts but has had it withheld, we grant it
-  // active tab-style permissions, even if it doesn't have the activeTab
-  // permission in the manifest.
-  if (should_grant_active_tab &&
-      (permissions_data->HasWithheldImpliedAllHosts() ||
-       permissions_data->HasAPIPermission(APIPermission::kActiveTab))) {
+  // TODO(devlin): This should be GetLastCommittedURL().
+  GURL url = web_contents()->GetVisibleURL();
+
+  // If the extension requested the host permission to |url| but had it
+  // withheld, we grant it active tab-style permissions, even if it doesn't have
+  // the activeTab permission in the manifest. This is necessary for the
+  // runtime host permissions feature to work.
+  // Note: It's important that we check if the extension has activeTab before
+  // checking ShouldGrantActiveTabOrPrompt() in order to prevent
+  // ShouldGrantActiveTabOrPrompt() from prompting for extensions that don't
+  // request the activeTab permission.
+  if ((permissions_data->HasAPIPermission(APIPermission::kActiveTab) ||
+       permissions_data->withheld_permissions().effective_hosts().MatchesURL(
+           url)) &&
+      ShouldGrantActiveTabOrPrompt(extension, web_contents())) {
     // Gate activeTab for file urls on extensions having explicit access to file
     // urls.
     int valid_schemes = UserScript::ValidUserScriptSchemes();
@@ -125,8 +143,7 @@ void ActiveTabPermissionGranter::GrantIfRequested(const Extension* extension) {
                                web_contents()->GetBrowserContext())) {
       valid_schemes &= ~URLPattern::SCHEME_FILE;
     }
-    new_hosts.AddOrigin(valid_schemes,
-                        web_contents()->GetVisibleURL().GetOrigin());
+    new_hosts.AddOrigin(valid_schemes, url.GetOrigin());
     new_apis.insert(APIPermission::kTab);
   }
 
@@ -179,24 +196,16 @@ void ActiveTabPermissionGranter::DidFinishNavigation(
   }
 
   // Only clear the granted permissions for cross-origin navigations.
-  //
-  // See http://crbug.com/404243 for why. Currently we only differentiate
-  // between same-origin and cross-origin navigations when the
-  // script-require-action flag is on. It's not clear it's good for general
-  // activeTab consumption (we likely need to build some UI around it first).
-  // However, features::kRuntimeHostPermissions is all-but unusable without
-  // this behaviour.
-  if (base::FeatureList::IsEnabled(features::kRuntimeHostPermissions)) {
-    const content::NavigationEntry* navigation_entry =
-        web_contents()->GetController().GetVisibleEntry();
-    if (!navigation_entry ||
-        (navigation_entry->GetURL().GetOrigin() !=
-            navigation_handle->GetPreviousURL().GetOrigin())) {
-      ClearActiveExtensionsAndNotify();
-    }
-  } else {
-    ClearActiveExtensionsAndNotify();
+  // TODO(devlin): We likely shouldn't be using the visible entry. Instead,
+  // we should use WebContents::GetLastCommittedURL().
+  const content::NavigationEntry* navigation_entry =
+      web_contents()->GetController().GetVisibleEntry();
+  if (navigation_entry && navigation_entry->GetURL().GetOrigin() ==
+                              navigation_handle->GetPreviousURL().GetOrigin()) {
+    return;
   }
+
+  ClearActiveExtensionsAndNotify();
 }
 
 void ActiveTabPermissionGranter::WebContentsDestroyed() {

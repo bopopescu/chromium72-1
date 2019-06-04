@@ -11,7 +11,7 @@
 
 class CFDE_TextEditEngineTest : public testing::Test {
  public:
-  class Delegate : public CFDE_TextEditEngine::Delegate {
+  class Delegate final : public CFDE_TextEditEngine::Delegate {
    public:
     void Reset() {
       text_is_full = false;
@@ -21,7 +21,8 @@ class CFDE_TextEditEngineTest : public testing::Test {
     void NotifyTextFull() override { text_is_full = true; }
 
     void OnCaretChanged() override {}
-    void OnTextChanged(const WideString& prevText) override {}
+    void OnTextWillChange(CFDE_TextEditEngine::TextChange* change) override {}
+    void OnTextChanged() override {}
     void OnSelChanged() override {}
     bool OnValidate(const WideString& wsText) override {
       return !fail_validation;
@@ -38,7 +39,7 @@ class CFDE_TextEditEngineTest : public testing::Test {
   void SetUp() override {
     font_ =
         CFGAS_GEFont::LoadFont(L"Arial Black", 0, 0, GetGlobalFontManager());
-    ASSERT(font_.Get() != nullptr);
+    ASSERT_TRUE(font_.Get() != nullptr);
 
     engine_ = pdfium::MakeUnique<CFDE_TextEditEngine>();
     engine_->SetFont(font_);

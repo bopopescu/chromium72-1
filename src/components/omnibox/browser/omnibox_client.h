@@ -14,6 +14,7 @@
 
 class AutocompleteResult;
 class GURL;
+class QueryInOmnibox;
 class SessionID;
 class TemplateURL;
 class TemplateURLService;
@@ -83,6 +84,9 @@ class OmniboxClient {
   // Returns whether |url| corresponds to the user's home page.
   virtual bool IsHomePage(const GURL& url) const;
 
+  // Returns false if Default Search is disabled by a policy.
+  virtual bool IsDefaultSearchProviderEnabled() const;
+
   // Returns the session ID of the current page.
   virtual const SessionID& GetSessionID() const = 0;
 
@@ -90,6 +94,7 @@ class OmniboxClient {
   virtual TemplateURLService* GetTemplateURLService();
   virtual const AutocompleteSchemeClassifier& GetSchemeClassifier() const = 0;
   virtual AutocompleteClassifier* GetAutocompleteClassifier();
+  virtual QueryInOmnibox* GetQueryInOmnibox();
 
   // Returns the icon corresponding to |match| if match is an extension match
   // and an empty icon otherwise.
@@ -99,6 +104,9 @@ class OmniboxClient {
   // Returns the given |vector_icon_type| with the correct size.
   virtual gfx::Image GetSizedIcon(const gfx::VectorIcon& vector_icon_type,
                                   SkColor vector_icon_color) const;
+
+  // Returns the given |icon| with the correct size.
+  virtual gfx::Image GetSizedIcon(const gfx::Image& icon) const;
 
   // Checks whether |template_url| is an extension keyword; if so, asks the
   // ExtensionOmniboxEventRouter to process |match| for it and returns true.
@@ -161,6 +169,15 @@ class OmniboxClient {
 
   // Discards the state for all pending and transient navigations.
   virtual void DiscardNonCommittedNavigations() {}
+
+  // Opens and shows a new incognito browser window.
+  virtual void NewIncognitoWindow() {}
+
+  // Presents translation prompt for current tab web contents.
+  virtual void PromptPageTranslation() {}
+
+  // Presents prompt to update Chrome.
+  virtual void OpenUpdateChromeDialog() {}
 };
 
 #endif  // COMPONENTS_OMNIBOX_BROWSER_OMNIBOX_CLIENT_H_

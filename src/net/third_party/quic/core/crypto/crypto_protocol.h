@@ -22,7 +22,7 @@
 #define TAG(a, b, c, d) \
   static_cast<QuicTag>((d << 24) + (c << 16) + (b << 8) + a)
 
-namespace net {
+namespace quic {
 
 typedef QuicString ServerConfigID;
 
@@ -86,6 +86,10 @@ const QuicTag kBBS2 = TAG('B', 'B', 'S', '2');   // More aggressive packet
                                                  // conservation in BBR STARTUP
 const QuicTag kBBS3 = TAG('B', 'B', 'S', '3');   // Slowstart packet
                                                  // conservation in BBR STARTUP
+const QuicTag kBBS4 = TAG('B', 'B', 'S', '4');   // Reduce rate in STARTUP by
+                                                 // bytes_lost / CWND.
+const QuicTag kBBS5 = TAG('B', 'B', 'S', '5');   // Reduce rate in STARTUP by
+                                                 // 2 * bytes_lost / CWND.
 const QuicTag kBBRR = TAG('B', 'B', 'R', 'R');   // Rate-based recovery in BBR
 const QuicTag kBBR1 = TAG('B', 'B', 'R', '1');   // DEPRECATED
 const QuicTag kBBR2 = TAG('B', 'B', 'R', '2');   // DEPRECATED
@@ -98,8 +102,20 @@ const QuicTag kBBR7 = TAG('B', 'B', 'R', '7');   // Skip PROBE_RTT if rtt has
                                                  // not changed 12.5%
 const QuicTag kBBR8 = TAG('B', 'B', 'R', '8');   // Disable PROBE_RTT when
                                                  // recently app-limited
+const QuicTag kBBR9 = TAG('B', 'B', 'R', '9');   // Ignore app-limited calls in
+                                                 // BBR if enough inflight.
 const QuicTag kBBRS = TAG('B', 'B', 'R', 'S');   // Use 1.5x pacing in startup
                                                  // after a loss has occurred.
+const QuicTag kBBQ1 = TAG('B', 'B', 'Q', '1');   // BBR with lower 2.77 STARTUP
+                                                 // pacing and CWND gain.
+const QuicTag kBBQ2 = TAG('B', 'B', 'Q', '2');   // BBR with lower 2.0 STARTUP
+                                                 // CWND gain.
+const QuicTag kBBQ3 = TAG('B', 'B', 'Q', '3');   // BBR with ack aggregation
+                                                 // compensation in STARTUP.
+const QuicTag kBBQ4 = TAG('B', 'B', 'Q', '4');   // Drain gain of 0.75.
+const QuicTag kBBQ5 = TAG('B', 'B', 'Q', '5');   // Expire ack aggregation upon
+                                                 // bandwidth increase in
+                                                 // STARTUP.
 const QuicTag kRENO = TAG('R', 'E', 'N', 'O');   // Reno Congestion Control
 const QuicTag kTPCC = TAG('P', 'C', 'C', '\0');  // Performance-Oriented
                                                  // Congestion Control
@@ -138,18 +154,17 @@ const QuicTag kAKD4 = TAG('A', 'K', 'D', '4');   // Ack decimation with 1/8 RTT
 const QuicTag kAKDU = TAG('A', 'K', 'D', 'U');   // Unlimited number of packets
                                                  // received before acking
 const QuicTag kACKQ = TAG('A', 'C', 'K', 'Q');   // Send an immediate ack after
-                                                 // 1 RTT of not sending acks.
+                                                 // 1 RTT of not receiving.
 const QuicTag kSSLR = TAG('S', 'S', 'L', 'R');   // Slow Start Large Reduction.
 const QuicTag kNPRR = TAG('N', 'P', 'R', 'R');   // Pace at unity instead of PRR
 const QuicTag k5RTO = TAG('5', 'R', 'T', 'O');   // Close connection on 5 RTOs
-const QuicTag k3RTO = TAG('3', 'R', 'T', 'O');   // Close connection on 3 RTOs
-const QuicTag kDHDT = TAG('D', 'H', 'D', 'T');   // Disable HPACK dynamic table.
 const QuicTag kCONH = TAG('C', 'O', 'N', 'H');   // Conservative Handshake
                                                  // Retransmissions.
 const QuicTag kLFAK = TAG('L', 'F', 'A', 'K');   // Don't invoke FACK on the
                                                  // first ack.
-// TODO(fayang): Remove this connection option in QUIC_VERSION_37, in which
-// MAX_HEADER_LIST_SIZE settings frame should be supported.
+const QuicTag kSTMP = TAG('S', 'T', 'M', 'P');   // Send and process timestamps
+// TODO(fayang): Remove this connection option when QUIC_VERSION_35, is removed
+// Since MAX_HEADER_LIST_SIZE settings frame is supported instead.
 const QuicTag kSMHL = TAG('S', 'M', 'H', 'L');   // Support MAX_HEADER_LIST_SIZE
                                                  // settings frame.
 const QuicTag kNSTP = TAG('N', 'S', 'T', 'P');   // No stop waiting frames.
@@ -196,7 +211,6 @@ const QuicTag kCOPT = TAG('C', 'O', 'P', 'T');   // Connection options
 const QuicTag kCLOP = TAG('C', 'L', 'O', 'P');   // Client connection options
 const QuicTag kICSL = TAG('I', 'C', 'S', 'L');   // Idle network timeout
 const QuicTag kSCLS = TAG('S', 'C', 'L', 'S');   // Silently close on timeout
-const QuicTag kMSPC = TAG('M', 'S', 'P', 'C');   // Max streams per connection.
 const QuicTag kMIDS = TAG('M', 'I', 'D', 'S');   // Max incoming dynamic streams
 const QuicTag kIRTT = TAG('I', 'R', 'T', 'T');   // Estimated initial RTT in us.
 const QuicTag kSNI  = TAG('S', 'N', 'I', '\0');  // Server name
@@ -247,6 +261,9 @@ const QuicTag kPAD  = TAG('P', 'A', 'D', '\0');  // Padding
 // Server push tags
 const QuicTag kSPSH = TAG('S', 'P', 'S', 'H');  // Support server push.
 
+// Stats collection tags
+const QuicTag kEPID = TAG('E', 'P', 'I', 'D');  // Endpoint identifier.
+
 // clang-format on
 
 // These tags have a special form so that they appear either at the beginning
@@ -292,6 +309,6 @@ const char kProofSignatureLabel[] = "QUIC CHLO and server config signature";
 // rejection message.
 const size_t kClientHelloMinimumSize = 1024;
 
-}  // namespace net
+}  // namespace quic
 
 #endif  // NET_THIRD_PARTY_QUIC_CORE_CRYPTO_CRYPTO_PROTOCOL_H_

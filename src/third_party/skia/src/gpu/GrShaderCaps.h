@@ -8,8 +8,10 @@
 #ifndef GrShaderCaps_DEFINED
 #define GrShaderCaps_DEFINED
 
-#include "../private/GrGLSL.h"
-#include "../private/GrSwizzle.h"
+#include "GrSwizzle.h"
+#include "GrTypesPriv.h"
+#include "SkRefCnt.h"
+#include "glsl/GrGLSL.h"
 
 namespace SkSL {
 class ShaderCapsFactory;
@@ -46,7 +48,6 @@ public:
     bool dstReadInShaderSupport() const { return fDstReadInShaderSupport; }
     bool dualSourceBlendingSupport() const { return fDualSourceBlendingSupport; }
     bool integerSupport() const { return fIntegerSupport; }
-    bool texelBufferSupport() const { return fTexelBufferSupport; }
     int imageLoadStoreSupport() const { return fImageLoadStoreSupport; }
 
     /**
@@ -74,8 +75,6 @@ public:
 
     bool externalTextureSupport() const { return fExternalTextureSupport; }
 
-    bool texelFetchSupport() const { return fTexelFetchSupport; }
-
     bool vertexIDSupport() const { return fVertexIDSupport; }
 
     // frexp, ldexp, etc.
@@ -84,6 +83,11 @@ public:
     bool floatIs32Bits() const { return fFloatIs32Bits; }
 
     bool halfIs32Bits() const { return fHalfIs32Bits; }
+
+    bool unsignedSupport() const { return fUnsignedSupport; }
+
+    // SkSL only.
+    bool builtinFMASupport() const { return fBuiltinFMASupport; }
 
     AdvBlendEqInteraction advBlendEqInteraction() const { return fAdvBlendEqInteraction; }
 
@@ -119,12 +123,22 @@ public:
     // If false, SkSL uses a workaround so that sk_FragCoord doesn't actually query gl_FragCoord
     bool canUseFragCoord() const { return fCanUseFragCoord; }
 
-    // If true interpolated vertex shader outputs are inaccurate.
-    bool interpolantsAreInaccurate() const { return fInterpolantsAreInaccurate; }
-
     // If true, short ints can't represent every integer in the 16-bit two's complement range as
     // required by the spec. SKSL will always emit full ints.
     bool incompleteShortIntPrecision() const { return fIncompleteShortIntPrecision; }
+
+    // If true, then conditions in for loops need "&& true" to work around driver bugs.
+    bool addAndTrueToLoopCondition() const { return fAddAndTrueToLoopCondition; }
+
+    // If true, then expressions such as "x && y" or "x || y" are rewritten as
+    // ternary to work around driver bugs.
+    bool unfoldShortCircuitAsTernary() const { return fUnfoldShortCircuitAsTernary; }
+
+    bool emulateAbsIntFunction() const { return fEmulateAbsIntFunction; }
+
+    bool rewriteDoWhileLoops() const { return fRewriteDoWhileLoops; }
+
+    bool removePowWithConstantExponent() const { return fRemovePowWithConstantExponent; }
 
     bool requiresLocalOutputColorForFBFetch() const { return fRequiresLocalOutputColorForFBFetch; }
 
@@ -188,11 +202,6 @@ public:
         return fSecondExternalTextureExtensionString;
     }
 
-    const char* texelBufferExtensionString() const {
-        SkASSERT(this->texelBufferSupport());
-        return fTexelBufferExtensionString;
-    }
-
     const char* noperspectiveInterpolationExtensionString() const {
         SkASSERT(this->noperspectiveInterpolationSupport());
         return fNoPerspectiveInterpolationExtensionString;
@@ -203,22 +212,7 @@ public:
         return fImageLoadStoreExtensionString;
     }
 
-    int maxVertexSamplers() const { return fMaxVertexSamplers; }
-
-    int maxGeometrySamplers() const { return fMaxGeometrySamplers; }
-
     int maxFragmentSamplers() const { return fMaxFragmentSamplers; }
-
-    int maxCombinedSamplers() const { return fMaxCombinedSamplers; }
-
-    /**
-     * In general using multiple texture units for image rendering seems to be a win at smaller
-     * sizes of dst rects and a loss at larger sizes. Dst rects above this pixel area threshold will
-     * not use multitexturing.
-     */
-    size_t disableImageMultitexturingDstRectAreaThreshold() const {
-        return fDisableImageMultitexturingDstRectAreaThreshold;
-    }
 
     /**
      * Given a texture's config, this determines what swizzle must be appended to accesses to the
@@ -248,7 +242,6 @@ private:
     bool fDstReadInShaderSupport            : 1;
     bool fDualSourceBlendingSupport         : 1;
     bool fIntegerSupport                    : 1;
-    bool fTexelBufferSupport                : 1;
     bool fImageLoadStoreSupport             : 1;
     bool fDropsTileOnZeroDivide             : 1;
     bool fFBFetchSupport                    : 1;
@@ -258,11 +251,14 @@ private:
     bool fPreferFlatInterpolation           : 1;
     bool fNoPerspectiveInterpolationSupport : 1;
     bool fExternalTextureSupport            : 1;
-    bool fTexelFetchSupport                 : 1;
     bool fVertexIDSupport                   : 1;
     bool fFPManipulationSupport             : 1;
     bool fFloatIs32Bits                     : 1;
     bool fHalfIs32Bits                      : 1;
+    bool fUnsignedSupport                   : 1;
+
+    // Used by SkSL to know when to generate polyfills.
+    bool fBuiltinFMASupport : 1;
 
     // Used for specific driver bug work arounds
     bool fCanUseAnyFunctionInShader                   : 1;
@@ -275,8 +271,12 @@ private:
     bool fMustObfuscateUniformColor                   : 1;
     bool fMustGuardDivisionEvenAfterExplicitZeroCheck : 1;
     bool fCanUseFragCoord                             : 1;
-    bool fInterpolantsAreInaccurate                   : 1;
     bool fIncompleteShortIntPrecision                 : 1;
+    bool fAddAndTrueToLoopCondition                   : 1;
+    bool fUnfoldShortCircuitAsTernary                 : 1;
+    bool fEmulateAbsIntFunction                       : 1;
+    bool fRewriteDoWhileLoops                         : 1;
+    bool fRemovePowWithConstantExponent               : 1;
 
     const char* fVersionDeclString;
 
@@ -287,17 +287,13 @@ private:
     const char* fSecondaryOutputExtensionString;
     const char* fExternalTextureExtensionString;
     const char* fSecondExternalTextureExtensionString;
-    const char* fTexelBufferExtensionString;
     const char* fNoPerspectiveInterpolationExtensionString;
     const char* fImageLoadStoreExtensionString;
 
     const char* fFBFetchColorName;
     const char* fFBFetchExtensionString;
 
-    int fMaxVertexSamplers;
-    int fMaxGeometrySamplers;
     int fMaxFragmentSamplers;
-    int fMaxCombinedSamplers;
 
     size_t fDisableImageMultitexturingDstRectAreaThreshold;
 

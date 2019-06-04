@@ -84,8 +84,8 @@ void BaseScrollBar::ScrollByAmount(ScrollAmount amount) {
 
 void BaseScrollBar::ScrollToThumbPosition(int thumb_position,
                                           bool scroll_to_middle) {
-  contents_scroll_offset_ =
-      CalculateContentsOffset(thumb_position, scroll_to_middle);
+  contents_scroll_offset_ = CalculateContentsOffset(
+      static_cast<float>(thumb_position), scroll_to_middle);
   if (contents_scroll_offset_ < GetMinPosition()) {
     contents_scroll_offset_ = GetMinPosition();
   } else if (contents_scroll_offset_ > GetMaxPosition()) {
@@ -405,7 +405,8 @@ int BaseScrollBar::GetScrollIncrement(bool is_page, bool is_positive) {
 
 #if !defined(OS_MACOSX)
 // static
-base::Timer* BaseScrollBar::GetHideTimerForTest(BaseScrollBar* scroll_bar) {
+base::RetainingOneShotTimer* BaseScrollBar::GetHideTimerForTest(
+    BaseScrollBar* scroll_bar) {
   return nullptr;
 }
 #endif
@@ -459,16 +460,17 @@ int BaseScrollBar::CalculateThumbPosition(int contents_scroll_offset) const {
          (contents_size_ - viewport_size_);
 }
 
-int BaseScrollBar::CalculateContentsOffset(int thumb_position,
+int BaseScrollBar::CalculateContentsOffset(float thumb_position,
                                            bool scroll_to_middle) const {
-  int thumb_size = thumb_->GetSize();
+  float thumb_size = static_cast<float>(thumb_->GetSize());
   int track_size = GetTrackSize();
   if (track_size == thumb_size)
     return 0;
   if (scroll_to_middle)
     thumb_position = thumb_position - (thumb_size / 2);
-  return (thumb_position * (contents_size_ - viewport_size_)) /
-         (track_size - thumb_size);
+  float result = (thumb_position * (contents_size_ - viewport_size_)) /
+                 (track_size - thumb_size);
+  return static_cast<int>(result);
 }
 
 }  // namespace views

@@ -32,17 +32,20 @@
 
 #include "base/location.h"
 #include "base/macros.h"
-#include "base/single_thread_task_runner.h"
+#include "base/unguessable_token.h"
+#include "services/network/public/mojom/referrer_policy.mojom-shared.h"
+#include "third_party/blink/renderer/bindings/core/v8/sanitize_script_errors.h"
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/dom/context_lifecycle_notifier.h"
 #include "third_party/blink/renderer/core/dom/context_lifecycle_observer.h"
-#include "third_party/blink/renderer/core/execution_context/security_context.h"
 #include "third_party/blink/renderer/platform/heap/handle.h"
-#include "third_party/blink/renderer/platform/loader/fetch/access_control_status.h"
+#include "third_party/blink/renderer/platform/loader/fetch/https_state.h"
 #include "third_party/blink/renderer/platform/supplementable.h"
-#include "third_party/blink/renderer/platform/weborigin/kurl.h"
-#include "third_party/blink/renderer/platform/weborigin/referrer_policy.h"
 #include "v8/include/v8.h"
+
+namespace base {
+class SingleThreadTaskRunner;
+}
 
 namespace service_manager {
 class InterfaceProvider;
@@ -51,17 +54,20 @@ class InterfaceProvider;
 namespace blink {
 
 class ConsoleMessage;
+class ContentSecurityPolicy;
 class CoreProbeSink;
 class DOMTimerCoordinator;
 class ErrorEvent;
-class EventQueue;
 class EventTarget;
+class FetchClientSettingsObjectSnapshot;
 class FrameOrWorkerScheduler;
 class InterfaceInvalidator;
+class KURL;
 class LocalDOMWindow;
 class PausableObject;
 class PublicURLManager;
 class ResourceFetcher;
+class SecurityContext;
 class SecurityOrigin;
 class ScriptState;
 
@@ -129,6 +135,8 @@ class CORE_EXPORT ExecutionContext : public ContextLifecycleNotifier,
 
   virtual bool IsContextThread() const { return true; }
 
+  virtual bool ShouldInstallV8Extensions() const { return false; }
+
   const SecurityOrigin* GetSecurityOrigin();
   SecurityOrigin* GetMutableSecurityOrigin();
 
@@ -140,6 +148,8 @@ class CORE_EXPORT ExecutionContext : public ContextLifecycleNotifier,
   virtual LocalDOMWindow* ExecutingWindow() const { return nullptr; }
   virtual String UserAgent() const = 0;
 
+  virtual HttpsState GetHttpsState() const = 0;
+
   // Gets the DOMTimerCoordinator which maintains the "active timer
   // list" of tasks created by setTimeout and setInterval. The
   // DOMTimerCoordinator is owned by the ExecutionContext and should
@@ -150,12 +160,16 @@ class CORE_EXPORT ExecutionContext : public ContextLifecycleNotifier,
 
   virtual SecurityContext& GetSecurityContext() = 0;
 
+  // https://tc39.github.io/ecma262/#sec-agent-clusters
+  virtual const base::UnguessableToken& GetAgentClusterID() const = 0;
+
+  bool IsSameAgentCluster(const base::UnguessableToken&) const;
+
   virtual bool CanExecuteScripts(ReasonForCallingCanExecuteScripts) {
     return false;
   }
 
-  bool ShouldSanitizeScriptError(const String& source_url, AccessControlStatus);
-  void DispatchErrorEvent(ErrorEvent*, AccessControlStatus);
+  void DispatchErrorEvent(ErrorEvent*, SanitizeScriptErrors);
 
   virtual void AddConsoleMessage(ConsoleMessage*) = 0;
   virtual void ExceptionThrown(ErrorEvent*) = 0;
@@ -190,7 +204,6 @@ class CORE_EXPORT ExecutionContext : public ContextLifecycleNotifier,
   int CircularSequentialID();
 
   virtual EventTarget* ErrorEventTarget() = 0;
-  virtual EventQueue* GetEventQueue() const = 0;
 
   // Methods related to window interaction. It should be used to manage window
   // focusing and window creation permission for an ExecutionContext.
@@ -208,7 +221,13 @@ class CORE_EXPORT ExecutionContext : public ContextLifecycleNotifier,
                              : SecureContextMode::kInsecureContext;
   }
 
+  // Returns a referrer to be used in the "Determine request's Referrer"
+  // algorithm defined in the Referrer Policy spec.
+  // https://w3c.github.io/webappsec-referrer-policy/#determine-requests-referrer
   virtual String OutgoingReferrer() const;
+
+  FetchClientSettingsObjectSnapshot* CreateFetchClientSettingsObjectSnapshot();
+
   // Parses a comma-separated list of referrer policy tokens, and sets
   // the context's referrer policy to the last one that is a valid
   // policy. Logs a message to the console if none of the policy
@@ -219,8 +238,10 @@ class CORE_EXPORT ExecutionContext : public ContextLifecycleNotifier,
   // parsed as valid policies.
   void ParseAndSetReferrerPolicy(const String& policies,
                                  bool support_legacy_keywords = false);
-  void SetReferrerPolicy(ReferrerPolicy);
-  virtual ReferrerPolicy GetReferrerPolicy() const { return referrer_policy_; }
+  void SetReferrerPolicy(network::mojom::ReferrerPolicy);
+  virtual network::mojom::ReferrerPolicy GetReferrerPolicy() const {
+    return referrer_policy_;
+  }
 
   virtual CoreProbeSink* GetProbeSink() { return nullptr; }
 
@@ -234,12 +255,16 @@ class CORE_EXPORT ExecutionContext : public ContextLifecycleNotifier,
 
   InterfaceInvalidator* GetInterfaceInvalidator() { return invalidator_.get(); }
 
+  v8::Isolate* GetIsolate() const { return isolate_; }
+
  protected:
-  ExecutionContext();
+  explicit ExecutionContext(v8::Isolate* isolate);
   ~ExecutionContext() override;
 
  private:
-  bool DispatchErrorEventInternal(ErrorEvent*, AccessControlStatus);
+  v8::Isolate* const isolate_;
+
+  bool DispatchErrorEventInternal(ErrorEvent*, SanitizeScriptErrors);
 
   unsigned circular_sequential_id_;
 
@@ -257,7 +282,7 @@ class CORE_EXPORT ExecutionContext : public ContextLifecycleNotifier,
   // increment and decrement the counter.
   int window_interaction_tokens_;
 
-  ReferrerPolicy referrer_policy_;
+  network::mojom::ReferrerPolicy referrer_policy_;
 
   std::unique_ptr<InterfaceInvalidator> invalidator_;
 

@@ -6,6 +6,7 @@
 <link rel="import" href="chrome://resources/cr_elements/hidden_style_css.html">
 <link rel="import" href="chrome://resources/cr_elements/paper_button_style_css.html">
 <link rel="import" href="chrome://resources/cr_elements/policy/cr_tooltip_icon.html">
+<link rel="import" href="chrome://resources/cr_elements/shared_vars_css.html">
 <link rel="import" href="chrome://resources/html/assert.html">
 <link rel="import" href="chrome://resources/html/cr.html">
 <link rel="import" href="chrome://resources/html/util.html">
@@ -13,6 +14,7 @@
 <link rel="import" href="chrome://resources/polymer/v1_0/iron-a11y-announcer/iron-a11y-announcer.html">
 <link rel="import" href="chrome://resources/polymer/v1_0/paper-styles/color.html">
 <link rel="import" href="icons.html">
+<link rel="import" href="pack_dialog.html">
 
 <dom-module id="extensions-toolbar">
   <template>
@@ -31,14 +33,15 @@
 
       /* This toggle needs special styling because it's on blue background. */
       cr-toolbar cr-toggle {
-        --cr-toggle-checked-bar-color: white;
+        --cr-toggle-checked-bar-color: var(--google-grey-refresh-100);
         --cr-toggle-checked-button-color: white;
         --cr-toggle-checked-ink-color: white;
+        --cr-toggle-unchecked-bar-color: var(--google-grey-600);
         --cr-toggle-unchecked-ink-color: white;
       }
 
       cr-tooltip-icon {
-        -webkit-margin-end: 20px;
+        margin-inline-end: 20px;
       }
 
       #devDrawer[expanded] #buttonStrip {
@@ -48,8 +51,10 @@
       #devDrawer {
         background: white;
         border-bottom: 1px solid var(--google-grey-300);
+        box-sizing: border-box;
         height: 0;
-        overflow: hidden;
+        overflow-x: hidden;
+        overflow-y: auto;
         position: relative;
         transition: height var(--drawer-transition);
       }
@@ -59,8 +64,8 @@
       }
 
       #buttonStrip {
-        -webkit-margin-end: auto;
-        -webkit-margin-start: 24px;
+        margin-inline-end: auto;
+        margin-inline-start: 24px;
         padding: var(--padding-top-bottom) 0;
         position: absolute;
         top: calc(var(--button-row-height) * -1);
@@ -71,7 +76,7 @@
       }
 
       #buttonStrip paper-button {
-        -webkit-margin-end: 16px;
+        margin-inline-end: 16px;
       }
 
       .more-actions {
@@ -81,7 +86,7 @@
       }
 
       .more-actions span {
-        -webkit-margin-end: 16px;
+        margin-inline-end: 16px;
       }
 
       cr-toast > div {
@@ -110,6 +115,11 @@
         </cr-toggle>
       </div>
     </cr-toolbar>
+    <template is="dom-if" if="[[showPackDialog_]]" restamp>
+      <extensions-pack-dialog delegate="[[delegate]]"
+          on-close="onPackDialogClose_">
+      </extensions-pack-dialog>
+    </template>
     <div id="devDrawer" expanded$="[[expanded_]]">
       <div id="buttonStrip">
         <paper-button hidden$="[[!canLoadUnpacked]]" id="loadUnpacked"

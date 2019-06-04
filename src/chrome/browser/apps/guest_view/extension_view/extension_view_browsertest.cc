@@ -3,7 +3,7 @@
 // found in the LICENSE file.
 
 #include "base/strings/stringprintf.h"
-#include "chrome/browser/apps/app_browsertest_util.h"
+#include "chrome/browser/apps/platform_apps/app_browsertest_util.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "components/guest_view/browser/guest_view_manager.h"
 #include "components/guest_view/browser/guest_view_manager_delegate.h"
@@ -126,7 +126,9 @@ IN_PROC_BROWSER_TEST_F(ExtensionViewLoadApiTest, LoadAPISameIdDifferentSrc) {
   TestLoadApiHelper("testLoadAPISameIdDifferentSrc");
 }
 
-IN_PROC_BROWSER_TEST_F(ExtensionViewLoadApiTest, LoadAPILoadOtherExtension) {
+// TODO(crbug.com/810225): Test is flaky.
+IN_PROC_BROWSER_TEST_F(ExtensionViewLoadApiTest,
+                       DISABLED_LoadAPILoadOtherExtension) {
   TestLoadApiHelper("testLoadAPILoadOtherExtension");
 }
 
@@ -146,7 +148,8 @@ IN_PROC_BROWSER_TEST_F(ExtensionViewLoadApiTest, QueuedLoadAPIFunction) {
   TestLoadApiHelper("testQueuedLoadAPIFunction");
 }
 
+// TODO(crbug.com/810225): Test is flaky.
 IN_PROC_BROWSER_TEST_F(ExtensionViewLoadApiTest,
-                       QueuedLoadAPILoadOtherExtension) {
+                       DISABLED_QueuedLoadAPILoadOtherExtension) {
   TestLoadApiHelper("testQueuedLoadAPILoadOtherExtension");
 }

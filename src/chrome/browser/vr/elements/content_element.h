@@ -7,7 +7,7 @@
 
 #include "base/macros.h"
 #include "chrome/browser/vr/elements/platform_ui_element.h"
-#include "chrome/browser/vr/ui_element_renderer.h"
+#include "chrome/browser/vr/vr_ui_export.h"
 
 namespace vr {
 
@@ -21,7 +21,7 @@ class TextInputDelegate;
 // If quad layer is set, it stops surface frames of web page but instead draws
 // transparent in UI. So the web page in quad layer can be later composited to
 // the UI.
-class ContentElement : public PlatformUiElement {
+class VR_UI_EXPORT ContentElement : public PlatformUiElement {
  public:
   typedef typename base::RepeatingCallback<void(const gfx::SizeF&)>
       ScreenBoundsChangedCallback;
@@ -44,7 +44,7 @@ class ContentElement : public PlatformUiElement {
                                 cc::KeyframeModel* animation) override;
 
   void SetOverlayTextureId(unsigned int texture_id);
-  void SetOverlayTextureLocation(UiElementRenderer::TextureLocation location);
+  void SetOverlayTextureLocation(GlTextureLocation location);
   void SetOverlayTextureEmpty(bool empty);
   bool GetOverlayTextureEmpty();
   void SetProjectionMatrix(const gfx::Transform& matrix);
@@ -61,8 +61,7 @@ class ContentElement : public PlatformUiElement {
   ScreenBoundsChangedCallback bounds_changed_callback_;
   unsigned int overlay_texture_id_ = 0;
   bool overlay_texture_non_empty_ = false;
-  UiElementRenderer::TextureLocation overlay_texture_location_ =
-      UiElementRenderer::kTextureLocationExternal;
+  GlTextureLocation overlay_texture_location_ = kGlTextureLocationExternal;
   gfx::SizeF last_content_screen_bounds_;
   float last_content_aspect_ratio_ = 0.0f;
   gfx::Transform projection_matrix_;

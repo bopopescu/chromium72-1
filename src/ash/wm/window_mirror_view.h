@@ -23,11 +23,17 @@ namespace ash {
 
 namespace wm {
 
-// A view that mirrors the client area of a single window.
+// A view that mirrors the client area of a single (source) window.
 class WindowMirrorView : public views::View {
  public:
-  WindowMirrorView(aura::Window* window, bool trilinear_filtering_on_init);
+  WindowMirrorView(aura::Window* source, bool trilinear_filtering_on_init);
   ~WindowMirrorView() override;
+
+  // Returns the source of the mirror.
+  aura::Window* source() { return source_; }
+
+  // Recreates |layer_owner_|.
+  void RecreateMirrorLayers();
 
   // views::View:
   gfx::Size CalculatePreferredSize() const override;
@@ -38,7 +44,7 @@ class WindowMirrorView : public views::View {
  private:
   void InitLayerOwner();
 
-  // Gets the root of the layer tree that was lifted from |target_| (and is now
+  // Gets the root of the layer tree that was lifted from |source_| (and is now
   // a child of |this->layer()|).
   ui::Layer* GetMirrorLayer();
 
@@ -47,7 +53,7 @@ class WindowMirrorView : public views::View {
   gfx::Rect GetClientAreaBounds() const;
 
   // The original window that is being represented by |this|.
-  aura::Window* target_;
+  aura::Window* source_;
 
   // Retains ownership of the mirror layer tree. This is lazily initialized
   // the first time the view becomes visible.

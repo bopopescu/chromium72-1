@@ -5,8 +5,8 @@
 #include "chrome/common/media_router/mojo/media_router_struct_traits.h"
 
 #include "chrome/common/media_router/media_source.h"
-#include "net/interfaces/ip_address_struct_traits.h"
-#include "net/interfaces/ip_endpoint_struct_traits.h"
+#include "services/network/public/cpp/ip_address_mojom_traits.h"
+#include "services/network/public/cpp/ip_endpoint_mojom_traits.h"
 #include "url/mojom/url_gurl_mojom_traits.h"
 
 namespace mojo {
@@ -33,11 +33,11 @@ bool StructTraits<media_router::mojom::IssueDataView, media_router::IssueInfo>::
   if (!data.ReadSecondaryActions(&out->secondary_actions))
     return false;
 
-  base::Optional<std::string> route_id;
-  if (!data.ReadRouteId(&route_id))
+  if (!data.ReadRouteId(&out->route_id))
     return false;
 
-  out->route_id = route_id.value_or(std::string());
+  if (!data.ReadSinkId(&out->sink_id))
+    return false;
 
   out->is_blocking = data.is_blocking();
   out->help_page_id = data.help_page_id();

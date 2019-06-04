@@ -15,7 +15,7 @@
 #include "net/third_party/quic/core/quic_unacked_packet_map.h"
 #include "net/third_party/quic/platform/api/quic_export.h"
 
-namespace net {
+namespace quic {
 
 // Class which can be configured to implement's TCP's approach of detecting loss
 // when 3 nacks have been received for a packet or with a time threshold.
@@ -27,6 +27,8 @@ class QUIC_EXPORT_PRIVATE GeneralLossAlgorithm : public LossDetectionInterface {
 
   GeneralLossAlgorithm();
   explicit GeneralLossAlgorithm(LossDetectionType loss_type);
+  GeneralLossAlgorithm(const GeneralLossAlgorithm&) = delete;
+  GeneralLossAlgorithm& operator=(const GeneralLossAlgorithm&) = delete;
   ~GeneralLossAlgorithm() override {}
 
   LossDetectionType GetLossDetectionType() const override;
@@ -40,6 +42,7 @@ class QUIC_EXPORT_PRIVATE GeneralLossAlgorithm : public LossDetectionInterface {
                     QuicTime time,
                     const RttStats& rtt_stats,
                     QuicPacketNumber largest_newly_acked,
+                    const AckedPacketVector& packets_acked,
                     LostPacketVector* packets_lost) override;
 
   // Returns a non-zero value when the early retransmit timer is active.
@@ -69,19 +72,16 @@ class QUIC_EXPORT_PRIVATE GeneralLossAlgorithm : public LossDetectionInterface {
   // The largest newly acked from the previous call to DetectLosses.
   QuicPacketNumber largest_previously_acked_;
   // The largest lost packet.
+  // TODO(fayang): Remove this variable when deprecate
+  // quic_reloadable_flag_quic_faster_detect_loss.
   QuicPacketNumber largest_lost_;
-
-  // Latched value of
-  // quic_reloadable_flag_quic_early_retransmit_detects_in_flight_packet_lost.
-  const bool early_retransmit_declares_in_flight_packet_lost_;
-  // Latched value of
-  // quic_reloadable_flag_quic_early_retransmit_detects_in_flight_packet_lost
-  // and quic_reloadable_flag_quic_incremental_loss_detection.
-  const bool detect_loss_incrementally_;
-
-  DISALLOW_COPY_AND_ASSIGN(GeneralLossAlgorithm);
+  // The least in flight packet. Loss detection should start from this. Please
+  // note, least_in_flight_ could be largest packet ever sent + 1.
+  QuicPacketNumber least_in_flight_;
+  // Latched value of quic_reloadable_flag_quic_faster_detect_loss.
+  const bool faster_detect_loss_;
 };
 
-}  // namespace net
+}  // namespace quic
 
 #endif  // NET_THIRD_PARTY_QUIC_CORE_CONGESTION_CONTROL_GENERAL_LOSS_ALGORITHM_H_

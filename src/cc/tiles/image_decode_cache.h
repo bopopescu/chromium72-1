@@ -11,6 +11,7 @@
 #include "cc/paint/decoded_draw_image.h"
 #include "cc/paint/draw_image.h"
 #include "cc/raster/tile_task.h"
+#include "cc/tiles/image_decode_cache_utils.h"
 #include "cc/tiles/tile_priority.h"
 
 namespace cc {
@@ -137,6 +138,11 @@ class CC_EXPORT ImageDecodeCache {
   // memory. It is used as an esimate of whether an image can fit into the
   // locked budget before creating a task.
   virtual size_t GetMaximumMemoryLimitBytes() const = 0;
+
+  // Returns true if the cache should be used for |image|. In certain cases the
+  // image can directly be used for raster (for instance bitmaps in a software
+  // draw).
+  virtual bool UseCacheForDrawImage(const DrawImage& image) const = 0;
 
  protected:
   void RecordImageMipLevelUMA(int mip_level);

@@ -8,13 +8,14 @@
 #include <memory>
 
 #include "base/memory/ptr_util.h"
+#include "third_party/blink/public/mojom/script/script_type.mojom-blink.h"
+#include "third_party/blink/public/platform/modules/fetch/fetch_api_request.mojom-shared.h"
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/script/script.h"
 #include "third_party/blink/renderer/platform/cross_origin_attribute_value.h"
 #include "third_party/blink/renderer/platform/loader/fetch/client_hints_preferences.h"
 #include "third_party/blink/renderer/platform/loader/fetch/fetch_parameters.h"
 #include "third_party/blink/renderer/platform/loader/fetch/integrity_metadata.h"
-#include "third_party/blink/renderer/platform/loader/fetch/resource.h"
 #include "third_party/blink/renderer/platform/loader/fetch/resource_fetcher.h"
 #include "third_party/blink/renderer/platform/weborigin/security_policy.h"
 #include "third_party/blink/renderer/platform/wtf/allocator.h"
@@ -22,8 +23,9 @@
 
 namespace blink {
 
-class CSSPreloaderResourceClient;
 class Document;
+class Resource;
+enum class ResourceType : uint8_t;
 
 class CORE_EXPORT PreloadRequest {
   USING_FAST_MALLOC(PreloadRequest);
@@ -44,8 +46,8 @@ class CORE_EXPORT PreloadRequest {
       const TextPosition& initiator_position,
       const String& resource_url,
       const KURL& base_url,
-      Resource::Type resource_type,
-      const ReferrerPolicy referrer_policy,
+      ResourceType resource_type,
+      const network::mojom::ReferrerPolicy referrer_policy,
       ReferrerSource referrer_source,
       ResourceFetcher::IsImageSet is_image_set,
       const FetchParameters::ResourceWidth& resource_width =
@@ -67,7 +69,7 @@ class CORE_EXPORT PreloadRequest {
         referrer_policy, referrer_source, is_image_set));
   }
 
-  Resource* Start(Document*, CSSPreloaderResourceClient*);
+  Resource* Start(Document*);
 
   void SetDefer(FetchParameters::DeferOption defer) { defer_ = defer; }
   void SetCharset(const String& charset) { charset_ = charset; }
@@ -76,10 +78,15 @@ class CORE_EXPORT PreloadRequest {
   }
   CrossOriginAttributeValue CrossOrigin() const { return cross_origin_; }
 
+  void SetImportance(mojom::FetchImportanceMode importance) {
+    importance_ = importance;
+  }
+  mojom::FetchImportanceMode Importance() const { return importance_; }
+
   void SetNonce(const String& nonce) { nonce_ = nonce; }
   const String& Nonce() const { return nonce_; }
 
-  Resource::Type ResourceType() const { return resource_type_; }
+  ResourceType GetResourceType() const { return resource_type_; }
 
   const String& ResourceURL() const { return resource_url_; }
   float ResourceWidth() const {
@@ -93,9 +100,13 @@ class CORE_EXPORT PreloadRequest {
   const ClientHintsPreferences& Preferences() const {
     return client_hints_preferences_;
   }
-  ReferrerPolicy GetReferrerPolicy() const { return referrer_policy_; }
+  network::mojom::ReferrerPolicy GetReferrerPolicy() const {
+    return referrer_policy_;
+  }
 
-  void SetScriptType(ScriptType script_type) { script_type_ = script_type; }
+  void SetScriptType(mojom::ScriptType script_type) {
+    script_type_ = script_type;
+  }
 
   // Only scripts and css stylesheets need to have integrity set on preloads.
   // This is because neither resource keeps raw data around to redo an
@@ -115,16 +126,23 @@ class CORE_EXPORT PreloadRequest {
     return is_image_set_ == ResourceFetcher::kImageIsImageSet;
   }
 
+  void SetIsLazyloadImageDisabled(bool is_lazyload_image_disable) {
+    is_lazyload_image_disabled_ = is_lazyload_image_disable;
+  }
+  bool IsLazyloadImageDisabledForTesting() {
+    return is_lazyload_image_disabled_;
+  }
+
  private:
   PreloadRequest(const String& initiator_name,
                  const TextPosition& initiator_position,
                  const String& resource_url,
                  const KURL& base_url,
-                 Resource::Type resource_type,
+                 ResourceType resource_type,
                  const FetchParameters::ResourceWidth& resource_width,
                  const ClientHintsPreferences& client_hints_preferences,
                  RequestType request_type,
-                 const ReferrerPolicy referrer_policy,
+                 const network::mojom::ReferrerPolicy referrer_policy,
                  ReferrerSource referrer_source,
                  ResourceFetcher::IsImageSet is_image_set)
       : initiator_name_(initiator_name),
@@ -132,8 +150,9 @@ class CORE_EXPORT PreloadRequest {
         resource_url_(resource_url),
         base_url_(base_url),
         resource_type_(resource_type),
-        script_type_(ScriptType::kClassic),
+        script_type_(mojom::ScriptType::kClassic),
         cross_origin_(kCrossOriginAttributeNotSet),
+        importance_(mojom::FetchImportanceMode::kImportanceAuto),
         defer_(FetchParameters::kNoDefer),
         resource_width_(resource_width),
         client_hints_preferences_(client_hints_preferences),
@@ -141,7 +160,8 @@ class CORE_EXPORT PreloadRequest {
         referrer_policy_(referrer_policy),
         referrer_source_(referrer_source),
         from_insertion_scanner_(false),
-        is_image_set_(is_image_set) {}
+        is_image_set_(is_image_set),
+        is_lazyload_image_disabled_(false) {}
 
   KURL CompleteURL(Document*);
 
@@ -150,19 +170,21 @@ class CORE_EXPORT PreloadRequest {
   String resource_url_;
   KURL base_url_;
   String charset_;
-  Resource::Type resource_type_;
-  ScriptType script_type_;
+  ResourceType resource_type_;
+  mojom::ScriptType script_type_;
   CrossOriginAttributeValue cross_origin_;
+  mojom::FetchImportanceMode importance_;
   String nonce_;
   FetchParameters::DeferOption defer_;
   FetchParameters::ResourceWidth resource_width_;
   ClientHintsPreferences client_hints_preferences_;
   RequestType request_type_;
-  ReferrerPolicy referrer_policy_;
+  network::mojom::ReferrerPolicy referrer_policy_;
   ReferrerSource referrer_source_;
   IntegrityMetadataSet integrity_metadata_;
   bool from_insertion_scanner_;
   ResourceFetcher::IsImageSet is_image_set_;
+  bool is_lazyload_image_disabled_;
 };
 
 typedef Vector<std::unique_ptr<PreloadRequest>> PreloadRequestStream;

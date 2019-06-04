@@ -14,19 +14,47 @@
 #include "net/third_party/quic/platform/api/quic_export.h"
 #include "net/third_party/quic/platform/api/quic_string.h"
 
-namespace net {
+namespace quic {
 
 namespace test {
 class QuicStreamSequencerPeer;
 }  // namespace test
 
-class QuicStream;
-
 // Buffers frames until we have something which can be passed
 // up to the next layer.
 class QUIC_EXPORT_PRIVATE QuicStreamSequencer {
  public:
-  explicit QuicStreamSequencer(QuicStream* quic_stream);
+  // Interface that thie Sequencer uses to communicate with the Stream.
+  class StreamInterface {
+   public:
+    virtual ~StreamInterface() = default;
+
+    // Called when new data is available to be read from the sequencer.
+    virtual void OnDataAvailable() = 0;
+    // Called when the end of the stream has been read.
+    virtual void OnFinRead() = 0;
+    // Called when bytes have been consumed from the sequencer.
+    virtual void AddBytesConsumed(QuicByteCount bytes) = 0;
+    // TODO(rch): Clean up this interface via OnUnrecoverableError and
+    // remove PeerAddressOfLatestPacket().
+    // Called when an error has occurred which should result in the stream
+    // being reset.
+    virtual void Reset(QuicRstStreamErrorCode error) = 0;
+    // Called when an error has occurred which should result in the connection
+    // being closed.
+    virtual void CloseConnectionWithDetails(QuicErrorCode error,
+                                            const QuicString& details) = 0;
+
+    // Returns the stream id of this stream.
+    virtual QuicStreamId id() const = 0;
+    // Returns the peer address of the last packet received for this stream.
+    virtual const QuicSocketAddress& PeerAddressOfLatestPacket() const = 0;
+  };
+
+  explicit QuicStreamSequencer(StreamInterface* quic_stream);
+  QuicStreamSequencer(const QuicStreamSequencer&) = delete;
+  QuicStreamSequencer(QuicStreamSequencer&&) = default;
+  QuicStreamSequencer& operator=(const QuicStreamSequencer&) = delete;
   virtual ~QuicStreamSequencer();
 
   // If the frame is the next one we need in order to process in-order data,
@@ -57,7 +85,7 @@ class QUIC_EXPORT_PRIVATE QuicStreamSequencer {
   // to do zero-copy reads.
   void MarkConsumed(size_t num_bytes);
 
-  // Copies all of the readable data into |buffer| and marks all of the copied
+  // Appends all of the readable data to |buffer| and marks all of the appended
   // data as consumed.
   void Read(QuicString* buffer);
 
@@ -95,6 +123,8 @@ class QUIC_EXPORT_PRIVATE QuicStreamSequencer {
   // Number of bytes has been consumed.
   QuicStreamOffset NumBytesConsumed() const;
 
+  QuicStreamOffset close_offset() const { return close_offset_; }
+
   int num_frames_received() const { return num_frames_received_; }
 
   int num_duplicate_frames_received() const {
@@ -109,7 +139,7 @@ class QUIC_EXPORT_PRIVATE QuicStreamSequencer {
 
   bool level_triggered() const { return level_triggered_; }
 
-  // Returns std::string describing internal state.
+  // Returns string describing internal state.
   const QuicString DebugString() const;
 
  private:
@@ -127,7 +157,7 @@ class QUIC_EXPORT_PRIVATE QuicStreamSequencer {
   bool MaybeCloseStream();
 
   // The stream which owns this sequencer.
-  QuicStream* stream_;
+  StreamInterface* stream_;
 
   // Stores received data in offset order.
   QuicStreamSequencerBuffer buffered_frames_;
@@ -153,9 +183,13 @@ class QUIC_EXPORT_PRIVATE QuicStreamSequencer {
   // Otherwise, call OnDataAvailable() when number of readable bytes changes.
   bool level_triggered_;
 
-  DISALLOW_COPY_AND_ASSIGN(QuicStreamSequencer);
+  // Latched value of
+  // quic_reloadable_flag_quic_stop_reading_when_level_triggered.  When true,
+  // the sequencer will discard incoming data (but not FIN bits) after
+  // StopReading is called, even in level_triggered_ mode.
+  const bool stop_reading_when_level_triggered_;
 };
 
-}  // namespace net
+}  // namespace quic
 
 #endif  // NET_THIRD_PARTY_QUIC_CORE_QUIC_STREAM_SEQUENCER_H_

@@ -13,28 +13,29 @@ vars = {
   'chromium_git': 'https://chromium.googlesource.com',
   'pdfium_git': 'https://pdfium.googlesource.com',
 
-  'android_ndk_revision': 'e951c37287c7d8cd915bf8d4149fd4a06d808b55',
-  'binutils_revision': 'e146228c20af6af922887d0be2d3641cbffb33c5',
-  'build_revision': '037f38ae0fe5e11b4f7c33b750fd7a1e9634a606',
-  'buildtools_revision': 'ab7b6a7b350dd15804c87c20ce78982811fdd76f',
-  'catapult_revision': '4f03e51f019492441438893094f789df20102a93',
-  'clang_revision': 'abe5e4f9dc0f1df848c7a0efa05256253e77a7b7',
+  'android_ndk_revision': '5cd86312e794bdf542a3685c6f10cbb96072990b',
+  'binutils_revision': '4110e09197116a9c5dedd4c827bbe95c224f87ac',
+  'build_revision': '81ffd00401995c9ae0b99557b82e319a2a0498d1',
+  'buildtools_revision': 'fdce2ad26b26961629cb6bb2fc4757396d37f174',
+  'catapult_revision': '5d5091665700495b0d212cc504fd48530565eecf',
+  'clang_revision': '31f2d265b80ffaf698f41e2ef3e0e8f282f13285',
+  'code_coverage_revision': '4191ea0675c4c133cb506316b6b974f31e600576',
   'cygwin_revision': 'c89e446b273697fadf3a10ff1007a97c0b7de6df',
-  'depot_tools_revision': '869a2857a4f3acc08fdec6182ecec5b73593be3b',
-  'freetype_revision': '62b55f8e51ea8b2b244d8e2ccff5c6aa2170260c',
-  'gtest_revision': '4bd8c4638ada823a8da2569735cc0a9402fb8052',
-  'icu_revision': 'e4194dc7bbb3305d84cbb1b294274ca70d230721',
-  'instrumented_lib_revision': '323cf32193caecbf074d1a0cb5b02b905f163e0f',
-  'jinja2_revision': 'd34383206fa42d52faa10bb9931d6d538f3a57e0',
-  'jpeg_turbo_revision': '7260e4d8b8e1e40b17f03fafdf1cd83296900f76',
+  'depot_tools_revision': 'ddbeac1c06a9c0ffa100f6f2af672af83f980fcb',
+  'freetype_revision': '3dd4e76b19f3cd4f706c3455d6ae01765d07eee5',
+  'gtest_revision': '2e68926a9d4929e9289373cd49e40ddcb9a628f7',
+  'icu_revision': '45f655f2feb7069a7b9b47d1b1a596807bfd4220',
+  'instrumented_lib_revision': 'a959e4f0cb643003f2d75d179cede449979e3e77',
+  'jinja2_revision': '45571de473282bd1d8b63a8dfcb1fd268d0635d2',
+  'jpeg_turbo_revision': '61a2bbaa9aec89cb2c882d87ace6aba9aee49bb9',
   'markupsafe_revision': '8f45f5cfa0009d2a70589bcda0349b8cb2b72783',
-  'pdfium_tests_revision': '9b7ff5b879ce578f4f186ad546f45fc9fb592943',
-  'skia_revision': 'af7700265b74123d8ad3de6dde0c21545453140b',
-  'tools_memory_revision': '427f10475e1a8d72424c29d00bf689122b738e5d',
-  'trace_event_revision': '0e9a47d74970bee1bbfc063c47215406f8918699',
-  'v8_revision': '9cf8abb7ce7e3a3152fb71d0e87678e64f7ab0c8',
-  'yasm_source_revision': 'b98114e18d8b9b84586b10d24353ab8616d4c5fc',
-  'zlib_revision': '8c371ad77b836c02e44006dc2dc77c5d6d910861',
+  'pdfium_tests_revision': '5a68e87859476eb75d3e068bd406c4921a6be8e2',
+  'skia_revision': '36b85be4944363139562664c964d6fde749babdb',
+  'tools_memory_revision': 'f7b00daf4df7f6c469f5fbc68d7f40f6bd15d6e6',
+  'trace_event_revision': '211b3ed9d0481b4caddbee1322321b86a483ca1f',
+  'v8_revision': 'd5f263024407cc8363474f5770362caaf3d66c87',
+  'yasm_source_revision': '720b70524a4424b15fc57e82263568c8ba0496ad',
+  'zlib_revision': 'dde5ce526c84143fb931a5191dd4623ae6d197d6',
 }
 
 deps = {
@@ -102,10 +103,9 @@ deps = {
   "tools/clang":
     Var('chromium_git') + "/chromium/src/tools/clang@" +  Var('clang_revision'),
 
-  # TODO(GYP): Remove this when no tools rely on GYP anymore.
-  "tools/gyp":
-    Var('chromium_git') + '/external/gyp.git@' +
-        'eb296f67da078ec01f5e3a9ea9cdc6d26d680161',
+  "tools/code_coverage":
+    Var('chromium_git') + "/chromium/src/tools/code_coverage.git@" +
+        Var('code_coverage_revision'),
 
   "tools/memory":
     Var('chromium_git') + "/chromium/src/tools/memory@" +
@@ -318,5 +318,12 @@ hooks = [
                 "--bucket", "chromium-instrumented-libraries",
                 "-s", "pdfium/third_party/instrumented_libraries/binaries/msan-no-origins-trusty.tgz.sha1",
               ],
+  },
+  {
+    # Update LASTCHANGE.
+    'name': 'lastchange',
+    'pattern': '.',
+    'action': ['python', 'pdfium/build/util/lastchange.py',
+               '-o', 'pdfium/build/util/LASTCHANGE'],
   },
 ]

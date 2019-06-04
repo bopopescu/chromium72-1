@@ -12,36 +12,34 @@
 #include "third_party/blink/public/web/web_local_frame.h"
 #include "third_party/blink/public/web/web_plugin_container.h"
 #include "third_party/blink/renderer/core/core_export.h"
+#include "third_party/blink/renderer/core/dom/context_lifecycle_observer.h"
 #include "third_party/blink/renderer/core/editing/finder/text_finder.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
+#include "third_party/blink/renderer/platform/heap/persistent.h"
 
 namespace blink {
 
 class WebLocalFrameImpl;
 class WebString;
-struct WebFindOptions;
 struct WebFloatRect;
 
 class CORE_EXPORT FindInPage final
     : public GarbageCollectedFinalized<FindInPage>,
       public mojom::blink::FindInPage {
-  USING_PRE_FINALIZER(FindInPage, Dispose);
 
  public:
   static FindInPage* Create(WebLocalFrameImpl& frame,
                             InterfaceRegistry* interface_registry) {
-    return new FindInPage(frame, interface_registry);
+    return MakeGarbageCollected<FindInPage>(frame, interface_registry);
   }
 
-  void RequestFind(int identifier,
-                   const WebString& search_text,
-                   const WebFindOptions&);
+  FindInPage(WebLocalFrameImpl& frame, InterfaceRegistry* interface_registry);
 
-  bool Find(int identifier,
-            const WebString& search_text,
-            const WebFindOptions&,
-            bool wrap_within_frame,
-            bool* active_now = nullptr);
+  bool FindInternal(int identifier,
+                    const WebString& search_text,
+                    const mojom::blink::FindOptions&,
+                    bool wrap_within_frame,
+                    bool* active_now = nullptr);
 
   void SetTickmarks(const WebVector<WebRect>&);
 
@@ -52,10 +50,21 @@ class CORE_EXPORT FindInPage final
   // coordinates.
   WebFloatRect ActiveFindMatchRect();
 
-  // mojom::blink::FindInPage overrides
+  void ReportFindInPageMatchCount(int request_id, int count, bool final_update);
 
-  void ActivateNearestFindResult(const WebFloatPoint&,
-                                 ActivateNearestFindResultCallback) final;
+  void ReportFindInPageSelection(int request_id,
+                                 int active_match_ordinal,
+                                 const blink::WebRect& selection_rect,
+                                 bool final_update);
+
+  // mojom::blink::FindInPage overrides
+  void Find(int request_id,
+            const String& search_text,
+            mojom::blink::FindOptionsPtr) final;
+
+  void SetClient(mojom::blink::FindInPageClientPtr) final;
+
+  void ActivateNearestFindResult(int request_id, const WebFloatPoint&) final;
 
   // Stops the current find-in-page, following the given |action|
   void StopFinding(mojom::StopFindAction action) final;
@@ -94,20 +103,14 @@ class CORE_EXPORT FindInPage final
   }
 
  private:
-  FindInPage(WebLocalFrameImpl& frame, InterfaceRegistry* interface_registry)
-      : frame_(&frame), binding_(this) {
-    if (!interface_registry)
-      return;
-    interface_registry->AddAssociatedInterface(WTF::BindRepeating(
-        &FindInPage::BindToRequest, WrapWeakPersistent(this)));
-  }
-
   // Will be initialized after first call to ensureTextFinder().
   Member<TextFinder> text_finder_;
 
   WebPluginContainer* plugin_find_handler_;
 
   const Member<WebLocalFrameImpl> frame_;
+
+  mojom::blink::FindInPageClientPtr client_;
 
   mojo::AssociatedBinding<mojom::blink::FindInPage> binding_;
 

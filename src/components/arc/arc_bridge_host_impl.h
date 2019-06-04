@@ -39,6 +39,7 @@ class ArcBridgeHostImpl : public mojom::ArcBridgeHost {
   void OnAccessibilityHelperInstanceReady(
       mojom::AccessibilityHelperInstancePtr accessibility_helper_ptr) override;
   void OnAppInstanceReady(mojom::AppInstancePtr app_ptr) override;
+  void OnAppfuseInstanceReady(mojom::AppfuseInstancePtr appfuse_ptr) override;
   void OnAudioInstanceReady(mojom::AudioInstancePtr audio_ptr) override;
   void OnAuthInstanceReady(mojom::AuthInstancePtr auth_ptr) override;
   void OnBackupSettingsInstanceReady(
@@ -55,6 +56,8 @@ class ArcBridgeHostImpl : public mojom::ArcBridgeHost {
       mojom::ClipboardInstancePtr clipboard_ptr) override;
   void OnCrashCollectorInstanceReady(
       mojom::CrashCollectorInstancePtr crash_collector_ptr) override;
+  void OnDiskQuotaInstanceReady(
+      mojom::DiskQuotaInstancePtr disk_quota_ptr) override;
   void OnEnterpriseReportingInstanceReady(
       mojom::EnterpriseReportingInstancePtr enterprise_reporting_ptr) override;
   void OnFileSystemInstanceReady(
@@ -67,6 +70,8 @@ class ArcBridgeHostImpl : public mojom::ArcBridgeHost {
   void OnKioskInstanceReady(mojom::KioskInstancePtr kiosk_ptr) override;
   void OnLockScreenInstanceReady(
       mojom::LockScreenInstancePtr lock_screen_ptr) override;
+  void OnMediaSessionInstanceReady(
+      mojom::MediaSessionInstancePtr media_session_ptr) override;
   void OnMetricsInstanceReady(mojom::MetricsInstancePtr metrics_ptr) override;
   void OnMidisInstanceReady(mojom::MidisInstancePtr midis_ptr) override;
   void OnNetInstanceReady(mojom::NetInstancePtr net_ptr) override;
@@ -76,10 +81,13 @@ class ArcBridgeHostImpl : public mojom::ArcBridgeHost {
       mojom::ObbMounterInstancePtr obb_mounter_ptr) override;
   void OnOemCryptoInstanceReady(
       mojom::OemCryptoInstancePtr oemcrypto_ptr) override;
+  void OnPipInstanceReady(mojom::PipInstancePtr policy_ptr) override;
   void OnPolicyInstanceReady(mojom::PolicyInstancePtr policy_ptr) override;
   void OnPowerInstanceReady(mojom::PowerInstancePtr power_ptr) override;
   void OnPrintInstanceReady(mojom::PrintInstancePtr print_ptr) override;
   void OnProcessInstanceReady(mojom::ProcessInstancePtr process_ptr) override;
+  void OnPropertyInstanceReady(
+      mojom::PropertyInstancePtr property_ptr) override;
   void OnRotationLockInstanceReady(
       mojom::RotationLockInstancePtr rotation_lock_ptr) override;
   void OnScreenCaptureInstanceReady(

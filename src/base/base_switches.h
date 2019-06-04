@@ -21,7 +21,9 @@ extern const char kEnableLowEndDeviceMode[];
 extern const char kForceFieldTrials[];
 extern const char kFullMemoryCrashReport[];
 extern const char kNoErrorDialogs[];
+extern const char kProfilingAtStart[];
 extern const char kProfilingFile[];
+extern const char kProfilingFlush[];
 extern const char kTestChildProcess[];
 extern const char kTestDoNotInitializeIcu[];
 extern const char kTraceToFile[];
@@ -44,8 +46,6 @@ extern const char kEnableCrashReporterForTesting[];
 
 #if defined(OS_ANDROID)
 extern const char kOrderfileMemoryOptimization[];
-extern const char kForceNativePrefetch[];
-extern const char kNativePrefetchOrderedOnly[];
 #endif
 
 }  // namespace switches

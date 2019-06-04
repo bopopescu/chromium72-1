@@ -7,14 +7,13 @@
 
 #include <cstddef>
 
-#include "base/compiler_specific.h"
 #include "base/macros.h"
 #include "net/third_party/quic/core/crypto/quic_encrypter.h"
 #include "net/third_party/quic/core/quic_types.h"
 #include "net/third_party/quic/platform/api/quic_export.h"
 #include "net/third_party/quic/platform/api/quic_string_piece.h"
 
-namespace net {
+namespace quic {
 
 // A NullEncrypter is a QuicEncrypter used before a crypto negotiation
 // has occurred.  It does not actually encrypt the payload, but does
@@ -22,6 +21,8 @@ namespace net {
 class QUIC_EXPORT_PRIVATE NullEncrypter : public QuicEncrypter {
  public:
   explicit NullEncrypter(Perspective perspective);
+  NullEncrypter(const NullEncrypter&) = delete;
+  NullEncrypter& operator=(const NullEncrypter&) = delete;
   ~NullEncrypter() override {}
 
   // QuicEncrypter implementation
@@ -47,10 +48,8 @@ class QUIC_EXPORT_PRIVATE NullEncrypter : public QuicEncrypter {
   size_t GetHashLength() const;
 
   Perspective perspective_;
-
-  DISALLOW_COPY_AND_ASSIGN(NullEncrypter);
 };
 
-}  // namespace net
+}  // namespace quic
 
 #endif  // NET_THIRD_PARTY_QUIC_CORE_CRYPTO_NULL_ENCRYPTER_H_

@@ -24,7 +24,7 @@
 #include "net/http/http_stream_request.h"
 #include "net/log/net_log_with_source.h"
 #include "net/proxy_resolution/proxy_resolution_service.h"
-#include "net/quic/chromium/quic_stream_factory.h"
+#include "net/quic/quic_stream_factory.h"
 #include "net/socket/client_socket_handle.h"
 #include "net/socket/client_socket_pool_manager.h"
 #include "net/socket/next_proto.h"
@@ -82,6 +82,9 @@ class HttpStreamFactory::Job {
     virtual void OnStreamFailed(Job* job,
                                 int status,
                                 const SSLConfig& used_ssl_config) = 0;
+
+    // Invoked when |job| fails on the default network.
+    virtual void OnFailedOnDefaultNetwork(Job* job) = 0;
 
     // Invoked when |job| has a certificate error for the HttpStreamRequest.
     virtual void OnCertificateError(Job* job,
@@ -188,7 +191,7 @@ class HttpStreamFactory::Job {
       HostPortPair destination,
       GURL origin_url,
       NextProto alternative_protocol,
-      QuicTransportVersion quic_version,
+      quic::QuicTransportVersion quic_version,
       const ProxyServer& alternative_proxy_server,
       bool is_websocket,
       bool enable_ip_based_pooling,
@@ -315,6 +318,9 @@ class HttpStreamFactory::Job {
   // resolution completes. It's called with the next result after host
   // resolution, not the result of host resolution itself.
   void OnQuicHostResolution(int result);
+
+  // Invoked when the underlying connection fails on the default network.
+  void OnFailedOnDefaultNetwork(int result);
 
   // Each of these methods corresponds to a State value.  Those with an input
   // argument receive the result from the previous state.  If a method returns
@@ -448,9 +454,9 @@ class HttpStreamFactory::Job {
   // True if Job uses QUIC.
   const bool using_quic_;
 
-  // QuicTransportVersion that should be used to connect to the QUIC server if
-  // Job uses QUIC.
-  QuicTransportVersion quic_version_;
+  // quic::QuicTransportVersion that should be used to connect to the QUIC
+  // server if Job uses QUIC.
+  quic::QuicTransportVersion quic_version_;
 
   // True if Alternative Service protocol field requires that HTTP/2 is used.
   // In this case, Job fails if it cannot pool to an existing SpdySession and
@@ -554,7 +560,7 @@ class HttpStreamFactory::JobFactory {
       HostPortPair destination,
       GURL origin_url,
       NextProto alternative_protocol,
-      QuicTransportVersion quic_version,
+      quic::QuicTransportVersion quic_version,
       bool is_websocket,
       bool enable_ip_based_pooling,
       NetLog* net_log);

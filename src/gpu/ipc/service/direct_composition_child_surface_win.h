@@ -25,7 +25,7 @@ class GPU_IPC_SERVICE_EXPORT DirectCompositionChildSurfaceWin
                                    bool allow_tearing);
 
   // GLSurfaceEGL implementation.
-  using GLSurfaceEGL::Initialize;
+  using GLSurface::Initialize;
   bool Initialize(gl::GLSurfaceFormat format) override;
   void Destroy() override;
   gfx::Size GetSize() override;
@@ -49,9 +49,6 @@ class GPU_IPC_SERVICE_EXPORT DirectCompositionChildSurfaceWin
   }
 
   uint64_t dcomp_surface_serial() const { return dcomp_surface_serial_; }
-
-  EGLSurface default_surface_for_debugging() { return default_surface_; }
-  EGLSurface real_surface_for_debugging() { return real_surface_; }
 
  protected:
   ~DirectCompositionChildSurfaceWin() override;

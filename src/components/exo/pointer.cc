@@ -9,8 +9,10 @@
 #include "ash/public/cpp/shell_window_ids.h"
 #include "components/exo/pointer_delegate.h"
 #include "components/exo/pointer_gesture_pinch_delegate.h"
+#include "components/exo/shell_surface_base.h"
 #include "components/exo/surface.h"
 #include "components/exo/wm_helper.h"
+#include "components/exo/wm_helper_chromeos.h"
 #include "components/viz/common/frame_sinks/copy_output_request.h"
 #include "components/viz/common/frame_sinks/copy_output_result.h"
 #include "ui/aura/client/cursor_client.h"
@@ -44,13 +46,8 @@ const float kLargeCursorScale = 2.8f;
 
 const double kLocatedEventEpsilonSquared = 1.0 / (2000.0 * 2000.0);
 
-// Synthesized events typically lack floating point precision so to avoid
-// generating mouse event jitter we consider the location of these events
-// to be the same as |location| if floored values match.
-bool SameLocation(const ui::LocatedEvent* event, const gfx::PointF& location) {
-  if (event->flags() & ui::EF_IS_SYNTHESIZED)
-    return event->location() == gfx::ToFlooredPoint(location);
-
+bool SameLocation(const gfx::PointF& location_in_target,
+                  const gfx::PointF& location) {
   // In general, it is good practice to compare floats using an epsilon.
   // In particular, the mouse location_f() could differ between the
   // MOUSE_PRESSED and MOUSE_RELEASED events. At MOUSE_RELEASED, it will have a
@@ -58,7 +55,7 @@ bool SameLocation(const ui::LocatedEvent* event, const gfx::PointF& location) {
   // calculate it passing through all the hierarchy of windows, and that could
   // generate rounding error. std::numeric_limits<float>::epsilon() is not big
   // enough to catch this rounding error.
-  gfx::Vector2dF offset = event->location_f() - location;
+  gfx::Vector2dF offset = location_in_target - location;
   return offset.LengthSquared() < (2 * kLocatedEventEpsilonSquared);
 }
 
@@ -85,7 +82,7 @@ Pointer::Pointer(PointerDelegate* delegate)
       capture_ratio_(GetCaptureDisplayInfo().GetDensityRatio()),
       cursor_capture_source_id_(base::UnguessableToken::Create()),
       cursor_capture_weak_ptr_factory_(this) {
-  auto* helper = WMHelper::GetInstance();
+  WMHelperChromeOS* helper = WMHelperChromeOS::GetInstance();
   helper->AddPreTargetHandler(this);
   helper->AddDisplayConfigurationObserver(this);
   // TODO(sky): CursorClient does not exist in mash
@@ -102,7 +99,7 @@ Pointer::~Pointer() {
   }
   if (pinch_delegate_)
     pinch_delegate_->OnPointerDestroying(this);
-  auto* helper = WMHelper::GetInstance();
+  WMHelperChromeOS* helper = WMHelperChromeOS::GetInstance();
   helper->RemoveDisplayConfigurationObserver(this);
   helper->RemovePreTargetHandler(this);
   // TODO(sky): CursorClient does not exist in mash
@@ -159,6 +156,10 @@ void Pointer::SetCursor(Surface* surface, const gfx::Point& hotspot) {
 }
 
 void Pointer::SetCursorType(ui::CursorType cursor_type) {
+  // Early out if the pointer doesn't have a surface in focus.
+  if (!focus_surface_)
+    return;
+
   if (cursor_ == cursor_type)
     return;
   cursor_ = cursor_type;
@@ -203,10 +204,16 @@ void Pointer::OnSurfaceDestroying(Surface* surface) {
 
 void Pointer::OnMouseEvent(ui::MouseEvent* event) {
   Surface* target = GetEffectiveTargetForEvent(event);
+  gfx::PointF location_in_target = event->location_f();
+  if (target) {
+    aura::Window::ConvertPointToTarget(
+        static_cast<aura::Window*>(event->target()), target->window(),
+        &location_in_target);
+  }
 
   // Update focus if target is different than the current pointer focus.
   if (target != focus_surface_)
-    SetFocus(target, event->location_f(), event->button_flags());
+    SetFocus(target, location_in_target, event->button_flags());
 
   if (!focus_surface_)
     return;
@@ -218,8 +225,15 @@ void Pointer::OnMouseEvent(ui::MouseEvent* event) {
     // here as mouse movement can generate both "moved" and "entered" events
     // but OnPointerMotion should only be called if location changed since
     // OnPointerEnter was called.
-    if (!SameLocation(event, location_)) {
-      location_ = event->location_f();
+    // For synthesized events, they typically lack floating point precision
+    // so to avoid generating mouse event jitter we consider the location of
+    // these events to be the same as |location| if floored values match.
+    bool same_location = !event->IsSynthesized()
+                             ? SameLocation(location_in_target, location_)
+                             : gfx::ToFlooredPoint(location_in_target) ==
+                                   gfx::ToFlooredPoint(location_);
+    if (!same_location) {
+      location_ = location_in_target;
       delegate_->OnPointerMotion(event->time_stamp(), location_);
       delegate_->OnPointerFrame();
     }
@@ -334,6 +348,9 @@ void Pointer::OnCursorSizeChanged(ui::CursorSize cursor_size) {
 
 void Pointer::OnCursorDisplayChanged(const display::Display& display) {
   auto* cursor_client = WMHelper::GetInstance()->GetCursorClient();
+  // TODO(crbug.com/631103): CursorClient does not exist in mash yet.
+  if (!cursor_client)
+    return;
   if (cursor_ == ui::CursorType::kCustom &&
       cursor_client->GetCursor() == cursor_client->GetCursor()) {
     // If the current cursor is still the one created by us,
@@ -357,9 +374,9 @@ void Pointer::OnDisplayConfigurationChanged() {
 ////////////////////////////////////////////////////////////////////////////////
 // Pointer, private:
 
-Surface* Pointer::GetEffectiveTargetForEvent(ui::Event* event) const {
-  Surface* target =
-      Surface::AsSurface(static_cast<aura::Window*>(event->target()));
+Surface* Pointer::GetEffectiveTargetForEvent(ui::LocatedEvent* event) const {
+  Surface* target = ShellSurfaceBase::GetTargetSurfaceForLocatedEvent(event);
+
   if (!target)
     return nullptr;
 
@@ -423,11 +440,9 @@ void Pointer::CaptureCursor(const gfx::Point& hotspot) {
   // Surface size is in DIPs, while layer size is in pseudo-DIP units that
   // depend on the DSF of the display mode. Scale the layer to capture the
   // surface at a constant pixel size, regardless of the primary display's
-  // UI scale and display mode DSF.
+  // display mode DSF.
   display::Display display = display::Screen::GetScreen()->GetPrimaryDisplay();
-  auto* helper = WMHelper::GetInstance();
-  float scale = helper->GetDisplayInfo(display.id()).GetEffectiveUIScale() *
-                capture_scale_ / display.device_scale_factor();
+  float scale = capture_scale_ / display.device_scale_factor();
   host_window()->SetTransform(gfx::GetScaleTransform(gfx::Point(), scale));
 
   std::unique_ptr<viz::CopyOutputRequest> request =
@@ -457,8 +472,11 @@ void Pointer::OnCursorCaptured(const gfx::Point& hotspot,
 }
 
 void Pointer::UpdateCursor() {
-  auto* helper = WMHelper::GetInstance();
+  WMHelper* helper = WMHelper::GetInstance();
   aura::client::CursorClient* cursor_client = helper->GetCursorClient();
+  // TODO(crbug.com/631103): CursorClient does not exist in mash yet.
+  if (!cursor_client)
+    return;
 
   if (cursor_ == ui::CursorType::kCustom) {
     SkBitmap bitmap = cursor_bitmap_;

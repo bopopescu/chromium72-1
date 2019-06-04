@@ -12,7 +12,6 @@
 
 namespace ui {
 class ContextFactory;
-class InputDeviceClient;
 }  // namespace ui
 
 namespace aura {
@@ -43,10 +42,6 @@ class AuraTestSuiteSetup {
   std::unique_ptr<TestWindowTreeClientDelegate>
       test_window_tree_client_delegate_;
   std::unique_ptr<TestWindowTreeClientSetup> window_tree_client_setup_;
-#endif
-
-#if defined(USE_OZONE)
-  std::unique_ptr<ui::InputDeviceClient> input_device_client_;
 #endif
 
   DISALLOW_COPY_AND_ASSIGN(AuraTestSuiteSetup);

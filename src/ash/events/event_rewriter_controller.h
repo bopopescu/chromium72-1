@@ -47,6 +47,8 @@ class ASH_EXPORT EventRewriterController
       mojom::SpokenFeedbackEventRewriterDelegatePtr delegate) override;
   void OnUnhandledSpokenFeedbackEvent(
       std::unique_ptr<ui::Event> event) override;
+  void CaptureAllKeysForSpokenFeedback(bool capture) override;
+  void SetSendMouseEventsToDelegate(bool value) override;
 
   // aura::EnvObserver:
   void OnWindowInitialized(aura::Window* window) override {}

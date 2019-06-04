@@ -148,6 +148,10 @@ ToolbarActionsBarUnitTest::ToolbarActionsBarUnitTest()
 ToolbarActionsBarUnitTest::~ToolbarActionsBarUnitTest() {}
 
 void ToolbarActionsBarUnitTest::SetUp() {
+  // Overriding MD state needs to be done before setting up the test window to
+  // maintain consistency throughout its lifetime.
+  material_design_state_ =
+      std::make_unique<ui::test::MaterialDesignControllerTestAPI>(GetParam());
   BrowserWithTestWindowTest::SetUp();
   extensions::LoadErrorReporter::Init(false);
 
@@ -164,8 +168,6 @@ void ToolbarActionsBarUnitTest::SetUp() {
       extensions::extension_action_test_util::CreateToolbarModelForProfile(
           profile());
 
-  material_design_state_.reset(
-      new ui::test::MaterialDesignControllerTestAPI(GetParam()));
   ToolbarActionsBar::disable_animations_for_testing_ = true;
   browser_action_test_util_ = BrowserActionTestUtil::Create(browser(), false);
 
@@ -179,8 +181,8 @@ void ToolbarActionsBarUnitTest::TearDown() {
   browser_action_test_util_.reset();
   overflow_browser_action_test_util_.reset();
   ToolbarActionsBar::disable_animations_for_testing_ = false;
-  material_design_state_.reset();
   BrowserWithTestWindowTest::TearDown();
+  material_design_state_.reset();
 }
 
 void ToolbarActionsBarUnitTest::ActivateTab(int index) {
@@ -234,12 +236,9 @@ testing::AssertionResult ToolbarActionsBarUnitTest::VerifyToolbarOrder(
 
 // Note: First argument is optional and intentionally left blank.
 // (it's a prefix for the generated test cases)
-INSTANTIATE_TEST_CASE_P(
-    ,
-    ToolbarActionsBarUnitTest,
-    testing::Values(ui::MaterialDesignController::MATERIAL_NORMAL,
-                    ui::MaterialDesignController::MATERIAL_HYBRID,
-                    ui::MaterialDesignController::MATERIAL_TOUCH_OPTIMIZED));
+INSTANTIATE_TEST_CASE_P(,
+                        ToolbarActionsBarUnitTest,
+                        testing::Values(false, true));
 
 TEST_P(ToolbarActionsBarUnitTest, BasicToolbarActionsBarTest) {
   // Add three extensions to the profile; this is the easiest way to have
@@ -494,6 +493,10 @@ TEST_P(ToolbarActionsBarUnitTest, TestActionFrameBounds) {
 
 TEST_P(ToolbarActionsBarUnitTest, TestStartAndEndIndexes) {
   const int icon_width = toolbar_actions_bar()->GetViewSize().width();
+  // Width of the resize handle.
+  int extra_area_width =
+      toolbar_actions_bar()->platform_settings().item_spacing +
+      2 * GetLayoutConstant(TOOLBAR_STANDARD_SPACING) + 1;
 
   for (int i = 0; i < 3; ++i) {
     CreateAndAddExtension(base::StringPrintf("extension %d", i),
@@ -509,7 +512,7 @@ TEST_P(ToolbarActionsBarUnitTest, TestStartAndEndIndexes) {
   EXPECT_FALSE(toolbar_actions_bar()->NeedsOverflow());
 
   // Shrink the width of the view to be a little over enough for one icon.
-  browser_action_test_util()->SetWidth(icon_width + 2);
+  browser_action_test_util()->SetWidth(icon_width + 2 + extra_area_width);
   // Tricky: GetIconCount() is what we use to determine our preferred size,
   // stored pref size, etc, and should not be affected by a minimum size that is
   // too small to show everything. It should remain constant.
@@ -532,9 +535,12 @@ TEST_P(ToolbarActionsBarUnitTest, TestStartAndEndIndexes) {
   EXPECT_EQ(3u, overflow_bar()->GetEndIndexInBounds());
   EXPECT_TRUE(toolbar_actions_bar()->NeedsOverflow());
 
-  // Set the width back to the preferred width. All should be back to normal.
+  // Set the width back to the preferred width (with resize handle). All should
+  // be back to normal.
+  // TODO(pbos): Set the full width in a less contrived way when
+  // ToolbarActionsBar and BrowserActionsContainer merge.
   browser_action_test_util()->SetWidth(
-      toolbar_actions_bar()->GetFullSize().width());
+      toolbar_actions_bar()->GetFullSize().width() + extra_area_width);
   EXPECT_EQ(3u, toolbar_actions_bar()->GetIconCount());
   EXPECT_EQ(0u, toolbar_actions_bar()->GetStartIndexInBounds());
   EXPECT_EQ(3u, toolbar_actions_bar()->GetEndIndexInBounds());
@@ -607,7 +613,7 @@ TEST_P(ToolbarActionsBarUnitTest, TestNeedsOverflow) {
 // TODO(catmullings): Convert this from TEST_P to TEST_F since there is no test
 // parameter dependence.
 TEST_P(ToolbarActionsBarUnitTest, ReuploadExtensionFailed) {
-  ExtensionService* service =
+  extensions::ExtensionService* service =
       extensions::ExtensionSystem::Get(profile())->extension_service();
   extensions::ExtensionRegistry* registry =
       extensions::ExtensionRegistry::Get(profile());

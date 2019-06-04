@@ -11,8 +11,8 @@
 #include "api/audio_codecs/opus/audio_decoder_opus.h"
 #include "api/audio_codecs/opus/audio_encoder_opus.h"
 #include "common_audio/include/audio_util.h"
-#include "common_audio/lapped_transform.h"
 #include "common_audio/window_generator.h"
+#include "modules/audio_coding/codecs/opus/test/lapped_transform.h"
 #include "modules/audio_coding/neteq/tools/audio_loop.h"
 #include "test/field_trial.h"
 #include "test/gtest.h"
@@ -110,7 +110,7 @@ TEST(BandwidthAdaptationTest, BandwidthAdaptationTest) {
 
   // Create encoder.
   AudioEncoderOpusConfig enc_config;
-  enc_config.bitrate_bps = rtc::Optional<int>(7999);
+  enc_config.bitrate_bps = absl::optional<int>(7999);
   enc_config.num_channels = kNumChannels;
   constexpr int payload_type = 17;
   auto encoder = AudioEncoderOpus::MakeAudioEncoder(enc_config, payload_type);

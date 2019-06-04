@@ -9,8 +9,8 @@
 #include "components/payments/content/web_app_manifest.h"
 #include "components/payments/core/payment_instrument.h"
 #include "content/public/browser/stored_payment_app.h"
-#include "third_party/blink/public/platform/modules/payments/payment_app.mojom.h"
-#include "third_party/blink/public/platform/modules/payments/payment_request.mojom.h"
+#include "third_party/blink/public/mojom/payments/payment_app.mojom.h"
+#include "third_party/blink/public/mojom/payments/payment_request.mojom.h"
 
 namespace content {
 class BrowserContext;
@@ -69,7 +69,7 @@ class ServiceWorkerPaymentInstrument : public PaymentInstrument {
   void RecordUse() override;
   base::string16 GetLabel() const override;
   base::string16 GetSublabel() const override;
-  bool IsValidForModifier(const std::vector<std::string>& methods,
+  bool IsValidForModifier(const std::string& method,
                           bool supported_networks_specified,
                           const std::set<std::string>& supported_networks,
                           bool supported_types_specified,

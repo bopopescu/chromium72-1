@@ -5,25 +5,31 @@
 #include "third_party/blink/renderer/core/script/module_map.h"
 
 #include "third_party/blink/renderer/core/loader/modulescript/module_script_fetch_request.h"
+#include "third_party/blink/renderer/core/loader/modulescript/module_script_loader.h"
 #include "third_party/blink/renderer/core/loader/modulescript/module_script_loader_client.h"
+#include "third_party/blink/renderer/core/loader/modulescript/module_script_loader_registry.h"
 #include "third_party/blink/renderer/core/script/modulator.h"
 #include "third_party/blink/renderer/core/script/module_script.h"
+#include "third_party/blink/renderer/platform/bindings/name_client.h"
 
 namespace blink {
 
 // Entry struct represents a value in "module map" spec object.
 // https://html.spec.whatwg.org/multipage/webappapis.html#module-map
 class ModuleMap::Entry final : public GarbageCollectedFinalized<Entry>,
-                               public TraceWrapperBase,
+                               public NameClient,
                                public ModuleScriptLoaderClient {
   USING_GARBAGE_COLLECTED_MIXIN(ModuleMap::Entry);
 
  public:
-  static Entry* Create(ModuleMap* map) { return new Entry(map); }
+  static Entry* Create(ModuleMap* map) {
+    return MakeGarbageCollected<Entry>(map);
+  }
+
+  explicit Entry(ModuleMap*);
   ~Entry() override {}
 
   void Trace(blink::Visitor*) override;
-  void TraceWrappers(ScriptWrappableVisitor*) const override;
   const char* NameInHeapSnapshot() const override { return "ModuleMap::Entry"; }
 
   // Notify fetched |m_moduleScript| to the client asynchronously.
@@ -33,8 +39,6 @@ class ModuleMap::Entry final : public GarbageCollectedFinalized<Entry>,
   ModuleScript* GetModuleScript() const;
 
  private:
-  explicit Entry(ModuleMap*);
-
   void DispatchFinishedNotificationAsync(SingleModuleClient*);
 
   // Implements ModuleScriptLoaderClient
@@ -57,10 +61,6 @@ void ModuleMap::Entry::Trace(blink::Visitor* visitor) {
   visitor->Trace(module_script_);
   visitor->Trace(map_);
   visitor->Trace(clients_);
-}
-
-void ModuleMap::Entry::TraceWrappers(ScriptWrappableVisitor* visitor) const {
-  visitor->TraceWrappers(module_script_);
 }
 
 void ModuleMap::Entry::DispatchFinishedNotificationAsync(
@@ -98,24 +98,25 @@ ModuleScript* ModuleMap::Entry::GetModuleScript() const {
   return module_script_.Get();
 }
 
-ModuleMap::ModuleMap(Modulator* modulator) : modulator_(modulator) {
+ModuleMap::ModuleMap(Modulator* modulator)
+    : modulator_(modulator),
+      loader_registry_(ModuleScriptLoaderRegistry::Create()) {
   DCHECK(modulator);
 }
 
 void ModuleMap::Trace(blink::Visitor* visitor) {
   visitor->Trace(map_);
   visitor->Trace(modulator_);
+  visitor->Trace(loader_registry_);
 }
 
-void ModuleMap::TraceWrappers(ScriptWrappableVisitor* visitor) const {
-  for (const auto& it : map_)
-    visitor->TraceWrappers(it.value);
-}
-
-// https://html.spec.whatwg.org/multipage/webappapis.html#fetch-a-single-module-script
-void ModuleMap::FetchSingleModuleScript(const ModuleScriptFetchRequest& request,
-                                        ModuleGraphLevel level,
-                                        SingleModuleClient* client) {
+// <specdef href="https://html.spec.whatwg.org/#fetch-a-single-module-script">
+void ModuleMap::FetchSingleModuleScript(
+    const ModuleScriptFetchRequest& request,
+    FetchClientSettingsObjectSnapshot* fetch_client_settings_object,
+    ModuleGraphLevel level,
+    ModuleScriptCustomFetchType custom_fetch_type,
+    SingleModuleClient* client) {
   // <spec step="1">Let moduleMap be module map settings object's module
   // map.</spec>
   //
@@ -131,14 +132,16 @@ void ModuleMap::FetchSingleModuleScript(const ModuleScriptFetchRequest& request,
 
     // Steps 4-9 loads a new single module script.
     // Delegates to ModuleScriptLoader via Modulator.
-    modulator_->FetchNewSingleModule(request, level, entry);
+    ModuleScriptLoader::Fetch(request, fetch_client_settings_object, level,
+                              modulator_, custom_fetch_type, loader_registry_,
+                              entry);
   }
   DCHECK(entry);
 
   // <spec step="3">If moduleMap[url] exists, asynchronously complete this
   // algorithm with moduleMap[url], and abort these steps.</spec>
   //
-  // <spec step="11">Set moduleMap[url] to module script, and asynchronously
+  // <spec step="12">Set moduleMap[url] to module script, and asynchronously
   // complete this algorithm with module script.</spec>
   if (client)
     entry->AddClient(client);

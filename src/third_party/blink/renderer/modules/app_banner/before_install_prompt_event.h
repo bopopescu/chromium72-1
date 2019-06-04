@@ -23,7 +23,7 @@ class BeforeInstallPromptEventInit;
 
 using UserChoiceProperty =
     ScriptPromiseProperty<Member<BeforeInstallPromptEvent>,
-                          AppBannerPromptResult,
+                          Member<AppBannerPromptResult>,
                           ToV8UndefinedGenerator>;
 
 class BeforeInstallPromptEvent final
@@ -43,15 +43,17 @@ class BeforeInstallPromptEvent final
       LocalFrame& frame,
       mojom::blink::AppBannerServicePtr service_ptr,
       mojom::blink::AppBannerEventRequest event_request,
-      const Vector<String>& platforms) {
+      const Vector<String>& platforms,
+      bool require_gesture) {
     return new BeforeInstallPromptEvent(name, frame, std::move(service_ptr),
-                                        std::move(event_request), platforms);
+                                        std::move(event_request), platforms,
+                                        require_gesture);
   }
 
   static BeforeInstallPromptEvent* Create(
       ExecutionContext* execution_context,
       const AtomicString& name,
-      const BeforeInstallPromptEventInit& init) {
+      const BeforeInstallPromptEventInit* init) {
     return new BeforeInstallPromptEvent(execution_context, name, init);
   }
 
@@ -74,10 +76,11 @@ class BeforeInstallPromptEvent final
                            LocalFrame&,
                            mojom::blink::AppBannerServicePtr,
                            mojom::blink::AppBannerEventRequest,
-                           const Vector<String>& platforms);
+                           const Vector<String>& platforms,
+                           bool require_gesture);
   BeforeInstallPromptEvent(ExecutionContext*,
                            const AtomicString& name,
-                           const BeforeInstallPromptEventInit&);
+                           const BeforeInstallPromptEventInit*);
 
   // mojom::blink::AppBannerEvent methods:
   void BannerAccepted(const String& platform) override;
@@ -87,16 +90,19 @@ class BeforeInstallPromptEvent final
   mojo::Binding<mojom::blink::AppBannerEvent> binding_;
   Vector<String> platforms_;
   Member<UserChoiceProperty> user_choice_;
-  bool prompt_called_;
+
+  // TODO(crbug.com/869780): remove this member when the ExperimentalAppBanners
+  // feature is removed.
+  bool require_gesture_;
 };
 
 DEFINE_TYPE_CASTS(BeforeInstallPromptEvent,
                   Event,
                   event,
                   event->InterfaceName() ==
-                      EventNames::BeforeInstallPromptEvent,
+                      event_interface_names::kBeforeInstallPromptEvent,
                   event.InterfaceName() ==
-                      EventNames::BeforeInstallPromptEvent);
+                      event_interface_names::kBeforeInstallPromptEvent);
 
 }  // namespace blink
 

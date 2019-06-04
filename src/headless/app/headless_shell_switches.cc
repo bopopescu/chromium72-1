@@ -12,6 +12,9 @@ namespace switches {
 // transparent.
 const char kDefaultBackgroundColor[] = "default-background-color";
 
+// Whether cookies stored as part of user profile are encrypted.
+const char kDisableCookieEncryption[] = "disable-cookie-encryption";
+
 // Whether or not begin frames should be issued over DevToolsProtocol
 // (experimental).
 const char kEnableBeginFrameControl[] = "enable-begin-frame-control";
@@ -30,11 +33,6 @@ const char kCrashDumpsDir[] = "crash-dumps-dir";
 // deterministic mode where begin frames should be issued over DevToolsProtocol
 // (experimental).
 const char kDeterministicMode[] = "deterministic-mode";
-
-// Instructs headless_shell to cause network fetches to complete in order of
-// creation. This removes a significant source of network related
-// non-determinism at the cost of slower page loads.
-const char kDeterministicFetch[] = "deterministic-fetch";
 
 // Instructs headless_shell to print document.body.innerHTML to stdout.
 const char kDumpDom[] = "dump-dom";
@@ -117,5 +115,7 @@ const char kAuthServerWhitelist[] = "auth-server-whitelist";
 // Possible values: none|slight|medium|full|max. Default: full.
 const char kFontRenderHinting[] = "font-render-hinting";
 
+// If true, then all pop-ups and calls to window.open will fail.
+const char kBlockNewWebContents[] = "block-new-web-contents";
 }  // namespace switches
 }  // namespace headless

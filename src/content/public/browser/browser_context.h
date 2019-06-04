@@ -15,11 +15,15 @@
 
 #include "base/callback_forward.h"
 #include "base/containers/hash_tables.h"
+#include "base/optional.h"
 #include "base/supports_user_data.h"
 #include "content/common/content_export.h"
 #include "net/url_request/url_request_interceptor.h"
 #include "net/url_request/url_request_job_factory.h"
-#include "services/service_manager/embedder/embedded_service_info.h"
+#include "services/network/public/mojom/cors_origin_pattern.mojom.h"
+#include "services/service_manager/public/cpp/embedded_service_info.h"
+#include "services/service_manager/public/mojom/service.mojom.h"
+#include "third_party/blink/public/mojom/blob/blob.mojom.h"
 
 #if !defined(OS_ANDROID)
 #include "content/public/browser/zoom_level_delegate.h"
@@ -29,14 +33,24 @@ class GURL;
 
 namespace base {
 class FilePath;
+class Token;
+}
+
+namespace download {
+class InProgressDownloadManager;
 }
 
 namespace service_manager {
 class Connector;
+class Service;
 }
 
 namespace storage {
 class ExternalMountPoints;
+}
+
+namespace url {
+class Origin;
 }
 
 namespace media {
@@ -66,11 +80,12 @@ class BrowsingDataRemover;
 class BrowsingDataRemoverDelegate;
 class DownloadManager;
 class DownloadManagerDelegate;
-class PermissionManager;
-struct PushEventPayload;
+class PermissionController;
+class PermissionControllerDelegate;
 class PushMessagingService;
 class ResourceContext;
 class ServiceManagerConnection;
+class SharedCorsOriginAccessList;
 class SiteInstance;
 class StoragePartition;
 class SSLHostStateDelegate;
@@ -100,6 +115,10 @@ class CONTENT_EXPORT BrowserContext : public base::SupportsUserData {
   // Returns a BrowsingDataRemover that can schedule data deletion tasks
   // for this |context|.
   static BrowsingDataRemover* GetBrowsingDataRemover(BrowserContext* context);
+
+  // Returns the PermissionController associated with this context. There's
+  // always a PermissionController instance for each BrowserContext.
+  static PermissionController* GetPermissionController(BrowserContext* context);
 
   // Returns a StoragePartition for the given SiteInstance. By default this will
   // create a new StoragePartition if it doesn't exist, unless |can_create| is
@@ -147,13 +166,21 @@ class CONTENT_EXPORT BrowserContext : public base::SupportsUserData {
   static BlobContextGetter GetBlobStorageContext(
       BrowserContext* browser_context);
 
+  // Returns a mojom::BlobPtr for a specific blob. If no blob exists with the
+  // given UUID, the BlobPtr pipe will close.
+  // This method should be called on the UI thread.
+  // TODO(mek): Blob UUIDs should be entirely internal to the blob system, so
+  // eliminate this method in favor of just passing around the BlobPtr directly.
+  static blink::mojom::BlobPtr GetBlobPtr(BrowserContext* browser_context,
+                                          const std::string& uuid);
+
   // Delivers a push message with |data| to the Service Worker identified by
   // |origin| and |service_worker_registration_id|.
   static void DeliverPushMessage(
       BrowserContext* browser_context,
       const GURL& origin,
       int64_t service_worker_registration_id,
-      const PushEventPayload& payload,
+      base::Optional<std::string> payload,
       const base::Callback<void(mojom::PushDeliveryStatus)>& callback);
 
   static void NotifyWillBeDestroyed(BrowserContext* browser_context);
@@ -173,29 +200,45 @@ class CONTENT_EXPORT BrowserContext : public base::SupportsUserData {
       BrowserContext* browser_context,
       std::unique_ptr<content::DownloadManager> download_manager);
 
-  // Makes the Service Manager aware of this BrowserContext, and assigns a user
-  // ID number to it. Should be called for each BrowserContext created.
+  // Makes the Service Manager aware of this BrowserContext, and assigns a
+  // instance group ID to it. Should be called for each BrowserContext created.
   static void Initialize(BrowserContext* browser_context,
                          const base::FilePath& path);
 
-  // Returns a Service User ID associated with this BrowserContext. This ID is
-  // not persistent across runs. See
+  // Returns a Service instance group ID associated with this BrowserContext.
+  // This ID is not persistent across runs. See
   // services/service_manager/public/mojom/connector.mojom. By default,
-  // this user id is randomly generated when Initialize() is called.
-  static const std::string& GetServiceUserIdFor(
+  // group ID is randomly generated when Initialize() is called.
+  static const base::Token& GetServiceInstanceGroupFor(
       BrowserContext* browser_context);
 
-  // Returns the BrowserContext associated with |user_id|, or nullptr if no
-  // BrowserContext exists for that |user_id|.
-  static BrowserContext* GetBrowserContextForServiceUserId(
-      const std::string& user_id);
+  // Returns the BrowserContext associated with |instance_group|, or nullptr if
+  // no BrowserContext exists for that |instance_group|.
+  static BrowserContext* GetBrowserContextForServiceInstanceGroup(
+      const base::Token& instance_group);
 
   // Returns a Connector associated with this BrowserContext, which can be used
   // to connect to service instances bound as this user.
   static service_manager::Connector* GetConnectorFor(
       BrowserContext* browser_context);
+
   static ServiceManagerConnection* GetServiceManagerConnectionFor(
       BrowserContext* browser_context);
+
+  // Returns a SharedCorsOriginAccessList instance for the |browser_context|.
+  // TODO(toyoshim): Remove this interface once NetworkService is enabled.
+  static const SharedCorsOriginAccessList* GetSharedCorsOriginAccessList(
+      BrowserContext* browser_context);
+
+  // Sets CORS origin access lists. This obtains SharedCorsOriginAccessList
+  // that is bound to |browser_context|, and calls SetForOrigin(...) for legacy
+  // code path, but calls into NetworkService instead if it is enabled.
+  static void SetCorsOriginAccessListsForOrigin(
+      BrowserContext* browser_context,
+      const url::Origin& source_origin,
+      std::vector<network::mojom::CorsOriginPatternPtr> allow_patterns,
+      std::vector<network::mojom::CorsOriginPatternPtr> block_patterns,
+      base::OnceClosure closure);
 
   BrowserContext();
 
@@ -247,9 +290,12 @@ class CONTENT_EXPORT BrowserContext : public base::SupportsUserData {
   // return nullptr, implementing the default exception storage strategy.
   virtual SSLHostStateDelegate* GetSSLHostStateDelegate() = 0;
 
-  // Returns the PermissionManager associated with that context if any, nullptr
-  // otherwise.
-  virtual PermissionManager* GetPermissionManager() = 0;
+  // Returns the PermissionControllerDelegate associated with this context if
+  // any, nullptr otherwise.
+  //
+  // Note: if you want to check a permission status, you probably need
+  // BrowserContext::GetPermissionController() instead.
+  virtual PermissionControllerDelegate* GetPermissionControllerDelegate() = 0;
 
   // Returns the BackgroundFetchDelegate associated with that context if any,
   // nullptr otherwise.
@@ -294,6 +340,12 @@ class CONTENT_EXPORT BrowserContext : public base::SupportsUserData {
   // by the Service Manager.
   virtual void RegisterInProcessServices(StaticServiceMap* services) {}
 
+  // Handles a service request for a service expected to run an instance per
+  // BrowserContext.
+  virtual std::unique_ptr<service_manager::Service> HandleServiceRequest(
+      const std::string& service_name,
+      service_manager::mojom::ServiceRequest request);
+
   // Returns a unique string associated with this browser context.
   virtual const std::string& UniqueId() const;
 
@@ -311,6 +363,11 @@ class CONTENT_EXPORT BrowserContext : public base::SupportsUserData {
   // have similar decode performance and stats are not exposed to the web
   // directly, so privacy is not compromised.
   virtual media::VideoDecodePerfHistory* GetVideoDecodePerfHistory();
+
+  // Retrieves the InProgressDownloadManager associated with this object if
+  // available
+  virtual download::InProgressDownloadManager*
+  RetriveInProgressDownloadManager();
 
  private:
   const std::string unique_id_;

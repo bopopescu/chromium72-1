@@ -19,17 +19,12 @@ class ViewsDelegate;
 namespace ui_devtools {
 class UiDevToolsServer;
 }
-namespace views {
-class MusClient;
-}
 namespace wm {
 class WMState;
 }
 #endif
 
-#if !defined(OS_CHROMEOS)
 class RelaunchNotificationController;
-#endif
 
 class ChromeBrowserMainExtraPartsViews : public ChromeBrowserMainExtraParts {
  public:
@@ -40,8 +35,6 @@ class ChromeBrowserMainExtraPartsViews : public ChromeBrowserMainExtraParts {
   void ToolkitInitialized() override;
   void PreCreateThreads() override;
   void PreProfileInit() override;
-  void ServiceManagerConnectionStarted(
-      content::ServiceManagerConnection* connection) override;
   void PostBrowserStart() override;
   void PostMainMessageLoopRun() override;
 
@@ -53,18 +46,12 @@ class ChromeBrowserMainExtraPartsViews : public ChromeBrowserMainExtraParts {
   // Only used when running in --enable-ui-devtools.
   std::unique_ptr<ui_devtools::UiDevToolsServer> devtools_server_;
 
-  // Not created when running in ash::Config::MUS.
   std::unique_ptr<wm::WMState> wm_state_;
-
-  // Only used when running in ash::Config::MASH.
-  std::unique_ptr<views::MusClient> mus_client_;
 #endif
 
-#if !defined(OS_CHROMEOS)
   // Manages the relaunch notification prompts.
   std::unique_ptr<RelaunchNotificationController>
       relaunch_notification_controller_;
-#endif
 
   DISALLOW_COPY_AND_ASSIGN(ChromeBrowserMainExtraPartsViews);
 };

@@ -24,7 +24,7 @@
 #include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
-#include "base/task_scheduler/post_task.h"
+#include "base/task/post_task.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/dbus/dbus_thread_linux.h"
@@ -35,6 +35,7 @@
 #include "chrome/grit/chromium_strings.h"
 #include "chrome/grit/generated_resources.h"
 #include "components/url_formatter/elide_url.h"
+#include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/notification_service.h"
 #include "dbus/bus.h"
@@ -188,6 +189,14 @@ void ForwardNotificationOperationOnUiThread(
     const std::string& profile_id,
     bool is_incognito) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+
+  // Profile ID can be empty for system notifications, which are not bound to a
+  // profile, but system notifications are transient and thus not handled by
+  // this NotificationPlatformBridge.
+  // When transient notifications are supported, this should route the
+  // notification response to the system NotificationDisplayService.
+  DCHECK(!profile_id.empty());
+
   g_browser_process->profile_manager()->LoadProfile(
       profile_id, is_incognito,
       base::Bind(&NotificationDisplayServiceImpl::ProfileLoadedCallback,
@@ -322,6 +331,8 @@ class NotificationPlatformBridgeLinuxImpl
     }
   }
 
+  void DisplayServiceShutDown(Profile* profile) override {}
+
   void CleanUp() {
     DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
     task_runner_->PostTask(
@@ -432,8 +443,8 @@ class NotificationPlatformBridgeLinuxImpl
           ConnectionInitializationStatusCode::MISSING_REQUIRED_CAPABILITIES);
       return;
     }
-    content::BrowserThread::PostTask(
-        content::BrowserThread::UI, FROM_HERE,
+    base::PostTaskWithTraits(
+        FROM_HERE, {content::BrowserThread::UI},
         base::BindOnce(
             &NotificationPlatformBridgeLinuxImpl::SetBodyImagesSupported, this,
             base::ContainsKey(capabilities_, kCapabilityBodyImages)));
@@ -725,8 +736,8 @@ class NotificationPlatformBridgeLinuxImpl
       if (data->profile_id == profile_id && data->is_incognito == incognito)
         displayed->insert(data->notification_id);
     }
-    content::BrowserThread::PostTask(
-        content::BrowserThread::UI, FROM_HERE,
+    base::PostTaskWithTraits(
+        FROM_HERE, {content::BrowserThread::UI},
         base::BindOnce(std::move(callback), std::move(displayed), true));
   }
 
@@ -764,8 +775,8 @@ class NotificationPlatformBridgeLinuxImpl
                                     const base::Optional<int>& action_index,
                                     const base::Optional<bool>& by_user) {
     DCHECK(task_runner_->RunsTasksInCurrentSequence());
-    content::BrowserThread::PostTask(
-        content::BrowserThread::UI, location,
+    base::PostTaskWithTraits(
+        location, {content::BrowserThread::UI},
         base::BindOnce(ForwardNotificationOperationOnUiThread, operation,
                        data->notification_type, data->origin_url,
                        data->notification_id, action_index, by_user,
@@ -787,12 +798,12 @@ class NotificationPlatformBridgeLinuxImpl
       return;
 
     if (action == kDefaultButtonId) {
-      ForwardNotificationOperation(FROM_HERE, data, NotificationCommon::CLICK,
-                                   base::nullopt /* action_index */,
-                                   base::nullopt /* by_user */);
+      ForwardNotificationOperation(
+          FROM_HERE, data, NotificationCommon::OPERATION_CLICK,
+          base::nullopt /* action_index */, base::nullopt /* by_user */);
     } else if (action == kSettingsButtonId) {
       ForwardNotificationOperation(
-          FROM_HERE, data, NotificationCommon::SETTINGS,
+          FROM_HERE, data, NotificationCommon::OPERATION_SETTINGS,
           base::nullopt /* action_index */, base::nullopt /* by_user */);
     } else if (action == kCloseButtonId) {
       CloseOnTaskRunner(data->profile_id, data->notification_id);
@@ -804,7 +815,8 @@ class NotificationPlatformBridgeLinuxImpl
       size_t id_zero_based = id - data->action_start;
       if (id_zero_based >= n_buttons)
         return;
-      ForwardNotificationOperation(FROM_HERE, data, NotificationCommon::CLICK,
+      ForwardNotificationOperation(FROM_HERE, data,
+                                   NotificationCommon::OPERATION_CLICK,
                                    id_zero_based, base::nullopt /* by_user */);
     }
   }
@@ -821,9 +833,9 @@ class NotificationPlatformBridgeLinuxImpl
       return;
 
     // TODO(peter): Can we support |by_user| appropriately here?
-    ForwardNotificationOperation(FROM_HERE, data, NotificationCommon::CLOSE,
-                                 base::nullopt /* action_index */,
-                                 true /* by_user */);
+    ForwardNotificationOperation(
+        FROM_HERE, data, NotificationCommon::OPERATION_CLOSE,
+        base::nullopt /* action_index */, true /* by_user */);
     notifications_.erase(data);
   }
 
@@ -846,8 +858,8 @@ class NotificationPlatformBridgeLinuxImpl
         "Notifications.Linux.BridgeInitializationStatus",
         static_cast<int>(status),
         static_cast<int>(ConnectionInitializationStatusCode::NUM_ITEMS));
-    content::BrowserThread::PostTask(
-        content::BrowserThread::UI, FROM_HERE,
+    base::PostTaskWithTraits(
+        FROM_HERE, {content::BrowserThread::UI},
         base::BindOnce(&NotificationPlatformBridgeLinuxImpl::
                            OnConnectionInitializationFinishedOnUiThread,
                        this,
@@ -1006,6 +1018,9 @@ void NotificationPlatformBridgeLinux::GetDisplayed(
 void NotificationPlatformBridgeLinux::SetReadyCallback(
     NotificationBridgeReadyCallback callback) {
   impl_->SetReadyCallback(std::move(callback));
+}
+
+void NotificationPlatformBridgeLinux::DisplayServiceShutDown(Profile* profile) {
 }
 
 void NotificationPlatformBridgeLinux::CleanUp() {

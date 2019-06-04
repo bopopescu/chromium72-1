@@ -15,17 +15,17 @@
 #include "base/logging.h"
 #include "base/strings/string_split.h"
 #include "base/strings/stringprintf.h"
-#include "base/sys_info.h"
+#include "base/system/sys_info.h"
 #include "base/time/time.h"
 #include "base/trace_event/trace_config.h"
 #include "base/values.h"
 #include "build/build_config.h"
 #include "components/tracing/common/trace_startup_config.h"
+#include "content/browser/gpu/gpu_data_manager_impl.h"
 #include "content/browser/tracing/file_tracing_provider_impl.h"
 #include "content/browser/tracing/tracing_ui.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/content_browser_client.h"
-#include "content/public/browser/gpu_data_manager.h"
 #include "content/public/browser/tracing_controller.h"
 #include "content/public/browser/tracing_delegate.h"
 #include "content/public/common/content_client.h"
@@ -38,15 +38,6 @@
 #include "services/tracing/public/mojom/constants.mojom.h"
 #include "v8/include/v8-version-string.h"
 
-#if (defined(OS_POSIX) && defined(USE_UDEV)) || defined(OS_WIN) || \
-    defined(OS_MACOSX)
-#define ENABLE_POWER_TRACING
-#endif
-
-#if defined(ENABLE_POWER_TRACING)
-#include "content/browser/tracing/power_tracing_agent.h"
-#endif
-
 #if defined(OS_CHROMEOS)
 #include "chromeos/dbus/dbus_thread_manager.h"
 #include "chromeos/dbus/debug_daemon_client.h"
@@ -58,7 +49,7 @@
 #endif
 
 #if defined(OS_WIN)
-#include "content/browser/tracing/etw_tracing_agent_win.h"
+#include "base/win/windows_version.h"
 #endif
 
 #if defined(OS_ANDROID)
@@ -140,17 +131,10 @@ void TracingControllerImpl::AddAgents() {
       content::ServiceManagerConnection::GetForProcess()->GetConnector();
   connector->BindInterface(tracing::mojom::kServiceName, &coordinator_);
 
-// Register tracing agents.
-#if defined(ENABLE_POWER_TRACING)
-  agents_.push_back(std::make_unique<PowerTracingAgent>(connector));
-#endif
-
 #if defined(OS_CHROMEOS)
   agents_.push_back(std::make_unique<CrOSTracingAgent>(connector));
 #elif defined(CAST_TRACING_AGENT)
   agents_.push_back(std::make_unique<CastTracingAgent>(connector));
-#elif defined(OS_WIN)
-  agents_.push_back(std::make_unique<EtwTracingAgent>(connector));
 #endif
 
   auto trace_event_agent = tracing::TraceEventAgent::Create(
@@ -175,6 +159,7 @@ tracing::TraceEventAgent* TracingControllerImpl::GetTraceEventAgent() const {
 
 std::unique_ptr<base::DictionaryValue>
 TracingControllerImpl::GenerateMetadataDict() const {
+  DCHECK_CURRENTLY_ON(BrowserThread::UI);
   auto metadata_dict = std::make_unique<base::DictionaryValue>();
 
   // trace_config_ can be null if the tracing controller finishes flushing
@@ -202,24 +187,26 @@ TracingControllerImpl::GenerateMetadataDict() const {
   if (soname)
     metadata_dict->SetString("chrome-library-name", soname.value());
 #endif  // defined(OS_ANDROID)
+  metadata_dict->SetInteger("chrome-bitness", 8 * sizeof(uintptr_t));
 
   // OS
 #if defined(OS_CHROMEOS)
   metadata_dict->SetString("os-name", "CrOS");
-  int32_t major_version;
-  int32_t minor_version;
-  int32_t bugfix_version;
-  // OperatingSystemVersion only has a POSIX implementation which returns the
-  // wrong versions for CrOS.
-  base::SysInfo::OperatingSystemVersionNumbers(&major_version, &minor_version,
-                                               &bugfix_version);
-  metadata_dict->SetString(
-      "os-version", base::StringPrintf("%d.%d.%d", major_version, minor_version,
-                                       bugfix_version));
 #else
   metadata_dict->SetString("os-name", base::SysInfo::OperatingSystemName());
+#endif
   metadata_dict->SetString("os-version",
                            base::SysInfo::OperatingSystemVersion());
+#if defined(OS_WIN)
+  if (base::win::OSInfo::GetInstance()->architecture() ==
+      base::win::OSInfo::X64_ARCHITECTURE) {
+    if (base::win::OSInfo::GetInstance()->wow64_status() ==
+        base::win::OSInfo::WOW64_ENABLED) {
+      metadata_dict->SetString("os-wow64", "enabled");
+    } else {
+      metadata_dict->SetString("os-wow64", "disabled");
+    }
+  }
 #endif
   metadata_dict->SetString("os-arch",
                            base::SysInfo::OperatingSystemArchitecture());
@@ -236,14 +223,16 @@ TracingControllerImpl::GenerateMetadataDict() const {
   metadata_dict->SetString("cpu-brand", cpu.cpu_brand());
 
   // GPU
-  gpu::GPUInfo gpu_info = content::GpuDataManager::GetInstance()->GetGPUInfo();
+  const gpu::GPUInfo gpu_info =
+      content::GpuDataManagerImpl::GetInstance()->GetGPUInfo();
+  const gpu::GPUInfo::GPUDevice& active_gpu = gpu_info.active_gpu();
 
 #if !defined(OS_ANDROID)
-  metadata_dict->SetInteger("gpu-venid", gpu_info.gpu.vendor_id);
-  metadata_dict->SetInteger("gpu-devid", gpu_info.gpu.device_id);
+  metadata_dict->SetInteger("gpu-venid", active_gpu.vendor_id);
+  metadata_dict->SetInteger("gpu-devid", active_gpu.device_id);
 #endif
 
-  metadata_dict->SetString("gpu-driver", gpu_info.driver_version);
+  metadata_dict->SetString("gpu-driver", active_gpu.driver_version);
   metadata_dict->SetString("gpu-psver", gpu_info.pixel_shader_version);
   metadata_dict->SetString("gpu-vsver", gpu_info.vertex_shader_version);
 
@@ -295,11 +284,10 @@ TracingControllerImpl* TracingControllerImpl::GetInstance() {
   return g_tracing_controller;
 }
 
-bool TracingControllerImpl::GetCategories(
-    const GetCategoriesDoneCallback& callback) {
+bool TracingControllerImpl::GetCategories(GetCategoriesDoneCallback callback) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
-  coordinator_->GetCategories(base::BindRepeating(
-      [](const GetCategoriesDoneCallback& callback, bool success,
+  coordinator_->GetCategories(base::BindOnce(
+      [](GetCategoriesDoneCallback callback, bool success,
          const std::string& categories) {
         const std::vector<std::string> split = base::SplitString(
             categories, ",", base::TRIM_WHITESPACE, base::SPLIT_WANT_ALL);
@@ -307,9 +295,9 @@ bool TracingControllerImpl::GetCategories(
         for (const auto& category : split) {
           category_set.insert(category);
         }
-        callback.Run(category_set);
+        std::move(callback).Run(category_set);
       },
-      callback));
+      std::move(callback)));
   // TODO(chiniforooshan): The actual success value should be sent by the
   // callback asynchronously.
   return true;
@@ -317,22 +305,37 @@ bool TracingControllerImpl::GetCategories(
 
 bool TracingControllerImpl::StartTracing(
     const base::trace_event::TraceConfig& trace_config,
-    const StartTracingDoneCallback& callback) {
+    StartTracingDoneCallback callback) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
   // TODO(chiniforooshan): The actual value should be received by callback and
   // this function should return void.
-  if (IsTracing())
-    return false;
+  if (IsTracing()) {
+    // Do not allow updating trace config when process filter is not used.
+    if (trace_config.process_filter_config().empty() ||
+        trace_config_->process_filter_config().empty()) {
+      return false;
+    }
+    // Make sure other parts of trace_config (besides process filter)
+    // did not change.
+    base::trace_event::TraceConfig old_config_copy(*trace_config_);
+    base::trace_event::TraceConfig new_config_copy(trace_config);
+    old_config_copy.SetProcessFilterConfig(
+        base::trace_event::TraceConfig::ProcessFilterConfig());
+    new_config_copy.SetProcessFilterConfig(
+        base::trace_event::TraceConfig::ProcessFilterConfig());
+    if (old_config_copy.ToString() != new_config_copy.ToString())
+      return false;
+  }
   trace_config_ =
       std::make_unique<base::trace_event::TraceConfig>(trace_config);
   coordinator_->StartTracing(
       trace_config.ToString(),
-      base::BindRepeating(
-          [](const StartTracingDoneCallback& callback, bool success) {
+      base::BindOnce(
+          [](StartTracingDoneCallback callback, bool success) {
             if (!callback.is_null())
-              callback.Run();
+              std::move(callback).Run();
           },
-          callback));
+          std::move(callback)));
   // TODO(chiniforooshan): The actual success value should be sent by the
   // callback asynchronously.
   return true;
@@ -375,15 +378,15 @@ bool TracingControllerImpl::StopTracing(
 }
 
 bool TracingControllerImpl::GetTraceBufferUsage(
-    const GetTraceBufferUsageCallback& callback) {
+    GetTraceBufferUsageCallback callback) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
 
-  coordinator_->RequestBufferUsage(base::BindRepeating(
-      [](const GetTraceBufferUsageCallback& callback, bool success,
-         float percent_full, uint32_t approximate_count) {
-        callback.Run(percent_full, approximate_count);
+  coordinator_->RequestBufferUsage(base::BindOnce(
+      [](GetTraceBufferUsageCallback callback, bool success, float percent_full,
+         uint32_t approximate_count) {
+        std::move(callback).Run(percent_full, approximate_count);
       },
-      callback));
+      std::move(callback)));
   // TODO(chiniforooshan): The actual success value should be sent by the
   // callback asynchronously.
   return true;
@@ -399,7 +402,7 @@ void TracingControllerImpl::RegisterTracingUI(TracingUI* tracing_ui) {
 }
 
 void TracingControllerImpl::UnregisterTracingUI(TracingUI* tracing_ui) {
-  std::set<TracingUI*>::iterator it = tracing_uis_.find(tracing_ui);
+  auto it = tracing_uis_.find(tracing_ui);
   DCHECK(it != tracing_uis_.end());
   tracing_uis_.erase(it);
 }
@@ -453,6 +456,15 @@ void TracingControllerImpl::OnMetadataAvailable(base::Value metadata) {
   }
   if (is_data_complete_)
     CompleteFlush();
+}
+
+void TracingControllerImpl::SetTracingDelegateForTesting(
+    std::unique_ptr<TracingDelegate> delegate) {
+  if (!delegate)
+    delegate_.reset(GetContentClient()->browser()->GetTracingDelegate());
+  else {
+    delegate_ = std::move(delegate);
+  }
 }
 
 }  // namespace content

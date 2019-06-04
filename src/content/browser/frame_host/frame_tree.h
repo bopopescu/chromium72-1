@@ -18,6 +18,7 @@
 #include "content/browser/frame_host/frame_tree_node.h"
 #include "content/common/content_export.h"
 #include "services/service_manager/public/mojom/interface_provider.mojom.h"
+#include "third_party/blink/public/common/frame/frame_owner_element_type.h"
 
 namespace blink {
 struct FramePolicy;
@@ -102,6 +103,23 @@ class CONTENT_EXPORT FrameTree {
 
   FrameTreeNode* root() const { return root_; }
 
+  // Delegates for RenderFrameHosts, RenderViewHosts, RenderWidgetHosts and
+  // RenderFrameHostManagers. These can be kept centrally on the FrameTree
+  // because they are expected to be the same for all frames on a given
+  // FrameTree.
+  RenderFrameHostDelegate* render_frame_delegate() {
+    return render_frame_delegate_;
+  }
+  RenderViewHostDelegate* render_view_delegate() {
+    return render_view_delegate_;
+  }
+  RenderWidgetHostDelegate* render_widget_delegate() {
+    return render_widget_delegate_;
+  }
+  RenderFrameHostManager::Delegate* manager_delegate() {
+    return manager_delegate_;
+  }
+
   // Returns the FrameTreeNode with the given |frame_tree_node_id| if it is part
   // of this FrameTree.
   FrameTreeNode* FindByID(int frame_tree_node_id);
@@ -142,7 +160,8 @@ class CONTENT_EXPORT FrameTree {
                 const base::UnguessableToken& devtools_frame_token,
                 const blink::FramePolicy& frame_policy,
                 const FrameOwnerProperties& frame_owner_properties,
-                bool was_discarded);
+                bool was_discarded,
+                blink::FrameOwnerElementType owner_type);
 
   // Removes a frame from the frame tree. |child|, its children, and objects
   // owned by their RenderFrameHostManagers are immediately deleted. The root
@@ -183,6 +202,7 @@ class CONTENT_EXPORT FrameTree {
   RenderViewHostImpl* CreateRenderViewHost(SiteInstance* site_instance,
                                            int32_t routing_id,
                                            int32_t main_frame_routing_id,
+                                           int32_t widget_routing_id,
                                            bool swapped_out,
                                            bool hidden);
 
@@ -206,7 +226,7 @@ class CONTENT_EXPORT FrameTree {
   void UpdateLoadProgress(double progress);
 
   // Returns this FrameTree's total load progress.
-  double load_progress() { return load_progress_; }
+  double load_progress() const { return load_progress_; }
 
   // Resets the load progress on all nodes in this FrameTree.
   void ResetLoadProgress();

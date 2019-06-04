@@ -5,11 +5,6 @@
 
 /** @const */ var Constants = {
   /**
-   * Key to access wallpaper rss in chrome.storage.local.
-   */
-  AccessLocalRssKey: 'wallpaper-picker-surprise-rss-key',
-
-  /**
    * Key to access wallpaper manifest in chrome.storage.local.
    */
   AccessLocalManifestKey: 'wallpaper-picker-manifest-key',
@@ -25,7 +20,7 @@
   AccessSyncWallpaperInfoKey: 'wallpaper-sync-info-key',
 
   /**
-   * Key to access last changed date of a surprise wallpaper in
+   * Key to access last changed date of a daily refresh wallpaper in
    * chrome.storage.local or chrome.storage.sync.
    */
   AccessLastSurpriseWallpaperChangedDate: 'wallpaper-last-changed-date-key',
@@ -43,16 +38,21 @@
   AccessSyncSurpriseMeEnabledKey: 'sync-surprise-me-enabled-key',
 
   /**
-   * URL to get latest wallpaper RSS feed.
+   * Key to access the info related to daily refresh feature in
+   * chrome.storage.local.
    */
-  WallpaperRssURL: 'https://storage.googleapis.com/' +
-      'chromeos-wallpaper-public/wallpaper.rss',
+  AccessLocalDailyRefreshInfoKey: 'daily-refresh-info-key',
 
   /**
-   * cros-wallpaper namespace URI.
+   * Key to access the info related to daily refresh feature in
+   * chrome.storage.sync.
    */
-  WallpaperNameSpaceURI: 'http://commondatastorage.googleapis.com/' +
-      'chromeos-wallpaper-public/cros-wallpaper-uri',
+  AccessSyncDailyRefreshInfoKey: 'sync-daily-refresh-info-key',
+
+  /**
+   * Key to access the images info in chrome.storage.local.
+   */
+  AccessLocalImagesInfoKey: 'images-info-key',
 
   /**
    * Wallpaper sources enum.
@@ -63,7 +63,6 @@
     OEM: 'OEM',
     Custom: 'CUSTOM',
     ThirdParty: 'THIRDPARTY',
-    AddNew: 'ADDNEW',
     Default: 'DEFAULT'
   },
 
@@ -95,5 +94,11 @@
   /**
    * The filename prefix for a third party wallpaper.
    */
-  ThirdPartyWallpaperPrefix: 'third_party_'
+  ThirdPartyWallpaperPrefix: 'third_party_',
+
+  /**
+   * The name of the custom event that's fired when the wallpaper is changed by
+   * third-party apps.
+   */
+  WallpaperChangedBy3rdParty: 'wallpaperChangedBy3rdParty'
 };

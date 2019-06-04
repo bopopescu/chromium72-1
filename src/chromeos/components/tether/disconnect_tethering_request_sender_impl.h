@@ -13,9 +13,16 @@
 
 namespace chromeos {
 
+namespace device_sync {
+class DeviceSyncClient;
+}  // namespace device_sync
+
+namespace secure_channel {
+class SecureChannelClient;
+}  // namespace secure_channel
+
 namespace tether {
 
-class BleConnectionManager;
 class TetherHostFetcher;
 
 class DisconnectTetheringRequestSenderImpl
@@ -25,14 +32,16 @@ class DisconnectTetheringRequestSenderImpl
   class Factory {
    public:
     static std::unique_ptr<DisconnectTetheringRequestSender> NewInstance(
-        BleConnectionManager* ble_connection_manager,
+        device_sync::DeviceSyncClient* device_sync_client,
+        secure_channel::SecureChannelClient* secure_channel_client,
         TetherHostFetcher* tether_host_fetcher);
 
     static void SetInstanceForTesting(Factory* factory);
 
    protected:
     virtual std::unique_ptr<DisconnectTetheringRequestSender> BuildInstance(
-        BleConnectionManager* ble_connection_manager,
+        device_sync::DeviceSyncClient* device_sync_client,
+        secure_channel::SecureChannelClient* secure_channel_client,
         TetherHostFetcher* tether_host_fetcher);
 
    private:
@@ -50,7 +59,8 @@ class DisconnectTetheringRequestSenderImpl
 
  protected:
   DisconnectTetheringRequestSenderImpl(
-      BleConnectionManager* ble_connection_manager,
+      device_sync::DeviceSyncClient* device_sync_client,
+      secure_channel::SecureChannelClient* secure_channel_client,
       TetherHostFetcher* tether_host_fetcher);
 
  private:
@@ -58,7 +68,8 @@ class DisconnectTetheringRequestSenderImpl
       const std::string& device_id,
       base::Optional<cryptauth::RemoteDeviceRef> tether_host);
 
-  BleConnectionManager* ble_connection_manager_;
+  device_sync::DeviceSyncClient* device_sync_client_;
+  secure_channel::SecureChannelClient* secure_channel_client_;
   TetherHostFetcher* tether_host_fetcher_;
 
   int num_pending_host_fetches_ = 0;

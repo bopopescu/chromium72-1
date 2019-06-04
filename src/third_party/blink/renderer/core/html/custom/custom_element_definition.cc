@@ -3,12 +3,12 @@
 // found in the LICENSE file.
 
 #include "third_party/blink/renderer/core/html/custom/custom_element_definition.h"
-
-#include "third_party/blink/renderer/bindings/core/v8/exception_state.h"
-#include "third_party/blink/renderer/core/css/css_style_sheet.h"
+#include "third_party/blink/renderer/core/css/css_import_rule.h"
+#include "third_party/blink/renderer/core/css/style_change_reason.h"
+#include "third_party/blink/renderer/core/css/style_engine.h"
+#include "third_party/blink/renderer/core/css/style_sheet_contents.h"
 #include "third_party/blink/renderer/core/dom/attr.h"
 #include "third_party/blink/renderer/core/dom/document.h"
-#include "third_party/blink/renderer/core/dom/exception_code.h"
 #include "third_party/blink/renderer/core/html/custom/custom_element.h"
 #include "third_party/blink/renderer/core/html/custom/custom_element_adopted_callback_reaction.h"
 #include "third_party/blink/renderer/core/html/custom/custom_element_attribute_changed_callback_reaction.h"
@@ -17,8 +17,10 @@
 #include "third_party/blink/renderer/core/html/custom/custom_element_reaction.h"
 #include "third_party/blink/renderer/core/html/custom/custom_element_reaction_stack.h"
 #include "third_party/blink/renderer/core/html/custom/custom_element_upgrade_reaction.h"
+#include "third_party/blink/renderer/core/html/custom/element_internals.h"
 #include "third_party/blink/renderer/core/html/html_element.h"
 #include "third_party/blink/renderer/core/html_element_factory.h"
+#include "third_party/blink/renderer/platform/bindings/exception_state.h"
 
 namespace blink {
 
@@ -28,24 +30,21 @@ CustomElementDefinition::CustomElementDefinition(
 
 CustomElementDefinition::CustomElementDefinition(
     const CustomElementDescriptor& descriptor,
-    CSSStyleSheet* default_style_sheet)
-    : descriptor_(descriptor), default_style_sheet_(default_style_sheet) {}
-
-CustomElementDefinition::CustomElementDefinition(
-    const CustomElementDescriptor& descriptor,
-    CSSStyleSheet* default_style_sheet,
-    const HashSet<AtomicString>& observed_attributes)
+    const HashSet<AtomicString>& observed_attributes,
+    const Vector<String>& disabled_features,
+    FormAssociationFlag form_association_flag)
     : descriptor_(descriptor),
       observed_attributes_(observed_attributes),
       has_style_attribute_changed_callback_(
-          observed_attributes.Contains(HTMLNames::styleAttr.LocalName())),
-      default_style_sheet_(default_style_sheet) {}
+          observed_attributes.Contains(html_names::kStyleAttr.LocalName())),
+      disable_internals_(disabled_features.Contains(String("internals"))),
+      is_form_associated_(form_association_flag == FormAssociationFlag::kYes) {}
 
 CustomElementDefinition::~CustomElementDefinition() = default;
 
 void CustomElementDefinition::Trace(blink::Visitor* visitor) {
   visitor->Trace(construction_stack_);
-  visitor->Trace(default_style_sheet_);
+  visitor->Trace(default_style_sheets_);
 }
 
 static String ErrorMessageForConstructorResult(Element* element,
@@ -68,7 +67,7 @@ static String ErrorMessageForConstructorResult(Element* element,
     return "The result must be in the same document";
   // 6.1.8. If result's namespace is not the HTML namespace, then throw a
   // NotSupportedError.
-  if (element->namespaceURI() != HTMLNames::xhtmlNamespaceURI)
+  if (element->namespaceURI() != html_names::xhtmlNamespaceURI)
     return "The result must have HTML namespace";
   // 6.1.9. If result's local name is not equal to localName, then throw a
   // NotSupportedError.
@@ -95,8 +94,10 @@ void CustomElementDefinition::CheckConstructorResult(
   // 6.1.4. through 6.1.9.
   const String message =
       ErrorMessageForConstructorResult(element, document, tag_name);
-  if (!message.IsEmpty())
-    exception_state.ThrowDOMException(kNotSupportedError, message);
+  if (!message.IsEmpty()) {
+    exception_state.ThrowDOMException(DOMExceptionCode::kNotSupportedError,
+                                      message);
+  }
 }
 
 HTMLElement* CustomElementDefinition::CreateElementForConstructor(
@@ -109,7 +110,7 @@ HTMLElement* CustomElementDefinition::CreateElementForConstructor(
   } else {
     element =
         HTMLElement::Create(QualifiedName(g_null_atom, Descriptor().LocalName(),
-                                          HTMLNames::xhtmlNamespaceURI),
+                                          html_names::xhtmlNamespaceURI),
                             document);
   }
   // TODO(davaajav): write this as one call to setCustomElementState instead of
@@ -211,6 +212,36 @@ void CustomElementDefinition::Upgrade(Element* element) {
   }
 
   element->SetCustomElementDefinition(this);
+
+  if (IsFormAssociated())
+    ToHTMLElement(element)->EnsureElementInternals().DidUpgrade();
+  AddDefaultStylesTo(*element);
+}
+
+void CustomElementDefinition::AddDefaultStylesTo(Element& element) {
+  if (!RuntimeEnabledFeatures::CustomElementDefaultStyleEnabled() ||
+      !HasDefaultStyleSheets())
+    return;
+  const auto& default_styles = DefaultStyleSheets();
+  for (CSSStyleSheet* style : default_styles) {
+    Document* associated_document = style->AssociatedDocument();
+    if (associated_document && associated_document != &element.GetDocument()) {
+      // No spec yet, but for now we forbid usage of other document's
+      // constructed stylesheet.
+      return;
+    }
+  }
+  if (!added_default_style_sheet_) {
+    element.GetDocument().GetStyleEngine().AddedCustomElementDefaultStyles(
+        default_styles);
+    added_default_style_sheet_ = true;
+    const AtomicString& local_tag_name = element.LocalNameForSelectorMatching();
+    for (CSSStyleSheet* sheet : default_styles)
+      sheet->AddToCustomElementTagNames(local_tag_name);
+  }
+  element.SetNeedsStyleRecalc(
+      kLocalStyleChange, StyleChangeReasonForTracing::Create(
+                             style_change_reason::kActiveStylesheetsUpdate));
 }
 
 bool CustomElementDefinition::HasAttributeChangedCallback(
@@ -222,8 +253,11 @@ bool CustomElementDefinition::HasStyleAttributeChangedCallback() const {
   return has_style_attribute_changed_callback_;
 }
 
-void CustomElementDefinition::EnqueueUpgradeReaction(Element* element) {
-  CustomElement::Enqueue(element, new CustomElementUpgradeReaction(this));
+void CustomElementDefinition::EnqueueUpgradeReaction(
+    Element* element,
+    bool upgrade_invisible_elements) {
+  CustomElement::Enqueue(element, new CustomElementUpgradeReaction(
+                                      this, upgrade_invisible_elements));
 }
 
 void CustomElementDefinition::EnqueueConnectedCallback(Element* element) {

@@ -12,8 +12,6 @@
 #include "base/macros.h"
 #include "chrome/browser/chromeos/login/test/https_forwarder.h"
 #include "chrome/browser/chromeos/login/test/js_checker.h"
-#include "chrome/browser/chromeos/login/ui/login_display_host_webui.h"
-#include "chrome/browser/chromeos/login/ui/login_display_webui.h"
 #include "chrome/browser/extensions/extension_apitest.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "content/public/test/test_utils.h"
@@ -64,6 +62,12 @@ class OobeBaseTest : public extensions::ExtensionApiTest {
 
   virtual void InitHttpsForwarders();
 
+  // If this returns true (default), the |ash::switches::kShowWebUiLogin|
+  // command-line switch is passed to force the Web Ui Login.
+  // If this returns false, the switch is omitted so the views-based login may
+  // be used.
+  virtual bool ShouldForceWebUiLogin();
+
   // Network status control functions.
   void SimulateNetworkOffline();
   void SimulateNetworkOnline();
@@ -87,9 +91,6 @@ class OobeBaseTest : public extensions::ExtensionApiTest {
 
   // Returns chrome://oobe WebUI.
   content::WebUI* GetLoginUI();
-
-  // Returns login display.
-  LoginDisplayWebUI* GetLoginDisplay();
 
   void WaitForGaiaPageLoad();
   void WaitForGaiaPageLoadAndPropertyUpdate();

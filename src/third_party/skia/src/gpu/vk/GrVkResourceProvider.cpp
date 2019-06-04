@@ -18,7 +18,6 @@
 #include "GrVkUtil.h"
 
 #ifdef SK_TRACE_VK_RESOURCES
-GrVkResource::Trace GrVkResource::fTrace;
 uint32_t GrVkResource::fKeyCounter = 0;
 #endif
 
@@ -57,17 +56,16 @@ void GrVkResourceProvider::init() {
     fUniformDSHandle = GrVkDescriptorSetManager::Handle(0);
 }
 
-GrVkPipeline* GrVkResourceProvider::createPipeline(const GrPipeline& pipeline,
+GrVkPipeline* GrVkResourceProvider::createPipeline(const GrPrimitiveProcessor& primProc,
+                                                   const GrPipeline& pipeline,
                                                    const GrStencilSettings& stencil,
-                                                   const GrPrimitiveProcessor& primProc,
                                                    VkPipelineShaderStageCreateInfo* shaderStageInfo,
                                                    int shaderStageCount,
                                                    GrPrimitiveType primitiveType,
-                                                   const GrVkRenderPass& renderPass,
+                                                   VkRenderPass compatibleRenderPass,
                                                    VkPipelineLayout layout) {
-
-    return GrVkPipeline::Create(fGpu, pipeline, stencil, primProc, shaderStageInfo,
-                                shaderStageCount, primitiveType, renderPass, layout,
+    return GrVkPipeline::Create(fGpu, primProc, pipeline, stencil, shaderStageInfo,
+                                shaderStageCount, primitiveType, compatibleRenderPass, layout,
                                 fPipelineCache);
 }
 
@@ -168,11 +166,10 @@ GrVkDescriptorPool* GrVkResourceProvider::findOrCreateCompatibleDescriptorPool(
     return new GrVkDescriptorPool(fGpu, type, count);
 }
 
-GrVkSampler* GrVkResourceProvider::findOrCreateCompatibleSampler(const GrSamplerState& params,
-                                                                 uint32_t maxMipLevel) {
-    GrVkSampler* sampler = fSamplers.find(GrVkSampler::GenerateKey(params, maxMipLevel));
+GrVkSampler* GrVkResourceProvider::findOrCreateCompatibleSampler(const GrSamplerState& params) {
+    GrVkSampler* sampler = fSamplers.find(GrVkSampler::GenerateKey(params));
     if (!sampler) {
-        sampler = GrVkSampler::Create(fGpu, params, maxMipLevel);
+        sampler = GrVkSampler::Create(fGpu, params);
         fSamplers.add(sampler);
     }
     SkASSERT(sampler);
@@ -181,11 +178,10 @@ GrVkSampler* GrVkResourceProvider::findOrCreateCompatibleSampler(const GrSampler
 }
 
 GrVkPipelineState* GrVkResourceProvider::findOrCreateCompatiblePipelineState(
-                                                                 const GrPipeline& pipeline,
-                                                                 const GrPrimitiveProcessor& proc,
-                                                                 GrPrimitiveType primitiveType,
-                                                                 const GrVkRenderPass& renderPass) {
-    return fPipelineStateCache->refPipelineState(pipeline, proc, primitiveType, renderPass);
+        const GrPipeline& pipeline, const GrPrimitiveProcessor& proc, GrPrimitiveType primitiveType,
+        VkRenderPass compatibleRenderPass) {
+    return fPipelineStateCache->refPipelineState(proc, pipeline, primitiveType,
+                                                 compatibleRenderPass);
 }
 
 void GrVkResourceProvider::getSamplerDescriptorSetHandle(VkDescriptorType type,
@@ -353,7 +349,7 @@ void GrVkResourceProvider::destroyResources(bool deviceLost) {
     fRenderPassArray.reset();
 
     // Iterate through all store GrVkSamplers and unref them before resetting the hash.
-    SkTDynamicHash<GrVkSampler, uint16_t>::Iter iter(&fSamplers);
+    SkTDynamicHash<GrVkSampler, uint8_t>::Iter iter(&fSamplers);
     for (; !iter.done(); ++iter) {
         (*iter).unref(fGpu);
     }
@@ -382,14 +378,12 @@ void GrVkResourceProvider::destroyResources(bool deviceLost) {
 void GrVkResourceProvider::abandonResources() {
     // release our active command buffers
     for (int i = 0; i < fActiveCommandBuffers.count(); ++i) {
-        SkASSERT(fActiveCommandBuffers[i]->finished(fGpu));
         SkASSERT(fActiveCommandBuffers[i]->unique());
         fActiveCommandBuffers[i]->unrefAndAbandon();
     }
     fActiveCommandBuffers.reset();
     // release our available command buffers
     for (int i = 0; i < fAvailableCommandBuffers.count(); ++i) {
-        SkASSERT(fAvailableCommandBuffers[i]->finished(fGpu));
         SkASSERT(fAvailableCommandBuffers[i]->unique());
         fAvailableCommandBuffers[i]->unrefAndAbandon();
     }
@@ -414,7 +408,7 @@ void GrVkResourceProvider::abandonResources() {
     fRenderPassArray.reset();
 
     // Iterate through all store GrVkSamplers and unrefAndAbandon them before resetting the hash.
-    SkTDynamicHash<GrVkSampler, uint16_t>::Iter iter(&fSamplers);
+    SkTDynamicHash<GrVkSampler, uint8_t>::Iter iter(&fSamplers);
     for (; !iter.done(); ++iter) {
         (*iter).unrefAndAbandon();
     }

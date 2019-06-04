@@ -10,12 +10,14 @@
 #include "net/third_party/quic/core/quic_framer.h"
 #include "net/third_party/quic/core/quic_packets.h"
 
-namespace net {
+namespace quic {
 
 namespace test {
 
 class QuicFramerPeer {
  public:
+  QuicFramerPeer() = delete;
+
   static QuicPacketNumber CalculatePacketNumberFromWire(
       QuicFramer* framer,
       QuicPacketNumberLength packet_number_length,
@@ -33,9 +35,6 @@ class QuicFramerPeer {
 
   static QuicEncrypter* GetEncrypter(QuicFramer* framer, EncryptionLevel level);
 
-  static void SetLastPacketIsIetfQuic(QuicFramer* framer,
-                                      bool last_packet_is_ietf_quic);
-
   // IETF defined frame append/process methods.
   static bool ProcessIetfStreamFrame(QuicFramer* framer,
                                      QuicDataReader* reader,
@@ -45,6 +44,12 @@ class QuicFramerPeer {
                                     const QuicStreamFrame& frame,
                                     bool last_frame_in_packet,
                                     QuicDataWriter* writer);
+  static bool ProcessCryptoFrame(QuicFramer* framer,
+                                 QuicDataReader* reader,
+                                 QuicCryptoFrame* frame);
+  static bool AppendCryptoFrame(QuicFramer* framer,
+                                const QuicCryptoFrame& frame,
+                                QuicDataWriter* writer);
 
   static bool AppendIetfConnectionCloseFrame(
       QuicFramer* framer,
@@ -59,15 +64,16 @@ class QuicFramerPeer {
                                               QuicConnectionCloseFrame* frame);
   static bool ProcessApplicationCloseFrame(QuicFramer* framer,
                                            QuicDataReader* reader,
-                                           const uint8_t frame_type,
                                            QuicApplicationCloseFrame* frame);
   static bool ProcessIetfAckFrame(QuicFramer* framer,
                                   QuicDataReader* reader,
-                                  uint8_t frame_type,
+                                  uint64_t frame_type,
                                   QuicAckFrame* ack_frame);
-  static bool AppendIetfAckFrame(QuicFramer* framer,
-                                 const QuicAckFrame& frame,
-                                 QuicDataWriter* writer);
+  static bool AppendIetfAckFrameAndTypeByte(QuicFramer* framer,
+                                            const QuicAckFrame& frame,
+                                            QuicDataWriter* writer);
+  static size_t GetIetfAckFrameSize(QuicFramer* framer,
+                                    const QuicAckFrame& frame);
   static bool AppendIetfResetStreamFrame(QuicFramer* framer,
                                          const QuicRstStreamFrame& frame,
                                          QuicDataWriter* writer);
@@ -143,13 +149,22 @@ class QuicFramerPeer {
   static bool ProcessNewConnectionIdFrame(QuicFramer* framer,
                                           QuicDataReader* reader,
                                           QuicNewConnectionIdFrame* frame);
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(QuicFramerPeer);
+  static bool AppendRetireConnectionIdFrame(
+      QuicFramer* framer,
+      const QuicRetireConnectionIdFrame& frame,
+      QuicDataWriter* writer);
+  static bool ProcessRetireConnectionIdFrame(
+      QuicFramer* framer,
+      QuicDataReader* reader,
+      QuicRetireConnectionIdFrame* frame);
+  static size_t ComputeFrameLength(QuicFramer* framer,
+                                   const QuicFrame& frame,
+                                   bool last_frame_in_packet,
+                                   QuicPacketNumberLength packet_number_length);
 };
 
 }  // namespace test
 
-}  // namespace net
+}  // namespace quic
 
 #endif  // NET_THIRD_PARTY_QUIC_TEST_TOOLS_QUIC_FRAMER_PEER_H_

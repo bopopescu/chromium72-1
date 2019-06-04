@@ -200,7 +200,9 @@ class DescriptorSetLayout {
     DescriptorSetLayout(const VkDescriptorSetLayoutCreateInfo *p_create_info, const VkDescriptorSetLayout layout);
     // Validate create info - should be called prior to creation
     static bool ValidateCreateInfo(const debug_report_data *, const VkDescriptorSetLayoutCreateInfo *, const bool, const uint32_t,
-                                   const bool, const VkPhysicalDeviceDescriptorIndexingFeaturesEXT *descriptor_indexing_features);
+                                   const bool, const VkPhysicalDeviceDescriptorIndexingFeaturesEXT *descriptor_indexing_features,
+                                   const VkPhysicalDeviceInlineUniformBlockFeaturesEXT *inline_uniform_block_features,
+                                   const VkPhysicalDeviceInlineUniformBlockPropertiesEXT *inline_uniform_block_props);
     bool HasBinding(const uint32_t binding) const { return layout_id_->HasBinding(binding); }
     // Return true if this layout is compatible with passed in layout from a pipelineLayout,
     //   else return false and update error_msg with description of incompatibility
@@ -209,8 +211,8 @@ class DescriptorSetLayout {
     VkDescriptorSetLayout GetDescriptorSetLayout() const { return layout_; };
     bool IsDestroyed() const { return layout_destroyed_; }
     void MarkDestroyed() { layout_destroyed_ = true; }
-    const DescriptorSetLayoutDef *get_layout_def() const { return layout_id_.get(); }
-    DescriptorSetLayoutId get_layout_id() const { return layout_id_; }
+    const DescriptorSetLayoutDef *GetLayoutDef() const { return layout_id_.get(); }
+    DescriptorSetLayoutId GetLayoutId() const { return layout_id_; }
     uint32_t GetTotalDescriptorCount() const { return layout_id_->GetTotalDescriptorCount(); };
     uint32_t GetDynamicDescriptorCount() const { return layout_id_->GetDynamicDescriptorCount(); };
     uint32_t GetBindingCount() const { return layout_id_->GetBindingCount(); };
@@ -291,7 +293,7 @@ class DescriptorSetLayout {
  */
 
 // Slightly broader than type, each c++ "class" will has a corresponding "DescriptorClass"
-enum DescriptorClass { PlainSampler, ImageSampler, Image, TexelBuffer, GeneralBuffer };
+enum DescriptorClass { PlainSampler, ImageSampler, Image, TexelBuffer, GeneralBuffer, InlineUniform, AccelerationStructure };
 
 class Descriptor {
    public:
@@ -313,8 +315,8 @@ class Descriptor {
 // Shared helper functions - These are useful because the shared sampler image descriptor type
 //  performs common functions with both sampler and image descriptors so they can share their common functions
 bool ValidateSampler(const VkSampler, const core_validation::layer_data *);
-bool ValidateImageUpdate(VkImageView, VkImageLayout, VkDescriptorType, const core_validation::layer_data *,
-                         UNIQUE_VALIDATION_ERROR_CODE *, std::string *);
+bool ValidateImageUpdate(VkImageView, VkImageLayout, VkDescriptorType, const core_validation::layer_data *, std::string *,
+                         std::string *);
 
 class SamplerDescriptor : public Descriptor {
    public:
@@ -398,9 +400,26 @@ class BufferDescriptor : public Descriptor {
     VkDeviceSize offset_;
     VkDeviceSize range_;
 };
+
+class InlineUniformDescriptor : public Descriptor {
+   public:
+    InlineUniformDescriptor(const VkDescriptorType) { updated = false; descriptor_class = InlineUniform; }
+    void WriteUpdate(const VkWriteDescriptorSet *, const uint32_t) override { updated = true; }
+    void CopyUpdate(const Descriptor *) override  { updated = true; }
+    void BindCommandBuffer(const core_validation::layer_data *, GLOBAL_CB_NODE *) override {}
+};
+
+class AccelerationStructureDescriptor : public Descriptor {
+   public:
+    AccelerationStructureDescriptor(const VkDescriptorType) { updated = false; descriptor_class = AccelerationStructure; }
+    void WriteUpdate(const VkWriteDescriptorSet *, const uint32_t) override { updated = true; }
+    void CopyUpdate(const Descriptor *) override  { updated = true; }
+    void BindCommandBuffer(const core_validation::layer_data *, GLOBAL_CB_NODE *) override {}
+};
+
 // Structs to contain common elements that need to be shared between Validate* and Perform* calls below
 struct AllocateDescriptorSetsData {
-    uint32_t required_descriptors_by_type[VK_DESCRIPTOR_TYPE_RANGE_SIZE];
+    std::map<uint32_t, uint32_t> required_descriptors_by_type;
     std::vector<std::shared_ptr<DescriptorSetLayout const>> layout_nodes;
     AllocateDescriptorSetsData(uint32_t);
 };
@@ -478,13 +497,12 @@ class DescriptorSet : public BASE_NODE {
 
     // Descriptor Update functions. These functions validate state and perform update separately
     // Validate contents of a WriteUpdate
-    bool ValidateWriteUpdate(const debug_report_data *, const VkWriteDescriptorSet *, UNIQUE_VALIDATION_ERROR_CODE *,
-                             std::string *);
+    bool ValidateWriteUpdate(const debug_report_data *, const VkWriteDescriptorSet *, std::string *, std::string *);
     // Perform a WriteUpdate whose contents were just validated using ValidateWriteUpdate
     void PerformWriteUpdate(const VkWriteDescriptorSet *);
     // Validate contents of a CopyUpdate
-    bool ValidateCopyUpdate(const debug_report_data *, const VkCopyDescriptorSet *, const DescriptorSet *,
-                            UNIQUE_VALIDATION_ERROR_CODE *, std::string *);
+    bool ValidateCopyUpdate(const debug_report_data *, const VkCopyDescriptorSet *, const DescriptorSet *, std::string *,
+                            std::string *);
     // Perform a CopyUpdate whose contents were just validated using ValidateCopyUpdate
     void PerformCopyUpdate(const VkCopyDescriptorSet *, const DescriptorSet *);
 
@@ -494,6 +512,8 @@ class DescriptorSet : public BASE_NODE {
     std::unordered_set<GLOBAL_CB_NODE *> GetBoundCmdBuffers() const { return cb_bindings; }
     // Bind given cmd_buffer to this descriptor set
     void BindCommandBuffer(GLOBAL_CB_NODE *, const std::map<uint32_t, descriptor_req> &);
+    // Update CB image layout map with image/imagesampler descriptor image layouts
+    void UpdateDSImageLayoutState(GLOBAL_CB_NODE *);
 
     // Track work that has been bound or validated to avoid duplicate work, important when large descriptor arrays
     // are present
@@ -529,13 +549,11 @@ class DescriptorSet : public BASE_NODE {
     DESCRIPTOR_POOL_STATE *GetPoolState() const { return pool_state_; }
 
    private:
-    bool VerifyWriteUpdateContents(const VkWriteDescriptorSet *, const uint32_t, UNIQUE_VALIDATION_ERROR_CODE *,
-                                   std::string *) const;
-    bool VerifyCopyUpdateContents(const VkCopyDescriptorSet *, const DescriptorSet *, VkDescriptorType, uint32_t,
-                                  UNIQUE_VALIDATION_ERROR_CODE *, std::string *) const;
-    bool ValidateBufferUsage(BUFFER_STATE const *, VkDescriptorType, UNIQUE_VALIDATION_ERROR_CODE *, std::string *) const;
-    bool ValidateBufferUpdate(VkDescriptorBufferInfo const *, VkDescriptorType, UNIQUE_VALIDATION_ERROR_CODE *,
-                              std::string *) const;
+    bool VerifyWriteUpdateContents(const VkWriteDescriptorSet *, const uint32_t, std::string *, std::string *) const;
+    bool VerifyCopyUpdateContents(const VkCopyDescriptorSet *, const DescriptorSet *, VkDescriptorType, uint32_t, std::string *,
+                                  std::string *) const;
+    bool ValidateBufferUsage(BUFFER_STATE const *, VkDescriptorType, std::string *, std::string *) const;
+    bool ValidateBufferUpdate(VkDescriptorBufferInfo const *, VkDescriptorType, std::string *, std::string *) const;
     // Private helper to set all bound cmd buffers to INVALID state
     void InvalidateBoundCmdBuffers();
     bool some_update_;  // has any part of the set ever been updated?

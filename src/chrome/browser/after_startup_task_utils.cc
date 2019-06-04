@@ -12,20 +12,26 @@
 #include "base/macros.h"
 #include "base/memory/ptr_util.h"
 #include "base/metrics/histogram_macros.h"
-#include "base/process/process_info.h"
+#include "base/process/process.h"
 #include "base/rand_util.h"
 #include "base/sequence_checker.h"
 #include "base/synchronization/atomic_flag.h"
+#include "base/task/post_task.h"
 #include "base/task_runner.h"
 #include "build/build_config.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_list.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
+#include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_contents_observer.h"
 #include "third_party/blink/public/mojom/page/page_visibility_state.mojom.h"
+
+#if defined(OS_LINUX) && !defined(OS_CHROMEOS)
+#include "ui/views/linux_ui/linux_ui.h"
+#endif
 
 using content::BrowserThread;
 using content::WebContents;
@@ -85,8 +91,11 @@ void QueueTask(std::unique_ptr<AfterStartupTask> queued_task) {
   CHECK(queued_task->task);
 
   if (!BrowserThread::CurrentlyOn(BrowserThread::UI)) {
-    BrowserThread::PostTask(BrowserThread::UI, FROM_HERE,
-                            base::BindOnce(QueueTask, std::move(queued_task)));
+    // Posted with USER_VISIBLE priority to avoid this becoming an after startup
+    // task itself.
+    base::PostTaskWithTraits(
+        FROM_HERE, {BrowserThread::UI, base::TaskPriority::USER_VISIBLE},
+        base::BindOnce(QueueTask, std::move(queued_task)));
     return;
   }
 
@@ -102,9 +111,9 @@ void QueueTask(std::unique_ptr<AfterStartupTask> queued_task) {
 void SetBrowserStartupIsComplete() {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
 #if defined(OS_MACOSX) || defined(OS_WIN) || defined(OS_LINUX)
-  // CurrentProcessInfo::CreationTime() is not available on all platforms.
+  // Process::Current().CreationTime() is not available on all platforms.
   const base::Time process_creation_time =
-      base::CurrentProcessInfo::CreationTime();
+      base::Process::Current().CreationTime();
   if (!process_creation_time.is_null()) {
     UMA_HISTOGRAM_LONG_TIMES("Startup.AfterStartupTaskDelayedUntilTime",
                              base::Time::Now() - process_creation_time);
@@ -120,6 +129,14 @@ void SetBrowserStartupIsComplete() {
   // The shrink_to_fit() method is not available for all of our build targets.
   base::circular_deque<AfterStartupTask*>(g_after_startup_tasks.Get())
       .swap(g_after_startup_tasks.Get());
+
+#if defined(OS_LINUX) && !defined(OS_CHROMEOS)
+  // Make sure we complete the startup notification sequence, or launchers will
+  // get confused by not receiving the expected message from the main process.
+  views::LinuxUI* linux_ui = views::LinuxUI::instance();
+  if (linux_ui)
+    linux_ui->NotifyWindowManagerStartupComplete();
+#endif
 }
 
 // Observes the first visible page load and sets the startup complete
@@ -196,8 +213,8 @@ void StartupObserver::Start() {
   delay = base::TimeDelta::FromMinutes(kLongerDelayMins);
 #endif  // !defined(OS_ANDROID)
 
-  BrowserThread::PostDelayedTask(
-      BrowserThread::UI, FROM_HERE,
+  base::PostDelayedTaskWithTraits(
+      FROM_HERE, {BrowserThread::UI},
       base::BindOnce(&StartupObserver::OnFailsafeTimeout,
                      weak_factory_.GetWeakPtr()),
       delay);

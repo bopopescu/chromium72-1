@@ -78,8 +78,6 @@ namespace blink {
 typedef double Vector4[4];
 typedef double Vector3[3];
 
-const double kSmallNumber = 1.e-8;
-
 // inverse(original_matrix, inverse_matrix)
 //
 // calculate the inverse of a 4x4 matrix
@@ -225,7 +223,7 @@ static bool Inverse(const TransformationMatrix::Matrix4& matrix,
   // then the inverse matrix is not unique.
   double det = Determinant4x4(matrix);
 
-  if (fabs(det) < kSmallNumber)
+  if (det == 0)
     return false;
 
 #if defined(ARCH_CPU_ARM64)
@@ -564,7 +562,7 @@ static void V3Cross(const Vector3 a, const Vector3 b, Vector3 result) {
 static bool Decompose(const TransformationMatrix::Matrix4& mat,
                       TransformationMatrix::DecomposedType& result) {
   TransformationMatrix::Matrix4 local_matrix;
-  memcpy(local_matrix, mat, sizeof(TransformationMatrix::Matrix4));
+  memcpy(&local_matrix, &mat, sizeof(TransformationMatrix::Matrix4));
 
   // Normalize the matrix.
   if (local_matrix[3][3] == 0)
@@ -578,7 +576,7 @@ static bool Decompose(const TransformationMatrix::Matrix4& mat,
   // perspectiveMatrix is used to solve for perspective, but it also provides
   // an easy way to test for singularity of the upper 3x3 component.
   TransformationMatrix::Matrix4 perspective_matrix;
-  memcpy(perspective_matrix, local_matrix,
+  memcpy(&perspective_matrix, &local_matrix,
          sizeof(TransformationMatrix::Matrix4));
   for (i = 0; i < 3; i++)
     perspective_matrix[i][3] = 0;
@@ -1433,6 +1431,11 @@ TransformationMatrix& TransformationMatrix::Multiply(
   ST_DP(v_tmp_m2, &(matrix_[3][0]));
   ST_DP(v_tmp_m3, &(matrix_[3][2]));
 #elif defined(TRANSFORMATION_MATRIX_USE_X86_64_SSE2)
+  static_assert(alignof(TransformationMatrix) == 16,
+                "TransformationMatrix must be aligned.");
+  static_assert(alignof(TransformationMatrix::Matrix4) == 16,
+                "Matrix4 must be aligned.");
+
   // x86_64 has 16 XMM registers which is enough to do the multiplication fully
   // in registers.
   __m128d matrix_block_a = _mm_load_pd(&(matrix_[0][0]));
@@ -1651,15 +1654,7 @@ void TransformationMatrix::MultVecMatrix(double x,
 }
 
 bool TransformationMatrix::IsInvertible() const {
-  if (IsIdentityOrTranslation())
-    return true;
-
-  double det = blink::Determinant4x4(matrix_);
-
-  if (fabs(det) < kSmallNumber)
-    return false;
-
-  return true;
+  return IsIdentityOrTranslation() || blink::Determinant4x4(matrix_) != 0;
 }
 
 TransformationMatrix TransformationMatrix::Inverse() const {
@@ -1835,6 +1830,56 @@ bool TransformationMatrix::IsIntegerTranslation() const {
     return false;
 
   return true;
+}
+
+// This is the same as gfx::Transform::Preserves2dAxisAlignment().
+bool TransformationMatrix::Preserves2dAxisAlignment() const {
+  // Check whether an axis aligned 2-dimensional rect would remain axis-aligned
+  // after being transformed by this matrix (and implicitly projected by
+  // dropping any non-zero z-values).
+  //
+  // The 4th column can be ignored because translations don't affect axis
+  // alignment. The 3rd column can be ignored because we are assuming 2d
+  // inputs, where z-values will be zero. The 3rd row can also be ignored
+  // because we are assuming 2d outputs, and any resulting z-value is dropped
+  // anyway. For the inner 2x2 portion, the only effects that keep a rect axis
+  // aligned are (1) swapping axes and (2) scaling axes. This can be checked by
+  // verifying only 1 element of every column and row is non-zero.  Degenerate
+  // cases that project the x or y dimension to zero are considered to preserve
+  // axis alignment.
+  //
+  // If the matrix does have perspective component that is affected by x or y
+  // values: The current implementation conservatively assumes that axis
+  // alignment is not preserved.
+  bool has_x_or_y_perspective = M14() != 0 || M24() != 0;
+  if (has_x_or_y_perspective)
+    return false;
+
+  constexpr double kEpsilon = std::numeric_limits<double>::epsilon();
+
+  int num_non_zero_in_row_1 = 0;
+  int num_non_zero_in_row_2 = 0;
+  int num_non_zero_in_col_1 = 0;
+  int num_non_zero_in_col_2 = 0;
+  if (std::abs(M11()) > kEpsilon) {
+    num_non_zero_in_col_1++;
+    num_non_zero_in_row_1++;
+  }
+  if (std::abs(M12()) > kEpsilon) {
+    num_non_zero_in_col_1++;
+    num_non_zero_in_row_2++;
+  }
+  if (std::abs(M21()) > kEpsilon) {
+    num_non_zero_in_col_2++;
+    num_non_zero_in_row_1++;
+  }
+  if (std::abs(M22()) > kEpsilon) {
+    num_non_zero_in_col_2++;
+    num_non_zero_in_row_2++;
+  }
+
+  return num_non_zero_in_row_1 <= 1 && num_non_zero_in_row_2 <= 1 &&
+         num_non_zero_in_col_1 <= 1 && num_non_zero_in_col_2 <= 1;
 }
 
 FloatSize TransformationMatrix::To2DTranslation() const {

@@ -8,10 +8,10 @@ import android.support.annotation.IntDef;
 import android.support.annotation.NonNull;
 import android.support.annotation.Nullable;
 import android.util.SparseArray;
-import android.view.View;
 
+import org.chromium.base.Callback;
 import org.chromium.base.VisibleForTesting;
-import org.chromium.ui.UiUtils;
+import org.chromium.chrome.browser.modelutil.PropertyModel;
 
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
@@ -21,90 +21,93 @@ import java.util.List;
 import java.util.Set;
 
 /**
- * Manager for managing the display of a queue of {@link ModalDialogView}s.
+ * Manager for managing the display of a queue of {@link PropertyModel}s.
  */
 public class ModalDialogManager {
     /**
-     * Present a {@link ModalDialogView} in a container.
+     * Present a {@link PropertyModel} in a container.
      */
     public static abstract class Presenter {
-        private Runnable mCancelCallback;
-        private ModalDialogView mModalDialog;
-        private View mCurrentView;
+        private Callback<Integer> mDismissCallback;
+        private PropertyModel mDialogModel;
 
         /**
-         * @param dialog The dialog that's currently showing in this presenter. If null, no dialog
-         *               is currently showing.
+         * @param model The dialog model that's currently showing in this presenter.
+         *              If null, no dialog is currently showing.
          */
-        private void setModalDialog(
-                @Nullable ModalDialogView dialog, @Nullable Runnable cancelCallback) {
-            if (dialog == null) {
-                removeDialogView(mCurrentView);
-                mModalDialog = null;
-                mCancelCallback = null;
+        private void setDialogModel(
+                @Nullable PropertyModel model, @Nullable Callback<Integer> dismissCallback) {
+            if (model == null) {
+                removeDialogView(mDialogModel);
+                mDialogModel = null;
+                mDismissCallback = null;
             } else {
-                assert mModalDialog
-                        == null : "Should call setModalDialog(null) before setting a modal dialog.";
-                mModalDialog = dialog;
-                mCurrentView = dialog.getView();
-                mCancelCallback = cancelCallback;
-                // Make sure the view is detached from any parent before adding it to the container.
-                // This is not detached after removeDialogView() because there could be animation
-                // running on removing the dialog view.
-                UiUtils.removeViewFromParent(mCurrentView);
-                addDialogView(mCurrentView);
+                assert mDialogModel
+                        == null : "Should call setDialogModel(null) before setting a dialog model.";
+                mDialogModel = model;
+                mDismissCallback = dismissCallback;
+                addDialogView(model);
             }
         }
 
         /**
          * Run the cached cancel callback and reset the cached callback.
          */
-        protected final void cancelCurrentDialog() {
-            if (mCancelCallback == null) return;
+        protected final void dismissCurrentDialog(@DialogDismissalCause int dismissalCause) {
+            if (mDismissCallback == null) return;
 
             // Set #mCancelCallback to null before calling the callback to avoid it being
             // updated during the callback.
-            Runnable callback = mCancelCallback;
-            mCancelCallback = null;
-            callback.run();
+            Callback<Integer> callback = mDismissCallback;
+            mDismissCallback = null;
+            callback.onResult(dismissalCause);
         }
 
         /**
-         * @return The modal dialog that this presenter is showing.
+         * @return The dialog model that this presenter is showing.
          */
-        protected final ModalDialogView getModalDialog() {
-            return mModalDialog;
+        protected final PropertyModel getDialogModel() {
+            return mDialogModel;
         }
 
         /**
-         * Add the specified {@link ModalDialogView} in a container.
-         * @param dialogView The {@link ModalDialogView} that needs to be shown.
+         * @param model The dialog model from which the properties should be obtained.
+         * @return The property value for {@link ModalDialogProperties#CONTENT_DESCRIPTION}, or a
+         *         fallback content description if it is not set.
          */
-        protected abstract void addDialogView(View dialogView);
+        protected static String getContentDescription(PropertyModel model) {
+            String description = model.get(ModalDialogProperties.CONTENT_DESCRIPTION);
+            if (description == null) description = model.get(ModalDialogProperties.TITLE);
+            return description;
+        }
 
         /**
-         * Remove the specified {@link ModalDialogView} from a container.
-         * @param dialogView The {@link ModalDialogView} that needs to be removed.
+         * Creates a view for the specified dialog model and puts the view in a container.
+         * @param model The dialog model that needs to be shown.
          */
-        protected abstract void removeDialogView(View dialogView);
+        protected abstract void addDialogView(PropertyModel model);
+
+        /**
+         * Removes the view created for the specified model from a container.
+         * @param model The dialog model that needs to be removed.
+         */
+        protected abstract void removeDialogView(PropertyModel model);
     }
 
+    @IntDef({ModalDialogType.APP, ModalDialogType.TAB})
     @Retention(RetentionPolicy.SOURCE)
-    @IntDef({APP_MODAL, TAB_MODAL})
-    public @interface ModalDialogType {}
-
-    /**
-     * The integer assigned to each type represents its priority. A smaller number represents a
-     * higher priority type of dialog.
-     */
-    public static final int APP_MODAL = 0;
-    public static final int TAB_MODAL = 1;
+    public @interface ModalDialogType {
+        // The integer assigned to each type represents its priority. A smaller number represents a
+        // higher priority type of dialog.
+        int APP = 0;
+        int TAB = 1;
+    }
 
     /** Mapping of the {@link Presenter}s and the type of dialogs they are showing. */
     private final SparseArray<Presenter> mPresenters = new SparseArray<>();
 
     /** Mapping of the lists of pending dialogs and the type of the dialogs. */
-    private final SparseArray<List<ModalDialogView>> mPendingDialogs = new SparseArray<>();
+    private final SparseArray<List<PropertyModel>> mPendingDialogs = new SparseArray<>();
 
     /**
      * The list of suspended types of dialogs. The dialogs of types in the list will be suspended
@@ -145,7 +148,7 @@ public class ModalDialogManager {
 
     /** Clears any dependencies on the showing or pending dialogs. */
     public void destroy() {
-        cancelAllDialogs();
+        dismissAllDialogs(DialogDismissalCause.ACTIVITY_DESTROYED);
     }
 
     /**
@@ -170,55 +173,60 @@ public class ModalDialogManager {
     /**
      * Show the specified dialog. If another dialog is currently showing, the specified dialog will
      * be added to the end of the pending dialog list of the specified type.
-     * @param dialog The dialog to be shown or added to pending list.
+     * @param model The dialog model to be shown or added to pending list.
      * @param dialogType The type of the dialog to be shown.
      */
-    public void showDialog(ModalDialogView dialog, @ModalDialogType int dialogType) {
-        showDialog(dialog, dialogType, false);
+    public void showDialog(PropertyModel model, @ModalDialogType int dialogType) {
+        showDialog(model, dialogType, false);
     }
 
     /**
      * Show the specified dialog. If another dialog is currently showing, the specified dialog will
      * be added to the pending dialog list. If showNext is set to true, the dialog will be added
      * to the top of the pending list of its type, otherwise it will be added to the end.
-     * @param dialog The dialog to be shown or added to pending list.
+     * @param model The dialog model to be shown or added to pending list.
      * @param dialogType The type of the dialog to be shown.
      * @param showAsNext Whether the specified dialog should be set highest priority of its type.
      */
     public void showDialog(
-            ModalDialogView dialog, @ModalDialogType int dialogType, boolean showAsNext) {
-        List<ModalDialogView> dialogs = mPendingDialogs.get(dialogType);
+            PropertyModel model, @ModalDialogType int dialogType, boolean showAsNext) {
+        List<PropertyModel> dialogs = mPendingDialogs.get(dialogType);
         if (dialogs == null) mPendingDialogs.put(dialogType, dialogs = new ArrayList<>());
 
         // Put the new dialog in pending list if the dialog type is suspended or the current dialog
         // is of higher priority.
         if (mSuspendedTypes.contains(dialogType) || (isShowing() && mCurrentType <= dialogType)) {
-            dialogs.add(showAsNext ? 0 : dialogs.size(), dialog);
+            dialogs.add(showAsNext ? 0 : dialogs.size(), model);
             return;
         }
 
         if (isShowing()) suspendCurrentDialog();
 
         assert !isShowing();
-        dialog.prepareBeforeShow();
         mCurrentType = dialogType;
         mCurrentPresenter = mPresenters.get(dialogType, mDefaultPresenter);
-        mCurrentPresenter.setModalDialog(dialog, () -> cancelDialog(dialog));
+        mCurrentPresenter.setDialogModel(
+                model, (dismissalCause) -> dismissDialog(model, dismissalCause));
     }
 
     /**
      * Dismiss the specified dialog. If the dialog is not currently showing, it will be removed from
      * the pending dialog list. If the dialog is currently being dismissed this function does
      * nothing.
-     * @param dialog The dialog to be dismissed or removed from pending list.
+     * @param model The dialog model to be dismissed or removed from pending list.
+     * @param dismissalCause The {@link DialogDismissalCause} that describes why the dialog is
+     *                       dismissed.
      */
-    public void dismissDialog(ModalDialogView dialog) {
-        if (mCurrentPresenter == null || dialog != mCurrentPresenter.getModalDialog()) {
+    public void dismissDialog(PropertyModel model, @DialogDismissalCause int dismissalCause) {
+        if (model == null) return;
+        if (mCurrentPresenter == null || model != mCurrentPresenter.getDialogModel()) {
             for (int i = 0; i < mPendingDialogs.size(); ++i) {
-                List<ModalDialogView> dialogs = mPendingDialogs.valueAt(i);
+                List<PropertyModel> dialogs = mPendingDialogs.valueAt(i);
                 for (int j = 0; j < dialogs.size(); ++j) {
-                    if (dialogs.get(j) == dialog) {
-                        dialogs.remove(j).getController().onDismiss();
+                    if (dialogs.get(j) == model) {
+                        dialogs.remove(j)
+                                .get(ModalDialogProperties.CONTROLLER)
+                                .onDismiss(model, dismissalCause);
                         return;
                     }
                 }
@@ -228,59 +236,52 @@ public class ModalDialogManager {
         }
 
         if (!isShowing()) return;
-        assert dialog == mCurrentPresenter.getModalDialog();
+        assert model == mCurrentPresenter.getDialogModel();
         if (mDismissingCurrentDialog) return;
         mDismissingCurrentDialog = true;
-        dialog.getController().onDismiss();
-        mCurrentPresenter.setModalDialog(null, null);
+        model.get(ModalDialogProperties.CONTROLLER).onDismiss(model, dismissalCause);
+        mCurrentPresenter.setDialogModel(null, null);
         mCurrentPresenter = null;
         mDismissingCurrentDialog = false;
         showNextDialog();
     }
 
     /**
-     * Cancel showing the specified dialog. This is essentially the same as
-     * {@link #dismissDialog(ModalDialogView)} but will also call the onCancelled callback from the
-     * modal dialog.
-     * @param dialog The dialog to be cancelled.
+     * Dismiss the dialog currently shown and remove all pending dialogs.
+     * @param dismissalCause The {@link DialogDismissalCause} that describes why the dialogs are
+     *                       dismissed.
      */
-    public void cancelDialog(ModalDialogView dialog) {
-        dialog.getController().onCancel();
-        dismissDialog(dialog);
-    }
-
-    /**
-     * Dismiss the dialog currently shown and remove all pending dialogs and call the onCancelled
-     * callbacks from the modal dialogs.
-     */
-    public void cancelAllDialogs() {
+    public void dismissAllDialogs(@DialogDismissalCause int dismissalCause) {
         for (int i = 0; i < mPendingDialogs.size(); ++i) {
-            cancelPendingDialogs(mPendingDialogs.keyAt(i));
+            dismissPendingDialogsOfType(mPendingDialogs.keyAt(i), dismissalCause);
         }
-        if (isShowing()) cancelDialog(mCurrentPresenter.getModalDialog());
+        if (isShowing()) dismissDialog(mCurrentPresenter.getDialogModel(), dismissalCause);
     }
 
     /**
-     * Dismiss the dialog currently shown and remove all pending dialogs of the specified type and
-     * call the onCancelled callbacks from the modal dialogs.
+     * Dismiss the dialog currently shown and remove all pending dialogs of the specified type.
      * @param dialogType The specified type of dialog.
+     * @param dismissalCause The {@link DialogDismissalCause} that describes why the dialogs are
+     *                       dismissed.
      */
-    protected void cancelAllDialogs(@ModalDialogType int dialogType) {
-        cancelPendingDialogs(dialogType);
+    protected void dismissDialogsOfType(
+            @ModalDialogType int dialogType, @DialogDismissalCause int dismissalCause) {
+        dismissPendingDialogsOfType(dialogType, dismissalCause);
         if (isShowing() && dialogType == mCurrentType) {
-            cancelDialog(mCurrentPresenter.getModalDialog());
+            dismissDialog(mCurrentPresenter.getDialogModel(), dismissalCause);
         }
     }
 
-    /** Helper method to cancel pending dialogs of the specified type. */
-    private void cancelPendingDialogs(@ModalDialogType int dialogType) {
-        List<ModalDialogView> dialogs = mPendingDialogs.get(dialogType);
+    /** Helper method to dismiss pending dialogs of the specified type. */
+    private void dismissPendingDialogsOfType(
+            @ModalDialogType int dialogType, @DialogDismissalCause int dismissalCause) {
+        List<PropertyModel> dialogs = mPendingDialogs.get(dialogType);
         if (dialogs == null) return;
 
         while (!dialogs.isEmpty()) {
-            ModalDialogView.Controller controller = dialogs.remove(0).getController();
-            controller.onDismiss();
-            controller.onCancel();
+            PropertyModel model = dialogs.remove(0);
+            ModalDialogView.Controller controller = model.get(ModalDialogProperties.CONTROLLER);
+            controller.onDismiss(model, dismissalCause);
         }
     }
 
@@ -311,8 +312,8 @@ public class ModalDialogManager {
     /** Hide the current dialog and put it back to the front of the pending list. */
     private void suspendCurrentDialog() {
         assert isShowing();
-        ModalDialogView dialogView = mCurrentPresenter.getModalDialog();
-        mCurrentPresenter.setModalDialog(null, null);
+        PropertyModel dialogView = mCurrentPresenter.getDialogModel();
+        mCurrentPresenter.setDialogModel(null, null);
         mCurrentPresenter = null;
         mPendingDialogs.get(mCurrentType).add(0, dialogView);
     }
@@ -325,7 +326,7 @@ public class ModalDialogManager {
             int dialogType = mPendingDialogs.keyAt(i);
             if (mSuspendedTypes.contains(dialogType)) continue;
 
-            List<ModalDialogView> dialogs = mPendingDialogs.valueAt(i);
+            List<PropertyModel> dialogs = mPendingDialogs.valueAt(i);
             if (!dialogs.isEmpty()) {
                 showDialog(dialogs.remove(0), dialogType);
                 return;
@@ -334,12 +335,12 @@ public class ModalDialogManager {
     }
 
     @VisibleForTesting
-    public ModalDialogView getCurrentDialogForTest() {
-        return mCurrentPresenter == null ? null : mCurrentPresenter.getModalDialog();
+    public PropertyModel getCurrentDialogForTest() {
+        return mCurrentPresenter == null ? null : mCurrentPresenter.getDialogModel();
     }
 
     @VisibleForTesting
-    List<ModalDialogView> getPendingDialogsForTest(@ModalDialogType int dialogType) {
+    List<PropertyModel> getPendingDialogsForTest(@ModalDialogType int dialogType) {
         return mPendingDialogs.get(dialogType);
     }
 

@@ -12,10 +12,6 @@
 #include "net/test/net_test_suite.h"
 #include "url/url_features.h"
 
-#if !defined(OS_IOS)
-#include "mojo/edk/embedder/embedder.h"  // nogncheck
-#endif
-
 using net::internal::ClientSocketPoolBaseHelper;
 
 namespace {
@@ -56,10 +52,6 @@ int main(int argc, char** argv) {
 
   NetTestSuite test_suite(argc, argv);
   ClientSocketPoolBaseHelper::set_connect_backup_jobs_enabled(false);
-
-#if !defined(OS_IOS)
-  mojo::edk::Init();
-#endif
 
   return base::LaunchUnitTests(
       argc, argv, base::Bind(&NetTestSuite::Run,

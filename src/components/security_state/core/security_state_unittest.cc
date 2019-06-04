@@ -10,7 +10,7 @@
 
 #include "base/bind.h"
 #include "base/command_line.h"
-#include "base/test/histogram_tester.h"
+#include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_feature_list.h"
 #include "components/security_state/core/features.h"
 #include "components/security_state/core/insecure_input_event_data.h"
@@ -118,7 +118,6 @@ class TestSecurityStateHelper {
     state->certificate = cert_;
     state->cert_status = cert_status_;
     state->connection_status = connection_status_;
-    state->security_bits = 256;
     state->displayed_mixed_content = displayed_mixed_content_;
     state->contained_mixed_form = contained_mixed_form_;
     state->ran_mixed_content = ran_mixed_content_;
@@ -418,21 +417,19 @@ TEST(SecurityStateTest, ViewSourceKeepsWarning) {
 }
 
 // Tests that |incognito_downgraded_security_level| is set only when the
-// corresponding VisibleSecurityState flag is set and the HTTPBad Phase 2
-// experiment is enabled.
+// corresponding VisibleSecurityState flag is set. The incognito downgrade is
+// only performed when the HTTP-Bad feature is disabled.
 TEST(SecurityStateTest, IncognitoFlagPropagates) {
   TestSecurityStateHelper helper;
   helper.SetUrl(GURL(kHttpUrl));
   SecurityInfo security_info;
 
   {
-    // Disable the feature, which shows the warning on all incognito http pages
-    // by default.
+    // When the feature is disabled, the downgraded flag should be set for
+    // incognito http pages.
     base::test::ScopedFeatureList scoped_feature_list;
     scoped_feature_list.InitAndDisableFeature(
         security_state::features::kMarkHttpAsFeature);
-
-    // Test the default non-secure-while-incognito-or-editing configuration.
     helper.set_is_incognito(false);
     helper.GetSecurityInfo(&security_info);
     EXPECT_FALSE(security_info.incognito_downgraded_security_level);
@@ -443,12 +440,10 @@ TEST(SecurityStateTest, IncognitoFlagPropagates) {
   }
 
   {
-    // Disable the "non-secure-while-incognito" configuration.
+    // When the feature is enabled, the downgraded flag should never be set.
     base::test::ScopedFeatureList scoped_feature_list;
-    scoped_feature_list.InitAndEnableFeatureWithParameters(
-        security_state::features::kMarkHttpAsFeature,
-        {{security_state::features::kMarkHttpAsFeatureParameterName,
-          security_state::features::kMarkHttpAsParameterDangerous}});
+    scoped_feature_list.InitAndEnableFeature(
+        security_state::features::kMarkHttpAsFeature);
     helper.set_is_incognito(false);
     helper.GetSecurityInfo(&security_info);
     EXPECT_FALSE(security_info.incognito_downgraded_security_level);
@@ -567,8 +562,8 @@ TEST(SecurityStateTest, FieldEdit) {
   helper.SetUrl(GURL(kHttpUrl));
 
   {
-    // Test the configuration that warns on field edits (the default behavior
-    // when the feature is disabled).
+    // Test that a warning is shown on field edits, when the feature is
+    // disabled.
     base::test::ScopedFeatureList scoped_feature_list;
     scoped_feature_list.InitAndDisableFeature(
         security_state::features::kMarkHttpAsFeature);
@@ -591,12 +586,11 @@ TEST(SecurityStateTest, FieldEdit) {
   }
 
   {
-    // Test the "dangerous" configuration.
+    // Test that the default enabled configuration shows the dangerous warning
+    // on field edits.
     base::test::ScopedFeatureList scoped_feature_list;
-    scoped_feature_list.InitAndEnableFeatureWithParameters(
-        security_state::features::kMarkHttpAsFeature,
-        {{security_state::features::kMarkHttpAsFeatureParameterName,
-          security_state::features::kMarkHttpAsParameterDangerous}});
+    scoped_feature_list.InitAndEnableFeature(
+        security_state::features::kMarkHttpAsFeature);
 
     SecurityInfo security_info;
     helper.GetSecurityInfo(&security_info);
@@ -655,53 +649,12 @@ TEST(SecurityStateTest, IncognitoErrorPage) {
   EXPECT_EQ(SecurityLevel::HTTP_SHOW_WARNING, security_info.security_level);
 }
 
-// Tests that HTTP_SHOW_WARNING is set when the 'warning' field trial
-// configuration is enabled.
-TEST(SecurityStateTest, AlwaysShowWarning) {
-  base::test::ScopedFeatureList scoped_feature_list;
-  scoped_feature_list.InitAndEnableFeatureWithParameters(
-      security_state::features::kMarkHttpAsFeature,
-      {{security_state::features::kMarkHttpAsFeatureParameterName,
-        security_state::features::kMarkHttpAsParameterWarning}});
-
-  TestSecurityStateHelper helper;
-  helper.SetUrl(GURL(kHttpUrl));
-
-  {
-    SecurityInfo security_info;
-    helper.GetSecurityInfo(&security_info);
-    EXPECT_EQ(security_state::HTTP_SHOW_WARNING, security_info.security_level);
-  }
-
-  {
-    // Use a fresh SecurityInfo to make sure to check the output of this
-    // GetSecurityInfo() call, not the previous one (e.g. to catch a
-    // hypothetical bug where GetSecurityInfo() doesn't set a |security_level|).
-    SecurityInfo security_info;
-    helper.set_insecure_field_edit(true);
-    helper.GetSecurityInfo(&security_info);
-    EXPECT_EQ(security_state::HTTP_SHOW_WARNING, security_info.security_level);
-  }
-
-  {
-    SecurityInfo security_info;
-    helper.set_insecure_field_edit(true);
-    helper.set_password_field_shown(true);
-    helper.GetSecurityInfo(&security_info);
-    EXPECT_EQ(security_state::HTTP_SHOW_WARNING, security_info.security_level);
-  }
-}
-
 // Tests that HTTP_SHOW_WARNING is set on normal http pages but DANGEROUS on
-// form edits when the 'warning-and-dangerous-on-form-edits' field trial
-// configuration is enabled.
+// form edits when the default feature configuration is enabled.
 TEST(SecurityStateTest, WarningAndDangerousOnFormEdits) {
   base::test::ScopedFeatureList scoped_feature_list;
-  scoped_feature_list.InitAndEnableFeatureWithParameters(
-      security_state::features::kMarkHttpAsFeature,
-      {{security_state::features::kMarkHttpAsFeatureParameterName,
-        security_state::features::
-            kMarkHttpAsParameterWarningAndDangerousOnFormEdits}});
+  scoped_feature_list.InitAndEnableFeature(
+      security_state::features::kMarkHttpAsFeature);
 
   TestSecurityStateHelper helper;
   helper.SetUrl(GURL(kHttpUrl));
@@ -771,6 +724,48 @@ TEST(SecurityStateTest, WarningAndDangerousOnSensitiveFields) {
     helper.GetSecurityInfo(&security_info);
     EXPECT_EQ(security_state::DANGEROUS, security_info.security_level);
   }
+}
+
+// Tests that the billing status is set, and it overrides valid HTTPS.
+TEST(SecurityStateTest, BillingOverridesValidHTTPS) {
+  TestSecurityStateHelper helper;
+  // TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256 from
+  // http://www.iana.org/assignments/tls-parameters/tls-parameters.xml#tls-parameters-4
+  const uint16_t ciphersuite = 0xc02f;
+  helper.set_connection_status(net::SSL_CONNECTION_VERSION_TLS1_2
+                               << net::SSL_CONNECTION_VERSION_SHIFT);
+  helper.SetCipherSuite(ciphersuite);
+
+  SecurityInfo security_info;
+  helper.GetSecurityInfo(&security_info);
+  EXPECT_EQ(MALICIOUS_CONTENT_STATUS_NONE,
+            security_info.malicious_content_status);
+
+  helper.set_malicious_content_status(MALICIOUS_CONTENT_STATUS_BILLING);
+  helper.GetSecurityInfo(&security_info);
+
+  EXPECT_EQ(MALICIOUS_CONTENT_STATUS_BILLING,
+            security_info.malicious_content_status);
+  EXPECT_EQ(DANGEROUS, security_info.security_level);
+}
+
+// Tests that the billing status is set, and it overrides invalid HTTPS.
+TEST(SecurityStateTest, BillingOverridesHTTPWarning) {
+  TestSecurityStateHelper helper;
+  helper.SetUrl(GURL(kHttpUrl));
+
+  SecurityInfo security_info;
+  helper.GetSecurityInfo(&security_info);
+  // Expect to see a warning for HTTP first.
+  EXPECT_EQ(security_state::HTTP_SHOW_WARNING, security_info.security_level);
+
+  // Now mark the URL as matching the billing list.
+  helper.set_malicious_content_status(MALICIOUS_CONTENT_STATUS_BILLING);
+  helper.GetSecurityInfo(&security_info);
+  // Expect to see a warning for billing now.
+  EXPECT_EQ(MALICIOUS_CONTENT_STATUS_BILLING,
+            security_info.malicious_content_status);
+  EXPECT_EQ(DANGEROUS, security_info.security_level);
 }
 
 }  // namespace security_state

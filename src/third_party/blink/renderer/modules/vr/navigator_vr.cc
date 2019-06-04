@@ -5,12 +5,13 @@
 #include "third_party/blink/renderer/modules/vr/navigator_vr.h"
 
 #include "services/metrics/public/cpp/ukm_builders.h"
+#include "third_party/blink/public/mojom/feature_policy/feature_policy.mojom-blink.h"
 #include "third_party/blink/public/platform/platform.h"
+#include "third_party/blink/public/platform/web_security_origin.h"
 #include "third_party/blink/public/web/web_frame.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_promise_resolver.h"
 #include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/dom/dom_exception.h"
-#include "third_party/blink/renderer/core/dom/exception_code.h"
 #include "third_party/blink/renderer/core/execution_context/execution_context.h"
 #include "third_party/blink/renderer/core/frame/local_dom_window.h"
 #include "third_party/blink/renderer/core/frame/local_frame.h"
@@ -23,7 +24,6 @@
 #include "third_party/blink/renderer/modules/vr/vr_get_devices_callback.h"
 #include "third_party/blink/renderer/modules/vr/vr_pose.h"
 #include "third_party/blink/renderer/modules/xr/xr.h"
-#include "third_party/blink/renderer/platform/feature_policy/feature_policy.h"
 
 namespace blink {
 
@@ -31,10 +31,6 @@ namespace {
 
 const char kFeaturePolicyBlockedMessage[] =
     "Access to the feature \"vr\" is disallowed by feature policy.";
-
-const char kGetVRDisplaysCrossOriginBlockedMessage[] =
-    "Access to navigator.getVRDisplays requires a user gesture in cross-origin "
-    "embedded frames.";
 
 const char kNotAssociatedWithDocumentMessage[] =
     "The object is no longer associated with a document.";
@@ -55,7 +51,7 @@ NavigatorVR* NavigatorVR::From(Document& document) {
 NavigatorVR& NavigatorVR::From(Navigator& navigator) {
   NavigatorVR* supplement = Supplement<Navigator>::From<NavigatorVR>(navigator);
   if (!supplement) {
-    supplement = new NavigatorVR(navigator);
+    supplement = MakeGarbageCollected<NavigatorVR>(navigator);
     ProvideTo(navigator, supplement);
   }
   return *supplement;
@@ -121,7 +117,7 @@ ScriptPromise NavigatorVR::getVRDisplays(ScriptState* script_state,
                                          Navigator& navigator) {
   if (!navigator.GetFrame()) {
     return ScriptPromise::RejectWithDOMException(
-        script_state, DOMException::Create(kInvalidStateError,
+        script_state, DOMException::Create(DOMExceptionCode::kInvalidStateError,
                                            kNotAssociatedWithDocumentMessage));
   }
   return NavigatorVR::From(navigator).getVRDisplays(script_state);
@@ -130,7 +126,7 @@ ScriptPromise NavigatorVR::getVRDisplays(ScriptState* script_state,
 ScriptPromise NavigatorVR::getVRDisplays(ScriptState* script_state) {
   if (!GetDocument()) {
     return ScriptPromise::RejectWithDOMException(
-        script_state, DOMException::Create(kInvalidStateError,
+        script_state, DOMException::Create(DOMExceptionCode::kInvalidStateError,
                                            kNotAssociatedWithDocumentMessage));
   }
 
@@ -145,31 +141,21 @@ ScriptPromise NavigatorVR::getVRDisplays(ScriptState* script_state) {
   LocalFrame* frame = GetDocument()->GetFrame();
   if (!frame) {
     return ScriptPromise::RejectWithDOMException(
-        script_state, DOMException::Create(kInvalidStateError,
+        script_state, DOMException::Create(DOMExceptionCode::kInvalidStateError,
                                            kNotAssociatedWithDocumentMessage));
   }
-  if (IsSupportedInFeaturePolicy(mojom::FeaturePolicyFeature::kWebVr)) {
-    if (!frame->IsFeatureEnabled(mojom::FeaturePolicyFeature::kWebVr)) {
-      return ScriptPromise::RejectWithDOMException(
-          script_state,
-          DOMException::Create(kSecurityError, kFeaturePolicyBlockedMessage));
-    }
-  } else if (!frame->HasBeenActivated() && frame->IsCrossOriginSubframe()) {
-    // Before we introduced feature policy, cross-origin iframes had access to
-    // WebVR APIs. Ideally, we want to block access to WebVR APIs for
-    // cross-origin iframes. To be backward compatible, we changed to require a
-    // user gesture for cross-origin iframes.
+  if (!GetDocument()->IsFeatureEnabled(mojom::FeaturePolicyFeature::kWebVr,
+                                       ReportOptions::kReportOnFailure)) {
     return ScriptPromise::RejectWithDOMException(
-        script_state,
-        DOMException::Create(kSecurityError,
-                             kGetVRDisplaysCrossOriginBlockedMessage));
+        script_state, DOMException::Create(DOMExceptionCode::kSecurityError,
+                                           kFeaturePolicyBlockedMessage));
   }
 
   // Similar to the restriciton above, we're going to block developers from
   // using the legacy API if they've already made calls to the new API.
   if (xr_) {
     return ScriptPromise::RejectWithDOMException(
-        script_state, DOMException::Create(kInvalidStateError,
+        script_state, DOMException::Create(DOMExceptionCode::kInvalidStateError,
                                            kCannotUseBothNewAndOldAPIMessage));
   }
 
@@ -193,7 +179,7 @@ VRController* NavigatorVR::Controller() {
     return nullptr;
 
   if (!controller_) {
-    controller_ = new VRController(this);
+    controller_ = MakeGarbageCollected<VRController>(this);
     controller_->SetListeningForActivate(focused_ && listening_for_activate_);
     controller_->FocusChanged();
   }
@@ -243,7 +229,8 @@ void NavigatorVR::EnqueueVREvent(VRDisplayEvent* event) {
   if (!GetSupplementable()->GetFrame())
     return;
 
-  GetSupplementable()->GetFrame()->DomWindow()->EnqueueWindowEvent(event);
+  GetSupplementable()->GetFrame()->DomWindow()->EnqueueWindowEvent(
+      *event, TaskType::kMiscPlatformAPI);
 }
 
 void NavigatorVR::DispatchVREvent(VRDisplayEvent* event) {
@@ -253,7 +240,7 @@ void NavigatorVR::DispatchVREvent(VRDisplayEvent* event) {
   LocalDOMWindow* window = GetSupplementable()->GetFrame()->DomWindow();
   DCHECK(window);
   event->SetTarget(window);
-  window->DispatchEvent(event);
+  window->DispatchEvent(*event);
 }
 
 void NavigatorVR::FocusedFrameChanged() {
@@ -273,10 +260,10 @@ void NavigatorVR::DidAddEventListener(LocalDOMWindow* window,
   if (xr_)
     return;
 
-  if (event_type == EventTypeNames::vrdisplayactivate) {
+  if (event_type == event_type_names::kVrdisplayactivate) {
     listening_for_activate_ = true;
     Controller()->SetListeningForActivate(focused_);
-  } else if (event_type == EventTypeNames::vrdisplayconnect) {
+  } else if (event_type == event_type_names::kVrdisplayconnect) {
     // If the page is listening for connection events make sure we've created a
     // controller so that we'll be notified of new devices.
     Controller();
@@ -289,8 +276,8 @@ void NavigatorVR::DidRemoveEventListener(LocalDOMWindow* window,
   if (xr_)
     return;
 
-  if (event_type == EventTypeNames::vrdisplayactivate &&
-      !window->HasEventListeners(EventTypeNames::vrdisplayactivate)) {
+  if (event_type == event_type_names::kVrdisplayactivate &&
+      !window->HasEventListeners(event_type_names::kVrdisplayactivate)) {
     listening_for_activate_ = false;
     Controller()->SetListeningForActivate(false);
   }

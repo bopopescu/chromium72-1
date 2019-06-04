@@ -10,8 +10,10 @@
 #include <set>
 #include <utility>
 
+#include "constants/form_flags.h"
 #include "core/fpdfapi/parser/cfdf_document.h"
 #include "core/fpdfapi/parser/cpdf_array.h"
+#include "core/fpdfapi/parser/cpdf_dictionary.h"
 #include "core/fpdfapi/parser/cpdf_document.h"
 #include "core/fpdfapi/parser/cpdf_name.h"
 #include "core/fpdfapi/parser/cpdf_number.h"
@@ -19,12 +21,14 @@
 #include "core/fpdfapi/parser/fpdf_parser_decode.h"
 #include "core/fpdfdoc/cpdf_defaultappearance.h"
 #include "core/fpdfdoc/cpdf_formcontrol.h"
-#include "core/fpdfdoc/cpdf_interform.h"
+#include "core/fpdfdoc/cpdf_interactiveform.h"
 #include "core/fpdfdoc/cpvt_generateap.h"
+#include "third_party/base/ptr_util.h"
 #include "third_party/base/stl_util.h"
 
 namespace {
 
+// TODO(thestig): Move into constants/form_flags.h.
 const int kFormListMultiSelect = 0x100;
 
 const int kFormComboEdit = 0x100;
@@ -38,9 +42,24 @@ const int kFormTextNoScroll = 0x400;
 const int kFormTextComb = 0x800;
 
 bool IsUnison(CPDF_FormField* pField) {
-  if (pField->GetType() == CPDF_FormField::CheckBox)
+  if (pField->GetType() == CPDF_FormField::kCheckBox)
     return true;
   return (pField->GetFieldFlags() & 0x2000000) != 0;
+}
+
+const CPDF_Object* FPDF_GetFieldAttrRecursive(const CPDF_Dictionary* pFieldDict,
+                                              const char* name,
+                                              int nLevel) {
+  static constexpr int kGetFieldMaxRecursion = 32;
+  if (!pFieldDict || nLevel > kGetFieldMaxRecursion)
+    return nullptr;
+
+  const CPDF_Object* pAttr = pFieldDict->GetDirectObjectFor(name);
+  if (pAttr)
+    return pAttr;
+
+  return FPDF_GetFieldAttrRecursive(pFieldDict->GetDictFor("Parent"), name,
+                                    nLevel + 1);
 }
 
 }  // namespace
@@ -53,19 +72,14 @@ Optional<FormFieldType> IntToFormFieldType(int value) {
   return {};
 }
 
-CPDF_Object* FPDF_GetFieldAttr(const CPDF_Dictionary* pFieldDict,
-                               const char* name,
-                               int nLevel) {
-  static constexpr int kGetFieldMaxRecursion = 32;
-  if (!pFieldDict || nLevel > kGetFieldMaxRecursion)
-    return nullptr;
+const CPDF_Object* FPDF_GetFieldAttr(const CPDF_Dictionary* pFieldDict,
+                                     const char* name) {
+  return FPDF_GetFieldAttrRecursive(pFieldDict, name, 0);
+}
 
-  CPDF_Object* pAttr = pFieldDict->GetDirectObjectFor(name);
-  if (pAttr)
-    return pAttr;
-
-  CPDF_Dictionary* pParent = pFieldDict->GetDictFor("Parent");
-  return pParent ? FPDF_GetFieldAttr(pParent, name, nLevel + 1) : nullptr;
+CPDF_Object* FPDF_GetFieldAttr(CPDF_Dictionary* pFieldDict, const char* name) {
+  return const_cast<CPDF_Object*>(FPDF_GetFieldAttrRecursive(
+      static_cast<const CPDF_Dictionary*>(pFieldDict), name, 0));
 }
 
 WideString FPDF_GetFullName(CPDF_Dictionary* pFieldDict) {
@@ -77,7 +91,7 @@ WideString FPDF_GetFullName(CPDF_Dictionary* pFieldDict) {
     WideString short_name = pLevel->GetUnicodeTextFor("T");
     if (!short_name.IsEmpty()) {
       if (full_name.IsEmpty())
-        full_name = short_name;
+        full_name = std::move(short_name);
       else
         full_name = short_name + L"." + full_name;
     }
@@ -88,49 +102,51 @@ WideString FPDF_GetFullName(CPDF_Dictionary* pFieldDict) {
   return full_name;
 }
 
-CPDF_FormField::CPDF_FormField(CPDF_InterForm* pForm, CPDF_Dictionary* pDict)
-    : m_Type(Unknown),
-      m_pForm(pForm),
-      m_pDict(pDict),
-      m_FontSize(0),
-      m_pFont(nullptr) {
-  SyncFieldFlags();
+CPDF_FormField::CPDF_FormField(CPDF_InteractiveForm* pForm,
+                               CPDF_Dictionary* pDict)
+    : m_pForm(pForm), m_pDict(pDict) {
+  InitFieldFlags();
 }
 
 CPDF_FormField::~CPDF_FormField() {}
 
-void CPDF_FormField::SyncFieldFlags() {
-  CPDF_Object* ft_attr = FPDF_GetFieldAttr(m_pDict.Get(), "FT");
+void CPDF_FormField::InitFieldFlags() {
+  const CPDF_Object* ft_attr = FPDF_GetFieldAttr(m_pDict.Get(), "FT");
   ByteString type_name = ft_attr ? ft_attr->GetString() : ByteString();
-  CPDF_Object* ff_attr = FPDF_GetFieldAttr(m_pDict.Get(), "Ff");
+  const CPDF_Object* ff_attr = FPDF_GetFieldAttr(m_pDict.Get(), "Ff");
   uint32_t flags = ff_attr ? ff_attr->GetInteger() : 0;
-  m_Flags = 0;
-  if (flags & FORMFLAG_READONLY)
-    m_Flags |= FORMFLAG_READONLY;
-  if (flags & FORMFLAG_REQUIRED)
-    m_Flags |= FORMFLAG_REQUIRED;
-  if (flags & FORMFLAG_NOEXPORT)
-    m_Flags |= FORMFLAG_NOEXPORT;
+  if (flags & pdfium::form_flags::kReadOnly) {
+    m_Flags |= pdfium::form_flags::kReadOnly;
+    m_bReadOnly = true;
+  }
+  if (flags & pdfium::form_flags::kRequired) {
+    m_Flags |= pdfium::form_flags::kRequired;
+    m_bRequired = true;
+  }
+  if (flags & pdfium::form_flags::kNoExport) {
+    m_Flags |= pdfium::form_flags::kNoExport;
+    m_bNoExport = true;
+  }
 
   if (type_name == "Btn") {
     if (flags & 0x8000) {
-      m_Type = RadioButton;
+      m_Type = kRadioButton;
       if (flags & 0x4000)
         m_Flags |= kFormRadioNoToggleOff;
       if (flags & 0x2000000)
         m_Flags |= kFormRadioUnison;
     } else if (flags & 0x10000) {
-      m_Type = PushButton;
+      m_Type = kPushButton;
     } else {
-      m_Type = CheckBox;
+      m_Type = kCheckBox;
     }
   } else if (type_name == "Tx") {
     if (flags & 0x100000) {
-      m_Type = File;
+      m_Type = kFile;
     } else if (flags & 0x2000000) {
-      m_Type = RichText;
+      m_Type = kRichText;
     } else {
-      m_Type = Text;
+      m_Type = kText;
       if (flags & 0x1000)
         m_Flags |= kFormTextMultiLine;
       if (flags & 0x2000)
@@ -143,17 +159,17 @@ void CPDF_FormField::SyncFieldFlags() {
     LoadDA();
   } else if (type_name == "Ch") {
     if (flags & 0x20000) {
-      m_Type = ComboBox;
+      m_Type = kComboBox;
       if (flags & 0x40000)
         m_Flags |= kFormComboEdit;
     } else {
-      m_Type = ListBox;
+      m_Type = kListBox;
       if (flags & 0x200000)
         m_Flags |= kFormListMultiSelect;
     }
     LoadDA();
   } else if (type_name == "Sig") {
-    m_Type = Sign;
+    m_Type = kSign;
   }
 }
 
@@ -161,71 +177,75 @@ WideString CPDF_FormField::GetFullName() const {
   return FPDF_GetFullName(m_pDict.Get());
 }
 
-bool CPDF_FormField::ResetField(bool bNotify) {
+bool CPDF_FormField::ResetField(NotificationOption notify) {
   switch (m_Type) {
-    case CPDF_FormField::CheckBox:
-    case CPDF_FormField::RadioButton: {
+    case kCheckBox:
+    case kRadioButton: {
       int iCount = CountControls();
-      if (iCount) {
-        // TODO(weili): Check whether anything special needs to be done for
-        // unison field. (When IsUnison(this) returns true/false.)
-        for (int i = 0; i < iCount; i++)
-          CheckControl(i, GetControl(i)->IsDefaultChecked(), false);
+      // TODO(weili): Check whether anything special needs to be done for
+      // unison field. (When IsUnison(this) returns true/false.)
+      for (int i = 0; i < iCount; i++) {
+        CheckControl(i, GetControl(i)->IsDefaultChecked(),
+                     NotificationOption::kDoNotNotify);
       }
-      if (bNotify && m_pForm->GetFormNotify())
+      if (notify == NotificationOption::kNotify && m_pForm->GetFormNotify())
         m_pForm->GetFormNotify()->AfterCheckedStatusChange(this);
       break;
     }
-    case CPDF_FormField::ComboBox:
-    case CPDF_FormField::ListBox: {
+    case kComboBox:
+    case kListBox: {
+      ClearSelection(NotificationOption::kDoNotNotify);
       WideString csValue;
-      ClearSelection();
       int iIndex = GetDefaultSelectedItem();
       if (iIndex >= 0)
         csValue = GetOptionLabel(iIndex);
-
-      if (bNotify && !NotifyListOrComboBoxBeforeChange(csValue))
+      if (notify == NotificationOption::kNotify &&
+          !NotifyListOrComboBoxBeforeChange(csValue)) {
         return false;
-
-      SetItemSelection(iIndex, true);
-      if (bNotify)
+      }
+      SetItemSelection(iIndex, true, NotificationOption::kDoNotNotify);
+      if (notify == NotificationOption::kNotify)
         NotifyListOrComboBoxAfterChange();
       break;
     }
-    case CPDF_FormField::Text:
-    case CPDF_FormField::RichText:
-    case CPDF_FormField::File:
+    case kText:
+    case kRichText:
+    case kFile:
     default: {
-      CPDF_Object* pDV = FPDF_GetFieldAttr(m_pDict.Get(), "DV");
+      const CPDF_Object* pDV = FPDF_GetFieldAttr(m_pDict.Get(), "DV");
       WideString csDValue;
       if (pDV)
         csDValue = pDV->GetUnicodeText();
 
-      CPDF_Object* pV = FPDF_GetFieldAttr(m_pDict.Get(), "V");
+      const CPDF_Object* pV = FPDF_GetFieldAttr(m_pDict.Get(), "V");
       WideString csValue;
       if (pV)
         csValue = pV->GetUnicodeText();
 
-      CPDF_Object* pRV = FPDF_GetFieldAttr(m_pDict.Get(), "RV");
+      const CPDF_Object* pRV = FPDF_GetFieldAttr(m_pDict.Get(), "RV");
       if (!pRV && (csDValue == csValue))
         return false;
 
-      if (bNotify && !NotifyBeforeValueChange(csDValue))
+      if (notify == NotificationOption::kNotify &&
+          !NotifyBeforeValueChange(csDValue)) {
         return false;
-
+      }
       if (pDV) {
         std::unique_ptr<CPDF_Object> pClone = pDV->Clone();
         if (!pClone)
           return false;
 
+        m_pForm->GetDocument()->AddOrphan(m_pDict->RemoveFor("V"));
         m_pDict->SetFor("V", std::move(pClone));
-        if (pRV)
+        if (pRV) {
+          m_pForm->GetDocument()->AddOrphan(m_pDict->RemoveFor("RV"));
           m_pDict->SetFor("RV", pDV->Clone());
+        }
       } else {
-        m_pDict->RemoveFor("V");
-        m_pDict->RemoveFor("RV");
+        m_pForm->GetDocument()->AddOrphan(m_pDict->RemoveFor("V"));
+        m_pForm->GetDocument()->AddOrphan(m_pDict->RemoveFor("RV"));
       }
-      if (bNotify)
+      if (notify == NotificationOption::kNotify)
         NotifyAfterValueChange();
       break;
     }
@@ -233,31 +253,40 @@ bool CPDF_FormField::ResetField(bool bNotify) {
   return true;
 }
 
+int CPDF_FormField::CountControls() const {
+  return pdfium::CollectionSize<int>(GetControls());
+}
+
+CPDF_FormControl* CPDF_FormField::GetControl(int index) const {
+  return GetControls()[index].Get();
+}
+
 int CPDF_FormField::GetControlIndex(const CPDF_FormControl* pControl) const {
   if (!pControl)
     return -1;
 
-  auto it = std::find(m_ControlList.begin(), m_ControlList.end(), pControl);
-  return it != m_ControlList.end() ? it - m_ControlList.begin() : -1;
+  const auto& controls = GetControls();
+  auto it = std::find(controls.begin(), controls.end(), pControl);
+  return it != controls.end() ? it - controls.begin() : -1;
 }
 
 FormFieldType CPDF_FormField::GetFieldType() const {
   switch (m_Type) {
-    case PushButton:
+    case kPushButton:
       return FormFieldType::kPushButton;
-    case CheckBox:
+    case kCheckBox:
       return FormFieldType::kCheckBox;
-    case RadioButton:
+    case kRadioButton:
       return FormFieldType::kRadioButton;
-    case ComboBox:
+    case kComboBox:
       return FormFieldType::kComboBox;
-    case ListBox:
+    case kListBox:
       return FormFieldType::kListBox;
-    case Text:
-    case RichText:
-    case File:
+    case kText:
+    case kRichText:
+    case kFile:
       return FormFieldType::kTextField;
-    case Sign:
+    case kSign:
       return FormFieldType::kSignature;
     default:
       return FormFieldType::kUnknown;
@@ -265,40 +294,45 @@ FormFieldType CPDF_FormField::GetFieldType() const {
 }
 
 CPDF_AAction CPDF_FormField::GetAdditionalAction() const {
-  CPDF_Object* pObj = FPDF_GetFieldAttr(m_pDict.Get(), "AA");
+  const CPDF_Object* pObj = FPDF_GetFieldAttr(m_pDict.Get(), "AA");
   return CPDF_AAction(pObj ? pObj->GetDict() : nullptr);
 }
 
 WideString CPDF_FormField::GetAlternateName() const {
-  CPDF_Object* pObj = FPDF_GetFieldAttr(m_pDict.Get(), "TU");
+  const CPDF_Object* pObj = FPDF_GetFieldAttr(m_pDict.Get(), "TU");
   return pObj ? pObj->GetUnicodeText() : L"";
 }
 
 WideString CPDF_FormField::GetMappingName() const {
-  CPDF_Object* pObj = FPDF_GetFieldAttr(m_pDict.Get(), "TM");
+  const CPDF_Object* pObj = FPDF_GetFieldAttr(m_pDict.Get(), "TM");
   return pObj ? pObj->GetUnicodeText() : L"";
 }
 
 uint32_t CPDF_FormField::GetFieldFlags() const {
-  CPDF_Object* pObj = FPDF_GetFieldAttr(m_pDict.Get(), "Ff");
+  const CPDF_Object* pObj = FPDF_GetFieldAttr(m_pDict.Get(), "Ff");
   return pObj ? pObj->GetInteger() : 0;
 }
 
 ByteString CPDF_FormField::GetDefaultStyle() const {
-  CPDF_Object* pObj = FPDF_GetFieldAttr(m_pDict.Get(), "DS");
+  const CPDF_Object* pObj = FPDF_GetFieldAttr(m_pDict.Get(), "DS");
   return pObj ? pObj->GetString() : "";
 }
 
+void CPDF_FormField::SetOpt(std::unique_ptr<CPDF_Object> pOpt) {
+  m_pDict->SetFor("Opt", std::move(pOpt));
+}
+
 WideString CPDF_FormField::GetValue(bool bDefault) const {
-  if (GetType() == CheckBox || GetType() == RadioButton)
+  if (GetType() == kCheckBox || GetType() == kRadioButton)
     return GetCheckValue(bDefault);
 
-  CPDF_Object* pValue = FPDF_GetFieldAttr(m_pDict.Get(), bDefault ? "DV" : "V");
+  const CPDF_Object* pValue =
+      FPDF_GetFieldAttr(m_pDict.Get(), bDefault ? "DV" : "V");
   if (!pValue) {
     if (!bDefault) {
-      if (m_Type == RichText)
+      if (m_Type == kRichText)
         pValue = FPDF_GetFieldAttr(m_pDict.Get(), "V");
-      if (!pValue && m_Type != Text)
+      if (!pValue && m_Type != kText)
         pValue = FPDF_GetFieldAttr(m_pDict.Get(), "DV");
     }
     if (!pValue)
@@ -306,10 +340,10 @@ WideString CPDF_FormField::GetValue(bool bDefault) const {
   }
 
   switch (pValue->GetType()) {
-    case CPDF_Object::STRING:
-    case CPDF_Object::STREAM:
+    case CPDF_Object::kString:
+    case CPDF_Object::kStream:
       return pValue->GetUnicodeText();
-    case CPDF_Object::ARRAY:
+    case CPDF_Object::kArray:
       pValue = pValue->AsArray()->GetDirectObjectAt(0);
       if (pValue)
         return pValue->GetUnicodeText();
@@ -330,41 +364,46 @@ WideString CPDF_FormField::GetDefaultValue() const {
 
 bool CPDF_FormField::SetValue(const WideString& value,
                               bool bDefault,
-                              bool bNotify) {
+                              NotificationOption notify) {
   switch (m_Type) {
-    case CheckBox:
-    case RadioButton: {
-      SetCheckValue(value, bDefault, bNotify);
+    case kCheckBox:
+    case kRadioButton: {
+      SetCheckValue(value, bDefault, notify);
       return true;
     }
-    case File:
-    case RichText:
-    case Text:
-    case ComboBox: {
+    case kFile:
+    case kRichText:
+    case kText:
+    case kComboBox: {
       WideString csValue = value;
-      if (bNotify && !NotifyBeforeValueChange(csValue))
+      if (notify == NotificationOption::kNotify &&
+          !NotifyBeforeValueChange(csValue)) {
         return false;
-
+      }
       ByteString key(bDefault ? "DV" : "V");
       int iIndex = FindOptionValue(csValue);
       if (iIndex < 0) {
         ByteString bsEncodeText = PDF_EncodeText(csValue);
+        m_pForm->GetDocument()->AddOrphan(m_pDict->RemoveFor(key));
         m_pDict->SetNewFor<CPDF_String>(key, bsEncodeText, false);
-        if (m_Type == RichText && !bDefault)
+        if (m_Type == kRichText && !bDefault) {
+          m_pForm->GetDocument()->AddOrphan(m_pDict->RemoveFor("RV"));
           m_pDict->SetNewFor<CPDF_String>("RV", bsEncodeText, false);
-        m_pDict->RemoveFor("I");
+        }
+        m_pForm->GetDocument()->AddOrphan(m_pDict->RemoveFor("I"));
       } else {
+        m_pForm->GetDocument()->AddOrphan(m_pDict->RemoveFor(key));
         m_pDict->SetNewFor<CPDF_String>(key, PDF_EncodeText(csValue), false);
         if (!bDefault) {
-          ClearSelection();
-          SetItemSelection(iIndex, true);
+          ClearSelection(NotificationOption::kDoNotNotify);
+          SetItemSelection(iIndex, true, NotificationOption::kDoNotNotify);
         }
       }
-      if (bNotify)
+      if (notify == NotificationOption::kNotify)
         NotifyAfterValueChange();
       break;
     }
-    case ListBox: {
+    case kListBox: {
       int iIndex = FindOptionValue(value);
       if (iIndex < 0)
         return false;
@@ -372,14 +411,15 @@ bool CPDF_FormField::SetValue(const WideString& value,
       if (bDefault && iIndex == GetDefaultSelectedItem())
         return false;
 
-      if (bNotify && !NotifyBeforeSelectionChange(value))
+      if (notify == NotificationOption::kNotify &&
+          !NotifyBeforeSelectionChange(value)) {
         return false;
-
-      if (!bDefault) {
-        ClearSelection();
-        SetItemSelection(iIndex, true);
       }
-      if (bNotify)
+      if (!bDefault) {
+        ClearSelection(NotificationOption::kDoNotNotify);
+        SetItemSelection(iIndex, true, NotificationOption::kDoNotNotify);
+      }
+      if (notify == NotificationOption::kNotify)
         NotifyAfterSelectionChange();
       break;
     }
@@ -389,18 +429,20 @@ bool CPDF_FormField::SetValue(const WideString& value,
   return true;
 }
 
-bool CPDF_FormField::SetValue(const WideString& value, bool bNotify) {
-  return SetValue(value, false, bNotify);
+bool CPDF_FormField::SetValue(const WideString& value,
+                              NotificationOption notify) {
+  return SetValue(value, false, notify);
 }
 
 int CPDF_FormField::GetMaxLen() const {
-  if (CPDF_Object* pObj = FPDF_GetFieldAttr(m_pDict.Get(), "MaxLen"))
+  if (const CPDF_Object* pObj = FPDF_GetFieldAttr(m_pDict.Get(), "MaxLen"))
     return pObj->GetInteger();
 
-  for (auto& pControl : m_ControlList) {
+  for (auto& pControl : GetControls()) {
     if (!pControl)
       continue;
-    CPDF_Dictionary* pWidgetDict = pControl->GetWidget();
+
+    const CPDF_Dictionary* pWidgetDict = pControl->GetWidget();
     if (pWidgetDict->KeyExist("MaxLen"))
       return pWidgetDict->GetIntegerFor("MaxLen");
   }
@@ -408,7 +450,7 @@ int CPDF_FormField::GetMaxLen() const {
 }
 
 int CPDF_FormField::CountSelectedItems() const {
-  CPDF_Object* pValue = FPDF_GetFieldAttr(m_pDict.Get(), "V");
+  const CPDF_Object* pValue = FPDF_GetFieldAttr(m_pDict.Get(), "V");
   if (!pValue) {
     pValue = FPDF_GetFieldAttr(m_pDict.Get(), "I");
     if (!pValue)
@@ -417,13 +459,12 @@ int CPDF_FormField::CountSelectedItems() const {
 
   if (pValue->IsString() || pValue->IsNumber())
     return pValue->GetString().IsEmpty() ? 0 : 1;
-  if (CPDF_Array* pArray = pValue->AsArray())
-    return pArray->GetCount();
-  return 0;
+  const CPDF_Array* pArray = pValue->AsArray();
+  return pArray ? pArray->size() : 0;
 }
 
 int CPDF_FormField::GetSelectedIndex(int index) const {
-  CPDF_Object* pValue = FPDF_GetFieldAttr(m_pDict.Get(), "V");
+  const CPDF_Object* pValue = FPDF_GetFieldAttr(m_pDict.Get(), "V");
   if (!pValue) {
     pValue = FPDF_GetFieldAttr(m_pDict.Get(), "I");
     if (!pValue)
@@ -438,11 +479,11 @@ int CPDF_FormField::GetSelectedIndex(int index) const {
       return -1;
     sel_value = pValue->GetUnicodeText();
   } else {
-    CPDF_Array* pArray = pValue->AsArray();
+    const CPDF_Array* pArray = pValue->AsArray();
     if (!pArray || index < 0)
       return -1;
 
-    CPDF_Object* elementValue = pArray->GetDirectObjectAt(index);
+    const CPDF_Object* elementValue = pArray->GetDirectObjectAt(index);
     sel_value = elementValue ? elementValue->GetUnicodeText() : WideString();
   }
   if (index < CountSelectedOptions()) {
@@ -458,32 +499,31 @@ int CPDF_FormField::GetSelectedIndex(int index) const {
   return -1;
 }
 
-bool CPDF_FormField::ClearSelection(bool bNotify) {
-  if (bNotify && m_pForm->GetFormNotify()) {
+bool CPDF_FormField::ClearSelection(NotificationOption notify) {
+  if (notify == NotificationOption::kNotify && m_pForm->GetFormNotify()) {
     WideString csValue;
     int iIndex = GetSelectedIndex(0);
     if (iIndex >= 0)
       csValue = GetOptionLabel(iIndex);
-
     if (!NotifyListOrComboBoxBeforeChange(csValue))
       return false;
   }
-  m_pDict->RemoveFor("V");
-  m_pDict->RemoveFor("I");
-  if (bNotify)
+  m_pForm->GetDocument()->AddOrphan(m_pDict->RemoveFor("V"));
+  m_pForm->GetDocument()->AddOrphan(m_pDict->RemoveFor("I"));
+  if (notify == NotificationOption::kNotify)
     NotifyListOrComboBoxAfterChange();
   return true;
 }
 
 bool CPDF_FormField::IsItemSelected(int index) const {
-  ASSERT(GetType() == ComboBox || GetType() == ListBox);
+  ASSERT(GetType() == kComboBox || GetType() == kListBox);
   if (index < 0 || index >= CountOptions())
     return false;
   if (IsOptionSelected(index))
     return true;
 
   WideString opt_value = GetOptionValue(index);
-  CPDF_Object* pValue = FPDF_GetFieldAttr(m_pDict.Get(), "V");
+  const CPDF_Object* pValue = FPDF_GetFieldAttr(m_pDict.Get(), "V");
   if (!pValue) {
     pValue = FPDF_GetFieldAttr(m_pDict.Get(), "I");
     if (!pValue)
@@ -499,7 +539,7 @@ bool CPDF_FormField::IsItemSelected(int index) const {
     return (pValue->GetInteger() == index);
   }
 
-  CPDF_Array* pArray = pValue->AsArray();
+  const CPDF_Array* pArray = pValue->AsArray();
   if (!pArray)
     return false;
 
@@ -510,7 +550,7 @@ bool CPDF_FormField::IsItemSelected(int index) const {
       break;
     }
   }
-  for (int i = 0; i < static_cast<int>(pArray->GetCount()); i++)
+  for (int i = 0; i < static_cast<int>(pArray->size()); i++)
     if (pArray->GetDirectObjectAt(i)->GetUnicodeText() == opt_value &&
         i == iPos) {
       return true;
@@ -518,18 +558,21 @@ bool CPDF_FormField::IsItemSelected(int index) const {
   return false;
 }
 
-bool CPDF_FormField::SetItemSelection(int index, bool bSelected, bool bNotify) {
-  ASSERT(GetType() == ComboBox || GetType() == ListBox);
+bool CPDF_FormField::SetItemSelection(int index,
+                                      bool bSelected,
+                                      NotificationOption notify) {
+  ASSERT(GetType() == kComboBox || GetType() == kListBox);
   if (index < 0 || index >= CountOptions())
     return false;
 
   WideString opt_value = GetOptionValue(index);
-  if (bNotify && !NotifyListOrComboBoxBeforeChange(opt_value))
+  if (notify == NotificationOption::kNotify &&
+      !NotifyListOrComboBoxBeforeChange(opt_value)) {
     return false;
-
+  }
   if (bSelected) {
-    if (GetType() == ListBox) {
-      SelectOption(index, true);
+    if (GetType() == kListBox) {
+      SelectOption(index, true, NotificationOption::kDoNotNotify);
       if (!(m_Flags & kFormListMultiSelect)) {
         m_pDict->SetNewFor<CPDF_String>("V", PDF_EncodeText(opt_value), false);
       } else {
@@ -547,13 +590,13 @@ bool CPDF_FormField::SetItemSelection(int index, bool bSelected, bool bNotify) {
       pI->AddNew<CPDF_Number>(index);
     }
   } else {
-    CPDF_Object* pValue = FPDF_GetFieldAttr(m_pDict.Get(), "V");
+    const CPDF_Object* pValue = FPDF_GetFieldAttr(m_pDict.Get(), "V");
     if (pValue) {
-      if (GetType() == ListBox) {
-        SelectOption(index, false);
+      if (GetType() == kListBox) {
+        SelectOption(index, false, NotificationOption::kDoNotNotify);
         if (pValue->IsString()) {
           if (pValue->GetUnicodeText() == opt_value)
-            m_pDict->RemoveFor("V");
+            m_pForm->GetDocument()->AddOrphan(m_pDict->RemoveFor("V"));
         } else if (pValue->IsArray()) {
           auto pArray = pdfium::MakeUnique<CPDF_Array>();
           for (int i = 0; i < CountOptions(); i++) {
@@ -562,22 +605,24 @@ bool CPDF_FormField::SetItemSelection(int index, bool bSelected, bool bNotify) {
               pArray->AddNew<CPDF_String>(PDF_EncodeText(opt_value), false);
             }
           }
-          if (pArray->GetCount() > 0)
+          if (pArray->size() > 0) {
+            m_pForm->GetDocument()->AddOrphan(m_pDict->RemoveFor("V"));
             m_pDict->SetFor("V", std::move(pArray));
+          }
         }
       } else {
-        m_pDict->RemoveFor("V");
-        m_pDict->RemoveFor("I");
+        m_pForm->GetDocument()->AddOrphan(m_pDict->RemoveFor("V"));
+        m_pForm->GetDocument()->AddOrphan(m_pDict->RemoveFor("I"));
       }
     }
   }
-  if (bNotify)
+  if (notify == NotificationOption::kNotify)
     NotifyListOrComboBoxAfterChange();
   return true;
 }
 
 bool CPDF_FormField::IsItemDefaultSelected(int index) const {
-  ASSERT(GetType() == ComboBox || GetType() == ListBox);
+  ASSERT(GetType() == kComboBox || GetType() == kListBox);
   if (index < 0 || index >= CountOptions())
     return false;
   int iDVIndex = GetDefaultSelectedItem();
@@ -585,8 +630,8 @@ bool CPDF_FormField::IsItemDefaultSelected(int index) const {
 }
 
 int CPDF_FormField::GetDefaultSelectedItem() const {
-  ASSERT(GetType() == ComboBox || GetType() == ListBox);
-  CPDF_Object* pValue = FPDF_GetFieldAttr(m_pDict.Get(), "DV");
+  ASSERT(GetType() == kComboBox || GetType() == kListBox);
+  const CPDF_Object* pValue = FPDF_GetFieldAttr(m_pDict.Get(), "DV");
   if (!pValue)
     return -1;
   WideString csDV = pValue->GetUnicodeText();
@@ -600,22 +645,22 @@ int CPDF_FormField::GetDefaultSelectedItem() const {
 }
 
 int CPDF_FormField::CountOptions() const {
-  CPDF_Array* pArray = ToArray(FPDF_GetFieldAttr(m_pDict.Get(), "Opt"));
-  return pArray ? pArray->GetCount() : 0;
+  const CPDF_Array* pArray = ToArray(FPDF_GetFieldAttr(m_pDict.Get(), "Opt"));
+  return pArray ? pArray->size() : 0;
 }
 
 WideString CPDF_FormField::GetOptionText(int index, int sub_index) const {
-  CPDF_Array* pArray = ToArray(FPDF_GetFieldAttr(m_pDict.Get(), "Opt"));
+  const CPDF_Array* pArray = ToArray(FPDF_GetFieldAttr(m_pDict.Get(), "Opt"));
   if (!pArray)
     return WideString();
 
-  CPDF_Object* pOption = pArray->GetDirectObjectAt(index);
+  const CPDF_Object* pOption = pArray->GetDirectObjectAt(index);
   if (!pOption)
     return WideString();
-  if (CPDF_Array* pOptionArray = pOption->AsArray())
+  if (const CPDF_Array* pOptionArray = pOption->AsArray())
     pOption = pOptionArray->GetDirectObjectAt(sub_index);
 
-  CPDF_String* pString = ToString(pOption);
+  const CPDF_String* pString = ToString(pOption);
   return pString ? pString->GetUnicodeText() : WideString();
 }
 
@@ -643,61 +688,10 @@ int CPDF_FormField::FindOptionValue(const WideString& csOptValue) const {
   return -1;
 }
 
-#ifdef PDF_ENABLE_XFA
-int CPDF_FormField::InsertOption(WideString csOptLabel,
-                                 int index,
-                                 bool bNotify) {
-  if (csOptLabel.IsEmpty())
-    return -1;
-
-  if (bNotify && !NotifyListOrComboBoxBeforeChange(csOptLabel))
-    return -1;
-
-  ByteString csStr = PDF_EncodeText(csOptLabel);
-  CPDF_Array* pOpt = ToArray(FPDF_GetFieldAttr(m_pDict.Get(), "Opt"));
-  if (!pOpt)
-    pOpt = m_pDict->SetNewFor<CPDF_Array>("Opt");
-
-  int iCount = pdfium::base::checked_cast<int>(pOpt->GetCount());
-  if (index >= iCount) {
-    pOpt->AddNew<CPDF_String>(csStr, false);
-    index = iCount;
-  } else {
-    pOpt->InsertNewAt<CPDF_String>(index, csStr, false);
-  }
-
-  if (bNotify)
-    NotifyListOrComboBoxAfterChange();
-  return index;
-}
-
-bool CPDF_FormField::ClearOptions(bool bNotify) {
-  if (bNotify && m_pForm->GetFormNotify()) {
-    WideString csValue;
-    int iIndex = GetSelectedIndex(0);
-    if (iIndex >= 0)
-      csValue = GetOptionLabel(iIndex);
-    if (!NotifyListOrComboBoxBeforeChange(csValue))
-      return false;
-  }
-
-  m_pDict->RemoveFor("Opt");
-  m_pDict->RemoveFor("V");
-  m_pDict->RemoveFor("DV");
-  m_pDict->RemoveFor("I");
-  m_pDict->RemoveFor("TI");
-
-  if (bNotify)
-    NotifyListOrComboBoxAfterChange();
-
-  return true;
-}
-#endif  // PDF_ENABLE_XFA
-
 bool CPDF_FormField::CheckControl(int iControlIndex,
                                   bool bChecked,
-                                  bool bNotify) {
-  ASSERT(GetType() == CheckBox || GetType() == RadioButton);
+                                  NotificationOption notify) {
+  ASSERT(GetType() == kCheckBox || GetType() == kRadioButton);
   CPDF_FormControl* pControl = GetControl(iControlIndex);
   if (!pControl)
     return false;
@@ -728,13 +722,13 @@ bool CPDF_FormField::CheckControl(int iControlIndex,
     }
   }
 
-  CPDF_Object* pOpt = FPDF_GetFieldAttr(m_pDict.Get(), "Opt");
+  const CPDF_Object* pOpt = FPDF_GetFieldAttr(m_pDict.Get(), "Opt");
   if (!ToArray(pOpt)) {
     if (bChecked) {
       m_pDict->SetNewFor<CPDF_Name>("V", csBExport);
     } else {
       ByteString csV;
-      CPDF_Object* pV = FPDF_GetFieldAttr(m_pDict.Get(), "V");
+      const CPDF_Object* pV = FPDF_GetFieldAttr(m_pDict.Get(), "V");
       if (pV)
         csV = pV->GetString();
       if (csV == csBExport)
@@ -743,13 +737,13 @@ bool CPDF_FormField::CheckControl(int iControlIndex,
   } else if (bChecked) {
     m_pDict->SetNewFor<CPDF_Name>("V", ByteString::Format("%d", iControlIndex));
   }
-  if (bNotify && m_pForm->GetFormNotify())
+  if (notify == NotificationOption::kNotify && m_pForm->GetFormNotify())
     m_pForm->GetFormNotify()->AfterCheckedStatusChange(this);
   return true;
 }
 
 WideString CPDF_FormField::GetCheckValue(bool bDefault) const {
-  ASSERT(GetType() == CheckBox || GetType() == RadioButton);
+  ASSERT(GetType() == kCheckBox || GetType() == kRadioButton);
   WideString csExport = L"Off";
   int iCount = CountControls();
   for (int i = 0; i < iCount; i++) {
@@ -766,57 +760,62 @@ WideString CPDF_FormField::GetCheckValue(bool bDefault) const {
 
 bool CPDF_FormField::SetCheckValue(const WideString& value,
                                    bool bDefault,
-                                   bool bNotify) {
-  ASSERT(GetType() == CheckBox || GetType() == RadioButton);
+                                   NotificationOption notify) {
+  ASSERT(GetType() == kCheckBox || GetType() == kRadioButton);
   int iCount = CountControls();
   for (int i = 0; i < iCount; i++) {
     CPDF_FormControl* pControl = GetControl(i);
     WideString csExport = pControl->GetExportValue();
     bool val = csExport == value;
-    if (!bDefault)
-      CheckControl(GetControlIndex(pControl), val);
+    if (!bDefault) {
+      CheckControl(GetControlIndex(pControl), val,
+                   NotificationOption::kDoNotNotify);
+    }
     if (val)
       break;
   }
-  if (bNotify && m_pForm->GetFormNotify())
+  if (notify == NotificationOption::kNotify && m_pForm->GetFormNotify())
     m_pForm->GetFormNotify()->AfterCheckedStatusChange(this);
   return true;
 }
 
 int CPDF_FormField::GetTopVisibleIndex() const {
-  CPDF_Object* pObj = FPDF_GetFieldAttr(m_pDict.Get(), "TI");
+  const CPDF_Object* pObj = FPDF_GetFieldAttr(m_pDict.Get(), "TI");
   return pObj ? pObj->GetInteger() : 0;
 }
 
 int CPDF_FormField::CountSelectedOptions() const {
-  CPDF_Array* pArray = ToArray(FPDF_GetFieldAttr(m_pDict.Get(), "I"));
-  return pArray ? pArray->GetCount() : 0;
+  const CPDF_Array* pArray = ToArray(FPDF_GetFieldAttr(m_pDict.Get(), "I"));
+  return pArray ? pArray->size() : 0;
 }
 
 int CPDF_FormField::GetSelectedOptionIndex(int index) const {
-  CPDF_Array* pArray = ToArray(FPDF_GetFieldAttr(m_pDict.Get(), "I"));
+  const CPDF_Array* pArray = ToArray(FPDF_GetFieldAttr(m_pDict.Get(), "I"));
   if (!pArray)
     return -1;
 
-  int iCount = pArray->GetCount();
+  int iCount = pArray->size();
   if (iCount < 0 || index >= iCount)
     return -1;
   return pArray->GetIntegerAt(index);
 }
 
 bool CPDF_FormField::IsOptionSelected(int iOptIndex) const {
-  CPDF_Array* pArray = ToArray(FPDF_GetFieldAttr(m_pDict.Get(), "I"));
+  const CPDF_Array* pArray = ToArray(FPDF_GetFieldAttr(m_pDict.Get(), "I"));
   if (!pArray)
     return false;
 
-  for (const auto& pObj : *pArray) {
+  CPDF_ArrayLocker locker(pArray);
+  for (const auto& pObj : locker) {
     if (pObj->GetInteger() == iOptIndex)
       return true;
   }
   return false;
 }
 
-bool CPDF_FormField::SelectOption(int iOptIndex, bool bSelected, bool bNotify) {
+bool CPDF_FormField::SelectOption(int iOptIndex,
+                                  bool bSelected,
+                                  NotificationOption notify) {
   CPDF_Array* pArray = m_pDict->GetArrayFor("I");
   if (!pArray) {
     if (!bSelected)
@@ -826,13 +825,13 @@ bool CPDF_FormField::SelectOption(int iOptIndex, bool bSelected, bool bNotify) {
   }
 
   bool bReturn = false;
-  for (size_t i = 0; i < pArray->GetCount(); i++) {
+  for (size_t i = 0; i < pArray->size(); i++) {
     int iFind = pArray->GetIntegerAt(i);
     if (iFind == iOptIndex) {
       if (bSelected)
         return true;
 
-      if (bNotify && m_pForm->GetFormNotify()) {
+      if (notify == NotificationOption::kNotify && m_pForm->GetFormNotify()) {
         WideString csValue = GetOptionLabel(iOptIndex);
         if (!NotifyListOrComboBoxBeforeChange(csValue))
           return false;
@@ -846,7 +845,7 @@ bool CPDF_FormField::SelectOption(int iOptIndex, bool bSelected, bool bNotify) {
       if (!bSelected)
         continue;
 
-      if (bNotify && m_pForm->GetFormNotify()) {
+      if (notify == NotificationOption::kNotify && m_pForm->GetFormNotify()) {
         WideString csValue = GetOptionLabel(iOptIndex);
         if (!NotifyListOrComboBoxBeforeChange(csValue))
           return false;
@@ -859,28 +858,10 @@ bool CPDF_FormField::SelectOption(int iOptIndex, bool bSelected, bool bNotify) {
   if (!bReturn) {
     if (bSelected)
       pArray->AddNew<CPDF_Number>(iOptIndex);
-
     if (pArray->IsEmpty())
-      m_pDict->RemoveFor("I");
+      m_pForm->GetDocument()->AddOrphan(m_pDict->RemoveFor("I"));
   }
-  if (bNotify)
-    NotifyListOrComboBoxAfterChange();
-
-  return true;
-}
-
-bool CPDF_FormField::ClearSelectedOptions(bool bNotify) {
-  if (bNotify && m_pForm->GetFormNotify()) {
-    WideString csValue;
-    int iIndex = GetSelectedIndex(0);
-    if (iIndex >= 0)
-      csValue = GetOptionLabel(iIndex);
-
-    if (!NotifyListOrComboBoxBeforeChange(csValue))
-      return false;
-  }
-  m_pDict->RemoveFor("I");
-  if (bNotify)
+  if (notify == NotificationOption::kNotify)
     NotifyListOrComboBoxAfterChange();
 
   return true;
@@ -892,7 +873,7 @@ void CPDF_FormField::LoadDA() {
     return;
 
   ByteString DA;
-  if (CPDF_Object* pObj = FPDF_GetFieldAttr(m_pDict.Get(), "DA"))
+  if (const CPDF_Object* pObj = FPDF_GetFieldAttr(m_pDict.Get(), "DA"))
     DA = pObj->GetString();
 
   if (DA.IsEmpty())
@@ -922,34 +903,32 @@ void CPDF_FormField::LoadDA() {
 }
 
 bool CPDF_FormField::NotifyBeforeSelectionChange(const WideString& value) {
-  if (!m_pForm->GetFormNotify())
-    return true;
-  return m_pForm->GetFormNotify()->BeforeSelectionChange(this, value);
+  auto* pNotify = m_pForm->GetFormNotify();
+  return !pNotify || pNotify->BeforeSelectionChange(this, value);
 }
 
 void CPDF_FormField::NotifyAfterSelectionChange() {
-  if (!m_pForm->GetFormNotify())
-    return;
-  m_pForm->GetFormNotify()->AfterSelectionChange(this);
+  auto* pNotify = m_pForm->GetFormNotify();
+  if (pNotify)
+    pNotify->AfterSelectionChange(this);
 }
 
 bool CPDF_FormField::NotifyBeforeValueChange(const WideString& value) {
-  if (!m_pForm->GetFormNotify())
-    return true;
-  return m_pForm->GetFormNotify()->BeforeValueChange(this, value);
+  auto* pNotify = m_pForm->GetFormNotify();
+  return !pNotify || pNotify->BeforeValueChange(this, value);
 }
 
 void CPDF_FormField::NotifyAfterValueChange() {
-  if (!m_pForm->GetFormNotify())
-    return;
-  m_pForm->GetFormNotify()->AfterValueChange(this);
+  auto* pNotify = m_pForm->GetFormNotify();
+  if (pNotify)
+    pNotify->AfterValueChange(this);
 }
 
 bool CPDF_FormField::NotifyListOrComboBoxBeforeChange(const WideString& value) {
   switch (GetType()) {
-    case ListBox:
+    case kListBox:
       return NotifyBeforeSelectionChange(value);
-    case ComboBox:
+    case kComboBox:
       return NotifyBeforeValueChange(value);
     default:
       return true;
@@ -958,13 +937,18 @@ bool CPDF_FormField::NotifyListOrComboBoxBeforeChange(const WideString& value) {
 
 void CPDF_FormField::NotifyListOrComboBoxAfterChange() {
   switch (GetType()) {
-    case ListBox:
+    case kListBox:
       NotifyAfterSelectionChange();
       break;
-    case ComboBox:
+    case kComboBox:
       NotifyAfterValueChange();
       break;
     default:
       break;
   }
+}
+
+const std::vector<UnownedPtr<CPDF_FormControl>>& CPDF_FormField::GetControls()
+    const {
+  return m_pForm->GetControlsForField(this);
 }

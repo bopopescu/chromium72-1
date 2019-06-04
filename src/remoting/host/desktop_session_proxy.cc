@@ -23,6 +23,7 @@
 #include "remoting/host/client_session.h"
 #include "remoting/host/client_session_control.h"
 #include "remoting/host/desktop_session_connector.h"
+#include "remoting/host/ipc_action_executor.h"
 #include "remoting/host/ipc_audio_capturer.h"
 #include "remoting/host/ipc_input_injector.h"
 #include "remoting/host/ipc_mouse_cursor_monitor.h"
@@ -105,6 +106,12 @@ DesktopSessionProxy::DesktopSessionProxy(
   DCHECK(caller_task_runner_->BelongsToCurrentThread());
 }
 
+std::unique_ptr<ActionExecutor> DesktopSessionProxy::CreateActionExecutor() {
+  DCHECK(caller_task_runner_->BelongsToCurrentThread());
+
+  return std::make_unique<IpcActionExecutor>(this);
+}
+
 std::unique_ptr<AudioCapturer> DesktopSessionProxy::CreateAudioCapturer() {
   DCHECK(caller_task_runner_->BelongsToCurrentThread());
 
@@ -182,6 +189,8 @@ bool DesktopSessionProxy::OnMessageReceived(const IPC::Message& message) {
                         OnAudioPacket)
     IPC_MESSAGE_HANDLER(ChromotingDesktopNetworkMsg_CaptureResult,
                         OnCaptureResult)
+    IPC_MESSAGE_HANDLER(ChromotingDesktopNetworkMsg_DisplayChanged,
+                        OnDesktopDisplayChanged)
     IPC_MESSAGE_HANDLER(ChromotingDesktopNetworkMsg_MouseCursor,
                         OnMouseCursor)
     IPC_MESSAGE_HANDLER(ChromotingDesktopNetworkMsg_CreateSharedBuffer,
@@ -386,10 +395,23 @@ void DesktopSessionProxy::SetScreenResolution(
   // Depending on the session kind the screen resolution can be set by either
   // the daemon (for example RDP sessions on Windows) or by the desktop session
   // agent (when sharing the physical console).
-  if (desktop_session_connector_.get())
+  // Desktop-size-restore functionality (via an empty resolution param) does not
+  // exist for the Daemon process.  Passing an empty resolution object is
+  // treated as a critical error so we want to prevent that here.
+  if (desktop_session_connector_.get() && !screen_resolution_.IsEmpty())
     desktop_session_connector_->SetScreenResolution(this, screen_resolution_);
+
+  // Passing an empty |screen_resolution_| value to the desktop process
+  // indicates that the original resolution, if one exists, should be restored.
   SendToDesktop(
       new ChromotingNetworkDesktopMsg_SetScreenResolution(screen_resolution_));
+}
+
+void DesktopSessionProxy::ExecuteAction(
+    const protocol::ActionRequest& request) {
+  DCHECK(caller_task_runner_->BelongsToCurrentThread());
+
+  SendToDesktop(new ChromotingNetworkDesktopMsg_ExecuteActionRequest(request));
 }
 
 DesktopSessionProxy::~DesktopSessionProxy() {
@@ -449,6 +471,17 @@ void DesktopSessionProxy::OnReleaseSharedBuffer(int id) {
 
   // Drop the cached reference to the buffer.
   shared_buffers_.erase(id);
+}
+
+void DesktopSessionProxy::OnDesktopDisplayChanged(
+    const protocol::VideoLayout& displays) {
+  DCHECK(caller_task_runner_->BelongsToCurrentThread());
+
+  if (client_session_control_) {
+    auto layout = std::make_unique<protocol::VideoLayout>();
+    layout->CopyFrom(displays);
+    client_session_control_->OnDesktopDisplayChanged(std::move(layout));
+  }
 }
 
 void DesktopSessionProxy::OnCaptureResult(

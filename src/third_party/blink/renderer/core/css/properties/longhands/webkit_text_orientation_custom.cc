@@ -7,7 +7,7 @@
 #include "third_party/blink/renderer/core/style/computed_style.h"
 
 namespace blink {
-namespace CSSLonghand {
+namespace css_longhand {
 
 const CSSValue* WebkitTextOrientation::CSSValueFromComputedStyleInternal(
     const ComputedStyle& style,
@@ -20,5 +20,11 @@ const CSSValue* WebkitTextOrientation::CSSValueFromComputedStyleInternal(
   return CSSIdentifierValue::Create(style.GetTextOrientation());
 }
 
-}  // namespace CSSLonghand
+void WebkitTextOrientation::ApplyValue(StyleResolverState& state,
+                                       const CSSValue& value) const {
+  state.SetTextOrientation(
+      ToCSSIdentifierValue(value).ConvertTo<ETextOrientation>());
+}
+
+}  // namespace css_longhand
 }  // namespace blink

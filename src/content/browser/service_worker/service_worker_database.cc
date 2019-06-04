@@ -275,6 +275,7 @@ const char* ServiceWorkerDatabase::StatusToString(
 
 ServiceWorkerDatabase::RegistrationData::RegistrationData()
     : registration_id(blink::mojom::kInvalidServiceWorkerRegistrationId),
+      script_type(blink::mojom::ScriptType::kClassic),
       update_via_cache(blink::mojom::ServiceWorkerUpdateViaCache::kImports),
       version_id(blink::mojom::kInvalidServiceWorkerVersionId),
       is_active(false),
@@ -292,7 +293,7 @@ ServiceWorkerDatabase::ServiceWorkerDatabase(const base::FilePath& path)
       next_avail_registration_id_(0),
       next_avail_resource_id_(0),
       next_avail_version_id_(0),
-      state_(UNINITIALIZED) {
+      state_(DATABASE_STATE_UNINITIALIZED) {
   sequence_checker_.DetachFromSequence();
 }
 
@@ -396,6 +397,8 @@ ServiceWorkerDatabase::Status ServiceWorkerDatabase::GetRegistrationsForOrigin(
     return status;
 
   std::string prefix = CreateRegistrationKeyPrefix(origin);
+
+  // Read all registrations.
   {
     std::unique_ptr<leveldb::Iterator> itr(
         db_->NewIterator(leveldb::ReadOptions()));
@@ -420,21 +423,34 @@ ServiceWorkerDatabase::Status ServiceWorkerDatabase::GetRegistrationsForOrigin(
         break;
       }
       registrations->push_back(registration);
-
-      if (opt_resources_list) {
-        std::vector<ResourceRecord> resources;
-        status = ReadResourceRecords(registration, &resources);
-        if (status != STATUS_OK) {
-          registrations->clear();
-          opt_resources_list->clear();
-          break;
-        }
-        opt_resources_list->push_back(resources);
-      }
     }
   }
 
+  // Count reading all registrations as one "read operation" for UMA
+  // purposes.
   HandleReadResult(FROM_HERE, status);
+  if (status != STATUS_OK)
+    return status;
+
+  // Read the resources if requested. This must be done after the loop with
+  // leveldb::Iterator above, because it calls ReadResouceRecords() which
+  // deletes |db_| on failure, and iterators must be destroyed before the
+  // database.
+  if (opt_resources_list) {
+    for (const auto& registration : *registrations) {
+      std::vector<ResourceRecord> resources;
+      // NOTE: ReadResourceRecords already calls HandleReadResult() on its own,
+      // so to avoid double-counting the UMA, don't call it again after this.
+      status = ReadResourceRecords(registration, &resources);
+      if (status != STATUS_OK) {
+        registrations->clear();
+        opt_resources_list->clear();
+        break;
+      }
+      opt_resources_list->push_back(resources);
+    }
+  }
+
   return status;
 }
 
@@ -575,8 +591,7 @@ ServiceWorkerDatabase::Status ServiceWorkerDatabase::WriteRegistration(
   // Used for avoiding multiple writes for the same resource id or url.
   std::set<int64_t> pushed_resources;
   std::set<GURL> pushed_urls;
-  for (std::vector<ResourceRecord>::const_iterator itr = resources.begin();
-       itr != resources.end(); ++itr) {
+  for (auto itr = resources.begin(); itr != resources.end(); ++itr) {
     if (!itr->url.is_valid())
       return STATUS_ERROR_FAILED;
 
@@ -1226,12 +1241,8 @@ ServiceWorkerDatabase::Status ServiceWorkerDatabase::DestroyDatabase() {
     return STATUS_OK;
   }
 
-  // Directly delete the database instead of calling leveldb::DestroyDB()
-  // because the API does not delete the directory if there are unrelated files.
-  // (https://code.google.com/p/chromium/issues/detail?id=468926#c24)
-  Status status = base::DeleteFile(path_, true /* recursive */)
-                      ? STATUS_OK
-                      : STATUS_ERROR_FAILED;
+  Status status = LevelDBStatusToServiceWorkerDBStatus(
+      leveldb_chrome::DeleteDB(path_, leveldb_env::Options()));
   ServiceWorkerMetrics::RecordDestroyDatabaseResult(status);
   return status;
 }
@@ -1241,17 +1252,16 @@ ServiceWorkerDatabase::Status ServiceWorkerDatabase::LazyOpen(
   DCHECK(sequence_checker_.CalledOnValidSequence());
 
   // Do not try to open a database if we tried and failed once.
-  if (state_ == DISABLED)
+  if (state_ == DATABASE_STATE_DISABLED)
     return STATUS_ERROR_FAILED;
   if (IsOpen())
     return STATUS_OK;
 
-  if (!create_if_missing) {
+  if (!create_if_missing &&
+      (IsDatabaseInMemory() ||
+       !leveldb_chrome::PossiblyValidDB(path_, leveldb::Env::Default()))) {
     // Avoid opening a database if it does not exist at the |path_|.
-    if (IsDatabaseInMemory() || !base::PathExists(path_) ||
-        base::IsDirectoryEmpty(path_)) {
-      return STATUS_ERROR_NOT_FOUND;
-    }
+    return STATUS_ERROR_NOT_FOUND;
   }
 
   leveldb_env::Options options;
@@ -1282,7 +1292,7 @@ ServiceWorkerDatabase::Status ServiceWorkerDatabase::LazyOpen(
   switch (db_version) {
     case 0:
       // This database is new. It will be initialized when something is written.
-      DCHECK_EQ(UNINITIALIZED, state_);
+      DCHECK_EQ(DATABASE_STATE_UNINITIALIZED, state_);
       return STATUS_OK;
     case 1:
       // This database has an obsolete schema version. ServiceWorkerStorage
@@ -1292,7 +1302,7 @@ ServiceWorkerDatabase::Status ServiceWorkerDatabase::LazyOpen(
       return status;
     case 2:
       DCHECK_EQ(db_version, service_worker_internals::kCurrentSchemaVersion);
-      state_ = INITIALIZED;
+      state_ = DATABASE_STATE_INITIALIZED;
       return STATUS_OK;
     default:
       // Other cases should be handled in ReadDatabaseVersion.
@@ -1305,7 +1315,7 @@ bool ServiceWorkerDatabase::IsNewOrNonexistentDatabase(
     ServiceWorkerDatabase::Status status) {
   if (status == STATUS_ERROR_NOT_FOUND)
     return true;
-  if (status == STATUS_OK && state_ == UNINITIALIZED)
+  if (status == STATUS_OK && state_ == DATABASE_STATE_UNINITIALIZED)
     return true;
   return false;
 }
@@ -1415,6 +1425,15 @@ ServiceWorkerDatabase::Status ServiceWorkerDatabase::ParseRegistrationData(
   for (uint32_t feature : data.used_features())
     out->used_features.insert(feature);
 
+  if (data.has_script_type()) {
+    auto value = data.script_type();
+    if (!ServiceWorkerRegistrationData_ServiceWorkerScriptType_IsValid(value)) {
+      DLOG(ERROR) << "Worker script type '" << value << "' is not valid.";
+      return ServiceWorkerDatabase::STATUS_ERROR_CORRUPTED;
+    }
+    out->script_type = static_cast<blink::mojom::ScriptType>(value);
+  }
+
   if (data.has_update_via_cache()) {
     auto value = data.update_via_cache();
     if (!ServiceWorkerRegistrationData_ServiceWorkerUpdateViaCacheType_IsValid(
@@ -1466,6 +1485,9 @@ void ServiceWorkerDatabase::WriteRegistrationDataInBatch(
   for (uint32_t feature : registration.used_features)
     data.add_used_features(feature);
 
+  data.set_script_type(
+      static_cast<ServiceWorkerRegistrationData_ServiceWorkerScriptType>(
+          registration.script_type));
   data.set_update_via_cache(
       static_cast<
           ServiceWorkerRegistrationData_ServiceWorkerUpdateViaCacheType>(
@@ -1674,8 +1696,7 @@ ServiceWorkerDatabase::Status ServiceWorkerDatabase::WriteResourceIdsInBatch(
 
   if (ids.empty())
     return STATUS_OK;
-  for (std::set<int64_t>::const_iterator itr = ids.begin(); itr != ids.end();
-       ++itr) {
+  for (auto itr = ids.begin(); itr != ids.end(); ++itr) {
     // Value should be empty.
     batch->Put(CreateResourceIdKey(id_key_prefix, *itr), "");
   }
@@ -1697,8 +1718,7 @@ ServiceWorkerDatabase::Status ServiceWorkerDatabase::DeleteResourceIdsInBatch(
   if (status != STATUS_OK)
     return status;
 
-  for (std::set<int64_t>::const_iterator itr = ids.begin(); itr != ids.end();
-       ++itr) {
+  for (auto itr = ids.begin(); itr != ids.end(); ++itr) {
     batch->Delete(CreateResourceIdKey(id_key_prefix, *itr));
   }
   return STATUS_OK;
@@ -1768,14 +1788,14 @@ ServiceWorkerDatabase::Status ServiceWorkerDatabase::ReadDatabaseVersion(
 ServiceWorkerDatabase::Status ServiceWorkerDatabase::WriteBatch(
     leveldb::WriteBatch* batch) {
   DCHECK(batch);
-  DCHECK_NE(DISABLED, state_);
+  DCHECK_NE(DATABASE_STATE_DISABLED, state_);
 
-  if (state_ == UNINITIALIZED) {
+  if (state_ == DATABASE_STATE_UNINITIALIZED) {
     // Write database default values.
     batch->Put(
         service_worker_internals::kDatabaseVersionKey,
         base::Int64ToString(service_worker_internals::kCurrentSchemaVersion));
-    state_ = INITIALIZED;
+    state_ = DATABASE_STATE_INITIALIZED;
   }
 
   Status status = LevelDBStatusToServiceWorkerDBStatus(
@@ -1828,7 +1848,7 @@ void ServiceWorkerDatabase::Disable(const base::Location& from_here,
                 << " with error: " << StatusToString(status);
     DLOG(ERROR) << "ServiceWorkerDatabase is disabled.";
   }
-  state_ = DISABLED;
+  state_ = DATABASE_STATE_DISABLED;
   db_.reset();
 }
 

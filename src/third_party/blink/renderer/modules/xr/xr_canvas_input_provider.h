@@ -5,7 +5,7 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_MODULES_XR_XR_CANVAS_INPUT_PROVIDER_H_
 #define THIRD_PARTY_BLINK_RENDERER_MODULES_XR_XR_CANVAS_INPUT_PROVIDER_H_
 
-#include "third_party/blink/renderer/platform/bindings/script_wrappable.h"
+#include "third_party/blink/renderer/platform/bindings/name_client.h"
 #include "third_party/blink/renderer/platform/bindings/trace_wrapper_member.h"
 #include "third_party/blink/renderer/platform/heap/handle.h"
 #include "third_party/blink/renderer/platform/transforms/transformation_matrix.h"
@@ -16,13 +16,13 @@ namespace blink {
 
 class EventListener;
 class HTMLCanvasElement;
-class MouseEvent;
+class PointerEvent;
 class XRInputSource;
 class XRSession;
 
 class XRCanvasInputProvider
     : public GarbageCollectedFinalized<XRCanvasInputProvider>,
-      public TraceWrapperBase {
+      public NameClient {
  public:
   XRCanvasInputProvider(XRSession*, HTMLCanvasElement*);
   virtual ~XRCanvasInputProvider();
@@ -34,18 +34,18 @@ class XRCanvasInputProvider
 
   bool ShouldProcessEvents();
 
-  void OnClick(MouseEvent*);
+  void OnPointerDown(PointerEvent*);
+  void OnPointerUp(PointerEvent*);
 
   XRInputSource* GetInputSource();
 
   virtual void Trace(blink::Visitor*);
-  void TraceWrappers(blink::ScriptWrappableVisitor*) const override;
   const char* NameInHeapSnapshot() const override {
     return "XRCanvasInputProvider";
   }
 
  private:
-  void UpdateInputSource(MouseEvent*);
+  void UpdateInputSource(PointerEvent*);
   void ClearInputSource();
 
   const Member<XRSession> session_;

@@ -87,7 +87,7 @@ class InstallableManager
   FRIEND_TEST_ALL_PREFIXES(InstallableManagerBrowserTest,
                            ManifestUrlChangeFlushesState);
 
-  using IconPurpose = blink::Manifest::Icon::IconPurpose;
+  using IconPurpose = blink::Manifest::ImageResource::Purpose;
 
   struct EligiblityProperty {
     InstallableStatusCode error = NO_ERROR_DETECTED;
@@ -133,9 +133,13 @@ class InstallableManager
   // Returns true if |purpose| matches any fetched icon, or false if no icon has
   // been requested yet or there is no match.
   bool IsIconFetched(const IconPurpose purpose) const;
+  bool IsPrimaryIconFetched(const InstallableParams& params) const;
 
   // Sets the icon matching |purpose| as fetched.
   void SetIconFetched(const IconPurpose purpose);
+
+  // Gets the purpose of the icon to use as a primary icon.
+  IconPurpose GetPrimaryIconPurpose(const InstallableParams& params) const;
 
   // Returns the error code associated with the resources requested in |params|,
   // or NO_ERROR_DETECTED if there is no error.
@@ -179,8 +183,9 @@ class InstallableManager
   void OnDidGetManifest(const GURL& manifest_url,
                         const blink::Manifest& manifest);
 
-  void CheckManifestValid();
-  bool IsManifestValidForWebApp(const blink::Manifest& manifest);
+  void CheckManifestValid(bool check_webapp_manifest_display);
+  bool IsManifestValidForWebApp(const blink::Manifest& manifest,
+                                bool check_webapp_manifest_display);
   void CheckServiceWorker();
   void OnDidCheckHasServiceWorker(content::ServiceWorkerCapability capability);
 

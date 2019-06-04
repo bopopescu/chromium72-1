@@ -61,11 +61,12 @@ void InputIPC::CreateStream(media::AudioInputIPCDelegate* delegate,
       std::move(stream_request), std::move(client), nullptr,
       log_ ? std::move(log_) : nullptr, device_id_, params, total_segments,
       automatic_gain_control, std::move(invalid_key_press_count_buffer),
+      /*processing config*/ nullptr,
       base::BindOnce(&InputIPC::StreamCreated, weak_factory_.GetWeakPtr()));
 }
 
 void InputIPC::StreamCreated(
-    media::mojom::AudioDataPipePtr data_pipe,
+    media::mojom::ReadOnlyAudioDataPipePtr data_pipe,
     bool initially_muted,
     const base::Optional<base::UnguessableToken>& stream_id) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
@@ -84,14 +85,12 @@ void InputIPC::StreamCreated(
   auto result =
       mojo::UnwrapPlatformFile(std::move(data_pipe->socket), &socket_handle);
   DCHECK_EQ(result, MOJO_RESULT_OK);
-  base::SharedMemoryHandle memory_handle;
-  mojo::UnwrappedSharedMemoryHandleProtection protection;
-  result = mojo::UnwrapSharedMemoryHandle(std::move(data_pipe->shared_memory),
-                                          &memory_handle, nullptr, &protection);
-  DCHECK_EQ(result, MOJO_RESULT_OK);
-  DCHECK_EQ(protection, mojo::UnwrappedSharedMemoryHandleProtection::kReadOnly);
+  base::ReadOnlySharedMemoryRegion& shared_memory_region =
+      data_pipe->shared_memory;
+  DCHECK(shared_memory_region.IsValid());
 
-  delegate_->OnStreamCreated(memory_handle, socket_handle, initially_muted);
+  delegate_->OnStreamCreated(std::move(shared_memory_region), socket_handle,
+                             initially_muted);
 }
 
 void InputIPC::RecordStream() {
@@ -121,6 +120,9 @@ void InputIPC::CloseStream() {
   if (stream_client_binding_.is_bound())
     stream_client_binding_.Close();
   stream_.reset();
+
+  // Make sure we don't get any stale stream creation messages.
+  weak_factory_.InvalidateWeakPtrs();
 }
 
 void InputIPC::OnError() {

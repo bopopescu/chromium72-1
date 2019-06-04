@@ -7,7 +7,6 @@
 #include <utility>
 
 #include "base/memory/ptr_util.h"
-#include "base/metrics/field_trial_params.h"
 #include "base/metrics/histogram_macros.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/common/pref_names.h"
@@ -15,8 +14,8 @@
 #include "components/prefs/pref_service.h"
 #include "components/safe_browsing/db/util.h"
 #include "components/safe_browsing/db/v4_protocol_manager_util.h"
+#include "components/subresource_filter/content/browser/subresource_filter_safe_browsing_activation_throttle.h"
 #include "content/public/browser/navigation_handle.h"
-#include "content/public/browser/page_navigator.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/console_message_level.h"
@@ -24,12 +23,23 @@
 
 namespace {
 
-const char kIgnoreSublistsParam[] = "ignore_sublists";
-
 void LogAction(SafeBrowsingTriggeredPopupBlocker::Action action) {
   UMA_HISTOGRAM_ENUMERATION("ContentSettings.Popups.StrongBlockerActions",
                             action,
                             SafeBrowsingTriggeredPopupBlocker::Action::kCount);
+}
+
+subresource_filter::ActivationPosition GetActivationPosition(
+    size_t match_index,
+    size_t num_checks) {
+  DCHECK_GT(num_checks, 0u);
+  if (num_checks == 1)
+    return subresource_filter::ActivationPosition::kOnly;
+  if (match_index == 0)
+    return subresource_filter::ActivationPosition::kFirst;
+  if (match_index == num_checks - 1)
+    return subresource_filter::ActivationPosition::kLast;
+  return subresource_filter::ActivationPosition::kMiddle;
 }
 
 }  // namespace
@@ -56,45 +66,41 @@ void SafeBrowsingTriggeredPopupBlocker::RegisterProfilePrefs(
 }
 
 // static
-std::unique_ptr<SafeBrowsingTriggeredPopupBlocker>
-SafeBrowsingTriggeredPopupBlocker::MaybeCreate(
+void SafeBrowsingTriggeredPopupBlocker::MaybeCreate(
     content::WebContents* web_contents) {
   if (!IsEnabled(web_contents))
-    return nullptr;
+    return;
 
   auto* observer_manager =
       subresource_filter::SubresourceFilterObserverManager::FromWebContents(
           web_contents);
   if (!observer_manager)
-    return nullptr;
-  return base::WrapUnique(
-      new SafeBrowsingTriggeredPopupBlocker(web_contents, observer_manager));
+    return;
+
+  if (FromWebContents(web_contents))
+    return;
+
+  web_contents->SetUserData(
+      UserDataKey(), base::WrapUnique(new SafeBrowsingTriggeredPopupBlocker(
+                         web_contents, observer_manager)));
 }
 
 SafeBrowsingTriggeredPopupBlocker::~SafeBrowsingTriggeredPopupBlocker() =
     default;
 
-bool SafeBrowsingTriggeredPopupBlocker::ShouldApplyStrongPopupBlocker(
-    const content::OpenURLParams* open_url_params) {
+bool SafeBrowsingTriggeredPopupBlocker::ShouldApplyAbusivePopupBlocker() {
   LogAction(Action::kConsidered);
   if (!current_page_data_->is_triggered())
     return false;
 
-  bool should_block = true;
-  if (open_url_params) {
-    should_block = open_url_params->triggering_event_info ==
-                   blink::WebTriggeringEventInfo::kFromUntrustedEvent;
-  }
   if (!IsEnabled(web_contents()))
     return false;
 
-  if (should_block) {
-    LogAction(Action::kBlocked);
-    current_page_data_->inc_num_popups_blocked();
-    web_contents()->GetMainFrame()->AddMessageToConsole(
-        content::CONSOLE_MESSAGE_LEVEL_ERROR, kAbusiveEnforceMessage);
-  }
-  return should_block;
+  LogAction(Action::kBlocked);
+  current_page_data_->inc_num_popups_blocked();
+  web_contents()->GetMainFrame()->AddMessageToConsole(
+      content::CONSOLE_MESSAGE_LEVEL_ERROR, kAbusiveEnforceMessage);
+  return true;
 }
 
 SafeBrowsingTriggeredPopupBlocker::SafeBrowsingTriggeredPopupBlocker(
@@ -102,11 +108,7 @@ SafeBrowsingTriggeredPopupBlocker::SafeBrowsingTriggeredPopupBlocker(
     subresource_filter::SubresourceFilterObserverManager* observer_manager)
     : content::WebContentsObserver(web_contents),
       scoped_observer_(this),
-      current_page_data_(std::make_unique<PageData>()),
-      ignore_sublists_(
-          base::GetFieldTrialParamByFeatureAsBool(kAbusiveExperienceEnforce,
-                                                  kIgnoreSublistsParam,
-                                                  false /* default_value */)) {
+      current_page_data_(std::make_unique<PageData>()) {
   DCHECK(observer_manager);
   scoped_observer_.Add(observer_manager);
 }
@@ -144,25 +146,33 @@ void SafeBrowsingTriggeredPopupBlocker::DidFinishNavigation(
 
 // This method will always be called before the DidFinishNavigation associated
 // with this handle.
-void SafeBrowsingTriggeredPopupBlocker::OnSafeBrowsingCheckComplete(
+void SafeBrowsingTriggeredPopupBlocker::OnSafeBrowsingChecksComplete(
     content::NavigationHandle* navigation_handle,
-    safe_browsing::SBThreatType threat_type,
-    const safe_browsing::ThreatMetadata& threat_metadata) {
+    const SafeBrowsingCheckResults& results) {
   DCHECK(navigation_handle->IsInMainFrame());
-  if (threat_type !=
-      safe_browsing::SBThreatType::SB_THREAT_TYPE_SUBRESOURCE_FILTER)
-    return;
-  if (ignore_sublists_) {
-    // No warning for ignore_sublists mode.
-    level_for_next_committed_navigation_ = SubresourceFilterLevel::ENFORCE;
-    return;
+  base::Optional<safe_browsing::SubresourceFilterLevel> match_level;
+  base::Optional<size_t> match_index;
+  for (size_t i = 0u; i < results.size(); ++i) {
+    const auto& result = results[i];
+    if (result.threat_type !=
+        safe_browsing::SBThreatType::SB_THREAT_TYPE_SUBRESOURCE_FILTER)
+      continue;
+
+    auto abusive = result.threat_metadata.subresource_filter_match.find(
+        safe_browsing::SubresourceFilterType::ABUSIVE);
+    if (abusive != result.threat_metadata.subresource_filter_match.end() &&
+        (!match_level.has_value() || match_level.value() < abusive->second)) {
+      match_level = abusive->second;
+      match_index = i;
+    }
   }
 
-  auto abusive = threat_metadata.subresource_filter_match.find(
-      safe_browsing::SubresourceFilterType::ABUSIVE);
-  if (abusive == threat_metadata.subresource_filter_match.end())
-    return;
-  level_for_next_committed_navigation_ = abusive->second;
+  if (match_level.has_value()) {
+    level_for_next_committed_navigation_ = match_level;
+    UMA_HISTOGRAM_ENUMERATION(
+        "ContentSettings.Popups.StrongBlockerActivationPosition",
+        GetActivationPosition(match_index.value(), results.size()));
+  }
 }
 
 void SafeBrowsingTriggeredPopupBlocker::OnSubresourceFilterGoingAway() {
@@ -170,7 +180,7 @@ void SafeBrowsingTriggeredPopupBlocker::OnSubresourceFilterGoingAway() {
 }
 
 bool SafeBrowsingTriggeredPopupBlocker::IsEnabled(
-    const content::WebContents* web_contents) {
+    content::WebContents* web_contents) {
   // If feature is disabled, return false. This is done so that if the feature
   // is broken it can be disabled irrespective of the policy.
   if (!base::FeatureList::IsEnabled(kAbusiveExperienceEnforce))

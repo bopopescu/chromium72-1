@@ -5,11 +5,11 @@
 package org.chromium.chrome.browser.preferences.datareduction;
 
 import android.content.Context;
-import android.content.Intent;
 import android.graphics.ColorMatrix;
 import android.graphics.ColorMatrixColorFilter;
 import android.graphics.drawable.Drawable;
 import android.graphics.drawable.LayerDrawable;
+import android.os.Bundle;
 import android.text.format.DateUtils;
 import android.text.format.Formatter;
 import android.util.AttributeSet;
@@ -57,7 +57,7 @@ public class DataReductionMainMenuItem extends FrameLayout implements View.OnCli
 
             long chartStartDateInMillisSinceEpoch =
                     DataReductionProxySettings.getInstance().getDataReductionLastUpdateTime()
-                    - DateUtils.DAY_IN_MILLIS * ChartDataUsageView.DAYS_IN_CHART;
+                    - DateUtils.DAY_IN_MILLIS * ChartDataUsageView.MAXIMUM_DAYS_IN_CHART;
             long firstEnabledInMillisSinceEpoch = DataReductionProxySettings.getInstance()
                                                           .getDataReductionProxyFirstEnabledTime();
             long mostRecentTime = chartStartDateInMillisSinceEpoch > firstEnabledInMillisSinceEpoch
@@ -71,9 +71,9 @@ public class DataReductionMainMenuItem extends FrameLayout implements View.OnCli
                     getContext().getString(R.string.data_reduction_saved_label, dataSaved));
             itemSummary.setText(getContext().getString(R.string.data_reduction_date_label, date));
 
-            int lightActiveColor = ApiCompatibilityUtils.getColor(
-                    getContext().getResources(), R.color.light_active_color);
-            itemText.setTextColor(lightActiveColor);
+            int textColorLink = ApiCompatibilityUtils.getColor(
+                    getContext().getResources(), R.color.default_text_color_link);
+            itemText.setTextColor(textColorLink);
 
             // Reset the icon to blue.
             ImageView icon = (ImageView) findViewById(R.id.chart_icon);
@@ -101,11 +101,11 @@ public class DataReductionMainMenuItem extends FrameLayout implements View.OnCli
 
     @Override
     public void onClick(View v) {
-        Intent intent = PreferencesLauncher.createIntentForSettingsPage(
-                getContext(), DataReductionPreferences.class.getName());
         RecordUserAction.record("MobileMenuDataSaverOpened");
-        intent.putExtra(DataReductionPreferences.FROM_MAIN_MENU, true);
-        getContext().startActivity(intent);
+        Bundle fragmentArgs = new Bundle();
+        fragmentArgs.putBoolean(DataReductionPreferences.FROM_MAIN_MENU, true);
+        PreferencesLauncher.launchSettingsPage(
+                getContext(), DataReductionPreferences.class, fragmentArgs);
 
         Tracker tracker = TrackerFactory.getTrackerForProfile(Profile.getLastUsedProfile());
         tracker.notifyEvent(EventConstants.DATA_SAVER_DETAIL_OPENED);

@@ -35,6 +35,7 @@ void SkLocalMatrixShader::flatten(SkWriteBuffer& buffer) const {
     buffer.writeFlattenable(fProxyShader.get());
 }
 
+#ifdef SK_ENABLE_LEGACY_SHADERCONTEXT
 SkShaderBase::Context* SkLocalMatrixShader::onMakeContext(
     const ContextRec& rec, SkArenaAlloc* alloc) const
 {
@@ -48,6 +49,7 @@ SkShaderBase::Context* SkLocalMatrixShader::onMakeContext(
 
     return as_SB(fProxyShader)->makeContext(newRec, alloc);
 }
+#endif
 
 SkImage* SkLocalMatrixShader::onIsAImage(SkMatrix* outMatrix, enum TileMode* mode) const {
     SkMatrix imageMatrix;
@@ -69,16 +71,6 @@ bool SkLocalMatrixShader::onAppendStages(const StageRec& rec) const {
     StageRec newRec = rec;
     newRec.fLocalM = lm;
     return as_SB(fProxyShader)->appendStages(newRec);
-}
-
-void SkLocalMatrixShader::toString(SkString* str) const {
-    str->append("SkLocalMatrixShader: (");
-
-    as_SB(fProxyShader)->toString(str);
-
-    this->INHERITED::toString(str);
-
-    str->append(")");
 }
 
 sk_sp<SkShader> SkShader::makeWithLocalMatrix(const SkMatrix& localMatrix) const {

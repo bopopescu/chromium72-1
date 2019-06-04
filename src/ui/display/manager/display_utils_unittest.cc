@@ -4,6 +4,7 @@
 
 #include "ui/display/manager/display_util.h"
 
+#include <array>
 #include <vector>
 
 #include "base/macros.h"
@@ -37,7 +38,7 @@ TEST_F(DisplayUtilTest, DisplayZooms) {
   }};
   for (const auto& data : kTestData) {
     ManagedDisplayMode mode(gfx::Size(data.first, data.first), 60, false, true,
-                            1.f, 1.f);
+                            1.f);
     const std::vector<float> zoom_values = GetDisplayZoomFactors(mode);
     for (std::size_t j = 0; j < kNumOfZoomFactors; j++)
       EXPECT_FLOAT_EQ(zoom_values[j], data.second[j]);
@@ -128,6 +129,13 @@ TEST_F(DisplayUtilTest, InsertDsfIntoListGreaterThanUnity) {
   dsf = 1.f;
   list[0] = {0.6f, 0.65f, 0.7f, 0.75f, 0.8f, 0.85f, 0.9f, 0.95f, 1.f};
   list[1] = {0.6f, 0.65f, 0.7f, 0.75f, 0.8f, 0.85f, 0.9f, 0.95f, 1.f};
+  InsertDsfIntoList(&list[0], dsf);
+  EXPECT_EQ(list[1].size(), kNumOfZoomFactors);
+  EXPECT_EQ(list[0], list[1]);
+
+  dsf = 1.1f;
+  list[0] = {0.65f, 0.7f, 0.75f, 0.8f, 0.85f, 0.9f, 0.95f, 1.f, 1.05f};
+  list[1] = {0.65f, 0.7f, 0.75f, 0.8f, 0.85f, 0.9f, 0.95f, 1.f, dsf};
   InsertDsfIntoList(&list[0], dsf);
   EXPECT_EQ(list[1].size(), kNumOfZoomFactors);
   EXPECT_EQ(list[0], list[1]);

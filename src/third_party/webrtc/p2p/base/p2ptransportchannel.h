@@ -27,6 +27,7 @@
 #include <string>
 #include <vector>
 
+#include "api/asyncresolverfactory.h"
 #include "api/candidate.h"
 #include "api/rtcerror.h"
 #include "logging/rtc_event_log/events/rtc_event_ice_candidate_pair_config.h"
@@ -36,11 +37,13 @@
 #include "p2p/base/p2pconstants.h"
 #include "p2p/base/portallocator.h"
 #include "p2p/base/portinterface.h"
+#include "p2p/base/regatheringcontroller.h"
 #include "rtc_base/asyncinvoker.h"
 #include "rtc_base/asyncpacketsocket.h"
 #include "rtc_base/constructormagic.h"
-#include "rtc_base/random.h"
-#include "rtc_base/sigslot.h"
+#include "rtc_base/strings/string_builder.h"
+#include "rtc_base/system/rtc_export.h"
+#include "rtc_base/third_party/sigslot/sigslot.h"
 
 namespace webrtc {
 class RtcEventLog;
@@ -73,16 +76,24 @@ class RemoteCandidate : public Candidate {
 
 // P2PTransportChannel manages the candidates and connection process to keep
 // two P2P clients connected to each other.
-class P2PTransportChannel : public IceTransportInternal {
+class RTC_EXPORT P2PTransportChannel : public IceTransportInternal {
  public:
+  // For testing only.
+  // TODO(zstein): Remove once AsyncResolverFactory is required.
+  P2PTransportChannel(const std::string& transport_name,
+                      int component,
+                      PortAllocator* allocator);
   P2PTransportChannel(const std::string& transport_name,
                       int component,
                       PortAllocator* allocator,
+                      webrtc::AsyncResolverFactory* async_resolver_factory,
                       webrtc::RtcEventLog* event_log = nullptr);
   ~P2PTransportChannel() override;
 
   // From TransportChannelImpl:
   IceTransportState GetState() const override;
+  webrtc::IceTransportState GetIceTransportState() const override;
+
   const std::string& transport_name() const override;
   int component() const override;
   bool writable() const override;
@@ -98,17 +109,17 @@ class P2PTransportChannel : public IceTransportInternal {
   void Connect() {}
   void MaybeStartGathering() override;
   IceGatheringState gathering_state() const override;
+  void ResolveHostnameCandidate(const Candidate& candidate);
   void AddRemoteCandidate(const Candidate& candidate) override;
   void RemoveRemoteCandidate(const Candidate& candidate) override;
   // Sets the parameters in IceConfig. We do not set them blindly. Instead, we
   // only update the parameter if it is considered set in |config|. For example,
   // a negative value of receiving_timeout will be considered "not set" and we
   // will not use it to update the respective parameter in |config_|.
-  // TODO(deadbeef): Use rtc::Optional instead of negative values.
+  // TODO(deadbeef): Use absl::optional instead of negative values.
   void SetIceConfig(const IceConfig& config) override;
   const IceConfig& config() const;
   static webrtc::RTCError ValidateIceConfig(const IceConfig& config);
-  void SetMetricsObserver(webrtc::MetricsObserverInterface* observer) override;
 
   // From TransportChannel:
   int SendPacket(const char* data,
@@ -120,7 +131,7 @@ class P2PTransportChannel : public IceTransportInternal {
   int GetError() override;
   bool GetStats(std::vector<ConnectionInfo>* candidate_pair_stats_list,
                 std::vector<CandidateStats>* candidate_stats_list) override;
-  rtc::Optional<int> GetRttEstimate() override;
+  absl::optional<int> GetRttEstimate() override;
 
   // TODO(honghaiz): Remove this method once the reference of it in
   // Chromoting is removed.
@@ -138,7 +149,7 @@ class P2PTransportChannel : public IceTransportInternal {
 
   void PruneAllPorts();
   int check_receiving_interval() const;
-  rtc::Optional<rtc::NetworkRoute> network_route() const override;
+  absl::optional<rtc::NetworkRoute> network_route() const override;
 
   // Helper method used only in unittest.
   rtc::DiffServCodePoint DefaultDscpValue() const;
@@ -151,7 +162,10 @@ class P2PTransportChannel : public IceTransportInternal {
   const std::vector<Connection*>& connections() const { return connections_; }
 
   // Public for unit tests.
-  PortAllocatorSession* allocator_session() {
+  PortAllocatorSession* allocator_session() const {
+    if (allocator_sessions_.empty()) {
+      return nullptr;
+    }
     return allocator_sessions_.back().get();
   }
 
@@ -161,16 +175,17 @@ class P2PTransportChannel : public IceTransportInternal {
   }
 
   std::string ToString() const {
-    const char RECEIVING_ABBREV[2] = {'_', 'R'};
-    const char WRITABLE_ABBREV[2] = {'_', 'W'};
-    std::stringstream ss;
+    const std::string RECEIVING_ABBREV[2] = {"_", "R"};
+    const std::string WRITABLE_ABBREV[2] = {"_", "W"};
+    rtc::StringBuilder ss;
     ss << "Channel[" << transport_name_ << "|" << component_ << "|"
        << RECEIVING_ABBREV[receiving_] << WRITABLE_ABBREV[writable_] << "]";
-    return ss.str();
+    return ss.Release();
   }
 
  private:
   rtc::Thread* thread() const { return network_thread_; }
+
   bool IsGettingPorts() { return allocator_session()->IsGettingPorts(); }
 
   // A transport channel is weak if the current best connection is either
@@ -198,7 +213,7 @@ class P2PTransportChannel : public IceTransportInternal {
   int CompareCandidatePairNetworks(
       const Connection* a,
       const Connection* b,
-      rtc::Optional<rtc::AdapterType> network_preference) const;
+      absl::optional<rtc::AdapterType> network_preference) const;
 
   // The methods below return a positive value if |a| is preferable to |b|,
   // a negative value if |b| is preferable, and 0 if they're equally preferable.
@@ -210,7 +225,7 @@ class P2PTransportChannel : public IceTransportInternal {
   int CompareConnectionStates(
       const cricket::Connection* a,
       const cricket::Connection* b,
-      rtc::Optional<int64_t> receiving_unchanged_threshold,
+      absl::optional<int64_t> receiving_unchanged_threshold,
       bool* missed_receiving_unchanged_threshold) const;
   int CompareConnectionCandidates(const cricket::Connection* a,
                                   const cricket::Connection* b) const;
@@ -221,7 +236,7 @@ class P2PTransportChannel : public IceTransportInternal {
   // Returns a positive value if |a| is better than |b|.
   int CompareConnections(const cricket::Connection* a,
                          const cricket::Connection* b,
-                         rtc::Optional<int64_t> receiving_unchanged_threshold,
+                         absl::optional<int64_t> receiving_unchanged_threshold,
                          bool* missed_receiving_unchanged_threshold) const;
 
   bool PresumedWritable(const cricket::Connection* conn) const;
@@ -231,7 +246,13 @@ class P2PTransportChannel : public IceTransportInternal {
   void UpdateState();
   void HandleAllTimedOut();
   void MaybeStopPortAllocatorSessions();
+
+  // ComputeIceTransportState computes the RTCIceTransportState as described in
+  // https://w3c.github.io/webrtc-pc/#dom-rtcicetransportstate. ComputeState
+  // computes the value we currently export as RTCIceTransportState.
+  // TODO(bugs.webrtc.org/9308): Remove ComputeState once it's no longer used.
   IceTransportState ComputeState() const;
+  webrtc::IceTransportState ComputeIceTransportState() const;
 
   Connection* GetBestConnectionOnNetwork(rtc::Network* network) const;
   bool CreateConnections(const Candidate& remote_candidate,
@@ -256,10 +277,10 @@ class P2PTransportChannel : public IceTransportInternal {
   void AddAllocatorSession(std::unique_ptr<PortAllocatorSession> session);
   void AddConnection(Connection* connection);
 
-  void OnPortReady(PortAllocatorSession *session, PortInterface* port);
+  void OnPortReady(PortAllocatorSession* session, PortInterface* port);
   void OnPortsPruned(PortAllocatorSession* session,
                      const std::vector<PortInterface*>& ports);
-  void OnCandidatesReady(PortAllocatorSession *session,
+  void OnCandidatesReady(PortAllocatorSession* session,
                          const std::vector<Candidate>& candidates);
   void OnCandidatesRemoved(PortAllocatorSession* session,
                            const std::vector<Candidate>& candidates);
@@ -280,20 +301,20 @@ class P2PTransportChannel : public IceTransportInternal {
   void OnRoleConflict(PortInterface* port);
 
   void OnConnectionStateChange(Connection* connection);
-  void OnReadPacket(Connection *connection, const char *data, size_t len,
-                    const rtc::PacketTime& packet_time);
+  void OnReadPacket(Connection* connection,
+                    const char* data,
+                    size_t len,
+                    int64_t packet_time_us);
   void OnSentPacket(const rtc::SentPacket& sent_packet);
   void OnReadyToSend(Connection* connection);
-  void OnConnectionDestroyed(Connection *connection);
+  void OnConnectionDestroyed(Connection* connection);
 
   void OnNominated(Connection* conn);
 
   void CheckAndPing();
-  void RegatherOnFailedNetworks();
-  void RegatherOnAllNetworks();
 
-  void LogCandidatePairEvent(Connection* conn,
-                             webrtc::IceCandidatePairEventType type);
+  void LogCandidatePairConfig(Connection* conn,
+                              webrtc::IceCandidatePairConfigType type);
 
   uint32_t GetNominationAttr(Connection* conn) const;
   bool GetUseCandidateAttr(Connection* conn, NominationMode mode) const;
@@ -342,10 +363,6 @@ class P2PTransportChannel : public IceTransportInternal {
                : static_cast<uint32_t>(remote_ice_parameters_.size() - 1);
   }
 
-  // Samples a delay from the uniform distribution defined by the
-  // regather_on_all_networks_interval ICE configuration pair.
-  int SampleRegatherAllNetworksInterval();
-
   // Indicates if the given local port has been pruned.
   bool IsPortPruned(const Port* port) const;
 
@@ -360,6 +377,7 @@ class P2PTransportChannel : public IceTransportInternal {
   std::string transport_name_;
   int component_;
   PortAllocator* allocator_;
+  webrtc::AsyncResolverFactory* async_resolver_factory_;
   rtc::Thread* network_thread_;
   bool incoming_only_;
   int error_;
@@ -378,7 +396,7 @@ class P2PTransportChannel : public IceTransportInternal {
   // |pinged_connections_| and |unpinged_connections_| has the same
   // connections as |connections_|. These 2 sets maintain whether a
   // connection should be pinged next or not.
-  std::vector<Connection *> connections_;
+  std::vector<Connection*> connections_;
   std::set<Connection*> pinged_connections_;
   std::set<Connection*> unpinged_connections_;
 
@@ -395,13 +413,14 @@ class P2PTransportChannel : public IceTransportInternal {
   IceRole ice_role_;
   uint64_t tiebreaker_;
   IceGatheringState gathering_state_;
-
-  // Used to generate random intervals for regather_all_networks_interval_range.
-  webrtc::Random rand_;
-
+  std::unique_ptr<webrtc::BasicRegatheringController> regathering_controller_;
   int64_t last_ping_sent_ms_ = 0;
   int weak_ping_interval_ = WEAK_PING_INTERVAL;
+  // TODO(jonasolsson): Remove state_ and rename standardized_state_ once state_
+  // is no longer used to compute the ICE connection state.
   IceTransportState state_ = IceTransportState::STATE_INIT;
+  webrtc::IceTransportState standardized_state_ =
+      webrtc::IceTransportState::kNew;
   IceConfig config_;
   int last_sent_packet_id_ = -1;  // -1 indicates no packet was sent before.
   bool started_pinging_ = false;
@@ -412,9 +431,21 @@ class P2PTransportChannel : public IceTransportInternal {
   bool writable_ = false;
 
   rtc::AsyncInvoker invoker_;
-  webrtc::MetricsObserverInterface* metrics_observer_ = nullptr;
-  rtc::Optional<rtc::NetworkRoute> network_route_;
+  absl::optional<rtc::NetworkRoute> network_route_;
   webrtc::IceEventLog ice_event_log_;
+
+  struct CandidateAndResolver final {
+    CandidateAndResolver(const Candidate& candidate,
+                         rtc::AsyncResolverInterface* resolver);
+    ~CandidateAndResolver();
+    Candidate candidate_;
+    rtc::AsyncResolverInterface* resolver_;
+  };
+  std::vector<CandidateAndResolver> resolvers_;
+  void FinishAddingRemoteCandidate(const Candidate& new_remote_candidate);
+  void OnCandidateResolved(rtc::AsyncResolverInterface* resolver);
+  void AddRemoteCandidateWithResolver(Candidate candidate,
+                                      rtc::AsyncResolverInterface* resolver);
 
   RTC_DISALLOW_COPY_AND_ASSIGN(P2PTransportChannel);
 };

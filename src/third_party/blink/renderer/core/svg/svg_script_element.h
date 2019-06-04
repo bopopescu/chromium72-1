@@ -41,6 +41,8 @@ class SVGScriptElement final : public SVGElement,
  public:
   static SVGScriptElement* Create(Document&, const CreateElementFlags);
 
+  SVGScriptElement(Document&, const CreateElementFlags);
+
   ScriptLoader* Loader() const final { return loader_.Get(); }
 
 #if DCHECK_IS_ON()
@@ -50,13 +52,10 @@ class SVGScriptElement final : public SVGElement,
   bool IsScriptElement() const override { return true; }
 
   void Trace(blink::Visitor*) override;
-  void TraceWrappers(ScriptWrappableVisitor*) const override;
 
  private:
-  SVGScriptElement(Document&, const CreateElementFlags);
-
   void ParseAttribute(const AttributeModificationParams&) override;
-  InsertionNotificationRequest InsertedInto(ContainerNode*) override;
+  InsertionNotificationRequest InsertedInto(ContainerNode&) override;
   void DidNotifySubtreeInsertionsToDocument() override;
   void ChildrenChanged(const ChildrenChange&) override;
   void DidMoveToNewDocument(Document& old_document) override;
@@ -76,6 +75,7 @@ class SVGScriptElement final : public SVGElement,
   String EventAttributeValue() const override { return String(); }
   String ForAttributeValue() const override { return String(); }
   String IntegrityAttributeValue() const override { return String(); }
+  String ReferrerPolicyAttributeValue() const override { return String(); }
   String LanguageAttributeValue() const override { return String(); }
   bool NomoduleAttributeValue() const override { return false; }
   String SourceAttributeValue() const override;

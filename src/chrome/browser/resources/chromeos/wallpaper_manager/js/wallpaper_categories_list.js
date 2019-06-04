@@ -70,6 +70,9 @@ cr.define('wallpapers', function() {
         var div = self.ownerDocument.createElement('div');
         div.textContent = entry;
         li.appendChild(div);
+          li.addEventListener('mousedown', e => {
+            e.preventDefault();
+          });
         return li;
       };
     },

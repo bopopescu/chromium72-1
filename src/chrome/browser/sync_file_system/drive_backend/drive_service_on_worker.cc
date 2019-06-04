@@ -305,6 +305,7 @@ google_apis::CancelCallback DriveServiceOnWorker::GetAllTeamDriveList(
 }
 
 google_apis::CancelCallback DriveServiceOnWorker::GetAllFileList(
+    const std::string& team_drive_id,
     const google_apis::FileListCallback& callback) {
   NOTREACHED();
   return google_apis::CancelCallback();
@@ -313,20 +314,6 @@ google_apis::CancelCallback DriveServiceOnWorker::GetAllFileList(
 google_apis::CancelCallback DriveServiceOnWorker::Search(
     const std::string& search_query,
     const google_apis::FileListCallback& callback) {
-  NOTREACHED();
-  return google_apis::CancelCallback();
-}
-
-google_apis::CancelCallback DriveServiceOnWorker::GetShareUrl(
-    const std::string& resource_id,
-    const GURL& embed_origin,
-    const google_apis::GetShareUrlCallback& callback) {
-  NOTREACHED();
-  return google_apis::CancelCallback();
-}
-
-google_apis::CancelCallback DriveServiceOnWorker::GetAppList(
-    const google_apis::AppListCallback& callback) {
   NOTREACHED();
   return google_apis::CancelCallback();
 }
@@ -439,21 +426,6 @@ std::unique_ptr<drive::BatchRequestConfiguratorInterface>
 DriveServiceOnWorker::StartBatchRequest() {
   NOTREACHED();
   return std::unique_ptr<drive::BatchRequestConfiguratorInterface>();
-}
-
-google_apis::CancelCallback DriveServiceOnWorker::AuthorizeApp(
-    const std::string& resource_id,
-    const std::string& app_id,
-    const google_apis::AuthorizeAppCallback& callback) {
-  NOTREACHED();
-  return google_apis::CancelCallback();
-}
-
-google_apis::CancelCallback DriveServiceOnWorker::UninstallApp(
-    const std::string& app_id,
-    const google_apis::EntryActionCallback& callback) {
-  NOTREACHED();
-  return google_apis::CancelCallback();
 }
 
 google_apis::CancelCallback DriveServiceOnWorker::AddPermission(

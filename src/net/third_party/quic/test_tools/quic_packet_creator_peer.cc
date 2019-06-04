@@ -6,7 +6,7 @@
 
 #include "net/third_party/quic/core/quic_packet_creator.h"
 
-namespace net {
+namespace quic {
 namespace test {
 
 // static
@@ -92,6 +92,14 @@ QuicPacketCreatorPeer::SerializeConnectivityProbingPacket(
 }
 
 // static
+OwningSerializedPacketPointer
+QuicPacketCreatorPeer::SerializePathChallengeConnectivityProbingPacket(
+    QuicPacketCreator* creator,
+    QuicPathFrameBuffer* payload) {
+  return creator->SerializePathChallengeConnectivityProbingPacket(payload);
+}
+
+// static
 EncryptionLevel QuicPacketCreatorPeer::GetEncryptionLevel(
     QuicPacketCreator* creator) {
   return creator->packet_.encryption_level;
@@ -103,4 +111,4 @@ QuicFramer* QuicPacketCreatorPeer::framer(QuicPacketCreator* creator) {
 }
 
 }  // namespace test
-}  // namespace net
+}  // namespace quic

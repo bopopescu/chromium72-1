@@ -1,9 +1,0 @@
-{
-    "name": "NoMethodsInArgsField",
-    "methods": [
-      {
-          "method": "std::string GetValue",
-          "out_args": []
-      }
-    ]
-}

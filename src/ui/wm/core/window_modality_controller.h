@@ -14,10 +14,14 @@
 #include "ui/events/event_handler.h"
 #include "ui/wm/core/wm_core_export.h"
 
+namespace aura {
+class Env;
+}
+
 namespace ui {
 class EventTarget;
 class LocatedEvent;
-}
+}  // namespace ui
 
 namespace wm {
 
@@ -35,7 +39,8 @@ class WM_CORE_EXPORT WindowModalityController : public ui::EventHandler,
                                                 public aura::EnvObserver,
                                                 public aura::WindowObserver {
  public:
-  explicit WindowModalityController(ui::EventTarget* event_target);
+  explicit WindowModalityController(ui::EventTarget* event_target,
+                                    aura::Env* env = nullptr);
   ~WindowModalityController() override;
 
   // Overridden from ui::EventHandler:
@@ -56,8 +61,13 @@ class WM_CORE_EXPORT WindowModalityController : public ui::EventHandler,
  private:
   // Processes a mouse/touch event, and returns true if the event should be
   // consumed.
-  bool ProcessLocatedEvent(aura::Window* target,
-                           ui::LocatedEvent* event);
+  bool ProcessLocatedEvent(aura::Window* target, ui::LocatedEvent* event);
+
+  // Cancel touches on the transient window tree rooted to the top level
+  // transient window of the |window|.
+  void CancelTouchesOnTransientWindowTree(aura::Window* window);
+
+  aura::Env* env_;
 
   std::vector<aura::Window*> windows_;
 

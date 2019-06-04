@@ -24,6 +24,10 @@ class WebLocalFrame;
 class WebView;
 }
 
+namespace content {
+class RenderWidget;
+}  // namespace content
+
 namespace gin {
 class Arguments;
 }
@@ -31,7 +35,7 @@ class Arguments;
 namespace test_runner {
 
 class WebTestDelegate;
-class WebViewTestProxyBase;
+class WebViewTestProxy;
 
 // TestRunnerForSpecificView implements part of |testRunner| javascript bindings
 // that work with a view where the javascript call originated from.  Examples:
@@ -40,8 +44,7 @@ class WebViewTestProxyBase;
 // Note that "global" bindings are handled by TestRunner class.
 class TestRunnerForSpecificView {
  public:
-  explicit TestRunnerForSpecificView(
-      WebViewTestProxyBase* web_view_test_proxy_base);
+  explicit TestRunnerForSpecificView(WebViewTestProxy* web_view_test_proxy);
   ~TestRunnerForSpecificView();
 
   // Installs view-specific bindings (handled by |this|) and *also* global
@@ -71,6 +74,10 @@ class TestRunnerForSpecificView {
       const std::vector<v8::UniquePersistent<v8::Value>>& args);
   base::OnceClosure CreateClosureThatPostsV8Callback(
       const v8::Local<v8::Function>& callback);
+
+  void UpdateAllLifecyclePhasesAndComposite();
+  void UpdateAllLifecyclePhasesAndCompositeThen(
+      v8::Local<v8::Function> callback);
 
   void LayoutAndPaintAsync();
   void LayoutAndPaintAsyncThen(v8::Local<v8::Function> callback);
@@ -196,7 +203,6 @@ class TestRunnerForSpecificView {
     PointerLockWillFailSync,
   } pointer_lock_planned_result_;
 
-  bool CallShouldCloseOnWebView();
   void SetDomainRelaxationForbiddenForURLScheme(bool forbidden,
                                                 const std::string& scheme);
   v8::Local<v8::Value> EvaluateScriptInIsolatedWorldAndReturnValue(
@@ -217,10 +223,12 @@ class TestRunnerForSpecificView {
   // scenarios that require breaking this assumption.
   blink::WebLocalFrame* GetLocalMainFrame();
 
-  // Helpers for accessing pointers exposed by |web_view_test_proxy_base_|.
+  // Helpers for accessing pointers exposed by |web_view_test_proxy_|.
+  content::RenderWidget* main_frame_render_widget();
   blink::WebView* web_view();
   WebTestDelegate* delegate();
-  WebViewTestProxyBase* web_view_test_proxy_base_;
+
+  WebViewTestProxy* web_view_test_proxy_;
 
   base::WeakPtrFactory<TestRunnerForSpecificView> weak_factory_;
 

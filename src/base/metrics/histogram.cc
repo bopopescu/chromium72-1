@@ -32,7 +32,6 @@
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
 #include "base/synchronization/lock.h"
-#include "base/sys_info.h"
 #include "base/values.h"
 #include "build/build_config.h"
 
@@ -94,7 +93,7 @@ typedef HistogramBase::Count Count;
 typedef HistogramBase::Sample Sample;
 
 // static
-const uint32_t Histogram::kBucketCount_MAX = 16384u;
+const uint32_t Histogram::kBucketCount_MAX = 10002u;
 
 class Histogram::Factory {
  public:
@@ -167,6 +166,7 @@ HistogramBase* Histogram::Factory::Build() {
       return DummyHistogram::GetInstance();
     // To avoid racy destruction at shutdown, the following will be leaked.
     const BucketRanges* created_ranges = CreateRanges();
+
     const BucketRanges* registered_ranges =
         StatisticsRecorder::RegisterOrDeleteDuplicateRanges(created_ranges);
 
@@ -337,9 +337,11 @@ void Histogram::InitializeBucketRanges(Sample minimum,
   Sample current = minimum;
   ranges->set_range(bucket_index, current);
   size_t bucket_count = ranges->bucket_count();
+
   while (bucket_count > ++bucket_index) {
     double log_current;
     log_current = log(static_cast<double>(current));
+    debug::Alias(&log_current);
     // Calculate the count'th root of the range.
     log_ratio = (log_max - log_current) / (bucket_count - bucket_index);
     // See where the next bucket would start.
@@ -420,27 +422,37 @@ bool Histogram::InspectConstructionArguments(StringPiece name,
                                              Sample* minimum,
                                              Sample* maximum,
                                              uint32_t* bucket_count) {
+  bool check_okay = true;
+
+  // Checks below must be done after any min/max swap.
+  if (*minimum > *maximum) {
+    check_okay = false;
+    std::swap(*minimum, *maximum);
+  }
+
   // Defensive code for backward compatibility.
   if (*minimum < 1) {
     DVLOG(1) << "Histogram: " << name << " has bad minimum: " << *minimum;
     *minimum = 1;
+    if (*maximum < 1)
+      *maximum = 1;
   }
   if (*maximum >= kSampleType_MAX) {
     DVLOG(1) << "Histogram: " << name << " has bad maximum: " << *maximum;
     *maximum = kSampleType_MAX - 1;
   }
   if (*bucket_count >= kBucketCount_MAX) {
+    check_okay = false;
     DVLOG(1) << "Histogram: " << name << " has bad bucket_count: "
              << *bucket_count;
     *bucket_count = kBucketCount_MAX - 1;
   }
-
-  bool check_okay = true;
-
-  if (*minimum > *maximum) {
-    check_okay = false;
-    std::swap(*minimum, *maximum);
+  if (*bucket_count > 1002) {
+    UmaHistogramSparse("Histogram.TooManyBuckets.1000",
+                       static_cast<Sample>(HashMetricName(name)));
   }
+
+  // Ensure parameters are sane.
   if (*maximum == *minimum) {
     check_okay = false;
     *maximum = *minimum + 1;
@@ -448,13 +460,6 @@ bool Histogram::InspectConstructionArguments(StringPiece name,
   if (*bucket_count < 3) {
     check_okay = false;
     *bucket_count = 3;
-  }
-  // Very high bucket counts are wasteful. Use a sparse histogram instead.
-  // Value of 10002 equals a user-supplied value of 10k + 2 overflow buckets.
-  constexpr uint32_t kMaxBucketCount = 10002;
-  if (*bucket_count > kMaxBucketCount) {
-    check_okay = false;
-    *bucket_count = kMaxBucketCount;
   }
   if (*bucket_count > static_cast<uint32_t>(*maximum - *minimum + 2)) {
     check_okay = false;
@@ -568,36 +573,6 @@ void Histogram::ValidateHistogramContents() const {
   CHECK(unlogged_samples_->bucket_ranges());
   CHECK(logged_samples_);
   CHECK(logged_samples_->bucket_ranges());
-#if !defined(OS_NACL)
-  if (0U == logged_samples_->id() && (flags() & kIsPersistent)) {
-    // ID should never be zero. If it is, then it's probably because the
-    // entire memory page was cleared. Check that this is true.
-    // TODO(bcwhite): Remove this.
-    // https://bugs.chromium.org/p/chromium/issues/detail?id=836875
-    size_t page_size = SysInfo::VMAllocationGranularity();
-    if (page_size == 0)
-      page_size = 1024;
-    const int* address = reinterpret_cast<const int*>(
-        reinterpret_cast<uintptr_t>(logged_samples_->meta()) &
-        ~(page_size - 1));
-    // Check a couple places so there is evidence in a crash report as to
-    // where it was non-zero.
-    CHECK_EQ(0, address[0]);
-    CHECK_EQ(0, address[1]);
-    CHECK_EQ(0, address[2]);
-    CHECK_EQ(0, address[4]);
-    CHECK_EQ(0, address[8]);
-    CHECK_EQ(0, address[16]);
-    CHECK_EQ(0, address[32]);
-    CHECK_EQ(0, address[64]);
-    CHECK_EQ(0, address[128]);
-    CHECK_EQ(0, address[256]);
-    CHECK_EQ(0, address[512]);
-    // Now check every address.
-    for (size_t i = 0; i < page_size / sizeof(int); ++i)
-      CHECK_EQ(0, address[i]);
-  }
-#endif
   CHECK_NE(0U, logged_samples_->id());
 }
 
@@ -950,6 +925,18 @@ HistogramBase* LinearHistogram::FactoryGetWithRangeDescription(
     uint32_t bucket_count,
     int32_t flags,
     const DescriptionPair descriptions[]) {
+  // Originally, histograms were required to have at least one sample value
+  // plus underflow and overflow buckets. For single-entry enumerations,
+  // that one value is usually zero (which IS the underflow bucket)
+  // resulting in a |maximum| value of 1 (the exclusive upper-bound) and only
+  // the two outlier buckets. Handle this by making max==2 and buckets==3.
+  // This usually won't have any cost since the single-value-optimization
+  // will be used until the count exceeds 16 bits.
+  if (maximum == 1 && bucket_count == 2) {
+    maximum = 2;
+    bucket_count = 3;
+  }
+
   bool valid_arguments = Histogram::InspectConstructionArguments(
       name, &minimum, &maximum, &bucket_count);
   DCHECK(valid_arguments);
@@ -1013,10 +1000,12 @@ void LinearHistogram::InitializeBucketRanges(Sample minimum,
   double min = minimum;
   double max = maximum;
   size_t bucket_count = ranges->bucket_count();
+
   for (size_t i = 1; i < bucket_count; ++i) {
     double linear_range =
         (min * (bucket_count - 1 - i) + max * (i - 1)) / (bucket_count - 2);
-    ranges->set_range(i, static_cast<Sample>(linear_range + 0.5));
+    uint32_t range = static_cast<Sample>(linear_range + 0.5);
+    ranges->set_range(i, range);
   }
   ranges->set_range(ranges->bucket_count(), HistogramBase::kSampleType_MAX);
   ranges->ResetChecksum();
@@ -1078,16 +1067,18 @@ ScaledLinearHistogram::ScaledLinearHistogram(const char* name,
 ScaledLinearHistogram::~ScaledLinearHistogram() = default;
 
 void ScaledLinearHistogram::AddScaledCount(Sample value, int count) {
+  if (count == 0)
+    return;
+  if (count < 0) {
+    NOTREACHED();
+    return;
+  }
   const int32_t max_value =
       static_cast<int32_t>(histogram_->bucket_count() - 1);
   if (value > max_value)
     value = max_value;
   if (value < 0)
     value = 0;
-  if (count <= 0) {
-    NOTREACHED();
-    return;
-  }
 
   int scaled_count = count / scale_;
   subtle::Atomic32 remainder = count - scaled_count * scale_;

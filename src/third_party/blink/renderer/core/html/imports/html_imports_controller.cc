@@ -41,14 +41,19 @@
 namespace blink {
 
 HTMLImportsController::HTMLImportsController(Document& master)
-    : root_(HTMLImportTreeRoot::Create(&master)) {
-  UseCounter::Count(master, WebFeature::kHTMLImports);
-}
+    : root_(HTMLImportTreeRoot::Create(&master)) {}
 
 void HTMLImportsController::Dispose() {
-  for (const auto& loader : loaders_)
-    loader->Dispose();
-  loaders_.clear();
+  // TODO(tkent): We copy loaders_ before iteration to avoid crashes.
+  // This copy should be unnecessary. loaders_ is not modified during
+  // the iteration.  Also, null-check for |loader| should be
+  // unnecessary.  crbug.com/843151.
+  LoaderList list;
+  list.swap(loaders_);
+  for (const auto& loader : list) {
+    if (loader)
+      loader->Dispose();
+  }
 
   if (root_) {
     root_->Dispose();
@@ -79,7 +84,8 @@ HTMLImportChild* HTMLImportsController::CreateChild(
                       WebFeature::kHTMLImportsAsyncAttribute);
   }
 
-  HTMLImportChild* child = new HTMLImportChild(url, loader, client, mode);
+  HTMLImportChild* child =
+      MakeGarbageCollected<HTMLImportChild>(url, loader, client, mode);
   parent->AppendImport(child);
   loader->AddImport(child);
   return root_->Add(child);
@@ -145,11 +151,6 @@ HTMLImportLoader* HTMLImportsController::LoaderFor(
 void HTMLImportsController::Trace(blink::Visitor* visitor) {
   visitor->Trace(root_);
   visitor->Trace(loaders_);
-}
-
-void HTMLImportsController::TraceWrappers(
-    ScriptWrappableVisitor* visitor) const {
-  visitor->TraceWrappers(root_);
 }
 
 }  // namespace blink

@@ -23,8 +23,8 @@
 #include "content/browser/indexed_db/indexed_db_database.h"
 #include "content/browser/indexed_db/indexed_db_database_error.h"
 #include "content/browser/indexed_db/indexed_db_observer.h"
-#include "content/common/indexed_db/indexed_db.mojom.h"
-#include "third_party/blink/public/platform/modules/indexeddb/web_idb_types.h"
+#include "third_party/blink/public/common/indexeddb/web_idb_types.h"
+#include "third_party/blink/public/mojom/indexeddb/indexeddb.mojom.h"
 
 namespace content {
 
@@ -72,14 +72,14 @@ class CONTENT_EXPORT IndexedDBTransaction {
   // transaction.
   void GrabSnapshotThenStart();
 
-  blink::WebIDBTransactionMode mode() const { return mode_; }
+  blink::mojom::IDBTransactionMode mode() const { return mode_; }
   const std::set<int64_t>& scope() const { return object_store_ids_; }
 
   // Tasks cannot call Commit.
   void ScheduleTask(Operation task) {
-    ScheduleTask(blink::kWebIDBTaskTypeNormal, std::move(task));
+    ScheduleTask(blink::mojom::IDBTaskType::Normal, std::move(task));
   }
-  void ScheduleTask(blink::WebIDBTaskType, Operation task);
+  void ScheduleTask(blink::mojom::IDBTaskType, Operation task);
   void ScheduleAbortTask(AbortOperation abort_task);
   void RegisterOpenCursor(IndexedDBCursor* cursor);
   void UnregisterOpenCursor(IndexedDBCursor* cursor);
@@ -95,9 +95,9 @@ class CONTENT_EXPORT IndexedDBTransaction {
 
   // Adds observation for the connection.
   void AddObservation(int32_t connection_id,
-                      ::indexed_db::mojom::ObservationPtr observation);
+                      blink::mojom::IDBObservationPtr observation);
 
-  ::indexed_db::mojom::ObserverChangesPtr* GetPendingChangesForConnection(
+  blink::mojom::IDBObserverChangesPtr* GetPendingChangesForConnection(
       int32_t connection_id);
 
   IndexedDBBackingStore::Transaction* BackingStoreTransaction() {
@@ -131,7 +131,7 @@ class CONTENT_EXPORT IndexedDBTransaction {
       int64_t id,
       IndexedDBConnection* connection,
       const std::set<int64_t>& object_store_ids,
-      blink::WebIDBTransactionMode mode,
+      blink::mojom::IDBTransactionMode mode,
       IndexedDBBackingStore::Transaction* backing_store_transaction);
 
   // May be overridden in tests.
@@ -182,7 +182,7 @@ class CONTENT_EXPORT IndexedDBTransaction {
 
   const int64_t id_;
   const std::set<int64_t> object_store_ids_;
-  const blink::WebIDBTransactionMode mode_;
+  const blink::mojom::IDBTransactionMode mode_;
 
   bool used_ = false;
   State state_ = CREATED;
@@ -195,7 +195,7 @@ class CONTENT_EXPORT IndexedDBTransaction {
 
   // Observers in pending queue do not listen to changes until activated.
   std::vector<std::unique_ptr<IndexedDBObserver>> pending_observers_;
-  std::map<int32_t, ::indexed_db::mojom::ObserverChangesPtr>
+  std::map<int32_t, blink::mojom::IDBObserverChangesPtr>
       connection_changes_map_;
 
   // Metrics for quota.

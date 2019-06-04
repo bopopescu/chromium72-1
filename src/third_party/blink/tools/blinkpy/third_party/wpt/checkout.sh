@@ -8,8 +8,8 @@ DIR=$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )
 cd $DIR
 
 TARGET_DIR=$DIR/wpt
-REMOTE_REPO="https://chromium.googlesource.com/external/w3c/web-platform-tests.git"
-WPT_HEAD=ad84337c037685845f96d63618bb9b46ae9e9468
+REMOTE_REPO="https://chromium.googlesource.com/external/github.com/web-platform-tests/wpt.git"
+WPT_HEAD=6279ae5cc55eb91bb086ab1d0f1969c180cbedc2
 
 function clone {
   # Remove existing repo if already exists.
@@ -32,7 +32,7 @@ function reduce {
   # xargs on some platforms, so we remove those directories first.
   rm -fr html css
   # Remove all except white-listed.
-  find . -type f | grep -Fxvf ../WPTWhiteList | xargs -n 1 rm
+  comm -23 <(find . -type f | sort) <(cat ../WPTWhiteList | sort) | xargs -n 1 rm
   find . -empty -type d -delete
 }
 

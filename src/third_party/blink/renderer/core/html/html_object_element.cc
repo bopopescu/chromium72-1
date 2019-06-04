@@ -29,7 +29,6 @@
 #include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/dom/element_traversal.h"
 #include "third_party/blink/renderer/core/dom/shadow_root.h"
-#include "third_party/blink/renderer/core/dom/sync_reattach_context.h"
 #include "third_party/blink/renderer/core/dom/tag_collection.h"
 #include "third_party/blink/renderer/core/dom/text.h"
 #include "third_party/blink/renderer/core/exported/web_plugin_container_impl.h"
@@ -46,11 +45,11 @@
 
 namespace blink {
 
-using namespace HTMLNames;
+using namespace html_names;
 
 inline HTMLObjectElement::HTMLObjectElement(Document& document,
                                             const CreateElementFlags flags)
-    : HTMLPlugInElement(objectTag,
+    : HTMLPlugInElement(kObjectTag,
                         document,
                         flags,
                         kShouldNotPreferPlugInsForImages),
@@ -60,7 +59,7 @@ inline HTMLObjectElement::~HTMLObjectElement() = default;
 
 HTMLObjectElement* HTMLObjectElement::Create(Document& document,
                                              const CreateElementFlags flags) {
-  auto* element = new HTMLObjectElement(document, flags);
+  auto* element = MakeGarbageCollected<HTMLObjectElement>(document, flags);
   element->EnsureUserAgentShadowRoot();
   return element;
 }
@@ -68,6 +67,13 @@ HTMLObjectElement* HTMLObjectElement::Create(Document& document,
 void HTMLObjectElement::Trace(blink::Visitor* visitor) {
   ListedElement::Trace(visitor);
   HTMLPlugInElement::Trace(visitor);
+}
+
+const HashSet<AtomicString>& HTMLObjectElement::GetCheckedAttributeNames()
+    const {
+  DEFINE_STATIC_LOCAL(HashSet<AtomicString>, attribute_set,
+                      ({"data", "codebase"}));
+  return attribute_set;
 }
 
 LayoutEmbeddedContent* HTMLObjectElement::ExistingLayoutEmbeddedContent()
@@ -78,7 +84,7 @@ LayoutEmbeddedContent* HTMLObjectElement::ExistingLayoutEmbeddedContent()
 
 bool HTMLObjectElement::IsPresentationAttribute(
     const QualifiedName& name) const {
-  if (name == borderAttr)
+  if (name == kBorderAttr)
     return true;
   return HTMLPlugInElement::IsPresentationAttribute(name);
 }
@@ -87,7 +93,7 @@ void HTMLObjectElement::CollectStyleForPresentationAttribute(
     const QualifiedName& name,
     const AtomicString& value,
     MutableCSSPropertyValueSet* style) {
-  if (name == borderAttr)
+  if (name == kBorderAttr)
     ApplyBorderAttributeToStyle(value, style);
   else
     HTMLPlugInElement::CollectStyleForPresentationAttribute(name, value, style);
@@ -96,18 +102,18 @@ void HTMLObjectElement::CollectStyleForPresentationAttribute(
 void HTMLObjectElement::ParseAttribute(
     const AttributeModificationParams& params) {
   const QualifiedName& name = params.name;
-  if (name == formAttr) {
+  if (name == kFormAttr) {
     FormAttributeChanged();
-  } else if (name == typeAttr) {
+  } else if (name == kTypeAttr) {
     SetServiceType(params.new_value.LowerASCII());
-    size_t pos = service_type_.Find(";");
+    wtf_size_t pos = service_type_.Find(";");
     if (pos != kNotFound)
       SetServiceType(service_type_.Left(pos));
     // TODO(schenney): crbug.com/572908 What is the right thing to do here?
     // Should we suppress the reload stuff when a persistable widget-type is
     // specified?
     ReloadPluginOnAttributeChange(name);
-  } else if (name == dataAttr) {
+  } else if (name == kDataAttr) {
     SetUrl(StripLeadingAndTrailingHTMLSpaces(params.new_value));
     if (GetLayoutObject() && IsImageType()) {
       SetNeedsPluginUpdate(true);
@@ -117,7 +123,7 @@ void HTMLObjectElement::ParseAttribute(
     } else {
       ReloadPluginOnAttributeChange(name);
     }
-  } else if (name == classidAttr) {
+  } else if (name == kClassidAttr) {
     class_id_ = params.new_value;
     ReloadPluginOnAttributeChange(name);
   } else {
@@ -167,7 +173,7 @@ void HTMLObjectElement::ParametersForPlugin(PluginParameters& plugin_params) {
     // TODO(schenney): crbug.com/572908 serviceType calculation does not belong
     // in this function.
     if (service_type_.IsEmpty() && DeprecatedEqualIgnoringCase(name, "type")) {
-      size_t pos = p->Value().Find(";");
+      wtf_size_t pos = p->Value().Find(";");
       if (pos != kNotFound)
         SetServiceType(p->Value().GetString().Left(pos));
     }
@@ -190,7 +196,7 @@ bool HTMLObjectElement::HasFallbackContent() const {
     // Ignore whitespace-only text, and <param> tags, any other content is
     // fallback content.
     if (child->IsTextNode()) {
-      if (!ToText(child)->ContainsOnlyWhitespace())
+      if (!ToText(child)->ContainsOnlyWhitespaceOrEmpty())
         return true;
     } else if (!IsHTMLParamElement(*child)) {
       return true;
@@ -218,12 +224,12 @@ void HTMLObjectElement::ReloadPluginOnAttributeChange(
   // the updating of certain attributes should bring about "redetermination"
   // of what the element contains.
   bool needs_invalidation;
-  if (name == typeAttr) {
+  if (name == kTypeAttr) {
     needs_invalidation =
-        !FastHasAttribute(classidAttr) && !FastHasAttribute(dataAttr);
-  } else if (name == dataAttr) {
-    needs_invalidation = !FastHasAttribute(classidAttr);
-  } else if (name == classidAttr) {
+        !FastHasAttribute(kClassidAttr) && !FastHasAttribute(kDataAttr);
+  } else if (name == kDataAttr) {
+    needs_invalidation = !FastHasAttribute(kClassidAttr);
+  } else if (name == kClassidAttr) {
     needs_invalidation = true;
   } else {
     NOTREACHED();
@@ -235,7 +241,7 @@ void HTMLObjectElement::ReloadPluginOnAttributeChange(
 }
 
 // TODO(schenney): crbug.com/572908 This should be unified with
-// HTMLEmbedElement::updatePlugin and moved down into HTMLPluginElement.cpp
+// HTMLEmbedElement::UpdatePlugin and moved down into html_plugin_element.cc
 void HTMLObjectElement::UpdatePluginInternal() {
   DCHECK(!GetLayoutEmbeddedObject()->ShowsUnavailablePluginIndicator());
   DCHECK(NeedsPluginUpdate());
@@ -282,7 +288,7 @@ void HTMLObjectElement::UpdatePluginInternal() {
     if (!url_.IsEmpty())
       DispatchErrorEvent();
     if (HasFallbackContent())
-      RenderFallbackContent();
+      RenderFallbackContent(ContentFrame());
   } else {
     if (IsErrorplaceholder())
       DispatchErrorEvent();
@@ -290,13 +296,13 @@ void HTMLObjectElement::UpdatePluginInternal() {
 }
 
 Node::InsertionNotificationRequest HTMLObjectElement::InsertedInto(
-    ContainerNode* insertion_point) {
+    ContainerNode& insertion_point) {
   HTMLPlugInElement::InsertedInto(insertion_point);
   ListedElement::InsertedInto(insertion_point);
   return kInsertionDone;
 }
 
-void HTMLObjectElement::RemovedFrom(ContainerNode* insertion_point) {
+void HTMLObjectElement::RemovedFrom(ContainerNode& insertion_point) {
   HTMLPlugInElement::RemovedFrom(insertion_point);
   ListedElement::RemovedFrom(insertion_point);
 }
@@ -310,37 +316,32 @@ void HTMLObjectElement::ChildrenChanged(const ChildrenChange& change) {
 }
 
 bool HTMLObjectElement::IsURLAttribute(const Attribute& attribute) const {
-  return attribute.GetName() == codebaseAttr ||
-         attribute.GetName() == dataAttr ||
-         (attribute.GetName() == usemapAttr && attribute.Value()[0] != '#') ||
+  return attribute.GetName() == kCodebaseAttr ||
+         attribute.GetName() == kDataAttr ||
+         (attribute.GetName() == kUsemapAttr && attribute.Value()[0] != '#') ||
          HTMLPlugInElement::IsURLAttribute(attribute);
 }
 
 bool HTMLObjectElement::HasLegalLinkAttribute(const QualifiedName& name) const {
-  return name == classidAttr || name == dataAttr || name == codebaseAttr ||
+  return name == kClassidAttr || name == kDataAttr || name == kCodebaseAttr ||
          HTMLPlugInElement::HasLegalLinkAttribute(name);
 }
 
 const QualifiedName& HTMLObjectElement::SubResourceAttributeName() const {
-  return dataAttr;
+  return kDataAttr;
 }
 
 const AtomicString HTMLObjectElement::ImageSourceURL() const {
-  return getAttribute(dataAttr);
+  return getAttribute(kDataAttr);
 }
 
-// TODO(schenney): crbug.com/572908 Remove this hack.
 void HTMLObjectElement::ReattachFallbackContent() {
-  if (GetDocument().InStyleRecalc()) {
-    // This can happen inside of AttachLayoutTree() in the middle of a
-    // RebuildLayoutTree, so we need to reattach synchronously here.
-    ReattachLayoutTree(SyncReattachContext::CurrentAttachContext());
-  } else {
+  if (!GetDocument().InStyleRecalc())
     LazyReattachIfAttached();
-  }
 }
 
-void HTMLObjectElement::RenderFallbackContent() {
+void HTMLObjectElement::RenderFallbackContent(Frame* frame) {
+  DCHECK(!frame || frame == ContentFrame());
   if (UseFallbackContent())
     return;
 
@@ -386,14 +387,14 @@ bool HTMLObjectElement::IsExposed() const {
 }
 
 bool HTMLObjectElement::ContainsJavaApplet() const {
-  if (MIMETypeRegistry::IsJavaAppletMIMEType(getAttribute(typeAttr)))
+  if (MIMETypeRegistry::IsJavaAppletMIMEType(getAttribute(kTypeAttr)))
     return true;
 
   for (HTMLElement& child : Traversal<HTMLElement>::ChildrenOf(*this)) {
     if (IsHTMLParamElement(child) &&
         DeprecatedEqualIgnoringCase(child.GetNameAttribute(), "type") &&
         MIMETypeRegistry::IsJavaAppletMIMEType(
-            child.getAttribute(valueAttr).GetString()))
+            child.getAttribute(kValueAttr).GetString()))
       return true;
     if (IsHTMLObjectElement(child) &&
         ToHTMLObjectElement(child).ContainsJavaApplet())
@@ -413,7 +414,7 @@ HTMLFormElement* HTMLObjectElement::formOwner() const {
 }
 
 bool HTMLObjectElement::IsInteractiveContent() const {
-  return FastHasAttribute(usemapAttr);
+  return FastHasAttribute(kUsemapAttr);
 }
 
 bool HTMLObjectElement::UseFallbackContent() const {
@@ -428,11 +429,6 @@ void HTMLObjectElement::AssociateWith(HTMLFormElement* form) {
   AssociateByParser(form);
 }
 
-void HTMLObjectElement::AttachLayoutTree(AttachContext& context) {
-  SyncReattachContext reattach_context(context);
-  HTMLPlugInElement::AttachLayoutTree(context);
-}
-
 const HTMLObjectElement* ToHTMLObjectElementFromListedElement(
     const ListedElement* element) {
   SECURITY_DCHECK(!element || !element->IsFormControlElement());
@@ -441,7 +437,7 @@ const HTMLObjectElement* ToHTMLObjectElementFromListedElement(
   // We need to assert after the cast because ListedElement doesn't
   // have hasTagName.
   SECURITY_DCHECK(!object_element ||
-                  object_element->HasTagName(HTMLNames::objectTag));
+                  object_element->HasTagName(html_names::kObjectTag));
   return object_element;
 }
 

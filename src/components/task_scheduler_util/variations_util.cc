@@ -13,7 +13,7 @@
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
-#include "base/task_scheduler/initialization_util.h"
+#include "base/task/task_scheduler/initialization_util.h"
 #include "base/time/time.h"
 
 namespace task_scheduler_util {
@@ -68,9 +68,9 @@ std::unique_ptr<base::SchedulerWorkerPoolParams> GetWorkerPoolParams(
                                                 offset),
       base::TimeDelta::FromMilliseconds(detach_milliseconds));
 
-  if (params->max_threads() <= 0) {
-    DLOG(ERROR) << "Invalid max threads in the Worker Pool Descriptor: "
-                << params->max_threads();
+  if (params->max_tasks() <= 0) {
+    DLOG(ERROR) << "Invalid max tasks in the Worker Pool Descriptor: "
+                << params->max_tasks();
     return nullptr;
   }
 

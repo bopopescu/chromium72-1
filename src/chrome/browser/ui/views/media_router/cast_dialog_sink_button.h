@@ -15,33 +15,37 @@ class MouseEvent;
 namespace media_router {
 
 // A button representing a sink in the Cast dialog. It is highlighted when
-// hovered or selected.
+// hovered.
 class CastDialogSinkButton : public HoverButton {
  public:
   CastDialogSinkButton(views::ButtonListener* button_listener,
-                       const UIMediaSink& sink);
+                       const UIMediaSink& sink,
+                       int button_tag);
   ~CastDialogSinkButton() override;
 
-  // Sets |is_selected_| and updates the button's ink drop accordingly.
-  void SetSelected(bool is_selected);
+  void OverrideStatusText(const base::string16& status_text);
+  void RestoreStatusText();
 
   // views::View:
   bool OnMousePressed(const ui::MouseEvent& event) override;
-  void OnBlur() override;
-
-  // Returns the text that should be shown on the main action button of the Cast
-  // dialog when this button is selected.
-  base::string16 GetActionText() const;
-
-  // Changes the ink drop to the pressed state without animation.
-  void SnapInkDropToActivated();
+  void OnMouseReleased(const ui::MouseEvent& event) override;
+  void OnEnabledChanged() override;
+  void RequestFocus() override;
 
   const UIMediaSink& sink() const { return sink_; }
 
  private:
-  UIMediaSink sink_;
+  friend class MediaRouterUiForTest;
+  FRIEND_TEST_ALL_PREFIXES(CastDialogSinkButtonTest, OverrideStatusText);
+  FRIEND_TEST_ALL_PREFIXES(CastDialogSinkButtonTest,
+                           SetStatusLabelForActiveSink);
+  FRIEND_TEST_ALL_PREFIXES(CastDialogSinkButtonTest,
+                           SetStatusLabelForAvailableSink);
+  FRIEND_TEST_ALL_PREFIXES(CastDialogSinkButtonTest,
+                           SetStatusLabelForSinkWithIssue);
 
-  bool is_selected_ = false;
+  const UIMediaSink sink_;
+  base::Optional<base::string16> saved_status_text_;
 
   DISALLOW_COPY_AND_ASSIGN(CastDialogSinkButton);
 };

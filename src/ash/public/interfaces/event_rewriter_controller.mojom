@@ -8,8 +8,13 @@ import "ui/events/mojo/event.mojom";
 
 // Allows a client to implement spoken feedback features; used for ChromeVox.
 interface SpokenFeedbackEventRewriterDelegate {
-  // Used to send key events to the ChromeVox extension.
-  DispatchKeyEventToChromeVox(ui.mojom.Event event);
+  // Used to send key events to the ChromeVox extension. |capture| is true if
+  // the rewriter discarded the event, false if the rewriter continues event
+  // propagation.
+  DispatchKeyEventToChromeVox(ui.mojom.Event event, bool capture);
+
+  // Used to send mouse events to the ChromeVox extension.
+  DispatchMouseEventToChromeVox(ui.mojom.Event event);
 };
 
 // Allows clients to toggle some event rewriting behavior.
@@ -29,4 +34,10 @@ interface EventRewriterController {
   // Continue dispatch of key events that were unhandled by ChromeVox.
   // TODO(crbug.com/839541): ChromeVox should not repost unhandled events.
   OnUnhandledSpokenFeedbackEvent(ui.mojom.Event event);
+
+  // Discards key events and sends to spoken feedback when true.
+  CaptureAllKeysForSpokenFeedback(bool capture);
+
+  // Sends mouse events to ChromeVox when true.
+  SetSendMouseEventsToDelegate(bool value);
 };

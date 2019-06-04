@@ -18,8 +18,6 @@
 #include "build/build_config.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/content_settings/host_content_settings_map_factory.h"
-#include "chrome/browser/content_settings/tab_specific_content_settings.h"
-#include "chrome/browser/engagement/site_engagement_service.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/blocked_content/list_item_position.h"
 #include "chrome/browser/ui/blocked_content/popup_opener_tab_helper.h"
@@ -51,8 +49,6 @@
 #endif
 
 namespace {
-
-constexpr char kEngagementThreshold[] = "engagement_threshold";
 
 void LogAction(TabUnderNavigationThrottle::Action action, bool off_the_record) {
   UMA_HISTOGRAM_ENUMERATION("Tab.TabUnderAction", action,
@@ -105,7 +101,7 @@ void LogTabUnderAttempt(content::NavigationHandle* handle,
   ukm::SourceId opener_source_id =
       ukm::GetSourceIdForWebContentsDocument(handle->GetWebContents());
   if (opener_source_id != ukm::kInvalidSourceId && ukm_recorder) {
-    ukm::builders::AbusiveExperienceHeuristic(opener_source_id)
+    ukm::builders::AbusiveExperienceHeuristic_TabUnder(opener_source_id)
         .SetDidTabUnder(true)
         .Record(ukm_recorder);
   }
@@ -129,10 +125,6 @@ TabUnderNavigationThrottle::~TabUnderNavigationThrottle() = default;
 TabUnderNavigationThrottle::TabUnderNavigationThrottle(
     content::NavigationHandle* handle)
     : content::NavigationThrottle(handle),
-      engagement_threshold_(
-          base::GetFieldTrialParamByFeatureAsInt(kBlockTabUnders,
-                                                 kEngagementThreshold,
-                                                 0 /* default_value */)),
       off_the_record_(
           handle->GetWebContents()->GetBrowserContext()->IsOffTheRecord()),
       block_(base::FeatureList::IsEnabled(kBlockTabUnders)),
@@ -176,19 +168,6 @@ bool TabUnderNavigationThrottle::IsSuspiciousClientRedirect() const {
       previous_main_frame_url.SchemeIs(extensions::kExtensionScheme)) {
     return false;
   }
-
-  // This metric should be logged as the last check before a site would be
-  // blocked, to give an accurate sense of what scores tab-under destinations
-  // typically have.
-  DCHECK_EQ(100, SiteEngagementService::GetMaxPoints());
-  auto* site_engagement_service = SiteEngagementService::Get(
-      Profile::FromBrowserContext(contents->GetBrowserContext()));
-  double engagement_score = site_engagement_service->GetScore(target_url);
-  UMA_HISTOGRAM_COUNTS_100("Tab.TabUnder.EngagementScore",
-                           std::ceil(engagement_score));
-  if (engagement_score > engagement_threshold_ && engagement_threshold_ != -1)
-    return false;
-
   return true;
 }
 
@@ -230,11 +209,11 @@ void TabUnderNavigationThrottle::ShowUI() {
       std::make_unique<FramebustBlockMessageDelegate>(
           web_contents, url, base::BindOnce(&LogOutcome, off_the_record)));
 #else
-  TabSpecificContentSettings* content_settings =
-      TabSpecificContentSettings::FromWebContents(web_contents);
-  DCHECK(content_settings);
-  content_settings->OnFramebustBlocked(
-      url, base::BindOnce(&OnListItemClicked, off_the_record));
+  if (auto* tab_helper =
+          FramebustBlockTabHelper::FromWebContents(web_contents)) {
+    tab_helper->AddBlockedUrl(
+        url, base::BindOnce(&OnListItemClicked, off_the_record));
+  }
 #endif
 }
 

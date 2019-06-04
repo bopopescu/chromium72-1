@@ -8,6 +8,7 @@ import("//build/config/jumbo.gni")
 import("//pdf/features.gni")
 import("//testing/test.gni")
 import("//third_party/pdfium/pdfium.gni")
+import("//v8/gni/v8.gni")
 
 # Generate a buildflag header for compile-time checking of PDF support.
 buildflag_header("buildflags") {
@@ -18,8 +19,21 @@ buildflag_header("buildflags") {
 if (enable_pdf) {
   pdf_engine = 0  # 0 PDFium
 
+  config("pdf_common_config") {
+    if (pdf_engine == 0) {
+      defines = [ "PDFIUM_PRINT_TEXT_WITH_GDI" ]
+      if (pdf_enable_xfa) {
+        defines += [ "PDF_ENABLE_XFA" ]
+      }
+
+      include_dirs = [ "//third_party/pdfium" ]
+    }
+  }
+
   jumbo_static_library("pdf") {
+    configs += [ ":pdf_common_config" ]
     deps = [
+      ":features",
       "//base",
       "//gin",
       "//net",
@@ -59,15 +73,10 @@ if (enable_pdf) {
       "preview_mode_client.h",
       "range_set.cc",
       "range_set.h",
-      "timer.cc",
-      "timer.h",
       "url_loader_wrapper.h",
       "url_loader_wrapper_impl.cc",
       "url_loader_wrapper_impl.h",
     ]
-
-    include_dirs = []
-    defines = []
 
     if (pdf_engine == 0) {
       deps += [
@@ -80,6 +89,8 @@ if (enable_pdf) {
         "pdfium/pdfium_api_string_buffer_adapter.cc",
         "pdfium/pdfium_api_string_buffer_adapter.h",
         "pdfium/pdfium_assert_matching_enums.cc",
+        "pdfium/pdfium_document.cc",
+        "pdfium/pdfium_document.h",
         "pdfium/pdfium_engine.cc",
         "pdfium/pdfium_engine.h",
         "pdfium/pdfium_engine_exports.cc",
@@ -96,18 +107,46 @@ if (enable_pdf) {
         "pdfium/pdfium_print.h",
         "pdfium/pdfium_range.cc",
         "pdfium/pdfium_range.h",
+        "pdfium/pdfium_unsupported_features.cc",
+        "pdfium/pdfium_unsupported_features.h",
       ]
-
-      include_dirs += [ "//third_party/pdfium" ]
-
-      defines += [ "PDFIUM_PRINT_TEXT_WITH_GDI" ]
-      if (pdf_enable_xfa) {
-        defines += [ "PDF_ENABLE_XFA" ]
-      }
     }
   }
 
+  source_set("features") {
+    configs += [ ":pdf_common_config" ]
+    deps = [
+      "//base",
+    ]
+
+    public = [
+      "pdf_features.h",
+    ]
+
+    sources = [
+      "pdf_features.cc",
+      "pdf_features.h",
+    ]
+  }
+
+  source_set("pdf_test_utils") {
+    testonly = true
+    sources = [
+      "test/test_client.cc",
+      "test/test_client.h",
+      "test/test_document_loader.cc",
+      "test/test_document_loader.h",
+    ]
+
+    deps = [
+      ":pdf",
+      "//base",
+    ]
+  }
+
   test("pdf_unittests") {
+    testonly = true
+    configs += [ ":pdf_common_config" ]
     sources = [
       "chunk_stream_unittest.cc",
       "document_loader_impl_unittest.cc",
@@ -118,6 +157,7 @@ if (enable_pdf) {
 
     deps = [
       ":pdf",
+      ":pdf_test_utils",
       "//base",
       "//base/test:test_support",
       "//ppapi/c",
@@ -132,8 +172,21 @@ if (enable_pdf) {
     ]
 
     if (pdf_engine == 0) {
-      sources += [ "pdfium/findtext_unittest.cc" ]
-      include_dirs = [ "//third_party/pdfium" ]
+      configs += [ "//v8:external_startup_data" ]
+      sources += [
+        "pdfium/findtext_unittest.cc",
+        "pdfium/pdfium_engine_exports_unittest.cc",
+        "pdfium/pdfium_print_unittest.cc",
+        "pdfium/pdfium_test_base.cc",
+        "pdfium/pdfium_test_base.h",
+      ]
+
+      if (v8_use_external_startup_data) {
+        data += [
+          "$root_out_dir/natives_blob.bin",
+          "$root_out_dir/snapshot_blob.bin",
+        ]
+      }
     }
   }
 } else {

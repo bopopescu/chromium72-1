@@ -16,7 +16,7 @@
 
 namespace {
 
-void OnNewBufferHandleAcknowleged(
+void OnNewBufferAcknowleged(
     video_capture::mojom::SharedMemoryVirtualDevice::RequestFrameBufferCallback
         callback,
     int32_t buffer_id) {
@@ -29,9 +29,12 @@ namespace video_capture {
 
 SharedMemoryVirtualDeviceMojoAdapter::SharedMemoryVirtualDeviceMojoAdapter(
     std::unique_ptr<service_manager::ServiceContextRef> service_ref,
-    mojom::ProducerPtr producer)
+    mojom::ProducerPtr producer,
+    bool send_buffer_handles_to_producer_as_raw_file_descriptors)
     : service_ref_(std::move(service_ref)),
       producer_(std::move(producer)),
+      send_buffer_handles_to_producer_as_raw_file_descriptors_(
+          send_buffer_handles_to_producer_as_raw_file_descriptors),
       buffer_pool_(new media::VideoCaptureBufferPoolImpl(
           std::make_unique<media::VideoCaptureBufferTrackerFactoryImpl>(),
           max_buffer_pool_buffer_count())) {}
@@ -52,12 +55,15 @@ int SharedMemoryVirtualDeviceMojoAdapter::max_buffer_pool_buffer_count() {
 void SharedMemoryVirtualDeviceMojoAdapter::RequestFrameBuffer(
     const gfx::Size& dimension,
     media::VideoPixelFormat pixel_format,
+    media::mojom::PlaneStridesPtr strides,
     RequestFrameBufferCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
   int buffer_id_to_drop = media::VideoCaptureBufferPool::kInvalidId;
-  const int buffer_id = buffer_pool_->ReserveForProducer(
-      dimension, pixel_format, 0 /* frame_feedback_id */, &buffer_id_to_drop);
+  int buffer_id = media::VideoCaptureBufferPool::kInvalidId;
+  const auto reserve_result = buffer_pool_->ReserveForProducer(
+      dimension, pixel_format, strides, 0 /* frame_feedback_id */, &buffer_id,
+      &buffer_id_to_drop);
 
   // Remove dropped buffer if there is one.
   if (buffer_id_to_drop != media::VideoCaptureBufferPool::kInvalidId) {
@@ -72,8 +78,8 @@ void SharedMemoryVirtualDeviceMojoAdapter::RequestFrameBuffer(
     }
   }
 
-  // No buffer available.
-  if (buffer_id == media::VideoCaptureBufferPool::kInvalidId) {
+  if (reserve_result !=
+      media::VideoCaptureDevice::Client::ReserveResult::kSucceeded) {
     std::move(callback).Run(mojom::kInvalidBufferId);
     return;
   }
@@ -89,17 +95,26 @@ void SharedMemoryVirtualDeviceMojoAdapter::RequestFrameBuffer(
     }
     known_buffer_ids_.push_back(buffer_id);
 
+    // Share buffer handle with producer.
+    media::mojom::VideoBufferHandlePtr buffer_handle =
+        media::mojom::VideoBufferHandle::New();
+    if (send_buffer_handles_to_producer_as_raw_file_descriptors_) {
+      buffer_handle->set_shared_memory_via_raw_file_descriptor(
+          buffer_pool_->CreateSharedMemoryViaRawFileDescriptorStruct(
+              buffer_id));
+    } else {
+      buffer_handle->set_shared_buffer_handle(
+          buffer_pool_->GetHandleForInterProcessTransit(buffer_id,
+                                                        true /*read_only*/));
+    }
     // Invoke the response back only after the producer have acked
     // that it has received the newly created buffer. This is need
     // because the |producer_| and the |callback| are bound to different
     // message pipes, so the order for calls to |producer_| and |callback|
     // is not guaranteed.
-    producer_->OnNewBufferHandle(
-        buffer_id,
-        buffer_pool_->GetHandleForInterProcessTransit(buffer_id,
-                                                      false /* read_only */),
-        base::BindOnce(&OnNewBufferHandleAcknowleged, base::Passed(&callback),
-                       buffer_id));
+    producer_->OnNewBuffer(buffer_id, std::move(buffer_handle),
+                           base::BindOnce(&OnNewBufferAcknowleged,
+                                          base::Passed(&callback), buffer_id));
     return;
   }
   std::move(callback).Run(buffer_id);

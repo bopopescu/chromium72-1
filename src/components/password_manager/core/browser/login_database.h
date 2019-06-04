@@ -19,11 +19,15 @@
 #include "components/password_manager/core/browser/password_store_change.h"
 #include "components/password_manager/core/browser/psl_matching_helper.h"
 #include "components/password_manager/core/browser/statistics_table.h"
-#include "sql/connection.h"
+#include "sql/database.h"
 #include "sql/meta_table.h"
 
 #if defined(OS_IOS)
 #include "base/gtest_prod_util.h"
+#endif
+
+#if defined(OS_MACOSX) && !defined(OS_IOS)
+#include "components/password_manager/core/browser/password_recovery_util_mac.h"
 #endif
 
 namespace password_manager {
@@ -45,6 +49,12 @@ class LoginDatabase {
   // should be called.
   virtual bool Init();
 
+#if defined(OS_MACOSX) && !defined(OS_IOS)
+  // Registers utility which is used to save password recovery status on MacOS.
+  void InitPasswordRecoveryUtil(
+      std::unique_ptr<PasswordRecoveryUtilMac> password_recovery_util);
+#endif
+
   // Reports usage metrics to UMA.
   void ReportMetrics(const std::string& sync_username,
                      bool custom_passphrase_sync_enabled);
@@ -55,6 +65,12 @@ class LoginDatabase {
   // primary key columns contain the values associated with the removed form.
   PasswordStoreChangeList AddLogin(const autofill::PasswordForm& form)
       WARN_UNUSED_RESULT;
+
+  // This function does the same thing as AddLogin() with the difference that
+  // doesn't check if a site is already blacklisted before adding it. This is
+  // needed for tests that will require to have duplicates in the database.
+  PasswordStoreChangeList AddBlacklistedLoginForTesting(
+      const autofill::PasswordForm& form) WARN_UNUSED_RESULT;
 
   // Updates existing password form. Returns the list of applied changes
   // ({}, {UPDATE}). The password is looked up by the tuple {origin,
@@ -89,7 +105,7 @@ class LoginDatabase {
   // and federated credentials.
   bool GetLogins(const PasswordStore::FormDigest& form,
                  std::vector<std::unique_ptr<autofill::PasswordForm>>* forms)
-      const WARN_UNUSED_RESULT;
+      WARN_UNUSED_RESULT;
 
   // Retrieves all stored credentials with SCHEME_HTTP that have a realm whose
   // organization-identifying name -- that is, the first domain name label below
@@ -101,7 +117,7 @@ class LoginDatabase {
   // but not for "http://notexample.com" or "https://example.foo.com".
   bool GetLoginsForSameOrganizationName(
       const std::string& signon_realm,
-      std::vector<std::unique_ptr<autofill::PasswordForm>>* forms) const;
+      std::vector<std::unique_ptr<autofill::PasswordForm>>* forms);
 
   // Gets all logins created from |begin| onwards (inclusive) and before |end|.
   // You may use a null Time value to do an unbounded search in either
@@ -109,7 +125,7 @@ class LoginDatabase {
   bool GetLoginsCreatedBetween(
       base::Time begin,
       base::Time end,
-      std::vector<std::unique_ptr<autofill::PasswordForm>>* forms) const
+      std::vector<std::unique_ptr<autofill::PasswordForm>>* forms)
       WARN_UNUSED_RESULT;
 
   // Gets all logins synced from |begin| onwards (inclusive) and before |end|.
@@ -118,21 +134,21 @@ class LoginDatabase {
   bool GetLoginsSyncedBetween(
       base::Time begin,
       base::Time end,
-      std::vector<std::unique_ptr<autofill::PasswordForm>>* forms) const
+      std::vector<std::unique_ptr<autofill::PasswordForm>>* forms)
       WARN_UNUSED_RESULT;
 
   // Gets the complete list of not blacklisted credentials.
   bool GetAutofillableLogins(
-      std::vector<std::unique_ptr<autofill::PasswordForm>>* forms) const
+      std::vector<std::unique_ptr<autofill::PasswordForm>>* forms)
       WARN_UNUSED_RESULT;
 
   // Gets the complete list of blacklisted credentials.
   bool GetBlacklistLogins(std::vector<std::unique_ptr<autofill::PasswordForm>>*
-                              forms) const WARN_UNUSED_RESULT;
+                              forms) WARN_UNUSED_RESULT;
 
   // Gets the list of auto-sign-inable credentials.
   bool GetAutoSignInLogins(std::vector<std::unique_ptr<autofill::PasswordForm>>*
-                               forms) const WARN_UNUSED_RESULT;
+                               forms) WARN_UNUSED_RESULT;
 
   // Deletes the login database file on disk, and creates a new, empty database.
   // This can be used after migrating passwords to some other store, to ensure
@@ -140,6 +156,15 @@ class LoginDatabase {
   // Returns true on success; otherwise, whether the file was deleted and
   // whether further use of this login database will succeed is unspecified.
   bool DeleteAndRecreateDatabaseFile();
+
+  // On MacOS, it deletes all logins from the database that cannot be decrypted
+  // when encryption key from Keychain is available. If the Keychain is locked,
+  // it does nothing and returns ENCRYPTION_UNAVAILABLE. If it's not running on
+  // MacOS, it does nothing and returns SUCCESS. This can be used when syncing
+  // logins from the cloud to rewrite entries that can't be used anymore (due to
+  // modification of the encryption key). If one of the logins couldn't be
+  // removed from the database, returns ITEM_FAILURE.
+  DatabaseCleanupResult DeleteUndecryptableLogins();
 
   // Returns the encrypted password value for the specified |form|.  Returns an
   // empty string if the row for this |form| is not found.
@@ -205,22 +230,28 @@ class LoginDatabase {
   // result.
   bool GetAllLoginsWithBlacklistSetting(
       bool blacklisted,
-      std::vector<std::unique_ptr<autofill::PasswordForm>>* forms) const;
+      std::vector<std::unique_ptr<autofill::PasswordForm>>* forms);
 
   // Overwrites |forms| with credentials retrieved from |statement|. If
   // |matched_form| is not null, filters out all results but those PSL-matching
-  // |*matched_form| or federated credentials for it. On success returns true.
+  // |*matched_form| or federated credentials for it. If feature for recovering
+  // passwords is enabled, it removes all passwords that couldn't be decrypted
+  // when encryption was available from the database. On success returns true.
   bool StatementToForms(sql::Statement* statement,
                         const PasswordStore::FormDigest* matched_form,
                         std::vector<std::unique_ptr<autofill::PasswordForm>>*
-                            forms) const WARN_UNUSED_RESULT;
+                            forms) WARN_UNUSED_RESULT;
 
   // Initializes all the *_statement_ data members with appropriate SQL
   // fragments based on |builder|.
   void InitializeStatementStrings(const SQLTableBuilder& builder);
 
+  // On Mac, returns true if the feature for recovering lost passwords is
+  // enabled, or false otherwise. On all other platforms it returns false.
+  bool IsUsingCleanupMechanism() const;
+
   base::FilePath db_path_;
-  mutable sql::Connection db_;
+  mutable sql::Database db_;
   sql::MetaTable meta_table_;
   StatisticsTable stats_table_;
 
@@ -239,6 +270,10 @@ class LoginDatabase {
   std::string synced_statement_;
   std::string blacklisted_statement_;
   std::string encrypted_statement_;
+
+#if defined(OS_MACOSX) && !defined(OS_IOS)
+  std::unique_ptr<PasswordRecoveryUtilMac> password_recovery_util_;
+#endif
 
 #if defined(OS_POSIX) && !defined(OS_MACOSX)
   // Whether password values should be encrypted.

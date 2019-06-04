@@ -18,13 +18,6 @@
 
 namespace resource_coordinator {
 
-// static
-TabMemoryMetricsReporter* TabMemoryMetricsReporter::Get() {
-  static base::NoDestructor<TabMemoryMetricsReporter>
-      tab_memory_metrics_reporter;
-  return tab_memory_metrics_reporter.get();
-}
-
 TabMemoryMetricsReporter::TabMemoryMetricsReporter() = default;
 
 TabMemoryMetricsReporter::~TabMemoryMetricsReporter() = default;
@@ -51,8 +44,9 @@ void TabMemoryMetricsReporter::OnStartTracking(
 
 void TabMemoryMetricsReporter::OnLoadingStateChange(
     content::WebContents* web_contents,
-    TabLoadTracker::LoadingState loading_state) {
-  if (loading_state != TabLoadTracker::LoadingState::LOADED)
+    TabLoadTracker::LoadingState old_loading_state,
+    LoadingState new_loading_state) {
+  if (new_loading_state != TabLoadTracker::LoadingState::LOADED)
     return;
 
   MonitorWebContents(web_contents);
@@ -108,7 +102,7 @@ void TabMemoryMetricsReporter::UpdateTimerCallback() {
 
   // Extract all WebContentsData whose next_emit_time have expired,
   // and emit metrics for them.
-  std::set<WebContentsData>::iterator it = monitored_contents_.begin();
+  auto it = monitored_contents_.begin();
   while (it != monitored_contents_.end() &&
          it->next_emit_time <= current_time) {
     if (EmitMemoryMetricsAfterPageLoaded(*it))
@@ -190,7 +184,7 @@ TabMemoryMetricsReporter::NextStateOfEmitMemoryDumpAfterPageLoaded(
 
 bool TabMemoryMetricsReporter::WebContentsDataComparator::operator()(
     const WebContentsData& a,
-    const WebContentsData& b) {
+    const WebContentsData& b) const {
   return a.next_emit_time < b.next_emit_time;
 }
 

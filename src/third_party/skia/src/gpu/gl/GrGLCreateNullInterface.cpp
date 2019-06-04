@@ -5,12 +5,13 @@
  * found in the LICENSE file.
  */
 
-
-#include "GrNonAtomicRef.h"
-#include "gl/GrGLInterface.h"
 #include "GrGLTestInterface.h"
+#include "GrNonAtomicRef.h"
 #include "SkMutex.h"
 #include "SkTDArray.h"
+#include "SkTo.h"
+#include "gl/GrGLInterface.h"
+
 #include <type_traits>
 
 // added to suppress 'no previous prototype' warning and because this code is duplicated in
@@ -416,6 +417,10 @@ public:
                                           GrGLenum renderbuffertarget,
                                           GrGLuint renderbuffer) override {
         SK_ABORT("Not implemented");
+    }
+
+    GrGLvoid genSamplers(GrGLsizei n, GrGLuint* samplers) override {
+        this->genGenericIds(n, samplers);
     }
 
     GrGLvoid genTextures(GrGLsizei n, GrGLuint *textures) override {

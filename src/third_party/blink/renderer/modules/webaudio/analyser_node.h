@@ -43,7 +43,7 @@ class AnalyserHandler final : public AudioBasicInspectorHandler {
   ~AnalyserHandler() override;
 
   // AudioHandler
-  void Process(size_t frames_to_process) override;
+  void Process(uint32_t frames_to_process) override;
 
   unsigned FftSize() const { return analyser_.FftSize(); }
   void SetFftSize(unsigned size, ExceptionState&);
@@ -80,7 +80,7 @@ class AnalyserHandler final : public AudioBasicInspectorHandler {
   // because the node must get pulled even if there are no inputs or
   // outputs so that the internal state is properly updated with the
   // correct time data.
-  void UpdatePullStatus() override;
+  void UpdatePullStatusIfNeeded() override;
 
   bool RequiresTailProcessing() const final;
   double TailTime() const final;
@@ -103,7 +103,7 @@ class AnalyserNode final : public AudioBasicInspectorNode {
  public:
   static AnalyserNode* Create(BaseAudioContext&, ExceptionState&);
   static AnalyserNode* Create(BaseAudioContext*,
-                              const AnalyserOptions&,
+                              const AnalyserOptions*,
                               ExceptionState&);
 
   unsigned fftSize() const;

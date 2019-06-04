@@ -10,9 +10,9 @@
 
 #include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/themes/theme_properties.h"
+#include "chrome/browser/ui/views/chrome_layout_provider.h"
+#include "chrome/browser/ui/views/chrome_typography.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
-#include "chrome/browser/ui/views/harmony/chrome_layout_provider.h"
-#include "chrome/browser/ui/views/harmony/chrome_typography.h"
 #include "chrome/grit/generated_resources.h"
 #include "components/infobars/core/infobar_delegate.h"
 #include "components/strings/grit/components_strings.h"
@@ -28,6 +28,7 @@
 #include "ui/gfx/paint_vector_icon.h"
 #include "ui/native_theme/common_theme.h"
 #include "ui/native_theme/native_theme.h"
+#include "ui/views/background.h"
 #include "ui/views/controls/button/image_button.h"
 #include "ui/views/controls/button/image_button_factory.h"
 #include "ui/views/controls/button/label_button_border.h"
@@ -57,9 +58,9 @@ namespace {
 DEFINE_UI_CLASS_PROPERTY_KEY(LabelType, kLabelType, LabelType::kNone);
 
 // IDs of the colors to use for infobar elements.
-constexpr int kBackgroundColor =
+constexpr int kInfoBarLabelBackgroundColor =
     ThemeProperties::COLOR_DETACHED_BOOKMARK_BAR_BACKGROUND;
-constexpr int kTextColor = ThemeProperties::COLOR_BOOKMARK_TEXT;
+constexpr int kInfoBarLabelTextColor = ThemeProperties::COLOR_BOOKMARK_TEXT;
 
 bool SortLabelsByDecreasingWidth(views::Label* label_1, views::Label* label_2) {
   return label_1->GetPreferredSize().width() >
@@ -212,10 +213,10 @@ void InfoBarView::OnPaint(gfx::Canvas* canvas) {
 }
 
 void InfoBarView::OnThemeChanged() {
-  const SkColor background_color = GetColor(kBackgroundColor);
+  const SkColor background_color = GetColor(kInfoBarLabelBackgroundColor);
   SetBackground(views::CreateSolidBackground(background_color));
 
-  const SkColor text_color = GetColor(kTextColor);
+  const SkColor text_color = GetColor(kInfoBarLabelTextColor);
   views::SetImageFromVectorIcon(close_button_, vector_icons::kCloseRoundedIcon,
                                 text_color);
 
@@ -265,7 +266,7 @@ void InfoBarView::OnWillChangeFocus(View* focused_before, View* focused_now) {
 views::Label* InfoBarView::CreateLabel(const base::string16& text) const {
   views::Label* label = new views::Label(text, CONTEXT_BODY_TEXT_LARGE);
   SetLabelDetails(label);
-  label->SetEnabledColor(GetColor(kTextColor));
+  label->SetEnabledColor(GetColor(kInfoBarLabelTextColor));
   label->SetProperty(kLabelType, LabelType::kLabel);
   return label;
 }
@@ -392,7 +393,7 @@ SkColor InfoBarView::GetColor(int id) const {
 
 void InfoBarView::SetLabelDetails(views::Label* label) const {
   label->SizeToPreferredSize();
-  label->SetBackgroundColor(GetColor(kBackgroundColor));
+  label->SetBackgroundColor(GetColor(kInfoBarLabelBackgroundColor));
   label->SetHorizontalAlignment(gfx::ALIGN_LEFT);
   label->SetProperty(
       views::kMarginsKey,

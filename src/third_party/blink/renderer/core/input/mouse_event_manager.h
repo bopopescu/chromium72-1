@@ -43,12 +43,13 @@ class CORE_EXPORT MouseEventManager final
   virtual ~MouseEventManager();
   void Trace(blink::Visitor*) override;
 
-  enum FakeMouseMoveReason { kDuringScroll, kPerFrame };
+  enum UpdateHoverReason { kScrollOffsetChanged, kLayoutOrStyleChanged };
 
   WebInputEventResult DispatchMouseEvent(EventTarget*,
                                          const AtomicString&,
                                          const WebMouseEvent&,
                                          const String& canvas_region_id,
+                                         const FloatPoint* last_position,
                                          EventTarget* related_target,
                                          bool check_for_listener = false);
 
@@ -89,8 +90,9 @@ class CORE_EXPORT MouseEventManager final
   void FakeMouseMoveEventTimerFired(TimerBase*);
 
   void CancelFakeMouseMoveEvent();
-  void DispatchFakeMouseMoveEventSoon(MouseEventManager::FakeMouseMoveReason);
-  void DispatchFakeMouseMoveEventSoonInQuad(const FloatQuad&);
+  void MayUpdateHoverWhenContentUnderMouseChanged(
+      MouseEventManager::UpdateHoverReason);
+  void MayUpdateHoverAfterScroll(const FloatQuad&);
 
   void SetLastKnownMousePosition(const WebMouseEvent&);
   void SetLastMousePositionAsUnknown();
@@ -153,6 +155,8 @@ class CORE_EXPORT MouseEventManager final
 
   bool FakeMouseMovePending() const;
 
+  void RecomputeMouseHoverState();
+
  private:
   class MouseEventBoundaryEventDispatcher : public BoundaryEventDispatcher {
    public:
@@ -198,7 +202,7 @@ class CORE_EXPORT MouseEventManager final
   void ClearDragDataTransfer();
   DataTransfer* CreateDraggingDataTransfer() const;
 
-  void ResetDragState();
+  void ResetDragSource();
 
   // Implementations of |SynchronousMutationObserver|
   void NodeChildrenWillBeRemoved(ContainerNode&) final;

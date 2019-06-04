@@ -9,6 +9,8 @@
 #include "base/macros.h"
 #include "base/run_loop.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/task/post_task.h"
+#include "base/threading/thread_restrictions.h"
 #include "base/values.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/chrome_notification_types.h"
@@ -16,11 +18,12 @@
 #include "chrome/browser/chromeos/login/signin_partition_manager.h"
 #include "chrome/browser/chromeos/login/test/oobe_base_test.h"
 #include "chrome/browser/chromeos/login/test/oobe_screen_waiter.h"
-#include "chrome/browser/chromeos/login/ui/login_display_webui.h"
+#include "chrome/browser/chromeos/login/ui/login_display_host.h"
 #include "chrome/browser/chromeos/policy/browser_policy_connector_chromeos.h"
 #include "chrome/browser/chromeos/policy/device_policy_builder.h"
 #include "chrome/browser/chromeos/policy/device_policy_cros_browser_test.h"
 #include "chrome/browser/chromeos/profiles/profile_helper.h"
+#include "chrome/browser/chromeos/settings/scoped_cros_settings_test_helper.h"
 #include "chrome/browser/policy/test/local_policy_test_server.h"
 #include "chrome/browser/ui/login/login_handler.h"
 #include "chrome/browser/ui/webui/signin/signin_utils.h"
@@ -37,7 +40,9 @@
 #include "components/policy/policy_constants.h"
 #include "components/policy/proto/chrome_device_policy.pb.h"
 #include "components/prefs/pref_change_registrar.h"
+#include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
+#include "content/public/browser/notification_service.h"
 #include "content/public/browser/storage_partition.h"
 #include "content/public/common/content_switches.h"
 #include "content/public/test/browser_test_utils.h"
@@ -161,6 +166,7 @@ class WebviewLoginTest : public OobeBaseTest {
   void SetUpCommandLine(base::CommandLine* command_line) override {
     command_line->AppendSwitch(switches::kOobeSkipPostLogin);
     command_line->AppendSwitch(::switches::kUseFakeDeviceForMediaStream);
+    command_line->AppendSwitch(switches::kStubCrosSettings);
     OobeBaseTest::SetUpCommandLine(command_line);
   }
 
@@ -220,6 +226,10 @@ class WebviewLoginTest : public OobeBaseTest {
 
     return web_view_found;
   }
+
+ protected:
+  ScopedCrosSettingsTestHelper settings_helper_{
+      /* create_settings_service= */ false};
 
  private:
   DISALLOW_COPY_AND_ASSIGN(WebviewLoginTest);
@@ -285,7 +295,7 @@ IN_PROC_BROWSER_TEST_F(WebviewLoginTest, DISABLED_BackButton) {
 IN_PROC_BROWSER_TEST_F(WebviewLoginTest, AllowGuest) {
   WaitForGaiaPageLoad();
   JsExpect("!$('guest-user-header-bar-item').hidden");
-  CrosSettings::Get()->SetBoolean(kAccountsPrefAllowGuest, false);
+  settings_helper_.SetBoolean(kAccountsPrefAllowGuest, false);
   JsExpect("$('guest-user-header-bar-item').hidden");
 }
 
@@ -298,8 +308,8 @@ IN_PROC_BROWSER_TEST_F(WebviewLoginTest, AllowNewUser) {
   JsExpect(frame_url + ".search('flow=nosignup') == -1");
 
   // Disallow new users - we also need to set a whitelist due to weird logic.
-  CrosSettings::Get()->Set(kAccountsPrefUsers, base::ListValue());
-  CrosSettings::Get()->SetBoolean(kAccountsPrefAllowNewUser, false);
+  settings_helper_.Set(kAccountsPrefUsers, base::ListValue());
+  settings_helper_.SetBoolean(kAccountsPrefAllowNewUser, false);
   WaitForGaiaPageReload();
 
   // flow=nosignup indicates that user creation is not allowed.
@@ -410,8 +420,8 @@ class WebviewClientCertsLoginTest : public WebviewLoginTest {
     {
       bool system_slot_constructed_successfully = false;
       base::RunLoop loop;
-      content::BrowserThread::PostTaskAndReply(
-          content::BrowserThread::IO, FROM_HERE,
+      base::PostTaskWithTraitsAndReply(
+          FROM_HERE, {content::BrowserThread::IO},
           base::BindOnce(&WebviewClientCertsLoginTest::SetUpTestSystemSlotOnIO,
                          base::Unretained(this),
                          &system_slot_constructed_successfully),
@@ -422,6 +432,7 @@ class WebviewClientCertsLoginTest : public WebviewLoginTest {
 
     // Import a second client cert signed by another CA than client_1 into the
     // system wide key slot.
+    base::ScopedAllowBlockingForTesting allow_io;
     client_cert_ = net::ImportClientCertAndKeyFromFile(
         net::GetTestCertsDirectory(), "client_1.pem", "client_1.pk8",
         test_system_slot_->slot());
@@ -454,7 +465,10 @@ class WebviewClientCertsLoginTest : public WebviewLoginTest {
   void SetIntermediateAuthorityInDeviceOncPolicy(
       const base::FilePath& authority_file_path) {
     std::string x509_contents;
-    ASSERT_TRUE(base::ReadFileToString(authority_file_path, &x509_contents));
+    {
+      base::ScopedAllowBlockingForTesting allow_io;
+      ASSERT_TRUE(base::ReadFileToString(authority_file_path, &x509_contents));
+    }
     base::DictionaryValue onc_dict =
         BuildDeviceOncDictForUntrustedAuthority(x509_contents);
 
@@ -553,8 +567,8 @@ class WebviewClientCertsLoginTest : public WebviewLoginTest {
       return;
 
     base::RunLoop loop;
-    content::BrowserThread::PostTaskAndReply(
-        content::BrowserThread::IO, FROM_HERE,
+    base::PostTaskWithTraitsAndReply(
+        FROM_HERE, {content::BrowserThread::IO},
         base::BindOnce(&WebviewClientCertsLoginTest::TearDownTestSystemSlotOnIO,
                        base::Unretained(this)),
         loop.QuitClosure());
@@ -631,15 +645,8 @@ IN_PROC_BROWSER_TEST_F(WebviewClientCertsLoginTest,
 // with multiple filters for the same pattern.
 //
 // Disabled due to flaky timeouts: https://crbug.com/830337.
-#if defined(ADDRESS_SANITIZER) || defined(LEAK_SANITIZER)
-#define MAYBE_SigninFrameCertMultipleFiltersAutoSelected \
-  DISABLED_SigninFrameCertMultipleFiltersAutoSelected
-#else
-#define MAYBE_SigninFrameCertMultipleFiltersAutoSelected \
-  SigninFrameCertMultipleFiltersAutoSelected
-#endif
 IN_PROC_BROWSER_TEST_F(WebviewClientCertsLoginTest,
-                       MAYBE_SigninFrameCertMultipleFiltersAutoSelected) {
+                       DISABLED_SigninFrameCertMultipleFiltersAutoSelected) {
   ASSERT_NO_FATAL_FAILURE(SetUpClientCertInSystemSlot());
   net::SpawnedTestServer::SSLOptions ssl_options;
   ssl_options.request_client_certificate = true;
@@ -833,8 +840,10 @@ IN_PROC_BROWSER_TEST_F(WebviewClientCertsLoginTest,
 // Tests that client certificate authentication is not enabled in a webview on
 // the sign-in screen which is not the sign-in frame. In this case, the EULA
 // webview is used.
+// TODO(pmarko): This is DISABLED because the eula UI it depends on has been
+// deprecated and removed. https://crbug.com/849710.
 IN_PROC_BROWSER_TEST_F(WebviewClientCertsLoginTest,
-                       ClientCertRequestedInOtherWebView) {
+                       DISABLED_ClientCertRequestedInOtherWebView) {
   ASSERT_NO_FATAL_FAILURE(SetUpClientCertInSystemSlot());
   net::SpawnedTestServer::SSLOptions ssl_options;
   ssl_options.request_client_certificate = true;
@@ -999,7 +1008,8 @@ class WebviewProxyAuthLoginTest : public WebviewLoginTest {
   DISALLOW_COPY_AND_ASSIGN(WebviewProxyAuthLoginTest);
 };
 
-IN_PROC_BROWSER_TEST_F(WebviewProxyAuthLoginTest, ProxyAuthTransfer) {
+// Disabled fails on msan and also non-msan bots: https://crbug.com/849128.
+IN_PROC_BROWSER_TEST_F(WebviewProxyAuthLoginTest, DISABLED_ProxyAuthTransfer) {
   WaitForSigninScreen();
 
   LoginHandler* login_handler = WaitForAuthRequested();

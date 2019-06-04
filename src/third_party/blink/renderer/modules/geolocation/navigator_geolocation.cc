@@ -40,7 +40,7 @@ NavigatorGeolocation& NavigatorGeolocation::From(Navigator& navigator) {
   NavigatorGeolocation* supplement =
       Supplement<Navigator>::From<NavigatorGeolocation>(navigator);
   if (!supplement) {
-    supplement = new NavigatorGeolocation(navigator);
+    supplement = MakeGarbageCollected<NavigatorGeolocation>(navigator);
     ProvideTo(navigator, supplement);
   }
   return *supplement;
@@ -60,12 +60,6 @@ Geolocation* NavigatorGeolocation::geolocation() {
 void NavigatorGeolocation::Trace(blink::Visitor* visitor) {
   visitor->Trace(geolocation_);
   Supplement<Navigator>::Trace(visitor);
-}
-
-void NavigatorGeolocation::TraceWrappers(
-    ScriptWrappableVisitor* visitor) const {
-  visitor->TraceWrappers(geolocation_);
-  Supplement<Navigator>::TraceWrappers(visitor);
 }
 
 }  // namespace blink

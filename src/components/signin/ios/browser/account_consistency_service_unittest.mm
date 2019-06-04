@@ -14,12 +14,12 @@
 #include "components/signin/core/browser/account_reconcilor.h"
 #include "components/signin/core/browser/account_reconcilor_delegate.h"
 #include "components/signin/core/browser/account_tracker_service.h"
+#include "components/signin/core/browser/fake_profile_oauth2_token_service.h"
 #include "components/signin/core/browser/fake_signin_manager.h"
 #include "components/signin/core/browser/gaia_cookie_manager_service.h"
 #include "components/signin/core/browser/signin_pref_names.h"
 #include "components/signin/core/browser/test_signin_client.h"
 #include "components/sync_preferences/testing_pref_service_syncable.h"
-#include "google_apis/gaia/gaia_constants.h"
 #include "ios/web/public/test/fakes/test_browser_state.h"
 #import "ios/web/public/test/fakes/test_web_state.h"
 #include "ios/web/public/test/test_web_thread_bundle.h"
@@ -95,7 +95,6 @@ class MockGaiaCookieManagerService : public GaiaCookieManagerService {
  public:
   MockGaiaCookieManagerService()
       : GaiaCookieManagerService(nullptr,
-                                 GaiaConstants::kChromeSource,
                                  nullptr) {}
   MOCK_METHOD0(ForceOnCookieChangeProcessing, void());
 };
@@ -142,6 +141,7 @@ class AccountConsistencyServiceTest : public PlatformTest {
     ActiveStateManager::FromBrowserState(&browser_state_)->SetActive(true);
     AccountConsistencyService::RegisterPrefs(prefs_.registry());
     AccountTrackerService::RegisterPrefs(prefs_.registry());
+    ProfileOAuth2TokenService::RegisterProfilePrefs(prefs_.registry());
     content_settings::CookieSettings::RegisterProfilePrefs(prefs_.registry());
     HostContentSettingsMap::RegisterProfilePrefs(prefs_.registry());
     SigninManagerBase::RegisterProfilePrefs(prefs_.registry());
@@ -149,12 +149,16 @@ class AccountConsistencyServiceTest : public PlatformTest {
     web_view_load_expection_count_ = 0;
     gaia_cookie_manager_service_.reset(new MockGaiaCookieManagerService());
     signin_client_.reset(new TestSigninClient(&prefs_));
-    signin_manager_.reset(new FakeSigninManager(
-        signin_client_.get(), nullptr, &account_tracker_service_, nullptr));
-    account_tracker_service_.Initialize(signin_client_.get());
+    account_tracker_service_.Initialize(&prefs_, base::FilePath());
+    token_service_.reset(new FakeProfileOAuth2TokenService(&prefs_));
+    signin_manager_.reset(
+        new FakeSigninManager(signin_client_.get(), token_service_.get(),
+                              &account_tracker_service_, nullptr));
+    signin_manager_->Initialize(nullptr);
     settings_map_ = new HostContentSettingsMap(
         &prefs_, false /* incognito_profile */, false /* guest_profile */,
-        false /* store_last_modified */);
+        false /* store_last_modified */,
+        false /* migrate_requesting_and_top_level_origin_settings */);
     cookie_settings_ =
         new content_settings::CookieSettings(settings_map_.get(), &prefs_, "");
     account_reconcilor_ =
@@ -256,6 +260,7 @@ class AccountConsistencyServiceTest : public PlatformTest {
   // FakeAccountConsistencyService to be able to use a mock web view.
   std::unique_ptr<AccountConsistencyService> account_consistency_service_;
   std::unique_ptr<TestSigninClient> signin_client_;
+  std::unique_ptr<FakeProfileOAuth2TokenService> token_service_;
   std::unique_ptr<FakeSigninManager> signin_manager_;
   std::unique_ptr<MockGaiaCookieManagerService> gaia_cookie_manager_service_;
   std::unique_ptr<MockAccountReconcilor> account_reconcilor_;

@@ -35,10 +35,9 @@ class AnimationEffectStackTest : public PageTestBase {
     return animation;
   }
 
-  void UpdateTimeline(double time) {
+  void UpdateTimeline(TimeDelta time) {
     GetDocument().GetAnimationClock().UpdateTime(
-        base::TimeTicks() + base::TimeDelta::FromSecondsD(
-                                GetDocument().Timeline().ZeroTime() + time));
+        GetDocument().Timeline().ZeroTime() + time);
     timeline->ServiceAnimations(kTimingUpdateForAnimationFrame);
   }
 
@@ -72,7 +71,7 @@ class AnimationEffectStackTest : public PageTestBase {
                                      double duration = 10) {
     Timing timing;
     timing.fill_mode = Timing::FillMode::BOTH;
-    timing.iteration_duration = duration;
+    timing.iteration_duration = AnimationTimeDelta::FromSecondsD(duration);
     return KeyframeEffect::Create(element.Get(), effect, timing);
   }
 
@@ -173,42 +172,50 @@ TEST_F(AnimationEffectStackTest, ForwardsFillDiscarding) {
   Play(MakeKeyframeEffect(MakeEffectModel(CSSPropertyFontSize, "3px")), 4);
   GetDocument().GetPendingAnimations().Update(
       base::Optional<CompositorElementIdSet>());
-  ActiveInterpolationsMap interpolations;
 
-  UpdateTimeline(11);
+  // Because we will be forcing a naive GC that assumes there are no Oilpan
+  // objects on the stack (e.g. passes BlinkGC::kNoHeapPointersOnStack), we have
+  // to keep the ActiveInterpolationsMap in a Persistent.
+  Persistent<ActiveInterpolationsMap> interpolations;
+
+  UpdateTimeline(TimeDelta::FromSeconds(11));
   ThreadState::Current()->CollectAllGarbage();
-  interpolations = EffectStack::ActiveInterpolations(
-      &element->GetElementAnimations()->GetEffectStack(), nullptr, nullptr,
-      KeyframeEffect::kDefaultPriority);
-  EXPECT_EQ(1u, interpolations.size());
-  EXPECT_EQ(GetFontSizeValue(interpolations), 3);
+  interpolations = MakeGarbageCollected<ActiveInterpolationsMap>(
+      EffectStack::ActiveInterpolations(
+          &element->GetElementAnimations()->GetEffectStack(), nullptr, nullptr,
+          KeyframeEffect::kDefaultPriority));
+  EXPECT_EQ(1u, interpolations->size());
+  EXPECT_EQ(GetFontSizeValue(*interpolations), 3);
   EXPECT_EQ(3u, SampledEffectCount());
 
-  UpdateTimeline(13);
+  UpdateTimeline(TimeDelta::FromSeconds(13));
   ThreadState::Current()->CollectAllGarbage();
-  interpolations = EffectStack::ActiveInterpolations(
-      &element->GetElementAnimations()->GetEffectStack(), nullptr, nullptr,
-      KeyframeEffect::kDefaultPriority);
-  EXPECT_EQ(1u, interpolations.size());
-  EXPECT_EQ(GetFontSizeValue(interpolations), 3);
+  interpolations = MakeGarbageCollected<ActiveInterpolationsMap>(
+      EffectStack::ActiveInterpolations(
+          &element->GetElementAnimations()->GetEffectStack(), nullptr, nullptr,
+          KeyframeEffect::kDefaultPriority));
+  EXPECT_EQ(1u, interpolations->size());
+  EXPECT_EQ(GetFontSizeValue(*interpolations), 3);
   EXPECT_EQ(3u, SampledEffectCount());
 
-  UpdateTimeline(15);
+  UpdateTimeline(TimeDelta::FromSeconds(15));
   ThreadState::Current()->CollectAllGarbage();
-  interpolations = EffectStack::ActiveInterpolations(
-      &element->GetElementAnimations()->GetEffectStack(), nullptr, nullptr,
-      KeyframeEffect::kDefaultPriority);
-  EXPECT_EQ(1u, interpolations.size());
-  EXPECT_EQ(GetFontSizeValue(interpolations), 3);
+  interpolations = MakeGarbageCollected<ActiveInterpolationsMap>(
+      EffectStack::ActiveInterpolations(
+          &element->GetElementAnimations()->GetEffectStack(), nullptr, nullptr,
+          KeyframeEffect::kDefaultPriority));
+  EXPECT_EQ(1u, interpolations->size());
+  EXPECT_EQ(GetFontSizeValue(*interpolations), 3);
   EXPECT_EQ(2u, SampledEffectCount());
 
-  UpdateTimeline(17);
+  UpdateTimeline(TimeDelta::FromSeconds(17));
   ThreadState::Current()->CollectAllGarbage();
-  interpolations = EffectStack::ActiveInterpolations(
-      &element->GetElementAnimations()->GetEffectStack(), nullptr, nullptr,
-      KeyframeEffect::kDefaultPriority);
-  EXPECT_EQ(1u, interpolations.size());
-  EXPECT_EQ(GetFontSizeValue(interpolations), 3);
+  interpolations = MakeGarbageCollected<ActiveInterpolationsMap>(
+      EffectStack::ActiveInterpolations(
+          &element->GetElementAnimations()->GetEffectStack(), nullptr, nullptr,
+          KeyframeEffect::kDefaultPriority));
+  EXPECT_EQ(1u, interpolations->size());
+  EXPECT_EQ(GetFontSizeValue(*interpolations), 3);
   EXPECT_EQ(1u, SampledEffectCount());
 }
 

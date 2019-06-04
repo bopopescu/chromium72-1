@@ -4,6 +4,7 @@
 
 #include "chrome/browser/chromeos/arc/app_shortcuts/arc_app_shortcuts_request.h"
 
+#include <string>
 #include <utility>
 
 #include "base/barrier_closure.h"
@@ -49,7 +50,18 @@ void ArcAppShortcutsRequest::StartForPackage(const std::string& package_name) {
 
 void ArcAppShortcutsRequest::OnGetAppShortcutItems(
     std::vector<mojom::AppShortcutItemPtr> shortcut_items) {
+  // In case |shortcut_items| is empty report now, otherwise
+  // |OnAllIconDecodeRequestsDone| will be called immediately on creation. As
+  // result of handling this the request will be deleted and assigning
+  // |barrier_closure_| will happen on deleted object that will cause memory
+  // corruption.
+  if (shortcut_items.empty()) {
+    base::ResetAndReturn(&callback_).Run(nullptr);
+    return;
+  }
+
   items_ = std::make_unique<ArcAppShortcutItems>();
+
   // Using base::Unretained(this) here is safe since we own barrier_closure_.
   barrier_closure_ = base::BarrierClosure(
       shortcut_items.size(),
@@ -61,6 +73,8 @@ void ArcAppShortcutsRequest::OnGetAppShortcutItems(
     ArcAppShortcutItem item;
     item.shortcut_id = shortcut_item_ptr->shortcut_id;
     item.short_label = base::UTF8ToUTF16(shortcut_item_ptr->short_label);
+    item.type = shortcut_item_ptr->type;
+    item.rank = shortcut_item_ptr->rank;
     items_->emplace_back(std::move(item));
 
     icon_decode_requests_.emplace_back(std::make_unique<IconDecodeRequest>(

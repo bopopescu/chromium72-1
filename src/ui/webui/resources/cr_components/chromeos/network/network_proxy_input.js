@@ -44,7 +44,7 @@ Polymer({
   },
 
   focus: function() {
-    this.$$('input').focus();
+    this.$$('cr-input').focus();
   },
 
   /**
@@ -52,7 +52,7 @@ Polymer({
    * @private
    */
   onValueChange_: function() {
-    var port = parseInt(this.value.Port, 10);
+    let port = parseInt(this.value.Port, 10);
     if (isNaN(port))
       port = 80;
     this.value.Port = port;

@@ -11,7 +11,7 @@
 #include "net/third_party/quic/core/quic_connection_stats.h"
 #include "net/third_party/quic/platform/api/quic_test.h"
 
-namespace net {
+namespace quic {
 namespace test {
 namespace {
 
@@ -38,7 +38,9 @@ std::vector<TestParams> GetTestParams() {
 
 class QuicReceivedPacketManagerTest : public QuicTestWithParam<TestParams> {
  protected:
-  QuicReceivedPacketManagerTest() : received_manager_(&stats_) {}
+  QuicReceivedPacketManagerTest() : received_manager_(&stats_) {
+    received_manager_.set_save_timestamps(true);
+  }
 
   void RecordPacketReceipt(QuicPacketNumber packet_number) {
     RecordPacketReceipt(packet_number, QuicTime::Zero());
@@ -141,6 +143,18 @@ TEST_P(QuicReceivedPacketManagerTest, LimitAckRanges) {
   }
 }
 
+TEST_P(QuicReceivedPacketManagerTest, IgnoreOutOfOrderTimestamps) {
+  EXPECT_FALSE(received_manager_.ack_frame_updated());
+  RecordPacketReceipt(1, QuicTime::Zero());
+  EXPECT_TRUE(received_manager_.ack_frame_updated());
+  EXPECT_EQ(1u, received_manager_.ack_frame().received_packet_times.size());
+  RecordPacketReceipt(2,
+                      QuicTime::Zero() + QuicTime::Delta::FromMilliseconds(1));
+  EXPECT_EQ(2u, received_manager_.ack_frame().received_packet_times.size());
+  RecordPacketReceipt(3, QuicTime::Zero());
+  EXPECT_EQ(2u, received_manager_.ack_frame().received_packet_times.size());
+}
+
 }  // namespace
 }  // namespace test
-}  // namespace net
+}  // namespace quic

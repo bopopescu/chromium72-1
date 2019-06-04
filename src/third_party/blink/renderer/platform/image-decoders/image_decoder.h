@@ -41,8 +41,9 @@
 #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
 #include "third_party/blink/renderer/platform/wtf/time.h"
 #include "third_party/blink/renderer/platform/wtf/vector.h"
-#include "third_party/skia/include/core/SkColorSpaceXform.h"
 #include "third_party/skia/third_party/skcms/skcms.h"
+
+class SkColorSpace;
 
 namespace blink {
 
@@ -117,6 +118,12 @@ class PLATFORM_EXPORT ImageDecoder {
       Platform::kNoDecodedImageByteLimit;
 
   enum AlphaOption { kAlphaPremultiplied, kAlphaNotPremultiplied };
+  enum HighBitDepthDecodingOption {
+    // Decode everything to uint8 pixel format (kN32 channel order).
+    kDefaultBitDepth,
+    // Decode high bit depth images to half float pixel format.
+    kHighBitDepthToHalfFloat
+  };
 
   virtual ~ImageDecoder() = default;
 
@@ -128,21 +135,30 @@ class PLATFORM_EXPORT ImageDecoder {
       scoped_refptr<SegmentReader> data,
       bool data_complete,
       AlphaOption,
+      HighBitDepthDecodingOption,
       const ColorBehavior&,
       const SkISize& desired_size = SkISize::MakeEmpty());
   static std::unique_ptr<ImageDecoder> Create(
       scoped_refptr<SharedBuffer> data,
       bool data_complete,
       AlphaOption alpha_option,
+      HighBitDepthDecodingOption high_bit_depth_decoding_option,
       const ColorBehavior& color_behavior,
       const SkISize& desired_size = SkISize::MakeEmpty()) {
     return Create(SegmentReader::CreateFromSharedBuffer(std::move(data)),
-                  data_complete, alpha_option, color_behavior, desired_size);
+                  data_complete, alpha_option, high_bit_depth_decoding_option,
+                  color_behavior, desired_size);
   }
 
   virtual String FilenameExtension() const = 0;
 
   bool IsAllDataReceived() const { return is_all_data_received_; }
+
+  // Returns true if the decoder supports decoding to high bit depth. The
+  // decoded output will be high bit depth (half float backed bitmap) iff
+  // encoded image is high bit depth and high_bit_depth_decoding_option_ is set
+  // to kHighBitDepthToHalfFloat.
+  virtual bool ImageIsHighBitDepth() { return false; }
 
   // Returns true if the buffer holds enough data to instantiate a decoder.
   // This is useful for callers to determine whether a decoder instantiation
@@ -205,7 +221,11 @@ class PLATFORM_EXPORT ImageDecoder {
   // Returns whether the size is legal (i.e. not going to result in
   // overflow elsewhere).  If not, marks decoding as failed.
   virtual bool SetSize(unsigned width, unsigned height) {
-    if (SizeCalculationMayOverflow(width, height))
+    unsigned decoded_bytes_per_pixel = 4;
+    if (ImageIsHighBitDepth() &&
+        high_bit_depth_decoding_option_ == kHighBitDepthToHalfFloat)
+      decoded_bytes_per_pixel = 8;
+    if (SizeCalculationMayOverflow(width, height, decoded_bytes_per_pixel))
       return SetFailed();
 
     size_ = IntSize(width, height);
@@ -283,15 +303,6 @@ class PLATFORM_EXPORT ImageDecoder {
   // Callers may pass WTF::kNotFound to clear all frames.
   // Note: If |frame_buffer_cache_| contains only one frame, it won't be
   // cleared. Returns the number of bytes of frame data actually cleared.
-  //
-  // This is a virtual method because MockImageDecoder needs to override it in
-  // order to run the test ImageFrameGeneratorTest::ClearMultiFrameDecode.
-  //
-  // @TODO  Let MockImageDecoder override ImageFrame::ClearFrameBuffer instead,
-  //        so this method can be made non-virtual. It is used in the test
-  //        ImageFrameGeneratorTest::ClearMultiFrameDecode. The test needs to
-  //        be modified since two frames may be kept in cache, instead of
-  //        always just one, with this ClearCacheExceptFrame implementation.
   virtual size_t ClearCacheExceptFrame(size_t);
 
   // If the image has a cursor hot-spot, stores it in the argument
@@ -316,9 +327,11 @@ class PLATFORM_EXPORT ImageDecoder {
 
  protected:
   ImageDecoder(AlphaOption alpha_option,
+               HighBitDepthDecodingOption high_bit_depth_decoding_option,
                const ColorBehavior& color_behavior,
                size_t max_decoded_bytes)
       : premultiply_alpha_(alpha_option == kAlphaPremultiplied),
+        high_bit_depth_decoding_option_(high_bit_depth_decoding_option),
         color_behavior_(color_behavior),
         max_decoded_bytes_(max_decoded_bytes),
         purge_aggressively_(false) {}
@@ -398,6 +411,7 @@ class PLATFORM_EXPORT ImageDecoder {
   scoped_refptr<SegmentReader> data_;  // The encoded data.
   Vector<ImageFrame, 1> frame_buffer_cache_;
   const bool premultiply_alpha_;
+  const HighBitDepthDecodingOption high_bit_depth_decoding_option_;
   const ColorBehavior color_behavior_;
   ImageOrientation orientation_;
 
@@ -429,18 +443,24 @@ class PLATFORM_EXPORT ImageDecoder {
   //
   // Before calling this, verify that frame |index| exists by checking that
   // |index| is smaller than |frame_buffer_cache_|.size().
-  virtual bool FrameStatusSufficientForSuccessors(size_t index) {
+  virtual bool FrameStatusSufficientForSuccessors(wtf_size_t index) {
     DCHECK(index < frame_buffer_cache_.size());
-    return frame_buffer_cache_[index].GetStatus() != ImageFrame::kFrameEmpty;
+    ImageFrame::Status frame_status = frame_buffer_cache_[index].GetStatus();
+    return frame_status == ImageFrame::kFramePartial ||
+           frame_status == ImageFrame::kFrameComplete;
   }
 
  private:
-  // Some code paths compute the size of the image as "width * height * 4"
+  // Some code paths compute the size of the image as "width * height * 4 or 8"
   // and return it as a (signed) int.  Avoid overflow.
-  static bool SizeCalculationMayOverflow(unsigned width, unsigned height) {
+  static bool SizeCalculationMayOverflow(unsigned width,
+                                         unsigned height,
+                                         unsigned decoded_bytes_per_pixel) {
     unsigned long long total_size = static_cast<unsigned long long>(width) *
                                     static_cast<unsigned long long>(height);
-    return total_size > ((1 << 29) - 1);
+    if (decoded_bytes_per_pixel == 4)
+      return total_size > ((1 << 29) - 1);
+    return total_size > ((1 << 28) - 1);
   }
 
   bool purge_aggressively_;

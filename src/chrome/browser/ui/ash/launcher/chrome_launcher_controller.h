@@ -19,6 +19,8 @@
 #include "chrome/browser/ui/app_icon_loader_delegate.h"
 #include "chrome/browser/ui/app_list/app_list_syncable_service.h"
 #include "chrome/browser/ui/app_list/app_sync_ui_state_observer.h"
+#include "chrome/browser/ui/ash/launcher/crostini_app_window_shelf_controller.h"
+#include "chrome/browser/ui/ash/launcher/discover_window_observer.h"
 #include "chrome/browser/ui/ash/launcher/launcher_app_updater.h"
 #include "chrome/browser/ui/ash/launcher/settings_window_observer.h"
 #include "components/prefs/pref_change_registrar.h"
@@ -66,14 +68,6 @@ class ChromeLauncherController
       private app_list::AppListSyncableService::Observer,
       private sync_preferences::PrefServiceSyncableObserver {
  public:
-  // Used to update the state of non plaform apps, as web contents change.
-  enum AppState {
-    APP_STATE_ACTIVE,
-    APP_STATE_WINDOW_ACTIVE,
-    APP_STATE_INACTIVE,
-    APP_STATE_REMOVED
-  };
-
   // Returns the single ChromeLauncherController instance.
   static ChromeLauncherController* instance() { return instance_; }
 
@@ -82,6 +76,10 @@ class ChromeLauncherController
 
   Profile* profile() const { return profile_; }
   ash::ShelfModel* shelf_model() const { return model_; }
+  CrostiniAppWindowShelfController* crostini_app_window_shelf_controller()
+      const {
+    return crostini_app_window_shelf_controller_;
+  }
 
   // Initializes this ChromeLauncherController.
   void Init();
@@ -137,7 +135,8 @@ class ChromeLauncherController
   // Used by the app-list, and by pinned-app shelf items.
   void ActivateApp(const std::string& app_id,
                    ash::ShelfLaunchSource source,
-                   int event_flags);
+                   int event_flags,
+                   int64_t display_id);
 
   // Set the image for a specific shelf item (e.g. when set by the app).
   void SetLauncherItemImage(const ash::ShelfID& shelf_id,
@@ -146,9 +145,10 @@ class ChromeLauncherController
   // Updates the image for a specific shelf item from the app's icon loader.
   void UpdateLauncherItemImage(const std::string& app_id);
 
-  // Notify the controller that the state of an non platform app's tabs
-  // have changed,
-  void UpdateAppState(content::WebContents* contents, AppState app_state);
+  // Notifies the controller that |contents| changed so it can update the state
+  // of v1 (non-packaged) apps in the shelf. If |remove| is true then it removes
+  // the association of |contents| with an app.
+  void UpdateAppState(content::WebContents* contents, bool remove);
 
   // Returns ShelfID for |contents|. If |contents| is not an app or is not
   // pinned, returns the id of browser shrotcut.
@@ -321,7 +321,7 @@ class ChromeLauncherController
   void CreateBrowserShortcutLauncherItem();
 
   // Check if the given |web_contents| is in incognito mode.
-  bool IsIncognito(const content::WebContents* web_contents) const;
+  bool IsIncognito(content::WebContents* web_contents) const;
 
   // Finds the index of where to insert the next item.
   int FindInsertionPoint();
@@ -382,6 +382,10 @@ class ChromeLauncherController
   // ChromeBrowserMainExtraPartsAsh, and synchronized with Ash's ShelfModel.
   ash::ShelfModel* model_;
 
+  // The shelf controller for Crostini apps.
+  CrostiniAppWindowShelfController* crostini_app_window_shelf_controller_ =
+      nullptr;
+
   // Ash's mojom::ShelfController used to change shelf state.
   ash::mojom::ShelfControllerPtr shelf_controller_;
 
@@ -401,10 +405,15 @@ class ChromeLauncherController
   // An observer that manages the shelf title and icon for settings windows.
   SettingsWindowObserver settings_window_observer_;
 
+  // An observer that manages the shelf title and icon for Chrome OS Discover
+  // windows.
+  DiscoverWindowObserver dicover_window_observer_;
+
   // Used to load the images for app items.
   std::vector<std::unique_ptr<AppIconLoader>> app_icon_loaders_;
 
   // Direct access to app_id for a web contents.
+  // NOTE: This tracks all WebContents, not just those associated with an app.
   WebContentsToAppIDMap web_contents_to_app_id_;
 
   // Used to track app windows.

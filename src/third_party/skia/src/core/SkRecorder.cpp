@@ -5,13 +5,17 @@
  * found in the LICENSE file.
  */
 
+#include "SkRecorder.h"
+
 #include "SkBigPicture.h"
 #include "SkCanvasPriv.h"
 #include "SkImage.h"
 #include "SkPatchUtils.h"
 #include "SkPicture.h"
-#include "SkRecorder.h"
 #include "SkSurface.h"
+#include "SkTo.h"
+
+#include <new>
 
 SkDrawableList::~SkDrawableList() {
     fArray.unrefAll();
@@ -249,6 +253,15 @@ void SkRecorder::onDrawImageLattice(const SkImage* image, const Lattice& lattice
            this->copy(lattice.fColors, flagCount), *lattice.fBounds, dst);
 }
 
+void SkRecorder::onDrawImageSet(const ImageSetEntry set[], int count, SkFilterQuality filterQuality,
+                                SkBlendMode mode) {
+    SkAutoTArray<ImageSetEntry> setCopy(count);
+    for (int i = 0; i < count; ++i) {
+        setCopy[i] = set[i];
+    }
+    this->append<SkRecords::DrawImageSet>(std::move(setCopy), count, filterQuality, mode);
+}
+
 void SkRecorder::onDrawText(const void* text, size_t byteLength,
                             SkScalar x, SkScalar y, const SkPaint& paint) {
     this->append<SkRecords::DrawText>(
@@ -274,16 +287,6 @@ void SkRecorder::onDrawPosTextH(const void* text, size_t byteLength,
            SkToUInt(byteLength),
            constY,
            this->copy(xpos, points));
-}
-
-void SkRecorder::onDrawTextOnPath(const void* text, size_t byteLength, const SkPath& path,
-                                  const SkMatrix* matrix, const SkPaint& paint) {
-    this->append<SkRecords::DrawTextOnPath>(
-           paint,
-           this->copy((const char*)text, byteLength),
-           byteLength,
-           path,
-           matrix ? *matrix : SkMatrix::I());
 }
 
 void SkRecorder::onDrawTextRSXform(const void* text, size_t byteLength, const SkRSXform xform[],
@@ -313,9 +316,13 @@ void SkRecorder::onDrawPicture(const SkPicture* pic, const SkMatrix* matrix, con
     }
 }
 
-void SkRecorder::onDrawVerticesObject(const SkVertices* vertices, SkBlendMode bmode,
-                                      const SkPaint& paint) {
-    this->append<SkRecords::DrawVertices>(paint, sk_ref_sp(const_cast<SkVertices*>(vertices)), bmode);
+void SkRecorder::onDrawVerticesObject(const SkVertices* vertices, const SkVertices::Bone bones[],
+                                      int boneCount, SkBlendMode bmode, const SkPaint& paint) {
+    this->append<SkRecords::DrawVertices>(paint,
+                                          sk_ref_sp(const_cast<SkVertices*>(vertices)),
+                                          this->copy(bones, boneCount),
+                                          boneCount,
+                                          bmode);
 }
 
 void SkRecorder::onDrawPatch(const SkPoint cubics[12], const SkColor colors[4],

@@ -34,7 +34,6 @@ blink_core_sources("page") {
     "page.h",
     "page_animator.cc",
     "page_animator.h",
-    "page_lifecycle_state.h",
     "page_overlay.cc",
     "page_overlay.h",
     "page_popup.h",
@@ -90,20 +89,12 @@ blink_core_sources("page") {
     "spatial_navigation.h",
     "touch_adjustment.cc",
     "touch_adjustment.h",
-    "touch_disambiguation.cc",
-    "touch_disambiguation.h",
     "validation_message_client.h",
     "validation_message_client_impl.cc",
     "validation_message_client_impl.h",
     "validation_message_overlay_delegate.cc",
     "validation_message_overlay_delegate.h",
+    "viewport_description.cc",
+    "viewport_description.h",
   ]
-
-if (use_neva_appruntime) {
-  sources += [
-    "injected_style_sheets.cc",
-    "injected_style_sheets.h",
-  ]
-}
-
 }

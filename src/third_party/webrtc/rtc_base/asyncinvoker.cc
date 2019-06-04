@@ -17,7 +17,7 @@ namespace rtc {
 
 AsyncInvoker::AsyncInvoker()
     : pending_invocations_(0),
-      invocation_complete_(new RefCountedObject<Event>(false, false)),
+      invocation_complete_(new RefCountedObject<Event>()),
       destroying_(false) {}
 
 AsyncInvoker::~AsyncInvoker() {
@@ -106,8 +106,7 @@ GuardedAsyncInvoker::GuardedAsyncInvoker() : thread_(Thread::Current()) {
                                         &GuardedAsyncInvoker::ThreadDestroyed);
 }
 
-GuardedAsyncInvoker::~GuardedAsyncInvoker() {
-}
+GuardedAsyncInvoker::~GuardedAsyncInvoker() {}
 
 bool GuardedAsyncInvoker::Flush(uint32_t id) {
   CritScope cs(&crit_);

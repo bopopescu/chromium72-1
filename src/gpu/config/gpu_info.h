@@ -26,6 +26,29 @@ typedef unsigned long VisualID;
 
 namespace gpu {
 
+// These values are persisted to logs. Entries should not be renumbered and
+// numeric values should never be reused.
+enum class GpuSeriesType {
+  kUnknown = 0,
+  // Intel 6th gen
+  kIntelSandyBridge = 1,
+  // Intel 7th gen
+  kIntelValleyView = 2,  // BayTrail
+  kIntelIvyBridge = 3,
+  kIntelHaswell = 4,
+  // Intel 8th gen
+  kIntelCherryView = 5,  // Braswell
+  kIntelBroadwell = 6,
+  // Intel 9th gen
+  kIntelApolloLake = 7,
+  kIntelSkyLake = 8,
+  kIntelGeminiLake = 9,
+  kIntelKabyLake = 10,
+  kIntelCoffeeLake = 11,
+  // Please also update |gpu_series_map| in process_json.py.
+  kMaxValue = kIntelCoffeeLake,
+};
+
 // Video profile.  This *must* match media::VideoCodecProfile.
 enum VideoCodecProfile {
   VIDEO_CODEC_PROFILE_UNKNOWN = -1,
@@ -54,8 +77,10 @@ enum VideoCodecProfile {
   DOLBYVISION_PROFILE5,
   DOLBYVISION_PROFILE7,
   THEORAPROFILE_ANY,
-  AV1PROFILE_PROFILE0,
-  VIDEO_CODEC_PROFILE_MAX = AV1PROFILE_PROFILE0,
+  AV1PROFILE_PROFILE_MAIN,
+  AV1PROFILE_PROFILE_HIGH,
+  AV1PROFILE_PROFILE_PRO,
+  VIDEO_CODEC_PROFILE_MAX = AV1PROFILE_PROFILE_PRO,
 };
 
 // Specification of a decoding profile supported by a hardware decoder.
@@ -88,10 +113,46 @@ struct GPU_EXPORT VideoEncodeAcceleratorSupportedProfile {
 using VideoEncodeAcceleratorSupportedProfiles =
     std::vector<VideoEncodeAcceleratorSupportedProfile>;
 
+#if defined(OS_WIN)
+// Common overlay formats that we're interested in. Must match the OverlayFormat
+// enum in //tools/metrics/histograms/enums.xml. Mapped to corresponding DXGI
+// formats in DirectCompositionSurfaceWin.
+enum class OverlayFormat { kBGRA = 0, kYUY2 = 1, kNV12 = 2, kMaxValue = kNV12 };
+
+GPU_EXPORT const char* OverlayFormatToString(OverlayFormat format);
+
+struct GPU_EXPORT OverlayCapability {
+  OverlayFormat format;
+  bool is_scaling_supported;
+  bool operator==(const OverlayCapability& other) const;
+};
+using OverlayCapabilities = std::vector<OverlayCapability>;
+
+struct GPU_EXPORT Dx12VulkanVersionInfo {
+  bool IsEmpty() const { return !d3d12_feature_level && !vulkan_version; }
+
+  // True if the GPU driver supports DX12.
+  bool supports_dx12 = false;
+
+  // True if the GPU driver supports Vulkan.
+  bool supports_vulkan = false;
+
+  // The supported d3d feature level in the gpu driver;
+  uint32_t d3d12_feature_level = 0;
+
+  // The support Vulkan API version in the gpu driver;
+  uint32_t vulkan_version = 0;
+};
+#endif
+
 struct GPU_EXPORT GPUInfo {
   struct GPU_EXPORT GPUDevice {
     GPUDevice();
-    ~GPUDevice();
+    GPUDevice(const GPUDevice& other);
+    GPUDevice(GPUDevice&& other) noexcept;
+    ~GPUDevice() noexcept;
+    GPUDevice& operator=(const GPUDevice& other);
+    GPUDevice& operator=(GPUDevice&& other) noexcept;
 
     // The DWORD (uint32_t) representing the graphics card vendor id.
     uint32_t vendor_id;
@@ -110,6 +171,14 @@ struct GPU_EXPORT GPUInfo {
     // In Android, these are respectively GL_VENDOR and GL_RENDERER.
     std::string vendor_string;
     std::string device_string;
+
+    std::string driver_vendor;
+    std::string driver_version;
+    std::string driver_date;
+
+    // NVIDIA CUDA compute capability, major version. 0 if undetermined. Can be
+    // used to determine the hardware generation that the GPU belongs to.
+    int cuda_compute_capability_major;
   };
 
   GPUInfo();
@@ -117,6 +186,7 @@ struct GPU_EXPORT GPUInfo {
   ~GPUInfo();
 
   // The currently active gpu.
+  GPUDevice& active_gpu();
   const GPUDevice& active_gpu() const;
 
   bool IsInitialized() const;
@@ -136,15 +206,6 @@ struct GPU_EXPORT GPUInfo {
 
   // Secondary GPUs, for example, the integrated GPU in a dual GPU machine.
   std::vector<GPUDevice> secondary_gpus;
-
-  // The vendor of the graphics driver currently installed.
-  std::string driver_vendor;
-
-  // The version of the graphics driver currently installed.
-  std::string driver_version;
-
-  // The date of the graphics driver currently installed.
-  std::string driver_date;
 
   // The version of the pixel/fragment shader used by the gpu.
   std::string pixel_shader_version;
@@ -208,32 +269,24 @@ struct GPU_EXPORT GPUInfo {
   // True if the GPU process is using the passthrough command decoder.
   bool passthrough_cmd_decoder;
 
-  // True if we use direct composition surfaces on Windows.
-  bool direct_composition = false;
-
-  // True if the current set of outputs supports overlays.
-  bool supports_overlays = false;
-
   // True only on android when extensions for threaded mailbox sharing are
   // present. Threaded mailbox sharing is used on Android only, so this check
   // is only implemented on Android.
   bool can_support_threaded_texture_mailbox = false;
 
 #if defined(OS_WIN)
+  // True if we use direct composition surface on Windows.
+  bool direct_composition = false;
+
+  // True if we use direct composition surface overlays on Windows.
+  bool supports_overlays = false;
+
+  OverlayCapabilities overlay_capabilities;
+
   // The information returned by the DirectX Diagnostics Tool.
   DxDiagNode dx_diagnostics;
 
-  // True if the GPU driver supports DX12.
-  bool supports_dx12 = false;
-
-  // True if the GPU driver supports Vulkan.
-  bool supports_vulkan = false;
-
-  // The supported d3d feature level in the gpu driver;
-  uint32_t d3d12_feature_level = 0;
-
-  // The support Vulkan API version in the gpu driver;
-  uint32_t vulkan_version = 0;
+  Dx12VulkanVersionInfo dx12_vulkan_version_info;
 #endif
 
   VideoDecodeAcceleratorCapabilities video_decode_accelerator_capabilities;
@@ -245,6 +298,8 @@ struct GPU_EXPORT GPUInfo {
   VisualID system_visual;
   VisualID rgba_visual;
 #endif
+
+  bool oop_rasterization_supported;
 
   // Note: when adding new members, please remember to update EnumerateFields
   // in gpu_info.cc.
@@ -284,6 +339,12 @@ struct GPU_EXPORT GPUInfo {
     // (according to the DevTools protocol) are being described.
     virtual void BeginAuxAttributes() = 0;
     virtual void EndAuxAttributes() = 0;
+
+    virtual void BeginOverlayCapability() = 0;
+    virtual void EndOverlayCapability() = 0;
+
+    virtual void BeginDx12VulkanVersionInfo() = 0;
+    virtual void EndDx12VulkanVersionInfo() = 0;
 
    protected:
     virtual ~Enumerator() = default;

@@ -6,10 +6,11 @@ assert(is_chromeos, "Non-ChromeOS builds cannot depend on //chromeos")
 
 component("drivefs") {
   sources = [
-    "drive_file_stream_service_provider_delegate.cc",
-    "drive_file_stream_service_provider_delegate.h",
     "drivefs_host.cc",
     "drivefs_host.h",
+    "drivefs_host_observer.h",
+    "fake_drivefs_launcher_client.cc",
+    "fake_drivefs_launcher_client.h",
     "pending_connection_manager.cc",
     "pending_connection_manager.h",
   ]
@@ -18,15 +19,32 @@ component("drivefs") {
     "//chromeos",
     "//chromeos/components/drivefs/mojom",
     "//components/account_id",
+    "//components/drive",
     "//dbus",
     "//google_apis",
-    "//mojo/edk",
     "//mojo/public/cpp/bindings",
+    "//mojo/public/cpp/platform",
     "//net",
     "//services/identity/public/mojom",
+    "//services/network/public/cpp:cpp",
     "//services/service_manager/public/cpp",
   ]
   defines = [ "IS_DRIVEFS_IMPL" ]
+}
+
+source_set("test_support") {
+  testonly = true
+  sources = [
+    "fake_drivefs.cc",
+    "fake_drivefs.h",
+  ]
+  deps = [
+    ":drivefs",
+    "//base",
+    "//chromeos",
+    "//chromeos/components/drivefs/mojom",
+    "//net",
+  ]
 }
 
 source_set("unit_tests") {
@@ -42,9 +60,13 @@ source_set("unit_tests") {
     "//base/test:test_support",
     "//chromeos:test_support",
     "//chromeos/components/drivefs/mojom",
+    "//components/drive",
+    "//components/invalidation/impl:test_support",
     "//mojo/public/cpp/bindings",
     "//net",
+    "//net:test_support",
     "//services/identity/public/mojom",
+    "//services/network/public/cpp:cpp",
     "//services/service_manager/public/cpp",
     "//services/service_manager/public/cpp/test:test_support",
     "//testing/gmock",

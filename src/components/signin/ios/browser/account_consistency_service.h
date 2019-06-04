@@ -58,7 +58,7 @@ class AccountConsistencyService : public KeyedService,
   ~AccountConsistencyService() override;
 
   // Registers the preferences used by AccountConsistencyService.
-  static void RegisterPrefs(user_prefs::PrefRegistrySyncable* registry);
+  static void RegisterPrefs(PrefRegistrySimple* registry);
 
   // Sets the handler for |web_state| that reacts on Gaia responses with the
   // X-Chrome-Manage-Accounts header and notifies |delegate|.
@@ -156,10 +156,8 @@ class AccountConsistencyService : public KeyedService,
       const GoogleServiceAuthError& error) override;
 
   // SigninManagerBase::Observer implementation.
-  void GoogleSigninSucceeded(const std::string& account_id,
-                             const std::string& username) override;
-  void GoogleSignedOut(const std::string& account_id,
-                       const std::string& username) override;
+  void GoogleSigninSucceeded(const AccountInfo& account_info) override;
+  void GoogleSignedOut(const AccountInfo& account_info) override;
 
   // ActiveStateManager::Observer implementation.
   void OnActive() override;

@@ -28,11 +28,13 @@
 
 #include "third_party/blink/renderer/core/css/media_query_list_listener.h"
 #include "third_party/blink/renderer/core/html/html_element.h"
+#include "third_party/blink/renderer/platform/scheduler/public/post_cancellable_task.h"
 #include "third_party/blink/renderer/platform/timer.h"
-#include "third_party/blink/renderer/platform/web_task_runner.h"
 
 namespace blink {
 
+class USVStringOrTrustedURL;
+class ExceptionState;
 class HTMLSourceElement final : public HTMLElement {
   DEFINE_WRAPPERTYPEINFO();
 
@@ -42,8 +44,12 @@ class HTMLSourceElement final : public HTMLElement {
   DECLARE_NODE_FACTORY(HTMLSourceElement);
   ~HTMLSourceElement() override;
 
+  // Returns attributes that should be checked against Trusted Types
+  const HashSet<AtomicString>& GetCheckedAttributeNames() const override;
+
   const AtomicString& type() const;
   void SetSrc(const String&);
+  void SetSrc(const USVStringOrTrustedURL&, ExceptionState&);
   void setType(const AtomicString&);
 
   void ScheduleErrorEvent();
@@ -63,8 +69,8 @@ class HTMLSourceElement final : public HTMLElement {
 
   void DidMoveToNewDocument(Document& old_document) override;
 
-  InsertionNotificationRequest InsertedInto(ContainerNode*) override;
-  void RemovedFrom(ContainerNode*) override;
+  InsertionNotificationRequest InsertedInto(ContainerNode&) override;
+  void RemovedFrom(ContainerNode&) override;
   bool IsURLAttribute(const Attribute&) const override;
   void ParseAttribute(const AttributeModificationParams&) override;
 

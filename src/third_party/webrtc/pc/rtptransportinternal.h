@@ -14,18 +14,16 @@
 #include <string>
 
 #include "api/ortc/srtptransportinterface.h"
-#include "api/umametrics.h"
 #include "call/rtp_demuxer.h"
 #include "p2p/base/icetransportinternal.h"
 #include "pc/sessiondescription.h"
 #include "rtc_base/networkroute.h"
-#include "rtc_base/sigslot.h"
 #include "rtc_base/sslstreamadapter.h"
+#include "rtc_base/third_party/sigslot/sigslot.h"
 
 namespace rtc {
 class CopyOnWriteBuffer;
 struct PacketOptions;
-struct PacketTime;
 }  // namespace rtc
 
 namespace webrtc {
@@ -60,12 +58,11 @@ class RtpTransportInternal : public SrtpTransportInterface,
   // Called whenever an RTCP packet is received. There is no equivalent signal
   // for RTP packets because they would be forwarded to the BaseChannel through
   // the RtpDemuxer callback.
-  sigslot::signal2<rtc::CopyOnWriteBuffer*, const rtc::PacketTime&>
-      SignalRtcpPacketReceived;
+  sigslot::signal2<rtc::CopyOnWriteBuffer*, int64_t> SignalRtcpPacketReceived;
 
   // Called whenever the network route of the P2P layer transport changes.
   // The argument is an optional network route.
-  sigslot::signal1<rtc::Optional<rtc::NetworkRoute>> SignalNetworkRouteChanged;
+  sigslot::signal1<absl::optional<rtc::NetworkRoute>> SignalNetworkRouteChanged;
 
   // Called whenever a transport's writable state might change. The argument is
   // true if the transport is writable, otherwise it is false.
@@ -99,9 +96,6 @@ class RtpTransportInternal : public SrtpTransportInterface,
       const cricket::RtpHeaderExtensions& header_extensions) = 0;
 
   virtual bool IsSrtpActive() const = 0;
-
-  virtual void SetMetricsObserver(
-      rtc::scoped_refptr<MetricsObserverInterface> metrics_observer) = 0;
 
   virtual bool RegisterRtpDemuxerSink(const RtpDemuxerCriteria& criteria,
                                       RtpPacketSinkInterface* sink) = 0;

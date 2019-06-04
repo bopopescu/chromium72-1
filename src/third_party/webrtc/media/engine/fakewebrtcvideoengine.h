@@ -15,13 +15,13 @@
 #include <string>
 #include <vector>
 
+#include "absl/memory/memory.h"
 #include "api/video_codecs/video_decoder.h"
 #include "api/video_codecs/video_decoder_factory.h"
 #include "api/video_codecs/video_encoder.h"
 #include "api/video_codecs/video_encoder_factory.h"
 #include "rtc_base/criticalsection.h"
 #include "rtc_base/event.h"
-#include "rtc_base/ptr_util.h"
 #include "rtc_base/thread_annotations.h"
 
 namespace cricket {
@@ -86,7 +86,6 @@ class FakeWebRtcVideoEncoder : public webrtc::VideoEncoder {
   int32_t RegisterEncodeCompleteCallback(
       webrtc::EncodedImageCallback* callback) override;
   int32_t Release() override;
-  int32_t SetChannelParameters(uint32_t packetLoss, int64_t rtt) override;
   int32_t SetRateAllocation(const webrtc::VideoBitrateAllocation& allocation,
                             uint32_t framerate) override;
 

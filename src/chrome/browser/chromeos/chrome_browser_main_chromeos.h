@@ -10,11 +10,12 @@
 #include "base/macros.h"
 #include "base/task/cancelable_task_tracker.h"
 #include "chrome/browser/chrome_browser_main_linux.h"
+#include "chrome/browser/chromeos/crostini/crosvm_metrics.h"
 #include "chrome/browser/chromeos/external_metrics.h"
 #include "chrome/browser/memory/memory_kills_monitor.h"
-#include "chromeos/system/version_loader.h"
+#include "chromeos/assistant/buildflags.h"
 
-class NotificationPlatformBridge;
+class ChromeKeyboardControllerClient;
 class SpokenFeedbackEventRewriterDelegate;
 
 namespace lock_screen_apps {
@@ -26,12 +27,21 @@ class ArcServiceLauncher;
 class VoiceInteractionControllerClient;
 }
 
+#if BUILDFLAG(ENABLE_CROS_ASSISTANT)
+class AssistantClient;
+#endif
+
 namespace chromeos {
 
 class ArcKioskAppManager;
+class DemoModeResourcesRemover;
+class DiagnosticsdBridge;
+class DiscoverManager;
 class EventRewriterDelegateImpl;
+class FastTransitionObserver;
 class IdleActionWarningObserver;
 class LowDiskNotification;
+class NetworkChangeManagerClient;
 class NetworkPrefStateObserver;
 class NetworkThrottlingObserver;
 class PowerMetricsReporter;
@@ -45,7 +55,6 @@ class ExternalLoader;
 
 
 namespace internal {
-class DBusPreEarlyInit;
 class DBusServices;
 class SystemTokenCertDBInitializer;
 }
@@ -55,6 +64,10 @@ namespace ml {
 class AdaptiveScreenBrightnessManager;
 class UserActivityController;
 }  // namespace ml
+
+namespace auto_screen_brightness {
+class Controller;
+}  // namespace auto_screen_brightness
 }  // namespace power
 
 // ChromeBrowserMainParts implementation for chromeos specific code.
@@ -63,9 +76,9 @@ class UserActivityController;
 // src/ash or chrome/browser/ui/ash.
 class ChromeBrowserMainPartsChromeos : public ChromeBrowserMainPartsLinux {
  public:
-  explicit ChromeBrowserMainPartsChromeos(
+  ChromeBrowserMainPartsChromeos(
       const content::MainFunctionParams& parameters,
-      std::unique_ptr<ui::DataPack> data_pack);
+      ChromeFeatureListCreator* chrome_feature_list_creator);
   ~ChromeBrowserMainPartsChromeos() override;
 
   // ChromeBrowserMainParts overrides.
@@ -90,9 +103,13 @@ class ChromeBrowserMainPartsChromeos : public ChromeBrowserMainPartsLinux {
   std::unique_ptr<RendererFreezer> renderer_freezer_;
   std::unique_ptr<PowerMetricsReporter> power_metrics_reporter_;
   std::unique_ptr<WakeOnWifiManager> wake_on_wifi_manager_;
+  std::unique_ptr<FastTransitionObserver> fast_transition_observer_;
   std::unique_ptr<NetworkThrottlingObserver> network_throttling_observer_;
+  std::unique_ptr<NetworkChangeManagerClient> network_change_manager_client_;
 
-  std::unique_ptr<internal::DBusPreEarlyInit> dbus_pre_early_init_;
+  // Indicates whether the DBus has been initialized before. It is possible that
+  // the DBus has been initialized in ChromeFeatureListCreator.
+  bool is_dbus_initialized_ = false;
   std::unique_ptr<internal::DBusServices> dbus_services_;
 
   std::unique_ptr<internal::SystemTokenCertDBInitializer>
@@ -113,23 +130,32 @@ class ChromeBrowserMainPartsChromeos : public ChromeBrowserMainPartsLinux {
   std::unique_ptr<arc::VoiceInteractionControllerClient>
       arc_voice_interaction_controller_client_;
 
+#if BUILDFLAG(ENABLE_CROS_ASSISTANT)
+  std::unique_ptr<AssistantClient> assistant_client_;
+#endif
+
   std::unique_ptr<LowDiskNotification> low_disk_notification_;
   std::unique_ptr<ArcKioskAppManager> arc_kiosk_app_manager_;
 
   std::unique_ptr<memory::MemoryKillsMonitor::Handle> memory_kills_monitor_;
 
+  std::unique_ptr<ChromeKeyboardControllerClient>
+      chrome_keyboard_controller_client_;
+
   std::unique_ptr<lock_screen_apps::StateController>
       lock_screen_apps_state_controller_;
-
-  // TODO(estade): Remove this when Chrome OS uses native notifications by
-  // default (as it will be instantiated elsewhere). For now it's necessary to
-  // send notifier settings information to Ash.
-  std::unique_ptr<NotificationPlatformBridge> notification_client_;
 
   std::unique_ptr<power::ml::AdaptiveScreenBrightnessManager>
       adaptive_screen_brightness_manager_;
 
   std::unique_ptr<power::ml::UserActivityController> user_activity_controller_;
+  std::unique_ptr<power::auto_screen_brightness::Controller>
+      auto_screen_brightness_controller_;
+
+  std::unique_ptr<DemoModeResourcesRemover> demo_mode_resources_remover_;
+  std::unique_ptr<crostini::CrosvmMetrics> crosvm_metrics_;
+  std::unique_ptr<DiscoverManager> discover_manager_;
+  std::unique_ptr<DiagnosticsdBridge> diagnosticsd_bridge_;
 
   DISALLOW_COPY_AND_ASSIGN(ChromeBrowserMainPartsChromeos);
 };

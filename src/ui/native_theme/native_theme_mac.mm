@@ -11,7 +11,6 @@
 #include "base/mac/sdk_forward_declarations.h"
 #include "base/macros.h"
 #import "skia/ext/skia_utils_mac.h"
-#include "ui/base/material_design/material_design_controller.h"
 #include "ui/gfx/color_palette.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/skia_util.h"
@@ -26,14 +25,9 @@
 namespace {
 
 const SkColor kMenuPopupBackgroundColor = SK_ColorWHITE;
-
-// Hardcoded color used for some existing dialogs in Chrome's Cocoa UI.
-const SkColor kDialogBackgroundColor = SkColorSetRGB(251, 251, 251);
-
-// Color for the highlighted text in a control when that control doesn't have
-// keyboard focus.
-const SkColor kUnfocusedSelectedTextBackgroundColor =
-    SkColorSetRGB(220, 220, 220);
+// TODO(crbug.com/893598): Finalize dark mode color.
+const SkColor kMenuPopupBackgroundColorDarkMode =
+    SkColorSetRGB(0x2B, 0x2B, 0x2B);
 
 // Helper to make indexing an array by an enum class easier.
 template <class KEY, class VALUE>
@@ -108,8 +102,8 @@ NativeTheme* NativeTheme::GetInstanceForNativeUi() {
 
 // static
 NativeThemeMac* NativeThemeMac::instance() {
-  CR_DEFINE_STATIC_LOCAL(NativeThemeMac, s_native_theme, ());
-  return &s_native_theme;
+  static base::NoDestructor<NativeThemeMac> s_native_theme;
+  return s_native_theme.get();
 }
 
 // static
@@ -128,11 +122,14 @@ SkColor NativeThemeMac::GetSystemColor(ColorId color_id) const {
     case kColorId_DisabledMenuItemForegroundColor:
       return NSSystemColorToSkColor([NSColor disabledControlTextColor]);
     case kColorId_SelectedMenuItemForegroundColor:
-      return SK_ColorBLACK;
+      return UsesHighContrastColors() ? SK_ColorWHITE : SK_ColorBLACK;
     case kColorId_FocusedMenuItemBackgroundColor:
-      return gfx::kGoogleGrey200;
+      return UsesHighContrastColors() ? SK_ColorDKGRAY : gfx::kGoogleGrey200;
     case kColorId_MenuBackgroundColor:
-      return kMenuPopupBackgroundColor;
+    case kColorId_BubbleBackground:
+    case kColorId_DialogBackground:
+      return SystemDarkModeEnabled() ? kMenuPopupBackgroundColorDarkMode
+                                     : kMenuPopupBackgroundColor;
     case kColorId_MenuSeparatorColor:
       return UsesHighContrastColors() ? SK_ColorBLACK
                                       : SkColorSetA(SK_ColorBLACK, 0x26);
@@ -160,87 +157,7 @@ SkColor NativeThemeMac::GetSystemColor(ColorId color_id) const {
       break;
   }
 
-  if (ui::MaterialDesignController::IsSecondaryUiMaterial())
-    return ApplySystemControlTint(GetAuraColor(color_id, this));
-
-  // TODO(tapted): Add caching for these, and listen for
-  // NSSystemColorsDidChangeNotification.
-  switch (color_id) {
-    case kColorId_WindowBackground:
-      return NSSystemColorToSkColor([NSColor windowBackgroundColor]);
-    case kColorId_DialogBackground:
-      return kDialogBackgroundColor;
-    case kColorId_BubbleBackground:
-      return SK_ColorWHITE;
-
-    case kColorId_FocusedBorderColor:
-      return NSSystemColorToSkColor([NSColor keyboardFocusIndicatorColor]);
-    case kColorId_UnfocusedBorderColor:
-      return NSSystemColorToSkColor([NSColor controlColor]);
-
-    // Buttons and labels.
-    case kColorId_ButtonEnabledColor:
-    case kColorId_LabelEnabledColor:
-      return NSSystemColorToSkColor([NSColor controlTextColor]);
-    // NSColor doesn't offer a color for prominent buttons. Use the Aura color,
-    // but apply the system tint. This is a good match for the blue Cocoa uses
-    // to draw buttons that are given a \n key equivalent.
-    case kColorId_ProminentButtonColor:
-      return ApplySystemControlTint(GetAuraColor(color_id, this));
-    case kColorId_ButtonDisabledColor:
-    case kColorId_LabelDisabledColor:
-      return NSSystemColorToSkColor([NSColor disabledControlTextColor]);
-    case kColorId_ButtonHoverColor:
-      return NSSystemColorToSkColor([NSColor selectedControlTextColor]);
-    case kColorId_LabelTextSelectionColor:
-      return NSSystemColorToSkColor([NSColor selectedTextColor]);
-
-    // Link.
-    case kColorId_LinkDisabled:
-      return SK_ColorBLACK;
-    case kColorId_LinkEnabled:
-      return SK_ColorBLUE;
-    case kColorId_LinkPressed:
-      return SK_ColorRED;
-
-    // Text fields.
-    case kColorId_TextfieldDefaultColor:
-    case kColorId_TextfieldReadOnlyColor:
-      return NSSystemColorToSkColor([NSColor textColor]);
-    case kColorId_TextfieldDefaultBackground:
-    case kColorId_TextfieldReadOnlyBackground:
-      return NSSystemColorToSkColor([NSColor textBackgroundColor]);
-    case kColorId_TextfieldSelectionColor:
-      return NSSystemColorToSkColor([NSColor selectedTextColor]);
-
-    // Trees/Tables. For focused text, use the alternate* versions, which
-    // NSColor documents as "the table and list view equivalent to the
-    // selectedControlTextColor".
-    case kColorId_TreeBackground:
-    case kColorId_TableBackground:
-      return NSSystemColorToSkColor([NSColor controlBackgroundColor]);
-    case kColorId_TreeText:
-    case kColorId_TableText:
-    case kColorId_TableSelectedTextUnfocused:
-    case kColorId_TreeSelectedTextUnfocused:
-      return NSSystemColorToSkColor([NSColor textColor]);
-    case kColorId_TreeSelectedText:
-    case kColorId_TableSelectedText:
-      return NSSystemColorToSkColor(
-          [NSColor alternateSelectedControlTextColor]);
-    case kColorId_TreeSelectionBackgroundFocused:
-    case kColorId_TableSelectionBackgroundFocused:
-      return NSSystemColorToSkColor([NSColor alternateSelectedControlColor]);
-    case kColorId_TreeSelectionBackgroundUnfocused:
-    case kColorId_TableSelectionBackgroundUnfocused:
-      return kUnfocusedSelectedTextBackgroundColor;
-    case kColorId_TableGroupingIndicatorColor:
-      return SkColorSetRGB(140, 140, 140);
-
-    default:
-      // TODO(tapted): Handle all values and remove the default case.
-      return GetAuraColor(color_id, this);
-  }
+  return ApplySystemControlTint(GetAuraColor(color_id, this));
 }
 
 void NativeThemeMac::PaintMenuPopupBackground(
@@ -249,7 +166,7 @@ void NativeThemeMac::PaintMenuPopupBackground(
     const MenuBackgroundExtraParams& menu_background) const {
   cc::PaintFlags flags;
   flags.setAntiAlias(true);
-  flags.setColor(kMenuPopupBackgroundColor);
+  flags.setColor(GetSystemColor(kColorId_MenuBackgroundColor));
   const SkScalar radius = SkIntToScalar(menu_background.corner_radius);
   SkRect rect = gfx::RectToSkRect(gfx::Rect(size));
   canvas->drawRoundRect(rect, radius, radius, flags);
@@ -285,6 +202,17 @@ bool NativeThemeMac::UsesHighContrastColors() const {
   return false;
 }
 
+bool NativeThemeMac::SystemDarkModeEnabled() const {
+  if (@available(macOS 10.14, *)) {
+    NSAppearanceName appearance =
+        [[NSApp effectiveAppearance] bestMatchFromAppearancesWithNames:@[
+          NSAppearanceNameAqua, NSAppearanceNameDarkAqua
+        ]];
+    return [appearance isEqual:NSAppearanceNameDarkAqua];
+  }
+  return NativeThemeBase::SystemDarkModeEnabled();
+}
+
 NativeThemeMac::NativeThemeMac() {
 }
 
@@ -297,18 +225,6 @@ void NativeThemeMac::PaintSelectedMenuItem(cc::PaintCanvas* canvas,
   cc::PaintFlags flags;
   flags.setColor(GetSystemColor(kColorId_FocusedMenuItemBackgroundColor));
   canvas->drawRect(gfx::RectToSkRect(rect), flags);
-
-  // In high contrast, draw a border stroke as well.
-  if (UsesHighContrastColors()) {
-    constexpr int kStrokeWidth = 2;
-    cc::PaintFlags border_flags;
-    gfx::Rect border_rect = rect;
-    border_rect.Inset(kStrokeWidth / 2, kStrokeWidth / 2);
-    border_flags.setColor(GetSystemColor(kColorId_MenuBorderColor));
-    border_flags.setStyle(cc::PaintFlags::kStroke_Style);
-    border_flags.setStrokeWidth(kStrokeWidth);
-    canvas->drawRect(gfx::RectToSkRect(border_rect), border_flags);
-  }
 }
 
 }  // namespace ui

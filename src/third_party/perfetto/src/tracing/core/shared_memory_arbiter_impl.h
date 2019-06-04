@@ -59,7 +59,7 @@ class SharedMemoryArbiterImpl : public SharedMemoryArbiter {
   SharedMemoryArbiterImpl(void* start,
                           size_t size,
                           size_t page_size,
-                          Service::ProducerEndpoint*,
+                          TracingService::ProducerEndpoint*,
                           base::TaskRunner*);
 
   // Returns a new Chunk to write tracing data. The call always returns a valid
@@ -73,7 +73,7 @@ class SharedMemoryArbiterImpl : public SharedMemoryArbiter {
   // service to move it to the central tracing buffer. |target_buffer| is the
   // absolute trace buffer ID where the service should move the chunk onto (the
   // producer is just to copy back the same number received in the
-  // DataSourceConfig upon the CreateDataSourceInstance() reques).
+  // DataSourceConfig upon the StartDataSource() reques).
   // PatchList is a pointer to the list of patches for previous chunks. The
   // first patched entries will be removed from the patched list and sent over
   // to the service in the same CommitData() IPC request.
@@ -110,7 +110,7 @@ class SharedMemoryArbiterImpl : public SharedMemoryArbiter {
   void ReleaseWriterID(WriterID);
 
   base::TaskRunner* const task_runner_;
-  Service::ProducerEndpoint* const producer_endpoint_;
+  TracingService::ProducerEndpoint* const producer_endpoint_;
   PERFETTO_THREAD_CHECKER(thread_checker_)
 
   // --- Begin lock-protected members ---

@@ -8,11 +8,13 @@
 
 #include "base/macros.h"
 #include "base/run_loop.h"
+#include "base/task/post_task.h"
 #include "build/build_config.h"
 #include "cc/test/pixel_test_utils.h"
 #include "content/browser/media/capture/content_capture_device_browsertest_base.h"
 #include "content/browser/media/capture/fake_video_capture_stack.h"
 #include "content/browser/media/capture/frame_test_util.h"
+#include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/render_process_host.h"
@@ -97,10 +99,18 @@ class WebContentsVideoCaptureDeviceBrowserTest
             << average_mainframe_rgb << ", letterbox region has average color "
             << average_letterbox_rgb;
 
+        // TODO(crbug/810131): The software compositor ignores color space and
+        // always uses the REC609 conversion factors. Once that's fixed and
+        // color space info is fully plumbed-through, remove this.
+        const int max_color_diff =
+            IsSoftwareCompositingTest()
+                ? FrameTestUtil::kMaxInaccurateColorDifference
+                : FrameTestUtil::kMaxColorDifference;
+
         // The letterboxed region should always be black.
         if (IsFixedAspectRatioTest()) {
           EXPECT_TRUE(FrameTestUtil::IsApproximatelySameColor(
-              SK_ColorBLACK, average_letterbox_rgb));
+              SK_ColorBLACK, average_letterbox_rgb, max_color_diff));
         }
 
         if (testing::Test::HasFailure()) {
@@ -111,17 +121,17 @@ class WebContentsVideoCaptureDeviceBrowserTest
 
         // Return if the content region(s) now has/have the expected color(s).
         if (IsCrossSiteCaptureTest() &&
-            FrameTestUtil::IsApproximatelySameColor(color,
-                                                    average_iframe_rgb) &&
-            FrameTestUtil::IsApproximatelySameColor(SK_ColorWHITE,
-                                                    average_mainframe_rgb)) {
+            FrameTestUtil::IsApproximatelySameColor(color, average_iframe_rgb,
+                                                    max_color_diff) &&
+            FrameTestUtil::IsApproximatelySameColor(
+                SK_ColorWHITE, average_mainframe_rgb, max_color_diff)) {
           VLOG(1) << "Observed desired frame.";
           return;
         } else if (!IsCrossSiteCaptureTest() &&
                    FrameTestUtil::IsApproximatelySameColor(
-                       color, average_iframe_rgb) &&
+                       color, average_iframe_rgb, max_color_diff) &&
                    FrameTestUtil::IsApproximatelySameColor(
-                       color, average_mainframe_rgb)) {
+                       color, average_mainframe_rgb, max_color_diff)) {
           VLOG(1) << "Observed desired frame.";
           return;
         } else {
@@ -133,9 +143,9 @@ class WebContentsVideoCaptureDeviceBrowserTest
       // Wait for at least the minimum capture period before checking for more
       // captured frames.
       base::RunLoop run_loop;
-      BrowserThread::PostDelayedTask(BrowserThread::UI, FROM_HERE,
-                                     run_loop.QuitClosure(),
-                                     GetMinCapturePeriod());
+      base::PostDelayedTaskWithTraits(FROM_HERE, {BrowserThread::UI},
+                                      run_loop.QuitClosure(),
+                                      GetMinCapturePeriod());
       run_loop.Run();
     }
   }
@@ -195,6 +205,7 @@ IN_PROC_BROWSER_TEST_F(WebContentsVideoCaptureDeviceBrowserTest,
   capture_stack()->ExpectHasLogMessages();
 
   device->StopAndDeAllocate();
+  device.reset();
   RunUntilIdle();
 }
 
@@ -204,6 +215,7 @@ IN_PROC_BROWSER_TEST_F(WebContentsVideoCaptureDeviceBrowserTest,
                        ErrorsOutWhenWebContentsIsDestroyed) {
   NavigateToInitialDocument();
   AllocateAndStartAndWaitForFirstFrame();
+  EXPECT_TRUE(shell()->web_contents()->IsBeingCaptured());
 
   // Initially, the device captures any content changes normally.
   ChangePageContentColor(SK_ColorRED);
@@ -226,6 +238,7 @@ IN_PROC_BROWSER_TEST_F(WebContentsVideoCaptureDeviceBrowserTest,
                        SuspendsAndResumes) {
   NavigateToInitialDocument();
   AllocateAndStartAndWaitForFirstFrame();
+  EXPECT_TRUE(shell()->web_contents()->IsBeingCaptured());
 
   // Initially, the device captures any content changes normally.
   ChangePageContentColor(SK_ColorRED);
@@ -240,9 +253,9 @@ IN_PROC_BROWSER_TEST_F(WebContentsVideoCaptureDeviceBrowserTest,
   // frames were queued because the device should be suspended.
   ChangePageContentColor(SK_ColorGREEN);
   base::RunLoop run_loop;
-  BrowserThread::PostDelayedTask(BrowserThread::UI, FROM_HERE,
-                                 run_loop.QuitClosure(),
-                                 base::TimeDelta::FromSeconds(5));
+  base::PostDelayedTaskWithTraits(FROM_HERE, {BrowserThread::UI},
+                                  run_loop.QuitClosure(),
+                                  base::TimeDelta::FromSeconds(5));
   run_loop.Run();
   EXPECT_FALSE(HasCapturedFramesInQueue());
 
@@ -252,6 +265,7 @@ IN_PROC_BROWSER_TEST_F(WebContentsVideoCaptureDeviceBrowserTest,
   WaitForFrameWithColor(SK_ColorGREEN);
 
   StopAndDeAllocate();
+  EXPECT_FALSE(shell()->web_contents()->IsBeingCaptured());
 }
 
 // Tests that the device delivers refresh frames when asked, while the source
@@ -260,6 +274,7 @@ IN_PROC_BROWSER_TEST_F(WebContentsVideoCaptureDeviceBrowserTest,
                        DeliversRefreshFramesUponRequest) {
   NavigateToInitialDocument();
   AllocateAndStartAndWaitForFirstFrame();
+  EXPECT_TRUE(shell()->web_contents()->IsBeingCaptured());
 
   // Set the page content to a known color.
   ChangePageContentColor(SK_ColorRED);
@@ -274,6 +289,7 @@ IN_PROC_BROWSER_TEST_F(WebContentsVideoCaptureDeviceBrowserTest,
   }
 
   StopAndDeAllocate();
+  EXPECT_FALSE(shell()->web_contents()->IsBeingCaptured());
 }
 
 class WebContentsVideoCaptureDeviceBrowserTestP
@@ -315,12 +331,19 @@ INSTANTIATE_TEST_CASE_P(
                         true /* page contains a cross-site iframe */)));
 #endif  // defined(OS_CHROMEOS)
 
+// TODO(crbug/908854): This test is flaky on Win7 Tests.
+#if defined(OS_WIN)
+#define MAYBE_CapturesContentChanges DISABLED_CapturesContentChanges
+#else
+#define MAYBE_CapturesContentChanges CapturesContentChanges
+#endif
+
 // Tests that the device successfully captures a series of content changes,
 // whether the browser is running with software compositing or GPU-accelerated
 // compositing, whether the WebContents is visible/hidden or occluded/unoccluded
 // and whether the main document contains a cross-site iframe.
 IN_PROC_BROWSER_TEST_P(WebContentsVideoCaptureDeviceBrowserTestP,
-                       CapturesContentChanges) {
+                       MAYBE_CapturesContentChanges) {
   SCOPED_TRACE(testing::Message()
                << "Test parameters: "
                << (IsSoftwareCompositingTest() ? "Software Compositing"
@@ -331,6 +354,7 @@ IN_PROC_BROWSER_TEST_P(WebContentsVideoCaptureDeviceBrowserTestP,
 
   NavigateToInitialDocument();
   AllocateAndStartAndWaitForFirstFrame();
+  EXPECT_TRUE(shell()->web_contents()->IsBeingCaptured());
 
   for (int visilibilty_case = 0; visilibilty_case < 3; ++visilibilty_case) {
     switch (visilibilty_case) {
@@ -378,6 +402,7 @@ IN_PROC_BROWSER_TEST_P(WebContentsVideoCaptureDeviceBrowserTestP,
   }
 
   StopAndDeAllocate();
+  EXPECT_FALSE(shell()->web_contents()->IsBeingCaptured());
 }
 
 }  // namespace

@@ -9,7 +9,7 @@
  * @param {!GalleryDataModel} dataModel Gallery data model.
  * @param {!cr.ui.ListSelectionModel} selectionModel List selection model.
  * @param {function()} changeToSlideModeCallback A callback to be called to
- *     change to slide mode.
+ *     change to slide mode due to activating a thumbnail.
  * @constructor
  * @extends {cr.EventTarget}
  * @struct
@@ -663,6 +663,9 @@ ThumbnailView.prototype.selectByThumbnail_ = function(
         this.selectionModel_.selectedIndexes.indexOf(index) === -1);
   } else if (selectionMode === ThumbnailView.SelectionMode.RANGE) {
     var leadIndex = this.selectionModel_.leadIndex;
+    if(leadIndex < 0) {
+      leadIndex = 0;
+    }
     this.selectionModel_.unselectAll();
     this.selectionModel_.selectRange(leadIndex, index);
   } else {
@@ -841,6 +844,10 @@ ThumbnailView.Thumbnail = function(galleryItem) {
   this.imageFrame_ = assertInstanceof(
       document.createElement('div'), HTMLElement);
   this.imageFrame_.classList.add('image', 'frame');
+
+  if (FileType.isVideo(galleryItem.getEntry()))
+    this.imageFrame_.classList.add('video');
+
   this.container_.appendChild(this.imageFrame_);
 
   /**

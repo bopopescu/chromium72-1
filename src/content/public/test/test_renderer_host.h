@@ -12,7 +12,7 @@
 #include <vector>
 
 #include "base/macros.h"
-#include "base/message_loop/message_loop.h"
+#include "base/test/scoped_task_environment.h"
 #include "build/build_config.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/render_view_host.h"
@@ -34,7 +34,12 @@ namespace display {
 class Screen;
 }
 
+namespace net {
+class NetworkChangeNotifier;
+}
+
 namespace ui {
+class InputDeviceManager;
 class ScopedOleInitializer;
 }
 
@@ -139,10 +144,7 @@ class RenderViewHostTester {
   // RenderViewHostTestEnabler instance (see below) to do this.
   static RenderViewHostTester* For(RenderViewHost* host);
 
-  // Calls the RenderViewHosts' private OnMessageReceived function with the
-  // given message.
-  static bool TestOnMessageReceived(RenderViewHost* rvh,
-                                    const IPC::Message& msg);
+  static void SimulateFirstPaint(RenderViewHost* rvh);
 
   // Returns whether the underlying web-page has any touch-event handlers.
   static bool HasTouchEventHandler(RenderViewHost* rvh);
@@ -179,7 +181,10 @@ class RenderViewHostTestEnabler {
 #if defined(OS_ANDROID)
   std::unique_ptr<display::Screen> screen_;
 #endif
-  std::unique_ptr<base::MessageLoop> message_loop_;
+#if defined(USE_AURA)
+  std::unique_ptr<ui::InputDeviceManager> input_device_client_;
+#endif
+  std::unique_ptr<base::test::ScopedTaskEnvironment> task_environment_;
   std::unique_ptr<MockRenderProcessHostFactory> rph_factory_;
   std::unique_ptr<TestRenderViewHostFactory> rvh_factory_;
   std::unique_ptr<TestRenderFrameHostFactory> rfh_factory_;
@@ -238,6 +243,10 @@ class RenderViewHostTestHarness : public testing::Test {
   // WebContentsTester::NavigateAndCommit for details.
   void NavigateAndCommit(const GURL& url);
 
+  // Sets the focused frame to the main frame of the WebContents for tests that
+  // rely on the focused frame not being null.
+  void FocusWebContentsOnMainFrame();
+
  protected:
   // testing::Test
   void SetUp() override;
@@ -255,6 +264,8 @@ class RenderViewHostTestHarness : public testing::Test {
   // context.
   virtual BrowserContext* GetBrowserContext();
 
+  TestBrowserThreadBundle* thread_bundle() { return thread_bundle_.get(); }
+
 #if defined(USE_AURA)
   aura::Window* root_window() { return aura_test_helper_->root_window(); }
 #endif
@@ -264,6 +275,8 @@ class RenderViewHostTestHarness : public testing::Test {
 
  private:
   std::unique_ptr<TestBrowserThreadBundle> thread_bundle_;
+
+  std::unique_ptr<net::NetworkChangeNotifier> network_change_notifier_;
 
   std::unique_ptr<ContentBrowserSanityChecker> sanity_checker_;
 

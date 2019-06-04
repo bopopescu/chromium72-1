@@ -103,13 +103,13 @@ TEST_F(VisibleUnitsTest, canonicalPositionOfWithHTMLHtmlElement) {
   Node* two = GetDocument().QuerySelector("#two");
   Node* three = GetDocument().QuerySelector("#three");
   Node* four = GetDocument().QuerySelector("#four");
-  Element* html = GetDocument().CreateRawElement(HTMLNames::htmlTag);
+  Element* html = GetDocument().CreateRawElement(html_names::kHTMLTag);
   // Move two, three and four into second html element.
   html->AppendChild(two);
   html->AppendChild(three);
   html->AppendChild(four);
   one->appendChild(html);
-  UpdateAllLifecyclePhases();
+  UpdateAllLifecyclePhasesForTest();
 
   EXPECT_EQ(Position(),
             CanonicalPositionOf(Position(GetDocument().documentElement(), 0)));
@@ -282,13 +282,13 @@ TEST_F(VisibleUnitsTest, IsVisuallyEquivalentCandidateWithHTMLHtmlElement) {
   Node* two = GetDocument().QuerySelector("#two");
   Node* three = GetDocument().QuerySelector("#three");
   Node* four = GetDocument().QuerySelector("#four");
-  Element* html = GetDocument().CreateRawElement(HTMLNames::htmlTag);
+  Element* html = GetDocument().CreateRawElement(html_names::kHTMLTag);
   // Move two, three and four into second html element.
   html->AppendChild(two);
   html->AppendChild(three);
   html->AppendChild(four);
   one->appendChild(html);
-  UpdateAllLifecyclePhases();
+  UpdateAllLifecyclePhasesForTest();
 
   EXPECT_FALSE(IsVisuallyEquivalentCandidate(
       Position(GetDocument().documentElement(), 0)));
@@ -319,10 +319,10 @@ TEST_F(VisibleUnitsTest, isVisuallyEquivalentCandidateWithHTMLBodyElement) {
   Node* two = GetDocument().QuerySelector("#two");
   Node* three = GetDocument().QuerySelector("#three");
   Node* four = GetDocument().QuerySelector("#four");
-  Element* body = GetDocument().CreateRawElement(HTMLNames::bodyTag);
-  Element* empty_body = GetDocument().CreateRawElement(HTMLNames::bodyTag);
-  Element* div = GetDocument().CreateRawElement(HTMLNames::divTag);
-  Element* br = GetDocument().CreateRawElement(HTMLNames::brTag);
+  Element* body = GetDocument().CreateRawElement(html_names::kBodyTag);
+  Element* empty_body = GetDocument().CreateRawElement(html_names::kBodyTag);
+  Element* div = GetDocument().CreateRawElement(html_names::kDivTag);
+  Element* br = GetDocument().CreateRawElement(html_names::kBrTag);
   empty_body->appendChild(div);
   empty_body->appendChild(br);
   one->appendChild(empty_body);
@@ -354,7 +354,7 @@ TEST_F(VisibleUnitsTest, isVisuallyEquivalentCandidateWithHTMLBodyElement) {
 }
 
 TEST_F(VisibleUnitsTest, isVisuallyEquivalentCandidateWithDocument) {
-  UpdateAllLifecyclePhases();
+  UpdateAllLifecyclePhasesForTest();
 
   EXPECT_FALSE(IsVisuallyEquivalentCandidate(Position(&GetDocument(), 0)));
 }
@@ -421,7 +421,7 @@ TEST_F(VisibleUnitsTest, mostBackwardCaretPositionFirstLetterSplit) {
   Node* first_letter = sample->firstChild();
   // Split "abc" into "a" "bc"
   Text* remaining = ToText(first_letter)->splitText(1, ASSERT_NO_EXCEPTION);
-  UpdateAllLifecyclePhases();
+  UpdateAllLifecyclePhasesForTest();
 
   EXPECT_EQ(Position(sample, 0),
             MostBackwardCaretPosition(Position(first_letter, 0)));
@@ -445,7 +445,7 @@ TEST_F(VisibleUnitsTest, mostForwardCaretPositionAfterAnchor) {
       "<b id='two'>22</b><content select=#one></content><b id='three'>333</b>";
   SetBodyContent(body_content);
   ShadowRoot* shadow_root = SetShadowContent(shadow_content, "host");
-  UpdateAllLifecyclePhases();
+  UpdateAllLifecyclePhasesForTest();
 
   Element* host = GetDocument().getElementById("host");
   Element* one = GetDocument().getElementById("one");
@@ -761,22 +761,12 @@ TEST_F(VisibleUnitsTest,
   EXPECT_EQ(Position(text, 2), start);
 }
 
-static unsigned MockBoundarySearch(const UChar*,
-                                   unsigned,
-                                   unsigned,
-                                   BoundarySearchContextAvailability,
-                                   bool&) {
-  return true;
-}
-
-// Regression test for crbug.com/788661
-TEST_F(VisibleUnitsTest, NextBoundaryOfEditableTableWithLeadingSpaceInOutput) {
-  VisiblePosition pos = CreateVisiblePosition(SetCaretTextToBody(
-      // The leading whitespace is necessary for bug repro
-      "<output> <table contenteditable><!--|--></table></output>"));
-  Position result = NextBoundary(pos, MockBoundarySearch);
-  EXPECT_EQ("<output> <table contenteditable>|</table></output>",
-            GetCaretTextFromBody(result));
+TEST_F(VisibleUnitsTest, MostForwardCaretPositionWithInvisibleFirstLetter) {
+  InsertStyleElement("div::first-letter{visibility:hidden}");
+  // Use special syntax to set input position DIV@0
+  const Position position = SetCaretTextToBody("<div><!--|-->foo</div>");
+  const Node* foo = GetDocument().QuerySelector("div")->firstChild();
+  EXPECT_EQ(Position(foo, 1), MostForwardCaretPosition(position));
 }
 
 }  // namespace visible_units_test

@@ -8,15 +8,16 @@
 #include "base/memory/ref_counted.h"
 #include "net/base/io_buffer.h"
 #include "net/third_party/quic/core/quic_types.h"
+#include "net/third_party/quic/platform/api/quic_string_piece.h"
 
-namespace net {
+namespace quic {
 
 class QuicStreamSendBuffer;
 
 // QuicMemSliceSpanImpl wraps a MemSlice span.
 class QUIC_EXPORT_PRIVATE QuicMemSliceSpanImpl {
  public:
-  QuicMemSliceSpanImpl(const scoped_refptr<IOBuffer>* buffers,
+  QuicMemSliceSpanImpl(const scoped_refptr<net::IOBuffer>* buffers,
                        const int* lengths,
                        size_t num_buffers);
 
@@ -31,15 +32,23 @@ class QUIC_EXPORT_PRIVATE QuicMemSliceSpanImpl {
   // saved mem slices.
   QuicByteCount SaveMemSlicesInSendBuffer(QuicStreamSendBuffer* send_buffer);
 
+  QuicStringPiece GetData(size_t index) {
+    return QuicStringPiece(buffers_[index]->data(), lengths_[index]);
+  }
+
+  QuicByteCount total_length();
+
+  size_t NumSlices() { return num_buffers_; }
+
   bool empty() const { return num_buffers_ == 0; }
 
  private:
-  const scoped_refptr<IOBuffer>* buffers_;
+  const scoped_refptr<net::IOBuffer>* buffers_;
   const int* lengths_;
   // Not const so that the move operator can work properly.
   size_t num_buffers_;
 };
 
-}  // namespace net
+}  // namespace quic
 
 #endif  // NET_THIRD_PARTY_QUIC_PLATFORM_IMPL_QUIC_MEM_SLICE_SPAN_IMPL_H_

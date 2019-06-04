@@ -2,9 +2,10 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/renderer/core/paint/compositing/compositing_inputs_updater.h"
+#include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/renderer/core/paint/paint_layer.h"
+#include "third_party/blink/renderer/core/paint/paint_layer_scrollable_area.h"
 #include "third_party/blink/renderer/core/testing/core_unit_test_helper.h"
 
 namespace blink {
@@ -72,7 +73,7 @@ TEST_F(CompositingInputsUpdaterTest,
   EXPECT_FALSE(sticky->Layer()->AncestorOverflowLayer()->GetScrollableArea());
   EXPECT_EQ(sticky->Layer()->AncestorOverflowLayer(), outer_scroller->Layer());
 
-  GetDocument().View()->UpdateAllLifecyclePhases();
+  UpdateAllLifecyclePhasesForTest();
 
   // Both scrollers must still have a layer.
   EXPECT_TRUE(outer_scroller->Layer());
@@ -98,14 +99,14 @@ TEST_F(CompositingInputsUpdaterTest, UnclippedAndClippedRectsUnderScroll) {
   LayoutBoxModelObject* target =
       ToLayoutBoxModelObject(GetLayoutObjectByElementId("target"));
 
-  GetDocument().View()->LayoutViewportScrollableArea()->ScrollBy(
-      ScrollOffset(0, 25), kUserScroll);
+  GetDocument().View()->LayoutViewport()->ScrollBy(ScrollOffset(0, 25),
+                                                   kUserScroll);
   GetDocument()
       .View()
       ->GetLayoutView()
       ->Layer()
       ->SetNeedsCompositingInputsUpdate();
-  GetDocument().View()->UpdateAllLifecyclePhases();
+  UpdateAllLifecyclePhasesForTest();
   EXPECT_EQ(IntRect(8, 8, 200, 200),
             target->Layer()->ClippedAbsoluteBoundingBox());
   EXPECT_EQ(IntRect(8, 8, 200, 200),
@@ -124,15 +125,15 @@ TEST_F(CompositingInputsUpdaterTest,
   LayoutBoxModelObject* target =
       ToLayoutBoxModelObject(GetLayoutObjectByElementId("target"));
 
-  GetDocument().View()->LayoutViewportScrollableArea()->ScrollBy(
-      ScrollOffset(0, 25), kUserScroll);
+  GetDocument().View()->LayoutViewport()->ScrollBy(ScrollOffset(0, 25),
+                                                   kUserScroll);
   GetDocument()
       .View()
       ->GetLayoutView()
       ->Layer()
       ->SetNeedsCompositingInputsUpdate();
 
-  GetDocument().View()->UpdateAllLifecyclePhases();
+  UpdateAllLifecyclePhasesForTest();
   EXPECT_EQ(IntRect(8, 8, 200, 200),
             target->Layer()->ClippedAbsoluteBoundingBox());
   EXPECT_EQ(IntRect(8, 8, 200, 200),

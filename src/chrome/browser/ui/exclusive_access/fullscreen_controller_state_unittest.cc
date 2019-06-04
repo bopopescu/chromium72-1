@@ -3,7 +3,7 @@
 // found in the LICENSE file.
 
 #include "base/command_line.h"
-#include "base/test/histogram_tester.h"
+#include "base/test/metrics/histogram_tester.h"
 #include "build/build_config.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_tabstrip.h"
@@ -67,7 +67,7 @@ class FullscreenControllerTestWindow : public TestBrowserWindow,
       ExclusiveAccessBubbleHideCallback bubble_first_hide_callback,
       bool force_update) override;
   void OnExclusiveAccessUserInput() override;
-  ExclusiveAccessBubbleViews* GetExclusiveAccessBubble() override;
+  bool CanUserExitFullscreen() const override;
 
   // Simulates the window changing state.
   void ChangeWindowFullscreenState();
@@ -198,9 +198,8 @@ void FullscreenControllerTestWindow::UpdateExclusiveAccessExitBubbleContent(
 
 void FullscreenControllerTestWindow::OnExclusiveAccessUserInput() {}
 
-ExclusiveAccessBubbleViews*
-FullscreenControllerTestWindow::GetExclusiveAccessBubble() {
-  return nullptr;
+bool FullscreenControllerTestWindow::CanUserExitFullscreen() const {
+  return true;
 }
 
 }  // namespace

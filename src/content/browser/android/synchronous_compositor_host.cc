@@ -11,8 +11,9 @@
 #include "base/containers/hash_tables.h"
 #include "base/memory/ptr_util.h"
 #include "base/memory/shared_memory.h"
+#include "base/task/post_task.h"
 #include "base/threading/thread_restrictions.h"
-#include "base/trace_event/trace_event_argument.h"
+#include "base/trace_event/traced_value.h"
 #include "content/browser/android/synchronous_compositor_sync_call_bridge.h"
 #include "content/browser/bad_message.h"
 #include "content/browser/renderer_host/render_widget_host_view_android.h"
@@ -20,6 +21,7 @@
 #include "content/common/android/sync_compositor_statics.h"
 #include "content/common/input/sync_compositor_messages.h"
 #include "content/public/browser/android/synchronous_compositor_client.h"
+#include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/render_view_host.h"
 #include "content/public/common/content_features.h"
@@ -53,8 +55,8 @@ class SynchronousCompositorControlHost
                      scoped_refptr<SynchronousCompositorSyncCallBridge> bridge,
                      int process_id) {
     DCHECK_CURRENTLY_ON(BrowserThread::UI);
-    BrowserThread::PostTask(
-        BrowserThread::IO, FROM_HERE,
+    base::PostTaskWithTraits(
+        FROM_HERE, {BrowserThread::IO},
         base::BindOnce(&CreateOnIOThread, std::move(request), std::move(bridge),
                        process_id));
   }
@@ -119,6 +121,7 @@ SynchronousCompositorHost::SynchronousCompositorHost(
       renderer_param_version_(0u),
       need_animate_scroll_(false),
       need_invalidate_count_(0u),
+      invalidate_needs_draw_(false),
       did_activate_pending_tree_count_(0u) {
   client_->DidInitializeCompositor(this, process_id_, routing_id_);
   bridge_ = new SynchronousCompositorSyncCallBridge(this);
@@ -158,6 +161,7 @@ SynchronousCompositorHost::DemandDrawHwAsync(
     const gfx::Size& viewport_size,
     const gfx::Rect& viewport_rect_for_tile_priority,
     const gfx::Transform& transform_for_tile_priority) {
+  invalidate_needs_draw_ = false;
   scoped_refptr<FrameFuture> frame_future = new FrameFuture();
   if (compute_scroll_needs_synchronous_draw_ || !allow_async_draw_) {
     allow_async_draw_ = allow_async_draw_ || IsReadyForSynchronousCall();
@@ -258,6 +262,7 @@ bool SynchronousCompositorHost::DemandDrawSwInProc(SkCanvas* canvas) {
   ScopedSetSkCanvas set_sk_canvas(canvas);
   SyncCompositorDemandDrawSwParams params;  // Unused.
   uint32_t metadata_version = 0u;
+  invalidate_needs_draw_ = false;
   if (!IsReadyForSynchronousCall() ||
       !GetSynchronousCompositor()->DemandDrawSw(params, &common_renderer_params,
                                                 &metadata_version, &metadata))
@@ -501,10 +506,20 @@ void SynchronousCompositorHost::UpdateState(
   renderer_param_version_ = params.version;
   need_animate_scroll_ = params.need_animate_scroll;
   root_scroll_offset_ = params.total_scroll_offset;
+  max_scroll_offset_ = params.max_scroll_offset;
+  scrollable_size_ = params.scrollable_size;
+  page_scale_factor_ = params.page_scale_factor;
+  min_page_scale_factor_ = params.min_page_scale_factor;
+  max_page_scale_factor_ = params.max_page_scale_factor;
+  invalidate_needs_draw_ |= params.invalidate_needs_draw;
 
   if (need_invalidate_count_ != params.need_invalidate_count) {
     need_invalidate_count_ = params.need_invalidate_count;
-    client_->PostInvalidate(this);
+    if (invalidate_needs_draw_) {
+      client_->PostInvalidate(this);
+    } else {
+      GetSynchronousCompositor()->WillSkipDraw();
+    }
   }
 
   if (did_activate_pending_tree_count_ !=
@@ -513,15 +528,22 @@ void SynchronousCompositorHost::UpdateState(
     client_->DidUpdateContent(this);
   }
 
+  UpdateRootLayerStateOnClient();
+}
+
+void SynchronousCompositorHost::DidBecomeActive() {
+  UpdateRootLayerStateOnClient();
+}
+
+void SynchronousCompositorHost::UpdateRootLayerStateOnClient() {
   // Ensure only valid values from compositor are sent to client.
   // Compositor has page_scale_factor set to 0 before initialization, so check
   // for that case here.
-  if (params.page_scale_factor) {
+  if (page_scale_factor_) {
     client_->UpdateRootLayerState(
-        this, gfx::ScrollOffsetToVector2dF(params.total_scroll_offset),
-        gfx::ScrollOffsetToVector2dF(params.max_scroll_offset),
-        params.scrollable_size, params.page_scale_factor,
-        params.min_page_scale_factor, params.max_page_scale_factor);
+        this, gfx::ScrollOffsetToVector2dF(root_scroll_offset_),
+        gfx::ScrollOffsetToVector2dF(max_scroll_offset_), scrollable_size_,
+        page_scale_factor_, min_page_scale_factor_, max_page_scale_factor_);
   }
 }
 

@@ -49,10 +49,10 @@ class CC_EXPORT SingleThreadProxy : public Proxy,
   void SetNeedsCommit() override;
   void SetNeedsRedraw(const gfx::Rect& damage_rect) override;
   void SetNextCommitWaitsForActivation() override;
+  bool RequestedAnimatePending() override;
   void NotifyInputThrottledUntilCommit() override {}
-  void SetDeferCommits(bool defer_commits) override;
+  void SetDeferMainFrameUpdate(bool defer_main_frame_update) override;
   bool CommitRequested() const override;
-  void MainThreadHasStoppedFlinging() override {}
   void Start() override;
   void Stop() override;
   void SetMutator(std::unique_ptr<LayerTreeMutator> mutator) override;
@@ -63,20 +63,19 @@ class CC_EXPORT SingleThreadProxy : public Proxy,
     // layout tests. This will still get called in the latter case, but we don't
     // need to record UKM in that case.
   }
-  void ClearHistoryOnNavigation() override;
+  void ClearHistory() override;
   void SetRenderFrameObserver(
       std::unique_ptr<RenderFrameMetadataObserver> observer) override;
 
-  // Blink layout tests might call into this even though an unthreaded CC
-  // doesn't have BrowserControls itself.
   void UpdateBrowserControlsState(BrowserControlsState constraints,
                                   BrowserControlsState current,
-                                  bool animate) override {}
+                                  bool animate) override;
 
   // SchedulerClient implementation
   bool WillBeginImplFrame(const viz::BeginFrameArgs& args) override;
   void DidFinishImplFrame() override;
   void DidNotProduceFrame(const viz::BeginFrameAck& ack) override;
+  void WillNotReceiveBeginFrame() override;
   void ScheduledActionSendBeginMainFrame(
       const viz::BeginFrameArgs& args) override;
   DrawResult ScheduledActionDrawIfPossible() override;
@@ -85,11 +84,12 @@ class CC_EXPORT SingleThreadProxy : public Proxy,
   void ScheduledActionActivateSyncTree() override;
   void ScheduledActionBeginLayerTreeFrameSinkCreation() override;
   void ScheduledActionPrepareTiles() override;
-  void ScheduledActionInvalidateLayerTreeFrameSink() override;
+  void ScheduledActionInvalidateLayerTreeFrameSink(bool needs_redraw) override;
   void ScheduledActionPerformImplSideInvalidation() override;
   void SendBeginMainFrameNotExpectedSoon() override;
   void ScheduledActionBeginMainFrameNotExpectedUntil(
       base::TimeTicks time) override;
+  void FrameIntervalUpdated(base::TimeDelta interval) override;
   size_t CompositedAnimationsCount() const override;
   size_t MainThreadAnimationsCount() const override;
   bool CurrentFrameHadRAF() const override;
@@ -117,15 +117,15 @@ class CC_EXPORT SingleThreadProxy : public Proxy,
   void WillPrepareTiles() override;
   void DidPrepareTiles() override;
   void DidCompletePageScaleAnimationOnImplThread() override;
-  void OnDrawForLayerTreeFrameSink(bool resourceless_software_draw) override;
+  void OnDrawForLayerTreeFrameSink(bool resourceless_software_draw,
+                                   bool skip_draw) override;
   void NeedsImplSideInvalidation(bool needs_first_draw_on_activation) override;
   void RequestBeginMainFrameNotExpected(bool new_state) override;
   void NotifyImageDecodeRequestFinished() override;
   void DidPresentCompositorFrameOnImplThread(
-      const std::vector<int>& source_frames,
-      base::TimeTicks time,
-      base::TimeDelta refresh,
-      uint32_t flags) override;
+      uint32_t frame_token,
+      std::vector<LayerTreeHost::PresentationTimeCallback> callbacks,
+      const gfx::PresentationFeedback& feedback) override;
 
   void RequestNewLayerTreeFrameSink();
 
@@ -174,10 +174,11 @@ class CC_EXPORT SingleThreadProxy : public Proxy,
   bool inside_impl_frame_;
 #endif
   bool inside_draw_;
-  bool defer_commits_;
+  bool defer_main_frame_update_;
   bool animate_requested_;
   bool commit_requested_;
   bool inside_synchronous_composite_;
+  bool needs_impl_frame_;
 
   // True if a request to the LayerTreeHostClient to create an output surface
   // is still outstanding.

@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <memory>
 #include <string>
+#include <utility>
 
 #include "base/command_line.h"
 #include "base/macros.h"
@@ -19,6 +20,7 @@
 #include "chrome/browser/prerender/prerender_manager_factory.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/renderer_host/chrome_navigation_ui_data.h"
+#include "chrome/browser/signin/signin_promo.h"
 #include "chrome/browser/tab_contents/tab_util.h"
 #include "chrome/browser/task_manager/web_contents_tags.h"
 #include "chrome/browser/ui/browser.h"
@@ -56,7 +58,7 @@
 #if BUILDFLAG(ENABLE_EXTENSIONS)
 #include "chrome/browser/extensions/extension_util.h"
 #include "chrome/browser/extensions/tab_helper.h"
-#include "chrome/browser/web_applications/web_app.h"
+#include "chrome/browser/web_applications/components/web_app_helpers.h"
 #include "extensions/browser/extension_registry.h"
 #include "extensions/common/extension.h"
 #include "extensions/common/extension_set.h"
@@ -83,7 +85,7 @@ namespace {
 // those types of Browser.
 bool WindowCanOpenTabs(Browser* browser) {
   return browser->CanSupportWindowFeature(Browser::FEATURE_TABSTRIP) ||
-      browser->tab_strip_model()->empty();
+         browser->tab_strip_model()->empty();
 }
 
 // Finds an existing Browser compatible with |profile|, making a new one if no
@@ -116,7 +118,7 @@ bool AdjustNavigateParamsForURL(NavigateParams* params) {
     // If incognito is forced, we punt.
     PrefService* prefs = profile->GetPrefs();
     if (prefs && IncognitoModePrefs::GetAvailability(prefs) ==
-            IncognitoModePrefs::FORCED) {
+                     IncognitoModePrefs::FORCED) {
       return false;
     }
 
@@ -145,7 +147,7 @@ std::pair<Browser*, int> GetBrowserAndTabForDisposition(
         profile, params.url, extensions::LAUNCH_CONTAINER_WINDOW);
     if (app) {
       std::string app_name =
-          web_app::GenerateApplicationNameFromExtensionId(app->id());
+          web_app::GenerateApplicationNameFromAppId(app->id());
       return {
           new Browser(Browser::CreateParams::CreateForApp(
               app_name,
@@ -200,16 +202,16 @@ std::pair<Browser*, int> GetBrowserAndTabForDisposition(
       std::string app_name;
 #if BUILDFLAG(ENABLE_EXTENSIONS)
       if (!params.extension_app_id.empty()) {
-        app_name = web_app::GenerateApplicationNameFromExtensionId(
-            params.extension_app_id);
+        app_name =
+            web_app::GenerateApplicationNameFromAppId(params.extension_app_id);
       } else if (params.browser && !params.browser->app_name().empty()) {
         app_name = params.browser->app_name();
       } else if (params.source_contents) {
         extensions::TabHelper* extensions_tab_helper =
             extensions::TabHelper::FromWebContents(params.source_contents);
         if (extensions_tab_helper && extensions_tab_helper->is_app()) {
-          app_name = web_app::GenerateApplicationNameFromExtensionId(
-              extensions_tab_helper->extension_app()->id());
+          app_name = web_app::GenerateApplicationNameFromAppId(
+              extensions_tab_helper->GetAppId());
         }
       }
 #endif
@@ -324,6 +326,9 @@ void LoadURLInContents(WebContents* target_contents,
   load_url_params.started_from_context_menu = params->started_from_context_menu;
   load_url_params.has_user_gesture = params->user_gesture;
   load_url_params.blob_url_loader_factory = params->blob_url_loader_factory;
+  load_url_params.input_start = params->input_start;
+  load_url_params.was_activated = params->was_activated;
+  load_url_params.href_translate = params->href_translate;
 
   // |frame_tree_node_id| is kNoFrameTreeNodeId for main frame navigations.
   if (params->frame_tree_node_id ==
@@ -405,11 +410,8 @@ std::unique_ptr<content::WebContents> CreateTargetContents(
     create_params.initially_hidden = true;
 
 #if defined(USE_AURA)
-  if (params.browser->window() &&
-      params.browser->window()->GetNativeWindow()) {
-    create_params.context =
-        params.browser->window()->GetNativeWindow();
-  }
+  if (params.browser->window() && params.browser->window()->GetNativeWindow())
+    create_params.context = params.browser->window()->GetNativeWindow();
 #endif
 
   std::unique_ptr<WebContents> target_contents =
@@ -440,7 +442,7 @@ bool SwapInPrerender(const GURL& url,
   prerender::PrerenderManager* prerender_manager =
       prerender::PrerenderManagerFactory::GetForBrowserContext(profile);
   return prerender_manager &&
-      prerender_manager->MaybeUsePrerenderedPage(url, params);
+         prerender_manager->MaybeUsePrerenderedPage(url, params);
 }
 
 }  // namespace
@@ -456,20 +458,14 @@ void Navigate(NavigateParams* params) {
 
 #if BUILDFLAG(ENABLE_EXTENSIONS)
   const extensions::Extension* extension =
-    extensions::ExtensionRegistry::Get(params->initiating_profile)->
-        enabled_extensions().GetExtensionOrAppByURL(params->url);
+      extensions::ExtensionRegistry::Get(params->initiating_profile)
+          ->enabled_extensions()
+          .GetExtensionOrAppByURL(params->url);
   // Platform apps cannot navigate. Block the request.
   if (extension && extension->is_platform_app())
     params->url = GURL(chrome::kExtensionInvalidRequestURL);
 #endif
 
-  // The browser window may want to adjust the disposition.
-  if (params->disposition == WindowOpenDisposition::NEW_POPUP &&
-      source_browser && source_browser->window()) {
-    params->disposition =
-        source_browser->window()->GetDispositionForPopupBounds(
-            params->window_bounds);
-  }
   // Trying to open a background tab when in an app browser results in
   // focusing a regular browser window an opening a tab in the background
   // of that window. Change the disposition to NEW_FOREGROUND_TAB so that
@@ -701,6 +697,49 @@ void Navigate(NavigateParams* params) {
   params->navigated_or_inserted_contents = contents_to_navigate_or_insert;
 }
 
+bool IsHostAllowedInIncognito(const GURL& url) {
+  std::string scheme = url.scheme();
+  base::StringPiece host = url.host_piece();
+  if (scheme == chrome::kChromeSearchScheme) {
+    return host != chrome::kChromeUIThumbnailHost &&
+           host != chrome::kChromeUIThumbnailHost2 &&
+           host != chrome::kChromeUIThumbnailListHost &&
+           host != chrome::kChromeUISuggestionsHost;
+  }
+
+  if (scheme != content::kChromeUIScheme)
+    return true;
+
+  if (host == chrome::kChromeUIChromeSigninHost) {
+#if defined(OS_WIN)
+    // Allow incognito mode for the chrome-signin url if we only want to
+    // retrieve the login scope token without touching any profiles. This
+    // option is only available on Windows for use with Google Credential
+    // Provider for Windows.
+    return signin::GetSigninReasonForPromoURL(url) ==
+           signin_metrics::Reason::REASON_FETCH_LST_ONLY;
+#else
+    return false;
+#endif  // defined(OS_WIN)
+  }
+
+  // Most URLs are allowed in incognito; the following are exceptions.
+  // chrome://extensions is on the list because it redirects to
+  // chrome://settings.
+  return host != chrome::kChromeUIAppLauncherPageHost &&
+         host != chrome::kChromeUISettingsHost &&
+         host != chrome::kChromeUIHelpHost &&
+         host != chrome::kChromeUIHistoryHost &&
+         host != chrome::kChromeUIExtensionsHost &&
+         host != chrome::kChromeUIBookmarksHost &&
+         host != chrome::kChromeUIUberHost &&
+         host != chrome::kChromeUIThumbnailHost &&
+         host != chrome::kChromeUIThumbnailHost2 &&
+         host != chrome::kChromeUIThumbnailListHost &&
+         host != chrome::kChromeUISuggestionsHost &&
+         host != chrome::kChromeUIDevicesHost;
+}
+
 bool IsURLAllowedInIncognito(const GURL& url,
                              content::BrowserContext* browser_context) {
   if (url.scheme() == content::kViewSourceScheme) {
@@ -712,36 +751,11 @@ bool IsURLAllowedInIncognito(const GURL& url,
     stripped_spec.erase(0, strlen(content::kViewSourceScheme) + 1);
     GURL stripped_url(stripped_spec);
     return stripped_url.is_valid() &&
-        IsURLAllowedInIncognito(stripped_url, browser_context);
-  }
-  // Most URLs are allowed in incognito; the following are exceptions.
-  // chrome://extensions is on the list because it redirects to
-  // chrome://settings.
-  if (url.scheme() == content::kChromeUIScheme &&
-      (url.host_piece() == chrome::kChromeUISettingsHost ||
-       url.host_piece() == chrome::kChromeUIHelpHost ||
-       url.host_piece() == chrome::kChromeUIHistoryHost ||
-       url.host_piece() == chrome::kChromeUIExtensionsHost ||
-       url.host_piece() == chrome::kChromeUIBookmarksHost ||
-#if !defined(OS_CHROMEOS)
-       url.host_piece() == chrome::kChromeUIChromeSigninHost ||
-#endif
-       url.host_piece() == chrome::kChromeUIUberHost ||
-       url.host_piece() == chrome::kChromeUIThumbnailHost ||
-       url.host_piece() == chrome::kChromeUIThumbnailHost2 ||
-       url.host_piece() == chrome::kChromeUIThumbnailListHost ||
-       url.host_piece() == chrome::kChromeUISuggestionsHost ||
-       url.host_piece() == chrome::kChromeUIDevicesHost)) {
-    return false;
+           IsURLAllowedInIncognito(stripped_url, browser_context);
   }
 
-  if (url.scheme() == chrome::kChromeSearchScheme &&
-      (url.host_piece() == chrome::kChromeUIThumbnailHost ||
-       url.host_piece() == chrome::kChromeUIThumbnailHost2 ||
-       url.host_piece() == chrome::kChromeUIThumbnailListHost ||
-       url.host_piece() == chrome::kChromeUISuggestionsHost)) {
+  if (!IsHostAllowedInIncognito(url))
     return false;
-  }
 
   GURL rewritten_url = url;
   bool reverse_on_redirect = false;

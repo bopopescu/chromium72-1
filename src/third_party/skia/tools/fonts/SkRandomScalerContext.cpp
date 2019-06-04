@@ -24,11 +24,11 @@ public:
 protected:
     unsigned generateGlyphCount() override;
     uint16_t generateCharToGlyph(SkUnichar) override;
-    void generateAdvance(SkGlyph*) override;
+    bool generateAdvance(SkGlyph*) override;
     void generateMetrics(SkGlyph*) override;
     void generateImage(const SkGlyph&) override;
     bool generatePath(SkGlyphID, SkPath*) override;
-    void generateFontMetrics(SkPaint::FontMetrics*) override;
+    void generateFontMetrics(SkFontMetrics*) override;
 
 private:
     SkRandomTypeface* getRandomTypeface() const {
@@ -57,8 +57,8 @@ uint16_t SkRandomScalerContext::generateCharToGlyph(SkUnichar uni) {
     return fProxy->charToGlyphID(uni);
 }
 
-void SkRandomScalerContext::generateAdvance(SkGlyph* glyph) {
-    fProxy->getAdvance(glyph);
+bool SkRandomScalerContext::generateAdvance(SkGlyph* glyph) {
+    return fProxy->generateAdvance(glyph);
 }
 
 void SkRandomScalerContext::generateMetrics(SkGlyph* glyph) {
@@ -140,7 +140,7 @@ bool SkRandomScalerContext::generatePath(SkGlyphID glyph, SkPath* path) {
     return fProxy->generatePath(glyph, path);
 }
 
-void SkRandomScalerContext::generateFontMetrics(SkPaint::FontMetrics* metrics) {
+void SkRandomScalerContext::generateFontMetrics(SkFontMetrics* metrics) {
     fProxy->getFontMetrics(metrics);
 }
 
@@ -160,7 +160,7 @@ SkScalerContext* SkRandomTypeface::onCreateScalerContext(const SkScalerContextEf
 
 void SkRandomTypeface::onFilterRec(SkScalerContextRec* rec) const {
     fProxy->filterRec(rec);
-    rec->setHinting(SkPaint::kNo_Hinting);
+    rec->setHinting(kNo_SkFontHinting);
     rec->fMaskFormat = SkMask::kARGB32_Format;
 }
 
@@ -174,6 +174,14 @@ std::unique_ptr<SkAdvancedTypefaceMetrics> SkRandomTypeface::onGetAdvancedMetric
 
 SkStreamAsset* SkRandomTypeface::onOpenStream(int* ttcIndex) const {
     return fProxy->openStream(ttcIndex);
+}
+
+sk_sp<SkTypeface> SkRandomTypeface::onMakeClone(const SkFontArguments& args) const {
+    sk_sp<SkTypeface> proxy = fProxy->makeClone(args);
+    if (!proxy) {
+        return nullptr;
+    }
+    return sk_make_sp<SkRandomTypeface>(proxy, fPaint, fFakeIt);
 }
 
 void SkRandomTypeface::onGetFontDescriptor(SkFontDescriptor* desc, bool* isLocal) const {
@@ -207,6 +215,12 @@ int SkRandomTypeface::onGetVariationDesignPosition(
         SkFontArguments::VariationPosition::Coordinate coordinates[], int coordinateCount) const
 {
     return fProxy->onGetVariationDesignPosition(coordinates, coordinateCount);
+}
+
+int SkRandomTypeface::onGetVariationDesignParameters(
+        SkFontParameters::Variation::Axis parameters[], int parameterCount) const
+{
+    return fProxy->onGetVariationDesignParameters(parameters, parameterCount);
 }
 
 int SkRandomTypeface::onGetTableTags(SkFontTableTag tags[]) const {

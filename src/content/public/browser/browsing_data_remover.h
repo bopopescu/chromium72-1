@@ -121,6 +121,9 @@ class BrowsingDataRemover {
 
   // A helper enum to report the deletion of cookies and/or cache. Do not
   // reorder the entries, as this enum is passed to UMA.
+  // A Java counterpart will be generated for this enum so that it can be
+  // logged on Android.
+  // GENERATED_JAVA_ENUM_PACKAGE: org.chromium.chrome.browser.browsing_data
   enum CookieOrCacheDeletionChoice {
     NEITHER_COOKIES_NOR_CACHE,
     ONLY_COOKIES,
@@ -168,7 +171,7 @@ class BrowsingDataRemover {
 
   // Like Remove(), but in case of URL-keyed only removes data whose URL match
   // |filter_builder| (e.g. are on certain origin or domain).
-  // RemoveWithFilter() currently only works with FILTERABLE_DATATYPES.
+  // RemoveWithFilter() currently only works with FILTERABLE_DATA_TYPES.
   virtual void RemoveWithFilter(
       const base::Time& delete_begin,
       const base::Time& delete_end,

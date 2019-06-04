@@ -23,7 +23,7 @@
 #include "base/metrics/histogram.h"
 #include "base/process/kill.h"
 #include "base/strings/utf_string_conversions.h"
-#include "base/sys_info.h"
+#include "base/system/sys_info.h"
 #include "base/win/scoped_handle.h"
 #include "base/win/scoped_process_information.h"
 #include "base/win/startup_information.h"
@@ -239,9 +239,11 @@ Process LaunchProcess(const string16& cmdline,
     flags |= EXTENDED_STARTUPINFO_PRESENT;
   }
 
+  if (options.feedback_cursor_off)
+    startup_info->dwFlags |= STARTF_FORCEOFFFEEDBACK;
   if (options.empty_desktop_name)
     startup_info->lpDesktop = const_cast<wchar_t*>(L"");
-  startup_info->dwFlags = STARTF_USESHOWWINDOW;
+  startup_info->dwFlags |= STARTF_USESHOWWINDOW;
   startup_info->wShowWindow = options.start_hidden ? SW_HIDE : SW_SHOWNORMAL;
 
   if (options.stdin_handle || options.stdout_handle || options.stderr_handle) {
@@ -254,12 +256,6 @@ Process LaunchProcess(const string16& cmdline,
     startup_info->hStdOutput = options.stdout_handle;
     startup_info->hStdError = options.stderr_handle;
   }
-
-  const bool launch_suspended =
-      options.job_handle || options.grant_foreground_privilege;
-
-  if (launch_suspended)
-    flags |= CREATE_SUSPENDED;
 
   if (options.job_handle) {
     // If this code is run under a debugger, the launched process is
@@ -280,6 +276,10 @@ Process LaunchProcess(const string16& cmdline,
                                   : options.current_directory.value().c_str();
 
   string16 writable_cmdline(cmdline);
+  DCHECK(!(flags & CREATE_SUSPENDED))
+      << "Creating a suspended process can lead to hung processes if the "
+      << "launching process is killed before it assigns the process to the"
+      << "job. https://crbug.com/820996";
   if (options.as_user) {
     flags |= CREATE_UNICODE_ENVIRONMENT;
     void* enviroment_block = nullptr;
@@ -323,9 +323,6 @@ Process LaunchProcess(const string16& cmdline,
       !AllowSetForegroundWindow(GetProcId(process_info.process_handle()))) {
     DPLOG(ERROR) << "Failed to grant foreground privilege to launched process";
   }
-
-  if (launch_suspended)
-    ResumeThread(process_info.thread_handle());
 
   if (options.wait)
     WaitForSingleObject(process_info.process_handle(), INFINITE);

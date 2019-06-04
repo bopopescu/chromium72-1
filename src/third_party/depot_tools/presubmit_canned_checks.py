@@ -80,7 +80,7 @@ def CheckChangeWasUploaded(input_api, output_api):
 
 ### Content checks
 
-def CheckAuthorizedAuthor(input_api, output_api):
+def CheckAuthorizedAuthor(input_api, output_api, bot_whitelist=None):
   """For non-googler/chromites committers, verify the author's email address is
   in AUTHORS.
   """
@@ -93,6 +93,11 @@ def CheckAuthorizedAuthor(input_api, output_api):
   if not author:
     input_api.logging.info('No author, skipping AUTHOR check')
     return []
+
+  # This is used for CLs created by trusted robot accounts.
+  if bot_whitelist and author in bot_whitelist:
+    return []
+
   authors_path = input_api.os_path.join(
       input_api.PresubmitLocalPath(), 'AUTHORS')
   valid_authors = (
@@ -887,8 +892,8 @@ def CheckOwners(input_api, output_api, source_file_filter=None):
         output_fn('Missing %s for these files:\n    %s' %
                   (needed, '\n    '.join(sorted(missing_files))))]
     if input_api.tbr and affects_owners:
-      output_list.append(output_fn('Note that TBR does not apply to changes '
-                                   'that affect OWNERS files.'))
+      output_list.append(output_fn('The CL affects an OWNERS file, so TBR will '
+                                   'be ignored.'))
     if not input_api.is_committing:
       suggested_owners = owners_db.reviewers_for(missing_files, owner_email)
       owners_with_comments = []
@@ -1055,12 +1060,29 @@ def PanProjectChecks(input_api, output_api,
   return results
 
 
-def CheckPatchFormatted(input_api, output_api, check_js=False):
+def CheckPatchFormatted(input_api,
+                        output_api,
+                        check_js=False,
+                        check_python=None,
+                        result_factory=None):
+  result_factory = result_factory or output_api.PresubmitPromptWarning
   import git_cl
-  cmd = ['-C', input_api.change.RepositoryRoot(),
-         'cl', 'format', '--dry-run', '--presubmit']
+
+  display_args = []
   if check_js:
-    cmd.append('--js')
+    display_args.append('--js')
+
+  # Explicitly setting check_python to will enable/disable python formatting
+  # on all files. Leaving it as None will enable checking patch formatting
+  # on files that have a .style.yapf file in a parent directory.
+  if check_python is not None:
+    if check_python:
+      display_args.append('--python')
+    else:
+      display_args.append('--no-python')
+
+  cmd = ['-C', input_api.change.RepositoryRoot(),
+         'cl', 'format', '--dry-run', '--presubmit'] + display_args
   presubmit_subdir = input_api.os_path.relpath(
       input_api.PresubmitLocalPath(), input_api.change.RepositoryRoot())
   if presubmit_subdir.startswith('..') or presubmit_subdir == '.':
@@ -1076,10 +1098,11 @@ def CheckPatchFormatted(input_api, output_api, check_js=False):
       short_path = presubmit_subdir
     else:
       short_path = input_api.basename(input_api.change.RepositoryRoot())
-    return [output_api.PresubmitPromptWarning(
+    display_args.append(presubmit_subdir)
+    return [result_factory(
       'The %s directory requires source formatting. '
-      'Please run: git cl format %s%s' %
-      (short_path, '--js ' if check_js else '', presubmit_subdir))]
+      'Please run: git cl format %s' %
+      (short_path, ' '.join(display_args)))]
   # As this is just a warning, ignore all other errors if the user
   # happens to have a broken clang-format, doesn't use git, etc etc.
   return []
@@ -1164,6 +1187,29 @@ def CheckCIPDPackages(input_api, output_api, platforms, packages):
   for k, v in packages.iteritems():
     manifest.append('%s %s' % (k, v))
   return CheckCIPDManifest(input_api, output_api, content='\n'.join(manifest))
+
+
+def CheckCIPDClientDigests(input_api, output_api, client_version_file):
+  """Verifies that *.digests file was correctly regenerated.
+
+  <client_version_file>.digests file contains pinned hashes of the CIPD client.
+  It is consulted during CIPD client bootstrap and self-update. It should be
+  regenerated each time CIPD client version file changes.
+
+  Args:
+    client_version_file (str): Path to a text file with CIPD client version.
+  """
+  cmd = [
+    'cipd' if not input_api.is_windows else 'cipd.bat',
+    'selfupdate-roll', '-check', '-version-file', client_version_file,
+  ]
+  if input_api.verbose:
+    cmd += ['-log-level', 'debug']
+  return input_api.Command(
+      'Check CIPD client_version_file.digests file',
+      cmd,
+      {'shell': True} if input_api.is_windows else {},  # to resolve cipd.bat
+      output_api.PresubmitError)
 
 
 def CheckVPythonSpec(input_api, output_api, file_filter=None):

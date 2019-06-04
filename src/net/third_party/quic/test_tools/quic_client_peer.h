@@ -7,7 +7,7 @@
 
 #include "base/macros.h"
 
-namespace net {
+namespace quic {
 
 class QuicClient;
 class QuicPacketWriter;
@@ -16,16 +16,15 @@ namespace test {
 
 class QuicClientPeer {
  public:
+  QuicClientPeer() = delete;
+
   static bool CreateUDPSocketAndBind(QuicClient* client);
   static void CleanUpUDPSocket(QuicClient* client, int fd);
   static void SetClientPort(QuicClient* client, int port);
   static void SetWriter(QuicClient* client, QuicPacketWriter* writer);
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(QuicClientPeer);
 };
 
 }  // namespace test
-}  // namespace net
+}  // namespace quic
 
 #endif  // NET_THIRD_PARTY_QUIC_TEST_TOOLS_QUIC_CLIENT_PEER_H_

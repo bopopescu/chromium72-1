@@ -6,7 +6,9 @@
 #define THIRD_PARTY_BLINK_PUBLIC_WEB_WEB_REMOTE_FRAME_H_
 
 #include "third_party/blink/public/common/feature_policy/feature_policy.h"
+#include "third_party/blink/public/common/frame/frame_owner_element_type.h"
 #include "third_party/blink/public/common/frame/sandbox_flags.h"
+#include "third_party/blink/public/common/frame/user_activation_update_type.h"
 #include "third_party/blink/public/platform/web_content_security_policy.h"
 #include "third_party/blink/public/platform/web_insecure_request_policy.h"
 #include "third_party/blink/public/platform/web_scroll_types.h"
@@ -21,7 +23,7 @@ namespace blink {
 
 enum class WebTreeScopeType;
 class InterfaceRegistry;
-class WebFrameClient;
+class WebLocalFrameClient;
 class WebRemoteFrameClient;
 class WebString;
 class WebView;
@@ -50,22 +52,26 @@ class WebRemoteFrame : public WebFrame {
   virtual WebLocalFrame* CreateLocalChild(WebTreeScopeType,
                                           const WebString& name,
                                           WebSandboxFlags,
-                                          WebFrameClient*,
+                                          WebLocalFrameClient*,
                                           blink::InterfaceRegistry*,
                                           WebFrame* previous_sibling,
                                           const ParsedFeaturePolicy&,
                                           const WebFrameOwnerProperties&,
+                                          FrameOwnerElementType,
                                           WebFrame* opener) = 0;
 
   virtual WebRemoteFrame* CreateRemoteChild(WebTreeScopeType,
                                             const WebString& name,
                                             WebSandboxFlags,
                                             const ParsedFeaturePolicy&,
+                                            FrameOwnerElementType,
                                             WebRemoteFrameClient*,
                                             WebFrame* opener) = 0;
 
   // Layer for the in-process compositor.
-  virtual void SetCcLayer(cc::Layer*, bool prevent_contents_opaque_changes) = 0;
+  virtual void SetCcLayer(cc::Layer*,
+                          bool prevent_contents_opaque_changes,
+                          bool is_surface_layer) = 0;
 
   // Set security origin replicated from another process.
   virtual void SetReplicatedOrigin(
@@ -114,9 +120,9 @@ class WebRemoteFrame : public WebFrame {
   // owner.
   virtual void WillEnterFullscreen() = 0;
 
-  // Mark the document for the corresponding LocalFrame as having received a
-  // user gesture.
-  virtual void SetHasReceivedUserGesture() = 0;
+  // Update the user activation state in appropriate part of this frame's
+  // "local" frame tree (ancestors-only vs all-nodes).
+  virtual void UpdateUserActivationState(UserActivationUpdateType) = 0;
 
   virtual void SetHasReceivedUserGestureBeforeNavigation(bool value) = 0;
 
@@ -136,6 +142,12 @@ class WebRemoteFrame : public WebFrame {
   virtual void IntrinsicSizingInfoChanged(const WebIntrinsicSizingInfo&) = 0;
 
   virtual WebRect GetCompositingRect() = 0;
+
+  // When a cross-process navigation or loading fails, the browser notifies the
+  // parent process to render its own fallback content if any. This only occurs
+  // if the owner element is capable of rendering its own fallback (e.g.,
+  // <object>).
+  virtual void RenderFallbackContent() const = 0;
 
  protected:
   explicit WebRemoteFrame(WebTreeScopeType scope) : WebFrame(scope) {}

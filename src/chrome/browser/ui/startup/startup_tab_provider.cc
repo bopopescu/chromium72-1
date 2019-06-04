@@ -5,7 +5,6 @@
 #include "chrome/browser/ui/startup/startup_tab_provider.h"
 
 #include "base/metrics/histogram_macros.h"
-#include "build/build_config.h"
 #include "chrome/browser/first_run/first_run.h"
 #include "chrome/browser/profile_resetter/triggered_profile_resetter.h"
 #include "chrome/browser/profile_resetter/triggered_profile_resetter_factory.h"
@@ -26,7 +25,11 @@
 #include "base/win/windows_version.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/shell_integration.h"
-#endif
+#endif  // defined(OS_WIN)
+
+#if defined(OS_WIN) && defined(GOOGLE_CHROME_BUILD)
+#include "chrome/browser/ui/webui/welcome/nux_helper.h"
+#endif  // defined(OS_WIN) && defined(GOOGLE_CHROME_BUILD)
 
 namespace {
 
@@ -78,9 +81,17 @@ StartupTabs StartupTabProviderImpl::GetOnboardingTabs(Profile* profile) const {
   standard_params.is_supervised_user = profile->IsSupervised();
   standard_params.is_force_signin_enabled = signin_util::IsForceSigninEnabled();
 
+// TODO(scottchen): make win-10 also show NUX onboarding page when its enabled.
+
 #if defined(OS_WIN)
-  // Windows 10 has unique onboarding policies and content.
-  if (base::win::GetVersion() >= base::win::VERSION_WIN10) {
+  // Windows 10 has unique onboarding policies and content. However, if
+  // NuxOnboarding is enabled, the standard welcome URL should still
+  // be used.
+  bool is_navi_enabled = false;
+#if defined(GOOGLE_CHROME_BUILD)
+  is_navi_enabled = nux::IsNuxOnboardingEnabled(profile);
+#endif
+  if (base::win::GetVersion() >= base::win::VERSION_WIN10 && !is_navi_enabled) {
     Win10OnboardingTabsParams win10_params;
     PrefService* local_state = g_browser_process->local_state();
     const shell_integration::DefaultWebClientState web_client_state =
@@ -121,7 +132,7 @@ StartupTabs StartupTabProviderImpl::GetWelcomeBackTabs(
         break;
       }
       FALLTHROUGH;
-#endif   // defined(OS_WIN)
+#endif  // defined(OS_WIN)
     case StartupBrowserCreator::WelcomeBackPage::kWelcomeStandard:
       if (CanShowWelcome(profile->IsSyncAllowed(), profile->IsSupervised(),
                          signin_util::IsForceSigninEnabled())) {
@@ -238,7 +249,7 @@ StartupTabs StartupTabProviderImpl::GetWin10OnboardingTabsForState(
 
   return GetStandardOnboardingTabsForState(standard_params);
 }
-#endif
+#endif  // defined(OS_WIN)
 
 // static
 StartupTabs StartupTabProviderImpl::GetMasterPrefsTabsForState(

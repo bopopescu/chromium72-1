@@ -188,12 +188,8 @@ ProxyConfigServiceImpl::GetActiveProxyConfigDictionary(
   if (PrefProxyConfigTrackerImpl::PrefPrecedes(pref_state)) {
     const PrefService::Preference* const pref =
         profile_prefs->FindPreference(::proxy_config::prefs::kProxy);
-    const base::DictionaryValue* proxy_config_value;
-    bool value_exists = pref->GetValue()->GetAsDictionary(&proxy_config_value);
-    DCHECK(value_exists);
-
-    return std::make_unique<ProxyConfigDictionary>(
-        proxy_config_value->CreateDeepCopy());
+    DCHECK(pref->GetValue() && pref->GetValue()->is_dict());
+    return std::make_unique<ProxyConfigDictionary>(pref->GetValue()->Clone());
   }
 
   const NetworkState* network =
@@ -266,7 +262,9 @@ void ProxyConfigServiceImpl::DetermineEffectiveConfigFromDefaultNetwork() {
   if (effective_config.value().proxy_rules().type !=
       net::ProxyConfig::ProxyRules::Type::EMPTY) {
     net::ProxyConfig proxy_config = effective_config.value();
-    proxy_config.proxy_rules().bypass_rules.AddRuleToBypassLocal();
+    // TODO(https://crbug.com/902418): Is this rule still needed?
+    proxy_config.proxy_rules()
+        .bypass_rules.PrependRuleToBypassSimpleHostnames();
     effective_config = net::ProxyConfigWithAnnotation(
         proxy_config, effective_config.traffic_annotation());
   }

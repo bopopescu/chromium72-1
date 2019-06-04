@@ -5,7 +5,9 @@
 module blink.mojom;
 
 import "mojo/public/mojom/base/big_string.mojom";
+import "mojo/public/mojom/base/unguessable_token.mojom";
 import "ui/gfx/geometry/mojo/geometry.mojom";
+import "url/mojom/url.mojom";
 
 // Debugging interactions are defined in Remote Debugging Protocol.
 // See https://chromedevtools.github.io/devtools-protocol/ for more
@@ -38,8 +40,8 @@ interface DevToolsAgent {
   // e.g. requesting a pause. There is no ordering guarantee relative to
   // regular |session|.
   //
-  // If |reattach_state| is present, restores the state of the session to
-  // previously saved one (see DevToolsSessionHost). This is useful when
+  // If |reattach_session_state| is present, restores the state of the session
+  // to previously saved one (see DevToolsSessionHost). This is useful when
   // transferring a session from one agent to another while preserving the
   // state. For example, cross-process navigation in a frame creates a new
   // DevToolsAgent (in a different process), but we can preserve the state of
@@ -65,7 +67,7 @@ interface DevToolsAgent {
   AttachDevToolsSession(associated DevToolsSessionHost host,
                         associated DevToolsSession& session,
                         DevToolsSession& io_session,
-                        string? reattach_state);
+                        DevToolsSessionState? reattach_session_state);
 
   // Requests an element at specific position to be inspected in every
   // attached session (or the next attached one if none yet).
@@ -74,6 +76,28 @@ interface DevToolsAgent {
   // by itself, and has no effect unless a debugging session is
   // or will be attached.
   InspectElement(gfx.mojom.Point point);
+
+  // Instructs agent to start/stop reporting child workers to the host.
+  // |wait_for_debugger| controls whether the worker should be paused
+  // on start waiting for debugger to connect.
+  // See ChildWorkerCreated in DevToolsAgentHost for details.
+  ReportChildWorkers(bool report, bool wait_for_debugger);
+};
+
+// This interface is implemented in browser and is notified by DevToolsAgent
+// when new child worker is available for future debugging.
+interface DevToolsAgentHost {
+  // Informs the host about new child worker and gives its DevToolsAgent
+  // for debugging.
+  // |devtools_worker_token| is a unique token identifying this worker.
+  // |waiting_for_debugger| is true if worker was paused on startup and
+  // should be resumed by debugger to actually start.
+  ChildWorkerCreated(
+      DevToolsAgent worker_devtools_agent,
+      DevToolsAgentHost& worker_devtools_agent_host,
+      url.mojom.Url url,
+      mojo_base.mojom.UnguessableToken devtools_worker_token,
+      bool waiting_for_debugger);
 };
 
 // Represents an attached session which exposes remote debugging protocol.
@@ -96,13 +120,24 @@ interface DevToolsSession {
 interface DevToolsSessionHost {
   // Dispatches protocol command response to a remote debugging client.
   // |call_id| is a command id as defined in protocol.
-  // |state| is a state for future reattach (see DevToolsAgent),
-  // may be missing if the state did not change since last time.
+  // |updates| are the session state deltas for future reattach (see
+  // DevToolsAgent), may be missing if the state did not change since
+  // last time.
   DispatchProtocolResponse(mojo_base.mojom.BigString message,
                            int32 call_id,
-                           string? state);
+                           DevToolsSessionState? updates);
 
   // Dispatches protocol notification to a remote debugging client.
   DispatchProtocolNotification(mojo_base.mojom.BigString message,
-                               string? state);
+                               DevToolsSessionState? updates);
+};
+
+// The session state is a mapping from keys to either values or missing
+// values. Missing values are only used when updates are sent; that's
+// in DispatchProtocolResponse and DispatchProtocolNotification. The
+// DevToolsSession will then interpret these missing values by deleting
+// the respective key when its applying the updates in
+// DevToolsSession::ApplySessionStateUpdates.
+struct DevToolsSessionState {
+  map<string, string?> entries;
 };

@@ -53,8 +53,10 @@ class NET_EXPORT NetworkErrorLoggingService {
 
     GURL uri;
     GURL referrer;
+    std::string user_agent;
     IPAddress server_ip;
     std::string protocol;
+    std::string method;
     int status_code;
     base::TimeDelta elapsed_time;
     Error type;
@@ -77,18 +79,49 @@ class NET_EXPORT NetworkErrorLoggingService {
 
   // Keys for data included in report bodies. Exposed for tests.
 
-  static const char kUriKey[];
   static const char kReferrerKey[];
   static const char kSamplingFractionKey[];
   static const char kServerIpKey[];
   static const char kProtocolKey[];
+  static const char kMethodKey[];
   static const char kStatusCodeKey[];
   static const char kElapsedTimeKey[];
+  static const char kPhaseKey[];
   static const char kTypeKey[];
+
+  // Histograms.  These are mainly used in test cases to verify that interesting
+  // events occurred.
+
+  static const char kHeaderOutcomeHistogram[];
+
+  enum class HeaderOutcome {
+    DISCARDED_NO_NETWORK_ERROR_LOGGING_SERVICE = 0,
+    DISCARDED_INVALID_SSL_INFO = 1,
+    DISCARDED_CERT_STATUS_ERROR = 2,
+
+    DISCARDED_INSECURE_ORIGIN = 3,
+
+    DISCARDED_JSON_TOO_BIG = 4,
+    DISCARDED_JSON_INVALID = 5,
+    DISCARDED_NOT_DICTIONARY = 6,
+    DISCARDED_TTL_MISSING = 7,
+    DISCARDED_TTL_NOT_INTEGER = 8,
+    DISCARDED_TTL_NEGATIVE = 9,
+    DISCARDED_REPORT_TO_MISSING = 10,
+    DISCARDED_REPORT_TO_NOT_STRING = 11,
+
+    REMOVED = 12,
+    SET = 13,
+
+    DISCARDED_MISSING_REMOTE_ENDPOINT = 14,
+
+    MAX
+  };
 
   static void RecordHeaderDiscardedForNoNetworkErrorLoggingService();
   static void RecordHeaderDiscardedForInvalidSSLInfo();
   static void RecordHeaderDiscardedForCertStatusError();
+  static void RecordHeaderDiscardedForMissingRemoteEndpoint();
 
   static void RecordRequestDiscardedForNoNetworkErrorLoggingService();
 
@@ -97,16 +130,24 @@ class NET_EXPORT NetworkErrorLoggingService {
 
   virtual ~NetworkErrorLoggingService();
 
-  // Ingests a "NEL:" header received from |orogin| with normalized value
-  // |value|. May or may not actually set a policy for that origin.
+  // Ingests a "NEL:" header received for |origin| from |received_ip_address|
+  // with normalized value |value|. May or may not actually set a policy for
+  // that origin.
   virtual void OnHeader(const url::Origin& origin,
+                        const IPAddress& received_ip_address,
                         const std::string& value) = 0;
 
   // Considers queueing a network error report for the request described in
-  // |details|. Note that Network Error Logging can report a fraction of
-  // successful requests as well (to calculate error rates), so this should be
-  // called on *all* requests.
-  virtual void OnRequest(const RequestDetails& details) = 0;
+  // |details|.  The contents of |details| might be changed, depending on the
+  // NEL policy associated with the request's origin.  Note that |details| is
+  // passed by value, so that it doesn't need to be copied in this function if
+  // it needs to be changed.  Consider using std::move to pass this parameter if
+  // the caller doesn't need to access it after this method call.
+  //
+  // Note that Network Error Logging can report a fraction of successful
+  // requests as well (to calculate error rates), so this should be called on
+  // *all* requests.
+  virtual void OnRequest(RequestDetails details) = 0;
 
   // Removes browsing data (origin policies) associated with any origin for
   // which |origin_filter| returns true.

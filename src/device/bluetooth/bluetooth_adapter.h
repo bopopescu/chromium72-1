@@ -89,6 +89,7 @@ class DEVICE_BLUETOOTH_EXPORT BluetoothAdapter
     // |device| changes:
     //  * GetAddress()
     //  * GetAppearance()
+    //  * GetName() (Chrome OS and Windows only)
     //  * GetBluetoothClass()
     //  * GetInquiryRSSI()
     //  * GetInquiryTxPower()
@@ -138,6 +139,26 @@ class DEVICE_BLUETOOTH_EXPORT BluetoothAdapter
     virtual void DeviceMTUChanged(BluetoothAdapter* adapter,
                                   BluetoothDevice* device,
                                   uint16_t mtu) {}
+
+    // This function is implemented for ChromeOS only.
+    // Called when advertisement is received from |device|. |eir| is the
+    // extended inquiry response specified in Bluetooth Core Spec, Vol 3,
+    // Part C, Section 11.
+    //
+    // Override this function to observe LE advertisements. Whenever |rssi| of
+    // |device| changes, this function is called with the latest |eir| from
+    // |device|. This function is never called on classic |device|.
+    virtual void DeviceAdvertisementReceived(BluetoothAdapter* adapter,
+                                             BluetoothDevice* device,
+                                             int16_t rssi,
+                                             const std::vector<uint8_t>& eir) {}
+
+    // This function is implemented for ChromeOS only.
+    // Called when |device|'s state has changed from connected to not connected
+    // or vice versa.
+    virtual void DeviceConnectedStateChanged(BluetoothAdapter* adapter,
+                                             BluetoothDevice* device,
+                                             bool is_now_connected) {}
 #endif
 
     // Called when the device |device| is removed from the adapter |adapter|,
@@ -343,6 +364,11 @@ class DEVICE_BLUETOOTH_EXPORT BluetoothAdapter
   // is only considered present if the address has been obtained.
   virtual bool IsPresent() const = 0;
 
+  // Indicates whether the adapter radio can be powered. Defaults to
+  // IsPresent(). Currently only overridden on Windows, where the adapter can be
+  // present, but we might fail to get access to the underlying radio.
+  virtual bool CanPower() const;
+
   // Indicates whether the adapter radio is powered.
   virtual bool IsPowered() const = 0;
 
@@ -354,10 +380,14 @@ class DEVICE_BLUETOOTH_EXPORT BluetoothAdapter
   // callback based API. It will store pending callbacks in
   // |set_powered_callbacks_| and invoke SetPoweredImpl(bool) which these
   // platforms need to implement. Pending callbacks are only run when
-  // DidChangePoweredState() is invoked.
+  // RunPendingPowerCallbacks() is invoked.
   //
   // Platforms that natively support a callback based API (e.g. BlueZ and Win)
   // should override this method and provide their own implementation instead.
+  //
+  // Due to an issue with non-native APIs on Windows 10, both IsPowered() and
+  // SetPowered() don't work correctly when run from a x86 Chrome on a x64 CPU.
+  // See https://github.com/Microsoft/cppwinrt/issues/47 for more details.
   virtual void SetPowered(bool powered,
                           const base::Closure& callback,
                           const ErrorCallback& error_callback);
@@ -518,6 +548,10 @@ class DEVICE_BLUETOOTH_EXPORT BluetoothAdapter
       const AdvertisementErrorCallback& error_callback) = 0;
 #endif
 
+  // Returns the list of pending advertisements that are not registered yet.
+  virtual std::vector<BluetoothAdvertisement*>
+  GetPendingAdvertisementsForTesting() const;
+
   // Returns the local GATT services associated with this adapter with the
   // given identifier. Returns NULL if the service doesn't exist.
   virtual BluetoothLocalGattService* GetGattService(
@@ -586,9 +620,9 @@ class DEVICE_BLUETOOTH_EXPORT BluetoothAdapter
   // pending SetPowered() callbacks need to be stored explicitly.
   virtual bool SetPoweredImpl(bool powered) = 0;
 
-  // Called by macOS and Android once the specific powered state events are
-  // received. Clears out pending callbacks.
-  void DidChangePoweredState();
+  // Called by macOS, Android and WinRT once the specific powered state events
+  // are received or an error occurred. Clears out pending callbacks.
+  void RunPendingPowerCallbacks();
 
   // Internal methods for initiating and terminating device discovery sessions.
   // An implementation of BluetoothAdapter keeps an internal reference count to
@@ -680,7 +714,7 @@ class DEVICE_BLUETOOTH_EXPORT BluetoothAdapter
   scoped_refptr<base::SingleThreadTaskRunner> ui_task_runner_;
 
   // Observers of BluetoothAdapter, notified from implementation subclasses.
-  base::ObserverList<device::BluetoothAdapter::Observer> observers_;
+  base::ObserverList<device::BluetoothAdapter::Observer>::Unchecked observers_;
 
   // Devices paired with, connected to, discovered by, or visible to the
   // adapter. The key is the Bluetooth address of the device and the value is

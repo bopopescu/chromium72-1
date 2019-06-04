@@ -131,6 +131,7 @@ void PrerenderURLLoaderThrottle::WillStartRequest(
 #endif  // OS_ANDROID
 
   if (mode_ == PREFETCH_ONLY) {
+    request->headers.SetHeader(kPurposeHeaderName, kPurposeHeaderValue);
     detached_timer_.Start(FROM_HERE,
                           base::TimeDelta::FromMilliseconds(
                               content::kDefaultDetachableCancelDelayMs),
@@ -139,9 +140,11 @@ void PrerenderURLLoaderThrottle::WillStartRequest(
 }
 
 void PrerenderURLLoaderThrottle::WillRedirectRequest(
-    const net::RedirectInfo& redirect_info,
+    net::RedirectInfo* redirect_info,
     const network::ResourceResponseHead& response_head,
-    bool* defer) {
+    bool* defer,
+    std::vector<std::string>* /* to_be_removed_headers */,
+    net::HttpRequestHeaders* /* modified_headers */) {
   redirect_count_++;
   if (mode_ == PREFETCH_ONLY) {
     RecordPrefetchResponseReceived(
@@ -153,12 +156,12 @@ void PrerenderURLLoaderThrottle::WillRedirectRequest(
   response_head.headers->GetNormalizedHeader(
       kFollowOnlyWhenPrerenderShown, &follow_only_when_prerender_shown_header);
   // Abort any prerenders with requests which redirect to invalid schemes.
-  if (!DoesURLHaveValidScheme(redirect_info.new_url)) {
+  if (!DoesURLHaveValidScheme(redirect_info->new_url)) {
     delegate_->CancelWithError(net::ERR_ABORTED);
     canceler_getter_task_runner_->PostTask(
         FROM_HERE,
         base::BindOnce(CancelPrerenderForUnsupportedScheme,
-                       std::move(canceler_getter_), redirect_info.new_url));
+                       std::move(canceler_getter_), redirect_info->new_url));
   } else if (follow_only_when_prerender_shown_header == "1" &&
              resource_type_ != content::RESOURCE_TYPE_MAIN_FRAME) {
     // Only defer redirects with the Follow-Only-When-Prerender-Shown
@@ -180,7 +183,7 @@ void PrerenderURLLoaderThrottle::WillRedirectRequest(
 
 void PrerenderURLLoaderThrottle::WillProcessResponse(
     const GURL& response_url,
-    const network::ResourceResponseHead& response_head,
+    network::ResourceResponseHead* response_head,
     bool* defer) {
   if (mode_ != PREFETCH_ONLY)
     return;
@@ -188,7 +191,7 @@ void PrerenderURLLoaderThrottle::WillProcessResponse(
   bool is_main_resource = content::IsResourceTypeFrame(resource_type_);
   RecordPrefetchResponseReceived(histogram_prefix_, is_main_resource,
                                  true /* is_redirect */,
-                                 IsNoStoreResponse(response_head));
+                                 IsNoStoreResponse(*response_head));
   RecordPrefetchRedirectCount(histogram_prefix_, is_main_resource,
                               redirect_count_);
 }

@@ -118,7 +118,7 @@ void HostPairingScreenHandler::OnContextChanged(
     context_cache_.ApplyChanges(diff, NULL);
     return;
   }
-  CallJS(kMethodContextChanged, diff);
+  CallJSWithPrefix(kMethodContextChanged, diff);
 }
 
 std::string HostPairingScreenHandler::GetErrorStringFromAuthError(
@@ -168,6 +168,9 @@ std::string HostPairingScreenHandler::GetErrorStringFromEnrollmentError(
         case policy::DM_STATUS_SERVICE_DOMAIN_MISMATCH:
           return l10n_util::GetStringUTF8(
               IDS_ENTERPRISE_ENROLLMENT_DOMAIN_MISMATCH_ERROR);
+        case policy::DM_STATUS_SERVICE_CONSUMER_ACCOUNT_WITH_PACKAGED_LICENSE:
+          return l10n_util::GetStringUTF8(
+              IDS_ENTERPRISE_ENROLLMENT_CONSUMER_ACCOUNT_WITH_PACKAGED_LICENSE);
         default:
           return l10n_util::GetStringFUTF8(
               IDS_ENTERPRISE_ENROLLMENT_STATUS_REGISTRATION_FAILED,

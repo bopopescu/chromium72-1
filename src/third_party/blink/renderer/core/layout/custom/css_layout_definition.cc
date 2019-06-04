@@ -8,6 +8,7 @@
 #include "third_party/blink/renderer/bindings/core/v8/idl_types.h"
 #include "third_party/blink/renderer/bindings/core/v8/native_value_traits_impl.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_iterator.h"
+#include "third_party/blink/renderer/bindings/core/v8/serialization/serialized_script_value.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_binding_for_core.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_fragment_result_options.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_layout_fragment_request.h"
@@ -23,6 +24,24 @@
 #include "third_party/blink/renderer/platform/bindings/v8_object_constructor.h"
 
 namespace blink {
+
+namespace {
+
+bool IsLogicalHeightDefinite(const LayoutCustom& layout_custom) {
+  if (layout_custom.HasOverrideLogicalHeight())
+    return true;
+
+  // In quirks mode the document and body element stretch to the viewport.
+  if (layout_custom.StretchesToViewport())
+    return true;
+
+  if (layout_custom.HasDefiniteLogicalHeight())
+    return true;
+
+  return false;
+}
+
+}  // namespace
 
 CSSLayoutDefinition::CSSLayoutDefinition(
     ScriptState* script_state,
@@ -47,13 +66,14 @@ CSSLayoutDefinition::CSSLayoutDefinition(
 CSSLayoutDefinition::~CSSLayoutDefinition() = default;
 
 CSSLayoutDefinition::Instance::Instance(CSSLayoutDefinition* definition,
-                                        v8::Local<v8::Object> instance)
+                                        v8::Local<v8::Value> instance)
     : definition_(definition),
       instance_(definition->script_state_->GetIsolate(), instance) {}
 
 bool CSSLayoutDefinition::Instance::Layout(
     const LayoutCustom& layout_custom,
-    FragmentResultOptions* fragment_result_options) {
+    FragmentResultOptions* fragment_result_options,
+    scoped_refptr<SerializedScriptValue>* fragment_result_data) {
   ScriptState* script_state = definition_->GetScriptState();
   ExecutionContext* execution_context = ExecutionContext::From(script_state);
 
@@ -64,7 +84,7 @@ bool CSSLayoutDefinition::Instance::Layout(
   ScriptState::Scope scope(script_state);
 
   v8::Isolate* isolate = script_state->GetIsolate();
-  v8::Local<v8::Object> instance = instance_.NewLocal(isolate);
+  v8::Local<v8::Value> instance = instance_.NewLocal(isolate);
   v8::Local<v8::Context> context = script_state->GetContext();
 
   v8::Local<v8::Function> layout = definition_->layout_.NewLocal(isolate);
@@ -92,13 +112,22 @@ bool CSSLayoutDefinition::Instance::Layout(
       return false;
   }
 
-  CustomLayoutConstraints* constraints =
-      new CustomLayoutConstraints(layout_custom.LogicalWidth());
+  LayoutUnit fixed_block_size(-1);
+  if (IsLogicalHeightDefinite(layout_custom)) {
+    LayoutBox::LogicalExtentComputedValues computed_values;
+    layout_custom.ComputeLogicalHeight(LayoutUnit(-1), LayoutUnit(),
+                                       computed_values);
+    fixed_block_size = computed_values.extent_;
+  }
+
+  CustomLayoutConstraints* constraints = new CustomLayoutConstraints(
+      layout_custom.LogicalWidth(), fixed_block_size,
+      layout_custom.GetConstraintData(), isolate);
 
   // TODO(ikilpatrick): Instead of creating a new style_map each time here,
   // store on LayoutCustom, and update when the style changes.
   StylePropertyMapReadOnly* style_map =
-      new PrepopulatedComputedStylePropertyMap(
+      MakeGarbageCollected<PrepopulatedComputedStylePropertyMap>(
           layout_custom.GetDocument(), layout_custom.StyleRef(),
           layout_custom.GetNode(), definition_->native_invalidation_properties_,
           definition_->custom_invalidation_properties_);
@@ -138,11 +167,11 @@ bool CSSLayoutDefinition::Instance::Layout(
     v8::Local<v8::Value> value = iterator.GetValue().ToLocalChecked();
 
     // Process a single fragment request.
-    if (V8LayoutFragmentRequest::hasInstance(value, isolate)) {
+    if (V8LayoutFragmentRequest::HasInstance(value, isolate)) {
       CustomLayoutFragmentRequest* fragment_request =
           V8LayoutFragmentRequest::ToImpl(v8::Local<v8::Object>::Cast(value));
 
-      CustomLayoutFragment* fragment = fragment_request->PerformLayout();
+      CustomLayoutFragment* fragment = fragment_request->PerformLayout(isolate);
       if (!fragment) {
         execution_context->AddConsoleMessage(ConsoleMessage::Create(
             kJSMessageSource, kInfoMessageLevel,
@@ -168,7 +197,7 @@ bool CSSLayoutDefinition::Instance::Layout(
       v8::Local<v8::Array> results = v8::Array::New(isolate, requests.size());
       uint32_t index = 0;
       for (const auto& request : requests) {
-        CustomLayoutFragment* fragment = request->PerformLayout();
+        CustomLayoutFragment* fragment = request->PerformLayout(isolate);
 
         if (!fragment) {
           execution_context->AddConsoleMessage(ConsoleMessage::Create(
@@ -212,7 +241,7 @@ bool CSSLayoutDefinition::Instance::Layout(
 
   // Attempt to convert the result.
   V8FragmentResultOptions::ToImpl(isolate, result_value,
-                                  *fragment_result_options, exception_state);
+                                  fragment_result_options, exception_state);
 
   if (exception_state.HadException()) {
     V8ScriptRunner::ReportException(isolate, exception_state.GetException());
@@ -220,6 +249,28 @@ bool CSSLayoutDefinition::Instance::Layout(
     execution_context->AddConsoleMessage(
         ConsoleMessage::Create(kJSMessageSource, kInfoMessageLevel,
                                "Unable to parse the layout function "
+                               "result, falling back to block layout."));
+    return false;
+  }
+
+  // Serialize any extra data provided by the web-developer to potentially pass
+  // up to the parent custom layout.
+  if (fragment_result_options->hasData()) {
+    // We serialize "kForStorage" so that SharedArrayBuffers can't be shared
+    // between LayoutWorkletGlobalScopes.
+    *fragment_result_data = SerializedScriptValue::Serialize(
+        isolate, fragment_result_options->data().V8Value(),
+        SerializedScriptValue::SerializeOptions(
+            SerializedScriptValue::kForStorage),
+        exception_state);
+  }
+
+  if (exception_state.HadException()) {
+    V8ScriptRunner::ReportException(isolate, exception_state.GetException());
+    exception_state.ClearException();
+    execution_context->AddConsoleMessage(
+        ConsoleMessage::Create(kJSMessageSource, kInfoMessageLevel,
+                               "Unable to serialize the data provided in the "
                                "result, falling back to block layout."));
     return false;
   }
@@ -259,10 +310,11 @@ CSSLayoutDefinition::Instance* CSSLayoutDefinition::CreateInstance() {
   v8::Local<v8::Function> constructor = constructor_.NewLocal(isolate);
   DCHECK(!IsUndefinedOrNull(constructor));
 
-  v8::Local<v8::Object> layout_instance;
-  if (V8ObjectConstructor::NewInstance(isolate, constructor)
+  v8::Local<v8::Value> layout_instance;
+  if (V8ScriptRunner::CallAsConstructor(
+          isolate, constructor, ExecutionContext::From(script_state_), 0, {})
           .ToLocal(&layout_instance)) {
-    instance = new Instance(this, layout_instance);
+    instance = MakeGarbageCollected<Instance>(this, layout_instance);
   } else {
     constructor_has_failed_ = true;
   }
@@ -274,10 +326,11 @@ void CSSLayoutDefinition::Instance::Trace(blink::Visitor* visitor) {
   visitor->Trace(definition_);
 }
 
-void CSSLayoutDefinition::TraceWrappers(ScriptWrappableVisitor* visitor) const {
-  visitor->TraceWrappers(constructor_.Cast<v8::Value>());
-  visitor->TraceWrappers(intrinsic_sizes_.Cast<v8::Value>());
-  visitor->TraceWrappers(layout_.Cast<v8::Value>());
+void CSSLayoutDefinition::Trace(Visitor* visitor) {
+  visitor->Trace(constructor_.Cast<v8::Value>());
+  visitor->Trace(intrinsic_sizes_.Cast<v8::Value>());
+  visitor->Trace(layout_.Cast<v8::Value>());
+  visitor->Trace(script_state_);
 }
 
 }  // namespace blink

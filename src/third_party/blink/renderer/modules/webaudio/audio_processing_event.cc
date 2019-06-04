@@ -24,6 +24,8 @@
  */
 
 #include "third_party/blink/renderer/modules/webaudio/audio_processing_event.h"
+
+#include "third_party/blink/renderer/core/event_type_names.h"
 #include "third_party/blink/renderer/modules/webaudio/audio_processing_event_init.h"
 
 namespace blink {
@@ -40,7 +42,7 @@ AudioProcessingEvent* AudioProcessingEvent::Create(AudioBuffer* input_buffer,
 
 AudioProcessingEvent* AudioProcessingEvent::Create(
     const AtomicString& type,
-    const AudioProcessingEventInit& initializer) {
+    const AudioProcessingEventInit* initializer) {
   return new AudioProcessingEvent(type, initializer);
 }
 
@@ -49,24 +51,24 @@ AudioProcessingEvent::AudioProcessingEvent() = default;
 AudioProcessingEvent::AudioProcessingEvent(AudioBuffer* input_buffer,
                                            AudioBuffer* output_buffer,
                                            double playback_time)
-    : Event(EventTypeNames::audioprocess, Bubbles::kYes, Cancelable::kNo),
+    : Event(event_type_names::kAudioprocess, Bubbles::kYes, Cancelable::kNo),
       input_buffer_(input_buffer),
       output_buffer_(output_buffer),
       playback_time_(playback_time) {}
 
 AudioProcessingEvent::AudioProcessingEvent(
     const AtomicString& type,
-    const AudioProcessingEventInit& initializer)
+    const AudioProcessingEventInit* initializer)
     : Event(type, initializer) {
-  input_buffer_ = initializer.inputBuffer();
-  output_buffer_ = initializer.outputBuffer();
-  playback_time_ = initializer.playbackTime();
+  input_buffer_ = initializer->inputBuffer();
+  output_buffer_ = initializer->outputBuffer();
+  playback_time_ = initializer->playbackTime();
 }
 
 AudioProcessingEvent::~AudioProcessingEvent() = default;
 
 const AtomicString& AudioProcessingEvent::InterfaceName() const {
-  return EventNames::AudioProcessingEvent;
+  return event_interface_names::kAudioProcessingEvent;
 }
 
 void AudioProcessingEvent::Trace(blink::Visitor* visitor) {

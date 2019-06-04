@@ -10,16 +10,16 @@
 #include "third_party/blink/renderer/core/mojo/mojo_handle_signals.h"
 #include "third_party/blink/renderer/platform/bindings/script_state.h"
 #include "third_party/blink/renderer/platform/cross_thread_functional.h"
-#include "third_party/blink/renderer/platform/web_task_runner.h"
+#include "third_party/blink/renderer/platform/scheduler/public/post_cross_thread_task.h"
 
 namespace blink {
 
 // static
 MojoWatcher* MojoWatcher::Create(mojo::Handle handle,
-                                 const MojoHandleSignals& signals_dict,
+                                 const MojoHandleSignals* signals_dict,
                                  V8MojoWatchCallback* callback,
                                  ExecutionContext* context) {
-  MojoWatcher* watcher = new MojoWatcher(context, callback);
+  MojoWatcher* watcher = MakeGarbageCollected<MojoWatcher>(context, callback);
   MojoResult result = watcher->Watch(handle, signals_dict);
   // TODO(alokp): Consider raising an exception.
   // Current clients expect to recieve the initial error returned by MojoWatch
@@ -56,11 +56,6 @@ void MojoWatcher::Trace(blink::Visitor* visitor) {
   ContextLifecycleObserver::Trace(visitor);
 }
 
-void MojoWatcher::TraceWrappers(ScriptWrappableVisitor* visitor) const {
-  ScriptWrappable::TraceWrappers(visitor);
-  visitor->TraceWrappers(callback_);
-}
-
 bool MojoWatcher::HasPendingActivity() const {
   return handle_.is_valid();
 }
@@ -76,13 +71,13 @@ MojoWatcher::MojoWatcher(ExecutionContext* context,
       callback_(callback) {}
 
 MojoResult MojoWatcher::Watch(mojo::Handle handle,
-                              const MojoHandleSignals& signals_dict) {
+                              const MojoHandleSignals* signals_dict) {
   ::MojoHandleSignals signals = MOJO_HANDLE_SIGNAL_NONE;
-  if (signals_dict.readable())
+  if (signals_dict->readable())
     signals |= MOJO_HANDLE_SIGNAL_READABLE;
-  if (signals_dict.writable())
+  if (signals_dict->writable())
     signals |= MOJO_HANDLE_SIGNAL_WRITABLE;
-  if (signals_dict.peerClosed())
+  if (signals_dict->peerClosed())
     signals |= MOJO_HANDLE_SIGNAL_PEER_CLOSED;
 
   MojoResult result =
@@ -123,20 +118,18 @@ MojoResult MojoWatcher::Arm(MojoResult* ready_result) {
   if (!handle_.is_valid())
     return MOJO_RESULT_OK;
 
-  uint32_t num_ready_contexts = 1;
-  uintptr_t ready_context;
-  MojoResult local_ready_result;
-  MojoHandleSignalsState ready_signals;
-  MojoResult result =
-      MojoArmTrap(trap_handle_.get().value(), nullptr, &num_ready_contexts,
-                  &ready_context, &local_ready_result, &ready_signals);
+  uint32_t num_blocking_events = 1;
+  MojoTrapEvent blocking_event = {sizeof(blocking_event)};
+  MojoResult result = MojoArmTrap(trap_handle_.get().value(), nullptr,
+                                  &num_blocking_events, &blocking_event);
   if (result == MOJO_RESULT_OK)
     return MOJO_RESULT_OK;
 
   if (result == MOJO_RESULT_FAILED_PRECONDITION) {
-    DCHECK_EQ(1u, num_ready_contexts);
-    DCHECK_EQ(reinterpret_cast<uintptr_t>(this), ready_context);
-    *ready_result = local_ready_result;
+    DCHECK_EQ(1u, num_blocking_events);
+    DCHECK_EQ(reinterpret_cast<uintptr_t>(this),
+              blocking_event.trigger_context);
+    *ready_result = blocking_event.result;
     return result;
   }
 

@@ -5,7 +5,8 @@
 #include "device/fido/fido_parsing_utils.h"
 
 #include "base/logging.h"
-#include "crypto/sha2.h"
+#include "base/numerics/safe_conversions.h"
+#include "base/strings/stringprintf.h"
 
 namespace device {
 namespace fido_parsing_utils {
@@ -20,8 +21,6 @@ constexpr bool AreSpansDisjoint(base::span<const uint8_t> lhs,
 
 }  // namespace
 
-const uint32_t kU2fResponseKeyHandleLengthPos = 66u;
-const uint32_t kU2fResponseKeyHandleStartPos = 67u;
 const char kEs256[] = "ES256";
 
 std::vector<uint8_t> Materialize(base::span<const uint8_t> span) {
@@ -80,10 +79,37 @@ std::vector<base::span<const uint8_t>> SplitSpan(base::span<const uint8_t> span,
   return chunks;
 }
 
-std::vector<uint8_t> CreateSHA256Hash(base::StringPiece data) {
-  std::vector<uint8_t> hashed_data(crypto::kSHA256Length);
+std::array<uint8_t, crypto::kSHA256Length> CreateSHA256Hash(
+    base::StringPiece data) {
+  std::array<uint8_t, crypto::kSHA256Length> hashed_data;
   crypto::SHA256HashString(data, hashed_data.data(), hashed_data.size());
   return hashed_data;
+}
+
+base::StringPiece ConvertToStringPiece(base::span<const uint8_t> data) {
+  return {reinterpret_cast<const char*>(data.data()), data.size()};
+}
+
+std::string ConvertBytesToUuid(base::span<const uint8_t, 16> bytes) {
+  uint64_t most_significant_bytes = 0;
+  for (size_t i = 0; i < sizeof(uint64_t); i++) {
+    most_significant_bytes |= base::strict_cast<uint64_t>(bytes[i])
+                              << 8 * (7 - i);
+  }
+
+  uint64_t least_significant_bytes = 0;
+  for (size_t i = 0; i < sizeof(uint64_t); i++) {
+    least_significant_bytes |= base::strict_cast<uint64_t>(bytes[i + 8])
+                               << 8 * (7 - i);
+  }
+
+  return base::StringPrintf(
+      "%08x-%04x-%04x-%04x-%012llx",
+      static_cast<unsigned int>(most_significant_bytes >> 32),
+      static_cast<unsigned int>((most_significant_bytes >> 16) & 0x0000ffff),
+      static_cast<unsigned int>(most_significant_bytes & 0x0000ffff),
+      static_cast<unsigned int>(least_significant_bytes >> 48),
+      least_significant_bytes & 0x0000ffff'ffffffffULL);
 }
 
 }  // namespace fido_parsing_utils

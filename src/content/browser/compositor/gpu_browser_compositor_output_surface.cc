@@ -18,13 +18,13 @@
 #include "gpu/command_buffer/common/swap_buffers_complete_params.h"
 #include "gpu/command_buffer/common/swap_buffers_flags.h"
 #include "gpu/ipc/client/command_buffer_proxy_impl.h"
-#include "services/ui/public/cpp/gpu/context_provider_command_buffer.h"
+#include "services/ws/public/cpp/gpu/context_provider_command_buffer.h"
 #include "ui/gl/gl_utils.h"
 
 namespace content {
 
 GpuBrowserCompositorOutputSurface::GpuBrowserCompositorOutputSurface(
-    scoped_refptr<ui::ContextProviderCommandBuffer> context,
+    scoped_refptr<ws::ContextProviderCommandBuffer> context,
     const UpdateVSyncParametersCallback& update_vsync_parameters_callback,
     std::unique_ptr<viz::CompositorOverlayCandidateValidator>
         overlay_candidate_validator)
@@ -38,18 +38,15 @@ GpuBrowserCompositorOutputSurface::GpuBrowserCompositorOutputSurface(
   }
   capabilities_.supports_stencil =
       context_provider()->ContextCapabilities().num_stencil_bits > 0;
+  // Since one of the buffers is used by the surface for presentation, there can
+  // be at most |num_surface_buffers - 1| pending buffers that the compositor
+  // can use.
+  capabilities_.max_frames_pending =
+      context_provider()->ContextCapabilities().num_surface_buffers - 1;
 }
 
 GpuBrowserCompositorOutputSurface::~GpuBrowserCompositorOutputSurface() =
     default;
-
-void GpuBrowserCompositorOutputSurface::SetNeedsVSync(bool needs_vsync) {
-#if defined(OS_WIN)
-  GetCommandBufferProxy()->SetNeedsVSync(needs_vsync);
-#else
-  NOTREACHED();
-#endif  // defined(OS_WIN)
-}
 
 void GpuBrowserCompositorOutputSurface::OnGpuSwapBuffersCompleted(
     std::vector<ui::LatencyInfo> latency_info,
@@ -60,7 +57,6 @@ void GpuBrowserCompositorOutputSurface::OnGpuSwapBuffersCompleted(
     client_->DidReceiveTextureInUseResponses(params.texture_in_use_responses);
   client_->DidReceiveSwapBuffersAck();
   UpdateLatencyInfoOnSwap(params.swap_response, &latency_info);
-  RenderWidgetHostImpl::OnGpuSwapBuffersCompleted(latency_info);
   latency_tracker_.OnGpuSwapBuffersCompleted(latency_info);
 }
 
@@ -110,9 +106,6 @@ void GpuBrowserCompositorOutputSurface::Reshape(
 
 void GpuBrowserCompositorOutputSurface::SwapBuffers(
     viz::OutputSurfaceFrame frame) {
-  if (LatencyInfoHasSnapshotRequest(frame.latency_info))
-    GetCommandBufferProxy()->SetSnapshotRequested();
-
   gfx::Size surface_size = frame.size;
   if (reflector_) {
     if (frame.sub_buffer_rect && reflector_texture_defined_) {
@@ -154,7 +147,7 @@ void GpuBrowserCompositorOutputSurface::SwapBuffers(
 }
 
 uint32_t GpuBrowserCompositorOutputSurface::GetFramebufferCopyTextureFormat() {
-  auto* gl = static_cast<ui::ContextProviderCommandBuffer*>(context_provider());
+  auto* gl = static_cast<ws::ContextProviderCommandBuffer*>(context_provider());
   return gl->GetCopyTextureInternalFormat();
 }
 
@@ -199,8 +192,8 @@ void GpuBrowserCompositorOutputSurface::OnUpdateVSyncParameters(
 
 gpu::CommandBufferProxyImpl*
 GpuBrowserCompositorOutputSurface::GetCommandBufferProxy() {
-  ui::ContextProviderCommandBuffer* provider_command_buffer =
-      static_cast<ui::ContextProviderCommandBuffer*>(context_provider_.get());
+  ws::ContextProviderCommandBuffer* provider_command_buffer =
+      static_cast<ws::ContextProviderCommandBuffer*>(context_provider_.get());
   gpu::CommandBufferProxyImpl* command_buffer_proxy =
       provider_command_buffer->GetCommandBufferProxy();
   DCHECK(command_buffer_proxy);

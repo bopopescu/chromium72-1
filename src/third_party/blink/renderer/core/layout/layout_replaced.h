@@ -63,6 +63,12 @@ class CORE_EXPORT LayoutReplaced : public LayoutBox {
   // This function returns the local rect of the replaced content.
   virtual LayoutRect ReplacedContentRect() const;
 
+  // This is used by a few special elements, e.g. <video>, <iframe> to ensure
+  // a persistent sizing under different subpixel offset, because these
+  // elements have a high cost to resize. The drawback is that we may overflow
+  // or underflow the final content box by 1px.
+  static LayoutRect PreSnappedRectForPersistentSizing(LayoutRect);
+
   bool NeedsPreferredWidthsRecalculation() const override;
 
   // These values are specified to be 300 and 150 pixels in the CSS 2.1 spec.
@@ -70,15 +76,16 @@ class CORE_EXPORT LayoutReplaced : public LayoutBox {
   static const int kDefaultWidth;
   static const int kDefaultHeight;
   bool CanHaveChildren() const override { return false; }
-  virtual void PaintReplaced(const PaintInfo&, const LayoutPoint&) const {}
+  virtual void PaintReplaced(const PaintInfo&,
+                             const LayoutPoint& paint_offset) const {}
   LayoutRect LocalSelectionRect() const final;
 
   bool HasObjectFit() const {
-    return Style()->GetObjectFit() !=
+    return StyleRef().GetObjectFit() !=
            ComputedStyleInitialValues::InitialObjectFit();
   }
 
-  void Paint(const PaintInfo&, const LayoutPoint&) const override;
+  void Paint(const PaintInfo&) const override;
 
   // Replaced objects often have contents to paint.
   bool PaintedOutputOfObjectHasNoEffectRegardlessOfSize() const override {

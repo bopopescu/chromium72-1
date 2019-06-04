@@ -36,6 +36,7 @@ class CORE_EXPORT WebRemoteFrameImpl final
                                              WebRemoteFrameClient*,
                                              WebFrame* opener = nullptr);
 
+  WebRemoteFrameImpl(WebTreeScopeType, WebRemoteFrameClient*);
   ~WebRemoteFrameImpl() override;
 
   // WebFrame methods:
@@ -48,19 +49,23 @@ class CORE_EXPORT WebRemoteFrameImpl final
   WebLocalFrame* CreateLocalChild(WebTreeScopeType,
                                   const WebString& name,
                                   WebSandboxFlags,
-                                  WebFrameClient*,
+                                  WebLocalFrameClient*,
                                   blink::InterfaceRegistry*,
                                   WebFrame* previous_sibling,
                                   const ParsedFeaturePolicy&,
                                   const WebFrameOwnerProperties&,
+                                  FrameOwnerElementType,
                                   WebFrame* opener) override;
   WebRemoteFrame* CreateRemoteChild(WebTreeScopeType,
                                     const WebString& name,
                                     WebSandboxFlags,
                                     const ParsedFeaturePolicy&,
+                                    FrameOwnerElementType,
                                     WebRemoteFrameClient*,
                                     WebFrame* opener) override;
-  void SetCcLayer(cc::Layer*, bool prevent_contents_opaque_changes) override;
+  void SetCcLayer(cc::Layer*,
+                  bool prevent_contents_opaque_changes,
+                  bool is_surface_layer) override;
   void SetReplicatedOrigin(
       const WebSecurityOrigin&,
       bool is_potentially_trustworthy_opaque_origin) override;
@@ -82,7 +87,7 @@ class CORE_EXPORT WebRemoteFrameImpl final
   void DidStopLoading() override;
   bool IsIgnoredForHitTest() const override;
   void WillEnterFullscreen() override;
-  void SetHasReceivedUserGesture() override;
+  void UpdateUserActivationState(UserActivationUpdateType) override;
   void ScrollRectToVisible(const WebRect&,
                            const WebScrollIntoViewParams&) override;
   void BubbleLogicalScroll(WebScrollDirection direction,
@@ -91,6 +96,7 @@ class CORE_EXPORT WebRemoteFrameImpl final
   void SetHasReceivedUserGestureBeforeNavigation(bool value) override;
   v8::Local<v8::Object> GlobalProxy() const override;
   WebRect GetCompositingRect() override;
+  void RenderFallbackContent() const override;
 
   void InitializeCoreFrame(Page&, FrameOwner*, const AtomicString& name);
   RemoteFrame* GetFrame() const { return frame_.Get(); }
@@ -99,17 +105,10 @@ class CORE_EXPORT WebRemoteFrameImpl final
 
   static WebRemoteFrameImpl* FromFrame(RemoteFrame&);
 
-#if defined(USE_NEVA_APPRUNTIME)
-  void ReplaceBaseURL(const WebString& url) const override;
-  void SetViewportSize(const WebSize& size) override { }
-#endif
-
   void Trace(blink::Visitor*);
 
  private:
   friend class RemoteFrameClientImpl;
-
-  WebRemoteFrameImpl(WebTreeScopeType, WebRemoteFrameClient*);
 
   void SetCoreFrame(RemoteFrame*);
   void ApplyReplicatedFeaturePolicyHeader();

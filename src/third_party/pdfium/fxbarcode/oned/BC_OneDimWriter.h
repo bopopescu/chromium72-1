@@ -7,17 +7,17 @@
 #ifndef FXBARCODE_ONED_BC_ONEDIMWRITER_H_
 #define FXBARCODE_ONED_BC_ONEDIMWRITER_H_
 
-#include <memory>
 #include <vector>
 
 #include "core/fxcrt/unowned_ptr.h"
-#include "core/fxge/cfx_renderdevice.h"
 #include "fxbarcode/BC_Library.h"
 #include "fxbarcode/BC_Writer.h"
+#include "fxbarcode/utils.h"
 
 class CFX_Font;
 class CFX_PathData;
 class CFX_RenderDevice;
+class FXTEXT_CHARPOS;
 
 class CBC_OneDimWriter : public CBC_Writer {
  public:
@@ -54,46 +54,47 @@ class CBC_OneDimWriter : public CBC_Writer {
                                   int32_t hints);
   virtual uint8_t* EncodeImpl(const ByteString& contents,
                               int32_t& outLength) = 0;
-  virtual void CalcTextInfo(const ByteString& text,
-                            FXTEXT_CHARPOS* charPos,
-                            CFX_Font* cFont,
-                            float geWidth,
-                            int32_t fontSize,
-                            float& charsLen);
   virtual bool ShowChars(const WideStringView& contents,
                          CFX_RenderDevice* device,
                          const CFX_Matrix* matrix,
                          int32_t barWidth,
                          int32_t multiple);
-  virtual void ShowDeviceChars(CFX_RenderDevice* device,
-                               const CFX_Matrix* matrix,
-                               const ByteString str,
-                               float geWidth,
-                               FXTEXT_CHARPOS* pCharPos,
-                               float locX,
-                               float locY,
-                               int32_t barWidth);
-  virtual int32_t AppendPattern(uint8_t* target,
-                                int32_t pos,
-                                const int8_t* pattern,
-                                int32_t patternLength,
-                                int32_t startColor,
-                                int32_t& e);
+  void ShowDeviceChars(CFX_RenderDevice* device,
+                       const CFX_Matrix* matrix,
+                       const ByteString str,
+                       float geWidth,
+                       FXTEXT_CHARPOS* pCharPos,
+                       float locX,
+                       float locY,
+                       int32_t barWidth);
+  void CalcTextInfo(const ByteString& text,
+                    FXTEXT_CHARPOS* charPos,
+                    CFX_Font* cFont,
+                    float geWidth,
+                    int32_t fontSize,
+                    float& charsLen);
+  int32_t AppendPattern(uint8_t* target,
+                        int32_t pos,
+                        const int8_t* pattern,
+                        int32_t patternLength,
+                        bool startColor);
 
-  wchar_t Upper(wchar_t ch);
   void RenderVerticalBars(int32_t outputX, int32_t width, int32_t height);
 
-  bool m_bPrintChecksum;
-  int32_t m_iDataLenth;
-  bool m_bCalcChecksum;
+  bool m_bPrintChecksum = true;
+  bool m_bCalcChecksum = false;
+  bool m_bLeftPadding = false;
+  bool m_bRightPadding = false;
+
   UnownedPtr<CFX_Font> m_pFont;
-  float m_fFontSize;
-  int32_t m_iFontStyle;
-  uint32_t m_fontColor;
-  BC_TEXT_LOC m_locTextLoc;
-  size_t m_iContentLen;
-  bool m_bLeftPadding;
-  bool m_bRightPadding;
+  float m_fFontSize = 10.0f;
+  int32_t m_iFontStyle = 0;
+  uint32_t m_fontColor = 0xff000000;
+  BC_TEXT_LOC m_locTextLoc = BC_TEXT_LOC_BELOWEMBED;
+
+  int32_t m_iDataLenth = 0;
+  size_t m_iContentLen = 0;
+
   std::vector<CFX_PathData> m_output;
   int32_t m_barWidth;
   int32_t m_multiple;

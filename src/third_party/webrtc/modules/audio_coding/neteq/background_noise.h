@@ -14,14 +14,12 @@
 #include <string.h>  // size_t
 #include <memory>
 
-#include "modules/audio_coding/neteq/audio_multi_vector.h"
-#include "modules/audio_coding/neteq/include/neteq.h"
 #include "rtc_base/constructormagic.h"
-#include "typedefs.h"  // NOLINT(build/include)
 
 namespace webrtc {
 
 // Forward declarations.
+class AudioMultiVector;
 class PostDecodeVad;
 
 // This class handles estimation of background noise parameters.
@@ -38,8 +36,7 @@ class BackgroundNoise {
 
   // Updates the parameter estimates based on the signal currently in the
   // |sync_buffer|, and on the latest decision in |vad| if it is running.
-  void Update(const AudioMultiVector& sync_buffer,
-              const PostDecodeVad& vad);
+  void Update(const AudioMultiVector& sync_buffer, const PostDecodeVad& vad);
 
   // Returns |energy_| for |channel|.
   int32_t Energy(size_t channel) const;
@@ -78,9 +75,7 @@ class BackgroundNoise {
 
   struct ChannelParameters {
     // Constructor.
-    ChannelParameters() {
-      Reset();
-    }
+    ChannelParameters() { Reset(); }
 
     void Reset() {
       energy = 2500;

@@ -225,7 +225,6 @@ mojom::DisplayModePtr GetDisplayMode(
   gfx::Size size_dip = display_mode.GetSizeInDIP(is_internal);
   result->size = size_dip;
   result->size_in_native_pixels = display_mode.size();
-  result->ui_scale = display_mode.ui_scale();
   result->device_scale_factor = display_mode.device_scale_factor();
   result->refresh_rate = display_mode.refresh_rate();
   result->is_native = display_mode.native();
@@ -418,19 +417,19 @@ mojom::DisplayConfigResult SetDisplayMode(
   display::ManagedDisplayMode new_mode(
       display_mode.size_in_native_pixels, current_mode.refresh_rate(),
       current_mode.is_interlaced(), display_mode.is_native,
-      display_mode.ui_scale, display_mode.device_scale_factor);
+      display_mode.device_scale_factor);
 
   if (!new_mode.IsEquivalent(current_mode)) {
     // For the internal display, the display mode will be applied directly.
     // Otherwise a confirm/revert notification will be prepared first, and the
     // display mode will be applied. If the user accepts the mode change by
-    // dismissing the notification, StoreDisplayPrefs() will be called back to
-    // persist the new preferences.
+    // dismissing the notification, MaybeStoreDisplayPrefs() will be called back
+    // to persist the new preferences.
     if (!Shell::Get()
              ->resolution_notification_controller()
              ->PrepareNotificationAndSetDisplayMode(
                  id, current_mode, new_mode, base::BindOnce([]() {
-                   Shell::Get()->display_prefs()->StoreDisplayPrefs();
+                   Shell::Get()->display_prefs()->MaybeStoreDisplayPrefs();
                  }))) {
       return mojom::DisplayConfigResult::kSetDisplayModeError;
     }
@@ -619,8 +618,10 @@ void CrosDisplayConfig::GetDisplayUnitInfoList(
     primary_id = display::Screen::GetScreen()->GetPrimaryDisplay().id();
   } else {
     displays = display_manager->software_mirroring_display_list();
-    primary_id =
-        display_manager->GetPrimaryMirroringDisplayForUnifiedDesktop()->id();
+    primary_id = Shell::Get()
+                     ->display_configuration_controller()
+                     ->GetPrimaryMirroringDisplayForUnifiedDesktop()
+                     .id();
   }
 
   for (const display::Display& display : displays)
@@ -646,8 +647,10 @@ void CrosDisplayConfig::SetDisplayProperties(
   const display::Display& primary =
       display::Screen::GetScreen()->GetPrimaryDisplay();
 
-  if (properties->set_primary && display.id() != primary.id())
-    display_configuration_controller->SetPrimaryDisplayId(display.id());
+  if (properties->set_primary && display.id() != primary.id()) {
+    display_configuration_controller->SetPrimaryDisplayId(
+        display.id(), false /* don't throttle */);
+  }
 
   if (properties->overscan)
     display_manager->SetOverscanInsets(display.id(), *properties->overscan);

@@ -7,68 +7,39 @@
 #include "ash/shelf/shelf.h"
 #include "ash/shell.h"
 #include "ash/system/date/date_view.h"
-#include "ash/system/date/system_info_default_view.h"
 #include "ash/system/model/clock_model.h"
 #include "ash/system/model/system_tray_model.h"
-#include "ash/system/tray/system_tray.h"
 #include "ash/system/tray/system_tray_notifier.h"
-#include "ash/system/tray/tray_item_view.h"
 
 namespace ash {
 
-TraySystemInfo::TraySystemInfo(SystemTray* system_tray)
-    : SystemTrayItem(system_tray, UMA_DATE),
-      tray_view_(nullptr),
-      default_view_(nullptr) {}
+namespace tray {
 
-TraySystemInfo::~TraySystemInfo() = default;
-
-const tray::TimeView* TraySystemInfo::GetTimeTrayForTesting() const {
-  return tray_view_;
-}
-
-const SystemInfoDefaultView* TraySystemInfo::GetDefaultViewForTesting() const {
-  return default_view_;
-}
-
-views::View* TraySystemInfo::CreateDefaultViewForTesting(LoginStatus status) {
-  return CreateDefaultView(status);
-}
-
-views::View* TraySystemInfo::CreateTrayView(LoginStatus status) {
-  CHECK(tray_view_ == nullptr);
+TimeTrayItemView::TimeTrayItemView(Shelf* shelf)
+    : TrayItemView(shelf), session_observer_(this) {
   tray::TimeView::ClockLayout clock_layout =
-      system_tray()->shelf()->IsHorizontalAlignment()
+      shelf->IsHorizontalAlignment()
           ? tray::TimeView::ClockLayout::HORIZONTAL_CLOCK
           : tray::TimeView::ClockLayout::VERTICAL_CLOCK;
-  tray_view_ = new tray::TimeView(clock_layout,
+  time_view_ = new tray::TimeView(clock_layout,
                                   Shell::Get()->system_tray_model()->clock());
-  views::View* view = new TrayItemView(this);
-  view->AddChildView(tray_view_);
-  return view;
+  AddChildView(time_view_);
 }
 
-views::View* TraySystemInfo::CreateDefaultView(LoginStatus status) {
-  default_view_ = new SystemInfoDefaultView(this);
-  return default_view_;
+TimeTrayItemView::~TimeTrayItemView() = default;
+
+void TimeTrayItemView::UpdateAlignmentForShelf(Shelf* shelf) {
+  tray::TimeView::ClockLayout clock_layout =
+      shelf->IsHorizontalAlignment()
+          ? tray::TimeView::ClockLayout::HORIZONTAL_CLOCK
+          : tray::TimeView::ClockLayout::VERTICAL_CLOCK;
+  time_view_->UpdateClockLayout(clock_layout);
 }
 
-void TraySystemInfo::OnTrayViewDestroyed() {
-  tray_view_ = nullptr;
+void TimeTrayItemView::OnSessionStateChanged(
+    session_manager::SessionState state) {
+  time_view_->SetTextColorBasedOnSession(state);
 }
 
-void TraySystemInfo::OnDefaultViewDestroyed() {
-  default_view_ = nullptr;
-}
-
-void TraySystemInfo::UpdateAfterShelfAlignmentChange() {
-  if (tray_view_) {
-    tray::TimeView::ClockLayout clock_layout =
-        system_tray()->shelf()->IsHorizontalAlignment()
-            ? tray::TimeView::ClockLayout::HORIZONTAL_CLOCK
-            : tray::TimeView::ClockLayout::VERTICAL_CLOCK;
-    tray_view_->UpdateClockLayout(clock_layout);
-  }
-}
-
+}  // namespace tray
 }  // namespace ash

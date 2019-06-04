@@ -32,7 +32,7 @@
 #define THIRD_PARTY_BLINK_RENDERER_CORE_HTML_IMPORTS_HTML_IMPORTS_CONTROLLER_H_
 
 #include "third_party/blink/renderer/core/dom/document.h"
-#include "third_party/blink/renderer/platform/bindings/script_wrappable.h"
+#include "third_party/blink/renderer/platform/bindings/name_client.h"
 #include "third_party/blink/renderer/platform/heap/handle.h"
 #include "third_party/blink/renderer/platform/wtf/allocator.h"
 #include "third_party/blink/renderer/platform/wtf/vector.h"
@@ -49,11 +49,13 @@ class KURL;
 
 class HTMLImportsController final
     : public GarbageCollected<HTMLImportsController>,
-      public TraceWrapperBase {
+      public NameClient {
  public:
   static HTMLImportsController* Create(Document& master) {
-    return new HTMLImportsController(master);
+    return MakeGarbageCollected<HTMLImportsController>(master);
   }
+
+  explicit HTMLImportsController(Document&);
 
   HTMLImportTreeRoot* Root() const { return root_; }
 
@@ -64,22 +66,19 @@ class HTMLImportsController final
 
   Document* Master() const;
 
-  size_t LoaderCount() const { return loaders_.size(); }
-  HTMLImportLoader* LoaderAt(size_t i) const { return loaders_[i]; }
+  wtf_size_t LoaderCount() const { return loaders_.size(); }
+  HTMLImportLoader* LoaderAt(wtf_size_t i) const { return loaders_[i]; }
   HTMLImportLoader* LoaderFor(const Document&) const;
 
   void Trace(blink::Visitor*);
 
   void Dispose();
 
-  void TraceWrappers(ScriptWrappableVisitor*) const override;
   const char* NameInHeapSnapshot() const override {
     return "HTMLImportsController";
   }
 
  private:
-  explicit HTMLImportsController(Document&);
-
   HTMLImportChild* CreateChild(const KURL&,
                                HTMLImportLoader*,
                                HTMLImport* parent,

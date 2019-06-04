@@ -14,9 +14,9 @@
 #include "base/atomicops.h"
 #include "base/macros.h"
 #include "base/observer_list.h"
+#include "base/sequence_checker.h"
 #include "base/strings/string_util.h"
 #include "base/synchronization/lock.h"
-#include "base/threading/thread_checker.h"
 #include "components/sync/base/cancelation_observer.h"
 #include "components/sync/syncable/syncable_id.h"
 
@@ -43,30 +43,22 @@ struct HttpResponse {
     IO_ERROR,
 
     // SYNC_SERVER_ERROR is returned when the HTTP status code indicates that
-    // a non-auth error has occured.
+    // a non-auth error has occurred.
     SYNC_SERVER_ERROR,
 
     // SYNC_AUTH_ERROR is returned when the HTTP status code indicates that an
-    // auth error has occured (i.e. a 401 or sync-specific AUTH_INVALID
-    // response)
-    // TODO(tim): Caring about AUTH_INVALID is a layering violation. But
-    // this app-specific logic is being added as a stable branch hotfix so
-    // minimal changes prevail for the moment.  Fix this! Bug 35060.
+    // auth error has occurred (i.e. a 401).
     SYNC_AUTH_ERROR,
 
     // SERVER_CONNECTION_OK is returned when request was handled correctly.
     SERVER_CONNECTION_OK,
-
-    // RETRY is returned when a Commit request fails with a RETRY response from
-    // the server.
-    //
-    // TODO(idana): the server no longer returns RETRY so we should remove this
-    // value.
-    RETRY,
   };
 
+  // The network error code.
+  int net_error_code;
+
   // The HTTP Status code.
-  int64_t response_code;
+  int http_status_code;
 
   // The value of the Content-length header.
   int64_t content_length;
@@ -170,8 +162,13 @@ class ServerConnectionManager {
   void RemoveListener(ServerConnectionEventListener* listener);
 
   inline HttpResponse::ServerConnectionCode server_status() const {
-    DCHECK(thread_checker_.CalledOnValidThread());
+    DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
     return server_status_;
+  }
+
+  inline int net_error_code() const {
+    DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+    return net_error_code_;
   }
 
   const std::string client_id() const { return client_id_; }
@@ -181,7 +178,7 @@ class ServerConnectionManager {
   virtual std::unique_ptr<Connection> MakeConnection();
 
   void set_client_id(const std::string& client_id) {
-    DCHECK(thread_checker_.CalledOnValidThread());
+    DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
     DCHECK(client_id_.empty());
     client_id_.assign(client_id);
   }
@@ -194,7 +191,7 @@ class ServerConnectionManager {
   bool HasInvalidAuthToken() { return auth_token_.empty(); }
 
   const std::string auth_token() const {
-    DCHECK(thread_checker_.CalledOnValidThread());
+    DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
     return auth_token_;
   }
 
@@ -211,10 +208,7 @@ class ServerConnectionManager {
                                 const std::string& path,
                                 const std::string& auth_token);
 
-  // An internal helper to clear our auth_token_ and cache the old version
-  // in |previously_invalidated_token_| to shelter us from retrying with a
-  // known bad token.
-  void InvalidateAndClearAuthToken();
+  void ClearAuthToken();
 
   // Helper to check terminated flags and build a Connection object. If this
   // ServerConnectionManager has been terminated, this will return null.
@@ -241,14 +235,16 @@ class ServerConnectionManager {
   // The auth token to use in authenticated requests.
   std::string auth_token_;
 
-  // The previous auth token that is invalid now.
-  std::string previously_invalidated_token;
-
-  base::ObserverList<ServerConnectionEventListener> listeners_;
+  base::ObserverList<ServerConnectionEventListener>::Unchecked listeners_;
 
   HttpResponse::ServerConnectionCode server_status_;
 
-  base::ThreadChecker thread_checker_;
+  // Contains the network error code if there is an error when making the
+  // connection with the server in which case |server_status_| is set to
+  // HttpResponse::CONNECTION_UNAVAILABLE.
+  int net_error_code_;
+
+  SEQUENCE_CHECKER(sequence_checker_);
 
   CancelationSignal* const cancelation_signal_;
 

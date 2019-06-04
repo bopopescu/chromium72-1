@@ -32,7 +32,8 @@ private:
     using DstProxy = GrXferProcessor::DstProxy;
 
 public:
-    GrRenderTargetOpList(GrResourceProvider*, GrRenderTargetProxy*, GrAuditTrail*);
+    GrRenderTargetOpList(GrResourceProvider*, sk_sp<GrOpMemoryPool>,
+                         GrRenderTargetProxy*, GrAuditTrail*);
 
     ~GrRenderTargetOpList() override;
 
@@ -46,7 +47,7 @@ public:
         INHERITED::makeClosed(caps);
     }
 
-    bool isEmpty() const { return fRecordedOps.empty(); }
+    bool isEmpty() const { return fOpChains.empty(); }
 
     /**
      * Empties the draw buffer of any queued up draws.
@@ -60,40 +61,35 @@ public:
     void onPrepare(GrOpFlushState* flushState) override;
     bool onExecute(GrOpFlushState* flushState) override;
 
-    /**
-     * Returns this opList's id if the Op was recorded, or SK_InvalidUniqueID if it was combined
-     * into an existing Op or otherwise deleted.
-     */
-    uint32_t addOp(std::unique_ptr<GrOp> op, const GrCaps& caps) {
+    void addOp(std::unique_ptr<GrOp> op, const GrCaps& caps) {
         auto addDependency = [ &caps, this ] (GrSurfaceProxy* p) {
             this->addDependency(p, caps);
         };
 
         op->visitProxies(addDependency);
 
-        return this->recordOp(std::move(op), caps);
+        this->recordOp(std::move(op), caps);
     }
 
-    /**
-     * Returns this opList's id if the Op was recorded, or SK_InvalidUniqueID if it was combined
-     * into an existing Op or otherwise deleted.
-     */
-    uint32_t addOp(std::unique_ptr<GrOp> op, const GrCaps& caps,
-                   GrAppliedClip&& clip, const DstProxy& dstProxy) {
+    void addOp(std::unique_ptr<GrOp> op, const GrCaps& caps, GrAppliedClip&& clip,
+               const DstProxy& dstProxy) {
         auto addDependency = [ &caps, this ] (GrSurfaceProxy* p) {
             this->addDependency(p, caps);
         };
 
         op->visitProxies(addDependency);
         clip.visitProxies(addDependency);
+        if (dstProxy.proxy()) {
+            addDependency(dstProxy.proxy());
+        }
 
-        return this->recordOp(std::move(op), caps, clip.doesClip() ? &clip : nullptr, &dstProxy);
+        this->recordOp(std::move(op), caps, clip.doesClip() ? &clip : nullptr, &dstProxy);
     }
 
     void discard();
 
     /** Clears the entire render target */
-    void fullClear(const GrCaps& caps, GrColor color);
+    void fullClear(GrContext*, const SkPMColor4f& color);
 
     /**
      * Copies a pixel rectangle from one surface to another. This call may finalize
@@ -105,7 +101,7 @@ public:
      * depending on the type of surface, configs, etc, and the backend-specific
      * limitations.
      */
-    bool copySurface(const GrCaps& caps,
+    bool copySurface(GrContext*,
                      GrSurfaceProxy* dst,
                      GrSurfaceProxy* src,
                      const SkIRect& srcRect,
@@ -114,60 +110,102 @@ public:
     GrRenderTargetOpList* asRenderTargetOpList() override { return this; }
 
     SkDEBUGCODE(void dump(bool printDependencies) const override;)
-
-    SkDEBUGCODE(int numOps() const override { return fRecordedOps.count(); })
     SkDEBUGCODE(int numClips() const override { return fNumClips; })
     SkDEBUGCODE(void visitProxies_debugOnly(const GrOp::VisitProxyFunc&) const;)
 
 private:
     friend class GrRenderTargetContextPriv; // for stencil clip state. TODO: this is invasive
 
-    struct RecordedOp {
-        RecordedOp(std::unique_ptr<GrOp> op, GrAppliedClip* appliedClip, const DstProxy* dstProxy)
-                : fOp(std::move(op)), fAppliedClip(appliedClip) {
-            if (dstProxy) {
-                fDstProxy = *dstProxy;
-            }
+    void deleteOps();
+
+    class OpChain {
+    public:
+        OpChain(const OpChain&) = delete;
+        OpChain& operator=(const OpChain&) = delete;
+        OpChain(std::unique_ptr<GrOp>, GrAppliedClip*, const DstProxy*);
+
+        ~OpChain() {
+            // The ops are stored in a GrMemoryPool and must be explicitly deleted via the pool.
+            SkASSERT(fList.empty());
         }
 
-        void visitProxies(const GrOp::VisitProxyFunc& func) const {
-            if (fOp) {
-                fOp->visitProxies(func);
-            }
-            if (fDstProxy.proxy()) {
-                func(fDstProxy.proxy());
-            }
-            if (fAppliedClip) {
-                fAppliedClip->visitProxies(func);
-            }
-        }
+        void visitProxies(const GrOp::VisitProxyFunc&, GrOp::VisitorType) const;
 
-        std::unique_ptr<GrOp> fOp;
+        GrOp* head() const { return fList.head(); }
+
+        GrAppliedClip* appliedClip() const { return fAppliedClip; }
+        const DstProxy& dstProxy() const { return fDstProxy; }
+        const SkRect& bounds() const { return fBounds; }
+
+        // Deletes all the ops in the chain via the pool.
+        void deleteOps(GrOpMemoryPool* pool);
+
+        // Attempts to move the ops from the passed chain to this chain at the head. Also attempts
+        // to merge ops between the chains. Upon success the passed chain is empty.
+        // Fails when the chains aren't of the same op type, have different clips or dst proxies.
+        bool prependChain(OpChain*, const GrCaps&, GrOpMemoryPool*, GrAuditTrail*);
+
+        // Attempts to add 'op' to this chain either by merging or adding to the tail. Returns
+        // 'op' to the caller upon failure, otherwise null. Fails when the op and chain aren't of
+        // the same op type, have different clips or dst proxies.
+        std::unique_ptr<GrOp> appendOp(std::unique_ptr<GrOp> op, const DstProxy*,
+                                       const GrAppliedClip*, const GrCaps&, GrOpMemoryPool*,
+                                       GrAuditTrail*);
+
+    private:
+        class List {
+        public:
+            List() = default;
+            List(std::unique_ptr<GrOp>);
+            List(List&&);
+            List& operator=(List&& that);
+
+            bool empty() const { return !SkToBool(fHead); }
+            GrOp* head() const { return fHead.get(); }
+            GrOp* tail() const { return fTail; }
+
+            std::unique_ptr<GrOp> popHead();
+            std::unique_ptr<GrOp> removeOp(GrOp* op);
+            void pushHead(std::unique_ptr<GrOp> op);
+            void pushTail(std::unique_ptr<GrOp>);
+
+            void validate() const;
+
+        private:
+            std::unique_ptr<GrOp> fHead;
+            GrOp* fTail = nullptr;
+        };
+
+        void validate() const;
+
+        std::tuple<List, List> TryConcat(List chainA, const DstProxy& dstProxyA,
+                                         const GrAppliedClip* appliedClipA, List chainB,
+                                         const DstProxy& dstProxyB,
+                                         const GrAppliedClip* appliedClipB, const GrCaps&,
+                                         GrOpMemoryPool*, GrAuditTrail*);
+        List DoConcat(List, List, const GrCaps&, GrOpMemoryPool*, GrAuditTrail*);
+
+        List fList;
         DstProxy fDstProxy;
         GrAppliedClip* fAppliedClip;
+        SkRect fBounds;
     };
 
     void purgeOpsWithUninstantiatedProxies() override;
 
     void gatherProxyIntervals(GrResourceAllocator*) const override;
 
-    // Returns this opList's id if the Op was recorded, or SK_InvalidUniqueID if it was combined
-    // into an existing Op or otherwise deleted.
-    uint32_t recordOp(std::unique_ptr<GrOp>, const GrCaps& caps,
-                      GrAppliedClip* = nullptr, const DstProxy* = nullptr);
+    void recordOp(std::unique_ptr<GrOp>, const GrCaps& caps, GrAppliedClip* = nullptr,
+                  const DstProxy* = nullptr);
 
     void forwardCombine(const GrCaps&);
-
-    // If this returns true then b has been merged into a's op.
-    bool combineIfPossible(const RecordedOp& a, GrOp* b, const GrAppliedClip* bClip,
-                           const DstProxy* bDstTexture, const GrCaps&);
 
     uint32_t                       fLastClipStackGenID;
     SkIRect                        fLastDevClipBounds;
     int                            fLastClipNumAnalyticFPs;
 
     // For ops/opList we have mean: 5 stdDev: 28
-    SkSTArray<5, RecordedOp, true> fRecordedOps;
+    SkSTArray<25, OpChain, true> fOpChains;
 
     // MDB TODO: 4096 for the first allocation of the clip space will be huge overkill.
     // Gather statistics to determine the correct size.

@@ -13,6 +13,7 @@
 #include "ash/system/tray/tray_constants.h"
 #include "ash/system/tray/tray_container.h"
 #include "ash/wm/mru_window_tracker.h"
+#include "ash/wm/overview/window_selector.h"
 #include "ash/wm/overview/window_selector_controller.h"
 #include "ash/wm/splitview/split_view_controller.h"
 #include "ash/wm/tablet_mode/tablet_mode_controller.h"
@@ -74,13 +75,13 @@ bool OverviewButtonTray::PerformAction(const ui::Event& event) {
   DCHECK(event.type() == ui::ET_MOUSE_RELEASED ||
          event.type() == ui::ET_GESTURE_TAP);
 
-  if (last_press_event_time_ &&
+  WindowSelectorController* window_selector_controller =
+      Shell::Get()->window_selector_controller();
+  // Skip if the second tap happened outside of overview. This can happen if a
+  // window gets activated in between, which cancels overview mode.
+  if (window_selector_controller->IsSelecting() && last_press_event_time_ &&
       event.time_stamp() - last_press_event_time_.value() <
           kDoubleTapThresholdMs) {
-    // Second taps should not be processed outside of overview mode. (First
-    // taps should be outside of overview).
-    DCHECK(Shell::Get()->window_selector_controller()->IsSelecting());
-
     base::RecordAction(base::UserMetricsAction("Tablet_QuickSwitch"));
 
     // Build mru window list. Use cycle as it excludes some windows we are not
@@ -89,8 +90,12 @@ bool OverviewButtonTray::PerformAction(const ui::Event& event) {
         Shell::Get()->mru_window_tracker()->BuildWindowForCycleList();
 
     // Switch to the second most recently used window (most recent is the
-    // current window) if it exists, unless splitview mode is active.
-    if (mru_window_list.size() > 1u) {
+    // current window) if it exists, unless splitview mode is active. Do not
+    // switch we entered overview mode will all windows minimized.
+    if (mru_window_list.size() > 1u &&
+        window_selector_controller->window_selector()
+                ->enter_exit_overview_type() !=
+            WindowSelector::EnterExitOverviewType::kWindowsMinimized) {
       aura::Window* new_active_window = mru_window_list[1];
 
       // In splitview mode, quick switch will only affect the windows on the non
@@ -110,7 +115,7 @@ bool OverviewButtonTray::PerformAction(const ui::Event& event) {
       }
 
       AnimateInkDrop(views::InkDropState::DEACTIVATED, nullptr);
-      wm::GetWindowState(new_active_window)->Activate();
+      ::wm::ActivateWindow(new_active_window);
       last_press_event_time_ = base::nullopt;
       return true;
     }
@@ -138,11 +143,7 @@ void OverviewButtonTray::OnSessionStateChanged(
   UpdateIconVisibility();
 }
 
-void OverviewButtonTray::OnTabletModeStarted() {
-  UpdateIconVisibility();
-}
-
-void OverviewButtonTray::OnTabletModeEnded() {
+void OverviewButtonTray::OnTabletModeEventsBlockingChanged() {
   UpdateIconVisibility();
 }
 
@@ -160,8 +161,7 @@ base::string16 OverviewButtonTray::GetAccessibleNameForTray() {
   return l10n_util::GetStringUTF16(IDS_ASH_OVERVIEW_BUTTON_ACCESSIBLE_NAME);
 }
 
-void OverviewButtonTray::HideBubbleWithView(
-    const views::TrayBubbleView* bubble_view) {
+void OverviewButtonTray::HideBubbleWithView(const TrayBubbleView* bubble_view) {
   // This class has no bubbles to hide.
 }
 
@@ -171,13 +171,12 @@ void OverviewButtonTray::UpdateIconVisibility() {
   // not change during transient times in which CanSelect is false. Such as when
   // a modal dialog is present.
   SessionController* session_controller = Shell::Get()->session_controller();
-
-  Shell* shell = Shell::Get();
-  SetVisible(
-      shell->tablet_mode_controller()->IsTabletModeWindowManagerEnabled() &&
-      session_controller->GetSessionState() ==
-          session_manager::SessionState::ACTIVE &&
-      !session_controller->IsRunningInAppMode());
+  SetVisible(Shell::Get()
+                 ->tablet_mode_controller()
+                 ->AreInternalInputDeviceEventsBlocked() &&
+             session_controller->GetSessionState() ==
+                 session_manager::SessionState::ACTIVE &&
+             !session_controller->IsRunningInAppMode());
 }
 
 }  // namespace ash

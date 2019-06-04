@@ -7,12 +7,12 @@
 
 #include <ostream>
 
-#include "net/third_party/quic/core/frames/quic_control_frame.h"
 #include "net/third_party/quic/core/quic_error_codes.h"
+#include "net/third_party/quic/core/quic_types.h"
 
-namespace net {
+namespace quic {
 
-struct QUIC_EXPORT_PRIVATE QuicStopSendingFrame : public QuicControlFrame {
+struct QUIC_EXPORT_PRIVATE QuicStopSendingFrame {
   QuicStopSendingFrame();
   QuicStopSendingFrame(QuicControlFrameId control_frame_id,
                        QuicStreamId stream_id,
@@ -22,10 +22,13 @@ struct QUIC_EXPORT_PRIVATE QuicStopSendingFrame : public QuicControlFrame {
       std::ostream& os,
       const QuicStopSendingFrame& frame);
 
+  // A unique identifier of this control frame. 0 when this frame is received,
+  // and non-zero when sent.
+  QuicControlFrameId control_frame_id;
   QuicStreamId stream_id;
   QuicApplicationErrorCode application_error_code;
 };
 
-}  // namespace net
+}  // namespace quic
 
 #endif  // NET_THIRD_PARTY_QUIC_CORE_FRAMES_QUIC_STOP_SENDING_FRAME_H_

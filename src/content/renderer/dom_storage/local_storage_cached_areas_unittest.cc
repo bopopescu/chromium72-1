@@ -8,15 +8,28 @@
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/test/scoped_task_environment.h"
-#include "content/public/common/content_features.h"
 #include "content/renderer/dom_storage/local_storage_cached_area.h"
 #include "content/renderer/dom_storage/mock_leveldb_wrapper.h"
-#include "third_party/blink/public/platform/scheduler/test/fake_renderer_scheduler.h"
+#include "testing/gtest/include/gtest/gtest.h"
+#include "third_party/blink/public/common/features.h"
+#include "third_party/blink/public/platform/scheduler/test/web_fake_thread_scheduler.h"
 
 namespace content {
 
-TEST(LocalStorageCachedAreasTest, CacheLimit) {
-  base::test::ScopedTaskEnvironment scoped_task_environment;
+class LocalStorageCachedAreasTest : public testing::Test {
+  // testing::Test:
+  void TearDown() override {
+    // Some of these tests close message pipes which serve as master interfaces
+    // to other associated interfaces; this in turn schedules tasks to invoke
+    // the associated interfaces' error handlers, and local storage code relies
+    // on those handlers running in order to avoid memory leaks at shutdown.
+    scoped_task_environment_.RunUntilIdle();
+  }
+
+  base::test::ScopedTaskEnvironment scoped_task_environment_;
+};
+
+TEST_F(LocalStorageCachedAreasTest, CacheLimit) {
   const url::Origin kOrigin = url::Origin::Create(GURL("http://dom_storage1/"));
   const url::Origin kOrigin2 =
       url::Origin::Create(GURL("http://dom_storage2/"));
@@ -28,11 +41,11 @@ TEST(LocalStorageCachedAreasTest, CacheLimit) {
   const std::string kStorageAreaId("7");
   const size_t kCacheLimit = 100;
 
-  blink::scheduler::FakeRendererScheduler renderer_scheduler;
+  blink::scheduler::WebFakeThreadScheduler thread_scheduler;
 
   MockLevelDBWrapper mock_leveldb_wrapper;
   LocalStorageCachedAreas cached_areas(&mock_leveldb_wrapper,
-                                       &renderer_scheduler);
+                                       &thread_scheduler);
   cached_areas.set_cache_limit_for_testing(kCacheLimit);
 
   scoped_refptr<LocalStorageCachedArea> cached_area1 =
@@ -59,19 +72,18 @@ TEST(LocalStorageCachedAreasTest, CacheLimit) {
   EXPECT_EQ(cached_area2->memory_used(), cached_areas.TotalCacheSize());
 }
 
-TEST(LocalStorageCachedAreasTest, CloneBeforeGetArea) {
-  base::test::ScopedTaskEnvironment scoped_task_environment;
+TEST_F(LocalStorageCachedAreasTest, CloneBeforeGetArea) {
   base::test::ScopedFeatureList feature_list;
-  feature_list.InitAndEnableFeature(features::kMojoSessionStorage);
+  feature_list.InitAndEnableFeature(blink::features::kOnionSoupDOMStorage);
   const std::string kNamespace1 = base::GenerateGUID();
   const std::string kNamespace2 = base::GenerateGUID();
   const url::Origin kOrigin = url::Origin::Create(GURL("http://dom_storage1/"));
 
-  blink::scheduler::FakeRendererScheduler renderer_scheduler;
+  blink::scheduler::WebFakeThreadScheduler thread_scheduler;
 
   MockLevelDBWrapper mock_leveldb_wrapper;
   LocalStorageCachedAreas cached_areas(&mock_leveldb_wrapper,
-                                       &renderer_scheduler);
+                                       &thread_scheduler);
 
   cached_areas.CloneNamespace(kNamespace1, kNamespace2);
 

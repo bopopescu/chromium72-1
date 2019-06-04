@@ -18,7 +18,10 @@ A test case can use these checks by declaring their enclosing mixin classes
 as superclass and providing the expected_* variables required by the check_*()
 methods in the mixin classes.
 """
+import difflib
 import os
+import re
+import subprocess
 from glslc_test_framework import GlslCTest
 
 
@@ -110,11 +113,20 @@ class NoGeneratedFiles(GlslCTest):
             return False, 'Extra files generated: {}'.format(generated_files)
 
 
-class CorrectObjectFilePreamble(GlslCTest):
-    """Provides methods for verifying preamble for a SPV object file."""
+class CorrectBinaryLengthAndPreamble(GlslCTest):
+    """Provides methods for verifying preamble for a SPIR-V binary."""
 
-    def verify_object_file_preamble(self, filename):
-        """Checks that the given SPIR-V binary file has correct preamble."""
+    def verify_binary_length_and_header(self, binary, spv_version = 0x10000):
+        """Checks that the given SPIR-V binary has valid length and header.
+
+        Returns:
+            False, error string if anything is invalid
+            True, '' otherwise
+        Args:
+            binary: a bytes object containing the SPIR-V binary
+            spv_version: target SPIR-V version number, with same encoding
+                 as the version word in a SPIR-V header.
+        """
 
         def read_word(binary, index, little_endian):
             """Reads the index-th word from the given binary file."""
@@ -124,7 +136,7 @@ class CorrectObjectFilePreamble(GlslCTest):
             return reduce(lambda w, b: (w << 8) | ord(b), word, 0)
 
         def check_endianness(binary):
-            """Checks the endianness of the given SPIR-V binary file.
+            """Checks the endianness of the given SPIR-V binary.
 
             Returns:
               True if it's little endian, False if it's big endian.
@@ -138,6 +150,45 @@ class CorrectObjectFilePreamble(GlslCTest):
                 return False
             return None
 
+        num_bytes = len(binary)
+        if num_bytes % 4 != 0:
+            return False, ('Incorrect SPV binary: size should be a multiple'
+                           ' of words')
+        if num_bytes < 20:
+            return False, 'Incorrect SPV binary: size less than 5 words'
+
+        preamble = binary[0:19]
+        little_endian = check_endianness(preamble)
+        # SPIR-V module magic number
+        if little_endian is None:
+            return False, 'Incorrect SPV binary: wrong magic number'
+
+        # SPIR-V version number
+        version = read_word(preamble, 1, little_endian)
+        # TODO(dneto): Recent Glslang uses version word 0 for opengl_compat
+        # profile
+
+        if version != spv_version and version != 0:
+            return False, 'Incorrect SPV binary: wrong version number'
+        # Shaderc-over-Glslang (0x000d....) or
+        # SPIRV-Tools (0x0007....) generator number
+        if read_word(preamble, 2, little_endian) != 0x000d0007 and \
+                read_word(preamble, 2, little_endian) != 0x00070000:
+            return False, ('Incorrect SPV binary: wrong generator magic '
+                           'number')
+        # reserved for instruction schema
+        if read_word(preamble, 4, little_endian) != 0:
+            return False, 'Incorrect SPV binary: the 5th byte should be 0'
+
+        return True, ''
+
+
+class CorrectObjectFilePreamble(CorrectBinaryLengthAndPreamble):
+    """Provides methods for verifying preamble for a SPV object file."""
+
+    def verify_object_file_preamble(self, filename, spv_version = 0x10000):
+        """Checks that the given SPIR-V binary file has correct preamble."""
+
         success, message = verify_file_non_empty(filename)
         if not success:
             return False, message
@@ -145,31 +196,11 @@ class CorrectObjectFilePreamble(GlslCTest):
         with open(filename, 'rb') as object_file:
             object_file.seek(0, os.SEEK_END)
             num_bytes = object_file.tell()
-            if num_bytes % 4 != 0:
-                return False, ('Incorrect SPV binary: size should be a multiple'
-                               ' of words')
-            if num_bytes < 20:
-                return False, 'Incorrect SPV binary: size less than 5 words'
 
             object_file.seek(0)
-            preamble = bytes(object_file.read(20))
 
-            little_endian = check_endianness(preamble)
-            # SPIR-V module magic number
-            if little_endian is None:
-                return False, 'Incorrect SPV binary: wrong magic number'
-
-            # SPIR-V version number
-            if read_word(preamble, 1, little_endian) != 0x00010000:
-                return False, 'Incorrect SPV binary: wrong version number'
-            # glslang (0x0008....) or SPIRV-Tools (0x0007....) generator number
-            if read_word(preamble, 2, little_endian) != 0x00080001 and \
-                    read_word(preamble, 2, little_endian) != 0x00070000:
-                return False, ('Incorrect SPV binary: wrong generator magic '
-                               'number')
-            # reserved for instruction schema
-            if read_word(preamble, 4, little_endian) != 0:
-                return False, 'Incorrect SPV binary: the 5th byte should be 0'
+            binary = bytes(object_file.read())
+            return self.verify_binary_length_and_header(binary, spv_version)
 
         return True, ''
 
@@ -189,15 +220,15 @@ class CorrectAssemblyFilePreamble(GlslCTest):
 
         if (line1 != '; SPIR-V\n' or
             line2 != '; Version: 1.0\n' or
-            line3 != '; Generator: Khronos Glslang Reference Front End; 1\n'):
+            (not line3.startswith('; Generator: Google Shaderc over Glslang;'))):
             return False, 'Incorrect SPV assembly'
 
         return True, ''
 
 
 class ValidObjectFile(SuccessfulReturn, CorrectObjectFilePreamble):
-    """Mixin class for checking that every input file generates a valid object
-    file following the object file naming rule, and there is no output on
+    """Mixin class for checking that every input file generates a valid SPIR-V 1.0
+    object file following the object file naming rule, and there is no output on
     stdout/stderr."""
 
     def check_object_file_preamble(self, status):
@@ -207,6 +238,49 @@ class ValidObjectFile(SuccessfulReturn, CorrectObjectFilePreamble):
                 os.path.join(status.directory, object_filename))
             if not success:
                 return False, message
+        return True, ''
+
+
+class ValidObjectFile1_3(SuccessfulReturn, CorrectObjectFilePreamble):
+    """Mixin class for checking that every input file generates a valid SPIR-V 1.3
+    object file following the object file naming rule, and there is no output on
+    stdout/stderr."""
+
+    def check_object_file_preamble(self, status):
+        for input_filename in status.input_filenames:
+            object_filename = get_object_filename(input_filename)
+            success, message = self.verify_object_file_preamble(
+                os.path.join(status.directory, object_filename),
+                0x10300)
+            if not success:
+                return False, message
+        return True, ''
+
+
+class ValidObjectFileWithAssemblySubstr(SuccessfulReturn, CorrectObjectFilePreamble):
+    """Mixin class for checking that every input file generates a valid object
+    file following the object file naming rule, there is no output on
+    stdout/stderr, and the disassmbly contains a specified substring per input."""
+
+    def check_object_file_disassembly(self, status):
+        for an_input in status.inputs:
+            object_filename = get_object_filename(an_input.filename)
+            obj_file = str(os.path.join(status.directory, object_filename))
+            success, message = self.verify_object_file_preamble(obj_file)
+            if not success:
+                return False, message
+            cmd = [status.test_manager.disassembler_path, '--no-color', obj_file]
+            process = subprocess.Popen(
+                args=cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE, cwd=status.directory)
+            output = process.communicate(None)
+            disassembly = output[0]
+            if not isinstance(an_input.assembly_substr, str):
+                return False, "Missing assembly_substr member"
+            if an_input.assembly_substr not in disassembly:
+                return False, ('Incorrect disassembly output:\n{asm}\n'
+                    'Expected substring not found:\n{exp}'.format(
+                    asm=disassembly, exp=an_input.assembly_substr))
         return True, ''
 
 
@@ -238,11 +312,27 @@ class ValidFileContents(GlslCTest):
             return False, 'Cannot find file: ' + target_filename
         with open(target_filename, 'r') as target_file:
             file_contents = target_file.read()
-            if file_contents == self.expected_file_contents:
-                return True, ''
-            return False, ('Incorrect file output: \n{act}\nExpected:\n{exp}'
-                           ''.format(act=file_contents,
-                                     exp=self.expected_file_contents))
+            if isinstance(self.expected_file_contents, str):
+                if file_contents == self.expected_file_contents:
+                    return True, ''
+                return False, ('Incorrect file output: \n{act}\n'
+                               'Expected:\n{exp}'
+                               'With diff:\n{diff}'.format(
+                                   act=file_contents,
+                                   exp=self.expected_file_contents,
+                                   diff='\n'.join(list(difflib.unified_diff(
+                                       self.expected_file_contents.split('\n'),
+                                       file_contents.split('\n'),
+                                       fromfile='expected_output',
+                                       tofile='actual_output')))))
+            elif isinstance(self.expected_file_contents, type(re.compile(''))):
+                if self.expected_file_contents.search(file_contents):
+                    return True, ''
+                return False, (
+                    'Incorrect file output: \n{act}\n'
+                    'Expected matching regex pattern:\n{exp}'.format(
+                        act=file_contents,
+                        exp=self.expected_file_contents.pattern))
         return False, ('Could not open target file ' + target_filename +
                        ' for reading')
 
@@ -259,6 +349,58 @@ class ValidAssemblyFile(SuccessfulReturn, CorrectAssemblyFilePreamble):
                 os.path.join(status.directory, assembly_filename))
             if not success:
                 return False, message
+        return True, ''
+
+
+class ValidAssemblyFileWithSubstr(ValidAssemblyFile):
+    """Mixin class for checking that every input file generates a valid assembly
+    file following the assembly file naming rule, there is no output on
+    stdout/stderr, and all assembly files have the given substring specified
+    by expected_assembly_substr.
+
+    To mix in this class, subclasses need to provde expected_assembly_substr
+    as the expected substring.
+    """
+
+    def check_assembly_with_substr(self, status):
+        for input_filename in status.input_filenames:
+            assembly_filename = get_assembly_filename(input_filename)
+            success, message = self.verify_assembly_file_preamble(
+                os.path.join(status.directory, assembly_filename))
+            if not success:
+                return False, message
+            with open(assembly_filename, 'r') as f:
+                content = f.read()
+                if self.expected_assembly_substr not in convert_to_unix_line_endings(content):
+                   return False, ('Incorrect assembly output:\n{asm}\n'
+                                  'Expected substring not found:\n{exp}'.format(
+                                  asm=content, exp=self.expected_assembly_substr))
+        return True, ''
+
+
+class ValidAssemblyFileWithoutSubstr(ValidAssemblyFile):
+    """Mixin class for checking that every input file generates a valid assembly
+    file following the assembly file naming rule, there is no output on
+    stdout/stderr, and no assembly files have the given substring specified
+    by unexpected_assembly_substr.
+
+    To mix in this class, subclasses need to provde unexpected_assembly_substr
+    as the substring we expect not to see.
+    """
+
+    def check_assembly_for_substr(self, status):
+        for input_filename in status.input_filenames:
+            assembly_filename = get_assembly_filename(input_filename)
+            success, message = self.verify_assembly_file_preamble(
+                os.path.join(status.directory, assembly_filename))
+            if not success:
+                return False, message
+            with open(assembly_filename, 'r') as f:
+                content = f.read()
+                if self.unexpected_assembly_substr in convert_to_unix_line_endings(content):
+                   return False, ('Incorrect assembly output:\n{asm}\n'
+                                  'Unexpected substring found:\n{unexp}'.format(
+                                  asm=content, exp=self.unexpected_assembly_substr))
         return True, ''
 
 
@@ -463,4 +605,32 @@ class StdoutNoWiderThan80Columns(GlslCTest):
                 if len(line) > 80:
                     return False, ('Stdout line longer than 80 columns: %s'
                                    % line)
+        return True, ''
+
+
+class NoObjectFile(GlslCTest):
+    """Mixin class for checking that no input file has a corresponding object
+    file."""
+
+    def check_no_object_file(self, status):
+        for input_filename in status.input_filenames:
+            object_filename = get_object_filename(input_filename)
+            full_object_file = os.path.join(status.directory, object_filename)
+            print("checking %s" % full_object_file)
+            if os.path.isfile(full_object_file):
+                return False, ('Expected no object file, but found: %s'
+                               % full_object_file)
+        return True, ''
+
+
+class NoNamedOutputFiles(GlslCTest):
+    """Mixin class for checking that no specified output files exist.
+
+    The expected_output_filenames member should be full pathnames."""
+
+    def check_no_named_output_files(self, status):
+        for object_filename in self.expected_output_filenames:
+            if os.path.isfile(object_filename):
+                return False, ('Expected no output file, but found: %s'
+                               % object_filename)
         return True, ''

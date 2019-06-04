@@ -20,8 +20,9 @@ import subprocess2
 
 
 def ValidateEmail(email):
-  return (re.match(r"^[a-zA-Z0-9._%-+]+@[a-zA-Z0-9._%-]+.[a-zA-Z]{2,6}$", email)
-          is not None)
+  return (
+      re.match(r"^[a-zA-Z0-9._%\-+]+@[a-zA-Z0-9._%-]+.[a-zA-Z]{2,6}$", email)
+      is not None)
 
 
 def GetCasedPath(path):
@@ -254,6 +255,15 @@ class GIT(object):
       if remote_ref:
         upstream_branch = ''.join(remote_ref)
     return upstream_branch
+
+  @staticmethod
+  def IsAncestor(cwd, maybe_ancestor, ref):
+    """Verifies if |maybe_ancestor| is an ancestor of |ref|."""
+    try:
+      GIT.Capture(['merge-base', '--is-ancestor', maybe_ancestor, ref], cwd=cwd)
+      return True
+    except subprocess2.CalledProcessError:
+      return False
 
   @staticmethod
   def GetOldContents(cwd, filename, branch=None):

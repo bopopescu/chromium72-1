@@ -10,21 +10,23 @@
 #include <memory>
 #include <utility>
 
-#include "core/fxcrt/xml/cfx_xmldocument.h"
-#include "core/fxcrt/xml/cfx_xmlnode.h"
+#include "core/fxcrt/fx_string.h"
+#include "core/fxcrt/retain_ptr.h"
 #include "xfa/fxfa/fxfa_basic.h"
 
+class CFX_XMLDocument;
+class CFX_XMLNode;
 class CXFA_Document;
 class CXFA_Node;
 class CFX_XMLInstruction;
-class IFX_SeekableStream;
+class IFX_SeekableReadStream;
 
 class CXFA_DocumentParser {
  public:
   explicit CXFA_DocumentParser(CXFA_Document* pFactory);
   ~CXFA_DocumentParser();
 
-  bool Parse(const RetainPtr<IFX_SeekableStream>& pStream,
+  bool Parse(const RetainPtr<IFX_SeekableReadStream>& pStream,
              XFA_PacketType ePacketID);
 
   CFX_XMLNode* ParseXMLData(const ByteString& wsXML);
@@ -35,7 +37,7 @@ class CXFA_DocumentParser {
 
  private:
   std::unique_ptr<CFX_XMLDocument> LoadXML(
-      const RetainPtr<IFX_SeekableStream>& pStream);
+      const RetainPtr<IFX_SeekableReadStream>& pStream);
 
   CXFA_Node* ParseAsXDPPacket(CFX_XMLNode* pXMLDocumentNode,
                               XFA_PacketType ePacketID);
@@ -75,6 +77,7 @@ class CXFA_DocumentParser {
   std::unique_ptr<CFX_XMLDocument> xml_doc_;
   // TODO(dsinclair): Figure out who owns this.
   CXFA_Node* m_pRootNode = nullptr;
+  unsigned long m_ExecuteRecursionDepth = 0;
 };
 
 #endif  // XFA_FXFA_PARSER_CXFA_DOCUMENT_PARSER_H_

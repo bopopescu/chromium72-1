@@ -5,7 +5,7 @@
 #include "third_party/blink/renderer/platform/graphics/paint/raster_invalidation_tracking.h"
 
 #include "SkImageFilter.h"
-#include "base/trace_event/trace_event_argument.h"
+#include "base/trace_event/traced_value.h"
 #include "third_party/blink/renderer/platform/geometry/geometry_as_json.h"
 #include "third_party/blink/renderer/platform/geometry/layout_rect.h"
 #include "third_party/blink/renderer/platform/graphics/color.h"
@@ -247,7 +247,8 @@ void RasterInvalidationTracking::CheckUnderInvalidations(
   auto* canvas = recorder.getRecordingCanvas();
   if (under_invalidation_record_)
     canvas->drawPicture(std::move(under_invalidation_record_));
-  canvas->drawBitmap(new_bitmap, rect.X(), rect.Y());
+  canvas->drawImage(cc::PaintImage::CreateFromBitmap(std::move(new_bitmap)),
+                    rect.X(), rect.Y());
   under_invalidation_record_ = recorder.finishRecordingAsPicture();
 }
 

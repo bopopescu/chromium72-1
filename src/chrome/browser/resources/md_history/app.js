@@ -226,7 +226,8 @@ Polymer({
         e.canExecute = this.$.toolbar.count > 0;
         break;
       case 'select-all-command':
-        e.canExecute = !this.$.toolbar.searchField.isSearchFocused();
+        e.canExecute = !this.$.toolbar.searchField.isSearchFocused() &&
+            !this.syncedTabsSelected_(this.selectedPage_);
         break;
     }
   },
@@ -309,7 +310,7 @@ Polymer({
     const drawer =
         /** @type {?CrDrawerElement} */ (this.$.drawer.getIfExists());
     if (!this.hasDrawer_ && drawer && drawer.open)
-      drawer.closeDrawer();
+      drawer.cancel();
   },
 
   /**
@@ -330,7 +331,7 @@ Polymer({
   closeDrawer_: function() {
     const drawer = this.$.drawer.get();
     if (drawer && drawer.open)
-      drawer.closeDrawer();
+      drawer.close();
   },
 
   /** @private */

@@ -92,8 +92,7 @@ class Commit(collections.namedtuple('Commit', ('repository', 'git_hash'))):
     commit_info = gitiles_service.CommitInfo(self.repository_url, self.git_hash)
     details = {
         'repository': self.repository,
-        'git_hash': self.git_hash,
-
+        'git_hash': commit_info['commit'],
         'url': self.repository_url + '/+/' + commit_info['commit'],
         'subject': commit_info['message'].split('\n', 1)[0],
         'author': commit_info['author']['email'],
@@ -124,9 +123,42 @@ class Commit(collections.namedtuple('Commit', ('repository', 'git_hash'))):
     Returns:
       A Commit.
     """
-    repository = repository_module.Repository(dep.repository_url,
-                                              add_if_missing=True)
+    repository = repository_module.RepositoryName(
+        dep.repository_url, add_if_missing=True)
     return cls(repository, dep.git_hash)
+
+  @classmethod
+  def FromData(cls, data):
+    """Create a Commit from the given request data.
+
+    Raises:
+      KeyError: The repository name is not in the local datastore,
+                or the git hash is not valid.
+      ValueError: The URL has an unrecognized format.
+    """
+    if isinstance(data, basestring):
+      return cls.FromUrl(data)
+    else:
+      return cls.FromDict(data)
+
+  @classmethod
+  def FromUrl(cls, url):
+    """Create a Commit from a Gitiles URL.
+
+    Raises:
+      KeyError: The URL's repository or commit doesn't exist.
+      ValueError: The URL has an unrecognized format.
+    """
+    url_parts = url.split('+')
+    if len(url_parts) != 2:
+      raise ValueError('Unknown commit URL format: ' + url)
+
+    repository, git_hash = url_parts
+
+    return cls.FromDict({
+        'repository': repository[:-1],
+        'git_hash': git_hash[1:],
+    })
 
   @classmethod
   def FromDict(cls, data):
@@ -140,12 +172,11 @@ class Commit(collections.namedtuple('Commit', ('repository', 'git_hash'))):
                 or the git hash is not valid.
     """
     repository = data['repository']
+    git_hash = data['git_hash']
 
     # Translate repository if it's a URL.
     if repository.startswith('https://'):
-      repository = repository_module.Repository(repository)
-
-    git_hash = data['git_hash']
+      repository = repository_module.RepositoryName(repository)
 
     try:
       # If they send in something like HEAD, resolve to a hash.
@@ -203,7 +234,7 @@ def _ParseCommitPosition(commit_message):
   """Parses a commit message for the commit position.
 
   Args:
-    commit_message:: The commit message as a string.
+    commit_message: The commit message as a string.
 
   Returns:
     An int if there is a commit position, or None otherwise."""

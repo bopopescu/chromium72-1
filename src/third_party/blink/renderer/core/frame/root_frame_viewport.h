@@ -7,7 +7,7 @@
 
 #include "base/single_thread_task_runner.h"
 #include "third_party/blink/renderer/core/core_export.h"
-#include "third_party/blink/renderer/platform/scroll/scrollable_area.h"
+#include "third_party/blink/renderer/core/scroll/scrollable_area.h"
 
 namespace blink {
 
@@ -32,8 +32,12 @@ class CORE_EXPORT RootFrameViewport final
  public:
   static RootFrameViewport* Create(ScrollableArea& visual_viewport,
                                    ScrollableArea& layout_viewport) {
-    return new RootFrameViewport(visual_viewport, layout_viewport);
+    return MakeGarbageCollected<RootFrameViewport>(visual_viewport,
+                                                   layout_viewport);
   }
+
+  RootFrameViewport(ScrollableArea& visual_viewport,
+                    ScrollableArea& layout_viewport);
 
   void Trace(blink::Visitor*) override;
 
@@ -64,15 +68,20 @@ class CORE_EXPORT RootFrameViewport final
                             const WebScrollIntoViewParams&) override;
   IntRect VisibleContentRect(
       IncludeScrollbarsInRect = kExcludeScrollbars) const override;
-  LayoutRect VisibleScrollSnapportRect() const override;
+  LayoutRect VisibleScrollSnapportRect(
+      IncludeScrollbarsInRect = kExcludeScrollbars) const override;
   bool ShouldUseIntegerScrollOffset() const override;
+  bool IsThrottled() const override {
+    // RootFrameViewport is always in the main frame, so the frame does not get
+    // throttled.
+    return false;
+  }
   bool IsActive() const override;
   int ScrollSize(ScrollbarOrientation) const override;
   bool IsScrollCornerVisible() const override;
   IntRect ScrollCornerRect() const override;
   void UpdateScrollOffset(const ScrollOffset&, ScrollType) override;
   IntSize ScrollOffsetInt() const override;
-  IntPoint ScrollOrigin() const override;
   ScrollOffset GetScrollOffset() const override;
   IntSize MinimumScrollOffsetInt() const override;
   IntSize MaximumScrollOffsetInt() const override;
@@ -98,8 +107,10 @@ class CORE_EXPORT RootFrameViewport final
           kIgnorePlatformOverlayScrollbarSize) const override;
   ScrollResult UserScroll(ScrollGranularity, const FloatSize&) override;
   CompositorElementId GetCompositorElementId() const override;
+  CompositorElementId GetScrollbarElementId(
+      ScrollbarOrientation orientation) override;
   bool ScrollAnimatorEnabled() const override;
-  PlatformChromeClient* GetChromeClient() const override;
+  ChromeClient* GetChromeClient() const override;
   SmoothScrollSequencer* GetSmoothScrollSequencer() const override;
   void ServiceScrollAnimations(double) override;
   void UpdateCompositorScrollAnimations() override;
@@ -114,9 +125,6 @@ class CORE_EXPORT RootFrameViewport final
   ScrollbarTheme& GetPageScrollbarTheme() const override;
 
  private:
-  RootFrameViewport(ScrollableArea& visual_viewport,
-                    ScrollableArea& layout_viewport);
-
   enum ViewportToScrollFirst { kVisualViewport, kLayoutViewport };
 
   ScrollOffset ScrollOffsetFromScrollAnimators() const;

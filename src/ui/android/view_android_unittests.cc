@@ -118,6 +118,11 @@ TEST_F(ViewAndroidBoundsTest, MatchesViewInFront) {
   root_.MoveToFront(&view2_);
   GenerateTouchEventAt(100.f, 100.f);
   ExpectHit(handler2_);
+
+  // View 2 moves back to the bottom, and events should hit View 1 again.
+  root_.MoveToBack(&view2_);
+  GenerateTouchEventAt(100.f, 100.f);
+  ExpectHit(handler1_);
 }
 
 TEST_F(ViewAndroidBoundsTest, MatchesViewArea) {
@@ -320,6 +325,29 @@ TEST(ViewAndroidTest, Observer) {
 
   // Views in a tree all get notified of 'detached' event.
   top.RemoveFromParent();
+  EXPECT_FALSE(top_observer.attached_);
+  EXPECT_FALSE(bottom_observer.attached_);
+}
+
+TEST(ViewAndroidTest, WindowAndroidDestructionDetachesAllViewAndroid) {
+  std::unique_ptr<WindowAndroid> window(WindowAndroid::CreateForTesting());
+  ViewAndroid top;
+  ViewAndroid bottom;
+
+  Observer top_observer;
+  Observer bottom_observer;
+
+  top.AddObserver(&top_observer);
+  bottom.AddObserver(&bottom_observer);
+
+  window->AddChild(&top);
+  top.AddChild(&bottom);
+
+  EXPECT_TRUE(top_observer.attached_);
+  EXPECT_TRUE(bottom_observer.attached_);
+
+  window.reset();
+
   EXPECT_FALSE(top_observer.attached_);
   EXPECT_FALSE(bottom_observer.attached_);
 }

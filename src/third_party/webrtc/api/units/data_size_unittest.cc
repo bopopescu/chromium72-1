@@ -14,14 +14,24 @@
 namespace webrtc {
 namespace test {
 
+TEST(DataSizeTest, ConstExpr) {
+  constexpr int64_t kValue = 12345;
+  constexpr DataSize kDataSizeZero = DataSize::Zero();
+  constexpr DataSize kDataSizeInf = DataSize::Infinity();
+  static_assert(kDataSizeZero.IsZero(), "");
+  static_assert(kDataSizeInf.IsInfinite(), "");
+  static_assert(kDataSizeInf.bytes_or(-1) == -1, "");
+  static_assert(kDataSizeInf > kDataSizeZero, "");
+
+  constexpr DataSize kDataSize = DataSize::Bytes<kValue>();
+  static_assert(kDataSize.bytes_or(-1) == kValue, "");
+
+  EXPECT_EQ(kDataSize.bytes(), kValue);
+}
+
 TEST(DataSizeTest, GetBackSameValues) {
   const int64_t kValue = 123 * 8;
   EXPECT_EQ(DataSize::bytes(kValue).bytes(), kValue);
-}
-
-TEST(DataSizeTest, GetDifferentPrefix) {
-  const int64_t kValue = 123 * 8000;
-  EXPECT_EQ(DataSize::bytes(kValue).kilobytes(), kValue / 1000);
 }
 
 TEST(DataSizeTest, IdentityChecks) {
@@ -58,6 +68,18 @@ TEST(DataSizeTest, ComparisonOperators) {
   EXPECT_GT(DataSize::Infinity(), large);
 }
 
+TEST(DataSizeTest, ConvertsToAndFromDouble) {
+  const int64_t kValue = 128;
+  const double kDoubleValue = static_cast<double>(kValue);
+
+  EXPECT_EQ(DataSize::bytes(kValue).bytes<double>(), kDoubleValue);
+  EXPECT_EQ(DataSize::bytes(kDoubleValue).bytes(), kValue);
+
+  const double kInfinity = std::numeric_limits<double>::infinity();
+  EXPECT_EQ(DataSize::Infinity().bytes<double>(), kInfinity);
+  EXPECT_TRUE(DataSize::bytes(kInfinity).IsInfinite());
+}
+
 TEST(DataSizeTest, MathOperations) {
   const int64_t kValueA = 450;
   const int64_t kValueB = 267;
@@ -73,6 +95,7 @@ TEST(DataSizeTest, MathOperations) {
   EXPECT_EQ((size_a * kFloatValue).bytes(), kValueA * kFloatValue);
 
   EXPECT_EQ((size_a / 10).bytes(), kValueA / 10);
+  EXPECT_EQ(size_a / size_b, static_cast<double>(kValueA) / kValueB);
 
   DataSize mutable_size = DataSize::bytes(kValueA);
   mutable_size += size_b;

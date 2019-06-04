@@ -555,7 +555,13 @@ void ExtensionSyncService::ApplyBookmarkAppSyncData(
     web_app_info.icons.push_back(icon_info);
   }
 
-  CreateOrUpdateBookmarkApp(extension_service(), &web_app_info);
+#if defined(OS_CHROMEOS)
+  bool is_locally_installed = true;
+#else
+  bool is_locally_installed = extension != nullptr;
+#endif
+  CreateOrUpdateBookmarkApp(extension_service(), &web_app_info,
+                            is_locally_installed);
 }
 
 void ExtensionSyncService::SetSyncStartFlareForTesting(
@@ -569,7 +575,7 @@ void ExtensionSyncService::DeleteThemeDoNotUse(const Extension& theme) {
       theme.id(), CreateSyncData(theme).GetSyncData());
 }
 
-ExtensionService* ExtensionSyncService::extension_service() const {
+extensions::ExtensionService* ExtensionSyncService::extension_service() const {
   return ExtensionSystem::Get(profile_)->extension_service();
 }
 

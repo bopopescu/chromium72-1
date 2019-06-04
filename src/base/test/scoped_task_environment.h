@@ -8,27 +8,22 @@
 #include "base/macros.h"
 #include "base/memory/ref_counted.h"
 #include "base/single_thread_task_runner.h"
-#include "base/task_scheduler/lazy_task_runner.h"
+#include "base/task/lazy_task_runner.h"
+#include "base/task/sequence_manager/sequence_manager.h"
 #include "build/build_config.h"
 
 namespace base {
 
-namespace internal {
-class ScopedSetSequenceLocalStorageMapForCurrentThread;
-class SequenceLocalStorageMap;
-}  // namespace internal
 
 class FileDescriptorWatcher;
-class MessageLoop;
 class TaskScheduler;
-class TestMockTimeTaskRunner;
 class TickClock;
 
 namespace test {
 
 // ScopedTaskEnvironment allows usage of these APIs within its scope:
 // - (Thread|Sequenced)TaskRunnerHandle, on the thread where it lives
-// - base/task_scheduler/post_task.h, on any thread
+// - base/task/post_task.h, on any thread
 //
 // Tests that need either of these APIs should instantiate a
 // ScopedTaskEnvironment.
@@ -37,10 +32,10 @@ namespace test {
 // RunLoop::Run(UntilIdle) or ScopedTaskEnvironment::RunUntilIdle is called on
 // the thread where the ScopedTaskEnvironment lives.
 //
-// Tasks posted through base/task_scheduler/post_task.h run on dedicated
-// threads. If ExecutionMode is QUEUED, they run when RunUntilIdle() or
-// ~ScopedTaskEnvironment is called. If ExecutionMode is ASYNC, they run
-// as they are posted.
+// Tasks posted through base/task/post_task.h run on dedicated threads. If
+// ExecutionMode is QUEUED, they run when RunUntilIdle() or
+// ~ScopedTaskEnvironment is called. If ExecutionMode is ASYNC, they run as they
+// are posted.
 //
 // All methods of ScopedTaskEnvironment must be called from the same thread.
 //
@@ -76,6 +71,11 @@ class ScopedTaskEnvironment {
     MOCK_TIME,
     // The main thread pumps UI messages.
     UI,
+    // The main thread pumps UI messages and uses a mock clock for delayed tasks
+    // (controllable via FastForward*() methods).
+    // TODO(gab@): Enable mock time on all threads and make MOCK_TIME
+    // configurable independent of MainThreadType.
+    UI_MOCK_TIME,
     // The main thread pumps asynchronous IO messages and supports the
     // FileDescriptorWatcher API on POSIX.
     IO,
@@ -94,9 +94,32 @@ class ScopedTaskEnvironment {
       MainThreadType main_thread_type = MainThreadType::DEFAULT,
       ExecutionMode execution_control_mode = ExecutionMode::ASYNC);
 
+  // Constructs a ScopedTaskEnvironment using a preexisting |sequence_manager|.
+  // |sequence_manager| must outlive this ScopedTaskEnvironment.
+  ScopedTaskEnvironment(
+      sequence_manager::SequenceManager* sequence_manager,
+      MainThreadType main_thread_type = MainThreadType::DEFAULT,
+      ExecutionMode execution_control_mode = ExecutionMode::ASYNC);
+
   // Waits until no undelayed TaskScheduler tasks remain. Then, unregisters the
   // TaskScheduler and the (Thread|Sequenced)TaskRunnerHandle.
   ~ScopedTaskEnvironment();
+
+  class LifetimeObserver {
+   public:
+    virtual ~LifetimeObserver() = default;
+
+    virtual void OnScopedTaskEnvironmentCreated(
+        MainThreadType main_thread_type,
+        scoped_refptr<SingleThreadTaskRunner> task_runner) = 0;
+    virtual void OnScopedTaskEnvironmentDestroyed() = 0;
+  };
+
+  // Set a thread-local observer which will get notifications when
+  // a new ScopedTaskEnvironment is created or destroyed.
+  // This is needed due to peculiarities of Blink initialisation
+  // (Blink is per-test suite and ScopedTaskEnvironment is per-test).
+  static void SetLifetimeObserver(LifetimeObserver* lifetime_observer);
 
   // Returns a TaskRunner that schedules tasks on the main thread.
   scoped_refptr<base::SingleThreadTaskRunner> GetMainThreadTaskRunner();
@@ -126,6 +149,10 @@ class ScopedTaskEnvironment {
   std::unique_ptr<TickClock> DeprecatedGetMockTickClock();
 
   // Only valid for instances with a MOCK_TIME MainThreadType.
+  // Returns the current virtual tick time (initially starting at 0).
+  base::TimeTicks NowTicks() const;
+
+  // Only valid for instances with a MOCK_TIME MainThreadType.
   // Returns the number of pending tasks of the main thread's TaskRunner.
   size_t GetPendingMainThreadTaskCount() const;
 
@@ -135,26 +162,27 @@ class ScopedTaskEnvironment {
   TimeDelta NextMainThreadPendingTaskDelay() const;
 
  private:
+  class MockTimeDomain;
   class TestTaskTracker;
+
+  ScopedTaskEnvironment(
+      std::unique_ptr<sequence_manager::SequenceManager> owned_sequence_manager,
+      sequence_manager::SequenceManager* sequence_manager,
+      MainThreadType main_thread_type,
+      ExecutionMode execution_control_mode);
+
+  scoped_refptr<sequence_manager::TaskQueue> CreateDefaultTaskQueue();
 
   const ExecutionMode execution_control_mode_;
 
-  // Exactly one of these will be non-null to provide the task environment on
-  // the main thread. Users of this class should NOT rely on the presence of a
-  // MessageLoop beyond (Thread|Sequenced)TaskRunnerHandle and RunLoop as
-  // the backing implementation of each MainThreadType may change over time.
-  const std::unique_ptr<MessageLoop> message_loop_;
-  const scoped_refptr<TestMockTimeTaskRunner> mock_time_task_runner_;
+  const std::unique_ptr<MockTimeDomain> mock_time_domain_;
+  const std::unique_ptr<sequence_manager::SequenceManager>
+      owned_sequence_manager_;
+  sequence_manager::SequenceManager* const sequence_manager_;
 
-  // Non-null in MOCK_TIME, where an explicit SequenceLocalStorageMap needs to
-  // be provided. TODO(gab): This can be removed once mock time support is added
-  // to MessageLoop directly.
-  const std::unique_ptr<internal::SequenceLocalStorageMap> slsm_for_mock_time_;
-  const std::unique_ptr<
-      internal::ScopedSetSequenceLocalStorageMapForCurrentThread>
-      slsm_registration_for_mock_time_;
+  scoped_refptr<sequence_manager::TaskQueue> task_queue_;
 
-#if defined(OS_POSIX)
+#if defined(OS_POSIX) || defined(OS_FUCHSIA)
   // Enables the FileDescriptorWatcher API iff running a MainThreadType::IO.
   const std::unique_ptr<FileDescriptorWatcher> file_descriptor_watcher_;
 #endif

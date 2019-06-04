@@ -13,13 +13,14 @@
 #include "base/location.h"
 #include "base/macros.h"
 #include "base/run_loop.h"
-#include "base/single_thread_task_runner.h"
+#include "base/sequenced_task_runner.h"
 #include "base/synchronization/waitable_event.h"
 #include "base/test/scoped_task_environment.h"
 #include "base/test/test_timeouts.h"
 #include "base/threading/thread.h"
 #include "base/threading/thread_task_runner_handle.h"
 #include "components/sync/driver/async_directory_type_controller_mock.h"
+#include "components/sync/driver/configure_context.h"
 #include "components/sync/driver/data_type_controller_mock.h"
 #include "components/sync/driver/fake_sync_client.h"
 #include "components/sync/driver/generic_change_processor_factory.h"
@@ -99,7 +100,7 @@ class AsyncDirectoryTypeControllerFake : public AsyncDirectoryTypeController {
       SyncClient* sync_client,
       AsyncDirectoryTypeControllerMock* mock,
       SharedChangeProcessor* change_processor,
-      scoped_refptr<base::SingleThreadTaskRunner> backend_task_runner)
+      scoped_refptr<base::SequencedTaskRunner> backend_task_runner)
       : AsyncDirectoryTypeController(kType,
                                      base::Closure(),
                                      sync_client,
@@ -166,7 +167,7 @@ class AsyncDirectoryTypeControllerFake : public AsyncDirectoryTypeController {
   std::vector<PendingTask> pending_tasks_;
   AsyncDirectoryTypeControllerMock* mock_;
   scoped_refptr<SharedChangeProcessor> change_processor_;
-  scoped_refptr<base::SingleThreadTaskRunner> backend_task_runner_;
+  scoped_refptr<base::SequencedTaskRunner> backend_task_runner_;
 
   DISALLOW_COPY_AND_ASSIGN(AsyncDirectoryTypeControllerFake);
 };
@@ -197,7 +198,8 @@ class SyncAsyncDirectoryTypeControllerTest : public testing::Test,
                        base::WaitableEvent::InitialState::NOT_SIGNALED);
     backend_thread_.task_runner()->PostTask(
         FROM_HERE,
-        base::Bind(&SyncAsyncDirectoryTypeControllerTest::SignalDone, &done));
+        base::BindOnce(&SyncAsyncDirectoryTypeControllerTest::SignalDone,
+                       &done));
     done.TimedWait(TestTimeouts::action_timeout());
     if (!done.IsSignaled()) {
       ADD_FAILURE() << "Timed out waiting for DB thread to finish.";
@@ -245,8 +247,10 @@ class SyncAsyncDirectoryTypeControllerTest : public testing::Test,
   }
 
   void Start() {
-    non_ui_dtc_->LoadModels(base::Bind(
-        &ModelLoadCallbackMock::Run, base::Unretained(&model_load_callback_)));
+    non_ui_dtc_->LoadModels(
+        ConfigureContext(),
+        base::Bind(&ModelLoadCallbackMock::Run,
+                   base::Unretained(&model_load_callback_)));
     non_ui_dtc_->StartAssociating(base::Bind(
         &StartCallbackMock::Run, base::Unretained(&start_callback_)));
   }
@@ -299,11 +303,12 @@ TEST_F(SyncAsyncDirectoryTypeControllerTest, AbortDuringStartModels) {
   EXPECT_CALL(*dtc_mock_, StartModels()).WillOnce(Return(false));
   EXPECT_CALL(*dtc_mock_, StopModels());
   EXPECT_EQ(DataTypeController::NOT_RUNNING, non_ui_dtc_->state());
-  non_ui_dtc_->LoadModels(base::Bind(&ModelLoadCallbackMock::Run,
+  non_ui_dtc_->LoadModels(ConfigureContext(),
+                          base::Bind(&ModelLoadCallbackMock::Run,
                                      base::Unretained(&model_load_callback_)));
   WaitForDTC();
   EXPECT_EQ(DataTypeController::MODEL_STARTING, non_ui_dtc_->state());
-  non_ui_dtc_->Stop();
+  non_ui_dtc_->Stop(STOP_SYNC);
   EXPECT_EQ(DataTypeController::NOT_RUNNING, non_ui_dtc_->state());
 }
 
@@ -327,8 +332,8 @@ TEST_F(SyncAsyncDirectoryTypeControllerTest, StartAssociationFailed) {
       FROM_HERE, SyncError::DATATYPE_ERROR, "Sync Error", non_ui_dtc_->type()));
   Start();
   WaitForDTC();
-  EXPECT_EQ(DataTypeController::DISABLED, non_ui_dtc_->state());
-  non_ui_dtc_->Stop();
+  EXPECT_EQ(DataTypeController::FAILED, non_ui_dtc_->state());
+  non_ui_dtc_->Stop(STOP_SYNC);
   EXPECT_EQ(DataTypeController::NOT_RUNNING, non_ui_dtc_->state());
 }
 
@@ -388,7 +393,7 @@ TEST_F(SyncAsyncDirectoryTypeControllerTest, AbortDuringAssociation) {
   EXPECT_EQ(DataTypeController::NOT_RUNNING, non_ui_dtc_->state());
   Start();
   wait_for_db_thread_pause.Wait();
-  non_ui_dtc_->Stop();
+  non_ui_dtc_->Stop(STOP_SYNC);
   WaitForDTC();
   EXPECT_EQ(DataTypeController::NOT_RUNNING, non_ui_dtc_->state());
 }
@@ -404,7 +409,7 @@ TEST_F(SyncAsyncDirectoryTypeControllerTest, StartAfterSyncShutdown) {
   SetStopExpectations();
   EXPECT_EQ(DataTypeController::NOT_RUNNING, non_ui_dtc_->state());
   Start();
-  non_ui_dtc_->Stop();
+  non_ui_dtc_->Stop(STOP_SYNC);
   EXPECT_EQ(DataTypeController::NOT_RUNNING, non_ui_dtc_->state());
   Mock::VerifyAndClearExpectations(change_processor_.get());
   Mock::VerifyAndClearExpectations(dtc_mock_.get());
@@ -422,7 +427,7 @@ TEST_F(SyncAsyncDirectoryTypeControllerTest, Stop) {
   Start();
   WaitForDTC();
   EXPECT_EQ(DataTypeController::RUNNING, non_ui_dtc_->state());
-  non_ui_dtc_->Stop();
+  non_ui_dtc_->Stop(STOP_SYNC);
   EXPECT_EQ(DataTypeController::NOT_RUNNING, non_ui_dtc_->state());
 }
 
@@ -441,7 +446,7 @@ TEST_F(SyncAsyncDirectoryTypeControllerTest, StopStart) {
   EXPECT_EQ(DataTypeController::RUNNING, non_ui_dtc_->state());
 
   non_ui_dtc_->BlockBackendTasks();
-  non_ui_dtc_->Stop();
+  non_ui_dtc_->Stop(STOP_SYNC);
   SetStartExpectations();
   SetAssociateExpectations();
   SetActivateExpectations(DataTypeController::OK);

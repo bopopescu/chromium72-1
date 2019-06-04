@@ -6,61 +6,61 @@
 #define ASH_VOICE_INTERACTION_VOICE_INTERACTION_CONTROLLER_H_
 
 #include <memory>
+#include <string>
 
 #include "ash/ash_export.h"
+#include "ash/public/cpp/assistant/assistant_state_base.h"
+#include "ash/public/cpp/assistant/default_voice_interaction_observer.h"
 #include "ash/public/interfaces/voice_interaction_controller.mojom.h"
-#include "ash/voice_interaction/voice_interaction_observer.h"
-#include "mojo/public/cpp/bindings/binding.h"
+#include "mojo/public/cpp/bindings/binding_set.h"
+#include "mojo/public/cpp/bindings/interface_ptr_set.h"
 
 namespace ash {
 
 class ASH_EXPORT VoiceInteractionController
-    : public mojom::VoiceInteractionController {
+    : public mojom::VoiceInteractionController,
+      public AssistantStateBase {
  public:
   VoiceInteractionController();
   ~VoiceInteractionController() override;
 
   void BindRequest(mojom::VoiceInteractionControllerRequest request);
 
-  void AddObserver(VoiceInteractionObserver* observer);
-  void RemoveObserver(VoiceInteractionObserver* observer);
-
   // ash::mojom::VoiceInteractionController:
   void NotifyStatusChanged(mojom::VoiceInteractionState state) override;
   void NotifySettingsEnabled(bool enabled) override;
   void NotifyContextEnabled(bool enabled) override;
+  void NotifyHotwordEnabled(bool enabled) override;
   void NotifySetupCompleted(bool completed) override;
   void NotifyFeatureAllowed(mojom::AssistantAllowedState state) override;
+  void NotifyNotificationEnabled(bool enabled) override;
+  void NotifyLocaleChanged(const std::string& locale) override;
+  void NotifyLaunchWithMicOpen(bool launch_with_mic_open) override;
+  void AddObserver(mojom::VoiceInteractionObserverPtr observer) override;
 
-  mojom::VoiceInteractionState voice_interaction_state() const {
-    return voice_interaction_state_;
-  }
+  // Adding local observers in the same process.
+  void AddLocalObserver(DefaultVoiceInteractionObserver* observer);
+  void RemoveLocalObserver(DefaultVoiceInteractionObserver* observer);
+  void InitObserver(mojom::VoiceInteractionObserver* observer);
 
-  bool settings_enabled() const { return settings_enabled_; }
+  bool notification_enabled() const { return notification_enabled_; }
 
-  bool setup_completed() const { return setup_completed_; }
+  bool launch_with_mic_open() const { return launch_with_mic_open_; }
 
-  mojom::AssistantAllowedState allowed_state() const { return allowed_state_; }
+  void FlushForTesting();
 
  private:
-  // Voice interaction state. The initial value should be set to STOPPED to make
-  // sure the app list button burst animation could be correctly shown.
-  mojom::VoiceInteractionState voice_interaction_state_ =
-      mojom::VoiceInteractionState::STOPPED;
+  // Whether notification is enabled.
+  bool notification_enabled_ = false;
 
-  // Whether voice interaction is enabled in system settings.
-  bool settings_enabled_ = false;
+  // Whether the Assistant should launch with mic open;
+  bool launch_with_mic_open_ = false;
 
-  // Whether voice intearction setup flow has completed.
-  bool setup_completed_ = false;
+  mojo::BindingSet<mojom::VoiceInteractionController> bindings_;
 
-  // Whether voice intearction feature is allowed or disallowed for what reason.
-  mojom::AssistantAllowedState allowed_state_ =
-      mojom::AssistantAllowedState::ALLOWED;
+  mojo::InterfacePtrSet<mojom::VoiceInteractionObserver> observers_;
 
-  base::ObserverList<VoiceInteractionObserver> observers_;
-
-  mojo::Binding<mojom::VoiceInteractionController> binding_;
+  base::ObserverList<DefaultVoiceInteractionObserver> local_observers_;
 
   DISALLOW_COPY_AND_ASSIGN(VoiceInteractionController);
 };

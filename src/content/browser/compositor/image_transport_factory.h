@@ -15,10 +15,6 @@ class ContextFactory;
 class ContextFactoryPrivate;
 }
 
-namespace viz {
-class GLHelper;
-}
-
 namespace content {
 
 // This class provides the interface for creating the support for the
@@ -38,6 +34,10 @@ class CONTENT_EXPORT ImageTransportFactory {
   // Gets the factory instance.
   static ImageTransportFactory* GetInstance();
 
+  // Disable GPU compositing. Will do nothing if GPU compositing is already
+  // disabled.
+  virtual void DisableGpuCompositing() = 0;
+
   // Whether gpu compositing is being used or is disabled for software
   // compositing. Clients of the compositor should give resources that match
   // the appropriate mode.
@@ -50,11 +50,6 @@ class CONTENT_EXPORT ImageTransportFactory {
   // compositor. TODO(fsamuel): This interface should eventually go away once
   // Mus subsumes this functionality.
   virtual ui::ContextFactoryPrivate* GetContextFactoryPrivate() = 0;
-
-  // Gets a GLHelper instance, associated with the shared context. This
-  // GLHelper will get destroyed whenever the shared context is lost
-  // (ImageTransportFactoryObserver::OnLostResources is called).
-  virtual viz::GLHelper* GetGLHelper() = 0;
 };
 
 }  // namespace content

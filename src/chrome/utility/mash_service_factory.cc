@@ -6,25 +6,34 @@
 
 #include <memory>
 
-#include "ash/components/autoclick/autoclick_application.h"
+#include "ash/ash_service.h"
 #include "ash/components/quick_launch/public/mojom/constants.mojom.h"
 #include "ash/components/quick_launch/quick_launch_application.h"
-#include "ash/components/shortcut_viewer/public/mojom/constants.mojom.h"
+#include "ash/components/shortcut_viewer/public/mojom/shortcut_viewer.mojom.h"
 #include "ash/components/shortcut_viewer/shortcut_viewer_application.h"
 #include "ash/components/tap_visualizer/public/mojom/constants.mojom.h"
 #include "ash/components/tap_visualizer/tap_visualizer_app.h"
 #include "ash/public/interfaces/constants.mojom.h"
-#include "ash/window_manager_service.h"
 #include "base/bind.h"
-#include "base/message_loop/message_loop.h"
+#include "base/logging.h"
+#include "base/metrics/histogram_macros.h"
 #include "build/build_config.h"
-#include "components/services/font/font_service_app.h"
-#include "components/services/font/public/interfaces/constants.mojom.h"
-#include "services/ui/common/image_cursors_set.h"
-#include "services/ui/public/interfaces/constants.mojom.h"
-#include "services/ui/service.h"
 
 namespace {
+
+// These values are persisted to logs. Entries should not be renumbered and
+// numeric values should never be reused.
+enum class MashService {
+  kAsh = 0,
+  kAutoclickDeprecated = 1,  // Deleted Aug 2018, https://crbug.com/876115
+  kQuickLaunch = 2,
+  kShortcutViewer = 3,
+  kTapVisualizer = 4,
+  kFontDeprecated = 5,  // Font Service is not in use for mash, but run
+                        // in-process in the browser
+                        // process. https://crbug.com/862553
+  kMaxValue = kFontDeprecated,
+};
 
 using ServiceFactoryFunction = std::unique_ptr<service_manager::Service>();
 
@@ -37,79 +46,61 @@ void RegisterMashService(
   services->emplace(name, service_info);
 }
 
-// Runs on the UI service main thread.
-// NOTE: For mus the UI service is created at the //chrome/browser layer,
-// not in //content. See ServiceManagerContext.
-std::unique_ptr<service_manager::Service> CreateUiService(
-    const scoped_refptr<base::SingleThreadTaskRunner>& resource_runner,
-    base::WeakPtr<ui::ImageCursorsSet> image_cursors_set_weak_ptr) {
-  ui::Service::InitParams params;
-  params.running_standalone = false;
-  params.resource_runner = resource_runner;
-  params.image_cursors_set_weak_ptr = image_cursors_set_weak_ptr;
-  params.should_host_viz = true;
-  return std::make_unique<ui::Service>(params);
-}
-
-// Runs on the utility process main thread.
-void RegisterUiService(
-    content::ContentUtilityClient::StaticServiceMap* services,
-    ui::ImageCursorsSet* cursors) {
-  service_manager::EmbeddedServiceInfo service_info;
-  service_info.use_own_thread = true;
-  service_info.message_loop_type = base::MessageLoop::TYPE_UI;
-  service_info.thread_priority = base::ThreadPriority::DISPLAY;
-  service_info.factory =
-      base::BindRepeating(&CreateUiService, base::ThreadTaskRunnerHandle::Get(),
-                          cursors->GetWeakPtr());
-  services->emplace(ui::mojom::kServiceName, service_info);
+// Wrapper function so we only have one copy of histogram macro generated code.
+void RecordMashServiceLaunch(MashService service) {
+  UMA_HISTOGRAM_ENUMERATION("Launch.MashService", service);
 }
 
 std::unique_ptr<service_manager::Service> CreateAshService() {
-  const bool show_primary_host_on_connect = true;
-  return std::make_unique<ash::WindowManagerService>(
-      show_primary_host_on_connect);
+  RecordMashServiceLaunch(MashService::kAsh);
+  logging::SetLogPrefix("ash");
+  return std::make_unique<ash::AshService>();
 }
 
-std::unique_ptr<service_manager::Service> CreateAutoclickApp() {
-  return std::make_unique<autoclick::AutoclickApplication>();
-}
-
-std::unique_ptr<service_manager::Service> CreateQuickLaunchApp() {
-  return std::make_unique<quick_launch::QuickLaunchApplication>();
+std::unique_ptr<service_manager::Service> CreateQuickLaunchService(
+    service_manager::mojom::ServiceRequest request) {
+  RecordMashServiceLaunch(MashService::kQuickLaunch);
+  logging::SetLogPrefix("quick");
+  return std::make_unique<quick_launch::QuickLaunchApplication>(
+      std::move(request));
 }
 
 std::unique_ptr<service_manager::Service> CreateShortcutViewerApp() {
+  RecordMashServiceLaunch(MashService::kShortcutViewer);
+  logging::SetLogPrefix("shortcut");
   return std::make_unique<
       keyboard_shortcut_viewer::ShortcutViewerApplication>();
 }
 
 std::unique_ptr<service_manager::Service> CreateTapVisualizerApp() {
+  RecordMashServiceLaunch(MashService::kTapVisualizer);
+  logging::SetLogPrefix("tap");
   return std::make_unique<tap_visualizer::TapVisualizerApp>();
-}
-
-std::unique_ptr<service_manager::Service> CreateFontService() {
-  return std::make_unique<font_service::FontServiceApp>();
 }
 
 }  // namespace
 
-MashServiceFactory::MashServiceFactory()
-    : cursors_(std::make_unique<ui::ImageCursorsSet>()) {}
+MashServiceFactory::MashServiceFactory() = default;
 
 MashServiceFactory::~MashServiceFactory() = default;
 
 void MashServiceFactory::RegisterOutOfProcessServices(
     content::ContentUtilityClient::StaticServiceMap* services) {
-  RegisterUiService(services, cursors_.get());
-  RegisterMashService(services, quick_launch::mojom::kServiceName,
-                      &CreateQuickLaunchApp);
   RegisterMashService(services, ash::mojom::kServiceName, &CreateAshService);
-  RegisterMashService(services, "autoclick_app", &CreateAutoclickApp);
   RegisterMashService(services, shortcut_viewer::mojom::kServiceName,
                       &CreateShortcutViewerApp);
   RegisterMashService(services, tap_visualizer::mojom::kServiceName,
                       &CreateTapVisualizerApp);
-  RegisterMashService(services, font_service::mojom::kServiceName,
-                      &CreateFontService);
+
+  keyboard_shortcut_viewer::ShortcutViewerApplication::RegisterForTraceEvents();
+}
+
+std::unique_ptr<service_manager::Service>
+MashServiceFactory::HandleServiceRequest(
+    const std::string& service_name,
+    service_manager::mojom::ServiceRequest request) {
+  if (service_name == quick_launch::mojom::kServiceName)
+    return CreateQuickLaunchService(std::move(request));
+
+  return nullptr;
 }

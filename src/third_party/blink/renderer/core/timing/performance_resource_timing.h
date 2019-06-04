@@ -49,13 +49,25 @@ class CORE_EXPORT PerformanceResourceTiming : public PerformanceEntry {
   friend class PerformanceResourceTimingTest;
 
  public:
+  // This constructor is for PerformanceNavigationTiming.
+  // Related doc: https://goo.gl/uNecAj.
+  PerformanceResourceTiming(const AtomicString& name,
+                            TimeTicks time_origin,
+                            const WebVector<WebServerTimingInfo>&);
+  PerformanceResourceTiming(const WebResourceTimingInfo&,
+                            TimeTicks time_origin,
+                            const AtomicString& initiator_type);
   ~PerformanceResourceTiming() override;
   static PerformanceResourceTiming* Create(
       const WebResourceTimingInfo& info,
       TimeTicks time_origin,
       const AtomicString& initiator_type = g_null_atom) {
-    return new PerformanceResourceTiming(info, time_origin, initiator_type);
+    return MakeGarbageCollected<PerformanceResourceTiming>(info, time_origin,
+                                                           initiator_type);
   }
+
+  AtomicString entryType() const override;
+  PerformanceEntryType EntryTypeEnum() const override;
 
   // Related doc: https://goo.gl/uNecAj.
   virtual AtomicString initiatorType() const;
@@ -82,23 +94,12 @@ class CORE_EXPORT PerformanceResourceTiming : public PerformanceEntry {
  protected:
   void BuildJSONValue(V8ObjectBuilder&) const override;
 
-  // This constructor is for PerformanceNavigationTiming.
-  // Related doc: https://goo.gl/uNecAj.
-  PerformanceResourceTiming(const String& name,
-                            const String& entry_type,
-                            TimeTicks time_origin,
-                            const WebVector<WebServerTimingInfo>&);
   virtual AtomicString AlpnNegotiatedProtocol() const;
   virtual AtomicString ConnectionInfo() const;
 
- protected:
   TimeTicks TimeOrigin() const { return time_origin_; }
 
  private:
-  PerformanceResourceTiming(const WebResourceTimingInfo&,
-                            TimeTicks time_origin,
-                            const AtomicString& initiator_type);
-
   static AtomicString GetNextHopProtocol(
       const AtomicString& alpn_negotiated_protocol,
       const AtomicString& connection_info);

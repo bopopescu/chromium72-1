@@ -6,18 +6,13 @@
 
 from recipe_engine import recipe_api
 
+from PB.go.chromium.org.luci.buildbucket.proto import common as common_pb2
+
 
 class BotUpdateApi(recipe_api.RecipeApi):
 
-  def __init__(self, properties, patch_issue, patch_set, patch_ref,
-               patch_gerrit_url, deps_revision_overrides, fail_patch, *args,
+  def __init__(self, properties, deps_revision_overrides, fail_patch, *args,
                **kwargs):
-    self._apply_patch_on_gclient = properties.get(
-        'apply_patch_on_gclient', True)
-    self._issue = patch_issue
-    self._patchset = patch_set
-    self._gerrit_ref = patch_ref
-    self._gerrit = patch_gerrit_url
     self._deps_revision_overrides = deps_revision_overrides
     self._fail_patch = fail_patch
 
@@ -65,7 +60,7 @@ class BotUpdateApi(recipe_api.RecipeApi):
           'invalid (host, project) pair in '
           'buildbucket.build.input.gitiles_commit: '
           '(%r, %r) does not match any of configured gclient solutions '
-          'and not present in gclient.c.repo_path_map' % (
+          'and not present in gclient_config.repo_path_map' % (
               commit.host, commit.project))
 
     return repo_path
@@ -81,6 +76,7 @@ class BotUpdateApi(recipe_api.RecipeApi):
                       gerrit_no_rebase_patch_ref=False,
                       disable_syntax_validation=False, manifest_name=None,
                       patch_refs=None, ignore_input_commit=False,
+                      set_output_commit=False, step_test_data=None,
                       **kwargs):
     """
     Args:
@@ -91,6 +87,17 @@ class BotUpdateApi(recipe_api.RecipeApi):
         such as bisect.
       manifest_name: The name of the manifest to upload to LogDog.  This must
         be unique for the whole build.
+      ignore_input_commit: if True, ignore api.buildbucket.gitiles_commit.
+        Exists for historical reasons. Please do not use.
+      set_output_commit: if True, mark the checked out commit as the
+        primary output commit of this build, i.e. call
+        api.buildbucket.set_output_gitiles_commit.
+        In case of multiple repos, the repo is the one specified in
+        api.buildbucket.gitiles_commit or the first configured solution.
+        When sorting builds by commit position, this commit will be used.
+        Requires falsy ignore_input_commit.
+      step_test_data: a null function that returns test bot_update.py output.
+        Use test_api.output_json to generate test data.
     """
     assert use_site_config_creds is None, "use_site_config_creds is deprecated"
     assert rietveld is None, "rietveld is deprecated"
@@ -98,6 +105,7 @@ class BotUpdateApi(recipe_api.RecipeApi):
     assert patchset is None, "patchset is deprecated"
     assert patch_oauth2 is None, "patch_oauth2 is deprecated"
     assert oauth2_json is None, "oauth2_json is deprecated"
+    assert not (ignore_input_commit and set_output_commit)
 
     refs = refs or []
     # We can re-use the gclient spec from the gclient module, since all the
@@ -108,18 +116,13 @@ class BotUpdateApi(recipe_api.RecipeApi):
 
     # Construct our bot_update command.  This basically be inclusive of
     # everything required for bot_update to know:
-    root = patch_root
-    if root is None:
-      # TODO(nodir): use m.gclient.get_repo_path instead.
-      root = self.m.gclient.calculate_patch_root(
-          self.m.properties.get('patch_project'), cfg,
-          self.m.tryserver.gerrit_change_repo_url)
+    patch_root = patch_root or self.m.gclient.get_gerrit_patch_root(
+        gclient_config=cfg)
 
     # Allow patch_project's revision if necessary.
     # This is important for projects which are checked out as DEPS of the
     # gclient solution.
-    self.m.gclient.set_patch_project_revision(
-        self.m.properties.get('patch_project'), cfg)
+    self.m.gclient.set_patch_repo_revision(cfg)
 
     reverse_rev_map = self.m.gclient.got_revision_reverse_mapping(cfg)
 
@@ -127,7 +130,7 @@ class BotUpdateApi(recipe_api.RecipeApi):
         # What do we want to check out (spec/root/rev/reverse_rev_map).
         ['--spec-path', self.m.raw_io.input(
             self.m.gclient.config_to_pythonish(cfg))],
-        ['--patch_root', root],
+        ['--patch_root', patch_root],
         ['--revision_mapping_file', self.m.json.input(reverse_rev_map)],
         ['--git-cache-dir', cfg.cache_dir],
         ['--cleanup-dir', self.m.path['cleanup'].join('bot_update')],
@@ -138,10 +141,14 @@ class BotUpdateApi(recipe_api.RecipeApi):
 
     # How to find the patch, if any
     if patch:
-      if self.m.tryserver.gerrit_change_repo_url and self._gerrit_ref:
-        flags.append(
-            ['--patch_ref', '%s@%s' % (
-                self.m.tryserver.gerrit_change_repo_url, self._gerrit_ref)])
+      repo_url = self.m.tryserver.gerrit_change_repo_url
+      fetch_ref = self.m.tryserver.gerrit_change_fetch_ref
+      target_ref = self.m.tryserver.gerrit_change_target_ref
+      if repo_url and fetch_ref:
+        flags.append([
+            '--patch_ref',
+            '%s@%s:%s' % (repo_url, target_ref, fetch_ref),
+        ])
       if patch_refs:
         flags.extend(
             ['--patch_ref', patch_ref]
@@ -155,18 +162,16 @@ class BotUpdateApi(recipe_api.RecipeApi):
 
     # HACK: ensure_checkout API must be redesigned so that we don't pass such
     # parameters. Existing semantics is too opiniated.
-    if not ignore_input_commit:
-      # Apply input gitiles_commit, if any.
-      input_commit = self.m.buildbucket.build.input.gitiles_commit
-      if input_commit.id or input_commit.ref:
-        repo_path = self._get_commit_repo_path(input_commit, cfg)
-        # Note: this is not entirely correct. build.input.gitiles_commit
-        # definition says "The Gitiles commit to run against.".
-        # However, here we ignore it if the config specified a revision.
-        # This is necessary because existing builders rely on this behavior,
-        # e.g. they want to force refs/heads/master at the config level.
-        revisions[repo_path] = (
-            revisions.get(repo_path) or input_commit.id or input_commit.ref)
+    in_commit = self.m.buildbucket.gitiles_commit
+    in_commit_rev = in_commit.id or in_commit.ref
+    if not ignore_input_commit and in_commit_rev:
+      # Note: this is not entirely correct. build.input.gitiles_commit
+      # definition says "The Gitiles commit to run against.".
+      # However, here we ignore it if the config specified a revision.
+      # This is necessary because existing builders rely on this behavior,
+      # e.g. they want to force refs/heads/master at the config level.
+      main_repo_path = self._get_commit_repo_path(in_commit, cfg)
+      revisions[main_repo_path] = revisions.get(main_repo_path) or in_commit_rev
 
     # Guarantee that first solution has a revision.
     # TODO(machenbach): We should explicitly pass HEAD for ALL solutions
@@ -194,8 +199,8 @@ class BotUpdateApi(recipe_api.RecipeApi):
       if fixed_revision:
         fixed_revisions[name] = fixed_revision
         if fixed_revision.upper() == 'HEAD':
-          # Sync to correct destination branch if HEAD was specified.
-          fixed_revision = self._destination_branch(cfg, name)
+          # Sync to correct destination ref if HEAD was specified.
+          fixed_revision = self._destination_ref(cfg, name)
         # If we're syncing to a ref, we want to make sure it exists before
         # trying to check it out.
         if (fixed_revision.startswith('refs/') and
@@ -237,14 +242,12 @@ class BotUpdateApi(recipe_api.RecipeApi):
       cmd.append('--gerrit_no_rebase_patch_ref')
     if disable_syntax_validation or cfg.disable_syntax_validation:
       cmd.append('--disable-syntax-validation')
-    if not self._apply_patch_on_gclient:
-      cmd.append('--no-apply-patch-on-gclient')
 
     # Inject Json output for testing.
     first_sln = cfg.solutions[0].name
-    step_test_data = lambda: self.test_api.output_json(
-        root, first_sln, reverse_rev_map, self._fail_patch,
-        fixed_revisions=fixed_revisions)
+    step_test_data = step_test_data or (lambda: self.test_api.output_json(
+        patch_root, first_sln, reverse_rev_map, self._fail_patch,
+        fixed_revisions=fixed_revisions))
 
     name = 'bot_update'
     if not patch:
@@ -267,27 +270,71 @@ class BotUpdateApi(recipe_api.RecipeApi):
     finally:
       if step_result and step_result.json.output:
         result = step_result.json.output
-        self._last_returned_properties = step_result.json.output.get(
-            'properties', {})
+        self._last_returned_properties = result.get('properties', {})
 
         if update_presentation:
           # Set properties such as got_revision.
           for prop_name, prop_value in (
               self.last_returned_properties.iteritems()):
             step_result.presentation.properties[prop_name] = prop_value
+
         # Add helpful step description in the step UI.
         if 'step_text' in result:
           step_text = result['step_text']
           step_result.presentation.step_text = step_text
 
         # Export the step results as a Source Manifest to LogDog.
+        source_manifest = result.get('source_manifest', {})
         if manifest_name:
           if not patch:
             # The param "patched" is purely cosmetic to mean "if false, this
             # bot_update run exists purely to unpatch an existing patch".
             manifest_name += '_unpatched'
           self.m.source_manifest.set_json_manifest(
-              manifest_name, result.get('source_manifest', {}))
+              manifest_name, source_manifest)
+
+        # Set output commit of the build.
+        if set_output_commit:
+          # As of April 2019, got_revision describes the output commit,
+          # the same commit that Build.output.gitiles_commit describes.
+          # In particular, users tend to set got_revision to make Milo display
+          # it. Derive output commit from got_revision.
+          out_commit = common_pb2.GitilesCommit(
+              id=self._last_returned_properties['got_revision'],
+          )
+
+          out_solution = reverse_rev_map['got_revision']
+          out_manifest = result['manifest'][out_solution]
+          assert out_manifest['revision'] == out_commit.id, (
+              out_manifest, out_commit.id)
+
+          out_commit.host, out_commit.project = (
+              self.m.gitiles.parse_repo_url(out_manifest['repository'])
+          )
+
+          # Determine the output ref.
+          got_revision_cp = self._last_returned_properties.get('got_revision_cp')
+          in_rev = revisions.get(out_solution)
+          if got_revision_cp:
+            # If commit position string is available, read the ref from there.
+            out_commit.ref, out_commit.position = (
+                self.m.commit_position.parse(got_revision_cp))
+          elif in_rev.startswith('refs/'):
+            # If we were asked to check out a specific ref, use it as output
+            # ref.
+            out_commit.ref = in_rev
+          elif in_rev == 'HEAD':
+            # bot_update.py interprets HEAD as refs/heads/master
+            out_commit.ref = 'refs/heads/master'
+          elif out_commit.id == in_commit.id and in_commit.ref:
+            # Derive output ref from the input ref.
+            out_commit.ref = in_commit.ref
+          else: # pragma: no cover
+            assert False, (
+                'Unsupposed case. '
+                'Call buildbucket.set_output_gitiles_commit directly.'
+            )
+          self.m.buildbucket.set_output_gitiles_commit(out_commit)
 
         # Set the "checkout" path for the main solution.
         # This is used by the Chromium module to figure out where to look for
@@ -316,20 +363,22 @@ class BotUpdateApi(recipe_api.RecipeApi):
 
         # bot_update actually just sets root to be the folder name of the
         # first solution.
-        if result['did_run'] and 'checkout' not in self.m.path:
+        if (result.get('did_run')
+            and 'checkout' not in self.m.path
+            and 'root' in result):
           co_root = result['root']
           cwd = self.m.context.cwd or self.m.path['start_dir']
           self.m.path['checkout'] = cwd.join(*co_root.split(self.m.path.sep))
 
     return step_result
 
-  def _destination_branch(self, cfg, path):
-    """Returns the destination branch of a CL for the matching project
-    if available or HEAD otherwise.
+  def _destination_ref(self, cfg, path):
+    """Returns the ref branch of a CL for the matching project if available or
+    HEAD otherwise.
 
-    This is a noop if there's no Gerrit CL associated with the run.
-    Otherwise this queries Gerrit for the correct destination branch, which
-    might differ from master.
+    If there's no Gerrit CL associated with the run, returns 'HEAD'.
+    Otherwise this queries Gerrit for the correct destination ref, which
+    might differ from refs/heads/master.
 
     Args:
       cfg: The used gclient config.
@@ -337,29 +386,21 @@ class BotUpdateApi(recipe_api.RecipeApi):
           'src/v8'. The query will only be made for the project that matches
           the CL's project.
     Returns:
-        A destination branch as understood by bot_update.py if available
-        and if different from master, returns 'HEAD' otherwise.
+        A destination ref as understood by bot_update.py if available
+        and if different from refs/heads/master, returns 'HEAD' otherwise.
     """
-    # Bail out if this is not a gerrit issue.
-    if (not self.m.tryserver.is_gerrit_issue or
-        not self._gerrit or not self._issue):
+    # Ignore project paths other than the one belonging to the current CL.
+    patch_path = self.m.gclient.get_gerrit_patch_root(gclient_config=cfg)
+    if patch_path:
+      patch_path = patch_path.replace(self.m.path.sep, '/')
+    if not patch_path or path != patch_path:
       return 'HEAD'
 
-    # Ignore other project paths than the one belonging to the CL.
-    if path != cfg.patch_projects.get(
-        self.m.properties.get('patch_project'),
-        (cfg.solutions[0].name, None))[0]:
+    target_ref = self.m.tryserver.gerrit_change_target_ref
+    if target_ref == 'refs/heads/master':
       return 'HEAD'
 
-    # Query Gerrit to check if a CL's destination branch differs from master.
-    destination_branch = self.m.gerrit.get_change_destination_branch(
-        host=self._gerrit,
-        change=self._issue,
-        name='get_patch_destination_branch',
-    )
-
-    # Only use prefix if different from bot_update.py's default.
-    return destination_branch if destination_branch != 'master' else 'HEAD'
+    return target_ref
 
   def _resolve_fixed_revisions(self, bot_update_json):
     """Set all fixed revisions from the first sync to their respective

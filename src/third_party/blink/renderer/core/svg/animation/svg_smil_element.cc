@@ -38,6 +38,7 @@
 #include "third_party/blink/renderer/core/svg/svg_uri_reference.h"
 #include "third_party/blink/renderer/core/xlink_names.h"
 #include "third_party/blink/renderer/platform/heap/handle.h"
+#include "third_party/blink/renderer/platform/wtf/functional.h"
 #include "third_party/blink/renderer/platform/wtf/math_extras.h"
 #include "third_party/blink/renderer/platform/wtf/std_lib_extras.h"
 #include "third_party/blink/renderer/platform/wtf/vector.h"
@@ -47,21 +48,20 @@ namespace blink {
 class RepeatEvent final : public Event {
  public:
   static RepeatEvent* Create(const AtomicString& type, int repeat) {
-    return new RepeatEvent(type, Bubbles::kNo, Cancelable::kNo, repeat);
+    return MakeGarbageCollected<RepeatEvent>(type, Bubbles::kNo,
+                                             Cancelable::kNo, repeat);
   }
 
-  ~RepeatEvent() override = default;
-
-  int Repeat() const { return repeat_; }
-
-  void Trace(blink::Visitor* visitor) override { Event::Trace(visitor); }
-
- protected:
   RepeatEvent(const AtomicString& type,
               Bubbles bubbles,
               Cancelable cancelable,
               int repeat = -1)
       : Event(type, bubbles, cancelable), repeat_(repeat) {}
+  ~RepeatEvent() override = default;
+
+  int Repeat() const { return repeat_; }
+
+  void Trace(blink::Visitor* visitor) override { Event::Trace(visitor); }
 
  private:
   int repeat_;
@@ -105,7 +105,7 @@ class ConditionEventListener final : public EventListener {
         animation_(animation),
         condition_(condition) {}
 
-  void handleEvent(ExecutionContext*, Event*) override;
+  void Invoke(ExecutionContext*, Event*) override;
 
   Member<SVGSMILElement> animation_;
   Member<SVGSMILElement::Condition> condition_;
@@ -119,7 +119,7 @@ bool ConditionEventListener::operator==(const EventListener& listener) const {
   return false;
 }
 
-void ConditionEventListener::handleEvent(ExecutionContext*, Event* event) {
+void ConditionEventListener::Invoke(ExecutionContext*, Event* event) {
   if (!animation_)
     return;
   if (event->type() == "repeatn" &&
@@ -302,10 +302,10 @@ void SVGSMILElement::Reset() {
 }
 
 Node::InsertionNotificationRequest SVGSMILElement::InsertedInto(
-    ContainerNode* root_parent) {
+    ContainerNode& root_parent) {
   SVGElement::InsertedInto(root_parent);
 
-  if (!root_parent->isConnected())
+  if (!root_parent.isConnected())
     return kInsertionDone;
 
   UseCounter::Count(GetDocument(), WebFeature::kSVGSMILElementInDocument);
@@ -324,7 +324,7 @@ Node::InsertionNotificationRequest SVGSMILElement::InsertedInto(
 
   // "If no attribute is present, the default begin value (an offset-value of 0)
   // must be evaluated."
-  if (!FastHasAttribute(SVGNames::beginAttr))
+  if (!FastHasAttribute(svg_names::kBeginAttr))
     begin_times_.push_back(SMILTimeWithOrigin());
 
   if (is_waiting_for_first_interval_)
@@ -338,8 +338,8 @@ Node::InsertionNotificationRequest SVGSMILElement::InsertedInto(
   return kInsertionDone;
 }
 
-void SVGSMILElement::RemovedFrom(ContainerNode* root_parent) {
-  if (root_parent->isConnected()) {
+void SVGSMILElement::RemovedFrom(ContainerNode& root_parent) {
+  if (root_parent.isConnected()) {
     ClearResourceAndEventBaseReferences();
     ClearConditions();
     SetTargetElement(nullptr);
@@ -381,8 +381,8 @@ SMILTime SVGSMILElement::ParseClockValue(const String& data) {
 
   double result = 0;
   bool ok;
-  size_t double_point_one = parse.find(':');
-  size_t double_point_two = parse.find(':', double_point_one + 1);
+  wtf_size_t double_point_one = parse.find(':');
+  wtf_size_t double_point_two = parse.find(':', double_point_one + 1);
   if (double_point_one == 2 && double_point_two == 5 && parse.length() >= 8) {
     result += parse.Substring(0, 2).ToUIntStrict(&ok) * 60 * 60;
     if (!ok)
@@ -415,7 +415,7 @@ bool SVGSMILElement::ParseCondition(const String& value,
 
   double sign = 1.;
   bool ok;
-  size_t pos = parse_string.find('+');
+  wtf_size_t pos = parse_string.find('+');
   if (pos == kNotFound) {
     pos = parse_string.find('-');
     if (pos != kNotFound)
@@ -508,10 +508,10 @@ void SVGSMILElement::ParseBeginOrEnd(const String& parse_string,
 void SVGSMILElement::ParseAttribute(const AttributeModificationParams& params) {
   const QualifiedName& name = params.name;
   const AtomicString& value = params.new_value;
-  if (name == SVGNames::beginAttr) {
+  if (name == svg_names::kBeginAttr) {
     if (!conditions_.IsEmpty()) {
       ClearConditions();
-      ParseBeginOrEnd(FastGetAttribute(SVGNames::endAttr), kEnd);
+      ParseBeginOrEnd(FastGetAttribute(svg_names::kEndAttr), kEnd);
     }
     ParseBeginOrEnd(value.GetString(), kBegin);
     if (isConnected()) {
@@ -520,10 +520,10 @@ void SVGSMILElement::ParseAttribute(const AttributeModificationParams& params) {
       BeginListChanged(Elapsed());
     }
     AnimationAttributeChanged();
-  } else if (name == SVGNames::endAttr) {
+  } else if (name == svg_names::kEndAttr) {
     if (!conditions_.IsEmpty()) {
       ClearConditions();
-      ParseBeginOrEnd(FastGetAttribute(SVGNames::beginAttr), kBegin);
+      ParseBeginOrEnd(FastGetAttribute(svg_names::kBeginAttr), kBegin);
     }
     ParseBeginOrEnd(value.GetString(), kEnd);
     if (isConnected()) {
@@ -532,26 +532,23 @@ void SVGSMILElement::ParseAttribute(const AttributeModificationParams& params) {
       EndListChanged(Elapsed());
     }
     AnimationAttributeChanged();
-  } else if (name == SVGNames::onbeginAttr) {
-    SetAttributeEventListener(
-        EventTypeNames::beginEvent,
-        CreateAttributeEventListener(this, name, value, EventParameterName()));
-  } else if (name == SVGNames::onendAttr) {
-    SetAttributeEventListener(
-        EventTypeNames::endEvent,
-        CreateAttributeEventListener(this, name, value, EventParameterName()));
-  } else if (name == SVGNames::onrepeatAttr) {
-    SetAttributeEventListener(
-        EventTypeNames::repeatEvent,
-        CreateAttributeEventListener(this, name, value, EventParameterName()));
-  } else if (name == SVGNames::restartAttr) {
+  } else if (name == svg_names::kOnbeginAttr) {
+    SetAttributeEventListener(event_type_names::kBeginEvent,
+                              CreateAttributeEventListener(this, name, value));
+  } else if (name == svg_names::kOnendAttr) {
+    SetAttributeEventListener(event_type_names::kEndEvent,
+                              CreateAttributeEventListener(this, name, value));
+  } else if (name == svg_names::kOnrepeatAttr) {
+    SetAttributeEventListener(event_type_names::kRepeatEvent,
+                              CreateAttributeEventListener(this, name, value));
+  } else if (name == svg_names::kRestartAttr) {
     if (value == "never")
       restart_ = kRestartNever;
     else if (value == "whenNotActive")
       restart_ = kRestartWhenNotActive;
     else
       restart_ = kRestartAlways;
-  } else if (name == SVGNames::fillAttr) {
+  } else if (name == svg_names::kFillAttr) {
     fill_ = value == "freeze" ? kFillFreeze : kFillRemove;
   } else {
     SVGElement::ParseAttribute(params);
@@ -559,18 +556,18 @@ void SVGSMILElement::ParseAttribute(const AttributeModificationParams& params) {
 }
 
 void SVGSMILElement::SvgAttributeChanged(const QualifiedName& attr_name) {
-  if (attr_name == SVGNames::durAttr) {
+  if (attr_name == svg_names::kDurAttr) {
     cached_dur_ = kInvalidCachedTime;
-  } else if (attr_name == SVGNames::repeatDurAttr) {
+  } else if (attr_name == svg_names::kRepeatDurAttr) {
     cached_repeat_dur_ = kInvalidCachedTime;
-  } else if (attr_name == SVGNames::repeatCountAttr) {
+  } else if (attr_name == svg_names::kRepeatCountAttr) {
     cached_repeat_count_ = kInvalidCachedTime;
-  } else if (attr_name == SVGNames::minAttr) {
+  } else if (attr_name == svg_names::kMinAttr) {
     cached_min_ = kInvalidCachedTime;
-  } else if (attr_name == SVGNames::maxAttr) {
+  } else if (attr_name == svg_names::kMaxAttr) {
     cached_max_ = kInvalidCachedTime;
-  } else if (attr_name.Matches(SVGNames::hrefAttr) ||
-             attr_name.Matches(XLinkNames::hrefAttr)) {
+  } else if (attr_name.Matches(svg_names::kHrefAttr) ||
+             attr_name.Matches(xlink_names::kHrefAttr)) {
     // TODO(fs): Could be smarter here when 'href' is specified and 'xlink:href'
     // is changed.
     SVGElement::InvalidationGuard invalidation_guard(this);
@@ -650,7 +647,7 @@ bool SVGSMILElement::IsFrozen() const {
 SMILTime SVGSMILElement::Dur() const {
   if (cached_dur_ != kInvalidCachedTime)
     return cached_dur_;
-  const AtomicString& value = FastGetAttribute(SVGNames::durAttr);
+  const AtomicString& value = FastGetAttribute(svg_names::kDurAttr);
   SMILTime clock_value = ParseClockValue(value);
   return cached_dur_ = clock_value <= 0 ? SMILTime::Unresolved() : clock_value;
 }
@@ -658,7 +655,7 @@ SMILTime SVGSMILElement::Dur() const {
 SMILTime SVGSMILElement::RepeatDur() const {
   if (cached_repeat_dur_ != kInvalidCachedTime)
     return cached_repeat_dur_;
-  const AtomicString& value = FastGetAttribute(SVGNames::repeatDurAttr);
+  const AtomicString& value = FastGetAttribute(svg_names::kRepeatDurAttr);
   SMILTime clock_value = ParseClockValue(value);
   cached_repeat_dur_ = clock_value <= 0 ? SMILTime::Unresolved() : clock_value;
   return cached_repeat_dur_;
@@ -669,7 +666,7 @@ SMILTime SVGSMILElement::RepeatCount() const {
   if (cached_repeat_count_ != kInvalidCachedTime)
     return cached_repeat_count_;
   SMILTime computed_repeat_count = SMILTime::Unresolved();
-  const AtomicString& value = FastGetAttribute(SVGNames::repeatCountAttr);
+  const AtomicString& value = FastGetAttribute(svg_names::kRepeatCountAttr);
   if (!value.IsNull()) {
     DEFINE_STATIC_LOCAL(const AtomicString, indefinite_value, ("indefinite"));
     if (value == indefinite_value) {
@@ -688,7 +685,7 @@ SMILTime SVGSMILElement::RepeatCount() const {
 SMILTime SVGSMILElement::MaxValue() const {
   if (cached_max_ != kInvalidCachedTime)
     return cached_max_;
-  const AtomicString& value = FastGetAttribute(SVGNames::maxAttr);
+  const AtomicString& value = FastGetAttribute(svg_names::kMaxAttr);
   SMILTime result = ParseClockValue(value);
   return cached_max_ = (result.IsUnresolved() || result <= 0)
                            ? SMILTime::Indefinite()
@@ -698,7 +695,7 @@ SMILTime SVGSMILElement::MaxValue() const {
 SMILTime SVGSMILElement::MinValue() const {
   if (cached_min_ != kInvalidCachedTime)
     return cached_min_;
-  const AtomicString& value = FastGetAttribute(SVGNames::minAttr);
+  const AtomicString& value = FastGetAttribute(svg_names::kMinAttr);
   SMILTime result = ParseClockValue(value);
   return cached_min_ = (result.IsUnresolved() || result < 0) ? 0 : result;
 }
@@ -743,7 +740,7 @@ SMILTime SVGSMILElement::FindInstanceTime(BeginOrEnd begin_or_end,
       minimum_time, SMILTimeWithOrigin::kParserOrigin);
   const SMILTimeWithOrigin* result = std::lower_bound(
       list.begin(), list.end(), dummy_time_with_origin, CompareTimes);
-  int index_of_result = result - list.begin();
+  int index_of_result = static_cast<int>(result - list.begin());
   if (index_of_result == size_of_list)
     return SMILTime::Unresolved();
   const SMILTime& current_time = list[index_of_result].Time();
@@ -1133,7 +1130,7 @@ bool SVGSMILElement::Progress(double elapsed, bool seek_to_time) {
   if (animation_is_contributing) {
     if (old_active_state == kInactive ||
         restarted_interval == kDidRestartInterval) {
-      ScheduleEvent(EventTypeNames::beginEvent);
+      ScheduleEvent(event_type_names::kBeginEvent);
       StartedActiveInterval();
     }
 
@@ -1146,14 +1143,14 @@ bool SVGSMILElement::Progress(double elapsed, bool seek_to_time) {
 
   if ((old_active_state == kActive && GetActiveState() != kActive) ||
       restarted_interval == kDidRestartInterval) {
-    ScheduleEvent(EventTypeNames::endEvent);
+    ScheduleEvent(event_type_names::kEndEvent);
     EndedActiveInterval();
   }
 
   // Triggering all the pending events if the animation timeline is changed.
   if (seek_to_time) {
     if (GetActiveState() == kInactive)
-      ScheduleEvent(EventTypeNames::beginEvent);
+      ScheduleEvent(event_type_names::kBeginEvent);
 
     if (repeat) {
       for (unsigned repeat_event_count = 1; repeat_event_count < repeat;
@@ -1164,7 +1161,7 @@ bool SVGSMILElement::Progress(double elapsed, bool seek_to_time) {
     }
 
     if (GetActiveState() == kInactive || GetActiveState() == kFrozen)
-      ScheduleEvent(EventTypeNames::endEvent);
+      ScheduleEvent(event_type_names::kEndEvent);
   }
 
   next_progress_time_ = CalculateNextProgressTime(elapsed);
@@ -1235,7 +1232,7 @@ void SVGSMILElement::EndedActiveInterval() {
 
 void SVGSMILElement::ScheduleRepeatEvents(unsigned count) {
   repeat_event_count_list_.push_back(count);
-  ScheduleEvent(EventTypeNames::repeatEvent);
+  ScheduleEvent(event_type_names::kRepeatEvent);
   ScheduleEvent(AtomicString("repeatn"));
 }
 
@@ -1247,15 +1244,16 @@ void SVGSMILElement::ScheduleEvent(const AtomicString& event_type) {
 }
 
 void SVGSMILElement::DispatchPendingEvent(const AtomicString& event_type) {
-  DCHECK(event_type == EventTypeNames::endEvent ||
-         event_type == EventTypeNames::beginEvent ||
-         event_type == EventTypeNames::repeatEvent || event_type == "repeatn");
+  DCHECK(event_type == event_type_names::kEndEvent ||
+         event_type == event_type_names::kBeginEvent ||
+         event_type == event_type_names::kRepeatEvent ||
+         event_type == "repeatn");
   if (event_type == "repeatn") {
     unsigned repeat_event_count = repeat_event_count_list_.front();
     repeat_event_count_list_.EraseAt(0);
-    DispatchEvent(RepeatEvent::Create(event_type, repeat_event_count));
+    DispatchEvent(*RepeatEvent::Create(event_type, repeat_event_count));
   } else {
-    DispatchEvent(Event::Create(event_type));
+    DispatchEvent(*Event::Create(event_type));
   }
 }
 

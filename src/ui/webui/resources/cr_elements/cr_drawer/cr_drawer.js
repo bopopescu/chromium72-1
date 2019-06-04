@@ -8,10 +8,10 @@ Polymer({
   properties: {
     heading: String,
 
-    open: {
+    /** @private */
+    show_: {
       type: Boolean,
-      // Enables 'open-changed' events.
-      notify: true,
+      reflectToAttribute: true,
     },
 
     /** The alignment of the drawer on the screen ('ltr' or 'rtl'). */
@@ -22,33 +22,61 @@ Polymer({
     },
   },
 
-  listeners: {
-    'transitionend': 'onDialogTransitionEnd_',
+  /** @type {boolean} */
+  get open() {
+    return this.$.dialog.open;
+  },
+
+  set open(value) {
+    assertNotReached('Cannot set |open|.');
   },
 
   /** Toggles the drawer open and close. */
   toggle: function() {
-    if (this.$.dialog.open)
-      this.closeDrawer();
+    if (this.open)
+      this.cancel();
     else
       this.openDrawer();
   },
 
   /** Shows drawer and slides it into view. */
   openDrawer: function() {
-    if (!this.$.dialog.open) {
-      this.$.dialog.showModal();
-      this.open = true;
-      this.classList.add('opening');
-    }
+    if (this.open)
+      return;
+    this.$.dialog.showModal();
+    this.show_ = true;
+    this.fire('cr-drawer-opening');
+    listenOnce(this.$.dialog, 'transitionend', () => {
+      this.fire('cr-drawer-opened');
+    });
   },
 
-  /** Slides the drawer away, then closes it after the transition has ended. */
-  closeDrawer: function() {
-    if (this.$.dialog.open) {
-      this.classList.remove('opening');
-      this.classList.add('closing');
-    }
+  /**
+   * Slides the drawer away, then closes it after the transition has ended. It
+   * is up to the owner of this component to differentiate between close and
+   * cancel.
+   * @param {boolean} cancel
+   */
+  dismiss_: function(cancel) {
+    if (!this.open)
+      return;
+    this.show_ = false;
+    listenOnce(this.$.dialog, 'transitionend', () => {
+      this.$.dialog.close(cancel ? 'canceled' : 'closed');
+    });
+  },
+
+  cancel: function() {
+    this.dismiss_(true);
+  },
+
+  close: function() {
+    this.dismiss_(false);
+  },
+
+  /** @return {boolean} */
+  wasCanceled: function() {
+    return !this.open && this.$.dialog.returnValue == 'canceled';
   },
 
   /**
@@ -66,7 +94,7 @@ Polymer({
    * @private
    */
   onDialogTap_: function() {
-    this.closeDrawer();
+    this.cancel();
   },
 
   /**
@@ -76,20 +104,20 @@ Polymer({
    */
   onDialogCancel_: function(event) {
     event.preventDefault();
-    this.closeDrawer();
+    this.cancel();
   },
 
   /**
-   * Closes the dialog when the closing animation is over.
+   * @param {!Event} event
    * @private
    */
-  onDialogTransitionEnd_: function() {
-    if (this.classList.contains('closing')) {
-      this.classList.remove('closing');
-      this.$.dialog.close();
-      this.open = false;
-    } else if (this.classList.contains('opening')) {
-      this.fire('cr-drawer-opened');
-    }
+  onDialogClose_: function(event) {
+    // TODO(dpapad): This is necessary to make the code work both for Polymer 1
+    // and Polymer 2. Remove once migration to Polymer 2 is completed.
+    event.stopPropagation();
+
+    // Catch and re-fire the 'close' event such that it bubbles across Shadow
+    // DOM v1.
+    this.fire('close');
   },
 });

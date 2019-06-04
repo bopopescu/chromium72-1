@@ -16,7 +16,7 @@
 
 // Definitions of constant values used throughout the QUIC code.
 
-namespace net {
+namespace quic {
 
 // Simple time constants.
 const uint64_t kNumSecondsPerMinute = 60;
@@ -25,6 +25,8 @@ const uint64_t kNumSecondsPerWeek = kNumSecondsPerHour * 24 * 7;
 const uint64_t kNumMicrosPerMilli = 1000;
 const uint64_t kNumMicrosPerSecond = 1000 * 1000;
 
+// Default number of connections for N-connection emulation.
+const uint32_t kDefaultNumConnections = 2;
 // Default initial maximum size in bytes of a QUIC packet.
 const QuicByteCount kDefaultMaxPacketSize = 1350;
 // Default initial maximum size in bytes of a QUIC packet for servers.
@@ -34,9 +36,18 @@ const QuicByteCount kDefaultServerMaxPacketSize = 1000;
 // additional 8 bytes.  This is a total overhead of 48 bytes.  Ethernet's
 // max packet size is 1500 bytes,  1500 - 48 = 1452.
 const QuicByteCount kMaxPacketSize = 1452;
+// The maximum packet size of any QUIC packet over IPv4.
+// 1500(Ethernet) - 20(IPv4 header) - 8(UDP header) = 1472.
+const QuicByteCount kMaxV4PacketSize = 1472;
+// ETH_MAX_MTU - MAX(sizeof(iphdr), sizeof(ip6_hdr)) - sizeof(udphdr).
+const QuicByteCount kMaxGsoPacketSize = 65535 - 40 - 8;
 // Default maximum packet size used in the Linux TCP implementation.
 // Used in QUIC for congestion window computations in bytes.
 const QuicByteCount kDefaultTCPMSS = 1460;
+const QuicByteCount kMaxSegmentSize = kDefaultTCPMSS;
+// The minimum size of a packet which can elicit a version negotiation packet,
+// as per section 8.1 of the QUIC spec.
+const QuicByteCount kMinPacketSizeForVersionNegotiation = 1200;
 
 // We match SPDY's use of 32 (since we'd compete with SPDY).
 const QuicPacketCount kInitialCongestionWindow = 32;
@@ -73,26 +84,11 @@ const size_t kDefaultMaxStreamsPerConnection = 100;
 const size_t kPublicFlagsSize = 1;
 // Number of bytes reserved for version number in the packet header.
 const size_t kQuicVersionSize = 4;
-// Number of bytes reserved for path id in the packet header.
-const size_t kQuicPathIdSize = 1;
-// Number of bytes reserved for private flags in the packet header.
-const size_t kPrivateFlagsSize = 1;
 
 // Signifies that the QuicPacket will contain version of the protocol.
 const bool kIncludeVersion = true;
-// Signifies that the QuicPacket will contain path id.
-const bool kIncludePathId = true;
 // Signifies that the QuicPacket will include a diversification nonce.
 const bool kIncludeDiversificationNonce = true;
-
-// Stream ID is reserved to denote an invalid ID.
-const QuicStreamId kInvalidStreamId = 0;
-
-// Reserved ID for the crypto stream.
-const QuicStreamId kCryptoStreamId = 1;
-
-// Reserved ID for the headers stream.
-const QuicStreamId kHeadersStreamId = 3;
 
 // Header key used to identify final offset on data stream when sending HTTP/2
 // trailing headers over QUIC.
@@ -207,11 +203,31 @@ const QuicByteCount kMaxStreamLength = (UINT64_C(1) << 62) - 1;
 const uint64_t kMaxIetfVarInt = UINT64_C(0x3fffffffffffffff);
 
 // The maximum stream id value that is supported - (2^32)-1
+// TODO(fkastenholz): Should update this to 64 bits for IETF Quic.
 const QuicStreamId kMaxQuicStreamId = 0xffffffff;
 
 // Number of bytes reserved for packet header type.
 const size_t kPacketHeaderTypeSize = 1;
 
-}  // namespace net
+// Number of bytes reserved for connection ID length.
+const size_t kConnectionIdLengthSize = 1;
+
+// Length of an encoded variable length connection ID, in bytes.
+const size_t kQuicConnectionIdLength = 8;
+
+// Minimum length of random bytes in IETF stateless reset packet.
+const size_t kMinRandomBytesLengthInStatelessReset = 20;
+
+// Maximum length allowed for the token in a NEW_TOKEN frame.
+const size_t kMaxNewTokenTokenLength = 0xffff;
+
+// Used to represent an invalid packet number.
+const QuicPacketNumber kInvalidPacketNumber = 0;
+
+// Used by clients to tell if a public reset is sent from a Google frontend.
+QUIC_EXPORT_PRIVATE extern const char* const kEPIDGoogleFrontEnd;
+QUIC_EXPORT_PRIVATE extern const char* const kEPIDGoogleFrontEnd0;
+
+}  // namespace quic
 
 #endif  // NET_THIRD_PARTY_QUIC_CORE_QUIC_CONSTANTS_H_

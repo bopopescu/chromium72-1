@@ -41,12 +41,12 @@ class TestRequestPeer : public RequestPeer {
   void OnReceivedResponse(const network::ResourceResponseInfo& info) override;
   void OnStartLoadingResponseBody(
       mojo::ScopedDataPipeConsumerHandle body) override;
-  void OnDownloadedData(int len, int encoded_data_length) override;
   void OnReceivedData(std::unique_ptr<ReceivedData> data) override;
   void OnTransferSizeUpdated(int transfer_size_diff) override;
   void OnReceivedCachedMetadata(const char* data, int len) override;
   void OnCompletedRequest(
       const network::URLLoaderCompletionStatus& status) override;
+  scoped_refptr<base::TaskRunner> GetTaskRunner() const override;
 
   struct Context final {
     Context();
@@ -72,9 +72,6 @@ class TestRequestPeer : public RequestPeer {
     // not.
     int total_encoded_data_length = 0;
     bool defer_on_transfer_size_updated = false;
-
-    // Total length when downloading to a file.
-    int total_downloaded_data_length = 0;
 
     bool complete = false;
     bool cancelled = false;

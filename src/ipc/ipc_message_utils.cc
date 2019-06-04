@@ -122,7 +122,7 @@ void WriteValue(base::Pickle* m, const base::Value* value, int recursion) {
       break;
     }
     case base::Value::Type::BINARY: {
-      m->WriteData(value->GetBlob().data(),
+      m->WriteData(reinterpret_cast<const char*>(value->GetBlob().data()),
                    base::checked_cast<int>(value->GetBlob().size()));
       break;
     }
@@ -572,15 +572,13 @@ void ParamTraits<base::FileDescriptor>::Log(const param_type& p,
 #endif  // defined(OS_POSIX) || defined(OS_FUCHSIA)
 
 #if defined(OS_ANDROID)
-void ParamTraits<AHardwareBuffer*>::Write(base::Pickle* m,
-                                          const param_type& p) {
-  const bool is_valid = p != nullptr;
+void ParamTraits<base::android::ScopedHardwareBufferHandle>::Write(
+    base::Pickle* m,
+    const param_type& p) {
+  const bool is_valid = p.is_valid();
   WriteParam(m, is_valid);
   if (!is_valid)
     return;
-
-  // Assume ownership of the input AHardwareBuffer.
-  auto handle = base::android::ScopedHardwareBufferHandle::Adopt(p);
 
   // We must keep a ref to the AHardwareBuffer alive until the receiver has
   // acquired its own reference. We do this by sending a message pipe handle
@@ -590,19 +588,20 @@ void ParamTraits<AHardwareBuffer*>::Write(base::Pickle* m,
   mojo::MessagePipe tracking_pipe;
   m->WriteAttachment(new internal::MojoHandleAttachment(
       mojo::ScopedHandle::From(std::move(tracking_pipe.handle0))));
-  WriteParam(m,
-             base::FileDescriptor(handle.SerializeAsFileDescriptor().release(),
-                                  true /* auto_close */));
+  WriteParam(m, base::FileDescriptor(p.SerializeAsFileDescriptor().release(),
+                                     true /* auto_close */));
 
   // Pass ownership of the input handle to our tracking pipe to keep the AHB
   // alive long enough to be deserialized by the receiver.
-  mojo::ScopeToMessagePipe(std::move(handle), std::move(tracking_pipe.handle1));
+  mojo::ScopeToMessagePipe(std::move(const_cast<param_type&>(p)),
+                           std::move(tracking_pipe.handle1));
 }
 
-bool ParamTraits<AHardwareBuffer*>::Read(const base::Pickle* m,
-                                         base::PickleIterator* iter,
-                                         param_type* r) {
-  *r = nullptr;
+bool ParamTraits<base::android::ScopedHardwareBufferHandle>::Read(
+    const base::Pickle* m,
+    base::PickleIterator* iter,
+    param_type* r) {
+  *r = base::android::ScopedHardwareBufferHandle();
 
   bool is_valid;
   if (!ReadParam(m, iter, &is_valid))
@@ -633,13 +632,15 @@ bool ParamTraits<AHardwareBuffer*>::Read(const base::Pickle* m,
     return false;
 
   *r = base::android::ScopedHardwareBufferHandle::DeserializeFromFileDescriptor(
-           std::move(scoped_fd))
-           .Take();
+      std::move(scoped_fd));
   return true;
 }
 
-void ParamTraits<AHardwareBuffer*>::Log(const param_type& p, std::string* l) {
-  l->append(base::StringPrintf("AHardwareBuffer(%p)", p));
+void ParamTraits<base::android::ScopedHardwareBufferHandle>::Log(
+    const param_type& p,
+    std::string* l) {
+  l->append(base::StringPrintf("base::android::ScopedHardwareBufferHandle(%p)",
+                               p.get()));
 }
 #endif  // defined(OS_ANDROID)
 
@@ -876,6 +877,8 @@ void ParamTraits<base::UnsafeSharedMemoryRegion>::Log(const param_type& p,
 void ParamTraits<base::subtle::PlatformSharedMemoryRegion>::Write(
     base::Pickle* m,
     const param_type& p) {
+  // This serialization must be kept in sync with
+  // nacl_message_scanner.cc::WriteHandle().
   const bool valid = p.IsValid();
   WriteParam(m, valid);
 
@@ -888,16 +891,16 @@ void ParamTraits<base::subtle::PlatformSharedMemoryRegion>::Write(
 
 #if defined(OS_WIN)
   base::win::ScopedHandle h = const_cast<param_type&>(p).PassPlatformHandle();
-  HandleWin handle_win(h.Take());
+  HandleWin handle_win(h.Get());
   WriteParam(m, handle_win);
 #elif defined(OS_FUCHSIA)
-  base::ScopedZxHandle h = const_cast<param_type&>(p).PassPlatformHandle();
-  HandleFuchsia handle_fuchsia(h.release());
+  zx::handle h = const_cast<param_type&>(p).PassPlatformHandle();
+  HandleFuchsia handle_fuchsia(h.get());
   WriteParam(m, handle_fuchsia);
 #elif defined(OS_MACOSX) && !defined(OS_IOS)
   base::mac::ScopedMachSendRight h =
       const_cast<param_type&>(p).PassPlatformHandle();
-  MachPortMac mach_port_mac(h.release());
+  MachPortMac mach_port_mac(h.get());
   WriteParam(m, mach_port_mac);
 #elif defined(OS_ANDROID)
   m->WriteAttachment(new internal::PlatformFileAttachment(
@@ -947,7 +950,7 @@ bool ParamTraits<base::subtle::PlatformSharedMemoryRegion>::Read(
   if (!ReadParam(m, iter, &handle_fuchsia))
     return false;
   *r = base::subtle::PlatformSharedMemoryRegion::Take(
-      base::ScopedZxHandle(handle_fuchsia.get_handle()), mode, size, guid);
+      zx::vmo(handle_fuchsia.get_handle()), mode, size, guid);
 #elif defined(OS_MACOSX) && !defined(OS_IOS)
   MachPortMac mach_port_mac;
   if (!ReadParam(m, iter, &mach_port_mac))
@@ -1002,7 +1005,10 @@ bool ParamTraits<base::subtle::PlatformSharedMemoryRegion>::Read(
 void ParamTraits<base::subtle::PlatformSharedMemoryRegion>::Log(
     const param_type& p,
     std::string* l) {
-#if defined(OS_FUCHSIA) || defined(OS_WIN)
+#if defined(OS_FUCHSIA)
+  l->append("Handle: ");
+  LogParam(p.GetPlatformHandle()->get(), l);
+#elif defined(OS_WIN)
   l->append("Handle: ");
   LogParam(p.GetPlatformHandle(), l);
 #elif defined(OS_MACOSX) && !defined(OS_IOS)
@@ -1259,8 +1265,6 @@ void ParamTraits<base::UnguessableToken>::Write(base::Pickle* m,
                                                 const param_type& p) {
   DCHECK(!p.is_empty());
 
-  // This serialization must be kept in sync with
-  // nacl_message_scanner.cc:WriteHandle().
   ParamTraits<uint64_t>::Write(m, p.GetHighForSerialization());
   ParamTraits<uint64_t>::Write(m, p.GetLowForSerialization());
 }
@@ -1412,31 +1416,6 @@ bool ParamTraits<HANDLE>::Read(const base::Pickle* m,
 
 void ParamTraits<HANDLE>::Log(const param_type& p, std::string* l) {
   l->append(base::StringPrintf("0x%p", p));
-}
-
-void ParamTraits<LOGFONT>::Write(base::Pickle* m, const param_type& p) {
-  m->WriteData(reinterpret_cast<const char*>(&p), sizeof(LOGFONT));
-}
-
-bool ParamTraits<LOGFONT>::Read(const base::Pickle* m,
-                                base::PickleIterator* iter,
-                                param_type* r) {
-  const char *data;
-  int data_size = 0;
-  if (iter->ReadData(&data, &data_size) && data_size == sizeof(LOGFONT)) {
-    const LOGFONT *font = reinterpret_cast<LOGFONT*>(const_cast<char*>(data));
-    if (_tcsnlen(font->lfFaceName, LF_FACESIZE) < LF_FACESIZE) {
-      memcpy(r, data, sizeof(LOGFONT));
-      return true;
-    }
-  }
-
-  NOTREACHED();
-  return false;
-}
-
-void ParamTraits<LOGFONT>::Log(const param_type& p, std::string* l) {
-  l->append(base::StringPrintf("<LOGFONT>"));
 }
 
 void ParamTraits<MSG>::Write(base::Pickle* m, const param_type& p) {

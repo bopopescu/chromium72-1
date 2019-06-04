@@ -10,7 +10,6 @@
 #include <vector>
 
 #include "base/callback.h"
-#include "base/files/scoped_file.h"
 #include "base/macros.h"
 #include "base/observer_list.h"
 #include "base/time/time.h"
@@ -21,7 +20,7 @@
 #include "third_party/cros_system_api/dbus/login_manager/dbus-constants.h"
 
 namespace cryptohome {
-class Identification;
+class AccountIdentifier;
 }
 
 namespace login_manager {
@@ -129,7 +128,7 @@ class CHROMEOS_EXPORT SessionManagerClient : public DBusClient {
 
   // Starts the session for the user.
   virtual void StartSession(
-      const cryptohome::Identification& cryptohome_id) = 0;
+      const cryptohome::AccountIdentifier& cryptohome_id) = 0;
 
   // Stops the current session.
   virtual void StopSession() = 0;
@@ -158,7 +157,7 @@ class CHROMEOS_EXPORT SessionManagerClient : public DBusClient {
 
   // Map that is used to describe the set of active user sessions where |key|
   // is cryptohome id and |value| is user_id_hash.
-  using ActiveSessionsMap = std::map<cryptohome::Identification, std::string>;
+  using ActiveSessionsMap = std::map<std::string, std::string>;
 
   // The ActiveSessionsCallback is used for the RetrieveActiveSessions()
   // method. It receives |sessions| argument where the keys are cryptohome_ids
@@ -207,7 +206,7 @@ class CHROMEOS_EXPORT SessionManagerClient : public DBusClient {
   // provided callback.
   // DEPRECATED, use RetrievePolicy() instead.
   virtual void RetrievePolicyForUser(
-      const cryptohome::Identification& cryptohome_id,
+      const cryptohome::AccountIdentifier& cryptohome_id,
       RetrievePolicyCallback callback) = 0;
 
   // Same as RetrievePolicyForUser() but blocks until a reply is received, and
@@ -219,14 +218,14 @@ class CHROMEOS_EXPORT SessionManagerClient : public DBusClient {
   // TODO(crbug.com/160522): Get rid of blocking calls.
   // DEPRECATED, use BlockingRetrievePolicy() instead.
   virtual RetrievePolicyResponseType BlockingRetrievePolicyForUser(
-      const cryptohome::Identification& cryptohome_id,
+      const cryptohome::AccountIdentifier& cryptohome_id,
       std::string* policy_out) = 0;
 
   // Fetches the user policy blob for a hidden user home mount. |callback| is
   // invoked upon completition.
   // DEPRECATED, use RetrievePolicy() instead.
   virtual void RetrievePolicyForUserWithoutSession(
-      const cryptohome::Identification& cryptohome_id,
+      const cryptohome::AccountIdentifier& cryptohome_id,
       RetrievePolicyCallback callback) = 0;
 
   // Fetches the policy blob associated with the specified device-local account
@@ -273,7 +272,7 @@ class CHROMEOS_EXPORT SessionManagerClient : public DBusClient {
   // given |cryptohome_id|. Upon completion of the store attempt, we will call
   // callback.
   virtual void StorePolicyForUser(
-      const cryptohome::Identification& cryptohome_id,
+      const cryptohome::AccountIdentifier& cryptohome_id,
       const std::string& policy_blob,
       VoidDBusMethodCallback callback) = 0;
 
@@ -297,8 +296,9 @@ class CHROMEOS_EXPORT SessionManagerClient : public DBusClient {
 
   // Sets the flags to be applied next time by the session manager when Chrome
   // is restarted inside an already started session for a particular user.
-  virtual void SetFlagsForUser(const cryptohome::Identification& cryptohome_id,
-                               const std::vector<std::string>& flags) = 0;
+  virtual void SetFlagsForUser(
+      const cryptohome::AccountIdentifier& cryptohome_id,
+      const std::vector<std::string>& flags) = 0;
 
   using StateKeysCallback =
       base::OnceCallback<void(const std::vector<std::string>& state_keys)>;
@@ -325,17 +325,14 @@ class CHROMEOS_EXPORT SessionManagerClient : public DBusClient {
       StartArcMiniContainerCallback callback) = 0;
 
   // UpgradeArcContainer upgrades a mini-container to a full ARC container. In
-  // case of success, success_callback is called. |server_socket| should be
-  // accept(2)ed to connect to the ArcBridgeService Mojo channel.  In case of
-  // error, error_callback will be called with a |low_free_disk_space| signaling
+  // case of success, success_callback is called. In case of error,
+  // error_callback will be called with a |low_free_disk_space| signaling
   // whether the failure was due to low free disk space.
-  using UpgradeArcContainerCallback =
-      base::OnceCallback<void(base::ScopedFD server_socket)>;
   using UpgradeErrorCallback =
       base::OnceCallback<void(bool low_free_disk_space)>;
   virtual void UpgradeArcContainer(
       const login_manager::UpgradeArcContainerRequest& request,
-      UpgradeArcContainerCallback success_callback,
+      base::OnceClosure success_callback,
       UpgradeErrorCallback error_callback) = 0;
 
   // Asynchronously stops the ARC instance.  Upon completion, invokes
@@ -356,20 +353,13 @@ class CHROMEOS_EXPORT SessionManagerClient : public DBusClient {
       VoidDBusMethodCallback callback) = 0;
 
   // Emits the "arc-booted" upstart signal.
-  virtual void EmitArcBooted(const cryptohome::Identification& cryptohome_id,
+  virtual void EmitArcBooted(const cryptohome::AccountIdentifier& cryptohome_id,
                              VoidDBusMethodCallback callback) = 0;
 
   // Asynchronously retrieves the timestamp which ARC instance is invoked.
   // Returns nullopt if there is no ARC instance or ARC is not available.
   virtual void GetArcStartTime(
       DBusMethodCallback<base::TimeTicks> callback) = 0;
-
-  // Asynchronously removes all ARC user data for the user whose cryptohome is
-  // located by |cryptohome_id|. Upon completion, invokes |callback| with the
-  // result; true on success, false on failure (either session manager failed
-  // to remove user data or session manager can not be reached).
-  virtual void RemoveArcData(const cryptohome::Identification& cryptohome_id,
-                             VoidDBusMethodCallback callback) = 0;
 
   // Creates the instance.
   static SessionManagerClient* Create(DBusClientImplementationType type);

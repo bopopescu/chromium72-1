@@ -53,6 +53,7 @@ class FakeDownloadItem : public download::DownloadItem {
   base::Time GetLastAccessTime() const override;
   bool IsTransient() const override;
   bool IsParallelDownload() const override;
+  DownloadCreationType GetDownloadCreationType() const override;
   bool IsDone() const override;
   const std::string& GetETag() const override;
   const std::string& GetLastModifiedTime() const override;
@@ -73,6 +74,7 @@ class FakeDownloadItem : public download::DownloadItem {
   bool IsSavePackageDownload() const override;
   const base::FilePath& GetFullPath() const override;
   const base::FilePath& GetForcedFilePath() const override;
+  base::FilePath GetTemporaryFilePath() const override;
   base::FilePath GetFileNameToReportUser() const override;
   TargetDisposition GetTargetDisposition() const override;
   const std::string& GetHash() const override;
@@ -133,7 +135,7 @@ class FakeDownloadItem : public download::DownloadItem {
   void SetLastModifiedTime(const std::string& last_modified_time);
 
  private:
-  base::ObserverList<Observer> observers_;
+  base::ObserverList<Observer>::Unchecked observers_;
   uint32_t id_ = 0;
   std::string guid_;
   GURL url_;

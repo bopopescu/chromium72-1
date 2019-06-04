@@ -13,11 +13,10 @@ from telemetry.internal.browser import browser_finder_exceptions
 from telemetry.internal.browser import browser_info as browser_info_module
 from telemetry.internal.browser import browser_interval_profiling_controller
 from telemetry.page import cache_temperature
+from telemetry.page import legacy_page_test
 from telemetry.page import traffic_setting
 from telemetry import story as story_module
 from telemetry.util import screenshot
-from telemetry.util import wpr_modes
-from telemetry.web_perf import timeline_based_measurement
 
 
 def _PrepareFinderOptions(finder_options, test, device_type):
@@ -38,10 +37,10 @@ class SharedPageState(story_module.SharedState):
 
   def __init__(self, test, finder_options, story_set):
     super(SharedPageState, self).__init__(test, finder_options, story_set)
-    if isinstance(test, timeline_based_measurement.TimelineBasedMeasurement):
+    if not issubclass(type(test), legacy_page_test.LegacyPageTest):
       # This is to avoid the cyclic-import caused by timeline_based_page_test.
       from telemetry.web_perf import timeline_based_page_test
-      self._test = timeline_based_page_test.TimelineBasedPageTest(test)
+      self._test = timeline_based_page_test.TimelineBasedPageTest()
     else:
       self._test = test
 
@@ -62,16 +61,7 @@ class SharedPageState(story_module.SharedState):
 
     self._test.SetOptions(self._finder_options)
 
-    # TODO(crbug/404771): Move network controller options out of
-    # browser_options and into finder_options.
-    browser_options = self._finder_options.browser_options
-    if self._finder_options.use_live_sites:
-      wpr_mode = wpr_modes.WPR_OFF
-    elif browser_options.wpr_mode == wpr_modes.WPR_RECORD:
-      wpr_mode = wpr_modes.WPR_RECORD
-    else:
-      wpr_mode = wpr_modes.WPR_REPLAY
-    self._extra_wpr_args = browser_options.extra_wpr_args
+    self._extra_wpr_args = self._finder_options.browser_options.extra_wpr_args
 
     profiling_mod = browser_interval_profiling_controller
     self._interval_profiling_controller = (
@@ -83,7 +73,7 @@ class SharedPageState(story_module.SharedState):
 
     self.platform.SetFullPerformanceModeEnabled(
         finder_options.full_performance_mode)
-    self.platform.network_controller.Open(wpr_mode)
+    self.platform.network_controller.Open(self.wpr_mode)
     self.platform.Initialize()
 
   @property

@@ -11,10 +11,12 @@
 #include <GLES2/gl2ext.h>
 #include <GLES2/gl2extchromium.h>
 #include <GLES3/gl3.h>
+#include <GLES3/gl31.h>
 
 #include <sstream>
 
 #include "base/numerics/safe_math.h"
+#include "base/stl_util.h"
 
 namespace gpu {
 namespace gles2 {
@@ -279,6 +281,26 @@ int GLES2Util::GLGetNumValuesReturned(int id) const {
     case GL_UNIFORM_BUFFER_START:
       return 1;
     case GL_UNIFORM_BUFFER_OFFSET_ALIGNMENT:
+      return 1;
+
+    // ES31
+    case GL_ATOMIC_COUNTER_BUFFER_BINDING:
+      return 1;
+    case GL_ATOMIC_COUNTER_BUFFER_SIZE:
+      return 1;
+    case GL_ATOMIC_COUNTER_BUFFER_START:
+      return 1;
+    case GL_MAX_ATOMIC_COUNTER_BUFFER_BINDINGS:
+      return 1;
+    case GL_MAX_SHADER_STORAGE_BUFFER_BINDINGS:
+      return 1;
+    case GL_SHADER_STORAGE_BUFFER_BINDING:
+      return 1;
+    case GL_SHADER_STORAGE_BUFFER_SIZE:
+      return 1;
+    case GL_SHADER_STORAGE_BUFFER_START:
+      return 1;
+    case GL_SHADER_STORAGE_BUFFER_OFFSET_ALIGNMENT:
       return 1;
 
     // -- glGetBooleanv, glGetFloatv, glGetIntergerv with
@@ -1627,6 +1649,15 @@ size_t GLES2Util::CalcClearBufferfvDataCount(int buffer) {
   }
 }
 
+size_t GLES2Util::CalcClearBufferuivDataCount(int buffer) {
+  switch (buffer) {
+    case GL_COLOR:
+      return 4;
+    default:
+      return 0;
+  }
+}
+
 // static
 void GLES2Util::MapUint64ToTwoUint32(
     uint64_t v64, uint32_t* v32_0, uint32_t* v32_1) {
@@ -1646,6 +1677,8 @@ uint32_t GLES2Util::MapBufferTargetToBindingEnum(uint32_t target) {
   switch (target) {
     case GL_ARRAY_BUFFER:
       return GL_ARRAY_BUFFER_BINDING;
+    case GL_ATOMIC_COUNTER_BUFFER:
+      return GL_ATOMIC_COUNTER_BUFFER_BINDING;
     case GL_COPY_READ_BUFFER:
       return GL_COPY_READ_BUFFER_BINDING;
     case GL_COPY_WRITE_BUFFER:
@@ -1656,6 +1689,8 @@ uint32_t GLES2Util::MapBufferTargetToBindingEnum(uint32_t target) {
       return GL_PIXEL_PACK_BUFFER_BINDING;
     case GL_PIXEL_UNPACK_BUFFER:
       return GL_PIXEL_UNPACK_BUFFER_BINDING;
+    case GL_SHADER_STORAGE_BUFFER:
+      return GL_SHADER_STORAGE_BUFFER_BINDING;
     case GL_TRANSFORM_FEEDBACK_BUFFER:
       return GL_TRANSFORM_FEEDBACK_BUFFER_BINDING;
     case GL_UNIFORM_BUFFER:

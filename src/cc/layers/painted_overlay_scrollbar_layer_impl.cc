@@ -64,7 +64,7 @@ void PaintedOverlayScrollbarLayerImpl::PushPropertiesTo(LayerImpl* layer) {
 
 bool PaintedOverlayScrollbarLayerImpl::WillDraw(
     DrawMode draw_mode,
-    LayerTreeResourceProvider* resource_provider) {
+    viz::ClientResourceProvider* resource_provider) {
   DCHECK(draw_mode != DRAW_MODE_RESOURCELESS_SOFTWARE);
   return LayerImpl::WillDraw(draw_mode, resource_provider);
 }
@@ -158,11 +158,11 @@ void PaintedOverlayScrollbarLayerImpl::AppendTrackQuads(
   float opacity[] = {1.0f, 1.0f, 1.0f, 1.0f};
   viz::TextureDrawQuad* quad =
       render_pass->CreateAndAppendDrawQuad<viz::TextureDrawQuad>();
-  quad->SetNew(shared_quad_state, scaled_track_quad_rect,
-               scaled_visible_track_quad_rect, needs_blending,
-               track_resource_id, premultipled_alpha, uv_top_left,
-               uv_bottom_right, SK_ColorTRANSPARENT, opacity, flipped,
-               nearest_neighbor, false);
+  quad->SetNew(
+      shared_quad_state, scaled_track_quad_rect, scaled_visible_track_quad_rect,
+      needs_blending, track_resource_id, premultipled_alpha, uv_top_left,
+      uv_bottom_right, SK_ColorTRANSPARENT, opacity, flipped, nearest_neighbor,
+      /*secure_output_only=*/false, ui::ProtectedVideoType::kClear);
   ValidateQuadResources(quad);
 }
 

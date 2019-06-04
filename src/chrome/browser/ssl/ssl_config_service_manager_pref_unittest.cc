@@ -16,6 +16,7 @@
 #include "components/prefs/testing_pref_service.h"
 #include "components/variations/variations_params_manager.h"
 #include "mojo/public/cpp/bindings/binding.h"
+#include "net/cert/cert_verifier.h"
 #include "net/ssl/ssl_config.h"
 #include "services/network/public/mojom/network_service.mojom.h"
 #include "services/network/public/mojom/ssl_config.mojom.h"
@@ -272,11 +273,11 @@ TEST_F(SSLConfigServiceManagerPrefTest, TLS13VariantFeatureDraft23) {
             initial_config_->tls13_variant);
 }
 
-// Tests that Draft28 TLS 1.3 can be enabled via field trials.
-TEST_F(SSLConfigServiceManagerPrefTest, TLS13VariantFeatureDraft28) {
+// Tests that Final TLS 1.3 can be enabled via field trials.
+TEST_F(SSLConfigServiceManagerPrefTest, TLS13VariantFeatureFinal) {
   // Toggle the field trial.
   variations::testing::VariationParamsManager variation_params(
-      "TLS13Variant", {{"variant", "draft28"}});
+      "TLS13Variant", {{"variant", "final"}});
 
   TestingPrefServiceSimple local_state;
   SSLConfigServiceManager::RegisterPrefs(local_state.registry());
@@ -285,7 +286,7 @@ TEST_F(SSLConfigServiceManagerPrefTest, TLS13VariantFeatureDraft28) {
       SetUpConfigServiceManager(&local_state);
 
   EXPECT_EQ(network::mojom::SSLVersion::kTLS13, initial_config_->version_max);
-  EXPECT_EQ(network::mojom::TLS13Variant::kDraft28,
+  EXPECT_EQ(network::mojom::TLS13Variant::kFinal,
             initial_config_->tls13_variant);
 }
 
@@ -352,44 +353,6 @@ TEST_F(SSLConfigServiceManagerPrefTest, TLS13VariantOverrideEnable) {
             initial_config_->tls13_variant);
 }
 
-// Tests that SHA-1 signatures for local trust anchors can be enabled.
-TEST_F(SSLConfigServiceManagerPrefTest, SHA1ForLocalAnchors) {
-  scoped_refptr<TestingPrefStore> local_state_store(new TestingPrefStore());
-
-  TestingPrefServiceSimple local_state;
-  SSLConfigServiceManager::RegisterPrefs(local_state.registry());
-
-  std::unique_ptr<SSLConfigServiceManager> config_manager =
-      SetUpConfigServiceManager(&local_state);
-
-  // By default, SHA-1 local trust anchors should not be enabled when not
-  // not using any pref service.
-  EXPECT_FALSE(net::SSLConfig().sha1_local_anchors_enabled);
-  EXPECT_FALSE(network::mojom::SSLConfig::New()->sha1_local_anchors_enabled);
-
-  // Using a pref service without any preference set should result in
-  // SHA-1 local trust anchors being disabled.
-  EXPECT_FALSE(initial_config_->sha1_local_anchors_enabled);
-
-  // Enabling the local preference should result in SHA-1 local trust anchors
-  // being enabled.
-  local_state.SetUserPref(prefs::kCertEnableSha1LocalAnchors,
-                          std::make_unique<base::Value>(true));
-  // Wait for the SSLConfigServiceManagerPref to be notified of the preferences
-  // being changed, and for it to notify the test fixture of the change.
-  ASSERT_NO_FATAL_FAILURE(WaitForUpdate());
-  EXPECT_TRUE(observed_configs_[0]->sha1_local_anchors_enabled);
-
-  // Disabling the local preference should result in SHA-1 local trust
-  // anchors being disabled.
-  local_state.SetUserPref(prefs::kCertEnableSha1LocalAnchors,
-                          std::make_unique<base::Value>(false));
-  // Wait for the SSLConfigServiceManagerPref to be notified of the preferences
-  // being changed, and for it to notify the test fixture of the change.
-  ASSERT_NO_FATAL_FAILURE(WaitForUpdate());
-  EXPECT_FALSE(observed_configs_[1]->sha1_local_anchors_enabled);
-}
-
 // Tests that Symantec's legacy infrastructure can be enabled.
 TEST_F(SSLConfigServiceManagerPrefTest, SymantecLegacyInfrastructure) {
   scoped_refptr<TestingPrefStore> local_state_store(new TestingPrefStore());
@@ -402,7 +365,7 @@ TEST_F(SSLConfigServiceManagerPrefTest, SymantecLegacyInfrastructure) {
 
   // By default, Symantec's legacy infrastructure should be disabled when
   // not using any pref service.
-  EXPECT_FALSE(net::SSLConfig().symantec_enforcement_disabled);
+  EXPECT_FALSE(net::CertVerifier::Config().disable_symantec_enforcement);
   EXPECT_FALSE(network::mojom::SSLConfig::New()->symantec_enforcement_disabled);
 
   // Using a pref service without any preference set should result in
@@ -426,4 +389,40 @@ TEST_F(SSLConfigServiceManagerPrefTest, SymantecLegacyInfrastructure) {
   // being changed, and for it to notify the test fixture of the change.
   ASSERT_NO_FATAL_FAILURE(WaitForUpdate());
   EXPECT_FALSE(observed_configs_[1]->symantec_enforcement_disabled);
+}
+
+TEST_F(SSLConfigServiceManagerPrefTest, H2ClientCertCoalescingPref) {
+  scoped_refptr<TestingPrefStore> local_state_store(new TestingPrefStore());
+
+  TestingPrefServiceSimple local_state;
+  SSLConfigServiceManager::RegisterPrefs(local_state.registry());
+
+  std::unique_ptr<SSLConfigServiceManager> config_manager =
+      SetUpConfigServiceManager(&local_state);
+
+  auto patterns = std::make_unique<base::ListValue>();
+  // Patterns expected to be canonicalized.
+  patterns->GetList().emplace_back(base::Value("canon.example"));
+  patterns->GetList().emplace_back(base::Value(".NonCanon.example"));
+  patterns->GetList().emplace_back(base::Value("Non-Canon.example"));
+  patterns->GetList().emplace_back(base::Value("127.0.0.1"));
+  patterns->GetList().emplace_back(base::Value("2147614986"));
+  // Patterns expected to be skipped.
+  patterns->GetList().emplace_back(base::Value("???"));
+  patterns->GetList().emplace_back(base::Value("example.com/"));
+  patterns->GetList().emplace_back(base::Value("xn--hellö.com"));
+  local_state.SetUserPref(prefs::kH2ClientCertCoalescingHosts,
+                          std::move(patterns));
+
+  // Wait for the SSLConfigServiceManagerPref to be notified of the preferences
+  // being changed, and for it to notify the test fixture of the change.
+  ASSERT_NO_FATAL_FAILURE(WaitForUpdate());
+
+  auto observed_patterns = observed_configs_[0]->client_cert_pooling_policy;
+  ASSERT_EQ(5u, observed_patterns.size());
+  EXPECT_EQ("canon.example", observed_patterns[0]);
+  EXPECT_EQ(".noncanon.example", observed_patterns[1]);
+  EXPECT_EQ("non-canon.example", observed_patterns[2]);
+  EXPECT_EQ("127.0.0.1", observed_patterns[3]);
+  EXPECT_EQ("128.2.1.10", observed_patterns[4]);
 }

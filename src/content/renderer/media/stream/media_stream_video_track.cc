@@ -11,6 +11,7 @@
 #include "base/location.h"
 #include "base/macros.h"
 #include "base/single_thread_task_runner.h"
+#include "base/stl_util.h"
 #include "base/threading/thread_task_runner_handle.h"
 #include "build/build_config.h"
 #include "content/renderer/media/stream/media_stream_constraints_util_video_device.h"
@@ -128,7 +129,7 @@ void MediaStreamVideoTrack::FrameDeliverer::RemoveCallbackOnIO(
     VideoSinkId id,
     const scoped_refptr<base::SingleThreadTaskRunner>& task_runner) {
   DCHECK(io_task_runner_->BelongsToCurrentThread());
-  std::vector<VideoIdCallbackPair>::iterator it = callbacks_.begin();
+  auto it = callbacks_.begin();
   for (; it != callbacks_.end(); ++it) {
     if (it->first == id) {
       // Callback is copied to heap and then deleted on the target thread.
@@ -303,7 +304,7 @@ void MediaStreamVideoTrack::AddSink(MediaStreamVideoSink* sink,
                                     const VideoCaptureDeliverFrameCB& callback,
                                     bool is_sink_secure) {
   DCHECK(main_render_thread_checker_.CalledOnValidThread());
-  DCHECK(std::find(sinks_.begin(), sinks_.end(), sink) == sinks_.end());
+  DCHECK(!base::ContainsValue(sinks_, sink));
   sinks_.push_back(sink);
   frame_deliverer_->AddCallback(sink, callback);
   secure_tracker_.Add(sink, is_sink_secure);
@@ -318,8 +319,7 @@ void MediaStreamVideoTrack::AddSink(MediaStreamVideoSink* sink,
 
 void MediaStreamVideoTrack::RemoveSink(MediaStreamVideoSink* sink) {
   DCHECK(main_render_thread_checker_.CalledOnValidThread());
-  std::vector<MediaStreamVideoSink*>::iterator it =
-      std::find(sinks_.begin(), sinks_.end(), sink);
+  auto it = std::find(sinks_.begin(), sinks_.end(), sink);
   DCHECK(it != sinks_.end());
   sinks_.erase(it);
   frame_deliverer_->RemoveCallback(sink);
@@ -382,6 +382,11 @@ void MediaStreamVideoTrack::GetSettings(
     settings.video_kind = GetVideoKindForFormat(*format);
   }
   settings.facing_mode = ToWebFacingMode(source_->device().video_facing);
+  settings.resize_mode = blink::WebString::FromASCII(
+      std::string(adapter_settings().target_size()
+                      ? blink::WebMediaStreamTrack::kResizeModeRescale
+                      : blink::WebMediaStreamTrack::kResizeModeNone));
+
   const base::Optional<CameraCalibration> calibration =
       source_->device().camera_calibration;
   if (calibration) {
@@ -390,6 +395,12 @@ void MediaStreamVideoTrack::GetSettings(
     settings.focal_length_x = calibration->focal_length_x;
     settings.focal_length_y = calibration->focal_length_y;
   }
+  if (source_->device().display_media_info.has_value()) {
+    const auto& info = source_->device().display_media_info.value();
+    settings.display_surface = ToWebDisplaySurface(info->display_surface);
+    settings.logical_surface = info->logical_surface;
+    settings.cursor = ToWebCursorCaptureType(info->cursor);
+  }
 }
 
 void MediaStreamVideoTrack::OnReadyStateChanged(
@@ -397,6 +408,11 @@ void MediaStreamVideoTrack::OnReadyStateChanged(
   DCHECK(main_render_thread_checker_.CalledOnValidThread());
   for (auto* sink : sinks_)
     sink->OnReadyStateChanged(state);
+}
+
+void MediaStreamVideoTrack::SetTrackAdapterSettings(
+    const VideoTrackAdapterSettings& settings) {
+  adapter_settings_ = std::make_unique<VideoTrackAdapterSettings>(settings);
 }
 
 }  // namespace content

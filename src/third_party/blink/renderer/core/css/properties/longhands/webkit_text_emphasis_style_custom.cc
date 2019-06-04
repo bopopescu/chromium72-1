@@ -11,7 +11,7 @@
 #include "third_party/blink/renderer/core/style/computed_style.h"
 
 namespace blink {
-namespace CSSLonghand {
+namespace css_longhand {
 
 const CSSValue* WebkitTextEmphasisStyle::ParseSingleValue(
     CSSParserTokenRange& range,
@@ -19,23 +19,22 @@ const CSSValue* WebkitTextEmphasisStyle::ParseSingleValue(
     const CSSParserLocalContext&) const {
   CSSValueID id = range.Peek().Id();
   if (id == CSSValueNone)
-    return CSSPropertyParserHelpers::ConsumeIdent(range);
+    return css_property_parser_helpers::ConsumeIdent(range);
 
   if (CSSValue* text_emphasis_style =
-          CSSPropertyParserHelpers::ConsumeString(range))
+          css_property_parser_helpers::ConsumeString(range))
     return text_emphasis_style;
 
   CSSIdentifierValue* fill =
-      CSSPropertyParserHelpers::ConsumeIdent<CSSValueFilled, CSSValueOpen>(
+      css_property_parser_helpers::ConsumeIdent<CSSValueFilled, CSSValueOpen>(
           range);
-  CSSIdentifierValue* shape =
-      CSSPropertyParserHelpers::ConsumeIdent<CSSValueDot, CSSValueCircle,
-                                             CSSValueDoubleCircle,
-                                             CSSValueTriangle, CSSValueSesame>(
-          range);
+  CSSIdentifierValue* shape = css_property_parser_helpers::ConsumeIdent<
+      CSSValueDot, CSSValueCircle, CSSValueDoubleCircle, CSSValueTriangle,
+      CSSValueSesame>(range);
   if (!fill) {
-    fill = CSSPropertyParserHelpers::ConsumeIdent<CSSValueFilled, CSSValueOpen>(
-        range);
+    fill =
+        css_property_parser_helpers::ConsumeIdent<CSSValueFilled, CSSValueOpen>(
+            range);
   }
   if (fill && shape) {
     CSSValueList* parsed_values = CSSValueList::CreateSpaceSeparated();
@@ -79,5 +78,64 @@ const CSSValue* WebkitTextEmphasisStyle::CSSValueFromComputedStyleInternal(
   return nullptr;
 }
 
-}  // namespace CSSLonghand
+void WebkitTextEmphasisStyle::ApplyInitial(StyleResolverState& state) const {
+  state.Style()->SetTextEmphasisFill(
+      ComputedStyleInitialValues::InitialTextEmphasisFill());
+  state.Style()->SetTextEmphasisMark(
+      ComputedStyleInitialValues::InitialTextEmphasisMark());
+  state.Style()->SetTextEmphasisCustomMark(
+      ComputedStyleInitialValues::InitialTextEmphasisCustomMark());
+}
+
+void WebkitTextEmphasisStyle::ApplyInherit(StyleResolverState& state) const {
+  state.Style()->SetTextEmphasisFill(
+      state.ParentStyle()->GetTextEmphasisFill());
+  state.Style()->SetTextEmphasisMark(
+      state.ParentStyle()->GetTextEmphasisMark());
+  state.Style()->SetTextEmphasisCustomMark(
+      state.ParentStyle()->TextEmphasisCustomMark());
+}
+
+void WebkitTextEmphasisStyle::ApplyValue(StyleResolverState& state,
+                                         const CSSValue& value) const {
+  if (value.IsValueList()) {
+    const CSSValueList& list = ToCSSValueList(value);
+    DCHECK_EQ(list.length(), 2U);
+    for (unsigned i = 0; i < 2; ++i) {
+      const CSSIdentifierValue& value = ToCSSIdentifierValue(list.Item(i));
+      if (value.GetValueID() == CSSValueFilled ||
+          value.GetValueID() == CSSValueOpen)
+        state.Style()->SetTextEmphasisFill(value.ConvertTo<TextEmphasisFill>());
+      else
+        state.Style()->SetTextEmphasisMark(value.ConvertTo<TextEmphasisMark>());
+    }
+    state.Style()->SetTextEmphasisCustomMark(g_null_atom);
+    return;
+  }
+
+  if (value.IsStringValue()) {
+    state.Style()->SetTextEmphasisFill(TextEmphasisFill::kFilled);
+    state.Style()->SetTextEmphasisMark(TextEmphasisMark::kCustom);
+    state.Style()->SetTextEmphasisCustomMark(
+        AtomicString(ToCSSStringValue(value).Value()));
+    return;
+  }
+
+  const CSSIdentifierValue& identifier_value = ToCSSIdentifierValue(value);
+
+  state.Style()->SetTextEmphasisCustomMark(g_null_atom);
+
+  if (identifier_value.GetValueID() == CSSValueFilled ||
+      identifier_value.GetValueID() == CSSValueOpen) {
+    state.Style()->SetTextEmphasisFill(
+        identifier_value.ConvertTo<TextEmphasisFill>());
+    state.Style()->SetTextEmphasisMark(TextEmphasisMark::kAuto);
+  } else {
+    state.Style()->SetTextEmphasisFill(TextEmphasisFill::kFilled);
+    state.Style()->SetTextEmphasisMark(
+        identifier_value.ConvertTo<TextEmphasisMark>());
+  }
+}
+
+}  // namespace css_longhand
 }  // namespace blink

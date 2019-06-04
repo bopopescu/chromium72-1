@@ -13,11 +13,13 @@
 #include "ash/host/ash_window_tree_host.h"
 #include "ash/host/ash_window_tree_host_init_params.h"
 #include "ash/host/root_window_transformer.h"
-#include "ash/public/cpp/config.h"
 #include "ash/root_window_settings.h"
 #include "ash/shell.h"
+#include "ash/window_factory.h"
 #include "base/strings/stringprintf.h"
 #include "base/threading/thread_task_runner_handle.h"
+#include "components/viz/common/features.h"
+#include "components/viz/common/surfaces/surface_id.h"
 #include "ui/aura/client/capture_client.h"
 #include "ui/aura/env.h"
 #include "ui/aura/window_delegate.h"
@@ -122,6 +124,10 @@ int64_t GetCurrentReflectingSourceId() {
   return display::kInvalidDisplayId;
 }
 
+ui::ContextFactoryPrivate* GetContextFactoryPrivate() {
+  return Shell::Get()->aura_env()->context_factory_private();
+}
+
 }  // namespace
 
 struct MirrorWindowController::MirroringHostInfo {
@@ -154,6 +160,8 @@ void MirrorWindowController::UpdateWindow(
 
   multi_display_mode_ = GetCurrentMultiDisplayMode();
   reflecting_source_id_ = GetCurrentReflectingSourceId();
+  viz::SurfaceId reflecting_surface_id =
+      Shell::GetRootWindowForDisplayId(reflecting_source_id_)->GetSurfaceId();
 
   for (const display::ManagedDisplayInfo& display_info : display_info_list) {
     std::unique_ptr<RootWindowTransformer> transformer;
@@ -177,18 +185,14 @@ void MirrorWindowController::UpdateWindow(
       init_params.mirroring_delegate = this;
       init_params.mirroring_unified = display_manager->IsInUnifiedMode();
       init_params.device_scale_factor = display_info.device_scale_factor();
-      init_params.ui_scale_factor = display_info.configured_ui_scale();
       MirroringHostInfo* host_info = new MirroringHostInfo;
       host_info->ash_host = AshWindowTreeHost::Create(init_params);
       mirroring_host_info_map_[display_info.id()] = host_info;
 
       aura::WindowTreeHost* host = host_info->ash_host->AsWindowTreeHost();
-      // TODO: Config::MUS should not install an InputMethod.
-      // http://crbug.com/706913
-      if (!host->has_input_method()) {
-        host->SetSharedInputMethod(
-            Shell::Get()->window_tree_host_manager()->input_method());
-      }
+      DCHECK(!host->has_input_method());
+      host->SetSharedInputMethod(
+          Shell::Get()->window_tree_host_manager()->input_method());
       host->window()->SetName(
           base::StringPrintf("MirrorRootWindow-%d", mirror_host_count++));
       host->compositor()->SetBackgroundColor(SK_ColorBLACK);
@@ -216,27 +220,23 @@ void MirrorWindowController::UpdateWindow(
       host->Show();
 
       aura::Window* mirror_window = host_info->mirror_window =
-          new aura::Window(nullptr);
+          window_factory::NewWindow().release();
       mirror_window->Init(ui::LAYER_SOLID_COLOR);
       host->window()->AddChild(mirror_window);
       host_info->ash_host->SetRootWindowTransformer(std::move(transformer));
-      mirror_window->SetBounds(host->window()->bounds());
-      mirror_window->Show();
-      // The classic config creates the accelerated widget synchronously. Mus
-      // (without viz) creates the reflector in OnAcceleratedWidgetOverridden.
-      if (host->GetAcceleratedWidget() != gfx::kNullAcceleratedWidget) {
-        DCHECK_EQ(Shell::GetAshConfig(), Config::CLASSIC);
+      // The accelerated widget is created synchronously.
+      DCHECK_NE(gfx::kNullAcceleratedWidget, host->GetAcceleratedWidget());
+      if (!base::FeatureList::IsEnabled(features::kVizDisplayCompositor)) {
+        mirror_window->SetBounds(host->window()->bounds());
+        mirror_window->Show();
         if (reflector_) {
           reflector_->AddMirroringLayer(mirror_window->layer());
-        } else if (aura::Env::GetInstance()->context_factory_private()) {
-          reflector_ =
-              aura::Env::GetInstance()
-                  ->context_factory_private()
-                  ->CreateReflector(
-                      Shell::GetRootWindowForDisplayId(reflecting_source_id_)
-                          ->GetHost()
-                          ->compositor(),
-                      mirror_window->layer());
+        } else if (GetContextFactoryPrivate()) {
+          reflector_ = GetContextFactoryPrivate()->CreateReflector(
+              Shell::GetRootWindowForDisplayId(reflecting_source_id_)
+                  ->GetHost()
+                  ->compositor(),
+              mirror_window->layer());
         }
       }
     } else {
@@ -246,6 +246,22 @@ void MirrorWindowController::UpdateWindow(
       GetRootWindowSettings(host->window())->display_id = display_info.id();
       ash_host->SetRootWindowTransformer(std::move(transformer));
       host->SetBoundsInPixels(display_info.bounds_in_native());
+    }
+
+    if (base::FeatureList::IsEnabled(features::kVizDisplayCompositor)) {
+      // |mirror_size| is the size of the mirror source in physical pixels.
+      // The RootWindowTransformer corrects the scale of the mirrored display
+      // and the location of input events.
+      gfx::Size mirror_size =
+          display_manager->GetDisplayInfo(reflecting_source_id_)
+              .bounds_in_native()
+              .size();
+      aura::Window* mirror_window =
+          mirroring_host_info_map_[display_info.id()]->mirror_window;
+      mirror_window->SetBounds(gfx::Rect(mirror_size));
+      mirror_window->Show();
+      mirror_window->layer()->SetShowReflectedSurface(reflecting_surface_id,
+                                                      mirror_size);
     }
   }
 
@@ -267,8 +283,7 @@ void MirrorWindowController::UpdateWindow(
 
   if (mirroring_host_info_map_.empty() && reflector_) {
     // Close the mirror window if all displays are disconnected.
-    aura::Env::GetInstance()->context_factory_private()->RemoveReflector(
-        reflector_.get());
+    GetContextFactoryPrivate()->RemoveReflector(reflector_.get());
     reflector_.reset();
   }
 }
@@ -307,8 +322,7 @@ void MirrorWindowController::CloseIfNotNecessary() {
 
 void MirrorWindowController::Close(bool delay_host_deletion) {
   if (reflector_) {
-    aura::Env::GetInstance()->context_factory_private()->RemoveReflector(
-        reflector_.get());
+    GetContextFactoryPrivate()->RemoveReflector(reflector_.get());
     reflector_.reset();
   }
 
@@ -324,8 +338,6 @@ void MirrorWindowController::OnHostResized(aura::WindowTreeHost* host) {
       if (info->mirror_window_host_size == host->GetBoundsInPixels().size())
         return;
       info->mirror_window_host_size = host->GetBoundsInPixels().size();
-      // TODO: |reflector_| should always be non-null here, but isn't in MUS
-      // yet because of http://crbug.com/601869.
       if (reflector_)
         reflector_->OnMirroringCompositorResized();
       // No need to update the transformer as new transformer is already set
@@ -336,22 +348,6 @@ void MirrorWindowController::OnHostResized(aura::WindowTreeHost* host) {
           ->UpdateLocation();
       return;
     }
-  }
-}
-
-void MirrorWindowController::OnAcceleratedWidgetOverridden(
-    aura::WindowTreeHost* host) {
-  DCHECK_NE(host->GetAcceleratedWidget(), gfx::kNullAcceleratedWidget);
-  DCHECK_NE(Shell::GetAshConfig(), Config::CLASSIC);
-  DCHECK(!base::FeatureList::IsEnabled(features::kMash));
-  MirroringHostInfo* info = mirroring_host_info_map_[host->GetDisplayId()];
-  if (reflector_) {
-    reflector_->AddMirroringLayer(info->mirror_window->layer());
-  } else if (aura::Env::GetInstance()->context_factory_private()) {
-    reflector_ =
-        aura::Env::GetInstance()->context_factory_private()->CreateReflector(
-            Shell::GetPrimaryRootWindow()->GetHost()->compositor(),
-            info->mirror_window->layer());
   }
 }
 
@@ -415,8 +411,7 @@ void MirrorWindowController::CloseAndDeleteHost(MirroringHostInfo* host_info,
   host->RemoveObserver(Shell::Get()->window_tree_host_manager());
   host->RemoveObserver(this);
   host_info->ash_host->PrepareForShutdown();
-  // TODO: |reflector_| should always be non-null here, but isn't in MUS yet
-  // because of http://crbug.com/601869.
+  // |reflector_| may be null during display disconnect or shutdown.
   if (reflector_ && host_info->mirror_window->layer()->GetCompositor())
     reflector_->RemoveMirroringLayer(host_info->mirror_window->layer());
 

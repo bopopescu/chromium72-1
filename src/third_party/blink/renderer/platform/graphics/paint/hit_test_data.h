@@ -5,36 +5,41 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_PLATFORM_GRAPHICS_PAINT_HIT_TEST_DATA_H_
 #define THIRD_PARTY_BLINK_RENDERER_PLATFORM_GRAPHICS_PAINT_HIT_TEST_DATA_H_
 
-#include "third_party/blink/renderer/platform/geometry/float_rect.h"
-#include "third_party/blink/renderer/platform/geometry/region.h"
-#include "third_party/blink/renderer/platform/graphics/touch_action_rect.h"
+#include "third_party/blink/renderer/platform/graphics/hit_test_rect.h"
 #include "third_party/blink/renderer/platform/platform_export.h"
 
 namespace blink {
 
+using HitTestRects = Vector<HitTestRect>;
+
 struct PLATFORM_EXPORT HitTestData {
-  FloatRect border_rect;
-  TouchActionRect touch_action_rect =
-      TouchActionRect(LayoutRect(), cc::kTouchActionNone);
-  Region wheel_event_handler_region;
-  Region non_fast_scrollable_region;
+  HitTestRects touch_action_rects;
+  HitTestRects wheel_event_handler_region;
+  HitTestRects non_fast_scrollable_region;
 
   HitTestData() = default;
   HitTestData(const HitTestData& other)
-      : border_rect(other.border_rect),
-        touch_action_rect(other.touch_action_rect),
+      : touch_action_rects(other.touch_action_rects),
         wheel_event_handler_region(other.wheel_event_handler_region),
         non_fast_scrollable_region(other.non_fast_scrollable_region) {}
 
   bool operator==(const HitTestData& rhs) const {
-    return border_rect == rhs.border_rect &&
-           touch_action_rect == rhs.touch_action_rect &&
+    return touch_action_rects == rhs.touch_action_rects &&
            wheel_event_handler_region == rhs.wheel_event_handler_region &&
            non_fast_scrollable_region == rhs.non_fast_scrollable_region;
   }
 
+  void Append(const HitTestRect& rect) {
+    // TODO(836905): Support other types of hit testing.
+    touch_action_rects.push_back(rect);
+  }
+
   bool operator!=(const HitTestData& rhs) const { return !(*this == rhs); }
+
+  String ToString() const;
 };
+
+PLATFORM_EXPORT std::ostream& operator<<(std::ostream&, const HitTestData&);
 
 }  // namespace blink
 

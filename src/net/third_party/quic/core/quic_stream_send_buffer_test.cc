@@ -7,13 +7,14 @@
 #include "net/third_party/quic/core/quic_data_writer.h"
 #include "net/third_party/quic/core/quic_simple_buffer_allocator.h"
 #include "net/third_party/quic/core/quic_utils.h"
+#include "net/third_party/quic/platform/api/quic_expect_bug.h"
 #include "net/third_party/quic/platform/api/quic_flags.h"
 #include "net/third_party/quic/platform/api/quic_string.h"
 #include "net/third_party/quic/platform/api/quic_test.h"
 #include "net/third_party/quic/test_tools/quic_stream_send_buffer_peer.h"
 #include "net/third_party/quic/test_tools/quic_test_utils.h"
 
-namespace net {
+namespace quic {
 namespace test {
 namespace {
 
@@ -104,8 +105,8 @@ TEST_F(QuicStreamSendBufferTest, CopyDataToBuffer) {
   // Invalid data copy.
   QuicDataWriter writer3(4000, buf, HOST_BYTE_ORDER);
   EXPECT_FALSE(send_buffer_.WriteStreamData(3000, 1024, &writer3));
-  EXPECT_DFATAL(send_buffer_.WriteStreamData(0, 4000, &writer3),
-                "Writer fails to write.");
+  EXPECT_QUIC_BUG(send_buffer_.WriteStreamData(0, 4000, &writer3),
+                  "Writer fails to write.");
 
   send_buffer_.OnStreamDataConsumed(3840);
   EXPECT_EQ(3840u, send_buffer_.stream_bytes_written());
@@ -287,4 +288,4 @@ TEST_F(QuicStreamSendBufferTest, CurrentWriteIndex) {
 
 }  // namespace
 }  // namespace test
-}  // namespace net
+}  // namespace quic

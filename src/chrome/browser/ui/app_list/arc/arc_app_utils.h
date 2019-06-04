@@ -13,6 +13,7 @@
 #include "base/macros.h"
 #include "base/optional.h"
 #include "components/arc/common/app.mojom.h"
+#include "components/arc/metrics/arc_metrics_constants.h"
 
 class Profile;
 
@@ -22,6 +23,9 @@ class BrowserContext;
 
 namespace arc {
 
+extern const char kGoogleDuo[];
+extern const char kInfinitePainter[];
+extern const char kLightRoom[];
 extern const char kPlayStoreAppId[];
 extern const char kPlayBooksAppId[];
 extern const char kPlayGamesAppId[];
@@ -93,16 +97,19 @@ bool LaunchPlayStoreWithUrl(const std::string& url);
 // Launches an ARC app.
 bool LaunchApp(content::BrowserContext* context,
                const std::string& app_id,
-               int event_flags);
+               int event_flags,
+               UserInteractionType user_action);
 bool LaunchApp(content::BrowserContext* context,
                const std::string& app_id,
                int event_flags,
+               UserInteractionType user_action,
                int64_t display_id);
 
 bool LaunchAppWithIntent(content::BrowserContext* context,
                          const std::string& app_id,
                          const base::Optional<std::string>& launch_intent,
                          int event_flags,
+                         UserInteractionType user_action,
                          int64_t display_id);
 
 // Launches App Shortcut that was published by Android's ShortcutManager.
@@ -128,6 +135,13 @@ void ShowTalkBackSettings();
 
 // Starts Play Auto Install flow.
 void StartPaiFlow();
+
+// Gets user selected package names.
+std::vector<std::string> GetSelectedPackagesFromPrefs(
+    content::BrowserContext* context);
+
+// Starts Play Fast App Reinstall flow.
+void StartFastAppReinstallFlow(const std::vector<std::string>& package_names);
 
 // Uninstalls the package in ARC.
 void UninstallPackage(const std::string& package_name);
@@ -156,6 +170,12 @@ std::string GetLaunchIntent(const std::string& package_name,
 // Parses provided |intent_as_string|. Returns false if |intent_as_string|
 // cannot be parsed.
 bool ParseIntent(const std::string& intent_as_string, Intent* intent);
+
+// Returns current active locale and list of preferred languages for the given
+// |profile|.
+void GetLocaleAndPreferredLanguages(const Profile* profle,
+                                    std::string* out_locale,
+                                    std::string* out_preferred_languages);
 
 }  // namespace arc
 

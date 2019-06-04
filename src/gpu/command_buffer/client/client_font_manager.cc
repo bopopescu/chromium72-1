@@ -59,10 +59,13 @@ ClientFontManager::ClientFontManager(Client* client,
 ClientFontManager::~ClientFontManager() = default;
 
 SkDiscardableHandleId ClientFontManager::createHandle() {
-  SkDiscardableHandleId handle_id = ++last_allocated_handle_id_;
-  discardable_handle_map_[handle_id] =
+  auto client_handle =
       client_discardable_manager_.CreateHandle(command_buffer_);
+  if (client_handle.is_null())
+    return kInvalidSkDiscardableHandleId;
 
+  SkDiscardableHandleId handle_id = ++last_allocated_handle_id_;
+  discardable_handle_map_[handle_id] = client_handle;
   // Handles start with a ref-count.
   locked_handles_.insert(handle_id);
   return handle_id;
@@ -74,7 +77,9 @@ bool ClientFontManager::lockHandle(SkDiscardableHandleId handle_id) {
     return true;
 
   auto it = discardable_handle_map_.find(handle_id);
-  DCHECK(it != discardable_handle_map_.end());
+  if (it == discardable_handle_map_.end())
+    return false;
+
   bool locked = client_discardable_manager_.LockHandle(it->second);
   if (locked) {
     locked_handles_.insert(handle_id);
@@ -85,13 +90,26 @@ bool ClientFontManager::lockHandle(SkDiscardableHandleId handle_id) {
   return false;
 }
 
+bool ClientFontManager::isHandleDeleted(SkDiscardableHandleId handle_id) {
+  auto it = discardable_handle_map_.find(handle_id);
+  if (it == discardable_handle_map_.end())
+    return true;
+
+  if (client_discardable_manager_.HandleIsDeleted(it->second)) {
+    discardable_handle_map_.erase(it);
+    return true;
+  }
+
+  return false;
+}
+
 void ClientFontManager::Serialize() {
   // TODO(khushalsagar): May be skia can track the size required so we avoid
   // this copy.
   std::vector<uint8_t> strike_data;
   strike_server_.writeStrikeData(&strike_data);
 
-  const size_t num_handles_created =
+  const uint64_t num_handles_created =
       last_allocated_handle_id_ - last_serialized_handle_id_;
   if (strike_data.size() == 0u && num_handles_created == 0u &&
       locked_handles_.size() == 0u) {
@@ -102,14 +120,14 @@ void ClientFontManager::Serialize() {
   // Size requires for serialization.
   size_t bytes_required =
       // Skia data size.
-      +sizeof(size_t) + alignof(size_t) + strike_data.size() +
-      alignof(std::max_align_t)
+      +sizeof(uint64_t) + alignof(uint64_t) + strike_data.size() +
+      16
       // num of handles created + SerializableHandles.
-      + sizeof(size_t) + alignof(size_t) +
+      + sizeof(uint64_t) + alignof(uint64_t) +
       num_handles_created * sizeof(SerializableSkiaHandle) +
       alignof(SerializableSkiaHandle) +
       // num of handles locked + DiscardableHandleIds.
-      +sizeof(size_t) + alignof(size_t) +
+      +sizeof(uint64_t) + alignof(uint64_t) +
       locked_handles_.size() * sizeof(SkDiscardableHandleId) +
       alignof(SkDiscardableHandleId);
 
@@ -123,11 +141,14 @@ void ClientFontManager::Serialize() {
   Serializer serializer(reinterpret_cast<char*>(memory), bytes_required);
 
   // Serialize all new handles.
-  serializer.Write<size_t>(&num_handles_created);
+  serializer.Write<uint64_t>(&num_handles_created);
   for (SkDiscardableHandleId handle_id = last_serialized_handle_id_ + 1;
        handle_id <= last_allocated_handle_id_; handle_id++) {
     auto it = discardable_handle_map_.find(handle_id);
     DCHECK(it != discardable_handle_map_.end());
+
+    // We must have a valid |client_handle| here since all new handles are
+    // currently in locked state.
     auto client_handle = client_discardable_manager_.GetHandle(it->second);
     DCHECK(client_handle.IsValid());
     SerializableSkiaHandle handle(handle_id, client_handle.shm_id(),
@@ -136,16 +157,15 @@ void ClientFontManager::Serialize() {
   }
 
   // Serialize all locked handle ids, so the raster unlocks them when done.
-  const size_t num_locked_handles = locked_handles_.size();
-  serializer.Write<size_t>(&num_locked_handles);
+  const uint64_t num_locked_handles = locked_handles_.size();
+  serializer.Write<uint64_t>(&num_locked_handles);
   for (auto handle_id : locked_handles_)
     serializer.Write<SkDiscardableHandleId>(&handle_id);
 
   // Serialize skia data.
-  const size_t skia_data_size = strike_data.size();
-  serializer.Write<size_t>(&skia_data_size);
-  serializer.WriteData(strike_data.data(), strike_data.size(),
-                       alignof(std::max_align_t));
+  const uint64_t skia_data_size = strike_data.size();
+  serializer.Write<uint64_t>(&skia_data_size);
+  serializer.WriteData(strike_data.data(), strike_data.size(), 16);
 
   // Reset all state for what has been serialized.
   last_serialized_handle_id_ = last_allocated_handle_id_;

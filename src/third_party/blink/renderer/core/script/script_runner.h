@@ -30,7 +30,7 @@
 #include "base/macros.h"
 #include "base/single_thread_task_runner.h"
 #include "third_party/blink/renderer/core/core_export.h"
-#include "third_party/blink/renderer/platform/bindings/script_wrappable.h"
+#include "third_party/blink/renderer/platform/bindings/name_client.h"
 #include "third_party/blink/renderer/platform/bindings/trace_wrapper_member.h"
 #include "third_party/blink/renderer/platform/heap/handle.h"
 #include "third_party/blink/renderer/platform/wtf/deque.h"
@@ -44,11 +44,13 @@ class ScriptLoader;
 
 class CORE_EXPORT ScriptRunner final
     : public GarbageCollectedFinalized<ScriptRunner>,
-      public TraceWrapperBase {
+      public NameClient {
  public:
   static ScriptRunner* Create(Document* document) {
-    return new ScriptRunner(document);
+    return MakeGarbageCollected<ScriptRunner>(document);
   }
+
+  explicit ScriptRunner(Document*);
 
   void QueueScriptForExecution(PendingScript*);
   bool HasPendingScripts() const {
@@ -63,13 +65,10 @@ class CORE_EXPORT ScriptRunner final
   static void MovePendingScript(Document&, Document&, ScriptLoader*);
 
   void Trace(blink::Visitor*);
-  void TraceWrappers(ScriptWrappableVisitor*) const override;
   const char* NameInHeapSnapshot() const override { return "ScriptRunner"; }
 
  private:
   class Task;
-
-  explicit ScriptRunner(Document*);
 
   void MovePendingScript(ScriptRunner*, PendingScript*);
   bool RemovePendingInOrderScript(PendingScript*);

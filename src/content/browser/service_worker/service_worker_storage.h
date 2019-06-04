@@ -25,7 +25,7 @@
 #include "content/browser/service_worker/service_worker_metrics.h"
 #include "content/browser/service_worker/service_worker_version.h"
 #include "content/common/content_export.h"
-#include "content/common/service_worker/service_worker_status_code.h"
+#include "third_party/blink/public/common/service_worker/service_worker_status_code.h"
 #include "url/gurl.h"
 
 namespace base {
@@ -69,30 +69,30 @@ FORWARD_DECLARE_TEST(ServiceWorkerResourceStorageDiskTest,
 // disabled and all subsequent requests are aborted until the context core is
 // restarted.
 class CONTENT_EXPORT ServiceWorkerStorage
-    : public ServiceWorkerVersion::Listener {
+    : public ServiceWorkerVersion::Observer {
  public:
   using ResourceList = std::vector<ServiceWorkerDatabase::ResourceRecord>;
   using StatusCallback =
-      base::OnceCallback<void(ServiceWorkerStatusCode status)>;
+      base::OnceCallback<void(blink::ServiceWorkerStatusCode status)>;
   using FindRegistrationCallback = base::OnceCallback<void(
-      ServiceWorkerStatusCode status,
+      blink::ServiceWorkerStatusCode status,
       scoped_refptr<ServiceWorkerRegistration> registration)>;
   using GetRegistrationsCallback = base::OnceCallback<void(
-      ServiceWorkerStatusCode status,
+      blink::ServiceWorkerStatusCode status,
       const std::vector<scoped_refptr<ServiceWorkerRegistration>>&
           registrations)>;
   using GetRegistrationsInfosCallback = base::OnceCallback<void(
-      ServiceWorkerStatusCode status,
+      blink::ServiceWorkerStatusCode status,
       const std::vector<ServiceWorkerRegistrationInfo>& registrations)>;
   using GetUserDataCallback =
       base::OnceCallback<void(const std::vector<std::string>& data,
-                              ServiceWorkerStatusCode status)>;
+                              blink::ServiceWorkerStatusCode status)>;
   using GetUserKeysAndDataCallback = base::OnceCallback<void(
       const base::flat_map<std::string, std::string>& data_map,
-      ServiceWorkerStatusCode status)>;
+      blink::ServiceWorkerStatusCode status)>;
   using GetUserDataForAllRegistrationsCallback = base::OnceCallback<void(
       const std::vector<std::pair<int64_t, std::string>>& user_data,
-      ServiceWorkerStatusCode status)>;
+      blink::ServiceWorkerStatusCode status)>;
 
   ~ServiceWorkerStorage() override;
 
@@ -108,19 +108,20 @@ class CONTENT_EXPORT ServiceWorkerStorage
       const base::WeakPtr<ServiceWorkerContextCore>& context,
       ServiceWorkerStorage* old_storage);
 
-  // Finds registration for |document_url| or |pattern| or |registration_id|.
+  // Finds registration for |document_url| or |scope| or |registration_id|.
   // The Find methods will find stored and initially installing registrations.
-  // Returns SERVICE_WORKER_OK with non-null registration if registration
-  // is found, or returns SERVICE_WORKER_ERROR_NOT_FOUND if no matching
-  // registration is found.  The FindRegistrationForPattern method is
+  // Returns blink::ServiceWorkerStatusCode::kOk with non-null
+  // registration if registration is found, or returns
+  // blink::ServiceWorkerStatusCode::kErrorNotFound if no
+  // matching registration is found.  The FindRegistrationForScope method is
   // guaranteed to return asynchronously. However, the methods to find
   // for |document_url| or |registration_id| may complete immediately
   // (the callback may be called prior to the method returning) or
   // asynchronously.
   void FindRegistrationForDocument(const GURL& document_url,
                                    FindRegistrationCallback callback);
-  void FindRegistrationForPattern(const GURL& scope,
-                                  FindRegistrationCallback callback);
+  void FindRegistrationForScope(const GURL& scope,
+                                FindRegistrationCallback callback);
   void FindRegistrationForId(int64_t registration_id,
                              const GURL& origin,
                              FindRegistrationCallback callback);
@@ -259,10 +260,9 @@ class CONTENT_EXPORT ServiceWorkerStorage
   // ServiceWorkerRegistration.
   void NotifyInstallingRegistration(
       ServiceWorkerRegistration* registration);
-  void NotifyDoneInstallingRegistration(
-      ServiceWorkerRegistration* registration,
-      ServiceWorkerVersion* version,
-      ServiceWorkerStatusCode status);
+  void NotifyDoneInstallingRegistration(ServiceWorkerRegistration* registration,
+                                        ServiceWorkerVersion* version,
+                                        blink::ServiceWorkerStatusCode status);
   void NotifyUninstallingRegistration(ServiceWorkerRegistration* registration);
   void NotifyDoneUninstallingRegistration(
       ServiceWorkerRegistration* registration);
@@ -375,7 +375,7 @@ class CONTENT_EXPORT ServiceWorkerStorage
       const ServiceWorkerDatabase::RegistrationData& data,
       const ResourceList& resources,
       ServiceWorkerDatabase::Status status);
-  void DidFindRegistrationForPattern(
+  void DidFindRegistrationForScope(
       const GURL& scope,
       FindRegistrationCallback callback,
       const ServiceWorkerDatabase::RegistrationData& data,
@@ -437,7 +437,7 @@ class CONTENT_EXPORT ServiceWorkerStorage
       const ResourceList& resources);
   ServiceWorkerRegistration* FindInstallingRegistrationForDocument(
       const GURL& document_url);
-  ServiceWorkerRegistration* FindInstallingRegistrationForPattern(
+  ServiceWorkerRegistration* FindInstallingRegistrationForScope(
       const GURL& scope);
   ServiceWorkerRegistration* FindInstallingRegistrationForId(
       int64_t registration_id);
@@ -489,7 +489,7 @@ class CONTENT_EXPORT ServiceWorkerStorage
       scoped_refptr<base::SequencedTaskRunner> original_task_runner,
       const GURL& document_url,
       FindInDBCallback callback);
-  static void FindForPatternInDB(
+  static void FindForScopeInDB(
       ServiceWorkerDatabase* database,
       scoped_refptr<base::SequencedTaskRunner> original_task_runner,
       const GURL& scope,
@@ -563,10 +563,10 @@ class CONTENT_EXPORT ServiceWorkerStorage
   int64_t next_resource_id_;
 
   enum State {
-    UNINITIALIZED,
-    INITIALIZING,
-    INITIALIZED,
-    DISABLED,
+    STORAGE_STATE_UNINITIALIZED,
+    STORAGE_STATE_INITIALIZING,
+    STORAGE_STATE_INITIALIZED,
+    STORAGE_STATE_DISABLED,
   };
   State state_;
 

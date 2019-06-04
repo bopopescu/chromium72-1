@@ -11,8 +11,7 @@
 #include "media/base/media.h"
 #include "services/service_manager/public/cpp/binder_registry.h"
 #include "third_party/blink/public/platform/scheduler/test/renderer_scheduler_test_support.h"
-#include "third_party/blink/public/platform/scheduler/web_main_thread_scheduler.h"
-#include "third_party/blink/public/platform/web_thread.h"
+#include "third_party/blink/public/platform/scheduler/web_thread_scheduler.h"
 #include "third_party/blink/public/web/blink.h"
 
 #if defined(OS_ANDROID)
@@ -20,7 +19,7 @@
 #endif
 
 #if !defined(OS_IOS)
-#include "mojo/edk/embedder/embedder.h"
+#include "mojo/core/embedder/embedder.h"
 #endif
 
 #if defined(V8_USE_EXTERNAL_STARTUP_DATA)
@@ -40,24 +39,20 @@ class BlinkPlatformWithTaskEnvironment : public blink::Platform {
  public:
   BlinkPlatformWithTaskEnvironment()
       : main_thread_scheduler_(
-            blink::scheduler::CreateWebMainThreadSchedulerForTests()),
-        main_thread_(main_thread_scheduler_->CreateMainThread()) {}
+            blink::scheduler::WebThreadScheduler::CreateMainThreadScheduler()) {
+  }
 
   ~BlinkPlatformWithTaskEnvironment() override {
     main_thread_scheduler_->Shutdown();
   }
 
- protected:
-  blink::WebThread* CurrentThread() override {
-    CHECK(main_thread_->IsCurrentThread());
-    return main_thread_.get();
+  blink::scheduler::WebThreadScheduler* GetMainThreadScheduler() {
+    return main_thread_scheduler_.get();
   }
 
  private:
   base::test::ScopedTaskEnvironment scoped_task_environment_;
-  std::unique_ptr<blink::scheduler::WebMainThreadScheduler>
-      main_thread_scheduler_;
-  std::unique_ptr<blink::WebThread> main_thread_;
+  std::unique_ptr<blink::scheduler::WebThreadScheduler> main_thread_scheduler_;
 
   DISALLOW_COPY_AND_ASSIGN(BlinkPlatformWithTaskEnvironment);
 };
@@ -79,12 +74,13 @@ static int RunTests(base::TestSuite* test_suite) {
 
 #if !defined(OS_IOS)
   // Initialize mojo firstly to enable Blink initialization to use it.
-  mojo::edk::Init();
+  mojo::core::Init();
 #endif
 
   BlinkPlatformWithTaskEnvironment platform_;
   service_manager::BinderRegistry empty_registry;
-  blink::Initialize(&platform_, &empty_registry);
+  blink::Initialize(&platform_, &empty_registry,
+                    platform_.GetMainThreadScheduler());
 
   return test_suite->Run();
 }

@@ -25,7 +25,7 @@ class CFFL_InteractiveFormFiller;
 class CFX_SystemHandler;
 class CPDFSDK_ActionHandler;
 class CPDFSDK_AnnotHandlerMgr;
-class CPDFSDK_InterForm;
+class CPDFSDK_InteractiveForm;
 class CPDFSDK_PageView;
 class IJS_Runtime;
 
@@ -44,7 +44,7 @@ FPDF_WIDESTRING AsFPDFWideString(ByteString* bsUTF16LE);
 // hierarcy back to the form fill environment itself, so as to flag any
 // lingering lifetime issues via the memory tools.
 
-class CPDFSDK_FormFillEnvironment
+class CPDFSDK_FormFillEnvironment final
     : public Observable<CPDFSDK_FormFillEnvironment> {
  public:
   CPDFSDK_FormFillEnvironment(CPDF_Document* pDoc, FPDF_FORMFILLINFO* pFFinfo);
@@ -60,13 +60,13 @@ class CPDFSDK_FormFillEnvironment
     return !!(nFlag & FWL_EVENTFLAG_AltKey);
   }
 
-  CPDFSDK_PageView* GetPageView(UnderlyingPageType* pPage, bool renew);
+  CPDFSDK_PageView* GetPageView(IPDF_Page* pPage, bool renew);
   CPDFSDK_PageView* GetPageView(int nIndex);
   CPDFSDK_PageView* GetCurrentView();
-  void RemovePageView(UnderlyingPageType* pPage);
+  void RemovePageView(IPDF_Page* pPage);
   void UpdateAllViews(CPDFSDK_PageView* pSender, CPDFSDK_Annot* pAnnot);
 
-  CPDFSDK_Annot* GetFocusAnnot() { return m_pFocusAnnot.Get(); }
+  CPDFSDK_Annot* GetFocusAnnot() const { return m_pFocusAnnot.Get(); }
   bool SetFocusAnnot(CPDFSDK_Annot::ObservedPtr* pAnnot);
   bool KillFocusAnnot(uint32_t nFlag);
   void ClearAllFocusedAnnots();
@@ -90,8 +90,8 @@ class CPDFSDK_FormFillEnvironment
   void ProcJavascriptFun();
   bool ProcOpenAction();
 
-  void Invalidate(UnderlyingPageType* page, const FX_RECT& rect);
-  void OutputSelectedRect(UnderlyingPageType* page, const CFX_FloatRect& rect);
+  void Invalidate(IPDF_Page* page, const FX_RECT& rect);
+  void OutputSelectedRect(IPDF_Page* page, const CFX_FloatRect& rect);
 
   void SetCursor(int nCursorType);
   int SetTimer(int uElapse, TimerCallback lpTimerFunc);
@@ -113,9 +113,10 @@ class CPDFSDK_FormFillEnvironment
 
   CPDF_Document* GetPDFDocument() const { return m_pCPDFDoc.Get(); }
 
+#ifdef PDF_ENABLE_V8
 #ifdef PDF_ENABLE_XFA
   CPDFXFA_Context* GetXFAContext() const;
-  int GetPageViewCount() const { return m_PageMap.size(); }
+  int GetPageViewCount() const;
 
   void DisplayCaret(CPDFXFA_Page* page,
                     FPDF_BOOL bVisible,
@@ -137,7 +138,6 @@ class CPDFSDK_FormFillEnvironment
                  int menuFlag,
                  CFX_PointF pt);
 
-  void Alert(FPDF_WIDESTRING Msg, FPDF_WIDESTRING Title, int Type, int Icon);
   void EmailTo(FPDF_FILEHANDLER* fileHandler,
                FPDF_WIDESTRING pTo,
                FPDF_WIDESTRING pSubject,
@@ -166,8 +166,8 @@ class CPDFSDK_FormFillEnvironment
 
   int JS_appAlert(const WideString& Msg,
                   const WideString& Title,
-                  uint32_t Type,
-                  uint32_t Icon);
+                  int Type,
+                  int Icon);
   int JS_appResponse(const WideString& Question,
                      const WideString& Title,
                      const WideString& Default,
@@ -177,8 +177,6 @@ class CPDFSDK_FormFillEnvironment
                      int length);
   void JS_appBeep(int nType);
   WideString JS_fieldBrowse();
-  WideString JS_docGetFilePath();
-  void JS_docSubmitForm(void* formData, int length, const WideString& URL);
   void JS_docmailForm(void* mailData,
                       int length,
                       FPDF_BOOL bUI,
@@ -196,8 +194,14 @@ class CPDFSDK_FormFillEnvironment
                    FPDF_BOOL bReverse,
                    FPDF_BOOL bAnnotations);
   void JS_docgotoPage(int nPageNum);
+#endif  // PDF_ENABLE_V8
 
   bool IsJSPlatformPresent() const { return m_pInfo && m_pInfo->m_pJsPlatform; }
+
+  // TODO(tsepez): required even if !V8, investigate.
+  WideString JS_docGetFilePath();
+  void JS_docSubmitForm(void* formData, int length, const WideString& URL);
+
   ByteString GetAppName() const { return ""; }
   CFX_SystemHandler* GetSysHandler() const { return m_pSysHandler.get(); }
   FPDF_FORMFILLINFO* GetFormFillInfo() const { return m_pInfo; }
@@ -207,23 +211,23 @@ class CPDFSDK_FormFillEnvironment
   CPDFSDK_AnnotHandlerMgr* GetAnnotHandlerMgr();  // Creates if not present.
   IJS_Runtime* GetIJSRuntime();                   // Creates if not present.
   CPDFSDK_ActionHandler* GetActionHandler();      // Creates if not present.
-  CPDFSDK_InterForm* GetInterForm();              // Creates if not present.
+  CPDFSDK_InteractiveForm* GetInteractiveForm();  // Creates if not present.
 
  private:
-  UnderlyingPageType* GetPage(int nIndex);
+  IPDF_Page* GetPage(int nIndex);
 
   FPDF_FORMFILLINFO* const m_pInfo;
   std::unique_ptr<CPDFSDK_AnnotHandlerMgr> m_pAnnotHandlerMgr;
   std::unique_ptr<CPDFSDK_ActionHandler> m_pActionHandler;
   std::unique_ptr<IJS_Runtime> m_pIJSRuntime;
-  std::map<UnderlyingPageType*, std::unique_ptr<CPDFSDK_PageView>> m_PageMap;
-  std::unique_ptr<CPDFSDK_InterForm> m_pInterForm;
+  std::map<IPDF_Page*, std::unique_ptr<CPDFSDK_PageView>> m_PageMap;
+  std::unique_ptr<CPDFSDK_InteractiveForm> m_pInteractiveForm;
   CPDFSDK_Annot::ObservedPtr m_pFocusAnnot;
   UnownedPtr<CPDF_Document> const m_pCPDFDoc;
   std::unique_ptr<CFFL_InteractiveFormFiller> m_pFormFiller;
   std::unique_ptr<CFX_SystemHandler> m_pSysHandler;
-  bool m_bChangeMask;
-  bool m_bBeingDestroyed;
+  bool m_bChangeMask = false;
+  bool m_bBeingDestroyed = false;
 };
 
 #endif  // FPDFSDK_CPDFSDK_FORMFILLENVIRONMENT_H_

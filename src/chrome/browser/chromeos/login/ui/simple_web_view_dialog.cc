@@ -4,8 +4,6 @@
 
 #include "chrome/browser/chromeos/login/ui/simple_web_view_dialog.h"
 
-#include "ash/public/cpp/shell_window_ids.h"
-#include "ash/shell.h"
 #include "base/macros.h"
 #include "base/strings/utf_string_conversions.h"
 #include "chrome/app/chrome_command_ids.h"
@@ -19,13 +17,13 @@
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/content_settings/content_setting_bubble_model_delegate.h"
 #include "chrome/browser/ui/view_ids.h"
-#include "chrome/browser/ui/views/harmony/chrome_layout_provider.h"
+#include "chrome/browser/ui/views/chrome_layout_provider.h"
 #include "chrome/browser/ui/views/toolbar/reload_button.h"
 #include "chrome/grit/generated_resources.h"
 #include "chrome/grit/theme_resources.h"
+#include "components/omnibox/browser/location_bar_model_impl.h"
 #include "components/password_manager/core/browser/password_manager.h"
 #include "components/strings/grit/components_strings.h"
-#include "components/toolbar/toolbar_model_impl.h"
 #include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/navigation_entry.h"
 #include "content/public/browser/web_contents.h"
@@ -158,11 +156,11 @@ void SimpleWebViewDialog::StartLoad(const GURL& url) {
 }
 
 void SimpleWebViewDialog::Init() {
-  // Create the security state model that the toolbar model needs.
+  // Create the security state model that the location bar model needs.
   if (web_view_->GetWebContents())
     SecurityStateTabHelper::CreateForWebContents(web_view_->GetWebContents());
-  toolbar_model_.reset(
-      new ToolbarModelImpl(this, content::kMaxURLDisplayChars));
+  location_bar_model_.reset(
+      new LocationBarModelImpl(this, content::kMaxURLDisplayChars));
 
   SetBackground(views::CreateSolidBackground(kDialogColor));
 
@@ -190,7 +188,7 @@ void SimpleWebViewDialog::Init() {
                                       this, true);
 
   // Reload button.
-  reload_ = new ReloadButton(profile_, command_updater_.get());
+  reload_ = new ReloadButton(command_updater_.get());
   reload_->set_triggerable_event_flags(ui::EF_LEFT_MOUSE_BUTTON |
                                        ui::EF_MIDDLE_MOUSE_BUTTON);
   reload_->set_tag(IDC_RELOAD);
@@ -277,12 +275,12 @@ WebContents* SimpleWebViewDialog::GetWebContents() {
   return nullptr;
 }
 
-ToolbarModel* SimpleWebViewDialog::GetToolbarModel() {
-  return toolbar_model_.get();
+LocationBarModel* SimpleWebViewDialog::GetLocationBarModel() {
+  return location_bar_model_.get();
 }
 
-const ToolbarModel* SimpleWebViewDialog::GetToolbarModel() const {
-  return toolbar_model_.get();
+const LocationBarModel* SimpleWebViewDialog::GetLocationBarModel() const {
+  return location_bar_model_.get();
 }
 
 ContentSettingBubbleModelDelegate*

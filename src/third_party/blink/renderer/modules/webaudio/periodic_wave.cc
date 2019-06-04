@@ -28,15 +28,14 @@
 
 #include <algorithm>
 #include <memory>
-#include "third_party/blink/renderer/bindings/core/v8/exception_messages.h"
-#include "third_party/blink/renderer/bindings/core/v8/exception_state.h"
-#include "third_party/blink/renderer/core/dom/exception_code.h"
+
 #include "third_party/blink/renderer/modules/webaudio/base_audio_context.h"
 #include "third_party/blink/renderer/modules/webaudio/oscillator_node.h"
 #include "third_party/blink/renderer/modules/webaudio/periodic_wave.h"
 #include "third_party/blink/renderer/modules/webaudio/periodic_wave_options.h"
 #include "third_party/blink/renderer/platform/audio/fft_frame.h"
 #include "third_party/blink/renderer/platform/audio/vector_math.h"
+#include "third_party/blink/renderer/platform/bindings/exception_state.h"
 
 namespace blink {
 
@@ -50,7 +49,7 @@ const unsigned kMaxPeriodicWaveSize = 16384;
 
 const float kCentsPerRange = 1200 / kNumberOfOctaveBands;
 
-using namespace VectorMath;
+using namespace vector_math;
 
 PeriodicWave* PeriodicWave::Create(BaseAudioContext& context,
                                    const Vector<float>& real,
@@ -66,36 +65,37 @@ PeriodicWave* PeriodicWave::Create(BaseAudioContext& context,
 
   if (real.size() != imag.size()) {
     exception_state.ThrowDOMException(
-        kIndexSizeError, "length of real array (" +
-                             String::Number(real.size()) +
-                             ") and length of imaginary array (" +
-                             String::Number(imag.size()) + ") must match.");
+        DOMExceptionCode::kIndexSizeError,
+        "length of real array (" + String::Number(real.size()) +
+            ") and length of imaginary array (" + String::Number(imag.size()) +
+            ") must match.");
     return nullptr;
   }
 
-  PeriodicWave* periodic_wave = new PeriodicWave(context.sampleRate());
+  PeriodicWave* periodic_wave =
+      MakeGarbageCollected<PeriodicWave>(context.sampleRate());
   periodic_wave->CreateBandLimitedTables(real.data(), imag.data(), real.size(),
                                          disable_normalization);
   return periodic_wave;
 }
 
 PeriodicWave* PeriodicWave::Create(BaseAudioContext* context,
-                                   const PeriodicWaveOptions& options,
+                                   const PeriodicWaveOptions* options,
                                    ExceptionState& exception_state) {
-  bool normalize = options.disableNormalization();
+  bool normalize = options->disableNormalization();
 
   Vector<float> real_coef;
   Vector<float> imag_coef;
 
-  if (options.hasReal()) {
-    real_coef = options.real();
-    if (options.hasImag())
-      imag_coef = options.imag();
+  if (options->hasReal()) {
+    real_coef = options->real();
+    if (options->hasImag())
+      imag_coef = options->imag();
     else
       imag_coef.resize(real_coef.size());
-  } else if (options.hasImag()) {
+  } else if (options->hasImag()) {
     // |real| not given, but we have |imag|.
-    imag_coef = options.imag();
+    imag_coef = options->imag();
     real_coef.resize(imag_coef.size());
   } else {
     // Neither |real| nor |imag| given.  Return an object that would
@@ -109,25 +109,25 @@ PeriodicWave* PeriodicWave::Create(BaseAudioContext* context,
 }
 
 PeriodicWave* PeriodicWave::CreateSine(float sample_rate) {
-  PeriodicWave* periodic_wave = new PeriodicWave(sample_rate);
+  PeriodicWave* periodic_wave = MakeGarbageCollected<PeriodicWave>(sample_rate);
   periodic_wave->GenerateBasicWaveform(OscillatorHandler::SINE);
   return periodic_wave;
 }
 
 PeriodicWave* PeriodicWave::CreateSquare(float sample_rate) {
-  PeriodicWave* periodic_wave = new PeriodicWave(sample_rate);
+  PeriodicWave* periodic_wave = MakeGarbageCollected<PeriodicWave>(sample_rate);
   periodic_wave->GenerateBasicWaveform(OscillatorHandler::SQUARE);
   return periodic_wave;
 }
 
 PeriodicWave* PeriodicWave::CreateSawtooth(float sample_rate) {
-  PeriodicWave* periodic_wave = new PeriodicWave(sample_rate);
+  PeriodicWave* periodic_wave = MakeGarbageCollected<PeriodicWave>(sample_rate);
   periodic_wave->GenerateBasicWaveform(OscillatorHandler::SAWTOOTH);
   return periodic_wave;
 }
 
 PeriodicWave* PeriodicWave::CreateTriangle(float sample_rate) {
-  PeriodicWave* periodic_wave = new PeriodicWave(sample_rate);
+  PeriodicWave* periodic_wave = MakeGarbageCollected<PeriodicWave>(sample_rate);
   periodic_wave->GenerateBasicWaveform(OscillatorHandler::TRIANGLE);
   return periodic_wave;
 }
@@ -319,7 +319,7 @@ void PeriodicWave::GenerateBasicWaveform(int shape) {
   imag_p[0] = 0;
 
   for (unsigned n = 1; n < half_size; ++n) {
-    float pi_factor = 2 / (n * piFloat);
+    float pi_factor = 2 / (n * kPiFloat);
 
     // All waveforms are odd functions with a positive slope at time 0. Hence
     // the coefficients for cos() are always 0.

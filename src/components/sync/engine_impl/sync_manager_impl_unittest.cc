@@ -62,7 +62,7 @@
 #include "components/sync/test/engine/fake_model_worker.h"
 #include "components/sync/test/engine/fake_sync_scheduler.h"
 #include "components/sync/test/engine/test_id_factory.h"
-#include "google_apis/gaia/gaia_constants.h"
+#include "services/network/test/test_network_connection_tracker.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/protobuf/src/google/protobuf/io/coded_stream.h"
@@ -494,7 +494,7 @@ TEST_F(SyncApiTest, TestDeleteBehavior) {
 }
 
 TEST_F(SyncApiTest, WriteAndReadPassword) {
-  KeyParams params = {"localhost", "username", "passphrase"};
+  KeyParams params = {KeyDerivationParams::CreateForPbkdf2(), "passphrase"};
   {
     ReadTransaction trans(FROM_HERE, user_share());
     trans.GetCryptographer()->AddKey(params);
@@ -526,7 +526,7 @@ TEST_F(SyncApiTest, WriteAndReadPassword) {
 }
 
 TEST_F(SyncApiTest, WritePasswordAndCheckMetadata) {
-  KeyParams params = {"localhost", "username", "passphrase"};
+  KeyParams params = {KeyDerivationParams::CreateForPbkdf2(), "passphrase"};
   {
     ReadTransaction trans(FROM_HERE, user_share());
     trans.GetCryptographer()->AddKey(params);
@@ -563,7 +563,7 @@ TEST_F(SyncApiTest, WritePasswordAndCheckMetadata) {
 }
 
 TEST_F(SyncApiTest, WriteEncryptedTitle) {
-  KeyParams params = {"localhost", "username", "passphrase"};
+  KeyParams params = {KeyDerivationParams::CreateForPbkdf2(), "passphrase"};
   {
     ReadTransaction trans(FROM_HERE, user_share());
     trans.GetCryptographer()->AddKey(params);
@@ -769,7 +769,7 @@ TEST_F(SyncApiTest, WriteNode_UniqueByCreation_UndeleteCase) {
 // Tests that InitUniqueByCreation called for existing encrypted entry properly
 // decrypts specifics and pust them in BaseNode::unencrypted_data_.
 TEST_F(SyncApiTest, WriteNode_UniqueByCreation_EncryptedExistingEntry) {
-  KeyParams params = {"localhost", "username", "passphrase"};
+  KeyParams params = {KeyDerivationParams::CreateForPbkdf2(), "passphrase"};
   {
     ReadTransaction trans(FROM_HERE, user_share());
     trans.GetCryptographer()->AddKey(params);
@@ -802,7 +802,7 @@ TEST_F(SyncApiTest, WriteNode_UniqueByCreation_EncryptedExistingEntry) {
 // Tests that undeleting deleted password doesn't trigger any issues.
 // See crbug/440430.
 TEST_F(SyncApiTest, WriteNode_PasswordUniqueByCreationAfterDelete) {
-  KeyParams params = {"localhost", "username", "passphrase"};
+  KeyParams params = {KeyDerivationParams::CreateForPbkdf2(), "passphrase"};
   {
     ReadTransaction trans(FROM_HERE, user_share());
     trans.GetCryptographer()->AddKey(params);
@@ -849,7 +849,8 @@ class TestHttpPostProviderInterface : public HttpPostProviderInterface {
   void SetPostPayload(const char* content_type,
                       int content_length,
                       const char* content) override {}
-  bool MakeSynchronousPost(int* error_code, int* response_code) override {
+  bool MakeSynchronousPost(int* net_error_code,
+                           int* http_status_code) override {
     return false;
   }
   int GetResponseContentLength() const override { return 0; }
@@ -892,8 +893,9 @@ class SyncManagerObserverMock : public SyncManager::Observer {
 class SyncEncryptionHandlerObserverMock
     : public SyncEncryptionHandler::Observer {
  public:
-  MOCK_METHOD2(OnPassphraseRequired,
+  MOCK_METHOD3(OnPassphraseRequired,
                void(PassphraseRequiredReason,
+                    const KeyDerivationParams&,
                     const sync_pb::EncryptedData&));  // NOLINT
   MOCK_METHOD0(OnPassphraseAccepted, void());         // NOLINT
   MOCK_METHOD2(OnBootstrapTokenUpdated,
@@ -917,7 +919,9 @@ class SyncManagerTest : public testing::Test,
 
   enum EncryptionStatus { UNINITIALIZED, DEFAULT_ENCRYPTION, FULL_ENCRYPTION };
 
-  SyncManagerTest() : sync_manager_("Test sync manager") {
+  SyncManagerTest()
+      : sync_manager_("Test sync manager",
+                      network::TestNetworkConnectionTracker::GetInstance()) {
     switches_.encryption_method = EngineComponentsFactory::ENCRYPTION_KEYSTORE;
   }
 
@@ -932,9 +936,6 @@ class SyncManagerTest : public testing::Test,
     credentials.account_id = "foo@bar.com";
     credentials.email = "foo@bar.com";
     credentials.sync_token = "sometoken";
-    OAuth2TokenService::ScopeSet scope_set;
-    scope_set.insert(GaiaConstants::kChromeSyncOAuth2Scope);
-    credentials.scope_set = scope_set;
 
     sync_manager_.AddObserver(&manager_observer_);
     EXPECT_CALL(manager_observer_, OnInitializationComplete(_, _, _, _))
@@ -980,9 +981,8 @@ class SyncManagerTest : public testing::Test,
 
     if (initialization_succeeded_) {
       ModelTypeSet enabled_types = GetEnabledTypes();
-      for (auto it = enabled_types.First(); it.Good(); it.Inc()) {
-        type_roots_[it.Get()] =
-            MakeTypeRoot(sync_manager_.GetUserShare(), it.Get());
+      for (ModelType type : enabled_types) {
+        type_roots_[type] = MakeTypeRoot(sync_manager_.GetUserShare(), type);
       }
     }
 
@@ -994,7 +994,7 @@ class SyncManagerTest : public testing::Test,
 
   void TearDown() override {
     sync_manager_.RemoveObserver(&manager_observer_);
-    sync_manager_.ShutdownOnSyncThread(STOP_SYNC);
+    sync_manager_.ShutdownOnSyncThread();
     PumpLoop();
   }
 
@@ -1009,7 +1009,6 @@ class SyncManagerTest : public testing::Test,
     enabled_types.Put(PASSWORDS);
     enabled_types.Put(PREFERENCES);
     enabled_types.Put(PRIORITY_PREFERENCES);
-    enabled_types.Put(ARTICLES);
 
     return enabled_types;
   }
@@ -1040,7 +1039,7 @@ class SyncManagerTest : public testing::Test,
     if (!cryptographer)
       return false;
     if (encryption_status != UNINITIALIZED) {
-      KeyParams params = {"localhost", "dummy", "foobar"};
+      KeyParams params = {KeyDerivationParams::CreateForPbkdf2(), "foobar"};
       cryptographer->AddKey(params);
     } else {
       DCHECK_NE(nigori_status, WRITE_TO_NIGORI);
@@ -1121,7 +1120,7 @@ class SyncManagerTest : public testing::Test,
   }
 
   void SimulateInvalidatorEnabledForTest(bool is_enabled) {
-    DCHECK(sync_manager_.thread_checker_.CalledOnValidThread());
+    DCHECK_CALLED_ON_VALID_SEQUENCE(sync_manager_.sequence_checker_);
     sync_manager_.SetInvalidatorEnabled(is_enabled);
   }
 
@@ -1145,17 +1144,10 @@ class SyncManagerTest : public testing::Test,
     EXPECT_CALL(encryption_observer_, OnCryptographerStateChanged(_));
   }
 
-  void SetImplicitPassphraseAndCheck(const std::string& passphrase) {
-    sync_manager_.GetEncryptionHandler()->SetEncryptionPassphrase(passphrase,
-                                                                  false);
-    EXPECT_EQ(PassphraseType::IMPLICIT_PASSPHRASE, GetPassphraseType());
-  }
-
   void SetCustomPassphraseAndCheck(const std::string& passphrase) {
     EXPECT_CALL(encryption_observer_,
                 OnPassphraseTypeChanged(PassphraseType::CUSTOM_PASSPHRASE, _));
-    sync_manager_.GetEncryptionHandler()->SetEncryptionPassphrase(passphrase,
-                                                                  true);
+    sync_manager_.GetEncryptionHandler()->SetEncryptionPassphrase(passphrase);
     EXPECT_EQ(PassphraseType::CUSTOM_PASSPHRASE, GetPassphraseType());
   }
 
@@ -1216,7 +1208,7 @@ TEST_F(SyncManagerTest, RefreshEncryptionNotReady) {
 
   // Should fail. Triggers an OnPassphraseRequired because the cryptographer
   // is not ready.
-  EXPECT_CALL(encryption_observer_, OnPassphraseRequired(_, _)).Times(1);
+  EXPECT_CALL(encryption_observer_, OnPassphraseRequired(_, _, _)).Times(1);
   EXPECT_CALL(encryption_observer_, OnCryptographerStateChanged(_));
   EXPECT_CALL(encryption_observer_, OnEncryptedTypesChanged(_, false));
   sync_manager_.GetEncryptionHandler()->Init();
@@ -1344,56 +1336,6 @@ TEST_F(SyncManagerTest, EncryptDataTypesWithData) {
   sync_manager_.GetEncryptionHandler()->EnableEncryptEverything();
 }
 
-// Test that when there are no pending keys and the cryptographer is not
-// initialized, we add a key based on the current GAIA password.
-// (case 1 in SyncManager::SyncInternal::SetEncryptionPassphrase)
-TEST_F(SyncManagerTest, SetInitialGaiaPass) {
-  EXPECT_FALSE(SetUpEncryption(DONT_WRITE_NIGORI, UNINITIALIZED));
-  EXPECT_CALL(encryption_observer_,
-              OnBootstrapTokenUpdated(_, PASSPHRASE_BOOTSTRAP_TOKEN));
-  ExpectPassphraseAcceptance();
-  SetImplicitPassphraseAndCheck("new_passphrase");
-  EXPECT_FALSE(IsEncryptEverythingEnabledForTest());
-  {
-    ReadTransaction trans(FROM_HERE, sync_manager_.GetUserShare());
-    ReadNode node(&trans);
-    EXPECT_EQ(BaseNode::INIT_OK, node.InitTypeRoot(NIGORI));
-    sync_pb::NigoriSpecifics nigori = node.GetNigoriSpecifics();
-    Cryptographer* cryptographer = trans.GetCryptographer();
-    EXPECT_TRUE(cryptographer->is_ready());
-    EXPECT_TRUE(cryptographer->CanDecrypt(nigori.encryption_keybag()));
-  }
-}
-
-// Test that when there are no pending keys and we have on the old GAIA
-// password, we update and re-encrypt everything with the new GAIA password.
-// (case 1 in SyncManager::SyncInternal::SetEncryptionPassphrase)
-TEST_F(SyncManagerTest, UpdateGaiaPass) {
-  EXPECT_TRUE(SetUpEncryption(WRITE_TO_NIGORI, DEFAULT_ENCRYPTION));
-  Cryptographer verifier(&encryptor_);
-  {
-    ReadTransaction trans(FROM_HERE, sync_manager_.GetUserShare());
-    Cryptographer* cryptographer = trans.GetCryptographer();
-    std::string bootstrap_token;
-    cryptographer->GetBootstrapToken(&bootstrap_token);
-    verifier.Bootstrap(bootstrap_token);
-  }
-  EXPECT_CALL(encryption_observer_,
-              OnBootstrapTokenUpdated(_, PASSPHRASE_BOOTSTRAP_TOKEN));
-  ExpectPassphraseAcceptance();
-  SetImplicitPassphraseAndCheck("new_passphrase");
-  EXPECT_FALSE(IsEncryptEverythingEnabledForTest());
-  {
-    ReadTransaction trans(FROM_HERE, sync_manager_.GetUserShare());
-    Cryptographer* cryptographer = trans.GetCryptographer();
-    EXPECT_TRUE(cryptographer->is_ready());
-    // Verify the default key has changed.
-    sync_pb::EncryptedData encrypted;
-    cryptographer->GetKeys(&encrypted);
-    EXPECT_FALSE(verifier.CanDecrypt(encrypted));
-  }
-}
-
 // Sets a new explicit passphrase. This should update the bootstrap token
 // and re-encrypt everything.
 // (case 2 in SyncManager::SyncInternal::SetEncryptionPassphrase)
@@ -1458,7 +1400,7 @@ TEST_F(SyncManagerTest, SupplyPendingGAIAPass) {
 
     // Now update the nigori to reflect the new keys, and update the
     // cryptographer to have pending keys.
-    KeyParams params = {"localhost", "dummy", "passphrase2"};
+    KeyParams params = {KeyDerivationParams::CreateForPbkdf2(), "passphrase2"};
     other_cryptographer.AddKey(params);
     WriteNode node(&trans);
     EXPECT_EQ(BaseNode::INIT_OK, node.InitTypeRoot(NIGORI));
@@ -1486,81 +1428,6 @@ TEST_F(SyncManagerTest, SupplyPendingGAIAPass) {
 }
 
 // Manually set the pending keys in the cryptographer/nigori to reflect the data
-// being encrypted with an old (unprovided) GAIA password. Attempt to supply
-// the current GAIA password and verify the bootstrap token is updated. Then
-// supply the old GAIA password, and verify we re-encrypt all data with the
-// new GAIA password.
-// (cases 4 and 5 in SyncManager::SyncInternal::SetEncryptionPassphrase)
-TEST_F(SyncManagerTest, SupplyPendingOldGAIAPass) {
-  EXPECT_TRUE(SetUpEncryption(WRITE_TO_NIGORI, DEFAULT_ENCRYPTION));
-  Cryptographer other_cryptographer(&encryptor_);
-  {
-    WriteTransaction trans(FROM_HERE, sync_manager_.GetUserShare());
-    Cryptographer* cryptographer = trans.GetCryptographer();
-    std::string bootstrap_token;
-    cryptographer->GetBootstrapToken(&bootstrap_token);
-    other_cryptographer.Bootstrap(bootstrap_token);
-
-    // Now update the nigori to reflect the new keys, and update the
-    // cryptographer to have pending keys.
-    KeyParams params = {"localhost", "dummy", "old_gaia"};
-    other_cryptographer.AddKey(params);
-    WriteNode node(&trans);
-    EXPECT_EQ(BaseNode::INIT_OK, node.InitTypeRoot(NIGORI));
-    sync_pb::NigoriSpecifics nigori;
-    other_cryptographer.GetKeys(nigori.mutable_encryption_keybag());
-    node.SetNigoriSpecifics(nigori);
-    cryptographer->SetPendingKeys(nigori.encryption_keybag());
-
-    // other_cryptographer now contains all encryption keys, and is encrypting
-    // with the newest gaia.
-    KeyParams new_params = {"localhost", "dummy", "new_gaia"};
-    other_cryptographer.AddKey(new_params);
-  }
-  // The bootstrap token should have been updated. Save it to ensure it's based
-  // on the new GAIA password.
-  std::string bootstrap_token;
-  EXPECT_CALL(encryption_observer_,
-              OnBootstrapTokenUpdated(_, PASSPHRASE_BOOTSTRAP_TOKEN))
-      .WillOnce(SaveArg<0>(&bootstrap_token));
-  EXPECT_CALL(encryption_observer_, OnPassphraseRequired(_, _));
-  EXPECT_CALL(encryption_observer_, OnCryptographerStateChanged(_));
-  SetImplicitPassphraseAndCheck("new_gaia");
-  EXPECT_FALSE(IsEncryptEverythingEnabledForTest());
-  testing::Mock::VerifyAndClearExpectations(&encryption_observer_);
-  {
-    ReadTransaction trans(FROM_HERE, sync_manager_.GetUserShare());
-    Cryptographer* cryptographer = trans.GetCryptographer();
-    EXPECT_TRUE(cryptographer->is_initialized());
-    EXPECT_FALSE(cryptographer->is_ready());
-    // Verify we're encrypting with the new key, even though we have pending
-    // keys.
-    sync_pb::EncryptedData encrypted;
-    other_cryptographer.GetKeys(&encrypted);
-    EXPECT_TRUE(cryptographer->CanDecrypt(encrypted));
-  }
-  EXPECT_CALL(encryption_observer_,
-              OnBootstrapTokenUpdated(_, PASSPHRASE_BOOTSTRAP_TOKEN));
-  ExpectPassphraseAcceptance();
-  SetImplicitPassphraseAndCheck("old_gaia");
-  {
-    ReadTransaction trans(FROM_HERE, sync_manager_.GetUserShare());
-    Cryptographer* cryptographer = trans.GetCryptographer();
-    EXPECT_TRUE(cryptographer->is_ready());
-
-    // Verify we're encrypting with the new key.
-    sync_pb::EncryptedData encrypted;
-    other_cryptographer.GetKeys(&encrypted);
-    EXPECT_TRUE(cryptographer->CanDecrypt(encrypted));
-
-    // Verify the saved bootstrap token is based on the new gaia password.
-    Cryptographer temp_cryptographer(&encryptor_);
-    temp_cryptographer.Bootstrap(bootstrap_token);
-    EXPECT_TRUE(temp_cryptographer.CanDecrypt(encrypted));
-  }
-}
-
-// Manually set the pending keys in the cryptographer/nigori to reflect the data
 // being encrypted with an explicit (unprovided) passphrase, then supply the
 // passphrase.
 // (case 9 in SyncManager::SyncInternal::SetDecryptionPassphrase)
@@ -1576,7 +1443,7 @@ TEST_F(SyncManagerTest, SupplyPendingExplicitPass) {
 
     // Now update the nigori to reflect the new keys, and update the
     // cryptographer to have pending keys.
-    KeyParams params = {"localhost", "dummy", "explicit"};
+    KeyParams params = {KeyDerivationParams::CreateForPbkdf2(), "explicit"};
     other_cryptographer.AddKey(params);
     WriteNode node(&trans);
     EXPECT_EQ(BaseNode::INIT_OK, node.InitTypeRoot(NIGORI));
@@ -1590,7 +1457,7 @@ TEST_F(SyncManagerTest, SupplyPendingExplicitPass) {
   EXPECT_CALL(encryption_observer_, OnCryptographerStateChanged(_));
   EXPECT_CALL(encryption_observer_,
               OnPassphraseTypeChanged(PassphraseType::CUSTOM_PASSPHRASE, _));
-  EXPECT_CALL(encryption_observer_, OnPassphraseRequired(_, _));
+  EXPECT_CALL(encryption_observer_, OnPassphraseRequired(_, _, _));
   EXPECT_CALL(encryption_observer_, OnEncryptedTypesChanged(_, false));
   sync_manager_.GetEncryptionHandler()->Init();
   EXPECT_CALL(encryption_observer_,
@@ -1607,40 +1474,6 @@ TEST_F(SyncManagerTest, SupplyPendingExplicitPass) {
     sync_pb::EncryptedData encrypted;
     cryptographer->GetKeys(&encrypted);
     EXPECT_TRUE(other_cryptographer.CanDecrypt(encrypted));
-  }
-}
-
-// Manually set the pending keys in the cryptographer/nigori to reflect the data
-// being encrypted with a new (unprovided) GAIA password, then supply the
-// password as a user-provided password.
-// This is the android case 7/8.
-TEST_F(SyncManagerTest, SupplyPendingGAIAPassUserProvided) {
-  EXPECT_FALSE(SetUpEncryption(DONT_WRITE_NIGORI, UNINITIALIZED));
-  Cryptographer other_cryptographer(&encryptor_);
-  {
-    WriteTransaction trans(FROM_HERE, sync_manager_.GetUserShare());
-    Cryptographer* cryptographer = trans.GetCryptographer();
-    // Now update the nigori to reflect the new keys, and update the
-    // cryptographer to have pending keys.
-    KeyParams params = {"localhost", "dummy", "passphrase"};
-    other_cryptographer.AddKey(params);
-    WriteNode node(&trans);
-    EXPECT_EQ(BaseNode::INIT_OK, node.InitTypeRoot(NIGORI));
-    sync_pb::NigoriSpecifics nigori;
-    other_cryptographer.GetKeys(nigori.mutable_encryption_keybag());
-    node.SetNigoriSpecifics(nigori);
-    cryptographer->SetPendingKeys(nigori.encryption_keybag());
-    EXPECT_FALSE(cryptographer->is_ready());
-  }
-  EXPECT_CALL(encryption_observer_,
-              OnBootstrapTokenUpdated(_, PASSPHRASE_BOOTSTRAP_TOKEN));
-  ExpectPassphraseAcceptance();
-  SetImplicitPassphraseAndCheck("passphrase");
-  EXPECT_FALSE(IsEncryptEverythingEnabledForTest());
-  {
-    ReadTransaction trans(FROM_HERE, sync_manager_.GetUserShare());
-    Cryptographer* cryptographer = trans.GetCryptographer();
-    EXPECT_TRUE(cryptographer->is_ready());
   }
 }
 
@@ -2214,7 +2047,8 @@ TEST_F(SyncManagerTest, ReencryptEverythingWithUnrecoverableErrorPasswords) {
     ReadTransaction trans(FROM_HERE, sync_manager_.GetUserShare());
 
     Cryptographer other_cryptographer(&encryptor_);
-    KeyParams fake_params = {"localhost", "dummy", "fake_key"};
+    KeyParams fake_params = {KeyDerivationParams::CreateForPbkdf2(),
+                             "fake_key"};
     other_cryptographer.AddKey(fake_params);
     sync_pb::PasswordSpecificsData data;
     data.set_password_value("secret");
@@ -2222,7 +2056,8 @@ TEST_F(SyncManagerTest, ReencryptEverythingWithUnrecoverableErrorPasswords) {
         data, entity_specifics.mutable_password()->mutable_encrypted());
 
     // Set up the real cryptographer with a different key.
-    KeyParams real_params = {"localhost", "username", "real_key"};
+    KeyParams real_params = {KeyDerivationParams::CreateForPbkdf2(),
+                             "real_key"};
     trans.GetCryptographer()->AddKey(real_params);
   }
   MakeServerNode(sync_manager_.GetUserShare(), PASSWORDS, kClientTag,
@@ -2255,7 +2090,8 @@ TEST_F(SyncManagerTest, ReencryptEverythingWithUnrecoverableErrorBookmarks) {
     ReadTransaction trans(FROM_HERE, sync_manager_.GetUserShare());
 
     Cryptographer other_cryptographer(&encryptor_);
-    KeyParams fake_params = {"localhost", "dummy", "fake_key"};
+    KeyParams fake_params = {KeyDerivationParams::CreateForPbkdf2(),
+                             "fake_key"};
     other_cryptographer.AddKey(fake_params);
     sync_pb::EntitySpecifics bm_specifics;
     bm_specifics.mutable_bookmark()->set_title("title");
@@ -2265,7 +2101,8 @@ TEST_F(SyncManagerTest, ReencryptEverythingWithUnrecoverableErrorBookmarks) {
     entity_specifics.mutable_encrypted()->CopyFrom(encrypted);
 
     // Set up the real cryptographer with a different key.
-    KeyParams real_params = {"localhost", "username", "real_key"};
+    KeyParams real_params = {KeyDerivationParams::CreateForPbkdf2(),
+                             "real_key"};
     trans.GetCryptographer()->AddKey(real_params);
   }
   MakeServerNode(sync_manager_.GetUserShare(), BOOKMARKS, kClientTag,
@@ -2579,12 +2416,12 @@ TEST_F(SyncManagerTest, IncrementTransactionVersion) {
   {
     ReadTransaction read_trans(FROM_HERE, sync_manager_.GetUserShare());
     ModelTypeSet enabled_types = GetEnabledTypes();
-    for (auto it = enabled_types.First(); it.Good(); it.Inc()) {
+    for (ModelType type : enabled_types) {
       // Transaction version is incremented when SyncManagerTest::SetUp()
       // creates a node of each type.
-      EXPECT_EQ(1,
-                sync_manager_.GetUserShare()->directory->GetTransactionVersion(
-                    it.Get()));
+      EXPECT_EQ(
+          1,
+          sync_manager_.GetUserShare()->directory->GetTransactionVersion(type));
     }
   }
 
@@ -2599,10 +2436,10 @@ TEST_F(SyncManagerTest, IncrementTransactionVersion) {
   {
     ReadTransaction read_trans(FROM_HERE, sync_manager_.GetUserShare());
     ModelTypeSet enabled_types = GetEnabledTypes();
-    for (auto it = enabled_types.First(); it.Good(); it.Inc()) {
-      EXPECT_EQ(it.Get() == BOOKMARKS ? 2 : 1,
-                sync_manager_.GetUserShare()->directory->GetTransactionVersion(
-                    it.Get()));
+    for (ModelType type : enabled_types) {
+      EXPECT_EQ(
+          type == BOOKMARKS ? 2 : 1,
+          sync_manager_.GetUserShare()->directory->GetTransactionVersion(type));
     }
   }
 }
@@ -2703,15 +2540,12 @@ TEST_F(SyncManagerTestWithMockScheduler, BasicConfiguration) {
   EXPECT_CALL(*scheduler(), ScheduleConfiguration(_))
       .WillOnce(SaveArg<0>(&params));
 
-  CallbackCounter ready_task_counter, retry_task_counter;
+  CallbackCounter ready_task_counter;
   sync_manager_.ConfigureSyncer(
-      reason, types_to_download,
+      reason, types_to_download, SyncManager::SyncFeatureState::ON,
       base::Bind(&CallbackCounter::Callback,
-                 base::Unretained(&ready_task_counter)),
-      base::Bind(&CallbackCounter::Callback,
-                 base::Unretained(&retry_task_counter)));
+                 base::Unretained(&ready_task_counter)));
   EXPECT_EQ(0, ready_task_counter.times_called());
-  EXPECT_EQ(0, retry_task_counter.times_called());
   EXPECT_EQ(sync_pb::SyncEnums::RECONFIGURATION, params.origin);
   EXPECT_EQ(types_to_download, params.types_to_download);
 }
@@ -2723,9 +2557,8 @@ TEST_F(SyncManagerTestWithMockScheduler, PurgeDisabledTypes) {
   ModelTypeSet disabled_types = Difference(ModelTypeSet::All(), enabled_types);
   // Set data for all types.
   ModelTypeSet protocol_types = ProtocolTypes();
-  for (ModelTypeSet::Iterator iter = protocol_types.First(); iter.Good();
-       iter.Inc()) {
-    SetProgressMarkerForType(iter.Get(), true);
+  for (ModelType type : protocol_types) {
+    SetProgressMarkerForType(type, true);
   }
 
   sync_manager_.PurgeDisabledTypes(disabled_types, ModelTypeSet(),
@@ -2834,9 +2667,8 @@ TEST_F(SyncManagerTest, PurgeDisabledTypes) {
 
   // Set progress markers for all types.
   ModelTypeSet protocol_types = ProtocolTypes();
-  for (ModelTypeSet::Iterator iter = protocol_types.First(); iter.Good();
-       iter.Inc()) {
-    SetProgressMarkerForType(iter.Get(), true);
+  for (ModelType type : protocol_types) {
+    SetProgressMarkerForType(type, true);
   }
 
   // Verify all the enabled types remain after cleanup, and all the disabled
@@ -2876,9 +2708,8 @@ TEST_F(SyncManagerTest, PurgeUnappliedTypes) {
 
   // Set progress markers for all types.
   ModelTypeSet protocol_types = ProtocolTypes();
-  for (ModelTypeSet::Iterator iter = protocol_types.First(); iter.Good();
-       iter.Inc()) {
-    SetProgressMarkerForType(iter.Get(), true);
+  for (ModelType type : protocol_types) {
+    SetProgressMarkerForType(type, true);
   }
 
   // Add the following kinds of items:

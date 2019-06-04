@@ -66,7 +66,6 @@ class CONTENT_EXPORT RenderWidgetHostViewGuest
   RenderWidgetHostViewBase* GetParentView() override;
 
   // RenderWidgetHostView implementation.
-  bool OnMessageReceived(const IPC::Message& msg) override;
   void InitAsChild(gfx::NativeView parent_view) override;
   void SetSize(const gfx::Size& size) override;
   void SetBounds(const gfx::Rect& rect) override;
@@ -93,6 +92,7 @@ class CONTENT_EXPORT RenderWidgetHostViewGuest
       const gfx::PointF& point) override;
 
   // RenderWidgetHostViewBase implementation.
+  RenderWidgetHostViewBase* GetRootView() override;
   void InitAsPopup(RenderWidgetHostView* parent_host_view,
                    const gfx::Rect& bounds) override;
   void InitAsFullscreen(RenderWidgetHostView* reference_host_view) override;
@@ -114,11 +114,7 @@ class CONTENT_EXPORT RenderWidgetHostViewGuest
                         size_t offset,
                         const gfx::Range& range) override;
   void SelectionBoundsChanged(
-      const ViewHostMsg_SelectionBounds_Params& params) override;
-#if defined(USE_AURA)
-  void ProcessAckedTouchEvent(const TouchEventWithLatencyInfo& touch,
-                              InputEventAckState ack_result) override;
-#endif
+      const WidgetHostMsg_SelectionBounds_Params& params) override;
   void PreProcessMouseEvent(const blink::WebMouseEvent& event) override;
   void PreProcessTouchEvent(const blink::WebTouchEvent& event) override;
 
@@ -126,7 +122,8 @@ class CONTENT_EXPORT RenderWidgetHostViewGuest
   bool LockMouse() override;
   void UnlockMouse() override;
   viz::FrameSinkId GetRootFrameSinkId() override;
-  viz::LocalSurfaceId GetLocalSurfaceId() const override;
+  const viz::LocalSurfaceIdAllocation& GetLocalSurfaceIdAllocation()
+      const override;
   void DidCreateNewRendererCompositorFrameSink(
       viz::mojom::CompositorFrameSinkClient* renderer_compositor_frame_sink)
       override;
@@ -159,11 +156,12 @@ class CONTENT_EXPORT RenderWidgetHostViewGuest
   viz::ScopedSurfaceIdAllocator DidUpdateVisualProperties(
       const cc::RenderFrameMetadata& metadata) override;
 
+  void MaybeSendSyntheticTapGestureForTest(
+      const blink::WebFloatPoint& position,
+      const blink::WebFloatPoint& screen_position) const;
+
  private:
   friend class RenderWidgetHostView;
-
-  void SendSurfaceInfoToEmbedderImpl(
-      const viz::SurfaceInfo& surface_info) override;
 
   void OnDidUpdateVisualPropertiesComplete(
       const cc::RenderFrameMetadata& metadata);
@@ -181,13 +179,14 @@ class CONTENT_EXPORT RenderWidgetHostViewGuest
   // http://crbug.com/533069
   void MaybeSendSyntheticTapGesture(
       const blink::WebFloatPoint& position,
-      const blink::WebFloatPoint& screenPosition) const;
+      const blink::WebFloatPoint& screen_position) const;
 
   void OnHandleInputEvent(RenderWidgetHostImpl* embedder,
                           int browser_plugin_instance_id,
                           const blink::WebInputEvent* event);
 
-  bool HasEmbedderChanged() override;
+  void ProcessTouchpadZoomEventAckInRoot(const blink::WebGestureEvent& event,
+                                         InputEventAckState ack_result);
 
 #if defined(USE_AURA)
   void OnGotEmbedToken(const base::UnguessableToken& token);

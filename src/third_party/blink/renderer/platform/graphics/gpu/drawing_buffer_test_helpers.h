@@ -38,10 +38,10 @@ class WebGraphicsContext3DProviderForTests
       : gl_(std::move(gl)) {}
 
   gpu::gles2::GLES2Interface* ContextGL() override { return gl_.get(); }
-  bool IsSoftwareRendering() const override { return false; }
 
   // Not used by WebGL code.
   GrContext* GetGrContext() override { return nullptr; }
+  gpu::webgpu::WebGPUInterface* WebGPUInterface() override { return nullptr; }
   bool BindToCurrentThread() override { return false; }
   const gpu::Capabilities& GetCapabilities() const override {
     return capabilities_;
@@ -53,7 +53,9 @@ class WebGraphicsContext3DProviderForTests
   void SetLostContextCallback(base::Closure) override {}
   void SetErrorMessageCallback(
       base::RepeatingCallback<void(const char*, int32_t id)>) override {}
-  cc::ImageDecodeCache* ImageDecodeCache() override {
+  cc::ImageDecodeCache* ImageDecodeCache(
+      SkColorType color_type,
+      sk_sp<SkColorSpace> color_space) override {
     return &image_decode_cache_;
   }
 
@@ -197,13 +199,9 @@ class GLES2InterfaceForTests : public gpu::gles2::GLES2InterfaceStub,
     }
   }
 
-  void GenMailboxCHROMIUM(GLbyte* mailbox) override {
+  void ProduceTextureDirectCHROMIUM(GLuint texture, GLbyte* mailbox) override {
     ++current_mailbox_byte_;
     memset(mailbox, current_mailbox_byte_, GL_MAILBOX_SIZE_CHROMIUM);
-  }
-
-  void ProduceTextureDirectCHROMIUM(GLuint texture,
-                                    const GLbyte* mailbox) override {
     if (!create_image_chromium_fail_) {
       ASSERT_TRUE(texture_sizes_.Contains(texture));
       most_recently_produced_size_ = texture_sizes_.at(texture);

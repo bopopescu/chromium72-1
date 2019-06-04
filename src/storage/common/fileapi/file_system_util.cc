@@ -175,7 +175,8 @@ bool ParseFileSystemSchemeURL(const GURL& url,
   if (file_system_type == kFileSystemTypeUnknown)
     return false;
 
-  std::string path = net::UnescapeBinaryURLComponent(url.path());
+  std::string path;
+  net::UnescapeBinaryURLComponent(url.path(), &path);
 
   // Ensure the path is relative.
   while (!path.empty() && path[0] == '/')
@@ -311,6 +312,8 @@ std::string GetFileSystemTypeString(FileSystemType type) {
       return "ArcContent";
     case kFileSystemTypeArcDocumentsProvider:
       return "ArcDocumentsProvider";
+    case kFileSystemTypeDriveFs:
+      return "DriveFs";
     case kFileSystemInternalTypeEnumStart:
     case kFileSystemInternalTypeEnumEnd:
       NOTREACHED();
@@ -336,35 +339,6 @@ base::FilePath StringToFilePath(const std::string& file_path_string) {
 #elif defined(OS_POSIX) || defined(OS_FUCHSIA)
   return base::FilePath(file_path_string);
 #endif
-}
-
-blink::WebFileError FileErrorToWebFileError(
-    base::File::Error error_code) {
-  switch (error_code) {
-    case base::File::FILE_ERROR_NOT_FOUND:
-      return blink::kWebFileErrorNotFound;
-    case base::File::FILE_ERROR_INVALID_OPERATION:
-    case base::File::FILE_ERROR_EXISTS:
-    case base::File::FILE_ERROR_NOT_EMPTY:
-      return blink::kWebFileErrorInvalidModification;
-    case base::File::FILE_ERROR_NOT_A_DIRECTORY:
-    case base::File::FILE_ERROR_NOT_A_FILE:
-      return blink::kWebFileErrorTypeMismatch;
-    case base::File::FILE_ERROR_ACCESS_DENIED:
-      return blink::kWebFileErrorNoModificationAllowed;
-    case base::File::FILE_ERROR_FAILED:
-      return blink::kWebFileErrorInvalidState;
-    case base::File::FILE_ERROR_ABORT:
-      return blink::kWebFileErrorAbort;
-    case base::File::FILE_ERROR_SECURITY:
-      return blink::kWebFileErrorSecurity;
-    case base::File::FILE_ERROR_NO_SPACE:
-      return blink::kWebFileErrorQuotaExceeded;
-    case base::File::FILE_ERROR_INVALID_URL:
-      return blink::kWebFileErrorEncoding;
-    default:
-      return blink::kWebFileErrorInvalidModification;
-  }
 }
 
 bool GetFileSystemPublicType(

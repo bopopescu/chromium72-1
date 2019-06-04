@@ -45,6 +45,7 @@ namespace blink {
 class DisplayItemClient;
 class Element;
 class LayoutBlock;
+class LayoutText;
 class LocalFrame;
 class FrameCaret;
 class GranularityStrategy;
@@ -64,8 +65,7 @@ enum RevealExtentOption { kRevealExtent, kDoNotRevealExtent };
 enum class CaretVisibility;
 
 enum class HandleVisibility { kNotVisible, kVisible };
-
-enum class SelectLineBreak { kNotSelected, kSelected };
+enum class SelectSoftLineBreak { kNotSelected, kSelected };
 
 // This is return type of ComputeLayoutSelectionStatus(paintfragment).
 // This structure represents how the fragment is selected.
@@ -74,13 +74,14 @@ enum class SelectLineBreak { kNotSelected, kSelected };
 //   |fragemnt.StartOffset <= start <= end <= fragment.EndOffset|.
 // |start| == |end| means this fragment is not selected.
 // |line_break| : This value represents If this fragment is selected and
-// selection wraps line break.
+// selection wraps soft line break.
 struct LayoutSelectionStatus {
   STACK_ALLOCATED();
 
+ public:
   LayoutSelectionStatus(unsigned passed_start,
                         unsigned passed_end,
-                        SelectLineBreak passed_line_break)
+                        SelectSoftLineBreak passed_line_break)
       : start(passed_start), end(passed_end), line_break(passed_line_break) {
     DCHECK_LE(start, end);
   }
@@ -91,7 +92,30 @@ struct LayoutSelectionStatus {
 
   unsigned start;
   unsigned end;
-  SelectLineBreak line_break;
+  SelectSoftLineBreak line_break;
+};
+
+enum class SelectionIncludeEnd { kInclude, kNotInclude };
+
+struct LayoutTextSelectionStatus {
+  STACK_ALLOCATED();
+
+ public:
+  LayoutTextSelectionStatus(unsigned passed_start,
+                            unsigned passed_end,
+                            SelectionIncludeEnd passed_include_end)
+      : start(passed_start), end(passed_end), include_end(passed_include_end) {
+    DCHECK_LE(start, end);
+  }
+  bool operator==(const LayoutTextSelectionStatus& other) const {
+    return start == other.start && end == other.end &&
+           include_end == other.include_end;
+  }
+  bool IsEmpty() const { return start == 0 && end == 0; }
+
+  unsigned start;
+  unsigned end;
+  SelectionIncludeEnd include_end;
 };
 
 class CORE_EXPORT FrameSelection final
@@ -101,8 +125,10 @@ class CORE_EXPORT FrameSelection final
 
  public:
   static FrameSelection* Create(LocalFrame& frame) {
-    return new FrameSelection(frame);
+    return MakeGarbageCollected<FrameSelection>(frame);
   }
+
+  explicit FrameSelection(LocalFrame&);
   ~FrameSelection();
 
   bool IsAvailable() const { return LifecycleContext(); }
@@ -180,10 +206,9 @@ class CORE_EXPORT FrameSelection final
   SelectionInDOMTree GetSelectionInDOMTree() const;
   bool IsDirectional() const;
 
-  void DocumentAttached(Document*);
+  void DidAttachDocument(Document*);
 
   void DidLayout();
-  bool NeedsLayoutSelectionUpdate() const;
   void CommitAppearanceIfNeeded();
   void SetCaretVisible(bool caret_is_visible);
   void ScheduleVisualUpdate() const;
@@ -247,9 +272,8 @@ class CORE_EXPORT FrameSelection final
 
   FrameCaret& FrameCaretForTesting() const { return *frame_caret_; }
 
-  base::Optional<unsigned> LayoutSelectionStart() const;
-  base::Optional<unsigned> LayoutSelectionEnd() const;
-  void ClearLayoutSelection();
+  LayoutTextSelectionStatus ComputeLayoutSelectionStatus(
+      const LayoutText& text) const;
   LayoutSelectionStatus ComputeLayoutSelectionStatus(
       const NGPaintFragment&) const;
 
@@ -260,8 +284,6 @@ class CORE_EXPORT FrameSelection final
   friend class FrameSelectionTest;
   friend class PaintControllerPaintTestBase;
   friend class SelectionControllerTest;
-
-  explicit FrameSelection(LocalFrame&);
 
   const DisplayItemClient& CaretDisplayItemClientForTesting() const;
 

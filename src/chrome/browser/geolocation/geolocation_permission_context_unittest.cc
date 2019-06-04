@@ -21,7 +21,7 @@
 #include "base/run_loop.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/synchronization/waitable_event.h"
-#include "base/test/histogram_tester.h"
+#include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/test/simple_test_clock.h"
 #include "base/time/clock.h"
@@ -241,8 +241,7 @@ void GeolocationPermissionContextTests::CheckTabContentsState(
       content_settings->geolocation_usages_state().state_map();
   EXPECT_EQ(1U, state_map.count(requesting_frame.GetOrigin()));
   EXPECT_EQ(0U, state_map.count(requesting_frame));
-  ContentSettingsUsagesState::StateMap::const_iterator settings =
-      state_map.find(requesting_frame.GetOrigin());
+  auto settings = state_map.find(requesting_frame.GetOrigin());
   ASSERT_FALSE(settings == state_map.end())
       << "geolocation state not found " << requesting_frame;
   EXPECT_EQ(expected_content_setting, settings->second);

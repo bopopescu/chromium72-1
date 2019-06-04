@@ -13,7 +13,7 @@
 #include "base/process/launch.h"
 #include "base/strings/string_tokenizer.h"
 #include "base/strings/string_util.h"
-#include "base/sys_info.h"
+#include "base/system/sys_info.h"
 
 namespace chromeos {  // NOLINT
 namespace system {
@@ -71,6 +71,17 @@ bool NameValuePairsParser::ParseNameValuePairsFromTool(
 
   return ParseNameValuePairsWithComments(output_string, eq, delim,
                                          comment_delim);
+}
+
+void NameValuePairsParser::DeletePairsWithValue(const std::string& value) {
+  auto it = map_->begin();
+  while (it != map_->end()) {
+    if (it->second == value) {
+      it = map_->erase(it);
+    } else {
+      it++;
+    }
+  }
 }
 
 void NameValuePairsParser::AddNameValuePair(const std::string& key,

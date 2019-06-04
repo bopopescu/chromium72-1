@@ -24,26 +24,29 @@
 
 #include "third_party/blink/renderer/core/html/html_iframe_element.h"
 
-#include "third_party/blink/renderer/core/css_property_names.h"
+#include "third_party/blink/renderer/bindings/core/v8/string_or_trusted_html.h"
+#include "third_party/blink/renderer/bindings/core/v8/v8_html_iframe_element.h"
+#include "third_party/blink/renderer/core/css/css_property_names.h"
+#include "third_party/blink/renderer/core/dom/element.h"
+#include "third_party/blink/renderer/core/feature_policy/iframe_policy.h"
 #include "third_party/blink/renderer/core/frame/csp/content_security_policy.h"
 #include "third_party/blink/renderer/core/frame/use_counter.h"
 #include "third_party/blink/renderer/core/html/html_document.h"
 #include "third_party/blink/renderer/core/html_names.h"
 #include "third_party/blink/renderer/core/inspector/console_message.h"
 #include "third_party/blink/renderer/core/layout/layout_iframe.h"
-#include "third_party/blink/renderer/core/page/page.h"
-#include "third_party/blink/renderer/core/policy/iframe_policy.h"
+#include "third_party/blink/renderer/core/loader/document_loader.h"
 #include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 
 namespace blink {
 
-using namespace HTMLNames;
+using namespace html_names;
 
 inline HTMLIFrameElement::HTMLIFrameElement(Document& document)
-    : HTMLFrameElementBase(iframeTag, document),
+    : HTMLFrameElementBase(kIFrameTag, document),
       collapsed_by_client_(false),
       sandbox_(HTMLIFrameElementSandbox::Create(this)),
-      referrer_policy_(kReferrerPolicyDefault) {}
+      referrer_policy_(network::mojom::ReferrerPolicy::kDefault) {}
 
 DEFINE_NODE_FACTORY(HTMLIFrameElement)
 
@@ -55,6 +58,13 @@ void HTMLIFrameElement::Trace(blink::Visitor* visitor) {
 }
 
 HTMLIFrameElement::~HTMLIFrameElement() = default;
+
+const HashSet<AtomicString>& HTMLIFrameElement::GetCheckedAttributeNames()
+    const {
+  DEFINE_STATIC_LOCAL(HashSet<AtomicString>, attribute_set,
+                      ({"src", "srcdoc"}));
+  return attribute_set;
+}
 
 void HTMLIFrameElement::SetCollapsed(bool collapse) {
   if (collapsed_by_client_ == collapse)
@@ -74,16 +84,16 @@ DOMTokenList* HTMLIFrameElement::sandbox() const {
 
 Policy* HTMLIFrameElement::policy() {
   if (!policy_) {
-    policy_ = new IFramePolicy(&GetDocument(), ContainerPolicy(),
-                               GetOriginForFeaturePolicy());
+    policy_ = MakeGarbageCollected<IFramePolicy>(
+        &GetDocument(), ContainerPolicy(), GetOriginForFeaturePolicy());
   }
   return policy_.Get();
 }
 
 bool HTMLIFrameElement::IsPresentationAttribute(
     const QualifiedName& name) const {
-  if (name == widthAttr || name == heightAttr || name == alignAttr ||
-      name == frameborderAttr)
+  if (name == kWidthAttr || name == kHeightAttr || name == kAlignAttr ||
+      name == kFrameborderAttr)
     return true;
   return HTMLFrameElementBase::IsPresentationAttribute(name);
 }
@@ -92,13 +102,13 @@ void HTMLIFrameElement::CollectStyleForPresentationAttribute(
     const QualifiedName& name,
     const AtomicString& value,
     MutableCSSPropertyValueSet* style) {
-  if (name == widthAttr) {
+  if (name == kWidthAttr) {
     AddHTMLLengthToStyle(style, CSSPropertyWidth, value);
-  } else if (name == heightAttr) {
+  } else if (name == kHeightAttr) {
     AddHTMLLengthToStyle(style, CSSPropertyHeight, value);
-  } else if (name == alignAttr) {
+  } else if (name == kAlignAttr) {
     ApplyAlignmentAttributeToStyle(value, style);
-  } else if (name == frameborderAttr) {
+  } else if (name == kFrameborderAttr) {
     // LocalFrame border doesn't really match the HTML4 spec definition for
     // iframes. It simply adds a presentational hint that the border should be
     // off if set to zero.
@@ -118,7 +128,7 @@ void HTMLIFrameElement::ParseAttribute(
     const AttributeModificationParams& params) {
   const QualifiedName& name = params.name;
   const AtomicString& value = params.new_value;
-  if (name == nameAttr) {
+  if (name == kNameAttr) {
     if (IsInDocumentTree() && GetDocument().IsHTMLDocument()) {
       HTMLDocument& document = ToHTMLDocument(GetDocument());
       document.RemoveNamedItem(name_);
@@ -128,7 +138,7 @@ void HTMLIFrameElement::ParseAttribute(
     name_ = value;
     if (name_ != old_name)
       FrameOwnerPropertiesChanged();
-  } else if (name == sandboxAttr) {
+  } else if (name == kSandboxAttr) {
     sandbox_->DidUpdateAttributeValue(params.old_value, value);
     String invalid_tokens;
     SetSandboxFlags(value.IsNull() ? kSandboxNone
@@ -140,15 +150,15 @@ void HTMLIFrameElement::ParseAttribute(
           "Error while parsing the 'sandbox' attribute: " + invalid_tokens));
     }
     UseCounter::Count(GetDocument(), WebFeature::kSandboxViaIFrame);
-  } else if (name == referrerpolicyAttr) {
-    referrer_policy_ = kReferrerPolicyDefault;
+  } else if (name == kReferrerpolicyAttr) {
+    referrer_policy_ = network::mojom::ReferrerPolicy::kDefault;
     if (!value.IsNull()) {
       SecurityPolicy::ReferrerPolicyFromString(
           value, kSupportReferrerPolicyLegacyKeywords, &referrer_policy_);
       UseCounter::Count(GetDocument(),
                         WebFeature::kHTMLIFrameElementReferrerPolicyAttribute);
     }
-  } else if (name == allowfullscreenAttr) {
+  } else if (name == kAllowfullscreenAttr) {
     bool old_allow_fullscreen = allow_fullscreen_;
     allow_fullscreen_ = !value.IsNull();
     if (allow_fullscreen_ != old_allow_fullscreen) {
@@ -163,15 +173,14 @@ void HTMLIFrameElement::ParseAttribute(
       FrameOwnerPropertiesChanged();
       UpdateContainerPolicy();
     }
-  } else if (name == allowpaymentrequestAttr) {
+  } else if (name == kAllowpaymentrequestAttr) {
     bool old_allow_payment_request = allow_payment_request_;
     allow_payment_request_ = !value.IsNull();
     if (allow_payment_request_ != old_allow_payment_request) {
       FrameOwnerPropertiesChanged();
       UpdateContainerPolicy();
     }
-  } else if (RuntimeEnabledFeatures::EmbedderCSPEnforcementEnabled() &&
-             name == cspAttr) {
+  } else if (name == kCspAttr) {
     if (!ContentSecurityPolicy::IsValidCSPAttr(
             value.GetString(), GetDocument().RequiredCSP().GetString())) {
       required_csp_ = g_null_atom;
@@ -184,7 +193,7 @@ void HTMLIFrameElement::ParseAttribute(
       required_csp_ = value;
       FrameOwnerPropertiesChanged();
     }
-  } else if (name == allowAttr) {
+  } else if (name == kAllowAttr) {
     if (allow_ != value) {
       allow_ = value;
       Vector<String> messages;
@@ -207,8 +216,8 @@ void HTMLIFrameElement::ParseAttribute(
     // proper solution.
     // To avoid polluting the console, this is being recorded only once per
     // page.
-    if (name == "gesture" && value == "media" && GetDocument().GetPage() &&
-        !GetDocument().GetPage()->GetUseCounter().HasRecordedMeasurement(
+    if (name == "gesture" && value == "media" && GetDocument().Loader() &&
+        !GetDocument().Loader()->GetUseCounter().HasRecordedMeasurement(
             WebFeature::kHTMLIFrameElementGestureMedia)) {
       UseCounter::Count(GetDocument(),
                         WebFeature::kHTMLIFrameElementGestureMedia);
@@ -219,7 +228,7 @@ void HTMLIFrameElement::ParseAttribute(
                                  "https://goo.gl/ximf56"));
     }
 
-    if (name == srcAttr)
+    if (name == kSrcAttr)
       LogUpdateAttributeIfIsolatedWorldAndInDocument("iframe", params);
     HTMLFrameElementBase::ParseAttribute(params);
   }
@@ -230,50 +239,27 @@ ParsedFeaturePolicy HTMLIFrameElement::ConstructContainerPolicy(
   scoped_refptr<const SecurityOrigin> src_origin = GetOriginForFeaturePolicy();
   scoped_refptr<const SecurityOrigin> self_origin =
       GetDocument().GetSecurityOrigin();
-  ParsedFeaturePolicy container_policy =
-      ParseFeaturePolicyAttribute(allow_, self_origin, src_origin, messages);
+  ParsedFeaturePolicy container_policy = ParseFeaturePolicyAttribute(
+      allow_, self_origin, src_origin, messages, &GetDocument());
 
   // If allowfullscreen attribute is present and no fullscreen policy is set,
   // enable the feature for all origins.
   if (AllowFullscreen()) {
-    bool has_fullscreen_policy = false;
-    for (const auto& declaration : container_policy) {
-      if (declaration.feature == mojom::FeaturePolicyFeature::kFullscreen) {
-        has_fullscreen_policy = true;
-        if (messages) {
-          messages->push_back(
-              "allow attribute is overriding 'allowfullscreen'.");
-        }
-        break;
-      }
-    }
-    if (!has_fullscreen_policy) {
-      ParsedFeaturePolicyDeclaration whitelist;
-      whitelist.feature = mojom::FeaturePolicyFeature::kFullscreen;
-      whitelist.matches_all_origins = true;
-      container_policy.push_back(whitelist);
+    bool policy_changed = AllowFeatureEverywhereIfNotPresent(
+        mojom::FeaturePolicyFeature::kFullscreen, container_policy);
+    if (!policy_changed && messages) {
+      messages->push_back(
+          "Allow attribute will take precedence over 'allowfullscreen'.");
     }
   }
   // If the allowpaymentrequest attribute is present and no 'payment' policy is
   // set, enable the feature for all origins.
   if (AllowPaymentRequest()) {
-    bool has_payment_policy = false;
-    for (const auto& declaration : container_policy) {
-      if (declaration.feature == mojom::FeaturePolicyFeature::kPayment) {
-        has_payment_policy = true;
-        if (messages) {
-          messages->push_back(
-              "allow attribute is overriding 'allowpaymentrequest'.");
-        }
-        break;
-      }
-    }
-    if (!has_payment_policy) {
-      ParsedFeaturePolicyDeclaration whitelist;
-      whitelist.feature = mojom::FeaturePolicyFeature::kPayment;
-      whitelist.matches_all_origins = true;
-      whitelist.origins = std::vector<url::Origin>(0UL);
-      container_policy.push_back(whitelist);
+    bool policy_changed = AllowFeatureEverywhereIfNotPresent(
+        mojom::FeaturePolicyFeature::kPayment, container_policy);
+    if (!policy_changed && messages) {
+      messages->push_back(
+          "Allow attribute will take precedence over 'allowpaymentrequest'.");
     }
   }
 
@@ -294,11 +280,11 @@ LayoutObject* HTMLIFrameElement::CreateLayoutObject(const ComputedStyle&) {
 }
 
 Node::InsertionNotificationRequest HTMLIFrameElement::InsertedInto(
-    ContainerNode* insertion_point) {
+    ContainerNode& insertion_point) {
   InsertionNotificationRequest result =
       HTMLFrameElementBase::InsertedInto(insertion_point);
 
-  if (insertion_point->IsInDocumentTree() && GetDocument().IsHTMLDocument()) {
+  if (insertion_point.IsInDocumentTree() && GetDocument().IsHTMLDocument()) {
     ToHTMLDocument(GetDocument()).AddNamedItem(name_);
 
     if (!ContentSecurityPolicy::IsValidCSPAttr(
@@ -314,13 +300,13 @@ Node::InsertionNotificationRequest HTMLIFrameElement::InsertedInto(
       }
     }
   }
-  LogAddElementIfIsolatedWorldAndInDocument("iframe", srcAttr);
+  LogAddElementIfIsolatedWorldAndInDocument("iframe", kSrcAttr);
   return result;
 }
 
-void HTMLIFrameElement::RemovedFrom(ContainerNode* insertion_point) {
+void HTMLIFrameElement::RemovedFrom(ContainerNode& insertion_point) {
   HTMLFrameElementBase::RemovedFrom(insertion_point);
-  if (insertion_point->IsInDocumentTree() && GetDocument().IsHTMLDocument())
+  if (insertion_point.IsInDocumentTree() && GetDocument().IsHTMLDocument())
     ToHTMLDocument(GetDocument()).RemoveNamedItem(name_);
 }
 
@@ -328,7 +314,7 @@ bool HTMLIFrameElement::IsInteractiveContent() const {
   return true;
 }
 
-ReferrerPolicy HTMLIFrameElement::ReferrerPolicyAttribute() {
+network::mojom::ReferrerPolicy HTMLIFrameElement::ReferrerPolicyAttribute() {
   return referrer_policy_;
 }
 

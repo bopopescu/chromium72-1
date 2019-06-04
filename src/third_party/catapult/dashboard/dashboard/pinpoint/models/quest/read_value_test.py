@@ -52,10 +52,20 @@ class ReadHistogramsJsonValueQuestTest(unittest.TestCase):
         'speedometer/perf_results.json')
     self.assertEqual(quest, expected)
 
+  def testPerformanceTestSuiteWindows(self):
+    arguments = dict(_BASE_ARGUMENTS_HISTOGRAMS)
+    arguments['dimensions'] = [{'key': 'os', 'value': 'Windows-10'}]
+    arguments['target'] = 'performance_test_suite'
+    quest = read_value.ReadHistogramsJsonValue.FromDict(arguments)
+
+    expected = read_value.ReadHistogramsJsonValue(
+        'speedometer\\perf_results.json')
+    self.assertEqual(quest, expected)
+
 
 class ReadGraphJsonValueQuestTest(unittest.TestCase):
 
-  def testAllArguments(self):
+  def testMinimumArguments(self):
     quest = read_value.ReadGraphJsonValue.FromDict(_BASE_ARGUMENTS_GRAPH_JSON)
     expected = read_value.ReadGraphJsonValue('chart_name', 'trace_name')
     self.assertEqual(quest, expected)
@@ -114,10 +124,10 @@ class ReadHistogramsJsonValueTest(_ReadValueExecutionTest):
     hist.AddSample(1)
     hist.AddSample(2)
     histograms = histogram_set.HistogramSet([hist])
-    histograms.AddSharedDiagnostic(
+    histograms.AddSharedDiagnosticToAllHistograms(
         reserved_infos.STORY_TAGS.name,
         generic_set.GenericSet(['group:tir_label']))
-    histograms.AddSharedDiagnostic(
+    histograms.AddSharedDiagnosticToAllHistograms(
         reserved_infos.STORIES.name,
         generic_set.GenericSet(['story']))
     self.SetOutputFileContents(histograms.AsDicts())
@@ -131,16 +141,39 @@ class ReadHistogramsJsonValueTest(_ReadValueExecutionTest):
     self.assertEqual(execution.result_values, (0, 1, 2))
     self.assertRetrievedOutputJson()
 
+  def testReadHistogramsJsonValueStoryNeedsEscape(self):
+    hist = histogram_module.Histogram('hist', 'count')
+    hist.AddSample(0)
+    hist.AddSample(1)
+    hist.AddSample(2)
+    histograms = histogram_set.HistogramSet([hist])
+    histograms.AddSharedDiagnosticToAllHistograms(
+        reserved_infos.STORY_TAGS.name,
+        generic_set.GenericSet(['group:tir_label']))
+    histograms.AddSharedDiagnosticToAllHistograms(
+        reserved_infos.STORIES.name,
+        generic_set.GenericSet(['http://story']))
+    self.SetOutputFileContents(histograms.AsDicts())
+
+    quest = read_value.ReadHistogramsJsonValue(
+        'chartjson-output.json', hist.name, 'tir_label', 'http://story')
+    execution = quest.Start(None, 'server', 'output hash')
+    execution.Poll()
+
+    self.assertReadValueSuccess(execution)
+    self.assertEqual(execution.result_values, (0, 1, 2))
+    self.assertRetrievedOutputJson()
+
   def testReadHistogramsJsonValueStatistic(self):
     hist = histogram_module.Histogram('hist', 'count')
     hist.AddSample(0)
     hist.AddSample(1)
     hist.AddSample(2)
     histograms = histogram_set.HistogramSet([hist])
-    histograms.AddSharedDiagnostic(
+    histograms.AddSharedDiagnosticToAllHistograms(
         reserved_infos.STORY_TAGS.name,
         generic_set.GenericSet(['group:tir_label']))
-    histograms.AddSharedDiagnostic(
+    histograms.AddSharedDiagnosticToAllHistograms(
         reserved_infos.STORIES.name,
         generic_set.GenericSet(['story']))
     self.SetOutputFileContents(histograms.AsDicts())
@@ -158,10 +191,10 @@ class ReadHistogramsJsonValueTest(_ReadValueExecutionTest):
   def testReadHistogramsJsonValueStatisticNoSamples(self):
     hist = histogram_module.Histogram('hist', 'count')
     histograms = histogram_set.HistogramSet([hist])
-    histograms.AddSharedDiagnostic(
+    histograms.AddSharedDiagnosticToAllHistograms(
         reserved_infos.STORY_TAGS.name,
         generic_set.GenericSet(['group:tir_label']))
-    histograms.AddSharedDiagnostic(
+    histograms.AddSharedDiagnosticToAllHistograms(
         reserved_infos.STORIES.name,
         generic_set.GenericSet(['story']))
     self.SetOutputFileContents(histograms.AsDicts())
@@ -188,10 +221,10 @@ class ReadHistogramsJsonValueTest(_ReadValueExecutionTest):
     hist3.AddSample(4)
     hist3.AddSample(5)
     histograms = histogram_set.HistogramSet([hist, hist2, hist3])
-    histograms.AddSharedDiagnostic(
+    histograms.AddSharedDiagnosticToAllHistograms(
         reserved_infos.STORY_TAGS.name,
         generic_set.GenericSet(['group:tir_label']))
-    histograms.AddSharedDiagnostic(
+    histograms.AddSharedDiagnosticToAllHistograms(
         reserved_infos.STORIES.name,
         generic_set.GenericSet(['story']))
     self.SetOutputFileContents(histograms.AsDicts())
@@ -230,15 +263,23 @@ class ReadHistogramsJsonValueTest(_ReadValueExecutionTest):
         {
             'completed': True,
             'exception': None,
-            'result_arguments': {},
-            'details': {
-                'isolate_server': 'server',
-                'traces': [
-                    {'url': 'trace_url1', 'name': 'trace_url1'},
-                    {'url': 'trace_url2', 'name': 'trace_url2'},
-                    {'url': 'trace_url3', 'name': 'trace_url3'}
-                ]
-            }
+            'details': [
+                {
+                    'key': 'trace',
+                    'value': 'trace_url1',
+                    'url': 'trace_url1',
+                },
+                {
+                    'key': 'trace',
+                    'value': 'trace_url2',
+                    'url': 'trace_url2',
+                },
+                {
+                    'key': 'trace',
+                    'value': 'trace_url3',
+                    'url': 'trace_url3',
+                },
+            ],
         },
         execution.AsDict())
     self.assertRetrievedOutputJson()
@@ -266,14 +307,18 @@ class ReadHistogramsJsonValueTest(_ReadValueExecutionTest):
         {
             'completed': True,
             'exception': None,
-            'result_arguments': {},
-            'details': {
-                'isolate_server': 'server',
-                'traces': [
-                    {'url': 'trace_url1', 'name': 'trace_url1'},
-                    {'url': 'trace_url2', 'name': 'trace_url2'},
-                ]
-            }
+            'details': [
+                {
+                    'key': 'trace',
+                    'value': 'trace_url1',
+                    'url': 'trace_url1',
+                },
+                {
+                    'key': 'trace',
+                    'value': 'trace_url2',
+                    'url': 'trace_url2',
+                },
+            ],
         },
         execution.AsDict())
     self.assertRetrievedOutputJson()
@@ -284,7 +329,7 @@ class ReadHistogramsJsonValueTest(_ReadValueExecutionTest):
     hist.AddSample(1)
     hist.AddSample(2)
     histograms = histogram_set.HistogramSet([hist])
-    histograms.AddSharedDiagnostic(
+    histograms.AddSharedDiagnosticToAllHistograms(
         reserved_infos.STORY_TAGS.name,
         generic_set.GenericSet(['group:tir_label']))
 
@@ -305,7 +350,7 @@ class ReadHistogramsJsonValueTest(_ReadValueExecutionTest):
     hist.AddSample(1)
     hist.AddSample(2)
     histograms = histogram_set.HistogramSet([hist])
-    histograms.AddSharedDiagnostic(
+    histograms.AddSharedDiagnosticToAllHistograms(
         reserved_infos.STORIES.name,
         generic_set.GenericSet(['story']))
 
@@ -320,7 +365,7 @@ class ReadHistogramsJsonValueTest(_ReadValueExecutionTest):
     self.assertEqual(execution.result_values, (0, 1, 2))
     self.assertRetrievedOutputJson()
 
-  def testReadHistogramsJsonValueSummary(self):
+  def testReadHistogramsJsonValueSummaryTIRLabel(self):
     samples = []
     hists = []
     for i in xrange(10):
@@ -334,7 +379,7 @@ class ReadHistogramsJsonValueTest(_ReadValueExecutionTest):
       samples.extend(hist.sample_values)
 
     histograms = histogram_set.HistogramSet(hists)
-    histograms.AddSharedDiagnostic(
+    histograms.AddSharedDiagnosticToAllHistograms(
         reserved_infos.STORY_TAGS.name,
         generic_set.GenericSet(['group:tir_label']))
 
@@ -346,7 +391,80 @@ class ReadHistogramsJsonValueTest(_ReadValueExecutionTest):
     execution.Poll()
 
     self.assertReadValueSuccess(execution)
-    self.assertEqual(execution.result_values, tuple(samples))
+    self.assertEqual(execution.result_values, (sum(samples),))
+    self.assertRetrievedOutputJson()
+
+  def testReadHistogramsJsonValueSummary(self):
+    samples = []
+    hists = []
+    for i in xrange(10):
+      hist = histogram_module.Histogram('hist', 'count')
+      hist.AddSample(0)
+      hist.AddSample(1)
+      hist.AddSample(2)
+      hist.diagnostics[reserved_infos.STORIES.name] = (
+          generic_set.GenericSet(['story%d' % i]))
+      hist.diagnostics[reserved_infos.STORY_TAGS.name] = (
+          generic_set.GenericSet(['group:tir_label1']))
+      hists.append(hist)
+      samples.extend(hist.sample_values)
+
+    for i in xrange(10):
+      hist = histogram_module.Histogram('hist', 'count')
+      hist.AddSample(0)
+      hist.AddSample(1)
+      hist.AddSample(2)
+      hist.diagnostics[reserved_infos.STORIES.name] = (
+          generic_set.GenericSet(['another_story%d' % i]))
+      hist.diagnostics[reserved_infos.STORY_TAGS.name] = (
+          generic_set.GenericSet(['group:tir_label2']))
+      hists.append(hist)
+      samples.extend(hist.sample_values)
+
+    histograms = histogram_set.HistogramSet(hists)
+    histograms.AddSharedDiagnosticToAllHistograms(
+        reserved_infos.STORY_TAGS.name,
+        generic_set.GenericSet(['group:tir_label']))
+
+    self.SetOutputFileContents(histograms.AsDicts())
+
+    quest = read_value.ReadHistogramsJsonValue(
+        'chartjson-output.json', hist_name=hists[0].name)
+    execution = quest.Start(None, 'server', 'output hash')
+    execution.Poll()
+
+    self.assertReadValueSuccess(execution)
+    self.assertEqual(execution.result_values, (sum(samples),))
+    self.assertRetrievedOutputJson()
+
+  def testReadHistogramsJsonValueSummaryNoHistName(self):
+    samples = []
+    hists = []
+    for i in xrange(10):
+      hist = histogram_module.Histogram('hist', 'count')
+      hist.AddSample(0)
+      hist.AddSample(1)
+      hist.AddSample(2)
+      hist.diagnostics[reserved_infos.STORIES.name] = (
+          generic_set.GenericSet(['story%d' % i]))
+      hist.diagnostics[reserved_infos.STORY_TAGS.name] = (
+          generic_set.GenericSet(['group:tir_label1']))
+      hists.append(hist)
+      samples.extend(hist.sample_values)
+
+    histograms = histogram_set.HistogramSet(hists)
+    histograms.AddSharedDiagnosticToAllHistograms(
+        reserved_infos.STORY_TAGS.name,
+        generic_set.GenericSet(['group:tir_label']))
+
+    self.SetOutputFileContents(histograms.AsDicts())
+
+    quest = read_value.ReadHistogramsJsonValue('chartjson-output.json')
+    execution = quest.Start(None, 'server', 'output hash')
+    execution.Poll()
+
+    self.assertReadValueSuccess(execution)
+    self.assertEqual(execution.result_values, ())
     self.assertRetrievedOutputJson()
 
   def testReadHistogramsJsonValueWithMissingFile(self):

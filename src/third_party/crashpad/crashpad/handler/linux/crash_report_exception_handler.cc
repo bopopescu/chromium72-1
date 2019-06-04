@@ -21,6 +21,8 @@
 #include "minidump/minidump_file_writer.h"
 #include "snapshot/crashpad_info_client_options.h"
 #include "snapshot/linux/process_snapshot_linux.h"
+#include "snapshot/sanitized/process_snapshot_sanitized.h"
+#include "snapshot/sanitized/sanitization_information.h"
 #include "util/linux/direct_ptrace_connection.h"
 #include "util/linux/ptrace_client.h"
 #include "util/misc/metrics.h"
@@ -41,9 +43,9 @@ CrashReportExceptionHandler::CrashReportExceptionHandler(
 
 CrashReportExceptionHandler::~CrashReportExceptionHandler() = default;
 
-bool CrashReportExceptionHandler::HandleException(
-    pid_t client_process_id,
-    VMAddress exception_info_address) {
+bool CrashReportExceptionHandler::HandleException(pid_t client_process_id,
+                                                  const ClientInformation& info,
+                                                  UUID* local_report_id) {
   Metrics::ExceptionEncountered();
 
   DirectPtraceConnection connection;
@@ -53,13 +55,14 @@ bool CrashReportExceptionHandler::HandleException(
     return false;
   }
 
-  return HandleExceptionWithConnection(&connection, exception_info_address);
+  return HandleExceptionWithConnection(&connection, info, local_report_id);
 }
 
 bool CrashReportExceptionHandler::HandleExceptionWithBroker(
     pid_t client_process_id,
-    VMAddress exception_info_address,
-    int broker_sock) {
+    const ClientInformation& info,
+    int broker_sock,
+    UUID* local_report_id) {
   Metrics::ExceptionEncountered();
 
   PtraceClient client;
@@ -69,19 +72,21 @@ bool CrashReportExceptionHandler::HandleExceptionWithBroker(
     return false;
   }
 
-  return HandleExceptionWithConnection(&client, exception_info_address);
+  return HandleExceptionWithConnection(&client, info, local_report_id);
 }
 
 bool CrashReportExceptionHandler::HandleExceptionWithConnection(
     PtraceConnection* connection,
-    VMAddress exception_info_address) {
+    const ClientInformation& info,
+    UUID* local_report_id) {
   ProcessSnapshotLinux process_snapshot;
   if (!process_snapshot.Initialize(connection)) {
     Metrics::ExceptionCaptureResult(Metrics::CaptureResult::kSnapshotFailed);
     return false;
   }
 
-  if (!process_snapshot.InitializeException(exception_info_address)) {
+  if (!process_snapshot.InitializeException(
+          info.exception_information_address)) {
     Metrics::ExceptionCaptureResult(
         Metrics::CaptureResult::kExceptionInitializationFailed);
     return false;
@@ -116,10 +121,50 @@ bool CrashReportExceptionHandler::HandleExceptionWithConnection(
 
     process_snapshot.SetReportID(new_report->ReportID());
 
+    ProcessSnapshot* snapshot = nullptr;
+    ProcessSnapshotSanitized sanitized;
+    std::vector<std::string> whitelist;
+    if (info.sanitization_information_address) {
+      SanitizationInformation sanitization_info;
+      ProcessMemoryRange range;
+      if (!range.Initialize(connection->Memory(), connection->Is64Bit()) ||
+          !range.Read(info.sanitization_information_address,
+                      sizeof(sanitization_info),
+                      &sanitization_info)) {
+        Metrics::ExceptionCaptureResult(
+            Metrics::CaptureResult::kSanitizationInitializationFailed);
+        return false;
+      }
+
+      if (sanitization_info.annotations_whitelist_address &&
+          !ReadAnnotationsWhitelist(
+              range,
+              sanitization_info.annotations_whitelist_address,
+              &whitelist)) {
+        Metrics::ExceptionCaptureResult(
+            Metrics::CaptureResult::kSanitizationInitializationFailed);
+        return false;
+      }
+
+      if (!sanitized.Initialize(&process_snapshot,
+                                sanitization_info.annotations_whitelist_address
+                                    ? &whitelist
+                                    : nullptr,
+                                sanitization_info.target_module_address,
+                                sanitization_info.sanitize_stacks)) {
+        Metrics::ExceptionCaptureResult(
+            Metrics::CaptureResult::kSkippedDueToSanitization);
+        return true;
+      }
+
+      snapshot = &sanitized;
+    } else {
+      snapshot = &process_snapshot;
+    }
+
     MinidumpFileWriter minidump;
-    minidump.InitializeFromSnapshot(&process_snapshot);
-    AddUserExtensionStreams(
-        user_stream_data_sources_, &process_snapshot, &minidump);
+    minidump.InitializeFromSnapshot(snapshot);
+    AddUserExtensionStreams(user_stream_data_sources_, snapshot, &minidump);
 
     if (!minidump.WriteEverything(new_report->Writer())) {
       LOG(ERROR) << "WriteEverything failed";
@@ -136,6 +181,9 @@ bool CrashReportExceptionHandler::HandleExceptionWithConnection(
       Metrics::ExceptionCaptureResult(
           Metrics::CaptureResult::kFinishedWritingCrashReportFailed);
       return false;
+    }
+    if (local_report_id != nullptr) {
+      *local_report_id = uuid;
     }
 
     if (upload_thread_) {

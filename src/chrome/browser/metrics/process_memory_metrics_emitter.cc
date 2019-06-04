@@ -10,6 +10,7 @@
 #include "base/trace_event/memory_dump_request_args.h"
 #include "build/build_config.h"
 #include "chrome/browser/browser_process.h"
+#include "chrome/browser/metrics/tab_footprint_aggregator.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "content/public/browser/audio_service_info.h"
 #include "content/public/browser/render_process_host.h"
@@ -20,7 +21,6 @@
 #include "services/metrics/public/cpp/ukm_builders.h"
 #include "services/metrics/public/cpp/ukm_recorder.h"
 #include "services/resource_coordinator/public/cpp/memory_instrumentation/memory_instrumentation.h"
-#include "services/resource_coordinator/public/cpp/resource_coordinator_features.h"
 #include "services/resource_coordinator/public/mojom/service_constants.mojom.h"
 #include "services/service_manager/public/cpp/connector.h"
 #include "url/gurl.h"
@@ -38,7 +38,11 @@ using ukm::builders::Memory_Experimental;
 namespace {
 
 const char kEffectiveSize[] = "effective_size";
+const char kSize[] = "size";
+const char kAllocatedObjectsSize[] = "allocated_objects_size";
 const bool kLargeMetric = true;
+
+enum class EmitTo { kUkmOnly, kUkmAndUmaAsSize };
 
 struct Metric {
   // The root dump name that represents the required metric.
@@ -50,116 +54,208 @@ struct Metric {
   const bool is_large_metric;
   // The type of metric that is measured, usually size in bytes or object count.
   const char* const metric;
+  // Indicates where to emit the metric.
+  const EmitTo target;
   // The setter method for the metric in UKM recorder.
   Memory_Experimental& (Memory_Experimental::*setter)(int64_t);
 };
 const Metric kAllocatorDumpNamesForMetrics[] = {
     {"blink_gc", "BlinkGC", kLargeMetric, kEffectiveSize,
-     &Memory_Experimental::SetBlinkGC},
+     EmitTo::kUkmAndUmaAsSize, &Memory_Experimental::SetBlinkGC},
     {"blink_gc/allocated_objects", "BlinkGC.AllocatedObjects", kLargeMetric,
-     kEffectiveSize, &Memory_Experimental::SetBlinkGC_AllocatedObjects},
+     kEffectiveSize, EmitTo::kUkmAndUmaAsSize,
+     &Memory_Experimental::SetBlinkGC_AllocatedObjects},
     {"blink_objects/Document", "NumberOfDocuments", !kLargeMetric,
-     MemoryAllocatorDump::kNameObjectCount,
+     MemoryAllocatorDump::kNameObjectCount, EmitTo::kUkmOnly,
      &Memory_Experimental::SetNumberOfDocuments},
     {"blink_objects/AdSubframe", "NumberOfAdSubframes", !kLargeMetric,
-     MemoryAllocatorDump::kNameObjectCount,
+     MemoryAllocatorDump::kNameObjectCount, EmitTo::kUkmOnly,
      &Memory_Experimental::SetNumberOfAdSubframes},
     {"blink_objects/DetachedScriptState", "NumberOfDetachedScriptStates",
-     !kLargeMetric, MemoryAllocatorDump::kNameObjectCount,
+     !kLargeMetric, MemoryAllocatorDump::kNameObjectCount, EmitTo::kUkmOnly,
      &Memory_Experimental::SetNumberOfDetachedScriptStates},
     {"blink_objects/Frame", "NumberOfFrames", !kLargeMetric,
-     MemoryAllocatorDump::kNameObjectCount,
+     MemoryAllocatorDump::kNameObjectCount, EmitTo::kUkmOnly,
      &Memory_Experimental::SetNumberOfFrames},
     {"blink_objects/LayoutObject", "NumberOfLayoutObjects", !kLargeMetric,
-     MemoryAllocatorDump::kNameObjectCount,
+     MemoryAllocatorDump::kNameObjectCount, EmitTo::kUkmOnly,
      &Memory_Experimental::SetNumberOfLayoutObjects},
     {"blink_objects/Node", "NumberOfNodes", !kLargeMetric,
-     MemoryAllocatorDump::kNameObjectCount,
+     MemoryAllocatorDump::kNameObjectCount, EmitTo::kUkmOnly,
      &Memory_Experimental::SetNumberOfNodes},
     {"components/download", "DownloadService", !kLargeMetric, kEffectiveSize,
-     &Memory_Experimental::SetDownloadService},
+     EmitTo::kUkmAndUmaAsSize, &Memory_Experimental::SetDownloadService},
     {"discardable", "Discardable", kLargeMetric, kEffectiveSize,
-     &Memory_Experimental::SetDiscardable},
+     EmitTo::kUkmAndUmaAsSize, &Memory_Experimental::SetDiscardable},
     {"extensions/value_store", "Extensions.ValueStore", kLargeMetric,
-     kEffectiveSize, &Memory_Experimental::SetExtensions_ValueStore},
+     kEffectiveSize, EmitTo::kUkmAndUmaAsSize,
+     &Memory_Experimental::SetExtensions_ValueStore},
     {"font_caches", "FontCaches", !kLargeMetric, kEffectiveSize,
-     &Memory_Experimental::SetFontCaches},
+     EmitTo::kUkmAndUmaAsSize, &Memory_Experimental::SetFontCaches},
     {"gpu/gl", "CommandBuffer", kLargeMetric, kEffectiveSize,
-     &Memory_Experimental::SetCommandBuffer},
+     EmitTo::kUkmAndUmaAsSize, &Memory_Experimental::SetCommandBuffer},
     {"history", "History", !kLargeMetric, kEffectiveSize,
-     &Memory_Experimental::SetHistory},
+     EmitTo::kUkmAndUmaAsSize, &Memory_Experimental::SetHistory},
     {"java_heap", "JavaHeap", kLargeMetric, kEffectiveSize,
-     &Memory_Experimental::SetJavaHeap},
+     EmitTo::kUkmAndUmaAsSize, &Memory_Experimental::SetJavaHeap},
     {"leveldatabase", "LevelDatabase", !kLargeMetric, kEffectiveSize,
-     &Memory_Experimental::SetLevelDatabase},
-    {"malloc", "Malloc", kLargeMetric, kEffectiveSize,
+     EmitTo::kUkmAndUmaAsSize, &Memory_Experimental::SetLevelDatabase},
+    {"malloc", "Malloc", kLargeMetric, kEffectiveSize, EmitTo::kUkmAndUmaAsSize,
      &Memory_Experimental::SetMalloc},
     {"mojo", "NumberOfMojoHandles", !kLargeMetric,
-     MemoryAllocatorDump::kNameObjectCount,
+     MemoryAllocatorDump::kNameObjectCount, EmitTo::kUkmOnly,
      &Memory_Experimental::SetNumberOfMojoHandles},
-    {"net", "Net", !kLargeMetric, kEffectiveSize, &Memory_Experimental::SetNet},
+    {"net", "Net", !kLargeMetric, kEffectiveSize, EmitTo::kUkmAndUmaAsSize,
+     &Memory_Experimental::SetNet},
     {"net/url_request_context", "Net.UrlRequestContext", !kLargeMetric,
-     kEffectiveSize, &Memory_Experimental::SetNet_UrlRequestContext},
+     kEffectiveSize, EmitTo::kUkmAndUmaAsSize,
+     &Memory_Experimental::SetNet_UrlRequestContext},
     {"omnibox", "OmniboxSuggestions", !kLargeMetric, kEffectiveSize,
-     &Memory_Experimental::SetOmniboxSuggestions},
+     EmitTo::kUkmAndUmaAsSize, &Memory_Experimental::SetOmniboxSuggestions},
     {"partition_alloc", "PartitionAlloc", kLargeMetric, kEffectiveSize,
-     &Memory_Experimental::SetPartitionAlloc},
+     EmitTo::kUkmAndUmaAsSize, &Memory_Experimental::SetPartitionAlloc},
     {"partition_alloc/allocated_objects", "PartitionAlloc.AllocatedObjects",
-     kLargeMetric, kEffectiveSize,
+     kLargeMetric, kEffectiveSize, EmitTo::kUkmAndUmaAsSize,
      &Memory_Experimental::SetPartitionAlloc_AllocatedObjects},
     {"partition_alloc/partitions/array_buffer",
-     "PartitionAlloc.Partitions.ArrayBuffer", kLargeMetric, kEffectiveSize,
+     "PartitionAlloc.Partitions.ArrayBuffer", kLargeMetric, kSize,
+     EmitTo::kUkmAndUmaAsSize,
      &Memory_Experimental::SetPartitionAlloc_Partitions_ArrayBuffer},
     {"partition_alloc/partitions/buffer", "PartitionAlloc.Partitions.Buffer",
-     kLargeMetric, kEffectiveSize,
+     kLargeMetric, kSize, EmitTo::kUkmAndUmaAsSize,
      &Memory_Experimental::SetPartitionAlloc_Partitions_Buffer},
     {"partition_alloc/partitions/fast_malloc",
-     "PartitionAlloc.Partitions.FastMalloc", kLargeMetric, kEffectiveSize,
+     "PartitionAlloc.Partitions.FastMalloc", kLargeMetric, kSize,
+     EmitTo::kUkmAndUmaAsSize,
      &Memory_Experimental::SetPartitionAlloc_Partitions_FastMalloc},
     {"partition_alloc/partitions/layout", "PartitionAlloc.Partitions.Layout",
-     kLargeMetric, kEffectiveSize,
+     kLargeMetric, kSize, EmitTo::kUkmAndUmaAsSize,
      &Memory_Experimental::SetPartitionAlloc_Partitions_Layout},
     {"site_storage", "SiteStorage", kLargeMetric, kEffectiveSize,
-     &Memory_Experimental::SetSiteStorage},
+     EmitTo::kUkmAndUmaAsSize, &Memory_Experimental::SetSiteStorage},
     {"site_storage/blob_storage", "SiteStorage.BlobStorage", kLargeMetric,
-     kEffectiveSize, &Memory_Experimental::SetSiteStorage_BlobStorage},
+     kEffectiveSize, EmitTo::kUkmAndUmaAsSize,
+     &Memory_Experimental::SetSiteStorage_BlobStorage},
     {"site_storage/index_db", "SiteStorage.IndexDB", !kLargeMetric,
-     kEffectiveSize, &Memory_Experimental::SetSiteStorage_IndexDB},
+     kEffectiveSize, EmitTo::kUkmAndUmaAsSize,
+     &Memory_Experimental::SetSiteStorage_IndexDB},
     {"site_storage/localstorage", "SiteStorage.LocalStorage", !kLargeMetric,
-     kEffectiveSize, &Memory_Experimental::SetSiteStorage_LocalStorage},
+     kEffectiveSize, EmitTo::kUkmAndUmaAsSize,
+     &Memory_Experimental::SetSiteStorage_LocalStorage},
     {"site_storage/session_storage", "SiteStorage.SessionStorage",
-     !kLargeMetric, kEffectiveSize,
+     !kLargeMetric, kEffectiveSize, EmitTo::kUkmAndUmaAsSize,
      &Memory_Experimental::SetSiteStorage_SessionStorage},
-    {"skia", "Skia", kLargeMetric, kEffectiveSize,
+    {"skia", "Skia", kLargeMetric, kEffectiveSize, EmitTo::kUkmAndUmaAsSize,
      &Memory_Experimental::SetSkia},
     {"skia/sk_glyph_cache", "Skia.SkGlyphCache", kLargeMetric, kEffectiveSize,
-     &Memory_Experimental::SetSkia_SkGlyphCache},
+     EmitTo::kUkmAndUmaAsSize, &Memory_Experimental::SetSkia_SkGlyphCache},
     {"skia/sk_resource_cache", "Skia.SkResourceCache", kLargeMetric,
-     kEffectiveSize, &Memory_Experimental::SetSkia_SkResourceCache},
+     kEffectiveSize, EmitTo::kUkmAndUmaAsSize,
+     &Memory_Experimental::SetSkia_SkResourceCache},
     {"sqlite", "Sqlite", !kLargeMetric, kEffectiveSize,
-     &Memory_Experimental::SetSqlite},
-    {"sync", "Sync", kLargeMetric, kEffectiveSize,
+     EmitTo::kUkmAndUmaAsSize, &Memory_Experimental::SetSqlite},
+    {"sync", "Sync", kLargeMetric, kEffectiveSize, EmitTo::kUkmAndUmaAsSize,
      &Memory_Experimental::SetSync},
     {"tab_restore", "TabRestore", !kLargeMetric, kEffectiveSize,
-     &Memory_Experimental::SetTabRestore},
-    {"ui", "UI", !kLargeMetric, kEffectiveSize, &Memory_Experimental::SetUI},
-    {"v8", "V8", kLargeMetric, kEffectiveSize, &Memory_Experimental::SetV8},
+     EmitTo::kUkmAndUmaAsSize, &Memory_Experimental::SetTabRestore},
+    {"ui", "UI", !kLargeMetric, kEffectiveSize, EmitTo::kUkmAndUmaAsSize,
+     &Memory_Experimental::SetUI},
+    {"v8", "V8", kLargeMetric, kEffectiveSize, EmitTo::kUkmAndUmaAsSize,
+     &Memory_Experimental::SetV8},
+    {"v8", "V8.AllocatedObjects", kLargeMetric, kAllocatedObjectsSize,
+     EmitTo::kUkmAndUmaAsSize, &Memory_Experimental::SetV8_AllocatedObjects},
+    {"v8/main", "V8.Main", kLargeMetric, kEffectiveSize,
+     EmitTo::kUkmAndUmaAsSize, &Memory_Experimental::SetV8_Main},
+    {"v8/main", "V8.Main.AllocatedObjects", kLargeMetric, kAllocatedObjectsSize,
+     EmitTo::kUkmAndUmaAsSize,
+     &Memory_Experimental::SetV8_Main_AllocatedObjects},
+    {"v8/main/heap", "V8.Main.Heap", kLargeMetric, kEffectiveSize,
+     EmitTo::kUkmAndUmaAsSize, &Memory_Experimental::SetV8_Main_Heap},
+    {"v8/main/heap", "V8.Main.Heap.AllocatedObjects", kLargeMetric,
+     kAllocatedObjectsSize, EmitTo::kUkmAndUmaAsSize,
+     &Memory_Experimental::SetV8_Main_Heap_AllocatedObjects},
+    {"v8/main/heap/code_large_object_space",
+     "V8.Main.Heap.CodeLargeObjectSpace", kLargeMetric, kEffectiveSize,
+     EmitTo::kUkmAndUmaAsSize,
+     &Memory_Experimental::SetV8_Main_Heap_CodeLargeObjectSpace},
+    {"v8/main/heap/code_large_object_space",
+     "V8.Main.Heap.CodeLargeObjectSpace.AllocatedObjects", kLargeMetric,
+     kAllocatedObjectsSize, EmitTo::kUkmAndUmaAsSize,
+     &Memory_Experimental::
+         SetV8_Main_Heap_CodeLargeObjectSpace_AllocatedObjects},
+    {"v8/main/heap/code_space", "V8.Main.Heap.CodeSpace", kLargeMetric,
+     kEffectiveSize, EmitTo::kUkmAndUmaAsSize,
+     &Memory_Experimental::SetV8_Main_Heap_CodeSpace},
+    {"v8/main/heap/code_space", "V8.Main.Heap.CodeSpace.AllocatedObjects",
+     kLargeMetric, kAllocatedObjectsSize, EmitTo::kUkmAndUmaAsSize,
+     &Memory_Experimental::SetV8_Main_Heap_CodeSpace_AllocatedObjects},
+    {"v8/main/heap/large_object_space", "V8.Main.Heap.LargeObjectSpace",
+     kLargeMetric, kEffectiveSize, EmitTo::kUkmAndUmaAsSize,
+     &Memory_Experimental::SetV8_Main_Heap_LargeObjectSpace},
+    {"v8/main/heap/large_object_space",
+     "V8.Main.Heap.LargeObjectSpace.AllocatedObjects", kLargeMetric,
+     kAllocatedObjectsSize, EmitTo::kUkmAndUmaAsSize,
+     &Memory_Experimental::SetV8_Main_Heap_LargeObjectSpace_AllocatedObjects},
+    {"v8/main/heap/map_space", "V8.Main.Heap.MapSpace", kLargeMetric,
+     kEffectiveSize, EmitTo::kUkmAndUmaAsSize,
+     &Memory_Experimental::SetV8_Main_Heap_MapSpace},
+    {"v8/main/heap/map_space", "V8.Main.Heap.MapSpace.AllocatedObjects",
+     kLargeMetric, kAllocatedObjectsSize, EmitTo::kUkmAndUmaAsSize,
+     &Memory_Experimental::SetV8_Main_Heap_MapSpace_AllocatedObjects},
+    {"v8/main/heap/new_large_object_space", "V8.Main.Heap.NewLargeObjectSpace",
+     kLargeMetric, kEffectiveSize, EmitTo::kUkmAndUmaAsSize,
+     &Memory_Experimental::SetV8_Main_Heap_NewLargeObjectSpace},
+    {"v8/main/heap/new_large_object_space",
+     "V8.Main.Heap.NewLargeObjectSpace.AllocatedObjects", kLargeMetric,
+     kAllocatedObjectsSize, EmitTo::kUkmAndUmaAsSize,
+     &Memory_Experimental::
+         SetV8_Main_Heap_NewLargeObjectSpace_AllocatedObjects},
+    {"v8/main/heap/new_space", "V8.Main.Heap.NewSpace", kLargeMetric,
+     kEffectiveSize, EmitTo::kUkmAndUmaAsSize,
+     &Memory_Experimental::SetV8_Main_Heap_NewSpace},
+    {"v8/main/heap/new_space", "V8.Main.Heap.NewSpace.AllocatedObjects",
+     kLargeMetric, kAllocatedObjectsSize, EmitTo::kUkmAndUmaAsSize,
+     &Memory_Experimental::SetV8_Main_Heap_NewSpace_AllocatedObjects},
+    {"v8/main/heap/old_space", "V8.Main.Heap.OldSpace", kLargeMetric,
+     kEffectiveSize, EmitTo::kUkmAndUmaAsSize,
+     &Memory_Experimental::SetV8_Main_Heap_OldSpace},
+    {"v8/main/heap/old_space", "V8.Main.Heap.OldSpace.AllocatedObjects",
+     kLargeMetric, kAllocatedObjectsSize, EmitTo::kUkmAndUmaAsSize,
+     &Memory_Experimental::SetV8_Main_Heap_OldSpace_AllocatedObjects},
+    {"v8/main/heap/read_only_space", "V8.Main.Heap.ReadOnlySpace", kLargeMetric,
+     kEffectiveSize, EmitTo::kUkmAndUmaAsSize,
+     &Memory_Experimental::SetV8_Main_Heap_ReadOnlySpace},
+    {"v8/main/heap/read_only_space",
+     "V8.Main.Heap.ReadOnlySpace.AllocatedObjects", kLargeMetric,
+     kAllocatedObjectsSize, EmitTo::kUkmAndUmaAsSize,
+     &Memory_Experimental::SetV8_Main_Heap_ReadOnlySpace_AllocatedObjects},
+    {"v8/main/malloc", "V8.Main.Malloc", kLargeMetric, kEffectiveSize,
+     EmitTo::kUkmAndUmaAsSize, &Memory_Experimental::SetV8_Main_Malloc},
+    {"v8/workers", "V8.Workers", kLargeMetric, kEffectiveSize,
+     EmitTo::kUkmAndUmaAsSize, &Memory_Experimental::SetV8_Workers},
+    {"v8/workers", "V8.Workers.AllocatedObjects", kLargeMetric,
+     kAllocatedObjectsSize, EmitTo::kUkmAndUmaAsSize,
+     &Memory_Experimental::SetV8_Workers_AllocatedObjects},
     {"web_cache", "WebCache", !kLargeMetric, kEffectiveSize,
-     &Memory_Experimental::SetWebCache},
+     EmitTo::kUkmAndUmaAsSize, &Memory_Experimental::SetWebCache},
     {"web_cache/Image_resources", "WebCache.ImageResources", !kLargeMetric,
-     kEffectiveSize, &Memory_Experimental::SetWebCache_ImageResources},
+     kEffectiveSize, EmitTo::kUkmAndUmaAsSize,
+     &Memory_Experimental::SetWebCache_ImageResources},
     {"web_cache/CSS stylesheet_resources", "WebCache.CSSStylesheetResources",
-     !kLargeMetric, kEffectiveSize,
+     !kLargeMetric, kEffectiveSize, EmitTo::kUkmAndUmaAsSize,
      &Memory_Experimental::SetWebCache_CSSStylesheetResources},
     {"web_cache/Script_resources", "WebCache.ScriptResources", !kLargeMetric,
-     kEffectiveSize, &Memory_Experimental::SetWebCache_ScriptResources},
+     kEffectiveSize, EmitTo::kUkmAndUmaAsSize,
+     &Memory_Experimental::SetWebCache_ScriptResources},
     {"web_cache/XSL stylesheet_resources", "WebCache.XSLStylesheetResources",
-     !kLargeMetric, kEffectiveSize,
+     !kLargeMetric, kEffectiveSize, EmitTo::kUkmAndUmaAsSize,
      &Memory_Experimental::SetWebCache_XSLStylesheetResources},
     {"web_cache/Font_resources", "WebCache.FontResources", !kLargeMetric,
-     kEffectiveSize, &Memory_Experimental::SetWebCache_FontResources},
+     kEffectiveSize, EmitTo::kUkmAndUmaAsSize,
+     &Memory_Experimental::SetWebCache_FontResources},
     {"web_cache/Other_resources", "WebCache.OtherResources", !kLargeMetric,
-     kEffectiveSize, &Memory_Experimental::SetWebCache_OtherResources},
+     kEffectiveSize, EmitTo::kUkmAndUmaAsSize,
+     &Memory_Experimental::SetWebCache_OtherResources},
 };
 
 #define UMA_PREFIX "Memory."
@@ -184,11 +280,8 @@ void EmitProcessUkm(const GlobalMemoryDump::ProcessDump& pmd,
   for (const auto& item : kAllocatorDumpNamesForMetrics) {
     base::Optional<uint64_t> value = pmd.GetMetric(item.dump_name, item.metric);
     if (value) {
-      // Effective size is the size of the memory dump after discounting all
-      // suballocations from the dump.
-      if (base::StringPiece(item.metric) == kEffectiveSize) {
-        // For each effective size metric, emit both an UMA in MB or KB, and an
-        // UKM in MB.
+      if (item.target == EmitTo::kUkmAndUmaAsSize) {
+        // For each size metric, emit both an UMA in MB or KB, and an UKM in MB.
         ((*builder).*(item.setter))(value.value() / 1024 / 1024);
         if (!record_uma)
           continue;
@@ -221,7 +314,12 @@ void EmitProcessUkm(const GlobalMemoryDump::ProcessDump& pmd,
       }
     }
   }
+
+#if !defined(OS_MACOSX)
+  // Resident set is not populated on Mac.
   builder->SetResident(pmd.os_dump().resident_set_kb / 1024);
+#endif
+
   builder->SetPrivateMemoryFootprint(pmd.os_dump().private_footprint_kb / 1024);
   builder->SetSharedMemoryFootprint(pmd.os_dump().shared_footprint_kb / 1024);
 #if defined(OS_LINUX) || defined(OS_ANDROID)
@@ -233,6 +331,14 @@ void EmitProcessUkm(const GlobalMemoryDump::ProcessDump& pmd,
   if (!record_uma)
     return;
 
+#if defined(OS_MACOSX)
+  // Resident set is not populated on Mac.
+  DCHECK_EQ(pmd.os_dump().resident_set_kb, 0U);
+#else
+  MEMORY_METRICS_HISTOGRAM_MB(
+      std::string(UMA_PREFIX) + process_name + ".ResidentSet",
+      pmd.os_dump().resident_set_kb / 1024);
+#endif
   MEMORY_METRICS_HISTOGRAM_MB(
       std::string(UMA_PREFIX) + process_name + ".PrivateMemoryFootprint",
       pmd.os_dump().private_footprint_kb / 1024);
@@ -301,6 +407,19 @@ void EmitGpuMemoryMetrics(const GlobalMemoryDump::ProcessDump& pmd,
   builder.Record(ukm_recorder);
 }
 
+void EmitUtilityMemoryMetrics(const GlobalMemoryDump::ProcessDump& pmd,
+                              ukm::SourceId ukm_source_id,
+                              ukm::UkmRecorder* ukm_recorder,
+                              const base::Optional<base::TimeDelta>& uptime,
+                              bool record_uma) {
+  Memory_Experimental builder(ukm_source_id);
+  builder.SetProcessType(static_cast<int64_t>(
+      memory_instrumentation::mojom::ProcessType::UTILITY));
+  EmitProcessUkm(pmd, "Utility", uptime, record_uma, &builder);
+
+  builder.Record(ukm_recorder);
+}
+
 void EmitAudioServiceMemoryMetrics(
     const GlobalMemoryDump::ProcessDump& pmd,
     ukm::SourceId ukm_source_id,
@@ -342,21 +461,18 @@ void ProcessMemoryMetricsEmitter::FetchAndEmitProcessMemoryMetrics() {
   }
 
   // The callback keeps this object alive until the callback is invoked.
-  if (IsResourceCoordinatorEnabled()) {
-    service_manager::Connector* connector =
-        content::ServiceManagerConnection::GetForProcess()->GetConnector();
-    connector->BindInterface(resource_coordinator::mojom::kServiceName,
-                             mojo::MakeRequest(&introspector_));
-    auto callback2 =
-        base::Bind(&ProcessMemoryMetricsEmitter::ReceivedProcessInfos, this);
-    introspector_->GetProcessToURLMap(callback2);
-  }
+  service_manager::Connector* connector =
+      content::ServiceManagerConnection::GetForProcess()->GetConnector();
+  connector->BindInterface(resource_coordinator::mojom::kServiceName,
+                           mojo::MakeRequest(&introspector_));
+  auto callback2 =
+      base::Bind(&ProcessMemoryMetricsEmitter::ReceivedProcessInfos, this);
+  introspector_->GetProcessToURLMap(callback2);
 }
 
 void ProcessMemoryMetricsEmitter::MarkServiceRequestsInProgress() {
   memory_dump_in_progress_ = true;
-  if (IsResourceCoordinatorEnabled())
-    get_process_urls_in_progress_ = true;
+  get_process_urls_in_progress_ = true;
 }
 
 ProcessMemoryMetricsEmitter::~ProcessMemoryMetricsEmitter() {}
@@ -384,10 +500,6 @@ void ProcessMemoryMetricsEmitter::ReceivedProcessInfos(
     process_infos_[pid] = std::move(process_info);
   }
   CollateResults();
-}
-
-bool ProcessMemoryMetricsEmitter::IsResourceCoordinatorEnabled() {
-  return resource_coordinator::IsResourceCoordinatorEnabled();
 }
 
 ukm::UkmRecorder* ProcessMemoryMetricsEmitter::GetUkmRecorder() {
@@ -453,74 +565,123 @@ void ProcessMemoryMetricsEmitter::CollateResults() {
     return;
 
   uint32_t private_footprint_total_kb = 0;
+  uint32_t renderer_private_footprint_total_kb = 0;
   uint32_t shared_footprint_total_kb = 0;
-  bool record_uma = pid_scope_ == base::kNullProcessId;
+  uint32_t resident_set_total_kb = 0;
+  bool emit_metrics_for_all_processes = pid_scope_ == base::kNullProcessId;
+
+  TabFootprintAggregator per_tab_metrics;
 
   base::Time now = base::Time::Now();
   for (const auto& pmd : global_dump_->process_dumps()) {
-    private_footprint_total_kb += pmd.os_dump().private_footprint_kb;
+    uint32_t process_pmf_kb = pmd.os_dump().private_footprint_kb;
+    private_footprint_total_kb += process_pmf_kb;
     shared_footprint_total_kb += pmd.os_dump().shared_footprint_kb;
+    resident_set_total_kb += pmd.os_dump().resident_set_kb;
 
-    if (!record_uma && pid_scope_ != pmd.pid())
+    if (!emit_metrics_for_all_processes && pid_scope_ != pmd.pid())
       continue;
 
     switch (pmd.process_type()) {
       case memory_instrumentation::mojom::ProcessType::BROWSER: {
-        EmitBrowserMemoryMetrics(pmd, ukm::UkmRecorder::GetNewSourceID(),
-                                 GetUkmRecorder(),
-                                 GetProcessUptime(now, pmd.pid()), record_uma);
+        EmitBrowserMemoryMetrics(
+            pmd, ukm::UkmRecorder::GetNewSourceID(), GetUkmRecorder(),
+            GetProcessUptime(now, pmd.pid()), emit_metrics_for_all_processes);
         break;
       }
       case memory_instrumentation::mojom::ProcessType::RENDERER: {
-        resource_coordinator::mojom::PageInfoPtr page_info;
-        // If there is more than one frame being hosted in a renderer, don't
-        // emit any URLs. This is not ideal, but UKM does not support
-        // multiple-URLs per entry, and we must have one entry per process.
-        if (process_infos_.find(pmd.pid()) != process_infos_.end()) {
+        renderer_private_footprint_total_kb += process_pmf_kb;
+        resource_coordinator::mojom::PageInfoPtr single_page_info;
+        auto iter = process_infos_.find(pmd.pid());
+        if (iter != process_infos_.end()) {
           const resource_coordinator::mojom::ProcessInfoPtr& process_info =
-              process_infos_[pmd.pid()];
+              iter->second;
+
+          if (emit_metrics_for_all_processes) {
+            // Renderer metrics-by-tab only make sense if we're visiting all
+            // render processes.
+            for (const resource_coordinator::mojom::PageInfoPtr& page_info :
+                 process_info->page_infos) {
+              if (page_info->hosts_main_frame) {
+                per_tab_metrics.AssociateMainFrame(page_info->ukm_source_id,
+                                                   pmd.pid(), page_info->tab_id,
+                                                   process_pmf_kb);
+              } else {
+                per_tab_metrics.AssociateSubFrame(page_info->ukm_source_id,
+                                                  pmd.pid(), page_info->tab_id,
+                                                  process_pmf_kb);
+              }
+            }
+          }
+
+          // If there is more than one frame being hosted in a renderer, don't
+          // emit any per-renderer URLs. This is not ideal, but UKM does not
+          // support multiple-URLs per entry, and we must have one entry per
+          // process.
           if (process_info->page_infos.size() == 1) {
-            page_info = std::move(process_info->page_infos[0]);
+            single_page_info = std::move(process_info->page_infos[0]);
           }
         }
 
         int number_of_extensions = GetNumberOfExtensions(pmd.pid());
-        EmitRendererMemoryMetrics(pmd, page_info, GetUkmRecorder(),
-                                  number_of_extensions,
-                                  GetProcessUptime(now, pmd.pid()), record_uma);
+        EmitRendererMemoryMetrics(
+            pmd, single_page_info, GetUkmRecorder(), number_of_extensions,
+            GetProcessUptime(now, pmd.pid()), emit_metrics_for_all_processes);
         break;
       }
       case memory_instrumentation::mojom::ProcessType::GPU: {
         EmitGpuMemoryMetrics(pmd, ukm::UkmRecorder::GetNewSourceID(),
                              GetUkmRecorder(), GetProcessUptime(now, pmd.pid()),
-                             record_uma);
+                             emit_metrics_for_all_processes);
         break;
       }
       case memory_instrumentation::mojom::ProcessType::UTILITY: {
-        if (pmd.pid() == content::GetProcessIdForAudioService())
+        if (pmd.pid() == content::GetProcessIdForAudioService()) {
           EmitAudioServiceMemoryMetrics(
               pmd, ukm::UkmRecorder::GetNewSourceID(), GetUkmRecorder(),
-              GetProcessUptime(now, pmd.pid()), record_uma);
+              GetProcessUptime(now, pmd.pid()), emit_metrics_for_all_processes);
+        } else {
+          EmitUtilityMemoryMetrics(
+              pmd, ukm::UkmRecorder::GetNewSourceID(), GetUkmRecorder(),
+              GetProcessUptime(now, pmd.pid()), emit_metrics_for_all_processes);
+        }
         break;
       }
       case memory_instrumentation::mojom::ProcessType::PLUGIN:
+        FALLTHROUGH;
+      case memory_instrumentation::mojom::ProcessType::ARC:
         FALLTHROUGH;
       case memory_instrumentation::mojom::ProcessType::OTHER:
         break;
     }
   }
-  if (record_uma) {
+
+  if (emit_metrics_for_all_processes) {
     UMA_HISTOGRAM_MEMORY_LARGE_MB(
         "Memory.Experimental.Total2.PrivateMemoryFootprint",
         private_footprint_total_kb / 1024);
+#if defined(OS_MACOSX)
+    // Resident set is not populated on Mac.
+    DCHECK_EQ(resident_set_total_kb, 0U);
+#else
+    UMA_HISTOGRAM_MEMORY_LARGE_MB("Memory.Total.ResidentSet",
+                                  resident_set_total_kb / 1024);
+
+#endif
     UMA_HISTOGRAM_MEMORY_LARGE_MB("Memory.Total.PrivateMemoryFootprint",
                                   private_footprint_total_kb / 1024);
+    UMA_HISTOGRAM_MEMORY_LARGE_MB("Memory.Total.RendererPrivateMemoryFootprint",
+                                  renderer_private_footprint_total_kb / 1024);
     UMA_HISTOGRAM_MEMORY_LARGE_MB("Memory.Total.SharedMemoryFootprint",
                                   shared_footprint_total_kb / 1024);
-  }
 
-  Memory_Experimental(ukm::UkmRecorder::GetNewSourceID())
-      .SetTotal2_PrivateMemoryFootprint(private_footprint_total_kb / 1024)
-      .SetTotal2_SharedMemoryFootprint(shared_footprint_total_kb / 1024)
-      .Record(GetUkmRecorder());
+    Memory_Experimental(ukm::UkmRecorder::GetNewSourceID())
+        .SetTotal2_PrivateMemoryFootprint(private_footprint_total_kb / 1024)
+        .SetTotal2_SharedMemoryFootprint(shared_footprint_total_kb / 1024)
+        .Record(GetUkmRecorder());
+
+    // Renderer metrics-by-tab only make sense if we're visiting all render
+    // processes.
+    per_tab_metrics.RecordPmfs(GetUkmRecorder());
+  }
 }

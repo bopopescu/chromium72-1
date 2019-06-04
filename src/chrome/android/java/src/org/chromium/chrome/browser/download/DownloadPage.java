@@ -11,20 +11,22 @@ import org.chromium.base.ApplicationStatus;
 import org.chromium.base.ApplicationStatus.ActivityStateListener;
 import org.chromium.base.ThreadUtils;
 import org.chromium.chrome.R;
-import org.chromium.chrome.browser.BasicNativePage;
 import org.chromium.chrome.browser.ChromeActivity;
-import org.chromium.chrome.browser.NativePageHost;
 import org.chromium.chrome.browser.UrlConstants;
-import org.chromium.chrome.browser.download.ui.DownloadManagerUi;
+import org.chromium.chrome.browser.download.home.DownloadManagerCoordinator;
+import org.chromium.chrome.browser.download.home.DownloadManagerCoordinatorFactory;
+import org.chromium.chrome.browser.download.home.DownloadManagerUiConfig;
+import org.chromium.chrome.browser.native_page.BasicNativePage;
+import org.chromium.chrome.browser.native_page.NativePageHost;
 import org.chromium.chrome.browser.snackbar.SnackbarManager.SnackbarManageable;
 
 /**
  * Native page for managing downloads handled through Chrome.
  */
-public class DownloadPage extends BasicNativePage {
+public class DownloadPage extends BasicNativePage implements DownloadManagerCoordinator.Observer {
     private ActivityStateListener mActivityStateListener;
 
-    private DownloadManagerUi mManager;
+    private DownloadManagerCoordinator mDownloadCoordinator;
     private String mTitle;
 
     /**
@@ -40,9 +42,14 @@ public class DownloadPage extends BasicNativePage {
     protected void initialize(ChromeActivity activity, final NativePageHost host) {
         ThreadUtils.assertOnUiThread();
 
-        mManager = new DownloadManagerUi(activity, host.isIncognito(), activity.getComponentName(),
-                false, ((SnackbarManageable) activity).getSnackbarManager());
-        mManager.setBasicNativePage(this);
+        DownloadManagerUiConfig config = new DownloadManagerUiConfig.Builder()
+                                                 .setIsOffTheRecord(host.isIncognito())
+                                                 .setIsSeparateActivity(false)
+                                                 .build();
+        mDownloadCoordinator = DownloadManagerCoordinatorFactory.create(activity, config,
+                ((SnackbarManageable) activity).getSnackbarManager(), activity.getComponentName());
+
+        mDownloadCoordinator.addObserver(this);
         mTitle = activity.getString(R.string.menu_downloads);
 
         // #destroy() unregisters the ActivityStateListener to avoid checking for externally removed
@@ -52,8 +59,7 @@ public class DownloadPage extends BasicNativePage {
         // resumed.
         mActivityStateListener = (activity1, newState) -> {
             if (newState == ActivityState.RESUMED) {
-                DownloadUtils.checkForExternallyRemovedDownloads(
-                        mManager.getBackendProvider(), host.isIncognito());
+                DownloadUtils.checkForExternallyRemovedDownloads(host.isIncognito());
             }
         };
         ApplicationStatus.registerStateListenerForActivity(mActivityStateListener, activity);
@@ -61,7 +67,7 @@ public class DownloadPage extends BasicNativePage {
 
     @Override
     public View getView() {
-        return mManager.getView();
+        return mDownloadCoordinator.getView();
     }
 
     @Override
@@ -77,14 +83,25 @@ public class DownloadPage extends BasicNativePage {
     @Override
     public void updateForUrl(String url) {
         super.updateForUrl(url);
-        mManager.updateForUrl(url);
+        mDownloadCoordinator.updateForUrl(url);
     }
 
     @Override
     public void destroy() {
-        mManager.onDestroyed();
-        mManager = null;
+        mDownloadCoordinator.removeObserver(this);
+        mDownloadCoordinator.destroy();
+        mDownloadCoordinator = null;
         ApplicationStatus.unregisterActivityStateListener(mActivityStateListener);
         super.destroy();
+    }
+
+    // DownloadManagerCoordinator.Observer implementation.
+    @Override
+    public void onUrlChanged(String url) {
+        // We want to squash consecutive download home URLs having different filters into the one
+        // having the latest filter. This will avoid requiring user to press back button too many
+        // times to exit download home. In the event, chrome gets killed or if user navigates away
+        // from download home, we still will be able to come back to the latest filter.
+        onStateChange(url, true);
     }
 }

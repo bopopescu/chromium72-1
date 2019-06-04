@@ -10,7 +10,7 @@
 #include "base/callback.h"
 #include "base/logging.h"
 #include "base/memory/ptr_util.h"
-#include "base/sys_info.h"
+#include "base/system/sys_info.h"
 #include "remoting/base/util.h"
 #include "remoting/proto/video.pb.h"
 #include "third_party/libvpx/source/libvpx/vpx/vp8cx.h"
@@ -91,7 +91,7 @@ void SetVp8CodecParameters(vpx_codec_enc_cfg_t* config,
   // to be met, we relax the max quantizer. The quality will get topped-off
   // in subsequent frames.
   config->rc_min_quantizer = 20;
-  config->rc_max_quantizer = 63;
+  config->rc_max_quantizer = 50;
 }
 
 void SetVp9CodecParameters(vpx_codec_enc_cfg_t* config,

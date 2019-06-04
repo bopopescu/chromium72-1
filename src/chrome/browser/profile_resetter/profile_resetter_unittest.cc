@@ -11,6 +11,7 @@
 #include <string>
 #include <utility>
 
+#include "base/bind.h"
 #include "base/macros.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/run_loop.h"
@@ -50,6 +51,7 @@
 #include "net/http/http_util.h"
 #include "services/network/public/cpp/resource_request.h"
 #include "services/network/test/test_url_loader_factory.h"
+#include "services/network/test/test_utils.h"
 #include "url/gurl.h"
 
 #if defined(OS_WIN)
@@ -150,7 +152,7 @@ void ProfileResetterTest::SetUp() {
 
   profile()->CreateWebDataService();
   TemplateURLServiceFactory::GetInstance()->SetTestingFactory(
-      profile(), &CreateTemplateURLServiceForTesting);
+      profile(), base::BindRepeating(&CreateTemplateURLServiceForTesting));
   resetter_.reset(new ProfileResetter(profile()));
 }
 
@@ -181,17 +183,6 @@ class ConfigParserTest : public testing::Test {
  protected:
   ConfigParserTest();
   ~ConfigParserTest() override;
-
-  std::string GetBodyFromRequest(const network::ResourceRequest& request) {
-    auto body = request.request_body;
-    if (!body)
-      return std::string();
-
-    CHECK_EQ(1u, body->elements()->size());
-    auto& element = body->elements()->at(0);
-    CHECK_EQ(network::DataElement::TYPE_BYTES, element.type());
-    return std::string(element.bytes(), element.length());
-  }
 
   std::unique_ptr<BrandcodeConfigFetcher> WaitForRequest(const GURL& url);
 
@@ -224,7 +215,7 @@ std::unique_ptr<BrandcodeConfigFetcher> ConfigParserTest::WaitForRequest(
   std::string upload_data;
   test_url_loader_factory_.SetInterceptor(
       base::BindLambdaForTesting([&](const network::ResourceRequest& request) {
-        upload_data = GetBodyFromRequest(request);
+        upload_data = network::GetUploadData(request);
       }));
   std::unique_ptr<BrandcodeConfigFetcher> fetcher(new BrandcodeConfigFetcher(
       &test_url_loader_factory_,
@@ -787,8 +778,7 @@ TEST_F(ConfigParserTest, ParseConfig) {
       settings->GetUrlsToRestoreOnStartup());
   EXPECT_TRUE(startup_list);
   std::vector<std::string> startup_pages;
-  for (base::ListValue::iterator i = startup_list->begin();
-       i != startup_list->end(); ++i) {
+  for (auto i = startup_list->begin(); i != startup_list->end(); ++i) {
     std::string url;
     EXPECT_TRUE(i->GetAsString(&url));
     startup_pages.push_back(url);

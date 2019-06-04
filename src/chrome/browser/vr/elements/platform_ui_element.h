@@ -7,7 +7,7 @@
 
 #include "base/macros.h"
 #include "chrome/browser/vr/elements/ui_element.h"
-#include "chrome/browser/vr/ui_element_renderer.h"
+#include "chrome/browser/vr/gl_texture_location.h"
 
 namespace vr {
 
@@ -22,40 +22,43 @@ class PlatformUiElement : public UiElement {
   PlatformUiElement();
   ~PlatformUiElement() override;
 
-  void OnHoverEnter(const gfx::PointF& position) override;
-  void OnHoverLeave() override;
-  void OnMove(const gfx::PointF& position) override;
-  void OnButtonDown(const gfx::PointF& position) override;
-  void OnButtonUp(const gfx::PointF& position) override;
-  void OnFlingCancel(std::unique_ptr<blink::WebGestureEvent> gesture,
+  void OnHoverEnter(const gfx::PointF& position,
+                    base::TimeTicks timestamp) override;
+  void OnHoverLeave(base::TimeTicks timestamp) override;
+  void OnHoverMove(const gfx::PointF& position,
+                   base::TimeTicks timestamp) override;
+  void OnButtonDown(const gfx::PointF& position,
+                    base::TimeTicks timestamp) override;
+  void OnButtonUp(const gfx::PointF& position,
+                  base::TimeTicks timestamp) override;
+  void OnTouchMove(const gfx::PointF& position,
+                   base::TimeTicks timestamp) override;
+  void OnFlingCancel(std::unique_ptr<InputEvent> gesture,
                      const gfx::PointF& position) override;
-  void OnScrollBegin(std::unique_ptr<blink::WebGestureEvent> gesture,
+  void OnScrollBegin(std::unique_ptr<InputEvent> gesture,
                      const gfx::PointF& position) override;
-  void OnScrollUpdate(std::unique_ptr<blink::WebGestureEvent> gesture,
+  void OnScrollUpdate(std::unique_ptr<InputEvent> gesture,
                       const gfx::PointF& position) override;
-  void OnScrollEnd(std::unique_ptr<blink::WebGestureEvent> gesture,
+  void OnScrollEnd(std::unique_ptr<InputEvent> gesture,
                    const gfx::PointF& position) override;
 
   void Render(UiElementRenderer* renderer,
               const CameraModel& model) const override;
 
   void SetTextureId(unsigned int texture_id);
-  void SetTextureLocation(UiElementRenderer::TextureLocation location);
+  void SetTextureLocation(GlTextureLocation location);
 
   void SetDelegate(PlatformUiInputDelegate* delegate);
 
  protected:
   PlatformUiInputDelegate* delegate() const { return delegate_; }
   unsigned int texture_id() const { return texture_id_; }
-  UiElementRenderer::TextureLocation texture_location() const {
-    return texture_location_;
-  }
+  GlTextureLocation texture_location() const { return texture_location_; }
 
  private:
   PlatformUiInputDelegate* delegate_ = nullptr;
   unsigned int texture_id_ = 0;
-  UiElementRenderer::TextureLocation texture_location_ =
-      UiElementRenderer::kTextureLocationExternal;
+  GlTextureLocation texture_location_ = kGlTextureLocationExternal;
 
   DISALLOW_COPY_AND_ASSIGN(PlatformUiElement);
 };

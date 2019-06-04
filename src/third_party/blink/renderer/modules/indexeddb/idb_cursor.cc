@@ -27,19 +27,18 @@
 
 #include <limits>
 #include <memory>
-#include "third_party/blink/public/platform/modules/indexeddb/web_idb_database.h"
 #include "third_party/blink/public/platform/modules/indexeddb/web_idb_key_range.h"
-#include "third_party/blink/renderer/bindings/core/v8/exception_state.h"
 #include "third_party/blink/renderer/bindings/modules/v8/to_v8_for_modules.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_binding_for_modules.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_idb_request.h"
-#include "third_party/blink/renderer/core/dom/exception_code.h"
 #include "third_party/blink/renderer/modules/indexed_db_names.h"
 #include "third_party/blink/renderer/modules/indexeddb/idb_any.h"
 #include "third_party/blink/renderer/modules/indexeddb/idb_database.h"
 #include "third_party/blink/renderer/modules/indexeddb/idb_object_store.h"
 #include "third_party/blink/renderer/modules/indexeddb/idb_tracing.h"
 #include "third_party/blink/renderer/modules/indexeddb/idb_transaction.h"
+#include "third_party/blink/renderer/modules/indexeddb/web_idb_database.h"
+#include "third_party/blink/renderer/platform/bindings/exception_state.h"
 #include "third_party/blink/renderer/platform/bindings/script_state.h"
 #include "third_party/blink/renderer/platform/bindings/v8_private_property.h"
 
@@ -49,16 +48,16 @@ using blink::WebIDBDatabase;
 namespace blink {
 
 IDBCursor* IDBCursor::Create(std::unique_ptr<WebIDBCursor> backend,
-                             WebIDBCursorDirection direction,
+                             mojom::IDBCursorDirection direction,
                              IDBRequest* request,
                              const Source& source,
                              IDBTransaction* transaction) {
-  return new IDBCursor(std::move(backend), direction, request, source,
-                       transaction);
+  return MakeGarbageCollected<IDBCursor>(std::move(backend), direction, request,
+                                         source, transaction);
 }
 
 IDBCursor::IDBCursor(std::unique_ptr<WebIDBCursor> backend,
-                     WebIDBCursorDirection direction,
+                     mojom::IDBCursorDirection direction,
                      IDBRequest* request,
                      const Source& source,
                      IDBTransaction* transaction)
@@ -103,34 +102,35 @@ IDBRequest* IDBCursor::update(ScriptState* script_state,
                               ExceptionState& exception_state) {
   IDB_TRACE("IDBCursor::updateRequestSetup");
   if (!transaction_->IsActive()) {
-    exception_state.ThrowDOMException(kTransactionInactiveError,
-                                      transaction_->InactiveErrorMessage());
+    exception_state.ThrowDOMException(
+        DOMExceptionCode::kTransactionInactiveError,
+        transaction_->InactiveErrorMessage());
     return nullptr;
   }
   if (transaction_->IsReadOnly()) {
     exception_state.ThrowDOMException(
-        kReadOnlyError,
+        DOMExceptionCode::kReadOnlyError,
         "The record may not be updated inside a read-only transaction.");
     return nullptr;
   }
   if (IsDeleted()) {
-    exception_state.ThrowDOMException(kInvalidStateError,
+    exception_state.ThrowDOMException(DOMExceptionCode::kInvalidStateError,
                                       IDBDatabase::kSourceDeletedErrorMessage);
     return nullptr;
   }
   if (!got_value_) {
-    exception_state.ThrowDOMException(kInvalidStateError,
+    exception_state.ThrowDOMException(DOMExceptionCode::kInvalidStateError,
                                       IDBDatabase::kNoValueErrorMessage);
     return nullptr;
   }
   if (IsKeyCursor()) {
-    exception_state.ThrowDOMException(kInvalidStateError,
+    exception_state.ThrowDOMException(DOMExceptionCode::kInvalidStateError,
                                       IDBDatabase::kIsKeyCursorErrorMessage);
     return nullptr;
   }
 
   IDBObjectStore* object_store = EffectiveObjectStore();
-  return object_store->DoPut(script_state, kWebIDBPutModeCursorUpdate,
+  return object_store->DoPut(script_state, mojom::IDBPutMode::CursorUpdate,
                              IDBRequest::Source::FromIDBCursor(this), value,
                              IdbPrimaryKey(), exception_state);
 }
@@ -145,17 +145,18 @@ void IDBCursor::advance(unsigned count, ExceptionState& exception_state) {
     return;
   }
   if (!transaction_->IsActive()) {
-    exception_state.ThrowDOMException(kTransactionInactiveError,
-                                      transaction_->InactiveErrorMessage());
+    exception_state.ThrowDOMException(
+        DOMExceptionCode::kTransactionInactiveError,
+        transaction_->InactiveErrorMessage());
     return;
   }
   if (IsDeleted()) {
-    exception_state.ThrowDOMException(kInvalidStateError,
+    exception_state.ThrowDOMException(DOMExceptionCode::kInvalidStateError,
                                       IDBDatabase::kSourceDeletedErrorMessage);
     return;
   }
   if (!got_value_) {
-    exception_state.ThrowDOMException(kInvalidStateError,
+    exception_state.ThrowDOMException(DOMExceptionCode::kInvalidStateError,
                                       IDBDatabase::kNoValueErrorMessage);
     return;
   }
@@ -173,17 +174,18 @@ void IDBCursor::Continue(ScriptState* script_state,
   IDBRequest::AsyncTraceState metrics("IDBCursor::continue");
 
   if (!transaction_->IsActive()) {
-    exception_state.ThrowDOMException(kTransactionInactiveError,
-                                      transaction_->InactiveErrorMessage());
+    exception_state.ThrowDOMException(
+        DOMExceptionCode::kTransactionInactiveError,
+        transaction_->InactiveErrorMessage());
     return;
   }
   if (!got_value_) {
-    exception_state.ThrowDOMException(kInvalidStateError,
+    exception_state.ThrowDOMException(DOMExceptionCode::kInvalidStateError,
                                       IDBDatabase::kNoValueErrorMessage);
     return;
   }
   if (IsDeleted()) {
-    exception_state.ThrowDOMException(kInvalidStateError,
+    exception_state.ThrowDOMException(DOMExceptionCode::kInvalidStateError,
                                       IDBDatabase::kSourceDeletedErrorMessage);
     return;
   }
@@ -196,7 +198,7 @@ void IDBCursor::Continue(ScriptState* script_state,
   if (exception_state.HadException())
     return;
   if (key && !key->IsValid()) {
-    exception_state.ThrowDOMException(kDataError,
+    exception_state.ThrowDOMException(DOMExceptionCode::kDataError,
                                       IDBDatabase::kNotValidKeyErrorMessage);
     return;
   }
@@ -211,32 +213,34 @@ void IDBCursor::continuePrimaryKey(ScriptState* script_state,
   IDBRequest::AsyncTraceState metrics("IDBCursor::continuePrimaryKey");
 
   if (!transaction_->IsActive()) {
-    exception_state.ThrowDOMException(kTransactionInactiveError,
-                                      transaction_->InactiveErrorMessage());
+    exception_state.ThrowDOMException(
+        DOMExceptionCode::kTransactionInactiveError,
+        transaction_->InactiveErrorMessage());
     return;
   }
 
   if (IsDeleted()) {
-    exception_state.ThrowDOMException(kInvalidStateError,
+    exception_state.ThrowDOMException(DOMExceptionCode::kInvalidStateError,
                                       IDBDatabase::kSourceDeletedErrorMessage);
     return;
   }
 
   if (!source_.IsIDBIndex()) {
-    exception_state.ThrowDOMException(kInvalidAccessError,
+    exception_state.ThrowDOMException(DOMExceptionCode::kInvalidAccessError,
                                       "The cursor's source is not an index.");
     return;
   }
 
-  if (direction_ != kWebIDBCursorDirectionNext &&
-      direction_ != kWebIDBCursorDirectionPrev) {
+  if (direction_ != mojom::IDBCursorDirection::Next &&
+      direction_ != mojom::IDBCursorDirection::Prev) {
     exception_state.ThrowDOMException(
-        kInvalidAccessError, "The cursor's direction is not 'next' or 'prev'.");
+        DOMExceptionCode::kInvalidAccessError,
+        "The cursor's direction is not 'next' or 'prev'.");
     return;
   }
 
   if (!got_value_) {
-    exception_state.ThrowDOMException(kInvalidStateError,
+    exception_state.ThrowDOMException(DOMExceptionCode::kInvalidStateError,
                                       IDBDatabase::kNoValueErrorMessage);
     return;
   }
@@ -246,7 +250,7 @@ void IDBCursor::continuePrimaryKey(ScriptState* script_state,
   if (exception_state.HadException())
     return;
   if (!key->IsValid()) {
-    exception_state.ThrowDOMException(kDataError,
+    exception_state.ThrowDOMException(DOMExceptionCode::kDataError,
                                       IDBDatabase::kNotValidKeyErrorMessage);
     return;
   }
@@ -257,7 +261,7 @@ void IDBCursor::continuePrimaryKey(ScriptState* script_state,
   if (exception_state.HadException())
     return;
   if (!primary_key->IsValid()) {
-    exception_state.ThrowDOMException(kDataError,
+    exception_state.ThrowDOMException(DOMExceptionCode::kDataError,
                                       IDBDatabase::kNotValidKeyErrorMessage);
     return;
   }
@@ -279,14 +283,14 @@ void IDBCursor::Continue(std::unique_ptr<IDBKey> key,
 
   if (key) {
     DCHECK(key_);
-    if (direction_ == kWebIDBCursorDirectionNext ||
-        direction_ == kWebIDBCursorDirectionNextNoDuplicate) {
+    if (direction_ == mojom::IDBCursorDirection::Next ||
+        direction_ == mojom::IDBCursorDirection::NextNoDuplicate) {
       const bool ok = key_->IsLessThan(key.get()) ||
                       (primary_key && key_->IsEqual(key.get()) &&
                        current_primary_key->IsLessThan(primary_key.get()));
       if (!ok) {
         exception_state.ThrowDOMException(
-            kDataError,
+            DOMExceptionCode::kDataError,
             "The parameter is less than or equal to this cursor's position.");
         return;
       }
@@ -296,7 +300,7 @@ void IDBCursor::Continue(std::unique_ptr<IDBKey> key,
                       (primary_key && key->IsEqual(key_.get()) &&
                        primary_key->IsLessThan(current_primary_key));
       if (!ok) {
-        exception_state.ThrowDOMException(kDataError,
+        exception_state.ThrowDOMException(DOMExceptionCode::kDataError,
                                           "The parameter is greater than or "
                                           "equal to this cursor's position.");
         return;
@@ -310,8 +314,9 @@ void IDBCursor::Continue(std::unique_ptr<IDBKey> key,
   request_->SetPendingCursor(this);
   request_->AssignNewMetrics(std::move(metrics));
   got_value_ = false;
-  backend_->Continue(WebIDBKeyView(key.get()), WebIDBKeyView(primary_key.get()),
-                     request_->CreateWebCallbacks().release());
+  backend_->CursorContinue(WebIDBKeyView(key.get()),
+                           WebIDBKeyView(primary_key.get()),
+                           request_->CreateWebCallbacks().release());
 }
 
 IDBRequest* IDBCursor::Delete(ScriptState* script_state,
@@ -319,33 +324,34 @@ IDBRequest* IDBCursor::Delete(ScriptState* script_state,
   IDB_TRACE("IDBCursor::deleteRequestSetup");
   IDBRequest::AsyncTraceState metrics("IDBCursor::delete");
   if (!transaction_->IsActive()) {
-    exception_state.ThrowDOMException(kTransactionInactiveError,
-                                      transaction_->InactiveErrorMessage());
+    exception_state.ThrowDOMException(
+        DOMExceptionCode::kTransactionInactiveError,
+        transaction_->InactiveErrorMessage());
     return nullptr;
   }
   if (transaction_->IsReadOnly()) {
     exception_state.ThrowDOMException(
-        kReadOnlyError,
+        DOMExceptionCode::kReadOnlyError,
         "The record may not be deleted inside a read-only transaction.");
     return nullptr;
   }
   if (IsDeleted()) {
-    exception_state.ThrowDOMException(kInvalidStateError,
+    exception_state.ThrowDOMException(DOMExceptionCode::kInvalidStateError,
                                       IDBDatabase::kSourceDeletedErrorMessage);
     return nullptr;
   }
   if (!got_value_) {
-    exception_state.ThrowDOMException(kInvalidStateError,
+    exception_state.ThrowDOMException(DOMExceptionCode::kInvalidStateError,
                                       IDBDatabase::kNoValueErrorMessage);
     return nullptr;
   }
   if (IsKeyCursor()) {
-    exception_state.ThrowDOMException(kInvalidStateError,
+    exception_state.ThrowDOMException(DOMExceptionCode::kInvalidStateError,
                                       IDBDatabase::kIsKeyCursorErrorMessage);
     return nullptr;
   }
   if (!transaction_->BackendDB()) {
-    exception_state.ThrowDOMException(kInvalidStateError,
+    exception_state.ThrowDOMException(DOMExceptionCode::kInvalidStateError,
                                       IDBDatabase::kDatabaseClosedErrorMessage);
     return nullptr;
   }
@@ -477,38 +483,38 @@ bool IDBCursor::IsDeleted() const {
   return source_.GetAsIDBIndex()->IsDeleted();
 }
 
-WebIDBCursorDirection IDBCursor::StringToDirection(
+mojom::IDBCursorDirection IDBCursor::StringToDirection(
     const String& direction_string) {
-  if (direction_string == IndexedDBNames::next)
-    return kWebIDBCursorDirectionNext;
-  if (direction_string == IndexedDBNames::nextunique)
-    return kWebIDBCursorDirectionNextNoDuplicate;
-  if (direction_string == IndexedDBNames::prev)
-    return kWebIDBCursorDirectionPrev;
-  if (direction_string == IndexedDBNames::prevunique)
-    return kWebIDBCursorDirectionPrevNoDuplicate;
+  if (direction_string == indexed_db_names::kNext)
+    return mojom::IDBCursorDirection::Next;
+  if (direction_string == indexed_db_names::kNextunique)
+    return mojom::IDBCursorDirection::NextNoDuplicate;
+  if (direction_string == indexed_db_names::kPrev)
+    return mojom::IDBCursorDirection::Prev;
+  if (direction_string == indexed_db_names::kPrevunique)
+    return mojom::IDBCursorDirection::PrevNoDuplicate;
 
   NOTREACHED();
-  return kWebIDBCursorDirectionNext;
+  return mojom::IDBCursorDirection::Next;
 }
 
 const String& IDBCursor::direction() const {
   switch (direction_) {
-    case kWebIDBCursorDirectionNext:
-      return IndexedDBNames::next;
+    case mojom::IDBCursorDirection::Next:
+      return indexed_db_names::kNext;
 
-    case kWebIDBCursorDirectionNextNoDuplicate:
-      return IndexedDBNames::nextunique;
+    case mojom::IDBCursorDirection::NextNoDuplicate:
+      return indexed_db_names::kNextunique;
 
-    case kWebIDBCursorDirectionPrev:
-      return IndexedDBNames::prev;
+    case mojom::IDBCursorDirection::Prev:
+      return indexed_db_names::kPrev;
 
-    case kWebIDBCursorDirectionPrevNoDuplicate:
-      return IndexedDBNames::prevunique;
+    case mojom::IDBCursorDirection::PrevNoDuplicate:
+      return indexed_db_names::kPrevunique;
 
     default:
       NOTREACHED();
-      return IndexedDBNames::next;
+      return indexed_db_names::kNext;
   }
 }
 

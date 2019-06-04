@@ -33,13 +33,12 @@ ChildFrameCompositingHelper::~ChildFrameCompositingHelper() = default;
 void ChildFrameCompositingHelper::ChildFrameGone(
     const gfx::Size& frame_size_in_dip,
     float device_scale_factor) {
-  primary_surface_id_ = viz::SurfaceId();
-  fallback_surface_id_ = viz::SurfaceId();
+  surface_id_ = viz::SurfaceId();
 
   scoped_refptr<cc::SolidColorLayer> crashed_layer =
       cc::SolidColorLayer::Create();
   crashed_layer->SetMasksToBounds(true);
-  crashed_layer->SetBackgroundColor(SK_ColorBLACK);
+  crashed_layer->SetBackgroundColor(SK_ColorGRAY);
 
   if (child_frame_compositor_->GetLayer()) {
     SkBitmap* sad_bitmap = child_frame_compositor_->GetSadPageBitmap();
@@ -67,52 +66,36 @@ void ChildFrameCompositingHelper::ChildFrameGone(
 
   bool prevent_contents_opaque_changes = false;
   child_frame_compositor_->SetLayer(std::move(crashed_layer),
-                                    prevent_contents_opaque_changes);
+                                    prevent_contents_opaque_changes,
+                                    false /* is_surface_layer */);
 }
 
-void ChildFrameCompositingHelper::SetPrimarySurfaceId(
+void ChildFrameCompositingHelper::SetSurfaceId(
     const viz::SurfaceId& surface_id,
     const gfx::Size& frame_size_in_dip,
     const cc::DeadlinePolicy& deadline) {
-  if (primary_surface_id_ == surface_id)
+  if (surface_id_ == surface_id)
     return;
 
-  primary_surface_id_ = surface_id;
+  surface_id_ = surface_id;
 
   surface_layer_ = cc::SurfaceLayer::Create();
   surface_layer_->SetMasksToBounds(true);
   surface_layer_->SetSurfaceHitTestable(true);
   surface_layer_->SetBackgroundColor(SK_ColorTRANSPARENT);
 
-  surface_layer_->SetPrimarySurfaceId(surface_id, deadline);
-  surface_layer_->SetFallbackSurfaceId(fallback_surface_id_);
+  surface_layer_->SetSurfaceId(surface_id, deadline);
 
   // TODO(lfg): Investigate if it's possible to propagate the information
   // about the child surface's opacity. https://crbug.com/629851.
   bool prevent_contents_opaque_changes = true;
   child_frame_compositor_->SetLayer(surface_layer_,
-                                    prevent_contents_opaque_changes);
+                                    prevent_contents_opaque_changes,
+                                    true /* is_surface_layer */);
 
   UpdateVisibility(true);
 
   surface_layer_->SetBounds(frame_size_in_dip);
-}
-
-void ChildFrameCompositingHelper::SetFallbackSurfaceId(
-    const viz::SurfaceId& surface_id,
-    const gfx::Size& frame_size_in_dip) {
-  if (fallback_surface_id_ == surface_id)
-    return;
-
-  fallback_surface_id_ = surface_id;
-
-  if (!surface_layer_) {
-    SetPrimarySurfaceId(surface_id, frame_size_in_dip,
-                        cc::DeadlinePolicy::UseDefaultDeadline());
-    return;
-  }
-
-  surface_layer_->SetFallbackSurfaceId(surface_id);
 }
 
 void ChildFrameCompositingHelper::UpdateVisibility(bool visible) {

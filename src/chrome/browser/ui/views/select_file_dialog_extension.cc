@@ -13,7 +13,7 @@
 #include "base/single_thread_task_runner.h"
 #include "base/threading/thread_task_runner_handle.h"
 #include "chrome/browser/app_mode/app_mode_utils.h"
-#include "chrome/browser/apps/app_window_registry_util.h"
+#include "chrome/browser/apps/platform_apps/app_window_registry_util.h"
 #include "chrome/browser/chromeos/file_manager/app_id.h"
 #include "chrome/browser/chromeos/file_manager/fileapi_util.h"
 #include "chrome/browser/chromeos/file_manager/select_file_dialog_util.h"
@@ -103,15 +103,8 @@ scoped_refptr<SelectFileDialogExtension> PendingDialog::Find(
 #if defined(OS_CHROMEOS)
 // Return the Chrome OS WebUI login WebContents, if applicable.
 content::WebContents* GetLoginWebContents() {
-  chromeos::LoginDisplayHost* const login_display_host =
-      chromeos::LoginDisplayHost::default_host();
-  if (!login_display_host)
-    return nullptr;
-  chromeos::WebUILoginView* const view =
-      login_display_host->GetWebUILoginView();
-  if (!view)
-    return nullptr;
-  return view->GetWebContents();
+  chromeos::LoginDisplayHost* host = chromeos::LoginDisplayHost::default_host();
+  return host ? host->GetOobeWebContents() : nullptr;
 }
 #endif
 
@@ -140,7 +133,6 @@ void FindRuntimeContext(gfx::NativeWindow owner_window,
   }
 
   if (app_window) {
-    DCHECK(!app_window->window_type_is_panel());
     *base_window = app_window->GetBaseWindow();
     *web_contents = app_window->web_contents();
   } else {
@@ -165,8 +157,6 @@ void FindRuntimeContext(gfx::NativeWindow owner_window,
   if (!*web_contents)
     *web_contents = GetLoginWebContents();
 #endif
-
-  CHECK(*web_contents);
 }
 
 }  // namespace
@@ -248,7 +238,7 @@ void SelectFileDialogExtension::ExtensionTerminated(
   if (profile_) {
     base::ThreadTaskRunnerHandle::Get()->PostTask(
         FROM_HERE,
-        base::Bind(&ExtensionService::ReloadExtension,
+        base::Bind(&extensions::ExtensionService::ReloadExtension,
                    base::Unretained(extensions::ExtensionSystem::Get(profile_)
                                         ->extension_service()),
                    extension_id));
@@ -300,6 +290,11 @@ content::RenderViewHost* SelectFileDialogExtension::GetRenderViewHost() {
   if (extension_dialog_.get())
     return extension_dialog_->host()->render_view_host();
   return NULL;
+}
+
+bool SelectFileDialogExtension::IsResizeable() const {
+  DCHECK(extension_dialog_.get());
+  return extension_dialog_->CanResize();
 }
 
 void SelectFileDialogExtension::NotifyListener() {
@@ -356,17 +351,17 @@ void SelectFileDialogExtension::SelectFileImpl(
   // The web contents to associate the dialog with.
   content::WebContents* web_contents = NULL;
   FindRuntimeContext(owner_window, &base_window, &web_contents);
-  CHECK(web_contents);
-  profile_ = Profile::FromBrowserContext(web_contents->GetBrowserContext());
-  CHECK(profile_);
+  if (web_contents)
+    profile_ = Profile::FromBrowserContext(web_contents->GetBrowserContext());
 
 #if defined(OS_CHROMEOS)
-  // Handle the case when |web_contents| is associated with Default profile.
-  if (chromeos::ProfileHelper::IsSigninProfile(profile_)) {
+  // Handle the cases where |web_contents| is not available or |web_contents| is
+  // associated with Default profile.
+  if (!web_contents || chromeos::ProfileHelper::IsSigninProfile(profile_))
     profile_ = ProfileManager::GetActiveUserProfile();
-    CHECK(profile_);
-  }
 #endif
+
+  DCHECK(profile_);
 
   // Check if we have another dialog opened for the contents. It's unlikely, but
   // possible. In such situation, discard this request.
@@ -440,13 +435,9 @@ void SelectFileDialogExtension::SelectFileImpl(
 
   ExtensionDialog* dialog = ExtensionDialog::Show(
       file_manager_url,
-      base_window ? base_window->GetNativeWindow() : owner_window,
-      profile_,
-      web_contents,
-      kFileManagerWidth,
-      kFileManagerHeight,
-      kFileManagerMinimumWidth,
-      kFileManagerMinimumHeight,
+      base_window ? base_window->GetNativeWindow() : owner_window, profile_,
+      web_contents, (owner_window != nullptr) /* is_modal */, kFileManagerWidth,
+      kFileManagerHeight, kFileManagerMinimumWidth, kFileManagerMinimumHeight,
       file_manager::util::GetSelectFileDialogTitle(type),
       this /* ExtensionDialog::Observer */);
   if (!dialog) {

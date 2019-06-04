@@ -49,12 +49,14 @@ namespace blink {
 class CORE_EXPORT WebDocumentLoaderImpl final : public DocumentLoader,
                                                 public WebDocumentLoader {
  public:
-  static WebDocumentLoaderImpl* Create(
-      LocalFrame*,
-      const ResourceRequest&,
-      const SubstituteData&,
-      ClientRedirectPolicy,
-      const base::UnguessableToken& devtools_navigation_token);
+  WebDocumentLoaderImpl(LocalFrame*,
+                        const ResourceRequest&,
+                        const SubstituteData&,
+                        ClientRedirectPolicy,
+                        const base::UnguessableToken& devtools_navigation_token,
+                        WebFrameLoadType load_type,
+                        WebNavigationType navigation_type,
+                        std::unique_ptr<WebNavigationParams> navigation_params);
 
   static WebDocumentLoaderImpl* FromDocumentLoader(DocumentLoader* loader) {
     return static_cast<WebDocumentLoaderImpl*>(loader);
@@ -72,37 +74,23 @@ class CORE_EXPORT WebDocumentLoaderImpl final : public DocumentLoader,
   bool ReplacesCurrentHistoryItem() const override;
   WebNavigationType GetNavigationType() const override;
   ExtraData* GetExtraData() const override;
-  void SetExtraData(ExtraData*) override;
-  void SetNavigationStartTime(base::TimeTicks) override;
-  void UpdateNavigation(base::TimeTicks redirect_start_time,
-                        base::TimeTicks redirect_end_time,
-                        base::TimeTicks fetch_start_time,
-                        bool has_redirect) override;
+  void SetExtraData(std::unique_ptr<ExtraData>) override;
   void SetSubresourceFilter(WebDocumentSubresourceFilter*) override;
   void SetServiceWorkerNetworkProvider(
       std::unique_ptr<WebServiceWorkerNetworkProvider>) override;
   WebServiceWorkerNetworkProvider* GetServiceWorkerNetworkProvider() override;
-  void SetSourceLocation(const WebSourceLocation&) override;
   void ResetSourceLocation() override;
-  void SetUserActivated() override;
   void BlockParser() override;
   void ResumeParser() override;
   bool IsArchive() const override;
   WebArchiveInfo GetArchiveInfo() const override;
-
-  static WebNavigationType ToWebNavigationType(NavigationType);
+  bool HadUserGesture() const override;
 
   void Trace(blink::Visitor*) override;
 
  private:
-  WebDocumentLoaderImpl(
-      LocalFrame*,
-      const ResourceRequest&,
-      const SubstituteData&,
-      ClientRedirectPolicy,
-      const base::UnguessableToken& devtools_navigation_token);
   ~WebDocumentLoaderImpl() override;
-  void DetachFromFrame() override;
+  void DetachFromFrame(bool flush_microtask_queue) override;
   String DebugName() const override { return "WebDocumentLoaderImpl"; }
 
   // Mutable because the const getters will magically sync these to the

@@ -11,34 +11,43 @@
 #include "ui/views/view.h"
 #include "ui/views/widget/widget.h"
 
-enum class OmniboxTint;
+class LocationBarView;
 
 // A class that wraps a Widget's content view to provide a custom results frame.
 class RoundedOmniboxResultsFrame : public views::View {
  public:
-  // How the Widget is aligned relative to the location bar.
-  static constexpr gfx::Insets kLocationBarAlignmentInsets = gfx::Insets(4);
-
-  RoundedOmniboxResultsFrame(views::View* contents, OmniboxTint tint);
+  RoundedOmniboxResultsFrame(views::View* contents,
+                             const LocationBarView* location_bar);
   ~RoundedOmniboxResultsFrame() override;
 
   // Hook to customize Widget initialization.
-  static void OnBeforeWidgetInit(views::Widget::InitParams* params);
+  static void OnBeforeWidgetInit(views::Widget::InitParams* params,
+                                 views::Widget* widget);
 
   // The height of the location bar view part of the omnibox popup.
   static int GetNonResultSectionHeight();
+
+  // How the Widget is aligned relative to the location bar.
+  static gfx::Insets GetLocationBarAlignmentInsets();
+
+  // Returns the blur region taken up by the Omnibox popup shadows.
+  static gfx::Insets GetShadowInsets();
 
   // views::View:
   const char* GetClassName() const override;
   void Layout() override;
   void AddedToWidget() override;
+#if !defined(USE_AURA)
+  void OnMouseMoved(const ui::MouseEvent& event) override;
+  void OnMouseEvent(ui::MouseEvent* event) override;
+#endif  // !USE_AURA
 
  private:
   std::unique_ptr<ui::LayerOwner> contents_mask_;
 
   views::View* top_background_ = nullptr;
-  views::View* contents_ = nullptr;
   views::View* contents_host_ = nullptr;
+  views::View* contents_;
 
   DISALLOW_COPY_AND_ASSIGN(RoundedOmniboxResultsFrame);
 };

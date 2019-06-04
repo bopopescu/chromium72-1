@@ -13,6 +13,7 @@
 #include "base/json/json_reader.h"
 #include "base/path_service.h"
 #include "base/strings/string_number_conversions.h"
+#include "build/build_config.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/client_certificate_delegate.h"
@@ -163,7 +164,7 @@ void HeadlessContentBrowserClient::RegisterOutOfProcessServices(
     OutOfProcessServiceMap* services) {
 #if BUILDFLAG(ENABLE_PRINTING) && !defined(CHROME_MULTIPLE_DLL_CHILD)
   (*services)[printing::mojom::kServiceName] =
-      base::ASCIIToUTF16("PDF Compositor Service");
+      base::BindRepeating(&base::ASCIIToUTF16, "PDF Compositor Service");
 #endif
 }
 
@@ -199,9 +200,18 @@ HeadlessContentBrowserClient::CreateQuotaPermissionContext() {
 void HeadlessContentBrowserClient::GetQuotaSettings(
     content::BrowserContext* context,
     content::StoragePartition* partition,
-    storage::OptionalQuotaSettingsCallback callback) {
-  storage::GetNominalDynamicSettings(
+    ::storage::OptionalQuotaSettingsCallback callback) {
+  ::storage::GetNominalDynamicSettings(
       partition->GetPath(), context->IsOffTheRecord(), std::move(callback));
+}
+
+content::GeneratedCodeCacheSettings
+HeadlessContentBrowserClient::GetGeneratedCodeCacheSettings(
+    content::BrowserContext* context) {
+  // If we pass 0 for size, disk_cache will pick a default size using the
+  // heuristics based on available disk size. These are implemented in
+  // disk_cache::PreferredCacheSize in net/disk_cache/cache_util.cc.
+  return content::GeneratedCodeCacheSettings(true, 0, context->GetPath());
 }
 
 #if defined(OS_POSIX) && !defined(OS_MACOSX)
@@ -276,6 +286,11 @@ void HeadlessContentBrowserClient::AppendExtraCommandLineSwitches(
   }
 }
 
+std::string HeadlessContentBrowserClient::GetAcceptLangs(
+    content::BrowserContext* context) {
+  return browser_->options()->accept_language;
+}
+
 void HeadlessContentBrowserClient::AllowCertificateError(
     content::WebContents* web_contents,
     int cert_error,
@@ -315,49 +330,22 @@ void HeadlessContentBrowserClient::ResourceDispatcherHostCreated() {
       resource_dispatcher_host_delegate_.get());
 }
 
-net::NetLog* HeadlessContentBrowserClient::GetNetLog() {
-  return browser_->net_log();
+bool HeadlessContentBrowserClient::ShouldEnableStrictSiteIsolation() {
+  // TODO(lukasza): https://crbug.com/869494: Instead of overriding
+  // ShouldEnableStrictSiteIsolation, //headless should inherit the default
+  // site-per-process setting from //content - this way tools (tests, but also
+  // production cases like screenshot or pdf generation) based on //headless
+  // will use a mode that is actually shipping in Chrome.
+  return browser_->options()->site_per_process;
 }
 
-bool HeadlessContentBrowserClient::AllowGetCookie(
-    const GURL& url,
-    const GURL& first_party,
-    const net::CookieList& cookie_list,
-    content::ResourceContext* context,
-    int render_process_id,
-    int render_frame_id) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::IO);
-  LockedPtr<HeadlessBrowserContextImpl> browser_context =
-      browser_->GetBrowserContextForRenderFrame(render_process_id,
-                                                render_frame_id);
-  if (!browser_context)
-    return false;
-  return browser_context->options()->allow_cookies();
-}
-
-bool HeadlessContentBrowserClient::AllowSetCookie(
-    const GURL& url,
-    const GURL& first_party,
-    const net::CanonicalCookie& cookie,
-    content::ResourceContext* context,
-    int render_process_id,
-    int render_frame_id,
-    const net::CookieOptions& options) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::IO);
-  LockedPtr<HeadlessBrowserContextImpl> browser_context =
-      browser_->GetBrowserContextForRenderFrame(render_process_id,
-                                                render_frame_id);
-  if (!browser_context)
-    return false;
-  return browser_context->options()->allow_cookies();
-}
-
-bool HeadlessContentBrowserClient::DoesSiteRequireDedicatedProcess(
-    content::BrowserContext* browser_context,
-    const GURL& effective_site_url) {
-  return HeadlessBrowserContextImpl::From(browser_context)
-      ->options()
-      ->site_per_process();
+::network::mojom::NetworkContextPtr
+HeadlessContentBrowserClient::CreateNetworkContext(
+    content::BrowserContext* context,
+    bool in_memory,
+    const base::FilePath& relative_partition_path) {
+  return HeadlessBrowserContextImpl::From(context)->CreateNetworkContext(
+      in_memory, relative_partition_path);
 }
 
 }  // namespace headless

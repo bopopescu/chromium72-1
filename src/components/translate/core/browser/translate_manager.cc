@@ -11,12 +11,14 @@
 #include "base/command_line.h"
 #include "base/metrics/field_trial.h"
 #include "base/metrics/histogram.h"
+#include "base/stl_util.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_split.h"
 #include "base/strings/stringprintf.h"
 #include "base/time/time.h"
 #include "components/language/core/browser/language_model.h"
 #include "components/language/core/common/language_experiments.h"
+#include "components/language/core/common/locale_util.h"
 #include "components/prefs/pref_service.h"
 #include "components/translate/core/browser/language_state.h"
 #include "components/translate/core/browser/page_translated_details.h"
@@ -122,7 +124,8 @@ void TranslateManager::InitiateTranslation(const std::string& page_lang) {
   if (!language_state_.page_needs_translation() ||
       language_state_.translation_pending() ||
       language_state_.translation_declined() ||
-      language_state_.IsPageTranslated()) {
+      language_state_.IsPageTranslated() ||
+      !base::FeatureList::IsEnabled(translate::kTranslateUI)) {
     return;
   }
 
@@ -131,7 +134,8 @@ void TranslateManager::InitiateTranslation(const std::string& page_lang) {
   if (net::NetworkChangeNotifier::IsOffline())
     return;
 
-  if (!ignore_missing_key_for_testing_ && !::google_apis::HasKeysConfigured()) {
+  if (!ignore_missing_key_for_testing_ &&
+      !::google_apis::HasAPIKeyConfigured()) {
     // Without an API key, translate won't work, so don't offer to translate in
     // the first place. Leave prefs::kOfferTranslateEnabled on, though, because
     // that settings syncs and we don't want to turn off translate everywhere
@@ -263,28 +267,103 @@ void TranslateManager::InitiateTranslation(const std::string& page_lang) {
     return;
   }
 
-  if (!should_offer_translation) {
+  // Show the omnibar icon if we've gotten this far.
+  language_state_.SetTranslateEnabled(true);
+  TranslateBrowserMetrics::ReportInitiationStatus(
+      TranslateBrowserMetrics::INITIATION_STATUS_SHOW_ICON);
+
+  // Will be true if we've decided to show the infobar/bubble UI to the user.
+  bool did_show_ui = false;
+
+  if (should_offer_translation) {
+    TranslateBrowserMetrics::ReportInitiationStatus(
+        TranslateBrowserMetrics::INITIATION_STATUS_SHOW_INFOBAR);
+
+    // If the source language matches the UI language, it means the translation
+    // prompt is being forced by an experiment. Report this so the count of how
+    // often it happens can be tracked to suppress the experiment as necessary.
+    if (language_code ==
+        TranslateDownloadManager::GetLanguageCode(
+            TranslateDownloadManager::GetInstance()->application_locale())) {
+      translate_prefs->ReportForceTriggerOnEnglishPages();
+    }
+
+    // Prompts the user if they want the page translated.
+    did_show_ui = translate_client_->ShowTranslateUI(
+        translate::TRANSLATE_STEP_BEFORE_TRANSLATE, language_code, target_lang,
+        TranslateErrors::NONE, false);
+
+  } else {
     TranslateBrowserMetrics::ReportInitiationStatus(
         TranslateBrowserMetrics::INITIATION_STATUS_ABORTED_BY_RANKER);
     RecordTranslateEvent(metrics::TranslateEventProto::DISABLED_BY_RANKER);
-    return;
   }
 
-  TranslateBrowserMetrics::ReportInitiationStatus(
-      TranslateBrowserMetrics::INITIATION_STATUS_SHOW_INFOBAR);
-
-  // If the source language matches the UI language, it means the translation
-  // prompt is being forced by an experiment. Report this so the count of how
-  // often it happens can be tracked to suppress the experiment as necessary.
-  if (language_code ==
-      TranslateDownloadManager::GetLanguageCode(
-          TranslateDownloadManager::GetInstance()->application_locale())) {
-    translate_prefs->ReportForceTriggerOnEnglishPages();
+  if (!did_show_ui) {
+    TranslateBrowserMetrics::ReportInitiationStatus(
+        TranslateBrowserMetrics::INITIATION_STATUS_SUPPRESS_INFOBAR);
   }
+}
 
-  // Prompts the user if they want the page translated.
-  translate_client_->ShowTranslateUI(translate::TRANSLATE_STEP_BEFORE_TRANSLATE,
-                                     language_code, target_lang,
+// static
+std::string TranslateManager::GetManualTargetLanguage(
+    const std::string& source_code,
+    const LanguageState& language_state,
+    translate::TranslatePrefs* prefs,
+    language::LanguageModel* language_model) {
+  if (language_state.IsPageTranslated()) {
+    return language_state.current_language();
+  } else {
+    const std::set<std::string>& skipped_languages =
+        GetSkippedLanguagesForExperiments(source_code, prefs);
+    return GetTargetLanguage(prefs, language_model, skipped_languages);
+  }
+}
+
+bool TranslateManager::CanManuallyTranslate() {
+  if (!base::FeatureList::IsEnabled(translate::kTranslateUI) ||
+      net::NetworkChangeNotifier::IsOffline() ||
+      (!ignore_missing_key_for_testing_ &&
+       !::google_apis::HasAPIKeyConfigured()))
+    return false;
+
+  // MHTML pages currently cannot be translated (crbug.com/217945).
+  if (translate_driver_->GetContentsMimeType() == "multipart/related" ||
+      !translate_client_->IsTranslatableURL(
+          translate_driver_->GetVisibleURL()) ||
+      !language_state_.page_needs_translation())
+    return false;
+
+  const std::string source_language = language_state_.original_language();
+  if (source_language.empty() ||
+      source_language == translate::kUnknownLanguageCode)
+    return false;
+
+  std::unique_ptr<TranslatePrefs> translate_prefs(
+      translate_client_->GetTranslatePrefs());
+  const std::string target_lang = GetManualTargetLanguage(
+      TranslateDownloadManager::GetLanguageCode(source_language),
+      language_state_, translate_prefs.get(), language_model_);
+  if (target_lang.empty())
+    return false;
+
+  return true;
+}
+
+void TranslateManager::InitiateManualTranslation() {
+  std::unique_ptr<TranslatePrefs> translate_prefs(
+      translate_client_->GetTranslatePrefs());
+  const std::string source_code = TranslateDownloadManager::GetLanguageCode(
+      language_state_.original_language());
+  const std::string target_lang = GetManualTargetLanguage(
+      source_code, language_state_, translate_prefs.get(), language_model_);
+
+  language_state_.SetTranslateEnabled(true);
+  const translate::TranslateStep step =
+      language_state_.IsPageTranslated()
+          ? translate::TRANSLATE_STEP_AFTER_TRANSLATE
+          : translate::TRANSLATE_STEP_BEFORE_TRANSLATE;
+  translate_client_->ShowTranslateUI(step, source_code, target_lang,
                                      TranslateErrors::NONE, false);
 }
 
@@ -352,7 +431,7 @@ void TranslateManager::TranslatePage(const std::string& original_source_lang,
       base::Bind(&TranslateManager::OnTranslateScriptFetchComplete,
                  GetWeakPtr(), source_lang, target_lang);
 
-  script->Request(callback);
+  script->Request(callback, translate_driver_->IsIncognito());
 }
 
 void TranslateManager::RevertTranslation() {
@@ -542,6 +621,15 @@ void TranslateManager::SetIgnoreMissingKeyForTesting(bool ignore) {
   ignore_missing_key_for_testing_ = ignore;
 }
 
+// static
+bool TranslateManager::IsAvailable(const TranslatePrefs* prefs) {
+  // These conditions mirror the conditions in InitiateTranslation.
+  return base::FeatureList::IsEnabled(translate::kTranslateUI) &&
+         (ignore_missing_key_for_testing_ ||
+          ::google_apis::HasAPIKeyConfigured()) &&
+         prefs->IsOfferTranslateEnabled();
+}
+
 void TranslateManager::InitTranslateEvent(const std::string& src_lang,
                                           const std::string& dst_lang,
                                           const TranslatePrefs& prefs) {
@@ -564,7 +652,7 @@ void TranslateManager::InitTranslateEvent(const std::string& src_lang,
 void TranslateManager::RecordTranslateEvent(int event_type) {
   translate_ranker_->RecordTranslateEvent(
       event_type, translate_driver_->GetVisibleURL(), translate_event_.get());
-  translate_client_->RecordTranslateEvent(*translate_event_.get());
+  translate_client_->RecordTranslateEvent(*translate_event_);
 }
 
 bool TranslateManager::ShouldOverrideDecision(int event_type) {
@@ -579,7 +667,6 @@ bool TranslateManager::ShouldSuppressBubbleUI(
   // the same language as the previous page. In the new UI,
   // continue offering translation after the user navigates
   // to another page.
-  language_state_.SetTranslateEnabled(true);
   if (!language_state_.HasLanguageChanged() &&
       !ShouldOverrideDecision(
           metrics::TranslateEventProto::MATCHES_PREVIOUS_LANGUAGE)) {
@@ -606,11 +693,31 @@ bool TranslateManager::ShouldSuppressBubbleUI(
 
 void TranslateManager::AddTargetLanguageToAcceptLanguages(
     const std::string& target_language_code) {
+  std::string target_language, tail;
+  // |target_language_code| should satisfy BCP47 and consist of a language code
+  // and an optional region code joined by an hyphen.
+  language::SplitIntoMainAndTail(target_language_code, &target_language, &tail);
+
+  std::function<bool(const std::string&)> is_redundant;
+  if (tail.empty()) {
+    is_redundant = [&target_language](const std::string& language) {
+      return language::ExtractBaseLanguage(language) == target_language;
+    };
+  } else {
+    is_redundant = [&target_language_code](const std::string& language) {
+      return language == target_language_code;
+    };
+  }
+
   auto prefs = translate_client_->GetTranslatePrefs();
   std::vector<std::string> languages;
   prefs->GetLanguageList(&languages);
-  if (std::find(languages.begin(), languages.end(), target_language_code) ==
-      languages.end()) {
+
+  // Only add the target language if it's not redundant with another already in
+  // the list, and if it's not an automatic target (such as when translation
+  // happens because of an hrefTranslate navigation).
+  if (std::none_of(languages.begin(), languages.end(), is_redundant) &&
+      language_state_.AutoTranslateTo() != target_language_code) {
     prefs->AddToLanguageList(target_language_code, /*force_blocked=*/false);
   }
 }

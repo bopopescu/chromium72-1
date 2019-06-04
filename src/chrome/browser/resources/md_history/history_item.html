@@ -11,7 +11,6 @@
 <link rel="import" href="chrome://resources/html/icon.html">
 <link rel="import" href="chrome://resources/html/util.html">
 <link rel="import" href="chrome://resources/polymer/v1_0/iron-icon/iron-icon.html">
-<link rel="import" href="chrome://resources/polymer/v1_0/paper-styles/shadow.html">
 
 <!-- Lazy loaded: paper-icon-button-light. -->
 
@@ -42,13 +41,18 @@
 
       :host([is-card-start]) #date-accessed {
         display: block;
+        font-size: 123%;
+        font-weight: 400;
+        letter-spacing: .25px;
+        padding-bottom: 4px;
+        padding-top: 8px;
       }
 
       #item-container {
-        -webkit-padding-start: 10px;
         align-items: center;
         display: flex;
         min-height: var(--item-height);
+        padding-inline-start: 10px;
         pointer-events: auto;
       }
 
@@ -75,7 +79,7 @@
       /* #checkbox[unresolved] styling is necessary since cr-checkbox is being
          lazy-loaded. */
       #checkbox[unresolved] {
-        border: 2px solid var(--secondary-text-color);
+        border: 2px solid var(--cr-secondary-text-color);
         border-radius: 2px;
         content: '';
         display: block;
@@ -84,24 +88,24 @@
       }
 
       #time-accessed {
-        -webkit-margin-start: 6px;
         color: var(--history-item-time-color);
+        margin-inline-start: 6px;
         min-width: 96px;
       }
 
       #domain {
-        -webkit-margin-start: 16px;
-        color: var(--secondary-text-color);
+        color: var(--cr-secondary-text-color);
         flex-shrink: 0;
+        margin-inline-start: 16px;
       }
 
       #menu-button-container {
-        -webkit-margin-end: 12px;
+        margin-inline-end: 12px;
       }
 
       #star-container {
-        -webkit-margin-end: 4px;
-        -webkit-margin-start: 12px;
+        margin-inline-end: 4px;
+        margin-inline-start: 12px;
         width: 32px;
       }
 
@@ -117,9 +121,9 @@
       }
 
       #time-gap-separator {
-        -webkit-border-start: 1px solid #888;
-        -webkit-margin-start: 77px;
+        border-inline-start: 1px solid #888;
         height: 15px;
+        margin-inline-start: 77px;
       }
 
       #background-clip {
@@ -139,7 +143,7 @@
       }
 
       #background {
-        @apply --shadow-elevation-2dp;
+        @apply --cr-card-elevation;
         background: #fff;
         bottom: 0;
         left: 0;
@@ -207,7 +211,7 @@
         <paper-icon-button-light id="menu-button-container"
             class="more-vert-button">
           <button id="menu-button"
-              title="$i18n{moreActionsButton}" on-click="onMenuButtonTap_">
+              title="$i18n{actionMenuDescription}" on-click="onMenuButtonTap_">
             <div></div>
             <div></div>
             <div></div>

@@ -50,18 +50,17 @@ class CORE_EXPORT WorkerNavigator final
 
  public:
   static WorkerNavigator* Create(const String& user_agent) {
-    return new WorkerNavigator(user_agent);
+    return MakeGarbageCollected<WorkerNavigator>(user_agent);
   }
+
+  explicit WorkerNavigator(const String&);
   ~WorkerNavigator() override;
 
   String userAgent() const override;
 
   void Trace(blink::Visitor*) override;
-  void TraceWrappers(ScriptWrappableVisitor*) const override;
 
  private:
-  explicit WorkerNavigator(const String&);
-
   String user_agent_;
 };
 

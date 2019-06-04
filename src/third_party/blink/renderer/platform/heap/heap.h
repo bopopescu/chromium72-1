@@ -31,6 +31,7 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_PLATFORM_HEAP_HEAP_H_
 #define THIRD_PARTY_BLINK_RENDERER_PLATFORM_HEAP_HEAP_H_
 
+#include <limits>
 #include <memory>
 
 #include "base/macros.h"
@@ -147,61 +148,6 @@ class ObjectAliveTrait<T, true> {
   }
 };
 
-// Stats for the heap.
-class ThreadHeapStats {
-  USING_FAST_MALLOC(ThreadHeapStats);
-
- public:
-  ThreadHeapStats();
-  void SetMarkedObjectSizeAtLastCompleteSweep(size_t size) {
-    marked_object_size_at_last_complete_sweep_ = size;
-  }
-  size_t MarkedObjectSizeAtLastCompleteSweep() {
-    return marked_object_size_at_last_complete_sweep_;
-  }
-  void IncreaseAllocatedObjectSize(size_t delta);
-  void DecreaseAllocatedObjectSize(size_t delta);
-  size_t AllocatedObjectSize() { return allocated_object_size_; }
-  void IncreaseMarkedObjectSize(size_t delta);
-  size_t MarkedObjectSize() const { return marked_object_size_; }
-  void IncreaseAllocatedSpace(size_t delta);
-  void DecreaseAllocatedSpace(size_t delta);
-  size_t AllocatedSpace() { return allocated_space_; }
-  size_t ObjectSizeAtLastGC() const { return object_size_at_last_gc_; }
-  double LiveObjectRateSinceLastGC() const;
-  void IncreaseWrapperCount(size_t delta) { wrapper_count_ += delta; }
-  void DecreaseWrapperCount(size_t delta) { wrapper_count_ -= delta; }
-  size_t WrapperCount() { return AcquireLoad(&wrapper_count_); }
-  size_t WrapperCountAtLastGC() { return wrapper_count_at_last_gc_; }
-  void IncreaseCollectedWrapperCount(size_t delta) {
-    collected_wrapper_count_ += delta;
-  }
-  size_t CollectedWrapperCount() { return collected_wrapper_count_; }
-  size_t PartitionAllocSizeAtLastGC() {
-    return partition_alloc_size_at_last_gc_;
-  }
-  void SetEstimatedMarkingTimePerByte(double estimated_marking_time_per_byte) {
-    estimated_marking_time_per_byte_ = estimated_marking_time_per_byte;
-  }
-  double EstimatedMarkingTimePerByte() const {
-    return estimated_marking_time_per_byte_;
-  }
-  double EstimatedMarkingTime();
-  void Reset();
-
- private:
-  size_t allocated_space_;
-  size_t allocated_object_size_;
-  size_t object_size_at_last_gc_;
-  size_t marked_object_size_;
-  size_t marked_object_size_at_last_complete_sweep_;
-  size_t wrapper_count_;
-  size_t wrapper_count_at_last_gc_;
-  size_t collected_wrapper_count_;
-  size_t partition_alloc_size_at_last_gc_;
-  double estimated_marking_time_per_byte_;
-};
-
 class PLATFORM_EXPORT ThreadHeap {
  public:
   explicit ThreadHeap(ThreadState*);
@@ -245,8 +191,6 @@ class PLATFORM_EXPORT ThreadHeap {
 
   StackFrameDepth& GetStackFrameDepth() { return stack_frame_depth_; }
 
-  ThreadHeapStats& HeapStats() { return stats_; }
-
   MarkingWorklist* GetMarkingWorklist() const {
     return marking_worklist_.get();
   }
@@ -258,11 +202,6 @@ class PLATFORM_EXPORT ThreadHeap {
   WeakCallbackWorklist* GetWeakCallbackWorklist() const {
     return weak_callback_worklist_.get();
   }
-
-  void VisitPersistentRoots(Visitor*);
-  void VisitStackRoots(MarkingVisitor*);
-  void EnterSafePoint(ThreadState*);
-  void LeaveSafePoint();
 
   // Is the finalizable GC object still alive, but slated for lazy sweeping?
   // If a lazy sweep is in progress, returns true if the object was found
@@ -318,7 +257,7 @@ class PLATFORM_EXPORT ThreadHeap {
   //
   // For Blink, |HeapLinkedHashSet<>| is currently the only abstraction which
   // relies on this feature.
-  void RegisterMovingObjectCallback(MovableReference,
+  void RegisterMovingObjectCallback(MovableReference*,
                                     MovingObjectCallback,
                                     void* callback_data);
 
@@ -336,17 +275,19 @@ class PLATFORM_EXPORT ThreadHeap {
   Address AllocateOnArenaIndex(ThreadState*,
                                size_t,
                                int arena_index,
-                               size_t gc_info_index,
+                               uint32_t gc_info_index,
                                const char* type_name);
   template <typename T>
   static Address Allocate(size_t, bool eagerly_sweep = false);
   template <typename T>
   static Address Reallocate(void* previous, size_t);
 
-  void ProcessMarkingStack(Visitor*);
   void WeakProcessing(Visitor*);
-  void MarkNotFullyConstructedObjects(Visitor*);
-  bool AdvanceMarkingStackProcessing(Visitor*, double deadline_seconds);
+
+  // Marks not fully constructed objects.
+  void MarkNotFullyConstructedObjects(MarkingVisitor*);
+  // Marks the transitive closure including ephemerons.
+  bool AdvanceMarking(MarkingVisitor*, TimeTicks deadline);
   void VerifyMarking();
 
   // Conservatively checks whether an address is a pointer in any of the
@@ -360,7 +301,7 @@ class PLATFORM_EXPORT ThreadHeap {
 
   size_t ObjectPayloadSizeForTesting();
 
-  AddressCache* address_cache() { return address_cache_.get(); }
+  AddressCache* address_cache() const { return address_cache_.get(); }
 
   PagePool* GetFreePagePool() { return free_page_pool_.get(); }
 
@@ -368,9 +309,6 @@ class PLATFORM_EXPORT ThreadHeap {
   // provide an efficient mapping from arbitrary addresses to the containing
   // heap-page if one exists.
   BasePage* LookupPageForAddress(Address);
-
-  static void ReportMemoryUsageHistogram();
-  static void ReportMemoryUsageForTracing();
 
   HeapCompact* Compaction();
 
@@ -409,9 +347,9 @@ class PLATFORM_EXPORT ThreadHeap {
   //   (*) More than 33% of the same type of vectors have been promptly
   //       freed since the last GC.
   //
-  BaseArena* VectorBackingArena(size_t gc_info_index) {
+  BaseArena* VectorBackingArena(uint32_t gc_info_index) {
     DCHECK(thread_state_->CheckThread());
-    size_t entry_index = gc_info_index & kLikelyToBePromptlyFreedArrayMask;
+    uint32_t entry_index = gc_info_index & kLikelyToBePromptlyFreedArrayMask;
     --likely_to_be_promptly_freed_[entry_index];
     int arena_index = vector_backing_arena_index_;
     // If likely_to_be_promptly_freed_[entryIndex] > 0, that means that
@@ -426,14 +364,14 @@ class PLATFORM_EXPORT ThreadHeap {
     DCHECK(IsVectorArenaIndex(arena_index));
     return arenas_[arena_index];
   }
-  BaseArena* ExpandedVectorBackingArena(size_t gc_info_index);
+  BaseArena* ExpandedVectorBackingArena(uint32_t gc_info_index);
   static bool IsVectorArenaIndex(int arena_index) {
     return BlinkGC::kVector1ArenaIndex <= arena_index &&
            arena_index <= BlinkGC::kVector4ArenaIndex;
   }
   static bool IsNormalArenaIndex(int);
   void AllocationPointAdjusted(int arena_index);
-  void PromptlyFreed(size_t gc_info_index);
+  void PromptlyFreed(uint32_t gc_info_index);
   void ClearArenaAges();
   int ArenaIndexOfVectorArenaLeastRecentlyExpanded(int begin_arena_index,
                                                    int end_arena_index);
@@ -446,7 +384,7 @@ class PLATFORM_EXPORT ThreadHeap {
 
   void Compact();
 
-  bool AdvanceLazySweep(double deadline_seconds);
+  bool AdvanceLazySweep(TimeTicks deadline);
 
   void PrepareForSweep();
   void RemoveAllPages();
@@ -458,6 +396,12 @@ class PLATFORM_EXPORT ThreadHeap {
   ThreadHeapStatsCollector* stats_collector() const {
     return heap_stats_collector_.get();
   }
+
+  void IncreaseAllocatedObjectSize(size_t);
+  void DecreaseAllocatedObjectSize(size_t);
+  void IncreaseMarkedObjectSize(size_t);
+  void IncreaseAllocatedSpace(size_t);
+  void DecreaseAllocatedSpace(size_t);
 
 #if defined(ADDRESS_SANITIZER)
   void PoisonEagerArena();
@@ -476,9 +420,6 @@ class PLATFORM_EXPORT ThreadHeap {
 #endif
 
  private:
-  // Reset counters that track live and allocated-since-last-GC sizes.
-  void ResetHeapCounters();
-
   static int ArenaIndexForObjectSize(size_t);
 
   void CommitCallbackStacks();
@@ -491,7 +432,6 @@ class PLATFORM_EXPORT ThreadHeap {
   void WriteBarrier(void* value);
 
   ThreadState* thread_state_;
-  ThreadHeapStats stats_;
   std::unique_ptr<ThreadHeapStatsCollector> heap_stats_collector_;
   std::unique_ptr<RegionTree> region_tree_;
   std::unique_ptr<AddressCache> address_cache_;
@@ -584,6 +524,55 @@ class GarbageCollected {
   DISALLOW_COPY_AND_ASSIGN(GarbageCollected);
 };
 
+template <typename T, bool is_mixin = IsGarbageCollectedMixin<T>::value>
+class ConstructTrait {
+ public:
+};
+
+template <typename T>
+class ConstructTrait<T, false> {
+ public:
+  template <typename... Args>
+  static T* Construct(Args&&... args) {
+    void* memory =
+        T::AllocateObject(sizeof(T), IsEagerlyFinalizedType<T>::value);
+    HeapObjectHeader* header = HeapObjectHeader::FromPayload(memory);
+    header->MarkIsInConstruction();
+    // Placement new as regular operator new() is deleted.
+    T* object = ::new (memory) T(std::forward<Args>(args)...);
+    header->UnmarkIsInConstruction();
+    return object;
+  }
+};
+
+template <typename T>
+class ConstructTrait<T, true> {
+ public:
+  template <typename... Args>
+  NO_SANITIZE_UNRELATED_CAST static T* Construct(Args&&... args) {
+    void* memory =
+        T::AllocateObject(sizeof(T), IsEagerlyFinalizedType<T>::value);
+    HeapObjectHeader* header = HeapObjectHeader::FromPayload(memory);
+    header->MarkIsInConstruction();
+    ThreadState* state =
+        ThreadStateFor<ThreadingTrait<T>::kAffinity>::GetState();
+    state->EnterGCForbiddenScopeIfNeeded(
+        &(reinterpret_cast<T*>(memory)->mixin_constructor_marker_));
+    // Placement new as regular operator new() is deleted.
+    T* object = ::new (memory) T(std::forward<Args>(args)...);
+    header->UnmarkIsInConstruction();
+    return object;
+  }
+};
+
+// Constructs an instance of T, which is a garbage collected type.
+template <typename T, typename... Args>
+T* MakeGarbageCollected(Args&&... args) {
+  static_assert(WTF::IsGarbageCollectedType<T>::value,
+                "T needs to be a garbage collected object");
+  return ConstructTrait<T>::Construct(std::forward<Args>(args)...);
+}
+
 // Assigning class types to their arenas.
 //
 // We use sized arenas for most 'normal' objects to improve memory locality.
@@ -659,7 +648,7 @@ class VerifyEagerFinalization {
 inline Address ThreadHeap::AllocateOnArenaIndex(ThreadState* state,
                                                 size_t size,
                                                 int arena_index,
-                                                size_t gc_info_index,
+                                                uint32_t gc_info_index,
                                                 const char* type_name) {
   DCHECK(state->IsAllocationAllowed());
   DCHECK_NE(arena_index, BlinkGC::kLargeObjectArenaIndex);
@@ -708,7 +697,7 @@ Address ThreadHeap::Reallocate(void* previous, size_t size) {
       arena_index = ArenaIndexForObjectSize(size);
   }
 
-  size_t gc_info_index = GCInfoTrait<T>::Index();
+  uint32_t gc_info_index = GCInfoTrait<T>::Index();
   // TODO(haraken): We don't support reallocate() for finalizable objects.
   DCHECK(!GCInfoTable::Get()
               .GCInfoFromIndex(previous_header->GcInfoIndex())
@@ -734,11 +723,17 @@ Address ThreadHeap::Reallocate(void* previous, size_t size) {
 template <typename T>
 void Visitor::HandleWeakCell(Visitor* self, void* object) {
   T** cell = reinterpret_cast<T**>(object);
-  // '-1' means deleted value. This can happen when weak fields are deleted
-  // while incremental marking is running.
-  if (*cell && (*cell == reinterpret_cast<T*>(-1) ||
-                !ObjectAliveTrait<T>::IsHeapObjectAlive(*cell)))
-    *cell = nullptr;
+  T* contents = *cell;
+  if (contents) {
+    if (contents == reinterpret_cast<T*>(-1)) {
+      // '-1' means deleted value. This can happen when weak fields are deleted
+      // while incremental marking is running. Deleted values need to be
+      // preserved to avoid reviving objects in containers.
+      return;
+    }
+    if (!ObjectAliveTrait<T>::IsHeapObjectAlive(contents))
+      *cell = nullptr;
+  }
 }
 
 }  // namespace blink

@@ -38,9 +38,6 @@ class WebContentsViewAndroid : public WebContentsView,
 
   void SetContentUiEventHandler(std::unique_ptr<ContentUiEventHandler> handler);
 
-  // Sets the object that show/hide popup view for <select> tag.
-  void SetSelectPopup(std::unique_ptr<SelectPopup> select_popup);
-
   void set_synchronous_compositor_client(SynchronousCompositorClient* client) {
     synchronous_compositor_client_ = client;
   }
@@ -76,11 +73,13 @@ class WebContentsViewAndroid : public WebContentsView,
   RenderWidgetHostViewBase* CreateViewForWidget(
       RenderWidgetHost* render_widget_host,
       bool is_guest_view_hack) override;
-  RenderWidgetHostViewBase* CreateViewForPopupWidget(
+  RenderWidgetHostViewBase* CreateViewForChildWidget(
       RenderWidgetHost* render_widget_host) override;
   void SetPageTitle(const base::string16& title) override;
   void RenderViewCreated(RenderViewHost* host) override;
-  void RenderViewSwappedIn(RenderViewHost* host) override;
+  void RenderViewReady() override;
+  void RenderViewHostChanged(RenderViewHost* old_host,
+                             RenderViewHost* new_host) override;
   void SetOverscrollControllerEnabled(bool enabled) override;
 
   // Backend implementation of RenderViewHostDelegateView.
@@ -108,7 +107,7 @@ class WebContentsViewAndroid : public WebContentsView,
   void TakeFocus(bool reverse) override;
   int GetTopControlsHeight() const override;
   int GetBottomControlsHeight() const override;
-  bool DoBrowserControlsShrinkBlinkSize() const override;
+  bool DoBrowserControlsShrinkRendererSize() const override;
 
   // ui::EventHandlerAndroid implementation.
   bool OnTouchEvent(const ui::MotionEventAndroid& event) override;
@@ -122,10 +121,10 @@ class WebContentsViewAndroid : public WebContentsView,
   void OnSizeChanged() override;
   void OnPhysicalBackingSizeChanged() override;
 
+  void SetFocus(bool focused);
   void set_device_orientation(int orientation) {
     device_orientation_ = orientation;
   }
-  int device_orientation() { return device_orientation_; }
 
  private:
   void OnDragEntered(const std::vector<DropData::Metadata>& metadata,
@@ -139,6 +138,8 @@ class WebContentsViewAndroid : public WebContentsView,
                      const gfx::PointF& screen_location);
   void OnDragEnded();
   void OnSystemDragEnded();
+
+  SelectPopup* GetSelectPopup();
 
   // The WebContents whose contents we display.
   WebContentsImpl* web_contents_;

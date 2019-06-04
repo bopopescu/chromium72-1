@@ -7,9 +7,10 @@
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/public/platform/modules/remoteplayback/web_remote_playback_state.h"
-#include "third_party/blink/renderer/bindings/core/v8/exception_state.h"
+#include "third_party/blink/renderer/bindings/core/v8/script_function.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_binding_for_testing.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_remote_playback_availability_callback.h"
+#include "third_party/blink/renderer/core/dom/events/event_listener.h"
 #include "third_party/blink/renderer/core/dom/user_gesture_indicator.h"
 #include "third_party/blink/renderer/core/frame/local_frame.h"
 #include "third_party/blink/renderer/core/html/media/html_media_element.h"
@@ -17,6 +18,7 @@
 #include "third_party/blink/renderer/core/testing/dummy_page_holder.h"
 #include "third_party/blink/renderer/modules/presentation/presentation_controller.h"
 #include "third_party/blink/renderer/modules/remoteplayback/html_media_element_remote_playback.h"
+#include "third_party/blink/renderer/platform/bindings/exception_state.h"
 #include "third_party/blink/renderer/platform/testing/runtime_enabled_features_test_helpers.h"
 #include "third_party/blink/renderer/platform/testing/unit_test_helpers.h"
 
@@ -45,7 +47,7 @@ class MockEventListenerForRemotePlayback : public EventListener {
     return this == &other;
   }
 
-  MOCK_METHOD2(handleEvent, void(ExecutionContext* executionContext, Event*));
+  MOCK_METHOD2(Invoke, void(ExecutionContext* executionContext, Event*));
 };
 
 class MockPresentationController final : public PresentationController {
@@ -95,8 +97,9 @@ TEST_F(RemotePlaybackTest, PromptCancelledRejectsWithNotAllowedError) {
   EXPECT_CALL(*resolve, Call(testing::_)).Times(0);
   EXPECT_CALL(*reject, Call(testing::_)).Times(1);
 
-  std::unique_ptr<UserGestureIndicator> indicator = Frame::NotifyUserActivation(
-      &page_holder->GetFrame(), UserGestureToken::kNewGesture);
+  std::unique_ptr<UserGestureIndicator> indicator =
+      LocalFrame::NotifyUserActivation(&page_holder->GetFrame(),
+                                       UserGestureToken::kNewGesture);
   remote_playback->prompt(scope.GetScriptState())
       .Then(resolve->Bind(), reject->Bind());
   CancelPrompt(remote_playback);
@@ -128,8 +131,9 @@ TEST_F(RemotePlaybackTest, PromptConnectedRejectsWhenCancelled) {
 
   SetState(remote_playback, WebRemotePlaybackState::kConnected);
 
-  std::unique_ptr<UserGestureIndicator> indicator = Frame::NotifyUserActivation(
-      &page_holder->GetFrame(), UserGestureToken::kNewGesture);
+  std::unique_ptr<UserGestureIndicator> indicator =
+      LocalFrame::NotifyUserActivation(&page_holder->GetFrame(),
+                                       UserGestureToken::kNewGesture);
   remote_playback->prompt(scope.GetScriptState())
       .Then(resolve->Bind(), reject->Bind());
   CancelPrompt(remote_playback);
@@ -161,8 +165,9 @@ TEST_F(RemotePlaybackTest, PromptConnectedResolvesWhenDisconnected) {
 
   SetState(remote_playback, WebRemotePlaybackState::kConnected);
 
-  std::unique_ptr<UserGestureIndicator> indicator = Frame::NotifyUserActivation(
-      &page_holder->GetFrame(), UserGestureToken::kNewGesture);
+  std::unique_ptr<UserGestureIndicator> indicator =
+      LocalFrame::NotifyUserActivation(&page_holder->GetFrame(),
+                                       UserGestureToken::kNewGesture);
   remote_playback->prompt(scope.GetScriptState())
       .Then(resolve->Bind(), reject->Bind());
 
@@ -194,17 +199,16 @@ TEST_F(RemotePlaybackTest, StateChangeEvents) {
   auto* disconnect_handler =
       new testing::StrictMock<MockEventListenerForRemotePlayback>();
 
-  remote_playback->addEventListener(EventTypeNames::connecting,
+  remote_playback->addEventListener(event_type_names::kConnecting,
                                     connecting_handler);
-  remote_playback->addEventListener(EventTypeNames::connect, connect_handler);
-  remote_playback->addEventListener(EventTypeNames::disconnect,
+  remote_playback->addEventListener(event_type_names::kConnect,
+                                    connect_handler);
+  remote_playback->addEventListener(event_type_names::kDisconnect,
                                     disconnect_handler);
 
-  EXPECT_CALL(*connecting_handler, handleEvent(testing::_, testing::_))
-      .Times(1);
-  EXPECT_CALL(*connect_handler, handleEvent(testing::_, testing::_)).Times(1);
-  EXPECT_CALL(*disconnect_handler, handleEvent(testing::_, testing::_))
-      .Times(1);
+  EXPECT_CALL(*connecting_handler, Invoke(testing::_, testing::_)).Times(1);
+  EXPECT_CALL(*connect_handler, Invoke(testing::_, testing::_)).Times(1);
+  EXPECT_CALL(*disconnect_handler, Invoke(testing::_, testing::_)).Times(1);
 
   SetState(remote_playback, WebRemotePlaybackState::kConnecting);
   SetState(remote_playback, WebRemotePlaybackState::kConnecting);
@@ -237,12 +241,13 @@ TEST_F(RemotePlaybackTest,
   EXPECT_CALL(*resolve, Call(testing::_)).Times(0);
   EXPECT_CALL(*reject, Call(testing::_)).Times(1);
 
-  std::unique_ptr<UserGestureIndicator> indicator = Frame::NotifyUserActivation(
-      &page_holder->GetFrame(), UserGestureToken::kNewGesture);
+  std::unique_ptr<UserGestureIndicator> indicator =
+      LocalFrame::NotifyUserActivation(&page_holder->GetFrame(),
+                                       UserGestureToken::kNewGesture);
   remote_playback->prompt(scope.GetScriptState())
       .Then(resolve->Bind(), reject->Bind());
   HTMLMediaElementRemotePlayback::SetBooleanAttribute(
-      HTMLNames::disableremoteplaybackAttr, *element, true);
+      html_names::kDisableremoteplaybackAttr, *element, true);
 
   // Runs pending promises.
   v8::MicrotasksScope::PerformCheckpoint(scope.GetIsolate());
@@ -283,7 +288,7 @@ TEST_F(RemotePlaybackTest, DisableRemotePlaybackCancelsAvailabilityCallbacks) {
       .Then(resolve->Bind(), reject->Bind());
 
   HTMLMediaElementRemotePlayback::SetBooleanAttribute(
-      HTMLNames::disableremoteplaybackAttr, *element, true);
+      html_names::kDisableremoteplaybackAttr, *element, true);
 
   // Runs pending promises.
   v8::MicrotasksScope::PerformCheckpoint(scope.GetIsolate());
@@ -312,8 +317,9 @@ TEST_F(RemotePlaybackTest, PromptThrowsWhenBackendDisabled) {
   EXPECT_CALL(*resolve, Call(testing::_)).Times(0);
   EXPECT_CALL(*reject, Call(testing::_)).Times(1);
 
-  std::unique_ptr<UserGestureIndicator> indicator = Frame::NotifyUserActivation(
-      &page_holder->GetFrame(), UserGestureToken::kNewGesture);
+  std::unique_ptr<UserGestureIndicator> indicator =
+      LocalFrame::NotifyUserActivation(&page_holder->GetFrame(),
+                                       UserGestureToken::kNewGesture);
   remote_playback->prompt(scope.GetScriptState())
       .Then(resolve->Bind(), reject->Bind());
 
@@ -379,7 +385,7 @@ TEST_F(RemotePlaybackTest, IsListening) {
 
   LocalFrame& frame = page_holder->GetFrame();
   MockPresentationController* mock_controller =
-      new MockPresentationController(frame);
+      MakeGarbageCollected<MockPresentationController>(frame);
   Supplement<LocalFrame>::ProvideTo(
       frame, static_cast<PresentationController*>(mock_controller));
 

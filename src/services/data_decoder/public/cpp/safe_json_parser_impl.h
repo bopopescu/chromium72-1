@@ -11,7 +11,9 @@
 #include "base/callback.h"
 #include "base/macros.h"
 #include "base/memory/ref_counted.h"
+#include "base/optional.h"
 #include "base/threading/thread_checker.h"
+#include "base/token.h"
 #include "base/values.h"
 #include "services/data_decoder/public/cpp/safe_json_parser.h"
 #include "services/data_decoder/public/mojom/json_parser.mojom.h"
@@ -27,7 +29,8 @@ class SafeJsonParserImpl : public SafeJsonParser {
   SafeJsonParserImpl(service_manager::Connector* connector,
                      const std::string& unsafe_json,
                      const SuccessCallback& success_callback,
-                     const ErrorCallback& error_callback);
+                     const ErrorCallback& error_callback,
+                     const base::Optional<base::Token>& batch_id);
 
  private:
   ~SafeJsonParserImpl() override;

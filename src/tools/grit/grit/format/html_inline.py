@@ -28,6 +28,9 @@ from grit.format import minifier
 mimetypes.init([])
 mimetypes.add_type('image/svg+xml', '.svg')
 
+# webm video type is not always available if mimetype package is outdated.
+mimetypes.add_type('video/webm', '.webm')
+
 DIST_DEFAULT = 'chromium'
 DIST_ENV_VAR = 'CHROMIUM_BUILD'
 DIST_SUBSTR = '%DISTRIBUTION%'
@@ -367,6 +370,7 @@ def DoInline(
     if names_only:
       inlined_files.update(GetResourceFilenames(
           filepath,
+          grd_node,
           allow_external_script,
           rewrite_function,
           filename_expansion_function=filename_expansion_function))
@@ -433,18 +437,18 @@ def DoInline(
 
     return pattern % InlineCSSText(text, filepath)
 
-
   def InlineCSSImages(text, filepath=input_filepath):
     """Helper function that inlines external images in CSS backgrounds."""
     # Replace contents of url() for css attributes: content, background,
     # or *-image.
-    return re.sub('(content|background|[\w-]*-image):[^;]*' +
-                  '(url\((?P<quote1>"|\'|)[^"\'()]*(?P=quote1)\)|' +
-                      'image-set\(' +
-                          '([ ]*url\((?P<quote2>"|\'|)[^"\'()]*(?P=quote2)\)' +
-                              '[ ]*[0-9.]*x[ ]*(,[ ]*)?)+\))',
-                  lambda m: InlineCSSUrls(m, filepath),
-                  text)
+    property_re = '(content|background|[\w-]*-image):[^;]*'
+    url_value_re = 'url\((?!\[\[|{{)(?P<quote1>"|\'|)[^"\'()]*(?P=quote1)\)'
+    image_set_value_re = 'image-set\(([ ]*url\((?!\[\[|{{)' + \
+        '(?P<quote2>"|\'|)[^"\'()]*(?P=quote2)\)' + \
+        '[ ]*[0-9.]*x[ ]*(,[ ]*)?)+\)'
+    value_re = '(%s|%s)' % (url_value_re, image_set_value_re)
+    css_re = property_re + value_re
+    return re.sub(css_re, lambda m: InlineCSSUrls(m, filepath), text)
 
   def InlineCSSUrls(src_match, filepath=input_filepath):
     """Helper function that inlines each url on a CSS image rule match."""
@@ -555,6 +559,7 @@ def InlineToFile(input_filename, output_filename, grd_node):
 
 
 def GetResourceFilenames(filename,
+                         grd_node,
                          allow_external_script=False,
                          rewrite_function=None,
                          filename_expansion_function=None):
@@ -562,7 +567,7 @@ def GetResourceFilenames(filename,
   try:
     return DoInline(
         filename,
-        None,
+        grd_node,
         names_only=True,
         preprocess_only=False,
         allow_external_script=allow_external_script,

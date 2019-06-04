@@ -1,4 +1,0 @@
-[document web] enabled focusable focused<newline>
-++[document web] name='graphics-document' enabled<newline>
-++[panel] name='graphics-object' enabled<newline>
-++[image] name='graphics-symbol' enabled<newline>

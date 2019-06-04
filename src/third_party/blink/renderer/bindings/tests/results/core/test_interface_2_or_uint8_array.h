@@ -8,12 +8,11 @@
 // DO NOT MODIFY!
 
 // clang-format off
-#ifndef TestInterface2OrUint8Array_h
-#define TestInterface2OrUint8Array_h
+#ifndef THIRD_PARTY_BLINK_RENDERER_BINDINGS_TESTS_RESULTS_CORE_TEST_INTERFACE_2_OR_UINT_8_ARRAY_H_
+#define THIRD_PARTY_BLINK_RENDERER_BINDINGS_TESTS_RESULTS_CORE_TEST_INTERFACE_2_OR_UINT_8_ARRAY_H_
 
 #include "base/optional.h"
 #include "third_party/blink/renderer/bindings/core/v8/dictionary.h"
-#include "third_party/blink/renderer/bindings/core/v8/exception_state.h"
 #include "third_party/blink/renderer/bindings/core/v8/native_value_traits.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_array_buffer_view.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_binding_for_core.h"
@@ -21,6 +20,7 @@
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/typed_arrays/array_buffer_view_helpers.h"
 #include "third_party/blink/renderer/core/typed_arrays/flexible_array_buffer_view.h"
+#include "third_party/blink/renderer/platform/bindings/exception_state.h"
 #include "third_party/blink/renderer/platform/heap/handle.h"
 
 namespace blink {
@@ -28,7 +28,7 @@ namespace blink {
 class TestInterface2;
 
 class CORE_EXPORT TestInterface2OrUint8Array final {
-  DISALLOW_NEW_EXCEPT_PLACEMENT_NEW();
+  DISALLOW_NEW();
  public:
   TestInterface2OrUint8Array();
   bool IsNull() const { return type_ == SpecificType::kNone; }
@@ -98,4 +98,4 @@ struct V8TypeOf<TestInterface2OrUint8Array> {
 // See https://codereview.chromium.org/1118993002/#msg5 for more details.
 WTF_ALLOW_MOVE_AND_INIT_WITH_MEM_FUNCTIONS(blink::TestInterface2OrUint8Array);
 
-#endif  // TestInterface2OrUint8Array_h
+#endif  // THIRD_PARTY_BLINK_RENDERER_BINDINGS_TESTS_RESULTS_CORE_TEST_INTERFACE_2_OR_UINT_8_ARRAY_H_

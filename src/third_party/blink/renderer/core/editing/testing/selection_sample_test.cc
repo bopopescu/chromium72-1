@@ -5,6 +5,7 @@
 #include "third_party/blink/renderer/core/editing/testing/selection_sample.h"
 
 #include "third_party/blink/renderer/core/dom/processing_instruction.h"
+#include "third_party/blink/renderer/core/dom/text.h"
 #include "third_party/blink/renderer/core/editing/selection_template.h"
 #include "third_party/blink/renderer/core/editing/testing/editing_test_base.h"
 
@@ -240,7 +241,7 @@ TEST_F(SelectionSampleTest, SerializeVoidElement) {
 }
 
 TEST_F(SelectionSampleTest, SerializeVoidElementBR) {
-  Element* const br = GetDocument().CreateRawElement(HTMLNames::brTag);
+  Element* const br = GetDocument().CreateRawElement(html_names::kBrTag);
   br->appendChild(GetDocument().createTextNode("abc"));
   GetDocument().body()->appendChild(br);
   EXPECT_EQ(

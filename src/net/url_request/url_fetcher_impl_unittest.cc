@@ -25,7 +25,7 @@
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
 #include "base/synchronization/waitable_event.h"
-#include "base/task_scheduler/post_task.h"
+#include "base/task/post_task.h"
 #include "base/test/test_timeouts.h"
 #include "base/threading/platform_thread.h"
 #include "base/threading/sequenced_task_runner_handle.h"
@@ -511,8 +511,9 @@ TEST_F(URLFetcherTest, FetchedUsingProxy) {
   context_getter->set_proxy_resolution_service(
       std::move(proxy_resolution_service));
 
-  delegate.CreateFetcher(test_server_->GetURL(kDefaultResponsePath),
-                         URLFetcher::GET, context_getter);
+  delegate.CreateFetcher(
+      GURL(std::string("http://does.not.resolve.test") + kDefaultResponsePath),
+      URLFetcher::GET, context_getter);
   delegate.StartFetcherAndWait();
 
   EXPECT_TRUE(delegate.fetcher()->GetStatus().is_success());

@@ -14,16 +14,11 @@
 #include "SkMatrixPriv.h"
 #include "SkPaint.h"
 #include "SkTemplates.h"
-#include "SkUtils.h"
+#include "SkUTF.h"
 #include <utility>
 
 class SkFindAndPlaceGlyph {
 public:
-    template<typename ProcessOneGlyph>
-    static void ProcessText(
-        SkPaint::TextEncoding, const char text[], size_t byteLength,
-        SkPoint offset, const SkMatrix& matrix, SkPaint::Align textAlignment,
-        SkGlyphCache* cache, ProcessOneGlyph&& processOneGlyph);
     // ProcessPosText handles all cases for finding and positioning glyphs. It has a very large
     // multiplicity. It figures out the glyph, position and rounding and pass those parameters to
     // processOneGlyph.
@@ -85,6 +80,33 @@ public:
         return {0.0f, 0.0f};
     }
 
+    // MapperInterface given a point map it through the matrix. There are several shortcut
+    // variants.
+    // * TranslationMapper - assumes a translation only matrix.
+    // * XScaleMapper - assumes an X scaling and a translation.
+    // * GeneralMapper - Does all other matricies.
+    class MapperInterface {
+    public:
+        virtual ~MapperInterface() {}
+
+        virtual SkPoint map(SkPoint position) const = 0;
+    };
+
+    static MapperInterface* CreateMapper(const SkMatrix& matrix, const SkPoint& offset,
+                                         int scalarsPerPosition, SkArenaAlloc* arena) {
+        auto mtype = matrix.getType();
+        if (mtype & (SkMatrix::kAffine_Mask | SkMatrix::kPerspective_Mask) ||
+            scalarsPerPosition == 2) {
+            return arena->make<GeneralMapper>(matrix, offset);
+        }
+
+        if (mtype & SkMatrix::kScale_Mask) {
+            return arena->make<XScaleMapper>(matrix, offset);
+        }
+
+        return arena->make<TranslationMapper>(matrix, offset);
+    }
+
 private:
     // GlyphFinderInterface is the polymorphic base for classes that parse a stream of chars into
     // the right UniChar (or GlyphID) and lookup up the glyph on the cache. The concrete
@@ -93,8 +115,9 @@ private:
     class GlyphFinderInterface {
     public:
         virtual ~GlyphFinderInterface() {}
-        virtual const SkGlyph& lookupGlyph(const char** text) = 0;
-        virtual const SkGlyph& lookupGlyphXY(const char** text, SkFixed x, SkFixed y) = 0;
+        virtual const SkGlyph& lookupGlyph(const char** text, const char* stop) = 0;
+        virtual const SkGlyph& lookupGlyphXY(const char** text, const char* stop,
+                                             SkFixed x, SkFixed y) = 0;
     };
 
     class UtfNGlyphFinder : public GlyphFinderInterface {
@@ -104,17 +127,17 @@ private:
             SkASSERT(cache != nullptr);
         }
 
-        const SkGlyph& lookupGlyph(const char** text) override {
+        const SkGlyph& lookupGlyph(const char** text, const char* stop) override {
             SkASSERT(text != nullptr);
-            return fCache->getUnicharMetrics(nextUnichar(text));
+            return fCache->getUnicharMetrics(nextUnichar(text, stop));
         }
-        const SkGlyph& lookupGlyphXY(const char** text, SkFixed x, SkFixed y) override {
+        const SkGlyph& lookupGlyphXY(const char** text, const char* stop, SkFixed x, SkFixed y) override {
             SkASSERT(text != nullptr);
-            return fCache->getUnicharMetrics(nextUnichar(text), x, y);
+            return fCache->getUnicharMetrics(nextUnichar(text, stop), x, y);
         }
 
     private:
-        virtual SkUnichar nextUnichar(const char** text) = 0;
+        virtual SkUnichar nextUnichar(const char** text, const char* stop) = 0;
         SkGlyphCache* fCache;
     };
 
@@ -123,7 +146,9 @@ private:
         explicit Utf8GlyphFinder(SkGlyphCache* cache) : UtfNGlyphFinder(cache) { }
 
     private:
-        SkUnichar nextUnichar(const char** text) override { return SkUTF8_NextUnichar(text); }
+        SkUnichar nextUnichar(const char** text, const char* stop) override {
+            return SkUTF::NextUTF8(text, stop);
+        }
     };
 
     class Utf16GlyphFinder final : public UtfNGlyphFinder {
@@ -131,8 +156,8 @@ private:
         explicit Utf16GlyphFinder(SkGlyphCache* cache) : UtfNGlyphFinder(cache) { }
 
     private:
-        SkUnichar nextUnichar(const char** text) override {
-            return SkUTF16_NextUnichar((const uint16_t**)text);
+        SkUnichar nextUnichar(const char** text, const char* stop) override {
+            return SkUTF::NextUTF16((const uint16_t**)text, (const uint16_t*)stop);
         }
     };
 
@@ -141,11 +166,8 @@ private:
         explicit Utf32GlyphFinder(SkGlyphCache* cache) : UtfNGlyphFinder(cache) { }
 
     private:
-        SkUnichar nextUnichar(const char** text) override {
-            const int32_t* ptr = *(const int32_t**)text;
-            SkUnichar uni = *ptr++;
-            *text = (const char*)ptr;
-            return uni;
+        SkUnichar nextUnichar(const char** text, const char* stop) override {
+            return SkUTF::NextUTF32((const int32_t**)text, (const int32_t*)stop);
         }
     };
 
@@ -156,18 +178,24 @@ private:
             SkASSERT(cache != nullptr);
         }
 
-        const SkGlyph& lookupGlyph(const char** text) override {
-            return fCache->getGlyphIDMetrics(nextGlyphId(text));
+        const SkGlyph& lookupGlyph(const char** text, const char* stop) override {
+            return fCache->getGlyphIDMetrics(nextGlyphId(text, stop));
         }
-        const SkGlyph& lookupGlyphXY(const char** text, SkFixed x, SkFixed y) override {
-            return fCache->getGlyphIDMetrics(nextGlyphId(text), x, y);
+        const SkGlyph& lookupGlyphXY(const char** text, const char* stop,
+                                     SkFixed x, SkFixed y) override {
+            return fCache->getGlyphIDMetrics(nextGlyphId(text, stop), x, y);
         }
 
     private:
-        uint16_t nextGlyphId(const char** text) {
+        uint16_t nextGlyphId(const char** text, const char* stop) {
             SkASSERT(text != nullptr);
 
             const uint16_t* ptr = *(const uint16_t**)text;
+            SkASSERT(ptr);
+            if (ptr + 1 > (const uint16_t*)stop) {
+                *text = stop;
+                return 0;
+            }
             uint16_t glyphID = *ptr;
             ptr += 1;
             *text = (const char*)ptr;
@@ -228,18 +256,6 @@ private:
 
     private:
         const SkScalar* fPositions;
-    };
-
-    // MapperInterface given a point map it through the matrix. There are several shortcut
-    // variants.
-    // * TranslationMapper - assumes a translation only matrix.
-    // * XScaleMapper - assumes an X scaling and a translation.
-    // * GeneralMapper - Does all other matricies.
-    class MapperInterface {
-    public:
-        virtual ~MapperInterface() { }
-
-        virtual SkPoint map(SkPoint position) const = 0;
     };
 
     class TranslationMapper final : public MapperInterface {
@@ -309,7 +325,8 @@ private:
         // compile error.
         // See GCC bug: https://gcc.gnu.org/bugzilla/show_bug.cgi?id=60277
         virtual SkPoint findAndPositionGlyph(
-            const char** text, SkPoint position, ProcessOneGlyph&& processOneGlyph) {
+            const char** text, const char* stop, SkPoint position,
+            ProcessOneGlyph&& processOneGlyph) {
             SK_ABORT("Should never get here.");
             return {0.0f, 0.0f};
         }
@@ -325,12 +342,13 @@ private:
             : fGlyphFinder(glyphFinder) { }
 
         SkPoint findAndPositionGlyph(
-            const char** text, SkPoint position, ProcessOneGlyph&& processOneGlyph) override {
+            const char** text, const char* stop, SkPoint position,
+            ProcessOneGlyph&& processOneGlyph) override {
 
             // Find the glyph.
             SkIPoint lookupPosition = SubpixelAlignment(kAxisAlignment, position);
             const SkGlyph& renderGlyph =
-                fGlyphFinder->lookupGlyphXY(text, lookupPosition.fX, lookupPosition.fY);
+                fGlyphFinder->lookupGlyphXY(text, stop, lookupPosition.fX, lookupPosition.fY);
 
             // If the glyph has no width (no pixels) then don't bother processing it.
             if (renderGlyph.fWidth > 0) {
@@ -355,9 +373,10 @@ private:
         }
 
         SkPoint findAndPositionGlyph(
-            const char** text, SkPoint position, ProcessOneGlyph&& processOneGlyph) override {
+            const char** text, const char* stop, SkPoint position,
+            ProcessOneGlyph&& processOneGlyph) override {
             SkPoint finalPosition = position;
-            const SkGlyph& glyph = fGlyphFinder->lookupGlyph(text);
+            const SkGlyph& glyph = fGlyphFinder->lookupGlyph(text, stop);
 
             if (glyph.fWidth > 0) {
                 processOneGlyph(glyph, finalPosition, {SK_ScalarHalf, SK_ScalarHalf});
@@ -397,7 +416,7 @@ private:
         while (text < stop) {
             // don't need x, y here, since all subpixel variants will have the
             // same advance
-            const SkGlyph& glyph = glyphFinder->lookupGlyph(&text);
+            const SkGlyph& glyph = glyphFinder->lookupGlyph(&text, stop);
 
             x += SkFloatToScalar(glyph.fAdvanceX);
             y += SkFloatToScalar(glyph.fAdvanceY);
@@ -441,7 +460,7 @@ inline void SkFindAndPlaceGlyph::ProcessPosText(
         while (cursor < stop) {
             SkPoint mappedPoint = mapper.TranslationMapper::map(positions->nextPoint());
             positioner.Positioner::findAndPositionGlyph(
-                &cursor, mappedPoint, std::forward<ProcessOneGlyph>(processOneGlyph));
+                &cursor, stop, mappedPoint, std::forward<ProcessOneGlyph>(processOneGlyph));
         }
         return;
     }
@@ -457,16 +476,7 @@ inline void SkFindAndPlaceGlyph::ProcessPosText(
         positionReader = arena.make<HorizontalPositions>(pos);
     }
 
-    MapperInterface* mapper = nullptr;
-    if (mtype & (SkMatrix::kAffine_Mask | SkMatrix::kPerspective_Mask)
-        || scalarsPerPosition == 2) {
-        mapper = arena.make<GeneralMapper>(matrix, offset);
-    } else if (mtype & SkMatrix::kScale_Mask) {
-        mapper = arena.make<XScaleMapper>(matrix, offset);
-    } else {
-        mapper = arena.make<TranslationMapper>(matrix, offset);
-    }
-
+    MapperInterface* mapper = CreateMapper(matrix, offset, scalarsPerPosition, &arena);
     GlyphFindAndPlaceInterface<ProcessOneGlyph>* findAndPosition = nullptr;
     if (cache->isSubpixel()) {
         findAndPosition = getSubpixel<ProcessOneGlyph>(&arena, axisAlignment, glyphFinder);
@@ -478,49 +488,7 @@ inline void SkFindAndPlaceGlyph::ProcessPosText(
     while (text < stop) {
         SkPoint mappedPoint = mapper->map(positionReader->nextPoint());
         findAndPosition->findAndPositionGlyph(
-            &text, mappedPoint, std::forward<ProcessOneGlyph>(processOneGlyph));
-    }
-}
-
-template<typename ProcessOneGlyph>
-inline void SkFindAndPlaceGlyph::ProcessText(
-    SkPaint::TextEncoding textEncoding, const char text[], size_t byteLength,
-    SkPoint offset, const SkMatrix& matrix, SkPaint::Align textAlignment,
-    SkGlyphCache* cache, ProcessOneGlyph&& processOneGlyph) {
-    SkSTArenaAlloc<64> arena;
-
-    // transform the starting point
-    matrix.mapPoints(&offset, 1);
-
-    GlyphFinderInterface* glyphFinder = getGlyphFinder(&arena, textEncoding, cache);
-
-    // need to measure first
-    if (textAlignment != SkPaint::kLeft_Align) {
-        SkVector stop = MeasureText(glyphFinder, text, byteLength);
-
-        if (textAlignment == SkPaint::kCenter_Align) {
-            stop *= SK_ScalarHalf;
-        }
-        offset -= stop;
-    }
-
-    GlyphFindAndPlaceInterface<ProcessOneGlyph>* findAndPosition = nullptr;
-    if (cache->isSubpixel()) {
-        SkAxisAlignment axisAlignment = cache->getScalerContext()->computeAxisAlignmentForHText();
-        findAndPosition = getSubpixel<ProcessOneGlyph>(
-            &arena, axisAlignment, glyphFinder);
-    } else {
-        using FullPixel = GlyphFindAndPlaceFullPixel<ProcessOneGlyph>;
-        findAndPosition = arena.make<FullPixel>(glyphFinder);
-    }
-
-    const char* stop = text + byteLength;
-    SkPoint current = offset;
-    while (text < stop) {
-        current =
-            findAndPosition->findAndPositionGlyph(
-                &text, current, std::forward<ProcessOneGlyph>(processOneGlyph));
-
+            &text, stop, mappedPoint, std::forward<ProcessOneGlyph>(processOneGlyph));
     }
 }
 

@@ -59,18 +59,6 @@ class CHROMEOS_EXPORT FakeShillManagerClient
   void GetService(const base::DictionaryValue& properties,
                   const ObjectPathCallback& callback,
                   const ErrorCallback& error_callback) override;
-  void VerifyDestination(const VerificationProperties& properties,
-                         const BooleanCallback& callback,
-                         const ErrorCallback& error_callback) override;
-  void VerifyAndEncryptCredentials(
-      const VerificationProperties& properties,
-      const std::string& service_path,
-      const StringCallback& callback,
-      const ErrorCallback& error_callback) override;
-  void VerifyAndEncryptData(const VerificationProperties& properties,
-                            const std::string& data,
-                            const StringCallback& callback,
-                            const ErrorCallback& error_callback) override;
   void ConnectToBestServices(const base::Closure& callback,
                              const ErrorCallback& error_callback) override;
   void SetNetworkThrottlingStatus(const NetworkThrottlingStatus& status,
@@ -104,6 +92,7 @@ class CHROMEOS_EXPORT FakeShillManagerClient
   int GetInteractiveDelay() const override;
   void SetBestServiceToConnect(const std::string& service_path) override;
   const NetworkThrottlingStatus& GetNetworkThrottlingStatus() override;
+  bool GetFastTransitionStatus() override;
 
   // Constants used for testing.
   static const char kFakeEthernetNetworkGuid[];
@@ -147,6 +136,12 @@ class CHROMEOS_EXPORT FakeShillManagerClient
   // Initial state for fake services.
   std::map<std::string, std::string> shill_initial_state_map_;
 
+  // Carrier for fake cellular service.
+  std::string cellular_carrier_;
+
+  // URL used for cellular activation.
+  std::string cellular_olp_;
+
   // Technology type for fake cellular service.
   std::string cellular_technology_;
 
@@ -160,7 +155,7 @@ class CHROMEOS_EXPORT FakeShillManagerClient
   typedef std::map<std::string, ShillPropertyMap> DevicePropertyMap;
   DevicePropertyMap shill_device_property_map_;
 
-  base::ObserverList<ShillPropertyChangedObserver> observer_list_;
+  base::ObserverList<ShillPropertyChangedObserver>::Unchecked observer_list_;
 
   // Track the default service for signaling Manager.DefaultService.
   std::string default_service_;

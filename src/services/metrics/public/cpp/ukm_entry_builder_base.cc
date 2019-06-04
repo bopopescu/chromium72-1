@@ -19,15 +19,18 @@ UkmEntryBuilderBase::UkmEntryBuilderBase(ukm::SourceId source_id,
   entry_->event_hash = event_hash;
 }
 
+UkmEntryBuilderBase::UkmEntryBuilderBase(base::UkmSourceId source_id,
+                                         uint64_t event_hash)
+    : entry_(mojom::UkmEntry::New()) {
+  entry_->source_id = source_id.ToInt64();
+  entry_->event_hash = event_hash;
+}
+
 UkmEntryBuilderBase::~UkmEntryBuilderBase() = default;
 
 void UkmEntryBuilderBase::SetMetricInternal(uint64_t metric_hash,
                                             int64_t value) {
-#if defined(OS_WEBOS)
-  entry_->metrics.insert(std::make_pair(metric_hash, value));
-#else
   entry_->metrics.emplace(metric_hash, value);
-#endif
 }
 
 void UkmEntryBuilderBase::Record(UkmRecorder* recorder) {
@@ -35,6 +38,10 @@ void UkmEntryBuilderBase::Record(UkmRecorder* recorder) {
     recorder->AddEntry(std::move(entry_));
   else
     entry_.reset();
+}
+
+mojom::UkmEntryPtr UkmEntryBuilderBase::TakeEntry() {
+  return std::move(entry_);
 }
 
 }  // namespace internal

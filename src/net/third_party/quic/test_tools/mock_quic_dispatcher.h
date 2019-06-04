@@ -13,7 +13,7 @@
 #include "net/third_party/quic/tools/quic_simple_server_backend.h"
 #include "testing/gmock/include/gmock/gmock.h"
 
-namespace net {
+namespace quic {
 namespace test {
 
 class MockQuicDispatcher : public QuicSimpleDispatcher {
@@ -26,6 +26,8 @@ class MockQuicDispatcher : public QuicSimpleDispatcher {
       std::unique_ptr<QuicCryptoServerStream::Helper> session_helper,
       std::unique_ptr<QuicAlarmFactory> alarm_factory,
       QuicSimpleServerBackend* quic_simple_server_backend);
+  MockQuicDispatcher(const MockQuicDispatcher&) = delete;
+  MockQuicDispatcher& operator=(const MockQuicDispatcher&) = delete;
 
   ~MockQuicDispatcher() override;
 
@@ -33,12 +35,9 @@ class MockQuicDispatcher : public QuicSimpleDispatcher {
                void(const QuicSocketAddress& server_address,
                     const QuicSocketAddress& client_address,
                     const QuicReceivedPacket& packet));
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(MockQuicDispatcher);
 };
 
 }  // namespace test
-}  // namespace net
+}  // namespace quic
 
 #endif  // NET_THIRD_PARTY_QUIC_TEST_TOOLS_MOCK_QUIC_DISPATCHER_H_

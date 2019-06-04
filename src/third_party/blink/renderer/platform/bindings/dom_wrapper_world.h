@@ -38,7 +38,7 @@
 #include "third_party/blink/public/platform/web_isolated_world_ids.h"
 #include "third_party/blink/renderer/platform/bindings/script_state.h"
 #include "third_party/blink/renderer/platform/platform_export.h"
-#include "third_party/blink/renderer/platform/weborigin/security_origin.h"
+#include "third_party/blink/renderer/platform/wtf/hash_set.h"
 #include "third_party/blink/renderer/platform/wtf/ref_counted.h"
 #include "v8/include/v8.h"
 
@@ -46,6 +46,8 @@ namespace blink {
 
 class DOMDataStore;
 class DOMObjectHolderBase;
+class ScriptWrappable;
+class SecurityOrigin;
 
 // This class represent a collection of DOM wrappers for a specific world. This
 // is identified by a world id that is a per-thread global identifier (see
@@ -57,8 +59,10 @@ class PLATFORM_EXPORT DOMWrapperWorld : public RefCounted<DOMWrapperWorld> {
     kInvalidWorldId = -1,
     kMainWorldId = 0,
 
-    kEmbedderWorldIdLimit = IsolatedWorldId::kEmbedderWorldIdLimit,
-    kIsolatedWorldIdLimit = IsolatedWorldId::kIsolatedWorldIdLimit,
+    kDOMWrapperWorldEmbedderWorldIdLimit =
+        IsolatedWorldId::kEmbedderWorldIdLimit,
+    kDOMWrapperWorldIsolatedWorldIdLimit =
+        IsolatedWorldId::kIsolatedWorldIdLimit,
 
     // Other worlds can use IDs after this. Don't manually pick up an ID from
     // this range. generateWorldIdForType() picks it up on behalf of you.
@@ -69,12 +73,16 @@ class PLATFORM_EXPORT DOMWrapperWorld : public RefCounted<DOMWrapperWorld> {
     kMain,
     kIsolated,
     kInspectorIsolated,
-    kGarbageCollector,
     kRegExp,
     kTesting,
     kForV8ContextSnapshotNonMain,
     kWorker,
   };
+
+  static bool IsIsolatedWorldId(int world_id) {
+    return DOMWrapperWorld::kMainWorldId < world_id &&
+           world_id < DOMWrapperWorld::kDOMWrapperWorldIsolatedWorldIdLimit;
+  }
 
   // Creates a world other than IsolatedWorld. Note this can return nullptr if
   // GenerateWorldIdForType fails to allocate a valid id.
@@ -97,7 +105,6 @@ class PLATFORM_EXPORT DOMWrapperWorld : public RefCounted<DOMWrapperWorld> {
 
   // Traces wrappers corresponding to the ScriptWrappable in DOM data stores.
   static void Trace(const ScriptWrappable*, Visitor*);
-  static void TraceWrappers(const ScriptWrappable*, ScriptWrappableVisitor*);
 
   static DOMWrapperWorld& World(v8::Local<v8::Context> context) {
     return ScriptState::From(context)->World();
@@ -118,18 +125,6 @@ class PLATFORM_EXPORT DOMWrapperWorld : public RefCounted<DOMWrapperWorld> {
   static void SetIsolatedWorldSecurityOrigin(int world_id,
                                              scoped_refptr<SecurityOrigin>);
   SecurityOrigin* IsolatedWorldSecurityOrigin();
-
-  // Associated an isolated world with a Content Security Policy. Resources
-  // embedded into the main world's DOM from script executed in an isolated
-  // world should be restricted based on the isolated world's DOM, not the
-  // main world's.
-  //
-  // FIXME: Right now, resource injection simply bypasses the main world's
-  // DOM. More work is necessary to allow the isolated world's policy to be
-  // applied correctly.
-  static void SetIsolatedWorldContentSecurityPolicy(int world_id,
-                                                    const String& policy);
-  bool IsolatedWorldHasContentSecurityPolicy();
 
   static bool HasWrapperInAnyWorldInMainThread(ScriptWrappable*);
 

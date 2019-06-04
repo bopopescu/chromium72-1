@@ -10,7 +10,8 @@
 #include "content/browser/background_fetch/background_fetch.pb.h"
 #include "content/browser/background_fetch/background_fetch_request_info.h"
 #include "content/browser/background_fetch/storage/database_task.h"
-#include "content/common/service_worker/service_worker_status_code.h"
+#include "content/browser/cache_storage/cache_storage_cache_handle.h"
+#include "third_party/blink/public/common/service_worker/service_worker_status_code.h"
 
 namespace content {
 
@@ -20,13 +21,14 @@ namespace background_fetch {
 // download response in cache storage.
 class MarkRequestCompleteTask : public DatabaseTask {
  public:
-  using MarkedCompleteCallback = base::OnceCallback<void()>;
+  using MarkRequestCompleteCallback =
+      base::OnceCallback<void(blink::mojom::BackgroundFetchError)>;
 
   MarkRequestCompleteTask(
-      BackgroundFetchDataManager* data_manager,
+      DatabaseTaskHost* host,
       BackgroundFetchRegistrationId registration_id,
       scoped_refptr<BackgroundFetchRequestInfo> request_info,
-      MarkedCompleteCallback callback);
+      MarkRequestCompleteCallback callback);
 
   ~MarkRequestCompleteTask() override;
 
@@ -34,19 +36,51 @@ class MarkRequestCompleteTask : public DatabaseTask {
   void Start() override;
 
  private:
-  void StoreResponse();
+  void StoreResponse(base::OnceClosure done_closure);
 
-  void CreateAndStoreCompletedRequest(bool succeeded);
+  void PopulateResponseBody(blink::mojom::FetchAPIResponse* response);
 
-  void DidStoreCompletedRequest(ServiceWorkerStatusCode status);
+  void DidGetIsQuotaAvailable(blink::mojom::FetchAPIResponsePtr response,
+                              base::OnceClosure done_closure,
+                              bool is_available);
 
-  void DidDeleteActiveRequest(ServiceWorkerStatusCode status);
+  void DidOpenCache(blink::mojom::FetchAPIResponsePtr response,
+                    base::OnceClosure done_closure,
+                    CacheStorageCacheHandle handle,
+                    blink::mojom::CacheStorageError error);
+
+  void DidWriteToCache(CacheStorageCacheHandle handle,
+                       base::OnceClosure done_closure,
+                       blink::mojom::CacheStorageError error);
+
+  void CreateAndStoreCompletedRequest(base::OnceClosure done_closure);
+
+  void DidStoreCompletedRequest(base::OnceClosure done_closure,
+                                blink::ServiceWorkerStatusCode status);
+
+  void DidDeleteActiveRequest(base::OnceClosure done_closure,
+                              blink::ServiceWorkerStatusCode status);
+
+  void UpdateMetadata(base::OnceClosure done_closure);
+
+  void DidGetMetadata(base::OnceClosure done_closure,
+                      blink::mojom::BackgroundFetchError error,
+                      std::unique_ptr<proto::BackgroundFetchMetadata> metadata);
+
+  void DidStoreMetadata(base::OnceClosure done_closure,
+                        blink::ServiceWorkerStatusCode status);
+
+  void FinishWithError(blink::mojom::BackgroundFetchError error) override;
+
+  std::string HistogramName() const override;
 
   BackgroundFetchRegistrationId registration_id_;
   scoped_refptr<BackgroundFetchRequestInfo> request_info_;
-  MarkedCompleteCallback callback_;
+  MarkRequestCompleteCallback callback_;
 
   proto::BackgroundFetchCompletedRequest completed_request_;
+  proto::BackgroundFetchRegistration::BackgroundFetchFailureReason
+      failure_reason_ = proto::BackgroundFetchRegistration::NONE;
 
   base::WeakPtrFactory<MarkRequestCompleteTask> weak_factory_;  // Keep as last.
 

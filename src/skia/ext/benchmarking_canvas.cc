@@ -212,11 +212,9 @@ std::unique_ptr<base::Value> AsValue(const SkPaint& paint) {
     builder.addFlag(paint.isFakeBoldText(), "FakeBoldText");
     builder.addFlag(paint.isLinearText(), "LinearText");
     builder.addFlag(paint.isSubpixelText(), "SubpixelText");
-    builder.addFlag(paint.isDevKernText(), "DevKernText");
     builder.addFlag(paint.isLCDRenderText(), "LCDRenderText");
     builder.addFlag(paint.isEmbeddedBitmapText(), "EmbeddedBitmapText");
     builder.addFlag(paint.isAutohinted(), "Autohinted");
-    builder.addFlag(paint.isVerticalText(), "VerticalText");
 
     val->SetString("Flags", builder.str());
   }
@@ -689,18 +687,6 @@ void BenchmarkingCanvas::onDrawPosTextH(const void* text, size_t byteLength,
   op.addParam("pos", AsListValue(xpos, count));
 
   INHERITED::onDrawPosTextH(text, byteLength, xpos, constY, *op.paint());
-}
-
-void BenchmarkingCanvas::onDrawTextOnPath(const void* text, size_t byteLength,
-                                          const SkPath& path, const SkMatrix* matrix,
-                                          const SkPaint& paint) {
-  AutoOp op(this, "DrawTextOnPath", &paint);
-  op.addParam("count", AsValue(SkIntToScalar(paint.countText(text, byteLength))));
-  op.addParam("path", AsValue(path));
-  if (matrix)
-    op.addParam("matrix", AsValue(*matrix));
-
-  INHERITED::onDrawTextOnPath(text, byteLength, path, matrix, *op.paint());
 }
 
 void BenchmarkingCanvas::onDrawTextBlob(const SkTextBlob* blob, SkScalar x, SkScalar y,

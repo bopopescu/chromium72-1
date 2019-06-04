@@ -11,11 +11,12 @@
 #include "ash/display/screen_orientation_controller.h"
 #include "ash/metrics/user_metrics_action.h"
 #include "ash/metrics/user_metrics_recorder.h"
+#include "ash/public/cpp/notification_utils.h"
 #include "ash/resources/vector_icons/vector_icons.h"
 #include "ash/session/session_controller.h"
 #include "ash/shell.h"
 #include "ash/strings/grit/ash_strings.h"
-#include "ash/system/tray/system_tray_controller.h"
+#include "ash/system/model/system_tray_model.h"
 #include "ash/system/tray/tray_constants.h"
 #include "ash/wm/tablet_mode/tablet_mode_controller.h"
 #include "base/bind.h"
@@ -74,8 +75,9 @@ void OnNotificationClicked(base::Optional<int> button_index) {
   Shell::Get()->metrics()->RecordUserMetricsAction(
       UMA_STATUS_AREA_DISPLAY_NOTIFICATION_SELECTED);
   // Settings may be blocked, e.g. at the lock screen.
-  if (Shell::Get()->session_controller()->ShouldEnableSettings()) {
-    Shell::Get()->system_tray_controller()->ShowDisplaySettings();
+  if (Shell::Get()->session_controller()->ShouldEnableSettings() &&
+      Shell::Get()->system_tray_model()->client_ptr()) {
+    Shell::Get()->system_tray_model()->client_ptr()->ShowDisplaySettings();
     Shell::Get()->metrics()->RecordUserMetricsAction(
         UMA_STATUS_AREA_DISPLAY_NOTIFICATION_SHOW_SETTINGS);
   }
@@ -101,7 +103,6 @@ base::string16 GetExternalDisplayName(int64_t external_display_id) {
   const display::ManagedDisplayInfo& display_info =
       display_manager->GetDisplayInfo(external_display_id);
   if (display_info.GetActiveRotation() != display::Display::ROTATE_0 ||
-      display_info.configured_ui_scale() != 1.0f ||
       !display_info.overscan_insets_in_dip().IsEmpty()) {
     name =
         l10n_util::GetStringFUTF16(IDS_ASH_STATUS_TRAY_DISPLAY_ANNOTATED_NAME,
@@ -288,10 +289,8 @@ bool ScreenLayoutObserver::GetDisplayMessageForNotification(
       // Consume this state so that later changes are not affected.
       displays_changed_from_settings_ui_.erase(ignore_display_iter);
     } else {
-      if ((iter.second.configured_ui_scale() !=
-           old_iter->second.configured_ui_scale()) ||
-          (GetDisplayManager()->IsInUnifiedMode() &&
-           iter.second.size_in_pixel() != old_iter->second.size_in_pixel())) {
+      if (GetDisplayManager()->IsInUnifiedMode() &&
+          iter.second.size_in_pixel() != old_iter->second.size_in_pixel()) {
         *out_message = l10n_util::GetStringUTF16(
             IDS_ASH_STATUS_TRAY_DISPLAY_RESOLUTION_CHANGED_TITLE);
         *out_additional_message = l10n_util::GetStringFUTF16(
@@ -362,19 +361,18 @@ void ScreenLayoutObserver::CreateOrUpdateNotification(
     return;
   }
 
-  std::unique_ptr<Notification> notification =
-      Notification::CreateSystemNotification(
-          message_center::NOTIFICATION_TYPE_SIMPLE, kNotificationId, message,
-          additional_message, gfx::Image(),
-          base::string16(),  // display_source
-          GURL(),
-          message_center::NotifierId(
-              message_center::NotifierId::SYSTEM_COMPONENT, kNotifierDisplay),
-          message_center::RichNotificationData(),
-          new message_center::HandleNotificationClickDelegate(
-              base::Bind(&OnNotificationClicked)),
-          kNotificationScreenIcon,
-          message_center::SystemNotificationWarningLevel::NORMAL);
+  std::unique_ptr<Notification> notification = ash::CreateSystemNotification(
+      message_center::NOTIFICATION_TYPE_SIMPLE, kNotificationId, message,
+      additional_message,
+      base::string16(),  // display_source
+      GURL(),
+      message_center::NotifierId(message_center::NotifierType::SYSTEM_COMPONENT,
+                                 kNotifierDisplay),
+      message_center::RichNotificationData(),
+      new message_center::HandleNotificationClickDelegate(
+          base::BindRepeating(&OnNotificationClicked)),
+      kNotificationScreenIcon,
+      message_center::SystemNotificationWarningLevel::NORMAL);
   notification->set_priority(message_center::SYSTEM_PRIORITY);
 
   Shell::Get()->metrics()->RecordUserMetricsAction(

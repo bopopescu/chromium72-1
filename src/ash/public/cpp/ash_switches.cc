@@ -45,20 +45,16 @@ const char kAshEnableCursorMotionBlur[] = "ash-enable-cursor-motion-blur";
 const char kAshEnableMagnifierKeyScroller[] =
     "ash-enable-magnifier-key-scroller";
 
-// Enable the Night Light feature.
-const char kAshEnableNightLight[] = "ash-enable-night-light";
-
 // Enables the palette on every display, instead of only the internal one.
 const char kAshEnablePaletteOnAllDisplays[] =
     "ash-enable-palette-on-all-displays";
 
-// Enables the sidebar.
-const char kAshSidebarEnabled[] = "enable-ash-sidebar";
-const char kAshSidebarDisabled[] = "disable-ash-sidebar";
-
-// Enables the observation of accelerometer events to enter tablet
-// mode.  The flag is "enable-touchview" not "enable-tabletmode" as this
-// is used to enable tablet mode on convertible devices.
+// If the flag is present, it indicates 1) the device has accelerometer and 2)
+// the device is a convertible device or a tablet device (thus is capable of
+// entering tablet mode). If this flag is not set, then the device is not
+// capable of entering tablet mode. For example, Samus has accelerometer, but
+// is not a covertible or tablet, thus doesn't have this flag set, thus can't
+// enter tablet mode.
 const char kAshEnableTabletMode[] = "enable-touchview";
 
 // Enable the wayland server.
@@ -66,10 +62,6 @@ const char kAshEnableWaylandServer[] = "enable-wayland-server";
 
 // Enables mirrored screen.
 const char kAshEnableMirroredScreen[] = "ash-enable-mirrored-screen";
-
-// Enables display scale tray settings. This uses force-device-scale-factor flag
-// to modify the dsf of the device to any non discrete value.
-const char kAshEnableScaleSettingsTray[] = "ash-enable-scale-settings-tray";
 
 // Enables the stylus tools next to the status area.
 const char kAshForceEnableStylusTools[] = "force-enable-stylus-tools";
@@ -122,12 +114,12 @@ const char kAshTouchHud[] = "ash-touch-hud";
 // instead of displaying an interactive animation.
 const char kAuraLegacyPowerButton[] = "aura-legacy-power-button";
 
+// If set, tablet-like power button behavior (i.e. tapping the button turns the
+// screen off) is used even if the device is in laptop mode.
+const char kForceTabletPowerButton[] = "force-tablet-power-button";
+
 // Whether this device has an internal stylus.
 const char kHasInternalStylus[] = "has-internal-stylus";
-
-// Uses a mojo app to implement the Keyboard Shortcut Viewer feature. Exists so
-// the mojo app version can be tested independently from the classic version.
-const char kKeyboardShortcutViewerApp[] = "keyboard-shortcut-viewer-app";
 
 // Draws a circle at each touch point, similar to the Android OS developer
 // option "Show taps".
@@ -150,16 +142,6 @@ const char kTouchscreenUsableWhileScreenOff[] =
 
 // Hides all Message Center notification popups (toasts). Used for testing.
 const char kSuppressMessageCenterPopups[] = "suppress-message-center-popups";
-
-bool IsNightLightEnabled() {
-  return base::CommandLine::ForCurrentProcess()->HasSwitch(
-      kAshEnableNightLight);
-}
-
-bool IsSidebarEnabled() {
-  return base::CommandLine::ForCurrentProcess()->HasSwitch(
-      switches::kAshSidebarEnabled);
-}
 
 bool IsUsingViewsLock() {
   return !base::CommandLine::ForCurrentProcess()->HasSwitch(kShowWebUiLock);

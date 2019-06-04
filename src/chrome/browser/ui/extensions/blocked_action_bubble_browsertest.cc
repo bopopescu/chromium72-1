@@ -48,7 +48,7 @@ void ExtensionBlockedActionsBubbleTest::SetUpCommandLine(
     base::CommandLine* command_line) {
   extensions::ExtensionBrowserTest::SetUpCommandLine(command_line);
   scoped_feature_list_.InitAndEnableFeature(
-      extensions::features::kRuntimeHostPermissions);
+      extensions_features::kRuntimeHostPermissions);
 }
 
 void ExtensionBlockedActionsBubbleTest::SetUpOnMainThread() {
@@ -80,7 +80,7 @@ void ExtensionBlockedActionsBubbleTest::ShowUi(const std::string& name) {
   ASSERT_TRUE(extension);
   extensions::ScriptingPermissionsModifier(profile(),
                                            base::WrapRefCounted(extension))
-      .SetAllowedOnAllUrls(false);
+      .SetWithholdHostPermissions(true);
 
   content::WebContents* tab =
       browser()->tab_strip_model()->GetActiveWebContents();

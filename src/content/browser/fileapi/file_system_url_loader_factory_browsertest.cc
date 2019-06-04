@@ -12,10 +12,12 @@
 #include "base/files/scoped_temp_dir.h"
 #include "base/i18n/unicodestring.h"
 #include "base/rand_util.h"
+#include "base/task/post_task.h"
 #include "base/test/scoped_feature_list.h"
 #include "build/build_config.h"
 #include "content/browser/fileapi/file_system_url_loader_factory.h"
 #include "content/browser/web_contents/web_contents_impl.h"
+#include "content/public/browser/browser_task_traits.h"
 #include "content/public/test/content_browser_test.h"
 #include "content/shell/browser/shell.h"
 #include "net/base/mime_util.h"
@@ -34,6 +36,7 @@
 #include "storage/browser/test/mock_special_storage_policy.h"
 #include "storage/browser/test/test_file_system_backend.h"
 #include "storage/browser/test/test_file_system_context.h"
+#include "storage/browser/test/test_file_system_options.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/icu/source/i18n/unicode/datefmt.h"
 #include "third_party/icu/source/i18n/unicode/regex.h"
@@ -154,32 +157,34 @@ void ShutdownFileSystemContextOnIOThread(
 
 class FileSystemURLLoaderFactoryTest : public ContentBrowserTest {
  protected:
-  FileSystemURLLoaderFactoryTest() : weak_factory_(this) {}
+  FileSystemURLLoaderFactoryTest() {}
   ~FileSystemURLLoaderFactoryTest() override = default;
 
   void SetUpOnMainThread() override {
     feature_list_.InitAndEnableFeature(network::features::kNetworkService);
 
-    ASSERT_TRUE(temp_dir_.CreateUniqueTempDir());
-
     special_storage_policy_ = new MockSpecialStoragePolicy;
+
+    // We use a test FileSystemContext which runs on the main thread, so we
+    // can work with it synchronously.
+    ASSERT_TRUE(temp_dir_.CreateUniqueTempDir());
     file_system_context_ =
         CreateFileSystemContextForTesting(nullptr, temp_dir_.GetPath());
-
-    // We use the main thread so that we can get the root path synchronously.
+    base::RunLoop run_loop;
     file_system_context_->OpenFileSystem(
         GURL("http://remote/"), storage::kFileSystemTypeTemporary,
         storage::OPEN_FILE_SYSTEM_CREATE_IF_NONEXISTENT,
         base::BindOnce(&FileSystemURLLoaderFactoryTest::OnOpenFileSystem,
-                       weak_factory_.GetWeakPtr()));
-    base::RunLoop().RunUntilIdle();
+                       run_loop.QuitWhenIdleClosure()));
+    run_loop.Run();
+
     ContentBrowserTest::SetUpOnMainThread();
   }
 
   void TearDownOnMainThread() override {
     loader_.reset();
-    content::BrowserThread::PostTask(
-        content::BrowserThread::IO, FROM_HERE,
+    base::PostTaskWithTraits(
+        FROM_HERE, {content::BrowserThread::IO},
         base::BindOnce(&ShutdownFileSystemContextOnIOThread,
                        std::move(file_system_context_)));
     special_storage_policy_ = nullptr;
@@ -333,6 +338,14 @@ class FileSystemURLLoaderFactoryTest : public ContentBrowserTest {
   network::mojom::URLLoaderPtr loader_;
 
  private:
+  static void OnOpenFileSystem(base::OnceClosure done_closure,
+                               const GURL& root_url,
+                               const std::string& name,
+                               base::File::Error result) {
+    ASSERT_EQ(base::File::FILE_OK, result);
+    std::move(done_closure).Run();
+  }
+
   storage::FileSystemFileUtil* file_util() {
     return file_system_context_->sandbox_delegate()->sync_file_util();
   }
@@ -342,12 +355,6 @@ class FileSystemURLLoaderFactoryTest : public ContentBrowserTest {
         new FileSystemOperationContext(file_system_context_.get()));
     context->set_allowed_bytes_growth(1024);
     return context;
-  }
-
-  void OnOpenFileSystem(const GURL& root_url,
-                        const std::string& name,
-                        base::File::Error result) {
-    ASSERT_EQ(base::File::FILE_OK, result);
   }
 
   RenderFrameHost* render_frame_host() const {
@@ -393,7 +400,6 @@ class FileSystemURLLoaderFactoryTest : public ContentBrowserTest {
   base::test::ScopedFeatureList feature_list_;
   scoped_refptr<MockSpecialStoragePolicy> special_storage_policy_;
   scoped_refptr<FileSystemContext> file_system_context_;
-  base::WeakPtrFactory<FileSystemURLLoaderFactoryTest> weak_factory_;
 
   DISALLOW_COPY_AND_ASSIGN(FileSystemURLLoaderFactoryTest);
 };
@@ -735,6 +741,7 @@ IN_PROC_BROWSER_TEST_F(FileSystemURLLoaderFactoryTest, FileGetMimeType) {
   EXPECT_TRUE(client->has_received_completion());
 
   EXPECT_EQ(mime_type_direct, client->response_head().mime_type);
+  EXPECT_TRUE(client->response_head().did_mime_sniff);
 }
 
 IN_PROC_BROWSER_TEST_F(FileSystemURLLoaderFactoryTest, FileIncognito) {

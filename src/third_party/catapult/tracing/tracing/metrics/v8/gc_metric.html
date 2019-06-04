@@ -9,6 +9,8 @@ found in the LICENSE file.
 <link rel="import" href="/tracing/base/unit.html">
 <link rel="import" href="/tracing/metrics/metric_registry.html">
 <link rel="import" href="/tracing/metrics/v8/utils.html">
+<link rel="import" href="/tracing/model/helpers/chrome_model_helper.html">
+<link rel="import" href="/tracing/value/diagnostics/breakdown.html">
 <link rel="import" href="/tracing/value/histogram.html">
 
 <script>
@@ -27,6 +29,9 @@ tr.exportTo('tr.metrics.v8', function() {
     addDurationOfSubEvents(histograms, model);
     addPercentageInV8ExecuteOfTopEvents(histograms, model);
     addTotalPercentageInV8Execute(histograms, model);
+    addMarkCompactorMutatorUtilization(histograms, model);
+    addTotalMarkCompactorTime(histograms, model);
+    addTotalMarkCompactorMarkingTime(histograms, model);
   }
 
   tr.metrics.MetricRegistry.register(gcMetric);
@@ -106,27 +111,13 @@ tr.exportTo('tr.metrics.v8', function() {
     return hist;
   }
 
-  function isNotForcedTopGarbageCollectionEvent(event) {
-    // We exclude garbage collection events forced by benchmark runner,
-    // because they cannot happen in real world.
-    return tr.metrics.v8.utils.isTopGarbageCollectionEvent(event) &&
-           !tr.metrics.v8.utils.isForcedGarbageCollectionEvent(event);
-  }
-
-  function isNotForcedSubGarbageCollectionEvent(event) {
-    // We exclude garbage collection events forced by benchmark runner,
-    // because they cannot happen in real world.
-    return tr.metrics.v8.utils.isSubGarbageCollectionEvent(event) &&
-           !tr.metrics.v8.utils.isForcedGarbageCollectionEvent(event);
-  }
-
   /**
    * Example output:
    * - v8-gc-full-mark-compactor.
    */
   function addDurationOfTopEvents(histograms, model) {
     tr.metrics.v8.utils.groupAndProcessEvents(model,
-        isNotForcedTopGarbageCollectionEvent,
+        tr.metrics.v8.utils.isNotForcedTopGarbageCollectionEvent,
         tr.metrics.v8.utils.topGarbageCollectionEventName,
         function(name, events) {
           const cpuDuration = createNumericForTopEventTime(name);
@@ -144,7 +135,7 @@ tr.exportTo('tr.metrics.v8', function() {
    */
   function addTotalDurationOfTopEvents(histograms, model) {
     tr.metrics.v8.utils.groupAndProcessEvents(model,
-        isNotForcedTopGarbageCollectionEvent,
+        tr.metrics.v8.utils.isNotForcedTopGarbageCollectionEvent,
         event => 'v8-gc-total',
         function(name, events) {
           const cpuDuration = createNumericForTopEventTime(name);
@@ -156,13 +147,76 @@ tr.exportTo('tr.metrics.v8', function() {
     );
   }
 
+  function isV8MarkCompactorSummary(event) {
+    return !tr.metrics.v8.utils.isForcedGarbageCollectionEvent(event) &&
+           tr.metrics.v8.utils.isMarkCompactorSummaryEvent(event);
+  }
+
+  function isV8MarkCompactorMarkingSummary(event) {
+    return !tr.metrics.v8.utils.isForcedGarbageCollectionEvent(event) &&
+           tr.metrics.v8.utils.isMarkCompactorMarkingSummaryEvent(event);
+  }
+
+  function createHistogramFromSummary(histograms, name, events) {
+    const foregroundDuration =
+        createNumericForTopEventTime(name + '-foreground');
+    const backgroundDuration =
+        createNumericForTopEventTime(name + '-background');
+    const totalDuration =
+        createNumericForTopEventTime(name + '-total');
+    const relatedNames = new tr.v.d.RelatedNameMap();
+    relatedNames.set('foreground', foregroundDuration.name);
+    relatedNames.set('background', backgroundDuration.name);
+    for (const event of events) {
+      foregroundDuration.addSample(event.args.duration);
+      backgroundDuration.addSample(event.args.background_duration);
+      const breakdownForTotal = new tr.v.d.Breakdown();
+      breakdownForTotal.set('foreground', event.args.duration);
+      breakdownForTotal.set('background', event.args.background_duration);
+      totalDuration.addSample(
+          event.args.duration + event.args.background_duration,
+          {breakdown: breakdownForTotal});
+    }
+    histograms.addHistogram(foregroundDuration);
+    histograms.addHistogram(backgroundDuration);
+    histograms.addHistogram(totalDuration, {breakdown: relatedNames});
+  }
+
+  /**
+   * Example output:
+   * - v8-gc-mark-compactor-foreground
+   * - v8-gc-mark-compactor-background
+   * - v8-gc-mark-compactor-total
+   */
+  function addTotalMarkCompactorTime(histograms, model) {
+    tr.metrics.v8.utils.groupAndProcessEvents(model,
+        isV8MarkCompactorSummary,
+        event => 'v8-gc-mark-compactor',
+        (name, events) => createHistogramFromSummary(histograms, name, events)
+    );
+  }
+
+  /**
+   * Example output:
+   * - v8-gc-mark-compactor-marking-foreground
+   * - v8-gc-mark-compactor-marking-background
+   * - v8-gc-mark-compactor-marking-total
+   */
+  function addTotalMarkCompactorMarkingTime(histograms, model) {
+    tr.metrics.v8.utils.groupAndProcessEvents(model,
+        isV8MarkCompactorMarkingSummary,
+        event => 'v8-gc-mark-compactor-marking',
+        (name, events) => createHistogramFromSummary(histograms, name, events)
+    );
+  }
+
   /**
    * Example output:
    * - v8-gc-full-mark-compactor-evacuate.
    */
   function addDurationOfSubEvents(histograms, model) {
     tr.metrics.v8.utils.groupAndProcessEvents(model,
-        isNotForcedSubGarbageCollectionEvent,
+        tr.metrics.v8.utils.isNotForcedSubGarbageCollectionEvent,
         tr.metrics.v8.utils.subGarbageCollectionEventName,
         function(name, events) {
           const cpuDuration = createNumericForSubEventTime(name);
@@ -180,7 +234,7 @@ tr.exportTo('tr.metrics.v8', function() {
    */
   function addPercentageInV8ExecuteOfTopEvents(histograms, model) {
     tr.metrics.v8.utils.groupAndProcessEvents(model,
-        isNotForcedTopGarbageCollectionEvent,
+        tr.metrics.v8.utils.isNotForcedTopGarbageCollectionEvent,
         tr.metrics.v8.utils.topGarbageCollectionEventName,
         function(name, events) {
           addPercentageInV8Execute(histograms, model, name, events);
@@ -194,7 +248,7 @@ tr.exportTo('tr.metrics.v8', function() {
    */
   function addTotalPercentageInV8Execute(histograms, model) {
     tr.metrics.v8.utils.groupAndProcessEvents(model,
-        isNotForcedTopGarbageCollectionEvent,
+        tr.metrics.v8.utils.isNotForcedTopGarbageCollectionEvent,
         event => 'v8-gc-total',
         function(name, events) {
           addPercentageInV8Execute(histograms, model, name, events);
@@ -217,6 +271,22 @@ tr.exportTo('tr.metrics.v8', function() {
         name + '_percentage_in_v8_execute', cpuDurationInV8Execute,
         cpuDurationTotal, percentage_smallerIsBetter);
     histograms.addHistogram(percentage);
+  }
+
+  /**
+   * Example output:
+   * - v8-gc-mark-compactor-mmu-100ms_window.
+   */
+  function addMarkCompactorMutatorUtilization(histograms, model) {
+    const chromeHelper = model.getOrCreateHelper(
+        tr.model.helpers.ChromeModelHelper);
+    const rendererHelpers = Object.values(chromeHelper.rendererHelpers);
+    tr.metrics.v8.utils.addMutatorUtilization(
+        'v8-gc-mark-compactor-mmu',
+        tr.metrics.v8.utils.isNotForcedMarkCompactorEvent,
+        [100],
+        rendererHelpers,
+        histograms);
   }
 
   return {

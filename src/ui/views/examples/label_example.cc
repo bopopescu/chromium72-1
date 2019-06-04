@@ -4,6 +4,8 @@
 
 #include "ui/views/examples/label_example.h"
 
+#include <memory>
+
 #include "base/macros.h"
 #include "base/memory/ptr_util.h"
 #include "base/strings/utf_string_conversions.h"
@@ -66,10 +68,7 @@ LabelExample::LabelExample()
       custom_label_(NULL) {
 }
 
-LabelExample::~LabelExample() {
-  // Remove the views first as some reference combobox models.
-  container()->RemoveAllChildViews(true);
-}
+LabelExample::~LabelExample() = default;
 
 void LabelExample::CreateExampleView(View* container) {
   // A very simple label example, followed by additional helpful examples.
@@ -200,14 +199,11 @@ void LabelExample::AddCustomLabel(View* container) {
   column_set->AddColumn(GridLayout::LEADING, GridLayout::LEADING, 0,
                         GridLayout::USE_PREF, 0, 0);
   layout->StartRow(0, 1);
-  multiline_ = new Checkbox(base::ASCIIToUTF16("Multiline"));
-  multiline_->set_listener(this);
+  multiline_ = new Checkbox(base::ASCIIToUTF16("Multiline"), this);
   layout->AddView(multiline_);
-  shadows_ = new Checkbox(base::ASCIIToUTF16("Shadows"));
-  shadows_->set_listener(this);
+  shadows_ = new Checkbox(base::ASCIIToUTF16("Shadows"), this);
   layout->AddView(shadows_);
-  selectable_ = new Checkbox(base::ASCIIToUTF16("Selectable"));
-  selectable_->set_listener(this);
+  selectable_ = new Checkbox(base::ASCIIToUTF16("Selectable"), this);
   layout->AddView(selectable_);
   layout->AddPaddingRow(0, 8);
 
@@ -234,9 +230,8 @@ Combobox* LabelExample::AddCombobox(GridLayout* layout,
                                     int count) {
   layout->StartRow(0, 0);
   layout->AddView(new Label(base::ASCIIToUTF16(name)));
-  ExampleComboboxModel* model = new ExampleComboboxModel(strings, count);
-  example_combobox_models_.push_back(base::WrapUnique(model));
-  Combobox* combobox = new Combobox(model);
+  Combobox* combobox =
+      new Combobox(std::make_unique<ExampleComboboxModel>(strings, count));
   combobox->SetSelectedIndex(0);
   combobox->set_listener(this);
   layout->AddView(combobox);

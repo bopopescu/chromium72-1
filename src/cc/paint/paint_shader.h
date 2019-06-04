@@ -27,6 +27,7 @@ using PaintRecord = PaintOpBuffer;
 class CC_PAINT_EXPORT PaintShader : public SkRefCnt {
  public:
   enum class Type : uint8_t {
+    kEmpty,
     kColor,
     kLinearGradient,
     kRadialGradient,
@@ -44,6 +45,8 @@ class CC_PAINT_EXPORT PaintShader : public SkRefCnt {
   // RasterAtScale to create a picture shader. Use FixedScale to create an image
   // shader that is backed by the paint record.
   enum class ScalingBehavior : uint8_t { kRasterAtScale, kFixedScale };
+
+  static sk_sp<PaintShader> MakeEmpty();
 
   static sk_sp<PaintShader> MakeColor(SkColor color);
 
@@ -159,6 +162,7 @@ class CC_PAINT_EXPORT PaintShader : public SkRefCnt {
 
  private:
   friend class PaintFlags;
+  friend class PaintOpHelper;
   friend class PaintOpReader;
   friend class PaintOpSerializationTestUtils;
   friend class PaintOpWriter;
@@ -192,7 +196,8 @@ class CC_PAINT_EXPORT PaintShader : public SkRefCnt {
                                         SkFilterQuality requested_quality,
                                         ImageProvider* image_provider,
                                         uint32_t* transfer_cache_entry_id,
-                                        SkFilterQuality* raster_quality) const;
+                                        SkFilterQuality* raster_quality,
+                                        bool* needs_mips) const;
 
   void SetColorsAndPositions(const SkColor* colors,
                              const SkScalar* positions,

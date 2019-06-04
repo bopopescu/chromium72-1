@@ -26,8 +26,8 @@
 
 #include <memory>
 #include "SkMatrixConvolutionImageFilter.h"
+#include "base/numerics/checked_math.h"
 #include "third_party/blink/renderer/platform/graphics/filters/paint_filter_builder.h"
-#include "third_party/blink/renderer/platform/wtf/checked_numeric.h"
 #include "third_party/blink/renderer/platform/wtf/text/text_stream.h"
 
 namespace blink {
@@ -57,15 +57,16 @@ FEConvolveMatrix* FEConvolveMatrix::Create(Filter* filter,
                                            EdgeModeType edge_mode,
                                            bool preserve_alpha,
                                            const Vector<float>& kernel_matrix) {
-  return new FEConvolveMatrix(filter, kernel_size, divisor, bias, target_offset,
-                              edge_mode, preserve_alpha, kernel_matrix);
+  return MakeGarbageCollected<FEConvolveMatrix>(filter, kernel_size, divisor,
+                                                bias, target_offset, edge_mode,
+                                                preserve_alpha, kernel_matrix);
 }
 
 FloatRect FEConvolveMatrix::MapEffect(const FloatRect& rect) const {
   if (!ParametersValid())
     return rect;
   FloatRect result = rect;
-  result.MoveBy(-target_offset_);
+  result.MoveBy(FloatPoint(-target_offset_));
   result.Expand(FloatSize(kernel_size_));
   return result;
 }
@@ -123,7 +124,7 @@ bool FEConvolveMatrix::ParametersValid() const {
   if (kernel_size_.IsEmpty())
     return false;
   uint64_t kernel_area = kernel_size_.Area();
-  if (!CheckedNumeric<int>(kernel_area).IsValid())
+  if (!base::CheckedNumeric<int>(kernel_area).IsValid())
     return false;
   if (SafeCast<size_t>(kernel_area) != kernel_matrix_.size())
     return false;
@@ -140,8 +141,8 @@ sk_sp<PaintFilter> FEConvolveMatrix::CreateImageFilter() {
   if (!ParametersValid())
     return CreateTransparentBlack();
 
-  sk_sp<PaintFilter> input(
-      PaintFilterBuilder::Build(InputEffect(0), OperatingInterpolationSpace()));
+  sk_sp<PaintFilter> input(paint_filter_builder::Build(
+      InputEffect(0), OperatingInterpolationSpace()));
   SkISize kernel_size(
       SkISize::Make(kernel_size_.Width(), kernel_size_.Height()));
   // parametersValid() above checks that the kernel area fits in int.

@@ -92,7 +92,8 @@ class MEDIA_GPU_EXPORT VP9Decoder : public AcceleratedVideoDecoder {
     DISALLOW_COPY_AND_ASSIGN(VP9Accelerator);
   };
 
-  explicit VP9Decoder(std::unique_ptr<VP9Accelerator> accelerator);
+  VP9Decoder(std::unique_ptr<VP9Accelerator> accelerator,
+             const VideoColorSpace& container_color_space = VideoColorSpace());
   ~VP9Decoder() override;
 
   // AcceleratedVideoDecoder implementation.
@@ -140,11 +141,16 @@ class MEDIA_GPU_EXPORT VP9Decoder : public AcceleratedVideoDecoder {
   // Current frame header to be used in decoding the next picture.
   std::unique_ptr<Vp9FrameHeader> curr_frame_hdr_;
 
+  // Color space provided by the container.
+  const VideoColorSpace container_color_space_;
+
   // Reference frames currently in use.
   std::vector<scoped_refptr<VP9Picture>> ref_frames_;
 
   // Current coded resolution.
   gfx::Size pic_size_;
+
+  size_t size_change_failure_counter_ = 0;
 
   const std::unique_ptr<VP9Accelerator> accelerator_;
 

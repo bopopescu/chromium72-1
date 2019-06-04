@@ -13,14 +13,15 @@
 
 #include <limits>
 
-#include "api/optional.h"
+#include "absl/types/optional.h"
 #include "api/video/video_sink_interface.h"
+#include "rtc_base/system/rtc_export.h"
 
 namespace rtc {
 
 // VideoSinkWants is used for notifying the source of properties a video frame
 // should have when it is delivered to a certain sink.
-struct VideoSinkWants {
+struct RTC_EXPORT VideoSinkWants {
   VideoSinkWants();
   VideoSinkWants(const VideoSinkWants&);
   ~VideoSinkWants();
@@ -38,7 +39,7 @@ struct VideoSinkWants {
   // have improved after an earlier downgrade. The source should select the
   // closest resolution to this pixel count, but if max_pixel_count is set, it
   // still sets the absolute upper bound.
-  rtc::Optional<int> target_pixel_count;
+  absl::optional<int> target_pixel_count;
   // Tells the source the maximum framerate the sink wants.
   int max_framerate_fps = std::numeric_limits<int>::max();
 };

@@ -28,9 +28,7 @@ bool PowerButtonControllerTestApi::TriggerPreShutdownTimeout() {
   if (!controller_->pre_shutdown_timer_.IsRunning())
     return false;
 
-  base::Closure task = controller_->pre_shutdown_timer_.user_task();
-  controller_->pre_shutdown_timer_.Stop();
-  task.Run();
+  controller_->pre_shutdown_timer_.FireNow();
   return true;
 }
 
@@ -42,9 +40,7 @@ bool PowerButtonControllerTestApi::TriggerPowerButtonMenuTimeout() {
   if (!controller_->power_button_menu_timer_.IsRunning())
     return false;
 
-  base::Closure task = controller_->power_button_menu_timer_.user_task();
-  controller_->power_button_menu_timer_.Stop();
-  task.Run();
+  controller_->power_button_menu_timer_.FireNow();
   return true;
 }
 
@@ -78,6 +74,10 @@ bool PowerButtonControllerTestApi::MenuHasLockScreenItem() const {
          GetPowerButtonMenuView()->lock_screen_item_for_test();
 }
 
+bool PowerButtonControllerTestApi::MenuHasFeedbackItem() const {
+  return IsMenuOpened() && GetPowerButtonMenuView()->feedback_item_for_test();
+}
+
 PowerButtonScreenshotController*
 PowerButtonControllerTestApi::GetScreenshotController() {
   return controller_->screenshot_controller_.get();
@@ -101,6 +101,10 @@ void PowerButtonControllerTestApi::SetTickClock(
 void PowerButtonControllerTestApi::SetShowMenuAnimationDone(
     bool show_menu_animation_done) {
   controller_->show_menu_animation_done_ = show_menu_animation_done;
+}
+
+bool PowerButtonControllerTestApi::ShowMenuAnimationDone() const {
+  return controller_->show_menu_animation_done_;
 }
 
 }  // namespace ash

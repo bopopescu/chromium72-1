@@ -9,7 +9,7 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_CSS_PROPERTY_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_CSS_PROPERTY_H_
 
-#include "third_party/blink/renderer/core/css_property_names.h"
+#include "third_party/blink/renderer/core/css/css_property_names.h"
 #include "third_party/blink/renderer/core/css/css_value.h"
 #include "third_party/blink/renderer/core/css/properties/css_unresolved_property.h"
 #include "third_party/blink/renderer/platform/heap/heap_allocator.h"
@@ -58,6 +58,7 @@ class CSSProperty : public CSSUnresolvedProperty {
   virtual bool IsAffectedByAll() const { return IsEnabled() && IsProperty(); }
   virtual bool IsLayoutDependentProperty() const { return false; }
   virtual bool IsLayoutDependent(const ComputedStyle* style, LayoutObject* layout_object) const { return false; }
+  virtual bool IsValidForVisitedLink() const { return false; }
 
   // Properties that do not override this method:
   // CSSPropertyWebkitFontSizeDelta

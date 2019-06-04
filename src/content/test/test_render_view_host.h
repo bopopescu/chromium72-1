@@ -94,6 +94,12 @@ class TestRenderWidgetHostView : public RenderWidgetHostViewBase,
       viz::CompositorFrame frame,
       base::Optional<viz::HitTestRegionList> hit_test_region_list) override;
   void ClearCompositorFrame() override {}
+
+  // Advances the fallback surface to the first surface after navigation. This
+  // ensures that stale surfaces are not presented to the user for an indefinite
+  // period of time.
+  void ResetFallbackToFirstNavigationSurface() override{};
+
   void SetNeedsBeginFrames(bool needs_begin_frames) override {}
   void SetWantsAnimateOnlyBeginFrames() override {}
   void TakeFallbackContentFrom(RenderWidgetHostView* view) override;
@@ -113,7 +119,9 @@ class TestRenderWidgetHostView : public RenderWidgetHostViewBase,
   gfx::Rect GetBoundsInRootWindow() override;
   bool LockMouse() override;
   void UnlockMouse() override;
-  viz::FrameSinkId GetFrameSinkId() override;
+  const viz::FrameSinkId& GetFrameSinkId() const override;
+  const viz::LocalSurfaceIdAllocation& GetLocalSurfaceIdAllocation()
+      const override;
   viz::SurfaceId GetCurrentSurfaceId() const override;
 
   bool is_showing() const { return is_showing_; }
@@ -127,7 +135,7 @@ class TestRenderWidgetHostView : public RenderWidgetHostViewBase,
     did_change_compositor_frame_sink_ = false;
   }
 #if defined(USE_AURA)
-  void ScheduleEmbed(ui::mojom::WindowTreeClientPtr client,
+  void ScheduleEmbed(ws::mojom::WindowTreeClientPtr client,
                      base::OnceCallback<void(const base::UnguessableToken&)>
                          callback) override {}
 #endif
@@ -201,6 +209,7 @@ class TestRenderViewHost
   TestRenderViewHost(SiteInstance* instance,
                      std::unique_ptr<RenderWidgetHostImpl> widget,
                      RenderViewHostDelegate* delegate,
+                     int32_t routing_id,
                      int32_t main_frame_routing_id,
                      bool swapped_out);
   ~TestRenderViewHost() override;

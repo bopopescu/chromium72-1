@@ -18,7 +18,6 @@
 #include "../private/GrTypesPriv.h"
 
 class GrTexturePriv;
-enum class SkDestinationSurfaceColorMode;
 
 class GrTexture : virtual public GrSurface {
 public:
@@ -66,8 +65,7 @@ public:
     inline const GrTexturePriv texturePriv() const;
 
 protected:
-    GrTexture(GrGpu*, const GrSurfaceDesc&, GrSLType samplerType,
-              GrSamplerState::Filter highestFilterMode, GrMipMapsStatus);
+    GrTexture(GrGpu*, const GrSurfaceDesc&, GrTextureType, GrMipMapsStatus);
 
     virtual bool onStealBackendTexture(GrBackendTexture*, SkImage::BackendTextureReleaseProc*) = 0;
 
@@ -77,11 +75,9 @@ private:
     void markMipMapsDirty();
     void markMipMapsClean();
 
-    GrSLType                      fSamplerType;
-    GrSamplerState::Filter        fHighestFilterMode;
+    GrTextureType                 fTextureType;
     GrMipMapsStatus               fMipMapsStatus;
     int                           fMaxMipMapLevel;
-    SkDestinationSurfaceColorMode fMipColorMode;
     friend class GrTexturePriv;
 
     typedef GrSurface INHERITED;

@@ -4,15 +4,15 @@
 
 #include "third_party/blink/renderer/modules/canvas/canvas2d/hit_region.h"
 
-#include "third_party/blink/renderer/core/dom/ax_object_cache.h"
+#include "third_party/blink/renderer/core/accessibility/ax_object_cache.h"
 
 namespace blink {
 
-HitRegion::HitRegion(const Path& path, const HitRegionOptions& options)
-    : id_(options.id().IsEmpty() ? String() : options.id()),
-      control_(options.control()),
+HitRegion::HitRegion(const Path& path, const HitRegionOptions* options)
+    : id_(options->id().IsEmpty() ? String() : options->id()),
+      control_(options->control()),
       path_(path) {
-  if (options.fillRule() != "evenodd")
+  if (options->fillRule() != "evenodd")
     fill_rule_ = RULE_NONZERO;
   else
     fill_rule_ = RULE_EVENODD;

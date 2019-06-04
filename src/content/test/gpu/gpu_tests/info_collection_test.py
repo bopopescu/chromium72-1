@@ -19,6 +19,7 @@ class InfoCollectionTest(gpu_integration_test.GpuIntegrationTest):
 
   @classmethod
   def AddCommandlineArgs(cls, parser):
+    super(InfoCollectionTest, cls).AddCommandlineArgs(parser)
     parser.add_option('--expected-device-id',
         help='The expected device id')
     parser.add_option('--expected-vendor-id',
@@ -39,10 +40,11 @@ class InfoCollectionTest(gpu_integration_test.GpuIntegrationTest):
     self.tab.action_runner.Navigate('chrome:gpu')
 
     # Gather the IDs detected by the GPU process
-    if not self.browser.supports_system_info:
+    system_info = self.browser.GetSystemInfo()
+    if not system_info:
       self.fail("Browser doesn't support GetSystemInfo")
 
-    gpu = self.browser.GetSystemInfo().gpu.devices[0]
+    gpu = system_info.gpu.devices[0]
     if not gpu:
       self.fail("System Info doesn't have a gpu")
 

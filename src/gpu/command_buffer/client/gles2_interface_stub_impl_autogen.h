@@ -817,6 +817,21 @@ GLboolean GLES2InterfaceStub::IsVertexArrayOES(GLuint /* array */) {
   return 0;
 }
 void GLES2InterfaceStub::BindVertexArrayOES(GLuint /* array */) {}
+void GLES2InterfaceStub::FramebufferParameteri(GLenum /* target */,
+                                               GLenum /* pname */,
+                                               GLint /* param */) {}
+void GLES2InterfaceStub::BindImageTexture(GLuint /* unit */,
+                                          GLuint /* texture */,
+                                          GLint /* level */,
+                                          GLboolean /* layered */,
+                                          GLint /* layer */,
+                                          GLenum /* access */,
+                                          GLenum /* format */) {}
+void GLES2InterfaceStub::DispatchCompute(GLuint /* num_groups_x */,
+                                         GLuint /* num_groups_y */,
+                                         GLuint /* num_groups_z */) {}
+void GLES2InterfaceStub::MemoryBarrierEXT(GLbitfield /* barriers */) {}
+void GLES2InterfaceStub::MemoryBarrierByRegion(GLbitfield /* barriers */) {}
 void GLES2InterfaceStub::SwapBuffers(GLuint64 /* swap_id */,
                                      GLbitfield /* flags */) {}
 GLuint GLES2InterfaceStub::GetMaxValueInBufferCHROMIUM(GLuint /* buffer_id */,
@@ -937,8 +952,6 @@ void GLES2InterfaceStub::CopySubTextureCHROMIUM(
     GLboolean /* unpack_flip_y */,
     GLboolean /* unpack_premultiply_alpha */,
     GLboolean /* unpack_unmultiply_alpha */) {}
-void GLES2InterfaceStub::CompressedCopyTextureCHROMIUM(GLuint /* source_id */,
-                                                       GLuint /* dest_id */) {}
 void GLES2InterfaceStub::DrawArraysInstancedANGLE(GLenum /* mode */,
                                                   GLint /* first */,
                                                   GLsizei /* count */,
@@ -950,10 +963,8 @@ void GLES2InterfaceStub::DrawElementsInstancedANGLE(GLenum /* mode */,
                                                     GLsizei /* primcount */) {}
 void GLES2InterfaceStub::VertexAttribDivisorANGLE(GLuint /* index */,
                                                   GLuint /* divisor */) {}
-void GLES2InterfaceStub::GenMailboxCHROMIUM(GLbyte* /* mailbox */) {}
-void GLES2InterfaceStub::ProduceTextureDirectCHROMIUM(
-    GLuint /* texture */,
-    const GLbyte* /* mailbox */) {}
+void GLES2InterfaceStub::ProduceTextureDirectCHROMIUM(GLuint /* texture */,
+                                                      GLbyte* /* mailbox */) {}
 GLuint GLES2InterfaceStub::CreateAndConsumeTextureCHROMIUM(
     const GLbyte* /* mailbox */) {
   return 0;
@@ -1045,7 +1056,8 @@ void GLES2InterfaceStub::ScheduleDCLayerCHROMIUM(
     GLuint /* edge_aa_mask */,
     const GLfloat* /* bounds_rect */,
     GLuint /* filter */,
-    bool /* is_protected_video */) {}
+    GLuint /* protected_video_type */) {}
+void GLES2InterfaceStub::SetActiveURLCHROMIUM(const char* /* url */) {}
 void GLES2InterfaceStub::MatrixLoadfCHROMIUM(GLenum /* matrixMode */,
                                              const GLfloat* /* m */) {}
 void GLES2InterfaceStub::MatrixLoadIdentityCHROMIUM(GLenum /* matrixMode */) {}
@@ -1223,4 +1235,24 @@ GLuint GLES2InterfaceStub::CreateClientGpuFenceCHROMIUM(
 }
 void GLES2InterfaceStub::WaitGpuFenceCHROMIUM(GLuint /* gpu_fence_id */) {}
 void GLES2InterfaceStub::DestroyGpuFenceCHROMIUM(GLuint /* gpu_fence_id */) {}
+void GLES2InterfaceStub::InvalidateReadbackBufferShadowDataCHROMIUM(
+    GLuint /* buffer_id */) {}
+void GLES2InterfaceStub::FramebufferTextureMultiviewLayeredANGLE(
+    GLenum /* target */,
+    GLenum /* attachment */,
+    GLuint /* texture */,
+    GLint /* level */,
+    GLint /* baseViewIndex */,
+    GLsizei /* numViews */) {}
+void GLES2InterfaceStub::MaxShaderCompilerThreadsKHR(GLuint /* count */) {}
+GLuint GLES2InterfaceStub::CreateAndTexStorage2DSharedImageCHROMIUM(
+    GLenum /* internalFormat */,
+    const GLbyte* /* mailbox */) {
+  return 0;
+}
+void GLES2InterfaceStub::BeginSharedImageAccessDirectCHROMIUM(
+    GLuint /* texture */,
+    GLenum /* mode */) {}
+void GLES2InterfaceStub::EndSharedImageAccessDirectCHROMIUM(
+    GLuint /* texture */) {}
 #endif  // GPU_COMMAND_BUFFER_CLIENT_GLES2_INTERFACE_STUB_IMPL_AUTOGEN_H_

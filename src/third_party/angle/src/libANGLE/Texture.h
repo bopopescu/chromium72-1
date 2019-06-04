@@ -21,6 +21,7 @@
 #include "libANGLE/Error.h"
 #include "libANGLE/FramebufferAttachment.h"
 #include "libANGLE/Image.h"
+#include "libANGLE/Observer.h"
 #include "libANGLE/Stream.h"
 #include "libANGLE/angletypes.h"
 #include "libANGLE/formatutils.h"
@@ -29,14 +30,14 @@ namespace egl
 {
 class Surface;
 class Stream;
-}
+}  // namespace egl
 
 namespace rx
 {
 class GLImplFactory;
 class TextureImpl;
 class TextureGL;
-}
+}  // namespace rx
 
 namespace gl
 {
@@ -59,6 +60,8 @@ struct ImageDesc final
 
     ImageDesc(const ImageDesc &other) = default;
     ImageDesc &operator=(const ImageDesc &other) = default;
+
+    GLint getMemorySize() const;
 
     Extents size;
     Format format;
@@ -119,8 +122,8 @@ struct TextureState final : private angle::NonCopyable
     const ImageDesc &getBaseLevelDesc() const;
 
     // GLES1 emulation: For GL_OES_draw_texture
-    void setCrop(const gl::Rectangle& rect);
-    const gl::Rectangle& getCrop() const;
+    void setCrop(const gl::Rectangle &rect);
+    const gl::Rectangle &getCrop() const;
 
     // GLES1 emulation: Auto-mipmap generation is a texparameter
     void setGenerateMipmapHint(GLenum hint);
@@ -187,18 +190,21 @@ struct TextureState final : private angle::NonCopyable
 bool operator==(const TextureState &a, const TextureState &b);
 bool operator!=(const TextureState &a, const TextureState &b);
 
-class Texture final : public egl::ImageSibling, public LabeledObject
+class Texture final : public RefCountObject,
+                      public egl::ImageSibling,
+                      public LabeledObject,
+                      public angle::ObserverInterface
 {
   public:
     Texture(rx::GLImplFactory *factory, GLuint id, TextureType type);
     ~Texture() override;
 
-    Error onDestroy(const Context *context) override;
+    void onDestroy(const Context *context) override;
 
     void setLabel(const std::string &label) override;
     const std::string &getLabel() const override;
 
-    TextureType getType() const;
+    TextureType getType() const { return mState.mType; }
 
     void setSwizzleRed(GLenum swizzleRed);
     GLenum getSwizzleRed() const;
@@ -247,7 +253,7 @@ class Texture final : public egl::ImageSibling, public LabeledObject
 
     const SamplerState &getSamplerState() const;
 
-    gl::Error setBaseLevel(const Context *context, GLuint baseLevel);
+    angle::Result setBaseLevel(const Context *context, GLuint baseLevel);
     GLuint getBaseLevel() const;
 
     void setMaxLevel(GLuint maxLevel);
@@ -277,95 +283,99 @@ class Texture final : public egl::ImageSibling, public LabeledObject
 
     bool isMipmapComplete() const;
 
-    Error setImage(const Context *context,
-                   const PixelUnpackState &unpackState,
-                   TextureTarget target,
-                   GLint level,
-                   GLenum internalFormat,
-                   const Extents &size,
-                   GLenum format,
-                   GLenum type,
-                   const uint8_t *pixels);
-    Error setSubImage(const Context *context,
-                      const PixelUnpackState &unpackState,
-                      TextureTarget target,
-                      GLint level,
-                      const Box &area,
-                      GLenum format,
-                      GLenum type,
-                      const uint8_t *pixels);
+    angle::Result setImage(Context *context,
+                           const PixelUnpackState &unpackState,
+                           TextureTarget target,
+                           GLint level,
+                           GLenum internalFormat,
+                           const Extents &size,
+                           GLenum format,
+                           GLenum type,
+                           const uint8_t *pixels);
+    angle::Result setSubImage(Context *context,
+                              const PixelUnpackState &unpackState,
+                              Buffer *unpackBuffer,
+                              TextureTarget target,
+                              GLint level,
+                              const Box &area,
+                              GLenum format,
+                              GLenum type,
+                              const uint8_t *pixels);
 
-    Error setCompressedImage(const Context *context,
-                             const PixelUnpackState &unpackState,
-                             TextureTarget target,
-                             GLint level,
+    angle::Result setCompressedImage(Context *context,
+                                     const PixelUnpackState &unpackState,
+                                     TextureTarget target,
+                                     GLint level,
+                                     GLenum internalFormat,
+                                     const Extents &size,
+                                     size_t imageSize,
+                                     const uint8_t *pixels);
+    angle::Result setCompressedSubImage(const Context *context,
+                                        const PixelUnpackState &unpackState,
+                                        TextureTarget target,
+                                        GLint level,
+                                        const Box &area,
+                                        GLenum format,
+                                        size_t imageSize,
+                                        const uint8_t *pixels);
+
+    angle::Result copyImage(Context *context,
+                            TextureTarget target,
+                            GLint level,
+                            const Rectangle &sourceArea,
+                            GLenum internalFormat,
+                            Framebuffer *source);
+    angle::Result copySubImage(Context *context,
+                               TextureTarget target,
+                               GLint level,
+                               const Offset &destOffset,
+                               const Rectangle &sourceArea,
+                               Framebuffer *source);
+
+    angle::Result copyTexture(Context *context,
+                              TextureTarget target,
+                              GLint level,
+                              GLenum internalFormat,
+                              GLenum type,
+                              GLint sourceLevel,
+                              bool unpackFlipY,
+                              bool unpackPremultiplyAlpha,
+                              bool unpackUnmultiplyAlpha,
+                              Texture *source);
+    angle::Result copySubTexture(const Context *context,
+                                 TextureTarget target,
+                                 GLint level,
+                                 const Offset &destOffset,
+                                 GLint sourceLevel,
+                                 const Box &sourceBox,
+                                 bool unpackFlipY,
+                                 bool unpackPremultiplyAlpha,
+                                 bool unpackUnmultiplyAlpha,
+                                 Texture *source);
+    angle::Result copyCompressedTexture(Context *context, const Texture *source);
+
+    angle::Result setStorage(Context *context,
+                             TextureType type,
+                             GLsizei levels,
                              GLenum internalFormat,
-                             const Extents &size,
-                             size_t imageSize,
-                             const uint8_t *pixels);
-    Error setCompressedSubImage(const Context *context,
-                                const PixelUnpackState &unpackState,
-                                TextureTarget target,
-                                GLint level,
-                                const Box &area,
-                                GLenum format,
-                                size_t imageSize,
-                                const uint8_t *pixels);
+                             const Extents &size);
 
-    Error copyImage(const Context *context,
-                    TextureTarget target,
-                    GLint level,
-                    const Rectangle &sourceArea,
-                    GLenum internalFormat,
-                    Framebuffer *source);
-    Error copySubImage(const Context *context,
-                       TextureTarget target,
-                       GLint level,
-                       const Offset &destOffset,
-                       const Rectangle &sourceArea,
-                       Framebuffer *source);
+    angle::Result setStorageMultisample(Context *context,
+                                        TextureType type,
+                                        GLsizei samples,
+                                        GLint internalformat,
+                                        const Extents &size,
+                                        bool fixedSampleLocations);
 
-    Error copyTexture(const Context *context,
-                      TextureTarget target,
-                      GLint level,
-                      GLenum internalFormat,
-                      GLenum type,
-                      GLint sourceLevel,
-                      bool unpackFlipY,
-                      bool unpackPremultiplyAlpha,
-                      bool unpackUnmultiplyAlpha,
-                      Texture *source);
-    Error copySubTexture(const Context *context,
-                         TextureTarget target,
-                         GLint level,
-                         const Offset &destOffset,
-                         GLint sourceLevel,
-                         const Rectangle &sourceArea,
-                         bool unpackFlipY,
-                         bool unpackPremultiplyAlpha,
-                         bool unpackUnmultiplyAlpha,
-                         Texture *source);
-    Error copyCompressedTexture(const Context *context, const Texture *source);
+    angle::Result setEGLImageTarget(Context *context, TextureType type, egl::Image *imageTarget);
 
-    Error setStorage(const Context *context,
-                     TextureType type,
-                     GLsizei levels,
-                     GLenum internalFormat,
-                     const Extents &size);
-
-    Error setStorageMultisample(const Context *context,
-                                TextureType type,
-                                GLsizei samples,
-                                GLint internalformat,
-                                const Extents &size,
-                                bool fixedSampleLocations);
-
-    Error setEGLImageTarget(const Context *context, TextureType type, egl::Image *imageTarget);
-
-    Error generateMipmap(const Context *context);
+    angle::Result generateMipmap(Context *context);
 
     egl::Surface *getBoundSurface() const;
     egl::Stream *getBoundStream() const;
+
+    GLint getMemorySize() const;
+    GLint getLevelMemorySize(TextureTarget target, GLint level) const;
 
     void signalDirty(const Context *context, InitState initState);
 
@@ -375,12 +385,20 @@ class Texture final : public egl::ImageSibling, public LabeledObject
 
     // FramebufferAttachmentObject implementation
     Extents getAttachmentSize(const ImageIndex &imageIndex) const override;
-    const Format &getAttachmentFormat(GLenum binding, const ImageIndex &imageIndex) const override;
+    Format getAttachmentFormat(GLenum binding, const ImageIndex &imageIndex) const override;
     GLsizei getAttachmentSamples(const ImageIndex &imageIndex) const override;
+    bool isRenderable(const Context *context,
+                      GLenum binding,
+                      const ImageIndex &imageIndex) const override;
+
+    bool getAttachmentFixedSampleLocations(const ImageIndex &imageIndex) const;
+
+    void setBorderColor(const ColorGeneric &color);
+    const ColorGeneric &getBorderColor() const;
 
     // GLES1 emulation
-    void setCrop(const gl::Rectangle& rect);
-    const gl::Rectangle& getCrop() const;
+    void setCrop(const gl::Rectangle &rect);
+    const gl::Rectangle &getCrop() const;
     void setGenerateMipmapHint(GLenum generate);
     GLenum getGenerateMipmapHint() const;
 
@@ -389,9 +407,9 @@ class Texture final : public egl::ImageSibling, public LabeledObject
     GLuint getId() const override;
 
     // Needed for robust resource init.
-    Error ensureInitialized(const Context *context);
+    angle::Result ensureInitialized(const Context *context);
     InitState initState(const ImageIndex &imageIndex) const override;
-    InitState initState() const;
+    InitState initState() const { return mState.mInitState; }
     void setInitState(const ImageIndex &imageIndex, InitState initState) override;
 
     enum DirtyBitType
@@ -408,6 +426,7 @@ class Texture final : public egl::ImageSibling, public LabeledObject
         DIRTY_BIT_COMPARE_MODE,
         DIRTY_BIT_COMPARE_FUNC,
         DIRTY_BIT_SRGB_DECODE,
+        DIRTY_BIT_BORDER_COLOR,
 
         // Texture state
         DIRTY_BIT_SWIZZLE_RED,
@@ -421,41 +440,50 @@ class Texture final : public egl::ImageSibling, public LabeledObject
         // Misc
         DIRTY_BIT_LABEL,
         DIRTY_BIT_USAGE,
+        DIRTY_BIT_IMPLEMENTATION,
 
         DIRTY_BIT_COUNT,
     };
     using DirtyBits = angle::BitSet<DIRTY_BIT_COUNT>;
 
-    Error syncState(const Context *context);
+    angle::Result syncState(const Context *context);
     bool hasAnyDirtyBit() const { return mDirtyBits.any(); }
+
+    // ObserverInterface implementation.
+    void onSubjectStateChange(const gl::Context *context,
+                              angle::SubjectIndex index,
+                              angle::SubjectMessage message) override;
 
   private:
     rx::FramebufferAttachmentObjectImpl *getAttachmentImpl() const override;
 
     // ANGLE-only method, used internally
     friend class egl::Surface;
-    Error bindTexImageFromSurface(const Context *context, egl::Surface *surface);
-    Error releaseTexImageFromSurface(const Context *context);
+    angle::Result bindTexImageFromSurface(Context *context, egl::Surface *surface);
+    angle::Result releaseTexImageFromSurface(const Context *context);
 
     // ANGLE-only methods, used internally
     friend class egl::Stream;
     void bindStream(egl::Stream *stream);
     void releaseStream();
-    Error acquireImageFromStream(const Context *context,
-                                 const egl::Stream::GLTextureDescription &desc);
-    Error releaseImageFromStream(const Context *context);
+    angle::Result acquireImageFromStream(const Context *context,
+                                         const egl::Stream::GLTextureDescription &desc);
+    angle::Result releaseImageFromStream(const Context *context);
 
     void invalidateCompletenessCache() const;
-    Error releaseTexImageInternal(const Context *context);
+    angle::Result releaseTexImageInternal(Context *context);
 
-    Error ensureSubImageInitialized(const Context *context,
-                                    TextureTarget target,
-                                    size_t level,
-                                    const gl::Box &area);
+    angle::Result ensureSubImageInitialized(const Context *context,
+                                            TextureTarget target,
+                                            size_t level,
+                                            const gl::Box &area);
+
+    angle::Result handleMipmapGenerationHint(Context *context, int level);
 
     TextureState mState;
     DirtyBits mDirtyBits;
     rx::TextureImpl *mTexture;
+    angle::ObserverBinding mImplObserver;
 
     std::string mLabel;
 

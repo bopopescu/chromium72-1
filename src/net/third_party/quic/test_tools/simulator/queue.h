@@ -8,7 +8,7 @@
 #include "net/third_party/quic/core/quic_alarm.h"
 #include "net/third_party/quic/test_tools/simulator/link.h"
 
-namespace net {
+namespace quic {
 namespace simulator {
 
 // A finitely sized queue which egresses packets onto a constrained link.  The
@@ -23,7 +23,9 @@ class Queue : public Actor, public UnconstrainedPortInterface {
     virtual void OnPacketDequeued() = 0;
   };
 
-  Queue(Simulator* simulator, std::string name, QuicByteCount capacity);
+  Queue(Simulator* simulator, QuicString name, QuicByteCount capacity);
+  Queue(const Queue&) = delete;
+  Queue& operator=(const Queue&) = delete;
   ~Queue() override;
 
   void set_tx_port(ConstrainedPortInterface* port);
@@ -110,11 +112,9 @@ class Queue : public Actor, public UnconstrainedPortInterface {
   QuicQueue<EnqueuedPacket> queue_;
 
   ListenerInterface* listener_;
-
-  DISALLOW_COPY_AND_ASSIGN(Queue);
 };
 
 }  // namespace simulator
-}  // namespace net
+}  // namespace quic
 
 #endif  // NET_THIRD_PARTY_QUIC_TEST_TOOLS_SIMULATOR_QUEUE_H_

@@ -13,7 +13,7 @@
 #include "base/memory/ref_counted_memory.h"
 #include "base/single_thread_task_runner.h"
 #include "base/strings/string_piece.h"
-#include "base/task_scheduler/post_task.h"
+#include "base/task/post_task.h"
 #include "content/browser/bad_message.h"
 #include "content/browser/blob_storage/blob_internals_url_loader.h"
 #include "content/browser/blob_storage/chrome_blob_storage_context.h"
@@ -24,6 +24,7 @@
 #include "content/browser/webui/url_data_manager_backend.h"
 #include "content/browser/webui/url_data_source_impl.h"
 #include "content/public/browser/browser_context.h"
+#include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/render_process_host.h"
 #include "content/public/browser/web_contents.h"
@@ -66,7 +67,7 @@ void ReadData(scoped_refptr<network::ResourceResponse> headers,
 
   network::mojom::URLLoaderClientPtr client;
   client.Bind(std::move(client_info));
-  client->OnReceiveResponse(headers->head, nullptr);
+  client->OnReceiveResponse(headers->head);
 
   base::StringPiece input(reinterpret_cast<const char*>(bytes->front()),
                           bytes->size());
@@ -119,6 +120,7 @@ void ReadData(scoped_refptr<network::ResourceResponse> headers,
   network::URLLoaderCompletionStatus status(net::OK);
   status.encoded_data_length = output_size;
   status.encoded_body_length = output_size;
+  status.decoded_body_length = output_size;
   client->OnComplete(status);
 }
 
@@ -244,7 +246,6 @@ class WebUIURLLoaderFactory : public network::mojom::URLLoaderFactory,
                             const net::MutableNetworkTrafficAnnotationTag&
                                 traffic_annotation) override {
     DCHECK_CURRENTLY_ON(BrowserThread::UI);
-    DCHECK(!request.download_to_file);
 
     if (request.url.scheme() != scheme_) {
       DVLOG(1) << "Bad scheme: " << request.url.scheme();
@@ -270,8 +271,8 @@ class WebUIURLLoaderFactory : public network::mojom::URLLoaderFactory,
     }
 
     if (request.url.host_piece() == kChromeUIBlobInternalsHost) {
-      BrowserThread::PostTask(
-          BrowserThread::IO, FROM_HERE,
+      base::PostTaskWithTraits(
+          FROM_HERE, {BrowserThread::IO},
           base::BindOnce(&StartBlobInternalsURLLoader, request,
                          client.PassInterface(),
                          base::Unretained(ChromeBlobStorageContext::GetFor(
@@ -289,8 +290,8 @@ class WebUIURLLoaderFactory : public network::mojom::URLLoaderFactory,
     // from frames can happen while the RFH is changed for a cross-process
     // navigation. The URLDataSources just need the WebContents; the specific
     // frame doesn't matter.
-    BrowserThread::PostTask(
-        BrowserThread::IO, FROM_HERE,
+    base::PostTaskWithTraits(
+        FROM_HERE, {BrowserThread::IO},
         base::BindOnce(
             &StartURLLoader, request, render_frame_host_->GetFrameTreeNodeId(),
             client.PassInterface(),

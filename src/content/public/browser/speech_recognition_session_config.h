@@ -14,8 +14,8 @@
 #include "content/common/content_export.h"
 #include "content/public/browser/speech_recognition_session_context.h"
 #include "content/public/browser/speech_recognition_session_preamble.h"
-#include "content/public/common/speech_recognition_grammar.mojom.h"
-#include "net/url_request/url_request_context_getter.h"
+#include "services/network/public/cpp/shared_url_loader_factory.h"
+#include "third_party/blink/public/mojom/speech/speech_recognition_grammar.mojom.h"
 #include "url/origin.h"
 
 namespace content {
@@ -29,7 +29,10 @@ struct CONTENT_EXPORT SpeechRecognitionSessionConfig {
   ~SpeechRecognitionSessionConfig();
 
   std::string language;
-  std::vector<mojom::SpeechRecognitionGrammar> grammars;
+  // Accept language header. If |language| is empty, used to get a language
+  // instead.
+  std::string accept_language;
+  std::vector<blink::mojom::SpeechRecognitionGrammar> grammars;
   url::Origin origin;
   bool filter_profanities;
   bool continuous;
@@ -39,7 +42,8 @@ struct CONTENT_EXPORT SpeechRecognitionSessionConfig {
   std::string auth_scope;
   scoped_refptr<SpeechRecognitionSessionPreamble> preamble;
   SpeechRecognitionSessionContext initial_context;
-  scoped_refptr<net::URLRequestContextGetter> url_request_context_getter;
+  scoped_refptr<network::SharedURLLoaderFactory> shared_url_loader_factory;
+
   base::WeakPtr<SpeechRecognitionEventListener> event_listener;
 };
 

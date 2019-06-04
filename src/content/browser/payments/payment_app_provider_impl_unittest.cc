@@ -15,7 +15,7 @@
 #include "content/public/test/test_browser_context.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/blink/public/platform/modules/payments/payment_app.mojom.h"
+#include "third_party/blink/public/mojom/payments/payment_app.mojom.h"
 #include "third_party/blink/public/platform/modules/permissions/permission_status.mojom.h"
 #include "url/gurl.h"
 
@@ -65,7 +65,7 @@ class PaymentAppProviderTest : public PaymentAppContentUnitTestBase {
         .WillByDefault(
             testing::Return(blink::mojom::PermissionStatus::GRANTED));
     static_cast<TestBrowserContext*>(browser_context())
-        ->SetPermissionManager(std::move(mock_permission_manager));
+        ->SetPermissionControllerDelegate(std::move(mock_permission_manager));
   }
   ~PaymentAppProviderTest() override {}
 
@@ -159,7 +159,7 @@ TEST_F(PaymentAppProviderTest, CanMakePaymentTest) {
       payments::mojom::CanMakePaymentEventData::New();
   payments::mojom::PaymentMethodDataPtr methodData =
       payments::mojom::PaymentMethodData::New();
-  methodData->supported_methods.push_back("test-method");
+  methodData->supported_method = "test-method";
   event_data->method_data.push_back(std::move(methodData));
 
   bool can_make_payment = false;

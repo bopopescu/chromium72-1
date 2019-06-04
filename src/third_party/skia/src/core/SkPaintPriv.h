@@ -50,7 +50,7 @@ public:
      */
     static bool Overwrites(const SkImage*, const SkPaint* paint);
 
-    static void ScaleFontMetrics(SkPaint::FontMetrics*, SkScalar);
+    static void ScaleFontMetrics(SkFontMetrics*, SkScalar);
 
     /**
      *  Return a matrix that applies the paint's text values: size, scale, skew
@@ -68,7 +68,7 @@ public:
 
     static bool ShouldDither(const SkPaint&, SkColorType);
 
-    // returns 0 if buffer is invalid for specified encoding
+    // returns -1 if buffer is invalid for specified encoding
     static int ValidCountText(const void* text, size_t length, SkPaint::TextEncoding);
 
     static SkTypeface* GetTypefaceOrDefault(const SkPaint& paint) {

@@ -9,12 +9,11 @@
 
 #include "core/fxcrt/fx_string.h"
 #include "core/fxcrt/fx_system.h"
-#include "core/fxge/fx_dib.h"
 #include "fxbarcode/cbc_onecode.h"
 
 class CBC_OnedUPCAWriter;
 
-class CBC_UPCA : public CBC_OneCode {
+class CBC_UPCA final : public CBC_OneCode {
  public:
   CBC_UPCA();
   ~CBC_UPCA() override;

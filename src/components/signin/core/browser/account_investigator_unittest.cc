@@ -10,20 +10,21 @@
 
 #include "base/message_loop/message_loop.h"
 #include "base/run_loop.h"
-#include "base/test/histogram_tester.h"
+#include "base/test/metrics/histogram_tester.h"
 #include "base/timer/timer.h"
-#include "components/pref_registry/pref_registry_syncable.h"
+#include "components/prefs/pref_registry_simple.h"
 #include "components/signin/core/browser/account_tracker_service.h"
 #include "components/signin/core/browser/fake_gaia_cookie_manager_service.h"
 #include "components/signin/core/browser/fake_signin_manager.h"
+#include "components/signin/core/browser/profile_oauth2_token_service.h"
 #include "components/signin/core/browser/signin_metrics.h"
 #include "components/signin/core/browser/signin_pref_names.h"
 #include "components/signin/core/browser/test_signin_client.h"
 #include "components/sync_preferences/testing_pref_service_syncable.h"
+#include "google_apis/gaia/fake_oauth2_token_service_delegate.h"
 #include "google_apis/gaia/gaia_auth_util.h"
-#include "google_apis/gaia/gaia_constants.h"
 #include "google_apis/gaia/google_service_auth_error.h"
-#include "net/url_request/test_url_fetcher_factory.h"
+#include "services/identity/public/cpp/identity_test_environment.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 using base::HistogramTester;
@@ -37,25 +38,32 @@ class AccountInvestigatorTest : public testing::Test {
  protected:
   AccountInvestigatorTest()
       : signin_client_(&prefs_),
+        token_service_(&prefs_,
+                       std::make_unique<FakeOAuth2TokenServiceDelegate>()),
         signin_manager_(&signin_client_,
-                        nullptr,
+                        &token_service_,
                         &account_tracker_service_,
                         nullptr),
-        gaia_cookie_manager_service_(nullptr,
-                                     GaiaConstants::kChromeSource,
-                                     &signin_client_),
-        investigator_(&gaia_cookie_manager_service_, &prefs_, &signin_manager_),
-        fake_url_fetcher_factory_(nullptr) {
+        gaia_cookie_manager_service_(&token_service_, &signin_client_),
+        identity_test_env_(&account_tracker_service_,
+                           &token_service_,
+                           &signin_manager_,
+                           &gaia_cookie_manager_service_),
+        investigator_(&gaia_cookie_manager_service_,
+                      &prefs_,
+                      identity_test_env_.identity_manager()) {
     AccountTrackerService::RegisterPrefs(prefs_.registry());
     AccountInvestigator::RegisterPrefs(prefs_.registry());
     SigninManagerBase::RegisterProfilePrefs(prefs_.registry());
-    account_tracker_service_.Initialize(&signin_client_);
-    gaia_cookie_manager_service_.Init(&fake_url_fetcher_factory_);
+    account_tracker_service_.Initialize(&prefs_, base::FilePath());
   }
 
   ~AccountInvestigatorTest() override { investigator_.Shutdown(); }
 
   FakeSigninManager* signin_manager() { return &signin_manager_; }
+  identity::IdentityTestEnvironment* identity_test_env() {
+    return &identity_test_env_;
+  }
   PrefService* pref_service() { return &prefs_; }
   AccountInvestigator* investigator() { return &investigator_; }
   FakeGaiaCookieManagerService* cookie_manager_service() {
@@ -158,10 +166,11 @@ class AccountInvestigatorTest : public testing::Test {
   sync_preferences::TestingPrefServiceSyncable prefs_;
   AccountTrackerService account_tracker_service_;
   TestSigninClient signin_client_;
+  FakeProfileOAuth2TokenService token_service_;
   FakeSigninManager signin_manager_;
   FakeGaiaCookieManagerService gaia_cookie_manager_service_;
+  identity::IdentityTestEnvironment identity_test_env_;
   AccountInvestigator investigator_;
-  net::FakeURLFetcherFactory fake_url_fetcher_factory_;
   std::map<ReportingType, std::string> suffix_ = {
       {ReportingType::PERIODIC, "_Periodic"},
       {ReportingType::ON_CHANGE, "_OnChange"}};
@@ -181,14 +190,19 @@ AccountInfo Info(const std::string& id) {
   return info;
 }
 
+// NOTE: IdentityTestEnvironment uses a prefix for generating gaia IDs:
+// "gaia_id_for_". For this reason, the tests prefix expected account IDs
+// used so that there is a match.
 const std::vector<ListedAccount> no_accounts{};
-const std::vector<ListedAccount> just_one{Account("1")};
-const std::vector<ListedAccount> just_two{Account("2")};
-const std::vector<ListedAccount> both{Account("1"), Account("2")};
-const std::vector<ListedAccount> both_reversed{Account("2"), Account("1")};
+const std::vector<ListedAccount> just_one{Account("gaia_id_for_1_mail.com")};
+const std::vector<ListedAccount> just_two{Account("gaia_id_for_2_mail.com")};
+const std::vector<ListedAccount> both{Account("gaia_id_for_1_mail.com"),
+                                      Account("gaia_id_for_2_mail.com")};
+const std::vector<ListedAccount> both_reversed{
+    Account("gaia_id_for_2_mail.com"), Account("gaia_id_for_1_mail.com")};
 
-const AccountInfo one(Info("1"));
-const AccountInfo three(Info("3"));
+const AccountInfo one(Info("gaia_id_for_1_mail.com"));
+const AccountInfo three(Info("gaia_id_for_3_mail.com"));
 
 TEST_F(AccountInvestigatorTest, CalculatePeriodicDelay) {
   const Time epoch;
@@ -243,7 +257,7 @@ TEST_F(AccountInvestigatorTest, DiscernRelation) {
 TEST_F(AccountInvestigatorTest, SignedInAccountRelationReport) {
   ExpectRelationReport(just_one, no_accounts, ReportingType::PERIODIC,
                        AccountRelation::WITH_SIGNED_IN_NO_MATCH);
-  signin_manager()->SignIn("1", "a", "A");
+  identity_test_env()->SetPrimaryAccount("1@mail.com");
   ExpectRelationReport(just_one, no_accounts, ReportingType::PERIODIC,
                        AccountRelation::SINGLE_SIGNED_IN_MATCH_NO_SIGNED_OUT);
   ExpectRelationReport(just_two, no_accounts, ReportingType::ON_CHANGE,
@@ -259,7 +273,7 @@ TEST_F(AccountInvestigatorTest, SharedCookieJarReportEmpty) {
 }
 
 TEST_F(AccountInvestigatorTest, SharedCookieJarReportWithAccount) {
-  signin_manager()->SignIn("1", "a", "A");
+  identity_test_env()->SetPrimaryAccount("1@mail.com");
   base::Time now = base::Time::Now();
   pref_service()->SetDouble(prefs::kGaiaCookieChangedTime, now.ToDoubleT());
   const AccountRelation expected_relation(
@@ -294,7 +308,7 @@ TEST_F(AccountInvestigatorTest, OnGaiaAccountsInCookieUpdatedSigninOnly) {
       no_accounts, no_accounts, GoogleServiceAuthError::AuthErrorNone());
 
   const HistogramTester histogram_tester;
-  signin_manager()->SignIn("1", "a", "A");
+  identity_test_env()->SetPrimaryAccount("1@mail.com");
   pref_service()->SetString(prefs::kGaiaCookieHash,
                             Hash(just_one, no_accounts));
   investigator()->OnGaiaAccountsInCookieUpdated(
@@ -307,7 +321,7 @@ TEST_F(AccountInvestigatorTest, OnGaiaAccountsInCookieUpdatedSigninOnly) {
 TEST_F(AccountInvestigatorTest,
        OnGaiaAccountsInCookieUpdatedSigninSignOutOfContent) {
   const HistogramTester histogram_tester;
-  signin_manager()->SignIn("1", "a", "A");
+  identity_test_env()->SetPrimaryAccount("1@mail.com");
   investigator()->OnGaiaAccountsInCookieUpdated(
       just_one, no_accounts, GoogleServiceAuthError::AuthErrorNone());
   ExpectRelationReport(ReportingType::ON_CHANGE, histogram_tester,
@@ -336,7 +350,7 @@ TEST_F(AccountInvestigatorTest, Initialize) {
 }
 
 TEST_F(AccountInvestigatorTest, InitializeSignedIn) {
-  signin_manager()->SignIn("1", "a", "A");
+  identity_test_env()->SetPrimaryAccount("1@mail.com");
   EXPECT_FALSE(*previously_authenticated());
 
   investigator()->Initialize();

@@ -15,7 +15,7 @@
 #include "net/third_party/quic/platform/api/quic_string.h"
 #include "net/third_party/quic/platform/api/quic_string_piece.h"
 
-namespace net {
+namespace quic {
 
 class QuicRandom;
 
@@ -25,6 +25,8 @@ class QuicRandom;
 class QUIC_EXPORT_PRIVATE CryptoSecretBoxer {
  public:
   CryptoSecretBoxer();
+  CryptoSecretBoxer(const CryptoSecretBoxer&) = delete;
+  CryptoSecretBoxer& operator=(const CryptoSecretBoxer&) = delete;
   ~CryptoSecretBoxer();
 
   // GetKeySize returns the number of bytes in a key.
@@ -59,10 +61,8 @@ class QUIC_EXPORT_PRIVATE CryptoSecretBoxer {
   // state_ is an opaque pointer to whatever additional state the concrete
   // implementation of CryptoSecretBoxer requires.
   std::unique_ptr<State> state_ GUARDED_BY(lock_);
-
-  DISALLOW_COPY_AND_ASSIGN(CryptoSecretBoxer);
 };
 
-}  // namespace net
+}  // namespace quic
 
 #endif  // NET_THIRD_PARTY_QUIC_CORE_CRYPTO_CRYPTO_SECRET_BOXER_H_

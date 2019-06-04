@@ -21,6 +21,8 @@ Polymer({
     // <if expr="chromeos">
     showAndroidApps: Boolean,
 
+    showCrostini: Boolean,
+
     showMultidevice: Boolean,
 
     havePlayStoreApp: Boolean,
@@ -47,6 +49,7 @@ Polymer({
 
     advancedToggleExpanded: {
       type: Boolean,
+      value: false,
       notify: true,
       observer: 'advancedToggleExpandedChanged_',
     },
@@ -95,6 +98,12 @@ Polymer({
   listeners: {
     'subpage-expand': 'onSubpageExpanded_',
   },
+
+  /**
+   * Used to avoid handling a new toggle while currently toggling.
+   * @private {boolean}
+   */
+  advancedTogglingInProgress_: false,
 
   /** @override */
   attached: function() {
@@ -147,6 +156,12 @@ Polymer({
    */
   showPage_: function(visibility) {
     return visibility !== false;
+  },
+
+  focusSection: function() {
+    const section = this.getSection(settings.getCurrentRoute().section);
+    assert(section);
+    section.show();
   },
 
   /**
@@ -230,10 +245,11 @@ Polymer({
   },
 
   /**
-   * @return {boolean} Whether to show the multidevice settings page.
+   * @return {boolean} Whether the account supports the features managed in
+   * this section.
    * @private
    */
-  shouldShowMultidevice_: function() {
+  canShowMultideviceSection_: function() {
     const visibility = /** @type {boolean|undefined} */ (
         this.get('pageVisibility.multidevice'));
     return this.showMultidevice && this.showPage_(visibility);
@@ -253,8 +269,47 @@ Polymer({
    */
   advancedToggleExpandedChanged_: function() {
     if (this.advancedToggleExpanded) {
+      // In Polymer2, async() does not wait long enough for layout to complete.
+      // Polymer.RenderStatus.beforeNextRender() must be used instead.
+      // TODO (rbpotter): Remove conditional when migration to Polymer 2 is
+      // completed.
+      if (Polymer.DomIf) {
+        Polymer.RenderStatus.beforeNextRender(this, () => {
+          this.$$('#advancedPageTemplate').get();
+        });
+      } else {
+        this.async(() => {
+          this.$$('#advancedPageTemplate').get();
+        });
+      }
+    }
+  },
+
+  advancedToggleClicked_: function() {
+    if (this.advancedTogglingInProgress_)
+      return;
+
+    this.advancedTogglingInProgress_ = true;
+    const toggle = this.$$('#toggleContainer');
+    if (!this.advancedToggleExpanded) {
+      this.advancedToggleExpanded = true;
       this.async(() => {
-        this.$$('#advancedPageTemplate').get();
+        this.$$('#advancedPageTemplate').get().then(() => {
+          this.fire('scroll-to-top', {
+            top: toggle.offsetTop,
+            callback: () => {
+              this.advancedTogglingInProgress_ = false;
+            }
+          });
+        });
+      });
+    } else {
+      this.fire('scroll-to-bottom', {
+        bottom: toggle.offsetTop + toggle.offsetHeight + 24,
+        callback: () => {
+          this.advancedToggleExpanded = false;
+          this.advancedTogglingInProgress_ = false;
+        }
       });
     }
   },
@@ -314,5 +369,14 @@ Polymer({
    */
   getArrowIcon_: function(opened) {
     return opened ? 'cr:arrow-drop-up' : 'cr:arrow-drop-down';
+  },
+
+  /**
+   * @param {boolean} bool
+   * @return {string}
+   * @private
+   */
+  boolToString_: function(bool) {
+    return bool.toString();
   },
 });

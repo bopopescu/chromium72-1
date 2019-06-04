@@ -15,7 +15,7 @@
 #include "components/offline_pages/core/prefetch/prefetch_types.h"
 #include "components/offline_pages/core/prefetch/store/prefetch_downloader_quota.h"
 #include "components/offline_pages/core/prefetch/store/prefetch_store_utils.h"
-#include "sql/connection.h"
+#include "sql/database.h"
 #include "sql/statement.h"
 #include "url/gurl.h"
 
@@ -45,12 +45,17 @@ const char* kSqlAllColumnNames =
     "archive_body_name, "
     "title, "
     "file_path, "
-    "file_size";
+    "file_size, "
+    "thumbnail_url, "
+    "favicon_url, "
+    "snippet, "
+    "attribution";
 
-bool InsertPrefetchItemSync(const PrefetchItem& item, sql::Connection* db) {
+bool InsertPrefetchItemSync(const PrefetchItem& item, sql::Database* db) {
   static const std::string kSql = base::StringPrintf(
       "INSERT INTO prefetch_items (%s)"
-      " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,"
+      " ?, ?, ?)",
       kSqlAllColumnNames);
   sql::Statement statement(db->GetCachedStatement(SQL_FROM_HERE, kSql.c_str()));
   statement.BindInt64(0, item.offline_id);
@@ -72,11 +77,15 @@ bool InsertPrefetchItemSync(const PrefetchItem& item, sql::Connection* db) {
   statement.BindString16(16, item.title);
   statement.BindString(17, store_utils::ToDatabaseFilePath(item.file_path));
   statement.BindInt64(18, item.file_size);
+  statement.BindString(19, item.thumbnail_url.spec());
+  statement.BindString(20, item.favicon_url.spec());
+  statement.BindString(21, item.snippet);
+  statement.BindString(22, item.attribution);
 
   return statement.Run();
 }
 
-int CountPrefetchItemsSync(sql::Connection* db) {
+int CountPrefetchItemsSync(sql::Database* db) {
   // Not starting transaction as this is a single read.
   static const char kSql[] = "SELECT COUNT(offline_id) FROM prefetch_items";
   sql::Statement statement(db->GetCachedStatement(SQL_FROM_HERE, kSql));
@@ -89,7 +98,7 @@ int CountPrefetchItemsSync(sql::Connection* db) {
 // Populates the PrefetchItem with the data from the current row of the passed
 // in statement following the natural column ordering.
 void PopulatePrefetchItem(const sql::Statement& statement, PrefetchItem* item) {
-  DCHECK_EQ(19, statement.ColumnCount());
+  DCHECK_EQ(23, statement.ColumnCount());
   DCHECK(item);
 
   // Fields are assigned to the item in the order they are stored in the SQL
@@ -115,10 +124,14 @@ void PopulatePrefetchItem(const sql::Statement& statement, PrefetchItem* item) {
   item->file_path =
       store_utils::FromDatabaseFilePath(statement.ColumnString(17));
   item->file_size = statement.ColumnInt64(18);
+  item->thumbnail_url = GURL(statement.ColumnString(19));
+  item->favicon_url = GURL(statement.ColumnString(20));
+  item->snippet = statement.ColumnString(21);
+  item->attribution = statement.ColumnString(22);
 }
 
 std::unique_ptr<PrefetchItem> GetPrefetchItemSync(int64_t offline_id,
-                                                  sql::Connection* db) {
+                                                  sql::Database* db) {
   static const std::string kSql = base::StringPrintf(
       "SELECT %s FROM prefetch_items WHERE offline_id = ?", kSqlAllColumnNames);
 
@@ -133,24 +146,24 @@ std::unique_ptr<PrefetchItem> GetPrefetchItemSync(int64_t offline_id,
   return item;
 }
 
-std::size_t GetAllItemsSync(std::set<PrefetchItem>* items,
-                            sql::Connection* db) {
+std::set<PrefetchItem> GetAllItemsSync(sql::Database* db) {
   // Not starting transaction as this is a single read.
+  std::set<PrefetchItem> items;
   static const std::string kSql =
       base::StringPrintf("SELECT %s FROM prefetch_items", kSqlAllColumnNames);
   sql::Statement statement(db->GetCachedStatement(SQL_FROM_HERE, kSql.c_str()));
   while (statement.Step()) {
     PrefetchItem loaded_item;
     PopulatePrefetchItem(statement, &loaded_item);
-    items->insert(loaded_item);
+    items.insert(loaded_item);
   }
-  return items->size();
+  return items;
 }
 
 int UpdateItemsStateSync(const std::string& name_space,
                          const std::string& url,
                          PrefetchItemState state,
-                         sql::Connection* db) {
+                         sql::Database* db) {
   static const char kSql[] =
       "UPDATE prefetch_items"
       " SET state = ?"
@@ -166,14 +179,14 @@ int UpdateItemsStateSync(const std::string& name_space,
   return kPrefetchStoreCommandFailed;
 }
 
-int64_t GetPrefetchQuotaSync(base::Clock* clock, sql::Connection* db) {
+int64_t GetPrefetchQuotaSync(base::Clock* clock, sql::Database* db) {
   PrefetchDownloaderQuota downloader_quota(db, clock);
   return downloader_quota.GetAvailableQuotaBytes();
 }
 
 bool SetPrefetchQuotaSync(int64_t available_quota,
                           base::Clock* clock,
-                          sql::Connection* db) {
+                          sql::Database* db) {
   PrefetchDownloaderQuota downloader_quota(db, clock);
   return downloader_quota.SetAvailableQuotaBytes(available_quota);
 }
@@ -217,7 +230,7 @@ bool PrefetchStoreTestUtil::InsertPrefetchItem(const PrefetchItem& item) {
   bool success = false;
   store_->Execute(
       base::BindOnce(&InsertPrefetchItemSync, item),
-      base::BindOnce([](bool* alias, bool s) { *alias = s; }, &success));
+      base::BindOnce([](bool* alias, bool s) { *alias = s; }, &success), false);
   RunUntilIdle();
   return success;
 }
@@ -226,7 +239,8 @@ int PrefetchStoreTestUtil::CountPrefetchItems() {
   int count = 0;
   store_->Execute(
       base::BindOnce(&CountPrefetchItemsSync),
-      base::BindOnce([](int* alias, int result) { *alias = result; }, &count));
+      base::BindOnce([](int* alias, int result) { *alias = result; }, &count),
+      kPrefetchStoreCommandFailed);
   RunUntilIdle();
   return count;
 }
@@ -240,20 +254,31 @@ std::unique_ptr<PrefetchItem> PrefetchStoreTestUtil::GetPrefetchItem(
                          std::unique_ptr<PrefetchItem> result) {
                         *alias = std::move(result);
                       },
-                      &item));
+                      &item),
+                  std::unique_ptr<PrefetchItem>());
   RunUntilIdle();
   return item;
 }
 
 std::size_t PrefetchStoreTestUtil::GetAllItems(
     std::set<PrefetchItem>* all_items) {
-  std::size_t items_count;
-  store_->Execute(base::BindOnce(&GetAllItemsSync, all_items),
-                  base::BindOnce([](std::size_t* alias,
-                                    std::size_t result) { *alias = result; },
-                                 &items_count));
+  DCHECK(all_items->empty());
+  *all_items = GetAllItems();
+  return all_items->size();
+}
+
+std::set<PrefetchItem> PrefetchStoreTestUtil::GetAllItems() {
+  std::set<PrefetchItem> items;
+  store_->Execute(
+      base::BindOnce(&GetAllItemsSync),
+      base::BindOnce(
+          [](std::set<PrefetchItem>* alias, std::set<PrefetchItem> result) {
+            *alias = std::move(result);
+          },
+          &items),
+      std::set<PrefetchItem>());
   RunUntilIdle();
-  return items_count;
+  return items;
 }
 
 std::string PrefetchStoreTestUtil::ToString() {
@@ -274,7 +299,8 @@ int PrefetchStoreTestUtil::ZombifyPrefetchItems(const std::string& name_space,
   store_->Execute(
       base::BindOnce(&UpdateItemsStateSync, name_space, url.spec(),
                      PrefetchItemState::ZOMBIE),
-      base::BindOnce([](int* alias, int result) { *alias = result; }, &count));
+      base::BindOnce([](int* alias, int result) { *alias = result; }, &count),
+      kPrefetchStoreCommandFailed);
   RunUntilIdle();
   return count;
 }
@@ -286,10 +312,11 @@ void PrefetchStoreTestUtil::RunUntilIdle() {
 int PrefetchStoreTestUtil::LastCommandChangeCount() {
   int count = 0;
   store_->Execute(
-      base::BindOnce([](sql::Connection* connection) {
+      base::BindOnce([](sql::Database* connection) {
         return connection->GetLastChangeCount();
       }),
-      base::BindOnce([](int* result, int count) { *result = count; }, &count));
+      base::BindOnce([](int* result, int count) { *result = count; }, &count),
+      0);
   RunUntilIdle();
   return count;
 }
@@ -299,7 +326,8 @@ int64_t PrefetchStoreTestUtil::GetPrefetchQuota() {
   store_->Execute(
       base::BindOnce(&GetPrefetchQuotaSync, clock()),
       base::BindOnce([](int64_t* result, int64_t quota) { *result = quota; },
-                     &result));
+                     &result),
+      int64_t());
   RunUntilIdle();
   return result;
 }
@@ -309,7 +337,8 @@ bool PrefetchStoreTestUtil::SetPrefetchQuota(int64_t available_quota) {
   store_->Execute(
       base::BindOnce(&SetPrefetchQuotaSync, available_quota, clock()),
       base::BindOnce([](bool* result, bool success) { *result = success; },
-                     &result));
+                     &result),
+      false);
   RunUntilIdle();
   return result;
 }

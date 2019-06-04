@@ -12,11 +12,11 @@
 //
 // Run with:
 // ./out/Fuzz/blink_png_decoder_fuzzer
-// third_party/WebKit/LayoutTests/images/resources/pngfuzz
+// third_party/blink/web_tests/images/resources/pngfuzz
 //
 // Alternatively, it can be run with:
 // ./out/Fuzz/blink_png_decoder_fuzzer ~/another_dir_to_store_corpus
-// third_party/WebKit/LayoutTests/images/resources/pngfuzz
+// third_party/blink/web_tests/images/resources/pngfuzz
 //
 // so the fuzzer will read both directories passed, but all new generated
 // testcases will go into ~/another_dir_to_store_corpus
@@ -34,8 +34,8 @@ namespace blink {
 std::unique_ptr<ImageDecoder> CreateDecoder(
     ImageDecoder::AlphaOption alpha_option) {
   return std::make_unique<PNGImageDecoder>(
-      alpha_option, ColorBehavior::TransformToSRGB(),
-      ImageDecoder::kNoDecodedImageByteLimit);
+      alpha_option, ImageDecoder::kDefaultBitDepth,
+      ColorBehavior::TransformToSRGB(), ImageDecoder::kNoDecodedImageByteLimit);
 }
 
 int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {

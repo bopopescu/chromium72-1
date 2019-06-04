@@ -7,7 +7,7 @@ option optimize_for = LITE_RUNTIME;
 
 // This file defines messages used for starting, stopping, and managing VMs.
 package vm_tools.concierge;
-option go_package = "vm_concierge";
+option go_package = "vm_concierge_proto";
 
 // Specification of the key components of a VM.
 message VirtualMachineSpec {
@@ -26,6 +26,9 @@ enum DiskImageType {
 
   // A qcow2-compatible disk image.
   DISK_IMAGE_QCOW2 = 1;
+
+  // Automatically choose a disk image type.
+  DISK_IMAGE_AUTO = 2;
 }
 
 // Describes any additional disk images that should be mounted inside the VM.
@@ -66,6 +69,11 @@ message VmInfo {
 
   // The virtual socket context id assigned to the VM.
   int64 cid = 3;
+
+  // The handle to a 9p server managed by the seneschal system service.  Use
+  // this handle when making requests to that service to manage the files shared
+  // with this VM.
+  uint64 seneschal_server_handle = 4;
 }
 
 // Information that must be included with every StartVm dbus message.
@@ -78,7 +86,10 @@ message StartVmRequest {
   repeated DiskImage disks = 2;
 
   // Path to a shared directory that will be mounted via NFS inside the VM.
-  string shared_directory = 3;
+  // DEPRECATED: The server never did anything with this field.  Instead callers
+  // should use the |shared_dir_handle| field of the VmInfo message to get a
+  // server handle that can be used in requests to the seneschal system service.
+  string shared_directory = 3 [deprecated = true];
 
   // The human-readable name to be assigned to this VM.
   string name = 4;
@@ -95,6 +106,20 @@ message StartVmRequest {
   string owner_id = 7;
 }
 
+enum VmStatus {
+  // Unknown status.
+  VM_STATUS_UNKNOWN = 0;
+
+  // The VM is already running.
+  VM_STATUS_RUNNING = 1;
+
+  // The VM is currently starting up.
+  VM_STATUS_STARTING = 2;
+
+  // The VM failed to startup.
+  VM_STATUS_FAILURE = 3;
+}
+
 // Information sent back by vm_concierge in response to a StartVm dbus message.
 message StartVmResponse {
   // If true, the VM was started successfully.  |vm_info| will have non-default
@@ -106,6 +131,10 @@ message StartVmResponse {
 
   // Information about the VM that was started, if successful.
   VmInfo vm_info = 3;
+
+  // Status of the VM. If VM_STATUS_RUNNING, it is not necessary to wait for a
+  // TremplinStartedSignal before starting a container in the VM.
+  VmStatus status = 4;
 }
 
 // Information that must be included with every StopVm dbus message.
@@ -124,6 +153,16 @@ message StopVmResponse {
 
   // The failure_reason if the requested VM could not be stopped.
   string failure_reason = 2;
+}
+
+// Response to a SyncTimes RPC.
+message SyncVmTimesResponse {
+  // The total number of VMs we attempted to update.
+  uint32 requests = 1;
+  // Number of failed requests.
+  uint32 failures = 2;
+  // Reasons for failures, if any.
+  repeated string failure_reason = 3;
 }
 
 // Request for information about the VM.
@@ -227,6 +266,26 @@ message DestroyDiskImageResponse {
   string failure_reason = 3;
 }
 
+// Request to concierge to export a disk image.
+// Must be accompanied by an FD. The contents of `disk_path` will be written to
+// the passed FD.
+message ExportDiskImageRequest {
+  // The cryptohome id for the user's encrypted storage.
+  string cryptohome_id = 1;
+
+  // The path to the disk image. This must be a relative path.
+  string disk_path = 2;
+}
+
+// Response to a ExportDiskImageRequest.
+message ExportDiskImageResponse {
+  // If DISK_STATUS_CREATED, the disk image has been successfully exported.
+  DiskImageStatus status = 1;
+
+  // The failure reason if the disk image could not be exported.
+  string failure_reason = 2;
+}
+
 // Request to list all VM disk images in the given storage area.
 message ListVmDisksRequest {
   // The cryptohome id for the user's encrypted storage.
@@ -246,10 +305,12 @@ message ListVmDisksResponse {
 
   // The failure reason if the disks could not be listed.
   string failure_reason = 3;
+
+  // The total size in bytes on disk of the disk images in the response.
+  uint64 total_size = 4;
 }
 
-// Message used in the signal for when a container has started up or failed to
-// startup.
+// Message used in the signal for when a container has failed to start up.
 message ContainerStartedSignal {
   // Name of the VM the container is in.
   string vm_name = 1;
@@ -264,7 +325,11 @@ message ContainerStartedSignal {
 // Request to start a specified container image within a VM. If the container
 // does not exist in the VM it will be created. Used with the StartContainer
 // D-Bus message into vm_concierge.
+// This method is deprecated and no longer implemented in vm_concierge.
+// Requests to start a container should be handled through tremplin instead.
 message StartContainerRequest {
+  option deprecated = true;
+
   // Name of the VM to start the container in.
   string vm_name = 1;
 
@@ -315,72 +380,6 @@ message StartContainerResponse {
   ContainerStatus status = 3;
 }
 
-// Request to launch on application in the specified VM/container. Used with the
-// LaunchContainerApplication D-Bus message into vm_concierge.
-message LaunchContainerApplicationRequest {
-  // Name of the VM to target.
-  string vm_name = 1;
-
-  // Name of the container within the VM to target, if empty the default
-  // container name will be used.
-  string container_name = 2;
-
-  // ID of the application to launch, should map to the desktop_file_id that
-  // is in the application list sent back from the container.
-  string desktop_file_id = 3;
-
-  // The owner of the vm and container.
-  string owner_id = 4;
-}
-
-// Response sent back by vm_concierge when it receives a
-// LaunchContainerApplication D-Bus message.
-message LaunchContainerApplicationResponse {
-  // If true, the requested application launched successfully.
-  bool success = 1;
-
-  // The failure_reason if the requested application could not be started.
-  string failure_reason = 2;
-}
-
-// Request to get application icons in the specified VM/container. Used with the
-// GetContainerAppIcon D-Bus message into vm_concierge.
-message ContainerAppIconRequest {
-  // Name of the VM to target.
-  string vm_name = 1;
-
-  // Name of the container within the VM to target, if empty the default
-  // container name will be used.
-  string container_name = 2;
-
-  // IDs of the application to get icons for, should map to the desktop_file_id
-  // that is in the application list sent back from the container.
-  repeated string desktop_file_ids = 3;
-
-  // The icon size with both its height and width equals to this number.
-  int32 size = 4;
-
-  // The target scale of this icon. This is the scale at which this icon is
-  // designed to be used.
-  int32 scale = 5;
-
-  // The owner of the vm and container.
-  string owner_id = 6;
-}
-
-// One desktop file ID with its icon.
-message DesktopIcon {
-  string desktop_file_id = 1;
-  bytes icon = 2;
-}
-
-// Response sent back by vm_concierge when it receives a
-// GetContainerAppIcon D-Bus message.
-// Some desktop_file_id may not have an icon.
-message ContainerAppIconResponse {
-  repeated DesktopIcon icons = 1;
-}
-
 // Request to get the SSH keys associated with the host and a specific
 // container for the GetContainerSshKeys call. These keys will be generated
 // when StartContainer is called the first time for a container, so this should
@@ -406,9 +405,23 @@ message ContainerSshKeysResponse {
   // generated file.
   string container_public_key = 1;
 
-  // Private key for the host, counterpart fo the public key which is stored in
+  // Private key for the host, counterpart to the public key which is stored in
   // the container as an authorized host. This will be a multiline string that
   // is equivalent to the contents in the ssh-keygen generated file. This will
   // be the same for all VMs/containers.
   string host_private_key = 2;
+
+  // The hostname of the container.
+  string hostname = 3;
+
+  // Public key of the host for verification of it as a known host. This
+  // will be a single line string equivalent to the contents in the ssh-keygen
+  // generated file.
+  string host_public_key = 4;
+
+  // Private key for the container, counterpart to the public key which is
+  // stored in the container. This will be a multiline string that
+  // is equivalent to the contents in the ssh-keygen generated file. This is
+  // unique for each container.
+  string container_private_key = 5;
 }

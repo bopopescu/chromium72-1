@@ -31,11 +31,11 @@
 
 #if defined(OS_CHROMEOS)
 #include "chrome/browser/chromeos/login/users/scoped_test_user_manager.h"
-#include "chrome/browser/chromeos/settings/cros_settings.h"
-#include "chrome/browser/chromeos/settings/device_settings_service.h"
+#include "chrome/browser/chromeos/settings/scoped_cros_settings_test_helper.h"
 #endif  // defined(OS_CHROMEOS)
 
 using content::WebContents;
+using content::WebContentsTester;
 
 namespace {
 
@@ -120,7 +120,8 @@ class TabDesktopMediaListTest : public testing::Test {
             profile_, content::SiteInstance::Create(profile_)));
     ASSERT_TRUE(contents);
 
-    contents->SetLastActiveTime(base::TimeTicks::Now());
+    WebContentsTester::For(contents.get())
+        ->SetLastActiveTime(base::TimeTicks::Now());
 
     // Get or create the transient NavigationEntry and add a title and a
     // favicon to it.
@@ -252,8 +253,7 @@ class TabDesktopMediaListTest : public testing::Test {
   content::TestBrowserThreadBundle thread_bundle_;
 
 #if defined(OS_CHROMEOS)
-  chromeos::ScopedTestDeviceSettingsService test_device_settings_service_;
-  chromeos::ScopedTestCrosSettings test_cros_settings_;
+  chromeos::ScopedCrosSettingsTestHelper cros_settings_test_helper_;
   chromeos::ScopedTestUserManager test_user_manager_;
 #endif
 
@@ -314,8 +314,8 @@ TEST_F(TabDesktopMediaListTest, MoveTab) {
   ASSERT_TRUE(contents1);
   base::TimeTicks t1 = contents1->GetLastActiveTime();
 
-  contents0->SetLastActiveTime(t1);
-  contents1->SetLastActiveTime(t0);
+  WebContentsTester::For(contents0)->SetLastActiveTime(t1);
+  WebContentsTester::For(contents1)->SetLastActiveTime(t0);
 
   EXPECT_CALL(observer_, OnSourceMoved(list_.get(), 1, 0))
       .WillOnce(testing::DoAll(CheckListSize(list_.get(), kDefaultSourceCount),

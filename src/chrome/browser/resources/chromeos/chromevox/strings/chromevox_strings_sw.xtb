@@ -2,8 +2,10 @@
 <!DOCTYPE translationbundle>
 <translationbundle lang="sw">
 <translation id="100812568230599391">Badilisha mtindo wa onyesho uwe mchanganyiko.</translation>
+<translation id="1011903154582639569">Tafuta kitufe, kisha ukiinue ili uandike</translation>
 <translation id="1012173283529841972">Kipengee cha orodha</translation>
 <translation id="1013742170491673792">imetafuta</translation>
+<translation id="1014370462248694370">Telezesha vidole viwili kuelekea kulia</translation>
 <translation id="1022586497894531524">Je, unatumia maelezo yanayotamkwa ya ChromeVox kwa mara ya kwanza? Mafunzo haya ya haraka yanaeleza mambo muhimu katika mwongozo wa kuanza kutumia ChromeVox.</translation>
 <translation id="1023866615269196768">Kimejumuishwa.</translation>
 <translation id="1025074108959230262">Hali ya kunata imezimwa</translation>
@@ -15,10 +17,11 @@
 <translation id="1065552602950927991">Ulichoweka si sahihi</translation>
 <translation id="1080471004309605942">Mwisho wa maandishi ya italiki</translation>
 <translation id="1082209053475788238">Hakuna kichwa cha ngazi ya 6 iliyotangulia.</translation>
+<translation id="1087788677726983142">Ficha vichujio vya mtiririko wa tukio</translation>
 <translation id="1088219014394087294">Hakuna vichwa.</translation>
 <translation id="1106741348836243114">Washa au zima maoni ya sauti (earcons).</translation>
-<translation id="1108651818222110612">kichwa kidogo</translation>
 <translation id="1120743664840974483">{"a": "alpha", "b": "bravo", "c": "charlie", "d": "delta", "e": "echo", "f": "foxtrot", "g": "golf", "h": "hotel", "i": "india", "j": "juliet","k": "kilo", "l": "lima", "m": "mike", "n": "november", "o": "oscar","p": "papa", "q": "quebec", "r": "romeo", "s": "sierra", "t": "tango", "u": "uniform", "v": "victor", "w": "whiskey","x": "xray", "y": "yankee", "z": "zulu"}</translation>
+<translation id="1120938014254001895">Telezesha vidole viwili kuelekea juu</translation>
 <translation id="1124771028211010580">Mtindo wa sasa wa onyesho ni wa upande kwa upande.</translation>
 <translation id="113582498867142724"><ph name="TAG" /> mkusanyiko ulio na vipengee <ph name="NUM" /></translation>
 <translation id="1155043339247954670">Hakuna kipengee cha orodha kinachofuata.</translation>
@@ -29,7 +32,7 @@
 <translation id="1177863135347784049">Maalum</translation>
 <translation id="1188858454923323853">nyongeza</translation>
 <translation id="1195238899008218998">Maelezo kuhusu kitabu</translation>
-<translation id="1201402288615127009">Ifuatayo</translation>
+<translation id="1201402288615127009">Endelea</translation>
 <translation id="1206619573307042055">marquee</translation>
 <translation id="1213216066620407844">ChromeVox - Inaipa Chrome Sauti</translation>
 <translation id="1225437811932752266">Hongera! Umejifunza mambo muhimu kuhusu kutumia ChromeVox. Kumbuka kwamba unaweza kufungua menyu ya amri za ChromeVox wakati wowote kwa kubonyeza Tafuta+Nukta. Ili upate maelezo zaidi kuhusu ChromeVox na mfumo wa uendeshaji wa Chrome, soma makala yafuatayo. Ikiwa umemaliza mafunzo, tumia ChromeVox kusogeza hadi kwenye kitufe cha Kufunga na ukibofye.</translation>
@@ -39,12 +42,15 @@
 <translation id="1251750620252348585">Kichwa cha ngazi ya 6 kinachofuata</translation>
 <translation id="1275718070701477396">Imechaguliwa</translation>
 <translation id="1286609444451033486">Bonyeza Search+Space ili ugeuze.</translation>
+<translation id="1291286136605998134">Kitufe cha Kugeuza</translation>
+<translation id="1303806948938513162">Gusa kwa vidole 4 ili uweke menyu za ChromeVox</translation>
 <translation id="1319608975892113573">Hakuna nukuu la msingi lililotangulia.</translation>
 <translation id="1321576897702511272">Ficha usaidizi wa ChromeVox</translation>
 <translation id="1331702245475014624"><ph name="INDEX" /> kati ya <ph name="TOTAL" /></translation>
 <translation id="1334095593597963605">herufi na mwangwi wa neno</translation>
 <translation id="1339428534620983148">Safu wima ya jedwali lililotangulia</translation>
 <translation id="1342835525016946179">makala</translation>
+<translation id="1346059596910821859">Kidokezo</translation>
 <translation id="1346748346194534595">Kulia</translation>
 <translation id="135978014023467274">Kifaa chako kimesasishwa kitumie ChromeVox 63!</translation>
 <translation id="136718599399906424">Safu mlalo ya jedwali linalofuata</translation>
@@ -76,6 +82,7 @@
 <translation id="1618597272655350600">Hutangaza maelezo kamili ya nafasi ya sasa</translation>
 <translation id="1639634871799530612">{COUNT,plural, =1{kubwa kuliko}other{alama # za kubwa kuliko}}</translation>
 <translation id="1653266918374749391">Kichwa cha ngazi ya 3 kilichotangulia</translation>
+<translation id="1657616855184033958">Onyesha vichujio vya mtiririko wa tukio</translation>
 <translation id="1659072772017912254">Haijateuliwa</translation>
 <translation id="1669290819662866522">wiki</translation>
 <translation id="1674262202423278359">Kudurusu ChromeVox</translation>
@@ -87,10 +94,12 @@
 <translation id="1722567105086139392">Kiungo</translation>
 <translation id="1727806147743597030">kijachini</translation>
 <translation id="174268867904053074">Mchoro unaofuata</translation>
+<translation id="1765245556747822181">Telezesha kidole kimoja kuelekea juu</translation>
 <translation id="1781173782405573156">Nenosiri la kuingia</translation>
 <translation id="1787176709638001873">Maandishi ya kubadilisha nenosiri</translation>
 <translation id="1802710350767629429">Onyesha ukurasa wa sasisho</translation>
 <translation id="1810107444790159527">Kikasha orodha</translation>
+<translation id="1812527064848182527">mlalo</translation>
 <translation id="1828385960365606039">Mei</translation>
 <translation id="1834891354138622109">Safu wima</translation>
 <translation id="1845944666972354496">Gusa mara mbili ili uwashe</translation>
@@ -132,8 +141,10 @@
 <translation id="2223693656926968778">Chukua hatua kwenye kipengee cha sasa</translation>
 <translation id="225732394367814946">Ongeza kasi ya usemi</translation>
 <translation id="2267945578749931355">Herufi Inayofuata</translation>
+<translation id="2278490101488436824">Telezesha vidole vitatu kuelekea kushoto</translation>
 <translation id="2281234842553884450">Kitelezi kilichotangulia</translation>
 <translation id="2294136146931447363">Mwanzo wa maandishi ya italiki</translation>
+<translation id="2311237334957139798">Nenda kwenye kiwango cha maelezo kilichotangulia</translation>
 <translation id="2318372665160196757">Kuu</translation>
 <translation id="2329324941084714723">Kidirisha cha kichupo</translation>
 <translation id="2344193891939537199">Kidhibiti cha tarehe na saa</translation>
@@ -145,20 +156,24 @@
 <translation id="2416512023405990736">Kisanduku cha kuteua ambacho hakijateuliwa</translation>
 <translation id="2417569100218200841">Maelezo ya maudhui</translation>
 <translation id="2417948780551741035">Maelezo ya mwisho wa kitabu</translation>
+<translation id="2421113964388408478">Ufutaji</translation>
 <translation id="2422937916923936891">Kisanduku cha kuteua cha kipengee cha menyu</translation>
 <translation id="2428534162001909979">Menyu za Amri</translation>
 <translation id="2429669115401274487">PM</translation>
+<translation id="242998846562331953">Manukuu</translation>
 <translation id="2435413342408885429"><ph name="KEY" /> sasa ni kirekebishaji kipya cha ChromeVox.</translation>
 <translation id="2450814015951372393">Kisanduku cha kuteua</translation>
 <translation id="2462626033734746142">Vitufe kadhaa vya mviringo</translation>
 <translation id="2471138580042810658">Kichwa 6</translation>
 <translation id="248982282205370495">{COUNT,plural, =1{nyota}other{nyota #}}</translation>
+<translation id="249330843868392562">Fungua mipangilio ya ubadilishaji wa maandishi kwenda usemi</translation>
 <translation id="2523609930580546572">Mafunzo ya ChromeVox</translation>
 <translation id="2525706221823668172">Njia ya mikato ya kibodi kwenye Chromebook</translation>
 <translation id="2549392850788122959"><ph name="KEY" /> imewekwa upya.</translation>
 <translation id="2553108862507765288">kosa la sarufi</translation>
 <translation id="257674075312929031">Kikundi</translation>
 <translation id="2582407057977008361">Kando</translation>
+<translation id="2592212930811759050">Gusa mara mbili ili uanze kubadilisha</translation>
 <translation id="2606210917827248971">ina {COUNT,plural, =1{Kipengee #}other{Vipengee #}}</translation>
 <translation id="2614981083756825552">Mpangilio wa Hisabati ML</translation>
 <translation id="2624431853467395961">Fungua hali ya kujifunza</translation>
@@ -181,7 +196,6 @@
 <translation id="2737520612859577214">Mwisho wa nambari juu ya nyingine</translation>
 <translation id="2749275490991666823">Imeteuliwa</translation>
 <translation id="27527859628328957">Ruka hadi kipengee kinachoweza kulengwa kinachofuata</translation>
-<translation id="276402504937943375">jedwali la yaliyomo</translation>
 <translation id="2770781857296573485">Ingia ugunduaji wa kikundi</translation>
 <translation id="2777845298774924149">Imeondoka</translation>
 <translation id="2781264313200109999">Mwanzo wa kiungo</translation>
@@ -200,17 +214,20 @@
 <translation id="2864481629947106776">Kiungo kilichotangulia</translation>
 <translation id="2867808975387772810">Bibliografia</translation>
 <translation id="2873259058405069099">Nenda hadi mwanzo wa jedwali</translation>
+<translation id="2879867157561757640">Telezesha vidole vitatu kuelekea chini</translation>
 <translation id="288178314850623291">Tumia amri za kuruka ili uruke aina mahsusi ya vipengee. Ili kuruka mbele baina ya vichwa, bonyeza Tafuta + H, au ili uruke kwenda nyuma, bonyeza Tafuta + Shift + H.</translation>
 <translation id="2894654529758326923">Maelezo</translation>
 <translation id="2899328121302785497">{COUNT,plural, =1{parandesi ya kushoto}other{parandesi # za kushoto}}</translation>
 <translation id="2909478709401302630">Mwanzo wa nambari juu ya nyingine</translation>
 <translation id="2911433807131383493">Fungua mafunzo ya ChromeVox</translation>
+<translation id="2912405967290226587">Telezesha vidole vitatu kuelekea kulia</translation>
 <translation id="2932083475399492303">Geuza aina ya mstari kati ya muundo au mpangilio</translation>
 <translation id="2944762337049891859">Soma ukurasa kiotomatiki baada ya kupakiwa.</translation>
 <translation id="2964026537669811554">Kichwa cha kikundi</translation>
 <translation id="296951647852255825">{COUNT,plural, =1{kichupo}other{vichupo #}}</translation>
 <translation id="2972078295414139404">Hakuna kiungo kilichotembelewa kilichotangulia.</translation>
 <translation id="2972205263822847197">Kidokezo cha zana</translation>
+<translation id="297825089465017871">Telezesha vidole viwili kuelekea kushoto</translation>
 <translation id="2998131015536248178">Herufi Iliyotangulia</translation>
 <translation id="2999559350546931576">Punguza kiwango cha sauti</translation>
 <translation id="2999945368667127852">Hakuna wijeti ya maudhui inayofuata.</translation>
@@ -222,6 +239,8 @@
 <translation id="3046838483509668188">Chaguo za ChromeVox</translation>
 <translation id="3047143736589213134">Ramani msingi ya majaribio</translation>
 <translation id="3060756054951570867">Menyu <ph name="TITLE" /> imefunguliwa</translation>
+<translation id="3060880924447482063">Telezesha kidole kushoto au kulia ili usogeza kulingana na kipengee</translation>
+<translation id="3070245424257836917">Telezesha vidole vitatu kuelekea juu</translation>
 <translation id="3078345202707391975">Kichwa cha ngazi ya 2 kinachofuata</translation>
 <translation id="3078740164268491126">jedwali</translation>
 <translation id="3082249673510793544">Sogeza nyuma</translation>
@@ -252,6 +271,7 @@
 <translation id="3232388865800379423">Kitufe ibukizi</translation>
 <translation id="3241052487511142956">Kiungo kilichotembelewa kilichotangulia</translation>
 <translation id="3241638166094654466">Visanduku katika kila mstari:</translation>
+<translation id="3286372614333682499">wima</translation>
 <translation id="3286390186030710347">Kitelezi</translation>
 <translation id="3299925995433437805">Hakuna kiungo kilichotembelewa kinachofuata.</translation>
 <translation id="3300348286427369683">Inatumia maandishi anuai. ChromeVox sasa inatumia sehemu za maandishi anuai ikiwa ni pamoja na amri za kuruka, kiashiria cha kuelekeza nukta nundu, uteuzi na mengineyo.</translation>
@@ -313,6 +333,7 @@
 <translation id="3389259863310851658">Sehemu ya fomu iliyotangulia</translation>
 <translation id="3390225400784126843">Kipengee tofauti kinachofuata.</translation>
 <translation id="3392045790598181549"><ph name="NAME" />, kipengee cha menyu</translation>
+<translation id="3393605254399152980">Buruta kidole kimoja ili usikie unachogusa</translation>
 <translation id="3406283310380167331">Onyesha orodha ya fomu</translation>
 <translation id="3423495725743882470">safu mlalo $1 safu wima $2</translation>
 <translation id="3457000393508828486">Imebonyezwa kiasi</translation>
@@ -328,11 +349,13 @@
 <translation id="3497063866483065785">{COUNT,plural, =1{alama ya kuuliza}other{alama # za kuuliza}}</translation>
 <translation id="3514822174137761109">{COUNT,plural, =1{kareti}other{alama # za kareti}}</translation>
 <translation id="352577523970648069">Sehemu ya maandishi yanayoweza kubadilishwa</translation>
+<translation id="3549680091535286226">Gusa kwa vidole 2 ili usimamishe matamshi kwa muda mfupi</translation>
 <translation id="3568702578574425662">Kisanduku cha kuteua <ph name="NAME" /> hakijateuliwa</translation>
 <translation id="3589661172894441357">Faharasa</translation>
 <translation id="3599054940393788245">Siyo ndani ya hisabati</translation>
 <translation id="360241989769010433">Shukrani</translation>
 <translation id="3616113530831147358">Sauti</translation>
+<translation id="3622350485154495700">Gusa mara mbili ukitumia kidole kimoja</translation>
 <translation id="3646890046000188562">{COUNT,plural, =1{kingo`ngo}other{ving`ong`o #}}</translation>
 <translation id="3650317109285159359">chkmnuitm</translation>
 <translation id="3655855170848725876">{COUNT,plural, =1{dola}other{alama # za dola}}</translation>
@@ -362,7 +385,9 @@
 <translation id="3914173277599553213">Inahitajika</translation>
 <translation id="3914732343065571127">Marejeleo ya Amri ya ChromeVox</translation>
 <translation id="3930498801443296724">Nukuu muhimu</translation>
+<translation id="3941269780691800708">Itamke maandishi yaliyo chini ya kiashiria.</translation>
 <translation id="3962990492275676168">Anza kusoma kutoka mahali pa sasa</translation>
+<translation id="3989324057180830702">tgl btn</translation>
 <translation id="4004802134384979325">kimeteuliwa</translation>
 <translation id="4006140876663370126">picha</translation>
 <translation id="4038349100599457191">Udhibiti wa mwezi</translation>
@@ -376,6 +401,7 @@
 <translation id="4058278702844053247">Ukurasa unaendelea kupakiwa</translation>
 <translation id="4065205963140826639">Jaribu kutumia Tafuta + Kishale cha Kulia kupata kitufe cha Next, kisha ubonyeze Tafuta + Space ili ukibofye.</translation>
 <translation id="4081085052247739398">{COUNT,plural, =1{KISTARI}other{vistari #}}</translation>
+<translation id="4086311032171418648">Inafunga Hali ya Kujifunza.</translation>
 <translation id="409334809956508737">Kifaa Kilichotangulia</translation>
 <translation id="4099274309791143834">ina menyu ndogo</translation>
 <translation id="4101527861445851766">Kisanduku kilichoteuliwa</translation>
@@ -388,6 +414,7 @@
 <translation id="4166192625054637755">Mwisho wa nambari chini ya nyingine</translation>
 <translation id="4173994908659439270">Hakuna sehemu ya maandishi inayoweza kubadilishwa inayofuata.</translation>
 <translation id="4176463684765177261">Kimelemazwa</translation>
+<translation id="4187322598335821254">Telezesha kidole juu au chini ili usogeze kulingana na mstari</translation>
 <translation id="4188530942454211480">Sentensi Iliyotangulia</translation>
 <translation id="4191918948604314587">Kitufe</translation>
 <translation id="419265409837491189">Nenda kwenye safu wima iliyotangulia</translation>
@@ -405,6 +432,7 @@
 <translation id="4255943572433203166">Tumia chaguo zilizo hapa chini ili kubadilisha ChromeVox ikufae. Mabadiliko yataanza kufanya kazi mara moja.</translation>
 <translation id="4271220233568730077">Hisabati inayofuata</translation>
 <translation id="4271521365602459209">Hakuna matokeo zaidi.</translation>
+<translation id="4275397969489577657">Washa kumbukumbu za mtiririko wa tukio</translation>
 <translation id="4287520460805643128">Hakuna makala yanayofuata.</translation>
 <translation id="4289540628985791613">Muhtasari</translation>
 <translation id="4300318234632215983">Tangaza URL nyuma ya kiungo</translation>
@@ -425,6 +453,7 @@
 <translation id="4476183483923481720">mstari mpya</translation>
 <translation id="4482330759234983253">Jedwali lililotangulia</translation>
 <translation id="4491109536499578614">Picha</translation>
+<translation id="4505167975768625962">Uwekaji</translation>
 <translation id="4517854969512651305">Ongeza thamani</translation>
 <translation id="4529987814483543472">Ramani msingi ya zamani</translation>
 <translation id="4532633738839459153">{COUNT,plural, =1{mkwaju}other{mikwaju #}}</translation>
@@ -450,6 +479,7 @@
 <translation id="4688873778442829762">gridi</translation>
 <translation id="4693675773662933727">Kivutio kilichotangulia</translation>
 <translation id="4696413482802371445">Hakuna kichwa cha ngazi ya 5 inayofuata.</translation>
+<translation id="4710166929009737753">Telezesha kidole kimoja kuelekea kulia</translation>
 <translation id="4729095194763193578">Safu mlalo ya jedwali lililotangulia</translation>
 <translation id="4736221692378411923">Agosti</translation>
 <translation id="4740661827607246557">Amri za Usaidizi</translation>
@@ -462,6 +492,7 @@
 <translation id="4826415162591436065">Nenda mbele</translation>
 <translation id="4826604887384865800">Kuruka kunakofuata</translation>
 <translation id="4827410568042294688">yameondolewa uteuzi</translation>
+<translation id="4838490795649708173">Gusa kwa vidole vinne</translation>
 <translation id="4839925464551908214">Nenda kwenye safu mlalo iliyotangulia</translation>
 <translation id="4842108708071771135">Hakuna nukuu la msingi linalofuata.</translation>
 <translation id="4844625982113518938">Bonyeza kitufe chochote ufahamu jina lake. Ctrl+W kutafunga hali ya kujifunza.</translation>
@@ -474,6 +505,7 @@
 <translation id="4877261390094455813">Ingiza hoja ya utafutaji.</translation>
 <translation id="4886524826165775965"><ph name="INDEX" />/<ph name="TOTAL" /></translation>
 <translation id="489907760999452556">Kiungo cha ndani</translation>
+<translation id="4915087353619183190">Inafungua Hali ya Kujifunza. Bonyeza kitufe cha qwerty, kitufe cha nukta nundu unachoweza kuonyesha upya au ishara ya kugusa ili ujue kazi yake. Bonyeza control pamoja na 'w' au escape ili ufunge.</translation>
 <translation id="492295894462528572">Dibaji</translation>
 <translation id="495170559598752135">Vitendo</translation>
 <translation id="4953585991029886728">Badilisha maandishi</translation>
@@ -482,6 +514,7 @@
 <translation id="4973762002207131920">Imebadilishwa kwenda <ph name="KEY" />.</translation>
 <translation id="4975416682604111799">milisekunde</translation>
 <translation id="49787999531187221">ChromeVox sasa haitumiki.</translation>
+<translation id="4979263087381759787">Chaguo za Wasanidi Programu</translation>
 <translation id="4979404613699303341">Kitufe kilichotangulia</translation>
 <translation id="4982773647088557172"><ph name="VALUE" />, <ph name="NAME" />, kisanduku cha orodha</translation>
 <translation id="4983588134362688868">Ruka hadi mwanzo wa ukurasa</translation>
@@ -493,6 +526,7 @@
 <translation id="5000760171916499057">Hakuna fomu.</translation>
 <translation id="5005670136041063723">Hakuna vipengee vinavyofanana tena.</translation>
 <translation id="501473567976723023">Januari</translation>
+<translation id="5020651427400641814">Washa kumbukumbu za matamshi</translation>
 <translation id="5041394372352067729">Sogeza onyesho la breli hadi mwanzo wa ukurasa</translation>
 <translation id="5042770794184672516">Ongeza sauti ya usemi</translation>
 <translation id="5050015258024679800">Kichwa cha ngazi ya 4 kilichotangulia</translation>
@@ -507,6 +541,7 @@
 <translation id="5106547198195128110">Tuna mabadiliko ya kusisimua katika toleo hili jipya; yafuatayo ni mambo mapya:</translation>
 <translation id="5110983769041734144">Hakuna sehemu ya fomu iliyotangulia.</translation>
 <translation id="5111640677200759579">Kichwa cha safu wima</translation>
+<translation id="5115892389597951922">Kumbukumbu ya ChromeVox</translation>
 <translation id="5136967254288895616">Hakuna kiungo kilichotangulia.</translation>
 <translation id="513774504516943387">kiungo</translation>
 <translation id="5158275234811857234">Jalada</translation>
@@ -540,6 +575,7 @@
 <translation id="5407530583102765689">{COUNT,plural, =1{nuktamkato}other{nuktamikato #}}</translation>
 <translation id="5411891038905756502">Hakuna mahali pa kuruka palipotangulia.</translation>
 <translation id="5417034931411865818">Bofya kipengee kilicho chini ya ufunguo wa ruta cha $1</translation>
+<translation id="5435274640623994081">Washa kumbukumbu za sehemu ya kiashiria cha sauti</translation>
 <translation id="5436105723448703439">{COUNT,plural, =1{ndogo kuliko}other{alama # za ndogo kuliko}}</translation>
 <translation id="5444587279251314700">(inatumika)</translation>
 <translation id="5446809554778706307">Haijaangazia. Bonyeza Ctrl+T ili ufungue kichupo kipya.</translation>
@@ -588,11 +624,13 @@
 <translation id="5712338278108304766">Safu wima ya jedwali linalofuata</translation>
 <translation id="571866080859340309">Inagundua vikundi</translation>
 <translation id="5728409797179002635">Hakuna jedwali lililopatikana.</translation>
+<translation id="5729047866208036762">Bonyeza vishale vya juu, chini, kushoto au kulia ili ukague maudhui ya hesabu.</translation>
 <translation id="5732189279857692565">Hiki ndicho kichwa cha pili. Endelea; bonyeza Search+H au Search+Shift+H</translation>
 <translation id="5748623122140342504">Kichwa cha ngazi ya 5 kilichotangulia</translation>
 <translation id="5750633686117194034">Hakuna kirekebishaji kilichobonyezwa; tafadhali bonyeza na ushikilie kirekebishaji kimoja au zaidi; ondoa kidole chako unapomaliza na utasikia vitufe vikiwekwa. Gusa kichupo ili kuondoka.</translation>
 <translation id="5760594853119905566">Kiambatisho</translation>
 <translation id="5788275253279308023">dirisha fiche la kichupo cha <ph name="TITLE" /></translation>
+<translation id="5805940204952508776">Gusa kwa vidole viwili</translation>
 <translation id="5806206155699461681">Boresha tovuti mahususi (kama vile Huduma ya Tafuta na Google).</translation>
 <translation id="5819072574982403430">Kipengee cha mti</translation>
 <translation id="5826479389509458994">safu mlalo <ph name="ROW" /> safu wima <ph name="COL" /></translation>
@@ -663,6 +701,7 @@
 <translation id="641759969622533235">{COUNT,plural, =1{nuktambili}other{nuktambili #}}</translation>
 <translation id="6438968337250688271"><ph name="NAME" />, menyu</translation>
 <translation id="6444046323172968959">Arifa ya mazungumzo</translation>
+<translation id="6452403590345320472">Yaliyomo</translation>
 <translation id="6459511626086141404">Ramani msingi bapa</translation>
 <translation id="6468049171101508116">Kitufe kinachofuata</translation>
 <translation id="646954774886932461">Faharasa</translation>
@@ -672,8 +711,10 @@
 <translation id="6540201937398578274">Katika ChromeVox, kitufe cha Utafutaji ndicho kitufe cha kurekebisha. Njia nyingi za mkato za ChromeVox huanzia kwenye kitufe cha Utafutaji. Pia utatumia vitufe vya vishale ili kusogeza.</translation>
 <translation id="6550720799683018100">Badilisha ramani msingi ya sasa kwa kuchagua chaguo kutoka kwenye orodha hapa chini.</translation>
 <translation id="6561818612645211875">Nenda hadi mwanzo wa safu mlalo ya sasa</translation>
+<translation id="6583174818554398774">Nenda kwenye kiwango cha maelezo kinachofuata</translation>
 <translation id="6587021927234520429">Hakuna kichwa cha ngazi ya 4 kinachofuata.</translation>
 <translation id="6601344353291556895">Washa maelezo yenye maneno mengi.</translation>
+<translation id="6609828810966525877">Gundua ishara zaidi katika Hali ya Kujifunza na Kituo cha Usaidizi cha Chromebook</translation>
 <translation id="6615602925644411249">Tafuta katika ukurasa.</translation>
 <translation id="6628427060004938651">Sehemu</translation>
 <translation id="6633350132811819843">Hakuna jedwali linalofuata.</translation>
@@ -696,8 +737,10 @@
 <translation id="6786800275320335305">Makala</translation>
 <translation id="6787839852456839824">Mikato ya kibodi</translation>
 <translation id="6793101435925451627">lstbx</translation>
+<translation id="6826226459053491773">Telezesha vidole viwili kuelekea chini</translation>
 <translation id="6833103209700200188">Kijachini</translation>
 <translation id="6858047746862060282">Shairi la utangulizi</translation>
+<translation id="6859876496651143278">Telezesha kidole kimoja kuelekea kushoto</translation>
 <translation id="6871161210040114857">Inapuuza herufi kubwa au ndogo.</translation>
 <translation id="6877435256196695200">Hakuna mchoro unaofuata.</translation>
 <translation id="6897341342232909480">Sogeza kushoto</translation>
@@ -723,6 +766,7 @@ Ili kufunga kichupo, bonyeza Control+W.
 Ili kusonga mbele kati ya vichupo vilivyo wazi, tumia Control+Tab. 
 Ili kufungua menyu ya kivinjari cha Chrome, bonyeza Alt+F.</translation>
 <translation id="7086377898680121060">Ongeza ung'aavu</translation>
+<translation id="7088743565397416204">Gusa mara mbili ili uwashe kinachoangaziwa</translation>
 <translation id="7095834689119144465">Badilisha maandishi ya nambari pekee</translation>
 <translation id="7096001299300236431">Maudhui yaliyotangulia</translation>
 <translation id="7116595520562830928">multln</translation>
@@ -743,9 +787,11 @@ Ili kufungua menyu ya kivinjari cha Chrome, bonyeza Alt+F.</translation>
 <translation id="7226216518520804442">orodha</translation>
 <translation id="7229749224609077523">Chagua jedwali la breli ya vitone 6:</translation>
 <translation id="72393384879519786">Kichwa</translation>
+<translation id="7240858705033280249">Nenda kwenye Maelezo</translation>
 <translation id="7241683698754534149">Fungua maelezo marefu katika kichupo kipya</translation>
 <translation id="7248671827512403053">Programu</translation>
 <translation id="725969808843520477">Kitufe cha mviringo kinachofuata</translation>
+<translation id="7261612856573623172">Sauti ya mfumo wa Ubadilishaji wa Maandishi kwenda Usemi</translation>
 <translation id="7269119382257320590">Hakuna vituo  vya maandishi</translation>
 <translation id="7273174640290488576">Mtupu</translation>
 <translation id="7274770952766771364">Marejeleo ya dokezo</translation>
@@ -776,6 +822,7 @@ Ili kufungua menyu ya kivinjari cha Chrome, bonyeza Alt+F.</translation>
 <translation id="7491962110804786152">kichupo</translation>
 <translation id="7492049978501397201">umeingiza mazungumzo</translation>
 <translation id="7518543783849163354">Ili usitishe ChromeVox kwa muda kuzungumza, bonyeza kitufe cha Dhibiti.</translation>
+<translation id="7521682724501952239">Unaweza kutumia ChromeVox kwenye skrini ya kugusa.</translation>
 <translation id="7532613204005497612">Juni</translation>
 <translation id="7552432549459840808">Njia Muhimu za Mikato kwenye Chrome</translation>
 <translation id="7579911500627256166">nukta ya <ph name="DOT" /></translation>
@@ -789,7 +836,6 @@ Ili kufungua menyu ya kivinjari cha Chrome, bonyeza Alt+F.</translation>
 <translation id="7625690649919402823">Jedwali linalofuata</translation>
 <translation id="7628927569678398026"><ph name="LOCALE" /> (<ph name="VARIANT" />), Daraja la <ph name="GRADE" /></translation>
 <translation id="7641134354185483015">Hakuna kichwa cha ngazi ya 3 kilichotangulia.</translation>
-<translation id="7647456547678091388">kidokezo</translation>
 <translation id="7659376057562985921"><ph name="VALUE" />, <ph name="NAME" />, kikasha maandishi</translation>
 <translation id="7663318257180412551">Kichwa 2</translation>
 <translation id="7674576868851035240">Kiungo kinachofuata</translation>
@@ -835,6 +881,7 @@ Ili kufungua menyu ya kivinjari cha Chrome, bonyeza Alt+F.</translation>
 <translation id="8076492880354921740">Vichupo</translation>
 <translation id="8091452896542422286">Nafasi</translation>
 <translation id="8110647606445335195">Hakuna vivutio vya ARIA.</translation>
+<translation id="8138880386467279117">Skrini za kugusa</translation>
 <translation id="8153880621934657047">Haimo ndani ya jedwali.</translation>
 <translation id="817440585505441544">{COUNT,plural, =1{kistari cha chini}other{vistari # vya chini}}</translation>
 <translation id="8179976553408161302">Enter</translation>
@@ -886,6 +933,7 @@ Ili kufungua menyu ya kivinjari cha Chrome, bonyeza Alt+F.</translation>
 <translation id="8650576015643545550">Hakuna orodha iliyotangulia.</translation>
 <translation id="8651481478098336970">zima sauti</translation>
 <translation id="8653646212587894517">Onyesha orodha ya viungo</translation>
+<translation id="8656888282555543604">Washa kumbukumbu za nukta nundu</translation>
 <translation id="8664519043722036194">sekunde</translation>
 <translation id="867187640362843212">Kichwa 5</translation>
 <translation id="8697111817566059991">{COUNT,plural, =1{kistari}other{vistari wima #}}</translation>
@@ -919,6 +967,7 @@ Ili kufungua menyu ya kivinjari cha Chrome, bonyeza Alt+F.</translation>
 <translation id="9043969572162476692"><ph name="NUM" />%</translation>
 <translation id="9061884144798498064">Chagua jedwali la breli ya vitone 8:</translation>
 <translation id="9065283790526219006">+dirisha ibukizi</translation>
+<translation id="9066023754636984703">Bofya Tafuta+A, J ili uende kwenye maelezo.</translation>
 <translation id="9067522039955793016">Nafasi ya kugawa kurasa</translation>
 <translation id="9077213568694924680">imeondolewa kwenye uchaguzi</translation>
 <translation id="9082874451376019682">Hakuna kitelezi kilichotangulia.</translation>
@@ -943,6 +992,7 @@ Ili kufungua menyu ya kivinjari cha Chrome, bonyeza Alt+F.</translation>
 <translation id="923331726185079994">ChromeVox Imesasishwa</translation>
 <translation id="930275611743429116">Anza au maliza uchaguzi.</translation>
 <translation id="948171205378458592">Punguza kasi ya usemi</translation>
+<translation id="958854023026327378">Telezesha kidole kimoja kuelekea chini</translation>
 <translation id="962913030769097253">Kichwa cha ngazi ya 1 kinachofuata</translation>
 <translation id="973955474346881951">Washa/Zima hali ya kunata</translation>
 <translation id="976849232629612000">Hakuna vipengee.</translation>

@@ -25,14 +25,14 @@
 #include "rtc_base/thread.h"
 #include "rtc_base/thread_annotations.h"
 #include "rtc_base/timeutils.h"
-#include "sdk/objc/Framework/Classes/Common/helpers.h"
+#include "sdk/objc/native/src/audio/helpers.h"
 #include "system_wrappers/include/metrics.h"
 
-#import "WebRTC/RTCLogging.h"
 #import "modules/audio_device/ios/objc/RTCAudioSessionDelegateAdapter.h"
-#import "sdk/objc/Framework/Classes/Audio/RTCAudioSession+Private.h"
-#import "sdk/objc/Framework/Headers/WebRTC/RTCAudioSession.h"
-#import "sdk/objc/Framework/Headers/WebRTC/RTCAudioSessionConfiguration.h"
+#import "sdk/objc/base/RTCLogging.h"
+#import "sdk/objc/components/audio/RTCAudioSession+Private.h"
+#import "sdk/objc/components/audio/RTCAudioSession.h"
+#import "sdk/objc/components/audio/RTCAudioSessionConfiguration.h"
 
 namespace webrtc {
 
@@ -491,15 +491,7 @@ void AudioDeviceIOS::HandleInterruptionBegin() {
     if (!audio_unit_->Stop()) {
       RTCLogError(@"Failed to stop the audio unit for interruption begin.");
     } else {
-      // The audio unit has been stopped but will be restarted when the
-      // interruption ends in HandleInterruptionEnd(). It will result in audio
-      // callbacks from a new native I/O thread which means that we must detach
-      // thread checkers here to be prepared for an upcoming new audio stream.
-      io_thread_checker_.DetachFromThread();
-      // The audio device buffer must also be informed about the interrupted
-      // state so it can detach its thread checkers as well.
-      audio_device_buffer_->NativeAudioPlayoutInterrupted();
-      audio_device_buffer_->NativeAudioRecordingInterrupted();
+      PrepareForNewStart();
     }
   }
   is_interrupted_ = true;
@@ -581,6 +573,7 @@ void AudioDeviceIOS::HandleSampleRateChange(float sample_rate) {
   if (audio_unit_->GetState() == VoiceProcessingAudioUnit::kStarted) {
     audio_unit_->Stop();
     restart_audio_unit = true;
+    PrepareForNewStart();
   }
   if (audio_unit_->GetState() == VoiceProcessingAudioUnit::kInitialized) {
     audio_unit_->Uninitialize();
@@ -853,6 +846,7 @@ bool AudioDeviceIOS::InitPlayOrRecord() {
   if (![session beginWebRTCSession:&error]) {
     [session unlockForConfiguration];
     RTCLogError(@"Failed to begin WebRTC session: %@", error.localizedDescription);
+    audio_unit_.reset();
     return false;
   }
 
@@ -864,6 +858,7 @@ bool AudioDeviceIOS::InitPlayOrRecord() {
       // audio session during or after a Media Services failure.
       // See AVAudioSessionErrorCodeMediaServicesFailed for details.
       [session unlockForConfiguration];
+      audio_unit_.reset();
       return false;
     }
     SetupAudioBuffersForActiveAudioSession();
@@ -899,6 +894,15 @@ void AudioDeviceIOS::ShutdownPlayOrRecord() {
   UnconfigureAudioSession();
   [session endWebRTCSession:nil];
   [session unlockForConfiguration];
+}
+
+void AudioDeviceIOS::PrepareForNewStart() {
+  LOGI() << "PrepareForNewStart";
+  // The audio unit has been stopped and preparations are needed for an upcoming
+  // restart. It will result in audio callbacks from a new native I/O thread
+  // which means that we must detach thread checkers here to be prepared for an
+  // upcoming new audio stream.
+  io_thread_checker_.DetachFromThread();
 }
 
 }  // namespace webrtc

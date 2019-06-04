@@ -5,6 +5,7 @@
 #include "content/browser/renderer_host/media/media_stream_dispatcher_host.h"
 
 #include <stddef.h>
+#include <stdint.h>
 #include <memory>
 #include <string>
 #include <utility>
@@ -16,7 +17,7 @@
 #include "base/containers/queue.h"
 #include "base/run_loop.h"
 #include "base/single_thread_task_runner.h"
-#include "base/system_monitor/system_monitor.h"
+#include "base/system/system_monitor.h"
 #include "base/threading/thread_task_runner_handle.h"
 #include "build/build_config.h"
 #include "content/browser/renderer_host/media/audio_input_device_manager.h"
@@ -55,7 +56,8 @@ namespace {
 
 constexpr int kProcessId = 5;
 constexpr int kRenderId = 6;
-constexpr int kPageRequestId = 7;
+constexpr int kRequesterId = 7;
+constexpr int kPageRequestId = 8;
 constexpr const char* kRegularVideoDeviceId = "stub_device_0";
 constexpr const char* kDepthVideoDeviceId = "stub_device_1 (depth)";
 constexpr media::VideoCaptureApi kStubCaptureApi =
@@ -133,6 +135,11 @@ class MockMediaStreamDispatcherHost : public MediaStreamDispatcherHost,
     OnDeviceStoppedInternal(label, device);
   }
 
+  // mojom::MediaStreamDeviceObserver implementation.
+  void OnDeviceChanged(const std::string& label,
+                       const MediaStreamDevice& old_device,
+                       const MediaStreamDevice& new_device) override {}
+
   mojom::MediaStreamDeviceObserverPtr CreateInterfacePtrAndBind() {
     mojom::MediaStreamDeviceObserverPtr observer;
     binding_.Bind(mojo::MakeRequest(&observer));
@@ -185,7 +192,7 @@ class MockMediaStreamDispatcherHost : public MediaStreamDispatcherHost,
 
   void OnDeviceStoppedInternal(const std::string& label,
                                const MediaStreamDevice& device) {
-    if (IsVideoMediaType(device.type))
+    if (IsVideoInputMediaType(device.type))
       EXPECT_TRUE(device.IsSameDevice(video_devices_[0]));
     if (IsAudioInputMediaType(device.type))
       EXPECT_TRUE(device.IsSameDevice(audio_devices_[0]));
@@ -298,8 +305,8 @@ class MediaStreamDispatcherHostTest : public testing::Test {
     devices_to_enumerate[MEDIA_DEVICE_TYPE_AUDIO_INPUT] = true;
     media_stream_manager_->media_devices_manager()->EnumerateDevices(
         devices_to_enumerate,
-        base::Bind(&AudioInputDevicesEnumerated, run_loop.QuitClosure(),
-                   &audio_device_descriptions_));
+        base::BindOnce(&AudioInputDevicesEnumerated, run_loop.QuitClosure(),
+                       &audio_device_descriptions_));
     run_loop.Run();
 
     ASSERT_GT(audio_device_descriptions_.size(), 0u);
@@ -317,6 +324,7 @@ class MediaStreamDispatcherHostTest : public testing::Test {
   std::unique_ptr<FakeMediaStreamUIProxy> CreateMockUI(bool expect_started) {
     std::unique_ptr<MockMediaStreamUIProxy> fake_ui =
         std::make_unique<MockMediaStreamUIProxy>();
+    testing::Mock::AllowLeak(fake_ui.get());
     if (expect_started)
       EXPECT_CALL(*fake_ui, MockOnStarted(_));
     return fake_ui;
@@ -785,7 +793,7 @@ TEST_F(MediaStreamDispatcherHostTest, CancelPendingStreams) {
                             run_loop.QuitClosure());
   }
 
-  media_stream_manager_->CancelAllRequests(kProcessId, kRenderId);
+  media_stream_manager_->CancelAllRequests(kProcessId, kRenderId, kRequesterId);
   run_loop.RunUntilIdle();
 }
 
@@ -799,7 +807,7 @@ TEST_F(MediaStreamDispatcherHostTest, StopGeneratedStreams) {
   for (size_t i = 0; i < generated_streams; ++i)
     GenerateStreamAndWaitForResult(kPageRequestId + i, controls);
 
-  media_stream_manager_->CancelAllRequests(kProcessId, kRenderId);
+  media_stream_manager_->CancelAllRequests(kProcessId, kRenderId, kRequesterId);
   base::RunLoop().RunUntilIdle();
 }
 

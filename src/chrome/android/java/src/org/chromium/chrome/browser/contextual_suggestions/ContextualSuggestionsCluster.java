@@ -7,12 +7,12 @@ package org.chromium.chrome.browser.contextual_suggestions;
 import android.support.annotation.NonNull;
 import android.text.TextUtils;
 
-import org.chromium.base.Callback;
 import org.chromium.chrome.browser.ntp.cards.ChildNode;
 import org.chromium.chrome.browser.ntp.cards.InnerNode;
 import org.chromium.chrome.browser.ntp.cards.ItemViewType;
 import org.chromium.chrome.browser.ntp.cards.NewTabPageViewHolder;
-import org.chromium.chrome.browser.ntp.cards.NodeVisitor;
+import org.chromium.chrome.browser.ntp.cards.NewTabPageViewHolder.PartialBindCallback;
+import org.chromium.chrome.browser.ntp.cards.PartiallyBindable;
 import org.chromium.chrome.browser.ntp.cards.SuggestionsCategoryInfo;
 import org.chromium.chrome.browser.ntp.snippets.ContentSuggestionsCardLayout;
 import org.chromium.chrome.browser.ntp.snippets.KnownCategories;
@@ -28,10 +28,10 @@ import org.chromium.chrome.browser.suggestions.SuggestionsOfflineModelObserver;
 import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.List;
-import java.util.Set;
+import java.util.Locale;
 
 /** A node in a tree that groups contextual suggestions in a cluster of related items. */
-class ContextualSuggestionsCluster extends InnerNode {
+class ContextualSuggestionsCluster extends InnerNode<NewTabPageViewHolder, PartialBindCallback> {
     private final String mTitle;
     private final boolean mShouldShowTitle;
     private final List<SnippetArticle> mSuggestions = new ArrayList<>();
@@ -59,16 +59,19 @@ class ContextualSuggestionsCluster extends InnerNode {
     /**
      * Called to build the tree node's children. Should be called after all suggestions have been
      * added.
+     *
+     * @param globalIndexOffset The index offset for setting global suggestion rank. This should be
+     *                          the total number of suggestions displayed before this cluster.
      */
-    void buildChildren() {
+    void buildChildren(int globalIndexOffset) {
         if (mShouldShowTitle) {
             mHeader = new SectionHeader(mTitle);
-            addChild(mHeader);
+            addChildren(mHeader);
         }
 
         mSuggestionsList = new SuggestionsList();
-        mSuggestionsList.addAll(mSuggestions);
-        addChild(mSuggestionsList);
+        mSuggestionsList.addAll(mSuggestions, globalIndexOffset);
+        addChildren(mSuggestionsList);
 
         // Only add observer after suggestions have been added to the cluster node to avoid
         // OfflineModelObserver requesting a null list.
@@ -77,14 +80,15 @@ class ContextualSuggestionsCluster extends InnerNode {
         mOfflineModelObserver.updateAllSuggestionsOfflineAvailability(false);
     }
 
-    @Override
-    public void detach() {
-        super.detach();
+    public void destroy() {
+        // TODO(bauerb): This should be part of a mediator instead of the cluster itself.
         if (mOfflineModelObserver != null) mOfflineModelObserver.onDestroy();
     }
 
     /** A tree node that holds a list of suggestions. */
-    private static class SuggestionsList extends ChildNode implements Iterable<SnippetArticle> {
+    private static class SuggestionsList
+            extends ChildNode<NewTabPageViewHolder, PartialBindCallback>
+            implements Iterable<SnippetArticle>, PartiallyBindable {
         private final List<SnippetArticle> mSuggestions = new ArrayList<>();
 
         private final SuggestionsCategoryInfo mCategoryInfo;
@@ -119,33 +123,21 @@ class ContextualSuggestionsCluster extends InnerNode {
             return mSuggestions.get(position);
         }
 
-        public void addAll(List<SnippetArticle> suggestions) {
+        public void addAll(List<SnippetArticle> suggestions, int globalIndexOffset) {
             if (suggestions.isEmpty()) return;
 
             int insertionPointIndex = mSuggestions.size();
+            for (int i = 0; i < suggestions.size(); i++) {
+                suggestions.get(i).setRank(i, i + globalIndexOffset);
+            }
             mSuggestions.addAll(suggestions);
             notifyItemRangeInserted(insertionPointIndex, suggestions.size());
         }
 
         @Override
-        public void visitItems(NodeVisitor visitor) {
-            for (SnippetArticle suggestion : mSuggestions) {
-                visitor.visitSuggestion(suggestion);
-            }
-        }
-
-        @Override
-        public Set<Integer> getItemDismissalGroup(int position) {
-            // Contextual suggestions are not dismissible.
-            assert false;
-
-            return null;
-        }
-
-        @Override
-        public void dismissItem(int position, Callback<String> itemRemovedCallback) {
-            // Contextual suggestions are not dismissible.
-            assert false;
+        public String describeItemForTesting(int position) {
+            return String.format(
+                    Locale.US, "SUGGESTION(%1.42s)", mSuggestions.get(position).mTitle);
         }
 
         @NonNull

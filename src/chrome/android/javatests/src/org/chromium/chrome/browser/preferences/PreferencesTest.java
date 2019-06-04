@@ -1,3 +1,4 @@
+// Copyright 2018 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -28,7 +29,7 @@ import org.chromium.base.test.util.RetryOnFailure;
 import org.chromium.chrome.browser.accessibility.FontSizePrefs;
 import org.chromium.chrome.browser.init.ChromeBrowserInitializer;
 import org.chromium.chrome.browser.preferences.website.ContentSetting;
-import org.chromium.chrome.browser.preferences.website.GeolocationInfo;
+import org.chromium.chrome.browser.preferences.website.PermissionInfo;
 import org.chromium.chrome.browser.preferences.website.WebsitePreferenceBridge;
 import org.chromium.chrome.browser.search_engines.TemplateUrl;
 import org.chromium.chrome.browser.search_engines.TemplateUrlService;
@@ -36,9 +37,9 @@ import org.chromium.chrome.browser.search_engines.TemplateUrlService.LoadListene
 import org.chromium.chrome.browser.test.ChromeBrowserTestRule;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
 import org.chromium.chrome.test.util.ActivityUtils;
-import org.chromium.content.browser.test.util.Criteria;
-import org.chromium.content.browser.test.util.CriteriaHelper;
-import org.chromium.content.browser.test.util.UiUtils;
+import org.chromium.content_public.browser.test.util.Criteria;
+import org.chromium.content_public.browser.test.util.CriteriaHelper;
+import org.chromium.content_public.browser.test.util.UiUtils;
 import org.chromium.policy.test.annotations.Policies;
 
 import java.lang.reflect.InvocationTargetException;
@@ -303,7 +304,8 @@ public class PreferencesTest {
 
     private ContentSetting locationPermissionForSearchEngine(String keyword) {
         String url = TemplateUrlService.getInstance().getSearchEngineUrlFromTemplateUrl(keyword);
-        GeolocationInfo locationSettings = new GeolocationInfo(url, null, false);
+        PermissionInfo locationSettings =
+                new PermissionInfo(PermissionInfo.Type.GEOLOCATION, url, null, false);
         ContentSetting locationPermission = locationSettings.getContentSetting();
         return locationPermission;
     }

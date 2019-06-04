@@ -14,10 +14,6 @@
 #include "media/base/pipeline.h"
 #include "media/base/renderer.h"
 
-#if defined(USE_NEVA_MEDIA)
-#include "media/base/neva/media_platform_api.h"
-#endif
-
 namespace media {
 class Demuxer;
 
@@ -118,6 +114,10 @@ class MEDIA_EXPORT PipelineController {
   // Returns true if the current target state is suspended.
   bool IsSuspended();
 
+  // Returns true if Seek() was called and there is a seek operation which has
+  // not yet completed.
+  bool IsPendingSeek();
+
   // Returns true if |pipeline_| is suspended.
   bool IsPipelineSuspended();
 
@@ -138,11 +138,6 @@ class MEDIA_EXPORT PipelineController {
       const std::vector<MediaTrack::Id>& enabled_track_ids);
   void OnSelectedVideoTrackChanged(
       base::Optional<MediaTrack::Id> selected_track_id);
-
-#if defined(USE_NEVA_MEDIA)
-  void SetMediaPlatformAPI(
-      const scoped_refptr<MediaPlatformAPI>& media_platform_api);
-#endif
 
   // Used to fire the OnTrackChangeComplete function which is captured in a
   // OnceCallback, and doesn't play nicely with gmock.
@@ -197,6 +192,9 @@ class MEDIA_EXPORT PipelineController {
   // Indicates that a seek has occurred. When set, a seeked callback will be
   // issued at the next stable state.
   bool pending_seeked_cb_ = false;
+
+  // Indicates that a seek has occurred from an explicit call to Seek().
+  bool pending_seek_except_start_ = false;
 
   // Indicates that time has been changed by a seek, which will be reported at
   // the next seeked callback.

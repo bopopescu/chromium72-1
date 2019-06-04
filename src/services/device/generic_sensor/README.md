@@ -42,13 +42,13 @@ The DeviceOrientation Events API is implemented in `third_party/blink/renderer/m
 [DeviceMotionEvent]: ../../../third_party/blink/renderer/modules/device_orientation/device_motion_event.idl
 [DeviceOrientationEvent]: ../../../third_party/blink/renderer/modules/device_orientation/device_orientation_event.idl
 
-The content renderer layer is located in `content/renderer/device_sensors`.
+The content renderer layer is located in `third_party/blink/renderer/modules/device_orientation`.
 
 Testing:
 
 * Browser tests are located in `content/browser/device_sensors`.
 * Layout tests are located in `third_party/WebKit/LayoutTests/device_orientation`.
-* Web platform tests are located in `third_party/WebKit/LayoutTests/external/wpt/orientation-event` and are a mirror of the [web-platform-tests GitHub repository](https://github.com/w3c/web-platform-tests).
+* Web platform tests are located in `third_party/WebKit/LayoutTests/external/wpt/orientation-event` and are a mirror of the [web-platform-tests GitHub repository](https://github.com/web-platform-tests/wpt).
 
 ## Permissions
 

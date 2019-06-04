@@ -4,11 +4,16 @@
   "interface_provider_specs": {
     "service_manager:connector": {
       "provides": {
+        "app": [
+          "ax.mojom.AXHost"
+        ],
         "renderer": [
           "autofill.mojom.AutofillDriver",
           "autofill.mojom.PasswordManagerDriver",
+          "chrome.mojom.AvailableOfflineContentProvider",
           "chrome.mojom.CacheStatsRecorder",
           "chrome.mojom.NetBenchmarking",
+          "data_reduction_proxy.mojom.DataReductionProxy",
           "extensions.StashService",
           "metrics.mojom.CallStackProfileCollector",
           "mojom.ModuleEventSink",
@@ -25,7 +30,7 @@
         ]
       },
       "requires": {
-        "autoclick_app": [ "chromeos:autoclick" ],
+        "apps": [ "app_service" ],
         "ash": [ "system_ui", "test", "display" ],
         // Only used in classic ash case.
         "ash_pref_connector": [ "pref_connector" ],
@@ -34,18 +39,22 @@
         "chrome": [ "input_device_controller" ],
         "chrome_printing": [ "converter" ],
         "content_browser": [ "profiling_client" ],
+        "cups_ipp_parser": [ "ipp_parser" ],
         "device": [
           "device:fingerprint",
           "device:geolocation_config",
           "device:geolocation_control",
           "device:ip_geolocator"
         ],
+        "device_sync": [ "device_sync" ],
         "file_util": [ "analyze_archive", "zip_file" ],
         "identity": [ "identity_manager" ],
+        "ime": [ "input_engine" ],
         // Only used in classic ash case.
         "local_state": [ "pref_client" ],
         "media_gallery_util": [ "parse_media" ],
         "multidevice_setup": [ "multidevice_setup" ],
+        "mirroring": ["mirroring"],
         "nacl_broker": [ "browser" ],
         "nacl_loader": [ "browser" ],
         "patch": [ "patch_file" ],
@@ -55,15 +64,18 @@
         "proxy_resolver": [ "factory" ],
         "preferences": [ "pref_client", "pref_control" ],
         "removable_storage_writer": [ "removable_storage_writer" ],
+        "secure_channel": [ "secure_channel" ],
+        "shortcut_viewer_app": [ "shortcut_viewer" ],
         "ui": [
-          "display_dev",
           "ime_registrar",
           "input_device_controller",
           "window_manager"
         ],
         "unzip": [ "unzip_file" ],
         "util_win" : [ "shell_util_win" ],
-        "wifi_util_win": [ "wifi_credentials" ]
+        "wifi_util_win": [ "wifi_credentials" ],
+        "resource_coordinator": [ "webui_graph_dump" ],
+        "xr_device_service": [ "xr_device_provider", "xr_device_test_hook" ]
       }
     },
     "navigation:frame": {
@@ -71,26 +83,31 @@
         "renderer": [
           "autofill.mojom.AutofillDriver",
           "autofill.mojom.PasswordManagerDriver",
-          "blink.mojom.BudgetService",
+          "blink.mojom.BadgeService",
+          "blink.mojom.CredentialManager",
           "blink.mojom.InstalledAppProvider",
           "blink.mojom.MediaDownloadInProductHelp",
           "blink.mojom.ShareService",
           "blink.mojom.TextSuggestionHost",
+          "chrome.mojom.OfflinePageAutoFetcher",
           "chrome.mojom.OpenSearchDocumentDescriptionHandler",
           "chrome.mojom.PrerenderCanceler",
+          "chromeos.ime.mojom.InputEngineManager",
+          "chromeos.media_perception.mojom.MediaPerception",
           "contextual_search.mojom.ContextualSearchJsApiService",
           "dom_distiller.mojom.DistillabilityService",
           "dom_distiller.mojom.DistillerJavaScriptService",
           "extensions.KeepAlive",
+          "extensions.mime_handler.BeforeUnloadControl",
           "extensions.mime_handler.MimeHandlerService",
-          "extensions.mojom.InlineInstall",
           "media_router.mojom.MediaRouter",
           "page_load_metrics.mojom.PageLoadMetrics",
-          "password_manager.mojom.CredentialManager",
           "safe_browsing.mojom.PhishingDetectorClient",
           "translate.mojom.ContentTranslateDriver",
 
           // TODO(beng): These should be moved to a separate capability.
+          "app_management.mojom.PageHandlerFactory",
+          "eoc_internals.mojom.PageHandler",
           "media.mojom.MediaEngagementScoreDetailsProvider",
           "mojom.BluetoothInternalsHandler",
           "mojom.DiscardsDetailsProvider",
@@ -100,32 +117,13 @@
           "mojom.ResetPasswordHandler",
           "mojom.SiteEngagementDetailsProvider",
           "mojom.UsbInternalsPageHandler",
+          "resource_coordinator.mojom.WebUIGraphDump",
           "snippets_internals.mojom.PageHandlerFactory",
           "web_ui_test.mojom.TestRunner"
         ],
         "multidevice_setup" : [
-          "chromeos.multidevice_setup.mojom.MultiDeviceSetup"
-        ]
-      }
-    },
-    "navigation:dedicated_worker": {
-      "provides": {
-        "renderer": [
-          "blink.mojom.BudgetService"
-        ]
-      }
-    },
-    "navigation:service_worker": {
-      "provides": {
-        "renderer": [
-          "blink.mojom.BudgetService"
-        ]
-      }
-    },
-    "navigation:shared_worker": {
-      "provides": {
-        "renderer": [
-          "blink.mojom.BudgetService"
+          "chromeos.multidevice_setup.mojom.MultiDeviceSetup",
+          "chromeos.multidevice_setup.mojom.PrivilegedHostDeviceSetter"
         ]
       }
     }

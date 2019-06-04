@@ -18,14 +18,18 @@
 #include "base/rand_util.h"
 #include "base/strings/string_util.h"
 #include "base/synchronization/waitable_event.h"
-#include "base/task_scheduler/post_task.h"
+#include "base/task/post_task.h"
+#include "base/time/time.h"
 #include "build/build_config.h"
 #include "content/common/inter_process_time_ticks_converter.h"
+#include "content/common/mime_sniffing_throttle.h"
 #include "content/common/navigation_params.h"
+#include "content/common/net/record_load_histograms.h"
 #include "content/common/throttling_url_loader.h"
-#include "content/public/common/browser_side_navigation_policy.h"
+#include "content/public/common/navigation_policy.h"
 #include "content/public/common/resource_load_info.mojom.h"
 #include "content/public/common/resource_type.h"
+#include "content/public/common/url_utils.h"
 #include "content/public/renderer/fixed_received_data.h"
 #include "content/public/renderer/request_peer.h"
 #include "content/public/renderer/resource_dispatcher_delegate.h"
@@ -38,12 +42,12 @@
 #include "net/base/load_flags.h"
 #include "net/base/net_errors.h"
 #include "net/base/request_priority.h"
-#include "net/cert/cert_status_flags.h"
 #include "net/http/http_response_headers.h"
 #include "services/network/public/cpp/features.h"
 #include "services/network/public/cpp/resource_request.h"
 #include "services/network/public/cpp/resource_response.h"
 #include "services/network/public/cpp/url_loader_completion_status.h"
+#include "third_party/blink/public/common/service_worker/service_worker_utils.h"
 
 namespace content {
 
@@ -95,18 +99,21 @@ void NotifySubresourceStarted(
   render_frame->GetFrameHost()->SubresourceResponseStarted(url, cert_status);
 }
 
-void NotifyResourceLoadComplete(
+void NotifyResourceLoadStarted(
     scoped_refptr<base::SingleThreadTaskRunner> thread_task_runner,
+    const GURL& response_url,
     int render_frame_id,
-    mojom::ResourceLoadInfoPtr resource_load_info) {
+    int request_id,
+    const network::ResourceResponseHead& response_head,
+    content::ResourceType resource_type) {
   if (!thread_task_runner)
     return;
 
   if (!thread_task_runner->BelongsToCurrentThread()) {
     thread_task_runner->PostTask(
-        FROM_HERE,
-        base::BindOnce(NotifyResourceLoadComplete, thread_task_runner,
-                       render_frame_id, std::move(resource_load_info)));
+        FROM_HERE, base::BindOnce(NotifyResourceLoadStarted, thread_task_runner,
+                                  response_url, render_frame_id, request_id,
+                                  response_head, resource_type));
     return;
   }
 
@@ -115,9 +122,101 @@ void NotifyResourceLoadComplete(
   if (!render_frame)
     return;
 
+  render_frame->DidStartResponse(response_url, request_id, response_head,
+                                 resource_type);
+}
+
+void NotifyResourceLoadComplete(
+    scoped_refptr<base::SingleThreadTaskRunner> thread_task_runner,
+    int render_frame_id,
+    mojom::ResourceLoadInfoPtr resource_load_info,
+    const network::URLLoaderCompletionStatus& status) {
+  if (!thread_task_runner)
+    return;
+
+  if (!thread_task_runner->BelongsToCurrentThread()) {
+    thread_task_runner->PostTask(
+        FROM_HERE,
+        base::BindOnce(NotifyResourceLoadComplete, thread_task_runner,
+                       render_frame_id, std::move(resource_load_info), status));
+    return;
+  }
+
+  RenderFrameImpl* render_frame =
+      RenderFrameImpl::FromRoutingID(render_frame_id);
+  if (!render_frame)
+    return;
+
+  render_frame->DidCompleteResponse(resource_load_info->request_id, status);
   render_frame->GetFrameHost()->ResourceLoadComplete(
       std::move(resource_load_info));
 }
+
+void NotifyResourceLoadCancel(
+    scoped_refptr<base::SingleThreadTaskRunner> thread_task_runner,
+    int render_frame_id,
+    int request_id) {
+  if (!thread_task_runner)
+    return;
+
+  if (!thread_task_runner->BelongsToCurrentThread()) {
+    thread_task_runner->PostTask(
+        FROM_HERE, base::BindOnce(NotifyResourceLoadCancel, thread_task_runner,
+                                  render_frame_id, request_id));
+    return;
+  }
+
+  RenderFrameImpl* render_frame =
+      RenderFrameImpl::FromRoutingID(render_frame_id);
+  if (!render_frame)
+    return;
+
+  render_frame->DidCancelResponse(request_id);
+}
+
+void NotifyResourceTransferSizeUpdate(
+    scoped_refptr<base::SingleThreadTaskRunner> thread_task_runner,
+    int render_frame_id,
+    int request_id,
+    int transfer_size_diff) {
+  if (!thread_task_runner)
+    return;
+
+  if (!thread_task_runner->BelongsToCurrentThread()) {
+    thread_task_runner->PostTask(
+        FROM_HERE,
+        base::BindOnce(NotifyResourceTransferSizeUpdate, thread_task_runner,
+                       render_frame_id, request_id, transfer_size_diff));
+    return;
+  }
+
+  RenderFrameImpl* render_frame =
+      RenderFrameImpl::FromRoutingID(render_frame_id);
+  if (!render_frame)
+    return;
+
+  render_frame->DidReceiveTransferSizeUpdate(request_id, transfer_size_diff);
+}
+
+#if defined(OS_ANDROID)
+void NotifyUpdateUserGestureCarryoverInfo(int render_frame_id) {
+  scoped_refptr<base::SingleThreadTaskRunner> task_runner =
+      RenderThreadImpl::DeprecatedGetMainTaskRunner();
+  if (!task_runner->BelongsToCurrentThread()) {
+    task_runner->PostTask(
+        FROM_HERE,
+        base::BindOnce(NotifyUpdateUserGestureCarryoverInfo, render_frame_id));
+    return;
+  }
+
+  RenderFrameImpl* render_frame =
+      RenderFrameImpl::FromRoutingID(render_frame_id);
+  if (!render_frame)
+    return;
+
+  render_frame->GetFrameHost()->UpdateUserGestureCarryoverInfo();
+}
+#endif
 
 // Returns true if the headers indicate that this resource should always be
 // revalidated or not cached.
@@ -148,6 +247,22 @@ int GetInitialRequestID() {
   return base::RandInt(kMin, kMax);
 }
 
+// Determines if the loader should be restarted on a redirect using
+// ThrottlingURLLoader::FollowRedirectForcingRestart.
+bool RedirectRequiresLoaderRestart(const GURL& original_url,
+                                   const GURL& redirect_url) {
+  if (!base::FeatureList::IsEnabled(network::features::kNetworkService))
+    return false;
+
+  // Restart is needed if the URL is no longer handled by network service.
+  if (IsURLHandledByNetworkService(original_url))
+    return !IsURLHandledByNetworkService(redirect_url);
+
+  // If URL wasn't originally handled by network service, restart is needed if
+  // schemes are different.
+  return original_url.scheme_piece() != redirect_url.scheme_piece();
+}
+
 }  // namespace
 
 // static
@@ -168,7 +283,7 @@ ResourceDispatcher::~ResourceDispatcher() {
 
 ResourceDispatcher::PendingRequestInfo*
 ResourceDispatcher::GetPendingRequestInfo(int request_id) {
-  PendingRequestMap::iterator it = pending_requests_.find(request_id);
+  auto it = pending_requests_.find(request_id);
   if (it == pending_requests_.end())
     return nullptr;
   return it->second.get();
@@ -201,6 +316,18 @@ void ResourceDispatcher::OnReceivedResponse(
                          &renderer_response_info);
   request_info->load_timing_info = renderer_response_info.load_timing;
 
+  if (renderer_response_info.network_accessed) {
+    if (request_info->resource_type == RESOURCE_TYPE_MAIN_FRAME) {
+      UMA_HISTOGRAM_ENUMERATION("Net.ConnectionInfo.MainFrame",
+                                renderer_response_info.connection_info,
+                                net::HttpResponseInfo::NUM_OF_CONNECTION_INFOS);
+    } else {
+      UMA_HISTOGRAM_ENUMERATION("Net.ConnectionInfo.SubResource",
+                                renderer_response_info.connection_info,
+                                net::HttpResponseInfo::NUM_OF_CONNECTION_INFOS);
+    }
+  }
+
   network::ResourceResponseHead response_head;
   std::unique_ptr<NavigationResponseOverrideParameters> response_override =
       std::move(request_info->navigation_response_override);
@@ -231,6 +358,15 @@ void ResourceDispatcher::OnReceivedResponse(
   }
 
   request_info->peer->OnReceivedResponse(renderer_response_info);
+
+  // Make a deep copy of ResourceResponseHead before passing it cross-thread.
+  auto resource_response = base::MakeRefCounted<network::ResourceResponse>();
+  resource_response->head = response_head;
+  auto deep_copied_response = resource_response->DeepCopy();
+  NotifyResourceLoadStarted(
+      RenderThreadImpl::DeprecatedGetMainTaskRunner(),
+      request_info->response_url, request_info->render_frame_id, request_id,
+      deep_copied_response->head, request_info->resource_type);
 }
 
 void ResourceDispatcher::OnReceivedCachedMetadata(
@@ -256,16 +392,6 @@ void ResourceDispatcher::OnStartLoadingResponseBody(
   request_info->peer->OnStartLoadingResponseBody(std::move(body));
 }
 
-void ResourceDispatcher::OnDownloadedData(int request_id,
-                                          int data_len,
-                                          int encoded_data_length) {
-  PendingRequestInfo* request_info = GetPendingRequestInfo(request_id);
-  if (!request_info)
-    return;
-
-  request_info->peer->OnDownloadedData(data_len, encoded_data_length);
-}
-
 void ResourceDispatcher::OnReceivedRedirect(
     int request_id,
     const net::RedirectInfo& redirect_info,
@@ -275,8 +401,23 @@ void ResourceDispatcher::OnReceivedRedirect(
   PendingRequestInfo* request_info = GetPendingRequestInfo(request_id);
   if (!request_info)
     return;
+  if (!request_info->url_loader && request_info->should_follow_redirect) {
+    // This is a redirect that synchronously came as the loader is being
+    // constructed, due to a URLLoaderThrottle that changed the starting
+    // URL. Handle this in a posted task, as we don't have the loader
+    // pointer yet.
+    base::ThreadTaskRunnerHandle::Get()->PostTask(
+        FROM_HERE, base::BindOnce(&ResourceDispatcher::OnReceivedRedirect,
+                                  weak_factory_.GetWeakPtr(), request_id,
+                                  redirect_info, response_head, task_runner));
+    return;
+  }
+
   request_info->local_response_start = base::TimeTicks::Now();
   request_info->remote_request_start = response_head.load_timing.request_start;
+  request_info->redirect_requires_loader_restart =
+      RedirectRequiresLoaderRestart(request_info->response_url,
+                                    redirect_info.new_url);
 
   network::ResourceResponseInfo renderer_response_info;
   ToResourceResponseInfo(*request_info, response_head, &renderer_response_info);
@@ -317,7 +458,13 @@ void ResourceDispatcher::FollowPendingRedirect(
     request_info->has_pending_redirect = false;
     // net::URLRequest clears its request_start on redirect, so should we.
     request_info->local_request_start = base::TimeTicks::Now();
-    request_info->url_loader->FollowRedirect();
+    // Redirect URL may not be handled by the network service, so force a
+    // restart in case another URLLoaderFactory should handle the URL.
+    if (request_info->redirect_requires_loader_restart) {
+      request_info->url_loader->FollowRedirectForcingRestart();
+    } else {
+      request_info->url_loader->FollowRedirect(base::nullopt);
+    }
   }
 }
 
@@ -331,6 +478,7 @@ void ResourceDispatcher::OnRequestComplete(
     return;
   request_info->buffer.reset();
   request_info->buffer_size = 0;
+  request_info->net_error = status.error_code;
 
   auto resource_load_info = mojom::ResourceLoadInfo::New();
   resource_load_info->url = request_info->response_url;
@@ -356,7 +504,7 @@ void ResourceDispatcher::OnRequestComplete(
 
   NotifyResourceLoadComplete(RenderThreadImpl::DeprecatedGetMainTaskRunner(),
                              request_info->render_frame_id,
-                             std::move(resource_load_info));
+                             std::move(resource_load_info), status);
 
   RequestPeer* peer = request_info->peer.get();
 
@@ -369,6 +517,7 @@ void ResourceDispatcher::OnRequestComplete(
   }
 
   network::URLLoaderCompletionStatus renderer_status(status);
+  // TODO(toyoshim): Consider to convert status.cors_preflight_timing_info here.
   if (status.completion_time.is_null()) {
     // No completion timestamp is provided, leave it as is.
   } else if (request_info->remote_request_start.is_null() ||
@@ -399,23 +548,21 @@ void ResourceDispatcher::OnRequestComplete(
   peer->OnCompletedRequest(renderer_status);
 }
 
-network::mojom::DownloadedTempFilePtr
-ResourceDispatcher::TakeDownloadedTempFile(int request_id) {
-  PendingRequestMap::iterator it = pending_requests_.find(request_id);
-  if (it == pending_requests_.end())
-    return nullptr;
-  PendingRequestInfo* request_info = it->second.get();
-  if (!request_info->url_loader_client)
-    return nullptr;
-  return request_info->url_loader_client->TakeDownloadedTempFile();
-}
-
 bool ResourceDispatcher::RemovePendingRequest(
     int request_id,
     scoped_refptr<base::SingleThreadTaskRunner> task_runner) {
-  PendingRequestMap::iterator it = pending_requests_.find(request_id);
+  auto it = pending_requests_.find(request_id);
   if (it == pending_requests_.end())
     return false;
+
+  if (it->second->net_error == net::ERR_IO_PENDING) {
+    it->second->net_error = net::ERR_ABORTED;
+    NotifyResourceLoadCancel(RenderThreadImpl::DeprecatedGetMainTaskRunner(),
+                             it->second->render_frame_id, request_id);
+  }
+
+  RecordLoadHistograms(it->second->response_url, it->second->resource_type,
+                       it->second->net_error);
 
   // Cancel loading.
   it->second->url_loader = nullptr;
@@ -435,7 +582,7 @@ bool ResourceDispatcher::RemovePendingRequest(
 void ResourceDispatcher::Cancel(
     int request_id,
     scoped_refptr<base::SingleThreadTaskRunner> task_runner) {
-  PendingRequestMap::iterator it = pending_requests_.find(request_id);
+  auto it = pending_requests_.find(request_id);
   if (it == pending_requests_.end()) {
     DLOG(ERROR) << "unknown request";
     return;
@@ -485,6 +632,10 @@ void ResourceDispatcher::OnTransferSizeUpdated(int request_id,
   // TODO(yhirano): Consider using int64_t in
   // RequestPeer::OnTransferSizeUpdated.
   request_info->peer->OnTransferSizeUpdated(transfer_size_diff);
+
+  NotifyResourceTransferSizeUpdate(
+      RenderThreadImpl::DeprecatedGetMainTaskRunner(),
+      request_info->render_frame_id, request_id, transfer_size_diff);
 }
 
 ResourceDispatcher::PendingRequestInfo::PendingRequestInfo(
@@ -494,7 +645,6 @@ ResourceDispatcher::PendingRequestInfo::PendingRequestInfo(
     const GURL& request_url,
     const std::string& method,
     const GURL& referrer,
-    bool download_to_file,
     std::unique_ptr<NavigationResponseOverrideParameters>
         navigation_response_override_params)
     : peer(std::move(peer)),
@@ -504,7 +654,6 @@ ResourceDispatcher::PendingRequestInfo::PendingRequestInfo(
       response_url(request_url),
       response_method(method),
       response_referrer(referrer),
-      download_to_file(download_to_file),
       local_request_start(base::TimeTicks::Now()),
       buffer_size(0),
       navigation_response_override(
@@ -520,7 +669,7 @@ void ResourceDispatcher::StartSync(
     SyncLoadResponse* response,
     scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
     std::vector<std::unique_ptr<URLLoaderThrottle>> throttles,
-    double timeout,
+    base::TimeDelta timeout,
     blink::mojom::BlobRegistryPtrInfo download_to_blob_registry,
     std::unique_ptr<RequestPeer> peer) {
   CheckSchemeForReferrerPolicy(*request);
@@ -590,6 +739,13 @@ int ResourceDispatcher::StartAsync(
     base::OnceClosure* continue_navigation_function) {
   CheckSchemeForReferrerPolicy(*request);
 
+#if defined(OS_ANDROID)
+  if (request->resource_type != RESOURCE_TYPE_MAIN_FRAME &&
+      request->has_user_gesture) {
+    NotifyUpdateUserGestureCarryoverInfo(request->render_frame_id);
+  }
+#endif
+
   bool override_url_loader =
       !!response_override_params &&
       !!response_override_params->url_loader_client_endpoints;
@@ -599,23 +755,39 @@ int ResourceDispatcher::StartAsync(
   pending_requests_[request_id] = std::make_unique<PendingRequestInfo>(
       std::move(peer), static_cast<ResourceType>(request->resource_type),
       request->render_frame_id, request->url, request->method,
-      request->referrer, request->download_to_file,
-      std::move(response_override_params));
+      request->referrer, std::move(response_override_params));
 
   if (override_url_loader) {
+    // Redirect checks are handled by NavigationURLLoaderImpl, so it's safe to
+    // pass true for |bypass_redirect_checks|.
     pending_requests_[request_id]->url_loader_client =
-        std::make_unique<URLLoaderClientImpl>(request_id, this,
-                                              loading_task_runner);
+        std::make_unique<URLLoaderClientImpl>(
+            request_id, this, loading_task_runner,
+            true /* bypass_redirect_checks */, request->url);
 
-    DCHECK(continue_navigation_function);
-    *continue_navigation_function =
-        base::BindOnce(&ResourceDispatcher::ContinueForNavigation,
-                       weak_factory_.GetWeakPtr(), request_id);
+    if (request->resource_type == RESOURCE_TYPE_SHARED_WORKER) {
+      // For shared workers, immediately post a task for continuing loading
+      // because shared workers don't have the concept of the navigation commit
+      // and |continue_navigation_function| is never called.
+      // TODO(nhiroki): Unify this case with the navigation case for code
+      // health.
+      loading_task_runner->PostTask(
+          FROM_HERE, base::BindOnce(&ResourceDispatcher::ContinueForNavigation,
+                                    weak_factory_.GetWeakPtr(), request_id));
+    } else {
+      // For navigations, |continue_navigation_function| is called after the
+      // navigation commit.
+      DCHECK(continue_navigation_function);
+      *continue_navigation_function =
+          base::BindOnce(&ResourceDispatcher::ContinueForNavigation,
+                         weak_factory_.GetWeakPtr(), request_id);
+    }
     return request_id;
   }
 
-  std::unique_ptr<URLLoaderClientImpl> client(
-      new URLLoaderClientImpl(request_id, this, loading_task_runner));
+  std::unique_ptr<URLLoaderClientImpl> client(new URLLoaderClientImpl(
+      request_id, this, loading_task_runner,
+      url_loader_factory->BypassRedirectChecks(), request->url));
 
   if (pass_response_pipe_to_peer)
     client->SetPassResponsePipeToDispatcher(true);
@@ -623,10 +795,12 @@ int ResourceDispatcher::StartAsync(
   uint32_t options = network::mojom::kURLLoadOptionNone;
   // TODO(jam): use this flag for ResourceDispatcherHost code path once
   // MojoLoading is the only IPC code path.
-  if (base::FeatureList::IsEnabled(network::features::kNetworkService) &&
-      request->fetch_request_context_type != REQUEST_CONTEXT_TYPE_FETCH) {
+  if (request->fetch_request_context_type !=
+      static_cast<int>(blink::mojom::RequestContextType::FETCH)) {
     // MIME sniffing should be disabled for a request initiated by fetch().
     options |= network::mojom::kURLLoadOptionSniffMimeType;
+    if (blink::ServiceWorkerUtils::IsServicificationEnabled())
+      throttles.push_back(std::make_unique<MimeSniffingThrottle>());
   }
   if (is_sync) {
     options |= network::mojom::kURLLoadOptionSynchronous;
@@ -709,8 +883,7 @@ void ResourceDispatcher::ContinueForNavigation(int request_id) {
       return;
   }
 
-  client_ptr->OnReceiveResponse(response_override->response,
-                                network::mojom::DownloadedTempFilePtr());
+  client_ptr->OnReceiveResponse(response_override->response);
 
   // Abort if the request is cancelled.
   if (!GetPendingRequestInfo(request_id))

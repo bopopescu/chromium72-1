@@ -7,6 +7,8 @@
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/public/platform/web_url_loader_mock_factory.h"
 #include "third_party/blink/renderer/core/loader/modulescript/module_script_creation_params.h"
+#include "third_party/blink/renderer/core/loader/modulescript/worklet_module_script_fetcher.h"
+#include "third_party/blink/renderer/core/script/modulator.h"
 #include "third_party/blink/renderer/core/workers/worker_fetch_test_helper.h"
 #include "third_party/blink/renderer/platform/loader/testing/fetch_testing_platform_support.h"
 #include "third_party/blink/renderer/platform/loader/testing/mock_fetch_context.h"
@@ -27,16 +29,26 @@ class WorkletModuleResponsesMapTest : public testing::Test {
     auto* context =
         MockFetchContext::Create(MockFetchContext::kShouldLoadNewResource);
     fetcher_ = ResourceFetcher::Create(context);
-    map_ = new WorkletModuleResponsesMap(fetcher_);
+    map_ = MakeGarbageCollected<WorkletModuleResponsesMap>();
   }
 
   void Fetch(const KURL& url, ClientImpl* client) {
     ResourceRequest resource_request(url);
     // TODO(nhiroki): Specify worklet-specific request context (e.g.,
     // "paintworklet").
-    resource_request.SetRequestContext(WebURLRequest::kRequestContextScript);
+    resource_request.SetRequestContext(mojom::RequestContextType::SCRIPT);
     FetchParameters fetch_params(resource_request);
-    map_->Fetch(fetch_params, client);
+    WorkletModuleScriptFetcher* module_fetcher =
+        MakeGarbageCollected<WorkletModuleScriptFetcher>(fetcher_.Get(),
+                                                         map_.Get());
+    module_fetcher->Fetch(fetch_params, ModuleGraphLevel::kTopLevelModuleFetch,
+                          client);
+  }
+
+  void RunUntilIdle() {
+    base::SingleThreadTaskRunner* runner =
+        fetcher_->Context().GetLoadingTaskRunner().get();
+    static_cast<scheduler::FakeTaskRunner*>(runner)->RunUntilIdle();
   }
 
  protected:
@@ -47,7 +59,7 @@ class WorkletModuleResponsesMapTest : public testing::Test {
 
 TEST_F(WorkletModuleResponsesMapTest, Basic) {
   const KURL kUrl("https://example.com/module.js");
-  URLTestHelpers::RegisterMockedURLLoad(
+  url_test_helpers::RegisterMockedURLLoad(
       kUrl, test::CoreTestDataPath("module.js"), "text/javascript");
   HeapVector<Member<ClientImpl>> clients;
 
@@ -69,6 +81,7 @@ TEST_F(WorkletModuleResponsesMapTest, Basic) {
 
   // Serve the fetch request. This should notify the waiting clients.
   platform_->GetURLLoaderMockFactory()->ServeAsynchronousRequests();
+  RunUntilIdle();
   for (auto client : clients) {
     EXPECT_EQ(ClientImpl::Result::kOK, client->GetResult());
     EXPECT_TRUE(client->GetParams().has_value());
@@ -77,7 +90,7 @@ TEST_F(WorkletModuleResponsesMapTest, Basic) {
 
 TEST_F(WorkletModuleResponsesMapTest, Failure) {
   const KURL kUrl("https://example.com/module.js");
-  URLTestHelpers::RegisterMockedErrorURLLoad(kUrl);
+  url_test_helpers::RegisterMockedErrorURLLoad(kUrl);
   HeapVector<Member<ClientImpl>> clients;
 
   // An initial read call initiates a fetch request.
@@ -98,6 +111,7 @@ TEST_F(WorkletModuleResponsesMapTest, Failure) {
 
   // Serve the fetch request with 404. This should fail the waiting clients.
   platform_->GetURLLoaderMockFactory()->ServeAsynchronousRequests();
+  RunUntilIdle();
   for (auto client : clients) {
     EXPECT_EQ(ClientImpl::Result::kFailed, client->GetResult());
     EXPECT_FALSE(client->GetParams().has_value());
@@ -107,8 +121,8 @@ TEST_F(WorkletModuleResponsesMapTest, Failure) {
 TEST_F(WorkletModuleResponsesMapTest, Isolation) {
   const KURL kUrl1("https://example.com/module?1.js");
   const KURL kUrl2("https://example.com/module?2.js");
-  URLTestHelpers::RegisterMockedErrorURLLoad(kUrl1);
-  URLTestHelpers::RegisterMockedURLLoad(
+  url_test_helpers::RegisterMockedErrorURLLoad(kUrl1);
+  url_test_helpers::RegisterMockedURLLoad(
       kUrl2, test::CoreTestDataPath("module.js"), "text/javascript");
   HeapVector<Member<ClientImpl>> clients;
 
@@ -141,6 +155,7 @@ TEST_F(WorkletModuleResponsesMapTest, Isolation) {
 
   // Serve the fetch requests.
   platform_->GetURLLoaderMockFactory()->ServeAsynchronousRequests();
+  RunUntilIdle();
   EXPECT_EQ(ClientImpl::Result::kFailed, clients[0]->GetResult());
   EXPECT_FALSE(clients[0]->GetParams().has_value());
   EXPECT_EQ(ClientImpl::Result::kFailed, clients[1]->GetResult());
@@ -156,6 +171,7 @@ TEST_F(WorkletModuleResponsesMapTest, InvalidURL) {
   ASSERT_TRUE(kEmptyURL.IsEmpty());
   ClientImpl* client1 = new ClientImpl;
   Fetch(kEmptyURL, client1);
+  RunUntilIdle();
   EXPECT_EQ(ClientImpl::Result::kFailed, client1->GetResult());
   EXPECT_FALSE(client1->GetParams().has_value());
 
@@ -163,6 +179,7 @@ TEST_F(WorkletModuleResponsesMapTest, InvalidURL) {
   ASSERT_TRUE(kNullURL.IsNull());
   ClientImpl* client2 = new ClientImpl;
   Fetch(kNullURL, client2);
+  RunUntilIdle();
   EXPECT_EQ(ClientImpl::Result::kFailed, client2->GetResult());
   EXPECT_FALSE(client2->GetParams().has_value());
 
@@ -170,6 +187,7 @@ TEST_F(WorkletModuleResponsesMapTest, InvalidURL) {
   ASSERT_FALSE(kInvalidURL.IsValid());
   ClientImpl* client3 = new ClientImpl;
   Fetch(kInvalidURL, client3);
+  RunUntilIdle();
   EXPECT_EQ(ClientImpl::Result::kFailed, client3->GetResult());
   EXPECT_FALSE(client3->GetParams().has_value());
 }
@@ -177,9 +195,9 @@ TEST_F(WorkletModuleResponsesMapTest, InvalidURL) {
 TEST_F(WorkletModuleResponsesMapTest, Dispose) {
   const KURL kUrl1("https://example.com/module?1.js");
   const KURL kUrl2("https://example.com/module?2.js");
-  URLTestHelpers::RegisterMockedURLLoad(
+  url_test_helpers::RegisterMockedURLLoad(
       kUrl1, test::CoreTestDataPath("module.js"), "text/javascript");
-  URLTestHelpers::RegisterMockedURLLoad(
+  url_test_helpers::RegisterMockedURLLoad(
       kUrl2, test::CoreTestDataPath("module.js"), "text/javascript");
   HeapVector<Member<ClientImpl>> clients;
 
@@ -211,6 +229,7 @@ TEST_F(WorkletModuleResponsesMapTest, Dispose) {
 
   // Dispose() should notify to all waiting clients.
   map_->Dispose();
+  RunUntilIdle();
   for (auto client : clients) {
     EXPECT_EQ(ClientImpl::Result::kFailed, client->GetResult());
     EXPECT_FALSE(client->GetParams().has_value());

@@ -8,11 +8,9 @@
 #include <vector>
 
 #include "base/bind.h"
-#include "base/json/json_writer.h"
 #include "base/lazy_instance.h"
 #include "base/observer_list.h"
 #include "content/browser/devtools/devtools_manager.h"
-#include "content/browser/devtools/devtools_session.h"
 #include "content/browser/devtools/forwarding_agent_host.h"
 #include "content/browser/devtools/protocol/page.h"
 #include "content/browser/devtools/protocol/security_handler.h"
@@ -34,40 +32,13 @@ typedef std::map<std::string, DevToolsAgentHostImpl*> DevToolsMap;
 base::LazyInstance<DevToolsMap>::Leaky g_devtools_instances =
     LAZY_INSTANCE_INITIALIZER;
 
-base::LazyInstance<base::ObserverList<DevToolsAgentHostObserver>>::Leaky
-    g_devtools_observers = LAZY_INSTANCE_INITIALIZER;
-
-// Returns a list of all active hosts on browser targets.
-DevToolsAgentHost::List GetBrowserAgentHosts() {
-  DevToolsAgentHost::List result;
-  for (const auto& id_host : g_devtools_instances.Get()) {
-    if (id_host.second->GetType() == DevToolsAgentHost::kTypeBrowser)
-      result.push_back(id_host.second);
-  }
-  return result;
-}
-
-// Notify the provided agent host of a certificate error. Returns true if one of
-// the host's handlers will handle the certificate error.
-bool NotifyCertificateError(
-    DevToolsAgentHost* host,
-    int cert_error,
-    const GURL& request_url,
-    const DevToolsAgentHostImpl::CertErrorCallback& callback) {
-  DevToolsAgentHostImpl* host_impl = static_cast<DevToolsAgentHostImpl*>(host);
-  for (auto* security_handler :
-       protocol::SecurityHandler::ForAgentHost(host_impl)) {
-    if (security_handler->NotifyCertificateError(cert_error, request_url,
-                                                 callback)) {
-      return true;
-    }
-  }
-  return false;
-}
+base::LazyInstance<base::ObserverList<DevToolsAgentHostObserver>::Unchecked>::
+    Leaky g_devtools_observers = LAZY_INSTANCE_INITIALIZER;
 }  // namespace
 
 const char DevToolsAgentHost::kTypePage[] = "page";
 const char DevToolsAgentHost::kTypeFrame[] = "iframe";
+const char DevToolsAgentHost::kTypeDedicatedWorker[] = "worker";
 const char DevToolsAgentHost::kTypeSharedWorker[] = "shared_worker";
 const char DevToolsAgentHost::kTypeServiceWorker[] = "service_worker";
 const char DevToolsAgentHost::kTypeBrowser[] = "browser";
@@ -101,6 +72,8 @@ DevToolsAgentHost::List DevToolsAgentHost::GetOrCreateAll() {
   for (const auto& host : service_list)
     result.push_back(host);
 
+  // TODO(dgozman): we should add dedicated workers here, but clients are not
+  // ready.
   RenderFrameDevToolsAgentHost::AddAllAgentHosts(&result);
 
 #if DCHECK_IS_ON()
@@ -114,7 +87,8 @@ DevToolsAgentHost::List DevToolsAgentHost::GetOrCreateAll() {
   return result;
 }
 
-DevToolsAgentHostImpl::DevToolsAgentHostImpl(const std::string& id) : id_(id) {
+DevToolsAgentHostImpl::DevToolsAgentHostImpl(const std::string& id)
+    : id_(id), renderer_channel_(this) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
 }
 
@@ -128,7 +102,7 @@ scoped_refptr<DevToolsAgentHost> DevToolsAgentHost::GetForId(
     const std::string& id) {
   if (!g_devtools_instances.IsCreated())
     return nullptr;
-  DevToolsMap::iterator it = g_devtools_instances.Get().find(id);
+  auto it = g_devtools_instances.Get().find(id);
   if (it == g_devtools_instances.Get().end())
     return nullptr;
   return it->second;
@@ -144,76 +118,42 @@ scoped_refptr<DevToolsAgentHost> DevToolsAgentHost::Forward(
   return new ForwardingAgentHost(id, std::move(delegate));
 }
 
-// static
-bool DevToolsAgentHostImpl::HandleCertificateError(WebContents* web_contents,
-                                                   int cert_error,
-                                                   const GURL& request_url,
-                                                   CertErrorCallback callback) {
-  scoped_refptr<DevToolsAgentHost> agent_host =
-      DevToolsAgentHost::GetOrCreateFor(web_contents).get();
-  if (NotifyCertificateError(agent_host.get(), cert_error, request_url,
-                             callback)) {
-    // Only allow a single agent host to handle the error.
-    callback.Reset();
-  }
-
-  for (scoped_refptr<DevToolsAgentHost> browser_agent_host :
-       GetBrowserAgentHosts()) {
-    if (NotifyCertificateError(browser_agent_host.get(), cert_error,
-                               request_url, callback)) {
-      // Only allow a single agent host to handle the error.
-      callback.Reset();
-    }
-  }
-
-  return !callback;
-}
-
 DevToolsSession* DevToolsAgentHostImpl::SessionByClient(
     DevToolsAgentHostClient* client) {
   auto it = session_by_client_.find(client);
   return it == session_by_client_.end() ? nullptr : it->second.get();
 }
 
-bool DevToolsAgentHostImpl::InnerAttachClient(DevToolsAgentHostClient* client,
-                                              bool restricted) {
+bool DevToolsAgentHostImpl::AttachInternal(
+    std::unique_ptr<DevToolsSession> session_owned) {
   scoped_refptr<DevToolsAgentHostImpl> protect(this);
-  DevToolsSession* session = new DevToolsSession(this, client, restricted);
-  sessions_.insert(session);
-  session_by_client_[client].reset(session);
-  if (!AttachSession(session)) {
-    sessions_.erase(session);
-    session_by_client_.erase(client);
+  DevToolsSession* session = session_owned.get();
+  session->SetAgentHost(this);
+  if (!AttachSession(session))
     return false;
-  }
-
+  renderer_channel_.AttachSession(session);
+  sessions_.push_back(session);
+  session_by_client_[session->client()] = std::move(session_owned);
   if (sessions_.size() == 1)
     NotifyAttached();
   DevToolsManager* manager = DevToolsManager::GetInstance();
   if (manager->delegate())
-    manager->delegate()->ClientAttached(this, client);
+    manager->delegate()->ClientAttached(this, session->client());
   return true;
 }
 
-void DevToolsAgentHostImpl::AttachClient(DevToolsAgentHostClient* client) {
-  if (SessionByClient(client))
-    return;
-  InnerAttachClient(client, false /* restricted */);
-}
-
-bool DevToolsAgentHostImpl::AttachRestrictedClient(
-    DevToolsAgentHostClient* client) {
+bool DevToolsAgentHostImpl::AttachClient(DevToolsAgentHostClient* client) {
   if (SessionByClient(client))
     return false;
-  return InnerAttachClient(client, true /* restricted */);
+  return AttachInternal(std::make_unique<DevToolsSession>(client));
 }
 
 bool DevToolsAgentHostImpl::DetachClient(DevToolsAgentHostClient* client) {
-  if (!SessionByClient(client))
+  DevToolsSession* session = SessionByClient(client);
+  if (!session)
     return false;
-
   scoped_refptr<DevToolsAgentHostImpl> protect(this);
-  InnerDetachClient(client);
+  DetachInternal(session);
   return true;
 }
 
@@ -223,19 +163,20 @@ bool DevToolsAgentHostImpl::DispatchProtocolMessage(
   DevToolsSession* session = SessionByClient(client);
   if (!session)
     return false;
-  DispatchProtocolMessage(session, message);
-  return true;
+  return session->DispatchProtocolMessage(message);
 }
 
-void DevToolsAgentHostImpl::InnerDetachClient(DevToolsAgentHostClient* client) {
-  std::unique_ptr<DevToolsSession> session =
-      std::move(session_by_client_[client]);
-  sessions_.erase(session.get());
-  session_by_client_.erase(client);
-  DetachSession(session.get());
+void DevToolsAgentHostImpl::DetachInternal(DevToolsSession* session) {
+  std::unique_ptr<DevToolsSession> session_owned =
+      std::move(session_by_client_[session->client()]);
+  // Make sure we dispose session prior to reporting it to the host.
+  session->Dispose();
+  sessions_.erase(std::remove(sessions_.begin(), sessions_.end(), session));
+  session_by_client_.erase(session->client());
+  DetachSession(session);
   DevToolsManager* manager = DevToolsManager::GetInstance();
   if (manager->delegate())
-    manager->delegate()->ClientDetached(this, client);
+    manager->delegate()->ClientDetached(this, session->client());
   if (sessions_.empty()) {
     io_context_.DiscardAllStreams();
     NotifyDetached();
@@ -310,16 +251,11 @@ void DevToolsAgentHostImpl::ForceDetachAllSessions() {
   }
 }
 
-void DevToolsAgentHostImpl::ForceDetachRestrictedSessions() {
-  if (sessions_.empty())
-    return;
+void DevToolsAgentHostImpl::ForceDetachRestrictedSessions(
+    const std::vector<DevToolsSession*>& restricted_sessions) {
   scoped_refptr<DevToolsAgentHostImpl> protect(this);
-  std::vector<DevToolsSession*> restricted;
-  for (DevToolsSession* session : sessions_) {
-    if (session->restricted())
-      restricted.push_back(session);
-  }
-  for (DevToolsSession* session : restricted) {
+
+  for (DevToolsSession* session : restricted_sessions) {
     DevToolsAgentHostClient* client = session->client();
     DetachClient(client);
     client->AgentHostClosed(this);
@@ -332,9 +268,7 @@ bool DevToolsAgentHostImpl::AttachSession(DevToolsSession* session) {
 
 void DevToolsAgentHostImpl::DetachSession(DevToolsSession* session) {}
 
-void DevToolsAgentHostImpl::DispatchProtocolMessage(
-    DevToolsSession* session,
-    const std::string& message) {}
+void DevToolsAgentHostImpl::UpdateRendererChannel(bool force) {}
 
 // static
 void DevToolsAgentHost::DetachAllClients() {
@@ -343,11 +277,12 @@ void DevToolsAgentHost::DetachAllClients() {
 
   // Make a copy, since detaching may lead to agent destruction, which
   // removes it from the instances.
-  DevToolsMap copy = g_devtools_instances.Get();
-  for (DevToolsMap::iterator it(copy.begin()); it != copy.end(); ++it) {
-    DevToolsAgentHostImpl* agent_host = it->second;
-    agent_host->ForceDetachAllSessions();
-  }
+  std::vector<scoped_refptr<DevToolsAgentHostImpl>> copy;
+  for (auto it(g_devtools_instances.Get().begin());
+       it != g_devtools_instances.Get().end(); ++it)
+    copy.push_back(it->second);
+  for (auto it(copy.begin()); it != copy.end(); ++it)
+    it->get()->ForceDetachAllSessions();
 }
 
 // static
@@ -398,6 +333,11 @@ void DevToolsAgentHostImpl::NotifyAttached() {
 void DevToolsAgentHostImpl::NotifyDetached() {
   for (auto& observer : g_devtools_observers.Get())
     observer.DevToolsAgentHostDetached(this);
+}
+
+void DevToolsAgentHostImpl::NotifyCrashed(base::TerminationStatus status) {
+  for (auto& observer : g_devtools_observers.Get())
+    observer.DevToolsAgentHostCrashed(this, status);
 }
 
 void DevToolsAgentHostImpl::NotifyDestroyed() {

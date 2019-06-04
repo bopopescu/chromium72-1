@@ -18,17 +18,14 @@
 #include "base/macros.h"
 #include "base/stl_util.h"
 #include "chrome/browser/android/search_permissions/search_permissions_service.h"
-#include "chrome/browser/browsing_data/browsing_data_flash_lso_helper.h"
 #include "chrome/browser/browsing_data/browsing_data_local_storage_helper.h"
-#include "chrome/browser/browsing_data/browsing_data_quota_helper.h"
-#include "chrome/browser/browsing_data/cookies_tree_model.h"
-#include "chrome/browser/browsing_data/local_data_container.h"
 #include "chrome/browser/content_settings/cookie_settings_factory.h"
 #include "chrome/browser/content_settings/host_content_settings_map_factory.h"
 #include "chrome/browser/content_settings/tab_specific_content_settings.h"
 #include "chrome/browser/content_settings/web_site_settings_uma_util.h"
 #include "chrome/browser/engagement/important_sites_util.h"
-#include "chrome/browser/notifications/desktop_notification_profile_util.h"
+#include "chrome/browser/media/android/cdm/media_drm_license_manager.h"
+#include "chrome/browser/notifications/notification_permission_context.h"
 #include "chrome/browser/permissions/permission_decision_auto_blocker.h"
 #include "chrome/browser/permissions/permission_manager.h"
 #include "chrome/browser/permissions/permission_uma_util.h"
@@ -44,7 +41,7 @@
 #include "content/public/browser/storage_partition.h"
 #include "jni/WebsitePreferenceBridge_jni.h"
 #include "net/base/registry_controlled_domains/registry_controlled_domain.h"
-#include "storage/browser/quota/quota_manager.h"
+#include "services/network/public/mojom/cookie_manager.mojom.h"
 #include "third_party/blink/public/mojom/quota/quota_types.mojom.h"
 #include "url/origin.h"
 #include "url/url_constants.h"
@@ -64,8 +61,8 @@ namespace {
 // ManageSpaceActivity.java.
 const int kMaxImportantSites = 10;
 
-const char* kHttpPortSuffix = ":80";
-const char* kHttpsPortSuffix = ":443";
+const char kHttpPortSuffix[] = ":80";
+const char kHttpsPortSuffix[] = ":443";
 
 Profile* GetActiveUserProfile(bool is_incognito) {
   Profile* profile = ProfileManager::GetActiveUserProfile();
@@ -272,6 +269,10 @@ ChooserContextBase* GetChooserContext(ContentSettingsType type) {
   }
 }
 
+bool OriginMatcher(const url::Origin& origin, const GURL& other) {
+  return origin == url::Origin::Create(other);
+}
+
 }  // anonymous namespace
 
 static void JNI_WebsitePreferenceBridge_GetClipboardOrigins(
@@ -426,6 +427,11 @@ static void JNI_WebsitePreferenceBridge_SetNotificationSettingForOrigin(
     const JavaParamRef<jstring>& origin,
     jint value,
     jboolean is_incognito) {
+  // Note: For Android O+, SetNotificationSettingForOrigin is only called when
+  // the "Clear & Reset" button in Site Settings is pressed. Otherwise, we rely
+  // on ReportNotificationRevokedForOrigin to explicitly record metrics
+  // when we detect changes initiated in Android.
+  //
   // Note: Web Notification permission behaves differently from all other
   // permission types. See https://crbug.com/416894.
   Profile* profile = GetActiveUserProfile(is_incognito);
@@ -437,26 +443,40 @@ static void JNI_WebsitePreferenceBridge_SetNotificationSettingForOrigin(
         url, CONTENT_SETTINGS_TYPE_NOTIFICATIONS);
   }
 
-  if (MaybeResetDSEPermission(CONTENT_SETTINGS_TYPE_NOTIFICATIONS, url, url,
+  if (MaybeResetDSEPermission(CONTENT_SETTINGS_TYPE_NOTIFICATIONS, url, GURL(),
                               is_incognito, setting)) {
     return;
   }
 
-  switch (setting) {
-    case CONTENT_SETTING_DEFAULT:
-      DesktopNotificationProfileUtil::ClearSetting(profile, url);
-      break;
-    case CONTENT_SETTING_ALLOW:
-      DesktopNotificationProfileUtil::GrantPermission(profile, url);
-      break;
-    case CONTENT_SETTING_BLOCK:
-      DesktopNotificationProfileUtil::DenyPermission(profile, url);
-      break;
-    default:
-      NOTREACHED();
-  }
+  PermissionUtil::ScopedRevocationReporter scoped_revocation_reporter(
+      profile, url, GURL(), CONTENT_SETTINGS_TYPE_NOTIFICATIONS,
+      PermissionSourceUI::SITE_SETTINGS);
+
+  NotificationPermissionContext::UpdatePermission(profile, url, setting);
   WebSiteSettingsUmaUtil::LogPermissionChange(
       CONTENT_SETTINGS_TYPE_NOTIFICATIONS, setting);
+}
+
+// In Android O+, Android is responsible for revoking notification settings--
+// We detect this change and explicitly report it back for UMA reporting.
+static void JNI_WebsitePreferenceBridge_ReportNotificationRevokedForOrigin(
+    JNIEnv* env,
+    const JavaParamRef<jclass>& clazz,
+    const JavaParamRef<jstring>& origin,
+    jint new_setting_value,
+    jboolean is_incognito) {
+  Profile* profile = GetActiveUserProfile(is_incognito);
+  GURL url = GURL(ConvertJavaStringToUTF8(env, origin));
+
+  ContentSetting setting = static_cast<ContentSetting>(new_setting_value);
+  DCHECK_NE(setting, CONTENT_SETTING_ALLOW);
+
+  WebSiteSettingsUmaUtil::LogPermissionChange(
+      CONTENT_SETTINGS_TYPE_NOTIFICATIONS, setting);
+
+  PermissionUmaUtil::PermissionRevoked(CONTENT_SETTINGS_TYPE_NOTIFICATIONS,
+                                       PermissionSourceUI::ANDROID_SETTINGS,
+                                       url.GetOrigin(), profile);
 }
 
 static void JNI_WebsitePreferenceBridge_GetCameraOrigins(
@@ -606,100 +626,15 @@ static void JNI_WebsitePreferenceBridge_RevokeObjectPermission(
 
 namespace {
 
-class SiteDataDeleteHelper : public CookiesTreeModel::Observer {
- public:
-  SiteDataDeleteHelper(Profile* profile, const GURL& domain)
-      : profile_(profile), domain_(domain), ending_batch_processing_(false) {
+void OnCookiesReceived(network::mojom::CookieManager* cookie_manager,
+                       const GURL& domain,
+                       const std::vector<net::CanonicalCookie>& cookies) {
+  for (const auto& cookie : cookies) {
+    if (cookie.IsDomainMatch(domain.host())) {
+      cookie_manager->DeleteCanonicalCookie(cookie, base::DoNothing());
+    }
   }
-
-  void Run() {
-    content::StoragePartition* storage_partition =
-        content::BrowserContext::GetDefaultStoragePartition(profile_);
-    content::IndexedDBContext* indexed_db_context =
-        storage_partition->GetIndexedDBContext();
-    content::ServiceWorkerContext* service_worker_context =
-        storage_partition->GetServiceWorkerContext();
-    content::CacheStorageContext* cache_storage_context =
-        storage_partition->GetCacheStorageContext();
-    storage::FileSystemContext* file_system_context =
-        storage_partition->GetFileSystemContext();
-    auto container = std::make_unique<LocalDataContainer>(
-        new BrowsingDataCookieHelper(profile_->GetRequestContext()),
-        new BrowsingDataDatabaseHelper(profile_),
-        new BrowsingDataLocalStorageHelper(profile_), nullptr,
-        new BrowsingDataAppCacheHelper(profile_),
-        new BrowsingDataIndexedDBHelper(indexed_db_context),
-        BrowsingDataFileSystemHelper::Create(file_system_context),
-        BrowsingDataQuotaHelper::Create(profile_),
-        BrowsingDataChannelIDHelper::Create(profile_->GetRequestContext()),
-        new BrowsingDataServiceWorkerHelper(service_worker_context),
-        new BrowsingDataSharedWorkerHelper(storage_partition,
-                                           profile_->GetResourceContext()),
-        new BrowsingDataCacheStorageHelper(cache_storage_context), nullptr,
-        nullptr);
-
-    cookies_tree_model_ = std::make_unique<CookiesTreeModel>(
-        container.release(), profile_->GetExtensionSpecialStoragePolicy());
-    cookies_tree_model_->AddCookiesTreeObserver(this);
-  }
-
-  // TreeModelObserver:
-  void TreeNodesAdded(ui::TreeModel* model,
-                      ui::TreeModelNode* parent,
-                      int start,
-                      int count) override {}
-  void TreeNodesRemoved(ui::TreeModel* model,
-                        ui::TreeModelNode* parent,
-                        int start,
-                        int count) override {}
-
-  // CookiesTreeModel::Observer:
-  void TreeNodeChanged(ui::TreeModel* model, ui::TreeModelNode* node) override {
-  }
-
-  void TreeModelBeginBatch(CookiesTreeModel* model) override {
-    DCHECK(!ending_batch_processing_);  // Extra batch-start sent.
-  }
-
-  void TreeModelEndBatch(CookiesTreeModel* model) override {
-    DCHECK(!ending_batch_processing_);  // Already in end-stage.
-    ending_batch_processing_ = true;
-
-    RecursivelyFindSiteAndDelete(cookies_tree_model_->GetRoot());
-
-    // Delete this object after the current iteration of the message loop,
-    // because we are in a callback from the CookiesTreeModel, which we own,
-    // so it will be destroyed with this object.
-    BrowserThread::DeleteSoon(BrowserThread::UI, FROM_HERE, this);
-  }
-
-  void RecursivelyFindSiteAndDelete(CookieTreeNode* node) {
-    CookieTreeNode::DetailedInfo info = node->GetDetailedInfo();
-    for (int i = node->child_count(); i > 0; --i)
-      RecursivelyFindSiteAndDelete(node->GetChild(i - 1));
-
-    if (info.node_type == CookieTreeNode::DetailedInfo::TYPE_COOKIE &&
-        info.cookie && domain_.DomainIs(info.cookie->Domain()))
-      cookies_tree_model_->DeleteCookieNode(node);
-  }
-
- private:
-  friend class base::DeleteHelper<SiteDataDeleteHelper>;
-
-  ~SiteDataDeleteHelper() override {}
-
-  Profile* profile_;
-
-  // The domain we want to delete data for.
-  GURL domain_;
-
-  // Keeps track of when we're ready to close batch processing.
-  bool ending_batch_processing_;
-
-  std::unique_ptr<CookiesTreeModel> cookies_tree_model_;
-
-  DISALLOW_COPY_AND_ASSIGN(SiteDataDeleteHelper);
-};
+}
 
 void OnStorageInfoReady(const ScopedJavaGlobalRef<jobject>& java_callback,
                         const storage::UsageInfoEntries& entries) {
@@ -717,7 +652,7 @@ void OnStorageInfoReady(const ScopedJavaGlobalRef<jobject>& java_callback,
         env, list, host, static_cast<jint>(i->type), i->usage);
   }
 
-  base::android::RunCallbackAndroid(java_callback, list);
+  base::android::RunObjectCallbackAndroid(java_callback, list);
 }
 
 void OnLocalStorageCleared(const ScopedJavaGlobalRef<jobject>& java_callback) {
@@ -788,7 +723,7 @@ void OnLocalStorageModelInfoLoaded(
         env, map, origin, full_origin, info.size, important);
   }
 
-  base::android::RunCallbackAndroid(java_callback, map);
+  base::android::RunObjectCallbackAndroid(java_callback, map);
 }
 
 }  // anonymous namespace
@@ -864,10 +799,11 @@ static void JNI_WebsitePreferenceBridge_ClearCookieData(
   Profile* profile = ProfileManager::GetActiveUserProfile();
   GURL url(ConvertJavaStringToUTF8(env, jorigin));
 
-  // Deletes itself when done.
-  SiteDataDeleteHelper* site_data_deleter =
-      new SiteDataDeleteHelper(profile, url);
-  site_data_deleter->Run();
+  auto* storage_partition =
+      content::BrowserContext::GetDefaultStoragePartition(profile);
+  auto* cookie_manager = storage_partition->GetCookieManagerForBrowserProcess();
+  cookie_manager->GetAllCookies(
+      base::BindOnce(&OnCookiesReceived, cookie_manager, url));
 }
 
 static void JNI_WebsitePreferenceBridge_ClearBannerData(
@@ -877,6 +813,18 @@ static void JNI_WebsitePreferenceBridge_ClearBannerData(
   GetHostContentSettingsMap(false)->SetWebsiteSettingDefaultScope(
       GURL(ConvertJavaStringToUTF8(env, jorigin)), GURL(),
       CONTENT_SETTINGS_TYPE_APP_BANNER, std::string(), nullptr);
+}
+
+static void JNI_WebsitePreferenceBridge_ClearMediaLicenses(
+    JNIEnv* env,
+    const JavaParamRef<jclass>& clazz,
+    const JavaParamRef<jstring>& jorigin) {
+  Profile* profile = ProfileManager::GetActiveUserProfile();
+  url::Origin origin =
+      url::Origin::Create(GURL(ConvertJavaStringToUTF8(env, jorigin)));
+  ClearMediaDrmLicenses(profile->GetPrefs(), base::Time(), base::Time::Max(),
+                        base::BindRepeating(&OriginMatcher, origin),
+                        base::DoNothing());
 }
 
 static jboolean JNI_WebsitePreferenceBridge_IsPermissionControlledByDSE(
@@ -901,6 +849,37 @@ static jboolean JNI_WebsitePreferenceBridge_GetAdBlockingActivated(
   GURL url(ConvertJavaStringToUTF8(env, jorigin));
   return !!GetHostContentSettingsMap(false)->GetWebsiteSetting(
       url, GURL(), CONTENT_SETTINGS_TYPE_ADS_DATA, std::string(), nullptr);
+}
+
+static void JNI_WebsitePreferenceBridge_GetSensorsOrigins(
+    JNIEnv* env,
+    const JavaParamRef<jclass>& clazz,
+    const JavaParamRef<jobject>& list) {
+  JNI_WebsitePreferenceBridge_GetOrigins(
+      env, CONTENT_SETTINGS_TYPE_SENSORS,
+      &Java_WebsitePreferenceBridge_insertSensorsInfoIntoList, list, false);
+}
+
+static jint JNI_WebsitePreferenceBridge_GetSensorsSettingForOrigin(
+    JNIEnv* env,
+    const JavaParamRef<jclass>& clazz,
+    const JavaParamRef<jstring>& origin,
+    const JavaParamRef<jstring>& embedder,
+    jboolean is_incognito) {
+  return JNI_WebsitePreferenceBridge_GetSettingForOrigin(
+      env, CONTENT_SETTINGS_TYPE_SENSORS, origin, embedder, is_incognito);
+}
+
+static void JNI_WebsitePreferenceBridge_SetSensorsSettingForOrigin(
+    JNIEnv* env,
+    const JavaParamRef<jclass>& clazz,
+    const JavaParamRef<jstring>& origin,
+    const JavaParamRef<jstring>& embedder,
+    jint value,
+    jboolean is_incognito) {
+  JNI_WebsitePreferenceBridge_SetSettingForOrigin(
+      env, CONTENT_SETTINGS_TYPE_SENSORS, origin, embedder,
+      static_cast<ContentSetting>(value), is_incognito);
 }
 
 // On Android O+ notification channels are not stored in the Chrome profile and

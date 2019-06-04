@@ -4,20 +4,17 @@
 
 #include "media/gpu/vaapi/vaapi_h264_accelerator.h"
 
+#include <va/va.h>
+
+#include "media/gpu/decode_surface_handler.h"
 #include "media/gpu/h264_dpb.h"
+#include "media/gpu/macros.h"
 #include "media/gpu/vaapi/vaapi_common.h"
-#include "media/gpu/vaapi/vaapi_video_decode_accelerator.h"
 #include "media/gpu/vaapi/vaapi_wrapper.h"
 
-#define ARRAY_MEMCPY_CHECKED(to, from)                               \
-  do {                                                               \
-    static_assert(sizeof(to) == sizeof(from),                        \
-                  #from " and " #to " arrays must be of same size"); \
-    memcpy(to, from, sizeof(to));                                    \
-  } while (0)
-#define VLOGF(level) VLOG(level) << __func__ << "(): "
-
 namespace media {
+
+using Status = H264Decoder::H264Accelerator::Status;
 
 namespace {
 
@@ -38,7 +35,7 @@ static constexpr uint8_t kZigzagScan8x8[64] = {
 }  // namespace
 
 VaapiH264Accelerator::VaapiH264Accelerator(
-    VaapiVideoDecodeAccelerator* vaapi_dec,
+    DecodeSurfaceHandler<VASurface>* vaapi_dec,
     scoped_refptr<VaapiWrapper> vaapi_wrapper)
     : vaapi_wrapper_(vaapi_wrapper), vaapi_dec_(vaapi_dec) {
   DCHECK(vaapi_wrapper_);
@@ -53,7 +50,7 @@ VaapiH264Accelerator::~VaapiH264Accelerator() {
 
 scoped_refptr<H264Picture> VaapiH264Accelerator::CreateH264Picture() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  const auto va_surface = vaapi_dec_->CreateVASurface();
+  const auto va_surface = vaapi_dec_->CreateSurface();
   if (!va_surface)
     return nullptr;
 
@@ -67,7 +64,7 @@ static void InitVAPicture(VAPictureH264* va_pic) {
   va_pic->flags = VA_PICTURE_H264_INVALID;
 }
 
-bool VaapiH264Accelerator::SubmitFrameMetadata(
+Status VaapiH264Accelerator::SubmitFrameMetadata(
     const H264SPS* sps,
     const H264PPS* pps,
     const H264DPB& dpb,
@@ -145,9 +142,8 @@ bool VaapiH264Accelerator::SubmitFrameMetadata(
 
   pic_param.num_ref_frames = sps->max_num_ref_frames;
 
-  if (!vaapi_wrapper_->SubmitBuffer(VAPictureParameterBufferType,
-                                    sizeof(pic_param), &pic_param))
-    return false;
+  if (!vaapi_wrapper_->SubmitBuffer(VAPictureParameterBufferType, &pic_param))
+    return Status::kFail;
 
   VAIQMatrixBufferH264 iq_matrix_buf;
   memset(&iq_matrix_buf, 0, sizeof(iq_matrix_buf));
@@ -178,17 +174,20 @@ bool VaapiH264Accelerator::SubmitFrameMetadata(
     }
   }
 
-  return vaapi_wrapper_->SubmitBuffer(VAIQMatrixBufferType,
-                                      sizeof(iq_matrix_buf), &iq_matrix_buf);
+  return vaapi_wrapper_->SubmitBuffer(VAIQMatrixBufferType, &iq_matrix_buf)
+             ? Status::kOk
+             : Status::kFail;
 }
 
-bool VaapiH264Accelerator::SubmitSlice(const H264PPS* pps,
-                                       const H264SliceHeader* slice_hdr,
-                                       const H264Picture::Vector& ref_pic_list0,
-                                       const H264Picture::Vector& ref_pic_list1,
-                                       const scoped_refptr<H264Picture>& pic,
-                                       const uint8_t* data,
-                                       size_t size) {
+Status VaapiH264Accelerator::SubmitSlice(
+    const H264PPS* pps,
+    const H264SliceHeader* slice_hdr,
+    const H264Picture::Vector& ref_pic_list0,
+    const H264Picture::Vector& ref_pic_list1,
+    const scoped_refptr<H264Picture>& pic,
+    const uint8_t* data,
+    size_t size,
+    const std::vector<SubsampleEntry>& subsamples) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   VASliceParameterBufferH264 slice_param;
   memset(&slice_param, 0, sizeof(slice_param));
@@ -278,21 +277,21 @@ bool VaapiH264Accelerator::SubmitSlice(const H264PPS* pps,
       FillVAPicture(&slice_param.RefPicList1[i], ref_pic_list1[i]);
   }
 
-  if (!vaapi_wrapper_->SubmitBuffer(VASliceParameterBufferType,
-                                    sizeof(slice_param), &slice_param))
-    return false;
+  if (!vaapi_wrapper_->SubmitBuffer(VASliceParameterBufferType, &slice_param))
+    return Status::kFail;
 
-  // Can't help it, blame libva...
-  void* non_const_ptr = const_cast<uint8_t*>(data);
-  return vaapi_wrapper_->SubmitBuffer(VASliceDataBufferType, size,
-                                      non_const_ptr);
+  return vaapi_wrapper_->SubmitBuffer(VASliceDataBufferType, size, data)
+             ? Status::kOk
+             : Status::kFail;
 }
 
-bool VaapiH264Accelerator::SubmitDecode(const scoped_refptr<H264Picture>& pic) {
-  VLOGF(4) << "Decoding POC " << pic->pic_order_cnt;
+Status VaapiH264Accelerator::SubmitDecode(
+    const scoped_refptr<H264Picture>& pic) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
-  return vaapi_dec_->DecodeVASurface(pic->AsVaapiH264Picture()->va_surface());
+  const bool success = vaapi_wrapper_->ExecuteAndDestroyPendingBuffers(
+      pic->AsVaapiH264Picture()->va_surface()->id());
+  return success ? Status::kOk : Status::kFail;
 }
 
 bool VaapiH264Accelerator::OutputPicture(
@@ -300,8 +299,9 @@ bool VaapiH264Accelerator::OutputPicture(
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
   const VaapiH264Picture* vaapi_pic = pic->AsVaapiH264Picture();
-  vaapi_dec_->VASurfaceReady(vaapi_pic->va_surface(), vaapi_pic->bitstream_id(),
-                             vaapi_pic->visible_rect());
+  vaapi_dec_->SurfaceReady(vaapi_pic->va_surface(), vaapi_pic->bitstream_id(),
+                           vaapi_pic->visible_rect(),
+                           vaapi_pic->get_colorspace());
   return true;
 }
 

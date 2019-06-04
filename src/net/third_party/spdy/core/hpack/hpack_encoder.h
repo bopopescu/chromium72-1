@@ -39,7 +39,7 @@ class SPDY_EXPORT_PRIVATE HpackEncoder {
 
   // Callers may provide a HeaderListener to be informed of header name-value
   // pairs processed by this encoder.
-  typedef std::function<void(SpdyStringPiece, SpdyStringPiece)> HeaderListener;
+  using HeaderListener = std::function<void(SpdyStringPiece, SpdyStringPiece)>;
 
   // An indexing policy should return true if the provided header name-value
   // pair should be inserted into the HPACK dynamic table.
@@ -48,6 +48,8 @@ class SPDY_EXPORT_PRIVATE HpackEncoder {
   // |table| is an initialized HPACK Huffman table, having an
   // externally-managed lifetime which spans beyond HpackEncoder.
   explicit HpackEncoder(const HpackHuffmanTable& table);
+  HpackEncoder(const HpackEncoder&) = delete;
+  HpackEncoder& operator=(const HpackEncoder&) = delete;
   ~HpackEncoder();
 
   // Encodes the given header set into the given string. Returns
@@ -143,8 +145,6 @@ class SPDY_EXPORT_PRIVATE HpackEncoder {
   IndexingPolicy should_index_;
   bool enable_compression_;
   bool should_emit_table_size_;
-
-  DISALLOW_COPY_AND_ASSIGN(HpackEncoder);
 };
 
 }  // namespace spdy

@@ -3,13 +3,16 @@
 # found in the LICENSE file.
 
 import("//build/split_static_library.gni")
-import("//neva/neva.gni")
 import("//third_party/blink/renderer/core/core.gni")
 
 blink_core_sources("html") {
   split_count = 4
 
   sources = [
+    "anchor_element_metrics.cc",
+    "anchor_element_metrics.h",
+    "anchor_element_metrics_sender.cc",
+    "anchor_element_metrics_sender.h",
     "canvas/canvas_async_blob_creator.cc",
     "canvas/canvas_async_blob_creator.h",
     "canvas/canvas_context_creation_attributes_core.cc",
@@ -53,6 +56,8 @@ blink_core_sources("html") {
     "custom/custom_element_descriptor_hash.h",
     "custom/custom_element_disconnected_callback_reaction.cc",
     "custom/custom_element_disconnected_callback_reaction.h",
+    "custom/custom_element_form_associated_callback_reaction.cc",
+    "custom/custom_element_form_associated_callback_reaction.h",
     "custom/custom_element_reaction.cc",
     "custom/custom_element_reaction.h",
     "custom/custom_element_reaction_queue.cc",
@@ -65,6 +70,8 @@ blink_core_sources("html") {
     "custom/custom_element_upgrade_reaction.h",
     "custom/custom_element_upgrade_sorter.cc",
     "custom/custom_element_upgrade_sorter.h",
+    "custom/element_internals.cc",
+    "custom/element_internals.h",
     "custom/v0_custom_element.cc",
     "custom/v0_custom_element.h",
     "custom/v0_custom_element_async_import_microtask_queue.cc",
@@ -452,6 +459,10 @@ blink_core_sources("html") {
     "imports/html_imports_controller.h",
     "imports/link_import.cc",
     "imports/link_import.h",
+    "lazy_load_frame_observer.cc",
+    "lazy_load_frame_observer.h",
+    "lazy_load_image_observer.cc",
+    "lazy_load_image_observer.h",
     "link_manifest.cc",
     "link_manifest.h",
     "link_rel_attribute.cc",
@@ -482,6 +493,8 @@ blink_core_sources("html") {
     "media/media_custom_controls_fullscreen_detector.h",
     "media/media_document.cc",
     "media/media_document.h",
+    "media/media_element_parser_helpers.cc",
+    "media/media_element_parser_helpers.h",
     "media/media_error.h",
     "media/media_fragment_uri_parser.cc",
     "media/media_fragment_uri_parser.h",
@@ -491,6 +504,10 @@ blink_core_sources("html") {
     "media/picture_in_picture_interstitial.h",
     "plugin_document.cc",
     "plugin_document.h",
+    "portal/document_portals.cc",
+    "portal/document_portals.h",
+    "portal/html_portal_element.cc",
+    "portal/html_portal_element.h",
     "rel_list.cc",
     "rel_list.h",
     "shadow/details_marker_control.cc",
@@ -553,25 +570,15 @@ blink_core_sources("html") {
     "track/vtt/vtt_token.h",
     "track/vtt/vtt_tokenizer.cc",
     "track/vtt/vtt_tokenizer.h",
-    "void_callback.h",
     "window_name_collection.cc",
     "window_name_collection.h",
   ]
-
-  if (use_neva_media) {
-    sources += [
-      "media/neva/HTMLMediaElement.h",
-    ]
-  } else {
-    sources += [
-      "media/neva/HTMLMediaElementStub.h",
-    ]
-  }
 
   jumbo_excluded_sources = [ "canvas/canvas_rendering_context.cc" ]  # https://crbug.com/716395
 
   deps = [
     "//services/metrics/public/cpp:metrics_cpp",
+    "//skia:skcms",
     "//third_party/blink/renderer/core/html/parser:parser",
   ]
 }

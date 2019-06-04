@@ -10,38 +10,18 @@
 #include "ui/aura/test/aura_test_context_factory.h"
 #include "ui/base/ui_base_features.h"
 
-#if defined(USE_OZONE)
-#include "services/ui/public/cpp/input_devices/input_device_client.h"
-#endif
-
 #if BUILDFLAG(ENABLE_MUS)
 #include "ui/aura/test/mus/test_window_tree_client_delegate.h"
 #include "ui/aura/test/mus/test_window_tree_client_setup.h"
 #endif
 
 namespace aura {
-namespace {
-
-#if defined(USE_OZONE)
-class TestInputDeviceClient : public ui::InputDeviceClient {
- public:
-  TestInputDeviceClient() = default;
-  ~TestInputDeviceClient() override = default;
-
-  using InputDeviceClient::GetIntefacePtr;
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(TestInputDeviceClient);
-};
-#endif
-
-}  // namespace
 
 AuraTestSuiteSetup::AuraTestSuiteSetup() {
-  DCHECK(!Env::GetInstanceDontCreate());
+  DCHECK(!Env::HasInstance());
 #if BUILDFLAG(ENABLE_MUS)
   const Env::Mode env_mode =
-      features::IsMashEnabled() ? Env::Mode::MUS : Env::Mode::LOCAL;
+      features::IsUsingWindowService() ? Env::Mode::MUS : Env::Mode::LOCAL;
   env_ = Env::CreateInstance(env_mode);
   if (env_mode == Env::Mode::MUS)
     ConfigureMus();
@@ -63,12 +43,11 @@ void AuraTestSuiteSetup::ConfigureMus() {
       test_window_tree_client_delegate_.get());
   env_->SetWindowTreeClient(window_tree_client_setup_->window_tree_client());
 
-#if defined(USE_OZONE)
-  input_device_client_ = std::make_unique<TestInputDeviceClient>();
-#endif
+#if !defined(USE_OZONE)
   context_factory_ = std::make_unique<test::AuraTestContextFactory>();
   env_->set_context_factory(context_factory_.get());
   env_->set_context_factory_private(nullptr);
+#endif
 }
 #endif
 

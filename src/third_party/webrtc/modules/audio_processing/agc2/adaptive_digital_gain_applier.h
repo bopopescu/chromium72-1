@@ -13,26 +13,35 @@
 
 #include "modules/audio_processing/agc2/agc2_common.h"
 #include "modules/audio_processing/agc2/gain_applier.h"
+#include "modules/audio_processing/agc2/vad_with_level.h"
 #include "modules/audio_processing/include/audio_frame_view.h"
-#include "modules/audio_processing/vad/vad_with_level.h"
 
 namespace webrtc {
 
 class ApmDataDumper;
 
+struct SignalWithLevels {
+  SignalWithLevels(AudioFrameView<float> float_frame);
+  SignalWithLevels(const SignalWithLevels&);
+
+  float input_level_dbfs = -1.f;
+  float input_noise_level_dbfs = -1.f;
+  VadWithLevel::LevelAndProbability vad_result;
+  float limiter_audio_level_dbfs = -1.f;
+  bool estimate_is_confident = false;
+  AudioFrameView<float> float_frame;
+};
+
 class AdaptiveDigitalGainApplier {
  public:
   explicit AdaptiveDigitalGainApplier(ApmDataDumper* apm_data_dumper);
   // Decide what gain to apply.
-  void Process(
-      float input_level_dbfs,
-      float input_noise_level_dbfs,
-      rtc::ArrayView<const VadWithLevel::LevelAndProbability> vad_results,
-      AudioFrameView<float> float_frame);
+  void Process(SignalWithLevels signal_with_levels);
 
  private:
   float last_gain_db_ = kInitialAdaptiveDigitalGainDb;
   GainApplier gain_applier_;
+  int calls_since_last_gain_log_ = 0;
 
   // For some combinations of noise and speech probability, increasing
   // the level is not allowed. Since we may get VAD results in bursts,

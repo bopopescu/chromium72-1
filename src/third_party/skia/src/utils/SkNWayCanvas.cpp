@@ -257,6 +257,14 @@ void SkNWayCanvas::onDrawImageLattice(const SkImage* image, const Lattice& latti
     }
 }
 
+void SkNWayCanvas::onDrawImageSet(const SkCanvas::ImageSetEntry set[], int count,
+                                  SkFilterQuality filterQuality, SkBlendMode mode) {
+    Iter iter(fList);
+    while (iter.next()) {
+        iter->experimental_DrawImageSetV1(set, count, filterQuality, mode);
+    }
+}
+
 void SkNWayCanvas::onDrawText(const void* text, size_t byteLength, SkScalar x, SkScalar y,
                               const SkPaint& paint) {
     Iter iter(fList);
@@ -278,14 +286,6 @@ void SkNWayCanvas::onDrawPosTextH(const void* text, size_t byteLength, const SkS
     Iter iter(fList);
     while (iter.next()) {
         iter->drawPosTextH(text, byteLength, xpos, constY, paint);
-    }
-}
-
-void SkNWayCanvas::onDrawTextOnPath(const void* text, size_t byteLength, const SkPath& path,
-                                    const SkMatrix* matrix, const SkPaint& paint) {
-    Iter iter(fList);
-    while (iter.next()) {
-        iter->drawTextOnPath(text, byteLength, path, matrix, paint);
     }
 }
 
@@ -320,11 +320,11 @@ void SkNWayCanvas::onDrawDrawable(SkDrawable* drawable, const SkMatrix* matrix) 
     }
 }
 
-void SkNWayCanvas::onDrawVerticesObject(const SkVertices* vertices, SkBlendMode bmode,
-                                        const SkPaint& paint) {
+void SkNWayCanvas::onDrawVerticesObject(const SkVertices* vertices, const SkVertices::Bone bones[],
+                                        int boneCount, SkBlendMode bmode, const SkPaint& paint) {
     Iter iter(fList);
     while (iter.next()) {
-        iter->drawVertices(vertices, bmode, paint);
+        iter->drawVertices(vertices, bones, boneCount, bmode, paint);
     }
 }
 
@@ -366,13 +366,3 @@ void SkNWayCanvas::onFlush() {
         iter->flush();
     }
 }
-
-#ifdef SK_SUPPORT_LEGACY_DRAWFILTER
-SkDrawFilter* SkNWayCanvas::setDrawFilter(SkDrawFilter* filter) {
-    Iter iter(fList);
-    while (iter.next()) {
-        iter->setDrawFilter(filter);
-    }
-    return this->INHERITED::setDrawFilter(filter);
-}
-#endif

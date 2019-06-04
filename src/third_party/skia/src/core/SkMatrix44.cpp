@@ -6,6 +6,7 @@
  */
 
 #include "SkMatrix44.h"
+#include <utility>
 
 static inline bool eq4(const SkMScalar* SK_RESTRICT a,
                       const SkMScalar* SK_RESTRICT b) {
@@ -495,7 +496,7 @@ bool SkMatrix44::invert(SkMatrix44* storage) const {
         return true;
     }
 
-    SkMatrix44 tmp(kUninitialized_Constructor);
+    SkMatrix44 tmp;
     // Use storage if it's available and distinct from this matrix.
     SkMatrix44* inverse = (storage && storage != this) ? storage : &tmp;
     if (this->isScaleTranslate()) {
@@ -692,12 +693,13 @@ bool SkMatrix44::invert(SkMatrix44* storage) const {
 ///////////////////////////////////////////////////////////////////////////////
 
 void SkMatrix44::transpose() {
-    SkTSwap(fMat[0][1], fMat[1][0]);
-    SkTSwap(fMat[0][2], fMat[2][0]);
-    SkTSwap(fMat[0][3], fMat[3][0]);
-    SkTSwap(fMat[1][2], fMat[2][1]);
-    SkTSwap(fMat[1][3], fMat[3][1]);
-    SkTSwap(fMat[2][3], fMat[3][2]);
+    using std::swap;
+    swap(fMat[0][1], fMat[1][0]);
+    swap(fMat[0][2], fMat[2][0]);
+    swap(fMat[0][3], fMat[3][0]);
+    swap(fMat[1][2], fMat[2][1]);
+    swap(fMat[1][3], fMat[3][1]);
+    swap(fMat[2][3], fMat[3][2]);
 
     if (!this->isTriviallyIdentity()) {
         this->dirtyTypeMask();

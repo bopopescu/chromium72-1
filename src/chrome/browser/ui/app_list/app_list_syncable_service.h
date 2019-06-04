@@ -27,6 +27,7 @@
 #include "components/sync/protocol/app_list_specifics.pb.h"
 
 class AppListModelUpdater;
+class AppServiceAppModelBuilder;
 class ArcAppModelBuilder;
 class ChromeAppListItem;
 class CrostiniAppModelBuilder;
@@ -148,6 +149,8 @@ class AppListSyncableService : public syncer::SyncableService,
     return oem_folder_name_;
   }
 
+  void InstallDefaultPageBreaksForTest();
+
   const SyncItemMap& sync_items() const { return sync_items_; }
 
   // syncer::SyncableService
@@ -256,28 +259,49 @@ class AppListSyncableService : public syncer::SyncableService,
   // Returns true if extension service is ready.
   bool IsExtensionServiceReady() const;
 
-  // Remove sync data of Drive apps.
-  // TODO(http://crbug.com/794724): Remove after M65 goes stable.
-  void RemoveDriveAppItems();
+  // Returns a list of top level sync items sorted by item ordinal.
+  std::vector<SyncItem*> GetSortedTopLevelSyncItems() const;
+
+  // Remove leading, trailing and duplicate "page break" items in sorted top
+  // level item list.
+  void PruneRedundantPageBreakItems();
+
+  // Installs the default page break items. This is only called for first time
+  // users.
+  void InstallDefaultPageBreaks();
+
+  // Applies sync changes to the local item.
+  void UpdateSyncItemFromSync(const sync_pb::AppListSpecifics& specifics,
+                              AppListSyncableService::SyncItem* item);
+
+  // Applies changes from the local item to sync item.
+  bool UpdateSyncItemFromAppItem(const ChromeAppListItem* app_item,
+                                 AppListSyncableService::SyncItem* sync_item);
 
   Profile* profile_;
   extensions::ExtensionSystem* extension_system_;
   std::unique_ptr<AppListModelUpdater> model_updater_;
   std::unique_ptr<ModelUpdaterDelegate> model_updater_delegate_;
-  std::unique_ptr<ExtensionAppModelBuilder> apps_builder_;
+
+  std::unique_ptr<AppServiceAppModelBuilder> app_service_apps_builder_;
+  // TODO(crbug.com/826982): delete all the other FooModelBuilder's, after
+  // folding them into the App Service.
+  std::unique_ptr<ExtensionAppModelBuilder> ext_apps_builder_;
   std::unique_ptr<ArcAppModelBuilder> arc_apps_builder_;
   std::unique_ptr<CrostiniAppModelBuilder> crostini_apps_builder_;
   std::unique_ptr<InternalAppModelBuilder> internal_apps_builder_;
+
   std::unique_ptr<syncer::SyncChangeProcessor> sync_processor_;
   std::unique_ptr<syncer::SyncErrorFactory> sync_error_handler_;
   SyncItemMap sync_items_;
   syncer::SyncableService::StartSyncFlare flare_;
   bool initial_sync_data_processed_;
   bool first_app_list_sync_;
+  const bool is_app_service_enabled_;
   std::string oem_folder_name_;
 
   // List of observers.
-  base::ObserverList<Observer> observer_list_;
+  base::ObserverList<Observer>::Unchecked observer_list_;
 
   base::WeakPtrFactory<AppListSyncableService> weak_ptr_factory_;
 

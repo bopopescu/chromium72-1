@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-// Next MinVersion: 11
+// Next MinVersion: 14
 
 module arc.mojom;
 
@@ -292,19 +292,13 @@ struct BluetoothCreateSdpRecordResult {
   uint32 service_handle;
 };
 
-// Next Method ID: 44
+// Next Method ID: 45
+// Deprecated Method ID: 4, 5, 6, 7, 20, 21
 interface BluetoothHost {
   EnableAdapter@0() => (BluetoothAdapterState state);
   DisableAdapter@1() => (BluetoothAdapterState state);
   GetAdapterProperty@2(BluetoothPropertyType type);
   SetAdapterProperty@3(BluetoothProperty property);
-  GetRemoteDeviceProperty@4(BluetoothAddress remote_addr,
-                            BluetoothPropertyType type);
-  SetRemoteDeviceProperty@5(BluetoothAddress remote_addr,
-                            BluetoothProperty property);
-  GetRemoteServiceRecord@6(BluetoothAddress remote_addr,
-                           BluetoothUUID uuid);
-  GetRemoteServices@7(BluetoothAddress remote_addr);
   StartDiscovery@8();
   CancelDiscovery@9();
   CreateBond@10(BluetoothAddress addr, int32 transport);
@@ -320,8 +314,6 @@ interface BluetoothHost {
   [MinVersion=1] DisconnectLEDevice@17(BluetoothAddress remote_addr);
   [MinVersion=1] SearchService@18(BluetoothAddress remote_addr);
   [MinVersion=1] GetGattDB@19(BluetoothAddress remote_addr);
-  [MinVersion=1] StartLEListen@20() => (BluetoothGattStatus status);
-  [MinVersion=1] StopLEListen@21() => (BluetoothGattStatus status);
   [MinVersion=1] ReadGattCharacteristic@22(BluetoothAddress remote_addr,
                                            BluetoothGattServiceID service_id,
                                            BluetoothGattID char_id)
@@ -329,7 +321,8 @@ interface BluetoothHost {
   [MinVersion=1] WriteGattCharacteristic@23(BluetoothAddress remote_addr,
                                             BluetoothGattServiceID service_id,
                                             BluetoothGattID char_id,
-                                            BluetoothGattValue value)
+                                            BluetoothGattValue value,
+                                            [MinVersion=11] bool prepare)
       => (BluetoothGattStatus status);
   [MinVersion=1] ReadGattDescriptor@24(BluetoothAddress remote_addr,
                                        BluetoothGattServiceID service_id,
@@ -341,6 +334,9 @@ interface BluetoothHost {
                                         BluetoothGattID char_id,
                                         BluetoothGattID desc_id,
                                         BluetoothGattValue value)
+      => (BluetoothGattStatus status);
+  [MinVersion=11] ExecuteWrite@44(BluetoothAddress remote_addr,
+                                  bool execute)
       => (BluetoothGattStatus status);
   [MinVersion=1] RegisterForGattNotification@26(
       BluetoothAddress remote_addr,
@@ -405,7 +401,8 @@ interface BluetoothHost {
       => (BluetoothGattStatus status);
 };
 
-// Next Method ID: 20
+// Next Method ID: 22
+// Deprecated Method ID: 2, 6
 interface BluetoothInstance {
   // DEPRECATED: Please use Init@18 instead.
   InitDeprecated@0(BluetoothHost host_ptr);
@@ -415,22 +412,21 @@ interface BluetoothInstance {
 
   OnAdapterProperties@1(BluetoothStatus status,
                         array<BluetoothProperty> properties);
-  OnRemoteDeviceProperties@2(BluetoothStatus status,
-                             BluetoothAddress address,
-                             array<BluetoothProperty> properties);
   OnDeviceFound@3(array<BluetoothProperty> properties);
   OnDiscoveryStateChanged@4(BluetoothDiscoveryState state);
   OnBondStateChanged@5(BluetoothStatus status,
                        BluetoothAddress remote_addr,
                        BluetoothBondState state);
-  OnAclStateChanged@6(BluetoothStatus status,
-                      BluetoothAddress remote_addr,
-                      BluetoothAclState state);
 
   // Bluetooth Gatt Client callbacks
-  [MinVersion=1] OnLEDeviceFound@7(BluetoothAddress addr,
-                                   int32 rssi,
-                                   array<BluetoothAdvertisingData> adv_data);
+  // TODO(b/111367421): Remove this when no active device running Android N.
+  [MinVersion=1] OnLEDeviceFoundForN@7(
+      BluetoothAddress addr,
+      int32 rssi,
+      array<BluetoothAdvertisingData> adv_data);
+  [MinVersion=13] OnLEDeviceFound@21(BluetoothAddress addr,
+                                     int32 rssi,
+                                     array<uint8> eir);
   [MinVersion=1] OnLEConnectionStateChange@8(BluetoothAddress remote_addr,
                                              bool connected);
   [MinVersion=4] OnLEDeviceAddressChange@16(BluetoothAddress old_addr,
@@ -463,7 +459,12 @@ interface BluetoothInstance {
       int32 attribute_handle,
       int32 offset,
       array<uint8> value,
-      [MinVersion=9] BluetoothGattDBAttributeType attribute_type)
+      [MinVersion=9] BluetoothGattDBAttributeType attribute_type,
+      [MinVersion=12] bool is_prepare)
+      => (BluetoothGattStatus status);
+  [MinVersion=12] RequestGattExecuteWrite@20(
+      BluetoothAddress address,
+      bool execute)
       => (BluetoothGattStatus status);
   [MinVersion=10] OnMTUReceived@19(BluetoothAddress remote_addr, uint16 mtu);
 

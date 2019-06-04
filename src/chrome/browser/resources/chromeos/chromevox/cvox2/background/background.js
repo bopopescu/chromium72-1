@@ -12,6 +12,7 @@ goog.provide('Background');
 goog.require('AutomationPredicate');
 goog.require('AutomationUtil');
 goog.require('BackgroundKeyboardHandler');
+goog.require('BackgroundMouseHandler');
 goog.require('BrailleCommandData');
 goog.require('BrailleCommandHandler');
 goog.require('ChromeVoxState');
@@ -20,6 +21,7 @@ goog.require('DesktopAutomationHandler');
 goog.require('FindHandler');
 goog.require('GestureCommandHandler');
 goog.require('LiveRegions');
+goog.require('MathHandler');
 goog.require('MediaAutomationHandler');
 goog.require('NextEarcons');
 goog.require('Notifications');
@@ -120,6 +122,13 @@ Background = function() {
   /** @type {!BackgroundKeyboardHandler} @private */
   this.keyboardHandler_ = new BackgroundKeyboardHandler();
 
+  /** @type {!BackgroundMouseHandler} @private */
+  this.mouseHandler_ = new BackgroundMouseHandler();
+
+  if (localStorage['speakTextUnderMouse'] == String(true)) {
+    chrome.accessibilityPrivate.enableChromeVoxMouseEvents(true);
+  }
+
   /** @type {!LiveRegions} @private */
   this.liveRegions_ = new LiveRegions(this);
 
@@ -137,11 +146,6 @@ Background = function() {
    * @private
    */
   this.focusRecoveryMap_ = new WeakMap();
-
-  chrome.automation.getDesktop(function(desktop) {
-    /** @type {string} */
-    this.chromeChannel_ = desktop.chromeChannel;
-  }.bind(this));
 
   CommandHandler.init();
   FindHandler.init();
@@ -177,30 +181,35 @@ Background.prototype = {
     // the user navigates.
     cvox.ChromeVox.braille.thaw();
 
-    if (newRange && !newRange.isValid())
+    if (newRange && !newRange.isValid()) {
+      chrome.accessibilityPrivate.setFocusRing([]);
       return;
+    }
 
     this.currentRange_ = newRange;
     ChromeVoxState.observers.forEach(function(observer) {
       observer.onCurrentRangeChanged(newRange);
     });
 
-    if (this.currentRange_) {
-      var start = this.currentRange_.start.node;
-      start.makeVisible();
-
-      var root = AutomationUtil.getTopLevelRoot(start);
-      if (!root || root.role == RoleType.DESKTOP)
-        return;
-
-      var position = {};
-      var loc = start.unclippedLocation;
-      position.x = loc.left + loc.width / 2;
-      position.y = loc.top + loc.height / 2;
-      var url = root.docUrl;
-      url = url.substring(0, url.indexOf('#')) || url;
-      cvox.ChromeVox.position[url] = position;
+    if (!this.currentRange_) {
+      chrome.accessibilityPrivate.setFocusRing([]);
+      return;
     }
+
+    var start = this.currentRange_.start.node;
+    start.makeVisible();
+
+    var root = AutomationUtil.getTopLevelRoot(start);
+    if (!root || root.role == RoleType.DESKTOP || root == start)
+      return;
+
+    var position = {};
+    var loc = start.unclippedLocation;
+    position.x = loc.left + loc.width / 2;
+    position.y = loc.top + loc.height / 2;
+    var url = root.docUrl;
+    url = url.substring(0, url.indexOf('#')) || url;
+    cvox.ChromeVox.position[url] = position;
   },
 
   /**
@@ -210,6 +219,14 @@ Background.prototype = {
     opt_focus = opt_focus === undefined ? true : opt_focus;
     opt_speechProps = opt_speechProps || {};
     var prevRange = this.currentRange_;
+
+    // Specialization for math output.
+    var skipOutput = false;
+    if (MathHandler.init(range)) {
+      skipOutput = MathHandler.instance.speak();
+      opt_focus = false;
+    }
+
     if (opt_focus)
       this.setFocusToRange_(range, prevRange);
 
@@ -220,16 +237,8 @@ Background.prototype = {
     var msg;
 
     if (this.pageSel_ && this.pageSel_.isValid() && range.isValid()) {
-      // Compute the direction of the endpoints of each range.
-
-      // Casts are ok because isValid checks node start and end nodes are
-      // non-null; Closure just doesn't eval enough to see it.
-      var startDir = AutomationUtil.getDirection(
-          this.pageSel_.start.node,
-          /** @type {!AutomationNode} */ (range.start.node));
-      var endDir = AutomationUtil.getDirection(
-          this.pageSel_.end.node,
-          /** @type {!AutomationNode} */ (range.end.node));
+      // Suppress hints.
+      o.withoutHints();
 
       // Selection across roots isn't supported.
       var pageRootStart = this.pageSel_.start.node.root;
@@ -238,21 +247,34 @@ Background.prototype = {
       var curRootEnd = range.end.node.root;
 
       // Disallow crossing over the start of the page selection and roots.
-      if (startDir == Dir.BACKWARD || pageRootStart != pageRootEnd ||
-          pageRootStart != curRootStart || pageRootEnd != curRootEnd) {
+      if (pageRootStart != pageRootEnd || pageRootStart != curRootStart ||
+          pageRootEnd != curRootEnd) {
         o.format('@end_selection');
+        DesktopAutomationHandler.instance.ignoreDocumentSelectionFromAction(
+            false);
         this.pageSel_ = null;
       } else {
         // Expand or shrink requires different feedback.
-        if (endDir == Dir.FORWARD &&
-            (this.pageSel_.end.node != range.end.node ||
-             this.pageSel_.end.index <= range.end.index)) {
+
+        // Page sel is the only place in ChromeVox where we used directed
+        // selections. It is important to keep track of the directedness in
+        // places, but when comparing to other ranges, take the undirected
+        // range.
+        var dir = this.pageSel_.normalize().compare(range);
+
+        if (dir) {
+          // Directed expansion.
           msg = '@selected';
         } else {
+          // Directed shrink.
           msg = '@unselected';
           selectedRange = prevRange;
         }
-        this.pageSel_ = new cursors.Range(this.pageSel_.start, range.end);
+        var wasBackwardSel =
+            this.pageSel_.start.compare(this.pageSel_.end) == Dir.BACKWARD ||
+            dir == Dir.BACKWARD;
+        this.pageSel_ = new cursors.Range(
+            this.pageSel_.start, wasBackwardSel ? range.start : range.end);
         if (this.pageSel_)
           this.pageSel_.select();
       }
@@ -269,8 +291,9 @@ Background.prototype = {
     }
 
     o.withRichSpeechAndBraille(
-         selectedRange || range, prevRange, Output.EventType.NAVIGATE)
-        .withQueueMode(cvox.QueueMode.FLUSH);
+        selectedRange || range, prevRange, Output.EventType.NAVIGATE);
+
+    o.withQueueMode(cvox.QueueMode.FLUSH);
 
     if (msg)
       o.format(msg);
@@ -278,7 +301,16 @@ Background.prototype = {
     for (var prop in opt_speechProps)
       o.format('!' + prop);
 
-    o.go();
+    if (!skipOutput) {
+      o.go();
+
+      if (range.start.node) {
+        // Update the DesktopAutomationHandler's state as well to ensure event
+        // handlers don't repeat this output.
+        DesktopAutomationHandler.instance.updateLastAttributeState(
+            range.start.node, o);
+      }
+    }
   },
 
   /**
@@ -408,11 +440,6 @@ Background.prototype = {
           AutomationPredicate.linkOrControl(node);
     };
 
-    // Always try to give nodes selection.
-    if (start.defaultActionVerb == chrome.automation.DefaultActionVerb.SELECT) {
-      start.doDefault();
-    }
-
     // Next, try to focus the start or end node.
     if (!AutomationPredicate.structuralContainer(start) &&
         start.state[StateType.FOCUSABLE]) {
@@ -443,7 +470,7 @@ Background.prototype = {
     // the next or previous focusable node from |start|.
     if (!start.state[StateType.OFFSCREEN])
       start.setSequentialFocusNavigationStartingPoint();
-  }
+  },
 };
 
 /**

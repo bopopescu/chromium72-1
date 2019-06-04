@@ -39,6 +39,17 @@ URL_EXPORT void Shutdown();
 
 // Schemes ---------------------------------------------------------------------
 
+// Changes the behavior of SchemeHostPort / Origin to allow non-standard schemes
+// to be specified, instead of canonicalizing them to an invalid SchemeHostPort
+// or opaque Origin, respectively. This is used for Android WebView backwards
+// compatibility, which allows the use of custom schemes: content hosted in
+// Android WebView assumes that one URL with a non-standard scheme will be
+// same-origin to another URL with the same non-standard scheme.
+URL_EXPORT void EnableNonStandardSchemesForAndroidWebView();
+
+// Whether or not SchemeHostPort and Origin allow non-standard schemes.
+URL_EXPORT bool AllowNonStandardSchemesForAndroidWebView();
+
 // A pair for representing a standard scheme name and the SchemeType for it.
 struct URL_EXPORT SchemeWithType {
   const char* scheme;
@@ -80,8 +91,8 @@ URL_EXPORT const std::vector<std::string>& GetNoAccessSchemes();
 
 // Adds an application-defined scheme to the list of schemes that can be sent
 // CORS requests.
-URL_EXPORT void AddCORSEnabledScheme(const char* new_scheme);
-URL_EXPORT const std::vector<std::string>& GetCORSEnabledSchemes();
+URL_EXPORT void AddCorsEnabledScheme(const char* new_scheme);
+URL_EXPORT const std::vector<std::string>& GetCorsEnabledSchemes();
 
 // Adds an application-defined scheme to the list of web schemes that can be
 // used by web to store data (e.g. cookies, local storage, ...). This is
@@ -258,12 +269,13 @@ enum class DecodeURLResult {
   // Did UTF-8 decode only.
   kUTF8,
   // Did byte to Unicode mapping only.
+  // https://infra.spec.whatwg.org/#isomorphic-decode
   kIsomorphic,
-  // Did both of UTF-8 decode and isomorphic decode.
-  kMixed,
 };
 
 // Unescapes the given string using URL escaping rules.
+// This function tries to decode non-ASCII characters in UTF-8 first,
+// then in isomorphic encoding if UTF-8 decoding failed.
 URL_EXPORT DecodeURLResult DecodeURLEscapeSequences(const char* input,
                                                     int length,
                                                     CanonOutputW* output);

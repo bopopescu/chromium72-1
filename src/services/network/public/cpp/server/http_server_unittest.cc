@@ -49,14 +49,16 @@ class TestHttpClient {
     base::RunLoop run_loop;
     int net_error = net::ERR_FAILED;
     factory_.CreateTCPConnectedSocket(
-        base::nullopt, /* local address */
-        addresses, TRAFFIC_ANNOTATION_FOR_TESTS, mojo::MakeRequest(&socket_),
-        nullptr, /* observer */
+        base::nullopt /* local address */, addresses,
+        nullptr /* tcp_connected_socket_options */,
+        TRAFFIC_ANNOTATION_FOR_TESTS, mojo::MakeRequest(&socket_),
+        nullptr /* observer */,
         base::BindOnce(
             [](base::RunLoop* run_loop, int* result_out,
                mojo::ScopedDataPipeConsumerHandle* receive_pipe_handle_out,
                mojo::ScopedDataPipeProducerHandle* send_pipe_handle_out,
-               int result,
+               int result, const base::Optional<net::IPEndPoint>& local_addr,
+               const base::Optional<net::IPEndPoint>& peer_addr,
                mojo::ScopedDataPipeConsumerHandle receive_pipe_handle,
                mojo::ScopedDataPipeProducerHandle send_pipe_handle) {
               *receive_pipe_handle_out = std::move(receive_pipe_handle);
@@ -188,16 +190,6 @@ class HttpServerTest : public testing::Test, public HttpServer::Delegate {
     EXPECT_EQ(net::OK, net_error);
 
     server_.reset(new HttpServer(std::move(server_socket_), this));
-
-    base::RunLoop run_loop2;
-    server_->GetLocalAddress(base::BindOnce(
-        [](base::RunLoop* run_loop, int net_error,
-           const base::Optional<net::IPEndPoint>& server_addr) {
-          ASSERT_THAT(net_error, IsOk());
-          run_loop->Quit();
-        },
-        base::Unretained(&run_loop2)));
-    run_loop2.Run();
   }
 
   void OnConnect(int connection_id) override {

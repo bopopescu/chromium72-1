@@ -60,9 +60,11 @@ class CORE_EXPORT InspectorLayerTreeAgent final
 
   static InspectorLayerTreeAgent* Create(InspectedFrames* inspected_frames,
                                          Client* client) {
-    return new InspectorLayerTreeAgent(inspected_frames, client);
+    return MakeGarbageCollected<InspectorLayerTreeAgent>(inspected_frames,
+                                                         client);
   }
 
+  InspectorLayerTreeAgent(InspectedFrames*, Client*);
   ~InspectorLayerTreeAgent() override;
   void Trace(blink::Visitor*) override;
 
@@ -107,8 +109,6 @@ class CORE_EXPORT InspectorLayerTreeAgent final
  private:
   static unsigned last_snapshot_id_;
 
-  InspectorLayerTreeAgent(InspectedFrames*, Client*);
-
   GraphicsLayer* RootGraphicsLayer();
 
   PaintLayerCompositor* GetPaintLayerCompositor();
@@ -124,7 +124,6 @@ class CORE_EXPORT InspectorLayerTreeAgent final
       std::unique_ptr<protocol::Array<protocol::LayerTree::Layer>>&,
       bool has_wheel_event_handlers,
       int scrolling_root_layer_id);
-  int IdForNode(Node*);
 
   Member<InspectedFrames> inspected_frames_;
   Client* client_;

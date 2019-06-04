@@ -48,6 +48,7 @@
 #include "third_party/blink/renderer/platform/wtf/text/string_builder.h"
 #include "third_party/blink/renderer/platform/wtf/text/string_utf8_adaptor.h"
 #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
+#include "third_party/blink/renderer/platform/wtf/wtf.h"
 
 namespace blink {
 
@@ -123,7 +124,7 @@ bool IsValidHTTPHeaderValue(const String& name) {
   // FIXME: This should really match name against
   // field-value in section 4.2 of RFC 2616.
 
-  return name.ContainsOnlyLatin1() && !name.Contains('\r') &&
+  return name.ContainsOnlyLatin1OrEmpty() && !name.Contains('\r') &&
          !name.Contains('\n') && !name.Contains('\0');
 }
 
@@ -380,7 +381,7 @@ ContentTypeOptionsDisposition ParseContentTypeOptionsHeader(
 
   Vector<String> results;
   value.Split(",", results);
-  if (results[0].StripWhiteSpace().LowerASCII() == "nosniff")
+  if (results.size() && results[0].StripWhiteSpace().LowerASCII() == "nosniff")
     return kContentTypeOptionsNosniff;
   return kContentTypeOptionsNone;
 }
@@ -424,10 +425,10 @@ static inline String TrimToNextSeparator(const String& str) {
 static void ParseCacheHeader(const String& header,
                              Vector<std::pair<String, String>>& result) {
   const String safe_header = header.RemoveCharacters(IsControlCharacter);
-  unsigned max = safe_header.length();
-  for (unsigned pos = 0; pos < max; /* pos incremented in loop */) {
-    size_t next_comma_position = safe_header.find(',', pos);
-    size_t next_equal_sign_position = safe_header.find('=', pos);
+  wtf_size_t max = safe_header.length();
+  for (wtf_size_t pos = 0; pos < max; /* pos incremented in loop */) {
+    wtf_size_t next_comma_position = safe_header.find(',', pos);
+    wtf_size_t next_equal_sign_position = safe_header.find('=', pos);
     if (next_equal_sign_position != kNotFound &&
         (next_equal_sign_position < next_comma_position ||
          next_comma_position == kNotFound)) {
@@ -441,7 +442,7 @@ static void ParseCacheHeader(const String& header,
       String value = safe_header.Substring(pos, max - pos).StripWhiteSpace();
       if (value[0] == '"') {
         // The value is a quoted string
-        size_t next_double_quote_position = value.find('"', 1);
+        wtf_size_t next_double_quote_position = value.find('"', 1);
         if (next_double_quote_position != kNotFound) {
           // Store the value as a quoted string without quotes
           result.push_back(std::pair<String, String>(
@@ -450,7 +451,7 @@ static void ParseCacheHeader(const String& header,
           pos += (safe_header.find('"', pos) - pos) +
                  next_double_quote_position + 1;
           // Move past next comma, if there is one
-          size_t next_comma_position2 = safe_header.find(',', pos);
+          wtf_size_t next_comma_position2 = safe_header.find(',', pos);
           if (next_comma_position2 != kNotFound)
             pos += next_comma_position2 - pos + 1;
           else
@@ -465,7 +466,7 @@ static void ParseCacheHeader(const String& header,
         }
       } else {
         // The value is a token until the next comma
-        size_t next_comma_position2 = value.find(',');
+        wtf_size_t next_comma_position2 = value.find(',');
         if (next_comma_position2 != kNotFound) {
           // The value is delimited by the next comma
           result.push_back(std::pair<String, String>(
@@ -507,18 +508,21 @@ CacheControlHeader ParseCacheControlDirectives(
   CacheControlHeader cache_control_header;
   cache_control_header.parsed = true;
   cache_control_header.max_age = std::numeric_limits<double>::quiet_NaN();
+  cache_control_header.stale_while_revalidate =
+      std::numeric_limits<double>::quiet_NaN();
 
   static const char kNoCacheDirective[] = "no-cache";
   static const char kNoStoreDirective[] = "no-store";
   static const char kMustRevalidateDirective[] = "must-revalidate";
   static const char kMaxAgeDirective[] = "max-age";
+  static const char kStaleWhileRevalidateDirective[] = "stale-while-revalidate";
 
   if (!cache_control_value.IsEmpty()) {
     Vector<std::pair<String, String>> directives;
     ParseCacheHeader(cache_control_value, directives);
 
-    size_t directives_size = directives.size();
-    for (size_t i = 0; i < directives_size; ++i) {
+    wtf_size_t directives_size = directives.size();
+    for (wtf_size_t i = 0; i < directives_size; ++i) {
       // RFC2616 14.9.1: A no-cache directive with a value is only meaningful
       // for proxy caches.  It should be ignored by a browser level cache.
       if (DeprecatedEqualIgnoringCase(directives[i].first, kNoCacheDirective) &&
@@ -540,6 +544,17 @@ CacheControlHeader ParseCacheControlDirectives(
         double max_age = directives[i].second.ToDouble(&ok);
         if (ok)
           cache_control_header.max_age = max_age;
+      } else if (DeprecatedEqualIgnoringCase(directives[i].first,
+                                             kStaleWhileRevalidateDirective)) {
+        if (!std::isnan(cache_control_header.stale_while_revalidate)) {
+          // First stale-while-revalidate directive wins if there are multiple
+          // ones.
+          continue;
+        }
+        bool ok;
+        double stale_while_revalidate = directives[i].second.ToDouble(&ok);
+        if (ok)
+          cache_control_header.stale_while_revalidate = stale_while_revalidate;
       }
     }
   }
@@ -563,9 +578,9 @@ void ParseCommaDelimitedHeader(const String& header_value,
 }
 
 bool ParseMultipartHeadersFromBody(const char* bytes,
-                                   size_t size,
+                                   wtf_size_t size,
                                    ResourceResponse* response,
-                                   size_t* end) {
+                                   wtf_size_t* end) {
   DCHECK(IsMainThread());
 
   int headers_end_pos =
@@ -574,7 +589,7 @@ bool ParseMultipartHeadersFromBody(const char* bytes,
   if (headers_end_pos < 0)
     return false;
 
-  *end = headers_end_pos;
+  *end = static_cast<wtf_size_t>(headers_end_pos);
 
   // Eat headers and prepend a status line as is required by
   // HttpResponseHeaders.
@@ -582,8 +597,8 @@ bool ParseMultipartHeadersFromBody(const char* bytes,
   headers.append(bytes, headers_end_pos);
 
   scoped_refptr<net::HttpResponseHeaders> response_headers =
-      new net::HttpResponseHeaders(
-          net::HttpUtil::AssembleRawHeaders(headers.data(), headers.length()));
+      new net::HttpResponseHeaders(net::HttpUtil::AssembleRawHeaders(
+          headers.data(), static_cast<int>(headers.length())));
 
   std::string mime_type, charset;
   response_headers->GetMimeTypeAndCharset(&mime_type, &charset);
@@ -607,31 +622,31 @@ bool ParseMultipartHeadersFromBody(const char* bytes,
 }
 
 bool ParseMultipartFormHeadersFromBody(const char* bytes,
-                                       size_t size,
+                                       wtf_size_t size,
                                        HTTPHeaderMap* header_fields,
-                                       size_t* end) {
+                                       wtf_size_t* end) {
   DCHECK_EQ(0u, header_fields->size());
 
-  int headersEndPos =
+  int headers_end_pos =
       net::HttpUtil::LocateEndOfAdditionalHeaders(bytes, size, 0);
 
-  if (headersEndPos < 0)
+  if (headers_end_pos < 0)
     return false;
 
-  *end = headersEndPos;
+  *end = static_cast<wtf_size_t>(headers_end_pos);
 
   // Eat headers and prepend a status line as is required by
   // HttpResponseHeaders.
   std::string headers("HTTP/1.1 200 OK\r\n");
-  headers.append(bytes, headersEndPos);
+  headers.append(bytes, headers_end_pos);
 
   scoped_refptr<net::HttpResponseHeaders> responseHeaders =
-      new net::HttpResponseHeaders(
-          net::HttpUtil::AssembleRawHeaders(headers.data(), headers.length()));
+      new net::HttpResponseHeaders(net::HttpUtil::AssembleRawHeaders(
+          headers.data(), static_cast<wtf_size_t>(headers.length())));
 
   // Copy selected header fields.
   const AtomicString* const headerNamePointers[] = {
-      &HTTPNames::Content_Disposition, &HTTPNames::Content_Type};
+      &http_names::kContentDisposition, &http_names::kContentType};
   for (const AtomicString* headerNamePointer : headerNamePointers) {
     StringUTF8Adaptor adaptor(*headerNamePointer);
     size_t iterator = 0;

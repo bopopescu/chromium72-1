@@ -9,12 +9,11 @@
 
 #include "core/fxcrt/fx_string.h"
 #include "core/fxcrt/fx_system.h"
-#include "core/fxge/fx_dib.h"
 #include "fxbarcode/cbc_codebase.h"
 
 class CBC_PDF417Writer;
 
-class CBC_PDF417I : public CBC_CodeBase {
+class CBC_PDF417I final : public CBC_CodeBase {
  public:
   CBC_PDF417I();
   ~CBC_PDF417I() override;
@@ -24,9 +23,6 @@ class CBC_PDF417I : public CBC_CodeBase {
   bool RenderDevice(CFX_RenderDevice* device,
                     const CFX_Matrix* matrix) override;
   BC_TYPE GetType() override;
-
-  bool SetErrorCorrectionLevel(int32_t level);
-  void SetTruncated(bool truncated);
 
  private:
   CBC_PDF417Writer* GetPDF417Writer();

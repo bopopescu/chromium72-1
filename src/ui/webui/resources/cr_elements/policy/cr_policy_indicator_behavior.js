@@ -21,10 +21,11 @@
  *   controlledSettingOwner: (string|undefined),
  * }}
  */
+// eslint-disable-next-line no-var
 var CrPolicyStrings;
 
 /** @enum {string} */
-var CrPolicyIndicatorType = {
+const CrPolicyIndicatorType = {
   DEVICE_POLICY: 'devicePolicy',
   EXTENSION: 'extension',
   NONE: 'none',
@@ -35,7 +36,7 @@ var CrPolicyIndicatorType = {
 };
 
 /** @polymerBehavior */
-var CrPolicyIndicatorBehavior = {
+const CrPolicyIndicatorBehavior = {
   // Properties exposed to all policy indicators.
   properties: {
     /**
@@ -67,11 +68,6 @@ var CrPolicyIndicatorBehavior = {
     indicatorIcon: {
       type: String,
       computed: 'getIndicatorIcon_(indicatorType)',
-    },
-
-    indicatorTooltip: {
-      type: String,
-      computed: 'getIndicatorTooltip(indicatorType, indicatorSourceName)',
     },
   },
 

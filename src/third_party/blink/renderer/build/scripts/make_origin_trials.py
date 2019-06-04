@@ -55,7 +55,7 @@ class OriginTrialsWriter(make_runtime_features.RuntimeFeatureWriter):
             # have a trial defined.
             implied_by_trials = []
             for implied_by_name in implied_feature['implied_by']:
-                if any(implied_by_name == feature['name']
+                if any(implied_by_name == feature['name'].original
                        for feature in self._origin_trial_features):
 
                     implied_by_trials.append(implied_by_name)
@@ -67,7 +67,7 @@ class OriginTrialsWriter(make_runtime_features.RuntimeFeatureWriter):
                     if implied_list is None:
                         implied_list = set()
                         implied_mappings[implied_by_name] = implied_list
-                    implied_list.add(implied_feature['name'])
+                    implied_list.add(implied_feature['name'].original)
 
             implied_feature['implied_by_origin_trials'] = implied_by_trials
 
@@ -89,6 +89,7 @@ class OriginTrialsWriter(make_runtime_features.RuntimeFeatureWriter):
             'origin_trial_features': self._origin_trial_features,
             'implied_origin_trial_features': self._implied_mappings,
             'input_files': self._input_files,
+            'header_guard': self._header_guard,
         }
 
 

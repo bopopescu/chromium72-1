@@ -12,6 +12,7 @@
 
 #include <string.h>
 #include <algorithm>
+#include <cstdint>
 
 #include "rtc_base/checks.h"
 #include "rtc_base/numerics/safe_conversions.h"
@@ -159,7 +160,8 @@ void AudioFrameOperations::QuadToMono(const int16_t* src_audio,
   for (size_t i = 0; i < samples_per_channel; i++) {
     dst_audio[i] =
         (static_cast<int32_t>(src_audio[4 * i]) + src_audio[4 * i + 1] +
-         src_audio[4 * i + 2] + src_audio[4 * i + 3]) >> 2;
+         src_audio[4 * i + 2] + src_audio[4 * i + 3]) >>
+        2;
   }
 }
 

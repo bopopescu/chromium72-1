@@ -27,9 +27,9 @@ namespace internal {
 
 namespace {
 
-// Add any neaw team drives, or update existing team drives in resource
+// Add any new team drives, or update existing team drives in resource
 // metadata.
-FileError AddOrUpdateTeamDrives(const ResourceEntryVector& team_drives,
+FileError AddOrUpdateTeamDrives(ResourceEntryVector team_drives,
                                 ResourceMetadata* metadata,
                                 base::CancellationFlag* in_shutdown) {
   DCHECK(metadata);
@@ -73,7 +73,33 @@ FileError AddOrUpdateTeamDrives(const ResourceEntryVector& team_drives,
   return FILE_ERROR_OK;
 }
 
+// Remove the supplied list of team drives from the resource metadata.
+FileError RemoveTeamDrives(ResourceEntryVector team_drives,
+                           ResourceMetadata* metadata,
+                           base::CancellationFlag* in_shutdown) {
+  DCHECK(metadata);
+  DCHECK(in_shutdown);
+  FileError result = FILE_ERROR_OK;
+  for (const auto& entry : team_drives) {
+    if (in_shutdown->IsSet()) {
+      return FILE_ERROR_ABORT;
+    }
+    result = metadata->RemoveEntry(entry.local_id());
+    if (result != FILE_ERROR_OK) {
+      return result;
+    }
+  }
+  return result;
+}
+
 }  // namespace
+
+// Used to notify observers of the result of loading the team drives.
+struct TeamDriveListLoader::TeamDriveUpdateData {
+  std::vector<TeamDrive> all_team_drives;
+  std::vector<TeamDrive> added_team_drives;
+  std::vector<TeamDrive> removed_team_drives;
+};
 
 TeamDriveListLoader::TeamDriveListLoader(
     EventLogger* logger,
@@ -97,6 +123,14 @@ TeamDriveListLoader::~TeamDriveListLoader() {
   blocking_task_runner_->DeleteSoon(FROM_HERE, in_shutdown_.release());
 }
 
+void TeamDriveListLoader::AddObserver(TeamDriveListObserver* observer) {
+  observers_.AddObserver(observer);
+}
+
+void TeamDriveListLoader::RemoveObserver(TeamDriveListObserver* observer) {
+  observers_.RemoveObserver(observer);
+}
+
 bool TeamDriveListLoader::IsRefreshing() const {
   return !pending_load_callbacks_.empty();
 }
@@ -106,21 +140,15 @@ void TeamDriveListLoader::CheckForUpdates(
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
   DCHECK(callback);
 
-  if (google_apis::GetTeamDrivesIntegrationSwitch() ==
-      google_apis::TEAM_DRIVES_INTEGRATION_ENABLED) {
-    if (IsRefreshing()) {
-      pending_load_callbacks_.emplace_back(callback);
-      return;
-    }
-
+  if (IsRefreshing()) {
     pending_load_callbacks_.emplace_back(callback);
-    scheduler_->GetAllTeamDriveList(
-        base::BindRepeating(&TeamDriveListLoader::OnTeamDriveListLoaded,
-                            weak_ptr_factory_.GetWeakPtr()));
-  } else {
-    // No team drive integration, just flow OK to the callback.
-    callback.Run(FILE_ERROR_OK);
+    return;
   }
+
+  pending_load_callbacks_.emplace_back(callback);
+  scheduler_->GetAllTeamDriveList(
+      base::BindRepeating(&TeamDriveListLoader::OnTeamDriveListLoaded,
+                          weak_ptr_factory_.GetWeakPtr()));
 }
 
 void TeamDriveListLoader::LoadIfNeeded(const FileOperationCallback& callback) {
@@ -164,17 +192,142 @@ void TeamDriveListLoader::OnTeamDriveListLoaded(
               std::back_inserter(team_drive_resource_vector));
   }
 
-  // TODO(slangley): Handle team drives that have been removed
+  // We will store the current list of team drives in local_resources.
+  std::unique_ptr<ResourceEntryVector> local_resources =
+      std::make_unique<ResourceEntryVector>();
 
-  loader_controller_->ScheduleRun(base::BindRepeating(
+  base::PostTaskAndReplyWithResult(
+      blocking_task_runner_.get(), FROM_HERE,
+      base::BindRepeating(&ResourceMetadata::ReadDirectoryByPath,
+                          base::Unretained(resource_metadata_),
+                          util::GetDriveTeamDrivesRootPath(),
+                          local_resources.get()),
+      base::BindRepeating(&TeamDriveListLoader::OnReadDirectoryByPath,
+                          weak_ptr_factory_.GetWeakPtr(),
+                          base::Owned(local_resources.release()),
+                          base::Passed(std::move(team_drive_resource_vector))));
+}
+
+void TeamDriveListLoader::OnReadDirectoryByPath(
+    ResourceEntryVector* local_resources,
+    ResourceEntryVector remote_resources,
+    FileError error) {
+  DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
+  DCHECK(local_resources);
+
+  // We need to sort vectors to use std::set_difference
+  std::sort(local_resources->begin(), local_resources->end(),
+            [](const ResourceEntry& lhs, const ResourceEntry& rhs) {
+              return lhs.resource_id() < rhs.resource_id();
+            });
+  std::sort(remote_resources.begin(), remote_resources.end(),
+            [](const ResourceEntry& lhs, const ResourceEntry& rhs) {
+              return lhs.resource_id() < rhs.resource_id();
+            });
+
+  // Removed team drives are the ResourceEntry's that are present in
+  // local_resources but missing from remote_resources.
+  ResourceEntryVector removed_team_drives;
+  std::set_difference(local_resources->begin(), local_resources->end(),
+                      remote_resources.begin(), remote_resources.end(),
+                      std::back_inserter(removed_team_drives),
+                      [](const ResourceEntry& lhs, const ResourceEntry& rhs) {
+                        return lhs.resource_id() < rhs.resource_id();
+                      });
+
+  // Added team drives are the ResourceEntry's that are present in
+  // remote_resources but missing from local_resources.
+  ResourceEntryVector added_team_drives;
+  std::set_difference(remote_resources.begin(), remote_resources.end(),
+                      local_resources->begin(), local_resources->end(),
+                      std::back_inserter(added_team_drives),
+                      [](const ResourceEntry& lhs, const ResourceEntry& rhs) {
+                        return lhs.resource_id() < rhs.resource_id();
+                      });
+
+  // We need to store the list of team drives, the added drives and the
+  // removed drives so we can notify observers on completion.
+  TeamDriveUpdateData team_drive_updates;
+  std::transform(remote_resources.begin(), remote_resources.end(),
+                 std::back_inserter(team_drive_updates.all_team_drives),
+                 [](const ResourceEntry& entry) -> TeamDrive {
+                   return {entry.resource_id(), entry.base_name(),
+                           drive::util::GetDriveTeamDrivesRootPath().Append(
+                               util::NormalizeFileName(entry.base_name()))};
+                 });
+
+  // Create a copy of the added team drives list to notify observers.
+  std::transform(added_team_drives.begin(), added_team_drives.end(),
+                 std::back_inserter(team_drive_updates.added_team_drives),
+                 [](const ResourceEntry& entry) -> TeamDrive {
+                   return {entry.resource_id(), entry.base_name(),
+                           drive::util::GetDriveTeamDrivesRootPath().Append(
+                               util::NormalizeFileName(entry.base_name()))};
+                 });
+
+  // Create a copy of the removed team drives list to notify observers.
+  std::transform(removed_team_drives.begin(), removed_team_drives.end(),
+                 std::back_inserter(team_drive_updates.removed_team_drives),
+                 [](const ResourceEntry& entry) -> TeamDrive {
+                   return {entry.resource_id()};
+                 });
+
+  // Remove team drives that have been deleted.
+  loader_controller_->ScheduleRun(base::BindOnce(
       &drive::util::RunAsyncTask, base::RetainedRef(blocking_task_runner_),
       FROM_HERE,
-      base::BindRepeating(&AddOrUpdateTeamDrives,
-                          base::Passed(std::move(team_drive_resource_vector)),
-                          base::Unretained(resource_metadata_),
-                          base::Unretained(in_shutdown_.get())),
-      base::BindRepeating(&TeamDriveListLoader::OnTeamDriveListLoadComplete,
-                          weak_ptr_factory_.GetWeakPtr())));
+      base::BindOnce(&RemoveTeamDrives, std::move(removed_team_drives),
+                     base::Unretained(resource_metadata_),
+                     base::Unretained(in_shutdown_.get())),
+      base::BindOnce(&TeamDriveListLoader::OnTeamDrivesRemoved,
+                     weak_ptr_factory_.GetWeakPtr(),
+                     std::move(remote_resources),
+                     std::move(team_drive_updates))));
+}
+
+void TeamDriveListLoader::OnTeamDrivesRemoved(
+    ResourceEntryVector remote_resources,
+    TeamDriveUpdateData team_drive_updates,
+    FileError error) {
+  DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
+
+  if (error != FILE_ERROR_OK) {
+    logger_->Log(logging::LOG_ERROR, "Failed to remove team drives: %s",
+                 drive::FileErrorToString(error).c_str());
+    OnTeamDriveListLoadComplete(error);
+    return;
+  }
+
+  loader_controller_->ScheduleRun(base::BindOnce(
+      &drive::util::RunAsyncTask, base::RetainedRef(blocking_task_runner_),
+      FROM_HERE,
+      base::BindOnce(&AddOrUpdateTeamDrives, std::move(remote_resources),
+                     base::Unretained(resource_metadata_),
+                     base::Unretained(in_shutdown_.get())),
+      base::BindOnce(&TeamDriveListLoader::OnAddOrUpdateTeamDrives,
+                     weak_ptr_factory_.GetWeakPtr(),
+                     std::move(team_drive_updates))));
+}
+
+void TeamDriveListLoader::OnAddOrUpdateTeamDrives(
+    TeamDriveUpdateData team_drive_updates,
+    FileError error) {
+  DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
+
+  if (error != FILE_ERROR_OK) {
+    logger_->Log(logging::LOG_ERROR, "Failed to add or update team drives: %s",
+                 drive::FileErrorToString(error).c_str());
+    OnTeamDriveListLoadComplete(error);
+    return;
+  }
+
+  for (auto& observer : observers_) {
+    observer.OnTeamDriveListLoaded(team_drive_updates.all_team_drives,
+                                   team_drive_updates.added_team_drives,
+                                   team_drive_updates.removed_team_drives);
+  }
+
+  OnTeamDriveListLoadComplete(FILE_ERROR_OK);
 }
 
 void TeamDriveListLoader::OnTeamDriveListLoadComplete(FileError error) {

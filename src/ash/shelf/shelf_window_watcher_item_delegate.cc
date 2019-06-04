@@ -17,7 +17,6 @@
 #include "ui/aura/client/aura_constants.h"
 #include "ui/aura/window.h"
 #include "ui/base/l10n/l10n_util.h"
-#include "ui/base/ui_base_features.h"
 #include "ui/events/event_constants.h"
 #include "ui/wm/core/window_animations.h"
 
@@ -27,12 +26,6 @@ namespace {
 
 // Close command id; avoids colliding with ShelfContextMenuModel command ids.
 const int kCloseCommandId = ShelfContextMenuModel::MENU_LOCAL_END + 1;
-
-ShelfItemType GetShelfItemType(const ShelfID& id) {
-  ShelfModel* model = Shell::Get()->shelf_controller()->model();
-  ShelfItems::const_iterator item = model->ItemByID(id);
-  return item == model->items().end() ? TYPE_UNDEFINED : item->type;
-}
 
 }  // namespace
 
@@ -51,15 +44,6 @@ void ShelfWindowWatcherItemDelegate::ItemSelected(
     int64_t display_id,
     ShelfLaunchSource source,
     ItemSelectedCallback callback) {
-  // Move panels attached on another display to the current display.
-  if (GetShelfItemType(shelf_id()) == TYPE_APP_PANEL &&
-      window_->GetProperty(kPanelAttachedKey) &&
-      wm::MoveWindowToDisplay(window_, display_id)) {
-    wm::ActivateWindow(window_);
-    std::move(callback).Run(SHELF_ACTION_WINDOW_ACTIVATED, base::nullopt);
-    return;
-  }
-
   if (wm::IsActiveWindow(window_)) {
     if (event && event->type() == ui::ET_KEY_RELEASED) {
       ::wm::AnimateWindow(window_, ::wm::WINDOW_ANIMATION_TYPE_BOUNCE);
@@ -85,11 +69,6 @@ void ShelfWindowWatcherItemDelegate::GetContextMenuItems(
   close->label = l10n_util::GetStringUTF16(IDS_CLOSE);
   close->enabled = true;
   items.push_back(std::move(close));
-  if (!features::IsTouchableAppContextMenuEnabled()) {
-    ash::mojom::MenuItemPtr separator(ash::mojom::MenuItem::New());
-    separator->type = ui::MenuModel::TYPE_SEPARATOR;
-    items.push_back(std::move(separator));
-  }
   std::move(callback).Run(std::move(items));
 }
 

@@ -10,9 +10,9 @@
 #include "SkCanvas.h"
 #include "SkColorFilter.h"
 #include "SkColorPriv.h"
-#include "SkFlattenablePriv.h"
 #include "SkImageFilterPriv.h"
 #include "SkShader.h"
+#include "SkTextUtils.h"
 
 #include "SkBlurImageFilter.h"
 #include "SkColorFilterImageFilter.h"
@@ -21,21 +21,11 @@
 
 class FailImageFilter : public SkImageFilter {
 public:
-    class Registrar {
-    public:
-        Registrar() {
-            SkFlattenable::Register("FailImageFilter",
-                                    FailImageFilter::CreateProc,
-                                    FailImageFilter::GetFlattenableType());
-        }
-    };
     static sk_sp<SkImageFilter> Make() {
         return sk_sp<SkImageFilter>(new FailImageFilter);
     }
 
-    void toString(SkString* str) const override;
-    SK_DECLARE_PUBLIC_FLATTENABLE_DESERIALIZATION_PROCS(FailImageFilter)
-
+    SK_FLATTENABLE_HOOKS(FailImageFilter)
 protected:
     FailImageFilter() : INHERITED(nullptr, 0, nullptr) {}
 
@@ -44,42 +34,27 @@ protected:
         return nullptr;
     }
     sk_sp<SkImageFilter> onMakeColorSpace(SkColorSpaceXformer*) const override {
-        return nullptr;
+        return sk_ref_sp(this);
     }
 
 private:
+
     typedef SkImageFilter INHERITED;
 };
-
-static FailImageFilter::Registrar gReg0;
 
 sk_sp<SkFlattenable> FailImageFilter::CreateProc(SkReadBuffer& buffer) {
     SK_IMAGEFILTER_UNFLATTEN_COMMON(common, 0);
     return FailImageFilter::Make();
 }
 
-void FailImageFilter::toString(SkString* str) const {
-    str->appendf("FailImageFilter: (");
-    str->append(")");
-}
-
 class IdentityImageFilter : public SkImageFilter {
 public:
-    class Registrar {
-    public:
-        Registrar() {
-            SkFlattenable::Register("IdentityImageFilter",
-                                    IdentityImageFilter::CreateProc,
-                                    IdentityImageFilter::GetFlattenableType());
-        }
-    };
     static sk_sp<SkImageFilter> Make(sk_sp<SkImageFilter> input) {
         return sk_sp<SkImageFilter>(new IdentityImageFilter(std::move(input)));
     }
 
-    void toString(SkString* str) const override;
-    SK_DECLARE_PUBLIC_FLATTENABLE_DESERIALIZATION_PROCS(IdentityImageFilter)
 
+    SK_FLATTENABLE_HOOKS(IdentityImageFilter)
 protected:
     sk_sp<SkSpecialImage> onFilterImage(SkSpecialImage* source, const Context&,
                                         SkIPoint* offset) const override {
@@ -96,16 +71,19 @@ private:
     typedef SkImageFilter INHERITED;
 };
 
-static IdentityImageFilter::Registrar gReg1;
+// Register these image filters as deserializable before main().
+namespace {
+    static struct Initializer {
+        Initializer() {
+            SK_REGISTER_FLATTENABLE(IdentityImageFilter);
+            SK_REGISTER_FLATTENABLE(FailImageFilter);
+        }
+    } initializer;
+}
 
 sk_sp<SkFlattenable> IdentityImageFilter::CreateProc(SkReadBuffer& buffer) {
     SK_IMAGEFILTER_UNFLATTEN_COMMON(common, 1);
     return IdentityImageFilter::Make(common.getInput(0));
-}
-
-void IdentityImageFilter::toString(SkString* str) const {
-    str->appendf("IdentityImageFilter: (");
-    str->append(")");
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -152,8 +130,8 @@ static void draw_text(SkCanvas* canvas, const SkRect& r, sk_sp<SkImageFilter> im
     paint.setAntiAlias(true);
     sk_tool_utils::set_portable_typeface(&paint);
     paint.setTextSize(r.height()/2);
-    paint.setTextAlign(SkPaint::kCenter_Align);
-    canvas->drawString("Text", r.centerX(), r.centerY(), paint);
+    SkTextUtils::DrawString(canvas, "Text", r.centerX(), r.centerY(), paint,
+                            SkTextUtils::kCenter_Align);
 }
 
 static void draw_bitmap(SkCanvas* canvas, const SkRect& r, sk_sp<SkImageFilter> imf) {

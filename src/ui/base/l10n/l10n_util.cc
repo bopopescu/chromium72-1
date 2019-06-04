@@ -62,6 +62,7 @@ static const char* const kAcceptLanguageList[] = {
     "br",     // Breton
     "bs",     // Bosnian
     "ca",     // Catalan
+    "ceb",    // Cebuano
     "ckb",    // Kurdish (Arabci),  Sorani
     "co",     // Corsican
     "cs",     // Czech
@@ -119,10 +120,12 @@ static const char* const kAcceptLanguageList[] = {
     "hi",      // Hindi
     "hmn",     // Hmong
     "hr",      // Croatian
+    "ht",      // Haitian Creole
     "hu",      // Hungarian
     "hy",      // Armenian
     "ia",      // Interlingua
     "id",      // Indonesian
+    "ig",      // Igbo
     "is",      // Icelandic
     "it",      // Italian
     "it-CH",   // Italian (Switzerland)
@@ -142,6 +145,8 @@ static const char* const kAcceptLanguageList[] = {
     "lo",      // Laothian
     "lt",      // Lithuanian
     "lv",      // Latvian
+    "mg",      // Malagasy
+    "mi",      // Maori
     "mk",      // Macedonian
     "ml",      // Malayalam
     "mn",      // Mongolian
@@ -149,11 +154,13 @@ static const char* const kAcceptLanguageList[] = {
     "mr",      // Marathi
     "ms",      // Malay
     "mt",      // Maltese
+    "my",      // Burmese
     "nb",      // Norwegian (Bokmal)
     "ne",      // Nepali
     "nl",      // Dutch
     "nn",      // Norwegian (Nynorsk)
     "no",      // Norwegian
+    "ny",      // Nyanja
     "oc",      // Occitan
     "om",      // Oromo
     "or",      // Oriya
@@ -261,15 +268,7 @@ bool IsLocaleAvailable(const std::string& locale) {
   if (!l10n_util::IsLocaleSupportedByOS(locale))
     return false;
 
-  // If the ResourceBundle is not yet initialized, return false to avoid the
-  // CHECK failure in ResourceBundle::GetSharedInstance().
-  if (!ui::ResourceBundle::HasSharedInstance())
-    return false;
-
-  // TODO(hshi): make ResourceBundle::LocaleDataPakExists() a static function
-  // so that this can be invoked without initializing the global instance.
-  // See crbug.com/230432: CHECK failure in GetUserDataDir().
-  return ui::ResourceBundle::GetSharedInstance().LocaleDataPakExists(locale);
+  return ui::ResourceBundle::LocaleDataPakExists(locale);
 }
 #endif
 
@@ -471,6 +470,10 @@ std::string GetApplicationLocaleInternal(const std::string& pref_locale) {
   }
 
 #elif defined(OS_ANDROID)
+
+  // Try pref_locale first.
+  if (!pref_locale.empty())
+    candidates.push_back(base::i18n::GetCanonicalLocale(pref_locale));
 
   // On Android, query java.util.Locale for the default locale.
   candidates.push_back(base::android::GetDefaultLocaleString());

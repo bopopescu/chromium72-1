@@ -36,8 +36,8 @@ class SyncAwareCounterTest : public SyncTest {
   ~SyncAwareCounterTest() override {}
 
   void SetUpOnMainThread() override {
-    fake_web_history_service_.reset(new history::FakeWebHistoryService(
-        browser()->profile()->GetRequestContext()));
+    fake_web_history_service_ =
+        std::make_unique<history::FakeWebHistoryService>();
     run_loop_.reset(new base::RunLoop());
   }
 
@@ -111,7 +111,7 @@ IN_PROC_BROWSER_TEST_F(SyncAwareCounterTest, AutofillCounter) {
   // We sync all datatypes by default, so starting Sync means that we start
   // syncing autofill, and this should restart the counter.
   ASSERT_TRUE(SetupSync());
-  ASSERT_TRUE(sync_service->IsSyncActive());
+  ASSERT_TRUE(sync_service->IsSyncFeatureActive());
   ASSERT_TRUE(sync_service->GetActiveDataTypes().Has(syncer::AUTOFILL));
   WaitForCounting();
   EXPECT_TRUE(IsSyncEnabled());
@@ -121,30 +121,33 @@ IN_PROC_BROWSER_TEST_F(SyncAwareCounterTest, AutofillCounter) {
       syncer::UserSelectableTypes();
   everything_except_autofill.Remove(syncer::AUTOFILL);
   auto sync_blocker = sync_service->GetSetupInProgressHandle();
-  sync_service->OnUserChoseDatatypes(/*sync_everything=*/false,
-                                     everything_except_autofill);
-  ASSERT_FALSE(sync_service->GetPreferredDataTypes().Has(syncer::AUTOFILL));
+  sync_service->GetUserSettings()->SetChosenDataTypes(
+      /*sync_everything=*/false, everything_except_autofill);
+  ASSERT_FALSE(sync_service->GetUserSettings()->GetChosenDataTypes().Has(
+      syncer::AUTOFILL));
   sync_blocker.reset();
   WaitForCounting();
   ASSERT_FALSE(sync_service->GetActiveDataTypes().Has(syncer::AUTOFILL));
   EXPECT_FALSE(IsSyncEnabled());
 
   // If autofill sync is not affected, the counter is not restarted.
-  syncer::ModelTypeSet only_history(syncer::HISTORY_DELETE_DIRECTIVES);
+  syncer::ModelTypeSet only_history(syncer::TYPED_URLS);
   sync_blocker = sync_service->GetSetupInProgressHandle();
-  sync_service->ChangePreferredDataTypes(only_history);
+  sync_service->GetUserSettings()->SetChosenDataTypes(/*sync_everything=*/false,
+                                                      only_history);
   sync_blocker.reset();
   EXPECT_FALSE(CountingFinishedSinceLastAsked());
 
   // We start syncing autofill again. This restarts the counter.
   sync_blocker = sync_service->GetSetupInProgressHandle();
-  sync_service->ChangePreferredDataTypes(syncer::ModelTypeSet::All());
+  sync_service->GetUserSettings()->SetChosenDataTypes(
+      /*sync_everything=*/false, syncer::UserSelectableTypes());
   sync_blocker.reset();
   WaitForCounting();
   EXPECT_TRUE(IsSyncEnabled());
 
   // Stopping the Sync service triggers a restart.
-  sync_service->RequestStop(syncer::SyncService::CLEAR_DATA);
+  sync_service->GetUserSettings()->SetSyncRequested(false);
   WaitForCounting();
   EXPECT_FALSE(IsSyncEnabled());
 }
@@ -172,8 +175,9 @@ IN_PROC_BROWSER_TEST_F(SyncAwareCounterTest, PasswordCounter) {
   // We sync all datatypes by default, so starting Sync means that we start
   // syncing passwords, and this should restart the counter.
   ASSERT_TRUE(SetupSync());
-  ASSERT_TRUE(sync_service->IsSyncActive());
-  ASSERT_TRUE(sync_service->GetPreferredDataTypes().Has(syncer::PASSWORDS));
+  ASSERT_TRUE(sync_service->IsSyncFeatureActive());
+  ASSERT_TRUE(sync_service->GetUserSettings()->GetChosenDataTypes().Has(
+      syncer::PASSWORDS));
   WaitForCounting();
   EXPECT_TRUE(IsSyncEnabled());
 
@@ -182,31 +186,36 @@ IN_PROC_BROWSER_TEST_F(SyncAwareCounterTest, PasswordCounter) {
       syncer::UserSelectableTypes();
   everything_except_passwords.Remove(syncer::PASSWORDS);
   auto sync_blocker = sync_service->GetSetupInProgressHandle();
-  sync_service->OnUserChoseDatatypes(/*sync_everything=*/false,
-                                     everything_except_passwords);
-  ASSERT_FALSE(sync_service->GetPreferredDataTypes().Has(syncer::PASSWORDS));
+  sync_service->GetUserSettings()->SetChosenDataTypes(
+      /*sync_everything=*/false, everything_except_passwords);
+  ASSERT_FALSE(sync_service->GetUserSettings()->GetChosenDataTypes().Has(
+      syncer::PASSWORDS));
   sync_blocker.reset();
   WaitForCounting();
-  ASSERT_FALSE(sync_service->GetPreferredDataTypes().Has(syncer::PASSWORDS));
+  ASSERT_FALSE(sync_service->GetUserSettings()->GetChosenDataTypes().Has(
+      syncer::PASSWORDS));
   EXPECT_FALSE(IsSyncEnabled());
 
   // If password sync is not affected, the counter is not restarted.
-  syncer::ModelTypeSet only_history(syncer::HISTORY_DELETE_DIRECTIVES);
-  sync_service->ChangePreferredDataTypes(only_history);
+  syncer::ModelTypeSet only_history(syncer::TYPED_URLS);
+  sync_service->GetUserSettings()->SetChosenDataTypes(/*sync_everything=*/false,
+                                                      only_history);
   sync_blocker = sync_service->GetSetupInProgressHandle();
-  sync_service->ChangePreferredDataTypes(only_history);
+  sync_service->GetUserSettings()->SetChosenDataTypes(/*sync_everything=*/false,
+                                                      only_history);
   sync_blocker.reset();
   EXPECT_FALSE(CountingFinishedSinceLastAsked());
 
   // We start syncing passwords again. This restarts the counter.
   sync_blocker = sync_service->GetSetupInProgressHandle();
-  sync_service->ChangePreferredDataTypes(syncer::ModelTypeSet::All());
+  sync_service->GetUserSettings()->SetChosenDataTypes(
+      /*sync_everything=*/false, syncer::UserSelectableTypes());
   sync_blocker.reset();
   WaitForCounting();
   EXPECT_TRUE(IsSyncEnabled());
 
   // Stopping the Sync service triggers a restart.
-  sync_service->RequestStop(syncer::SyncService::CLEAR_DATA);
+  sync_service->GetUserSettings()->SetSyncRequested(false);
   WaitForCounting();
   EXPECT_FALSE(IsSyncEnabled());
 }
@@ -237,9 +246,9 @@ IN_PROC_BROWSER_TEST_F(SyncAwareCounterTest, HistoryCounter) {
   // We sync all datatypes by default, so starting Sync means that we start
   // syncing history deletion, and this should restart the counter.
   ASSERT_TRUE(SetupSync());
-  ASSERT_TRUE(sync_service->IsSyncActive());
-  ASSERT_TRUE(sync_service->GetPreferredDataTypes().Has(
-      syncer::HISTORY_DELETE_DIRECTIVES));
+  ASSERT_TRUE(sync_service->IsSyncFeatureActive());
+  ASSERT_TRUE(sync_service->GetUserSettings()->GetChosenDataTypes().Has(
+      syncer::TYPED_URLS));
   ASSERT_TRUE(sync_service->GetActiveDataTypes().Has(
       syncer::HISTORY_DELETE_DIRECTIVES));
 
@@ -249,19 +258,21 @@ IN_PROC_BROWSER_TEST_F(SyncAwareCounterTest, HistoryCounter) {
   // We stop syncing history deletion in particular. This restarts the counter.
   syncer::ModelTypeSet everything_except_history =
       syncer::UserSelectableTypes();
-  everything_except_history.Remove(syncer::HISTORY_DELETE_DIRECTIVES);
+  everything_except_history.Remove(syncer::TYPED_URLS);
   auto sync_blocker = sync_service->GetSetupInProgressHandle();
-  sync_service->OnUserChoseDatatypes(/*sync_everything=*/false,
-                                     everything_except_history);
+  sync_service->GetUserSettings()->SetChosenDataTypes(
+      /*sync_everything=*/false, everything_except_history);
   sync_blocker.reset();
   WaitForCounting();
   EXPECT_FALSE(IsSyncEnabled());
 
   // If the history deletion sync is not affected, the counter is not restarted.
   syncer::ModelTypeSet only_passwords(syncer::PASSWORDS);
-  sync_service->ChangePreferredDataTypes(only_passwords);
+  sync_service->GetUserSettings()->SetChosenDataTypes(/*sync_everything=*/false,
+                                                      only_passwords);
   sync_blocker = sync_service->GetSetupInProgressHandle();
-  sync_service->ChangePreferredDataTypes(only_passwords);
+  sync_service->GetUserSettings()->SetChosenDataTypes(/*sync_everything=*/false,
+                                                      only_passwords);
   sync_blocker.reset();
   EXPECT_FALSE(counter.HasTrackedTasks());
   EXPECT_FALSE(CountingFinishedSinceLastAsked());
@@ -270,14 +281,16 @@ IN_PROC_BROWSER_TEST_F(SyncAwareCounterTest, HistoryCounter) {
   syncer::ModelTypeSet autofill_and_passwords(syncer::AUTOFILL,
                                               syncer::PASSWORDS);
   sync_blocker = sync_service->GetSetupInProgressHandle();
-  sync_service->ChangePreferredDataTypes(autofill_and_passwords);
+  sync_service->GetUserSettings()->SetChosenDataTypes(/*sync_everything=*/false,
+                                                      autofill_and_passwords);
   sync_blocker.reset();
   EXPECT_FALSE(counter.HasTrackedTasks());
   EXPECT_FALSE(CountingFinishedSinceLastAsked());
 
   // We start syncing history deletion again. This restarts the counter.
   sync_blocker = sync_service->GetSetupInProgressHandle();
-  sync_service->ChangePreferredDataTypes(syncer::ModelTypeSet::All());
+  sync_service->GetUserSettings()->SetChosenDataTypes(
+      /*sync_everything=*/false, syncer::UserSelectableTypes());
   sync_blocker.reset();
   WaitForCounting();
   EXPECT_TRUE(IsSyncEnabled());
@@ -289,7 +302,7 @@ IN_PROC_BROWSER_TEST_F(SyncAwareCounterTest, HistoryCounter) {
   // active again.
 
   // Stopping the Sync service triggers a restart.
-  sync_service->RequestStop(syncer::SyncService::CLEAR_DATA);
+  sync_service->GetUserSettings()->SetSyncRequested(false);
   WaitForCounting();
   EXPECT_FALSE(IsSyncEnabled());
 }

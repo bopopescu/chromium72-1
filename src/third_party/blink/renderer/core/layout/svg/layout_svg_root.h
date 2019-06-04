@@ -72,7 +72,7 @@ class CORE_EXPORT LayoutSVGRoot final : public LayoutReplaced {
     // the layout may be incorrectly using the old size.
     if (container_size_ != container_size) {
       SetNeedsLayoutAndFullPaintInvalidation(
-          LayoutInvalidationReason::kSizeChanged);
+          layout_invalidation_reason::kSizeChanged);
     }
     container_size_ = container_size;
   }
@@ -84,9 +84,6 @@ class CORE_EXPORT LayoutSVGRoot final : public LayoutReplaced {
   }
 
   bool ShouldApplyViewportClip() const;
-  bool ShouldClipOverflow() const override {
-    return LayoutBox::ShouldClipOverflow() || ShouldApplyViewportClip();
-  }
 
   LayoutRect VisualOverflowRect() const override;
 
@@ -94,9 +91,11 @@ class CORE_EXPORT LayoutSVGRoot final : public LayoutReplaced {
 
   const char* GetName() const override { return "LayoutSVGRoot"; }
 
-  bool PaintedOutputOfObjectHasNoEffectRegardlessOfSize() const final;
-
  private:
+  bool ComputeShouldClipOverflow() const override {
+    return LayoutBox::ComputeShouldClipOverflow() || ShouldApplyViewportClip();
+  }
+
   const LayoutObjectChildList* Children() const { return &children_; }
   LayoutObjectChildList* Children() { return &children_; }
 
@@ -116,7 +115,8 @@ class CORE_EXPORT LayoutSVGRoot final : public LayoutReplaced {
   LayoutUnit ComputeReplacedLogicalHeight(
       LayoutUnit estimated_used_width = LayoutUnit()) const override;
   void UpdateLayout() override;
-  void PaintReplaced(const PaintInfo&, const LayoutPoint&) const override;
+  void PaintReplaced(const PaintInfo&,
+                     const LayoutPoint& paint_offset) const override;
 
   void WillBeDestroyed() override;
   void StyleDidChange(StyleDifference, const ComputedStyle* old_style) override;

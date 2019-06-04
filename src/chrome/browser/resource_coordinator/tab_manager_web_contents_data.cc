@@ -17,9 +17,6 @@
 using base::TimeTicks;
 using content::WebContents;
 
-DEFINE_WEB_CONTENTS_USER_DATA_KEY(
-    resource_coordinator::TabManager::WebContentsData);
-
 namespace resource_coordinator {
 
 TabManager::WebContentsData::WebContentsData(content::WebContents* web_contents)
@@ -79,7 +76,7 @@ void TabManager::WebContentsData::CopyState(
 }
 
 TabManager::WebContentsData::Data::Data()
-    : tab_loading_state(TabLoadTracker::UNLOADED),
+    : tab_loading_state(TabLoadTracker::LoadingState::UNLOADED),
       is_in_session_restore(false),
       is_restored_in_foreground(false) {}
 

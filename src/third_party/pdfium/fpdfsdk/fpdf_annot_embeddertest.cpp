@@ -28,6 +28,43 @@ std::string BufferToString(const std::vector<char>& buf) {
   return GetPlatformString(reinterpret_cast<FPDF_WIDESTRING>(buf.data()));
 }
 
+TEST_F(FPDFAnnotEmbeddertest, BadParams) {
+  ASSERT_TRUE(OpenDocument("hello_world.pdf"));
+  FPDF_PAGE page = LoadPage(0);
+  ASSERT_TRUE(page);
+
+  EXPECT_EQ(0, FPDFPage_GetAnnotCount(nullptr));
+
+  EXPECT_FALSE(FPDFPage_GetAnnot(nullptr, 0));
+  EXPECT_FALSE(FPDFPage_GetAnnot(nullptr, -1));
+  EXPECT_FALSE(FPDFPage_GetAnnot(nullptr, 1));
+  EXPECT_FALSE(FPDFPage_GetAnnot(page, -1));
+  EXPECT_FALSE(FPDFPage_GetAnnot(page, 1));
+
+  EXPECT_EQ(FPDF_ANNOT_UNKNOWN, FPDFAnnot_GetSubtype(nullptr));
+
+  EXPECT_EQ(0, FPDFAnnot_GetObjectCount(nullptr));
+
+  EXPECT_FALSE(FPDFAnnot_GetObject(nullptr, 0));
+  EXPECT_FALSE(FPDFAnnot_GetObject(nullptr, -1));
+  EXPECT_FALSE(FPDFAnnot_GetObject(nullptr, 1));
+
+  EXPECT_FALSE(FPDFAnnot_HasKey(nullptr, "foo"));
+
+  static constexpr wchar_t kContents[] = L"Bar";
+  std::unique_ptr<unsigned short, pdfium::FreeDeleter> text =
+      GetFPDFWideString(kContents);
+  EXPECT_FALSE(FPDFAnnot_SetStringValue(nullptr, "foo", text.get()));
+
+  char buffer[128];
+  EXPECT_EQ(0u, FPDFAnnot_GetStringValue(nullptr, "foo", nullptr, 0));
+  EXPECT_EQ(0u, FPDFAnnot_GetStringValue(nullptr, "foo", buffer, 0));
+  EXPECT_EQ(0u,
+            FPDFAnnot_GetStringValue(nullptr, "foo", buffer, sizeof(buffer)));
+
+  UnloadPage(page);
+}
+
 TEST_F(FPDFAnnotEmbeddertest, RenderAnnotWithOnlyRolloverAP) {
   // Open a file with one annotation and load its first page.
   ASSERT_TRUE(OpenDocument("annotation_highlight_rollover_ap.pdf"));
@@ -60,10 +97,7 @@ TEST_F(FPDFAnnotEmbeddertest, RenderMultilineMarkupAnnotWithoutAP) {
 TEST_F(FPDFAnnotEmbeddertest, ExtractHighlightLongContent) {
   // Open a file with one annotation and load its first page.
   ASSERT_TRUE(OpenDocument("annotation_highlight_long_content.pdf"));
-  // TODO(thestig): This test should use LoadPage() and UnloadPage(), but one of
-  // the FORM API calls in LoadPage() makes this test fail. So use
-  // FPDF_LoadPage() and FPDF_ClosePage() for now.
-  FPDF_PAGE page = FPDF_LoadPage(document(), 0);
+  FPDF_PAGE page = LoadPageNoEvents(0);
   ASSERT_TRUE(page);
 
   // Check that there is a total of 1 annotation on its first page.
@@ -137,16 +171,13 @@ TEST_F(FPDFAnnotEmbeddertest, ExtractHighlightLongContent) {
     EXPECT_EQ(157.211182f, quadpoints.x4);
     EXPECT_EQ(706.264465f, quadpoints.y4);
   }
-  FPDF_ClosePage(page);
+  UnloadPageNoEvents(page);
 }
 
 TEST_F(FPDFAnnotEmbeddertest, ExtractInkMultiple) {
   // Open a file with three annotations and load its first page.
   ASSERT_TRUE(OpenDocument("annotation_ink_multiple.pdf"));
-  // TODO(thestig): This test should use LoadPage() and UnloadPage(), but one of
-  // the FORM API calls in LoadPage() makes this test fail. So use
-  // FPDF_LoadPage() and FPDF_ClosePage() for now.
-  FPDF_PAGE page = FPDF_LoadPage(document(), 0);
+  FPDF_PAGE page = LoadPageNoEvents(0);
   ASSERT_TRUE(page);
 
   // Check that there is a total of 3 annotation on its first page.
@@ -183,7 +214,11 @@ TEST_F(FPDFAnnotEmbeddertest, ExtractInkMultiple) {
     EXPECT_EQ(475.336090f, rect.right);
     EXPECT_EQ(681.535034f, rect.top);
   }
-  FPDF_ClosePage(page);
+  {
+    ScopedFPDFBitmap bitmap = RenderLoadedPageWithFlags(page, FPDF_ANNOT);
+    CompareBitmap(bitmap.get(), 612, 792, "354002e1c4386d38fdde29ef8d61074a");
+  }
+  UnloadPageNoEvents(page);
 }
 
 TEST_F(FPDFAnnotEmbeddertest, AddIllegalSubtypeAnnotation) {
@@ -320,7 +355,7 @@ TEST_F(FPDFAnnotEmbeddertest, AddAndSaveUnderlineAnnotation) {
   // Open the saved document.
   const char md5[] = "dba153419f67b7c0c0e3d22d3e8910d5";
 
-  OpenSavedDocument();
+  OpenSavedDocument(nullptr);
   page = LoadSavedPage(0);
   VerifySavedRendering(page, 612, 792, md5);
 
@@ -427,7 +462,6 @@ TEST_F(FPDFAnnotEmbeddertest, GetAndSetQuadPoints) {
   }
 
   FPDFPage_CloseAnnot(squareAnnot);
-
   UnloadPage(page);
 }
 
@@ -563,10 +597,7 @@ TEST_F(FPDFAnnotEmbeddertest, CountAttachmentPoints) {
 TEST_F(FPDFAnnotEmbeddertest, RemoveAnnotation) {
   // Open a file with 3 annotations on its first page.
   ASSERT_TRUE(OpenDocument("annotation_ink_multiple.pdf"));
-  // TODO(thestig): This test should use LoadPage() and UnloadPage(), but one of
-  // the FORM API calls in LoadPage() makes this test fail. So use
-  // FPDF_LoadPage() and FPDF_ClosePage() for now.
-  FPDF_PAGE page = FPDF_LoadPage(document(), 0);
+  FPDF_PAGE page = LoadPageNoEvents(0);
   ASSERT_TRUE(page);
   EXPECT_EQ(3, FPDFPage_GetAnnotCount(page));
 
@@ -604,7 +635,7 @@ TEST_F(FPDFAnnotEmbeddertest, RemoveAnnotation) {
 
   // Save the document, closing the page and document.
   EXPECT_TRUE(FPDF_SaveAsCopy(document(), this, 0));
-  FPDF_ClosePage(page);
+  UnloadPageNoEvents(page);
 
   // TODO(npm): VerifySavedRendering changes annot rect dimensions by 1??
   // Open the saved document.
@@ -645,6 +676,11 @@ TEST_F(FPDFAnnotEmbeddertest, AddAndModifyPath) {
   const char md5_modified_path[] = "873b92ea83ccf006e58415d866ce145b";
   const char md5_two_paths[] = "6f1f1c91f50240e9cc9d7c87c48b93a7";
   const char md5_new_annot[] = "078bf58f939645ac305854f31ee9a828";
+#elif _FX_PLATFORM_ == _FX_PLATFORM_WINDOWS_
+  const char md5_original[] = "6f3cc2dd37479ce7cc072bfb0c63c275";
+  const char md5_modified_path[] = "c66293426cbf1f568502d1f7c0728fc7";
+  const char md5_two_paths[] = "122ac4625393b1dfe4be8707b73cbb13";
+  const char md5_new_annot[] = "253c7fd739646ba2568e1e8bfc782336";
 #else
   const char md5_original[] = "964f89bbe8911e540a465cf1a64b7f7e";
   const char md5_modified_path[] = "5a4a6091cff648a4ece3ce7e245e3e38";
@@ -757,7 +793,7 @@ TEST_F(FPDFAnnotEmbeddertest, AddAndModifyPath) {
   UnloadPage(page);
 
   // Open the saved document.
-  OpenSavedDocument();
+  OpenSavedDocument(nullptr);
   page = LoadSavedPage(0);
   VerifySavedRendering(page, 595, 842, md5_new_annot);
 
@@ -841,6 +877,10 @@ TEST_F(FPDFAnnotEmbeddertest, AddAndModifyImage) {
   const char md5_original[] = "c35408717759562d1f8bf33d317483d2";
   const char md5_new_image[] = "ff012f5697436dfcaec25b32d1333596";
   const char md5_modified_image[] = "86cf8cb2755a7a2046a543e66d9c1e61";
+#elif _FX_PLATFORM_ == _FX_PLATFORM_WINDOWS_
+  const char md5_original[] = "6f3cc2dd37479ce7cc072bfb0c63c275";
+  const char md5_new_image[] = "d19c6fcfd9a170802fcfb9adfa13557e";
+  const char md5_modified_image[] = "1273cf2363570a50d1aa0c95b1318197";
 #else
   const char md5_original[] = "964f89bbe8911e540a465cf1a64b7f7e";
   const char md5_new_image[] = "9ea8732dc9d579f68853f16892856208";
@@ -922,6 +962,10 @@ TEST_F(FPDFAnnotEmbeddertest, AddAndModifyText) {
   const char md5_original[] = "c35408717759562d1f8bf33d317483d2";
   const char md5_new_text[] = "e5680ed048c2cfd9a1d27212cdf41286";
   const char md5_modified_text[] = "79f5cfb0b07caaf936f65f6a7a57ce77";
+#elif _FX_PLATFORM_ == _FX_PLATFORM_WINDOWS_
+  const char md5_original[] = "6f3cc2dd37479ce7cc072bfb0c63c275";
+  const char md5_new_text[] = "554d625b52144816aaabb0dd66962c55";
+  const char md5_modified_text[] = "26e94fbd3af4b1e65479327507600114";
 #else
   const char md5_original[] = "964f89bbe8911e540a465cf1a64b7f7e";
   const char md5_new_text[] = "00b14fa2dc1c90d1b0d034e1608efef5";
@@ -1056,12 +1100,14 @@ TEST_F(FPDFAnnotEmbeddertest, GetSetStringValue) {
 
 #if _FX_PLATFORM_ == _FX_PLATFORM_APPLE_
   const char md5[] = "4d64e61c9c0f8c60ab3cc3234bb73b1c";
+#elif _FX_PLATFORM_ == _FX_PLATFORM_WINDOWS_
+  const char md5[] = "9ee141f698c3fcb56c050dffd6c82624";
 #else
   const char md5[] = "c96ee1f316d7f5a1b154de9f9d467f01";
 #endif
 
   // Open the saved annotation.
-  OpenSavedDocument();
+  OpenSavedDocument(nullptr);
   page = LoadSavedPage(0);
   VerifySavedRendering(page, 595, 842, md5);
   {
@@ -1183,7 +1229,7 @@ TEST_F(FPDFAnnotEmbeddertest, GetSetAP) {
   EXPECT_TRUE(FPDF_SaveAsCopy(document(), this, 0));
   UnloadPage(page);
 
-  OpenSavedDocument();
+  OpenSavedDocument(nullptr);
   page = LoadSavedPage(0);
   {
     ScopedFPDFAnnotation new_annot(FPDFPage_GetAnnot(page, 0));
@@ -1403,9 +1449,19 @@ TEST_F(FPDFAnnotEmbeddertest, GetFormAnnotNull) {
   ASSERT_TRUE(page);
 
   // Attempt to get an annotation where no annotation exists on page.
-  FPDF_ANNOTATION annot =
-      FPDFAnnot_GetFormFieldAtPoint(form_handle(), page, 0, 0);
-  EXPECT_FALSE(annot);
+  EXPECT_FALSE(FPDFAnnot_GetFormFieldAtPoint(form_handle(), page, 0, 0));
+
+  {
+    // Verify there is an annotation.
+    ScopedFPDFAnnotation annot(
+        FPDFAnnot_GetFormFieldAtPoint(form_handle(), page, 120, 120));
+    EXPECT_TRUE(annot);
+  }
+
+  // Try other bad inputs at a valid location.
+  EXPECT_FALSE(FPDFAnnot_GetFormFieldAtPoint(nullptr, nullptr, 120, 120));
+  EXPECT_FALSE(FPDFAnnot_GetFormFieldAtPoint(nullptr, page, 120, 120));
+  EXPECT_FALSE(FPDFAnnot_GetFormFieldAtPoint(form_handle(), nullptr, 120, 120));
 
   UnloadPage(page);
 }

@@ -49,7 +49,7 @@ enum DrawType {
     DRAW_RRECT,
     DRAW_SPRITE_RETIRED_2015_REMOVED_2018,
     DRAW_TEXT,
-    DRAW_TEXT_ON_PATH,
+    DRAW_TEXT_ON_PATH_RETIRED_08_2018_REMOVED_10_2018,
     DRAW_TEXT_TOP_BOTTOM,   // fast variant of DRAW_TEXT
     DRAW_VERTICES_RETIRED_03_2017_REMOVED_01_2018,
     RESTORE,
@@ -97,7 +97,8 @@ enum DrawType {
 
     FLUSH,
 
-    LAST_DRAWTYPE_ENUM = FLUSH
+    DRAW_IMAGE_SET,
+    LAST_DRAWTYPE_ENUM = DRAW_IMAGE_SET
 };
 
 enum DrawVertexFlags {
@@ -155,23 +156,25 @@ static inline bool ClipParams_unpackDoAA(uint32_t packed) {
 
 class SkTypefacePlayback {
 public:
-    SkTypefacePlayback();
-    virtual ~SkTypefacePlayback();
+    SkTypefacePlayback() : fCount(0), fArray(nullptr) {}
+    ~SkTypefacePlayback() = default;
 
-    int count() const { return fCount; }
+    void setCount(size_t count);
 
-    void reset(const SkRefCntSet*);
+    size_t count() const { return fCount; }
 
-    void setCount(int count);
-    SkRefCnt* set(int index, SkRefCnt*);
+    sk_sp<SkTypeface>& operator[](size_t index) {
+        SkASSERT(index < fCount);
+        return fArray[index];
+    }
 
     void setupBuffer(SkReadBuffer& buffer) const {
-        buffer.setTypefaceArray((SkTypeface**)fArray, fCount);
+        buffer.setTypefaceArray(fArray.get(), fCount);
     }
 
 protected:
-    int fCount;
-    SkRefCnt** fArray;
+    size_t fCount;
+    std::unique_ptr<sk_sp<SkTypeface>[]> fArray;
 };
 
 class SkFactoryPlayback {

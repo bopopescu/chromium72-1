@@ -24,6 +24,8 @@ namespace {
 content::WebUIDataSource* CreateSignInInternalsHTMLSource() {
   content::WebUIDataSource* source =
       content::WebUIDataSource::Create(chrome::kChromeUISignInInternalsHost);
+  source->OverrideContentSecurityPolicyScriptSrc(
+      "script-src chrome://resources 'self' 'unsafe-eval';");
 
   source->SetJsonPath("strings.js");
   source->AddResourcePath("signin_internals.js", IDR_SIGNIN_INTERNALS_INDEX_JS);
@@ -81,9 +83,8 @@ bool SignInInternalsUI::OverrideHandleWebUIMessage(
       std::vector<gaia::ListedAccount> signed_out_accounts;
       GaiaCookieManagerService* cookie_manager_service =
           GaiaCookieManagerServiceFactory::GetForProfile(profile);
-      if (cookie_manager_service->ListAccounts(
-              &cookie_accounts, &signed_out_accounts,
-              "ChromiumSignInInternalsUI")) {
+      if (cookie_manager_service->ListAccounts(&cookie_accounts,
+                                               &signed_out_accounts)) {
         about_signin_internals->OnGaiaAccountsInCookieUpdated(
             cookie_accounts,
             signed_out_accounts,

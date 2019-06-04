@@ -48,7 +48,8 @@ WorkerGlobalScopePerformance& WorkerGlobalScopePerformance::From(
       Supplement<WorkerGlobalScope>::From<WorkerGlobalScopePerformance>(
           worker_global_scope);
   if (!supplement) {
-    supplement = new WorkerGlobalScopePerformance(worker_global_scope);
+    supplement =
+        MakeGarbageCollected<WorkerGlobalScopePerformance>(worker_global_scope);
     ProvideTo(worker_global_scope, supplement);
   }
   return *supplement;
@@ -69,12 +70,6 @@ WorkerPerformance* WorkerGlobalScopePerformance::performance(
 void WorkerGlobalScopePerformance::Trace(blink::Visitor* visitor) {
   visitor->Trace(performance_);
   Supplement<WorkerGlobalScope>::Trace(visitor);
-}
-
-void WorkerGlobalScopePerformance::TraceWrappers(
-    ScriptWrappableVisitor* visitor) const {
-  visitor->TraceWrappers(performance_);
-  Supplement<WorkerGlobalScope>::TraceWrappers(visitor);
 }
 
 }  // namespace blink

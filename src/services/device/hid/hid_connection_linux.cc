@@ -17,7 +17,7 @@
 #include "base/macros.h"
 #include "base/memory/ref_counted_memory.h"
 #include "base/posix/eintr_wrapper.h"
-#include "base/threading/thread_restrictions.h"
+#include "base/threading/scoped_blocking_call.h"
 #include "base/threading/thread_task_runner_handle.h"
 #include "components/device_event_log/device_event_log.h"
 #include "services/device/hid/hid_service.h"
@@ -52,7 +52,6 @@ class HidConnectionLinux::BlockingTaskHelper {
   // Must be called on a thread that has a base::MessageLoopForIO.
   void Start() {
     DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-    base::AssertBlockingAllowed();
 
     file_watcher_ = base::FileDescriptorWatcher::WatchReadable(
         fd_.get(), base::Bind(&BlockingTaskHelper::OnFileCanReadWithoutBlocking,
@@ -62,6 +61,9 @@ class HidConnectionLinux::BlockingTaskHelper {
   void Write(scoped_refptr<base::RefCountedBytes> buffer,
              WriteCallback callback) {
     DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+    base::ScopedBlockingCall scoped_blocking_call(
+        base::BlockingType::MAY_BLOCK);
+
     ssize_t result =
         HANDLE_EINTR(write(fd_.get(), buffer->front(), buffer->size()));
     if (result < 0) {
@@ -82,6 +84,9 @@ class HidConnectionLinux::BlockingTaskHelper {
                         scoped_refptr<base::RefCountedBytes> buffer,
                         ReadCallback callback) {
     DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+    base::ScopedBlockingCall scoped_blocking_call(
+        base::BlockingType::MAY_BLOCK);
+
     int result = HANDLE_EINTR(
         ioctl(fd_.get(), HIDIOCGFEATURE(buffer->size()), buffer->front()));
     if (result < 0) {
@@ -109,6 +114,9 @@ class HidConnectionLinux::BlockingTaskHelper {
   void SendFeatureReport(scoped_refptr<base::RefCountedBytes> buffer,
                          WriteCallback callback) {
     DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+    base::ScopedBlockingCall scoped_blocking_call(
+        base::BlockingType::MAY_BLOCK);
+
     int result = HANDLE_EINTR(
         ioctl(fd_.get(), HIDIOCSFEATURE(buffer->size()), buffer->front()));
     if (result < 0) {
@@ -194,18 +202,6 @@ void HidConnectionLinux::PlatformClose() {
   // and 2) any tasks posted to this task runner that refer to this file will
   // complete before it is closed.
   blocking_task_runner_->DeleteSoon(FROM_HERE, helper_.release());
-
-  while (!pending_reads_.empty()) {
-    std::move(pending_reads_.front().callback).Run(false, NULL, 0);
-    pending_reads_.pop();
-  }
-}
-
-void HidConnectionLinux::PlatformRead(ReadCallback callback) {
-  PendingHidRead pending_read;
-  pending_read.callback = std::move(callback);
-  pending_reads_.push(std::move(pending_read));
-  ProcessReadQueue();
 }
 
 void HidConnectionLinux::PlatformWrite(
@@ -243,39 +239,6 @@ void HidConnectionLinux::PlatformSendFeatureReport(
       FROM_HERE, base::BindOnce(&BlockingTaskHelper::SendFeatureReport,
                                 base::Unretained(helper_.get()), buffer,
                                 std::move(callback)));
-}
-
-void HidConnectionLinux::ProcessInputReport(
-    scoped_refptr<base::RefCountedBytes> buffer,
-    size_t size) {
-  DCHECK(thread_checker().CalledOnValidThread());
-  DCHECK_GE(size, 1u);
-
-  uint8_t report_id = buffer->data()[0];
-  if (IsReportIdProtected(report_id))
-    return;
-
-  PendingHidReport report;
-  report.buffer = buffer;
-  report.size = size;
-  pending_reports_.push(report);
-  ProcessReadQueue();
-}
-
-void HidConnectionLinux::ProcessReadQueue() {
-  DCHECK(thread_checker().CalledOnValidThread());
-
-  // Hold a reference to |this| to prevent a callback from freeing this object
-  // during the loop.
-  scoped_refptr<HidConnectionLinux> self(this);
-  while (pending_reads_.size() && pending_reports_.size()) {
-    PendingHidRead read = std::move(pending_reads_.front());
-    PendingHidReport report = std::move(pending_reports_.front());
-
-    pending_reads_.pop();
-    pending_reports_.pop();
-    std::move(read.callback).Run(true, std::move(report.buffer), report.size);
-  }
 }
 
 }  // namespace device

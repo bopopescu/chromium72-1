@@ -9,6 +9,7 @@
 #include "base/bind.h"
 #include "base/bind_helpers.h"
 #include "base/feature_list.h"
+#include "base/test/scoped_feature_list.h"
 #include "components/assist_ranker/fake_ranker_model_loader.h"
 #include "components/assist_ranker/proto/ranker_model.pb.h"
 #include "components/assist_ranker/ranker_model.h"
@@ -20,6 +21,8 @@ using ::assist_ranker::testing::FakeRankerModelLoader;
 
 class BinaryClassifierPredictorTest : public ::testing::Test {
  public:
+  void SetUp() override;
+
   std::unique_ptr<BinaryClassifierPredictor> InitPredictor(
       std::unique_ptr<RankerModel> ranker_model,
       const PredictorConfig& config);
@@ -28,12 +31,19 @@ class BinaryClassifierPredictorTest : public ::testing::Test {
   GenericLogisticRegressionModel GetSimpleLogisticRegressionModel();
 
   PredictorConfig GetConfig();
+  PredictorConfig GetConfig(float predictor_threshold_replacement);
 
  protected:
   const std::string feature_ = "feature";
   const float weight_ = 1.0;
   const float threshold_ = 0.5;
+  base::test::ScopedFeatureList scoped_feature_list_;
 };
+
+void BinaryClassifierPredictorTest::SetUp() {
+  ::testing::Test::SetUp();
+  scoped_feature_list_.Init();
+}
 
 std::unique_ptr<BinaryClassifierPredictor>
 BinaryClassifierPredictorTest::InitPredictor(
@@ -57,9 +67,14 @@ const base::FeatureParam<std::string> kTestRankerUrl{
     &kTestRankerQuery, "url-param-name", "https://default.model.url"};
 
 PredictorConfig BinaryClassifierPredictorTest::GetConfig() {
+  return GetConfig(kNoPredictThresholdReplacement);
+}
+
+PredictorConfig BinaryClassifierPredictorTest::GetConfig(
+    float predictor_threshold_replacement) {
   PredictorConfig config("model_name", "logging_name", "uma_prefix", LOG_NONE,
                          GetEmptyWhitelist(), &kTestRankerQuery,
-                         &kTestRankerUrl);
+                         &kTestRankerUrl, predictor_threshold_replacement);
 
   return config;
 }
@@ -160,6 +175,32 @@ TEST_F(BinaryClassifierPredictorTest,
   EXPECT_FALSE(bool_response);
   EXPECT_TRUE(predictor->PredictScore(ranker_example, &float_response));
   EXPECT_LT(float_response, threshold_);
+}
+
+TEST_F(BinaryClassifierPredictorTest,
+       GenericLogisticRegressionPreprocessedModelReplacedThreshold) {
+  auto ranker_model = std::make_unique<RankerModel>();
+  auto& glr = *ranker_model->mutable_proto()->mutable_logistic_regression();
+  glr = GetSimpleLogisticRegressionModel();
+  glr.clear_weights();
+  glr.set_is_preprocessed_model(true);
+  (*glr.mutable_fullname_weights())[feature_] = weight_;
+
+  float high_threshold = 0.9;  // Some high threshold.
+  auto predictor =
+      InitPredictor(std::move(ranker_model), GetConfig(high_threshold));
+  EXPECT_TRUE(predictor->IsReady());
+
+  RankerExample ranker_example;
+  auto& features = *ranker_example.mutable_features();
+  features[feature_].set_bool_value(true);
+  bool bool_response;
+  EXPECT_TRUE(predictor->Predict(ranker_example, &bool_response));
+  EXPECT_FALSE(bool_response);
+  float float_response;
+  EXPECT_TRUE(predictor->PredictScore(ranker_example, &float_response));
+  EXPECT_GT(float_response, threshold_);
+  EXPECT_LT(float_response, high_threshold);
 }
 
 }  // namespace assist_ranker

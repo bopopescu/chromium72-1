@@ -5,10 +5,16 @@
 #ifndef CHROME_BROWSER_EXTENSIONS_UPDATER_EXTENSION_UPDATE_CLIENT_BASE_BROWSERTEST_H_
 #define CHROME_BROWSER_EXTENSIONS_UPDATER_EXTENSION_UPDATE_CLIENT_BASE_BROWSERTEST_H_
 
+#include <memory>
+#include <string>
+#include <utility>
+#include <vector>
+
 #include "base/memory/ref_counted.h"
 #include "chrome/browser/extensions/extension_browsertest.h"
 #include "chrome/browser/extensions/updater/chrome_update_client_config.h"
 #include "components/update_client/update_client.h"
+#include "content/public/test/url_loader_interceptor.h"
 
 namespace base {
 namespace test {
@@ -20,13 +26,8 @@ namespace content {
 class BrowserMainParts;
 }  // namespace content
 
-namespace net {
-class TestURLRequestInterceptor;
-}  // namespace net
-
 namespace update_client {
-class URLRequestPostInterceptor;
-class URLRequestPostInterceptorFactory;
+class URLLoaderPostInterceptor;
 }  // namespace update_client
 
 namespace extensions {
@@ -39,13 +40,14 @@ class ExtensionUpdateClientBaseTest : public ExtensionBrowserTest {
  public:
   using ConfigFactoryCallback = ChromeUpdateClientConfig::FactoryCallback;
 
-  ExtensionUpdateClientBaseTest();
+  explicit ExtensionUpdateClientBaseTest(bool use_JSON);
   ~ExtensionUpdateClientBaseTest() override;
 
   // ExtensionBrowserTest:
   void SetUp() override;
   void SetUpOnMainThread() override;
   void CreatedBrowserMainParts(content::BrowserMainParts* parts) final;
+  void TearDownOnMainThread() override;
 
   // Injects a test configurator to the main extension browser client.
   // Override this function to inject your own custom configurator to the
@@ -66,17 +68,30 @@ class ExtensionUpdateClientBaseTest : public ExtensionBrowserTest {
   virtual std::vector<GURL> GetUpdateUrls() const;
   virtual std::vector<GURL> GetPingUrls() const;
 
+  void set_interceptor_hook(
+      content::URLLoaderInterceptor::InterceptCallback callback) {
+    callback_ = std::move(callback);
+  }
+
+  int get_interceptor_count() { return get_interceptor_count_; }
+
  protected:
   extensions::UpdateService* update_service_ = nullptr;
-  std::unique_ptr<net::TestURLRequestInterceptor> get_interceptor_;
-  std::unique_ptr<update_client::URLRequestPostInterceptorFactory>
-      update_interceptor_factory_;
-  std::unique_ptr<update_client::URLRequestPostInterceptorFactory>
-      ping_interceptor_factory_;
-  scoped_refptr<update_client::URLRequestPostInterceptor> update_interceptor_;
-  scoped_refptr<update_client::URLRequestPostInterceptor> ping_interceptor_;
+  std::unique_ptr<content::URLLoaderInterceptor> get_interceptor_;
+  int get_interceptor_count_ = 0;
+  content::URLLoaderInterceptor::InterceptCallback callback_;
+
+  std::unique_ptr<update_client::URLLoaderPostInterceptor> update_interceptor_;
+  std::unique_ptr<update_client::URLLoaderPostInterceptor> ping_interceptor_;
+
+  net::EmbeddedTestServer https_server_for_update_;
+  net::EmbeddedTestServer https_server_for_ping_;
+
+  bool use_JSON_ = false;
 
  private:
+  bool OnRequest(content::URLLoaderInterceptor::RequestParams* params);
+
   base::test::ScopedFeatureList scoped_feature_list_;
 
   DISALLOW_COPY_AND_ASSIGN(ExtensionUpdateClientBaseTest);

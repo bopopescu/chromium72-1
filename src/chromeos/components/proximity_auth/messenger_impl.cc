@@ -15,14 +15,14 @@
 #include "base/location.h"
 #include "base/threading/thread_task_runner_handle.h"
 #include "base/values.h"
+#include "chromeos/chromeos_features.h"
 #include "chromeos/components/proximity_auth/logging/logging.h"
 #include "chromeos/components/proximity_auth/messenger_observer.h"
 #include "chromeos/components/proximity_auth/remote_status_update.h"
-#include "components/cryptauth/connection.h"
-#include "components/cryptauth/secure_context.h"
 #include "components/cryptauth/wire_message.h"
 
 namespace proximity_auth {
+
 namespace {
 
 // The key names of JSON fields for messages sent between the devices.
@@ -41,7 +41,6 @@ const char kMessageTypeUnlockResponse[] = "unlock_response";
 
 // The name for an unlock event originating from the local device.
 const char kUnlockEventName[] = "easy_unlock";
-const char kEasyUnlockFeatureName[] = "easy_unlock";
 
 // Serializes the |value| to a JSON string and returns the result.
 std::string SerializeValueToJson(const base::Value& value) {
@@ -62,18 +61,14 @@ std::string GetMessageType(const base::DictionaryValue& message) {
 }  // namespace
 
 MessengerImpl::MessengerImpl(
-    std::unique_ptr<cryptauth::Connection> connection,
-    std::unique_ptr<cryptauth::SecureContext> secure_context)
-    : connection_(std::move(connection)),
-      secure_context_(std::move(secure_context)),
-      weak_ptr_factory_(this) {
-  DCHECK(connection_->IsConnected());
-  connection_->AddObserver(this);
+    std::unique_ptr<chromeos::secure_channel::ClientChannel> channel)
+    : channel_(std::move(channel)), weak_ptr_factory_(this) {
+  DCHECK(!channel_->is_disconnected());
+  channel_->AddObserver(this);
 }
 
 MessengerImpl::~MessengerImpl() {
-  if (connection_)
-    connection_->RemoveObserver(this);
+  channel_->RemoveObserver(this);
 }
 
 void MessengerImpl::AddObserver(MessengerObserver* observer) {
@@ -85,8 +80,7 @@ void MessengerImpl::RemoveObserver(MessengerObserver* observer) {
 }
 
 bool MessengerImpl::SupportsSignIn() const {
-  return (secure_context_->GetProtocolVersion() ==
-          cryptauth::SecureContext::PROTOCOL_VERSION_THREE_ONE);
+  return true;
 }
 
 void MessengerImpl::DispatchUnlockEvent() {
@@ -134,15 +128,16 @@ void MessengerImpl::RequestUnlock() {
   ProcessMessageQueue();
 }
 
-cryptauth::SecureContext* MessengerImpl::GetSecureContext() const {
-  return secure_context_.get();
+chromeos::secure_channel::ClientChannel* MessengerImpl::GetChannel() const {
+  if (channel_->is_disconnected())
+    return nullptr;
+
+  return channel_.get();
 }
 
-cryptauth::Connection* MessengerImpl::GetConnection() const {
-  return connection_.get();
-}
+MessengerImpl::PendingMessage::PendingMessage() = default;
 
-MessengerImpl::PendingMessage::PendingMessage() {}
+MessengerImpl::PendingMessage::~PendingMessage() = default;
 
 MessengerImpl::PendingMessage::PendingMessage(
     const base::DictionaryValue& message)
@@ -152,83 +147,20 @@ MessengerImpl::PendingMessage::PendingMessage(
 MessengerImpl::PendingMessage::PendingMessage(const std::string& message)
     : json_message(message), type(std::string()) {}
 
-MessengerImpl::PendingMessage::~PendingMessage() {}
-
 void MessengerImpl::ProcessMessageQueue() {
-  if (pending_message_ || queued_messages_.empty() ||
-      connection_->is_sending_message())
+  if (pending_message_ || queued_messages_.empty())
+    return;
+
+  if (channel_->is_disconnected())
     return;
 
   pending_message_.reset(new PendingMessage(queued_messages_.front()));
   queued_messages_.pop_front();
 
-  secure_context_->Encode(pending_message_->json_message,
-                          base::Bind(&MessengerImpl::OnMessageEncoded,
-                                     weak_ptr_factory_.GetWeakPtr()));
-}
-
-void MessengerImpl::OnMessageEncoded(const std::string& encoded_message) {
-  connection_->SendMessage(std::make_unique<cryptauth::WireMessage>(
-      encoded_message, std::string(kEasyUnlockFeatureName)));
-}
-
-void MessengerImpl::OnMessageDecoded(const std::string& decoded_message) {
-  // The decoded message should be a JSON string.
-  std::unique_ptr<base::Value> message_value =
-      base::JSONReader::Read(decoded_message);
-  if (!message_value || !message_value->is_dict()) {
-    PA_LOG(ERROR) << "Unable to parse message as JSON:\n" << decoded_message;
-    return;
-  }
-
-  base::DictionaryValue* message;
-  bool success = message_value->GetAsDictionary(&message);
-  DCHECK(success);
-
-  std::string type;
-  if (!message->GetString(kTypeKey, &type)) {
-    PA_LOG(ERROR) << "Missing '" << kTypeKey << "' key in message:\n "
-                  << decoded_message;
-    return;
-  }
-
-  // Remote status updates can be received out of the blue.
-  if (type == kMessageTypeRemoteStatusUpdate) {
-    HandleRemoteStatusUpdateMessage(*message);
-    return;
-  }
-
-  // All other messages should only be received in response to a message that
-  // the messenger sent.
-  if (!pending_message_) {
-    PA_LOG(WARNING) << "Unexpected message received:\n" << decoded_message;
-    return;
-  }
-
-  std::string expected_type;
-  if (pending_message_->type == kMessageTypeDecryptRequest)
-    expected_type = kMessageTypeDecryptResponse;
-  else if (pending_message_->type == kMessageTypeUnlockRequest)
-    expected_type = kMessageTypeUnlockResponse;
-  else
-    NOTREACHED();  // There are no other message types that expect a response.
-
-  if (type != expected_type) {
-    PA_LOG(ERROR) << "Unexpected '" << kTypeKey << "' value in message. "
-                  << "Expected '" << expected_type << "' but received '" << type
-                  << "'.";
-    return;
-  }
-
-  if (type == kMessageTypeDecryptResponse)
-    HandleDecryptResponseMessage(*message);
-  else if (type == kMessageTypeUnlockResponse)
-    HandleUnlockResponseMessage(*message);
-  else
-    NOTREACHED();  // There are no other message types that expect a response.
-
-  pending_message_.reset();
-  ProcessMessageQueue();
+  channel_->SendMessage(
+      pending_message_->json_message,
+      base::BindOnce(&MessengerImpl::OnSendMessageResult,
+                     weak_ptr_factory_.GetWeakPtr(), true /* success */));
 }
 
 void MessengerImpl::HandleRemoteStatusUpdateMessage(
@@ -266,32 +198,74 @@ void MessengerImpl::HandleUnlockResponseMessage(
     observer.OnUnlockResponse(true);
 }
 
-void MessengerImpl::OnConnectionStatusChanged(
-    cryptauth::Connection* connection,
-    cryptauth::Connection::Status old_status,
-    cryptauth::Connection::Status new_status) {
-  DCHECK_EQ(connection, connection_.get());
-  if (new_status == cryptauth::Connection::Status::DISCONNECTED) {
-    PA_LOG(INFO) << "Secure channel disconnected...";
-    connection_->RemoveObserver(this);
-    for (auto& observer : observers_)
-      observer.OnDisconnected();
-    // TODO(isherman): Determine whether it's also necessary/appropriate to fire
-    // this notification from the destructor.
+void MessengerImpl::OnDisconnected() {
+  for (auto& observer : observers_)
+    observer.OnDisconnected();
+}
+
+void MessengerImpl::OnMessageReceived(const std::string& payload) {
+  HandleMessage(payload);
+}
+
+void MessengerImpl::HandleMessage(const std::string& message) {
+  // The decoded message should be a JSON string.
+  std::unique_ptr<base::Value> message_value = base::JSONReader::Read(message);
+  if (!message_value || !message_value->is_dict()) {
+    PA_LOG(ERROR) << "Unable to parse message as JSON:\n" << message;
+    return;
   }
+
+  base::DictionaryValue* message_dictionary;
+  bool success = message_value->GetAsDictionary(&message_dictionary);
+  DCHECK(success);
+
+  std::string type;
+  if (!message_dictionary->GetString(kTypeKey, &type)) {
+    PA_LOG(ERROR) << "Missing '" << kTypeKey << "' key in message:\n "
+                  << message;
+    return;
+  }
+
+  // Remote status updates can be received out of the blue.
+  if (type == kMessageTypeRemoteStatusUpdate) {
+    HandleRemoteStatusUpdateMessage(*message_dictionary);
+    return;
+  }
+
+  // All other messages should only be received in response to a message that
+  // the messenger sent.
+  if (!pending_message_) {
+    PA_LOG(WARNING) << "Unexpected message received: " << message;
+    return;
+  }
+
+  std::string expected_type;
+  if (pending_message_->type == kMessageTypeDecryptRequest)
+    expected_type = kMessageTypeDecryptResponse;
+  else if (pending_message_->type == kMessageTypeUnlockRequest)
+    expected_type = kMessageTypeUnlockResponse;
+  else
+    NOTREACHED();  // There are no other message types that expect a response.
+
+  if (type != expected_type) {
+    PA_LOG(ERROR) << "Unexpected '" << kTypeKey << "' value in message. "
+                  << "Expected '" << expected_type << "' but received '" << type
+                  << "'.";
+    return;
+  }
+
+  if (type == kMessageTypeDecryptResponse)
+    HandleDecryptResponseMessage(*message_dictionary);
+  else if (type == kMessageTypeUnlockResponse)
+    HandleUnlockResponseMessage(*message_dictionary);
+  else
+    NOTREACHED();  // There are no other message types that expect a response.
+
+  pending_message_.reset();
+  ProcessMessageQueue();
 }
 
-void MessengerImpl::OnMessageReceived(
-    const cryptauth::Connection& connection,
-    const cryptauth::WireMessage& wire_message) {
-  secure_context_->Decode(wire_message.payload(),
-                          base::Bind(&MessengerImpl::OnMessageDecoded,
-                                     weak_ptr_factory_.GetWeakPtr()));
-}
-
-void MessengerImpl::OnSendCompleted(const cryptauth::Connection& connection,
-                                    const cryptauth::WireMessage& wire_message,
-                                    bool success) {
+void MessengerImpl::OnSendMessageResult(bool success) {
   if (!pending_message_) {
     PA_LOG(ERROR) << "Unexpected message sent.";
     return;

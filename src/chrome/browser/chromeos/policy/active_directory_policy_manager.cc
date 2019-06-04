@@ -9,6 +9,9 @@
 
 #include "base/logging.h"
 #include "chrome/browser/browser_process.h"
+#include "chrome/browser/chromeos/login/users/affiliation.h"
+#include "chrome/browser/chromeos/login/users/chrome_user_manager.h"
+#include "chrome/browser/net/system_network_context_manager.h"
 #include "chromeos/cryptohome/cryptohome_parameters.h"
 #include "chromeos/dbus/auth_policy_client.h"
 #include "chromeos/dbus/dbus_thread_manager.h"
@@ -20,14 +23,14 @@
 #include "components/policy/core/common/policy_namespace.h"
 #include "components/policy/core/common/policy_switches.h"
 #include "components/policy/policy_constants.h"
-#include "net/url_request/url_request_context_getter.h"
+#include "services/network/public/cpp/shared_url_loader_factory.h"
 
 namespace em = enterprise_management;
 
 namespace policy {
 namespace {
 
-// List of policies where variables like ${machine_name} should be expanded.
+// List of policies where variables like ${MACHINE_NAME} should be expanded.
 constexpr const char* kPoliciesToExpand[] = {key::kNativePrinters};
 
 // Fetch policy every 90 minutes which matches the Windows default:
@@ -78,12 +81,15 @@ void ActiveDirectoryPolicyManager::Init(SchemaRegistry* registry) {
       kFetchInterval);
 
   if (external_data_manager_) {
-    // Use the system request context here instead of a context derived from the
+    // Use the system network context here instead of a context derived from the
     // Profile because Connect() is called before the profile is fully
     // initialized (required so we can perform the initial policy load).
-    // Note: The request context can be null for tests and for device policy.
+    // Note: The network context can be null for tests and for device policy.
     external_data_manager_->Connect(
-        g_browser_process->system_request_context());
+        g_browser_process->system_network_context_manager()
+            ? g_browser_process->system_network_context_manager()
+                  ->GetSharedURLLoaderFactory()
+            : nullptr);
   }
 }
 
@@ -150,9 +156,10 @@ void ActiveDirectoryPolicyManager::OnComponentActiveDirectoryPolicyUpdated() {
 }
 
 void ActiveDirectoryPolicyManager::PublishPolicy() {
-  if (!store_->is_initialized()) {
+  if (!store_->is_initialized())
     return;
-  }
+  OnPublishPolicy();
+
   std::unique_ptr<PolicyBundle> bundle = std::make_unique<PolicyBundle>();
   PolicyMap& policy_map =
       bundle->Get(PolicyNamespace(POLICY_DOMAIN_CHROME, std::string()));
@@ -166,7 +173,7 @@ void ActiveDirectoryPolicyManager::PublishPolicy() {
   policy_map.SetSourceForAll(POLICY_SOURCE_ACTIVE_DIRECTORY);
   SetEnterpriseUsersDefaults(&policy_map);
 
-  // Expand e.g. ${machine_name} for a selected set of policies.
+  // Expand e.g. ${MACHINE_NAME} for a selected set of policies.
   ExpandVariables(&policy_map);
 
   // Policy is ready, send it off.
@@ -217,8 +224,11 @@ void ActiveDirectoryPolicyManager::ExpandVariables(PolicyMap* policy_map) {
     return;
   }
 
+  // TODO(rsorokin): remove "machine_name" in M72 (see
+  // https://crbug.com/875876).
   chromeos::VariableExpander expander(
-      {{"machine_name", policy->machine_name()}});
+      {{"MACHINE_NAME", policy->machine_name()},
+       {"machine_name", policy->machine_name()}});
   for (const char* policy_name : kPoliciesToExpand) {
     base::Value* value = policy_map->GetMutableValue(policy_name);
     if (value) {
@@ -259,7 +269,8 @@ UserActiveDirectoryPolicyManager::UserActiveDirectoryPolicyManager(
 UserActiveDirectoryPolicyManager::~UserActiveDirectoryPolicyManager() = default;
 
 void UserActiveDirectoryPolicyManager::Init(SchemaRegistry* registry) {
-  DCHECK(store()->is_initialized() || waiting_for_initial_policy_fetch_);
+  DCHECK(store()->is_initialized() || waiting_for_initial_policy_fetch_ ||
+         !policy_required_ /* policy may not be required in tests */);
   if (store()->is_initialized() && !store()->has_policy() && policy_required_) {
     // Exit the session in case of immediate load if policy is required.
     LOG(ERROR) << "Policy from forced immediate load could not be obtained. "
@@ -323,6 +334,20 @@ void UserActiveDirectoryPolicyManager::CancelWaitForInitialPolicy() {
   // Publish policy (even though it hasn't changed) in order to signal load
   // complete on the ConfigurationPolicyProvider interface.
   PublishPolicy();
+}
+
+void UserActiveDirectoryPolicyManager::OnPublishPolicy() {
+  const em::PolicyData* policy_data = store()->policy();
+  if (!policy_data)
+    return;
+
+  // Update user affiliation IDs.
+  chromeos::AffiliationIDSet set_of_user_affiliation_ids(
+      policy_data->user_affiliation_ids().begin(),
+      policy_data->user_affiliation_ids().end());
+
+  chromeos::ChromeUserManager::Get()->SetUserAffiliation(
+      account_id_, set_of_user_affiliation_ids);
 }
 
 void UserActiveDirectoryPolicyManager::OnBlockingFetchTimeout() {

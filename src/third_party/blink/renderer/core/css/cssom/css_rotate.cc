@@ -4,11 +4,11 @@
 
 #include "third_party/blink/renderer/core/css/cssom/css_rotate.h"
 
-#include "third_party/blink/renderer/bindings/core/v8/exception_state.h"
 #include "third_party/blink/renderer/core/css/css_function_value.h"
 #include "third_party/blink/renderer/core/css/css_primitive_value.h"
 #include "third_party/blink/renderer/core/css/cssom/css_unit_value.h"
 #include "third_party/blink/renderer/core/geometry/dom_matrix.h"
+#include "third_party/blink/renderer/platform/bindings/exception_state.h"
 
 namespace blink {
 
@@ -75,8 +75,9 @@ CSSRotate* CSSRotate::Create(CSSNumericValue* angle,
     exception_state.ThrowTypeError("Must pass an angle to CSSRotate");
     return nullptr;
   }
-  return new CSSRotate(CSSUnitValue::Create(0), CSSUnitValue::Create(0),
-                       CSSUnitValue::Create(1), angle, true /* is2D */);
+  return MakeGarbageCollected<CSSRotate>(
+      CSSUnitValue::Create(0), CSSUnitValue::Create(0), CSSUnitValue::Create(1),
+      angle, true /* is2D */);
 }
 
 CSSRotate* CSSRotate::Create(const CSSNumberish& x,
@@ -97,19 +98,21 @@ CSSRotate* CSSRotate::Create(const CSSNumberish& x,
     exception_state.ThrowTypeError("Must pass an angle to CSSRotate");
     return nullptr;
   }
-  return new CSSRotate(x_value, y_value, z_value, angle, false /* is2D */);
+  return MakeGarbageCollected<CSSRotate>(x_value, y_value, z_value, angle,
+                                         false /* is2D */);
 }
 
 CSSRotate* CSSRotate::Create(CSSNumericValue* angle) {
-  return new CSSRotate(CSSUnitValue::Create(0), CSSUnitValue::Create(0),
-                       CSSUnitValue::Create(1), angle, true /* is2D */);
+  return MakeGarbageCollected<CSSRotate>(
+      CSSUnitValue::Create(0), CSSUnitValue::Create(0), CSSUnitValue::Create(1),
+      angle, true /* is2D */);
 }
 
 CSSRotate* CSSRotate::Create(CSSNumericValue* x,
                              CSSNumericValue* y,
                              CSSNumericValue* z,
                              CSSNumericValue* angle) {
-  return new CSSRotate(x, y, z, angle, false /* is2D */);
+  return MakeGarbageCollected<CSSRotate>(x, y, z, angle, false /* is2D */);
 }
 
 CSSRotate* CSSRotate::FromCSSValue(const CSSFunctionValue& value) {

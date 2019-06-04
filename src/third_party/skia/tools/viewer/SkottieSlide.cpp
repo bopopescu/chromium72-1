@@ -7,11 +7,17 @@
 
 #include "SkottieSlide.h"
 
+#if defined(SK_ENABLE_SKOTTIE)
+
 #include "SkAnimTimer.h"
 #include "SkCanvas.h"
+#include "SkOSPath.h"
 #include "Skottie.h"
+#include "SkottieUtils.h"
 
-static void draw_stats_box(SkCanvas* canvas, const skottie::Animation::Stats& stats) {
+#include <cmath>
+
+static void draw_stats_box(SkCanvas* canvas, const skottie::Animation::Builder::Stats& stats) {
     static constexpr SkRect kR = { 10, 10, 280, 120 };
     static constexpr SkScalar kTextSize = 20;
 
@@ -55,17 +61,58 @@ SkottieSlide::SkottieSlide(const SkString& name, const SkString& path)
 }
 
 void SkottieSlide::load(SkScalar w, SkScalar h) {
-    fAnimation = skottie::Animation::MakeFromFile(fPath.c_str(), nullptr, &fAnimationStats);
-    fWinSize   = SkSize::Make(w, h);
-    fTimeBase  = 0; // force a time reset
+    class Logger final : public skottie::Logger {
+    public:
+        struct LogEntry {
+            SkString fMessage,
+                     fJSON;
+        };
+
+        void log(skottie::Logger::Level lvl, const char message[], const char json[]) override {
+            auto& log = lvl == skottie::Logger::Level::kError ? fErrors : fWarnings;
+            log.push_back({ SkString(message), json ? SkString(json) : SkString() });
+        }
+
+        void report() const {
+            SkDebugf("Animation loaded with %lu error%s, %lu warning%s.\n",
+                     fErrors.size(), fErrors.size() == 1 ? "" : "s",
+                     fWarnings.size(), fWarnings.size() == 1 ? "" : "s");
+
+            const auto& show = [](const LogEntry& log, const char prefix[]) {
+                SkDebugf("%s%s", prefix, log.fMessage.c_str());
+                if (!log.fJSON.isEmpty())
+                    SkDebugf(" : %s", log.fJSON.c_str());
+                SkDebugf("\n");
+            };
+
+            for (const auto& err : fErrors)   show(err, "  !! ");
+            for (const auto& wrn : fWarnings) show(wrn, "  ?? ");
+        }
+
+    private:
+        std::vector<LogEntry> fErrors,
+                              fWarnings;
+    };
+
+    auto logger = sk_make_sp<Logger>();
+    skottie::Animation::Builder builder;
+
+    fAnimation      = builder
+            .setLogger(logger)
+            .setResourceProvider(
+                skottie_utils::FileResourceProvider::Make(SkOSPath::Dirname(fPath.c_str())))
+            .makeFromFile(fPath.c_str());
+    fAnimationStats = builder.getStats();
+    fWinSize        = SkSize::Make(w, h);
+    fTimeBase       = 0; // force a time reset
 
     if (fAnimation) {
         fAnimation->setShowInval(fShowAnimationInval);
-        SkDebugf("loaded Bodymovin animation v: %s, size: [%f %f], fr: %f\n",
+        SkDebugf("Loaded Bodymovin animation v: %s, size: [%f %f]\n",
                  fAnimation->version().c_str(),
                  fAnimation->size().width(),
-                 fAnimation->size().height(),
-                 fAnimation->frameRate());
+                 fAnimation->size().height());
+        logger->report();
     } else {
         SkDebugf("failed to load Bodymovin animation: %s\n", fPath.c_str());
     }
@@ -99,8 +146,9 @@ bool SkottieSlide::animate(const SkAnimTimer& timer) {
     }
 
     if (fAnimation) {
-        auto t = timer.msec() - fTimeBase;
-        fAnimation->animationTick(t);
+        const auto t = timer.msec() - fTimeBase;
+        const auto d = fAnimation->duration() * 1000;
+        fAnimation->seek(std::fmod(t, d) / d);
     }
     return true;
 }
@@ -130,3 +178,5 @@ bool SkottieSlide::onMouse(SkScalar x, SkScalar y, sk_app::Window::InputState st
 
     return false;
 }
+
+#endif // SK_ENABLE_SKOTTIE

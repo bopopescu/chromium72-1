@@ -7,17 +7,23 @@
 #include <string>
 #include <utility>
 
+#include "base/command_line.h"
+#include "base/files/file_path.h"
+#include "base/files/file_util.h"
 #include "base/json/json_reader.h"
 #include "base/metrics/field_trial.h"
 #include "base/trace_event/trace_log.h"
 #include "build/build_config.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/tracing/crash_service_uploader.h"
+#include "chrome/common/chrome_switches.h"
+#include "components/tracing/common/tracing_switches.h"
 #include "components/variations/variations_associated_data.h"
 #include "content/public/browser/background_tracing_config.h"
 #include "content/public/browser/background_tracing_manager.h"
 #include "content/public/browser/browser_thread.h"
 #include "net/base/network_change_notifier.h"
+#include "services/network/public/cpp/shared_url_loader_factory.h"
 #include "url/gurl.h"
 
 namespace tracing {
@@ -45,7 +51,7 @@ void BackgroundTracingUploadCallback(
     std::unique_ptr<const base::DictionaryValue> metadata,
     content::BackgroundTracingManager::FinishedProcessingCallback callback) {
   TraceCrashServiceUploader* uploader = new TraceCrashServiceUploader(
-      g_browser_process->system_request_context());
+      g_browser_process->shared_url_loader_factory());
 
   if (GURL(upload_url).is_valid())
     uploader->SetUploadURL(upload_url);
@@ -67,30 +73,41 @@ void BackgroundTracingUploadCallback(
                      std::move(callback)));
 }
 
-}  // namespace
-
-void SetConfigTextFilterForTesting(ConfigTextFilterForTesting predicate) {
-  g_config_text_filter_for_testing = predicate;
-}
-
-void SetupBackgroundTracingFieldTrial() {
-  if (base::trace_event::TraceLog::GetInstance()->IsEnabled())
-    return;
-
+std::unique_ptr<content::BackgroundTracingConfig> GetBackgroundTracingConfig() {
   std::string config_text = variations::GetVariationParamValue(
       kBackgroundTracingFieldTrial, kBackgroundTracingConfig);
-  std::string upload_url = variations::GetVariationParamValue(
-      kBackgroundTracingFieldTrial, kBackgroundTracingUploadUrl);
 
   if (config_text.empty())
-    return;
+    return nullptr;
 
   if (g_config_text_filter_for_testing)
     (*g_config_text_filter_for_testing)(&config_text);
 
   std::unique_ptr<base::Value> value = base::JSONReader::Read(config_text);
   if (!value)
+    return nullptr;
+
+  const base::DictionaryValue* dict = nullptr;
+  if (!value->GetAsDictionary(&dict))
+    return nullptr;
+
+  return content::BackgroundTracingConfig::FromDict(dict);
+}
+
+void SetupBackgroundTracingFromConfigFile(const base::FilePath& config_file,
+                                          const std::string& upload_url) {
+  std::string config_text;
+  if (upload_url.empty() ||
+      !base::ReadFileToString(config_file, &config_text) ||
+      config_text.empty()) {
     return;
+  }
+
+  std::unique_ptr<base::Value> value = base::JSONReader::Read(config_text);
+  if (!value) {
+    LOG(ERROR) << "Background tracing has incorrect config: " << config_text;
+    return;
+  }
 
   const base::DictionaryValue* dict = nullptr;
   if (!value->GetAsDictionary(&dict))
@@ -98,12 +115,36 @@ void SetupBackgroundTracingFieldTrial() {
 
   std::unique_ptr<content::BackgroundTracingConfig> config =
       content::BackgroundTracingConfig::FromDict(dict);
-  if (!config)
-    return;
-
   content::BackgroundTracingManager::GetInstance()->SetActiveScenario(
       std::move(config),
-      base::BindOnce(&BackgroundTracingUploadCallback, upload_url),
+      base::BindRepeating(&BackgroundTracingUploadCallback, upload_url),
+      content::BackgroundTracingManager::NO_DATA_FILTERING);
+}
+
+}  // namespace
+
+void SetConfigTextFilterForTesting(ConfigTextFilterForTesting predicate) {
+  g_config_text_filter_for_testing = predicate;
+}
+
+void SetupBackgroundTracingFieldTrial() {
+  auto* command_line = base::CommandLine::ForCurrentProcess();
+  if (command_line->HasSwitch(switches::kEnableBackgroundTracing) &&
+      command_line->HasSwitch(switches::kTraceUploadURL)) {
+    tracing::SetupBackgroundTracingFromConfigFile(
+        command_line->GetSwitchValuePath(switches::kEnableBackgroundTracing),
+        command_line->GetSwitchValueASCII(switches::kTraceUploadURL));
+    return;
+  }
+
+  std::unique_ptr<content::BackgroundTracingConfig> config =
+      GetBackgroundTracingConfig();
+
+  std::string upload_url = variations::GetVariationParamValue(
+      kBackgroundTracingFieldTrial, kBackgroundTracingUploadUrl);
+  content::BackgroundTracingManager::GetInstance()->SetActiveScenario(
+      std::move(config),
+      base::BindRepeating(&BackgroundTracingUploadCallback, upload_url),
       content::BackgroundTracingManager::ANONYMIZE_DATA);
 }
 

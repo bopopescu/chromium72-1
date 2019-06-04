@@ -75,13 +75,9 @@ class ImageTransportSurfaceOverlayMac : public gl::GLSurface,
  private:
   ~ImageTransportSurfaceOverlayMac() override;
 
-  void SetSnapshotRequested();
-  bool GetAndResetSnapshotRequested();
-
   gfx::SwapResult SwapBuffersInternal(const gfx::Rect& pixel_damage_rect,
                                       const PresentationCallback& callback);
-  void ApplyBackpressure(base::TimeTicks* before_flush_time,
-                         base::TimeTicks* after_flush_before_commit_time);
+  void ApplyBackpressure();
   void BufferPresented(const PresentationCallback& callback,
                        const gfx::PresentationFeedback& feedback);
 
@@ -96,10 +92,9 @@ class ImageTransportSurfaceOverlayMac : public gl::GLSurface,
 
   std::vector<CALayerInUseQuery> ca_layer_in_use_queries_;
 
-  // A GLFence marking the end of the previous frame. Must only be accessed
-  // while the associated |previous_frame_context_| is bound.
-  std::unique_ptr<gl::GLFence> previous_frame_fence_;
-  base::ScopedTypeRef<CGLContextObj> fence_context_obj_;
+  // A GLFence marking the end of the previous frame, used for applying
+  // backpressure.
+  uint64_t previous_frame_fence_ = 0;
 
   // The renderer ID that all contexts made current to this surface should be
   // targeting.

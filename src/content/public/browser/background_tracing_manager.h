@@ -34,16 +34,16 @@ class BackgroundTracingManager {
   // void Upload(const scoped_refptr<base::RefCountedString>& data,
   //             FinishedProcessingCallback done_callback) {
   //   base::PostTaskWithTraitsAndReply(
-  //       FROM_HERE, {base::MayBlock(), base::TaskPriority::BACKGROUND},
+  //       FROM_HERE, {base::MayBlock(), base::TaskPriority::BEST_EFFORT},
   //       base::BindOnce(&DoUploadInBackground, data),
   //       std::move(done_callback));
   // }
   //
   using FinishedProcessingCallback = base::OnceCallback<void(bool success)>;
   using ReceiveCallback =
-      base::OnceCallback<void(const scoped_refptr<base::RefCountedString>&,
-                              std::unique_ptr<const base::DictionaryValue>,
-                              FinishedProcessingCallback)>;
+      base::RepeatingCallback<void(const scoped_refptr<base::RefCountedString>&,
+                                   std::unique_ptr<const base::DictionaryValue>,
+                                   FinishedProcessingCallback)>;
 
   // Set the triggering rules for when to start recording.
   //
@@ -90,6 +90,8 @@ class BackgroundTracingManager {
 
   virtual bool HasActiveScenario() = 0;
 
+  // For tests
+  virtual void AbortScenario() = 0;
   virtual void InvalidateTriggerHandlesForTesting() = 0;
   virtual void FireTimerForTesting() = 0;
 

@@ -33,14 +33,9 @@
 
 #include <string.h>
 #include "base/allocator/partition_allocator/partition_alloc.h"
-#include "base/allocator/partition_allocator/spin_lock.h"
+#include "base/logging.h"
 #include "base/numerics/checked_math.h"
-#include "third_party/blink/renderer/platform/wtf/assertions.h"
-#include "third_party/blink/renderer/platform/wtf/wtf.h"
 #include "third_party/blink/renderer/platform/wtf/wtf_export.h"
-#if defined(USE_MEMORY_TRACE)
-#include "base/allocator/partition_allocator/neva/partition_alloc.h"
-#endif
 
 namespace WTF {
 
@@ -68,11 +63,6 @@ class WTF_EXPORT Partitions {
     return fast_malloc_allocator_->root();
   }
 
-  ALWAYS_INLINE static base::PartitionRoot* NodePartition() {
-    NOTREACHED();
-    return nullptr;
-  }
-
   ALWAYS_INLINE static base::PartitionRoot* LayoutPartition() {
     DCHECK(initialized_);
     return layout_allocator_->root();
@@ -82,11 +72,6 @@ class WTF_EXPORT Partitions {
     base::CheckedNumeric<size_t> total = count;
     total *= size;
     return total.ValueOrDie();
-  }
-
-  static size_t CurrentDOMMemoryUsage() {
-    NOTREACHED();
-    return 0;
   }
 
   static size_t TotalSizeOfCommittedPages() {
@@ -108,10 +93,6 @@ class WTF_EXPORT Partitions {
 
   static void DumpMemoryStats(bool is_light_dump, base::PartitionStatsDumper*);
 
-#if defined(USE_MEMORY_TRACE)
-  static void TraceMemoryStats(base::neva::PartitionStatsTracer*);
-#endif
-
   ALWAYS_INLINE static void* BufferMalloc(size_t n, const char* type_name) {
     return BufferPartition()->Alloc(n, type_name);
   }
@@ -120,6 +101,11 @@ class WTF_EXPORT Partitions {
                                            const char* type_name) {
     return BufferPartition()->Realloc(p, n, type_name);
   }
+  ALWAYS_INLINE static void* BufferTryRealloc(void* p,
+                                              size_t n,
+                                              const char* type_name) {
+    return BufferPartition()->TryRealloc(p, n, type_name);
+  }
   ALWAYS_INLINE static void BufferFree(void* p) { BufferPartition()->Free(p); }
   ALWAYS_INLINE static size_t BufferActualSize(size_t n) {
     return BufferPartition()->ActualSize(n);
@@ -127,10 +113,12 @@ class WTF_EXPORT Partitions {
   static void* FastMalloc(size_t n, const char* type_name) {
     return Partitions::FastMallocPartition()->Alloc(n, type_name);
   }
+  static void* FastMallocFlags(int flags, size_t n, const char* type_name) {
+    return Partitions::FastMallocPartition()->AllocFlags(flags, n, type_name);
+  }
   static void* FastZeroedMalloc(size_t n, const char* type_name) {
-    void* result = FastMalloc(n, type_name);
-    memset(result, 0, n);
-    return result;
+    return Partitions::FastMallocPartition()->AllocFlags(
+        base::PartitionAllocZeroFill, n, type_name);
   }
   static void* FastRealloc(void* p, size_t n, const char* type_name) {
     return Partitions::FastMallocPartition()->Realloc(p, n, type_name);
@@ -149,35 +137,6 @@ class WTF_EXPORT Partitions {
   static base::SizeSpecificPartitionAllocator<1024>* layout_allocator_;
   static ReportPartitionAllocSizeFunction report_size_function_;
 };
-
-using base::kGenericMaxDirectMapped;
-using base::kPageAllocationGranularity;
-using base::kPageAllocationGranularityBaseMask;
-using base::kPageAllocationGranularityOffsetMask;
-using base::kSystemPageSize;
-
-using base::AllocPages;
-using base::DecommitSystemPages;
-using base::DiscardSystemPages;
-using base::PartitionFree;
-using base::FreePages;
-using base::GetAllocPageErrorCode;
-using base::RecommitSystemPages;
-using base::RoundDownToSystemPage;
-using base::RoundUpToSystemPage;
-using base::SetSystemPagesAccess;
-
-using base::PageInaccessible;
-using base::PageReadWrite;
-using base::PartitionStatsDumper;
-#if defined(USE_MEMORY_TRACE)
-using base::neva::PartitionStatsTracer;
-#endif
-using base::PartitionMemoryStats;
-using base::PartitionBucketMemoryStats;
-using base::PartitionAllocHooks;
-
-using CheckedSizeT = base::CheckedNumeric<size_t>;
 
 }  // namespace WTF
 

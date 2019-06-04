@@ -5,42 +5,48 @@
 #include "ui/views/event_monitor_aura.h"
 
 #include "base/logging.h"
-#include "base/memory/ptr_util.h"
 #include "ui/aura/env.h"
 #include "ui/aura/window.h"
+#include "ui/events/event_observer.h"
 #include "ui/events/event_target.h"
 
 namespace views {
 
 // static
 std::unique_ptr<EventMonitor> EventMonitor::CreateApplicationMonitor(
-    ui::EventHandler* event_handler) {
-  return base::WrapUnique(
-      new EventMonitorAura(event_handler, aura::Env::GetInstance()));
+    ui::EventObserver* event_observer,
+    gfx::NativeWindow context,
+    const std::set<ui::EventType>& types) {
+  aura::Env* env = context->env();
+  return std::make_unique<EventMonitorAura>(env, event_observer, env, types);
 }
 
 // static
 std::unique_ptr<EventMonitor> EventMonitor::CreateWindowMonitor(
-    ui::EventHandler* event_handler,
-    gfx::NativeWindow target_window) {
-  return base::WrapUnique(new EventMonitorAura(event_handler, target_window));
+    ui::EventObserver* event_observer,
+    gfx::NativeWindow target_window,
+    const std::set<ui::EventType>& types) {
+  return std::make_unique<EventMonitorAura>(
+      target_window->env(), event_observer, target_window, types);
 }
 
-// static
-gfx::Point EventMonitor::GetLastMouseLocation() {
-  return aura::Env::GetInstance()->last_mouse_location();
-}
-
-EventMonitorAura::EventMonitorAura(ui::EventHandler* event_handler,
-                                   ui::EventTarget* event_target)
-    : event_handler_(event_handler), event_target_(event_target) {
-  DCHECK(event_handler_);
+EventMonitorAura::EventMonitorAura(aura::Env* env,
+                                   ui::EventObserver* event_observer,
+                                   ui::EventTarget* event_target,
+                                   const std::set<ui::EventType>& types)
+    : env_(env), event_observer_(event_observer), event_target_(event_target) {
+  DCHECK(env_);
+  DCHECK(event_observer_);
   DCHECK(event_target_);
-  event_target_->AddPreTargetHandler(event_handler_);
+  env_->AddEventObserver(event_observer_, event_target, types);
 }
 
 EventMonitorAura::~EventMonitorAura() {
-  event_target_->RemovePreTargetHandler(event_handler_);
+  env_->RemoveEventObserver(event_observer_);
+}
+
+gfx::Point EventMonitorAura::GetLastMouseLocation() {
+  return env_->last_mouse_location();
 }
 
 }  // namespace views

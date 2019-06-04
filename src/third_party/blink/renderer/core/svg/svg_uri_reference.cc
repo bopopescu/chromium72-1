@@ -25,7 +25,6 @@
 #include "third_party/blink/renderer/core/html/parser/html_parser_idioms.h"
 #include "third_party/blink/renderer/core/svg/svg_element.h"
 #include "third_party/blink/renderer/core/xlink_names.h"
-#include "third_party/blink/renderer/platform/weborigin/kurl.h"
 #include "third_party/blink/renderer/platform/wtf/functional.h"
 
 namespace blink {
@@ -62,9 +61,9 @@ bool SVGURIReference::IsKnownAttribute(const QualifiedName& attr_name) {
 
 const AtomicString& SVGURIReference::LegacyHrefString(
     const SVGElement& element) {
-  if (element.hasAttribute(SVGNames::hrefAttr))
-    return element.getAttribute(SVGNames::hrefAttr);
-  return element.getAttribute(XLinkNames::hrefAttr);
+  if (element.hasAttribute(svg_names::kHrefAttr))
+    return element.getAttribute(svg_names::kHrefAttr);
+  return element.getAttribute(xlink_names::kHrefAttr);
 }
 
 KURL SVGURIReference::LegacyHrefURL(const Document& document) const {

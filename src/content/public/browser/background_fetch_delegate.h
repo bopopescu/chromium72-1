@@ -12,31 +12,45 @@
 #include "base/callback_forward.h"
 #include "base/files/file_path.h"
 #include "base/macros.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
+#include "base/optional.h"
 #include "content/common/content_export.h"
+#include "content/public/browser/resource_request_info.h"
+#include "services/network/public/cpp/resource_request_body.h"
+#include "third_party/blink/public/platform/modules/background_fetch/background_fetch.mojom.h"
+#include "third_party/skia/include/core/SkBitmap.h"
 
 class GURL;
 
 namespace gfx {
 class Size;
-}
+}  // namespace gfx
 
 namespace net {
 class HttpRequestHeaders;
 struct NetworkTrafficAnnotationTag;
 }  // namespace net
 
+namespace url {
+class Origin;
+}  // namespace url
+
 namespace content {
 struct BackgroundFetchResponse;
 struct BackgroundFetchResult;
 struct BackgroundFetchDescription;
 
-// Various reasons a Background Fetch can get aborted.
-enum class BackgroundFetchReasonToAbort {
-  NONE,
-  CANCELLED_FROM_UI,
-  ABORTED_BY_DEVELOPER,
-  TOTAL_DOWNLOAD_SIZE_EXCEEDED,
+enum class BackgroundFetchPermission {
+  // Background Fetch is allowed.
+  ALLOWED,
+
+  // Background Fetch should be started in a paused state, to let the user
+  // decide whether to continue.
+  ASK,
+
+  // Background Fetch is blocked.
+  BLOCKED,
 };
 
 // Interface for launching background fetches. Implementing classes would
@@ -46,6 +60,10 @@ enum class BackgroundFetchReasonToAbort {
 class CONTENT_EXPORT BackgroundFetchDelegate {
  public:
   using GetIconDisplaySizeCallback = base::OnceCallback<void(const gfx::Size&)>;
+  using GetPermissionForOriginCallback =
+      base::OnceCallback<void(BackgroundFetchPermission)>;
+  using GetUploadDataCallback =
+      base::OnceCallback<void(scoped_refptr<network::ResourceRequestBody>)>;
 
   // Client interface that a BackgroundFetchDelegate would use to signal the
   // progress of a background fetch.
@@ -57,7 +75,7 @@ class CONTENT_EXPORT BackgroundFetchDelegate {
     // e.g. because the user clicked cancel on a notification.
     virtual void OnJobCancelled(
         const std::string& job_unique_id,
-        BackgroundFetchReasonToAbort reason_to_abort) = 0;
+        blink::mojom::BackgroundFetchFailureReason reason_to_abort) = 0;
 
     // Called after the download has started with the initial response
     // (including headers and URL chain). Always called on the UI thread.
@@ -79,9 +97,21 @@ class CONTENT_EXPORT BackgroundFetchDelegate {
         const std::string& download_guid,
         std::unique_ptr<BackgroundFetchResult> result) = 0;
 
+    // Called when the UI of a background fetch job is activated.
+    virtual void OnUIActivated(const std::string& job_unique_id) = 0;
+
     // Called by the delegate when it's shutting down to signal that the
     // delegate is no longer valid.
     virtual void OnDelegateShutdown() = 0;
+
+    // Called after the UI has been updated.
+    virtual void OnUIUpdated(const std::string& job_unique_id) = 0;
+
+    // Called by the Download Client when it needs the upload data for
+    // the given |download_guid|.
+    virtual void GetUploadData(const std::string& job_unique_id,
+                               const std::string& download_guid,
+                               GetUploadDataCallback callback) = 0;
   };
 
   BackgroundFetchDelegate();
@@ -90,6 +120,13 @@ class CONTENT_EXPORT BackgroundFetchDelegate {
 
   // Gets size of the icon to display with the Background Fetch UI.
   virtual void GetIconDisplaySize(GetIconDisplaySizeCallback callback) = 0;
+
+  // Checks whether |origin| has permission to start a Background Fetch.
+  // |wc_getter| can be null, which means this is running from a worker context.
+  virtual void GetPermissionForOrigin(
+      const url::Origin& origin,
+      const ResourceRequestInfo::WebContentsGetter& wc_getter,
+      GetPermissionForOriginCallback callback) = 0;
 
   // Creates a new download grouping identified by |job_unique_id|. Further
   // downloads started by DownloadUrl will also use this |job_unique_id| so that
@@ -108,10 +145,20 @@ class CONTENT_EXPORT BackgroundFetchDelegate {
       const std::string& method,
       const GURL& url,
       const net::NetworkTrafficAnnotationTag& traffic_annotation,
-      const net::HttpRequestHeaders& headers) = 0;
+      const net::HttpRequestHeaders& headers,
+      bool has_request_body) = 0;
 
   // Aborts any downloads associated with |job_unique_id|.
   virtual void Abort(const std::string& job_unique_id) = 0;
+
+  // Called after the fetch has completed so that the delegate can clean up.
+  virtual void MarkJobComplete(const std::string& job_unique_id) = 0;
+
+  // Updates the UI shown for the fetch job associated with |job_unique_id| to
+  // display a new |title| or |icon|.
+  virtual void UpdateUI(const std::string& job_unique_id,
+                        const base::Optional<std::string>& title,
+                        const base::Optional<SkBitmap>& icon) = 0;
 
   // Set the client that the delegate should communicate changes to.
   void SetDelegateClient(base::WeakPtr<Client> client) { client_ = client; }

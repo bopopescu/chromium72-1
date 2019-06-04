@@ -4,57 +4,58 @@
 
 #include "ash/assistant/assistant_controller.h"
 
-#include "ash/assistant/model/assistant_interaction_model_observer.h"
-#include "ash/assistant/model/assistant_query.h"
-#include "ash/assistant/model/assistant_ui_element.h"
-#include "ash/assistant/ui/assistant_bubble.h"
+#include <algorithm>
+#include <utility>
+
+#include "ash/accessibility/accessibility_controller.h"
+#include "ash/assistant/assistant_cache_controller.h"
+#include "ash/assistant/assistant_controller_observer.h"
+#include "ash/assistant/assistant_interaction_controller.h"
+#include "ash/assistant/assistant_notification_controller.h"
+#include "ash/assistant/assistant_screen_context_controller.h"
+#include "ash/assistant/assistant_setup_controller.h"
+#include "ash/assistant/assistant_ui_controller.h"
+#include "ash/assistant/util/deep_link_util.h"
+#include "ash/new_window_controller.h"
 #include "ash/session/session_controller.h"
 #include "ash/shell.h"
-#include "ash/shell_delegate.h"
-#include "ash/system/toast/toast_data.h"
-#include "ash/system/toast/toast_manager.h"
+#include "ash/utility/screenshot_controller.h"
+#include "ash/voice_interaction/voice_interaction_controller.h"
 #include "base/bind.h"
 #include "base/memory/scoped_refptr.h"
-#include "base/strings/utf_string_conversions.h"
-#include "base/unguessable_token.h"
-#include "ui/snapshot/snapshot.h"
+#include "services/content/public/mojom/constants.mojom.h"
+#include "services/service_manager/public/cpp/connector.h"
 
 namespace ash {
 
-namespace {
-
-// Toast -----------------------------------------------------------------------
-
-constexpr int kToastDurationMs = 2500;
-constexpr char kUnboundServiceToastId[] =
-    "assistant_controller_unbound_service";
-
-// TODO(b/77638210): Localize string.
-constexpr char kSomethingWentWrong[] =
-    "Something went wrong. Try again in a few seconds.";
-
-void ShowToast(const std::string& id, const std::string& text) {
-  ToastData toast(id, base::UTF8ToUTF16(text), kToastDurationMs, base::nullopt);
-  Shell::Get()->toast_manager()->Show(toast);
-}
-
-}  // namespace
-
-// AssistantController ---------------------------------------------------------
-
 AssistantController::AssistantController()
-    : assistant_event_subscriber_binding_(this),
-      assistant_bubble_(std::make_unique<AssistantBubble>(this)) {
-  AddInteractionModelObserver(this);
-  Shell::Get()->highlighter_controller()->AddObserver(this);
+    : assistant_volume_control_binding_(this),
+      assistant_cache_controller_(
+          std::make_unique<AssistantCacheController>(this)),
+      assistant_interaction_controller_(
+          std::make_unique<AssistantInteractionController>(this)),
+      assistant_notification_controller_(
+          std::make_unique<AssistantNotificationController>(this)),
+      assistant_screen_context_controller_(
+          std::make_unique<AssistantScreenContextController>(this)),
+      assistant_setup_controller_(
+          std::make_unique<AssistantSetupController>(this)),
+      assistant_ui_controller_(std::make_unique<AssistantUiController>(this)),
+      weak_factory_(this) {
+  Shell::Get()->voice_interaction_controller()->AddLocalObserver(this);
+  chromeos::CrasAudioHandler::Get()->AddAudioObserver(this);
+  AddObserver(this);
+
+  NotifyConstructed();
 }
 
 AssistantController::~AssistantController() {
-  Shell::Get()->highlighter_controller()->RemoveObserver(this);
-  RemoveInteractionModelObserver(this);
+  NotifyDestroying();
 
-  assistant_controller_bindings_.CloseAllBindings();
-  assistant_event_subscriber_binding_.Close();
+  chromeos::CrasAudioHandler::Get()->RemoveAudioObserver(this);
+  Shell::Get()->accessibility_controller()->RemoveObserver(this);
+  Shell::Get()->voice_interaction_controller()->RemoveLocalObserver(this);
+  RemoveObserver(this);
 }
 
 void AssistantController::BindRequest(
@@ -62,19 +63,35 @@ void AssistantController::BindRequest(
   assistant_controller_bindings_.AddBinding(this, std::move(request));
 }
 
+void AssistantController::BindRequest(
+    mojom::AssistantVolumeControlRequest request) {
+  assistant_volume_control_binding_.Bind(std::move(request));
+}
+
+void AssistantController::AddObserver(AssistantControllerObserver* observer) {
+  observers_.AddObserver(observer);
+}
+
+void AssistantController::RemoveObserver(
+    AssistantControllerObserver* observer) {
+  observers_.RemoveObserver(observer);
+}
+
 void AssistantController::SetAssistant(
     chromeos::assistant::mojom::AssistantPtr assistant) {
   assistant_ = std::move(assistant);
 
-  // Subscribe to Assistant events.
-  chromeos::assistant::mojom::AssistantEventSubscriberPtr ptr;
-  assistant_event_subscriber_binding_.Bind(mojo::MakeRequest(&ptr));
-  assistant_->AddAssistantEventSubscriber(std::move(ptr));
-}
+  // Provide reference to sub-controllers.
+  assistant_interaction_controller_->SetAssistant(assistant_.get());
+  assistant_notification_controller_->SetAssistant(assistant_.get());
+  assistant_screen_context_controller_->SetAssistant(assistant_.get());
+  assistant_ui_controller_->SetAssistant(assistant_.get());
 
-void AssistantController::SetAssistantCardRenderer(
-    mojom::AssistantCardRendererPtr assistant_card_renderer) {
-  assistant_card_renderer_ = std::move(assistant_card_renderer);
+  // The Assistant service needs to have accessibility state synced with ash
+  // and be notified of any accessibility status changes in the future to
+  // provide an opportunity to turn on/off A11Y features.
+  Shell::Get()->accessibility_controller()->AddObserver(this);
+  OnAccessibilityStatusChanged();
 }
 
 void AssistantController::SetAssistantImageDownloader(
@@ -82,52 +99,9 @@ void AssistantController::SetAssistantImageDownloader(
   assistant_image_downloader_ = std::move(assistant_image_downloader);
 }
 
-void AssistantController::RequestScreenshot(
-    const gfx::Rect& rect,
-    RequestScreenshotCallback callback) {
-  // TODO(muyuanli): handle multi-display when assistant's behavior is defined.
-  auto* root_window = Shell::GetPrimaryRootWindow();
-  gfx::Rect source_rect =
-      rect.IsEmpty() ? gfx::Rect(root_window->bounds().size()) : rect;
-  ui::GrabWindowSnapshotAsyncJPEG(
-      root_window, source_rect,
-      base::BindRepeating(
-          [](RequestScreenshotCallback callback,
-             scoped_refptr<base::RefCountedMemory> data) {
-            std::move(callback).Run(std::vector<uint8_t>(
-                data->front(), data->front() + data->size()));
-          },
-          base::Passed(&callback)));
-}
-
-void AssistantController::RenderCard(
-    const base::UnguessableToken& id_token,
-    mojom::AssistantCardParamsPtr params,
-    mojom::AssistantCardRenderer::RenderCallback callback) {
-  DCHECK(assistant_card_renderer_);
-
-  const mojom::UserSession* user_session =
-      Shell::Get()->session_controller()->GetUserSession(0);
-
-  if (!user_session) {
-    LOG(WARNING) << "Unable to retrieve active user session.";
-    return;
-  }
-
-  AccountId account_id = user_session->user_info->account_id;
-  assistant_card_renderer_->Render(account_id, id_token, std::move(params),
-                                   std::move(callback));
-}
-
-void AssistantController::ReleaseCard(const base::UnguessableToken& id_token) {
-  DCHECK(assistant_card_renderer_);
-  assistant_card_renderer_->Release(id_token);
-}
-
-void AssistantController::ReleaseCards(
-    const std::vector<base::UnguessableToken>& id_tokens) {
-  DCHECK(assistant_card_renderer_);
-  assistant_card_renderer_->ReleaseAll(id_tokens);
+void AssistantController::OpenAssistantSettings() {
+  // Launch Assistant settings via deeplink.
+  OpenUrl(assistant::util::CreateAssistantSettingsDeepLink());
 }
 
 void AssistantController::DownloadImage(
@@ -140,6 +114,7 @@ void AssistantController::DownloadImage(
 
   if (!user_session) {
     LOG(WARNING) << "Unable to retrieve active user session.";
+    std::move(callback).Run(gfx::ImageSkia());
     return;
   }
 
@@ -147,231 +122,158 @@ void AssistantController::DownloadImage(
   assistant_image_downloader_->Download(account_id, url, std::move(callback));
 }
 
-void AssistantController::AddInteractionModelObserver(
-    AssistantInteractionModelObserver* observer) {
-  assistant_interaction_model_.AddObserver(observer);
-}
+void AssistantController::OnDeepLinkReceived(
+    assistant::util::DeepLinkType type,
+    const std::map<std::string, std::string>& params) {
+  using assistant::util::DeepLinkParam;
+  using assistant::util::DeepLinkType;
 
-void AssistantController::RemoveInteractionModelObserver(
-    AssistantInteractionModelObserver* observer) {
-  assistant_interaction_model_.RemoveObserver(observer);
-}
-
-void AssistantController::StartInteraction() {
-  if (!assistant_) {
-    ShowToast(kUnboundServiceToastId, kSomethingWentWrong);
-    return;
-  }
-  OnInteractionStarted();
-}
-
-void AssistantController::StopInteraction() {
-  assistant_interaction_model_.SetInteractionState(InteractionState::kInactive);
-}
-
-void AssistantController::ToggleInteraction() {
-  if (assistant_interaction_model_.interaction_state() ==
-      InteractionState::kInactive) {
-    StartInteraction();
-  } else {
-    StopInteraction();
-  }
-}
-
-void AssistantController::OnInteractionStateChanged(
-    InteractionState interaction_state) {
-  if (interaction_state == InteractionState::kActive)
-    return;
-
-  // When the user-facing interaction is dismissed, we instruct the service to
-  // terminate any listening, speaking, or query in flight.
-  DCHECK(assistant_);
-  assistant_->StopActiveInteraction();
-
-  assistant_interaction_model_.ClearInteraction();
-  assistant_interaction_model_.SetInputModality(InputModality::kVoice);
-}
-
-void AssistantController::OnHighlighterEnabledChanged(
-    HighlighterEnabledState state) {
-  assistant_interaction_model_.SetInputModality(InputModality::kStylus);
-  if (state == HighlighterEnabledState::kEnabled) {
-    assistant_interaction_model_.SetInteractionState(InteractionState::kActive);
-  } else if (state == HighlighterEnabledState::kDisabledByUser) {
-    assistant_interaction_model_.SetInteractionState(
-        InteractionState::kInactive);
-  }
-}
-
-void AssistantController::OnInputModalityChanged(InputModality input_modality) {
-  if (input_modality == InputModality::kVoice)
-    return;
-
-  // When switching to a non-voice input modality we instruct the underlying
-  // service to terminate any listening, speaking, or in flight voice query. We
-  // do not do this when switching to voice input modality because initiation of
-  // a voice interaction will automatically interrupt any pre-existing activity.
-  // Stopping the active interaction here for voice input modality would
-  // actually have the undesired effect of stopping the voice interaction.
-  if (assistant_interaction_model_.query().type() ==
-      AssistantQueryType::kVoice) {
-    DCHECK(assistant_);
-    assistant_->StopActiveInteraction();
-  }
-}
-
-void AssistantController::OnInteractionStarted() {
-  assistant_interaction_model_.SetInteractionState(InteractionState::kActive);
-}
-
-void AssistantController::OnInteractionFinished(
-    AssistantInteractionResolution resolution) {
-  // When a voice query is interrupted we do not receive any follow up speech
-  // recognition events but the mic is closed.
-  if (resolution == AssistantInteractionResolution::kInterruption) {
-    assistant_interaction_model_.SetMicState(MicState::kClosed);
-  }
-}
-
-void AssistantController::OnCardPressed(const GURL& url) {
-  OnOpenUrlResponse(url);
-}
-
-void AssistantController::OnDialogPlateActionPressed(const std::string& text) {
-  InputModality input_modality = assistant_interaction_model_.input_modality();
-
-  // When using keyboard input modality, pressing the dialog plate action is
-  // equivalent to a commit.
-  if (input_modality == InputModality::kKeyboard) {
-    OnDialogPlateContentsCommitted(text);
-    return;
-  }
-
-  DCHECK(assistant_);
-
-  // It should not be possible to press the dialog plate action when not using
-  // keyboard or voice input modality.
-  DCHECK(input_modality == InputModality::kVoice);
-
-  // When using voice input modality, pressing the dialog plate action will
-  // toggle the voice interaction state.
-  switch (assistant_interaction_model_.mic_state()) {
-    case MicState::kClosed:
-      assistant_->StartVoiceInteraction();
+  switch (type) {
+    case DeepLinkType::kChromeSettings: {
+      // Chrome Settings deep links are opened in a new browser tab.
+      OpenUrl(assistant::util::GetChromeSettingsUrl(
+          assistant::util::GetDeepLinkParam(params, DeepLinkParam::kPage)));
       break;
-    case MicState::kOpen:
-      assistant_->StopActiveInteraction();
+    }
+    case DeepLinkType::kFeedback:
+      // TODO(dmblack): Possibly use a new FeedbackSource (this method defaults
+      // to kFeedbackSourceAsh). This may be useful for differentiating feedback
+      // UI and behavior for Assistant.
+      Shell::Get()->new_window_controller()->OpenFeedbackPage();
+      break;
+    case DeepLinkType::kScreenshot:
+      // We close the UI before taking the screenshot as it's probably not the
+      // user's intention to include the Assistant in the picture.
+      assistant_ui_controller_->CloseUi(AssistantExitPoint::kUnspecified);
+      Shell::Get()->screenshot_controller()->TakeScreenshotForAllRootWindows();
+      break;
+    case DeepLinkType::kTaskManager:
+      // Open task manager window.
+      Shell::Get()->new_window_controller()->ShowTaskManager();
+      break;
+    case DeepLinkType::kUnsupported:
+    case DeepLinkType::kOnboarding:
+    case DeepLinkType::kQuery:
+    case DeepLinkType::kReminders:
+    case DeepLinkType::kSettings:
+    case DeepLinkType::kWhatsOnMyScreen:
+      // No action needed.
       break;
   }
 }
 
-void AssistantController::OnDialogPlateContentsChanged(
-    const std::string& text) {
-  if (text.empty()) {
-    // Note: This does not open the mic. It only updates the input modality to
-    // voice so that we will show the mic icon in the UI.
-    assistant_interaction_model_.SetInputModality(InputModality::kVoice);
-  } else {
-    assistant_interaction_model_.SetInputModality(InputModality::kKeyboard);
-    assistant_interaction_model_.SetMicState(MicState::kClosed);
-  }
+void AssistantController::SetVolume(int volume, bool user_initiated) {
+  volume = std::min(100, volume);
+  volume = std::max(volume, 0);
+  chromeos::CrasAudioHandler::Get()->SetOutputVolumePercent(volume);
 }
 
-void AssistantController::OnDialogPlateContentsCommitted(
-    const std::string& text) {
-  // TODO(dmblack): Handle an empty text query more gracefully by showing a
-  // helpful message to the user. Currently we just reset state and pretend as
-  // if nothing happened.
-  if (text.empty()) {
-    assistant_interaction_model_.ClearInteraction();
-    assistant_interaction_model_.SetInputModality(InputModality::kVoice);
+void AssistantController::SetMuted(bool muted) {
+  chromeos::CrasAudioHandler::Get()->SetOutputMute(muted);
+}
+
+void AssistantController::AddVolumeObserver(mojom::VolumeObserverPtr observer) {
+  volume_observer_.AddPtr(std::move(observer));
+
+  int output_volume =
+      chromeos::CrasAudioHandler::Get()->GetOutputVolumePercent();
+  bool mute = chromeos::CrasAudioHandler::Get()->IsOutputMuted();
+  OnOutputMuteChanged(mute, false /* system_adjust */);
+  OnOutputNodeVolumeChanged(0 /* node */, output_volume);
+}
+
+void AssistantController::OnOutputMuteChanged(bool mute_on,
+                                              bool system_adjust) {
+  volume_observer_.ForAllPtrs([mute_on](mojom::VolumeObserver* observer) {
+    observer->OnMuteStateChanged(mute_on);
+  });
+}
+
+void AssistantController::OnOutputNodeVolumeChanged(uint64_t node, int volume) {
+  // |node| refers to the active volume device, which we don't care here.
+  volume_observer_.ForAllPtrs([volume](mojom::VolumeObserver* observer) {
+    observer->OnVolumeChanged(volume);
+  });
+}
+
+void AssistantController::OnAccessibilityStatusChanged() {
+  // The Assistant service needs to be informed of changes to accessibility
+  // state so that it can turn on/off A11Y features appropriately.
+  assistant_->OnAccessibilityStatusChanged(
+      Shell::Get()->accessibility_controller()->IsSpokenFeedbackEnabled());
+}
+
+void AssistantController::OpenUrl(const GURL& url, bool from_server) {
+  if (assistant::util::IsDeepLinkUrl(url)) {
+    NotifyDeepLinkReceived(url);
     return;
   }
 
-  assistant_interaction_model_.ClearInteraction();
-  assistant_interaction_model_.SetQuery(
-      std::make_unique<AssistantTextQuery>(text));
-
-  // Note: This does not open the mic. It only updates the input modality to
-  // voice so that we will show the mic icon in the UI.
-  assistant_interaction_model_.SetInputModality(InputModality::kVoice);
-
-  DCHECK(assistant_);
-  assistant_->SendTextQuery(text);
+  // The new tab should be opened with a user activation since the user
+  // interacted with the Assistant to open the url.
+  Shell::Get()->new_window_controller()->NewTabWithUrl(
+      url, /*from_user_interaction=*/true);
+  NotifyUrlOpened(url, from_server);
 }
 
-void AssistantController::OnHtmlResponse(const std::string& response) {
-  assistant_interaction_model_.AddUiElement(
-      std::make_unique<AssistantCardElement>(response));
-}
+void AssistantController::GetNavigableContentsFactory(
+    content::mojom::NavigableContentsFactoryRequest request) {
+  const mojom::UserSession* user_session =
+      Shell::Get()->session_controller()->GetUserSession(0);
 
-void AssistantController::OnSuggestionChipPressed(int id) {
-  const AssistantSuggestion* suggestion =
-      assistant_interaction_model_.GetSuggestionById(id);
-
-  DCHECK(suggestion);
-
-  // If the suggestion contains a non-empty action url, we will handle the
-  // suggestion chip pressed event by launching the action url in the browser.
-  if (!suggestion->action_url.is_empty()) {
-    OnOpenUrlResponse(suggestion->action_url);
+  if (!user_session) {
+    LOG(WARNING) << "Unable to retrieve active user session.";
     return;
   }
 
-  // Otherwise, we will submit a simple text query using the suggestion text.
-  const std::string text = suggestion->text;
+  const base::Optional<base::Token>& service_instance_group =
+      user_session->user_info->service_instance_group;
+  if (!service_instance_group) {
+    LOG(ERROR) << "Unable to retrieve service instance group.";
+    return;
+  }
 
-  assistant_interaction_model_.ClearInteraction();
-  assistant_interaction_model_.SetQuery(
-      std::make_unique<AssistantTextQuery>(text));
-
-  DCHECK(assistant_);
-  assistant_->SendTextQuery(text);
+  Shell::Get()->connector()->BindInterface(
+      service_manager::ServiceFilter::ByNameInGroup(
+          content::mojom::kServiceName, *service_instance_group),
+      std::move(request));
 }
 
-void AssistantController::OnSuggestionsResponse(
-    std::vector<AssistantSuggestionPtr> response) {
-  assistant_interaction_model_.AddSuggestions(std::move(response));
+void AssistantController::NotifyConstructed() {
+  for (AssistantControllerObserver& observer : observers_)
+    observer.OnAssistantControllerConstructed();
 }
 
-void AssistantController::OnTextResponse(const std::string& response) {
-  assistant_interaction_model_.AddUiElement(
-      std::make_unique<AssistantTextElement>(response));
+void AssistantController::NotifyDestroying() {
+  for (AssistantControllerObserver& observer : observers_)
+    observer.OnAssistantControllerDestroying();
 }
 
-void AssistantController::OnSpeechRecognitionStarted() {
-  assistant_interaction_model_.ClearInteraction();
-  assistant_interaction_model_.SetInputModality(InputModality::kVoice);
-  assistant_interaction_model_.SetMicState(MicState::kOpen);
-  assistant_interaction_model_.SetQuery(
-      std::make_unique<AssistantVoiceQuery>());
+void AssistantController::NotifyDeepLinkReceived(const GURL& deep_link) {
+  using assistant::util::DeepLinkType;
+
+  // Retrieve deep link type and parsed parameters.
+  DeepLinkType type = assistant::util::GetDeepLinkType(deep_link);
+  const std::map<std::string, std::string> params =
+      assistant::util::GetDeepLinkParams(deep_link);
+
+  for (AssistantControllerObserver& observer : observers_)
+    observer.OnDeepLinkReceived(type, params);
 }
 
-void AssistantController::OnSpeechRecognitionIntermediateResult(
-    const std::string& high_confidence_text,
-    const std::string& low_confidence_text) {
-  assistant_interaction_model_.SetQuery(std::make_unique<AssistantVoiceQuery>(
-      high_confidence_text, low_confidence_text));
+void AssistantController::NotifyUrlOpened(const GURL& url, bool from_server) {
+  for (AssistantControllerObserver& observer : observers_)
+    observer.OnUrlOpened(url, from_server);
 }
 
-void AssistantController::OnSpeechRecognitionEndOfUtterance() {
-  assistant_interaction_model_.SetMicState(MicState::kClosed);
+void AssistantController::OnVoiceInteractionStatusChanged(
+    mojom::VoiceInteractionState state) {
+  if (state == mojom::VoiceInteractionState::NOT_READY)
+    assistant_ui_controller_->HideUi(AssistantExitPoint::kUnspecified);
 }
 
-void AssistantController::OnSpeechRecognitionFinalResult(
-    const std::string& final_result) {
-  assistant_interaction_model_.SetQuery(
-      std::make_unique<AssistantVoiceQuery>(final_result));
-}
-
-void AssistantController::OnSpeechLevelUpdated(float speech_level) {
-  // TODO(dmblack): Handle.
-  NOTIMPLEMENTED();
-}
-
-void AssistantController::OnOpenUrlResponse(const GURL& url) {
-  Shell::Get()->shell_delegate()->OpenUrlFromArc(url);
-  StopInteraction();
+base::WeakPtr<AssistantController> AssistantController::GetWeakPtr() {
+  return weak_factory_.GetWeakPtr();
 }
 
 }  // namespace ash

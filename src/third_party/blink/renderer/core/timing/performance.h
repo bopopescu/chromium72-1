@@ -48,6 +48,7 @@
 #include "third_party/blink/renderer/platform/wtf/forward.h"
 #include "third_party/blink/renderer/platform/wtf/hash_set.h"
 #include "third_party/blink/renderer/platform/wtf/linked_hash_set.h"
+#include "third_party/blink/renderer/platform/wtf/text/atomic_string.h"
 #include "third_party/blink/renderer/platform/wtf/vector.h"
 
 namespace blink {
@@ -85,6 +86,7 @@ class CORE_EXPORT Performance : public EventTargetWithInlineData {
   virtual PerformanceTiming* timing() const;
   virtual PerformanceNavigation* navigation() const;
   virtual MemoryInfo* memory() const;
+  virtual bool shouldYield() const;
 
   virtual void UpdateLongTaskInstrumentation() {}
 
@@ -112,19 +114,20 @@ class CORE_EXPORT Performance : public EventTargetWithInlineData {
   double GetTimeOrigin() const { return TimeTicksInSeconds(time_origin_); }
 
   PerformanceEntryVector getEntries();
-  PerformanceEntryVector getEntriesByType(const String& entry_type);
-  PerformanceEntryVector getEntriesByName(const String& name,
-                                          const String& entry_type);
+  PerformanceEntryVector getEntriesByType(const AtomicString& entry_type);
+  PerformanceEntryVector getEntriesByName(const AtomicString& name,
+                                          const AtomicString& entry_type);
 
   void clearResourceTimings();
   void setResourceTimingBufferSize(unsigned);
 
-  DEFINE_ATTRIBUTE_EVENT_LISTENER(resourcetimingbufferfull);
+  DEFINE_ATTRIBUTE_EVENT_LISTENER(resourcetimingbufferfull,
+                                  kResourcetimingbufferfull);
 
   void AddLongTaskTiming(
       TimeTicks start_time,
       TimeTicks end_time,
-      const String& name,
+      const AtomicString& name,
       const String& culprit_frame_src,
       const String& culprit_frame_id,
       const String& culprit_frame_name,
@@ -157,42 +160,83 @@ class CORE_EXPORT Performance : public EventTargetWithInlineData {
   unsigned EventTimingBufferSize() const;
   void clearEventTimings();
   void setEventTimingBufferMaxSize(unsigned);
-  DEFINE_ATTRIBUTE_EVENT_LISTENER(eventtimingbufferfull);
+  DEFINE_ATTRIBUTE_EVENT_LISTENER(eventtimingbufferfull,
+                                  kEventtimingbufferfull);
 
-  PerformanceMark* mark(ScriptState*, const String& mark_name, ExceptionState&);
+  PerformanceMark* mark(ScriptState*,
+                        const AtomicString& mark_name,
+                        ExceptionState&);
 
   PerformanceMark* mark(
       ScriptState*,
-      const String& mark_name,
+      const AtomicString& mark_name,
       DoubleOrPerformanceMarkOptions& start_time_or_mark_options,
       ExceptionState&);
 
-  void clearMarks(const String& mark_name);
+  void clearMarks(const AtomicString& mark_name);
+
+  // This enum is used to index different possible strings for for UMA enum
+  // histogram. New enum values can be added, but existing enums must never be
+  // renumbered or deleted and reused.
+  // This enum should be consistent with MeasureParameterType
+  // in tools/metrics/histograms/enums.xml.
+  enum class MeasureParameterType {
+    kObjectObject = 0,
+    // 1 to 8, 13 to 25 are navigation-timing types.
+    kUnloadEventStart = 1,
+    kUnloadEventEnd = 2,
+    kDomInteractive = 3,
+    kDomContentLoadedEventStart = 4,
+    kDomContentLoadedEventEnd = 5,
+    kDomComplete = 6,
+    kLoadEventStart = 7,
+    kLoadEventEnd = 8,
+    kOther = 9,
+    kUndefinedOrNull = 10,
+    kNumber = 11,
+    kUnprovided = 12,
+    kNavigationStart = 13,
+    kRedirectStart = 14,
+    kRedirectEnd = 15,
+    kFetchStart = 16,
+    kDomainLookupStart = 17,
+    kDomainLookupEnd = 18,
+    kConnectStart = 19,
+    kConnectEnd = 20,
+    kSecureConnectionStart = 21,
+    kRequestStart = 22,
+    kResponseStart = 23,
+    kResponseEnd = 24,
+    kDomLoading = 25,
+    kMaxValue = kDomLoading
+  };
 
   PerformanceMeasure* measure(ScriptState*,
-                              const String& measure_name,
+                              const AtomicString& measure_name,
                               ExceptionState&);
 
   PerformanceMeasure* measure(
       ScriptState*,
-      const String& measure_name,
+      const AtomicString& measure_name,
       const StringOrDoubleOrPerformanceMeasureOptions& start_or_options,
       ExceptionState&);
 
   PerformanceMeasure* measure(
       ScriptState*,
-      const String& measure_name,
+      const AtomicString& measure_name,
       const StringOrDoubleOrPerformanceMeasureOptions& start_or_options,
       const StringOrDouble& end,
       ExceptionState&);
 
-  void clearMeasures(const String& measure_name);
+  void clearMeasures(const AtomicString& measure_name);
 
   void UnregisterPerformanceObserver(PerformanceObserver&);
   void RegisterPerformanceObserver(PerformanceObserver&);
   void UpdatePerformanceObserverFilterOptions();
   void ActivateObserver(PerformanceObserver&);
   void ResumeSuspendedObservers();
+
+  bool HasObserverFor(PerformanceEntry::EntryType) const;
 
   static bool AllowsTimingRedirect(const Vector<ResourceResponse>&,
                                    const ResourceResponse&,
@@ -202,7 +246,6 @@ class CORE_EXPORT Performance : public EventTargetWithInlineData {
   ScriptValue toJSONForBinding(ScriptState*) const;
 
   void Trace(blink::Visitor*) override;
-  void TraceWrappers(ScriptWrappableVisitor*) const override;
 
  private:
   static bool PassesTimingAllowCheck(const ResourceResponse&,
@@ -212,20 +255,19 @@ class CORE_EXPORT Performance : public EventTargetWithInlineData {
 
   void AddPaintTiming(PerformancePaintTiming::PaintType, TimeTicks start_time);
 
-  PerformanceMeasure* measureInternal(
+  PerformanceMeasure* MeasureInternal(
       ScriptState*,
-      const String& measure_name,
+      const AtomicString& measure_name,
       const StringOrDoubleOrPerformanceMeasureOptions& start,
       const StringOrDouble& end,
-      bool end_is_empty,
       ExceptionState&);
 
-  PerformanceMeasure* measureInternal(ScriptState*,
-                                      const String& measure_name,
-                                      const StringOrDouble& start,
-                                      const StringOrDouble& end,
-                                      const ScriptValue& detail,
-                                      ExceptionState&);
+  PerformanceMeasure* MeasureWithDetail(ScriptState*,
+                                        const AtomicString& measure_name,
+                                        const StringOrDouble& start,
+                                        const StringOrDouble& end,
+                                        const ScriptValue& detail,
+                                        ExceptionState&);
 
  protected:
   Performance(TimeTicks time_origin,
@@ -242,14 +284,11 @@ class CORE_EXPORT Performance : public EventTargetWithInlineData {
 
   void NotifyObserversOfEntry(PerformanceEntry&) const;
   void NotifyObserversOfEntries(PerformanceEntryVector&);
-  bool HasObserverFor(PerformanceEntry::EntryType) const;
 
   void DeliverObservationsTimerFired(TimerBase*);
 
   virtual void BuildJSONValue(V8ObjectBuilder&) const;
 
-  PerformanceEntryVector frame_timing_buffer_;
-  unsigned frame_timing_buffer_size_;
   PerformanceEntryVector resource_timing_buffer_;
   unsigned resource_timing_buffer_size_;
   PerformanceEntryVector event_timing_buffer_;

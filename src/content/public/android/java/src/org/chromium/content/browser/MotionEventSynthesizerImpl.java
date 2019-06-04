@@ -97,10 +97,9 @@ public class MotionEventSynthesizerImpl implements MotionEventSynthesizer {
         switch (action) {
             case MotionEventAction.START: {
                 mDownTimeInMs = timeInMs;
-                MotionEvent event = MotionEvent.obtain(
-                        mDownTimeInMs, timeInMs, MotionEvent.ACTION_DOWN, 1,
-                        mPointerProperties, mPointerCoords,
-                        0, 0, 1, 1, 0, 0, 0, 0);
+                MotionEvent event =
+                        MotionEvent.obtain(mDownTimeInMs, timeInMs, MotionEvent.ACTION_DOWN, 1,
+                                mPointerProperties, mPointerCoords, 0, 0, 1, 1, 0, 0, 0, 0);
                 mTarget.dispatchTouchEvent(event);
                 event.recycle();
 
@@ -119,18 +118,16 @@ public class MotionEventSynthesizerImpl implements MotionEventSynthesizer {
             }
             case MotionEventAction.MOVE: {
                 MotionEvent event = MotionEvent.obtain(mDownTimeInMs, timeInMs,
-                        MotionEvent.ACTION_MOVE,
-                        pointerCount, mPointerProperties, mPointerCoords,
+                        MotionEvent.ACTION_MOVE, pointerCount, mPointerProperties, mPointerCoords,
                         0, 0, 1, 1, 0, 0, 0, 0);
                 mTarget.dispatchTouchEvent(event);
                 event.recycle();
                 break;
             }
             case MotionEventAction.CANCEL: {
-                MotionEvent event = MotionEvent.obtain(
-                        mDownTimeInMs, timeInMs, MotionEvent.ACTION_CANCEL, 1,
-                        mPointerProperties, mPointerCoords,
-                        0, 0, 1, 1, 0, 0, 0, 0);
+                MotionEvent event =
+                        MotionEvent.obtain(mDownTimeInMs, timeInMs, MotionEvent.ACTION_CANCEL, 1,
+                                mPointerProperties, mPointerCoords, 0, 0, 1, 1, 0, 0, 0, 0);
                 mTarget.dispatchTouchEvent(event);
                 event.recycle();
                 break;
@@ -148,10 +145,9 @@ public class MotionEventSynthesizerImpl implements MotionEventSynthesizer {
                     event.recycle();
                 }
 
-                MotionEvent event = MotionEvent.obtain(
-                        mDownTimeInMs, timeInMs, MotionEvent.ACTION_UP, 1,
-                        mPointerProperties, mPointerCoords,
-                        0, 0, 1, 1, 0, 0, 0, 0);
+                MotionEvent event =
+                        MotionEvent.obtain(mDownTimeInMs, timeInMs, MotionEvent.ACTION_UP, 1,
+                                mPointerProperties, mPointerCoords, 0, 0, 1, 1, 0, 0, 0, 0);
                 mTarget.dispatchTouchEvent(event);
                 event.recycle();
                 break;
@@ -160,7 +156,7 @@ public class MotionEventSynthesizerImpl implements MotionEventSynthesizer {
                 assert pointerCount == 1;
                 MotionEvent event = MotionEvent.obtain(mDownTimeInMs, timeInMs,
                         MotionEvent.ACTION_SCROLL, pointerCount, mPointerProperties, mPointerCoords,
-                        0, 0, 1, 1, 0, 0, InputDevice.SOURCE_CLASS_POINTER, 0);
+                        0, 0, 1, 1, 0, 0, 0, 0);
                 mTarget.dispatchGenericMotionEvent(event);
                 event.recycle();
                 break;

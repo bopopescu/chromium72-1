@@ -56,12 +56,17 @@ class CORE_EXPORT HTMLInputElement
 
  public:
   static HTMLInputElement* Create(Document&, const CreateElementFlags);
+
+  HTMLInputElement(Document&, const CreateElementFlags);
   ~HTMLInputElement() override;
   void Trace(blink::Visitor*) override;
 
+  // Returns attributes that should be checked against Trusted Types
+  const HashSet<AtomicString>& GetCheckedAttributeNames() const override;
+
   bool HasPendingActivity() const final;
 
-  DEFINE_ATTRIBUTE_EVENT_LISTENER(webkitspeechchange);
+  DEFINE_ATTRIBUTE_EVENT_LISTENER(webkitspeechchange, kWebkitspeechchange);
 
   bool ShouldAutocomplete() const final;
 
@@ -104,7 +109,7 @@ class CORE_EXPORT HTMLInputElement
   bool IsTextField() const;
   // Do not add type check predicates for concrete input types; e.g.  isImage,
   // isRadio, isFile.  If you want to check the input type, you may use
-  // |input->type() == InputTypeNames::image|, etc.
+  // |input->type() == input_type_names::kImage|, etc.
 
   // Returns whether this field is or has ever been a password field so that
   // its value can be protected from memorization by autofill or keyboards.
@@ -187,7 +192,7 @@ class CORE_EXPORT HTMLInputElement
   LayoutObject* CreateLayoutObject(const ComputedStyle&) override;
   void DetachLayoutTree(const AttachContext& = AttachContext()) final;
   void UpdateFocusAppearanceWithOptions(SelectionBehaviorOnFocus,
-                                        const FocusOptions&) final;
+                                        const FocusOptions*) final;
 
   // FIXME: For isActivatedSubmit and setActivatedSubmit, we should use the
   // NVI-idiom here by making it private virtual in all classes and expose a
@@ -258,10 +263,6 @@ class CORE_EXPORT HTMLInputElement
   void setHeight(unsigned);
   void setWidth(unsigned);
 
-#if defined(USE_NEVA_APPRUNTIME)
-  bool UseSystemKeyboard() const { return use_system_keyboard_; }
-#endif
-
   void blur() final;
   void DefaultBlur();
 
@@ -269,7 +270,7 @@ class CORE_EXPORT HTMLInputElement
 
   void EndEditing();
 
-  static Vector<FileChooserFileInfo> FilesFromFileInputFormControlState(
+  static Vector<String> FilesFromFileInputFormControlState(
       const FormControlState&);
 
   bool MatchesReadOnlyPseudoClass() const final;
@@ -308,9 +309,7 @@ class CORE_EXPORT HTMLInputElement
   void ChildrenChanged(const ChildrenChange&) override;
 
  protected:
-  HTMLInputElement(Document&, const CreateElementFlags);
-
-  void DefaultEventHandler(Event*) override;
+  void DefaultEventHandler(Event&) override;
   void CreateShadowSubtree();
 
  private:
@@ -318,14 +317,14 @@ class CORE_EXPORT HTMLInputElement
 
   void WillChangeForm() final;
   void DidChangeForm() final;
-  InsertionNotificationRequest InsertedInto(ContainerNode*) override;
-  void RemovedFrom(ContainerNode*) final;
+  InsertionNotificationRequest InsertedInto(ContainerNode&) override;
+  void RemovedFrom(ContainerNode&) final;
   void DidMoveToNewDocument(Document& old_document) final;
   bool HasActivationBehavior() const override;
 
   bool HasCustomFocusLogic() const final;
   bool IsKeyboardFocusable() const final;
-  bool ShouldShowFocusRingOnMouseFocus() const final;
+  bool MayTriggerVirtualKeyboard() const final;
   bool IsEnumeratable() const final;
   bool IsInteractiveContent() const final;
   bool SupportLabels() const final;
@@ -365,8 +364,8 @@ class CORE_EXPORT HTMLInputElement
   void ResetImpl() final;
   bool SupportsAutofocus() const final;
 
-  EventDispatchHandlingState* PreDispatchEventHandler(Event*) final;
-  void PostDispatchEventHandler(Event*, EventDispatchHandlingState*) final;
+  EventDispatchHandlingState* PreDispatchEventHandler(Event&) final;
+  void PostDispatchEventHandler(Event&, EventDispatchHandlingState*) final;
 
   bool IsURLAttribute(const Attribute&) const final;
   bool HasLegalLinkAttribute(const QualifiedName&) const final;
@@ -404,6 +403,7 @@ class CORE_EXPORT HTMLInputElement
   void AddToRadioButtonGroup();
   void RemoveFromRadioButtonGroup();
   scoped_refptr<ComputedStyle> CustomStyleForLayoutObject() override;
+  void DidRecalcStyle(StyleRecalcChange) override;
 
   AtomicString name_;
   // The value string in |value| value mode.
@@ -425,9 +425,6 @@ class CORE_EXPORT HTMLInputElement
   unsigned should_reveal_password_ : 1;
   unsigned needs_to_update_view_value_ : 1;
   unsigned is_placeholder_visible_ : 1;
-#if defined(USE_NEVA_APPRUNTIME)
-  unsigned use_system_keyboard_ : 1;
-#endif
   unsigned has_been_password_field_ : 1;
   Member<InputType> input_type_;
   Member<InputTypeView> input_type_view_;

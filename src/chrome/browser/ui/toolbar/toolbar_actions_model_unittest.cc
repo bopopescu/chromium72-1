@@ -348,8 +348,7 @@ bool ToolbarActionsModelUnitTest::ModelHasActionForId(
 
 testing::AssertionResult ToolbarActionsModelUnitTest::AddAndVerifyExtensions(
     const extensions::ExtensionList& extensions) {
-  for (extensions::ExtensionList::const_iterator iter = extensions.begin();
-       iter != extensions.end(); ++iter) {
+  for (auto iter = extensions.begin(); iter != extensions.end(); ++iter) {
     if (!AddExtension(*iter)) {
       return testing::AssertionFailure() << "Failed to install extension: "
                                          << (*iter)->name();
@@ -1162,7 +1161,7 @@ TEST_F(ToolbarActionsModelUnitTest, ModelWaitsForExtensionSystemReady) {
 
 // Check that the toolbar model correctly clears and reorders when it detects
 // a preference change.
-TEST_F(ToolbarActionsModelUnitTest, ToolbarModelPrefChange) {
+TEST_F(ToolbarActionsModelUnitTest, LocationBarModelPrefChange) {
   Init();
 
   ASSERT_TRUE(AddBrowserActionExtensions());

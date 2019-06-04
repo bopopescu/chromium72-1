@@ -8,6 +8,7 @@
 #include "base/logging.h"
 #include "base/numerics/safe_conversions.h"
 #include "base/process/kill.h"
+#include "base/test/clang_coverage.h"
 #include "base/threading/thread_restrictions.h"
 
 #include <windows.h>
@@ -85,6 +86,9 @@ bool Process::CanBackgroundProcesses() {
 
 // static
 void Process::TerminateCurrentProcessImmediately(int exit_code) {
+#if defined(CLANG_COVERAGE)
+  WriteClangCoverageProfile();
+#endif
   ::TerminateProcess(GetCurrentProcess(), exit_code);
   // There is some ambiguity over whether the call above can return. Rather than
   // hitting confusing crashes later on we should crash right here.
@@ -119,6 +123,18 @@ Process Process::Duplicate() const {
 ProcessId Process::Pid() const {
   DCHECK(IsValid());
   return GetProcId(Handle());
+}
+
+Time Process::CreationTime() const {
+  FILETIME creation_time = {};
+  FILETIME ignore1 = {};
+  FILETIME ignore2 = {};
+  FILETIME ignore3 = {};
+  if (!::GetProcessTimes(Handle(), &creation_time, &ignore1, &ignore2,
+                         &ignore3)) {
+    return Time();
+  }
+  return Time::FromFileTime(creation_time);
 }
 
 bool Process::is_current() const {
@@ -165,6 +181,9 @@ bool Process::WaitForExit(int* exit_code) const {
 }
 
 bool Process::WaitForExitWithTimeout(TimeDelta timeout, int* exit_code) const {
+  // Intentionally avoid instantiating ScopedBlockingCallWithBaseSyncPrimitives.
+  // In some cases, this function waits on a child Process doing CPU work.
+  // http://crbug.com/905788
   if (!timeout.is_zero())
     internal::AssertBaseSyncPrimitivesAllowed();
 

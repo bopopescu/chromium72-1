@@ -7,6 +7,7 @@
 #include <map>
 
 #include "base/test/scoped_task_environment.h"
+#include "base/test/simple_test_clock.h"
 #include "components/feed/core/proto/cached_image.pb.h"
 #include "components/feed/core/time_serialization.h"
 #include "components/leveldb_proto/testing/fake_db.h"
@@ -20,13 +21,22 @@ using testing::_;
 namespace feed {
 
 namespace {
-const std::string kImageURL = "http://pie.com/";
-const std::string kImageData = "pie image";
+
+// Fixed "now" to make tests more deterministic.
+char kNowString[] = "2018-06-11 15:41";
+
+constexpr char kImageURL[] = "http://pie.com/";
+constexpr char kImageData[] = "pie image";
+
 }  // namespace
 
 class FeedImageDatabaseTest : public testing::Test {
  public:
-  FeedImageDatabaseTest() : image_db_(nullptr) {}
+  FeedImageDatabaseTest() : image_db_(nullptr) {
+    base::Time now;
+    EXPECT_TRUE(base::Time::FromUTCString(kNowString, &now));
+    test_clock_.SetNow(now);
+  }
 
   void CreateDatabase() {
     // The FakeDBs are owned by |feed_db_|, so clear our pointers before
@@ -39,8 +49,8 @@ class FeedImageDatabaseTest : public testing::Test {
         std::make_unique<FakeDB<CachedImageProto>>(&image_db_storage_);
 
     image_db_ = image_db.get();
-    feed_db_ = std::make_unique<FeedImageDatabase>(base::FilePath(),
-                                                   std::move(image_db));
+    feed_db_ = std::make_unique<FeedImageDatabase>(
+        base::FilePath(), std::move(image_db), &test_clock_);
   }
 
   int64_t GetImageLastUsedTime(const std::string& url) {
@@ -58,12 +68,12 @@ class FeedImageDatabaseTest : public testing::Test {
   }
 
   FakeDB<CachedImageProto>* image_db() { return image_db_; }
-
   FeedImageDatabase* db() { return feed_db_.get(); }
+  base::SimpleTestClock* test_clock() { return &test_clock_; }
 
   void RunUntilIdle() { scoped_task_environment_.RunUntilIdle(); }
 
-  MOCK_METHOD1(OnImageLoaded, void(std::string));
+  MOCK_METHOD1(OnImageLoaded, void(const std::string&));
   MOCK_METHOD1(OnGarbageCollected, void(bool));
 
  private:
@@ -73,6 +83,8 @@ class FeedImageDatabaseTest : public testing::Test {
 
   // Owned by |feed_db_|.
   FakeDB<CachedImageProto>* image_db_;
+
+  base::SimpleTestClock test_clock_;
 
   std::unique_ptr<FeedImageDatabase> feed_db_;
 
@@ -250,7 +262,7 @@ TEST_F(FeedImageDatabaseTest, GarbageCollectImagesTest) {
   image_db()->InitCallback(true);
   ASSERT_TRUE(db()->IsInitialized());
 
-  base::Time now = base::Time::Now();
+  base::Time now = test_clock()->Now();
   base::Time expired_time = now - base::TimeDelta::FromDays(30);
   base::Time very_old_time = now - base::TimeDelta::FromDays(100);
 

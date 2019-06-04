@@ -4,7 +4,6 @@
 
 #include "third_party/blink/renderer/platform/scheduler/main_thread/main_thread_task_queue.h"
 
-#include "third_party/blink/renderer/platform/scheduler/base/task_queue_impl.h"
 #include "third_party/blink/renderer/platform/scheduler/main_thread/main_thread_scheduler_impl.h"
 
 namespace blink {
@@ -52,8 +51,14 @@ const char* MainThreadTaskQueue::NameForQueueType(
       return "input_tq";
     case MainThreadTaskQueue::QueueType::kDetached:
       return "detached_tq";
+    case MainThreadTaskQueue::QueueType::kCleanup:
+      return "cleanup_tq";
     case MainThreadTaskQueue::QueueType::kOther:
       return "other_tq";
+    case MainThreadTaskQueue::QueueType::kWebSchedulingUserInteraction:
+      return "web_scheduling_user_interaction_tq";
+    case MainThreadTaskQueue::QueueType::kWebSchedulingBestEffort:
+      return "web_scheduling_background_tq";
     case MainThreadTaskQueue::QueueType::kCount:
       NOTREACHED();
       return nullptr;
@@ -71,6 +76,7 @@ MainThreadTaskQueue::QueueClass MainThreadTaskQueue::QueueClassForQueueType(
     case QueueType::kTest:
     case QueueType::kV8:
     case QueueType::kIPC:
+    case QueueType::kCleanup:
       return QueueClass::kNone;
     case QueueType::kFrameLoading:
     case QueueType::kFrameLoadingControl:
@@ -80,6 +86,8 @@ MainThreadTaskQueue::QueueClass MainThreadTaskQueue::QueueClassForQueueType(
     case QueueType::kFrameDeferrable:
     case QueueType::kFramePausable:
     case QueueType::kFrameUnpausable:
+    case QueueType::kWebSchedulingUserInteraction:
+    case QueueType::kWebSchedulingBestEffort:
       return QueueClass::kTimer;
     case QueueType::kCompositor:
     case QueueType::kInput:
@@ -103,15 +111,11 @@ MainThreadTaskQueue::MainThreadTaskQueue(
       queue_type_(params.queue_type),
       queue_class_(QueueClassForQueueType(params.queue_type)),
       fixed_priority_(params.fixed_priority),
-      can_be_deferred_(params.can_be_deferred),
-      can_be_throttled_(params.can_be_throttled),
-      can_be_paused_(params.can_be_paused),
-      can_be_frozen_(params.can_be_frozen),
+      queue_traits_(params.queue_traits),
       freeze_when_keep_active_(params.freeze_when_keep_active),
-      used_for_important_tasks_(params.used_for_important_tasks),
       main_thread_scheduler_(main_thread_scheduler),
       frame_scheduler_(params.frame_scheduler) {
-  if (GetTaskQueueImpl()) {
+  if (GetTaskQueueImpl() && spec.should_notify_observers) {
     // TaskQueueImpl may be null for tests.
     // TODO(scheduler-dev): Consider mapping directly to
     // MainThreadSchedulerImpl::OnTaskStarted/Completed. At the moment this
@@ -126,20 +130,18 @@ MainThreadTaskQueue::MainThreadTaskQueue(
 
 MainThreadTaskQueue::~MainThreadTaskQueue() = default;
 
-void MainThreadTaskQueue::OnTaskStarted(const TaskQueue::Task& task,
-                                        base::TimeTicks start) {
+void MainThreadTaskQueue::OnTaskStarted(
+    const base::sequence_manager::Task& task,
+    const TaskQueue::TaskTiming& task_timing) {
   if (main_thread_scheduler_)
-    main_thread_scheduler_->OnTaskStarted(this, task, start);
+    main_thread_scheduler_->OnTaskStarted(this, task, task_timing);
 }
 
 void MainThreadTaskQueue::OnTaskCompleted(
-    const TaskQueue::Task& task,
-    base::TimeTicks start,
-    base::TimeTicks end,
-    base::Optional<base::TimeDelta> thread_time) {
+    const base::sequence_manager::Task& task,
+    const TaskQueue::TaskTiming& task_timing) {
   if (main_thread_scheduler_) {
-    main_thread_scheduler_->OnTaskCompleted(this, task, start, end,
-                                            thread_time);
+    main_thread_scheduler_->OnTaskCompleted(this, task, task_timing);
   }
 }
 
@@ -172,7 +174,7 @@ void MainThreadTaskQueue::ClearReferencesToSchedulers() {
   frame_scheduler_ = nullptr;
 }
 
-FrameScheduler* MainThreadTaskQueue::GetFrameScheduler() const {
+FrameSchedulerImpl* MainThreadTaskQueue::GetFrameScheduler() const {
   return frame_scheduler_;
 }
 
@@ -181,8 +183,18 @@ void MainThreadTaskQueue::DetachFromFrameScheduler() {
 }
 
 void MainThreadTaskQueue::SetFrameSchedulerForTest(
-    FrameScheduler* frame_scheduler) {
+    FrameSchedulerImpl* frame_scheduler) {
   frame_scheduler_ = frame_scheduler;
+}
+
+void MainThreadTaskQueue::SetNetRequestPriority(
+    net::RequestPriority net_request_priority) {
+  net_request_priority_ = net_request_priority;
+}
+
+base::Optional<net::RequestPriority> MainThreadTaskQueue::net_request_priority()
+    const {
+  return net_request_priority_;
 }
 
 }  // namespace scheduler

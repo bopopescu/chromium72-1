@@ -72,6 +72,17 @@ DecryptConfig::DecryptConfig(
 
 DecryptConfig::~DecryptConfig() = default;
 
+std::unique_ptr<DecryptConfig> DecryptConfig::Clone() const {
+  return base::WrapUnique(new DecryptConfig(*this));
+}
+
+std::unique_ptr<DecryptConfig> DecryptConfig::CopyNewSubsamplesIV(
+    const std::vector<SubsampleEntry>& subsamples,
+    const std::string& iv) {
+  return std::make_unique<DecryptConfig>(encryption_mode_, key_id_, iv,
+                                         subsamples, encryption_pattern_);
+}
+
 bool DecryptConfig::HasPattern() const {
   return encryption_pattern_.has_value();
 }
@@ -112,5 +123,7 @@ std::ostream& DecryptConfig::Print(std::ostream& os) const {
   os << "]";
   return os;
 }
+
+DecryptConfig::DecryptConfig(const DecryptConfig& other) = default;
 
 }  // namespace media

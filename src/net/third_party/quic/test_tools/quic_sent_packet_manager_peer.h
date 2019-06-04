@@ -9,7 +9,7 @@
 #include "net/third_party/quic/core/quic_packets.h"
 #include "net/third_party/quic/core/quic_sent_packet_manager.h"
 
-namespace net {
+namespace quic {
 
 class SendAlgorithmInterface;
 
@@ -17,6 +17,8 @@ namespace test {
 
 class QuicSentPacketManagerPeer {
  public:
+  QuicSentPacketManagerPeer() = delete;
+
   static size_t GetMaxTailLossProbes(
       QuicSentPacketManager* sent_packet_manager);
 
@@ -104,13 +106,10 @@ class QuicSentPacketManagerPeer {
 
   static void SetNextPacedPacketTime(QuicSentPacketManager* sent_packet_manager,
                                      QuicTime time);
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(QuicSentPacketManagerPeer);
 };
 
 }  // namespace test
 
-}  // namespace net
+}  // namespace quic
 
 #endif  // NET_THIRD_PARTY_QUIC_TEST_TOOLS_QUIC_SENT_PACKET_MANAGER_PEER_H_

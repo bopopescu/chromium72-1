@@ -22,14 +22,17 @@
 #include "components/strings/grit/components_strings.h"
 #include "ppapi/buildflags/buildflags.h"
 #include "ui/base/l10n/l10n_util.h"
-#include "ui/base/material_design/material_design_controller.h"
 #include "url/gurl.h"
 
 #if defined(OS_ANDROID)
 #include "chrome/browser/android/android_theme_resources.h"
 #else
 #include "chrome/app/vector_icons/vector_icons.h"
+#include "chrome/browser/profiles/profile.h"
+#include "chrome/common/pref_names.h"
+#include "components/prefs/pref_service.h"
 #include "components/vector_icons/vector_icons.h"
+#include "media/base/media_switches.h"
 #include "ui/gfx/color_palette.h"
 #include "ui/gfx/color_utils.h"
 #include "ui/gfx/paint_vector_icon.h"
@@ -47,7 +50,7 @@ const int kInvalidResourceID = -1;
 // The icon size is actually 16, but the vector icons being used generally all
 // have additional internal padding. Account for this difference by asking for
 // the vectors in 18x18dip sizes.
-constexpr int kIconSize = 18;
+constexpr int kVectorIconSize = 18;
 #endif
 
 // The resource IDs for the strings that are displayed on the permissions
@@ -99,9 +102,40 @@ const int kPermissionButtonTextIDDefaultSetting[] = {
     IDS_PAGE_INFO_BUTTON_TEXT_ASK_BY_DEFAULT,
     kInvalidResourceID,
     IDS_PAGE_INFO_BUTTON_TEXT_DETECT_IMPORTANT_CONTENT_BY_DEFAULT};
-static_assert(arraysize(kPermissionButtonTextIDDefaultSetting) ==
+static_assert(base::size(kPermissionButtonTextIDDefaultSetting) ==
                   CONTENT_SETTING_NUM_SETTINGS,
               "kPermissionButtonTextIDDefaultSetting array size is incorrect");
+
+#if !defined(OS_ANDROID)
+// The resource IDs for the strings that are displayed on the sound permission
+// button if the sound permission setting is managed by the user.
+const int kSoundPermissionButtonTextIDUserManaged[] = {
+    kInvalidResourceID,
+    IDS_PAGE_INFO_BUTTON_TEXT_ALLOWED_BY_USER,
+    IDS_PAGE_INFO_BUTTON_TEXT_MUTED_BY_USER,
+    kInvalidResourceID,
+    kInvalidResourceID,
+    kInvalidResourceID};
+static_assert(
+    base::size(kSoundPermissionButtonTextIDUserManaged) ==
+        CONTENT_SETTING_NUM_SETTINGS,
+    "kSoundPermissionButtonTextIDUserManaged array size is incorrect");
+
+// The resource IDs for the strings that are displayed on the sound permission
+// button if the permission setting is the global default setting and the
+// block autoplay preference is disabled.
+const int kSoundPermissionButtonTextIDDefaultSetting[] = {
+    kInvalidResourceID,
+    IDS_PAGE_INFO_BUTTON_TEXT_ALLOWED_BY_DEFAULT,
+    IDS_PAGE_INFO_BUTTON_TEXT_MUTED_BY_DEFAULT,
+    kInvalidResourceID,
+    kInvalidResourceID,
+    kInvalidResourceID};
+static_assert(
+    base::size(kSoundPermissionButtonTextIDDefaultSetting) ==
+        CONTENT_SETTING_NUM_SETTINGS,
+    "kSoundPermissionButtonTextIDDefaultSetting array size is incorrect");
+#endif
 
 struct PermissionsUIInfo {
   ContentSettingsType type;
@@ -250,10 +284,20 @@ PageInfoUI::GetSecurityDescription(const IdentityInfo& identity_info) const {
       return CreateSecurityDescription(SecuritySummaryColor::RED,
                                        IDS_PAGE_INFO_UNWANTED_SOFTWARE_SUMMARY,
                                        IDS_PAGE_INFO_UNWANTED_SOFTWARE_DETAILS);
-    case PageInfo::SITE_IDENTITY_STATUS_PASSWORD_REUSE:
+    case PageInfo::SITE_IDENTITY_STATUS_SIGN_IN_PASSWORD_REUSE:
 #if defined(SAFE_BROWSING_DB_LOCAL)
-      return CreateSecurityDescriptionForPasswordReuse();
+      return CreateSecurityDescriptionForPasswordReuse(
+          /*is_enterprise_password=*/false);
 #endif
+    case PageInfo::SITE_IDENTITY_STATUS_ENTERPRISE_PASSWORD_REUSE:
+#if defined(SAFE_BROWSING_DB_LOCAL)
+      return CreateSecurityDescriptionForPasswordReuse(
+          /*is_enterprise_password=*/true);
+#endif
+    case PageInfo::SITE_IDENTITY_STATUS_BILLING:
+      return CreateSecurityDescription(SecuritySummaryColor::RED,
+                                       IDS_PAGE_INFO_BILLING_SUMMARY,
+                                       IDS_PAGE_INFO_BILLING_DETAILS);
     case PageInfo::SITE_IDENTITY_STATUS_DEPRECATED_SIGNATURE_ALGORITHM:
     case PageInfo::SITE_IDENTITY_STATUS_UNKNOWN:
     case PageInfo::SITE_IDENTITY_STATUS_NO_CERT:
@@ -289,12 +333,38 @@ base::string16 PageInfoUI::PermissionActionToUIString(
   switch (source) {
     case content_settings::SETTING_SOURCE_USER:
       if (setting == CONTENT_SETTING_DEFAULT) {
+#if !defined(OS_ANDROID)
+        if (type == CONTENT_SETTINGS_TYPE_SOUND &&
+            base::FeatureList::IsEnabled(media::kAutoplayWhitelistSettings)) {
+          // If the block autoplay enabled preference is enabled and the
+          // sound default setting is ALLOW, we will return a custom string
+          // indicating that Chrome is controlling autoplay and sound
+          // automatically.
+          if (profile->GetPrefs()->GetBoolean(prefs::kBlockAutoplayEnabled) &&
+              effective_setting == ContentSetting::CONTENT_SETTING_ALLOW) {
+            return l10n_util::GetStringUTF16(
+                IDS_PAGE_INFO_BUTTON_TEXT_AUTOMATIC_BY_DEFAULT);
+          }
+
+          button_text_ids = kSoundPermissionButtonTextIDDefaultSetting;
+          break;
+        }
+#endif
+
         button_text_ids = kPermissionButtonTextIDDefaultSetting;
         break;
       }
       FALLTHROUGH;
     case content_settings::SETTING_SOURCE_POLICY:
     case content_settings::SETTING_SOURCE_EXTENSION:
+#if !defined(OS_ANDROID)
+      if (type == CONTENT_SETTINGS_TYPE_SOUND &&
+          base::FeatureList::IsEnabled(media::kAutoplayWhitelistSettings)) {
+        button_text_ids = kSoundPermissionButtonTextIDUserManaged;
+        break;
+      }
+#endif
+
       button_text_ids = kPermissionButtonTextIDUserManaged;
       break;
     case content_settings::SETTING_SOURCE_WHITELIST:
@@ -491,12 +561,12 @@ const gfx::ImageSkia PageInfoUI::GetPermissionIcon(const PermissionInfo& info,
                                : info.setting;
   if (setting == CONTENT_SETTING_BLOCK) {
     return gfx::CreateVectorIconWithBadge(
-        *icon, kIconSize,
+        *icon, kVectorIconSize,
         color_utils::DeriveDefaultIconColor(related_text_color),
         kBlockedBadgeIcon);
   }
   return gfx::CreateVectorIcon(
-      *icon, kIconSize,
+      *icon, kVectorIconSize,
       color_utils::DeriveDefaultIconColor(related_text_color));
 }
 
@@ -510,12 +580,12 @@ const gfx::ImageSkia PageInfoUI::GetChosenObjectIcon(
   const gfx::VectorIcon* icon = &vector_icons::kUsbIcon;
   if (deleted) {
     return gfx::CreateVectorIconWithBadge(
-        *icon, kIconSize,
+        *icon, kVectorIconSize,
         color_utils::DeriveDefaultIconColor(related_text_color),
         kBlockedBadgeIcon);
   }
   return gfx::CreateVectorIcon(
-      *icon, kIconSize,
+      *icon, kVectorIconSize,
       color_utils::DeriveDefaultIconColor(related_text_color));
 }
 
@@ -523,7 +593,7 @@ const gfx::ImageSkia PageInfoUI::GetChosenObjectIcon(
 const gfx::ImageSkia PageInfoUI::GetCertificateIcon(
     const SkColor related_text_color) {
   return gfx::CreateVectorIcon(
-      kCertificateIcon, kIconSize,
+      kCertificateIcon, kVectorIconSize,
       color_utils::DeriveDefaultIconColor(related_text_color));
 }
 
@@ -531,7 +601,7 @@ const gfx::ImageSkia PageInfoUI::GetCertificateIcon(
 const gfx::ImageSkia PageInfoUI::GetSiteSettingsIcon(
     const SkColor related_text_color) {
   return gfx::CreateVectorIcon(
-      kSettingsIcon, kIconSize,
+      kSettingsIcon, kVectorIconSize,
       color_utils::DeriveDefaultIconColor(related_text_color));
 }
 #endif

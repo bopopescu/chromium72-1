@@ -39,10 +39,10 @@ WideString CBC_EAN13::Preprocess(const WideStringView& contents) {
     for (int32_t i = 0; i < 12 - length; i++)
       encodeContents = wchar_t('0') + encodeContents;
 
-    ByteString byteString = encodeContents.UTF8Encode();
+    ByteString byteString = encodeContents.ToUTF8();
     int32_t checksum = pWriter->CalcChecksum(byteString);
-    byteString += checksum - 0 + '0';
-    encodeContents = byteString.UTF8Decode();
+    byteString += checksum + '0';
+    encodeContents = WideString::FromUTF8(byteString.AsStringView());
   }
   if (length > 13)
     encodeContents = encodeContents.Left(13);
@@ -57,16 +57,13 @@ bool CBC_EAN13::Encode(const WideStringView& contents) {
   BCFORMAT format = BCFORMAT_EAN_13;
   int32_t outWidth = 0;
   int32_t outHeight = 0;
-  WideString encodeContents = Preprocess(contents);
-  ByteString byteString = encodeContents.UTF8Encode();
-  m_renderContents = encodeContents;
+  m_renderContents = Preprocess(contents);
+  ByteString byteString = m_renderContents.ToUTF8();
   auto* pWriter = GetOnedEAN13Writer();
   std::unique_ptr<uint8_t, FxFreeDeleter> data(
       pWriter->Encode(byteString, format, outWidth, outHeight));
-  if (!data)
-    return false;
-  return pWriter->RenderResult(encodeContents.AsStringView(), data.get(),
-                               outWidth);
+  return data && pWriter->RenderResult(m_renderContents.AsStringView(),
+                                       data.get(), outWidth);
 }
 
 bool CBC_EAN13::RenderDevice(CFX_RenderDevice* device,

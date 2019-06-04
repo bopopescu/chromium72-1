@@ -21,7 +21,7 @@
 
 namespace content {
 
-struct VideoTrackAdapterSettings;
+class VideoTrackAdapterSettings;
 
 // MediaStreamVideoTrack is a video specific representation of a
 // blink::WebMediaStreamTrack in content. It is owned by the blink object
@@ -106,6 +106,8 @@ class CONTENT_EXPORT MediaStreamVideoTrack : public MediaStreamTrack {
     frame_rate_ = frame_rate;
   }
 
+  void SetTrackAdapterSettings(const VideoTrackAdapterSettings& settings);
+
   MediaStreamVideoSource* source() const { return source_.get(); }
 
  private:
@@ -114,6 +116,8 @@ class CONTENT_EXPORT MediaStreamVideoTrack : public MediaStreamTrack {
   friend class MediaStreamVideoSink;
   FRIEND_TEST_ALL_PREFIXES(MediaStreamRemoteVideoSourceTest, StartTrack);
   FRIEND_TEST_ALL_PREFIXES(MediaStreamRemoteVideoSourceTest, RemoteTrackStop);
+  FRIEND_TEST_ALL_PREFIXES(MediaStreamRemoteVideoSourceTest,
+                           PreservesColorSpace);
   FRIEND_TEST_ALL_PREFIXES(PepperToVideoTrackAdapterTest, PutFrame);
 
   // Add |sink| to receive state changes on the main render thread and video

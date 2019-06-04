@@ -147,7 +147,6 @@ bool SharedMemory::Create(const SharedMemoryCreateOptions& options) {
            sb.st_uid != effective_uid)) {
         LOG(ERROR) <<
             "Invalid owner when opening existing shared memory file.";
-        close(fd.get());
         return false;
       }
 
@@ -160,14 +159,6 @@ bool SharedMemory::Create(const SharedMemoryCreateOptions& options) {
       readonly_fd.reset(HANDLE_EINTR(open(path.value().c_str(), O_RDONLY)));
       if (!readonly_fd.is_valid()) {
         DPLOG(ERROR) << "open(\"" << path.value() << "\", O_RDONLY) failed";
-        close(fd.get());
-        return false;
-      }
-    }
-    if (fd.is_valid()) {
-      // "a+" is always appropriate: if it's a new file, a+ is similar to w+.
-      if (!fdopen(fd.get(), "a+")) {
-        PLOG(ERROR) << "Creating file stream in " << path.value() << " failed";
         return false;
       }
     }
@@ -372,8 +363,7 @@ bool SharedMemory::FilePathForMemoryName(const std::string& mem_name,
 #else
   static const char kShmem[] = "org.chromium.Chromium.shmem.";
 #endif
-  CR_DEFINE_STATIC_LOCAL(const std::string, name_base, (kShmem));
-  *path = temp_dir.AppendASCII(name_base + mem_name);
+  *path = temp_dir.AppendASCII(kShmem + mem_name);
   return true;
 }
 

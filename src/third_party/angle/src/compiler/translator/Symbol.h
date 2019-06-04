@@ -20,22 +20,6 @@ namespace sh
 
 class TSymbolTable;
 
-enum class SymbolType
-{
-    BuiltIn,
-    UserDefined,
-    AngleInternal,
-    Empty  // Meaning symbol without a name.
-};
-
-enum class SymbolClass
-{
-    Function,
-    Variable,
-    Struct,
-    InterfaceBlock
-};
-
 // Symbol base class. (Can build functions or variables out of these...)
 class TSymbol : angle::NonCopyable
 {
@@ -60,6 +44,7 @@ class TSymbol : angle::NonCopyable
     bool isFunction() const { return mSymbolClass == SymbolClass::Function; }
     bool isVariable() const { return mSymbolClass == SymbolClass::Variable; }
     bool isStruct() const { return mSymbolClass == SymbolClass::Struct; }
+    bool isInterfaceBlock() const { return mSymbolClass == SymbolClass::InterfaceBlock; }
 
     const TSymbolUniqueId &uniqueId() const { return mUniqueId; }
     SymbolType symbolType() const { return mSymbolType; }
@@ -76,8 +61,7 @@ class TSymbol : angle::NonCopyable
           mSymbolType(symbolType),
           mExtension(extension),
           mSymbolClass(symbolClass)
-    {
-    }
+    {}
 
     const ImmutableString mName;
 
@@ -117,8 +101,7 @@ class TVariable : public TSymbol
         : TSymbol(id, name, symbolType, extension, SymbolClass::Variable),
           mType(type),
           unionArray(nullptr)
-    {
-    }
+    {}
 
   private:
     const TType *mType;
@@ -199,9 +182,9 @@ struct TParameter
     const TVariable *createVariable(TSymbolTable *symbolTable)
     {
         const ImmutableString constName(name);
-        const TType *constType   = type;
-        name                     = nullptr;
-        type                     = nullptr;
+        const TType *constType = type;
+        name                   = nullptr;
+        type                   = nullptr;
         return new TVariable(symbolTable, constName, constType,
                              constName.empty() ? SymbolType::Empty : SymbolType::UserDefined);
     }
@@ -250,6 +233,8 @@ class TFunction : public TSymbol
 
     bool isMain() const;
     bool isImageFunction() const;
+    bool isAtomicCounterFunction() const;
+    bool hasSamplerInStructParams() const;
 
     // Note: Only to be used for static built-in functions!
     constexpr TFunction(const TSymbolUniqueId &id,
@@ -270,8 +255,7 @@ class TFunction : public TSymbol
           defined(false),
           mHasPrototypeDeclaration(false),
           mKnownToNotHaveSideEffects(knownToNotHaveSideEffects)
-    {
-    }
+    {}
 
   private:
     ImmutableString buildMangledName() const;

@@ -78,8 +78,9 @@ SubframeNavigationFilteringThrottle::DeferToCalculateLoadPolicy() {
     return PROCEED;
   parent_frame_filter_->GetLoadPolicyForSubdocument(
       navigation_handle()->GetURL(),
-      base::Bind(&SubframeNavigationFilteringThrottle::OnCalculatedLoadPolicy,
-                 weak_ptr_factory_.GetWeakPtr()));
+      base::BindOnce(
+          &SubframeNavigationFilteringThrottle::OnCalculatedLoadPolicy,
+          weak_ptr_factory_.GetWeakPtr()));
   last_defer_timestamp_ = base::TimeTicks::Now();
   return DEFER;
 }
@@ -92,14 +93,14 @@ void SubframeNavigationFilteringThrottle::OnCalculatedLoadPolicy(
 
   if (policy == LoadPolicy::DISALLOW) {
     if (parent_frame_filter_->activation_state().enable_logging) {
-      std::ostringstream oss(kDisallowSubframeConsoleMessagePrefix);
-      oss << navigation_handle()->GetURL();
-      oss << kDisallowSubframeConsoleMessageSuffix;
+      std::string console_message = base::StringPrintf(
+          kDisallowSubframeConsoleMessageFormat,
+          navigation_handle()->GetURL().possibly_invalid_spec().c_str());
       navigation_handle()
           ->GetWebContents()
           ->GetMainFrame()
           ->AddMessageToConsole(content::CONSOLE_MESSAGE_LEVEL_ERROR,
-                                oss.str());
+                                console_message);
     }
 
     parent_frame_filter_->ReportDisallowedLoad();
@@ -124,6 +125,13 @@ void SubframeNavigationFilteringThrottle::NotifyLoadPolicy() const {
       navigation_handle()->GetWebContents()->UnsafeFindFrameByFrameTreeNodeId(
           navigation_handle()->GetFrameTreeNodeId());
   DCHECK(starting_rfh);
+  if (!starting_rfh) {
+    // TODO(arthursonzogni): Remove this block, this must not happen.
+    // See https://crbug.com/904248.
+    observer_manager->NotifySubframeNavigationEvaluated(
+        navigation_handle(), load_policy_, false /* is_ad_subframe */);
+    return;
+  }
 
   bool is_ad_subframe =
       delegate_->CalculateIsAdSubframe(starting_rfh, load_policy_);

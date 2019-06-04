@@ -55,6 +55,14 @@ Polymer({
       },
     },
 
+    // <if expr="not chromeos">
+    /**
+     * Stored accounts to the system, supplied by SyncBrowserProxy.
+     * @type {?Array<!settings.StoredAccount>}
+     */
+    storedAccounts: Object,
+    // </if>
+
     /**
      * The current sync status, supplied by SyncBrowserProxy.
      * @type {?settings.SyncStatus}
@@ -79,27 +87,15 @@ Polymer({
      */
     profileName_: String,
 
-    /**
-     * The profile deletion warning. The message indicates the number of
-     * profile stats that will be deleted if a non-zero count for the profile
-     * stats is returned from the browser.
-     * @private
-     */
-    deleteProfileWarning_: String,
-
-    /**
-     * True if the profile deletion warning is visible.
-     * @private
-     */
-    deleteProfileWarningVisible_: Boolean,
-
-    /**
-     * True if the checkbox to delete the profile has been checked.
-     * @private
-     */
-    deleteProfile_: Boolean,
-
     // <if expr="not chromeos">
+    /** @private {boolean} */
+    shouldShowGoogleAccount_: {
+      type: Boolean,
+      value: false,
+      computed: 'computeShouldShowGoogleAccount_(storedAccounts, syncStatus,' +
+          'storedAccounts.length, syncStatus.signedIn, syncStatus.hasError)',
+    },
+
     /** @private */
     showImportDataDialog_: {
       type: Boolean,
@@ -108,7 +104,7 @@ Polymer({
     // </if>
 
     /** @private */
-    showDisconnectDialog_: Boolean,
+    showSignoutDialog_: Boolean,
 
     // <if expr="chromeos">
     /**
@@ -122,6 +118,18 @@ Polymer({
       },
       readOnly: true,
     },
+
+    /**
+     * True if Chrome OS Account Manager is enabled.
+     * @private
+     */
+    isAccountManagerEnabled_: {
+      type: Boolean,
+      value: function() {
+        return loadTimeData.getBoolean('isAccountManagerEnabled');
+      },
+      readOnly: true,
+    },
     // </if>
 
     /** @private {!Map<string, string>} */
@@ -129,30 +137,42 @@ Polymer({
       type: Object,
       value: function() {
         const map = new Map();
-        if (settings.routes.SYNC)
-          map.set(settings.routes.SYNC.path, '#sync-status .subpage-arrow');
+        if (settings.routes.SYNC) {
+          map.set(
+              settings.routes.SYNC.path,
+              loadTimeData.getBoolean('unifiedConsentEnabled') ?
+                  '#sync-setup' :
+                  '#sync-status .subpage-arrow button');
+        }
         // <if expr="not chromeos">
         if (settings.routes.MANAGE_PROFILE) {
           map.set(
               settings.routes.MANAGE_PROFILE.path,
-              '#picture-subpage-trigger .subpage-arrow');
+              loadTimeData.getBoolean('diceEnabled') ?
+                  '#edit-profile .subpage-arrow button' :
+                  '#picture-subpage-trigger .subpage-arrow button');
         }
         // </if>
         // <if expr="chromeos">
         if (settings.routes.CHANGE_PICTURE) {
           map.set(
               settings.routes.CHANGE_PICTURE.path,
-              '#picture-subpage-trigger .subpage-arrow');
+              '#picture-subpage-trigger .subpage-arrow button');
         }
         if (settings.routes.LOCK_SCREEN) {
           map.set(
               settings.routes.LOCK_SCREEN.path,
-              '#lock-screen-subpage-trigger .subpage-arrow');
+              '#lock-screen-subpage-trigger .subpage-arrow button');
         }
         if (settings.routes.ACCOUNTS) {
           map.set(
               settings.routes.ACCOUNTS.path,
-              '#manage-other-people-subpage-trigger .subpage-arrow');
+              '#manage-other-people-subpage-trigger');
+        }
+        if (settings.routes.ACCOUNT_MANAGER) {
+          map.set(
+              settings.routes.ACCOUNT_MANAGER.path,
+              '#account-manager-subpage-trigger .subpage-arrow button');
         }
         // </if>
         return map;
@@ -184,15 +204,19 @@ Polymer({
     this.addWebUIListener(
         'profile-info-changed', this.handleProfileInfo_.bind(this));
 
-    this.addWebUIListener(
-        'profile-stats-count-ready', this.handleProfileStatsCount_.bind(this));
-
     this.syncBrowserProxy_ = settings.SyncBrowserProxyImpl.getInstance();
     this.syncBrowserProxy_.getSyncStatus().then(
         this.handleSyncStatus_.bind(this));
     this.addWebUIListener(
         'sync-status-changed', this.handleSyncStatus_.bind(this));
+
     // <if expr="not chromeos">
+    const handleStoredAccounts = accounts => {
+      this.storedAccounts = accounts;
+    };
+    this.syncBrowserProxy_.getStoredAccounts().then(handleStoredAccounts);
+    this.addWebUIListener('stored-accounts-updated', handleStoredAccounts);
+
     this.addWebUIListener('sync-settings-saved', () => {
       /** @type {!CrToastElement} */ (this.$.toast).show();
     });
@@ -205,23 +229,24 @@ Polymer({
         settings.getCurrentRoute() == settings.routes.IMPORT_DATA;
 
     if (settings.getCurrentRoute() == settings.routes.SIGN_OUT) {
-      // <if expr="not chromeos">
-      settings.ProfileInfoBrowserProxyImpl.getInstance().getProfileStatsCount();
-      // </if>
       // If the sync status has not been fetched yet, optimistically display
-      // the disconnect dialog. There is another check when the sync status is
-      // fetched. The dialog will be closed then the user is not signed in.
+      // the sign-out dialog. There is another check when the sync status is
+      // fetched. The dialog will be closed when the user is not signed in.
       if (this.syncStatus && !this.syncStatus.signedIn) {
         settings.navigateToPreviousRoute();
       } else {
-        this.showDisconnectDialog_ = true;
-        this.async(() => {
-          this.$$('#disconnectDialog').showModal();
-        });
+        this.showSignoutDialog_ = true;
       }
-    } else if (this.showDisconnectDialog_) {
-      this.$$('#disconnectDialog').close();
     }
+  },
+
+  /**
+   * @return {!Element}
+   * @private
+   */
+  getEditPersonAssocControl_: function() {
+    return this.diceEnabled_ ? assert(this.$$('#edit-profile')) :
+                               assert(this.$$('#picture-subpage-trigger'));
   },
 
   // <if expr="chromeos">
@@ -258,24 +283,6 @@ Polymer({
   },
 
   /**
-   * Handler for when the profile stats count is pushed from the browser.
-   * @param {number} count
-   * @private
-   */
-  handleProfileStatsCount_: function(count) {
-    this.deleteProfileWarning_ = (count > 0) ?
-        (count == 1) ? loadTimeData.getStringF(
-                           'deleteProfileWarningWithCountsSingular',
-                           this.syncStatus.signedInUsername) :
-                       loadTimeData.getStringF(
-                           'deleteProfileWarningWithCountsPlural', count,
-                           this.syncStatus.signedInUsername) :
-        loadTimeData.getStringF(
-            'deleteProfileWarningWithoutCounts',
-            this.syncStatus.signedInUsername);
-  },
-
-  /**
    * Handler for when the sync state is pushed from the browser.
    * @param {?settings.SyncStatus} syncStatus
    * @private
@@ -287,9 +294,6 @@ Polymer({
     const shouldRecordSigninImpression =
         !this.syncStatus && syncStatus && this.showSignin_(syncStatus);
 
-    if (!syncStatus.signedIn && this.showDisconnectDialog_)
-      this.$$('#disconnectDialog').close();
-
     this.syncStatus = syncStatus;
 
     if (shouldRecordSigninImpression && !this.shouldShowSyncAccountControl_()) {
@@ -297,6 +301,20 @@ Polymer({
       chrome.metricsPrivate.recordUserAction('Signin_Impression_FromSettings');
     }
   },
+
+  // <if expr="not chromeos">
+  /**
+   * @return {boolean}
+   * @private
+   */
+  computeShouldShowGoogleAccount_: function() {
+    if (this.storedAccounts === undefined || this.syncStatus === undefined)
+      return false;
+
+    return (this.storedAccounts.length > 0 || !!this.syncStatus.signedIn) &&
+        !this.syncStatus.hasError;
+  },
+  // </if>
 
   /** @private */
   onProfileTap_: function() {
@@ -314,8 +332,8 @@ Polymer({
   },
 
   /** @private */
-  onDisconnectClosed_: function() {
-    this.showDisconnectDialog_ = false;
+  onDisconnectDialogClosed_: function(e) {
+    this.showSignoutDialog_ = false;
     // <if expr="not chromeos">
     if (!this.diceEnabled_) {
       // If DICE-enabled, this button won't exist here.
@@ -329,7 +347,6 @@ Polymer({
 
     if (settings.getCurrentRoute() == settings.routes.SIGN_OUT)
       settings.navigateToPreviousRoute();
-    this.fire('signout-dialog-closed');
   },
 
   /** @private */
@@ -338,37 +355,16 @@ Polymer({
   },
 
   /** @private */
-  onDisconnectCancel_: function() {
-    this.$$('#disconnectDialog').close();
-  },
-
-  /** @private */
-  onDisconnectConfirm_: function() {
-    const deleteProfile = !!this.syncStatus.domain || this.deleteProfile_;
-    // Trigger the sign out event after the navigateToPreviousRoute().
-    // So that the navigation to the setting page could be finished before the
-    // sign out if navigateToPreviousRoute() returns synchronously even the
-    // browser is closed after the sign out. Otherwise, the navigation will be
-    // finished during session restore if the browser is closed before the async
-    // callback executed.
-    listenOnce(this, 'signout-dialog-closed', () => {
-      this.syncBrowserProxy_.signOut(deleteProfile);
-    });
-
-    this.$$('#disconnectDialog').close();
-  },
-
-  /** @private */
   onSyncTap_: function() {
     // When unified-consent is enabled, users can go to sync subpage regardless
     // of sync status.
-    // TODO(scottchen): figure out how to deal with sync error states in the
-    //    subpage (https://crbug.com/824546).
     if (this.unifiedConsentEnabled_) {
       settings.navigateTo(settings.routes.SYNC);
       return;
     }
 
+    // TODO(crbug.com/862983): Remove this code once UnifiedConsent is rolled
+    // out to 100%.
     assert(this.syncStatus.signedIn);
     assert(this.syncStatus.syncSystemEnabled);
 
@@ -417,17 +413,20 @@ Polymer({
     e.preventDefault();
     settings.navigateTo(settings.routes.LOCK_SCREEN);
   },
-  // </if>
+
+  /**
+   * @param {!Event} e
+   * @private
+   */
+  onAccountManagerTap_: function(e) {
+    settings.navigateTo(settings.routes.ACCOUNT_MANAGER);
+  },
 
   /** @private */
   onManageOtherPeople_: function() {
-    // <if expr="not chromeos">
-    this.syncBrowserProxy_.manageOtherPeople();
-    // </if>
-    // <if expr="chromeos">
     settings.navigateTo(settings.routes.ACCOUNTS);
-    // </if>
   },
+  // </if>
 
   // <if expr="not chromeos">
   /**
@@ -452,29 +451,35 @@ Polymer({
   },
 
   /**
+   * Open URL for managing your Google Account.
+   * @private
+   */
+  openGoogleAccount_: function() {
+    settings.OpenWindowProxyImpl.getInstance().openURL(
+        loadTimeData.getString('googleAccountUrl'));
+  },
+
+  /**
    * @return {boolean}
    * @private
    */
   shouldShowSyncAccountControl_: function() {
-    return !!this.diceEnabled_ && !!this.syncStatus.syncSystemEnabled &&
+    if (this.syncStatus == undefined)
+      return false;
+
+    return this.diceEnabled_ && !!this.syncStatus.syncSystemEnabled &&
         !!this.syncStatus.signinAllowed;
   },
   // </if>
 
   /**
    * @private
-   * @param {string} domain
-   * @return {string}
+   * @param {?settings.SyncStatus} syncStatus
+   * @return {boolean}
    */
-  getDisconnectExplanationHtml_: function(domain) {
-    // <if expr="not chromeos">
-    if (domain) {
-      return loadTimeData.getStringF(
-          'syncDisconnectManagedProfileExplanation',
-          '<span id="managed-by-domain-name">' + domain + '</span>');
-    }
-    // </if>
-    return loadTimeData.getString('syncDisconnectExplanation');
+  isPreUnifiedConsentAdvancedSyncSettingsVisible_: function(syncStatus) {
+    return !!syncStatus && !!syncStatus.signedIn &&
+        !!syncStatus.syncSystemEnabled && !this.unifiedConsentEnabled_;
   },
 
   /**
@@ -482,9 +487,18 @@ Polymer({
    * @param {?settings.SyncStatus} syncStatus
    * @return {boolean}
    */
-  isAdvancedSyncSettingsVisible_: function(syncStatus) {
-    return !!syncStatus && !!syncStatus.signedIn &&
-        !!syncStatus.syncSystemEnabled && !this.unifiedConsentEnabled_;
+  isAdvancedSyncSettingsSearchable_: function(syncStatus) {
+    return this.isPreUnifiedConsentAdvancedSyncSettingsVisible_(syncStatus) ||
+        !!this.unifiedConsentEnabled_;
+  },
+
+  /**
+   * @private
+   * @return {Element|null}
+   */
+  getAdvancedSyncSettingsAssociatedControl_: function() {
+    return !!this.unifiedConsentEnabled_ ? this.$$('#sync-setup') :
+                                           this.$$('#sync-status');
   },
 
   /**
@@ -509,7 +523,7 @@ Polymer({
     if (!syncStatus)
       return '';
 
-    let syncIcon = 'settings:sync';
+    let syncIcon = 'cr:sync';
 
     if (syncStatus.hasError)
       syncIcon = 'settings:sync-problem';
@@ -566,5 +580,10 @@ Polymer({
     if (hasPinLogin)
       return this.i18n('lockScreenTitleLoginLock');
     return this.i18n('lockScreenTitleLock');
+  },
+
+  /** @private */
+  cancelSyncSetup_: function() {
+    this.$$('settings-sync-page').cancelSyncSetup();
   },
 });

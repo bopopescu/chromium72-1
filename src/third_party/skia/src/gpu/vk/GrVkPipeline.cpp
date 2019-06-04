@@ -6,9 +6,9 @@
 */
 
 #include "GrVkPipeline.h"
-
 #include "GrGeometryProcessor.h"
 #include "GrPipeline.h"
+#include "GrStencilSettings.h"
 #include "GrVkCommandBuffer.h"
 #include "GrVkGpu.h"
 #include "GrVkRenderTarget.h"
@@ -17,29 +17,51 @@
 static inline VkFormat attrib_type_to_vkformat(GrVertexAttribType type) {
     switch (type) {
         case kFloat_GrVertexAttribType:
-        case kHalf_GrVertexAttribType:
             return VK_FORMAT_R32_SFLOAT;
         case kFloat2_GrVertexAttribType:
-        case kHalf2_GrVertexAttribType:
             return VK_FORMAT_R32G32_SFLOAT;
         case kFloat3_GrVertexAttribType:
-        case kHalf3_GrVertexAttribType:
             return VK_FORMAT_R32G32B32_SFLOAT;
         case kFloat4_GrVertexAttribType:
-        case kHalf4_GrVertexAttribType:
             return VK_FORMAT_R32G32B32A32_SFLOAT;
+        case kHalf_GrVertexAttribType:
+            return VK_FORMAT_R16_SFLOAT;
+        case kHalf2_GrVertexAttribType:
+            return VK_FORMAT_R16G16_SFLOAT;
+        case kHalf3_GrVertexAttribType:
+            return VK_FORMAT_R16G16B16_SFLOAT;
+        case kHalf4_GrVertexAttribType:
+            return VK_FORMAT_R16G16B16A16_SFLOAT;
         case kInt2_GrVertexAttribType:
             return VK_FORMAT_R32G32_SINT;
         case kInt3_GrVertexAttribType:
             return VK_FORMAT_R32G32B32_SINT;
         case kInt4_GrVertexAttribType:
             return VK_FORMAT_R32G32B32A32_SINT;
+        case kByte_GrVertexAttribType:
+            return VK_FORMAT_R8_SINT;
+        case kByte2_GrVertexAttribType:
+            return VK_FORMAT_R8G8_SINT;
+        case kByte3_GrVertexAttribType:
+            return VK_FORMAT_R8G8B8_SINT;
+        case kByte4_GrVertexAttribType:
+            return VK_FORMAT_R8G8B8A8_SINT;
+        case kUByte_GrVertexAttribType:
+            return VK_FORMAT_R8_UINT;
+        case kUByte2_GrVertexAttribType:
+            return VK_FORMAT_R8G8_UINT;
+        case kUByte3_GrVertexAttribType:
+            return VK_FORMAT_R8G8B8_UINT;
+        case kUByte4_GrVertexAttribType:
+            return VK_FORMAT_R8G8B8A8_UINT;
         case kUByte_norm_GrVertexAttribType:
             return VK_FORMAT_R8_UNORM;
         case kUByte4_norm_GrVertexAttribType:
             return VK_FORMAT_R8G8B8A8_UNORM;
         case kShort2_GrVertexAttribType:
             return VK_FORMAT_R16G16_SINT;
+        case kShort4_GrVertexAttribType:
+            return VK_FORMAT_R16G16B16A16_SINT;
         case kUShort2_GrVertexAttribType:
             return VK_FORMAT_R16G16_UINT;
         case kUShort2_norm_GrVertexAttribType:
@@ -59,37 +81,54 @@ static void setup_vertex_input_state(const GrPrimitiveProcessor& primProc,
                                   VkVertexInputAttributeDescription* attributeDesc) {
     uint32_t vertexBinding = 0, instanceBinding = 0;
 
-    if (primProc.hasVertexAttribs()) {
-        vertexBinding = bindingDescs->count();
-        bindingDescs->push_back() = {
-            vertexBinding,
-            (uint32_t) primProc.getVertexStride(),
-            VK_VERTEX_INPUT_RATE_VERTEX
-        };
+    int nextBinding = bindingDescs->count();
+    if (primProc.hasVertexAttributes()) {
+        vertexBinding = nextBinding++;
     }
 
-    if (primProc.hasInstanceAttribs()) {
-        instanceBinding = bindingDescs->count();
-        bindingDescs->push_back() = {
-            instanceBinding,
-            (uint32_t) primProc.getInstanceStride(),
-            VK_VERTEX_INPUT_RATE_INSTANCE
-        };
+    if (primProc.hasInstanceAttributes()) {
+        instanceBinding = nextBinding;
     }
 
     // setup attribute descriptions
-    int vaCount = primProc.numAttribs();
-    if (vaCount > 0) {
-        for (int attribIndex = 0; attribIndex < vaCount; attribIndex++) {
-            using InputRate = GrPrimitiveProcessor::Attribute::InputRate;
-            const GrGeometryProcessor::Attribute& attrib = primProc.getAttrib(attribIndex);
-            VkVertexInputAttributeDescription& vkAttrib = attributeDesc[attribIndex];
-            vkAttrib.location = attribIndex; // for now assume location = attribIndex
-            vkAttrib.binding = InputRate::kPerInstance == attrib.fInputRate ? instanceBinding
-                                                                            : vertexBinding;
-            vkAttrib.format = attrib_type_to_vkformat(attrib.fType);
-            vkAttrib.offset = attrib.fOffsetInRecord;
-        }
+    int vaCount = primProc.numVertexAttributes();
+    int attribIndex = 0;
+    size_t vertexAttributeOffset = 0;
+    for (const auto& attrib : primProc.vertexAttributes()) {
+        VkVertexInputAttributeDescription& vkAttrib = attributeDesc[attribIndex];
+        vkAttrib.location = attribIndex++;  // for now assume location = attribIndex
+        vkAttrib.binding = vertexBinding;
+        vkAttrib.format = attrib_type_to_vkformat(attrib.cpuType());
+        vkAttrib.offset = vertexAttributeOffset;
+        vertexAttributeOffset += attrib.sizeAlign4();
+    }
+    SkASSERT(vertexAttributeOffset == primProc.vertexStride());
+
+    int iaCount = primProc.numInstanceAttributes();
+    size_t instanceAttributeOffset = 0;
+    for (const auto& attrib : primProc.instanceAttributes()) {
+        VkVertexInputAttributeDescription& vkAttrib = attributeDesc[attribIndex];
+        vkAttrib.location = attribIndex++;  // for now assume location = attribIndex
+        vkAttrib.binding = instanceBinding;
+        vkAttrib.format = attrib_type_to_vkformat(attrib.cpuType());
+        vkAttrib.offset = instanceAttributeOffset;
+        instanceAttributeOffset += attrib.sizeAlign4();
+    }
+    SkASSERT(instanceAttributeOffset == primProc.instanceStride());
+
+    if (primProc.hasVertexAttributes()) {
+        bindingDescs->push_back() = {
+                vertexBinding,
+                (uint32_t) vertexAttributeOffset,
+                VK_VERTEX_INPUT_RATE_VERTEX
+        };
+    }
+    if (primProc.hasInstanceAttributes()) {
+        bindingDescs->push_back() = {
+                instanceBinding,
+                (uint32_t) instanceAttributeOffset,
+                VK_VERTEX_INPUT_RATE_INSTANCE
+        };
     }
 
     memset(vertexInputInfo, 0, sizeof(VkPipelineVertexInputStateCreateInfo));
@@ -98,7 +137,7 @@ static void setup_vertex_input_state(const GrPrimitiveProcessor& primProc,
     vertexInputInfo->flags = 0;
     vertexInputInfo->vertexBindingDescriptionCount = bindingDescs->count();
     vertexInputInfo->pVertexBindingDescriptions = bindingDescs->begin();
-    vertexInputInfo->vertexAttributeDescriptionCount = vaCount;
+    vertexInputInfo->vertexAttributeDescriptionCount = vaCount + iaCount;
     vertexInputInfo->pVertexAttributeDescriptions = attributeDesc;
 }
 
@@ -237,8 +276,8 @@ static void setup_viewport_scissor_state(VkPipelineViewportStateCreateInfo* view
     SkASSERT(viewportInfo->viewportCount == viewportInfo->scissorCount);
 }
 
-static void setup_multisample_state(const GrPipeline& pipeline,
-                                    const GrPrimitiveProcessor& primProc,
+static void setup_multisample_state(const GrPrimitiveProcessor& primProc,
+                                    const GrPipeline& pipeline,
                                     const GrCaps* caps,
                                     VkPipelineMultisampleStateCreateInfo* multisampleInfo) {
     memset(multisampleInfo, 0, sizeof(VkPipelineMultisampleStateCreateInfo));
@@ -277,7 +316,7 @@ static VkBlendFactor blend_coeff_to_vk_blend(GrBlendCoeff coeff) {
         VK_BLEND_FACTOR_ONE_MINUS_SRC1_COLOR,      // kIS2C_GrBlendCoeff
         VK_BLEND_FACTOR_SRC1_ALPHA,                // kS2A_GrBlendCoeff
         VK_BLEND_FACTOR_ONE_MINUS_SRC1_ALPHA,      // kIS2A_GrBlendCoeff
-
+        VK_BLEND_FACTOR_ZERO,                      // kIllegal_GrBlendCoeff
     };
     GR_STATIC_ASSERT(SK_ARRAY_COUNT(gTable) == kGrBlendCoeffCnt);
     GR_STATIC_ASSERT(0 == kZero_GrBlendCoeff);
@@ -306,14 +345,50 @@ static VkBlendFactor blend_coeff_to_vk_blend(GrBlendCoeff coeff) {
 
 static VkBlendOp blend_equation_to_vk_blend_op(GrBlendEquation equation) {
     static const VkBlendOp gTable[] = {
-        VK_BLEND_OP_ADD,               // kAdd_GrBlendEquation
-        VK_BLEND_OP_SUBTRACT,          // kSubtract_GrBlendEquation
-        VK_BLEND_OP_REVERSE_SUBTRACT,  // kReverseSubtract_GrBlendEquation
+        // Basic blend ops
+        VK_BLEND_OP_ADD,
+        VK_BLEND_OP_SUBTRACT,
+        VK_BLEND_OP_REVERSE_SUBTRACT,
+
+        // Advanced blend ops
+        VK_BLEND_OP_SCREEN_EXT,
+        VK_BLEND_OP_OVERLAY_EXT,
+        VK_BLEND_OP_DARKEN_EXT,
+        VK_BLEND_OP_LIGHTEN_EXT,
+        VK_BLEND_OP_COLORDODGE_EXT,
+        VK_BLEND_OP_COLORBURN_EXT,
+        VK_BLEND_OP_HARDLIGHT_EXT,
+        VK_BLEND_OP_SOFTLIGHT_EXT,
+        VK_BLEND_OP_DIFFERENCE_EXT,
+        VK_BLEND_OP_EXCLUSION_EXT,
+        VK_BLEND_OP_MULTIPLY_EXT,
+        VK_BLEND_OP_HSL_HUE_EXT,
+        VK_BLEND_OP_HSL_SATURATION_EXT,
+        VK_BLEND_OP_HSL_COLOR_EXT,
+        VK_BLEND_OP_HSL_LUMINOSITY_EXT,
+
+        // Illegal.
+        VK_BLEND_OP_ADD,
     };
-    GR_STATIC_ASSERT(SK_ARRAY_COUNT(gTable) == kFirstAdvancedGrBlendEquation);
     GR_STATIC_ASSERT(0 == kAdd_GrBlendEquation);
     GR_STATIC_ASSERT(1 == kSubtract_GrBlendEquation);
     GR_STATIC_ASSERT(2 == kReverseSubtract_GrBlendEquation);
+    GR_STATIC_ASSERT(3 == kScreen_GrBlendEquation);
+    GR_STATIC_ASSERT(4 == kOverlay_GrBlendEquation);
+    GR_STATIC_ASSERT(5 == kDarken_GrBlendEquation);
+    GR_STATIC_ASSERT(6 == kLighten_GrBlendEquation);
+    GR_STATIC_ASSERT(7 == kColorDodge_GrBlendEquation);
+    GR_STATIC_ASSERT(8 == kColorBurn_GrBlendEquation);
+    GR_STATIC_ASSERT(9 == kHardLight_GrBlendEquation);
+    GR_STATIC_ASSERT(10 == kSoftLight_GrBlendEquation);
+    GR_STATIC_ASSERT(11 == kDifference_GrBlendEquation);
+    GR_STATIC_ASSERT(12 == kExclusion_GrBlendEquation);
+    GR_STATIC_ASSERT(13 == kMultiply_GrBlendEquation);
+    GR_STATIC_ASSERT(14 == kHSLHue_GrBlendEquation);
+    GR_STATIC_ASSERT(15 == kHSLSaturation_GrBlendEquation);
+    GR_STATIC_ASSERT(16 == kHSLColor_GrBlendEquation);
+    GR_STATIC_ASSERT(17 == kHSLLuminosity_GrBlendEquation);
+    GR_STATIC_ASSERT(SK_ARRAY_COUNT(gTable) == kGrBlendEquationCnt);
 
     SkASSERT((unsigned)equation < kGrBlendCoeffCnt);
     return gTable[equation];
@@ -340,6 +415,9 @@ static bool blend_coeff_refs_constant(GrBlendCoeff coeff) {
         false,
         false,
         false,
+        false,
+
+        // Illegal
         false,
     };
     return gCoeffReferencesBlendConst[coeff];
@@ -420,20 +498,18 @@ static void setup_dynamic_state(VkPipelineDynamicStateCreateInfo* dynamicInfo,
     dynamicInfo->pDynamicStates = dynamicStates;
 }
 
-GrVkPipeline* GrVkPipeline::Create(GrVkGpu* gpu, const GrPipeline& pipeline,
-                                   const GrStencilSettings& stencil,
-                                   const GrPrimitiveProcessor& primProc,
+GrVkPipeline* GrVkPipeline::Create(GrVkGpu* gpu, const GrPrimitiveProcessor& primProc,
+                                   const GrPipeline& pipeline, const GrStencilSettings& stencil,
                                    VkPipelineShaderStageCreateInfo* shaderStageInfo,
-                                   int shaderStageCount,
-                                   GrPrimitiveType primitiveType,
-                                   const GrVkRenderPass& renderPass,
-                                   VkPipelineLayout layout,
+                                   int shaderStageCount, GrPrimitiveType primitiveType,
+                                   VkRenderPass compatibleRenderPass, VkPipelineLayout layout,
                                    VkPipelineCache cache) {
     VkPipelineVertexInputStateCreateInfo vertexInputInfo;
     SkSTArray<2, VkVertexInputBindingDescription, true> bindingDescs;
     SkSTArray<16, VkVertexInputAttributeDescription> attributeDesc;
-    SkASSERT(primProc.numAttribs() <= gpu->vkCaps().maxVertexAttributes());
-    VkVertexInputAttributeDescription* pAttribs = attributeDesc.push_back_n(primProc.numAttribs());
+    int totalAttributeCnt = primProc.numVertexAttributes() + primProc.numInstanceAttributes();
+    SkASSERT(totalAttributeCnt <= gpu->vkCaps().maxVertexAttributes());
+    VkVertexInputAttributeDescription* pAttribs = attributeDesc.push_back_n(totalAttributeCnt);
     setup_vertex_input_state(primProc, &vertexInputInfo, &bindingDescs, pAttribs);
 
     VkPipelineInputAssemblyStateCreateInfo inputAssemblyInfo;
@@ -446,7 +522,7 @@ GrVkPipeline* GrVkPipeline::Create(GrVkGpu* gpu, const GrPipeline& pipeline,
     setup_viewport_scissor_state(&viewportInfo);
 
     VkPipelineMultisampleStateCreateInfo multisampleInfo;
-    setup_multisample_state(pipeline, primProc, gpu->caps(), &multisampleInfo);
+    setup_multisample_state(primProc, pipeline, gpu->caps(), &multisampleInfo);
 
     // We will only have one color attachment per pipeline.
     VkPipelineColorBlendAttachmentState attachmentStates[1];
@@ -477,7 +553,7 @@ GrVkPipeline* GrVkPipeline::Create(GrVkGpu* gpu, const GrPipeline& pipeline,
     pipelineCreateInfo.pColorBlendState = &colorBlendInfo;
     pipelineCreateInfo.pDynamicState = &dynamicInfo;
     pipelineCreateInfo.layout = layout;
-    pipelineCreateInfo.renderPass = renderPass.vkRenderPass();
+    pipelineCreateInfo.renderPass = compatibleRenderPass;
     pipelineCreateInfo.subpass = 0;
     pipelineCreateInfo.basePipelineHandle = VK_NULL_HANDLE;
     pipelineCreateInfo.basePipelineIndex = -1;
@@ -550,8 +626,11 @@ void GrVkPipeline::SetDynamicBlendConstantState(GrVkGpu* gpu,
     if (blend_coeff_refs_constant(srcCoeff) || blend_coeff_refs_constant(dstCoeff)) {
         // Swizzle the blend to match what the shader will output.
         const GrSwizzle& swizzle = gpu->caps()->shaderCaps()->configOutputSwizzle(pixelConfig);
-        GrColor blendConst = swizzle.applyTo(blendInfo.fBlendConstant);
-        GrColorToRGBAFloat(blendConst, floatColors);
+        SkPMColor4f blendConst = swizzle.applyTo(blendInfo.fBlendConstant);
+        floatColors[0] = blendConst.fR;
+        floatColors[1] = blendConst.fG;
+        floatColors[2] = blendConst.fB;
+        floatColors[3] = blendConst.fA;
     } else {
         memset(floatColors, 0, 4 * sizeof(float));
     }

@@ -10,6 +10,7 @@
 #include "ash/shelf/shelf.h"
 #include "ash/shelf/shelf_constants.h"
 #include "ash/shell.h"
+#include "ash/system/tray/tray_constants.h"
 #include "base/i18n/rtl.h"
 #include "ui/display/display.h"
 #include "ui/display/screen.h"
@@ -23,11 +24,6 @@ namespace ash {
 namespace {
 
 const int kToastMarginX = 7;
-
-// If there should be no margin for the first item, this value needs to be
-// subtracted to flush the message to the shelf (the width of the border +
-// shadow).
-const int kNoToastMarginBorderAndShadowOffset = 2;
 
 }  // namespace
 
@@ -55,13 +51,15 @@ void AshPopupAlignmentDelegate::StartObserving(
 }
 
 void AshPopupAlignmentDelegate::SetTrayBubbleHeight(int height) {
+  const int old_tray_bubble_height = tray_bubble_height_;
+
   tray_bubble_height_ = height;
 
   // If the shelf is shown during auto-hide state, the distance from the edge
   // should be reduced by the height of shelf's shown height.
   if (shelf_->GetVisibilityState() == SHELF_AUTO_HIDE &&
       shelf_->GetAutoHideState() == SHELF_AUTO_HIDE_SHOWN) {
-    tray_bubble_height_ -= kShelfSize;
+    tray_bubble_height_ -= ShelfConstants::shelf_size();
   }
 
   if (tray_bubble_height_ > 0)
@@ -69,7 +67,8 @@ void AshPopupAlignmentDelegate::SetTrayBubbleHeight(int height) {
   else
     tray_bubble_height_ = 0;
 
-  DoUpdateIfPossible();
+  if (old_tray_bubble_height != tray_bubble_height_)
+    ResetBounds();
 }
 
 int AshPopupAlignmentDelegate::GetToastOriginX(
@@ -85,7 +84,7 @@ int AshPopupAlignmentDelegate::GetToastOriginX(
 }
 
 int AshPopupAlignmentDelegate::GetBaseline() const {
-  return work_area_.bottom() - kNoToastMarginBorderAndShadowOffset -
+  return work_area_.bottom() - kUnifiedMenuVerticalPadding -
          tray_bubble_height_;
 }
 
@@ -104,9 +103,10 @@ bool AshPopupAlignmentDelegate::IsFromLeft() const {
   return GetAlignment() == SHELF_ALIGNMENT_LEFT;
 }
 
-void AshPopupAlignmentDelegate::RecomputeAlignment(
+bool AshPopupAlignmentDelegate::RecomputeAlignment(
     const display::Display& display) {
   // Nothing needs to be done.
+  return false;
 }
 
 void AshPopupAlignmentDelegate::ConfigureWidgetInitParamsForContainer(
@@ -134,8 +134,12 @@ display::Display AshPopupAlignmentDelegate::GetCurrentDisplay() const {
 }
 
 void AshPopupAlignmentDelegate::UpdateWorkArea() {
-  work_area_ = shelf_->GetUserWorkAreaBounds();
-  DoUpdateIfPossible();
+  gfx::Rect new_work_area = shelf_->GetUserWorkAreaBounds();
+  if (work_area_ == new_work_area)
+    return;
+
+  work_area_ = new_work_area;
+  ResetBounds();
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -153,12 +157,6 @@ void AshPopupAlignmentDelegate::OnAutoHideStateChanged(
 
 ///////////////////////////////////////////////////////////////////////////////
 // display::DisplayObserver:
-
-void AshPopupAlignmentDelegate::OnDisplayAdded(
-    const display::Display& new_display) {}
-
-void AshPopupAlignmentDelegate::OnDisplayRemoved(
-    const display::Display& old_display) {}
 
 void AshPopupAlignmentDelegate::OnDisplayMetricsChanged(
     const display::Display& display,

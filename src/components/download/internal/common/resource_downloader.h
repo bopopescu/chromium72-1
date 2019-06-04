@@ -5,8 +5,10 @@
 #ifndef COMPONENTS_DOWNLOAD_INTERNAL_COMMON_RESOURCE_DOWNLOADER_H_
 #define COMPONENTS_DOWNLOAD_INTERNAL_COMMON_RESOURCE_DOWNLOADER_H_
 
+#include "base/callback.h"
 #include "components/download/public/common/download_export.h"
 #include "components/download/public/common/download_response_handler.h"
+#include "components/download/public/common/download_utils.h"
 #include "components/download/public/common/url_download_handler.h"
 #include "mojo/public/cpp/bindings/binding.h"
 #include "net/cert/cert_status_flags.h"
@@ -16,7 +18,7 @@
 namespace download {
 class DownloadURLLoaderFactoryGetter;
 
-// Class for handing the download of a url.
+// Class for handing the download of a url. Lives on IO thread.
 class COMPONENTS_DOWNLOAD_EXPORT ResourceDownloader
     : public download::UrlDownloadHandler,
       public download::DownloadResponseHandler::Delegate {
@@ -28,10 +30,11 @@ class COMPONENTS_DOWNLOAD_EXPORT ResourceDownloader
       std::unique_ptr<network::ResourceRequest> request,
       scoped_refptr<download::DownloadURLLoaderFactoryGetter>
           url_loader_factory_getter,
+      const URLSecurityPolicy& url_security_policy,
       const GURL& site_url,
       const GURL& tab_url,
       const GURL& tab_referrer_url,
-      uint32_t download_id,
+      bool is_new_download,
       bool is_parallel_request,
       const scoped_refptr<base::SingleThreadTaskRunner>& task_runner);
 
@@ -52,6 +55,7 @@ class COMPONENTS_DOWNLOAD_EXPORT ResourceDownloader
       network::mojom::URLLoaderClientEndpointsPtr url_loader_client_endpoints,
       scoped_refptr<download::DownloadURLLoaderFactoryGetter>
           url_loader_factory_getter,
+      const URLSecurityPolicy& url_security_policy,
       const scoped_refptr<base::SingleThreadTaskRunner>& task_runner);
 
   ResourceDownloader(
@@ -62,10 +66,11 @@ class COMPONENTS_DOWNLOAD_EXPORT ResourceDownloader
       const GURL& site_url,
       const GURL& tab_url,
       const GURL& tab_referrer_url,
-      uint32_t download_id,
+      bool is_new_download,
       const scoped_refptr<base::SingleThreadTaskRunner>& task_runner,
       scoped_refptr<download::DownloadURLLoaderFactoryGetter>
-          url_loader_factory_getter);
+          url_loader_factory_getter,
+      const URLSecurityPolicy& url_security_policy);
   ~ResourceDownloader() override;
 
   // download::DownloadResponseHandler::Delegate
@@ -73,6 +78,8 @@ class COMPONENTS_DOWNLOAD_EXPORT ResourceDownloader
       std::unique_ptr<download::DownloadCreateInfo> download_create_info,
       download::mojom::DownloadStreamHandlePtr stream_handle) override;
   void OnReceiveRedirect() override;
+  void OnResponseCompleted() override;
+  bool CanRequestURL(const GURL& url) override;
 
  private:
   // Helper method to start the network request.
@@ -86,6 +93,12 @@ class COMPONENTS_DOWNLOAD_EXPORT ResourceDownloader
       std::vector<GURL> url_chain,
       net::CertStatus cert_status,
       network::mojom::URLLoaderClientEndpointsPtr url_loader_client_endpoints);
+
+  // UrlDownloadHandler implementations.
+  void CancelRequest() override;
+
+  // Ask the |delegate_| to destroy this object.
+  void Destroy();
 
   base::WeakPtr<download::UrlDownloadHandler::Delegate> delegate_;
 
@@ -102,9 +115,8 @@ class COMPONENTS_DOWNLOAD_EXPORT ResourceDownloader
   // URLLoader for sending out the request.
   network::mojom::URLLoaderPtr url_loader_;
 
-  // ID of the download, or download::DownloadItem::kInvalidId if this is a new
-  // download.
-  uint32_t download_id_;
+  // Whether this is a new download.
+  bool is_new_download_;
 
   // GUID of the download, or empty if this is a new download.
   std::string guid_;
@@ -134,6 +146,9 @@ class COMPONENTS_DOWNLOAD_EXPORT ResourceDownloader
   // URLLoaderFactory getter for issueing network requests.
   scoped_refptr<download::DownloadURLLoaderFactoryGetter>
       url_loader_factory_getter_;
+
+  // Used to check if the URL is safe to request.
+  URLSecurityPolicy url_security_policy_;
 
   base::WeakPtrFactory<ResourceDownloader> weak_ptr_factory_;
 

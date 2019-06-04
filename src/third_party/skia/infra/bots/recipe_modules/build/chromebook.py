@@ -34,6 +34,7 @@ def compile_fn(api, checkout_root, out_dir):
       '-I%s' % sysroot_dir.join('include', 'c++', '4.8.4',
                                 'arm-linux-gnueabihf'),
       '-DMESA_EGL_NO_X11_HEADERS',
+      '-U_GLIBCXX_DEBUG',
     ]
 
     extra_ldflags = [
@@ -91,7 +92,7 @@ def compile_fn(api, checkout_root, out_dir):
             infra_step=True)
     api.run(api.step, 'gn gen', cmd=[gn, 'gen', out_dir, '--args=' + gn_args])
     api.run(api.step, 'ninja',
-            cmd=['ninja', '-k', '0', '-C', out_dir, 'nanobench', 'dm'])
+            cmd=['ninja', '-C', out_dir, 'nanobench', 'dm'])
 
 
 def copy_extra_build_products(api, src, dst):

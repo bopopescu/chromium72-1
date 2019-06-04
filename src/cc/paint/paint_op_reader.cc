@@ -7,14 +7,15 @@
 #include <stddef.h>
 #include <algorithm>
 
+#include "base/bits.h"
+#include "base/debug/dump_without_crashing.h"
 #include "base/stl_util.h"
 #include "cc/paint/image_transfer_cache_entry.h"
+#include "cc/paint/paint_cache.h"
 #include "cc/paint/paint_flags.h"
 #include "cc/paint/paint_image_builder.h"
 #include "cc/paint/paint_op_buffer.h"
 #include "cc/paint/paint_shader.h"
-#include "cc/paint/paint_typeface_transfer_cache_entry.h"
-#include "cc/paint/path_transfer_cache_entry.h"
 #include "cc/paint/shader_transfer_cache_entry.h"
 #include "cc/paint/transfer_cache_deserialize_helper.h"
 #include "third_party/skia/include/core/SkPath.h"
@@ -82,6 +83,8 @@ bool PaintOpReader::ReadAndValidateOpHeader(const volatile void* input,
                                             size_t input_size,
                                             uint8_t* type,
                                             uint32_t* skip) {
+  if (input_size < 4)
+    return false;
   uint32_t first_word = reinterpret_cast<const volatile uint32_t*>(input)[0];
   *type = static_cast<uint8_t>(first_word & 0xFF);
   *skip = first_word >> 8;
@@ -99,7 +102,12 @@ template <typename T>
 void PaintOpReader::ReadSimple(T* val) {
   static_assert(base::is_trivially_copyable<T>::value,
                 "Not trivially copyable");
-  if (remaining_bytes_ < sizeof(T))
+
+  // Align everything to 4 bytes, as the writer does.
+  static constexpr size_t kAlign = 4;
+  size_t size = base::bits::Align(sizeof(T), kAlign);
+
+  if (remaining_bytes_ < size)
     SetInvalid();
   if (!valid_)
     return;
@@ -110,14 +118,14 @@ void PaintOpReader::ReadSimple(T* val) {
   // use assignment.
   *val = *reinterpret_cast<const T*>(const_cast<const char*>(memory_));
 
-  memory_ += sizeof(T);
-  remaining_bytes_ -= sizeof(T);
+  memory_ += size;
+  remaining_bytes_ -= size;
 }
 
 template <typename T>
 void PaintOpReader::ReadFlattenable(sk_sp<T>* val) {
   size_t bytes = 0;
-  ReadSimple(&bytes);
+  ReadSize(&bytes);
   if (remaining_bytes_ < bytes)
     SetInvalid();
   if (!valid_)
@@ -153,25 +161,11 @@ void PaintOpReader::ReadData(size_t bytes, void* data) {
   remaining_bytes_ -= bytes;
 }
 
-void PaintOpReader::ReadArray(size_t count, SkPoint* array) {
-  size_t bytes = count * sizeof(SkPoint);
-  if (remaining_bytes_ < bytes)
-    SetInvalid();
-  // Overflow?
-  if (count > static_cast<size_t>(~0) / sizeof(SkPoint))
-    SetInvalid();
-  if (!valid_)
-    return;
-  if (count == 0)
-    return;
-
-  memcpy(array, const_cast<const char*>(memory_), bytes);
-  memory_ += bytes;
-  remaining_bytes_ -= bytes;
-}
-
 void PaintOpReader::ReadSize(size_t* size) {
-  ReadSimple(size);
+  AlignMemory(8);
+  uint64_t size64 = 0;
+  ReadSimple(&size64);
+  *size = size64;
 }
 
 void PaintOpReader::Read(SkScalar* data) {
@@ -207,18 +201,38 @@ void PaintOpReader::Read(SkRRect* rect) {
 }
 
 void PaintOpReader::Read(SkPath* path) {
-  uint32_t transfer_cache_entry_id;
-  ReadSimple(&transfer_cache_entry_id);
+  uint32_t path_id;
+  ReadSimple(&path_id);
   if (!valid_)
     return;
-  auto* entry =
-      options_.transfer_cache->GetEntryAs<ServicePathTransferCacheEntry>(
-          transfer_cache_entry_id);
-  if (entry) {
-    *path = entry->path();
-  } else {
-    valid_ = false;
+
+  size_t path_bytes = 0u;
+  ReadSize(&path_bytes);
+  if (path_bytes > remaining_bytes_)
+    SetInvalid();
+  if (!valid_)
+    return;
+
+  if (path_bytes != 0u) {
+    size_t bytes_read =
+        path->readFromMemory(const_cast<const char*>(memory_), path_bytes);
+    if (bytes_read == 0u) {
+      SetInvalid();
+      return;
+    }
+
+    options_.paint_cache->PutPath(path_id, *path);
+    memory_ += path_bytes;
+    remaining_bytes_ -= path_bytes;
+    return;
   }
+
+  auto* cached_path = options_.paint_cache->GetPath(path_id);
+  if (!cached_path) {
+    SetInvalid();
+    return;
+  }
+  *path = *cached_path;
 }
 
 void PaintOpReader::Read(PaintFlags* flags) {
@@ -229,19 +243,13 @@ void PaintOpReader::Read(PaintFlags* flags) {
   ReadSimple(&flags->blend_mode_);
   ReadSimple(&flags->bitfields_uint_);
 
-  // Flattenables must be read at 4-byte boundary, which should be the case
-  // here.
-  AlignMemory(4);
   ReadFlattenable(&flags->path_effect_);
-  AlignMemory(4);
   ReadFlattenable(&flags->mask_filter_);
-  AlignMemory(4);
   ReadFlattenable(&flags->color_filter_);
 
-  AlignMemory(4);
   if (enable_security_constraints_) {
     size_t bytes = 0;
-    ReadSimple(&bytes);
+    ReadSize(&bytes);
     if (bytes != 0u) {
       SetInvalid();
       return;
@@ -320,6 +328,11 @@ void PaintOpReader::Read(PaintImage* image) {
   if (!valid_)
     return;
 
+  bool needs_mips;
+  ReadSimple(&needs_mips);
+  if (!valid_)
+    return;
+
   // If we encountered a decode failure, we may write an invalid id for the
   // image. In these cases, just return, leaving the image as nullptr.
   if (transfer_cache_entry_id == kInvalidImageTransferCacheEntryId)
@@ -328,16 +341,22 @@ void PaintOpReader::Read(PaintImage* image) {
   if (auto* entry =
           options_.transfer_cache->GetEntryAs<ServiceImageTransferCacheEntry>(
               transfer_cache_entry_id)) {
+    if (needs_mips)
+      entry->EnsureMips();
     *image = PaintImageBuilder::WithDefault()
                  .set_id(PaintImage::GetNextId())
                  .set_image(entry->image(), PaintImage::kNonLazyStableId)
                  .TakePaintImage();
+  } else {
+    // If a transfer cache id exists, we must have a valid entry for it in the
+    // cache.
+    SetInvalid();
   }
 }
 
 void PaintOpReader::Read(sk_sp<SkData>* data) {
   size_t bytes = 0;
-  ReadSimple(&bytes);
+  ReadSize(&bytes);
   if (remaining_bytes_ < bytes)
     SetInvalid();
   if (!valid_)
@@ -382,28 +401,45 @@ void PaintOpReader::Read(sk_sp<SkColorSpace>* color_space) {
   remaining_bytes_ -= size;
 }
 
-void PaintOpReader::Read(scoped_refptr<PaintTextBlob>* paint_blob) {
+void PaintOpReader::Read(sk_sp<SkTextBlob>* blob) {
+  AlignMemory(4);
+  uint32_t blob_id = 0u;
+  Read(&blob_id);
+  if (!valid_)
+    return;
+
   size_t data_bytes = 0u;
-  ReadSimple(&data_bytes);
-  if (remaining_bytes_ < data_bytes || data_bytes == 0u)
+  ReadSize(&data_bytes);
+  if (remaining_bytes_ < data_bytes)
     SetInvalid();
   if (!valid_)
     return;
+
+  if (data_bytes == 0u) {
+    auto cached_blob = options_.paint_cache->GetTextBlob(blob_id);
+    if (!cached_blob) {
+      SetInvalid();
+      return;
+    }
+
+    *blob = std::move(cached_blob);
+    return;
+  }
 
   DCHECK(options_.strike_client);
   SkDeserialProcs procs;
   TypefaceCtx typeface_ctx(options_.strike_client);
   procs.fTypefaceProc = &DeserializeTypeface;
   procs.fTypefaceCtx = &typeface_ctx;
-  sk_sp<SkTextBlob> blob = SkTextBlob::Deserialize(
+  sk_sp<SkTextBlob> deserialized_blob = SkTextBlob::Deserialize(
       const_cast<const char*>(memory_), data_bytes, procs);
-  if (typeface_ctx.invalid_typeface) {
+  if (!deserialized_blob || typeface_ctx.invalid_typeface) {
     SetInvalid();
     return;
   }
+  options_.paint_cache->PutTextBlob(blob_id, deserialized_blob);
 
-  *paint_blob = base::MakeRefCounted<PaintTextBlob>(
-      std::move(blob), std::vector<PaintTypeface>());
+  *blob = std::move(deserialized_blob);
   memory_ += data_bytes;
   remaining_bytes_ -= data_bytes;
 }
@@ -454,7 +490,15 @@ void PaintOpReader::Read(sk_sp<PaintShader>* shader) {
   uint32_t shader_id = PaintShader::kInvalidRecordShaderId;
   size_t shader_size = 0;
   if (has_record) {
+    if (shader_type != PaintShader::Type::kPaintRecord) {
+      SetInvalid();
+      return;
+    }
     Read(&shader_id);
+    if (shader_id == PaintShader::kInvalidRecordShaderId) {
+      SetInvalid();
+      return;
+    }
 
     // Track dependent transfer cache entries to make cached shader size
     // more realistic.
@@ -462,9 +506,11 @@ void PaintOpReader::Read(sk_sp<PaintShader>* shader) {
     size_t record_size = Read(&ref.record_);
     size_t post_size = options_.transfer_cache->GetTotalEntrySizes();
     shader_size = post_size - pre_size + record_size;
+
+    ref.id_ = shader_id;
   }
   decltype(ref.colors_)::size_type colors_size = 0;
-  ReadSimple(&colors_size);
+  ReadSize(&colors_size);
 
   // If there are too many colors, abort.
   if (colors_size > kMaxShaderColorsSupported) {
@@ -480,7 +526,7 @@ void PaintOpReader::Read(sk_sp<PaintShader>* shader) {
   ReadData(colors_bytes, ref.colors_.data());
 
   decltype(ref.positions_)::size_type positions_size = 0;
-  ReadSimple(&positions_size);
+  ReadSize(&positions_size);
   // Positions are optional. If they exist, they have the same count as colors.
   if (positions_size > 0 && positions_size != colors_size) {
     SetInvalid();
@@ -501,12 +547,8 @@ void PaintOpReader::Read(sk_sp<PaintShader>* shader) {
     return;
   }
 
-  if (shader_id == PaintShader::kInvalidRecordShaderId) {
-    // Paint record shaders must have ids.
-    if (shader_type == PaintShader::Type::kPaintRecord) {
-      SetInvalid();
-      return;
-    }
+  // All shader types but records are done.
+  if (shader_type != PaintShader::Type::kPaintRecord) {
     (*shader)->CreateSkShader();
     return;
   }
@@ -572,6 +614,10 @@ void PaintOpReader::AlignMemory(size_t alignment) {
 }
 
 inline void PaintOpReader::SetInvalid() {
+  if (valid_ && options_.crash_dump_on_failure) {
+    // TODO(enne): make this DumpWithoutCrashing after http://crbug.com/910772
+    // base::debug::DumpWithoutCrashing();
+  }
   valid_ = false;
 }
 
@@ -1194,9 +1240,8 @@ void PaintOpReader::ReadLightingSpotPaintFilter(
 
 size_t PaintOpReader::Read(sk_sp<PaintRecord>* record) {
   size_t size_bytes = 0;
-  ReadSimple(&size_bytes);
+  ReadSize(&size_bytes);
   AlignMemory(PaintOpBuffer::PaintOpAlign);
-
   if (enable_security_constraints_) {
     // Validate that the record was not serialized if security constraints are
     // enabled.
@@ -1225,7 +1270,7 @@ size_t PaintOpReader::Read(sk_sp<PaintRecord>* record) {
 
 void PaintOpReader::Read(SkRegion* region) {
   size_t region_bytes = 0;
-  ReadSimple(&region_bytes);
+  ReadSize(&region_bytes);
   if (region_bytes == 0 || region_bytes > kMaxRegionByteSize)
     SetInvalid();
   if (!valid_)

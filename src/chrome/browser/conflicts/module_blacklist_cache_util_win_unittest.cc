@@ -16,7 +16,9 @@
 #include "base/macros.h"
 #include "base/md5.h"
 #include "base/stl_util.h"
+#include "base/time/time.h"
 #include "chrome/browser/conflicts/module_list_filter_win.h"
+#include "chrome_elf/sha1/sha1.h"
 #include "chrome_elf/third_party_dlls/packed_list_format.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -41,9 +43,7 @@ std::vector<third_party_dlls::PackedListModule> CreateUniqueModuleEntries(
 
   for (auto& entry : entries) {
     // Fill up each bytes for both SHA1 hashes.
-    for (size_t i = 0;
-         i < arraysize(third_party_dlls::PackedListModule::basename_hash);
-         ++i) {
+    for (size_t i = 0; i < elf_sha1::kSHA1Length; ++i) {
       entry.basename_hash[i] = byte_distribution(random_engine);
       entry.code_id_hash[i] = byte_distribution(random_engine);
     }
@@ -96,6 +96,22 @@ class ModuleBlacklistCacheUtilTest : public testing::Test {
   DISALLOW_COPY_AND_ASSIGN(ModuleBlacklistCacheUtilTest);
 };
 
+TEST_F(ModuleBlacklistCacheUtilTest, CalculateTimeDateStamp) {
+  base::Time::Exploded chrome_birthday = {};
+  chrome_birthday.year = 2008;
+  chrome_birthday.month = 9;        // September.
+  chrome_birthday.day_of_week = 2;  // Tuesday.
+  chrome_birthday.day_of_month = 2;
+
+  base::Time time;
+  ASSERT_TRUE(chrome_birthday.HasValidValues());
+  ASSERT_TRUE(base::Time::FromUTCExploded(chrome_birthday, &time));
+
+  // Ensure that CalculateTimeDateStamp() will always return the number of
+  // hours between |time| and the Windows epoch.
+  EXPECT_EQ(3573552u, CalculateTimeDateStamp(time));
+}
+
 TEST_F(ModuleBlacklistCacheUtilTest, WriteEmptyCache) {
   third_party_dlls::PackedListMetadata metadata = {
       third_party_dlls::PackedListVersion::kCurrent, 0};
@@ -145,7 +161,8 @@ TEST_F(ModuleBlacklistCacheUtilTest, WriteAndRead) {
   third_party_dlls::PackedListMetadata read_metadata;
   std::vector<third_party_dlls::PackedListModule> read_blacklisted_modules;
   base::MD5Digest read_md5_digest;
-  EXPECT_TRUE(
+  EXPECT_EQ(
+      ReadResult::kSuccess,
       ReadModuleBlacklistCache(module_blacklist_cache_path(), &read_metadata,
                                &read_blacklisted_modules, &read_md5_digest));
 
@@ -165,12 +182,15 @@ TEST_F(ModuleBlacklistCacheUtilTest, WriteAndRead) {
 class FakeModuleListFilter : public ModuleListFilter {
  public:
   FakeModuleListFilter() = default;
-  ~FakeModuleListFilter() override = default;
 
   void AddWhitelistedModule(const third_party_dlls::PackedListModule& module) {
     whitelisted_modules_.emplace(
-        reinterpret_cast<const char*>(module.basename_hash),
-        reinterpret_cast<const char*>(module.code_id_hash));
+        base::StringPiece(
+            reinterpret_cast<const char*>(&module.basename_hash[0]),
+            base::size(module.basename_hash)),
+        base::StringPiece(
+            reinterpret_cast<const char*>(&module.code_id_hash[0]),
+            base::size(module.basename_hash)));
   }
 
   // ModuleListFilter:
@@ -188,6 +208,8 @@ class FakeModuleListFilter : public ModuleListFilter {
   }
 
  private:
+  ~FakeModuleListFilter() override = default;
+
   std::set<std::pair<base::StringPiece, base::StringPiece>>
       whitelisted_modules_;
 
@@ -208,11 +230,11 @@ TEST_F(ModuleBlacklistCacheUtilTest, RemoveWhitelistedEntries) {
                              whitelisted_modules.push_back(element);
                            },
                            &blacklisted_modules);
-  FakeModuleListFilter module_list_filter;
+  auto module_list_filter = base::MakeRefCounted<FakeModuleListFilter>();
   for (const auto& module : whitelisted_modules)
-    module_list_filter.AddWhitelistedModule(module);
+    module_list_filter->AddWhitelistedModule(module);
 
-  internal::RemoveWhitelistedEntries(module_list_filter, &blacklisted_modules);
+  internal::RemoveWhitelistedEntries(*module_list_filter, &blacklisted_modules);
 
   EXPECT_EQ(kTestModuleCount - kWhitelistedModulesCount,
             blacklisted_modules.size());

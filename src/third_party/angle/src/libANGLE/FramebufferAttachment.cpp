@@ -53,25 +53,19 @@ std::vector<Offset> FramebufferAttachment::GetDefaultViewportOffsetVector()
         FramebufferAttachment::kDefaultViewportOffsets, FramebufferAttachment::kDefaultNumViews);
 }
 
-FramebufferAttachment::Target::Target() : mBinding(GL_NONE), mTextureIndex()
-{
-}
+FramebufferAttachment::Target::Target() : mBinding(GL_NONE), mTextureIndex() {}
 
 FramebufferAttachment::Target::Target(GLenum binding, const ImageIndex &imageIndex)
-    : mBinding(binding),
-      mTextureIndex(imageIndex)
-{
-}
+    : mBinding(binding), mTextureIndex(imageIndex)
+{}
 
 FramebufferAttachment::Target::Target(const Target &other)
-    : mBinding(other.mBinding),
-      mTextureIndex(other.mTextureIndex)
-{
-}
+    : mBinding(other.mBinding), mTextureIndex(other.mTextureIndex)
+{}
 
 FramebufferAttachment::Target &FramebufferAttachment::Target::operator=(const Target &other)
 {
-    this->mBinding = other.mBinding;
+    this->mBinding      = other.mBinding;
     this->mTextureIndex = other.mTextureIndex;
     return *this;
 }
@@ -85,8 +79,7 @@ FramebufferAttachment::FramebufferAttachment()
       mMultiviewLayout(kDefaultMultiviewLayout),
       mBaseViewIndex(kDefaultBaseViewIndex),
       mViewportOffsets(GetDefaultViewportOffsetVector())
-{
-}
+{}
 
 FramebufferAttachment::FramebufferAttachment(const Context *context,
                                              GLenum type,
@@ -155,8 +148,8 @@ void FramebufferAttachment::attach(const Context *context,
         return;
     }
 
-    mType = type;
-    mTarget = Target(binding, textureIndex);
+    mType            = type;
+    mTarget          = Target(binding, textureIndex);
     mNumViews        = numViews;
     mBaseViewIndex   = baseViewIndex;
     mMultiviewLayout = multiviewLayout;
@@ -251,9 +244,9 @@ GLint FramebufferAttachment::layer() const
     return (index.has3DLayer() ? index.getLayerIndex() : 0);
 }
 
-GLsizei FramebufferAttachment::getNumViews() const
+bool FramebufferAttachment::isLayered() const
 {
-    return mNumViews;
+    return mTarget.textureIndex().isLayered();
 }
 
 GLenum FramebufferAttachment::getMultiviewLayout() const
@@ -318,12 +311,12 @@ InitState FramebufferAttachment::initState() const
     return mResource ? mResource->initState(mTarget.textureIndex()) : InitState::Initialized;
 }
 
-Error FramebufferAttachment::initializeContents(const Context *context)
+angle::Result FramebufferAttachment::initializeContents(const Context *context)
 {
     ASSERT(mResource);
     ANGLE_TRY(mResource->initializeContents(context, mTarget.textureIndex()));
     setInitState(InitState::Initialized);
-    return NoError();
+    return angle::Result::Continue();
 }
 
 void FramebufferAttachment::setInitState(InitState initState) const
@@ -334,15 +327,11 @@ void FramebufferAttachment::setInitState(InitState initState) const
 
 ////// FramebufferAttachmentObject Implementation //////
 
-FramebufferAttachmentObject::FramebufferAttachmentObject()
-{
-}
+FramebufferAttachmentObject::FramebufferAttachmentObject() {}
 
-FramebufferAttachmentObject::~FramebufferAttachmentObject()
-{
-}
+FramebufferAttachmentObject::~FramebufferAttachmentObject() {}
 
-Error FramebufferAttachmentObject::getAttachmentRenderTarget(
+angle::Result FramebufferAttachmentObject::getAttachmentRenderTarget(
     const Context *context,
     GLenum binding,
     const ImageIndex &imageIndex,
@@ -356,13 +345,8 @@ void FramebufferAttachmentObject::onStorageChange(const gl::Context *context) co
     return getAttachmentImpl()->onStateChange(context, angle::SubjectMessage::STORAGE_CHANGED);
 }
 
-angle::Subject *FramebufferAttachmentObject::getSubject() const
-{
-    return getAttachmentImpl();
-}
-
-Error FramebufferAttachmentObject::initializeContents(const Context *context,
-                                                      const ImageIndex &imageIndex)
+angle::Result FramebufferAttachmentObject::initializeContents(const Context *context,
+                                                              const ImageIndex &imageIndex)
 {
     ASSERT(context->isRobustResourceInitEnabled());
 
@@ -372,6 +356,11 @@ Error FramebufferAttachmentObject::initializeContents(const Context *context,
     {
         ImageIndex fullMipIndex =
             ImageIndex::Make2DArray(imageIndex.getLevelIndex(), ImageIndex::kEntireLevel);
+        return getAttachmentImpl()->initializeContents(context, fullMipIndex);
+    }
+    else if (imageIndex.getType() == TextureType::_2DMultisampleArray && imageIndex.hasLayer())
+    {
+        ImageIndex fullMipIndex = ImageIndex::Make2DMultisampleArray(ImageIndex::kEntireLevel);
         return getAttachmentImpl()->initializeContents(context, fullMipIndex);
     }
     else

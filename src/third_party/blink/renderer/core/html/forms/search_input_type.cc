@@ -31,7 +31,6 @@
 #include "third_party/blink/renderer/core/html/forms/search_input_type.h"
 
 #include "third_party/blink/public/platform/task_type.h"
-#include "third_party/blink/renderer/bindings/core/v8/exception_state.h"
 #include "third_party/blink/renderer/core/dom/shadow_root.h"
 #include "third_party/blink/renderer/core/events/keyboard_event.h"
 #include "third_party/blink/renderer/core/frame/web_feature.h"
@@ -41,10 +40,11 @@
 #include "third_party/blink/renderer/core/html_names.h"
 #include "third_party/blink/renderer/core/input_type_names.h"
 #include "third_party/blink/renderer/core/layout/layout_search_field.h"
+#include "third_party/blink/renderer/platform/bindings/exception_state.h"
 
 namespace blink {
 
-using namespace HTMLNames;
+using namespace html_names;
 
 inline SearchInputType::SearchInputType(HTMLInputElement& element)
     : BaseTextInputType(element),
@@ -54,7 +54,7 @@ inline SearchInputType::SearchInputType(HTMLInputElement& element)
           &SearchInputType::SearchEventTimerFired) {}
 
 InputType* SearchInputType::Create(HTMLInputElement& element) {
-  return new SearchInputType(element);
+  return MakeGarbageCollected<SearchInputType>(element);
 }
 
 void SearchInputType::CountUsage() {
@@ -66,7 +66,7 @@ LayoutObject* SearchInputType::CreateLayoutObject(const ComputedStyle&) const {
 }
 
 const AtomicString& SearchInputType::FormControlType() const {
-  return InputTypeNames::search;
+  return input_type_names::kSearch;
 }
 
 bool SearchInputType::NeedsContainer() const {
@@ -77,7 +77,7 @@ void SearchInputType::CreateShadowSubtree() {
   TextFieldInputType::CreateShadowSubtree();
   Element* container = ContainerElement();
   Element* view_port = GetElement().UserAgentShadowRoot()->getElementById(
-      ShadowElementNames::EditingViewPort());
+      shadow_element_names::EditingViewPort());
   DCHECK(container);
   DCHECK(view_port);
   container->InsertBefore(
@@ -85,17 +85,16 @@ void SearchInputType::CreateShadowSubtree() {
       view_port->nextSibling());
 }
 
-void SearchInputType::HandleKeydownEvent(KeyboardEvent* event) {
+void SearchInputType::HandleKeydownEvent(KeyboardEvent& event) {
   if (GetElement().IsDisabledOrReadOnly()) {
     TextFieldInputType::HandleKeydownEvent(event);
     return;
   }
 
-  const String& key = event->key();
-  if (key == "Escape") {
+  if (event.key() == "Escape") {
     GetElement().SetValueForUser("");
     GetElement().OnSearch();
-    event->SetDefaultHandled();
+    event.SetDefaultHandled();
     return;
   }
   TextFieldInputType::HandleKeydownEvent(event);
@@ -115,14 +114,16 @@ void SearchInputType::StartSearchEventTimer() {
     return;
   }
 
-  // After typing the first key, we wait 0.5 seconds.
-  // After the second key, 0.4 seconds, then 0.3, then 0.2 from then on.
-  search_event_timer_.StartOneShot(max(0.2, 0.6 - 0.1 * length), FROM_HERE);
+  // After typing the first key, we wait 500ms.
+  // After the second key, 400ms, then 300, then 200 from then on.
+  unsigned step = std::min(length, 4u) - 1;
+  TimeDelta timeout = TimeDelta::FromMilliseconds(500 - 100 * step);
+  search_event_timer_.StartOneShot(timeout, FROM_HERE);
 }
 
 void SearchInputType::DispatchSearchEvent() {
   search_event_timer_.Stop();
-  GetElement().DispatchEvent(Event::CreateBubble(EventTypeNames::search));
+  GetElement().DispatchEvent(*Event::CreateBubble(event_type_names::kSearch));
 }
 
 void SearchInputType::SearchEventTimerFired(TimerBase*) {
@@ -130,7 +131,7 @@ void SearchInputType::SearchEventTimerFired(TimerBase*) {
 }
 
 bool SearchInputType::SearchEventsShouldBeDispatched() const {
-  return GetElement().hasAttribute(incrementalAttr);
+  return GetElement().hasAttribute(kIncrementalAttr);
 }
 
 void SearchInputType::DidSetValueByUserEdit() {
@@ -150,7 +151,7 @@ void SearchInputType::UpdateView() {
 
 void SearchInputType::UpdateCancelButtonVisibility() {
   Element* button = GetElement().UserAgentShadowRoot()->getElementById(
-      ShadowElementNames::SearchClearButton());
+      shadow_element_names::SearchClearButton());
   if (!button)
     return;
   if (GetElement().value().IsEmpty()) {

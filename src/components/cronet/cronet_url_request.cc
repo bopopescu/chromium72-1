@@ -45,7 +45,7 @@ int CalculateLoadFlags(int load_flags,
   if (disable_cache)
     load_flags |= net::LOAD_DISABLE_CACHE;
   if (disable_connection_migration)
-    load_flags |= net::LOAD_DISABLE_CONNECTION_MIGRATION;
+    load_flags |= net::LOAD_DISABLE_CONNECTION_MIGRATION_TO_CELLULAR;
   return load_flags;
 }
 
@@ -170,6 +170,7 @@ CronetURLRequest::NetworkTasks::NetworkTasks(std::unique_ptr<Callback> callback,
       initial_priority_(priority),
       initial_load_flags_(load_flags),
       received_byte_count_from_redirects_(0l),
+      error_reported_(false),
       enable_metrics_(enable_metrics),
       metrics_reported_(false),
       traffic_stats_tag_set_(traffic_stats_tag_set),
@@ -211,9 +212,9 @@ void CronetURLRequest::NetworkTasks::OnSSLCertificateError(
     const net::SSLInfo& ssl_info,
     bool fatal) {
   DCHECK_CALLED_ON_VALID_THREAD(network_thread_checker_);
-  request->Cancel();
   int net_error = net::MapCertStatusToNetError(ssl_info.cert_status);
   ReportError(request, net_error);
+  request->Cancel();
 }
 
 void CronetURLRequest::NetworkTasks::OnResponseStarted(net::URLRequest* request,
@@ -243,6 +244,7 @@ void CronetURLRequest::NetworkTasks::OnReadCompleted(net::URLRequest* request,
   }
 
   if (bytes_read == 0) {
+    DCHECK(!error_reported_);
     MaybeReportMetrics();
     callback_->OnSucceeded(received_byte_count_from_redirects_ +
                            request->GetTotalReceivedBytes());
@@ -301,7 +303,8 @@ void CronetURLRequest::NetworkTasks::GetStatus(
 
 void CronetURLRequest::NetworkTasks::FollowDeferredRedirect() {
   DCHECK_CALLED_ON_VALID_THREAD(network_thread_checker_);
-  url_request_->FollowDeferredRedirect();
+  url_request_->FollowDeferredRedirect(
+      base::nullopt /* modified_request_headers */);
 }
 
 void CronetURLRequest::NetworkTasks::ReadData(
@@ -337,6 +340,10 @@ void CronetURLRequest::NetworkTasks::ReportError(net::URLRequest* request,
   DCHECK_NE(net::ERR_IO_PENDING, net_error);
   DCHECK_LT(net_error, 0);
   DCHECK_EQ(request, url_request_.get());
+  // Error may have already been reported.
+  if (error_reported_)
+    return;
+  error_reported_ = true;
   net::NetErrorDetails net_error_details;
   url_request_->PopulateNetErrorDetails(&net_error_details);
   VLOG(1) << "Error " << net::ErrorToString(net_error)

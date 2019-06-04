@@ -18,6 +18,7 @@
 #include "core/fxcrt/xml/cfx_xmlnode.h"
 #include "core/fxcrt/xml/cfx_xmltext.h"
 #include "fxjs/xfa/cjx_object.h"
+#include "third_party/base/stl_util.h"
 #include "xfa/fxfa/parser/cxfa_document.h"
 #include "xfa/fxfa/parser/cxfa_localemgr.h"
 #include "xfa/fxfa/parser/cxfa_localevalue.h"
@@ -215,7 +216,7 @@ void RegenerateFormFile_Changed(CXFA_Node* pNode,
         if (!pRichTextXML)
           break;
 
-        auto pMemStream = pdfium::MakeRetain<CFX_MemoryStream>(true);
+        auto pMemStream = pdfium::MakeRetain<CFX_MemoryStream>();
         pRichTextXML->Save(pMemStream);
         wsChildren += WideString::FromUTF8(
             ByteStringView(pMemStream->GetBuffer(), pMemStream->GetSize()));
@@ -340,13 +341,13 @@ void RegenerateFormFile_Container(CXFA_Node* pNode,
     RegenerateFormFile_Changed(pNode, buf, bSaveXML);
     size_t nLen = buf.GetLength();
     if (nLen > 0)
-      pStream->WriteString(buf.MakeString().UTF8Encode().AsStringView());
+      pStream->WriteString(buf.MakeString().ToUTF8().AsStringView());
     return;
   }
 
   WideString wsElement(pNode->GetClassName());
   pStream->WriteString("<");
-  pStream->WriteString(wsElement.UTF8Encode().AsStringView());
+  pStream->WriteString(wsElement.ToUTF8().AsStringView());
 
   WideString wsOutput;
   SaveAttribute(pNode, XFA_Attribute::Name, L"name", true, wsOutput);
@@ -365,7 +366,7 @@ void RegenerateFormFile_Container(CXFA_Node* pNode,
   }
 
   if (!wsOutput.IsEmpty())
-    pStream->WriteString(wsOutput.UTF8Encode().AsStringView());
+    pStream->WriteString(wsOutput.ToUTF8().AsStringView());
 
   CXFA_Node* pChildNode = pNode->GetFirstChild();
   if (!pChildNode) {
@@ -379,7 +380,7 @@ void RegenerateFormFile_Container(CXFA_Node* pNode,
     pChildNode = pChildNode->GetNextSibling();
   }
   pStream->WriteString("</");
-  pStream->WriteString(wsElement.UTF8Encode().AsStringView());
+  pStream->WriteString(wsElement.ToUTF8().AsStringView());
   pStream->WriteString(">\n");
 }
 
@@ -450,7 +451,7 @@ CXFA_LocaleValue XFA_GetLocaleValue(CXFA_Node* pNode) {
       break;
   }
   return CXFA_LocaleValue(iVTType, pNode->GetRawValue(),
-                          pNode->GetDocument()->GetLocalMgr());
+                          pNode->GetDocument()->GetLocaleMgr());
 }
 
 bool XFA_FDEExtension_ResolveNamespaceQualifier(CFX_XMLElement* pNode,
@@ -470,12 +471,9 @@ bool XFA_FDEExtension_ResolveNamespaceQualifier(CFX_XMLElement* pNode,
   }
   for (CFX_XMLNode* pParent = pNode; pParent != pFakeRoot;
        pParent = pParent->GetParent()) {
-    if (pParent->GetType() != FX_XMLNODE_Element)
-      continue;
-
-    auto* pElement = static_cast<CFX_XMLElement*>(pParent);
-    if (pElement->HasAttribute(wsNSAttribute.c_str())) {
-      *wsNamespaceURI = pElement->GetAttribute(wsNSAttribute.c_str());
+    CFX_XMLElement* pElement = ToXMLElement(pParent);
+    if (pElement && pElement->HasAttribute(wsNSAttribute)) {
+      *wsNamespaceURI = pElement->GetAttribute(wsNSAttribute);
       return true;
     }
   }
@@ -497,20 +495,13 @@ void XFA_DataExporter_DealWithDataGroupNode(CXFA_Node* pDataNode) {
   if (pDataNode->GetElementType() != XFA_Element::DataGroup)
     return;
 
+  CFX_XMLElement* pElement = ToXMLElement(pDataNode->GetXMLMappingNode());
   if (iChildNum > 0) {
-    CFX_XMLNode* pXMLNode = pDataNode->GetXMLMappingNode();
-    ASSERT(pXMLNode->GetType() == FX_XMLNODE_Element);
-    CFX_XMLElement* pXMLElement = static_cast<CFX_XMLElement*>(pXMLNode);
-    if (pXMLElement->HasAttribute(L"xfa:dataNode"))
-      pXMLElement->RemoveAttribute(L"xfa:dataNode");
-
+    if (pElement->HasAttribute(L"xfa:dataNode"))
+      pElement->RemoveAttribute(L"xfa:dataNode");
     return;
   }
-
-  CFX_XMLNode* pXMLNode = pDataNode->GetXMLMappingNode();
-  ASSERT(pXMLNode->GetType() == FX_XMLNODE_Element);
-  static_cast<CFX_XMLElement*>(pXMLNode)->SetAttribute(L"xfa:dataNode",
-                                                       L"dataGroup");
+  pElement->SetAttribute(L"xfa:dataNode", L"dataGroup");
 }
 
 void XFA_DataExporter_RegenerateFormFile(
@@ -527,7 +518,7 @@ void XFA_DataExporter_RegenerateFormFile(
       wsVersionNumber = L"2.8";
 
     wsVersionNumber += L"/\"\n>";
-    pStream->WriteString(wsVersionNumber.UTF8Encode().AsStringView());
+    pStream->WriteString(wsVersionNumber.ToUTF8().AsStringView());
 
     CXFA_Node* pChildNode = pNode->GetFirstChild();
     while (pChildNode) {
@@ -570,6 +561,7 @@ const XFA_SCRIPTATTRIBUTEINFO* XFA_GetScriptAttributeByName(
   if (wsAttributeName.IsEmpty())
     return nullptr;
 
+  uint32_t uHash = FX_HashCode_GetW(wsAttributeName, false);
   int32_t iElementIndex = static_cast<int32_t>(eElement);
   while (iElementIndex != -1) {
     const XFA_SCRIPTHIERARCHY* scriptIndex = g_XFAScriptIndex + iElementIndex;
@@ -579,7 +571,6 @@ const XFA_SCRIPTATTRIBUTEINFO* XFA_GetScriptAttributeByName(
       continue;
     }
 
-    uint32_t uHash = FX_HashCode_GetW(wsAttributeName, false);
     size_t iStart = scriptIndex->wAttributeStart;
     size_t iEnd = iStart + iCount;
     for (size_t iter = iStart; iter < iEnd; ++iter) {

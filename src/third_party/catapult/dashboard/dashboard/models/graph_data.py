@@ -60,7 +60,7 @@ import logging
 
 from google.appengine.ext import ndb
 
-from dashboard import layered_cache
+from dashboard.common import layered_cache
 from dashboard.common import utils
 from dashboard.models import anomaly
 from dashboard.models import anomaly_config
@@ -76,7 +76,7 @@ LIST_TESTS_SUBTEST_CACHE_KEY = 'list_tests_get_tests_v2_%s_%s_%s'
 _MAX_STRING_LENGTH = 500
 
 
-class Master(internal_only_model.InternalOnlyModel):
+class Master(ndb.Model):
   """Information about the Buildbot master.
 
   Masters are keyed by name, e.g. 'ChromiumGPU' or 'ChromiumPerf'.
@@ -95,6 +95,23 @@ class Bot(internal_only_model.InternalOnlyModel):
   a Bot, check the bot_name and master_name properties of the TestMetadata.
   """
   internal_only = ndb.BooleanProperty(default=False, indexed=True)
+
+  @classmethod
+  @ndb.synctasklet
+  def GetInternalOnlySync(cls, master, bot):
+    try:
+      internal_only = yield cls.GetInternalOnlyAsync(master, bot)
+      raise ndb.Return(internal_only)
+    except AssertionError:
+      raise ndb.Return(True)
+
+  @staticmethod
+  @ndb.tasklet
+  def GetInternalOnlyAsync(master, bot):
+    bot_entity = yield ndb.Key('Master', master, 'Bot', bot).get_async()
+    if bot_entity is None:
+      raise ndb.Return(True)
+    raise ndb.Return(bot_entity.internal_only)
 
 
 class TestMetadata(internal_only_model.CreateHookInternalOnlyModel):
@@ -131,7 +148,7 @@ class TestMetadata(internal_only_model.CreateHookInternalOnlyModel):
   # There is a default anomaly threshold config (in anomaly.py), and it can
   # be overridden for a group of tests by using /edit_sheriffs.
   overridden_anomaly_config = ndb.KeyProperty(
-      kind=anomaly_config.AnomalyConfig, indexed=True)
+      kind=anomaly_config.AnomalyConfig, indexed=False)
 
   # Keep track of what direction is an improvement for this graph so we can
   # filter out alerts on regressions.
@@ -147,9 +164,6 @@ class TestMetadata(internal_only_model.CreateHookInternalOnlyModel):
 
   # Units of the child Rows of this test, or None if there are no child Rows.
   units = ndb.StringProperty(indexed=False)
-
-  # The last alerted revision is used to avoid duplicate alerts.
-  last_alerted_revision = ndb.IntegerProperty(indexed=False)
 
   # Whether or not the test has child rows. Set by hook on Row class put.
   has_rows = ndb.BooleanProperty(default=False, indexed=True)
@@ -258,7 +272,12 @@ class TestMetadata(internal_only_model.CreateHookInternalOnlyModel):
     kwargs['description'] = description[:_MAX_STRING_LENGTH]
     super(TestMetadata, self).__init__(*args, **kwargs)
 
-  def _pre_put_hook(self):
+  @ndb.synctasklet
+  def UpdateSheriff(self):
+    yield self.UpdateSheriffAsync()
+
+  @ndb.tasklet
+  def UpdateSheriffAsync(self):
     """This method is called before a TestMetadata is put into the datastore.
 
     Here, we check the key to make sure it is valid and check the sheriffs and
@@ -273,8 +292,9 @@ class TestMetadata(internal_only_model.CreateHookInternalOnlyModel):
 
     # Set the sheriff to the first sheriff (alphabetically by sheriff name)
     # that has a test pattern that matches this test.
+    sheriffs = yield sheriff_module.Sheriff.query().fetch_async()
     self.sheriff = None
-    for sheriff_entity in sheriff_module.Sheriff.query().fetch():
+    for sheriff_entity in sheriffs:
       for pattern in sheriff_entity.patterns:
         if utils.TestMatchesPattern(self, pattern):
           self.sheriff = sheriff_entity.key
@@ -286,7 +306,7 @@ class TestMetadata(internal_only_model.CreateHookInternalOnlyModel):
     # that more specifically matches the test are given higher priority.
     # ie. */*/*/foo is chosen over */*/*/*
     self.overridden_anomaly_config = None
-    anomaly_configs = anomaly_config.AnomalyConfig.query().fetch()
+    anomaly_configs = yield anomaly_config.AnomalyConfig.query().fetch_async()
     anomaly_data_list = []
     for e in anomaly_configs:
       for p in e.patterns:
@@ -396,6 +416,7 @@ class Row(ndb.Expando):
 
     if not parent_test.has_rows:
       parent_test.has_rows = True
+      yield parent_test.UpdateSheriffAsync()
       yield parent_test.put_async(**ctx_options)
 
 

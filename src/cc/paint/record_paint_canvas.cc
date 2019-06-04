@@ -8,6 +8,7 @@
 #include "cc/paint/paint_image_builder.h"
 #include "cc/paint/paint_record.h"
 #include "cc/paint/paint_recorder.h"
+#include "cc/paint/skottie_wrapper.h"
 #include "third_party/skia/include/core/SkAnnotation.h"
 #include "third_party/skia/include/core/SkMetaData.h"
 #include "third_party/skia/include/utils/SkNWayCanvas.h"
@@ -263,24 +264,13 @@ void RecordPaintCanvas::drawImageRect(const PaintImage& image,
   list_->push<DrawImageRectOp>(image, src, dst, flags, constraint);
 }
 
-void RecordPaintCanvas::drawBitmap(const SkBitmap& bitmap,
-                                   SkScalar left,
-                                   SkScalar top,
-                                   const PaintFlags* flags) {
-  // TODO(enne): Move into base class?
-  if (bitmap.drawsNothing())
-    return;
-  // TODO(khushalsagar): Remove this and have callers use PaintImages holding
-  // bitmap-backed images, since they can maintain the PaintImage::Id.
-  drawImage(PaintImageBuilder::WithDefault()
-                .set_id(PaintImage::GetNextId())
-                .set_image(SkImage::MakeFromBitmap(bitmap),
-                           PaintImage::GetNextContentId())
-                .TakePaintImage(),
-            left, top, flags);
+void RecordPaintCanvas::drawSkottie(scoped_refptr<SkottieWrapper> skottie,
+                                    const SkRect& dst,
+                                    float t) {
+  list_->push<DrawSkottieOp>(std::move(skottie), dst, t);
 }
 
-void RecordPaintCanvas::drawTextBlob(scoped_refptr<PaintTextBlob> blob,
+void RecordPaintCanvas::drawTextBlob(sk_sp<SkTextBlob> blob,
                                      SkScalar x,
                                      SkScalar y,
                                      const PaintFlags& flags) {
@@ -325,7 +315,7 @@ SkNoDrawCanvas* RecordPaintCanvas::GetCanvas() {
     return &*canvas_;
 
   // Size the canvas to be large enough to contain the |recording_bounds|, which
-  // may not be positioned at th origin.
+  // may not be positioned at the origin.
   SkIRect enclosing_rect = recording_bounds_.roundOut();
   canvas_.emplace(enclosing_rect.right(), enclosing_rect.bottom());
 

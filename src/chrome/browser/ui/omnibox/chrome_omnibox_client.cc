@@ -14,6 +14,8 @@
 #include "base/callback.h"
 #include "base/macros.h"
 #include "base/metrics/histogram_macros.h"
+#include "base/metrics/user_metrics.h"
+#include "base/metrics/user_metrics_action.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "build/build_config.h"
@@ -23,11 +25,11 @@
 #include "chrome/browser/bitmap_fetcher/bitmap_fetcher_service_factory.h"
 #include "chrome/browser/bookmarks/bookmark_model_factory.h"
 #include "chrome/browser/bookmarks/bookmark_stats.h"
+#include "chrome/browser/browser_about_handler.h"
 #include "chrome/browser/command_updater.h"
 #include "chrome/browser/extensions/api/omnibox/omnibox_api.h"
 #include "chrome/browser/favicon/favicon_service_factory.h"
 #include "chrome/browser/history/history_service_factory.h"
-#include "chrome/browser/net/predictor.h"
 #include "chrome/browser/predictors/autocomplete_action_predictor.h"
 #include "chrome/browser/predictors/autocomplete_action_predictor_factory.h"
 #include "chrome/browser/predictors/loading_predictor.h"
@@ -37,9 +39,15 @@
 #include "chrome/browser/search/search.h"
 #include "chrome/browser/search_engines/template_url_service_factory.h"
 #include "chrome/browser/sessions/session_tab_helper.h"
+#include "chrome/browser/translate/chrome_translate_client.h"
+#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_commands.h"
+#include "chrome/browser/ui/browser_finder.h"
+#include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/layout_constants.h"
 #include "chrome/browser/ui/omnibox/chrome_omnibox_edit_controller.h"
 #include "chrome/browser/ui/omnibox/chrome_omnibox_navigation_observer.h"
+#include "chrome/browser/ui/omnibox/query_in_omnibox_factory.h"
 #include "chrome/browser/ui/search/search_tab_helper.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/common/search/instant_types.h"
@@ -49,11 +57,13 @@
 #include "components/feature_engagement/buildflags.h"
 #include "components/omnibox/browser/autocomplete_match.h"
 #include "components/omnibox/browser/autocomplete_result.h"
+#include "components/omnibox/browser/location_bar_model.h"
 #include "components/omnibox/browser/search_provider.h"
 #include "components/prefs/pref_service.h"
 #include "components/search/search.h"
+#include "components/search_engines/search_engines_pref_names.h"
 #include "components/search_engines/template_url_service.h"
-#include "components/toolbar/toolbar_model.h"
+#include "components/translate/core/browser/translate_manager.h"
 #include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/navigation_entry.h"
 #include "content/public/browser/web_contents.h"
@@ -61,6 +71,7 @@
 #include "net/traffic_annotation/network_traffic_annotation.h"
 #include "third_party/skia/include/core/SkBitmap.h"
 #include "ui/base/window_open_disposition.h"
+#include "ui/gfx/image/canvas_image_source.h"
 #include "ui/gfx/paint_vector_icon.h"
 #include "ui/gfx/vector_icon_types.h"
 #include "url/gurl.h"
@@ -190,6 +201,15 @@ bool ChromeOmniboxClient::IsHomePage(const GURL& url) const {
   return url.spec() == profile_->GetPrefs()->GetString(prefs::kHomePage);
 }
 
+bool ChromeOmniboxClient::IsDefaultSearchProviderEnabled() const {
+  const base::DictionaryValue* url_dict = profile_->GetPrefs()->GetDictionary(
+      DefaultSearchManager::kDefaultSearchProviderDataPrefName);
+  bool disabled_by_policy = false;
+  url_dict->GetBoolean(DefaultSearchManager::kDisabledByPolicy,
+                       &disabled_by_policy);
+  return !disabled_by_policy;
+}
+
 const SessionID& ChromeOmniboxClient::GetSessionID() const {
   return SessionTabHelper::FromWebContents(
       controller_->GetWebContents())->session_id();
@@ -212,6 +232,10 @@ AutocompleteClassifier* ChromeOmniboxClient::GetAutocompleteClassifier() {
   return AutocompleteClassifierFactory::GetForProfile(profile_);
 }
 
+QueryInOmnibox* ChromeOmniboxClient::GetQueryInOmnibox() {
+  return QueryInOmniboxFactory::GetForProfile(profile_);
+}
+
 gfx::Image ChromeOmniboxClient::GetIconIfExtensionMatch(
     const AutocompleteMatch& match) const {
   TemplateURLService* service =
@@ -231,6 +255,25 @@ gfx::Image ChromeOmniboxClient::GetSizedIcon(
   return gfx::Image(gfx::CreateVectorIcon(
       vector_icon_type, GetLayoutConstant(LOCATION_BAR_ICON_SIZE),
       vector_icon_color));
+}
+
+gfx::Image ChromeOmniboxClient::GetSizedIcon(const gfx::Image& icon) const {
+  if (icon.IsEmpty())
+    return icon;
+
+  const int icon_size = GetLayoutConstant(LOCATION_BAR_ICON_SIZE);
+  // In touch mode, icons are 20x20. FaviconCache and ExtensionIconManager both
+  // guarantee favicons and extension icons will be 16x16, so add extra padding
+  // around them to align them vertically with the other vector icons.
+  DCHECK_GE(icon_size, icon.Height());
+  DCHECK_GE(icon_size, icon.Width());
+  gfx::Insets padding_border((icon_size - icon.Height()) / 2,
+                             (icon_size - icon.Width()) / 2);
+  if (!padding_border.IsEmpty()) {
+    return gfx::Image(gfx::CanvasImageSource::CreatePadded(*icon.ToImageSkia(),
+                                                           padding_border));
+  }
+  return icon;
 }
 
 bool ChromeOmniboxClient::ProcessExtensionKeyword(
@@ -353,15 +396,18 @@ gfx::Image ChromeOmniboxClient::GetFaviconForPageUrl(
 
 gfx::Image ChromeOmniboxClient::GetFaviconForDefaultSearchProvider(
     FaviconFetchedCallback on_favicon_fetched) {
-  const GURL& favicon_url =
-      GetTemplateURLService()->GetDefaultSearchProvider()->favicon_url();
-  return favicon_cache_.GetFaviconForIconUrl(favicon_url,
+  const TemplateURL* const default_provider =
+      GetTemplateURLService()->GetDefaultSearchProvider();
+  if (!default_provider)
+    return gfx::Image();
+
+  return favicon_cache_.GetFaviconForIconUrl(default_provider->favicon_url(),
                                              std::move(on_favicon_fetched));
 }
 
 void ChromeOmniboxClient::OnCurrentMatchChanged(
     const AutocompleteMatch& match) {
-  if (!prerender::IsOmniboxEnabled(profile_))
+  if (!prerender::IsNoStatePrefetchEnabled())
     DoPreconnect(match);
 }
 
@@ -425,7 +471,7 @@ void ChromeOmniboxClient::OnURLOpenedFromOmnibox(OmniboxLog* log) {
 // and current URLs, but users edit URLs rarely enough that this is a
 // reasonable approximation.
 #if BUILDFLAG(ENABLE_DESKTOP_IN_PRODUCT_HELP)
-  if (controller_->GetToolbarModel()->ShouldDisplayURL()) {
+  if (controller_->GetLocationBarModel()->ShouldDisplayURL()) {
     feature_engagement::NewTabTrackerFactory::GetInstance()
         ->GetForProfile(profile_)
         ->OnOmniboxNavigation();
@@ -442,6 +488,46 @@ void ChromeOmniboxClient::OnBookmarkLaunched() {
 
 void ChromeOmniboxClient::DiscardNonCommittedNavigations() {
   controller_->GetWebContents()->GetController().DiscardNonCommittedEntries();
+}
+
+void ChromeOmniboxClient::NewIncognitoWindow() {
+  chrome::NewIncognitoWindow(profile_);
+}
+
+void ChromeOmniboxClient::PromptPageTranslation() {
+  content::WebContents* contents = controller_->GetWebContents();
+  if (contents) {
+    ChromeTranslateClient* translate_client =
+        ChromeTranslateClient::FromWebContents(contents);
+    if (translate_client) {
+      const translate::LanguageState& state =
+          translate_client->GetLanguageState();
+      // Here we pass triggered_from_menu as true because that is meant to
+      // capture whether the user explicitly requested the translation.
+      translate_client->ShowTranslateUI(
+          translate::TRANSLATE_STEP_BEFORE_TRANSLATE, state.original_language(),
+          state.AutoTranslateTo(), translate::TranslateErrors::NONE,
+          /*triggered_from_menu=*/true);
+    }
+  }
+}
+
+void ChromeOmniboxClient::OpenUpdateChromeDialog() {
+  const content::WebContents* contents = controller_->GetWebContents();
+  if (contents) {
+    Browser* browser = chrome::FindBrowserWithWebContents(contents);
+    if (browser) {
+      // Here we record and take action more directly than
+      // chrome::OpenUpdateChromeDialog because that call is intended for use
+      // by the delayed-update/auto-nag system, possibly presenting dialogs
+      // that don't apply when the goal is immediate relaunch & update.
+      // TODO(orinj): Ensure that this is the correct way to handle
+      // explicitly requested update regardless of the kind of update ready.
+      // See comments at https://crrev.com/c/1281162 for context.
+      base::RecordAction(base::UserMetricsAction("UpdateChrome"));
+      browser->window()->ShowUpdateChromeDialog();
+    }
+  }
 }
 
 void ChromeOmniboxClient::DoPrerender(
@@ -468,10 +554,6 @@ void ChromeOmniboxClient::DoPreconnect(const AutocompleteMatch& match) {
   if (loading_predictor) {
     loading_predictor->PrepareForPageLoad(
         match.destination_url, predictors::HintOrigin::OMNIBOX,
-        predictors::AutocompleteActionPredictor::IsPreconnectable(match));
-  } else if (profile_->GetNetworkPredictor()) {
-    profile_->GetNetworkPredictor()->AnticipateOmniboxUrl(
-        match.destination_url,
         predictors::AutocompleteActionPredictor::IsPreconnectable(match));
   }
   // We could prefetch the alternate nav URL, if any, but because there

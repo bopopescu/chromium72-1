@@ -4,11 +4,16 @@
 
 #include "chrome/browser/apps/app_shim/extension_app_shim_handler_mac.h"
 
+#include <utility>
+
 #include "apps/app_lifetime_monitor_factory.h"
 #include "apps/launcher.h"
+#include "base/callback.h"
 #include "base/files/file_path.h"
 #include "base/logging.h"
 #include "base/macros.h"
+#include "chrome/browser/apps/app_shim/app_shim_host_bootstrap_mac.h"
+#include "chrome/browser/apps/app_shim/app_shim_host_mac.h"
 #include "chrome/browser/apps/app_shim/app_shim_host_manager_mac.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/chrome_notification_types.h"
@@ -25,11 +30,13 @@
 #include "chrome/browser/ui/extensions/extension_enable_flow.h"
 #include "chrome/browser/ui/extensions/extension_enable_flow_delegate.h"
 #include "chrome/browser/ui/user_manager.h"
-#include "chrome/browser/web_applications/web_app_mac.h"
+#include "chrome/browser/web_applications/components/web_app_helpers.h"
+#include "chrome/browser/web_applications/components/web_app_shortcut_mac.h"
+#include "chrome/browser/web_applications/extensions/web_app_extension_shortcut.h"
 #include "chrome/common/extensions/extension_constants.h"
 #include "chrome/common/extensions/extension_metrics.h"
 #include "chrome/common/extensions/manifest_handlers/app_launch_info.h"
-#include "chrome/common/mac/app_shim_messages.h"
+#include "chrome/common/mac/app_shim_param_traits.h"
 #include "components/crx_file/id_util.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/notification_details.h"
@@ -53,18 +60,6 @@ using extensions::ExtensionRegistry;
 namespace {
 
 typedef AppWindowRegistry::AppWindowList AppWindowList;
-
-void ProfileLoadedCallback(base::Callback<void(Profile*)> callback,
-                           Profile* profile,
-                           Profile::CreateStatus status) {
-  if (status == Profile::CREATE_STATUS_INITIALIZED) {
-    callback.Run(profile);
-    return;
-  }
-
-  // This should never get an error since it only loads existing profiles.
-  DCHECK_EQ(Profile::CREATE_STATUS_CREATED, status);
-}
 
 void SetAppHidden(Profile* profile, const std::string& app_id, bool hidden) {
   AppWindowList windows =
@@ -95,7 +90,7 @@ bool FocusWindows(const AppWindowList& windows) {
   return true;
 }
 
-bool FocusHostedAppWindows(std::set<Browser*>& browsers) {
+bool FocusHostedAppWindows(const std::set<Browser*>& browsers) {
   if (browsers.empty())
     return false;
 
@@ -156,21 +151,25 @@ class EnableViaPrompt : public ExtensionEnableFlowDelegate {
 
 namespace apps {
 
+base::FilePath ExtensionAppShimHandler::Delegate::GetFullProfilePath(
+    const base::FilePath& relative_profile_path) {
+  ProfileManager* profile_manager = g_browser_process->profile_manager();
+  return profile_manager->user_data_dir().Append(relative_profile_path);
+}
+
 bool ExtensionAppShimHandler::Delegate::ProfileExistsForPath(
-    const base::FilePath& path) {
+    const base::FilePath& full_path) {
   ProfileManager* profile_manager = g_browser_process->profile_manager();
   // Check for the profile name in the profile info cache to ensure that we
   // never access any directory that isn't a known profile.
-  base::FilePath full_path = profile_manager->user_data_dir().Append(path);
   ProfileAttributesEntry* entry;
   return profile_manager->GetProfileAttributesStorage().
       GetProfileAttributesWithPath(full_path, &entry);
 }
 
 Profile* ExtensionAppShimHandler::Delegate::ProfileForPath(
-    const base::FilePath& path) {
+    const base::FilePath& full_path) {
   ProfileManager* profile_manager = g_browser_process->profile_manager();
-  base::FilePath full_path = profile_manager->user_data_dir().Append(path);
   Profile* profile = profile_manager->GetProfileByPath(full_path);
 
   // Use IsValidProfile to check if the profile has been created.
@@ -178,20 +177,14 @@ Profile* ExtensionAppShimHandler::Delegate::ProfileForPath(
 }
 
 void ExtensionAppShimHandler::Delegate::LoadProfileAsync(
-    const base::FilePath& path,
-    base::Callback<void(Profile*)> callback) {
+    const base::FilePath& full_path,
+    base::OnceCallback<void(Profile*)> callback) {
   ProfileManager* profile_manager = g_browser_process->profile_manager();
-  base::FilePath full_path = profile_manager->user_data_dir().Append(path);
-  profile_manager->CreateProfileAsync(
-      full_path,
-      base::Bind(&ProfileLoadedCallback, callback),
-      base::string16(), std::string(), std::string());
+  profile_manager->LoadProfileByPath(full_path, false, std::move(callback));
 }
 
 bool ExtensionAppShimHandler::Delegate::IsProfileLockedForPath(
-    const base::FilePath& path) {
-  ProfileManager* profile_manager = g_browser_process->profile_manager();
-  base::FilePath full_path = profile_manager->user_data_dir().Append(path);
+    const base::FilePath& full_path) {
   return profiles::IsProfileLocked(full_path);
 }
 
@@ -205,6 +198,12 @@ const Extension* ExtensionAppShimHandler::Delegate::MaybeGetAppExtension(
     content::BrowserContext* context,
     const std::string& extension_id) {
   return ExtensionAppShimHandler::MaybeGetAppExtension(context, extension_id);
+}
+
+AppShimHandler::Host* ExtensionAppShimHandler::Delegate::CreateHost(
+    const std::string& app_id,
+    const base::FilePath& profile_path) {
+  return new AppShimHost(app_id, profile_path);
 }
 
 void ExtensionAppShimHandler::Delegate::EnableExtension(
@@ -245,7 +244,7 @@ void ExtensionAppShimHandler::Delegate::LaunchShim(Profile* profile,
 
 void ExtensionAppShimHandler::Delegate::LaunchUserManager() {
   UserManager::Show(base::FilePath(),
-                    profiles::USER_MANAGER_SELECT_PROFILE_APP_LAUNCHER);
+                    profiles::USER_MANAGER_SELECT_PROFILE_NO_ACTION);
 }
 
 void ExtensionAppShimHandler::Delegate::MaybeTerminate() {
@@ -279,6 +278,30 @@ AppShimHandler::Host* ExtensionAppShimHandler::FindHost(
   return it == hosts_.end() ? NULL : it->second;
 }
 
+AppShimHandler::Host* ExtensionAppShimHandler::FindOrCreateHost(
+    Profile* profile,
+    const std::string& app_id) {
+  Host*& host = hosts_[make_pair(profile, app_id)];
+  if (!host)
+    host = delegate_->CreateHost(app_id, profile->GetPath());
+  return host;
+}
+
+views::BridgeFactoryHost*
+ExtensionAppShimHandler::GetViewsBridgeFactoryHostForBrowser(Browser* browser) {
+  if (!features::HostWindowsInAppShimProcess())
+    return nullptr;
+
+  const Extension* extension =
+      apps::ExtensionAppShimHandler::MaybeGetAppForBrowser(browser);
+  if (extension && extension->is_hosted_app()) {
+    Host* host = FindOrCreateHost(
+        Profile::FromBrowserContext(browser->profile()), extension->id());
+    return host->GetViewsBridgeFactoryHost();
+  }
+  return nullptr;
+}
+
 void ExtensionAppShimHandler::SetHostedAppHidden(Profile* profile,
                                                  const std::string& app_id,
                                                  bool hidden) {
@@ -287,10 +310,8 @@ void ExtensionAppShimHandler::SetHostedAppHidden(Profile* profile,
     return;
 
   for (const Browser* browser : it->second) {
-    if (web_app::GetExtensionIdFromApplicationName(browser->app_name()) !=
-        app_id) {
+    if (web_app::GetAppIdFromApplicationName(browser->app_name()) != app_id)
       continue;
-    }
 
     if (hidden)
       browser->window()->Hide();
@@ -323,17 +344,15 @@ const Extension* ExtensionAppShimHandler::MaybeGetAppForBrowser(
 
   return MaybeGetAppExtension(
       browser->profile(),
-      web_app::GetExtensionIdFromApplicationName(browser->app_name()));
+      web_app::GetAppIdFromApplicationName(browser->app_name()));
 }
 
-// static
 void ExtensionAppShimHandler::QuitAppForWindow(AppWindow* app_window) {
-  ExtensionAppShimHandler* handler = GetInstance();
-  Host* host = handler->FindHost(
-      Profile::FromBrowserContext(app_window->browser_context()),
-      app_window->extension_id());
+  Host* host =
+      FindHost(Profile::FromBrowserContext(app_window->browser_context()),
+               app_window->extension_id());
   if (host) {
-    handler->OnShimQuit(host);
+    OnShimQuit(host);
   } else {
     // App shims might be disabled or the shim is still starting up.
     AppWindowRegistry::Get(
@@ -342,22 +361,19 @@ void ExtensionAppShimHandler::QuitAppForWindow(AppWindow* app_window) {
   }
 }
 
-// static
 void ExtensionAppShimHandler::QuitHostedAppForWindow(
     Profile* profile,
     const std::string& app_id) {
-  ExtensionAppShimHandler* handler = GetInstance();
-  Host* host = handler->FindHost(Profile::FromBrowserContext(profile), app_id);
+  Host* host = FindHost(Profile::FromBrowserContext(profile), app_id);
   if (host)
-    handler->OnShimQuit(host);
+    OnShimQuit(host);
   else
-    handler->CloseBrowsersForApp(app_id);
+    CloseBrowsersForApp(app_id);
 }
 
 void ExtensionAppShimHandler::HideAppForWindow(AppWindow* app_window) {
-  ExtensionAppShimHandler* handler = GetInstance();
   Profile* profile = Profile::FromBrowserContext(app_window->browser_context());
-  Host* host = handler->FindHost(profile, app_window->extension_id());
+  Host* host = FindHost(profile, app_window->extension_id());
   if (host)
     host->OnAppHide();
   else
@@ -366,113 +382,102 @@ void ExtensionAppShimHandler::HideAppForWindow(AppWindow* app_window) {
 
 void ExtensionAppShimHandler::HideHostedApp(Profile* profile,
                                             const std::string& app_id) {
-  ExtensionAppShimHandler* handler = GetInstance();
-  Host* host = handler->FindHost(profile, app_id);
+  Host* host = FindHost(profile, app_id);
   if (host)
     host->OnAppHide();
   else
-    handler->SetHostedAppHidden(profile, app_id, true);
+    SetHostedAppHidden(profile, app_id, true);
 }
 
 void ExtensionAppShimHandler::FocusAppForWindow(AppWindow* app_window) {
-  ExtensionAppShimHandler* handler = GetInstance();
   Profile* profile = Profile::FromBrowserContext(app_window->browser_context());
   const std::string& app_id = app_window->extension_id();
-  Host* host = handler->FindHost(profile, app_id);
+  Host* host = FindHost(profile, app_id);
   if (host) {
-    handler->OnShimFocus(host,
-                         APP_SHIM_FOCUS_NORMAL,
-                         std::vector<base::FilePath>());
+    OnShimFocus(host, APP_SHIM_FOCUS_NORMAL, std::vector<base::FilePath>());
   } else {
     FocusWindows(AppWindowRegistry::Get(profile)->GetAppWindowsForApp(app_id));
   }
 }
 
-// static
 void ExtensionAppShimHandler::UnhideWithoutActivationForWindow(
     AppWindow* app_window) {
-  ExtensionAppShimHandler* handler = GetInstance();
   Profile* profile = Profile::FromBrowserContext(app_window->browser_context());
-  Host* host = handler->FindHost(profile, app_window->extension_id());
+  Host* host = FindHost(profile, app_window->extension_id());
   if (host)
     host->OnAppUnhideWithoutActivation();
 }
 
-// static
 void ExtensionAppShimHandler::RequestUserAttentionForWindow(
     AppWindow* app_window,
     AppShimAttentionType attention_type) {
-  ExtensionAppShimHandler* handler = GetInstance();
   Profile* profile = Profile::FromBrowserContext(app_window->browser_context());
-  Host* host = handler->FindHost(profile, app_window->extension_id());
+  Host* host = FindHost(profile, app_window->extension_id());
   if (host)
     host->OnAppRequestUserAttention(attention_type);
 }
 
-// static
 void ExtensionAppShimHandler::OnChromeWillHide() {
   // Send OnAppHide to all the shims so that they go into the hidden state.
   // This is necessary so that when the shim is next focused, it will know to
   // unhide.
-  ExtensionAppShimHandler* handler = GetInstance();
-  for (HostMap::iterator it = handler->hosts_.begin();
-       it != handler->hosts_.end();
-       ++it) {
-    it->second->OnAppHide();
-  }
+  for (auto& entry : hosts_)
+    entry.second->OnAppHide();
 }
 
 void ExtensionAppShimHandler::OnShimLaunch(
-    Host* host,
-    AppShimLaunchType launch_type,
-    const std::vector<base::FilePath>& files) {
-  const std::string& app_id = host->GetAppId();
+    std::unique_ptr<AppShimHostBootstrap> bootstrap) {
+  const std::string& app_id = bootstrap->GetAppId();
+  AppShimLaunchType launch_type = bootstrap->GetLaunchType();
   DCHECK(crx_file::id_util::IdIsValid(app_id));
 
-  const base::FilePath& profile_path = host->GetProfilePath();
-  DCHECK(!profile_path.empty());
+  const base::FilePath& relative_profile_path = bootstrap->GetProfilePath();
+  DCHECK(!relative_profile_path.empty());
+  base::FilePath profile_path =
+      delegate_->GetFullProfilePath(relative_profile_path);
 
   if (!delegate_->ProfileExistsForPath(profile_path)) {
     // User may have deleted the profile this shim was originally created for.
     // TODO(jackhou): Add some UI for this case and remove the LOG.
     LOG(ERROR) << "Requested directory is not a known profile '"
                << profile_path.value() << "'.";
-    host->OnAppLaunchComplete(APP_SHIM_LAUNCH_PROFILE_NOT_FOUND);
+    bootstrap->OnLaunchAppFailed(APP_SHIM_LAUNCH_PROFILE_NOT_FOUND);
     return;
   }
 
   if (delegate_->IsProfileLockedForPath(profile_path)) {
     LOG(WARNING) << "Requested profile is locked.  Showing User Manager.";
-    host->OnAppLaunchComplete(APP_SHIM_LAUNCH_PROFILE_LOCKED);
+    bootstrap->OnLaunchAppFailed(APP_SHIM_LAUNCH_PROFILE_LOCKED);
     delegate_->LaunchUserManager();
     return;
   }
 
   Profile* profile = delegate_->ProfileForPath(profile_path);
-
   if (profile) {
-    OnProfileLoaded(host, launch_type, files, profile);
-    return;
+    OnProfileLoaded(std::move(bootstrap), profile);
+  } else {
+    // If the profile is not loaded, this must have been a launch by the shim.
+    // Load the profile asynchronously, the host will be registered in
+    // OnProfileLoaded.
+    DCHECK_EQ(APP_SHIM_LAUNCH_NORMAL, launch_type);
+    delegate_->LoadProfileAsync(
+        profile_path,
+        base::BindOnce(&ExtensionAppShimHandler::OnProfileLoaded,
+                       weak_factory_.GetWeakPtr(), std::move(bootstrap)));
   }
-
-  // If the profile is not loaded, this must have been a launch by the shim.
-  // Load the profile asynchronously, the host will be registered in
-  // OnProfileLoaded.
-  DCHECK_EQ(APP_SHIM_LAUNCH_NORMAL, launch_type);
-  delegate_->LoadProfileAsync(
-      profile_path,
-      base::Bind(&ExtensionAppShimHandler::OnProfileLoaded,
-                 weak_factory_.GetWeakPtr(),
-                 host, launch_type, files));
 
   // Return now. OnAppLaunchComplete will be called when the app is activated.
 }
 
 // static
-ExtensionAppShimHandler* ExtensionAppShimHandler::GetInstance() {
-  return g_browser_process->platform_part()
-      ->app_shim_host_manager()
-      ->extension_app_shim_handler();
+ExtensionAppShimHandler* ExtensionAppShimHandler::Get() {
+  // This will only return nullptr in certain unit tests that do not initialize
+  // the app shim host manager.
+  auto* shim_host_manager =
+      g_browser_process->platform_part()->app_shim_host_manager();
+  if (shim_host_manager)
+    return shim_host_manager->extension_app_shim_handler();
+  return nullptr;
 }
 
 const Extension* ExtensionAppShimHandler::MaybeGetExtensionOrCloseHost(
@@ -504,23 +509,25 @@ void ExtensionAppShimHandler::CloseBrowsersForApp(const std::string& app_id) {
 }
 
 void ExtensionAppShimHandler::OnProfileLoaded(
-    Host* host,
-    AppShimLaunchType launch_type,
-    const std::vector<base::FilePath>& files,
+    std::unique_ptr<AppShimHostBootstrap> bootstrap,
     Profile* profile) {
-  const std::string& app_id = host->GetAppId();
+  const std::string& app_id = bootstrap->GetAppId();
+  AppShimLaunchType launch_type = bootstrap->GetLaunchType();
+  const std::vector<base::FilePath>& files = bootstrap->GetLaunchFiles();
 
-  // The first host to claim this (profile, app_id) becomes the main host.
-  // For any others, focus or relaunch the app.
-  if (!hosts_.insert(make_pair(make_pair(profile, app_id), host)).second) {
+  Host* host = FindOrCreateHost(profile, app_id);
+  if (host->HasBootstrapConnected()) {
+    // If another app shim process has already connected to this (profile,
+    // app_id) pair, then focus the windows for the existing process, and
+    // close the new process.
     OnShimFocus(host,
                 launch_type == APP_SHIM_LAUNCH_NORMAL ?
                     APP_SHIM_FOCUS_REOPEN : APP_SHIM_FOCUS_NORMAL,
                 files);
-    host->OnAppLaunchComplete(APP_SHIM_LAUNCH_DUPLICATE_HOST);
+    bootstrap->OnLaunchAppFailed(APP_SHIM_LAUNCH_DUPLICATE_HOST);
     return;
   }
-
+  host->OnBootstrapConnected(std::move(bootstrap));
   if (launch_type != APP_SHIM_LAUNCH_NORMAL) {
     host->OnAppLaunchComplete(APP_SHIM_LAUNCH_SUCCESS);
     return;
@@ -637,9 +644,9 @@ void ExtensionAppShimHandler::OnShimQuit(Host* host) {
   if (!extension)
     return;
 
-  if (extension->is_hosted_app())
+  if (extension->is_hosted_app()) {
     CloseBrowsersForApp(app_id);
-  else {
+  } else {
     const AppWindowList windows = delegate_->GetWindows(profile, app_id);
     for (AppWindowRegistry::const_iterator it = windows.begin();
          it != windows.end(); ++it) {
@@ -721,13 +728,15 @@ void ExtensionAppShimHandler::OnAppActivated(content::BrowserContext* context,
 
   Profile* profile = static_cast<Profile*>(context);
   Host* host = FindHost(profile, app_id);
-  if (host) {
+  if (host && host->HasBootstrapConnected()) {
+    // If there is a connected app shim process, notify it of success and focus
+    // the app windows.
     host->OnAppLaunchComplete(APP_SHIM_LAUNCH_SUCCESS);
     OnShimFocus(host, APP_SHIM_FOCUS_NORMAL, std::vector<base::FilePath>());
-    return;
+  } else {
+    // Otherwise, launch an app shim.
+    delegate_->LaunchShim(profile, extension);
   }
-
-  delegate_->LaunchShim(profile, extension);
 }
 
 void ExtensionAppShimHandler::OnAppDeactivated(content::BrowserContext* context,
@@ -748,8 +757,7 @@ void ExtensionAppShimHandler::OnAppStop(content::BrowserContext* context,
 // chrome::NOTIFICATION_BROWSER_OPENED and then call OnAppActivated.
 // If this notification is removed, check that OnBrowserAdded is called after
 // the BrowserWindow is ready.
-void ExtensionAppShimHandler::OnBrowserAdded(Browser* browser) {
-}
+void ExtensionAppShimHandler::OnBrowserAdded(Browser* browser) {}
 
 void ExtensionAppShimHandler::OnBrowserRemoved(Browser* browser) {
   const Extension* extension = MaybeGetAppForBrowser(browser);

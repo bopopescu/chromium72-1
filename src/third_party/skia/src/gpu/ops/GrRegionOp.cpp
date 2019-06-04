@@ -12,41 +12,19 @@
 #include "GrOpFlushState.h"
 #include "GrResourceProvider.h"
 #include "GrSimpleMeshDrawOpHelper.h"
+#include "GrVertexWriter.h"
 #include "SkMatrixPriv.h"
-#include "SkPointPriv.h"
 #include "SkRegion.h"
 
 static const int kVertsPerInstance = 4;
 static const int kIndicesPerInstance = 6;
 
-static sk_sp<GrGeometryProcessor> make_gp(const SkMatrix& viewMatrix) {
+static sk_sp<GrGeometryProcessor> make_gp(const GrShaderCaps* shaderCaps,
+                                          const SkMatrix& viewMatrix) {
     using namespace GrDefaultGeoProcFactory;
-    return GrDefaultGeoProcFactory::Make(Color::kPremulGrColorAttribute_Type, Coverage::kSolid_Type,
-                                         LocalCoords::kUsePosition_Type, viewMatrix);
-}
-
-static void tesselate_region(intptr_t vertices,
-                             size_t vertexStride,
-                             GrColor color,
-                             const SkRegion& region) {
-    SkRegion::Iterator iter(region);
-
-    intptr_t verts = vertices;
-    while (!iter.done()) {
-        SkRect rect = SkRect::Make(iter.rect());
-        SkPoint* position = (SkPoint*)verts;
-        SkPointPriv::SetRectTriStrip(position, rect, vertexStride);
-
-        static const int kColorOffset = sizeof(SkPoint);
-        GrColor* vertColor = reinterpret_cast<GrColor*>(verts + kColorOffset);
-        for (int i = 0; i < kVertsPerInstance; i++) {
-            *vertColor = color;
-            vertColor = (GrColor*)((intptr_t)vertColor + vertexStride);
-        }
-
-        verts += vertexStride * kVertsPerInstance;
-        iter.next();
-    }
+    return GrDefaultGeoProcFactory::Make(shaderCaps, Color::kPremulGrColorAttribute_Type,
+                                         Coverage::kSolid_Type, LocalCoords::kUsePosition_Type,
+                                         viewMatrix);
 }
 
 namespace {
@@ -58,15 +36,19 @@ private:
 public:
     DEFINE_OP_CLASS_ID
 
-    static std::unique_ptr<GrDrawOp> Make(GrPaint&& paint, const SkMatrix& viewMatrix,
-                                          const SkRegion& region, GrAAType aaType,
+    static std::unique_ptr<GrDrawOp> Make(GrContext* context,
+                                          GrPaint&& paint,
+                                          const SkMatrix& viewMatrix,
+                                          const SkRegion& region,
+                                          GrAAType aaType,
                                           const GrUserStencilSettings* stencilSettings = nullptr) {
-        return Helper::FactoryHelper<RegionOp>(std::move(paint), viewMatrix, region, aaType,
-                                               stencilSettings);
+        return Helper::FactoryHelper<RegionOp>(context, std::move(paint), viewMatrix, region,
+                                               aaType, stencilSettings);
     }
 
-    RegionOp(const Helper::MakeArgs& helperArgs, GrColor color, const SkMatrix& viewMatrix,
-             const SkRegion& region, GrAAType aaType, const GrUserStencilSettings* stencilSettings)
+    RegionOp(const Helper::MakeArgs& helperArgs, const SkPMColor4f& color,
+             const SkMatrix& viewMatrix, const SkRegion& region, GrAAType aaType,
+             const GrUserStencilSettings* stencilSettings)
             : INHERITED(ClassID())
             , fHelper(helperArgs, aaType, stencilSettings)
             , fViewMatrix(viewMatrix) {
@@ -80,39 +62,39 @@ public:
 
     const char* name() const override { return "GrRegionOp"; }
 
-    void visitProxies(const VisitProxyFunc& func) const override {
+    void visitProxies(const VisitProxyFunc& func, VisitorType) const override {
         fHelper.visitProxies(func);
     }
 
+#ifdef SK_DEBUG
     SkString dumpInfo() const override {
         SkString str;
         str.appendf("# combined: %d\n", fRegions.count());
         for (int i = 0; i < fRegions.count(); ++i) {
             const RegionInfo& info = fRegions[i];
-            str.appendf("%d: Color: 0x%08x, Region with %d rects\n", i, info.fColor,
+            str.appendf("%d: Color: 0x%08x, Region with %d rects\n", i, info.fColor.toBytes_RGBA(),
                         info.fRegion.computeRegionComplexity());
         }
         str += fHelper.dumpInfo();
         str += INHERITED::dumpInfo();
         return str;
     }
+#endif
 
     FixedFunctionFlags fixedFunctionFlags() const override { return fHelper.fixedFunctionFlags(); }
 
-    RequiresDstTexture finalize(const GrCaps& caps, const GrAppliedClip* clip,
-                                GrPixelConfigIsClamped dstIsClamped) override {
-        return fHelper.xpRequiresDstTexture(caps, clip, dstIsClamped,
-                                            GrProcessorAnalysisCoverage::kNone, &fRegions[0].fColor);
+    RequiresDstTexture finalize(const GrCaps& caps, const GrAppliedClip* clip) override {
+        return fHelper.xpRequiresDstTexture(caps, clip, GrProcessorAnalysisCoverage::kNone,
+                                            &fRegions[0].fColor);
     }
 
 private:
     void onPrepareDraws(Target* target) override {
-        sk_sp<GrGeometryProcessor> gp = make_gp(fViewMatrix);
+        sk_sp<GrGeometryProcessor> gp = make_gp(target->caps().shaderCaps(), fViewMatrix);
         if (!gp) {
             SkDebugf("Couldn't create GrGeometryProcessor\n");
             return;
         }
-        SkASSERT(gp->getVertexStride() == sizeof(GrDefaultGeoProcFactory::PositionColorAttr));
 
         int numRegions = fRegions.count();
         int numRects = 0;
@@ -123,43 +105,46 @@ private:
         if (!numRects) {
             return;
         }
-        size_t vertexStride = gp->getVertexStride();
         sk_sp<const GrBuffer> indexBuffer = target->resourceProvider()->refQuadIndexBuffer();
-        PatternHelper helper(GrPrimitiveType::kTriangles);
-        void* vertices =
-                helper.init(target, vertexStride, indexBuffer.get(), kVertsPerInstance,
-                            kIndicesPerInstance, numRects);
-        if (!vertices || !indexBuffer) {
+        PatternHelper helper(target, GrPrimitiveType::kTriangles, gp->vertexStride(),
+                             indexBuffer.get(), kVertsPerInstance, kIndicesPerInstance, numRects);
+        GrVertexWriter vertices{helper.vertices()};
+        if (!vertices.fPtr || !indexBuffer) {
             SkDebugf("Could not allocate vertices\n");
             return;
         }
 
-        intptr_t verts = reinterpret_cast<intptr_t>(vertices);
         for (int i = 0; i < numRegions; i++) {
-            tesselate_region(verts, vertexStride, fRegions[i].fColor, fRegions[i].fRegion);
-            int numRectsInRegion = fRegions[i].fRegion.computeRegionComplexity();
-            verts += numRectsInRegion * kVertsPerInstance * vertexStride;
+            // TODO4F: Preserve float colors
+            GrColor color = fRegions[i].fColor.toBytes_RGBA();
+
+            SkRegion::Iterator iter(fRegions[i].fRegion);
+            while (!iter.done()) {
+                SkRect rect = SkRect::Make(iter.rect());
+                vertices.writeQuad(GrVertexWriter::TriStripFromRect(rect), color);
+                iter.next();
+            }
         }
-        helper.recordDraw(target, gp.get(), fHelper.makePipeline(target));
+        auto pipe = fHelper.makePipeline(target);
+        helper.recordDraw(target, std::move(gp), pipe.fPipeline, pipe.fFixedDynamicState);
     }
 
-    bool onCombineIfPossible(GrOp* t, const GrCaps& caps) override {
+    CombineResult onCombineIfPossible(GrOp* t, const GrCaps& caps) override {
         RegionOp* that = t->cast<RegionOp>();
         if (!fHelper.isCompatible(that->fHelper, caps, this->bounds(), that->bounds())) {
-            return false;
+            return CombineResult::kCannotCombine;
         }
 
         if (fViewMatrix != that->fViewMatrix) {
-            return false;
+            return CombineResult::kCannotCombine;
         }
 
         fRegions.push_back_n(that->fRegions.count(), that->fRegions.begin());
-        this->joinBounds(*that);
-        return true;
+        return CombineResult::kMerged;
     }
 
     struct RegionInfo {
-        GrColor fColor;
+        SkPMColor4f fColor;
         SkRegion fRegion;
     };
 
@@ -174,12 +159,16 @@ private:
 
 namespace GrRegionOp {
 
-std::unique_ptr<GrDrawOp> Make(GrPaint&& paint, const SkMatrix& viewMatrix, const SkRegion& region,
-                               GrAAType aaType, const GrUserStencilSettings* stencilSettings) {
+std::unique_ptr<GrDrawOp> Make(GrContext* context,
+                               GrPaint&& paint,
+                               const SkMatrix& viewMatrix,
+                               const SkRegion& region,
+                               GrAAType aaType,
+                               const GrUserStencilSettings* stencilSettings) {
     if (aaType != GrAAType::kNone && aaType != GrAAType::kMSAA) {
         return nullptr;
     }
-    return RegionOp::Make(std::move(paint), viewMatrix, region, aaType, stencilSettings);
+    return RegionOp::Make(context, std::move(paint), viewMatrix, region, aaType, stencilSettings);
 }
 }
 
@@ -210,7 +199,7 @@ GR_DRAW_OP_TEST_DEFINE(RegionOp) {
     if (GrFSAAType::kUnifiedMSAA == fsaaType && random->nextBool()) {
         aaType = GrAAType::kMSAA;
     }
-    return RegionOp::Make(std::move(paint), viewMatrix, region, aaType,
+    return RegionOp::Make(context, std::move(paint), viewMatrix, region, aaType,
                           GrGetRandomStencil(random, context));
 }
 

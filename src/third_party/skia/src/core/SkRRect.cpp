@@ -5,13 +5,14 @@
  * found in the LICENSE file.
  */
 
-#include <cmath>
 #include "SkRRectPriv.h"
-#include "SkScopeExit.h"
 #include "SkBuffer.h"
 #include "SkMalloc.h"
 #include "SkMatrix.h"
 #include "SkScaleToSides.h"
+
+#include <cmath>
+#include <utility>
 
 ///////////////////////////////////////////////////////////////////////////////
 
@@ -23,17 +24,20 @@ void SkRRect::setRectXY(const SkRect& rect, SkScalar xRad, SkScalar yRad) {
     if (!SkScalarsAreFinite(xRad, yRad)) {
         xRad = yRad = 0;    // devolve into a simple rect
     }
+
+    if (fRect.width() < xRad+xRad || fRect.height() < yRad+yRad) {
+        // At most one of these two divides will be by zero, and neither numerator is zero.
+        SkScalar scale = SkMinScalar(sk_ieee_float_divide(fRect. width(), xRad + xRad),
+                                     sk_ieee_float_divide(fRect.height(), yRad + yRad));
+        SkASSERT(scale < SK_Scalar1);
+        xRad *= scale;
+        yRad *= scale;
+    }
+
     if (xRad <= 0 || yRad <= 0) {
         // all corners are square in this case
         this->setRect(rect);
         return;
-    }
-
-    if (fRect.width() < xRad+xRad || fRect.height() < yRad+yRad) {
-        SkScalar scale = SkMinScalar(fRect.width() / (xRad + xRad), fRect.height() / (yRad + yRad));
-        SkASSERT(scale < SK_Scalar1);
-        xRad *= scale;
-        yRad *= scale;
     }
 
     for (int i = 0; i < 4; ++i) {
@@ -321,14 +325,13 @@ static bool radii_are_nine_patch(const SkVector radii[4]) {
 
 // There is a simplified version of this method in setRectXY
 void SkRRect::computeType() {
-    SK_AT_SCOPE_EXIT(SkASSERT(this->isValid()));
-
     if (fRect.isEmpty()) {
         SkASSERT(fRect.isSorted());
         for (size_t i = 0; i < SK_ARRAY_COUNT(fRadii); ++i) {
             SkASSERT((fRadii[i] == SkVector{0, 0}));
         }
         fType = kEmpty_Type;
+        SkASSERT(this->isValid());
         return;
     }
 
@@ -348,6 +351,7 @@ void SkRRect::computeType() {
 
     if (allCornersSquare) {
         fType = kRect_Type;
+        SkASSERT(this->isValid());
         return;
     }
 
@@ -358,6 +362,7 @@ void SkRRect::computeType() {
         } else {
             fType = kSimple_Type;
         }
+        SkASSERT(this->isValid());
         return;
     }
 
@@ -366,12 +371,7 @@ void SkRRect::computeType() {
     } else {
         fType = kComplex_Type;
     }
-}
-
-static bool matrix_only_scale_and_translate(const SkMatrix& matrix) {
-    const SkMatrix::TypeMask m = (SkMatrix::TypeMask) (SkMatrix::kAffine_Mask
-                                    | SkMatrix::kPerspective_Mask);
-    return (matrix.getType() & m) == 0;
+    SkASSERT(this->isValid());
 }
 
 bool SkRRect::transform(const SkMatrix& matrix, SkRRect* dst) const {
@@ -391,7 +391,7 @@ bool SkRRect::transform(const SkMatrix& matrix, SkRRect* dst) const {
 
     // If transform supported 90 degree rotations (which it could), we could
     // use SkMatrix::rectStaysRect() to check for a valid transformation.
-    if (!matrix_only_scale_and_translate(matrix)) {
+    if (!matrix.isScaleTranslate()) {
         return false;
     }
 
@@ -447,20 +447,21 @@ bool SkRRect::transform(const SkMatrix& matrix, SkRRect* dst) const {
     }
 
     // Now swap as necessary.
+    using std::swap;
     if (flipX) {
         if (flipY) {
             // Swap with opposite corners
-            SkTSwap(dst->fRadii[kUpperLeft_Corner], dst->fRadii[kLowerRight_Corner]);
-            SkTSwap(dst->fRadii[kUpperRight_Corner], dst->fRadii[kLowerLeft_Corner]);
+            swap(dst->fRadii[kUpperLeft_Corner], dst->fRadii[kLowerRight_Corner]);
+            swap(dst->fRadii[kUpperRight_Corner], dst->fRadii[kLowerLeft_Corner]);
         } else {
             // Only swap in x
-            SkTSwap(dst->fRadii[kUpperRight_Corner], dst->fRadii[kUpperLeft_Corner]);
-            SkTSwap(dst->fRadii[kLowerRight_Corner], dst->fRadii[kLowerLeft_Corner]);
+            swap(dst->fRadii[kUpperRight_Corner], dst->fRadii[kUpperLeft_Corner]);
+            swap(dst->fRadii[kLowerRight_Corner], dst->fRadii[kLowerLeft_Corner]);
         }
     } else if (flipY) {
         // Only swap in y
-        SkTSwap(dst->fRadii[kUpperLeft_Corner], dst->fRadii[kLowerLeft_Corner]);
-        SkTSwap(dst->fRadii[kUpperRight_Corner], dst->fRadii[kLowerRight_Corner]);
+        swap(dst->fRadii[kUpperLeft_Corner], dst->fRadii[kLowerLeft_Corner]);
+        swap(dst->fRadii[kUpperRight_Corner], dst->fRadii[kLowerRight_Corner]);
     }
 
     if (!AreRectAndRadiiValid(dst->fRect, dst->fRadii)) {
@@ -518,9 +519,9 @@ size_t SkRRect::writeToMemory(void* buffer) const {
     return kSizeInMemory;
 }
 
-void SkRRect::writeToBuffer(SkWBuffer* buffer) const {
+void SkRRectPriv::WriteToBuffer(const SkRRect& rr, SkWBuffer* buffer) {
     // Serialize only the rect and corners, but not the derived type tag.
-    buffer->write(this, kSizeInMemory);
+    buffer->write(&rr, SkRRect::kSizeInMemory);
 }
 
 size_t SkRRect::readFromMemory(const void* buffer, size_t length) {
@@ -534,13 +535,13 @@ size_t SkRRect::readFromMemory(const void* buffer, size_t length) {
     return kSizeInMemory;
 }
 
-bool SkRRect::readFromBuffer(SkRBuffer* buffer) {
-    if (buffer->available() < kSizeInMemory) {
+bool SkRRectPriv::ReadFromBuffer(SkRBuffer* buffer, SkRRect* rr) {
+    if (buffer->available() < SkRRect::kSizeInMemory) {
         return false;
     }
     SkRRect storage;
-    return buffer->read(&storage, kSizeInMemory) &&
-           (this->readFromMemory(&storage, kSizeInMemory) == kSizeInMemory);
+    return buffer->read(&storage, SkRRect::kSizeInMemory) &&
+           (rr->readFromMemory(&storage, SkRRect::kSizeInMemory) == SkRRect::kSizeInMemory);
 }
 
 #include "SkString.h"

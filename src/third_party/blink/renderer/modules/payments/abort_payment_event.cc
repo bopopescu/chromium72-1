@@ -4,13 +4,13 @@
 
 #include "third_party/blink/renderer/modules/payments/abort_payment_event.h"
 
-#include "third_party/blink/renderer/bindings/core/v8/exception_state.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_promise.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_promise_resolver.h"
 #include "third_party/blink/renderer/modules/event_modules.h"
-#include "third_party/blink/renderer/modules/serviceworkers/extendable_event_init.h"
-#include "third_party/blink/renderer/modules/serviceworkers/respond_with_observer.h"
-#include "third_party/blink/renderer/modules/serviceworkers/wait_until_observer.h"
+#include "third_party/blink/renderer/modules/service_worker/extendable_event_init.h"
+#include "third_party/blink/renderer/modules/service_worker/respond_with_observer.h"
+#include "third_party/blink/renderer/modules/service_worker/wait_until_observer.h"
+#include "third_party/blink/renderer/platform/bindings/exception_state.h"
 #include "third_party/blink/renderer/platform/bindings/script_state.h"
 #include "third_party/blink/renderer/platform/wtf/text/atomic_string.h"
 
@@ -18,13 +18,13 @@ namespace blink {
 
 AbortPaymentEvent* AbortPaymentEvent::Create(
     const AtomicString& type,
-    const ExtendableEventInit& initializer) {
+    const ExtendableEventInit* initializer) {
   return new AbortPaymentEvent(type, initializer, nullptr, nullptr);
 }
 
 AbortPaymentEvent* AbortPaymentEvent::Create(
     const AtomicString& type,
-    const ExtendableEventInit& initializer,
+    const ExtendableEventInit* initializer,
     RespondWithObserver* respond_with_observer,
     WaitUntilObserver* wait_until_observer) {
   return new AbortPaymentEvent(type, initializer, respond_with_observer,
@@ -34,7 +34,7 @@ AbortPaymentEvent* AbortPaymentEvent::Create(
 AbortPaymentEvent::~AbortPaymentEvent() = default;
 
 const AtomicString& AbortPaymentEvent::InterfaceName() const {
-  return EventNames::AbortPaymentEvent;
+  return event_interface_names::kAbortPaymentEvent;
 }
 
 void AbortPaymentEvent::respondWith(ScriptState* script_state,
@@ -52,7 +52,7 @@ void AbortPaymentEvent::Trace(blink::Visitor* visitor) {
 }
 
 AbortPaymentEvent::AbortPaymentEvent(const AtomicString& type,
-                                     const ExtendableEventInit& initializer,
+                                     const ExtendableEventInit* initializer,
                                      RespondWithObserver* respond_with_observer,
                                      WaitUntilObserver* wait_until_observer)
     : ExtendableEvent(type, initializer, wait_until_observer),

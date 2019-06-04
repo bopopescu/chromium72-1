@@ -50,21 +50,14 @@ GLSurfaceCast::GLSurfaceCast(gfx::AcceleratedWidget widget,
       parent_(parent),
       supports_swap_buffer_with_bounds_(
           base::CommandLine::ForCurrentProcess()->HasSwitch(
-              switches::kEnableSwapBuffersWithBounds)) {
+              switches::kEnableSwapBuffersWithBounds)),
+      uses_triple_buffering_(
+          chromecast::IsFeatureEnabled(chromecast::kTripleBuffer720)) {
   DCHECK(parent_);
 }
 
 bool GLSurfaceCast::SupportsSwapBuffersWithBounds() {
   return supports_swap_buffer_with_bounds_;
-}
-
-gfx::SwapResult GLSurfaceCast::SwapBuffers(
-    const PresentationCallback& callback) {
-  gfx::SwapResult result = NativeViewGLSurfaceEGL::SwapBuffers(callback);
-  if (result == gfx::SwapResult::SWAP_ACK)
-    parent_->OnSwapBuffers();
-
-  return result;
 }
 
 gfx::SwapResult GLSurfaceCast::SwapBuffersWithBounds(
@@ -81,11 +74,8 @@ gfx::SwapResult GLSurfaceCast::SwapBuffersWithBounds(
     rects_data[i * 4 + 2] = rects[i].width();
     rects_data[i * 4 + 3] = rects[i].height();
   }
-  gfx::SwapResult result =
-      NativeViewGLSurfaceEGL::SwapBuffersWithDamage(rects_data, callback);
-  if (result == gfx::SwapResult::SWAP_ACK)
-    parent_->OnSwapBuffers();
-  return result;
+
+  return NativeViewGLSurfaceEGL::SwapBuffersWithDamage(rects_data, callback);
 }
 
 bool GLSurfaceCast::Resize(const gfx::Size& size,
@@ -134,6 +124,10 @@ EGLConfig GLSurfaceCast::GetConfig() {
     config_ = ChooseEGLConfig(GetDisplay(), config_attribs);
   }
   return config_;
+}
+
+int GLSurfaceCast::GetBufferCount() const {
+  return uses_triple_buffering_ ? 3 : 2;
 }
 
 GLSurfaceCast::~GLSurfaceCast() {

@@ -41,14 +41,12 @@
 #include "net/third_party/quic/core/quic_utils.h"
 #include "net/third_party/quic/platform/api/quic_text_utils.h"
 
-using std::string;
-
 // If set, specify the QUIC version to use.
-string FLAGS_quic_version = "";
+quic::QuicString FLAGS_quic_version = "";
 
 namespace {
 
-string ArgToString(base::CommandLine::StringType arg) {
+quic::QuicString ArgToString(base::CommandLine::StringType arg) {
 #if defined(OS_WIN)
   return base::UTF16ToASCII(arg);
 #else
@@ -57,7 +55,7 @@ string ArgToString(base::CommandLine::StringType arg) {
 }
 }  // namespace
 
-namespace net {
+namespace quic {
 
 class QuicPacketPrinter : public QuicFramerVisitorInterface {
  public:
@@ -67,7 +65,8 @@ class QuicPacketPrinter : public QuicFramerVisitorInterface {
     std::cerr << "OnError: " << QuicErrorCodeToString(framer->error())
               << " detail: " << framer->detailed_error() << "\n";
   }
-  bool OnProtocolVersionMismatch(ParsedQuicVersion received_version) override {
+  bool OnProtocolVersionMismatch(ParsedQuicVersion received_version,
+                                 PacketHeaderFormat form) override {
     framer_->set_version(received_version);
     std::cerr << "OnProtocolVersionMismatch: "
               << ParsedQuicVersionToString(received_version) << "\n";
@@ -105,8 +104,11 @@ class QuicPacketPrinter : public QuicFramerVisitorInterface {
               << " }\n";
     return true;
   }
-  bool OnAckFrame(const QuicAckFrame& frame) override {
-    std::cerr << "OnAckFrame: " << frame;
+  bool OnCryptoFrame(const QuicCryptoFrame& frame) override {
+    std::cerr << "OnCryptoFrame: " << frame;
+    std::cerr << "         data: { "
+              << QuicTextUtils::HexEncode(frame.data_buffer, frame.data_length)
+              << " }\n";
     return true;
   }
   bool OnAckFrameStart(QuicPacketNumber largest_acked,
@@ -114,11 +116,18 @@ class QuicPacketPrinter : public QuicFramerVisitorInterface {
     std::cerr << "OnAckFrameStart, largest_acked: " << largest_acked;
     return true;
   }
-  bool OnAckRange(QuicPacketNumber start,
-                  QuicPacketNumber end,
-                  bool last_range) override {
-    std::cerr << "OnAckRange: [" << start << ", " << end
-              << "),  last_range: " << last_range;
+  bool OnAckRange(QuicPacketNumber start, QuicPacketNumber end) override {
+    std::cerr << "OnAckRange: [" << start << ", " << end << ")";
+    return true;
+  }
+  bool OnAckTimestamp(QuicPacketNumber packet_number,
+                      QuicTime timestamp) override {
+    std::cerr << "OnAckTimestamp: [" << packet_number << ", "
+              << timestamp.ToDebuggingValue() << ")";
+    return true;
+  }
+  bool OnAckFrameEnd(QuicPacketNumber start) override {
+    std::cerr << "OnAckFrameEnd, start: " << start;
     return true;
   }
   bool OnStopWaitingFrame(const QuicStopWaitingFrame& frame) override {
@@ -141,8 +150,46 @@ class QuicPacketPrinter : public QuicFramerVisitorInterface {
     std::cerr << "OnConnectionCloseFrame: " << frame;
     return true;
   }
+  bool OnApplicationCloseFrame(
+      const QuicApplicationCloseFrame& frame) override {
+    std::cerr << "OnApplicationCloseFrame: " << frame;
+    return true;
+  }
+  bool OnNewConnectionIdFrame(const QuicNewConnectionIdFrame& frame) override {
+    std::cerr << "OnNewConnectionIdFrame: " << frame;
+    return true;
+  }
+  bool OnRetireConnectionIdFrame(
+      const QuicRetireConnectionIdFrame& frame) override {
+    std::cerr << "OnRetireConnectionIdFrame: " << frame;
+    return true;
+  }
+  bool OnNewTokenFrame(const QuicNewTokenFrame& frame) override {
+    std::cerr << "OnNewTokenFrame: " << frame;
+    return true;
+  }
+  bool OnStopSendingFrame(const QuicStopSendingFrame& frame) override {
+    std::cerr << "OnStopSendingFrame: " << frame;
+    return true;
+  }
+  bool OnPathChallengeFrame(const QuicPathChallengeFrame& frame) override {
+    std::cerr << "OnPathChallengeFrame: " << frame;
+    return true;
+  }
+  bool OnPathResponseFrame(const QuicPathResponseFrame& frame) override {
+    std::cerr << "OnPathResponseFrame: " << frame;
+    return true;
+  }
   bool OnGoAwayFrame(const QuicGoAwayFrame& frame) override {
     std::cerr << "OnGoAwayFrame: " << frame;
+    return true;
+  }
+  bool OnMaxStreamIdFrame(const QuicMaxStreamIdFrame& frame) override {
+    std::cerr << "OnMaxStreamIdFrame: " << frame;
+    return true;
+  }
+  bool OnStreamIdBlockedFrame(const QuicStreamIdBlockedFrame& frame) override {
+    std::cerr << "OnStreamIdBlockedFrame: " << frame;
     return true;
   }
   bool OnWindowUpdateFrame(const QuicWindowUpdateFrame& frame) override {
@@ -151,6 +198,10 @@ class QuicPacketPrinter : public QuicFramerVisitorInterface {
   }
   bool OnBlockedFrame(const QuicBlockedFrame& frame) override {
     std::cerr << "OnBlockedFrame: " << frame;
+    return true;
+  }
+  bool OnMessageFrame(const QuicMessageFrame& frame) override {
+    std::cerr << "OnMessageFrame: " << frame;
     return true;
   }
   void OnPacketComplete() override { std::cerr << "OnPacketComplete\n"; }
@@ -167,7 +218,7 @@ class QuicPacketPrinter : public QuicFramerVisitorInterface {
   QuicFramer* framer_;  // Unowned.
 };
 
-}  // namespace net
+}  // namespace quic
 
 int main(int argc, char* argv[]) {
   base::CommandLine::Init(argc, argv);
@@ -184,32 +235,32 @@ int main(int argc, char* argv[]) {
     FLAGS_quic_version = line->GetSwitchValueASCII("quic_version");
   }
 
-  string perspective_string = ArgToString(args[0]);
-  net::Perspective perspective;
+  quic::QuicString perspective_string = ArgToString(args[0]);
+  quic::Perspective perspective;
   if (perspective_string == "client") {
-    perspective = net::Perspective::IS_CLIENT;
+    perspective = quic::Perspective::IS_CLIENT;
   } else if (perspective_string == "server") {
-    perspective = net::Perspective::IS_SERVER;
+    perspective = quic::Perspective::IS_SERVER;
   } else {
     std::cerr << "Invalid perspective. " << perspective_string
               << " Usage: " << args[0] << " client|server <hex>\n";
     return 1;
   }
-  string hex = net::QuicTextUtils::HexDecode(argv[2]);
-  net::ParsedQuicVersionVector versions = net::AllSupportedVersions();
+  quic::QuicString hex = quic::QuicTextUtils::HexDecode(argv[2]);
+  quic::ParsedQuicVersionVector versions = quic::AllSupportedVersions();
   // Fake a time since we're not actually generating acks.
-  net::QuicTime start(net::QuicTime::Zero());
-  net::QuicFramer framer(versions, start, perspective);
+  quic::QuicTime start(quic::QuicTime::Zero());
+  quic::QuicFramer framer(versions, start, perspective);
   if (!FLAGS_quic_version.empty()) {
-    for (net::ParsedQuicVersion version : versions) {
-      if (net::QuicVersionToString(version.transport_version) ==
+    for (quic::ParsedQuicVersion version : versions) {
+      if (quic::QuicVersionToString(version.transport_version) ==
           FLAGS_quic_version) {
         framer.set_version(version);
       }
     }
   }
-  net::QuicPacketPrinter visitor(&framer);
+  quic::QuicPacketPrinter visitor(&framer);
   framer.set_visitor(&visitor);
-  net::QuicEncryptedPacket encrypted(hex.c_str(), hex.length());
+  quic::QuicEncryptedPacket encrypted(hex.c_str(), hex.length());
   return framer.ProcessPacket(encrypted);
 }

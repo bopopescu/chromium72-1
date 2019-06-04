@@ -10,7 +10,9 @@
 #include "base/command_line.h"
 #include "base/feature_list.h"
 #include "base/logging.h"
+#include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/autofill/address_normalizer_factory.h"
+#include "chrome/browser/autofill/legacy_strike_database_factory.h"
 #include "chrome/browser/autofill/personal_data_manager_factory.h"
 #include "chrome/browser/autofill/risk_util.h"
 #include "chrome/browser/browser_process.h"
@@ -20,34 +22,46 @@
 #include "chrome/browser/signin/identity_manager_factory.h"
 #include "chrome/browser/signin/signin_promo_util.h"
 #include "chrome/browser/ssl/insecure_sensitive_input_driver_factory.h"
+#include "chrome/browser/ssl/security_state_tab_helper.h"
 #include "chrome/browser/sync/profile_sync_service_factory.h"
+#include "chrome/browser/translate/chrome_translate_client.h"
 #include "chrome/browser/ui/autofill/autofill_popup_controller_impl.h"
 #include "chrome/browser/ui/autofill/create_card_unmask_prompt_view.h"
 #include "chrome/browser/ui/autofill/credit_card_scanner_controller.h"
 #include "chrome/browser/ui/browser_finder.h"
 #include "chrome/browser/ui/chrome_pages.h"
 #include "chrome/browser/ui/page_info/page_info_dialog.h"
+#include "chrome/browser/ui/passwords/manage_passwords_view_utils.h"
 #include "chrome/browser/ui/tabs/tab_strip_model_observer.h"
 #include "chrome/browser/vr/vr_tab_helper.h"
 #include "chrome/browser/web_data_service_factory.h"
+#include "chrome/common/channel_info.h"
 #include "chrome/common/url_constants.h"
 #include "components/autofill/content/browser/content_autofill_driver.h"
 #include "components/autofill/content/browser/content_autofill_driver_factory.h"
+#include "components/autofill/core/browser/form_data_importer.h"
+#include "components/autofill/core/browser/payments/payments_client.h"
 #include "components/autofill/core/browser/popup_item_ids.h"
 #include "components/autofill/core/browser/ui/card_unmask_prompt_view.h"
 #include "components/autofill/core/common/autofill_features.h"
-#include "components/autofill/core/common/autofill_pref_names.h"
+#include "components/autofill/core/common/autofill_prefs.h"
 #include "components/autofill/core/common/autofill_switches.h"
 #include "components/browser_sync/profile_sync_service.h"
 #include "components/password_manager/content/browser/content_password_manager_driver.h"
 #include "components/password_manager/core/browser/password_manager_metrics_util.h"
+#include "components/password_manager/core/browser/password_requirements_service.h"
 #include "components/prefs/pref_service.h"
+#include "components/signin/core/browser/account_info.h"
+#include "components/signin/core/browser/signin_buildflags.h"
 #include "components/signin/core/browser/signin_header_helper.h"
 #include "components/signin/core/browser/signin_metrics.h"
+#include "components/translate/core/browser/translate_manager.h"
+#include "components/ukm/content/source_url_recorder.h"
 #include "components/user_prefs/user_prefs.h"
 #include "content/public/browser/navigation_entry.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/ssl_status.h"
+#include "services/identity/public/cpp/identity_manager.h"
 #include "ui/gfx/geometry/rect.h"
 
 #if defined(OS_ANDROID)
@@ -56,10 +70,12 @@
 #include "chrome/browser/android/signin/signin_promo_util_android.h"
 #include "chrome/browser/infobars/infobar_service.h"
 #include "chrome/browser/ui/android/autofill/autofill_logger_android.h"
+#include "chrome/browser/ui/android/autofill/card_name_fix_flow_view_android.h"
 #include "chrome/browser/ui/android/infobars/autofill_credit_card_filling_infobar.h"
 #include "components/autofill/core/browser/autofill_credit_card_filling_infobar_delegate_mobile.h"
 #include "components/autofill/core/browser/autofill_save_card_infobar_delegate_mobile.h"
 #include "components/autofill/core/browser/autofill_save_card_infobar_mobile.h"
+#include "components/autofill/core/browser/ui/card_name_fix_flow_view_delegate_mobile.h"
 #include "components/infobars/core/infobar.h"
 #include "ui/android/window_android.h"
 #else  // !OS_ANDROID
@@ -70,12 +86,23 @@
 #include "components/zoom/zoom_controller.h"
 #endif
 
-DEFINE_WEB_CONTENTS_USER_DATA_KEY(autofill::ChromeAutofillClient);
-
 namespace autofill {
 
 ChromeAutofillClient::ChromeAutofillClient(content::WebContents* web_contents)
     : content::WebContentsObserver(web_contents),
+      payments_client_(std::make_unique<payments::PaymentsClient>(
+          Profile::FromBrowserContext(web_contents->GetBrowserContext())
+              ->GetURLLoaderFactory(),
+          GetPrefs(),
+          GetIdentityManager(),
+          GetPersonalDataManager(),
+          Profile::FromBrowserContext(web_contents->GetBrowserContext())
+              ->IsOffTheRecord())),
+      form_data_importer_(std::make_unique<FormDataImporter>(
+          this,
+          payments_client_.get(),
+          GetPersonalDataManager(),
+          GetPersonalDataManager()->app_locale())),
       unmask_controller_(
           user_prefs::UserPrefs::Get(web_contents->GetBrowserContext()),
           Profile::FromBrowserContext(web_contents->GetBrowserContext())
@@ -100,6 +127,10 @@ ChromeAutofillClient::~ChromeAutofillClient() {
   // this point (in particular, the WebContentsImpl destructor has already
   // finished running and we are now in the base class destructor).
   DCHECK(!popup_controller_);
+}
+
+version_info::Channel ChromeAutofillClient::GetChannel() const {
+  return chrome::GetChannel();
 }
 
 PersonalDataManager* ChromeAutofillClient::GetPersonalDataManager() {
@@ -133,8 +164,32 @@ identity::IdentityManager* ChromeAutofillClient::GetIdentityManager() {
   return IdentityManagerFactory::GetForProfile(profile->GetOriginalProfile());
 }
 
+payments::PaymentsClient* ChromeAutofillClient::GetPaymentsClient() {
+  return payments_client_.get();
+}
+
+FormDataImporter* ChromeAutofillClient::GetFormDataImporter() {
+  return form_data_importer_.get();
+}
+
+LegacyStrikeDatabase* ChromeAutofillClient::GetLegacyStrikeDatabase() {
+  Profile* profile =
+      Profile::FromBrowserContext(web_contents()->GetBrowserContext());
+  // No need to return a LegacyStrikeDatabase in incognito mode. It is primarily
+  // used to determine whether or not to offer save of Autofill data. However,
+  // we don't allow saving of Autofill data while in incognito anyway, so an
+  // incognito code path should never get far enough to query
+  // LegacyStrikeDatabase.
+  DCHECK(!profile->IsOffTheRecord());
+  return LegacyStrikeDatabaseFactory::GetForProfile(profile);
+}
+
 ukm::UkmRecorder* ChromeAutofillClient::GetUkmRecorder() {
   return ukm::UkmRecorder::Get();
+}
+
+ukm::SourceId ChromeAutofillClient::GetUkmSourceId() {
+  return ukm::GetSourceIdForWebContentsDocument(web_contents());
 }
 
 AddressNormalizer* ChromeAutofillClient::GetAddressNormalizer() {
@@ -143,13 +198,51 @@ AddressNormalizer* ChromeAutofillClient::GetAddressNormalizer() {
   return nullptr;
 }
 
-void ChromeAutofillClient::ShowAutofillSettings() {
+security_state::SecurityLevel
+ChromeAutofillClient::GetSecurityLevelForUmaHistograms() {
+  SecurityStateTabHelper* helper =
+      ::SecurityStateTabHelper::FromWebContents(web_contents());
+
+  // If there is no helper, it means we are not in a "web" state (for example
+  // the file picker on CrOS). Return SECURITY_LEVEL_COUNT which will not be
+  // logged.
+  if (!helper)
+    return security_state::SecurityLevel::SECURITY_LEVEL_COUNT;
+
+  security_state::SecurityInfo security_info;
+  helper->GetSecurityInfo(&security_info);
+  return security_info.security_level;
+}
+
+std::string ChromeAutofillClient::GetPageLanguage() const {
+  // TODO(crbug.com/912597): iOS vs other platforms extracts language from
+  // the top level frame vs whatever frame directly holds the form.
+  auto* translate_manager =
+      ChromeTranslateClient::GetManagerFromWebContents(web_contents());
+  if (translate_manager)
+    return translate_manager->GetLanguageState().original_language();
+  return std::string();
+}
+
+void ChromeAutofillClient::ShowAutofillSettings(
+    bool show_credit_card_settings) {
 #if defined(OS_ANDROID)
-  chrome::android::PreferencesLauncher::ShowAutofillSettings(web_contents());
+  if (show_credit_card_settings) {
+    chrome::android::PreferencesLauncher::ShowAutofillCreditCardSettings(
+        web_contents());
+  } else {
+    chrome::android::PreferencesLauncher::ShowAutofillProfileSettings(
+        web_contents());
+  }
 #else
   Browser* browser = chrome::FindBrowserWithWebContents(web_contents());
-  if (browser)
-    chrome::ShowSettingsSubPage(browser, chrome::kAutofillSubPage);
+  if (browser) {
+    if (show_credit_card_settings) {
+      chrome::ShowSettingsSubPage(browser, chrome::kPaymentsSubPage);
+    } else {
+      chrome::ShowSettingsSubPage(browser, chrome::kAddressesSubPage);
+    }
+  }
 #endif  // #if defined(OS_ANDROID)
 }
 
@@ -167,34 +260,110 @@ void ChromeAutofillClient::OnUnmaskVerificationResult(
   unmask_controller_.OnVerificationResult(result);
 }
 
+void ChromeAutofillClient::ShowLocalCardMigrationDialog(
+    base::OnceClosure show_migration_dialog_closure) {
+#if !defined(OS_ANDROID)
+  autofill::ManageMigrationUiController::CreateForWebContents(web_contents());
+  autofill::ManageMigrationUiController* controller =
+      autofill::ManageMigrationUiController::FromWebContents(web_contents());
+  controller->ShowBubble(std::move(show_migration_dialog_closure));
+#endif
+}
+
+void ChromeAutofillClient::ConfirmMigrateLocalCardToCloud(
+    std::unique_ptr<base::DictionaryValue> legal_message,
+    const std::vector<MigratableCreditCard>& migratable_credit_cards,
+    LocalCardMigrationCallback start_migrating_cards_callback) {
+#if !defined(OS_ANDROID)
+  autofill::ManageMigrationUiController::CreateForWebContents(web_contents());
+  autofill::ManageMigrationUiController* controller =
+      autofill::ManageMigrationUiController::FromWebContents(web_contents());
+  controller->ShowOfferDialog(
+      std::move(legal_message),
+      migratable_credit_cards, std::move(start_migrating_cards_callback));
+#endif
+}
+
+void ChromeAutofillClient::ShowLocalCardMigrationResults(
+    const bool has_server_error,
+    const base::string16& tip_message,
+    const std::vector<MigratableCreditCard>& migratable_credit_cards,
+    MigrationDeleteCardCallback delete_local_card_callback) {
+#if !defined(OS_ANDROID)
+  autofill::ManageMigrationUiController::CreateForWebContents(web_contents());
+  autofill::ManageMigrationUiController* controller =
+      autofill::ManageMigrationUiController::FromWebContents(web_contents());
+  controller->UpdateCreditCardIcon(has_server_error, tip_message,
+                                   migratable_credit_cards,
+                                   delete_local_card_callback);
+#endif
+}
+
+void ChromeAutofillClient::ConfirmSaveAutofillProfile(
+    const AutofillProfile& profile,
+    base::OnceClosure callback) {
+  // Since there is no confirmation needed to save an Autofill Profile,
+  // running |callback| will proceed with saving |profile|.
+  std::move(callback).Run();
+}
+
 void ChromeAutofillClient::ConfirmSaveCreditCardLocally(
     const CreditCard& card,
-    const base::Closure& callback) {
+    bool show_prompt,
+    base::OnceClosure callback) {
 #if defined(OS_ANDROID)
+  DCHECK(show_prompt);
   InfoBarService::FromWebContents(web_contents())
       ->AddInfoBar(CreateSaveCardInfoBarMobile(
           std::make_unique<AutofillSaveCardInfoBarDelegateMobile>(
-              false, card, std::unique_ptr<base::DictionaryValue>(nullptr),
-              callback, GetPrefs())));
+              /*upload=*/false, /*should_request_name_from_user=*/false, card,
+              std::make_unique<base::DictionaryValue>(),
+              GetLegacyStrikeDatabase(),
+              /*upload_save_card_callback=*/
+              UserAcceptedUploadCallback(),
+              /*local_save_card_callback=*/std::move(callback), GetPrefs())));
 #else
   // Do lazy initialization of SaveCardBubbleControllerImpl.
   autofill::SaveCardBubbleControllerImpl::CreateForWebContents(
       web_contents());
   autofill::SaveCardBubbleControllerImpl* controller =
       autofill::SaveCardBubbleControllerImpl::FromWebContents(web_contents());
-  controller->ShowBubbleForLocalSave(card, callback);
+  controller->OfferLocalSave(card, show_prompt, std::move(callback));
 #endif
 }
+
+#if defined(OS_ANDROID)
+void ChromeAutofillClient::ConfirmAccountNameFixFlow(
+    base::OnceCallback<void(const base::string16&)> callback) {
+  std::unique_ptr<CardNameFixFlowViewDelegateMobile>
+      card_name_fix_flow_view_delegate_mobile =
+          std::make_unique<CardNameFixFlowViewDelegateMobile>(
+              GetAccountHolderName(),
+              /*upload_save_card_callback=*/std::move(callback));
+
+  card_name_fix_flow_view_android_ =
+      std::make_unique<CardNameFixFlowViewAndroid>(
+          std::move(card_name_fix_flow_view_delegate_mobile), web_contents());
+  card_name_fix_flow_view_android_->Show();
+}
+#endif
 
 void ChromeAutofillClient::ConfirmSaveCreditCardToCloud(
     const CreditCard& card,
     std::unique_ptr<base::DictionaryValue> legal_message,
-    const base::Closure& callback) {
+    bool should_request_name_from_user,
+    bool should_request_expiration_date_from_user,
+    bool show_prompt,
+    UserAcceptedUploadCallback callback) {
 #if defined(OS_ANDROID)
+  DCHECK(show_prompt);
   std::unique_ptr<AutofillSaveCardInfoBarDelegateMobile>
       save_card_info_bar_delegate_mobile =
           std::make_unique<AutofillSaveCardInfoBarDelegateMobile>(
-              true, card, std::move(legal_message), callback, GetPrefs());
+              /*upload=*/true, should_request_name_from_user, card,
+              std::move(legal_message), GetLegacyStrikeDatabase(),
+              /*upload_save_card_callback=*/std::move(callback),
+              /*local_save_card_callback=*/base::Closure(), GetPrefs());
   if (save_card_info_bar_delegate_mobile->LegalMessagesParsedSuccessfully()) {
     InfoBarService::FromWebContents(web_contents())
         ->AddInfoBar(CreateSaveCardInfoBarMobile(
@@ -205,17 +374,20 @@ void ChromeAutofillClient::ConfirmSaveCreditCardToCloud(
   autofill::SaveCardBubbleControllerImpl::CreateForWebContents(web_contents());
   autofill::SaveCardBubbleControllerImpl* controller =
       autofill::SaveCardBubbleControllerImpl::FromWebContents(web_contents());
-  controller->ShowBubbleForUpload(card, std::move(legal_message), callback);
+  controller->OfferUploadSave(card, std::move(legal_message),
+                              should_request_name_from_user,
+                              should_request_expiration_date_from_user,
+                              show_prompt, std::move(callback));
 #endif
 }
 
 void ChromeAutofillClient::ConfirmCreditCardFillAssist(
     const CreditCard& card,
-    const base::Closure& callback) {
+    base::OnceClosure callback) {
 #if defined(OS_ANDROID)
   auto infobar_delegate =
       std::make_unique<AutofillCreditCardFillingInfoBarDelegateMobile>(
-          card, callback);
+          card, std::move(callback));
   auto* raw_delegate = infobar_delegate.get();
   if (InfoBarService::FromWebContents(web_contents())
           ->AddInfoBar(std::make_unique<AutofillCreditCardFillingInfoBar>(
@@ -226,8 +398,8 @@ void ChromeAutofillClient::ConfirmCreditCardFillAssist(
 }
 
 void ChromeAutofillClient::LoadRiskData(
-    const base::Callback<void(const std::string&)>& callback) {
-  ::autofill::LoadRiskData(0, web_contents(), callback);
+    base::OnceCallback<void(const std::string&)> callback) {
+  ::autofill::LoadRiskData(0, web_contents(), std::move(callback));
 }
 
 bool ChromeAutofillClient::HasCreditCardScanFeature() {
@@ -243,12 +415,8 @@ void ChromeAutofillClient::ShowAutofillPopup(
     const gfx::RectF& element_bounds,
     base::i18n::TextDirection text_direction,
     const std::vector<autofill::Suggestion>& suggestions,
+    bool autoselect_first_suggestion,
     base::WeakPtr<AutofillPopupDelegate> delegate) {
-  // TODO(https://crbug.com/779126): We currently don't support rendering popups
-  // while in VR, so we just don't show it.
-  if (!IsAutofillSupported())
-    return;
-
   // Convert element_bounds to be in screen space.
   gfx::Rect client_area = web_contents()->GetContainerBounds();
   gfx::RectF element_bounds_in_screen_space =
@@ -263,7 +431,7 @@ void ChromeAutofillClient::ShowAutofillPopup(
                                                element_bounds_in_screen_space,
                                                text_direction);
 
-  popup_controller_->Show(suggestions);
+  popup_controller_->Show(suggestions, autoselect_first_suggestion);
 }
 
 void ChromeAutofillClient::UpdateAutofillPopupDataListValues(
@@ -286,8 +454,7 @@ void ChromeAutofillClient::HideAutofillPopup() {
 }
 
 bool ChromeAutofillClient::IsAutocompleteEnabled() {
-  // For browser, Autocomplete is always enabled as part of Autofill.
-  return GetPrefs()->GetBoolean(prefs::kAutofillEnabled);
+  return prefs::IsAutocompleteEnabled(GetPrefs());
 }
 
 bool ChromeAutofillClient::AreServerCardsSupported() {
@@ -327,6 +494,7 @@ void ChromeAutofillClient::PropagateAutofillPredictions(
       password_manager::ContentPasswordManagerDriver::GetForRenderFrameHost(
           rfh);
   if (driver) {
+    driver->GetPasswordGenerationManager()->ProcessPasswordRequirements(forms);
     driver->GetPasswordGenerationManager()->DetectFormsEligibleForGeneration(
         forms);
     driver->GetPasswordManager()->ProcessAutofillPredictions(driver, forms);
@@ -354,7 +522,7 @@ bool ChromeAutofillClient::IsContextSecure() {
   content::NavigationEntry* navigation_entry =
       web_contents()->GetController().GetLastCommittedEntry();
   if (!navigation_entry)
-     return false;
+    return false;
 
   ssl_status = navigation_entry->GetSSL();
   // Note: If changing the implementation below, also change
@@ -377,16 +545,8 @@ bool ChromeAutofillClient::ShouldShowSigninPromo() {
 }
 
 void ChromeAutofillClient::ExecuteCommand(int id) {
-  if (id == autofill::POPUP_ITEM_ID_ALL_SAVED_PASSWORDS_ENTRY) {
-#if !defined(OS_ANDROID)
-    chrome::ShowSettingsSubPage(
-        chrome::FindBrowserWithWebContents(web_contents()),
-        chrome::kPasswordManagerSubPage);
-#else
-    chrome::android::PreferencesLauncher::ShowPasswordSettings();
-#endif
-  } else if (id == autofill::POPUP_ITEM_ID_CREDIT_CARD_SIGNIN_PROMO) {
 #if defined(OS_ANDROID)
+  if (id == autofill::POPUP_ITEM_ID_CREDIT_CARD_SIGNIN_PROMO) {
     auto* window = web_contents()->GetNativeView()->GetWindowAndroid();
     if (window) {
       chrome::android::SigninPromoUtilAndroid::
@@ -394,19 +554,26 @@ void ChromeAutofillClient::ExecuteCommand(int id) {
               window,
               signin_metrics::AccessPoint::ACCESS_POINT_AUTOFILL_DROPDOWN);
     }
-#endif
   }
+#endif
 }
 
-bool ChromeAutofillClient::IsAutofillSupported() {
-  // VR browsing supports the autofill behind a flag. When the flag is removed
-  // we can remove this condition.
-  if (vr::VrTabHelper::IsUiSuppressedInVr(web_contents(),
-                                          vr::UiSuppressedElement::kAutofill)) {
-    return false;
-  }
+Profile* ChromeAutofillClient::GetProfile() const {
+  if (!web_contents())
+    return nullptr;
+  return Profile::FromBrowserContext(web_contents()->GetBrowserContext());
+}
 
-  return true;
+base::string16 ChromeAutofillClient::GetAccountHolderName() {
+  Profile* profile = GetProfile();
+  if (!profile)
+    return base::string16();
+  identity::IdentityManager* identity_manager =
+      IdentityManagerFactory::GetForProfile(profile);
+  if (!identity_manager)
+    return base::string16();
+  AccountInfo account_info = identity_manager->GetPrimaryAccountInfo();
+  return base::UTF8ToUTF16(account_info.full_name);
 }
 
 }  // namespace autofill

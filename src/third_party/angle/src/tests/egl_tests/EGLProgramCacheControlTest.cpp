@@ -36,7 +36,7 @@ class EGLProgramCacheControlTest : public ANGLETest
     {
         mPlatformMethods.cacheProgram = &TestCacheProgram;
 
-        ANGLETestBase::ANGLETestSetUp();
+        ANGLETest::SetUp();
 
         if (extensionAvailable())
         {
@@ -48,7 +48,7 @@ class EGLProgramCacheControlTest : public ANGLETest
         getEGLWindow()->initializeContext();
     }
 
-    void TearDown() override { ANGLETestBase::ANGLETestTearDown(); }
+    void TearDown() override { ANGLETest::TearDown(); }
 
     bool extensionAvailable()
     {
@@ -259,4 +259,8 @@ TEST_P(EGLProgramCacheControlTest, LinkProgramWithBadShaders)
     glDeleteProgram(program);
 }
 
-ANGLE_INSTANTIATE_TEST(EGLProgramCacheControlTest, ES2_D3D9(), ES2_D3D11(), ES2_OPENGL());
+ANGLE_INSTANTIATE_TEST(EGLProgramCacheControlTest,
+                       ES2_D3D9(),
+                       ES2_D3D11(),
+                       ES2_OPENGL(),
+                       ES2_VULKAN());

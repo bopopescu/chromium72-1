@@ -9,6 +9,7 @@
 #include "base/i18n/number_formatting.h"
 #include "base/macros.h"
 #include "base/strings/string_util.h"
+#include "build/build_config.h"
 #include "chrome/app/vector_icons/vector_icons.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/themes/theme_properties.h"
@@ -18,9 +19,9 @@
 #include "chrome/browser/ui/find_bar/find_notification_details.h"
 #include "chrome/browser/ui/find_bar/find_tab_helper.h"
 #include "chrome/browser/ui/view_ids.h"
+#include "chrome/browser/ui/views/chrome_layout_provider.h"
 #include "chrome/browser/ui/views/find_bar_host.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
-#include "chrome/browser/ui/views/harmony/chrome_layout_provider.h"
 #include "chrome/grit/generated_resources.h"
 #include "components/strings/grit/components_strings.h"
 #include "components/vector_icons/vector_icons.h"
@@ -297,6 +298,18 @@ void FindBarView::Layout() {
       find_text_edge, find_previous_button_->y(),
       find_previous_button_->x() - find_text_edge,
       find_previous_button_->height());
+
+  for (auto* button :
+       {find_previous_button_, find_next_button_, close_button_}) {
+    constexpr int kCircleDiameterDp = 24;
+    auto highlight_path = std::make_unique<SkPath>();
+    // Use a centered circular shape for inkdrops and focus rings.
+    gfx::Rect circle_rect(button->GetLocalBounds());
+    circle_rect.ClampToCenteredSize(
+        gfx::Size(kCircleDiameterDp, kCircleDiameterDp));
+    highlight_path->addOval(gfx::RectToSkRect(circle_rect));
+    button->SetProperty(views::kHighlightPathKey, highlight_path.release());
+  }
 }
 
 gfx::Size FindBarView::CalculatePreferredSize() const {
@@ -321,7 +334,9 @@ void FindBarView::AddedToWidget() {
 
 void FindBarView::SetFocusAndSelection(bool select_all) {
   find_text_->RequestFocus();
-  GetWidget()->GetInputMethod()->ShowImeIfNeeded();
+#if !defined(OS_WIN)
+  GetWidget()->GetInputMethod()->ShowVirtualKeyboardIfEnabled();
+#endif
   if (select_all && !find_text_->text().empty())
     find_text_->SelectAll(true);
 }
@@ -460,18 +475,19 @@ void FindBarView::OnNativeThemeChanged(const ui::NativeTheme* theme) {
   SetBackground(std::make_unique<views::BubbleBackground>(border.get()));
   SetBorder(std::move(border));
 
-  match_count_text_->SetBackgroundColor(bg_color);
-  SkColor text_color =
-      theme->GetSystemColor(ui::NativeTheme::kColorId_TextfieldDefaultColor);
-  match_count_text_->SetEnabledColor(SkColorSetA(text_color, 0x69));
-  separator_->SetColor(SkColorSetA(text_color, 0x26));
-
-  const SkColor base_icon_color = GetNativeTheme()->GetSystemColor(
+  const SkColor base_foreground_color = GetNativeTheme()->GetSystemColor(
       ui::NativeTheme::kColorId_TextfieldDefaultColor);
+
+  match_count_text_->SetBackgroundColor(bg_color);
+  match_count_text_->SetEnabledColor(
+      SkColorSetA(base_foreground_color, gfx::kGoogleGreyAlpha700));
+  separator_->SetColor(
+      SkColorSetA(base_foreground_color, gfx::kGoogleGreyAlpha300));
+
   views::SetImageFromVectorIcon(find_previous_button_, kCaretUpIcon,
-                                base_icon_color);
+                                base_foreground_color);
   views::SetImageFromVectorIcon(find_next_button_, kCaretDownIcon,
-                                base_icon_color);
+                                base_foreground_color);
   views::SetImageFromVectorIcon(close_button_, vector_icons::kCloseRoundedIcon,
-                                base_icon_color);
+                                base_foreground_color);
 }

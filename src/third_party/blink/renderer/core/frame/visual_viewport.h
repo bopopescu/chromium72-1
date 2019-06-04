@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2013 Google Inc. All rights reserved.
+ * copyright (c) 2013 google inc. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are
@@ -38,22 +38,27 @@
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/dom/events/event.h"
 #include "third_party/blink/renderer/core/page/scrolling/scrolling_coordinator.h"
+#include "third_party/blink/renderer/core/scroll/scrollable_area.h"
 #include "third_party/blink/renderer/platform/geometry/float_rect.h"
 #include "third_party/blink/renderer/platform/geometry/float_size.h"
 #include "third_party/blink/renderer/platform/geometry/int_size.h"
 #include "third_party/blink/renderer/platform/graphics/compositor_element_id.h"
 #include "third_party/blink/renderer/platform/graphics/graphics_layer_client.h"
 #include "third_party/blink/renderer/platform/scroll/scroll_types.h"
-#include "third_party/blink/renderer/platform/scroll/scrollable_area.h"
 
 namespace blink {
 
+class EffectPaintPropertyNode;
 class GraphicsContext;
 class GraphicsLayer;
 class IntRect;
 class IntSize;
 class LocalFrame;
 class Page;
+class RootFrameViewport;
+class ScrollPaintPropertyNode;
+class TransformPaintPropertyNode;
+struct PaintPropertyTreeBuilderFragmentContext;
 
 // Represents the visual viewport the user is currently seeing the page through.
 // This class corresponds to the InnerViewport on the compositor. It is a
@@ -87,7 +92,11 @@ class CORE_EXPORT VisualViewport final
   USING_GARBAGE_COLLECTED_MIXIN(VisualViewport);
 
  public:
-  static VisualViewport* Create(Page& host) { return new VisualViewport(host); }
+  static VisualViewport* Create(Page& host) {
+    return MakeGarbageCollected<VisualViewport>(host);
+  }
+
+  explicit VisualViewport(Page&);
   ~VisualViewport() override;
 
   void Trace(blink::Visitor*) override;
@@ -113,12 +122,21 @@ class CORE_EXPORT VisualViewport final
   // FIXME: This should be called moveBy
   void Move(const ScrollOffset&);
 
-  // Sets the size of the inner viewport when unscaled in CSS pixels.
+  // The size of the Blink viewport area. See size_ for precise
+  // definition.
   void SetSize(const IntSize&);
   IntSize Size() const { return size_; }
 
-  // Gets the scaled size, i.e. the viewport in root view space.
-  FloatSize VisibleSize() const;
+  // The area of the layout viewport rect visible in the visual viewport,
+  // relative to the layout viewport's top-left corner. i.e. As the page scale
+  // is increased, this rect shrinks. Does not account for browser-zoom (ctrl
+  // +/- zooming).
+  FloatRect VisibleRect(IncludeScrollbarsInRect = kExcludeScrollbars) const;
+
+  // Similar to VisibleRect but this returns the rect relative to the main
+  // document's top-left corner.
+  FloatRect VisibleRectInDocument(
+      IncludeScrollbarsInRect = kExcludeScrollbars) const;
 
   // Resets the viewport to initial state.
   void Reset();
@@ -136,13 +154,6 @@ class CORE_EXPORT VisualViewport final
   // around the point specified by anchor in window coordinates. Returns false
   // if page scale factor is left unchanged.
   bool MagnifyScaleAroundAnchor(float magnify_delta, const FloatPoint& anchor);
-
-  // The portion of the unzoomed frame visible in the visual viewport,
-  // in partial CSS pixels. Relative to the main frame.
-  FloatRect VisibleRect() const;
-
-  // The viewport rect relative to the document origin, in partial CSS pixels.
-  FloatRect VisibleRectInDocument() const;
 
   // Convert the given rect in the main LocalFrameView's coordinates into a rect
   // in the viewport. The given and returned rects are in CSS pixels, meaning
@@ -178,11 +189,15 @@ class CORE_EXPORT VisualViewport final
   IntPoint RootFrameToViewport(const IntPoint&) const;
 
   // ScrollableArea implementation
-  PlatformChromeClient* GetChromeClient() const override;
-  bool ShouldUseIntegerScrollOffset() const override;
+  ChromeClient* GetChromeClient() const override;
   void SetScrollOffset(const ScrollOffset&,
                        ScrollType,
                        ScrollBehavior = kScrollBehaviorInstant) override;
+  bool IsThrottled() const override {
+    // VisualViewport is always in the main frame, so the frame does not get
+    // throttled.
+    return false;
+  }
   bool IsActive() const override { return false; }
   int ScrollSize(ScrollbarOrientation) const override;
   bool IsScrollCornerVisible() const override { return false; }
@@ -192,8 +207,9 @@ class CORE_EXPORT VisualViewport final
   IntSize MinimumScrollOffsetInt() const override;
   IntSize MaximumScrollOffsetInt() const override;
   ScrollOffset MaximumScrollOffset() const override;
-  int VisibleHeight() const override { return VisibleRect().Height(); }
-  int VisibleWidth() const override { return VisibleRect().Width(); }
+  // Note: Because scrollbars are conceptually owned by the LayoutView,
+  // ContentsSize includes the main frame's scrollbars. This is necessary for
+  // correct cc Layer sizing.
   IntSize ContentsSize() const override;
   bool ScrollbarsCanBeActive() const override { return false; }
   IntRect ScrollableAreaBoundingBox() const override;
@@ -217,7 +233,7 @@ class CORE_EXPORT VisualViewport final
   // VisualViewport scrolling may involve pinch zoom and gets routed through
   // WebViewImpl explicitly rather than via ScrollingCoordinator::DidScroll
   // since it needs to be set in tandem with the page scale delta.
-  void DidScroll(const gfx::ScrollOffset&) final { NOTREACHED(); }
+  void DidScroll(const FloatPoint&) final { NOTREACHED(); }
 
   // Visual Viewport API implementation.
   double OffsetLeft() const;
@@ -240,13 +256,28 @@ class CORE_EXPORT VisualViewport final
   bool ShouldDisableDesktopWorkarounds() const;
 
   ScrollbarTheme& GetPageScrollbarTheme() const override;
+  bool VisualViewportSuppliesScrollbars() const override;
+
+  TransformPaintPropertyNode* GetOverscrollElasticityTransformNode() const;
+  TransformPaintPropertyNode* GetPageScaleNode() const;
+  TransformPaintPropertyNode* GetScrollTranslationNode() const;
+  ScrollPaintPropertyNode* GetScrollNode() const;
+
+  // Create/update the page scale translation, viewport scroll, and viewport
+  // translation property nodes. Also set the layer states (inner viewport
+  // container, page scale layer, inner viewport scroll layer) to reference
+  // these nodes.
+  void UpdatePaintPropertyNodesIfNeeded(
+      PaintPropertyTreeBuilderFragmentContext& context);
+
+  CompositorElementId GetCompositorOverscrollElasticityElementId() const;
+
+  void SetNeedsPaintPropertyUpdate() { needs_paint_property_update_ = true; }
+  bool NeedsPaintPropertyUpdate() const { return needs_paint_property_update_; }
 
  private:
-  explicit VisualViewport(Page&);
-
   bool DidSetScaleOrLocation(float scale, const FloatPoint& location);
 
-  bool VisualViewportSuppliesScrollbars() const;
 
   void UpdateStyleAndLayoutIgnorePendingStylesheets() const;
 
@@ -264,11 +295,17 @@ class CORE_EXPORT VisualViewport final
                      GraphicsContext&,
                      GraphicsLayerPaintingPhase,
                      const IntRect&) const override;
+  void SetOverlayScrollbarsHidden(bool) override;
   String DebugName(const GraphicsLayer*) const override;
+
+  const ScrollableArea* GetScrollableAreaForTesting(
+      const GraphicsLayer*) const override;
 
   void SetupScrollbar(ScrollbarOrientation);
 
   void NotifyRootFrameViewport() const;
+
+  RootFrameViewport* GetRootFrameViewport() const;
 
   LocalFrame* MainFrame() const;
 
@@ -276,6 +313,12 @@ class CORE_EXPORT VisualViewport final
     DCHECK(page_);
     return *page_;
   }
+
+  CompositorElementId GetCompositorScrollElementId() const;
+
+  // Contracts the given size by the thickness of any visible scrollbars. Does
+  // not contract the size if the scrollbar is overlay.
+  IntSize ExcludeScrollbars(const IntSize&) const;
 
   Member<Page> page_;
   std::unique_ptr<GraphicsLayer> root_transform_layer_;
@@ -294,14 +337,42 @@ class CORE_EXPORT VisualViewport final
   std::unique_ptr<GraphicsLayer> overlay_scrollbar_horizontal_;
   std::unique_ptr<GraphicsLayer> overlay_scrollbar_vertical_;
 
+  scoped_refptr<TransformPaintPropertyNode>
+      overscroll_elasticity_transform_node_;
+  scoped_refptr<TransformPaintPropertyNode> scale_transform_node_;
+  scoped_refptr<TransformPaintPropertyNode> translation_transform_node_;
+  scoped_refptr<ScrollPaintPropertyNode> scroll_node_;
+  scoped_refptr<EffectPaintPropertyNode> horizontal_scrollbar_effect_node_;
+  scoped_refptr<EffectPaintPropertyNode> vertical_scrollbar_effect_node_;
+
   // Offset of the visual viewport from the main frame's origin, in CSS pixels.
   ScrollOffset offset_;
   float scale_;
+
+  // The Blink viewport size. This is effectively the size of the rect Blink is
+  // rendering into and includes space consumed by scrollbars. While it will
+  // not include the URL bar height, Blink is only informed of changes to the
+  // URL bar once they're fully committed (all the way hidden or shown). While
+  // they're animating or being dragged, size_ will not reflect the changed
+  // visible content area. The transient URL bar-caused change to the visible
+  // content area is tracked in browser_controls_adjustment.
   IntSize size_;
+
+  // Blink is only resized as a result of showing/hiding the URL bar once
+  // they're fully committed (all the way hidden or shown). While they're
+  // animating or being dragged, browser_controls_adjustment_ tracks the amount
+  // they expand or shrink the visible content height.
   float browser_controls_adjustment_;
+
+  // The maximum page scale the user has zoomed to on the current page. Used
+  // only to report statistics about pinch-zoom usage.
   float max_page_scale_;
   bool track_pinch_zoom_stats_for_page_;
-  UniqueObjectId unique_id_;
+  CompositorElementId element_id_;
+  CompositorElementId scroll_element_id_;
+  CompositorElementId overscroll_elasticity_element_id_;
+
+  bool needs_paint_property_update_;
 };
 
 }  // namespace blink

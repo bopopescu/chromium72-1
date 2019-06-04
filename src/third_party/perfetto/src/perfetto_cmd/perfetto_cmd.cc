@@ -31,6 +31,7 @@
 
 #include "perfetto/base/file_utils.h"
 #include "perfetto/base/logging.h"
+#include "perfetto/base/string_view.h"
 #include "perfetto/base/time.h"
 #include "perfetto/base/utils.h"
 #include "perfetto/protozero/proto_utils.h"
@@ -39,6 +40,7 @@
 #include "perfetto/tracing/core/data_source_descriptor.h"
 #include "perfetto/tracing/core/trace_config.h"
 #include "perfetto/tracing/core/trace_packet.h"
+#include "src/perfetto_cmd/pbtxt_to_pb.h"
 
 #include "perfetto/config/trace_config.pb.h"
 
@@ -59,6 +61,64 @@ constexpr char kDefaultDropBoxTag[] = "perfetto";
 
 perfetto::PerfettoCmd* g_consumer_cmd;
 
+class LoggingErrorReporter : public ErrorReporter {
+ public:
+  LoggingErrorReporter(std::string file_name, const char* config)
+      : file_name_(file_name), config_(config) {}
+
+  void AddError(size_t row,
+                size_t column,
+                size_t length,
+                const std::string& message) override {
+    parsed_successfully_ = false;
+    std::string line = ExtractLine(row - 1).ToStdString();
+    if (!line.empty() && line[line.length() - 1] == '\n') {
+      line.erase(line.length() - 1);
+    }
+
+    std::string guide(column + length, ' ');
+    for (size_t i = column; i < column + length; i++) {
+      guide[i - 1] = i == column ? '^' : '~';
+    }
+    fprintf(stderr, "%s:%zu:%zu error: %s\n", file_name_.c_str(), row, column,
+            message.c_str());
+    fprintf(stderr, "%s\n", line.c_str());
+    fprintf(stderr, "%s\n", guide.c_str());
+  }
+
+  bool Success() const { return parsed_successfully_; }
+
+ private:
+  base::StringView ExtractLine(size_t line) {
+    const char* start = config_;
+    const char* end = config_;
+
+    for (size_t i = 0; i < line + 1; i++) {
+      start = end;
+      char c;
+      while ((c = *end++) && c != '\n')
+        ;
+    }
+    return base::StringView(start, static_cast<size_t>(end - start));
+  }
+
+  bool parsed_successfully_ = true;
+  std::string file_name_;
+  const char* config_;
+};
+
+bool ParseTraceConfigPbtxt(const std::string& file_name,
+                           const std::string& pbtxt,
+                           protos::TraceConfig* config) {
+  LoggingErrorReporter reporter(file_name, pbtxt.c_str());
+  std::vector<uint8_t> buf = PbtxtToPb(pbtxt, &reporter);
+  if (!reporter.Success())
+    return false;
+  if (!config->ParseFromArray(buf.data(), static_cast<int>(buf.size())))
+    return false;
+  return true;
+}
+
 }  // namespace
 
 // Temporary directory for DropBox traces. Note that this is automatically
@@ -73,9 +133,11 @@ int PerfettoCmd::PrintUsage(const char* argv0) {
 Usage: %s
   --background     -b     : Exits immediately and continues tracing in background
   --config         -c     : /path/to/trace/config/file or - for stdin
-  --out            -o     : /path/to/out/trace/file
+  --out            -o     : /path/to/out/trace/file or - for stdout
   --dropbox        -d TAG : Upload trace into DropBox using tag TAG (default: %s)
   --no-guardrails  -n     : Ignore guardrails triggered when using --dropbox (for testing).
+  --reset-guardrails      : Resets the state of the guardails and exits (for testing).
+  --txt            -t     : Parse config as pbtxt. Not a stable API. Not for production use.
   --help           -h
 
 statsd-specific flags:
@@ -92,6 +154,7 @@ int PerfettoCmd::Main(int argc, char** argv) {
     OPT_ALERT_ID = 1000,
     OPT_CONFIG_ID,
     OPT_CONFIG_UID,
+    OPT_RESET_GUARDRAILS,
   };
   static const struct option long_options[] = {
       // |option_index| relies on the order of options, don't reshuffle them.
@@ -101,24 +164,31 @@ int PerfettoCmd::Main(int argc, char** argv) {
       {"background", no_argument, nullptr, 'b'},
       {"dropbox", optional_argument, nullptr, 'd'},
       {"no-guardrails", optional_argument, nullptr, 'n'},
+      {"txt", optional_argument, nullptr, 't'},
       {"alert-id", required_argument, nullptr, OPT_ALERT_ID},
       {"config-id", required_argument, nullptr, OPT_CONFIG_ID},
       {"config-uid", required_argument, nullptr, OPT_CONFIG_UID},
+      {"reset-guardrails", no_argument, nullptr, OPT_RESET_GUARDRAILS},
       {nullptr, 0, nullptr, 0}};
 
   int option_index = 0;
+  std::string config_file_name;
   std::string trace_config_raw;
   bool background = false;
   bool ignore_guardrails = false;
+  bool parse_as_pbtxt = false;
   perfetto::protos::TraceConfig::StatsdMetadata statsd_metadata;
+  RateLimiter limiter;
+
   for (;;) {
     int option =
-        getopt_long(argc, argv, "c:o:bd::n", long_options, &option_index);
+        getopt_long(argc, argv, "c:o:bd::nt", long_options, &option_index);
 
     if (option == -1)
       break;  // EOF.
 
     if (option == 'c') {
+      config_file_name = std::string(optarg);
       if (strcmp(optarg, "-") == 0) {
         std::istreambuf_iterator<char> begin(std::cin), end;
         trace_config_raw.assign(begin, end);
@@ -168,6 +238,17 @@ int PerfettoCmd::Main(int argc, char** argv) {
       continue;
     }
 
+    if (option == 't') {
+      parse_as_pbtxt = true;
+      continue;
+    }
+
+    if (option == OPT_RESET_GUARDRAILS) {
+      PERFETTO_CHECK(limiter.ClearState());
+      PERFETTO_ILOG("Guardrail state cleared");
+      return 0;
+    }
+
     if (option == OPT_ALERT_ID) {
       statsd_metadata.set_triggering_alert_id(atoll(optarg));
       continue;
@@ -204,9 +285,16 @@ int PerfettoCmd::Main(int argc, char** argv) {
 
   perfetto::protos::TraceConfig trace_config_proto;
   PERFETTO_DLOG("Parsing TraceConfig, %zu bytes", trace_config_raw.size());
-  bool parsed = trace_config_proto.ParseFromString(trace_config_raw);
+  bool parsed;
+  if (parse_as_pbtxt) {
+    parsed = ParseTraceConfigPbtxt(config_file_name, trace_config_raw,
+                                   &trace_config_proto);
+  } else {
+    parsed = trace_config_proto.ParseFromString(trace_config_raw);
+  }
+
   if (!parsed) {
-    PERFETTO_ELOG("Could not parse TraceConfig proto from stdin");
+    PERFETTO_ELOG("Could not parse TraceConfig proto");
     return 1;
   }
   *trace_config_proto.mutable_statsd_metadata() = std::move(statsd_metadata);
@@ -218,11 +306,29 @@ int PerfettoCmd::Main(int argc, char** argv) {
     return 1;
 
   if (background) {
-    PERFETTO_CHECK(daemon(0 /*nochdir*/, 0 /*noclose*/) == 0);
-    PERFETTO_DLOG("Continuing in background");
+    pid_t pid;
+    switch (pid = fork()) {
+      case -1:
+        PERFETTO_FATAL("fork");
+      case 0: {
+        PERFETTO_CHECK(setsid() != -1);
+        base::ignore_result(chdir("/"));
+        base::ScopedFile null = base::OpenFile("/dev/null", O_RDONLY);
+        PERFETTO_CHECK(null);
+        PERFETTO_CHECK(dup2(*null, STDIN_FILENO) != -1);
+        PERFETTO_CHECK(dup2(*null, STDOUT_FILENO) != -1);
+        PERFETTO_CHECK(dup2(*null, STDERR_FILENO) != -1);
+        // Do not accidentally close stdin/stdout/stderr.
+        if (*null <= 2)
+          null.release();
+        break;
+      }
+      default:
+        printf("%d\n", pid);
+        exit(0);
+    }
   }
 
-  RateLimiter limiter;
   RateLimiter::Args args{};
   args.is_dropbox = !dropbox_tag_.empty();
   args.current_time = base::GetWallTimeS();
@@ -239,10 +345,8 @@ int PerfettoCmd::Main(int argc, char** argv) {
   SetupCtrlCSignalHandler();
   task_runner_.Run();
 
-  return limiter.OnTraceDone(args, did_process_full_trace_,
-                             bytes_uploaded_to_dropbox_)
-             ? 0
-             : 1;
+  return limiter.OnTraceDone(args, did_process_full_trace_, bytes_written_) ? 0
+                                                                            : 1;
 }
 
 void PerfettoCmd::OnConnect() {
@@ -284,11 +388,12 @@ void PerfettoCmd::OnTraceData(std::vector<TracePacket> packets, bool has_more) {
     static constexpr uint32_t kPacketFieldNumber = 1;
     pos = WriteVarInt(MakeTagLengthDelimited(kPacketFieldNumber), pos);
     pos = WriteVarInt(static_cast<uint32_t>(packet.size()), pos);
-    fwrite(reinterpret_cast<const char*>(preamble),
-           static_cast<size_t>(pos - preamble), 1, trace_out_stream_.get());
+    bytes_written_ +=
+        fwrite(reinterpret_cast<const char*>(preamble), 1,
+               static_cast<size_t>(pos - preamble), trace_out_stream_.get());
     for (const Slice& slice : packet.slices()) {
-      fwrite(reinterpret_cast<const char*>(slice.start), slice.size, 1,
-             trace_out_stream_.get());
+      bytes_written_ += fwrite(reinterpret_cast<const char*>(slice.start), 1,
+                               slice.size, trace_out_stream_.get());
     }
   }
 
@@ -309,13 +414,18 @@ void PerfettoCmd::OnTracingDisabled() {
 
 void PerfettoCmd::FinalizeTraceAndExit() {
   fflush(*trace_out_stream_);
-  fseek(*trace_out_stream_, 0, SEEK_END);
-  long bytes_written = ftell(*trace_out_stream_);
   if (dropbox_tag_.empty()) {
     trace_out_stream_.reset();
     did_process_full_trace_ = true;
-    PERFETTO_ILOG("Wrote %ld bytes into %s", bytes_written,
-                  trace_out_path_.c_str());
+    if (trace_config_->write_into_file()) {
+      PERFETTO_ILOG("Streamed output to %s", trace_out_path_ == "-"
+                                                 ? "stdout"
+                                                 : trace_out_path_.c_str());
+    } else {
+      PERFETTO_ILOG(
+          "Wrote %" PRIu64 " bytes into %s", bytes_written_,
+          trace_out_path_ == "-" ? "stdout" : trace_out_path_.c_str());
+    }
   } else {
 #if PERFETTO_BUILDFLAG(PERFETTO_ANDROID_BUILD)
     android::sp<android::os::DropBoxManager> dropbox =
@@ -326,7 +436,7 @@ void PerfettoCmd::FinalizeTraceAndExit() {
     // violation (about system_server ending up with a writable FD to our dir).
     char fdpath[64];
     sprintf(fdpath, "/proc/self/fd/%d", fileno(*trace_out_stream_));
-    base::ScopedFile read_only_fd(open(fdpath, O_RDONLY));
+    base::ScopedFile read_only_fd(base::OpenFile(fdpath, O_RDONLY));
     PERFETTO_CHECK(read_only_fd);
     trace_out_stream_.reset();
     android::binder::Status status =
@@ -335,9 +445,8 @@ void PerfettoCmd::FinalizeTraceAndExit() {
     if (status.isOk()) {
       // TODO(hjd): Account for compression.
       did_process_full_trace_ = true;
-      bytes_uploaded_to_dropbox_ = bytes_written;
-      PERFETTO_ILOG("Uploaded %ld bytes into DropBox with tag %s",
-                    bytes_written, dropbox_tag_.c_str());
+      PERFETTO_ILOG("Uploaded %" PRIu64 " bytes into DropBox with tag %s",
+                    bytes_written_, dropbox_tag_.c_str());
     } else {
       PERFETTO_ELOG("DropBox upload failed: %s", status.toString8().c_str());
     }
@@ -353,7 +462,7 @@ bool PerfettoCmd::OpenOutputFile() {
     // If we are tracing to DropBox, there's no need to make a
     // filesystem-visible temporary file.
     // TODO(skyostil): Fall back to base::TempFile for older devices.
-    fd.reset(open(kTempDropBoxTraceDir, O_TMPFILE | O_RDWR, 0600));
+    fd = base::OpenFile(kTempDropBoxTraceDir, O_TMPFILE | O_RDWR, 0600);
     if (!fd) {
       PERFETTO_ELOG("Could not create a temporary trace file in %s",
                     kTempDropBoxTraceDir);
@@ -362,8 +471,10 @@ bool PerfettoCmd::OpenOutputFile() {
 #else
     PERFETTO_FATAL("Tracing to Dropbox requires the Android build.");
 #endif
+  } else if (trace_out_path_ == "-") {
+    fd.reset(dup(STDOUT_FILENO));
   } else {
-    fd.reset(open(trace_out_path_.c_str(), O_RDWR | O_CREAT | O_TRUNC, 0600));
+    fd = base::OpenFile(trace_out_path_, O_RDWR | O_CREAT | O_TRUNC, 0600);
   }
   trace_out_stream_.reset(fdopen(fd.release(), "wb"));
   PERFETTO_CHECK(trace_out_stream_);
@@ -372,10 +483,7 @@ bool PerfettoCmd::OpenOutputFile() {
 
 void PerfettoCmd::SetupCtrlCSignalHandler() {
   // Setup the pipe used to deliver the CTRL-C notification from signal handler.
-  int pipe_fds[2];
-  PERFETTO_CHECK(pipe(pipe_fds) == 0);
-  ctrl_c_pipe_rd_.reset(pipe_fds[0]);
-  ctrl_c_pipe_wr_.reset(pipe_fds[1]);
+  ctrl_c_pipe_ = base::Pipe::Create();
 
   // Setup signal handler.
   struct sigaction sa {};
@@ -388,15 +496,15 @@ void PerfettoCmd::SetupCtrlCSignalHandler() {
   sa.sa_handler = [](int) {
     PERFETTO_LOG("SIGINT received: disabling tracing");
     char one = '1';
-    PERFETTO_CHECK(PERFETTO_EINTR(write(g_consumer_cmd->ctrl_c_pipe_wr(), &one,
-                                        sizeof(one))) == 1);
+    PERFETTO_CHECK(base::WriteAll(g_consumer_cmd->ctrl_c_pipe_wr(), &one,
+                                  sizeof(one)) == 1);
   };
   sa.sa_flags = static_cast<decltype(sa.sa_flags)>(SA_RESETHAND | SA_RESTART);
 #pragma GCC diagnostic pop
   sigaction(SIGINT, &sa, nullptr);
 
   task_runner_.AddFileDescriptorWatch(
-      *ctrl_c_pipe_rd_, [this] { consumer_endpoint_->DisableTracing(); });
+      *ctrl_c_pipe_.rd, [this] { consumer_endpoint_->DisableTracing(); });
 }
 
 int __attribute__((visibility("default")))

@@ -45,7 +45,6 @@ class CC_PAINT_EXPORT PaintOpReader {
   size_t remaining_bytes() const { return remaining_bytes_; }
 
   void ReadData(size_t bytes, void* data);
-  void ReadArray(size_t count, SkPoint* array);
   void ReadSize(size_t* size);
 
   void Read(SkScalar* data);
@@ -61,7 +60,7 @@ class CC_PAINT_EXPORT PaintOpReader {
   void Read(PaintFlags* flags);
   void Read(PaintImage* image);
   void Read(sk_sp<SkData>* data);
-  void Read(scoped_refptr<PaintTextBlob>* blob);
+  void Read(sk_sp<SkTextBlob>* blob);
   void Read(sk_sp<PaintFilter>* filter);
   void Read(sk_sp<PaintShader>* shader);
   void Read(SkMatrix* matrix);

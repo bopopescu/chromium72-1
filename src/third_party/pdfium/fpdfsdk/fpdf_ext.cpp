@@ -7,10 +7,13 @@
 #include "public/fpdf_ext.h"
 
 #include "core/fpdfapi/cpdf_modulemgr.h"
+#include "core/fpdfapi/parser/cpdf_dictionary.h"
 #include "core/fpdfapi/parser/cpdf_document.h"
-#include "core/fpdfdoc/cpdf_interform.h"
+#include "core/fpdfdoc/cpdf_interactiveform.h"
 #include "core/fpdfdoc/cpdf_metadata.h"
+#include "core/fxcrt/fx_extension.h"
 #include "fpdfsdk/cpdfsdk_helpers.h"
+#include "third_party/base/ptr_util.h"
 
 #ifdef PDF_ENABLE_XFA
 #include "fpdfsdk/fpdfxfa/cpdfxfa_context.h"
@@ -76,6 +79,15 @@ FSDK_SetUnSpObjProcessHandler(UNSUPPORT_INFO* unsp_info) {
   return true;
 }
 
+FPDF_EXPORT void FPDF_CALLCONV FSDK_SetTimeFunction(time_t (*func)()) {
+  FXSYS_SetTimeFunction(func);
+}
+
+FPDF_EXPORT void FPDF_CALLCONV
+FSDK_SetLocaltimeFunction(struct tm* (*func)(const time_t* tp)) {
+  FXSYS_SetLocaltimeFunction(func);
+}
+
 FPDF_EXPORT int FPDF_CALLCONV FPDFDoc_GetPageMode(FPDF_DOCUMENT document) {
   CPDF_Document* pDoc = CPDFDocumentFromFPDFDocument(document);
   if (!pDoc)
@@ -85,7 +97,7 @@ FPDF_EXPORT int FPDF_CALLCONV FPDFDoc_GetPageMode(FPDF_DOCUMENT document) {
   if (!pRoot)
     return PAGEMODE_UNKNOWN;
 
-  CPDF_Object* pName = pRoot->GetObjectFor("PageMode");
+  const CPDF_Object* pName = pRoot->GetObjectFor("PageMode");
   if (!pName)
     return PAGEMODE_USENONE;
 

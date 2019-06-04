@@ -28,6 +28,7 @@
 #include "third_party/blink/renderer/core/css/media_query_list_listener.h"
 #include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/dom/events/event.h"
+#include "third_party/blink/renderer/core/event_interface_names.h"
 #include "third_party/blink/renderer/core/frame/local_dom_window.h"
 #include "third_party/blink/renderer/core/frame/local_frame_view.h"
 #include "third_party/blink/renderer/core/inspector/inspector_trace_events.h"
@@ -52,17 +53,12 @@ void ScriptedAnimationController::Trace(blink::Visitor* visitor) {
   visitor->Trace(per_frame_events_);
 }
 
-void ScriptedAnimationController::TraceWrappers(
-    ScriptWrappableVisitor* visitor) const {
-  visitor->TraceWrappers(callback_collection_);
-}
-
 void ScriptedAnimationController::Pause() {
   ++suspend_count_;
 }
 
 void ScriptedAnimationController::Unpause() {
-  // It would be nice to put an DCHECK(m_suspendCount > 0) here, but in WK1
+  // It would be nice to put an DCHECK_GT(suspend_count_, 0) here, but in WK1
   // resume() can be called even when suspend hasn't (if a tab was created in
   // the background).
   if (suspend_count_ > 0)
@@ -71,7 +67,7 @@ void ScriptedAnimationController::Unpause() {
 }
 
 void ScriptedAnimationController::DispatchEventsAndCallbacksForPrinting() {
-  DispatchEvents(EventNames::MediaQueryListEvent);
+  DispatchEvents(event_interface_names::kMediaQueryListEvent);
   CallMediaQueryListListeners();
 }
 
@@ -125,9 +121,9 @@ void ScriptedAnimationController::DispatchEvents(
     // tree.
     probe::AsyncTask async_task(event_target->GetExecutionContext(), event);
     if (LocalDOMWindow* window = event_target->ToLocalDOMWindow())
-      window->DispatchEvent(event, nullptr);
+      window->DispatchEvent(*event, nullptr);
     else
-      event_target->DispatchEvent(event);
+      event_target->DispatchEvent(*event);
   }
 }
 
@@ -138,12 +134,15 @@ void ScriptedAnimationController::ExecuteCallbacks(
     return;
 
   double high_res_now_ms =
-      1000.0 *
-      document_->Loader()->GetTiming().MonotonicTimeToZeroBasedDocumentTime(
-          monotonic_time_now);
+      document_->Loader()
+          ->GetTiming()
+          .MonotonicTimeToZeroBasedDocumentTime(monotonic_time_now)
+          .InMillisecondsF();
   double legacy_high_res_now_ms =
-      1000.0 * document_->Loader()->GetTiming().MonotonicTimeToPseudoWallTime(
-                   monotonic_time_now);
+      document_->Loader()
+          ->GetTiming()
+          .MonotonicTimeToPseudoWallTime(monotonic_time_now)
+          .InMillisecondsF();
   callback_collection_.ExecuteCallbacks(high_res_now_ms,
                                         legacy_high_res_now_ms);
 }

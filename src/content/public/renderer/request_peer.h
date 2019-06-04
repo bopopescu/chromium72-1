@@ -10,6 +10,7 @@
 #include <memory>
 #include <string>
 
+#include "base/task_runner.h"
 #include "content/common/content_export.h"
 #include "mojo/public/cpp/system/data_pipe.h"
 
@@ -76,15 +77,6 @@ class CONTENT_EXPORT RequestPeer {
   virtual void OnStartLoadingResponseBody(
       mojo::ScopedDataPipeConsumerHandle body) = 0;
 
-  // Called when a chunk of response data is downloaded.  This method may be
-  // called multiple times or not at all if an error occurs.  This method is
-  // only called if RequestInfo::download_to_file was set to true, and in
-  // that case, OnReceivedData will not be called.
-  // The encoded_data_length is the length of the encoded data transferred
-  // over the network, which could be different from data length (e.g. for
-  // gzipped content).
-  virtual void OnDownloadedData(int len, int encoded_data_length) = 0;
-
   // Called when a chunk of response data is available. This method may
   // be called multiple times or not at all if an error occurs.
   virtual void OnReceivedData(std::unique_ptr<ReceivedData> data) = 0;
@@ -104,6 +96,9 @@ class CONTENT_EXPORT RequestPeer {
   // the resource load.
   virtual void OnCompletedRequest(
       const network::URLLoaderCompletionStatus& status) = 0;
+
+  // Returns the task runner on which this request peer is running.
+  virtual scoped_refptr<base::TaskRunner> GetTaskRunner() const = 0;
 
   virtual ~RequestPeer() {}
 };

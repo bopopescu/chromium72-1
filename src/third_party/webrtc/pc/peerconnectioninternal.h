@@ -42,8 +42,8 @@ class PeerConnectionInternal : public PeerConnectionInterface {
   GetTransceiversInternal() const = 0;
 
   // Get the id used as a media stream track's "id" field from ssrc.
-  virtual bool GetLocalTrackIdBySsrc(uint32_t ssrc, std::string* track_id) = 0;
-  virtual bool GetRemoteTrackIdBySsrc(uint32_t ssrc, std::string* track_id) = 0;
+  virtual absl::string_view GetLocalTrackIdBySsrc(uint32_t ssrc) = 0;
+  virtual absl::string_view GetRemoteTrackIdBySsrc(uint32_t ssrc) = 0;
 
   virtual sigslot::signal1<DataChannel*>& SignalDataChannelCreated() = 0;
 
@@ -53,8 +53,8 @@ class PeerConnectionInternal : public PeerConnectionInterface {
   virtual std::vector<rtc::scoped_refptr<DataChannel>> sctp_data_channels()
       const = 0;
 
-  virtual rtc::Optional<std::string> sctp_content_name() const = 0;
-  virtual rtc::Optional<std::string> sctp_transport_name() const = 0;
+  virtual absl::optional<std::string> sctp_content_name() const = 0;
+  virtual absl::optional<std::string> sctp_transport_name() const = 0;
 
   virtual cricket::CandidateStatsList GetPooledCandidateStats() const = 0;
 

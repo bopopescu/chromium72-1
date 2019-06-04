@@ -24,7 +24,7 @@
 #include "perfetto/tracing/core/commit_data_request.h"
 #include "perfetto/tracing/core/data_source_config.h"
 #include "perfetto/tracing/core/data_source_descriptor.h"
-#include "perfetto/tracing/core/service.h"
+#include "perfetto/tracing/core/tracing_service.h"
 #include "src/tracing/ipc/posix_shared_memory.h"
 
 // The remote Producer(s) are not trusted. All the methods from the ProducerPort
@@ -33,7 +33,7 @@
 
 namespace perfetto {
 
-ProducerIPCService::ProducerIPCService(Service* core_service)
+ProducerIPCService::ProducerIPCService(TracingService* core_service)
     : core_service_(core_service), weak_ptr_factory_(this) {}
 
 ProducerIPCService::~ProducerIPCService() = default;
@@ -148,15 +148,35 @@ void ProducerIPCService::CommitData(const protos::CommitDataRequest& proto_req,
   std::function<void()> callback;
   if (resp.IsBound()) {
     // Capturing |resp| by reference here speculates on the fact that
-    // CommitData() in service_impl.cc invokes the passed callback inline,
-    // without posting it. If that assumption changes this code needs to wrap
-    // the response in a shared_ptr (C+11 lambdas don't support move) and use
-    // a weak ptr in the caller.
+    // CommitData() in tracing_service_impl.cc invokes the passed callback
+    // inline, without posting it. If that assumption changes this code needs to
+    // wrap the response in a shared_ptr (C+11 lambdas don't support move) and
+    // use a weak ptr in the caller.
     callback = [&resp] {
       resp.Resolve(ipc::AsyncResult<protos::CommitDataResponse>::Create());
     };
   }
   producer->service_endpoint->CommitData(req, callback);
+}
+
+void ProducerIPCService::NotifyDataSourceStopped(
+    const protos::NotifyDataSourceStoppedRequest& request,
+    DeferredNotifyDataSourceStoppedResponse response) {
+  RemoteProducer* producer = GetProducerForCurrentRequest();
+  if (!producer) {
+    PERFETTO_DLOG(
+        "Producer invoked NotifyDataSourceStopped() before "
+        "InitializeConnection()");
+    return;
+  }
+  producer->service_endpoint->NotifyDataSourceStopped(request.data_source_id());
+
+  // NotifyDataSourceStopped shouldn't expect any meaningful response, avoid
+  // a useless IPC in that case.
+  if (response.IsBound()) {
+    response.Resolve(
+        ipc::AsyncResult<protos::NotifyDataSourceStoppedResponse>::Create());
+  }
 }
 
 void ProducerIPCService::GetAsyncCommand(
@@ -191,9 +211,27 @@ void ProducerIPCService::RemoteProducer::OnConnect() {}
 // |service_endpoint| (in the RemoteProducer dtor).
 void ProducerIPCService::RemoteProducer::OnDisconnect() {}
 
+// Invoked by the |core_service_| business logic when it wants to create a new
+// data source.
+void ProducerIPCService::RemoteProducer::SetupDataSource(
+    DataSourceInstanceID dsid,
+    const DataSourceConfig& cfg) {
+  if (!async_producer_commands.IsBound()) {
+    PERFETTO_DLOG(
+        "The Service tried to create a new data source but the remote Producer "
+        "has not yet initialized the connection");
+    return;
+  }
+  auto cmd = ipc::AsyncResult<protos::GetAsyncCommandResponse>::Create();
+  cmd.set_has_more(true);
+  cmd->mutable_setup_data_source()->set_new_instance_id(dsid);
+  cfg.ToProto(cmd->mutable_setup_data_source()->mutable_config());
+  async_producer_commands.Resolve(std::move(cmd));
+}
+
 // Invoked by the |core_service_| business logic when it wants to start a new
 // data source.
-void ProducerIPCService::RemoteProducer::CreateDataSourceInstance(
+void ProducerIPCService::RemoteProducer::StartDataSource(
     DataSourceInstanceID dsid,
     const DataSourceConfig& cfg) {
   if (!async_producer_commands.IsBound()) {
@@ -209,7 +247,7 @@ void ProducerIPCService::RemoteProducer::CreateDataSourceInstance(
   async_producer_commands.Resolve(std::move(cmd));
 }
 
-void ProducerIPCService::RemoteProducer::TearDownDataSourceInstance(
+void ProducerIPCService::RemoteProducer::StopDataSource(
     DataSourceInstanceID dsid) {
   if (!async_producer_commands.IsBound()) {
     PERFETTO_DLOG(

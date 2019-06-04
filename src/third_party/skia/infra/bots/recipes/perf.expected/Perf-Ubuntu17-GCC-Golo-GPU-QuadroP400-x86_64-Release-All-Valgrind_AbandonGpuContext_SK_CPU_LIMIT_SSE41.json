@@ -135,7 +135,7 @@
       "--error-exitcode=1",
       "--num-callers=40",
       "--suppressions=[START_DIR]/skia/tools/valgrind.supp",
-      "[START_DIR]/build/out/Release/nanobench",
+      "[START_DIR]/build/nanobench",
       "-i",
       "[START_DIR]/skia/resources",
       "--skps",
@@ -161,6 +161,7 @@
       "1",
       "--keepAlive",
       "true",
+      "--reduceOpListSplitting",
       "--match",
       "~inc0.gif",
       "~inc1.gif",
@@ -191,8 +192,7 @@
     "name": "nanobench"
   },
   {
-    "name": "$result",
-    "recipe_result": null,
-    "status_code": 0
+    "jsonResult": null,
+    "name": "$result"
   }
 ]

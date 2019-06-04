@@ -24,8 +24,8 @@ import org.chromium.chrome.test.util.browser.Features;
 import org.chromium.components.offline_items_collection.LegacyHelpers;
 import org.chromium.components.offline_items_collection.OfflineItem;
 import org.chromium.components.offline_items_collection.OfflineItemState;
-import org.chromium.content.browser.test.util.Criteria;
-import org.chromium.content.browser.test.util.CriteriaHelper;
+import org.chromium.content_public.browser.test.util.Criteria;
+import org.chromium.content_public.browser.test.util.CriteriaHelper;
 
 import java.util.UUID;
 
@@ -78,7 +78,8 @@ public class DownloadInfoBarControllerTest {
         }
 
         @Override
-        protected void showInfoBar(DownloadInfoBarState state, DownloadProgressInfoBarData info) {
+        protected void showInfoBar(
+                @DownloadInfoBarState int state, DownloadProgressInfoBarData info) {
             mInfo = info;
             super.showInfoBar(state, info);
         }

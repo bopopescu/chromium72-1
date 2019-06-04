@@ -48,8 +48,8 @@ class ServiceProcessStateFileManipulationTest : public ::testing::Test {
     ASSERT_TRUE(temp_dir_.CreateUniqueTempDir());
     ASSERT_TRUE(MockLaunchd::MakeABundle(GetTempDirPath(), "Test",
                                          &bundle_path_, &executable_path_));
-    mock_launchd_.reset(
-        new MockLaunchd(executable_path_, loop_.task_runner(), false, false));
+    mock_launchd_.reset(new MockLaunchd(executable_path_, loop_.task_runner(),
+                                        run_loop_.QuitClosure(), false, false));
     scoped_launchd_instance_.reset(
         new Launchd::ScopedInstance(mock_launchd_.get()));
     ASSERT_TRUE(service_process_state_.Initialize());
@@ -129,7 +129,8 @@ TEST_F(ServiceProcessStateFileManipulationTest, VerifyLaunchD) {
       << " exit_code:" << exit_code << " " << output;
 }
 
-TEST_F(ServiceProcessStateFileManipulationTest, DeleteFile) {
+// Flaky: https://crbug.com/903823
+TEST_F(ServiceProcessStateFileManipulationTest, DISABLED_DeleteFile) {
   GetIOTaskRunner()->PostTask(FROM_HERE,
                               base::Bind(&DeleteFunc, executable_path()));
   Run();

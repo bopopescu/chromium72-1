@@ -20,6 +20,7 @@
 #include "core/fpdfapi/parser/fpdf_parser_utility.h"
 #include "core/fxcrt/fx_stream.h"
 #include "third_party/base/logging.h"
+#include "third_party/base/ptr_util.h"
 #include "third_party/base/stl_util.h"
 
 CPDF_Dictionary::CPDF_Dictionary()
@@ -39,7 +40,7 @@ CPDF_Dictionary::~CPDF_Dictionary() {
 }
 
 CPDF_Object::Type CPDF_Dictionary::GetType() const {
-  return DICTIONARY;
+  return kDictionary;
 }
 
 CPDF_Dictionary* CPDF_Dictionary::GetDict() {
@@ -71,7 +72,8 @@ std::unique_ptr<CPDF_Object> CPDF_Dictionary::CloneNonCyclic(
     std::set<const CPDF_Object*>* pVisited) const {
   pVisited->insert(this);
   auto pCopy = pdfium::MakeUnique<CPDF_Dictionary>(m_pPool);
-  for (const auto& it : *this) {
+  CPDF_DictionaryLocker locker(this);
+  for (const auto& it : locker) {
     if (!pdfium::ContainsKey(*pVisited, it.second.get())) {
       std::set<const CPDF_Object*> visited(*pVisited);
       if (auto obj = it.second->CloneNonCyclic(bDirect, &visited))
@@ -81,77 +83,102 @@ std::unique_ptr<CPDF_Object> CPDF_Dictionary::CloneNonCyclic(
   return std::move(pCopy);
 }
 
-CPDF_Object* CPDF_Dictionary::GetObjectFor(const ByteString& key) const {
+const CPDF_Object* CPDF_Dictionary::GetObjectFor(const ByteString& key) const {
   auto it = m_Map.find(key);
   return it != m_Map.end() ? it->second.get() : nullptr;
 }
 
-CPDF_Object* CPDF_Dictionary::GetDirectObjectFor(const ByteString& key) const {
-  CPDF_Object* p = GetObjectFor(key);
+CPDF_Object* CPDF_Dictionary::GetObjectFor(const ByteString& key) {
+  return const_cast<CPDF_Object*>(
+      static_cast<const CPDF_Dictionary*>(this)->GetObjectFor(key));
+}
+
+const CPDF_Object* CPDF_Dictionary::GetDirectObjectFor(
+    const ByteString& key) const {
+  const CPDF_Object* p = GetObjectFor(key);
   return p ? p->GetDirect() : nullptr;
 }
 
+CPDF_Object* CPDF_Dictionary::GetDirectObjectFor(const ByteString& key) {
+  return const_cast<CPDF_Object*>(
+      static_cast<const CPDF_Dictionary*>(this)->GetDirectObjectFor(key));
+}
+
 ByteString CPDF_Dictionary::GetStringFor(const ByteString& key) const {
-  CPDF_Object* p = GetObjectFor(key);
+  const CPDF_Object* p = GetObjectFor(key);
   return p ? p->GetString() : ByteString();
 }
 
 WideString CPDF_Dictionary::GetUnicodeTextFor(const ByteString& key) const {
-  CPDF_Object* p = GetObjectFor(key);
-  if (CPDF_Reference* pRef = ToReference(p))
+  const CPDF_Object* p = GetObjectFor(key);
+  if (const CPDF_Reference* pRef = ToReference(p))
     p = pRef->GetDirect();
   return p ? p->GetUnicodeText() : WideString();
 }
 
 ByteString CPDF_Dictionary::GetStringFor(const ByteString& key,
                                          const ByteString& def) const {
-  CPDF_Object* p = GetObjectFor(key);
+  const CPDF_Object* p = GetObjectFor(key);
   return p ? p->GetString() : ByteString(def);
 }
 
 int CPDF_Dictionary::GetIntegerFor(const ByteString& key) const {
-  CPDF_Object* p = GetObjectFor(key);
+  const CPDF_Object* p = GetObjectFor(key);
   return p ? p->GetInteger() : 0;
 }
 
 int CPDF_Dictionary::GetIntegerFor(const ByteString& key, int def) const {
-  CPDF_Object* p = GetObjectFor(key);
+  const CPDF_Object* p = GetObjectFor(key);
   return p ? p->GetInteger() : def;
 }
 
 float CPDF_Dictionary::GetNumberFor(const ByteString& key) const {
-  CPDF_Object* p = GetObjectFor(key);
+  const CPDF_Object* p = GetObjectFor(key);
   return p ? p->GetNumber() : 0;
 }
 
 bool CPDF_Dictionary::GetBooleanFor(const ByteString& key,
                                     bool bDefault) const {
-  CPDF_Object* p = GetObjectFor(key);
+  const CPDF_Object* p = GetObjectFor(key);
   return ToBoolean(p) ? p->GetInteger() != 0 : bDefault;
 }
 
-CPDF_Dictionary* CPDF_Dictionary::GetDictFor(const ByteString& key) const {
-  CPDF_Object* p = GetDirectObjectFor(key);
+const CPDF_Dictionary* CPDF_Dictionary::GetDictFor(
+    const ByteString& key) const {
+  const CPDF_Object* p = GetDirectObjectFor(key);
   if (!p)
     return nullptr;
-  if (CPDF_Dictionary* pDict = p->AsDictionary())
+  if (const CPDF_Dictionary* pDict = p->AsDictionary())
     return pDict;
-  if (CPDF_Stream* pStream = p->AsStream())
+  if (const CPDF_Stream* pStream = p->AsStream())
     return pStream->GetDict();
   return nullptr;
 }
 
-CPDF_Array* CPDF_Dictionary::GetArrayFor(const ByteString& key) const {
+CPDF_Dictionary* CPDF_Dictionary::GetDictFor(const ByteString& key) {
+  return const_cast<CPDF_Dictionary*>(
+      static_cast<const CPDF_Dictionary*>(this)->GetDictFor(key));
+}
+
+const CPDF_Array* CPDF_Dictionary::GetArrayFor(const ByteString& key) const {
   return ToArray(GetDirectObjectFor(key));
 }
 
-CPDF_Stream* CPDF_Dictionary::GetStreamFor(const ByteString& key) const {
+CPDF_Array* CPDF_Dictionary::GetArrayFor(const ByteString& key) {
+  return ToArray(GetDirectObjectFor(key));
+}
+
+const CPDF_Stream* CPDF_Dictionary::GetStreamFor(const ByteString& key) const {
+  return ToStream(GetDirectObjectFor(key));
+}
+
+CPDF_Stream* CPDF_Dictionary::GetStreamFor(const ByteString& key) {
   return ToStream(GetDirectObjectFor(key));
 }
 
 CFX_FloatRect CPDF_Dictionary::GetRectFor(const ByteString& key) const {
   CFX_FloatRect rect;
-  CPDF_Array* pArray = GetArrayFor(key);
+  const CPDF_Array* pArray = GetArrayFor(key);
   if (pArray)
     rect = pArray->GetRect();
   return rect;
@@ -159,7 +186,7 @@ CFX_FloatRect CPDF_Dictionary::GetRectFor(const ByteString& key) const {
 
 CFX_Matrix CPDF_Dictionary::GetMatrixFor(const ByteString& key) const {
   CFX_Matrix matrix;
-  CPDF_Array* pArray = GetArrayFor(key);
+  const CPDF_Array* pArray = GetArrayFor(key);
   if (pArray)
     matrix = pArray->GetMatrix();
   return matrix;
@@ -169,12 +196,17 @@ bool CPDF_Dictionary::KeyExist(const ByteString& key) const {
   return pdfium::ContainsKey(m_Map, key);
 }
 
-bool CPDF_Dictionary::IsSignatureDict() const {
-  return CPDF_CryptoHandler::IsSignatureDictionary(this);
+std::vector<ByteString> CPDF_Dictionary::GetKeys() const {
+  std::vector<ByteString> result;
+  CPDF_DictionaryLocker locker(this);
+  for (const auto& item : locker)
+    result.push_back(item.first);
+  return result;
 }
 
 CPDF_Object* CPDF_Dictionary::SetFor(const ByteString& key,
                                      std::unique_ptr<CPDF_Object> pObj) {
+  CHECK(!IsLocked());
   if (!pObj) {
     m_Map.erase(key);
     return nullptr;
@@ -188,15 +220,17 @@ CPDF_Object* CPDF_Dictionary::SetFor(const ByteString& key,
 void CPDF_Dictionary::ConvertToIndirectObjectFor(
     const ByteString& key,
     CPDF_IndirectObjectHolder* pHolder) {
+  CHECK(!IsLocked());
   auto it = m_Map.find(key);
   if (it == m_Map.end() || it->second->IsReference())
     return;
 
   CPDF_Object* pObj = pHolder->AddIndirectObject(std::move(it->second));
-  it->second = pdfium::MakeUnique<CPDF_Reference>(pHolder, pObj->GetObjNum());
+  it->second = pObj->MakeReference(pHolder);
 }
 
 std::unique_ptr<CPDF_Object> CPDF_Dictionary::RemoveFor(const ByteString& key) {
+  CHECK(!IsLocked());
   std::unique_ptr<CPDF_Object> result;
   auto it = m_Map.find(key);
   if (it != m_Map.end()) {
@@ -208,6 +242,7 @@ std::unique_ptr<CPDF_Object> CPDF_Dictionary::RemoveFor(const ByteString& key) {
 
 void CPDF_Dictionary::ReplaceKey(const ByteString& oldkey,
                                  const ByteString& newkey) {
+  CHECK(!IsLocked());
   auto old_it = m_Map.find(oldkey);
   if (old_it == m_Map.end())
     return;
@@ -244,27 +279,35 @@ ByteString CPDF_Dictionary::MaybeIntern(const ByteString& str) {
   return m_pPool ? m_pPool->Intern(str) : str;
 }
 
-bool CPDF_Dictionary::WriteTo(IFX_ArchiveStream* archive) const {
+bool CPDF_Dictionary::WriteTo(IFX_ArchiveStream* archive,
+                              const CPDF_Encryptor* encryptor) const {
   if (!archive->WriteString("<<"))
     return false;
 
-  for (const auto& it : *this) {
+  const bool is_signature = CPDF_CryptoHandler::IsSignatureDictionary(this);
+
+  CPDF_DictionaryLocker locker(this);
+  for (const auto& it : locker) {
     const ByteString& key = it.first;
     CPDF_Object* pValue = it.second.get();
     if (!archive->WriteString("/") ||
         !archive->WriteString(PDF_NameEncode(key).AsStringView())) {
       return false;
     }
-
-    if (!pValue->IsInline()) {
-      if (!archive->WriteString(" ") ||
-          !archive->WriteDWord(pValue->GetObjNum()) ||
-          !archive->WriteString(" 0 R")) {
-        return false;
-      }
-    } else if (!pValue->WriteTo(archive)) {
+    if (!pValue->WriteTo(archive, !is_signature || key != "Contents"
+                                      ? encryptor
+                                      : nullptr)) {
       return false;
     }
   }
   return archive->WriteString(">>");
+}
+
+CPDF_DictionaryLocker::CPDF_DictionaryLocker(const CPDF_Dictionary* pDictionary)
+    : m_pDictionary(pDictionary) {
+  m_pDictionary->m_LockCount++;
+}
+
+CPDF_DictionaryLocker::~CPDF_DictionaryLocker() {
+  m_pDictionary->m_LockCount--;
 }

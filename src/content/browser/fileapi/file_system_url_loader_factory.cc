@@ -15,11 +15,12 @@
 #include "base/memory/weak_ptr.h"
 #include "base/sequenced_task_runner.h"
 #include "base/strings/stringprintf.h"
-#include "base/task_scheduler/post_task.h"
-#include "base/task_scheduler/task_traits.h"
+#include "base/task/post_task.h"
+#include "base/task/task_traits.h"
 #include "build/build_config.h"
 #include "components/services/filesystem/public/interfaces/types.mojom.h"
 #include "content/browser/child_process_security_policy_impl.h"
+#include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/render_process_host.h"
@@ -94,8 +95,11 @@ class FileSystemEntryURLLoader
       : binding_(this), params_(std::move(params)) {}
 
   // network::mojom::URLLoader:
-  void FollowRedirect(const base::Optional<net::HttpRequestHeaders>&
-                          modified_request_headers) override {}
+  void FollowRedirect(
+      const base::Optional<std::vector<std::string>>&
+          to_be_removed_request_headers,
+      const base::Optional<net::HttpRequestHeaders>& modified_request_headers,
+      const base::Optional<GURL>& new_url) override {}
   void ProceedWithResponse() override {}
   void SetPriority(net::RequestPriority priority,
                    int32_t intra_priority_value) override {}
@@ -339,7 +343,7 @@ class FileSystemDirectoryURLLoader : public FileSystemEntryURLLoader {
     head.content_length = data_.size();
     head.headers = CreateHttpResponseHeaders(200);
 
-    client_->OnReceiveResponse(head, /*downloaded_file=*/nullptr);
+    client_->OnReceiveResponse(head);
     client_->OnStartLoadingResponseBody(std::move(pipe.consumer_handle));
 
     data_producer_ = std::make_unique<mojo::StringDataPipeProducer>(
@@ -444,14 +448,6 @@ class FileSystemFileURLLoader : public FileSystemEntryURLLoader {
           original_request_.url.ReplaceComponents(replacements);
       head_.encoded_data_length = 0;
       client_->OnReceiveRedirect(redirect_info, head_);
-
-      // Restart the request with a directory loader.
-      network::ResourceRequest new_request = original_request_;
-      new_request.url = redirect_info.new_url;
-      FileSystemDirectoryURLLoader::CreateAndStart(
-          new_request, binding_.Unbind(), client_.PassInterface(),
-          std::move(params_), io_task_runner_);
-      MaybeDeleteSelf();
       return;
     }
 
@@ -479,7 +475,8 @@ class FileSystemFileURLLoader : public FileSystemEntryURLLoader {
     data_producer_ = std::make_unique<mojo::StringDataPipeProducer>(
         std::move(pipe.producer_handle));
 
-    file_data_ = new net::IOBuffer(kDefaultFileSystemUrlPipeSize);
+    file_data_ =
+        base::MakeRefCounted<net::IOBuffer>(kDefaultFileSystemUrlPipeSize);
     ReadMoreFileData();
   }
 
@@ -487,6 +484,11 @@ class FileSystemFileURLLoader : public FileSystemEntryURLLoader {
     int64_t bytes_to_read = std::min(
         static_cast<int64_t>(kDefaultFileSystemUrlPipeSize), remaining_bytes_);
     if (!bytes_to_read) {
+      if (consumer_handle_.is_valid()) {
+        // This was an empty file; make sure to call OnReceiveResponse
+        // regardless.
+        client_->OnReceiveResponse(head_);
+      }
       OnFileWritten(MOJO_RESULT_OK);
       return;
     }
@@ -515,9 +517,10 @@ class FileSystemFileURLLoader : public FileSystemEntryURLLoader {
         SniffMimeType(file_data_->data(), result, url_.ToGURL(), type_hint,
                       net::ForceSniffFileUrlsForHtml::kDisabled,
                       &head_.mime_type);
+        head_.did_mime_sniff = true;
       }
 
-      client_->OnReceiveResponse(head_, /*downloaded_file=*/nullptr);
+      client_->OnReceiveResponse(head_);
       client_->OnStartLoadingResponseBody(std::move(consumer_handle_));
     }
     remaining_bytes_ -= result;
@@ -638,7 +641,7 @@ CreateFileSystemURLLoaderFactory(
 
   return std::make_unique<FileSystemURLLoaderFactory>(
       std::move(params),
-      BrowserThread::GetTaskRunnerForThread(BrowserThread::IO));
+      base::CreateSingleThreadTaskRunnerWithTraits({BrowserThread::IO}));
 }
 
 }  // namespace content

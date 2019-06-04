@@ -172,8 +172,7 @@ TEST_P(CopyCompressedTextureTest, InternalFormat)
         Data() : Data(GL_NONE, nullptr, 0) {}
         Data(GLint format, const uint8_t *data, GLsizei dataSize)
             : format(format), data(data), dataSize(dataSize)
-        {
-        }
+        {}
     };
     std::vector<Data> supportedFormats;
 
@@ -356,6 +355,7 @@ ANGLE_INSTANTIATE_TEST(CopyCompressedTextureTest,
                        ES2_OPENGL(),
                        ES3_OPENGL(),
                        ES2_OPENGLES(),
-                       ES3_OPENGLES());
+                       ES3_OPENGLES(),
+                       ES2_VULKAN());
 
 }  // namespace angle

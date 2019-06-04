@@ -12,16 +12,15 @@
 #include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/dom/dom_exception.h"
 #include "third_party/blink/renderer/core/dom/events/event.h"
-#include "third_party/blink/renderer/core/dom/exception_code.h"
 #include "third_party/blink/renderer/core/execution_context/execution_context.h"
 #include "third_party/blink/renderer/core/frame/local_frame.h"
 #include "third_party/blink/renderer/modules/mediastream/input_device_info.h"
 #include "third_party/blink/renderer/modules/mediastream/media_error_state.h"
 #include "third_party/blink/renderer/modules/mediastream/media_stream.h"
 #include "third_party/blink/renderer/modules/mediastream/media_stream_constraints.h"
+#include "third_party/blink/renderer/modules/mediastream/media_track_supported_constraints.h"
 #include "third_party/blink/renderer/modules/mediastream/navigator_media_stream.h"
 #include "third_party/blink/renderer/modules/mediastream/user_media_controller.h"
-#include "third_party/blink/renderer/modules/mediastream/user_media_request.h"
 #include "third_party/blink/renderer/platform/bindings/script_state.h"
 #include "third_party/blink/renderer/platform/wtf/functional.h"
 
@@ -63,7 +62,7 @@ class PromiseResolverCallbacks final : public UserMediaRequest::Callbacks {
 }  // namespace
 
 MediaDevices* MediaDevices::Create(ExecutionContext* context) {
-  MediaDevices* media_devices = new MediaDevices(context);
+  MediaDevices* media_devices = MakeGarbageCollected<MediaDevices>(context);
   media_devices->PauseIfNeeded();
   return media_devices;
 }
@@ -84,11 +83,11 @@ MediaDevices::~MediaDevices() = default;
 ScriptPromise MediaDevices::enumerateDevices(ScriptState* script_state) {
   Platform::Current()->UpdateWebRTCAPICount(WebRTCAPIName::kEnumerateDevices);
   LocalFrame* frame =
-      ToDocument(ExecutionContext::From(script_state))->GetFrame();
+      To<Document>(ExecutionContext::From(script_state))->GetFrame();
   if (!frame) {
     return ScriptPromise::RejectWithDOMException(
-        script_state,
-        DOMException::Create(kNotSupportedError, "Current frame is detached."));
+        script_state, DOMException::Create(DOMExceptionCode::kNotSupportedError,
+                                           "Current frame is detached."));
   }
 
   ScriptPromiseResolver* resolver = ScriptPromiseResolver::Create(script_state);
@@ -103,31 +102,45 @@ ScriptPromise MediaDevices::enumerateDevices(ScriptState* script_state) {
   return promise;
 }
 
+MediaTrackSupportedConstraints* MediaDevices::getSupportedConstraints() const {
+  return MediaTrackSupportedConstraints::Create();
+}
+
 ScriptPromise MediaDevices::getUserMedia(ScriptState* script_state,
-                                         const MediaStreamConstraints& options,
+                                         const MediaStreamConstraints* options,
                                          ExceptionState& exception_state) {
+  return SendUserMediaRequest(script_state,
+                              WebUserMediaRequest::MediaType::kUserMedia,
+                              options, exception_state);
+}
+
+ScriptPromise MediaDevices::SendUserMediaRequest(
+    ScriptState* script_state,
+    WebUserMediaRequest::MediaType media_type,
+    const MediaStreamConstraints* options,
+    ExceptionState& exception_state) {
   ScriptPromiseResolver* resolver = ScriptPromiseResolver::Create(script_state);
   PromiseResolverCallbacks* callbacks =
       PromiseResolverCallbacks::Create(resolver);
 
-  Document* document = ToDocument(ExecutionContext::From(script_state));
+  Document* document = To<Document>(ExecutionContext::From(script_state));
   UserMediaController* user_media =
       UserMediaController::From(document->GetFrame());
   if (!user_media)
     return ScriptPromise::RejectWithDOMException(
         script_state,
-        DOMException::Create(kNotSupportedError,
+        DOMException::Create(DOMExceptionCode::kNotSupportedError,
                              "No media device controller available; is this a "
                              "detached window?"));
 
   MediaErrorState error_state;
   UserMediaRequest* request = UserMediaRequest::Create(
-      document, user_media, options, callbacks, error_state);
+      document, user_media, media_type, options, callbacks, error_state);
   if (!request) {
     DCHECK(error_state.HadException());
     if (error_state.CanGenerateException()) {
       error_state.RaiseException(exception_state);
-      return exception_state.Reject(script_state);
+      return ScriptPromise();
     }
     ScriptPromise rejected_promise = resolver->Promise();
     resolver->Reject(error_state.CreateError());
@@ -137,15 +150,25 @@ ScriptPromise MediaDevices::getUserMedia(ScriptState* script_state,
   String error_message;
   if (!request->IsSecureContextUse(error_message)) {
     return ScriptPromise::RejectWithDOMException(
-        script_state, DOMException::Create(kNotSupportedError, error_message));
+        script_state, DOMException::Create(DOMExceptionCode::kNotSupportedError,
+                                           error_message));
   }
   auto promise = resolver->Promise();
   request->Start();
   return promise;
 }
 
+ScriptPromise MediaDevices::getDisplayMedia(
+    ScriptState* script_state,
+    const MediaStreamConstraints* options,
+    ExceptionState& exception_state) {
+  return SendUserMediaRequest(script_state,
+                              WebUserMediaRequest::MediaType::kDisplayMedia,
+                              options, exception_state);
+}
+
 const AtomicString& MediaDevices::InterfaceName() const {
-  return EventTargetNames::MediaDevices;
+  return event_target_names::kMediaDevices;
 }
 
 ExecutionContext* MediaDevices::GetExecutionContext() const {
@@ -203,11 +226,11 @@ void MediaDevices::Unpause() {
 void MediaDevices::OnDevicesChanged(
     MediaDeviceType type,
     Vector<mojom::blink::MediaDeviceInfoPtr> device_infos) {
-  Document* document = ToDocument(GetExecutionContext());
+  Document* document = To<Document>(GetExecutionContext());
   DCHECK(document);
 
   if (RuntimeEnabledFeatures::OnDeviceChangeEnabled())
-    ScheduleDispatchEvent(Event::Create(EventTypeNames::devicechange));
+    ScheduleDispatchEvent(Event::Create(event_type_names::kDevicechange));
 
   if (device_change_test_callback_)
     std::move(device_change_test_callback_).Run();
@@ -224,14 +247,14 @@ void MediaDevices::DispatchScheduledEvent() {
   events.swap(scheduled_events_);
 
   for (const auto& event : events)
-    DispatchEvent(event);
+    DispatchEvent(*event);
 }
 
 void MediaDevices::StartObserving() {
   if (binding_.is_bound() || stopped_)
     return;
 
-  Document* document = ToDocument(GetExecutionContext());
+  Document* document = To<Document>(GetExecutionContext());
   if (!document || !document->GetFrame())
     return;
 
@@ -268,20 +291,21 @@ void MediaDevices::DevicesEnumerated(
     return;
   }
 
-  DCHECK_EQ(static_cast<size_t>(MediaDeviceType::NUM_MEDIA_DEVICE_TYPES),
+  DCHECK_EQ(static_cast<wtf_size_t>(MediaDeviceType::NUM_MEDIA_DEVICE_TYPES),
             enumeration.size());
 
   if (!video_input_capabilities.IsEmpty()) {
     DCHECK_EQ(
-        enumeration[static_cast<size_t>(MediaDeviceType::MEDIA_VIDEO_INPUT)]
+        enumeration[static_cast<wtf_size_t>(MediaDeviceType::MEDIA_VIDEO_INPUT)]
             .size(),
         video_input_capabilities.size());
   }
 
   MediaDeviceInfoVector media_devices;
-  for (size_t i = 0;
-       i < static_cast<size_t>(MediaDeviceType::NUM_MEDIA_DEVICE_TYPES); ++i) {
-    for (size_t j = 0; j < enumeration[i].size(); ++j) {
+  for (wtf_size_t i = 0;
+       i < static_cast<wtf_size_t>(MediaDeviceType::NUM_MEDIA_DEVICE_TYPES);
+       ++i) {
+    for (wtf_size_t j = 0; j < enumeration[i].size(); ++j) {
       MediaDeviceType device_type = static_cast<MediaDeviceType>(i);
       mojom::blink::MediaDeviceInfoPtr device_info =
           std::move(enumeration[i][j]);
@@ -312,8 +336,8 @@ void MediaDevices::DevicesEnumerated(
 
 void MediaDevices::OnDispatcherHostConnectionError() {
   for (ScriptPromiseResolver* resolver : requests_) {
-    resolver->Reject(
-        DOMException::Create(kAbortError, "enumerateDevices() failed."));
+    resolver->Reject(DOMException::Create(DOMExceptionCode::kAbortError,
+                                          "enumerateDevices() failed."));
   }
   requests_.clear();
   dispatcher_host_.reset();

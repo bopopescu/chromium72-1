@@ -23,7 +23,7 @@
 #include "net/third_party/quic/test_tools/quic_crypto_server_config_peer.h"
 #include "net/third_party/quic/test_tools/quic_test_utils.h"
 
-namespace net {
+namespace quic {
 namespace test {
 namespace {
 
@@ -82,6 +82,7 @@ class StatelessRejectorTest : public QuicTestWithParam<TestParams> {
         config_(QuicCryptoServerConfig::TESTING,
                 QuicRandom::GetInstance(),
                 crypto_test_utils::ProofSourceForTesting(),
+                KeyExchangeSource::Default(),
                 TlsServerHandshaker::CreateSslCtx()),
         config_peer_(&config_),
         compressed_certs_cache_(
@@ -287,4 +288,4 @@ TEST_P(StatelessRejectorTest, AcceptChlo) {
 
 }  // namespace
 }  // namespace test
-}  // namespace net
+}  // namespace quic

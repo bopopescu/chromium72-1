@@ -4,10 +4,10 @@
 
 #include "third_party/blink/renderer/core/dom/static_range.h"
 
-#include "third_party/blink/renderer/bindings/core/v8/exception_state.h"
 #include "third_party/blink/renderer/core/dom/range.h"
 #include "third_party/blink/renderer/core/editing/ephemeral_range.h"
 #include "third_party/blink/renderer/core/frame/local_dom_window.h"
+#include "third_party/blink/renderer/platform/bindings/exception_state.h"
 #include "third_party/blink/renderer/platform/bindings/script_state.h"
 
 namespace blink {
@@ -33,11 +33,11 @@ StaticRange::StaticRange(Document& document,
 // static
 StaticRange* StaticRange::Create(const EphemeralRange& range) {
   DCHECK(!range.IsNull());
-  return new StaticRange(range.GetDocument(),
-                         range.StartPosition().ComputeContainerNode(),
-                         range.StartPosition().ComputeOffsetInContainerNode(),
-                         range.EndPosition().ComputeContainerNode(),
-                         range.EndPosition().ComputeOffsetInContainerNode());
+  return MakeGarbageCollected<StaticRange>(
+      range.GetDocument(), range.StartPosition().ComputeContainerNode(),
+      range.StartPosition().ComputeOffsetInContainerNode(),
+      range.EndPosition().ComputeContainerNode(),
+      range.EndPosition().ComputeOffsetInContainerNode());
 }
 
 void StaticRange::setStart(Node* container, unsigned offset) {

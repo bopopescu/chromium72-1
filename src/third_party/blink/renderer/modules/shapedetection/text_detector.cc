@@ -16,7 +16,7 @@
 namespace blink {
 
 TextDetector* TextDetector::Create(ExecutionContext* context) {
-  return new TextDetector(context);
+  return MakeGarbageCollected<TextDetector>(context);
 }
 
 TextDetector::TextDetector(ExecutionContext* context) : ShapeDetector() {
@@ -33,8 +33,9 @@ ScriptPromise TextDetector::DoDetect(ScriptPromiseResolver* resolver,
                                      SkBitmap bitmap) {
   ScriptPromise promise = resolver->Promise();
   if (!text_service_) {
-    resolver->Reject(DOMException::Create(
-        kNotSupportedError, "Text detection service unavailable."));
+    resolver->Reject(
+        DOMException::Create(DOMExceptionCode::kNotSupportedError,
+                             "Text detection service unavailable."));
     return promise;
   }
   text_service_requests_.insert(resolver);
@@ -54,17 +55,18 @@ void TextDetector::OnDetectText(
 
   HeapVector<Member<DetectedText>> detected_text;
   for (const auto& text : text_detection_results) {
-    HeapVector<Point2D> corner_points;
+    HeapVector<Member<Point2D>> corner_points;
     for (const auto& corner_point : text->corner_points) {
-      Point2D point;
-      point.setX(corner_point.x);
-      point.setY(corner_point.y);
+      Point2D* point = Point2D::Create();
+      point->setX(corner_point.x);
+      point->setY(corner_point.y);
       corner_points.push_back(point);
     }
     detected_text.push_back(DetectedText::Create(
         text->raw_value,
-        DOMRect::Create(text->bounding_box.x, text->bounding_box.y,
-                        text->bounding_box.width, text->bounding_box.height),
+        DOMRectReadOnly::Create(text->bounding_box.x, text->bounding_box.y,
+                                text->bounding_box.width,
+                                text->bounding_box.height),
         corner_points));
   }
 
@@ -73,7 +75,7 @@ void TextDetector::OnDetectText(
 
 void TextDetector::OnTextServiceConnectionError() {
   for (const auto& request : text_service_requests_) {
-    request->Reject(DOMException::Create(kNotSupportedError,
+    request->Reject(DOMException::Create(DOMExceptionCode::kNotSupportedError,
                                          "Text Detection not implemented."));
   }
   text_service_requests_.clear();

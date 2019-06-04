@@ -18,7 +18,7 @@ public:
     static const int kPathRefGenIDBitCnt = 32;
 #endif
 
-    enum FirstDirection {
+    enum FirstDirection : int {
         kCW_FirstDirection,         // == SkPath::kCW_Direction
         kCCW_FirstDirection,        // == SkPath::kCCW_Direction
         kUnknown_FirstDirection,
@@ -86,8 +86,9 @@ public:
         return false;
     }
 
-    static void AddGenIDChangeListener(const SkPath& path, SkPathRef::GenIDChangeListener* listener) {
-        path.fPathRef->addGenIDChangeListener(listener);
+    static void AddGenIDChangeListener(const SkPath& path,
+                                       sk_sp<SkPathRef::GenIDChangeListener> listener) {
+        path.fPathRef->addGenIDChangeListener(std::move(listener));
     }
 
     /**
@@ -258,6 +259,11 @@ public:
 
         SkASSERT(verb < SK_ARRAY_COUNT(gPtsInVerb));
         return gPtsInVerb[verb];
+    }
+
+    static bool IsAxisAligned(const SkPath& path) {
+        SkRect tmp;
+        return (path.fPathRef->fIsRRect | path.fPathRef->fIsOval) || path.isRect(&tmp);
     }
 };
 

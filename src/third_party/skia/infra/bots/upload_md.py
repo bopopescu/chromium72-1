@@ -33,12 +33,12 @@ def main():
   with git_utils.NewGitCheckout(repository=SKIA_REPO):
     with git_utils.GitBranch(branch_name='update_md_files',
                              commit_msg=COMMIT_MSG,
-                             commit_queue=True,
+                             commit_queue=False,
                              upload=False,
                              cc_list=CC_LIST) as git_branch:
       # Run bookmaker binary.
       cmd = [args.bookmaker_binary,
-             '-b', 'docs',
+             '-a', 'docs/status.json',
              '-f', args.fiddlecli_output,
              '-r', 'site/user/api',
              ]

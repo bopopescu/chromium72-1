@@ -22,6 +22,7 @@
 
 namespace blink {
 class WebAssociatedURLLoader;
+struct WebAssociatedURLLoaderOptions;
 }  // namespace blink
 
 namespace media {
@@ -70,6 +71,11 @@ class MEDIA_BLINK_EXPORT ResourceMultiBufferDataProvider
   // Callback used when we're asked to fetch data after the end of the file.
   void Terminate();
 
+  // At the end of Start(), we potentially wait for other loaders to
+  // finish, when they do a callback calls this function.
+  void StartLoading(std::unique_ptr<blink::WebURLRequest> request,
+                    const blink::WebAssociatedURLLoaderOptions& options);
+
   // Parse a Content-Range header into its component pieces and return true if
   // each of the expected elements was found & parsed correctly.
   // |*instance_size| may be set to kPositionNotSpecified if the range ends in
@@ -105,7 +111,7 @@ class MEDIA_BLINK_EXPORT ResourceMultiBufferDataProvider
 
   // Copy of url_data_->cors_mode()
   // const to make it obvious that redirects cannot change it.
-  const UrlData::CORSMode cors_mode_;
+  const UrlData::CorsMode cors_mode_;
 
   // The origin for the initial request.
   // const to make it obvious that redirects cannot change it.

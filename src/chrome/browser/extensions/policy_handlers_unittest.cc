@@ -96,15 +96,14 @@ TEST(ExtensionListPolicyHandlerTest, CheckPolicySettings) {
 }
 
 TEST(ExtensionSettingsPolicyHandlerTest, CheckPolicySettingsURL) {
-  std::vector<std::string> good_urls = {
-      "*://*.example.com", "*://example.com", "http://cat.example.com",
-      "https://example.*", "*://*.example.*", "<all_urls>"};
+  std::vector<std::string> good_urls = {"*://*.example.com", "*://example.com",
+                                        "http://cat.example.com", "<all_urls>"};
 
   // Invalid URLPattern or with a non-standard path
   std::vector<std::string> bad_urls = {
       "://*.example.com",       "*://example.com/cat*",  "*://example.com/",
       "*://*.example.com/*cat", "*://example.com/cat/*", "bad",
-      "*://example.com/*"};
+      "*://example.com/*",      "https://example.*",     "*://*.example.*"};
 
   // Crafts and parses a ExtensionSettings policy to test URL parsing.
   auto url_parses_successfully = [](const char* policy_template,
@@ -375,7 +374,7 @@ TEST(ExtensionSettingsPolicyHandlerTest, CheckPolicySettings) {
 TEST(ExtensionSettingsPolicyHandlerTest, ApplyPolicySettings) {
 // Mark as enterprise managed.
 #if defined(OS_WIN)
-  base::win::SetDomainStateForTesting(true);
+  base::win::ScopedDomainStateForTesting scoped_domain(true);
 #endif
 
   std::string error;
@@ -408,7 +407,7 @@ TEST(ExtensionSettingsPolicyHandlerTest, ApplyPolicySettings) {
 #if defined(OS_WIN)
 TEST(ExtensionSettingsPolicyHandlerTest, NonManagedOffWebstoreExtension) {
   // Mark as not enterprise managed.
-  base::win::SetDomainStateForTesting(false);
+  base::win::ScopedDomainStateForTesting scoped_domain(false);
 
   std::string error;
   std::unique_ptr<base::Value> policy_value =

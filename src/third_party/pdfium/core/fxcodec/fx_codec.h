@@ -11,7 +11,6 @@
 #include <memory>
 #include <tuple>
 #include <utility>
-#include <vector>
 
 #include "core/fxcodec/fx_codec_def.h"
 #include "core/fxcrt/fx_coordinates.h"
@@ -43,7 +42,7 @@ class CCodec_IccModule;
 class CCodec_Jbig2Module;
 class CCodec_JpegModule;
 class CCodec_JpxModule;
-class CFX_DIBSource;
+class CFX_DIBBase;
 class CJPX_Decoder;
 class CPDF_ColorSpace;
 class CPDF_StreamAcc;
@@ -59,12 +58,6 @@ class CFX_DIBAttribute {
 #ifdef PDF_ENABLE_XFA_BMP
   int32_t m_nBmpCompressType = 0;
 #endif  // PDF_ENABLE_XFA_BMP
-#ifdef PDF_ENABLE_XFA_GIF
-  int32_t m_nGifLeft = 0;
-  int32_t m_nGifTop = 0;
-  uint32_t* m_pGifLocalPalette = nullptr;
-  uint32_t m_nGifLocalPalNum = 0;
-#endif  // PDF_ENABLE_XFA_GIF
 
   int32_t m_nXDPI = -1;
   int32_t m_nYDPI = -1;
@@ -158,13 +151,6 @@ std::tuple<uint8_t, uint8_t, uint8_t> AdobeCMYK_to_sRGB1(uint8_t c,
                                                          uint8_t m,
                                                          uint8_t y,
                                                          uint8_t k);
-void FaxG4Decode(const uint8_t* src_buf,
-                 uint32_t src_size,
-                 int* pbitpos,
-                 uint8_t* dest_buf,
-                 int width,
-                 int height,
-                 int pitch);
 
 FX_SAFE_UINT32 CalculatePitch8(uint32_t bpc, uint32_t components, int width);
 FX_SAFE_UINT32 CalculatePitch32(int bpp, int width);

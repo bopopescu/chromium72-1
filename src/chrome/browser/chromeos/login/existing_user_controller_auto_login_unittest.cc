@@ -14,7 +14,7 @@
 #include "chrome/browser/chromeos/login/users/mock_user_manager.h"
 #include "chrome/browser/chromeos/policy/device_local_account.h"
 #include "chrome/browser/chromeos/settings/cros_settings.h"
-#include "chrome/browser/chromeos/settings/device_settings_test_helper.h"
+#include "chrome/browser/chromeos/settings/scoped_cros_settings_test_helper.h"
 #include "chrome/test/base/scoped_testing_local_state.h"
 #include "chrome/test/base/testing_browser_process.h"
 #include "chromeos/settings/cros_settings_names.h"
@@ -47,13 +47,15 @@ class ExistingUserControllerAutoLoginTest : public ::testing::Test {
         scoped_user_manager_(base::WrapUnique(mock_user_manager_)) {}
 
   void SetUp() override {
-    mock_login_display_host_.reset(new MockLoginDisplayHost);
-    mock_login_display_ = new MockLoginDisplay();
-    arc_kiosk_app_manager_.reset(new ArcKioskAppManager());
+    arc_kiosk_app_manager_ = std::make_unique<ArcKioskAppManager>();
+    existing_user_controller_ = std::make_unique<ExistingUserController>();
+    mock_login_display_ = std::make_unique<MockLoginDisplay>();
+    mock_login_display_host_ = std::make_unique<MockLoginDisplayHost>();
 
-    EXPECT_CALL(*mock_login_display_host_.get(), CreateLoginDisplay(_))
-        .Times(1)
-        .WillOnce(Return(mock_login_display_));
+    ON_CALL(*mock_login_display_host_, GetLoginDisplay())
+        .WillByDefault(Return(mock_login_display_.get()));
+    ON_CALL(*mock_login_display_host_, GetExistingUserController())
+        .WillByDefault(Return(existing_user_controller_.get()));
 
     EXPECT_CALL(*mock_user_manager_, Shutdown()).Times(AnyNumber());
     EXPECT_CALL(*mock_user_manager_, FindUser(_)).WillRepeatedly(ReturnNull());
@@ -61,8 +63,8 @@ class ExistingUserControllerAutoLoginTest : public ::testing::Test {
         .WillRepeatedly(Return(mock_user_manager_->CreatePublicAccountUser(
             auto_login_account_id_)));
 
-    existing_user_controller_.reset(
-        new ExistingUserController(mock_login_display_host_.get()));
+    settings_helper_.ReplaceDeviceSettingsProviderWithStub();
+    settings_helper_.SetFakeSessionManager();
 
     std::unique_ptr<base::DictionaryValue> account(new base::DictionaryValue);
     account->SetKey(kAccountsPrefDeviceLocalAccountsKeyId,
@@ -72,7 +74,7 @@ class ExistingUserControllerAutoLoginTest : public ::testing::Test {
         base::Value(policy::DeviceLocalAccount::TYPE_PUBLIC_SESSION));
     base::ListValue accounts;
     accounts.Append(std::move(account));
-    CrosSettings::Get()->Set(kAccountsPrefDeviceLocalAccounts, accounts);
+    settings_helper_.Set(kAccountsPrefDeviceLocalAccounts, accounts);
 
     // Prevent settings changes from auto-starting the timer.
     existing_user_controller_->local_account_auto_login_id_subscription_
@@ -81,19 +83,15 @@ class ExistingUserControllerAutoLoginTest : public ::testing::Test {
         .reset();
   }
 
-  const ExistingUserController* existing_user_controller() const {
-    return ExistingUserController::current_controller();
-  }
-
-  ExistingUserController* existing_user_controller() {
+  ExistingUserController* existing_user_controller() const {
     return ExistingUserController::current_controller();
   }
 
   void SetAutoLoginSettings(const std::string& user_id, int delay) {
-    CrosSettings::Get()->SetString(kAccountsPrefDeviceLocalAccountAutoLoginId,
-                                   user_id);
-    CrosSettings::Get()->SetInteger(
-        kAccountsPrefDeviceLocalAccountAutoLoginDelay, delay);
+    settings_helper_.SetString(kAccountsPrefDeviceLocalAccountAutoLoginId,
+                               user_id);
+    settings_helper_.SetInteger(kAccountsPrefDeviceLocalAccountAutoLoginDelay,
+                                delay);
   }
 
   // ExistingUserController private member accessors.
@@ -136,17 +134,13 @@ class ExistingUserControllerAutoLoginTest : public ::testing::Test {
           policy::DeviceLocalAccount::TYPE_PUBLIC_SESSION));
 
  private:
-  // |mock_login_display_| is owned by the ExistingUserController, which calls
-  // CreateLoginDisplay() on the |mock_login_display_host_| to get it.
-  MockLoginDisplay* mock_login_display_;
-
   std::unique_ptr<MockLoginDisplayHost> mock_login_display_host_;
+  std::unique_ptr<MockLoginDisplay> mock_login_display_;
   content::TestBrowserThreadBundle test_browser_thread_bundle_;
   ScopedTestingLocalState local_state_;
 
   // Required by ExistingUserController:
-  ScopedDeviceSettingsTestHelper device_settings_test_helper_;
-  ScopedTestCrosSettings test_cros_settings_;
+  ScopedCrosSettingsTestHelper settings_helper_;
   MockUserManager* mock_user_manager_;
   user_manager::ScopedUserManager scoped_user_manager_;
   std::unique_ptr<ArcKioskAppManager> arc_kiosk_app_manager_;

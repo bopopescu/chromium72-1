@@ -7,6 +7,7 @@
 #include "third_party/blink/renderer/core/paint/block_painter.h"
 #include "third_party/blink/renderer/core/paint/object_painter.h"
 #include "third_party/blink/renderer/core/paint/paint_info.h"
+#include "third_party/blink/renderer/core/paint/scoped_paint_state.h"
 #include "third_party/blink/renderer/core/paint/table_cell_painter.h"
 
 namespace blink {
@@ -333,9 +334,8 @@ static EBorderStyle CollapsedBorderStyle(EBorderStyle style) {
 }
 
 void CollapsedBorderPainter::PaintCollapsedBorders(
-    const PaintInfo& paint_info,
-    const LayoutPoint& paint_offset) {
-  if (cell_.Style()->Visibility() != EVisibility::kVisible)
+    const PaintInfo& paint_info) {
+  if (cell_.StyleRef().Visibility() != EVisibility::kVisible)
     return;
 
   if (!cell_.GetCollapsedBorderValues())
@@ -350,9 +350,10 @@ void CollapsedBorderPainter::PaintCollapsedBorders(
   // Now left=start_, right=end_, before_=top, after_=bottom.
 
   // Collapsed borders are half inside and half outside of |rect|.
+  ScopedPaintState paint_state(cell_, paint_info);
   IntRect rect = PixelSnappedIntRect(
       TableCellPainter(cell_).PaintRectNotIncludingVisualOverflow(
-          paint_offset + cell_.Location()));
+          paint_state.PaintOffset()));
   // |paint_rect| covers the whole collapsed borders.
   IntRect paint_rect = rect;
   paint_rect.Expand(IntRectOutsets(before_.outer_width, end_.outer_width,

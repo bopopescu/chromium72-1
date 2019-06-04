@@ -8,6 +8,10 @@
 #include "ui/gfx/native_widget_types.h"
 #include "ui/views/views_export.h"
 
+namespace ui {
+class LayerOwner;
+}
+
 namespace views {
 
 class NativeViewHost;
@@ -38,9 +42,9 @@ class NativeViewHostWrapper {
   // rooted at a valid Widget.
   virtual void RemovedFromWidget() = 0;
 
-  // Sets the corner radius for clipping gfx::NativeView. Returns true on
+  // Sets the custom mask for clipping gfx::NativeView. Returns true on
   // success or false if the platform doesn't support the operation.
-  virtual bool SetCornerRadius(int corner_radius) = 0;
+  virtual bool SetCustomMask(std::unique_ptr<ui::LayerOwner> mask) = 0;
 
   // Installs a clip on the gfx::NativeView. These values are in the coordinate
   // space of the Widget, so if this method is called from ShowWidget
@@ -74,6 +78,10 @@ class NativeViewHostWrapper {
   // Sets focus to the gfx::NativeView.
   virtual void SetFocus() = 0;
 
+  // Returns the container that contains the NativeViewHost's native view if
+  // any.
+  virtual gfx::NativeView GetNativeViewContainer() const = 0;
+
   // Return the native view accessible corresponding to the wrapped native
   // view.
   virtual gfx::NativeViewAccessible GetNativeViewAccessible() = 0;
@@ -81,6 +89,11 @@ class NativeViewHostWrapper {
   // Returns the native cursor corresponding to the point (x, y)
   // in the native view.
   virtual gfx::NativeCursor GetCursor(int x, int y) = 0;
+
+  // Sets the visibility of the gfx::NativeView. This differs from
+  // {Show,Hide}Widget because it doesn't affect the placement, size,
+  // or clipping of the view.
+  virtual void SetVisible(bool visible) = 0;
 
   // Creates a platform-specific instance of an object implementing this
   // interface.

@@ -88,8 +88,8 @@ class FakeSyncManager : public SyncManager {
   void StartConfiguration() override;
   void ConfigureSyncer(ConfigureReason reason,
                        ModelTypeSet to_download,
-                       const base::Closure& ready_task,
-                       const base::Closure& retry_task) override;
+                       SyncFeatureState sync_feature_state,
+                       const base::Closure& ready_task) override;
   void OnIncomingInvalidation(
       ModelType type,
       std::unique_ptr<InvalidationInterface> interface) override;
@@ -98,7 +98,7 @@ class FakeSyncManager : public SyncManager {
   void RemoveObserver(Observer* observer) override;
   SyncStatus GetDetailedStatus() const override;
   void SaveChanges() override;
-  void ShutdownOnSyncThread(ShutdownReason reason) override;
+  void ShutdownOnSyncThread() override;
   UserShare* GetUserShare() override;
   ModelTypeConnector* GetModelTypeConnector() override;
   std::unique_ptr<ModelTypeConnector> GetModelTypeConnectorProxy() override;
@@ -123,7 +123,7 @@ class FakeSyncManager : public SyncManager {
  private:
   scoped_refptr<base::SequencedTaskRunner> sync_task_runner_;
 
-  base::ObserverList<SyncManager::Observer> observers_;
+  base::ObserverList<SyncManager::Observer>::Unchecked observers_;
 
   // Faked directory state.
   ModelTypeSet initial_sync_ended_types_;

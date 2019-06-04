@@ -6,6 +6,7 @@
 
 #include <stdint.h>
 
+#include "ash/public/cpp/notification_utils.h"
 #include "ash/public/cpp/vector_icons/vector_icons.h"
 #include "base/bind.h"
 #include "base/macros.h"
@@ -99,7 +100,7 @@ LowDiskNotification::CreateNotification(Severity severity) {
   optional_fields.buttons.push_back(storage_settings);
 
   message_center::NotifierId notifier_id(
-      message_center::NotifierId::SYSTEM_COMPONENT, kNotifierLowDisk);
+      message_center::NotifierType::SYSTEM_COMPONENT, kNotifierLowDisk);
 
   auto on_click = base::BindRepeating([](base::Optional<int> button_index) {
     if (button_index) {
@@ -109,9 +110,9 @@ LowDiskNotification::CreateNotification(Severity severity) {
     }
   });
   std::unique_ptr<message_center::Notification> notification =
-      message_center::Notification::CreateSystemNotification(
+      ash::CreateSystemNotification(
           message_center::NOTIFICATION_TYPE_SIMPLE, kLowDiskId, title, message,
-          gfx::Image(), base::string16(), GURL(), notifier_id, optional_fields,
+          base::string16(), GURL(), notifier_id, optional_fields,
           new message_center::HandleNotificationClickDelegate(on_click),
           ash::kNotificationStorageFullIcon, warning_level);
 

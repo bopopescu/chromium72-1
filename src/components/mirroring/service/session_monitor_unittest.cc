@@ -24,6 +24,9 @@
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
+using mirroring::mojom::CastMessage;
+using mirroring::mojom::SessionError;
+
 namespace mirroring {
 
 namespace {
@@ -79,21 +82,23 @@ void VerifyWifiStatus(const base::Value& raw_value,
 
 }  // namespace
 
-class SessionMonitorTest : public CastMessageChannel, public ::testing::Test {
+class SessionMonitorTest : public mojom::CastMessageChannel,
+                           public ::testing::Test {
  public:
   SessionMonitorTest()
       : receiver_address_(media::cast::test::GetFreeLocalPort().address()),
-        message_dispatcher_(this, error_callback_.Get()) {}
+        binding_(this),
+        message_dispatcher_(CreateInterfacePtrAndBind(),
+                            mojo::MakeRequest(&inbound_channel_),
+                            error_callback_.Get()) {}
   ~SessionMonitorTest() override {}
 
  protected:
-  // CastMessageChannel implementation.
-  MOCK_METHOD1(Send, void(const CastMessage&));
+  // mojom::CastMessageChannel implementation.
+  MOCK_METHOD1(Send, void(mojom::CastMessagePtr));
 
   void CreateSessionMonitor(int max_bytes, std::string* expected_settings) {
     EXPECT_CALL(*this, Send(::testing::_)).Times(::testing::AtLeast(1));
-    auto wifi_status_monitor =
-        std::make_unique<WifiStatusMonitor>(123, &message_dispatcher_);
     network::mojom::URLLoaderFactoryPtr url_loader_factory;
     auto test_url_loader_factory =
         std::make_unique<network::TestURLLoaderFactory>();
@@ -111,7 +116,7 @@ class SessionMonitorTest : public CastMessageChannel, public ::testing::Test {
     session_tags.SetKey("shouldCaptureVideo", base::Value(true));
     session_monitor_ = std::make_unique<SessionMonitor>(
         max_bytes, receiver_address_, std::move(session_tags),
-        std::move(url_loader_factory), std::move(wifi_status_monitor));
+        std::move(url_loader_factory));
   }
 
   // Generates and sends |num_of_responses| WiFi status.
@@ -120,7 +125,7 @@ class SessionMonitorTest : public CastMessageChannel, public ::testing::Test {
                       int num_of_responses) {
     for (int i = 0; i < num_of_responses; ++i) {
       CastMessage message;
-      message.message_namespace = kWebRtcNamespace;
+      message.message_namespace = mojom::kWebRtcNamespace;
       message.json_format_data =
           "{\"seqNum\":" +
           std::to_string(message_dispatcher_.GetNextSeqNumber()) +
@@ -136,7 +141,7 @@ class SessionMonitorTest : public CastMessageChannel, public ::testing::Test {
           "],"
           "\"wifiFcsError\": [12, 13, 12, 12]}"  // This will be ignored.
           "}";
-      static_cast<CastMessageChannel*>(&message_dispatcher_)->Send(message);
+      inbound_channel_->Send(message.Clone());
       scoped_task_environment_.RunUntilIdle();
     }
   }
@@ -148,9 +153,11 @@ class SessionMonitorTest : public CastMessageChannel, public ::testing::Test {
         scoped_task_environment_.GetMainThreadTaskRunner(),
         scoped_task_environment_.GetMainThreadTaskRunner());
     EXPECT_TRUE(session_monitor_);
-    session_monitor_->StartStreamingSession(cast_environment_,
-                                            SessionMonitor::AUDIO_AND_VIDEO,
-                                            false /* is_remoting */);
+    auto wifi_status_monitor =
+        std::make_unique<WifiStatusMonitor>(&message_dispatcher_);
+    session_monitor_->StartStreamingSession(
+        cast_environment_, std::move(wifi_status_monitor),
+        SessionMonitor::AUDIO_AND_VIDEO, false /* is_remoting */);
     scoped_task_environment_.RunUntilIdle();
   }
 
@@ -206,8 +213,16 @@ class SessionMonitorTest : public CastMessageChannel, public ::testing::Test {
   }
 
  private:
+  mojom::CastMessageChannelPtr CreateInterfacePtrAndBind() {
+    mojom::CastMessageChannelPtr outbound_channel_ptr;
+    binding_.Bind(mojo::MakeRequest(&outbound_channel_ptr));
+    return outbound_channel_ptr;
+  }
+
   base::test::ScopedTaskEnvironment scoped_task_environment_;
   const net::IPAddress receiver_address_;
+  mojo::Binding<mojom::CastMessageChannel> binding_;
+  mojom::CastMessageChannelPtr inbound_channel_;
   base::MockCallback<MessageDispatcher::ErrorCallback> error_callback_;
   MessageDispatcher message_dispatcher_;
   network::TestURLLoaderFactory* url_loader_factory_ = nullptr;
@@ -220,8 +235,8 @@ class SessionMonitorTest : public CastMessageChannel, public ::testing::Test {
 TEST_F(SessionMonitorTest, ProvidesExpectedTags) {
   std::string expected_settings;
   CreateSessionMonitor(kRetentionBytes, &expected_settings);
-  SendWifiStatus(34, 2000, 5);
   StartStreamingSession();
+  SendWifiStatus(34, 2000, 5);
   std::vector<int32_t> bundle_sizes({kRetentionBytes});
   std::vector<SessionMonitor::EventsAndStats> bundles =
       AssembleBundleAndVerify(bundle_sizes);
@@ -271,11 +286,11 @@ TEST_F(SessionMonitorTest, ConfigureMaxRetentionBytes) {
   // 2500 is an estimate number of bytes for a snapshot that includes tags and
   // five WiFi status records.
   CreateSessionMonitor(2500, nullptr);
+  StartStreamingSession();
   SendWifiStatus(34, 2000, 5);
-  StartStreamingSession();
   StopStreamingSession();
-  SendWifiStatus(54, 3000, 5);
   StartStreamingSession();
+  SendWifiStatus(54, 3000, 5);
   StopStreamingSession();
   std::vector<int32_t> bundle_sizes({kRetentionBytes});
   std::vector<SessionMonitor::EventsAndStats> bundles =
@@ -289,11 +304,11 @@ TEST_F(SessionMonitorTest, ConfigureMaxRetentionBytes) {
 
 TEST_F(SessionMonitorTest, AssembleBundlesWithVaryingSizes) {
   CreateSessionMonitor(kRetentionBytes, nullptr);
+  StartStreamingSession();
   SendWifiStatus(34, 2000, 5);
-  StartStreamingSession();
   StopStreamingSession();
-  SendWifiStatus(54, 3000, 5);
   StartStreamingSession();
+  SendWifiStatus(54, 3000, 5);
   StopStreamingSession();
   std::vector<int32_t> bundle_sizes({2500, kRetentionBytes});
   std::vector<SessionMonitor::EventsAndStats> bundles =
@@ -318,8 +333,8 @@ TEST_F(SessionMonitorTest, ErrorTags) {
   CreateSessionMonitor(kRetentionBytes, nullptr);
   StartStreamingSession();
   TakeSnapshot();  // Take the first snapshot.
-  ReportError(VIDEO_CAPTURE_ERROR);
-  ReportError(RTP_STREAM_ERROR);
+  ReportError(SessionError::VIDEO_CAPTURE_ERROR);
+  ReportError(SessionError::RTP_STREAM_ERROR);
   TakeSnapshot();          // Take the second snapshot.
   StopStreamingSession();  // Take the third snapshot.
 

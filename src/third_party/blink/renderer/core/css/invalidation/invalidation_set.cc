@@ -69,10 +69,11 @@ bool InvalidationSet::InvalidatesElement(Element& element) const {
   if (invalidation_flags_.WholeSubtreeInvalid())
     return true;
 
-  if (tag_names_ && tag_names_->Contains(element.TagQName().LocalName())) {
+  if (tag_names_ &&
+      tag_names_->Contains(element.LocalNameForSelectorMatching())) {
     TRACE_STYLE_INVALIDATOR_INVALIDATION_SELECTORPART_IF_ENABLED(
         element, kInvalidationSetMatchedTagName, *this,
-        element.TagQName().LocalName());
+        element.LocalNameForSelectorMatching());
     return true;
   }
 
@@ -105,7 +106,7 @@ bool InvalidationSet::InvalidatesElement(Element& element) const {
     }
   }
 
-  if (element.HasPartName() && invalidation_flags_.InvalidatesParts()) {
+  if (element.HasPart() && invalidation_flags_.InvalidatesParts()) {
     TRACE_STYLE_INVALIDATOR_INVALIDATION_SELECTORPART_IF_ENABLED(
         element, kInvalidationSetMatchedPart, *this, "");
     return true;
@@ -115,10 +116,11 @@ bool InvalidationSet::InvalidatesElement(Element& element) const {
 }
 
 bool InvalidationSet::InvalidatesTagName(Element& element) const {
-  if (tag_names_ && tag_names_->Contains(element.TagQName().LocalName())) {
+  if (tag_names_ &&
+      tag_names_->Contains(element.LocalNameForSelectorMatching())) {
     TRACE_STYLE_INVALIDATOR_INVALIDATION_SELECTORPART_IF_ENABLED(
         element, kInvalidationSetMatchedTagName, *this,
-        element.TagQName().LocalName());
+        element.LocalNameForSelectorMatching());
     return true;
   }
 
@@ -291,10 +293,22 @@ scoped_refptr<DescendantInvalidationSet> CreateSelfInvalidationSet() {
   return new_set;
 }
 
+scoped_refptr<DescendantInvalidationSet> CreatePartInvalidationSet() {
+  auto new_set = DescendantInvalidationSet::Create();
+  new_set->SetInvalidatesParts();
+  new_set->SetTreeBoundaryCrossing();
+  return new_set;
+}
+
 }  // namespace
 
 InvalidationSet* InvalidationSet::SelfInvalidationSet() {
   DEFINE_STATIC_REF(InvalidationSet, singleton_, CreateSelfInvalidationSet());
+  return singleton_;
+}
+
+InvalidationSet* InvalidationSet::PartInvalidationSet() {
+  DEFINE_STATIC_REF(InvalidationSet, singleton_, CreatePartInvalidationSet());
   return singleton_;
 }
 

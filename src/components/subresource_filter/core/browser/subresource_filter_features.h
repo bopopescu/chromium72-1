@@ -13,10 +13,9 @@
 #include "base/macros.h"
 #include "base/memory/ref_counted.h"
 #include "base/strings/string_piece.h"
-#include "components/subresource_filter/core/common/activation_level.h"
 #include "components/subresource_filter/core/common/activation_list.h"
 #include "components/subresource_filter/core/common/activation_scope.h"
-#include "components/subresource_filter/core/common/activation_state.h"
+#include "components/subresource_filter/mojom/subresource_filter.mojom.h"
 
 namespace base {
 namespace trace_event {
@@ -64,11 +63,6 @@ struct Configuration {
     // otherwise satisfied. A greater value indicates higher priority.
     int priority = 0;
 
-    // This boolean is set to true for a navigation which has forced activation,
-    // despite other conditions not matching. It should never be possible to set
-    // this via variation params.
-    bool forced_activation = false;
-
     std::unique_ptr<base::trace_event::TracedValue> ToTracedValue() const;
   };
 
@@ -79,7 +73,7 @@ struct Configuration {
     // any RenderFrame. When set to DISABLED, this configuration will cause
     // subresource filtering to be de-activated for a navigation if this is the
     // highest priority configuration with its activation conditions met.
-    ActivationLevel activation_level = ActivationLevel::DISABLED;
+    mojom::ActivationLevel activation_level = mojom::ActivationLevel::kDisabled;
 
     // A number in the range [0, 1], indicating the fraction of page loads that
     // should have extended performance measurements enabled.
@@ -97,7 +91,7 @@ struct Configuration {
   // methods when adding new fields here!
 
   Configuration();
-  Configuration(ActivationLevel activation_level,
+  Configuration(mojom::ActivationLevel activation_level,
                 ActivationScope activation_scope,
                 ActivationList activation_list = ActivationList::NONE);
   Configuration(const Configuration&);
@@ -111,12 +105,12 @@ struct Configuration {
 
   std::unique_ptr<base::trace_event::TracedValue> ToTracedValue() const;
 
-  // Returns the ActivationState that page loads that match this configuration
-  // should activate with. |effective_activation_level| can be different from
-  // this config's activation level due to things like warning mode or client
-  // whitelisting.
-  ActivationState GetActivationState(
-      ActivationLevel effective_activation_level) const;
+  // Returns the mojom::ActivationState that page loads that match this
+  // configuration should activate with. |effective_activation_level| can be
+  // different from this config's activation level due to things like warning
+  // mode or client whitelisting.
+  mojom::ActivationState GetActivationState(
+      mojom::ActivationLevel effective_activation_level) const;
 
   // Factory methods for preset configurations.
   //
@@ -128,10 +122,6 @@ struct Configuration {
   static Configuration MakePresetForLiveRunOnPhishingSites();
   static Configuration MakePresetForPerformanceTestingDryRunOnAllSites();
   static Configuration MakePresetForLiveRunForBetterAds();
-
-  // Not really a preset, but used as the configuration for forcing activation
-  // (e.g. via devtools).
-  static Configuration MakeForForcedActivation();
 
   ActivationConditions activation_conditions;
   ActivationOptions activation_options;
@@ -191,8 +181,11 @@ scoped_refptr<ConfigurationList> GetAndSetActivateConfigurations(
 // The master toggle to enable/disable the Safe Browsing Subresource Filter.
 extern const base::Feature kSafeBrowsingSubresourceFilter;
 
-// Enables the new experimental UI for the Subresource Filter.
-extern const base::Feature kSafeBrowsingSubresourceFilterExperimentalUI;
+// Safe Browsing Activation Throttle considers all checks in a redirect chain.
+extern const base::Feature kSafeBrowsingSubresourceFilterConsiderRedirects;
+
+// Enables the blocking of ads on sites that are abusive.
+extern const base::Feature kFilterAdsOnAbusiveSites;
 
 // Name/values of the variation parameter controlling maximum activation level.
 extern const char kActivationLevelParameterName[];

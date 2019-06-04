@@ -10,18 +10,21 @@
 #include "base/bind_helpers.h"
 #include "media/base/audio_codecs.h"
 #include "media/base/decode_capabilities.h"
+#include "media/base/key_system_names.h"
 #include "media/base/mime_util.h"
 #include "media/base/video_codecs.h"
 #include "media/base/video_color_space.h"
+#include "media/blink/webcontentdecryptionmoduleaccess_impl.h"
 #include "media/filters/stream_parser_factory.h"
 #include "media/mojo/interfaces/media_types.mojom.h"
 #include "mojo/public/cpp/bindings/associated_interface_ptr.h"
 #include "services/service_manager/public/cpp/connector.h"
 #include "third_party/blink/public/platform/modules/media_capabilities/web_audio_configuration.h"
 #include "third_party/blink/public/platform/modules/media_capabilities/web_media_capabilities_info.h"
-#include "third_party/blink/public/platform/modules/media_capabilities/web_media_configuration.h"
+#include "third_party/blink/public/platform/modules/media_capabilities/web_media_decoding_configuration.h"
 #include "third_party/blink/public/platform/modules/media_capabilities/web_video_configuration.h"
 #include "third_party/blink/public/platform/platform.h"
+#include "third_party/blink/public/platform/scoped_web_callbacks.h"
 
 namespace media {
 
@@ -140,22 +143,32 @@ WebMediaCapabilitiesClientImpl::WebMediaCapabilitiesClientImpl() = default;
 
 WebMediaCapabilitiesClientImpl::~WebMediaCapabilitiesClientImpl() = default;
 
+namespace {
 void VideoPerfInfoCallback(
-    std::unique_ptr<blink::WebMediaCapabilitiesQueryCallbacks> callbacks,
-    std::unique_ptr<blink::WebMediaCapabilitiesInfo> info,
+    blink::ScopedWebCallbacks<blink::WebMediaCapabilitiesDecodingInfoCallbacks>
+        scoped_callbacks,
+    std::unique_ptr<blink::WebMediaCapabilitiesDecodingInfo> info,
     bool is_smooth,
     bool is_power_efficient) {
   DCHECK(info->supported);
   info->smooth = is_smooth;
   info->power_efficient = is_power_efficient;
-  callbacks->OnSuccess(std::move(info));
+  scoped_callbacks.PassCallbacks()->OnSuccess(std::move(info));
 }
 
+void OnGetPerfInfoError(
+    std::unique_ptr<blink::WebMediaCapabilitiesDecodingInfoCallbacks>
+        callbacks) {
+  callbacks->OnError();
+}
+}  // namespace
+
 void WebMediaCapabilitiesClientImpl::DecodingInfo(
-    const blink::WebMediaConfiguration& configuration,
-    std::unique_ptr<blink::WebMediaCapabilitiesQueryCallbacks> callbacks) {
-  std::unique_ptr<blink::WebMediaCapabilitiesInfo> info(
-      new blink::WebMediaCapabilitiesInfo());
+    const blink::WebMediaDecodingConfiguration& configuration,
+    std::unique_ptr<blink::WebMediaCapabilitiesDecodingInfoCallbacks>
+        callbacks) {
+  std::unique_ptr<blink::WebMediaCapabilitiesDecodingInfo> info(
+      new blink::WebMediaCapabilitiesDecodingInfo());
 
   // MSE support is cheap to check (regex matching). Do it first.
   if (configuration.type == blink::MediaConfigurationType::kMediaSource &&
@@ -196,6 +209,27 @@ void WebMediaCapabilitiesClientImpl::DecodingInfo(
     return;
   }
 
+  // TODO(907909): this is a mock implementation of Encrypted Media support to
+  // have a form of end-to-end implementation.
+  if (configuration.key_system_configuration.has_value()) {
+    auto key_system_configuration = configuration.key_system_configuration;
+
+    if (!media::IsClearKey(key_system_configuration->key_system.Utf8())) {
+      info->supported = info->smooth = info->power_efficient = false;
+      callbacks->OnSuccess(std::move(info));
+      return;
+    }
+
+    info->supported = info->smooth = info->power_efficient = true;
+    info->content_decryption_module_access =
+        base::WrapUnique(WebContentDecryptionModuleAccessImpl::Create(
+            key_system_configuration->key_system, blink::WebSecurityOrigin(),
+            blink::WebMediaKeySystemConfiguration(), {}, nullptr));
+
+    callbacks->OnSuccess(std::move(info));
+    return;
+  }
+
   // Video is supported! Check its performance history.
   info->supported = true;
 
@@ -209,8 +243,16 @@ void WebMediaCapabilitiesClientImpl::DecodingInfo(
 
   decode_history_ptr_->GetPerfInfo(
       std::move(features),
-      base::BindOnce(&VideoPerfInfoCallback, std::move(callbacks),
-                     std::move(info)));
+      base::BindOnce(
+          &VideoPerfInfoCallback,
+          blink::MakeScopedWebCallbacks(std::move(callbacks),
+                                        base::BindOnce(&OnGetPerfInfoError)),
+          std::move(info)));
+}
+
+void WebMediaCapabilitiesClientImpl::BindVideoDecodePerfHistoryForTests(
+    mojom::VideoDecodePerfHistoryPtr decode_history_ptr) {
+  decode_history_ptr_ = std::move(decode_history_ptr);
 }
 
 }  // namespace media

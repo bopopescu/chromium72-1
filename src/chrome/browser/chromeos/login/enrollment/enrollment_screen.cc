@@ -12,6 +12,7 @@
 #include "base/timer/elapsed_timer.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/browser_process_platform_part.h"
+#include "chrome/browser/chromeos/login/configuration_keys.h"
 #include "chrome/browser/chromeos/login/enrollment/enrollment_uma.h"
 #include "chrome/browser/chromeos/login/screen_manager.h"
 #include "chrome/browser/chromeos/login/screens/base_screen_delegate.h"
@@ -111,7 +112,8 @@ EnrollmentScreen::EnrollmentScreen(BaseScreenDelegate* base_screen_delegate,
 
 EnrollmentScreen::~EnrollmentScreen() {
   DCHECK(!enrollment_helper_ || g_browser_process->IsShuttingDown() ||
-         browser_shutdown::IsTryingToQuit());
+         browser_shutdown::IsTryingToQuit() ||
+         DBusThreadManager::Get()->IsUsingFakes());
 }
 
 void EnrollmentScreen::SetParameters(
@@ -143,13 +145,15 @@ void EnrollmentScreen::SetParameters(
 
 void EnrollmentScreen::SetConfig() {
   config_ = enrollment_config_;
-  if (current_auth_ == AUTH_OAUTH &&
-      enrollment_config_.mode ==
-          policy::EnrollmentConfig::MODE_ATTESTATION_SERVER_FORCED) {
-    config_.mode = policy::EnrollmentConfig::MODE_ATTESTATION_MANUAL_FALLBACK;
+  if (current_auth_ == AUTH_OAUTH && config_.is_mode_attestation_server()) {
+    config_.mode =
+        config_.mode ==
+                policy::EnrollmentConfig::MODE_ATTESTATION_INITIAL_SERVER_FORCED
+            ? policy::EnrollmentConfig::MODE_ATTESTATION_INITIAL_MANUAL_FALLBACK
+            : policy::EnrollmentConfig::MODE_ATTESTATION_MANUAL_FALLBACK;
   } else if (current_auth_ == AUTH_ATTESTATION &&
              !enrollment_config_.is_mode_attestation()) {
-    config_.mode = enrollment_config_.is_attestation_forced()
+    config_.mode = config_.is_attestation_forced()
                        ? policy::EnrollmentConfig::MODE_ATTESTATION_LOCAL_FORCED
                        : policy::EnrollmentConfig::MODE_ATTESTATION;
   }
@@ -190,6 +194,11 @@ void EnrollmentScreen::OnAuthCleared(const base::Closure& callback) {
 
 void EnrollmentScreen::Show() {
   UMA(policy::kMetricEnrollmentTriggered);
+  if (enrollment_config_.mode ==
+      policy::EnrollmentConfig::MODE_ENROLLED_ROLLBACK) {
+    RestoreAfterRollback();
+    return;
+  }
   switch (current_auth_) {
     case AUTH_OAUTH:
       ShowInteractiveScreen();
@@ -211,6 +220,15 @@ void EnrollmentScreen::ShowInteractiveScreen() {
 void EnrollmentScreen::Hide() {
   view_->Hide();
   weak_ptr_factory_.InvalidateWeakPtrs();
+}
+
+void EnrollmentScreen::RestoreAfterRollback() {
+  VLOG(1) << "Restoring after version rollback.";
+  elapsed_timer_.reset(new base::ElapsedTimer());
+  view_->Show();
+  view_->ShowEnrollmentSpinnerScreen();
+  CreateEnrollmentHelper();
+  enrollment_helper_->RestoreAfterRollback();
 }
 
 void EnrollmentScreen::AuthenticateUsingAttestation() {
@@ -265,18 +283,27 @@ void EnrollmentScreen::ProcessRetry() {
 }
 
 void EnrollmentScreen::OnCancel() {
+  if (enrollment_succeeded_) {
+    // Cancellation is the same to confirmation after the successful enrollment.
+    OnConfirmationClosed();
+    return;
+  }
+
+  // Record cancellation for that one enrollment mode.
+  UMA(policy::kMetricEnrollmentCancelled);
+
   if (AdvanceToNextAuth()) {
     Show();
     return;
   }
 
+  // Record the total time for all auth attempts until final cancellation.
+  if (elapsed_timer_)
+    UMA_ENROLLMENT_TIME(kMetricEnrollmentTimeCancel, elapsed_timer_);
+
   on_joined_callback_.Reset();
   if (authpolicy_login_helper_)
     authpolicy_login_helper_->CancelRequestsAndRestart();
-
-  UMA(policy::kMetricEnrollmentCancelled);
-  if (elapsed_timer_)
-    UMA_ENROLLMENT_TIME(kMetricEnrollmentTimeCancel, elapsed_timer_);
 
   const ScreenExitCode exit_code =
       config_.is_forced() ? ScreenExitCode::ENTERPRISE_ENROLLMENT_BACK
@@ -307,6 +334,22 @@ void EnrollmentScreen::OnAuthError(const GoogleServiceAuthError& error) {
 
 void EnrollmentScreen::OnMultipleLicensesAvailable(
     const EnrollmentLicenseMap& licenses) {
+  if (GetConfiguration()) {
+    auto* license_type_value = GetConfiguration()->FindKeyOfType(
+        configuration::kEnrollmentLicenseType, base::Value::Type::STRING);
+    if (license_type_value) {
+      const std::string& license_type = license_type_value->GetString();
+      for (const auto& it : licenses) {
+        if (license_type == GetLicenseIdByType(it.first) && it.second > 0) {
+          VLOG(1) << "Using License type from configuration " << license_type;
+          OnLicenseTypeSelected(license_type);
+          return;
+        }
+      }
+      VLOG(1) << "No licenses for License type from configuration "
+              << license_type;
+    }
+  }
   base::DictionaryValue license_dict;
   for (const auto& it : licenses)
     license_dict.SetInteger(GetLicenseIdByType(it.first), it.second);
@@ -319,13 +362,17 @@ void EnrollmentScreen::OnEnrollmentError(policy::EnrollmentStatus status) {
   // based enrollment and we have a fallback authentication, show it.
   if (status.status() == policy::EnrollmentStatus::REGISTRATION_FAILED &&
       status.client_status() == policy::DM_STATUS_SERVICE_DEVICE_NOT_FOUND &&
-      current_auth_ == AUTH_ATTESTATION && AdvanceToNextAuth()) {
-    Show();
-  } else {
-    view_->ShowEnrollmentStatus(status);
-    if (WizardController::UsingHandsOffEnrollment())
-      AutomaticRetry();
+      current_auth_ == AUTH_ATTESTATION) {
+    UMA(policy::kMetricEnrollmentDeviceNotPreProvisioned);
+    if (AdvanceToNextAuth()) {
+      Show();
+      return;
+    }
   }
+
+  view_->ShowEnrollmentStatus(status);
+  if (WizardController::UsingHandsOffEnrollment())
+    AutomaticRetry();
 }
 
 void EnrollmentScreen::OnOtherError(
@@ -337,6 +384,7 @@ void EnrollmentScreen::OnOtherError(
 }
 
 void EnrollmentScreen::OnDeviceEnrolled(const std::string& additional_token) {
+  enrollment_succeeded_ = true;
   if (!additional_token.empty())
     SendEnrollmentAuthToken(additional_token);
 
@@ -375,6 +423,12 @@ void EnrollmentScreen::OnDeviceAttributeUpdatePermission(bool granted) {
   }
 }
 
+void EnrollmentScreen::OnRestoreAfterRollbackCompleted() {
+  StartupUtils::MarkDeviceRegistered(
+      base::BindOnce(&EnrollmentScreen::ShowEnrollmentStatusOnSuccess,
+                     weak_ptr_factory_.GetWeakPtr()));
+}
+
 void EnrollmentScreen::OnDeviceAttributeUploadCompleted(bool success) {
   if (success) {
     // If the device attributes have been successfully uploaded, fetch policy.
@@ -395,12 +449,45 @@ void EnrollmentScreen::ShowAttributePromptScreen() {
   policy::DeviceCloudPolicyManagerChromeOS* policy_manager =
       connector->GetDeviceCloudPolicyManager();
 
+  std::string asset_id;
+  std::string location;
+
+  if (GetConfiguration()) {
+    auto* asset_id_value = GetConfiguration()->FindKeyOfType(
+        configuration::kEnrollmentAssetId, base::Value::Type::STRING);
+    if (asset_id_value) {
+      VLOG(1) << "Using Asset ID from configuration "
+              << asset_id_value->GetString();
+      asset_id = asset_id_value->GetString();
+    }
+    auto* location_value = GetConfiguration()->FindKeyOfType(
+        configuration::kEnrollmentLocation, base::Value::Type::STRING);
+    if (location_value) {
+      VLOG(1) << "Using Location from configuration "
+              << location_value->GetString();
+      location = location_value->GetString();
+    }
+  }
+
   policy::CloudPolicyStore* store = policy_manager->core()->store();
 
   const enterprise_management::PolicyData* policy = store->policy();
 
-  std::string asset_id = policy ? policy->annotated_asset_id() : std::string();
-  std::string location = policy ? policy->annotated_location() : std::string();
+  if (policy) {
+    asset_id = policy->annotated_asset_id();
+    location = policy->annotated_location();
+  }
+
+  if (GetConfiguration()) {
+    auto* auto_attributes = GetConfiguration()->FindKeyOfType(
+        configuration::kEnrollmentAutoAttributes, base::Value::Type::BOOLEAN);
+    if (auto_attributes && auto_attributes->GetBool()) {
+      VLOG(1) << "Automatically accept attributes";
+      OnDeviceAttributeProvided(asset_id, location);
+      return;
+    }
+  }
+
   view_->ShowAttributePromptScreen(asset_id, location);
 }
 
@@ -414,7 +501,9 @@ void EnrollmentScreen::ShowEnrollmentStatusOnSuccess() {
   if (elapsed_timer_)
     UMA_ENROLLMENT_TIME(kMetricEnrollmentTimeSuccess, elapsed_timer_);
   if (WizardController::UsingHandsOffEnrollment() ||
-      WizardController::skip_enrollment_prompts()) {
+      WizardController::skip_enrollment_prompts() ||
+      enrollment_config_.mode ==
+          policy::EnrollmentConfig::MODE_ENROLLED_ROLLBACK) {
     OnConfirmationClosed();
   } else {
     view_->ShowEnrollmentStatus(
@@ -433,19 +522,21 @@ void EnrollmentScreen::ShowSigninScreen() {
 
 void EnrollmentScreen::RecordEnrollmentErrorMetrics() {
   enrollment_failed_once_ = true;
-  //  TODO(drcrash): Maybe create multiple metrics (http://crbug.com/640313)?
-  if (elapsed_timer_)
+  //  TODO(crbug.com/896793): Have other metrics for each auth mechanism.
+  if (elapsed_timer_ && current_auth_ == last_auth_)
     UMA_ENROLLMENT_TIME(kMetricEnrollmentTimeFailure, elapsed_timer_);
 }
 
 void EnrollmentScreen::JoinDomain(const std::string& dm_token,
+                                  const std::string& domain_join_config,
                                   OnDomainJoinedCallback on_joined_callback) {
   if (!authpolicy_login_helper_)
     authpolicy_login_helper_ = std::make_unique<AuthPolicyLoginHelper>();
   authpolicy_login_helper_->set_dm_token(dm_token);
   on_joined_callback_ = std::move(on_joined_callback);
-  view_->ShowActiveDirectoryScreen(std::string(), std::string(),
-                                   authpolicy::ERROR_NONE);
+  view_->ShowActiveDirectoryScreen(
+      domain_join_config, std::string() /* machine_name */,
+      std::string() /* username */, authpolicy::ERROR_NONE);
 }
 
 void EnrollmentScreen::OnActiveDirectoryJoined(
@@ -458,7 +549,8 @@ void EnrollmentScreen::OnActiveDirectoryJoined(
     std::move(on_joined_callback_).Run(machine_domain);
     return;
   }
-  view_->ShowActiveDirectoryScreen(machine_name, username, error);
+  view_->ShowActiveDirectoryScreen(std::string() /* domain_join_config */,
+                                   machine_name, username, error);
 }
 
 }  // namespace chromeos

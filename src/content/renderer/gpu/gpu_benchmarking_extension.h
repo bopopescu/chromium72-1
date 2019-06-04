@@ -80,6 +80,7 @@ class GpuBenchmarking : public gin::Wrappable<GpuBenchmarking> {
   bool SendMessageToMicroBenchmark(int id, v8::Local<v8::Object> message);
   bool HasGpuChannel();
   bool HasGpuProcess();
+  void CrashGpuProcess();
   void GetGpuDriverBugWorkarounds(gin::Arguments* args);
 
   // Starts/stops the sampling profiler. StartProfiling takes one optional
@@ -90,6 +91,9 @@ class GpuBenchmarking : public gin::Wrappable<GpuBenchmarking> {
   // hard drives with profile data.
   void StartProfiling(gin::Arguments* args);
   void StopProfiling();
+
+  // Freezes a page, used to transition the page to the FROZEN lifecycle state.
+  void Freeze();
 
   RenderFrameImpl* render_frame_;
   mojom::InputInjectorPtr input_injector_;

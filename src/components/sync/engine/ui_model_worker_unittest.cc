@@ -27,13 +27,13 @@ SyncerError DoWork(
     base::Closure work) {
   DCHECK(thread_verifier->BelongsToCurrentThread());
   work.Run();
-  return SYNCER_OK;
+  return SyncerError(SyncerError::SYNCER_OK);
 }
 
 // Converts |work| to a WorkCallback that will verify that it's run on the
 // thread it was constructed on.
 WorkCallback ClosureToWorkCallback(base::Closure work) {
-  return base::Bind(&DoWork, base::ThreadTaskRunnerHandle::Get(), work);
+  return base::BindOnce(&DoWork, base::ThreadTaskRunnerHandle::Get(), work);
 }
 
 // Increments |counter|.

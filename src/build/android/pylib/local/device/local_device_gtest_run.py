@@ -51,11 +51,13 @@ _SECONDS_TO_NANOS = int(1e9)
 # The amount of time a test executable may run before it gets killed.
 _TEST_TIMEOUT_SECONDS = 30*60
 
+# Tests that use SpawnedTestServer must run the LocalTestServerSpawner on the
+# host machine.
 # TODO(jbudorick): Move this up to the test instance if the net test server is
 # handled outside of the APK for the remote_device environment.
 _SUITE_REQUIRES_TEST_SERVER_SPAWNER = [
   'components_browsertests', 'content_unittests', 'content_browsertests',
-  'net_unittests', 'unit_tests'
+  'net_unittests', 'services_unittests', 'unit_tests'
 ]
 
 # No-op context manager. If we used Python 3, we could change this to
@@ -150,6 +152,7 @@ class _ApkDelegate(object):
       extras[gtest_test_instance.EXTRA_SHARD_NANO_TIMEOUT] = int(
           kwargs['timeout'] * _SECONDS_TO_NANOS)
 
+    # pylint: disable=redefined-variable-type
     command_line_file = _NullContextManager()
     if flags:
       if len(flags) > _MAX_INLINE_FLAGS_LENGTH:
@@ -167,6 +170,7 @@ class _ApkDelegate(object):
         extras[_EXTRA_TEST_LIST] = test_list_file.name
       else:
         extras[_EXTRA_TEST] = test[0]
+    # pylint: enable=redefined-variable-type
 
     stdout_file = device_temp_file.DeviceTempFile(
         device.adb, dir=device.GetExternalStoragePath(), suffix='.gtest_out')
@@ -281,11 +285,13 @@ class LocalDeviceGtestRun(local_device_test_run.LocalDeviceTestRun):
     assert isinstance(test_instance, gtest_test_instance.GtestTestInstance)
     super(LocalDeviceGtestRun, self).__init__(env, test_instance)
 
+    # pylint: disable=redefined-variable-type
     if self._test_instance.apk:
       self._delegate = _ApkDelegate(self._test_instance, env.tool)
     elif self._test_instance.exe_dist_dir:
       self._delegate = _ExeDelegate(self, self._test_instance.exe_dist_dir,
                                     self._env.tool)
+    # pylint: enable=redefined-variable-type
     self._crashes = set()
     self._servers = collections.defaultdict(list)
 
@@ -311,7 +317,11 @@ class LocalDeviceGtestRun(local_device_test_run.LocalDeviceTestRun):
             for h, d in host_device_tuples]
         dev.PushChangedFiles(
             host_device_tuples_substituted,
-            delete_device_stale=True)
+            delete_device_stale=True,
+            # Some gtest suites, e.g. unit_tests, have data dependencies that
+            # can take longer than the default timeout to push. See
+            # crbug.com/791632 for context.
+            timeout=600)
         if not host_device_tuples:
           dev.RemovePath(device_root, force=True, recursive=True, rename=True)
           dev.RunShellCommand(['mkdir', '-p', device_root], check_return=True)
@@ -593,6 +603,14 @@ class LocalDeviceGtestRun(local_device_test_run.LocalDeviceTestRun):
 
   #override
   def TearDown(self):
+    # By default, teardown will invoke ADB. When receiving SIGTERM due to a
+    # timeout, there's a high probability that ADB is non-responsive. In these
+    # cases, sending an ADB command will potentially take a long time to time
+    # out. Before this happens, the process will be hard-killed for not
+    # responding to SIGTERM fast enough.
+    if self._received_sigterm:
+      return
+
     @local_device_environment.handle_shard_failures
     @trace_event.traced
     def individual_device_tear_down(dev):

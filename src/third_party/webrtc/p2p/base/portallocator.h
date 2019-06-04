@@ -20,15 +20,15 @@
 #include "p2p/base/portinterface.h"
 #include "rtc_base/helpers.h"
 #include "rtc_base/proxyinfo.h"
-#include "rtc_base/sigslot.h"
 #include "rtc_base/sslcertificate.h"
+#include "rtc_base/system/rtc_export.h"
+#include "rtc_base/third_party/sigslot/sigslot.h"
 #include "rtc_base/thread.h"
 #include "rtc_base/thread_checker.h"
 
 namespace webrtc {
-class MetricsObserverInterface;
 class TurnCustomizer;
-}
+}  // namespace webrtc
 
 namespace cricket {
 
@@ -147,7 +147,7 @@ struct RelayCredentials {
 
 typedef std::vector<ProtocolAddress> PortList;
 // TODO(deadbeef): Rename to TurnServerConfig.
-struct RelayServerConfig {
+struct RTC_EXPORT RelayServerConfig {
   explicit RelayServerConfig(RelayType type);
   RelayServerConfig(const rtc::SocketAddress& address,
                     const std::string& username,
@@ -184,7 +184,7 @@ struct RelayServerConfig {
   rtc::SSLCertificateVerifier* tls_cert_verifier = nullptr;
 };
 
-class PortAllocatorSession : public sigslot::has_slots<> {
+class RTC_EXPORT PortAllocatorSession : public sigslot::has_slots<> {
  public:
   // Content name passed in mostly for logging and debugging.
   PortAllocatorSession(const std::string& content_name,
@@ -202,7 +202,7 @@ class PortAllocatorSession : public sigslot::has_slots<> {
   int component() const { return component_; }
   const std::string& ice_ufrag() const { return ice_ufrag_; }
   const std::string& ice_pwd() const { return ice_pwd_; }
-  bool pooled() const { return ice_ufrag_.empty(); }
+  bool pooled() const { return pooled_; }
 
   // Setting this filter should affect not only candidates gathered in the
   // future, but candidates already gathered and ports already "ready",
@@ -250,7 +250,7 @@ class PortAllocatorSession : public sigslot::has_slots<> {
   // The default value of the interval in implementation is restored if a null
   // optional value is passed.
   virtual void SetStunKeepaliveIntervalForReadyPorts(
-      const rtc::Optional<int>& stun_keepalive_interval) {}
+      const absl::optional<int>& stun_keepalive_interval) {}
   // Another way of getting the information provided by the signals below.
   //
   // Ports and candidates are not guaranteed to be in the same order as the
@@ -269,8 +269,8 @@ class PortAllocatorSession : public sigslot::has_slots<> {
   // ready(pairable).
   sigslot::signal2<PortAllocatorSession*, const std::vector<PortInterface*>&>
       SignalPortsPruned;
-  sigslot::signal2<PortAllocatorSession*,
-                   const std::vector<Candidate>&> SignalCandidatesReady;
+  sigslot::signal2<PortAllocatorSession*, const std::vector<Candidate>&>
+      SignalCandidatesReady;
   // Candidates should be signaled to be removed when the port that generated
   // the candidates is removed.
   sigslot::signal2<PortAllocatorSession*, const std::vector<Candidate>&>
@@ -310,12 +310,16 @@ class PortAllocatorSession : public sigslot::has_slots<> {
     UpdateIceParametersInternal();
   }
 
+  void set_pooled(bool value) { pooled_ = value; }
+
   uint32_t flags_;
   uint32_t generation_;
   std::string content_name_;
   int component_;
   std::string ice_ufrag_;
   std::string ice_pwd_;
+
+  bool pooled_ = false;
 
   // SetIceParameters is an implementation detail which only PortAllocator
   // should be able to call.
@@ -327,7 +331,7 @@ class PortAllocatorSession : public sigslot::has_slots<> {
 //
 // This allows a PortAllocator subclass to be constructed and configured on one
 // thread, and passed into an object that uses it on a different thread.
-class PortAllocator : public sigslot::has_slots<> {
+class RTC_EXPORT PortAllocator : public sigslot::has_slots<> {
  public:
   PortAllocator();
   ~PortAllocator() override;
@@ -335,6 +339,11 @@ class PortAllocator : public sigslot::has_slots<> {
   // This MUST be called on the PortAllocator's thread after finishing
   // constructing and configuring the PortAllocator subclasses.
   virtual void Initialize();
+
+  // Set to true if some Ports need to know the ICE credentials when they are
+  // created. This will ensure that the PortAllocator will only match pooled
+  // allocator sessions to the ICE transport with the same credentials.
+  virtual void set_restrict_ice_credentials_change(bool value);
 
   // Set STUN and TURN servers to be used in future sessions, and set
   // candidate pool size, as described in JSEP.
@@ -353,8 +362,8 @@ class PortAllocator : public sigslot::has_slots<> {
                         int candidate_pool_size,
                         bool prune_turn_ports,
                         webrtc::TurnCustomizer* turn_customizer = nullptr,
-                        const rtc::Optional<int>&
-                            stun_candidate_keepalive_interval = rtc::nullopt);
+                        const absl::optional<int>&
+                            stun_candidate_keepalive_interval = absl::nullopt);
 
   const ServerAddresses& stun_servers() const {
     CheckRunOnValidThreadIfInitialized();
@@ -371,7 +380,7 @@ class PortAllocator : public sigslot::has_slots<> {
     return candidate_pool_size_;
   }
 
-  const rtc::Optional<int>& stun_candidate_keepalive_interval() const {
+  const absl::optional<int>& stun_candidate_keepalive_interval() const {
     CheckRunOnValidThreadIfInitialized();
     return stun_candidate_keepalive_interval_;
   }
@@ -393,6 +402,8 @@ class PortAllocator : public sigslot::has_slots<> {
   //
   // Caller takes ownership of the returned session.
   //
+  // If restrict_ice_credentials_change is TRUE, then it will only
+  //   return a pooled session with matching ice credentials.
   // If no pooled sessions are available, returns null.
   std::unique_ptr<PortAllocatorSession> TakePooledSession(
       const std::string& content_name,
@@ -400,8 +411,10 @@ class PortAllocator : public sigslot::has_slots<> {
       const std::string& ice_ufrag,
       const std::string& ice_pwd);
 
-  // Returns the next session that would be returned by TakePooledSession.
-  const PortAllocatorSession* GetPooledSession() const;
+  // Returns the next session that would be returned by TakePooledSession
+  // optionally restricting it to sessions with specified ice credentials.
+  const PortAllocatorSession* GetPooledSession(
+      const IceParameters* ice_credentials = nullptr) const;
 
   // After FreezeCandidatePool is called, changing the candidate pool size will
   // no longer be allowed, and changing ICE servers will not cause pooled
@@ -536,11 +549,6 @@ class PortAllocator : public sigslot::has_slots<> {
     origin_ = origin;
   }
 
-  void SetMetricsObserver(webrtc::MetricsObserverInterface* observer) {
-    CheckRunOnValidThreadIfInitialized();
-    metrics_observer_ = observer;
-  }
-
   webrtc::TurnCustomizer* turn_customizer() {
     CheckRunOnValidThreadIfInitialized();
     return turn_customizer_;
@@ -554,6 +562,9 @@ class PortAllocator : public sigslot::has_slots<> {
   virtual void GetCandidateStatsFromPooledSessions(
       CandidateStatsList* candidate_stats_list);
 
+  // Return IceParameters of the pooled sessions.
+  std::vector<IceParameters> GetPooledIceCredentials();
+
  protected:
   virtual PortAllocatorSession* CreateSessionInternal(
       const std::string& content_name,
@@ -561,11 +572,7 @@ class PortAllocator : public sigslot::has_slots<> {
       const std::string& ice_ufrag,
       const std::string& ice_pwd) = 0;
 
-  webrtc::MetricsObserverInterface* metrics_observer() {
-    return metrics_observer_;
-  }
-
-  const std::deque<std::unique_ptr<PortAllocatorSession>>& pooled_sessions() {
+  const std::vector<std::unique_ptr<PortAllocatorSession>>& pooled_sessions() {
     return pooled_sessions_;
   }
 
@@ -596,18 +603,25 @@ class PortAllocator : public sigslot::has_slots<> {
   ServerAddresses stun_servers_;
   std::vector<RelayServerConfig> turn_servers_;
   int candidate_pool_size_ = 0;  // Last value passed into SetConfiguration.
-  std::deque<std::unique_ptr<PortAllocatorSession>> pooled_sessions_;
+  std::vector<std::unique_ptr<PortAllocatorSession>> pooled_sessions_;
   bool candidate_pool_frozen_ = false;
   bool prune_turn_ports_ = false;
-
-  webrtc::MetricsObserverInterface* metrics_observer_ = nullptr;
 
   // Customizer for TURN messages.
   // The instance is owned by application and will be shared among
   // all TurnPort(s) created.
   webrtc::TurnCustomizer* turn_customizer_ = nullptr;
 
-  rtc::Optional<int> stun_candidate_keepalive_interval_;
+  absl::optional<int> stun_candidate_keepalive_interval_;
+
+  // If true, TakePooledSession() will only return sessions that has same ice
+  // credentials as requested.
+  bool restrict_ice_credentials_change_ = false;
+
+  // Returns iterator to pooled session with specified ice_credentials or first
+  // if ice_credentials is nullptr.
+  std::vector<std::unique_ptr<PortAllocatorSession>>::const_iterator
+  FindPooledSession(const IceParameters* ice_credentials = nullptr) const;
 };
 
 }  // namespace cricket

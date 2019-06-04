@@ -20,7 +20,7 @@
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
-#include "base/task_scheduler/post_task.h"
+#include "base/task/post_task.h"
 #include "base/time/time.h"
 #include "base/values.h"
 #include "build/build_config.h"
@@ -30,14 +30,14 @@
 #include "chrome/browser/ui/browser_commands.h"
 #include "chrome/browser/ui/browser_finder.h"
 #include "chrome/browser/ui/chrome_pages.h"
-#include "chrome/browser/upgrade_detector.h"
+#include "chrome/browser/upgrade_detector/upgrade_detector.h"
 #include "chrome/common/channel_info.h"
 #include "chrome/common/chrome_content_client.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/common/url_constants.h"
 #include "chrome/grit/chromium_strings.h"
 #include "chrome/grit/generated_resources.h"
-#include "components/google/core/browser/google_util.h"
+#include "components/google/core/common/google_util.h"
 #include "components/policy/core/common/policy_namespace.h"
 #include "components/policy/policy_constants.h"
 #include "components/strings/grit/components_chromium_strings.h"
@@ -53,7 +53,7 @@
 
 #if defined(OS_CHROMEOS)
 #include "base/i18n/time_formatting.h"
-#include "base/sys_info.h"
+#include "base/system/sys_info.h"
 #include "chrome/browser/chromeos/ownership/owner_settings_service_chromeos.h"
 #include "chrome/browser/chromeos/ownership/owner_settings_service_chromeos_factory.h"
 #include "chrome/browser/chromeos/policy/browser_policy_connector_chromeos.h"
@@ -66,6 +66,7 @@
 #include "chrome/browser/ui/webui/help/version_updater_chromeos.h"
 #include "chromeos/chromeos_switches.h"
 #include "chromeos/dbus/power_manager_client.h"
+#include "chromeos/dbus/util/version_loader.h"
 #include "chromeos/network/network_state.h"
 #include "chromeos/network/network_state_handler.h"
 #include "chromeos/system/statistics_provider.h"
@@ -94,6 +95,13 @@ struct RegulatoryLabel {
   const std::string label_text;
   const std::string image_url;
 };
+
+bool ShouldShowSafetyInfo() {
+  const std::vector<std::string> board =
+      base::SplitString(base::SysInfo::GetLsbReleaseBoard(), "-",
+                        base::TRIM_WHITESPACE, base::SPLIT_WANT_NONEMPTY);
+  return board[0] == "nocturne";
+}
 
 // Returns message that informs user that for update it's better to
 // connect to a network of one of the allowed types.
@@ -283,11 +291,9 @@ AboutHandler* AboutHandler::Create(content::WebUIDataSource* html_source,
                                         ? IDS_VERSION_UI_OFFICIAL
                                         : IDS_VERSION_UI_UNOFFICIAL),
           base::UTF8ToUTF16(chrome::GetChannelName()),
-#if defined(ARCH_CPU_64_BITS)
-          l10n_util::GetStringUTF16(IDS_VERSION_UI_64BIT)));
-#else
-          l10n_util::GetStringUTF16(IDS_VERSION_UI_32BIT)));
-#endif
+          l10n_util::GetStringUTF16(sizeof(void*) == 8
+                                        ? IDS_VERSION_UI_64BIT
+                                        : IDS_VERSION_UI_32BIT)));
 
   html_source->AddString(
       "aboutProductCopyright",
@@ -317,10 +323,25 @@ AboutHandler* AboutHandler::Create(content::WebUIDataSource* html_source,
 #endif
 
 #if defined(OS_CHROMEOS)
+  html_source->AddBoolean("shouldShowSafetyInfo", ShouldShowSafetyInfo());
+#if defined(GOOGLE_CHROME_BUILD)
+  html_source->AddString(
+      "aboutProductSafety",
+      l10n_util::GetStringUTF16(IDS_ABOUT_SAFETY_INFORMATION));
+  html_source->AddString("aboutProductSafetyURL",
+                         base::UTF8ToUTF16(chrome::kChromeUISafetyURL));
+#endif
+
   base::string16 os_license = l10n_util::GetStringFUTF16(
       IDS_ABOUT_CROS_VERSION_LICENSE,
       base::ASCIIToUTF16(chrome::kChromeUIOSCreditsURL));
   html_source->AddString("aboutProductOsLicense", os_license);
+  base::string16 os_with_linux_license = l10n_util::GetStringFUTF16(
+      IDS_ABOUT_CROS_WITH_LINUX_VERSION_LICENSE,
+      base::ASCIIToUTF16(chrome::kChromeUIOSCreditsURL),
+      base::ASCIIToUTF16(chrome::kChromeUILinuxCreditsURL));
+  html_source->AddString("aboutProductOsWithLinuxLicense",
+                         os_with_linux_license);
   html_source->AddBoolean("aboutEnterpriseManaged", IsEnterpriseManaged());
 
   base::Time build_time = base::SysInfo::GetLsbReleaseTime();
@@ -397,7 +418,7 @@ void AboutHandler::RegisterMessages() {
 #if defined(OS_CHROMEOS)
   // Handler for the product label image, which will be shown if available.
   content::URLDataSource::Add(Profile::FromWebUI(web_ui()),
-                              new chromeos::ImageSource());
+                              std::make_unique<chromeos::ImageSource>());
 #endif
 }
 
@@ -646,6 +667,7 @@ void AboutHandler::RequestUpdate() {
 
 void AboutHandler::SetUpdateStatus(VersionUpdater::Status status,
                                    int progress,
+                                   bool rollback,
                                    const std::string& version,
                                    int64_t size,
                                    const base::string16& message) {
@@ -656,6 +678,7 @@ void AboutHandler::SetUpdateStatus(VersionUpdater::Status status,
   event->SetString("status", UpdateStatusToString(status));
   event->SetString("message", message);
   event->SetInteger("progress", progress);
+  event->SetBoolean("rollback", rollback);
   event->SetString("version", version);
   // DictionaryValue does not support int64_t, so convert to string.
   event->SetString("size", base::Int64ToString(size));

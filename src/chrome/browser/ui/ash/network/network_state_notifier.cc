@@ -4,6 +4,7 @@
 
 #include "chrome/browser/ui/ash/network/network_state_notifier.h"
 
+#include "ash/public/cpp/notification_utils.h"
 #include "ash/public/cpp/vector_icons/vector_icons.h"
 #include "base/bind.h"
 #include "base/location.h"
@@ -14,8 +15,8 @@
 #include "chrome/browser/notifications/system_notification_helper.h"
 #include "chrome/browser/ui/ash/system_tray_client.h"
 #include "chrome/grit/generated_resources.h"
-#include "chrome/grit/theme_resources.h"
 #include "chromeos/network/network_configuration_handler.h"
+#include "chromeos/network/network_connect.h"
 #include "chromeos/network/network_connection_handler.h"
 #include "chromeos/network/network_state.h"
 #include "chromeos/network/network_state_handler.h"
@@ -23,7 +24,6 @@
 #include "components/device_event_log/device_event_log.h"
 #include "third_party/cros_system_api/dbus/service_constants.h"
 #include "ui/base/l10n/l10n_util.h"
-#include "ui/base/resource/resource_bundle.h"
 #include "ui/message_center/public/cpp/notification.h"
 
 namespace chromeos {
@@ -79,11 +79,11 @@ void ShowErrorNotification(const std::string& service_path,
   NET_LOG(ERROR) << "ShowErrorNotification: " << service_path << ": "
                  << base::UTF16ToUTF8(title);
   std::unique_ptr<message_center::Notification> notification =
-      message_center::Notification::CreateSystemNotification(
+      ash::CreateSystemNotification(
           message_center::NOTIFICATION_TYPE_SIMPLE, notification_id, title,
-          message, gfx::Image(), base::string16() /* display_source */, GURL(),
+          message, base::string16() /* display_source */, GURL(),
           message_center::NotifierId(
-              message_center::NotifierId::SYSTEM_COMPONENT,
+              message_center::NotifierType::SYSTEM_COMPONENT,
               kNotifierNetworkError),
           message_center::RichNotificationData(),
           new message_center::HandleNotificationClickDelegate(callback),
@@ -227,7 +227,7 @@ bool NetworkStateNotifier::UpdateDefaultNetwork(const NetworkState* network) {
 void NetworkStateNotifier::UpdateVpnConnectionState(const NetworkState* vpn) {
   if (vpn->path() == connected_vpn_) {
     if (!vpn->IsConnectedState() && !vpn->IsConnectingState()) {
-      if (vpn->vpn_provider_type() != shill::kProviderArcVpn) {
+      if (vpn->GetVpnProviderType() != shill::kProviderArcVpn) {
         ShowVpnDisconnectedNotification(vpn);
       }
       connected_vpn_.clear();
@@ -265,7 +265,7 @@ void NetworkStateNotifier::UpdateCellularOutOfCredits(
     ShowErrorNotification(
         cellular->path(), kNetworkOutOfCreditsNotificationId, cellular->type(),
         l10n_util::GetStringUTF16(IDS_NETWORK_OUT_OF_CREDITS_TITLE), error_msg,
-        base::Bind(&NetworkStateNotifier::ShowNetworkSettings,
+        base::Bind(&NetworkStateNotifier::ShowMobileSetup,
                    weak_ptr_factory_.GetWeakPtr(), cellular->guid()));
   }
 }
@@ -285,20 +285,24 @@ void NetworkStateNotifier::UpdateCellularActivating(
     return;
 
   cellular_activating_.erase(cellular->path());
-  const gfx::Image& icon =
-      ui::ResourceBundle::GetSharedInstance().GetImageNamed(
-          cellular->network_technology() == shill::kNetworkTechnologyLte
-              ? IDR_NETWORK_ACTIVATED_LTE
-              : IDR_NETWORK_ACTIVATED_3G);
-  SystemNotificationHelper::GetInstance()->Display(
-      *message_center::Notification::CreateSystemNotification(
+  std::unique_ptr<message_center::Notification> notification =
+      ash::CreateSystemNotification(
+          message_center::NOTIFICATION_TYPE_SIMPLE,
           kNetworkActivateNotificationId,
           l10n_util::GetStringUTF16(IDS_NETWORK_CELLULAR_ACTIVATED_TITLE),
           l10n_util::GetStringFUTF16(IDS_NETWORK_CELLULAR_ACTIVATED,
                                      base::UTF8ToUTF16((cellular->name()))),
-          icon, kNotifierNetwork,
-          base::Bind(&NetworkStateNotifier::ShowNetworkSettings,
-                     weak_ptr_factory_.GetWeakPtr(), cellular->guid())));
+          base::string16() /* display_source */, GURL(),
+          message_center::NotifierId(
+              message_center::NotifierType::SYSTEM_COMPONENT, kNotifierNetwork),
+          {},
+          new message_center::HandleNotificationClickDelegate(
+              base::Bind(&NetworkStateNotifier::ShowNetworkSettings,
+                         weak_ptr_factory_.GetWeakPtr(), cellular->guid())),
+          ash::kNotificationMobileDataIcon,
+          message_center::SystemNotificationWarningLevel::CRITICAL_WARNING);
+  notification->set_priority(message_center::SYSTEM_PRIORITY);
+  SystemNotificationHelper::GetInstance()->Display(*notification);
 }
 
 void NetworkStateNotifier::ShowNetworkConnectErrorForGuid(
@@ -327,17 +331,25 @@ void NetworkStateNotifier::ShowMobileActivationErrorForGuid(
                    << guid;
     return;
   }
-  SystemNotificationHelper::GetInstance()->Display(
-      *message_center::Notification::CreateSystemNotification(
+  std::unique_ptr<message_center::Notification> notification =
+      ash::CreateSystemNotification(
+          message_center::NOTIFICATION_TYPE_SIMPLE,
           kNetworkActivateNotificationId,
           l10n_util::GetStringUTF16(IDS_NETWORK_ACTIVATION_ERROR_TITLE),
           l10n_util::GetStringFUTF16(IDS_NETWORK_ACTIVATION_NEEDS_CONNECTION,
-                                     base::UTF8ToUTF16(cellular->name())),
-          ui::ResourceBundle::GetSharedInstance().GetImageNamed(
-              IDR_NETWORK_FAILED_CELLULAR),
-          kNotifierNetworkError,
-          base::Bind(&NetworkStateNotifier::ShowNetworkSettings,
-                     weak_ptr_factory_.GetWeakPtr(), cellular->guid())));
+                                     base::UTF8ToUTF16((cellular->name()))),
+          base::string16() /* display_source */, GURL(),
+          message_center::NotifierId(
+              message_center::NotifierType::SYSTEM_COMPONENT,
+              kNotifierNetworkError),
+          {},
+          new message_center::HandleNotificationClickDelegate(
+              base::Bind(&NetworkStateNotifier::ShowNetworkSettings,
+                         weak_ptr_factory_.GetWeakPtr(), cellular->guid())),
+          ash::kNotificationMobileDataOffIcon,
+          message_center::SystemNotificationWarningLevel::CRITICAL_WARNING);
+  notification->set_priority(message_center::SYSTEM_PRIORITY);
+  SystemNotificationHelper::GetInstance()->Display(*notification);
 }
 
 void NetworkStateNotifier::RemoveConnectNotification() {
@@ -493,6 +505,10 @@ void NetworkStateNotifier::ShowNetworkSettings(const std::string& network_id) {
   } else {
     SystemTrayClient::Get()->ShowNetworkSettings(network_id);
   }
+}
+
+void NetworkStateNotifier::ShowMobileSetup(const std::string& network_id) {
+  NetworkConnect::Get()->ShowMobileSetup(network_id);
 }
 
 }  // namespace chromeos

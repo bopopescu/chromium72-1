@@ -20,6 +20,7 @@
 #include "base/strings/utf_string_conversions.h"
 #include "base/time/time.h"
 #include "build/build_config.h"
+#include "content/common/input/web_mouse_wheel_event_traits.h"
 #include "content/shell/test_runner/mock_spell_check.h"
 #include "content/shell/test_runner/test_interfaces.h"
 #include "content/shell/test_runner/web_test_delegate.h"
@@ -353,7 +354,7 @@ int GetKeyModifiers(const std::vector<std::string>& modifier_names) {
 int GetKeyModifiersFromV8(v8::Isolate* isolate, v8::Local<v8::Value> value) {
   std::vector<std::string> modifier_names;
   if (value->IsString()) {
-    modifier_names.push_back(gin::V8ToString(value));
+    modifier_names.push_back(gin::V8ToString(isolate, value));
   } else if (value->IsArray()) {
     gin::Converter<std::vector<std::string>>::FromV8(isolate, value,
                                                      &modifier_names);
@@ -383,9 +384,10 @@ WebMouseWheelEvent::Phase GetMouseWheelEventPhase(
 }
 
 WebMouseWheelEvent::Phase GetMouseWheelEventPhaseFromV8(
+    v8::Isolate* isolate,
     v8::Local<v8::Value> value) {
   if (value->IsString())
-    return GetMouseWheelEventPhase(gin::V8ToString(value));
+    return GetMouseWheelEventPhase(gin::V8ToString(isolate, value));
   return WebMouseWheelEvent::kPhaseNone;
 }
 
@@ -427,7 +429,7 @@ void PopulateCustomItems(const WebVector<WebMenuItemInfo>& customItems,
 }
 
 // Because actual context menu is implemented by the browser side,
-// this function does only what LayoutTests are expecting:
+// this function does only what web_tests are expecting:
 // - Many test checks the count of items. So returning non-zero value makes
 // sense.
 // - Some test compares the count before and after some action. So changing the
@@ -621,9 +623,6 @@ class EventSenderBindings : public gin::Wrappable<EventSenderBindings> {
   void GestureScrollBegin(gin::Arguments* args);
   void GestureScrollEnd(gin::Arguments* args);
   void GestureScrollUpdate(gin::Arguments* args);
-  void GesturePinchBegin(gin::Arguments* args);
-  void GesturePinchEnd(gin::Arguments* args);
-  void GesturePinchUpdate(gin::Arguments* args);
   void GestureTap(gin::Arguments* args);
   void GestureTapDown(gin::Arguments* args);
   void GestureShowPress(gin::Arguments* args);
@@ -747,9 +746,6 @@ gin::ObjectTemplateBuilder EventSenderBindings::GetObjectTemplateBuilder(
       .SetMethod("gestureScrollEnd", &EventSenderBindings::GestureScrollEnd)
       .SetMethod("gestureScrollUpdate",
                  &EventSenderBindings::GestureScrollUpdate)
-      .SetMethod("gesturePinchBegin", &EventSenderBindings::GesturePinchBegin)
-      .SetMethod("gesturePinchEnd", &EventSenderBindings::GesturePinchEnd)
-      .SetMethod("gesturePinchUpdate", &EventSenderBindings::GesturePinchUpdate)
       .SetMethod("gestureTap", &EventSenderBindings::GestureTap)
       .SetMethod("gestureTapDown", &EventSenderBindings::GestureTapDown)
       .SetMethod("gestureShowPress", &EventSenderBindings::GestureShowPress)
@@ -973,21 +969,6 @@ void EventSenderBindings::GestureScrollEnd(gin::Arguments* args) {
 void EventSenderBindings::GestureScrollUpdate(gin::Arguments* args) {
   if (sender_)
     sender_->GestureScrollUpdate(args);
-}
-
-void EventSenderBindings::GesturePinchBegin(gin::Arguments* args) {
-  if (sender_)
-    sender_->GesturePinchBegin(args);
-}
-
-void EventSenderBindings::GesturePinchEnd(gin::Arguments* args) {
-  if (sender_)
-    sender_->GesturePinchEnd(args);
-}
-
-void EventSenderBindings::GesturePinchUpdate(gin::Arguments* args) {
-  if (sender_)
-    sender_->GesturePinchUpdate(args);
 }
 
 void EventSenderBindings::GestureTap(gin::Arguments* args) {
@@ -1430,8 +1411,7 @@ void EventSender::PointerDown(int button_number,
                               int tiltX,
                               int tiltY) {
   if (force_layout_on_events_)
-    widget()->UpdateLifecycle(blink::WebWidget::LifecycleUpdate::kPrePaint);
-
+    UpdateLifecycleToPrePaint();
   DCHECK_NE(-1, button_number);
 
   WebMouseEvent::Button button_type =
@@ -1466,7 +1446,7 @@ void EventSender::PointerUp(int button_number,
                             int tiltX,
                             int tiltY) {
   if (force_layout_on_events_)
-    widget()->UpdateLifecycle(blink::WebWidget::LifecycleUpdate::kPrePaint);
+    UpdateLifecycleToPrePaint();
 
   DCHECK_NE(-1, button_number);
 
@@ -1732,7 +1712,7 @@ void EventSender::KeyDown(const std::string& code_str,
   // EventSender.m forces a layout here, with at least one
   // test (fast/forms/focus-control-to-page.html) relying on this.
   if (force_layout_on_events_)
-    widget()->UpdateLifecycle(blink::WebWidget::LifecycleUpdate::kPrePaint);
+    UpdateLifecycleToPrePaint();
 
   // In the browser, if a keyboard event corresponds to an editor command,
   // the command will be dispatched to the renderer just before dispatching
@@ -1775,7 +1755,7 @@ void EventSender::ClearKillRing() {}
 
 std::vector<std::string> EventSender::ContextClick() {
   if (force_layout_on_events_)
-    widget()->UpdateLifecycle(blink::WebWidget::LifecycleUpdate::kPrePaint);
+    UpdateLifecycleToPrePaint();
 
   UpdateClickCountForButton(WebMouseEvent::Button::kRight);
 
@@ -1964,7 +1944,7 @@ void EventSender::GestureFlingCancel() {
   // choose Touchpad here.
 
   if (force_layout_on_events_)
-    widget()->UpdateLifecycle(blink::WebWidget::LifecycleUpdate::kPrePaint);
+    UpdateLifecycleToPrePaint();
 
   HandleInputEventOnViewOrPopup(event);
 }
@@ -2005,7 +1985,7 @@ void EventSender::GestureFlingStart(float x,
   event.data.fling_start.velocity_y = velocity_y;
 
   if (force_layout_on_events_)
-    widget()->UpdateLifecycle(blink::WebWidget::LifecycleUpdate::kPrePaint);
+    UpdateLifecycleToPrePaint();
 
   HandleInputEventOnViewOrPopup(event);
 }
@@ -2138,18 +2118,6 @@ void EventSender::GestureScrollUpdate(gin::Arguments* args) {
   GestureEvent(WebInputEvent::kGestureScrollUpdate, args);
 }
 
-void EventSender::GesturePinchBegin(gin::Arguments* args) {
-  GestureEvent(WebInputEvent::kGesturePinchBegin, args);
-}
-
-void EventSender::GesturePinchEnd(gin::Arguments* args) {
-  GestureEvent(WebInputEvent::kGesturePinchEnd, args);
-}
-
-void EventSender::GesturePinchUpdate(gin::Arguments* args) {
-  GestureEvent(WebInputEvent::kGesturePinchUpdate, args);
-}
-
 void EventSender::GestureTap(gin::Arguments* args) {
   GestureEvent(WebInputEvent::kGestureTap, args);
 }
@@ -2196,7 +2164,7 @@ void EventSender::MouseScrollBy(gin::Arguments* args,
 
 void EventSender::MouseMoveTo(gin::Arguments* args) {
   if (force_layout_on_events_)
-    widget()->UpdateLifecycle(blink::WebWidget::LifecycleUpdate::kPrePaint);
+    UpdateLifecycleToPrePaint();
 
   double x;
   double y;
@@ -2253,7 +2221,7 @@ void EventSender::MouseLeave(
     blink::WebPointerProperties::PointerType pointerType,
     int pointerId) {
   if (force_layout_on_events_)
-    widget()->UpdateLifecycle(blink::WebWidget::LifecycleUpdate::kPrePaint);
+    UpdateLifecycleToPrePaint();
 
   WebMouseEvent event(WebInputEvent::kMouseLeave,
                       ModifiersForPointer(pointerId), GetCurrentEventTime());
@@ -2309,7 +2277,7 @@ void EventSender::SendCurrentTouchEvent(WebInputEvent::Type type,
   DCHECK_LE(touch_points_.size(),
             static_cast<unsigned>(WebTouchEvent::kTouchesLengthCap));
   if (force_layout_on_events_)
-    widget()->UpdateLifecycle(blink::WebWidget::LifecycleUpdate::kPrePaint);
+    UpdateLifecycleToPrePaint();
 
   base::TimeTicks time_stamp = GetCurrentEventTime();
   blink::WebInputEvent::DispatchType dispatch_type =
@@ -2408,24 +2376,6 @@ void EventSender::GestureEvent(WebInputEvent::Type type, gin::Arguments* args) {
     case WebInputEvent::kGestureFlingStart:
       event.SetPositionInWidget(current_gesture_location_);
       break;
-    case WebInputEvent::kGesturePinchBegin:
-    case WebInputEvent::kGesturePinchEnd:
-      current_gesture_location_ = WebFloatPoint(x, y);
-      event.SetPositionInWidget(current_gesture_location_);
-      break;
-    case WebInputEvent::kGesturePinchUpdate: {
-      float scale = 1;
-      if (!args->PeekNext().IsEmpty()) {
-        if (!args->GetNext(&scale)) {
-          args->ThrowError();
-          return;
-        }
-      }
-      event.data.pinch_update.scale = scale;
-      current_gesture_location_ = WebFloatPoint(x, y);
-      event.SetPositionInWidget(current_gesture_location_);
-      break;
-    }
     case WebInputEvent::kGestureTap: {
       float tap_count = 1;
       float width = 30;
@@ -2560,7 +2510,7 @@ void EventSender::GestureEvent(WebInputEvent::Type type, gin::Arguments* args) {
   event.SetPositionInScreen(event.PositionInWidget());
 
   if (force_layout_on_events_)
-    widget()->UpdateLifecycle(blink::WebWidget::LifecycleUpdate::kPrePaint);
+    UpdateLifecycleToPrePaint();
 
   WebInputEventResult result = HandleInputEventOnViewOrPopup(event);
 
@@ -2600,7 +2550,7 @@ WebMouseWheelEvent EventSender::GetMouseWheelEvent(gin::Arguments* args,
   // determined before we send events (as well as all the other methods
   // that send an event do).
   if (force_layout_on_events_)
-    widget()->UpdateLifecycle(blink::WebWidget::LifecycleUpdate::kPrePaint);
+    UpdateLifecycleToPrePaint();
 
   double horizontal;
   double vertical;
@@ -2626,7 +2576,7 @@ WebMouseWheelEvent EventSender::GetMouseWheelEvent(gin::Arguments* args,
           if (!args->PeekNext().IsEmpty()) {
             v8::Local<v8::Value> phase_value;
             args->GetNext(&phase_value);
-            phase = GetMouseWheelEventPhaseFromV8(phase_value);
+            phase = GetMouseWheelEventPhaseFromV8(args->isolate(), phase_value);
           }
         }
       }
@@ -2655,6 +2605,7 @@ WebMouseWheelEvent EventSender::GetMouseWheelEvent(gin::Arguments* args,
     event.delta_x *= kScrollbarPixelsPerTick;
     event.delta_y *= kScrollbarPixelsPerTick;
   }
+  event.event_action = content::WebMouseWheelEventTraits::GetEventAction(event);
   return event;
 }
 
@@ -2879,7 +2830,7 @@ void EventSender::SendGesturesForMouseWheelEvent(
   }
 
   if (force_layout_on_events_)
-    widget()->UpdateLifecycle(blink::WebWidget::LifecycleUpdate::kPrePaint);
+    UpdateLifecycleToPrePaint();
 
   HandleInputEventOnViewOrPopup(begin_event);
 
@@ -2895,7 +2846,7 @@ void EventSender::SendGesturesForMouseWheelEvent(
       begin_event.data.scroll_begin.delta_hint_units;
 
   if (force_layout_on_events_)
-    widget()->UpdateLifecycle(blink::WebWidget::LifecycleUpdate::kPrePaint);
+    UpdateLifecycleToPrePaint();
   HandleInputEventOnViewOrPopup(update_event);
 
   WebGestureEvent end_event(WebInputEvent::kGestureScrollEnd,
@@ -2906,7 +2857,7 @@ void EventSender::SendGesturesForMouseWheelEvent(
       begin_event.data.scroll_begin.delta_hint_units;
 
   if (force_layout_on_events_)
-    widget()->UpdateLifecycle(blink::WebWidget::LifecycleUpdate::kPrePaint);
+    UpdateLifecycleToPrePaint();
   HandleInputEventOnViewOrPopup(end_event);
 }
 
@@ -2939,6 +2890,11 @@ std::unique_ptr<WebInputEvent> EventSender::TransformScreenToWidgetCoordinates(
     const WebInputEvent& event) {
   return delegate()->TransformScreenToWidgetCoordinates(
       web_widget_test_proxy_base_, event);
+}
+
+void EventSender::UpdateLifecycleToPrePaint() {
+  widget()->UpdateLifecycle(blink::WebWidget::LifecycleUpdate::kPrePaint,
+                            blink::WebWidget::LifecycleUpdateReason::kTest);
 }
 
 }  // namespace test_runner

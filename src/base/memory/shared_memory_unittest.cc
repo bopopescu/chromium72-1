@@ -21,7 +21,7 @@
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_piece.h"
 #include "base/strings/string_util.h"
-#include "base/sys_info.h"
+#include "base/system/sys_info.h"
 #include "base/test/multiprocess_test.h"
 #include "base/threading/platform_thread.h"
 #include "base/time/time.h"
@@ -52,9 +52,8 @@
 #endif
 
 #if defined(OS_FUCHSIA)
-#include <zircon/process.h>
-#include <zircon/syscalls.h>
-#include "base/fuchsia/scoped_zx_handle.h"
+#include <lib/zx/vmar.h>
+#include <lib/zx/vmo.h>
 #endif
 
 namespace base {
@@ -291,8 +290,7 @@ TEST_P(SharedMemoryTest, MultipleThreads) {
   // kNumThreads.
 
   int threadcounts[] = { 1, kNumThreads };
-  for (size_t i = 0; i < arraysize(threadcounts); i++) {
-    int numthreads = threadcounts[i];
+  for (auto numthreads : threadcounts) {
     std::unique_ptr<PlatformThreadHandle[]> thread_handles;
     std::unique_ptr<MultipleThreadMain* []> thread_delegates;
 
@@ -361,6 +359,8 @@ TEST_P(SharedMemoryTest, AnonymousPrivate) {
   }
 }
 
+#if !(defined(OS_MACOSX) && !defined(OS_IOS))
+// The Mach functionality is tested in shared_memory_mac_unittest.cc.
 TEST_P(SharedMemoryTest, GetReadOnlyHandle) {
   StringPiece contents = "Hello World";
 
@@ -368,10 +368,6 @@ TEST_P(SharedMemoryTest, GetReadOnlyHandle) {
   SharedMemoryCreateOptions options;
   options.size = contents.size();
   options.share_read_only = true;
-#if defined(OS_MACOSX) && !defined(OS_IOS)
-  // The Mach functionality is tested in shared_memory_mac_unittest.cc.
-  options.type = SharedMemoryHandle::POSIX;
-#endif
   ASSERT_TRUE(writable_shmem.Create(options));
   ASSERT_TRUE(writable_shmem.Map(options.size));
   memcpy(writable_shmem.memory(), contents.data(), contents.size());
@@ -418,17 +414,18 @@ TEST_P(SharedMemoryTest, GetReadOnlyHandle) {
   (void)handle;
 #elif defined(OS_FUCHSIA)
   uintptr_t addr;
-  EXPECT_NE(ZX_OK, zx_vmar_map(zx_vmar_root_self(), 0, handle.GetHandle(), 0,
-                               contents.size(), ZX_VM_FLAG_PERM_WRITE, &addr))
+  EXPECT_NE(ZX_OK, zx::vmar::root_self()->map(
+                       0, *zx::unowned_vmo(handle.GetHandle()), 0,
+                       contents.size(), ZX_VM_FLAG_PERM_WRITE, &addr))
       << "Shouldn't be able to map as writable.";
 
-  ScopedZxHandle duped_handle;
-  EXPECT_NE(ZX_OK, zx_handle_duplicate(handle.GetHandle(), ZX_RIGHT_WRITE,
-                                       duped_handle.receive()))
+  zx::vmo duped_handle;
+  EXPECT_NE(ZX_OK, zx::unowned_vmo(handle.GetHandle())
+                       ->duplicate(ZX_RIGHT_WRITE, &duped_handle))
       << "Shouldn't be able to duplicate the handle into a writable one.";
 
-  EXPECT_EQ(ZX_OK, zx_handle_duplicate(handle.GetHandle(), ZX_RIGHT_READ,
-                                       duped_handle.receive()))
+  EXPECT_EQ(ZX_OK, zx::unowned_vmo(handle.GetHandle())
+                       ->duplicate(ZX_RIGHT_READ, &duped_handle))
       << "Should be able to duplicate the handle into a readable one.";
 #elif defined(OS_POSIX)
   int handle_fd = SharedMemory::GetFdFromSharedMemoryHandle(handle);
@@ -468,6 +465,7 @@ TEST_P(SharedMemoryTest, GetReadOnlyHandle) {
 #error Unexpected platform; write a test that tries to make 'handle' writable.
 #endif  // defined(OS_POSIX) || defined(OS_WIN)
 }
+#endif  // defined(OS_MACOSX) && !defined(OS_IOS)
 
 TEST_P(SharedMemoryTest, ShareToSelf) {
   StringPiece contents = "Hello World";
@@ -585,19 +583,25 @@ TEST_P(SharedMemoryTest, MapTwice) {
 
 #if defined(OS_POSIX)
 // This test is not applicable for iOS (crbug.com/399384).
-#if !defined(OS_IOS)
+// The Mach functionality is tested in shared_memory_mac_unittest.cc.
+#if !defined(OS_MACOSX) && !defined(OS_IOS)
 // Create a shared memory object, mmap it, and mprotect it to PROT_EXEC.
 TEST_P(SharedMemoryTest, AnonymousExecutable) {
+#if defined(OS_LINUX)
+  // On Chromecast both /dev/shm and /tmp are mounted with 'noexec' option,
+  // which makes this test fail. But Chromecast doesn't use NaCL so we don't
+  // need this.
+  if (!IsPathExecutable(FilePath("/dev/shm")) &&
+      !IsPathExecutable(FilePath("/tmp"))) {
+    return;
+  }
+#endif  // OS_LINUX
   const uint32_t kTestSize = 1 << 16;
 
   SharedMemory shared_memory;
   SharedMemoryCreateOptions options;
   options.size = kTestSize;
   options.executable = true;
-#if defined(OS_MACOSX) && !defined(OS_IOS)
-  // The Mach functionality is tested in shared_memory_mac_unittest.cc.
-  options.type = SharedMemoryHandle::POSIX;
-#endif
 
   EXPECT_TRUE(shared_memory.Create(options));
   EXPECT_TRUE(shared_memory.Map(shared_memory.requested_size()));
@@ -605,7 +609,7 @@ TEST_P(SharedMemoryTest, AnonymousExecutable) {
   EXPECT_EQ(0, mprotect(shared_memory.memory(), shared_memory.requested_size(),
                         PROT_READ | PROT_EXEC));
 }
-#endif  // !defined(OS_IOS)
+#endif  // !defined(OS_MACOSX) && !defined(OS_IOS)
 
 #if defined(OS_ANDROID)
 // This test is restricted to Android since there is no way on other platforms
@@ -650,16 +654,14 @@ class ScopedUmaskSetter {
 };
 
 // Create a shared memory object, check its permissions.
+#if !(defined(OS_MACOSX) && !defined(OS_IOS))
+// The Mach functionality is tested in shared_memory_mac_unittest.cc.
 TEST_P(SharedMemoryTest, FilePermissionsAnonymous) {
   const uint32_t kTestSize = 1 << 8;
 
   SharedMemory shared_memory;
   SharedMemoryCreateOptions options;
   options.size = kTestSize;
-#if defined(OS_MACOSX) && !defined(OS_IOS)
-  // The Mach functionality is tested in shared_memory_mac_unittest.cc.
-  options.type = SharedMemoryHandle::POSIX;
-#endif
   // Set a file mode creation mask that gives all permissions.
   ScopedUmaskSetter permissive_mask(S_IWGRP | S_IWOTH);
 
@@ -674,18 +676,17 @@ TEST_P(SharedMemoryTest, FilePermissionsAnonymous) {
   EXPECT_FALSE(shm_stat.st_mode & S_IRWXO);
   EXPECT_FALSE(shm_stat.st_mode & S_IRWXG);
 }
+#endif  // !(defined(OS_MACOSX) && !defined(OS_IOS)
 
 // Create a shared memory object, check its permissions.
+#if !(defined(OS_MACOSX) && !defined(OS_IOS))
+// The Mach functionality is tested in shared_memory_mac_unittest.cc.
 TEST_P(SharedMemoryTest, FilePermissionsNamed) {
   const uint32_t kTestSize = 1 << 8;
 
   SharedMemory shared_memory;
   SharedMemoryCreateOptions options;
   options.size = kTestSize;
-#if defined(OS_MACOSX) && !defined(OS_IOS)
-  // The Mach functionality is tested in shared_memory_mac_unittest.cc.
-  options.type = SharedMemoryHandle::POSIX;
-#endif
 
   // Set a file mode creation mask that gives all permissions.
   ScopedUmaskSetter permissive_mask(S_IWGRP | S_IWOTH);
@@ -700,6 +701,7 @@ TEST_P(SharedMemoryTest, FilePermissionsNamed) {
   EXPECT_FALSE(shm_stat.st_mode & S_IRWXO);
   EXPECT_FALSE(shm_stat.st_mode & S_IRWXG);
 }
+#endif  // !(defined(OS_MACOSX) && !defined(OS_IOS)
 #endif  // !defined(OS_ANDROID) && !defined(OS_FUCHSIA)
 
 #endif  // defined(OS_POSIX)
@@ -821,15 +823,15 @@ TEST_F(SharedMemoryProcessTest, SharedMemoryAcrossProcesses) {
   // Start |kNumTasks| processes, each of which atomically increments the first
   // word by 1.
   Process processes[kNumTasks];
-  for (int index = 0; index < kNumTasks; ++index) {
-    processes[index] = SpawnChild("SharedMemoryTestMain");
-    ASSERT_TRUE(processes[index].IsValid());
+  for (auto& index : processes) {
+    index = SpawnChild("SharedMemoryTestMain");
+    ASSERT_TRUE(index.IsValid());
   }
 
   // Check that each process exited correctly.
   int exit_code = 0;
-  for (int index = 0; index < kNumTasks; ++index) {
-    EXPECT_TRUE(processes[index].WaitForExit(&exit_code));
+  for (const auto& index : processes) {
+    EXPECT_TRUE(index.WaitForExit(&exit_code));
     EXPECT_EQ(0, exit_code);
   }
 
@@ -846,15 +848,13 @@ MULTIPROCESS_TEST_MAIN(SharedMemoryTestMain) {
 #endif  // !defined(OS_IOS) && !defined(OS_ANDROID) && !defined(OS_MACOSX) &&
         // !defined(OS_FUCHSIA)
 
+#if !(defined(OS_MACOSX) && !defined(OS_IOS))
+// The Mach functionality is tested in shared_memory_mac_unittest.cc.
 TEST_P(SharedMemoryTest, MappedId) {
   const uint32_t kDataSize = 1024;
   SharedMemory memory;
   SharedMemoryCreateOptions options;
   options.size = kDataSize;
-#if defined(OS_MACOSX) && !defined(OS_IOS)
-  // The Mach functionality is tested in shared_memory_mac_unittest.cc.
-  options.type = SharedMemoryHandle::POSIX;
-#endif
 
   EXPECT_TRUE(memory.Create(options));
   base::UnguessableToken id = memory.handle().GetGUID();
@@ -870,6 +870,7 @@ TEST_P(SharedMemoryTest, MappedId) {
   memory.Unmap();
   EXPECT_TRUE(memory.mapped_id().is_empty());
 }
+#endif  // !(defined(OS_MACOSX) && !defined(OS_IOS)
 
 INSTANTIATE_TEST_CASE_P(Default,
                         SharedMemoryTest,

@@ -26,7 +26,6 @@
 #include "gin/public/context_holder.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/blink/public/web/web_scoped_user_gesture.h"
 #include "v8/include/v8.h"
 
 namespace extensions {
@@ -126,9 +125,10 @@ class APIBindingUnittest : public APIBindingTest {
   void SetUp() override {
     APIBindingTest::SetUp();
     request_handler_ = std::make_unique<APIRequestHandler>(
-        base::Bind(&APIBindingUnittest::OnFunctionCall, base::Unretained(this)),
+        base::BindRepeating(&APIBindingUnittest::OnFunctionCall,
+                            base::Unretained(this)),
         APILastError(APILastError::GetParent(), binding::AddConsoleError()),
-        nullptr);
+        nullptr, base::BindRepeating(&GetTestUserActivationState));
   }
 
   void TearDown() override {
@@ -198,8 +198,12 @@ class APIBindingUnittest : public APIBindingTest {
       on_silent_request_ = base::DoNothing();
     if (!availability_callback_)
       availability_callback_ = base::Bind(&AllowAllFeatures);
+    auto get_context_owner = [](v8::Local<v8::Context>) {
+      return std::string("context");
+    };
     event_handler_ = std::make_unique<APIEventHandler>(
-        base::Bind(&OnEventListenersChanged), nullptr);
+        base::Bind(&OnEventListenersChanged),
+        base::BindRepeating(get_context_owner), nullptr);
     access_checker_ =
         std::make_unique<BindingAccessChecker>(availability_callback_);
     binding_ = std::make_unique<APIBinding>(
@@ -803,7 +807,7 @@ TEST_F(APIBindingUnittest, TestCustomHooks) {
       EXPECT_EQ(1u, arguments->size());
       return result;
     }
-    EXPECT_EQ("foo", gin::V8ToString(arguments->at(0)));
+    EXPECT_EQ("foo", gin::V8ToString(context->GetIsolate(), arguments->at(0)));
     return result;
   };
   hooks->AddHandler("test.oneString", base::Bind(hook, &did_call));
@@ -1066,7 +1070,7 @@ TEST_F(APIBindingUnittest,
       return result;
     }
     v8::Isolate* isolate = context->GetIsolate();
-    std::string arg_value = gin::V8ToString(arguments->at(0));
+    std::string arg_value = gin::V8ToString(isolate, arguments->at(0));
     if (arg_value == "throw") {
       isolate->ThrowException(v8::Exception::Error(
           gin::StringToV8(isolate, "Custom Hook Error")));
@@ -1207,12 +1211,13 @@ TEST_F(APIBindingUnittest, TestUserGestures) {
   ASSERT_FALSE(function.IsEmpty());
 
   v8::Local<v8::Value> argv[] = {binding_object};
+
   RunFunction(function, context, arraysize(argv), argv);
   ASSERT_TRUE(last_request());
   EXPECT_FALSE(last_request()->has_user_gesture);
   reset_last_request();
 
-  blink::WebScopedUserGesture user_gesture(nullptr);
+  ScopedTestUserActivation test_user_activation;
   RunFunction(function, context, arraysize(argv), argv);
   ASSERT_TRUE(last_request());
   EXPECT_TRUE(last_request()->has_user_gesture);

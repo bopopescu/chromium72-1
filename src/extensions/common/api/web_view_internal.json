@@ -721,26 +721,6 @@
         ]
       },
       {
-        "name": "resume",
-        "type": "function",
-        "parameters": [
-          {
-            "type": "integer",
-            "name": "instanceId"
-          }
-        ]
-      },
-      {
-        "name": "suspend",
-        "type": "function",
-        "parameters": [
-          {
-            "type": "integer",
-            "name": "instanceId"
-          }
-        ]
-      },
-      {
         "name": "stop",
         "type": "function",
         "parameters": [
@@ -782,6 +762,45 @@
               {"type": "string",
                 "name": "dataUrl",
                 "description": "A data URL which encodes an image of the visible area of the captured tab. May be assigned to the 'src' property of an HTML Image element for display."
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "name": "setSpatialNavigationEnabled",
+        "type": "function",
+        "description": "Sets spatial navigation state of the webview.",
+        "parameters": [
+          {
+            "type": "integer",
+            "name": "instanceId",
+            "description": "The instance ID of the guest <webview> process."
+          },
+          {
+            "type": "boolean",
+            "name": "spatialNavEnabled",
+            "description": "Spatial navigation state value."
+          }
+        ]
+      },
+      {
+        "name": "isSpatialNavigationEnabled",
+        "type": "function",
+        "description": "Callback that returns whether whether spatial navigation is enabled for the webview.",
+        "parameters": [
+          {
+            "type": "integer",
+            "name": "instanceId",
+            "description": "The instance ID of the guest <webview> process."
+          },
+          {
+            "type": "function",
+            "name": "callback",
+            "parameters": [
+              {
+                "name": "spatialNavEnabled",
+                "type": "boolean"
               }
             ]
           }

@@ -45,6 +45,7 @@
 #include "third_party/blink/renderer/core/exported/web_remote_frame_impl.h"
 #include "third_party/blink/renderer/core/frame/frame.h"
 #include "third_party/blink/renderer/core/frame/frame_serializer.h"
+#include "third_party/blink/renderer/core/frame/local_dom_window.h"
 #include "third_party/blink/renderer/core/frame/local_frame.h"
 #include "third_party/blink/renderer/core/frame/remote_frame.h"
 #include "third_party/blink/renderer/core/frame/web_frame_serializer_impl.h"
@@ -55,6 +56,7 @@
 #include "third_party/blink/renderer/core/html/html_frame_owner_element.h"
 #include "third_party/blink/renderer/core/html/html_head_element.h"
 #include "third_party/blink/renderer/core/html/html_image_element.h"
+#include "third_party/blink/renderer/core/html/html_link_element.h"
 #include "third_party/blink/renderer/core/html/html_table_element.h"
 #include "third_party/blink/renderer/core/html_names.h"
 #include "third_party/blink/renderer/core/input_type_names.h"
@@ -152,6 +154,12 @@ bool MHTMLFrameSerializerDelegate::ShouldIgnoreElement(const Element& element) {
       ShouldIgnorePopupOverlayElement(element)) {
     return true;
   }
+  // Remove <link> for stylesheets that do not load.
+  if (IsHTMLLinkElement(element) &&
+      ToHTMLLinkElement(element).RelAttribute().IsStyleSheet() &&
+      !ToHTMLLinkElement(element).sheet()) {
+    return true;
+  }
   return false;
 }
 
@@ -167,12 +175,12 @@ bool MHTMLFrameSerializerDelegate::ShouldIgnoreHiddenElement(
   }
 
   // Do not include the element that is marked with hidden attribute.
-  if (element.FastHasAttribute(HTMLNames::hiddenAttr))
+  if (element.FastHasAttribute(html_names::kHiddenAttr))
     return true;
 
   // Do not include the hidden form element.
   return IsHTMLInputElement(element) &&
-         ToHTMLInputElement(&element)->type() == InputTypeNames::hidden;
+         ToHTMLInputElement(&element)->type() == input_type_names::kHidden;
 }
 
 bool MHTMLFrameSerializerDelegate::ShouldIgnoreMetaElement(
@@ -185,10 +193,10 @@ bool MHTMLFrameSerializerDelegate::ShouldIgnoreMetaElement(
   // scheme could be prevented from loading.
   if (!IsHTMLMetaElement(element))
     return false;
-  if (!element.FastHasAttribute(HTMLNames::contentAttr))
+  if (!element.FastHasAttribute(html_names::kContentAttr))
     return false;
   const AtomicString& http_equiv =
-      element.FastGetAttribute(HTMLNames::http_equivAttr);
+      element.FastGetAttribute(html_names::kHttpEquivAttr);
   return http_equiv == "Content-Security-Policy";
 }
 
@@ -229,13 +237,13 @@ bool MHTMLFrameSerializerDelegate::ShouldIgnoreAttribute(
   // images, as only the value of src is pulled into the archive. Discarding
   // srcset prevents the problem. Long term we should make sure to MHTML plays
   // nicely with srcset.
-  if (attribute.LocalName() == HTMLNames::srcsetAttr)
+  if (attribute.LocalName() == html_names::kSrcsetAttr)
     return true;
 
   // Do not save ping attribute since anyway the ping will be blocked from
   // MHTML.
   if (IsHTMLAnchorElement(element) &&
-      attribute.LocalName() == HTMLNames::pingAttr) {
+      attribute.LocalName() == html_names::kPingAttr) {
     return true;
   }
 
@@ -253,10 +261,16 @@ bool MHTMLFrameSerializerDelegate::ShouldIgnoreAttribute(
   // containing link instead of html contents, don't ignore the attribute.
   // Bail out now to avoid the check in Element::isScriptingAttribute.
   bool is_src_doc_attribute = IsHTMLFrameElementBase(element) &&
-                              attribute.GetName() == HTMLNames::srcdocAttr;
+                              attribute.GetName() == html_names::kSrcdocAttr;
   String new_link_for_the_element;
   if (is_src_doc_attribute && RewriteLink(element, new_link_for_the_element))
     return false;
+
+  //  Drop integrity attribute for those links with subresource loaded.
+  if (attribute.LocalName() == html_names::kIntegrityAttr &&
+      IsHTMLLinkElement(element) && ToHTMLLinkElement(element).sheet()) {
+    return true;
+  }
 
   // Do not include attributes that contain javascript. This is because the
   // script will not be executed when a MHTML page is being loaded.
@@ -325,8 +339,8 @@ void MHTMLFrameSerializerDelegate::GetCustomAttributesForImageElement(
   }
 
   // The width and height attributes should not be set.
-  if (element.FastHasAttribute(HTMLNames::widthAttr) ||
-      element.FastHasAttribute(HTMLNames::heightAttr)) {
+  if (element.FastHasAttribute(html_names::kWidthAttr) ||
+      element.FastHasAttribute(html_names::kHeightAttr)) {
     return;
   }
 
@@ -337,10 +351,10 @@ void MHTMLFrameSerializerDelegate::GetCustomAttributesForImageElement(
     return;
   }
 
-  Attribute width_attribute(HTMLNames::widthAttr,
+  Attribute width_attribute(html_names::kWidthAttr,
                             AtomicString::Number(element.LayoutBoxWidth()));
   attributes->push_back(width_attribute);
-  Attribute height_attribute(HTMLNames::heightAttr,
+  Attribute height_attribute(html_names::kHeightAttr,
                              AtomicString::Number(element.LayoutBoxHeight()));
   attributes->push_back(height_attribute);
 }
@@ -370,7 +384,7 @@ std::pair<Node*, Element*> MHTMLFrameSerializerDelegate::GetAuxiliaryDOMTree(
   // Put the shadow DOM content inside a template element. A special attribute
   // is set to tell the mode of the shadow DOM.
   Element* template_element =
-      Element::Create(HTMLNames::templateTag, &(element.GetDocument()));
+      Element::Create(html_names::kTemplateTag, &(element.GetDocument()));
   template_element->setAttribute(
       QualifiedName(g_null_atom, kShadowModeAttributeName, g_null_atom),
       AtomicString(shadow_mode));

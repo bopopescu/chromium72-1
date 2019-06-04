@@ -46,11 +46,6 @@ class WebScriptController {
   // v8::Extension object passed.
   BLINK_EXPORT static void RegisterExtension(v8::Extension*);
 
-#if defined(USE_NEVA_APPRUNTIME)
-  // Clear registered v8 extensions
-  BLINK_EXPORT static void clearExtensions();
-#endif
-
  private:
   WebScriptController() = delete;
 };

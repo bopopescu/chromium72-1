@@ -8,15 +8,16 @@
 #include "third_party/blink/renderer/core/css/parser/css_parser_context.h"
 #include "third_party/blink/renderer/core/css/parser/css_parser_mode.h"
 #include "third_party/blink/renderer/core/css/parser/css_property_parser_helpers.h"
+#include "third_party/blink/renderer/core/css/resolver/style_builder_converter.h"
 #include "third_party/blink/renderer/core/style/computed_style.h"
 
 namespace blink {
-namespace CSSLonghand {
+namespace css_longhand {
 
 const CSSValue* Color::ParseSingleValue(CSSParserTokenRange& range,
                                         const CSSParserContext& context,
                                         const CSSParserLocalContext&) const {
-  return CSSPropertyParserHelpers::ConsumeColor(
+  return css_property_parser_helpers::ConsumeColor(
       range, context.Mode(), IsQuirksModeBehavior(context.Mode()));
 }
 
@@ -40,5 +41,37 @@ const CSSValue* Color::CSSValueFromComputedStyleInternal(
                           : style.GetColor().Rgb());
 }
 
-}  // namespace CSSLonghand
+void Color::ApplyInitial(StyleResolverState& state) const {
+  blink::Color color = ComputedStyleInitialValues::InitialColor();
+  if (state.ApplyPropertyToRegularStyle())
+    state.Style()->SetColor(color);
+  if (state.ApplyPropertyToVisitedLinkStyle())
+    state.Style()->SetVisitedLinkColor(color);
+}
+
+void Color::ApplyInherit(StyleResolverState& state) const {
+  blink::Color color = state.ParentStyle()->GetColor();
+  if (state.ApplyPropertyToRegularStyle())
+    state.Style()->SetColor(color);
+  if (state.ApplyPropertyToVisitedLinkStyle())
+    state.Style()->SetVisitedLinkColor(color);
+}
+
+void Color::ApplyValue(StyleResolverState& state, const CSSValue& value) const {
+  // As per the spec, 'color: currentColor' is treated as 'color: inherit'
+  if (value.IsIdentifierValue() &&
+      ToCSSIdentifierValue(value).GetValueID() == CSSValueCurrentcolor) {
+    ApplyInherit(state);
+    return;
+  }
+
+  if (state.ApplyPropertyToRegularStyle())
+    state.Style()->SetColor(StyleBuilderConverter::ConvertColor(state, value));
+  if (state.ApplyPropertyToVisitedLinkStyle()) {
+    state.Style()->SetVisitedLinkColor(
+        StyleBuilderConverter::ConvertColor(state, value, true));
+  }
+}
+
+}  // namespace css_longhand
 }  // namespace blink

@@ -47,8 +47,8 @@ namespace blink {
 class AudioTrackList;
 class DOMArrayBuffer;
 class DOMArrayBufferView;
+class EventQueue;
 class ExceptionState;
-class MediaElementEventQueue;
 class MediaSource;
 class TimeRanges;
 class VideoTrackList;
@@ -65,10 +65,11 @@ class SourceBuffer final : public EventTargetWithInlineData,
  public:
   static SourceBuffer* Create(std::unique_ptr<WebSourceBuffer>,
                               MediaSource*,
-                              MediaElementEventQueue*);
+                              EventQueue*);
   static const AtomicString& SegmentsKeyword();
   static const AtomicString& SequenceKeyword();
 
+  SourceBuffer(std::unique_ptr<WebSourceBuffer>, MediaSource*, EventQueue*);
   ~SourceBuffer() override;
 
   // SourceBuffer.idl methods
@@ -82,15 +83,16 @@ class SourceBuffer final : public EventTargetWithInlineData,
   void appendBuffer(NotShared<DOMArrayBufferView> data, ExceptionState&);
   void abort(ExceptionState&);
   void remove(double start, double end, ExceptionState&);
+  void changeType(const String& type, ExceptionState&);
   double appendWindowStart() const;
   void setAppendWindowStart(double, ExceptionState&);
   double appendWindowEnd() const;
   void setAppendWindowEnd(double, ExceptionState&);
-  DEFINE_ATTRIBUTE_EVENT_LISTENER(updatestart);
-  DEFINE_ATTRIBUTE_EVENT_LISTENER(update);
-  DEFINE_ATTRIBUTE_EVENT_LISTENER(updateend);
-  DEFINE_ATTRIBUTE_EVENT_LISTENER(error);
-  DEFINE_ATTRIBUTE_EVENT_LISTENER(abort);
+  DEFINE_ATTRIBUTE_EVENT_LISTENER(updatestart, kUpdatestart);
+  DEFINE_ATTRIBUTE_EVENT_LISTENER(update, kUpdate);
+  DEFINE_ATTRIBUTE_EVENT_LISTENER(updateend, kUpdateend);
+  DEFINE_ATTRIBUTE_EVENT_LISTENER(error, kError);
+  DEFINE_ATTRIBUTE_EVENT_LISTENER(abort, kAbort);
   TrackDefaultList* trackDefaults() const { return track_defaults_.Get(); }
   void setTrackDefaults(TrackDefaultList*, ExceptionState&);
 
@@ -119,9 +121,6 @@ class SourceBuffer final : public EventTargetWithInlineData,
   void Trace(blink::Visitor*) override;
 
  private:
-  SourceBuffer(std::unique_ptr<WebSourceBuffer>,
-               MediaSource*,
-               MediaElementEventQueue*);
   void Dispose();
 
   bool IsRemoved() const;
@@ -160,7 +159,7 @@ class SourceBuffer final : public EventTargetWithInlineData,
   std::unique_ptr<WebSourceBuffer> web_source_buffer_;
   Member<MediaSource> source_;
   Member<TrackDefaultList> track_defaults_;
-  Member<MediaElementEventQueue> async_event_queue_;
+  Member<EventQueue> async_event_queue_;
 
   AtomicString mode_;
   bool updating_;
@@ -172,7 +171,7 @@ class SourceBuffer final : public EventTargetWithInlineData,
   bool first_initialization_segment_received_;
 
   Vector<unsigned char> pending_append_data_;
-  size_t pending_append_data_offset_;
+  wtf_size_t pending_append_data_offset_;
   Member<AsyncMethodRunner<SourceBuffer>> append_buffer_async_part_runner_;
 
   double pending_remove_start_;

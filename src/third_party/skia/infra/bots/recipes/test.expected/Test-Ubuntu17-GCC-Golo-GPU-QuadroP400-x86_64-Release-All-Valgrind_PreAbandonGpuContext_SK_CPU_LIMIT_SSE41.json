@@ -135,7 +135,7 @@
       "--error-exitcode=1",
       "--num-callers=40",
       "--suppressions=[START_DIR]/skia/tools/valgrind.supp",
-      "[START_DIR]/build/out/Release/dm",
+      "[START_DIR]/build/dm",
       "--resourcePath",
       "[START_DIR]/skia/resources",
       "--skps",
@@ -184,7 +184,6 @@
       "gldft",
       "glsrgb",
       "glmsaa8",
-      "gl1010102",
       "--src",
       "tests",
       "gm",
@@ -192,10 +191,6 @@
       "colorImage",
       "svg",
       "--blacklist",
-      "gl1010102",
-      "image",
-      "_",
-      "_",
       "_",
       "svg",
       "_",
@@ -208,6 +203,10 @@
       "svg",
       "_",
       "_",
+      "_",
+      "image",
+      "gen_platf",
+      "error",
       "_",
       "image",
       "_",
@@ -304,6 +303,7 @@
       "~Threaded",
       "~multipicturedraw_",
       "--nonativeFonts",
+      "--reduceOpListSplitting",
       "--verbose",
       "--preAbandonGpuContext"
     ],
@@ -315,8 +315,7 @@
     "name": "dm"
   },
   {
-    "name": "$result",
-    "recipe_result": null,
-    "status_code": 0
+    "jsonResult": null,
+    "name": "$result"
   }
 ]

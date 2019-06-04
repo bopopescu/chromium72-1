@@ -7,9 +7,9 @@
 #include "base/json/json_reader.h"
 #include "base/json/json_writer.h"
 #include "base/memory/ptr_util.h"
+#include "base/metrics/histogram_macros.h"
 #include "base/strings/stringprintf.h"
 #include "base/values.h"
-#include "net/base/load_flags.h"
 #include "net/http/http_status_code.h"
 #include "net/url_request/url_fetcher.h"
 
@@ -18,13 +18,40 @@ using net::URLRequestStatus;
 
 namespace {
 
-const char kPrivateTopicNameKey[] = "private_topic_name";
+const char kPrivateTopicNameKey[] = "privateTopicName";
 
 base::Value* GetPrivateTopicName(base::Value* value) {
   if (!value || !value->is_dict()) {
     return nullptr;
   }
   return value->FindKeyOfType(kPrivateTopicNameKey, base::Value::Type::STRING);
+}
+
+// Subscription status values for UMA_HISTOGRAM.
+enum class SubscriptionStatus {
+  kSuccess = 0,
+  kNetworkFailure = 1,
+  kHttpFailure = 2,
+  kParsingFailure = 3,
+  kFailure = 4,
+  kMaxValue = kFailure,
+};
+
+void RecordRequestStatus(
+    SubscriptionStatus status,
+    syncer::PerUserTopicRegistrationRequest::RequestType type) {
+  switch (type) {
+    case syncer::PerUserTopicRegistrationRequest::SUBSCRIBE: {
+      UMA_HISTOGRAM_ENUMERATION("FCMInvalidations.SubscriptionRequestStatus",
+                                status);
+      break;
+    }
+    case syncer::PerUserTopicRegistrationRequest::UNSUBSCRIBE: {
+      UMA_HISTOGRAM_ENUMERATION("FCMInvalidations.UnsubscriptionRequestStatus",
+                                status);
+      break;
+    }
+  }
 }
 
 };  // namespace
@@ -38,11 +65,12 @@ PerUserTopicRegistrationRequest::~PerUserTopicRegistrationRequest() = default;
 
 void PerUserTopicRegistrationRequest::Start(
     CompletedCallback callback,
-    ParseJSONCallback parse_json,
+    const ParseJSONCallback& parse_json,
     network::mojom::URLLoaderFactory* loader_factory) {
   DCHECK(request_completed_callback_.is_null()) << "Request already running!";
   request_completed_callback_ = std::move(callback);
-  parse_json_ = std::move(parse_json);
+  parse_json_ = parse_json;
+
   simple_loader_->DownloadToStringOfUnboundedSizeUntilCrashAndDie(
       loader_factory,
       base::BindOnce(&PerUserTopicRegistrationRequest::OnURLFetchComplete,
@@ -68,33 +96,50 @@ void PerUserTopicRegistrationRequest::OnURLFetchCompleteInternal(
     std::move(request_completed_callback_)
         .Run(Status(StatusCode::FAILED, base::StringPrintf("Network Error")),
              std::string());
+    RecordRequestStatus(SubscriptionStatus::kNetworkFailure, type_);
     return;
   }
 
   if (response_code != net::HTTP_OK) {
     std::move(request_completed_callback_)
-        .Run(Status(StatusCode::FAILED,
+        .Run(Status((response_code == net::HTTP_UNAUTHORIZED)
+                        ? StatusCode::AUTH_FAILURE
+                        : StatusCode::FAILED,
                     base::StringPrintf("HTTP Error: %d", response_code)),
              std::string());
+    RecordRequestStatus(SubscriptionStatus::kHttpFailure, type_);
+    return;
+  }
+
+  if (type_ == UNSUBSCRIBE) {
+    // No response body expected for DELETE requests.
+    RecordRequestStatus(SubscriptionStatus::kSuccess, type_);
+    std::move(request_completed_callback_)
+        .Run(Status(StatusCode::SUCCESS, std::string()), std::string());
     return;
   }
 
   if (!response_body || response_body->empty()) {
+    RecordRequestStatus(SubscriptionStatus::kParsingFailure, type_);
     std::move(request_completed_callback_)
         .Run(Status(StatusCode::FAILED, base::StringPrintf("Body parse error")),
              std::string());
     return;
   }
-  std::move(parse_json_)
-      .Run(*response_body,
-           base::BindOnce(&PerUserTopicRegistrationRequest::OnJsonParseSuccess,
-                          weak_ptr_factory_.GetWeakPtr()),
-           base::BindOnce(&PerUserTopicRegistrationRequest::OnJsonParseFailure,
-                          weak_ptr_factory_.GetWeakPtr()));
+  auto success_callback =
+      base::BindOnce(&PerUserTopicRegistrationRequest::OnJsonParseSuccess,
+                     weak_ptr_factory_.GetWeakPtr());
+  auto error_callback =
+      base::BindOnce(&PerUserTopicRegistrationRequest::OnJsonParseFailure,
+                     weak_ptr_factory_.GetWeakPtr());
+  parse_json_.Run(*response_body,
+                  base::AdaptCallbackForRepeating(std::move(success_callback)),
+                  base::AdaptCallbackForRepeating(std::move(error_callback)));
 }
 
 void PerUserTopicRegistrationRequest::OnJsonParseFailure(
     const std::string& error) {
+  RecordRequestStatus(SubscriptionStatus::kParsingFailure, type_);
   std::move(request_completed_callback_)
       .Run(Status(StatusCode::FAILED, base::StringPrintf("Body parse error")),
            std::string());
@@ -104,11 +149,13 @@ void PerUserTopicRegistrationRequest::OnJsonParseSuccess(
     std::unique_ptr<base::Value> value) {
   const base::Value* private_topic_name_value =
       GetPrivateTopicName(value.get());
+  RecordRequestStatus(SubscriptionStatus::kSuccess, type_);
   if (private_topic_name_value) {
     std::move(request_completed_callback_)
         .Run(Status(StatusCode::SUCCESS, std::string()),
              private_topic_name_value->GetString());
   } else {
+    RecordRequestStatus(SubscriptionStatus::kParsingFailure, type_);
     std::move(request_completed_callback_)
         .Run(Status(StatusCode::FAILED, base::StringPrintf("Body parse error")),
              std::string());
@@ -125,15 +172,29 @@ PerUserTopicRegistrationRequest::Builder::Build() const {
   DCHECK(!scope_.empty());
   auto request = base::WrapUnique(new PerUserTopicRegistrationRequest);
 
-  GURL full_url(base::StringPrintf(
-      "%s/v1/perusertopics/%s/rel/topics/?subscriber_token=%s", scope_.c_str(),
-      project_id_.c_str(), token_.c_str()));
+  std::string url;
+  switch (type_) {
+    case SUBSCRIBE:
+      url = base::StringPrintf(
+          "%s/v1/perusertopics/%s/rel/topics/?subscriber_token=%s",
+          scope_.c_str(), project_id_.c_str(), token_.c_str());
+      break;
+    case UNSUBSCRIBE:
+      url = base::StringPrintf(
+          "%s/v1/perusertopics/%s/rel/topics/%s?subscriber_token=%s",
+          scope_.c_str(), project_id_.c_str(), topic_.c_str(), token_.c_str());
+      break;
+  }
+  GURL full_url(url);
 
   DCHECK(full_url.is_valid());
 
   request->url_ = full_url;
+  request->type_ = type_;
 
-  std::string body = BuildBody();
+  std::string body;
+  if (type_ == SUBSCRIBE)
+    body = BuildBody();
   net::HttpRequestHeaders headers = BuildHeaders();
   request->simple_loader_ = BuildURLFetcher(headers, body, full_url);
 
@@ -174,6 +235,12 @@ PerUserTopicRegistrationRequest::Builder&
 PerUserTopicRegistrationRequest::Builder::SetProjectId(
     const std::string& project_id) {
   project_id_ = project_id;
+  return *this;
+}
+
+PerUserTopicRegistrationRequest::Builder&
+PerUserTopicRegistrationRequest::Builder::SetType(RequestType type) {
+  type_ = type;
   return *this;
 }
 
@@ -231,7 +298,14 @@ PerUserTopicRegistrationRequest::Builder::BuildURLFetcher(
         })");
 
   auto request = std::make_unique<network::ResourceRequest>();
-  request->method = "POST";
+  switch (type_) {
+    case SUBSCRIBE:
+      request->method = "POST";
+      break;
+    case UNSUBSCRIBE:
+      request->method = "DELETE";
+      break;
+  }
   request->url = url;
   request->headers = headers;
 

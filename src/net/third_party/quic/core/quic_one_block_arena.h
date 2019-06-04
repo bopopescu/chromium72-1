@@ -18,7 +18,7 @@
 #include "net/third_party/quic/platform/api/quic_bug_tracker.h"
 #include "net/third_party/quic/platform/api/quic_logging.h"
 
-namespace net {
+namespace quic {
 
 template <uint32_t ArenaSize>
 class QuicOneBlockArena {
@@ -26,6 +26,8 @@ class QuicOneBlockArena {
 
  public:
   QuicOneBlockArena();
+  QuicOneBlockArena(const QuicOneBlockArena&) = delete;
+  QuicOneBlockArena& operator=(const QuicOneBlockArena&) = delete;
 
   // Instantiates an object of type |T| with |args|. |args| are perfectly
   // forwarded to |T|'s constructor. The returned pointer's lifetime is
@@ -46,8 +48,6 @@ class QuicOneBlockArena {
   QUIC_ALIGNED(8) char storage_[ArenaSize];
   // Current offset into the storage.
   uint32_t offset_;
-
-  DISALLOW_COPY_AND_ASSIGN(QuicOneBlockArena);
 };
 
 template <uint32_t ArenaSize>
@@ -74,6 +74,10 @@ QuicArenaScopedPtr<T> QuicOneBlockArena<ArenaSize>::New(Args&&... args) {
                                QuicArenaScopedPtr<T>::ConstructFrom::kArena);
 }
 
-}  // namespace net
+// QuicConnections currently use around 1KB of polymorphic types which would
+// ordinarily be on the heap. Instead, store them inline in an arena.
+using QuicConnectionArena = QuicOneBlockArena<1024>;
+
+}  // namespace quic
 
 #endif  // NET_THIRD_PARTY_QUIC_CORE_QUIC_ONE_BLOCK_ARENA_H_

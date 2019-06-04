@@ -28,12 +28,11 @@
 #include <algorithm>
 #include "third_party/blink/public/platform/platform.h"
 #include "third_party/blink/public/platform/task_type.h"
-#include "third_party/blink/public/platform/web_thread.h"
-#include "third_party/blink/renderer/bindings/core/v8/script_streamer.h"
 #include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/script/script_loader.h"
 #include "third_party/blink/renderer/platform/heap/handle.h"
 #include "third_party/blink/renderer/platform/runtime_enabled_features.h"
+#include "third_party/blink/renderer/platform/scheduler/public/thread.h"
 #include "third_party/blink/renderer/platform/scheduler/public/thread_scheduler.h"
 
 namespace blink {
@@ -307,7 +306,6 @@ bool ScriptRunner::DoTryStream(PendingScript* pending_script) {
 #endif
 
   bool success = pending_script->StartStreamingIfPossible(
-      ScriptStreamer::kAsync,
       WTF::Bind(&ScriptRunner::NotifyScriptStreamerFinished,
                 WrapWeakPersistent(this)));
 #ifndef NDEBUG
@@ -328,17 +326,6 @@ void ScriptRunner::Trace(blink::Visitor* visitor) {
   visitor->Trace(pending_async_scripts_);
   visitor->Trace(async_scripts_to_execute_soon_);
   visitor->Trace(in_order_scripts_to_execute_soon_);
-}
-
-void ScriptRunner::TraceWrappers(ScriptWrappableVisitor* visitor) const {
-  for (const auto& loader : pending_in_order_scripts_)
-    visitor->TraceWrappers(loader);
-  for (const auto& loader : pending_async_scripts_)
-    visitor->TraceWrappers(loader);
-  for (const auto& loader : async_scripts_to_execute_soon_)
-    visitor->TraceWrappers(loader);
-  for (const auto& loader : in_order_scripts_to_execute_soon_)
-    visitor->TraceWrappers(loader);
 }
 
 }  // namespace blink

@@ -39,8 +39,7 @@ namespace {
 // Returns true iff all addresses in |list| are in the IPv6 family.
 bool AddressListOnlyContainsIPv6(const AddressList& list) {
   DCHECK(!list.empty());
-  for (AddressList::const_iterator iter = list.begin(); iter != list.end();
-       ++iter) {
+  for (auto iter = list.begin(); iter != list.end(); ++iter) {
     if (iter->GetFamily() != ADDRESS_FAMILY_IPV6)
       return false;
   }
@@ -141,7 +140,7 @@ void TransportConnectJob::GetAdditionalErrorState(ClientSocketHandle* handle) {
 
 // static
 void TransportConnectJob::MakeAddressListStartWithIPv4(AddressList* list) {
-  for (AddressList::iterator i = list->begin(); i != list->end(); ++i) {
+  for (auto i = list->begin(); i != list->end(); ++i) {
     if (i->GetFamily() == ADDRESS_FAMILY_IPV4) {
       std::rotate(list->begin(), i, list->end());
       break;
@@ -246,6 +245,7 @@ int TransportConnectJob::DoLoop(int result) {
 
   return rv;
 }
+
 int TransportConnectJob::DoResolveHost() {
   next_state_ = STATE_RESOLVE_HOST_COMPLETE;
   connect_timing_.dns_start = base::TimeTicks::Now();
@@ -257,7 +257,7 @@ int TransportConnectJob::DoResolveHost() {
 }
 
 int TransportConnectJob::DoResolveHostComplete(int result) {
-  TRACE_EVENT0(kNetTracingCategory,
+  TRACE_EVENT0(NetTracingCategory(),
                "TransportConnectJob::DoResolveHostComplete");
   connect_timing_.dns_end = base::TimeTicks::Now();
   // Overwrite connection start time, since for connections that do not go
@@ -440,6 +440,14 @@ int TransportConnectJob::ConnectInternal() {
   return DoLoop(OK);
 }
 
+void TransportConnectJob::ChangePriorityInternal(RequestPriority priority) {
+  if (next_state_ == STATE_RESOLVE_HOST_COMPLETE) {
+    DCHECK(request_);
+    // Change the request priority in the host resolver.
+    request_->ChangeRequestPriority(priority);
+  }
+}
+
 void TransportConnectJob::CopyConnectionAttemptsFromSockets() {
   if (transport_socket_)
     transport_socket_->GetConnectionAttempts(&connection_attempts_);
@@ -495,7 +503,7 @@ int TransportClientSocketPool::RequestSocket(const std::string& group_name,
                                              const SocketTag& socket_tag,
                                              RespectLimits respect_limits,
                                              ClientSocketHandle* handle,
-                                             const CompletionCallback& callback,
+                                             CompletionOnceCallback callback,
                                              const NetLogWithSource& net_log) {
   const scoped_refptr<TransportSocketParams>* casted_params =
       static_cast<const scoped_refptr<TransportSocketParams>*>(params);
@@ -503,7 +511,8 @@ int TransportClientSocketPool::RequestSocket(const std::string& group_name,
   NetLogTcpClientSocketPoolRequestedSocket(net_log, casted_params);
 
   return base_.RequestSocket(group_name, *casted_params, priority, socket_tag,
-                             respect_limits, handle, callback, net_log);
+                             respect_limits, handle, std::move(callback),
+                             net_log);
 }
 
 void TransportClientSocketPool::NetLogTcpClientSocketPoolRequestedSocket(

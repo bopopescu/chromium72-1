@@ -30,39 +30,39 @@
 
 #include "third_party/blink/renderer/modules/mediasource/source_buffer_list.h"
 
-#include "third_party/blink/renderer/core/dom/events/media_element_event_queue.h"
+#include "third_party/blink/renderer/core/dom/events/event_queue.h"
 #include "third_party/blink/renderer/modules/event_modules.h"
 #include "third_party/blink/renderer/modules/mediasource/source_buffer.h"
 
 namespace blink {
 
 SourceBufferList::SourceBufferList(ExecutionContext* context,
-                                   MediaElementEventQueue* async_event_queue)
+                                   EventQueue* async_event_queue)
     : ContextClient(context), async_event_queue_(async_event_queue) {}
 
 SourceBufferList::~SourceBufferList() = default;
 
 void SourceBufferList::Add(SourceBuffer* buffer) {
   list_.push_back(buffer);
-  ScheduleEvent(EventTypeNames::addsourcebuffer);
+  ScheduleEvent(event_type_names::kAddsourcebuffer);
 }
 
-void SourceBufferList::insert(size_t position, SourceBuffer* buffer) {
+void SourceBufferList::insert(wtf_size_t position, SourceBuffer* buffer) {
   list_.insert(position, buffer);
-  ScheduleEvent(EventTypeNames::addsourcebuffer);
+  ScheduleEvent(event_type_names::kAddsourcebuffer);
 }
 
 void SourceBufferList::Remove(SourceBuffer* buffer) {
-  size_t index = list_.Find(buffer);
+  wtf_size_t index = list_.Find(buffer);
   if (index == kNotFound)
     return;
   list_.EraseAt(index);
-  ScheduleEvent(EventTypeNames::removesourcebuffer);
+  ScheduleEvent(event_type_names::kRemovesourcebuffer);
 }
 
 void SourceBufferList::Clear() {
   list_.clear();
-  ScheduleEvent(EventTypeNames::removesourcebuffer);
+  ScheduleEvent(event_type_names::kRemovesourcebuffer);
 }
 
 void SourceBufferList::ScheduleEvent(const AtomicString& event_name) {
@@ -71,11 +71,11 @@ void SourceBufferList::ScheduleEvent(const AtomicString& event_name) {
   Event* event = Event::Create(event_name);
   event->SetTarget(this);
 
-  async_event_queue_->EnqueueEvent(FROM_HERE, event);
+  async_event_queue_->EnqueueEvent(FROM_HERE, *event);
 }
 
 const AtomicString& SourceBufferList::InterfaceName() const {
-  return EventTargetNames::SourceBufferList;
+  return event_target_names::kSourceBufferList;
 }
 
 void SourceBufferList::Trace(blink::Visitor* visitor) {

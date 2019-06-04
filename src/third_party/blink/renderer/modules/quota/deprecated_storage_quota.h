@@ -32,7 +32,7 @@
 #define THIRD_PARTY_BLINK_RENDERER_MODULES_QUOTA_DEPRECATED_STORAGE_QUOTA_H_
 
 #include "third_party/blink/public/mojom/quota/quota_dispatcher_host.mojom-blink.h"
-#include "third_party/blink/renderer/core/dom/exception_code.h"
+#include "third_party/blink/renderer/platform/bindings/exception_code.h"
 #include "third_party/blink/renderer/platform/bindings/script_wrappable.h"
 #include "third_party/blink/renderer/platform/heap/handle.h"
 
@@ -54,12 +54,14 @@ class DeprecatedStorageQuota final : public ScriptWrappable {
   };
 
   static DeprecatedStorageQuota* Create(Type type) {
-    return new DeprecatedStorageQuota(type);
+    return MakeGarbageCollected<DeprecatedStorageQuota>(type);
   }
 
   static void EnqueueStorageErrorCallback(ScriptState*,
                                           V8StorageErrorCallback*,
-                                          ExceptionCode);
+                                          DOMExceptionCode);
+
+  explicit DeprecatedStorageQuota(Type);
 
   void queryUsageAndQuota(ScriptState*,
                           V8StorageUsageCallback*,
@@ -71,8 +73,6 @@ class DeprecatedStorageQuota final : public ScriptWrappable {
                     V8StorageErrorCallback* = nullptr);
 
  private:
-  explicit DeprecatedStorageQuota(Type);
-
   // Binds the interface (if not already bound) with the given interface
   // provider, and returns it,
   mojom::blink::QuotaDispatcherHost& GetQuotaHost(ExecutionContext*);

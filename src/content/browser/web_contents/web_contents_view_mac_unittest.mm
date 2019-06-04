@@ -9,6 +9,7 @@
 #include "content/public/browser/web_contents.h"
 #include "content/public/test/test_renderer_host.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "testing/gtest_mac.h"
 #include "testing/platform_test.h"
 #include "ui/base/test/cocoa_helper.h"
 #import "ui/base/test/cocoa_helper.h"
@@ -23,6 +24,7 @@ class WebContentsViewCocoaTest : public ui::CocoaTest {
 }  // namespace
 
 TEST_F(WebContentsViewCocoaTest, NonWebDragSourceTest) {
+  // The designated initializer is private but init should be fine in this case.
   base::scoped_nsobject<WebContentsViewCocoa> view(
       [[WebContentsViewCocoa alloc] init]);
 
@@ -36,6 +38,28 @@ TEST_F(WebContentsViewCocoaTest, NonWebDragSourceTest) {
       [view draggingSourceOperationMaskForLocal:NO]);
 }
 
+TEST_F(WebContentsViewCocoaTest, AccessibilityParentTest) {
+  // The designated initializer is private but init should be fine in this case.
+  base::scoped_nsobject<WebContentsViewCocoa> view(
+      [[WebContentsViewCocoa alloc] init]);
+
+  // NSBox so it participates in the a11y hierarchy.
+  base::scoped_nsobject<NSView> parent_view([[NSBox alloc] init]);
+  base::scoped_nsobject<NSView> accessibility_parent([[NSView alloc] init]);
+
+  [parent_view addSubview:view];
+  EXPECT_NSEQ([view accessibilityAttributeValue:NSAccessibilityParentAttribute],
+              parent_view);
+
+  [view setAccessibilityParentElement:accessibility_parent];
+  EXPECT_NSEQ([view accessibilityAttributeValue:NSAccessibilityParentAttribute],
+              accessibility_parent);
+
+  [view setAccessibilityParentElement:nil];
+  EXPECT_NSEQ([view accessibilityAttributeValue:NSAccessibilityParentAttribute],
+              parent_view);
+}
+
 namespace {
 
 class WebContentsViewMacTest : public RenderViewHostTestHarness {
@@ -45,7 +69,8 @@ class WebContentsViewMacTest : public RenderViewHostTestHarness {
   void SetUp() override {
     RenderViewHostTestHarness::SetUp();
     window_.reset([[CocoaTestHelperWindow alloc] init]);
-    [[window_ contentView] addSubview:web_contents()->GetNativeView()];
+    [[window_ contentView]
+        addSubview:web_contents()->GetNativeView().GetNativeNSView()];
   }
 
   base::scoped_nsobject<CocoaTestHelperWindow> window_;

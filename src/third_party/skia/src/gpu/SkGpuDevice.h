@@ -73,27 +73,20 @@ public:
                     const SkPaint& paint) override;
     void drawRect(const SkRect& r, const SkPaint& paint) override;
     void drawRRect(const SkRRect& r, const SkPaint& paint) override;
-    void drawDRRect(const SkRRect& outer, const SkRRect& inner,
-                    const SkPaint& paint) override;
+    void drawDRRect(const SkRRect& outer, const SkRRect& inner, const SkPaint& paint) override;
     void drawRegion(const SkRegion& r, const SkPaint& paint) override;
     void drawOval(const SkRect& oval, const SkPaint& paint) override;
     void drawArc(const SkRect& oval, SkScalar startAngle, SkScalar sweepAngle,
                  bool useCenter, const SkPaint& paint) override;
-    void drawPath(const SkPath& path, const SkPaint& paint,
-                  const SkMatrix* prePathMatrix, bool pathIsMutable) override;
-    void drawBitmap(const SkBitmap&, SkScalar x, SkScalar y,
-                    const SkPaint&) override;
+    void drawPath(const SkPath& path, const SkPaint& paint, bool pathIsMutable) override;
+    void drawBitmap(const SkBitmap&, SkScalar x, SkScalar y, const SkPaint&) override;
     void drawBitmapRect(const SkBitmap&, const SkRect* srcOrNull, const SkRect& dst,
                         const SkPaint& paint, SkCanvas::SrcRectConstraint) override;
     void drawSprite(const SkBitmap& bitmap, int x, int y,
                     const SkPaint& paint) override;
-    void drawText(const void* text, size_t len, SkScalar x, SkScalar y,
-                  const SkPaint&) override;
-    void drawPosText(const void* text, size_t len, const SkScalar pos[],
-                     int scalarsPerPos, const SkPoint& offset, const SkPaint&) override;
-    void drawTextBlob(const SkTextBlob*, SkScalar x, SkScalar y,
-                      const SkPaint& paint, SkDrawFilter* drawFilter) override;
-    void drawVertices(const SkVertices*, SkBlendMode, const SkPaint&) override;
+    void drawGlyphRunList(const SkGlyphRunList& glyphRunList) override;
+    void drawVertices(const SkVertices*, const SkVertices::Bone bones[], int boneCount, SkBlendMode,
+                      const SkPaint&) override;
     void drawShadow(const SkPath&, const SkDrawShadowRec&) override;
     void drawAtlas(const SkImage* atlas, const SkRSXform[], const SkRect[],
                    const SkColor[], int count, SkBlendMode, const SkPaint&) override;
@@ -112,6 +105,10 @@ public:
                           const SkRect& dst, const SkPaint&) override;
     void drawBitmapLattice(const SkBitmap&, const SkCanvas::Lattice&,
                            const SkRect& dst, const SkPaint&) override;
+    void drawImageSet(const SkCanvas::ImageSetEntry[], int count, SkFilterQuality,
+                      SkBlendMode) override;
+
+    void drawDrawable(SkDrawable*, const SkMatrix*, SkCanvas* canvas) override;
 
     void drawSpecial(SkSpecialImage*, int left, int top, const SkPaint& paint,
                      SkImage*, const SkMatrix&) override;
@@ -136,7 +133,6 @@ private:
     sk_sp<GrRenderTargetContext> fRenderTargetContext;
 
     SkISize                      fSize;
-    bool                         fOpaque;
 
     enum Flags {
         kNeedClear_Flag = 1 << 0,  //!< Surface requires an initial clear
@@ -219,21 +215,13 @@ private:
                                 const SkMatrix& viewMatrix,
                                 const SkPaint&);
 
-    void drawTextureMaker(GrTextureMaker* maker,
-                          int imageW,
-                          int imageH,
-                          const SkRect* srcRect,
-                          const SkRect* dstRect,
-                          SkCanvas::SrcRectConstraint,
-                          const SkMatrix& viewMatrix,
-                          const SkPaint&);
-
     void drawTextureProducer(GrTextureProducer*,
                              const SkRect* srcRect,
                              const SkRect* dstRect,
                              SkCanvas::SrcRectConstraint,
                              const SkMatrix& viewMatrix,
-                             const SkPaint&);
+                             const SkPaint&,
+                             bool attemptDrawTexture);
 
     void drawTextureProducerImpl(GrTextureProducer*,
                                  const SkRect& clippedSrcRect,
@@ -249,7 +237,8 @@ private:
     void drawStrokedLine(const SkPoint pts[2], const SkPaint&);
 
     void wireframeVertices(SkVertices::VertexMode, int vertexCount, const SkPoint verts[],
-                           SkBlendMode, const uint16_t indices[], int indexCount, const SkPaint&);
+                           const SkVertices::Bone bones[], int boneCount, SkBlendMode,
+                           const uint16_t indices[], int indexCount, const SkPaint&);
 
     static sk_sp<GrRenderTargetContext> MakeRenderTargetContext(GrContext*,
                                                                 SkBudgeted,

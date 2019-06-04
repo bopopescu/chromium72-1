@@ -196,7 +196,7 @@ public class WebApkUpdateManager implements WebApkUpdateDataFetcher.Observer {
             callback.run();
         };
 
-        WebApkUma.recordUpdateRequestSent(WebApkUma.UPDATE_REQUEST_SENT_WHILE_WEBAPK_CLOSED);
+        WebApkUma.recordUpdateRequestSent(WebApkUma.UpdateRequestSent.WHILE_WEBAPK_CLOSED);
         updateWebApkFromFile(mStorage.getPendingUpdateRequestPath(), callbackRunner);
     }
 
@@ -204,10 +204,10 @@ public class WebApkUpdateManager implements WebApkUpdateDataFetcher.Observer {
      * Destroys {@link mFetcher}. In a separate function for the sake of tests.
      */
     protected void destroyFetcher() {
-        if (mFetcher == null) return;
-
-        mFetcher.destroy();
-        mFetcher = null;
+        if (mFetcher != null) {
+            mFetcher.destroy();
+            mFetcher = null;
+        }
     }
 
     /**
@@ -229,7 +229,7 @@ public class WebApkUpdateManager implements WebApkUpdateDataFetcher.Observer {
      * Whether there is a new version of the //chrome/android/webapk/shell_apk code.
      */
     private static boolean isShellApkVersionOutOfDate(WebApkInfo info) {
-        return info.shellApkVersion() < WebApkVersion.CURRENT_SHELL_APK_VERSION;
+        return info.shellApkVersion() < WebApkVersion.REQUEST_UPDATE_FOR_SHELL_APK_VERSION;
     }
 
     /**
@@ -239,21 +239,17 @@ public class WebApkUpdateManager implements WebApkUpdateDataFetcher.Observer {
      * True if there has not been any update attempts.
      */
     private boolean shouldCheckIfWebManifestUpdated(WebApkInfo info) {
-        if (!sUpdatesEnabled) {
-            return false;
-        }
+        if (!sUpdatesEnabled) return false;
 
         if (CommandLine.getInstance().hasSwitch(
                     ChromeSwitches.CHECK_FOR_WEB_MANIFEST_UPDATE_ON_STARTUP)) {
             return true;
         }
 
-        if (!info.apkPackageName().startsWith(WEBAPK_PACKAGE_PREFIX)) {
-            return false;
-        }
+        if (!info.webApkPackageName().startsWith(WEBAPK_PACKAGE_PREFIX)) return false;
 
         if (isShellApkVersionOutOfDate(info)
-                && WebApkVersion.CURRENT_SHELL_APK_VERSION
+                && WebApkVersion.REQUEST_UPDATE_FOR_SHELL_APK_VERSION
                         > mStorage.getLastRequestedShellApkVersion()) {
             return true;
         }
@@ -271,7 +267,8 @@ public class WebApkUpdateManager implements WebApkUpdateDataFetcher.Observer {
         mStorage.updateTimeOfLastWebApkUpdateRequestCompletion();
         mStorage.updateDidLastWebApkUpdateRequestSucceed(result == WebApkInstallResult.SUCCESS);
         mStorage.setRelaxedUpdates(relaxUpdates);
-        mStorage.updateLastRequestedShellApkVersion(WebApkVersion.CURRENT_SHELL_APK_VERSION);
+        mStorage.updateLastRequestedShellApkVersion(
+                WebApkVersion.REQUEST_UPDATE_FOR_SHELL_APK_VERSION);
     }
 
     /**
@@ -296,13 +293,8 @@ public class WebApkUpdateManager implements WebApkUpdateDataFetcher.Observer {
      */
     private static @WebApkUpdateReason int needsUpdate(WebApkInfo oldInfo, WebApkInfo fetchedInfo,
             String primaryIconUrl, String badgeIconUrl) {
-        if (isShellApkVersionOutOfDate(oldInfo)) {
-            return WebApkUpdateReason.OLD_SHELL_APK;
-        }
-
-        if (fetchedInfo == null) {
-            return WebApkUpdateReason.NONE;
-        }
+        if (isShellApkVersionOutOfDate(oldInfo)) return WebApkUpdateReason.OLD_SHELL_APK;
+        if (fetchedInfo == null) return WebApkUpdateReason.NONE;
 
         // We should have computed the Murmur2 hashes for the bitmaps at the primary icon URL and
         // the badge icon for {@link fetchedInfo} (but not the other icon URLs.)
@@ -337,6 +329,8 @@ public class WebApkUpdateManager implements WebApkUpdateDataFetcher.Observer {
             return WebApkUpdateReason.ORIENTATION_DIFFERS;
         } else if (oldInfo.displayMode() != fetchedInfo.displayMode()) {
             return WebApkUpdateReason.DISPLAY_MODE_DIFFERS;
+        } else if (!oldInfo.shareTarget().equals(fetchedInfo.shareTarget())) {
+            return WebApkUpdateReason.WEB_SHARE_TARGET_DIFFERS;
         }
         return WebApkUpdateReason.NONE;
     }
@@ -358,7 +352,7 @@ public class WebApkUpdateManager implements WebApkUpdateDataFetcher.Observer {
     protected void storeWebApkUpdateRequestToFile(String updateRequestPath, WebApkInfo info,
             String primaryIconUrl, String badgeIconUrl, boolean isManifestStale,
             @WebApkUpdateReason int updateReason, Callback<Boolean> callback) {
-        int versionCode = readVersionCodeFromAndroidManifest(info.apkPackageName());
+        int versionCode = readVersionCodeFromAndroidManifest(info.webApkPackageName());
         int size = info.iconUrlToMurmur2HashMap().size();
         String[] iconUrls = new String[size];
         String[] iconHashes = new String[size];
@@ -374,7 +368,9 @@ public class WebApkUpdateManager implements WebApkUpdateDataFetcher.Observer {
                 info.scopeUri().toString(), info.name(), info.shortName(), primaryIconUrl,
                 info.icon(), badgeIconUrl, info.badgeIcon(), iconUrls, iconHashes,
                 info.displayMode(), info.orientation(), info.themeColor(), info.backgroundColor(),
-                info.manifestUrl(), info.apkPackageName(), versionCode, isManifestStale,
+                info.shareTarget().getAction(), info.shareTarget().getParamTitle(),
+                info.shareTarget().getParamText(), info.shareTarget().getParamUrl(),
+                info.manifestUrl(), info.webApkPackageName(), versionCode, isManifestStale,
                 updateReason, callback);
     }
 
@@ -386,9 +382,10 @@ public class WebApkUpdateManager implements WebApkUpdateDataFetcher.Observer {
             String startUrl, String scope, String name, String shortName, String primaryIconUrl,
             Bitmap primaryIcon, String badgeIconUrl, Bitmap badgeIcon, String[] iconUrls,
             String[] iconHashes, @WebDisplayMode int displayMode, int orientation, long themeColor,
-            long backgroundColor, String manifestUrl, String webApkPackage, int webApkVersion,
-            boolean isManifestStale, @WebApkUpdateReason int updateReason,
-            Callback<Boolean> callback);
+            long backgroundColor, String shareTargetAction, String shareTargetParamTitle,
+            String shareTargetParamText, String shareTargetParamUrl, String manifestUrl,
+            String webApkPackage, int webApkVersion, boolean isManifestStale,
+            @WebApkUpdateReason int updateReason, Callback<Boolean> callback);
     private static native void nativeUpdateWebApkFromFile(
             String updateRequestPath, WebApkUpdateCallback callback);
 }

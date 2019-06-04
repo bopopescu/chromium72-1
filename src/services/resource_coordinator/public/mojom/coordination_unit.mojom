@@ -54,6 +54,9 @@ interface FrameCoordinationUnit {
   // children.
   GetID() => (CoordinationUnitID id);
 
+  // Sets the process hosting this frame.
+  SetProcess(CoordinationUnitID id);
+
   // Add a new binding to an existing FrameCoordinationUnit.
   AddBinding(FrameCoordinationUnit& request);
   AddChildFrame(CoordinationUnitID cu_id);
@@ -63,6 +66,7 @@ interface FrameCoordinationUnit {
   SetAudibility(bool audible);
   SetNetworkAlmostIdle(bool idle);
   SetLifecycleState(LifecycleState state);
+  SetHasNonEmptyBeforeUnload(bool has_nonempty_beforeunload);
 
   // Event signals.
   OnAlertFired();
@@ -88,7 +92,13 @@ interface PageCoordinationUnit {
   // Event signals.
   OnFaviconUpdated();
   OnTitleUpdated();
-  OnMainFrameNavigationCommitted();
+
+  // |navigation_committed_time| is the time when the commit occurred.
+  // |navigation_id| is the unique ID of the navigation handle that was
+  // committed.
+  OnMainFrameNavigationCommitted(
+      mojo_base.mojom.TimeTicks navigation_committed_time,
+      int64 navigation_id, string url);
 };
 
 interface ProcessCoordinationUnit {
@@ -99,15 +109,21 @@ interface ProcessCoordinationUnit {
 
   // Add a new binding to an existing ProcessCoordinationUnit.
   AddBinding(ProcessCoordinationUnit& request);
-  AddFrame(CoordinationUnitID cu_id);
-  RemoveFrame(CoordinationUnitID cu_id);
 
   // Property signals.
   SetCPUUsage(double cpu_usage);
   SetExpectedTaskQueueingDuration(mojo_base.mojom.TimeDelta duration);
   SetLaunchTime(mojo_base.mojom.Time launch_time);
   SetMainThreadTaskLoadIsLow(bool main_thread_task_load_is_low);
-  SetPID(int64 pid);
+  SetPID(mojo_base.mojom.ProcessId pid);
+  // Called when the process is known to have died or to have failed to start.
+  SetProcessExitStatus(int32 exit_status);
+
+  // Event signals.
+
+  // Fired when one of the renderer heaps is about to exceed its limit.
+  // If nothing is done, then the renderer is likely to crash with OOM.
+  OnRendererIsBloated();
 };
 
 // There is exactly one SystemCoordinationUnit at all times.

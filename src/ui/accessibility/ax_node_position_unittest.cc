@@ -118,12 +118,12 @@ void AXPositionTest::SetUp() {
   root_.role = ax::mojom::Role::kDialog;
   root_.AddState(ax::mojom::State::kFocusable);
   root_.SetName(std::string("ButtonCheck box") + TEXT_VALUE);
-  root_.location = gfx::RectF(0, 0, 800, 600);
+  root_.relative_bounds.bounds = gfx::RectF(0, 0, 800, 600);
 
   button_.role = ax::mojom::Role::kButton;
   button_.SetHasPopup(ax::mojom::HasPopup::kMenu);
   button_.SetName("Button");
-  button_.location = gfx::RectF(20, 20, 200, 30);
+  button_.relative_bounds.bounds = gfx::RectF(20, 20, 200, 30);
   button_.AddIntListAttribute(ax::mojom::IntListAttribute::kWordStarts,
                               std::vector<int32_t>{0});
   button_.AddIntListAttribute(ax::mojom::IntListAttribute::kWordEnds,
@@ -135,7 +135,7 @@ void AXPositionTest::SetUp() {
   check_box_.role = ax::mojom::Role::kCheckBox;
   check_box_.SetCheckedState(ax::mojom::CheckedState::kTrue);
   check_box_.SetName("Check box");
-  check_box_.location = gfx::RectF(20, 50, 200, 30);
+  check_box_.relative_bounds.bounds = gfx::RectF(20, 50, 200, 30);
   check_box_.AddIntListAttribute(ax::mojom::IntListAttribute::kWordStarts,
                                  std::vector<int32_t>{0, 6});
   check_box_.AddIntListAttribute(ax::mojom::IntListAttribute::kWordEnds,
@@ -201,7 +201,7 @@ void AXPositionTest::SetUp() {
   initial_state.nodes.push_back(static_text2_);
   initial_state.nodes.push_back(inline_box2_);
   initial_state.has_tree_data = true;
-  initial_state.tree_data.tree_id = 0;
+  initial_state.tree_data.tree_id = AXTreeID::FromString("0");
   initial_state.tree_data.title = "Dialog title";
   AXSerializableTree src_tree(initial_state);
 
@@ -1533,6 +1533,18 @@ TEST_F(AXPositionTest, OperatorEquals) {
       ax::mojom::TextAffinity::kUpstream);
   ASSERT_NE(nullptr, text_position2);
   EXPECT_EQ(*text_position1, *text_position2);
+
+  // Two text positions that are consequtive, one "before text" and one "after
+  // text".
+  text_position1 = AXNodePosition::CreateTextPosition(
+      tree_.data().tree_id, inline_box2_.id, 0 /* text_offset */,
+      ax::mojom::TextAffinity::kDownstream);
+  ASSERT_NE(nullptr, text_position1);
+  text_position2 = AXNodePosition::CreateTextPosition(
+      tree_.data().tree_id, line_break_.id, 1 /* text_offset */,
+      ax::mojom::TextAffinity::kDownstream);
+  ASSERT_NE(nullptr, text_position2);
+  EXPECT_NE(*text_position1, *text_position2);
 }
 
 TEST_F(AXPositionTest, OperatorsLessThanAndGreaterThan) {
@@ -1573,6 +1585,7 @@ TEST_F(AXPositionTest, OperatorsLessThanAndGreaterThan) {
   EXPECT_LT(*tree_position1, *tree_position2);
   EXPECT_GT(*tree_position2, *tree_position1);
 
+  // Two text positions that share a common anchor.
   TestPositionType text_position1 = AXNodePosition::CreateTextPosition(
       tree_.data().tree_id, inline_box1_.id, 2 /* text_offset */,
       ax::mojom::TextAffinity::kDownstream);
@@ -1601,6 +1614,38 @@ TEST_F(AXPositionTest, OperatorsLessThanAndGreaterThan) {
   text_position2 = AXNodePosition::CreateTextPosition(
       tree_.data().tree_id, line_break_.id, 0 /* text_offset */,
       ax::mojom::TextAffinity::kUpstream);
+  ASSERT_NE(nullptr, text_position2);
+  EXPECT_GT(*text_position1, *text_position2);
+  EXPECT_LT(*text_position2, *text_position1);
+
+  // A text position that is an ancestor of another.
+  text_position1 = AXNodePosition::CreateTextPosition(
+      tree_.data().tree_id, text_field_.id, 6 /* text_offset */,
+      ax::mojom::TextAffinity::kDownstream);
+  ASSERT_NE(nullptr, text_position1);
+  text_position2 = AXNodePosition::CreateTextPosition(
+      tree_.data().tree_id, inline_box1_.id, 5 /* text_offset */,
+      ax::mojom::TextAffinity::kDownstream);
+  ASSERT_NE(nullptr, text_position2);
+  EXPECT_GT(*text_position1, *text_position2);
+  EXPECT_LT(*text_position2, *text_position1);
+
+  // Two text positions that share a common ancestor.
+  text_position1 = AXNodePosition::CreateTextPosition(
+      tree_.data().tree_id, inline_box2_.id, 0 /* text_offset */,
+      ax::mojom::TextAffinity::kDownstream);
+  ASSERT_NE(nullptr, text_position1);
+  text_position2 = AXNodePosition::CreateTextPosition(
+      tree_.data().tree_id, line_break_.id, 0 /* text_offset */,
+      ax::mojom::TextAffinity::kDownstream);
+  ASSERT_NE(nullptr, text_position2);
+  EXPECT_GT(*text_position1, *text_position2);
+  EXPECT_LT(*text_position2, *text_position1);
+
+  // Two consequtive positions. One "before text" and one "after text".
+  text_position2 = AXNodePosition::CreateTextPosition(
+      tree_.data().tree_id, line_break_.id, 1 /* text_offset */,
+      ax::mojom::TextAffinity::kDownstream);
   ASSERT_NE(nullptr, text_position2);
   EXPECT_GT(*text_position1, *text_position2);
   EXPECT_LT(*text_position2, *text_position1);

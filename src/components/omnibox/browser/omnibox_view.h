@@ -77,7 +77,8 @@ class OmniboxView {
                          WindowOpenDisposition disposition,
                          const GURL& alternate_nav_url,
                          const base::string16& pasted_text,
-                         size_t selected_line);
+                         size_t selected_line,
+                         base::TimeTicks match_selection_timestamp);
 
   // Returns the current text of the edit control, which could be the
   // "temporary" text set by the popup, the "permanent" text set by the
@@ -142,7 +143,7 @@ class OmniboxView {
   // defines a method with that name.
   virtual void CloseOmniboxPopup();
 
-  // Sets the focus to the autocomplete view.
+  // Sets the focus to the omnibox.
   virtual void SetFocus() = 0;
 
   // Shows or hides the caret based on whether the model's is_caret_visible() is
@@ -208,7 +209,7 @@ class OmniboxView {
   virtual bool IsImeShowingPopup() const;
 
   // Display a virtual keyboard or alternate input view if enabled.
-  virtual void ShowImeIfNeeded();
+  virtual void ShowVirtualKeyboardIfEnabled();
 
   // Hides a virtual keyboard or alternate input view if enabled.
   virtual void HideImeIfNeeded();
@@ -287,15 +288,13 @@ class OmniboxView {
                        const bool text_is_url,
                        const AutocompleteSchemeClassifier& classifier);
 
-  void OnShiftKeyChanged(bool down) { shift_key_down_ = down; }
-
  private:
   friend class OmniboxViewMacTest;
+  friend class TestOmniboxView;
 
   // |model_| can be NULL in tests.
   std::unique_ptr<OmniboxEditModel> model_;
   OmniboxEditController* controller_;
-  bool shift_key_down_;
 
   DISALLOW_COPY_AND_ASSIGN(OmniboxView);
 };

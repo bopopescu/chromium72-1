@@ -5,15 +5,15 @@
 #include "net/third_party/http2/hpack/decoder/hpack_entry_type_decoder.h"
 
 #include "base/logging.h"
+#include "net/third_party/http2/platform/api/http2_bug_tracker.h"
 #include "net/third_party/http2/platform/api/http2_string_utils.h"
-#include "net/third_party/http2/tools/http2_bug_tracker.h"
 
 namespace http2 {
 
 Http2String HpackEntryTypeDecoder::DebugString() const {
   return Http2StrCat(
       "HpackEntryTypeDecoder(varint_decoder=", varint_decoder_.DebugString(),
-      ", entry_type = ", entry_type_, ") ");
+      ", entry_type=", entry_type_, ")");
 }
 
 std::ostream& operator<<(std::ostream& out, const HpackEntryTypeDecoder& v) {
@@ -65,7 +65,7 @@ DecodeStatus HpackEntryTypeDecoder::Start(DecodeBuffer* db) {
       // The low 4 bits of |byte| are the initial bits of the varint. All 4
       // are 1, so the varint extends into another byte.
       entry_type_ = HpackEntryType::kUnindexedLiteralHeader;
-      return varint_decoder_.StartExtended(0x0f, db);
+      return varint_decoder_.StartExtended(4, db);
 
     case 0b00010000:
     case 0b00010001:
@@ -92,7 +92,7 @@ DecodeStatus HpackEntryTypeDecoder::Start(DecodeBuffer* db) {
       // The low 4 bits of |byte| are the initial bits of the varint.
       // All of those bits are 1, so the varint extends into another byte.
       entry_type_ = HpackEntryType::kNeverIndexedLiteralHeader;
-      return varint_decoder_.StartExtended(0x0f, db);
+      return varint_decoder_.StartExtended(4, db);
 
     case 0b00100000:
     case 0b00100001:
@@ -135,7 +135,7 @@ DecodeStatus HpackEntryTypeDecoder::Start(DecodeBuffer* db) {
       entry_type_ = HpackEntryType::kDynamicTableSizeUpdate;
       // The low 5 bits of |byte| are the initial bits of the varint.
       // All of those bits are 1, so the varint extends into another byte.
-      return varint_decoder_.StartExtended(0x1f, db);
+      return varint_decoder_.StartExtended(5, db);
 
     case 0b01000000:
     case 0b01000001:
@@ -210,7 +210,7 @@ DecodeStatus HpackEntryTypeDecoder::Start(DecodeBuffer* db) {
       entry_type_ = HpackEntryType::kIndexedLiteralHeader;
       // The low 6 bits of |byte| are the initial bits of the varint.
       // All of those bits are 1, so the varint extends into another byte.
-      return varint_decoder_.StartExtended(0x3f, db);
+      return varint_decoder_.StartExtended(6, db);
 
     case 0b10000000:
     case 0b10000001:
@@ -349,7 +349,7 @@ DecodeStatus HpackEntryTypeDecoder::Start(DecodeBuffer* db) {
       entry_type_ = HpackEntryType::kIndexedHeader;
       // The low 7 bits of |byte| are the initial bits of the varint.
       // All of those bits are 1, so the varint extends into another byte.
-      return varint_decoder_.StartExtended(0x7f, db);
+      return varint_decoder_.StartExtended(7, db);
   }
   HTTP2_BUG << "Unreachable, byte=" << std::hex << static_cast<uint32_t>(byte);
   return DecodeStatus::kDecodeError;

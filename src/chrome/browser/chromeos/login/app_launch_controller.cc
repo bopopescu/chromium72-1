@@ -4,7 +4,7 @@
 
 #include "chrome/browser/chromeos/login/app_launch_controller.h"
 
-#include "ash/shell.h"
+#include "ash/public/cpp/ash_features.h"
 #include "base/bind.h"
 #include "base/callback.h"
 #include "base/files/file_path.h"
@@ -25,13 +25,12 @@
 #include "chrome/browser/chromeos/app_mode/startup_app_launcher.h"
 #include "chrome/browser/chromeos/login/enterprise_user_session_metrics.h"
 #include "chrome/browser/chromeos/login/ui/login_display_host.h"
-#include "chrome/browser/chromeos/login/ui/login_display_host_webui.h"
 #include "chrome/browser/chromeos/login/ui/webui_login_view.h"
 #include "chrome/browser/chromeos/policy/browser_policy_connector_chromeos.h"
 #include "chrome/browser/chromeos/settings/cros_settings.h"
 #include "chrome/browser/lifetime/application_lifetime.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/ash/ash_util.h"
+#include "chrome/browser/ui/ash/chrome_keyboard_controller_client.h"
 #include "chrome/browser/ui/webui/chromeos/login/app_launch_splash_screen_handler.h"
 #include "chrome/browser/ui/webui/chromeos/login/oobe_ui.h"
 #include "chromeos/settings/cros_settings_names.h"
@@ -42,7 +41,7 @@
 #include "extensions/browser/app_window/app_window_registry.h"
 #include "extensions/common/features/feature_session_type.h"
 #include "net/base/network_change_notifier.h"
-#include "ui/keyboard/keyboard_util.h"
+#include "ui/base/ui_base_features.h"
 
 namespace chromeos {
 
@@ -60,7 +59,7 @@ enum KioskLaunchType {
 };
 
 // Application install splash screen minimum show time in milliseconds.
-constexpr int kAppInstallSplashScreenMinTimeMS = 3000;
+constexpr int kAppInstallSplashScreenMinTimeMS = 10000;
 
 // Parameters for test:
 bool skip_splash_wait = false;
@@ -167,13 +166,18 @@ void AppLaunchController::StartAppLaunch(bool is_auto_launch) {
   RecordKioskLaunchUMA(is_auto_launch);
 
   // Ensure WebUILoginView is enabled so that bailout shortcut key works.
-  host_->GetWebUILoginView()->SetUIEnabled(true);
-
-  webui_visible_ = host_->GetWebUILoginView()->webui_visible();
-  if (!webui_visible_) {
-    registrar_.Add(this, chrome::NOTIFICATION_LOGIN_OR_LOCK_WEBUI_VISIBLE,
-                   content::NotificationService::AllSources());
+  if (ash::features::IsViewsLoginEnabled()) {
+    host_->GetLoginDisplay()->SetUIEnabled(true);
+    login_screen_visible_ = true;
+  } else {
+    host_->GetWebUILoginView()->SetUIEnabled(true);
+    login_screen_visible_ = host_->GetWebUILoginView()->webui_visible();
+    if (!login_screen_visible_) {
+      registrar_.Add(this, chrome::NOTIFICATION_LOGIN_OR_LOCK_WEBUI_VISIBLE,
+                     content::NotificationService::AllSources());
+    }
   }
+
   launch_splash_start_time_ = base::TimeTicks::Now().ToInternalValue();
 
   // TODO(tengs): Add a loading profile app launch state.
@@ -269,8 +273,8 @@ void AppLaunchController::Observe(int type,
                                   const content::NotificationSource& source,
                                   const content::NotificationDetails& details) {
   DCHECK_EQ(chrome::NOTIFICATION_LOGIN_OR_LOCK_WEBUI_VISIBLE, type);
-  DCHECK(!webui_visible_);
-  webui_visible_ = true;
+  DCHECK(!login_screen_visible_);
+  login_screen_visible_ = true;
   launch_splash_start_time_ = base::TimeTicks::Now().ToInternalValue();
   if (launcher_ready_)
     OnReadyToLaunch();
@@ -316,13 +320,7 @@ void AppLaunchController::OnProfileLoaded(Profile* profile) {
   profile_->InitChromeOSPreferences();
 
   // Reset virtual keyboard to use IME engines in app profile early.
-  if (!ash_util::IsRunningInMash()) {
-    if (keyboard::IsKeyboardEnabled())
-      ash::Shell::Get()->CreateKeyboard();
-  } else {
-    // TODO(xiyuan): Update with mash VK work http://crbug.com/648733
-    NOTIMPLEMENTED();
-  }
+  ChromeKeyboardControllerClient::Get()->RebuildKeyboardIfEnabled();
 
   kiosk_profile_loader_.reset();
   startup_app_launcher_.reset(
@@ -350,6 +348,10 @@ void AppLaunchController::CleanUp() {
   splash_wait_timer_.Stop();
 
   host_->Finalize(base::OnceClosure());
+
+  // Make sure that any kiosk launch errors get written to disk before we kill
+  // the browser.
+  g_browser_process->local_state()->CommitPendingWrite();
 }
 
 void AppLaunchController::OnNetworkWaitTimedout() {
@@ -483,7 +485,7 @@ void AppLaunchController::OnReadyToLaunch() {
   if (network_config_requested_)
     return;
 
-  if (!webui_visible_)
+  if (!login_screen_visible_)
     return;
 
   if (splash_wait_timer_.IsRunning())

@@ -14,7 +14,7 @@
 #include "net/third_party/quic/test_tools/simulator/actor.h"
 #include "net/third_party/quic/test_tools/simulator/alarm_factory.h"
 
-namespace net {
+namespace quic {
 namespace simulator {
 
 // Simulator is responsible for scheduling actors in the simulation and
@@ -22,6 +22,8 @@ namespace simulator {
 class Simulator : public QuicConnectionHelperInterface {
  public:
   Simulator();
+  Simulator(const Simulator&) = delete;
+  Simulator& operator=(const Simulator&) = delete;
   ~Simulator() override;
 
   // Register an actor with the simulator.  Returns a handle which the actor can
@@ -124,9 +126,7 @@ class Simulator : public QuicConnectionHelperInterface {
   // For each actor, maintain the time it is scheduled at.  The value for
   // unscheduled actors is QuicTime::Infinite().
   QuicUnorderedMap<Actor*, QuicTime> scheduled_times_;
-  QuicUnorderedSet<std::string> actor_names_;
-
-  DISALLOW_COPY_AND_ASSIGN(Simulator);
+  QuicUnorderedSet<QuicString> actor_names_;
 };
 
 template <class TerminationPredicate>
@@ -157,6 +157,6 @@ bool Simulator::RunUntilOrTimeout(TerminationPredicate termination_predicate,
 }
 
 }  // namespace simulator
-}  // namespace net
+}  // namespace quic
 
 #endif  // NET_THIRD_PARTY_QUIC_TEST_TOOLS_SIMULATOR_SIMULATOR_H_

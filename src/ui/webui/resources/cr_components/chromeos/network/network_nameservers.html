@@ -1,43 +1,42 @@
 <link rel="import" href="chrome://resources/html/polymer.html">
 
 <link rel="import" href="chrome://resources/cr_elements/chromeos/network/cr_onc_types.html">
+<link rel="import" href="chrome://resources/cr_elements/cr_input/cr_input.html">
 <link rel="import" href="chrome://resources/cr_elements/cr_radio_button/cr_radio_button.html">
+<link rel="import" href="chrome://resources/cr_elements/cr_radio_group/cr_radio_group.html">
 <link rel="import" href="chrome://resources/html/i18n_behavior.html">
 <link rel="import" href="chrome://resources/html/md_select_css.html">
 <link rel="import" href="chrome://resources/polymer/v1_0/iron-flex-layout/iron-flex-layout-classes.html">
-<link rel="import" href="chrome://resources/polymer/v1_0/iron-input/iron-input.html">
-<link rel="import" href="chrome://resources/polymer/v1_0/paper-input/paper-input-container.html">
-<link rel="import" href="chrome://resources/polymer/v1_0/paper-radio-group/paper-radio-group.html">
 <link rel="import" href="network_shared_css.html">
 
 <dom-module id="network-nameservers">
   <template>
     <style include="network-shared md-select iron-flex">
       a {
-        -webkit-margin-start: 4px;
+        margin-inline-start: 4px;
       }
 
-      paper-input-container {
+      cr-input {
+        margin-bottom: 4px;
         /* Aligns with the start of cr-radio-button's text. */
-        -webkit-margin-start: 38px;
-        height: 36px;
+        margin-inline-start: 38px;
       }
 
-      paper-radio-group {
-        --paper-radio-group-item-padding: 12px;
+      cr-radio-group {
+        --cr-radio-group-item-padding: 12px;
         width: 100%;
       }
 
       .nameservers {
         /* Aligns with the start of cr-radio-button's text. */
-        -webkit-margin-start: 38px;
+        margin-inline-start: 38px;
       }
 
       #radioGroupDiv {
-        -webkit-padding-end: var(--cr-section-padding);
-        -webkit-padding-start: var(--cr-section-padding);
         align-items: center;
         display: block;
+        padding-inline-end: var(--cr-section-padding);
+        padding-inline-start: var(--cr-section-padding);
       }
 
     </style>
@@ -47,10 +46,9 @@
     </div>
 
     <div id="radioGroupDiv">
-      <paper-radio-group id="nameserverType" class="layout vertical"
+      <cr-radio-group id="nameserverType" class="layout vertical"
           selected="[[nameserversType_]]"
-          selectable="cr-radio-button"
-          on-paper-radio-group-changed="onTypeChange_"
+          on-selected-changed="onTypeChange_"
           aria-label="[[i18n('networkNameservers')]]">
         <!-- Automatic nameservers -->
         <cr-radio-button name="automatic">
@@ -85,16 +83,14 @@
             'custom')]]">
           <div class="property-box single-column two-line">
             <template is="dom-repeat" items="[[nameservers_]]">
-              <paper-input-container no-label-float>
-                <iron-input slot="input" bind-value="[[item]]">
-                  <input id="nameserver[[index]]" on-change="onValueChange_"
-                      disabled="[[!canEdit_(editable, nameserversType_)]]">
-                </iron-input>
-              </paper-input-container>
+              <cr-input id="nameserver[[index]]" value="[[item]]"
+                  on-change="onValueChange_"
+                  disabled="[[!canEdit_(editable, nameserversType_)]]">
+              </cr-input>
             </template>
           </div>
         </template>
-      </paper-radio-group>
+      </cr-radio-group>
     </div>
 
   </template>

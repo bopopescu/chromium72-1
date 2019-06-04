@@ -8,6 +8,7 @@
 #include "base/feature_list.h"
 #include "base/memory/weak_ptr.h"
 #include "base/single_thread_task_runner.h"
+#include "base/timer/timer.h"
 #include "cc/input/touch_action.h"
 #include "content/common/content_export.h"
 #include "content/common/input/input_event_dispatch_type.h"
@@ -16,7 +17,7 @@
 #include "content/renderer/input/input_event_prediction.h"
 #include "content/renderer/input/main_thread_event_queue_task_list.h"
 #include "content/renderer/input/scoped_web_input_event_with_latency_info.h"
-#include "third_party/blink/public/platform/scheduler/web_main_thread_scheduler.h"
+#include "third_party/blink/public/platform/scheduler/web_thread_scheduler.h"
 #include "third_party/blink/public/platform/web_input_event.h"
 #include "ui/events/blink/did_overscroll_params.h"
 #include "ui/events/blink/web_input_event_traits.h"
@@ -85,7 +86,7 @@ class CONTENT_EXPORT MainThreadEventQueue
   MainThreadEventQueue(
       MainThreadEventQueueClient* client,
       const scoped_refptr<base::SingleThreadTaskRunner>& main_task_runner,
-      blink::scheduler::WebMainThreadScheduler* main_thread_scheduler,
+      blink::scheduler::WebThreadScheduler* main_thread_scheduler,
       bool allow_raf_aligned_input);
 
   // Called once the compositor has handled |event| and indicated that it is
@@ -100,6 +101,7 @@ class CONTENT_EXPORT MainThreadEventQueue
 
   void ClearClient();
   void SetNeedsLowLatency(bool low_latency);
+  void HasPointerRawMoveEventHandlers(bool has_handlers);
 
   // Request unbuffered input events until next pointerup.
   void RequestUnbufferedInputEvents();
@@ -126,6 +128,10 @@ class CONTENT_EXPORT MainThreadEventQueue
                                const ui::LatencyInfo& latency,
                                HandledEventCallback handled_callback);
 
+  bool IsRawMoveEvent(
+      const std::unique_ptr<MainThreadEventQueueTask>& item) const;
+  bool ShouldFlushQueue(
+      const std::unique_ptr<MainThreadEventQueueTask>& item) const;
   bool IsRafAlignedEvent(
       const std::unique_ptr<MainThreadEventQueueTask>& item) const;
   void RafFallbackTimerFired();
@@ -143,6 +149,7 @@ class CONTENT_EXPORT MainThreadEventQueue
   bool needs_low_latency_;
   bool allow_raf_aligned_input_;
   bool needs_low_latency_until_pointer_up_ = false;
+  bool has_pointerrawmove_handlers_ = false;
 
   // Contains data to be shared between main thread and compositor thread.
   struct SharedState {
@@ -162,7 +169,7 @@ class CONTENT_EXPORT MainThreadEventQueue
   SharedState shared_state_;
 
   scoped_refptr<base::SingleThreadTaskRunner> main_task_runner_;
-  blink::scheduler::WebMainThreadScheduler* main_thread_scheduler_;
+  blink::scheduler::WebThreadScheduler* main_thread_scheduler_;
   base::OneShotTimer raf_fallback_timer_;
   bool use_raf_fallback_timer_;
 

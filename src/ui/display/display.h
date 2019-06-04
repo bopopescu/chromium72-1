@@ -79,6 +79,11 @@ class DISPLAY_EXPORT Display final {
   Display(const Display& other);
   ~Display();
 
+  // Returns a valid display with default parameters and ID set to
+  // |kDefaultDisplayId| which is used when there's no actual display connected
+  // to the device.
+  static Display GetDefaultDisplay();
+
   // Returns the forced device scale factor, which is given by
   // "--force-device-scale-factor".
   static float GetForcedDeviceScaleFactor();
@@ -89,11 +94,19 @@ class DISPLAY_EXPORT Display final {
 
   // Returns the forced display color profile, which is given by
   // "--force-color-profile".
-  static gfx::ColorSpace GetForcedColorProfile();
+  static gfx::ColorSpace GetForcedDisplayColorProfile();
 
   // Indicates if a display color profile is being explicitly enforced from the
   // command line via "--force-color-profile".
-  static bool HasForceColorProfile();
+  static bool HasForceDisplayColorProfile();
+
+  // Returns the forced raster color profile, which is given by
+  // "--force-raster-color-profile".
+  static gfx::ColorSpace GetForcedRasterColorProfile();
+
+  // Indicates if a raster color profile is being explicitly enforced from the
+  // command line via "--force-raster-color-profile".
+  static bool HasForceRasterColorProfile();
 
   // Indicates if the display color profile being forced should be ensured to
   // be in use by the operating system as well.

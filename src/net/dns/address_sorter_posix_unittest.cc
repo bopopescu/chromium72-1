@@ -114,7 +114,7 @@ class TestUDPClientSocket : public DatagramClientSocket {
   int Connect(const IPEndPoint& remote) override {
     if (connected_)
       return ERR_UNEXPECTED;
-    AddressMapping::const_iterator it = mapping_->find(remote.address());
+    auto it = mapping_->find(remote.address());
     if (it == mapping_->end())
       return ERR_FAILED;
     connected_ = true;
@@ -227,8 +227,8 @@ class AddressSorterPosixTest : public testing::Test {
 
     AddressList result;
     TestCompletionCallback callback;
-    sorter_.Sort(list, base::Bind(&OnSortComplete, &result,
-                                  callback.callback()));
+    sorter_.Sort(list,
+                 base::BindOnce(&OnSortComplete, &result, callback.callback()));
     callback.WaitForResult();
 
     for (size_t i = 0; (i < result.size()) || (order[i] >= 0); ++i) {

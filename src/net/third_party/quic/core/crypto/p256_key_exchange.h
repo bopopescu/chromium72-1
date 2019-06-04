@@ -14,7 +14,7 @@
 #include "net/third_party/quic/platform/api/quic_string_piece.h"
 #include "third_party/boringssl/src/include/openssl/base.h"
 
-namespace net {
+namespace quic {
 
 // P256KeyExchange implements a KeyExchange using elliptic-curve
 // Diffie-Hellman on NIST P-256.
@@ -24,7 +24,7 @@ class QUIC_EXPORT_PRIVATE P256KeyExchange : public KeyExchange {
 
   // New creates a new key exchange object from a private key. If
   // |private_key| is invalid, nullptr is returned.
-  static P256KeyExchange* New(QuicStringPiece private_key);
+  static std::unique_ptr<P256KeyExchange> New(QuicStringPiece private_key);
 
   // |NewPrivateKey| returns a private key, suitable for passing to |New|.
   // If |NewPrivateKey| can't generate a private key, it returns an empty
@@ -32,11 +32,13 @@ class QUIC_EXPORT_PRIVATE P256KeyExchange : public KeyExchange {
   static QuicString NewPrivateKey();
 
   // KeyExchange interface.
-  KeyExchange* NewKeyPair(QuicRandom* rand) const override;
+  const Factory& GetFactory() const override;
   bool CalculateSharedKey(QuicStringPiece peer_public_value,
                           QuicString* shared_key) const override;
+  void CalculateSharedKey(QuicStringPiece peer_public_value,
+                          QuicString* shared_key,
+                          std::unique_ptr<Callback> callback) const override;
   QuicStringPiece public_value() const override;
-  QuicTag tag() const override;
 
  private:
   enum {
@@ -54,14 +56,14 @@ class QUIC_EXPORT_PRIVATE P256KeyExchange : public KeyExchange {
   // |kUncompressedP256PointBytes| bytes.
   P256KeyExchange(bssl::UniquePtr<EC_KEY> private_key,
                   const uint8_t* public_key);
+  P256KeyExchange(const P256KeyExchange&) = delete;
+  P256KeyExchange& operator=(const P256KeyExchange&) = delete;
 
   bssl::UniquePtr<EC_KEY> private_key_;
   // The public key stored as an uncompressed P-256 point.
   uint8_t public_key_[kUncompressedP256PointBytes];
-
-  DISALLOW_COPY_AND_ASSIGN(P256KeyExchange);
 };
 
-}  // namespace net
+}  // namespace quic
 
 #endif  // NET_THIRD_PARTY_QUIC_CORE_CRYPTO_P256_KEY_EXCHANGE_H_

@@ -12,13 +12,12 @@
 #define VIDEO_RECEIVE_STATISTICS_PROXY_H_
 
 #include <map>
+#include <memory>
 #include <string>
 #include <vector>
 
-#include "api/optional.h"
+#include "absl/types/optional.h"
 #include "call/video_receive_stream.h"
-#include "common_types.h"  // NOLINT(build/include)
-#include "common_video/include/frame_callback.h"
 #include "modules/video_coding/include/video_coding_defines.h"
 #include "rtc_base/criticalsection.h"
 #include "rtc_base/numerics/histogram_percentile_counter.h"
@@ -31,6 +30,7 @@
 #include "video/quality_threshold.h"
 #include "video/report_block_stats.h"
 #include "video/stats_counter.h"
+#include "video/video_quality_observer.h"
 #include "video/video_stream_decoder.h"
 
 namespace webrtc {
@@ -46,19 +46,21 @@ class ReceiveStatisticsProxy : public VCMReceiveStatisticsCallback,
  public:
   ReceiveStatisticsProxy(const VideoReceiveStream::Config* config,
                          Clock* clock);
-  virtual ~ReceiveStatisticsProxy();
+  ~ReceiveStatisticsProxy() override;
 
   VideoReceiveStream::Stats GetStats() const;
 
-  void OnDecodedFrame(rtc::Optional<uint8_t> qp, VideoContentType content_type);
+  void OnDecodedFrame(absl::optional<uint8_t> qp,
+                      int width,
+                      int height,
+                      VideoContentType content_type);
   void OnSyncOffsetUpdated(int64_t sync_offset_ms, double estimated_freq_khz);
   void OnRenderedFrame(const VideoFrame& frame);
   void OnIncomingPayloadType(int payload_type);
   void OnDecoderImplementationName(const char* implementation_name);
   void OnIncomingRate(unsigned int framerate, unsigned int bitrate_bps);
 
-  void OnPreDecode(const EncodedImage& encoded_image,
-                   const CodecSpecificInfo* codec_specific_info);
+  void OnPreDecode(VideoCodecType codec_type, int qp);
 
   void OnUniqueFramesCounted(int num_unique_frames);
 
@@ -110,6 +112,7 @@ class ReceiveStatisticsProxy : public VCMReceiveStatisticsCallback,
 
   struct ContentSpecificStats {
     ContentSpecificStats();
+    ~ContentSpecificStats();
 
     void Add(const ContentSpecificStats& other);
 
@@ -163,6 +166,8 @@ class ReceiveStatisticsProxy : public VCMReceiveStatisticsCallback,
   rtc::SampleCounter target_delay_counter_ RTC_GUARDED_BY(crit_);
   rtc::SampleCounter current_delay_counter_ RTC_GUARDED_BY(crit_);
   rtc::SampleCounter delay_counter_ RTC_GUARDED_BY(crit_);
+  std::unique_ptr<VideoQualityObserver> video_quality_observer_
+      RTC_GUARDED_BY(crit_);
   mutable rtc::MovingMaxCounter<int> interframe_delay_max_moving_
       RTC_GUARDED_BY(crit_);
   std::map<VideoContentType, ContentSpecificStats> content_specific_stats_
@@ -175,13 +180,16 @@ class ReceiveStatisticsProxy : public VCMReceiveStatisticsCallback,
   int64_t avg_rtt_ms_ RTC_GUARDED_BY(crit_);
   mutable std::map<int64_t, size_t> frame_window_ RTC_GUARDED_BY(&crit_);
   VideoContentType last_content_type_ RTC_GUARDED_BY(&crit_);
-  rtc::Optional<int64_t> first_decoded_frame_time_ms_ RTC_GUARDED_BY(&crit_);
-  rtc::Optional<int64_t> last_decoded_frame_time_ms_ RTC_GUARDED_BY(&crit_);
+  VideoCodecType last_codec_type_ RTC_GUARDED_BY(&crit_);
+  absl::optional<int64_t> first_decoded_frame_time_ms_ RTC_GUARDED_BY(&crit_);
+  absl::optional<int64_t> last_decoded_frame_time_ms_ RTC_GUARDED_BY(&crit_);
+  size_t num_delayed_frames_rendered_ RTC_GUARDED_BY(&crit_);
+  int64_t sum_missed_render_deadline_ms_ RTC_GUARDED_BY(&crit_);
   // Mutable because calling Max() on MovingMaxCounter is not const. Yet it is
   // called from const GetStats().
   mutable rtc::MovingMaxCounter<TimingFrameInfo> timing_frame_info_counter_
       RTC_GUARDED_BY(&crit_);
-  rtc::Optional<int> num_unique_frames_ RTC_GUARDED_BY(crit_);
+  absl::optional<int> num_unique_frames_ RTC_GUARDED_BY(crit_);
   rtc::ThreadChecker decode_thread_;
   rtc::ThreadChecker network_thread_;
   rtc::ThreadChecker main_thread_;

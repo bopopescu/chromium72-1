@@ -11,7 +11,9 @@ import android.app.ActivityManager;
 import android.content.Context;
 import android.content.Intent;
 import android.os.Build;
+import android.os.Handler;
 import android.os.PowerManager;
+import android.util.Pair;
 
 import org.junit.Assert;
 
@@ -24,11 +26,17 @@ import org.chromium.chrome.browser.ChromeActivity;
 import org.chromium.chrome.browser.omaha.OmahaBase;
 import org.chromium.chrome.browser.omaha.VersionNumberGetter;
 import org.chromium.chrome.browser.tab.Tab;
-import org.chromium.content.browser.test.util.Coordinates;
-import org.chromium.content.browser.test.util.Criteria;
-import org.chromium.content.browser.test.util.CriteriaHelper;
+import org.chromium.content_public.browser.test.util.Coordinates;
+import org.chromium.content_public.browser.test.util.Criteria;
+import org.chromium.content_public.browser.test.util.CriteriaHelper;
 
+import java.lang.ref.WeakReference;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Locale;
 import java.util.concurrent.Callable;
+import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * Methods used for testing Chrome at the Application-level.
@@ -54,7 +62,8 @@ public class ApplicationTestUtils {
         // Make sure the screen is on during test runs.
         PowerManager pm = (PowerManager) context.getSystemService(Context.POWER_SERVICE);
         sWakeLock = pm.newWakeLock(PowerManager.SCREEN_DIM_WAKE_LOCK
-                | PowerManager.ACQUIRE_CAUSES_WAKEUP | PowerManager.ON_AFTER_RELEASE, TAG);
+                        | PowerManager.ACQUIRE_CAUSES_WAKEUP | PowerManager.ON_AFTER_RELEASE,
+                "Chromium:" + TAG);
         sWakeLock.acquire();
 
         // Disable Omaha related activities.
@@ -105,12 +114,43 @@ public class ApplicationTestUtils {
 
     /** Waits until Chrome is in the background. */
     public static void waitUntilChromeInBackground() {
-        CriteriaHelper.pollInstrumentationThread(new Criteria() {
+        CriteriaHelper.pollUiThread(new Criteria() {
             @Override
             public boolean isSatisfied() {
                 int state = ApplicationStatus.getStateForApplication();
-                return state == ApplicationState.HAS_STOPPED_ACTIVITIES
+                boolean retVal = state == ApplicationState.HAS_STOPPED_ACTIVITIES
                         || state == ApplicationState.HAS_DESTROYED_ACTIVITIES;
+                if (!retVal) updateVisibleActivitiesError();
+                return retVal;
+            }
+
+            private void updateVisibleActivitiesError() {
+                List<WeakReference<Activity>> activities = ApplicationStatus.getRunningActivities();
+                List<Pair<Activity, Integer>> visibleActivities = new ArrayList<>();
+                for (WeakReference<Activity> activityRef : activities) {
+                    Activity activity = activityRef.get();
+                    if (activity == null) continue;
+                    @ActivityState
+                    int activityState = ApplicationStatus.getStateForActivity(activity);
+                    if (activityState != ActivityState.DESTROYED
+                            && activityState != ActivityState.STOPPED) {
+                        visibleActivities.add(Pair.create(activity, activityState));
+                    }
+                }
+                if (visibleActivities.isEmpty()) {
+                    updateFailureReason(
+                            "No visible activities, application status response is suspect.");
+                } else {
+                    StringBuilder error = new StringBuilder("Unexpected visible activities: ");
+                    for (Pair<Activity, Integer> visibleActivityState : visibleActivities) {
+                        Activity activity = visibleActivityState.first;
+                        error.append(
+                                String.format(Locale.US, "\n\tActivity: %s, State: %d, Intent: %s",
+                                        activity.getClass().getSimpleName(),
+                                        visibleActivityState.second, activity.getIntent()));
+                    }
+                    updateFailureReason(error.toString());
+                }
             }
         });
     }
@@ -218,5 +258,44 @@ public class ApplicationTestUtils {
                 return Math.abs(scale - expectedScale) < FLOAT_EPSILON;
             }
         });
+    }
+
+    /**
+     * Recreates the provided Activity, returning the newly created Activity once it's finished
+     * starting up.
+     * @param activity The Activity to recreate.
+     * @return The newly created Activity.
+     */
+    public static <T extends Activity> T recreateActivity(T activity) {
+        final Class<?> activityClass = activity.getClass();
+        final CallbackHelper activityCallback = new CallbackHelper();
+        final AtomicReference<T> activityRef = new AtomicReference<>();
+        ApplicationStatus.ActivityStateListener stateListener =
+                new ApplicationStatus.ActivityStateListener() {
+                    @SuppressWarnings("unchecked")
+                    @Override
+                    public void onActivityStateChange(Activity activity, int newState) {
+                        if (newState == ActivityState.RESUMED) {
+                            if (!activityClass.isAssignableFrom(activity.getClass())) return;
+
+                            activityRef.set((T) activity);
+                            new Handler().post(() -> activityCallback.notifyCalled());
+                            ApplicationStatus.unregisterActivityStateListener(this);
+                        }
+                    }
+                };
+        ApplicationStatus.registerStateListenerForAllActivities(stateListener);
+
+        try {
+            ThreadUtils.runOnUiThreadBlocking(() -> activity.recreate());
+            activityCallback.waitForCallback("Activity did not start as expected", 0);
+            T createdActivity = activityRef.get();
+            Assert.assertNotNull("Activity reference is null.", createdActivity);
+            return createdActivity;
+        } catch (InterruptedException | TimeoutException e) {
+            throw new RuntimeException(e);
+        } finally {
+            ApplicationStatus.unregisterActivityStateListener(stateListener);
+        }
     }
 }

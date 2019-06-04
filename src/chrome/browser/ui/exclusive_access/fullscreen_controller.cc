@@ -56,9 +56,10 @@ FullscreenController::FullscreenController(ExclusiveAccessManager* manager)
       state_prior_to_tab_fullscreen_(STATE_INVALID),
       tab_fullscreen_(false),
       toggled_into_fullscreen_(false),
+      deactivated_contents_(nullptr),
       is_privileged_fullscreen_for_testing_(false),
-      ptr_factory_(this) {
-}
+      is_tab_fullscreen_for_testing_(false),
+      ptr_factory_(this) {}
 
 FullscreenController::~FullscreenController() {
 }
@@ -82,7 +83,7 @@ void FullscreenController::ToggleBrowserFullscreenModeWithExtension(
 }
 
 bool FullscreenController::IsWindowFullscreenForTabOrPending() const {
-  return exclusive_access_tab() != nullptr;
+  return exclusive_access_tab() != nullptr || is_tab_fullscreen_for_testing_;
 }
 
 bool FullscreenController::IsExtensionFullscreenOrPending() const {
@@ -94,7 +95,7 @@ bool FullscreenController::IsControllerInitiatedFullscreen() const {
 }
 
 bool FullscreenController::IsTabFullscreen() const {
-  return tab_fullscreen_;
+  return tab_fullscreen_ || is_tab_fullscreen_for_testing_;
 }
 
 bool FullscreenController::IsFullscreenForTabOrPending(
@@ -102,8 +103,14 @@ bool FullscreenController::IsFullscreenForTabOrPending(
   if (IsFullscreenWithinTab(web_contents))
     return true;
   if (web_contents == exclusive_access_tab()) {
+    // If we're handling OnTabDeactivated(), |web_contents| is the
+    // deactivated contents. On the other hand,
+    // exclusive_access_manager()->context()->GetActiveWebContents() returns
+    // newly activated contents. That's because deactivation of tab is notified
+    // after TabStripModel's internal state is consistent.
     DCHECK(web_contents ==
-           exclusive_access_manager()->context()->GetActiveWebContents());
+               exclusive_access_manager()->context()->GetActiveWebContents() ||
+           web_contents == deactivated_contents_);
     return true;
   }
   return false;
@@ -134,6 +141,10 @@ void FullscreenController::EnterFullscreenModeForTab(WebContents* web_contents,
 
   ExclusiveAccessContext* exclusive_access_context =
       exclusive_access_manager()->context();
+  // This is needed on Mac as entering into Tab Fullscreen might change the top
+  // UI style.
+  exclusive_access_context->UpdateUIForTabFullscreen(
+      ExclusiveAccessContext::STATE_ENTER_TAB_FULLSCREEN);
 
   if (!exclusive_access_context->IsFullscreen()) {
     // Normal -> Tab Fullscreen.
@@ -143,11 +154,8 @@ void FullscreenController::EnterFullscreenModeForTab(WebContents* web_contents,
   }
 
   // Browser Fullscreen -> Tab Fullscreen.
-  if (exclusive_access_context->IsFullscreen()) {
-    exclusive_access_context->UpdateUIForTabFullscreen(
-        ExclusiveAccessContext::STATE_ENTER_TAB_FULLSCREEN);
+  if (exclusive_access_context->IsFullscreen())
     state_prior_to_tab_fullscreen_ = STATE_BROWSER_FULLSCREEN;
-  }
 
   // We need to update the fullscreen exit bubble, e.g., going from browser
   // fullscreen to tab fullscreen will need to show different content.
@@ -185,9 +193,14 @@ void FullscreenController::ExitFullscreenModeForTab(WebContents* web_contents) {
   }
 
   // Tab Fullscreen -> Browser Fullscreen.
-  if (state_prior_to_tab_fullscreen_ == STATE_BROWSER_FULLSCREEN)
+  // Exiting tab fullscreen mode requires updating top UI.
+  // All exiting tab fullscreen to non-fullscreen mode cases are handled in
+  // BrowserNonClientFrameView::OnFullscreenStateChanged(); but exiting tab
+  // fullscreen to browser fullscreen should be handled here.
+  if (state_prior_to_tab_fullscreen_ == STATE_BROWSER_FULLSCREEN) {
     exclusive_access_context->UpdateUIForTabFullscreen(
         ExclusiveAccessContext::STATE_EXIT_TAB_FULLSCREEN);
+  }
 
   // If currently there is a tab in "tab fullscreen" mode and fullscreen
   // was not caused by it (i.e., previously it was in "browser fullscreen"
@@ -199,6 +212,13 @@ void FullscreenController::ExitFullscreenModeForTab(WebContents* web_contents) {
   // This is only a change between Browser and Tab fullscreen. We generate
   // a fullscreen notification now because there is no window change.
   PostFullscreenChangeNotification(true);
+}
+
+void FullscreenController::OnTabDeactivated(
+    content::WebContents* web_contents) {
+  base::AutoReset<content::WebContents*> auto_resetter(&deactivated_contents_,
+                                                       web_contents);
+  ExclusiveAccessControllerBase::OnTabDeactivated(web_contents);
 }
 
 void FullscreenController::OnTabDetachedFromView(WebContents* old_contents) {
@@ -445,6 +465,9 @@ bool FullscreenController::MaybeToggleFullscreenWithinTab(
 
 bool FullscreenController::IsFullscreenWithinTab(
     const WebContents* web_contents) const {
+  if (is_tab_fullscreen_for_testing_)
+    return true;
+
   // Note: On Mac, some of the OnTabXXX() methods get called with a nullptr
   // value
   // for web_contents. Check for that here.

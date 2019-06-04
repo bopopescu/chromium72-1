@@ -7,7 +7,6 @@
 #include <algorithm>
 #include <string>
 
-#include "base/command_line.h"
 #include "base/logging.h"
 #include "base/run_loop.h"
 #include "components/keep_alive_registry/keep_alive_registry.h"
@@ -17,7 +16,6 @@
 #include "ui/aura/client/cursor_client.h"
 #include "ui/aura/window.h"
 #include "ui/aura/window_tree_host.h"
-#include "ui/base/ui_base_neva_switches.h"
 #include "ui/base/cursor/cursor.h"
 #include "ui/base/cursor/image_cursors.h"
 #include "ui/base/ime/input_method.h"
@@ -34,6 +32,7 @@
 #include "ui/wm/core/native_cursor_manager_delegate.h"
 
 #if defined(OS_CHROMEOS)
+#include "base/command_line.h"
 #include "chromeos/dbus/dbus_thread_manager.h"
 #include "extensions/shell/browser/shell_screen.h"
 #include "extensions/shell/common/switches.h"
@@ -188,14 +187,6 @@ void ShellDesktopControllerAura::AddAppWindow(AppWindow* app_window,
         CreateRootWindowControllerForDisplay(display);
   }
   root_window_controllers_[display.id()]->AddAppWindow(app_window, window);
-
-#if defined(OS_WEBOS)
-  const char kAppId[] = "appId";
-  std::string app_id = app_window->GetApplicationId();
-  if (!app_id.empty()) {
-    root_window_controllers_[display.id()]->host()->SetWindowProperty(kAppId, app_id);
-  }
-#endif
 }
 
 void ShellDesktopControllerAura::CloseAppWindows() {
@@ -242,12 +233,13 @@ void ShellDesktopControllerAura::OnDisplayModeChanged(
 #endif
 
 ui::EventDispatchDetails ShellDesktopControllerAura::DispatchKeyEventPostIME(
-    ui::KeyEvent* key_event) {
+    ui::KeyEvent* key_event,
+    base::OnceCallback<void(bool)> ack_callback) {
   if (key_event->target()) {
     aura::WindowTreeHost* host = static_cast<aura::Window*>(key_event->target())
                                      ->GetRootWindow()
                                      ->GetHost();
-    return host->DispatchKeyEventPostIME(key_event);
+    return host->DispatchKeyEventPostIME(key_event, std::move(ack_callback));
   }
 
   // Send the key event to the focused window.
@@ -255,10 +247,11 @@ ui::EventDispatchDetails ShellDesktopControllerAura::DispatchKeyEventPostIME(
       const_cast<aura::Window*>(focus_controller_->GetActiveWindow());
   if (active_window) {
     return active_window->GetRootWindow()->GetHost()->DispatchKeyEventPostIME(
-        key_event);
+        key_event, std::move(ack_callback));
   }
 
-  return GetPrimaryHost()->DispatchKeyEventPostIME(key_event);
+  return GetPrimaryHost()->DispatchKeyEventPostIME(key_event,
+                                                   std::move(ack_callback));
 }
 
 void ShellDesktopControllerAura::OnKeepAliveStateChanged(
@@ -346,7 +339,7 @@ void ShellDesktopControllerAura::InitWindowManager() {
   user_activity_detector_ = std::make_unique<ui::UserActivityDetector>();
   user_activity_notifier_ =
       std::make_unique<ui::UserActivityPowerManagerNotifier>(
-          user_activity_detector_.get());
+          user_activity_detector_.get(), nullptr /*connector*/);
 #endif
 }
 
@@ -386,8 +379,7 @@ ShellDesktopControllerAura::CreateRootWindowControllerForDisplay(
   wm::SetActivationClient(root_window, focus_controller_.get());
   aura::client::SetCursorClient(root_window, cursor_manager_.get());
 
-  base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
-  if (!command_line->HasSwitch(switches::kEnableNevaIme) && !input_method_) {
+  if (!input_method_) {
     // Create an input method and become its delegate.
     input_method_ = ui::CreateInputMethod(
         this, root_window_controller->host()->GetAcceleratedWidget());

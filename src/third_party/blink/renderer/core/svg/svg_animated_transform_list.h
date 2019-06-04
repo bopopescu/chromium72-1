@@ -50,21 +50,10 @@ class SVGAnimatedTransformList final
       SVGElement* context_element,
       const QualifiedName& attribute_name,
       CSSPropertyID css_property_id = CSSPropertyInvalid) {
-    return new SVGAnimatedTransformList(context_element, attribute_name,
-                                        css_property_id);
+    return MakeGarbageCollected<SVGAnimatedTransformList>(
+        context_element, attribute_name, css_property_id);
   }
 
-  void Trace(blink::Visitor* visitor) override {
-    SVGAnimatedProperty<SVGTransformList>::Trace(visitor);
-    ScriptWrappable::Trace(visitor);
-  }
-
-  void TraceWrappers(ScriptWrappableVisitor* visitor) const override {
-    SVGAnimatedProperty<SVGTransformList>::TraceWrappers(visitor);
-    ScriptWrappable::TraceWrappers(visitor);
-  }
-
- protected:
   SVGAnimatedTransformList(SVGElement* context_element,
                            const QualifiedName& attribute_name,
                            CSSPropertyID css_property_id)
@@ -72,6 +61,11 @@ class SVGAnimatedTransformList final
                                               attribute_name,
                                               SVGTransformList::Create(),
                                               css_property_id) {}
+
+  void Trace(blink::Visitor* visitor) override {
+    SVGAnimatedProperty<SVGTransformList>::Trace(visitor);
+    ScriptWrappable::Trace(visitor);
+  }
 };
 
 }  // namespace blink

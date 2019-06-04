@@ -42,34 +42,29 @@ class PopStateEvent final : public Event {
   DEFINE_WRAPPERTYPEINFO();
 
  public:
+  PopStateEvent();
+  PopStateEvent(ScriptState*, const AtomicString&, const PopStateEventInit*);
+  PopStateEvent(scoped_refptr<SerializedScriptValue>, History*);
   ~PopStateEvent() override;
+
   static PopStateEvent* Create();
   static PopStateEvent* Create(scoped_refptr<SerializedScriptValue>, History*);
   static PopStateEvent* Create(ScriptState*,
                                const AtomicString&,
-                               const PopStateEventInit&);
+                               const PopStateEventInit*);
 
   ScriptValue state(ScriptState*) const;
   SerializedScriptValue* SerializedState() const {
     return serialized_state_.get();
   }
-  void SetSerializedState(scoped_refptr<SerializedScriptValue> state) {
-    DCHECK(!serialized_state_);
-    serialized_state_ = std::move(state);
-  }
+  void SetSerializedState(scoped_refptr<SerializedScriptValue> state);
   History* GetHistory() const { return history_.Get(); }
 
   const AtomicString& InterfaceName() const override;
 
   void Trace(blink::Visitor*) override;
 
-  void TraceWrappers(ScriptWrappableVisitor*) const override;
-
  private:
-  PopStateEvent();
-  PopStateEvent(ScriptState*, const AtomicString&, const PopStateEventInit&);
-  PopStateEvent(scoped_refptr<SerializedScriptValue>, History*);
-
   scoped_refptr<SerializedScriptValue> serialized_state_;
   scoped_refptr<DOMWrapperWorld> world_;
   TraceWrapperV8Reference<v8::Value> state_;

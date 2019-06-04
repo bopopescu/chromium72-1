@@ -36,11 +36,11 @@ WideString CBC_EAN8::Preprocess(const WideStringView& contents) {
   int32_t length = encodeContents.GetLength();
   if (length <= 7) {
     for (int32_t i = 0; i < 7 - length; i++)
-      encodeContents = wchar_t('0') + encodeContents;
+      encodeContents = L'0' + encodeContents;
 
-    ByteString byteString = encodeContents.UTF8Encode();
+    ByteString byteString = encodeContents.ToUTF8();
     int32_t checksum = pWriter->CalcChecksum(byteString);
-    encodeContents += wchar_t(checksum - 0 + '0');
+    encodeContents += L'0' + checksum;
   }
   if (length > 8)
     encodeContents = encodeContents.Left(8);
@@ -55,16 +55,13 @@ bool CBC_EAN8::Encode(const WideStringView& contents) {
   BCFORMAT format = BCFORMAT_EAN_8;
   int32_t outWidth = 0;
   int32_t outHeight = 0;
-  WideString encodeContents = Preprocess(contents);
-  ByteString byteString = encodeContents.UTF8Encode();
-  m_renderContents = encodeContents;
+  m_renderContents = Preprocess(contents);
+  ByteString byteString = m_renderContents.ToUTF8();
   auto* pWriter = GetOnedEAN8Writer();
   std::unique_ptr<uint8_t, FxFreeDeleter> data(
       pWriter->Encode(byteString, format, outWidth, outHeight));
-  if (!data)
-    return false;
-  return pWriter->RenderResult(encodeContents.AsStringView(), data.get(),
-                               outWidth);
+  return data && pWriter->RenderResult(m_renderContents.AsStringView(),
+                                       data.get(), outWidth);
 }
 
 bool CBC_EAN8::RenderDevice(CFX_RenderDevice* device,

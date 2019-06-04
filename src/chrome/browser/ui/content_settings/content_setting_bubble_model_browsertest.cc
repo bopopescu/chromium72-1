@@ -7,13 +7,14 @@
 #include "base/command_line.h"
 #include "base/files/file_path.h"
 #include "base/strings/utf_string_conversions.h"
-#include "base/test/histogram_tester.h"
+#include "base/test/metrics/histogram_tester.h"
 #include "chrome/browser/content_settings/chrome_content_settings_utils.h"
 #include "chrome/browser/content_settings/tab_specific_content_settings.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_content_setting_bubble_model_delegate.h"
 #include "chrome/browser/ui/browser_finder.h"
 #include "chrome/browser/ui/content_settings/content_setting_bubble_model.h"
+#include "chrome/browser/ui/content_settings/fake_owner.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
@@ -67,7 +68,7 @@ IN_PROC_BROWSER_TEST_F(ContentSettingBubbleModelMixedScriptTest, MainFrame) {
       ContentSettingBubbleModel::CreateContentSettingBubbleModel(
           browser()->content_setting_bubble_model_delegate(),
           browser()->tab_strip_model()->GetActiveWebContents(),
-          browser()->profile(), CONTENT_SETTINGS_TYPE_MIXEDSCRIPT));
+          CONTENT_SETTINGS_TYPE_MIXEDSCRIPT));
   model->OnCustomLinkClicked();
 
   // Wait for reload
@@ -127,7 +128,7 @@ IN_PROC_BROWSER_TEST_F(ContentSettingsMixedScriptIgnoreCertErrorsTest,
       ContentSettingBubbleModel::CreateContentSettingBubbleModel(
           browser()->content_setting_bubble_model_delegate(),
           browser()->tab_strip_model()->GetActiveWebContents(),
-          browser()->profile(), CONTENT_SETTINGS_TYPE_MIXEDSCRIPT));
+          CONTENT_SETTINGS_TYPE_MIXEDSCRIPT));
   model->SetRapporServiceImplForTesting(&rappor_service);
   model->OnCustomLinkClicked();
 
@@ -186,8 +187,7 @@ class ContentSettingBubbleModelMediaStreamTest : public InProcessBrowserTest {
             state, std::string(), std::string(), std::string(), std::string());
     std::unique_ptr<ContentSettingBubbleModel> bubble(
         new ContentSettingMediaStreamBubbleModel(
-            browser()->content_setting_bubble_model_delegate(), original_tab,
-            browser()->profile()));
+            browser()->content_setting_bubble_model_delegate(), original_tab));
 
     // Click the manage button, which opens in a new tab or window. Wait until
     // it loads.
@@ -234,6 +234,8 @@ IN_PROC_BROWSER_TEST_F(ContentSettingBubbleModelMediaStreamTest,
 
 class ContentSettingBubbleModelPopupTest : public InProcessBrowserTest {
  protected:
+  static constexpr int kDisallowButtonIndex = 1;
+
   void SetUpInProcessBrowserTestFixture() override {
     https_server_.reset(
         new net::EmbeddedTestServer(net::EmbeddedTestServer::TYPE_HTTPS));
@@ -261,7 +263,9 @@ IN_PROC_BROWSER_TEST_F(ContentSettingBubbleModelPopupTest,
       ContentSettingBubbleModel::CreateContentSettingBubbleModel(
           browser()->content_setting_bubble_model_delegate(),
           browser()->tab_strip_model()->GetActiveWebContents(),
-          browser()->profile(), CONTENT_SETTINGS_TYPE_POPUPS));
+          CONTENT_SETTINGS_TYPE_POPUPS));
+  std::unique_ptr<FakeOwner> owner =
+      FakeOwner::Create(*model, kDisallowButtonIndex);
 
   histograms.ExpectBucketCount(
         "ContentSettings.Popups",
@@ -277,8 +281,7 @@ IN_PROC_BROWSER_TEST_F(ContentSettingBubbleModelPopupTest,
         "ContentSettings.Popups",
         content_settings::POPUPS_ACTION_CLICKED_MANAGE_POPUPS_BLOCKING, 1);
 
-  model->OnRadioClicked(model->kAllowButtonIndex);
-  delete model.release();
+  owner->SetSelectedRadioOptionAndCommit(model->kAllowButtonIndex);
   histograms.ExpectBucketCount(
         "ContentSettings.Popups",
         content_settings::POPUPS_ACTION_SELECTED_ALWAYS_ALLOW_POPUPS_FROM, 1);
@@ -337,7 +340,7 @@ IN_PROC_BROWSER_TEST_F(ContentSettingBubbleModelMixedScriptOopifTest,
   std::unique_ptr<ContentSettingBubbleModel> model(
       ContentSettingBubbleModel::CreateContentSettingBubbleModel(
           browser()->content_setting_bubble_model_delegate(), web_contents,
-          browser()->profile(), CONTENT_SETTINGS_TYPE_MIXEDSCRIPT));
+          CONTENT_SETTINGS_TYPE_MIXEDSCRIPT));
   model->OnCustomLinkClicked();
 
   // Wait for reload and verify that mixed content is allowed.

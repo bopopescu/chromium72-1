@@ -35,6 +35,7 @@
 #include "base/memory/scoped_refptr.h"
 #include "third_party/blink/public/platform/web_input_event.h"
 #include "third_party/blink/renderer/core/core_export.h"
+#include "third_party/blink/renderer/core/dom/dom_node_ids.h"
 #include "third_party/blink/renderer/core/inspector/inspector_base_agent.h"
 #include "third_party/blink/renderer/core/inspector/inspector_highlight.h"
 #include "third_party/blink/renderer/core/inspector/inspector_overlay_host.h"
@@ -81,6 +82,7 @@ class CORE_EXPORT InspectorOverlayAgent final
   protocol::Response setShowDebugBorders(bool) override;
   protocol::Response setShowFPSCounter(bool) override;
   protocol::Response setShowScrollBottleneckRects(bool) override;
+  protocol::Response setShowHitTestBorders(bool) override;
   protocol::Response setShowViewportSizeOnResize(bool) override;
   protocol::Response setPausedInDebuggerMessage(
       protocol::Maybe<String>) override;
@@ -122,8 +124,10 @@ class CORE_EXPORT InspectorOverlayAgent final
   bool HandleInputEvent(const WebInputEvent&);
   void PageLayoutInvalidated(bool resized);
   String EvaluateInOverlayForTest(const String&);
-  void PaintOverlay();
-  void LayoutOverlay();
+
+  // Update the complete lifecycle (e.g., layout, paint) for the overlay.
+  void UpdateAllOverlayLifecyclePhases();
+
   bool IsInspectorLayer(GraphicsLayer*);
 
  private:
@@ -151,8 +155,7 @@ class CORE_EXPORT InspectorOverlayAgent final
 
   Page* OverlayPage();
   LocalFrame* OverlayMainFrame();
-  void Reset(const IntSize& viewport_size,
-             const IntPoint& document_scroll_offset);
+  void Reset(const IntSize& viewport_size);
   void EvaluateInOverlay(const String& method, const String& argument);
   void EvaluateInOverlay(const String& method,
                          std::unique_ptr<protocol::Value> argument);
@@ -161,7 +164,6 @@ class CORE_EXPORT InspectorOverlayAgent final
   void Invalidate();
   void ScheduleUpdate();
   void ClearInternal();
-  void UpdateAllLifecyclePhases();
 
   bool HandleMouseDown(const WebMouseEvent&);
   bool HandleMouseUp(const WebMouseEvent&);
@@ -191,8 +193,6 @@ class CORE_EXPORT InspectorOverlayAgent final
 
   Member<WebLocalFrameImpl> frame_impl_;
   Member<InspectedFrames> inspected_frames_;
-  bool enabled_;
-  String paused_in_debugger_message_;
   Member<Node> highlight_node_;
   Member<Node> event_target_node_;
   InspectorHighlightConfig node_highlight_config_;
@@ -202,11 +202,9 @@ class CORE_EXPORT InspectorOverlayAgent final
   Member<InspectorOverlayHost> overlay_host_;
   Color quad_content_color_;
   Color quad_content_outline_color_;
-  bool draw_view_size_;
   bool resize_timer_active_;
   bool omit_tooltip_;
   TaskRunnerTimer<InspectorOverlayAgent> timer_;
-  bool suspended_;
   bool disposed_;
   bool in_layout_;
   bool needs_update_;
@@ -217,10 +215,19 @@ class CORE_EXPORT InspectorOverlayAgent final
   bool swallow_next_mouse_up_;
   SearchMode inspect_mode_;
   std::unique_ptr<InspectorHighlightConfig> inspect_mode_highlight_config_;
-  int backend_node_id_to_inspect_;
+  DOMNodeId backend_node_id_to_inspect_;
   bool screenshot_mode_ = false;
   IntPoint screenshot_anchor_;
   IntPoint screenshot_position_;
+  InspectorAgentState::Boolean enabled_;
+  InspectorAgentState::Boolean suspended_;
+  InspectorAgentState::Boolean show_debug_borders_;
+  InspectorAgentState::Boolean show_fps_counter_;
+  InspectorAgentState::Boolean show_paint_rects_;
+  InspectorAgentState::Boolean show_scroll_bottleneck_rects_;
+  InspectorAgentState::Boolean show_hit_test_borders_;
+  InspectorAgentState::Boolean show_size_on_resize_;
+  InspectorAgentState::String paused_in_debugger_message_;
   DISALLOW_COPY_AND_ASSIGN(InspectorOverlayAgent);
 };
 

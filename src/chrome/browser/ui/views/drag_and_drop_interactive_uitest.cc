@@ -28,6 +28,7 @@
 #include "content/public/test/browser_test_utils.h"
 #include "content/public/test/content_browser_test.h"
 #include "content/public/test/content_browser_test_utils.h"
+#include "content/public/test/hit_test_region_observer.h"
 #include "content/public/test/test_frame_navigation_observer.h"
 #include "content/public/test/test_utils.h"
 #include "net/base/escape.h"
@@ -103,11 +104,11 @@ class DragAndDropSimulator {
     if (!delegate)
       return false;
 
-    gfx::Point event_location;
-    gfx::Point event_root_location;
+    gfx::PointF event_location;
+    gfx::PointF event_root_location;
     CalculateEventLocations(location, &event_location, &event_root_location);
-    active_drag_event_->set_location(event_location);
-    active_drag_event_->set_root_location(event_root_location);
+    active_drag_event_->set_location_f(event_location);
+    active_drag_event_->set_root_location_f(event_root_location);
 
     delegate->OnDragUpdated(*active_drag_event_);
     delegate->OnPerformDrop(*active_drag_event_);
@@ -125,8 +126,8 @@ class DragAndDropSimulator {
     if (!delegate)
       return false;
 
-    gfx::Point event_location;
-    gfx::Point event_root_location;
+    gfx::PointF event_location;
+    gfx::PointF event_root_location;
     CalculateEventLocations(location, &event_location, &event_root_location);
     active_drag_event_.reset(new ui::DropTargetEvent(
         data, event_location, event_root_location, kDefaultSourceOperations));
@@ -145,16 +146,16 @@ class DragAndDropSimulator {
   }
 
   void CalculateEventLocations(gfx::Point web_contents_relative_location,
-                               gfx::Point* out_event_location,
-                               gfx::Point* out_event_root_location) {
+                               gfx::PointF* out_event_location,
+                               gfx::PointF* out_event_root_location) {
     gfx::NativeView view = web_contents_->GetNativeView();
 
-    *out_event_location = web_contents_relative_location;
+    *out_event_location = gfx::PointF(web_contents_relative_location);
 
     gfx::Point root_location = web_contents_relative_location;
     aura::Window::ConvertPointToTarget(view, view->GetRootWindow(),
                                        &root_location);
-    *out_event_root_location = root_location;
+    *out_event_root_location = gfx::PointF(root_location);
   }
 
   // These are ui::DropTargetEvent::source_operations_ being sent when manually
@@ -700,8 +701,8 @@ class DragAndDropBrowserTest : public InProcessBrowserTest,
     frame = GetFrameByName(frame_name);
     DCHECK(frame);
 
-    // Wait until frame contents have painted and are ready for hit testing.
-    WaitForChildFrameSurfaceReady(frame);
+    // Wait until hit testing data is ready.
+    WaitForHitTestDataOrChildSurfaceReady(frame);
 
     return true;
   }
@@ -762,7 +763,7 @@ IN_PROC_BROWSER_TEST_P(DragAndDropBrowserTest, MAYBE_DropTextFromOutside) {
   }
 }
 
-#if defined(OS_CHROMEOS)
+#if defined(OS_CHROMEOS) || !defined(NDEBUG)
 // Flaky: https://crbug.com/835774
 #define MAYBE_DragStartInFrame DISABLED_DragStartInFrame
 #else

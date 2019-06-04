@@ -8,7 +8,7 @@
 #include "base/test/test_discardable_memory_allocator.h"
 #include "base/trace_event/memory_allocator_dump.h"
 #include "base/trace_event/process_memory_dump.h"
-#include "base/trace_event/trace_event_argument.h"
+#include "base/trace_event/traced_value.h"
 #include "base/values.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -61,8 +61,6 @@ TEST(WebProcessMemoryDumpTest, IntegrationTest) {
 
   // Check that calling serialization routines doesn't cause a crash.
   wpmd2->process_memory_dump()->SerializeAllocatorDumpsInto(traced_value.get());
-  wpmd2->process_memory_dump()->SerializeHeapProfilerDumpsInto(
-      traced_value.get());
 
   // Free the |wpmd2| to check that the memory ownership of the two MAD(s)
   // has been transferred to |wpmd1|.
@@ -85,8 +83,6 @@ TEST(WebProcessMemoryDumpTest, IntegrationTest) {
   // Check that calling serialization routines doesn't cause a crash.
   traced_value.reset(new base::trace_event::TracedValue);
   wpmd1->process_memory_dump()->SerializeAllocatorDumpsInto(traced_value.get());
-  wpmd1->process_memory_dump()->SerializeHeapProfilerDumpsInto(
-      traced_value.get());
 
   // Check that clear() actually works.
   wpmd1->Clear();
@@ -97,8 +93,6 @@ TEST(WebProcessMemoryDumpTest, IntegrationTest) {
   // Check that calling serialization routines doesn't cause a crash.
   traced_value.reset(new base::trace_event::TracedValue);
   wpmd1->process_memory_dump()->SerializeAllocatorDumpsInto(traced_value.get());
-  wpmd1->process_memory_dump()->SerializeHeapProfilerDumpsInto(
-      traced_value.get());
 
   // Check if a WebMemoryAllocatorDump created with guid, has correct guid.
   blink::WebMemoryAllocatorDumpGuid guid =

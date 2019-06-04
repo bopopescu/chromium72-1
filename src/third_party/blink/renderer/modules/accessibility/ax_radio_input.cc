@@ -4,7 +4,7 @@
 
 #include "third_party/blink/renderer/modules/accessibility/ax_radio_input.h"
 
-#include "third_party/blink/renderer/core/dom/accessible_node.h"
+#include "third_party/blink/renderer/core/aom/accessible_node.h"
 #include "third_party/blink/renderer/core/html/forms/html_input_element.h"
 #include "third_party/blink/renderer/core/html/forms/radio_input_type.h"
 #include "third_party/blink/renderer/core/input_type_names.h"
@@ -12,8 +12,6 @@
 #include "third_party/blink/renderer/modules/accessibility/ax_object_cache_impl.h"
 
 namespace blink {
-
-using namespace HTMLNames;
 
 AXRadioInput::AXRadioInput(LayoutObject* layout_object,
                            AXObjectCacheImpl& ax_object_cache)
@@ -28,7 +26,7 @@ AXRadioInput::AXRadioInput(LayoutObject* layout_object,
 
 AXRadioInput* AXRadioInput::Create(LayoutObject* layout_object,
                                    AXObjectCacheImpl& ax_object_cache) {
-  return new AXRadioInput(layout_object, ax_object_cache);
+  return MakeGarbageCollected<AXRadioInput>(layout_object, ax_object_cache);
 }
 
 void AXRadioInput::UpdatePosAndSetSize(int position) {
@@ -53,7 +51,7 @@ void AXRadioInput::RequestUpdateToNextNode(bool forward) {
 
   ToAXRadioInput(next_axobject)->UpdatePosAndSetSize(position);
   AXObjectCache().PostNotification(next_axobject,
-                                   AXObjectCacheImpl::kAXAriaAttributeChanged);
+                                   ax::mojom::Event::kAriaAttributeChanged);
   ToAXRadioInput(next_axobject)->RequestUpdateToNextNode(forward);
 }
 

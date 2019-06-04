@@ -83,7 +83,7 @@ void StubPasswordManagerClient::CheckSafeBrowsingReputation(
     const GURL& frame_url) {}
 
 void StubPasswordManagerClient::CheckProtectedPasswordEntry(
-    bool matches_sync_password,
+    metrics_util::PasswordType reused_password_type,
     const std::vector<std::string>& matching_domains,
     bool password_field_exists) {}
 
@@ -94,12 +94,12 @@ ukm::SourceId StubPasswordManagerClient::GetUkmSourceId() {
   return ukm_source_id_;
 }
 
-PasswordManagerMetricsRecorder&
+PasswordManagerMetricsRecorder*
 StubPasswordManagerClient::GetMetricsRecorder() {
   if (!metrics_recorder_) {
     metrics_recorder_.emplace(GetUkmSourceId(), GetMainFrameURL());
   }
-  return metrics_recorder_.value();
+  return base::OptionalOrNullptr(metrics_recorder_);
 }
 
 }  // namespace password_manager

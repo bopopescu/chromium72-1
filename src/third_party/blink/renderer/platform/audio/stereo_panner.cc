@@ -26,7 +26,7 @@ StereoPanner::StereoPanner(float sample_rate) {}
 void StereoPanner::PanWithSampleAccurateValues(const AudioBus* input_bus,
                                                AudioBus* output_bus,
                                                const float* pan_values,
-                                               size_t frames_to_process) {
+                                               uint32_t frames_to_process) {
   bool is_input_safe = input_bus &&
                        (input_bus->NumberOfChannels() == 1 ||
                         input_bus->NumberOfChannels() == 2) &&
@@ -63,7 +63,7 @@ void StereoPanner::PanWithSampleAccurateValues(const AudioBus* input_bus,
       float input_l = *source_l++;
       double pan = clampTo(*pan_values++, -1.0, 1.0);
       // Pan from left to right [-1; 1] will be normalized as [0; 1].
-      pan_radian = (pan * 0.5 + 0.5) * piOverTwoDouble;
+      pan_radian = (pan * 0.5 + 0.5) * kPiOverTwoDouble;
       gain_l = std::cos(pan_radian);
       gain_r = std::sin(pan_radian);
       *destination_l++ = static_cast<float>(input_l * gain_l);
@@ -75,7 +75,7 @@ void StereoPanner::PanWithSampleAccurateValues(const AudioBus* input_bus,
       float input_r = *source_r++;
       double pan = clampTo(*pan_values++, -1.0, 1.0);
       // Normalize [-1; 0] to [0; 1]. Do nothing when [0; 1].
-      pan_radian = (pan <= 0 ? pan + 1 : pan) * piOverTwoDouble;
+      pan_radian = (pan <= 0 ? pan + 1 : pan) * kPiOverTwoDouble;
       gain_l = std::cos(pan_radian);
       gain_r = std::sin(pan_radian);
       if (pan <= 0) {
@@ -92,7 +92,7 @@ void StereoPanner::PanWithSampleAccurateValues(const AudioBus* input_bus,
 void StereoPanner::PanToTargetValue(const AudioBus* input_bus,
                                     AudioBus* output_bus,
                                     float pan_value,
-                                    size_t frames_to_process) {
+                                    uint32_t frames_to_process) {
   bool is_input_safe = input_bus &&
                        (input_bus->NumberOfChannels() == 1 ||
                         input_bus->NumberOfChannels() == 2) &&
@@ -126,12 +126,12 @@ void StereoPanner::PanToTargetValue(const AudioBus* input_bus,
 
   if (number_of_input_channels == 1) {  // For mono source case.
     // Pan from left to right [-1; 1] will be normalized as [0; 1].
-    double pan_radian = (target_pan * 0.5 + 0.5) * piOverTwoDouble;
+    double pan_radian = (target_pan * 0.5 + 0.5) * kPiOverTwoDouble;
 
     double gain_l = std::cos(pan_radian);
     double gain_r = std::sin(pan_radian);
 
-    // TODO(rtoy): This can be vectorized using VectorMath::Vsmul
+    // TODO(rtoy): This can be vectorized using vector_math::Vsmul
     while (n--) {
       float input_l = *source_l++;
       *destination_l++ = static_cast<float>(input_l * gain_l);
@@ -141,7 +141,7 @@ void StereoPanner::PanToTargetValue(const AudioBus* input_bus,
     // Normalize [-1; 0] to [0; 1] for the left pan position (<= 0), and
     // do nothing when [0; 1].
     double pan_radian =
-        (target_pan <= 0 ? target_pan + 1 : target_pan) * piOverTwoDouble;
+        (target_pan <= 0 ? target_pan + 1 : target_pan) * kPiOverTwoDouble;
 
     double gain_l = std::cos(pan_radian);
     double gain_r = std::sin(pan_radian);

@@ -1,7 +1,6 @@
 # Copyright 2017 The Chromium Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
-import("//neva/neva.gni")
 
 import("//third_party/libaom/options.gni")
 
@@ -29,13 +28,18 @@ source_set("renderers") {
     "video_overlay_factory.h",
     "video_renderer_impl.cc",
     "video_renderer_impl.h",
+    "video_resource_updater.cc",
+    "video_resource_updater.h",
   ]
 
   deps = [
     "//base",
+    "//cc/base",  # For MathUtil.
     "//cc/paint",
+    "//components/viz/client",
     "//gpu/command_buffer/client:gles2_interface",
     "//gpu/command_buffer/common",
+    "//media/audio",
     "//media/base",
     "//media/filters",
     "//media/video",
@@ -45,13 +49,8 @@ source_set("renderers") {
     "//ui/gfx:geometry_skia",
     "//ui/gfx:memory_buffer",
     "//ui/gfx/geometry",
+    "//ui/gl",
   ]
-
-  if (use_neva_media) {
-    deps += [
-      "//media/renderers/neva",
-    ]
-  }
 
   configs += [
     "//media:subcomponent_config",
@@ -68,12 +67,15 @@ source_set("unit_tests") {
     "paint_canvas_video_renderer_unittest.cc",
     "renderer_impl_unittest.cc",
     "video_renderer_impl_unittest.cc",
+    "video_resource_updater_unittest.cc",
   ]
   configs += [ "//media:media_config" ]
   deps = [
     "//base",
     "//base/test:test_support",
     "//cc/paint",
+    "//components/viz/client",
+    "//components/viz/test:test_support",
     "//gpu:test_support",
     "//gpu/command_buffer/client:gles2_interface",
     "//gpu/command_buffer/common",

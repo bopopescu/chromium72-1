@@ -16,10 +16,10 @@
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
-#include "base/sys_info.h"
+#include "base/system/sys_info.h"
 #include "base/time/time.h"
+#include "base/trace_event/memory_usage_estimator.h"
 #include "build/build_config.h"
-#include "components/omnibox/browser/omnibox_switches.h"
 #include "components/omnibox/browser/url_index_private_data.h"
 #include "components/search/search.h"
 #include "components/variations/active_field_trials.h"
@@ -33,14 +33,81 @@ using metrics::OmniboxEventProto;
 
 namespace omnibox {
 
+// Feature used to hide the scheme from steady state URLs displayed in the
+// toolbar. It is restored during editing.
+const base::Feature kHideFileUrlScheme {
+  "OmniboxUIExperimentHideFileUrlScheme",
+// Android and iOS don't have the File security chip, and therefore still
+// need to show the file scheme.
+#if defined(OS_ANDROID) || defined(OS_IOS)
+      base::FEATURE_DISABLED_BY_DEFAULT
+#else
+      base::FEATURE_ENABLED_BY_DEFAULT
+#endif
+};
+
+// Feature used to hide the scheme from steady state URLs displayed in the
+// toolbar. It is restored during editing.
+const base::Feature kHideSteadyStateUrlScheme {
+  "OmniboxUIExperimentHideSteadyStateUrlScheme",
+#if defined(OS_IOS)
+      base::FEATURE_ENABLED_BY_DEFAULT
+#else
+      base::FEATURE_DISABLED_BY_DEFAULT
+#endif
+};
+
+// Feature used to hide trivial subdomains from steady state URLs displayed in
+// the toolbar. It is restored during editing.
+const base::Feature kHideSteadyStateUrlTrivialSubdomains {
+  "OmniboxUIExperimentHideSteadyStateUrlTrivialSubdomains",
+#if defined(OS_IOS)
+      base::FEATURE_ENABLED_BY_DEFAULT
+#else
+      base::FEATURE_DISABLED_BY_DEFAULT
+#endif
+};
+
+// Feature used to hide the path, query and ref from steady state URLs
+// displayed in the toolbar. It is restored during editing.
+const base::Feature kHideSteadyStateUrlPathQueryAndRef {
+  "OmniboxUIExperimentHideSteadyStateUrlPathQueryAndRef",
+#if defined(OS_IOS)
+      base::FEATURE_ENABLED_BY_DEFAULT
+#else
+      base::FEATURE_DISABLED_BY_DEFAULT
+#endif
+};
+
+// Feature used to undo all omnibox elisions on a single click or focus action.
+const base::Feature kOneClickUnelide{"OmniboxOneClickUnelide",
+                                     base::FEATURE_DISABLED_BY_DEFAULT};
+
+// This feature simplifies the security indiciator UI for https:// pages. The
+// exact UI treatment is dependent on the parameter 'treatment' which can have
+// the following value:
+// - 'ev-to-secure': Show the "Secure" chip for pages with an EV certificate.
+// - 'secure-to-lock': Show only the lock icon for non-EV https:// pages.
+// - 'both-to-lock': Show only the lock icon for all https:// pages.
+// - 'keep-secure-chip': Show the old "Secure" chip for non-EV https:// pages.
+// The default behavior is the same as 'secure-to-lock'.
+// This feature is used for EV UI removal experiment (https://crbug.com/803501).
+const base::Feature kSimplifyHttpsIndicator{"SimplifyHttpsIndicator",
+                                            base::FEATURE_DISABLED_BY_DEFAULT};
+
 // Feature used to enable entity suggestion images and enhanced presentation
 // showing more context and descriptive text about the entity.
 const base::Feature kOmniboxRichEntitySuggestions{
     "OmniboxRichEntitySuggestions", base::FEATURE_DISABLED_BY_DEFAULT};
 
-// Feature used to enable enhanced presentation showing larger images.
+// Feature used to enable enhanced presentation showing larger images, currently
+// only used on desktop platforms.
 const base::Feature kOmniboxNewAnswerLayout{"OmniboxNewAnswerLayout",
                                             base::FEATURE_DISABLED_BY_DEFAULT};
+
+// Feature used to enable swapping the rows on answers.
+const base::Feature kOmniboxReverseAnswers{"OmniboxReverseAnswers",
+                                           base::FEATURE_DISABLED_BY_DEFAULT};
 
 // Feature used to force on the experiment of transmission of tail suggestions
 // from GWS to this client, currently testing for desktop.
@@ -48,9 +115,37 @@ const base::Feature kOmniboxTailSuggestions{
     "OmniboxTailSuggestions", base::FEATURE_DISABLED_BY_DEFAULT};
 
 // Feature used to force on the experiment of showing a button for suggestions
-// whose URL is open in another tab, with the ability to switch to that tab.
+// whose URL is open in another tab, with the ability to switch to that tab,
+// currently only used on desktop and iOS platforms.
 const base::Feature kOmniboxTabSwitchSuggestions{
-    "OmniboxTabSwitchSuggestions", base::FEATURE_DISABLED_BY_DEFAULT};
+  "OmniboxTabSwitchSuggestions",
+#if defined(OS_IOS) || defined(OS_ANDROID)
+      base::FEATURE_DISABLED_BY_DEFAULT
+#else
+      base::FEATURE_ENABLED_BY_DEFAULT
+#endif
+};
+
+// Feature used to enable various experiments on keyword mode, UI and
+// suggestions.
+const base::Feature kExperimentalKeywordMode{"ExperimentalKeywordMode",
+                                             base::FEATURE_DISABLED_BY_DEFAULT};
+
+// Feature used to enable Pedal suggestions as either in-suggestion side button
+// or dedicated suggestion beneath triggering suggestion.
+const base::Feature kOmniboxPedalSuggestions{"OmniboxPedalSuggestions",
+                                             base::FEATURE_DISABLED_BY_DEFAULT};
+constexpr base::FeatureParam<OmniboxFieldTrial::PedalSuggestionMode>::Option
+    kPedalSuggestionModeOptions[] = {
+        {OmniboxFieldTrial::PedalSuggestionMode::IN_SUGGESTION,
+         "in_suggestion"},
+        {OmniboxFieldTrial::PedalSuggestionMode::DEDICATED, "dedicated"},
+};
+constexpr base::FeatureParam<OmniboxFieldTrial::PedalSuggestionMode>
+    pedal_suggestion_mode{&kOmniboxPedalSuggestions,
+                          OmniboxFieldTrial::kPedalSuggestionModeParam,
+                          OmniboxFieldTrial::PedalSuggestionMode::DEDICATED,
+                          &kPedalSuggestionModeOptions};
 
 // Feature used to enable clipboard provider, which provides the user with
 // suggestions of the URL in the user's clipboard (if any) upon omnibox focus.
@@ -101,28 +196,29 @@ const base::Feature kUIExperimentMaxAutocompleteMatches{
     "OmniboxUIExperimentMaxAutocompleteMatches",
     base::FEATURE_DISABLED_BY_DEFAULT};
 
-// Feature used for eliding the suggestion URL after the host as a UI
-// experiment.
-const base::Feature kUIExperimentElideSuggestionUrlAfterHost{
-    "OmniboxUIExperimentElideSuggestionUrlAfterHost",
-    base::FEATURE_DISABLED_BY_DEFAULT};
+// Feature used to display the search terms instead of the URL in the Omnibox
+// when the user is on the search results page of the default search provider.
+const base::Feature kQueryInOmnibox{"QueryInOmnibox",
+                                    base::FEATURE_DISABLED_BY_DEFAULT};
 
-// Feature used to hide the scheme and trivial subdomains from steady state
-// URLs displayed in the Omnibox. Hidden portions are restored during editing.
-const base::Feature kUIExperimentHideSteadyStateUrlSchemeAndSubdomains{
-    "OmniboxUIExperimentHideSteadyStateUrlSchemeAndSubdomains",
-    base::FEATURE_DISABLED_BY_DEFAULT};
-
-// Feature used for showing the URL suggestion favicons as a UI experiment.
+// Feature used for showing the URL suggestion favicons as a UI experiment,
+// currently only used on desktop platforms.
 const base::Feature kUIExperimentShowSuggestionFavicons{
     "OmniboxUIExperimentShowSuggestionFavicons",
-    base::FEATURE_DISABLED_BY_DEFAULT};
+    base::FEATURE_ENABLED_BY_DEFAULT};
 
 // Feature used to always swap the title and URL.
 const base::Feature kUIExperimentSwapTitleAndUrl{
-    "OmniboxUIExperimentSwapTitleAndUrl", base::FEATURE_DISABLED_BY_DEFAULT};
+    "OmniboxUIExperimentSwapTitleAndUrl",
+#if defined(OS_IOS) || defined(OS_ANDROID)
+    base::FEATURE_DISABLED_BY_DEFAULT
+#else
+    base::FEATURE_ENABLED_BY_DEFAULT
+#endif
+};
 
-// Feature used for the vertical margin UI experiment.
+// Feature used for the vertical margin UI experiment, currently only used on
+// desktop platforms.
 const base::Feature kUIExperimentVerticalMargin{
     "OmniboxUIExperimentVerticalMargin", base::FEATURE_DISABLED_BY_DEFAULT};
 
@@ -134,10 +230,15 @@ const base::Feature kSpeculativeServiceWorkerStartOnQueryInput{
       base::FEATURE_ENABLED_BY_DEFAULT
 };
 
-// Feature used to allow breaking words at underscores in building
-// URLIndexPrivateData.
-const base::Feature kBreakWordsAtUnderscores{"OmniboxBreakWordsAtUnderscores",
-                                             base::FEATURE_DISABLED_BY_DEFAULT};
+// Feature used to fetch document suggestions.
+const base::Feature kDocumentProvider{"OmniboxDocumentProvider",
+                                      base::FEATURE_DISABLED_BY_DEFAULT};
+
+// Feature to replace the standard ZeroSuggest with icons for most visited sites
+// and collections (bookmarks, history, recent tabs, reading list). Only
+// available on iOS.
+const base::Feature kOmniboxPopupShortcutIconsInZeroState{
+    "OmniboxPopupShortcutIconsInZeroState", base::FEATURE_DISABLED_BY_DEFAULT};
 
 }  // namespace omnibox
 
@@ -174,7 +275,7 @@ void InitializeScoreBuckets(const VariationParams& params,
                             const char* score_buckets_param,
                             const char* use_decay_factor_param,
                             ScoreBuckets* score_buckets) {
-  VariationParams::const_iterator it = params.find(relevance_cap_param);
+  auto it = params.find(relevance_cap_param);
   if (it != params.end()) {
     int relevance_cap;
     if (base::StringToInt(it->second, &relevance_cap))
@@ -609,13 +710,6 @@ bool OmniboxFieldTrial::HUPSearchDatabase() {
   return value.empty() || (value == "true");
 }
 
-bool OmniboxFieldTrial::KeywordRequiresRegistry() {
-  const std::string& value = variations::GetVariationParamValue(
-      kBundledExperimentFieldTrialName,
-      kKeywordRequiresRegistryRule);
-  return value.empty() || (value == "true");
-}
-
 bool OmniboxFieldTrial::KeywordRequiresPrefixMatch() {
   const std::string& value = variations::GetVariationParamValue(
       kBundledExperimentFieldTrialName,
@@ -640,14 +734,14 @@ int OmniboxFieldTrial::KeywordScoreForSufficientlyCompleteMatch() {
 OmniboxFieldTrial::EmphasizeTitlesCondition
 OmniboxFieldTrial::GetEmphasizeTitlesConditionForInput(
     const AutocompleteInput& input) {
-  if (base::FeatureList::IsEnabled(omnibox::kUIExperimentSwapTitleAndUrl))
-    return EMPHASIZE_WHEN_NONEMPTY;
-
-  // Touch-optimized UI and MD Refresh also always swap title and URL.
-  if (ui::MaterialDesignController::is_mode_initialized() &&
-      ui::MaterialDesignController::IsNewerMaterialUi()) {
+  if (base::FeatureList::IsEnabled(omnibox::kUIExperimentSwapTitleAndUrl) ||
+      base::FeatureList::IsEnabled(features::kExperimentalUi)) {
     return EMPHASIZE_WHEN_NONEMPTY;
   }
+
+  // Touch-optimized UI always swaps title and URL.
+  if (ui::MaterialDesignController::touch_ui())
+    return EMPHASIZE_WHEN_NONEMPTY;
 
   // Check the feature that swaps the title and URL only for zero suggest
   // suggestions.
@@ -677,41 +771,59 @@ OmniboxFieldTrial::GetEmphasizeTitlesConditionForInput(
   return static_cast<EmphasizeTitlesCondition>(value);
 }
 
+bool OmniboxFieldTrial::IsRichEntitySuggestionsEnabled() {
+  return base::FeatureList::IsEnabled(omnibox::kOmniboxRichEntitySuggestions);
+}
+
 bool OmniboxFieldTrial::IsNewAnswerLayoutEnabled() {
-  return base::FeatureList::IsEnabled(omnibox::kOmniboxNewAnswerLayout);
+  return base::FeatureList::IsEnabled(omnibox::kOmniboxNewAnswerLayout) ||
+         base::FeatureList::IsEnabled(features::kExperimentalUi);
+}
+
+bool OmniboxFieldTrial::IsReverseAnswersEnabled() {
+  return base::FeatureList::IsEnabled(omnibox::kOmniboxReverseAnswers) ||
+         base::FeatureList::IsEnabled(features::kExperimentalUi);
 }
 
 bool OmniboxFieldTrial::IsTabSwitchSuggestionsEnabled() {
+#if defined(OS_IOS)
   return base::FeatureList::IsEnabled(omnibox::kOmniboxTabSwitchSuggestions);
+#else  // defined(OS_IOS)
+  return base::FeatureList::IsEnabled(omnibox::kOmniboxTabSwitchSuggestions) ||
+         base::FeatureList::IsEnabled(features::kExperimentalUi);
+#endif
 }
 
-bool OmniboxFieldTrial::IsHideSteadyStateUrlSchemeAndSubdomainsEnabled() {
-#if defined(OS_MACOSX)
-#if BUILDFLAG(MAC_VIEWS_BROWSER)
-  // Disable Steady State Elisions on Mac if browser is in Cocoa mode.
-  if (features::IsViewsBrowserCocoa())
-    return false;
-#else   // !BUILDFLAG(MAC_VIEWS_BROWSER)
-  // If MacViews is not even built on Mac, we must be on Cocoa, so disable
-  // State State Elisions.
-  return false;
-#endif  // BUILDFLAG(MAC_VIEWS_BROWSER)
-#endif  // defined(OS_MACOSX)
-
-  return base::FeatureList::IsEnabled(
-      omnibox::kUIExperimentHideSteadyStateUrlSchemeAndSubdomains);
+OmniboxFieldTrial::PedalSuggestionMode
+OmniboxFieldTrial::GetPedalSuggestionMode() {
+  // Disabled case is handled specially, as no parameter values are specified.
+  if (!base::FeatureList::IsEnabled(omnibox::kOmniboxPedalSuggestions)) {
+    return PedalSuggestionMode::NONE;
+  }
+  return omnibox::pedal_suggestion_mode.Get();
 }
 
-bool OmniboxFieldTrial::IsShowSuggestionFaviconsEnabled() {
+bool OmniboxFieldTrial::IsHideSteadyStateUrlSchemeEnabled() {
+  return base::FeatureList::IsEnabled(omnibox::kHideSteadyStateUrlScheme) ||
+         base::FeatureList::IsEnabled(features::kExperimentalUi);
+}
+
+bool OmniboxFieldTrial::IsHideSteadyStateUrlTrivialSubdomainsEnabled() {
   return base::FeatureList::IsEnabled(
-      omnibox::kUIExperimentShowSuggestionFavicons);
+             omnibox::kHideSteadyStateUrlTrivialSubdomains) ||
+         base::FeatureList::IsEnabled(features::kExperimentalUi);
 }
 
 int OmniboxFieldTrial::GetSuggestionVerticalMargin() {
-  using Md = ui::MaterialDesignController;
+  // When the vertical margin is set to 2dp, the suggestion height is the
+  // closest to the pre-Refresh height. In fact it's 1dp taller than the
+  // pre-Refresh height on Linux.
   return base::GetFieldTrialParamByFeatureAsInt(
-      omnibox::kUIExperimentVerticalMargin, kUIVerticalMarginParam,
-      Md::GetMode() == Md::MATERIAL_HYBRID ? 8 : 4);
+      omnibox::kUIExperimentVerticalMargin, kUIVerticalMarginParam, 2);
+}
+
+bool OmniboxFieldTrial::IsExperimentalKeywordModeEnabled() {
+  return base::FeatureList::IsEnabled(omnibox::kExperimentalKeywordMode);
 }
 
 const char OmniboxFieldTrial::kBundledExperimentFieldTrialName[] =
@@ -785,6 +897,19 @@ const char
 const char OmniboxFieldTrial::kUIMaxAutocompleteMatchesParam[] =
     "UIMaxAutocompleteMatches";
 const char OmniboxFieldTrial::kUIVerticalMarginParam[] = "UIVerticalMargin";
+const char OmniboxFieldTrial::kPedalSuggestionModeParam[] =
+    "PedalSuggestionMode";
+
+const char OmniboxFieldTrial::kSimplifyHttpsIndicatorParameterName[] =
+    "treatment";
+const char OmniboxFieldTrial::kSimplifyHttpsIndicatorParameterEvToSecure[] =
+    "ev-to-secure";
+const char OmniboxFieldTrial::kSimplifyHttpsIndicatorParameterSecureToLock[] =
+    "secure-to-lock";
+const char OmniboxFieldTrial::kSimplifyHttpsIndicatorParameterBothToLock[] =
+    "both-to-lock";
+const char OmniboxFieldTrial::kSimplifyHttpsIndicatorParameterKeepSecureChip[] =
+    "keep-secure-chip";
 
 const char OmniboxFieldTrial::kZeroSuggestRedirectToChromeExperimentIdParam[] =
     "ZeroSuggestRedirectToChromeExperimentID";

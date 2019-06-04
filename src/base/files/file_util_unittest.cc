@@ -4,6 +4,7 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include <stdio.h>
 
 #include <algorithm>
 #include <fstream>
@@ -25,6 +26,7 @@
 #include "base/files/file_util.h"
 #include "base/files/scoped_file.h"
 #include "base/files/scoped_temp_dir.h"
+#include "base/guid.h"
 #include "base/macros.h"
 #include "base/path_service.h"
 #include "base/strings/string_util.h"
@@ -34,6 +36,7 @@
 #include "base/test/test_file_util.h"
 #include "base/test/test_timeouts.h"
 #include "base/threading/platform_thread.h"
+#include "base/threading/thread.h"
 #include "build/build_config.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "testing/multiprocess_func_list.h"
@@ -2367,7 +2370,14 @@ TEST_F(FileUtilTest, GetTempDirTest) {
 TEST_F(FileUtilTest, OpenFileNoInheritance) {
   FilePath file_path(temp_dir_.GetPath().Append(FPL("a_file")));
 
-  for (const char* mode : {"wb", "r,ccs=UTF-8"}) {
+// Character set handling is leaking according to ASAN. http://crbug.com/883698
+#if defined(ADDRESS_SANITIZER)
+  static constexpr const char* modes[] = {"wb", "r"};
+#else
+  static constexpr const char* modes[] = {"wb", "r,ccs=UTF-8"};
+#endif
+
+  for (const char* mode : modes) {
     SCOPED_TRACE(mode);
     ASSERT_NO_FATAL_FAILURE(CreateTextFile(file_path, L"Geepers"));
     FILE* file = OpenFile(file_path, mode);
@@ -2384,15 +2394,15 @@ TEST_F(FileUtilTest, OpenFileNoInheritance) {
 
 TEST_F(FileUtilTest, CreateTemporaryFileTest) {
   FilePath temp_files[3];
-  for (int i = 0; i < 3; i++) {
-    ASSERT_TRUE(CreateTemporaryFile(&(temp_files[i])));
-    EXPECT_TRUE(PathExists(temp_files[i]));
-    EXPECT_FALSE(DirectoryExists(temp_files[i]));
+  for (auto& i : temp_files) {
+    ASSERT_TRUE(CreateTemporaryFile(&i));
+    EXPECT_TRUE(PathExists(i));
+    EXPECT_FALSE(DirectoryExists(i));
   }
   for (int i = 0; i < 3; i++)
     EXPECT_FALSE(temp_files[i] == temp_files[(i+1)%3]);
-  for (int i = 0; i < 3; i++)
-    EXPECT_TRUE(DeleteFile(temp_files[i], false));
+  for (const auto& i : temp_files)
+    EXPECT_TRUE(DeleteFile(i, false));
 }
 
 TEST_F(FileUtilTest, CreateAndOpenTemporaryFileTest) {
@@ -2419,7 +2429,14 @@ TEST_F(FileUtilTest, CreateAndOpenTemporaryFileTest) {
   }
 }
 
-TEST_F(FileUtilTest, FileToFILE) {
+#if defined(OS_FUCHSIA)
+// TODO(crbug.com/851747): Re-enable when the Fuchsia-side fix for fdopen has
+// been rolled into Chromium.
+#define MAYBE_FileToFILE DISABLED_FileToFILE
+#else
+#define MAYBE_FileToFILE FileToFILE
+#endif
+TEST_F(FileUtilTest, MAYBE_FileToFILE) {
   File file;
   FILE* stream = FileToFILE(std::move(file), "w");
   EXPECT_FALSE(stream);
@@ -3169,7 +3186,7 @@ TEST_F(FileUtilTest, ReadFileToStringWithNamedPipe) {
 }
 #endif  // defined(OS_WIN)
 
-#if defined(OS_POSIX) && !defined(OS_MACOSX) && !defined(OS_FUCHSIA)
+#if defined(OS_POSIX) && !defined(OS_MACOSX)
 TEST_F(FileUtilTest, ReadFileToStringWithProcFileSystem) {
   FilePath file_path("/proc/cpuinfo");
   std::string data = "temp";
@@ -3179,23 +3196,15 @@ TEST_F(FileUtilTest, ReadFileToStringWithProcFileSystem) {
 
   data = "temp";
   EXPECT_FALSE(ReadFileToStringWithMaxSize(file_path, &data, 2));
-#if defined(OS_ANDROID)
-  EXPECT_EQ("Pr", data);
-#else
-  EXPECT_EQ("pr", data);
-#endif
+  EXPECT_TRUE(EqualsCaseInsensitiveASCII("pr", data));
 
   data = "temp";
   EXPECT_FALSE(ReadFileToStringWithMaxSize(file_path, &data, 4));
-#if defined(OS_ANDROID)
-  EXPECT_EQ("Proc", data);
-#else
-  EXPECT_EQ("proc", data);
-#endif
+  EXPECT_TRUE(EqualsCaseInsensitiveASCII("proc", data));
 
   EXPECT_FALSE(ReadFileToStringWithMaxSize(file_path, nullptr, 4));
 }
-#endif  // defined(OS_POSIX) && !defined(OS_MACOSX) && !defined(OS_FUCHSIA)
+#endif  // defined(OS_POSIX) && !defined(OS_MACOSX)
 
 TEST_F(FileUtilTest, ReadFileToStringWithLargeFile) {
   std::string data(kLargeFileSize, 'c');
@@ -3636,6 +3645,70 @@ TEST_F(FileUtilTest, NonExistentContentUriTest) {
   EXPECT_FALSE(file.IsValid());
 }
 #endif
+
+// Test that temp files obtained racily are all unique (no interference between
+// threads). Mimics file operations in DoLaunchChildTestProcess() to rule out
+// thread-safety issues @ https://crbug.com/826408#c17.
+#if defined(OS_FUCHSIA)
+// TODO(crbug.com/844416): Too slow to run on infra due to QEMU overloads.
+#define MAYBE_MultiThreadedTempFiles DISABLED_MultiThreadedTempFiles
+#else
+#define MAYBE_MultiThreadedTempFiles MultiThreadedTempFiles
+#endif
+TEST(FileUtilMultiThreadedTest, MAYBE_MultiThreadedTempFiles) {
+  constexpr int kNumThreads = 64;
+  constexpr int kNumWritesPerThread = 32;
+
+  std::unique_ptr<Thread> threads[kNumThreads];
+  for (auto& thread : threads) {
+    thread = std::make_unique<Thread>("test worker");
+    thread->Start();
+  }
+
+  // Wait until all threads are started for max parallelism.
+  for (auto& thread : threads)
+    thread->WaitUntilThreadStarted();
+
+  const RepeatingClosure open_write_close_read = BindRepeating([]() {
+    FilePath output_filename;
+    ScopedFILE output_file(CreateAndOpenTemporaryFile(&output_filename));
+    EXPECT_TRUE(output_file);
+
+    const std::string content = GenerateGUID();
+#if defined(OS_WIN)
+    HANDLE handle =
+        reinterpret_cast<HANDLE>(_get_osfhandle(_fileno(output_file.get())));
+    DWORD bytes_written = 0;
+    ::WriteFile(handle, content.c_str(), content.length(), &bytes_written,
+                NULL);
+#else
+    size_t bytes_written =
+        ::write(::fileno(output_file.get()), content.c_str(), content.length());
+#endif
+    EXPECT_EQ(content.length(), bytes_written);
+    ::fflush(output_file.get());
+    output_file.reset();
+
+    std::string output_file_contents;
+    EXPECT_TRUE(ReadFileToString(output_filename, &output_file_contents))
+        << output_filename;
+
+    EXPECT_EQ(content, output_file_contents);
+
+    DeleteFile(output_filename, false);
+  });
+
+  // Post tasks to each thread in a round-robin fashion to ensure as much
+  // parallelism as possible.
+  for (int i = 0; i < kNumWritesPerThread; ++i) {
+    for (auto& thread : threads) {
+      thread->task_runner()->PostTask(FROM_HERE, open_write_close_read);
+    }
+  }
+
+  for (auto& thread : threads)
+    thread->Stop();
+}
 
 #if defined(OS_POSIX) || defined(OS_FUCHSIA)
 

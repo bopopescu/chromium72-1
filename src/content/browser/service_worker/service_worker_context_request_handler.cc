@@ -67,8 +67,6 @@ std::string ServiceWorkerContextRequestHandler::CreateJobStatusToString(
       return "ERROR_UNINSTALLED_SCRIPT_IMPORT";
     case CreateJobStatus::ERROR_OUT_OF_RESOURCE_IDS:
       return "ERROR_OUT_OF_RESOURCE_IDS";
-    case CreateJobStatus::NUM_TYPES:
-      NOTREACHED();
   }
   NOTREACHED() << static_cast<int>(status);
   return "UNKNOWN";
@@ -103,17 +101,6 @@ net::URLRequestJob* ServiceWorkerContextRequestHandler::MaybeCreateJob(
   // falling back to network. Otherwise the renderer may receive the response
   // from network and start a service worker whose browser-side
   // ServiceWorkerVersion is not properly initialized.
-  //
-  // As an exception, allow installed service workers to use importScripts()
-  // to import non-installed scripts.
-  // TODO(falken): This is a spec violation that should be deprecated and
-  // removed. See https://github.com/w3c/ServiceWorker/issues/1021
-  if (status == CreateJobStatus::ERROR_UNINSTALLED_SCRIPT_IMPORT) {
-    // Fall back to network.
-    ServiceWorkerMetrics::RecordUninstalledScriptImport(version_->script_url());
-    return nullptr;
-  }
-
   std::string error_str(CreateJobStatusToString(status));
   request->net_log().AddEvent(
       net::NetLogEventType::SERVICE_WORKER_SCRIPT_LOAD_UNHANDLED_REQUEST_ERROR,
@@ -158,8 +145,6 @@ net::URLRequestJob* ServiceWorkerContextRequestHandler::MaybeCreateJobImpl(
   if (resource_id != kInvalidServiceWorkerResourceId) {
     if (ServiceWorkerVersion::IsInstalled(version_->status())) {
       // An installed worker is loading a stored script.
-      if (is_main_script)
-        version_->embedded_worker()->OnURLJobCreatedForMainScript();
       *out_status = CreateJobStatus::READ_JOB;
     } else {
       // A new worker is loading a stored script. The script was already
@@ -212,7 +197,6 @@ net::URLRequestJob* ServiceWorkerContextRequestHandler::MaybeCreateJobImpl(
       incumbent_resource_id =
           stored_version->script_cache_map()->LookupResourceId(request->url());
     }
-    version_->embedded_worker()->OnURLJobCreatedForMainScript();
   }
   *out_status = incumbent_resource_id == kInvalidServiceWorkerResourceId
                     ? CreateJobStatus::WRITE_JOB

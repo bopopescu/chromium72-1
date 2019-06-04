@@ -24,23 +24,18 @@
 
 namespace customtabs {
 
-namespace {
-
-constexpr int kMaxResponseSize = 100 * 1024;
-
-}  // namespace
-
 // static
 void DetachedResourceRequest::CreateAndStart(
     content::BrowserContext* browser_context,
     const GURL& url,
     const GURL& site_for_cookies,
     const net::URLRequest::ReferrerPolicy referrer_policy,
+    Motivation motivation,
     DetachedResourceRequest::OnResultCallback cb) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
   std::unique_ptr<DetachedResourceRequest> detached_request(
       new DetachedResourceRequest(url, site_for_cookies, referrer_policy,
-                                  std::move(cb)));
+                                  motivation, std::move(cb)));
   Start(std::move(detached_request), browser_context);
 }
 
@@ -50,9 +45,11 @@ DetachedResourceRequest::DetachedResourceRequest(
     const GURL& url,
     const GURL& site_for_cookies,
     net::URLRequest::ReferrerPolicy referrer_policy,
+    Motivation motivation,
     DetachedResourceRequest::OnResultCallback cb)
     : url_(url),
       site_for_cookies_(site_for_cookies),
+      motivation_(motivation),
       cb_(std::move(cb)),
       redirects_(0) {
   net::NetworkTrafficAnnotationTag traffic_annotation =
@@ -126,7 +123,8 @@ void DetachedResourceRequest::Start(
 
 void DetachedResourceRequest::OnRedirectCallback(
     const net::RedirectInfo& redirect_info,
-    const network::ResourceResponseHead& response_head) {
+    const network::ResourceResponseHead& response_head,
+    std::vector<std::string>* to_be_removed_headers) {
   redirects_++;
 }
 
@@ -135,25 +133,46 @@ void DetachedResourceRequest::OnResponseCallback(
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
   int net_error = url_loader_->NetError();
   bool success = net_error == net::OK;
+  net_error = std::abs(net_error);
   auto duration = base::TimeTicks::Now() - start_time_;
-  if (success) {
-    // Max 20 redirects, 21 would be a bug.
-    UMA_HISTOGRAM_CUSTOM_COUNTS(
-        "CustomTabs.DetachedResourceRequest.RedirectsCount.Success", redirects_,
-        1, 21, 21);
-    UMA_HISTOGRAM_MEDIUM_TIMES(
-        "CustomTabs.DetachedResourceRequest.Duration.Success", duration);
-  } else {
-    UMA_HISTOGRAM_CUSTOM_COUNTS(
-        "CustomTabs.DetachedResourceRequest.RedirectsCount.Failure", redirects_,
-        1, 21, 21);
-    UMA_HISTOGRAM_MEDIUM_TIMES(
-        "CustomTabs.DetachedResourceRequest.Duration.Failure", duration);
+
+  switch (motivation_) {
+    case Motivation::kParallelRequest: {
+      if (success) {
+        // Max 20 redirects, 21 would be a bug.
+        UMA_HISTOGRAM_CUSTOM_COUNTS(
+            "CustomTabs.DetachedResourceRequest.RedirectsCount.Success",
+            redirects_, 1, 21, 21);
+        UMA_HISTOGRAM_MEDIUM_TIMES(
+            "CustomTabs.DetachedResourceRequest.Duration.Success", duration);
+      } else {
+        UMA_HISTOGRAM_CUSTOM_COUNTS(
+            "CustomTabs.DetachedResourceRequest.RedirectsCount.Failure",
+            redirects_, 1, 21, 21);
+        UMA_HISTOGRAM_MEDIUM_TIMES(
+            "CustomTabs.DetachedResourceRequest.Duration.Failure", duration);
+      }
+
+      base::UmaHistogramSparse("CustomTabs.DetachedResourceRequest.FinalStatus",
+                               net_error);
+      break;
+    }
+    case Motivation::kResourcePrefetch: {
+      if (success) {
+        UMA_HISTOGRAM_MEDIUM_TIMES(
+            "CustomTabs.ResourcePrefetch.Duration.Success", duration);
+      } else {
+        UMA_HISTOGRAM_MEDIUM_TIMES(
+            "CustomTabs.ResourcePrefetch.Duration.Failure", duration);
+      }
+
+      base::UmaHistogramSparse("CustomTabs.ResourcePrefetch.FinalStatus",
+                               net_error);
+      break;
+    }
   }
 
-  base::UmaHistogramSparse("CustomTabs.DetachedResourceRequest.FinalStatus",
-                           std::abs(net_error));
-  std::move(cb_).Run(success);
+  std::move(cb_).Run(net_error);
 }
 
 }  // namespace customtabs

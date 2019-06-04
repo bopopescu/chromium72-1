@@ -7,7 +7,7 @@
 
 #include "third_party/blink/public/platform/modules/permissions/permission.mojom-blink.h"
 #include "third_party/blink/public/platform/modules/permissions/permission_status.mojom-blink.h"
-#include "third_party/blink/renderer/modules/serviceworkers/service_worker_registration.h"
+#include "third_party/blink/renderer/modules/service_worker/service_worker_registration.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/supplementable.h"
 
@@ -33,15 +33,14 @@ class PushMessagingBridge final
 
   static PushMessagingBridge* From(ServiceWorkerRegistration* registration);
 
+  explicit PushMessagingBridge(ServiceWorkerRegistration& registration);
   virtual ~PushMessagingBridge();
 
   // Asynchronously determines the permission state for the current origin.
   ScriptPromise GetPermissionState(ScriptState* script_state,
-                                   const PushSubscriptionOptionsInit& options);
+                                   const PushSubscriptionOptionsInit* options);
 
  private:
-  explicit PushMessagingBridge(ServiceWorkerRegistration& registration);
-
   // Method to be invoked when the permission status has been retrieved from the
   // permission service. Will settle the given |resolver|.
   void DidGetPermissionState(ScriptPromiseResolver* resolver,

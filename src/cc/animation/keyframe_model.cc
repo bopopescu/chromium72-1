@@ -61,12 +61,13 @@ std::unique_ptr<KeyframeModel> KeyframeModel::CreateImplInstance(
   DCHECK(!is_controlling_instance_);
   std::unique_ptr<KeyframeModel> to_return(
       new KeyframeModel(curve_->Clone(), id_, group_, target_property_id_));
+  to_return->element_id_ = element_id_;
   to_return->run_state_ = initial_run_state;
   to_return->iterations_ = iterations_;
   to_return->iteration_start_ = iteration_start_;
   to_return->start_time_ = start_time_;
   to_return->pause_time_ = pause_time_;
-  to_return->total_paused_time_ = total_paused_time_;
+  to_return->total_paused_duration_ = total_paused_duration_;
   to_return->time_offset_ = time_offset_;
   to_return->direction_ = direction_;
   to_return->playback_rate_ = playback_rate_;
@@ -121,7 +122,7 @@ void KeyframeModel::SetRunState(RunState run_state,
   const char* old_run_state_name = s_runStateNames[run_state_];
 
   if (run_state == RUNNING && run_state_ == PAUSED)
-    total_paused_time_ += (monotonic_time - pause_time_);
+    total_paused_duration_ += (monotonic_time - pause_time_);
   else if (run_state == PAUSED)
     pause_time_ = monotonic_time;
   run_state_ = run_state;
@@ -140,6 +141,18 @@ void KeyframeModel::SetRunState(RunState run_state,
       TRACE_STR_COPY(name_buffer), "State", TRACE_STR_COPY(state_buffer));
 }
 
+void KeyframeModel::Pause(base::TimeDelta pause_offset) {
+  // Convert pause offset to monotonic time.
+
+  // TODO(crbug.com/840364): This conversion is incorrect. pause_offset is
+  // actually a local time so to convert it to monotonic time we should include
+  // total_paused_duration_ but exclude time_offset. The current calculation is
+  // is incorrect for animations that have start-delay or are paused and
+  // unpaused multiple times.
+  base::TimeTicks monotonic_time = pause_offset + start_time_ + time_offset_;
+  SetRunState(PAUSED, monotonic_time);
+}
+
 bool KeyframeModel::IsFinishedAt(base::TimeTicks monotonic_time) const {
   if (is_finished())
     return true;
@@ -152,39 +165,42 @@ bool KeyframeModel::IsFinishedAt(base::TimeTicks monotonic_time) const {
 
   return run_state_ == RUNNING && iterations_ >= 0 &&
          (curve_->Duration() * (iterations_ / std::abs(playback_rate_))) <=
-             (monotonic_time + time_offset_ - start_time_ - total_paused_time_);
+             (ConvertMonotonicTimeToLocalTime(monotonic_time) + time_offset_);
 }
 
 bool KeyframeModel::InEffect(base::TimeTicks monotonic_time) const {
-  return ConvertToActiveTime(monotonic_time) >= base::TimeDelta() ||
+  return ConvertMonotonicTimeToLocalTime(monotonic_time) + time_offset_ >=
+             base::TimeDelta() ||
          (fill_mode_ == FillMode::BOTH || fill_mode_ == FillMode::BACKWARDS);
 }
 
-base::TimeDelta KeyframeModel::ConvertToActiveTime(
+base::TimeDelta KeyframeModel::ConvertMonotonicTimeToLocalTime(
     base::TimeTicks monotonic_time) const {
-  // If we're just starting or we're waiting on receiving a start time,
-  // time is 'stuck' at the initial state.
+  // When waiting on receiving a start time, then our global clock is 'stuck' at
+  // the initial state.
   if ((run_state_ == STARTING && !has_set_start_time()) ||
-      needs_synchronized_start_time()) {
-    return time_offset_;
-  }
+      needs_synchronized_start_time())
+    return base::TimeDelta();
 
-  // Compute active time. If we're paused, time is 'stuck' at the pause time.
-  base::TimeTicks active_time =
-      (run_state_ == PAUSED) ? pause_time_ : (monotonic_time + time_offset_);
-
-  // Returned time should always be relative to the start time and should
-  // subtract all time spent paused.
-  return active_time - start_time_ - total_paused_time_;
+  // If we're paused, time is 'stuck' at the pause time.
+  base::TimeTicks time =
+      (run_state_ == PAUSED) ? pause_time_ - time_offset_ : monotonic_time;
+  return time - start_time_ - total_paused_duration_;
 }
 
 base::TimeDelta KeyframeModel::TrimTimeToCurrentIteration(
     base::TimeTicks monotonic_time) const {
+  base::TimeDelta local_time = ConvertMonotonicTimeToLocalTime(monotonic_time);
+  return TrimLocalTimeToCurrentIteration(local_time);
+}
+
+base::TimeDelta KeyframeModel::TrimLocalTimeToCurrentIteration(
+    base::TimeDelta local_time) const {
   // Check for valid parameters
   DCHECK(playback_rate_);
   DCHECK_GE(iteration_start_, 0);
 
-  base::TimeDelta active_time = ConvertToActiveTime(monotonic_time);
+  base::TimeDelta active_time = local_time + time_offset_;
   base::TimeDelta start_offset = curve_->Duration() * iteration_start_;
 
   // Return start offset if we are before the start of the keyframe model
@@ -248,13 +264,12 @@ base::TimeDelta KeyframeModel::TrimTimeToCurrentIteration(
 }
 
 void KeyframeModel::PushPropertiesTo(KeyframeModel* other) const {
-  // Currently, we only push changes due to pausing and resuming KeyframeModels
-  // on the main thread.
+  other->element_id_ = element_id_;
   if (run_state_ == KeyframeModel::PAUSED ||
       other->run_state_ == KeyframeModel::PAUSED) {
     other->run_state_ = run_state_;
     other->pause_time_ = pause_time_;
-    other->total_paused_time_ = total_paused_time_;
+    other->total_paused_duration_ = total_paused_duration_;
   }
 }
 

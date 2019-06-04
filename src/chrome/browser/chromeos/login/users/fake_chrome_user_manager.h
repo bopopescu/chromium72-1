@@ -66,7 +66,6 @@ class FakeChromeUserManager : public ChromeUserManager {
   const user_manager::UserList& GetLoggedInUsers() const override;
   const user_manager::UserList& GetLRULoggedInUsers() const override;
   user_manager::UserList GetUnlockUsers() const override;
-  const AccountId& GetOwnerAccountId() const override;
   void UserLoggedIn(const AccountId& account_id,
                     const std::string& user_id_hash,
                     bool browser_restart,
@@ -120,9 +119,6 @@ class FakeChromeUserManager : public ChromeUserManager {
   bool IsGaiaUserAllowed(const user_manager::User& user) const override;
   bool IsUserAllowed(const user_manager::User& user) const override;
   PrefService* GetLocalState() const override;
-  bool GetPlatformKnownUserId(const std::string& user_email,
-                              const std::string& gaia_id,
-                              AccountId* out_account_id) const override;
   const AccountId& GetGuestAccountId() const override;
   bool IsFirstExecAfterBoot() const override;
   void AsyncRemoveCryptohome(const AccountId& account_id) const override;
@@ -159,9 +155,7 @@ class FakeChromeUserManager : public ChromeUserManager {
   void PublicAccountUserLoggedIn(user_manager::User* user) override;
   void SupervisedUserLoggedIn(const AccountId& account_id) override;
   void OnUserRemoved(const AccountId& account_id) override;
-  void UpdateLoginState(const user_manager::User* active_user,
-                        const user_manager::User* primary_user,
-                        bool is_current_user_owner) const override;
+  void SetOwnerId(const AccountId& account_id) override;
 
   // UserManagerInterface override.
   MultiProfileUserController* GetMultiProfileUserController() override;
@@ -179,13 +173,18 @@ class FakeChromeUserManager : public ChromeUserManager {
       const AccountId& account_id,
       const AffiliationIDSet& user_affiliation_ids) override;
   bool ShouldReportUser(const std::string& user_id) const override;
+  bool IsManagedSessionEnabledForUser(
+      const user_manager::User& active_user) const override;
+  bool IsFullManagementDisclosureNeeded(
+      policy::DeviceLocalAccountPolicyBroker* broker) const override;
 
   void set_ephemeral_users_enabled(bool ephemeral_users_enabled) {
     fake_ephemeral_users_enabled_ = ephemeral_users_enabled;
   }
 
+  // TODO(mukai): remove this.
   void set_owner_id(const AccountId& owner_account_id) {
-    owner_account_id_ = owner_account_id;
+    SetOwnerId(owner_account_id);
   }
 
   void set_multi_profile_user_controller(
@@ -196,6 +195,9 @@ class FakeChromeUserManager : public ChromeUserManager {
   void set_current_user_new(bool new_user) { current_user_new_ = new_user; }
   void set_current_user_ephemeral(bool user_ephemeral) {
     current_user_ephemeral_ = user_ephemeral;
+  }
+  void set_current_user_child(bool child_user) {
+    current_user_child_ = child_user;
   }
 
   void set_is_enterprise_managed(bool is_enterprise_managed) {
@@ -210,10 +212,10 @@ class FakeChromeUserManager : public ChromeUserManager {
   user_manager::User* GetActiveUserInternal() const;
 
   std::unique_ptr<FakeSupervisedUserManager> supervised_user_manager_;
-  AccountId owner_account_id_ = EmptyAccountId();
   bool fake_ephemeral_users_enabled_ = false;
   bool current_user_new_ = false;
   bool current_user_ephemeral_ = false;
+  bool current_user_child_ = false;
 
   MultiProfileUserController* multi_profile_user_controller_ = nullptr;
 

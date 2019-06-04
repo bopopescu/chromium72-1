@@ -19,7 +19,7 @@
 #include "xfa/fwl/cfwl_app.h"
 #include "xfa/fwl/cfwl_caret.h"
 #include "xfa/fwl/cfwl_event.h"
-#include "xfa/fwl/cfwl_eventtextchanged.h"
+#include "xfa/fwl/cfwl_eventtextwillchange.h"
 #include "xfa/fwl/cfwl_eventvalidate.h"
 #include "xfa/fwl/cfwl_messagekey.h"
 #include "xfa/fwl/cfwl_messagemouse.h"
@@ -95,7 +95,7 @@ CFX_RectF CFWL_Edit::GetAutosizedWidgetRect() {
 
   if (m_EdtEngine.GetLength() > 0) {
     CFX_SizeF size = CalcTextSize(
-        m_EdtEngine.GetText(), m_pProperties->m_pThemeProvider,
+        m_EdtEngine.GetText(), m_pProperties->m_pThemeProvider.Get(),
         !!(m_pProperties->m_dwStyleExes & FWL_STYLEEXT_EDT_MultiLine));
     rect = CFX_RectF(0, 0, size);
   }
@@ -147,14 +147,15 @@ FWL_WidgetHit CFWL_Edit::HitTest(const CFX_PointF& point) {
 void CFWL_Edit::DrawWidget(CXFA_Graphics* pGraphics, const CFX_Matrix& matrix) {
   if (!pGraphics)
     return;
-  if (!m_pProperties->m_pThemeProvider)
-    return;
+
   if (m_rtClient.IsEmpty())
     return;
 
-  IFWL_ThemeProvider* pTheme = m_pProperties->m_pThemeProvider;
-  DrawContent(pGraphics, pTheme, &matrix);
+  IFWL_ThemeProvider* pTheme = m_pProperties->m_pThemeProvider.Get();
+  if (!pTheme)
+    return;
 
+  DrawContent(pGraphics, pTheme, &matrix);
   if (HasBorder())
     DrawBorder(pGraphics, CFWL_Part::Border, pTheme, matrix);
 }
@@ -171,9 +172,10 @@ void CFWL_Edit::SetThemeProvider(IFWL_ThemeProvider* pThemeProvider) {
   m_pProperties->m_pThemeProvider = pThemeProvider;
 }
 
-void CFWL_Edit::SetText(const WideString& wsText) {
+void CFWL_Edit::SetText(const WideString& wsText,
+                        CFDE_TextEditEngine::RecordOperation op) {
   m_EdtEngine.Clear();
-  m_EdtEngine.Insert(0, wsText);
+  m_EdtEngine.Insert(0, wsText, op);
 }
 
 int32_t CFWL_Edit::GetTextLength() const {
@@ -297,13 +299,25 @@ void CFWL_Edit::OnCaretChanged() {
   }
 }
 
-void CFWL_Edit::OnTextChanged(const WideString& prevText) {
+void CFWL_Edit::OnTextWillChange(CFDE_TextEditEngine::TextChange* change) {
+  CFWL_EventTextWillChange event(this);
+  event.previous_text = change->previous_text;
+  event.change_text = change->text;
+  event.selection_start = change->selection_start;
+  event.selection_end = change->selection_end;
+  event.cancelled = false;
+
+  DispatchEvent(&event);
+
+  change->text = event.change_text;
+  change->selection_start = event.selection_start;
+  change->selection_end = event.selection_end;
+  change->cancelled = event.cancelled;
+}
+
+void CFWL_Edit::OnTextChanged() {
   if (m_pProperties->m_dwStyleExes & FWL_STYLEEXT_EDT_VAlignMask)
     UpdateVAlignment();
-
-  CFWL_EventTextChanged event(this);
-  event.wsPrevText = prevText;
-  DispatchEvent(&event);
 
   LayoutScrollBar();
   RepaintRect(GetClientRect());
@@ -314,10 +328,6 @@ void CFWL_Edit::OnSelChanged() {
 }
 
 bool CFWL_Edit::OnValidate(const WideString& wsText) {
-  CFWL_Widget* pDst = GetOuter();
-  if (!pDst)
-    pDst = this;
-
   CFWL_EventValidate event(this);
   event.wsInsert = wsText;
   event.bValidate = true;
@@ -654,12 +664,8 @@ void CFWL_Edit::UpdateCaret() {
 }
 
 CFWL_ScrollBar* CFWL_Edit::UpdateScroll() {
-  bool bShowHorz =
-      m_pHorzScrollBar &&
-      ((m_pHorzScrollBar->GetStates() & FWL_WGTSTATE_Invisible) == 0);
-  bool bShowVert =
-      m_pVertScrollBar &&
-      ((m_pVertScrollBar->GetStates() & FWL_WGTSTATE_Invisible) == 0);
+  bool bShowHorz = m_pHorzScrollBar && m_pHorzScrollBar->IsVisible();
+  bool bShowVert = m_pVertScrollBar && m_pVertScrollBar->IsVisible();
   if (!bShowHorz && !bShowVert)
     return nullptr;
 
@@ -1059,7 +1065,7 @@ void CFWL_Edit::OnProcessEvent(CFWL_Event* pEvent) {
   if (!pEvent || pEvent->GetType() != CFWL_Event::Type::Scroll)
     return;
 
-  CFWL_Widget* pSrcTarget = pEvent->m_pSrcTarget;
+  CFWL_Widget* pSrcTarget = pEvent->GetSrcTarget();
   if ((pSrcTarget == m_pVertScrollBar.get() && m_pVertScrollBar) ||
       (pSrcTarget == m_pHorzScrollBar.get() && m_pHorzScrollBar)) {
     CFWL_EventScroll* pScrollEvent = static_cast<CFWL_EventScroll*>(pEvent);

@@ -7,6 +7,7 @@
 
 #include <memory>
 #include "base/memory/scoped_refptr.h"
+#include "base/optional.h"
 #include "cc/animation/animation_delegate.h"
 #include "cc/animation/scroll_timeline.h"
 #include "cc/animation/single_keyframe_effect_animation.h"
@@ -14,6 +15,7 @@
 #include "third_party/blink/renderer/platform/graphics/compositor_element_id.h"
 #include "third_party/blink/renderer/platform/platform_export.h"
 #include "third_party/blink/renderer/platform/wtf/noncopyable.h"
+#include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
 
 namespace cc {
 class AnimationCurve;
@@ -33,8 +35,10 @@ class PLATFORM_EXPORT CompositorAnimation : public cc::AnimationDelegate {
  public:
   static std::unique_ptr<CompositorAnimation> Create();
   static std::unique_ptr<CompositorAnimation> CreateWorkletAnimation(
+      cc::WorkletAnimationId,
       const String& name,
-      std::unique_ptr<CompositorScrollTimeline>);
+      std::unique_ptr<CompositorScrollTimeline>,
+      std::unique_ptr<cc::AnimationOptions>);
 
   explicit CompositorAnimation(
       scoped_refptr<cc::SingleKeyframeEffectAnimation>);
@@ -56,6 +60,10 @@ class PLATFORM_EXPORT CompositorAnimation : public cc::AnimationDelegate {
   void RemoveKeyframeModel(int keyframe_model_id);
   void PauseKeyframeModel(int keyframe_model_id, double time_offset);
   void AbortKeyframeModel(int keyframe_model_id);
+
+  void UpdateScrollTimeline(base::Optional<cc::ElementId>,
+                            base::Optional<double> start_scroll_offset,
+                            base::Optional<double> end_scroll_offset);
 
  private:
   // cc::AnimationDelegate implementation.

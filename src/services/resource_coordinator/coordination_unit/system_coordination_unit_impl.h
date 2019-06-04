@@ -20,7 +20,8 @@ class SystemCoordinationUnitImpl
 
   SystemCoordinationUnitImpl(
       const CoordinationUnitID& id,
-      std::unique_ptr<service_manager::ServiceContextRef> service_ref);
+      CoordinationUnitGraph* graph,
+      std::unique_ptr<service_manager::ServiceKeepaliveRef> keepalive_ref);
   ~SystemCoordinationUnitImpl() override;
 
   // mojom::SystemCoordinationUnit implementation:
@@ -28,8 +29,18 @@ class SystemCoordinationUnitImpl
   void DistributeMeasurementBatch(
       mojom::ProcessResourceMeasurementBatchPtr measurement_batch) override;
 
+  // Accessors for the start/end times bracketing when the last performance
+  // measurement occurred.
+  base::TimeTicks last_measurement_start_time() const {
+    return last_measurement_start_time_;
+  }
+  base::TimeTicks last_measurement_end_time() const {
+    return last_measurement_end_time_;
+  }
+
  private:
-  base::TimeTicks last_measurement_batch_time_;
+  base::TimeTicks last_measurement_start_time_;
+  base::TimeTicks last_measurement_end_time_;
 
   // CoordinationUnitInterface implementation:
   void OnEventReceived(mojom::Event event) override;

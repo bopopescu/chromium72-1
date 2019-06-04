@@ -67,13 +67,16 @@ bool Path::operator==(const Path& other) const {
 }
 
 bool Path::Contains(const FloatPoint& point) const {
-  return path_.contains(WebCoreFloatToSkScalar(point.X()),
-                        WebCoreFloatToSkScalar(point.Y()));
+  if (!std::isfinite(point.X()) || !std::isfinite(point.Y()))
+    return false;
+  return path_.contains(SkScalar(point.X()), SkScalar(point.Y()));
 }
 
 bool Path::Contains(const FloatPoint& point, WindRule rule) const {
-  SkScalar x = WebCoreFloatToSkScalar(point.X());
-  SkScalar y = WebCoreFloatToSkScalar(point.Y());
+  if (!std::isfinite(point.X()) || !std::isfinite(point.Y()))
+    return false;
+  SkScalar x = point.X();
+  SkScalar y = point.Y();
   SkPath::FillType fill_type = WebCoreWindRuleToSkFillType(rule);
   if (path_.getFillType() != fill_type) {
     SkPath tmp(path_);
@@ -101,9 +104,10 @@ SkPath Path::StrokePath(const StrokeData& stroke_data) const {
 
 bool Path::StrokeContains(const FloatPoint& point,
                           const StrokeData& stroke_data) const {
+  if (!std::isfinite(point.X()) || !std::isfinite(point.Y()))
+    return false;
   return StrokePath(stroke_data)
-      .contains(WebCoreFloatToSkScalar(point.X()),
-                WebCoreFloatToSkScalar(point.Y()));
+      .contains(SkScalar(point.X()), SkScalar(point.Y()));
 }
 
 FloatRect Path::BoundingRect() const {
@@ -353,7 +357,7 @@ void Path::AddEllipse(const FloatPoint& p,
                       bool anticlockwise) {
   DCHECK(EllipseIsRenderable(start_angle, end_angle));
   DCHECK_GE(start_angle, 0);
-  DCHECK_LT(start_angle, twoPiFloat);
+  DCHECK_LT(start_angle, kTwoPiFloat);
   DCHECK((anticlockwise && (start_angle - end_angle) >= 0) ||
          (!anticlockwise && (end_angle - start_angle) >= 0));
 
@@ -367,8 +371,8 @@ void Path::AddEllipse(const FloatPoint& p,
            cy + radius_y_scalar);
 
   float sweep = end_angle - start_angle;
-  SkScalar start_degrees = WebCoreFloatToSkScalar(start_angle * 180 / piFloat);
-  SkScalar sweep_degrees = WebCoreFloatToSkScalar(sweep * 180 / piFloat);
+  SkScalar start_degrees = WebCoreFloatToSkScalar(start_angle * 180 / kPiFloat);
+  SkScalar sweep_degrees = WebCoreFloatToSkScalar(sweep * 180 / kPiFloat);
   SkScalar s360 = SkIntToScalar(360);
 
   // We can't use SkPath::addOval(), because addOval() makes a new sub-path.
@@ -415,7 +419,7 @@ void Path::AddEllipse(const FloatPoint& p,
                       bool anticlockwise) {
   DCHECK(EllipseIsRenderable(start_angle, end_angle));
   DCHECK_GE(start_angle, 0);
-  DCHECK_LT(start_angle, twoPiFloat);
+  DCHECK_LT(start_angle, kTwoPiFloat);
   DCHECK((anticlockwise && (start_angle - end_angle) >= 0) ||
          (!anticlockwise && (end_angle - start_angle) >= 0));
 
@@ -535,8 +539,9 @@ bool Path::IntersectPath(const Path& other) {
 }
 
 bool EllipseIsRenderable(float start_angle, float end_angle) {
-  return (std::abs(end_angle - start_angle) < twoPiFloat) ||
-         WebCoreFloatNearlyEqual(std::abs(end_angle - start_angle), twoPiFloat);
+  return (std::abs(end_angle - start_angle) < kTwoPiFloat) ||
+         WebCoreFloatNearlyEqual(std::abs(end_angle - start_angle),
+                                 kTwoPiFloat);
 }
 
 }  // namespace blink

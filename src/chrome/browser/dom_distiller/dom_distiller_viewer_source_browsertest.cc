@@ -7,6 +7,7 @@
 #include <memory>
 #include <utility>
 
+#include "base/bind.h"
 #include "base/command_line.h"
 #include "base/guid.h"
 #include "base/run_loop.h"
@@ -218,7 +219,8 @@ void DomDistillerViewerSourceBrowserTest::ViewSingleDistilledPage(
     const std::string& expected_mime_type) {
   // Ensure the correct factory is used for the DomDistillerService.
   dom_distiller::DomDistillerServiceFactory::GetInstance()
-      ->SetTestingFactoryAndUse(browser()->profile(), &Build);
+      ->SetTestingFactoryAndUse(browser()->profile(),
+                                base::BindRepeating(&Build));
 
   // Navigate to a URL which the source should respond to.
   ui_test_utils::NavigateToURL(browser(), url);
@@ -308,7 +310,8 @@ IN_PROC_BROWSER_TEST_F(DomDistillerViewerSourceBrowserTest,
 IN_PROC_BROWSER_TEST_F(DomDistillerViewerSourceBrowserTest,
                        EarlyTemplateLoad) {
   dom_distiller::DomDistillerServiceFactory::GetInstance()
-      ->SetTestingFactoryAndUse(browser()->profile(), &Build);
+      ->SetTestingFactoryAndUse(browser()->profile(),
+                                base::BindRepeating(&Build));
 
   scoped_refptr<content::MessageLoopRunner> distillation_done_runner =
       new content::MessageLoopRunner;
@@ -376,12 +379,11 @@ IN_PROC_BROWSER_TEST_F(DomDistillerViewerSourceBrowserTest,
   // Wait for the page load to complete (this will be a distiller error page).
   content::WaitForLoadStop(contents);
 
-  bool result;
   // Execute in isolated world; where all distiller scripts are run.
-  EXPECT_TRUE(content::ExecuteScriptInIsolatedWorldAndExtractBool(
-      contents, ISOLATED_WORLD_ID_CHROME_INTERNAL, kTestDistillerObject,
-      &result));
-  EXPECT_TRUE(result);
+  EXPECT_EQ(true, content::EvalJsWithManualReply(
+                      contents, kTestDistillerObject,
+                      content::EXECUTE_SCRIPT_DEFAULT_OPTIONS,
+                      ISOLATED_WORLD_ID_CHROME_INTERNAL));
 }
 
 IN_PROC_BROWSER_TEST_F(DomDistillerViewerSourceBrowserTest,
@@ -427,7 +429,8 @@ IN_PROC_BROWSER_TEST_F(DomDistillerViewerSourceBrowserTest, MultiPageArticle) {
   expect_distillation_ = false;
   expect_distiller_page_ = true;
   dom_distiller::DomDistillerServiceFactory::GetInstance()
-      ->SetTestingFactoryAndUse(browser()->profile(), &Build);
+      ->SetTestingFactoryAndUse(browser()->profile(),
+                                base::BindRepeating(&Build));
 
   scoped_refptr<content::MessageLoopRunner> distillation_done_runner =
       new content::MessageLoopRunner;

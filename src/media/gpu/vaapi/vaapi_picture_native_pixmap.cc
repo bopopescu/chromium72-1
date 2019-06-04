@@ -46,6 +46,10 @@ bool VaapiPictureNativePixmap::AllowOverlay() const {
   return true;
 }
 
+VASurfaceID VaapiPictureNativePixmap::va_surface_id() const {
+  return va_surface_->id();
+}
+
 unsigned VaapiPictureNativePixmap::BufferFormatToInternalFormat(
     gfx::BufferFormat format) const {
   switch (format) {
@@ -66,6 +70,32 @@ unsigned VaapiPictureNativePixmap::BufferFormatToInternalFormat(
       NOTREACHED() << gfx::BufferFormatToString(format);
       return GL_BGRA_EXT;
   }
+}
+
+// static
+gfx::GpuMemoryBufferHandle
+VaapiPictureNativePixmap::CreateGpuMemoryBufferHandleFromVideoFrame(
+    const VideoFrame* const video_frame) {
+  DCHECK(video_frame->HasDmaBufs());
+
+  gfx::GpuMemoryBufferHandle handle;
+  handle.type = gfx::NATIVE_PIXMAP;
+  for (const auto& plane : video_frame->layout().planes()) {
+    handle.native_pixmap_handle.planes.emplace_back(plane.stride, plane.offset,
+                                                    0);
+  }
+
+  const auto& fds = video_frame->DmabufFds();
+  for (const auto& fd : fds) {
+    int dup_fd = HANDLE_EINTR(dup(fd.get()));
+    if (dup_fd == -1) {
+      PLOG(ERROR) << "Failed duplicating dmabuf fd";
+      return gfx::GpuMemoryBufferHandle();
+    }
+    handle.native_pixmap_handle.fds.emplace_back(
+        base::FileDescriptor(dup_fd, true));
+  }
+  return handle;
 }
 
 }  // namespace media

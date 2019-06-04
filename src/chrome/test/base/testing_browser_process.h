@@ -29,6 +29,7 @@ class IOThread;
 class NotificationPlatformBridge;
 class NotificationUIManager;
 class PrefService;
+class SystemNotificationHelper;
 class WatchDogThread;
 
 namespace content {
@@ -43,12 +44,17 @@ namespace gcm {
 class GCMDriver;
 }
 
+namespace network {
+class NetworkQualityTracker;
+class TestNetworkConnectionTracker;
+}
+
 namespace policy {
 class PolicyService;
 }
 
 namespace resource_coordinator {
-class TabLifecycleUnitSource;
+class ResourceCoordinatorParts;
 }
 
 class TestingBrowserProcess : public BrowserProcess {
@@ -72,7 +78,9 @@ class TestingBrowserProcess : public BrowserProcess {
   rappor::RapporServiceImpl* rappor_service() override;
   IOThread* io_thread() override;
   SystemNetworkContextManager* system_network_context_manager() override;
-  content::NetworkConnectionTracker* network_connection_tracker() override;
+  scoped_refptr<network::SharedURLLoaderFactory> shared_url_loader_factory()
+      override;
+  network::NetworkQualityTracker* network_quality_tracker() override;
   WatchDogThread* watchdog_thread() override;
   ProfileManager* profile_manager() override;
   PrefService* local_state() override;
@@ -88,8 +96,8 @@ class TestingBrowserProcess : public BrowserProcess {
   safe_browsing::SafeBrowsingService* safe_browsing_service() override;
   safe_browsing::ClientSideDetectionService* safe_browsing_detection_service()
       override;
-  subresource_filter::ContentRulesetService*
-  subresource_filter_ruleset_service() override;
+  subresource_filter::RulesetService* subresource_filter_ruleset_service()
+      override;
   optimization_guide::OptimizationGuideService* optimization_guide_service()
       override;
   net::URLRequestContextGetter* system_request_context() override;
@@ -107,7 +115,7 @@ class TestingBrowserProcess : public BrowserProcess {
       override;
   printing::BackgroundPrintingManager* background_printing_manager() override;
   const std::string& GetApplicationLocale() override;
-  void SetApplicationLocale(const std::string& app_locale) override;
+  void SetApplicationLocale(const std::string& actual_locale) override;
   DownloadStatusUpdater* download_status_updater() override;
   DownloadRequestLimiter* download_request_limiter() override;
 
@@ -127,6 +135,8 @@ class TestingBrowserProcess : public BrowserProcess {
 
   gcm::GCMDriver* gcm_driver() override;
   resource_coordinator::TabManager* GetTabManager() override;
+  resource_coordinator::ResourceCoordinatorParts* resource_coordinator_parts()
+      override;
   shell_integration::DefaultWebClientState CachedDefaultWebClientState()
       override;
   prefs::InProcessPrefServiceFactory* pref_service_factory() const override;
@@ -138,18 +148,19 @@ class TestingBrowserProcess : public BrowserProcess {
   void SetIOThread(IOThread* io_thread);
   void SetSafeBrowsingService(safe_browsing::SafeBrowsingService* sb_service);
   void SetRulesetService(
-      std::unique_ptr<subresource_filter::ContentRulesetService>
-          ruleset_service);
+      std::unique_ptr<subresource_filter::RulesetService> ruleset_service);
   void SetOptimizationGuideService(
       std::unique_ptr<optimization_guide::OptimizationGuideService>
           optimization_guide_service);
   void SetSystemRequestContext(net::URLRequestContextGetter* context_getter);
-  void SetNetworkConnectionTracker(
-      std::unique_ptr<content::NetworkConnectionTracker> tracker);
+  void SetSharedURLLoaderFactory(
+      scoped_refptr<network::SharedURLLoaderFactory> shared_url_loader_factory);
   void SetNotificationUIManager(
       std::unique_ptr<NotificationUIManager> notification_ui_manager);
   void SetNotificationPlatformBridge(
       std::unique_ptr<NotificationPlatformBridge> notification_platform_bridge);
+  void SetSystemNotificationHelper(
+      std::unique_ptr<SystemNotificationHelper> system_notification_helper);
   void SetRapporServiceImpl(rappor::RapporServiceImpl* rappor_service);
   void SetShuttingDown(bool is_shutting_down);
   void ShutdownBrowserPolicyConnector();
@@ -166,11 +177,12 @@ class TestingBrowserProcess : public BrowserProcess {
   std::unique_ptr<policy::ChromeBrowserPolicyConnector>
       browser_policy_connector_;
   bool created_browser_policy_connector_ = false;
-  std::unique_ptr<content::NetworkConnectionTracker>
-      network_connection_tracker_;
+  std::unique_ptr<network::NetworkQualityTracker> network_quality_tracker_;
   std::unique_ptr<ProfileManager> profile_manager_;
   std::unique_ptr<NotificationUIManager> notification_ui_manager_;
   std::unique_ptr<NotificationPlatformBridge> notification_platform_bridge_;
+  std::unique_ptr<SystemNotificationHelper> system_notification_helper_;
+  scoped_refptr<DownloadRequestLimiter> download_request_limiter_;
 
 #if BUILDFLAG(ENABLE_PRINTING)
   std::unique_ptr<printing::PrintJobManager> print_job_manager_;
@@ -184,28 +196,23 @@ class TestingBrowserProcess : public BrowserProcess {
 #endif
 
   scoped_refptr<safe_browsing::SafeBrowsingService> sb_service_;
-  std::unique_ptr<subresource_filter::ContentRulesetService>
+  std::unique_ptr<subresource_filter::RulesetService>
       subresource_filter_ruleset_service_;
   std::unique_ptr<optimization_guide::OptimizationGuideService>
       optimization_guide_service_;
 
   std::unique_ptr<network_time::NetworkTimeTracker> network_time_tracker_;
 
-  // |tab_manager_| is null by default and will be created when
-  // GetTabManager() is invoked on supported platforms.
-#if defined(OS_WIN) || defined(OS_MACOSX) || defined(OS_LINUX)
-  std::unique_ptr<resource_coordinator::TabManager> tab_manager_;
-  std::unique_ptr<resource_coordinator::TabLifecycleUnitSource>
-      tab_lifecycle_unit_source_;
-#endif
-
   // The following objects are not owned by TestingBrowserProcess:
   PrefService* local_state_;
   IOThread* io_thread_;
   net::URLRequestContextGetter* system_request_context_;
+  scoped_refptr<network::SharedURLLoaderFactory> shared_url_loader_factory_;
   rappor::RapporServiceImpl* rappor_service_;
 
   std::unique_ptr<BrowserProcessPlatformPart> platform_part_;
+  std::unique_ptr<network::TestNetworkConnectionTracker>
+      test_network_connection_tracker_;
 
 #if BUILDFLAG(ENABLE_EXTENSIONS)
   std::unique_ptr<MediaFileSystemRegistry> media_file_system_registry_;
@@ -213,6 +220,9 @@ class TestingBrowserProcess : public BrowserProcess {
   std::unique_ptr<extensions::ExtensionsBrowserClient>
       extensions_browser_client_;
 #endif
+
+  std::unique_ptr<resource_coordinator::ResourceCoordinatorParts>
+      resource_coordinator_parts_;
 
   DISALLOW_COPY_AND_ASSIGN(TestingBrowserProcess);
 };

@@ -11,11 +11,22 @@
 
 #include "base/callback.h"
 #include "base/macros.h"
-
+#include "base/values.h"
 #include "third_party/perfetto/include/perfetto/tracing/core/consumer.h"
-#include "third_party/perfetto/include/perfetto/tracing/core/service.h"
+#include "third_party/perfetto/include/perfetto/tracing/core/tracing_service.h"
+
+namespace perfetto {
+namespace protos {
+class ChromeTracedValue;
+}  // namespace protos
+}  // namespace perfetto
 
 namespace tracing {
+
+// Serializes the supplied proto into JSON, using the same
+// format as TracedValue::AppendAsTraceFormat.
+void AppendProtoDictAsJSON(std::string* out,
+                           const perfetto::protos::ChromeTracedValue& dict);
 
 // This is a Perfetto consumer which will enable Perfetto tracing
 // and subscribe to ChromeTraceEvent data sources. Any received
@@ -25,12 +36,15 @@ class JSONTraceExporter : public perfetto::Consumer {
  public:
   // The owner of JSONTraceExporter should make sure to destroy
   // |service| before destroying this.
-  JSONTraceExporter(const std::string& config, perfetto::Service* service);
+  JSONTraceExporter(const std::string& config,
+                    perfetto::TracingService* service);
 
   ~JSONTraceExporter() override;
 
   using OnTraceEventJSONCallback =
-      base::RepeatingCallback<void(const std::string& json, bool has_more)>;
+      base::RepeatingCallback<void(const std::string& json,
+                                   base::DictionaryValue* metadata,
+                                   bool has_more)>;
   void StopAndFlush(OnTraceEventJSONCallback callback);
 
   // perfetto::Consumer implementation.
@@ -38,7 +52,7 @@ class JSONTraceExporter : public perfetto::Consumer {
   // and to send finished protobufs over.
   void OnConnect() override;
   void OnDisconnect() override;
-  void OnTracingDisabled() override{};
+  void OnTracingDisabled() override;
   void OnTraceData(std::vector<perfetto::TracePacket> packets,
                    bool has_more) override;
 
@@ -47,9 +61,13 @@ class JSONTraceExporter : public perfetto::Consumer {
   bool has_output_json_preamble_ = false;
   bool has_output_first_event_ = false;
   std::string config_;
+  std::unique_ptr<base::DictionaryValue> metadata_;
+  std::string legacy_system_ftrace_output_;
+  std::string legacy_system_trace_events_;
 
   // Keep last to avoid edge-cases where its callbacks come in mid-destruction.
-  std::unique_ptr<perfetto::Service::ConsumerEndpoint> consumer_endpoint_;
+  std::unique_ptr<perfetto::TracingService::ConsumerEndpoint>
+      consumer_endpoint_;
   DISALLOW_COPY_AND_ASSIGN(JSONTraceExporter);
 };
 

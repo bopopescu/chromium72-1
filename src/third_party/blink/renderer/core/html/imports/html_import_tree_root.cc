@@ -12,7 +12,7 @@
 namespace blink {
 
 HTMLImportTreeRoot* HTMLImportTreeRoot::Create(Document* document) {
-  return new HTMLImportTreeRoot(document);
+  return MakeGarbageCollected<HTMLImportTreeRoot>(document);
 }
 
 HTMLImportTreeRoot::HTMLImportTreeRoot(Document* document)
@@ -85,10 +85,6 @@ void HTMLImportTreeRoot::Trace(blink::Visitor* visitor) {
   visitor->Trace(document_);
   visitor->Trace(imports_);
   HTMLImport::Trace(visitor);
-}
-
-void HTMLImportTreeRoot::TraceWrappers(ScriptWrappableVisitor* visitor) const {
-  visitor->TraceWrappers(document_);
 }
 
 }  // namespace blink

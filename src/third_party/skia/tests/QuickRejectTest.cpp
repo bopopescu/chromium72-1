@@ -10,7 +10,6 @@
 #include "SkCanvas.h"
 #include "SkColorSpaceXformer.h"
 #include "SkDrawLooper.h"
-#include "SkFlattenablePriv.h"
 #include "SkLightingImageFilter.h"
 #include "SkPoint3.h"
 #include "SkTypes.h"
@@ -30,13 +29,9 @@ public:
         return nullptr;
     }
 
-    void toString(SkString* str) const override {
-        str->append("TestLooper:");
-    }
-
-    SK_DECLARE_PUBLIC_FLATTENABLE_DESERIALIZATION_PROCS(TestLooper)
-
 private:
+    SK_FLATTENABLE_HOOKS(TestLooper)
+
     class TestDrawLooperContext : public SkDrawLooper::Context {
     public:
         TestDrawLooperContext() : fOnce(true) {}

@@ -67,12 +67,16 @@ viz_component("service") {
     "display/program_binding.h",
     "display/renderer_utils.cc",
     "display/renderer_utils.h",
+    "display/resource_fence.h",
+    "display/resource_metadata.cc",
+    "display/resource_metadata.h",
     "display/scoped_gpu_memory_buffer_texture.cc",
     "display/scoped_gpu_memory_buffer_texture.h",
     "display/scoped_render_pass_texture.cc",
     "display/scoped_render_pass_texture.h",
     "display/shader.cc",
     "display/shader.h",
+    "display/shared_bitmap_manager.h",
     "display/skia_output_surface.cc",
     "display/skia_output_surface.h",
     "display/skia_renderer.cc",
@@ -95,22 +99,18 @@ viz_component("service") {
     "display_embedder/compositing_mode_reporter_impl.h",
     "display_embedder/compositor_overlay_candidate_validator.h",
     "display_embedder/display_provider.h",
-    "display_embedder/external_begin_frame_controller_impl.cc",
-    "display_embedder/external_begin_frame_controller_impl.h",
     "display_embedder/gl_output_surface.cc",
     "display_embedder/gl_output_surface.h",
     "display_embedder/gl_output_surface_buffer_queue.cc",
     "display_embedder/gl_output_surface_buffer_queue.h",
+    "display_embedder/gl_output_surface_offscreen.cc",
+    "display_embedder/gl_output_surface_offscreen.h",
     "display_embedder/gpu_display_provider.cc",
     "display_embedder/gpu_display_provider.h",
     "display_embedder/in_process_gpu_memory_buffer_manager.cc",
     "display_embedder/in_process_gpu_memory_buffer_manager.h",
     "display_embedder/server_shared_bitmap_manager.cc",
     "display_embedder/server_shared_bitmap_manager.h",
-    "display_embedder/skia_output_surface_impl.cc",
-    "display_embedder/skia_output_surface_impl.h",
-    "display_embedder/skia_output_surface_impl_on_gpu.cc",
-    "display_embedder/skia_output_surface_impl_on_gpu.h",
     "display_embedder/software_output_surface.cc",
     "display_embedder/software_output_surface.h",
     "display_embedder/viz_process_context_provider.cc",
@@ -122,13 +122,13 @@ viz_component("service") {
     "frame_sinks/compositor_frame_sink_support_manager.h",
     "frame_sinks/direct_layer_tree_frame_sink.cc",
     "frame_sinks/direct_layer_tree_frame_sink.h",
+    "frame_sinks/external_begin_frame_source_mojo.cc",
+    "frame_sinks/external_begin_frame_source_mojo.h",
     "frame_sinks/frame_sink_manager_impl.cc",
     "frame_sinks/frame_sink_manager_impl.h",
     "frame_sinks/frame_sink_observer.h",
     "frame_sinks/primary_begin_frame_source.cc",
     "frame_sinks/primary_begin_frame_source.h",
-    "frame_sinks/referenced_surface_tracker.cc",
-    "frame_sinks/referenced_surface_tracker.h",
     "frame_sinks/root_compositor_frame_sink_impl.cc",
     "frame_sinks/root_compositor_frame_sink_impl.h",
     "frame_sinks/surface_resource_holder.cc",
@@ -142,16 +142,18 @@ viz_component("service") {
     "frame_sinks/video_capture/in_flight_frame_delivery.h",
     "frame_sinks/video_capture/interprocess_frame_pool.cc",
     "frame_sinks/video_capture/interprocess_frame_pool.h",
+    "frame_sinks/video_capture/video_capture_overlay.cc",
+    "frame_sinks/video_capture/video_capture_overlay.h",
     "frame_sinks/video_detector.cc",
     "frame_sinks/video_detector.h",
-    "gl/gpu_service_impl.cc",
-    "gl/gpu_service_impl.h",
     "hit_test/hit_test_aggregator.cc",
     "hit_test/hit_test_aggregator.h",
     "hit_test/hit_test_aggregator_delegate.h",
     "hit_test/hit_test_manager.cc",
     "hit_test/hit_test_manager.h",
     "surfaces/latest_local_surface_id_lookup_delegate.h",
+    "surfaces/referenced_surface_tracker.cc",
+    "surfaces/referenced_surface_tracker.h",
     "surfaces/surface.cc",
     "surfaces/surface.h",
     "surfaces/surface_client.h",
@@ -165,6 +167,7 @@ viz_component("service") {
     "surfaces/surface_hittest_delegate.h",
     "surfaces/surface_manager.cc",
     "surfaces/surface_manager.h",
+    "surfaces/surface_manager_delegate.h",
     "surfaces/surface_reference.cc",
     "surfaces/surface_reference.h",
     "viz_service_export.h",
@@ -172,33 +175,33 @@ viz_component("service") {
 
   defines = [ "VIZ_SERVICE_IMPLEMENTATION" ]
 
-  configs = [ "//build/config/compiler:no_size_t_to_int_warning" ]
+  allow_circular_includes_from = [ ":gpu_service_dependencies" ]
 
   deps = [
+    "//cc/base",
     "//cc/paint",
     "//components/crash/core/common:crash_key",
     "//components/viz/common",
+    "//gpu/command_buffer/client:gles2_cmd_helper",
     "//gpu/command_buffer/client:gles2_implementation",
     "//gpu/command_buffer/client:raster",
-    "//gpu/command_buffer/service:gles2",
-    "//gpu/ipc:gl_in_process_context",
 
     # Note that dependency on //gpu/ipc/client is for GpuMemoryBufferImpl. This
     # dependency should not be in public_deps.
     "//gpu/ipc/client",
+    "//gpu/ipc/common:surface_handle_type",
     "//gpu/ipc/service",
     "//gpu/skia_bindings:skia_bindings",
     "//gpu/vulkan:buildflags",
     "//media",
     "//media/capture:capture_lib",
-    "//media/gpu/ipc/service",
     "//media/mojo/services",
     "//services/viz/privileged/interfaces",
-    "//skia",
     "//ui/display/types",
   ]
 
   public_deps = [
+    ":gpu_service_dependencies",
     "//base",
     "//cc",
     "//cc/debug",
@@ -215,7 +218,7 @@ viz_component("service") {
       "display_embedder/software_output_device_x11.cc",
       "display_embedder/software_output_device_x11.h",
     ]
-    configs += [ "//build/config/linux:x11" ]
+    configs = [ "//build/config/linux:x11" ]
     deps += [ "//ui/gfx/x" ]
   }
 
@@ -241,7 +244,13 @@ viz_component("service") {
     sources += [
       "display_embedder/compositor_overlay_candidate_validator_android.cc",
       "display_embedder/compositor_overlay_candidate_validator_android.h",
+      "frame_sinks/external_begin_frame_source_android.cc",
+      "frame_sinks/external_begin_frame_source_android.h",
+      "gl/throw_uncaught_exception.cc",
+      "gl/throw_uncaught_exception.h",
     ]
+
+    deps += [ ":service_jni_headers" ]
   }
 
   if (use_ozone) {
@@ -270,12 +279,67 @@ viz_component("service") {
     ]
   }
 
+  if (is_android) {
+    sources += [
+      "display_embedder/gl_output_surface_android.cc",
+      "display_embedder/gl_output_surface_android.h",
+      "display_embedder/gl_output_surface_buffer_queue_android.cc",
+      "display_embedder/gl_output_surface_buffer_queue_android.h",
+    ]
+  }
+
   if (enable_vulkan) {
     deps += [ "//gpu/vulkan" ]
   }
 }
 
+# The gpu_service_dependencies source set contains source files that
+# use the service side GL library (ui/gl), while the rest of
+# viz/service use the client side GL library. This split is needed
+# because the two GL libraries are incompatible and can't compile
+# together in jumbo builds.
+#
+# Long term all service code is moving to be in the gpu process and
+# then this build target will no longer be needed.
+viz_source_set("gpu_service_dependencies") {
+  sources = [
+    "display_embedder/skia_output_surface_impl.cc",
+    "display_embedder/skia_output_surface_impl.h",
+    "display_embedder/skia_output_surface_impl_on_gpu.cc",
+    "display_embedder/skia_output_surface_impl_on_gpu.h",
+    "gl/gpu_service_impl.cc",
+    "gl/gpu_service_impl.h",
+  ]
+
+  public_deps = [
+    "//gpu/command_buffer/service:gles2",
+    "//gpu/ipc:gl_in_process_context",
+    "//gpu/ipc/service",
+    "//gpu/vulkan:buildflags",
+    "//media/gpu/ipc/service",
+    "//media/mojo/services",
+    "//services/viz/privileged/interfaces/gl",
+    "//skia",
+  ]
+
+  defines = [ "VIZ_SERVICE_IMPLEMENTATION" ]
+
+  if (is_chromeos) {
+    deps = [
+      "//components/arc/video_accelerator",
+      "//gpu/command_buffer/service:gles2",
+      "//media/mojo/services",
+    ]
+  }
+
+  if (enable_vulkan) {
+    public_deps += [ "//gpu/vulkan" ]
+  }
+}
+
 viz_source_set("unit_tests") {
+  # Not ready for jumbo compilation. Too much repeated test code.
+  never_build_jumbo = true
   testonly = true
   sources = [
     "display/bsp_tree_unittest.cc",
@@ -300,14 +364,15 @@ viz_source_set("unit_tests") {
     "frame_sinks/compositor_frame_sink_support_unittest.cc",
     "frame_sinks/direct_layer_tree_frame_sink_unittest.cc",
     "frame_sinks/frame_sink_manager_unittest.cc",
-    "frame_sinks/referenced_surface_tracker_unittest.cc",
     "frame_sinks/surface_references_unittest.cc",
     "frame_sinks/surface_synchronization_unittest.cc",
     "frame_sinks/video_capture/frame_sink_video_capturer_impl_unittest.cc",
     "frame_sinks/video_capture/interprocess_frame_pool_unittest.cc",
+    "frame_sinks/video_capture/video_capture_overlay_unittest.cc",
     "frame_sinks/video_detector_unittest.cc",
     "gl/gpu_service_impl_unittest.cc",
     "hit_test/hit_test_aggregator_unittest.cc",
+    "surfaces/referenced_surface_tracker_unittest.cc",
     "surfaces/surface_dependency_deadline_unittest.cc",
     "surfaces/surface_hittest_unittest.cc",
     "surfaces/surface_unittest.cc",
@@ -328,6 +393,7 @@ viz_source_set("unit_tests") {
     "//base/test:test_support",
     "//cc:test_support",
     "//cc/paint",
+    "//components/viz/client",
     "//components/viz/common",
     "//components/viz/host",
     "//components/viz/test:test_support",
@@ -337,8 +403,8 @@ viz_source_set("unit_tests") {
     "//gpu/ipc/service",
     "//media",
     "//media/capture:capture_lib",
-    "//services/ui/public/interfaces",
     "//services/viz/public/interfaces",
+    "//services/ws/public/mojom",
     "//skia",
     "//testing/gmock",
     "//testing/gtest",
@@ -364,9 +430,15 @@ viz_source_set("unit_tests") {
   if (is_win) {
     sources += [ "display_embedder/output_device_backing_unittest.cc" ]
   }
+
+  if (is_android) {
+    sources += [ "frame_sinks/external_begin_frame_source_android_unittest.cc" ]
+  }
 }
 
 viz_source_set("perf_tests") {
+  # Not ready for jumbo compilation. Too much repeated test code.
+  never_build_jumbo = true
   testonly = true
   sources = [
     "display/bsp_tree_perftest.cc",
@@ -398,6 +470,26 @@ fuzzer_test("hit_test_manager_fuzzer") {
     ":service",
     "//base/test:test_support",
     "//components/viz/test:test_support",
-    "//mojo/edk",
   ]
+}
+
+if (is_android) {
+  android_library("service_java") {
+    deps = [
+      "//base:base_java",
+      "//ui/android:ui_full_java",
+    ]
+    java_files = [
+      "java/src/org/chromium/components/viz/service/gl/ThrowUncaughtException.java",
+      "java/src/org/chromium/components/viz/service/frame_sinks/ExternalBeginFrameSourceAndroid.java",
+    ]
+  }
+
+  generate_jni("service_jni_headers") {
+    jni_package = "components/viz/service"
+    sources = [
+      "java/src/org/chromium/components/viz/service/frame_sinks/ExternalBeginFrameSourceAndroid.java",
+      "java/src/org/chromium/components/viz/service/gl/ThrowUncaughtException.java",
+    ]
+  }
 }

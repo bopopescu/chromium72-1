@@ -15,6 +15,7 @@
 #include "snapshot/mac/process_reader_mac.h"
 
 #include <AvailabilityMacros.h>
+#include <errno.h>
 #include <OpenCL/opencl.h>
 #include <mach-o/dyld.h>
 #include <mach-o/dyld_images.h>
@@ -26,12 +27,13 @@
 #include <utility>
 
 #include "base/logging.h"
-#include "base/mac/scoped_mach_port.h"
+#include "base/mac/mach_logging.h"
 #include "base/posix/eintr_wrapper.h"
 #include "base/strings/stringprintf.h"
 #include "build/build_config.h"
 #include "gtest/gtest.h"
 #include "snapshot/mac/mach_o_image_reader.h"
+#include "snapshot/mac/mach_o_image_segment_reader.h"
 #include "test/errors.h"
 #include "test/mac/dyld.h"
 #include "test/mac/mach_errors.h"
@@ -126,8 +128,8 @@ TEST(ProcessReaderMac, ChildBasic) {
 // This function CHECKs success and returns the thread ID directly.
 uint64_t PthreadToThreadID(pthread_t pthread) {
   uint64_t thread_id;
-  int rv = pthread_threadid_np(pthread, &thread_id);
-  CHECK_EQ(rv, 0);
+  errno = pthread_threadid_np(pthread, &thread_id);
+  PCHECK(errno == 0) << "pthread_threadid_np";
   return thread_id;
 }
 
@@ -409,6 +411,18 @@ TEST(ProcessReaderMac, SelfSeveralThreads) {
   EXPECT_TRUE(found_thread_self);
 }
 
+uint64_t GetThreadID() {
+  thread_identifier_info info;
+  mach_msg_type_number_t info_count = THREAD_IDENTIFIER_INFO_COUNT;
+  kern_return_t kr = thread_info(MachThreadSelf(),
+                                 THREAD_IDENTIFIER_INFO,
+                                 reinterpret_cast<thread_info_t>(&info),
+                                 &info_count);
+  MACH_CHECK(kr == KERN_SUCCESS, kr) << "thread_info";
+
+  return info.thread_id;
+}
+
 class ProcessReaderThreadedChild final : public MachMultiprocess {
  public:
   explicit ProcessReaderThreadedChild(size_t thread_count)
@@ -462,7 +476,7 @@ class ProcessReaderThreadedChild final : public MachMultiprocess {
 
     // This thread isn’t part of the thread pool, but the parent will be able
     // to inspect it. Write an entry for it.
-    uint64_t thread_id = PthreadToThreadID(pthread_self());
+    uint64_t thread_id = GetThreadID();
 
     CheckedWriteFile(write_handle, &thread_id, sizeof(thread_id));
 
@@ -663,14 +677,20 @@ TEST(ProcessReaderMac, SelfModules) {
         modules[index].reader->Address(),
         FromPointerCast<mach_vm_address_t>(_dyld_get_image_header(index)));
 
+    bool expect_timestamp;
     if (index == 0) {
       // dyld didn’t load the main executable, so it couldn’t record its
       // timestamp, and it is reported as 0.
       EXPECT_EQ(modules[index].timestamp, 0);
-    } else if (modules[index].reader->FileType() == MH_BUNDLE &&
-               modules[index].name == "cl_kernels") {
-      // cl_kernels doesn’t exist as a file.
-      EXPECT_EQ(modules[index].timestamp, 0);
+    } else if (IsMalformedCLKernelsModule(modules[index].reader->FileType(),
+                                          modules[index].name,
+                                          &expect_timestamp)) {
+      // cl_kernels doesn’t exist as a file, but may still have a timestamp.
+      if (!expect_timestamp) {
+        EXPECT_EQ(modules[index].timestamp, 0);
+      } else {
+        EXPECT_NE(modules[index].timestamp, 0);
+      }
       found_cl_kernels = true;
     } else {
       // Hope that the module didn’t change on disk.
@@ -747,14 +767,20 @@ class ProcessReaderModulesChild final : public MachMultiprocess {
       ASSERT_TRUE(modules[index].reader);
       EXPECT_EQ(modules[index].reader->Address(), expect_address);
 
+      bool expect_timestamp;
       if (index == 0 || index == modules.size() - 1) {
         // dyld didn’t load the main executable or itself, so it couldn’t record
         // these timestamps, and they are reported as 0.
         EXPECT_EQ(modules[index].timestamp, 0);
-      } else if (modules[index].reader->FileType() == MH_BUNDLE &&
-                 modules[index].name == "cl_kernels") {
-        // cl_kernels doesn’t exist as a file.
-        EXPECT_EQ(modules[index].timestamp, 0);
+      } else if (IsMalformedCLKernelsModule(modules[index].reader->FileType(),
+                                            modules[index].name,
+                                            &expect_timestamp)) {
+        // cl_kernels doesn’t exist as a file, but may still have a timestamp.
+        if (!expect_timestamp) {
+          EXPECT_EQ(modules[index].timestamp, 0);
+        } else {
+          EXPECT_NE(modules[index].timestamp, 0);
+        }
         found_cl_kernels = true;
       } else {
         // Hope that the module didn’t change on disk.

@@ -28,11 +28,14 @@
 #define THIRD_PARTY_BLINK_RENDERER_PLATFORM_LOADER_FETCH_RESOURCE_FETCHER_H_
 
 #include <memory>
+
+#include "services/network/public/cpp/cors/preflight_timing_info.h"
+#include "third_party/blink/public/mojom/service_worker/service_worker_object.mojom-blink.h"
+#include "third_party/blink/renderer/platform/heap/persistent.h"
 #include "third_party/blink/renderer/platform/loader/fetch/fetch_context.h"
 #include "third_party/blink/renderer/platform/loader/fetch/fetch_initiator_info.h"
 #include "third_party/blink/renderer/platform/loader/fetch/fetch_parameters.h"
 #include "third_party/blink/renderer/platform/loader/fetch/preload_key.h"
-#include "third_party/blink/renderer/platform/loader/fetch/resource.h"
 #include "third_party/blink/renderer/platform/loader/fetch/resource_error.h"
 #include "third_party/blink/renderer/platform/loader/fetch/resource_load_priority.h"
 #include "third_party/blink/renderer/platform/loader/fetch/resource_loader_options.h"
@@ -49,16 +52,22 @@ namespace blink {
 class ArchiveResource;
 class MHTMLArchive;
 class KURL;
+class Resource;
 class ResourceTimingInfo;
+enum class ResourceType : uint8_t;
 
 // The ResourceFetcher provides a per-context interface to the MemoryCache and
 // enforces a bunch of security checks and rules for resource revalidation. Its
 // lifetime is roughly per-DocumentLoader, in that it is generally created in
 // the DocumentLoader constructor and loses its ability to generate network
-// requests when the DocumentLoader is destroyed. Documents also hold a pointer
-// to ResourceFetcher for their lifetime (and will create one if they are
-// initialized without a LocalFrame), so a Document can keep a ResourceFetcher
-// alive past detach if scripts still reference the Document.
+// requests when the DocumentLoader is destroyed.
+//
+// It is also created for workers and worklets.
+//
+// Documents also hold a pointer to ResourceFetcher for their lifetime (and will
+// create one if they are initialized without a LocalFrame), so a Document can
+// keep a ResourceFetcher alive past detach if scripts still reference the
+// Document.
 class PLATFORM_EXPORT ResourceFetcher
     : public GarbageCollectedFinalized<ResourceFetcher> {
   WTF_MAKE_NONCOPYABLE(ResourceFetcher);
@@ -66,8 +75,10 @@ class PLATFORM_EXPORT ResourceFetcher
 
  public:
   static ResourceFetcher* Create(FetchContext* context) {
-    return new ResourceFetcher(context);
+    return MakeGarbageCollected<ResourceFetcher>(context);
   }
+
+  ResourceFetcher(FetchContext*);
   virtual ~ResourceFetcher();
   virtual void Trace(blink::Visitor*);
 
@@ -100,9 +111,7 @@ class PLATFORM_EXPORT ResourceFetcher
   void SetAutoLoadImages(bool);
   void SetImagesEnabled(bool);
 
-  FetchContext& Context() const {
-    return context_ ? *context_.Get() : FetchContext::NullInstance();
-  }
+  FetchContext& Context() const;
   void ClearContext();
 
   int BlockingRequestCount() const;
@@ -119,8 +128,7 @@ class PLATFORM_EXPORT ResourceFetcher
 
   int CountPreloads() const { return preloads_.size(); }
   void ClearPreloads(ClearPreloadsPolicy = kClearAllPreloads);
-  void LogPreloadStats(ClearPreloadsPolicy);
-  void WarnUnusedPreloads();
+  Vector<KURL> GetUrlsOfUnusedPreloads();
 
   MHTMLArchive* Archive() const { return archive_.Get(); }
   ArchiveResource* CreateArchive(Resource*);
@@ -137,18 +145,20 @@ class PLATFORM_EXPORT ResourceFetcher
                           TimeTicks finish_time,
                           LoaderFinishType,
                           uint32_t inflight_keepalive_bytes,
-                          bool blocked_cross_site_document);
+                          bool should_report_corb_blocking,
+                          const std::vector<network::cors::PreflightTimingInfo>&
+                              cors_preflight_timing_info);
   void HandleLoaderError(Resource*,
                          const ResourceError&,
                          uint32_t inflight_keepalive_bytes);
-  bool IsControlledByServiceWorker() const;
+  blink::mojom::ControllerServiceWorkerMode IsControlledByServiceWorker() const;
 
   String GetCacheIdentifier() const;
 
   enum IsImageSet { kImageNotImageSet, kImageIsImageSet };
 
-  WARN_UNUSED_RESULT static WebURLRequest::RequestContext
-  DetermineRequestContext(Resource::Type, IsImageSet, bool is_main_frame);
+  WARN_UNUSED_RESULT static mojom::RequestContextType
+  DetermineRequestContext(ResourceType, IsImageSet, bool is_main_frame);
 
   void UpdateAllImageResourcePriorities();
 
@@ -163,13 +173,13 @@ class PLATFORM_EXPORT ResourceFetcher
   void RemovePreload(Resource*);
 
   void LoosenLoadThrottlingPolicy() { scheduler_->LoosenThrottlingPolicy(); }
-  void OnNetworkQuiet() { scheduler_->OnNetworkQuiet(); }
+  void OnNetworkQuiet();
 
   // Workaround for https://crbug.com/666214.
   // TODO(hiroshige): Remove this hack.
   void EmulateLoadStartedForInspector(Resource*,
                                       const KURL&,
-                                      WebURLRequest::RequestContext,
+                                      mojom::RequestContextType,
                                       const AtomicString& initiator_name);
 
   // This is called from leak detectors (Real-world leak detector & layout test
@@ -177,7 +187,9 @@ class PLATFORM_EXPORT ResourceFetcher
   // counting.
   void PrepareForLeakDetection();
 
-  using ResourceFetcherSet = PersistentHeapHashSet<WeakMember<ResourceFetcher>>;
+  void SetStaleWhileRevalidateEnabled(bool enabled);
+
+  using ResourceFetcherSet = HeapHashSet<WeakMember<ResourceFetcher>>;
   static const ResourceFetcherSet& MainThreadFetchers();
 
  private:
@@ -186,8 +198,6 @@ class PLATFORM_EXPORT ResourceFetcher
     kExcludingKeepaliveLoaders,
     kIncludingKeepaliveLoaders,
   };
-
-  ResourceFetcher(FetchContext*);
 
   void InitializeRevalidation(ResourceRequest&, Resource*);
   // When |security_origin| of the ResourceLoaderOptions is not a nullptr, it'll
@@ -199,7 +209,7 @@ class PLATFORM_EXPORT ResourceFetcher
                                      const ResourceFactory&);
   void StorePerformanceTimingInitiatorInformation(Resource*);
   ResourceLoadPriority ComputeLoadPriority(
-      Resource::Type,
+      ResourceType,
       const ResourceRequest&,
       ResourcePriority::VisibilityStatus,
       FetchParameters::DeferOption = FetchParameters::kNoDefer,
@@ -207,9 +217,6 @@ class PLATFORM_EXPORT ResourceFetcher
           FetchParameters::SpeculativePreloadType::kNotSpeculative,
       bool is_link_preload = false);
 
-  Resource* RequestResourceInternal(FetchParameters&,
-                                    const ResourceFactory&,
-                                    const SubstituteData&);
   base::Optional<ResourceRequestBlockedReason> PrepareRequest(
       FetchParameters&,
       const ResourceFactory&,
@@ -221,12 +228,14 @@ class PLATFORM_EXPORT ResourceFetcher
                                   const SubstituteData&);
   Resource* ResourceForBlockedRequest(const FetchParameters&,
                                       const ResourceFactory&,
-                                      ResourceRequestBlockedReason);
+                                      ResourceRequestBlockedReason,
+                                      ResourceClient*);
 
-  Resource* MatchPreload(const FetchParameters& params, Resource::Type);
+  Resource* MatchPreload(const FetchParameters& params, ResourceType);
+  void PrintPreloadWarning(Resource*, Resource::MatchStatus);
   void InsertAsPreloadIfNecessary(Resource*,
                                   const FetchParameters& params,
-                                  Resource::Type);
+                                  ResourceType);
 
   bool IsImageResourceDisallowedToBeReused(const Resource&) const;
 
@@ -238,7 +247,7 @@ class PLATFORM_EXPORT ResourceFetcher
 
   // A wrapper just for placing a trace_event macro.
   RevalidationPolicy DetermineRevalidationPolicy(
-      Resource::Type,
+      ResourceType,
       const FetchParameters&,
       const Resource& existing_resource,
       bool is_static_data) const;
@@ -246,7 +255,7 @@ class PLATFORM_EXPORT ResourceFetcher
   // resource retrieved from the memory cache (can be a newly constructed one
   // for a static data).
   RevalidationPolicy DetermineRevalidationPolicyInternal(
-      Resource::Type,
+      ResourceType,
       const FetchParameters&,
       const Resource& existing_resource,
       bool is_static_data) const;
@@ -278,6 +287,9 @@ class PLATFORM_EXPORT ResourceFetcher
                               const FetchParameters&,
                               const ResourceFactory&,
                               bool is_static_data) const;
+
+  void ScheduleStaleRevalidate(Resource* stale_resource);
+  void RevalidateStaleResource(Resource* stale_resource);
 
   Member<FetchContext> context_;
   Member<ResourceLoadScheduler> scheduler_;
@@ -314,11 +326,12 @@ class PLATFORM_EXPORT ResourceFetcher
 
   uint32_t inflight_keepalive_bytes_ = 0;
 
-  // 28 bits left
+  // 27 bits left
   bool auto_load_images_ : 1;
   bool images_enabled_ : 1;
   bool allow_stale_resources_ : 1;
   bool image_fetched_ : 1;
+  bool stale_while_revalidate_enabled_ : 1;
 
   static constexpr uint32_t kKeepaliveInflightBytesQuota = 64 * 1024;
 };

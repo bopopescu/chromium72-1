@@ -15,9 +15,10 @@
 #include <string>
 #include <vector>
 
+#include "api/video/encoded_image.h"
 #include "api/video/video_frame.h"
-#include "common_types.h"  // NOLINT(build/include)
-#include "common_video/include/video_frame.h"
+#include "api/video_codecs/video_codec.h"
+#include "rtc_base/system/rtc_export.h"
 
 namespace webrtc {
 
@@ -25,7 +26,7 @@ namespace webrtc {
 struct CodecSpecificInfo;
 class VideoCodec;
 
-class DecodedImageCallback {
+class RTC_EXPORT DecodedImageCallback {
  public:
   virtual ~DecodedImageCallback() {}
 
@@ -39,15 +40,15 @@ class DecodedImageCallback {
   // TODO(sakal): Remove other implementations when upstream projects have been
   // updated.
   virtual void Decoded(VideoFrame& decodedImage,
-                       rtc::Optional<int32_t> decode_time_ms,
-                       rtc::Optional<uint8_t> qp);
+                       absl::optional<int32_t> decode_time_ms,
+                       absl::optional<uint8_t> qp);
 
   virtual int32_t ReceivedDecodedReferenceFrame(const uint64_t pictureId);
 
   virtual int32_t ReceivedDecodedFrame(const uint64_t pictureId);
 };
 
-class VideoDecoder {
+class RTC_EXPORT VideoDecoder {
  public:
   virtual ~VideoDecoder() {}
 

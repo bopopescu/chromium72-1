@@ -72,27 +72,16 @@ def _PackageChecks(input_api, output_api):
     return []
 
 
-def _RunUnittests(input_api, output_api):
+def _RunToolsUnittests(input_api, output_api):
   return input_api.canned_checks.RunUnitTestsInDirectory(
-      input_api, output_api, '.', [ r'^.+_unittest\.py$'])
+      input_api, output_api, '.', [ r'^tools_unittest\.py$'])
 
 
-def _ChangeAffectsCronetForAndroid(change):
-  """ Returns |true| if the change may affect Cronet for Android. """
+def _ChangeAffectsCronetTools(change):
+  """ Returns |true| if the change may affect Cronet tools. """
 
-  for affected_file in change.AffectedFiles():
-    path = affected_file.LocalPath()
-    if not path.startswith(os.path.join('components', 'cronet', 'ios')):
-      return True
-  return False
-
-
-def _ChangeAffectsCronetForIos(change):
-  """ Returns |true| if the change may affect Cronet for iOS. """
-
-  for affected_file in change.AffectedFiles():
-    path = affected_file.LocalPath()
-    if not path.startswith(os.path.join('components', 'cronet', 'android')):
+  for path in change.LocalPaths():
+    if path.startswith(os.path.join('components', 'cronet', 'tools')):
       return True
   return False
 
@@ -101,26 +90,10 @@ def CheckChangeOnUpload(input_api, output_api):
   results = []
   results.extend(_PyLintChecks(input_api, output_api))
   results.extend(_PackageChecks(input_api, output_api))
-  results.extend(_RunUnittests(input_api, output_api))
+  if _ChangeAffectsCronetTools(input_api.change):
+    results.extend(_RunToolsUnittests(input_api, output_api))
   return results
 
 
 def CheckChangeOnCommit(input_api, output_api):
-  return _RunUnittests(input_api, output_api)
-
-
-def PostUploadHook(cl, change, output_api):
-  """git cl upload will call this hook after the issue is created/modified.
-
-  This hook adds an extra try bot to the CL description in order to run Cronet
-  tests in addition to CQ try bots.
-  """
-
-  try_bots = []
-  if _ChangeAffectsCronetForAndroid(change):
-    try_bots.append('master.tryserver.chromium.android:android_cronet_tester')
-  if _ChangeAffectsCronetForIos(change):
-    try_bots.append('master.tryserver.chromium.mac:ios-simulator-cronet')
-
-  return output_api.EnsureCQIncludeTrybotsAreAdded(
-    cl, try_bots, 'Automatically added Cronet trybots to run tests on CQ.')
+  return _RunToolsUnittests(input_api, output_api)

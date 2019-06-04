@@ -14,29 +14,33 @@
 #include "base/time/tick_clock.h"
 #include "base/time/time.h"
 #include "content/child/thread_safe_sender.h"
-#include "content/common/service_worker/service_worker_utils.h"
+#include "content/common/service_worker/service_worker_types.h"
+#include "content/public/common/content_client.h"
+#include "content/public/renderer/content_renderer_client.h"
 #include "content/renderer/service_worker/embedded_worker_instance_client_impl.h"
 #include "content/renderer/service_worker/service_worker_timeout_timer.h"
-#include "content/renderer/service_worker/web_service_worker_impl.h"
+#include "content/renderer/service_worker/service_worker_type_util.h"
 #include "content/renderer/worker_thread_registry.h"
 #include "mojo/public/cpp/bindings/associated_binding_set.h"
 #include "mojo/public/cpp/bindings/associated_interface_ptr.h"
 #include "services/network/public/cpp/features.h"
 #include "services/network/public/cpp/resource_request.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/blink/public/common/message_port/message_port_channel.h"
+#include "third_party/blink/public/common/messaging/message_port_channel.h"
+#include "third_party/blink/public/common/service_worker/service_worker_utils.h"
 #include "third_party/blink/public/mojom/service_worker/service_worker_registration.mojom.h"
-#include "third_party/blink/public/platform/modules/background_fetch/web_background_fetch_settled_fetch.h"
+#include "third_party/blink/public/platform/modules/background_fetch/background_fetch.mojom.h"
 #include "third_party/blink/public/platform/modules/notifications/web_notification_data.h"
 #include "third_party/blink/public/platform/modules/payments/web_payment_request_event_data.h"
-#include "third_party/blink/public/platform/modules/serviceworker/web_service_worker_clients_info.h"
-#include "third_party/blink/public/platform/modules/serviceworker/web_service_worker_error.h"
-#include "third_party/blink/public/platform/modules/serviceworker/web_service_worker_request.h"
+#include "third_party/blink/public/platform/modules/service_worker/web_service_worker_clients_info.h"
+#include "third_party/blink/public/platform/modules/service_worker/web_service_worker_error.h"
+#include "third_party/blink/public/platform/modules/service_worker/web_service_worker_registration_object_info.h"
+#include "third_party/blink/public/platform/modules/service_worker/web_service_worker_request.h"
 #include "third_party/blink/public/platform/scheduler/test/renderer_scheduler_test_support.h"
 #include "third_party/blink/public/platform/web_data_consumer_handle.h"
 #include "third_party/blink/public/platform/web_string.h"
 #include "third_party/blink/public/platform/web_url_response.h"
-#include "third_party/blink/public/web/modules/serviceworker/web_service_worker_context_proxy.h"
+#include "third_party/blink/public/web/modules/service_worker/web_service_worker_context_proxy.h"
 
 namespace content {
 
@@ -45,7 +49,7 @@ namespace {
 // Pipes connected to the context client.
 struct ContextClientPipes {
   // From the browser to ServiceWorkerContextClient.
-  mojom::ServiceWorkerEventDispatcherPtr event_dispatcher;
+  mojom::ServiceWorkerPtr service_worker;
   mojom::ControllerServiceWorkerPtr controller;
   blink::mojom::ServiceWorkerRegistrationObjectAssociatedPtr registration;
 
@@ -62,12 +66,16 @@ class MockWebServiceWorkerContextProxy
  public:
   ~MockWebServiceWorkerContextProxy() override = default;
 
-  void ReadyToEvaluateScript() override {}
+  void BindServiceWorkerHost(
+      mojo::ScopedInterfaceEndpointHandle service_worker_host) override {}
   void SetRegistration(
-      std::unique_ptr<blink::WebServiceWorkerRegistration::Handle> handle)
-      override {
-    registration_handle_ = std::move(handle);
+      blink::WebServiceWorkerRegistrationObjectInfo info) override {
+    DCHECK(!registration_object_info_);
+    registration_object_info_ =
+        std::make_unique<blink::WebServiceWorkerRegistrationObjectInfo>(
+            std::move(info));
   }
+  void ReadyToEvaluateScript() override {}
   bool HasFetchEventHandler() override { return false; }
   void DispatchFetchEvent(int fetch_event_id,
                           const blink::WebServiceWorkerRequest& web_request,
@@ -78,37 +86,28 @@ class MockWebServiceWorkerContextProxy
   void DispatchActivateEvent(int event_id) override { NOTREACHED(); }
   void DispatchBackgroundFetchAbortEvent(
       int event_id,
-      const blink::WebString& developer_id,
-      const blink::WebString& unique_id,
-      const blink::WebVector<blink::WebBackgroundFetchSettledFetch>& fetches)
-      override {
+      const blink::WebBackgroundFetchRegistration& registration) override {
     NOTREACHED();
   }
-  void DispatchBackgroundFetchClickEvent(int event_id,
-                                         const blink::WebString& developer_id,
-                                         BackgroundFetchState status) override {
+  void DispatchBackgroundFetchClickEvent(
+      int event_id,
+      const blink::WebBackgroundFetchRegistration& registration) override {
     NOTREACHED();
   }
   void DispatchBackgroundFetchFailEvent(
       int event_id,
-      const blink::WebString& developer_id,
-      const blink::WebString& unique_id,
-      const blink::WebVector<blink::WebBackgroundFetchSettledFetch>& fetches)
-      override {
+      const blink::WebBackgroundFetchRegistration& registration) override {
     NOTREACHED();
   }
-  void DispatchBackgroundFetchedEvent(
+  void DispatchBackgroundFetchSuccessEvent(
       int event_id,
-      const blink::WebString& developer_id,
-      const blink::WebString& unique_id,
-      const blink::WebVector<blink::WebBackgroundFetchSettledFetch>& fetches)
-      override {
+      const blink::WebBackgroundFetchRegistration& registration) override {
     NOTREACHED();
   }
-  void DispatchCookieChangeEvent(int event_id,
-                                 const blink::WebString& name,
-                                 const blink::WebString& value,
-                                 bool is_deleted) override {
+  void DispatchCookieChangeEvent(
+      int event_id,
+      const blink::WebCanonicalCookie& cookie,
+      ::network::mojom::CookieChangeCause change_cause) override {
     NOTREACHED();
   }
   void DispatchExtendableMessageEvent(
@@ -122,7 +121,7 @@ class MockWebServiceWorkerContextProxy
       int event_id,
       blink::TransferableMessage message,
       const blink::WebSecurityOrigin& source_origin,
-      std::unique_ptr<blink::WebServiceWorker::Handle>) override {
+      blink::WebServiceWorkerObjectInfo) override {
     NOTREACHED();
   }
   void DispatchInstallEvent(int event_id) override { NOTREACHED(); }
@@ -161,7 +160,7 @@ class MockWebServiceWorkerContextProxy
   void OnNavigationPreloadResponse(
       int fetch_event_id,
       std::unique_ptr<blink::WebURLResponse>,
-      std::unique_ptr<blink::WebDataConsumerHandle>) override {
+      mojo::ScopedDataPipeConsumerHandle) override {
     NOTREACHED();
   }
   void OnNavigationPreloadError(
@@ -184,8 +183,8 @@ class MockWebServiceWorkerContextProxy
   }
 
  private:
-  std::unique_ptr<blink::WebServiceWorkerRegistration::Handle>
-      registration_handle_;
+  std::unique_ptr<blink::WebServiceWorkerRegistrationObjectInfo>
+      registration_object_info_;
   std::vector<std::pair<int /* event_id */, blink::WebServiceWorkerRequest>>
       fetch_events_;
 };
@@ -245,11 +244,12 @@ class ServiceWorkerContextClientTest : public testing::Test {
     ServiceWorkerContextClient::ResetThreadSpecificInstanceForTesting();
     // Unregister this thread from worker threads.
     WorkerThreadRegistry::Instance()->WillStopCurrentWorkerThread();
+    task_runner_->RunUntilIdle();
   }
 
   void EnableServicification() {
     feature_list_.InitWithFeatures({network::features::kNetworkService}, {});
-    ASSERT_TRUE(ServiceWorkerUtils::IsServicificationEnabled());
+    ASSERT_TRUE(blink::ServiceWorkerUtils::IsServicificationEnabled());
   }
 
   // Creates an empty struct to initialize ServiceWorkerProviderContext.
@@ -264,8 +264,7 @@ class ServiceWorkerContextClientTest : public testing::Test {
   std::unique_ptr<ServiceWorkerContextClient> CreateContextClient(
       ContextClientPipes* out_pipes,
       blink::WebServiceWorkerContextProxy* proxy) {
-    auto event_dispatcher_request =
-        mojo::MakeRequest(&out_pipes->event_dispatcher);
+    auto service_worker_request = mojo::MakeRequest(&out_pipes->service_worker);
     auto controller_request = mojo::MakeRequest(&out_pipes->controller);
     mojom::EmbeddedWorkerInstanceHostAssociatedPtr embedded_worker_host_ptr;
     out_pipes->embedded_worker_host_request =
@@ -276,9 +275,13 @@ class ServiceWorkerContextClientTest : public testing::Test {
         std::make_unique<ServiceWorkerContextClient>(
             1 /* embedded_worker_id */, 1 /* service_worker_version_id */,
             kScope, kScript, false /* is_script_streaming */,
-            std::move(event_dispatcher_request), std::move(controller_request),
+            RendererPreferences(), std::move(service_worker_request),
+            std::move(controller_request),
             embedded_worker_host_ptr.PassInterface(), CreateProviderInfo(),
             nullptr /* embedded_worker_client */,
+            mojom::EmbeddedWorkerStartTiming::New(),
+            nullptr /* preference_watcher_request */,
+            nullptr /* subresource_loaders */,
             blink::scheduler::GetSingleThreadTaskRunnerForTesting());
 
     context_client->WorkerContextStarted(proxy);
@@ -291,19 +294,15 @@ class ServiceWorkerContextClientTest : public testing::Test {
     registration_info->registration_id = 100;  // dummy
     registration_info->options =
         blink::mojom::ServiceWorkerRegistrationOptions::New(
-            kScope, blink::mojom::ServiceWorkerUpdateViaCache::kAll);
+            kScope, blink::mojom::ScriptType::kClassic,
+            blink::mojom::ServiceWorkerUpdateViaCache::kAll);
     out_pipes->registration_host_request =
         mojo::MakeRequest(&registration_info->host_ptr_info);
     registration_info->request = mojo::MakeRequest(&out_pipes->registration);
-    out_pipes->event_dispatcher->InitializeGlobalScope(
+    out_pipes->service_worker->InitializeGlobalScope(
         std::move(service_worker_host), std::move(registration_info));
     task_runner()->RunUntilIdle();
     return context_client;
-  }
-
-  bool ContainsServiceWorkerObject(ServiceWorkerContextClient* context_client,
-                                   int64_t version_id) {
-    return context_client->ContainsServiceWorkerObjectForTesting(version_id);
   }
 
   scoped_refptr<base::TestMockTimeTaskRunner> task_runner() const {
@@ -323,7 +322,7 @@ TEST_F(ServiceWorkerContextClientTest, Ping) {
       CreateContextClient(&pipes, &mock_proxy);
 
   bool is_called = false;
-  pipes.event_dispatcher->Ping(CreateCallbackWithCalledFlag(&is_called));
+  pipes.service_worker->Ping(CreateCallbackWithCalledFlag(&is_called));
   task_runner()->RunUntilIdle();
   EXPECT_TRUE(is_called);
 }
@@ -333,27 +332,75 @@ TEST_F(ServiceWorkerContextClientTest, DispatchFetchEvent) {
   MockWebServiceWorkerContextProxy mock_proxy;
   std::unique_ptr<ServiceWorkerContextClient> context_client =
       CreateContextClient(&pipes, &mock_proxy);
-  context_client->DidEvaluateClassicScript(true /* success */);
+  context_client->DidEvaluateScript(true /* success */);
   task_runner()->RunUntilIdle();
   EXPECT_TRUE(mock_proxy.fetch_events().empty());
 
   const GURL expected_url("https://example.com/expected");
-  mojom::ServiceWorkerFetchResponseCallbackRequest fetch_callback_request;
   auto request = std::make_unique<network::ResourceRequest>();
   request->url = expected_url;
-  mojom::ServiceWorkerFetchResponseCallbackPtr fetch_callback_ptr;
-  fetch_callback_request = mojo::MakeRequest(&fetch_callback_ptr);
-  auto params = mojom::DispatchFetchEventParams::New();
+  blink::mojom::ServiceWorkerFetchResponseCallbackPtr fetch_callback_ptr;
+  blink::mojom::ServiceWorkerFetchResponseCallbackRequest
+      fetch_callback_request = mojo::MakeRequest(&fetch_callback_ptr);
+  auto params = blink::mojom::DispatchFetchEventParams::New();
   params->request = *request;
-  pipes.event_dispatcher->DispatchFetchEvent(
+  pipes.service_worker->DispatchFetchEvent(
       std::move(params), std::move(fetch_callback_ptr),
-      base::BindOnce(
-          [](blink::mojom::ServiceWorkerEventStatus, base::Time) {}));
+      base::BindOnce([](blink::mojom::ServiceWorkerEventStatus) {}));
   task_runner()->RunUntilIdle();
 
   ASSERT_EQ(1u, mock_proxy.fetch_events().size());
-  EXPECT_EQ(request->url,
+  EXPECT_EQ(expected_url,
             static_cast<GURL>(mock_proxy.fetch_events()[0].second.Url()));
+}
+
+class HeaderContentRendererClient : public ContentRendererClient {
+  bool IsExcludedHeaderForServiceWorkerFetchEvent(
+      const std::string& header_name) override {
+    return header_name == "x-bye-bye";
+  }
+};
+
+TEST_F(ServiceWorkerContextClientTest, DispatchFetchEvent_Headers) {
+  HeaderContentRendererClient header_client;
+  auto* old_client = SetRendererClientForTesting(&header_client);
+
+  ContextClientPipes pipes;
+  MockWebServiceWorkerContextProxy mock_proxy;
+  std::unique_ptr<ServiceWorkerContextClient> context_client =
+      CreateContextClient(&pipes, &mock_proxy);
+  context_client->DidEvaluateScript(true /* success */);
+  task_runner()->RunUntilIdle();
+  EXPECT_TRUE(mock_proxy.fetch_events().empty());
+
+  const GURL expected_url("https://example.com/expected");
+  auto request = std::make_unique<network::ResourceRequest>();
+  request->url = expected_url;
+  request->headers.SetHeader("x-bye-bye", "excluded");
+  request->headers.SetHeader("x-hi-hi", "present");
+  blink::mojom::ServiceWorkerFetchResponseCallbackPtr fetch_callback_ptr;
+  blink::mojom::ServiceWorkerFetchResponseCallbackRequest
+      fetch_callback_request = mojo::MakeRequest(&fetch_callback_ptr);
+  auto params = blink::mojom::DispatchFetchEventParams::New();
+  params->request = *request;
+  pipes.service_worker->DispatchFetchEvent(
+      std::move(params), std::move(fetch_callback_ptr),
+      base::BindOnce([](blink::mojom::ServiceWorkerEventStatus) {}));
+  task_runner()->RunUntilIdle();
+
+  ASSERT_EQ(1u, mock_proxy.fetch_events().size());
+  const blink::WebServiceWorkerRequest& received_request =
+      mock_proxy.fetch_events()[0].second;
+  ServiceWorkerHeaderMap header_map;
+  GetServiceWorkerHeaderMapFromWebRequest(received_request, &header_map);
+
+  EXPECT_EQ(expected_url, static_cast<GURL>(received_request.Url()));
+  EXPECT_TRUE(header_map.find("x-bye-bye") == header_map.end());
+  auto iter = header_map.find("x-hi-hi");
+  ASSERT_TRUE(iter != header_map.end());
+  EXPECT_EQ("present", iter->second);
+
+  SetRendererClientForTesting(old_client);
 }
 
 TEST_F(ServiceWorkerContextClientTest,
@@ -363,7 +410,7 @@ TEST_F(ServiceWorkerContextClientTest,
   MockWebServiceWorkerContextProxy mock_proxy;
   std::unique_ptr<ServiceWorkerContextClient> context_client =
       CreateContextClient(&pipes, &mock_proxy);
-  context_client->DidEvaluateClassicScript(true /* success */);
+  context_client->DidEvaluateScript(true /* success */);
   task_runner()->RunUntilIdle();
   EXPECT_TRUE(mock_proxy.fetch_events().empty());
 
@@ -375,17 +422,16 @@ TEST_F(ServiceWorkerContextClientTest,
 
   // The dispatched fetch event should be recorded by |mock_proxy|.
   const GURL expected_url("https://example.com/expected");
-  mojom::ServiceWorkerFetchResponseCallbackPtr fetch_callback_ptr;
-  mojom::ServiceWorkerFetchResponseCallbackRequest fetch_callback_request =
-      mojo::MakeRequest(&fetch_callback_ptr);
+  blink::mojom::ServiceWorkerFetchResponseCallbackPtr fetch_callback_ptr;
+  blink::mojom::ServiceWorkerFetchResponseCallbackRequest
+      fetch_callback_request = mojo::MakeRequest(&fetch_callback_ptr);
   auto request = std::make_unique<network::ResourceRequest>();
   request->url = expected_url;
-  auto params = mojom::DispatchFetchEventParams::New();
+  auto params = blink::mojom::DispatchFetchEventParams::New();
   params->request = *request;
   context_client->DispatchOrQueueFetchEvent(
       std::move(params), std::move(fetch_callback_ptr),
-      base::BindOnce(
-          [](blink::mojom::ServiceWorkerEventStatus, base::Time) {}));
+      base::BindOnce([](blink::mojom::ServiceWorkerEventStatus) {}));
   task_runner()->RunUntilIdle();
 
   EXPECT_FALSE(context_client->RequestedTermination());
@@ -401,7 +447,7 @@ TEST_F(ServiceWorkerContextClientTest,
   MockWebServiceWorkerContextProxy mock_proxy;
   std::unique_ptr<ServiceWorkerContextClient> context_client =
       CreateContextClient(&pipes, &mock_proxy);
-  context_client->DidEvaluateClassicScript(true /* success */);
+  context_client->DidEvaluateScript(true /* success */);
   task_runner()->RunUntilIdle();
   EXPECT_TRUE(mock_proxy.fetch_events().empty());
 
@@ -419,21 +465,20 @@ TEST_F(ServiceWorkerContextClientTest,
   EXPECT_TRUE(context_client->RequestedTermination());
 
   const GURL expected_url("https://example.com/expected");
-  mojom::ServiceWorkerFetchResponseCallbackRequest fetch_callback_request;
 
   // FetchEvent dispatched directly from the controlled clients through
   // mojom::ControllerServiceWorker should be queued in the idle state.
   {
-    mojom::ServiceWorkerFetchResponseCallbackPtr fetch_callback_ptr;
-    fetch_callback_request = mojo::MakeRequest(&fetch_callback_ptr);
+    blink::mojom::ServiceWorkerFetchResponseCallbackPtr fetch_callback_ptr;
+    blink::mojom::ServiceWorkerFetchResponseCallbackRequest
+        fetch_callback_request = mojo::MakeRequest(&fetch_callback_ptr);
     auto request = std::make_unique<network::ResourceRequest>();
     request->url = expected_url;
-    auto params = mojom::DispatchFetchEventParams::New();
+    auto params = blink::mojom::DispatchFetchEventParams::New();
     params->request = *request;
     pipes.controller->DispatchFetchEvent(
         std::move(params), std::move(fetch_callback_ptr),
-        base::BindOnce(
-            [](blink::mojom::ServiceWorkerEventStatus, base::Time) {}));
+        base::BindOnce([](blink::mojom::ServiceWorkerEventStatus) {}));
     task_runner()->RunUntilIdle();
   }
   EXPECT_TRUE(mock_proxy.fetch_events().empty());
@@ -449,7 +494,7 @@ TEST_F(ServiceWorkerContextClientTest,
   MockWebServiceWorkerContextProxy mock_proxy;
   std::unique_ptr<ServiceWorkerContextClient> context_client =
       CreateContextClient(&pipes, &mock_proxy);
-  context_client->DidEvaluateClassicScript(true /* success */);
+  context_client->DidEvaluateScript(true /* success */);
   task_runner()->RunUntilIdle();
   EXPECT_TRUE(mock_proxy.fetch_events().empty());
   bool is_idle = false;
@@ -467,39 +512,39 @@ TEST_F(ServiceWorkerContextClientTest,
 
   const GURL expected_url_1("https://example.com/expected_1");
   const GURL expected_url_2("https://example.com/expected_2");
-  mojom::ServiceWorkerFetchResponseCallbackRequest fetch_callback_request_1;
-  mojom::ServiceWorkerFetchResponseCallbackRequest fetch_callback_request_2;
+  blink::mojom::ServiceWorkerFetchResponseCallbackRequest
+      fetch_callback_request_1;
+  blink::mojom::ServiceWorkerFetchResponseCallbackRequest
+      fetch_callback_request_2;
 
   // FetchEvent dispatched directly from the controlled clients through
   // mojom::ControllerServiceWorker should be queued in the idle state.
   {
-    mojom::ServiceWorkerFetchResponseCallbackPtr fetch_callback_ptr;
+    blink::mojom::ServiceWorkerFetchResponseCallbackPtr fetch_callback_ptr;
     fetch_callback_request_1 = mojo::MakeRequest(&fetch_callback_ptr);
     auto request = std::make_unique<network::ResourceRequest>();
     request->url = expected_url_1;
-    auto params = mojom::DispatchFetchEventParams::New();
+    auto params = blink::mojom::DispatchFetchEventParams::New();
     params->request = *request;
     pipes.controller->DispatchFetchEvent(
         std::move(params), std::move(fetch_callback_ptr),
-        base::BindOnce(
-            [](blink::mojom::ServiceWorkerEventStatus, base::Time) {}));
+        base::BindOnce([](blink::mojom::ServiceWorkerEventStatus) {}));
     task_runner()->RunUntilIdle();
   }
   EXPECT_TRUE(mock_proxy.fetch_events().empty());
 
-  // Another event dispatched to mojom::ServiceWorkerEventDispatcher wakes up
+  // Another event dispatched to mojom::ServiceWorker wakes up
   // the context client.
   {
-    mojom::ServiceWorkerFetchResponseCallbackPtr fetch_callback_ptr;
+    blink::mojom::ServiceWorkerFetchResponseCallbackPtr fetch_callback_ptr;
     fetch_callback_request_2 = mojo::MakeRequest(&fetch_callback_ptr);
     auto request = std::make_unique<network::ResourceRequest>();
     request->url = expected_url_2;
-    auto params = mojom::DispatchFetchEventParams::New();
+    auto params = blink::mojom::DispatchFetchEventParams::New();
     params->request = *request;
-    pipes.event_dispatcher->DispatchFetchEvent(
+    pipes.service_worker->DispatchFetchEvent(
         std::move(params), std::move(fetch_callback_ptr),
-        base::BindOnce(
-            [](blink::mojom::ServiceWorkerEventStatus, base::Time) {}));
+        base::BindOnce([](blink::mojom::ServiceWorkerEventStatus) {}));
     task_runner()->RunUntilIdle();
   }
   EXPECT_FALSE(context_client->RequestedTermination());
@@ -510,60 +555,6 @@ TEST_F(ServiceWorkerContextClientTest,
             static_cast<GURL>(mock_proxy.fetch_events()[0].second.Url()));
   EXPECT_EQ(expected_url_2,
             static_cast<GURL>(mock_proxy.fetch_events()[1].second.Url()));
-}
-
-TEST_F(ServiceWorkerContextClientTest, GetOrCreateServiceWorkerObject) {
-  ContextClientPipes pipes;
-  MockWebServiceWorkerContextProxy mock_proxy;
-  std::unique_ptr<ServiceWorkerContextClient> context_client =
-      CreateContextClient(&pipes, &mock_proxy);
-  scoped_refptr<WebServiceWorkerImpl> worker1;
-  scoped_refptr<WebServiceWorkerImpl> worker2;
-  const int64_t version_id = 200;
-  auto mock_service_worker_object_host =
-      std::make_unique<MockServiceWorkerObjectHost>(version_id);
-  ASSERT_EQ(0, mock_service_worker_object_host->GetBindingCount());
-
-  // Should return a worker object newly created with the 1st given |info|.
-  {
-    blink::mojom::ServiceWorkerObjectInfoPtr info =
-        mock_service_worker_object_host->CreateObjectInfo();
-    // ServiceWorkerObjectHost Mojo connection has been added.
-    EXPECT_EQ(1, mock_service_worker_object_host->GetBindingCount());
-    EXPECT_FALSE(ContainsServiceWorkerObject(context_client.get(), version_id));
-    worker1 = context_client->GetOrCreateServiceWorkerObject(std::move(info));
-    EXPECT_TRUE(worker1);
-    EXPECT_TRUE(ContainsServiceWorkerObject(context_client.get(), version_id));
-    // |worker1| is holding the 1st blink::mojom::ServiceWorkerObjectHost Mojo
-    // connection to |mock_service_worker_object_host|.
-    EXPECT_EQ(1, mock_service_worker_object_host->GetBindingCount());
-  }
-
-  // Should return the same worker object and release the 2nd given |info|.
-  {
-    blink::mojom::ServiceWorkerObjectInfoPtr info =
-        mock_service_worker_object_host->CreateObjectInfo();
-    EXPECT_EQ(2, mock_service_worker_object_host->GetBindingCount());
-    worker2 = context_client->GetOrCreateServiceWorkerObject(std::move(info));
-    EXPECT_EQ(worker1, worker2);
-    task_runner()->RunUntilIdle();
-    // The 2nd ServiceWorkerObjectHost Mojo connection in |info| has been
-    // dropped.
-    EXPECT_EQ(1, mock_service_worker_object_host->GetBindingCount());
-  }
-
-  // The dtor decrements the refcounts.
-  worker1 = nullptr;
-  worker2 = nullptr;
-  task_runner()->RunUntilIdle();
-  EXPECT_FALSE(ContainsServiceWorkerObject(context_client.get(), version_id));
-  // The 1st ServiceWorkerObjectHost Mojo connection got broken.
-  EXPECT_EQ(0, mock_service_worker_object_host->GetBindingCount());
-
-  // Should return nullptr when given nullptr.
-  scoped_refptr<WebServiceWorkerImpl> invalid_worker =
-      context_client->GetOrCreateServiceWorkerObject(nullptr);
-  EXPECT_FALSE(invalid_worker);
 }
 
 }  // namespace content

@@ -5,14 +5,15 @@
 #include "chrome/browser/offline_pages/background_loader_offliner.h"
 
 #include "base/bind.h"
+#include "base/command_line.h"
 #include "base/run_loop.h"
-#include "base/test/histogram_tester.h"
+#include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/test/scoped_mock_time_message_loop_task_runner.h"
 #include "base/threading/thread_task_runner_handle.h"
-#include "chrome/browser/loader/chrome_navigation_data.h"
 #include "chrome/browser/net/prediction_options.h"
 #include "chrome/browser/offline_pages/offliner_helper.h"
+#include "chrome/browser/previews/previews_ui_tab_helper.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/test/base/testing_profile.h"
 #include "components/content_settings/core/common/pref_names.h"
@@ -24,6 +25,7 @@
 #include "components/offline_pages/core/offline_page_feature.h"
 #include "components/offline_pages/core/stub_offline_page_model.h"
 #include "components/prefs/pref_service.h"
+#include "components/previews/content/previews_user_data.h"
 #include "content/public/browser/mhtml_extra_parts.h"
 #include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/web_contents.h"
@@ -33,6 +35,11 @@
 #include "net/base/net_errors.h"
 #include "net/http/http_response_headers.h"
 #include "testing/gtest/include/gtest/gtest.h"
+
+namespace {
+char kShortSnapshotDelayForTest[] =
+    "short-offline-page-snapshot-delay-for-test";
+};  // namespace
 
 namespace offline_pages {
 
@@ -67,9 +74,9 @@ class MockOfflinePageModel : public StubOfflinePageModel {
   void SavePage(const SavePageParams& save_page_params,
                 std::unique_ptr<OfflinePageArchiver> archiver,
                 content::WebContents* web_contents,
-                const SavePageCallback& callback) override {
+                SavePageCallback callback) override {
     mock_saving_ = true;
-    save_page_callback_ = callback;
+    save_page_callback_ = std::move(callback);
     save_page_params_ = save_page_params;
   }
 
@@ -77,7 +84,7 @@ class MockOfflinePageModel : public StubOfflinePageModel {
     DCHECK(mock_saving_);
     mock_saving_ = false;
     base::ThreadTaskRunnerHandle::Get()->PostTask(
-        FROM_HERE, base::BindOnce(save_page_callback_,
+        FROM_HERE, base::BindOnce(std::move(save_page_callback_),
                                   SavePageResult::ARCHIVE_CREATION_FAILED, 0));
   }
 
@@ -85,22 +92,22 @@ class MockOfflinePageModel : public StubOfflinePageModel {
     DCHECK(mock_saving_);
     mock_saving_ = false;
     base::ThreadTaskRunnerHandle::Get()->PostTask(
-        FROM_HERE,
-        base::BindOnce(save_page_callback_, SavePageResult::SUCCESS, 123456));
+        FROM_HERE, base::BindOnce(std::move(save_page_callback_),
+                                  SavePageResult::SUCCESS, 123456));
   }
 
   void CompleteSavingAsAlreadyExists() {
     DCHECK(mock_saving_);
     mock_saving_ = false;
     base::ThreadTaskRunnerHandle::Get()->PostTask(
-        FROM_HERE, base::BindOnce(save_page_callback_,
+        FROM_HERE, base::BindOnce(std::move(save_page_callback_),
                                   SavePageResult::ALREADY_EXISTS, 123456));
   }
 
   void DeletePagesByOfflineId(const std::vector<int64_t>& offline_ids,
-                              const DeletePageCallback& callback) override {
+                              DeletePageCallback callback) override {
     mock_deleting_ = true;
-    callback.Run(DeletePageResult::SUCCESS);
+    std::move(callback).Run(DeletePageResult::SUCCESS);
   }
 
   bool mock_saving() const { return mock_saving_; }
@@ -209,15 +216,12 @@ class BackgroundLoaderOfflinerTest : public testing::Test {
 
   void CompleteLoading() {
     // Reset snapshot controller.
-    std::unique_ptr<SnapshotController> snapshot_controller(
-        new SnapshotController(base::ThreadTaskRunnerHandle::Get(),
-                               offliner_.get(),
-                               0L /* DelayAfterDocumentAvailable */,
-                               0L /* DelayAfterDocumentOnLoad */,
-                               0L /* DelayAfterRenovationsCompleted */,
-                               false /* DocumentAvailableTriggersSnapshot */,
-                               false /* RenovationsEnabled */));
-    offliner_->SetSnapshotControllerForTest(std::move(snapshot_controller));
+    std::unique_ptr<BackgroundSnapshotController> snapshot_controller(
+        new BackgroundSnapshotController(base::ThreadTaskRunnerHandle::Get(),
+                                         offliner_.get(),
+                                         false /* RenovationsEnabled */));
+    offliner_->SetBackgroundSnapshotControllerForTest(
+        std::move(snapshot_controller));
     // Call complete loading.
     offliner()->DocumentOnLoadCompletedInMainFrame();
     PumpLoop();
@@ -265,6 +269,10 @@ BackgroundLoaderOfflinerTest::BackgroundLoaderOfflinerTest()
 BackgroundLoaderOfflinerTest::~BackgroundLoaderOfflinerTest() {}
 
 void BackgroundLoaderOfflinerTest::SetUp() {
+  // Set the snapshot controller delay command line switch to short delays.
+  base::CommandLine* cl = base::CommandLine::ForCurrentProcess();
+  cl->AppendSwitch(kShortSnapshotDelayForTest);
+
   std::unique_ptr<TestLoadTerminationListener> listener =
       std::make_unique<TestLoadTerminationListener>();
   load_termination_listener_ = listener.get();
@@ -397,6 +405,7 @@ TEST_F(BackgroundLoaderOfflinerTest, CancelWhenLoading) {
   PumpLoop();
   offliner()->OnNetworkBytesChanged(15LL);
   EXPECT_TRUE(cancel_callback_called());
+  EXPECT_FALSE(completion_callback_called());
   EXPECT_FALSE(offliner()->is_loading());  // Offliner reset.
   EXPECT_EQ(progress(), 0LL);  // network bytes not recorded when not busy.
 }
@@ -658,15 +667,12 @@ TEST_F(BackgroundLoaderOfflinerTest, OffliningPreviewsStatusOffHistogram) {
       content::NavigationHandle::CreateNavigationHandleForTesting(
           kHttpUrl, offliner()->web_contents()->GetMainFrame(), true,
           net::Error::OK));
-  // Set up ChromeNavigationData on the handle.
-  std::unique_ptr<ChromeNavigationData> chrome_navigation_data(
-      new ChromeNavigationData());
-  chrome_navigation_data->set_previews_state(
-      content::PreviewsTypes::PREVIEWS_NO_TRANSFORM);
-  std::unique_ptr<content::NavigationData> navigation_data(
-      chrome_navigation_data.release());
-  offliner()->web_contents_tester()->SetNavigationData(
-      handle.get(), std::move(navigation_data));
+  // Set up PreviewsUserData on the handle.
+  PreviewsUITabHelper::CreateForWebContents(offliner()->web_contents());
+  PreviewsUITabHelper::FromWebContents(offliner()->web_contents())
+      ->CreatePreviewsUserDataForNavigationHandle(handle.get(), 1u)
+      ->set_committed_previews_state(
+          content::PreviewsTypes::PREVIEWS_NO_TRANSFORM);
   scoped_refptr<net::HttpResponseHeaders> header(
       new net::HttpResponseHeaders("HTTP/1.1 200 OK"));
   offliner()->web_contents_tester()->SetHttpResponseHeaders(handle.get(),
@@ -692,15 +698,11 @@ TEST_F(BackgroundLoaderOfflinerTest, OffliningPreviewsStatusOnHistogram) {
       content::NavigationHandle::CreateNavigationHandleForTesting(
           kHttpUrl, offliner()->web_contents()->GetMainFrame(), true,
           net::Error::OK));
-  // Set up ChromeNavigationData on the handle.
-  std::unique_ptr<ChromeNavigationData> chrome_navigation_data(
-      new ChromeNavigationData());
-  chrome_navigation_data->set_previews_state(
-      content::PreviewsTypes::CLIENT_LOFI_ON);
-  std::unique_ptr<content::NavigationData> navigation_data(
-      chrome_navigation_data.release());
-  offliner()->web_contents_tester()->SetNavigationData(
-      handle.get(), std::move(navigation_data));
+  // Set up PreviewsUserData on the handle.
+  PreviewsUITabHelper::CreateForWebContents(offliner()->web_contents());
+  PreviewsUITabHelper::FromWebContents(offliner()->web_contents())
+      ->CreatePreviewsUserDataForNavigationHandle(handle.get(), 1u)
+      ->set_committed_previews_state(content::PreviewsTypes::CLIENT_LOFI_ON);
   scoped_refptr<net::HttpResponseHeaders> header(
       new net::HttpResponseHeaders("HTTP/1.1 200 OK"));
   offliner()->web_contents_tester()->SetHttpResponseHeaders(handle.get(),

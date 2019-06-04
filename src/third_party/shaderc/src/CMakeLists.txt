@@ -4,29 +4,42 @@ enable_testing()
 
 message(STATUS "Shaderc: build type is \"${CMAKE_BUILD_TYPE}\".")
 
-option(SHADERC_SKIP_TESTS
-       "Skip building unit tests based on googlemock and googletest"
-       ${SHADERC_SKIP_TESTS})
+option(SHADERC_SKIP_INSTALL "Skip installation" ${SHADERC_SKIP_INSTALL})
+if(NOT ${SHADERC_SKIP_INSTALL})
+  set(SHADERC_ENABLE_INSTALL ON)
+endif()
+
+option(SHADERC_SKIP_TESTS "Skip building tests" ${SHADERC_SKIP_TESTS})
 if(NOT ${SHADERC_SKIP_TESTS})
   set(SHADERC_ENABLE_TESTS ON)
 endif()
 if(${SHADERC_ENABLE_TESTS})
-  message(STATUS "Configuring Shaderc to build unit tests.")
+  message(STATUS "Configuring Shaderc to build tests.")
 else()
-  message(STATUS "Configuring Shaderc to avoid building unit tests.")
+  message(STATUS "Configuring Shaderc to avoid building tests.")
 endif()
 
+set (CMAKE_CXX_STANDARD 11)
+
+option(SHADERC_ENABLE_NV_EXTENSIONS "Enables support of Nvidia-specific extensions" ON)
+
+include(GNUInstallDirs)
 include(cmake/setup_build.cmake)
 include(cmake/utils.cmake)
 
+
+if(SHADERC_ENABLE_NV_EXTENSIONS)
+    add_definitions(-DNV_EXTENSIONS)
+endif(SHADERC_ENABLE_NV_EXTENSIONS)
+
 add_custom_target(check-copyright ALL
-  ${PYTHON_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/utils/add_copyright.py
+  ${PYTHON_EXE} ${CMAKE_CURRENT_SOURCE_DIR}/utils/add_copyright.py
   --check
   WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
   COMMENT "Check copyright")
 
 add_custom_target(add-copyright
-  ${PYTHON_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/utils/add_copyright.py
+  ${PYTHON_EXE} ${CMAKE_CURRENT_SOURCE_DIR}/utils/add_copyright.py
   WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
   COMMENT "Add copyright")
 
@@ -56,7 +69,7 @@ add_subdirectory(glslc)
 add_subdirectory(examples)
 
 add_custom_target(build-version
-  ${PYTHON_EXECUTABLE}
+  ${PYTHON_EXE}
   ${CMAKE_CURRENT_SOURCE_DIR}/utils/update_build_version.py
   ${shaderc_SOURCE_DIR} ${spirv-tools_SOURCE_DIR} ${glslang_SOURCE_DIR}
   COMMENT "Update build-version.inc in the Shaderc build directory (if necessary).")

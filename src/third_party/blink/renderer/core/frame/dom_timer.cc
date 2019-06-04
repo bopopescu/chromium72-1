@@ -69,7 +69,7 @@ void DOMTimer::RemoveByID(ExecutionContext* context, int timeout_id) {
   DOMTimer* timer = context->Timers()->RemoveTimeoutByID(timeout_id);
   TRACE_EVENT_INSTANT1("devtools.timeline", "TimerRemove",
                        TRACE_EVENT_SCOPE_THREAD, "data",
-                       InspectorTimerRemoveEvent::Data(context, timeout_id));
+                       inspector_timer_remove_event::Data(context, timeout_id));
   // Eagerly unregister as ExecutionContext observer.
   if (timer)
     timer->ClearContext();
@@ -104,8 +104,8 @@ DOMTimer::DOMTimer(ExecutionContext* context,
   PauseIfNeeded();
   TRACE_EVENT_INSTANT1("devtools.timeline", "TimerInstall",
                        TRACE_EVENT_SCOPE_THREAD, "data",
-                       InspectorTimerInstallEvent::Data(context, timeout_id,
-                                                        interval, single_shot));
+                       inspector_timer_install_event::Data(
+                           context, timeout_id, interval, single_shot));
   probe::AsyncTaskScheduledBreakable(
       context, single_shot ? "setTimeout" : "setInterval", this);
 }
@@ -116,9 +116,10 @@ DOMTimer::~DOMTimer() {
 }
 
 void DOMTimer::Stop() {
+  const bool is_interval = !RepeatInterval().is_zero();
   probe::AsyncTaskCanceledBreakable(
-      GetExecutionContext(),
-      RepeatInterval() ? "clearInterval" : "clearTimeout", this);
+      GetExecutionContext(), is_interval ? "clearInterval" : "clearTimeout",
+      this);
 
   user_gesture_token_ = nullptr;
   // Need to release JS objects potentially protected by ScheduledAction
@@ -144,20 +145,18 @@ void DOMTimer::Fired() {
   UserGestureIndicator gesture_indicator(std::move(user_gesture_token_));
 
   TRACE_EVENT1("devtools.timeline", "TimerFire", "data",
-               InspectorTimerFireEvent::Data(context, timeout_id_));
-  probe::UserCallback probe(context,
-                            RepeatInterval() ? "setInterval" : "setTimeout",
-                            AtomicString(), true);
-  probe::AsyncTask async_task(context, this,
-                              RepeatInterval() ? "fired" : nullptr);
+               inspector_timer_fire_event::Data(context, timeout_id_));
+  const bool is_interval = !RepeatInterval().is_zero();
+  probe::UserCallback probe(context, is_interval ? "setInterval" : "setTimeout",
+                            g_null_atom, true);
+  probe::AsyncTask async_task(context, this, is_interval ? "fired" : nullptr);
 
   // Simple case for non-one-shot timers.
   if (IsActive()) {
-    if (!RepeatIntervalDelta().is_zero() &&
-        RepeatIntervalDelta() < kMinimumInterval) {
+    if (is_interval && RepeatInterval() < kMinimumInterval) {
       nesting_level_++;
       if (nesting_level_ >= kMaxTimerNestingLevel)
-        AugmentRepeatInterval(kMinimumInterval - RepeatIntervalDelta());
+        AugmentRepeatInterval(kMinimumInterval - RepeatInterval());
     }
 
     // No access to member variables after this point, it can delete the timer.

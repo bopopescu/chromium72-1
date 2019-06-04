@@ -23,6 +23,7 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_HTML_HTML_OBJECT_ELEMENT_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_HTML_HTML_OBJECT_ELEMENT_H_
 
+#include "third_party/blink/public/common/frame/frame_owner_element_type.h"
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/html/forms/form_associated.h"
 #include "third_party/blink/renderer/core/html/forms/listed_element.h"
@@ -44,8 +45,13 @@ class CORE_EXPORT HTMLObjectElement final : public HTMLPlugInElement,
 
  public:
   static HTMLObjectElement* Create(Document&, const CreateElementFlags);
+
+  HTMLObjectElement(Document&, const CreateElementFlags);
   ~HTMLObjectElement() override;
   void Trace(blink::Visitor*) override;
+
+  // Returns attributes that should be checked against Trusted Types
+  const HashSet<AtomicString>& GetCheckedAttributeNames() const override;
 
   const String& ClassId() const { return class_id_; }
 
@@ -56,7 +62,7 @@ class CORE_EXPORT HTMLObjectElement final : public HTMLPlugInElement,
   bool HasFallbackContent() const override;
   bool UseFallbackContent() const override;
   bool CanRenderFallbackContent() const override { return true; }
-  void RenderFallbackContent() override;
+  void RenderFallbackContent(Frame*) override;
 
   bool IsFormControlElement() const override { return false; }
 
@@ -64,6 +70,10 @@ class CORE_EXPORT HTMLObjectElement final : public HTMLPlugInElement,
   bool IsInteractiveContent() const override;
 
   bool ChildrenCanHaveStyle() const override { return UseFallbackContent(); }
+
+  FrameOwnerElementType OwnerType() const final {
+    return FrameOwnerElementType::kObject;
+  }
 
   // Implementations of constraint validation API.
   // Note that the object elements are always barred from constraint validation.
@@ -80,11 +90,8 @@ class CORE_EXPORT HTMLObjectElement final : public HTMLPlugInElement,
 
   FormAssociated* ToFormAssociatedOrNull() override { return this; };
   void AssociateWith(HTMLFormElement*) override;
-  void AttachLayoutTree(AttachContext&) final;
 
  private:
-  HTMLObjectElement(Document&, const CreateElementFlags);
-
   void ParseAttribute(const AttributeModificationParams&) override;
   bool IsPresentationAttribute(const QualifiedName&) const override;
   void CollectStyleForPresentationAttribute(
@@ -92,8 +99,8 @@ class CORE_EXPORT HTMLObjectElement final : public HTMLPlugInElement,
       const AtomicString&,
       MutableCSSPropertyValueSet*) override;
 
-  InsertionNotificationRequest InsertedInto(ContainerNode*) override;
-  void RemovedFrom(ContainerNode*) override;
+  InsertionNotificationRequest InsertedInto(ContainerNode&) override;
+  void RemovedFrom(ContainerNode&) override;
 
   void DidMoveToNewDocument(Document& old_document) override;
 

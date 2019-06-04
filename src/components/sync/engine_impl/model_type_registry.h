@@ -12,7 +12,9 @@
 
 #include "base/macros.h"
 #include "base/memory/weak_ptr.h"
+#include "base/observer_list.h"
 #include "components/sync/base/model_type.h"
+#include "components/sync/base/passphrase_enums.h"
 #include "components/sync/engine/cycle/type_debug_info_observer.h"
 #include "components/sync/engine/model_safe_worker.h"
 #include "components/sync/engine/model_type_connector.h"
@@ -52,7 +54,7 @@ class ModelTypeRegistry : public ModelTypeConnector,
   // Expects that the proxy's ModelType is not currently enabled.
   void ConnectNonBlockingType(
       ModelType type,
-      std::unique_ptr<ActivationContext> activation_context) override;
+      std::unique_ptr<DataTypeActivationResponse> activation_response) override;
 
   // Disables the syncing of an off-thread type.
   //
@@ -71,6 +73,7 @@ class ModelTypeRegistry : public ModelTypeConnector,
   // Implementation of SyncEncryptionHandler::Observer.
   void OnPassphraseRequired(
       PassphraseRequiredReason reason,
+      const KeyDerivationParams& key_derivation_params,
       const sync_pb::EncryptedData& pending_keys) override;
   void OnPassphraseAccepted() override;
   void OnBootstrapTokenUpdated(const std::string& bootstrap_token,
@@ -154,6 +157,10 @@ class ModelTypeRegistry : public ModelTypeConnector,
   // A copy of the directory's most recent cryptographer.
   std::unique_ptr<Cryptographer> cryptographer_;
 
+  // A copy of the directory's most recent passphrase type.
+  PassphraseType passphrase_type_ =
+      SyncEncryptionHandler::kInitialPassphraseType;
+
   // The set of encrypted types.
   ModelTypeSet encrypted_types_;
 
@@ -173,7 +180,8 @@ class ModelTypeRegistry : public ModelTypeConnector,
   // a lot of them, and their lifetimes are unpredictable, so it makes the
   // book-keeping easier if we just store the list here.  That way it's
   // guaranteed to live as long as this sync backend.
-  base::ObserverList<TypeDebugInfoObserver> type_debug_info_observers_;
+  base::ObserverList<TypeDebugInfoObserver>::Unchecked
+      type_debug_info_observers_;
 
   base::WeakPtrFactory<ModelTypeRegistry> weak_ptr_factory_;
 

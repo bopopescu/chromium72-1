@@ -8,17 +8,17 @@
 #include "base/callback.h"
 #include "base/macros.h"
 #include "base/memory/weak_ptr.h"
-#include "components/offline_pages/core/task.h"
+#include "components/offline_pages/task/task.h"
 
 namespace offline_pages {
-class OfflinePageMetadataStoreSQL;
+class OfflinePageMetadataStore;
 
 // Checks if a thumbnail exists for the specified offline id.
 class HasThumbnailTask : public Task {
  public:
   using ThumbnailExistsCallback = base::OnceCallback<void(bool)>;
 
-  HasThumbnailTask(OfflinePageMetadataStoreSQL* store,
+  HasThumbnailTask(OfflinePageMetadataStore* store,
                    int64_t offline_id,
                    ThumbnailExistsCallback exists_callback);
   ~HasThumbnailTask() override;
@@ -29,7 +29,7 @@ class HasThumbnailTask : public Task {
  private:
   void OnThumbnailExists(bool exists);
 
-  OfflinePageMetadataStoreSQL* store_;
+  OfflinePageMetadataStore* store_;
   int64_t offline_id_;
   ThumbnailExistsCallback exists_callback_;
   base::WeakPtrFactory<HasThumbnailTask> weak_ptr_factory_;

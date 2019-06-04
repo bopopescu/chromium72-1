@@ -78,8 +78,10 @@ TextEditor.TextEditorAutocompleteController = class {
    */
   _beforeChange(codeMirror, changeObject) {
     this._updatedLines = this._updatedLines || {};
-    for (let i = changeObject.from.line; i <= changeObject.to.line; ++i)
-      this._updatedLines[i] = this._codeMirror.getLine(i);
+    for (let i = changeObject.from.line; i <= changeObject.to.line; ++i) {
+      if (this._updatedLines[i] === undefined)
+        this._updatedLines[i] = this._codeMirror.getLine(i);
+    }
   }
 
   /**
@@ -289,7 +291,7 @@ TextEditor.TextEditorAutocompleteController = class {
       return;
     }
     const suffix = hint.substring(query.length).split('\n')[0];
-    this._hintElement.textContent = suffix;
+    this._hintElement.textContent = suffix.trimEnd(10000);
     const cursor = this._codeMirror.getCursor('to');
     if (this._hintMarker) {
       const position = this._hintMarker.position();

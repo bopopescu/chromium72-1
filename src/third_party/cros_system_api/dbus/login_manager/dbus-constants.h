@@ -33,10 +33,15 @@ const char kSessionManagerStoreDeviceLocalAccountPolicy[] =
     "StoreDeviceLocalAccountPolicy";
 const char kSessionManagerRetrieveDeviceLocalAccountPolicy[] =
     "RetrieveDeviceLocalAccountPolicy";
+const char kSessionManagerListStoredComponentPolicies[] =
+    "ListStoredComponentPolicies";
 const char kSessionManagerRetrieveSessionState[] = "RetrieveSessionState";
 const char kSessionManagerRetrieveActiveSessions[] = "RetrieveActiveSessions";
+const char kSessionManagerRetrievePrimarySession[] = "RetrievePrimarySession";
 const char kSessionManagerStartTPMFirmwareUpdate[] = "StartTPMFirmwareUpdate";
 const char kSessionManagerStartDeviceWipe[] = "StartDeviceWipe";
+const char kSessionManagerClearCheckEnrollmentVpd[] =
+    "ClearCheckEnrollmentVpd";
 const char kSessionManagerHandleSupervisedUserCreationStarting[] =
     "HandleSupervisedUserCreationStarting";
 const char kSessionManagerHandleSupervisedUserCreationFinished[] =
@@ -45,12 +50,12 @@ const char kSessionManagerLockScreen[] = "LockScreen";
 const char kSessionManagerHandleLockScreenShown[] = "HandleLockScreenShown";
 const char kSessionManagerHandleLockScreenDismissed[] =
     "HandleLockScreenDismissed";
+const char kSessionManagerIsScreenLocked[] = "IsScreenLocked";
 const char kSessionManagerSetFlagsForUser[] = "SetFlagsForUser";
 const char kSessionManagerGetServerBackedStateKeys[] =
     "GetServerBackedStateKeys";
 const char kSessionManagerInitMachineInfo[] = "InitMachineInfo";
 const char kSessionManagerCheckArcAvailability[] = "CheckArcAvailability";
-const char kSessionManagerStartArcInstance[] = "StartArcInstance";
 const char kSessionManagerStartArcMiniContainer[] = "StartArcMiniContainer";
 const char kSessionManagerUpgradeArcContainer[] = "UpgradeArcContainer";
 const char kSessionManagerStopArcInstance[] = "StopArcInstance";
@@ -84,6 +89,7 @@ const char kArcInstanceRunning[] = INTERFACE ".ArcInstanceRunning";
 const char kArcContainerNotFound[] = INTERFACE ".ArcContainerNotFound";
 const char kContainerStartupFail[] = INTERFACE ".ContainerStartupFail";
 const char kContainerShutdownFail[] = INTERFACE ".ContainerShutdownFail";
+const char kDeleteFail[] = INTERFACE ".DeleteFail";
 const char kEmitFailed[] = INTERFACE ".EmitFailed";
 const char kGetServiceFail[] = INTERFACE ".kGetServiceFail";
 const char kInitMachineInfoFail[] = INTERFACE ".InitMachineInfoFail";

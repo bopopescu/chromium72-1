@@ -51,10 +51,10 @@ Polymer({
     pageVisibility_: {type: Object, value: settings.pageVisibility},
 
     /** @private */
-    showCrostini_: Boolean,
+    showAndroidApps_: Boolean,
 
     /** @private */
-    showAndroidApps_: Boolean,
+    showCrostini_: Boolean,
 
     /** @private */
     showMultidevice_: Boolean,
@@ -85,12 +85,12 @@ Polymer({
    */
   ready: function() {
     // Lazy-create the drawer the first time it is opened or swiped into view.
-    listenOnce(this.$.drawer, 'open-changed', () => {
+    listenOnce(this.$.drawer, 'cr-drawer-opening', () => {
       this.$.drawerTemplate.if = true;
     });
 
     window.addEventListener('popstate', e => {
-      this.$.drawer.closeDrawer();
+      this.$.drawer.cancel();
     });
 
     CrPolicyStrings = {
@@ -137,11 +137,11 @@ Polymer({
     };
     // </if>
 
-    this.showCrostini_ = loadTimeData.valueExists('showCrostini') &&
-        loadTimeData.getBoolean('showCrostini');
     this.showAndroidApps_ = loadTimeData.valueExists('androidAppsVisible') &&
         loadTimeData.getBoolean('androidAppsVisible');
-    this.showMultidevice_ = this.showAndroidApps_ &&
+    this.showCrostini_ = loadTimeData.valueExists('showCrostini') &&
+        loadTimeData.getBoolean('showCrostini');
+    this.showMultidevice_ =
         loadTimeData.valueExists('enableMultideviceSettings') &&
         loadTimeData.getBoolean('enableMultideviceSettings');
     this.havePlayStoreApp_ = loadTimeData.valueExists('havePlayStoreApp') &&
@@ -169,6 +169,26 @@ Polymer({
     // Preload bold Roboto so it doesn't load and flicker the first time used.
     document.fonts.load('bold 12px Roboto');
     settings.setGlobalScrollTarget(this.$.container);
+
+    const scrollToTop = top => new Promise(resolve => {
+      this.$.container.scrollTo({top, behavior: 'smooth'});
+      const onScroll = () => {
+        this.debounce('scrollEnd', () => {
+          this.$.container.removeEventListener('scroll', onScroll);
+          resolve();
+        }, 75);
+      };
+      this.$.container.addEventListener('scroll', onScroll);
+    });
+    this.addEventListener('scroll-to-top', e => {
+      scrollToTop(e.detail.top).then(e.detail.callback);
+    });
+    this.addEventListener('scroll-to-bottom', e => {
+      scrollToTop(e.detail.bottom - this.$.container.clientHeight)
+          .then(e.detail.callback);
+    });
+
+    this.becomeActiveFindShortcutListener();
   },
 
   /** @override */
@@ -200,13 +220,11 @@ Polymer({
   },
 
   // Override settings.FindShortcutBehavior methods.
-  canHandleFindShortcut: function() {
-    return !this.$.drawer.open &&
-        !document.querySelector('* /deep/ cr-dialog[open]');
-  },
-
-  handleFindShortcut: function() {
+  handleFindShortcut: function(modalContextOpen) {
+    if (modalContextOpen)
+      return false;
     this.$$('cr-toolbar').getSearchField().showAndFocus();
+    return true;
   },
 
   /**
@@ -241,12 +259,11 @@ Polymer({
   },
 
   /**
-   * @param {!Event} event
+   * Called when a section is selected.
    * @private
    */
-  onIronActivate_: function(event) {
-    if (event.detail.item.id != 'advancedSubmenu')
-      this.$.drawer.closeDrawer();
+  onIronActivate_: function() {
+    this.$.drawer.close();
   },
 
   /** @private */
@@ -254,14 +271,25 @@ Polymer({
     this.$.drawer.toggle();
   },
 
-  /** @private */
-  onMenuClosed_: function() {
-    // Add tab index so that the container can be focused.
-    this.$.container.setAttribute('tabindex', '-1');
-    this.$.container.focus();
+  /**
+   * When this is called, The drawer animation is finished, and the dialog no
+   * longer has focus. The selected section will gain focus if one was selected.
+   * Otherwise, the drawer was closed due being canceled, and the main settings
+   * container is given focus. That way the arrow keys can be used to scroll
+   * the container, and pressing tab focuses a component in settings.
+   * @private
+   */
+  onMenuClose_: function() {
+    if (this.$.drawer.wasCanceled()) {
+      // Add tab index so that the container can be focused.
+      this.$.container.setAttribute('tabindex', '-1');
+      this.$.container.focus();
 
-    listenOnce(this.$.container, ['blur', 'pointerdown'], () => {
-      this.$.container.removeAttribute('tabindex');
-    });
+      listenOnce(this.$.container, ['blur', 'pointerdown'], () => {
+        this.$.container.removeAttribute('tabindex');
+      });
+    } else {
+      this.$.main.focusSection();
+    }
   },
 });

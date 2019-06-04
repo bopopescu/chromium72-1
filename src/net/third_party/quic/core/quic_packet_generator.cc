@@ -13,14 +13,14 @@
 #include "net/third_party/quic/platform/api/quic_flags.h"
 #include "net/third_party/quic/platform/api/quic_logging.h"
 
-namespace net {
+namespace quic {
 
 QuicPacketGenerator::QuicPacketGenerator(QuicConnectionId connection_id,
                                          QuicFramer* framer,
                                          QuicRandom* random_generator,
                                          DelegateInterface* delegate)
     : delegate_(delegate),
-      packet_creator_(connection_id, framer, delegate),
+      packet_creator_(connection_id, framer, random_generator, delegate),
       flusher_attached_(false),
       should_send_ack_(false),
       should_send_stop_waiting_(false),
@@ -59,7 +59,8 @@ QuicConsumedData QuicPacketGenerator::ConsumeData(QuicStreamId id,
                                                   StreamSendingState state) {
   QUIC_BUG_IF(!flusher_attached_) << "Packet flusher is not attached when "
                                      "generator tries to write stream data.";
-  bool has_handshake = (id == kCryptoStreamId);
+  bool has_handshake =
+      (id == QuicUtils::GetCryptoStreamId(packet_creator_.transport_version()));
   bool fin = state != NO_FIN;
   QUIC_BUG_IF(has_handshake && fin)
       << "Handshake packets should never send a fin";
@@ -72,7 +73,7 @@ QuicConsumedData QuicPacketGenerator::ConsumeData(QuicStreamId id,
   size_t total_bytes_consumed = 0;
   bool fin_consumed = false;
 
-  if (!packet_creator_.HasRoomForStreamFrame(id, offset)) {
+  if (!packet_creator_.HasRoomForStreamFrame(id, offset, write_length)) {
     packet_creator_.Flush();
   }
 
@@ -100,7 +101,7 @@ QuicConsumedData QuicPacketGenerator::ConsumeData(QuicStreamId id,
     }
 
     // A stream frame is created and added.
-    size_t bytes_consumed = frame.stream_frame->data_length;
+    size_t bytes_consumed = frame.stream_frame.data_length;
     total_bytes_consumed += bytes_consumed;
     fin_consumed = fin && total_bytes_consumed == write_length;
     if (fin_consumed && state == FIN_AND_PADDING) {
@@ -142,7 +143,8 @@ QuicConsumedData QuicPacketGenerator::ConsumeDataFastPath(
     QuicStreamOffset offset,
     bool fin,
     size_t total_bytes_consumed) {
-  DCHECK_NE(id, kCryptoStreamId);
+  DCHECK_NE(id,
+            QuicUtils::GetCryptoStreamId(packet_creator_.transport_version()));
 
   while (total_bytes_consumed < write_length &&
          delegate_->ShouldGeneratePacket(HAS_RETRANSMITTABLE_DATA,
@@ -320,6 +322,21 @@ QuicPacketGenerator::SerializeConnectivityProbingPacket() {
   return packet_creator_.SerializeConnectivityProbingPacket();
 }
 
+OwningSerializedPacketPointer
+QuicPacketGenerator::SerializePathChallengeConnectivityProbingPacket(
+    QuicPathFrameBuffer* payload) {
+  return packet_creator_.SerializePathChallengeConnectivityProbingPacket(
+      payload);
+}
+
+OwningSerializedPacketPointer
+QuicPacketGenerator::SerializePathResponseConnectivityProbingPacket(
+    const QuicDeque<QuicPathFrameBuffer>& payloads,
+    const bool is_padded) {
+  return packet_creator_.SerializePathResponseConnectivityProbingPacket(
+      payloads, is_padded);
+}
+
 void QuicPacketGenerator::ReserializeAllFrames(
     const QuicPendingRetransmission& retransmission,
     char* buffer,
@@ -387,4 +404,29 @@ void QuicPacketGenerator::SetCanSetTransmissionType(
   packet_creator_.set_can_set_transmission_type(can_set_transmission_type);
 }
 
-}  // namespace net
+MessageStatus QuicPacketGenerator::AddMessageFrame(QuicMessageId message_id,
+                                                   QuicStringPiece message) {
+  QUIC_BUG_IF(!flusher_attached_) << "Packet flusher is not attached when "
+                                     "generator tries to add message frame.";
+  if (message.length() > GetLargestMessagePayload()) {
+    return MESSAGE_STATUS_TOO_LARGE;
+  }
+  SendQueuedFrames(/*flush=*/false);
+  if (!packet_creator_.HasRoomForMessageFrame(message.length())) {
+    packet_creator_.Flush();
+  }
+  QuicMessageFrame* frame = new QuicMessageFrame(message_id, message);
+  const bool success = packet_creator_.AddSavedFrame(QuicFrame(frame));
+  if (!success) {
+    QUIC_BUG << "Failed to send message " << message_id;
+    delete frame;
+    return MESSAGE_STATUS_INTERNAL_ERROR;
+  }
+  return MESSAGE_STATUS_SUCCESS;
+}
+
+QuicPacketLength QuicPacketGenerator::GetLargestMessagePayload() const {
+  return packet_creator_.GetLargestMessagePayload();
+}
+
+}  // namespace quic

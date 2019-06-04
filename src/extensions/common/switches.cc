@@ -41,6 +41,11 @@ const char kEnableExperimentalExtensionApis[] =
 // Enables extensions to hide bookmarks UI elements.
 const char kEnableOverrideBookmarksUI[] = "enable-override-bookmarks-ui";
 
+// Disable the net::URLRequestThrottlerManager functionality for
+// requests originating from extensions.
+const char kDisableExtensionsHttpThrottling[] =
+    "disable-extensions-http-throttling";
+
 // Enables tab for desktop sharing.
 const char kDisableTabForDesktopShare[] = "disable-tab-for-desktop-share";
 
@@ -72,6 +77,10 @@ const char kLoadExtension[] = "load-extension";
 const char kPromptForExternalExtensions[] = "prompt-for-external-extensions";
 #endif
 
+// Set the parameters for ExtensionURLLoaderThrottleBrowserTest.
+const char kSetExtensionThrottleTestParams[] =
+    "set-extension-throttle-test-params";
+
 // Makes component extensions appear in chrome://settings/extensions.
 const char kShowComponentExtensionOptions[] =
     "show-component-extension-options";
@@ -85,18 +94,6 @@ const char kTraceAppSource[] = "enable-trace-app-source";
 // Enable package hash check: the .crx file sha256 hash sum should be equal to
 // the one received from update manifest.
 const char kEnableCrxHashCheck[] = "enable-crx-hash-check";
-
-///@name USE_NEVA_APPRUNTIME
-///@{
-// Create new process per <webview> regardless of a partition name
-const char kProcessPerGuestWebView[] =
-    "process-per-guest-webview";
-///@}
-
-// Pass application Id to browser
-#if defined(OS_WEBOS)
-const char kWebOSAppId[] = "webos-appid";
-#endif
 
 }  // namespace switches
 

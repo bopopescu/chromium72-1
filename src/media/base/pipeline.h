@@ -22,10 +22,6 @@
 #include "media/base/video_rotation.h"
 #include "ui/gfx/geometry/size.h"
 
-#if defined(USE_NEVA_MEDIA)
-#include "media/base/neva/media_platform_api.h"
-#endif
-
 namespace media {
 
 class Demuxer;
@@ -237,11 +233,6 @@ class MEDIA_EXPORT Pipeline {
 
   virtual void SetCdm(CdmContext* cdm_context,
                       const CdmAttachedCB& cdm_attached_cb) = 0;
-
-#if defined(USE_NEVA_MEDIA)
-  virtual void SetMediaPlatformAPI(
-      const scoped_refptr<MediaPlatformAPI>& media_platform_api) {}
-#endif
 };
 
 }  // namespace media

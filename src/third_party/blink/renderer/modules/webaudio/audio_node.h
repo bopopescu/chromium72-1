@@ -32,6 +32,7 @@
 #include "third_party/blink/renderer/modules/modules_export.h"
 #include "third_party/blink/renderer/platform/audio/audio_bus.h"
 #include "third_party/blink/renderer/platform/audio/audio_utilities.h"
+#include "third_party/blink/renderer/platform/heap/persistent.h"
 #include "third_party/blink/renderer/platform/wtf/forward.h"
 #include "third_party/blink/renderer/platform/wtf/thread_safe_ref_counted.h"
 #include "third_party/blink/renderer/platform/wtf/vector.h"
@@ -47,6 +48,7 @@ class AudioNodeOptions;
 class AudioNodeInput;
 class AudioNodeOutput;
 class AudioParam;
+class DeferredTaskHandler;
 class ExceptionState;
 
 // An AudioNode is the basic building block for handling audio within an
@@ -107,10 +109,11 @@ class MODULES_EXPORT AudioHandler : public ThreadSafeRefCounted<AudioHandler> {
   // Do not release resources used by an audio rendering thread in dispose().
   virtual void Dispose();
 
-  // GetNode() returns a valid object until dispose() is called.  This returns
-  // nullptr after dispose().  We must not call GetNode() in an audio rendering
-  // thread.
+  // GetNode() returns a valid object until the AudioNode is collected on the
+  // main thread, and nullptr thereafter. We must not call GetNode() in an audio
+  // rendering thread.
   AudioNode* GetNode() const;
+
   // context() returns a valid object until the BaseAudioContext dies, and
   // returns nullptr otherwise.  This always returns a valid object in an audio
   // rendering thread, and inside dispose().  We must not call context() in the
@@ -140,12 +143,12 @@ class MODULES_EXPORT AudioHandler : public ThreadSafeRefCounted<AudioHandler> {
   // when process() is called.  Subclasses will take this input data and put the
   // results in the AudioBus(s) of its AudioNodeOutput(s) (if any).
   // Called from context's audio thread.
-  virtual void Process(size_t frames_to_process) = 0;
+  virtual void Process(uint32_t frames_to_process) = 0;
 
   // Like process(), but only causes the automations to process; the
   // normal processing of the node is bypassed.  By default, we assume
   // no AudioParams need to be updated.
-  virtual void ProcessOnlyAudioParams(size_t frames_to_process){};
+  virtual void ProcessOnlyAudioParams(uint32_t frames_to_process){};
 
   // No significant resources should be allocated until initialize() is called.
   // Processing may not occur until a node is initialized.
@@ -170,7 +173,7 @@ class MODULES_EXPORT AudioHandler : public ThreadSafeRefCounted<AudioHandler> {
   // will only process once per rendering time quantum even if it's called
   // repeatedly.  This handles the case of "fanout" where an output is connected
   // to multiple AudioNode inputs.  Called from context's audio thread.
-  void ProcessIfNecessary(size_t frames_to_process);
+  void ProcessIfNecessary(uint32_t frames_to_process);
 
   // Called when a new connection has been made to one of our inputs or the
   // connection number of channels has changed.  This potentially gives us
@@ -219,8 +222,8 @@ class MODULES_EXPORT AudioHandler : public ThreadSafeRefCounted<AudioHandler> {
   void DisableOutputsIfNecessary();
   void DisableOutputs();
 
-  unsigned long ChannelCount();
-  virtual void SetChannelCount(unsigned long, ExceptionState&);
+  unsigned ChannelCount();
+  virtual void SetChannelCount(unsigned, ExceptionState&);
 
   String GetChannelCountMode();
   virtual void SetChannelCountMode(const String&, ExceptionState&);
@@ -238,10 +241,9 @@ class MODULES_EXPORT AudioHandler : public ThreadSafeRefCounted<AudioHandler> {
   void UpdateChannelCountMode();
   void UpdateChannelInterpretation();
 
-  // Default callbackBufferSize should be the render quantum size
-  virtual size_t CallbackBufferSize() const {
-    return AudioUtilities::kRenderQuantumFrames;
-  }
+  // Called when this node's outputs may have become connected or disconnected
+  // to handle automatic pull nodes.
+  virtual void UpdatePullStatusIfNeeded() {}
 
  protected:
   // Inputs and outputs must be created before the AudioHandler is
@@ -253,7 +255,7 @@ class MODULES_EXPORT AudioHandler : public ThreadSafeRefCounted<AudioHandler> {
   // connected to us to process.  Each rendering quantum, the audio data for
   // each of the AudioNode's inputs will be available after this method is
   // called.  Called from context's audio thread.
-  virtual void PullInputs(size_t frames_to_process);
+  virtual void PullInputs(uint32_t frames_to_process);
 
   // Force all inputs to take any channel interpretation changes into account.
   void UpdateChannelsForInputs();
@@ -261,14 +263,11 @@ class MODULES_EXPORT AudioHandler : public ThreadSafeRefCounted<AudioHandler> {
  private:
   void SetNodeType(NodeType);
 
-  volatile bool is_initialized_;
+  bool is_initialized_;
   NodeType node_type_;
 
-  // The owner AudioNode.  This untraced member is safe because dispose() is
-  // called before the AudioNode death, and it clears |node_|.  Do not access
-  // |node_| directly, use GetNode() instead.
-  // See http://crbug.com/404527 for the detail.
-  UntracedMember<AudioNode> node_;
+  // The owner AudioNode. Accessed only on the main thread.
+  const WeakPersistent<AudioNode> node_;
 
   // This untraced member is safe because this is cleared for all of live
   // AudioHandlers when the BaseAudioContext dies.  Do not access m_context
@@ -282,7 +281,7 @@ class MODULES_EXPORT AudioHandler : public ThreadSafeRefCounted<AudioHandler> {
   double last_processing_time_;
   double last_non_silent_time_;
 
-  volatile int connection_ref_count_;
+  int connection_ref_count_;
 
   bool is_disabled_;
 
@@ -315,18 +314,20 @@ class MODULES_EXPORT AudioNode : public EventTargetWithInlineData {
   USING_PRE_FINALIZER(AudioNode, Dispose);
 
  public:
+  ~AudioNode() override;
+
   void Trace(blink::Visitor*) override;
   AudioHandler& Handler() const;
 
-  void HandleChannelOptions(const AudioNodeOptions&, ExceptionState&);
+  void HandleChannelOptions(const AudioNodeOptions*, ExceptionState&);
 
-  virtual AudioNode* connect(AudioNode*,
-                             unsigned output_index,
-                             unsigned input_index,
-                             ExceptionState&);
+  AudioNode* connect(AudioNode*,
+                     unsigned output_index,
+                     unsigned input_index,
+                     ExceptionState&);
   void connect(AudioParam*, unsigned output_index, ExceptionState&);
   void disconnect();
-  virtual void disconnect(unsigned output_index, ExceptionState&);
+  void disconnect(unsigned output_index, ExceptionState&);
   void disconnect(AudioNode*, ExceptionState&);
   void disconnect(AudioNode*, unsigned output_index, ExceptionState&);
   void disconnect(AudioNode*,
@@ -338,8 +339,8 @@ class MODULES_EXPORT AudioNode : public EventTargetWithInlineData {
   BaseAudioContext* context() const;
   unsigned numberOfInputs() const;
   unsigned numberOfOutputs() const;
-  unsigned long channelCount() const;
-  void setChannelCount(unsigned long, ExceptionState&);
+  unsigned channelCount() const;
+  void setChannelCount(unsigned, ExceptionState&);
   String channelCountMode() const;
   void setChannelCountMode(const String&, ExceptionState&);
   String channelInterpretation() const;
@@ -351,9 +352,6 @@ class MODULES_EXPORT AudioNode : public EventTargetWithInlineData {
 
   // Called inside AudioHandler constructors.
   void DidAddOutput(unsigned number_of_outputs);
-  // Like disconnect, but no exception is thrown if the outputIndex is invalid.
-  // Just do nothing in that case.
-  void DisconnectWithoutException(unsigned output_index);
 
  protected:
   explicit AudioNode(BaseAudioContext&);
@@ -371,7 +369,12 @@ class MODULES_EXPORT AudioNode : public EventTargetWithInlineData {
   bool DisconnectFromOutputIfConnected(unsigned output_index, AudioParam&);
 
   Member<BaseAudioContext> context_;
+
+  // Needed in the destructor, where |context_| is not guaranteed to be alive.
+  scoped_refptr<DeferredTaskHandler> deferred_task_handler_;
+
   scoped_refptr<AudioHandler> handler_;
+
   // Represents audio node graph with Oilpan references. N-th HeapHashSet
   // represents a set of AudioNode objects connected to this AudioNode's N-th
   // output.

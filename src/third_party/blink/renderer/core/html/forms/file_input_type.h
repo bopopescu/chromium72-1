@@ -37,6 +37,7 @@
 #include "third_party/blink/renderer/core/html/forms/file_chooser.h"
 #include "third_party/blink/renderer/core/html/forms/input_type.h"
 #include "third_party/blink/renderer/core/html/forms/keyboard_clickable_input_type_view.h"
+#include "third_party/blink/renderer/core/page/popup_opening_observer.h"
 #include "third_party/blink/renderer/platform/heap/handle.h"
 
 namespace blink {
@@ -51,19 +52,20 @@ class CORE_EXPORT FileInputType final : public InputType,
 
  public:
   static InputType* Create(HTMLInputElement&);
+
+  FileInputType(HTMLInputElement&);
+
   void Trace(blink::Visitor*) override;
   using InputType::GetElement;
-  static Vector<FileChooserFileInfo> FilesFromFormControlState(
-      const FormControlState&);
-  static FileList* CreateFileList(const Vector<FileChooserFileInfo>& files,
-                                  bool has_webkit_directory_attr);
+  static Vector<String> FilesFromFormControlState(const FormControlState&);
+  static FileList* CreateFileList(const FileChooserFileInfoList& files,
+                                  const base::FilePath& base_dir);
 
   void CountUsage() override;
 
   void SetFilesFromPaths(const Vector<String>&) override;
 
  private:
-  FileInputType(HTMLInputElement&);
   InputTypeView* CreateView() override;
   const AtomicString& FormControlType() const override;
   FormControlState SaveFormControlState() const override;
@@ -71,7 +73,7 @@ class CORE_EXPORT FileInputType final : public InputType,
   void AppendToFormData(FormData&) const override;
   bool ValueMissing(const String&) const override;
   String ValueMissingText() const override;
-  void HandleDOMActivateEvent(Event*) override;
+  void HandleDOMActivateEvent(Event&) override;
   LayoutObject* CreateLayoutObject(const ComputedStyle&) const override;
   bool CanSetStringValue() const override;
   FileList* Files() override;
@@ -92,11 +94,16 @@ class CORE_EXPORT FileInputType final : public InputType,
   void CopyNonAttributeProperties(const HTMLInputElement&) override;
 
   // KeyboardClickableInputTypeView overrides.
-  void HandleKeypressEvent(KeyboardEvent*) override;
-  void HandleKeyupEvent(KeyboardEvent*) override;
+  void HandleKeypressEvent(KeyboardEvent&) override;
+  void HandleKeyupEvent(KeyboardEvent&) override;
 
   // FileChooserClient implementation.
-  void FilesChosen(const Vector<FileChooserFileInfo>&) override;
+  void FilesChosen(FileChooserFileInfoList files,
+                   const base::FilePath& base_dir) override;
+  LocalFrame* FrameOrNull() const override;
+
+  // PopupOpeningObserver implementation.
+  void WillOpenPopup() override;
 
   void SetFilesFromDirectory(const String&);
 

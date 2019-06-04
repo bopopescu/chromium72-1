@@ -30,11 +30,6 @@ class FingerprintStorageUnitTest : public testing::Test {
                                      records_number);
   }
 
-  void SetAuthenticationPref(bool enabled) {
-    profile_->GetPrefs()->SetBoolean(prefs::kEnableQuickUnlockFingerprint,
-                                     enabled);
-  }
-
   content::TestBrowserThreadBundle thread_bundle_;
   std::unique_ptr<TestingProfile> profile_;
 
@@ -51,8 +46,8 @@ class FingerprintStorageTestApi {
       quick_unlock::FingerprintStorage* fingerprint_storage)
       : fingerprint_storage_(fingerprint_storage) {}
 
-  bool IsFingerprintAuthenticationAvailable() const {
-    return fingerprint_storage_->IsFingerprintAuthenticationAvailable();
+  bool IsFingerprintAvailable() const {
+    return fingerprint_storage_->IsFingerprintAvailable();
   }
 
  private:
@@ -82,9 +77,8 @@ TEST_F(FingerprintStorageUnitTest, UnlockAttemptCount) {
 }
 
 // Verifies that authentication is not available when
-// 1. Authentication pref is disabled.
-// 2. No fingerprint records registered.
-// 3. Too many authentication attempts.
+// 1. No fingerprint records registered.
+// 2. Too many authentication attempts.
 TEST_F(FingerprintStorageUnitTest, AuthenticationUnAvailable) {
   quick_unlock::FingerprintStorage* fingerprint_storage =
       quick_unlock::QuickUnlockFactory::GetForProfile(profile_.get())
@@ -96,17 +90,14 @@ TEST_F(FingerprintStorageUnitTest, AuthenticationUnAvailable) {
   EXPECT_TRUE(fingerprint_storage->HasRecord());
   EXPECT_EQ(0, fingerprint_storage->unlock_attempt_count());
 
-  // Authentication pref is disabled by default.
-  EXPECT_FALSE(test_api.IsFingerprintAuthenticationAvailable());
-  SetAuthenticationPref(true /*enabled*/);
-  EXPECT_TRUE(test_api.IsFingerprintAuthenticationAvailable());
+  EXPECT_TRUE(test_api.IsFingerprintAvailable());
 
   // No fingerprint records registered makes fingerprint authentication
   // unavailable.
   SetRecords(0);
-  EXPECT_FALSE(test_api.IsFingerprintAuthenticationAvailable());
+  EXPECT_FALSE(test_api.IsFingerprintAvailable());
   SetRecords(1);
-  EXPECT_TRUE(test_api.IsFingerprintAuthenticationAvailable());
+  EXPECT_TRUE(test_api.IsFingerprintAvailable());
 
   // Too many authentication attempts make fingerprint authentication
   // unavailable.
@@ -114,9 +105,9 @@ TEST_F(FingerprintStorageUnitTest, AuthenticationUnAvailable) {
        ++i) {
     fingerprint_storage->AddUnlockAttempt();
   }
-  EXPECT_FALSE(test_api.IsFingerprintAuthenticationAvailable());
+  EXPECT_FALSE(test_api.IsFingerprintAvailable());
   fingerprint_storage->ResetUnlockAttemptCount();
-  EXPECT_TRUE(test_api.IsFingerprintAuthenticationAvailable());
+  EXPECT_TRUE(test_api.IsFingerprintAvailable());
 }
 
 }  // namespace chromeos

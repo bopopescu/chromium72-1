@@ -5,7 +5,7 @@
 #include "chrome/browser/google/google_search_domain_mixing_metrics_emitter.h"
 
 #include "base/files/scoped_temp_dir.h"
-#include "base/test/histogram_tester.h"
+#include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_task_environment.h"
 #include "base/test/simple_test_clock.h"
 #include "base/timer/mock_timer.h"
@@ -21,7 +21,8 @@ class GoogleSearchDomainMixingMetricsEmitterTest : public testing::Test {
  public:
   GoogleSearchDomainMixingMetricsEmitterTest()
       : scoped_task_environment_(
-            base::test::ScopedTaskEnvironment::MainThreadType::MOCK_TIME) {}
+            base::test::ScopedTaskEnvironment::MainThreadType::MOCK_TIME),
+        thread_bundle_(content::TestBrowserThreadBundle::PLAIN_MAINLOOP) {}
 
   void SetUp() override {
     GoogleSearchDomainMixingMetricsEmitter::RegisterProfilePrefs(
@@ -38,8 +39,7 @@ class GoogleSearchDomainMixingMetricsEmitterTest : public testing::Test {
     clock_ = clock.get();
     emitter_->SetClockForTesting(std::move(clock));
 
-    auto timer = std::make_unique<base::MockTimer>(/*retain_user_task=*/true,
-                                                   /*is_repeating=*/true);
+    auto timer = std::make_unique<base::MockRepeatingTimer>();
     timer_ = timer.get();
     emitter_->SetTimerForTesting(std::move(timer));
 
@@ -80,12 +80,13 @@ class GoogleSearchDomainMixingMetricsEmitterTest : public testing::Test {
 
  protected:
   base::test::ScopedTaskEnvironment scoped_task_environment_;
+  content::TestBrowserThreadBundle thread_bundle_;
   TestingPrefServiceSimple prefs_;
   base::ScopedTempDir history_dir_;
   std::unique_ptr<history::HistoryService> history_service_;
   std::unique_ptr<GoogleSearchDomainMixingMetricsEmitter> emitter_;
   base::SimpleTestClock* clock_;  // Not owned.
-  base::MockTimer* timer_;        // Not owned.
+  base::MockRepeatingTimer* timer_;  // Not owned.
 };
 
 TEST_F(GoogleSearchDomainMixingMetricsEmitterTest, FirstStart) {

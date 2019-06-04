@@ -16,22 +16,21 @@
 #include "components/viz/service/viz_service_export.h"
 #include "gpu/command_buffer/client/gpu_memory_buffer_manager.h"
 #include "gpu/command_buffer/common/activity_flags.h"
-#include "gpu/command_buffer/service/gpu_preferences.h"
 #include "gpu/command_buffer/service/sequence_id.h"
 #include "gpu/config/gpu_info.h"
+#include "gpu/config/gpu_preferences.h"
 #include "gpu/ipc/common/surface_handle.h"
 #include "gpu/ipc/service/gpu_channel.h"
 #include "gpu/ipc/service/gpu_channel_manager.h"
 #include "gpu/ipc/service/gpu_channel_manager_delegate.h"
 #include "gpu/ipc/service/gpu_config.h"
 #include "gpu/ipc/service/x_util.h"
+#include "gpu/vulkan/buildflags.h"
 #include "mojo/public/cpp/bindings/binding_set.h"
 #include "services/viz/privileged/interfaces/gl/gpu_host.mojom.h"
 #include "services/viz/privileged/interfaces/gl/gpu_service.mojom.h"
 #include "third_party/skia/include/core/SkRefCnt.h"
 #include "ui/gfx/native_widget_types.h"
-
-class GrContext;
 
 #if defined(OS_CHROMEOS)
 namespace arc {
@@ -44,13 +43,22 @@ class GpuMemoryBufferFactory;
 class GpuWatchdogThread;
 class Scheduler;
 class SyncPointManager;
+class VulkanImplementation;
 }  // namespace gpu
 
 namespace media {
 class MediaGpuChannelManager;
 }
 
+namespace gpu {
+namespace raster {
+struct RasterDecoderContextState;
+}  // namespace raster
+}  // namespace gpu
+
 namespace viz {
+
+class VulkanContextProvider;
 
 // This runs in the GPU process, and communicates with the gpu host (which is
 // the window server) over the mojom APIs. This is responsible for setting up
@@ -65,19 +73,32 @@ class VIZ_SERVICE_EXPORT GpuServiceImpl : public gpu::GpuChannelManagerDelegate,
                  const gpu::GpuPreferences& gpu_preferences,
                  const base::Optional<gpu::GPUInfo>& gpu_info_for_hardware_gpu,
                  const base::Optional<gpu::GpuFeatureInfo>&
-                     gpu_feature_info_for_hardware_gpu);
+                     gpu_feature_info_for_hardware_gpu,
+                 gpu::VulkanImplementation* vulkan_implementation,
+                 base::OnceClosure exit_callback);
 
   ~GpuServiceImpl() override;
 
   void UpdateGPUInfo();
 
-  void InitializeWithHost(mojom::GpuHostPtr gpu_host,
-                          gpu::GpuProcessActivityFlags activity_flags,
-                          gpu::SyncPointManager* sync_point_manager = nullptr,
-                          base::WaitableEvent* shutdown_event = nullptr);
+  void InitializeWithHost(
+      mojom::GpuHostPtr gpu_host,
+      gpu::GpuProcessActivityFlags activity_flags,
+      scoped_refptr<gl::GLSurface> default_offscreen_surface,
+      gpu::SyncPointManager* sync_point_manager = nullptr,
+      base::WaitableEvent* shutdown_event = nullptr);
   void Bind(mojom::GpuServiceRequest request);
 
-  bool CreateGrContextIfNecessary(gl::GLSurface* surface);
+  scoped_refptr<gpu::raster::RasterDecoderContextState>
+  GetContextStateForGLSurface(gl::GLSurface* surface);
+  scoped_refptr<gpu::raster::RasterDecoderContextState>
+  GetContextStateForVulkan();
+
+  // Notifies the GpuHost to stop using GPU compositing. This should be called
+  // in response to an error in the GPU process that occurred after
+  // InitializeWithHost() was called, otherwise GpuFeatureInfo should be set
+  // accordingly. This can safely be called from any thread.
+  void DisableGpuCompositing();
 
   bool is_initialized() const { return !!gpu_host_; }
 
@@ -98,8 +119,16 @@ class VIZ_SERVICE_EXPORT GpuServiceImpl : public gpu::GpuChannelManagerDelegate,
     return gpu_channel_manager_->mailbox_manager();
   }
 
+  gpu::SharedImageManager* shared_image_manager() {
+    return gpu_channel_manager_->shared_image_manager();
+  }
+
   gl::GLShareGroup* share_group() {
     return gpu_channel_manager_->share_group();
+  }
+
+  gpu::raster::GrShaderCache* gr_shader_cache() {
+    return gpu_channel_manager_->gr_shader_cache();
   }
 
   gpu::SyncPointManager* sync_point_manager() { return sync_point_manager_; }
@@ -123,8 +152,18 @@ class VIZ_SERVICE_EXPORT GpuServiceImpl : public gpu::GpuChannelManagerDelegate,
   gpu::SequenceId skia_output_surface_sequence_id() const {
     return skia_output_surface_sequence_id_;
   }
-  gl::GLContext* context_for_skia() { return context_for_skia_.get(); }
-  GrContext* gr_context() { return gr_context_.get(); }
+
+#if BUILDFLAG(ENABLE_VULKAN)
+  bool is_using_vulkan() const { return !!vulkan_context_provider_; }
+  VulkanContextProvider* vulkan_context_provider() {
+    return vulkan_context_provider_.get();
+  }
+#else
+  bool is_using_vulkan() const { return false; }
+  VulkanContextProvider* vulkan_context_provider() { return nullptr; }
+#endif
+
+  void set_oopd_enabled() { oopd_enabled_ = true; }
 
  private:
   void RecordLogMessage(int severity,
@@ -144,10 +183,10 @@ class VIZ_SERVICE_EXPORT GpuServiceImpl : public gpu::GpuChannelManagerDelegate,
   void StoreShaderToDisk(int client_id,
                          const std::string& key,
                          const std::string& shader) override;
+  void ExitProcess() override;
 #if defined(OS_WIN)
-  void SendAcceleratedSurfaceCreatedChildWindow(
-      gpu::SurfaceHandle parent_window,
-      gpu::SurfaceHandle child_window) override;
+  void SendCreatedChildWindow(gpu::SurfaceHandle parent_window,
+                              gpu::SurfaceHandle child_window) override;
 #endif
   void SetActiveURL(const GURL& url) override;
 
@@ -155,6 +194,7 @@ class VIZ_SERVICE_EXPORT GpuServiceImpl : public gpu::GpuChannelManagerDelegate,
   void EstablishGpuChannel(int32_t client_id,
                            uint64_t client_tracing_id,
                            bool is_gpu_host,
+                           bool cache_shaders_on_disk,
                            EstablishGpuChannelCallback callback) override;
   void CloseChannel(int32_t client_id) override;
 #if defined(OS_CHROMEOS)
@@ -186,19 +226,25 @@ class VIZ_SERVICE_EXPORT GpuServiceImpl : public gpu::GpuChannelManagerDelegate,
                               const gpu::SyncToken& sync_token) override;
   void GetVideoMemoryUsageStats(
       GetVideoMemoryUsageStatsCallback callback) override;
+#if defined(OS_WIN)
   void RequestCompleteGpuInfo(RequestCompleteGpuInfoCallback callback) override;
   void GetGpuSupportedRuntimeVersion(
       GetGpuSupportedRuntimeVersionCallback callback) override;
+#endif
   void RequestHDRStatus(RequestHDRStatusCallback callback) override;
-  void LoadedShader(const std::string& key, const std::string& data) override;
-  void DestroyingVideoSurface(int32_t surface_id,
-                              DestroyingVideoSurfaceCallback callback) override;
+  void LoadedShader(int32_t client_id,
+                    const std::string& key,
+                    const std::string& data) override;
   void WakeUpGpu() override;
   void GpuSwitched() override;
   void DestroyAllChannels() override;
   void OnBackgroundCleanup() override;
   void OnBackgrounded() override;
   void OnForegrounded() override;
+#if defined(OS_MACOSX)
+  void BeginCATransaction() override;
+  void CommitCATransaction(CommitCATransactionCallback callback) override;
+#endif
   void Crash() override;
   void Hang() override;
   void ThrowJavaException() override;
@@ -216,6 +262,8 @@ class VIZ_SERVICE_EXPORT GpuServiceImpl : public gpu::GpuChannelManagerDelegate,
 #endif  // defined(OS_CHROMEOS)
 
   void RequestHDRStatusOnMainThread(RequestHDRStatusCallback callback);
+
+  void OnBackgroundedOnMainThread();
 
   scoped_refptr<base::SingleThreadTaskRunner> main_runner_;
   scoped_refptr<base::SingleThreadTaskRunner> io_runner_;
@@ -251,16 +299,18 @@ class VIZ_SERVICE_EXPORT GpuServiceImpl : public gpu::GpuChannelManagerDelegate,
   // sequence id for running tasks from SkiaOutputSurface;
   gpu::SequenceId skia_output_surface_sequence_id_;
 
-  // A GLContext for |gr_context_|. It can only be accessed by Skia.
-  scoped_refptr<gl::GLContext> context_for_skia_;
-
-  // A GrContext for SkiaOutputSurface (maybe raster as well).
-  sk_sp<GrContext> gr_context_;
+#if BUILDFLAG(ENABLE_VULKAN)
+  gpu::VulkanImplementation* vulkan_implementation_;
+  scoped_refptr<VulkanContextProvider> vulkan_context_provider_;
+#endif
 
   // An event that will be signalled when we shutdown. On some platforms it
   // comes from external sources.
   std::unique_ptr<base::WaitableEvent> owned_shutdown_event_;
   base::WaitableEvent* shutdown_event_ = nullptr;
+
+  // Callback that safely exits GPU process.
+  base::OnceClosure exit_callback_;
 
   base::Time start_time_;
 
@@ -271,6 +321,8 @@ class VIZ_SERVICE_EXPORT GpuServiceImpl : public gpu::GpuChannelManagerDelegate,
 #if defined(OS_CHROMEOS)
   scoped_refptr<arc::ProtectedBufferManager> protected_buffer_manager_;
 #endif  // defined(OS_CHROMEOS)
+
+  bool oopd_enabled_ = false;
 
   base::WeakPtr<GpuServiceImpl> weak_ptr_;
   base::WeakPtrFactory<GpuServiceImpl> weak_ptr_factory_;

@@ -8,7 +8,7 @@
 #include "base/time/time.h"
 
 class PrefRegistrySimple;
-class PrefService;
+class Profile;
 
 namespace chromeos {
 
@@ -25,8 +25,12 @@ class FingerprintStorage {
   // Registers profile prefs.
   static void RegisterProfilePrefs(PrefRegistrySimple* registry);
 
-  explicit FingerprintStorage(PrefService* pref_service);
+  explicit FingerprintStorage(Profile* profile);
   ~FingerprintStorage();
+
+  // Returns true if fingerprint unlock is currently available.
+  // This does not check if strong auth is available.
+  bool IsFingerprintAvailable() const;
 
   // Returns true if the user has fingerprint record registered.
   bool HasRecord() const;
@@ -40,19 +44,13 @@ class FingerprintStorage {
   // Returns true if the user has exceeded fingerprint unlock attempts.
   bool ExceededUnlockAttempts() const;
 
-  // Returns true if user has enabled fingerprint to unlock device.
-  bool AuthenticationEnabled() const;
-
   int unlock_attempt_count() const { return unlock_attempt_count_; }
 
  private:
   friend class chromeos::FingerprintStorageTestApi;
   friend class QuickUnlockStorage;
 
-  // Returns true if fingerprint unlock is currently available.
-  bool IsFingerprintAuthenticationAvailable() const;
-
-  PrefService* pref_service_;
+  Profile* const profile_;
   // Number of fingerprint unlock attempt.
   int unlock_attempt_count_ = 0;
 

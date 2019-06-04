@@ -9,6 +9,13 @@ import os
 import shutil
 import subprocess
 import tempfile
+import time
+
+
+try:
+  StringTypes = basestring
+except NameError:
+  StringTypes = str
 
 
 _TRACING_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)),
@@ -46,24 +53,18 @@ class TraceDataPart(object):
 ANDROID_PROCESS_DATA_PART = TraceDataPart('androidProcessDump')
 ATRACE_PART = TraceDataPart('systemTraceEvents')
 ATRACE_PROCESS_DUMP_PART = TraceDataPart('atraceProcessDump')
-BATTOR_TRACE_PART = TraceDataPart('powerTraceAsString')
 CHROME_TRACE_PART = TraceDataPart('traceEvents')
 CPU_TRACE_DATA = TraceDataPart('cpuSnapshots')
 INSPECTOR_TRACE_PART = TraceDataPart('inspectorTimelineEvents')
-SURFACE_FLINGER_PART = TraceDataPart('surfaceFlinger')
-TAB_ID_PART = TraceDataPart('tabIds')
 TELEMETRY_PART = TraceDataPart('telemetry')
 WALT_TRACE_PART = TraceDataPart('waltTraceEvents')
 
 ALL_TRACE_PARTS = {ANDROID_PROCESS_DATA_PART,
                    ATRACE_PART,
                    ATRACE_PROCESS_DUMP_PART,
-                   BATTOR_TRACE_PART,
                    CHROME_TRACE_PART,
                    CPU_TRACE_DATA,
                    INSPECTOR_TRACE_PART,
-                   SURFACE_FLINGER_PART,
-                   TAB_ID_PART,
                    TELEMETRY_PART}
 
 ALL_TRACE_PARTS_RAW_NAMES = set(k.raw_field_name for k in ALL_TRACE_PARTS)
@@ -85,7 +86,7 @@ def _GetFilePathForTrace(trace, dir_path):
   if isinstance(trace, TraceFileHandle):
     return trace.file_path
   with tempfile.NamedTemporaryFile(mode='w', dir=dir_path, delete=False) as fp:
-    if isinstance(trace, basestring):
+    if isinstance(trace, StringTypes):
       fp.write(trace)
     elif isinstance(trace, dict) or isinstance(trace, list):
       json.dump(trace, fp)
@@ -165,7 +166,7 @@ class TraceData(object):
     Those include traces stored in memory & on disk. After invoking this,
     one can no longer uses this object for collecting the traces.
     """
-    for traces_list in self._raw_data.itervalues():
+    for traces_list in self._raw_data.values():
       for trace in traces_list:
         if isinstance(trace, TraceFileHandle):
           trace.Clean()
@@ -182,7 +183,7 @@ class TraceData(object):
     trace_files = []
     try:
       trace_size_data = {}
-      for part, traces_list in self._raw_data.iteritems():
+      for part, traces_list in self._raw_data.items():
         for trace in traces_list:
           path = _GetFilePathForTrace(trace, temp_dir)
           trace_size_data.setdefault(part, 0)
@@ -190,9 +191,14 @@ class TraceData(object):
           trace_files.append(path)
       logging.info('Trace sizes in bytes: %s', trace_size_data)
 
-      cmd = (['python', _TRACE2HTML_PATH] + trace_files +
-             ['--output', file_path] + ['--title', trace_title])
+      start_time = time.time()
+      cmd = (
+          ['python', _TRACE2HTML_PATH] + trace_files +
+          ['--output', file_path] + ['--title', trace_title])
       subprocess.check_output(cmd)
+
+      elapsed_time = time.time() - start_time
+      logging.info('trace2html finished in %.02f seconds.', elapsed_time)
     finally:
       shutil.rmtree(temp_dir)
 
@@ -219,7 +225,7 @@ class TraceFileHandle(object):
     self._backing_file = tempfile.NamedTemporaryFile(delete=False, mode='a')
 
   def AppendTraceData(self, partial_trace_data):
-    assert isinstance(partial_trace_data, basestring)
+    assert isinstance(partial_trace_data, StringTypes)
     self._backing_file.write(partial_trace_data)
 
   @property
@@ -272,7 +278,7 @@ class TraceDataBuilder(object):
     self._raw_data = {}
 
   def AsData(self):
-    if self._raw_data == None:
+    if self._raw_data is None:
       raise Exception('Can only AsData once')
     data = TraceData()
     data._SetFromBuilder(self._raw_data)
@@ -286,11 +292,11 @@ class TraceDataBuilder(object):
               isinstance(trace, list) or
               isinstance(trace, TraceFileHandle))
     else:
-      assert (isinstance(trace, basestring) or
+      assert (isinstance(trace, StringTypes) or
               isinstance(trace, dict) or
               isinstance(trace, list))
 
-    if self._raw_data == None:
+    if self._raw_data is None:
       raise Exception('Already called AsData() on this builder.')
 
     self._raw_data.setdefault(part.raw_field_name, [])
@@ -314,7 +320,7 @@ def CreateTraceDataFromRawData(raw_data):
 
   """
   raw_data = copy.deepcopy(raw_data)
-  if isinstance(raw_data, basestring):
+  if isinstance(raw_data, StringTypes):
     json_data = json.loads(raw_data)
   else:
     json_data = raw_data

@@ -5,7 +5,7 @@
 #ifndef THIRD_PARTY_BLINK_PUBLIC_WEB_WEB_REMOTE_FRAME_CLIENT_H_
 #define THIRD_PARTY_BLINK_PUBLIC_WEB_WEB_REMOTE_FRAME_CLIENT_H_
 
-#include "third_party/blink/public/platform/web_canvas.h"
+#include "cc/paint/paint_canvas.h"
 #include "third_party/blink/public/platform/web_focus_type.h"
 #include "third_party/blink/public/platform/web_security_origin.h"
 #include "third_party/blink/public/platform/web_touch_action.h"
@@ -13,8 +13,6 @@
 #include "third_party/blink/public/web/web_frame.h"
 
 namespace blink {
-enum class ClientRedirectPolicy;
-enum class WebFrameLoadType;
 class WebURLRequest;
 struct WebRect;
 
@@ -42,13 +40,13 @@ class WebRemoteFrameClient {
   virtual void Navigate(const WebURLRequest& request,
                         bool should_replace_current_entry,
                         mojo::ScopedMessagePipeHandle blob_url_token) {}
-  virtual void Reload(WebFrameLoadType, ClientRedirectPolicy) {}
 
   virtual void FrameRectsChanged(const WebRect& local_frame_rect,
                                  const WebRect& screen_space_rect) {}
 
   virtual void UpdateRemoteViewportIntersection(
-      const WebRect& viewport_intersection) {}
+      const WebRect& viewport_intersection,
+      bool occluded_or_obscured) {}
 
   virtual void VisibilityChanged(bool visible) {}
 
@@ -85,7 +83,9 @@ class WebRemoteFrameClient {
   // frame.
   // |canvas| is the canvas we are printing on.
   // Returns the id of the placeholder content.
-  virtual uint32_t Print(const WebRect& rect, WebCanvas* canvas) { return 0; }
+  virtual uint32_t Print(const WebRect& rect, cc::PaintCanvas* canvas) {
+    return 0;
+  }
 
  protected:
   virtual ~WebRemoteFrameClient() = default;

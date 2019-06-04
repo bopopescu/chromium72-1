@@ -11,6 +11,7 @@ from telemetry.testing import run_tests
 class MockArgs(object):
   def __init__(self):
     self.positional_args = []
+    self.test_filter = ''
     self.exact_test_filter = True
     self.run_disabled_tests = False
     self.skip = []
@@ -61,6 +62,7 @@ class RunTestsUnitTest(unittest.TestCase):
   def testSystemMacMavericks(self):
     self.assertEquals(
         set(['testAllEnabled',
+             'testAllEnabledVersion2',
              'testMacOnly',
              'testMavericksOnly',
              'testNoChromeOS',
@@ -72,6 +74,7 @@ class RunTestsUnitTest(unittest.TestCase):
   def testSystemMacLion(self):
     self.assertEquals(
         set(['testAllEnabled',
+             'testAllEnabledVersion2',
              'testMacOnly',
              'testNoChromeOS',
              'testNoMavericks',
@@ -83,6 +86,7 @@ class RunTestsUnitTest(unittest.TestCase):
   def testCrosGuestChromeOS(self):
     self.assertEquals(
         set(['testAllEnabled',
+             'testAllEnabledVersion2',
              'testChromeOSOnly',
              'testNoMac',
              'testNoMavericks',
@@ -94,6 +98,7 @@ class RunTestsUnitTest(unittest.TestCase):
   def testCanaryWindowsWin7(self):
     self.assertEquals(
         set(['testAllEnabled',
+             'testAllEnabledVersion2',
              'testNoChromeOS',
              'testNoMac',
              'testNoMavericks',
@@ -105,6 +110,7 @@ class RunTestsUnitTest(unittest.TestCase):
   def testDoesntHaveTabs(self):
     self.assertEquals(
         set(['testAllEnabled',
+             'testAllEnabledVersion2',
              'testNoChromeOS',
              'testNoMac',
              'testNoMavericks',
@@ -118,7 +124,27 @@ class RunTestsUnitTest(unittest.TestCase):
                  'telemetry.testing.disabled_cases.DisabledCases.testNoSystem']
     self.assertEquals(
         set(['testAllEnabled',
+             'testAllEnabledVersion2',
              'testNoChromeOS',
              'testWinOrLinuxOnly',
              'testHasTabs']),
         self._GetEnabledTests('canary', 'win', 'win7', True, args))
+
+  def testtPostionalArgsTestFiltering(self):
+    args = MockArgs()
+    args.positional_args = ['testAllEnabled']
+    args.exact_test_filter = False
+    self.assertEquals(
+        set(['testAllEnabled', 'testAllEnabledVersion2']),
+        self._GetEnabledTests('system', 'win', 'win7', True, args))
+
+  def testPostionalArgsTestFiltering(self):
+    args = MockArgs()
+    args.test_filter = (
+        'telemetry.testing.disabled_cases.DisabledCases.testAllEnabled::'
+        'telemetry.testing.disabled_cases.DisabledCases.testNoMavericks::'
+        'testAllEnabledVersion2')  # Partial test name won't match
+    args.exact_test_filter = False
+    self.assertEquals(
+        set(['testAllEnabled', 'testNoMavericks']),
+        self._GetEnabledTests('system', 'win', 'win7', True, args))

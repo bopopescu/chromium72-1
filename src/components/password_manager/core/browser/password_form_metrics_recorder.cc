@@ -10,6 +10,7 @@
 #include "base/metrics/histogram_macros.h"
 #include "base/metrics/user_metrics.h"
 #include "base/numerics/safe_conversions.h"
+#include "components/autofill/core/common/password_generation_util.h"
 #include "components/password_manager/core/browser/form_fetcher.h"
 #include "components/password_manager/core/browser/password_manager_metrics_util.h"
 
@@ -39,7 +40,6 @@ PasswordFormMetricsRecorder::BubbleDismissalReason GetBubbleDismissalReason(
 
     // Ignore these for metrics collection:
     case metrics_util::CLICKED_MANAGE:
-    case metrics_util::CLICKED_BRAND_NAME:
     case metrics_util::CLICKED_PASSWORDS_DASHBOARD:
     case metrics_util::AUTO_SIGNIN_TOAST_TIMEOUT:
       break;
@@ -50,11 +50,22 @@ PasswordFormMetricsRecorder::BubbleDismissalReason GetBubbleDismissalReason(
     case metrics_util::CLICKED_UNBLACKLIST_OBSOLETE:
     case metrics_util::CLICKED_CREDENTIAL_OBSOLETE:
     case metrics_util::AUTO_SIGNIN_TOAST_CLICKED_OBSOLETE:
+    case metrics_util::CLICKED_BRAND_NAME_OBSOLETE:
     case metrics_util::NUM_UI_RESPONSES:
       NOTREACHED();
       break;
   }
   return BubbleDismissalReason::kUnknown;
+}
+
+bool HasGeneratedPassword(
+    base::Optional<PasswordFormMetricsRecorder::GeneratedPasswordStatus>
+        status) {
+  return status.has_value() &&
+         (status == PasswordFormMetricsRecorder::GeneratedPasswordStatus::
+                        kPasswordAccepted ||
+          status == PasswordFormMetricsRecorder::GeneratedPasswordStatus::
+                        kPasswordEdited);
 }
 
 }  // namespace
@@ -81,7 +92,7 @@ PasswordFormMetricsRecorder::~PasswordFormMetricsRecorder() {
   }
 
   if (submit_result_ == kSubmitResultNotSubmitted) {
-    if (has_generated_password_) {
+    if (HasGeneratedPassword(generated_password_status_)) {
       metrics_util::LogPasswordGenerationSubmissionEvent(
           metrics_util::PASSWORD_NOT_SUBMITTED);
     } else if (generation_available_) {
@@ -128,10 +139,41 @@ PasswordFormMetricsRecorder::~PasswordFormMetricsRecorder() {
     }
   }
 
+  ukm_entry_builder_.SetGeneration_GeneratedPassword(
+      HasGeneratedPassword(generated_password_status_));
+  if (HasGeneratedPassword(generated_password_status_)) {
+    ukm_entry_builder_.SetGeneration_GeneratedPasswordModified(
+        generated_password_status_ !=
+        GeneratedPasswordStatus::kPasswordAccepted);
+  }
+  if (generated_password_status_.has_value()) {
+    // static cast to bypass a compilation error.
+    UMA_HISTOGRAM_ENUMERATION("PasswordGeneration.UserDecision",
+                              static_cast<GeneratedPasswordStatus>(
+                                  generated_password_status_.value()));
+  }
+
+  if (password_generation_popup_shown_ !=
+      PasswordGenerationPopupShown::kNotShown) {
+    ukm_entry_builder_.SetGeneration_PopupShown(
+        static_cast<int64_t>(password_generation_popup_shown_));
+  }
+  if (spec_priority_of_generated_password_) {
+    ukm_entry_builder_.SetGeneration_SpecPriority(
+        spec_priority_of_generated_password_.value());
+  }
+
   if (showed_manual_fallback_for_saving_) {
     ukm_entry_builder_.SetSaving_ShowedManualFallbackForSaving(
         showed_manual_fallback_for_saving_.value());
   }
+
+  if (form_changes_bitmask_) {
+    UMA_HISTOGRAM_ENUMERATION("PasswordManager.DynamicFormChanges",
+                              *form_changes_bitmask_,
+                              static_cast<uint32_t>(kMaxFormDifferencesValue));
+  }
+
   ukm_entry_builder_.Record(ukm::UkmRecorder::Get());
 }
 
@@ -139,9 +181,14 @@ void PasswordFormMetricsRecorder::MarkGenerationAvailable() {
   generation_available_ = true;
 }
 
-void PasswordFormMetricsRecorder::SetHasGeneratedPassword(
-    bool has_generated_password) {
-  has_generated_password_ = has_generated_password;
+void PasswordFormMetricsRecorder::SetGeneratedPasswordStatus(
+    GeneratedPasswordStatus status) {
+  generated_password_status_ = status;
+}
+
+void PasswordFormMetricsRecorder::ReportSpecPriorityForGeneratedPassword(
+    uint32_t spec_priority) {
+  spec_priority_of_generated_password_ = spec_priority;
 }
 
 void PasswordFormMetricsRecorder::SetManagerAction(
@@ -170,7 +217,7 @@ void PasswordFormMetricsRecorder::SetUserAction(UserAction user_action) {
 
 void PasswordFormMetricsRecorder::LogSubmitPassed() {
   if (submit_result_ != kSubmitResultFailed) {
-    if (has_generated_password_) {
+    if (HasGeneratedPassword(generated_password_status_)) {
       metrics_util::LogPasswordGenerationSubmissionEvent(
           metrics_util::PASSWORD_SUBMITTED);
     } else if (generation_available_) {
@@ -185,7 +232,7 @@ void PasswordFormMetricsRecorder::LogSubmitPassed() {
 }
 
 void PasswordFormMetricsRecorder::LogSubmitFailed() {
-  if (has_generated_password_) {
+  if (HasGeneratedPassword(generated_password_status_)) {
     metrics_util::LogPasswordGenerationSubmissionEvent(
         metrics_util::GENERATED_PASSWORD_FORCE_SAVED);
   } else if (generation_available_) {
@@ -198,13 +245,24 @@ void PasswordFormMetricsRecorder::LogSubmitFailed() {
   submit_result_ = kSubmitResultFailed;
 }
 
+void PasswordFormMetricsRecorder::SetPasswordGenerationPopupShown(
+    bool generation_popup_was_shown,
+    bool is_manual_generation) {
+  password_generation_popup_shown_ =
+      generation_popup_was_shown
+          ? (is_manual_generation
+                 ? PasswordGenerationPopupShown::kShownManually
+                 : PasswordGenerationPopupShown::kShownAutomatically)
+          : PasswordGenerationPopupShown::kNotShown;
+}
+
 void PasswordFormMetricsRecorder::SetSubmittedFormType(
     SubmittedFormType form_type) {
   submitted_form_type_ = form_type;
 }
 
 void PasswordFormMetricsRecorder::SetSubmissionIndicatorEvent(
-    autofill::PasswordForm::SubmissionIndicatorEvent event) {
+    autofill::SubmissionIndicatorEvent event) {
   ukm_entry_builder_.SetSubmission_Indicator(static_cast<int>(event));
 }
 
@@ -239,11 +297,37 @@ void PasswordFormMetricsRecorder::RecordFormSignature(
       HashFormSignature(form_signature));
 }
 
+void PasswordFormMetricsRecorder::RecordParsingsComparisonResult(
+    ParsingComparisonResult comparison_result) {
+  ukm_entry_builder_.SetParsingComparison(
+      static_cast<uint64_t>(comparison_result));
+}
+
+void PasswordFormMetricsRecorder::RecordParsingOnSavingDifference(
+    uint64_t comparison_result) {
+  ukm_entry_builder_.SetParsingOnSavingDifference(comparison_result);
+}
+
+void PasswordFormMetricsRecorder::RecordReadonlyWhenFilling(uint64_t value) {
+  ukm_entry_builder_.SetReadonlyWhenFilling(value);
+}
+
+void PasswordFormMetricsRecorder::RecordReadonlyWhenSaving(uint64_t value) {
+  ukm_entry_builder_.SetReadonlyWhenSaving(value);
+}
+
 void PasswordFormMetricsRecorder::RecordShowManualFallbackForSaving(
     bool has_generated_password,
     bool is_update) {
   showed_manual_fallback_for_saving_ =
       1 + (has_generated_password ? 2 : 0) + (is_update ? 4 : 0);
+}
+
+void PasswordFormMetricsRecorder::RecordFormChangeBitmask(uint32_t bitmask) {
+  if (!form_changes_bitmask_)
+    form_changes_bitmask_ = bitmask;
+  else
+    *form_changes_bitmask_ |= bitmask;
 }
 
 int PasswordFormMetricsRecorder::GetActionsTaken() const {

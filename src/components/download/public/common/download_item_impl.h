@@ -248,6 +248,7 @@ class COMPONENTS_DOWNLOAD_EXPORT DownloadItemImpl
   const base::FilePath& GetFullPath() const override;
   const base::FilePath& GetTargetFilePath() const override;
   const base::FilePath& GetForcedFilePath() const override;
+  base::FilePath GetTemporaryFilePath() const override;
   base::FilePath GetFileNameToReportUser() const override;
   TargetDisposition GetTargetDisposition() const override;
   const std::string& GetHash() const override;
@@ -275,6 +276,7 @@ class COMPONENTS_DOWNLOAD_EXPORT DownloadItemImpl
   base::Time GetLastAccessTime() const override;
   bool IsTransient() const override;
   bool IsParallelDownload() const override;
+  DownloadCreationType GetDownloadCreationType() const override;
   void OnContentCheckCompleted(DownloadDangerType danger_type,
                                DownloadInterruptReason reason) override;
   void SetOpenWhenComplete(bool open) override;
@@ -296,8 +298,6 @@ class COMPONENTS_DOWNLOAD_EXPORT DownloadItemImpl
   // parameters. It may be different from the DownloadCreateInfo used to create
   // the DownloadItem if Start() is being called in response for a
   // download resumption request.
-  // TODO(qinmin): Remove |url_request_context_getter| once network service is
-  // enabled.
   virtual void Start(std::unique_ptr<DownloadFile> download_file,
                      std::unique_ptr<DownloadRequestHandleInterface> req_handle,
                      const DownloadCreateInfo& new_create_info,
@@ -329,8 +329,6 @@ class COMPONENTS_DOWNLOAD_EXPORT DownloadItemImpl
   // should be considered complete.
   virtual void MarkAsComplete();
 
-  DownloadSource download_source() const { return download_source_; }
-
   // DownloadDestinationObserver
   void DestinationUpdate(
       int64_t bytes_so_far,
@@ -343,6 +341,18 @@ class COMPONENTS_DOWNLOAD_EXPORT DownloadItemImpl
   void DestinationCompleted(
       int64_t total_bytes,
       std::unique_ptr<crypto::SecureHash> hash_state) override;
+
+  void SetDelegate(DownloadItemImplDelegate* delegate);
+
+  const DownloadUrlParameters::RequestHeadersType& request_headers() const {
+    return request_headers_;
+  }
+
+  bool fetch_error_body() const { return fetch_error_body_; }
+
+  DownloadSource download_source() const { return download_source_; }
+
+  uint64_t ukm_download_id() const { return ukm_download_id_; }
 
  private:
   // Fine grained states of a download.
@@ -505,7 +515,7 @@ class COMPONENTS_DOWNLOAD_EXPORT DownloadItemImpl
   // Construction common to all constructors. |active| should be true for new
   // downloads and false for downloads from the history.
   // |download_type| indicates to the trace event what kind of download this is.
-  void Init(bool active, DownloadItem::DownloadType download_type);
+  void Init(bool active, DownloadItem::DownloadCreationType download_type);
 
   // Callback from file thread when we initialize the DownloadFile.
   void OnDownloadFileInitialized(DownloadInterruptReason result,
@@ -677,7 +687,7 @@ class COMPONENTS_DOWNLOAD_EXPORT DownloadItemImpl
   DownloadDangerType danger_type_ = DOWNLOAD_DANGER_TYPE_NOT_DANGEROUS;
 
   // The views of this item in the download shelf and download contents.
-  base::ObserverList<Observer> observers_;
+  base::ObserverList<Observer>::Unchecked observers_;
 
   // Our delegate.
   DownloadItemImplDelegate* delegate_ = nullptr;
@@ -768,6 +778,12 @@ class COMPONENTS_DOWNLOAD_EXPORT DownloadItemImpl
 
   // Source of the download, used in metrics.
   DownloadSource download_source_ = DownloadSource::UNKNOWN;
+
+  DownloadCreationType download_type_ =
+      DownloadCreationType::TYPE_ACTIVE_DOWNLOAD;
+
+  // UKM ID for reporting, default to 0 if uninitialized.
+  uint64_t ukm_download_id_ = 0;
 
   THREAD_CHECKER(thread_checker_);
 

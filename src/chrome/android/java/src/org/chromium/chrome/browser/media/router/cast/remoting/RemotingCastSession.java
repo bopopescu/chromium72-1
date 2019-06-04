@@ -17,12 +17,12 @@ import org.json.JSONObject;
 import org.chromium.base.Log;
 import org.chromium.chrome.R;
 import org.chromium.chrome.browser.media.remote.RemoteMediaPlayerWrapper;
-import org.chromium.chrome.browser.media.router.MediaController;
+import org.chromium.chrome.browser.media.router.CastSessionUtil;
+import org.chromium.chrome.browser.media.router.FlingingController;
 import org.chromium.chrome.browser.media.router.MediaSource;
 import org.chromium.chrome.browser.media.router.cast.CastMessageHandler;
 import org.chromium.chrome.browser.media.router.cast.CastSession;
 import org.chromium.chrome.browser.media.router.cast.CastSessionInfo;
-import org.chromium.chrome.browser.media.router.cast.CastSessionUtil;
 import org.chromium.chrome.browser.media.router.cast.ChromeCastSessionManager;
 import org.chromium.chrome.browser.media.ui.MediaNotificationInfo;
 import org.chromium.chrome.browser.media.ui.MediaNotificationListener;
@@ -35,6 +35,7 @@ import java.util.Set;
 /**
  * A wrapper around a RemoteMediaPlayer, used in remote playback.
  */
+// Migrated to RemotingSessionController. See https://crbug.com/711860.
 public class RemotingCastSession
         implements MediaNotificationListener, CastSession, Cast.MessageReceivedCallback {
     private static final String TAG = "MediaRouter";
@@ -48,7 +49,7 @@ public class RemotingCastSession
     private ApplicationMetadata mApplicationMetadata;
     private MediaNotificationInfo.Builder mNotificationBuilder;
     private RemoteMediaPlayerWrapper mMediaPlayerWrapper;
-    private boolean mStoppingApplication = false;
+    private boolean mStoppingApplication;
 
     public RemotingCastSession(GoogleApiClient apiClient, String sessionId,
             ApplicationMetadata metadata, String applicationStatus, CastDevice castDevice,
@@ -81,10 +82,8 @@ public class RemotingCastSession
             Log.e(TAG, "Failed to register media namespace listener", e);
         }
 
-        mMediaPlayerWrapper =
-                new RemoteMediaPlayerWrapper(mApiClient, mNotificationBuilder, mCastDevice);
-
-        mMediaPlayerWrapper.load(((RemotingMediaSource) source).getMediaUrl());
+        mMediaPlayerWrapper = new RemoteMediaPlayerWrapper(mApiClient, mNotificationBuilder,
+                mCastDevice, ((RemotingMediaSource) source).getMediaUrl());
     }
 
     /**
@@ -214,7 +213,7 @@ public class RemotingCastSession
     public void onMediaSessionAction(int action) {}
 
     @Override
-    public MediaController getMediaController() {
+    public FlingingController getFlingingController() {
         return mMediaPlayerWrapper;
     }
 }

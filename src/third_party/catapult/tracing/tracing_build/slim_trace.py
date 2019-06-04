@@ -33,10 +33,10 @@ def Main(argv):
   with codecs.open(trace_path, mode='r', encoding='utf-8') as f:
     SlimTrace(f, slimmed_trace_path)
 
-  print 'Original trace %s (%s Mb)' % (
-      trace_path, GetFileSizeInMb(trace_path))
-  print 'Slimmed trace file://%s (%s Mb)' % (
-      slimmed_trace_path, GetFileSizeInMb(slimmed_trace_path))
+  print('Original trace %s (%s Mb)' % (
+      trace_path, GetFileSizeInMb(trace_path)))
+  print('Slimmed trace file://%s (%s Mb)' % (
+      slimmed_trace_path, GetFileSizeInMb(slimmed_trace_path)))
 
 def SlimTraceEventsList(events_list):
   filtered_events = []
@@ -102,7 +102,7 @@ def SlimTrace(trace_file_handle, slimmed_trace_path):
       traces = extractor.ExtractTracesFromFile(trace_file_handle)
       break
 
-  if traces == None:
+  if traces is None:
     raise Exception('Cannot extrac trace from %s' % trace_file_handle.name)
 
   slimmed_traces = map(SlimSingleTrace, traces)

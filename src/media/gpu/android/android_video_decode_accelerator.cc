@@ -17,7 +17,7 @@
 #include "base/containers/queue.h"
 #include "base/logging.h"
 #include "base/metrics/histogram_macros.h"
-#include "base/sys_info.h"
+#include "base/system/sys_info.h"
 #include "base/task_runner_util.h"
 #include "base/threading/thread.h"
 #include "base/threading/thread_checker.h"
@@ -35,13 +35,12 @@
 #include "media/base/media_switches.h"
 #include "media/base/media_util.h"
 #include "media/base/timestamp_constants.h"
+#include "media/base/unaligned_shared_memory.h"
 #include "media/base/video_decoder_config.h"
 #include "media/gpu/android/android_video_surface_chooser_impl.h"
 #include "media/gpu/android/avda_picture_buffer_manager.h"
-#include "media/gpu/android/content_video_view_overlay.h"
 #include "media/gpu/android/device_info.h"
 #include "media/gpu/android/promotion_hint_aggregator_impl.h"
-#include "media/gpu/shared_memory_region.h"
 #include "media/media_buildflags.h"
 #include "media/mojo/buildflags.h"
 #include "media/video/picture.h"
@@ -119,13 +118,13 @@ constexpr base::TimeDelta IdleTimerTimeOut = base::TimeDelta::FromSeconds(1);
 // On low end devices (< KitKat is always low-end due to buggy MediaCodec),
 // defer the surface creation until the codec is actually used if we know no
 // software fallback exists.
-bool ShouldDeferSurfaceCreation(AVDACodecAllocator* codec_allocator,
+bool ShouldDeferSurfaceCreation(CodecAllocator* codec_allocator,
                                 const OverlayInfo& overlay_info,
                                 VideoCodec codec,
                                 DeviceInfo* device_info) {
   // TODO(liberato): We might still want to defer if we've got a routing
   // token.  It depends on whether we want to use it right away or not.
-  if (overlay_info.HasValidSurfaceId() || overlay_info.HasValidRoutingToken())
+  if (overlay_info.HasValidRoutingToken())
     return false;
 
   return codec == kCodecH264 && codec_allocator->IsAnyRegisteredAVDA() &&
@@ -247,8 +246,10 @@ static AVDAManager* GetManager() {
 AndroidVideoDecodeAccelerator::BitstreamRecord::BitstreamRecord(
     const BitstreamBuffer& bitstream_buffer)
     : buffer(bitstream_buffer) {
-  if (buffer.id() != -1)
-    memory.reset(new SharedMemoryRegion(buffer, true));
+  if (buffer.id() != -1) {
+    memory.reset(
+        new UnalignedSharedMemory(buffer.handle(), buffer.size(), true));
+  }
 }
 
 AndroidVideoDecodeAccelerator::BitstreamRecord::BitstreamRecord(
@@ -258,11 +259,12 @@ AndroidVideoDecodeAccelerator::BitstreamRecord::BitstreamRecord(
 AndroidVideoDecodeAccelerator::BitstreamRecord::~BitstreamRecord() {}
 
 AndroidVideoDecodeAccelerator::AndroidVideoDecodeAccelerator(
-    AVDACodecAllocator* codec_allocator,
+    CodecAllocator* codec_allocator,
     std::unique_ptr<AndroidVideoSurfaceChooser> surface_chooser,
     const MakeGLContextCurrentCallback& make_context_current_cb,
     const GetContextGroupCallback& get_context_group_cb,
     const AndroidOverlayMojoFactoryCB& overlay_factory_cb,
+    const CreateAbstractTextureCallback& create_abstract_texture_cb,
     DeviceInfo* device_info)
     : client_(nullptr),
       codec_allocator_(codec_allocator),
@@ -282,11 +284,13 @@ AndroidVideoDecodeAccelerator::AndroidVideoDecodeAccelerator(
           std::move(surface_chooser),
           base::CommandLine::ForCurrentProcess()->HasSwitch(
               switches::kForceVideoOverlays),
-          base::FeatureList::IsEnabled(media::kUseAndroidOverlayAggressively)),
+          base::FeatureList::IsEnabled(media::kUseAndroidOverlayAggressively),
+          false /* always_use_texture_owner */),
       device_info_(device_info),
       force_defer_surface_creation_for_testing_(false),
       force_allow_software_decoding_for_testing_(false),
       overlay_factory_cb_(overlay_factory_cb),
+      create_abstract_texture_cb_(create_abstract_texture_cb),
       weak_this_factory_(this) {}
 
 AndroidVideoDecodeAccelerator::~AndroidVideoDecodeAccelerator() {
@@ -315,7 +319,7 @@ bool AndroidVideoDecodeAccelerator::Initialize(const Config& config,
   DCHECK(thread_checker_.CalledOnValidThread());
   base::AutoReset<bool> scoper(&during_initialize_, true);
 
-  if (make_context_current_cb_.is_null() || get_context_group_cb_.is_null()) {
+  if (!make_context_current_cb_ || !get_context_group_cb_) {
     DLOG(ERROR) << "GL callbacks are required for this VDA";
     return false;
   }
@@ -375,10 +379,6 @@ bool AndroidVideoDecodeAccelerator::Initialize(const Config& config,
     return false;
   }
 
-  // SetSurface() can't be called before Initialize(), so we pick up our first
-  // surface ID from the codec configuration.
-  DCHECK(!pending_surface_id_);
-
   // We signaled that we support deferred initialization, so see if the client
   // does also.
   deferred_initialization_pending_ = config.is_deferred_initialization_allowed;
@@ -390,7 +390,6 @@ bool AndroidVideoDecodeAccelerator::Initialize(const Config& config,
                                  codec_config_->codec, device_info_)) {
     // We should never be here if a SurfaceView is required.
     // TODO(liberato): This really isn't true with AndroidOverlay.
-    DCHECK(!config_.overlay_info.HasValidSurfaceId());
     defer_surface_creation_ = true;
   }
 
@@ -448,7 +447,6 @@ void AndroidVideoDecodeAccelerator::StartSurfaceChooser() {
   // surface creation for other reasons, in which case the sync path with just
   // signal success optimistically.
   if (during_initialize_ && !deferred_initialization_pending_) {
-    DCHECK(!config_.overlay_info.HasValidSurfaceId());
     DCHECK(!config_.overlay_info.HasValidRoutingToken());
     // Note that we might still send feedback to |surface_chooser_|, which might
     // call us back.  However, it will only ever tell us to use TextureOwner,
@@ -461,11 +459,7 @@ void AndroidVideoDecodeAccelerator::StartSurfaceChooser() {
   // told not to use an overlay (kNoSurfaceID or a null routing token), then we
   // leave the factory blank.
   AndroidOverlayFactoryCB factory;
-  if (config_.overlay_info.HasValidSurfaceId()) {
-    factory = base::BindRepeating(&ContentVideoViewOverlay::Create,
-                                  config_.overlay_info.surface_id);
-  } else if (config_.overlay_info.HasValidRoutingToken() &&
-             overlay_factory_cb_) {
+  if (config_.overlay_info.HasValidRoutingToken() && overlay_factory_cb_) {
     factory = base::BindRepeating(overlay_factory_cb_,
                                   *config_.overlay_info.routing_token);
   }
@@ -655,16 +649,17 @@ bool AndroidVideoDecodeAccelerator::QueueInput() {
     return true;
   }
 
-  std::unique_ptr<SharedMemoryRegion> shm;
+  std::unique_ptr<UnalignedSharedMemory> shm;
 
   if (pending_input_buf_index_ == -1) {
     // When |pending_input_buf_index_| is not -1, the buffer is already dequeued
     // from MediaCodec, filled with data and bitstream_buffer.handle() is
     // closed.
     shm = std::move(pending_bitstream_records_.front().memory);
+    auto* buffer = &pending_bitstream_records_.front().buffer;
 
-    if (!shm->Map()) {
-      NOTIFY_ERROR(UNREADABLE_INPUT, "SharedMemoryRegion::Map() failed");
+    if (!shm->MapAt(buffer->offset(), buffer->size())) {
+      NOTIFY_ERROR(UNREADABLE_INPUT, "UnalignedSharedMemory::Map() failed");
       return false;
     }
   }
@@ -1207,19 +1202,22 @@ void AndroidVideoDecodeAccelerator::OnDrainCompleted() {
     case DRAIN_FOR_FLUSH:
       ResetCodecState();
       base::ThreadTaskRunnerHandle::Get()->PostTask(
-          FROM_HERE, base::Bind(&AndroidVideoDecodeAccelerator::NotifyFlushDone,
-                                weak_this_factory_.GetWeakPtr()));
+          FROM_HERE,
+          base::BindOnce(&AndroidVideoDecodeAccelerator::NotifyFlushDone,
+                         weak_this_factory_.GetWeakPtr()));
       break;
     case DRAIN_FOR_RESET:
       ResetCodecState();
       base::ThreadTaskRunnerHandle::Get()->PostTask(
-          FROM_HERE, base::Bind(&AndroidVideoDecodeAccelerator::NotifyResetDone,
-                                weak_this_factory_.GetWeakPtr()));
+          FROM_HERE,
+          base::BindOnce(&AndroidVideoDecodeAccelerator::NotifyResetDone,
+                         weak_this_factory_.GetWeakPtr()));
       break;
     case DRAIN_FOR_DESTROY:
       base::ThreadTaskRunnerHandle::Get()->PostTask(
-          FROM_HERE, base::Bind(&AndroidVideoDecodeAccelerator::ActualDestroy,
-                                weak_this_factory_.GetWeakPtr()));
+          FROM_HERE,
+          base::BindOnce(&AndroidVideoDecodeAccelerator::ActualDestroy,
+                         weak_this_factory_.GetWeakPtr()));
       break;
   }
   drain_type_.reset();
@@ -1286,8 +1284,9 @@ void AndroidVideoDecodeAccelerator::Reset() {
     DCHECK(pending_bitstream_records_.empty());
     DCHECK_EQ(state_, BEFORE_OVERLAY_INIT);
     base::ThreadTaskRunnerHandle::Get()->PostTask(
-        FROM_HERE, base::Bind(&AndroidVideoDecodeAccelerator::NotifyResetDone,
-                              weak_this_factory_.GetWeakPtr()));
+        FROM_HERE,
+        base::BindOnce(&AndroidVideoDecodeAccelerator::NotifyResetDone,
+                       weak_this_factory_.GetWeakPtr()));
     return;
   }
 
@@ -1336,20 +1335,15 @@ void AndroidVideoDecodeAccelerator::SetOverlayInfo(
 
   // Note that these might be kNoSurfaceID / empty.  In that case, we will
   // revoke the factory.
-  int32_t surface_id = overlay_info.surface_id;
   OverlayInfo::RoutingToken routing_token = overlay_info.routing_token;
 
   // We don't want to change the factory unless this info has actually changed.
   // We'll get the same info many times if some other part of the config is now
   // different, such as fullscreen state.
   base::Optional<AndroidOverlayFactoryCB> new_factory;
-  if (surface_id != previous_info.surface_id ||
-      routing_token != previous_info.routing_token) {
+  if (routing_token != previous_info.routing_token) {
     if (routing_token && overlay_factory_cb_)
       new_factory = base::BindRepeating(overlay_factory_cb_, *routing_token);
-    else if (surface_id != SurfaceManager::kNoSurfaceID)
-      new_factory =
-          base::BindRepeating(&ContentVideoViewOverlay::Create, surface_id);
   }
 
   surface_chooser_helper_.UpdateChooserState(new_factory);
@@ -1397,6 +1391,19 @@ const gfx::Size& AndroidVideoDecodeAccelerator::GetSize() const {
 gpu::gles2::ContextGroup* AndroidVideoDecodeAccelerator::GetContextGroup()
     const {
   return get_context_group_cb_.Run();
+}
+
+std::unique_ptr<gpu::gles2::AbstractTexture>
+AndroidVideoDecodeAccelerator::CreateAbstractTexture(GLenum target,
+                                                     GLenum internal_format,
+                                                     GLsizei width,
+                                                     GLsizei height,
+                                                     GLsizei depth,
+                                                     int border,
+                                                     GLenum format,
+                                                     GLenum type) {
+  return create_abstract_texture_cb_.Run(target, internal_format, width, height,
+                                         depth, border, format, type);
 }
 
 void AndroidVideoDecodeAccelerator::OnStopUsingOverlayImmediately(

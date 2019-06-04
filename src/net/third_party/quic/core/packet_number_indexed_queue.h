@@ -9,7 +9,7 @@
 #include "net/third_party/quic/core/quic_types.h"
 #include "net/third_party/quic/platform/api/quic_containers.h"
 
-namespace net {
+namespace quic {
 
 // PacketNumberIndexedQueue is a queue of mostly continuous numbered entries
 // which supports the following operations:
@@ -80,15 +80,14 @@ class PacketNumberIndexedQueue {
 
  private:
   // Wrapper around T used to mark whether the entry is actually in the map.
-  struct EntryWrapper {
-    T data;
+  struct EntryWrapper : T {
     bool present;
 
-    EntryWrapper() : data(), present(false) {}
+    EntryWrapper() : present(false) {}
 
     template <typename... Args>
     explicit EntryWrapper(Args&&... args)
-        : data(std::forward<Args>(args)...), present(true) {}
+        : T(std::forward<Args>(args)...), present(true) {}
   };
 
   // Cleans up unused slots in the front after removing an element.
@@ -111,7 +110,7 @@ T* PacketNumberIndexedQueue<T>::GetEntry(QuicPacketNumber packet_number) {
   if (entry == nullptr) {
     return nullptr;
   }
-  return &entry->data;
+  return entry;
 }
 
 template <typename T>
@@ -121,7 +120,7 @@ const T* PacketNumberIndexedQueue<T>::GetEntry(
   if (entry == nullptr) {
     return nullptr;
   }
-  return &entry->data;
+  return entry;
 }
 
 template <typename T>
@@ -201,6 +200,6 @@ auto PacketNumberIndexedQueue<T>::GetEntryWrapper(QuicPacketNumber offset) const
   return entry;
 }
 
-}  // namespace net
+}  // namespace quic
 
 #endif  // NET_THIRD_PARTY_QUIC_CORE_PACKET_NUMBER_INDEXED_QUEUE_H_

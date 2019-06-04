@@ -31,16 +31,6 @@ enum EventType {
   ET_TOUCH_CANCELLED,
   ET_DROP_TARGET_EVENT,
 
-  // PointerEvent types
-  ET_POINTER_DOWN,
-  ET_POINTER_MOVED,
-  ET_POINTER_UP,
-  ET_POINTER_CANCELLED,
-  ET_POINTER_ENTERED,
-  ET_POINTER_EXITED,
-  ET_POINTER_WHEEL_CHANGED,
-  ET_POINTER_CAPTURE_CHANGED,
-
   // GestureEvent types
   ET_GESTURE_SCROLL_BEGIN,
   ET_GESTURE_TYPE_START = ET_GESTURE_SCROLL_BEGIN,
@@ -153,6 +143,9 @@ enum MouseEventFlags {
   EF_PRECISION_SCROLLING_DELTA =     // Indicates this mouse event is from high
   1 << 21,                           // precision touchpad and will come with a
                                      // high precision delta.
+  EF_SCROLL_BY_PAGE = 1 << 22,       // Indicates this mouse event is generated
+                                     // when users is requesting to scroll by
+                                     // pages.
 };
 
 // Result of dispatching an event.

@@ -7,13 +7,13 @@
 
 #include "SkTypes.h"
 
-#if SK_SUPPORT_GPU
 #include "GrContext.h"
 #include "GrContextFactory.h"
 #include "GrContextPriv.h"
 #include "GrDeferredUpload.h"
 #include "GrDrawOpAtlas.h"
 #include "GrDrawingManager.h"
+#include "GrMemoryPool.h"
 #include "GrOnFlushResourceProvider.h"
 #include "GrOpFlushState.h"
 #include "GrRenderTargetContext.h"
@@ -33,8 +33,8 @@
 #include "Test.h"
 #include "ops/GrDrawOp.h"
 #include "text/GrAtlasManager.h"
-#include "text/GrAtlasTextContext.h"
-#include "text/GrTextUtils.h"
+#include "text/GrTextContext.h"
+#include "text/GrTextTarget.h"
 
 #include <memory>
 
@@ -47,7 +47,7 @@ static const int kAtlasSize = kNumPlots * kPlotSize;
 int GrDrawOpAtlas::numAllocated_TestingOnly() const {
     int count = 0;
     for (uint32_t i = 0; i < this->maxPages(); ++i) {
-        if (fProxies[i]->priv().isInstantiated()) {
+        if (fProxies[i]->isInstantiated()) {
             ++count;
         }
     }
@@ -135,8 +135,12 @@ DEF_GPUTEST_FOR_RENDERING_CONTEXTS(BasicDrawOpAtlas, reporter, ctxInfo) {
     GrOnFlushResourceProvider onFlushResourceProvider(drawingManager);
     TestingUploadTarget uploadTarget;
 
+    GrBackendFormat format =
+            context->contextPriv().caps()->getBackendFormatFromColorType(kAlpha_8_SkColorType);
+
     std::unique_ptr<GrDrawOpAtlas> atlas = GrDrawOpAtlas::Make(
                                                 proxyProvider,
+                                                format,
                                                 kAlpha_8_GrPixelConfig,
                                                 kAtlasSize, kAtlasSize,
                                                 kNumPlots, kNumPlots,
@@ -181,9 +185,14 @@ DEF_GPUTEST_FOR_RENDERING_CONTEXTS(GrAtlasTextOpPreparation, reporter, ctxInfo) 
     auto gpu = context->contextPriv().getGpu();
     auto resourceProvider = context->contextPriv().resourceProvider();
     auto drawingManager = context->contextPriv().drawingManager();
-    auto textContext = drawingManager->getAtlasTextContext();
+    auto textContext = drawingManager->getTextContext();
+    auto opMemoryPool = context->contextPriv().opMemoryPool();
 
-    auto rtc =  context->contextPriv().makeDeferredRenderTargetContext(SkBackingFit::kApprox,
+    GrBackendFormat format =
+            context->contextPriv().caps()->getBackendFormatFromColorType(kRGBA_8888_SkColorType);
+
+    auto rtc =  context->contextPriv().makeDeferredRenderTargetContext(format,
+                                                                       SkBackingFit::kApprox,
                                                                        32, 32,
                                                                        kRGBA_8888_GrPixelConfig,
                                                                        nullptr);
@@ -193,19 +202,17 @@ DEF_GPUTEST_FOR_RENDERING_CONTEXTS(GrAtlasTextOpPreparation, reporter, ctxInfo) 
     paint.setLCDRenderText(false);
     paint.setAntiAlias(false);
     paint.setSubpixelText(false);
-    GrTextUtils::Paint utilsPaint(&paint, &rtc->colorSpaceInfo());
 
     const char* text = "a";
 
-    std::unique_ptr<GrDrawOp> op = textContext->createOp_TestingOnly(context, textContext,
-                                                                     rtc.get(), paint,
-                                                                     SkMatrix::I(), text,
-                                                                     16, 16);
-    op->finalize(*context->contextPriv().caps(), nullptr, GrPixelConfigIsClamped::kNo);
+    std::unique_ptr<GrDrawOp> op = textContext->createOp_TestingOnly(
+            context, textContext, rtc.get(), paint, SkMatrix::I(), text, 16, 16);
+    op->finalize(*context->contextPriv().caps(), nullptr);
 
     TestingUploadTarget uploadTarget;
 
-    GrOpFlushState flushState(gpu, resourceProvider, uploadTarget.writeableTokenTracker());
+    GrOpFlushState flushState(gpu, resourceProvider, uploadTarget.writeableTokenTracker(), nullptr,
+                              nullptr);
     GrOpFlushState::OpArgs opArgs = {
         op.get(),
         rtc->asRenderTargetProxy(),
@@ -223,7 +230,14 @@ DEF_GPUTEST_FOR_RENDERING_CONTEXTS(GrAtlasTextOpPreparation, reporter, ctxInfo) 
     flushState.setOpArgs(&opArgs);
     op->prepare(&flushState);
     flushState.setOpArgs(nullptr);
+    opMemoryPool->release(std::move(op));
 }
 
-
-#endif
+DEF_GPUTEST(GrDrawOpAtlasConfig_Basic, reporter, options) {
+    REPORTER_ASSERT(reporter, GrDrawOpAtlasConfig::PlotsPerLongDimensionForARGB(   1) == 1);
+    REPORTER_ASSERT(reporter, GrDrawOpAtlasConfig::PlotsPerLongDimensionForARGB( 256) == 1);
+    REPORTER_ASSERT(reporter, GrDrawOpAtlasConfig::PlotsPerLongDimensionForARGB( 512) == 2);
+    REPORTER_ASSERT(reporter, GrDrawOpAtlasConfig::PlotsPerLongDimensionForARGB(1024) == 4);
+    REPORTER_ASSERT(reporter, GrDrawOpAtlasConfig::PlotsPerLongDimensionForARGB(2048) == 8);
+    REPORTER_ASSERT(reporter, GrDrawOpAtlasConfig::PlotsPerLongDimensionForARGB(4096) == 8);
+}

@@ -5,8 +5,11 @@
  * found in the LICENSE file.
  */
 
+#include "GrContextFactory.h"
+#include "GrTypes.h"
 #include "SkBitmap.h"
 #include "SkDevice.h"
+#include "SkGpuDevice.h"
 #include "SkImage.h"
 #include "SkImageInfo.h"
 #include "SkRect.h"
@@ -14,14 +17,9 @@
 #include "SkSpecialImage.h"
 #include "SkTypes.h"
 #include "Test.h"
-class SkColorSpace;
 
-#if SK_SUPPORT_GPU
-#include "GrContextFactory.h"
-#include "GrTypes.h"
-#include "SkGpuDevice.h"
+class SkColorSpace;
 class GrContext;
-#endif
 
 class DeviceTestingAccess {
 public:
@@ -78,8 +76,6 @@ DEF_TEST(SpecialImage_BitmapDevice, reporter) {
 #endif
 
 
-#if SK_SUPPORT_GPU
-
 DEF_GPUTEST_FOR_RENDERING_CONTEXTS(SpecialImage_GPUDevice, reporter, ctxInfo) {
     GrContext* context = ctxInfo.grContext();
 
@@ -131,5 +127,3 @@ DEF_GPUTEST_FOR_RENDERING_CONTEXTS(SpecialImage_GPUDevice, reporter, ctxInfo) {
     SkASSERT(2*kHeight == special->height());
     SkASSERT(SkIRect::MakeWH(2*kWidth, 2*kHeight) == special->subset());
 }
-
-#endif

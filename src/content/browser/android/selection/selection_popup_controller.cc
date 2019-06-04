@@ -49,6 +49,15 @@ SelectionPopupController::SelectionPopupController(
   wcva->set_selection_popup_controller(this);
 }
 
+SelectionPopupController::~SelectionPopupController() {
+  JNIEnv* env = AttachCurrentThread();
+  ScopedJavaLocalRef<jobject> obj = java_obj_.get(env);
+  if (!obj.is_null()) {
+    Java_SelectionPopupControllerImpl_nativeSelectionPopupControllerDestroyed(
+        env, obj);
+  }
+}
+
 ScopedJavaLocalRef<jobject> SelectionPopupController::GetContext() const {
   JNIEnv* env = AttachCurrentThread();
 
@@ -74,8 +83,7 @@ SelectionPopupController::CreateTouchHandleDrawable() {
   // the java side in CompositedTouchHandleDrawable.
   auto* view = web_contents()->GetNativeView();
   return std::unique_ptr<ui::TouchHandleDrawable>(
-      new CompositedTouchHandleDrawable(view->GetLayer(), view->GetDipScale(),
-                                        activityContext));
+      new CompositedTouchHandleDrawable(view, activityContext));
 }
 
 void SelectionPopupController::MoveRangeSelectionExtent(

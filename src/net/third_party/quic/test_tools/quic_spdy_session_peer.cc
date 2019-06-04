@@ -4,9 +4,9 @@
 
 #include "net/third_party/quic/test_tools/quic_spdy_session_peer.h"
 
-#include "net/third_party/quic/core/quic_spdy_session.h"
+#include "net/third_party/quic/core/http/quic_spdy_session.h"
 
-namespace net {
+namespace quic {
 namespace test {
 
 // static
@@ -20,7 +20,7 @@ void QuicSpdySessionPeer::SetHeadersStream(QuicSpdySession* session,
                                            QuicHeadersStream* headers_stream) {
   session->headers_stream_.reset(headers_stream);
   if (headers_stream != nullptr) {
-    session->static_streams()[headers_stream->id()] = headers_stream;
+    session->RegisterStaticStream(headers_stream->id(), headers_stream);
   }
 }
 
@@ -72,15 +72,19 @@ QuicStreamId QuicSpdySessionPeer::NextStreamId(const QuicSpdySession& session) {
 QuicStreamId QuicSpdySessionPeer::GetNthClientInitiatedStreamId(
     const QuicSpdySession& session,
     int n) {
-  return 5 + QuicSpdySessionPeer::NextStreamId(session) * n;
+  return (session.connection()->transport_version() == QUIC_VERSION_99 ? 4
+                                                                       : 5) +
+         QuicSpdySessionPeer::NextStreamId(session) * n;
 }
 
 //  static
 QuicStreamId QuicSpdySessionPeer::GetNthServerInitiatedStreamId(
     const QuicSpdySession& session,
     int n) {
-  return 2 + QuicSpdySessionPeer::NextStreamId(session) * n;
+  return (session.connection()->transport_version() == QUIC_VERSION_99 ? 1
+                                                                       : 2) +
+         QuicSpdySessionPeer::NextStreamId(session) * n;
 }
 
 }  // namespace test
-}  // namespace net
+}  // namespace quic

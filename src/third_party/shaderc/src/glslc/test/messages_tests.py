@@ -23,7 +23,7 @@ class MultipleErrors(expect.ErrorMessage):
     shader = FileShader('#version 140\nint main() {}', '.vert')
     glslc_args = ['-c', shader]
     expected_error = [
-        shader, ":2: error: 'int' :  main function cannot return a value\n",
+        shader, ":2: error: 'int' :  entry point cannot return a value\n",
         shader, ":2: error: '' : function does not return a value: main\n",
         '2 errors generated.\n']
 
@@ -84,10 +84,11 @@ class GlobalWarning(expect.WarningMessage):
     void main() {
     }
     """, '.vert')
-    glslc_args = ['-c', shader]
+    glslc_args = ['-c', '-std=400', shader]
 
     expected_warning = [
-        shader, ': warning: version 550 is unknown.\n1 warning generated.\n']
+            shader, ': warning: (version, profile) forced to be (400, none),'
+            ' while in source code it is (550, none)\n1 warning generated.\n']
 
 @inside_glslc_testsuite('ErrorMessages')
 class SuppressedGlobalWarning(expect.SuccessfulReturn):
@@ -99,7 +100,7 @@ class SuppressedGlobalWarning(expect.SuccessfulReturn):
     void main() {
     }
     """, '.vert')
-    glslc_args = ['-c', shader, '-w']
+    glslc_args = ['-c', '-std=400', shader, '-w']
 
 
 @inside_glslc_testsuite('ErrorMessages')
@@ -112,18 +113,19 @@ class GlobalWarningAsError(expect.ErrorMessage):
     void main() {
     }
     """, '.vert')
-    glslc_args = ['-c', shader, '-Werror']
+    glslc_args = ['-c', '-std=400', shader, '-Werror']
 
     expected_error= [
-        shader, ': error: version 550 is unknown.\n1 error generated.\n']
+            shader, ': error: (version, profile) forced to be (400, none),'
+            ' while in source code it is (550, none)\n1 error generated.\n']
 
 @inside_glslc_testsuite('ErrorMessages')
 class WarningOnLine(expect.WarningMessage):
     """Tests that a warning message with a file/line number is emitted."""
 
     shader = FileShader(
-        """#version 140
-    attribute float x;
+        """#version 400
+    layout(location = 0) attribute float x;
     void main() {
     }
     """, '.vert')
@@ -139,8 +141,8 @@ class SuppressedWarningOnLine(expect.SuccessfulReturn):
     presence of -w."""
 
     shader = FileShader(
-        """#version 140
-    attribute float x;
+        """#version 400
+    layout(location = 0) attribute float x;
     void main() {
     }
     """, '.vert')
@@ -152,8 +154,8 @@ class WarningOnLineAsError(expect.ErrorMessage):
     number is emitted instead of a warning."""
 
     shader = FileShader(
-        """#version 140
-    attribute float x;
+        """#version 400
+    layout(location = 0) attribute float x;
     void main() {
     }
     """, '.vert')
@@ -168,8 +170,8 @@ class WarningAndError(expect.ErrorMessage):
     """Tests that both warnings and errors are emitted together."""
 
     shader = FileShader(
-        """#version 140
-    attribute float x;
+        """#version 400
+    layout(location = 0) attribute float x;
     int main() {
     }
     """, '.vert')
@@ -178,7 +180,7 @@ class WarningAndError(expect.ErrorMessage):
     expected_error = [
         shader, ':2: warning: attribute deprecated in version 130; ',
         'may be removed in future release\n',
-        shader, ":3: error: 'int' :  main function cannot return a value\n",
+        shader, ":3: error: 'int' :  entry point cannot return a value\n",
         shader, ":3: error: '' : function does not return a value: main\n",
         '1 warning and 2 errors generated.\n']
 
@@ -187,15 +189,15 @@ class SuppressedWarningAndError(expect.ErrorMessage):
     """Tests that only warnings are suppressed in the presence of -w."""
 
     shader = FileShader(
-        """#version 140
-    attribute float x;
+        """#version 400
+    layout(location = 0) attribute float x;
     int main() {
     }
     """, '.vert')
     glslc_args = ['-c', shader, '-w']
 
     expected_error = [
-        shader, ":3: error: 'int' :  main function cannot return a value\n",
+        shader, ":3: error: 'int' :  entry point cannot return a value\n",
         shader, ":3: error: '' : function does not return a value: main\n",
         '2 errors generated.\n']
 
@@ -204,8 +206,8 @@ class WarningAsErrorAndError(expect.ErrorMessage):
     """Tests that with -Werror an warnings and errors are emitted as errors."""
 
     shader = FileShader(
-        """#version 140
-    attribute float x;
+        """#version 400
+    layout(location = 0) attribute float x;
     int main() {
     }
     """, '.vert')
@@ -214,7 +216,7 @@ class WarningAsErrorAndError(expect.ErrorMessage):
     expected_error = [
         shader, ':2: error: attribute deprecated in version 130; ',
         'may be removed in future release\n',
-        shader, ":3: error: 'int' :  main function cannot return a value\n",
+        shader, ":3: error: 'int' :  entry point cannot return a value\n",
         shader, ":3: error: '' : function does not return a value: main\n",
         '3 errors generated.\n']
 
@@ -243,8 +245,8 @@ class WarningAsErrorMultipleFiles(expect.ErrorMessage):
     """
 
     shader = FileShader(
-        """#version 140
-    attribute float x;
+        """#version 400
+    layout(location = 0) attribute float x;
     void main() {
     }
     """, '.vert')
@@ -255,21 +257,23 @@ class WarningAsErrorMultipleFiles(expect.ErrorMessage):
     }
     """, '.vert')
 
-    glslc_args = ['-c', shader, '-Werror', shader2]
+    glslc_args = ['-c', '-std=400', shader, '-Werror', shader2]
 
     expected_error = [
         shader, ':2: error: attribute deprecated in version 130; ',
         'may be removed in future release\n',
-        shader2, ': error: version 550 is unknown.\n',
+        shader2, ': error: (version, profile) forced to be (400, none),'
+            ' while in source code it is (550, none)\n',
         '2 errors generated.\n']
+
 
 @inside_glslc_testsuite('ErrorMessages')
 class SuppressedWarningAsError(expect.SuccessfulReturn):
     """Tests that nothing is returned in the presence of -w -Werror."""
 
     shader = FileShader(
-        """#version 140
-    attribute float x;
+        """#version 400
+    layout(location = 0) attribute float x;
     void main() {
     }
     """, '.vert')
@@ -280,8 +284,8 @@ class MultipleSuppressed(expect.SuccessfulReturn):
     """Tests that multiple -w arguments are supported."""
 
     shader = FileShader(
-        """#version 140
-    attribute float x;
+        """#version 400
+    layout(location = 0) attribute float x;
     void main() {
     }
     """, '.vert')
@@ -292,15 +296,15 @@ class MultipleSuppressedFiles(expect.SuccessfulReturn):
     """Tests that -w suppresses warnings from all files."""
 
     shader = FileShader(
-        """#version 140
-    attribute float x;
+        """#version 400
+    layout(location = 0) attribute float x;
     void main() {
     }
     """, '.vert')
 
     shader2 = FileShader(
-        """#version 140
-    attribute float x;
+        """#version 400
+    layout(location = 0) attribute float x;
     void main() {
     }
     """, '.vert')

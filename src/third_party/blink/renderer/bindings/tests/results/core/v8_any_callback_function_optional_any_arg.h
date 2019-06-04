@@ -8,12 +8,12 @@
 // DO NOT MODIFY!
 
 // clang-format off
-
-#ifndef V8AnyCallbackFunctionOptionalAnyArg_h
-#define V8AnyCallbackFunctionOptionalAnyArg_h
+#ifndef THIRD_PARTY_BLINK_RENDERER_BINDINGS_TESTS_RESULTS_CORE_V8_ANY_CALLBACK_FUNCTION_OPTIONAL_ANY_ARG_H_
+#define THIRD_PARTY_BLINK_RENDERER_BINDINGS_TESTS_RESULTS_CORE_V8_ANY_CALLBACK_FUNCTION_OPTIONAL_ANY_ARG_H_
 
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/platform/bindings/callback_function_base.h"
+#include "third_party/blink/renderer/platform/wtf/forward.h"
 
 namespace blink {
 
@@ -22,22 +22,27 @@ class ScriptWrappable;
 class CORE_EXPORT V8AnyCallbackFunctionOptionalAnyArg final : public CallbackFunctionBase {
  public:
   static V8AnyCallbackFunctionOptionalAnyArg* Create(v8::Local<v8::Function> callback_function) {
-    return new V8AnyCallbackFunctionOptionalAnyArg(callback_function);
+    return MakeGarbageCollected<V8AnyCallbackFunctionOptionalAnyArg>(callback_function);
   }
 
+  explicit V8AnyCallbackFunctionOptionalAnyArg(v8::Local<v8::Function> callback_function)
+      : CallbackFunctionBase(callback_function) {}
   ~V8AnyCallbackFunctionOptionalAnyArg() override = default;
+
+  // NameClient overrides:
+  const char* NameInHeapSnapshot() const override;
 
   // Performs "invoke".
   // https://heycam.github.io/webidl/#es-invoking-callback-functions
   v8::Maybe<ScriptValue> Invoke(ScriptWrappable* callback_this_value, ScriptValue optionalAnyArg) WARN_UNUSED_RESULT;
 
- private:
-  explicit V8AnyCallbackFunctionOptionalAnyArg(v8::Local<v8::Function> callback_function)
-      : CallbackFunctionBase(callback_function) {}
+  // Performs "construct".
+  // https://heycam.github.io/webidl/#construct-a-callback-function
+  v8::Maybe<ScriptValue> Construct(ScriptValue optionalAnyArg) WARN_UNUSED_RESULT;
 };
 
 template <>
-class CORE_TEMPLATE_CLASS_EXPORT V8PersistentCallbackFunction<V8AnyCallbackFunctionOptionalAnyArg> final : public V8PersistentCallbackFunctionBase {
+class V8PersistentCallbackFunction<V8AnyCallbackFunctionOptionalAnyArg> final : public V8PersistentCallbackFunctionBase {
   using V8CallbackFunction = V8AnyCallbackFunctionOptionalAnyArg;
 
  public:
@@ -46,7 +51,6 @@ class CORE_TEMPLATE_CLASS_EXPORT V8PersistentCallbackFunction<V8AnyCallbackFunct
   // Returns a wrapper-tracing version of this callback function.
   V8CallbackFunction* ToNonV8Persistent() { return Proxy(); }
 
-  CORE_EXTERN_TEMPLATE_EXPORT
   v8::Maybe<ScriptValue> Invoke(ScriptWrappable* callback_this_value, ScriptValue optionalAnyArg) WARN_UNUSED_RESULT;
 
  private:
@@ -71,4 +75,4 @@ Persistent<V8AnyCallbackFunctionOptionalAnyArg> WrapPersistent(V8AnyCallbackFunc
 
 }  // namespace blink
 
-#endif  // V8AnyCallbackFunctionOptionalAnyArg_h
+#endif  // THIRD_PARTY_BLINK_RENDERER_BINDINGS_TESTS_RESULTS_CORE_V8_ANY_CALLBACK_FUNCTION_OPTIONAL_ANY_ARG_H_

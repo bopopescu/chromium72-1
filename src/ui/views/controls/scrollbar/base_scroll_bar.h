@@ -111,7 +111,8 @@ class VIEWS_EXPORT BaseScrollBar : public ScrollBar,
 
   FRIEND_TEST_ALL_PREFIXES(ScrollBarViewsTest, ScrollBarFitsToBottom);
   FRIEND_TEST_ALL_PREFIXES(ScrollBarViewsTest, ThumbFullLengthOfTrack);
-  static base::Timer* GetHideTimerForTest(BaseScrollBar* scroll_bar);
+  static base::RetainingOneShotTimer* GetHideTimerForTest(
+      BaseScrollBar* scroll_bar);
   int GetThumbSizeForTest();
 
   // Changes to 'pushed' state and starts a timer to scroll repeatedly.
@@ -134,7 +135,7 @@ class VIEWS_EXPORT BaseScrollBar : public ScrollBar,
   // Calculates the current value of the contents offset (contents coordinates)
   // based on the current thumb position (thumb track coordinates). See
   // |ScrollToThumbPosition| for an explanation of |scroll_to_middle|.
-  int CalculateContentsOffset(int thumb_position,
+  int CalculateContentsOffset(float thumb_position,
                               bool scroll_to_middle) const;
 
   // Called when the state of the thumb track changes (e.g. by the user

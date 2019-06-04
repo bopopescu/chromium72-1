@@ -19,6 +19,10 @@ namespace base {
 class FilePath;
 }
 
+namespace crostini {
+class CrostiniRegistryService;
+}
+
 class Profile;
 
 // A class that provides an ImageSkia for UI code to use. It handles Crostini
@@ -44,7 +48,6 @@ class CrostiniAppIcon {
 
   const std::string& app_id() const { return app_id_; }
   const gfx::ImageSkia& image_skia() const { return image_skia_; }
-  Profile* profile() const { return profile_; }
 
   // Icon loading is performed in several steps. It is initiated by
   // LoadImageForScaleFactor request that specifies a required scale factor.
@@ -82,12 +85,16 @@ class CrostiniAppIcon {
   // Removed the corresponding |request| from our list.
   void DiscardDecodeRequest(DecodeRequest* request);
 
-  Profile* profile_;
+  base::WeakPtr<crostini::CrostiniRegistryService> registry_service_;
   const std::string app_id_;
   const int resource_size_in_dip_;
   Observer* const observer_;
 
   gfx::ImageSkia image_skia_;
+
+  // TODO(jkardatzke): Remove this for M-72, it's to cleanup from
+  // crbug.com/891588
+  std::set<ui::ScaleFactor> already_requested_icons_;
 
   // Contains pending image decode requests.
   std::vector<std::unique_ptr<DecodeRequest>> decode_requests_;

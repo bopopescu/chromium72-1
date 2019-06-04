@@ -22,36 +22,44 @@
 #include "rtc_base/flags.h"
 #include "rtc_base/format_macros.h"
 #include "rtc_base/ignore_wundef.h"
-#include "typedefs.h"  // NOLINT(build/include)
+#include "rtc_base/strings/string_builder.h"
 
 RTC_PUSH_IGNORING_WUNDEF()
 #include "modules/audio_processing/debug.pb.h"
 RTC_POP_IGNORING_WUNDEF()
 
 // TODO(andrew): unpack more of the data.
-DEFINE_string(input_file, "input", "The name of the input stream file.");
-DEFINE_string(output_file, "ref_out",
-              "The name of the reference output stream file.");
-DEFINE_string(reverse_file, "reverse",
-              "The name of the reverse input stream file.");
-DEFINE_string(delay_file, "delay.int32", "The name of the delay file.");
-DEFINE_string(drift_file, "drift.int32", "The name of the drift file.");
-DEFINE_string(level_file, "level.int32", "The name of the level file.");
-DEFINE_string(keypress_file, "keypress.bool", "The name of the keypress file.");
-DEFINE_string(callorder_file,
-              "callorder",
-              "The name of the render/capture call order file.");
-DEFINE_string(settings_file, "settings.txt", "The name of the settings file.");
-DEFINE_bool(full, false,
-            "Unpack the full set of files (normally not needed).");
-DEFINE_bool(raw, false, "Write raw data instead of a WAV file.");
-DEFINE_bool(text,
-            false,
-            "Write non-audio files as text files instead of binary files.");
-DEFINE_bool(help, false, "Print this message.");
+WEBRTC_DEFINE_string(input_file, "input", "The name of the input stream file.");
+WEBRTC_DEFINE_string(output_file,
+                     "ref_out",
+                     "The name of the reference output stream file.");
+WEBRTC_DEFINE_string(reverse_file,
+                     "reverse",
+                     "The name of the reverse input stream file.");
+WEBRTC_DEFINE_string(delay_file, "delay.int32", "The name of the delay file.");
+WEBRTC_DEFINE_string(drift_file, "drift.int32", "The name of the drift file.");
+WEBRTC_DEFINE_string(level_file, "level.int32", "The name of the level file.");
+WEBRTC_DEFINE_string(keypress_file,
+                     "keypress.bool",
+                     "The name of the keypress file.");
+WEBRTC_DEFINE_string(callorder_file,
+                     "callorder",
+                     "The name of the render/capture call order file.");
+WEBRTC_DEFINE_string(settings_file,
+                     "settings.txt",
+                     "The name of the settings file.");
+WEBRTC_DEFINE_bool(full,
+                   false,
+                   "Unpack the full set of files (normally not needed).");
+WEBRTC_DEFINE_bool(raw, false, "Write raw data instead of a WAV file.");
+WEBRTC_DEFINE_bool(
+    text,
+    false,
+    "Write non-audio files as text files instead of binary files.");
+WEBRTC_DEFINE_bool(help, false, "Print this message.");
 
-#define PRINT_CONFIG(field_name) \
-  if (msg.has_##field_name()) { \
+#define PRINT_CONFIG(field_name)                                         \
+  if (msg.has_##field_name()) {                                          \
     fprintf(settings_file, "  " #field_name ": %d\n", msg.field_name()); \
   }
 
@@ -69,7 +77,9 @@ using audioproc::Init;
 
 namespace {
 
-void WriteData(const void* data, size_t size, FILE* file,
+void WriteData(const void* data,
+               size_t size,
+               FILE* file,
                const std::string& filename) {
   if (fwrite(data, size, 1, file) != 1) {
     printf("Error when writing to %s\n", filename.c_str());
@@ -84,15 +94,21 @@ void WriteCallOrderData(const bool render_call,
   WriteData(&call_type, sizeof(call_type), file, filename.c_str());
 }
 
+bool WritingCallOrderFile() {
+  return FLAG_full;
+}
+
 }  // namespace
 
 int do_main(int argc, char* argv[]) {
   std::string program_name = argv[0];
-  std::string usage = "Commandline tool to unpack audioproc debug files.\n"
-    "Example usage:\n" + program_name + " debug_dump.pb\n";
+  std::string usage =
+      "Commandline tool to unpack audioproc debug files.\n"
+      "Example usage:\n" +
+      program_name + " debug_dump.pb\n";
 
-  if (rtc::FlagList::SetFlagsFromCommandLine(&argc, argv, true) ||
-      FLAG_help || argc < 2) {
+  if (rtc::FlagList::SetFlagsFromCommandLine(&argc, argv, true) || FLAG_help ||
+      argc < 2) {
     printf("%s", usage.c_str());
     if (FLAG_help) {
       rtc::FlagList::Print(nullptr, false);
@@ -118,9 +134,11 @@ int do_main(int argc, char* argv[]) {
   std::unique_ptr<RawFile> input_raw_file;
   std::unique_ptr<RawFile> output_raw_file;
 
-  std::stringstream callorder_raw_name;
+  rtc::StringBuilder callorder_raw_name;
   callorder_raw_name << FLAG_callorder_file << ".char";
-  FILE* callorder_char_file = OpenFile(callorder_raw_name.str(), "wb");
+  FILE* callorder_char_file = WritingCallOrderFile()
+                                  ? OpenFile(callorder_raw_name.str(), "wb")
+                                  : nullptr;
   FILE* settings_file = OpenFile(FLAG_settings_file, "wb");
 
   while (ReadMessageFromFile(debug_file, &event_msg)) {
@@ -133,8 +151,8 @@ int do_main(int argc, char* argv[]) {
       const ReverseStream msg = event_msg.reverse_stream();
       if (msg.has_data()) {
         if (FLAG_raw && !reverse_raw_file) {
-          reverse_raw_file.reset(new RawFile(std::string(FLAG_reverse_file) +
-                                             ".pcm"));
+          reverse_raw_file.reset(
+              new RawFile(std::string(FLAG_reverse_file) + ".pcm"));
         }
         // TODO(aluebs): Replace "num_reverse_channels *
         // reverse_samples_per_channel" with "msg.data().size() /
@@ -142,27 +160,26 @@ int do_main(int argc, char* argv[]) {
         // it into stable: https://webrtc-codereview.appspot.com/15299004/
         WriteIntData(reinterpret_cast<const int16_t*>(msg.data().data()),
                      num_reverse_channels * reverse_samples_per_channel,
-                     reverse_wav_file.get(),
-                     reverse_raw_file.get());
+                     reverse_wav_file.get(), reverse_raw_file.get());
       } else if (msg.channel_size() > 0) {
         if (FLAG_raw && !reverse_raw_file) {
-          reverse_raw_file.reset(new RawFile(std::string(FLAG_reverse_file) +
-                                             ".float"));
+          reverse_raw_file.reset(
+              new RawFile(std::string(FLAG_reverse_file) + ".float"));
         }
         std::unique_ptr<const float* []> data(
-            new const float* [num_reverse_channels]);
+            new const float*[num_reverse_channels]);
         for (size_t i = 0; i < num_reverse_channels; ++i) {
           data[i] = reinterpret_cast<const float*>(msg.channel(i).data());
         }
-        WriteFloatData(data.get(),
-                       reverse_samples_per_channel,
-                       num_reverse_channels,
-                       reverse_wav_file.get(),
+        WriteFloatData(data.get(), reverse_samples_per_channel,
+                       num_reverse_channels, reverse_wav_file.get(),
                        reverse_raw_file.get());
       }
       if (FLAG_full) {
-        WriteCallOrderData(true /* render_call */, callorder_char_file,
-                           FLAG_callorder_file);
+        if (WritingCallOrderFile()) {
+          WriteCallOrderData(true /* render_call */, callorder_char_file,
+                             FLAG_callorder_file);
+        }
       }
     } else if (event_msg.type() == Event::STREAM) {
       frame_count++;
@@ -174,60 +191,56 @@ int do_main(int argc, char* argv[]) {
       const Stream msg = event_msg.stream();
       if (msg.has_input_data()) {
         if (FLAG_raw && !input_raw_file) {
-          input_raw_file.reset(new RawFile(std::string(FLAG_input_file) +
-                                           ".pcm"));
+          input_raw_file.reset(
+              new RawFile(std::string(FLAG_input_file) + ".pcm"));
         }
         WriteIntData(reinterpret_cast<const int16_t*>(msg.input_data().data()),
                      num_input_channels * input_samples_per_channel,
-                     input_wav_file.get(),
-                     input_raw_file.get());
+                     input_wav_file.get(), input_raw_file.get());
       } else if (msg.input_channel_size() > 0) {
         if (FLAG_raw && !input_raw_file) {
-          input_raw_file.reset(new RawFile(std::string(FLAG_input_file) +
-                                           ".float"));
+          input_raw_file.reset(
+              new RawFile(std::string(FLAG_input_file) + ".float"));
         }
         std::unique_ptr<const float* []> data(
-            new const float* [num_input_channels]);
+            new const float*[num_input_channels]);
         for (size_t i = 0; i < num_input_channels; ++i) {
           data[i] = reinterpret_cast<const float*>(msg.input_channel(i).data());
         }
-        WriteFloatData(data.get(),
-                       input_samples_per_channel,
-                       num_input_channels,
-                       input_wav_file.get(),
+        WriteFloatData(data.get(), input_samples_per_channel,
+                       num_input_channels, input_wav_file.get(),
                        input_raw_file.get());
       }
 
       if (msg.has_output_data()) {
         if (FLAG_raw && !output_raw_file) {
-          output_raw_file.reset(new RawFile(std::string(FLAG_output_file) +
-                                            ".pcm"));
+          output_raw_file.reset(
+              new RawFile(std::string(FLAG_output_file) + ".pcm"));
         }
         WriteIntData(reinterpret_cast<const int16_t*>(msg.output_data().data()),
                      num_output_channels * output_samples_per_channel,
-                     output_wav_file.get(),
-                     output_raw_file.get());
+                     output_wav_file.get(), output_raw_file.get());
       } else if (msg.output_channel_size() > 0) {
         if (FLAG_raw && !output_raw_file) {
-          output_raw_file.reset(new RawFile(std::string(FLAG_output_file) +
-                                            ".float"));
+          output_raw_file.reset(
+              new RawFile(std::string(FLAG_output_file) + ".float"));
         }
         std::unique_ptr<const float* []> data(
-            new const float* [num_output_channels]);
+            new const float*[num_output_channels]);
         for (size_t i = 0; i < num_output_channels; ++i) {
           data[i] =
               reinterpret_cast<const float*>(msg.output_channel(i).data());
         }
-        WriteFloatData(data.get(),
-                       output_samples_per_channel,
-                       num_output_channels,
-                       output_wav_file.get(),
+        WriteFloatData(data.get(), output_samples_per_channel,
+                       num_output_channels, output_wav_file.get(),
                        output_raw_file.get());
       }
 
       if (FLAG_full) {
-        WriteCallOrderData(false /* render_call */, callorder_char_file,
-                           FLAG_callorder_file);
+        if (WritingCallOrderFile()) {
+          WriteCallOrderData(false /* render_call */, callorder_char_file,
+                             FLAG_callorder_file);
+        }
         if (msg.has_delay()) {
           static FILE* delay_file = OpenFile(FLAG_delay_file, "wb");
           int32_t delay = msg.delay();
@@ -294,7 +307,6 @@ int do_main(int argc, char* argv[]) {
       PRINT_CONFIG(ns_enabled);
       PRINT_CONFIG(ns_level);
       PRINT_CONFIG(transient_suppression_enabled);
-      PRINT_CONFIG(intelligibility_enhancer_enabled);
       PRINT_CONFIG(pre_amplifier_enabled);
       PRINT_CONFIG_FLOAT(pre_amplifier_fixed_gain_factor);
 
@@ -316,8 +328,7 @@ int do_main(int argc, char* argv[]) {
       int output_sample_rate = msg.output_sample_rate();
       fprintf(settings_file, "  Output sample rate: %d\n", output_sample_rate);
       int reverse_sample_rate = msg.reverse_sample_rate();
-      fprintf(settings_file,
-              "  Reverse sample rate: %d\n",
+      fprintf(settings_file, "  Reverse sample rate: %d\n",
               reverse_sample_rate);
       num_input_channels = msg.num_input_channels();
       fprintf(settings_file, "  Input channels: %" PRIuS "\n",
@@ -328,6 +339,11 @@ int do_main(int argc, char* argv[]) {
       num_reverse_channels = msg.num_reverse_channels();
       fprintf(settings_file, "  Reverse channels: %" PRIuS "\n",
               num_reverse_channels);
+      if (msg.has_timestamp_ms()) {
+        const int64_t timestamp = msg.timestamp_ms();
+        fprintf(settings_file, "  Timestamp in millisecond: %" PRId64 "\n",
+                timestamp);
+      }
 
       fprintf(settings_file, "\n");
 
@@ -340,33 +356,31 @@ int do_main(int argc, char* argv[]) {
 
       reverse_samples_per_channel =
           static_cast<size_t>(reverse_sample_rate / 100);
-      input_samples_per_channel =
-          static_cast<size_t>(input_sample_rate / 100);
+      input_samples_per_channel = static_cast<size_t>(input_sample_rate / 100);
       output_samples_per_channel =
           static_cast<size_t>(output_sample_rate / 100);
 
       if (!FLAG_raw) {
         // The WAV files need to be reset every time, because they cant change
         // their sample rate or number of channels.
-        std::stringstream reverse_name;
+        rtc::StringBuilder reverse_name;
         reverse_name << FLAG_reverse_file << frame_count << ".wav";
-        reverse_wav_file.reset(new WavWriter(reverse_name.str(),
-                                             reverse_sample_rate,
-                                             num_reverse_channels));
-        std::stringstream input_name;
+        reverse_wav_file.reset(new WavWriter(
+            reverse_name.str(), reverse_sample_rate, num_reverse_channels));
+        rtc::StringBuilder input_name;
         input_name << FLAG_input_file << frame_count << ".wav";
-        input_wav_file.reset(new WavWriter(input_name.str(),
-                                           input_sample_rate,
+        input_wav_file.reset(new WavWriter(input_name.str(), input_sample_rate,
                                            num_input_channels));
-        std::stringstream output_name;
+        rtc::StringBuilder output_name;
         output_name << FLAG_output_file << frame_count << ".wav";
-        output_wav_file.reset(new WavWriter(output_name.str(),
-                                            output_sample_rate,
-                                            num_output_channels));
+        output_wav_file.reset(new WavWriter(
+            output_name.str(), output_sample_rate, num_output_channels));
 
-        std::stringstream callorder_name;
-        callorder_name << FLAG_callorder_file << frame_count << ".char";
-        callorder_char_file = OpenFile(callorder_name.str(), "wb");
+        if (WritingCallOrderFile()) {
+          rtc::StringBuilder callorder_name;
+          callorder_name << FLAG_callorder_file << frame_count << ".char";
+          callorder_char_file = OpenFile(callorder_name.str(), "wb");
+        }
       }
     }
   }

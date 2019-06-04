@@ -8,8 +8,8 @@
 #include "base/path_service.h"
 #include "base/strings/strcat.h"
 #include "base/strings/utf_string_conversions.h"
-#include "base/task_scheduler/post_task.h"
-#include "base/task_scheduler/task_traits.h"
+#include "base/task/post_task.h"
+#include "base/task/task_traits.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/threading/thread_restrictions.h"
 #include "base/values.h"
@@ -466,7 +466,13 @@ IN_PROC_BROWSER_TEST_F(PolicyToolUITest, MAYBE_CreatingSessionFiles) {
   EXPECT_TRUE(PathExists(GetSessionPath(FILE_PATH_LITERAL("сессия"))));
 }
 
-IN_PROC_BROWSER_TEST_F(PolicyToolUITest, ImportingSession) {
+// Flaky on Win buildbots. See crbug.com/842405.
+#if defined(OS_WIN)
+#define MAYBE_ImportingSession DISABLED_ImportingSession
+#else
+#define MAYBE_ImportingSession ImportingSession
+#endif
+IN_PROC_BROWSER_TEST_F(PolicyToolUITest, MAYBE_ImportingSession) {
   ui_test_utils::NavigateToURL(browser(), GURL("chrome://policy-tool"));
 
   // Set up policy values and put them in the session file.

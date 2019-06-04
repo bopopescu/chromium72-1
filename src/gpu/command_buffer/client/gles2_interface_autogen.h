@@ -617,6 +617,21 @@ virtual void GenVertexArraysOES(GLsizei n, GLuint* arrays) = 0;
 virtual void DeleteVertexArraysOES(GLsizei n, const GLuint* arrays) = 0;
 virtual GLboolean IsVertexArrayOES(GLuint array) = 0;
 virtual void BindVertexArrayOES(GLuint array) = 0;
+virtual void FramebufferParameteri(GLenum target,
+                                   GLenum pname,
+                                   GLint param) = 0;
+virtual void BindImageTexture(GLuint unit,
+                              GLuint texture,
+                              GLint level,
+                              GLboolean layered,
+                              GLint layer,
+                              GLenum access,
+                              GLenum format) = 0;
+virtual void DispatchCompute(GLuint num_groups_x,
+                             GLuint num_groups_y,
+                             GLuint num_groups_z) = 0;
+virtual void MemoryBarrierEXT(GLbitfield barriers) = 0;
+virtual void MemoryBarrierByRegion(GLbitfield barriers) = 0;
 virtual void SwapBuffers(GLuint64 swap_id, GLbitfield flags = 0) = 0;
 virtual GLuint GetMaxValueInBufferCHROMIUM(GLuint buffer_id,
                                            GLsizei count,
@@ -711,8 +726,6 @@ virtual void CopySubTextureCHROMIUM(GLuint source_id,
                                     GLboolean unpack_flip_y,
                                     GLboolean unpack_premultiply_alpha,
                                     GLboolean unpack_unmultiply_alpha) = 0;
-virtual void CompressedCopyTextureCHROMIUM(GLuint source_id,
-                                           GLuint dest_id) = 0;
 virtual void DrawArraysInstancedANGLE(GLenum mode,
                                       GLint first,
                                       GLsizei count,
@@ -723,9 +736,7 @@ virtual void DrawElementsInstancedANGLE(GLenum mode,
                                         const void* indices,
                                         GLsizei primcount) = 0;
 virtual void VertexAttribDivisorANGLE(GLuint index, GLuint divisor) = 0;
-virtual void GenMailboxCHROMIUM(GLbyte* mailbox) = 0;
-virtual void ProduceTextureDirectCHROMIUM(GLuint texture,
-                                          const GLbyte* mailbox) = 0;
+virtual void ProduceTextureDirectCHROMIUM(GLuint texture, GLbyte* mailbox) = 0;
 virtual GLuint CreateAndConsumeTextureCHROMIUM(const GLbyte* mailbox) = 0;
 virtual void BindUniformLocationCHROMIUM(GLuint program,
                                          GLint location,
@@ -796,7 +807,8 @@ virtual void ScheduleDCLayerCHROMIUM(GLsizei num_textures,
                                      GLuint edge_aa_mask,
                                      const GLfloat* bounds_rect,
                                      GLuint filter,
-                                     bool is_protected_video) = 0;
+                                     GLuint protected_video_type) = 0;
+virtual void SetActiveURLCHROMIUM(const char* url) = 0;
 virtual void MatrixLoadfCHROMIUM(GLenum matrixMode, const GLfloat* m) = 0;
 virtual void MatrixLoadIdentityCHROMIUM(GLenum matrixMode) = 0;
 virtual GLuint GenPathsCHROMIUM(GLsizei range) = 0;
@@ -938,4 +950,18 @@ virtual GLuint CreateGpuFenceCHROMIUM() = 0;
 virtual GLuint CreateClientGpuFenceCHROMIUM(ClientGpuFence source) = 0;
 virtual void WaitGpuFenceCHROMIUM(GLuint gpu_fence_id) = 0;
 virtual void DestroyGpuFenceCHROMIUM(GLuint gpu_fence_id) = 0;
+virtual void InvalidateReadbackBufferShadowDataCHROMIUM(GLuint buffer_id) = 0;
+virtual void FramebufferTextureMultiviewLayeredANGLE(GLenum target,
+                                                     GLenum attachment,
+                                                     GLuint texture,
+                                                     GLint level,
+                                                     GLint baseViewIndex,
+                                                     GLsizei numViews) = 0;
+virtual void MaxShaderCompilerThreadsKHR(GLuint count) = 0;
+virtual GLuint CreateAndTexStorage2DSharedImageCHROMIUM(
+    GLenum internalFormat,
+    const GLbyte* mailbox) = 0;
+virtual void BeginSharedImageAccessDirectCHROMIUM(GLuint texture,
+                                                  GLenum mode) = 0;
+virtual void EndSharedImageAccessDirectCHROMIUM(GLuint texture) = 0;
 #endif  // GPU_COMMAND_BUFFER_CLIENT_GLES2_INTERFACE_AUTOGEN_H_

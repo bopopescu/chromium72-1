@@ -56,14 +56,15 @@ public final class DialogManager {
 
     /** Possible actions taken on the dialog during {@link #hide}. */
     @Retention(RetentionPolicy.SOURCE)
-    @IntDef({ACTION_NO_OP, ACTION_HIDDEN_IMMEDIATELY, ACTION_HIDING_DELAYED})
-    public @interface HideActions {}
-    /** The dialog has not been shown, so it is not being hidden. */
-    public static final int ACTION_NO_OP = 0;
-    /** {@link #mBarrierClosure} was signalled so the dialog is hidden now. */
-    public static final int ACTION_HIDDEN_IMMEDIATELY = 1;
-    /** The hiding is being delayed until {@link #mBarrierClosure} is signalled further. */
-    public static final int ACTION_HIDING_DELAYED = 2;
+    @IntDef({HideActions.NO_OP, HideActions.HIDDEN_IMMEDIATELY, HideActions.HIDING_DELAYED})
+    public @interface HideActions {
+        /** The dialog has not been shown, so it is not being hidden. */
+        int NO_OP = 0;
+        /** {@link #mBarrierClosure} was signalled so the dialog is hidden now. */
+        int HIDDEN_IMMEDIATELY = 1;
+        /** The hiding is being delayed until {@link #mBarrierClosure} is signalled further. */
+        int HIDING_DELAYED = 2;
+    }
 
     /** Interface to notify, during @{link #hide}, which action was taken. */
     public interface ActionsConsumer { void consume(@HideActions int action); }
@@ -92,10 +93,7 @@ public final class DialogManager {
         mDialogFragment.show(fragmentManager, null);
         // Initiate the barrier closure, expecting 2 runs: one automatic but delayed, and one
         // explicit, to hide the dialog.
-        // TODO(crbug.com/821377) -- remove clang-format pragmas
-        // clang-format off
         mBarrierClosure = new SingleThreadBarrierClosure(2, this::hideImmediately);
-        // clang-format on
         // This is the automatic but delayed signal.
         mDelayer.delay(mBarrierClosure);
     }
@@ -111,11 +109,11 @@ public final class DialogManager {
             @HideActions
             final int action;
             if (mBarrierClosure == null) {
-                action = ACTION_NO_OP;
+                action = HideActions.NO_OP;
             } else if (mBarrierClosure.isReady()) {
-                action = ACTION_HIDDEN_IMMEDIATELY;
+                action = HideActions.HIDDEN_IMMEDIATELY;
             } else {
-                action = ACTION_HIDING_DELAYED;
+                action = HideActions.HIDING_DELAYED;
             }
             mActionsConsumer.consume(action);
         }

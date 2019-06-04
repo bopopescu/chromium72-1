@@ -5,8 +5,9 @@
 #include "chrome/browser/android/vr/arcore_device/ar_image_transport.h"
 
 #include "base/android/android_hardware_buffer_compat.h"
+#include "base/android/scoped_hardware_buffer_handle.h"
 #include "base/containers/queue.h"
-#include "base/trace_event/trace_event_argument.h"
+#include "base/trace_event/traced_value.h"
 #include "chrome/browser/android/vr/mailbox_to_surface_bridge.h"
 #include "gpu/ipc/common/gpu_memory_buffer_impl_android_hardware_buffer.h"
 #include "ui/gfx/gpu_fence.h"
@@ -28,7 +29,7 @@ constexpr int kSharedBufferSwapChainSize = 3;
 
 }  // namespace
 
-// TODO(klausw): share this with VrShellGl.
+// TODO(klausw): share this with WebXrPresentationState.
 struct SharedFrameBuffer {
   SharedFrameBuffer() = default;
   ~SharedFrameBuffer() = default;
@@ -59,23 +60,22 @@ struct SharedFrameBufferSwapChain {
   int next_memory_buffer_id = 0;
 };
 
-ARImageTransport::ARImageTransport(
+ArImageTransport::ArImageTransport(
     std::unique_ptr<vr::MailboxToSurfaceBridge> mailbox_bridge)
     : gl_thread_task_runner_(base::ThreadTaskRunnerHandle::Get()),
       mailbox_bridge_(std::move(mailbox_bridge)),
       swap_chain_(std::make_unique<SharedFrameBufferSwapChain>()) {}
 
-ARImageTransport::~ARImageTransport() {}
+ArImageTransport::~ArImageTransport() {}
 
-bool ARImageTransport::Initialize() {
+bool ArImageTransport::Initialize() {
   DCHECK(IsOnGlThread());
 
   mailbox_bridge_->BindContextProviderToCurrentThread();
 
   glDisable(GL_DEPTH_TEST);
   glDepthMask(GL_FALSE);
-  web_vr_renderer_ = std::make_unique<vr::WebVrRenderer>();
-  vr::BaseQuadRenderer::CreateBuffers();
+  ar_renderer_ = std::make_unique<ArRenderer>();
   glGenTextures(1, &camera_texture_id_arcore_);
 
   SetupHardwareBuffers();
@@ -83,7 +83,11 @@ bool ARImageTransport::Initialize() {
   return true;
 }
 
-void ARImageTransport::ResizeSharedBuffer(const gfx::Size& size,
+GLuint ArImageTransport::GetCameraTextureId() {
+  return camera_texture_id_arcore_;
+}
+
+void ArImageTransport::ResizeSharedBuffer(const gfx::Size& size,
                                           SharedFrameBuffer* buffer) {
   DCHECK(IsOnGlThread());
 
@@ -122,9 +126,9 @@ void ARImageTransport::ResizeSharedBuffer(const gfx::Size& size,
 
   auto img = base::MakeRefCounted<gl::GLImageAHardwareBuffer>(size);
 
-  AHardwareBuffer* ahb =
-      buffer->shared_gpu_memory_buffer->GetHandle().android_hardware_buffer;
-  bool ret = img->Initialize(ahb, false /* preserved */);
+  base::android::ScopedHardwareBufferHandle ahb =
+      buffer->shared_gpu_memory_buffer->CloneHandle().android_hardware_buffer;
+  bool ret = img->Initialize(ahb.get(), false /* preserved */);
   if (!ret) {
     DLOG(WARNING) << __FUNCTION__ << ": ERROR: failed to initialize image!";
     return;
@@ -139,7 +143,7 @@ void ARImageTransport::ResizeSharedBuffer(const gfx::Size& size,
   buffer->size = size;
 }
 
-void ARImageTransport::SetupHardwareBuffers() {
+void ArImageTransport::SetupHardwareBuffers() {
   DCHECK(IsOnGlThread());
 
   glGenFramebuffersEXT(1, &camera_fbo_);
@@ -148,14 +152,10 @@ void ARImageTransport::SetupHardwareBuffers() {
     std::unique_ptr<SharedFrameBuffer> buffer =
         std::make_unique<SharedFrameBuffer>();
     // Remote resources
-    std::unique_ptr<gpu::MailboxHolder> holder =
-        std::make_unique<gpu::MailboxHolder>();
-    mailbox_bridge_->GenerateMailbox(holder->mailbox);
-    holder->texture_target = GL_TEXTURE_2D;
-    buffer->mailbox_holder = std::move(holder);
-
+    buffer->mailbox_holder = std::make_unique<gpu::MailboxHolder>();
+    buffer->mailbox_holder->texture_target = GL_TEXTURE_2D;
     buffer->remote_texture_id =
-        mailbox_bridge_->CreateMailboxTexture(buffer->mailbox_holder->mailbox);
+        mailbox_bridge_->CreateMailboxTexture(&buffer->mailbox_holder->mailbox);
 
     // Local resources
     glGenTextures(1, &buffer->local_texture_id);
@@ -167,7 +167,7 @@ void ARImageTransport::SetupHardwareBuffers() {
   glGenFramebuffersEXT(1, &transfer_fbo_);
 }
 
-gpu::MailboxHolder ARImageTransport::TransferFrame(
+gpu::MailboxHolder ArImageTransport::TransferFrame(
     const gfx::Size& frame_size,
     const gfx::Transform& uv_transform) {
   DCHECK(IsOnGlThread());
@@ -195,7 +195,7 @@ gpu::MailboxHolder ARImageTransport::TransferFrame(
 
   // Don't need face culling, depth testing, blending, etc. Turn it all off.
   // TODO(klausw): see if we can do this one time on initialization. That would
-  // be a tiny bit more efficient, but is only safe if ARCore and WebVrRenderer
+  // be a tiny bit more efficient, but is only safe if ARCore and ArRenderer
   // don't modify these states.
   glDisable(GL_CULL_FACE);
   glDisable(GL_SCISSOR_TEST);
@@ -206,7 +206,7 @@ gpu::MailboxHolder ARImageTransport::TransferFrame(
   // Draw the ARCore texture!
   float uv_transform_floats[16];
   uv_transform.matrix().asColMajorf(uv_transform_floats);
-  web_vr_renderer_->Draw(camera_texture_id_arcore_, uv_transform_floats, 0, 0);
+  ar_renderer_->Draw(camera_texture_id_arcore_, uv_transform_floats, 0, 0);
 
   glBindFramebufferEXT(GL_DRAW_FRAMEBUFFER, 0);
 
@@ -224,8 +224,13 @@ gpu::MailboxHolder ARImageTransport::TransferFrame(
   return rendered_frame_holder;
 }
 
-bool ARImageTransport::IsOnGlThread() const {
+bool ArImageTransport::IsOnGlThread() const {
   return gl_thread_task_runner_->BelongsToCurrentThread();
+}
+
+std::unique_ptr<ArImageTransport> ArImageTransportFactory::Create(
+    std::unique_ptr<vr::MailboxToSurfaceBridge> mailbox_bridge) {
+  return std::make_unique<ArImageTransport>(std::move(mailbox_bridge));
 }
 
 }  // namespace device

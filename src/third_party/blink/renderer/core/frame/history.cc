@@ -25,19 +25,20 @@
 
 #include "third_party/blink/renderer/core/frame/history.h"
 
-#include "third_party/blink/renderer/bindings/core/v8/exception_state.h"
 #include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/execution_context/execution_context.h"
 #include "third_party/blink/renderer/core/frame/frame_console.h"
 #include "third_party/blink/renderer/core/frame/local_frame.h"
 #include "third_party/blink/renderer/core/frame/local_frame_client.h"
 #include "third_party/blink/renderer/core/frame/settings.h"
+#include "third_party/blink/renderer/core/frame/use_counter.h"
 #include "third_party/blink/renderer/core/inspector/console_message.h"
 #include "third_party/blink/renderer/core/loader/document_loader.h"
 #include "third_party/blink/renderer/core/loader/frame_loader.h"
 #include "third_party/blink/renderer/core/loader/history_item.h"
 #include "third_party/blink/renderer/core/loader/navigation_scheduler.h"
 #include "third_party/blink/renderer/core/page/page.h"
+#include "third_party/blink/renderer/platform/bindings/exception_state.h"
 #include "third_party/blink/renderer/platform/bindings/script_state.h"
 #include "third_party/blink/renderer/platform/weborigin/kurl.h"
 #include "third_party/blink/renderer/platform/weborigin/security_origin.h"
@@ -134,36 +135,21 @@ String History::scrollRestoration(ExceptionState& exception_state) {
 }
 
 HistoryScrollRestorationType History::ScrollRestorationInternal() const {
-  HistoryItem* history_item =
-      GetFrame() ? GetFrame()->Loader().GetDocumentLoader()->GetHistoryItem()
-                 : nullptr;
-  return history_item ? history_item->ScrollRestorationType()
-                      : kScrollRestorationAuto;
-}
+  constexpr HistoryScrollRestorationType default_type = kScrollRestorationAuto;
 
-// TODO(crbug.com/394296): This is not the long-term fix to IPC flooding that we
-// need. However, it does somewhat mitigate the immediate concern of |pushState|
-// and |replaceState| DoS (assuming the renderer has not been compromised).
-bool History::ShouldThrottleStateObjectChanges() {
-  if (!GetFrame()->GetSettings()->GetShouldThrottlePushState())
-    return false;
+  LocalFrame* frame = GetFrame();
+  if (!frame)
+    return default_type;
 
-  const int kStateUpdateLimit = 50;
+  DocumentLoader* document_loader = frame->Loader().GetDocumentLoader();
+  if (!document_loader)
+    return default_type;
 
-  if (state_flood_guard.count > kStateUpdateLimit) {
-    static constexpr auto kStateUpdateLimitResetInterval =
-        TimeDelta::FromSeconds(10);
-    const auto now = CurrentTimeTicks();
-    if (now - state_flood_guard.last_updated > kStateUpdateLimitResetInterval) {
-      state_flood_guard.count = 0;
-      state_flood_guard.last_updated = now;
-      return false;
-    }
-    return true;
-  }
+  HistoryItem* history_item = document_loader->GetHistoryItem();
+  if (!history_item)
+    return default_type;
 
-  state_flood_guard.count++;
-  return false;
+  return history_item->ScrollRestorationType();
 }
 
 bool History::stateChanged() const {
@@ -194,7 +180,8 @@ void History::go(ScriptState* script_state,
   }
 
   DCHECK(IsMainThread());
-  Document* active_document = ToDocument(ExecutionContext::From(script_state));
+  Document* active_document =
+      To<Document>(ExecutionContext::From(script_state));
   if (!active_document)
     return;
 
@@ -205,6 +192,9 @@ void History::go(ScriptState* script_state,
     return;
   }
 
+  if (!GetFrame()->navigation_rate_limiter().CanProceed())
+    return;
+
   if (delta) {
     GetFrame()->Client()->NavigateBackForward(delta);
   } else {
@@ -212,7 +202,7 @@ void History::go(ScriptState* script_state,
     // Otherwise, navigation happens on the root frame.
     // This behavior is designed in the following spec.
     // https://html.spec.whatwg.org/multipage/browsers.html#dom-history-go
-    GetFrame()->Reload(kFrameLoadTypeReload,
+    GetFrame()->Reload(WebFrameLoadType::kReload,
                        ClientRedirectPolicy::kClientRedirect);
   }
 }
@@ -222,7 +212,17 @@ void History::pushState(scoped_refptr<SerializedScriptValue> data,
                         const String& url,
                         ExceptionState& exception_state) {
   StateObjectAdded(std::move(data), title, url, ScrollRestorationInternal(),
-                   kFrameLoadTypeStandard, exception_state);
+                   WebFrameLoadType::kStandard, exception_state);
+  UseCounter::Count(GetFrame(), WebFeature::kHistoryPushState);
+}
+
+void History::replaceState(scoped_refptr<SerializedScriptValue> data,
+                           const String& title,
+                           const String& url,
+                           ExceptionState& exception_state) {
+  StateObjectAdded(std::move(data), title, url, ScrollRestorationInternal(),
+                   WebFrameLoadType::kReplaceCurrentItem, exception_state);
+  UseCounter::Count(GetFrame(), WebFeature::kHistoryReplaceState);
 }
 
 KURL History::UrlForState(const String& url_string) {
@@ -248,7 +248,7 @@ bool History::CanChangeToUrl(const KURL& url,
   // We allow sandboxed documents, `data:`/`file:` URLs, etc. to use
   // 'pushState'/'replaceState' to modify the URL fragment: see
   // https://crbug.com/528681 for the compatibility concerns.
-  if (document_origin->IsUnique() || document_origin->IsLocal())
+  if (document_origin->IsOpaque() || document_origin->IsLocal())
     return EqualIgnoringQueryAndFragment(url, document_url);
 
   if (!EqualIgnoringPathQueryAndFragment(url, document_url))
@@ -256,7 +256,7 @@ bool History::CanChangeToUrl(const KURL& url,
 
   scoped_refptr<const SecurityOrigin> requested_origin =
       SecurityOrigin::Create(url);
-  if (requested_origin->IsUnique() ||
+  if (requested_origin->IsOpaque() ||
       !requested_origin->IsSameSchemeHostPort(document_origin)) {
     return false;
   }
@@ -268,7 +268,7 @@ void History::StateObjectAdded(scoped_refptr<SerializedScriptValue> data,
                                const String& /* title */,
                                const String& url_string,
                                HistoryScrollRestorationType restoration_type,
-                               FrameLoadType type,
+                               WebFrameLoadType type,
                                ExceptionState& exception_state) {
   if (!GetFrame() || !GetFrame()->GetPage() ||
       !GetFrame()->Loader().GetDocumentLoader()) {
@@ -292,19 +292,14 @@ void History::StateObjectAdded(scoped_refptr<SerializedScriptValue> data,
     return;
   }
 
-  if (ShouldThrottleStateObjectChanges()) {
+  if (!GetFrame()->navigation_rate_limiter().CanProceed()) {
     // TODO(769592): Get an API spec change so that we can throw an exception:
     //
-    //  exception_state.ThrowDOMException(kQuotaExceededError,
+    //  exception_state.ThrowDOMException(DOMExceptionCode::kQuotaExceededError,
     //                                    "Throttling history state changes to "
     //                                    "prevent the browser from hanging.");
     //
     // instead of merely warning.
-
-    GetFrame()->Console().AddMessage(
-        ConsoleMessage::Create(kJSMessageSource, kWarningMessageLevel,
-                               "Throttling history state changes to prevent "
-                               "the browser from hanging."));
     return;
   }
 

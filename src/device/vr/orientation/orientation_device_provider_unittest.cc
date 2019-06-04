@@ -38,13 +38,12 @@ class VROrientationDeviceProviderTest : public testing::Test {
         mojo::MakeRequest(&sensor_ptr_));
     shared_buffer_handle_ = mojo::SharedBufferHandle::Create(
         sizeof(SensorReadingSharedBuffer) *
-        static_cast<uint64_t>(mojom::SensorType::LAST));
+        (static_cast<uint64_t>(mojom::SensorType::kMaxValue) + 1));
 
     service_manager::mojom::ConnectorRequest request;
     connector_ = service_manager::Connector::Create(&request);
-    service_manager::Connector::TestApi test_api(connector_.get());
-    test_api.OverrideBinderForTesting(
-        service_manager::Identity(mojom::kServiceName),
+    connector_->OverrideBinderForTesting(
+        service_manager::ServiceFilter::ByName(mojom::kServiceName),
         mojom::SensorProvider::Name_,
         base::BindRepeating(&FakeSensorProvider::Bind,
                             base::Unretained(fake_sensor_provider_.get())));
@@ -83,15 +82,38 @@ class VROrientationDeviceProviderTest : public testing::Test {
     return init_params;
   }
 
-  base::RepeatingCallback<void(VRDevice*)> DeviceCallbackFailIfCalled() {
-    return base::BindRepeating([](VRDevice* device) { FAIL(); });
+  base::RepeatingCallback<void(device::mojom::XRDeviceId,
+                               mojom::VRDisplayInfoPtr,
+                               mojom::XRRuntimePtr device)>
+  DeviceAndIdCallbackFailIfCalled() {
+    return base::BindRepeating([](device::mojom::XRDeviceId id,
+                                  mojom::VRDisplayInfoPtr,
+                                  mojom::XRRuntimePtr device) { FAIL(); });
   };
 
-  base::RepeatingCallback<void(VRDevice*)> DeviceCallbackMustBeCalled(
-      base::RunLoop* loop) {
+  base::RepeatingCallback<void(device::mojom::XRDeviceId)>
+  DeviceIdCallbackFailIfCalled() {
+    return base::BindRepeating([](device::mojom::XRDeviceId id) { FAIL(); });
+  };
+
+  base::RepeatingCallback<void(device::mojom::XRDeviceId,
+                               mojom::VRDisplayInfoPtr,
+                               mojom::XRRuntimePtr device)>
+  DeviceAndIdCallbackMustBeCalled(base::RunLoop* loop) {
     return base::BindRepeating(
-        [](base::OnceClosure quit_closure, VRDevice* device) {
+        [](base::OnceClosure quit_closure, device::mojom::XRDeviceId id,
+           mojom::VRDisplayInfoPtr info, mojom::XRRuntimePtr device) {
           ASSERT_TRUE(device);
+          ASSERT_TRUE(info);
+          std::move(quit_closure).Run();
+        },
+        loop->QuitClosure());
+  };
+
+  base::RepeatingCallback<void(device::mojom::XRDeviceId)>
+  DeviceIdCallbackMustBeCalled(base::RunLoop* loop) {
+    return base::BindRepeating(
+        [](base::OnceClosure quit_closure, device::mojom::XRDeviceId id) {
           std::move(quit_closure).Run();
         },
         loop->QuitClosure());
@@ -135,8 +157,8 @@ TEST_F(VROrientationDeviceProviderTest, InitializationCallbackSuccessTest) {
   base::RunLoop wait_for_device;
   base::RunLoop wait_for_init;
 
-  provider_->Initialize(DeviceCallbackMustBeCalled(&wait_for_device),
-                        DeviceCallbackFailIfCalled(),
+  provider_->Initialize(DeviceAndIdCallbackMustBeCalled(&wait_for_device),
+                        DeviceIdCallbackFailIfCalled(),
                         ClosureMustBeCalled(&wait_for_init));
 
   InitializeDevice(FakeInitParams());
@@ -150,8 +172,8 @@ TEST_F(VROrientationDeviceProviderTest, InitializationCallbackSuccessTest) {
 TEST_F(VROrientationDeviceProviderTest, InitializationCallbackFailureTest) {
   base::RunLoop wait_for_init;
 
-  provider_->Initialize(DeviceCallbackFailIfCalled(),
-                        DeviceCallbackFailIfCalled(),
+  provider_->Initialize(DeviceAndIdCallbackFailIfCalled(),
+                        DeviceIdCallbackFailIfCalled(),
                         ClosureMustBeCalled(&wait_for_init));
 
   InitializeDevice(nullptr);
@@ -159,49 +181,6 @@ TEST_F(VROrientationDeviceProviderTest, InitializationCallbackFailureTest) {
   // Wait for the initialization to finish.
   wait_for_init.Run();
   EXPECT_TRUE(provider_->Initialized());
-}
-
-TEST_F(VROrientationDeviceProviderTest, SecondInitializationSuccessTest) {
-  base::RunLoop wait_for_device;
-  base::RunLoop wait_for_init;
-
-  provider_->Initialize(DeviceCallbackMustBeCalled(&wait_for_device),
-                        DeviceCallbackFailIfCalled(),
-                        ClosureMustBeCalled(&wait_for_init));
-
-  InitializeDevice(FakeInitParams());
-
-  // Wait for the initialization to finish.
-  wait_for_init.Run();
-  wait_for_device.Run();
-
-  base::RunLoop second_wait_for_device;
-
-  EXPECT_TRUE(provider_->Initialized());
-
-  // If we run initialize again, we should only call add device.
-  provider_->Initialize(DeviceCallbackMustBeCalled(&second_wait_for_device),
-                        DeviceCallbackFailIfCalled(), ClosureFailIfCalled());
-
-  second_wait_for_device.Run();
-}
-
-TEST_F(VROrientationDeviceProviderTest, SecondInitializationFailureTest) {
-  base::RunLoop wait_for_init;
-
-  provider_->Initialize(DeviceCallbackFailIfCalled(),
-                        DeviceCallbackFailIfCalled(),
-                        ClosureMustBeCalled(&wait_for_init));
-
-  InitializeDevice(nullptr);
-
-  wait_for_init.Run();
-
-  EXPECT_TRUE(provider_->Initialized());
-
-  // If we call again on a failure, nothing should be called.
-  provider_->Initialize(DeviceCallbackFailIfCalled(),
-                        DeviceCallbackFailIfCalled(), ClosureFailIfCalled());
 }
 
 }  // namespace device

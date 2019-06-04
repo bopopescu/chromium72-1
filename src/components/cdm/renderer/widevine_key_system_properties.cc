@@ -4,9 +4,12 @@
 
 #include "components/cdm/renderer/widevine_key_system_properties.h"
 
-#include "widevine_cdm_version.h"  // In SHARED_INTERMEDIATE_DIR.
+#include "third_party/widevine/cdm/buildflags.h"
+#include "third_party/widevine/cdm/widevine_cdm_common.h"
 
-#if defined(WIDEVINE_CDM_AVAILABLE)
+#if !BUILDFLAG(ENABLE_WIDEVINE)
+#error This file should only be built when Widevine is enabled.
+#endif
 
 using media::EmeConfigRule;
 using media::EmeFeatureSupport;
@@ -38,29 +41,26 @@ Robustness ConvertRobustness(const std::string& robustness) {
 }  // namespace
 
 WidevineKeySystemProperties::WidevineKeySystemProperties(
-    base::flat_set<media::EncryptionMode> supported_encryption_schemes,
-    media::SupportedCodecs supported_codecs,
-#if defined(OS_ANDROID)
-    media::SupportedCodecs supported_secure_codecs,
-#endif  // defined(OS_ANDROID)
+    media::SupportedCodecs codecs,
+    base::flat_set<media::EncryptionMode> encryption_schemes,
+    media::SupportedCodecs hw_secure_codecs,
+    base::flat_set<media::EncryptionMode> hw_secure_encryption_schemes,
     Robustness max_audio_robustness,
     Robustness max_video_robustness,
     media::EmeSessionTypeSupport persistent_license_support,
     media::EmeSessionTypeSupport persistent_release_message_support,
     media::EmeFeatureSupport persistent_state_support,
     media::EmeFeatureSupport distinctive_identifier_support)
-    : supported_encryption_schemes_(std::move(supported_encryption_schemes)),
-      supported_codecs_(supported_codecs),
-#if defined(OS_ANDROID)
-      supported_secure_codecs_(supported_secure_codecs),
-#endif  // defined(OS_ANDROID)
+    : codecs_(codecs),
+      encryption_schemes_(std::move(encryption_schemes)),
+      hw_secure_codecs_(hw_secure_codecs),
+      hw_secure_encryption_schemes_(std::move(hw_secure_encryption_schemes)),
       max_audio_robustness_(max_audio_robustness),
       max_video_robustness_(max_video_robustness),
       persistent_license_support_(persistent_license_support),
       persistent_release_message_support_(persistent_release_message_support),
       persistent_state_support_(persistent_state_support),
-      distinctive_identifier_support_(distinctive_identifier_support) {
-}
+      distinctive_identifier_support_(distinctive_identifier_support) {}
 
 WidevineKeySystemProperties::~WidevineKeySystemProperties() = default;
 
@@ -70,31 +70,41 @@ std::string WidevineKeySystemProperties::GetKeySystemName() const {
 
 bool WidevineKeySystemProperties::IsSupportedInitDataType(
     EmeInitDataType init_data_type) const {
-  // Here we assume that support for a container imples support for the
+  // Here we assume that support for a container implies support for the
   // associated initialization data type. KeySystems handles validating
   // |init_data_type| x |container| pairings.
   if (init_data_type == EmeInitDataType::WEBM)
-    return (supported_codecs_ & media::EME_CODEC_WEBM_ALL) != 0;
+    return (codecs_ & media::EME_CODEC_WEBM_ALL) != 0;
   if (init_data_type == EmeInitDataType::CENC)
-    return (supported_codecs_ & media::EME_CODEC_MP4_ALL) != 0;
+    return (codecs_ & media::EME_CODEC_MP4_ALL) != 0;
 
   return false;
 }
 
-bool WidevineKeySystemProperties::IsEncryptionSchemeSupported(
+EmeConfigRule WidevineKeySystemProperties::GetEncryptionSchemeConfigRule(
     media::EncryptionMode encryption_scheme) const {
-  return supported_encryption_schemes_.count(encryption_scheme) != 0;
+  bool is_supported = encryption_schemes_.count(encryption_scheme);
+  bool is_hw_secure_supported =
+      hw_secure_encryption_schemes_.count(encryption_scheme);
+
+  if (is_supported && is_hw_secure_supported)
+    return EmeConfigRule::SUPPORTED;
+  else if (is_supported && !is_hw_secure_supported)
+    return EmeConfigRule::HW_SECURE_CODECS_NOT_ALLOWED;
+  else if (!is_supported && is_hw_secure_supported)
+    return EmeConfigRule::HW_SECURE_CODECS_REQUIRED;
+  else
+    return EmeConfigRule::NOT_SUPPORTED;
 }
 
 SupportedCodecs WidevineKeySystemProperties::GetSupportedCodecs() const {
-  return supported_codecs_;
+  return codecs_;
 }
 
-#if defined(OS_ANDROID)
-SupportedCodecs WidevineKeySystemProperties::GetSupportedSecureCodecs() const {
-  return supported_secure_codecs_;
+SupportedCodecs WidevineKeySystemProperties::GetSupportedHwSecureCodecs()
+    const {
+  return hw_secure_codecs_;
 }
-#endif
 
 EmeConfigRule WidevineKeySystemProperties::GetRobustnessConfigRule(
     EmeMediaType media_type,
@@ -139,12 +149,19 @@ EmeConfigRule WidevineKeySystemProperties::GetRobustnessConfigRule(
     return EmeConfigRule::IDENTIFIER_RECOMMENDED;
   }
 #elif defined(OS_ANDROID)
-  // Require hardware secure codecs when SW_SECURE_DECODE or above is specified.
+  // On Android, require hardware secure codecs for SW_SECURE_DECODE and above.
   if (robustness >= Robustness::SW_SECURE_DECODE) {
+    return EmeConfigRule::HW_SECURE_CODECS_REQUIRED;
+  }
+#else
+  // On Linux/Mac/Win, require hardware secure codecs for HW_SECURE_CRYPTO and
+  // above.
+  if (robustness >= Robustness::HW_SECURE_CRYPTO) {
     return EmeConfigRule::HW_SECURE_CODECS_REQUIRED;
   }
 #endif  // defined(OS_CHROMEOS)
 
+  // TODO(crbug.com/848532): Handle HW_SECURE* levels for Windows.
   return EmeConfigRule::SUPPORTED;
 }
 
@@ -154,7 +171,7 @@ WidevineKeySystemProperties::GetPersistentLicenseSessionSupport() const {
 }
 
 EmeSessionTypeSupport
-WidevineKeySystemProperties::GetPersistentReleaseMessageSessionSupport() const {
+WidevineKeySystemProperties::GetPersistentUsageRecordSessionSupport() const {
   return persistent_release_message_support_;
 }
 
@@ -169,5 +186,3 @@ EmeFeatureSupport WidevineKeySystemProperties::GetDistinctiveIdentifierSupport()
 }
 
 }  // namespace cdm
-
-#endif  // WIDEVINE_CDM_AVAILABLE

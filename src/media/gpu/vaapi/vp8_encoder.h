@@ -10,6 +10,7 @@
 
 #include "base/macros.h"
 #include "base/sequence_checker.h"
+#include "media/base/video_bitrate_allocation.h"
 #include "media/filters/vp8_parser.h"
 #include "media/gpu/vaapi/accelerated_video_encoder.h"
 #include "media/gpu/vp8_picture.h"
@@ -25,8 +26,8 @@ class VP8Encoder : public AcceleratedVideoEncoder {
     // Produce a keyframe at least once per this many frames.
     size_t kf_period_frames;
 
-    // Bitrate in bps.
-    uint32_t bitrate_bps;
+    // Bitrate allocation in bps.
+    VideoBitrateAllocation bitrate_allocation;
 
     // Framerate in FPS.
     uint32_t framerate;
@@ -59,7 +60,7 @@ class VP8Encoder : public AcceleratedVideoEncoder {
     // it. Returns true on success.
     virtual bool SubmitFrameParameters(
         EncodeJob* job,
-        const media::VP8Encoder::EncodeParams& encode_params,
+        const VP8Encoder::EncodeParams& encode_params,
         scoped_refptr<VP8Picture> pic,
         const Vp8ReferenceFrameVector& ref_frames) = 0;
 
@@ -71,13 +72,10 @@ class VP8Encoder : public AcceleratedVideoEncoder {
   ~VP8Encoder() override;
 
   // AcceleratedVideoEncoder implementation.
-  bool Initialize(const gfx::Size& visible_size,
-                  VideoCodecProfile profile,
-                  uint32_t initial_bitrate,
-                  uint32_t initial_framerate) override;
-  bool UpdateRates(uint32_t bitrate, uint32_t framerate) override;
+  bool Initialize(const VideoEncodeAccelerator::Config& config) override;
+  bool UpdateRates(const VideoBitrateAllocation& bitrate_allocation,
+                   uint32_t framerate) override;
   gfx::Size GetCodedSize() const override;
-  size_t GetBitstreamBufferSize() const override;
   size_t GetMaxNumOfRefFrames() const override;
   bool PrepareEncodeJob(EncodeJob* encode_job) override;
 

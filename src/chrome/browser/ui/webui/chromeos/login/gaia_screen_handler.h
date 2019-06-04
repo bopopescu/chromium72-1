@@ -20,8 +20,12 @@
 
 class AccountId;
 
-namespace policy {
-class TempCertsCacheNSS;
+namespace net {
+class CanonicalCookie;
+}
+
+namespace network {
+class NSSTempCertsCacheChromeOS;
 }
 
 namespace chromeos {
@@ -53,6 +57,9 @@ class GaiaScreenHandler : public BaseScreenHandler,
   void MaybePreloadAuthExtension() override;
   void DisableRestrictiveProxyCheckForTest() override;
   void ShowGaiaAsync(const base::Optional<AccountId>& account_id) override;
+  void ShowSigninScreenForTest(const std::string& username,
+                               const std::string& password,
+                               const std::string& services) override;
 
  private:
   // TODO (xiaoyinh): remove this dependency.
@@ -66,6 +73,11 @@ class GaiaScreenHandler : public BaseScreenHandler,
   // been retrieved.
   void LoadGaiaWithPartition(const GaiaContext& context,
                              const std::string& partition_name);
+
+  // Called after the GAPS cookie, if present, is added to the cookie store.
+  void OnSetCookieForLoadGaiaWithPartition(const GaiaContext& context,
+                                           const std::string& partition_name,
+                                           bool success);
 
   // Callback that loads GAIA after version and stat consent information has
   // been retrieved.
@@ -105,10 +117,15 @@ class GaiaScreenHandler : public BaseScreenHandler,
   void HandleCompleteAuthentication(const std::string& gaia_id,
                                     const std::string& email,
                                     const std::string& password,
-                                    const std::string& auth_code,
                                     bool using_saml,
-                                    const std::string& gaps_cookie,
                                     const ::login::StringList& services);
+  void OnGetCookiesForCompleteAuthentication(
+      const std::string& gaia_id,
+      const std::string& email,
+      const std::string& password,
+      bool using_saml,
+      const ::login::StringList& services,
+      const std::vector<net::CanonicalCookie>& cookies);
   void HandleCompleteLogin(const std::string& gaia_id,
                            const std::string& typed_email,
                            const std::string& password,
@@ -128,9 +145,16 @@ class GaiaScreenHandler : public BaseScreenHandler,
   void HandleIdentifierEntered(const std::string& account_identifier);
 
   void HandleAuthExtensionLoaded();
-  void HandleUpdateGaiaDialogSize(int width, int height);
-  void HandleUpdateGaiaDialogVisibility(bool visible);
+  void HandleUpdateOobeDialogSize(int width, int height);
+  void HandleHideOobeDialog();
   void HandleShowAddUser(const base::ListValue* args);
+  void HandleGetIsSamlUserPasswordless(const std::string& callback_id,
+                                       const std::string& typed_email,
+                                       const std::string& gaia_id);
+  void HandleUpdateSigninUIState(int state);
+  void HandleShowGuestForGaiaScreen(bool allow_guest_login,
+                                    bool can_show_for_gaia);
+
   void OnShowAddUser();
 
   // Really handles the complete login message.
@@ -158,11 +182,6 @@ class GaiaScreenHandler : public BaseScreenHandler,
                 authpolicy::ErrorType error,
                 const authpolicy::ActiveDirectoryAccountInfo& account_info);
 
-  // Show sign-in screen for the given credentials.
-  // Should match the same method in SigninScreenHandler.
-  void ShowSigninScreenForTest(const std::string& username,
-                               const std::string& password,
-                               const std::string& services);
   // Attempts login for test.
   void SubmitLoginFormForTest();
 
@@ -283,7 +302,8 @@ class GaiaScreenHandler : public BaseScreenHandler,
 
   // Makes untrusted authority certificates from device policy available for
   // client certificate discovery.
-  std::unique_ptr<policy::TempCertsCacheNSS> untrusted_authority_certs_cache_;
+  std::unique_ptr<network::NSSTempCertsCacheChromeOS>
+      untrusted_authority_certs_cache_;
 
   base::WeakPtrFactory<GaiaScreenHandler> weak_factory_;
 

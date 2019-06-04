@@ -171,6 +171,7 @@ ONC_EXPORT extern const char kAccessPointName[];
 ONC_EXPORT extern const char kName[];
 ONC_EXPORT extern const char kUsername[];
 ONC_EXPORT extern const char kPassword[];
+ONC_EXPORT extern const char kAuthentication[];
 ONC_EXPORT extern const char kLocalizedName[];
 ONC_EXPORT extern const char kLanguage[];
 }  // namespace cellular_apn
@@ -245,6 +246,7 @@ ONC_EXPORT extern const char kSSID[];
 ONC_EXPORT extern const char kSecurity[];
 ONC_EXPORT extern const char kSecurityNone[];
 ONC_EXPORT extern const char kSignalStrength[];
+ONC_EXPORT extern const char kTetheringState[];
 ONC_EXPORT extern const char kWEP_PSK[];
 ONC_EXPORT extern const char kWEP_8021X[];
 ONC_EXPORT extern const char kWPA_PSK[];
@@ -466,6 +468,8 @@ ONC_EXPORT extern const char kWPAD[];
 namespace global_network_config {
 ONC_EXPORT extern const char kAllowOnlyPolicyNetworksToAutoconnect[];
 ONC_EXPORT extern const char kAllowOnlyPolicyNetworksToConnect[];
+ONC_EXPORT extern const char kAllowOnlyPolicyNetworksToConnectIfAvailable[];
+ONC_EXPORT extern const char kBlacklistedHexSSIDs[];
 ONC_EXPORT extern const char kDisableNetworkTypes[];
 }  // global_network_config
 
@@ -475,6 +479,12 @@ ONC_EXPORT extern const char kDisabled[];
 ONC_EXPORT extern const char kEnabling[];
 ONC_EXPORT extern const char kEnabled[];
 }  // device_state
+
+namespace tethering_state {
+ONC_EXPORT extern const char kTetheringConfirmedState[];
+ONC_EXPORT extern const char kTetheringNotDetectedState[];
+ONC_EXPORT extern const char kTetheringSuspectedState[];
+}  // namespace tethering_state
 
 }  // namespace onc
 

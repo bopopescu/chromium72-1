@@ -7,13 +7,19 @@
 #include <memory>
 #include <utility>
 
+#include "ash/public/cpp/ash_features.h"
+#include "ash/system/message_center/arc/arc_notification_constants.h"
 #include "ash/system/message_center/arc/arc_notification_delegate.h"
 #include "ash/system/message_center/arc/arc_notification_item_impl.h"
 #include "ash/system/message_center/arc/arc_notification_manager_delegate.h"
 #include "ash/system/message_center/arc/arc_notification_view.h"
+#include "base/command_line.h"
 #include "base/stl_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "components/arc/mojo_channel.h"
+#include "ui/message_center/lock_screen/lock_screen_controller.h"
+#include "ui/message_center/message_center_impl.h"
+#include "ui/message_center/message_center_observer.h"
 #include "ui/message_center/views/message_view_factory.h"
 
 using arc::ConnectionHolder;
@@ -22,6 +28,10 @@ using arc::mojom::ArcNotificationData;
 using arc::mojom::ArcNotificationDataPtr;
 using arc::mojom::ArcNotificationEvent;
 using arc::mojom::ArcNotificationPriority;
+using arc::mojom::ArcDoNotDisturbStatus;
+using arc::mojom::ArcDoNotDisturbStatusPtr;
+using arc::mojom::NotificationConfiguration;
+using arc::mojom::NotificationConfigurationPtr;
 using arc::mojom::NotificationsHost;
 using arc::mojom::NotificationsInstance;
 using arc::mojom::NotificationsInstancePtr;
@@ -34,11 +44,25 @@ constexpr char kPlayStorePackageName[] = "com.android.vending";
 std::unique_ptr<message_center::MessageView> CreateCustomMessageView(
     const message_center::Notification& notification) {
   DCHECK_EQ(notification.notifier_id().type,
-            message_center::NotifierId::ARC_APPLICATION);
+            message_center::NotifierType::ARC_APPLICATION);
+  DCHECK_EQ(kArcNotificationCustomViewType, notification.custom_view_type());
   auto* arc_delegate =
       static_cast<ArcNotificationDelegate*>(notification.delegate());
   return arc_delegate->CreateCustomMessageView(notification);
 }
+
+class DoNotDisturbManager : public message_center::MessageCenterObserver {
+ public:
+  DoNotDisturbManager(ArcNotificationManager* manager) : manager_(manager) {}
+  void OnQuietModeChanged(bool in_quiet_mode) override {
+    manager_->SetDoNotDisturbStatusOnAndroid(in_quiet_mode);
+  }
+
+ private:
+  ArcNotificationManager* const manager_;
+
+  DISALLOW_COPY_AND_ASSIGN(DoNotDisturbManager);
+};
 
 }  // namespace
 
@@ -77,6 +101,7 @@ class ArcNotificationManager::InstanceOwner {
 // static
 void ArcNotificationManager::SetCustomNotificationViewFactory() {
   message_center::MessageViewFactory::SetCustomNotificationViewFactory(
+      kArcNotificationCustomViewType,
       base::BindRepeating(&CreateCustomMessageView));
 }
 
@@ -87,14 +112,23 @@ ArcNotificationManager::ArcNotificationManager(
     : delegate_(std::move(delegate)),
       main_profile_id_(main_profile_id),
       message_center_(message_center),
+      do_not_disturb_manager_(new DoNotDisturbManager(this)),
       instance_owner_(std::make_unique<InstanceOwner>()) {
+  DCHECK(message_center_);
+
   instance_owner_->holder()->SetHost(this);
   instance_owner_->holder()->AddObserver(this);
-  if (!message_center::MessageViewFactory::HasCustomNotificationViewFactory())
+  if (!message_center::MessageViewFactory::HasCustomNotificationViewFactory(
+          kArcNotificationCustomViewType)) {
     SetCustomNotificationViewFactory();
+  }
+
+  message_center_->AddObserver(do_not_disturb_manager_.get());
 }
 
 ArcNotificationManager::~ArcNotificationManager() {
+  message_center_->RemoveObserver(do_not_disturb_manager_.get());
+
   instance_owner_->holder()->RemoveObserver(this);
   instance_owner_->holder()->SetHost(nullptr);
 
@@ -113,8 +147,15 @@ ArcNotificationManager::GetConnectionHolderForTest() {
 
 void ArcNotificationManager::OnConnectionReady() {
   DCHECK(!ready_);
+
   // TODO(hidehiko): Replace this by ConnectionHolder::IsConnected().
   ready_ = true;
+
+  // Sync the initial quiet mode state with Android.
+  SetDoNotDisturbStatusOnAndroid(message_center_->IsQuietMode());
+
+  // Set configuration variables for notifications on arc.
+  SetNotificationConfiguration();
 }
 
 void ArcNotificationManager::OnConnectionClosed() {
@@ -166,6 +207,32 @@ void ArcNotificationManager::OnNotificationUpdated(
   if (it == items_.end())
     return;
 
+  bool is_remote_view_focused =
+      (data->remote_input_state ==
+       arc::mojom::ArcNotificationRemoteInputState::OPENED);
+  if (is_remote_view_focused && (previously_focused_notification_key_ != key)) {
+    if (!previously_focused_notification_key_.empty()) {
+      auto prev_it = items_.find(previously_focused_notification_key_);
+      // The case that another remote input is focused. Notify the previously-
+      // focused notification (if any).
+      if (prev_it != items_.end())
+        prev_it->second->OnRemoteInputActivationChanged(false);
+    }
+
+    // Notify the newly-focused notification.
+    previously_focused_notification_key_ = key;
+    it->second->OnRemoteInputActivationChanged(true);
+  } else if (!is_remote_view_focused &&
+             (previously_focused_notification_key_ == key)) {
+    // The case that the previously-focused notification gets unfocused. Notify
+    // the previously-focused notification if the notification still exists.
+    auto it = items_.find(previously_focused_notification_key_);
+    if (it != items_.end())
+      it->second->OnRemoteInputActivationChanged(false);
+
+    previously_focused_notification_key_.clear();
+  }
+
   delegate_->GetAppIdByPackageName(
       data->package_name.value_or(std::string()),
       base::BindOnce(&ArcNotificationManager::OnGotAppId,
@@ -174,6 +241,71 @@ void ArcNotificationManager::OnNotificationUpdated(
 
 void ArcNotificationManager::OpenMessageCenter() {
   delegate_->ShowMessageCenter();
+}
+
+void ArcNotificationManager::CloseMessageCenter() {
+  delegate_->HideMessageCenter();
+}
+
+void ArcNotificationManager::OnLockScreenSettingUpdated(
+    arc::mojom::ArcLockScreenNotificationSettingPtr setting) {
+  // TODO(yoshiki): sync the setting.
+}
+
+void ArcNotificationManager::ProcessUserAction(
+    arc::mojom::ArcNotificationUserActionDataPtr data) {
+  if (!data->defer_until_unlock) {
+    PerformUserAction(data->action_id, data->to_be_focused_after_unlock);
+    return;
+  }
+
+  // TODO(yoshiki): remove the static cast after refactionring.
+  static_cast<message_center::MessageCenterImpl*>(message_center_)
+      ->lock_screen_controller()
+      ->DismissLockScreenThenExecute(
+          base::BindOnce(&ArcNotificationManager::PerformUserAction,
+                         weak_ptr_factory_.GetWeakPtr(), data->action_id,
+                         data->to_be_focused_after_unlock),
+          base::BindOnce(&ArcNotificationManager::CancelUserAction,
+                         weak_ptr_factory_.GetWeakPtr(), data->action_id));
+}
+
+void ArcNotificationManager::PerformUserAction(uint32_t id,
+                                               bool open_message_center) {
+  // TODO(yoshiki): Pass the event to the message center and handle the action
+  // in the NotificationDelegate::Click() for consistency with non-arc
+  // notifications.
+  auto* notifications_instance = ARC_GET_INSTANCE_FOR_METHOD(
+      instance_owner_->holder(), PerformDeferredUserAction);
+
+  // On shutdown, the ARC channel may quit earlier than notifications.
+  if (!notifications_instance) {
+    VLOG(2) << "Trying to perform the defered operation, "
+               "but the ARC channel has already gone.";
+    return;
+  }
+
+  notifications_instance->PerformDeferredUserAction(id);
+
+  if (open_message_center) {
+    OpenMessageCenter();
+    // TODO(yoshiki): focus the target notification after opening the message
+    // center.
+  }
+}
+
+void ArcNotificationManager::CancelUserAction(uint32_t id) {
+  auto* notifications_instance = ARC_GET_INSTANCE_FOR_METHOD(
+      instance_owner_->holder(), CancelDeferredUserAction);
+
+  // On shutdown, the ARC channel may quit earlier than notifications.
+  if (!notifications_instance) {
+    VLOG(2) << "Trying to cancel the defered operation, "
+               "but the ARC channel has already gone.";
+    return;
+  }
+
+  notifications_instance->CancelDeferredUserAction(id);
 }
 
 void ArcNotificationManager::OnNotificationRemoved(const std::string& key) {
@@ -239,51 +371,6 @@ void ArcNotificationManager::SendNotificationClickedOnChrome(
       key, ArcNotificationEvent::BODY_CLICKED);
 }
 
-void ArcNotificationManager::SendNotificationButtonClickedOnChrome(
-    const std::string& key,
-    int button_index) {
-  if (items_.find(key) == items_.end()) {
-    VLOG(3) << "Chrome requests to fire a click event on notification (key: "
-            << key << "), but it is gone.";
-    return;
-  }
-
-  auto* notifications_instance = ARC_GET_INSTANCE_FOR_METHOD(
-      instance_owner_->holder(), SendNotificationEventToAndroid);
-
-  // On shutdown, the ARC channel may quit earlier than notifications.
-  if (!notifications_instance) {
-    VLOG(2) << "ARC Notification (key: " << key
-            << ")'s button is clicked, but the ARC channel has already gone.";
-    return;
-  }
-
-  ArcNotificationEvent command;
-  switch (button_index) {
-    case 0:
-      command = ArcNotificationEvent::BUTTON_1_CLICKED;
-      break;
-    case 1:
-      command = ArcNotificationEvent::BUTTON_2_CLICKED;
-      break;
-    case 2:
-      command = ArcNotificationEvent::BUTTON_3_CLICKED;
-      break;
-    case 3:
-      command = ArcNotificationEvent::BUTTON_4_CLICKED;
-      break;
-    case 4:
-      command = ArcNotificationEvent::BUTTON_5_CLICKED;
-      break;
-    default:
-      VLOG(3) << "Invalid button index (key: " << key
-              << ", index: " << button_index << ").";
-      return;
-  }
-
-  notifications_instance->SendNotificationEventToAndroid(key, command);
-}
-
 void ArcNotificationManager::CreateNotificationWindow(const std::string& key) {
   if (items_.find(key) == items_.end()) {
     VLOG(3) << "Chrome requests to create window on notification (key: " << key
@@ -329,6 +416,24 @@ void ArcNotificationManager::OpenNotificationSettings(const std::string& key) {
     return;
 
   notifications_instance->OpenNotificationSettings(key);
+}
+
+void ArcNotificationManager::OpenNotificationSnoozeSettings(
+    const std::string& key) {
+  if (!base::ContainsKey(items_, key)) {
+    DVLOG(3) << "Chrome requests to show a snooze setting gut on the"
+             << "notification (key: " << key << "), but it is gone.";
+    return;
+  }
+
+  auto* notifications_instance = ARC_GET_INSTANCE_FOR_METHOD(
+      instance_owner_->holder(), OpenNotificationSnoozeSettings);
+
+  // On shutdown, the ARC channel may quit earlier than notifications.
+  if (!notifications_instance)
+    return;
+
+  notifications_instance->OpenNotificationSnoozeSettings(key);
 }
 
 bool ArcNotificationManager::IsOpeningSettingsSupported() const {
@@ -383,6 +488,68 @@ void ArcNotificationManager::OnGotAppId(ArcNotificationDataPtr data,
     return;
 
   it->second->OnUpdatedFromAndroid(std::move(data), app_id);
+}
+
+void ArcNotificationManager::OnDoNotDisturbStatusUpdated(
+    ArcDoNotDisturbStatusPtr status) {
+  // Remove the observer to prevent from sending the command to Android since
+  // this request came from Android.
+  message_center_->RemoveObserver(do_not_disturb_manager_.get());
+
+  if (message_center_->IsQuietMode() != status->enabled)
+    message_center_->SetQuietMode(status->enabled);
+
+  // Add back the observer.
+  message_center_->AddObserver(do_not_disturb_manager_.get());
+}
+
+void ArcNotificationManager::SetDoNotDisturbStatusOnAndroid(bool enabled) {
+  auto* notifications_instance = ARC_GET_INSTANCE_FOR_METHOD(
+      instance_owner_->holder(), SetDoNotDisturbStatusOnAndroid);
+
+  // On shutdown, the ARC channel may quit earlier than notifications.
+  if (!notifications_instance) {
+    VLOG(2) << "Trying to send the Do Not Disturb status (" << enabled
+            << "), but the ARC channel has already gone.";
+    return;
+  }
+
+  ArcDoNotDisturbStatusPtr status = ArcDoNotDisturbStatus::New();
+  status->enabled = enabled;
+
+  notifications_instance->SetDoNotDisturbStatusOnAndroid(std::move(status));
+}
+
+void ArcNotificationManager::CancelPress(const std::string& key) {
+  auto* notifications_instance =
+      ARC_GET_INSTANCE_FOR_METHOD(instance_owner_->holder(), CancelPress);
+
+  // On shutdown, the ARC channel may quit earlier than notifications.
+  if (!notifications_instance) {
+    VLOG(2) << "Trying to cancel the long press operation, "
+               "but the ARC channel has already gone.";
+    return;
+  }
+
+  notifications_instance->CancelPress(key);
+}
+
+void ArcNotificationManager::SetNotificationConfiguration() {
+  auto* notifications_instance = ARC_GET_INSTANCE_FOR_METHOD(
+      instance_owner_->holder(), SetNotificationConfiguration);
+
+  if (!notifications_instance) {
+    VLOG(2) << "Trying to set notification expansion animations"
+            << ", but the ARC channel has already gone.";
+    return;
+  }
+
+  NotificationConfigurationPtr configuration = NotificationConfiguration::New();
+  configuration->expansion_animation =
+      ash::features::IsNotificationExpansionAnimationEnabled();
+
+  notifications_instance->SetNotificationConfiguration(
+      std::move(configuration));
 }
 
 }  // namespace ash

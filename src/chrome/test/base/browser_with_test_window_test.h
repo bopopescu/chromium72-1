@@ -5,7 +5,6 @@
 #ifndef CHROME_TEST_BASE_BROWSER_WITH_TEST_WINDOW_TEST_H_
 #define CHROME_TEST_BASE_BROWSER_WITH_TEST_WINDOW_TEST_H_
 
-#include "base/at_exit.h"
 #include "base/macros.h"
 #include "build/build_config.h"
 #include "chrome/browser/ui/browser.h"
@@ -20,8 +19,8 @@
 #include "ash/test/ash_test_helper.h"
 #include "ash/test/ash_test_views_delegate.h"
 #include "chrome/browser/chromeos/login/users/scoped_test_user_manager.h"
-#include "chrome/browser/chromeos/settings/cros_settings.h"
-#include "chrome/browser/chromeos/settings/device_settings_service.h"
+#include "chrome/browser/chromeos/settings/scoped_cros_settings_test_helper.h"
+#include "chrome/test/base/ash_test_environment_chrome.h"
 #else
 #include "ui/views/test/scoped_views_test_helper.h"
 #endif
@@ -37,13 +36,6 @@ class GURL;
 namespace views {
 class TestViewsDelegate;
 }
-#if defined(OS_CHROMEOS)
-namespace ash {
-namespace test {
-class AshTestEnvironment;
-}
-}
-#endif
 #endif
 
 namespace content {
@@ -84,6 +76,19 @@ class BrowserWithTestWindowTest : public testing::Test {
   // the specified type.
   BrowserWithTestWindowTest(Browser::Type browser_type, bool hosted_app);
 
+  // Creates a BrowserWithTestWindowTest with the specified options for the
+  // TestBrowserThreadBundle.
+  explicit BrowserWithTestWindowTest(
+      content::TestBrowserThreadBundle::Options thread_bundle_options);
+
+  // Creates a BrowserWithTestWindowTest for which the initial window will be
+  // the specified type and with the specified options for the
+  // TestBrowserThreadBundle.
+  BrowserWithTestWindowTest(
+      Browser::Type browser_type,
+      bool hosted_app,
+      content::TestBrowserThreadBundle::Options thread_bundle_options);
+
   ~BrowserWithTestWindowTest() override;
 
   void SetUp() override;
@@ -106,12 +111,14 @@ class BrowserWithTestWindowTest : public testing::Test {
 
   TestingProfileManager* profile_manager() { return profile_manager_.get(); }
 
+  content::TestBrowserThreadBundle* thread_bundle() { return &thread_bundle_; }
+
   BrowserWindow* release_browser_window() WARN_UNUSED_RESULT {
     return window_.release();
   }
 
 #if defined(OS_CHROMEOS)
-  ash::AshTestHelper* ash_test_helper() { return ash_test_helper_.get(); }
+  ash::AshTestHelper* ash_test_helper() { return &ash_test_helper_; }
 #endif
 
   // The context to help determine desktop type when creating new Widgets.
@@ -162,7 +169,7 @@ class BrowserWithTestWindowTest : public testing::Test {
 #if defined(TOOLKIT_VIEWS)
   views::TestViewsDelegate* test_views_delegate() {
 #if defined(OS_CHROMEOS)
-    return ash_test_helper_->test_views_delegate();
+    return ash_test_helper_.test_views_delegate();
 #else
     return views_test_helper_->test_views_delegate();
 #endif
@@ -172,11 +179,9 @@ class BrowserWithTestWindowTest : public testing::Test {
  private:
   // We need to create a MessageLoop, otherwise a bunch of things fails.
   content::TestBrowserThreadBundle thread_bundle_;
-  base::ShadowingAtExitManager at_exit_manager_;
 
 #if defined(OS_CHROMEOS)
-  chromeos::ScopedTestDeviceSettingsService test_device_settings_service_;
-  chromeos::ScopedTestCrosSettings test_cros_settings_;
+  chromeos::ScopedCrosSettingsTestHelper cros_settings_test_helper_;
   chromeos::ScopedTestUserManager test_user_manager_;
 #endif
 
@@ -186,16 +191,15 @@ class BrowserWithTestWindowTest : public testing::Test {
   std::unique_ptr<BrowserWindow> window_;  // Usually a TestBrowserWindow.
   std::unique_ptr<Browser> browser_;
 
-  // The existence of this object enables tests via
-  // RenderViewHostTester.
-  content::RenderViewHostTestEnabler rvh_test_enabler_;
-
 #if defined(OS_CHROMEOS)
-  std::unique_ptr<ash::AshTestEnvironment> ash_test_environment_;
-  std::unique_ptr<ash::AshTestHelper> ash_test_helper_;
+  AshTestEnvironmentChrome ash_test_environment_;
+  ash::AshTestHelper ash_test_helper_;
 #elif defined(TOOLKIT_VIEWS)
   std::unique_ptr<views::ScopedViewsTestHelper> views_test_helper_;
 #endif
+
+  // The existence of this object enables tests via RenderViewHostTester.
+  std::unique_ptr<content::RenderViewHostTestEnabler> rvh_test_enabler_;
 
 #if defined(OS_WIN)
   ui::ScopedOleInitializer ole_initializer_;

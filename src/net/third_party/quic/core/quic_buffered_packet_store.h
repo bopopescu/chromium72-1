@@ -17,7 +17,7 @@
 #include "net/third_party/quic/platform/api/quic_socket_address.h"
 #include "net/third_party/quic/platform/api/quic_string.h"
 
-namespace net {
+namespace quic {
 
 namespace test {
 class QuicBufferedPacketStorePeer;
@@ -71,6 +71,8 @@ class QUIC_EXPORT_PRIVATE QuicBufferedPacketStore {
     QuicString alpn;
     // Indicating whether this is an IETF QUIC connection.
     bool ietf_quic;
+    // QUIC version if buffered_packets contains the CHLO.
+    ParsedQuicVersion version;
   };
 
   typedef QuicLinkedHashMap<QuicConnectionId, BufferedPacketList>
@@ -96,13 +98,16 @@ class QUIC_EXPORT_PRIVATE QuicBufferedPacketStore {
   QuicBufferedPacketStore& operator=(const QuicBufferedPacketStore&) = delete;
 
   // Adds a copy of packet into packet queue for given connection.
+  // TODO(danzh): Consider to split this method to EnqueueChlo() and
+  // EnqueueDataPacket().
   EnqueuePacketResult EnqueuePacket(QuicConnectionId connection_id,
                                     bool ietf_quic,
                                     const QuicReceivedPacket& packet,
                                     QuicSocketAddress server_address,
                                     QuicSocketAddress client_address,
                                     bool is_chlo,
-                                    const QuicString& alpn);
+                                    const QuicString& alpn,
+                                    const ParsedQuicVersion& version);
 
   // Returns true if there are any packets buffered for |connection_id|.
   bool HasBufferedPackets(QuicConnectionId connection_id) const;
@@ -165,6 +170,6 @@ class QUIC_EXPORT_PRIVATE QuicBufferedPacketStore {
   QuicLinkedHashMap<QuicConnectionId, bool> connections_with_chlo_;
 };
 
-}  // namespace net
+}  // namespace quic
 
 #endif  // NET_THIRD_PARTY_QUIC_CORE_QUIC_BUFFERED_PACKET_STORE_H_

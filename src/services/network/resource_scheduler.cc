@@ -13,12 +13,15 @@
 #include "base/macros.h"
 #include "base/metrics/field_trial.h"
 #include "base/metrics/field_trial_params.h"
+#include "base/metrics/histogram_functions.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/optional.h"
 #include "base/sequenced_task_runner.h"
 #include "base/stl_util.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/supports_user_data.h"
+#include "base/time/default_tick_clock.h"
+#include "base/time/tick_clock.h"
 #include "base/trace_event/trace_event.h"
 #include "net/base/host_port_pair.h"
 #include "net/base/load_flags.h"
@@ -29,7 +32,6 @@
 #include "net/url_request/url_request.h"
 #include "net/url_request/url_request_context.h"
 #include "services/network/public/cpp/features.h"
-#include "services/network/resource_scheduler_params_manager.h"
 #include "url/scheme_host_port.h"
 
 namespace network {
@@ -46,28 +48,10 @@ namespace {
 const base::Feature kPrioritySupportedRequestsDelayable{
     "PrioritySupportedRequestsDelayable", base::FEATURE_DISABLED_BY_DEFAULT};
 
-// When kSpdyProxiesRequestsDelayable is enabled, HTTP requests fetched from
-// a SPDY/QUIC/H2 proxies can be delayed by the ResourceScheduler just as
-// HTTP/1.1 resources are.
-const base::Feature kSpdyProxiesRequestsDelayable{
-    "SpdyProxiesRequestsDelayable", base::FEATURE_DISABLED_BY_DEFAULT};
-
 // When enabled, low-priority H2 and QUIC requests are throttled, but only
 // when the parser is in head.
 const base::Feature kHeadPrioritySupportedRequestsDelayable{
     "HeadPriorityRequestsDelayable", base::FEATURE_DISABLED_BY_DEFAULT};
-
-// In the event that many resource requests are started quickly, this feature
-// will periodically yield (e.g., delaying starting of requests) by posting a
-// task and waiting for the task to run to resume. This allows other
-// operations that rely on the IO thread (e.g., already running network
-// requests) to make progress.
-const base::Feature kNetworkSchedulerYielding{
-    "NetworkSchedulerYielding", base::FEATURE_DISABLED_BY_DEFAULT};
-const char kMaxRequestsBeforeYieldingParam[] = "MaxRequestsBeforeYieldingParam";
-const int kMaxRequestsBeforeYieldingDefault = 5;
-const char kYieldMsParam[] = "MaxYieldMs";
-const int kYieldMsDefault = 0;
 
 enum StartMode { START_SYNC, START_ASYNC };
 
@@ -88,7 +72,7 @@ enum class RequestStartTrigger {
   CLIENT_KILL,
   SPDY_PROXY_DETECTED,
   REQUEST_REPRIORITIZED,
-  START_WAS_YIELDED,
+  LONG_QUEUED_REQUESTS_TIMER_FIRED,
 };
 
 const char* RequestStartTriggerString(RequestStartTrigger trigger) {
@@ -107,11 +91,9 @@ const char* RequestStartTriggerString(RequestStartTrigger trigger) {
       return "SPDY_PROXY_DETECTED";
     case RequestStartTrigger::REQUEST_REPRIORITIZED:
       return "REQUEST_REPRIORITIZED";
-    case RequestStartTrigger::START_WAS_YIELDED:
-      return "START_WAS_YIELDED";
+    case RequestStartTrigger::LONG_QUEUED_REQUESTS_TIMER_FIRED:
+      return "LONG_QUEUED_REQUESTS_TIMER_FIRED";
   }
-  NOTREACHED();
-  return "Unknown";
 }
 
 }  // namespace
@@ -125,17 +107,21 @@ static const size_t kMaxNumDelayableRequestsPerHostPerClient = 6;
 // point in time while in the layout-blocking phase of loading.
 static const size_t kMaxNumDelayableWhileLayoutBlockingPerClient = 1;
 
-// The priority level above which resources are considered layout-blocking if
-// the html_body has not started.
-static const net::RequestPriority kLayoutBlockingPriorityThreshold =
-    net::MEDIUM;
-
 // The priority level below which resources are considered to be delayable.
 static const net::RequestPriority kDelayablePriorityThreshold = net::MEDIUM;
 
 // The number of in-flight layout-blocking requests above which all delayable
 // requests should be blocked.
 static const size_t kInFlightNonDelayableRequestCountPerClientThreshold = 1;
+
+// Duration after which the timer to dispatch long queued requests should fire.
+// The request needs to be queued for at least 15 seconds before it can be
+// dispatched. Choosing 5 seconds as the checking interval ensures that the
+// queue is not checked too frequently. The interval is also not too long, so
+// we do not expect too many long queued requests to go on the network at the
+// same time.
+constexpr base::TimeDelta kLongQueuedRequestsDispatchPeriodicity =
+    base::TimeDelta::FromSeconds(5);
 
 struct ResourceScheduler::RequestPriorityParams {
   RequestPriorityParams()
@@ -390,26 +376,19 @@ void ResourceScheduler::RequestQueue::Insert(
 class ResourceScheduler::Client {
  public:
   Client(const net::NetworkQualityEstimator* const network_quality_estimator,
-         ResourceScheduler* resource_scheduler)
-      : spdy_proxy_requests_delayble_(
-            base::FeatureList::IsEnabled(kSpdyProxiesRequestsDelayable)),
-        deprecated_is_loaded_(false),
-        deprecated_has_html_body_(false),
-        using_spdy_proxy_(false),
+         ResourceScheduler* resource_scheduler,
+         const base::TickClock* tick_clock)
+      : deprecated_is_loaded_(false),
         in_flight_delayable_count_(0),
         total_layout_blocking_count_(0),
         num_skipped_scans_due_to_scheduled_start_(0),
-        started_requests_since_yielding_(0),
-        did_scheduler_yield_(false),
         network_quality_estimator_(network_quality_estimator),
         resource_scheduler_(resource_scheduler),
+        tick_clock_(tick_clock),
         weak_ptr_factory_(this) {
+    DCHECK(tick_clock_);
+
     UpdateParamsForNetworkQuality();
-    if (IsRendererSideResourceSchedulerEnabled()) {
-      // In this case, "layout blocking" concept is moved to the renderer side,
-      // so the shceduler works always with the normal mode.
-      deprecated_has_html_body_ = true;
-    }
     // Must not run the conflicting experiments together.
     DCHECK(!params_for_network_quality_
                 .delay_requests_on_multiplexed_connections ||
@@ -430,8 +409,6 @@ class ResourceScheduler::Client {
       StartRequest(request, START_SYNC, RequestStartTrigger::NONE);
     } else {
       pending_requests_.Insert(request);
-      if (should_start == YIELD_SCHEDULER)
-        did_scheduler_yield_ = true;
     }
   }
 
@@ -444,8 +421,7 @@ class ResourceScheduler::Client {
 
       // Removing this request may have freed up another to load.
       LoadAnyStartablePendingRequests(
-          deprecated_has_html_body_ ? RequestStartTrigger::COMPLETION_POST_BODY
-                                    : RequestStartTrigger::COMPLETION_PRE_BODY);
+          RequestStartTrigger::COMPLETION_POST_BODY);
     }
   }
 
@@ -481,36 +457,8 @@ class ResourceScheduler::Client {
   }
 
   void DeprecatedOnNavigate() {
-    deprecated_has_html_body_ = false;
-    if (IsRendererSideResourceSchedulerEnabled()) {
-      // In this case, "layout blocking" concept is moved to the renderer side,
-      // so the shceduler works always with the normal mode.
-      deprecated_has_html_body_ = true;
-    }
-
     deprecated_is_loaded_ = false;
     UpdateParamsForNetworkQuality();
-  }
-
-  void DeprecatedOnWillInsertBody() {
-    // Can be called multiple times per RVH in the case of out-of-process
-    // iframes.
-    if (deprecated_has_html_body_)
-      return;
-    deprecated_has_html_body_ = true;
-    LoadAnyStartablePendingRequests(RequestStartTrigger::BODY_REACHED);
-  }
-
-  void OnReceivedSpdyProxiedHttpResponse() {
-    // If the requests to SPDY/H2/QUIC proxies are delayable, then return
-    // immediately.
-    if (spdy_proxy_requests_delayble_)
-      return;
-
-    if (!using_spdy_proxy_) {
-      using_spdy_proxy_ = true;
-      LoadAnyStartablePendingRequests(RequestStartTrigger::SPDY_PROXY_DETECTED);
-    }
   }
 
   void ReprioritizeRequest(ScheduledResourceRequestImpl* request,
@@ -535,23 +483,29 @@ class ResourceScheduler::Client {
     }
   }
 
- private:
-  enum ShouldStartReqResult {
-    DO_NOT_START_REQUEST_AND_STOP_SEARCHING,
-    DO_NOT_START_REQUEST_AND_KEEP_SEARCHING,
-    START_REQUEST,
-    YIELD_SCHEDULER
-  };
-
   // Updates the params based on the current network quality estimate.
   void UpdateParamsForNetworkQuality() {
     params_for_network_quality_ =
         resource_scheduler_->resource_scheduler_params_manager_
-            ->GetParamsForEffectiveConnectionType(
+            .GetParamsForEffectiveConnectionType(
                 network_quality_estimator_
                     ? network_quality_estimator_->GetEffectiveConnectionType()
                     : net::EFFECTIVE_CONNECTION_TYPE_UNKNOWN);
   }
+
+  void OnLongQueuedRequestsDispatchTimerFired() {
+    LoadAnyStartablePendingRequests(
+        RequestStartTrigger::LONG_QUEUED_REQUESTS_TIMER_FIRED);
+  }
+
+  bool HasNoPendingRequests() const { return pending_requests_.IsEmpty(); }
+
+ private:
+  enum ShouldStartReqResult {
+    DO_NOT_START_REQUEST_AND_STOP_SEARCHING,
+    DO_NOT_START_REQUEST_AND_KEEP_SEARCHING,
+    START_REQUEST
+  };
 
   // Records the metrics related to number of requests in flight.
   void RecordRequestCountMetrics() const {
@@ -677,17 +631,9 @@ class ResourceScheduler::Client {
       // If a request is already marked as layout-blocking make sure to keep the
       // attribute across redirects.
       attributes |= kAttributeLayoutBlocking;
-    } else if (!deprecated_has_html_body_ &&
-               request->url_request()->priority() >
-                   kLayoutBlockingPriorityThreshold) {
-      // Requests that are above the non_delayable threshold before the HTML
-      // body has been parsed are inferred to be layout-blocking.
-      attributes |= kAttributeLayoutBlocking;
     } else if (request->url_request()->priority() <
                kDelayablePriorityThreshold) {
       if (resource_scheduler_->priority_requests_delayable() ||
-          (resource_scheduler_->head_priority_requests_delayable() &&
-           !deprecated_has_html_body_) ||
           params_for_network_quality_
               .delay_requests_on_multiplexed_connections) {
         // Resources below the delayable priority threshold that are considered
@@ -746,21 +692,6 @@ class ResourceScheduler::Client {
   void StartRequest(ScheduledResourceRequestImpl* request,
                     StartMode start_mode,
                     RequestStartTrigger trigger) {
-    if (resource_scheduler_->yielding_scheduler_enabled()) {
-      started_requests_since_yielding_ += 1;
-      if (started_requests_since_yielding_ == 1) {
-        // This is the first started request since last yielding. Post a task to
-        // reset the counter and start any yielded tasks if necessary. We post
-        // this now instead of when we first yield so that if there is a pause
-        // between requests the counter is reset.
-        resource_scheduler_->task_runner()->PostDelayedTask(
-            FROM_HERE,
-            base::BindOnce(&Client::ResumeIfYielded,
-                           weak_ptr_factory_.GetWeakPtr()),
-            resource_scheduler_->yield_time());
-      }
-    }
-
     // Only log on requests that were blocked by the ResourceScheduler.
     if (start_mode == START_ASYNC) {
       DCHECK_NE(RequestStartTrigger::NONE, trigger);
@@ -776,6 +707,15 @@ class ResourceScheduler::Client {
           "ResourceScheduler.NumDelayableRequestsInFlightAtStart.NonDelayable",
           in_flight_delayable_count_);
     }
+
+    DCHECK(!request->url_request()->creation_time().is_null());
+    base::TimeDelta queuing_duration =
+        base::TimeTicks::Now() - request->url_request()->creation_time();
+    base::UmaHistogramMediumTimes(
+        "ResourceScheduler.RequestQueuingDuration.Priority" +
+            base::IntToString(request->get_request_priority_params().priority),
+        queuing_duration);
+
     InsertInFlightRequest(request);
     request->Start(start_mode);
   }
@@ -830,12 +770,16 @@ class ResourceScheduler::Client {
     if (!url_request.url().SchemeIsHTTPOrHTTPS())
       return START_REQUEST;
 
+    if (params_for_network_quality_.max_queuing_time &&
+        tick_clock_->NowTicks() - url_request.creation_time() >=
+            params_for_network_quality_.max_queuing_time) {
+      return START_REQUEST;
+    }
+
     const net::HostPortPair& host_port_pair = request->host_port_pair();
 
     bool priority_delayable =
         resource_scheduler_->priority_requests_delayable() ||
-        (resource_scheduler_->head_priority_requests_delayable() &&
-         !deprecated_has_html_body_) ||
         params_for_network_quality_.delay_requests_on_multiplexed_connections;
 
     url::SchemeHostPort scheme_host_port(url_request.url());
@@ -844,14 +788,11 @@ class ResourceScheduler::Client {
                                  ->SupportsRequestPriority(scheme_host_port);
 
     if (!priority_delayable) {
-      if (using_spdy_proxy_ && url_request.url().SchemeIs(url::kHttpScheme))
-        return ShouldStartOrYieldRequest(request);
-
       // TODO(willchan): We should really improve this algorithm as described in
       // https://crbug.com/164101. Also, theoretically we should not count a
       // request-priority capable request against the delayable requests limit.
       if (supports_priority)
-        return ShouldStartOrYieldRequest(request);
+        return START_REQUEST;
     }
 
     // Non-delayable requests.
@@ -879,7 +820,7 @@ class ResourceScheduler::Client {
     // delayable requests is handled above here so this is deciding what to
     // do with a delayable request while we are in the layout-blocking phase
     // of loading.
-    if (!deprecated_has_html_body_ || total_layout_blocking_count_ != 0) {
+    if (total_layout_blocking_count_ != 0) {
       size_t non_delayable_requests_in_flight_count =
           in_flight_requests_.size() - in_flight_delayable_count_;
       if (non_delayable_requests_in_flight_count >
@@ -920,34 +861,6 @@ class ResourceScheduler::Client {
     num_skipped_scans_due_to_scheduled_start_ += 1;
   }
 
-  void ResumeIfYielded() {
-    bool yielded = did_scheduler_yield_;
-    started_requests_since_yielding_ = 0;
-    did_scheduler_yield_ = false;
-
-    if (yielded)
-      LoadAnyStartablePendingRequests(RequestStartTrigger::START_WAS_YIELDED);
-  }
-
-  // For a request that is ready to start, return START_REQUEST if the
-  // scheduler doesn't need to yield, else YIELD_SCHEDULER.
-  ShouldStartReqResult ShouldStartOrYieldRequest(
-      ScheduledResourceRequestImpl* request) const {
-    DCHECK_GE(started_requests_since_yielding_, 0);
-
-    // Don't yield if:
-    // 1. The yielding scheduler isn't enabled
-    // 2. The resource is high priority
-    // 3. There haven't been enough recent requests to warrant yielding.
-    if (!resource_scheduler_->yielding_scheduler_enabled() ||
-        request->url_request()->priority() >= kDelayablePriorityThreshold ||
-        started_requests_since_yielding_ <
-            resource_scheduler_->max_requests_before_yielding()) {
-      return START_REQUEST;
-    }
-    return YIELD_SCHEDULER;
-  }
-
   void LoadAnyStartablePendingRequests(RequestStartTrigger trigger) {
     // We iterate through all the pending requests, starting with the highest
     // priority one. For each entry, one of three things can happen:
@@ -984,9 +897,6 @@ class ResourceScheduler::Client {
       } else if (query_result == DO_NOT_START_REQUEST_AND_KEEP_SEARCHING) {
         ++request_iter;
         continue;
-      } else if (query_result == YIELD_SCHEDULER) {
-        did_scheduler_yield_ = true;
-        break;
       } else {
         DCHECK(query_result == DO_NOT_START_REQUEST_AND_STOP_SEARCHING);
         break;
@@ -994,17 +904,11 @@ class ResourceScheduler::Client {
     }
   }
 
-  // True if requests to SPDY/H2/QUIC proxies can be delayed by the
-  // ResourceScheduler just as HTTP/1.1 resources are.
-  const bool spdy_proxy_requests_delayble_;
-
   bool deprecated_is_loaded_;
   // Tracks if the main HTML parser has reached the body which marks the end of
   // layout-blocking resources.
   // This is disabled and the is always true when kRendererSideResourceScheduler
   // is enabled.
-  bool deprecated_has_html_body_;
-  bool using_spdy_proxy_;
   RequestQueue pending_requests_;
   RequestSet in_flight_requests_;
   // The number of delayable in-flight requests.
@@ -1015,14 +919,6 @@ class ResourceScheduler::Client {
   // The number of LoadAnyStartablePendingRequests scans that were skipped due
   // to smarter task scheduling around reprioritization.
   int num_skipped_scans_due_to_scheduled_start_;
-
-  // The number of started requests since the last ResumeIfYielded task was
-  // run.
-  int started_requests_since_yielding_;
-
-  // If the scheduler had to yield the start of a request since the last
-  // ResumeIfYielded task was run.
-  bool did_scheduler_yield_;
 
   // Network quality estimator for network aware resource scheudling. This may
   // be null.
@@ -1037,31 +933,29 @@ class ResourceScheduler::Client {
   // configuration.
   ResourceScheduler* resource_scheduler_;
 
+  // Guaranteed to be non-null.
+  const base::TickClock* tick_clock_;
+
   base::WeakPtrFactory<ResourceScheduler::Client> weak_ptr_factory_;
 };
 
-ResourceScheduler::ResourceScheduler(bool enabled)
-    : enabled_(enabled),
+ResourceScheduler::ResourceScheduler(bool enabled,
+                                     const base::TickClock* tick_clock)
+    : tick_clock_(tick_clock ? tick_clock
+                             : base::DefaultTickClock::GetInstance()),
+      enabled_(enabled),
       priority_requests_delayable_(
           base::FeatureList::IsEnabled(kPrioritySupportedRequestsDelayable)),
       head_priority_requests_delayable_(base::FeatureList::IsEnabled(
           kHeadPrioritySupportedRequestsDelayable)),
-      yielding_scheduler_enabled_(
-          base::FeatureList::IsEnabled(kNetworkSchedulerYielding)),
-      max_requests_before_yielding_(base::GetFieldTrialParamByFeatureAsInt(
-          kNetworkSchedulerYielding,
-          kMaxRequestsBeforeYieldingParam,
-          kMaxRequestsBeforeYieldingDefault)),
-      yield_time_(base::TimeDelta::FromMilliseconds(
-          base::GetFieldTrialParamByFeatureAsInt(kNetworkSchedulerYielding,
-                                                 kYieldMsParam,
-                                                 kYieldMsDefault))),
       task_runner_(base::ThreadTaskRunnerHandle::Get()) {
-  resource_scheduler_params_manager_ =
-      std::make_unique<ResourceSchedulerParamsManager>();
+  DCHECK(tick_clock_);
+
   // Don't run the two experiments together.
   if (priority_requests_delayable_ && head_priority_requests_delayable_)
     priority_requests_delayable_ = false;
+
+  StartLongQueuedRequestsDispatchTimerIfNeeded();
 }
 
 ResourceScheduler::~ResourceScheduler() {
@@ -1095,6 +989,10 @@ ResourceScheduler::ScheduleRequest(int child_id,
 
   Client* client = it->second.get();
   client->ScheduleRequest(*url_request, request.get());
+
+  if (!IsLongQueuedRequestsDispatchTimerRunning())
+    StartLongQueuedRequestsDispatchTimerIfNeeded();
+
   return std::move(request);
 }
 
@@ -1122,16 +1020,25 @@ void ResourceScheduler::OnClientCreated(
   DCHECK(!base::ContainsKey(client_map_, client_id));
 
   client_map_[client_id] =
-      std::make_unique<Client>(network_quality_estimator, this);
+      std::make_unique<Client>(network_quality_estimator, this, tick_clock_);
 }
 
 void ResourceScheduler::OnClientDeleted(int child_id, int route_id) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+
   ClientId client_id = MakeClientId(child_id, route_id);
   ClientMap::iterator it = client_map_.find(client_id);
-  DCHECK(it != client_map_.end());
+  // TODO(crbug.com/873959): Turns this CHECK to DCHECK once the investigation
+  // is done.
+  CHECK(it != client_map_.end());
 
   Client* client = it->second.get();
+  // TODO(crbug.com/873959): Remove this CHECK once the investigation is done.
+  CHECK(client);
+  DCHECK(!base::FeatureList::IsEnabled(
+             features::kUnthrottleRequestsAfterLongQueuingDelay) ||
+         client->HasNoPendingRequests() ||
+         IsLongQueuedRequestsDispatchTimerRunning());
   // ResourceDispatcherHost cancels all requests except for cross-renderer
   // navigations, async revalidations and detachable requests after
   // OnClientDeleted() returns.
@@ -1166,33 +1073,6 @@ void ResourceScheduler::DeprecatedOnNavigate(int child_id, int route_id) {
   client->DeprecatedOnNavigate();
 }
 
-void ResourceScheduler::DeprecatedOnWillInsertBody(int child_id, int route_id) {
-  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  ClientId client_id = MakeClientId(child_id, route_id);
-
-  ClientMap::iterator it = client_map_.find(client_id);
-  if (it == client_map_.end()) {
-    // The client was likely deleted shortly before we received this IPC.
-    return;
-  }
-
-  Client* client = it->second.get();
-  client->DeprecatedOnWillInsertBody();
-}
-
-void ResourceScheduler::OnReceivedSpdyProxiedHttpResponse(int child_id,
-                                                          int route_id) {
-  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  ClientId client_id = MakeClientId(child_id, route_id);
-
-  ClientMap::iterator client_it = client_map_.find(client_id);
-  if (client_it == client_map_.end())
-    return;
-
-  Client* client = client_it->second.get();
-  client->OnReceivedSpdyProxiedHttpResponse();
-}
-
 bool ResourceScheduler::DeprecatedHasLoadingClients() const {
   for (const auto& client : client_map_) {
     if (!client.second->deprecated_is_loaded())
@@ -1208,6 +1088,40 @@ ResourceScheduler::Client* ResourceScheduler::GetClient(int child_id,
   if (client_it == client_map_.end())
     return nullptr;
   return client_it->second.get();
+}
+
+void ResourceScheduler::StartLongQueuedRequestsDispatchTimerIfNeeded() {
+  if (!base::FeatureList::IsEnabled(
+          features::kUnthrottleRequestsAfterLongQueuingDelay)) {
+    return;
+  }
+
+  bool pending_request_found = false;
+  for (const auto& client : client_map_) {
+    if (!client.second->HasNoPendingRequests()) {
+      pending_request_found = true;
+      break;
+    }
+  }
+
+  // If there are no pending requests, then do not start the timer. This ensures
+  // that we are not running the periodic timer when Chrome is not being
+  // actively used (e.g., it's in background).
+  if (!pending_request_found)
+    return;
+
+  long_queued_requests_dispatch_timer_.Start(
+      FROM_HERE, kLongQueuedRequestsDispatchPeriodicity, this,
+      &ResourceScheduler::OnLongQueuedRequestsDispatchTimerFired);
+}
+
+void ResourceScheduler::OnLongQueuedRequestsDispatchTimerFired() {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+
+  for (auto& client : client_map_)
+    client.second->OnLongQueuedRequestsDispatchTimerFired();
+
+  StartLongQueuedRequestsDispatchTimerIfNeeded();
 }
 
 void ResourceScheduler::ReprioritizeRequest(net::URLRequest* request,
@@ -1266,22 +1180,23 @@ ResourceScheduler::ClientId ResourceScheduler::MakeClientId(int child_id,
   return (static_cast<ResourceScheduler::ClientId>(child_id) << 32) | route_id;
 }
 
-bool ResourceScheduler::IsRendererSideResourceSchedulerEnabled() {
-  // We are assuming that kRendererSideResourceScheduler will be shipped when
-  // launching Network Service, so let's act as if
-  // kRendererSideResourceScheduler is enabled when kNetworkService is enabled.
-  return base::FeatureList::IsEnabled(
-             features::kRendererSideResourceScheduler) ||
-         base::FeatureList::IsEnabled(features::kNetworkService);
+bool ResourceScheduler::IsLongQueuedRequestsDispatchTimerRunning() const {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  return long_queued_requests_dispatch_timer_.IsRunning();
 }
 
 void ResourceScheduler::SetResourceSchedulerParamsManagerForTests(
-    std::unique_ptr<ResourceSchedulerParamsManager>
-        resource_scheduler_params_manager) {
+    const ResourceSchedulerParamsManager& resource_scheduler_params_manager) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  resource_scheduler_params_manager_ =
-      std::move(resource_scheduler_params_manager);
-  DCHECK(resource_scheduler_params_manager_);
+  resource_scheduler_params_manager_.Reset(resource_scheduler_params_manager);
+  for (const auto& pair : client_map_) {
+    pair.second->UpdateParamsForNetworkQuality();
+  }
+}
+
+void ResourceScheduler::DispatchLongQueuedRequestsForTesting() {
+  long_queued_requests_dispatch_timer_.Stop();
+  OnLongQueuedRequestsDispatchTimerFired();
 }
 
 }  // namespace network

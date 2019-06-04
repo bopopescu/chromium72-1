@@ -48,29 +48,30 @@ class FakeVideoCaptureStack::Receiver : public media::VideoFrameReceiver {
       media::mojom::VideoFrameInfoPtr frame_info) final {
     const auto it = buffers_.find(buffer_id);
     CHECK(it != buffers_.end());
-    CHECK(it->second->is_shared_buffer_handle());
-    mojo::ScopedSharedBufferHandle& buffer =
-        it->second->get_shared_buffer_handle();
 
-    const size_t mapped_size =
-        media::VideoCaptureFormat(frame_info->coded_size, 0.0f,
-                                  frame_info->pixel_format)
-            .ImageAllocationSize();
-    mojo::ScopedSharedBufferMapping mapping = buffer->Map(mapped_size);
-    CHECK(mapping.get());
+    CHECK(it->second->is_read_only_shmem_region());
+    base::ReadOnlySharedMemoryMapping mapping =
+        it->second->get_read_only_shmem_region().Map();
+    CHECK(mapping.IsValid());
+    CHECK_LE(media::VideoCaptureFormat(frame_info->coded_size, 0.0f,
+                                       frame_info->pixel_format)
+                 .ImageAllocationSize(),
+             mapping.size());
 
     auto frame = media::VideoFrame::WrapExternalData(
         frame_info->pixel_format, frame_info->coded_size,
         frame_info->visible_rect, frame_info->visible_rect.size(),
-        reinterpret_cast<uint8_t*>(mapping.get()), mapped_size,
-        frame_info->timestamp);
+        const_cast<uint8_t*>(static_cast<const uint8_t*>(mapping.memory())),
+        mapping.size(), frame_info->timestamp);
     CHECK(frame);
     frame->metadata()->MergeInternalValuesFrom(frame_info->metadata);
+    if (frame_info->color_space.has_value())
+      frame->set_color_space(frame_info->color_space.value());
     // This destruction observer will unmap the shared memory when the
     // VideoFrame goes out-of-scope.
-    frame->AddDestructionObserver(
-        base::BindOnce(base::DoNothing::Once<mojo::ScopedSharedBufferMapping>(),
-                       std::move(mapping)));
+    frame->AddDestructionObserver(base::BindOnce(
+        base::DoNothing::Once<base::ReadOnlySharedMemoryMapping>(),
+        std::move(mapping)));
     // This destruction observer will notify the video capture device once all
     // downstream code is done using the VideoFrame.
     frame->AddDestructionObserver(base::BindOnce(
@@ -86,7 +87,11 @@ class FakeVideoCaptureStack::Receiver : public media::VideoFrameReceiver {
     buffers_.erase(it);
   }
 
-  void OnError() final { capture_stack_->error_occurred_ = true; }
+  void OnError(media::VideoCaptureError) final {
+    capture_stack_->error_occurred_ = true;
+  }
+
+  void OnFrameDropped(media::VideoCaptureFrameDropReason) final {}
 
   void OnLog(const std::string& message) final {
     capture_stack_->log_messages_.push_back(message);
@@ -113,9 +118,10 @@ SkBitmap FakeVideoCaptureStack::NextCapturedFrame() {
   SkBitmap bitmap;
   bitmap.allocN32Pixels(frame.visible_rect().width(),
                         frame.visible_rect().height());
-  // TODO(crbug/810131): This is not Rec.709 colorspace conversion, and so will
-  // introduce inaccuracies.
-  libyuv::I420ToARGB(frame.visible_data(media::VideoFrame::kYPlane),
+  // TODO(crbug/810131): CHECK_EQ(frame.ColorSpace(), REC709);
+  // libyuv::H420ToARGB() converts from I420 planes in the REC709 color space to
+  // sRGB.
+  libyuv::H420ToARGB(frame.visible_data(media::VideoFrame::kYPlane),
                      frame.stride(media::VideoFrame::kYPlane),
                      frame.visible_data(media::VideoFrame::kUPlane),
                      frame.stride(media::VideoFrame::kUPlane),

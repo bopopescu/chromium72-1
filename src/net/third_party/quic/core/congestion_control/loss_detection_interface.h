@@ -1,7 +1,7 @@
 // Copyright 2014 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
-//
+
 // The pure virtual class for send side loss detection algorithm.
 
 #ifndef NET_THIRD_PARTY_QUIC_CORE_CONGESTION_CONTROL_LOSS_DETECTION_INTERFACE_H_
@@ -12,7 +12,7 @@
 #include "net/third_party/quic/core/quic_time.h"
 #include "net/third_party/quic/platform/api/quic_export.h"
 
-namespace net {
+namespace quic {
 
 class QuicUnackedPacketMap;
 class RttStats;
@@ -28,6 +28,7 @@ class QUIC_EXPORT_PRIVATE LossDetectionInterface {
                             QuicTime time,
                             const RttStats& rtt_stats,
                             QuicPacketNumber largest_newly_acked,
+                            const AckedPacketVector& packets_acked,
                             LostPacketVector* packets_lost) = 0;
 
   // Get the time the LossDetectionAlgorithm wants to re-evaluate losses.
@@ -43,6 +44,6 @@ class QUIC_EXPORT_PRIVATE LossDetectionInterface {
       QuicPacketNumber spurious_retransmission) = 0;
 };
 
-}  // namespace net
+}  // namespace quic
 
 #endif  // NET_THIRD_PARTY_QUIC_CORE_CONGESTION_CONTROL_LOSS_DETECTION_INTERFACE_H_

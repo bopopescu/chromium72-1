@@ -86,9 +86,11 @@ class EnrollmentScreen
   void OnDeviceEnrolled(const std::string& additional_token) override;
   void OnDeviceAttributeUploadCompleted(bool success) override;
   void OnDeviceAttributeUpdatePermission(bool granted) override;
+  void OnRestoreAfterRollbackCompleted() override;
 
   // ActiveDirectoryJoinDelegate implementation:
   void JoinDomain(const std::string& dm_token,
+                  const std::string& domain_join_config,
                   OnDomainJoinedCallback on_joined_callback) override;
 
   // Used for testing.
@@ -98,6 +100,7 @@ class EnrollmentScreen
   friend class MultiLicenseEnrollmentScreenUnitTest;
   friend class ZeroTouchEnrollmentScreenUnitTest;
   friend class AutomaticReenrollmentScreenUnitTest;
+  friend class EnterpriseEnrollmentConfigurationTest;
 
   FRIEND_TEST_ALL_PREFIXES(AttestationAuthEnrollmentScreenTest, TestCancel);
   FRIEND_TEST_ALL_PREFIXES(ForcedAttestationAuthEnrollmentScreenTest,
@@ -109,16 +112,18 @@ class EnrollmentScreen
                            TestAttributePromptPageGetsLoaded);
   FRIEND_TEST_ALL_PREFIXES(EnterpriseEnrollmentTest,
                            TestAuthCodeGetsProperlyReceivedFromGaia);
-  FRIEND_TEST_ALL_PREFIXES(EnterpriseEnrollmentTest,
+  FRIEND_TEST_ALL_PREFIXES(ActiveDirectoryJoinTest,
                            TestActiveDirectoryEnrollment_Success);
-  FRIEND_TEST_ALL_PREFIXES(EnterpriseEnrollmentTest,
+  FRIEND_TEST_ALL_PREFIXES(ActiveDirectoryJoinTest,
                            TestActiveDirectoryEnrollment_DistinguishedName);
-  FRIEND_TEST_ALL_PREFIXES(EnterpriseEnrollmentTest,
+  FRIEND_TEST_ALL_PREFIXES(ActiveDirectoryJoinTest,
                            TestActiveDirectoryEnrollment_UIErrors);
-  FRIEND_TEST_ALL_PREFIXES(EnterpriseEnrollmentTest,
+  FRIEND_TEST_ALL_PREFIXES(ActiveDirectoryJoinTest,
                            TestActiveDirectoryEnrollment_ErrorCard);
-  FRIEND_TEST_ALL_PREFIXES(HandsOffNetworkScreenTest, RequiresNoInput);
-  FRIEND_TEST_ALL_PREFIXES(HandsOffNetworkScreenTest, ContinueClickedOnlyOnce);
+  FRIEND_TEST_ALL_PREFIXES(ActiveDirectoryJoinTest,
+                           TestActiveDirectoryEnrollment_Streamline);
+  FRIEND_TEST_ALL_PREFIXES(HandsOffWelcomeScreenTest, RequiresNoInput);
+  FRIEND_TEST_ALL_PREFIXES(HandsOffWelcomeScreenTest, ContinueClickedOnlyOnce);
   FRIEND_TEST_ALL_PREFIXES(ZeroTouchEnrollmentScreenUnitTest, Retry);
   FRIEND_TEST_ALL_PREFIXES(ZeroTouchEnrollmentScreenUnitTest, TestSuccess);
   FRIEND_TEST_ALL_PREFIXES(ZeroTouchEnrollmentScreenUnitTest,
@@ -160,6 +165,10 @@ class EnrollmentScreen
   // Do attestation based enrollment.
   void AuthenticateUsingAttestation();
 
+  // Starts flow that would handle necessary steps to restore after version
+  // rollback.
+  void RestoreAfterRollback();
+
   // Shows the interactive screen. Resets auth then shows the signin screen.
   void ShowInteractiveScreen();
 
@@ -198,6 +207,7 @@ class EnrollmentScreen
   Auth current_auth_ = AUTH_OAUTH;
   Auth last_auth_ = AUTH_OAUTH;
   bool enrollment_failed_once_ = false;
+  bool enrollment_succeeded_ = false;
   std::string enrolling_user_domain_;
   std::unique_ptr<base::ElapsedTimer> elapsed_timer_;
   net::BackoffEntry::Policy retry_policy_;

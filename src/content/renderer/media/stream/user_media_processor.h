@@ -105,8 +105,12 @@ class CONTENT_EXPORT UserMediaProcessor
     return media_stream_device_observer_.get();
   }
 
+  bool HasActiveSources() const;
+
   // MediaStreamDispatcherEventHandler implementation.
   void OnDeviceStopped(const MediaStreamDevice& device) override;
+  void OnDeviceChanged(const MediaStreamDevice& old_device,
+                       const MediaStreamDevice& new_device) override;
 
   void set_media_stream_dispatcher_host_for_testing(
       mojom::MediaStreamDispatcherHostPtr dispatcher_host) {
@@ -270,7 +274,7 @@ class CONTENT_EXPORT UserMediaProcessor
   void FinalizeSelectVideoDeviceSettings(
       const blink::WebUserMediaRequest& web_request,
       const VideoCaptureSettings& settings);
-  void SelectVideoContentSettings();
+  void SelectVideoContentSettings(bool allow_device_id_constraint);
 
   void GenerateStreamForCurrentRequestInfo();
 

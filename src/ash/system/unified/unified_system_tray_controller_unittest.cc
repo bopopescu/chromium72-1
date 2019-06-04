@@ -4,7 +4,6 @@
 
 #include "ash/system/unified/unified_system_tray_controller.h"
 
-#include "ash/public/cpp/config.h"
 #include "ash/shell.h"
 #include "ash/system/unified/unified_system_tray_model.h"
 #include "ash/system/unified/unified_system_tray_view.h"
@@ -30,22 +29,19 @@ class UnifiedSystemTrayControllerTest : public AshTestBase,
     // Initializing NetworkHandler before ash is more like production.
     chromeos::NetworkHandler::Initialize();
     AshTestBase::SetUp();
-    // Mash doesn't do this yet, so don't do it in tests either.
-    // http://crbug.com/718072
-    if (Shell::GetAshConfig() != Config::MASH) {
-      chromeos::NetworkHandler::Get()->InitializePrefServices(&profile_prefs_,
-                                                              &local_state_);
-    }
+    chromeos::NetworkHandler::Get()->InitializePrefServices(&profile_prefs_,
+                                                            &local_state_);
     // Networking stubs may have asynchronous initialization.
     base::RunLoop().RunUntilIdle();
 
     model_ = std::make_unique<UnifiedSystemTrayModel>();
-    controller_ = std::make_unique<UnifiedSystemTrayController>(
-        model(), nullptr /* system_tray */);
+    controller_ = std::make_unique<UnifiedSystemTrayController>(model());
     view_.reset(controller_->CreateView());
 
     view_->AddObserver(this);
     OnViewPreferredSizeChanged(view());
+
+    preferred_size_changed_count_ = 0;
   }
 
   void TearDown() override {
@@ -56,9 +52,7 @@ class UnifiedSystemTrayControllerTest : public AshTestBase,
     model_.reset();
 
     // This roughly matches production shutdown order.
-    if (Shell::GetAshConfig() != Config::MASH) {
-      chromeos::NetworkHandler::Get()->ShutdownPrefServices();
-    }
+    chromeos::NetworkHandler::Get()->ShutdownPrefServices();
     AshTestBase::TearDown();
     chromeos::NetworkHandler::Shutdown();
     chromeos::DBusThreadManager::Shutdown();
@@ -68,12 +62,17 @@ class UnifiedSystemTrayControllerTest : public AshTestBase,
   void OnViewPreferredSizeChanged(views::View* observed_view) override {
     view_->SetBoundsRect(gfx::Rect(view_->GetPreferredSize()));
     view_->Layout();
+    ++preferred_size_changed_count_;
   }
 
  protected:
   void WaitForAnimation() {
     while (controller()->animation_->is_animating())
       base::RunLoop().RunUntilIdle();
+  }
+
+  int preferred_size_changed_count() const {
+    return preferred_size_changed_count_;
   }
 
   UnifiedSystemTrayModel* model() { return model_.get(); }
@@ -88,11 +87,13 @@ class UnifiedSystemTrayControllerTest : public AshTestBase,
   TestingPrefServiceSimple profile_prefs_;
   TestingPrefServiceSimple local_state_;
 
+  int preferred_size_changed_count_ = 0;
+
   DISALLOW_COPY_AND_ASSIGN(UnifiedSystemTrayControllerTest);
 };
 
 TEST_F(UnifiedSystemTrayControllerTest, ToggleExpanded) {
-  EXPECT_TRUE(model()->expanded_on_open());
+  EXPECT_TRUE(model()->IsExpandedOnOpen());
   const int expanded_height = view()->GetPreferredSize().height();
 
   controller()->ToggleExpanded();
@@ -100,7 +101,20 @@ TEST_F(UnifiedSystemTrayControllerTest, ToggleExpanded) {
 
   const int collapsed_height = view()->GetPreferredSize().height();
   EXPECT_LT(collapsed_height, expanded_height);
-  EXPECT_FALSE(model()->expanded_on_open());
+  EXPECT_FALSE(model()->IsExpandedOnOpen());
+}
+
+TEST_F(UnifiedSystemTrayControllerTest, PreferredSizeChanged) {
+  // Checks PreferredSizeChanged is not called too frequently.
+  EXPECT_EQ(0, preferred_size_changed_count());
+  view()->SetExpandedAmount(0.0);
+  EXPECT_EQ(1, preferred_size_changed_count());
+  view()->SetExpandedAmount(0.25);
+  EXPECT_EQ(2, preferred_size_changed_count());
+  view()->SetExpandedAmount(0.75);
+  EXPECT_EQ(3, preferred_size_changed_count());
+  view()->SetExpandedAmount(1.0);
+  EXPECT_EQ(4, preferred_size_changed_count());
 }
 
 }  // namespace ash

@@ -26,9 +26,10 @@ class MultithreadingTest : public ANGLETest
         setConfigGreenBits(8);
         setConfigBlueBits(8);
         setConfigAlphaBits(8);
+        setContextVirtualization(false);
     }
 
-    bool platformSupportsMultithreading() const { return false; }
+    bool platformSupportsMultithreading() const { return (IsOpenGLES() && IsAndroid()); }
 };
 
 // Test that it's possible to make one context current on different threads
@@ -77,6 +78,7 @@ TEST_P(MultithreadingTest, MakeCurrentSingleContext)
 TEST_P(MultithreadingTest, MakeCurrentMultiContext)
 {
     ANGLE_SKIP_TEST_IF(!platformSupportsMultithreading());
+    ANGLE_SKIP_TEST_IF(IsWindows() && IsOpenGL() && IsAMD());
 
     std::mutex mutex;
 
@@ -92,18 +94,16 @@ TEST_P(MultithreadingTest, MakeCurrentMultiContext)
     std::array<std::thread, kThreadCount> threads;
     for (size_t thread = 0; thread < kThreadCount; thread++)
     {
-        threads[thread] = std::thread([&]() {
-            EGLSurface pbuffer= EGL_NO_SURFACE;
-            EGLConfig ctx= EGL_NO_CONTEXT;
+        threads[thread] = std::thread([&, thread]() {
+            EGLSurface pbuffer = EGL_NO_SURFACE;
+            EGLConfig ctx      = EGL_NO_CONTEXT;
 
             {
                 std::lock_guard<decltype(mutex)> lock(mutex);
 
                 // Initialize the pbuffer and context
                 EGLint pbufferAttributes[] = {
-                    EGL_WIDTH,          kPBufferSize,     EGL_HEIGHT,         kPBufferSize,
-                    EGL_TEXTURE_FORMAT, EGL_TEXTURE_RGBA, EGL_TEXTURE_TARGET, EGL_TEXTURE_2D,
-                    EGL_NONE,           EGL_NONE,
+                    EGL_WIDTH, kPBufferSize, EGL_HEIGHT, kPBufferSize, EGL_NONE, EGL_NONE,
                 };
                 pbuffer = eglCreatePbufferSurface(dpy, config, pbufferAttributes);
                 EXPECT_EGL_SUCCESS();
@@ -160,6 +160,7 @@ ANGLE_INSTANTIATE_TEST(MultithreadingTest,
                        ES2_OPENGL(),
                        ES3_OPENGL(),
                        ES2_OPENGLES(),
-                       ES3_OPENGLES());
+                       ES3_OPENGLES(),
+                       ES2_VULKAN());
 
 }  // namespace angle

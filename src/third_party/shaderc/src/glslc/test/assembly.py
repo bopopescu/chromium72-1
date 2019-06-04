@@ -21,7 +21,7 @@ def assembly_comments():
     return """
     ; SPIR-V
     ; Version: 1.0
-    ; Generator: Khronos Glslang Reference Front End; 1
+    ; Generator: Google Shaderc over Glslang; 7
     ; Bound: 6
     ; Schema: 0"""
 
@@ -124,10 +124,12 @@ class TestShaderStageWithAssemblyFile(expect.ErrorMessage):
     glslc_args = ['-c', '-fshader-stage=vertex', shader]
 
     expected_error = [
-        shader, ': error: #version: Desktop shaders for SPIR-V require '
-        'version 140 or higher\n',
-        shader, ":2: error: '' :  syntax error\n",
-        '2 errors generated.\n']
+        shader, ": error: #version: Desktop shaders for Vulkan SPIR-V require "
+        "version 140 or higher\n",
+        shader, ":2: error: 'extraneous semicolon' :",
+        " not supported for this version or the enabled extensions\n",
+        shader, ":2: error: '' :  syntax error, unexpected IDENTIFIER\n",
+        '3 errors generated.\n']
 
 
 @inside_glslc_testsuite('SpirvAssembly')

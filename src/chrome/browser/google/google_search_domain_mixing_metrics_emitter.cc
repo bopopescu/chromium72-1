@@ -4,11 +4,14 @@
 
 #include "chrome/browser/google/google_search_domain_mixing_metrics_emitter.h"
 
+#include "base/logging.h"
+#include "base/task/post_task.h"
 #include "base/threading/thread_task_runner_handle.h"
 #include "components/history/core/browser/domain_mixing_metrics.h"
 #include "components/history/core/browser/history_backend.h"
 #include "components/history/core/browser/history_database.h"
 #include "components/history/core/browser/history_db_task.h"
+#include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
 
 namespace {
@@ -51,8 +54,10 @@ GoogleSearchDomainMixingMetricsEmitter::GoogleSearchDomainMixingMetricsEmitter(
     history::HistoryService* history_service)
     : prefs_(prefs),
       history_service_(history_service),
-      ui_thread_task_runner_(content::BrowserThread::GetTaskRunnerForThread(
-          content::BrowserThread::UI)) {}
+      ui_thread_task_runner_(base::CreateSingleThreadTaskRunnerWithTraits(
+          {content::BrowserThread::UI})) {
+  DCHECK(history_service_);
+}
 
 GoogleSearchDomainMixingMetricsEmitter::
     ~GoogleSearchDomainMixingMetricsEmitter() {}
@@ -94,7 +99,7 @@ void GoogleSearchDomainMixingMetricsEmitter::SetClockForTesting(
 }
 
 void GoogleSearchDomainMixingMetricsEmitter::SetTimerForTesting(
-    std::unique_ptr<base::Timer> timer) {
+    std::unique_ptr<base::RepeatingTimer> timer) {
   timer_ = std::move(timer);
 }
 

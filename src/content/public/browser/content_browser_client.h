@@ -9,33 +9,42 @@
 
 #include <map>
 #include <memory>
+#include <set>
 #include <string>
 #include <utility>
 #include <vector>
 
 #include "base/callback.h"
+#include "base/containers/flat_set.h"
 #include "base/optional.h"
-#include "base/task_scheduler/task_scheduler.h"
+#include "base/task/task_scheduler/task_scheduler.h"
 #include "base/values.h"
 #include "build/build_config.h"
 #include "content/public/browser/certificate_request_result_type.h"
+#include "content/public/browser/generated_code_cache_settings.h"
+#include "content/public/browser/global_request_id.h"
+#include "content/public/browser/global_routing_id.h"
 #include "content/public/browser/navigation_throttle.h"
 #include "content/public/browser/overlay_window.h"
 #include "content/public/browser/resource_request_info.h"
 #include "content/public/common/content_client.h"
 #include "content/public/common/media_stream_request.h"
+#include "content/public/common/previews_state.h"
+#include "content/public/common/renderer_preference_watcher.mojom.h"
 #include "content/public/common/resource_type.h"
 #include "content/public/common/socket_permission_request.h"
 #include "content/public/common/window_container_type.mojom.h"
-#include "device/usb/public/mojom/chooser_service.mojom.h"
-#include "device/usb/public/mojom/device_manager.mojom.h"
+#include "media/base/video_codecs.h"
+#include "media/cdm/cdm_proxy.h"
 #include "media/media_buildflags.h"
 #include "media/mojo/interfaces/remoting.mojom.h"
 #include "net/base/mime_util.h"
 #include "net/cookies/canonical_cookie.h"
-#include "services/network/public/mojom/network_service.mojom.h"
-#include "services/service_manager/embedder/embedded_service_info.h"
+#include "net/url_request/url_request_context_getter.h"
+#include "services/network/public/mojom/network_context.mojom.h"
+#include "services/network/public/mojom/websocket.mojom.h"
 #include "services/service_manager/public/cpp/binder_registry.h"
+#include "services/service_manager/public/cpp/embedded_service_info.h"
 #include "services/service_manager/public/mojom/service.mojom.h"
 #include "services/service_manager/sandbox/sandbox_type.h"
 #include "storage/browser/fileapi/file_system_context.h"
@@ -63,6 +72,12 @@ class CommandLine;
 class FilePath;
 }
 
+namespace blink {
+namespace mojom {
+class WebUsbService;
+}
+}  // namespace blink
+
 namespace device {
 class LocationProvider;
 }
@@ -74,11 +89,15 @@ class ImageSkia;
 namespace media {
 class AudioLogFactory;
 class AudioManager;
-class CdmFactory;
+enum class EncryptionMode;
 }
 
 namespace mojo {
 class ScopedInterfaceEndpointHandle;
+}
+
+namespace network {
+class SharedURLLoaderFactory;
 }
 
 namespace service_manager {
@@ -93,19 +112,17 @@ class AuthCredentials;
 class ClientCertIdentity;
 using ClientCertIdentityList = std::vector<std::unique_ptr<ClientCertIdentity>>;
 class ClientCertStore;
-class CookieOptions;
+class CookieStore;
 class HttpRequestHeaders;
 class NetLog;
 class SSLCertRequestInfo;
 class SSLInfo;
 class URLRequest;
-class URLRequestContext;
-class URLRequestContextGetter;
 }  // namespace net
 
 namespace network {
 namespace mojom {
-class NetworkContext;
+class NetworkService;
 }
 struct ResourceRequest;
 }  // namespace network
@@ -133,6 +150,7 @@ class FileSystemBackend;
 namespace content {
 
 enum class PermissionType;
+class AuthenticatorRequestClientDelegate;
 class BrowserChildProcessHost;
 class BrowserContext;
 class BrowserMainParts;
@@ -143,7 +161,6 @@ class ControllerPresentationServiceDelegate;
 class DevToolsManagerDelegate;
 class LoginDelegate;
 class MediaObserver;
-class MemoryCoordinatorDelegate;
 class NavigationHandle;
 class NavigationUIData;
 class PlatformNotificationService;
@@ -158,14 +175,17 @@ class SiteInstance;
 class SpeechRecognitionManagerDelegate;
 class StoragePartition;
 class TracingDelegate;
+class TtsControllerDelegate;
 class URLLoaderRequestInterceptor;
 class URLLoaderThrottle;
 class VpnServiceProxy;
 class WebContents;
 class WebContentsViewDelegate;
+enum class OriginPolicyErrorReason;
 struct MainFunctionParams;
 struct OpenURLParams;
 struct Referrer;
+struct RendererPreferences;
 struct WebPreferences;
 
 CONTENT_EXPORT void OverrideOnBindInterface(
@@ -240,6 +260,20 @@ class CONTENT_EXPORT ContentBrowserClient {
   virtual GURL GetEffectiveURL(BrowserContext* browser_context,
                                const GURL& url);
 
+  // Returns true if effective URLs should be compared when choosing a
+  // SiteInstance for a navigation to |destination_url|.
+  // |is_main_frame| is true if the navigation will take place in a main frame.
+  virtual bool ShouldCompareEffectiveURLsForSiteInstanceSelection(
+      BrowserContext* browser_context,
+      content::SiteInstance* candidate_site_instance,
+      bool is_main_frame,
+      const GURL& candidate_url,
+      const GURL& destination_url);
+
+  // Returns whether gesture fling events should use the mobile-behavior gesture
+  // curve for scrolling.
+  virtual bool ShouldUseMobileFlingCurve() const;
+
   // Returns whether all instances of the specified effective URL should be
   // rendered by the same process, rather than using process-per-site-instance.
   virtual bool ShouldUseProcessPerSite(BrowserContext* browser_context,
@@ -278,7 +312,41 @@ class CONTENT_EXPORT ContentBrowserClient {
   // Returns the scheme of request initiator that should be ignored by
   // cross-origin read blocking.  nullptr can be returned to indicate that no
   // exceptions should be granted based on initiator's scheme.
-  virtual const char* GetInitatorSchemeBypassingDocumentBlocking();
+  virtual const char* GetInitiatorSchemeBypassingDocumentBlocking();
+
+  // Gives the embedder a chance to log that CORB would have blocked a response
+  // if it wasn't for GetInitatorSchemeBypassingDocumentBlocking above.  Called
+  // only after all the other CORB checks (potentially including sniffing) have
+  // been already run / right before blocking would have otherwise happened (and
+  // only for non-empty, non-4xx responses).
+  // TODO(lukasza): Remove once we gather enough data.
+  virtual void LogInitiatorSchemeBypassingDocumentBlocking(
+      const url::Origin& initiator_origin,
+      int render_process_id,
+      ResourceType resource_type);
+
+  // Called to create a URLLoaderFactory for network requests in the following
+  // cases:
+  // - The default factory to be used by a frame.  In this case
+  //   |request_initiator| is the origin being committed in the frame (or the
+  //   last origin committed in the frame).
+  // - The initiator-specific factory to be used by a frame.  This happens for
+  //   origins covered via
+  //   RenderFrameHost::MarkInitiatorAsRequiringSeparateURLLoaderFactory.
+  //
+  // This method allows the //content embedder to provide a URLLoaderFactory
+  // with |request_initiator|-specific properties (e.g. with relaxed
+  // Cross-Origin Read Blocking enforcement as needed by some extensions).
+  //
+  // If the embedder doesn't want to override the URLLoaderFactory for the given
+  // |request_initiator|, then it should return an invalid
+  // mojo::InterfacePtrInfo.
+  virtual network::mojom::URLLoaderFactoryPtrInfo
+  CreateURLLoaderFactoryForNetworkRequests(
+      RenderProcessHost* process,
+      network::mojom::NetworkContext* network_context,
+      network::mojom::TrustedURLLoaderHeaderClientPtrInfo* header_client,
+      const url::Origin& request_initiator);
 
   // Returns a list additional WebUI schemes, if any.  These additional schemes
   // act as aliases to the chrome: scheme.  The additional schemes may or may
@@ -297,6 +365,13 @@ class CONTENT_EXPORT ContentBrowserClient {
   // chrome://) URLs are logged. Returns whether the URL was actually logged.
   virtual bool LogWebUIUrl(const GURL& web_ui_url) const;
 
+  // http://crbug.com/829412
+  // Renderers with WebUI bindings shouldn't make http(s) requests for security
+  // reasons (e.g. to avoid malicious responses being able to run code in
+  // priviliged renderers). Fix these webui's to make requests through C++
+  // code instead.
+  virtual bool IsWebUIAllowedToMakeNetworkRequests(const url::Origin& origin);
+
   // Returns whether a specified URL is handled by the embedder's internal
   // protocol handlers.
   virtual bool IsHandledURL(const GURL& url);
@@ -308,7 +383,8 @@ class CONTENT_EXPORT ContentBrowserClient {
   // This is called on the UI thread.
   virtual bool CanCommitURL(RenderProcessHost* process_host, const GURL& url);
 
-  // Returns whether a URL should be allowed to open from a specific context.
+  // Returns whether |url| should be allowed to open from the context indicated
+  // by |site_instance|.
   // This also applies in cases where the new URL will open in another process.
   virtual bool ShouldAllowOpenURL(SiteInstance* site_instance, const GURL& url);
 
@@ -324,14 +400,6 @@ class CONTENT_EXPORT ContentBrowserClient {
                                         ui::PageTransition* transition,
                                         bool* is_renderer_initiated,
                                         content::Referrer* referrer) {}
-
-  // Allows the embedder to override top document isolation for specific frames.
-  // |url| is the URL being loaded in the subframe, and |parent_site_instance|
-  // is the SiteInstance of the parent frame. Called only for subframes and only
-  // when top document isolation mode is enabled.
-  virtual bool ShouldFrameShareParentSiteInstanceDespiteTopDocumentIsolation(
-      const GURL& url,
-      SiteInstance* parent_site_instance);
 
   // Temporary hack to determine whether to skip OOPIFs on the new tab page.
   // TODO(creis): Remove when https://crbug.com/566091 is fixed.
@@ -353,6 +421,15 @@ class CONTENT_EXPORT ContentBrowserClient {
   // unless there is a good reason otherwise.
   virtual bool ShouldTryToUseExistingProcessHost(
       BrowserContext* browser_context, const GURL& url);
+
+  // Returns whether or not subframes of |main_frame| should try to
+  // aggressively reuse existing processes, even when below process limit.
+  // This gets called when navigating a subframe to a URL that requires a
+  // dedicated process and defaults to true, which minimizes the process count.
+  // The embedder can choose to override this if there is a reason to avoid the
+  // reuse.
+  virtual bool ShouldSubframesTryToReuseExistingProcess(
+      RenderFrameHost* main_frame);
 
   // Called when a site instance is first associated with a process.
   virtual void SiteInstanceGotProcess(SiteInstance* site_instance) {}
@@ -381,12 +458,18 @@ class CONTENT_EXPORT ContentBrowserClient {
   // opted into --isolate-origins mode of Site Isolation.
   virtual std::vector<url::Origin> GetOriginsRequiringDedicatedProcess();
 
-  // Allows the embedder to programmatically opt into --site-per-process mode of
-  // Site Isolation.
+  // Allows the embedder to programmatically control whether the
+  // --site-per-process mode of Site Isolation should be used.
   //
   // Note that for correctness, the same value should be consistently returned.
   // See also https://crbug.com/825369
   virtual bool ShouldEnableStrictSiteIsolation();
+
+  // Allows the embedder to programmatically control whether Site Isolation
+  // should be disabled.
+  //
+  // Note that for correctness, the same value should be consistently returned.
+  virtual bool ShouldDisableSiteIsolation();
 
   // Indicates whether a file path should be accessible via file URL given a
   // request from a browser context which lives within |profile_path|.
@@ -442,7 +525,7 @@ class CONTENT_EXPORT ContentBrowserClient {
       const GURL& scope,
       const GURL& first_party,
       ResourceContext* context,
-      const base::Callback<WebContents*(void)>& wc_getter);
+      base::RepeatingCallback<WebContents*()> wc_getter);
 
   // Allow the embedder to control if a Shared Worker can be connected from a
   // given tab.
@@ -457,6 +540,14 @@ class CONTENT_EXPORT ContentBrowserClient {
 
   virtual bool IsDataSaverEnabled(BrowserContext* context);
 
+  // Updates the given prefs for Service Worker and Shared Worker. The prefs
+  // are to be sent to the renderer process when a worker is created. Note that
+  // We don't use this method for Dedicated Workers as they inherit preferences
+  // from their closest ancestor frame.
+  virtual void UpdateRendererPreferencesForWorker(
+      BrowserContext* browser_context,
+      RendererPreferences* out_prefs);
+
   // Allow the embedder to return additional headers that should be sent when
   // fetching |url| as well as add extra load flags.
   virtual void NavigationRequestStarted(
@@ -464,6 +555,14 @@ class CONTENT_EXPORT ContentBrowserClient {
       const GURL& url,
       std::unique_ptr<net::HttpRequestHeaders>* extra_headers,
       int* extra_load_flags) {}
+
+  // Allow the embedder to modify headers for a redirect. If non-nullopt,
+  // |*modified_request_headers| are applied to the request headers after
+  // updating them for the redirect.
+  virtual void NavigationRequestRedirected(
+      int frame_tree_node_id,
+      const GURL& url,
+      base::Optional<net::HttpRequestHeaders>* modified_request_headers) {}
 
   // Allow the embedder to control if the given cookie can be read.
   // This is called on the IO thread.
@@ -481,8 +580,24 @@ class CONTENT_EXPORT ContentBrowserClient {
                               const net::CanonicalCookie& cookie,
                               ResourceContext* context,
                               int render_process_id,
-                              int render_frame_id,
-                              const net::CookieOptions& options);
+                              int render_frame_id);
+
+  // Notifies the embedder that an attempt has been made to read the cookies in
+  // |cookie_list|.
+  virtual void OnCookiesRead(int process_id,
+                             int routing_id,
+                             const GURL& url,
+                             const GURL& first_party_url,
+                             const net::CookieList& cookie_list,
+                             bool blocked_by_policy);
+
+  // Notifies the embedder that an attempt has been made to set |cookie|.
+  virtual void OnCookieChange(int process_id,
+                              int routing_id,
+                              const GURL& url,
+                              const GURL& first_party_url,
+                              const net::CanonicalCookie& cookie,
+                              bool blocked_by_policy);
 
   // Allow the embedder to control if access to file system by a shared worker
   // is allowed.
@@ -490,7 +605,7 @@ class CONTENT_EXPORT ContentBrowserClient {
   virtual void AllowWorkerFileSystem(
       const GURL& url,
       ResourceContext* context,
-      const std::vector<std::pair<int, int> >& render_frames,
+      const std::vector<GlobalFrameRoutingId>& render_frames,
       base::Callback<void(bool)> callback);
 
   // Allow the embedder to control if access to IndexedDB by a shared worker
@@ -498,9 +613,8 @@ class CONTENT_EXPORT ContentBrowserClient {
   // This is called on the IO thread.
   virtual bool AllowWorkerIndexedDB(
       const GURL& url,
-      const base::string16& name,
       ResourceContext* context,
-      const std::vector<std::pair<int, int> >& render_frames);
+      const std::vector<GlobalFrameRoutingId>& render_frames);
 
   // Allow the embedder to control whether we can use Web Bluetooth.
   // TODO(crbug.com/589228): Replace this with a use of the permission system.
@@ -529,12 +643,16 @@ class CONTENT_EXPORT ContentBrowserClient {
   // "1812:e, 00001800-0000-1000-8000-00805f9b34fb:w, ignored:1, alsoignored."
   virtual std::string GetWebBluetoothBlocklist();
 
-  // Allow the embedder to override the request context based on the URL for
-  // certain operations, like cookie access. Returns nullptr to indicate the
-  // regular request context should be used.
+  // Allow the embedder to override the cookie store for a particular URL.
+  // Returns nullptr to indicate the regular cookie store should be used.
   // This is called on the IO thread.
-  virtual net::URLRequestContext* OverrideRequestContextForURL(
-      const GURL& url, ResourceContext* context);
+  virtual net::CookieStore* OverrideCookieStoreForURL(const GURL& url,
+                                                      ResourceContext* context);
+
+#if defined(OS_CHROMEOS)
+  // Notification that a trust anchor was used by the given user.
+  virtual void OnTrustAnchorUsed(const std::string& username_hash) {}
+#endif
 
   // Allows the embedder to override the LocationProvider implementation.
   // Return nullptr to indicate the default one for the platform should be
@@ -542,20 +660,27 @@ class CONTENT_EXPORT ContentBrowserClient {
   virtual std::unique_ptr<device::LocationProvider>
   OverrideSystemLocationProvider();
 
-  // Allows the embedder to provide a URLRequestContextGetter to use for network
-  // geolocation queries.
-  // * May be called from any thread. A URLRequestContextGetter is then provided
-  //   by invoking |callback| on the calling thread.
-  // * Default implementation provides nullptr URLRequestContextGetter.
-  virtual void GetGeolocationRequestContext(
-      base::OnceCallback<void(scoped_refptr<net::URLRequestContextGetter>)>
-          callback);
+  // Returns a SharedURLLoaderFactory attached to the system network context.
+  // Must be called on the UI thread. The default implementation returns
+  // nullptr.
+  virtual scoped_refptr<network::SharedURLLoaderFactory>
+  GetSystemSharedURLLoaderFactory();
+
+  // Returns the system network context. This shouldn't be used to create a
+  // URLLoaderFactory, instead use GetSystemSharedURLLoaderFactory(). Must be
+  // called on the UI thread. The default implementation returns nullptr.
+  virtual network::mojom::NetworkContext* GetSystemNetworkContext();
 
   // Allows an embedder to provide a Google API Key to use for network
   // geolocation queries.
   // * May be called from any thread.
   // * Default implementation returns empty string, meaning send no API key.
   virtual std::string GetGeolocationApiKey();
+
+#if defined(OS_ANDROID)
+  // Allows an embedder to decide whether to use the GmsCoreLocationProvider.
+  virtual bool ShouldUseGmsCoreGeolocationProvider();
+#endif
 
   // Allow the embedder to specify a string version of the storage partition
   // config with a site.
@@ -602,6 +727,11 @@ class CONTENT_EXPORT ContentBrowserClient {
       content::BrowserContext* context,
       content::StoragePartition* partition,
       storage::OptionalQuotaSettingsCallback callback);
+
+  // Allows the embedder to provide settings that determine if generated code
+  // can be cached and the amount of disk space used for caching generated code.
+  virtual GeneratedCodeCacheSettings GetGeneratedCodeCacheSettings(
+      BrowserContext* context);
 
   // Informs the embedder that a certificate error has occured.  If
   // |overridable| is true and if |strict_enforcement| is false, the user
@@ -664,6 +794,9 @@ class CONTENT_EXPORT ContentBrowserClient {
   virtual SpeechRecognitionManagerDelegate*
       CreateSpeechRecognitionManagerDelegate();
 
+  // Allows the embedder to return a delegate for the TtsController.
+  virtual TtsControllerDelegate* GetTtsControllerDelegate();
+
   // Getter for the net logging object. This can be called on any thread.
   virtual net::NetLog* GetNetLog();
 
@@ -687,6 +820,10 @@ class CONTENT_EXPORT ContentBrowserClient {
 
   // Returns the path to the browser shader disk cache root.
   virtual base::FilePath GetShaderDiskCacheDirectory();
+
+  // Returns the path to the shader disk cache root for shaders generated by
+  // skia.
+  virtual base::FilePath GetGrShaderDiskCacheDirectory();
 
   // Notification that a pepper plugin has just been spawned. This allows the
   // embedder to add filters onto the host to implement interfaces.
@@ -766,11 +903,6 @@ class CONTENT_EXPORT ContentBrowserClient {
       BrowserContext* browser_context,
       const GURL& url);
 
-  // Generate a Service user-id for the supplied browser context. Defaults to
-  // returning a random GUID.
-  virtual std::string GetServiceUserIdForBrowserContext(
-      BrowserContext* browser_context);
-
   // Allows to register browser interfaces exposed through the
   // RenderProcessHost. Note that interface factory callbacks added to
   // |registry| will by default be run immediately on the IO thread, unless a
@@ -834,15 +966,18 @@ class CONTENT_EXPORT ContentBrowserClient {
       const std::string& name,
       mojo::ScopedMessagePipeHandle* handle) {}
 
+  using ProcessNameCallback = base::RepeatingCallback<base::string16()>;
+
   struct CONTENT_EXPORT OutOfProcessServiceInfo {
     OutOfProcessServiceInfo();
-    OutOfProcessServiceInfo(const base::string16& process_name);
-    OutOfProcessServiceInfo(const base::string16& process_name,
+    OutOfProcessServiceInfo(const ProcessNameCallback& process_name_callback);
+    OutOfProcessServiceInfo(const ProcessNameCallback& process_name_callback,
                             const std::string& process_group);
     ~OutOfProcessServiceInfo();
 
-    // The display name of the service process launched for the service.
-    base::string16 process_name;
+    // The callback function to get the display name of the service process
+    // launched for the service.
+    ProcessNameCallback process_name_callback;
 
     // If provided, a string which groups this service into a process shared
     // by other services using the same string.
@@ -855,6 +990,13 @@ class CONTENT_EXPORT ContentBrowserClient {
   // utility process. The value of each map entry should be a process name,
   // to use for the service's host process when launched.
   virtual void RegisterOutOfProcessServices(OutOfProcessServiceMap* services) {}
+
+  // Handles a Service request for the service named |service_name|. If the
+  // client knows how to run |service_name|, it should bind |request|
+  // accordingly.
+  virtual void HandleServiceRequest(
+      const std::string& service_name,
+      service_manager::mojom::ServiceRequest request);
 
   // Allows the embedder to terminate the browser if a specific service instance
   // quits or crashes.
@@ -880,6 +1022,10 @@ class CONTENT_EXPORT ContentBrowserClient {
   // with the service manager context.
   virtual std::vector<ServiceManifestInfo> GetExtraServiceManifests();
 
+  // Allows the embedder to have a list of services started after the
+  // in-process Service Manager has been initialized.
+  virtual std::vector<std::string> GetStartupServices();
+
   // Allows to override the visibility state of a RenderFrameHost.
   // |visibility_state| should not be null. It will only be set if needed.
   virtual void OverridePageVisibilityState(
@@ -899,9 +1045,10 @@ class CONTENT_EXPORT ContentBrowserClient {
   GetReceiverPresentationServiceDelegate(WebContents* web_contents);
 
   // Allows programmatic opening of a new tab/window without going through
-  // another WebContents. For example, from a Worker. |callback| will be
+  // another WebContents. For example, from a Worker. |site_instance|
+  // describes the context initiating the navigation. |callback| will be
   // invoked with the appropriate WebContents* when available.
-  virtual void OpenURL(BrowserContext* browser_context,
+  virtual void OpenURL(SiteInstance* site_instance,
                        const OpenURLParams& params,
                        const base::Callback<void(WebContents*)>& callback);
 
@@ -939,9 +1086,17 @@ class CONTENT_EXPORT ContentBrowserClient {
   // returns a non-null value.
   virtual bool OverridesAudioManager();
 
-  // Creates and returns a factory used for creating CDM instances for playing
-  // protected content.
-  virtual std::unique_ptr<media::CdmFactory> CreateCdmFactory();
+  // Gets supported hardware secure |video_codecs| and |encryption_schemes| for
+  // the purpose of decrypting encrypted media using a Content Decryption Module
+  // (CDM) and a CdmProxy associated with |key_system|. The CDM supports all
+  // protocols in |cdm_proxy_protocols|, but only one CdmProxy protocol will be
+  // supported by the CdmProxy on the system, for which the capabilities will
+  // be returned.
+  virtual void GetHardwareSecureDecryptionCaps(
+      const std::string& key_system,
+      const base::flat_set<media::CdmProxy::Protocol>& cdm_proxy_protocols,
+      base::flat_set<media::VideoCodec>* video_codecs,
+      base::flat_set<media::EncryptionMode>* encryption_schemes);
 
   // Populates |mappings| with all files that need to be mapped before launching
   // a child process.
@@ -965,10 +1120,6 @@ class CONTENT_EXPORT ContentBrowserClient {
       int sandbox_type) const;
 #endif
 
-  // Returns an instance of MemoryCoordinatorDelegate.
-  virtual std::unique_ptr<MemoryCoordinatorDelegate>
-  GetMemoryCoordinatorDelegate();
-
   // Binds a new media remoter service to |request|, if supported by the
   // embedder, for the |source| that lives in the render frame represented
   // by |render_frame_host|. This may be called multiple times if there is more
@@ -986,7 +1137,8 @@ class CONTENT_EXPORT ContentBrowserClient {
   GetTaskSchedulerInitParams();
 
   // Allows the embedder to register one or more URLLoaderThrottles for a
-  // URL request. This is used only when --enable-network-service is in effect.
+  // navigation request.
+  // This is called both when the network service is enabled and disabled.
   // This is called on the IO thread.
   virtual std::vector<std::unique_ptr<URLLoaderThrottle>>
   CreateURLLoaderThrottles(
@@ -1020,18 +1172,57 @@ class CONTENT_EXPORT ContentBrowserClient {
 
   // Allows the embedder to intercept URLLoaderFactory interfaces used for
   // navigation or being brokered on behalf of a renderer fetching subresources.
+  //
+  // |frame| could be nullptr when the caller is creating URLLoaderFactory
+  // for a service worker.
+  //
+  // |render_process_id| is the id of a render process host in which the
+  // URLLoaderFactory will be used.
+  //
+  // |is_navigation| is true when it's a request used for navigation.
+  //
+  // |request_initiator| indicates which origin will be the initiator of
+  // requests that will use the URLLoaderFactory (see also
+  // |network::ResourceRequest::requests|).  |request_initiator| is set when
+  // it's a request for a renderer fetching subresources. It's not set when
+  // creating a factory for navigation requests, because navigation requests are
+  // made on behalf of the browser, rather than on behalf of any particular
+  // origin.
+  //
   // |*factory_request| is always valid upon entry and MUST be valid upon
   // return. The embedder may swap out the value of |*factory_request| for its
-  // own, in which case it must return |true| to indicate that its proxying
+  // own, in which case it must return |true| to indicate that it's proxying
   // requests for the URLLoaderFactory. Otherwise |*factory_request| is left
   // unmodified and this must return |false|.
+  //
+  // |header_client| may be bound within this call. This can be used in
+  // URLLoaderFactoryParams when creating the factory.
+  //
+  // |bypass_redirect_checks| will be set to true when the embedder will be
+  // handling redirect security checks.
   //
   // Always called on the UI thread and only when the Network Service is
   // enabled.
   virtual bool WillCreateURLLoaderFactory(
+      BrowserContext* browser_context,
       RenderFrameHost* frame,
+      int render_process_id,
       bool is_navigation,
-      network::mojom::URLLoaderFactoryRequest* factory_request);
+      const url::Origin& request_initiator,
+      network::mojom::URLLoaderFactoryRequest* factory_request,
+      network::mojom::TrustedURLLoaderHeaderClientPtrInfo* header_client,
+      bool* bypass_redirect_checks);
+
+  // Allows the embedder to intercept a WebSocket connection. |*request|
+  // is always valid upon entry and MUST be valid upon return. The embedder
+  // may swap out the value of |*request| for its own.
+  //
+  // Always called on the UI thread and only when the Network Service is
+  // enabled.
+  virtual void WillCreateWebSocket(
+      RenderFrameHost* frame,
+      network::mojom::WebSocketRequest* request,
+      network::mojom::AuthenticationHandlerPtr* authentication_handler);
 
   // Allows the embedder to returns a list of request interceptors that can
   // intercept a navigation request.
@@ -1041,6 +1232,13 @@ class CONTENT_EXPORT ContentBrowserClient {
   virtual std::vector<std::unique_ptr<URLLoaderRequestInterceptor>>
   WillCreateURLLoaderRequestInterceptors(NavigationUIData* navigation_ui_data,
                                          int frame_tree_node_id);
+
+  // Called when the NetworkService, accessible through
+  // content::GetNetworkService(), is created. Implementations should avoid
+  // calling into GetNetworkService() again to avoid re-entrancy if the service
+  // fails to start.
+  virtual void OnNetworkServiceCreated(
+      network::mojom::NetworkService* network_service);
 
   // Creates a NetworkContext for a BrowserContext's StoragePartition. If the
   // network service is enabled, it must return a NetworkContext using the
@@ -1094,13 +1292,9 @@ class CONTENT_EXPORT ContentBrowserClient {
   virtual bool ShouldForceDownloadResource(const GURL& url,
                                            const std::string& mime_type);
 
-  virtual void CreateUsbDeviceManager(
+  virtual void CreateWebUsbService(
       RenderFrameHost* render_frame_host,
-      device::mojom::UsbDeviceManagerRequest request);
-
-  virtual void CreateUsbChooserService(
-      RenderFrameHost* render_frame_host,
-      device::mojom::UsbChooserServiceRequest request);
+      mojo::InterfaceRequest<blink::mojom::WebUsbService> request);
 
   // Attempt to open the Payment Handler window inside its corresponding
   // PaymentRequest UI surface. Returns true if the ContentBrowserClient
@@ -1123,38 +1317,21 @@ class CONTENT_EXPORT ContentBrowserClient {
   // BrowserMainLoop, BrowserMainLoop itself is responsible for that.
   virtual bool ShouldCreateTaskScheduler();
 
-  // Returns true if the given Webauthn[1] RP ID[2] is permitted to receive
-  // individual attestation certificates. This a) triggers a signal to the
-  // security key that returning individual attestation certificates is
-  // permitted and b) skips any permission prompt for attestation.
-  //
-  // [1] https://www.w3.org/TR/webauthn/
-  // [2] https://www.w3.org/TR/webauthn/#relying-party-identifier
-  virtual bool ShouldPermitIndividualAttestationForWebauthnRPID(
-      content::BrowserContext* browser_context,
-      const std::string& rp_id);
+  // Returns an AuthenticatorRequestClientDelegate subclass instance to provide
+  // embedder-specific configuration for a single Web Authentication API request
+  // being serviced in a given RenderFrame. The instance is guaranteed to be
+  // destroyed before the RenderFrame goes out of scope. The embedder may choose
+  // to return nullptr to indicate that the request cannot be serviced right
+  // now.
+  virtual std::unique_ptr<AuthenticatorRequestClientDelegate>
+  GetWebAuthenticationRequestDelegate(RenderFrameHost* render_frame_host);
 
-  // Invokes |callback| with |true| if the given Webauthn RP ID (see references
-  // above) is permitted to receive attestation certificates from a device.
-  // Otherwise invokes |callback| with |false|.
-  //
-  // Since these certificates may uniquely identify the authenticator, the
-  // embedder may choose to show a permissions prompt to the user, and only
-  // invoke |callback| afterwards. This may hairpin |callback|.
-  virtual void ShouldReturnAttestationForWebauthnRPID(
-      content::RenderFrameHost* rfh,
-      const std::string& rp_id,
-      const url::Origin& origin,
-      base::OnceCallback<void(bool)> callback);
-
-  // Returns whether |web_contents| is the active tab in the focused window.
-  // As an example, webauthn uses this because it doesn't want to allow
-  // authenticator operations to be triggered by background tabs.
-  //
-  // Note that the default implementation of this function, and the
-  // implementation in ChromeContentBrowserClient for Android, return |true| so
-  // that testing is possible.
-  virtual bool IsFocused(content::WebContents* web_contents);
+#if defined(OS_MACOSX)
+  // Returns whether WebAuthn supports the built-in Touch ID platform
+  // authenticator. If true, the embedder must supply a configuration in
+  // |AuthenticatorRequestClientDelegate::GetTouchIdAuthenticatorConfig|.
+  virtual bool IsWebAuthenticationTouchIdAuthenticatorSupported();
+#endif
 
   // Get platform ClientCertStore. May return nullptr.
   virtual std::unique_ptr<net::ClientCertStore> CreateClientCertStore(
@@ -1171,8 +1348,10 @@ class CONTENT_EXPORT ContentBrowserClient {
   virtual scoped_refptr<LoginDelegate> CreateLoginDelegate(
       net::AuthChallengeInfo* auth_info,
       content::ResourceRequestInfo::WebContentsGetter web_contents_getter,
+      const GlobalRequestID& request_id,
       bool is_request_for_main_frame,
       const GURL& url,
+      scoped_refptr<net::HttpResponseHeaders> response_headers,
       bool first_auth_attempt,
       LoginAuthRequiredCallback auth_required_callback);
 
@@ -1190,7 +1369,9 @@ class CONTENT_EXPORT ContentBrowserClient {
       NavigationUIData* navigation_data,
       bool is_main_frame,
       ui::PageTransition page_transition,
-      bool has_user_gesture);
+      bool has_user_gesture,
+      const std::string& method,
+      const net::HttpRequestHeaders& headers);
 
   // Creates an OverlayWindow to be used for Picture-in-Picture. This window
   // will house the content shown when in Picture-in-Picture mode. This will
@@ -1199,6 +1380,56 @@ class CONTENT_EXPORT ContentBrowserClient {
   // default implementation provides nullptr OverlayWindow.
   virtual std::unique_ptr<OverlayWindow> CreateWindowForPictureInPicture(
       PictureInPictureWindowController* controller);
+
+  // Returns true if it is safe to redirect to |url|, otherwise returns false.
+  // This is called on the IO thread.
+  virtual bool IsSafeRedirectTarget(const GURL& url, ResourceContext* context);
+
+  // Registers the watcher to observe updates in RendererPreferences. The
+  // watchers are for shared workers and service workers.
+  virtual void RegisterRendererPreferenceWatcherForWorkers(
+      BrowserContext* browser_context,
+      mojom::RendererPreferenceWatcherPtr watcher);
+
+  // Returns the HTML content of the error page for Origin Policy related
+  // errors.
+  virtual base::Optional<std::string> GetOriginPolicyErrorPage(
+      OriginPolicyErrorReason error_reason,
+      const url::Origin& origin,
+      const GURL& url);
+
+  // Returns true if it is OK to ignore errors for certificates specified by the
+  // --ignore-certificate-errors-spki-list command line flag. The embedder may
+  // perform additional checks, such as requiring --user-data-dir flag too to
+  // make sure that insecure contents will not persist accidentally.
+  virtual bool CanIgnoreCertificateErrorIfNeeded();
+
+  // Called on every request completion to update the data use when network
+  // service is enabled.
+  virtual void OnNetworkServiceDataUseUpdate(
+      int32_t network_traffic_annotation_id_hash,
+      int64_t recv_bytes,
+      int64_t sent_bytes);
+
+  // Asks the embedder for the PreviewsState which says which previews should
+  // be enabled for the given navigation. The PreviewsState is a bitmask of
+  // potentially several Previews optimizations. |initial_state| is used to
+  // keep sub-frame navigation state consistent with main frame state.
+  // |current_navigation_url| is the URL that is currently being navigated to,
+  // and can differ from GetURL() in |navigation_handle| on redirects.
+  virtual content::PreviewsState DetermineAllowedPreviews(
+      content::PreviewsState initial_state,
+      content::NavigationHandle* navigation_handle,
+      const GURL& current_navigation_url);
+
+  // Asks the embedder for the preview state that should be committed to the
+  // renderer. |initial_state| was pre-determined by |DetermineAllowedPreviews|.
+  // |navigation_handle| is the corresponding navigation object.
+  // |response_headers| are the response headers related to this navigation.
+  virtual content::PreviewsState DetermineCommittedPreviews(
+      content::PreviewsState initial_state,
+      content::NavigationHandle* navigation_handle,
+      const net::HttpResponseHeaders* response_headers);
 };
 
 }  // namespace content

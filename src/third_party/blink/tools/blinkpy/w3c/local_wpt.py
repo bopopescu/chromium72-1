@@ -7,7 +7,13 @@
 import logging
 
 from blinkpy.common.system.executive import ScriptError
-from blinkpy.w3c.common import WPT_GH_SSH_URL_TEMPLATE, WPT_MIRROR_URL, CHROMIUM_WPT_DIR
+from blinkpy.w3c.common import (
+    CHROMIUM_WPT_DIR,
+    DEFAULT_WPT_COMMITTER_EMAIL,
+    DEFAULT_WPT_COMMITTER_NAME,
+    WPT_GH_SSH_URL_TEMPLATE,
+    WPT_MIRROR_URL,
+)
 
 _log = logging.getLogger(__name__)
 
@@ -35,14 +41,19 @@ class LocalWPT(object):
             self.run(['git', 'reset', '--hard', 'origin/master'])
             return
 
-        _log.info('Cloning GitHub w3c/web-platform-tests into %s', self.path)
+        _log.info('Cloning GitHub web-platform-tests/wpt into %s', self.path)
         if self.gh_token:
             remote_url = WPT_GH_SSH_URL_TEMPLATE.format(self.gh_token)
         else:
             remote_url = WPT_MIRROR_URL
             _log.info('No credentials given, using wpt mirror URL.')
             _log.info('It is possible for the mirror to be delayed; see https://crbug.com/698272.')
+        # Do not use self.run here because self.path doesn't exist yet.
         self.host.executive.run_command(['git', 'clone', remote_url, self.path])
+
+        _log.info('Setting git user name & email in %s', self.path)
+        self.run(['git', 'config', 'user.name', DEFAULT_WPT_COMMITTER_NAME])
+        self.run(['git', 'config', 'user.email', DEFAULT_WPT_COMMITTER_EMAIL])
 
     def run(self, command, **kwargs):
         """Runs a command in the local WPT directory."""

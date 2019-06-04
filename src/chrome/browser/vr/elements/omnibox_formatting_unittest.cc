@@ -6,6 +6,7 @@
 
 #include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/vr/model/color_scheme.h"
+#include "chrome/browser/vr/ui_support.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/gfx/render_text.h"
 #include "ui/gfx/render_text_test_api.h"
@@ -30,7 +31,6 @@ TEST(OmniboxSuggestionFormatting, TextFormatting) {
       ACMatchClassification(0, ACMatchClassification::NONE),
       ACMatchClassification(1, ACMatchClassification::URL),
       ACMatchClassification(2, ACMatchClassification::MATCH),
-      ACMatchClassification(3, ACMatchClassification::INVISIBLE),
   };
   size_t string_length = classifications.size();
 
@@ -42,7 +42,7 @@ TEST(OmniboxSuggestionFormatting, TextFormatting) {
   TextFormatting formatting =
       ConvertClassification(classifications, string_length, color_scheme);
 
-  ASSERT_EQ(formatting.size(), 5u);
+  ASSERT_EQ(formatting.size(), 4u);
 
   EXPECT_EQ(formatting[0].type(), TextFormattingAttribute::COLOR);
   EXPECT_EQ(formatting[0].color(), kDefaultColor);
@@ -59,10 +59,6 @@ TEST(OmniboxSuggestionFormatting, TextFormatting) {
   EXPECT_EQ(formatting[3].type(), TextFormattingAttribute::WEIGHT);
   EXPECT_EQ(formatting[3].weight(), gfx::Font::Weight::BOLD);
   EXPECT_EQ(formatting[3].range(), gfx::Range(2, 3));
-
-  EXPECT_EQ(formatting[4].type(), TextFormattingAttribute::COLOR);
-  EXPECT_EQ(formatting[4].color(), SK_ColorTRANSPARENT);
-  EXPECT_EQ(formatting[4].range(), gfx::Range(3, 4));
 }
 
 struct ElisionTestcase {
@@ -87,9 +83,7 @@ TEST_P(ElisionTest, ProperOffsetAndFading) {
   GURL gurl(base::UTF8ToUTF16(GetParam().url_string));
   ASSERT_TRUE(gurl.is_valid());
   url::Parsed parsed;
-  const base::string16 text = url_formatter::FormatUrl(
-      gurl, GetVrFormatUrlTypes(), net::UnescapeRule::NORMAL, &parsed, nullptr,
-      nullptr);
+  const base::string16 text = FormatUrlForVr(gurl, &parsed);
 
   auto render_text = gfx::RenderText::CreateHarfBuzzInstance();
   render_text->SetFontList(font_list);
@@ -147,9 +141,7 @@ TextFormatting CreateTextUrlFormatting(const std::string& url_string,
                                        const std::string& expected_string) {
   GURL url(base::UTF8ToUTF16(url_string));
   url::Parsed parsed;
-  const base::string16 formatted_url = url_formatter::FormatUrl(
-      url, GetVrFormatUrlTypes(), net::UnescapeRule::NORMAL, &parsed, nullptr,
-      nullptr);
+  const base::string16 formatted_url = FormatUrlForVr(url, &parsed);
   EXPECT_EQ(formatted_url, base::UTF8ToUTF16(expected_string));
   return CreateUrlFormatting(formatted_url, parsed, kEmphasizedColor,
                              kDeemphasizedColor);

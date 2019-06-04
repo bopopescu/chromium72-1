@@ -7,14 +7,18 @@ package org.chromium.chrome.browser.services.gcm;
 import android.content.Context;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.SystemClock;
 import android.text.TextUtils;
 
 import com.google.android.gms.gcm.GcmListenerService;
 import com.google.ipc.invalidation.ticl.android2.channel.AndroidGcmController;
 
+import org.chromium.base.ApplicationStatus;
+import org.chromium.base.ContextUtils;
 import org.chromium.base.Log;
 import org.chromium.base.ThreadUtils;
 import org.chromium.base.library_loader.ProcessInitException;
+import org.chromium.base.metrics.CachedMetrics;
 import org.chromium.chrome.browser.init.ChromeBrowserInitializer;
 import org.chromium.chrome.browser.init.ProcessInitializationHandler;
 import org.chromium.components.background_task_scheduler.BackgroundTaskSchedulerFactory;
@@ -22,6 +26,9 @@ import org.chromium.components.background_task_scheduler.TaskIds;
 import org.chromium.components.background_task_scheduler.TaskInfo;
 import org.chromium.components.gcm_driver.GCMDriver;
 import org.chromium.components.gcm_driver.GCMMessage;
+import org.chromium.components.gcm_driver.LazySubscriptionsManager;
+
+import java.util.concurrent.TimeUnit;
 
 /**
  * Receives Downstream messages and status of upstream messages from GCM.
@@ -38,15 +45,13 @@ public class ChromeGcmListenerService extends GcmListenerService {
     @Override
     public void onMessageReceived(final String from, final Bundle data) {
         boolean hasCollapseKey = !TextUtils.isEmpty(data.getString("collapse_key"));
-        GcmUma.recordDataMessageReceived(getApplicationContext(), hasCollapseKey);
+        GcmUma.recordDataMessageReceived(ContextUtils.getApplicationContext(), hasCollapseKey);
 
         String invalidationSenderId = AndroidGcmController.get(this).getSenderId();
         if (from.equals(invalidationSenderId)) {
             AndroidGcmController.get(this).onMessageReceived(data);
             return;
         }
-
-        final Context applicationContext = getApplicationContext();
 
         // Dispatch the message to the GCM Driver for native features.
         ThreadUtils.runOnUiThread(new Runnable() {
@@ -60,7 +65,7 @@ public class ChromeGcmListenerService extends GcmListenerService {
                     return;
                 }
 
-                scheduleOrDispatchMessageToDriver(applicationContext, message);
+                scheduleOrDispatchMessageToDriver(message);
             }
         });
     }
@@ -68,13 +73,15 @@ public class ChromeGcmListenerService extends GcmListenerService {
     @Override
     public void onMessageSent(String msgId) {
         Log.d(TAG, "Message sent successfully. Message id: " + msgId);
-        GcmUma.recordGcmUpstreamHistogram(getApplicationContext(), GcmUma.UMA_UPSTREAM_SUCCESS);
+        GcmUma.recordGcmUpstreamHistogram(
+                ContextUtils.getApplicationContext(), GcmUma.UMA_UPSTREAM_SUCCESS);
     }
 
     @Override
     public void onSendError(String msgId, String error) {
         Log.w(TAG, "Error in sending message. Message id: " + msgId + " Error: " + error);
-        GcmUma.recordGcmUpstreamHistogram(getApplicationContext(), GcmUma.UMA_UPSTREAM_SEND_FAILED);
+        GcmUma.recordGcmUpstreamHistogram(
+                ContextUtils.getApplicationContext(), GcmUma.UMA_UPSTREAM_SEND_FAILED);
     }
 
     @Override
@@ -82,17 +89,41 @@ public class ChromeGcmListenerService extends GcmListenerService {
         // TODO(johnme): Ask GCM to include the subtype in this event.
         Log.w(TAG, "Push messages were deleted, but we can't tell the Service Worker as we don't"
                 + "know what subtype (app ID) it occurred for.");
-        GcmUma.recordDeletedMessages(getApplicationContext());
+        GcmUma.recordDeletedMessages(ContextUtils.getApplicationContext());
     }
 
     /**
-     * Either schedules |message| to be dispatched through the Job Scheduler, which we use on
-     * Android N and beyond, or immediately dispatches the message on other versions of Android.
-     * Must be called on the UI thread both for the BackgroundTaskScheduler and for dispatching
-     * the |message| to the GCMDriver.
+     * If Chrome is backgrounded, messages coming from lazy subscriptions are
+     * persisted on disk and replayed next time Chrome is forgrounded. If Chrome is forgrounded or
+     * if the message isn't coming from a lazy subscription, this method either schedules |message|
+     * to be dispatched through the Job Scheduler, which we use on Android N and beyond, or
+     * immediately dispatches the message on other versions of Android. Must be called on the UI
+     * thread both for the BackgroundTaskScheduler and for dispatching the |message| to the
+     * GCMDriver.
      */
-    static void scheduleOrDispatchMessageToDriver(Context context, GCMMessage message) {
+    static void scheduleOrDispatchMessageToDriver(GCMMessage message) {
         ThreadUtils.assertOnUiThread();
+        final String subscriptionId = LazySubscriptionsManager.buildSubscriptionUniqueId(
+                message.getAppId(), message.getSenderId());
+        if (!ApplicationStatus.hasVisibleActivities()) {
+            boolean isSubscriptionLazy = false;
+            long time = SystemClock.elapsedRealtime();
+            if (LazySubscriptionsManager.isSubscriptionLazy(subscriptionId)) {
+                isSubscriptionLazy = true;
+                LazySubscriptionsManager.persistMessage(subscriptionId, message);
+            }
+
+            // Use {@link CachedMetrics} so this gets reported when native is
+            // loaded instead of calling native right away.
+            new CachedMetrics
+                    .TimesHistogramSample(
+                            "PushMessaging.TimeToCheckIfSubscriptionLazy", TimeUnit.MILLISECONDS)
+                    .record(SystemClock.elapsedRealtime() - time);
+
+            if (isSubscriptionLazy) {
+                return;
+            }
+        }
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
             Bundle extras = message.toBundle();
@@ -103,10 +134,11 @@ public class ChromeGcmListenerService extends GcmListenerService {
                                               .setExtras(extras)
                                               .build();
 
-            BackgroundTaskSchedulerFactory.getScheduler().schedule(context, backgroundTask);
+            BackgroundTaskSchedulerFactory.getScheduler().schedule(
+                    ContextUtils.getApplicationContext(), backgroundTask);
 
         } else {
-            dispatchMessageToDriver(context, message);
+            dispatchMessageToDriver(ContextUtils.getApplicationContext(), message);
         }
     }
 

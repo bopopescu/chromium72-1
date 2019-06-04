@@ -23,13 +23,12 @@ GraphicsContext* SVGFilterRecordingContext::BeginContent() {
   paint_controller_ = PaintController::Create();
   context_ = std::make_unique<GraphicsContext>(*paint_controller_);
 
-  if (RuntimeEnabledFeatures::SlimmingPaintV175Enabled()) {
-    // Use initial_context_'s current paint chunk properties so that any new
-    // chunk created during painting the content will be in the correct state.
-    paint_controller_->UpdateCurrentPaintChunkProperties(
-        base::nullopt,
-        initial_context_.GetPaintController().CurrentPaintChunkProperties());
-  }
+  // Use initial_context_'s current paint chunk properties so that any new
+  // chunk created during painting the content will be in the correct state.
+  paint_controller_->UpdateCurrentPaintChunkProperties(
+      base::nullopt,
+      initial_context_.GetPaintController().CurrentPaintChunkProperties());
+
   return context_.get();
 }
 
@@ -68,7 +67,7 @@ static void PaintFilteredContent(GraphicsContext& context,
 
   DrawingRecorder recorder(context, object, DisplayItem::kSVGFilter);
   sk_sp<PaintFilter> image_filter =
-      PaintFilterBuilder::Build(effect, kInterpolationSpaceSRGB);
+      paint_filter_builder::Build(effect, kInterpolationSpaceSRGB);
   context.Save();
 
   // Clip drawing of filtered image to the minimum required paint rect.
@@ -154,8 +153,8 @@ void SVGFilterPainter::FinishEffect(
   if (filter_data->state_ == FilterData::kRecordingContent) {
     DCHECK(filter->GetSourceGraphic());
     sk_sp<PaintRecord> content = recording_context.EndContent(bounds);
-    PaintFilterBuilder::BuildSourceGraphic(filter->GetSourceGraphic(),
-                                           std::move(content), bounds);
+    paint_filter_builder::BuildSourceGraphic(filter->GetSourceGraphic(),
+                                             std::move(content), bounds);
     filter_data->state_ = FilterData::kReadyToPaint;
   }
 

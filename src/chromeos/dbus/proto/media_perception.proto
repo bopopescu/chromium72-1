@@ -28,6 +28,14 @@ message MediaPerception {
   // A single AudioVisualPerception message or array of audio-visual
   // perceptions.
   repeated AudioVisualPerception audio_visual_perception = 4;
+
+  // Stores metadata such as version of media perception features.
+  optional Metadata metadata = 5;
+}
+
+// Stores metadata such as version of media perception features.
+message Metadata {
+  optional string visual_experience_controller_version = 1;
 }
 
 // Used to transmit a history of image frames and their associated annotations.
@@ -75,6 +83,40 @@ message State {
   // Media analytics configuration. It can only be used when setting state to
   // RUNNING.
   optional string configuration = 4;
+
+  // Corners and aspect ratio of the whiteboard in the image frame. Should only
+  // be set when setting state to running and configuration to whiteboard.
+  optional Whiteboard whiteboard = 5;
+
+  enum Feature {
+    // UNSET is not a real feature value.
+    FEATURE_UNSET = 0;
+    FEATURE_AUTOZOOM = 1;
+    FEATURE_HOTWORD_DETECTION = 2;
+    FEATURE_OCCUPANCY_DETECTION = 3;
+    FEATURE_EDGE_EMBEDDINGS = 4;
+    FEATURE_SOFTWARE_CROPPING = 5;
+  }
+
+  // A list of enabled media perception features.
+  repeated Feature features = 6;
+
+  message NamedTemplateArgument {
+    optional string name = 1;
+    oneof value {
+      string str = 2;
+      double num = 3;
+    }
+  }
+
+  // An optional list of template arguments to be substituted at
+  // run-time.  Each argument present in this list will be set to the
+  // specified values, others will not be changed. Furthermore, nested
+  // arguments (dictionaries) are not supported.
+  // CAUTION: These template args can be used to overwrite the
+  // Feature flags defined above since feature flags are implemented
+  // as numeric template args.
+  repeated NamedTemplateArgument named_template_arguments = 7;
 }
 
 // This is the output of the MediaPerceptionSinkCalculator.
@@ -87,6 +129,9 @@ message PerceptionSample {
   optional AudioPerception audio_perception = 3;
 
   optional AudioVisualPerception audio_visual_perception = 4;
+
+  // Stores metadata such as version of media perception features.
+  optional Metadata metadata = 5;
 }
 
 // Perception results based on both audio and video inputs.
@@ -220,6 +265,16 @@ message FramePerception {
 
   // Human presence detection results for a video frame.
   optional VideoHumanPresenceDetection video_human_presence_detection = 7;
+
+  enum PerceptionType {
+    UNKNOWN_TYPE = 0;
+    FACE_DETECTION = 1;
+    MOTION_DETECTION = 2;
+    PERSON_DETECTION = 3;
+  }
+
+  // Indicates what types of frame perception were run.
+  repeated PerceptionType perception_types = 8;
 }
 
 // Detection of human presence close to the camera.
@@ -328,4 +383,22 @@ message Distance {
   optional DistanceUnits units = 1;
 
   optional float magnitude = 2;
+}
+
+// The parameters for a whiteboard in the image frame.
+message Whiteboard {
+  // The top left corner of the whiteboard in the image frame.
+  optional Point top_left = 1;
+
+  // The top right corner of the whiteboard in the image frame.
+  optional Point top_right = 2;
+
+  // The bottom left corner of the whiteboard in the image frame.
+  optional Point bottom_left = 3;
+
+  // The bottom right corner of the whiteboard in the image frame.
+  optional Point bottom_right = 4;
+
+  // The physical aspect ratio of the whiteboard.
+  optional float aspect_ratio = 5;
 }

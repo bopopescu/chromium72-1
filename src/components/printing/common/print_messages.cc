@@ -28,15 +28,6 @@
 #error "Failed to include header components/printing/common/print_messages.h"
 #endif
 
-// Generate destructors.
-#include "ipc/struct_destructor_macros.h"
-#undef COMPONENTS_PRINTING_COMMON_PRINT_MESSAGES_H_
-#undef COMPONENTS_PRINTING_COMMON_PRINTING_PARAM_TRAITS_MACROS_H_
-#include "components/printing/common/print_messages.h"
-#ifndef COMPONENTS_PRINTING_COMMON_PRINT_MESSAGES_H_
-#error "Failed to include header components/printing/common/print_messages.h"
-#endif
-
 // Generate param traits write methods.
 #include "ipc/param_traits_write_macros.h"
 namespace IPC {
@@ -89,7 +80,7 @@ PrintMsg_Print_Params::PrintMsg_Print_Params()
       should_print_backgrounds(false),
       printed_doc_type(printing::SkiaDocumentType::PDF),
       prefer_css_page_size(false),
-      num_pages_per_sheet(1) {}
+      pages_per_sheet(1) {}
 
 PrintMsg_Print_Params::PrintMsg_Print_Params(
     const PrintMsg_Print_Params& other) = default;
@@ -121,7 +112,7 @@ void PrintMsg_Print_Params::Reset() {
   should_print_backgrounds = false;
   printed_doc_type = printing::SkiaDocumentType::PDF;
   prefer_css_page_size = false;
-  num_pages_per_sheet = 1;
+  pages_per_sheet = 1;
 }
 
 PrintMsg_PrintPages_Params::PrintMsg_PrintPages_Params() {}
@@ -151,6 +142,14 @@ PrintHostMsg_RequestPrintPreview_Params::
 
 PrintHostMsg_RequestPrintPreview_Params::
     ~PrintHostMsg_RequestPrintPreview_Params() {}
+
+PrintHostMsg_PreviewIds::PrintHostMsg_PreviewIds()
+    : request_id(-1), ui_id(-1) {}
+
+PrintHostMsg_PreviewIds::PrintHostMsg_PreviewIds(int request_id, int ui_id)
+    : request_id(request_id), ui_id(ui_id) {}
+
+PrintHostMsg_PreviewIds::~PrintHostMsg_PreviewIds() {}
 
 PrintHostMsg_SetOptionsFromDocument_Params::
     PrintHostMsg_SetOptionsFromDocument_Params()

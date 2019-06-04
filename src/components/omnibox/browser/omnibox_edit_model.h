@@ -35,19 +35,6 @@ namespace gfx {
 class Image;
 }
 
-// Reasons why the Omnibox could change into keyword mode.
-// These numeric values are used in UMA logs; do not change them.
-enum class KeywordModeEntryMethod {
-  TAB = 0,
-  SPACE_AT_END = 1,
-  SPACE_IN_MIDDLE = 2,
-  KEYBOARD_SHORTCUT = 3,
-  QUESTION_MARK = 4,
-  CLICK_ON_VIEW = 5,
-  TAP_ON_VIEW = 6,
-  NUM_ITEMS,
-};
-
 class OmniboxEditModel {
  public:
   // Did the Omnibox focus originate via the user clicking on the Omnibox, on
@@ -64,7 +51,8 @@ class OmniboxEditModel {
           const base::string16& user_text,
           const base::string16& keyword,
           bool is_keyword_hint,
-          KeywordModeEntryMethod keyword_mode_entry_method,
+          metrics::OmniboxEventProto::KeywordModeEntryMethod
+              keyword_mode_entry_method,
           OmniboxFocusState focus_state,
           FocusSource focus_source,
           const AutocompleteInput& autocomplete_input);
@@ -75,11 +63,17 @@ class OmniboxEditModel {
     const base::string16 user_text;
     const base::string16 keyword;
     const bool is_keyword_hint;
-    KeywordModeEntryMethod keyword_mode_entry_method;
+    metrics::OmniboxEventProto::KeywordModeEntryMethod
+        keyword_mode_entry_method;
     OmniboxFocusState focus_state;
     FocusSource focus_source;
     const AutocompleteInput autocomplete_input;
   };
+
+  // This is a mirror of content::kMaxURLDisplayChars because ios cannot depend
+  // on content. If clipboard contains more than kMaxPasteAndGoTextLength
+  // characters, then the paste & go option will be disabled.
+  static const size_t kMaxPasteAndGoTextLength = 32 * 1024;
 
   OmniboxEditModel(OmniboxView* view,
                    OmniboxEditController* controller,
@@ -105,7 +99,7 @@ class OmniboxEditModel {
 
   OmniboxEditController* controller() const { return controller_; }
 
-  OmniboxClient* client() { return client_.get(); }
+  OmniboxClient* client() const { return client_.get(); }
 
   // Returns the current state.  This assumes we are switching tabs, and changes
   // the internal state appropriately.
@@ -131,14 +125,14 @@ class OmniboxEditModel {
   // URL/navigation, as opposed to a search.
   bool CurrentTextIsURL() const;
 
-  // Returns the match type for the current edit contents.
-  AutocompleteMatch::Type CurrentTextType() const;
-
-  // Invoked to adjust the text before writting to the clipboard for a copy
-  // (e.g. by adding 'http' to the front). |sel_min| gives the minimum position
-  // of the selection e.g. min(selection_start, selection_end). |text| is the
-  // currently selected text. If the url should be copied to the clipboard
-  // |write_url| is set to true and |url_from_text| set to the url to write.
+  // Adjusts the copied text before writing it to the clipboard. If the copied
+  // text is a URL with the scheme elided, this method reattaches the scheme.
+  // Copied text that looks like a search query, including the Query in Omnibox
+  // case, will not be modified.
+  //
+  // |sel_min| gives the minimum of the selection, e.g. min(sel_start, sel_end).
+  // |text| is the currently selected text. If the copied text is interpreted
+  // as a URL, |write_url| is set to true and |url_from_text| set to the URL.
   void AdjustTextForCopy(int sel_min,
                          base::string16* text,
                          GURL* url_from_text,
@@ -156,20 +150,26 @@ class OmniboxEditModel {
   void UpdateInput(bool has_selected_text,
                    bool prevent_inline_autocomplete);
 
-  // Resets the permanent display URLs to those provided by the controller.
-  // Returns true if the display URLs have changed and the change should be
-  // immediately user-visible, because either the user is not editing or the
-  // edit does not have focus.
-  bool ResetDisplayUrls();
+  // Resets the permanent display texts (display_text_ and url_for_editing_)
+  // to those provided by the controller. Returns true if the display texts
+  // have changed and the change should be immediately user-visible, because
+  // either the user is not editing or the edit does not have focus.
+  bool ResetDisplayTexts();
 
   // Returns the URL corresponding to the permanent text.
   GURL PermanentURL() const;
 
-  // Returns the permanent URL text for the current page and Omnibox state.
-  base::string16 GetCurrentPermanentUrlText() const;
+  // Returns the permanent display text for the current page and Omnibox state.
+  base::string16 GetPermanentDisplayText() const;
 
-  // Sets the user_text_ to |text|.  Only the View should call this.
+  // Sets the user_text_ to |text|.
   void SetUserText(const base::string16& text);
+
+  // Unapplies any Steady State Elisions by setting the user text to be
+  // url_for_editing_. This also selects all and enters user-input-in-progress
+  // mode. If |exit_query_in_omnibox| is set to true, this will alse exit
+  // Query in Omnibox mode if the omnibox is showing a query.
+  void Unelide(bool exit_query_in_omnibox);
 
   // Invoked any time the text may have changed in the edit. Notifies the
   // controller.
@@ -191,7 +191,9 @@ class OmniboxEditModel {
   bool CanPasteAndGo(const base::string16& text) const;
 
   // Navigates to the destination last supplied to CanPasteAndGo.
-  void PasteAndGo(const base::string16& text);
+  void PasteAndGo(
+      const base::string16& text,
+      base::TimeTicks match_selection_timestamp = base::TimeTicks());
 
   // Returns true if |text| classifies as a Search rather than a URL.
   bool ClassifiesAsSearch(const base::string16& text) const;
@@ -201,8 +203,10 @@ class OmniboxEditModel {
   // it indicates the input is being accepted as part of a drop operation and
   // the transition should be treated as LINK (so that it won't trigger the
   // URL to be autocompleted).
-  void AcceptInput(WindowOpenDisposition disposition,
-                   bool for_drop);
+  void AcceptInput(
+      WindowOpenDisposition disposition,
+      bool for_drop,
+      base::TimeTicks match_selection_timestamp = base::TimeTicks());
 
   // Asks the browser to load the item at |index|, with the given properties.
   // OpenMatch() needs to know the original text that drove this action.  If
@@ -224,10 +228,13 @@ class OmniboxEditModel {
                  WindowOpenDisposition disposition,
                  const GURL& alternate_nav_url,
                  const base::string16& pasted_text,
-                 size_t index);
+                 size_t index,
+                 base::TimeTicks match_selection_timestamp = base::TimeTicks());
 
   OmniboxFocusState focus_state() const { return focus_state_; }
   bool has_focus() const { return focus_state_ != OMNIBOX_FOCUS_NONE; }
+
+  // This is the same as when the Omnibox is visibly focused.
   bool is_caret_visible() const {
     return focus_state_ == OMNIBOX_FOCUS_VISIBLE;
   }
@@ -246,16 +253,17 @@ class OmniboxEditModel {
   }
 
   // Accepts the current keyword hint as a keyword. It always returns true for
-  // caller convenience. |entered_method| indicates how the user entered
+  // caller convenience. |entry_method| indicates how the user entered
   // keyword mode.
-  bool AcceptKeyword(KeywordModeEntryMethod entry_method);
+  bool AcceptKeyword(
+      metrics::OmniboxEventProto::KeywordModeEntryMethod entry_method);
 
   // Sets the current keyword to that of the user's default search provider and
   // updates the view so the user sees the keyword chip in the omnibox.  Adjusts
   // user_text_ and the selection based on the display text and the keyword
   // entry method.
   void EnterKeywordModeForDefaultSearchProvider(
-      KeywordModeEntryMethod entry_method);
+      metrics::OmniboxEventProto::KeywordModeEntryMethod entry_method);
 
   // Accepts the current temporary text as the user text.
   void AcceptTemporaryTextAsUserText();
@@ -285,6 +293,10 @@ class OmniboxEditModel {
   // Caret visibility is tracked per-tab and updates automatically upon
   // switching tabs.
   void SetCaretVisibility(bool visible);
+
+  // If the ctrl key is down, marks it as consumed to prevent it from triggering
+  // ctrl-enter behavior unless it is released and re-pressed.
+  void ConsumeCtrlKey();
 
   // Sent before |OnKillFocus| and before the popup is closed.
   void OnWillKillFocus();
@@ -348,14 +360,23 @@ class OmniboxEditModel {
   // Called when the current match has changed in the OmniboxController.
   void OnCurrentMatchChanged();
 
+  // Convenience method for QueryInOmnibox::GetDisplaySearchTerms.
+  // Returns true if Query in Omnibox is active. |search_terms| may be nullptr.
+  bool GetQueryInOmniboxSearchTerms(base::string16* search_terms) const;
+
   // Used for testing purposes only.
   base::string16 GetUserTextForTesting() const { return user_text_; }
 
   // Name of the histogram tracking cut or copy omnibox commands.
   static const char kCutOrCopyAllTextHistogram[];
 
+  OmniboxView* view() { return view_; }
+
  private:
   friend class OmniboxControllerTest;
+  FRIEND_TEST_ALL_PREFIXES(OmniboxEditModelTest, ConsumeCtrlKey);
+  FRIEND_TEST_ALL_PREFIXES(OmniboxEditModelTest, ConsumeCtrlKeyOnRequestFocus);
+  FRIEND_TEST_ALL_PREFIXES(OmniboxEditModelTest, ConsumeCtrlKeyOnCtrlAction);
 
   enum PasteState {
     NONE,           // Most recent edit was not a paste.
@@ -369,17 +390,14 @@ class OmniboxEditModel {
   };
 
   enum ControlKeyState {
-    UP,                   // The control key is not depressed.
-    DOWN_WITHOUT_CHANGE,  // The control key is depressed, and the edit's
-                          // contents/selection have not changed since it was
-                          // depressed.  This is the only state in which we
-                          // do the "ctrl-enter" behavior when the user hits
-                          // enter.
-    DOWN_WITH_CHANGE,     // The control key is depressed, and the edit's
-                          // contents/selection have changed since it was
-                          // depressed.  If the user now hits enter, we assume
-                          // they simply haven't released the key, rather than
-                          // that they intended to hit "ctrl-enter".
+    UP,                // The control key is not depressed.
+    DOWN,              // The control key is depressed and should trigger the
+                       // "ctrl-enter" behavior when the user hits enter.
+    DOWN_AND_CONSUMED  // The control key is depressed, but has been consumed
+                       // and should not trigger the "ctrl-enter" behavior.
+                       // The control key becomes consumed if it has been used
+                       // for another action such as focusing the location bar
+                       // with ctrl-l or copying the selected text with ctrl-c.
   };
 
   // Returns true if a query to an autocomplete provider is currently
@@ -395,9 +413,6 @@ class OmniboxEditModel {
 
   // Called whenever user_text_ should change.
   void InternalSetUserText(const base::string16& text);
-
-  // Turns off keyword mode for the current match.
-  void ClearPopupKeywordMode() const;
 
   // Conversion between user text and display text. User text is the text the
   // user has input. Display text is the text being shown in the edit. The
@@ -476,10 +491,15 @@ class OmniboxEditModel {
   // no input is in progress or the Omnibox is not focused.
   FocusSource focus_source_;
 
-  // The text representing the current URL for steady state display. This may
-  // be a simplified version of the current URL with destructive elisions
-  // applied - and should not be considered suitable for editing.
-  base::string16 display_only_url_;
+  // Display-only text representing the current page. This could be any of:
+  //  - The same as |url_for_editing_| if Steady State Elisions is OFF.
+  //  - A simplified version of |url_for_editing_| with some destructive
+  //    elisions applied. This is the case if Steady State Elisions is ON.
+  //  - The user entered search query, if the user is on the search results
+  //    page of the default search provider and Query in Omnibox is ON.
+  //
+  // This should not be considered suitable for editing.
+  base::string16 display_text_;
 
   // The initial text representing the current URL suitable for editing.
   // This should fully represent the current URL without any meaning-changing
@@ -576,9 +596,9 @@ class OmniboxEditModel {
   bool is_keyword_hint_;
 
   // Indicates how the user entered keyword mode if the user is actually in
-  // keyword mode.  Otherwise, the value of this variable is undefined.  This
+  // keyword mode.  Otherwise, the value of this variable is INVALID.  This
   // is used to restore the user's search terms upon a call to ClearKeyword().
-  KeywordModeEntryMethod keyword_mode_entry_method_;
+  metrics::OmniboxEventProto::KeywordModeEntryMethod keyword_mode_entry_method_;
 
   // This is needed to properly update the SearchModel state when the user
   // presses escape.

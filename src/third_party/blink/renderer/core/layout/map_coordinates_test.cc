@@ -5,6 +5,7 @@
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/renderer/core/layout/layout_inline.h"
 #include "third_party/blink/renderer/core/layout/layout_view.h"
+#include "third_party/blink/renderer/core/paint/paint_layer_scrollable_area.h"
 #include "third_party/blink/renderer/core/testing/core_unit_test_helper.h"
 #include "third_party/blink/renderer/platform/transforms/transform_state.h"
 
@@ -549,14 +550,11 @@ TEST_F(MapCoordinatesTest, FixedPosInFixedPosScrollView) {
   LayoutBox* view = html->ParentBox();
   ASSERT_TRUE(view->IsLayoutView());
 
-  GetDocument().View()->LayoutViewportScrollableArea()->SetScrollOffset(
-      ScrollOffset(0.0, 50), kProgrammaticScroll);
-  GetDocument().View()->UpdateAllLifecyclePhases();
-  EXPECT_EQ(50, GetDocument()
-                    .View()
-                    ->LayoutViewportScrollableArea()
-                    ->ScrollOffsetInt()
-                    .Height());
+  GetDocument().View()->LayoutViewport()->SetScrollOffset(ScrollOffset(0.0, 50),
+                                                          kProgrammaticScroll);
+  UpdateAllLifecyclePhasesForTest();
+  EXPECT_EQ(50,
+            GetDocument().View()->LayoutViewport()->ScrollOffsetInt().Height());
 
   FloatPoint mapped_point = MapLocalToAncestor(target, view, FloatPoint());
   EXPECT_EQ(AdjustForFrameScroll(FloatPoint(200, 250)), mapped_point);
@@ -585,14 +583,11 @@ TEST_F(MapCoordinatesTest, FixedPosInAbsolutePosScrollView) {
   LayoutBox* view = html->ParentBox();
   ASSERT_TRUE(view->IsLayoutView());
 
-  GetDocument().View()->LayoutViewportScrollableArea()->SetScrollOffset(
-      ScrollOffset(0.0, 50), kProgrammaticScroll);
-  GetDocument().View()->UpdateAllLifecyclePhases();
-  EXPECT_EQ(50, GetDocument()
-                    .View()
-                    ->LayoutViewportScrollableArea()
-                    ->ScrollOffsetInt()
-                    .Height());
+  GetDocument().View()->LayoutViewport()->SetScrollOffset(ScrollOffset(0.0, 50),
+                                                          kProgrammaticScroll);
+  UpdateAllLifecyclePhasesForTest();
+  EXPECT_EQ(50,
+            GetDocument().View()->LayoutViewport()->ScrollOffsetInt().Height());
 
   FloatPoint mapped_point = MapLocalToAncestor(target, view, FloatPoint());
   EXPECT_EQ(AdjustForFrameScroll(FloatPoint(200, 250)), mapped_point);
@@ -615,14 +610,11 @@ TEST_F(MapCoordinatesTest, FixedPosInTransform) {
     <div class='spacer'></div>
   )HTML");
 
-  GetDocument().View()->LayoutViewportScrollableArea()->SetScrollOffset(
-      ScrollOffset(0.0, 50), kProgrammaticScroll);
-  GetDocument().View()->UpdateAllLifecyclePhases();
-  EXPECT_EQ(50, GetDocument()
-                    .View()
-                    ->LayoutViewportScrollableArea()
-                    ->ScrollOffsetInt()
-                    .Height());
+  GetDocument().View()->LayoutViewport()->SetScrollOffset(ScrollOffset(0.0, 50),
+                                                          kProgrammaticScroll);
+  UpdateAllLifecyclePhasesForTest();
+  EXPECT_EQ(50,
+            GetDocument().View()->LayoutViewport()->ScrollOffsetInt().Height());
 
   LayoutBox* target = ToLayoutBox(GetLayoutObjectByElementId("target"));
   LayoutBox* container = ToLayoutBox(GetLayoutObjectByElementId("container"));
@@ -657,14 +649,11 @@ TEST_F(MapCoordinatesTest, FixedPosInContainPaint) {
     <div class='spacer'></div>
   )HTML");
 
-  GetDocument().View()->LayoutViewportScrollableArea()->SetScrollOffset(
-      ScrollOffset(0.0, 50), kProgrammaticScroll);
-  GetDocument().View()->UpdateAllLifecyclePhases();
-  EXPECT_EQ(50, GetDocument()
-                    .View()
-                    ->LayoutViewportScrollableArea()
-                    ->ScrollOffsetInt()
-                    .Height());
+  GetDocument().View()->LayoutViewport()->SetScrollOffset(ScrollOffset(0.0, 50),
+                                                          kProgrammaticScroll);
+  UpdateAllLifecyclePhasesForTest();
+  EXPECT_EQ(50,
+            GetDocument().View()->LayoutViewport()->ScrollOffsetInt().Height());
 
   LayoutBox* target = ToLayoutBox(GetLayoutObjectByElementId("target"));
   LayoutBox* container = ToLayoutBox(GetLayoutObjectByElementId("container"));
@@ -703,9 +692,9 @@ TEST_F(MapCoordinatesTest, FixedPosInIFrameWhenMainFrameScrolled) {
       "<style>body { margin: 0; } #target { width: 200px; height: 200px; "
       "position:fixed}</style><div id=target></div>");
 
-  GetDocument().View()->LayoutViewportScrollableArea()->SetScrollOffset(
+  GetDocument().View()->LayoutViewport()->SetScrollOffset(
       ScrollOffset(0.0, 1000), kProgrammaticScroll);
-  GetDocument().View()->UpdateAllLifecyclePhases();
+  UpdateAllLifecyclePhasesForTest();
 
   Element* target = ChildDocument().getElementById("target");
   ASSERT_TRUE(target);
@@ -732,11 +721,12 @@ TEST_F(MapCoordinatesTest, IFrameTransformed) {
       "<style>body { margin: 0; } #target { width: 200px; "
       "height: 8000px}</style><div id=target></div>");
 
-  GetDocument().View()->UpdateAllLifecyclePhases();
+  UpdateAllLifecyclePhasesForTest();
 
-  ChildDocument().View()->LayoutViewportScrollableArea()->SetScrollOffset(
+  ChildDocument().View()->LayoutViewport()->SetScrollOffset(
       ScrollOffset(0.0, 1000), kProgrammaticScroll);
-  ChildDocument().View()->UpdateAllLifecyclePhases();
+  ChildDocument().View()->UpdateAllLifecyclePhases(
+      DocumentLifecycle::LifecycleUpdateReason::kTest);
 
   Element* target = ChildDocument().getElementById("target");
   ASSERT_TRUE(target);
@@ -769,10 +759,10 @@ TEST_F(MapCoordinatesTest, FixedPosInScrolledIFrameWithTransform) {
     <div style='width: 200; height: 8000px'></div>
   )HTML");
 
-  GetDocument().View()->UpdateAllLifecyclePhases();
-  ChildDocument().View()->LayoutViewportScrollableArea()->SetScrollOffset(
+  UpdateAllLifecyclePhasesForTest();
+  ChildDocument().View()->LayoutViewport()->SetScrollOffset(
       ScrollOffset(0.0, 1000), kProgrammaticScroll);
-  GetDocument().View()->UpdateAllLifecyclePhases();
+  UpdateAllLifecyclePhasesForTest();
 
   Element* target = ChildDocument().getElementById("target");
   ASSERT_TRUE(target);
@@ -1644,8 +1634,9 @@ TEST_F(MapCoordinatesTest, LocalToAncestorTransform) {
 }
 
 TEST_F(MapCoordinatesTest, LocalToAbsoluteTransformFlattens) {
-  GetDocument().GetFrame()->GetSettings()->SetAcceleratedCompositingEnabled(
-      true);
+  // This Page is not actually being shown by a compositor, but we act like it
+  // will in order to test behaviour.
+  GetPage().GetSettings().SetAcceleratedCompositingEnabled(true);
   SetBodyInnerHTML(R"HTML(
     <div style='position: absolute; left: 0; top: 0;'>
       <div style='transform: rotateY(45deg);

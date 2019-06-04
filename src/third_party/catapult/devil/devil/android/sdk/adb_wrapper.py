@@ -19,6 +19,7 @@ import posixpath
 import re
 import subprocess
 
+from devil import base_error
 from devil import devil_env
 from devil.android import decorators
 from devil.android import device_errors
@@ -96,7 +97,11 @@ def _GetVersion():
 
 
 def _ShouldRetryAdbCmd(exc):
-  return not isinstance(exc, device_errors.NoAdbError)
+  # Errors are potentially transient and should be retried, with the exception
+  # of NoAdbError. Exceptions [e.g. generated from SIGTERM handler] should be
+  # raised.
+  return (isinstance(exc, base_error.BaseError) and
+          not isinstance(exc, device_errors.NoAdbError))
 
 
 DeviceStat = collections.namedtuple('DeviceStat',
@@ -258,12 +263,18 @@ class AdbWrapper(object):
   @decorators.WithTimeoutAndConditionalRetries(_ShouldRetryAdbCmd)
   def _RunAdbCmd(cls, args, timeout=None, retries=None, device_serial=None,
                  check_error=True, cpu_affinity=None):
-    # pylint: disable=no-member
+    if timeout:
+      remaining = timeout_retry.CurrentTimeoutThreadGroup().GetRemainingTime()
+      if remaining:
+        # Use a slightly smaller timeout than remaining time to ensure that we
+        # have time to collect output from the command.
+        timeout = 0.95 * remaining
+      else:
+        timeout = None
     try:
       status, output = cmd_helper.GetCmdStatusAndOutputWithTimeout(
           cls._BuildAdbCmd(args, device_serial, cpu_affinity=cpu_affinity),
-          timeout_retry.CurrentTimeoutThreadGroup().GetRemainingTime(),
-          env=cls._ADB_ENV)
+          timeout, env=cls._ADB_ENV)
     except OSError as e:
       if e.errno in (errno.ENOENT, errno.ENOEXEC):
         raise device_errors.NoAdbError(msg=str(e))

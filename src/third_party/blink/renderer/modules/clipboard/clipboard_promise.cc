@@ -5,20 +5,23 @@
 #include "third_party/blink/renderer/modules/clipboard/clipboard_promise.h"
 
 #include "base/single_thread_task_runner.h"
+#include "third_party/blink/public/mojom/page/page_visibility_state.mojom-blink.h"
 #include "third_party/blink/public/platform/modules/permissions/permission.mojom-blink.h"
 #include "third_party/blink/public/platform/platform.h"
 #include "third_party/blink/public/platform/task_type.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_promise_resolver.h"
+#include "third_party/blink/renderer/core/clipboard/clipboard_mime_types.h"
 #include "third_party/blink/renderer/core/clipboard/data_object.h"
 #include "third_party/blink/renderer/core/clipboard/data_transfer.h"
 #include "third_party/blink/renderer/core/clipboard/data_transfer_access_policy.h"
 #include "third_party/blink/renderer/core/clipboard/data_transfer_item.h"
 #include "third_party/blink/renderer/core/clipboard/data_transfer_item_list.h"
 #include "third_party/blink/renderer/core/clipboard/system_clipboard.h"
+#include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/execution_context/execution_context.h"
 #include "third_party/blink/renderer/core/frame/local_frame.h"
 #include "third_party/blink/renderer/modules/permissions/permission_utils.h"
-#include "third_party/blink/renderer/platform/clipboard/clipboard_mime_types.h"
+#include "third_party/blink/renderer/platform/wtf/functional.h"
 
 // And now, a brief note about clipboard permissions.
 //
@@ -93,8 +96,7 @@ PermissionService* ClipboardPromise::GetPermissionService() {
 }
 
 bool ClipboardPromise::IsFocusedDocument(ExecutionContext* context) {
-  DCHECK(context->IsDocument());
-  Document* doc = ToDocumentOrNull(context);
+  Document* doc = To<Document>(context);
   return doc && doc->hasFocus();
 }
 
@@ -180,8 +182,8 @@ void ClipboardPromise::HandleReadTextWithPermission(PermissionStatus status) {
 // TODO(garykac): This currently only handles plain text.
 void ClipboardPromise::HandleWrite(DataTransfer* data) {
   // Scan DataTransfer and extract data types that we support.
-  size_t num_items = data->items()->length();
-  for (unsigned long i = 0; i < num_items; i++) {
+  uint32_t num_items = data->items()->length();
+  for (uint32_t i = 0; i < num_items; i++) {
     DataTransferItem* item = data->items()->item(i);
     DataObjectItem* objectItem = item->GetDataObjectItem();
     if (objectItem->Kind() == DataObjectItem::kStringKind &&
@@ -222,6 +224,7 @@ void ClipboardPromise::HandleWriteTextWithPermission(PermissionStatus status) {
 }
 
 void ClipboardPromise::Trace(blink::Visitor* visitor) {
+  visitor->Trace(script_state_);
   visitor->Trace(script_promise_resolver_);
   ContextLifecycleObserver::Trace(visitor);
 }

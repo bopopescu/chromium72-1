@@ -23,6 +23,7 @@
 #include "components/payments/content/payment_request.h"
 #include "components/payments/content/payment_request_spec.h"
 #include "components/payments/core/autofill_payment_instrument.h"
+#include "components/payments/core/features.h"
 #include "components/strings/grit/components_strings.h"
 #include "content/public/test/browser_test_utils.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -224,6 +225,10 @@ IN_PROC_BROWSER_TEST_F(PaymentRequestCreditCardEditorTest,
 }
 
 IN_PROC_BROWSER_TEST_F(PaymentRequestCreditCardEditorTest, EditingMaskedCard) {
+  // Masked cards are from Google Pay.
+  base::test::ScopedFeatureList features;
+  features.InitAndEnableFeature(features::kReturnGooglePayInBasicCard);
+
   NavigateTo("/payment_request_no_shipping_test.html");
   autofill::TestAutofillClock test_clock;
   test_clock.SetNow(kJune2017);
@@ -305,6 +310,10 @@ IN_PROC_BROWSER_TEST_F(PaymentRequestCreditCardEditorTest, EditingMaskedCard) {
 
 IN_PROC_BROWSER_TEST_F(PaymentRequestCreditCardEditorTest,
                        EditingMaskedCard_ClickOnPaymentsLink) {
+  // Masked cards are from Google Pay.
+  base::test::ScopedFeatureList features;
+  features.InitAndEnableFeature(features::kReturnGooglePayInBasicCard);
+
   NavigateTo("/payment_request_no_shipping_test.html");
   autofill::TestAutofillClock test_clock;
   test_clock.SetNow(kJune2017);
@@ -900,33 +909,6 @@ IN_PROC_BROWSER_TEST_F(PaymentRequestCreditCardEditorTest,
   EXPECT_EQ(1U, request->state()->available_instruments().size());
   EXPECT_EQ(request->state()->available_instruments().back().get(),
             request->state()->selected_instrument());
-}
-
-IN_PROC_BROWSER_TEST_F(PaymentRequestCreditCardEditorTest,
-                       RefuseExistingCardNumber) {
-  NavigateTo("/payment_request_no_shipping_test.html");
-  autofill::CreditCard card = autofill::test::GetCreditCard();
-  AddCreditCard(card);
-
-  InvokePaymentRequestUI();
-  OpenPaymentMethodScreen();
-  OpenCreditCardEditorScreen();
-
-  SetEditorTextfieldValue(card.number(), autofill::CREDIT_CARD_NUMBER);
-  ValidatingTextfield* textfield = static_cast<ValidatingTextfield*>(
-      dialog_view()->GetViewByID(EditorViewController::GetInputFieldViewId(
-          autofill::CREDIT_CARD_NUMBER)));
-  ASSERT_TRUE(textfield);
-  EXPECT_TRUE(textfield->invalid());
-  EXPECT_EQ(l10n_util::GetStringUTF16(
-                IDS_PAYMENTS_VALIDATION_ALREADY_USED_CREDIT_CARD_NUMBER),
-            GetErrorLabelForType(autofill::CREDIT_CARD_NUMBER));
-
-  // Now fix it.
-  ASSERT_NE(base::ASCIIToUTF16("4111111111111129"), card.number());
-  SetEditorTextfieldValue(base::ASCIIToUTF16("4111111111111129"),
-                          autofill::CREDIT_CARD_NUMBER);
-  EXPECT_FALSE(textfield->invalid());
 }
 
 IN_PROC_BROWSER_TEST_F(PaymentRequestCreditCardEditorTest, EnteringEmptyData) {

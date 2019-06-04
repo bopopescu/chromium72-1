@@ -7,9 +7,12 @@
 #include <utility>
 
 #include "ash/public/interfaces/voice_interaction_controller.mojom.h"
+#include "chrome/browser/chromeos/arc/arc_util.h"
 #include "chrome/browser/chromeos/arc/voice_interaction/voice_interaction_controller_client.h"
-#include "chrome/browser/ui/ash/assistant/assistant_card_renderer.h"
+#include "chrome/browser/profiles/profile_manager.h"
+#include "chrome/browser/ui/ash/assistant/assistant_context_util.h"
 #include "chrome/browser/ui/ash/assistant/assistant_image_downloader.h"
+#include "chrome/browser/ui/ash/assistant/assistant_setup.h"
 #include "chromeos/services/assistant/public/mojom/constants.mojom.h"
 #include "services/service_manager/public/cpp/connector.h"
 
@@ -25,9 +28,7 @@ AssistantClient* AssistantClient::Get() {
 }
 
 AssistantClient::AssistantClient()
-    : client_binding_(this),
-      audio_input_binding_(&audio_input_),
-      context_binding_(&context_) {
+    : client_binding_(this), device_actions_binding_(&device_actions_) {
   DCHECK_EQ(nullptr, g_instance);
   g_instance = this;
 }
@@ -35,35 +36,46 @@ AssistantClient::AssistantClient()
 AssistantClient::~AssistantClient() {
   DCHECK(g_instance);
   g_instance = nullptr;
-  context_binding_.Close();
 }
 
-void AssistantClient::MaybeInit(service_manager::Connector* connector) {
+void AssistantClient::MaybeInit(Profile* profile) {
+  if (arc::IsAssistantAllowedForProfile(profile) !=
+      ash::mojom::AssistantAllowedState::ALLOWED) {
+    return;
+  }
+
   if (initialized_)
     return;
 
   initialized_ = true;
+  auto* connector = content::BrowserContext::GetConnectorFor(profile);
   connector->BindInterface(chromeos::assistant::mojom::kServiceName,
                            &assistant_connection_);
-  chromeos::assistant::mojom::AudioInputPtr audio_input_ptr;
-  audio_input_binding_.Bind(mojo::MakeRequest(&audio_input_ptr));
 
   chromeos::assistant::mojom::ClientPtr client_ptr;
   client_binding_.Bind(mojo::MakeRequest(&client_ptr));
 
-  chromeos::assistant::mojom::ContextPtr context_ptr;
-  context_binding_.Bind(mojo::MakeRequest(&context_ptr));
+  chromeos::assistant::mojom::DeviceActionsPtr device_actions_ptr;
+  device_actions_binding_.Bind(mojo::MakeRequest(&device_actions_ptr));
 
-  assistant_connection_->Init(std::move(client_ptr), std::move(context_ptr),
-                              std::move(audio_input_ptr));
+  assistant_connection_->Init(std::move(client_ptr),
+                              std::move(device_actions_ptr));
 
-  assistant_card_renderer_ = std::make_unique<AssistantCardRenderer>(connector);
   assistant_image_downloader_ =
       std::make_unique<AssistantImageDownloader>(connector);
+  assistant_setup_ = std::make_unique<AssistantSetup>(connector);
 }
 
 void AssistantClient::OnAssistantStatusChanged(bool running) {
+  // |running| means assistent mojom service is running. This maps to
+  // |STOPPED| and |NOT_READY|. |RUNNING| maps to UI is shown and an assistant
+  // session is running.
   arc::VoiceInteractionControllerClient::Get()->NotifyStatusChanged(
-      running ? ash::mojom::VoiceInteractionState::RUNNING
-              : ash::mojom::VoiceInteractionState::STOPPED);
+      running ? ash::mojom::VoiceInteractionState::STOPPED
+              : ash::mojom::VoiceInteractionState::NOT_READY);
+}
+
+void AssistantClient::RequestAssistantStructure(
+    RequestAssistantStructureCallback callback) {
+  RequestAssistantStructureForActiveBrowserWindow(std::move(callback));
 }

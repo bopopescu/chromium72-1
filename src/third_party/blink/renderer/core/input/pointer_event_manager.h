@@ -36,7 +36,8 @@ class CORE_EXPORT PointerEventManager
   // through this function.
   WebInputEventResult HandlePointerEvent(
       const WebPointerEvent&,
-      const Vector<WebPointerEvent>& coalesced_events);
+      const Vector<WebPointerEvent>& coalesced_events,
+      const Vector<WebPointerEvent>& predicted_events);
 
   // Sends the mouse pointer events and the boundary events
   // that it may cause. It also sends the compat mouse events
@@ -47,7 +48,8 @@ class CORE_EXPORT PointerEventManager
       const String& canvas_region_id,
       const WebInputEvent::Type,
       const WebMouseEvent&,
-      const Vector<WebMouseEvent>& coalesced_events);
+      const Vector<WebMouseEvent>& coalesced_events,
+      const Vector<WebMouseEvent>& predicted_events);
 
   // Sends boundary events pointerout/leave/over/enter and
   // mouseout/leave/over/enter to the corresponding targets.
@@ -58,6 +60,21 @@ class CORE_EXPORT PointerEventManager
   void SendMouseAndPointerBoundaryEvents(Node* entered_node,
                                          const String& canvas_region_id,
                                          const WebMouseEvent&);
+
+  WebInputEventResult DirectDispatchMousePointerEvent(
+      Node* target,
+      const WebMouseEvent&,
+      const AtomicString& event_type,
+      const Vector<WebMouseEvent>& coalesced_events,
+      const Vector<WebMouseEvent>& predicted_events,
+      const String& canvas_node_id = String());
+
+  WebInputEventResult CreateAndDispatchPointerEvent(
+      Node* target,
+      const AtomicString& mouse_event_name,
+      const WebMouseEvent&,
+      const Vector<WebMouseEvent>& coalesced_events,
+      const Vector<WebMouseEvent>& predicted_events);
 
   // Resets the internal state of this object.
   void Clear();
@@ -90,6 +107,8 @@ class CORE_EXPORT PointerEventManager
 
   void ProcessPendingPointerCaptureForPointerLock(const WebMouseEvent&);
 
+  void RemoveLastMousePosition();
+
   // Sends any outstanding events. For example it notifies TouchEventManager
   // to group any changes to touch since last FlushEvents and send the touch
   // event out to js. Since after this function any outstanding event is sent,
@@ -104,15 +123,14 @@ class CORE_EXPORT PointerEventManager
                       WTF::UnsignedWithZeroKeyHashTraits<int>>
       PointerCapturingMap;
   class EventTargetAttributes {
-    DISALLOW_NEW_EXCEPT_PLACEMENT_NEW();
+    DISALLOW_NEW();
 
    public:
     void Trace(blink::Visitor* visitor) { visitor->Trace(target); }
     Member<EventTarget> target;
-    bool has_recieved_over_event;
-    EventTargetAttributes() : target(nullptr), has_recieved_over_event(false) {}
-    EventTargetAttributes(EventTarget* target, bool has_recieved_over_event)
-        : target(target), has_recieved_over_event(has_recieved_over_event) {}
+    EventTargetAttributes() : target(nullptr) {}
+    EventTargetAttributes(EventTarget* target)
+        : target(target) {}
   };
 
   class PointerEventBoundaryEventDispatcher : public BoundaryEventDispatcher {
@@ -151,13 +169,14 @@ class CORE_EXPORT PointerEventManager
   void HandlePointerInterruption(const WebPointerEvent&);
 
   // Returns PointerEventTarget for a WebTouchPoint, hit-testing as necessary.
-  EventHandlingUtil::PointerEventTarget ComputePointerEventTarget(
+  event_handling_util::PointerEventTarget ComputePointerEventTarget(
       const WebPointerEvent&);
 
   WebInputEventResult DispatchTouchPointerEvent(
       const WebPointerEvent&,
       const Vector<WebPointerEvent>& coalesced_events,
-      const EventHandlingUtil::PointerEventTarget&);
+      const Vector<WebPointerEvent>& predicted_events,
+      const event_handling_util::PointerEventTarget&);
 
   // Returns whether the event is consumed or not.
   WebInputEventResult SendTouchPointerEvent(EventTarget*,

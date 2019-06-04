@@ -10,10 +10,10 @@
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/macros.h"
-#include "base/message_loop/message_loop.h"
 #include "base/run_loop.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/cancelable_task_tracker.h"
+#include "base/test/scoped_task_environment.h"
 #include "components/history/core/browser/history_database_params.h"
 #include "components/history/core/browser/history_service.h"
 #include "components/history/core/test/test_history_database.h"
@@ -182,11 +182,11 @@ class HistoryQueryTest : public testing::Test {
 
   void TearDown() override {
     if (history_) {
-      history_->SetOnBackendDestroyTask(
-          base::RunLoop::QuitCurrentWhenIdleClosureDeprecated());
+      base::RunLoop run_loop;
+      history_->SetOnBackendDestroyTask(run_loop.QuitClosure());
       history_->Cleanup();
       history_.reset();
-      base::RunLoop().Run();  // Wait for the other thread.
+      run_loop.Run();  // Wait for the other thread.
     }
   }
 
@@ -198,7 +198,7 @@ class HistoryQueryTest : public testing::Test {
 
   base::ScopedTempDir temp_dir_;
 
-  base::MessageLoop message_loop_;
+  base::test::ScopedTaskEnvironment task_environment_;
 
   base::FilePath history_dir_;
 

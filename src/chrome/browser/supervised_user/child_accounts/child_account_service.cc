@@ -4,6 +4,8 @@
 
 #include "chrome/browser/supervised_user/child_accounts/child_account_service.h"
 
+#include <utility>
+
 #include "base/callback.h"
 #include "base/command_line.h"
 #include "base/feature_list.h"
@@ -37,9 +39,9 @@
 
 #if defined(OS_CHROMEOS)
 #include "chrome/browser/chromeos/profiles/profile_helper.h"
+#else
+#include "chrome/browser/signin/signin_util.h"
 #endif
-
-const char kGaiaCookieManagerSource[] = "child_account_service";
 
 // Normally, re-check the family info once per day.
 const int kUpdateIntervalSeconds = 60 * 60 * 24;
@@ -130,20 +132,18 @@ void ChildAccountService::Shutdown() {
 }
 
 void ChildAccountService::AddChildStatusReceivedCallback(
-    const base::Closure& callback) {
+    base::OnceClosure callback) {
   if (IsChildAccountStatusKnown())
-    callback.Run();
+    std::move(callback).Run();
   else
-    status_received_callback_list_.push_back(callback);
+    status_received_callback_list_.push_back(std::move(callback));
 }
 
 ChildAccountService::AuthState ChildAccountService::GetGoogleAuthState() {
   std::vector<gaia::ListedAccount> accounts;
   std::vector<gaia::ListedAccount> signed_out_accounts;
-  if (!gaia_cookie_manager_->ListAccounts(&accounts, &signed_out_accounts,
-                                          kGaiaCookieManagerSource)) {
+  if (!gaia_cookie_manager_->ListAccounts(&accounts, &signed_out_accounts))
     return AuthState::PENDING;
-  }
   return (accounts.empty() || !accounts[0].valid) ? AuthState::NOT_AUTHENTICATED
                                                   : AuthState::AUTHENTICATED;
 }
@@ -164,10 +164,6 @@ bool ChildAccountService::SetActive(bool active) {
   if (active_) {
     SupervisedUserSettingsService* settings_service =
         SupervisedUserSettingsServiceFactory::GetForProfile(profile_);
-
-    settings_service->SetLocalSetting(
-        supervised_users::kRecordHistoryIncludesSessionSync,
-        std::make_unique<base::Value>(false));
 
     // In contrast to legacy SUs, child account SUs must sign in.
     settings_service->SetLocalSetting(supervised_users::kSigninAllowed,
@@ -193,7 +189,7 @@ bool ChildAccountService::SetActive(bool active) {
     // This is also used by user policies (UserPolicySigninService), but since
     // child accounts can not also be Dasher accounts, there shouldn't be any
     // problems.
-    SigninManagerFactory::GetForProfile(profile_)->ProhibitSignout(true);
+    signin_util::SetUserSignoutAllowedForProfile(profile_, false);
 #endif
 
     // TODO(treib): Maybe store the last update time in a pref, so we don't
@@ -211,8 +207,6 @@ bool ChildAccountService::SetActive(bool active) {
   } else {
     SupervisedUserSettingsService* settings_service =
         SupervisedUserSettingsServiceFactory::GetForProfile(profile_);
-    settings_service->SetLocalSetting(
-        supervised_users::kRecordHistoryIncludesSessionSync, nullptr);
     settings_service->SetLocalSetting(supervised_users::kSigninAllowed,
                                       nullptr);
     settings_service->SetLocalSetting(supervised_users::kCookiesAlwaysAllowed,
@@ -225,7 +219,7 @@ bool ChildAccountService::SetActive(bool active) {
 #endif
 
 #if !defined(OS_CHROMEOS)
-    SigninManagerFactory::GetForProfile(profile_)->ProhibitSignout(false);
+    signin_util::SetUserSignoutAllowedForProfile(profile_, true);
 #endif
 
     CancelFetchingFamilyInfo();
@@ -235,8 +229,10 @@ bool ChildAccountService::SetActive(bool active) {
   // The logic to do this lives in the SupervisedUserSyncDataTypeController.
   browser_sync::ProfileSyncService* sync_service =
       ProfileSyncServiceFactory::GetForProfile(profile_);
-  if (sync_service->IsFirstSetupComplete())
-    sync_service->ReconfigureDatatypeManager();
+  if (sync_service->IsFirstSetupComplete()) {
+    sync_service->ReconfigureDatatypeManager(
+        /*bypass_setup_in_progress_check=*/false);
+  }
 
   return true;
 }
@@ -255,8 +251,8 @@ void ChildAccountService::SetIsChildAccount(bool is_child_account) {
   }
   profile_->GetPrefs()->SetBoolean(prefs::kChildAccountStatusKnown, true);
 
-  for (const auto& callback : status_received_callback_list_)
-    callback.Run();
+  for (auto& callback : status_received_callback_list_)
+    std::move(callback).Run();
   status_received_callback_list_.clear();
 }
 

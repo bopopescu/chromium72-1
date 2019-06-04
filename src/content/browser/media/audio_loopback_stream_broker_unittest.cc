@@ -35,16 +35,15 @@ media::AudioParameters TestParams() {
   return media::AudioParameters::UnavailableDeviceParams();
 }
 
-class MockSource : public AudioStreamBrokerFactory::LoopbackSource {
+class MockSource : public AudioStreamBroker::LoopbackSource {
  public:
-  explicit MockSource(const base::UnguessableToken& group_id)
-      : group_id_(group_id) {}
+  MockSource() : group_id_(base::UnguessableToken::Create()) {}
   ~MockSource() override {}
 
   // AudioStreamBrokerFactory::LoopbackSource mocking.
-  base::UnguessableToken GetGroupID() override { return group_id_; }
-  MOCK_METHOD0(OnStartCapturing, void(void));
-  MOCK_METHOD0(OnStopCapturing, void(void));
+  const base::UnguessableToken& GetGroupID() override { return group_id_; }
+  MOCK_METHOD1(AddLoopbackSink, void(AudioStreamBroker::LoopbackSink*));
+  MOCK_METHOD1(RemoveLoopbackSink, void(AudioStreamBroker::LoopbackSink*));
 
  private:
   base::UnguessableToken group_id_;
@@ -71,7 +70,7 @@ class MockRendererAudioInputStreamFactoryClient
   void StreamCreated(
       media::mojom::AudioInputStreamPtr input_stream,
       media::mojom::AudioInputStreamClientRequest client_request,
-      media::mojom::AudioDataPipePtr data_pipe,
+      media::mojom::ReadOnlyAudioDataPipePtr data_pipe,
       bool initially_muted,
       const base::Optional<base::UnguessableToken>& stream_id) override {
     // Loopback streams have no stream ids.
@@ -158,19 +157,17 @@ struct TestEnvironment {
   TestEnvironment(const base::UnguessableToken& group_id, bool mute_source) {
     // Muting should not start until CreateStream() is called.
     EXPECT_CALL(stream_factory, IsMuting(_)).Times(0);
-    auto mock_source = std::make_unique<NiceMock<MockSource>>(group_id);
-    source = mock_source.get();
+    EXPECT_CALL(source, AddLoopbackSink(_));
     broker = std::make_unique<AudioLoopbackStreamBroker>(
-        kRenderProcessId, kRenderFrameId, std::move(mock_source), TestParams(),
-        kShMemCount, mute_source, deleter.Get(),
-        renderer_factory_client.MakePtr());
+        kRenderProcessId, kRenderFrameId, &source, TestParams(), kShMemCount,
+        mute_source, deleter.Get(), renderer_factory_client.MakePtr());
   }
 
   void RunUntilIdle() { thread_bundle.RunUntilIdle(); }
 
   TestBrowserThreadBundle thread_bundle;
   MockDeleterCallback deleter;
-  MockSource* source;
+  MockSource source;
   StrictMock<MockRendererAudioInputStreamFactoryClient> renderer_factory_client;
   std::unique_ptr<AudioLoopbackStreamBroker> broker;
   MockStreamFactory stream_factory;
@@ -184,27 +181,24 @@ TEST(AudioLoopbackStreamBrokerTest, StoresProcessAndFrameId) {
   TestBrowserThreadBundle thread_bundle;
   MockDeleterCallback deleter;
   StrictMock<MockRendererAudioInputStreamFactoryClient> renderer_factory_client;
-  auto source = std::make_unique<StrictMock<MockSource>>(
-      base::UnguessableToken::Create());
-  MockSource* mock_source = source.get();
+  MockSource source;
 
-  EXPECT_CALL(*mock_source, OnStartCapturing());
+  EXPECT_CALL(source, AddLoopbackSink(_));
 
-  AudioLoopbackStreamBroker broker(kRenderProcessId, kRenderFrameId,
-                                   std::move(source), TestParams(), kShMemCount,
-                                   !kMuteSource, deleter.Get(),
-                                   renderer_factory_client.MakePtr());
+  AudioLoopbackStreamBroker broker(
+      kRenderProcessId, kRenderFrameId, &source, TestParams(), kShMemCount,
+      !kMuteSource, deleter.Get(), renderer_factory_client.MakePtr());
 
   EXPECT_EQ(kRenderProcessId, broker.render_process_id());
   EXPECT_EQ(kRenderFrameId, broker.render_frame_id());
 
-  EXPECT_CALL(*mock_source, OnStopCapturing());
+  EXPECT_CALL(source, RemoveLoopbackSink(&broker));
 }
 
 TEST(AudioLoopbackStreamBrokerTest, StreamCreationSuccess_Propagates) {
   TestEnvironment env(base::UnguessableToken::Create(), !kMuteSource);
   MockStreamFactory::StreamRequestData stream_request_data(
-      env.source->GetGroupID(), TestParams());
+      env.source.GetGroupID(), TestParams());
   env.stream_factory.ExpectStreamCreation(&stream_request_data);
 
   EXPECT_CALL(env.stream_factory, IsMuting(_)).Times(0);
@@ -219,7 +213,8 @@ TEST(AudioLoopbackStreamBrokerTest, StreamCreationSuccess_Propagates) {
   base::SyncSocket socket1, socket2;
   base::SyncSocket::CreatePair(&socket1, &socket2);
   std::move(stream_request_data.created_callback)
-      .Run({base::in_place, mojo::SharedBufferHandle::Create(shmem_size),
+      .Run({base::in_place,
+            base::ReadOnlySharedMemoryRegion::Create(shmem_size).region,
             mojo::WrapPlatformFile(socket1.Release())});
 
   EXPECT_CALL(env.renderer_factory_client, OnStreamCreated());
@@ -233,10 +228,10 @@ TEST(AudioLoopbackStreamBrokerTest, StreamCreationSuccess_Propagates) {
 TEST(AudioLoopbackStreamBrokerTest, MutedStreamCreation_Mutes) {
   TestEnvironment env(base::UnguessableToken::Create(), kMuteSource);
   MockStreamFactory::StreamRequestData stream_request_data(
-      env.source->GetGroupID(), TestParams());
+      env.source.GetGroupID(), TestParams());
   env.stream_factory.ExpectStreamCreation(&stream_request_data);
 
-  EXPECT_CALL(env.stream_factory, IsMuting(env.source->GetGroupID()));
+  EXPECT_CALL(env.stream_factory, IsMuting(env.source.GetGroupID()));
 
   env.broker->CreateStream(env.factory_ptr.get());
   env.RunUntilIdle();
@@ -248,7 +243,8 @@ TEST(AudioLoopbackStreamBrokerTest, MutedStreamCreation_Mutes) {
   base::SyncSocket socket1, socket2;
   base::SyncSocket::CreatePair(&socket1, &socket2);
   std::move(stream_request_data.created_callback)
-      .Run({base::in_place, mojo::SharedBufferHandle::Create(shmem_size),
+      .Run({base::in_place,
+            base::ReadOnlySharedMemoryRegion::Create(shmem_size).region,
             mojo::WrapPlatformFile(socket1.Release())});
 
   EXPECT_CALL(env.renderer_factory_client, OnStreamCreated());
@@ -262,10 +258,10 @@ TEST(AudioLoopbackStreamBrokerTest, MutedStreamCreation_Mutes) {
 TEST(AudioLoopbackStreamBrokerTest, SourceGone_CallsDeleter) {
   TestEnvironment env(base::UnguessableToken::Create(), kMuteSource);
   MockStreamFactory::StreamRequestData stream_request_data(
-      env.source->GetGroupID(), TestParams());
+      env.source.GetGroupID(), TestParams());
   env.stream_factory.ExpectStreamCreation(&stream_request_data);
 
-  EXPECT_CALL(env.stream_factory, IsMuting(env.source->GetGroupID()));
+  EXPECT_CALL(env.stream_factory, IsMuting(env.source.GetGroupID()));
 
   env.broker->CreateStream(env.factory_ptr.get());
   env.RunUntilIdle();
@@ -277,7 +273,8 @@ TEST(AudioLoopbackStreamBrokerTest, SourceGone_CallsDeleter) {
   base::SyncSocket socket1, socket2;
   base::SyncSocket::CreatePair(&socket1, &socket2);
   std::move(stream_request_data.created_callback)
-      .Run({base::in_place, mojo::SharedBufferHandle::Create(shmem_size),
+      .Run({base::in_place,
+            base::ReadOnlySharedMemoryRegion::Create(shmem_size).region,
             mojo::WrapPlatformFile(socket1.Release())});
 
   EXPECT_CALL(env.renderer_factory_client, OnStreamCreated());
@@ -286,10 +283,12 @@ TEST(AudioLoopbackStreamBrokerTest, SourceGone_CallsDeleter) {
 
   Mock::VerifyAndClear(&env.renderer_factory_client);
 
-  EXPECT_CALL(env.deleter, Run(env.broker.release()))
-      .WillOnce(testing::DeleteArg<0>());
+  EXPECT_CALL(env.deleter, Run(env.broker.get()));
 
-  env.source->WebContentsDestroyed();
+  // Accessing source is not allowed after OnSourceGone.
+  EXPECT_CALL(env.source, RemoveLoopbackSink(_)).Times(0);
+
+  env.broker->OnSourceGone();
 
   env.RunUntilIdle();
 }
@@ -297,7 +296,7 @@ TEST(AudioLoopbackStreamBrokerTest, SourceGone_CallsDeleter) {
 TEST(AudioLoopbackStreamBrokerTest, StreamCreationFailure_CallsDeleter) {
   TestEnvironment env(base::UnguessableToken::Create(), !kMuteSource);
   MockStreamFactory::StreamRequestData stream_request_data(
-      env.source->GetGroupID(), TestParams());
+      env.source.GetGroupID(), TestParams());
   env.stream_factory.ExpectStreamCreation(&stream_request_data);
 
   EXPECT_CALL(env.stream_factory, IsMuting(_)).Times(0);
@@ -318,7 +317,7 @@ TEST(AudioLoopbackStreamBrokerTest,
      RendererFactoryClientDisconnect_CallsDeleter) {
   TestEnvironment env(base::UnguessableToken::Create(), !kMuteSource);
   MockStreamFactory::StreamRequestData stream_request_data(
-      env.source->GetGroupID(), TestParams());
+      env.source.GetGroupID(), TestParams());
   env.stream_factory.ExpectStreamCreation(&stream_request_data);
 
   EXPECT_CALL(env.stream_factory, IsMuting(_)).Times(0);
@@ -340,7 +339,7 @@ TEST(AudioLoopbackStreamBrokerTest,
 TEST(AudioLoopbackStreamBrokerTest, ObserverDisconnect_CallsDeleter) {
   TestEnvironment env(base::UnguessableToken::Create(), !kMuteSource);
   MockStreamFactory::StreamRequestData stream_request_data(
-      env.source->GetGroupID(), TestParams());
+      env.source.GetGroupID(), TestParams());
   env.stream_factory.ExpectStreamCreation(&stream_request_data);
 
   EXPECT_CALL(env.stream_factory, IsMuting(_)).Times(0);

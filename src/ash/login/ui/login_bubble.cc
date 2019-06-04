@@ -8,13 +8,14 @@
 #include <utility>
 
 #include "ash/focus_cycler.h"
-#include "ash/login/ui/layout_util.h"
 #include "ash/login/ui/lock_screen.h"
 #include "ash/login/ui/lock_window.h"
 #include "ash/login/ui/login_button.h"
 #include "ash/login/ui/login_menu_view.h"
 #include "ash/login/ui/non_accessible_view.h"
+#include "ash/login/ui/views_utils.h"
 #include "ash/public/cpp/ash_constants.h"
+#include "ash/public/cpp/shell_window_ids.h"
 #include "ash/resources/vector_icons/vector_icons.h"
 #include "ash/shell.h"
 #include "ash/strings/grit/ash_strings.h"
@@ -26,6 +27,7 @@
 #include "ui/compositor/scoped_layer_animation_settings.h"
 #include "ui/gfx/font.h"
 #include "ui/gfx/paint_vector_icon.h"
+#include "ui/gfx/text_constants.h"
 #include "ui/views/controls/button/md_text_button.h"
 #include "ui/views/controls/image_view.h"
 #include "ui/views/controls/label.h"
@@ -34,6 +36,7 @@
 #include "ui/views/focus/focus_manager.h"
 #include "ui/views/layout/box_layout.h"
 #include "ui/views/layout/fill_layout.h"
+#include "ui/views/view_properties.h"
 #include "ui/wm/core/coordinate_conversion.h"
 
 namespace ash {
@@ -52,8 +55,8 @@ constexpr int kAlertIconSizeDp = 20;
 constexpr SkAlpha kSubMessageColorAlpha = 0x89;
 
 // Color of the "Remove user" text.
-constexpr SkColor kRemoveUserInitialColor = SkColorSetRGB(0x7B, 0xAA, 0xF7);
-constexpr SkColor kRemoveUserConfirmColor = SkColorSetRGB(0xE6, 0x7C, 0x73);
+constexpr SkColor kRemoveUserInitialColor = gfx::kGoogleBlueDark400;
+constexpr SkColor kRemoveUserConfirmColor = gfx::kGoogleRedDark500;
 
 // Margin/inset of the entries for the user menu.
 constexpr int kUserMenuMarginWidth = 14;
@@ -92,13 +95,23 @@ views::Label* CreateLabel(const base::string16& message, SkColor color) {
 
 class LoginErrorBubbleView : public LoginBaseBubbleView {
  public:
-  LoginErrorBubbleView(views::View* content, views::View* anchor_view)
-      : LoginBaseBubbleView(anchor_view) {
-    SetLayoutManager(std::make_unique<views::BoxLayout>(
-        views::BoxLayout::kVertical, gfx::Insets(),
-        kBubbleBetweenChildSpacingDp));
+  LoginErrorBubbleView(views::View* content,
+                       views::View* anchor_view,
+                       aura::Window* container,
+                       bool show_persistently)
+      : LoginBaseBubbleView(anchor_view, container),
+        show_persistently_(show_persistently) {
     set_anchor_view_insets(
         gfx::Insets(kAnchorViewErrorBubbleVerticalSpacingDp, 0));
+
+    gfx::Insets margins(kUserMenuMarginHeight, kUserMenuMarginWidth);
+
+    set_margins(gfx::Insets(0, margins.left(), 0, margins.right()));
+
+    SetLayoutManager(std::make_unique<views::BoxLayout>(
+        views::BoxLayout::kVertical,
+        gfx::Insets(margins.top(), 0, margins.bottom(), 0),
+        kBubbleBetweenChildSpacingDp));
 
     auto* alert_view = new NonAccessibleView("AlertIconContainer");
     alert_view->SetLayoutManager(
@@ -115,6 +128,9 @@ class LoginErrorBubbleView : public LoginBaseBubbleView {
 
   ~LoginErrorBubbleView() override = default;
 
+  // LoginBaseBubbleView:
+  bool IsPersistent() const override { return show_persistently_; }
+
   // views::View:
   const char* GetClassName() const override { return "LoginErrorBubbleView"; }
   void GetAccessibleNodeData(ui::AXNodeData* node_data) override {
@@ -122,6 +138,8 @@ class LoginErrorBubbleView : public LoginBaseBubbleView {
   }
 
  private:
+  bool show_persistently_;
+
   DISALLOW_COPY_AND_ASSIGN(LoginErrorBubbleView);
 };
 
@@ -148,6 +166,24 @@ class ButtonWithContent : public views::Button {
   DISALLOW_COPY_AND_ASSIGN(ButtonWithContent);
 };
 
+// A view that has a customizable accessible name.
+class ViewWithAccessibleName : public views::View {
+ public:
+  ViewWithAccessibleName(const base::string16& accessible_name)
+      : accessible_name_(accessible_name) {}
+  ~ViewWithAccessibleName() override = default;
+
+  // views::View:
+  void GetAccessibleNodeData(ui::AXNodeData* node_data) override {
+    node_data->role = ax::mojom::Role::kStaticText;
+    node_data->SetName(accessible_name_);
+  }
+
+ private:
+  const base::string16 accessible_name_;
+  DISALLOW_COPY_AND_ASSIGN(ViewWithAccessibleName);
+};
+
 class LoginUserMenuView : public LoginBaseBubbleView,
                           public views::ButtonListener {
  public:
@@ -157,11 +193,13 @@ class LoginUserMenuView : public LoginBaseBubbleView,
                     user_manager::UserType type,
                     bool is_owner,
                     views::View* anchor_view,
+                    LoginButton* bubble_opener_,
                     bool show_remove_user,
                     base::OnceClosure on_remove_user_warning_shown,
                     base::OnceClosure on_remove_user_requested)
       : LoginBaseBubbleView(anchor_view),
         bubble_(bubble),
+        bubble_opener_(bubble_opener_),
         on_remove_user_warning_shown_(std::move(on_remove_user_warning_shown)),
         on_remove_user_requested_(std::move(on_remove_user_requested)) {
     // This view has content the user can interact with if the remove user
@@ -180,8 +218,7 @@ class LoginUserMenuView : public LoginBaseBubbleView,
         kUserMenuMarginHeight, kUserMenuMarginWidth,
         kUserMenuMarginHeight - kUserMenuMarginAroundRemoveUserButtonDp,
         kUserMenuMarginWidth);
-    auto create_and_add_horizontal_margin_container = [&]() {
-      auto* container = new NonAccessibleView("MarginContainer");
+    auto setup_horizontal_margin_container = [&](views::View* container) {
       container->SetLayoutManager(std::make_unique<views::BoxLayout>(
           views::BoxLayout::kVertical,
           gfx::Insets(0, margins.left(), 0, margins.right())));
@@ -207,11 +244,21 @@ class LoginUserMenuView : public LoginBaseBubbleView,
                                                 username)
                    : username;
 
-      views::View* container = create_and_add_horizontal_margin_container();
-      container->AddChildView(CreateLabel(display_username, SK_ColorWHITE));
+      views::View* container = setup_horizontal_margin_container(
+          new NonAccessibleView("UsernameLabel MarginContainer"));
+      username_label_ = CreateLabel(display_username, SK_ColorWHITE);
+      // Do not change these two lines. Without them, the remove user button
+      // will be pushed out of the box when the user has a long name.
+      username_label_->SetMultiLine(true);
+      username_label_->SetMaxLines(1);
+      container->AddChildView(username_label_);
       add_space(container, kBubbleBetweenChildSpacingDp);
-      container->AddChildView(CreateLabel(
-          email, SkColorSetA(SK_ColorWHITE, kSubMessageColorAlpha)));
+      views::Label* email_label =
+          CreateLabel(email, SkColorSetA(SK_ColorWHITE, kSubMessageColorAlpha));
+      // Do not change these two lines for the same reasons as above.
+      email_label->SetMultiLine(true);
+      email_label->SetMaxLines(1);
+      container->AddChildView(email_label);
     }
 
     // Remove user.
@@ -231,6 +278,7 @@ class LoginUserMenuView : public LoginBaseBubbleView,
       auto make_label = [this](const base::string16& text) {
         views::Label* label = CreateLabel(text, SK_ColorWHITE);
         label->SetMultiLine(true);
+        label->SetAllowCharacterBreak(true);
         // Make sure to set a maximum label width, otherwise text wrapping will
         // significantly increase width and layout may not work correctly if
         // the input string is very long.
@@ -238,8 +286,6 @@ class LoginUserMenuView : public LoginBaseBubbleView,
         return label;
       };
 
-      remove_user_confirm_data_ = create_and_add_horizontal_margin_container();
-      remove_user_confirm_data_->SetVisible(false);
       base::string16 part1 = l10n_util::GetStringUTF16(
           IDS_ASH_LOGIN_POD_NON_OWNER_USER_REMOVE_WARNING_PART_1);
       if (type == user_manager::UserType::USER_TYPE_SUPERVISED) {
@@ -247,6 +293,12 @@ class LoginUserMenuView : public LoginBaseBubbleView,
             IDS_ASH_LOGIN_POD_LEGACY_SUPERVISED_USER_REMOVE_WARNING,
             base::UTF8ToUTF16(ash::kLegacySupervisedUserManagementDisplayURL));
       }
+      base::string16 part2 = l10n_util::GetStringFUTF16(
+          IDS_ASH_LOGIN_POD_NON_OWNER_USER_REMOVE_WARNING_PART_2, email);
+
+      remove_user_confirm_data_ = setup_horizontal_margin_container(
+          new ViewWithAccessibleName(part1 + base::ASCIIToUTF16(" ") + part2));
+      remove_user_confirm_data_->SetVisible(false);
 
       // Account for margin that was removed below the separator for the add
       // user button.
@@ -255,15 +307,14 @@ class LoginUserMenuView : public LoginBaseBubbleView,
       remove_user_confirm_data_->AddChildView(make_label(part1));
       add_space(remove_user_confirm_data_,
                 kUserMenuVerticalDistanceBetweenLabelsDp);
-      remove_user_confirm_data_->AddChildView(
-          make_label(l10n_util::GetStringFUTF16(
-              IDS_ASH_LOGIN_POD_NON_OWNER_USER_REMOVE_WARNING_PART_2, email)));
+      remove_user_confirm_data_->AddChildView(make_label(part2));
       // Reduce margin since the remove user button comes next.
       add_space(remove_user_confirm_data_,
                 kUserMenuVerticalDistanceBetweenLabelsDp -
                     kUserMenuMarginAroundRemoveUserButtonDp);
 
-      auto* container = create_and_add_horizontal_margin_container();
+      auto* container = setup_horizontal_margin_container(
+          new NonAccessibleView("RemoveUserButton MarginContainer"));
       remove_user_label_ =
           CreateLabel(l10n_util::GetStringUTF16(
                           IDS_ASH_LOGIN_POD_MENU_REMOVE_ITEM_ACCESSIBLE_NAME),
@@ -272,16 +323,33 @@ class LoginUserMenuView : public LoginBaseBubbleView,
       remove_user_button_->SetFocusBehavior(views::View::FocusBehavior::ALWAYS);
       remove_user_button_->set_id(
           LoginBubble::kUserMenuRemoveUserButtonIdForTest);
+      remove_user_button_->SetAccessibleName(remove_user_label_->text());
       container->AddChildView(remove_user_button_);
     }
+  }
 
-    // The user menu is focusable so that the we can detect when to refocus the
-    // lock window from tab navigation, otherwise focus will be trapped inside
-    // of the bubble.
-    SetFocusBehavior(views::View::FocusBehavior::ALWAYS);
+  void RequestFocus() override {
+    // This view has no actual interesting contents to focus, so immediately
+    // forward to the button.
+    if (remove_user_button_)
+      remove_user_button_->RequestFocus();
+  }
+
+  void AddedToWidget() override {
+    LoginBaseBubbleView::AddedToWidget();
+    // Set up focus traversable parent so that keyboard focus can continue in
+    // the lock window, otherwise focus will be trapped inside the bubble.
+    if (GetAnchorView()) {
+      GetWidget()->SetFocusTraversableParent(
+          anchor_widget()->GetFocusTraversable());
+      GetWidget()->SetFocusTraversableParentView(GetAnchorView());
+    }
   }
 
   ~LoginUserMenuView() override = default;
+
+  // LoginBaseBubbleView:
+  LoginButton* GetBubbleOpener() const override { return bubble_opener_; }
 
   // views::View:
   const char* GetClassName() const override { return "LoginUserMenuView"; }
@@ -292,16 +360,6 @@ class LoginUserMenuView : public LoginBaseBubbleView,
     size.Enlarge(kUserMenuMarginWidth, 0);
     return size;
   }
-  void OnFocus() override {
-    // This view has no actual interesting contents to focus, so immediately
-    // forward to the button.
-    remove_user_button_->RequestFocus();
-  }
-  void AboutToRequestFocusFromTabTraversal(bool reverse) override {
-    // Redirect the focus event to the lock screen.
-    Shell::Get()->focus_cycler()->FocusWidget(LockScreen::Get()->window());
-    LockScreen::Get()->window()->GetFocusManager()->AdvanceFocus(reverse);
-  }
 
   // views::ButtonListener:
   void ButtonPressed(views::Button* sender, const ui::Event& event) override {
@@ -310,9 +368,17 @@ class LoginUserMenuView : public LoginBaseBubbleView,
     if (!remove_user_confirm_data_->visible()) {
       remove_user_confirm_data_->SetVisible(true);
       remove_user_label_->SetEnabledColor(kRemoveUserConfirmColor);
+      SetSize(GetPreferredSize());
       SizeToContents();
-      GetWidget()->SetSize(size());
       Layout();
+
+      // Fire an accessibility alert to make ChromeVox read the warning message
+      // and remove button.
+      remove_user_confirm_data_->NotifyAccessibilityEvent(
+          ax::mojom::Event::kAlert, true /*send_native_event*/);
+      remove_user_button_->NotifyAccessibilityEvent(ax::mojom::Event::kAlert,
+                                                    true /*send_native_event*/);
+
       if (on_remove_user_warning_shown_)
         std::move(on_remove_user_warning_shown_).Run();
       return;
@@ -326,13 +392,21 @@ class LoginUserMenuView : public LoginBaseBubbleView,
       std::move(on_remove_user_requested_).Run();
   }
 
+  views::View* remove_user_button() { return remove_user_button_; }
+
+  views::View* remove_user_confirm_data() { return remove_user_confirm_data_; }
+
+  views::Label* username_label() { return username_label_; }
+
  private:
   LoginBubble* bubble_ = nullptr;
+  LoginButton* bubble_opener_ = nullptr;
   base::OnceClosure on_remove_user_warning_shown_;
   base::OnceClosure on_remove_user_requested_;
   views::View* remove_user_confirm_data_ = nullptr;
   views::Label* remove_user_label_ = nullptr;
   ButtonWithContent* remove_user_button_ = nullptr;
+  views::Label* username_label_ = nullptr;
 
   DISALLOW_COPY_AND_ASSIGN(LoginUserMenuView);
 };
@@ -362,6 +436,22 @@ class LoginTooltipView : public LoginBaseBubbleView {
 // static
 const int LoginBubble::kUserMenuRemoveUserButtonIdForTest = 1;
 
+LoginBubble::TestApi::TestApi(LoginBaseBubbleView* bubble_view)
+    : bubble_view_(bubble_view) {}
+
+views::View* LoginBubble::TestApi::user_menu_remove_user_button() {
+  return static_cast<LoginUserMenuView*>(bubble_view_)->remove_user_button();
+}
+
+views::View* LoginBubble::TestApi::remove_user_confirm_data() {
+  return static_cast<LoginUserMenuView*>(bubble_view_)
+      ->remove_user_confirm_data();
+}
+
+views::Label* LoginBubble::TestApi::username_label() {
+  return static_cast<LoginUserMenuView*>(bubble_view_)->username_label();
+}
+
 LoginBubble::LoginBubble() {
   Shell::Get()->AddPreTargetHandler(this);
 }
@@ -374,12 +464,14 @@ LoginBubble::~LoginBubble() {
 
 void LoginBubble::ShowErrorBubble(views::View* content,
                                   views::View* anchor_view,
-                                  uint32_t flags) {
+                                  bool show_persistently) {
   if (bubble_view_)
     CloseImmediately();
 
-  flags_ = flags;
-  bubble_view_ = new LoginErrorBubbleView(content, anchor_view);
+  aura::Window* menu_container = Shell::GetContainer(
+      Shell::GetPrimaryRootWindow(), kShellWindowId_MenuContainer);
+  bubble_view_ = new LoginErrorBubbleView(content, anchor_view, menu_container,
+                                          show_persistently);
 
   Show();
 }
@@ -396,13 +488,13 @@ void LoginBubble::ShowUserMenu(const base::string16& username,
   if (bubble_view_)
     CloseImmediately();
 
-  flags_ = kFlagsNone;
-  bubble_opener_ = bubble_opener;
-  bubble_view_ = new LoginUserMenuView(this, username, email, type, is_owner,
-                                       anchor_view, show_remove_user,
-                                       std::move(on_remove_user_warning_shown),
-                                       std::move(on_remove_user_requested));
-  bool had_focus = bubble_opener_->HasFocus();
+  bubble_view_ = new LoginUserMenuView(
+      this, username, email, type, is_owner, anchor_view, bubble_opener,
+      show_remove_user, std::move(on_remove_user_warning_shown),
+      std::move(on_remove_user_requested));
+  // Prevent focus from going into |bubble_view_|.
+  bool had_focus = bubble_view_->GetBubbleOpener() &&
+                   bubble_view_->GetBubbleOpener()->HasFocus();
   Show();
   if (had_focus) {
     // Try to focus the bubble view only if the bubble opener was focused.
@@ -415,19 +507,16 @@ void LoginBubble::ShowTooltip(const base::string16& message,
   if (bubble_view_)
     CloseImmediately();
 
-  flags_ = kFlagsNone;
   bubble_view_ = new LoginTooltipView(message, anchor_view);
   Show();
 }
 
-void LoginBubble::ShowSelectionMenu(LoginMenuView* menu,
-                                    LoginButton* bubble_opener) {
+void LoginBubble::ShowSelectionMenu(LoginMenuView* menu) {
   if (bubble_view_)
     CloseImmediately();
 
-  flags_ = kFlagsNone;
-  bubble_opener_ = bubble_opener;
-  const bool had_focus = bubble_opener_->HasFocus();
+  const bool had_focus =
+      menu->GetBubbleOpener() && menu->GetBubbleOpener()->HasFocus();
 
   // Transfer the ownership of |menu| to bubble widget.
   bubble_view_ = menu;
@@ -461,6 +550,11 @@ void LoginBubble::OnWidgetDestroying(views::Widget* widget) {
   OnWidgetClosing(widget);
 }
 
+void LoginBubble::OnWidgetBoundsChanged(views::Widget* widget,
+                                        const gfx::Rect& new_bounds) {
+  EnsureBubbleInScreen();
+}
+
 void LoginBubble::OnMouseEvent(ui::MouseEvent* event) {
   if (event->type() == ui::ET_MOUSE_PRESSED)
     ProcessPressedEvent(event->AsLocatedEvent());
@@ -474,19 +568,27 @@ void LoginBubble::OnGestureEvent(ui::GestureEvent* event) {
 }
 
 void LoginBubble::OnKeyEvent(ui::KeyEvent* event) {
-  if (!bubble_view_ || event->type() != ui::ET_KEY_PRESSED)
+  // Ignore VKEY_PROCESSKEY; it is an IME event saying that the key has been
+  // processed. This event is also generated in tablet mode, ie, after
+  // submitting a password a VKEY_PROCESSKEY event is generated. If we treat
+  // that as a normal key event the password bubble will be dismissed
+  // immediately after submitting.
+  if (!bubble_view_ || event->type() != ui::ET_KEY_PRESSED ||
+      event->key_code() == ui::VKEY_PROCESSKEY) {
     return;
+  }
 
   // If current focus view is the button view, don't process the event here,
   // let the button logic handle the event and determine show/hide behavior.
-  if (bubble_opener_ && bubble_opener_->HasFocus())
+  if (bubble_view_->GetBubbleOpener() &&
+      bubble_view_->GetBubbleOpener()->HasFocus())
     return;
 
   // If |bubble_view_| is interactive do not close it.
   if (bubble_view_->GetWidget()->IsActive())
     return;
 
-  if (!(flags_ & kFlagPersistent)) {
+  if (!bubble_view_->IsPersistent()) {
     Close();
   }
 }
@@ -510,7 +612,7 @@ void LoginBubble::OnWindowFocused(aura::Window* gained_focus,
   if (gained_focus && bubble_window->Contains(gained_focus))
     return;
 
-  if (!(flags_ & kFlagPersistent))
+  if (!bubble_view_->IsPersistent())
     Close();
 }
 
@@ -518,16 +620,17 @@ void LoginBubble::Show() {
   DCHECK(bubble_view_);
   views::Widget* widget =
       views::BubbleDialogDelegateView::CreateBubble(bubble_view_);
+  EnsureBubbleInScreen();
   widget->ShowInactive();
   widget->AddObserver(this);
   widget->StackAtTop();
   aura::client::GetFocusClient(widget->GetNativeView())->AddObserver(this);
-  bubble_view_->SetAlignment(views::BubbleBorder::ALIGN_EDGE_TO_ANCHOR_EDGE);
 
   ScheduleAnimation(true /*visible*/);
 
   // Fire an alert so ChromeVox will read the contents of the bubble.
-  bubble_view_->NotifyAccessibilityEvent(ax::mojom::Event::kAlert, true);
+  bubble_view_->NotifyAccessibilityEvent(ax::mojom::Event::kAlert,
+                                         true /*send_native_event*/);
 }
 
 void LoginBubble::ProcessPressedEvent(const ui::LocatedEvent* event) {
@@ -544,13 +647,14 @@ void LoginBubble::ProcessPressedEvent(const ui::LocatedEvent* event) {
 
   // If the user clicks on the button view, don't process the event here,
   // let the button logic handle the event and determine show/hide behavior.
-  if (bubble_opener_) {
-    gfx::Rect bubble_opener_bounds = bubble_opener_->GetBoundsInScreen();
+  if (bubble_view_->GetBubbleOpener()) {
+    gfx::Rect bubble_opener_bounds =
+        bubble_view_->GetBubbleOpener()->GetBoundsInScreen();
     if (bubble_opener_bounds.Contains(screen_location))
       return;
   }
 
-  if (!(flags_ & kFlagPersistent))
+  if (!bubble_view_->IsPersistent())
     Close();
 }
 
@@ -558,10 +662,11 @@ void LoginBubble::ScheduleAnimation(bool visible) {
   if (!bubble_view_ || is_visible_ == visible)
     return;
 
-  if (bubble_opener_) {
-    bubble_opener_->AnimateInkDrop(visible ? views::InkDropState::ACTIVATED
-                                           : views::InkDropState::DEACTIVATED,
-                                   nullptr /*event*/);
+  if (bubble_view_->GetBubbleOpener()) {
+    bubble_view_->GetBubbleOpener()->AnimateInkDrop(
+        visible ? views::InkDropState::ACTIVATED
+                : views::InkDropState::DEACTIVATED,
+        nullptr /*event*/);
   }
 
   ui::Layer* layer = bubble_view_->layer();
@@ -597,9 +702,32 @@ void LoginBubble::Reset(bool widget_already_closing) {
   if (!widget_already_closing)
     bubble_view_->GetWidget()->Close();
   is_visible_ = false;
-  bubble_opener_ = nullptr;
   bubble_view_ = nullptr;
-  flags_ = kFlagsNone;
+}
+
+void LoginBubble::EnsureBubbleInScreen() {
+  DCHECK(bubble_view_);
+  DCHECK(bubble_view_->GetWidget());
+
+  const gfx::Rect view_bounds = bubble_view_->GetBoundsInScreen();
+  const gfx::Rect work_area =
+      display::Screen::GetScreen()
+          ->GetDisplayNearestWindow(
+              bubble_view_->GetWidget()->GetNativeWindow())
+          .work_area();
+
+  int horizontal_offset = 0;
+
+  // If the widget extends past the right side of the screen, make it go to
+  // the left instead.
+  if (work_area.right() < view_bounds.right()) {
+    horizontal_offset = -view_bounds.width();
+  }
+
+  bubble_view_->set_anchor_view_insets(
+      bubble_view_->anchor_view_insets().Offset(
+          gfx::Vector2d(horizontal_offset, 0)));
+  bubble_view_->OnAnchorBoundsChanged();
 }
 
 }  // namespace ash

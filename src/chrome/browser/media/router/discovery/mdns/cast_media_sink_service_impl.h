@@ -44,12 +44,9 @@ class CastMediaSinkServiceImpl : public MediaSinkServiceBase,
   // before we can say confidently that it is unlikely to be a Cast device.
   static constexpr int kMaxDialSinkFailureCount = 10;
 
-  // Returns the icon type to use according to |capabilities|. |capabilities| is
-  // a bit set of cast_channel::CastDeviceCapabilities in CastSinkExtraData.
-  static SinkIconType GetCastSinkIconType(uint8_t capabilities);
-
-  // Returns a Cast MediaSink ID from a DIAL MediaSink ID |dial_sink_id|.
+  // Returns a Cast MediaSink ID from a DIAL MediaSink ID, and vice versa.
   static MediaSink::Id GetCastSinkIdFromDial(const MediaSink::Id& dial_sink_id);
+  static MediaSink::Id GetDialSinkIdFromCast(const MediaSink::Id& cast_sink_id);
 
   // |callback|: Callback passed to MediaSinkServiceBase.
   // |observer|: Observer to invoke on sink updates. Can be nullptr.

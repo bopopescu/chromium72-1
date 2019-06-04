@@ -29,40 +29,197 @@
 #include "third_party/blink/renderer/modules/indexeddb/idb_factory.h"
 
 #include <memory>
+#include <utility>
+
+#include "third_party/blink/public/mojom/indexeddb/indexeddb.mojom-blink.h"
+#include "third_party/blink/public/platform/interface_provider.h"
+#include "third_party/blink/public/platform/modules/indexeddb/web_idb_callbacks.h"
 #include "third_party/blink/public/platform/modules/indexeddb/web_idb_database_callbacks.h"
-#include "third_party/blink/public/platform/modules/indexeddb/web_idb_factory.h"
+#include "third_party/blink/public/platform/modules/indexeddb/web_idb_name_and_version.h"
+#include "third_party/blink/public/platform/modules/indexeddb/web_idb_value.h"
 #include "third_party/blink/public/platform/platform.h"
 #include "third_party/blink/public/platform/task_type.h"
 #include "third_party/blink/public/platform/web_security_origin.h"
-#include "third_party/blink/renderer/bindings/core/v8/exception_state.h"
+#include "third_party/blink/renderer/bindings/core/v8/script_promise_resolver.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_binding_for_modules.h"
 #include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/dom/dom_exception.h"
-#include "third_party/blink/renderer/core/dom/exception_code.h"
 #include "third_party/blink/renderer/core/execution_context/execution_context.h"
 #include "third_party/blink/renderer/core/frame/use_counter.h"
+#include "third_party/blink/renderer/core/probe/core_probes.h"
+#include "third_party/blink/renderer/modules/indexed_db_names.h"
 #include "third_party/blink/renderer/modules/indexeddb/idb_database.h"
 #include "third_party/blink/renderer/modules/indexeddb/idb_database_callbacks.h"
+#include "third_party/blink/renderer/modules/indexeddb/idb_database_info.h"
 #include "third_party/blink/renderer/modules/indexeddb/idb_key.h"
 #include "third_party/blink/renderer/modules/indexeddb/idb_tracing.h"
 #include "third_party/blink/renderer/modules/indexeddb/indexed_db_client.h"
+#include "third_party/blink/renderer/modules/indexeddb/web_idb_factory.h"
+#include "third_party/blink/renderer/modules/indexeddb/web_idb_factory_impl.h"
+#include "third_party/blink/renderer/platform/bindings/exception_state.h"
+#include "third_party/blink/renderer/platform/heap/persistent.h"
 #include "third_party/blink/renderer/platform/histogram.h"
 #include "third_party/blink/renderer/platform/weborigin/security_origin.h"
+#include "third_party/blink/renderer/platform/wtf/allocator.h"
 
 namespace blink {
+
+namespace {
+
+class WebIDBGetDBNamesCallbacksImpl : public WebIDBCallbacks {
+ public:
+  // static
+  static std::unique_ptr<WebIDBGetDBNamesCallbacksImpl> Create(
+      ScriptPromiseResolver* promise_resolver) {
+    return base::WrapUnique(
+        new WebIDBGetDBNamesCallbacksImpl(promise_resolver));
+  }
+
+  WebIDBGetDBNamesCallbacksImpl(ScriptPromiseResolver* promise_resolver)
+      : promise_resolver_(promise_resolver) {
+    probe::AsyncTaskScheduled(
+        ExecutionContext::From(promise_resolver_->GetScriptState()),
+        indexed_db_names::kIndexedDB, this);
+  }
+
+  ~WebIDBGetDBNamesCallbacksImpl() override {
+    if (promise_resolver_) {
+      probe::AsyncTaskCanceled(
+          ExecutionContext::From(promise_resolver_->GetScriptState()), this);
+      promise_resolver_->Reject(
+          DOMException::Create(DOMExceptionCode::kUnknownError,
+                               "An unexpected shutdown occured before the "
+                               "databases() promise could be resolved"));
+    }
+  }
+
+  void OnError(const WebIDBDatabaseError& error) override {
+    if (!promise_resolver_)
+      return;
+
+    probe::AsyncTask async_task(
+        ExecutionContext::From(promise_resolver_->GetScriptState()), this,
+        "error");
+    promise_resolver_->Reject(
+        DOMException::Create(DOMExceptionCode::kUnknownError,
+                             "The databases() promise was rejected."));
+    promise_resolver_.Clear();
+  }
+
+  void OnSuccess(const WebVector<WebIDBNameAndVersion>&
+                     web_database_name_and_version_list) override {
+    if (!promise_resolver_)
+      return;
+
+    HeapVector<Member<IDBDatabaseInfo>> database_name_and_version_list;
+    for (size_t i = 0; i < web_database_name_and_version_list.size(); ++i) {
+      IDBDatabaseInfo* idb_info = IDBDatabaseInfo::Create();
+      idb_info->setName(web_database_name_and_version_list[i].name);
+      idb_info->setVersion(web_database_name_and_version_list[i].version);
+      database_name_and_version_list.push_back(idb_info);
+    }
+    probe::AsyncTask async_task(
+        ExecutionContext::From(promise_resolver_->GetScriptState()), this,
+        "success");
+    promise_resolver_->Resolve(database_name_and_version_list);
+    promise_resolver_.Clear();
+  }
+
+  void OnSuccess(const WebVector<WebString>&) override { NOTREACHED(); }
+
+  void OnSuccess(WebIDBCursor* cursor,
+                 WebIDBKey key,
+                 WebIDBKey primary_key,
+                 WebIDBValue value) override {
+    NOTREACHED();
+  }
+
+  void OnSuccess(WebIDBDatabase* backend,
+                 const WebIDBMetadata& metadata) override {
+    NOTREACHED();
+  }
+
+  void OnSuccess(WebIDBKey key) override { NOTREACHED(); }
+
+  void OnSuccess(WebIDBValue value) override { NOTREACHED(); }
+
+  void OnSuccess(WebVector<WebIDBValue> values) override { NOTREACHED(); }
+
+  void OnSuccess(long long value) override { NOTREACHED(); }
+
+  void OnSuccess() override { NOTREACHED(); }
+
+  void OnSuccess(WebIDBKey key,
+                 WebIDBKey primary_key,
+                 WebIDBValue value) override {
+    NOTREACHED();
+  }
+
+  void OnBlocked(long long old_version) override { NOTREACHED(); }
+
+  void OnUpgradeNeeded(long long old_version,
+                       WebIDBDatabase* database,
+                       const WebIDBMetadata& metadata,
+                       mojom::IDBDataLoss data_loss,
+                       WebString data_loss_message) override {
+    NOTREACHED();
+  }
+
+  void Detach() override { NOTREACHED(); }
+
+ private:
+  Persistent<ScriptPromiseResolver> promise_resolver_;
+};
+
+}  // namespace
 
 static const char kPermissionDeniedErrorMessage[] =
     "The user denied permission to access the database.";
 
 IDBFactory::IDBFactory() = default;
 
+IDBFactory::IDBFactory(std::unique_ptr<WebIDBFactory> web_idb_factory)
+    : web_idb_factory_(std::move(web_idb_factory)) {}
+
 static bool IsContextValid(ExecutionContext* context) {
-  DCHECK(context->IsDocument() || context->IsWorkerGlobalScope());
-  if (context->IsDocument()) {
-    Document* document = ToDocument(context);
+  DCHECK(IsA<Document>(context) || context->IsWorkerGlobalScope());
+  if (auto* document = DynamicTo<Document>(context))
     return document->GetFrame() && document->GetPage();
-  }
   return true;
+}
+
+WebIDBFactory* IDBFactory::GetFactory() {
+  if (!web_idb_factory_) {
+    mojom::blink::IDBFactoryPtrInfo web_idb_factory_host_info;
+    Platform::Current()->GetInterfaceProvider()->GetInterface(
+        mojo::MakeRequest(&web_idb_factory_host_info));
+    web_idb_factory_ = std::make_unique<WebIDBFactoryImpl>(
+        std::move(web_idb_factory_host_info));
+  }
+  return web_idb_factory_.get();
+}
+
+ScriptPromise IDBFactory::GetDatabaseInfo(ScriptState* script_state,
+                                          ExceptionState& exception_state) {
+  ScriptPromiseResolver* resolver = ScriptPromiseResolver::Create(script_state);
+
+  if (!ExecutionContext::From(script_state)
+           ->GetSecurityOrigin()
+           ->CanAccessDatabase()) {
+    exception_state.ThrowSecurityError(
+        "Access to the IndexedDB API is denied in this context.");
+    resolver->Reject();
+    return resolver->Promise();
+  }
+
+  GetFactory()->GetDatabaseInfo(
+      WebIDBGetDBNamesCallbacksImpl::Create(resolver).release(),
+      WebSecurityOrigin(
+          ExecutionContext::From(script_state)->GetSecurityOrigin()),
+      ExecutionContext::From(script_state)
+          ->GetTaskRunner(TaskType::kInternalIndexedDB));
+  ScriptPromise promise = resolver->Promise();
+  return promise;
 }
 
 IDBRequest* IDBFactory::GetDatabaseNames(ScriptState* script_state,
@@ -88,14 +245,13 @@ IDBRequest* IDBFactory::GetDatabaseNames(ScriptState* script_state,
   }
 
   if (!IndexedDBClient::From(ExecutionContext::From(script_state))
-           ->AllowIndexedDB(ExecutionContext::From(script_state),
-                            "Database Listing")) {
-    request->HandleResponse(
-        DOMException::Create(kUnknownError, kPermissionDeniedErrorMessage));
+           ->AllowIndexedDB(ExecutionContext::From(script_state))) {
+    request->HandleResponse(DOMException::Create(
+        DOMExceptionCode::kUnknownError, kPermissionDeniedErrorMessage));
     return request;
   }
 
-  Platform::Current()->IdbFactory()->GetDatabaseNames(
+  GetFactory()->GetDatabaseNames(
       request->CreateWebCallbacks().release(),
       WebSecurityOrigin(
           ExecutionContext::From(script_state)->GetSecurityOrigin()),
@@ -121,7 +277,6 @@ IDBOpenDBRequest* IDBFactory::OpenInternal(ScriptState* script_state,
                                            ExceptionState& exception_state) {
   IDB_TRACE1("IDBFactory::open", "name", name.Utf8());
   IDBRequest::AsyncTraceState metrics("IDBFactory::open");
-  IDBDatabase::RecordApiCallsHistogram(kIDBOpenCall);
   DCHECK(version >= 1 || version == IDBDatabaseMetadata::kNoVersion);
   if (!IsContextValid(ExecutionContext::From(script_state)))
     return nullptr;
@@ -145,13 +300,13 @@ IDBOpenDBRequest* IDBFactory::OpenInternal(ScriptState* script_state,
                                version, std::move(metrics));
 
   if (!IndexedDBClient::From(ExecutionContext::From(script_state))
-           ->AllowIndexedDB(ExecutionContext::From(script_state), name)) {
-    request->HandleResponse(
-        DOMException::Create(kUnknownError, kPermissionDeniedErrorMessage));
+           ->AllowIndexedDB(ExecutionContext::From(script_state))) {
+    request->HandleResponse(DOMException::Create(
+        DOMExceptionCode::kUnknownError, kPermissionDeniedErrorMessage));
     return request;
   }
 
-  Platform::Current()->IdbFactory()->Open(
+  GetFactory()->Open(
       name, version, transaction_id, request->CreateWebCallbacks().release(),
       database_callbacks->CreateWebCallbacks().release(),
       WebSecurityOrigin(
@@ -191,7 +346,6 @@ IDBOpenDBRequest* IDBFactory::DeleteDatabaseInternal(
     bool force_close) {
   IDB_TRACE1("IDBFactory::deleteDatabase", "name", name.Utf8());
   IDBRequest::AsyncTraceState metrics("IDBFactory::deleteDatabase");
-  IDBDatabase::RecordApiCallsHistogram(kIDBDeleteDatabaseCall);
   if (!IsContextValid(ExecutionContext::From(script_state)))
     return nullptr;
   if (!ExecutionContext::From(script_state)
@@ -212,13 +366,13 @@ IDBOpenDBRequest* IDBFactory::DeleteDatabaseInternal(
       std::move(metrics));
 
   if (!IndexedDBClient::From(ExecutionContext::From(script_state))
-           ->AllowIndexedDB(ExecutionContext::From(script_state), name)) {
-    request->HandleResponse(
-        DOMException::Create(kUnknownError, kPermissionDeniedErrorMessage));
+           ->AllowIndexedDB(ExecutionContext::From(script_state))) {
+    request->HandleResponse(DOMException::Create(
+        DOMExceptionCode::kUnknownError, kPermissionDeniedErrorMessage));
     return request;
   }
 
-  Platform::Current()->IdbFactory()->DeleteDatabase(
+  GetFactory()->DeleteDatabase(
       name, request->CreateWebCallbacks().release(),
       WebSecurityOrigin(
           ExecutionContext::From(script_state)->GetSecurityOrigin()),
@@ -239,7 +393,7 @@ short IDBFactory::cmp(ScriptState* script_state,
     return 0;
   DCHECK(first);
   if (!first->IsValid()) {
-    exception_state.ThrowDOMException(kDataError,
+    exception_state.ThrowDOMException(DOMExceptionCode::kDataError,
                                       IDBDatabase::kNotValidKeyErrorMessage);
     return 0;
   }
@@ -251,7 +405,7 @@ short IDBFactory::cmp(ScriptState* script_state,
     return 0;
   DCHECK(second);
   if (!second->IsValid()) {
-    exception_state.ThrowDOMException(kDataError,
+    exception_state.ThrowDOMException(DOMExceptionCode::kDataError,
                                       IDBDatabase::kNotValidKeyErrorMessage);
     return 0;
   }

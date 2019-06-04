@@ -9,7 +9,7 @@
 #include <ostream>
 
 #include "base/strings/stringprintf.h"
-#include "base/trace_event/trace_event_argument.h"
+#include "base/trace_event/traced_value.h"
 #include "base/values.h"
 
 namespace cc {
@@ -40,7 +40,7 @@ void ElementId::AddToTracedValue(base::trace_event::TracedValue* res) const {
   res->EndDictionary();
 }
 
-ElementIdType ElementId::ToInternalValue() const {
+ElementIdType ElementId::GetInternalValue() const {
   return id_;
 }
 

@@ -3,7 +3,7 @@
 // found in the LICENSE file.
 //
 // The Google-specific helper for QuicConnection which uses
-// EpollAlarm for alarms, and used an int fd_ for writing data.
+// net::EpollAlarm for alarms, and used an int fd_ for writing data.
 
 #ifndef NET_THIRD_PARTY_QUIC_CORE_QUIC_EPOLL_CONNECTION_HELPER_H_
 #define NET_THIRD_PARTY_QUIC_CORE_QUIC_EPOLL_CONNECTION_HELPER_H_
@@ -20,9 +20,11 @@
 #include "net/third_party/quic/core/quic_time.h"
 #include "net/third_party/quic/platform/impl/quic_epoll_clock.h"
 
+namespace quic {}  // namespace quic
 namespace net {
-
 class EpollServer;
+}  // namespace net
+namespace quic {
 class QuicRandom;
 
 using QuicStreamBufferAllocator = SimpleBufferAllocator;
@@ -31,7 +33,10 @@ enum class QuicAllocator { SIMPLE, BUFFER_POOL };
 
 class QuicEpollConnectionHelper : public QuicConnectionHelperInterface {
  public:
-  QuicEpollConnectionHelper(EpollServer* eps, QuicAllocator allocator);
+  QuicEpollConnectionHelper(net::EpollServer* eps, QuicAllocator allocator);
+  QuicEpollConnectionHelper(const QuicEpollConnectionHelper&) = delete;
+  QuicEpollConnectionHelper& operator=(const QuicEpollConnectionHelper&) =
+      delete;
   ~QuicEpollConnectionHelper() override;
 
   // QuicEpollConnectionHelperInterface
@@ -49,10 +54,8 @@ class QuicEpollConnectionHelper : public QuicConnectionHelperInterface {
   QuicStreamBufferAllocator stream_buffer_allocator_;
   SimpleBufferAllocator simple_buffer_allocator_;
   QuicAllocator allocator_type_;
-
-  DISALLOW_COPY_AND_ASSIGN(QuicEpollConnectionHelper);
 };
 
-}  // namespace net
+}  // namespace quic
 
 #endif  // NET_THIRD_PARTY_QUIC_CORE_QUIC_EPOLL_CONNECTION_HELPER_H_

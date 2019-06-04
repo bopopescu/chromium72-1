@@ -13,21 +13,24 @@ appends args to the command in the fetched isolated and runs it.
 To improve performance, keeps a local cache.
 The local cache can safely be deleted.
 
-Any ${EXECUTABLE_SUFFIX} on the command line will be replaced with ".exe" string
-on Windows and "" on other platforms.
+Any ${EXECUTABLE_SUFFIX} on the command line or the environment variables passed
+with the --env option will be replaced with ".exe" string on Windows and "" on
+other platforms.
 
-Any ${ISOLATED_OUTDIR} on the command line will be replaced by the location of a
-temporary directory upon execution of the command specified in the .isolated
-file. All content written to this directory will be uploaded upon termination
-and the .isolated file describing this directory will be printed to stdout.
+Any ${ISOLATED_OUTDIR} on the command line or the environment variables passed
+with the --env option will be replaced by the location of a temporary directory
+upon execution of the command specified in the .isolated file. All content
+written to this directory will be uploaded upon termination and the .isolated
+file describing this directory will be printed to stdout.
 
-Any ${SWARMING_BOT_FILE} on the command line will be replaced by the value of
-the --bot-file parameter. This file is used by a swarming bot to communicate
-state of the host to tasks. It is written to by the swarming bot's
-on_before_task() hook in the swarming server's custom bot_config.py.
+Any ${SWARMING_BOT_FILE} on the command line  or the environment variables
+passed with the --env option will be replaced by the value of the --bot-file
+parameter. This file is used by a swarming bot to communicate state of the host
+to tasks. It is written to by the swarming bot's on_before_task() hook in the
+swarming server's custom bot_config.py.
 """
 
-__version__ = '0.10.5'
+__version__ = '0.11.1'
 
 import argparse
 import base64
@@ -38,6 +41,7 @@ import json
 import logging
 import optparse
 import os
+import re
 import sys
 import tempfile
 import time
@@ -58,7 +62,8 @@ from libs import luci_context
 import auth
 import cipd
 import isolateserver
-import named_cache
+import isolate_storage
+import local_caching
 
 
 # Absolute path to this file (can be None if running from zip on Mac).
@@ -108,6 +113,10 @@ ISOLATED_OUT_DIR = u'io'
 ISOLATED_TMP_DIR = u'it'
 
 
+# Keep synced with task_request.py
+CACHE_NAME_RE = re.compile(ur'^[a-z0-9_]{1,4096}$')
+
+
 OUTLIVING_ZOMBIE_MSG = """\
 *** Swarming tried multiple times to delete the %s directory and failed ***
 *** Hard failing the task ***
@@ -136,11 +145,16 @@ How to fix?
     them to terminate before quitting.
 
 See
-https://github.com/luci/luci-py/blob/master/appengine/swarming/doc/Bot.md#graceful-termination-aka-the-sigterm-and-sigkill-dance
+https://chromium.googlesource.com/infra/luci/luci-py.git/+/master/appengine/swarming/doc/Bot.md#Graceful-termination_aka-the-SIGTERM-and-SIGKILL-dance
 for more information.
 
 *** May the SIGKILL force be with you ***
 """
+
+
+# Currently hardcoded. Eventually could be exposed as a flag once there's value.
+# 3 weeks
+MAX_AGE_SECS = 21*24*60*60
 
 
 TaskData = collections.namedtuple(
@@ -216,7 +230,6 @@ def get_as_zip_package(executable=True):
   package.add_python_file(os.path.join(BASE_DIR, 'auth.py'))
   package.add_python_file(os.path.join(BASE_DIR, 'cipd.py'))
   package.add_python_file(os.path.join(BASE_DIR, 'local_caching.py'))
-  package.add_python_file(os.path.join(BASE_DIR, 'named_cache.py'))
   package.add_directory(os.path.join(BASE_DIR, 'libs'))
   package.add_directory(os.path.join(BASE_DIR, 'third_party'))
   package.add_directory(os.path.join(BASE_DIR, 'utils'))
@@ -263,10 +276,10 @@ def change_tree_read_only(rootdir, read_only):
     file_path.make_tree_files_read_only(rootdir)
   elif read_only in (0, None):
     # Anything can be modified.
-    # TODO(maruel): This is currently dangerous as long as DiskCache.touch()
-    # is not yet changed to verify the hash of the content of the files it is
-    # looking at, so that if a test modifies an input file, the file must be
-    # deleted.
+    # TODO(maruel): This is currently dangerous as long as
+    # DiskContentAddressedCache.touch() is not yet changed to verify the hash of
+    # the content of the files it is looking at, so that if a test modifies an
+    # input file, the file must be deleted.
     file_path.make_tree_writeable(rootdir)
   else:
     raise ValueError(
@@ -323,39 +336,49 @@ def set_luci_context_account(account, tmp_dir):
 
 
 def process_command(command, out_dir, bot_file):
-  """Replaces variables in a command line.
+  """Replaces parameters in a command line.
 
   Raises:
     ValueError if a parameter is requested in |command| but its value is not
       provided.
   """
-  def fix(arg):
-    arg = arg.replace(EXECUTABLE_SUFFIX_PARAMETER, cipd.EXECUTABLE_SUFFIX)
-    replace_slash = False
-    if ISOLATED_OUTDIR_PARAMETER in arg:
-      if not out_dir:
-        raise ValueError(
-            'output directory is requested in command, but not provided; '
-            'please specify one')
-      arg = arg.replace(ISOLATED_OUTDIR_PARAMETER, out_dir)
+  return [replace_parameters(arg, out_dir, bot_file) for arg in command]
+
+
+def replace_parameters(arg, out_dir, bot_file):
+  """Replaces parameter tokens with appropriate values in a string.
+
+  Raises:
+    ValueError if a parameter is requested in |arg| but its value is not
+      provided.
+  """
+  arg = arg.replace(EXECUTABLE_SUFFIX_PARAMETER, cipd.EXECUTABLE_SUFFIX)
+  replace_slash = False
+  if ISOLATED_OUTDIR_PARAMETER in arg:
+    if not out_dir:
+      raise ValueError(
+          'output directory is requested in command or env var, but not '
+          'provided; please specify one')
+    arg = arg.replace(ISOLATED_OUTDIR_PARAMETER, out_dir)
+    replace_slash = True
+  if SWARMING_BOT_FILE_PARAMETER in arg:
+    if bot_file:
+      arg = arg.replace(SWARMING_BOT_FILE_PARAMETER, bot_file)
       replace_slash = True
-    if SWARMING_BOT_FILE_PARAMETER in arg:
-      if bot_file:
-        arg = arg.replace(SWARMING_BOT_FILE_PARAMETER, bot_file)
-        replace_slash = True
-      else:
-        logging.warning('SWARMING_BOT_FILE_PARAMETER found in command, but no '
-                        'bot_file specified. Leaving parameter unchanged.')
-    if replace_slash:
-      # Replace slashes only if parameters are present
-      # because of arguments like '${ISOLATED_OUTDIR}/foo/bar'
-      arg = arg.replace('/', os.sep)
-    return arg
-
-  return [fix(arg) for arg in command]
+    else:
+      logging.warning('SWARMING_BOT_FILE_PARAMETER found in command or env '
+                      'var, but no bot_file specified. Leaving parameter '
+                      'unchanged.')
+  if replace_slash:
+    # Replace slashes only if parameters are present
+    # because of arguments like '${ISOLATED_OUTDIR}/foo/bar'
+    arg = arg.replace('/', os.sep)
+  return arg
 
 
-def get_command_env(tmp_dir, cipd_info, run_dir, env, env_prefixes):
+
+def get_command_env(tmp_dir, cipd_info, run_dir, env, env_prefixes, out_dir,
+                    bot_file):
   """Returns full OS environment to run a command in.
 
   Sets up TEMP, puts directory with cipd binary in front of PATH, exposes
@@ -367,13 +390,17 @@ def get_command_env(tmp_dir, cipd_info, run_dir, env, env_prefixes):
     run_dir: The root directory the isolated tree is mapped in.
     env: environment variables to use
     env_prefixes: {"ENV_KEY": ['cwd', 'relative', 'paths', 'to', 'prepend']}
+    out_dir: Isolated output directory. Required to be != None if any of the
+        env vars contain ISOLATED_OUTDIR_PARAMETER.
+    bot_file: Required to be != None if any of the env vars contain
+        SWARMING_BOT_FILE_PARAMETER.
   """
   out = os.environ.copy()
   for k, v in env.iteritems():
     if not v:
       out.pop(k, None)
     else:
-      out[k] = v
+      out[k] = replace_parameters(v, out_dir, bot_file)
 
   if cipd_info:
     bin_dir = os.path.dirname(cipd_info.client.binary_path)
@@ -388,17 +415,37 @@ def get_command_env(tmp_dir, cipd_info, run_dir, env, env_prefixes):
       paths.append(cur)
     out[key] = _to_str(os.path.pathsep.join(paths))
 
-  # TMPDIR is specified as the POSIX standard envvar for the temp directory.
-  #   * mktemp on linux respects $TMPDIR, not $TMP
-  #   * mktemp on OS X SOMETIMES respects $TMPDIR
-  #   * chromium's base utils respects $TMPDIR on linux, $TEMP on windows.
-  #     Unfortunately at the time of writing it completely ignores all envvars
-  #     on OS X.
-  #   * python respects TMPDIR, TEMP, and TMP (regardless of platform)
-  #   * golang respects TMPDIR on linux+mac, TEMP on windows.
-  key = {'win32': 'TEMP'}.get(sys.platform, 'TMPDIR')
-  out[key] = _to_str(tmp_dir)
-
+  tmp_dir = _to_str(tmp_dir)
+  # pylint: disable=line-too-long
+  # * python respects $TMPDIR, $TEMP, and $TMP in this order, regardless of
+  #   platform. So $TMPDIR must be set on all platforms.
+  #   https://github.com/python/cpython/blob/2.7/Lib/tempfile.py#L155
+  out['TMPDIR'] = tmp_dir
+  if sys.platform == 'win32':
+    # * chromium's base utils uses GetTempPath().
+    #   https://cs.chromium.org/chromium/src/base/files/file_util_win.cc?q=GetTempPath
+    # * Go uses GetTempPath().
+    # * GetTempDir() uses %TMP%, then %TEMP%, then other stuff. So %TMP% must be
+    #   set.
+    #   https://docs.microsoft.com/en-us/windows/desktop/api/fileapi/nf-fileapi-gettemppathw
+    out['TMP'] = tmp_dir
+    # https://blogs.msdn.microsoft.com/oldnewthing/20150417-00/?p=44213
+    out['TEMP'] = tmp_dir
+  elif sys.platform == 'darwin':
+    # * Chromium uses an hack on macOS before calling into
+    #   NSTemporaryDirectory().
+    #   https://cs.chromium.org/chromium/src/base/files/file_util_mac.mm?q=GetTempDir
+    #   https://developer.apple.com/documentation/foundation/1409211-nstemporarydirectory
+    out['MAC_CHROMIUM_TMPDIR'] = tmp_dir
+  else:
+    # TMPDIR is specified as the POSIX standard envvar for the temp directory.
+    # http://pubs.opengroup.org/onlinepubs/9699919799/basedefs/V1_chap08.html
+    # * mktemp on linux respects $TMPDIR.
+    # * Chromium respects $TMPDIR on linux.
+    #   https://cs.chromium.org/chromium/src/base/files/file_util_posix.cc?q=GetTempDir
+    # * Go uses $TMPDIR.
+    #   https://go.googlesource.com/go/+/go1.10.3/src/os/file_unix.go#307
+    pass
   return out
 
 
@@ -484,8 +531,6 @@ def fetch_and_map(isolated_hash, storage, cache, outdir, use_symlinks):
       use_symlinks=use_symlinks)
   return bundle, {
     'duration': time.time() - start,
-    'initial_number_items': cache.initial_number_items,
-    'initial_size': cache.initial_size,
     'items_cold': base64.b64encode(large.pack(sorted(cache.added))),
     'items_hot': base64.b64encode(
         large.pack(sorted(set(cache.used) - set(cache.added)))),
@@ -568,9 +613,9 @@ def delete_and_upload(storage, out_dir, leak_temp_dir):
         results, f_cold, f_hot = isolateserver.archive_files_to_storage(
             storage, [out_dir], None)
         outputs_ref = {
-          'isolated': results[0][0],
-          'isolatedserver': storage.location,
-          'namespace': storage.namespace,
+          'isolated': results.values()[0],
+          'isolatedserver': storage.server_ref.url,
+          'namespace': storage.server_ref.namespace,
         }
         cold = sorted(i.size for i in f_cold)
         hot = sorted(i.size for i in f_hot)
@@ -618,32 +663,32 @@ def map_and_run(data, constant_run_path):
     'had_hard_timeout': False,
     'internal_failure': 'run_isolated did not complete properly',
     'stats': {
-    # 'isolated': {
-    #    'cipd': {
-    #      'duration': 0.,
-    #      'get_client_duration': 0.,
-    #    },
-    #    'download': {
-    #      'duration': 0.,
-    #      'initial_number_items': 0,
-    #      'initial_size': 0,
-    #      'items_cold': '<large.pack()>',
-    #      'items_hot': '<large.pack()>',
-    #    },
-    #    'upload': {
-    #      'duration': 0.,
-    #      'items_cold': '<large.pack()>',
-    #      'items_hot': '<large.pack()>',
-    #    },
-    #  },
+      'isolated': {
+        #'cipd': {
+        #  'duration': 0.,
+        #  'get_client_duration': 0.,
+        #},
+        'download': {
+          #'duration': 0.,
+          'initial_number_items': len(data.isolate_cache),
+          'initial_size': data.isolate_cache.total_size,
+          #'items_cold': '<large.pack()>',
+          #'items_hot': '<large.pack()>',
+        },
+        #'upload': {
+        #  'duration': 0.,
+        #  'items_cold': '<large.pack()>',
+        #  'items_hot': '<large.pack()>',
+        #},
+      },
     },
-    # 'cipd_pins': {
-    #   'packages': [
-    #     {'package_name': ..., 'version': ..., 'path': ...},
-    #     ...
-    #   ],
-    #  'client_package': {'package_name': ..., 'version': ...},
-    # },
+    #'cipd_pins': {
+    #  'packages': [
+    #    {'package_name': ..., 'version': ..., 'path': ...},
+    #    ...
+    #  ],
+    # 'client_package': {'package_name': ..., 'version': ...},
+    #},
     'outputs_ref': None,
     'version': 5,
   }
@@ -681,12 +726,13 @@ def map_and_run(data, constant_run_path):
 
       if data.isolated_hash:
         isolated_stats = result['stats'].setdefault('isolated', {})
-        bundle, isolated_stats['download'] = fetch_and_map(
+        bundle, stats = fetch_and_map(
             isolated_hash=data.isolated_hash,
             storage=data.storage,
             cache=data.isolate_cache,
             outdir=run_dir,
             use_symlinks=data.use_symlinks)
+        isolated_stats['download'].update(stats)
         change_tree_read_only(run_dir, bundle.read_only)
         # Inject the command
         if not command and bundle.command:
@@ -728,7 +774,8 @@ def map_and_run(data, constant_run_path):
           # so it can grab correct value of LUCI_CONTEXT env var.
           with set_luci_context_account(data.switch_to_account, tmp_dir):
             env = get_command_env(
-                tmp_dir, cipd_info, run_dir, data.env, data.env_prefix)
+                tmp_dir, cipd_info, run_dir, data.env, data.env_prefix, out_dir,
+                data.bot_file)
             command = tools.fix_python_cmd(command, env)
             command = process_command(command, out_dir, data.bot_file)
             file_path.ensure_command_has_abs_path(command, cwd)
@@ -770,7 +817,7 @@ def map_and_run(data, constant_run_path):
           try:
             success = file_path.rmtree(run_dir)
           except OSError as e:
-            logging.error('Failure with %s', e)
+            logging.error('rmtree(%r) failed: %s', run_dir, e)
             success = False
           if not success:
             sys.stderr.write(OUTLIVING_ZOMBIE_MSG % ('run', data.grace_period))
@@ -780,7 +827,7 @@ def map_and_run(data, constant_run_path):
           try:
             success = file_path.rmtree(tmp_dir)
           except OSError as e:
-            logging.error('Failure with %s', e)
+            logging.error('rmtree(%r) failed: %s', tmp_dir, e)
             success = False
           if not success:
             sys.stderr.write(OUTLIVING_ZOMBIE_MSG % ('temp', data.grace_period))
@@ -1011,37 +1058,6 @@ def install_client_and_packages(
       })
 
 
-def clean_caches(isolate_cache, named_cache_manager):
-  """Trims isolated and named caches.
-
-  The goal here is to coherently trim both caches, deleting older items
-  independent of which container they belong to.
-  """
-  # TODO(maruel): Trim CIPD cache the same way.
-  total = 0
-  with named_cache_manager.open():
-    oldest_isolated = isolate_cache.get_oldest()
-    oldest_named = named_cache_manager.get_oldest()
-    trimmers = [
-      (
-        isolate_cache.trim,
-        isolate_cache.get_timestamp(oldest_isolated) if oldest_isolated else 0,
-      ),
-      (
-        named_cache_manager.trim,
-        named_cache_manager.get_timestamp(oldest_named) if oldest_named else 0,
-      ),
-    ]
-    trimmers.sort(key=lambda (_, ts): ts)
-    # TODO(maruel): This is incorrect, we want to trim 'items' that are strictly
-    # the oldest independent of in which cache they live in. Right now, the
-    # cache with the oldest item pays the price.
-    for trim, _ in trimmers:
-      total += trim()
-  isolate_cache.cleanup()
-  return total
-
-
 def create_option_parser():
   parser = logging_utils.OptionParserWithLogging(
       usage='%prog <options> [command to run or extra args]',
@@ -1052,11 +1068,6 @@ def create_option_parser():
       help='Cleans the cache, trimming it necessary and remove corrupted items '
            'and returns without executing anything; use with -v to know what '
            'was done')
-  parser.add_option(
-      '--no-clean', action='store_true',
-      help='Do not clean the cache automatically on startup. This is meant for '
-           'bots where a separate execution with --clean was done earlier so '
-           'doing it again is redundant')
   parser.add_option(
       '--use-symlinks', action='store_true',
       help='Use symlinks instead of hardlinks')
@@ -1121,7 +1132,23 @@ def create_option_parser():
   isolateserver.add_cache_options(parser)
 
   cipd.add_cipd_options(parser)
-  named_cache.add_named_cache_options(parser)
+
+  group = optparse.OptionGroup(parser, 'Named caches')
+  group.add_option(
+      '--named-cache',
+      dest='named_caches',
+      action='append',
+      nargs=3,
+      default=[],
+      help='A named cache to request. Accepts 3 arguments: name, path, hint. '
+           'name identifies the cache, must match regex [a-z0-9_]{1,4096}. '
+           'path is a path relative to the run dir where the cache directory '
+           'must be put to. '
+           'This option can be specified more than once.')
+  group.add_option(
+      '--named-cache-root', default='named_caches',
+      help='Cache root directory. Default=%default')
+  parser.add_option_group(group)
 
   debug_group = optparse.OptionGroup(parser, 'Debugging')
   debug_group.add_option(
@@ -1135,11 +1162,39 @@ def create_option_parser():
 
   auth.add_auth_options(parser)
 
-  parser.set_defaults(
-      cache='cache',
-      cipd_cache='cipd_cache',
-      named_cache_root='named_caches')
+  parser.set_defaults(cache='cache', cipd_cache='cipd_cache')
   return parser
+
+
+def process_named_cache_options(parser, options, time_fn=None):
+  """Validates named cache options and returns a CacheManager."""
+  if options.named_caches and not options.named_cache_root:
+    parser.error('--named-cache is specified, but --named-cache-root is empty')
+  for name, path, hint in options.named_caches:
+    if not CACHE_NAME_RE.match(name):
+      parser.error(
+          'cache name %r does not match %r' % (name, CACHE_NAME_RE.pattern))
+    if not path:
+      parser.error('cache path cannot be empty')
+    try:
+      long(hint)
+    except ValueError:
+      parser.error('cache hint must be a number')
+  if options.named_cache_root:
+    # Make these configurable later if there is use case but for now it's fairly
+    # safe values.
+    # In practice, a fair chunk of bots are already recycled on a daily schedule
+    # so this code doesn't have any effect to them, unless they are preloaded
+    # with a really old cache.
+    policies = local_caching.CachePolicies(
+        # 1TiB.
+        max_cache_size=1024*1024*1024*1024,
+        min_free_space=options.min_free_space,
+        max_items=50,
+        max_age_secs=MAX_AGE_SECS)
+    root_dir = unicode(os.path.abspath(options.named_cache_root))
+    return local_caching.NamedCache(root_dir, policies, time_fn=time_fn)
+  return None
 
 
 def parse_args(args):
@@ -1170,6 +1225,18 @@ def parse_args(args):
   return (parser, options, args)
 
 
+def _calc_named_cache_hint(named_cache, named_caches):
+  """Returns the expected size of the missing named caches."""
+  present = named_cache.available
+  size = 0
+  for name, _, hint in named_caches:
+    if name not in present:
+      hint = long(hint)
+      if hint > 0:
+        size += hint
+  return size
+
+
 def main(args):
   # Warning: when --argsfile is used, the strings are unicode instances, when
   # parsed normally, the strings are str instances.
@@ -1178,8 +1245,24 @@ def main(args):
   if not file_path.enable_symlink():
     logging.error('Symlink support is not enabled')
 
+  named_cache = process_named_cache_options(parser, options)
+  # hint is 0 if there's no named cache.
+  hint = _calc_named_cache_hint(named_cache, options.named_caches)
+  if hint:
+    # Increase the --min-free-space value by the hint, and recreate the
+    # NamedCache instance so it gets the updated CachePolicy.
+    options.min_free_space += hint
+    named_cache = process_named_cache_options(parser, options)
+
+  # TODO(maruel): CIPD caches should be defined at an higher level here too, so
+  # they can be cleaned the same way.
   isolate_cache = isolateserver.process_cache_options(options, trim=False)
-  named_cache_manager = named_cache.process_named_cache_options(parser, options)
+  caches = []
+  if isolate_cache:
+    caches.append(isolate_cache)
+  if named_cache:
+    caches.append(named_cache)
+  root = caches[0].cache_dir if caches else unicode(os.getcwd())
   if options.clean:
     if options.isolated:
       parser.error('Can\'t use --isolated with --clean.')
@@ -1189,11 +1272,29 @@ def main(args):
       parser.error('Can\'t use --json with --clean.')
     if options.named_caches:
       parser.error('Can\t use --named-cache with --clean.')
-    clean_caches(isolate_cache, named_cache_manager)
+    # Trim first, then clean.
+    local_caching.trim_caches(
+        caches,
+        root,
+        min_free_space=options.min_free_space,
+        max_age_secs=MAX_AGE_SECS)
+    for c in caches:
+      c.cleanup()
     return 0
 
-  if not options.no_clean:
-    clean_caches(isolate_cache, named_cache_manager)
+  # Trim must still be done for the following case:
+  # - named-cache was used
+  # - some entries, with a large hint, where missing
+  # - --min-free-space was increased accordingly, thus trimming is needed
+  # Otherwise, this will have no effect, as bot_main calls run_isolated with
+  # --clean after each task.
+  if hint:
+    logging.info('Additional trimming of %d bytes', hint)
+    local_caching.trim_caches(
+        caches,
+        root,
+        min_free_space=options.min_free_space,
+        max_age_secs=MAX_AGE_SECS)
 
   if not options.isolated and not args:
     parser.error('--isolated or command to run is required.')
@@ -1251,13 +1352,14 @@ def main(args):
   def install_named_caches(run_dir):
     # WARNING: this function depends on "options" variable defined in the outer
     # function.
-    caches = [
+    assert unicode(run_dir), repr(run_dir)
+    assert os.path.isabs(run_dir), run_dir
+    named_caches = [
       (os.path.join(run_dir, unicode(relpath)), name)
-      for name, relpath in options.named_caches
+      for name, relpath, _ in options.named_caches
     ]
-    with named_cache_manager.open():
-      for path, name in caches:
-        named_cache_manager.install(path, name)
+    for path, name in named_caches:
+      named_cache.install(path, name)
     try:
       yield
     finally:
@@ -1267,13 +1369,14 @@ def main(args):
       #
       # If the Swarming bot cannot clean up the cache, it will handle it like
       # any other bot file that could not be removed.
-      with named_cache_manager.open():
-        for path, name in caches:
-          try:
-            named_cache_manager.uninstall(path, name)
-          except named_cache.Error:
-            logging.exception('Error while removing named cache %r at %r. '
-                              'The cache will be lost.', path, name)
+      for path, name in reversed(named_caches):
+        try:
+          # uninstall() doesn't trim but does call save() implicitly. Trimming
+          # *must* be done manually via periodic 'run_isolated.py --clean'.
+          named_cache.uninstall(path, name)
+        except local_caching.NamedCacheError:
+          logging.exception('Error while removing named cache %r at %r. '
+                            'The cache will be lost.', path, name)
 
   extra_args = []
   command = []
@@ -1310,15 +1413,19 @@ def main(args):
       env_prefix=options.env_prefix)
   try:
     if options.isolate_server:
-      storage = isolateserver.get_storage(
+      server_ref = isolate_storage.ServerRef(
           options.isolate_server, options.namespace)
+      storage = isolateserver.get_storage(server_ref)
       with storage:
         data = data._replace(storage=storage)
         # Hashing schemes used by |storage| and |isolate_cache| MUST match.
-        assert storage.hash_algo == isolate_cache.hash_algo
+        assert storage.server_ref.hash_algo == server_ref.hash_algo
         return run_tha_test(data, options.json)
     return run_tha_test(data, options.json)
-  except (cipd.Error, named_cache.Error) as ex:
+  except (
+      cipd.Error,
+      local_caching.NamedCacheError,
+      local_caching.NoMoreSpace) as ex:
     print >> sys.stderr, ex.message
     return 1
 

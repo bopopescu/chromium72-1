@@ -18,11 +18,34 @@ function ExternalMetadataProvider() {
  * @const {!Array<string>}
  */
 ExternalMetadataProvider.PROPERTY_NAMES = [
-  'availableOffline', 'availableWhenMetered', 'contentMimeType',
-  'croppedThumbnailUrl', 'customIconUrl', 'dirty', 'externalFileUrl', 'hosted',
-  'imageHeight', 'imageRotation', 'imageWidth', 'modificationTime',
-  'modificationByMeTime', 'pinned', 'present', 'shared', 'sharedWithMe', 'size',
-  'thumbnailUrl'
+  'alternateUrl',
+  'availableOffline',
+  'availableWhenMetered',
+  'contentMimeType',
+  'croppedThumbnailUrl',
+  'customIconUrl',
+  'dirty',
+  'externalFileUrl',
+  'hosted',
+  'imageHeight',
+  'imageRotation',
+  'imageWidth',
+  'modificationTime',
+  'modificationByMeTime',
+  'pinned',
+  'present',
+  'shared',
+  'sharedWithMe',
+  'size',
+  'thumbnailUrl',
+  'canCopy',
+  'canDelete',
+  'canRename',
+  'canAddChildren',
+  'canShare',
+  'isMachineRoot',
+  'isExternalMedia',
+  'isArbitrarySyncFolder',
 ];
 
 ExternalMetadataProvider.prototype.__proto__ = MetadataProvider.prototype;
@@ -57,8 +80,9 @@ ExternalMetadataProvider.prototype.get = function(requests) {
 
 /**
  * @param {!Array<!MetadataRequest>} requests
- * @param {!Object<boolean>} nameMap
- * @param {!Array<!EntryProperties>} propertiesList
+ * @param {!Object<boolean>} nameMap A map of property names that will be used
+ *     to copy the value from |propertiesList|.
+ * @param {!Array<!chrome.fileManagerPrivate.EntryProperties>} propertiesList
  * @return {!Array<!MetadataItem>}
  */
 ExternalMetadataProvider.prototype.convertResults_ =
@@ -67,6 +91,8 @@ ExternalMetadataProvider.prototype.convertResults_ =
   for (var i = 0; i < propertiesList.length; i++) {
     var prop = propertiesList[i];
     var item = new MetadataItem();
+    if (prop.alternateUrl !== undefined || nameMap['alternateUrl'])
+      item.alternateUrl = prop.alternateUrl;
     if (prop.availableOffline !== undefined || nameMap['availableOffline'])
       item.availableOffline = prop.availableOffline;
     if (prop.availableWhenMetered !== undefined ||
@@ -108,6 +134,23 @@ ExternalMetadataProvider.prototype.convertResults_ =
       item.size = requests[i].entry.isFile ? (prop.size || 0) : -1;
     if (prop.thumbnailUrl !== undefined || nameMap['thumbnailUrl'])
       item.thumbnailUrl = prop.thumbnailUrl;
+    if (prop.canCopy !== undefined || nameMap['canCopy'])
+      item.canCopy = prop.canCopy;
+    if (prop.canDelete !== undefined || nameMap['canDelete'])
+      item.canDelete = prop.canDelete;
+    if (prop.canRename !== undefined || nameMap['canRename'])
+      item.canRename = prop.canRename;
+    if (prop.canAddChildren !== undefined || nameMap['canAddChildren'])
+      item.canAddChildren = prop.canAddChildren;
+    if (prop.canShare !== undefined || nameMap['canShare'])
+      item.canShare = prop.canShare;
+    if (prop.isMachineRoot !== undefined || nameMap['isMachineRoot'])
+      item.isMachineRoot = prop.isMachineRoot;
+    if (prop.isExternalMedia !== undefined || nameMap['isExternalMedia'])
+      item.isExternalMedia = prop.isExternalMedia;
+    if (prop.isArbitrarySyncFolder !== undefined ||
+        nameMap['isArbitrarySyncFolder'])
+      item.isArbitrarySyncFolder = prop.isArbitrarySyncFolder;
     results.push(item);
   }
   return results;

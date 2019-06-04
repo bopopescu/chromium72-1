@@ -30,48 +30,49 @@
 
 #include "third_party/blink/renderer/modules/peerconnection/rtc_ice_candidate.h"
 
-#include "third_party/blink/renderer/bindings/core/v8/exception_messages.h"
-#include "third_party/blink/renderer/bindings/core/v8/exception_state.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_value.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_object_builder.h"
-#include "third_party/blink/renderer/core/dom/exception_code.h"
 #include "third_party/blink/renderer/core/execution_context/execution_context.h"
 #include "third_party/blink/renderer/core/frame/use_counter.h"
 #include "third_party/blink/renderer/modules/peerconnection/rtc_ice_candidate_init.h"
+#include "third_party/blink/renderer/platform/bindings/exception_messages.h"
+#include "third_party/blink/renderer/platform/bindings/exception_state.h"
 
 namespace blink {
 
 RTCIceCandidate* RTCIceCandidate::Create(
     ExecutionContext* context,
-    const RTCIceCandidateInit& candidate_init,
+    const RTCIceCandidateInit* candidate_init,
     ExceptionState& exception_state) {
-  if (!candidate_init.hasCandidate() || !candidate_init.candidate().length()) {
+  if (!candidate_init->hasCandidate() ||
+      !candidate_init->candidate().length()) {
     exception_state.ThrowDOMException(
-        kTypeMismatchError, ExceptionMessages::IncorrectPropertyType(
-                                "candidate", "is not a string, or is empty."));
+        DOMExceptionCode::kTypeMismatchError,
+        ExceptionMessages::IncorrectPropertyType(
+            "candidate", "is not a string, or is empty."));
     return nullptr;
   }
 
   String sdp_mid;
-  if (candidate_init.hasSdpMid())
-    sdp_mid = candidate_init.sdpMid();
+  if (candidate_init->hasSdpMid())
+    sdp_mid = candidate_init->sdpMid();
 
   // TODO(guidou): Change default value to -1. crbug.com/614958.
   unsigned short sdp_m_line_index = 0;
-  if (candidate_init.hasSdpMLineIndex()) {
-    sdp_m_line_index = candidate_init.sdpMLineIndex();
+  if (candidate_init->hasSdpMLineIndex()) {
+    sdp_m_line_index = candidate_init->sdpMLineIndex();
   } else {
     UseCounter::Count(context,
                       WebFeature::kRTCIceCandidateDefaultSdpMLineIndex);
   }
 
-  return new RTCIceCandidate(WebRTCICECandidate::Create(
-      candidate_init.candidate(), sdp_mid, sdp_m_line_index));
+  return MakeGarbageCollected<RTCIceCandidate>(WebRTCICECandidate::Create(
+      candidate_init->candidate(), sdp_mid, sdp_m_line_index));
 }
 
 RTCIceCandidate* RTCIceCandidate::Create(
     scoped_refptr<WebRTCICECandidate> web_candidate) {
-  return new RTCIceCandidate(std::move(web_candidate));
+  return MakeGarbageCollected<RTCIceCandidate>(std::move(web_candidate));
 }
 
 RTCIceCandidate::RTCIceCandidate(

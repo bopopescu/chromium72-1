@@ -52,6 +52,7 @@ class ResourceRequestInfoImpl : public ResourceRequestInfo,
       int request_id,
       int render_frame_id,
       bool is_main_frame,
+      const base::UnguessableToken& fetch_window_id,
       ResourceType resource_type,
       ui::PageTransition transition_type,
       bool is_download,
@@ -62,7 +63,7 @@ class ResourceRequestInfoImpl : public ResourceRequestInfo,
       bool enable_upload_progress,
       bool do_not_prompt_for_login,
       bool keepalive,
-      blink::WebReferrerPolicy referrer_policy,
+      network::mojom::ReferrerPolicy referrer_policy,
       bool is_prerendering,
       ResourceContext* context,
       bool report_raw_headers,
@@ -86,7 +87,7 @@ class ResourceRequestInfoImpl : public ResourceRequestInfo,
   bool IsMainFrame() const override;
   ResourceType GetResourceType() const override;
   int GetProcessType() const override;
-  blink::WebReferrerPolicy GetReferrerPolicy() const override;
+  network::mojom::ReferrerPolicy GetReferrerPolicy() const override;
   bool IsPrerendering() const override;
   ui::PageTransition GetPageTransition() const override;
   bool HasUserGesture() const override;
@@ -96,20 +97,25 @@ class ResourceRequestInfoImpl : public ResourceRequestInfo,
   bool IsDownload() const override;
   // Returns a bitmask of potentially several Previews optimizations.
   PreviewsState GetPreviewsState() const override;
-  bool ShouldReportRawHeaders() const;
-  bool ShouldReportSecurityInfo() const;
   NavigationUIData* GetNavigationUIData() const override;
-  DevToolsStatus GetDevToolsStatus() const override;
-
+  void SetResourceRequestBlockedReason(
+      blink::ResourceRequestBlockedReason reason) override;
   base::Optional<blink::ResourceRequestBlockedReason>
   GetResourceRequestBlockedReason() const override;
-
   base::StringPiece GetCustomCancelReason() const override;
 
   CONTENT_EXPORT void AssociateWithRequest(net::URLRequest* request);
 
   CONTENT_EXPORT int GetRequestID() const;
   GlobalRoutingID GetGlobalRoutingID() const;
+
+  // Returns true if raw response headers (including sensitive data such as
+  // cookies) should be included with the response.
+  bool ShouldReportRawHeaders() const;
+
+  // Returns true if security details (SSL/TLS connection parameters and
+  // certificate chain) should be included with the response.
+  bool ShouldReportSecurityInfo() const;
 
   // PlzNavigate
   // The id of the FrameTreeNode that initiated this request (for a navigation
@@ -180,22 +186,19 @@ class ResourceRequestInfoImpl : public ResourceRequestInfo,
     navigation_ui_data_ = std::move(navigation_ui_data);
   }
 
-  void set_devtools_status(DevToolsStatus devtools_status) {
-    devtools_status_ = devtools_status;
-  }
-
-  void set_resource_request_blocked_reason(
-      base::Optional<blink::ResourceRequestBlockedReason> reason) {
-    resource_request_blocked_reason_ = reason;
-  }
-
   void SetBlobHandles(BlobHandles blob_handles);
 
-  bool blocked_cross_site_document() const {
-    return blocked_cross_site_document_;
+  bool blocked_response_from_reaching_renderer() const {
+    return blocked_response_from_reaching_renderer_;
   }
-  void set_blocked_cross_site_document(bool value) {
-    blocked_cross_site_document_ = value;
+  void set_blocked_response_from_reaching_renderer(bool value) {
+    blocked_response_from_reaching_renderer_ = value;
+  }
+  bool should_report_corb_blocking() const {
+    return should_report_corb_blocking_;
+  }
+  void set_should_report_corb_blocking(bool value) {
+    should_report_corb_blocking_ = value;
   }
 
   void set_custom_cancel_reason(base::StringPiece reason) {
@@ -206,6 +209,10 @@ class ResourceRequestInfoImpl : public ResourceRequestInfo,
 
   void set_first_auth_attempt(bool first_auth_attempt) {
     first_auth_attempt_ = first_auth_attempt;
+  }
+
+  const base::UnguessableToken& fetch_window_id() const {
+    return fetch_window_id_;
   }
 
  private:
@@ -223,6 +230,7 @@ class ResourceRequestInfoImpl : public ResourceRequestInfo,
   int request_id_;
   int render_frame_id_;
   bool is_main_frame_;
+  base::UnguessableToken fetch_window_id_;
   bool is_download_;
   bool is_stream_;
   bool allow_download_;
@@ -235,20 +243,25 @@ class ResourceRequestInfoImpl : public ResourceRequestInfo,
   ResourceType resource_type_;
   ui::PageTransition transition_type_;
   int memory_cost_;
-  blink::WebReferrerPolicy referrer_policy_;
+  network::mojom::ReferrerPolicy referrer_policy_;
   bool is_prerendering_;
   ResourceContext* context_;
   bool report_raw_headers_;
   bool report_security_info_;
   bool is_async_;
-  DevToolsStatus devtools_status_;
   base::Optional<blink::ResourceRequestBlockedReason>
       resource_request_blocked_reason_;
   PreviewsState previews_state_;
   scoped_refptr<network::ResourceRequestBody> body_;
   bool initiated_in_secure_context_;
   std::unique_ptr<NavigationUIData> navigation_ui_data_;
-  bool blocked_cross_site_document_;
+
+  // Whether response details (response headers, timing information, metadata)
+  // have been blocked from reaching the renderer process (e.g. by Cross-Origin
+  // Read Blocking).
+  bool blocked_response_from_reaching_renderer_;
+
+  bool should_report_corb_blocking_;
   bool first_auth_attempt_;
 
   // Keeps upload body blobs alive for the duration of the request.

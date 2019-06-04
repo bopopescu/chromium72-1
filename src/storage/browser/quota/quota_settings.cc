@@ -6,16 +6,12 @@
 
 #include <algorithm>
 
-#include "base/metrics/histogram_macros.h"
 #include "base/rand_util.h"
-#include "base/sys_info.h"
-#include "base/task_scheduler/post_task.h"
-#include "base/threading/thread_restrictions.h"
+#include "base/system/sys_info.h"
+#include "base/task/post_task.h"
+#include "base/threading/scoped_blocking_call.h"
 #include "build/build_config.h"
-
-#define UMA_HISTOGRAM_MBYTES(name, sample)                                     \
-  UMA_HISTOGRAM_CUSTOM_COUNTS((name), static_cast<int>((sample) / kMBytes), 1, \
-                              10 * 1024 * 1024 /* 10TB */, 100)
+#include "storage/browser/quota/quota_macros.h"
 
 namespace storage {
 
@@ -30,7 +26,7 @@ int64_t RandomizeByPercent(int64_t value, int percent) {
 base::Optional<storage::QuotaSettings> CalculateNominalDynamicSettings(
     const base::FilePath& partition_path,
     bool is_incognito) {
-  base::AssertBlockingAllowed();
+  base::ScopedBlockingCall scoped_blocking_call(base::BlockingType::MAY_BLOCK);
   const int64_t kMBytes = 1024 * 1024;
   const int kRandomizedPercentage = 10;
 
@@ -137,7 +133,7 @@ void GetNominalDynamicSettings(const base::FilePath& partition_path,
                                OptionalQuotaSettingsCallback callback) {
   base::PostTaskWithTraitsAndReplyWithResult(
       FROM_HERE,
-      {base::MayBlock(), base::TaskPriority::BACKGROUND,
+      {base::MayBlock(), base::TaskPriority::BEST_EFFORT,
        base::TaskShutdownBehavior::CONTINUE_ON_SHUTDOWN},
       base::BindOnce(&CalculateNominalDynamicSettings, partition_path,
                      is_incognito),

@@ -33,6 +33,18 @@ void SearchResult::SetIcon(const gfx::ImageSkia& icon) {
     observer.OnMetadataChanged();
 }
 
+void SearchResult::SetChipIcon(const gfx::ImageSkia& chip_icon) {
+  metadata_->chip_icon = chip_icon;
+  for (auto& observer : observers_)
+    observer.OnMetadataChanged();
+}
+
+void SearchResult::set_title(const base::string16& title) {
+  metadata_->title = title;
+  for (auto& observer : observers_)
+    observer.OnMetadataChanged();
+}
+
 void SearchResult::SetBadgeIcon(const gfx::ImageSkia& badge_icon) {
   metadata_->badge_icon = badge_icon;
   for (auto& observer : observers_)

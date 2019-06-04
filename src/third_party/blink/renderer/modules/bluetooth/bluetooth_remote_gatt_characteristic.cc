@@ -18,6 +18,7 @@
 #include "third_party/blink/renderer/modules/bluetooth/bluetooth_remote_gatt_service.h"
 #include "third_party/blink/renderer/modules/bluetooth/bluetooth_remote_gatt_utils.h"
 #include "third_party/blink/renderer/modules/bluetooth/bluetooth_uuid.h"
+#include "third_party/blink/renderer/platform/wtf/functional.h"
 
 #include <memory>
 #include <utility>
@@ -55,7 +56,7 @@ void BluetoothRemoteGATTCharacteristic::RemoteCharacteristicValueChanged(
   if (!GetGatt()->connected())
     return;
   this->SetValue(BluetoothRemoteGATTUtils::ConvertWTFVectorToDataView(value));
-  DispatchEvent(Event::Create(EventTypeNames::characteristicvaluechanged));
+  DispatchEvent(*Event::Create(event_type_names::kCharacteristicvaluechanged));
 }
 
 void BluetoothRemoteGATTCharacteristic::ContextDestroyed(ExecutionContext*) {
@@ -68,12 +69,19 @@ void BluetoothRemoteGATTCharacteristic::Dispose() {
 
 const WTF::AtomicString& BluetoothRemoteGATTCharacteristic::InterfaceName()
     const {
-  return EventTargetNames::BluetoothRemoteGATTCharacteristic;
+  return event_target_names::kBluetoothRemoteGATTCharacteristic;
 }
 
 ExecutionContext* BluetoothRemoteGATTCharacteristic::GetExecutionContext()
     const {
   return ContextLifecycleObserver::GetExecutionContext();
+}
+
+bool BluetoothRemoteGATTCharacteristic::HasPendingActivity() const {
+  // This object should be considered active as long as there are registered
+  // event listeners. Even if script drops all references this can still be
+  // found again through the BluetoothRemoteGATTServer object.
+  return GetExecutionContext() && HasEventListeners();
 }
 
 void BluetoothRemoteGATTCharacteristic::AddedEventListener(
@@ -103,7 +111,8 @@ void BluetoothRemoteGATTCharacteristic::ReadValueCallback(
     DOMDataView* dom_data_view =
         BluetoothRemoteGATTUtils::ConvertWTFVectorToDataView(value.value());
     SetValue(dom_data_view);
-    DispatchEvent(Event::Create(EventTypeNames::characteristicvaluechanged));
+    DispatchEvent(
+        *Event::Create(event_type_names::kCharacteristicvaluechanged));
     resolver->Resolve(dom_data_view);
   } else {
     resolver->Reject(BluetoothError::CreateDOMException(result));
@@ -182,10 +191,12 @@ ScriptPromise BluetoothRemoteGATTCharacteristic::writeValue(
   // If bytes is more than 512 bytes long (the maximum length of an attribute
   // value, per Long Attribute Values) return a promise rejected with an
   // InvalidModificationError and abort.
-  if (value.ByteLength() > 512)
+  if (value.ByteLength() > 512) {
     return ScriptPromise::RejectWithDOMException(
-        script_state, DOMException::Create(kInvalidModificationError,
-                                           "Value can't exceed 512 bytes."));
+        script_state,
+        DOMException::Create(DOMExceptionCode::kInvalidModificationError,
+                             "Value can't exceed 512 bytes."));
+  }
 
   // Let valueVector be a copy of the bytes held by value.
   Vector<uint8_t> value_vector;
@@ -293,7 +304,7 @@ ScriptPromise BluetoothRemoteGATTCharacteristic::getDescriptor(
   String descriptor =
       BluetoothUUID::getDescriptor(descriptor_uuid, exception_state);
   if (exception_state.HadException())
-    return exception_state.Reject(script_state);
+    return ScriptPromise();
 
   return GetDescriptorsImpl(script_state,
                             mojom::blink::WebBluetoothGATTQueryQuantity::SINGLE,
@@ -314,7 +325,7 @@ ScriptPromise BluetoothRemoteGATTCharacteristic::getDescriptors(
   String descriptor =
       BluetoothUUID::getDescriptor(descriptor_uuid, exception_state);
   if (exception_state.HadException())
-    return exception_state.Reject(script_state);
+    return ScriptPromise();
 
   return GetDescriptorsImpl(
       script_state, mojom::blink::WebBluetoothGATTQueryQuantity::MULTIPLE,

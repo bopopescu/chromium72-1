@@ -4,6 +4,7 @@
 
 #include "third_party/blink/renderer/core/html/link_style.h"
 
+#include "services/network/public/mojom/referrer_policy.mojom-shared.h"
 #include "third_party/blink/renderer/core/css/style_sheet_contents.h"
 #include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/frame/csp/content_security_policy.h"
@@ -12,23 +13,21 @@
 #include "third_party/blink/renderer/core/html/cross_origin_attribute.h"
 #include "third_party/blink/renderer/core/html/html_link_element.h"
 #include "third_party/blink/renderer/core/html_names.h"
+#include "third_party/blink/renderer/core/loader/importance_attribute.h"
 #include "third_party/blink/renderer/core/loader/resource/css_style_sheet_resource.h"
 #include "third_party/blink/renderer/core/loader/subresource_integrity_helper.h"
 #include "third_party/blink/renderer/platform/histogram.h"
 #include "third_party/blink/renderer/platform/loader/fetch/fetch_parameters.h"
-#include "third_party/blink/renderer/platform/loader/fetch/resource_loader_options.h"
-#include "third_party/blink/renderer/platform/loader/fetch/resource_request.h"
 #include "third_party/blink/renderer/platform/loader/subresource_integrity.h"
 #include "third_party/blink/renderer/platform/network/mime/content_type.h"
 #include "third_party/blink/renderer/platform/network/mime/mime_type_registry.h"
 #include "third_party/blink/renderer/platform/weborigin/kurl.h"
-#include "third_party/blink/renderer/platform/weborigin/referrer_policy.h"
 #include "third_party/blink/renderer/platform/weborigin/security_policy.h"
 #include "third_party/blink/renderer/platform/wtf/text/atomic_string.h"
 
 namespace blink {
 
-using namespace HTMLNames;
+using namespace html_names;
 
 static bool StyleSheetTypeIsSupported(const String& type) {
   String trimmed_type = ContentType(type).GetType();
@@ -37,7 +36,7 @@ static bool StyleSheetTypeIsSupported(const String& type) {
 }
 
 LinkStyle* LinkStyle::Create(HTMLLinkElement* owner) {
-  return new LinkStyle(owner);
+  return MakeGarbageCollected<LinkStyle>(owner);
 }
 
 LinkStyle::LinkStyle(HTMLLinkElement* owner)
@@ -71,10 +70,10 @@ void LinkStyle::NotifyFinished(Resource* resource) {
   }
 
   CSSStyleSheetResource* cached_style_sheet = ToCSSStyleSheetResource(resource);
-  // See the comment in PendingScript.cpp about why this check is necessary
+  // See the comment in pending_script.cc about why this check is necessary
   // here, instead of in the resource fetcher. https://crbug.com/500701.
   if (!cached_style_sheet->ErrorOccurred() &&
-      !owner_->FastGetAttribute(integrityAttr).IsEmpty() &&
+      !owner_->FastGetAttribute(kIntegrityAttr).IsEmpty() &&
       !cached_style_sheet->IntegrityMetadata().IsEmpty()) {
     ResourceIntegrityDisposition disposition =
         cached_style_sheet->IntegrityDisposition();
@@ -193,7 +192,7 @@ void LinkStyle::RemovePendingSheet() {
   if (type == kNone)
     return;
   if (type == kNonBlocking) {
-    // Tell StyleEngine to re-compute styleSheets of this m_owner's treescope.
+    // Tell StyleEngine to re-compute styleSheets of this owner_'s treescope.
     GetDocument().GetStyleEngine().ModifiedStyleSheetCandidateNode(*owner_);
     return;
   }
@@ -253,20 +252,18 @@ void LinkStyle::SetCrossOriginStylesheetStatus(CSSStyleSheet* sheet) {
   fetch_following_cors_ = false;
 }
 
-// TODO(yoav): move that logic to LinkLoader
 LinkStyle::LoadReturnValue LinkStyle::LoadStylesheetIfNeeded(
-    const KURL& url,
-    const WTF::TextEncoding& charset,
-    const String& type) {
+    const LinkLoadParameters& params,
+    const WTF::TextEncoding& charset) {
   if (disabled_state_ == kDisabled || !owner_->RelAttribute().IsStyleSheet() ||
-      !StyleSheetTypeIsSupported(type) || !ShouldLoadResource() ||
-      !url.IsValid())
+      !StyleSheetTypeIsSupported(params.type) || !ShouldLoadResource() ||
+      !params.href.IsValid())
     return kNotNeeded;
 
   if (GetResource()) {
     RemovePendingSheet();
     ClearResource();
-    ClearFetchFollowingCORS();
+    ClearFetchFollowingCors();
   }
 
   if (!owner_->ShouldLoadLink())
@@ -294,44 +291,18 @@ LinkStyle::LoadReturnValue LinkStyle::LoadStylesheetIfNeeded(
                   owner_->IsCreatedByParser();
   AddPendingSheet(blocking ? kBlocking : kNonBlocking);
 
-  ResourceRequest resource_request(GetDocument().CompleteURL(url));
-  ReferrerPolicy referrer_policy = owner_->GetReferrerPolicy();
-  if (referrer_policy != kReferrerPolicyDefault) {
-    resource_request.SetHTTPReferrer(SecurityPolicy::GenerateReferrer(
-        referrer_policy, url, GetDocument().OutgoingReferrer()));
+  if (params.cross_origin != kCrossOriginAttributeNotSet) {
+    SetFetchFollowingCors();
   }
-
-  ResourceLoaderOptions options;
-  options.initiator_info.name = owner_->localName();
-  FetchParameters params(resource_request, options);
-  params.SetCharset(charset);
 
   // Load stylesheets that are not needed for the layout immediately with low
   // priority.  When the link element is created by scripts, load the
   // stylesheets asynchronously but in high priority.
-  if (!media_query_matches || owner_->IsAlternate())
-    params.SetDefer(FetchParameters::kLazyLoad);
+  FetchParameters::DeferOption defer_option =
+      !media_query_matches || owner_->IsAlternate() ? FetchParameters::kLazyLoad
+                                                    : FetchParameters::kNoDefer;
 
-  params.SetContentSecurityPolicyNonce(owner_->nonce());
-
-  CrossOriginAttributeValue cross_origin =
-      GetCrossOriginAttributeValue(owner_->FastGetAttribute(crossoriginAttr));
-  if (cross_origin != kCrossOriginAttributeNotSet) {
-    params.SetCrossOriginAccessControl(GetDocument().GetSecurityOrigin(),
-                                       cross_origin);
-    SetFetchFollowingCORS();
-  }
-
-  String integrity_attr = owner_->FastGetAttribute(integrityAttr);
-  if (!integrity_attr.IsEmpty()) {
-    IntegrityMetadataSet metadata_set;
-    SubresourceIntegrity::ParseIntegrityAttribute(
-        integrity_attr, SubresourceIntegrityHelper::GetFeatures(&GetDocument()),
-        metadata_set);
-    params.SetIntegrityMetadata(metadata_set);
-    params.MutableResourceRequest().SetFetchIntegrity(integrity_attr);
-  }
-  CSSStyleSheetResource::Fetch(params, GetDocument().Fetcher(), this);
+  owner_->LoadStylesheet(params, charset, defer_option, this);
 
   if (loading_ && !GetResource()) {
     // Fetch() synchronous failure case.
@@ -350,13 +321,14 @@ void LinkStyle::Process() {
   DCHECK(owner_->ShouldProcessStyle());
   const LinkLoadParameters params(
       owner_->RelAttribute(),
-      GetCrossOriginAttributeValue(owner_->FastGetAttribute(crossoriginAttr)),
+      GetCrossOriginAttributeValue(owner_->FastGetAttribute(kCrossoriginAttr)),
       owner_->TypeValue().DeprecatedLower(),
       owner_->AsValue().DeprecatedLower(), owner_->Media().DeprecatedLower(),
-      owner_->nonce(), owner_->IntegrityValue(), owner_->GetReferrerPolicy(),
-      owner_->GetNonEmptyURLAttribute(hrefAttr),
-      owner_->FastGetAttribute(srcsetAttr),
-      owner_->FastGetAttribute(imgsizesAttr));
+      owner_->nonce(), owner_->IntegrityValue(),
+      owner_->ImportanceValue().LowerASCII(), owner_->GetReferrerPolicy(),
+      owner_->GetNonEmptyURLAttribute(kHrefAttr),
+      owner_->FastGetAttribute(kImagesrcsetAttr),
+      owner_->FastGetAttribute(kImagesizesAttr));
 
   WTF::TextEncoding charset = GetCharset();
 
@@ -378,8 +350,7 @@ void LinkStyle::Process() {
   if (!sheet_ && !owner_->LoadLink(params))
     return;
 
-  if (LoadStylesheetIfNeeded(params.href, charset, params.type) == kNotNeeded &&
-      sheet_) {
+  if (LoadStylesheetIfNeeded(params, charset) == kNotNeeded && sheet_) {
     // we no longer contain a stylesheet, e.g. perhaps rel or type was changed
     ClearSheet();
     GetDocument().GetStyleEngine().SetNeedsActiveStyleUpdate(
@@ -397,7 +368,7 @@ void LinkStyle::SetSheetTitle(const String& title) {
   if (title.IsEmpty() || !IsUnset() || owner_->IsAlternate())
     return;
 
-  const KURL& href = owner_->GetNonEmptyURLAttribute(hrefAttr);
+  const KURL& href = owner_->GetNonEmptyURLAttribute(kHrefAttr);
   if (href.IsValid() && !href.IsEmpty())
     GetDocument().GetStyleEngine().SetPreferredStylesheetSetNameIfNotSet(title);
 }

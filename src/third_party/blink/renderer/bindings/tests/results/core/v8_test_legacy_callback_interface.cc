@@ -3,7 +3,7 @@
 // found in the LICENSE file.
 
 // This file has been auto-generated from the Jinja2 template
-// third_party/blink/renderer/bindings/templates/callback_interface.cpp.tmpl
+// third_party/blink/renderer/bindings/templates/callback_interface.cc.tmpl
 // by the script code_generator_v8.py.
 // DO NOT MODIFY!
 
@@ -18,6 +18,7 @@
 #include "third_party/blink/renderer/bindings/core/v8/v8_dom_configuration.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_node.h"
 #include "third_party/blink/renderer/core/execution_context/execution_context.h"
+#include "third_party/blink/renderer/platform/bindings/exception_messages.h"
 
 namespace blink {
 
@@ -29,7 +30,7 @@ namespace blink {
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wglobal-constructors"
 #endif
-const WrapperTypeInfo V8TestLegacyCallbackInterface::wrapperTypeInfo = {
+const WrapperTypeInfo V8TestLegacyCallbackInterface::wrapper_type_info = {
     gin::kEmbedderBlink,
     V8TestLegacyCallbackInterface::DomTemplate,
     nullptr,
@@ -50,43 +51,61 @@ static void InstallV8TestLegacyCallbackInterfaceTemplate(v8::Isolate* isolate, c
   // Initialize the interface object's template.
   V8DOMConfiguration::InitializeDOMInterfaceTemplate(
       isolate, interface_template,
-      V8TestLegacyCallbackInterface::wrapperTypeInfo.interface_name,
+      V8TestLegacyCallbackInterface::wrapper_type_info.interface_name,
       v8::Local<v8::FunctionTemplate>(),
       kV8DefaultWrapperInternalFieldCount);
   interface_template->SetLength(0);
 
   // Register IDL constants.
-  v8::Local<v8::FunctionTemplate> interfaceTemplate = interface_template;
-  v8::Local<v8::ObjectTemplate> prototypeTemplate =
+  v8::Local<v8::ObjectTemplate> prototype_template =
       interface_template->PrototypeTemplate();
-  static constexpr V8DOMConfiguration::ConstantConfiguration V8TestLegacyCallbackInterfaceConstants[] = {
-      {"CONST_VALUE_USHORT_42", V8DOMConfiguration::kConstantTypeUnsignedShort, static_cast<int>(42)},
-  };
-  V8DOMConfiguration::InstallConstants(
-      isolate, interfaceTemplate, prototypeTemplate,
-      V8TestLegacyCallbackInterfaceConstants, arraysize(V8TestLegacyCallbackInterfaceConstants));
+  {
+    static constexpr V8DOMConfiguration::ConstantConfiguration kConstants[] = {
+        {"CONST_VALUE_USHORT_42", V8DOMConfiguration::kConstantTypeUnsignedShort, static_cast<int>(42)},
+    };
+    V8DOMConfiguration::InstallConstants(
+        isolate, interface_template, prototype_template,
+        kConstants, base::size(kConstants));
+  }
   static_assert(42 == TestLegacyCallbackInterface::kConstValueUshort42, "the value of TestLegacyCallbackInterface_kConstValueUshort42 does not match with implementation");
 }
 
+// static
 v8::Local<v8::FunctionTemplate> V8TestLegacyCallbackInterface::DomTemplate(v8::Isolate* isolate, const DOMWrapperWorld& world) {
   return V8DOMConfiguration::DomClassTemplate(
       isolate,
       world,
-      const_cast<WrapperTypeInfo*>(&wrapperTypeInfo),
+      const_cast<WrapperTypeInfo*>(&wrapper_type_info),
       InstallV8TestLegacyCallbackInterfaceTemplate);
 }
 
-v8::Maybe<uint16_t> V8TestLegacyCallbackInterface::acceptNode(ScriptWrappable* callback_this_value, Node* node) {
-  // This function implements "call a user object's operation".
-  // https://heycam.github.io/webidl/#call-a-user-objects-operation
+const char* V8TestLegacyCallbackInterface::NameInHeapSnapshot() const {
+  return "V8TestLegacyCallbackInterface";
+}
 
-  if (!IsCallbackFunctionRunnable(CallbackRelevantScriptState())) {
+// static
+V8TestLegacyCallbackInterface* V8TestLegacyCallbackInterface::CreateOrNull(v8::Local<v8::Object> callback_object) {
+  v8::Local<v8::Context> creation_context = callback_object->CreationContext();
+  // When |callback_object| is an object in RemoteContext (i.e. RemoteInstance),
+  // the object has no creation context, and no way to proceed.
+  // TODO(crbug.com/886588): Make CreateOrNull into Create removing the early
+  // return with nullptr.
+  if (creation_context.IsEmpty())
+    return nullptr;
+
+  return MakeGarbageCollected<V8TestLegacyCallbackInterface>(callback_object, creation_context);
+}
+
+v8::Maybe<uint16_t> V8TestLegacyCallbackInterface::acceptNode(ScriptWrappable* callback_this_value, Node* node) {
+  if (!IsCallbackFunctionRunnable(CallbackRelevantScriptState(),
+                                  IncumbentScriptState())) {
     // Wrapper-tracing for the callback function makes the function object and
     // its creation context alive. Thus it's safe to use the creation context
     // of the callback function here.
     v8::HandleScope handle_scope(GetIsolate());
-    CHECK(!CallbackObject().IsEmpty());
-    v8::Context::Scope context_scope(CallbackObject()->CreationContext());
+    v8::Local<v8::Object> callback_object = CallbackObject();
+    CHECK(!callback_object.IsEmpty());
+    v8::Context::Scope context_scope(callback_object->CreationContext());
     V8ThrowException::ThrowError(
         GetIsolate(),
         ExceptionMessages::FailedToExecute(
@@ -96,19 +115,10 @@ v8::Maybe<uint16_t> V8TestLegacyCallbackInterface::acceptNode(ScriptWrappable* c
     return v8::Nothing<uint16_t>();
   }
 
-  // step 7. Prepare to run script with relevant settings.
+  // step: Prepare to run script with relevant settings.
   ScriptState::Scope callback_relevant_context_scope(
       CallbackRelevantScriptState());
-  // step 8. Prepare to run a callback with stored settings.
-  if (IncumbentScriptState()->GetContext().IsEmpty()) {
-    V8ThrowException::ThrowError(
-        GetIsolate(),
-        ExceptionMessages::FailedToExecute(
-            "acceptNode",
-            "TestLegacyCallbackInterface",
-            "The provided callback is no longer runnable."));
-    return v8::Nothing<uint16_t>();
-  }
+  // step: Prepare to run a callback with stored settings.
   v8::Context::BackupIncumbentScope backup_incumbent_scope(
       IncumbentScriptState()->GetContext());
 
@@ -155,31 +165,33 @@ v8::Maybe<uint16_t> V8TestLegacyCallbackInterface::acceptNode(ScriptWrappable* c
     this_arg = ToV8(callback_this_value, CallbackRelevantScriptState());
   }
 
-  // step 12. Let esArgs be the result of converting args to an ECMAScript
+  // step: Let esArgs be the result of converting args to an ECMAScript
   //   arguments list. If this throws an exception, set completion to the
   //   completion value representing the thrown exception and jump to the step
   //   labeled return.
   v8::Local<v8::Object> argument_creation_context =
       CallbackRelevantScriptState()->GetContext()->Global();
   ALLOW_UNUSED_LOCAL(argument_creation_context);
-  v8::Local<v8::Value> nodeHandle = ToV8(node, argument_creation_context, GetIsolate());
-  v8::Local<v8::Value> argv[] = { nodeHandle };
+  v8::Local<v8::Value> v8_node = ToV8(node, argument_creation_context, GetIsolate());
+  constexpr int argc = 1;
+  v8::Local<v8::Value> argv[] = { v8_node };
+  static_assert(static_cast<size_t>(argc) == base::size(argv), "size mismatch");
 
-  // step 13. Let callResult be Call(X, thisArg, esArgs).
   v8::Local<v8::Value> call_result;
+  // step: Let callResult be Call(X, thisArg, esArgs).
   if (!V8ScriptRunner::CallFunction(
           function,
           ExecutionContext::From(CallbackRelevantScriptState()),
           this_arg,
-          1,
+          argc,
           argv,
           GetIsolate()).ToLocal(&call_result)) {
-    // step 14. If callResult is an abrupt completion, set completion to
-    //   callResult and jump to the step labeled return.
+    // step: If callResult is an abrupt completion, set completion to callResult
+    //   and jump to the step labeled return.
     return v8::Nothing<uint16_t>();
   }
 
-  // step 15. Set completion to the result of converting callResult.[[Value]] to
+  // step: Set completion to the result of converting callResult.[[Value]] to
   //   an IDL value of the same type as the operation's return type.
   {
     ExceptionState exception_state(GetIsolate(),
@@ -196,7 +208,6 @@ v8::Maybe<uint16_t> V8TestLegacyCallbackInterface::acceptNode(ScriptWrappable* c
   }
 }
 
-CORE_EXTERN_TEMPLATE_EXPORT
 v8::Maybe<uint16_t> V8PersistentCallbackInterface<V8TestLegacyCallbackInterface>::acceptNode(ScriptWrappable* callback_this_value, Node* node) {
   return Proxy()->acceptNode(
       callback_this_value, node);

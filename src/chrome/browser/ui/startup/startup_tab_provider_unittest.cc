@@ -14,7 +14,10 @@
 
 #if defined(OS_WIN)
 #include "base/win/windows_version.h"
-#endif
+#if defined(GOOGLE_CHROME_BUILD)
+#include "chrome/browser/ui/webui/welcome/nux/constants.h"
+#endif  // defined(GOOGLE_CHROME_BUILD)
+#endif  // defined(OS_WIN)
 
 using StandardOnboardingTabsParams =
     StartupTabProviderImpl::StandardOnboardingTabsParams;
@@ -316,7 +319,7 @@ TEST(StartupTabProviderTest,
     EXPECT_TRUE(output.empty());
   }
 }
-#endif
+#endif  // defined(OS_WIN)
 
 TEST(StartupTabProviderTest, GetMasterPrefsTabsForState) {
   std::vector<GURL> input = {GURL(base::ASCIIToUTF16("https://new_tab_page")),

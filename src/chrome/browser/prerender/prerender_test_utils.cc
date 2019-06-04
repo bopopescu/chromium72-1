@@ -15,10 +15,10 @@
 #include "base/memory/ptr_util.h"
 #include "base/run_loop.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/task/post_task.h"
 #include "chrome/browser/prerender/prerender_manager.h"
 #include "chrome/browser/prerender/prerender_manager_factory.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/safe_browsing/local_database_manager.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/common/pref_names.h"
@@ -26,6 +26,7 @@
 #include "chrome/test/base/ui_test_utils.h"
 #include "components/prefs/pref_service.h"
 #include "components/safe_browsing/db/v4_protocol_manager_util.h"
+#include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/render_view_host.h"
 #include "content/public/browser/render_widget_host.h"
 #include "content/public/common/content_switches.h"
@@ -90,8 +91,8 @@ class CountingInterceptor : public net::URLRequestInterceptor {
   }
 
   void RequestStarted() {
-    content::BrowserThread::PostTask(
-        content::BrowserThread::UI, FROM_HERE,
+    base::PostTaskWithTraits(
+        FROM_HERE, {content::BrowserThread::UI},
         base::BindOnce(&RequestCounter::RequestStarted, counter_));
   }
 
@@ -113,8 +114,8 @@ class CountingInterceptorWithCallback : public net::URLRequestInterceptor {
     base::WeakPtr<RequestCounter> weakptr;
     if (counter)
       weakptr = counter->AsWeakPtr();
-    content::BrowserThread::PostTask(
-        content::BrowserThread::IO, FROM_HERE,
+    base::PostTaskWithTraits(
+        FROM_HERE, {content::BrowserThread::IO},
         base::BindOnce(&CountingInterceptorWithCallback::CreateAndAddOnIO, url,
                        weakptr, callback_io));
   }
@@ -127,8 +128,8 @@ class CountingInterceptorWithCallback : public net::URLRequestInterceptor {
     callback_.Run(request);
 
     // Ping the request counter.
-    content::BrowserThread::PostTask(
-        content::BrowserThread::UI, FROM_HERE,
+    base::PostTaskWithTraits(
+        FROM_HERE, {content::BrowserThread::UI},
         base::BindOnce(&RequestCounter::RequestStarted, counter_));
     return nullptr;
   }
@@ -236,8 +237,8 @@ bool FakeSafeBrowsingDatabaseManager::CheckBrowseUrl(
     return true;
   }
 
-  content::BrowserThread::PostTask(
-      content::BrowserThread::IO, FROM_HERE,
+  base::PostTaskWithTraits(
+      FROM_HERE, {content::BrowserThread::IO},
       base::BindOnce(&FakeSafeBrowsingDatabaseManager::OnCheckBrowseURLDone,
                      this, gurl, client));
   return false;
@@ -266,18 +267,8 @@ FakeSafeBrowsingDatabaseManager::~FakeSafeBrowsingDatabaseManager() {}
 
 void FakeSafeBrowsingDatabaseManager::OnCheckBrowseURLDone(const GURL& gurl,
                                                            Client* client) {
-  safe_browsing::SBThreatTypeSet expected_threats =
-      safe_browsing::CreateSBThreatTypeSet(
-          {safe_browsing::SB_THREAT_TYPE_URL_MALWARE,
-           safe_browsing::SB_THREAT_TYPE_URL_PHISHING});
-
-  // TODO(nparker): Replace SafeBrowsingCheck w/ a call to
-  // client->OnCheckBrowseUrlResult()
-  safe_browsing::LocalSafeBrowsingDatabaseManager::SafeBrowsingCheck sb_check(
-      std::vector<GURL>(1, gurl), std::vector<safe_browsing::SBFullHash>(),
-      client, safe_browsing::MALWARE, expected_threats);
-  sb_check.url_results[0] = bad_urls_[gurl.spec()];
-  sb_check.OnSafeBrowsingResult();
+  client->OnCheckBrowseUrlResult(gurl, bad_urls_[gurl.spec()],
+                                 safe_browsing::ThreatMetadata());
 }
 
 TestPrerenderContents::TestPrerenderContents(
@@ -286,7 +277,8 @@ TestPrerenderContents::TestPrerenderContents(
     const GURL& url,
     const content::Referrer& referrer,
     Origin origin,
-    FinalStatus expected_final_status)
+    FinalStatus expected_final_status,
+    bool ignore_final_status)
     : PrerenderContents(prerender_manager, profile, url, referrer, origin),
       expected_final_status_(expected_final_status),
       observer_(this),
@@ -294,7 +286,7 @@ TestPrerenderContents::TestPrerenderContents(
       was_hidden_(false),
       was_shown_(false),
       should_be_shown_(expected_final_status == FINAL_STATUS_USED),
-      skip_final_checks_(false) {}
+      skip_final_checks_(ignore_final_status) {}
 
 TestPrerenderContents::~TestPrerenderContents() {
   if (skip_final_checks_)
@@ -528,6 +520,10 @@ TestPrerenderContentsFactory::ExpectPrerenderContents(
   return handle;
 }
 
+void TestPrerenderContentsFactory::IgnorePrerenderContents() {
+  expected_contents_queue_.push_back(ExpectedContents(true));
+}
+
 PrerenderContents* TestPrerenderContentsFactory::CreatePrerenderContents(
     PrerenderManager* prerender_manager,
     Profile* profile,
@@ -539,15 +535,15 @@ PrerenderContents* TestPrerenderContentsFactory::CreatePrerenderContents(
     expected = expected_contents_queue_.front();
     expected_contents_queue_.pop_front();
   }
-  TestPrerenderContents* contents = new TestPrerenderContents(
-      prerender_manager, profile, url, referrer, origin, expected.final_status);
+  TestPrerenderContents* contents =
+      new TestPrerenderContents(prerender_manager, profile, url, referrer,
+                                origin, expected.final_status, expected.ignore);
   if (expected.handle)
     expected.handle->OnPrerenderCreated(contents);
   return contents;
 }
 
-TestPrerenderContentsFactory::ExpectedContents::ExpectedContents()
-    : final_status(FINAL_STATUS_MAX) {}
+TestPrerenderContentsFactory::ExpectedContents::ExpectedContents() {}
 
 TestPrerenderContentsFactory::ExpectedContents::ExpectedContents(
     const ExpectedContents& other) = default;
@@ -556,6 +552,9 @@ TestPrerenderContentsFactory::ExpectedContents::ExpectedContents(
     FinalStatus final_status,
     const base::WeakPtr<TestPrerender>& handle)
     : final_status(final_status), handle(handle) {}
+
+TestPrerenderContentsFactory::ExpectedContents::ExpectedContents(bool ignore)
+    : ignore(ignore) {}
 
 TestPrerenderContentsFactory::ExpectedContents::~ExpectedContents() {}
 
@@ -640,7 +639,8 @@ PrerenderInProcessBrowserTest::GetFakeSafeBrowsingDatabaseManager() {
           .get());
 }
 
-void PrerenderInProcessBrowserTest::SetUpInProcessBrowserTestFixture() {
+void PrerenderInProcessBrowserTest::CreatedBrowserMainParts(
+    content::BrowserMainParts* browser_main_parts) {
   safe_browsing_factory_->SetTestDatabaseManager(
       new test_utils::FakeSafeBrowsingDatabaseManager());
   safe_browsing::SafeBrowsingService::RegisterFactory(

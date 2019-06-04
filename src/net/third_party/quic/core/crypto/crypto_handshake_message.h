@@ -16,7 +16,7 @@
 #include "net/third_party/quic/platform/api/quic_string_piece.h"
 #include "net/third_party/quic/platform/api/quic_uint128.h"
 
-namespace net {
+namespace quic {
 
 // An intermediate format of a handshake message that's convenient for a
 // CryptoFramer to serialize from or parse into.
@@ -35,7 +35,7 @@ class QUIC_EXPORT_PRIVATE CryptoHandshakeMessage {
 
   // GetSerialized returns the serialized form of this message and caches the
   // result. Subsequently altering the message does not invalidate the cache.
-  const QuicData& GetSerialized(Perspective perspective) const;
+  const QuicData& GetSerialized() const;
 
   // MarkDirty invalidates the cache created by |GetSerialized|.
   void MarkDirty();
@@ -126,7 +126,7 @@ class QUIC_EXPORT_PRIVATE CryptoHandshakeMessage {
 
   // DebugString returns a multi-line, string representation of the message
   // suitable for including in debug output.
-  QuicString DebugString(Perspective perspective) const;
+  QuicString DebugString() const;
 
  private:
   // GetPOD is a utility function for extracting a plain-old-data value. If
@@ -138,7 +138,7 @@ class QUIC_EXPORT_PRIVATE CryptoHandshakeMessage {
   // little-endian.
   QuicErrorCode GetPOD(QuicTag tag, void* out, size_t len) const;
 
-  QuicString DebugStringInternal(size_t indent, Perspective perspective) const;
+  QuicString DebugStringInternal(size_t indent) const;
 
   QuicTag tag_;
   QuicTagValueMap tag_value_map_;
@@ -146,10 +146,10 @@ class QUIC_EXPORT_PRIVATE CryptoHandshakeMessage {
   size_t minimum_size_;
 
   // The serialized form of the handshake message. This member is constructed
-  // lasily.
+  // lazily.
   mutable std::unique_ptr<QuicData> serialized_;
 };
 
-}  // namespace net
+}  // namespace quic
 
 #endif  // NET_THIRD_PARTY_QUIC_CORE_CRYPTO_CRYPTO_HANDSHAKE_MESSAGE_H_

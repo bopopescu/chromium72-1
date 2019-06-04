@@ -13,14 +13,14 @@
 #include <string>
 #include <vector>
 
+#include "absl/memory/memory.h"
 #include "media/base/rtputils.h"
 #include "pc/rtptransport.h"
 #include "pc/srtpsession.h"
 #include "rtc_base/asyncpacketsocket.h"
-#include "rtc_base/base64.h"
 #include "rtc_base/copyonwritebuffer.h"
 #include "rtc_base/numerics/safe_conversions.h"
-#include "rtc_base/ptr_util.h"
+#include "rtc_base/third_party/base64/base64.h"
 #include "rtc_base/trace_event.h"
 #include "rtc_base/zero_memory.h"
 
@@ -193,7 +193,7 @@ bool SrtpTransport::SendRtcpPacket(rtc::CopyOnWriteBuffer* packet,
 }
 
 void SrtpTransport::OnRtpPacketReceived(rtc::CopyOnWriteBuffer* packet,
-                                        const rtc::PacketTime& packet_time) {
+                                        int64_t packet_time_us) {
   if (!IsSrtpActive()) {
     RTC_LOG(LS_WARNING)
         << "Inactive SRTP transport received an RTP packet. Drop it.";
@@ -207,16 +207,25 @@ void SrtpTransport::OnRtpPacketReceived(rtc::CopyOnWriteBuffer* packet,
     uint32_t ssrc = 0;
     cricket::GetRtpSeqNum(data, len, &seq_num);
     cricket::GetRtpSsrc(data, len, &ssrc);
-    RTC_LOG(LS_ERROR) << "Failed to unprotect RTP packet: size=" << len
-                      << ", seqnum=" << seq_num << ", SSRC=" << ssrc;
+
+    // Limit the error logging to avoid excessive logs when there are lots of
+    // bad packets.
+    const int kFailureLogThrottleCount = 100;
+    if (decryption_failure_count_ % kFailureLogThrottleCount == 0) {
+      RTC_LOG(LS_ERROR) << "Failed to unprotect RTP packet: size=" << len
+                        << ", seqnum=" << seq_num << ", SSRC=" << ssrc
+                        << ", previous failure count: "
+                        << decryption_failure_count_;
+    }
+    ++decryption_failure_count_;
     return;
   }
   packet->SetSize(len);
-  DemuxPacket(packet, packet_time);
+  DemuxPacket(packet, packet_time_us);
 }
 
 void SrtpTransport::OnRtcpPacketReceived(rtc::CopyOnWriteBuffer* packet,
-                                         const rtc::PacketTime& packet_time) {
+                                         int64_t packet_time_us) {
   if (!IsSrtpActive()) {
     RTC_LOG(LS_WARNING)
         << "Inactive SRTP transport received an RTCP packet. Drop it.";
@@ -233,11 +242,11 @@ void SrtpTransport::OnRtcpPacketReceived(rtc::CopyOnWriteBuffer* packet,
     return;
   }
   packet->SetSize(len);
-  SignalRtcpPacketReceived(packet, packet_time);
+  SignalRtcpPacketReceived(packet, packet_time_us);
 }
 
 void SrtpTransport::OnNetworkRouteChanged(
-    rtc::Optional<rtc::NetworkRoute> network_route) {
+    absl::optional<rtc::NetworkRoute> network_route) {
   // Only append the SRTP overhead when there is a selected network route.
   if (network_route) {
     int srtp_overhead = 0;
@@ -325,11 +334,6 @@ bool SrtpTransport::SetRtcpParams(int send_cs,
     return false;
   }
 
-  if (metrics_observer_) {
-    send_rtcp_session_->SetMetricsObserver(metrics_observer_);
-    recv_rtcp_session_->SetMetricsObserver(metrics_observer_);
-  }
-
   RTC_LOG(LS_INFO) << "SRTCP activated with negotiated parameters:"
                       " send cipher_suite "
                    << send_cs << " recv cipher_suite " << recv_cs;
@@ -357,11 +361,6 @@ void SrtpTransport::ResetParams() {
 void SrtpTransport::CreateSrtpSessions() {
   send_session_.reset(new cricket::SrtpSession());
   recv_session_.reset(new cricket::SrtpSession());
-  if (metrics_observer_) {
-    send_session_->SetMetricsObserver(metrics_observer_);
-    recv_session_->SetMetricsObserver(metrics_observer_);
-  }
-
   if (external_auth_enabled_) {
     send_session_->EnableExternalAuth();
   }
@@ -504,23 +503,6 @@ bool SrtpTransport::ParseKeyParams(const std::string& key_params,
   // sensitive data.
   rtc::ExplicitZeroMemory(&key_str[0], key_str.size());
   return true;
-}
-
-void SrtpTransport::SetMetricsObserver(
-    rtc::scoped_refptr<MetricsObserverInterface> metrics_observer) {
-  metrics_observer_ = metrics_observer;
-  if (send_session_) {
-    send_session_->SetMetricsObserver(metrics_observer_);
-  }
-  if (recv_session_) {
-    recv_session_->SetMetricsObserver(metrics_observer_);
-  }
-  if (send_rtcp_session_) {
-    send_rtcp_session_->SetMetricsObserver(metrics_observer_);
-  }
-  if (recv_rtcp_session_) {
-    recv_rtcp_session_->SetMetricsObserver(metrics_observer_);
-  }
 }
 
 void SrtpTransport::MaybeUpdateWritableState() {

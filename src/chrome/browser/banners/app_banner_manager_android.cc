@@ -27,8 +27,6 @@ using base::android::ConvertJavaStringToUTF16;
 using base::android::ConvertUTF8ToJavaString;
 using base::android::JavaParamRef;
 
-DEFINE_WEB_CONTENTS_USER_DATA_KEY(banners::AppBannerManagerAndroid);
-
 namespace {
 
 // Returns a pointer to the InstallableAmbientBadgeInfoBar if it is currently
@@ -285,7 +283,7 @@ void AppBannerManagerAndroid::ShowBannerUi(WebappInstallSource install_source) {
     ui_delegate_ = AppBannerUiDelegateAndroid::Create(
         GetWeakPtr(), native_app_title_,
         base::android::ScopedJavaLocalRef<jobject>(native_app_data_),
-        primary_icon_, native_app_package_, referrer_);
+        primary_icon_, native_app_package_);
   }
 
   bool banner_shown = false;

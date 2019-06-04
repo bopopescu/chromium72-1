@@ -13,7 +13,9 @@ import urllib
 
 from apiclient import discovery
 from apiclient import errors
+from google.appengine.api import app_identity
 from google.appengine.api import memcache
+from google.appengine.api import oauth
 from google.appengine.api import urlfetch
 from google.appengine.api import urlfetch_errors
 from google.appengine.api import users
@@ -29,11 +31,46 @@ SERVICE_ACCOUNT_KEY = 'service_account'
 EMAIL_SCOPE = 'https://www.googleapis.com/auth/userinfo.email'
 _PROJECT_ID_KEY = 'project_id'
 _DEFAULT_CUSTOM_METRIC_VAL = 1
+OAUTH_SCOPES = (
+    'https://www.googleapis.com/auth/userinfo.email',
+)
+OAUTH_ENDPOINTS = ['/api/', '/add_histograms']
+
+
+def IsDevAppserver():
+  return app_identity.get_application_id() == 'None'
 
 
 def _GetNowRfc3339():
   """Returns the current time formatted per RFC 3339."""
   return time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
+
+
+def GetEmail():
+  """Returns email address of the current user.
+
+  Uses OAuth2 for /api/ requests, otherwise cookies.
+
+  Returns:
+    The email address as a string or None if there is no user logged in.
+
+  Raises:
+    OAuthRequestError: The request was not a valid OAuth request.
+    OAuthServiceFailureError: An unknown error occurred.
+  """
+  request_uri = os.environ.get('REQUEST_URI', '')
+  if any(request_uri.startswith(e) for e in OAUTH_ENDPOINTS):
+    # Prevent a CSRF whereby a malicious site posts an api request without an
+    # Authorization header (so oauth.get_current_user() is None), but while the
+    # user is signed in, so their cookies would make users.get_current_user()
+    # return a non-None user.
+    if 'HTTP_AUTHORIZATION' not in os.environ:
+      # The user is not signed in. Avoid raising OAuthRequestError.
+      return None
+    user = oauth.get_current_user(OAUTH_SCOPES)
+  else:
+    user = users.get_current_user()
+  return user.email() if user else None
 
 
 def TickMonitoringCustomMetric(metric_name):
@@ -184,7 +221,7 @@ def MostSpecificMatchingPattern(test, pattern_data_tuples):
   if not matching_patterns:
     return None
 
-  if type(test) is ndb.Key:
+  if isinstance(test, ndb.Key):
     test_path = TestPath(test)
   else:
     test_path = test.test_path
@@ -227,7 +264,7 @@ def TestMatchesPattern(test, pattern):
   """
   if not test:
     return False
-  if type(test) is ndb.Key:
+  if isinstance(test, ndb.Key):
     test_path = TestPath(test)
   else:
     test_path = test.test_path
@@ -278,7 +315,7 @@ def GetTestContainerKey(test):
     ndb.Key('TestContainer', test path)
   """
   test_path = None
-  if type(test) is ndb.Key:
+  if isinstance(test, ndb.Key):
     test_path = TestPath(test)
   else:
     test_path = test.test_path
@@ -337,27 +374,29 @@ def MinimumRange(ranges):
 
 def IsInternalUser():
   """Checks whether the user should be able to see internal-only data."""
-  username = users.get_current_user()
-  if not username:
+  if IsDevAppserver():
+    return True
+  email = GetEmail()
+  if not email:
     return False
-  cached = GetCachedIsInternalUser(username)
+  cached = GetCachedIsInternalUser(email)
   if cached is not None:
     return cached
-  is_internal_user = IsGroupMember(identity=username, group='chromeperf-access')
-  SetCachedIsInternalUser(username, is_internal_user)
+  is_internal_user = IsGroupMember(identity=email, group='chromeperf-access')
+  SetCachedIsInternalUser(email, is_internal_user)
   return is_internal_user
 
 
-def GetCachedIsInternalUser(username):
-  return memcache.get(_IsInternalUserCacheKey(username))
+def GetCachedIsInternalUser(email):
+  return memcache.get(_IsInternalUserCacheKey(email))
 
 
-def SetCachedIsInternalUser(username, value):
-  memcache.add(_IsInternalUserCacheKey(username), value, time=60*60*24)
+def SetCachedIsInternalUser(email, value):
+  memcache.add(_IsInternalUserCacheKey(email), value, time=60*60*24)
 
 
-def _IsInternalUserCacheKey(username):
-  return 'is_internal_user_%s' % username
+def _IsInternalUserCacheKey(email):
+  return 'is_internal_user_%s' % email
 
 
 def IsGroupMember(identity, group):
@@ -422,14 +461,20 @@ def ServiceAccountHttp(scope=EMAIL_SCOPE, timeout=None):
 
 def IsValidSheriffUser():
   """Checks whether the user should be allowed to triage alerts."""
-  user = users.get_current_user()
+  email = GetEmail()
+  if not email:
+    return False
+
   sheriff_domains = stored_object.Get(SHERIFF_DOMAINS_KEY)
-  if user:
-    domain_matched = sheriff_domains and any(
-        user.email().endswith('@' + domain) for domain in sheriff_domains)
-    return domain_matched or IsGroupMember(
-        identity=user, group='project-chromium-tryjob-access')
-  return False
+  domain_matched = sheriff_domains and any(
+      email.endswith('@' + domain) for domain in sheriff_domains)
+  return domain_matched or IsTryjobUser()
+
+
+def IsTryjobUser():
+  email = GetEmail()
+  return bool(email) and IsGroupMember(
+      identity=email, group='project-chromium-tryjob-access')
 
 
 def GetIpWhitelist():
@@ -470,7 +515,7 @@ def Validate(expected, actual):
     actual: A value.
   """
   def IsValidType(expected, actual):
-    if type(expected) is type and type(actual) is not expected:
+    if isinstance(expected, type) and not isinstance(actual, expected):
       try:
         expected(actual)
       except ValueError:
@@ -528,7 +573,7 @@ def FetchURL(request_url, skip_status_code=False):
   except urlfetch_errors.DownloadError as err:
     # DownloadError is raised to indicate a non-specific failure when there
     # was not a 4xx or 5xx status code.
-    logging.error(err)
+    logging.error('DownloadError: %r', err)
     return None
   if skip_status_code:
     return response

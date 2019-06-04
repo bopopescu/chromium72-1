@@ -11,7 +11,6 @@ import android.net.Uri;
 import android.support.annotation.NonNull;
 import android.support.customtabs.CustomTabsService;
 import android.support.customtabs.CustomTabsService.Relation;
-import android.support.v4.util.Pair;
 import android.text.TextUtils;
 
 import org.chromium.base.CommandLine;
@@ -26,9 +25,8 @@ import org.chromium.base.library_loader.LibraryProcessType;
 import org.chromium.chrome.browser.ChromeSwitches;
 import org.chromium.chrome.browser.IntentHandler;
 import org.chromium.chrome.browser.UrlConstants;
-import org.chromium.chrome.browser.preferences.ChromePreferenceManager;
 import org.chromium.chrome.browser.profiles.Profile;
-import org.chromium.content.browser.BrowserStartupController;
+import org.chromium.content_public.browser.BrowserStartupController;
 
 import java.io.ByteArrayInputStream;
 import java.io.InputStream;
@@ -38,11 +36,7 @@ import java.security.cert.CertificateEncodingException;
 import java.security.cert.CertificateException;
 import java.security.cert.CertificateFactory;
 import java.security.cert.X509Certificate;
-import java.util.HashMap;
-import java.util.HashSet;
 import java.util.Locale;
-import java.util.Map;
-import java.util.Set;
 
 /**
  * Used to verify postMessage origin for a designated package name.
@@ -61,12 +55,11 @@ public class OriginVerifier {
     private static final String USE_AS_ORIGIN = "delegate_permission/common.use_as_origin";
     private static final String HANDLE_ALL_URLS = "delegate_permission/common.handle_all_urls";
 
-    private static Map<Pair<String, Integer>, Set<Origin>> sPackageToCachedOrigins;
     private final OriginVerificationListener mListener;
     private final String mPackageName;
     private final String mSignatureFingerprint;
     private final @Relation int mRelation;
-    private long mNativeOriginVerifier = 0;
+    private long mNativeOriginVerifier;
     private Origin mOrigin;
 
     /** Small helper class to post a result of origin verification. */
@@ -94,8 +87,7 @@ public class OriginVerifier {
     /** Clears all known relations. */
     @VisibleForTesting
     public static void clearCachedVerificationsForTesting() {
-        ThreadUtils.assertOnUiThread();
-        if (sPackageToCachedOrigins != null) sPackageToCachedOrigins.clear();
+        VerificationResultStore.clearStoredRelationships();
     }
 
     /**
@@ -107,15 +99,7 @@ public class OriginVerifier {
     public static void addVerifiedOriginForPackage(
             String packageName, Origin origin, @Relation int relation) {
         Log.d(TAG, "Adding: %s for %s", packageName, origin);
-        ThreadUtils.assertOnUiThread();
-        if (sPackageToCachedOrigins == null) sPackageToCachedOrigins = new HashMap<>();
-        Set<Origin> cachedOrigins =
-                sPackageToCachedOrigins.get(new Pair<>(packageName, relation));
-        if (cachedOrigins == null) {
-            cachedOrigins = new HashSet<>();
-            sPackageToCachedOrigins.put(new Pair<>(packageName, relation), cachedOrigins);
-        }
-        cachedOrigins.add(origin);
+        VerificationResultStore.addRelationship(new Relationship(packageName, origin, relation));
 
         TrustedWebActivityClient.registerClient(ContextUtils.getApplicationContext(),
                 origin, packageName);
@@ -132,11 +116,8 @@ public class OriginVerifier {
      * @param relation The Digital Asset Links relation to verify for.
      */
     public static boolean isValidOrigin(String packageName, Origin origin, @Relation int relation) {
-        ThreadUtils.assertOnUiThread();
-        if (sPackageToCachedOrigins == null) return false;
-        Set<Origin> cachedOrigins = sPackageToCachedOrigins.get(new Pair<>(packageName, relation));
-        if (cachedOrigins == null) return false;
-        return cachedOrigins.contains(origin);
+        return VerificationResultStore.isRelationshipSaved(
+                new Relationship(packageName, origin, relation));
     }
 
     /**
@@ -197,7 +178,7 @@ public class OriginVerifier {
                 || !UrlConstants.HTTPS_SCHEME.equals(scheme.toLowerCase(Locale.US))) {
             Log.i(TAG, "Verification failed for %s as not https.", origin);
             BrowserServicesMetrics.recordVerificationResult(
-                    BrowserServicesMetrics.VERIFICATION_RESULT_HTTPS_FAILURE);
+                    BrowserServicesMetrics.VerificationResult.HTTPS_FAILURE);
             ThreadUtils.runOnUiThread(new VerifiedCallback(false, null));
             return;
         }
@@ -206,7 +187,7 @@ public class OriginVerifier {
         if (isValidOrigin(mPackageName, origin, mRelation)) {
             Log.i(TAG, "Verification succeeded for %s, it was cached.", origin);
             BrowserServicesMetrics.recordVerificationResult(
-                    BrowserServicesMetrics.VERIFICATION_RESULT_CACHED_SUCCESS);
+                    BrowserServicesMetrics.VerificationResult.CACHED_SUCCESS);
             ThreadUtils.runOnUiThread(new VerifiedCallback(true, null));
             return;
         }
@@ -235,7 +216,7 @@ public class OriginVerifier {
                 mSignatureFingerprint, mOrigin.toString(), relationship);
         if (!requestSent) {
             BrowserServicesMetrics.recordVerificationResult(
-                    BrowserServicesMetrics.VERIFICATION_RESULT_REQUEST_FAILURE);
+                    BrowserServicesMetrics.VerificationResult.REQUEST_FAILURE);
             ThreadUtils.runOnUiThread(new VerifiedCallback(false, false));
         }
     }
@@ -312,12 +293,12 @@ public class OriginVerifier {
         switch (result) {
             case RelationshipCheckResult.SUCCESS:
                 BrowserServicesMetrics.recordVerificationResult(
-                        BrowserServicesMetrics.VERIFICATION_RESULT_ONLINE_SUCCESS);
+                        BrowserServicesMetrics.VerificationResult.ONLINE_SUCCESS);
                 originVerified(true, true);
                 break;
             case RelationshipCheckResult.FAILURE:
                 BrowserServicesMetrics.recordVerificationResult(
-                        BrowserServicesMetrics.VERIFICATION_RESULT_ONLINE_FAILURE);
+                        BrowserServicesMetrics.VerificationResult.ONLINE_FAILURE);
                 originVerified(false, true);
                 break;
             case RelationshipCheckResult.NO_CONNECTION:
@@ -350,40 +331,37 @@ public class OriginVerifier {
      * Saves the result of a verification to Preferences so we can reuse it when offline.
      */
     private void saveVerificationResult(boolean originVerified) {
-        String link = relationshipToString(mPackageName, mOrigin, mRelation);
-        Set<String> savedLinks;
-        try (StrictModeContext unused = StrictModeContext.allowDiskReads()) {
-            savedLinks = ChromePreferenceManager.getInstance().getVerifiedDigitalAssetLinks();
-        }
+        Relationship relationship = new Relationship(mPackageName, mOrigin, mRelation);
         if (originVerified) {
-            savedLinks.add(link);
+            VerificationResultStore.addRelationship(relationship);
         } else {
-            savedLinks.remove(link);
+            VerificationResultStore.removeRelationship(relationship);
         }
-        ChromePreferenceManager.getInstance().setVerifiedDigitalAssetLinks(savedLinks);
     }
 
     /**
      * Checks for a previously saved verification result.
      */
     private void checkForSavedResult() {
-        String link = relationshipToString(mPackageName, mOrigin, mRelation);
         try (StrictModeContext unused = StrictModeContext.allowDiskReads()) {
-            Set<String> savedLinks =
-                    ChromePreferenceManager.getInstance().getVerifiedDigitalAssetLinks();
-            boolean verified = savedLinks.contains(link);
+            boolean verified = VerificationResultStore.isRelationshipSaved(
+                    new Relationship(mPackageName, mOrigin, mRelation));
 
             BrowserServicesMetrics.recordVerificationResult(verified
-                    ? BrowserServicesMetrics.VERIFICATION_RESULT_OFFLINE_SUCCESS
-                    : BrowserServicesMetrics.VERIFICATION_RESULT_OFFLINE_FAILURE);
+                            ? BrowserServicesMetrics.VerificationResult.OFFLINE_SUCCESS
+                            : BrowserServicesMetrics.VerificationResult.OFFLINE_FAILURE);
 
             originVerified(verified, false);
         }
     }
 
-    private static String relationshipToString(String packageName, Origin origin, int relation) {
-        // Neither package names nor origins contain commas.
-        return packageName + "," + origin + "," + relation;
+    /**
+     * Removes any data about sites visited from static variables and Android Preferences.
+     */
+    @CalledByNative
+    public static void clearBrowsingData() {
+        // TODO(peconn): Move this over to VerificationResultStore.
+        VerificationResultStore.clearStoredRelationships();
     }
 
     private native long nativeInit(Profile profile);

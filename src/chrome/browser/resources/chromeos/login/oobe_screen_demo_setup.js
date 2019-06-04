@@ -8,24 +8,48 @@
 
 login.createScreen('DemoSetupScreen', 'demo-setup', function() {
   return {
-    UI_STATE: {ERROR: -1, DEFAULT: 0, PROCESSING: 1},
-    EXTERNAL_API: ['setState'],
+    EXTERNAL_API: ['onSetupSucceeded', 'onSetupFailed'],
 
+    /**
+     * Demo setup module.
+     * @private
+     */
+    demoSetupModule_: null,
+
+
+    /** @override */
+    decorate: function() {
+      this.demoSetupModule_ = $('demo-setup-content');
+    },
+
+    /** Returns a control which should receive an initial focus. */
     get defaultControl() {
-      return $('demo-setup-content');
+      return this.demoSetupModule_;
+    },
+
+    /** Called after resources are updated. */
+    updateLocalizedContent: function() {
+      this.demoSetupModule_.updateLocalizedContent();
     },
 
     /** @override */
-    onBeforeShow: function(data) {
-      this.setState(this.UI_STATE.DEFAULT);
+    onBeforeShow: function() {
+      this.demoSetupModule_.reset();
+    },
+
+    /** Called when demo mode setup succeeded. */
+    onSetupSucceeded: function() {
+      this.demoSetupModule_.onSetupSucceeded();
     },
 
     /**
-     * Sets state of the UI.
-     * @param {number} state.
+     * Called when demo mode setup failed.
+     * @param {string} message Error message to be displayed to the user.
+     * @param {boolean} isPowerwashRequired Whether powerwash is required to
+     *     recover from the error.
      */
-    setState: function(state) {
-      this.state_ = state;
+    onSetupFailed: function(message, isPowerwashRequired) {
+      this.demoSetupModule_.onSetupFailed(message, isPowerwashRequired);
     },
   };
 });

@@ -9,7 +9,7 @@
 #include "net/third_party/quic/platform/api/quic_containers.h"
 #include "net/third_party/quic/platform/api/quic_string.h"
 
-namespace net {
+namespace quic {
 
 class QuicSession;
 
@@ -53,6 +53,18 @@ class QUIC_EXPORT_PRIVATE QuicControlFrameManager {
   // immediately.
   void WriteOrBufferBlocked(QuicStreamId id);
 
+  // Tries to send an IETF-QUIC STOP_SENDING frame. The frame is buffered if it
+  // can not be sent immediately.
+  void WriteOrBufferStopSending(uint16_t code, QuicStreamId stream_id);
+
+  // Tries to send a STREAM_ID_BLOCKED Frame. Buffers the frame if it cannot be
+  // sent immediately.
+  void WriteOrBufferStreamIdBlocked(QuicStreamId id);
+
+  // Tries to send a MAX_STREAM_ID Frame. Buffers the frame if it cannot be sent
+  // immediately.
+  void WriteOrBufferMaxStreamId(QuicStreamId id);
+
   // Sends a PING_FRAME. Do not send PING if there is buffered frames.
   void WritePing();
 
@@ -83,6 +95,12 @@ class QUIC_EXPORT_PRIVATE QuicControlFrameManager {
   // sent.
   bool WillingToWrite() const;
 
+  // TODO(wub): Remove this function once
+  // quic_reloadable_flag_quic_donot_retransmit_old_window_update is deprecated.
+  bool donot_retransmit_old_window_updates() const {
+    return donot_retransmit_old_window_updates_;
+  }
+
  private:
   friend class test::QuicControlFrameManagerPeer;
 
@@ -95,6 +113,10 @@ class QUIC_EXPORT_PRIVATE QuicControlFrameManager {
   // Writes pending retransmissions if any.
   void WritePendingRetransmission();
 
+  // Called when frame with |id| gets acked. Returns true if |id| gets acked for
+  // the first time, return false otherwise.
+  bool OnControlFrameIdAcked(QuicControlFrameId id);
+
   // Retrieves the next pending retransmission. This must only be called when
   // there are pending retransmissions.
   QuicFrame NextPendingRetransmission() const;
@@ -102,6 +124,11 @@ class QUIC_EXPORT_PRIVATE QuicControlFrameManager {
   // Returns true if there are buffered frames waiting to be sent for the first
   // time.
   bool HasBufferedFrames() const;
+
+  // Writes or buffers a control frame.  Frame is buffered if there already
+  // are frames waiting to be sent. If no others waiting, will try to send the
+  // frame.
+  void WriteOrBufferQuicFrame(QuicFrame frame);
 
   QuicDeque<QuicFrame> control_frames_;
 
@@ -121,8 +148,15 @@ class QUIC_EXPORT_PRIVATE QuicControlFrameManager {
 
   // Pointer to the owning QuicSession object.
   QuicSession* session_;
+
+  // Last sent window update frame for each stream.
+  QuicSmallMap<QuicStreamId, QuicControlFrameId, 10> window_update_frames_;
+
+  // Latched value of
+  // FLAGS_quic_reloadable_flag_quic_donot_retransmit_old_window_update2.
+  const bool donot_retransmit_old_window_updates_;
 };
 
-}  // namespace net
+}  // namespace quic
 
 #endif  // NET_THIRD_PARTY_QUIC_CORE_QUIC_CONTROL_FRAME_MANAGER_H_

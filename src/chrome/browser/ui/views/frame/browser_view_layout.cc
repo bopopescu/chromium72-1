@@ -4,14 +4,18 @@
 
 #include "chrome/browser/ui/views/frame/browser_view_layout.h"
 
+#include <algorithm>
+
 #include "base/macros.h"
 #include "base/observer_list.h"
+#include "build/build_config.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_finder.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/find_bar/find_bar.h"
 #include "chrome/browser/ui/find_bar/find_bar_controller.h"
+#include "chrome/browser/ui/layout_constants.h"
 #include "chrome/browser/ui/views/bookmarks/bookmark_bar_view.h"
 #include "chrome/browser/ui/views/download/download_shelf_view.h"
 #include "chrome/browser/ui/views/exclusive_access_bubble_views.h"
@@ -21,12 +25,10 @@
 #include "chrome/browser/ui/views/frame/immersive_mode_controller.h"
 #include "chrome/browser/ui/views/frame/top_container_view.h"
 #include "chrome/browser/ui/views/infobars/infobar_container_view.h"
-#include "chrome/browser/ui/views/location_bar/location_bar_view.h"
 #include "chrome/browser/ui/views/tabs/tab_strip.h"
 #include "chrome/browser/ui/views/toolbar/toolbar_view.h"
 #include "components/web_modal/web_contents_modal_dialog_host.h"
 #include "ui/base/hit_test.h"
-#include "ui/base/material_design/material_design_controller.h"
 #include "ui/gfx/geometry/point.h"
 #include "ui/gfx/geometry/size.h"
 #include "ui/gfx/scrollbar_size.h"
@@ -114,7 +116,7 @@ class BrowserViewLayout::WebContentsModalDialogHostViews
 
   BrowserViewLayout* const browser_view_layout_;
 
-  base::ObserverList<ModalDialogHostObserver> observer_list_;
+  base::ObserverList<ModalDialogHostObserver>::Unchecked observer_list_;
 
   DISALLOW_COPY_AND_ASSIGN(WebContentsModalDialogHostViews);
 };
@@ -168,7 +170,7 @@ WebContentsModalDialogHost*
   return dialog_host_.get();
 }
 
-gfx::Size BrowserViewLayout::GetMinimumSize() {
+gfx::Size BrowserViewLayout::GetMinimumSize(const views::View* host) const {
   gfx::Size tabstrip_size(
       browser()->SupportsWindowFeature(Browser::FEATURE_TABSTRIP) ?
       tab_strip_->GetMinimumSize() : gfx::Size());
@@ -184,11 +186,17 @@ gfx::Size BrowserViewLayout::GetMinimumSize() {
     bookmark_bar_size.Enlarge(0, -bookmark_bar_->GetToolbarOverlap());
   }
   gfx::Size infobar_container_size(infobar_container_->GetMinimumSize());
-  // TODO: Adjust the minimum height for the find bar.
+  // TODO(pkotwicz): Adjust the minimum height for the find bar.
 
   gfx::Size contents_size(contents_container_->GetMinimumSize());
+  // Prevent having a 0x0 sized-contents as this can allow the window to be
+  // resized down such that it's invisible and can no longer accept events.
+  // Use a very small 1x1 size to allow the user and the web contents to be able
+  // to resize the window as small as possible without introducing bugs.
+  // https://crbug.com/847179.
+  contents_size.SetToMax(gfx::Size(1, 1));
 
-  int min_height = delegate_->GetTopInsetInBrowserView(false) +
+  int min_height = delegate_->GetTopInsetInBrowserView() +
       tabstrip_size.height() + toolbar_size.height() +
       bookmark_bar_size.height() + infobar_container_size.height() +
       contents_size.height();
@@ -215,26 +223,16 @@ gfx::Rect BrowserViewLayout::GetFindBarBoundingBox() const {
   // to the Toolbar.
 
   BrowserView* browser_view = BrowserView::GetBrowserViewForBrowser(browser_);
-  LocationBarView* location_bar_view = browser_view->GetLocationBarView();
-
-  // Check for the presence of a visible OmniBox/location bar.
-  const bool has_location_bar =
-      browser_->SupportsWindowFeature(Browser::FEATURE_LOCATIONBAR) &&
-      location_bar_view && location_bar_view->visible() &&
-      (!immersive_mode_controller_->IsEnabled() ||
-       immersive_mode_controller_->IsRevealed());
 
   gfx::Rect bounding_box;
-  // If the OmniBox/location bar is visible, anchor the find bar bounding box
-  // to its bottom edge.
-  if (has_location_bar) {
-    // The bounding box should be the area right below the OmniBox/location bar.
-    bounding_box = location_bar_view->ConvertRectToWidget(
-        location_bar_view->GetLocalBounds());
-    bounding_box.Inset(0, location_bar_view->height(), 0,
-                       -contents_container_->height());
-    return bounding_box;
+  if (!immersive_mode_controller_->IsEnabled() ||
+      immersive_mode_controller_->IsRevealed()) {
+    bounding_box =
+        browser_view->toolbar_button_provider()->GetFindBarBoundingBox(
+            contents_container_->height());
   }
+  if (!bounding_box.IsEmpty())
+    return bounding_box;
 
   // Otherwise, use the contents container minus any infobars and detached
   // bookmark bar from the top and a scrollbar width from the appropriate edge.
@@ -324,21 +322,12 @@ int BrowserViewLayout::NonClientHitTest(const gfx::Point& point) {
 
 void BrowserViewLayout::Layout(views::View* browser_view) {
   vertical_layout_rect_ = browser_view->GetLocalBounds();
-  int top = LayoutTabStripRegion(delegate_->GetTopInsetInBrowserView(false));
+  int top_inset = delegate_->GetTopInsetInBrowserView();
+  int top = LayoutTabStripRegion(top_inset);
   if (delegate_->IsTabStripVisible()) {
-    // By passing true to GetTopInsetInBrowserView(), we position the tab
-    // background to vertically align with the frame background image of a
-    // restored-mode frame, even in a maximized window.  Then in the frame code,
-    // we position the frame so the portion of the image that's behind the
-    // restored-mode tabstrip is always behind the tabstrip.  Together these
-    // ensure that the tab and frame images are always aligned, and that their
-    // relative alignment with the toolbar image is always the same, so themes
-    // which try to align all three will look correct in both restored and
-    // maximized windows.
-    tab_strip_->SetBackgroundOffset(gfx::Point(
+    tab_strip_->SetBackgroundOffset(
         tab_strip_->GetMirroredX() + browser_view_->GetMirroredX() +
-            delegate_->GetThemeBackgroundXInset(),
-        browser_view_->y() + delegate_->GetTopInsetInBrowserView(true)));
+            delegate_->GetThemeBackgroundXInset());
   }
   top = LayoutToolbar(top);
 
@@ -347,13 +336,7 @@ void BrowserViewLayout::Layout(views::View* browser_view) {
   // Top container requires updated toolbar and bookmark bar to compute bounds.
   UpdateTopContainerBounds();
 
-  int bottom = LayoutDownloadShelf(browser_view->height());
-  // Treat a detached bookmark bar as if the web contents container is shifted
-  // upwards and overlaps it.
-  int active_top_margin = GetContentsOffsetForBookmarkBar();
-  contents_layout_manager_->SetActiveTopMargin(active_top_margin);
-  top -= active_top_margin;
-  LayoutContentsContainerView(top, bottom);
+  LayoutContentsContainerView(top, LayoutDownloadShelf(browser_view->height()));
 
   // This must be done _after_ we lay out the WebContents since this
   // code calls back into us to find the bounding box the find bar
@@ -403,7 +386,7 @@ int BrowserViewLayout::LayoutTabStripRegion(int top) {
   tab_strip_->SetVisible(true);
   tab_strip_->SetBoundsRect(tabstrip_bounds);
 
-  return tabstrip_bounds.bottom();
+  return tabstrip_bounds.bottom() - GetLayoutConstant(TABSTRIP_TOOLBAR_OVERLAP);
 }
 
 int BrowserViewLayout::LayoutToolbar(int top) {
@@ -446,7 +429,7 @@ int BrowserViewLayout::LayoutBookmarkBar(int top) {
     return y;
   }
 
-  bookmark_bar_->set_infobar_visible(InfobarVisible());
+  bookmark_bar_->SetInfoBarVisible(IsInfobarVisible());
   int bookmark_bar_height = bookmark_bar_->GetPreferredSize().height();
   y -= bookmark_bar_->GetToolbarOverlap();
   bookmark_bar_->SetBounds(vertical_layout_rect_.x(),
@@ -460,12 +443,17 @@ int BrowserViewLayout::LayoutBookmarkBar(int top) {
 }
 
 int BrowserViewLayout::LayoutInfoBar(int top) {
-  // In immersive fullscreen, the infobar always starts near the top of the
-  // screen.
-  if (immersive_mode_controller_->IsEnabled())
-    top = browser_view_->y();
+  // In immersive fullscreen or when top-chrome is fully hidden due to the page
+  // gesture scroll slide behavior, the infobar always starts near the top of
+  // the screen.
+  if (immersive_mode_controller_->IsEnabled() ||
+      (delegate_->IsTopControlsSlideBehaviorEnabled() &&
+       delegate_->GetTopControlsSlideBehaviorShownRatio() == 0.f)) {
+    // Can be null in tests.
+    top = browser_view_ ? browser_view_->y() : 0;
+  }
 
-  infobar_container_->SetVisible(InfobarVisible());
+  infobar_container_->SetVisible(IsInfobarVisible());
   infobar_container_->SetBounds(
       vertical_layout_rect_.x(), top, vertical_layout_rect_.width(),
       infobar_container_->GetPreferredSize().height());
@@ -503,29 +491,23 @@ void BrowserViewLayout::UpdateTopContainerBounds() {
   // Ensure that the top container view reaches the topmost view in the
   // ClientView because the bounds of the top container view are used in
   // layout and we assume that this is the case.
-  height = std::max(height, delegate_->GetTopInsetInBrowserView(false));
+  height = std::max(height, delegate_->GetTopInsetInBrowserView());
 
   gfx::Rect top_container_bounds(vertical_layout_rect_.width(), height);
 
-  // If the immersive mode controller is animating the top container, it may be
-  // partly offscreen.
-  top_container_bounds.set_y(
-      immersive_mode_controller_->GetTopContainerVerticalOffset(
-          top_container_bounds.size()));
-  top_container_->SetBoundsRect(top_container_bounds);
-}
-
-int BrowserViewLayout::GetContentsOffsetForBookmarkBar() {
-  // If the bookmark bar is hidden or attached to the omnibox the web contents
-  // will appear directly underneath it and does not need an offset.
-  if (!bookmark_bar_ ||
-      !delegate_->IsBookmarkBarVisible() ||
-      !bookmark_bar_->IsDetached()) {
-    return 0;
+  if (delegate_->IsTopControlsSlideBehaviorEnabled()) {
+    // If the top controls are fully hidden, then it's positioned outside the
+    // views' bounds.
+    const float ratio = delegate_->GetTopControlsSlideBehaviorShownRatio();
+    top_container_bounds.set_y(ratio == 0 ? -height : 0);
+  } else {
+    // If the immersive mode controller is animating the top container, it may
+    // be partly offscreen.
+    top_container_bounds.set_y(
+        immersive_mode_controller_->GetTopContainerVerticalOffset(
+            top_container_bounds.size()));
   }
-
-  // Offset for the detached bookmark bar.
-  return bookmark_bar_->height();
+  top_container_->SetBoundsRect(top_container_bounds);
 }
 
 int BrowserViewLayout::LayoutDownloadShelf(int bottom) {
@@ -543,7 +525,7 @@ int BrowserViewLayout::LayoutDownloadShelf(int bottom) {
   return bottom;
 }
 
-bool BrowserViewLayout::InfobarVisible() const {
+bool BrowserViewLayout::IsInfobarVisible() const {
   // Cast to a views::View to access GetPreferredSize().
   views::View* infobar_container = infobar_container_;
   // NOTE: Can't check if the size IsEmpty() since it's always 0-width.

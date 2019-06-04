@@ -8,7 +8,7 @@
 #include "base/macros.h"
 #include "net/third_party/quic/core/quic_packets.h"
 
-namespace net {
+namespace quic {
 
 class QuicPacketCreator;
 class QuicPacketGenerator;
@@ -17,14 +17,13 @@ namespace test {
 
 class QuicPacketGeneratorPeer {
  public:
-  static QuicPacketCreator* GetPacketCreator(QuicPacketGenerator* generator);
+  QuicPacketGeneratorPeer() = delete;
 
- private:
-  DISALLOW_COPY_AND_ASSIGN(QuicPacketGeneratorPeer);
+  static QuicPacketCreator* GetPacketCreator(QuicPacketGenerator* generator);
 };
 
 }  // namespace test
 
-}  // namespace net
+}  // namespace quic
 
 #endif  // NET_THIRD_PARTY_QUIC_TEST_TOOLS_QUIC_PACKET_GENERATOR_PEER_H_

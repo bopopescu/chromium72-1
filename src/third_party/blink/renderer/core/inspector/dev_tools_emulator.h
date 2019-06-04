@@ -17,15 +17,14 @@
 
 namespace blink {
 
-class IntPoint;
 class IntRect;
 class TransformationMatrix;
-class WebInputEvent;
 class WebViewImpl;
 
 class CORE_EXPORT DevToolsEmulator final
     : public GarbageCollectedFinalized<DevToolsEmulator> {
  public:
+  explicit DevToolsEmulator(WebViewImpl*);
   ~DevToolsEmulator();
   static DevToolsEmulator* Create(WebViewImpl*);
   void Trace(blink::Visitor*);
@@ -37,6 +36,8 @@ class CORE_EXPORT DevToolsEmulator final
   void SetViewportStyle(WebViewportStyle);
   void SetPluginsEnabled(bool);
   void SetScriptEnabled(bool);
+  void SetHideScrollbars(bool);
+  void SetCookieEnabled(bool);
   void SetDoubleTapToZoomEnabled(bool);
   bool DoubleTapToZoomEnabled() const;
   void SetAvailablePointerTypes(int);
@@ -53,8 +54,9 @@ class CORE_EXPORT DevToolsEmulator final
   void ResetViewport();
   bool ResizeIsDeviceSizeChange();
   void SetTouchEventEmulationEnabled(bool, int max_touch_points);
-  bool HandleInputEvent(const WebInputEvent&);
   void SetScriptExecutionDisabled(bool);
+  void SetScrollbarsHidden(bool);
+  void SetDocumentCookieDisabled(bool);
 
   // Notify the DevToolsEmulator about a scroll or scale change of the main
   // frame. Updates the transform for a viewport override.
@@ -65,8 +67,6 @@ class CORE_EXPORT DevToolsEmulator final
   base::Optional<IntRect> VisibleContentRectForPainting() const;
 
  private:
-  explicit DevToolsEmulator(WebViewImpl*);
-
   void EnableMobileEmulation();
   void DisableMobileEmulation();
 
@@ -112,11 +112,15 @@ class CORE_EXPORT DevToolsEmulator final
   bool double_tap_to_zoom_enabled_;
   bool original_device_supports_touch_;
   int original_max_touch_points_;
-  std::unique_ptr<IntPoint> last_pinch_anchor_css_;
-  std::unique_ptr<IntPoint> last_pinch_anchor_dip_;
 
   bool embedder_script_enabled_;
   bool script_execution_disabled_;
+
+  bool embedder_hide_scrollbars_;
+  bool scrollbars_hidden_;
+
+  bool embedder_cookie_enabled_;
+  bool document_cookie_disabled_;
 };
 
 }  // namespace blink

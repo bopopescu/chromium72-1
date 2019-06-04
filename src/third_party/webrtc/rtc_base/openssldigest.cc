@@ -10,7 +10,7 @@
 
 #include "rtc_base/openssldigest.h"
 
-#include "rtc_base/checks.h"
+#include "rtc_base/checks.h"  // RTC_DCHECK, RTC_CHECK
 #include "rtc_base/openssl.h"
 
 namespace rtc {
@@ -80,8 +80,7 @@ bool OpenSSLDigest::GetDigestEVP(const std::string& algorithm,
   return true;
 }
 
-bool OpenSSLDigest::GetDigestName(const EVP_MD* md,
-                                  std::string* algorithm) {
+bool OpenSSLDigest::GetDigestName(const EVP_MD* md, std::string* algorithm) {
   RTC_DCHECK(md != nullptr);
   RTC_DCHECK(algorithm != nullptr);
 
@@ -108,7 +107,7 @@ bool OpenSSLDigest::GetDigestName(const EVP_MD* md,
 
 bool OpenSSLDigest::GetDigestSize(const std::string& algorithm,
                                   size_t* length) {
-  const EVP_MD *md;
+  const EVP_MD* md;
   if (!GetDigestEVP(algorithm, &md))
     return false;
 

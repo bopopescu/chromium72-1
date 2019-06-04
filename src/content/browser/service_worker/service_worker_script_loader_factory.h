@@ -6,6 +6,8 @@
 #define CONTENT_BROWSER_SERVICE_WORKER_SERVICE_WORKER_SCRIPT_LOADER_FACTORY_H_
 
 #include "base/macros.h"
+#include "content/common/content_export.h"
+#include "mojo/public/cpp/bindings/binding_set.h"
 #include "services/network/public/mojom/url_loader_factory.mojom.h"
 
 namespace network {
@@ -25,11 +27,12 @@ class ServiceWorkerProviderHost;
 // service worker. For installed workers, service worker script streaming
 // (ServiceWorkerInstalledScriptsSender) is typically used instead. However,
 // this factory can still be used when an installed worker imports a
-// non-installed script (https://crbug.com/719052).
+// non-installed script. In this case, this factory just returns a network
+// error as the spec disallows it.
 //
 // This factory creates either a ServiceWorkerNewScriptLoader or a
 // ServiceWorkerInstalledScriptLoader to load a script.
-class ServiceWorkerScriptLoaderFactory
+class CONTENT_EXPORT ServiceWorkerScriptLoaderFactory
     : public network::mojom::URLLoaderFactory {
  public:
   // |loader_factory| is used to load scripts. Typically
@@ -54,12 +57,14 @@ class ServiceWorkerScriptLoaderFactory
   void Clone(network::mojom::URLLoaderFactoryRequest request) override;
 
  private:
-  bool ShouldHandleScriptRequest(
+  bool CheckIfScriptRequestIsValid(
       const network::ResourceRequest& resource_request);
 
   base::WeakPtr<ServiceWorkerContextCore> context_;
   base::WeakPtr<ServiceWorkerProviderHost> provider_host_;
   scoped_refptr<network::SharedURLLoaderFactory> loader_factory_;
+
+  mojo::BindingSet<network::mojom::URLLoaderFactory> bindings_;
 
   DISALLOW_COPY_AND_ASSIGN(ServiceWorkerScriptLoaderFactory);
 };

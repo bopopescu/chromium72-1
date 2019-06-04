@@ -21,11 +21,14 @@ class DisplayClient {
  public:
   virtual ~DisplayClient() {}
   virtual void DisplayOutputSurfaceLost() = 0;
+  // It is expected that |render_pass| would only be modified to insert debug
+  // quads.
   virtual void DisplayWillDrawAndSwap(bool will_draw_and_swap,
-                                      const RenderPassList& render_passes) = 0;
+                                      RenderPassList* render_passes) = 0;
   virtual void DisplayDidDrawAndSwap() = 0;
   virtual void DisplayDidReceiveCALayerParams(
       const gfx::CALayerParams& ca_layer_params) = 0;
+  virtual void DisplayDidCompleteSwapWithSize(const gfx::Size& pixel_size) = 0;
 
   // Notifies that a swap has occured after some latency info with snapshot
   // component reached the display.

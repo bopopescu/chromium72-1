@@ -11,6 +11,7 @@
 #include "base/run_loop.h"
 #include "base/threading/platform_thread.h"
 #include "build/build_config.h"
+#include "net/base/completion_once_callback.h"
 #include "net/base/ip_address.h"
 #include "net/base/ip_endpoint.h"
 #include "net/base/load_timing_info.h"
@@ -212,6 +213,258 @@ TEST_F(TransportClientSocketPoolTest, SetResolvePriorityOnInit) {
                           callback.callback(), &pool_, NetLogWithSource()));
     EXPECT_EQ(priority, host_resolver_->last_request_priority());
   }
+}
+
+TEST_F(TransportClientSocketPoolTest, ReprioritizeRequests) {
+  host_resolver_->set_ondemand_mode(true);
+
+  TestCompletionCallback callback1;
+  ClientSocketHandle handle1;
+  int rv1 = handle1.Init("a", params_, LOW, SocketTag(),
+                         ClientSocketPool::RespectLimits::ENABLED,
+                         callback1.callback(), &pool_, NetLogWithSource());
+  EXPECT_THAT(rv1, IsError(ERR_IO_PENDING));
+
+  TestCompletionCallback callback2;
+  ClientSocketHandle handle2;
+  int rv2 = handle2.Init("a", params_, HIGHEST, SocketTag(),
+                         ClientSocketPool::RespectLimits::ENABLED,
+                         callback2.callback(), &pool_, NetLogWithSource());
+  EXPECT_THAT(rv2, IsError(ERR_IO_PENDING));
+
+  TestCompletionCallback callback3;
+  ClientSocketHandle handle3;
+  int rv3 = handle3.Init("a", params_, LOWEST, SocketTag(),
+                         ClientSocketPool::RespectLimits::ENABLED,
+                         callback3.callback(), &pool_, NetLogWithSource());
+  EXPECT_THAT(rv3, IsError(ERR_IO_PENDING));
+
+  TestCompletionCallback callback4;
+  ClientSocketHandle handle4;
+  int rv4 = handle4.Init("a", params_, MEDIUM, SocketTag(),
+                         ClientSocketPool::RespectLimits::ENABLED,
+                         callback4.callback(), &pool_, NetLogWithSource());
+  EXPECT_THAT(rv4, IsError(ERR_IO_PENDING));
+
+  TestCompletionCallback callback5;
+  ClientSocketHandle handle5;
+  int rv5 = handle5.Init("a", params_, HIGHEST, SocketTag(),
+                         ClientSocketPool::RespectLimits::ENABLED,
+                         callback5.callback(), &pool_, NetLogWithSource());
+  EXPECT_THAT(rv5, IsError(ERR_IO_PENDING));
+
+  TestCompletionCallback callback6;
+  ClientSocketHandle handle6;
+  int rv6 = handle6.Init("a", params_, LOW, SocketTag(),
+                         ClientSocketPool::RespectLimits::ENABLED,
+                         callback6.callback(), &pool_, NetLogWithSource());
+  EXPECT_THAT(rv6, IsError(ERR_IO_PENDING));
+
+  // New jobs are created for each of the first 6 requests with the
+  // corresponding priority.
+  //
+  // Queue of pending requests:
+  // Request  Job  Priority
+  // =======  ===  ========
+  //    2      2   HIGHEST
+  //    5      5   HIGHEST
+  //    4      4   MEDIUM
+  //    1      1   LOW
+  //    6      6   LOW
+  //    3      3   LOWEST
+  EXPECT_EQ(LOW, host_resolver_->request_priority(1));
+  EXPECT_EQ(HIGHEST, host_resolver_->request_priority(2));
+  EXPECT_EQ(LOWEST, host_resolver_->request_priority(3));
+  EXPECT_EQ(MEDIUM, host_resolver_->request_priority(4));
+  EXPECT_EQ(HIGHEST, host_resolver_->request_priority(5));
+  EXPECT_EQ(LOW, host_resolver_->request_priority(6));
+
+  // Inserting a highest-priority request steals the job from the lowest
+  // priority request and reprioritizes it to match the new request.
+  TestCompletionCallback callback7;
+  ClientSocketHandle handle7;
+  int rv7 = handle7.Init("a", params_, HIGHEST, SocketTag(),
+                         ClientSocketPool::RespectLimits::ENABLED,
+                         callback7.callback(), &pool_, NetLogWithSource());
+  EXPECT_THAT(rv7, IsError(ERR_IO_PENDING));
+  // Request  Job  Priority
+  // =======  ===  ========
+  //    2      2   HIGHEST
+  //    5      5   HIGHEST
+  //    7      3   HIGHEST
+  //    4      4   MEDIUM
+  //    1      1   LOW
+  //    6      6   LOW
+  //    3          LOWEST
+  EXPECT_EQ(LOW, host_resolver_->request_priority(1));
+  EXPECT_EQ(HIGHEST, host_resolver_->request_priority(2));
+  EXPECT_EQ(HIGHEST, host_resolver_->request_priority(3));  // reprioritized
+  EXPECT_EQ(MEDIUM, host_resolver_->request_priority(4));
+  EXPECT_EQ(HIGHEST, host_resolver_->request_priority(5));
+  EXPECT_EQ(LOW, host_resolver_->request_priority(6));
+
+  TestCompletionCallback callback8;
+  ClientSocketHandle handle8;
+  int rv8 = handle8.Init("a", params_, HIGHEST, SocketTag(),
+                         ClientSocketPool::RespectLimits::ENABLED,
+                         callback8.callback(), &pool_, NetLogWithSource());
+  EXPECT_THAT(rv8, IsError(ERR_IO_PENDING));
+  // Request  Job  Priority
+  // =======  ===  ========
+  //    2      2   HIGHEST
+  //    5      5   HIGHEST
+  //    7      3   HIGHEST
+  //    8      6   HIGHEST
+  //    4      4   MEDIUM
+  //    1      1   LOW
+  //    6          LOW
+  //    3          LOWEST
+  EXPECT_EQ(LOW, host_resolver_->request_priority(1));
+  EXPECT_EQ(HIGHEST, host_resolver_->request_priority(2));
+  EXPECT_EQ(HIGHEST, host_resolver_->request_priority(3));
+  EXPECT_EQ(MEDIUM, host_resolver_->request_priority(4));
+  EXPECT_EQ(HIGHEST, host_resolver_->request_priority(5));
+  EXPECT_EQ(HIGHEST, host_resolver_->request_priority(6));  // reprioritized
+
+  // A request completes, then the socket is returned to the socket pool and
+  // goes to the highest remaining request. The job from the highest request
+  // should then be reassigned to the first request without a job.
+  host_resolver_->ResolveNow(2);
+  EXPECT_THAT(callback2.WaitForResult(), IsOk());
+  EXPECT_TRUE(handle2.is_initialized());
+  EXPECT_TRUE(handle2.socket());
+  handle2.Reset();
+  EXPECT_THAT(callback5.WaitForResult(), IsOk());
+  EXPECT_TRUE(handle5.is_initialized());
+  EXPECT_TRUE(handle5.socket());
+  // Request  Job  Priority
+  // =======  ===  ========
+  //    7      3   HIGHEST
+  //    8      6   HIGHEST
+  //    4      4   MEDIUM
+  //    1      1   LOW
+  //    6      5   LOW
+  //    3          LOWEST
+  EXPECT_EQ(LOW, host_resolver_->request_priority(1));
+  EXPECT_EQ(HIGHEST, host_resolver_->request_priority(3));
+  EXPECT_EQ(MEDIUM, host_resolver_->request_priority(4));
+  EXPECT_EQ(LOW, host_resolver_->request_priority(5));  // reprioritized
+  EXPECT_EQ(HIGHEST, host_resolver_->request_priority(6));
+
+  // Cancelling a request with a job reassigns the job to a lower request.
+  handle7.Reset();
+  // Request  Job  Priority
+  // =======  ===  ========
+  //    8      6   HIGHEST
+  //    4      4   MEDIUM
+  //    1      1   LOW
+  //    6      5   LOW
+  //    3      3   LOWEST
+  EXPECT_EQ(LOW, host_resolver_->request_priority(1));
+  EXPECT_EQ(LOWEST, host_resolver_->request_priority(3));  // reprioritized
+  EXPECT_EQ(MEDIUM, host_resolver_->request_priority(4));
+  EXPECT_EQ(LOW, host_resolver_->request_priority(5));
+  EXPECT_EQ(HIGHEST, host_resolver_->request_priority(6));
+
+  // Reprioritizing a request changes its job's priority.
+  pool_.SetPriority("a", &handle4, LOWEST);
+  // Request  Job  Priority
+  // =======  ===  ========
+  //    8      6   HIGHEST
+  //    1      1   LOW
+  //    6      5   LOW
+  //    3      3   LOWEST
+  //    4      4   LOWEST
+  EXPECT_EQ(LOW, host_resolver_->request_priority(1));
+  EXPECT_EQ(LOWEST, host_resolver_->request_priority(3));
+  EXPECT_EQ(LOWEST, host_resolver_->request_priority(4));  // reprioritized
+  EXPECT_EQ(LOW, host_resolver_->request_priority(5));
+  EXPECT_EQ(HIGHEST, host_resolver_->request_priority(6));
+
+  pool_.SetPriority("a", &handle3, MEDIUM);
+  // Request  Job  Priority
+  // =======  ===  ========
+  //    8      6   HIGHEST
+  //    3      3   MEDIUM
+  //    1      1   LOW
+  //    6      5   LOW
+  //    4      4   LOWEST
+  EXPECT_EQ(LOW, host_resolver_->request_priority(1));
+  EXPECT_EQ(MEDIUM, host_resolver_->request_priority(3));  // reprioritized
+  EXPECT_EQ(LOWEST, host_resolver_->request_priority(4));
+  EXPECT_EQ(LOW, host_resolver_->request_priority(5));
+  EXPECT_EQ(HIGHEST, host_resolver_->request_priority(6));
+
+  // Host resolution finishes for a lower-down request. The highest request
+  // should get the socket and its job should be reassigned to the lower
+  // request.
+  host_resolver_->ResolveNow(1);
+  EXPECT_THAT(callback8.WaitForResult(), IsOk());
+  EXPECT_TRUE(handle8.is_initialized());
+  EXPECT_TRUE(handle8.socket());
+  // Request  Job  Priority
+  // =======  ===  ========
+  //    3      3   MEDIUM
+  //    1      6   LOW
+  //    6      5   LOW
+  //    4      4   LOWEST
+  EXPECT_EQ(MEDIUM, host_resolver_->request_priority(3));
+  EXPECT_EQ(LOWEST, host_resolver_->request_priority(4));
+  EXPECT_EQ(LOW, host_resolver_->request_priority(5));
+  EXPECT_EQ(LOW, host_resolver_->request_priority(6));  // reprioritized
+
+  // Host resolution finishes for the highest request. Nothing gets
+  // reprioritized.
+  host_resolver_->ResolveNow(3);
+  EXPECT_THAT(callback3.WaitForResult(), IsOk());
+  EXPECT_TRUE(handle3.is_initialized());
+  EXPECT_TRUE(handle3.socket());
+  // Request  Job  Priority
+  // =======  ===  ========
+  //    1      6   LOW
+  //    6      5   LOW
+  //    4      4   LOWEST
+  EXPECT_EQ(LOWEST, host_resolver_->request_priority(4));
+  EXPECT_EQ(LOW, host_resolver_->request_priority(5));
+  EXPECT_EQ(LOW, host_resolver_->request_priority(6));
+
+  host_resolver_->ResolveAllPending();
+  EXPECT_THAT(callback1.WaitForResult(), IsOk());
+  EXPECT_TRUE(handle1.is_initialized());
+  EXPECT_TRUE(handle1.socket());
+  EXPECT_THAT(callback4.WaitForResult(), IsOk());
+  EXPECT_TRUE(handle4.is_initialized());
+  EXPECT_TRUE(handle4.socket());
+  EXPECT_THAT(callback6.WaitForResult(), IsOk());
+  EXPECT_TRUE(handle6.is_initialized());
+  EXPECT_TRUE(handle6.socket());
+}
+
+TEST_F(TransportClientSocketPoolTest, RequestIgnoringLimitsIsNotReprioritized) {
+  TransportClientSocketPool pool(kMaxSockets, 1, host_resolver_.get(),
+                                 &client_socket_factory_, nullptr, nullptr);
+
+  // Creates a job which ignores limits whose priority is MAXIMUM_PRIORITY
+  TestCompletionCallback callback1;
+  ClientSocketHandle handle1;
+  int rv1 = handle1.Init("a", params_, MAXIMUM_PRIORITY, SocketTag(),
+                         ClientSocketPool::RespectLimits::DISABLED,
+                         callback1.callback(), &pool, NetLogWithSource());
+  EXPECT_THAT(rv1, IsError(ERR_IO_PENDING));
+
+  EXPECT_EQ(MAXIMUM_PRIORITY, host_resolver_->request_priority(1));
+
+  TestCompletionCallback callback2;
+  ClientSocketHandle handle2;
+  int rv2 = handle2.Init("a", params_, LOW, SocketTag(),
+                         ClientSocketPool::RespectLimits::ENABLED,
+                         callback2.callback(), &pool, NetLogWithSource());
+  EXPECT_THAT(rv2, IsError(ERR_IO_PENDING));
+
+  // handle2 gets assigned the job, but it is not changed to match the request
+  // priority because it ignores limits.
+  handle1.Reset();
+  EXPECT_EQ(MAXIMUM_PRIORITY, host_resolver_->request_priority(1));
 }
 
 TEST_F(TransportClientSocketPoolTest, InitHostResolutionFailure) {
@@ -489,16 +742,14 @@ class RequestSocketCallback : public TestCompletionCallbackBase {
  public:
   RequestSocketCallback(ClientSocketHandle* handle,
                         TransportClientSocketPool* pool)
-      : handle_(handle),
-        pool_(pool),
-        within_callback_(false),
-        callback_(base::Bind(&RequestSocketCallback::OnComplete,
-                             base::Unretained(this))) {
-  }
+      : handle_(handle), pool_(pool), within_callback_(false) {}
 
   ~RequestSocketCallback() override = default;
 
-  const CompletionCallback& callback() const { return callback_; }
+  CompletionOnceCallback callback() {
+    return base::BindOnce(&RequestSocketCallback::OnComplete,
+                          base::Unretained(this));
+  }
 
  private:
   void OnComplete(int result) {
@@ -525,7 +776,6 @@ class RequestSocketCallback : public TestCompletionCallbackBase {
   ClientSocketHandle* const handle_;
   TransportClientSocketPool* const pool_;
   bool within_callback_;
-  CompletionCallback callback_;
 
   DISALLOW_COPY_AND_ASSIGN(RequestSocketCallback);
 };
@@ -807,9 +1057,6 @@ TEST_F(TransportClientSocketPoolTest, BackupSocketFailAfterStall) {
               IsError(ERR_CONNECTION_FAILED));
   EXPECT_EQ(0, pool_.IdleSocketCount());
   handle.Reset();
-
-  // Reset for the next case.
-  host_resolver_->set_synchronous_mode(false);
 }
 
 // Test the case where a socket took long enough to start the creation
@@ -858,9 +1105,6 @@ TEST_F(TransportClientSocketPoolTest, BackupSocketFailAfterDelay) {
   EXPECT_THAT(handle.connection_attempts()[0].result,
               IsError(ERR_CONNECTION_FAILED));
   handle.Reset();
-
-  // Reset for the next case.
-  host_resolver_->set_synchronous_mode(false);
 }
 
 // Test the case of the IPv6 address stalling, and falling back to the IPv4
@@ -1193,7 +1437,8 @@ TEST_F(TransportClientSocketPoolTest, Tag) {
   EXPECT_TRUE(handle.socket()->IsConnected());
   EXPECT_EQ(handle.socket(), socket);
   const char kRequest[] = "GET / HTTP/1.0\n\n";
-  scoped_refptr<IOBuffer> write_buffer(new StringIOBuffer(kRequest));
+  scoped_refptr<IOBuffer> write_buffer =
+      base::MakeRefCounted<StringIOBuffer>(kRequest);
   rv =
       handle.socket()->Write(write_buffer.get(), strlen(kRequest),
                              callback.callback(), TRAFFIC_ANNOTATION_FOR_TESTS);

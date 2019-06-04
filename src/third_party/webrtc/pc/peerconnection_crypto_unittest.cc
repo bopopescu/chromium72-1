@@ -10,6 +10,7 @@
 
 #include "api/audio_codecs/builtin_audio_decoder_factory.h"
 #include "api/audio_codecs/builtin_audio_encoder_factory.h"
+#include "api/create_peerconnection_factory.h"
 #include "api/video_codecs/builtin_video_decoder_factory.h"
 #include "api/video_codecs/builtin_video_encoder_factory.h"
 #include "p2p/base/fakeportallocator.h"
@@ -19,10 +20,10 @@
 #ifdef WEBRTC_ANDROID
 #include "pc/test/androidtestinitializer.h"
 #endif
+#include "absl/memory/memory.h"
 #include "pc/test/fakeaudiocapturemodule.h"
 #include "pc/test/fakertccertificategenerator.h"
 #include "rtc_base/gunit.h"
-#include "rtc_base/ptr_util.h"
 #include "rtc_base/virtualsocketserver.h"
 
 namespace webrtc {
@@ -64,9 +65,9 @@ class PeerConnectionCryptoBaseTest : public ::testing::Test {
   WrapperPtr CreatePeerConnection(
       const RTCConfiguration& config,
       std::unique_ptr<rtc::RTCCertificateGeneratorInterface> cert_gen) {
-    auto fake_port_allocator = rtc::MakeUnique<cricket::FakePortAllocator>(
+    auto fake_port_allocator = absl::make_unique<cricket::FakePortAllocator>(
         rtc::Thread::Current(), nullptr);
-    auto observer = rtc::MakeUnique<MockPeerConnectionObserver>();
+    auto observer = absl::make_unique<MockPeerConnectionObserver>();
     RTCConfiguration modified_config = config;
     modified_config.sdp_semantics = sdp_semantics_;
     auto pc = pc_factory_->CreatePeerConnection(
@@ -76,8 +77,9 @@ class PeerConnectionCryptoBaseTest : public ::testing::Test {
       return nullptr;
     }
 
-    return rtc::MakeUnique<PeerConnectionWrapper>(pc_factory_, pc,
-                                                  std::move(observer));
+    observer->SetPeerConnectionInterface(pc.get());
+    return absl::make_unique<PeerConnectionWrapper>(pc_factory_, pc,
+                                                    std::move(observer));
   }
 
   // Accepts the same arguments as CreatePeerConnection and adds default audio
@@ -278,13 +280,35 @@ TEST_P(PeerConnectionCryptoTest, CorrectCryptoInAnswerWhenEncryptionDisabled) {
                              answer->description()));
 }
 
+// CryptoOptions has been promoted to RTCConfiguration. As such if it is ever
+// set in the configuration it should overrite the settings set in the factory.
+TEST_P(PeerConnectionCryptoTest, RTCConfigurationCryptoOptionOverridesFactory) {
+  PeerConnectionFactoryInterface::Options options;
+  options.crypto_options.srtp.enable_gcm_crypto_suites = true;
+  pc_factory_->SetOptions(options);
+
+  RTCConfiguration config;
+  config.enable_dtls_srtp.emplace(false);
+  CryptoOptions crypto_options;
+  crypto_options.srtp.enable_gcm_crypto_suites = false;
+  config.crypto_options = crypto_options;
+  auto caller = CreatePeerConnectionWithAudioVideo(config);
+
+  auto offer = caller->CreateOffer();
+  ASSERT_TRUE(offer);
+
+  ASSERT_FALSE(offer->description()->contents().empty());
+  // This should exist if GCM is enabled see CorrectCryptoInOfferWithSdesAndGcm
+  EXPECT_FALSE(SdpContentsAll(HaveSdesGcmCryptos(3), offer->description()));
+}
+
 // When DTLS is disabled and GCM cipher suites are enabled, the SDP offer/answer
 // should have the correct ciphers in the SDES crypto options.
 // With GCM cipher suites enabled, there will be 3 cryptos in the offer and 1
 // in the answer.
 TEST_P(PeerConnectionCryptoTest, CorrectCryptoInOfferWithSdesAndGcm) {
   PeerConnectionFactoryInterface::Options options;
-  options.crypto_options.enable_gcm_crypto_suites = true;
+  options.crypto_options.srtp.enable_gcm_crypto_suites = true;
   pc_factory_->SetOptions(options);
 
   RTCConfiguration config;
@@ -297,9 +321,10 @@ TEST_P(PeerConnectionCryptoTest, CorrectCryptoInOfferWithSdesAndGcm) {
   ASSERT_FALSE(offer->description()->contents().empty());
   EXPECT_TRUE(SdpContentsAll(HaveSdesGcmCryptos(3), offer->description()));
 }
+
 TEST_P(PeerConnectionCryptoTest, CorrectCryptoInAnswerWithSdesAndGcm) {
   PeerConnectionFactoryInterface::Options options;
-  options.crypto_options.enable_gcm_crypto_suites = true;
+  options.crypto_options.srtp.enable_gcm_crypto_suites = true;
   pc_factory_->SetOptions(options);
 
   RTCConfiguration config;
@@ -317,7 +342,7 @@ TEST_P(PeerConnectionCryptoTest, CorrectCryptoInAnswerWithSdesAndGcm) {
 
 TEST_P(PeerConnectionCryptoTest, CanSetSdesGcmRemoteOfferAndLocalAnswer) {
   PeerConnectionFactoryInterface::Options options;
-  options.crypto_options.enable_gcm_crypto_suites = true;
+  options.crypto_options.srtp.enable_gcm_crypto_suites = true;
   pc_factory_->SetOptions(options);
 
   RTCConfiguration config;
@@ -566,7 +591,7 @@ TEST_P(PeerConnectionCryptoDtlsCertGenTest, TestCertificateGeneration) {
   RTCConfiguration config;
   config.enable_dtls_srtp.emplace(true);
   auto owned_fake_certificate_generator =
-      rtc::MakeUnique<FakeRTCCertificateGenerator>();
+      absl::make_unique<FakeRTCCertificateGenerator>();
   auto* fake_certificate_generator = owned_fake_certificate_generator.get();
   fake_certificate_generator->set_should_fail(cert_gen_result_ ==
                                               CertGenResult::kFail);
@@ -598,9 +623,11 @@ TEST_P(PeerConnectionCryptoDtlsCertGenTest, TestCertificateGeneration) {
         new rtc::RefCountedObject<MockCreateSessionDescriptionObserver>();
     observers.push_back(observer);
     if (sdp_type_ == SdpType::kOffer) {
-      pc->pc()->CreateOffer(observer, nullptr);
+      pc->pc()->CreateOffer(observer,
+                            PeerConnectionInterface::RTCOfferAnswerOptions());
     } else {
-      pc->pc()->CreateAnswer(observer, nullptr);
+      pc->pc()->CreateAnswer(observer,
+                             PeerConnectionInterface::RTCOfferAnswerOptions());
     }
   }
   for (auto& observer : observers) {
@@ -701,8 +728,8 @@ TEST_P(PeerConnectionCryptoTest, SessionErrorIfFingerprintInvalid) {
       invalid_answer->description()->GetTransportInfoByName(
           audio_content->name);
   ASSERT_TRUE(audio_transport_info);
-  audio_transport_info->description.identity_fingerprint.reset(
-      rtc::SSLFingerprint::CreateFromCertificate(other_certificate));
+  audio_transport_info->description.identity_fingerprint =
+      rtc::SSLFingerprint::CreateFromCertificate(*other_certificate);
 
   // Set the invalid answer and expect a fingerprint error.
   std::string error;

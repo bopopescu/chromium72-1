@@ -328,8 +328,7 @@ Profiler.ProfilesPanel = class extends UI.PanelWithSidebar {
     if (i !== -1)
       this._profileToView.splice(i, 1);
 
-    const profileType = profile.profileType();
-    const typeId = profileType.id;
+    const typeId = profile.profileType().id;
     const sectionIsEmpty = this._typeIdToSidebarSection[typeId].removeProfileHeader(profile);
 
     // No other item will be selected if there aren't any other profiles, so
@@ -383,6 +382,15 @@ Profiler.ProfilesPanel = class extends UI.PanelWithSidebar {
   }
 
   /**
+   * @override
+   * @param {number} nodeIndex
+   * @return {!Promise<?Element>}
+   */
+  async linkifyObject(nodeIndex) {
+    return null;
+  }
+
+  /**
    * @param {!Profiler.ProfileHeader} profile
    * @return {!UI.Widget}
    */
@@ -401,11 +409,7 @@ Profiler.ProfilesPanel = class extends UI.PanelWithSidebar {
    * @return {number}
    */
   _indexOfViewForProfile(profile) {
-    for (let i = 0; i < this._profileToView.length; i++) {
-      if (this._profileToView[i].profile === profile)
-        return i;
-    }
-    return -1;
+    return this._profileToView.findIndex(item => item.profile === profile);
   }
 
   closeVisibleView() {

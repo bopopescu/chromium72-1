@@ -14,11 +14,12 @@
 #include <map>
 #include <memory>
 #include <string>
+#include <vector>
 
 #include "api/transport/network_control.h"
 #include "call/rtp_bitrate_configurator.h"
 #include "call/rtp_transport_controller_send_interface.h"
-#include "common_types.h"  // NOLINT(build/include)
+#include "call/rtp_video_sender.h"
 #include "modules/congestion_controller/include/send_side_congestion_controller_interface.h"
 #include "modules/pacing/packet_router.h"
 #include "modules/utility/include/process_thread.h"
@@ -27,7 +28,9 @@
 #include "rtc_base/task_queue.h"
 
 namespace webrtc {
+
 class Clock;
+class FrameEncryptorInterface;
 class RtcEventLog;
 
 // TODO(nisse): When we get the underlying transports here, we should
@@ -43,6 +46,21 @@ class RtpTransportControllerSend final
       NetworkControllerFactoryInterface* controller_factory,
       const BitrateConstraints& bitrate_config);
   ~RtpTransportControllerSend() override;
+
+  RtpVideoSenderInterface* CreateRtpVideoSender(
+      const std::vector<uint32_t>& ssrcs,
+      std::map<uint32_t, RtpState> suspended_ssrcs,
+      const std::map<uint32_t, RtpPayloadState>&
+          states,  // move states into RtpTransportControllerSend
+      const RtpConfig& rtp_config,
+      int rtcp_report_interval_ms,
+      Transport* send_transport,
+      const RtpSenderObservers& observers,
+      RtcEventLog* event_log,
+      std::unique_ptr<FecController> fec_controller,
+      const RtpSenderFrameEncryptionConfig& frame_encryption_config) override;
+  void DestroyRtpVideoSender(
+      RtpVideoSenderInterface* rtp_video_sender) override;
 
   // Implements NetworkChangedObserver interface.
   void OnNetworkChanged(uint32_t bitrate_bps,
@@ -83,12 +101,17 @@ class RtpTransportControllerSend final
   void OnSentPacket(const rtc::SentPacket& sent_packet) override;
 
   void SetSdpBitrateParameters(const BitrateConstraints& constraints) override;
-  void SetClientBitratePreferences(
-      const BitrateSettings& preferences) override;
+  void SetClientBitratePreferences(const BitrateSettings& preferences) override;
+
+  void SetAllocatedBitrateWithoutFeedback(uint32_t bitrate_bps) override;
+
+  void OnTransportOverheadChanged(
+      size_t transport_overhead_per_packet) override;
 
  private:
   const Clock* const clock_;
   PacketRouter packet_router_;
+  std::vector<std::unique_ptr<RtpVideoSenderInterface>> video_rtp_senders_;
   PacedSender pacer_;
   RtpKeepAliveConfig keepalive_;
   RtpBitrateConfigurator bitrate_configurator_;
@@ -97,6 +120,8 @@ class RtpTransportControllerSend final
   rtc::CriticalSection observer_crit_;
   TargetTransferRateObserver* observer_ RTC_GUARDED_BY(observer_crit_);
   std::unique_ptr<SendSideCongestionControllerInterface> send_side_cc_;
+  RateLimiter retransmission_rate_limiter_;
+
   // TODO(perkj): |task_queue_| is supposed to replace |process_thread_|.
   // |task_queue_| is defined last to ensure all pending tasks are cancelled
   // and deleted before any other members.

@@ -13,8 +13,7 @@
 #include "base/bind.h"
 #include "base/strings/string16.h"
 #include "base/strings/utf_string_conversions.h"
-#include "base/test/histogram_tester.h"
-#include "base/test/scoped_feature_list.h"
+#include "base/test/metrics/histogram_tester.h"
 #include "build/build_config.h"
 #include "chrome/browser/content_settings/host_content_settings_map_factory.h"
 #include "chrome/browser/infobars/mock_infobar_service.h"
@@ -29,13 +28,11 @@
 #include "components/content_settings/core/common/content_settings_types.h"
 #include "components/infobars/core/infobar.h"
 #include "components/strings/grit/components_strings.h"
-#include "components/subresource_filter/core/browser/subresource_filter_features.h"
 #include "content/public/browser/ssl_host_state_delegate.h"
 #include "content/public/browser/ssl_status.h"
 #include "content/public/common/content_switches.h"
-#include "device/base/mock_device_client.h"
-#include "device/usb/mock_usb_device.h"
-#include "device/usb/mock_usb_service.h"
+#include "device/usb/public/cpp/fake_usb_device_manager.h"
+#include "device/usb/public/mojom/device.mojom.h"
 #include "net/cert/cert_status_flags.h"
 #include "net/cert/x509_certificate.h"
 #include "net/ssl/ssl_connection_status_flags.h"
@@ -49,6 +46,11 @@
 
 #if defined(OS_ANDROID)
 #include "chrome/browser/android/android_theme_resources.h"
+#else
+#include "base/test/scoped_feature_list.h"
+#include "chrome/common/pref_names.h"
+#include "components/prefs/pref_service.h"
+#include "media/base/media_switches.h"
 #endif
 
 using content::SSLStatus;
@@ -97,7 +99,8 @@ class MockPageInfoUI : public PageInfoUI {
 
 #if defined(SAFE_BROWSING_DB_LOCAL)
   std::unique_ptr<PageInfoUI::SecurityDescription>
-  CreateSecurityDescriptionForPasswordReuse() const override {
+  CreateSecurityDescriptionForPasswordReuse(
+      bool unused_is_enterprise_password) const override {
     std::unique_ptr<PageInfoUI::SecurityDescription> security_description(
         new PageInfoUI::SecurityDescription());
     security_description->summary_style = SecuritySummaryColor::RED;
@@ -199,14 +202,9 @@ class PageInfoTest : public ChromeRenderViewHostTestHarness {
     return page_info_.get();
   }
 
-  device::MockUsbService& usb_service() {
-    return *device_client_.usb_service();
-  }
-
   security_state::SecurityInfo security_info_;
 
  private:
-  device::MockDeviceClient device_client_;
   std::unique_ptr<PageInfo> page_info_;
   std::unique_ptr<MockPageInfoUI> mock_ui_;
   scoped_refptr<net::X509Certificate> cert_;
@@ -387,11 +385,16 @@ TEST_F(PageInfoTest, OnSiteDataAccessed) {
 }
 
 TEST_F(PageInfoTest, OnChosenObjectDeleted) {
-  scoped_refptr<device::UsbDevice> device =
-      new device::MockUsbDevice(0, 0, "Google", "Gizmo", "1234567890");
-  usb_service().AddDevice(device);
+  // Connect the UsbChooserContext with FakeUsbDeviceManager.
+  device::FakeUsbDeviceManager usb_device_manager;
+  device::mojom::UsbDeviceManagerPtr device_manager_ptr;
+  usb_device_manager.AddBinding(mojo::MakeRequest(&device_manager_ptr));
   UsbChooserContext* store = UsbChooserContextFactory::GetForProfile(profile());
-  store->GrantDevicePermission(url(), url(), device->guid());
+  store->SetDeviceManagerForTesting(std::move(device_manager_ptr));
+
+  auto device_info = usb_device_manager.CreateAndAddDevice(
+      0, 0, "Google", "Gizmo", "1234567890");
+  store->GrantDevicePermission(url(), url(), *device_info);
 
   EXPECT_CALL(*mock_ui(), SetIdentityInfo(_));
   EXPECT_CALL(*mock_ui(), SetCookieInfo(_));
@@ -406,7 +409,7 @@ TEST_F(PageInfoTest, OnChosenObjectDeleted) {
   const PageInfoUI::ChosenObjectInfo* info = last_chosen_object_info()[0].get();
   page_info()->OnSiteChosenObjectDeleted(info->ui_info, *info->object);
 
-  EXPECT_FALSE(store->HasDevicePermission(url(), url(), device));
+  EXPECT_FALSE(store->HasDevicePermission(url(), url(), *device_info));
   EXPECT_EQ(0u, last_chosen_object_info().size());
 }
 
@@ -447,15 +450,27 @@ TEST_F(PageInfoTest, UnwantedSoftware) {
 }
 
 #if defined(SAFE_BROWSING_DB_LOCAL)
-TEST_F(PageInfoTest, PasswordReuse) {
+TEST_F(PageInfoTest, SignInPasswordReuse) {
   security_info_.security_level = security_state::DANGEROUS;
   security_info_.malicious_content_status =
-      security_state::MALICIOUS_CONTENT_STATUS_PASSWORD_REUSE;
+      security_state::MALICIOUS_CONTENT_STATUS_SIGN_IN_PASSWORD_REUSE;
   SetDefaultUIExpectations(mock_ui());
 
   EXPECT_EQ(PageInfo::SITE_CONNECTION_STATUS_UNENCRYPTED,
             page_info()->site_connection_status());
-  EXPECT_EQ(PageInfo::SITE_IDENTITY_STATUS_PASSWORD_REUSE,
+  EXPECT_EQ(PageInfo::SITE_IDENTITY_STATUS_SIGN_IN_PASSWORD_REUSE,
+            page_info()->site_identity_status());
+}
+
+TEST_F(PageInfoTest, EnterprisePasswordReuse) {
+  security_info_.security_level = security_state::DANGEROUS;
+  security_info_.malicious_content_status =
+      security_state::MALICIOUS_CONTENT_STATUS_ENTERPRISE_PASSWORD_REUSE;
+  SetDefaultUIExpectations(mock_ui());
+
+  EXPECT_EQ(PageInfo::SITE_CONNECTION_STATUS_UNENCRYPTED,
+            page_info()->site_connection_status());
+  EXPECT_EQ(PageInfo::SITE_IDENTITY_STATUS_ENTERPRISE_PASSWORD_REUSE,
             page_info()->site_identity_status());
 }
 #endif
@@ -474,11 +489,11 @@ TEST_F(PageInfoTest, HTTPSConnection) {
   security_info_.scheme_is_cryptographic = true;
   security_info_.certificate = cert();
   security_info_.cert_status = 0;
-  security_info_.security_bits = 81;  // No error if > 80.
   int status = 0;
   status = SetSSLVersion(status, net::SSL_CONNECTION_VERSION_TLS1);
   status = SetSSLCipherSuite(status, CR_TLS_RSA_WITH_AES_256_CBC_SHA256);
   security_info_.connection_status = status;
+  security_info_.connection_info_initialized = true;
 
   SetDefaultUIExpectations(mock_ui());
 
@@ -645,7 +660,6 @@ TEST_F(PageInfoTest, InsecureContent) {
     security_info_.scheme_is_cryptographic = true;
     security_info_.certificate = cert();
     security_info_.cert_status = test.cert_status;
-    security_info_.security_bits = 81;  // No error if > 80.
     security_info_.mixed_content_status = test.mixed_content_status;
     security_info_.contained_mixed_form = test.contained_mixed_form;
     security_info_.content_with_cert_errors_status =
@@ -654,6 +668,7 @@ TEST_F(PageInfoTest, InsecureContent) {
     status = SetSSLVersion(status, net::SSL_CONNECTION_VERSION_TLS1);
     status = SetSSLCipherSuite(status, CR_TLS_RSA_WITH_AES_256_CBC_SHA256);
     security_info_.connection_status = status;
+    security_info_.connection_info_initialized = true;
 
     SetDefaultUIExpectations(mock_ui());
 
@@ -680,13 +695,13 @@ TEST_F(PageInfoTest, HTTPSEVCert) {
   security_info_.scheme_is_cryptographic = true;
   security_info_.certificate = ev_cert;
   security_info_.cert_status = net::CERT_STATUS_IS_EV;
-  security_info_.security_bits = 81;  // No error if > 80.
   security_info_.mixed_content_status =
       security_state::CONTENT_STATUS_DISPLAYED;
   int status = 0;
   status = SetSSLVersion(status, net::SSL_CONNECTION_VERSION_TLS1);
   status = SetSSLCipherSuite(status, CR_TLS_RSA_WITH_AES_256_CBC_SHA256);
   security_info_.connection_status = status;
+  security_info_.connection_info_initialized = true;
 
   SetDefaultUIExpectations(mock_ui());
 
@@ -702,11 +717,11 @@ TEST_F(PageInfoTest, HTTPSRevocationError) {
   security_info_.scheme_is_cryptographic = true;
   security_info_.certificate = cert();
   security_info_.cert_status = net::CERT_STATUS_UNABLE_TO_CHECK_REVOCATION;
-  security_info_.security_bits = 81;  // No error if > 80.
   int status = 0;
   status = SetSSLVersion(status, net::SSL_CONNECTION_VERSION_TLS1);
   status = SetSSLCipherSuite(status, CR_TLS_RSA_WITH_AES_256_CBC_SHA256);
   security_info_.connection_status = status;
+  security_info_.connection_info_initialized = true;
 
   SetDefaultUIExpectations(mock_ui());
 
@@ -722,11 +737,13 @@ TEST_F(PageInfoTest, HTTPSConnectionError) {
   security_info_.scheme_is_cryptographic = true;
   security_info_.certificate = cert();
   security_info_.cert_status = 0;
-  security_info_.security_bits = -1;
   int status = 0;
   status = SetSSLVersion(status, net::SSL_CONNECTION_VERSION_TLS1);
   status = SetSSLCipherSuite(status, CR_TLS_RSA_WITH_AES_256_CBC_SHA256);
   security_info_.connection_status = status;
+
+  // Simulate a failed connection.
+  security_info_.connection_info_initialized = false;
 
   SetDefaultUIExpectations(mock_ui());
 
@@ -744,11 +761,11 @@ TEST_F(PageInfoTest, HTTPSPolicyCertConnection) {
   security_info_.scheme_is_cryptographic = true;
   security_info_.certificate = cert();
   security_info_.cert_status = 0;
-  security_info_.security_bits = 81;  // No error if > 80.
   int status = 0;
   status = SetSSLVersion(status, net::SSL_CONNECTION_VERSION_TLS1);
   status = SetSSLCipherSuite(status, CR_TLS_RSA_WITH_AES_256_CBC_SHA256);
   security_info_.connection_status = status;
+  security_info_.connection_info_initialized = true;
 
   SetDefaultUIExpectations(mock_ui());
 
@@ -765,12 +782,12 @@ TEST_F(PageInfoTest, HTTPSSHA1) {
   security_info_.scheme_is_cryptographic = true;
   security_info_.certificate = cert();
   security_info_.cert_status = 0;
-  security_info_.security_bits = 81;  // No error if > 80.
   int status = 0;
   status = SetSSLVersion(status, net::SSL_CONNECTION_VERSION_TLS1);
   status = SetSSLCipherSuite(status, CR_TLS_RSA_WITH_AES_256_CBC_SHA256);
   security_info_.connection_status = status;
   security_info_.sha1_in_chain = true;
+  security_info_.connection_info_initialized = true;
 
   SetDefaultUIExpectations(mock_ui());
 
@@ -972,11 +989,73 @@ TEST_F(PageInfoTest, SecurityLevelMetrics) {
   }
 }
 
+// Tests that the duration of time the PageInfo is open is recorded for pages
+// with various security levels.
+TEST_F(PageInfoTest, TimeOpenMetrics) {
+  struct TestCase {
+    const std::string url;
+    const security_state::SecurityLevel security_level;
+    const std::string security_level_name;
+    const PageInfo::PageInfoAction action;
+  };
+
+  const std::string kHistogramPrefix("Security.PageInfo.TimeOpen.");
+
+  const TestCase kTestCases[] = {
+      // PAGE_INFO_COUNT used as shorthand for "take no action".
+      {"https://example.test", security_state::SECURE, "SECURE",
+       PageInfo::PAGE_INFO_COUNT},
+      {"https://example.test", security_state::EV_SECURE, "EV_SECURE",
+       PageInfo::PAGE_INFO_COUNT},
+      {"http://example.test", security_state::NONE, "NONE",
+       PageInfo::PAGE_INFO_COUNT},
+      {"https://example.test", security_state::SECURE, "SECURE",
+       PageInfo::PAGE_INFO_SITE_SETTINGS_OPENED},
+      {"https://example.test", security_state::EV_SECURE, "EV_SECURE",
+       PageInfo::PAGE_INFO_SITE_SETTINGS_OPENED},
+      {"http://example.test", security_state::NONE, "NONE",
+       PageInfo::PAGE_INFO_SITE_SETTINGS_OPENED},
+  };
+
+  for (const auto& test : kTestCases) {
+    base::HistogramTester histograms;
+    SetURL(test.url);
+    security_info_.security_level = test.security_level;
+    ResetMockUI();
+    ClearPageInfo();
+    SetDefaultUIExpectations(mock_ui());
+
+    histograms.ExpectTotalCount(kHistogramPrefix + test.security_level_name, 0);
+    histograms.ExpectTotalCount(
+        kHistogramPrefix + "Action." + test.security_level_name, 0);
+    histograms.ExpectTotalCount(
+        kHistogramPrefix + "NoAction." + test.security_level_name, 0);
+
+    PageInfo* test_page_info = page_info();
+    if (test.action != PageInfo::PAGE_INFO_COUNT) {
+      test_page_info->RecordPageInfoAction(test.action);
+    }
+    ClearPageInfo();
+
+    histograms.ExpectTotalCount(kHistogramPrefix + test.security_level_name, 1);
+
+    if (test.action != PageInfo::PAGE_INFO_COUNT) {
+      histograms.ExpectTotalCount(
+          kHistogramPrefix + "Action." + test.security_level_name, 1);
+    } else {
+      histograms.ExpectTotalCount(
+          kHistogramPrefix + "NoAction." + test.security_level_name, 1);
+    }
+  }
+
+  // PageInfoTest expects a valid PageInfo instance to exist at end of test.
+  ResetMockUI();
+  SetDefaultUIExpectations(mock_ui());
+  page_info();
+}
+
 // Tests that the SubresourceFilter setting is omitted correctly.
 TEST_F(PageInfoTest, SubresourceFilterSetting_MatchesActivation) {
-  base::test::ScopedFeatureList feature_list;
-  feature_list.InitAndEnableFeature(
-      subresource_filter::kSafeBrowsingSubresourceFilterExperimentalUI);
   auto showing_setting = [](const PermissionInfoList& permissions) {
     return PermissionInfoListContainsPermission(permissions,
                                                 CONTENT_SETTINGS_TYPE_ADS);
@@ -1003,3 +1082,134 @@ TEST_F(PageInfoTest, SubresourceFilterSetting_MatchesActivation) {
   page_info();
   EXPECT_TRUE(showing_setting(last_permission_info_list()));
 }
+
+#if !defined(OS_ANDROID)
+
+// Unit tests with the unified autoplay sound settings UI enabled. When enabled
+// the sound settings dropdown on the page info UI will have custom wording.
+
+class UnifiedAutoplaySoundSettingsPageInfoTest
+    : public ChromeRenderViewHostTestHarness {
+ public:
+  ~UnifiedAutoplaySoundSettingsPageInfoTest() override = default;
+
+  void SetUp() override {
+    scoped_feature_list_.InitWithFeatures(
+        {media::kAutoplayDisableSettings, media::kAutoplayWhitelistSettings},
+        {});
+    ChromeRenderViewHostTestHarness::SetUp();
+  }
+
+  void SetAutoplayPrefValue(bool value) {
+    profile()->GetPrefs()->SetBoolean(prefs::kBlockAutoplayEnabled, value);
+  }
+
+  void SetDefaultSoundContentSetting(ContentSetting default_setting) {
+    default_setting_ = default_setting;
+  }
+
+  base::string16 GetDefaultSoundSettingString() {
+    return PageInfoUI::PermissionActionToUIString(
+        profile(), CONTENT_SETTINGS_TYPE_SOUND, CONTENT_SETTING_DEFAULT,
+        default_setting_, content_settings::SettingSource::SETTING_SOURCE_USER);
+  }
+
+  base::string16 GetSoundSettingString(ContentSetting setting) {
+    return PageInfoUI::PermissionActionToUIString(
+        profile(), CONTENT_SETTINGS_TYPE_SOUND, setting, default_setting_,
+        content_settings::SettingSource::SETTING_SOURCE_USER);
+  }
+
+ private:
+  ContentSetting default_setting_ = CONTENT_SETTING_DEFAULT;
+  base::test::ScopedFeatureList scoped_feature_list_;
+};
+
+// This test checks that the strings for the sound settings dropdown when
+// block autoplay is enabled and the default sound setting is allow.
+// The three options should be Automatic (default), Allow and Mute.
+TEST_F(UnifiedAutoplaySoundSettingsPageInfoTest, DefaultAllow_PrefOn) {
+  SetDefaultSoundContentSetting(CONTENT_SETTING_ALLOW);
+  SetAutoplayPrefValue(true);
+
+  EXPECT_EQ(
+      l10n_util::GetStringUTF16(IDS_PAGE_INFO_BUTTON_TEXT_AUTOMATIC_BY_DEFAULT),
+      GetDefaultSoundSettingString());
+
+  EXPECT_EQ(
+      l10n_util::GetStringUTF16(IDS_PAGE_INFO_BUTTON_TEXT_ALLOWED_BY_USER),
+      GetSoundSettingString(CONTENT_SETTING_ALLOW));
+
+  EXPECT_EQ(l10n_util::GetStringUTF16(IDS_PAGE_INFO_BUTTON_TEXT_MUTED_BY_USER),
+            GetSoundSettingString(CONTENT_SETTING_BLOCK));
+}
+
+// This test checks that the strings for the sound settings dropdown when
+// block autoplay is disabled and the default sound setting is allow.
+// The three options should be Allow (default), Allow and Mute.
+TEST_F(UnifiedAutoplaySoundSettingsPageInfoTest, DefaultAllow_PrefOff) {
+  SetDefaultSoundContentSetting(CONTENT_SETTING_ALLOW);
+  SetAutoplayPrefValue(false);
+
+  EXPECT_EQ(
+      l10n_util::GetStringUTF16(IDS_PAGE_INFO_BUTTON_TEXT_ALLOWED_BY_DEFAULT),
+      GetDefaultSoundSettingString());
+
+  EXPECT_EQ(
+      l10n_util::GetStringUTF16(IDS_PAGE_INFO_BUTTON_TEXT_ALLOWED_BY_USER),
+      GetSoundSettingString(CONTENT_SETTING_ALLOW));
+
+  EXPECT_EQ(l10n_util::GetStringUTF16(IDS_PAGE_INFO_BUTTON_TEXT_MUTED_BY_USER),
+            GetSoundSettingString(CONTENT_SETTING_BLOCK));
+}
+
+// This test checks the strings for the sound settings dropdown when
+// the default sound setting is block. The three options should be
+// Block (default), Allow and Mute.
+TEST_F(UnifiedAutoplaySoundSettingsPageInfoTest, DefaultBlock_PrefOn) {
+  SetDefaultSoundContentSetting(CONTENT_SETTING_BLOCK);
+  SetAutoplayPrefValue(true);
+
+  EXPECT_EQ(
+      l10n_util::GetStringUTF16(IDS_PAGE_INFO_BUTTON_TEXT_MUTED_BY_DEFAULT),
+      GetDefaultSoundSettingString());
+
+  EXPECT_EQ(
+      l10n_util::GetStringUTF16(IDS_PAGE_INFO_BUTTON_TEXT_ALLOWED_BY_USER),
+      GetSoundSettingString(CONTENT_SETTING_ALLOW));
+
+  EXPECT_EQ(l10n_util::GetStringUTF16(IDS_PAGE_INFO_BUTTON_TEXT_MUTED_BY_USER),
+            GetSoundSettingString(CONTENT_SETTING_BLOCK));
+}
+
+// This test checks the strings for the sound settings dropdown when
+// the default sound setting is block. The three options should be
+// Block (default), Allow and Mute.
+TEST_F(UnifiedAutoplaySoundSettingsPageInfoTest, DefaultBlock_PrefOff) {
+  SetDefaultSoundContentSetting(CONTENT_SETTING_BLOCK);
+  SetAutoplayPrefValue(false);
+
+  EXPECT_EQ(
+      l10n_util::GetStringUTF16(IDS_PAGE_INFO_BUTTON_TEXT_MUTED_BY_DEFAULT),
+      GetDefaultSoundSettingString());
+
+  EXPECT_EQ(
+      l10n_util::GetStringUTF16(IDS_PAGE_INFO_BUTTON_TEXT_ALLOWED_BY_USER),
+      GetSoundSettingString(CONTENT_SETTING_ALLOW));
+
+  EXPECT_EQ(l10n_util::GetStringUTF16(IDS_PAGE_INFO_BUTTON_TEXT_MUTED_BY_USER),
+            GetSoundSettingString(CONTENT_SETTING_BLOCK));
+}
+
+// This test checks that the string for a permission dropdown that is not the
+// sound setting is unaffected.
+TEST_F(UnifiedAutoplaySoundSettingsPageInfoTest, NotSoundSetting_Noop) {
+  EXPECT_EQ(
+      l10n_util::GetStringUTF16(IDS_PAGE_INFO_BUTTON_TEXT_ALLOWED_BY_DEFAULT),
+      PageInfoUI::PermissionActionToUIString(
+          profile(), CONTENT_SETTINGS_TYPE_ADS, CONTENT_SETTING_DEFAULT,
+          CONTENT_SETTING_ALLOW,
+          content_settings::SettingSource::SETTING_SOURCE_USER));
+}
+
+#endif  // !defined(OS_ANDROID)

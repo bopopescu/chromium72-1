@@ -5,74 +5,55 @@
 #ifndef ASH_ASSISTANT_ASSISTANT_CONTROLLER_H_
 #define ASH_ASSISTANT_ASSISTANT_CONTROLLER_H_
 
+#include <map>
 #include <memory>
 #include <string>
 #include <vector>
 
-#include "ash/assistant/model/assistant_interaction_model.h"
-#include "ash/assistant/model/assistant_interaction_model_observer.h"
-#include "ash/highlighter/highlighter_controller.h"
-#include "ash/public/interfaces/assistant_card_renderer.mojom.h"
+#include "ash/accessibility/accessibility_observer.h"
+#include "ash/ash_export.h"
+#include "ash/assistant/assistant_controller_observer.h"
+#include "ash/public/cpp/assistant/default_voice_interaction_observer.h"
 #include "ash/public/interfaces/assistant_controller.mojom.h"
 #include "ash/public/interfaces/assistant_image_downloader.mojom.h"
+#include "ash/public/interfaces/assistant_setup.mojom.h"
+#include "ash/public/interfaces/assistant_volume_control.mojom.h"
+#include "ash/public/interfaces/voice_interaction_controller.mojom.h"
 #include "base/macros.h"
+#include "base/memory/weak_ptr.h"
+#include "base/observer_list.h"
+#include "chromeos/audio/cras_audio_handler.h"
 #include "chromeos/services/assistant/public/mojom/assistant.mojom.h"
-#include "mojo/public/cpp/bindings/binding.h"
 #include "mojo/public/cpp/bindings/binding_set.h"
-#include "ui/gfx/geometry/rect.h"
-
-namespace base {
-class UnguessableToken;
-}  // namespace base
+#include "mojo/public/cpp/bindings/interface_ptr_set.h"
+#include "services/content/public/mojom/navigable_contents_factory.mojom.h"
 
 namespace ash {
 
-class AssistantBubble;
-class AssistantInteractionModelObserver;
+class AssistantCacheController;
+class AssistantInteractionController;
+class AssistantNotificationController;
+class AssistantScreenContextController;
+class AssistantSetupController;
+class AssistantUiController;
 
-class AssistantController
+class ASH_EXPORT AssistantController
     : public mojom::AssistantController,
-      public chromeos::assistant::mojom::AssistantEventSubscriber,
-      public AssistantInteractionModelObserver,
-      public HighlighterController::Observer {
+      public AssistantControllerObserver,
+      public DefaultVoiceInteractionObserver,
+      public mojom::AssistantVolumeControl,
+      public chromeos::CrasAudioHandler::AudioObserver,
+      public AccessibilityObserver {
  public:
-  using AssistantSuggestion = chromeos::assistant::mojom::AssistantSuggestion;
-  using AssistantSuggestionPtr =
-      chromeos::assistant::mojom::AssistantSuggestionPtr;
-  using AssistantInteractionResolution =
-      chromeos::assistant::mojom::AssistantInteractionResolution;
-
   AssistantController();
   ~AssistantController() override;
 
   void BindRequest(mojom::AssistantControllerRequest request);
+  void BindRequest(mojom::AssistantVolumeControlRequest request);
 
-  // Returns a reference to the underlying interaction model.
-  const AssistantInteractionModel* interaction_model() const {
-    return &assistant_interaction_model_;
-  }
-
-  // Registers the specified |observer| with the interaction model observer
-  // pool.
-  void AddInteractionModelObserver(AssistantInteractionModelObserver* observer);
-
-  // Unregisters the specified |observer| from the interaction model observer
-  // pool.
-  void RemoveInteractionModelObserver(
-      AssistantInteractionModelObserver* observer);
-
-  // Renders a card, uniquely identified by |id_token|, according to the
-  // specified |params|. When the card is ready for embedding, the supplied
-  // |callback| is run with a token for embedding.
-  void RenderCard(const base::UnguessableToken& id_token,
-                  mojom::AssistantCardParamsPtr params,
-                  mojom::AssistantCardRenderer::RenderCallback callback);
-
-  // Releases resources for the card uniquely identified by |id_token|.
-  void ReleaseCard(const base::UnguessableToken& id_token);
-
-  // Releases resources for any card uniquely identified in |id_token_list|.
-  void ReleaseCards(const std::vector<base::UnguessableToken>& id_tokens);
+  // Adds/removes the specified |observer|.
+  void AddObserver(AssistantControllerObserver* observer);
+  void RemoveObserver(AssistantControllerObserver* observer);
 
   // Downloads the image found at the specified |url|. On completion, the
   // supplied |callback| will be run with the downloaded image. If the download
@@ -81,69 +62,112 @@ class AssistantController
       const GURL& url,
       mojom::AssistantImageDownloader::DownloadCallback callback);
 
-  // Invoke to modify the Assistant interaction state.
-  void StartInteraction();
-  void StopInteraction();
-  void ToggleInteraction();
-
-  // Invoked on dialog plate action pressed event.
-  void OnDialogPlateActionPressed(const std::string& text);
-
-  // Invoked on dialog plate contents changed event.
-  void OnDialogPlateContentsChanged(const std::string& text);
-
-  // Invoked on dialog plate contents committed event.
-  void OnDialogPlateContentsCommitted(const std::string& text);
-
-  // Invoked on suggestion chip pressed event.
-  void OnSuggestionChipPressed(int id);
-
-  // AssistantInteractionModelObserver:
-  void OnInputModalityChanged(InputModality input_modality) override;
-  void OnInteractionStateChanged(InteractionState interaction_state) override;
-
-  // HighlighterController::Observer:
-  void OnHighlighterEnabledChanged(HighlighterEnabledState state) override;
-
-  // chromeos::assistant::mojom::AssistantEventSubscriber:
-  void OnInteractionStarted() override;
-  void OnInteractionFinished(
-      AssistantInteractionResolution resolution) override;
-  void OnHtmlResponse(const std::string& response) override;
-  void OnSuggestionsResponse(
-      std::vector<AssistantSuggestionPtr> response) override;
-  void OnTextResponse(const std::string& response) override;
-  void OnOpenUrlResponse(const GURL& url) override;
-  void OnSpeechRecognitionStarted() override;
-  void OnSpeechRecognitionIntermediateResult(
-      const std::string& high_confidence_text,
-      const std::string& low_confidence_text) override;
-  void OnSpeechRecognitionEndOfUtterance() override;
-  void OnSpeechRecognitionFinalResult(const std::string& final_result) override;
-  void OnSpeechLevelUpdated(float speech_level) override;
-
   // mojom::AssistantController:
+  // TODO(updowndota): Refactor Set() calls to use a factory pattern.
   void SetAssistant(
       chromeos::assistant::mojom::AssistantPtr assistant) override;
-  void SetAssistantCardRenderer(
-      mojom::AssistantCardRendererPtr assistant_card_renderer) override;
   void SetAssistantImageDownloader(
       mojom::AssistantImageDownloaderPtr assistant_image_downloader) override;
-  void RequestScreenshot(const gfx::Rect& rect,
-                         RequestScreenshotCallback callback) override;
-  void OnCardPressed(const GURL& url) override;
+  void OpenAssistantSettings() override;
+
+  // AssistantControllerObserver:
+  void OnDeepLinkReceived(
+      assistant::util::DeepLinkType type,
+      const std::map<std::string, std::string>& params) override;
+
+  // mojom::VolumeControl:
+  void SetVolume(int volume, bool user_initiated) override;
+  void SetMuted(bool muted) override;
+  void AddVolumeObserver(mojom::VolumeObserverPtr observer) override;
+
+  // chromeos::CrasAudioHandler::AudioObserver:
+  void OnOutputMuteChanged(bool mute_on, bool system_adjust) override;
+  void OnOutputNodeVolumeChanged(uint64_t node, int volume) override;
+
+  // AccessibilityObserver:
+  void OnAccessibilityStatusChanged() override;
+
+  // Opens the specified |url| in a new browser tab. Special handling is applied
+  // to deep links which may cause deviation from this behavior.
+  void OpenUrl(const GURL& url, bool from_server = false);
+
+  // Acquires a NavigableContentsFactory from the Content Service to allow
+  // Assistant to display embedded web contents.
+  void GetNavigableContentsFactory(
+      content::mojom::NavigableContentsFactoryRequest request);
+
+  AssistantCacheController* cache_controller() {
+    DCHECK(assistant_cache_controller_);
+    return assistant_cache_controller_.get();
+  }
+
+  AssistantInteractionController* interaction_controller() {
+    DCHECK(assistant_interaction_controller_);
+    return assistant_interaction_controller_.get();
+  }
+
+  AssistantNotificationController* notification_controller() {
+    DCHECK(assistant_notification_controller_);
+    return assistant_notification_controller_.get();
+  }
+
+  AssistantScreenContextController* screen_context_controller() {
+    DCHECK(assistant_screen_context_controller_);
+    return assistant_screen_context_controller_.get();
+  }
+
+  AssistantSetupController* setup_controller() {
+    DCHECK(assistant_setup_controller_);
+    return assistant_setup_controller_.get();
+  }
+
+  AssistantUiController* ui_controller() {
+    DCHECK(assistant_ui_controller_);
+    return assistant_ui_controller_.get();
+  }
+
+  base::WeakPtr<AssistantController> GetWeakPtr();
 
  private:
+  void NotifyConstructed();
+  void NotifyDestroying();
+  void NotifyDeepLinkReceived(const GURL& deep_link);
+  void NotifyUrlOpened(const GURL& url, bool from_server);
+
+  // mojom::VoiceInteractionObserver:
+  void OnVoiceInteractionStatusChanged(
+      mojom::VoiceInteractionState state) override;
+
+  // The observer list should be initialized early so that sub-controllers may
+  // register as observers during their construction.
+  base::ObserverList<AssistantControllerObserver> observers_;
+
   mojo::BindingSet<mojom::AssistantController> assistant_controller_bindings_;
-  mojo::Binding<chromeos::assistant::mojom::AssistantEventSubscriber>
-      assistant_event_subscriber_binding_;
-  AssistantInteractionModel assistant_interaction_model_;
+
+  mojo::Binding<mojom::AssistantVolumeControl>
+      assistant_volume_control_binding_;
+  mojo::InterfacePtrSet<mojom::VolumeObserver> volume_observer_;
 
   chromeos::assistant::mojom::AssistantPtr assistant_;
-  mojom::AssistantCardRendererPtr assistant_card_renderer_;
+
   mojom::AssistantImageDownloaderPtr assistant_image_downloader_;
 
-  std::unique_ptr<AssistantBubble> assistant_bubble_;
+  std::unique_ptr<AssistantCacheController> assistant_cache_controller_;
+
+  std::unique_ptr<AssistantInteractionController>
+      assistant_interaction_controller_;
+
+  std::unique_ptr<AssistantNotificationController>
+      assistant_notification_controller_;
+
+  std::unique_ptr<AssistantScreenContextController>
+      assistant_screen_context_controller_;
+
+  std::unique_ptr<AssistantSetupController> assistant_setup_controller_;
+
+  std::unique_ptr<AssistantUiController> assistant_ui_controller_;
+
+  base::WeakPtrFactory<AssistantController> weak_factory_;
 
   DISALLOW_COPY_AND_ASSIGN(AssistantController);
 };

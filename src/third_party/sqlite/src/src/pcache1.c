@@ -105,7 +105,8 @@ struct PgHdr1 {
 };
 
 /*
-** A page is pinned if it is no on the LRU list
+** A page is pinned if it is not on the LRU list.  To be "pinned" means
+** that the page is in active use and must not be deallocated.
 */
 #define PAGE_IS_PINNED(p)    ((p)->pLruNext==0)
 #define PAGE_IS_UNPINNED(p)  ((p)->pLruNext!=0)
@@ -166,6 +167,7 @@ struct PCache1 {
   unsigned int nMax;                  /* Configured "cache_size" value */
   unsigned int n90pct;                /* nMax*9/10 */
   unsigned int iMaxKey;               /* Largest key seen since xTruncate() */
+  unsigned int nPurgeableDummy;       /* pnPurgeable points here when not used*/
 
   /* Hash table of all pages. The following variables may only be accessed
   ** when the accessor is holding the PGroup mutex.
@@ -689,8 +691,6 @@ static int pcache1Init(void *NotUsed){
   ** private PGroup (mode-1).  pcache1.separateCache is false if the single
   ** PGroup in pcache1.grp is used for all page caches (mode-2).
   **
-  **   *  Always use separate caches (mode-1) if SQLITE_SEPARATE_CACHE_POOLS
-  **
   **   *  Always use a unified cache (mode-2) if ENABLE_MEMORY_MANAGEMENT
   **
   **   *  Use a unified cache in single-threaded applications that have
@@ -700,9 +700,7 @@ static int pcache1Init(void *NotUsed){
   **
   **   *  Otherwise use separate caches (mode-1)
   */
-#ifdef SQLITE_SEPARATE_CACHE_POOLS
-  pcache1.separateCache = 1;
-#elif defined(SQLITE_ENABLE_MEMORY_MANAGEMENT)
+#if defined(SQLITE_ENABLE_MEMORY_MANAGEMENT)
   pcache1.separateCache = 0;
 #elif SQLITE_THREADSAFE
   pcache1.separateCache = sqlite3GlobalConfig.pPage==0
@@ -783,8 +781,7 @@ static sqlite3_pcache *pcache1Create(int szPage, int szExtra, int bPurgeable){
       pGroup->mxPinned = pGroup->nMaxPage + 10 - pGroup->nMinPage;
       pCache->pnPurgeable = &pGroup->nPurgeable;
     }else{
-      static unsigned int dummyCurrentPage;
-      pCache->pnPurgeable = &dummyCurrentPage;
+      pCache->pnPurgeable = &pCache->nPurgeableDummy;
     }
     pcache1LeaveMutex(pGroup);
     if( pCache->nHash==0 ){

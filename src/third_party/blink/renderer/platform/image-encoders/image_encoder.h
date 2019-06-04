@@ -5,10 +5,9 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_PLATFORM_IMAGE_ENCODERS_IMAGE_ENCODER_H_
 #define THIRD_PARTY_BLINK_RENDERER_PLATFORM_IMAGE_ENCODERS_IMAGE_ENCODER_H_
 
+#include "third_party/blink/renderer/platform/graphics/graphics_types.h"
 #include "third_party/blink/renderer/platform/platform_export.h"
 #include "third_party/blink/renderer/platform/wtf/vector.h"
-#include "third_party/libjpeg/jpeglib.h"          // for JPEG_MAX_DIMENSION
-#include "third_party/libwebp/src/webp/encode.h"  // for WEBP_MAX_DIMENSION
 #include "third_party/skia/include/core/SkStream.h"
 #include "third_party/skia/include/encode/SkJpegEncoder.h"
 #include "third_party/skia/include/encode/SkPngEncoder.h"
@@ -49,14 +48,7 @@ class PLATFORM_EXPORT ImageEncoder {
                      const SkPixmap& src,
                      const SkWebpEncoder::Options&);
 
-  enum MimeType {
-    kMimeTypePng,
-    kMimeTypeJpeg,
-    kMimeTypeWebp,
-    kNumberOfMimeTypeSupported
-  };
-
-  static int MaxDimension(MimeType mime_type);
+  static int MaxDimension(ImageEncodingMimeType mime_type);
 
   static std::unique_ptr<ImageEncoder> Create(Vector<unsigned char>* dst,
                                               const SkPixmap& src,
@@ -87,9 +79,7 @@ class PLATFORM_EXPORT ImageEncoder {
    *  is out of range, this will perform a lossy encode with the default
    *  value (80).
    */
-  static SkWebpEncoder::Options ComputeWebpOptions(
-      double quality,
-      SkTransferFunctionBehavior unpremulBehavior);
+  static SkWebpEncoder::Options ComputeWebpOptions(double quality);
 
  private:
   ImageEncoder(Vector<unsigned char>* dst) : dst_(dst) {}

@@ -13,6 +13,7 @@
 #include "third_party/blink/renderer/platform/heap/handle.h"
 #include "third_party/blink/renderer/platform/shared_buffer.h"
 #include "third_party/blink/renderer/platform/wtf/functional.h"
+#include "third_party/blink/renderer/platform/wtf/time.h"
 #include "third_party/skia/include/core/SkBitmap.h"
 
 namespace blink {
@@ -26,6 +27,8 @@ class ResourceError;
 class MODULES_EXPORT NotificationImageLoader final
     : public GarbageCollectedFinalized<NotificationImageLoader>,
       public ThreadableLoaderClient {
+  USING_GARBAGE_COLLECTED_MIXIN(NotificationImageLoader);
+
  public:
   // Type names are used in UMAs, so do not rename.
   enum class Type { kImage, kIcon, kBadge, kActionIcon };
@@ -58,14 +61,17 @@ class MODULES_EXPORT NotificationImageLoader final
   void DidFail(const ResourceError& error) override;
   void DidFailRedirectCheck() override;
 
-  void Trace(blink::Visitor* visitor) { visitor->Trace(threadable_loader_); }
+  void Trace(blink::Visitor* visitor) override {
+    visitor->Trace(threadable_loader_);
+    ThreadableLoaderClient::Trace(visitor);
+  }
 
  private:
   void RunCallbackWithEmptyBitmap();
 
   Type type_;
   bool stopped_;
-  double start_time_;
+  TimeTicks start_time_;
   scoped_refptr<SharedBuffer> data_;
   ImageCallback image_callback_;
   Member<ThreadableLoader> threadable_loader_;

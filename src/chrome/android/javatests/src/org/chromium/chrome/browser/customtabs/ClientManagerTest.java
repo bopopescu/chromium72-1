@@ -9,6 +9,7 @@ import android.net.Uri;
 import android.os.Process;
 import android.support.customtabs.CustomTabsService;
 import android.support.customtabs.CustomTabsSessionToken;
+import android.support.customtabs.PostMessageServiceConnection;
 import android.support.test.InstrumentationRegistry;
 import android.support.test.filters.SmallTest;
 
@@ -27,9 +28,9 @@ import org.chromium.chrome.browser.IntentHandler;
 import org.chromium.chrome.browser.browserservices.Origin;
 import org.chromium.chrome.browser.browserservices.OriginVerifier;
 import org.chromium.chrome.browser.browserservices.PostMessageHandler;
-import org.chromium.content.browser.test.NativeLibraryTestRule;
-import org.chromium.content.browser.test.util.Criteria;
-import org.chromium.content.browser.test.util.CriteriaHelper;
+import org.chromium.content_public.browser.test.NativeLibraryTestRule;
+import org.chromium.content_public.browser.test.util.Criteria;
+import org.chromium.content_public.browser.test.util.CriteriaHelper;
 
 /** Tests for ClientManager. */
 @RunWith(BaseJUnit4ClassRunner.class)
@@ -52,7 +53,7 @@ public class ClientManagerTest {
                                   .getApplicationContext();
         mActivityTestRule.loadNativeLibraryNoBrowserProcess();
         RequestThrottler.purgeAllEntriesForTesting(context);
-        mClientManager = new ClientManager(context);
+        mClientManager = new ClientManager();
         ThreadUtils.runOnUiThreadBlocking(new Runnable() {
             @Override
             public void run() {
@@ -64,37 +65,38 @@ public class ClientManagerTest {
     @Test
     @SmallTest
     public void testNoSessionNoWarmup() {
-        Assert.assertEquals(
-                ClientManager.NO_SESSION_NO_WARMUP, mClientManager.getWarmupState(null));
+        Assert.assertEquals(ClientManager.CalledWarmup.NO_SESSION_NO_WARMUP,
+                mClientManager.getWarmupState(null));
     }
 
     @Test
     @SmallTest
     public void testNoSessionWarmup() {
         mClientManager.recordUidHasCalledWarmup(mUid);
-        Assert.assertEquals(ClientManager.NO_SESSION_WARMUP, mClientManager.getWarmupState(null));
+        Assert.assertEquals(
+                ClientManager.CalledWarmup.NO_SESSION_WARMUP, mClientManager.getWarmupState(null));
     }
 
     @Test
     @SmallTest
     public void testInvalidSessionNoWarmup() {
-        Assert.assertEquals(
-                ClientManager.NO_SESSION_NO_WARMUP, mClientManager.getWarmupState(mSession));
+        Assert.assertEquals(ClientManager.CalledWarmup.NO_SESSION_NO_WARMUP,
+                mClientManager.getWarmupState(mSession));
     }
 
     @Test
     @SmallTest
     public void testInvalidSessionWarmup() {
         mClientManager.recordUidHasCalledWarmup(mUid);
-        Assert.assertEquals(
-                ClientManager.NO_SESSION_WARMUP, mClientManager.getWarmupState(mSession));
+        Assert.assertEquals(ClientManager.CalledWarmup.NO_SESSION_WARMUP,
+                mClientManager.getWarmupState(mSession));
     }
 
     @Test
     @SmallTest
     public void testValidSessionNoWarmup() {
-        mClientManager.newSession(mSession, mUid, null, null);
-        Assert.assertEquals(ClientManager.SESSION_NO_WARMUP_NOT_CALLED,
+        mClientManager.newSession(mSession, mUid, null, null, null);
+        Assert.assertEquals(ClientManager.CalledWarmup.SESSION_NO_WARMUP_NOT_CALLED,
                 mClientManager.getWarmupState(mSession));
     }
 
@@ -102,8 +104,8 @@ public class ClientManagerTest {
     @SmallTest
     public void testValidSessionOtherWarmup() {
         mClientManager.recordUidHasCalledWarmup(mUid + 1);
-        mClientManager.newSession(mSession, mUid, null, null);
-        Assert.assertEquals(ClientManager.SESSION_NO_WARMUP_ALREADY_CALLED,
+        mClientManager.newSession(mSession, mUid, null, null, null);
+        Assert.assertEquals(ClientManager.CalledWarmup.SESSION_NO_WARMUP_ALREADY_CALLED,
                 mClientManager.getWarmupState(mSession));
     }
 
@@ -111,60 +113,63 @@ public class ClientManagerTest {
     @SmallTest
     public void testValidSessionWarmup() {
         mClientManager.recordUidHasCalledWarmup(mUid);
-        mClientManager.newSession(mSession, mUid, null, null);
-        Assert.assertEquals(ClientManager.SESSION_WARMUP, mClientManager.getWarmupState(mSession));
+        mClientManager.newSession(mSession, mUid, null, null, null);
+        Assert.assertEquals(
+                ClientManager.CalledWarmup.SESSION_WARMUP, mClientManager.getWarmupState(mSession));
     }
 
     @Test
     @SmallTest
     public void testValidSessionWarmupSeveralCalls() {
         mClientManager.recordUidHasCalledWarmup(mUid);
-        mClientManager.newSession(mSession, mUid, null, null);
-        Assert.assertEquals(ClientManager.SESSION_WARMUP, mClientManager.getWarmupState(mSession));
+        mClientManager.newSession(mSession, mUid, null, null, null);
+        Assert.assertEquals(
+                ClientManager.CalledWarmup.SESSION_WARMUP, mClientManager.getWarmupState(mSession));
 
         CustomTabsSessionToken token = CustomTabsSessionToken.createMockSessionTokenForTesting();
-        mClientManager.newSession(token, mUid, null, null);
-        Assert.assertEquals(ClientManager.SESSION_WARMUP, mClientManager.getWarmupState(token));
+        mClientManager.newSession(token, mUid, null, null, null);
+        Assert.assertEquals(
+                ClientManager.CalledWarmup.SESSION_WARMUP, mClientManager.getWarmupState(token));
     }
 
     @Test
     @SmallTest
     @RetryOnFailure
     public void testPredictionOutcomeSuccess() {
-        Assert.assertTrue(mClientManager.newSession(mSession, mUid, null, null));
+        Assert.assertTrue(mClientManager.newSession(mSession, mUid, null, null, null));
         Assert.assertTrue(
                 mClientManager.updateStatsAndReturnWhetherAllowed(mSession, mUid, URL, false));
-        Assert.assertEquals(
-                ClientManager.GOOD_PREDICTION, mClientManager.getPredictionOutcome(mSession, URL));
+        Assert.assertEquals(ClientManager.PredictionStatus.GOOD,
+                mClientManager.getPredictionOutcome(mSession, URL));
     }
 
     @Test
     @SmallTest
     public void testPredictionOutcomeNoPrediction() {
-        Assert.assertTrue(mClientManager.newSession(mSession, mUid, null, null));
+        Assert.assertTrue(mClientManager.newSession(mSession, mUid, null, null, null));
         mClientManager.recordUidHasCalledWarmup(mUid);
-        Assert.assertEquals(
-                ClientManager.NO_PREDICTION, mClientManager.getPredictionOutcome(mSession, URL));
+        Assert.assertEquals(ClientManager.PredictionStatus.NONE,
+                mClientManager.getPredictionOutcome(mSession, URL));
     }
 
     @Test
     @SmallTest
     public void testPredictionOutcomeBadPrediction() {
-        Assert.assertTrue(mClientManager.newSession(mSession, mUid, null, null));
+        Assert.assertTrue(mClientManager.newSession(mSession, mUid, null, null, null));
         Assert.assertTrue(
                 mClientManager.updateStatsAndReturnWhetherAllowed(mSession, mUid, URL, false));
-        Assert.assertEquals(ClientManager.BAD_PREDICTION,
+        Assert.assertEquals(ClientManager.PredictionStatus.BAD,
                 mClientManager.getPredictionOutcome(mSession, URL + "#fragment"));
     }
 
     @Test
     @SmallTest
     public void testPredictionOutcomeIgnoreFragment() {
-        Assert.assertTrue(mClientManager.newSession(mSession, mUid, null, null));
+        Assert.assertTrue(mClientManager.newSession(mSession, mUid, null, null, null));
         Assert.assertTrue(
                 mClientManager.updateStatsAndReturnWhetherAllowed(mSession, mUid, URL, false));
         mClientManager.setIgnoreFragmentsForSession(mSession, true);
-        Assert.assertEquals(ClientManager.GOOD_PREDICTION,
+        Assert.assertEquals(ClientManager.PredictionStatus.GOOD,
                 mClientManager.getPredictionOutcome(mSession, URL + "#fragment"));
     }
 
@@ -172,7 +177,9 @@ public class ClientManagerTest {
     @SmallTest
     public void testPostMessageOriginVerification() {
         final ClientManager cm = mClientManager;
-        Assert.assertTrue(cm.newSession(mSession, mUid, null, new PostMessageHandler(mSession)));
+        PostMessageServiceConnection serviceConnection = new PostMessageServiceConnection(mSession);
+        Assert.assertTrue(cm.newSession(mSession, mUid, null,
+                new PostMessageHandler(serviceConnection), serviceConnection));
         // Should always start with no origin.
         Assert.assertNull(cm.getPostMessageOriginForSessionForTesting(mSession));
 
@@ -219,7 +226,9 @@ public class ClientManagerTest {
     @SmallTest
     public void testPostMessageOriginDifferentRelations() {
         final ClientManager cm = mClientManager;
-        Assert.assertTrue(cm.newSession(mSession, mUid, null, new PostMessageHandler(mSession)));
+        PostMessageServiceConnection serviceConnection = new PostMessageServiceConnection(mSession);
+        Assert.assertTrue(cm.newSession(mSession, mUid, null,
+                new PostMessageHandler(serviceConnection), serviceConnection));
         // Should always start with no origin.
         Assert.assertNull(cm.getPostMessageOriginForSessionForTesting(mSession));
 
@@ -256,7 +265,9 @@ public class ClientManagerTest {
     @SmallTest
     public void testPostMessageOriginHttpNotAllowed() {
         final ClientManager cm = mClientManager;
-        Assert.assertTrue(cm.newSession(mSession, mUid, null, new PostMessageHandler(mSession)));
+        PostMessageServiceConnection serviceConnection = new PostMessageServiceConnection(mSession);
+        Assert.assertTrue(cm.newSession(mSession, mUid, null,
+                new PostMessageHandler(serviceConnection), serviceConnection));
         // Should always start with no origin.
         Assert.assertNull(cm.getPostMessageOriginForSessionForTesting(mSession));
 
@@ -287,7 +298,7 @@ public class ClientManagerTest {
         Context context = InstrumentationRegistry.getInstrumentation()
                                   .getTargetContext()
                                   .getApplicationContext();
-        Assert.assertTrue(mClientManager.newSession(mSession, mUid, null, null));
+        Assert.assertTrue(mClientManager.newSession(mSession, mUid, null, null, null));
 
         // Two low confidence in a row is OK.
         Assert.assertTrue(
@@ -321,16 +332,16 @@ public class ClientManagerTest {
                                   .getApplicationContext();
 
         String name = "CustomTabs.MayLaunchUrlType";
-        MetricsUtils.HistogramDelta noMayLaunchUrlDelta =
-                new MetricsUtils.HistogramDelta(name, ClientManager.NO_MAY_LAUNCH_URL);
-        MetricsUtils.HistogramDelta lowConfidenceDelta =
-                new MetricsUtils.HistogramDelta(name, ClientManager.LOW_CONFIDENCE);
-        MetricsUtils.HistogramDelta highConfidenceDelta =
-                new MetricsUtils.HistogramDelta(name, ClientManager.HIGH_CONFIDENCE);
+        MetricsUtils.HistogramDelta noMayLaunchUrlDelta = new MetricsUtils.HistogramDelta(
+                name, ClientManager.MayLaunchUrlType.NO_MAY_LAUNCH_URL);
+        MetricsUtils.HistogramDelta lowConfidenceDelta = new MetricsUtils.HistogramDelta(
+                name, ClientManager.MayLaunchUrlType.LOW_CONFIDENCE);
+        MetricsUtils.HistogramDelta highConfidenceDelta = new MetricsUtils.HistogramDelta(
+                name, ClientManager.MayLaunchUrlType.HIGH_CONFIDENCE);
         MetricsUtils.HistogramDelta bothDelta =
-                new MetricsUtils.HistogramDelta(name, ClientManager.BOTH);
+                new MetricsUtils.HistogramDelta(name, ClientManager.MayLaunchUrlType.BOTH);
 
-        Assert.assertTrue(mClientManager.newSession(mSession, mUid, null, null));
+        Assert.assertTrue(mClientManager.newSession(mSession, mUid, null, null, null));
 
         // No prediction;
         mClientManager.registerLaunch(mSession, URL);
@@ -361,7 +372,7 @@ public class ClientManagerTest {
 
         // Low and High confidence, same call.
         RequestThrottler.purgeAllEntriesForTesting(context);
-        bothDelta = new MetricsUtils.HistogramDelta(name, ClientManager.BOTH);
+        bothDelta = new MetricsUtils.HistogramDelta(name, ClientManager.MayLaunchUrlType.BOTH);
         Assert.assertTrue(
                 mClientManager.updateStatsAndReturnWhetherAllowed(mSession, mUid, URL, true));
         mClientManager.registerLaunch(mSession, URL);

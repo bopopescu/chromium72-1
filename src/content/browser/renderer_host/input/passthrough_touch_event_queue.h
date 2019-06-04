@@ -34,7 +34,7 @@ class CONTENT_EXPORT PassthroughTouchEventQueueClient {
   virtual void OnFilteringTouchEvent(
       const blink::WebTouchEvent& touch_event) = 0;
 
-  virtual bool TouchscreenFlingInProgress() = 0;
+  virtual void FlushDeferredGestureQueue() = 0;
 };
 
 // A queue that processes a touch-event and forwards it on to the
@@ -80,7 +80,8 @@ class CONTENT_EXPORT PassthroughTouchEventQueue {
   void ProcessTouchAck(InputEventAckSource ack_source,
                        InputEventAckState ack_result,
                        const ui::LatencyInfo& latency_info,
-                       const uint32_t unique_touch_event_id);
+                       const uint32_t unique_touch_event_id,
+                       bool should_stop_timeout_monitor);
   void OnGestureScrollEvent(const GestureEventWithLatencyInfo& gesture_event);
 
   void OnGestureEventAck(const GestureEventWithLatencyInfo& event,
@@ -97,6 +98,8 @@ class CONTENT_EXPORT PassthroughTouchEventQueue {
   bool IsAckTimeoutEnabled() const;
 
   bool Empty() const;
+
+  void StopTimeoutMonitor();
 
  protected:
   void SendTouchCancelEventForTouchEvent(

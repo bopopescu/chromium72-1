@@ -17,12 +17,16 @@
 #include "base/optional.h"
 #include "ui/aura/window_observer.h"
 #include "ui/base/ui_base_types.h"
+#include "ui/compositor/layer_owner.h"
+#include "ui/display/display.h"
+#include "ui/gfx/animation/tween.h"
 
 namespace gfx {
 class Rect;
 }
 
 namespace ash {
+class ImmersiveGestureDragHandler;
 class LockWindowState;
 class TabletModeWindowState;
 
@@ -31,6 +35,7 @@ enum class WindowPinType;
 }
 
 namespace wm {
+class InitialStateTestState;
 class WindowState;
 class WindowStateDelegate;
 class WindowStateObserver;
@@ -59,6 +64,10 @@ ASH_EXPORT const WindowState* GetWindowState(const aura::Window* window);
 // accessing the window using |window()| is cheap.
 class ASH_EXPORT WindowState : public aura::WindowObserver {
  public:
+  // The default duration for an animation between two sets of bounds.
+  static constexpr base::TimeDelta kBoundsChangeSlideDuration =
+      base::TimeDelta::FromMilliseconds(120);
+
   // A subclass of State class represents one of the window's states
   // that corresponds to WindowStateType in Ash environment, e.g.
   // maximized, minimized or side snapped, as subclass.
@@ -114,6 +123,7 @@ class ASH_EXPORT WindowState : public aura::WindowObserver {
   bool IsSnapped() const;
   bool IsPinned() const;
   bool IsTrustedPinned() const;
+  bool IsPip() const;
 
   // True if the window's state type is WindowStateType::MAXIMIZED,
   // WindowStateType::FULLSCREEN or WindowStateType::PINNED.
@@ -230,16 +240,6 @@ class ASH_EXPORT WindowState : public aura::WindowObserver {
     autohide_shelf_when_maximized_or_fullscreen_ = value;
   }
 
-  // If the minimum visibility is true, ash will try to keep a
-  // minimum amount of the window is always visible on the work area
-  // when shown.
-  // TODO(oshima): Consolidate this and GetWindowPositionManaged
-  // into single parameter to control the window placement.
-  bool minimum_visibility() const { return minimum_visibility_; }
-  void set_minimum_visibility(bool minimum_visibility) {
-    minimum_visibility_ = minimum_visibility;
-  }
-
   // Gets/Sets the bounds of the window before it was moved by the auto window
   // management. As long as it was not auto-managed, it will return NULL.
   const base::Optional<gfx::Rect> pre_auto_manage_window_bounds() {
@@ -297,7 +297,6 @@ class ASH_EXPORT WindowState : public aura::WindowObserver {
   // the top portion of the window through a touch / mouse gesture. It might
   // also allow the shelf to be shown in some situations.
   bool IsInImmersiveFullscreen() const;
-  void SetInImmersiveFullscreen(bool enabled);
 
   // True if the window should not adjust the window's bounds when
   // virtual keyboard bounds changes.
@@ -337,9 +336,15 @@ class ASH_EXPORT WindowState : public aura::WindowObserver {
   void OnCompleteDrag(const gfx::Point& location);
   void OnRevertDrag(const gfx::Point& location);
 
+  // Notifies that the window lost the activation.
+  void OnActivationLost();
+
   // Returns a pointer to DragDetails during drag operations.
   const DragDetails* drag_details() const { return drag_details_.get(); }
   DragDetails* drag_details() { return drag_details_.get(); }
+
+  // Returns the Display that this WindowState is on.
+  display::Display GetDisplay();
 
   class TestApi {
    public:
@@ -351,6 +356,7 @@ class ASH_EXPORT WindowState : public aura::WindowObserver {
  private:
   friend class BaseState;
   friend class DefaultState;
+  friend class InitialStateTestState;
   friend class ash::wm::ClientControlledState;
   friend class ash::LockWindowState;
   friend class ash::TabletModeWindowState;
@@ -358,10 +364,14 @@ class ASH_EXPORT WindowState : public aura::WindowObserver {
   FRIEND_TEST_ALL_PREFIXES(WindowAnimationsTest, CrossFadeToBounds);
   FRIEND_TEST_ALL_PREFIXES(WindowAnimationsTest,
                            CrossFadeToBoundsFromTransform);
+  FRIEND_TEST_ALL_PREFIXES(WindowStateTest, PipWindowMaskRecreated);
+  FRIEND_TEST_ALL_PREFIXES(WindowStateTest, PipWindowHasMaskLayer);
 
   explicit WindowState(aura::Window* window);
 
   WindowStateDelegate* delegate() { return delegate_.get(); }
+
+  bool HasMaximumWidthOrHeight() const;
 
   // Returns the window's current always_on_top state.
   bool GetAlwaysOnTop() const;
@@ -396,12 +406,25 @@ class ASH_EXPORT WindowState : public aura::WindowObserver {
   void SetBoundsConstrained(const gfx::Rect& bounds);
 
   // Sets the wndow's |bounds| and transitions to the new bounds with
-  // a scale animation.
-  void SetBoundsDirectAnimated(const gfx::Rect& bounds);
+  // a scale animation, with duration specified by |duration|.
+  void SetBoundsDirectAnimated(
+      const gfx::Rect& bounds,
+      base::TimeDelta duration = kBoundsChangeSlideDuration);
 
   // Sets the window's |bounds| and transition to the new bounds with
   // a cross fade animation.
-  void SetBoundsDirectCrossFade(const gfx::Rect& bounds);
+  void SetBoundsDirectCrossFade(
+      const gfx::Rect& bounds,
+      gfx::Tween::Type animation_type = gfx::Tween::EASE_OUT);
+
+  // Update PIP related state, such as next window animation type, upon
+  // state change.
+  void UpdatePipState(bool was_pip);
+
+  // Update the PIP bounds if necessary. This may need to happen when the
+  // display work area changes, or if system ui regions like the virtual
+  // keyboard position changes.
+  void UpdatePipBounds();
 
   // aura::WindowObserver:
   void OnWindowPropertyChanged(aura::Window* window,
@@ -423,7 +446,6 @@ class ASH_EXPORT WindowState : public aura::WindowObserver {
   bool ignore_keyboard_bounds_change_ = false;
   bool hide_shelf_when_fullscreen_;
   bool autohide_shelf_when_maximized_or_fullscreen_;
-  bool minimum_visibility_;
   bool cached_always_on_top_;
   bool allow_set_bounds_direct_ = false;
 
@@ -446,13 +468,17 @@ class ASH_EXPORT WindowState : public aura::WindowObserver {
   // displays are restored to their previous states.
   base::Optional<PersistentWindowInfo> persistent_window_info_;
 
-  base::ObserverList<WindowStateObserver> observer_list_;
+  base::ObserverList<WindowStateObserver>::Unchecked observer_list_;
 
   // True to ignore a property change event to avoid reentrance in
   // UpdateWindowStateType()
   bool ignore_property_change_;
 
   std::unique_ptr<State> current_state_;
+
+  // An object that assists with dragging immersive mode windows in tablet mode.
+  // Only non-null when immersive mode is active.
+  std::unique_ptr<ImmersiveGestureDragHandler> immersive_gesture_drag_handler_;
 
   DISALLOW_COPY_AND_ASSIGN(WindowState);
 };

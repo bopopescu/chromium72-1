@@ -48,6 +48,15 @@ class MEDIA_EXPORT VideoDecoder {
   // name does not change across multiple constructions.
   virtual std::string GetDisplayName() const = 0;
 
+  // Returns true if the implementation is expected to be implemented by the
+  // platform. The value should be available immediately after construction and
+  // should not change within the lifetime of a decoder instance. The value is
+  // used for logging and metrics recording.
+  //
+  // TODO(sandersd): Use this to decide when to switch to software decode for
+  // low-resolution videos. https://crbug.com/684792
+  virtual bool IsPlatformDecoder() const;
+
   // Initializes a VideoDecoder with the given |config|, executing the
   // |init_cb| upon completion. |output_cb| is called for each output frame
   // decoded by Decode().
@@ -119,6 +128,13 @@ class MEDIA_EXPORT VideoDecoder {
   // Returns maximum number of parallel decode requests.
   virtual int GetMaxDecodeRequests() const;
 
+  // Returns the recommended number of threads for software video decoding. If
+  // the --video-threads command line option is specified and is valid, that
+  // value is returned. Otherwise |desired_threads| is clamped to the number of
+  // logical processors and then further clamped to
+  // [|limits::kMinVideoDecodeThreads|, |limits::kMaxVideoDecodeThreads|].
+  static int GetRecommendedThreadCount(int desired_threads);
+
  protected:
   // Deletion is only allowed via Destroy().
   virtual ~VideoDecoder();
@@ -126,7 +142,10 @@ class MEDIA_EXPORT VideoDecoder {
  private:
   friend struct std::default_delete<VideoDecoder>;
 
-  // Fires any pending callbacks, stops and destroys the decoder.
+  // Fires any pending callbacks, stops and destroys the decoder. After this
+  // call, external resources (e.g. raw pointers) |this| holds might be
+  // invalidated immediately. So if the decoder is destroyed asynchronously
+  // (e.g. DeleteSoon), external resources must be released in this call.
   virtual void Destroy();
 
   DISALLOW_COPY_AND_ASSIGN(VideoDecoder);

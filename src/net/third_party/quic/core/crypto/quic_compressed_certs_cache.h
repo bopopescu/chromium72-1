@@ -8,11 +8,11 @@
 #include <vector>
 
 #include "net/third_party/quic/core/crypto/proof_source.h"
+#include "net/third_party/quic/core/quic_lru_cache.h"
 #include "net/third_party/quic/platform/api/quic_export.h"
-#include "net/third_party/quic/platform/api/quic_lru_cache.h"
 #include "net/third_party/quic/platform/api/quic_string.h"
 
-namespace net {
+namespace quic {
 
 // QuicCompressedCertsCache is a cache to track most recently compressed certs.
 class QUIC_EXPORT_PRIVATE QuicCompressedCertsCache {
@@ -46,7 +46,7 @@ class QUIC_EXPORT_PRIVATE QuicCompressedCertsCache {
   size_t Size();
 
   // Default size of the QuicCompressedCertsCache per server side investigation.
-  static const size_t kQuicCompressedCertsCacheSize = 225;
+  static const size_t kQuicCompressedCertsCacheSize;
 
  private:
   // A wrapper of the tuple:
@@ -103,6 +103,6 @@ class QUIC_EXPORT_PRIVATE QuicCompressedCertsCache {
   QuicLRUCache<uint64_t, CachedCerts> certs_cache_;
 };
 
-}  // namespace net
+}  // namespace quic
 
 #endif  // NET_THIRD_PARTY_QUIC_CORE_CRYPTO_QUIC_COMPRESSED_CERTS_CACHE_H_

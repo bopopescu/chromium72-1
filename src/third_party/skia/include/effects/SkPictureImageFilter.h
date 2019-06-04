@@ -25,9 +25,6 @@ public:
      */
     static sk_sp<SkImageFilter> Make(sk_sp<SkPicture> picture, const SkRect& cropRect);
 
-    void toString(SkString* str) const override;
-
-    Factory getFactory() const override { return CreateProc; }
 
 protected:
     /*  Constructs an SkPictureImageFilter object from an SkReadBuffer.
@@ -42,10 +39,10 @@ protected:
     sk_sp<SkImageFilter> onMakeColorSpace(SkColorSpaceXformer*) const override;
 
 private:
+    SK_FLATTENABLE_HOOKS(SkPictureImageFilter)
+
     explicit SkPictureImageFilter(sk_sp<SkPicture> picture);
     SkPictureImageFilter(sk_sp<SkPicture> picture, const SkRect& cropRect, sk_sp<SkColorSpace>);
-    static sk_sp<SkFlattenable> CreateProc(SkReadBuffer&);
-    friend class SkFlattenable::PrivateInitializer;
 
     sk_sp<SkPicture>    fPicture;
     SkRect              fCropRect;

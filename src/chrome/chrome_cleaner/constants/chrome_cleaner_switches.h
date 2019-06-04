@@ -1,4 +1,4 @@
-// Copyright (c) 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -30,9 +30,12 @@ extern const char kNoSelfDeleteSwitch[];
 extern const char kPostRebootSwitch[];
 extern const char kPostRebootSwitchesInOtherRegistryKeySwitch[];
 extern const char kPostRebootTriggerSwitch[];
+extern const char kQuarantineDirSwitch[];
 extern const char kRemoveScanOnlyUwS[];
+extern const char kReportExtensionsSwitch[];
 extern const char kSandboxMojoPipeTokenSwitch[];
 extern const char kSandboxedProcessIdSwitch[];
+extern const char kScanLocationsSwitch[];
 extern const char kScanningTimeoutMinutesSwitch[];
 extern const char kTestLoggingURLSwitch[];
 extern const char kTestingSwitch[];

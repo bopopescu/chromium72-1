@@ -16,8 +16,9 @@
 #include "base/logging.h"
 #include "base/macros.h"
 #include "base/metrics/histogram_macros.h"
+#include "base/stl_util.h"
 #include "base/strings/string_number_conversions.h"
-#include "base/sys_info.h"
+#include "base/system/sys_info.h"
 #include "base/trace_event/trace_event.h"
 #include "build/build_config.h"
 #include "ui/gfx/geometry/rect.h"
@@ -94,6 +95,11 @@
 #define EGL_PLATFORM_ANGLE_TYPE_NULL_ANGLE 0x33AE
 #endif /* EGL_ANGLE_platform_angle_null */
 
+#ifndef EGL_ANGLE_platform_angle_vulkan
+#define EGL_ANGLE_platform_angle_vulkan 1
+#define EGL_PLATFORM_ANGLE_TYPE_VULKAN_ANGLE 0x3450
+#endif /* EGL_ANGLE_platform_angle_vulkan */
+
 #ifndef EGL_ANGLE_x11_visual
 #define EGL_ANGLE_x11_visual 1
 #define EGL_X11_VISUAL_ID_ANGLE 0x33A3
@@ -144,13 +150,13 @@ bool g_egl_surface_orientation_supported = false;
 bool g_egl_context_priority_supported = false;
 bool g_egl_khr_colorspace = false;
 bool g_egl_ext_colorspace_display_p3 = false;
-bool g_use_direct_composition = false;
+bool g_egl_flexible_surface_compatibility_supported = false;
 bool g_egl_robust_resource_init_supported = false;
 bool g_egl_display_texture_share_group_supported = false;
 bool g_egl_create_context_client_arrays_supported = false;
 bool g_egl_android_native_fence_sync_supported = false;
 
-const char kSwapEventTraceCategories[] = "gpu";
+constexpr const char kSwapEventTraceCategories[] = "gpu";
 
 constexpr size_t kMaxTimestampsSupportable = 9;
 
@@ -275,6 +281,12 @@ EGLDisplay GetDisplayFromType(DisplayType display_type,
     case ANGLE_NULL:
       return GetPlatformANGLEDisplay(
           native_display, EGL_PLATFORM_ANGLE_TYPE_NULL_ANGLE, false, false);
+    case ANGLE_VULKAN:
+      return GetPlatformANGLEDisplay(
+          native_display, EGL_PLATFORM_ANGLE_TYPE_VULKAN_ANGLE, false, false);
+    case ANGLE_VULKAN_NULL:
+      return GetPlatformANGLEDisplay(
+          native_display, EGL_PLATFORM_ANGLE_TYPE_VULKAN_ANGLE, false, true);
     default:
       NOTREACHED();
       return EGL_NO_DISPLAY;
@@ -303,6 +315,10 @@ const char* DisplayTypeString(DisplayType display_type) {
       return "OpenGLESNull";
     case ANGLE_NULL:
       return "Null";
+    case ANGLE_VULKAN:
+      return "Vulkan";
+    case ANGLE_VULKAN_NULL:
+      return "VulkanNull";
     default:
       NOTREACHED();
       return "Err";
@@ -477,9 +493,50 @@ EGLConfig ChooseConfig(GLSurfaceFormat format, bool surfaceless) {
 void AddInitDisplay(std::vector<DisplayType>* init_displays,
                     DisplayType display_type) {
   // Make sure to not add the same display type twice.
-  if (std::find(init_displays->begin(), init_displays->end(), display_type) ==
-      init_displays->end()) {
+  if (!base::ContainsValue(*init_displays, display_type))
     init_displays->push_back(display_type);
+}
+
+const char* GetDebugMessageTypeString(EGLint source) {
+  switch (source) {
+    case EGL_DEBUG_MSG_CRITICAL_KHR:
+      return "Critical";
+    case EGL_DEBUG_MSG_ERROR_KHR:
+      return "Error";
+    case EGL_DEBUG_MSG_WARN_KHR:
+      return "Warning";
+    case EGL_DEBUG_MSG_INFO_KHR:
+      return "Info";
+    default:
+      return "UNKNOWN";
+  }
+}
+
+static void EGLAPIENTRY LogEGLDebugMessage(EGLenum error,
+                                           const char* command,
+                                           EGLint message_type,
+                                           EGLLabelKHR thread_label,
+                                           EGLLabelKHR object_label,
+                                           const char* message) {
+  std::string formatted_message = std::string("EGL Driver message (") +
+                                  GetDebugMessageTypeString(message_type) +
+                                  ") " + command + ": " + message;
+
+  // Assume that all labels that have been set are strings
+  if (thread_label) {
+    formatted_message += " thread: ";
+    formatted_message += static_cast<const char*>(thread_label);
+  }
+  if (object_label) {
+    formatted_message += " object: ";
+    formatted_message += static_cast<const char*>(object_label);
+  }
+
+  if (message_type == EGL_DEBUG_MSG_CRITICAL_KHR ||
+      message_type == EGL_DEBUG_MSG_ERROR_KHR) {
+    LOG(ERROR) << formatted_message;
+  } else {
+    DVLOG(1) << formatted_message;
   }
 }
 
@@ -488,6 +545,7 @@ void AddInitDisplay(std::vector<DisplayType>* init_displays,
 void GetEGLInitDisplays(bool supports_angle_d3d,
                         bool supports_angle_opengl,
                         bool supports_angle_null,
+                        bool supports_angle_vulkan,
                         const base::CommandLine* command_line,
                         std::vector<DisplayType>* init_displays) {
   // SwiftShader does not use the platform extensions
@@ -540,8 +598,13 @@ void GetEGLInitDisplays(bool supports_angle_d3d,
 
   if (supports_angle_opengl) {
     if (use_angle_default && !supports_angle_d3d) {
+#if defined(OS_ANDROID)
+      // Don't request desktopGL on android
+      AddInitDisplay(init_displays, ANGLE_OPENGLES);
+#else
       AddInitDisplay(init_displays, ANGLE_OPENGL);
       AddInitDisplay(init_displays, ANGLE_OPENGLES);
+#endif
     } else {
       if (requested_renderer == kANGLEImplementationOpenGLName) {
         AddInitDisplay(init_displays, ANGLE_OPENGL);
@@ -552,6 +615,14 @@ void GetEGLInitDisplays(bool supports_angle_d3d,
       } else if (requested_renderer == kANGLEImplementationOpenGLESNULLName) {
         AddInitDisplay(init_displays, ANGLE_OPENGLES_NULL);
       }
+    }
+  }
+
+  if (supports_angle_vulkan) {
+    if (requested_renderer == kANGLEImplementationVulkanName) {
+      AddInitDisplay(init_displays, ANGLE_VULKAN);
+    } else if (requested_renderer == kANGLEImplementationVulkanNULLName) {
+      AddInitDisplay(init_displays, ANGLE_VULKAN_NULL);
     }
   }
 
@@ -615,8 +686,7 @@ bool GLSurfaceEGL::InitializeOneOffCommon() {
       HasEGLExtension("EGL_CHROMIUM_create_context_bind_generates_resource");
   g_egl_create_context_webgl_compatability_supported =
       HasEGLExtension("EGL_ANGLE_create_context_webgl_compatibility");
-  g_egl_sync_control_supported =
-      HasEGLExtension("EGL_CHROMIUM_sync_control");
+  g_egl_sync_control_supported = HasEGLExtension("EGL_CHROMIUM_sync_control");
   g_egl_window_fixed_size_supported =
       HasEGLExtension("EGL_ANGLE_window_fixed_size");
   g_egl_surface_orientation_supported =
@@ -638,15 +708,9 @@ bool GLSurfaceEGL::InitializeOneOffCommon() {
 
 #if defined(OS_WIN)
   // Need EGL_ANGLE_flexible_surface_compatibility to allow surfaces with and
-  // without alpha to be bound to the same context. Blacklist direct composition
-  // if MCTU.dll or MCTUX.dll are injected. These are user mode drivers for
-  // display adapters from Magic Control Technology Corporation.
-  g_use_direct_composition =
-      HasEGLExtension("EGL_ANGLE_direct_composition") &&
-      HasEGLExtension("EGL_ANGLE_flexible_surface_compatibility") &&
-      !base::CommandLine::ForCurrentProcess()->HasSwitch(
-          switches::kDisableDirectComposition) &&
-      !GetModuleHandle(TEXT("MCTU.dll")) && !GetModuleHandle(TEXT("MCTUX.dll"));
+  // without alpha to be bound to the same context.
+  g_egl_flexible_surface_compatibility_supported =
+      HasEGLExtension("EGL_ANGLE_flexible_surface_compatibility");
 #endif
 
   g_egl_display_texture_share_group_supported =
@@ -673,7 +737,7 @@ bool GLSurfaceEGL::InitializeOneOffCommon() {
     scoped_refptr<GLSurface> surface = new SurfacelessEGL(gfx::Size(1, 1));
     scoped_refptr<GLContext> context = InitializeGLContext(
         new GLContextEGL(nullptr), surface.get(), GLContextAttribs());
-    if (!context->MakeCurrent(surface.get()))
+    if (!context || !context->MakeCurrent(surface.get()))
       g_egl_surfaceless_context_supported = false;
 
     // Ensure context supports GL_OES_surfaceless_context.
@@ -732,7 +796,6 @@ void GLSurfaceEGL::ShutdownOneOff() {
   g_egl_sync_control_supported = false;
   g_egl_window_fixed_size_supported = false;
   g_egl_surface_orientation_supported = false;
-  g_use_direct_composition = false;
   g_egl_surfaceless_context_supported = false;
   g_egl_robust_resource_init_supported = false;
   g_egl_display_texture_share_group_supported = false;
@@ -785,8 +848,8 @@ bool GLSurfaceEGL::IsEGLContextPrioritySupported() {
 }
 
 // static
-bool GLSurfaceEGL::IsDirectCompositionSupported() {
-  return g_use_direct_composition;
+bool GLSurfaceEGL::IsEGLFlexibleSurfaceCompatibilitySupported() {
+  return g_egl_flexible_surface_compatibility_supported;
 }
 
 bool GLSurfaceEGL::IsRobustResourceInitSupported() {
@@ -823,9 +886,30 @@ EGLDisplay GLSurfaceEGL::InitializeDisplay(
   const char* client_extensions =
       eglQueryString(EGL_NO_DISPLAY, EGL_EXTENSIONS);
 
+  bool supports_egl_debug =
+      client_extensions &&
+      ExtensionsContain(client_extensions, "EGL_KHR_debug");
+  if (supports_egl_debug) {
+    EGLAttrib controls[] = {
+        EGL_DEBUG_MSG_CRITICAL_KHR,
+        EGL_TRUE,
+        EGL_DEBUG_MSG_ERROR_KHR,
+        EGL_TRUE,
+        EGL_DEBUG_MSG_WARN_KHR,
+        EGL_TRUE,
+        EGL_DEBUG_MSG_INFO_KHR,
+        EGL_TRUE,
+        EGL_NONE,
+        EGL_NONE,
+    };
+
+    eglDebugMessageControlKHR(&LogEGLDebugMessage, controls);
+  }
+
   bool supports_angle_d3d = false;
   bool supports_angle_opengl = false;
   bool supports_angle_null = false;
+  bool supports_angle_vulkan = false;
   // Check for availability of ANGLE extensions.
   if (client_extensions &&
       ExtensionsContain(client_extensions, "EGL_ANGLE_platform_angle")) {
@@ -835,11 +919,13 @@ EGLDisplay GLSurfaceEGL::InitializeDisplay(
         ExtensionsContain(client_extensions, "EGL_ANGLE_platform_angle_opengl");
     supports_angle_null =
         ExtensionsContain(client_extensions, "EGL_ANGLE_platform_angle_null");
+    supports_angle_vulkan =
+        ExtensionsContain(client_extensions, "EGL_ANGLE_platform_angle_vulkan");
   }
 
   std::vector<DisplayType> init_displays;
   GetEGLInitDisplays(supports_angle_d3d, supports_angle_opengl,
-                     supports_angle_null,
+                     supports_angle_null, supports_angle_vulkan,
                      base::CommandLine::ForCurrentProcess(), &init_displays);
 
   for (size_t disp_index = 0; disp_index < init_displays.size(); ++disp_index) {
@@ -934,14 +1020,6 @@ bool NativeViewGLSurfaceEGL::Initialize(GLSurfaceFormat format) {
     egl_window_attributes.push_back(EGL_SURFACE_ORIENTATION_INVERT_Y_ANGLE);
   }
 
-  if (g_use_direct_composition) {
-    egl_window_attributes.push_back(
-        EGL_FLEXIBLE_SURFACE_COMPATIBILITY_SUPPORTED_ANGLE);
-    egl_window_attributes.push_back(EGL_TRUE);
-    egl_window_attributes.push_back(EGL_DIRECT_COMPOSITION_ANGLE);
-    egl_window_attributes.push_back(EGL_TRUE);
-  }
-
   switch (format_.GetColorSpace()) {
     case GLSurfaceFormat::COLOR_SPACE_UNSPECIFIED:
       break;
@@ -1019,6 +1097,13 @@ void NativeViewGLSurfaceEGL::SetEnableSwapTimestamps() {
 
   eglSurfaceAttrib(GetDisplay(), surface_, EGL_TIMESTAMPS_ANDROID, EGL_TRUE);
 
+  // Check if egl composite interval is supported or not. If not then return.
+  // Else check which other timestamps are supported.
+  EGLint interval_name = EGL_COMPOSITE_INTERVAL_ANDROID;
+  if (!eglGetCompositorTimingSupportedANDROID(GetDisplay(), surface_,
+                                              interval_name))
+    return;
+
   static const struct {
     EGLint egl_name;
     const char* name;
@@ -1040,6 +1125,25 @@ void NativeViewGLSurfaceEGL::SetEnableSwapTimestamps() {
     if (!eglGetFrameTimestampSupportedANDROID(GetDisplay(), surface_,
                                               ts.egl_name))
       continue;
+
+    // For presentation feedback, prefer the actual scan out time, but fallback
+    // to SurfaceFlinger's composite time since some devices don't support
+    // the former.
+    switch (ts.egl_name) {
+      case EGL_FIRST_COMPOSITION_START_TIME_ANDROID:
+        // Value of presentation_feedback_index_ relies on the order of
+        // all_timestamps.
+        presentation_feedback_index_ =
+            static_cast<int>(supported_egl_timestamps_.size());
+        presentation_flags_ = 0;
+        break;
+      case EGL_DISPLAY_PRESENT_TIME_ANDROID:
+        presentation_feedback_index_ =
+            static_cast<int>(supported_egl_timestamps_.size());
+        presentation_flags_ = gfx::PresentationFeedback::kVSync |
+                              gfx::PresentationFeedback::kHWCompletion;
+        break;
+    }
 
     // Stored in separate vectors so we can pass the egl timestamps
     // directly to the EGL functions.
@@ -1086,21 +1190,24 @@ gfx::SwapResult NativeViewGLSurfaceEGL::SwapBuffers(
     return gfx::SwapResult::SWAP_FAILED;
   }
 
-  EGLuint64KHR newFrameId = 0;
-  bool newFrameIdIsValid = true;
+  EGLuint64KHR new_frame_id = 0;
+  bool new_frame_id_is_valid = true;
   if (use_egl_timestamps_) {
-    newFrameIdIsValid =
-        !!eglGetNextFrameIdANDROID(GetDisplay(), surface_, &newFrameId);
+    new_frame_id_is_valid =
+        !!eglGetNextFrameIdANDROID(GetDisplay(), surface_, &new_frame_id);
   }
+  if (!new_frame_id_is_valid)
+    new_frame_id = -1;
 
   GLSurfacePresentationHelper::ScopedSwapBuffers scoped_swap_buffers(
-      presentation_helper_.get(), callback);
+      presentation_helper_.get(), callback, new_frame_id);
+
   if (!eglSwapBuffers(GetDisplay(), surface_)) {
     DVLOG(1) << "eglSwapBuffers failed with error "
              << GetLastEGLErrorString();
     scoped_swap_buffers.set_result(gfx::SwapResult::SWAP_FAILED);
   } else if (use_egl_timestamps_) {
-    UpdateSwapEvents(newFrameId, newFrameIdIsValid);
+    UpdateSwapEvents(new_frame_id, new_frame_id_is_valid);
   }
 
 #if defined(USE_X11)
@@ -1251,45 +1358,29 @@ bool NativeViewGLSurfaceEGL::Resize(const gfx::Size& size,
                                     bool has_alpha) {
   if (size == GetSize())
     return true;
-
   size_ = size;
-
-  ui::ScopedReleaseCurrent release_current;
-
-  Destroy();
-
-  if (!Initialize(format_)) {
-    LOG(ERROR) << "Failed to resize window.";
-    return false;
+  {
+    ui::ScopedReleaseCurrent release_current;
+    Destroy();
+    if (!Initialize(format_)) {
+      LOG(ERROR) << "Failed to resize window.";
+      return false;
+    }
   }
-
-  if (!release_current.Restore()) {
-    LOG(ERROR) << "Could not MakeCurrent after Resize";
-    return false;
-  }
-
   SetVSyncEnabled(vsync_enabled_);
-
   return true;
 }
 
 bool NativeViewGLSurfaceEGL::Recreate() {
-  ui::ScopedReleaseCurrent release_current;
-
-  Destroy();
-
-  if (!Initialize(format_)) {
-    LOG(ERROR) << "Failed to create surface.";
-    return false;
+  {
+    ui::ScopedReleaseCurrent release_current;
+    Destroy();
+    if (!Initialize(format_)) {
+      LOG(ERROR) << "Failed to create surface.";
+      return false;
+    }
   }
-
-  if (!release_current.Restore()) {
-    LOG(ERROR) << "Failed to MakeCurrent after Recreate";
-    return false;
-  }
-
   SetVSyncEnabled(vsync_enabled_);
-
   return true;
 }
 
@@ -1305,8 +1396,87 @@ bool NativeViewGLSurfaceEGL::FlipsVertically() const {
   return flips_vertically_;
 }
 
-bool NativeViewGLSurfaceEGL::BuffersFlipped() const {
-  return g_use_direct_composition;
+EGLTimestampClient* NativeViewGLSurfaceEGL::GetEGLTimestampClient() {
+  // This api call is used by GLSurfacePresentationHelper class which is member
+  // of this class NativeViewGLSurfaceEGL. Hence its guaranteed "this" pointer
+  // will live longer than the GLSurfacePresentationHelper class.
+  return this;
+}
+
+bool NativeViewGLSurfaceEGL::IsEGLTimestampSupported() const {
+  return use_egl_timestamps_;
+}
+
+bool NativeViewGLSurfaceEGL::GetFrameTimestampInfoIfAvailable(
+    base::TimeTicks* presentation_time,
+    base::TimeDelta* composite_interval,
+    uint32_t* presentation_flags,
+    int frame_id) {
+  DCHECK(presentation_time);
+  DCHECK(composite_interval);
+  DCHECK(presentation_flags);
+
+  TRACE_EVENT1("gpu", "NativeViewGLSurfaceEGL:GetFrameTimestampInfoIfAvailable",
+               "frame_id", frame_id);
+
+  // Get the composite interval.
+  EGLint interval_name = EGL_COMPOSITE_INTERVAL_ANDROID;
+  EGLnsecsANDROID composite_interval_ns = 0;
+  *presentation_flags = 0;
+
+  // If an error is generated, we will treat it as a frame done for timestamp
+  // reporting purpose.
+  if (!eglGetCompositorTimingANDROID(GetDisplay(), surface_, 1, &interval_name,
+                                     &composite_interval_ns)) {
+    *composite_interval = base::TimeDelta::FromNanoseconds(
+        base::TimeTicks::kNanosecondsPerSecond / 60);
+    // If we couldn't get the correct presentation time due to some errors,
+    // return the current time.
+    *presentation_time = base::TimeTicks::Now();
+    return true;
+  }
+
+  // If the composite interval is pending, the frame is not yet done.
+  if (composite_interval_ns == EGL_TIMESTAMP_PENDING_ANDROID) {
+    return false;
+  }
+  DCHECK_GT(composite_interval_ns, 0);
+  *composite_interval = base::TimeDelta::FromNanoseconds(composite_interval_ns);
+
+  // Get the all available timestamps for the frame. If a frame is invalid or
+  // an error is generated,  we will treat it as a frame done for timestamp
+  // reporting purpose.
+  std::vector<EGLnsecsANDROID> egl_timestamps(supported_egl_timestamps_.size(),
+                                              EGL_TIMESTAMP_INVALID_ANDROID);
+  if ((frame_id < 0) ||
+      !eglGetFrameTimestampsANDROID(
+          GetDisplay(), surface_, frame_id,
+          static_cast<EGLint>(supported_egl_timestamps_.size()),
+          supported_egl_timestamps_.data(), egl_timestamps.data())) {
+    // If we couldn't get the correct presentation time due to some errors,
+    // return the current time.
+    *presentation_time = base::TimeTicks::Now();
+    return true;
+  }
+  DCHECK_GE(presentation_feedback_index_, 0);
+
+  // Get the presentation time.
+  EGLnsecsANDROID presentation_time_ns =
+      egl_timestamps[presentation_feedback_index_];
+
+  // If the presentation time is pending, the frame is not yet done.
+  if (presentation_time_ns == EGL_TIMESTAMP_PENDING_ANDROID) {
+    return false;
+  }
+  if (presentation_time_ns == EGL_TIMESTAMP_INVALID_ANDROID) {
+    *presentation_time = base::TimeTicks::Now();
+  } else {
+    *presentation_time = base::TimeTicks() +
+                         base::TimeDelta::FromNanoseconds(presentation_time_ns);
+    *presentation_flags = presentation_flags_;
+  }
+  DCHECK(!presentation_time->is_null());
+  return true;
 }
 
 gfx::SwapResult NativeViewGLSurfaceEGL::SwapBuffersWithDamage(
@@ -1432,7 +1602,7 @@ bool NativeViewGLSurfaceEGL::CommitAndClearPendingOverlays() {
 
   bool success = true;
 #if defined(OS_ANDROID)
-  for (const auto& overlay : pending_overlays_)
+  for (auto& overlay : pending_overlays_)
     success &= overlay.ScheduleOverlayPlane(window_);
   pending_overlays_.clear();
 #else
@@ -1474,22 +1644,12 @@ bool PbufferGLSurfaceEGL::Initialize(GLSurfaceFormat format) {
   // they have different addresses. If they have the same address then a
   // future call to MakeCurrent might early out because it appears the current
   // context and surface have not changed.
-  std::vector<EGLint> pbuffer_attribs;
-  pbuffer_attribs.push_back(EGL_WIDTH);
-  pbuffer_attribs.push_back(size_.width());
-  pbuffer_attribs.push_back(EGL_HEIGHT);
-  pbuffer_attribs.push_back(size_.height());
-
-  if (g_use_direct_composition) {
-    pbuffer_attribs.push_back(
-        EGL_FLEXIBLE_SURFACE_COMPATIBILITY_SUPPORTED_ANGLE);
-    pbuffer_attribs.push_back(EGL_TRUE);
-  }
-
-  pbuffer_attribs.push_back(EGL_NONE);
+  EGLint pbuffer_attribs[] = {
+      EGL_WIDTH, size_.width(), EGL_HEIGHT, size_.height(), EGL_NONE,
+  };
 
   EGLSurface new_surface =
-      eglCreatePbufferSurface(display, GetConfig(), &pbuffer_attribs[0]);
+      eglCreatePbufferSurface(display, GetConfig(), pbuffer_attribs);
   if (!new_surface) {
     LOG(ERROR) << "eglCreatePbufferSurface failed with error "
                << GetLastEGLErrorString();
@@ -1540,11 +1700,6 @@ bool PbufferGLSurfaceEGL::Resize(const gfx::Size& size,
 
   if (!Initialize(format_)) {
     LOG(ERROR) << "Failed to resize pbuffer.";
-    return false;
-  }
-
-  if (!release_current.Restore()) {
-    LOG(ERROR) << "Failed to MakeCurrent after Resize";
     return false;
   }
 

@@ -65,10 +65,12 @@ class TestNativeDisplayDelegate : public NativeDisplayDelegate {
   void SetHDCPState(const DisplaySnapshot& output,
                     HDCPState state,
                     SetHDCPStateCallback callback) override;
-  bool SetColorCorrection(const DisplaySnapshot& output,
-                          const std::vector<GammaRampRGBEntry>& degamma_lut,
-                          const std::vector<GammaRampRGBEntry>& gamma_lut,
-                          const std::vector<float>& correction_matrix) override;
+  bool SetColorMatrix(int64_t display_id,
+                      const std::vector<float>& color_matrix) override;
+  bool SetGammaCorrection(
+      int64_t display_id,
+      const std::vector<display::GammaRampRGBEntry>& degamma_lut,
+      const std::vector<display::GammaRampRGBEntry>& gamma_lut) override;
   void AddObserver(NativeDisplayObserver* observer) override;
   void RemoveObserver(NativeDisplayObserver* observer) override;
   FakeDisplayController* GetFakeDisplayController() override;
@@ -100,7 +102,7 @@ class TestNativeDisplayDelegate : public NativeDisplayDelegate {
 
   ActionLogger* log_;  // Not owned.
 
-  base::ObserverList<NativeDisplayObserver> observers_;
+  base::ObserverList<NativeDisplayObserver>::Unchecked observers_;
 
   DISALLOW_COPY_AND_ASSIGN(TestNativeDisplayDelegate);
 };

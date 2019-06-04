@@ -9,7 +9,6 @@
 #include <algorithm>
 
 #include "core/fxcrt/fx_extension.h"
-#include "third_party/base/ptr_util.h"
 #include "third_party/icu/source/common/unicode/uchar.h"
 
 namespace {
@@ -281,7 +280,7 @@ CXFA_FMToken CXFA_FMLexer::NextToken() {
           ++m_cursor;
           return CXFA_FMToken(TOKdotscream);
         }
-        if (*m_cursor <= '9' && *m_cursor >= '0') {
+        if (FXSYS_IsDecimalDigit(*m_cursor)) {
           --m_cursor;
           return AdvanceForNumber();
         }
@@ -305,7 +304,7 @@ CXFA_FMToken CXFA_FMLexer::AdvanceForNumber() {
   // This will set end to the character after the end of the number.
   int32_t used_length = 0;
   if (m_cursor)
-    FXSYS_wcstof(const_cast<wchar_t*>(m_cursor), -1, &used_length);
+    FXSYS_wcstof(m_cursor, m_end - m_cursor, &used_length);
 
   const wchar_t* end = m_cursor + used_length;
   if (used_length == 0 || !end || FXSYS_iswalpha(*end)) {

@@ -10,12 +10,15 @@
 #include "content/public/browser/host_zoom_map.h"
 #include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/render_process_host.h"
+#include "content/public/browser/render_view_host.h"
 #include "content/public/browser/render_widget_host.h"
 #include "content/public/browser/render_widget_host_view.h"
 #include "content/public/browser/stream_handle.h"
 #include "content/public/browser/stream_info.h"
 #include "content/public/common/child_process_host.h"
+#include "content/public/common/mime_handler_view_mode.h"
 #include "content/public/common/url_constants.h"
+#include "content/public/common/web_preferences.h"
 #include "extensions/browser/api/extensions_api_client.h"
 #include "extensions/browser/api/mime_handler_private/mime_handler_private.h"
 #include "extensions/browser/extension_registry.h"
@@ -64,7 +67,7 @@ StreamContainer::~StreamContainer() {
 }
 
 void StreamContainer::Abort(const base::Closure& callback) {
-  if (!stream_->handle) {
+  if (!stream_ || !stream_->handle) {
     callback.Run();
     return;
   }
@@ -99,10 +102,18 @@ MimeHandlerViewGuest::MimeHandlerViewGuest(WebContents* owner_web_contents)
       embedder_widget_routing_id_(MSG_ROUTING_NONE) {}
 
 MimeHandlerViewGuest::~MimeHandlerViewGuest() {
+  // Before attaching is complete, the instance ID is not valid.
+  if (content::MimeHandlerViewMode::UsesCrossProcessFrame() &&
+      element_instance_id() != guest_view::kInstanceIDNone) {
+    if (auto* embedder_frame = GetEmbedderFrame()) {
+      embedder_frame->Send(new ExtensionsGuestViewMsg_DestroyFrameContainer(
+          element_instance_id()));
+    }
+  }
 }
 
 bool MimeHandlerViewGuest::CanUseCrossProcessFrames() {
-  return false;
+  return content::MimeHandlerViewMode::UsesCrossProcessFrame();
 }
 
 content::RenderWidgetHost* MimeHandlerViewGuest::GetOwnerRenderWidgetHost() {
@@ -113,8 +124,7 @@ content::RenderWidgetHost* MimeHandlerViewGuest::GetOwnerRenderWidgetHost() {
 
 content::SiteInstance* MimeHandlerViewGuest::GetOwnerSiteInstance() {
   DCHECK_NE(embedder_frame_routing_id_, MSG_ROUTING_NONE);
-  content::RenderFrameHost* rfh = content::RenderFrameHost::FromID(
-      embedder_frame_process_id_, embedder_frame_routing_id_);
+  content::RenderFrameHost* rfh = GetEmbedderFrame();
   return rfh ? rfh->GetSiteInstance() : nullptr;
 }
 
@@ -129,8 +139,7 @@ void MimeHandlerViewGuest::SetEmbedderFrame(int process_id, int routing_id) {
   embedder_frame_process_id_ = process_id;
   embedder_frame_routing_id_ = routing_id;
 
-  content::RenderFrameHost* rfh =
-      content::RenderFrameHost::FromID(process_id, routing_id);
+  content::RenderFrameHost* rfh = GetEmbedderFrame();
 
   if (rfh && rfh->GetView()) {
     embedder_widget_routing_id_ =
@@ -138,6 +147,11 @@ void MimeHandlerViewGuest::SetEmbedderFrame(int process_id, int routing_id) {
   }
 
   DCHECK_NE(MSG_ROUTING_NONE, embedder_widget_routing_id_);
+}
+
+void MimeHandlerViewGuest::SetBeforeUnloadController(
+    mime_handler::BeforeUnloadControlPtrInfo pending_before_unload_control) {
+  pending_before_unload_control_ = std::move(pending_before_unload_control);
 }
 
 const char* MimeHandlerViewGuest::GetAPINamespace() const {
@@ -150,17 +164,17 @@ int MimeHandlerViewGuest::GetTaskPrefix() const {
 
 void MimeHandlerViewGuest::CreateWebContents(
     const base::DictionaryValue& create_params,
-    const WebContentsCreatedCallback& callback) {
+    WebContentsCreatedCallback callback) {
   std::string view_id;
   create_params.GetString(mime_handler_view::kViewId, &view_id);
   if (view_id.empty()) {
-    callback.Run(nullptr);
+    std::move(callback).Run(nullptr);
     return;
   }
   stream_ =
       MimeHandlerStreamManager::Get(browser_context())->ReleaseStream(view_id);
   if (!stream_) {
-    callback.Run(nullptr);
+    std::move(callback).Run(nullptr);
     return;
   }
   const Extension* mime_handler_extension =
@@ -172,7 +186,7 @@ void MimeHandlerViewGuest::CreateWebContents(
   if (!mime_handler_extension) {
     LOG(ERROR) << "Extension for mime_type not found, mime_type = "
                << stream_->mime_type();
-    callback.Run(nullptr);
+    std::move(callback).Run(nullptr);
     return;
   }
 
@@ -195,7 +209,7 @@ void MimeHandlerViewGuest::CreateWebContents(
   params.guest_delegate = this;
   // TODO(erikchen): Fix ownership semantics for guest views.
   // https://crbug.com/832879.
-  callback.Run(
+  std::move(callback).Run(
       WebContents::CreateWithSessionStorage(
           params,
           owner_web_contents()->GetController().GetSessionStorageNamespaceMap())
@@ -203,12 +217,17 @@ void MimeHandlerViewGuest::CreateWebContents(
 
   registry_.AddInterface(
       base::Bind(&MimeHandlerServiceImpl::Create, stream_->GetWeakPtr()));
+  registry_.AddInterface(base::BindRepeating(
+      &MimeHandlerViewGuest::FuseBeforeUnloadControl, base::Unretained(this)));
 }
 
 void MimeHandlerViewGuest::DidAttachToEmbedder() {
   web_contents()->GetController().LoadURL(
       stream_->handler_url(), content::Referrer(),
       ui::PAGE_TRANSITION_AUTO_TOPLEVEL, std::string());
+  auto prefs = web_contents()->GetRenderViewHost()->GetWebkitPreferences();
+  prefs.navigate_on_drag_drop = true;
+  web_contents()->GetRenderViewHost()->UpdateWebkitPreferences(prefs);
 }
 
 void MimeHandlerViewGuest::DidInitialize(
@@ -334,6 +353,30 @@ bool MimeHandlerViewGuest::IsFullscreenForTabOrPending(
   return is_guest_fullscreen_;
 }
 
+bool MimeHandlerViewGuest::ShouldCreateWebContents(
+    content::WebContents* web_contents,
+    content::RenderFrameHost* opener,
+    content::SiteInstance* source_site_instance,
+    int32_t route_id,
+    int32_t main_frame_route_id,
+    int32_t main_frame_widget_route_id,
+    content::mojom::WindowContainerType window_container_type,
+    const GURL& opener_url,
+    const std::string& frame_name,
+    const GURL& target_url,
+    const std::string& partition_id,
+    content::SessionStorageNamespace* session_storage_namespace) {
+  content::OpenURLParams open_params(target_url, content::Referrer(),
+                                     WindowOpenDisposition::NEW_FOREGROUND_TAB,
+                                     ui::PAGE_TRANSITION_LINK, true);
+  // Extensions are allowed to open popups under circumstances covered by
+  // running as a mime handler.
+  open_params.user_gesture = true;
+  embedder_web_contents()->GetDelegate()->OpenURLFromTab(
+      embedder_web_contents(), open_params);
+  return false;
+}
+
 bool MimeHandlerViewGuest::SetFullscreenState(bool is_fullscreen) {
   // Disallow fullscreen for embedded plugins.
   if (!is_full_page_plugin() || is_fullscreen == is_guest_fullscreen_)
@@ -371,6 +414,20 @@ void MimeHandlerViewGuest::ReadyToCommitNavigation(
     content::NavigationHandle* navigation_handle) {
   navigation_handle->RegisterSubresourceOverride(
       stream_->TakeTransferrableURLLoader());
+}
+
+void MimeHandlerViewGuest::FuseBeforeUnloadControl(
+    mime_handler::BeforeUnloadControlRequest request) {
+  if (!pending_before_unload_control_)
+    return;
+
+  mojo::FuseInterface(std::move(request),
+                      std::move(pending_before_unload_control_));
+}
+
+content::RenderFrameHost* MimeHandlerViewGuest::GetEmbedderFrame() const {
+  return content::RenderFrameHost::FromID(embedder_frame_process_id_,
+                                          embedder_frame_routing_id_);
 }
 
 }  // namespace extensions

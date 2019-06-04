@@ -136,10 +136,9 @@ KeyboardShortcutItemView::KeyboardShortcutItemView(
   // Use leaf list item role so that name is spoken by screen reader, but
   // redundant child label text is not also spoken.
   GetViewAccessibility().OverrideRole(ax::mojom::Role::kListItem);
-  GetViewAccessibility().OverrideIsLeaf();
-  accessible_name_ = GetStringForCategory(category_) +
-                     description_label_view_->text() +
-                     shortcut_label_view_->text();
+  GetViewAccessibility().OverrideIsLeaf(true);
+  accessible_name_ = description_label_view_->text() +
+                     base::ASCIIToUTF16(", ") + shortcut_label_view_->text();
 }
 
 void KeyboardShortcutItemView::GetAccessibleNodeData(
@@ -172,6 +171,7 @@ KeyboardShortcutItemView::GetKeycodeToString16Cache() {
 void KeyboardShortcutItemView::MaybeCalculateAndDoLayout(int width) const {
   if (width == calculated_size_.width())
     return;
+  TRACE_EVENT0("shortcut_viewer", "MaybeCalculateAndDoLayout");
 
   const gfx::Insets insets = GetInsets();
   width -= insets.width();

@@ -7,13 +7,16 @@
 #include <algorithm>
 
 #include "ash/public/cpp/ash_features.h"
+#include "ash/public/cpp/window_properties.h"
 #include "ash/shell.h"
 #include "ash/wm/overview/cleanup_animation_observer.h"
+#include "ash/wm/overview/drop_target_view.h"
 #include "ash/wm/overview/overview_utils.h"
-#include "ash/wm/overview/overview_window_animation_observer.h"
 #include "ash/wm/overview/scoped_overview_animation_settings.h"
+#include "ash/wm/overview/start_animation_observer.h"
 #include "ash/wm/overview/window_grid.h"
 #include "ash/wm/overview/window_selector.h"
+#include "ash/wm/overview/window_selector_controller.h"
 #include "ash/wm/overview/window_selector_item.h"
 #include "ash/wm/window_mirror_view.h"
 #include "ash/wm/window_state.h"
@@ -23,18 +26,17 @@
 #include "base/single_thread_task_runner.h"
 #include "base/threading/thread_task_runner_handle.h"
 #include "ui/aura/client/aura_constants.h"
+#include "ui/aura/null_window_targeter.h"
 #include "ui/aura/window.h"
 #include "ui/compositor/layer.h"
 #include "ui/compositor/layer_observer.h"
 #include "ui/compositor/paint_recorder.h"
-#include "ui/compositor/scoped_layer_animation_settings.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/geometry/safe_integer_conversions.h"
 #include "ui/gfx/transform_util.h"
 #include "ui/views/widget/widget.h"
 #include "ui/wm/core/coordinate_conversion.h"
 #include "ui/wm/core/shadow_controller.h"
-#include "ui/wm/core/shadow_types.h"
 #include "ui/wm/core/window_animations.h"
 #include "ui/wm/core/window_util.h"
 
@@ -47,9 +49,6 @@ bool immediate_close_for_tests = false;
 
 // Delay closing window to allow it to shrink and fade out.
 constexpr int kCloseWindowDelayInMilliseconds = 150;
-
-// The amount of rounding on window edges in overview mode.
-constexpr int kOverviewWindowRoundingDp = 4;
 
 aura::Window* GetTransientRoot(aura::Window* window) {
   while (window && ::wm::GetTransientParent(window))
@@ -137,10 +136,10 @@ class ScopedTransformOverviewWindow::WindowMask : public ui::LayerDelegate,
     // transformed, so reverse the transform so the final scaled round matches
     // |kOverviewWindowRoundingDp|.
     const gfx::Vector2dF scale = window_->transform().Scale2d();
-    const SkScalar r_x =
-        SkIntToScalar(std::round(kOverviewWindowRoundingDp / scale.x()));
-    const SkScalar r_y =
-        SkIntToScalar(std::round(kOverviewWindowRoundingDp / scale.y()));
+    const SkScalar r_x = SkIntToScalar(
+        std::round(DropTargetView::kOverviewWindowRoundingDp / scale.x()));
+    const SkScalar r_y = SkIntToScalar(
+        std::round(DropTargetView::kOverviewWindowRoundingDp / scale.y()));
 
     SkPath path;
     SkScalar radii[8] = {r_x, r_y, r_x, r_y, r_x, r_y, r_x, r_y};
@@ -182,23 +181,57 @@ ScopedTransformOverviewWindow::ScopedTransformOverviewWindow(
     : selector_item_(selector_item),
       window_(window),
       ignored_by_shelf_(wm::GetWindowState(window)->ignored_by_shelf()),
-      overview_started_(false),
       original_opacity_(window->layer()->GetTargetOpacity()),
+      original_mask_layer_(window_->layer()->layer_mask_layer()),
       weak_ptr_factory_(this) {
   type_ = GetWindowDimensionsType(window);
+  original_targeter_ =
+      window_->SetEventTargeter(std::make_unique<aura::NullWindowTargeter>());
+  null_targeter_ = window_->targeter();
 }
 
-ScopedTransformOverviewWindow::~ScopedTransformOverviewWindow() = default;
+ScopedTransformOverviewWindow::~ScopedTransformOverviewWindow() {
+  if (null_targeter_ == window_->targeter())
+    window_->SetEventTargeter(std::move(original_targeter_));
 
-void ScopedTransformOverviewWindow::RestoreWindow(bool reset_transform) {
-  Shell::Get()->shadow_controller()->UpdateShadowForWindow(window_);
+  StopObservingImplicitAnimations();
+}
+
+// static
+float ScopedTransformOverviewWindow::GetItemScale(const gfx::Size& source,
+                                                  const gfx::Size& target,
+                                                  int top_view_inset,
+                                                  int title_height) {
+  return std::min(2.0f, static_cast<float>((target.height() - title_height)) /
+                            (source.height() - top_view_inset));
+}
+
+// static
+gfx::Transform ScopedTransformOverviewWindow::GetTransformForRect(
+    const gfx::Rect& src_rect,
+    const gfx::Rect& dst_rect) {
+  DCHECK(!src_rect.IsEmpty());
+  gfx::Transform transform;
+  transform.Translate(dst_rect.x() - src_rect.x(), dst_rect.y() - src_rect.y());
+  transform.Scale(static_cast<float>(dst_rect.width()) / src_rect.width(),
+                  static_cast<float>(dst_rect.height()) / src_rect.height());
+  return transform;
+}
+
+void ScopedTransformOverviewWindow::RestoreWindow(bool reset_transform,
+                                                  bool use_slide_animation) {
+  // Shadow controller may be null on shutdown.
+  if (Shell::Get()->shadow_controller())
+    Shell::Get()->shadow_controller()->UpdateShadowForWindow(window_);
   wm::GetWindowState(window_)->set_ignored_by_shelf(ignored_by_shelf_);
   if (minimized_widget_) {
-    mask_.reset();
     // Fade out the minimized widget. This animation continues past the
     // lifetime of |this|.
-    FadeOutWidgetOnExit(std::move(minimized_widget_),
-                        OVERVIEW_ANIMATION_EXIT_OVERVIEW_MODE_FADE_OUT);
+    FadeOutWidgetAndMaybeSlideOnExit(
+        std::move(minimized_widget_),
+        use_slide_animation ? OVERVIEW_ANIMATION_EXIT_TO_HOME_LAUNCHER
+                            : OVERVIEW_ANIMATION_EXIT_OVERVIEW_MODE_FADE_OUT,
+        use_slide_animation);
     return;
   }
 
@@ -208,7 +241,7 @@ void ScopedTransformOverviewWindow::RestoreWindow(bool reset_transform) {
                          &animation_settings_list);
     // Use identity transform directly to reset window's transform when exiting
     // overview.
-    SetTransform(window()->GetRootWindow(), gfx::Transform());
+    SetTransform(GetOverviewWindow(), gfx::Transform());
     // Add requests to cache render surface and perform trilinear filtering for
     // the exit animation of overview mode. The requests will be removed when
     // the exit animation finishes.
@@ -223,47 +256,38 @@ void ScopedTransformOverviewWindow::RestoreWindow(bool reset_transform) {
   ScopedOverviewAnimationSettings animation_settings(
       selector_item_->GetExitOverviewAnimationType(), window_);
   SetOpacity(original_opacity_);
+  window_->layer()->SetMaskLayer(original_mask_layer_);
 }
 
 void ScopedTransformOverviewWindow::BeginScopedAnimation(
     OverviewAnimationType animation_type,
     ScopedAnimationSettings* animation_settings) {
-  if (animation_type == OverviewAnimationType::OVERVIEW_ANIMATION_NONE)
+  if (animation_type == OVERVIEW_ANIMATION_NONE)
     return;
 
   // Remove the mask before animating because masks affect animation
   // performance. Observe the animation and add the mask after animating if the
-  // animation type is layouting selector items.
-  mask_.reset();
-  selector_item_->SetShadowBounds(base::nullopt);
-  selector_item_->DisableBackdrop();
-
-  if (window_->GetProperty(aura::client::kShowStateKey) !=
-      ui::SHOW_STATE_MINIMIZED) {
-    window_->layer()->SetMaskLayer(original_mask_layer_);
-  }
+  // animation type is layouting selector items during overview.
+  selector_item_->UpdateMaskAndShadow(/*show=*/false);
 
   for (auto* window : wm::GetTransientTreeIterator(GetOverviewWindow())) {
     auto settings = std::make_unique<ScopedOverviewAnimationSettings>(
         animation_type, window);
     settings->DeferPaint();
 
-    // If current |window_| is the first MRU window covering the available
-    // workspace, add the |window_animation_observer| to its
-    // ScopedOverviewAnimationSettings in order to monitor the complete of its
-    // exiting animation.
-    if (window == GetOverviewWindow() &&
-        selector_item_->ShouldBeObservedWhenExiting()) {
-      auto window_animation_observer_weak_ptr =
-          selector_item_->window_grid()->window_animation_observer();
-      if (window_animation_observer_weak_ptr)
-        settings->AddObserver(window_animation_observer_weak_ptr.get());
+    // Create a start animation observer if this is an enter overview layout
+    // animation.
+    if (animation_type == OVERVIEW_ANIMATION_LAY_OUT_SELECTOR_ITEMS_ON_ENTER) {
+      auto start_observer = std::make_unique<StartAnimationObserver>();
+      settings->AddObserver(start_observer.get());
+      Shell::Get()->window_selector_controller()->AddStartAnimationObserver(
+          std::move(start_observer));
     }
 
     animation_settings->push_back(std::move(settings));
   }
 
-  if (animation_type == OVERVIEW_ANIMATION_LAY_OUT_SELECTOR_ITEMS &&
+  if (animation_type == OVERVIEW_ANIMATION_LAY_OUT_SELECTOR_ITEMS_IN_OVERVIEW &&
       animation_settings->size() > 0u) {
     animation_settings->front()->AddObserver(this);
   }
@@ -278,69 +302,8 @@ bool ScopedTransformOverviewWindow::Contains(const aura::Window* target) const {
   return mirror && mirror->Contains(target);
 }
 
-gfx::Rect ScopedTransformOverviewWindow::GetTargetBoundsInScreen() const {
-  gfx::Rect bounds;
-  aura::Window* overview_window = GetOverviewWindow();
-  for (auto* window : wm::GetTransientTreeIterator(overview_window)) {
-    // Ignore other window types when computing bounding box of window
-    // selector target item.
-    if (window != overview_window &&
-        window->type() != aura::client::WINDOW_TYPE_NORMAL &&
-        window->type() != aura::client::WINDOW_TYPE_PANEL) {
-      continue;
-    }
-    gfx::Rect target_bounds = window->GetTargetBounds();
-    ::wm::ConvertRectToScreen(window->parent(), &target_bounds);
-    bounds.Union(target_bounds);
-  }
-  return bounds;
-}
-
 gfx::Rect ScopedTransformOverviewWindow::GetTransformedBounds() const {
-  const int top_inset = GetTopInset();
-  gfx::Rect bounds;
-  aura::Window* overview_window = GetOverviewWindow();
-  for (auto* window : wm::GetTransientTreeIterator(overview_window)) {
-    // Ignore other window types when computing bounding box of window
-    // selector target item.
-    if (window != overview_window &&
-        (window->type() != aura::client::WINDOW_TYPE_NORMAL &&
-         window->type() != aura::client::WINDOW_TYPE_PANEL)) {
-      continue;
-    }
-    gfx::RectF window_bounds(window->GetTargetBounds());
-    gfx::Transform new_transform =
-        TransformAboutPivot(gfx::Point(window_bounds.x(), window_bounds.y()),
-                            window->layer()->GetTargetTransform());
-    new_transform.TransformRect(&window_bounds);
-
-    // The preview title is shown above the preview window. Hide the window
-    // header for apps or browser windows with no tabs (web apps) to avoid
-    // showing both the window header and the preview title.
-    if (top_inset > 0) {
-      gfx::RectF header_bounds(window_bounds);
-      header_bounds.set_height(top_inset);
-      new_transform.TransformRect(&header_bounds);
-      window_bounds.Inset(0, gfx::ToCeiledInt(header_bounds.height()), 0, 0);
-    }
-    gfx::Rect enclosing_bounds = ToEnclosingRect(window_bounds);
-    ::wm::ConvertRectToScreen(window->parent(), &enclosing_bounds);
-    bounds.Union(enclosing_bounds);
-  }
-  return bounds;
-}
-
-SkColor ScopedTransformOverviewWindow::GetTopColor() const {
-  for (auto* window : wm::GetTransientTreeIterator(window_)) {
-    // If there are regular windows in the transient ancestor tree, all those
-    // windows are shown in the same overview item and the header is not masked.
-    if (window != window_ &&
-        (window->type() == aura::client::WINDOW_TYPE_NORMAL ||
-         window->type() == aura::client::WINDOW_TYPE_PANEL)) {
-      return SK_ColorTRANSPARENT;
-    }
-  }
-  return window_->GetProperty(aura::client::kTopViewColor);
+  return ::ash::GetTransformedBounds(GetOverviewWindow(), GetTopInset());
 }
 
 int ScopedTransformOverviewWindow::GetTopInset() const {
@@ -361,54 +324,6 @@ int ScopedTransformOverviewWindow::GetTopInset() const {
 
 void ScopedTransformOverviewWindow::OnWindowDestroyed() {
   window_ = nullptr;
-}
-
-float ScopedTransformOverviewWindow::GetItemScale(const gfx::Size& source,
-                                                  const gfx::Size& target,
-                                                  int top_view_inset,
-                                                  int title_height) {
-  return std::min(2.0f, static_cast<float>((target.height() - title_height)) /
-                            (source.height() - top_view_inset));
-}
-
-gfx::Transform ScopedTransformOverviewWindow::GetTransformForRect(
-    const gfx::Rect& src_rect,
-    const gfx::Rect& dst_rect) {
-  DCHECK(!src_rect.IsEmpty());
-  gfx::Transform transform;
-  transform.Translate(dst_rect.x() - src_rect.x(), dst_rect.y() - src_rect.y());
-  transform.Scale(static_cast<float>(dst_rect.width()) / src_rect.width(),
-                  static_cast<float>(dst_rect.height()) / src_rect.height());
-  return transform;
-}
-
-void ScopedTransformOverviewWindow::SetTransform(
-    aura::Window* root_window,
-    const gfx::Transform& transform) {
-  DCHECK(overview_started_);
-  auto window_animation_observer_weak_ptr =
-      selector_item_->window_grid()->window_animation_observer();
-
-  gfx::Point target_origin(GetTargetBoundsInScreen().origin());
-  for (auto* window : wm::GetTransientTreeIterator(GetOverviewWindow())) {
-    aura::Window* parent_window = window->parent();
-    gfx::Rect original_bounds(window->GetTargetBounds());
-    ::wm::ConvertRectToScreen(parent_window, &original_bounds);
-    gfx::Transform new_transform =
-        TransformAboutPivot(gfx::Point(target_origin.x() - original_bounds.x(),
-                                       target_origin.y() - original_bounds.y()),
-                            transform);
-    // If current |window_| should not animate during exiting process, we defer
-    // set transfrom on the window by adding the layer and transform information
-    // to the |window_animation_observer|.
-    if (!selector_item_->ShouldAnimateWhenExiting() &&
-        window_animation_observer_weak_ptr) {
-      window_animation_observer_weak_ptr->AddLayerTransformPair(window->layer(),
-                                                                new_transform);
-    } else {
-      window->SetTransform(new_transform);
-    }
-  }
 }
 
 void ScopedTransformOverviewWindow::SetOpacity(float opacity) {
@@ -500,6 +415,7 @@ void ScopedTransformOverviewWindow::Close() {
     CloseWidget();
     return;
   }
+
   base::ThreadTaskRunnerHandle::Get()->PostDelayedTask(
       FROM_HERE, base::Bind(&ScopedTransformOverviewWindow::CloseWidget,
                             weak_ptr_factory_.GetWeakPtr()),
@@ -527,11 +443,6 @@ void ScopedTransformOverviewWindow::PrepareForOverview() {
           std::make_unique<LayerCachingAndFilteringObserver>(window->layer()));
     }
   }
-
-  // Apply rounded edge mask. Windows which are animated into overview mode
-  // will have their mask removed before the animation begins and reapplied
-  // after the animation ends.
-  CreateAndApplyMaskAndShadow();
 }
 
 void ScopedTransformOverviewWindow::CloseWidget() {
@@ -565,12 +476,48 @@ void ScopedTransformOverviewWindow::UpdateWindowDimensionsType() {
   window_selector_bounds_.reset();
 }
 
+void ScopedTransformOverviewWindow::UpdateMask(bool show) {
+  if (!show) {
+    mask_.reset();
+    return;
+  }
+
+  // Add the mask which gives the window selector items rounded corners, and add
+  // the shadow around the window.
+  ui::Layer* layer = minimized_widget_
+                         ? minimized_widget_->GetNativeWindow()->layer()
+                         : window_->layer();
+
+  mask_ = std::make_unique<WindowMask>(GetOverviewWindow());
+  mask_->layer()->SetBounds(layer->bounds());
+  mask_->set_top_inset(GetTopInset());
+  layer->SetMaskLayer(mask_->layer());
+}
+
 void ScopedTransformOverviewWindow::CancelAnimationsListener() {
   StopObservingImplicitAnimations();
 }
 
+void ScopedTransformOverviewWindow::ResizeMinimizedWidgetIfNeeded() {
+  if (!minimized_widget_)
+    return;
+
+  gfx::Rect bounds(window_->GetBoundsInScreen());
+  if (bounds.size() == window_->GetBoundsInScreen().size())
+    return;
+
+  wm::WindowMirrorView* mirror_view =
+      static_cast<wm::WindowMirrorView*>(minimized_widget_->GetContentsView());
+  if (mirror_view) {
+    mirror_view->RecreateMirrorLayers();
+    bounds.Inset(0, 0, 0,
+                 bounds.height() - mirror_view->GetPreferredSize().height());
+    minimized_widget_->SetBounds(bounds);
+  }
+}
+
 void ScopedTransformOverviewWindow::OnImplicitAnimationsCompleted() {
-  CreateAndApplyMaskAndShadow();
+  selector_item_->UpdateMaskAndShadow(/*show=*/true);
   selector_item_->OnDragAnimationCompleted();
 }
 
@@ -604,29 +551,13 @@ void ScopedTransformOverviewWindow::CreateMirrorWindowForMinimizedState() {
   minimized_widget_->SetBounds(bounds);
   minimized_widget_->Show();
 
-  minimized_widget_->SetOpacity(0.f);
-  ScopedOverviewAnimationSettings animation_settings(
-      OVERVIEW_ANIMATION_ENTER_OVERVIEW_MODE_TABLET_FADE_IN,
-      minimized_widget_->GetNativeWindow());
-  minimized_widget_->SetOpacity(1.f);
-}
+  // Stack the minimized window at the bottom since it is never transformed in
+  // and only faded in, so it should always be underneath non minimized windows.
+  window_->parent()->StackChildAtBottom(minimized_widget_->GetNativeWindow());
 
-void ScopedTransformOverviewWindow::CreateAndApplyMaskAndShadow() {
-  // Add the mask which gives the window selector items rounded corners, and add
-  // the shadow around the window.
-  ui::Layer* layer = minimized_widget_
-                         ? minimized_widget_->GetContentsView()->layer()
-                         : window_->layer();
-
-  if (!minimized_widget_)
-    original_mask_layer_ = window_->layer()->layer_mask_layer();
-
-  mask_ = std::make_unique<WindowMask>(GetOverviewWindow());
-  mask_->layer()->SetBounds(layer->bounds());
-  mask_->set_top_inset(GetTopInset());
-  layer->SetMaskLayer(mask_->layer());
-  selector_item_->SetShadowBounds(base::make_optional(GetTransformedBounds()));
-  selector_item_->EnableBackdropIfNeeded();
+  FadeInWidgetAndMaybeSlideOnEnter(
+      minimized_widget_.get(), OVERVIEW_ANIMATION_ENTER_OVERVIEW_MODE_FADE_IN,
+      /*slide=*/false);
 }
 
 }  // namespace ash

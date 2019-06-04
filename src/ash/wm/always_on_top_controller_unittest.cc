@@ -4,6 +4,7 @@
 
 #include "ash/wm/always_on_top_controller.h"
 
+#include "ash/keyboard/ash_keyboard_controller.h"
 #include "ash/public/cpp/shell_window_ids.h"
 #include "ash/root_window_controller.h"
 #include "ash/shell.h"
@@ -12,9 +13,9 @@
 #include "base/command_line.h"
 #include "base/memory/ptr_util.h"
 #include "ui/keyboard/keyboard_controller.h"
-#include "ui/keyboard/keyboard_switches.h"
-#include "ui/keyboard/keyboard_test_util.h"
 #include "ui/keyboard/keyboard_ui.h"
+#include "ui/keyboard/public/keyboard_switches.h"
+#include "ui/keyboard/test/keyboard_test_util.h"
 
 namespace ash {
 
@@ -55,9 +56,7 @@ class TestLayoutManager : public WorkspaceLayoutManager {
 
 // Verifies that the always on top controller is notified of keyboard bounds
 // changing events.
-TEST_F(VirtualKeyboardAlwaysOnTopControllerTest, NotifyKeyboardBoundsChanged) {
-  keyboard::KeyboardController* keyboard_controller =
-      keyboard::KeyboardController::GetInstance();
+TEST_F(VirtualKeyboardAlwaysOnTopControllerTest, NotifyKeyboardBoundsChanging) {
   aura::Window* root_window = Shell::GetPrimaryRootWindow();
   aura::Window* always_on_top_container =
       Shell::GetContainer(root_window, kShellWindowId_AlwaysOnTopContainer);
@@ -65,25 +64,18 @@ TEST_F(VirtualKeyboardAlwaysOnTopControllerTest, NotifyKeyboardBoundsChanged) {
   TestLayoutManager* manager = new TestLayoutManager(always_on_top_container);
   RootWindowController* controller = Shell::GetPrimaryRootWindowController();
   // Deactivates keyboard to unregister existing listeners.
-  controller->DeactivateKeyboard(keyboard_controller);
+  Shell::Get()->ash_keyboard_controller()->DeactivateKeyboard();
   AlwaysOnTopController* always_on_top_controller =
       controller->always_on_top_controller();
   always_on_top_controller->SetLayoutManagerForTest(base::WrapUnique(manager));
   // Activate keyboard. This triggers keyboard listeners to be registered.
-  controller->ActivateKeyboard(keyboard_controller);
+  Shell::Get()->ash_keyboard_controller()->ActivateKeyboard();
 
-  // Mock a keyboard appearing.
-  aura::Window* keyboard_container = keyboard_controller->GetContainerWindow();
-  ASSERT_TRUE(keyboard_container);
-  keyboard_container->Show();
-  aura::Window* contents_window =
-      keyboard_controller->ui()->GetContentsWindow();
-  const int kKeyboardHeight = 200;
-  gfx::Rect keyboard_bounds = keyboard::KeyboardBoundsFromRootBounds(
-      root_window->bounds(), kKeyboardHeight);
-  contents_window->SetBounds(keyboard_bounds);
-  contents_window->Show();
-  keyboard_controller->NotifyContentsBoundsChanging(keyboard_bounds);
+  // Show the keyboard.
+  auto* keyboard_controller = keyboard::KeyboardController::Get();
+  keyboard_controller->ShowKeyboard(false /* locked */);
+  ASSERT_TRUE(keyboard::WaitUntilShown());
+
   // Verify that test manager was notified of bounds change.
   ASSERT_TRUE(manager->keyboard_bounds_changed());
 }

@@ -11,7 +11,7 @@
 
 namespace content {
 
-class ServiceWorkerHandle;
+class ServiceWorkerObjectHost;
 
 // For NetworkService glues:
 // Navigation parameters that are necessary to set-up a subresource loader
@@ -25,19 +25,21 @@ struct CONTENT_EXPORT SubresourceLoaderParams {
   SubresourceLoaderParams(SubresourceLoaderParams&& other);
   SubresourceLoaderParams& operator=(SubresourceLoaderParams&& other);
 
-  // The subresource loader factory info that is to be used to create a
-  // subresource loader in the renderer.
-  network::mojom::URLLoaderFactoryPtrInfo loader_factory_info;
+  // For AppCache.
+  // Subresource loader factory info for appcache, that is to be used to
+  // create a subresource loader in the renderer.
+  network::mojom::URLLoaderFactoryPtrInfo appcache_loader_factory_info;
 
+  // For ServiceWorkers.
   // The controller service worker, non-null if the frame is to be
   // controlled by the service worker.
   //
   // |controller_service_worker_info->object_info| is "incomplete". It must be
   // updated before being sent over Mojo and then registered with
-  // |controller_service_worker_handle|. See
-  // ServiceWorkerHandle::CreateIncompleteObjectInfo() for details.
+  // |controller_service_worker_object_host|. See
+  // ServiceWorkerObjectHost::CreateIncompleteObjectInfo() for details.
   mojom::ControllerServiceWorkerInfoPtr controller_service_worker_info;
-  base::WeakPtr<ServiceWorkerHandle> controller_service_worker_handle;
+  base::WeakPtr<ServiceWorkerObjectHost> controller_service_worker_object_host;
 };
 
 }  // namespace content

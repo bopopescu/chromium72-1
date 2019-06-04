@@ -25,6 +25,7 @@
 #include "extensions/buildflags/buildflags.h"
 #include "media/media_buildflags.h"
 #include "ppapi/buildflags/buildflags.h"
+#include "services/network/public/mojom/network_context.mojom.h"
 
 #if BUILDFLAG(ENABLE_PLUGINS)
 #include "chrome/browser/pepper_flash_settings_manager.h"
@@ -38,6 +39,10 @@ namespace content {
 class BrowserContext;
 class PluginDataRemover;
 }
+
+namespace webrtc_event_logging {
+class WebRtcEventLogManager;
+}  // namespace webrtc_event_logging
 
 // A delegate used by BrowsingDataRemover to delete data specific to Chrome
 // as the embedder.
@@ -177,7 +182,16 @@ class ChromeBrowsingDataRemoverDelegate
       scoped_refptr<BrowsingDataFlashLSOHelper> flash_lso_helper);
 #endif
 
+  using DomainReliabilityClearer = base::RepeatingCallback<void(
+      const content::BrowsingDataFilterBuilder& filter_builder,
+      network::mojom::NetworkContext_DomainReliabilityClearMode,
+      network::mojom::NetworkContext::ClearDomainReliabilityCallback)>;
+  void OverrideDomainReliabilityClearerForTesting(
+      DomainReliabilityClearer clearer);
+
  private:
+  using WebRtcEventLogManager = webrtc_event_logging::WebRtcEventLogManager;
+
   // Called by the closures returned by CreatePendingTaskCompletionClosure().
   // Checks if all tasks have completed, and if so, calls callback_.
   void OnTaskComplete();
@@ -197,7 +211,10 @@ class ChromeBrowsingDataRemoverDelegate
   void OnKeywordsLoaded(base::RepeatingCallback<bool(const GURL&)> url_filter,
                         base::OnceClosure done);
 
-#if defined (OS_CHROMEOS)
+  // A helper method that checks if time period is for "all time".
+  bool IsForAllTime() const;
+
+#if defined(OS_CHROMEOS)
   void OnClearPlatformKeys(base::OnceClosure done, base::Optional<bool> result);
 #endif
 
@@ -248,6 +265,8 @@ class ChromeBrowsingDataRemoverDelegate
   // Used to deauthorize content licenses for Pepper Flash.
   std::unique_ptr<PepperFlashSettingsManager> pepper_flash_settings_manager_;
 #endif
+
+  DomainReliabilityClearer domain_reliability_clearer_;
 
   // Used if we need to clear history.
   base::CancelableTaskTracker history_task_tracker_;

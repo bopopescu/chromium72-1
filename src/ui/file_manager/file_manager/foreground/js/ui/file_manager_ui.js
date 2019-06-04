@@ -89,13 +89,6 @@ function FileManagerUI(providersModel, element, launchParam) {
   this.copyConfirmDialog.setOkLabel(str('CONFIRM_COPY_BUTTON_LABEL'));
 
   /**
-   * Share dialog.
-   * @type {!ShareDialog}
-   * @const
-   */
-  this.shareDialog = new ShareDialog(this.element);
-
-  /**
    * Multi-profile share dialog.
    * @type {!MultiProfileShareDialog}
    * @const
@@ -117,6 +110,14 @@ function FileManagerUI(providersModel, element, launchParam) {
    */
   this.suggestAppsDialog = new SuggestAppsDialog(
       providersModel, this.element, launchParam.suggestAppsDialogState);
+
+  /**
+   * Dialog for installing .deb files
+   * @type {!cr.filebrowser.InstallLinuxPackageDialog}
+   * @const
+   */
+  this.installLinuxPackageDialog =
+      new cr.filebrowser.InstallLinuxPackageDialog(this.element);
 
   /**
    * The container element of the dialog.
@@ -210,6 +211,14 @@ function FileManagerUI(providersModel, element, launchParam) {
    */
   this.gearButton = util.queryDecoratedElement(
       '#gear-button', cr.ui.MenuButton);
+
+  /**
+   * The button to add new service (file system providers).
+   * @type {!cr.ui.MenuButton}
+   * @const
+   */
+  this.newServiceButton =
+      util.queryDecoratedElement('#new-service-button', cr.ui.MenuButton);
 
   /**
    * Ripple effect of gear button.
@@ -337,6 +346,28 @@ function FileManagerUI(providersModel, element, launchParam) {
    * @const
    */
   this.actionsSubmenu = new ActionsSubmenu(this.fileContextMenu);
+
+  /**
+   * @type {!FilesToast}
+   * @const
+   */
+  this.toast =
+      /** @type {!FilesToast} */ (document.querySelector('files-toast'));
+
+  /**
+   * A hidden div that can be used to announce text to screen reader/ChromeVox.
+   * @private {!HTMLElement}
+   */
+  this.a11yMessage_ = queryRequiredElement('#a11y-msg', this.element);
+
+
+  if (window.IN_TEST) {
+    /**
+     * Stores all a11y announces to be checked in tests.
+     * @public {Array<string>}
+     */
+    this.a11yAnnounces = [];
+  }
 
   // Initialize attributes.
   this.element.setAttribute('type', this.dialogType_);
@@ -554,6 +585,14 @@ FileManagerUI.prototype.decorateSplitter_ = function(splitterElement,
 };
 
 /**
+ * Mark |element| with "loaded" attribute to indicate that File Manager has
+ * finished loading.
+ */
+FileManagerUI.prototype.addLoadedAttribute = function() {
+  this.element.setAttribute('loaded', '');
+};
+
+/**
  * Sets up and shows the alert to inform a user the task is opened in the
  * desktop of the running profile.
  *
@@ -614,4 +653,18 @@ FileManagerUI.prototype.showConfirmationDialog = function(isMove, messages) {
           resolve(false);
         });
   });
+};
+
+/**
+ * Send a text to screen reader/Chromevox without displaying the text in the UI.
+ * @param {string} text Text to be announced by screen reader, which should be
+ * already translated.
+ */
+FileManagerUI.prototype.speakA11yMessage = function(text) {
+  // Screen reader only reads if the content changes, so clear the content
+  // first.
+  this.a11yMessage_.textContent = '';
+  this.a11yMessage_.textContent = text;
+  if (window.IN_TEST)
+    this.a11yAnnounces.push(text);
 };

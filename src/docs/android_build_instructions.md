@@ -6,7 +6,8 @@ There are instructions for other platforms linked from the
 ## Instructions for Google Employees
 
 Are you a Google employee? See
-[go/building-chrome](https://goto.google.com/building-chrome) instead.
+[go/building-android-chrome](https://goto.google.com/building-android-chrome)
+instead.
 
 [TOC]
 
@@ -114,11 +115,11 @@ development and testing purposes.
 
 ## Setting up the build
 
-Chromium uses [Ninja](https://ninja-build.org) as its main build tool along
-with a tool called [GN](../tools/gn/docs/quick_start.md) to generate `.ninja`
-files. You can create any number of *build directories* with different
-configurations. To create a build directory which builds Chrome for Android,
-run:
+Chromium uses [Ninja](https://ninja-build.org) as its main build tool along with
+a tool called [GN](https://gn.googlesource.com/gn/+/master/docs/quick_start.md)
+to generate `.ninja` files. You can create any number of *build directories*
+with different configurations. To create a build directory which builds Chrome
+for Android, run:
 
 ```shell
 gn gen --args='target_os="android"' out/Default
@@ -143,12 +144,15 @@ require you to set `CHROMIUM_OUTPUT_DIR=out/Default`.
 Build Chromium with Ninja using the command:
 
 ```shell
-ninja -C out/Default chrome_public_apk
+autoninja -C out/Default chrome_public_apk
 ```
+
+(`autoninja` is a wrapper that automatically provides optimal values for the
+arguments passed to `ninja`.)
 
 You can get a list of all of the other build targets from GN by running `gn ls
 out/Default` from the command line. To compile one, pass the GN label to Ninja
-with no preceding "//" (so, for `//chrome/test:unit_tests` use `ninja -C
+with no preceding "//" (so, for `//chrome/test:unit_tests` use `autoninja -C
 out/Default chrome/test:unit_tests`).
 
 ### Multiple Chrome APK Targets
@@ -158,7 +162,7 @@ the version of Android running on a device. Chrome uses this feature to target
 3 different versions using 3 different ninja targets:
 
 1. `chrome_public_apk` (ChromePublic.apk)
-   * `minSdkVersion=16` (Jelly Bean).
+   * `minSdkVersion=19` (KitKat).
    * Stores libchrome.so compressed within the APK.
    * Uses [Crazy Linker](https://cs.chromium.org/chromium/src/base/android/linker/BUILD.gn?rcl=6bb29391a86f2be58c626170156cbfaa2cbc5c91&l=9).
    * Shipped only for Android < 21, but still works fine on Android >= 21.
@@ -227,10 +231,23 @@ third_party/android_tools/sdk/platform-tools/adb devices
 Which prints a list of connected devices. If not connected, try
 unplugging and reattaching your device.
 
+### Enable apps from unknown sources
+
+Allow Android to run APKs that haven't been signed through the Play Store:
+
+*   Enable 'Unknown sources' under Settings \> Security
+
+In case that setting isn't present, it may be possible to configure it via
+`adb shell` instead:
+
+```shell
+third_party/android_tools/sdk/platform-tools/adb shell settings put global verifier_verify_adb_installs 0
+```
+
 ### Build the full browser
 
 ```shell
-ninja -C out/Default chrome_public_apk
+autoninja -C out/Default chrome_public_apk
 ```
 
 And deploy it to your Android device:
@@ -248,7 +265,7 @@ Wraps the content module (but not the /chrome embedder). See
 for details on the content module and content shell.
 
 ```shell
-ninja -C out/Default content_shell_apk
+autoninja -C out/Default content_shell_apk
 out/Default/bin/content_shell_apk install
 ```
 
@@ -308,18 +325,30 @@ For information on running tests, see [Android Test Instructions](android_test_i
 
 ### Faster Edit/Deploy
 
+#### GN Args
+Args that affect build speed:
+ * `is_component_build = true` *(default=`is_debug`)*
+   * What it does: Uses multiple `.so` files instead of just one (faster links)
+ * `is_java_debug = true` *(default=`is_debug`)*
+   * What it does: Disables ProGuard (slow build step)
+ * `enable_incremental_javac = true` *(default=`false`)*
+   * What it does: Tries to compile only a subset of `.java` files within an
+     `android_library` for subsequent builds.
+   * Can cause infrequent (once a month-ish) failures due to not recompiling a
+     class that should be recompiled.
+
+#### Incremental Install
 "Incremental install" uses reflection and side-loading to speed up the edit
 & deploy cycle (normally < 10 seconds). The initial launch of the apk will be
 a little slower since updated dex files are installed manually.
 
-*   Make sure to set` is_component_build = true `in your GN args
 *   All apk targets have \*`_incremental` targets defined (e.g.
     `chrome_public_apk_incremental`) except for Webview and Monochrome
 
 Here's an example:
 
 ```shell
-ninja -C out/Default chrome_public_apk_incremental
+autoninja -C out/Default chrome_public_apk_incremental
 out/Default/bin/chrome_public_apk install --incremental --verbose
 ```
 
@@ -327,14 +356,14 @@ For gunit tests (note that run_*_incremental automatically add
 `--fast-local-dev` when calling `test_runner.py`):
 
 ```shell
-ninja -C out/Default base_unittests_incremental
+autoninja -C out/Default base_unittests_incremental
 out/Default/bin/run_base_unittests_incremental
 ```
 
 For instrumentation tests:
 
 ```shell
-ninja -C out/Default chrome_public_test_apk_incremental
+autoninja -C out/Default chrome_public_test_apk_incremental
 out/Default/bin/run_chrome_public_test_apk_incremental
 ```
 
@@ -351,6 +380,11 @@ incremental_apk_by_default = true
 ```
 
 This will make `chrome_public_apk` build in incremental mode.
+
+## Installing and Running Chromium on an Emulator
+
+Running on an emulator is the same as on a device. Refer to
+[android_emulator.md](android_emulator.md) for setting up emulators.
 
 
 ## Tips, tricks, and troubleshooting

@@ -11,13 +11,13 @@
 
 #include "base/containers/hash_tables.h"
 #include "ui/accessibility/ax_export.h"
+#include "ui/accessibility/ax_node.h"
 #include "ui/accessibility/ax_node_data.h"
 #include "ui/accessibility/ax_tree_data.h"
 #include "ui/accessibility/ax_tree_update.h"
 
 namespace ui {
 
-class AXNode;
 class AXTableInfo;
 class AXTree;
 struct AXTreeUpdateState;
@@ -157,7 +157,7 @@ class AX_EXPORT AXTreeDelegate {
 // used as a source for sending updates to another client tree.
 // It's designed to be subclassed to implement support for native
 // accessibility APIs on a specific platform.
-class AX_EXPORT AXTree {
+class AX_EXPORT AXTree : public AXNode::OwnerTree {
  public:
   typedef std::map<ax::mojom::IntAttribute,
                    std::map<int32_t, std::set<int32_t>>>
@@ -177,8 +177,9 @@ class AX_EXPORT AXTree {
 
   const AXTreeData& data() const { return data_; }
 
+  // AXNode::OwnerTree override.
   // Returns the AXNode with the given |id| if it is part of this AXTree.
-  AXNode* GetFromId(int32_t id) const;
+  AXNode* GetFromId(int32_t id) const override;
 
   // Returns true on success. If it returns false, it's a fatal error
   // and this tree should be destroyed, and the source of the tree update
@@ -222,6 +223,13 @@ class AX_EXPORT AXTree {
   std::set<int32_t> GetReverseRelations(ax::mojom::IntListAttribute attr,
                                         int32_t dst_id) const;
 
+  // Given a child tree ID, return the node IDs of all nodes in the tree who
+  // have a kChildTreeId int attribute with that value.
+  std::set<int32_t> GetNodeIdsForChildTreeId(AXTreeID child_tree_id) const;
+
+  // Get all of the child tree IDs referenced by any node in this tree.
+  const std::set<AXTreeID> GetAllChildTreeIds() const;
+
   // Map from a relation attribute to a map from a target id to source ids.
   const IntReverseRelationMap& int_reverse_relations() {
     return int_reverse_relations_;
@@ -229,16 +237,6 @@ class AX_EXPORT AXTree {
   const IntListReverseRelationMap& intlist_reverse_relations() {
     return intlist_reverse_relations_;
   }
-
-  // Given a node in this accessibility tree that corresponds to a table
-  // or grid, return an object containing information about the
-  // table structure. This object is computed lazily on-demand and
-  // cached until the next time the tree is updated. Clients should
-  // not retain this pointer, they should just request it every time
-  // it's needed.
-  //
-  // Returns nullptr if the node is not a valid table.
-  AXTableInfo* GetTableInfo(AXNode* table_node);
 
   // Return a multi-line indented string representation, for logging.
   std::string ToString() const;
@@ -249,7 +247,31 @@ class AX_EXPORT AXTree {
 
   int size() { return static_cast<int>(id_map_.size()); }
 
+  // Call this to enable support for extra Mac nodes - for each table,
+  // a table column header and a node for each column.
+  void SetEnableExtraMacNodes(bool enabled);
+  bool enable_extra_mac_nodes() const { return enable_extra_mac_nodes_; }
+
+  // Return a negative number that's suitable to use for a node ID for
+  // internal nodes created automatically by an AXTree, so as not to
+  // conflict with positive-numbered node IDs from tree sources.
+  int32_t GetNextNegativeInternalNodeId();
+
  private:
+  friend class AXTableInfoTest;
+
+  // AXNode::OwnerTree override.
+  //
+  // Given a node in this accessibility tree that corresponds to a table
+  // or grid, return an object containing information about the
+  // table structure. This object is computed lazily on-demand and
+  // cached until the next time the tree is updated. Clients should
+  // not retain this pointer, they should just request it every time
+  // it's needed.
+  //
+  // Returns nullptr if the node is not a valid table.
+  AXTableInfo* GetTableInfo(const AXNode* table_node) const override;
+
   AXNode* CreateNode(AXNode* parent,
                      int32_t id,
                      int32_t index_in_parent,
@@ -291,9 +313,6 @@ class AX_EXPORT AXTree {
                             std::vector<AXNode*>* new_children,
                             AXTreeUpdateState* update_state);
 
-  // Clear any cached AXTableInfo objects.
-  void ClearTables();
-
   AXTreeDelegate* delegate_ = nullptr;
   AXNode* root_ = nullptr;
   base::hash_map<int32_t, AXNode*> id_map_;
@@ -306,10 +325,21 @@ class AX_EXPORT AXTree {
   // Map from an int list attribute (if IsNodeIdIntListAttribute is true) to
   // a reverse mapping from target nodes to source nodes.
   IntListReverseRelationMap intlist_reverse_relations_;
+  // Map from child tree ID to the set of node IDs that contain that attribute.
+  std::map<AXTreeID, std::set<int32_t>> child_tree_id_reverse_map_;
 
   // Map from node ID to cached table info, if the given node is a table.
-  // Cleared every time the tree is updated.
-  base::hash_map<int32_t, AXTableInfo*> table_info_map_;
+  // Invalidated every time the tree is updated.
+  mutable base::hash_map<int32_t, AXTableInfo*> table_info_map_;
+
+  // The next negative node ID to use for internal nodes.
+  int32_t next_negative_internal_node_id_ = -1;
+
+  // Whether we should create extra nodes that
+  // are only useful on macOS. Implemented using this flag to allow
+  // this code to be unit-tested on other platforms (for example, more
+  // code sanitizers run on Linux).
+  bool enable_extra_mac_nodes_ = false;
 };
 
 }  // namespace ui

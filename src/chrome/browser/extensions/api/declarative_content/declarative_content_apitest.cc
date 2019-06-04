@@ -16,10 +16,12 @@
 #include "chrome/browser/extensions/extension_apitest.h"
 #include "chrome/browser/extensions/extension_service.h"
 #include "chrome/browser/extensions/extension_tab_util.h"
+#include "chrome/browser/sessions/session_tab_helper.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "components/bookmarks/browser/bookmark_model.h"
+#include "content/public/browser/storage_partition.h"
 #include "content/public/test/browser_test_utils.h"
 #include "extensions/browser/extension_registry.h"
 #include "extensions/browser/extension_system.h"
@@ -361,6 +363,9 @@ IN_PROC_BROWSER_TEST_F(DeclarativeContentApiTest, ReusedActionInstance) {
   ExtensionTestMessageListener ready("ready", false);
   const Extension* extension = LoadExtension(ext_dir_.UnpackedPath());
   ASSERT_TRUE(extension);
+  // Wait for declarative rules to be set up.
+  content::BrowserContext::GetDefaultStoragePartition(profile())
+      ->FlushNetworkInterfaceForTesting();
   const ExtensionAction* page_action =
       ExtensionActionManager::Get(browser()->profile())
           ->GetPageAction(*extension);
@@ -523,17 +528,11 @@ IN_PROC_BROWSER_TEST_F(DeclarativeContentApiTest,
   EXPECT_TRUE(incognito_page_action->GetIsVisible(incognito_tab_id));
 }
 
-// Frequently times out on ChromiumOS debug builders: https://crbug.com/512431.
-#if defined(OS_CHROMEOS) && !defined(NDEBUG)
-#define MAYBE_PRE_RulesPersistence DISABLED_PRE_RulesPersistence
-#define MAYBE_RulesPersistence DISABLED_RulesPersistence
-#else
-#define MAYBE_PRE_RulesPersistence PRE_RulesPersistence
-#define MAYBE_RulesPersistence RulesPersistence
-#endif
-
 // Sets up rules matching http://test1/ in a normal and incognito browser.
-IN_PROC_BROWSER_TEST_F(DeclarativeContentApiTest, MAYBE_PRE_RulesPersistence) {
+// Frequently times out on ChromiumOS, Linux ASan, and Windows:
+// https://crbug.com/512431.
+IN_PROC_BROWSER_TEST_F(DeclarativeContentApiTest,
+                       DISABLED_PRE_RulesPersistence) {
   ExtensionTestMessageListener ready("ready", false);
   ExtensionTestMessageListener ready_split("ready (split)", false);
   // An on-disk extension is required so that it can be reloaded later in the
@@ -550,7 +549,7 @@ IN_PROC_BROWSER_TEST_F(DeclarativeContentApiTest, MAYBE_PRE_RulesPersistence) {
 
 // Reloads the extension from PRE_RulesPersistence and checks that the rules
 // continue to work as expected after being persisted and reloaded.
-IN_PROC_BROWSER_TEST_F(DeclarativeContentApiTest, MAYBE_RulesPersistence) {
+IN_PROC_BROWSER_TEST_F(DeclarativeContentApiTest, DISABLED_RulesPersistence) {
   ExtensionTestMessageListener ready("second run ready", false);
   ExtensionTestMessageListener ready_split("second run ready (split)", false);
   ASSERT_TRUE(ready.WaitUntilSatisfied());
@@ -611,6 +610,9 @@ IN_PROC_BROWSER_TEST_F(DeclarativeContentApiTest,
   ext_dir_.WriteFile(FILE_PATH_LITERAL("background.js"), kBackgroundHelpers);
   const Extension* extension = LoadExtension(ext_dir_.UnpackedPath());
   ASSERT_TRUE(extension);
+  // Wait for declarative rules to be set up.
+  content::BrowserContext::GetDefaultStoragePartition(profile())
+      ->FlushNetworkInterfaceForTesting();
   const std::string extension_id = extension->id();
   const ExtensionAction* page_action = ExtensionActionManager::Get(
       browser()->profile())->GetPageAction(*extension);
@@ -637,6 +639,9 @@ IN_PROC_BROWSER_TEST_F(DeclarativeContentApiTest,
   EXPECT_EQ(1u, extension_action_test_util::GetTotalPageActionCount(tab));
 
   ReloadExtension(extension_id);  // Invalidates page_action and extension.
+  // Wait for declarative rules to be removed.
+  content::BrowserContext::GetDefaultStoragePartition(profile())
+      ->FlushNetworkInterfaceForTesting();
   EXPECT_EQ("test_rule",
             ExecuteScriptInBackgroundPage(extension_id, kTestRule));
   // TODO(jyasskin): Apply new rules to existing tabs, without waiting for a
@@ -647,6 +652,9 @@ IN_PROC_BROWSER_TEST_F(DeclarativeContentApiTest,
   EXPECT_EQ(1u, extension_action_test_util::GetTotalPageActionCount(tab));
 
   UnloadExtension(extension_id);
+  // Wait for declarative rules to be removed.
+  content::BrowserContext::GetDefaultStoragePartition(profile())
+      ->FlushNetworkInterfaceForTesting();
   NavigateInRenderer(tab, GURL("http://test/"));
   EXPECT_TRUE(WaitForPageActionVisibilityChangeTo(0));
   EXPECT_EQ(0u, extension_action_test_util::GetVisiblePageActionCount(tab));
@@ -706,13 +714,15 @@ IN_PROC_BROWSER_TEST_F(DeclarativeContentApiTest,
 
 namespace {
 
-class ShowPageActionWithoutPageActionTest
+// TODO(devlin): Would this be better as a parameterized test case that could
+// exercise all of (page action, browser action, no action)?
+class ShowPageActionWithoutSpecifiedPageActionTest
     : public DeclarativeContentApiTest,
       public testing::WithParamInterface<bool> {};
 
 }  // namespace
 
-IN_PROC_BROWSER_TEST_P(ShowPageActionWithoutPageActionTest, Test) {
+IN_PROC_BROWSER_TEST_P(ShowPageActionWithoutSpecifiedPageActionTest, Test) {
   bool has_browser_action = GetParam();
   // Load an extension without a page action.
   std::string manifest_without_page_action = kDeclarativeContentManifest;
@@ -728,6 +738,18 @@ IN_PROC_BROWSER_TEST_P(ShowPageActionWithoutPageActionTest, Test) {
   scoped_refptr<const Extension> extension =
       loader.LoadExtension(ext_dir_.UnpackedPath());
   ASSERT_TRUE(extension);
+  // Wait for declarative rules to be set up.
+  content::BrowserContext::GetDefaultStoragePartition(profile())
+      ->FlushNetworkInterfaceForTesting();
+
+  ExtensionAction* action = ExtensionActionManager::Get(browser()->profile())
+                                ->GetExtensionAction(*extension);
+  ASSERT_TRUE(action);
+  if (has_browser_action) {
+    // Set the browser action default visibility to false, so that we check the
+    // same behavior as with page actions.
+    action->SetIsVisible(ExtensionAction::kDefaultTabId, false);
+  }
 
   const char kScript[] =
       "setRules([{\n"
@@ -735,32 +757,35 @@ IN_PROC_BROWSER_TEST_P(ShowPageActionWithoutPageActionTest, Test) {
       "                   pageUrl: {hostPrefix: \"test\"}})],\n"
       "  actions: [new ShowPageAction()]\n"
       "}], 'test_rule');\n";
-  const char kErrorSubstr[] = "without a page action";
+  const char kSuccessStr[] = "test_rule";
+
   std::string result = ExecuteScriptInBackgroundPage(extension->id(), kScript);
 
-  // Extensions with no action provided are given a page action by default
-  // (for visibility reasons). If an extension has a browser action, it
-  // should cause an error.
-  if (has_browser_action)
-    EXPECT_THAT(result, testing::HasSubstr(kErrorSubstr));
-  else
-    EXPECT_THAT(result, testing::Not(testing::HasSubstr(kErrorSubstr)));
+  // Since extensions with no action provided are given a page action by default
+  // (for visibility reasons) and ShowPageAction() should also work with
+  // browser actions, both of these should pass.
+  EXPECT_THAT(result, testing::HasSubstr(kSuccessStr));
 
   content::WebContents* const tab =
       browser()->tab_strip_model()->GetWebContentsAt(0);
   NavigateInRenderer(tab, GURL("http://test/"));
 
+  const int tab_id = SessionTabHelper::IdForTab(tab).id();
+  EXPECT_TRUE(action->GetIsVisible(tab_id));
+
   bool expect_page_action = !has_browser_action;
-  ExtensionAction* page_action =
-      ExtensionActionManager::Get(browser()->profile())
-          ->GetPageAction(*extension);
-  EXPECT_EQ(expect_page_action, page_action != nullptr);
-  EXPECT_EQ(expect_page_action ? 1u : 0u,
-            extension_action_test_util::GetVisiblePageActionCount(tab));
+  if (expect_page_action) {
+    ExtensionAction* page_action =
+        ExtensionActionManager::Get(browser()->profile())
+            ->GetPageAction(*extension);
+    EXPECT_EQ(expect_page_action, page_action != nullptr);
+    EXPECT_EQ(expect_page_action ? 1u : 0u,
+              extension_action_test_util::GetVisiblePageActionCount(tab));
+  }
 }
 
-INSTANTIATE_TEST_CASE_P(ShowPageActionWithoutPageActionTest,
-                        ShowPageActionWithoutPageActionTest,
+INSTANTIATE_TEST_CASE_P(ShowPageActionWithoutSpecifiedPageActionTest,
+                        ShowPageActionWithoutSpecifiedPageActionTest,
                         ::testing::Bool());
 
 IN_PROC_BROWSER_TEST_F(DeclarativeContentApiTest,

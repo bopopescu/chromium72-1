@@ -21,13 +21,13 @@
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/extensions/browser_action_test_util.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
-#include "chrome/browser/ui/views_mode_controller.h"
 #include "chrome/test/base/interactive_test_utils.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "content/public/browser/notification_service.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/test/javascript_test_observer.h"
 #include "extensions/browser/extension_registry.h"
+#include "extensions/browser/test_event_router_observer.h"
 #include "extensions/common/extension.h"
 #include "extensions/common/feature_switch.h"
 #include "extensions/common/manifest_constants.h"
@@ -187,6 +187,9 @@ class CommandsApiTest : public ExtensionApiTest {
 #endif  // OS_CHROMEOS
 };
 
+class IncognitoCommandsApiTest : public CommandsApiTest,
+                                 public testing::WithParamInterface<bool> {};
+
 // Test the basic functionality of the Keybinding API:
 // - That pressing the shortcut keys should perform actions (activate the
 //   browser action or send an event).
@@ -298,6 +301,58 @@ IN_PROC_BROWSER_TEST_F(CommandsApiTest, PageActionKeyUpdated) {
   // Activate the shortcut.
   ASSERT_TRUE(ui_test_utils::SendKeyPressSync(
       browser(), ui::VKEY_G, false, true, true, false));
+
+  EXPECT_TRUE(test_listener.WaitUntilSatisfied());
+  EXPECT_EQ("clicked", test_listener.message());
+}
+
+IN_PROC_BROWSER_TEST_F(CommandsApiTest, PageActionOverrideChromeShortcut) {
+  ASSERT_TRUE(embedded_test_server()->Start());
+  ASSERT_TRUE(RunExtensionTest("keybinding/page_action")) << message_;
+  const Extension* extension = GetSingleLoadedExtension();
+  ASSERT_TRUE(extension) << message_;
+
+  CommandService* command_service = CommandService::Get(browser()->profile());
+// Simulate the user setting the keybinding to override the print shortcut.
+#if defined(OS_MACOSX)
+  std::string print_shortcut = "Command+P";
+#else
+  std::string print_shortcut = "Ctrl+P";
+#endif
+  command_service->UpdateKeybindingPrefs(
+      extension->id(), manifest_values::kPageActionCommandEvent,
+      print_shortcut);
+
+  {
+    // Load a page. The extension will detect the navigation and request to show
+    // the page action icon.
+    ResultCatcher catcher;
+    ui_test_utils::NavigateToURL(
+        browser(), embedded_test_server()->GetURL("/extensions/test_file.txt"));
+    ASSERT_TRUE(catcher.GetNextResult());
+  }
+
+  ExtensionTestMessageListener test_listener(false);  // Won't reply.
+  test_listener.set_extension_id(extension->id());
+
+  bool control_is_modifier = false;
+  bool command_is_modifier = false;
+#if defined(OS_MACOSX)
+  command_is_modifier = true;
+#else
+  control_is_modifier = true;
+#endif
+
+  // Activate the omnibox. This checks to ensure that the extension shortcut
+  // still works even if the WebContents isn't focused.
+  ASSERT_TRUE(ui_test_utils::SendKeyPressSync(browser(), ui::VKEY_L,
+                                              control_is_modifier, false, false,
+                                              command_is_modifier));
+
+  // Activate the shortcut.
+  ASSERT_TRUE(ui_test_utils::SendKeyPressSync(browser(), ui::VKEY_P,
+                                              control_is_modifier, false, false,
+                                              command_is_modifier));
 
   EXPECT_TRUE(test_listener.WaitUntilSatisfied());
   EXPECT_EQ("clicked", test_listener.message());
@@ -520,12 +575,6 @@ IN_PROC_BROWSER_TEST_F(CommandsApiTest,
 // web pages.
 IN_PROC_BROWSER_TEST_F(CommandsApiTest,
                        OverwriteBookmarkShortcutByUserOverridesWebKeybinding) {
-#if defined(OS_MACOSX)
-  // This doesn't work in MacViews mode: https://crbug.com/845503 is the likely
-  // root cause.
-  if (!views_mode_controller::IsViewsBrowserCocoa())
-    return;
-#endif
   ASSERT_TRUE(embedded_test_server()->Start());
 
   ASSERT_TRUE(ui_test_utils::BringBrowserWindowToFront(browser()));
@@ -1001,5 +1050,49 @@ IN_PROC_BROWSER_TEST_F(CommandsApiTest, AddRemoveAddComponentExtension) {
 
   ASSERT_TRUE(RunComponentExtensionTest("keybinding/component")) << message_;
 }
+
+// Test Keybinding in incognito mode.
+IN_PROC_BROWSER_TEST_P(IncognitoCommandsApiTest, IncognitoMode) {
+  ASSERT_TRUE(embedded_test_server()->Start());
+
+  bool is_incognito_enabled = GetParam();
+
+  if (is_incognito_enabled)
+    ASSERT_TRUE(RunExtensionTestIncognito("keybinding/basics")) << message_;
+  else
+    ASSERT_TRUE(RunExtensionTest("keybinding/basics")) << message_;
+
+  // Open incognito window and navigate to test page.
+  Browser* incognito_browser = OpenURLOffTheRecord(
+      browser()->profile(),
+      embedded_test_server()->GetURL("/extensions/test_file.html"));
+
+  ui_test_utils::NavigateToURL(
+      incognito_browser,
+      embedded_test_server()->GetURL("/extensions/test_file.txt"));
+
+  TestEventRouterObserver test_observer(
+      EventRouter::Get(incognito_browser->profile()));
+
+  // Activate the browser action shortcut (Ctrl+Shift+F).
+  ASSERT_TRUE(ui_test_utils::SendKeyPressSync(incognito_browser, ui::VKEY_F,
+                                              true, true, false, false));
+  base::RunLoop().RunUntilIdle();
+  EXPECT_EQ(is_incognito_enabled,
+            base::ContainsKey(test_observer.dispatched_events(),
+                              "browserAction.onClicked"));
+
+  test_observer.ClearEvents();
+
+  // Activate the command shortcut (Ctrl+Shift+Y).
+  ASSERT_TRUE(ui_test_utils::SendKeyPressSync(incognito_browser, ui::VKEY_Y,
+                                              true, true, false, false));
+  base::RunLoop().RunUntilIdle();
+  EXPECT_EQ(is_incognito_enabled,
+            base::ContainsKey(test_observer.dispatched_events(),
+                              "commands.onCommand"));
+}
+
+INSTANTIATE_TEST_CASE_P(, IncognitoCommandsApiTest, testing::Bool());
 
 }  // namespace extensions

@@ -13,6 +13,7 @@
 #include "device/fido/authenticator_get_info_response.h"
 #include "device/fido/authenticator_make_credential_response.h"
 #include "device/fido/device_response_converter.h"
+#include "device/fido/fido_transport_protocol.h"
 
 namespace device {
 
@@ -30,15 +31,18 @@ IcuEnvironment* env = new IcuEnvironment();
 
 extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
   std::vector<uint8_t> input(data, data + size);
-  std::vector<uint8_t> relying_party_id_hash(32);
-  auto response = device::ReadCTAPMakeCredentialResponse(input);
+  std::array<uint8_t, 32> relying_party_id_hash = {};
+  auto response = device::ReadCTAPMakeCredentialResponse(
+      FidoTransportProtocol::kUsbHumanInterfaceDevice, input);
   if (response)
-    response->EraseAttestationStatement();
+    response->EraseAttestationStatement(AttestationObject::AAGUID::kErase);
 
   response = device::AuthenticatorMakeCredentialResponse::
-      CreateFromU2fRegisterResponse(relying_party_id_hash, input);
+      CreateFromU2fRegisterResponse(
+          FidoTransportProtocol::kUsbHumanInterfaceDevice,
+          relying_party_id_hash, input);
   if (response)
-    response->EraseAttestationStatement();
+    response->EraseAttestationStatement(AttestationObject::AAGUID::kErase);
 
   device::ReadCTAPGetAssertionResponse(input);
   std::vector<uint8_t> u2f_response_data(data, data + size);

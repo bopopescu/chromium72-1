@@ -33,13 +33,17 @@ class MockPendingScript : public PendingScript {
     return Create(document, ScriptSchedulingType::kAsync);
   }
 
+  MockPendingScript(ScriptElementBase* element,
+                    ScriptSchedulingType scheduling_type)
+      : PendingScript(element, TextPosition()) {
+    SetSchedulingType(scheduling_type);
+  }
   ~MockPendingScript() override {}
 
-  MOCK_CONST_METHOD0(GetScriptType, ScriptType());
+  MOCK_CONST_METHOD0(GetScriptType, mojom::ScriptType());
   MOCK_CONST_METHOD1(CheckMIMETypeBeforeRunScript, bool(Document*));
-  MOCK_CONST_METHOD2(GetSource, Script*(const KURL&, bool&));
+  MOCK_CONST_METHOD1(GetSource, Script*(const KURL&));
   MOCK_CONST_METHOD0(IsExternal, bool());
-  MOCK_CONST_METHOD0(ErrorOccurred, bool());
   MOCK_CONST_METHOD0(WasCanceled, bool());
   MOCK_CONST_METHOD0(UrlForTracing, KURL());
   MOCK_METHOD0(RemoveFromMemoryCache, void());
@@ -61,8 +65,7 @@ class MockPendingScript : public PendingScript {
     state_ = State::kReadyToBeStreamed;
   }
 
-  bool StartStreamingIfPossible(ScriptStreamer::Type type,
-                                base::OnceClosure closure) override {
+  bool StartStreamingIfPossible(base::OnceClosure closure) override {
     if (state_ != State::kReadyToBeStreamed)
       return false;
 
@@ -87,19 +90,13 @@ class MockPendingScript : public PendingScript {
   MOCK_CONST_METHOD0(CheckState, void());
 
  private:
-  MockPendingScript(ScriptElementBase* element,
-                    ScriptSchedulingType scheduling_type)
-      : PendingScript(element, TextPosition()) {
-    SetSchedulingType(scheduling_type);
-  }
-
   static MockPendingScript* Create(Document* document,
                                    ScriptSchedulingType scheduling_type) {
     MockScriptElementBase* element = MockScriptElementBase::Create();
     EXPECT_CALL(*element, GetDocument())
         .WillRepeatedly(testing::ReturnRef(*document));
     MockPendingScript* pending_script =
-        new MockPendingScript(element, scheduling_type);
+        MakeGarbageCollected<MockPendingScript>(element, scheduling_type);
     EXPECT_CALL(*pending_script, IsExternal()).WillRepeatedly(Return(true));
     return pending_script;
   }
@@ -178,7 +175,7 @@ TEST_F(ScriptRunnerTest, QueueMultipleScripts_InOrder) {
     QueueScriptForExecution(pending_script);
   }
 
-  for (size_t i = 0; i < pending_scripts.size(); ++i) {
+  for (wtf_size_t i = 0; i < pending_scripts.size(); ++i) {
     EXPECT_CALL(*pending_scripts[i], ExecuteScriptBlock(_))
         .WillOnce(InvokeWithoutArgs([this, i] { order_.push_back(i + 1); }));
   }

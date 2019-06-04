@@ -4,15 +4,14 @@
 
 package org.chromium.chrome.browser.webapps;
 
-import android.content.pm.PackageManager;
 import android.graphics.Bitmap;
-import android.os.AsyncTask;
 
 import org.chromium.base.Callback;
 import org.chromium.base.ContextUtils;
+import org.chromium.base.PackageUtils;
 import org.chromium.base.annotations.CalledByNative;
+import org.chromium.base.task.AsyncTask;
 import org.chromium.chrome.browser.AppHooks;
-import org.chromium.chrome.browser.banners.InstallerDelegate;
 import org.chromium.chrome.browser.metrics.WebApkUma;
 import org.chromium.webapk.lib.common.WebApkConstants;
 
@@ -69,7 +68,7 @@ public class WebApkInstaller {
         if (mInstallDelegate == null) {
             notify(WebApkInstallResult.FAILURE);
             WebApkUma.recordGooglePlayInstallResult(
-                    WebApkUma.GOOGLE_PLAY_INSTALL_FAILED_NO_DELEGATE);
+                    WebApkUma.GooglePlayInstallResult.FAILED_NO_DELEGATE);
             return;
         }
 
@@ -126,9 +125,9 @@ public class WebApkInstaller {
 
     @CalledByNative
     private void checkFreeSpace() {
-        new AsyncTask<Void, Void, Integer>() {
+        new AsyncTask<Integer>() {
             @Override
-            protected Integer doInBackground(Void... params) {
+            protected Integer doInBackground() {
                 long availableSpaceInBytes = WebApkUma.getAvailableSpaceAboveLowSpaceLimit();
 
                 if (availableSpaceInBytes > 0) return SpaceStatus.ENOUGH_SPACE;
@@ -144,12 +143,12 @@ public class WebApkInstaller {
             protected void onPostExecute(Integer result) {
                 nativeOnGotSpaceStatus(mNativePointer, result);
             }
-        }.executeOnExecutor(AsyncTask.THREAD_POOL_EXECUTOR);
+        }
+                .executeOnExecutor(AsyncTask.THREAD_POOL_EXECUTOR);
     }
 
     private boolean isWebApkInstalled(String packageName) {
-        PackageManager packageManager = ContextUtils.getApplicationContext().getPackageManager();
-        return InstallerDelegate.isInstalled(packageManager, packageName);
+        return PackageUtils.isPackageInstalled(ContextUtils.getApplicationContext(), packageName);
     }
 
     private native void nativeOnInstallFinished(

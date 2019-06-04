@@ -9,6 +9,7 @@
 #include <memory>
 #include <utility>
 
+#include "base/feature_list.h"
 #include "base/macros.h"
 #include "chrome/browser/chromeos/input_method/input_method_engine.h"
 #include "chrome/browser/chromeos/login/lock/screen_locker.h"
@@ -16,6 +17,7 @@
 #include "chrome/browser/chromeos/profiles/profile_helper.h"
 #include "chrome/browser/extensions/extension_service.h"
 #include "chrome/browser/profiles/profile_manager.h"
+#include "chrome/browser/ui/ash/chrome_keyboard_controller_client.h"
 #include "chrome/common/extensions/api/input_ime.h"
 #include "chrome/common/extensions/api/input_method_private.h"
 #include "extensions/browser/extension_system.h"
@@ -24,8 +26,7 @@
 #include "ui/base/ime/chromeos/extension_ime_util.h"
 #include "ui/base/ime/chromeos/input_method_manager.h"
 #include "ui/base/ime/ime_engine_handler_interface.h"
-#include "ui/keyboard/keyboard_controller.h"
-#include "ui/keyboard/keyboard_util.h"
+#include "ui/base/ui_base_features.h"
 
 namespace input_ime = extensions::api::input_ime;
 namespace input_method_private = extensions::api::input_method_private;
@@ -48,10 +49,14 @@ using input_method::InputMethodEngineBase;
 using chromeos::InputMethodEngine;
 
 namespace {
-const char kErrorEngineNotAvailable[] = "Engine is not available";
-const char kErrorSetMenuItemsFail[] = "Could not create menu Items";
-const char kErrorUpdateMenuItemsFail[] = "Could not update menu Items";
-const char kErrorEngineNotActive[] = "The engine is not active.";
+const char kInputImeApiChromeOSErrorEngineNotAvailable[] =
+    "Engine is not available";
+const char kInputImeApiChromeOSErrorSetMenuItemsFail[] =
+    "Could not create menu Items";
+const char kInputImeApiChromeOSErrorUpdateMenuItemsFail[] =
+    "Could not update menu Items";
+const char kInputImeApiChromeOSErrorEngineNotActive[] =
+    "The engine is not active.";
 
 void SetMenuItemToMenu(
     const input_ime::MenuItem& input,
@@ -81,6 +86,10 @@ void SetMenuItemToMenu(
   if (input.enabled)
     out->modified |= InputMethodEngine::MENU_ITEM_MODIFIED_ENABLED;
   out->enabled = input.enabled ? *input.enabled : true;
+}
+
+keyboard::mojom::KeyboardConfig GetKeyboardConfig() {
+  return ChromeKeyboardControllerClient::Get()->GetKeyboardConfig();
 }
 
 class ImeObserverChromeOS : public ui::ImeObserver {
@@ -198,15 +207,18 @@ class ImeObserverChromeOS : public ui::ImeObserver {
     // There is both a public and private OnFocus event. The private OnFocus
     // event is only for ChromeOS and contains additional information about pen
     // inputs. We ensure that we only trigger one OnFocus event.
-    if (HasListener(input_method_private::OnFocus::kEventName) &&
-        keyboard::IsStylusVirtualKeyboardEnabled()) {
+    if (ExtensionHasListener(input_method_private::OnFocus::kEventName) &&
+        base::FeatureList::IsEnabled(features::kEnableStylusVirtualKeyboard)) {
       input_method_private::InputContext input_context;
       input_context.context_id = context.id;
       input_context.type = input_method_private::ParseInputContextType(
           ConvertInputContextType(context));
       input_context.auto_correct = ConvertInputContextAutoCorrect(context);
       input_context.auto_complete = ConvertInputContextAutoComplete(context);
+      input_context.auto_capitalize = (input_method_private::AutoCapitalizeType)
+          ConvertInputContextAutoCapitalize(context);
       input_context.spell_check = ConvertInputContextSpellCheck(context);
+      input_context.has_been_password = ConvertHasBeenPassword(context);
       input_context.should_do_learning = context.should_do_learning;
       input_context.focus_reason = input_method_private::ParseFocusReason(
           ConvertInputContextFocusReason(context));
@@ -300,6 +312,39 @@ class ImeObserverChromeOS : public ui::ImeObserver {
       case ui::TextInputClient::FOCUS_REASON_OTHER:
         return "other";
     }
+  }
+
+  bool ConvertInputContextAutoCorrect(
+      ui::IMEEngineHandlerInterface::InputContext input_context) override {
+    if (!GetKeyboardConfig().auto_correct)
+      return false;
+    return ImeObserver::ConvertInputContextAutoCorrect(input_context);
+  }
+
+  bool ConvertInputContextAutoComplete(
+      ui::IMEEngineHandlerInterface::InputContext input_context) override {
+    if (!GetKeyboardConfig().auto_complete)
+      return false;
+    return ImeObserver::ConvertInputContextAutoComplete(input_context);
+  }
+
+  input_ime::AutoCapitalizeType ConvertInputContextAutoCapitalize(
+      ui::IMEEngineHandlerInterface::InputContext input_context) override {
+    if (!GetKeyboardConfig().auto_capitalize)
+      return input_ime::AUTO_CAPITALIZE_TYPE_NONE;
+    return ImeObserver::ConvertInputContextAutoCapitalize(input_context);
+  }
+
+  bool ConvertInputContextSpellCheck(
+      ui::IMEEngineHandlerInterface::InputContext input_context) override {
+    if (!GetKeyboardConfig().spell_check)
+      return false;
+    return ImeObserver::ConvertInputContextSpellCheck(input_context);
+  }
+
+  bool ConvertHasBeenPassword(
+      ui::IMEEngineHandlerInterface::InputContext input_context) {
+    return input_context.flags & ui::TEXT_INPUT_FLAG_HAS_BEEN_PASSWORD;
   }
 
   DISALLOW_COPY_AND_ASSIGN(ImeObserverChromeOS);
@@ -401,8 +446,7 @@ void InputImeEventRouter::UnregisterAllImes(const std::string& extension_id) {
 }
 
 InputMethodEngine* InputImeEventRouter::GetEngine(
-    const std::string& extension_id,
-    const std::string& component_id) {
+    const std::string& extension_id) {
   std::map<std::string, InputMethodEngine*>::iterator it =
       engine_map_.find(extension_id);
   return (it != engine_map_.end()) ? it->second : nullptr;
@@ -456,8 +500,7 @@ InputImeSetCandidateWindowPropertiesFunction::Run() {
   InputImeEventRouter* event_router =
       GetInputImeEventRouter(Profile::FromBrowserContext(browser_context()));
   InputMethodEngine* engine =
-      event_router ? event_router->GetEngine(extension_id(), params.engine_id)
-                   : nullptr;
+      event_router ? event_router->GetEngine(extension_id()) : nullptr;
   if (!engine) {
     return RespondNow(OneArgument(std::make_unique<base::Value>(false)));
   }
@@ -587,10 +630,9 @@ ExtensionFunction::ResponseAction InputImeSetMenuItemsFunction::Run() {
   InputImeEventRouter* event_router =
       GetInputImeEventRouter(Profile::FromBrowserContext(browser_context()));
   InputMethodEngine* engine =
-      event_router ? event_router->GetEngine(extension_id(), params.engine_id)
-                   : nullptr;
+      event_router ? event_router->GetEngine(extension_id()) : nullptr;
   if (!engine)
-    return RespondNow(Error(kErrorEngineNotAvailable));
+    return RespondNow(Error(kInputImeApiChromeOSErrorEngineNotAvailable));
 
   std::vector<chromeos::input_method::InputMethodManager::MenuItem> items_out;
   for (const input_ime::MenuItem& item_in : params.items) {
@@ -599,7 +641,7 @@ ExtensionFunction::ResponseAction InputImeSetMenuItemsFunction::Run() {
   }
 
   if (!engine->SetMenuItems(items_out))
-    return RespondNow(Error(kErrorSetMenuItemsFail));
+    return RespondNow(Error(kInputImeApiChromeOSErrorSetMenuItemsFail));
   return RespondNow(NoArguments());
 }
 
@@ -612,10 +654,9 @@ ExtensionFunction::ResponseAction InputImeUpdateMenuItemsFunction::Run() {
   InputImeEventRouter* event_router =
       GetInputImeEventRouter(Profile::FromBrowserContext(browser_context()));
   InputMethodEngine* engine =
-      event_router ? event_router->GetEngine(extension_id(), params.engine_id)
-                   : nullptr;
+      event_router ? event_router->GetEngine(extension_id()) : nullptr;
   if (!engine)
-    return RespondNow(Error(kErrorEngineNotAvailable));
+    return RespondNow(Error(kInputImeApiChromeOSErrorEngineNotAvailable));
 
   std::vector<chromeos::input_method::InputMethodManager::MenuItem> items_out;
   for (const input_ime::MenuItem& item_in : params.items) {
@@ -624,7 +665,7 @@ ExtensionFunction::ResponseAction InputImeUpdateMenuItemsFunction::Run() {
   }
 
   if (!engine->UpdateMenuItems(items_out))
-    return RespondNow(Error(kErrorUpdateMenuItemsFail));
+    return RespondNow(Error(kInputImeApiChromeOSErrorUpdateMenuItemsFail));
   return RespondNow(NoArguments());
 }
 
@@ -637,10 +678,9 @@ ExtensionFunction::ResponseAction InputImeDeleteSurroundingTextFunction::Run() {
   InputImeEventRouter* event_router =
       GetInputImeEventRouter(Profile::FromBrowserContext(browser_context()));
   InputMethodEngine* engine =
-      event_router ? event_router->GetEngine(extension_id(), params.engine_id)
-                   : nullptr;
+      event_router ? event_router->GetEngine(extension_id()) : nullptr;
   if (!engine)
-    return RespondNow(Error(kErrorEngineNotAvailable));
+    return RespondNow(Error(kInputImeApiChromeOSErrorEngineNotAvailable));
 
   std::string error;
   engine->DeleteSurroundingText(params.context_id, params.offset, params.length,
@@ -660,12 +700,12 @@ InputMethodPrivateNotifyImeMenuItemActivatedFunction::Run() {
   InputMethodEngine* engine = GetActiveEngine(
       Profile::FromBrowserContext(browser_context()), active_extension_id);
   if (!engine)
-    return RespondNow(Error(kErrorEngineNotAvailable));
+    return RespondNow(Error(kInputImeApiChromeOSErrorEngineNotAvailable));
 
   std::unique_ptr<NotifyImeMenuItemActivated::Params> params(
       NotifyImeMenuItemActivated::Params::Create(*args_));
   if (params->engine_id != engine->GetActiveComponentId())
-    return RespondNow(Error(kErrorEngineNotActive));
+    return RespondNow(Error(kInputImeApiChromeOSErrorEngineNotActive));
   engine->PropertyActivate(params->name);
   return RespondNow(NoArguments());
 }
@@ -675,7 +715,7 @@ InputMethodPrivateGetCompositionBoundsFunction::Run() {
   InputMethodEngine* engine = GetActiveEngine(
       Profile::FromBrowserContext(browser_context()), extension_id());
   if (!engine)
-    return RespondNow(Error(kErrorEngineNotAvailable));
+    return RespondNow(Error(kInputImeApiChromeOSErrorEngineNotAvailable));
 
   auto bounds_list = std::make_unique<base::ListValue>();
   for (const auto& bounds : engine->composition_bounds()) {
@@ -740,9 +780,8 @@ void InputImeAPI::OnExtensionUnloaded(content::BrowserContext* browser_context,
     // desktop shelf will disappear. see bugs: 775507,788247,786273,761714.
     // But still need to unload keyboard container document. Since ime extension
     // need to re-render the document when it's recovered.
-    keyboard::KeyboardController* keyboard_controller =
-        keyboard::KeyboardController::GetInstance();
-    if (keyboard_controller) {
+    auto* keyboard_client = ChromeKeyboardControllerClient::Get();
+    if (keyboard_client->is_keyboard_enabled()) {
       // Keyboard controller "Reload" method only reload current page when the
       // url is changed. So we need unload the current page first. Then next
       // engine->Enable() can refresh the inputview page correctly.
@@ -750,7 +789,7 @@ void InputImeAPI::OnExtensionUnloaded(content::BrowserContext* browser_context,
       // current page.
       // TODO(wuyingbing): Should add a new method to unload the document.
       manager->GetActiveIMEState()->DisableInputView();
-      keyboard_controller->Reload();
+      keyboard_client->ReloadKeyboardIfNeeded();
     }
     event_router->SetUnloadedExtensionId(extension->id());
   } else {

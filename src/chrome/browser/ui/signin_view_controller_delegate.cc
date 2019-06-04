@@ -81,12 +81,25 @@ void SigninViewControllerDelegate::ResetSigninViewControllerDelegate() {
 void SigninViewControllerDelegate::LoadingStateChanged(
     content::WebContents* source,
     bool to_different_document) {
-  if (CanGoBack(source))
+  // The WebUI object can be missing for an error page, per
+  // https://crbug.com/860409.
+  if (!source->GetWebUI())
+    return;
+
+  if (CanGoBack(source)) {
     source->GetWebUI()->CallJavascriptFunctionUnsafe(
         "inline.login.showBackButton");
-  else
+  } else {
     source->GetWebUI()->CallJavascriptFunctionUnsafe(
         "inline.login.showCloseButton");
+  }
+}
+
+bool SigninViewControllerDelegate::HandleKeyboardEvent(
+    content::WebContents* source,
+    const content::NativeWebKeyboardEvent& event) {
+  NOTREACHED();
+  return false;
 }
 
 bool SigninViewControllerDelegate::CanGoBack(

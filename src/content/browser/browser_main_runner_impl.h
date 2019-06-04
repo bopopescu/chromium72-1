@@ -8,6 +8,7 @@
 #include <memory>
 
 #include "base/macros.h"
+#include "base/task/task_scheduler/task_scheduler.h"
 #include "build/build_config.h"
 #include "content/public/browser/browser_main_runner.h"
 
@@ -19,7 +20,6 @@ class ScopedOleInitializer;
 
 namespace content {
 
-class BrowserProcessSubThread;
 class BrowserMainLoop;
 class NotificationServiceImpl;
 
@@ -38,18 +38,18 @@ class BrowserMainRunnerImpl : public BrowserMainRunner {
   int Run() override;
   void Shutdown() override;
 
-  // Initialize all necessary browser state with a |service_manager_thread|
-  // on which ServiceManager is currently running.
-  int Initialize(
-      const MainFunctionParams& parameters,
-      std::unique_ptr<BrowserProcessSubThread> service_manager_thread);
-
  private:
   // True if we have started to initialize the runner.
   bool initialization_started_;
 
   // True if the runner has been shut down.
   bool is_shutdown_;
+
+  // Prevents execution of TaskScheduler tasks from the moment content is
+  // entered. Handed off to |main_loop_| later so it can decide when to release
+  // worker threads again.
+  std::unique_ptr<base::TaskScheduler::ScopedExecutionFence>
+      scoped_execution_fence_;
 
   std::unique_ptr<NotificationServiceImpl> notification_service_;
   std::unique_ptr<BrowserMainLoop> main_loop_;

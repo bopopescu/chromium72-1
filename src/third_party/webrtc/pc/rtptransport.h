@@ -16,13 +16,12 @@
 #include "call/rtp_demuxer.h"
 #include "modules/rtp_rtcp/include/rtp_header_extension_map.h"
 #include "pc/rtptransportinternal.h"
-#include "rtc_base/sigslot.h"
+#include "rtc_base/third_party/sigslot/sigslot.h"
 
 namespace rtc {
 
 class CopyOnWriteBuffer;
 struct PacketOptions;
-struct PacketTime;
 class PacketTransportInternal;
 
 }  // namespace rtc
@@ -83,15 +82,12 @@ class RtpTransport : public RtpTransportInternal {
 
   bool UnregisterRtpDemuxerSink(RtpPacketSinkInterface* sink) override;
 
-  void SetMetricsObserver(
-      rtc::scoped_refptr<MetricsObserverInterface> metrics_observer) override {}
-
  protected:
   // TODO(zstein): Remove this when we remove RtpTransportAdapter.
   RtpTransportAdapter* GetInternal() override;
 
   // These methods will be used in the subclasses.
-  void DemuxPacket(rtc::CopyOnWriteBuffer* packet, const rtc::PacketTime& time);
+  void DemuxPacket(rtc::CopyOnWriteBuffer* packet, int64_t packet_time_us);
 
   bool SendPacket(bool rtcp,
                   rtc::CopyOnWriteBuffer* packet,
@@ -100,11 +96,11 @@ class RtpTransport : public RtpTransportInternal {
 
   // Overridden by SrtpTransport.
   virtual void OnNetworkRouteChanged(
-      rtc::Optional<rtc::NetworkRoute> network_route);
+      absl::optional<rtc::NetworkRoute> network_route);
   virtual void OnRtpPacketReceived(rtc::CopyOnWriteBuffer* packet,
-                                   const rtc::PacketTime& packet_time);
+                                   int64_t packet_time_us);
   virtual void OnRtcpPacketReceived(rtc::CopyOnWriteBuffer* packet,
-                                    const rtc::PacketTime& packet_time);
+                                    int64_t packet_time_us);
   // Overridden by SrtpTransport and DtlsSrtpTransport.
   virtual void OnWritableState(rtc::PacketTransportInternal* packet_transport);
 
@@ -115,7 +111,7 @@ class RtpTransport : public RtpTransportInternal {
   void OnReadPacket(rtc::PacketTransportInternal* transport,
                     const char* data,
                     size_t len,
-                    const rtc::PacketTime& packet_time,
+                    const int64_t& packet_time_us,
                     int flags);
 
   // Updates "ready to send" for an individual channel and fires

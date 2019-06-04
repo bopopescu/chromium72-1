@@ -14,7 +14,7 @@
 #include "base/files/file_path.h"
 #include "base/path_service.h"
 #include "base/process/memory.h"
-#include "base/test/histogram_tester.h"
+#include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/test/scoped_task_environment.h"
 #include "base/threading/thread_restrictions.h"
@@ -23,6 +23,7 @@
 #include "chrome/browser/metrics/chrome_metrics_service_accessor.h"
 #include "chrome/browser/metrics/chrome_metrics_service_client.h"
 #include "chrome/browser/metrics/chrome_metrics_services_manager_client.h"
+#include "chrome/browser/metrics/persistent_histograms.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/common/chrome_paths.h"
@@ -179,6 +180,27 @@ IN_PROC_BROWSER_TEST_F(MetricsServiceBrowserTest, MAYBE_CrashRenderers) {
   histogram_tester.ExpectUniqueSample("Tabs.SadTab.CrashCreated", 1, 1);
 }
 
+#if defined(OS_WIN)
+IN_PROC_BROWSER_TEST_F(MetricsServiceBrowserTest, HeapCorruptionInRenderer) {
+  base::HistogramTester histogram_tester;
+
+  OpenTabsAndNavigateToCrashyUrl(content::kChromeUIHeapCorruptionCrashURL);
+
+  // Verify that the expected stability metrics were recorded.
+  const PrefService* prefs = g_browser_process->local_state();
+  EXPECT_EQ(1, prefs->GetInteger(metrics::prefs::kStabilityLaunchCount));
+  // The three tabs from OpenTabs() and the one tab to open chrome://crash/.
+  EXPECT_EQ(4, prefs->GetInteger(metrics::prefs::kStabilityPageLoadCount));
+  EXPECT_EQ(1, prefs->GetInteger(metrics::prefs::kStabilityRendererCrashCount));
+
+  histogram_tester.ExpectUniqueSample(
+      "CrashExitCodes.Renderer",
+      std::abs(static_cast<int32_t>(STATUS_HEAP_CORRUPTION)), 1);
+  histogram_tester.ExpectUniqueSample("Tabs.SadTab.CrashCreated", 1, 1);
+  LOG(INFO) << histogram_tester.GetAllHistogramsRecorded();
+}
+#endif  // OS_WIN
+
 IN_PROC_BROWSER_TEST_F(MetricsServiceBrowserTest, MAYBE_CheckCrashRenderers) {
   base::HistogramTester histogram_tester;
 
@@ -272,8 +294,7 @@ class MetricsServiceBrowserFilesTest : public InProcessBrowserTest {
 
     // Create the upload dir. Note that ASSERT macros won't fail in SetUp,
     // hence the use of CHECK.
-    upload_dir_ =
-        user_dir.AppendASCII(ChromeMetricsServiceClient::kBrowserMetricsName);
+    upload_dir_ = user_dir.AppendASCII(kBrowserMetricsName);
     CHECK(!base::PathExists(upload_dir_));
     CHECK(base::CreateDirectory(upload_dir_));
 

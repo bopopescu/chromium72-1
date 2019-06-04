@@ -14,18 +14,6 @@
  * </settings-lock-screen>
  */
 
-/**
- * Possible values of the proximity threshold displayed to the user.
- * This should be kept in sync with the enum defined here:
- * components/proximity_auth/proximity_monitor_impl.cc
- */
-settings.EasyUnlockProximityThreshold = {
-  VERY_CLOSE: 0,
-  CLOSE: 1,
-  FAR: 2,
-  VERY_FAR: 3,
-};
-
 Polymer({
   is: 'settings-lock-screen',
 
@@ -52,7 +40,7 @@ Polymer({
     },
 
     /**
-     * Authentication token provided by password-prompt-dialog.
+     * Authentication token provided by lock-screen-password-prompt-dialog.
      * @private
      */
     authToken_: String,
@@ -114,60 +102,29 @@ Polymer({
     },
 
     /**
-     * True if Easy Unlock is allowed on this machine.
+     * Whether notifications on the lock screen are enable by the feature flag.
+     * @private
      */
-    easyUnlockAllowed_: {
+    lockScreenNotificationsEnabled_: {
       type: Boolean,
       value: function() {
-        return loadTimeData.getBoolean('easyUnlockAllowed');
+        return loadTimeData.getBoolean('lockScreenNotificationsEnabled');
       },
       readOnly: true,
     },
 
     /**
-     * True if Easy Unlock is enabled.
+     * Whether the "hide sensitive notification" option on the lock screen can
+     * be enable by the feature flag.
+     * @private
      */
-    easyUnlockEnabled_: {
+    lockScreenHideSensitiveNotificationSupported_: {
       type: Boolean,
       value: function() {
-        return loadTimeData.getBoolean('easyUnlockEnabled');
-      },
-    },
-
-    /**
-     * Returns the proximity threshold mapping to be displayed in the
-     * threshold selector dropdown menu.
-     */
-    easyUnlockProximityThresholdMapping_: {
-      type: Array,
-      value: function() {
-        return [
-          {
-            value: settings.EasyUnlockProximityThreshold.VERY_CLOSE,
-            name:
-                loadTimeData.getString('easyUnlockProximityThresholdVeryClose')
-          },
-          {
-            value: settings.EasyUnlockProximityThreshold.CLOSE,
-            name: loadTimeData.getString('easyUnlockProximityThresholdClose')
-          },
-          {
-            value: settings.EasyUnlockProximityThreshold.FAR,
-            name: loadTimeData.getString('easyUnlockProximityThresholdFar')
-          },
-          {
-            value: settings.EasyUnlockProximityThreshold.VERY_FAR,
-            name: loadTimeData.getString('easyUnlockProximityThresholdVeryFar')
-          }
-        ];
+        return loadTimeData.getBoolean(
+            'lockScreenHideSensitiveNotificationsSupported');
       },
       readOnly: true,
-    },
-
-    /** @private */
-    showEasyUnlockTurnOffDialog_: {
-      type: Boolean,
-      value: false,
     },
 
     /** @private */
@@ -176,9 +133,6 @@ Polymer({
     /** @private */
     showSetupPinDialog_: Boolean,
   },
-
-  /** @private {?settings.EasyUnlockBrowserProxy} */
-  easyUnlockBrowserProxy_: null,
 
   /** @private {?settings.FingerprintBrowserProxy} */
   fingerprintBrowserProxy_: null,
@@ -191,19 +145,9 @@ Polymer({
     if (this.shouldAskForPassword_(settings.getCurrentRoute()))
       this.openPasswordPromptDialog_();
 
-    this.easyUnlockBrowserProxy_ =
-        settings.EasyUnlockBrowserProxyImpl.getInstance();
     this.fingerprintBrowserProxy_ =
         settings.FingerprintBrowserProxyImpl.getInstance();
     this.updateNumFingerprints_();
-
-    if (this.easyUnlockAllowed_) {
-      this.addWebUIListener(
-          'easy-unlock-enabled-status',
-          this.handleEasyUnlockEnabledStatusChanged_.bind(this));
-      this.easyUnlockBrowserProxy_.getEnabledStatus().then(
-          this.handleEasyUnlockEnabledStatusChanged_.bind(this));
-    }
   },
 
   /**
@@ -344,61 +288,6 @@ Polymer({
    */
   shouldAskForPassword_: function(route) {
     return route == settings.routes.LOCK_SCREEN && !this.setModes_;
-  },
-
-  /**
-   * Handler for when the Easy Unlock enabled status has changed.
-   * @private
-   */
-  handleEasyUnlockEnabledStatusChanged_: function(easyUnlockEnabled) {
-    this.easyUnlockEnabled_ = easyUnlockEnabled;
-    this.showEasyUnlockTurnOffDialog_ =
-        easyUnlockEnabled && this.showEasyUnlockTurnOffDialog_;
-  },
-
-  /** @private */
-  onEasyUnlockSetupTap_: function() {
-    this.easyUnlockBrowserProxy_.startTurnOnFlow();
-  },
-
-  /**
-   * @param {!Event} e
-   * @private
-   */
-  onEasyUnlockTurnOffTap_: function(e) {
-    // Prevent the end of the tap event from focusing what is underneath the
-    // button.
-    e.preventDefault();
-    this.showEasyUnlockTurnOffDialog_ = true;
-  },
-
-  /** @private */
-  onEasyUnlockTurnOffDialogClose_: function() {
-    this.showEasyUnlockTurnOffDialog_ = false;
-
-    // Restores focus on close to either the turn-off or set-up button,
-    // whichever is being displayed.
-    cr.ui.focusWithoutInk(assert(this.$$('.secondary-button')));
-  },
-
-  /**
-   * @param {boolean} enabled
-   * @param {!string} enabledStr
-   * @param {!string} disabledStr
-   * @private
-   */
-  getEasyUnlockDescription_: function(enabled, enabledStr, disabledStr) {
-    return enabled ? enabledStr : disabledStr;
-  },
-
-  /**
-   * @param {boolean} easyUnlockEnabled
-   * @param {boolean} proximityDetectionAllowed
-   * @private
-   */
-  getShowEasyUnlockToggle_: function(
-      easyUnlockEnabled, proximityDetectionAllowed) {
-    return easyUnlockEnabled && proximityDetectionAllowed;
   },
 
   /** @private */

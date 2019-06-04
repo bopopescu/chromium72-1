@@ -23,7 +23,6 @@
 #include "chrome/browser/ui/views/toolbar/extension_toolbar_menu_view.h"
 #include "chrome/browser/ui/views/toolbar/toolbar_view.h"
 #include "chrome/test/base/interactive_test_utils.h"
-#include "chrome/test/views/scoped_macviews_browser_mode.h"
 #include "extensions/browser/notification_types.h"
 #include "extensions/common/extension_builder.h"
 #include "extensions/common/feature_switch.h"
@@ -52,7 +51,7 @@ void TestOverflowedToolbarAction(Browser* browser,
   // A bunch of plumbing to safely get at the overflowed toolbar action.
   BrowserAppMenuButton* app_menu_button = GetAppButtonFromBrowser(browser);
   EXPECT_TRUE(app_menu_button->IsMenuShowing());
-  AppMenu* app_menu = app_menu_button->app_menu_for_testing();
+  AppMenu* app_menu = app_menu_button->app_menu();
   ASSERT_TRUE(app_menu);
   ExtensionToolbarMenuView* menu_view =
       app_menu->extension_toolbar_for_testing();
@@ -93,7 +92,7 @@ void TestWhileContextMenuOpen(Browser* browser,
 
   // Get the overflow container.
   BrowserAppMenuButton* app_menu_button = GetAppButtonFromBrowser(browser);
-  AppMenu* app_menu = app_menu_button->app_menu_for_testing();
+  AppMenu* app_menu = app_menu_button->app_menu();
   ASSERT_TRUE(app_menu);
   ExtensionToolbarMenuView* menu_view =
       app_menu->extension_toolbar_for_testing();
@@ -145,8 +144,6 @@ class ToolbarActionViewInteractiveUITest
   void TearDownOnMainThread() override;
 
  private:
-  test::ScopedMacViewsBrowserMode views_mode_{true};
-
   DISALLOW_COPY_AND_ASSIGN(ToolbarActionViewInteractiveUITest);
 };
 

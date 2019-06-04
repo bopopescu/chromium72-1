@@ -3,7 +3,7 @@
 // found in the LICENSE file.
 
 #include "base/run_loop.h"
-#include "base/test/histogram_tester.h"
+#include "base/test/metrics/histogram_tester.h"
 #include "build/build_config.h"
 #include "chrome/app/chrome_command_ids.h"
 #include "chrome/browser/chrome_notification_types.h"
@@ -19,6 +19,10 @@
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/events/test/event_generator.h"
+
+#if defined(OS_CHROMEOS)
+#include "ui/aura/window.h"
+#endif
 
 using testing::_;
 using testing::AtLeast;
@@ -79,35 +83,21 @@ IN_PROC_BROWSER_TEST_F(BrowserShutdownBrowserTest,
   histogram_tester_.ExpectTotalCount("Shutdown.window_close.time_per_process",
                                      1);
 }
-#endif  // !defined(OS_CHROMEOS)
-
-// EventGenerator doesn't work on Mac. See https://crbug.com/814675
-#if defined(OS_MACOSX)
-#define MAYBE_ShutdownConfirmation DISABLED_ShutdownConfirmation
 #else
-#define MAYBE_ShutdownConfirmation ShutdownConfirmation
-#endif
-
 // On Chrome OS, the shutdown accelerator is handled by Ash and requires
 // confirmation, so Chrome shouldn't try to shut down after it's been hit one
 // time. Regression test for crbug.com/834092
-IN_PROC_BROWSER_TEST_F(BrowserShutdownBrowserTest, MAYBE_ShutdownConfirmation) {
-#if defined(OS_MACOSX)
-  const int modifiers = ui::EF_COMMAND_DOWN;
-#else
+IN_PROC_BROWSER_TEST_F(BrowserShutdownBrowserTest, ShutdownConfirmation) {
   const int modifiers = ui::EF_CONTROL_DOWN | ui::EF_SHIFT_DOWN;
-#endif
 
-  ui::test::EventGenerator generator(browser()->window()->GetNativeWindow());
+  ui::test::EventGenerator generator(
+      browser()->window()->GetNativeWindow()->GetRootWindow());
 
   // Press the accelerator for quitting.
   generator.PressKey(ui::VKEY_Q, modifiers);
   generator.ReleaseKey(ui::VKEY_Q, modifiers);
   base::RunLoop().RunUntilIdle();
 
-#if defined(OS_CHROMEOS)
   EXPECT_FALSE(browser_shutdown::IsTryingToQuit());
-#else
-  EXPECT_TRUE(browser_shutdown::IsTryingToQuit());
-#endif
 }
+#endif  // !defined(OS_CHROMEOS)

@@ -11,10 +11,10 @@
 namespace payments {
 namespace features {
 
-#if defined(OS_IOS)
-// Used to control the state of the Payment Request API feature.
-extern const base::Feature kWebPayments;
+// Used to control whether Google Pay cards are returned for basic-card.
+extern const base::Feature kReturnGooglePayInBasicCard;
 
+#if defined(OS_IOS)
 // Used to control the support for iOS third party apps as payment methods.
 extern const base::Feature kWebPaymentsNativeApps;
 #endif
@@ -33,6 +33,9 @@ extern const base::Feature kWebPaymentsSingleAppUiSkip;
 
 // Used to control whether allow crawling just-in-time installable payment app.
 extern const base::Feature kWebPaymentsJustInTimePaymentApp;
+
+// Used to control whether canMakePayment() quota is per-method.
+extern const base::Feature kWebPaymentsPerMethodCanMakePaymentQuota;
 
 }  // namespace features
 }  // namespace payments

@@ -59,7 +59,7 @@ class CORE_EXPORT V0InsertionPoint : public HTMLElement {
   void RebuildDistributedChildrenLayoutTrees(WhitespaceAttacher&);
 
   size_t DistributedNodesSize() const { return distributed_nodes_.size(); }
-  Node* DistributedNodeAt(size_t index) const {
+  Node* DistributedNodeAt(wtf_size_t index) const {
     return distributed_nodes_.at(index);
   }
   Node* FirstDistributedNode() const {
@@ -81,9 +81,9 @@ class CORE_EXPORT V0InsertionPoint : public HTMLElement {
   V0InsertionPoint(const QualifiedName&, Document&);
   bool LayoutObjectIsNeeded(const ComputedStyle&) const override;
   void ChildrenChanged(const ChildrenChange&) override;
-  InsertionNotificationRequest InsertedInto(ContainerNode*) override;
-  void RemovedFrom(ContainerNode*) override;
-  void WillRecalcStyle(StyleRecalcChange) override;
+  InsertionNotificationRequest InsertedInto(ContainerNode&) override;
+  void RemovedFrom(ContainerNode&) override;
+  void DidRecalcStyle(StyleRecalcChange) override;
 
  private:
   bool IsV0InsertionPoint() const =

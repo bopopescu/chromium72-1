@@ -39,8 +39,8 @@ import org.chromium.chrome.browser.tab.TabIdManager;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
 import org.chromium.chrome.test.MultiActivityTestRule;
 import org.chromium.chrome.test.util.ApplicationTestUtils;
-import org.chromium.content.browser.test.util.Criteria;
-import org.chromium.content.browser.test.util.CriteriaHelper;
+import org.chromium.content_public.browser.test.util.Criteria;
+import org.chromium.content_public.browser.test.util.CriteriaHelper;
 import org.chromium.content_public.common.ScreenOrientationValues;
 
 /**
@@ -92,7 +92,7 @@ public class WebappModeTest {
                 null, WebDisplayMode.STANDALONE, ScreenOrientationValues.PORTRAIT,
                 ShortcutSource.UNKNOWN, ShortcutHelper.MANIFEST_COLOR_INVALID_OR_MISSING,
                 ShortcutHelper.MANIFEST_COLOR_INVALID_OR_MISSING, null, false /* isIconGenerated */,
-                false /* forceNavigation */);
+                false /* isIconAdaptive */, false /* forceNavigation */);
         webappInfo.setWebappIntentExtras(intent);
 
         return intent;

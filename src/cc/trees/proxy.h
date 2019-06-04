@@ -36,6 +36,9 @@ class CC_EXPORT Proxy {
   virtual ~Proxy() {}
 
   virtual bool IsStarted() const = 0;
+
+  // This function retruns true if the commits go directly to active tree by
+  // skipping commit to pending tree.
   virtual bool CommitToActiveTree() const = 0;
 
   virtual void SetLayerTreeFrameSink(
@@ -50,13 +53,15 @@ class CC_EXPORT Proxy {
   virtual void SetNeedsRedraw(const gfx::Rect& damage_rect) = 0;
   virtual void SetNextCommitWaitsForActivation() = 0;
 
+  // Returns true if an animate or commit has been requested, and hasn't
+  // completed yet.
+  virtual bool RequestedAnimatePending() = 0;
+
   virtual void NotifyInputThrottledUntilCommit() = 0;
 
-  // Defers commits until it is reset. It is only supported when using a
-  // scheduler.
-  virtual void SetDeferCommits(bool defer_commits) = 0;
-
-  virtual void MainThreadHasStoppedFlinging() = 0;
+  // Defers LayerTreeHost::BeginMainFrameUpdate and commits until it is
+  // reset. It is only supported when using a scheduler.
+  virtual void SetDeferMainFrameUpdate(bool defer_main_frame_update) = 0;
 
   virtual bool CommitRequested() const = 0;
 
@@ -80,7 +85,7 @@ class CC_EXPORT Proxy {
 
   virtual void SetURLForUkm(const GURL& url) = 0;
 
-  virtual void ClearHistoryOnNavigation() = 0;
+  virtual void ClearHistory() = 0;
 
   virtual void SetRenderFrameObserver(
       std::unique_ptr<RenderFrameMetadataObserver> observer) = 0;

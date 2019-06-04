@@ -67,6 +67,10 @@ class SQLTransactionBackend final
                                        SQLTransactionWrapper*,
                                        bool read_only);
 
+  SQLTransactionBackend(Database*,
+                        SQLTransaction*,
+                        SQLTransactionWrapper*,
+                        bool read_only);
   ~SQLTransactionBackend() override;
   void Trace(blink::Visitor*);
 
@@ -88,11 +92,6 @@ class SQLTransactionBackend final
                   int permissions);
 
  private:
-  SQLTransactionBackend(Database*,
-                        SQLTransaction*,
-                        SQLTransactionWrapper*,
-                        bool read_only);
-
   void DoCleanup();
 
   void EnqueueStatementBackend(SQLStatementBackend*);
@@ -121,7 +120,7 @@ class SQLTransactionBackend final
   CrossThreadPersistent<SQLTransaction> frontend_;
   CrossThreadPersistent<SQLStatementBackend> current_statement_backend_;
 
-  Member<Database> database_;
+  CrossThreadPersistent<Database> database_;
   Member<SQLTransactionWrapper> wrapper_;
   std::unique_ptr<SQLErrorData> transaction_error_;
 

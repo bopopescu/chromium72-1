@@ -5,7 +5,9 @@
 #include "content/public/common/content_client.h"
 
 #include "base/logging.h"
+#include "base/no_destructor.h"
 #include "base/strings/string_piece.h"
+#include "base/values.h"
 #include "build/build_config.h"
 #include "content/public/common/origin_util.h"
 #include "content/public/common/user_agent.h"
@@ -93,13 +95,17 @@ base::RefCountedMemory* ContentClient::GetDataResourceBytes(
 }
 
 gfx::Image& ContentClient::GetNativeImageNamed(int resource_id) const {
-  CR_DEFINE_STATIC_LOCAL(gfx::Image, kEmptyImage, ());
-  return kEmptyImage;
+  static base::NoDestructor<gfx::Image> kEmptyImage;
+  return *kEmptyImage;
 }
 
 std::string ContentClient::GetProcessTypeNameInEnglish(int type) {
   NOTIMPLEMENTED();
   return std::string();
+}
+
+base::DictionaryValue ContentClient::GetNetLogConstants() const {
+  return base::DictionaryValue();
 }
 
 blink::OriginTrialPolicy* ContentClient::GetOriginTrialPolicy() {

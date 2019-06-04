@@ -27,7 +27,8 @@ void ImageBitmapRenderingContext::transferFromImageBitmap(
     ExceptionState& exception_state) {
   if (image_bitmap && image_bitmap->IsNeutered()) {
     exception_state.ThrowDOMException(
-        kInvalidStateError, "The input ImageBitmap has been detached");
+        DOMExceptionCode::kInvalidStateError,
+        "The input ImageBitmap has been detached");
     return;
   }
 
@@ -37,7 +38,7 @@ void ImageBitmapRenderingContext::transferFromImageBitmap(
 CanvasRenderingContext* ImageBitmapRenderingContext::Factory::Create(
     CanvasRenderingContextHost* host,
     const CanvasContextCreationAttributesCore& attrs) {
-  return new ImageBitmapRenderingContext(host, attrs);
+  return MakeGarbageCollected<ImageBitmapRenderingContext>(host, attrs);
 }
 
 }  // namespace blink

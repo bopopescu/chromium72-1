@@ -14,11 +14,9 @@
 #include "ash/host/ash_window_tree_host.h"
 #include "ash/host/root_window_transformer.h"
 #include "ash/magnifier/magnifier_scale_utils.h"
-#include "ash/public/cpp/config.h"
 #include "ash/public/cpp/shell_window_ids.h"
 #include "ash/root_window_controller.h"
 #include "ash/shell.h"
-#include "ash/shell_port.h"
 #include "base/numerics/ranges.h"
 #include "base/synchronization/waitable_event.h"
 #include "ui/aura/client/cursor_client.h"
@@ -50,9 +48,6 @@ constexpr float kNonMagnifiedScale = 1.0f;
 
 constexpr float kInitialMagnifiedScale = 2.0f;
 constexpr float kScrollScaleChangeFactor = 0.00125f;
-
-constexpr float kZoomGestureLockThreshold = 0.2f;
-constexpr float kScrollGestureLockThreshold = 20000.0f;
 
 // Default animation parameters for redrawing the magnification window.
 constexpr gfx::Tween::Type kDefaultAnimationTweenType = gfx::Tween::EASE_OUT;
@@ -180,9 +175,11 @@ void MagnificationController::SetEnabled(bool enabled) {
   // Keyboard overscroll creates layout issues with fullscreen magnification
   // so it needs to be disabled when magnification is enabled.
   // TODO(spqchan): Fix the keyboard overscroll issues.
-  keyboard::SetKeyboardOverscrollOverride(
-      is_enabled_ ? keyboard::KEYBOARD_OVERSCROLL_OVERRIDE_DISABLED
-                  : keyboard::KEYBOARD_OVERSCROLL_OVERRIDE_NONE);
+  auto config = keyboard::KeyboardController::Get()->keyboard_config();
+  config.overscroll_behavior =
+      is_enabled_ ? keyboard::mojom::KeyboardOverscrollBehavior::kDisabled
+                  : keyboard::mojom::KeyboardOverscrollBehavior::kDefault;
+  keyboard::KeyboardController::Get()->UpdateKeyboardConfig(config);
 }
 
 bool MagnificationController::IsEnabled() const {
@@ -372,8 +369,6 @@ void MagnificationController::OnImplicitAnimationsCompleted() {
         aura::client::GetCursorClient(root_window_);
     if (cursor_client)
       cursor_client->EnableMouseEvents();
-    else if (Shell::GetAshConfig() == Config::MASH)
-      ShellPort::Get()->SetCursorTouchVisible(true);
   }
 
   is_on_animation_ = false;
@@ -515,21 +510,24 @@ ui::EventRewriteStatus MagnificationController::RewriteEvent(
     // cancells existing touches.
     consume_touch_event_ = true;
 
-    auto it = press_event_map_.begin();
+    for (const auto& it : press_event_map_) {
+      ui::TouchEvent touch_cancel_event(ui::ET_TOUCH_CANCELLED, gfx::Point(),
+                                        touch_event->time_stamp(),
+                                        it.second->pointer_details());
+      touch_cancel_event.set_location_f(it.second->location_f());
+      touch_cancel_event.set_root_location_f(it.second->root_location_f());
+      touch_cancel_event.set_flags(it.second->flags());
 
-    std::unique_ptr<ui::TouchEvent> rewritten_touch_event =
-        std::make_unique<ui::TouchEvent>(ui::ET_TOUCH_CANCELLED, gfx::Point(),
-                                         touch_event->time_stamp(),
-                                         it->second->pointer_details());
-    rewritten_touch_event->set_location_f(it->second->location_f());
-    rewritten_touch_event->set_root_location_f(it->second->root_location_f());
-    rewritten_touch_event->set_flags(it->second->flags());
-    *rewritten_event = std::move(rewritten_touch_event);
-
-    // The other event is cancelled in NextDispatchEvent.
-    press_event_map_.erase(it);
-
-    return ui::EVENT_REWRITE_DISPATCH_ANOTHER;
+      // TouchExplorationController is watching event stream and managing its
+      // internal state. If an event rewriter (MagnificationController) rewrites
+      // event stream, the next event rewriter won't get the event, which makes
+      // TouchExplorationController confused. Send cancelled event for recorded
+      // touch events to the next event rewriter here instead of rewriting an
+      // event in the stream.
+      SendEventToEventSource(root_window_->GetHost()->GetEventSource(),
+                             &touch_cancel_event);
+    }
+    press_event_map_.clear();
   }
 
   bool discard = consume_touch_event_;
@@ -537,7 +535,6 @@ ui::EventRewriteStatus MagnificationController::RewriteEvent(
   // Reset state once no point is touched on the screen.
   if (touch_points_ == 0) {
     consume_touch_event_ = false;
-    locked_gesture_ = NO_GESTURE;
 
     // Jump back to exactly 1.0 if we are just a tiny bit zoomed in.
     if (scale_ < kMinMagnifiedScaleThreshold) {
@@ -558,23 +555,8 @@ ui::EventRewriteStatus MagnificationController::RewriteEvent(
 ui::EventRewriteStatus MagnificationController::NextDispatchEvent(
     const ui::Event& last_event,
     std::unique_ptr<ui::Event>* new_event) {
-  DCHECK_EQ(1u, press_event_map_.size());
-
-  auto it = press_event_map_.begin();
-
-  std::unique_ptr<ui::TouchEvent> event = std::make_unique<ui::TouchEvent>(
-      ui::ET_TOUCH_CANCELLED, gfx::Point(), last_event.time_stamp(),
-      it->second->pointer_details());
-  event->set_location_f(it->second->location_f());
-  event->set_root_location_f(it->second->root_location_f());
-  event->set_flags(it->second->flags());
-  *new_event = std::move(event);
-
-  press_event_map_.erase(it);
-
-  DCHECK_EQ(0u, press_event_map_.size());
-
-  return ui::EVENT_REWRITE_REWRITTEN;
+  NOTREACHED();
+  return ui::EVENT_REWRITE_CONTINUE;
 }
 
 bool MagnificationController::Redraw(const gfx::PointF& position,
@@ -724,11 +706,8 @@ void MagnificationController::OnMouseMove(const gfx::Point& location) {
   int margin = kCursorPanningMargin / scale_;  // No need to consider DPI.
 
   // Reduce the bottom margin if the keyboard is visible.
-  bool reduce_bottom_margin = false;
-  if (keyboard::KeyboardController::GetInstance()) {
-    reduce_bottom_margin =
-        keyboard::KeyboardController::GetInstance()->keyboard_visible();
-  }
+  bool reduce_bottom_margin =
+      keyboard::KeyboardController::Get()->IsKeyboardVisible();
 
   MoveMagnifierWindowFollowPoint(mouse, margin, margin, margin, margin,
                                  reduce_bottom_margin);
@@ -746,8 +725,6 @@ void MagnificationController::AfterAnimationMoveCursorTo(
     if (!cursor_client->IsCursorVisible())
       return;
     cursor_client->DisableMouseEvents();
-  } else if (Shell::GetAshConfig() == Config::MASH) {
-    ShellPort::Get()->SetCursorTouchVisible(false);
   }
   move_cursor_after_animation_ = true;
   position_after_animation_ = location;
@@ -792,40 +769,33 @@ bool MagnificationController::ProcessGestures() {
       if (!consume_touch_event_)
         cancel_pressed_touches = true;
     } else if (gesture->type() == ui::ET_GESTURE_PINCH_UPDATE) {
-      if (locked_gesture_ == NO_GESTURE || locked_gesture_ == ZOOM) {
-        float scale = GetScale() * details.scale();
-        ValidateScale(&scale);
+      float scale = GetScale() * details.scale();
+      ValidateScale(&scale);
 
-        if (locked_gesture_ == NO_GESTURE &&
-            std::abs(scale - original_scale_) > kZoomGestureLockThreshold) {
-          locked_gesture_ = MagnificationController::ZOOM;
-        }
+      // |details.bounding_box().CenterPoint()| return center of touch points
+      // of gesture in non-dip screen coordinate.
+      gfx::PointF gesture_center =
+          gfx::PointF(details.bounding_box().CenterPoint());
 
-        // |details.bounding_box().CenterPoint()| return center of touch points
-        // of gesture in non-dip screen coordinate.
-        gfx::PointF gesture_center =
-            gfx::PointF(details.bounding_box().CenterPoint());
+      // Root transform does dip scaling, screen magnification scaling and
+      // translation. Apply inverse transform to convert non-dip screen
+      // coordinate to dip logical coordinate.
+      root_window_->GetHost()->GetInverseRootTransform().TransformPoint(
+          &gesture_center);
 
-        // Root transform does dip scaling, screen magnification scaling and
-        // translation. Apply inverse transform to convert non-dip screen
-        // coordinate to dip logical coordinate.
-        root_window_->GetHost()->GetInverseRootTransform().TransformPoint(
-            &gesture_center);
+      // Calcualte new origin to keep the distance between |gesture_center|
+      // and |origin| same in screen coordinate. This means the following
+      // equation.
+      // (gesture_center.x - origin_.x) * scale_ =
+      //   (gesture_center.x - new_origin.x) * scale
+      // If you solve it for |new_origin|, you will get the following formula.
+      const gfx::PointF origin = gfx::PointF(
+          gesture_center.x() -
+              (scale_ / scale) * (gesture_center.x() - origin_.x()),
+          gesture_center.y() -
+              (scale_ / scale) * (gesture_center.y() - origin_.y()));
 
-        // Calcualte new origin to keep the distance between |gesture_center|
-        // and |origin| same in screen coordinate. This means the following
-        // equation.
-        // (gesture_center.x - origin_.x) * scale_ =
-        //   (gesture_center.x - new_origin.x) * scale
-        // If you solve it for |new_origin|, you will get the following formula.
-        const gfx::PointF origin = gfx::PointF(
-            gesture_center.x() -
-                (scale_ / scale) * (gesture_center.x() - origin_.x()),
-            gesture_center.y() -
-                (scale_ / scale) * (gesture_center.y() - origin_.y()));
-
-        RedrawDIP(origin, scale, 0, kDefaultAnimationTweenType);
-      }
+      RedrawDIP(origin, scale, 0, kDefaultAnimationTweenType);
     } else if (gesture->type() == ui::ET_GESTURE_SCROLL_BEGIN) {
       original_origin_ = origin_;
 
@@ -833,23 +803,12 @@ bool MagnificationController::ProcessGestures() {
       if (!consume_touch_event_)
         cancel_pressed_touches = true;
     } else if (gesture->type() == ui::ET_GESTURE_SCROLL_UPDATE) {
-      if (locked_gesture_ == NO_GESTURE || locked_gesture_ == SCROLL) {
-        // Divide by scale to keep scroll speed same at any scale.
-        float new_x = origin_.x() + (-1.0f * details.scroll_x() / scale_);
-        float new_y = origin_.y() + (-1.0f * details.scroll_y() / scale_);
+      // Divide by scale to keep scroll speed same at any scale.
+      float new_x = origin_.x() + (-1.0f * details.scroll_x() / scale_);
+      float new_y = origin_.y() + (-1.0f * details.scroll_y() / scale_);
 
-        if (locked_gesture_ == NO_GESTURE) {
-          float diff_x = (new_x - original_origin_.x()) * scale_;
-          float diff_y = (new_y - original_origin_.y()) * scale_;
-          float squared_distance = (diff_x * diff_x) + (diff_y * diff_y);
-          if (squared_distance > kScrollGestureLockThreshold) {
-            locked_gesture_ = SCROLL;
-          }
-        }
-
-        RedrawDIP(gfx::PointF(new_x, new_y), scale_, 0,
-                  kDefaultAnimationTweenType);
-      }
+      RedrawDIP(gfx::PointF(new_x, new_y), scale_, 0,
+                kDefaultAnimationTweenType);
     }
   }
 
@@ -926,10 +885,10 @@ void MagnificationController::MoveMagnifierWindowCenterPoint(
   gfx::Rect window_rect = GetViewportRect();
 
   // Reduce the viewport bounds if the keyboard is up.
-  if (keyboard::KeyboardController::GetInstance()) {
-    gfx::Rect keyboard_rect = keyboard::KeyboardController::GetInstance()
-                                  ->GetContainerWindow()
-                                  ->bounds();
+  if (keyboard::KeyboardController::Get()->IsEnabled()) {
+    gfx::Rect keyboard_rect = keyboard::KeyboardController::Get()
+                                  ->GetKeyboardWindow()
+                                  ->GetBoundsInScreen();
     window_rect.set_height(window_rect.height() -
                            keyboard_rect.height() / scale_);
   }

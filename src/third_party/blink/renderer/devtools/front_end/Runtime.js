@@ -43,6 +43,8 @@ const baseUrl = self.location ? self.location.origin + self.location.pathname : 
 self._importScriptPathPrefix = baseUrl.substring(0, baseUrl.lastIndexOf('/') + 1);
 })();
 
+const REMOTE_MODULE_FALLBACK_REVISION = '@010ddcfda246975d194964ccf20038ebbdec6084';
+
 /**
  * @unrestricted
  */
@@ -64,8 +66,6 @@ var Runtime = class {  // eslint-disable-line
 
     for (let i = 0; i < descriptors.length; ++i)
       this._registerModule(descriptors[i]);
-
-    Runtime._runtimeReadyPromiseCallback();
   }
 
   /**
@@ -91,13 +91,30 @@ var Runtime = class {  // eslint-disable-line
         if (xhr.readyState !== XMLHttpRequest.DONE)
           return;
 
-        if ([0, 200, 304].indexOf(xhr.status) === -1)  // Testing harness file:/// results in 0.
-          reject(new Error('While loading from url ' + url + ' server responded with a status of ' + xhr.status));
+        // DevTools Proxy server can mask 404s as 200s, check the body to be sure
+        const status = /^HTTP\/1.1 404/.test(e.target.response) ? 404 : xhr.status;
+
+        if ([0, 200, 304].indexOf(status) === -1)  // Testing harness file:/// results in 0.
+          reject(new Error('While loading from url ' + url + ' server responded with a status of ' + status));
         else
           fulfill(e.target.response);
       }
       xhr.send(null);
     }
+  }
+
+  /**
+   * @param {string} url
+   * @return {!Promise.<string>}
+   */
+  static loadResourcePromiseWithFallback(url) {
+    return Runtime.loadResourcePromise(url).catch(err => {
+      const urlWithFallbackVersion = url.replace(/@[0-9a-f]{40}/, REMOTE_MODULE_FALLBACK_REVISION);
+      // TODO(phulce): mark fallbacks in module.json and modify build script instead
+      if (urlWithFallbackVersion === url || !url.includes('audits2_worker_module'))
+        throw err;
+      return Runtime.loadResourcePromise(urlWithFallbackVersion);
+    });
   }
 
   /**
@@ -157,8 +174,10 @@ var Runtime = class {  // eslint-disable-line
       if (_loadedScripts[sourceURL])
         continue;
       urls.push(sourceURL);
-      promises.push(Runtime.loadResourcePromise(sourceURL).then(
-          scriptSourceLoaded.bind(null, i), scriptSourceLoaded.bind(null, i, undefined)));
+      const loadResourcePromise =
+          base ? Runtime.loadResourcePromiseWithFallback(sourceURL) : Runtime.loadResourcePromise(sourceURL);
+      promises.push(
+          loadResourcePromise.then(scriptSourceLoaded.bind(null, i), scriptSourceLoaded.bind(null, i, undefined)));
     }
     return Promise.all(promises).then(undefined);
 
@@ -216,8 +235,8 @@ var Runtime = class {  // eslint-disable-line
   /**
    * @return {!Promise}
    */
-  static async runtimeReady() {
-    return Runtime._runtimeReadyPromise;
+  static async appStarted() {
+    return Runtime._appStartedPromise;
   }
 
   /**
@@ -268,7 +287,8 @@ var Runtime = class {  // eslint-disable-line
     }
     self.runtime = new Runtime(moduleDescriptors);
     if (coreModuleNames)
-      return /** @type {!Promise<undefined>} */ (self.runtime._loadAutoStartModules(coreModuleNames));
+      await self.runtime._loadAutoStartModules(coreModuleNames);
+    Runtime._appStartedPromiseCallback();
   }
 
   /**
@@ -288,7 +308,7 @@ var Runtime = class {  // eslint-disable-line
    * @return {?string}
    */
   static queryParam(name) {
-    return Runtime._queryParamsObject[name] || null;
+    return Runtime._queryParamsObject.get(name);
   }
 
   /**
@@ -543,12 +563,8 @@ var Runtime = class {  // eslint-disable-line
   }
 };
 
-/**
- * @type {!Object.<string, string>}
- */
-Runtime._queryParamsObject = {
-  __proto__: null
-};
+/** @type {!URLSearchParams} */
+Runtime._queryParamsObject = new URLSearchParams(Runtime.queryParamsString());
 
 Runtime._instanceSymbol = Symbol('instance');
 
@@ -950,7 +966,10 @@ Runtime.ExperimentsSupport = class {
    */
   isEnabled(experimentName) {
     this._checkExperiment(experimentName);
-
+    // Check for explicitly disabled experiments first - the code could call setEnable(false) on the experiment enabled
+    // by default and we should respect that.
+    if (Runtime._experimentsSetting()[experimentName] === false)
+      return false;
     if (this._enabledTransiently[experimentName])
       return true;
     if (!this.supportEnabled())
@@ -1045,26 +1064,12 @@ Runtime.Experiment = class {
   }
 };
 
-{
-  (function parseQueryParameters() {
-    const queryParams = Runtime.queryParamsString();
-    if (!queryParams)
-      return;
-    const params = queryParams.substring(1).split('&');
-    for (let i = 0; i < params.length; ++i) {
-      const pair = params[i].split('=');
-      const name = pair.shift();
-      Runtime._queryParamsObject[name] = pair.join('=');
-    }
-  })();
-}
-
 // This must be constructed after the query parameters have been parsed.
 Runtime.experiments = new Runtime.ExperimentsSupport();
 
 /** @type {Function} */
-Runtime._runtimeReadyPromiseCallback;
-Runtime._runtimeReadyPromise = new Promise(fulfil => Runtime._runtimeReadyPromiseCallback = fulfil);
+Runtime._appStartedPromiseCallback;
+Runtime._appStartedPromise = new Promise(fulfil => Runtime._appStartedPromiseCallback = fulfil);
 /**
  * @type {?string}
  */

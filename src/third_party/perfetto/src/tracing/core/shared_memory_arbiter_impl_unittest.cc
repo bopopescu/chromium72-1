@@ -33,11 +33,12 @@ namespace {
 using testing::Invoke;
 using testing::_;
 
-class MockProducerEndpoint : public Service::ProducerEndpoint {
+class MockProducerEndpoint : public TracingService::ProducerEndpoint {
  public:
   void RegisterDataSource(const DataSourceDescriptor&) override {}
   void UnregisterDataSource(const std::string&) override {}
   void NotifyFlushComplete(FlushRequestID) override {}
+  void NotifyDataSourceStopped(DataSourceInstanceID) override {}
   SharedMemory* shared_memory() const override { return nullptr; }
   size_t shared_buffer_page_size_kb() const override { return 0; }
   std::unique_ptr<TraceWriter> CreateTraceWriter(BufferID) override {

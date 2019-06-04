@@ -5,12 +5,12 @@
 #ifndef NET_THIRD_PARTY_QUIC_CORE_QUIC_STREAM_SEND_BUFFER_H_
 #define NET_THIRD_PARTY_QUIC_CORE_QUIC_STREAM_SEND_BUFFER_H_
 
-#include "net/base/iovec.h"
 #include "net/third_party/quic/core/frames/quic_stream_frame.h"
 #include "net/third_party/quic/platform/api/quic_containers.h"
+#include "net/third_party/quic/platform/api/quic_iovec.h"
 #include "net/third_party/quic/platform/api/quic_mem_slice.h"
 
-namespace net {
+namespace quic {
 
 namespace test {
 class QuicStreamSendBufferPeer;
@@ -119,6 +119,10 @@ class QUIC_EXPORT_PRIVATE QuicStreamSendBuffer {
     return bytes_acked_;
   }
 
+  const QuicIntervalSet<QuicStreamOffset>& pending_retransmissions() const {
+    return pending_retransmissions_;
+  }
+
  private:
   friend class test::QuicStreamSendBufferPeer;
   friend class test::QuicStreamPeer;
@@ -155,6 +159,6 @@ class QUIC_EXPORT_PRIVATE QuicStreamSendBuffer {
   int32_t write_index_;
 };
 
-}  // namespace net
+}  // namespace quic
 
 #endif  // NET_THIRD_PARTY_QUIC_CORE_QUIC_STREAM_SEND_BUFFER_H_

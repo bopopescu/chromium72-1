@@ -12,7 +12,6 @@
 #include <utility>
 
 #include "base/macros.h"
-#include "base/memory/memory_coordinator_client.h"
 #include "base/observer_list.h"
 #include "base/process/kill.h"
 #include "base/process/process_handle.h"
@@ -100,9 +99,6 @@ class TaskManagerInterface {
   // inflated because it is counting other processes' resources.
   virtual int64_t GetGpuMemoryUsage(TaskId task_id,
                                     bool* has_duplicates) const = 0;
-
-  // Returns the memory state of the task with |task_id|.
-  virtual base::MemoryState GetMemoryState(TaskId task_id) const = 0;
 
   // Returns the number of average idle CPU wakeups per second since the last
   // refresh cycle. A value of -1 means no valid value is currently available.
@@ -275,7 +271,7 @@ class TaskManagerInterface {
 
   int64_t enabled_resources_flags() const { return enabled_resources_flags_; }
 
-  void set_timer_for_testing(std::unique_ptr<base::Timer> timer) {
+  void set_timer_for_testing(std::unique_ptr<base::RepeatingTimer> timer) {
     refresh_timer_ = std::move(timer);
   }
 
@@ -297,10 +293,10 @@ class TaskManagerInterface {
   void ScheduleRefresh(base::TimeDelta refresh_time);
 
   // The list of observers.
-  base::ObserverList<TaskManagerObserver> observers_;
+  base::ObserverList<TaskManagerObserver>::Unchecked observers_;
 
   // The timer that will be used to schedule the successive refreshes.
-  std::unique_ptr<base::Timer> refresh_timer_;
+  std::unique_ptr<base::RepeatingTimer> refresh_timer_;
 
   // The flags containing the enabled resources types calculations.
   int64_t enabled_resources_flags_;

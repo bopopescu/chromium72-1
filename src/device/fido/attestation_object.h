@@ -6,12 +6,15 @@
 #define DEVICE_FIDO_ATTESTATION_OBJECT_H_
 
 #include <stdint.h>
+
+#include <array>
 #include <memory>
 #include <vector>
 
 #include "base/component_export.h"
 #include "base/macros.h"
 #include "device/fido/authenticator_data.h"
+#include "device/fido/fido_constants.h"
 
 namespace device {
 
@@ -33,10 +36,23 @@ class COMPONENT_EXPORT(DEVICE_FIDO) AttestationObject {
 
   std::vector<uint8_t> GetCredentialId() const;
 
-  // Replaces the attestation statement with a “none” attestation and replaces
-  // device AAGUID with zero bytes as specified for step 20.3 in
+  enum class AAGUID {
+    kErase,
+    kInclude,
+  };
+
+  // Replaces the attestation statement with a “none” attestation, and replaces
+  // device AAGUID with zero bytes (unless |erase_aaguid| is kInclude) as
+  // specified for step 20.3 in
   // https://w3c.github.io/webauthn/#createCredential.
-  void EraseAttestationStatement();
+  void EraseAttestationStatement(AAGUID erase_aaguid);
+
+  // Returns true if the attestation is a "self" attestation, i.e. is just the
+  // private key signing itself to show that it is fresh. See
+  // https://www.w3.org/TR/webauthn/#self-attestation. Note that self-
+  // attestation also requires at the AAGUID in the authenticator data be all
+  // zeros.
+  bool IsSelfAttestation();
 
   // Returns true if the attestation certificate is known to be inappropriately
   // identifying. Some tokens return unique attestation certificates even when
@@ -44,14 +60,22 @@ class COMPONENT_EXPORT(DEVICE_FIDO) AttestationObject {
   // not indended to be trackable.)
   bool IsAttestationCertificateInappropriatelyIdentifying();
 
-  // Produces a CBOR-encoded byte-array in the following format:
+  // Produces a WebAuthN style CBOR-encoded byte-array in the following format:
   // {"authData": authenticator data bytes,
   //  "fmt": attestation format name,
   //  "attStmt": attestation statement bytes }
   std::vector<uint8_t> SerializeToCBOREncodedBytes() const;
 
-  const std::vector<uint8_t>& rp_id_hash() const {
+  const std::array<uint8_t, kRpIdHashLength>& rp_id_hash() const {
     return authenticator_data_.application_parameter();
+  }
+
+  const AuthenticatorData& authenticator_data() const {
+    return authenticator_data_;
+  }
+
+  const AttestationStatement& attestation_statement() const {
+    return *attestation_statement_.get();
   }
 
  private:
@@ -60,6 +84,15 @@ class COMPONENT_EXPORT(DEVICE_FIDO) AttestationObject {
 
   DISALLOW_COPY_AND_ASSIGN(AttestationObject);
 };
+
+// Produces a CTAP style CBOR-encoded byte array that that conforms to the
+// format CTAP2 devices sends to the client as a response. More specifically:
+// {01: attestation format name,
+//  02: authenticator data bytes,
+//  03: attestation statement bytes }
+COMPONENT_EXPORT(DEVICE_FIDO)
+std::vector<uint8_t> SerializeToCtapStyleCborEncodedBytes(
+    const AttestationObject& object);
 
 }  // namespace device
 

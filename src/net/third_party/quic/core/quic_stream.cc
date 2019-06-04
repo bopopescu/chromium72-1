@@ -15,7 +15,7 @@
 
 using spdy::SpdyPriority;
 
-namespace net {
+namespace quic {
 
 #define ENDPOINT \
   (perspective_ == Perspective::IS_SERVER ? "Server: " : "Client: ")
@@ -43,9 +43,12 @@ size_t GetReceivedFlowControlWindow(QuicSession* session) {
 }  // namespace
 
 // static
-const spdy::SpdyPriority QuicStream::kDefaultPriority;
+const SpdyPriority QuicStream::kDefaultPriority;
 
-QuicStream::QuicStream(QuicStreamId id, QuicSession* session, bool is_static)
+QuicStream::QuicStream(QuicStreamId id,
+                       QuicSession* session,
+                       bool is_static,
+                       StreamType type)
     : sequencer_(this),
       id_(id),
       session_(session),
@@ -79,7 +82,16 @@ QuicStream::QuicStream(QuicStreamId id, QuicSession* session, bool is_static)
       send_buffer_(
           session->connection()->helper()->GetStreamSendBufferAllocator()),
       buffered_data_threshold_(GetQuicFlag(FLAGS_quic_buffered_data_threshold)),
-      is_static_(is_static) {
+      is_static_(is_static),
+      deadline_(QuicTime::Zero()),
+      type_(type) {
+  if (type_ == WRITE_UNIDIRECTIONAL) {
+    set_fin_received(true);
+    CloseReadSide();
+  } else if (type_ == READ_UNIDIRECTIONAL) {
+    set_fin_sent(true);
+    CloseWriteSide();
+  }
   SetFromConfig();
   session_->RegisterStreamPriority(id, is_static_, priority_);
 }
@@ -104,12 +116,18 @@ void QuicStream::OnStreamFrame(const QuicStreamFrame& frame) {
 
   DCHECK(!(read_side_closed_ && write_side_closed_));
 
+  if (type_ == WRITE_UNIDIRECTIONAL) {
+    CloseConnectionWithDetails(
+        QUIC_DATA_RECEIVED_ON_WRITE_UNIDIRECTIONAL_STREAM,
+        "Data received on write unidirectional stream");
+    return;
+  }
+
   bool is_stream_too_long =
       (frame.offset > kMaxStreamLength) ||
       (kMaxStreamLength - frame.offset < frame.data_length);
-  if (GetQuicReloadableFlag(quic_stream_too_long) && is_stream_too_long) {
+  if (is_stream_too_long) {
     // Close connection if stream becomes too long.
-    QUIC_FLAG_COUNT_N(quic_reloadable_flag_quic_stream_too_long, 4, 5);
     QUIC_PEER_BUG
         << "Receive stream frame reaches max stream length. frame offset "
         << frame.offset << " length " << frame.data_length;
@@ -165,9 +183,7 @@ int QuicStream::num_duplicate_frames_received() const {
 
 void QuicStream::OnStreamReset(const QuicRstStreamFrame& frame) {
   rst_received_ = true;
-  if (GetQuicReloadableFlag(quic_stream_too_long) &&
-      frame.byte_offset > kMaxStreamLength) {
-    QUIC_FLAG_COUNT_N(quic_reloadable_flag_quic_stream_too_long, 5, 5);
+  if (frame.byte_offset > kMaxStreamLength) {
     // Peer are not suppose to write bytes more than maxium allowed.
     CloseConnectionWithDetails(QUIC_STREAM_LENGTH_OVERFLOW,
                                "Reset frame stream offset overflow.");
@@ -225,12 +241,11 @@ void QuicStream::CloseConnectionWithDetails(QuicErrorCode error,
       error, details, ConnectionCloseBehavior::SEND_CONNECTION_CLOSE_PACKET);
 }
 
-spdy::SpdyPriority QuicStream::priority() const {
+SpdyPriority QuicStream::priority() const {
   return priority_;
 }
 
-void QuicStream::SetPriority(spdy::SpdyPriority priority) {
-  DCHECK_EQ(0u, stream_bytes_written());
+void QuicStream::SetPriority(SpdyPriority priority) {
   priority_ = priority;
   session_->UpdateStreamPriority(id(), priority);
 }
@@ -251,6 +266,11 @@ void QuicStream::WriteOrBufferData(
   if (write_side_closed_) {
     QUIC_DLOG(ERROR) << ENDPOINT
                      << "Attempt to write when the write side is closed";
+    if (type_ == READ_UNIDIRECTIONAL) {
+      CloseConnectionWithDetails(
+          QUIC_TRY_TO_WRITE_DATA_ON_READ_UNIDIRECTIONAL_STREAM,
+          "Try to send data on read unidirectional stream");
+    }
     return;
   }
 
@@ -263,9 +283,7 @@ void QuicStream::WriteOrBufferData(
   if (data.length() > 0) {
     struct iovec iov(MakeIovec(data));
     QuicStreamOffset offset = send_buffer_.stream_offset();
-    if (GetQuicReloadableFlag(quic_stream_too_long) &&
-        kMaxStreamLength - offset < data.length()) {
-      QUIC_FLAG_COUNT_N(quic_reloadable_flag_quic_stream_too_long, 1, 5);
+    if (kMaxStreamLength - offset < data.length()) {
       QUIC_BUG << "Write too many data via stream " << id_;
       CloseConnectionWithDetails(
           QUIC_STREAM_LENGTH_OVERFLOW,
@@ -282,6 +300,10 @@ void QuicStream::WriteOrBufferData(
 }
 
 void QuicStream::OnCanWrite() {
+  if (HasDeadlinePassed()) {
+    OnDeadlinePassed();
+    return;
+  }
   if (HasPendingRetransmission()) {
     WritePendingRetransmission();
     // Exit early to allow other streams to write pending retransmissions if
@@ -327,6 +349,11 @@ QuicConsumedData QuicStream::WritevData(const struct iovec* iov,
   if (write_side_closed_) {
     QUIC_DLOG(ERROR) << ENDPOINT << "Stream " << id()
                      << "attempting to write when the write side is closed";
+    if (type_ == READ_UNIDIRECTIONAL) {
+      CloseConnectionWithDetails(
+          QUIC_TRY_TO_WRITE_DATA_ON_READ_UNIDIRECTIONAL_STREAM,
+          "Try to send data on read unidirectional stream");
+    }
     return QuicConsumedData(0, false);
   }
 
@@ -344,9 +371,7 @@ QuicConsumedData QuicStream::WritevData(const struct iovec* iov,
     return consumed_data;
   }
 
-  if (GetQuicReloadableFlag(quic_stream_too_long) &&
-      kMaxStreamLength - send_buffer_.stream_offset() < write_length) {
-    QUIC_FLAG_COUNT_N(quic_reloadable_flag_quic_stream_too_long, 2, 5);
+  if (kMaxStreamLength - send_buffer_.stream_offset() < write_length) {
     QUIC_BUG << "Write too many data via stream " << id_;
     CloseConnectionWithDetails(
         QUIC_STREAM_LENGTH_OVERFLOW,
@@ -391,6 +416,11 @@ QuicConsumedData QuicStream::WriteMemSlices(QuicMemSliceSpan span, bool fin) {
   if (write_side_closed_) {
     QUIC_DLOG(ERROR) << ENDPOINT << "Stream " << id()
                      << "attempting to write when the write side is closed";
+    if (type_ == READ_UNIDIRECTIONAL) {
+      CloseConnectionWithDetails(
+          QUIC_TRY_TO_WRITE_DATA_ON_READ_UNIDIRECTIONAL_STREAM,
+          "Try to send data on read unidirectional stream");
+    }
     return consumed_data;
   }
 
@@ -402,10 +432,8 @@ QuicConsumedData QuicStream::WriteMemSlices(QuicMemSliceSpan span, bool fin) {
       QuicStreamOffset offset = send_buffer_.stream_offset();
       consumed_data.bytes_consumed =
           span.SaveMemSlicesInSendBuffer(&send_buffer_);
-      if (GetQuicReloadableFlag(quic_stream_too_long) &&
-          (offset > send_buffer_.stream_offset() ||
-           kMaxStreamLength < send_buffer_.stream_offset())) {
-        QUIC_FLAG_COUNT_N(quic_reloadable_flag_quic_stream_too_long, 3, 5);
+      if (offset > send_buffer_.stream_offset() ||
+          kMaxStreamLength < send_buffer_.stream_offset()) {
         QUIC_BUG << "Write too many data via stream " << id_;
         CloseConnectionWithDetails(
             QUIC_STREAM_LENGTH_OVERFLOW,
@@ -505,9 +533,9 @@ void QuicStream::OnClose() {
     // written on this stream before termination. Done here if needed, using a
     // RST_STREAM frame.
     QUIC_DLOG(INFO) << ENDPOINT << "Sending RST_STREAM in OnClose: " << id();
-    session_->OnStreamDoneWaitingForAcks(id_);
     session_->SendRstStream(id(), QUIC_RST_ACKNOWLEDGEMENT,
                             stream_bytes_written());
+    session_->OnStreamDoneWaitingForAcks(id_);
     rst_sent_ = true;
   }
 
@@ -590,13 +618,11 @@ bool QuicStream::OnStreamFrameAcked(QuicStreamOffset offset,
   QuicByteCount newly_acked_length = 0;
   if (!send_buffer_.OnStreamDataAcked(offset, data_length,
                                       &newly_acked_length)) {
-    RecordInternalErrorLocation(QUIC_STREAM_ACKED_UNSENT_DATA);
     CloseConnectionWithDetails(QUIC_INTERNAL_ERROR,
                                "Trying to ack unsent data.");
     return false;
   }
   if (!fin_sent_ && fin_acked) {
-    RecordInternalErrorLocation(QUIC_STREAM_ACKED_UNSENT_FIN);
     CloseConnectionWithDetails(QUIC_INTERNAL_ERROR,
                                "Trying to ack unsent fin.");
     return false;
@@ -646,6 +672,10 @@ void QuicStream::OnStreamFrameLost(QuicStreamOffset offset,
 bool QuicStream::RetransmitStreamData(QuicStreamOffset offset,
                                       QuicByteCount data_length,
                                       bool fin) {
+  if (HasDeadlinePassed()) {
+    OnDeadlinePassed();
+    return true;
+  }
   QuicIntervalSet<QuicStreamOffset> retransmission(offset,
                                                    offset + data_length);
   retransmission.Difference(bytes_acked());
@@ -850,4 +880,51 @@ void QuicStream::WritePendingRetransmission() {
   }
 }
 
-}  // namespace net
+bool QuicStream::MaybeSetTtl(QuicTime::Delta ttl) {
+  if (is_static_) {
+    QUIC_BUG << "Cannot set TTL of a static stream.";
+    return false;
+  }
+  if (deadline_.IsInitialized()) {
+    QUIC_DLOG(WARNING) << "Deadline has already been set.";
+    return false;
+  }
+  if (!session()->session_decides_what_to_write()) {
+    QUIC_DLOG(WARNING) << "This session does not support stream TTL yet.";
+    return false;
+  }
+  QuicTime now = session()->connection()->clock()->ApproximateNow();
+  deadline_ = now + ttl;
+  return true;
+}
+
+bool QuicStream::HasDeadlinePassed() const {
+  if (!deadline_.IsInitialized()) {
+    // No deadline has been set.
+    return false;
+  }
+  DCHECK(session()->session_decides_what_to_write());
+  QuicTime now = session()->connection()->clock()->ApproximateNow();
+  if (now < deadline_) {
+    return false;
+  }
+  // TTL expired.
+  QUIC_DVLOG(1) << "stream " << id() << " deadline has passed";
+  return true;
+}
+
+void QuicStream::OnDeadlinePassed() {
+  Reset(QUIC_STREAM_TTL_EXPIRED);
+}
+
+void QuicStream::SendStopSending(uint16_t code) {
+  if (transport_version() != QUIC_VERSION_99) {
+    // If the connection is not version 99, do nothing.
+    // Do not QUIC_BUG or anything; the application really does not need to know
+    // what version the connection is in.
+    return;
+  }
+  session_->SendStopSending(code, id_);
+}
+
+}  // namespace quic

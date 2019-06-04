@@ -43,7 +43,7 @@
 
 namespace blink {
 
-using namespace HTMLNames;
+using namespace html_names;
 
 HTMLFrameElementBase::HTMLFrameElementBase(const QualifiedName& tag_name,
                                            Document& document)
@@ -125,28 +125,28 @@ void HTMLFrameElementBase::ParseAttribute(
     const AttributeModificationParams& params) {
   const QualifiedName& name = params.name;
   const AtomicString& value = params.new_value;
-  if (name == srcdocAttr) {
+  if (name == kSrcdocAttr) {
     if (!value.IsNull()) {
       SetLocation(SrcdocURL().GetString());
     } else {
-      const AtomicString& src_value = FastGetAttribute(srcAttr);
+      const AtomicString& src_value = FastGetAttribute(kSrcAttr);
       if (!src_value.IsNull())
         SetLocation(StripLeadingAndTrailingHTMLSpaces(src_value));
     }
-  } else if (name == srcAttr && !FastHasAttribute(srcdocAttr)) {
+  } else if (name == kSrcAttr && !FastHasAttribute(kSrcdocAttr)) {
     SetLocation(StripLeadingAndTrailingHTMLSpaces(value));
-  } else if (name == idAttr) {
+  } else if (name == kIdAttr) {
     // Important to call through to base for the id attribute so the hasID bit
     // gets set.
     HTMLFrameOwnerElement::ParseAttribute(params);
     frame_name_ = value;
-  } else if (name == nameAttr) {
+  } else if (name == kNameAttr) {
     frame_name_ = value;
-  } else if (name == marginwidthAttr) {
+  } else if (name == kMarginwidthAttr) {
     SetMarginWidth(value.ToInt());
-  } else if (name == marginheightAttr) {
+  } else if (name == kMarginheightAttr) {
     SetMarginHeight(value.ToInt());
-  } else if (name == scrollingAttr) {
+  } else if (name == kScrollingAttr) {
     // Auto and yes both simply mean "allow scrolling." No means "don't allow
     // scrolling."
     if (DeprecatedEqualIgnoringCase(value, "auto") ||
@@ -154,11 +154,13 @@ void HTMLFrameElementBase::ParseAttribute(
       SetScrollingMode(kScrollbarAuto);
     else if (DeprecatedEqualIgnoringCase(value, "no"))
       SetScrollingMode(kScrollbarAlwaysOff);
-  } else if (name == onbeforeunloadAttr) {
+  } else if (name == kOnbeforeunloadAttr) {
     // FIXME: should <frame> elements have beforeunload handlers?
     SetAttributeEventListener(
-        EventTypeNames::beforeunload,
-        CreateAttributeEventListener(this, name, value, EventParameterName()));
+        event_type_names::kBeforeunload,
+        CreateAttributeEventListener(
+            this, name, value,
+            JSEventHandler::HandlerType::kOnBeforeUnloadEventHandler));
   } else {
     HTMLFrameOwnerElement::ParseAttribute(params);
   }
@@ -168,7 +170,7 @@ scoped_refptr<const SecurityOrigin>
 HTMLFrameElementBase::GetOriginForFeaturePolicy() const {
   // Sandboxed frames have a unique origin.
   if (GetSandboxFlags() & kSandboxOrigin)
-    return SecurityOrigin::CreateUnique();
+    return SecurityOrigin::CreateUniqueOpaque();
 
   // If the frame will inherit its origin from the owner, then use the owner's
   // origin when constructing the container policy.
@@ -187,7 +189,7 @@ void HTMLFrameElementBase::SetNameAndOpenURL() {
 }
 
 Node::InsertionNotificationRequest HTMLFrameElementBase::InsertedInto(
-    ContainerNode* insertion_point) {
+    ContainerNode& insertion_point) {
   HTMLFrameOwnerElement::InsertedInto(insertion_point);
   // We should never have a content frame at the point where we got inserted
   // into a tree.
@@ -239,19 +241,19 @@ void HTMLFrameElementBase::SetFocused(bool received, WebFocusType focus_type) {
 }
 
 bool HTMLFrameElementBase::IsURLAttribute(const Attribute& attribute) const {
-  return attribute.GetName() == longdescAttr ||
-         attribute.GetName() == srcAttr ||
+  return attribute.GetName() == kLongdescAttr ||
+         attribute.GetName() == kSrcAttr ||
          HTMLFrameOwnerElement::IsURLAttribute(attribute);
 }
 
 bool HTMLFrameElementBase::HasLegalLinkAttribute(
     const QualifiedName& name) const {
-  return name == srcAttr || HTMLFrameOwnerElement::HasLegalLinkAttribute(name);
+  return name == kSrcAttr || HTMLFrameOwnerElement::HasLegalLinkAttribute(name);
 }
 
 bool HTMLFrameElementBase::IsHTMLContentAttribute(
     const Attribute& attribute) const {
-  return attribute.GetName() == srcdocAttr ||
+  return attribute.GetName() == kSrcdocAttr ||
          HTMLFrameOwnerElement::IsHTMLContentAttribute(attribute);
 }
 

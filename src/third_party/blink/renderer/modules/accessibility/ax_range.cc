@@ -10,16 +10,21 @@
 namespace blink {
 
 AXRange::AXRange(const AXPosition& start, const AXPosition& end)
-    : start_(start), end_(end) {
-  DCHECK(start.IsValid());
-  DCHECK(end.IsValid());
-  DCHECK_LE(start, end);
+    : start_(), end_() {
+  if (!start.IsValid() || !end.IsValid() || start > end)
+    return;
 
   const Document* document = start.ContainerObject()->GetDocument();
   DCHECK(document);
   DCHECK(document->IsActive());
   DCHECK(!document->NeedsLayoutTreeUpdate());
-  DCHECK_EQ(end.ContainerObject()->GetDocument(), document);
+  // We don't support ranges that span across documents.
+  if (end.ContainerObject()->GetDocument() != document)
+    return;
+
+  start_ = start;
+  end_ = end;
+
 #if DCHECK_IS_ON()
   dom_tree_version_ = document->DomTreeVersion();
   style_version_ = document->StyleVersion();
@@ -65,6 +70,12 @@ AXRange AXRange::RangeOfContents(const AXObject& container) {
                  AXPosition::CreateLastPositionInObject(container));
 }
 
+String AXRange::ToString() const {
+  if (!IsValid())
+    return "Invalid AXRange";
+  return "AXRange from " + Start().ToString() + " to " + End().ToString();
+}
+
 bool operator==(const AXRange& a, const AXRange& b) {
   DCHECK(a.IsValid() && b.IsValid());
   return a.Start() == b.Start() && a.End() == b.End();
@@ -75,9 +86,7 @@ bool operator!=(const AXRange& a, const AXRange& b) {
 }
 
 std::ostream& operator<<(std::ostream& ostream, const AXRange& range) {
-  if (!range.IsValid())
-    return ostream << "Invalid AXRange";
-  return ostream << "AXRange from " << range.Start() << " to " << range.End();
+  return ostream << range.ToString().Utf8().data();
 }
 
 }  // namespace blink

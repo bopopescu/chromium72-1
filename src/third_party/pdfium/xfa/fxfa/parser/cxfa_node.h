@@ -7,22 +7,19 @@
 #ifndef XFA_FXFA_PARSER_CXFA_NODE_H_
 #define XFA_FXFA_PARSER_CXFA_NODE_H_
 
-#include <map>
 #include <memory>
 #include <utility>
 #include <vector>
 
 #include "core/fxcrt/fx_string.h"
-#include "core/fxcrt/maybe_owned.h"
-#include "core/fxcrt/xml/cfx_xmlnode.h"
 #include "core/fxge/fx_dib.h"
-#include "fxbarcode/BC_Library.h"
 #include "third_party/base/optional.h"
 #include "xfa/fxfa/cxfa_ffwidget.h"
 #include "xfa/fxfa/parser/cxfa_object.h"
 
 class CFGAS_GEFont;
 class CFX_DIBitmap;
+class CFX_XMLNode;
 class CXFA_Bind;
 class CXFA_Border;
 class CXFA_Calculate;
@@ -144,10 +141,6 @@ class CXFA_Node : public CXFA_Object {
       binding_nodes_.emplace_back(node);
   }
 
-  // TODO(dsinclair): This should not be needed. Nodes should get un-bound when
-  // they're deleted instead of us pointing to bad objects.
-  void ReleaseBindingNodes();
-
   bool HasRemovedChildren() const {
     return HasFlag(XFA_NodeFlag_HasRemovedChildren);
   }
@@ -202,7 +195,7 @@ class CXFA_Node : public CXFA_Object {
   CXFA_Node* GetDataDescriptionNode();
   void SetDataDescriptionNode(CXFA_Node* pDataDescriptionNode);
   CXFA_Node* GetBindData();
-  std::vector<UnownedPtr<CXFA_Node>>* GetBindItems();
+  std::vector<CXFA_Node*>* GetBindItems() { return &binding_nodes_; }
   int32_t AddBindItem(CXFA_Node* pFormNode);
   int32_t RemoveBindItem(CXFA_Node* pFormNode);
   bool HasBindItem();
@@ -450,8 +443,8 @@ class CXFA_Node : public CXFA_Object {
   bool CalculateImageAutoSize(CXFA_FFDoc* doc, CFX_SizeF* pSize);
   float CalculateWidgetAutoHeight(float fHeightCalc);
   float CalculateWidgetAutoWidth(float fWidthCalc);
-  float GetWidthWithoutMargin(float fWidthCalc);
-  float GetHeightWithoutMargin(float fHeightCalc);
+  float GetWidthWithoutMargin(float fWidthCalc) const;
+  float GetHeightWithoutMargin(float fHeightCalc) const;
   void CalculateTextContentSize(CXFA_FFDoc* doc, CFX_SizeF* pSize);
   CFX_SizeF CalculateAccWidthAndHeight(CXFA_FFDoc* doc, float fWidth);
   void InitLayoutData();
@@ -460,8 +453,7 @@ class CXFA_Node : public CXFA_Object {
   void InsertListTextItem(CXFA_Node* pItems,
                           const WideString& wsText,
                           int32_t nIndex);
-  WideString FormatNumStr(const WideString& wsValue, LocaleIface* pLocale);
-  void GetItemLabel(const WideStringView& wsValue, WideString& wsLabel);
+  WideString GetItemLabel(const WideStringView& wsValue) const;
 
   std::pair<XFA_FFWidgetType, CXFA_Ui*> CreateChildUIAndValueNodesIfNeeded();
   void CreateValueNodeIfNeeded(CXFA_Value* value, CXFA_Node* pUIChild);
@@ -473,7 +465,7 @@ class CXFA_Node : public CXFA_Object {
   CXFA_Node* GetBindingNode() const {
     if (binding_nodes_.empty())
       return nullptr;
-    return binding_nodes_[0].Get();
+    return binding_nodes_[0];
   }
   bool BindsFormItems() const { return HasFlag(XFA_NodeFlag_BindFormItems); }
   bool NeedsInitApp() const { return HasFlag(XFA_NodeFlag_NeedsInitApp); }
@@ -494,22 +486,23 @@ class CXFA_Node : public CXFA_Object {
   const AttributeData* const m_Attributes;
   const uint32_t m_ValidPackets;
 
-  // These nodes are responsible for building the CXFA_Node tree. We don't use
-  // unowned ptrs here because the cleanup process will remove the nodes in an
-  // order that doesn't necessarily match up to the tree structure.
-  CXFA_Node* parent_;
-  CXFA_Node* next_sibling_;
-  CXFA_Node* prev_sibling_;
-  CXFA_Node* first_child_;
-  CXFA_Node* last_child_;
+  // These members are responsible for building the CXFA_Node tree. Node
+  // pointers within the tree (or in objects owned by nodes in the tree)
+  // can't be UnownedPtr<> because the cleanup process will remove the nodes
+  // in an order that doesn't necessarily match up to the tree structure.
+  CXFA_Node* parent_ = nullptr;        // Raw, intra-tree node pointer.
+  CXFA_Node* next_sibling_ = nullptr;  // Raw, intra-tree node pointer.
+  CXFA_Node* prev_sibling_ = nullptr;  // Raw, intra-tree node pointer.
+  CXFA_Node* first_child_ = nullptr;   // Raw, intra-tree node pointer.
+  CXFA_Node* last_child_ = nullptr;    // Raw, intra-tree node pointer.
 
   UnownedPtr<CFX_XMLNode> xml_node_;
   const XFA_PacketType m_ePacket;
   uint8_t m_ExecuteRecursionDepth = 0;
-  uint16_t m_uNodeFlags;
-  uint32_t m_dwNameHash;
-  CXFA_Node* m_pAuxNode;
-  std::vector<UnownedPtr<CXFA_Node>> binding_nodes_;
+  uint16_t m_uNodeFlags = XFA_NodeFlag_None;
+  uint32_t m_dwNameHash = 0;
+  CXFA_Node* m_pAuxNode = nullptr;         // Raw, node tree cleanup order.
+  std::vector<CXFA_Node*> binding_nodes_;  // Raw, node tree cleanup order.
   bool m_bIsNull = true;
   bool m_bPreNull = true;
   bool is_widget_ready_ = false;

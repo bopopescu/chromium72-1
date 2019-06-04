@@ -59,25 +59,44 @@ bool IsPacMimeType(const std::string& mime_type) {
   return false;
 }
 
+struct BomMapping {
+  base::StringPiece prefix;
+  const char* charset;
+};
+
+const BomMapping kBomMappings[] = {
+    {"\xFE\xFF", "utf-16be"},
+    {"\xFF\xFE", "utf-16le"},
+    {"\xEF\xBB\xBF", "utf-8"},
+};
+
 // Converts |bytes| (which is encoded by |charset|) to UTF16, saving the resul
 // to |*utf16|.
 // If |charset| is empty, then we don't know what it was and guess.
 void ConvertResponseToUTF16(const std::string& charset,
                             const std::string& bytes,
                             base::string16* utf16) {
-  const char* codepage;
-
   if (charset.empty()) {
-    // Assume ISO-8859-1 if no charset was specified.
-    codepage = kCharsetLatin1;
-  } else {
-    // Otherwise trust the charset that was provided.
-    codepage = charset.c_str();
+    // Guess the charset by looking at the BOM.
+    base::StringPiece bytes_str(bytes);
+    for (const auto& bom : kBomMappings) {
+      if (bytes_str.starts_with(bom.prefix)) {
+        return ConvertResponseToUTF16(
+            bom.charset,
+            // Strip the BOM in the converted response.
+            bytes.substr(bom.prefix.size()), utf16);
+      }
+    }
+
+    // Otherwise assume ISO-8859-1 if no charset was specified.
+    return ConvertResponseToUTF16(kCharsetLatin1, bytes, utf16);
   }
+
+  DCHECK(!charset.empty());
 
   // Be generous in the conversion -- if any characters lie outside of |charset|
   // (i.e. invalid), then substitute them with U+FFFD rather than failing.
-  ConvertToUTF16WithSubstitutions(bytes, codepage, utf16);
+  ConvertToUTF16WithSubstitutions(bytes, charset.c_str(), utf16);
 }
 
 }  // namespace
@@ -126,7 +145,7 @@ void PacFileFetcherImpl::OnResponseCompleted(URLRequest* request,
 int PacFileFetcherImpl::Fetch(
     const GURL& url,
     base::string16* text,
-    const CompletionCallback& callback,
+    CompletionOnceCallback callback,
     const NetworkTrafficAnnotationTag traffic_annotation) {
   // It is invalid to call Fetch() while a request is already in progress.
   DCHECK(!cur_request_.get());
@@ -171,11 +190,11 @@ int PacFileFetcherImpl::Fetch(
   // the proxy might be the only way to the outside world.  IGNORE_LIMITS is
   // used to avoid blocking proxy resolution on other network requests.
   cur_request_->SetLoadFlags(LOAD_BYPASS_PROXY | LOAD_DISABLE_CACHE |
-                             LOAD_DISABLE_CERT_REVOCATION_CHECKING |
+                             LOAD_DISABLE_CERT_NETWORK_FETCHES |
                              LOAD_IGNORE_LIMITS);
 
   // Save the caller's info for notification on completion.
-  callback_ = callback;
+  callback_ = std::move(callback);
   result_text_ = text;
 
   bytes_read_so_far_.clear();
@@ -306,7 +325,7 @@ void PacFileFetcherImpl::OnReadCompleted(URLRequest* request, int num_bytes) {
 PacFileFetcherImpl::PacFileFetcherImpl(URLRequestContext* url_request_context,
                                        bool allow_file_url)
     : url_request_context_(url_request_context),
-      buf_(new IOBuffer(kBufSize)),
+      buf_(base::MakeRefCounted<IOBuffer>(kBufSize)),
       next_id_(0),
       cur_request_id_(0),
       result_code_(OK),
@@ -392,11 +411,11 @@ void PacFileFetcherImpl::FetchCompleted() {
   }
 
   int result_code = result_code_;
-  CompletionCallback callback = callback_;
+  CompletionOnceCallback callback = std::move(callback_);
 
   ResetCurRequestState();
 
-  callback.Run(result_code);
+  std::move(callback).Run(result_code);
 }
 
 void PacFileFetcherImpl::ResetCurRequestState() {

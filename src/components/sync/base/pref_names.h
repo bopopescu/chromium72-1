@@ -44,6 +44,7 @@ extern const char kSyncPriorityPreferences[];
 extern const char kSyncPrinters[];
 extern const char kSyncReadingList[];
 extern const char kSyncSearchEngines[];
+extern const char kSyncSendTabToSelf[];
 extern const char kSyncSessions[];
 extern const char kSyncSupervisedUserSettings[];
 extern const char kSyncSupervisedUserSharedSettings[];
@@ -54,6 +55,7 @@ extern const char kSyncSyncedNotifications[];
 extern const char kSyncTabs[];
 extern const char kSyncThemes[];
 extern const char kSyncTypedUrls[];
+extern const char kSyncUserConsents[];
 extern const char kSyncUserEvents[];
 extern const char kSyncWifiCredentials[];
 
@@ -62,8 +64,6 @@ extern const char kSyncSuppressStart[];
 
 extern const char kSyncEncryptionBootstrapToken[];
 extern const char kSyncKeystoreEncryptionBootstrapToken[];
-
-extern const char kSyncSessionsGUID[];
 
 #if defined(OS_CHROMEOS)
 extern const char kSyncSpareBootstrapToken[];

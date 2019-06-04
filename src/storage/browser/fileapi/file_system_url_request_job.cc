@@ -86,7 +86,7 @@ int FileSystemURLRequestJob::ReadRawData(net::IOBuffer* dest, int dest_size) {
   DCHECK_NE(dest_size, 0);
   DCHECK_GE(remaining_bytes_, 0);
 
-  if (reader_.get() == NULL)
+  if (reader_.get() == nullptr)
     return net::ERR_FAILED;
 
   if (remaining_bytes_ < dest_size)
@@ -96,8 +96,8 @@ int FileSystemURLRequestJob::ReadRawData(net::IOBuffer* dest, int dest_size) {
     return 0;
 
   const int rv = reader_->Read(dest, dest_size,
-                               base::Bind(&FileSystemURLRequestJob::DidRead,
-                                          weak_factory_.GetWeakPtr()));
+                               base::BindOnce(&FileSystemURLRequestJob::DidRead,
+                                              weak_factory_.GetWeakPtr()));
   if (rv >= 0) {
     remaining_bytes_ -= rv;
     DCHECK_GE(remaining_bytes_, 0);
@@ -162,10 +162,11 @@ void FileSystemURLRequestJob::StartAsync() {
     return;
   }
   file_system_context_->operation_runner()->GetMetadata(
-      url_, FileSystemOperation::GET_METADATA_FIELD_IS_DIRECTORY |
-                FileSystemOperation::GET_METADATA_FIELD_SIZE,
-      base::Bind(&FileSystemURLRequestJob::DidGetMetadata,
-                 weak_factory_.GetWeakPtr()));
+      url_,
+      FileSystemOperation::GET_METADATA_FIELD_IS_DIRECTORY |
+          FileSystemOperation::GET_METADATA_FIELD_SIZE,
+      base::BindOnce(&FileSystemURLRequestJob::DidGetMetadata,
+                     weak_factory_.GetWeakPtr()));
 }
 
 void FileSystemURLRequestJob::DidAttemptAutoMount(base::File::Error result) {
@@ -233,8 +234,10 @@ void FileSystemURLRequestJob::DidRead(int result) {
   ReadRawDataComplete(result);
 }
 
-bool FileSystemURLRequestJob::IsRedirectResponse(GURL* location,
-                                                 int* http_status_code) {
+bool FileSystemURLRequestJob::IsRedirectResponse(
+    GURL* location,
+    int* http_status_code,
+    bool* insecure_scheme_was_upgraded) {
   if (is_directory_) {
     // This happens when we discovered the file is a directory, so needs a
     // slash at the end of the path.
@@ -242,6 +245,7 @@ bool FileSystemURLRequestJob::IsRedirectResponse(GURL* location,
     new_path.push_back('/');
     GURL::Replacements replacements;
     replacements.SetPathStr(new_path);
+    *insecure_scheme_was_upgraded = false;
     *location = request_->url().ReplaceComponents(replacements);
     *http_status_code = 301;  // simulate a permanent redirect
     return true;

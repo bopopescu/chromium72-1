@@ -14,6 +14,7 @@
 #include "base/logging.h"
 #include "base/run_loop.h"
 #include "base/single_thread_task_runner.h"
+#include "base/stl_util.h"
 #include "base/test/scoped_task_environment.h"
 #include "base/threading/thread_task_runner_handle.h"
 #include "content/browser/renderer_host/input/timeout_monitor.h"
@@ -94,7 +95,7 @@ class PassthroughTouchEventQueueTest : public testing::Test,
   void OnFilteringTouchEvent(const blink::WebTouchEvent& touch_event) override {
   }
 
-  bool TouchscreenFlingInProgress() override { return false; }
+  void FlushDeferredGestureQueue() override {}
 
  protected:
   void SetUpForTouchMoveSlopTesting(double slop_length_dips) {
@@ -142,24 +143,22 @@ class PassthroughTouchEventQueueTest : public testing::Test,
   void SendTouchEventAck(InputEventAckState ack_result) {
     DCHECK(!sent_events_ids_.empty());
     queue_->ProcessTouchAck(InputEventAckSource::COMPOSITOR_THREAD, ack_result,
-                            ui::LatencyInfo(), sent_events_ids_.front());
+                            ui::LatencyInfo(), sent_events_ids_.front(), true);
     sent_events_ids_.pop_front();
   }
 
   void SendTouchEventAckLast(InputEventAckState ack_result) {
     DCHECK(!sent_events_ids_.empty());
     queue_->ProcessTouchAck(InputEventAckSource::COMPOSITOR_THREAD, ack_result,
-                            ui::LatencyInfo(), sent_events_ids_.back());
+                            ui::LatencyInfo(), sent_events_ids_.back(), true);
     sent_events_ids_.pop_back();
   }
 
   void SendTouchEventAckWithID(InputEventAckState ack_result,
                                int unique_event_id) {
     queue_->ProcessTouchAck(InputEventAckSource::COMPOSITOR_THREAD, ack_result,
-                            ui::LatencyInfo(), unique_event_id);
-    sent_events_ids_.erase(std::remove(sent_events_ids_.begin(),
-                                       sent_events_ids_.end(), unique_event_id),
-                           sent_events_ids_.end());
+                            ui::LatencyInfo(), unique_event_id, true);
+    base::Erase(sent_events_ids_, unique_event_id);
   }
 
   void SendGestureEventAck(WebInputEvent::Type type,
@@ -310,10 +309,10 @@ class PassthroughTouchEventQueueTest : public testing::Test,
   }
 
   static void RunTasksAndWait(base::TimeDelta delay) {
+    base::RunLoop run_loop;
     base::ThreadTaskRunnerHandle::Get()->PostDelayedTask(
-        FROM_HERE, base::RunLoop::QuitCurrentWhenIdleClosureDeprecated(),
-        delay);
-    base::RunLoop().Run();
+        FROM_HERE, run_loop.QuitClosure(), delay);
+    run_loop.Run();
   }
 
   int GetUniqueTouchEventID() { return sent_events_ids_.back(); }

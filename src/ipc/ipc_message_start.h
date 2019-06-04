@@ -5,8 +5,6 @@
 #ifndef IPC_IPC_MESSAGE_START_H_
 #define IPC_IPC_MESSAGE_START_H_
 
-#include "pal/ipc/pal_macros.h"
-
 // Used by IPC_BEGIN_MESSAGES so that each message class starts from a unique
 // base.  Messages have unique IDs across channels in order for the IPC logging
 // code to figure out the message class from its ID.
@@ -18,6 +16,7 @@ enum IPCMessageStart {
   FrameMsgStart,
   PageMsgStart,
   ViewMsgStart,
+  WidgetMsgStart,
   InputMsgStart,
   TestMsgStart,
   WorkerMsgStart,
@@ -26,12 +25,8 @@ enum IPCMessageStart {
   MediaMsgStart,
   PpapiMsgStart,
   DOMStorageMsgStart,
-  SpeechRecognitionMsgStart,
-  P2PMsgStart,
   ResourceMsgStart,
-  FileSystemMsgStart,
   BlobMsgStart,
-  AudioMsgStart,
   MidiMsgStart,
   ChromeMsgStart,
   DragMsgStart,
@@ -48,19 +43,16 @@ enum IPCMessageStart {
   MediaPlayerMsgStart,
   TracingMsgStart,
   PeerConnectionTrackerMsgStart,
-  AppShimMsgStart,
   WebRtcLoggingMsgStart,
   TtsMsgStart,
   NaClHostMsgStart,
   EncryptedMediaMsgStart,
-  ServiceWorkerMsgStart,
   CastMsgStart,
   ChromeExtensionMsgStart,
   GinJavaBridgeMsgStart,
   ChromeUtilityPrintingMsgStart,
   AecDumpMsgStart,
   OzoneGpuMsgStart,
-  PlatformNotificationMsgStart,
   LayoutTestMsgStart,
   NetworkHintsMsgStart,
   CastMediaMsgStart,
@@ -76,12 +68,7 @@ enum IPCMessageStart {
   SurfaceViewManagerMsgStart,
   ExtensionWorkerMsgStart,
   SubresourceFilterMsgStart,
-  // Added for Pal injection.
-  BrowserControlMsgStart,
-  // Added for neva injections.
-  InjectionMsgStart,
-  // Added for neva PAL.
-  PalMsgStart,
+  ChromeAppsMsgStart,
   LastIPCMsgStart  // Must come last.
 };
 

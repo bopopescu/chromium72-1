@@ -8,6 +8,7 @@
 #include "ui/base/cursor/cursor.h"
 #include "ui/gfx/canvas.h"
 #include "ui/views/controls/native/native_view_host_wrapper.h"
+#include "ui/views/painter.h"
 #include "ui/views/widget/widget.h"
 
 namespace views {
@@ -49,7 +50,14 @@ void NativeViewHost::Detach() {
 }
 
 bool NativeViewHost::SetCornerRadius(int corner_radius) {
-  return native_wrapper_->SetCornerRadius(corner_radius);
+  return SetCustomMask(views::Painter::CreatePaintedLayer(
+      views::Painter::CreateSolidRoundRectPainter(SK_ColorBLACK,
+                                                  corner_radius)));
+}
+
+bool NativeViewHost::SetCustomMask(std::unique_ptr<ui::LayerOwner> mask) {
+  DCHECK(native_wrapper_);
+  return native_wrapper_->SetCustomMask(std::move(mask));
 }
 
 void NativeViewHost::SetNativeViewSize(const gfx::Size& size) {
@@ -57,6 +65,10 @@ void NativeViewHost::SetNativeViewSize(const gfx::Size& size) {
     return;
   native_view_size_ = size;
   InvalidateLayout();
+}
+
+gfx::NativeView NativeViewHost::GetNativeViewContainer() const {
+  return native_view_ ? native_wrapper_->GetNativeViewContainer() : nullptr;
 }
 
 void NativeViewHost::NativeViewDestroyed() {
@@ -164,7 +176,7 @@ void NativeViewHost::ViewHierarchyChanged(
     if (!native_wrapper_.get())
       native_wrapper_.reset(NativeViewHostWrapper::CreateWrapper(this));
     native_wrapper_->AddedToWidget();
-  } else if (!details.is_add) {
+  } else if (!details.is_add && native_wrapper_) {
     native_wrapper_->RemovedFromWidget();
   }
 }
@@ -194,6 +206,11 @@ gfx::NativeCursor NativeViewHost::GetCursor(const ui::MouseEvent& event) {
   return native_wrapper_->GetCursor(event.x(), event.y());
 }
 
+void NativeViewHost::SetVisible(bool visible) {
+  native_wrapper_->SetVisible(visible);
+  View::SetVisible(visible);
+}
+
 ////////////////////////////////////////////////////////////////////////////////
 // NativeViewHost, private:
 
@@ -217,7 +234,7 @@ void NativeViewHost::ClearFocus() {
 
   Widget::Widgets widgets;
   Widget::GetAllChildWidgets(native_view(), &widgets);
-  for (Widget::Widgets::iterator i = widgets.begin(); i != widgets.end(); ++i) {
+  for (auto i = widgets.begin(); i != widgets.end(); ++i) {
     focus_manager->ViewRemoved((*i)->GetRootView());
     if (!focus_manager->GetFocusedView())
       return;

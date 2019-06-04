@@ -7,9 +7,9 @@
 //   Tests that malformed shaders fail compilation, and that correct shaders pass compilation.
 //
 
+#include "GLSLANG/ShaderLang.h"
 #include "angle_gl.h"
 #include "gtest/gtest.h"
-#include "GLSLANG/ShaderLang.h"
 #include "tests/test_utils/ShaderCompileTreeTest.h"
 
 using namespace sh;
@@ -20,6 +20,7 @@ class FragmentShaderValidationTest : public ShaderCompileTreeTest
 {
   public:
     FragmentShaderValidationTest() {}
+
   protected:
     ::GLenum getShaderType() const override { return GL_FRAGMENT_SHADER; }
     ShShaderSpec getShaderSpec() const override { return SH_GLES3_1_SPEC; }
@@ -4572,10 +4573,14 @@ TEST_F(FragmentShaderEXTGeometryShaderValidationTest, GeometryShaderBuiltInConst
             int val = )";
 
     const std::array<std::string, 9> kGeometryShaderBuiltinConstants = {{
-        "gl_MaxGeometryInputComponents", "gl_MaxGeometryOutputComponents",
-        "gl_MaxGeometryImageUniforms", "gl_MaxGeometryTextureImageUnits",
-        "gl_MaxGeometryOutputVertices", "gl_MaxGeometryTotalOutputComponents",
-        "gl_MaxGeometryUniformComponents", "gl_MaxGeometryAtomicCounters",
+        "gl_MaxGeometryInputComponents",
+        "gl_MaxGeometryOutputComponents",
+        "gl_MaxGeometryImageUniforms",
+        "gl_MaxGeometryTextureImageUnits",
+        "gl_MaxGeometryOutputVertices",
+        "gl_MaxGeometryTotalOutputComponents",
+        "gl_MaxGeometryUniformComponents",
+        "gl_MaxGeometryAtomicCounters",
         "gl_MaxGeometryAtomicCounterBuffers",
     }};
 
@@ -4609,10 +4614,14 @@ TEST_F(FragmentShaderEXTGeometryShaderValidationTest,
         "    int val = ";
 
     const std::array<std::string, 9> kGeometryShaderBuiltinConstants = {{
-        "gl_MaxGeometryInputComponents", "gl_MaxGeometryOutputComponents",
-        "gl_MaxGeometryImageUniforms", "gl_MaxGeometryTextureImageUnits",
-        "gl_MaxGeometryOutputVertices", "gl_MaxGeometryTotalOutputComponents",
-        "gl_MaxGeometryUniformComponents", "gl_MaxGeometryAtomicCounters",
+        "gl_MaxGeometryInputComponents",
+        "gl_MaxGeometryOutputComponents",
+        "gl_MaxGeometryImageUniforms",
+        "gl_MaxGeometryTextureImageUnits",
+        "gl_MaxGeometryOutputVertices",
+        "gl_MaxGeometryTotalOutputComponents",
+        "gl_MaxGeometryUniformComponents",
+        "gl_MaxGeometryAtomicCounters",
         "gl_MaxGeometryAtomicCounterBuffers",
     }};
 
@@ -5962,6 +5971,93 @@ TEST_F(FragmentShaderValidationTest, CaseInsideBlock)
                     my_FragColor = vec4(1.0);
             }
         })";
+    if (compile(shaderString))
+    {
+        FAIL() << "Shader compilation succeeded, expecting failure:\n" << mInfoLog;
+    }
+}
+
+// Test using a value from a constant array as a case label.
+TEST_F(FragmentShaderValidationTest, ValueFromConstantArrayAsCaseLabel)
+{
+    const std::string &shaderString =
+        R"(#version 300 es
+        precision mediump float;
+        uniform int u;
+        const int[3] arr = int[3](2, 1, 0);
+        out vec4 my_FragColor;
+        void main()
+        {
+            switch (u)
+            {
+                case arr[1]:
+                    my_FragColor = vec4(0.0);
+                case 2:
+                case 0:
+                default:
+                    my_FragColor = vec4(1.0);
+            }
+        })";
+    if (!compile(shaderString))
+    {
+        FAIL() << "Shader compilation failed, expecting success:\n" << mInfoLog;
+    }
+}
+
+// Test using a value from a constant array as a fragment output index.
+TEST_F(FragmentShaderValidationTest, ValueFromConstantArrayAsFragmentOutputIndex)
+{
+    const std::string &shaderString =
+        R"(#version 300 es
+        precision mediump float;
+        uniform int u;
+        const int[3] arr = int[3](4, 1, 0);
+        out vec4 my_FragData[2];
+        void main()
+        {
+            my_FragData[arr[1]] = vec4(0.0);
+            my_FragData[arr[2]] = vec4(0.0);
+        })";
+    if (!compile(shaderString))
+    {
+        FAIL() << "Shader compilation failed, expecting success:\n" << mInfoLog;
+    }
+}
+
+// Test using a value from a constant array as an array size.
+TEST_F(FragmentShaderValidationTest, ValueFromConstantArrayAsArraySize)
+{
+    const std::string &shaderString =
+        R"(#version 300 es
+        precision mediump float;
+        uniform int u;
+        const int[3] arr = int[3](0, 2, 0);
+        const int[arr[1]] arr2 = int[2](2, 1);
+        out vec4 my_FragColor;
+        void main()
+        {
+            my_FragColor = vec4(arr2[1]);
+        })";
+    if (!compile(shaderString))
+    {
+        FAIL() << "Shader compilation failed, expecting success:\n" << mInfoLog;
+    }
+}
+
+// Test that an invalid struct with void fields doesn't crash or assert when used in a comma
+// operator. This is a regression test.
+TEST_F(FragmentShaderValidationTest, InvalidStructWithVoidFieldsInComma)
+{
+    // The struct needed the two fields for the bug to repro.
+    const std::string &shaderString =
+        R"(#version 300 es
+precision highp float;
+
+struct T { void a[8], c; };
+
+void main() {
+    0.0, T();
+})";
     if (compile(shaderString))
     {
         FAIL() << "Shader compilation succeeded, expecting failure:\n" << mInfoLog;

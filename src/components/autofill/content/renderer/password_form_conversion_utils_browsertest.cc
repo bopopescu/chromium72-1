@@ -10,9 +10,10 @@
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
-#include "base/test/histogram_tester.h"
+#include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_feature_list.h"
 #include "build/build_config.h"
+#include "components/autofill/content/renderer/field_data_manager.h"
 #include "components/autofill/content/renderer/form_autofill_util.h"
 #include "components/autofill/content/renderer/password_form_conversion_utils.h"
 #include "components/autofill/core/browser/form_structure.h"
@@ -99,12 +100,12 @@ class PasswordFormBuilder {
 
   // Appends a disabled text-type field at the end of the form.
   void AddDisabledUsernameField() {
-    html_ += "<INPUT type=\"text\" disabled/>";
+    html_ += "<INPUT name=\"disabled field\" type=\"text\" disabled/>";
   }
 
   // Appends a disabled password-type field at the end of the form.
   void AddDisabledPasswordField() {
-    html_ += "<INPUT type=\"password\" disabled/>";
+    html_ += "<INPUT name=\"disabled field\" type=\"password\" disabled/>";
   }
 
   // Appends a hidden field at the end of the form.
@@ -153,6 +154,12 @@ class PasswordFormBuilder {
         "<INPUT type=\"password\" name=\"%s\" id=\"%s\" value=\"%s\""
         "style=\"visibility: hidden;\"/>",
         name_and_id, name_and_id, value);
+  }
+
+  // Add a field with a given type. Useful to add non-text fields.
+  void AddFieldWithType(const char* name_and_id, const char* type) {
+    base::StringAppendF(&html_, "<INPUT type=\"%s\" name=\"%s\" id=\"%s\"/>",
+                        type, name_and_id, name_and_id);
   }
 
   // Appends a new submit-type field at the end of the form with the specified
@@ -208,21 +215,20 @@ class MAYBE_PasswordFormConversionUtilsTest : public content::RenderViewTest {
 
     WebVector<WebFormControlElement> control_elements;
     form.GetFormControlElements(control_elements);
-    FieldValueAndPropertiesMaskMap user_input;
+    FieldDataManager field_data_manager;
     for (size_t i = 0; i < control_elements.size(); ++i) {
       WebInputElement* input_element = ToWebInputElement(&control_elements[i]);
       if (input_element->HasAttribute("set-activated-submit"))
         input_element->SetActivatedSubmit(true);
       if (with_user_input) {
-        const base::string16 element_value = input_element->Value().Utf16();
-        user_input[control_elements[i]] =
-            std::make_pair(std::make_unique<base::string16>(element_value),
-                           FieldPropertiesFlags::USER_TYPED);
+        field_data_manager.UpdateFieldDataMap(control_elements[i],
+                                              input_element->Value().Utf16(),
+                                              FieldPropertiesFlags::USER_TYPED);
       }
     }
 
     return CreatePasswordFormFromWebForm(
-        form, with_user_input ? &user_input : nullptr, predictions,
+        form, with_user_input ? &field_data_manager : nullptr, predictions,
         &username_detector_cache_);
   }
 
@@ -340,6 +346,10 @@ TEST_F(MAYBE_PasswordFormConversionUtilsTest, DisabledFieldsAreIgnored) {
   EXPECT_EQ(base::UTF8ToUTF16("secret"), password_form->password_value);
 }
 
+// When not enough fields are enabled to parse the form, the result should still
+// be not null. It must contain only minimal information, so that it is not used
+// for fill on load, for example. It must contain the full FormData, so that the
+// new parser can be run as well.
 TEST_F(MAYBE_PasswordFormConversionUtilsTest, OnlyDisabledFields) {
   PasswordFormBuilder builder(kTestFormActionURL);
   builder.AddDisabledUsernameField();
@@ -349,7 +359,11 @@ TEST_F(MAYBE_PasswordFormConversionUtilsTest, OnlyDisabledFields) {
 
   std::unique_ptr<PasswordForm> password_form =
       LoadHTMLAndConvertForm(html, nullptr, false);
-  ASSERT_FALSE(password_form);
+  ASSERT_TRUE(password_form);
+  EXPECT_TRUE(password_form->username_element.empty());
+  EXPECT_TRUE(password_form->password_element.empty());
+  EXPECT_TRUE(password_form->new_password_element.empty());
+  EXPECT_EQ(2u, password_form->form_data.fields.size());
 }
 
 TEST_F(MAYBE_PasswordFormConversionUtilsTest,
@@ -735,16 +749,16 @@ TEST_F(MAYBE_PasswordFormConversionUtilsTest,
   // A user typed only into "id" and "password" fields. So, the prediction for
   // "email" field should be ignored despite it is more reliable than prediction
   // for "id" field.
-  FieldValueAndPropertiesMaskMap user_input;
-  user_input[control_elements[2]] = std::make_pair(  // id
-      std::make_unique<base::string16>(control_elements[2].Value().Utf16()),
-      FieldPropertiesFlags::USER_TYPED);
-  user_input[control_elements[3]] = std::make_pair(  // password
-      std::make_unique<base::string16>(control_elements[3].Value().Utf16()),
-      FieldPropertiesFlags::USER_TYPED);
+  FieldDataManager field_data_manager;
+  field_data_manager.UpdateFieldDataMap(
+      control_elements[2], control_elements[2].Value().Utf16(),
+      FieldPropertiesFlags::USER_TYPED);  // id
+  field_data_manager.UpdateFieldDataMap(
+      control_elements[3], control_elements[3].Value().Utf16(),
+      FieldPropertiesFlags::USER_TYPED);  // password
 
   std::unique_ptr<PasswordForm> password_form = CreatePasswordFormFromWebForm(
-      form, &user_input, nullptr, &username_detector_cache);
+      form, &field_data_manager, nullptr, &username_detector_cache);
 
   ASSERT_TRUE(password_form);
   EXPECT_EQ(base::UTF8ToUTF16("id"), password_form->username_element);
@@ -1571,21 +1585,21 @@ TEST_F(MAYBE_PasswordFormConversionUtilsTest, UserInput) {
   WebFormElement form;
   LoadWebFormFromHTML(html, &form, nullptr);
 
-  FieldValueAndPropertiesMaskMap user_input;
+  FieldDataManager field_data_manager;
   WebVector<WebFormControlElement> control_elements;
   form.GetFormControlElements(control_elements);
   ASSERT_EQ("nonvisible_text", control_elements[0].NameForAutofill().Utf8());
-  user_input[control_elements[0]] = std::make_pair(
-      std::make_unique<base::string16>(control_elements[0].Value().Utf16()),
-      FieldPropertiesFlags::USER_TYPED);
+  field_data_manager.UpdateFieldDataMap(control_elements[0],
+                                        control_elements[0].Value().Utf16(),
+                                        FieldPropertiesFlags::USER_TYPED);
   ASSERT_EQ("nonvisible_password",
             control_elements[2].NameForAutofill().Utf8());
-  user_input[control_elements[2]] = std::make_pair(
-      std::make_unique<base::string16>(control_elements[2].Value().Utf16()),
-      FieldPropertiesFlags::USER_TYPED);
+  field_data_manager.UpdateFieldDataMap(control_elements[2],
+                                        control_elements[2].Value().Utf16(),
+                                        FieldPropertiesFlags::USER_TYPED);
 
-  std::unique_ptr<PasswordForm> password_form =
-      CreatePasswordFormFromWebForm(form, &user_input, nullptr, nullptr);
+  std::unique_ptr<PasswordForm> password_form = CreatePasswordFormFromWebForm(
+      form, &field_data_manager, nullptr, nullptr);
 
   ASSERT_TRUE(password_form);
   EXPECT_FALSE(password_form->only_for_fallback_saving);
@@ -1628,22 +1642,22 @@ TEST_F(MAYBE_PasswordFormConversionUtilsTest,
   WebFormElement form;
   LoadWebFormFromHTML(html, &form, nullptr);
 
-  FieldValueAndPropertiesMaskMap user_input;
+  FieldDataManager field_data_manager;
   WebVector<WebFormControlElement> control_elements;
   form.GetFormControlElements(control_elements);
   ASSERT_EQ("password_with_user_input1",
             control_elements[9].NameForAutofill().Utf8());
-  user_input[control_elements[9]] = std::make_pair(
-      std::make_unique<base::string16>(control_elements[9].Value().Utf16()),
-      FieldPropertiesFlags::USER_TYPED);
+  field_data_manager.UpdateFieldDataMap(control_elements[9],
+                                        control_elements[9].Value().Utf16(),
+                                        FieldPropertiesFlags::USER_TYPED);
   ASSERT_EQ("password_with_user_input2",
             control_elements[10].NameForAutofill().Utf8());
-  user_input[control_elements[10]] = std::make_pair(
-      std::make_unique<base::string16>(control_elements[10].Value().Utf16()),
-      FieldPropertiesFlags::USER_TYPED);
+  field_data_manager.UpdateFieldDataMap(control_elements[10],
+                                        control_elements[10].Value().Utf16(),
+                                        FieldPropertiesFlags::USER_TYPED);
 
-  std::unique_ptr<PasswordForm> password_form =
-      CreatePasswordFormFromWebForm(form, &user_input, nullptr, nullptr);
+  std::unique_ptr<PasswordForm> password_form = CreatePasswordFormFromWebForm(
+      form, &field_data_manager, nullptr, nullptr);
 
   ASSERT_TRUE(password_form);
   EXPECT_FALSE(password_form->only_for_fallback_saving);
@@ -1686,22 +1700,22 @@ TEST_F(MAYBE_PasswordFormConversionUtilsTest,
   WebFormElement form;
   LoadWebFormFromHTML(html, &form, nullptr);
 
-  FieldValueAndPropertiesMaskMap user_input;
+  FieldDataManager field_data_manager;
   WebVector<WebFormControlElement> control_elements;
   form.GetFormControlElements(control_elements);
   ASSERT_EQ("password_with_user_input1",
             control_elements[7].NameForAutofill().Utf8());
-  user_input[control_elements[7]] = std::make_pair(
-      std::make_unique<base::string16>(control_elements[7].Value().Utf16()),
-      FieldPropertiesFlags::USER_TYPED);
+  field_data_manager.UpdateFieldDataMap(control_elements[7],
+                                        control_elements[7].Value().Utf16(),
+                                        FieldPropertiesFlags::USER_TYPED);
   ASSERT_EQ("password_with_user_input2",
             control_elements[9].NameForAutofill().Utf8());
-  user_input[control_elements[9]] = std::make_pair(
-      std::make_unique<base::string16>(control_elements[9].Value().Utf16()),
-      FieldPropertiesFlags::USER_TYPED);
+  field_data_manager.UpdateFieldDataMap(control_elements[9],
+                                        control_elements[9].Value().Utf16(),
+                                        FieldPropertiesFlags::USER_TYPED);
 
-  std::unique_ptr<PasswordForm> password_form =
-      CreatePasswordFormFromWebForm(form, &user_input, nullptr, nullptr);
+  std::unique_ptr<PasswordForm> password_form = CreatePasswordFormFromWebForm(
+      form, &field_data_manager, nullptr, nullptr);
 
   ASSERT_TRUE(password_form);
   EXPECT_FALSE(password_form->only_for_fallback_saving);
@@ -1849,117 +1863,22 @@ TEST_F(MAYBE_PasswordFormConversionUtilsTest,
     LoadWebFormFromHTML(html, &form, nullptr);
     WebVector<WebFormControlElement> control_elements;
     form.GetFormControlElements(control_elements);
-    FieldValueAndPropertiesMaskMap user_input;
 
+    FieldDataManager field_data_manager;
     FieldPropertiesMask mask = FieldPropertiesFlags::AUTOFILLED;
     if (autofilled_value_was_modified_by_user)
       mask |= FieldPropertiesFlags::USER_TYPED;
-    user_input[control_elements[1]] =
-        std::make_pair(std::make_unique<base::string16>(
-                           base::ASCIIToUTF16("autofilled_value")),
-                       mask);
-    user_input[control_elements[2]] = std::make_pair(
-        std::make_unique<base::string16>(base::ASCIIToUTF16("user_value")),
-        FieldPropertiesFlags::USER_TYPED);
+    field_data_manager.UpdateFieldDataMap(
+        control_elements[1], base::ASCIIToUTF16("autofilled_value"), mask);
+    field_data_manager.UpdateFieldDataMap(control_elements[2],
+                                          base::ASCIIToUTF16("user_value"),
+                                          FieldPropertiesFlags::USER_TYPED);
 
-    std::unique_ptr<PasswordForm> password_form(
-        CreatePasswordFormFromWebForm(form, &user_input, nullptr, nullptr));
+    std::unique_ptr<PasswordForm> password_form(CreatePasswordFormFromWebForm(
+        form, &field_data_manager, nullptr, nullptr));
     ASSERT_TRUE(password_form);
     EXPECT_TRUE(password_form->form_has_autofilled_value);
   }
-}
-
-TEST_F(MAYBE_PasswordFormConversionUtilsTest, LayoutClassificationLogin) {
-  PasswordFormBuilder builder(kTestFormActionURL);
-  builder.AddHiddenField();
-  builder.AddTextField("username", "", nullptr);
-  builder.AddPasswordField("password", "", nullptr);
-  builder.AddSubmitButton("submit");
-  std::string login_html = builder.ProduceHTML();
-
-  std::unique_ptr<PasswordForm> login_form =
-      LoadHTMLAndConvertForm(login_html, nullptr, false);
-  ASSERT_TRUE(login_form);
-  EXPECT_FALSE(login_form->only_for_fallback_saving);
-  EXPECT_EQ(PasswordForm::Layout::LAYOUT_OTHER, login_form->layout);
-}
-
-TEST_F(MAYBE_PasswordFormConversionUtilsTest, LayoutClassificationSignup) {
-  PasswordFormBuilder builder(kTestFormActionURL);
-  builder.AddTextField("someotherfield", "", nullptr);
-  builder.AddTextField("username", "", nullptr);
-  builder.AddPasswordField("new_password", "", nullptr);
-  builder.AddHiddenField();
-  builder.AddPasswordField("new_password2", "", nullptr);
-  builder.AddSubmitButton("submit");
-  std::string signup_html = builder.ProduceHTML();
-
-  std::unique_ptr<PasswordForm> signup_form =
-      LoadHTMLAndConvertForm(signup_html, nullptr, false);
-  ASSERT_TRUE(signup_form);
-  EXPECT_FALSE(signup_form->only_for_fallback_saving);
-  EXPECT_EQ(PasswordForm::Layout::LAYOUT_OTHER, signup_form->layout);
-}
-
-TEST_F(MAYBE_PasswordFormConversionUtilsTest, LayoutClassificationChange) {
-  PasswordFormBuilder builder(kTestFormActionURL);
-  builder.AddTextField("username", "", nullptr);
-  builder.AddPasswordField("old_password", "", nullptr);
-  builder.AddHiddenField();
-  builder.AddPasswordField("new_password", "", nullptr);
-  builder.AddPasswordField("new_password2", "", nullptr);
-  builder.AddSubmitButton("submit");
-  std::string change_html = builder.ProduceHTML();
-
-  std::unique_ptr<PasswordForm> change_form =
-      LoadHTMLAndConvertForm(change_html, nullptr, false);
-  ASSERT_TRUE(change_form);
-  EXPECT_FALSE(change_form->only_for_fallback_saving);
-  EXPECT_EQ(PasswordForm::Layout::LAYOUT_OTHER, change_form->layout);
-}
-
-TEST_F(MAYBE_PasswordFormConversionUtilsTest,
-       LayoutClassificationLoginPlusSignup_A) {
-  PasswordFormBuilder builder(kTestFormActionURL);
-  builder.AddTextField("username", "", nullptr);
-  builder.AddHiddenField();
-  builder.AddPasswordField("password", "", nullptr);
-  builder.AddTextField("username2", "", nullptr);
-  builder.AddTextField("someotherfield", "", nullptr);
-  builder.AddPasswordField("new_password", "", nullptr);
-  builder.AddPasswordField("new_password2", "", nullptr);
-  builder.AddHiddenField();
-  builder.AddSubmitButton("submit");
-  std::string login_plus_signup_html = builder.ProduceHTML();
-
-  std::unique_ptr<PasswordForm> login_plus_signup_form =
-      LoadHTMLAndConvertForm(login_plus_signup_html, nullptr, false);
-  ASSERT_TRUE(login_plus_signup_form);
-  EXPECT_FALSE(login_plus_signup_form->only_for_fallback_saving);
-  EXPECT_EQ(PasswordForm::Layout::LAYOUT_LOGIN_AND_SIGNUP,
-            login_plus_signup_form->layout);
-}
-
-TEST_F(MAYBE_PasswordFormConversionUtilsTest,
-       LayoutClassificationLoginPlusSignup_B) {
-  PasswordFormBuilder builder(kTestFormActionURL);
-  builder.AddTextField("username", "", nullptr);
-  builder.AddHiddenField();
-  builder.AddPasswordField("password", "", nullptr);
-  builder.AddTextField("usrname2", "", nullptr);
-  builder.AddTextField("someotherfield", "", nullptr);
-  builder.AddPasswordField("new_password", "", nullptr);
-  builder.AddTextField("someotherfield2", "", nullptr);
-  builder.AddHiddenField();
-  builder.AddSubmitButton("submit");
-  std::string login_plus_signup_html = builder.ProduceHTML();
-
-  std::unique_ptr<PasswordForm> login_plus_signup_form =
-      LoadHTMLAndConvertForm(login_plus_signup_html, nullptr, false);
-  ASSERT_TRUE(login_plus_signup_form);
-  EXPECT_FALSE(login_plus_signup_form->only_for_fallback_saving);
-  EXPECT_EQ(PasswordForm::Layout::LAYOUT_LOGIN_AND_SIGNUP,
-            login_plus_signup_form->layout);
 }
 
 TEST_F(MAYBE_PasswordFormConversionUtilsTest,
@@ -2038,15 +1957,13 @@ TEST_F(MAYBE_PasswordFormConversionUtilsTest,
   LoadWebFormFromHTML(html, &form, nullptr);
   WebVector<WebFormControlElement> control_elements;
   form.GetFormControlElements(control_elements);
-  FieldValueAndPropertiesMaskMap user_input;
-  WebInputElement* input_element = ToWebInputElement(&control_elements[3]);
-  const base::string16 element_value = input_element->Value().Utf16();
-  user_input[control_elements[3]] =
-      std::make_pair(std::make_unique<base::string16>(element_value),
-                     FieldPropertiesFlags::USER_TYPED);
+  FieldDataManager field_data_manager;
+  field_data_manager.UpdateFieldDataMap(control_elements[3],
+                                        control_elements[3].Value().Utf16(),
+                                        FieldPropertiesFlags::USER_TYPED);
 
   std::unique_ptr<PasswordForm> password_form = CreatePasswordFormFromWebForm(
-      form, &user_input, &predictions, &username_detector_cache_);
+      form, &field_data_manager, &predictions, &username_detector_cache_);
   ASSERT_TRUE(password_form);
   EXPECT_EQ(base::UTF8ToUTF16("username"), password_form->username_element);
   EXPECT_EQ(base::UTF8ToUTF16("JohnSmith"), password_form->username_value);
@@ -2455,31 +2372,31 @@ TEST_F(MAYBE_PasswordFormConversionUtilsTest, TypedValuePreserved) {
   WebFormElement form;
   LoadWebFormFromHTML(html, &form, nullptr);
 
-  FieldValueAndPropertiesMaskMap user_input;
+  FieldDataManager field_data_manager;
   WebVector<WebFormControlElement> control_elements;
   form.GetFormControlElements(control_elements);
 
   ASSERT_EQ(3u, control_elements.size());
   ASSERT_EQ("fine", control_elements[0].NameForAutofill().Utf8());
   control_elements[0].SetAutofillValue("same_value");
-  user_input[control_elements[0]] = std::make_pair(
-      std::make_unique<base::string16>(control_elements[0].Value().Utf16()),
-      FieldPropertiesFlags::USER_TYPED);
+  field_data_manager.UpdateFieldDataMap(control_elements[0],
+                                        control_elements[0].Value().Utf16(),
+                                        FieldPropertiesFlags::USER_TYPED);
 
   ASSERT_EQ("mangled", control_elements[1].NameForAutofill().Utf8());
   control_elements[1].SetAutofillValue("mangled_value");
-  user_input[control_elements[1]] = std::make_pair(
-      std::make_unique<base::string16>(base::UTF8ToUTF16("original_value")),
-      FieldPropertiesFlags::USER_TYPED);
+  field_data_manager.UpdateFieldDataMap(control_elements[1],
+                                        base::UTF8ToUTF16("original_value"),
+                                        FieldPropertiesFlags::USER_TYPED);
 
   ASSERT_EQ("completed_for_user", control_elements[2].NameForAutofill().Utf8());
   control_elements[2].SetAutofillValue("email@gmail.com");
-  user_input[control_elements[2]] = std::make_pair(
-      std::make_unique<base::string16>(base::UTF8ToUTF16("email")),
-      FieldPropertiesFlags::USER_TYPED);
+  field_data_manager.UpdateFieldDataMap(control_elements[2],
+                                        base::UTF8ToUTF16("email"),
+                                        FieldPropertiesFlags::USER_TYPED);
 
-  std::unique_ptr<PasswordForm> password_form =
-      CreatePasswordFormFromWebForm(form, &user_input, nullptr, nullptr);
+  std::unique_ptr<PasswordForm> password_form = CreatePasswordFormFromWebForm(
+      form, &field_data_manager, nullptr, nullptr);
 
   ASSERT_TRUE(password_form);
 
@@ -2500,6 +2417,26 @@ TEST_F(MAYBE_PasswordFormConversionUtilsTest, TypedValuePreserved) {
   EXPECT_EQ(base::UTF8ToUTF16("email@gmail.com"),
             password_form->form_data.fields[2].value);
   EXPECT_EQ(base::string16(), password_form->form_data.fields[2].typed_value);
+}
+
+// Check that non-text fields are ignored.
+TEST_F(MAYBE_PasswordFormConversionUtilsTest, NonTextFields) {
+  PasswordFormBuilder builder(kTestFormActionURL);
+  // Avoid calling the text fields anything related to "username" to prevent the
+  // local HTML classifier from influencing the test result.
+  builder.AddTextField("textField", "", "");
+  builder.AddFieldWithType("radioInput", "radio");
+  builder.AddPasswordField("password", "", "");
+  std::string html = builder.ProduceHTML();
+
+  WebFormElement form;
+  LoadWebFormFromHTML(html, &form, nullptr);
+
+  std::unique_ptr<PasswordForm> password_form =
+      CreatePasswordFormFromWebForm(form, nullptr, nullptr, nullptr);
+
+  ASSERT_TRUE(password_form);
+  EXPECT_EQ(base::UTF8ToUTF16("textField"), password_form->username_element);
 }
 
 }  // namespace autofill

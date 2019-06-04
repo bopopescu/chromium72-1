@@ -37,7 +37,11 @@ class MockWebMediaPlayer : public blink::WebMediaPlayer,
   MockWebMediaPlayer()  = default;
   ~MockWebMediaPlayer() override = default;
 
-  void Load(LoadType, const blink::WebMediaPlayerSource&, CORSMode) override {}
+  LoadTiming Load(LoadType,
+                  const blink::WebMediaPlayerSource&,
+                  CorsMode) override {
+    return LoadTiming::kImmediate;
+  }
   void Play() override {}
   void Pause() override {}
   void Seek(double seconds) override {}
@@ -45,6 +49,8 @@ class MockWebMediaPlayer : public blink::WebMediaPlayer,
   void SetVolume(double) override {}
   void EnterPictureInPicture(PipWindowOpenedCallback) override {}
   void ExitPictureInPicture(PipWindowClosedCallback) override {}
+  void SetPictureInPictureCustomControls(
+      const std::vector<blink::PictureInPictureControlInfo>&) override {}
   void RegisterPictureInPictureWindowResizeCallback(
       PipWindowResizedCallback) override {}
   blink::WebTimeRanges Buffered() const override {
@@ -54,7 +60,7 @@ class MockWebMediaPlayer : public blink::WebMediaPlayer,
     return blink::WebTimeRanges();
   }
   void SetSinkId(const blink::WebString& sinkId,
-                 blink::WebSetSinkIdCallbacks*) override {}
+                 std::unique_ptr<blink::WebSetSinkIdCallbacks>) override {}
   bool HasVideo() const override { return true; }
   bool HasAudio() const override { return false; }
   blink::WebSize NaturalSize() const override { return blink::WebSize(16, 10); }
@@ -65,22 +71,23 @@ class MockWebMediaPlayer : public blink::WebMediaPlayer,
   double CurrentTime() const override { return 0.0; }
   NetworkState GetNetworkState() const override { return kNetworkStateEmpty; }
   ReadyState GetReadyState() const override { return kReadyStateHaveNothing; }
+  SurfaceLayerMode GetVideoSurfaceLayerMode() const override {
+    return SurfaceLayerMode::kNever;
+  }
   blink::WebString GetErrorMessage() const override {
     return blink::WebString();
   }
 
   bool DidLoadingProgress() override { return true; }
-  bool DidGetOpaqueResponseFromServiceWorker() const override { return false; }
-  bool HasSingleSecurityOrigin() const override { return true; }
-  bool DidPassCORSAccessCheck() const override { return true; }
+  bool WouldTaintOrigin() const override { return false; }
   double MediaTimeForTimeValue(double timeValue) const override { return 0.0; }
   unsigned DecodedFrameCount() const override { return 0; }
   unsigned DroppedFrameCount() const override { return 0; }
   unsigned CorruptedFrameCount() const override { return 0; }
-  size_t AudioDecodedByteCount() const override { return 0; }
-  size_t VideoDecodedByteCount() const override { return 0; }
+  uint64_t AudioDecodedByteCount() const override { return 0; }
+  uint64_t VideoDecodedByteCount() const override { return 0; }
 
-  void Paint(blink::WebCanvas* canvas,
+  void Paint(cc::PaintCanvas* canvas,
              const blink::WebRect& paint_rectangle,
              cc::PaintFlags&,
              int already_uploaded_id,

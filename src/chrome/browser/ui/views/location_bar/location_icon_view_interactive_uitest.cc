@@ -12,7 +12,6 @@
 #include "chrome/browser/ui/views/translate/translate_icon_view.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/interactive_test_utils.h"
-#include "chrome/test/views/scoped_macviews_browser_mode.h"
 
 namespace {
 
@@ -22,13 +21,12 @@ class LocationIconViewTest : public InProcessBrowserTest {
   ~LocationIconViewTest() override = default;
 
  private:
-  test::ScopedMacViewsBrowserMode views_mode_{true};
-
   DISALLOW_COPY_AND_ASSIGN(LocationIconViewTest);
 };
 
 #if defined(OS_MACOSX)
-// Focusing or input is not completely working on Mac: http://crbug.com/824418
+// TODO(robliao): https://crbug.com/824418  Focusing or input is not completely
+// working on Mac.
 #define MAYBE_HideOnSecondClick DISABLED_HideOnSecondClick
 #else
 #define MAYBE_HideOnSecondClick HideOnSecondClick
@@ -68,7 +66,8 @@ IN_PROC_BROWSER_TEST_F(LocationIconViewTest, MAYBE_HideOnSecondClick) {
 }
 
 #if defined(OS_MACOSX)
-// Widget activation doesn't work on Mac: https://crbug.com/823543
+// TODO(robliao): https://crbug.com/823543  Widget activation doesn't work on
+// Mac.
 #define MAYBE_ActivateFirstInactiveBubbleForAccessibility \
   DISABLED_ActivateFirstInactiveBubbleForAccessibility
 #else

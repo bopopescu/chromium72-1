@@ -9,11 +9,12 @@
 
 #include "base/memory/ref_counted.h"
 #include "base/run_loop.h"
-#include "base/test/histogram_tester.h"
+#include "base/test/metrics/histogram_tester.h"
 #include "base/trace_event/memory_allocator_dump.h"
 #include "base/trace_event/process_memory_dump.h"
-#include "base/trace_event/trace_event_argument.h"
+#include "base/trace_event/traced_value.h"
 #include "build/build_config.h"
+#include "net/base/completion_once_callback.h"
 #include "net/dns/host_cache.h"
 #include "net/http/http_network_session.h"
 #include "net/log/net_log_with_source.h"
@@ -118,8 +119,6 @@ TEST_F(SpdySessionPoolTest, CloseCurrentSessions) {
   const char kTestHost[] = "www.foo.com";
   const int kTestPort = 80;
 
-  session_deps_.host_resolver->set_synchronous_mode(true);
-
   HostPortPair test_host_port_pair(kTestHost, kTestPort);
   SpdySessionKey test_key =
       SpdySessionKey(test_host_port_pair, ProxyServer::Direct(),
@@ -167,8 +166,6 @@ TEST_F(SpdySessionPoolTest, CloseCurrentIdleSessions) {
   MockRead reads[] = {
       MockRead(SYNCHRONOUS, ERR_IO_PENDING)  // Stall forever.
   };
-
-  session_deps_.host_resolver->set_synchronous_mode(true);
 
   StaticSocketDataProvider data1(reads, base::span<MockWrite>());
   data1.set_connect_data(connect_data);
@@ -285,8 +282,6 @@ TEST_F(SpdySessionPoolTest, CloseAllSessions) {
   const char kTestHost[] = "www.foo.com";
   const int kTestPort = 80;
 
-  session_deps_.host_resolver->set_synchronous_mode(true);
-
   HostPortPair test_host_port_pair(kTestHost, kTestPort);
   SpdySessionKey test_key =
       SpdySessionKey(test_host_port_pair, ProxyServer::Direct(),
@@ -355,7 +350,6 @@ void SpdySessionPoolTest::RunIPPoolingTest(
   };
 
   session_deps_.host_resolver->set_synchronous_mode(true);
-  std::unique_ptr<HostResolver::Request> request[arraysize(test_hosts)];
   for (size_t i = 0; i < arraysize(test_hosts); i++) {
     session_deps_.host_resolver->rules()->AddIPLiteralRule(
         test_hosts[i].name, test_hosts[i].iplist, std::string());
@@ -363,9 +357,11 @@ void SpdySessionPoolTest::RunIPPoolingTest(
     // This test requires that the HostResolver cache be populated.  Normal
     // code would have done this already, but we do it manually.
     HostResolver::RequestInfo info(HostPortPair(test_hosts[i].name, kTestPort));
-    session_deps_.host_resolver->Resolve(
-        info, DEFAULT_PRIORITY, &test_hosts[i].addresses, CompletionCallback(),
-        &request[i], NetLogWithSource());
+    std::unique_ptr<HostResolver::Request> request;
+    int rv = session_deps_.host_resolver->Resolve(
+        info, DEFAULT_PRIORITY, &test_hosts[i].addresses,
+        CompletionOnceCallback(), &request, NetLogWithSource());
+    EXPECT_THAT(rv, IsOk());
 
     // Setup a SpdySessionKey.
     test_hosts[i].key = SpdySessionKey(
@@ -538,7 +534,6 @@ TEST_F(SpdySessionPoolTest, IPPoolingNetLog) {
     std::string iplist;
     SpdySessionKey key;
     AddressList addresses;
-    std::unique_ptr<HostResolver::Request> request;
   } test_hosts[] = {
       {"www.example.org", "192.168.0.1"}, {"mail.example.org", "192.168.0.1"},
   };
@@ -550,9 +545,11 @@ TEST_F(SpdySessionPoolTest, IPPoolingNetLog) {
         test_hosts[i].name, test_hosts[i].iplist, std::string());
 
     HostResolver::RequestInfo info(HostPortPair(test_hosts[i].name, kTestPort));
-    session_deps_.host_resolver->Resolve(
-        info, DEFAULT_PRIORITY, &test_hosts[i].addresses, CompletionCallback(),
-        &test_hosts[i].request, NetLogWithSource());
+    std::unique_ptr<HostResolver::Request> request;
+    int rv = session_deps_.host_resolver->Resolve(
+        info, DEFAULT_PRIORITY, &test_hosts[i].addresses,
+        CompletionOnceCallback(), &request, NetLogWithSource());
+    EXPECT_THAT(rv, IsOk());
 
     test_hosts[i].key = SpdySessionKey(
         HostPortPair(test_hosts[i].name, kTestPort), ProxyServer::Direct(),
@@ -618,7 +615,6 @@ TEST_F(SpdySessionPoolTest, IPPoolingDisabled) {
     std::string iplist;
     SpdySessionKey key;
     AddressList addresses;
-    std::unique_ptr<HostResolver::Request> request;
   } test_hosts[] = {
       {"www.example.org", "192.168.0.1"}, {"mail.example.org", "192.168.0.1"},
   };
@@ -630,9 +626,11 @@ TEST_F(SpdySessionPoolTest, IPPoolingDisabled) {
         test_hosts[i].name, test_hosts[i].iplist, std::string());
 
     HostResolver::RequestInfo info(HostPortPair(test_hosts[i].name, kTestPort));
-    session_deps_.host_resolver->Resolve(
-        info, DEFAULT_PRIORITY, &test_hosts[i].addresses, CompletionCallback(),
-        &test_hosts[i].request, NetLogWithSource());
+    std::unique_ptr<HostResolver::Request> request;
+    int rv = session_deps_.host_resolver->Resolve(
+        info, DEFAULT_PRIORITY, &test_hosts[i].addresses,
+        CompletionOnceCallback(), &request, NetLogWithSource());
+    EXPECT_THAT(rv, IsOk());
 
     test_hosts[i].key = SpdySessionKey(
         HostPortPair(test_hosts[i].name, kTestPort), ProxyServer::Direct(),
@@ -947,8 +945,7 @@ TEST_P(SpdySessionMemoryDumpTest, DumpMemoryStats) {
   EXPECT_TRUE(HasSpdySession(spdy_session_pool_, key));
   base::trace_event::MemoryDumpArgs dump_args = {GetParam()};
   auto process_memory_dump =
-      std::make_unique<base::trace_event::ProcessMemoryDump>(nullptr,
-                                                             dump_args);
+      std::make_unique<base::trace_event::ProcessMemoryDump>(dump_args);
   base::trace_event::MemoryAllocatorDump* parent_dump =
       process_memory_dump->CreateAllocatorDump(
           "net/http_network_session_0x123");
@@ -972,7 +969,7 @@ TEST_P(SpdySessionMemoryDumpTest, DumpMemoryStats) {
   spdy_session_pool_->CloseCurrentSessions(ERR_ABORTED);
 }
 
-TEST_F(SpdySessionPoolTest, FindAvailableSessionForWebsocket) {
+TEST_F(SpdySessionPoolTest, FindAvailableSessionForWebSocket) {
   // Define two hosts with identical IP address.
   const int kTestPort = 443;
   struct TestHosts {
@@ -980,7 +977,6 @@ TEST_F(SpdySessionPoolTest, FindAvailableSessionForWebsocket) {
     std::string iplist;
     SpdySessionKey key;
     AddressList addresses;
-    std::unique_ptr<HostResolver::Request> request;
   } test_hosts[] = {
       {"www.example.org", "192.168.0.1"}, {"mail.example.org", "192.168.0.1"},
   };
@@ -992,9 +988,11 @@ TEST_F(SpdySessionPoolTest, FindAvailableSessionForWebsocket) {
         test_hosts[i].name, test_hosts[i].iplist, std::string());
 
     HostResolver::RequestInfo info(HostPortPair(test_hosts[i].name, kTestPort));
-    session_deps_.host_resolver->Resolve(
-        info, DEFAULT_PRIORITY, &test_hosts[i].addresses, CompletionCallback(),
-        &test_hosts[i].request, NetLogWithSource());
+    std::unique_ptr<HostResolver::Request> request;
+    int rv = session_deps_.host_resolver->Resolve(
+        info, DEFAULT_PRIORITY, &test_hosts[i].addresses,
+        CompletionOnceCallback(), &request, NetLogWithSource());
+    EXPECT_THAT(rv, IsOk());
 
     test_hosts[i].key = SpdySessionKey(
         HostPortPair(test_hosts[i].name, kTestPort), ProxyServer::Direct(),

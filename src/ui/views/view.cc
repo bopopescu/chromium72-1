@@ -44,6 +44,7 @@
 #include "ui/gfx/skia_util.h"
 #include "ui/gfx/transform.h"
 #include "ui/native_theme/native_theme.h"
+#include "ui/views/accessibility/ax_event_manager.h"
 #include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/background.h"
 #include "ui/views/border.h"
@@ -52,7 +53,6 @@
 #include "ui/views/layout/layout_manager.h"
 #include "ui/views/view_observer.h"
 #include "ui/views/view_tracker.h"
-#include "ui/views/views_delegate.h"
 #include "ui/views/views_switches.h"
 #include "ui/views/widget/native_widget_private.h"
 #include "ui/views/widget/root_view.h"
@@ -123,30 +123,7 @@ const char View::kViewClassName[] = "View";
 
 // Creation and lifetime -------------------------------------------------------
 
-View::View()
-    : owned_by_client_(false),
-      id_(0),
-      group_(-1),
-      parent_(nullptr),
-#if DCHECK_IS_ON()
-      iterating_(false),
-#endif
-      can_process_events_within_subtree_(true),
-      visible_(true),
-      enabled_(true),
-      notify_enter_exit_on_child_(false),
-      registered_for_visible_bounds_notification_(false),
-      needs_layout_(true),
-      snap_layer_to_pixel_boundary_(false),
-      flip_canvas_on_paint_for_rtl_ui_(false),
-      paint_to_layer_(false),
-      accelerator_focus_manager_(nullptr),
-      registered_accelerator_count_(0),
-      next_focusable_view_(nullptr),
-      previous_focusable_view_(nullptr),
-      focus_behavior_(FocusBehavior::NEVER),
-      context_menu_controller_(nullptr),
-      drag_controller_(nullptr) {
+View::View() {
   SetTargetHandler(this);
 }
 
@@ -311,7 +288,7 @@ bool View::Contains(const View* view) const {
 }
 
 int View::GetIndexOf(const View* view) const {
-  Views::const_iterator i(std::find(children_.begin(), children_.end(), view));
+  auto i(std::find(children_.begin(), children_.end(), view));
   return i != children_.end() ? static_cast<int>(i - children_.begin()) : -1;
 }
 
@@ -325,6 +302,8 @@ void View::SetBoundsRect(const gfx::Rect& bounds) {
   if (bounds == bounds_) {
     if (needs_layout_) {
       needs_layout_ = false;
+      TRACE_EVENT1("views", "View::Layout(set_bounds)", "class",
+                   GetClassName());
       Layout();
     }
     return;
@@ -417,6 +396,10 @@ gfx::Rect View::GetBoundsInScreen() const {
   return gfx::Rect(origin, size());
 }
 
+gfx::Rect View::GetAnchorBoundsInScreen() const {
+  return GetBoundsInScreen();
+}
+
 gfx::Size View::GetPreferredSize() const {
   if (preferred_size_)
     return *preferred_size_;
@@ -440,6 +423,9 @@ void View::SizeToPreferredSize() {
 }
 
 gfx::Size View::GetMinimumSize() const {
+  if (layout_manager_)
+    return layout_manager_->GetMinimumSize(this);
+
   return GetPreferredSize();
 }
 
@@ -448,7 +434,7 @@ gfx::Size View::GetMaximumSize() const {
 }
 
 int View::GetHeightForWidth(int w) const {
-  if (layout_manager_.get())
+  if (layout_manager_)
     return layout_manager_->GetPreferredHeightForWidth(this, w);
   return GetPreferredSize().height();
 }
@@ -603,7 +589,7 @@ void View::Layout() {
   needs_layout_ = false;
 
   // If we have a layout manager, let it handle the layout for us.
-  if (layout_manager_.get())
+  if (layout_manager_)
     layout_manager_->Layout(this);
 
   // Make sure to propagate the Layout() call to any children that haven't
@@ -626,6 +612,9 @@ void View::InvalidateLayout() {
   // Always invalidate up. This is needed to handle the case of us already being
   // valid, but not our parent.
   needs_layout_ = true;
+  if (layout_manager_)
+    layout_manager_->InvalidateLayout();
+
   if (parent_)
     parent_->InvalidateLayout();
 }
@@ -1185,6 +1174,13 @@ void View::ConvertEventToTarget(ui::EventTarget* target,
   event->ConvertLocationToTarget(this, static_cast<View*>(target));
 }
 
+gfx::PointF View::GetScreenLocationF(const ui::LocatedEvent& event) const {
+  DCHECK_EQ(this, event.target());
+  gfx::Point screen_location(event.location());
+  ConvertPointToScreen(this, &screen_location);
+  return gfx::PointF(screen_location);
+}
+
 // Accelerators ----------------------------------------------------------------
 
 void View::AddAccelerator(const ui::Accelerator& accelerator) {
@@ -1203,8 +1199,7 @@ void View::RemoveAccelerator(const ui::Accelerator& accelerator) {
     return;
   }
 
-  std::vector<ui::Accelerator>::iterator i(
-      std::find(accelerators_->begin(), accelerators_->end(), accelerator));
+  auto i(std::find(accelerators_->begin(), accelerators_->end(), accelerator));
   if (i == accelerators_->end()) {
     NOTREACHED() << "Removing non-existing accelerator";
     return;
@@ -1404,9 +1399,6 @@ bool View::ExceededDragThreshold(const gfx::Vector2d& delta) {
 // Accessibility----------------------------------------------------------------
 
 ViewAccessibility& View::GetViewAccessibility() {
-#if defined(OZONE_PLATFORM_WAYLAND_EXTERNAL)
-  NOTREACHED();
-#endif
   if (!view_accessibility_)
     view_accessibility_ = ViewAccessibility::Create(this);
   return *view_accessibility_;
@@ -1422,12 +1414,14 @@ bool View::HandleAccessibleAction(const ui::AXActionData& action_data) {
       break;
     case ax::mojom::Action::kDoDefault: {
       const gfx::Point center = GetLocalBounds().CenterPoint();
-      OnMousePressed(ui::MouseEvent(
-          ui::ET_MOUSE_PRESSED, center, center, ui::EventTimeForNow(),
-          ui::EF_LEFT_MOUSE_BUTTON, ui::EF_LEFT_MOUSE_BUTTON));
-      OnMouseReleased(ui::MouseEvent(
-          ui::ET_MOUSE_RELEASED, center, center, ui::EventTimeForNow(),
-          ui::EF_LEFT_MOUSE_BUTTON, ui::EF_LEFT_MOUSE_BUTTON));
+      ui::MouseEvent press(ui::ET_MOUSE_PRESSED, center, center,
+                           ui::EventTimeForNow(), ui::EF_LEFT_MOUSE_BUTTON,
+                           ui::EF_LEFT_MOUSE_BUTTON);
+      OnEvent(&press);
+      ui::MouseEvent release(ui::ET_MOUSE_RELEASED, center, center,
+                             ui::EventTimeForNow(), ui::EF_LEFT_MOUSE_BUTTON,
+                             ui::EF_LEFT_MOUSE_BUTTON);
+      OnEvent(&release);
       return true;
     }
     case ax::mojom::Action::kFocus:
@@ -1452,23 +1446,15 @@ bool View::HandleAccessibleAction(const ui::AXActionData& action_data) {
 }
 
 gfx::NativeViewAccessible View::GetNativeViewAccessible() {
-// Disabled for ozone-wayland port
-#if defined(OZONE_PLATFORM_WAYLAND_EXTERNAL)
-  return nullptr;
-#endif
   return GetViewAccessibility().GetNativeObject();
 }
 
 void View::NotifyAccessibilityEvent(ax::mojom::Event event_type,
                                     bool send_native_event) {
-  if (ViewsDelegate::GetInstance())
-    ViewsDelegate::GetInstance()->NotifyAccessibilityEvent(this, event_type);
+  AXEventManager::Get()->NotifyViewEvent(this, event_type);
 
-// Disabled for ozone-wayland port
-#if !defined(OZONE_PLATFORM_WAYLAND_EXTERNAL)
   if (send_native_event && GetWidget())
     GetViewAccessibility().NotifyAccessibilityEvent(event_type);
-#endif
 
   OnAccessibilityEvent(event_type);
 }
@@ -1515,7 +1501,7 @@ bool View::HasObserver(const ViewObserver* observer) const {
 // Size and disposition --------------------------------------------------------
 
 gfx::Size View::CalculatePreferredSize() const {
-  if (layout_manager_.get())
+  if (layout_manager_)
     return layout_manager_->GetPreferredSize(this);
   return gfx::Size();
 }
@@ -2195,6 +2181,8 @@ void View::BoundsChanged(const gfx::Rect& previous_bounds) {
 
   if (needs_layout_ || previous_bounds.size() != size()) {
     needs_layout_ = false;
+    TRACE_EVENT1("views", "View::Layout(bounds_changed)", "class",
+                 GetClassName());
     Layout();
   }
 
@@ -2204,7 +2192,7 @@ void View::BoundsChanged(const gfx::Rect& previous_bounds) {
   // Notify interested Views that visible bounds within the root view may have
   // changed.
   if (descendants_to_notify_.get()) {
-    for (Views::iterator i(descendants_to_notify_->begin());
+    for (auto i(descendants_to_notify_->begin());
          i != descendants_to_notify_->end(); ++i) {
       (*i)->OnVisibleBoundsChanged();
     }
@@ -2254,8 +2242,8 @@ void View::AddDescendantToNotify(View* view) {
 
 void View::RemoveDescendantToNotify(View* view) {
   DCHECK(view && descendants_to_notify_.get());
-  Views::iterator i(std::find(
-      descendants_to_notify_->begin(), descendants_to_notify_->end(), view));
+  auto i(std::find(descendants_to_notify_->begin(),
+                   descendants_to_notify_->end(), view));
   DCHECK(i != descendants_to_notify_->end());
   descendants_to_notify_->erase(i);
   if (descendants_to_notify_->empty())

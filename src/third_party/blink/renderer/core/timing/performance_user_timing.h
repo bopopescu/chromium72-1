@@ -39,41 +39,48 @@ class Performance;
 
 typedef unsigned long long (
     PerformanceTiming::*NavigationTimingFunction)() const;
-using PerformanceEntryMap = HeapHashMap<String, PerformanceEntryVector>;
+using PerformanceEntryMap = HeapHashMap<AtomicString, PerformanceEntryVector>;
 
 class UserTiming final : public GarbageCollected<UserTiming> {
  public:
   static UserTiming* Create(Performance& performance) {
-    return new UserTiming(performance);
+    return MakeGarbageCollected<UserTiming>(performance);
   }
 
-  PerformanceMark* Mark(ScriptState*,
-                        const String& mark_name,
-                        const DOMHighResTimeStamp& start_time,
-                        const ScriptValue& detail,
-                        ExceptionState&);
-  void ClearMarks(const String& mark_name);
+  explicit UserTiming(Performance&);
+
+  PerformanceMark* Mark(
+      ScriptState* script_state,
+      const AtomicString& mark_name,
+      DoubleOrPerformanceMarkOptions& start_time_or_mark_options,
+      ExceptionState& exception_state);
+
+  void ClearMarks(const AtomicString& mark_name);
 
   PerformanceMeasure* Measure(ScriptState*,
-                              const String& measure_name,
+                              const AtomicString& measure_name,
                               const StringOrDouble& start,
                               const StringOrDouble& end,
                               const ScriptValue& detail,
                               ExceptionState&);
-  void ClearMeasures(const String& measure_name);
+  void ClearMeasures(const AtomicString& measure_name);
 
   PerformanceEntryVector GetMarks() const;
   PerformanceEntryVector GetMeasures() const;
 
-  PerformanceEntryVector GetMarks(const String& name) const;
-  PerformanceEntryVector GetMeasures(const String& name) const;
+  PerformanceEntryVector GetMarks(const AtomicString& name) const;
+  PerformanceEntryVector GetMeasures(const AtomicString& name) const;
 
   void Trace(blink::Visitor*);
 
  private:
-  explicit UserTiming(Performance&);
-
-  double FindExistingMarkStartTime(const String& mark_name, ExceptionState&);
+  PerformanceMark* MarkInternal(ScriptState*,
+                                const AtomicString& mark_name,
+                                const DOMHighResTimeStamp& start_time,
+                                const ScriptValue& detail,
+                                ExceptionState&);
+  double FindExistingMarkStartTime(const AtomicString& mark_name,
+                                   ExceptionState&);
   double FindStartMarkOrTime(const StringOrDouble& start, ExceptionState&);
 
   Member<Performance> performance_;

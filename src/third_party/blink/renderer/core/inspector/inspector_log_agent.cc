@@ -4,6 +4,7 @@
 
 #include "third_party/blink/renderer/core/inspector/inspector_log_agent.h"
 
+#include "base/format_macros.h"
 #include "third_party/blink/renderer/bindings/core/v8/source_location.h"
 #include "third_party/blink/renderer/core/frame/performance_monitor.h"
 #include "third_party/blink/renderer/core/inspector/console_message.h"
@@ -13,13 +14,7 @@
 #include "third_party/blink/renderer/platform/bindings/script_forbidden_scope.h"
 
 namespace blink {
-
 using protocol::Response;
-
-namespace LogAgentState {
-static const char kLogEnabled[] = "logEnabled";
-static const char kLogViolations[] = "logViolations";
-}  // namespace LogAgentState
 
 namespace {
 
@@ -79,10 +74,11 @@ InspectorLogAgent::InspectorLogAgent(
     ConsoleMessageStorage* storage,
     PerformanceMonitor* performance_monitor,
     v8_inspector::V8InspectorSession* v8_session)
-    : enabled_(false),
-      storage_(storage),
+    : storage_(storage),
       performance_monitor_(performance_monitor),
-      v8_session_(v8_session) {}
+      v8_session_(v8_session),
+      enabled_(&agent_state_, /*default_value=*/false),
+      violation_thresholds_(&agent_state_, -1.0) {}
 
 InspectorLogAgent::~InspectorLogAgent() = default;
 
@@ -94,19 +90,23 @@ void InspectorLogAgent::Trace(blink::Visitor* visitor) {
 }
 
 void InspectorLogAgent::Restore() {
-  if (!state_->booleanProperty(LogAgentState::kLogEnabled, false))
+  if (!enabled_.Get())
     return;
-  enable();
-  protocol::Value* config = state_->get(LogAgentState::kLogViolations);
-  if (config) {
-    protocol::ErrorSupport errors;
-    startViolationsReport(
-        protocol::Array<ViolationSetting>::fromValue(config, &errors));
+  InnerEnable();
+  if (violation_thresholds_.IsEmpty())
+    return;
+  auto settings = protocol::Array<ViolationSetting>::create();
+  for (const WTF::String& key : violation_thresholds_.Keys()) {
+    settings->addItem(ViolationSetting::create()
+                          .setName(key)
+                          .setThreshold(violation_thresholds_.Get(key))
+                          .build());
   }
+  startViolationsReport(std::move(settings));
 }
 
 void InspectorLogAgent::ConsoleMessageAdded(ConsoleMessage* message) {
-  DCHECK(enabled_);
+  DCHECK(enabled_.Get());
 
   std::unique_ptr<protocol::Log::LogEntry> entry =
       protocol::Log::LogEntry::create()
@@ -162,13 +162,8 @@ void InspectorLogAgent::ConsoleMessageAdded(ConsoleMessage* message) {
   GetFrontend()->flush();
 }
 
-Response InspectorLogAgent::enable() {
-  if (enabled_)
-    return Response::OK();
+void InspectorLogAgent::InnerEnable() {
   instrumenting_agents_->addInspectorLogAgent(this);
-  state_->setBoolean(LogAgentState::kLogEnabled, true);
-  enabled_ = true;
-
   if (storage_->ExpiredCount()) {
     std::unique_ptr<protocol::Log::LogEntry> expired =
         protocol::Log::LogEntry::create()
@@ -181,17 +176,23 @@ Response InspectorLogAgent::enable() {
     GetFrontend()->entryAdded(std::move(expired));
     GetFrontend()->flush();
   }
-  for (size_t i = 0; i < storage_->size(); ++i)
+  for (wtf_size_t i = 0; i < storage_->size(); ++i)
     ConsoleMessageAdded(storage_->at(i));
+}
+
+Response InspectorLogAgent::enable() {
+  if (enabled_.Get())
+    return Response::OK();
+  enabled_.Set(true);
+  InnerEnable();
   return Response::OK();
 }
 
 Response InspectorLogAgent::disable() {
-  if (!enabled_)
+  if (!enabled_.Get())
     return Response::OK();
-  state_->setBoolean(LogAgentState::kLogEnabled, false);
+  enabled_.Clear();
   stopViolationsReport();
-  enabled_ = false;
   instrumenting_agents_->removeInspectorLogAgent(this);
   return Response::OK();
 }
@@ -221,35 +222,37 @@ static PerformanceMonitor::Violation ParseViolation(const String& name) {
 
 Response InspectorLogAgent::startViolationsReport(
     std::unique_ptr<protocol::Array<ViolationSetting>> settings) {
-  if (!enabled_)
+  if (!enabled_.Get())
     return Response::Error("Log is not enabled");
-  state_->setValue(LogAgentState::kLogViolations, settings->toValue());
   if (!performance_monitor_)
     return Response::Error("Violations are not supported for this target");
   performance_monitor_->UnsubscribeAll(this);
+  violation_thresholds_.Clear();
   for (size_t i = 0; i < settings->length(); ++i) {
-    PerformanceMonitor::Violation violation =
-        ParseViolation(settings->get(i)->getName());
+    const WTF::String& name = settings->get(i)->getName();
+    double threshold = settings->get(i)->getThreshold();
+    PerformanceMonitor::Violation violation = ParseViolation(name);
     if (violation == PerformanceMonitor::kAfterLast)
       continue;
     performance_monitor_->Subscribe(
-        violation, settings->get(i)->getThreshold() / 1000, this);
+        violation, base::TimeDelta::FromMillisecondsD(threshold), this);
+    violation_thresholds_.Set(name, threshold);
   }
   return Response::OK();
 }
 
 Response InspectorLogAgent::stopViolationsReport() {
-  state_->remove(LogAgentState::kLogViolations);
+  violation_thresholds_.Clear();
   if (!performance_monitor_)
     return Response::Error("Violations are not supported for this target");
   performance_monitor_->UnsubscribeAll(this);
   return Response::OK();
 }
 
-void InspectorLogAgent::ReportLongLayout(double duration) {
-  String message_text =
-      String::Format("Forced reflow while executing JavaScript took %ldms",
-                     lround(duration * 1000));
+void InspectorLogAgent::ReportLongLayout(base::TimeDelta duration) {
+  String message_text = String::Format(
+      "Forced reflow while executing JavaScript took %" PRId64 "ms",
+      duration.InMilliseconds());
   ConsoleMessage* message = ConsoleMessage::Create(
       kViolationMessageSource, kVerboseMessageLevel, message_text);
   ConsoleMessageAdded(message);
@@ -257,7 +260,7 @@ void InspectorLogAgent::ReportLongLayout(double duration) {
 
 void InspectorLogAgent::ReportGenericViolation(PerformanceMonitor::Violation,
                                                const String& text,
-                                               double time,
+                                               base::TimeDelta time,
                                                SourceLocation* location) {
   ConsoleMessage* message = ConsoleMessage::Create(
       kViolationMessageSource, kVerboseMessageLevel, text, location->Clone());

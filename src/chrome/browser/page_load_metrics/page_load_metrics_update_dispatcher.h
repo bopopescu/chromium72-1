@@ -68,6 +68,17 @@ enum PageLoadTimingStatus {
   // We received a first input timestamp without a first input delay.
   INVALID_NULL_FIRST_INPUT_DELAY,
 
+  // We received a longest input delay without a longest input timestamp.
+  INVALID_NULL_LONGEST_INPUT_TIMESTAMP,
+  // We received a longest input timestamp without a longest input delay.
+  INVALID_NULL_LONGEST_INPUT_DELAY,
+
+  // Longest input delay cannot happen before first input delay.
+  INVALID_LONGEST_INPUT_TIMESTAMP_LESS_THAN_FIRST_INPUT_TIMESTAMP,
+
+  // Longest input delay cannot be less than first input delay.
+  INVALID_LONGEST_INPUT_DELAY_LESS_THAN_FIRST_INPUT_DELAY,
+
   // New values should be added before this final entry.
   LAST_PAGE_LOAD_TIMING_STATUS
 };
@@ -98,6 +109,8 @@ class PageLoadMetricsUpdateDispatcher {
     virtual void OnSubframeMetadataChanged() = 0;
     virtual void UpdateFeaturesUsage(
         const mojom::PageLoadFeatures& new_features) = 0;
+    virtual void UpdateResourceDataUse(
+        const std::vector<mojom::ResourceDataUpdatePtr>& resources) = 0;
   };
 
   // The |client| instance must outlive this object.
@@ -108,9 +121,17 @@ class PageLoadMetricsUpdateDispatcher {
   ~PageLoadMetricsUpdateDispatcher();
 
   void UpdateMetrics(content::RenderFrameHost* render_frame_host,
-                     const mojom::PageLoadTiming& new_timing,
-                     const mojom::PageLoadMetadata& new_metadata,
-                     const mojom::PageLoadFeatures& new_features);
+                     mojom::PageLoadTimingPtr new_timing,
+                     mojom::PageLoadMetadataPtr new_metadata,
+                     mojom::PageLoadFeaturesPtr new_features,
+                     const std::vector<mojom::ResourceDataUpdatePtr>& resources,
+                     mojom::PageRenderDataPtr render_data);
+
+  // This method is only intended to be called for PageLoadFeatures being
+  // recorded directly from the browser process. Features coming from the
+  // renderer process should use the main flow into |UpdateMetrics|.
+  void UpdateFeatures(content::RenderFrameHost* render_frame_host,
+                      const mojom::PageLoadFeatures& new_features);
 
   void DidFinishSubFrameNavigation(
       content::NavigationHandle* navigation_handle);
@@ -127,16 +148,21 @@ class PageLoadMetricsUpdateDispatcher {
   const mojom::PageLoadMetadata& subframe_metadata() const {
     return *(subframe_metadata_.get());
   }
+  const mojom::PageRenderData& main_frame_render_data() const {
+    return *(main_frame_render_data_.get());
+  }
 
  private:
   using FrameTreeNodeId = int;
 
-  void UpdateMainFrameTiming(const mojom::PageLoadTiming& new_timing);
+  void UpdateMainFrameTiming(mojom::PageLoadTimingPtr new_timing);
   void UpdateSubFrameTiming(content::RenderFrameHost* render_frame_host,
-                            const mojom::PageLoadTiming& new_timing);
+                            mojom::PageLoadTimingPtr new_timing);
 
-  void UpdateMainFrameMetadata(const mojom::PageLoadMetadata& new_metadata);
-  void UpdateSubFrameMetadata(const mojom::PageLoadMetadata& subframe_metadata);
+  void UpdateMainFrameMetadata(mojom::PageLoadMetadataPtr new_metadata);
+  void UpdateSubFrameMetadata(mojom::PageLoadMetadataPtr subframe_metadata);
+
+  void UpdateMainFrameRenderData(mojom::PageRenderDataPtr render_data);
 
   void MaybeDispatchTimingUpdates(bool did_merge_new_timing_value);
   void DispatchTimingUpdates();
@@ -144,10 +170,19 @@ class PageLoadMetricsUpdateDispatcher {
   // The client is guaranteed to outlive this object.
   Client* const client_;
 
-  std::unique_ptr<base::Timer> timer_;
+  std::unique_ptr<base::OneShotTimer> timer_;
 
   // Time the navigation for this page load was initiated.
   const base::TimeTicks navigation_start_;
+
+  // As FCP++ metrics need to report the last candidate, this attributes are
+  // used as a buffer to store the latest one of the updating candidate. We
+  // buffer them as private members and only merge them back into
+  // current_merged_page_timing_ at the end of the pageload life time.
+  base::Optional<base::TimeDelta> largest_image_paint_;
+  base::Optional<base::TimeDelta> last_image_paint_;
+  base::Optional<base::TimeDelta> largest_text_paint_;
+  base::Optional<base::TimeDelta> last_text_paint_;
 
   // PageLoadTiming for the currently tracked page. The fields in |paint_timing|
   // are merged across all frames in the document. All other fields are from the
@@ -162,6 +197,8 @@ class PageLoadMetricsUpdateDispatcher {
 
   mojom::PageLoadMetadataPtr main_frame_metadata_;
   mojom::PageLoadMetadataPtr subframe_metadata_;
+
+  mojom::PageRenderDataPtr main_frame_render_data_;
 
   // Navigation start offsets for the most recently committed document in each
   // frame.

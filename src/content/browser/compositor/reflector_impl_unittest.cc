@@ -5,16 +5,17 @@
 #include "content/browser/compositor/reflector_impl.h"
 
 #include "base/callback.h"
-#include "base/message_loop/message_loop.h"
+#include "base/feature_list.h"
 #include "base/run_loop.h"
 #include "base/single_thread_task_runner.h"
+#include "base/test/scoped_task_environment.h"
 #include "build/build_config.h"
+#include "components/viz/common/features.h"
 #include "components/viz/common/frame_sinks/begin_frame_source.h"
 #include "components/viz/common/frame_sinks/delay_based_time_source.h"
 #include "components/viz/service/display/output_surface_frame.h"
 #include "components/viz/service/display_embedder/compositor_overlay_candidate_validator.h"
 #include "components/viz/test/test_context_provider.h"
-#include "components/viz/test/test_web_graphics_context_3d.h"
 #include "content/browser/compositor/browser_compositor_output_surface.h"
 #include "content/browser/compositor/reflector_texture.h"
 #include "content/browser/compositor/test/test_image_transport_factory.h"
@@ -133,12 +134,11 @@ class ReflectorImplTest : public testing::Test {
     ui::ContextFactory* context_factory = nullptr;
     ui::ContextFactoryPrivate* context_factory_private = nullptr;
 
-    message_loop_ = std::make_unique<base::MessageLoop>();
     ui::InitializeContextFactoryForTests(enable_pixel_output, &context_factory,
                                          &context_factory_private);
     ImageTransportFactory::SetFactory(
         std::make_unique<TestImageTransportFactory>());
-    task_runner_ = message_loop_->task_runner();
+    task_runner_ = base::ThreadTaskRunnerHandle::Get();
     compositor_task_runner_ = new FakeTaskRunner();
     begin_frame_source_ = std::make_unique<viz::DelayBasedBeginFrameSource>(
         std::make_unique<viz::DelayBasedTimeSource>(
@@ -192,7 +192,7 @@ class ReflectorImplTest : public testing::Test {
  protected:
   scoped_refptr<base::SingleThreadTaskRunner> compositor_task_runner_;
   std::unique_ptr<viz::SyntheticBeginFrameSource> begin_frame_source_;
-  std::unique_ptr<base::MessageLoop> message_loop_;
+  base::test::ScopedTaskEnvironment task_environment_;
   scoped_refptr<base::SingleThreadTaskRunner> task_runner_;
   std::unique_ptr<ui::Compositor> compositor_;
   std::unique_ptr<ui::Layer> root_layer_;
@@ -203,6 +203,10 @@ class ReflectorImplTest : public testing::Test {
 
 namespace {
 TEST_F(ReflectorImplTest, CheckNormalOutputSurface) {
+  // TODO(jonross): Re-enable once Reflector is re-written to work with
+  // VizDisplayCompositor. https://crbug.com/601869
+  if (base::FeatureList::IsEnabled(features::kVizDisplayCompositor))
+    return;
   output_surface_->SetFlip(false);
   SetUpReflector();
   UpdateTexture();
@@ -213,6 +217,10 @@ TEST_F(ReflectorImplTest, CheckNormalOutputSurface) {
 }
 
 TEST_F(ReflectorImplTest, CheckInvertedOutputSurface) {
+  // TODO(jonross): Re-enable once Reflector is re-written to work with
+  // VizDisplayCompositor. https://crbug.com/601869
+  if (base::FeatureList::IsEnabled(features::kVizDisplayCompositor))
+    return;
   output_surface_->SetFlip(true);
   SetUpReflector();
   UpdateTexture();
@@ -222,6 +230,10 @@ TEST_F(ReflectorImplTest, CheckInvertedOutputSurface) {
 
 #if defined(USE_OZONE)
 TEST_F(ReflectorImplTest, CheckOverlayNoReflector) {
+  // TODO(jonross): Re-enable once Reflector is re-written to work with
+  // VizDisplayCompositor. https://crbug.com/601869
+  if (base::FeatureList::IsEnabled(features::kVizDisplayCompositor))
+    return;
   viz::OverlayCandidateList list;
   viz::OverlayCandidate plane_1, plane_2;
   plane_1.plane_z_order = 0;
@@ -233,6 +245,10 @@ TEST_F(ReflectorImplTest, CheckOverlayNoReflector) {
 }
 
 TEST_F(ReflectorImplTest, CheckOverlaySWMirroring) {
+  // TODO(jonross): Re-enable once Reflector is re-written to work with
+  // VizDisplayCompositor. https://crbug.com/601869
+  if (base::FeatureList::IsEnabled(features::kVizDisplayCompositor))
+    return;
   SetUpReflector();
   viz::OverlayCandidateList list;
   viz::OverlayCandidate plane_1, plane_2;

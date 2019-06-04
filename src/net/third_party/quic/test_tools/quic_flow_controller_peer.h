@@ -8,7 +8,7 @@
 #include "base/macros.h"
 #include "net/third_party/quic/core/quic_packets.h"
 
-namespace net {
+namespace quic {
 
 class QuicFlowController;
 
@@ -16,6 +16,8 @@ namespace test {
 
 class QuicFlowControllerPeer {
  public:
+  QuicFlowControllerPeer() = delete;
+
   static void SetSendWindowOffset(QuicFlowController* flow_controller,
                                   QuicStreamOffset offset);
 
@@ -36,12 +38,9 @@ class QuicFlowControllerPeer {
 
   static QuicByteCount WindowUpdateThreshold(
       QuicFlowController* flow_controller);
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(QuicFlowControllerPeer);
 };
 
 }  // namespace test
-}  // namespace net
+}  // namespace quic
 
 #endif  // NET_THIRD_PARTY_QUIC_TEST_TOOLS_QUIC_FLOW_CONTROLLER_PEER_H_

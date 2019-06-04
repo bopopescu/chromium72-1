@@ -24,8 +24,6 @@
  */
 
 #include "third_party/blink/renderer/bindings/core/v8/array_value.h"
-#include "third_party/blink/renderer/bindings/core/v8/exception_messages.h"
-#include "third_party/blink/renderer/bindings/core/v8/exception_state.h"
 #include "third_party/blink/renderer/bindings/core/v8/idl_types.h"
 #include "third_party/blink/renderer/bindings/core/v8/native_value_traits_impl.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_array_buffer_view.h"
@@ -36,6 +34,7 @@
 #include "third_party/blink/renderer/bindings/core/v8/v8_uint8_array.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_window.h"
 #include "third_party/blink/renderer/core/html/track/track_base.h"
+#include "third_party/blink/renderer/platform/bindings/exception_state.h"
 #include "third_party/blink/renderer/platform/wtf/math_extras.h"
 
 namespace blink {
@@ -62,7 +61,8 @@ CORE_EXPORT bool DictionaryHelper::Get(const Dictionary& dictionary,
   if (!dictionary.Get(key, v8_value))
     return false;
 
-  return v8_value->BooleanValue(dictionary.V8Context()).To(&value);
+  value = v8_value->BooleanValue(dictionary.GetIsolate());
+  return true;
 }
 
 template <>
@@ -174,7 +174,7 @@ bool DictionaryHelper::Get(const Dictionary& dictionary,
   double double_value;
   if (!v8_value->NumberValue(dictionary.V8Context()).To(&double_value))
     return false;
-  doubleToInteger(double_value, value);
+  value = DoubleToInteger(double_value);
   return true;
 }
 
@@ -206,7 +206,7 @@ bool DictionaryHelper::Get(const Dictionary& dictionary,
 
     // FIXME: this will need to be changed so it can also return an AudioTrack
     // or a VideoTrack once we add them.
-    v8::Local<v8::Object> track = V8TextTrack::findInstanceInPrototypeChain(
+    v8::Local<v8::Object> track = V8TextTrack::FindInstanceInPrototypeChain(
         wrapper, dictionary.GetIsolate());
     if (!track.IsEmpty())
       source = V8TextTrack::ToImpl(track);
@@ -227,7 +227,7 @@ CORE_EXPORT bool DictionaryHelper::Get(const Dictionary& dictionary,
     return false;
 
   v8::Local<v8::Array> v8_array = v8::Local<v8::Array>::Cast(v8_value);
-  for (size_t i = 0; i < v8_array->Length(); ++i) {
+  for (uint32_t i = 0; i < v8_array->Length(); ++i) {
     v8::Local<v8::Value> indexed_value;
     if (!v8_array
              ->Get(dictionary.V8Context(),

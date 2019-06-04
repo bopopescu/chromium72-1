@@ -14,16 +14,16 @@
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
+#include "chrome/browser/ui/views/frame/toolbar_button_provider.h"
 #include "chrome/browser/ui/views/location_bar/zoom_bubble_view.h"
-#include "chrome/browser/ui/views/location_bar/zoom_view.h"
 #include "chrome/browser/ui/views/omnibox/omnibox_view_views.h"
+#include "chrome/browser/ui/views/page_action/page_action_icon_container_view.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
-#include "chrome/test/views/scoped_macviews_browser_mode.h"
+#include "components/omnibox/browser/location_bar_model_impl.h"
+#include "components/omnibox/browser/omnibox_field_trial.h"
 #include "components/security_state/core/security_state.h"
-#include "components/toolbar/toolbar_field_trial.h"
-#include "components/toolbar/toolbar_model_impl.h"
 #include "components/zoom/zoom_controller.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/common/page_zoom.h"
@@ -33,7 +33,7 @@
 #include "net/test/cert_test_util.h"
 #include "net/test/test_data_directory.h"
 #include "services/network/public/cpp/features.h"
-#include "ui/base/ui_base_switches.h"
+#include "ui/base/test/material_design_controller_test_api.h"
 
 class LocationBarViewBrowserTest : public InProcessBrowserTest {
  public:
@@ -45,8 +45,14 @@ class LocationBarViewBrowserTest : public InProcessBrowserTest {
     return browser_view->GetLocationBarView();
   }
 
+  PageActionIconView* GetZoomView() {
+    return BrowserView::GetBrowserViewForBrowser(browser())
+        ->toolbar_button_provider()
+        ->GetPageActionIconContainerView()
+        ->GetPageActionIconView(PageActionIconType::kZoom);
+  }
+
  private:
-  test::ScopedMacViewsBrowserMode views_mode_{true};
   DISALLOW_COPY_AND_ASSIGN(LocationBarViewBrowserTest);
 };
 
@@ -57,7 +63,7 @@ IN_PROC_BROWSER_TEST_F(LocationBarViewBrowserTest, LocationBarDecoration) {
       browser()->tab_strip_model()->GetActiveWebContents();
   zoom::ZoomController* zoom_controller =
       zoom::ZoomController::FromWebContents(web_contents);
-  ZoomView* zoom_view = GetLocationBarView()->zoom_view();
+  PageActionIconView* zoom_view = GetZoomView();
 
   ASSERT_TRUE(zoom_view);
   EXPECT_FALSE(zoom_view->visible());
@@ -101,7 +107,7 @@ IN_PROC_BROWSER_TEST_F(LocationBarViewBrowserTest, BubblesCloseOnHide) {
       browser()->tab_strip_model()->GetActiveWebContents();
   zoom::ZoomController* zoom_controller =
       zoom::ZoomController::FromWebContents(web_contents);
-  ZoomView* zoom_view = GetLocationBarView()->zoom_view();
+  PageActionIconView* zoom_view = GetZoomView();
 
   ASSERT_TRUE(zoom_view);
   EXPECT_FALSE(zoom_view->visible());
@@ -120,15 +126,10 @@ IN_PROC_BROWSER_TEST_F(LocationBarViewBrowserTest, BubblesCloseOnHide) {
 
 class TouchLocationBarViewBrowserTest : public LocationBarViewBrowserTest {
  public:
-  TouchLocationBarViewBrowserTest() = default;
-
-  void SetUpCommandLine(base::CommandLine* command_line) override {
-    command_line->AppendSwitchASCII(
-        switches::kTopChromeMD, switches::kTopChromeMDMaterialTouchOptimized);
-    LocationBarViewBrowserTest::SetUpCommandLine(command_line);
-  }
+  TouchLocationBarViewBrowserTest() : test_api_(true) {}
 
  private:
+  ui::test::MaterialDesignControllerTestAPI test_api_;
   DISALLOW_COPY_AND_ASSIGN(TouchLocationBarViewBrowserTest);
 };
 
@@ -226,8 +227,10 @@ class SecurityIndicatorTest : public InProcessBrowserTest {
     network::ResourceResponseHead resource_response;
     resource_response.mime_type = "text/html";
     resource_response.ssl_info = ssl_info;
-    params->client->OnReceiveResponse(resource_response,
-                                      /*downloaded_file=*/nullptr);
+    params->client->OnReceiveResponse(resource_response);
+    // Send an empty response's body. This pipe is not filled with data.
+    mojo::DataPipe pipe;
+    params->client->OnStartLoadingResponseBody(std::move(pipe.consumer_handle));
     network::URLLoaderCompletionStatus completion_status;
     completion_status.ssl_info = ssl_info;
     params->client->OnComplete(completion_status);
@@ -236,7 +239,6 @@ class SecurityIndicatorTest : public InProcessBrowserTest {
 
  private:
   scoped_refptr<net::X509Certificate> cert_;
-  test::ScopedMacViewsBrowserMode views_mode_{true};
 
   std::unique_ptr<content::URLLoaderInterceptor> url_loader_interceptor_;
 
@@ -254,11 +256,11 @@ IN_PROC_BROWSER_TEST_F(SecurityIndicatorTest, CheckIndicatorText) {
 
   const std::string kDefaultVariation = std::string();
   const std::string kEvToSecureVariation(
-      toolbar::features::kSimplifyHttpsIndicatorParameterEvToSecure);
-  const std::string kSecureToLockVariation(
-      toolbar::features::kSimplifyHttpsIndicatorParameterSecureToLock);
+      OmniboxFieldTrial::kSimplifyHttpsIndicatorParameterEvToSecure);
   const std::string kBothToLockVariation(
-      toolbar::features::kSimplifyHttpsIndicatorParameterBothToLock);
+      OmniboxFieldTrial::kSimplifyHttpsIndicatorParameterBothToLock);
+  const std::string kKeepSecureChipVariation(
+      OmniboxFieldTrial::kSimplifyHttpsIndicatorParameterKeepSecureChip);
 
   const struct {
     std::string feature_param;
@@ -270,24 +272,24 @@ IN_PROC_BROWSER_TEST_F(SecurityIndicatorTest, CheckIndicatorText) {
   } cases[]{// Default
             {kDefaultVariation, kMockSecureURL, net::CERT_STATUS_IS_EV,
              security_state::EV_SECURE, true, kEvString},
-            {kDefaultVariation, kMockSecureURL, 0, security_state::SECURE, true,
-             kSecureString},
+            {kDefaultVariation, kMockSecureURL, 0, security_state::SECURE,
+             false, kEmptyString},
             {kDefaultVariation, kMockNonsecureURL, 0, security_state::NONE,
              false, kEmptyString},
             // Variation: EV To Secure
             {kEvToSecureVariation, kMockSecureURL, net::CERT_STATUS_IS_EV,
              security_state::EV_SECURE, true, kSecureString},
             {kEvToSecureVariation, kMockSecureURL, 0, security_state::SECURE,
-             true, kSecureString},
+             false, kEmptyString},
             {kEvToSecureVariation, kMockNonsecureURL, 0, security_state::NONE,
              false, kEmptyString},
-            // Variation: Secure to Lock
-            {kSecureToLockVariation, kMockSecureURL, net::CERT_STATUS_IS_EV,
+            // Variation: Keep Secure chip
+            {kKeepSecureChipVariation, kMockSecureURL, net::CERT_STATUS_IS_EV,
              security_state::EV_SECURE, true, kEvString},
-            {kSecureToLockVariation, kMockSecureURL, 0, security_state::SECURE,
-             false, kEmptyString},
-            {kSecureToLockVariation, kMockNonsecureURL, 0, security_state::NONE,
-             false, kEmptyString},
+            {kKeepSecureChipVariation, kMockSecureURL, 0,
+             security_state::SECURE, true, kSecureString},
+            {kKeepSecureChipVariation, kMockNonsecureURL, 0,
+             security_state::NONE, false, kEmptyString},
             // Variation: Both to Lock
             {kBothToLockVariation, kMockSecureURL, net::CERT_STATUS_IS_EV,
              security_state::EV_SECURE, false, kEmptyString},
@@ -308,11 +310,11 @@ IN_PROC_BROWSER_TEST_F(SecurityIndicatorTest, CheckIndicatorText) {
     base::test::ScopedFeatureList scoped_feature_list;
     if (c.feature_param.empty()) {
       scoped_feature_list.InitAndDisableFeature(
-          toolbar::features::kSimplifyHttpsIndicator);
+          omnibox::kSimplifyHttpsIndicator);
     } else {
       scoped_feature_list.InitAndEnableFeatureWithParameters(
-          toolbar::features::kSimplifyHttpsIndicator,
-          {{toolbar::features::kSimplifyHttpsIndicatorParameterName,
+          omnibox::kSimplifyHttpsIndicator,
+          {{OmniboxFieldTrial::kSimplifyHttpsIndicatorParameterName,
             c.feature_param}});
     }
     SetUpInterceptor(c.cert_status);
@@ -320,8 +322,9 @@ IN_PROC_BROWSER_TEST_F(SecurityIndicatorTest, CheckIndicatorText) {
     helper->GetSecurityInfo(&security_info);
     EXPECT_EQ(c.security_level, security_info.security_level);
     EXPECT_EQ(c.should_show_text,
-              location_bar_view->ShouldShowLocationIconText());
-    EXPECT_EQ(c.indicator_text, location_bar_view->GetLocationIconText());
+              location_bar_view->location_icon_view()->ShouldShowLabel());
+    EXPECT_EQ(c.indicator_text,
+              location_bar_view->location_icon_view()->GetText());
     ResetInterceptor();
   }
 }

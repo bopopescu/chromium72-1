@@ -41,8 +41,10 @@ class NodeIterator final : public ScriptWrappable, public NodeIteratorBase {
   static NodeIterator* Create(Node* root_node,
                               unsigned what_to_show,
                               V8NodeFilter* filter) {
-    return new NodeIterator(root_node, what_to_show, filter);
+    return MakeGarbageCollected<NodeIterator>(root_node, what_to_show, filter);
   }
+
+  NodeIterator(Node*, unsigned what_to_show, V8NodeFilter*);
 
   Node* nextNode(ExceptionState&);
   Node* previousNode(ExceptionState&);
@@ -58,11 +60,7 @@ class NodeIterator final : public ScriptWrappable, public NodeIteratorBase {
 
   void Trace(blink::Visitor*) override;
 
-  void TraceWrappers(ScriptWrappableVisitor*) const override;
-
  private:
-  NodeIterator(Node*, unsigned what_to_show, V8NodeFilter*);
-
   class NodePointer {
     DISALLOW_NEW();
 

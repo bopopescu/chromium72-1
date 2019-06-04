@@ -12,9 +12,12 @@
 #include "GrSurfaceContext.h"
 #include "text/GrAtlasManager.h"
 
+class GrBackendFormat;
 class GrBackendRenderTarget;
+class GrOpMemoryPool;
 class GrOnFlushCallbackObject;
 class GrSemaphore;
+class GrSkSLFPFactory;
 class GrSurfaceProxy;
 class GrTextureContext;
 
@@ -32,13 +35,17 @@ public:
 
     const GrCaps* caps() const { return fContext->fCaps.get(); }
 
+    sk_sp<GrOpMemoryPool> refOpMemoryPool();
+    GrOpMemoryPool* opMemoryPool();
+
     GrDrawingManager* drawingManager() { return fContext->fDrawingManager.get(); }
 
     sk_sp<GrSurfaceContext> makeWrappedSurfaceContext(sk_sp<GrSurfaceProxy>,
                                                       sk_sp<SkColorSpace> = nullptr,
                                                       const SkSurfaceProps* = nullptr);
 
-    sk_sp<GrSurfaceContext> makeDeferredSurfaceContext(const GrSurfaceDesc&,
+    sk_sp<GrSurfaceContext> makeDeferredSurfaceContext(const GrBackendFormat&,
+                                                       const GrSurfaceDesc&,
                                                        GrSurfaceOrigin,
                                                        GrMipMapped,
                                                        SkBackingFit,
@@ -130,9 +137,7 @@ public:
     };
 
     /**
-     * Reads a rectangle of pixels from a surface. There are currently two versions of this.
-     * readSurfacePixels() is the older version which will be replaced by the more robust and
-     * maintainable (but perhaps slower) readSurfacePixels2().
+     * Reads a rectangle of pixels from a surface.
      *
      * @param src           the surface context to read from.
      * @param left          left edge of the rectangle to read (inclusive)
@@ -152,14 +157,9 @@ public:
     bool readSurfacePixels(GrSurfaceContext* src, int left, int top, int width, int height,
                            GrColorType dstColorType, SkColorSpace* dstColorSpace, void* buffer,
                            size_t rowBytes = 0, uint32_t pixelOpsFlags = 0);
-    bool readSurfacePixels2(GrSurfaceContext* src, int left, int top, int width, int height,
-                            GrColorType dstColorType, SkColorSpace* dstColorSpace, void* buffer,
-                            size_t rowBytes = 0, uint32_t pixelOpsFlags = 0);
 
     /**
-     * Writes a rectangle of pixels to a surface. There are currently two versions of this.
-     * writeSurfacePixels() is the older version which will be replaced by the more robust and
-     * maintainable (but perhaps slower) writeSurfacePixels2().
+     * Writes a rectangle of pixels to a surface.
      *
      * @param dst           the surface context to write to.
      * @param left          left edge of the rectangle to write (inclusive)
@@ -178,11 +178,8 @@ public:
     bool writeSurfacePixels(GrSurfaceContext* dst, int left, int top, int width, int height,
                             GrColorType srcColorType, SkColorSpace* srcColorSpace,
                             const void* buffer, size_t rowBytes, uint32_t pixelOpsFlags = 0);
-    bool writeSurfacePixels2(GrSurfaceContext* dst, int left, int top, int width, int height,
-                             GrColorType srcColorType, SkColorSpace* srcColorSpace,
-                             const void* buffer, size_t rowBytes, uint32_t pixelOpsFlags = 0);
 
-    GrBackend getBackend() const { return fContext->fBackend; }
+    GrBackendApi getBackend() const { return fContext->fBackend; }
 
     SkTaskGroup* getTaskGroup() { return fContext->fTaskGroup.get(); }
 
@@ -193,10 +190,6 @@ public:
     const GrResourceProvider* resourceProvider() const { return fContext->fResourceProvider; }
 
     GrResourceCache* getResourceCache() { return fContext->fResourceCache; }
-
-    GrTextureStripAtlasManager* textureStripAtlasManager() {
-        return fContext->fTextureStripAtlasManager.get();
-    }
 
     GrGpu* getGpu() { return fContext->fGpu.get(); }
     const GrGpu* getGpu() const { return fContext->fGpu.get(); }
@@ -226,6 +219,7 @@ public:
      * renderTargetContexts created via this entry point.
      */
     sk_sp<GrRenderTargetContext> makeDeferredRenderTargetContext(
+                                                 const GrBackendFormat& format,
                                                  SkBackingFit fit,
                                                  int width, int height,
                                                  GrPixelConfig config,
@@ -242,6 +236,7 @@ public:
      * SRGB-ness will be preserved.
      */
     sk_sp<GrRenderTargetContext> makeDeferredRenderTargetContextWithFallback(
+                                                 const GrBackendFormat& format,
                                                  SkBackingFit fit,
                                                  int width, int height,
                                                  GrPixelConfig config,
@@ -251,8 +246,6 @@ public:
                                                  GrSurfaceOrigin origin = kBottomLeft_GrSurfaceOrigin,
                                                  const SkSurfaceProps* surfaceProps = nullptr,
                                                  SkBudgeted budgeted = SkBudgeted::kYes);
-
-    bool abandoned() const;
 
     /** Reset GPU stats */
     void resetGpuStats() const ;
@@ -274,10 +267,6 @@ public:
         this is for testing only */
     void setTextBlobCacheLimit_ForTesting(size_t bytes);
 
-    /** Specify the sizes of the GrAtlasTextContext atlases.  The configs pointer below should be
-        to an array of 3 entries */
-    void setTextContextAtlasSizes_ForTesting(const GrDrawOpAtlasConfig* configs);
-
     /** Get pointer to atlas texture for given mask format. Note that this wraps an
         actively mutating texture in an SkImage. This could yield unexpected results
         if it gets cached or used more generally. */
@@ -286,6 +275,10 @@ public:
     GrAuditTrail* getAuditTrail() { return &fContext->fAuditTrail; }
 
     GrContextOptions::PersistentCache* getPersistentCache() { return fContext->fPersistentCache; }
+
+    sk_sp<GrSkSLFPFactoryCache> getFPFactoryCache() {
+        return fContext->fFPFactoryCache;
+    }
 
     /** This is only useful for debug purposes */
     SkDEBUGCODE(GrSingleOwner* debugSingleOwner() const { return &fContext->fSingleOwner; } )

@@ -83,8 +83,12 @@ ListPicker.prototype._handleWindowMessage = function(event) {
         this._config.anchorRectInScreen.y !== window.updateData.anchorRectInScreen.y ||
         this._config.anchorRectInScreen.width !== window.updateData.anchorRectInScreen.width ||
         this._config.anchorRectInScreen.height !== window.updateData.anchorRectInScreen.height) {
-      this._config.anchorRectInScreen = window.updateData.anchorRectInScreen;
-      this._fixWindowSize();
+      // TODO(tkent): Don't fix window size here due to a bug of Aura or
+      // compositor. crbug.com/863770
+      if (!navigator.platform.startsWith('Win')) {
+        this._config.anchorRectInScreen = window.updateData.anchorRectInScreen;
+        this._fixWindowSize();
+      }
     }
   }
   delete window.updateData;
@@ -422,11 +426,11 @@ ListPicker.prototype._configureItem = function(element, config, inGroup) {
     if (config.ariaLabel)
     element.setAttribute('aria-label', config.ariaLabel);
     else element.removeAttribute('aria-label');
-    element.style.webkitPaddingStart = this._config.paddingStart + 'px';
+    element.style.paddingInlineStart = this._config.paddingStart + 'px';
     if (inGroup) {
-      element.style.webkitMarginStart = (-this._config.paddingStart) + 'px';
+      element.style.marginInlineStart = (-this._config.paddingStart) + 'px';
       // Should be synchronized with padding-end in listPicker.css.
-      element.style.webkitMarginEnd = '-2px';
+      element.style.marginInlineEnd = '-2px';
     }
   } else if (config.type === 'optgroup') {
     element.label = config.label;
@@ -434,15 +438,15 @@ ListPicker.prototype._configureItem = function(element, config, inGroup) {
     element.disabled = config.disabled;
     element.setAttribute('aria-label', config.ariaLabel);
     this._updateChildren(element, config);
-    element.style.webkitPaddingStart = this._config.paddingStart + 'px';
+    element.style.paddingInlineStart = this._config.paddingStart + 'px';
   } else if (config.type === 'separator') {
     element.title = config.title;
     element.disabled = config.disabled;
     element.setAttribute('aria-label', config.ariaLabel);
     if (inGroup) {
-      element.style.webkitMarginStart = (-this._config.paddingStart) + 'px';
+      element.style.marginInlineStart = (-this._config.paddingStart) + 'px';
       // Should be synchronized with padding-end in listPicker.css.
-      element.style.webkitMarginEnd = '-2px';
+      element.style.marginInlineEnd = '-2px';
     }
   }
   this._applyItemStyle(element, config.style);

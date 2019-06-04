@@ -20,7 +20,7 @@
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
-#include "base/test/histogram_tester.h"
+#include "base/test/metrics/histogram_tester.h"
 #include "base/test/test_file_util.h"
 #include "base/threading/thread_restrictions.h"
 #include "build/build_config.h"
@@ -1006,7 +1006,7 @@ IN_PROC_BROWSER_TEST_F(SavePageSitePerProcessBrowserTest,
           << "a.com and bar.com should be in different processes.";
 
       EXPECT_TRUE(process_to_kill->FastShutdownIfPossible());
-      EXPECT_FALSE(process_to_kill->HasConnection());
+      EXPECT_FALSE(process_to_kill->IsInitializedAndNotDead());
       did_kill_a_process = true;
       break;
     }
@@ -1072,6 +1072,15 @@ class SavePageOriginalVsSavedComparisonTest
         expected_number_of_frames_in_original_page;
     AssertExpectationsAboutCurrentTab(expected_number_of_frames_in_saved_page,
                                       expected_substrings);
+
+    if (GetParam() == content::SAVE_PAGE_TYPE_AS_MHTML) {
+      std::set<url::Origin> origins;
+      GetCurrentTab(browser())->ForEachFrame(
+          base::BindRepeating(&CheckFrameForMHTML, base::Unretained(&origins)));
+      int unique_origins = origins.size();
+      EXPECT_EQ(expected_number_of_frames_in_saved_page, unique_origins)
+          << "All origins should be unique";
+    }
   }
 
   // Helper method to deduplicate some code across 2 tests.
@@ -1148,6 +1157,18 @@ class SavePageOriginalVsSavedComparisonTest
   static void IncrementInteger(int* i, content::RenderFrameHost* /* unused */) {
     (*i)++;
   }
+
+  static void CheckFrameForMHTML(std::set<url::Origin>* origins,
+                                 content::RenderFrameHost* host) {
+    // See RFC n°2557, section-8.3: "Use of the Content-ID header and CID URLs".
+    const char kContentIdScheme[] = "cid";
+    origins->insert(host->GetLastCommittedOrigin());
+    EXPECT_TRUE(host->GetLastCommittedOrigin().opaque());
+    if (!host->GetParent())
+      EXPECT_TRUE(host->GetLastCommittedURL().SchemeIsFile());
+    else
+      EXPECT_TRUE(host->GetLastCommittedURL().SchemeIs(kContentIdScheme));
+  }
 };
 
 // Test coverage for:
@@ -1182,8 +1203,9 @@ IN_PROC_BROWSER_TEST_P(SavePageOriginalVsSavedComparisonTest,
 }
 
 // Tests that saving a page from file: URI works.
+// TODO(https://crbug.com/840063): Deflake and reenable.
 IN_PROC_BROWSER_TEST_P(SavePageOriginalVsSavedComparisonTest,
-                       ObjectElementsViaFile) {
+                       DISABLED_ObjectElementsViaFile) {
   base::FilePath test_data_dir;
   ASSERT_TRUE(base::PathService::Get(chrome::DIR_TEST_DATA, &test_data_dir));
   GURL url(net::FilePathToFileURL(

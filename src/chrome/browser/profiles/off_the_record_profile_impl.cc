@@ -13,6 +13,7 @@
 #include "base/files/file_path.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
+#include "base/task/post_task.h"
 #include "build/build_config.h"
 #include "chrome/browser/background/background_contents_service_factory.h"
 #include "chrome/browser/background_fetch/background_fetch_delegate_factory.h"
@@ -52,14 +53,18 @@
 #include "components/prefs/json_pref_store.h"
 #include "components/sync_preferences/pref_service_syncable.h"
 #include "components/user_prefs/user_prefs.h"
+#include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/render_process_host.h"
 #include "content/public/browser/storage_partition.h"
 #include "content/public/browser/url_data_source.h"
 #include "content/public/browser/web_contents.h"
 #include "extensions/buildflags/buildflags.h"
+#include "media/capabilities/in_memory_video_decode_stats_db_impl.h"
+#include "media/mojo/services/video_decode_perf_history.h"
 #include "net/http/transport_security_state.h"
 #include "ppapi/buildflags/buildflags.h"
+#include "services/network/public/mojom/network_context.mojom.h"
 #include "services/preferences/public/cpp/in_process_service_factory.h"
 #include "services/preferences/public/cpp/pref_service_main.h"
 #include "services/preferences/public/mojom/preferences.mojom.h"
@@ -106,9 +111,12 @@ using content::DownloadManagerDelegate;
 using content::HostZoomMap;
 #endif
 
-#if BUILDFLAG(ENABLE_EXTENSIONS)
 namespace {
 
+// Key names for OTR Profile user data.
+constexpr char kVideoDecodePerfHistoryId[] = "video-decode-perf-history";
+
+#if BUILDFLAG(ENABLE_EXTENSIONS)
 void NotifyOTRProfileCreatedOnIOThread(void* original_profile,
                                        void* otr_profile) {
   extensions::ExtensionWebRequestEventRouter::GetInstance()
@@ -120,9 +128,9 @@ void NotifyOTRProfileDestroyedOnIOThread(void* original_profile,
   extensions::ExtensionWebRequestEventRouter::GetInstance()
       ->OnOTRBrowserContextDestroyed(original_profile, otr_profile);
 }
+#endif  // BUILDFLAG(ENABLE_EXTENSIONS)
 
 }  // namespace
-#endif
 
 OffTheRecordProfileImpl::OffTheRecordProfileImpl(Profile* real_profile)
     : profile_(real_profile), start_time_(base::Time::Now()) {
@@ -176,14 +184,13 @@ void OffTheRecordProfileImpl::Init() {
 
 #if BUILDFLAG(ENABLE_EXTENSIONS)
   // Make the chrome//extension-icon/ resource available.
-  extensions::ExtensionIconSource* icon_source =
-      new extensions::ExtensionIconSource(profile_);
-  content::URLDataSource::Add(this, icon_source);
+  content::URLDataSource::Add(
+      this, std::make_unique<extensions::ExtensionIconSource>(profile_));
 
   extensions::ExtensionSystem::Get(this)->InitForIncognitoProfile();
 
-  BrowserThread::PostTask(
-      BrowserThread::IO, FROM_HERE,
+  base::PostTaskWithTraits(
+      FROM_HERE, {BrowserThread::IO},
       base::BindOnce(&NotifyOTRProfileCreatedOnIOThread, profile_, this));
 #endif
 
@@ -200,18 +207,20 @@ OffTheRecordProfileImpl::~OffTheRecordProfileImpl() {
       io_data_->GetResourceContextNoInit());
 #endif
 
+  // Clears any data the network stack contains that may be related to the
+  // OTR session. Must be done before DestroyBrowserContextServices, since
+  // the NetworkContext is managed by one such service.
+  GetDefaultStoragePartition(this)->GetNetworkContext()->ClearHostCache(
+      nullptr, network::mojom::NetworkContext::ClearHostCacheCallback());
+
   BrowserContextDependencyManager::GetInstance()->DestroyBrowserContextServices(
       this);
 
 #if BUILDFLAG(ENABLE_EXTENSIONS)
-  BrowserThread::PostTask(
-      BrowserThread::IO, FROM_HERE,
+  base::PostTaskWithTraits(
+      FROM_HERE, {BrowserThread::IO},
       base::BindOnce(&NotifyOTRProfileDestroyedOnIOThread, profile_, this));
 #endif
-
-  // Clears any data the network stack contains that may be related to the
-  // OTR session.
-  g_browser_process->io_thread()->ChangedToOnTheRecord();
 
   // This must be called before ProfileIOData::ShutdownOnUIThread but after
   // other profile-related destroy notifications are dispatched.
@@ -363,26 +372,36 @@ OffTheRecordProfileImpl::CreateMediaRequestContextForStoragePartition(
       .get();
 }
 
-void OffTheRecordProfileImpl::RegisterInProcessServices(
-    StaticServiceMap* services) {
-  {
-    service_manager::EmbeddedServiceInfo info;
-    info.factory =
-        InProcessPrefServiceFactoryFactory::GetInstanceForContext(this)
-            ->CreatePrefServiceFactory();
-    info.task_runner = content::BrowserThread::GetTaskRunnerForThread(
-        content::BrowserThread::UI);
-    services->insert(std::make_pair(prefs::mojom::kServiceName, info));
+std::unique_ptr<service_manager::Service>
+OffTheRecordProfileImpl::HandleServiceRequest(
+    const std::string& service_name,
+    service_manager::mojom::ServiceRequest request) {
+  if (service_name == prefs::mojom::kServiceName) {
+    return InProcessPrefServiceFactoryFactory::GetInstanceForContext(this)
+        ->CreatePrefService(std::move(request));
   }
+
+  return nullptr;
 }
 
 net::URLRequestContextGetter* OffTheRecordProfileImpl::GetRequestContext() {
   return GetDefaultStoragePartition(this)->GetURLRequestContext();
 }
 
-net::URLRequestContextGetter*
-    OffTheRecordProfileImpl::GetRequestContextForExtensions() {
-  return io_data_->GetExtensionsRequestContextGetter().get();
+base::OnceCallback<net::CookieStore*()>
+OffTheRecordProfileImpl::GetExtensionsCookieStoreGetter() {
+  return base::BindOnce(
+      [](content::ResourceContext* context) {
+        auto* io_data = ProfileIOData::FromResourceContext(context);
+        return io_data->GetExtensionsCookieStore();
+      },
+      GetResourceContext());
+}
+
+scoped_refptr<network::SharedURLLoaderFactory>
+OffTheRecordProfileImpl::GetURLLoaderFactory() {
+  return GetDefaultStoragePartition(this)
+      ->GetURLLoaderFactoryForBrowserProcess();
 }
 
 net::URLRequestContextGetter*
@@ -431,7 +450,8 @@ OffTheRecordProfileImpl::GetSSLHostStateDelegate() {
 
 // TODO(mlamouri): we should all these BrowserContext implementation to Profile
 // instead of repeating them inside all Profile implementations.
-content::PermissionManager* OffTheRecordProfileImpl::GetPermissionManager() {
+content::PermissionControllerDelegate*
+OffTheRecordProfileImpl::GetPermissionControllerDelegate() {
   return PermissionManagerFactory::GetForProfile(this);
 }
 
@@ -452,11 +472,35 @@ OffTheRecordProfileImpl::GetBrowsingDataRemoverDelegate() {
 
 media::VideoDecodePerfHistory*
 OffTheRecordProfileImpl::GetVideoDecodePerfHistory() {
-  // Defer to the original profile for VideoDecodePerfHistory. The incognito
-  // profile will have no history of its own (we don't save it for incognito)
-  // and the two profiles should have the same video performance. The history is
-  // not exposed directly to the web, so privacy is not compromised.
-  return GetOriginalProfile()->GetVideoDecodePerfHistory();
+  media::VideoDecodePerfHistory* decode_history =
+      static_cast<media::VideoDecodePerfHistory*>(
+          GetUserData(kVideoDecodePerfHistoryId));
+
+  // Lazily created. Note, this does not trigger loading the DB from disk. That
+  // occurs later upon first VideoDecodePerfHistory API request that requires DB
+  // access. DB operations will not block the UI thread.
+  if (!decode_history) {
+    // Use the original profile's DB to seed the OTR VideoDeocdePerfHisotry. The
+    // original DB is treated as read-only, while OTR playbacks will write stats
+    // to the InMemory version (cleared on profile destruction). Guest profiles
+    // don't have a root profile like incognito, meaning they don't have a seed
+    // DB to call on and we can just pass null.
+    media::VideoDecodeStatsDBProvider* seed_db_provider =
+        IsGuestSession() ? nullptr
+                         // Safely passing raw pointer to VideoDecodePerfHistory
+                         // because original profile will outlive this profile.
+                         : GetOriginalProfile()->GetVideoDecodePerfHistory();
+
+    auto stats_db = std::make_unique<media::InMemoryVideoDecodeStatsDBImpl>(
+        seed_db_provider);
+    auto new_decode_history =
+        std::make_unique<media::VideoDecodePerfHistory>(std::move(stats_db));
+    decode_history = new_decode_history.get();
+
+    SetUserData(kVideoDecodePerfHistoryId, std::move(new_decode_history));
+  }
+
+  return decode_history;
 }
 
 bool OffTheRecordProfileImpl::IsSameProfile(Profile* profile) {
@@ -505,12 +549,6 @@ void OffTheRecordProfileImpl::InitChromeOSPreferences() {
   // The preferences are associated with the regular user profile.
 }
 #endif  // defined(OS_CHROMEOS)
-
-chrome_browser_net::Predictor* OffTheRecordProfileImpl::GetNetworkPredictor() {
-  // We do not store information about websites visited in OTR profiles which
-  // is necessary for a Predictor, so we do not have a Predictor at all.
-  return NULL;
-}
 
 GURL OffTheRecordProfileImpl::GetHomePage() {
   return profile_->GetHomePage();

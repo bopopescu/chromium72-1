@@ -20,10 +20,10 @@ namespace syncer {
 namespace {
 
 syncer::WorkCallback ClosureToWorkCallback(base::Closure work) {
-  return base::Bind(
+  return base::BindOnce(
       [](base::Closure work) {
         work.Run();
-        return syncer::SYNCER_OK;
+        return syncer::SyncerError(syncer::SyncerError::SYNCER_OK);
       },
       std::move(work));
 }

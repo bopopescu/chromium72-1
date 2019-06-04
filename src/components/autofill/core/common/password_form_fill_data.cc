@@ -7,28 +7,17 @@
 #include <tuple>
 
 #include "base/strings/utf_string_conversions.h"
+#include "build/build_config.h"
 #include "components/autofill/core/common/form_field_data.h"
 
 namespace autofill {
 
-UsernamesCollectionKey::UsernamesCollectionKey() {}
-
-UsernamesCollectionKey::~UsernamesCollectionKey() {}
-
-bool UsernamesCollectionKey::operator<(
-    const UsernamesCollectionKey& other) const {
-  return std::tie(username, password, realm) <
-         std::tie(other.username, other.password, other.realm);
-}
-
-PasswordFormFillData::PasswordFormFillData()
-    : wait_for_username(false), is_possible_change_password_form(false) {}
+PasswordFormFillData::PasswordFormFillData() : wait_for_username(false) {}
 
 PasswordFormFillData::PasswordFormFillData(const PasswordFormFillData& other) =
     default;
 
-PasswordFormFillData::~PasswordFormFillData() {
-}
+PasswordFormFillData::~PasswordFormFillData() = default;
 
 void InitPasswordFormFillData(
     const PasswordForm& form_on_page,
@@ -42,20 +31,30 @@ void InitPasswordFormFillData(
   FormFieldData username_field;
   username_field.name = form_on_page.username_element;
   username_field.value = preferred_match->username_value;
+  username_field.unique_renderer_id = form_on_page.username_element_renderer_id;
+  result->username_may_use_prefilled_placeholder =
+      form_on_page.username_may_use_prefilled_placeholder;
   FormFieldData password_field;
   password_field.name = form_on_page.password_element;
   password_field.value = preferred_match->password_value;
+  password_field.unique_renderer_id = form_on_page.password_element_renderer_id;
   password_field.form_control_type = "password";
 
+// On iOS, use the unique_id field to refer to elements.
+#if defined(OS_IOS)
+  username_field.unique_id = form_on_page.username_element;
+  password_field.unique_id = form_on_page.password_element;
+#endif
+
   // Fill basic form data.
+  result->form_renderer_id = form_on_page.form_data.unique_renderer_id;
   result->name = form_on_page.form_data.name;
   result->origin = form_on_page.origin;
   result->action = form_on_page.action;
   result->username_field = username_field;
   result->password_field = password_field;
   result->wait_for_username = wait_for_username_before_autofill;
-  result->is_possible_change_password_form =
-      form_on_page.IsPossibleChangePasswordForm();
+  result->has_renderer_ids = form_on_page.has_renderer_ids;
 
   if (preferred_match->is_public_suffix_match ||
       preferred_match->is_affiliation_based_match)

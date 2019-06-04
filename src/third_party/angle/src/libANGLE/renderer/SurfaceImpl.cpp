@@ -11,18 +11,30 @@
 namespace rx
 {
 
-SurfaceImpl::SurfaceImpl(const egl::SurfaceState &state) : mState(state)
-{
-}
+SurfaceImpl::SurfaceImpl(const egl::SurfaceState &state) : mState(state) {}
 
-SurfaceImpl::~SurfaceImpl()
-{
-}
+SurfaceImpl::~SurfaceImpl() {}
 
 egl::Error SurfaceImpl::swapWithDamage(const gl::Context *context, EGLint *rects, EGLint n_rects)
 {
     UNREACHABLE();
     return egl::EglBadSurface() << "swapWithDamage implementation missing.";
+}
+
+egl::Error SurfaceImpl::setPresentationTime(EGLnsecsANDROID time)
+{
+    UNREACHABLE();
+    return egl::EglBadSurface() << "setPresentationTime implementation missing.";
+}
+
+void SurfaceImpl::setFixedWidth(EGLint width)
+{
+    UNREACHABLE();
+}
+
+void SurfaceImpl::setFixedHeight(EGLint height)
+{
+    UNREACHABLE();
 }
 
 }  // namespace rx

@@ -8,13 +8,15 @@
 #ifndef GrVkImage_DEFINED
 #define GrVkImage_DEFINED
 
+#include "GrVkVulkan.h"
+
 #include "GrVkResource.h"
 
+#include "GrBackendSurface.h"
 #include "GrTypesPriv.h"
 #include "GrVkImageLayout.h"
 #include "SkTypes.h"
 
-#include "vk/GrVkDefines.h"
 #include "vk/GrVkTypes.h"
 
 class GrVkGpu;
@@ -27,6 +29,7 @@ public:
     GrVkImage(const GrVkImageInfo& info, sk_sp<GrVkImageLayout> layout,
               GrBackendObjectOwnership ownership)
             : fInfo(info)
+            , fInitialQueueFamily(info.fCurrentQueueFamily)
             , fLayout(std::move(layout))
             , fIsBorrowed(GrBackendObjectOwnership::kBorrowed == ownership) {
         SkASSERT(fLayout->getImageLayout() == fInfo.fImageLayout);
@@ -41,6 +44,9 @@ public:
     VkImage image() const { return fInfo.fImage; }
     const GrVkAlloc& alloc() const { return fInfo.fAlloc; }
     VkFormat imageFormat() const { return fInfo.fFormat; }
+    GrBackendFormat getBackendFormat() const {
+        return GrBackendFormat::MakeVk(this->imageFormat());
+    }
     uint32_t mipLevels() const { return fInfo.fLevelCount; }
     const Resource* resource() const { return fResource; }
     bool isLinearTiled() const {
@@ -58,7 +64,8 @@ public:
                         VkImageLayout newLayout,
                         VkAccessFlags dstAccessMask,
                         VkPipelineStageFlags dstStageMask,
-                        bool byRegion);
+                        bool byRegion,
+                        bool releaseFamilyQueue = false);
 
     // This simply updates our tracking of the image layout and does not actually do any gpu work.
     // This is only used for mip map generation where we are manually changing the layouts as we
@@ -100,6 +107,10 @@ public:
 
     void setResourceRelease(sk_sp<GrReleaseProcHelper> releaseHelper);
 
+    // Helpers to use for setting the layout of the VkImage
+    static VkPipelineStageFlags LayoutToPipelineSrcStageFlags(const VkImageLayout layout);
+    static VkAccessFlags LayoutToSrcAccessMask(const VkImageLayout layout);
+
 protected:
     void releaseImage(const GrVkGpu* gpu);
     void abandonImage();
@@ -107,6 +118,7 @@ protected:
     void setNewResource(VkImage image, const GrVkAlloc& alloc, VkImageTiling tiling);
 
     GrVkImageInfo          fInfo;
+    uint32_t               fInitialQueueFamily;
     sk_sp<GrVkImageLayout> fLayout;
     bool                   fIsBorrowed;
 

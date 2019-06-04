@@ -221,6 +221,10 @@ static constexpr float kControllerLength = 0.105f;
 static constexpr float kControllerSmallButtonSize = kControllerWidth * 0.306f;
 static constexpr float kControllerAppButtonZ = kControllerLength * -0.075f;
 static constexpr float kControllerHomeButtonZ = kControllerLength * 0.075f;
+static constexpr float kControllerBatteryDotMargin = kControllerWidth * 0.07f;
+static constexpr float kControllerBatteryDotSize = kControllerWidth * 0.07f;
+static constexpr float kControllerBatteryDotZ = kControllerLength * 0.325f;
+static constexpr int kControllerBatteryDotCount = 5;
 
 static constexpr float kSkyDistance = 1000.0f;
 static constexpr float kGridOpacity = 0.5f;
@@ -279,29 +283,6 @@ static constexpr float kOverflowMenuYPadding = 0.012f;
 static constexpr float kOverflowMenuItemHeight = 0.080f;
 static constexpr float kOverflowMenuItemXPadding = 0.024f;
 static constexpr float kOverflowMenuMaxSpan = 0.384f - kOverflowMenuYPadding;
-
-static constexpr float kTabsViewDistance = 2.4f;
-static constexpr float kTabsViewRootMarginDMM = 0.1f;
-static constexpr size_t kTabsViewRowCount = 2ul;
-static constexpr size_t kTabsViewColumnCount = 3ul;
-static constexpr float kTabsViewGridMarginDMM = 0.05f;
-static constexpr float kTabItemWidthDMM = 0.2f;
-static constexpr float kTabItemHeightDMM = 0.15f;
-static constexpr float kTabItemCornerRadiusDMM = 0.01f;
-static constexpr float kTabItemTextSizeDMM = 0.07f;
-static constexpr float kTabsViewActivePageOpacity = 1.0f;
-static constexpr float kTabsViewInactivePageOpacity = 0.2f;
-static constexpr float kTabsViewHiddenPageOpacity = 0.0f;
-static constexpr float kTabsViewCloseButtonVerticalOffsetDMM = -0.5f;
-static constexpr float kTabsViewCloseButtonDepthOffset = -0.35f;
-static constexpr float kTabsViewVerticalOffsetDMM = -0.1f;
-static constexpr float kTabsViewModeButtonWidthDMM = 0.25f;
-static constexpr float kTabsViewModeButtonHeightDMM = 0.075f;
-static constexpr float kTabsViewModeButtonTextSizeDMM = 0.03f;
-static constexpr float kTabsViewRemoveButtonShadowIntensity = 0.4f;
-static constexpr float kTabsViewRemoveButtonDepthOffsetDMM = 0.02f;
-static constexpr float kTabsViewRemoveButtonSizeDMM = 0.05f;
-static constexpr float kTabsViewRemoveButtonHoverOffsetDMM = 0.015f;
 
 }  // namespace vr
 

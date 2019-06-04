@@ -32,8 +32,7 @@ class FakeSyncEncryptionHandler : public SyncEncryptionHandler,
   void AddObserver(Observer* observer) override;
   void RemoveObserver(Observer* observer) override;
   void Init() override;
-  void SetEncryptionPassphrase(const std::string& passphrase,
-                               bool is_explicit) override;
+  void SetEncryptionPassphrase(const std::string& passphrase) override;
   void SetDecryptionPassphrase(const std::string& passphrase) override;
   void EnableEncryptEverything() override;
   bool IsEncryptEverythingEnabled() const override;
@@ -56,7 +55,7 @@ class FakeSyncEncryptionHandler : public SyncEncryptionHandler,
   Cryptographer* cryptographer() { return &cryptographer_; }
 
  private:
-  base::ObserverList<SyncEncryptionHandler::Observer> observers_;
+  base::ObserverList<SyncEncryptionHandler::Observer>::Unchecked observers_;
   ModelTypeSet encrypted_types_;
   bool encrypt_everything_;
   PassphraseType passphrase_type_;

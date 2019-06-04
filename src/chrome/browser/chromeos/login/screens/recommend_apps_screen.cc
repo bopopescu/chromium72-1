@@ -5,11 +5,6 @@
 #include "chrome/browser/chromeos/login/screens/recommend_apps_screen.h"
 
 namespace chromeos {
-namespace {
-
-constexpr const char kUserActionSkip[] = "recommendAppsSkip";
-
-}  // namespace
 
 RecommendAppsScreen::RecommendAppsScreen(
     BaseScreenDelegate* base_screen_delegate,
@@ -17,27 +12,44 @@ RecommendAppsScreen::RecommendAppsScreen(
     : BaseScreen(base_screen_delegate, OobeScreen::SCREEN_RECOMMEND_APPS),
       view_(view) {
   DCHECK(view_);
+
   view_->Bind(this);
+  view_->AddObserver(this);
 }
 
 RecommendAppsScreen::~RecommendAppsScreen() {
-  view_->Bind(NULL);
+  if (view_) {
+    view_->Bind(nullptr);
+    view_->RemoveObserver(this);
+  }
 }
 
 void RecommendAppsScreen::Show() {
   view_->Show();
+
+  recommend_apps_fetcher_ = std::make_unique<RecommendAppsFetcher>(view_);
 }
 
 void RecommendAppsScreen::Hide() {
   view_->Hide();
 }
 
-void RecommendAppsScreen::OnUserAction(const std::string& action_id) {
-  if (action_id == kUserActionSkip) {
-    Finish(ScreenExitCode::RECOMMEND_APPS_SKIPPED);
-    return;
-  }
-  BaseScreen::OnUserAction(action_id);
+void RecommendAppsScreen::OnSkip() {
+  Finish(ScreenExitCode::RECOMMEND_APPS_SKIPPED);
+}
+
+void RecommendAppsScreen::OnRetry() {
+  recommend_apps_fetcher_->Retry();
+}
+
+void RecommendAppsScreen::OnInstall() {
+  Finish(ScreenExitCode::RECOMMEND_APPS_SELECTED);
+}
+
+void RecommendAppsScreen::OnViewDestroyed(RecommendAppsScreenView* view) {
+  DCHECK_EQ(view, view_);
+  view_->RemoveObserver(this);
+  view_ = nullptr;
 }
 
 }  // namespace chromeos

@@ -35,8 +35,9 @@ namespace syncer {
 // GENERATED_JAVA_ENUM_PACKAGE: org.chromium.components.sync
 //
 // |kModelTypeInfoMap| struct entries are in the same order as their definition
-// in ModelType enum. Don't forget to update the |kModelTypeInfoMap| struct in
-// model_type.cc when you make changes in ModelType enum.
+// in ModelType enum. When you make changes in ModelType enum, don't forget to
+// update the |kModelTypeInfoMap| struct in model_type.cc and also the
+// SyncModelType and SyncModelTypeByMacro histogram suffixes in histograms.xml
 enum ModelType {
   // Object type unknown.  Objects may transition through
   // the unknown state during their initial creation, before
@@ -114,12 +115,12 @@ enum ModelType {
   DEPRECATED_SUPERVISED_USERS,
   DEPRECATED_SUPERVISED_USER_SHARED_SETTINGS,
   // Distilled articles.
-  ARTICLES,
+  DEPRECATED_ARTICLES,
   // App List items
   APP_LIST,
   // WiFi credentials. Each item contains the information for connecting to one
   // WiFi network. This includes, e.g., network name and password.
-  WIFI_CREDENTIALS,
+  DEPRECATED_WIFI_CREDENTIALS,
   // Supervised user whitelists. Each item contains a CRX ID (like an extension
   // ID) and a name.
   SUPERVISED_USER_WHITELISTS,
@@ -133,6 +134,10 @@ enum ModelType {
   USER_EVENTS,
   // Shares in project Mountain.
   MOUNTAIN_SHARES,
+  // Commit only user consents.
+  USER_CONSENTS,
+  // Tabs sent between devices.
+  SEND_TAB_TO_SELF,
 
   // ---- Proxy types ----
   // Proxy types are excluded from the sync protocol, but are still considered
@@ -155,15 +160,6 @@ enum ModelType {
   LAST_CONTROL_MODEL_TYPE = EXPERIMENTS,
   LAST_REAL_MODEL_TYPE = LAST_CONTROL_MODEL_TYPE,
 
-  // If you are adding a new sync datatype that is exposed to the user via the
-  // sync preferences UI, be sure to update the list in
-  // components/sync/driver/user_selectable_sync_type.h so that the UMA
-  // histograms for sync include your new type.  In this case, be sure to also
-  // update the UserSelectableTypes() definition in
-  // sync/syncable/model_type.cc.
-
-  // Additionally, enum SyncModelTypes and suffix SyncModelType need to be
-  // updated in histograms.xml for all new types.
   MODEL_TYPE_COUNT,
 };
 
@@ -203,8 +199,7 @@ constexpr const char* kUserSelectableDataTypeNames[] = {
 #if BUILDFLAG(ENABLE_READING_LIST)
     "readingList",
 #endif
-    "tabs",
-};
+    "tabs"};
 
 // Protocol types are those types that have actual protocol buffer
 // representations. This distinguishes them from Proxy types, which have no
@@ -218,9 +213,10 @@ constexpr ModelTypeSet ProtocolTypes() {
       SYNCED_NOTIFICATIONS, SYNCED_NOTIFICATION_APP_INFO, DICTIONARY,
       FAVICON_IMAGES, FAVICON_TRACKING, DEVICE_INFO, PRIORITY_PREFERENCES,
       SUPERVISED_USER_SETTINGS, DEPRECATED_SUPERVISED_USERS,
-      DEPRECATED_SUPERVISED_USER_SHARED_SETTINGS, ARTICLES, APP_LIST,
-      WIFI_CREDENTIALS, SUPERVISED_USER_WHITELISTS, ARC_PACKAGE, PRINTERS,
-      READING_LIST, USER_EVENTS, NIGORI, EXPERIMENTS, MOUNTAIN_SHARES);
+      DEPRECATED_SUPERVISED_USER_SHARED_SETTINGS, DEPRECATED_ARTICLES, APP_LIST,
+      DEPRECATED_WIFI_CREDENTIALS, SUPERVISED_USER_WHITELISTS, ARC_PACKAGE,
+      PRINTERS, READING_LIST, USER_EVENTS, NIGORI, EXPERIMENTS, MOUNTAIN_SHARES,
+      USER_CONSENTS, SEND_TAB_TO_SELF);
 }
 
 // These are the normal user-controlled types. This is to distinguish from
@@ -228,6 +224,11 @@ constexpr ModelTypeSet ProtocolTypes() {
 // preference flag, so not all of them are individually user-selectable.
 constexpr ModelTypeSet UserTypes() {
   return ModelTypeSet::FromRange(FIRST_USER_MODEL_TYPE, LAST_USER_MODEL_TYPE);
+}
+
+// User types, which are not user-controlled.
+constexpr ModelTypeSet AlwaysPreferredUserTypes() {
+  return ModelTypeSet(DEVICE_INFO, USER_CONSENTS);
 }
 
 // These are the user-selectable data types.
@@ -295,7 +296,7 @@ constexpr ModelTypeSet PriorityCoreTypes() {
 
 // Types that may commit data, but should never be included in a GetUpdates.
 constexpr ModelTypeSet CommitOnlyTypes() {
-  return ModelTypeSet(USER_EVENTS);
+  return ModelTypeSet(USER_EVENTS, USER_CONSENTS);
 }
 
 ModelTypeNameMap GetUserSelectableTypeNameMap();
@@ -333,14 +334,23 @@ FullModelTypeSet ToFullModelTypeSet(ModelTypeSet in);
 
 // TODO(sync): The functions below badly need some cleanup.
 
-// Returns a pointer to a string with application lifetime that represents
-// the name of |model_type|.
+// Returns a string with application lifetime that represents the name of
+// |model_type|.
 const char* ModelTypeToString(ModelType model_type);
 
+// Returns a string with application lifetime that is used as the histogram
+// suffix for |model_type|.
+const char* ModelTypeToHistogramSuffix(ModelType model_type);
+
 // Some histograms take an integer parameter that represents a model type.
-// The mapping from ModelType to integer is defined here.  It should match
-// the mapping from integer to labels defined in histograms.xml.
+// The mapping from ModelType to integer is defined here. It defines a
+// completely different order than the ModelType enum itself. The mapping should
+// match the SyncModelTypes mapping from integer to labels defined in enums.xml.
 int ModelTypeToHistogramInt(ModelType model_type);
+
+// Returns for every model_type a positive unique integer that is stable over
+// time and thus can be used when persisting data.
+int ModelTypeToStableIdentifier(ModelType model_type);
 
 // Handles all model types, and not just real ones.
 std::unique_ptr<base::Value> ModelTypeToValue(ModelType model_type);

@@ -102,10 +102,10 @@ SyncScheduler::SyncState SyncSchedulerImpl::GetSyncState() const {
 void SyncSchedulerImpl::OnTimerFired() {
   timer_.reset();
   if (strategy_ == Strategy::PERIODIC_REFRESH) {
-    PA_LOG(INFO) << "Timer fired for periodic refresh, making request...";
+    PA_LOG(VERBOSE) << "Timer fired for periodic refresh, making request...";
     sync_state_ = SyncState::SYNC_IN_PROGRESS;
   } else if (strategy_ == Strategy::AGGRESSIVE_RECOVERY) {
-    PA_LOG(INFO) << "Timer fired for aggressive recovery, making request...";
+    PA_LOG(VERBOSE) << "Timer fired for aggressive recovery, making request...";
     sync_state_ = SyncState::SYNC_IN_PROGRESS;
   } else {
     NOTREACHED();
@@ -116,10 +116,8 @@ void SyncSchedulerImpl::OnTimerFired() {
       std::make_unique<SyncRequest>(weak_ptr_factory_.GetWeakPtr()));
 }
 
-std::unique_ptr<base::Timer> SyncSchedulerImpl::CreateTimer() {
-  bool retain_user_task = false;
-  bool is_repeating = false;
-  return std::make_unique<base::Timer>(retain_user_task, is_repeating);
+std::unique_ptr<base::OneShotTimer> SyncSchedulerImpl::CreateTimer() {
+  return std::make_unique<base::OneShotTimer>();
 }
 
 void SyncSchedulerImpl::ScheduleNextSync(const base::TimeDelta& sync_delta) {
@@ -130,21 +128,22 @@ void SyncSchedulerImpl::ScheduleNextSync(const base::TimeDelta& sync_delta) {
   }
 
   bool is_aggressive_recovery = (strategy_ == Strategy::AGGRESSIVE_RECOVERY);
-  PA_LOG(INFO) << "Scheduling next sync for " << scheduler_name_ << ":\n"
-               << "    Strategy: " << (is_aggressive_recovery
-                                           ? "Aggressive Recovery"
-                                           : "Periodic Refresh") << "\n"
-               << "    Time Delta: " << TimeDeltaToString(sync_delta)
-               << (is_aggressive_recovery
-                       ? base::StringPrintf(
-                             "\n    Previous Failures: %d",
-                             base::saturated_cast<int>(failure_count_))
-                       : "");
+  PA_LOG(VERBOSE) << "Scheduling next sync for " << scheduler_name_ << ":\n"
+                  << "    Strategy: "
+                  << (is_aggressive_recovery ? "Aggressive Recovery"
+                                             : "Periodic Refresh")
+                  << "\n"
+                  << "    Time Delta: " << TimeDeltaToString(sync_delta)
+                  << (is_aggressive_recovery
+                          ? base::StringPrintf(
+                                "\n    Previous Failures: %d",
+                                base::saturated_cast<int>(failure_count_))
+                          : "");
 
   timer_ = CreateTimer();
   timer_->Start(FROM_HERE, sync_delta,
-                base::Bind(&SyncSchedulerImpl::OnTimerFired,
-                           weak_ptr_factory_.GetWeakPtr()));
+                base::BindOnce(&SyncSchedulerImpl::OnTimerFired,
+                               weak_ptr_factory_.GetWeakPtr()));
 }
 
 void SyncSchedulerImpl::OnSyncCompleted(bool success) {

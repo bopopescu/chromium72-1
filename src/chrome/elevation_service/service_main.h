@@ -6,7 +6,9 @@
 #define CHROME_ELEVATION_SERVICE_SERVICE_MAIN_H_
 
 #include <windows.h>
+#include <wrl/implements.h>
 
+#include "base/containers/flat_map.h"
 #include "base/no_destructor.h"
 #include "base/synchronization/waitable_event.h"
 
@@ -30,15 +32,15 @@ class ServiceMain {
 
   // The following methods are public for the sake of testing.
 
-  // Registers the Service COM objects so other applications can connect to
-  // them. Returns the registration status.
-  HRESULT RegisterClassObjects();
+  // Registers the Service COM class factory object so other applications can
+  // connect to it. Returns the registration status.
+  HRESULT RegisterClassObject();
 
-  // Unregisters the Service COM objects.
-  void UnregisterClassObjects();
+  // Unregisters the Service COM class factory object.
+  void UnregisterClassObject();
 
-  // Returns true when the last object is released, or if the service is asked
-  // to exit.
+  // Returns true when the last COM object is released, or if the service is
+  // asked to exit.
   bool IsExitSignaled();
 
  private:
@@ -79,6 +81,10 @@ class ServiceMain {
 
   // Called when the last object is released or if the service is asked to exit.
   void SignalExit();
+
+  // Registers |factory| as the factory for the elevator identified by |id|.
+  void RegisterElevatorFactory(const base::string16& id,
+                               IClassFactory* factory);
 
   // The action routine to be executed.
   int (ServiceMain::*run_routine_)();

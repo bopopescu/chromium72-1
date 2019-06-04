@@ -1,20 +1,21 @@
-// Copyright (c) 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/chromeos/login/screens/demo_setup_screen.h"
 
-#include "chrome/browser/chromeos/login/enrollment/enterprise_enrollment_helper.h"
-#include "chrome/browser/chromeos/login/screen_manager.h"
+#include "base/bind.h"
 #include "chrome/browser/chromeos/login/screens/base_screen_delegate.h"
-#include "chrome/browser/chromeos/policy/enrollment_config.h"
+#include "chrome/browser/chromeos/login/screens/demo_setup_screen_view.h"
+#include "chrome/browser/chromeos/login/wizard_controller.h"
+#include "chromeos/dbus/dbus_thread_manager.h"
+#include "chromeos/dbus/session_manager_client.h"
 
 namespace {
 
-constexpr const char kUserActionOnlineSetup[] = "online-setup";
-constexpr const char kUserActionOfflineSetup[] = "offline-setup";
-constexpr const char kUserActionClose[] = "close-setup";
-constexpr const char kDemoModeDomain[] = "cros-demo-mode.com";
+constexpr char kUserActionStartSetup[] = "start-setup";
+constexpr char kUserActionClose[] = "close-setup";
+constexpr char kUserActionPowerwash[] = "powerwash";
 
 }  // namespace
 
@@ -23,7 +24,8 @@ namespace chromeos {
 DemoSetupScreen::DemoSetupScreen(BaseScreenDelegate* base_screen_delegate,
                                  DemoSetupScreenView* view)
     : BaseScreen(base_screen_delegate, OobeScreen::SCREEN_OOBE_DEMO_SETUP),
-      view_(view) {
+      view_(view),
+      weak_ptr_factory_(this) {
   DCHECK(view_);
   view_->Bind(this);
 }
@@ -43,67 +45,44 @@ void DemoSetupScreen::Hide() {
     view_->Hide();
 }
 
-void DemoSetupScreen::OnAuthError(const GoogleServiceAuthError& error) {
-  NOTREACHED();
-}
-
-void DemoSetupScreen::OnMultipleLicensesAvailable(
-    const EnrollmentLicenseMap& licenses) {
-  NOTREACHED();
-}
-
-void DemoSetupScreen::OnEnrollmentError(policy::EnrollmentStatus status) {
-  LOG(ERROR) << "Enrollment error: " << status.status() << ", "
-             << status.client_status() << ", " << status.store_status() << ", "
-             << status.validation_status() << ", " << status.lock_status();
-  // TODO(mukai): bring some error message on the screen.
-  // https://crbug.com/835898
-  NOTIMPLEMENTED();
-}
-
-void DemoSetupScreen::OnOtherError(
-    EnterpriseEnrollmentHelper::OtherError error) {
-  LOG(ERROR) << "Other error: " << error;
-  // TODO(mukai): bring some error message on the screen.
-  // https://crbug.com/835898
-  NOTIMPLEMENTED();
-}
-
-void DemoSetupScreen::OnDeviceEnrolled(const std::string& additional_token) {
-  NOTIMPLEMENTED();
-}
-
-void DemoSetupScreen::OnDeviceAttributeUpdatePermission(bool granted) {
-  NOTREACHED();
-}
-
-void DemoSetupScreen::OnDeviceAttributeUploadCompleted(bool success) {
-  NOTREACHED();
-}
-
 void DemoSetupScreen::OnUserAction(const std::string& action_id) {
-  if (action_id == kUserActionOnlineSetup) {
-    NOTIMPLEMENTED();
-  } else if (action_id == kUserActionOfflineSetup) {
-    // TODO(mukai): load the policy data from somewhere (maybe asynchronously)
-    // and then set the loaded policy data into config. https://crbug.com/827290
-    policy::EnrollmentConfig config;
-    config.mode = policy::EnrollmentConfig::MODE_OFFLINE_DEMO;
-    config.management_domain = kDemoModeDomain;
-    enrollment_helper_ = EnterpriseEnrollmentHelper::Create(
-        this, nullptr /* ad_join_delegate */, config, kDemoModeDomain);
-    enrollment_helper_->EnrollForOfflineDemo();
+  if (action_id == kUserActionStartSetup) {
+    StartEnrollment();
   } else if (action_id == kUserActionClose) {
-    Finish(ScreenExitCode::DEMO_MODE_SETUP_CLOSED);
+    Finish(ScreenExitCode::DEMO_MODE_SETUP_CANCELED);
+  } else if (action_id == kUserActionPowerwash) {
+    chromeos::DBusThreadManager::Get()
+        ->GetSessionManagerClient()
+        ->StartDeviceWipe();
   } else {
     BaseScreen::OnUserAction(action_id);
   }
 }
 
+
+void DemoSetupScreen::StartEnrollment() {
+  // Demo setup screen is only shown in OOBE.
+  DCHECK(DemoSetupController::IsOobeDemoSetupFlowInProgress());
+  DemoSetupController* demo_controller =
+      WizardController::default_controller()->demo_setup_controller();
+  demo_controller->Enroll(base::BindOnce(&DemoSetupScreen::OnSetupSuccess,
+                                         weak_ptr_factory_.GetWeakPtr()),
+                          base::BindOnce(&DemoSetupScreen::OnSetupError,
+                                         weak_ptr_factory_.GetWeakPtr()));
+}
+
+void DemoSetupScreen::OnSetupError(
+    const DemoSetupController::DemoSetupError& error) {
+  view_->OnSetupFailed(error);
+}
+
+void DemoSetupScreen::OnSetupSuccess() {
+  Finish(ScreenExitCode::DEMO_MODE_SETUP_FINISHED);
+}
+
 void DemoSetupScreen::OnViewDestroyed(DemoSetupScreenView* view) {
   if (view_ == view)
     view_ = nullptr;
-  enrollment_helper_.reset();
 }
 
 }  // namespace chromeos

@@ -150,6 +150,13 @@ SDK.NetworkRequest = class extends Common.Object {
   }
 
   /**
+   * @return {boolean}
+   */
+  isBlobRequest() {
+    return this._url.startsWith('blob:');
+  }
+
+  /**
    * @param {string} x
    */
   setUrl(x) {
@@ -859,12 +866,34 @@ SDK.NetworkRequest = class extends Common.Object {
    */
   async _parseFormParameters() {
     const requestContentType = this.requestContentType();
-    if (!requestContentType || !requestContentType.match(/^application\/x-www-form-urlencoded\s*(;.*)?$/i))
+
+    if (!requestContentType)
       return null;
-    const formData = await this.requestFormData();
-    if (formData)
+
+    // Handling application/x-www-form-urlencoded request bodies.
+    if (requestContentType.match(/^application\/x-www-form-urlencoded\s*(;.*)?$/i)) {
+      const formData = await this.requestFormData();
+      if (!formData)
+        return null;
+
       return this._parseParameters(formData);
-    return null;
+    }
+
+    // Handling multipart/form-data request bodies.
+    const multipartDetails = requestContentType.match(/^multipart\/form-data\s*;\s*boundary\s*=\s*(\S+)\s*$/);
+
+    if (!multipartDetails)
+      return null;
+
+    const boundary = multipartDetails[1];
+    if (!boundary)
+      return null;
+
+    const formData = await this.requestFormData();
+    if (!formData)
+      return null;
+
+    return this._parseMultipartFormDataParameters(formData, boundary);
   }
 
   /**
@@ -905,6 +934,58 @@ SDK.NetworkRequest = class extends Common.Object {
         return {name: pair.substring(0, position), value: pair.substring(position + 1)};
     }
     return queryString.split('&').map(parseNameValue);
+  }
+
+  /**
+   * Parses multipart/form-data; boundary=boundaryString request bodies -
+   * --boundaryString
+   * Content-Disposition: form-data; name="field-name"; filename="r.gif"
+   * Content-Type: application/octet-stream
+   *
+   * optionalValue
+   * --boundaryString
+   * Content-Disposition: form-data; name="field-name-2"
+   *
+   * optionalValue2
+   * --boundaryString--
+   *
+   * @param {string} data
+   * @param {string} boundary
+   * @return {!Array.<!SDK.NetworkRequest.NameValue>}
+   */
+  _parseMultipartFormDataParameters(data, boundary) {
+    const sanitizedBoundary = boundary.escapeForRegExp();
+    const keyValuePattern = new RegExp(
+        // Header with an optional file name.
+        '^\\r\\ncontent-disposition\\s*:\\s*form-data\\s*;\\s*name="([^"]*)"(?:\\s*;\\s*filename="([^"]*)")?' +
+            // Optional secondary header with the content type.
+            '(?:\\r\\ncontent-type\\s*:\\s*([^\\r\\n]*))?' +
+            // Padding.
+            '\\r\\n\\r\\n' +
+            // Value
+            '(.*)' +
+            // Padding.
+            '\\r\\n$',
+        'is');
+    const fields = data.split(new RegExp(`--${sanitizedBoundary}(?:--\s*$)?`, 'g'));
+    return fields.reduce(parseMultipartField, []);
+
+    /**
+     * @param {!Array.<!SDK.NetworkRequest.NameValue>} result
+     * @param {string} field
+     * @return {!Array.<!SDK.NetworkRequest.NameValue>}
+     */
+    function parseMultipartField(result, field) {
+      const [match, name, filename, contentType, value] = field.match(keyValuePattern) || [];
+
+      if (!match)
+        return result;
+
+      const processedValue = (filename || contentType) ? ls`(binary)` : value;
+      result.push({name, value: processedValue});
+
+      return result;
+    }
   }
 
   /**
@@ -992,9 +1073,12 @@ SDK.NetworkRequest = class extends Common.Object {
     if (!this._contentDataProvider)
       return SDK.NetworkManager.searchInRequest(this, query, caseSensitive, isRegex);
 
-    const content = await this.requestContent();
+    const contentData = await this.contentData();
+    let content = contentData.content;
     if (!content)
       return [];
+    if (contentData.encoded)
+      content = window.atob(content);
     return Common.ContentProvider.performSearchInContent(content, query, caseSensitive, isRegex);
   }
 
@@ -1064,19 +1148,16 @@ SDK.NetworkRequest = class extends Common.Object {
   /**
    * @param {!Element} image
    */
-  populateImageSource(image) {
-    /**
-     * @param {?string} content
-     * @this {SDK.NetworkRequest}
-     */
-    function onResourceContent(content) {
-      let imageSrc = Common.ContentProvider.contentAsDataURL(content, this._mimeType, true);
-      const cacheControl = this.responseHeaderValue('cache-control');
-      if (imageSrc === null && (!cacheControl || !cacheControl.includes('no-cache')))
+  async populateImageSource(image) {
+    const {content, encoded} = await this.contentData();
+    let imageSrc = Common.ContentProvider.contentAsDataURL(content, this._mimeType, encoded);
+    if (imageSrc === null && !this._failed) {
+      const cacheControl = this.responseHeaderValue('cache-control') || '';
+      if (!cacheControl.includes('no-cache'))
         imageSrc = this._url;
-      image.src = imageSrc;
     }
-    this.requestContent().then(onResourceContent.bind(this));
+    if (imageSrc !== null)
+      image.src = imageSrc;
   }
 
   /**
@@ -1163,6 +1244,24 @@ SDK.NetworkRequest = class extends Common.Object {
   setRequestIdForTest(requestId) {
     this._backendRequestId = requestId;
     this._requestId = requestId;
+  }
+
+  /**
+   * @return {?string}
+   */
+  charset() {
+    const contentTypeHeader = this.responseHeaderValue('content-type');
+    if (!contentTypeHeader)
+      return null;
+
+    const responseCharsets = contentTypeHeader.replace(/ /g, '')
+                                 .split(';')
+                                 .filter(parameter => parameter.toLowerCase().startsWith('charset='))
+                                 .map(parameter => parameter.slice('charset='.length));
+    if (responseCharsets.length)
+      return responseCharsets[0];
+
+    return null;
   }
 };
 

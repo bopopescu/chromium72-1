@@ -223,27 +223,25 @@ bool ShouldUnescapeCodePoint(UnescapeRule::Type rules, uint32_t code_point) {
       code_point == 0x1F513 ||  // OPEN LOCK            (%F0%9F%94%93)
 
       // Spaces are also banned, as they can be used to scroll text out of view.
-      (!(rules & UnescapeRule::NONASCII_SPACES) &&
-       (code_point == 0x0085 ||  // NEXT LINE                  (%C2%85)
-        code_point == 0x00A0 ||  // NO-BREAK SPACE             (%C2%A0)
-        code_point == 0x1680 ||  // OGHAM SPACE MARK           (%E1%9A%80)
-        code_point == 0x2000 ||  // EN QUAD                    (%E2%80%80)
-        code_point == 0x2001 ||  // EM QUAD                    (%E2%80%81)
-        code_point == 0x2002 ||  // EN SPACE                   (%E2%80%82)
-        code_point == 0x2003 ||  // EM SPACE                   (%E2%80%83)
-        code_point == 0x2004 ||  // THREE-PER-EM SPACE         (%E2%80%84)
-        code_point == 0x2005 ||  // FOUR-PER-EM SPACE          (%E2%80%85)
-        code_point == 0x2006 ||  // SIX-PER-EM SPACE           (%E2%80%86)
-        code_point == 0x2007 ||  // FIGURE SPACE               (%E2%80%87)
-        code_point == 0x2008 ||  // PUNCTUATION SPACE          (%E2%80%88)
-        code_point == 0x2009 ||  // THIN SPACE                 (%E2%80%89)
-        code_point == 0x200A ||  // HAIR SPACE                 (%E2%80%8A)
-        code_point == 0x2028 ||  // LINE SEPARATOR             (%E2%80%A8)
-        code_point == 0x2029 ||  // PARAGRAPH SEPARATOR        (%E2%80%A9)
-        code_point == 0x202F ||  // NARROW NO-BREAK SPACE      (%E2%80%AF)
-        code_point == 0x205F ||  // MEDIUM MATHEMATICAL SPACE  (%E2%81%9F)
-        code_point == 0x3000     // IDEOGRAPHIC SPACE          (%E3%80%80)
-        )));
+      code_point == 0x0085 ||  // NEXT LINE                  (%C2%85)
+      code_point == 0x00A0 ||  // NO-BREAK SPACE             (%C2%A0)
+      code_point == 0x1680 ||  // OGHAM SPACE MARK           (%E1%9A%80)
+      code_point == 0x2000 ||  // EN QUAD                    (%E2%80%80)
+      code_point == 0x2001 ||  // EM QUAD                    (%E2%80%81)
+      code_point == 0x2002 ||  // EN SPACE                   (%E2%80%82)
+      code_point == 0x2003 ||  // EM SPACE                   (%E2%80%83)
+      code_point == 0x2004 ||  // THREE-PER-EM SPACE         (%E2%80%84)
+      code_point == 0x2005 ||  // FOUR-PER-EM SPACE          (%E2%80%85)
+      code_point == 0x2006 ||  // SIX-PER-EM SPACE           (%E2%80%86)
+      code_point == 0x2007 ||  // FIGURE SPACE               (%E2%80%87)
+      code_point == 0x2008 ||  // PUNCTUATION SPACE          (%E2%80%88)
+      code_point == 0x2009 ||  // THIN SPACE                 (%E2%80%89)
+      code_point == 0x200A ||  // HAIR SPACE                 (%E2%80%8A)
+      code_point == 0x2028 ||  // LINE SEPARATOR             (%E2%80%A8)
+      code_point == 0x2029 ||  // PARAGRAPH SEPARATOR        (%E2%80%A9)
+      code_point == 0x202F ||  // NARROW NO-BREAK SPACE      (%E2%80%AF)
+      code_point == 0x205F ||  // MEDIUM MATHEMATICAL SPACE  (%E2%81%9F)
+      code_point == 0x3000);   // IDEOGRAPHIC SPACE          (%E3%80%80)
 }
 
 // Unescapes |escaped_text| according to |rules|, returning the resulting
@@ -359,6 +357,12 @@ str EscapeForHTMLImpl(base::BasicStringPiece<str> input) {
   return result;
 }
 
+// Everything except alphanumerics and -._~
+// See RFC 3986 for the list of unreserved characters.
+static const Charmap kUnreservedCharmap = {
+    {0xffffffffL, 0xfc009fffL, 0x78000001L, 0xb8000001L, 0xffffffffL,
+     0xffffffffL, 0xffffffffL, 0xffffffffL}};
+
 // Everything except alphanumerics and !'()*-._~
 // See RFC 2396 for the list of reserved characters.
 static const Charmap kQueryCharmap = {{
@@ -400,6 +404,10 @@ static const Charmap kExternalHandlerCharmap = {{
 }};
 
 }  // namespace
+
+std::string EscapeAllExceptUnreserved(base::StringPiece text) {
+  return Escape(text, kUnreservedCharmap, false);
+}
 
 std::string EscapeQueryParamValue(base::StringPiece text, bool use_plus) {
   return Escape(text, kQueryCharmap, use_plus);
@@ -471,8 +479,9 @@ base::string16 UnescapeAndDecodeUTF8URLComponentWithAdjustments(
   return base::UTF8ToUTF16WithAdjustments(text, adjustments);
 }
 
-std::string UnescapeBinaryURLComponent(base::StringPiece escaped_text,
-                                       UnescapeRule::Type rules) {
+void UnescapeBinaryURLComponent(const std::string& escaped_text,
+                                UnescapeRule::Type rules,
+                                std::string* unescaped_text) {
   // Only NORMAL and REPLACE_PLUS_WITH_SPACE are supported.
   DCHECK(rules != UnescapeRule::NONE);
   DCHECK(!(rules &
@@ -481,31 +490,37 @@ std::string UnescapeBinaryURLComponent(base::StringPiece escaped_text,
   // The output of the unescaping is always smaller than the input, so we can
   // reserve the input size to make sure we have enough buffer and don't have
   // to allocate in the loop below.
-  std::string result;
-  result.reserve(escaped_text.length());
+  // Increase capacity before size, as just resizing can grow capacity
+  // needlessly beyond our requested size.
+  if (unescaped_text->capacity() < escaped_text.size())
+    unescaped_text->reserve(escaped_text.size());
+  if (unescaped_text->size() < escaped_text.size())
+    unescaped_text->resize(escaped_text.size());
 
-  for (size_t i = 0, max = escaped_text.size(); i < max;) {
+  size_t output_index = 0;
+
+  for (size_t i = 0, max = unescaped_text->size(); i < max;) {
     unsigned char byte;
     // UnescapeUnsignedByteAtIndex does bounds checking, so this is always safe
     // to call.
     if (UnescapeUnsignedByteAtIndex(escaped_text, i, &byte)) {
-      result.push_back(byte);
+      (*unescaped_text)[output_index++] = byte;
       i += 3;
       continue;
     }
 
     if ((rules & UnescapeRule::REPLACE_PLUS_WITH_SPACE) &&
         escaped_text[i] == '+') {
-      result.push_back(' ');
+      (*unescaped_text)[output_index++] = ' ';
       ++i;
       continue;
     }
 
-    result.push_back(escaped_text[i]);
-    ++i;
+    (*unescaped_text)[output_index++] = escaped_text[i++];
   }
 
-  return result;
+  DCHECK_LE(output_index, unescaped_text->size());
+  unescaped_text->resize(output_index);
 }
 
 base::string16 UnescapeForHTML(base::StringPiece16 input) {
@@ -542,6 +557,26 @@ base::string16 UnescapeForHTML(base::StringPiece16 input) {
     }
   }
   return text;
+}
+
+bool ContainsEncodedBytes(base::StringPiece escaped_text,
+                          const std::set<unsigned char>& bytes) {
+  for (size_t i = 0, max = escaped_text.size(); i < max;) {
+    unsigned char byte;
+    // UnescapeUnsignedByteAtIndex does bounds checking, so this is always safe
+    // to call.
+    if (UnescapeUnsignedByteAtIndex(escaped_text, i, &byte)) {
+      if (bytes.find(byte) != bytes.end())
+        return true;
+
+      i += 3;
+      continue;
+    }
+
+    ++i;
+  }
+
+  return false;
 }
 
 }  // namespace net

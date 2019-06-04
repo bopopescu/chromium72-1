@@ -21,6 +21,10 @@ class ViewsTextServicesContextMenuBase : public ViewsTextServicesContextMenu {
   // Returns true if the given |command_id| is handled by the menu.
   bool SupportsCommand(int command_id) const override;
 
+  // ui::AcceleratorProvider:
+  bool GetAcceleratorForCommandId(int command_id,
+                                  ui::Accelerator* accelerator) const override;
+
   // Methods associated with SimpleMenuModel::Delegate.
   bool IsCommandIdChecked(int command_id) const override;
   bool IsCommandIdEnabled(int command_id) const override;

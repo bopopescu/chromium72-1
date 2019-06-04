@@ -2,12 +2,13 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 //
-// Next MinVersion: 32
+// Next MinVersion: 38
 
 module arc.mojom;
 
 import "components/arc/common/gfx.mojom";
 import "components/arc/common/scale_factor.mojom";
+import "ui/accessibility/mojom/ax_assistant_structure.mojom";
 
 // Describes installation result.
 struct InstallationResult {
@@ -22,6 +23,7 @@ struct AppInfo {
   string activity;
   [MinVersion=2] bool sticky;  // true if the app cannot be uninstalled
   [MinVersion=7] bool notifications_enabled;
+  [MinVersion=35] bool suspended;
 };
 
 // Describes ARC package.
@@ -154,6 +156,20 @@ enum AppDataRequestState {
   APP_DATA_SEARCH_PROXY_NOT_AVAILABLE = 7,
   // Failed to call globalQuery to GmsCore.
   FAILED_TO_CALL_GLOBALQUERY = 8,
+  // Failed to sign into GmsCore.
+  NOT_SIGNED_IN = 9,
+};
+
+// Describes the category type of app shortcut item.
+[Extensible]
+enum AppShortcutItemType {
+  // Static shortcut, which means it was published from AndroidManifest.xml.
+  kStatic = 0,
+
+  // Dynamic shortcut, which means it was published at runtime using the
+  // ShortcutManagerAPI. Dynamic shortcuts are links to specific,
+  // context-sensitive actions within the app.
+  kDynamic = 1,
 };
 
 // Describes app shortcut that is published by Android's ShortcutManager.
@@ -170,6 +186,12 @@ struct AppShortcutItem {
 
   // The package name of the publisher app.
   [MinVersion=31] string? package_name;
+
+  // The category type of this shortcut.
+  [MinVersion=32] AppShortcutItemType type;
+
+  // "Rank" of a shortcut, which is a non-negative, sequential value.
+  [MinVersion=32] int32 rank;
 };
 
 // Next method ID: 18
@@ -183,8 +205,8 @@ interface AppHost {
   // empty and must match to |scale_factor| assuming 48x48 for
   // SCALE_FACTOR_100P.  |scale_factor| is an enum defined at ui/base/layout.h.
   // |icon_png_data| is a png-encoded image.
-  OnAppIcon@1(string package_name, string activity,
-              ScaleFactor scale_factor, array<uint8> icon_png_data);
+  OnAppIconDeprecated@1(string package_name, string activity,
+                        ScaleFactor scale_factor, array<uint8> icon_png_data);
 
   // Receives a list of available ARC apps to Chrome. Members of AppInfo must
   // contain non-empty string.
@@ -254,7 +276,7 @@ interface AppHost {
 };
 
 // TODO(lhchavez): Migrate all request/response messages to Mojo.
-// Next method ID: 25
+// Next method ID: 30
 interface AppInstance {
   // DEPRECATED: Please use Init@21 instead.
   InitDeprecated@0(AppHost host_ptr);
@@ -302,17 +324,30 @@ interface AppInstance {
   // not received).
   RefreshAppList@2();
 
+  // Sends a request for the ARC shortcut icon of a given resource id and
+  // |pixel_size|.
+  [MinVersion=36] RequestAppIcon@27(string package_name,
+                                    string activity,
+                                    int32 pixel_size) =>
+                                        (array<uint8> icon_png_data);
+
   // Sends a request to ARC for the ARC app icon of a required scale factor.
   // Scale factor is an enum defined at ui/base/layout.h. App is defined by
   // |package_name| and |activity|, which cannot be empty.
-  RequestAppIcon@3(string package_name, string activity,
-                   ScaleFactor scale_factor);
+  RequestAppIconDeprecated@3(string package_name, string activity,
+                             ScaleFactor scale_factor);
+
+  // Sends a request for the ARC shortcut icon of a given resource id and
+  // |pixel_size|.
+  [MinVersion=36] RequestShortcutIcon@28(string icon_resource_id,
+                                         int32 pixel_size) =>
+                                             (array<uint8> icon_png_data);
 
   // Sends a request for the ARC shortcut icon of a given resource id and scale
   // factor.
-  [MinVersion=9] RequestIcon@13(string icon_resource_id,
-                                ScaleFactor scale_factor) =>
-                                    (array<uint8> icon_png_data);
+  [MinVersion=9] RequestShortcutIconDeprecated@13(
+      string icon_resource_id, ScaleFactor scale_factor) =>
+          (array<uint8> icon_png_data);
 
   // Removes cached shortcut icon with the given resource id.
   [MinVersion=9] RemoveCachedIcon@14(string icon_resource_id);
@@ -339,12 +374,20 @@ interface AppInstance {
   // Sends a request to ARC to start PAI flow.
   [MinVersion=21] StartPaiFlow@17();
 
+  // Sends a request to ARC to start FastAppReinstall flow.
+  [MinVersion=33] StartFastAppReinstallFlow@25(array<string> arc_package_names);
+
   // Sends a request to ARC to uninstall the given package.  Error (if ever
   // happens) is ignored, and uninstall option should appear in the UI.
   [MinVersion=2] UninstallPackage@5(string package_name);
 
-  // Sends a request to ARC to get app shortcuts for app with |package_name|. If
-  // |package_name| is empty, it will query for all launchable activities.
+  // Sends a request to ARC to get app shortcuts for apps in global scope that
+  // match a |query|. Limits the results to only return |max_results|.
+  [MinVersion=34] GetAppShortcutGlobalQueryItems@26(
+      string query, int32 max_results) =>
+          (array<AppShortcutItem> shortcut_items);
+
+  // Sends a request to ARC to get app shortcuts for app with |package_name|.
   [MinVersion=29] GetAppShortcutItems@23(string package_name) =>
       (array<AppShortcutItem> shortcut_items);
 
@@ -358,4 +401,9 @@ interface AppInstance {
       string query, int32 max_results) =>
           (AppDiscoveryRequestState state@1,
            array<AppDiscoveryResult> results@0);
+
+  // Requests assist structure.
+  [MinVersion=37] RequestAssistStructure@29() =>
+        (ax.mojom.AssistantExtra? assistant_extra,
+         ax.mojom.AssistantTree? assistant_tree);
 };

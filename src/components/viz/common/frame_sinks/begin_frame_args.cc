@@ -4,7 +4,7 @@
 
 #include "components/viz/common/frame_sinks/begin_frame_args.h"
 
-#include "base/trace_event/trace_event_argument.h"
+#include "base/trace_event/traced_value.h"
 
 namespace viz {
 
@@ -52,6 +52,9 @@ BeginFrameArgs::BeginFrameArgs(uint64_t source_id,
       animate_only(false) {
   DCHECK_LE(kStartingFrameNumber, sequence_number);
 }
+
+BeginFrameArgs::BeginFrameArgs(const BeginFrameArgs& args) = default;
+BeginFrameArgs& BeginFrameArgs::operator=(const BeginFrameArgs& args) = default;
 
 BeginFrameArgs BeginFrameArgs::Create(BeginFrameArgs::CreationLocation location,
                                       uint64_t source_id,
@@ -115,11 +118,19 @@ BeginFrameAck::BeginFrameAck()
       sequence_number(BeginFrameArgs::kInvalidFrameNumber),
       has_damage(false) {}
 
+BeginFrameAck::BeginFrameAck(const BeginFrameArgs& args, bool has_damage)
+    : BeginFrameAck(args.source_id,
+                    args.sequence_number,
+                    has_damage,
+                    args.trace_id) {}
+
 BeginFrameAck::BeginFrameAck(uint64_t source_id,
                              uint64_t sequence_number,
-                             bool has_damage)
+                             bool has_damage,
+                             int64_t trace_id)
     : source_id(source_id),
       sequence_number(sequence_number),
+      trace_id(trace_id),
       has_damage(has_damage) {
   DCHECK_LT(BeginFrameArgs::kInvalidFrameNumber, sequence_number);
 }

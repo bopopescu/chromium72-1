@@ -20,7 +20,6 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
-#include "chrome/browser/ui/views/autofill/dialog_event_waiter.h"
 #include "chrome/browser/ui/views/payments/editor_view_controller.h"
 #include "chrome/browser/ui/views/payments/payment_request_dialog_view_ids.h"
 #include "chrome/browser/ui/views/payments/validating_combobox.h"
@@ -89,6 +88,7 @@ void PaymentRequestBrowserTestBase::SetUpCommandLine(
   // HTTPS server only serves a valid cert for localhost, so this is needed to
   // load pages from "a.com" without an interstitial.
   command_line->AppendSwitch(switches::kIgnoreCertificateErrors);
+  command_line->AppendSwitch(switches::kEnableExperimentalWebPlatformFeatures);
 }
 
 void PaymentRequestBrowserTestBase::SetUpOnMainThread() {
@@ -255,7 +255,7 @@ void PaymentRequestBrowserTestBase::OnInterfaceRequestFromFrame(
 }
 
 void PaymentRequestBrowserTestBase::InvokePaymentRequestUI() {
-  ResetEventWaiter(DialogEvent::DIALOG_OPENED);
+  ResetEventWaiterForDialogOpened();
 
   content::WebContents* web_contents = GetActiveWebContents();
   const std::string click_buy_button_js =
@@ -628,6 +628,46 @@ void PaymentRequestBrowserTestBase::PayWithCreditCardAndWait(
                            dialog_view);
 }
 
+void PaymentRequestBrowserTestBase::PayWithCreditCard(
+    const base::string16& cvc) {
+  OpenCVCPromptWithCVC(cvc, delegate_->dialog_view());
+
+  ResetEventWaiter(DialogEvent::PROCESSING_SPINNER_SHOWN);
+  ClickOnDialogViewAndWait(DialogViewID::CVC_PROMPT_CONFIRM_BUTTON,
+                           delegate_->dialog_view());
+}
+
+void PaymentRequestBrowserTestBase::RetryPaymentRequest(
+    const std::string& validation_errors,
+    PaymentRequestDialogView* dialog_view) {
+  EXPECT_EQ(2U, dialog_view->view_stack_for_testing()->size());
+  ResetEventWaiterForSequence({DialogEvent::PROCESSING_SPINNER_HIDDEN,
+                               DialogEvent::SPEC_DONE_UPDATING,
+                               DialogEvent::PROCESSING_SPINNER_HIDDEN,
+                               DialogEvent::BACK_TO_PAYMENT_SHEET_NAVIGATION});
+
+  ASSERT_TRUE(content::ExecuteScript(GetActiveWebContents(),
+                                     "retry(" + validation_errors + ");"));
+
+  WaitForObservedEvent();
+}
+
+void PaymentRequestBrowserTestBase::RetryPaymentRequest(
+    const std::string& validation_errors,
+    const DialogEvent& dialog_event,
+    PaymentRequestDialogView* dialog_view) {
+  EXPECT_EQ(2U, dialog_view->view_stack_for_testing()->size());
+  ResetEventWaiterForSequence(
+      {DialogEvent::PROCESSING_SPINNER_HIDDEN, DialogEvent::SPEC_DONE_UPDATING,
+       DialogEvent::PROCESSING_SPINNER_HIDDEN,
+       DialogEvent::BACK_TO_PAYMENT_SHEET_NAVIGATION, dialog_event});
+
+  ASSERT_TRUE(content::ExecuteScript(GetActiveWebContents(),
+                                     "retry(" + validation_errors + ");"));
+
+  WaitForObservedEvent();
+}
+
 base::string16 PaymentRequestBrowserTestBase::GetEditorTextfieldValue(
     autofill::ServerFieldType type) {
   ValidatingTextfield* textfield =
@@ -758,14 +798,20 @@ void PaymentRequestBrowserTestBase::SetCanMakePaymentEnabledPref(
 }
 
 void PaymentRequestBrowserTestBase::ResetEventWaiter(DialogEvent event) {
-  event_waiter_ = std::make_unique<DialogEventWaiter<DialogEvent>>(
+  event_waiter_ = std::make_unique<autofill::EventWaiter<DialogEvent>>(
       std::list<DialogEvent>{event});
 }
 
 void PaymentRequestBrowserTestBase::ResetEventWaiterForSequence(
     std::list<DialogEvent> event_sequence) {
-  event_waiter_ = std::make_unique<DialogEventWaiter<DialogEvent>>(
+  event_waiter_ = std::make_unique<autofill::EventWaiter<DialogEvent>>(
       std::move(event_sequence));
+}
+
+void PaymentRequestBrowserTestBase::ResetEventWaiterForDialogOpened() {
+  ResetEventWaiterForSequence({DialogEvent::PROCESSING_SPINNER_SHOWN,
+                               DialogEvent::PROCESSING_SPINNER_HIDDEN,
+                               DialogEvent::DIALOG_OPENED});
 }
 
 void PaymentRequestBrowserTestBase::WaitForObservedEvent() {

@@ -11,6 +11,7 @@
 #include "base/run_loop.h"
 #include "base/single_thread_task_runner.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/threading/thread_restrictions.h"
 #include "build/build_config.h"
 #include "chrome/app/chrome_command_ids.h"
 #include "chrome/browser/bookmarks/bookmark_model_factory.h"
@@ -28,7 +29,6 @@
 #include "chrome/browser/ui/views/toolbar/toolbar_button.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/interactive_test_utils.h"
-#include "chrome/test/views/scoped_macviews_browser_mode.h"
 #include "components/bookmarks/browser/bookmark_model.h"
 #include "components/bookmarks/browser/bookmark_utils.h"
 #include "ui/views/focus/focus_manager.h"
@@ -65,8 +65,6 @@ class ToolbarViewInteractiveUITest : public extensions::ExtensionBrowserTest {
   void SetUpCommandLine(base::CommandLine* command_line) override;
   void SetUpOnMainThread() override;
   void TearDownOnMainThread() override;
-
-  test::ScopedMacViewsBrowserMode views_mode_{true};
 
   ToolbarView* toolbar_view_;
 
@@ -127,6 +125,7 @@ void ToolbarViewInteractiveUITest::TestWhileInDragOperation() {
 
 void ToolbarViewInteractiveUITest::FinishDragAndDrop(
     base::Closure quit_closure) {
+  base::ScopedAllowBlockingForTesting allow_thread_join;
   dnd_thread_.reset();
   TestWhileInDragOperation();
   ui_controls::SendMouseEventsNotifyWhenDone(ui_controls::LEFT, ui_controls::UP,
@@ -194,8 +193,6 @@ class ToolbarViewTest : public InProcessBrowserTest {
   void RunToolbarCycleFocusTest(Browser* browser);
 
  private:
-  test::ScopedMacViewsBrowserMode views_mode_{true};
-
   DISALLOW_COPY_AND_ASSIGN(ToolbarViewTest);
 };
 

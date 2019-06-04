@@ -36,13 +36,15 @@ class CORE_EXPORT HTMLLabelElement final : public HTMLElement {
 
  public:
   static HTMLLabelElement* Create(Document&);
+
+  explicit HTMLLabelElement(Document&);
+
   LabelableElement* control() const;
   HTMLFormElement* form() const;
 
   bool WillRespondToMouseClickEvents() override;
 
  private:
-  explicit HTMLLabelElement(Document&);
   bool IsInInteractiveContent(Node*) const;
 
   bool IsInteractiveContent() const override;
@@ -53,7 +55,7 @@ class CORE_EXPORT HTMLLabelElement final : public HTMLElement {
   void SetHovered(bool = true) override;
 
   // Overridden to either click() or focus() the corresponding control.
-  void DefaultEventHandler(Event*) override;
+  void DefaultEventHandler(Event&) override;
   bool HasActivationBehavior() const override;
 
   void focus(const FocusParams&) override;

@@ -11,24 +11,18 @@
 #ifndef LOGGING_RTC_EVENT_LOG_EVENTS_RTC_EVENT_ICE_CANDIDATE_PAIR_H_
 #define LOGGING_RTC_EVENT_LOG_EVENTS_RTC_EVENT_ICE_CANDIDATE_PAIR_H_
 
-#include "logging/rtc_event_log/events/rtc_event.h"
+#include <memory>
 
-#include <string>
+#include "logging/rtc_event_log/events/rtc_event.h"
 
 namespace webrtc {
 
 enum class IceCandidatePairEventType {
-  // Config event types for events related to the candiate pair creation and
-  // life-cycle management.
-  kAdded,
-  kUpdated,
-  kDestroyed,
-  kSelected,
-  // Non-config event types.
   kCheckSent,
   kCheckReceived,
   kCheckResponseSent,
   kCheckResponseReceived,
+  kNumValues,
 };
 
 class RtcEventIceCandidatePair final : public RtcEvent {
@@ -41,6 +35,14 @@ class RtcEventIceCandidatePair final : public RtcEvent {
   Type GetType() const override;
 
   bool IsConfigEvent() const override;
+
+  std::unique_ptr<RtcEventIceCandidatePair> Copy() const;
+
+  IceCandidatePairEventType type() const { return type_; }
+  uint32_t candidate_pair_id() const { return candidate_pair_id_; }
+
+ private:
+  RtcEventIceCandidatePair(const RtcEventIceCandidatePair& other);
 
   const IceCandidatePairEventType type_;
   const uint32_t candidate_pair_id_;

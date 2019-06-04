@@ -13,7 +13,6 @@
 #include "base/time/tick_clock.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/l10n/time_format.h"
-#include "ui/base/material_design/material_design_controller.h"
 #include "ui/base/ui_base_types.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/text_constants.h"
@@ -98,8 +97,7 @@ base::string16 LogoutConfirmationDialog::GetWindowTitle() const {
 }
 
 bool LogoutConfirmationDialog::ShouldShowCloseButton() const {
-  // Material UI has no [X] in the corner of this dialog.
-  return !ui::MaterialDesignController::IsSecondaryUiMaterial();
+  return false;
 }
 
 void LogoutConfirmationDialog::WindowClosing() {

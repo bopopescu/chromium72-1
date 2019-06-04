@@ -20,7 +20,7 @@
 #include "base/task_runner.h"
 #include "base/threading/thread_task_runner_handle.h"
 #include "base/trace_event/trace_event.h"
-#include "base/trace_event/trace_event_argument.h"
+#include "base/trace_event/traced_value.h"
 #include "third_party/skia/include/core/SkImageInfo.h"
 #include "ui/display/types/gamma_ramp_rgb_entry.h"
 #include "ui/ozone/platform/drm/common/drm_util.h"
@@ -133,6 +133,15 @@ bool CanQueryForResources(int fd) {
 
 }  // namespace
 
+DrmPropertyBlobMetadata::DrmPropertyBlobMetadata(DrmDevice* drm, uint32_t id)
+    : drm_(drm), id_(id) {}
+
+DrmPropertyBlobMetadata::~DrmPropertyBlobMetadata() {
+  DCHECK(drm_);
+  DCHECK(id_);
+  drm_->DestroyPropertyBlob(id_);
+}
+
 class DrmDevice::PageFlipManager {
  public:
   PageFlipManager() : next_id_(0) {}
@@ -196,19 +205,19 @@ class DrmDevice::IOWatcher : public base::MessagePumpLibevent::FdWatcher {
 
  private:
   void Register() {
-    DCHECK(base::MessageLoopForIO::IsCurrent());
+    DCHECK(base::MessageLoopCurrentForIO::IsSet());
     base::MessageLoopCurrentForIO::Get()->WatchFileDescriptor(
         fd_, true, base::MessagePumpForIO::WATCH_READ, &controller_, this);
   }
 
   void Unregister() {
-    DCHECK(base::MessageLoopForIO::IsCurrent());
+    DCHECK(base::MessageLoopCurrentForIO::IsSet());
     controller_.StopWatchingFileDescriptor();
   }
 
   // base::MessagePumpLibevent::FdWatcher overrides:
   void OnFileCanReadWithoutBlocking(int fd) override {
-    DCHECK(base::MessageLoopForIO::IsCurrent());
+    DCHECK(base::MessageLoopCurrentForIO::IsSet());
     TRACE_EVENT1("drm", "OnDrmEvent", "socket", fd);
 
     if (!ProcessDrmEvent(
@@ -230,11 +239,13 @@ class DrmDevice::IOWatcher : public base::MessagePumpLibevent::FdWatcher {
 
 DrmDevice::DrmDevice(const base::FilePath& device_path,
                      base::File file,
-                     bool is_primary_device)
+                     bool is_primary_device,
+                     std::unique_ptr<GbmDevice> gbm)
     : device_path_(device_path),
       file_(std::move(file)),
       page_flip_manager_(new PageFlipManager()),
-      is_primary_device_(is_primary_device) {}
+      is_primary_device_(is_primary_device),
+      gbm_(std::move(gbm)) {}
 
 DrmDevice::~DrmDevice() {}
 
@@ -247,12 +258,12 @@ bool DrmDevice::Initialize() {
   }
 
   // Use atomic only if kernel allows it.
-  if (SetCapability(DRM_CLIENT_CAP_ATOMIC, 1))
-    plane_manager_.reset(new HardwareDisplayPlaneManagerAtomic());
-
-  if (!plane_manager_)
-    plane_manager_.reset(new HardwareDisplayPlaneManagerLegacy());
-  if (!plane_manager_->Initialize(this)) {
+  is_atomic_ = SetCapability(DRM_CLIENT_CAP_ATOMIC, 1);
+  if (is_atomic_)
+    plane_manager_.reset(new HardwareDisplayPlaneManagerAtomic(this));
+  else
+    plane_manager_.reset(new HardwareDisplayPlaneManagerLegacy(this));
+  if (!plane_manager_->Initialize()) {
     LOG(ERROR) << "Failed to initialize the plane manager for "
                << device_path_.value();
     plane_manager_.reset();
@@ -354,7 +365,7 @@ bool DrmDevice::RemoveFramebuffer(uint32_t framebuffer) {
 
 bool DrmDevice::PageFlip(uint32_t crtc_id,
                          uint32_t framebuffer,
-                         PageFlipCallback callback) {
+                         scoped_refptr<PageFlipRequest> page_flip_request) {
   DCHECK(file_.IsValid());
   TRACE_EVENT2("drm", "DrmDevice::PageFlip", "crtc", crtc_id, "framebuffer",
                framebuffer);
@@ -365,25 +376,12 @@ bool DrmDevice::PageFlip(uint32_t crtc_id,
   if (!drmModePageFlip(file_.GetPlatformFile(), crtc_id, framebuffer,
                        DRM_MODE_PAGE_FLIP_EVENT, reinterpret_cast<void*>(id))) {
     // If successful the payload will be removed by a PageFlip event.
-    page_flip_manager_->RegisterCallback(id, 1, std::move(callback));
+    page_flip_manager_->RegisterCallback(id, 1,
+                                         page_flip_request->AddPageFlip());
     return true;
   }
 
   return false;
-}
-
-bool DrmDevice::PageFlipOverlay(uint32_t crtc_id,
-                                uint32_t framebuffer,
-                                const gfx::Rect& location,
-                                const gfx::Rect& source,
-                                int overlay_plane) {
-  DCHECK(file_.IsValid());
-  TRACE_EVENT2("drm", "DrmDevice::PageFlipOverlay", "crtc", crtc_id,
-               "framebuffer", framebuffer);
-  return !drmModeSetPlane(file_.GetPlatformFile(), overlay_plane, crtc_id,
-                          framebuffer, 0, location.x(), location.y(),
-                          location.width(), location.height(), source.x(),
-                          source.y(), source.width(), source.height());
 }
 
 ScopedDrmFramebufferPtr DrmDevice::GetFramebuffer(uint32_t framebuffer) {
@@ -391,6 +389,17 @@ ScopedDrmFramebufferPtr DrmDevice::GetFramebuffer(uint32_t framebuffer) {
   TRACE_EVENT1("drm", "DrmDevice::GetFramebuffer", "framebuffer", framebuffer);
   return ScopedDrmFramebufferPtr(
       drmModeGetFB(file_.GetPlatformFile(), framebuffer));
+}
+
+ScopedDrmPlanePtr DrmDevice::GetPlane(uint32_t plane_id) {
+  DCHECK(file_.IsValid());
+  return ScopedDrmPlanePtr(drmModeGetPlane(file_.GetPlatformFile(), plane_id));
+}
+
+ScopedDrmPlaneResPtr DrmDevice::GetPlaneResources() {
+  DCHECK(file_.IsValid());
+  return ScopedDrmPlaneResPtr(
+      drmModeGetPlaneResources(file_.GetPlatformFile()));
 }
 
 ScopedDrmPropertyPtr DrmDevice::GetProperty(drmModeConnector* connector,
@@ -422,9 +431,27 @@ bool DrmDevice::SetProperty(uint32_t connector_id,
                                       property_id, value);
 }
 
+ScopedDrmPropertyBlob DrmDevice::CreatePropertyBlob(void* blob, size_t size) {
+  uint32_t id = 0;
+  int ret = drmModeCreatePropertyBlob(file_.GetPlatformFile(), blob, size, &id);
+  DCHECK(!ret && id);
+
+  return ScopedDrmPropertyBlob(new DrmPropertyBlobMetadata(this, id));
+}
+
+void DrmDevice::DestroyPropertyBlob(uint32_t id) {
+  drmModeDestroyPropertyBlob(file_.GetPlatformFile(), id);
+}
+
 bool DrmDevice::GetCapability(uint64_t capability, uint64_t* value) {
   DCHECK(file_.IsValid());
   return !drmGetCap(file_.GetPlatformFile(), capability, value);
+}
+
+ScopedDrmPropertyBlobPtr DrmDevice::GetPropertyBlob(uint32_t property_id) {
+  DCHECK(file_.IsValid());
+  return ScopedDrmPropertyBlobPtr(
+      drmModeGetPropertyBlob(file_.GetPlatformFile(), property_id));
 }
 
 ScopedDrmPropertyBlobPtr DrmDevice::GetPropertyBlob(drmModeConnector* connector,
@@ -445,6 +472,15 @@ ScopedDrmPropertyBlobPtr DrmDevice::GetPropertyBlob(drmModeConnector* connector,
   }
 
   return ScopedDrmPropertyBlobPtr();
+}
+
+bool DrmDevice::SetObjectProperty(uint32_t object_id,
+                                  uint32_t object_type,
+                                  uint32_t property_id,
+                                  uint32_t property_value) {
+  DCHECK(file_.IsValid());
+  return !drmModeObjectSetProperty(file_.GetPlatformFile(), object_id,
+                                   object_type, property_id, property_value);
 }
 
 bool DrmDevice::SetCursor(uint32_t crtc_id,
@@ -511,20 +547,23 @@ bool DrmDevice::CloseBufferHandle(uint32_t handle) {
                    &close_request);
 }
 
-bool DrmDevice::CommitProperties(drmModeAtomicReq* properties,
-                                 uint32_t flags,
-                                 uint32_t crtc_count,
-                                 PageFlipCallback callback) {
+bool DrmDevice::CommitProperties(
+    drmModeAtomicReq* properties,
+    uint32_t flags,
+    uint32_t crtc_count,
+    scoped_refptr<PageFlipRequest> page_flip_request) {
   uint64_t id = 0;
-  bool page_flip_event_requested = flags & DRM_MODE_PAGE_FLIP_EVENT;
-
-  if (page_flip_event_requested)
+  if (page_flip_request) {
+    flags |= DRM_MODE_PAGE_FLIP_EVENT;
     id = page_flip_manager_->GetNextId();
+  }
 
   if (!drmModeAtomicCommit(file_.GetPlatformFile(), properties, flags,
                            reinterpret_cast<void*>(id))) {
-    if (page_flip_event_requested)
-      page_flip_manager_->RegisterCallback(id, crtc_count, std::move(callback));
+    if (page_flip_request) {
+      page_flip_manager_->RegisterCallback(id, crtc_count,
+                                           page_flip_request->AddPageFlip());
+    }
 
     return true;
   }

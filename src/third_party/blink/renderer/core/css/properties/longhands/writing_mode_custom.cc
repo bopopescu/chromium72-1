@@ -5,7 +5,7 @@
 #include "third_party/blink/renderer/core/css/properties/longhands/writing_mode.h"
 
 namespace blink {
-namespace CSSLonghand {
+namespace css_longhand {
 
 const CSSValue* WritingMode::CSSValueFromComputedStyleInternal(
     const ComputedStyle& style,
@@ -16,5 +16,11 @@ const CSSValue* WritingMode::CSSValueFromComputedStyleInternal(
   return CSSIdentifierValue::Create(style.GetWritingMode());
 }
 
-}  // namespace CSSLonghand
+void WritingMode::ApplyValue(StyleResolverState& state,
+                             const CSSValue& value) const {
+  state.SetWritingMode(
+      ToCSSIdentifierValue(value).ConvertTo<blink::WritingMode>());
+}
+
+}  // namespace css_longhand
 }  // namespace blink

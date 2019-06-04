@@ -26,8 +26,8 @@ value: "<serialized content::proto::BackgroundFetchMetadata>"
 ```
 
 ```
-key: "bgfetch_title_<unique_id>"
-value: "<ui_title>"
+key: "bgfetch_ui_options_<unique_id>"
+value: "<serialized content::proto::BackgroundFetchUIOptions>"
 ```
 
 ```
@@ -44,6 +44,19 @@ value: "<serialized content::proto::BackgroundFetchActiveRequest>"
 key: "bgfetch_completed_request_<unique_id>_<request_index>"
 value: "<serialized content::proto::BackgroundFetchCompletedRequest>"
 ```
+
+## Cache Storage UserData schema
+
+The downloaded responses of every fetch will be stored in their own private cache.
+
+### Cache identifiers
+* `origin`: `<origin>`
+* `owner`: `CacheStorageOwner::kBackgroundFetch`
+* `cache_name`: `<unique_id>`
+
+The cache will contain all the Request/Response key/value pairs of the fetch.
+Note that the Request value stored isn't comprehensive, and only the url value is
+used to as a key to find the matching Response.
 
 ### Expansions
 * `<unique_id>` is a GUID (v4) that identifies a background fetch registration.

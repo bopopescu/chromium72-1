@@ -13,18 +13,19 @@
 #include "chrome/browser/feedback/feedback_uploader_factory_chrome.h"
 #include "chrome/browser/feedback/system_logs/chrome_system_logs_fetcher.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/signin/signin_manager_factory.h"
+#include "chrome/browser/signin/identity_manager_factory.h"
 #include "chrome/browser/ui/simple_message_box.h"
 #include "chrome/grit/generated_resources.h"
 #include "components/feedback/system_logs/system_logs_fetcher.h"
-#include "components/signin/core/browser/signin_manager.h"
 #include "components/strings/grit/components_strings.h"
 #include "content/public/browser/browser_context.h"
+#include "services/identity/public/cpp/identity_manager.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/webui/web_ui_util.h"
 
 #if defined(OS_CHROMEOS)
 #include "chrome/browser/chromeos/arc/arc_util.h"
+#include "chrome/browser/chromeos/system_logs/iwlwifi_dump_log_source.h"
 #include "chrome/browser/chromeos/system_logs/single_debug_daemon_log_source.h"
 #include "chrome/browser/chromeos/system_logs/single_log_file_log_source.h"
 #include "chrome/browser/profiles/profile.h"
@@ -76,6 +77,8 @@ ChromeFeedbackPrivateDelegate::GetStrings(
   SET_STRING("privacy-note", IDS_FEEDBACK_PRIVACY_NOTE);
   SET_STRING("performance-trace",
              IDS_FEEDBACK_INCLUDE_PERFORMANCE_TRACE_CHECKBOX);
+  SET_STRING("bluetooth-logs-info", IDS_FEEDBACK_BLUETOOTH_LOGS_CHECKBOX);
+  SET_STRING("bluetooth-logs-message", IDS_FEEDBACK_BLUETOOTH_LOGS_MESSAGE);
   // Add the localized strings needed for the "system information" page.
   SET_STRING("sysinfoPageTitle", IDS_FEEDBACK_SYSINFO_PAGE_TITLE);
   SET_STRING("sysinfoPageDescription", IDS_ABOUT_SYS_DESC);
@@ -162,14 +165,32 @@ ChromeFeedbackPrivateDelegate::CreateSingleLogSource(
       return nullptr;
   }
 }
+
+void ChromeFeedbackPrivateDelegate::FetchAndMergeIwlwifiDumpLogsIfPresent(
+    std::unique_ptr<FeedbackCommon::SystemLogsMap> original_sys_logs,
+    content::BrowserContext* context,
+    system_logs::SysLogsFetcherCallback callback) const {
+  if (!original_sys_logs ||
+      !system_logs::ContainsIwlwifiLogs(original_sys_logs.get())) {
+    std::move(callback).Run(std::move(original_sys_logs));
+    return;
+  }
+
+  system_logs::SystemLogsFetcher* fetcher =
+      new system_logs::SystemLogsFetcher(true /* scrub_data */);
+  fetcher->AddSource(std::make_unique<system_logs::IwlwifiDumpLogSource>());
+  fetcher->Fetch(base::BindOnce(&system_logs::MergeIwlwifiLogs,
+                                std::move(original_sys_logs),
+                                std::move(callback)));
+}
 #endif  // defined(OS_CHROMEOS)
 
 std::string ChromeFeedbackPrivateDelegate::GetSignedInUserEmail(
     content::BrowserContext* context) const {
-  SigninManagerBase* signin_manager =
-      SigninManagerFactory::GetForProfile(Profile::FromBrowserContext(context));
-  return signin_manager ? signin_manager->GetAuthenticatedAccountInfo().email
-                        : std::string();
+  auto* identity_manager = IdentityManagerFactory::GetForProfile(
+      Profile::FromBrowserContext(context));
+  return identity_manager ? identity_manager->GetPrimaryAccountInfo().email
+                          : std::string();
 }
 
 void ChromeFeedbackPrivateDelegate::NotifyFeedbackDelayed() const {

@@ -17,7 +17,6 @@
 #include "base/macros.h"
 #include "base/memory/ref_counted.h"
 #include "base/memory/weak_ptr.h"
-#include "build/build_config.h"
 #include "net/base/completion_callback.h"
 #include "net/base/io_buffer.h"
 #include "net/cert/cert_verifier.h"
@@ -28,16 +27,14 @@
 #include "net/socket/next_proto.h"
 #include "net/socket/socket_bio_adapter.h"
 #include "net/socket/ssl_client_socket.h"
-#include "net/ssl/channel_id_service.h"
 #include "net/ssl/openssl_ssl_util.h"
 #include "net/ssl/ssl_client_cert_type.h"
-#include "net/ssl/ssl_config_service.h"
+#include "net/ssl/ssl_config.h"
 #include "net/traffic_annotation/network_traffic_annotation.h"
 #include "third_party/boringssl/src/include/openssl/base.h"
 #include "third_party/boringssl/src/include/openssl/ssl.h"
 
 namespace base {
-class FilePath;
 namespace trace_event {
 class ProcessMemoryDump;
 }
@@ -53,10 +50,7 @@ class CertVerifier;
 class CTVerifier;
 class SSLCertRequestInfo;
 class SSLInfo;
-
-using TokenBindingSignatureMap =
-    base::MRUCache<std::pair<TokenBindingType, std::string>,
-                   std::vector<uint8_t>>;
+class SSLKeyLogger;
 
 class SSLClientSocketImpl : public SSLClientSocket,
                             public SocketBIOAdapter::Delegate {
@@ -76,11 +70,9 @@ class SSLClientSocketImpl : public SSLClientSocket,
     return ssl_session_cache_shard_;
   }
 
-#if !defined(OS_NACL)
-  // Log SSL key material to |path|. Must be called before any SSLClientSockets
-  // are created.
-  static void SetSSLKeyLogFile(const base::FilePath& path);
-#endif
+  // Log SSL key material to |logger|. Must be called before any
+  // SSLClientSockets are created.
+  static void SetSSLKeyLogger(std::unique_ptr<SSLKeyLogger> logger);
 
   // SSLSocket implementation.
   int ExportKeyingMaterial(const base::StringPiece& label,
@@ -92,6 +84,7 @@ class SSLClientSocketImpl : public SSLClientSocket,
   // StreamSocket implementation.
   int Connect(CompletionOnceCallback callback) override;
   void Disconnect() override;
+  int ConfirmHandshake(CompletionOnceCallback callback) override;
   bool IsConnected() const override;
   bool IsConnectedAndIdle() const override;
   int GetPeerAddress(IPEndPoint* address) const override;
@@ -108,11 +101,6 @@ class SSLClientSocketImpl : public SSLClientSocket,
   void DumpMemoryStats(SocketMemoryStats* stats) const override;
   void GetSSLCertRequestInfo(
       SSLCertRequestInfo* cert_request_info) const override;
-  ChannelIDService* GetChannelIDService() const override;
-  Error GetTokenBindingSignature(crypto::ECPrivateKey* key,
-                                 TokenBindingType tb_type,
-                                 std::vector<uint8_t>* out) override;
-  crypto::ECPrivateKey* GetChannelIDKey() const override;
 
   void ApplySocketTag(const SocketTag& tag) override;
 
@@ -127,6 +115,7 @@ class SSLClientSocketImpl : public SSLClientSocket,
   int ReadIfReady(IOBuffer* buf,
                   int buf_len,
                   CompletionOnceCallback callback) override;
+  int CancelReadIfReady() override;
   int Write(IOBuffer* buf,
             int buf_len,
             CompletionOnceCallback callback,
@@ -150,8 +139,6 @@ class SSLClientSocketImpl : public SSLClientSocket,
 
   int DoHandshake();
   int DoHandshakeComplete(int result);
-  int DoChannelIDLookup();
-  int DoChannelIDLookupComplete(int result);
   int DoVerifyCert(int result);
   int DoVerifyCertComplete(int result);
   void DoConnectCallback(int result);
@@ -211,27 +198,20 @@ class SSLClientSocketImpl : public SSLClientSocket,
 
   void OnPrivateKeyComplete(Error error, const std::vector<uint8_t>& signature);
 
+  // Called from the BoringSSL info callback. (See |SSL_CTX_set_info_callback|.)
+  void InfoCallback(int type, int value);
+
   // Called whenever BoringSSL processes a protocol message.
   void MessageCallback(int is_write,
                        int content_type,
                        const void* buf,
                        size_t len);
 
-  int TokenBindingAdd(const uint8_t** out,
-                      size_t* out_len,
-                      int* out_alert_value);
-  int TokenBindingParse(const uint8_t* contents,
-                        size_t contents_len,
-                        int* out_alert_value);
-
   void LogConnectEndEvent(int rv);
 
   // Record whether ALPN was used, and if so, the negotiated protocol,
   // in a UMA histogram.
   void RecordNegotiatedProtocol() const;
-
-  // Returns whether TLS channel ID is enabled.
-  bool IsChannelIDEnabled() const;
 
   // Returns the net error corresponding to the most recent OpenSSL
   // error. ssl_error is the output of SSL_get_error.
@@ -283,10 +263,6 @@ class SSLClientSocketImpl : public SSLClientSocket,
   ct::CTVerifyResult ct_verify_result_;
   CTVerifier* cert_transparency_verifier_;
 
-  // The service for retrieving Channel ID keys.  May be NULL.
-  ChannelIDService* channel_id_service_;
-  TokenBindingSignatureMap tb_signature_map_;
-
   // OpenSSL stuff
   bssl::UniquePtr<SSL> ssl_;
 
@@ -303,21 +279,18 @@ class SSLClientSocketImpl : public SSLClientSocket,
     STATE_NONE,
     STATE_HANDSHAKE,
     STATE_HANDSHAKE_COMPLETE,
-    STATE_CHANNEL_ID_LOOKUP,
-    STATE_CHANNEL_ID_LOOKUP_COMPLETE,
     STATE_VERIFY_CERT,
     STATE_VERIFY_CERT_COMPLETE,
   };
   State next_handshake_state_;
 
+  // True if we are currently confirming the handshake.
+  bool in_confirm_handshake_;
+
   // True if the socket has been disconnected.
   bool disconnected_;
 
   NextProto negotiated_protocol_;
-  // Written by the |channel_id_service_|.
-  std::unique_ptr<crypto::ECPrivateKey> channel_id_key_;
-  // True if a channel ID was sent.
-  bool channel_id_sent_;
   // If non-null, the newly-established to be inserted into the session cache
   // once certificate verification is done.
   bssl::UniquePtr<SSL_SESSION> pending_session_;
@@ -325,8 +298,6 @@ class SSLClientSocketImpl : public SSLClientSocket,
   bool certificate_verified_;
   // Set to true if a CertificateRequest was received.
   bool certificate_requested_;
-  // The request handle for |channel_id_service_|.
-  ChannelIDService::Request channel_id_request_;
 
   int signature_result_;
   std::vector<uint8_t> signature_;

@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <array>
+#include <iterator>
 #include <utility>
 #include <vector>
 
@@ -17,18 +18,21 @@
 #include "base/containers/span.h"
 #include "base/optional.h"
 #include "base/strings/string_piece.h"
+#include "crypto/sha2.h"
 
 namespace device {
 namespace fido_parsing_utils {
 
-// Comparator object that calls base::make_span on its arguments before
-// comparing them with operator<. Useful when comparing sequence containers that
-// are of different types, but have similar semantics.
-struct SpanLess {
+// Comparator object that calls std::lexicographical_compare on the begin and
+// end iterators of the passed in ranges. Useful when comparing sequence
+// containers that are of different types, but have similar semantics.
+struct RangeLess {
   template <typename T, typename U>
   constexpr bool operator()(T&& lhs, U&& rhs) const {
-    return base::make_span(std::forward<T>(lhs)) <
-           base::make_span(std::forward<U>(rhs));
+    using std::begin;
+    using std::end;
+    return std::lexicographical_compare(begin(lhs), end(lhs), begin(rhs),
+                                        end(rhs));
   }
 
   using is_transparent = void;
@@ -49,6 +53,15 @@ std::vector<uint8_t> Materialize(base::span<const uint8_t> span);
 COMPONENT_EXPORT(DEVICE_FIDO)
 base::Optional<std::vector<uint8_t>> MaterializeOrNull(
     base::Optional<base::span<const uint8_t>> span);
+
+// Returns a materialized copy of the static |span|, that is, an array with the
+// same elements.
+template <size_t N>
+std::array<uint8_t, N> Materialize(base::span<const uint8_t, N> span) {
+  std::array<uint8_t, N> array;
+  std::copy(span.begin(), span.end(), array.begin());
+  return array;
+}
 
 // Appends |in_values| to the end of |target|. The underlying container for
 // |in_values| should *not* be |target|.
@@ -98,7 +111,17 @@ std::vector<base::span<const uint8_t>> SplitSpan(base::span<const uint8_t> span,
                                                  size_t max_chunk_size);
 
 COMPONENT_EXPORT(DEVICE_FIDO)
-std::vector<uint8_t> CreateSHA256Hash(base::StringPiece data);
+std::array<uint8_t, crypto::kSHA256Length> CreateSHA256Hash(
+    base::StringPiece data);
+
+COMPONENT_EXPORT(DEVICE_FIDO)
+base::StringPiece ConvertToStringPiece(base::span<const uint8_t> data);
+
+// Convert byte array into GUID formatted string as defined by RFC 4122.
+// As we are converting 128 bit UUID, |bytes| must be have length of 16.
+// https://tools.ietf.org/html/rfc4122
+COMPONENT_EXPORT(DEVICE_FIDO)
+std::string ConvertBytesToUuid(base::span<const uint8_t, 16> bytes);
 
 }  // namespace fido_parsing_utils
 }  // namespace device

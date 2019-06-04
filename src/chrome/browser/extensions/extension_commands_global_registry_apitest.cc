@@ -3,8 +3,8 @@
 // found in the LICENSE file.
 
 #include "build/build_config.h"
+#include "chrome/browser/extensions/browser_extension_window_controller.h"
 #include "chrome/browser/extensions/extension_apitest.h"
-#include "chrome/browser/extensions/window_controller.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/test/base/interactive_test_utils.h"
@@ -24,6 +24,7 @@
 
 #if defined(OS_MACOSX)
 #include <Carbon/Carbon.h>
+#include "base/mac/mac_util.h"
 #endif
 
 namespace extensions {
@@ -62,11 +63,11 @@ void SendNativeKeyEventToXDisplay(ui::KeyboardCode key,
                                        XKeysymForWindowsKeyCode(key, false)));
 
   // Simulate the keys being pressed.
-  for (KeyCodes::iterator it = key_codes.begin(); it != key_codes.end(); it++)
+  for (auto it = key_codes.begin(); it != key_codes.end(); it++)
     XTestFakeKeyEvent(display, *it, x11::True, x11::CurrentTime);
 
   // Simulate the keys being released.
-  for (KeyCodes::iterator it = key_codes.begin(); it != key_codes.end(); it++)
+  for (auto it = key_codes.begin(); it != key_codes.end(); it++)
     XTestFakeKeyEvent(display, *it, x11::False, x11::CurrentTime);
 
   XFlush(display);
@@ -141,6 +142,11 @@ IN_PROC_BROWSER_TEST_F(GlobalCommandsApiTest, MAYBE_GlobalCommand) {
   host->AddObserver(&observer);
 
 #elif defined(OS_MACOSX)
+  // ui_test_utils::SendGlobalKeyEventsAndWait() hangs the test on macOS 10.14 -
+  // https://crbug.com/904403
+  if (base::mac::IsAtLeastOS10_14())
+    return;
+
   // Create an incognito browser to capture the focus.
   Browser* incognito_browser = CreateIncognitoBrowser();
   // Activate Chrome.app so that events are seen on [NSApplication sendEvent:].
@@ -186,7 +192,7 @@ IN_PROC_BROWSER_TEST_F(GlobalCommandsApiTest, MAYBE_GlobalDuplicatedMediaKey) {
   ASSERT_TRUE(catcher.GetNextResult());
 
   Browser* incognito_browser = CreateIncognitoBrowser();  // Ditto.
-  WindowController* controller =
+  BrowserExtensionWindowController* controller =
       incognito_browser->extension_window_controller();
 
   ui_controls::SendKeyPress(controller->window()->GetNativeWindow(),

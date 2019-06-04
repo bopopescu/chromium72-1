@@ -27,7 +27,7 @@
 
 using testing::_;
 
-namespace net {
+namespace quic {
 namespace test {
 namespace {
 
@@ -38,10 +38,9 @@ class QuicCryptoClientStreamTest : public QuicTest {
  public:
   QuicCryptoClientStreamTest()
       : supported_versions_(AllSupportedVersions()),
-        server_id_(kServerHostname, kServerPort, PRIVACY_MODE_DISABLED),
+        server_id_(kServerHostname, kServerPort, false),
         crypto_config_(crypto_test_utils::ProofVerifierForTesting(),
                        TlsClientHandshaker::CreateSslCtx()) {
-    SetQuicReloadableFlag(quic_respect_ietf_header, true);
     CreateConnection();
   }
 
@@ -53,7 +52,8 @@ class QuicCryptoClientStreamTest : public QuicTest {
     connection_->AdvanceTime(QuicTime::Delta::FromSeconds(1));
 
     session_ = QuicMakeUnique<TestQuicSpdyClientSession>(
-        connection_, DefaultQuicConfig(), server_id_, &crypto_config_);
+        connection_, DefaultQuicConfig(), supported_versions_, server_id_,
+        &crypto_config_);
   }
 
   void CompleteCryptoHandshake() {
@@ -138,7 +138,6 @@ TEST_F(QuicCryptoClientStreamTest, NegotiatedParameters) {
 
   const QuicConfig* config = session_->config();
   EXPECT_EQ(kMaximumIdleTimeoutSecs, config->IdleNetworkTimeout().ToSeconds());
-  EXPECT_EQ(kDefaultMaxStreamsPerConnection, config->MaxStreamsPerConnection());
 
   const QuicCryptoNegotiatedParameters& crypto_params(
       stream()->crypto_negotiated_params());
@@ -261,7 +260,7 @@ TEST_F(QuicCryptoClientStreamTest, ServerConfigUpdateWithCert) {
   // Build a server config update message with certificates
   QuicCryptoServerConfig crypto_config(
       QuicCryptoServerConfig::TESTING, QuicRandom::GetInstance(),
-      crypto_test_utils::ProofSourceForTesting(),
+      crypto_test_utils::ProofSourceForTesting(), KeyExchangeSource::Default(),
       TlsServerHandshaker::CreateSslCtx());
   crypto_test_utils::FakeServerOptions options;
   crypto_test_utils::SetupCryptoServerConfigForTest(
@@ -369,13 +368,44 @@ TEST_F(QuicCryptoClientStreamTest, TokenBindingNotNegotiated) {
 TEST_F(QuicCryptoClientStreamTest, NoTokenBindingInPrivacyMode) {
   server_options_.token_binding_params = QuicTagVector{kTB10};
   crypto_config_.tb_key_params = QuicTagVector{kTB10};
-  server_id_ = QuicServerId(kServerHostname, kServerPort, PRIVACY_MODE_ENABLED);
+  server_id_ = QuicServerId(kServerHostname, kServerPort, true);
   CreateConnection();
 
   CompleteCryptoHandshake();
   EXPECT_TRUE(stream()->encryption_established());
   EXPECT_TRUE(stream()->handshake_confirmed());
   EXPECT_EQ(0u, stream()->crypto_negotiated_params().token_binding_key_param);
+}
+
+TEST_F(QuicCryptoClientStreamTest, PreferredVersion) {
+  // This mimics the case where client receives version negotiation packet, such
+  // that, the preferred version is different from the packets' version.
+  connection_ = new PacketSavingConnection(
+      &client_helper_, &alarm_factory_, Perspective::IS_CLIENT,
+      ParsedVersionOfIndex(supported_versions_, 1));
+  connection_->AdvanceTime(QuicTime::Delta::FromSeconds(1));
+
+  session_ = QuicMakeUnique<TestQuicSpdyClientSession>(
+      connection_, DefaultQuicConfig(), supported_versions_, server_id_,
+      &crypto_config_);
+  CompleteCryptoHandshake();
+  // 2 CHLOs are sent.
+  ASSERT_EQ(2u, session_->sent_crypto_handshake_messages().size());
+  // Verify preferred version is the highest version that session supports, and
+  // is different from connection's version.
+  QuicVersionLabel client_version_label;
+  EXPECT_EQ(QUIC_NO_ERROR,
+            session_->sent_crypto_handshake_messages()[0].GetVersionLabel(
+                kVER, &client_version_label));
+  EXPECT_EQ(CreateQuicVersionLabel(supported_versions_[0]),
+            client_version_label);
+  EXPECT_EQ(QUIC_NO_ERROR,
+            session_->sent_crypto_handshake_messages()[1].GetVersionLabel(
+                kVER, &client_version_label));
+  EXPECT_EQ(CreateQuicVersionLabel(supported_versions_[0]),
+            client_version_label);
+  EXPECT_NE(CreateQuicVersionLabel(connection_->version()),
+            client_version_label);
 }
 
 class QuicCryptoClientStreamStatelessTest : public QuicTest {
@@ -386,11 +416,11 @@ class QuicCryptoClientStreamStatelessTest : public QuicTest {
         server_crypto_config_(QuicCryptoServerConfig::TESTING,
                               QuicRandom::GetInstance(),
                               crypto_test_utils::ProofSourceForTesting(),
+                              KeyExchangeSource::Default(),
                               TlsServerHandshaker::CreateSslCtx()),
         server_compressed_certs_cache_(
             QuicCompressedCertsCache::kQuicCompressedCertsCacheSize),
-        server_id_(kServerHostname, kServerPort, PRIVACY_MODE_DISABLED) {
-    SetQuicReloadableFlag(quic_respect_ietf_header, true);
+        server_id_(kServerHostname, kServerPort, false) {
     TestQuicSpdyClientSession* client_session = nullptr;
     CreateClientSessionForTest(server_id_,
                                /* supports_stateless_rejects= */ true,
@@ -420,15 +450,14 @@ class QuicCryptoClientStreamStatelessTest : public QuicTest {
   // Initializes the server_stream_ for stateless rejects.
   void InitializeFakeStatelessRejectServer() {
     TestQuicSpdyServerSession* server_session = nullptr;
-    CreateServerSessionForTest(server_id_, QuicTime::Delta::FromSeconds(100000),
-                               AllSupportedVersions(), &helper_,
-                               &alarm_factory_, &server_crypto_config_,
-                               &server_compressed_certs_cache_,
-                               &server_connection_, &server_session);
+    CreateServerSessionForTest(
+        server_id_, QuicTime::Delta::FromSeconds(100000),
+        ParsedVersionOfIndex(AllSupportedVersions(), 0), &helper_,
+        &alarm_factory_, &server_crypto_config_,
+        &server_compressed_certs_cache_, &server_connection_, &server_session);
     CHECK(server_session);
     server_session_.reset(server_session);
-    server_session_->OnSuccessfulVersionNegotiation(
-        AllSupportedVersions().front());
+    server_session_->OnSuccessfulVersionNegotiation(AllSupportedVersions()[0]);
     crypto_test_utils::FakeServerOptions options;
     crypto_test_utils::SetupCryptoServerConfigForTest(
         server_connection_->clock(), server_connection_->random_generator(),
@@ -490,4 +519,4 @@ TEST_F(QuicCryptoClientStreamStatelessTest, StatelessReject) {
 
 }  // namespace
 }  // namespace test
-}  // namespace net
+}  // namespace quic

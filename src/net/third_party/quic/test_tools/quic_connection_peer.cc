@@ -12,7 +12,7 @@
 #include "net/third_party/quic/test_tools/quic_packet_generator_peer.h"
 #include "net/third_party/quic/test_tools/quic_sent_packet_manager_peer.h"
 
-namespace net {
+namespace quic {
 namespace test {
 
 // static
@@ -161,12 +161,6 @@ QuicAlarm* QuicConnectionPeer::GetPingAlarm(QuicConnection* connection) {
 }
 
 // static
-QuicAlarm* QuicConnectionPeer::GetResumeWritesAlarm(
-    QuicConnection* connection) {
-  return connection->resume_writes_alarm_.get();
-}
-
-// static
 QuicAlarm* QuicConnectionPeer::GetRetransmissionAlarm(
     QuicConnection* connection) {
   return connection->retransmission_alarm_.get();
@@ -189,15 +183,15 @@ QuicAlarm* QuicConnectionPeer::GetMtuDiscoveryAlarm(
 }
 
 // static
-QuicAlarm* QuicConnectionPeer::GetRetransmittableOnWireAlarm(
-    QuicConnection* connection) {
-  return connection->retransmittable_on_wire_alarm_.get();
-}
-
-// static
 QuicAlarm* QuicConnectionPeer::GetPathDegradingAlarm(
     QuicConnection* connection) {
   return connection->path_degrading_alarm_.get();
+}
+
+// static
+QuicAlarm* QuicConnectionPeer::GetProcessUndecryptablePacketsAlarm(
+    QuicConnection* connection) {
+  return connection->process_undecryptable_packets_alarm_.get();
 }
 
 // static
@@ -268,6 +262,13 @@ void QuicConnectionPeer::SetAckMode(QuicConnection* connection,
 }
 
 // static
+void QuicConnectionPeer::SetFastAckAfterQuiescence(
+    QuicConnection* connection,
+    bool fast_ack_after_quiescence) {
+  connection->fast_ack_after_quiescence_ = fast_ack_after_quiescence;
+}
+
+// static
 void QuicConnectionPeer::SetAckDecimationDelay(QuicConnection* connection,
                                                float ack_decimation_delay) {
   connection->ack_decimation_delay_ = ack_decimation_delay;
@@ -306,5 +307,25 @@ void QuicConnectionPeer::SetSessionDecidesWhatToWrite(
   connection->packet_generator_.SetCanSetTransmissionType(true);
 }
 
+// static
+void QuicConnectionPeer::SetNegotiatedVersion(QuicConnection* connection) {
+  connection->version_negotiation_state_ = QuicConnection::NEGOTIATED_VERSION;
+}
+
+// static
+void QuicConnectionPeer::SetMaxConsecutiveNumPacketsWithNoRetransmittableFrames(
+    QuicConnection* connection,
+    size_t new_value) {
+  connection->max_consecutive_num_packets_with_no_retransmittable_frames_ =
+      new_value;
+}
+
+// static
+void QuicConnectionPeer::SetNoVersionNegotiation(QuicConnection* connection,
+                                                 bool no_version_negotiation) {
+  *const_cast<bool*>(&connection->no_version_negotiation_) =
+      no_version_negotiation;
+}
+
 }  // namespace test
-}  // namespace net
+}  // namespace quic

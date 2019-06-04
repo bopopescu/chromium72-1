@@ -15,7 +15,6 @@
 #include "chrome/browser/interstitials/enterprise_util.h"
 #include "chrome/browser/metrics/chrome_metrics_service_accessor.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/safe_browsing/ping_manager.h"
 #include "chrome/browser/safe_browsing/safe_browsing_blocking_page.h"
 #include "chrome/browser/safe_browsing/safe_browsing_service.h"
 #include "chrome/browser/tab_contents/tab_util.h"
@@ -24,6 +23,7 @@
 #include "components/prefs/pref_service.h"
 #include "components/safe_browsing/browser/threat_details.h"
 #include "components/safe_browsing/common/safe_browsing_prefs.h"
+#include "components/safe_browsing/ping_manager.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/navigation_entry.h"
 #include "content/public/browser/notification_service.h"
@@ -105,10 +105,10 @@ void SafeBrowsingUIManager::ShowBlockingPageForResource(
 }
 
 // static
-bool SafeBrowsingUIManager::ShouldSendHitReport(
-    const HitReport& hit_report,
-    const WebContents* web_contents) {
-  return hit_report.extended_reporting_level != SBER_LEVEL_OFF &&
+bool SafeBrowsingUIManager::ShouldSendHitReport(const HitReport& hit_report,
+                                                WebContents* web_contents) {
+  return web_contents &&
+         hit_report.extended_reporting_level != SBER_LEVEL_OFF &&
          !web_contents->GetBrowserContext()->IsOffTheRecord();
 }
 
@@ -117,7 +117,7 @@ bool SafeBrowsingUIManager::ShouldSendHitReport(
 // extended-reporting users.
 void SafeBrowsingUIManager::MaybeReportSafeBrowsingHit(
     const HitReport& hit_report,
-    const WebContents* web_contents) {
+    WebContents* web_contents) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
 
   // Send report if user opted-in to extended reporting and is not in

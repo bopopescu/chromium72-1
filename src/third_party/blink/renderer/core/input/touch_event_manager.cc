@@ -12,6 +12,7 @@
 #include "third_party/blink/renderer/core/events/touch_event.h"
 #include "third_party/blink/renderer/core/frame/deprecation.h"
 #include "third_party/blink/renderer/core/frame/event_handler_registry.h"
+#include "third_party/blink/renderer/core/frame/local_dom_window.h"
 #include "third_party/blink/renderer/core/frame/local_frame_view.h"
 #include "third_party/blink/renderer/core/html/canvas/html_canvas_element.h"
 #include "third_party/blink/renderer/core/input/event_handling_util.h"
@@ -20,11 +21,33 @@
 #include "third_party/blink/renderer/core/page/chrome_client.h"
 #include "third_party/blink/renderer/core/page/page.h"
 #include "third_party/blink/renderer/platform/histogram.h"
+#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 #include "third_party/blink/renderer/platform/wtf/time.h"
 
 namespace blink {
 
 namespace {
+
+// Returns true if there are event listeners of |handler_class| on |touch_node|
+// or any of its ancestors inside the document (including DOMWindow).
+bool HasEventHandlerInAncestorPath(
+    Node* touch_node,
+    EventHandlerRegistry::EventHandlerClass handler_class) {
+  Document& document = touch_node->GetDocument();
+  const EventTargetSet* event_target_set =
+      document.GetFrame()->GetEventHandlerRegistry().EventHandlerTargets(
+          handler_class);
+
+  if (event_target_set->Contains(document.domWindow()))
+    return true;
+
+  for (Node& ancestor : NodeTraversal::InclusiveAncestorsOf(*touch_node)) {
+    if (event_target_set->Contains(&ancestor))
+      return true;
+  }
+
+  return false;
+}
 
 bool HasTouchHandlers(const EventHandlerRegistry& registry) {
   return registry.HasEventHandlers(
@@ -43,13 +66,13 @@ const AtomicString& TouchEventNameForPointerEventType(
     WebInputEvent::Type type) {
   switch (type) {
     case WebInputEvent::kPointerUp:
-      return EventTypeNames::touchend;
+      return event_type_names::kTouchend;
     case WebInputEvent::kPointerCancel:
-      return EventTypeNames::touchcancel;
+      return event_type_names::kTouchcancel;
     case WebInputEvent::kPointerDown:
-      return EventTypeNames::touchstart;
+      return event_type_names::kTouchstart;
     case WebInputEvent::kPointerMove:
-      return EventTypeNames::touchmove;
+      return event_type_names::kTouchmove;
     default:
       NOTREACHED();
       return g_empty_atom;
@@ -260,7 +283,8 @@ WebCoalescedInputEvent TouchEventManager::GenerateWebCoalescedInputEvent() {
   } timestamp_based_event_comparison;
   std::sort(all_coalesced_events.begin(), all_coalesced_events.end(),
             timestamp_based_event_comparison);
-  WebCoalescedInputEvent result(event, std::vector<const WebInputEvent*>());
+  WebCoalescedInputEvent result(event, std::vector<const WebInputEvent*>(),
+                                std::vector<const WebInputEvent*>());
   for (const auto& web_pointer_event : all_coalesced_events) {
     if (web_pointer_event.GetType() == WebInputEvent::kPointerDown) {
       // TODO(crbug.com/732842): Technically we should never receive the
@@ -456,13 +480,16 @@ TouchEventManager::DispatchTouchEventFromAccumulatdTouchPoints() {
           current_touch_action_);
 
       DispatchEventResult dom_dispatch_result =
-          touch_event_target->DispatchEvent(touch_event);
+          touch_event_target->DispatchEvent(*touch_event);
 
-      event_result = EventHandlingUtil::MergeEventResult(
+      event_result = event_handling_util::MergeEventResult(
           event_result,
-          EventHandlingUtil::ToWebInputEventResult(dom_dispatch_result));
+          event_handling_util::ToWebInputEventResult(dom_dispatch_result));
     }
   }
+
+  if (should_enforce_vertical_scroll_)
+    event_result = EnsureVerticalScrollIsPossible(event_result);
 
   // Suppress following touchmoves within the slop region if the touchstart is
   // not consumed.
@@ -476,7 +503,7 @@ TouchEventManager::DispatchTouchEventFromAccumulatdTouchPoints() {
 
 void TouchEventManager::UpdateTouchAttributeMapsForPointerDown(
     const WebPointerEvent& event,
-    const EventHandlingUtil::PointerEventTarget& pointer_event_target) {
+    const event_handling_util::PointerEventTarget& pointer_event_target) {
   // Touch events implicitly capture to the touched node, and don't change
   // active/hover states themselves (Gesture events do). So we only need
   // to hit-test on touchstart and when the target could be different than
@@ -488,7 +515,8 @@ void TouchEventManager::UpdateTouchAttributeMapsForPointerDown(
   // some tests that take advantage of it. There may also be edge
   // cases in the browser where this happens.
   // See http://crbug.com/345372.
-  touch_attribute_map_.Set(event.id, new TouchPointAttributes(event));
+  touch_attribute_map_.Set(event.id,
+                           MakeGarbageCollected<TouchPointAttributes>(event));
 
   Node* touch_node = pointer_event_target.target_node;
   String region = pointer_event_target.region;
@@ -507,11 +535,11 @@ void TouchEventManager::UpdateTouchAttributeMapsForPointerDown(
   if (touch_sequence_document_ &&
       (!touch_node || &touch_node->GetDocument() != touch_sequence_document_)) {
     if (touch_sequence_document_->GetFrame()) {
-      LayoutPoint frame_point = LayoutPoint(
-          touch_sequence_document_->GetFrame()->View()->RootFrameToContents(
-              event.PositionInWidget()));
-      result = EventHandlingUtil::HitTestResultInFrame(
-          touch_sequence_document_->GetFrame(), frame_point, hit_type);
+      HitTestLocation location(LayoutPoint(
+          touch_sequence_document_->GetFrame()->View()->ConvertFromRootFrame(
+              event.PositionInWidget())));
+      result = event_handling_util::HitTestResultInFrame(
+          touch_sequence_document_->GetFrame(), location, hit_type);
       Node* node = result.InnerNode();
       if (!node)
         return;
@@ -546,21 +574,30 @@ void TouchEventManager::UpdateTouchAttributeMapsForPointerDown(
   attributes->region_ = region;
 
   TouchAction effective_touch_action =
-      TouchActionUtil::ComputeEffectiveTouchAction(*touch_node);
-  if (effective_touch_action != TouchAction::kTouchActionAuto) {
+      touch_action_util::ComputeEffectiveTouchAction(*touch_node);
+
+  should_enforce_vertical_scroll_ =
+      touch_sequence_document_->IsVerticalScrollEnforced();
+  if (should_enforce_vertical_scroll_ &&
+      HasEventHandlerInAncestorPath(
+          touch_node, EventHandlerRegistry::kTouchStartOrMoveEventBlocking)) {
+    delayed_effective_touch_action_ = delayed_effective_touch_action_.value_or(
+                                          TouchAction::kTouchActionAuto) &
+                                      effective_touch_action;
+  }
+  if (!delayed_effective_touch_action_) {
     frame_->GetPage()->GetChromeClient().SetTouchAction(frame_,
                                                         effective_touch_action);
-
-    // Combine the current touch action sequence with the touch action
-    // for the current finger press.
-    current_touch_action_ &= effective_touch_action;
   }
+  // Combine the current touch action sequence with the touch action
+  // for the current finger press.
+  current_touch_action_ &= effective_touch_action;
 }
 
 void TouchEventManager::HandleTouchPoint(
     const WebPointerEvent& event,
     const Vector<WebPointerEvent>& coalesced_events,
-    const EventHandlingUtil::PointerEventTarget& pointer_event_target) {
+    const event_handling_util::PointerEventTarget& pointer_event_target) {
   DCHECK_GE(event.GetType(), WebInputEvent::kPointerTypeFirst);
   DCHECK_LE(event.GetType(), WebInputEvent::kPointerTypeLast);
   DCHECK_NE(event.GetType(), WebInputEvent::kPointerCausedUaAction);
@@ -599,7 +636,8 @@ void TouchEventManager::HandleTouchPoint(
   // them. For those just keep them in the map with a null target. Later they
   // will be targeted at the |touch_sequence_document_|.
   if (!touch_attribute_map_.Contains(event.id)) {
-    touch_attribute_map_.insert(event.id, new TouchPointAttributes(event));
+    touch_attribute_map_.insert(
+        event.id, MakeGarbageCollected<TouchPointAttributes>(event));
   }
 
   TouchPointAttributes* attributes = touch_attribute_map_.at(event.id);
@@ -648,10 +686,44 @@ void TouchEventManager::AllTouchesReleasedCleanup() {
   touch_sequence_document_.Clear();
   current_touch_action_ = TouchAction::kTouchActionAuto;
   last_coalesced_touch_event_ = WebTouchEvent();
+  // Ideally, we should have DCHECK(!delayed_effective_touch_action_) but we do
+  // we do actually get here from HandleTouchPoint(). Supposedly, if there has
+  // been a |touch_sequence_document_| and nothing in the |touch_attribute_map_|
+  // we still get here and if |touch_sequence_document| was of the type which
+  // cannot block scroll, then the flag is certainly set
+  // (https://crbug.com/345372).
+  delayed_effective_touch_action_ = base::nullopt;
+  should_enforce_vertical_scroll_ = false;
 }
 
 bool TouchEventManager::IsAnyTouchActive() const {
   return !touch_attribute_map_.IsEmpty();
+}
+
+WebInputEventResult TouchEventManager::EnsureVerticalScrollIsPossible(
+    WebInputEventResult event_result) {
+  bool prevent_defaulted =
+      event_result == WebInputEventResult::kHandledApplication;
+  if (prevent_defaulted && delayed_effective_touch_action_) {
+    // Make sure that only vertical scrolling is permitted.
+    *delayed_effective_touch_action_ &= TouchAction::kTouchActionPanY;
+  }
+
+  if (delayed_effective_touch_action_) {
+    // If 'touchstart' is preventDefault()-ed then we can proceed with reporting
+    // the effective 'touch-action'.
+    // TODO(ekaramad): This does not block horizontal scroll after enforcing
+    // vertical scrolling. We should ideally send the 'touch-action' to browser
+    // after the first 'touchmove' event has been dispatched.
+    // (https://crbug.com/844493).
+    frame_->GetPage()->GetChromeClient().SetTouchAction(
+        frame_, delayed_effective_touch_action_.value());
+    delayed_effective_touch_action_ = base::nullopt;
+  }
+
+  // If the event was canceled the result is ignored to make sure vertical
+  // scrolling is possible.
+  return prevent_defaulted ? WebInputEventResult::kNotHandled : event_result;
 }
 
 }  // namespace blink

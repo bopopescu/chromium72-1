@@ -12,7 +12,7 @@
 #include "net/third_party/quic/platform/api/quic_export.h"
 #include "third_party/boringssl/src/include/openssl/base.h"
 
-namespace net {
+namespace quic {
 
 class QuicCryptoStream;
 class QuicSession;
@@ -28,6 +28,8 @@ class QUIC_EXPORT_PRIVATE TlsHandshaker : public QuicTlsAdapter::Visitor {
   TlsHandshaker(QuicCryptoStream* stream,
                 QuicSession* session,
                 SSL_CTX* ssl_ctx);
+  TlsHandshaker(const TlsHandshaker&) = delete;
+  TlsHandshaker& operator=(const TlsHandshaker&) = delete;
 
   ~TlsHandshaker() override;
 
@@ -81,10 +83,8 @@ class QUIC_EXPORT_PRIVATE TlsHandshaker : public QuicTlsAdapter::Visitor {
   QuicSession* session_;
   QuicTlsAdapter bio_adapter_;
   bssl::UniquePtr<SSL> ssl_;
-
-  DISALLOW_COPY_AND_ASSIGN(TlsHandshaker);
 };
 
-}  // namespace net
+}  // namespace quic
 
 #endif  // NET_THIRD_PARTY_QUIC_CORE_TLS_HANDSHAKER_H_

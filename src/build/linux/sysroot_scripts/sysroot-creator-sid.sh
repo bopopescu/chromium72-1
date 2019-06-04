@@ -8,7 +8,14 @@ SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 DISTRO=debian
 DIST=sid
 
-APT_SOURCES_LIST="http://ftp.us.debian.org/debian/ sid main"
+# Keep the "experimental" repo before the "sid" repo.  There are some packages
+# that are currently only available in experimental like libgtk-4-0, but if it
+# were to be placed first, experimental (unreleased) versions of other packages
+# like libc6 would take precedence over the sid (released) versions.  While this
+# may be useful for certain kinds of development, the standard sysroots should
+# continue to be shipped only with released packages.
+APT_SOURCES_LIST="http://ftp.us.debian.org/debian/ experimental main
+http://ftp.us.debian.org/debian/ sid main"
 
 # gpg keyring file generated using:
 #   export KEYS="518E17E1 46925553 2B90D010 C857C906 F66AEC98 8AE22BA9 1A7B6500"
@@ -94,12 +101,14 @@ DEBIAN_PACKAGES="\
   libexpat1-dev
   libffi-dev
   libffi6
+  libffi7
   libflac-dev
   libflac8
   libfontconfig1
   libfontconfig1-dev
   libfreetype6
   libfreetype6-dev
+  libfribidi-dev
   libfribidi0
   libgbm-dev
   libgbm1
@@ -113,6 +122,7 @@ DEBIAN_PACKAGES="\
   libgl1-mesa-dev
   libgl1-mesa-glx
   libglapi-mesa
+  libgles1
   libgles2
   libglib2.0-0
   libglib2.0-dev
@@ -130,21 +140,26 @@ DEBIAN_PACKAGES="\
   libgomp1
   libgpg-error-dev
   libgpg-error0
+  libgraphene-1.0-0
+  libgraphene-1.0-dev
   libgraphite2-3
   libgraphite2-dev
   libgssapi-krb5-2
   libgssrpc4
   libgtk-3-0
   libgtk-3-dev
+  libgtk-4-0
+  libgtk-4-dev
   libgtk2.0-0
-  libgtk2.0-dev
   libharfbuzz-dev
   libharfbuzz-gobject0
   libharfbuzz-icu0
   libharfbuzz0b
   libhogweed4
   libice6
+  libicu-le-hb0
   libicu57
+  libicu60
   libidl-2-0
   libidn11
   libidn2-0
@@ -202,10 +217,13 @@ DEBIAN_PACKAGES="\
   libpcre3-dev
   libpcre32-3
   libpcrecpp0v5
+  libpipewire-0.2-1
+  libpipewire-0.2-dev
   libpixman-1-0
   libpixman-1-dev
   libpng-dev
   libpng16-16
+  libpsl5
   libpthread-stubs0-dev
   libpulse-dev
   libpulse-mainloop-glib0
@@ -220,6 +238,7 @@ DEBIAN_PACKAGES="\
   libsndfile1
   libsoup-gnome2.4-1
   libsoup2.4-1
+  libspa-lib-0.1-dev
   libspeechd-dev
   libspeechd2
   libsqlite3-0
@@ -234,7 +253,7 @@ DEBIAN_PACKAGES="\
   libtiff5
   libudev-dev
   libudev1
-  libunbound2
+  libunbound8
   libunistring2
   libuuid1
   libva-dev
@@ -247,9 +266,11 @@ DEBIAN_PACKAGES="\
   libvorbisenc2
   libvpx-dev
   libvpx5
+  libvulkan1
   libwayland-client0
   libwayland-cursor0
   libwayland-dev
+  libwayland-egl1
   libwayland-egl1-mesa
   libwayland-server0
   libwebp-dev
@@ -264,8 +285,10 @@ DEBIAN_PACKAGES="\
   libxau-dev
   libxau6
   libxcb-dri2-0
+  libxcb-dri2-0-dev
   libxcb-dri3-0
   libxcb-glx0
+  libxcb-glx0-dev
   libxcb-present0
   libxcb-render0
   libxcb-render0-dev
@@ -309,9 +332,11 @@ DEBIAN_PACKAGES="\
   libxt6
   libxtst-dev
   libxtst6
+  libxxf86vm-dev
   libxxf86vm1
   linux-libc-dev
   mesa-common-dev
+  shared-mime-info
   speech-dispatcher
   uuid-dev
   wayland-protocols
@@ -358,6 +383,7 @@ DEBIAN_PACKAGES_ARM="
 
 DEBIAN_PACKAGES_ARM64="
   libasan3
+  libdrm-etnaviv1
   libdrm-freedreno1
   libdrm-tegra0
   libgmp10

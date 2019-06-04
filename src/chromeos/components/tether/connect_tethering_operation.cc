@@ -38,15 +38,16 @@ ConnectTetheringOperation::Factory*
 std::unique_ptr<ConnectTetheringOperation>
 ConnectTetheringOperation::Factory::NewInstance(
     cryptauth::RemoteDeviceRef device_to_connect,
-    BleConnectionManager* connection_manager,
+    device_sync::DeviceSyncClient* device_sync_client,
+    secure_channel::SecureChannelClient* secure_channel_client,
     TetherHostResponseRecorder* tether_host_response_recorder,
     bool setup_required) {
   if (!factory_instance_) {
     factory_instance_ = new Factory();
   }
-  return factory_instance_->BuildInstance(device_to_connect, connection_manager,
-                                          tether_host_response_recorder,
-                                          setup_required);
+  return factory_instance_->BuildInstance(
+      device_to_connect, device_sync_client, secure_channel_client,
+      tether_host_response_recorder, setup_required);
 }
 
 // static
@@ -58,22 +59,26 @@ void ConnectTetheringOperation::Factory::SetInstanceForTesting(
 std::unique_ptr<ConnectTetheringOperation>
 ConnectTetheringOperation::Factory::BuildInstance(
     cryptauth::RemoteDeviceRef device_to_connect,
-    BleConnectionManager* connection_manager,
+    device_sync::DeviceSyncClient* device_sync_client,
+    secure_channel::SecureChannelClient* secure_channel_client,
     TetherHostResponseRecorder* tether_host_response_recorder,
     bool setup_required) {
   return base::WrapUnique(new ConnectTetheringOperation(
-      device_to_connect, connection_manager, tether_host_response_recorder,
-      setup_required));
+      device_to_connect, device_sync_client, secure_channel_client,
+      tether_host_response_recorder, setup_required));
 }
 
 ConnectTetheringOperation::ConnectTetheringOperation(
     cryptauth::RemoteDeviceRef device_to_connect,
-    BleConnectionManager* connection_manager,
+    device_sync::DeviceSyncClient* device_sync_client,
+    secure_channel::SecureChannelClient* secure_channel_client,
     TetherHostResponseRecorder* tether_host_response_recorder,
     bool setup_required)
     : MessageTransferOperation(
           cryptauth::RemoteDeviceRefList{device_to_connect},
-          connection_manager),
+          secure_channel::ConnectionPriority::kHigh,
+          device_sync_client,
+          secure_channel_client),
       remote_device_(device_to_connect),
       tether_host_response_recorder_(tether_host_response_recorder),
       clock_(base::DefaultClock::GetInstance()),
@@ -119,11 +124,11 @@ void ConnectTetheringOperation::OnMessageReceived(
       ConnectTetheringResponse_ResponseCode::
           ConnectTetheringResponse_ResponseCode_SUCCESS) {
     if (response->has_ssid() && response->has_password()) {
-      PA_LOG(INFO) << "Received ConnectTetheringResponse from device with ID "
-                   << remote_device.GetTruncatedDeviceIdForLogs() << " and "
-                   << "response_code == SUCCESS. Config: {ssid: \""
-                   << response->ssid() << "\", password: \""
-                   << response->password() << "\"}";
+      PA_LOG(VERBOSE)
+          << "Received ConnectTetheringResponse from device with ID "
+          << remote_device.GetTruncatedDeviceIdForLogs() << " and "
+          << "response_code == SUCCESS. Config: {ssid: \"" << response->ssid()
+          << "\", password: \"" << response->password() << "\"}";
 
       tether_host_response_recorder_->RecordSuccessfulConnectTetheringResponse(
           remote_device);
@@ -142,9 +147,10 @@ void ConnectTetheringOperation::OnMessageReceived(
           HostResponseErrorCode::INVALID_HOTSPOT_CREDENTIALS;
     }
   } else {
-    PA_LOG(INFO) << "Received ConnectTetheringResponse from device with ID "
-                 << remote_device.GetTruncatedDeviceIdForLogs() << " and "
-                 << "response_code == " << response->response_code() << ".";
+    PA_LOG(WARNING)
+        << "Received ConnectTetheringResponse from unexpected device with ID "
+        << remote_device.GetTruncatedDeviceIdForLogs() << " and "
+        << "response_code == " << response->response_code() << ".";
     error_code_to_return_ = ConnectTetheringResponseCodeToHostResponseErrorCode(
         response->response_code());
   }
@@ -204,7 +210,7 @@ void ConnectTetheringOperation::NotifyObserversOfConnectionFailure(
     observer.OnConnectTetheringFailure(remote_device_, error_code);
 }
 
-uint32_t ConnectTetheringOperation::GetTimeoutSeconds() {
+uint32_t ConnectTetheringOperation::GetMessageTimeoutSeconds() {
   return setup_required_
              ? ConnectTetheringOperation::kSetupRequiredResponseTimeoutSeconds
              : ConnectTetheringOperation::

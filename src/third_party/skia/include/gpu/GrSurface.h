@@ -9,6 +9,7 @@
 #define GrSurface_DEFINED
 
 #include "GrTypes.h"
+#include "GrBackendSurface.h"
 #include "GrGpuResource.h"
 #include "SkImageInfo.h"
 #include "SkRect.h"
@@ -42,6 +43,8 @@ public:
      */
     GrPixelConfig config() const { return fConfig; }
 
+    virtual GrBackendFormat backendFormat() const = 0;
+
     /**
      * @return the texture associated with the surface, may be null.
      */
@@ -63,25 +66,6 @@ public:
                               GrMipMapped, bool useNextPow2 = false);
 
 protected:
-    void setDoesNotSupportMipMaps() {
-        SkASSERT(this->asTexture());
-        fSurfaceFlags |= GrInternalSurfaceFlags::kDoesNotSupportMipMaps;
-    }
-    bool doesNotSupportMipMaps() const {
-        return fSurfaceFlags & GrInternalSurfaceFlags::kDoesNotSupportMipMaps;
-    }
-
-    void setIsGLTextureRectangleOrExternal() {
-        SkASSERT(this->asTexture());
-        fSurfaceFlags |= GrInternalSurfaceFlags::kIsGLTextureRectangleOrExternal;
-        // If we are a GL rectangle or external texture, it also means that we do not support
-        // generating mip maps.
-        this->setDoesNotSupportMipMaps();
-    }
-    bool isGLTextureRectangleOrExternal() const {
-        return fSurfaceFlags & GrInternalSurfaceFlags::kIsGLTextureRectangleOrExternal;
-    }
-
     void setHasMixedSamples() {
         SkASSERT(this->asRenderTarget());
         fSurfaceFlags |= GrInternalSurfaceFlags::kMixedSampled;
@@ -121,7 +105,6 @@ protected:
     }
 
     ~GrSurface() override {}
-
 
     void onRelease() override;
     void onAbandon() override;

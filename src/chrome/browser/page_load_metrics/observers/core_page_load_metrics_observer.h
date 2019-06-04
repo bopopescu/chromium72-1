@@ -6,7 +6,7 @@
 #define CHROME_BROWSER_PAGE_LOAD_METRICS_OBSERVERS_CORE_PAGE_LOAD_METRICS_OBSERVER_H_
 
 #include "chrome/browser/page_load_metrics/page_load_metrics_observer.h"
-#include "components/ukm/ukm_source.h"
+#include "services/metrics/public/cpp/ukm_source.h"
 
 namespace internal {
 
@@ -17,12 +17,18 @@ namespace internal {
 extern const char kHistogramFirstLayout[];
 extern const char kHistogramFirstInputDelay[];
 extern const char kHistogramFirstInputTimestamp[];
+extern const char kHistogramLongestInputDelay[];
+extern const char kHistogramLongestInputTimestamp[];
 extern const char kHistogramFirstPaint[];
 extern const char kHistogramFirstTextPaint[];
 extern const char kHistogramDomContentLoaded[];
 extern const char kHistogramLoad[];
 extern const char kHistogramFirstContentfulPaint[];
 extern const char kHistogramFirstMeaningfulPaint[];
+extern const char kHistogramLargestImagePaint[];
+extern const char kHistogramLastImagePaint[];
+extern const char kHistogramLargestTextPaint[];
+extern const char kHistogramLastTextPaint[];
 extern const char kHistogramTimeToInteractive[];
 extern const char kHistogramParseDuration[];
 extern const char kHistogramParseBlockedOnScriptLoad[];
@@ -61,6 +67,7 @@ extern const char kHistogramFirstScrollInputAfterFirstPaint[];
 extern const char kHistogramPageLoadTotalBytes[];
 extern const char kHistogramPageLoadNetworkBytes[];
 extern const char kHistogramPageLoadCacheBytes[];
+extern const char kHistogramPageLoadNetworkBytesIncludingHeaders[];
 
 extern const char kHistogramLoadTypeTotalBytesForwardBack[];
 extern const char kHistogramLoadTypeNetworkBytesForwardBack[];
@@ -77,6 +84,15 @@ extern const char kHistogramLoadTypeCacheBytesNewNavigation[];
 extern const char kHistogramTotalCompletedResources[];
 extern const char kHistogramNetworkCompletedResources[];
 extern const char kHistogramCacheCompletedResources[];
+
+extern const char kHistogramInputToNavigation[];
+extern const char kBackgroundHistogramInputToNavigation[];
+extern const char kHistogramInputToNavigationLinkClick[];
+extern const char kHistogramInputToNavigationOmnibox[];
+extern const char kHistogramInputToFirstPaint[];
+extern const char kBackgroundHistogramInputToFirstPaint[];
+extern const char kHistogramInputToFirstContentfulPaint[];
+extern const char kBackgroundHistogramInputToFirstContentfulPaint[];
 
 enum FirstMeaningfulPaintStatus {
   FIRST_MEANINGFUL_PAINT_RECORDED,
@@ -199,6 +215,21 @@ class CorePageLoadMetricsObserver
   void OnUserInput(const blink::WebInputEvent& event) override;
   void OnLoadedResource(const page_load_metrics::ExtraRequestCompleteInfo&
                             extra_request_complete_info) override;
+  void OnResourceDataUseObserved(
+      const std::vector<page_load_metrics::mojom::ResourceDataUpdatePtr>&
+          resources) override;
+  void OnLargestImagePaintInMainFrameDocument(
+      const page_load_metrics::mojom::PageLoadTiming& timing,
+      const page_load_metrics::PageLoadExtraInfo& info) override;
+  void OnLastImagePaintInMainFrameDocument(
+      const page_load_metrics::mojom::PageLoadTiming& timing,
+      const page_load_metrics::PageLoadExtraInfo& info) override;
+  void OnLargestTextPaintInMainFrameDocument(
+      const page_load_metrics::mojom::PageLoadTiming& timing,
+      const page_load_metrics::PageLoadExtraInfo& info) override;
+  void OnLastTextPaintInMainFrameDocument(
+      const page_load_metrics::mojom::PageLoadTiming& timing,
+      const page_load_metrics::PageLoadExtraInfo& info) override;
 
  private:
   void RecordTimingHistograms(
@@ -221,10 +252,14 @@ class CorePageLoadMetricsObserver
   int num_cache_resources_;
   int num_network_resources_;
 
-  // The number of body (not header) prefilter bytes consumed by requests for
-  // the page.
+  // The number of body (not header) prefilter bytes consumed by completed
+  // requests for the page.
   int64_t cache_bytes_;
   int64_t network_bytes_;
+
+  // The number of prefilter bytes consumed by completed and partial network
+  // requests for the page.
+  int64_t network_bytes_including_headers_;
 
   // Size of the redirect chain, which excludes the first URL.
   int redirect_chain_size_;

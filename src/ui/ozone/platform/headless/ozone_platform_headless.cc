@@ -8,21 +8,21 @@
 #include "base/files/file_path.h"
 #include "base/macros.h"
 #include "ui/base/cursor/ozone/bitmap_cursor_factory_ozone.h"
-#include "ui/display/manager/fake_display_delegate.h"
 #include "ui/events/ozone/layout/keyboard_layout_engine_manager.h"
 #include "ui/events/ozone/layout/stub/stub_keyboard_layout_engine.h"
 #include "ui/events/platform/platform_event_source.h"
 #include "ui/events/system_input_injector.h"
 #include "ui/ozone/common/stub_overlay_manager.h"
+#include "ui/ozone/platform/headless/headless_native_display_delegate.h"
 #include "ui/ozone/platform/headless/headless_surface_factory.h"
 #include "ui/ozone/platform/headless/headless_window.h"
 #include "ui/ozone/platform/headless/headless_window_manager.h"
 #include "ui/ozone/public/cursor_factory_ozone.h"
-#include "ui/ozone/public/gpu_platform_support.h"
 #include "ui/ozone/public/gpu_platform_support_host.h"
 #include "ui/ozone/public/input_controller.h"
 #include "ui/ozone/public/ozone_platform.h"
 #include "ui/ozone/public/ozone_switches.h"
+#include "ui/platform_window/platform_window_init_properties.h"
 
 namespace ui {
 
@@ -60,9 +60,6 @@ class OzonePlatformHeadless : public OzonePlatform {
   InputController* GetInputController() override {
     return input_controller_.get();
   }
-  GpuPlatformSupport* GetGpuPlatformSupport() override {
-    return gpu_platform_support_.get();
-  }
   GpuPlatformSupportHost* GetGpuPlatformSupportHost() override {
     return gpu_platform_support_host_.get();
   }
@@ -71,13 +68,13 @@ class OzonePlatformHeadless : public OzonePlatform {
   }
   std::unique_ptr<PlatformWindow> CreatePlatformWindow(
       PlatformWindowDelegate* delegate,
-      const gfx::Rect& bounds) override {
+      PlatformWindowInitProperties properties) override {
     return std::make_unique<HeadlessWindow>(delegate, window_manager_.get(),
-                                            bounds);
+                                            properties.bounds);
   }
   std::unique_ptr<display::NativeDisplayDelegate> CreateNativeDisplayDelegate()
       override {
-    return std::make_unique<display::FakeDisplayDelegate>();
+    return std::make_unique<HeadlessNativeDisplayDelegate>();
   }
 
   void InitializeUI(const InitParams& params) override {
@@ -98,7 +95,6 @@ class OzonePlatformHeadless : public OzonePlatform {
   void InitializeGPU(const InitParams& params) override {
     if (!surface_factory_)
       surface_factory_ = std::make_unique<HeadlessSurfaceFactory>(file_path_);
-    gpu_platform_support_.reset(CreateStubGpuPlatformSupport());
   }
 
  private:
@@ -107,7 +103,6 @@ class OzonePlatformHeadless : public OzonePlatform {
   std::unique_ptr<PlatformEventSource> platform_event_source_;
   std::unique_ptr<CursorFactoryOzone> cursor_factory_ozone_;
   std::unique_ptr<InputController> input_controller_;
-  std::unique_ptr<GpuPlatformSupport> gpu_platform_support_;
   std::unique_ptr<GpuPlatformSupportHost> gpu_platform_support_host_;
   std::unique_ptr<OverlayManagerOzone> overlay_manager_;
   base::FilePath file_path_;

@@ -15,10 +15,14 @@ WidgetElement::WidgetElement(views::Widget* widget,
     : UIElement(UIElementType::WIDGET, ui_element_delegate, parent),
       widget_(widget) {
   widget_->AddRemovalsObserver(this);
+  widget_->AddObserver(this);
 }
 
 WidgetElement::~WidgetElement() {
-  widget_->RemoveRemovalsObserver(this);
+  if (widget_) {
+    widget_->RemoveRemovalsObserver(this);
+    widget_->RemoveObserver(this);
+  }
 }
 
 void WidgetElement::OnWillRemoveView(views::Widget* widget, views::View* view) {
@@ -34,6 +38,12 @@ void WidgetElement::OnWidgetBoundsChanged(views::Widget* widget,
                                           const gfx::Rect& new_bounds) {
   DCHECK_EQ(widget, widget_);
   delegate()->OnUIElementBoundsChanged(this);
+}
+
+void WidgetElement::OnWidgetDestroyed(views::Widget* widget) {
+  DCHECK_EQ(widget, widget_);
+  delegate()->OnUIElementRemoved(this);
+  widget_ = nullptr;
 }
 
 std::vector<std::pair<std::string, std::string>>
@@ -84,4 +94,19 @@ views::Widget* WidgetElement::From(const UIElement* element) {
   return static_cast<const WidgetElement*>(element)->widget_;
 }
 
+template <>
+int UIElement::FindUIElementIdForBackendElement<views::Widget>(
+    views::Widget* element) const {
+  if (type_ == UIElementType::WIDGET &&
+      UIElement::GetBackingElement<views::Widget, WidgetElement>(this) ==
+          element) {
+    return node_id_;
+  }
+  for (auto* child : children_) {
+    int ui_element_id = child->FindUIElementIdForBackendElement(element);
+    if (ui_element_id)
+      return ui_element_id;
+  }
+  return 0;
+}
 }  // namespace ui_devtools

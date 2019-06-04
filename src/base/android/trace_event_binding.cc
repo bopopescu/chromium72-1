@@ -7,7 +7,6 @@
 #include <set>
 
 #include "base/android/jni_string.h"
-#include "base/lazy_instance.h"
 #include "base/macros.h"
 #include "base/trace_event/trace_event.h"
 #include "base/trace_event/trace_event_impl.h"
@@ -18,9 +17,9 @@ namespace android {
 
 namespace {
 
-const char kJavaCategory[] = "Java";
-const char kToplevelCategory[] = "toplevel";
-const char kLooperDispatchMessage[] = "Looper.dispatchMessage";
+constexpr const char kJavaCategory[] = "Java";
+constexpr const char kToplevelCategory[] = "toplevel";
+constexpr const char kLooperDispatchMessage[] = "Looper.dispatchMessage";
 
 // Boilerplate for safely converting Java data to TRACE_EVENT data.
 class TraceEventDataConverter {
@@ -29,8 +28,7 @@ class TraceEventDataConverter {
       : name_(ConvertJavaStringToUTF8(env, jname)),
         has_arg_(jarg != nullptr),
         arg_(jarg ? ConvertJavaStringToUTF8(env, jarg) : "") {}
-  ~TraceEventDataConverter() {
-  }
+  ~TraceEventDataConverter() = default;
 
   // Return saves values to pass to TRACE_EVENT macros.
   const char* name() { return name_.c_str(); }
@@ -47,18 +45,19 @@ class TraceEventDataConverter {
 
 class TraceEnabledObserver
     : public trace_event::TraceLog::EnabledStateObserver {
-  public:
-   void OnTraceLogEnabled() override {
-      JNIEnv* env = base::android::AttachCurrentThread();
-      base::android::Java_TraceEvent_setEnabled(env, true);
-    }
-    void OnTraceLogDisabled() override {
-      JNIEnv* env = base::android::AttachCurrentThread();
-      base::android::Java_TraceEvent_setEnabled(env, false);
-    }
-};
+ public:
+  ~TraceEnabledObserver() override = default;
 
-base::LazyInstance<TraceEnabledObserver>::Leaky g_trace_enabled_state_observer_;
+  // trace_event::TraceLog::EnabledStateObserver:
+  void OnTraceLogEnabled() override {
+    JNIEnv* env = base::android::AttachCurrentThread();
+    base::android::Java_TraceEvent_setEnabled(env, true);
+  }
+  void OnTraceLogDisabled() override {
+    JNIEnv* env = base::android::AttachCurrentThread();
+    base::android::Java_TraceEvent_setEnabled(env, false);
+  }
+};
 
 }  // namespace
 
@@ -67,8 +66,8 @@ static void JNI_TraceEvent_RegisterEnabledObserver(
     const JavaParamRef<jclass>& clazz) {
   bool enabled = trace_event::TraceLog::GetInstance()->IsEnabled();
   base::android::Java_TraceEvent_setEnabled(env, enabled);
-  trace_event::TraceLog::GetInstance()->AddEnabledStateObserver(
-      g_trace_enabled_state_observer_.Pointer());
+  trace_event::TraceLog::GetInstance()->AddOwnedEnabledStateObserver(
+      std::make_unique<TraceEnabledObserver>());
 }
 
 static void JNI_TraceEvent_StartATrace(JNIEnv* env,

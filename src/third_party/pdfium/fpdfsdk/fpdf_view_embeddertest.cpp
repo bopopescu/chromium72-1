@@ -7,6 +7,8 @@
 #include <memory>
 #include <string>
 
+#include "core/fpdfapi/parser/cpdf_document.h"
+#include "fpdfsdk/cpdfsdk_helpers.h"
 #include "fpdfsdk/fpdf_view_c_api_test.h"
 #include "public/cpp/fpdf_scopers.h"
 #include "public/fpdfview.h"
@@ -16,7 +18,7 @@
 
 namespace {
 
-class MockDownloadHints : public FX_DOWNLOADHINTS {
+class MockDownloadHints final : public FX_DOWNLOADHINTS {
  public:
   static void SAddSegment(FX_DOWNLOADHINTS* pThis, size_t offset, size_t size) {
   }
@@ -75,11 +77,11 @@ TEST_F(FPDFViewEmbeddertest, EmptyDocument) {
   }
 
   {
-#ifndef PDF_ENABLE_XFA
-    const unsigned long kExpected = 0;
-#else
+#ifdef PDF_ENABLE_XFA
     const unsigned long kExpected = static_cast<uint32_t>(-1);
-#endif
+#else   // PDF_ENABLE_XFA
+    const unsigned long kExpected = 0;
+#endif  // PDF_ENABLE_XFA
     EXPECT_EQ(kExpected, FPDF_GetDocPermissions(document()));
   }
 
@@ -589,7 +591,45 @@ TEST_F(FPDFViewEmbeddertest, FPDF_RenderPageBitmapWithMatrix) {
   UnloadPage(page);
 }
 
-class UnSupRecordDelegate : public EmbedderTest::Delegate {
+TEST_F(FPDFViewEmbeddertest, FPDF_GetPageSizeByIndex) {
+  EXPECT_TRUE(OpenDocument("rectangles.pdf"));
+
+  double width = 0;
+  double height = 0;
+
+  EXPECT_FALSE(FPDF_GetPageSizeByIndex(nullptr, 0, &width, &height));
+  EXPECT_FALSE(FPDF_GetPageSizeByIndex(document(), 0, nullptr, &height));
+  EXPECT_FALSE(FPDF_GetPageSizeByIndex(document(), 0, &width, nullptr));
+
+  // Page -1 doesn't exist.
+  EXPECT_FALSE(FPDF_GetPageSizeByIndex(document(), -1, &width, &height));
+
+  // Page 1 doesn't exist.
+  EXPECT_FALSE(FPDF_GetPageSizeByIndex(document(), 1, &width, &height));
+
+  // Page 0 exists.
+  EXPECT_TRUE(FPDF_GetPageSizeByIndex(document(), 0, &width, &height));
+  EXPECT_EQ(200.0, width);
+  EXPECT_EQ(300.0, height);
+
+  CPDF_Document* pDoc = CPDFDocumentFromFPDFDocument(document());
+#ifdef PDF_ENABLE_XFA
+  // TODO(tsepez): XFA must obtain this size without parsing.
+  EXPECT_EQ(1u, pDoc->GetParsedPageCountForTesting());
+#else   // PDF_ENABLE_XFA
+  EXPECT_EQ(0u, pDoc->GetParsedPageCountForTesting());
+#endif  // PDF_ENABLE_XFA
+
+  // Double-check against values from when page is actually parsed.
+  FPDF_PAGE page = LoadPage(0);
+  ASSERT_TRUE(page);
+  EXPECT_EQ(width, FPDF_GetPageWidth(page));
+  EXPECT_EQ(height, FPDF_GetPageHeight(page));
+  EXPECT_EQ(1u, pDoc->GetParsedPageCountForTesting());
+  UnloadPage(page);
+}
+
+class UnSupRecordDelegate final : public EmbedderTest::Delegate {
  public:
   UnSupRecordDelegate() : type_(-1) {}
   ~UnSupRecordDelegate() override {}

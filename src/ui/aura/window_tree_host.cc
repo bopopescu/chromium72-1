@@ -9,6 +9,7 @@
 #include "base/metrics/histogram_macros.h"
 #include "base/threading/thread_task_runner_handle.h"
 #include "base/trace_event/trace_event.h"
+#include "build/build_config.h"
 #include "components/viz/common/features.h"
 #include "ui/aura/client/capture_client.h"
 #include "ui/aura/client/cursor_client.h"
@@ -17,7 +18,6 @@
 #include "ui/aura/scoped_simple_keyboard_hook.h"
 #include "ui/aura/window.h"
 #include "ui/aura/window_event_dispatcher.h"
-#include "ui/aura/window_port.h"
 #include "ui/aura/window_targeter.h"
 #include "ui/aura/window_tree_host_observer.h"
 #include "ui/base/ime/input_method.h"
@@ -38,6 +38,11 @@
 #include "ui/gfx/geometry/rect_conversions.h"
 #include "ui/gfx/geometry/size_conversions.h"
 #include "ui/gfx/icc_profile.h"
+#include "ui/platform_window/platform_window_init_properties.h"
+
+#if defined(OS_WIN)
+#include "ui/aura/native_window_occlusion_tracker_win.h"
+#endif  // OS_WIN
 
 namespace aura {
 
@@ -46,11 +51,11 @@ namespace {
 const char kWindowTreeHostForAcceleratedWidget[] =
     "__AURA_WINDOW_TREE_HOST_ACCELERATED_WIDGET__";
 
-bool ShouldAllocateLocalSurfaceId() {
+bool ShouldAllocateLocalSurfaceId(Window* window) {
   // When running with the window service (either in 'mus' or 'mash' mode), the
   // LocalSurfaceId allocation for the WindowTreeHost is managed by the
   // WindowTreeClient and WindowTreeHostMus.
-  return Env::GetInstance()->mode() == Env::Mode::LOCAL;
+  return window->env()->mode() == Env::Mode::LOCAL;
 }
 
 #if DCHECK_IS_ON()
@@ -58,12 +63,13 @@ class ScopedLocalSurfaceIdValidator {
  public:
   explicit ScopedLocalSurfaceIdValidator(Window* window)
       : window_(window),
-        local_surface_id_(window ? window->GetLocalSurfaceId()
-                                 : viz::LocalSurfaceId()) {}
+        local_surface_id_(
+            window ? window->GetLocalSurfaceIdAllocation().local_surface_id()
+                   : viz::LocalSurfaceId()) {}
   ~ScopedLocalSurfaceIdValidator() {
-    if (ShouldAllocateLocalSurfaceId() && window_) {
-      DCHECK_EQ(local_surface_id_, window_->GetLocalSurfaceId());
-    }
+    if (window_ && ShouldAllocateLocalSurfaceId(window_))
+      DCHECK_EQ(local_surface_id_,
+                window_->GetLocalSurfaceIdAllocation().local_surface_id());
   }
 
  private:
@@ -78,6 +84,12 @@ class ScopedLocalSurfaceIdValidator {
   ~ScopedLocalSurfaceIdValidator() {}
 };
 #endif
+
+#if defined(OS_WIN)
+bool IsNativeWindowOcclusionEnabled() {
+  return base::FeatureList::IsEnabled(features::kCalculateNativeWinOcclusion);
+}
+#endif  // OS_WIN
 
 }  // namespace
 
@@ -108,7 +120,7 @@ void WindowTreeHost::InitHost() {
 
   UpdateRootWindowSizeInPixels();
   InitCompositor();
-  Env::GetInstance()->NotifyHostInitialized(this);
+  window()->env()->NotifyHostInitialized(this);
 }
 
 void WindowTreeHost::AddObserver(WindowTreeHostObserver* observer) {
@@ -117,6 +129,10 @@ void WindowTreeHost::AddObserver(WindowTreeHostObserver* observer) {
 
 void WindowTreeHost::RemoveObserver(WindowTreeHostObserver* observer) {
   observers_.RemoveObserver(observer);
+}
+
+bool WindowTreeHost::HasObserver(const WindowTreeHostObserver* observer) const {
+  return observers_.HasObserver(observer);
 }
 
 ui::EventSink* WindowTreeHost::event_sink() {
@@ -244,7 +260,8 @@ void WindowTreeHost::SetSharedInputMethod(ui::InputMethod* input_method) {
 }
 
 ui::EventDispatchDetails WindowTreeHost::DispatchKeyEventPostIME(
-    ui::KeyEvent* event) {
+    ui::KeyEvent* event,
+    base::OnceCallback<void(bool)> ack_callback) {
   // If dispatch to IME is already disabled we shouldn't reach here.
   DCHECK(!dispatcher_->should_skip_ime());
   dispatcher_->set_skip_ime(true);
@@ -253,6 +270,7 @@ ui::EventDispatchDetails WindowTreeHost::DispatchKeyEventPostIME(
       event_sink()->OnEventFromSource(event);
   if (!dispatch_details.dispatcher_destroyed)
     dispatcher_->set_skip_ime(false);
+  CallDispatchKeyEventPostIMEAck(event, std::move(ack_callback));
   return dispatch_details;
 }
 
@@ -287,19 +305,56 @@ std::unique_ptr<ScopedKeyboardHook> WindowTreeHost::CaptureSystemKeyEvents(
   return nullptr;
 }
 
+bool WindowTreeHost::ShouldSendKeyEventToIme() {
+  return true;
+}
+
+void WindowTreeHost::EnableNativeWindowOcclusionTracking() {
+#if defined(OS_WIN)
+  if (IsNativeWindowOcclusionEnabled()) {
+    NativeWindowOcclusionTrackerWin::GetOrCreateInstance()->Enable(window());
+  }
+#endif  // OS_WIN
+}
+
+void WindowTreeHost::DisableNativeWindowOcclusionTracking() {
+#if defined(OS_WIN)
+  if (IsNativeWindowOcclusionEnabled()) {
+    occlusion_state_ = Window::OcclusionState::UNKNOWN;
+    NativeWindowOcclusionTrackerWin::GetOrCreateInstance()->Disable(window());
+  }
+#endif  // OS_WIN
+}
+
+void WindowTreeHost::SetNativeWindowOcclusionState(
+    Window::OcclusionState state) {
+  if (occlusion_state_ != state) {
+    occlusion_state_ = state;
+    for (WindowTreeHostObserver& observer : observers_)
+      observer.OnOcclusionStateChanged(this, state);
+  }
+}
+
 ////////////////////////////////////////////////////////////////////////////////
 // WindowTreeHost, protected:
 
-WindowTreeHost::WindowTreeHost() : WindowTreeHost(nullptr) {
-}
-
-WindowTreeHost::WindowTreeHost(std::unique_ptr<WindowPort> window_port)
-    : window_(new Window(nullptr, std::move(window_port))),
+WindowTreeHost::WindowTreeHost(std::unique_ptr<Window> window)
+    : window_(window.release()),  // See header for details on ownership.
+      occlusion_state_(Window::OcclusionState::UNKNOWN),
       last_cursor_(ui::CursorType::kNull),
       input_method_(nullptr),
       owned_input_method_(false),
       weak_factory_(this) {
+  if (!window_)
+    window_ = new Window(nullptr);
   display::Screen::GetScreen()->AddObserver(this);
+  auto display = display::Screen::GetScreen()->GetDisplayNearestWindow(window_);
+  device_scale_factor_ = display.device_scale_factor();
+}
+
+void WindowTreeHost::IntializeDeviceScaleFactor(float device_scale_factor) {
+  DCHECK(!compositor_->root_layer()) << "Only call this before InitHost()";
+  device_scale_factor_ = device_scale_factor;
 }
 
 void WindowTreeHost::DestroyCompositor() {
@@ -326,23 +381,26 @@ void WindowTreeHost::DestroyDispatcher() {
 
 void WindowTreeHost::CreateCompositor(const viz::FrameSinkId& frame_sink_id,
                                       bool force_software_compositor,
-                                      bool external_begin_frames_enabled) {
-  DCHECK(Env::GetInstance());
-  ui::ContextFactory* context_factory = Env::GetInstance()->context_factory();
+                                      bool external_begin_frames_enabled,
+                                      bool are_events_in_pixels,
+                                      const char* trace_environment_name) {
+  DCHECK(window()->env());
+  Env* env = window()->env();
+  ui::ContextFactory* context_factory = env->context_factory();
   DCHECK(context_factory);
   ui::ContextFactoryPrivate* context_factory_private =
-      Env::GetInstance()->context_factory_private();
+      env->context_factory_private();
   bool enable_surface_synchronization =
-      aura::Env::GetInstance()->mode() == aura::Env::Mode::MUS ||
+      env->mode() == aura::Env::Mode::MUS ||
       features::IsSurfaceSynchronizationEnabled();
-  compositor_.reset(new ui::Compositor(
+  compositor_ = std::make_unique<ui::Compositor>(
       (!context_factory_private || frame_sink_id.is_valid())
           ? frame_sink_id
           : context_factory_private->AllocateFrameSinkId(),
       context_factory, context_factory_private,
       base::ThreadTaskRunnerHandle::Get(), enable_surface_synchronization,
       ui::IsPixelCanvasRecordingEnabled(), external_begin_frames_enabled,
-      force_software_compositor));
+      force_software_compositor, trace_environment_name);
 #if defined(OS_CHROMEOS)
   compositor_->AddObserver(this);
 #endif
@@ -350,14 +408,15 @@ void WindowTreeHost::CreateCompositor(const viz::FrameSinkId& frame_sink_id,
     window()->Init(ui::LAYER_NOT_DRAWN);
     window()->set_host(this);
     window()->SetName("RootWindow");
-    dispatcher_.reset(new WindowEventDispatcher(this));
+    dispatcher_ =
+        std::make_unique<WindowEventDispatcher>(this, are_events_in_pixels);
   }
 }
 
 void WindowTreeHost::InitCompositor() {
   DCHECK(!compositor_->root_layer());
   compositor_->SetScaleAndSize(device_scale_factor_, GetBoundsInPixels().size(),
-                               window()->GetLocalSurfaceId());
+                               window()->GetLocalSurfaceIdAllocation());
   compositor_->SetRootLayer(window()->layer());
 
   display::Display display =
@@ -382,21 +441,25 @@ void WindowTreeHost::OnHostMovedInPixels(
 
 void WindowTreeHost::OnHostResizedInPixels(
     const gfx::Size& new_size_in_pixels,
-    const viz::LocalSurfaceId& new_local_surface_id) {
+    const viz::LocalSurfaceIdAllocation& new_local_surface_id_allocation) {
+  // TODO(jonross) Unify all OnHostResizedInPixels to have both
+  // viz::LocalSurfaceId and allocation time as optional parameters.
   display::Display display =
       display::Screen::GetScreen()->GetDisplayNearestWindow(window());
   device_scale_factor_ = display.device_scale_factor();
   UpdateRootWindowSizeInPixels();
 
   // Allocate a new LocalSurfaceId for the new state.
-  auto local_surface_id = new_local_surface_id;
-  if (ShouldAllocateLocalSurfaceId() && !new_local_surface_id.is_valid()) {
+  viz::LocalSurfaceIdAllocation local_surface_id_allocation(
+      new_local_surface_id_allocation);
+  if (ShouldAllocateLocalSurfaceId(window()) &&
+      !new_local_surface_id_allocation.IsValid()) {
     window_->AllocateLocalSurfaceId();
-    local_surface_id = window_->GetLocalSurfaceId();
+    local_surface_id_allocation = window_->GetLocalSurfaceIdAllocation();
   }
   ScopedLocalSurfaceIdValidator lsi_validator(window());
   compositor_->SetScaleAndSize(device_scale_factor_, new_size_in_pixels,
-                               local_surface_id);
+                               local_surface_id_allocation);
 
   for (WindowTreeHostObserver& observer : observers_)
     observer.OnHostResized(this);
@@ -420,17 +483,6 @@ void WindowTreeHost::OnHostCloseRequested() {
     observer.OnHostCloseRequested(this);
 }
 
-#if defined(USE_OZONE) && defined(OZONE_PLATFORM_WAYLAND_EXTERNAL)
-void WindowTreeHost::OnWindowHostStateChanged(ui::WidgetState new_state) {
-  for (WindowTreeHostObserver& observer : observers_)
-    observer.OnWindowHostStateChanged(this, new_state);
-}
-#endif
-
-void WindowTreeHost::OnHostActivated() {
-  Env::GetInstance()->NotifyHostActivated(this);
-}
-
 void WindowTreeHost::OnHostLostWindowCapture() {
   // It is possible for this function to be called during destruction, after the
   // root window has already been destroyed (e.g. when the ui::PlatformWindow is
@@ -446,10 +498,6 @@ void WindowTreeHost::OnHostLostWindowCapture() {
 ui::EventSink* WindowTreeHost::GetEventSink() {
   return dispatcher_.get();
 }
-
-void WindowTreeHost::OnDisplayAdded(const display::Display& new_display) {}
-
-void WindowTreeHost::OnDisplayRemoved(const display::Display& old_display) {}
 
 void WindowTreeHost::OnDisplayMetricsChanged(const display::Display& display,
                                              uint32_t metrics) {
@@ -503,11 +551,8 @@ void WindowTreeHost::OnCompositingStarted(ui::Compositor* compositor,
 
 void WindowTreeHost::OnCompositingEnded(ui::Compositor* compositor) {}
 
-void WindowTreeHost::OnCompositingLockStateChanged(ui::Compositor* compositor) {
-}
-
 void WindowTreeHost::OnCompositingChildResizing(ui::Compositor* compositor) {
-  if (!Env::GetInstance()->throttle_input_on_resize() || holding_pointer_moves_)
+  if (!window()->env()->throttle_input_on_resize() || holding_pointer_moves_)
     return;
   synchronization_start_time_ = base::TimeTicks::Now();
   dispatcher_->HoldPointerMoves();

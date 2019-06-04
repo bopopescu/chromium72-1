@@ -28,6 +28,7 @@
 
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/dom/frame_request_callback_collection.h"
+#include "third_party/blink/renderer/platform/bindings/name_client.h"
 #include "third_party/blink/renderer/platform/bindings/trace_wrapper_member.h"
 #include "third_party/blink/renderer/platform/heap/handle.h"
 #include "third_party/blink/renderer/platform/wtf/text/atomic_string.h"
@@ -43,15 +44,16 @@ class MediaQueryListListener;
 
 class CORE_EXPORT ScriptedAnimationController
     : public GarbageCollectedFinalized<ScriptedAnimationController>,
-      public TraceWrapperBase {
+      public NameClient {
  public:
   static ScriptedAnimationController* Create(Document* document) {
-    return new ScriptedAnimationController(document);
+    return MakeGarbageCollected<ScriptedAnimationController>(document);
   }
+
+  explicit ScriptedAnimationController(Document*);
   virtual ~ScriptedAnimationController() = default;
 
   void Trace(blink::Visitor*);
-  void TraceWrappers(ScriptWrappableVisitor*) const override;
   const char* NameInHeapSnapshot() const override {
     return "ScriptedAnimationController";
   }
@@ -88,8 +90,6 @@ class CORE_EXPORT ScriptedAnimationController
   bool NextFrameHasPendingRAF() const { return next_frame_has_pending_raf_; }
 
  private:
-  explicit ScriptedAnimationController(Document*);
-
   void ScheduleAnimationIfNeeded();
 
   void RunTasks();

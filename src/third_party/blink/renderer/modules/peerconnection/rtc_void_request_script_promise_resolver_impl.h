@@ -15,7 +15,13 @@ class ScriptPromiseResolver;
 class RTCVoidRequestScriptPromiseResolverImpl : public RTCVoidRequest {
  public:
   static RTCVoidRequestScriptPromiseResolverImpl* Create(
-      ScriptPromiseResolver*);
+      ScriptPromiseResolver*,
+      const char* interface_name,
+      const char* property_name);
+
+  RTCVoidRequestScriptPromiseResolverImpl(ScriptPromiseResolver*,
+                                          const char* interface_name,
+                                          const char* property_name);
   ~RTCVoidRequestScriptPromiseResolverImpl() override;
 
   // RTCVoidRequest
@@ -25,9 +31,9 @@ class RTCVoidRequestScriptPromiseResolverImpl : public RTCVoidRequest {
   void Trace(blink::Visitor*) override;
 
  protected:
-  RTCVoidRequestScriptPromiseResolverImpl(ScriptPromiseResolver*);
-
   Member<ScriptPromiseResolver> resolver_;
+  const char* interface_name_;
+  const char* property_name_;
 };
 
 }  // namespace blink

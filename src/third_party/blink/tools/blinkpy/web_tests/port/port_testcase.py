@@ -254,13 +254,6 @@ class PortTestCase(LoggingTestCase):
             port.host.filesystem.join(port.layout_tests_dir(), 'SlowTests'),
         ])
 
-    def test_check_sys_deps(self):
-        port = self.make_port()
-        port._executive = MockExecutive(exit_code=0)  # pylint: disable=protected-access
-        self.assertEqual(port.check_sys_deps(needs_http=False), exit_codes.OK_EXIT_STATUS)
-        port._executive = MockExecutive(exit_code=1, output='testing output failure')  # pylint: disable=protected-access
-        self.assertEqual(port.check_sys_deps(needs_http=False), exit_codes.SYS_DEPS_EXIT_STATUS)
-
     def test_expectations_ordering(self):
         port = self.make_port()
         for path in port.expectations_files():
@@ -305,7 +298,7 @@ class PortTestCase(LoggingTestCase):
         self.assertEqual(port.baseline_search_path()[0], '/tmp/foo')
 
     def test_virtual_test_suites(self):
-        # We test that we can load the real LayoutTests/VirtualTestSuites file properly, so we
+        # We test that we can load the real web_tests/VirtualTestSuites file properly, so we
         # use a real SystemHost(). We don't care what virtual_test_suites() returns as long
         # as it is iterable.
         port = self.make_port(host=SystemHost(), port_name=self.full_port_name)

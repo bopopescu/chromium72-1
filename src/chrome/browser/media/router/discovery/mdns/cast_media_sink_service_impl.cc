@@ -8,14 +8,17 @@
 #include "base/rand_util.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/time/default_clock.h"
+#include "chrome/browser/browser_process.h"
 #include "chrome/browser/media/router/discovery/mdns/media_sink_util.h"
 #include "chrome/browser/media/router/media_router_feature.h"
+#include "chrome/browser/net/system_network_context_manager.h"
 #include "chrome/common/media_router/discovery/media_sink_internal.h"
 #include "chrome/common/media_router/media_sink.h"
 #include "components/cast_channel/cast_channel_enum.h"
 #include "components/cast_channel/cast_socket_service.h"
 #include "components/cast_channel/logger.h"
 #include "components/net_log/chrome_net_log.h"
+#include "content/public/browser/browser_thread.h"
 #include "net/base/backoff_entry.h"
 #include "net/base/net_errors.h"
 
@@ -157,21 +160,23 @@ bool IsNetworkIdUnknownOrDisconnected(const std::string& network_id) {
          network_id == DiscoveryNetworkMonitor::kNetworkIdDisconnected;
 }
 
+// Updates |existing_sink| with properties from |new_sink|. The relevant
+// properties are sink name and capabilities (and icon type, by association).
+// This method is only called with a |new_sink| discovered by mDNS. As such,
+// |discovered_by_dial| is also updated to false.
+void UpdateCastSink(const MediaSinkInternal& new_sink,
+                    MediaSinkInternal* existing_sink) {
+  existing_sink->sink().set_name(new_sink.sink().name());
+  auto capabilities = new_sink.cast_data().capabilities;
+  existing_sink->cast_data().capabilities = capabilities;
+  existing_sink->sink().set_icon_type(GetCastSinkIconType(capabilities));
+  existing_sink->cast_data().discovered_by_dial = false;
+}
+
 }  // namespace
 
 // static
 constexpr int CastMediaSinkServiceImpl::kMaxDialSinkFailureCount;
-
-// static
-SinkIconType CastMediaSinkServiceImpl::GetCastSinkIconType(
-    uint8_t capabilities) {
-  if (capabilities & cast_channel::CastDeviceCapability::VIDEO_OUT)
-    return SinkIconType::CAST;
-
-  return capabilities & cast_channel::CastDeviceCapability::MULTIZONE_GROUP
-             ? SinkIconType::CAST_AUDIO_GROUP
-             : SinkIconType::CAST_AUDIO;
-}
 
 // static
 MediaSink::Id CastMediaSinkServiceImpl::GetCastSinkIdFromDial(
@@ -181,6 +186,16 @@ MediaSink::Id CastMediaSinkServiceImpl::GetCastSinkIdFromDial(
 
   // Replace the "dial:" prefix with "cast:".
   return "cast:" + dial_sink_id.substr(5);
+}
+
+// static
+MediaSink::Id CastMediaSinkServiceImpl::GetDialSinkIdFromCast(
+    const MediaSink::Id& cast_sink_id) {
+  DCHECK_EQ("cast:", cast_sink_id.substr(0, 5))
+      << "unexpected Cast sink id " << cast_sink_id;
+
+  // Replace the "cast:" prefix with "dial:".
+  return "dial:" + cast_sink_id.substr(5);
 }
 
 CastMediaSinkServiceImpl::CastMediaSinkServiceImpl(
@@ -339,15 +354,6 @@ void CastMediaSinkServiceImpl::OnError(const cast_channel::CastSocket& socket,
           base::IgnoreResult(&cast_channel::CastSocketService::RemoveSocket),
           base::Unretained(cast_socket_service_), socket_id));
 
-  // No op if socket is not opened yet. OnChannelOpened will handle this error.
-  if (socket.ready_state() == cast_channel::ReadyState::CONNECTING) {
-    DVLOG(2) << "Opening socket is pending, no-op... "
-             << ip_endpoint.ToString();
-    return;
-  }
-
-  DVLOG(2) << "OnError starts reopening cast channel: "
-           << ip_endpoint.ToString();
   // Remove existing cast sink from |sinks|. It will be added back if
   // it can be successfully reconnected.
   const auto& sinks = GetSinks();
@@ -361,18 +367,24 @@ void CastMediaSinkServiceImpl::OnError(const cast_channel::CastSocket& socket,
     return;
   }
 
-  const MediaSinkInternal& sink = sink_it->second;
-  task_runner_->PostTask(
-      FROM_HERE,
-      base::BindOnce(&CastMediaSinkServiceImpl::OpenChannel, GetWeakPtr(), sink,
-                     nullptr, SinkSource::kConnectionRetry));
-
   // We erase the sink here so that OpenChannel would not find an existing
   // sink.
   // Note: a better longer term solution is to introduce a state field to the
   // sink. We would set it to ERROR here. In OpenChannel(), we would check
   // create a socket only if the state is not already CONNECTED.
+  MediaSinkInternal sink = sink_it->second;
   RemoveSink(sink);
+
+  // If socket is not opened yet, then |OnChannelOpened()| will handle the
+  // retry.
+  if (socket.ready_state() != cast_channel::ReadyState::CONNECTING) {
+    DVLOG(2) << "OnError starts reopening cast channel: "
+             << ip_endpoint.ToString();
+    task_runner_->PostTask(
+        FROM_HERE,
+        base::BindOnce(&CastMediaSinkServiceImpl::OpenChannel, GetWeakPtr(),
+                       sink, nullptr, SinkSource::kConnectionRetry));
+  }
 }
 
 void CastMediaSinkServiceImpl::OnMessage(
@@ -438,7 +450,7 @@ CastMediaSinkServiceImpl::CreateCastSocketOpenParams(
   // TODO(crbug.com/814419): Switching cast socket implementation to use network
   // service will allow us to get back NetLog.
   return cast_channel::CastSocketOpenParams(
-      sink.cast_data().ip_endpoint, nullptr,
+      sink.cast_data().ip_endpoint,
       base::TimeDelta::FromSeconds(connect_timeout_in_seconds),
       base::TimeDelta::FromSeconds(liveness_timeout_in_seconds),
       base::TimeDelta::FromSeconds(open_params_.ping_interval_in_seconds),
@@ -463,10 +475,33 @@ void CastMediaSinkServiceImpl::OpenChannel(
   if (sink_source != SinkSource::kDial)
     dial_sink_failure_count_.erase(sink_id);
 
+  // If the sink already exists, then we need to check if there are updates.
+  // If the IP endpoint changed, then we will need to reopen a socket.
+  // If the IP endpoint remained the same but other properties changed, then we
+  // can update the existing sink without opening a new socket.
   const MediaSinkInternal* existing_sink = GetSinkById(sink_id);
   if (existing_sink && existing_sink->cast_data().ip_endpoint == ip_endpoint) {
     DVLOG(2) << "A channel already exists for " << sink_id << ", "
              << ip_endpoint.ToString();
+    // This update is only performed if |sink_source| is kMdns. In particular,
+    // DIAL-discovered
+    // sinks contain incomplete information which should not be used for
+    // updates.
+    if (sink_source != SinkSource::kMdns)
+      return;
+
+    if (existing_sink->sink().name() == cast_sink.sink().name() &&
+        existing_sink->cast_data().capabilities ==
+            cast_sink.cast_data().capabilities) {
+      return;
+    }
+
+    // Merge new fields into copy of existing sink to retain cast_channel_id.
+    DVLOG(2) << "Updating existing sink without opening new channel: "
+             << sink_id << ", name: " << cast_sink.sink().name();
+    MediaSinkInternal existing_sink_copy = *existing_sink;
+    UpdateCastSink(cast_sink, &existing_sink_copy);
+    AddOrUpdateSink(existing_sink_copy);
     return;
   }
 
@@ -482,6 +517,11 @@ void CastMediaSinkServiceImpl::OpenChannel(
   cast_channel::CastSocketOpenParams open_params =
       CreateCastSocketOpenParams(cast_sink);
   cast_socket_service_->OpenSocket(
+      base::BindRepeating([] {
+        DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+        return g_browser_process->system_network_context_manager()
+            ->GetContext();
+      }),
       open_params,
       base::BindOnce(&CastMediaSinkServiceImpl::OnChannelOpened, GetWeakPtr(),
                      cast_sink, std::move(backoff_entry), sink_source,
@@ -563,7 +603,7 @@ void CastMediaSinkServiceImpl::OnChannelOpenSucceeded(
 
   CastAnalytics::RecordCastChannelConnectResult(
       MediaRouterChannelConnectResults::SUCCESS);
-  CastSinkExtraData extra_data = cast_sink.cast_data();
+  CastSinkExtraData& extra_data = cast_sink.cast_data();
   // Manually set device capabilities for sinks discovered via DIAL as DIAL
   // discovery does not provide capability info.
   if (cast_sink.cast_data().discovered_by_dial) {
@@ -577,11 +617,9 @@ void CastMediaSinkServiceImpl::OnChannelOpenSucceeded(
   }
 
   extra_data.cast_channel_id = socket->id();
-  cast_sink.set_cast_data(extra_data);
-
-  DVLOG(2) << "Adding or updating sink [name]: " << cast_sink.sink().name();
 
   // Add or update existing cast sink.
+  DVLOG(2) << "Adding or updating sink [name]: " << cast_sink.sink().name();
   const MediaSink::Id& sink_id = cast_sink.sink().id();
   const MediaSinkInternal* existing_sink = GetSinkById(sink_id);
   if (!existing_sink) {
@@ -609,6 +647,13 @@ void CastMediaSinkServiceImpl::OnChannelOpenSucceeded(
 
   if (old_sink_it != sinks.end())
     RemoveSink(old_sink_it->second);
+
+  // Certain classes of Cast sinks support advertising via SSDP but do not
+  // properly implement the rest of the DIAL protocol. If we successfully open
+  // a Cast channel to a device that came from DIAL, remove it from
+  // |dial_media_sink_service_|. This ensures the device shows up as a Cast sink
+  // only.
+  dial_media_sink_service_->RemoveSinkById(GetDialSinkIdFromCast(sink_id));
 }
 
 void CastMediaSinkServiceImpl::OnChannelOpenFailed(
@@ -651,6 +696,9 @@ void CastMediaSinkServiceImpl::TryConnectDialDiscoveredSink(
     DVLOG(2) << "Sink discovered by mDNS, skip adding [name]: "
              << sink.sink().name();
     metrics_.RecordCastSinkDiscoverySource(SinkSource::kMdnsDial);
+    // Sink is a Cast device; remove from |dial_media_sink_service_| to prevent
+    // duplicates.
+    dial_media_sink_service_->RemoveSink(dial_sink);
     return;
   }
 

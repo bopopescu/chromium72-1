@@ -99,7 +99,7 @@ public class RoundedIconGenerator {
     }
 
     /**
-     * Generates an icon based on |text|.
+     * Generates an icon based on |text| (using the first character).
      *
      * @param text The text to render the first character of on the icon.
      * @return The generated icon.
@@ -110,7 +110,8 @@ public class RoundedIconGenerator {
 
         canvas.drawRoundRect(mBackgroundRect, mCornerRadiusPx, mCornerRadiusPx, mBackgroundPaint);
 
-        String displayText = text.substring(0, 1).toUpperCase(Locale.getDefault());
+        int length = Math.min(1, text.length());
+        String displayText = text.substring(0, length).toUpperCase(Locale.getDefault());
         float textWidth = mTextPaint.measureText(displayText);
 
         canvas.drawText(

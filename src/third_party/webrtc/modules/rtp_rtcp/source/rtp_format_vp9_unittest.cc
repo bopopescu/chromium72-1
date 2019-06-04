@@ -15,7 +15,6 @@
 #include "modules/rtp_rtcp/source/rtp_packet_to_send.h"
 #include "test/gmock.h"
 #include "test/gtest.h"
-#include "typedefs.h"  // NOLINT(build/include)
 
 namespace webrtc {
 namespace {
@@ -82,8 +81,10 @@ void ParseAndCheckPacket(const uint8_t* packet,
   std::unique_ptr<RtpDepacketizer> depacketizer(new RtpDepacketizerVp9());
   RtpDepacketizer::ParsedPayload parsed;
   ASSERT_TRUE(depacketizer->Parse(&parsed, packet, expected_length));
-  EXPECT_EQ(kRtpVideoVp9, parsed.type.Video.codec);
-  VerifyHeader(expected, parsed.type.Video.codecHeader.VP9);
+  EXPECT_EQ(kVideoCodecVP9, parsed.video_header().codec);
+  auto& vp9_header =
+      absl::get<RTPVideoHeaderVP9>(parsed.video_header().video_type_header);
+  VerifyHeader(expected, vp9_header);
   const size_t kExpectedPayloadLength = expected_length - expected_hdr_length;
   VerifyPayload(parsed, packet + expected_hdr_length, kExpectedPayloadLength);
 }
@@ -132,22 +133,19 @@ class RtpPacketizerVp9Test : public ::testing::Test {
   void SetUp() override { expected_.InitRTPVideoHeaderVP9(); }
 
   RtpPacketToSend packet_;
-  std::unique_ptr<uint8_t[]> payload_;
-  size_t payload_size_;
+  std::vector<uint8_t> payload_;
   size_t payload_pos_;
   RTPVideoHeaderVP9 expected_;
   std::unique_ptr<RtpPacketizerVp9> packetizer_;
   size_t num_packets_;
 
   void Init(size_t payload_size, size_t packet_size) {
-    payload_.reset(new uint8_t[payload_size]);
-    memset(payload_.get(), 7, payload_size);
-    payload_size_ = payload_size;
+    payload_.assign(payload_size, 7);
     payload_pos_ = 0;
-    packetizer_.reset(new RtpPacketizerVp9(expected_, packet_size,
-                                           /*last_packet_reduction_len=*/0));
-    num_packets_ =
-        packetizer_->SetPayloadData(payload_.get(), payload_size_, nullptr);
+    RtpPacketizer::PayloadSizeLimits limits;
+    limits.max_payload_len = packet_size;
+    packetizer_.reset(new RtpPacketizerVp9(payload_, limits, expected_));
+    num_packets_ = packetizer_->NumPackets();
   }
 
   void CheckPayload(const uint8_t* packet,
@@ -157,7 +155,7 @@ class RtpPacketizerVp9Test : public ::testing::Test {
     for (size_t i = start_pos; i < end_pos; ++i) {
       EXPECT_EQ(packet[i], payload_[payload_pos_++]);
     }
-    EXPECT_EQ(last, payload_pos_ == payload_size_);
+    EXPECT_EQ(last, payload_pos_ == payload_.size());
   }
 
   void CreateParseAndCheckPackets(const size_t* expected_hdr_sizes,
@@ -225,7 +223,7 @@ TEST_F(RtpPacketizerVp9Test, TestOneBytePictureId) {
   const size_t kFrameSize = 30;
   const size_t kPacketSize = 12;
 
-  expected_.picture_id = kMaxOneBytePictureId;   // 2 byte payload descriptor
+  expected_.picture_id = kMaxOneBytePictureId;  // 2 byte payload descriptor
   expected_.max_picture_id = kMaxOneBytePictureId;
   Init(kFrameSize, kPacketSize);
 
@@ -482,10 +480,9 @@ TEST_F(RtpPacketizerVp9Test, TestSsDataDoesNotFitInAveragePacket) {
 
 TEST_F(RtpPacketizerVp9Test, EndOfPictureSetsSetMarker) {
   const size_t kFrameSize = 10;
-  const size_t kPacketSize = 8;
-  const size_t kLastPacketReductionLen = 0;
+  RtpPacketizer::PayloadSizeLimits limits;
+  limits.max_payload_len = 8;
   const uint8_t kFrame[kFrameSize] = {7};
-  const RTPFragmentationHeader* kNoFragmentation = nullptr;
 
   RTPVideoHeaderVP9 vp9_header;
   vp9_header.InitRTPVideoHeaderVP9();
@@ -501,9 +498,7 @@ TEST_F(RtpPacketizerVp9Test, EndOfPictureSetsSetMarker) {
         spatial_idx + 1 == vp9_header.num_spatial_layers - 1;
     vp9_header.spatial_idx = spatial_idx;
     vp9_header.end_of_picture = end_of_picture;
-    RtpPacketizerVp9 packetizer(vp9_header, kPacketSize,
-                                kLastPacketReductionLen);
-    packetizer.SetPayloadData(kFrame, sizeof(kFrame), kNoFragmentation);
+    RtpPacketizerVp9 packetizer(kFrame, limits, vp9_header);
     ASSERT_TRUE(packetizer.NextPacket(&packet));
     EXPECT_FALSE(packet.Marker());
     ASSERT_TRUE(packetizer.NextPacket(&packet));
@@ -513,23 +508,21 @@ TEST_F(RtpPacketizerVp9Test, EndOfPictureSetsSetMarker) {
 
 TEST_F(RtpPacketizerVp9Test, TestGeneratesMinimumNumberOfPackets) {
   const size_t kFrameSize = 10;
-  const size_t kPacketSize = 8;
-  const size_t kLastPacketReductionLen = 0;
+  RtpPacketizer::PayloadSizeLimits limits;
+  limits.max_payload_len = 8;
   // Calculated by hand. One packet can contain
   // |kPacketSize| - |kVp9MinDiscriptorSize| = 6 bytes of the frame payload,
   // thus to fit 10 bytes two packets are required.
   const size_t kMinNumberOfPackets = 2;
   const uint8_t kFrame[kFrameSize] = {7};
-  const RTPFragmentationHeader* kNoFragmentation = nullptr;
 
   RTPVideoHeaderVP9 vp9_header;
   vp9_header.InitRTPVideoHeaderVP9();
 
   RtpPacketToSend packet(kNoExtensions);
 
-  RtpPacketizerVp9 packetizer(vp9_header, kPacketSize, kLastPacketReductionLen);
-  EXPECT_EQ(kMinNumberOfPackets, packetizer.SetPayloadData(
-                                     kFrame, sizeof(kFrame), kNoFragmentation));
+  RtpPacketizerVp9 packetizer(kFrame, limits, vp9_header);
+  EXPECT_EQ(packetizer.NumPackets(), kMinNumberOfPackets);
   ASSERT_TRUE(packetizer.NextPacket(&packet));
   EXPECT_FALSE(packet.Marker());
   ASSERT_TRUE(packetizer.NextPacket(&packet));
@@ -538,8 +531,9 @@ TEST_F(RtpPacketizerVp9Test, TestGeneratesMinimumNumberOfPackets) {
 
 TEST_F(RtpPacketizerVp9Test, TestRespectsLastPacketReductionLen) {
   const size_t kFrameSize = 10;
-  const size_t kPacketSize = 8;
-  const size_t kLastPacketReductionLen = 5;
+  RtpPacketizer::PayloadSizeLimits limits;
+  limits.max_payload_len = 8;
+  limits.last_packet_reduction_len = 5;
   // Calculated by hand. VP9 payload descriptor is 2 bytes. Like in the test
   // above, 1 packet is not enough. 2 packets can contain
   // 2*(|kPacketSize| - |kVp9MinDiscriptorSize|) - |kLastPacketReductionLen| = 7
@@ -547,7 +541,6 @@ TEST_F(RtpPacketizerVp9Test, TestRespectsLastPacketReductionLen) {
   // bytes.
   const size_t kMinNumberOfPackets = 3;
   const uint8_t kFrame[kFrameSize] = {7};
-  const RTPFragmentationHeader* kNoFragmentation = nullptr;
 
   RTPVideoHeaderVP9 vp9_header;
   vp9_header.InitRTPVideoHeaderVP9();
@@ -555,11 +548,8 @@ TEST_F(RtpPacketizerVp9Test, TestRespectsLastPacketReductionLen) {
 
   RtpPacketToSend packet(kNoExtensions);
 
-  RtpPacketizerVp9 packetizer0(vp9_header, kPacketSize,
-                               kLastPacketReductionLen);
-  EXPECT_EQ(
-      packetizer0.SetPayloadData(kFrame, sizeof(kFrame), kNoFragmentation),
-      kMinNumberOfPackets);
+  RtpPacketizerVp9 packetizer0(kFrame, limits, vp9_header);
+  EXPECT_EQ(packetizer0.NumPackets(), kMinNumberOfPackets);
   ASSERT_TRUE(packetizer0.NextPacket(&packet));
   EXPECT_FALSE(packet.Marker());
   ASSERT_TRUE(packetizer0.NextPacket(&packet));
@@ -584,8 +574,7 @@ TEST_F(RtpPacketizerVp9Test, TestNonRefForInterLayerPred) {
 
 class RtpDepacketizerVp9Test : public ::testing::Test {
  protected:
-  RtpDepacketizerVp9Test()
-      : depacketizer_(new RtpDepacketizerVp9()) {}
+  RtpDepacketizerVp9Test() : depacketizer_(new RtpDepacketizerVp9()) {}
 
   void SetUp() override { expected_.InitRTPVideoHeaderVP9(); }
 
@@ -705,8 +694,8 @@ TEST_F(RtpDepacketizerVp9Test, ParseRefIdx) {
 TEST_F(RtpDepacketizerVp9Test, ParseRefIdxFailsWithNoPictureId) {
   const uint8_t kPdiff = 3;
   uint8_t packet[13] = {0};
-  packet[0] = 0x58;            // I:0 P:1 L:0 F:1 B:1 E:0 V:0 Z:0
-  packet[1] = (kPdiff << 1);   // P,F:  P_DIFF:3 N:0
+  packet[0] = 0x58;           // I:0 P:1 L:0 F:1 B:1 E:0 V:0 Z:0
+  packet[1] = (kPdiff << 1);  // P,F:  P_DIFF:3 N:0
 
   RtpDepacketizer::ParsedPayload parsed;
   EXPECT_FALSE(depacketizer_->Parse(&parsed, packet, sizeof(packet)));
@@ -761,7 +750,7 @@ TEST_F(RtpDepacketizerVp9Test, ParseFirstPacketInKeyFrame) {
   RtpDepacketizer::ParsedPayload parsed;
   ASSERT_TRUE(depacketizer_->Parse(&parsed, packet, sizeof(packet)));
   EXPECT_EQ(kVideoFrameKey, parsed.frame_type);
-  EXPECT_TRUE(parsed.type.Video.is_first_packet_in_frame);
+  EXPECT_TRUE(parsed.video_header().is_first_packet_in_frame);
 }
 
 TEST_F(RtpDepacketizerVp9Test, ParseLastPacketInDeltaFrame) {
@@ -771,7 +760,7 @@ TEST_F(RtpDepacketizerVp9Test, ParseLastPacketInDeltaFrame) {
   RtpDepacketizer::ParsedPayload parsed;
   ASSERT_TRUE(depacketizer_->Parse(&parsed, packet, sizeof(packet)));
   EXPECT_EQ(kVideoFrameDelta, parsed.frame_type);
-  EXPECT_FALSE(parsed.type.Video.is_first_packet_in_frame);
+  EXPECT_FALSE(parsed.video_header().is_first_packet_in_frame);
 }
 
 TEST_F(RtpDepacketizerVp9Test, ParseResolution) {
@@ -791,8 +780,8 @@ TEST_F(RtpDepacketizerVp9Test, ParseResolution) {
 
   RtpDepacketizer::ParsedPayload parsed;
   ASSERT_TRUE(depacketizer_->Parse(&parsed, packet, sizeof(packet)));
-  EXPECT_EQ(kWidth[0], parsed.type.Video.width);
-  EXPECT_EQ(kHeight[0], parsed.type.Video.height);
+  EXPECT_EQ(kWidth[0], parsed.video_header().width);
+  EXPECT_EQ(kHeight[0], parsed.video_header().height);
 }
 
 TEST_F(RtpDepacketizerVp9Test, ParseFailsForNoPayloadLength) {

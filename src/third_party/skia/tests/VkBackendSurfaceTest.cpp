@@ -9,9 +9,10 @@
 
 #include "SkTypes.h"
 
-#if SK_SUPPORT_GPU && defined(SK_VULKAN)
+#if defined(SK_VULKAN)
 
-#include "GrTest.h"
+#include "vk/GrVkVulkan.h"
+
 #include "Test.h"
 
 #include "GrBackendSurface.h"
@@ -30,7 +31,7 @@ DEF_GPUTEST_FOR_VULKAN_CONTEXT(VkImageLayoutTest, reporter, ctxInfo) {
     GrVkGpu* gpu = static_cast<GrVkGpu*>(context->contextPriv().getGpu());
 
     GrBackendTexture backendTex = gpu->createTestingOnlyBackendTexture(nullptr, 1, 1,
-                                                                       kRGBA_8888_GrPixelConfig,
+                                                                       GrColorType::kRGBA_8888,
                                                                        false,
                                                                        GrMipMapped::kNo);
     REPORTER_ASSERT(reporter, backendTex.isValid());
@@ -64,8 +65,8 @@ DEF_GPUTEST_FOR_VULKAN_CONTEXT(VkImageLayoutTest, reporter, ctxInfo) {
 
     sk_sp<GrTextureProxy> texProxy = as_IB(wrappedImage)->asTextureProxyRef();
     REPORTER_ASSERT(reporter, texProxy.get());
-    REPORTER_ASSERT(reporter, texProxy->priv().isInstantiated());
-    GrTexture* texture = texProxy->priv().peekTexture();
+    REPORTER_ASSERT(reporter, texProxy->isInstantiated());
+    GrTexture* texture = texProxy->peekTexture();
     REPORTER_ASSERT(reporter, texture);
 
     // Verify that modifying the layout via the GrVkTexture is reflected in the GrBackendTexture

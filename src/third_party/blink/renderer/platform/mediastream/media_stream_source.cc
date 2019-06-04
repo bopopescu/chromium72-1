@@ -29,6 +29,8 @@
  */
 
 #include "third_party/blink/renderer/platform/mediastream/media_stream_source.h"
+
+#include "third_party/blink/renderer/platform/mediastream/media_stream_center.h"
 #include "third_party/blink/renderer/platform/wtf/assertions.h"
 
 namespace blink {
@@ -39,8 +41,8 @@ MediaStreamSource* MediaStreamSource::Create(const String& id,
                                              bool remote,
                                              ReadyState ready_state,
                                              bool requires_consumer) {
-  return new MediaStreamSource(id, type, name, remote, ready_state,
-                               requires_consumer);
+  return MakeGarbageCollected<MediaStreamSource>(
+      id, type, name, remote, ready_state, requires_consumer);
 }
 
 MediaStreamSource::MediaStreamSource(const String& id,
@@ -85,7 +87,7 @@ void MediaStreamSource::SetReadyState(ReadyState ready_state) {
     //
     // TODO(sof): consider adding run-time checks that disallows this kind
     // of dead object revivification by default.
-    for (size_t i = 0; i < observers.size(); ++i)
+    for (wtf_size_t i = 0; i < observers.size(); ++i)
       observers[i] = nullptr;
   }
 }
@@ -130,12 +132,17 @@ void MediaStreamSource::GetSettings(WebMediaStreamTrack::Settings& settings) {
         settings.echo_cancellation = false;
         settings.echo_cancellation_type.Reset();
         break;
-      case EchoCancellationMode::kSoftware:
+      case EchoCancellationMode::kBrowser:
         settings.echo_cancellation = true;
         settings.echo_cancellation_type =
             WebString::FromASCII(blink::kEchoCancellationTypeBrowser);
         break;
-      case EchoCancellationMode::kHardware:
+      case EchoCancellationMode::kAec3:
+        settings.echo_cancellation = true;
+        settings.echo_cancellation_type =
+            WebString::FromASCII(blink::kEchoCancellationTypeAec3);
+        break;
+      case EchoCancellationMode::kSystem:
         settings.echo_cancellation = true;
         settings.echo_cancellation_type =
             WebString::FromASCII(blink::kEchoCancellationTypeSystem);
@@ -146,6 +153,8 @@ void MediaStreamSource::GetSettings(WebMediaStreamTrack::Settings& settings) {
     settings.auto_gain_control = *auto_gain_control_;
   if (noise_supression_)
     settings.noise_supression = *noise_supression_;
+
+  MediaStreamCenter::Instance().GetSourceSettings(this, settings);
 }
 
 void MediaStreamSource::SetAudioFormat(size_t number_of_channels,
@@ -179,9 +188,11 @@ STATIC_ASSERT_ENUM(WebMediaStreamSource::kReadyStateEnded,
                    MediaStreamSource::kReadyStateEnded);
 STATIC_ASSERT_ENUM(WebMediaStreamSource::EchoCancellationMode::kDisabled,
                    MediaStreamSource::EchoCancellationMode::kDisabled);
-STATIC_ASSERT_ENUM(WebMediaStreamSource::EchoCancellationMode::kSoftware,
-                   MediaStreamSource::EchoCancellationMode::kSoftware);
-STATIC_ASSERT_ENUM(WebMediaStreamSource::EchoCancellationMode::kHardware,
-                   MediaStreamSource::EchoCancellationMode::kHardware);
+STATIC_ASSERT_ENUM(WebMediaStreamSource::EchoCancellationMode::kBrowser,
+                   MediaStreamSource::EchoCancellationMode::kBrowser);
+STATIC_ASSERT_ENUM(WebMediaStreamSource::EchoCancellationMode::kAec3,
+                   MediaStreamSource::EchoCancellationMode::kAec3);
+STATIC_ASSERT_ENUM(WebMediaStreamSource::EchoCancellationMode::kSystem,
+                   MediaStreamSource::EchoCancellationMode::kSystem);
 
 }  // namespace blink

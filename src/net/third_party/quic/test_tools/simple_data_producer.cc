@@ -8,7 +8,7 @@
 #include "net/third_party/quic/platform/api/quic_map_util.h"
 #include "net/third_party/quic/platform/api/quic_ptr_util.h"
 
-namespace net {
+namespace quic {
 
 namespace test {
 
@@ -30,13 +30,21 @@ void SimpleDataProducer::SaveStreamData(QuicStreamId id,
   send_buffer_map_[id]->SaveStreamData(iov, iov_count, iov_offset, data_length);
 }
 
-bool SimpleDataProducer::WriteStreamData(QuicStreamId id,
-                                         QuicStreamOffset offset,
-                                         QuicByteCount data_length,
-                                         QuicDataWriter* writer) {
-  return send_buffer_map_[id]->WriteStreamData(offset, data_length, writer);
+WriteStreamDataResult SimpleDataProducer::WriteStreamData(
+    QuicStreamId id,
+    QuicStreamOffset offset,
+    QuicByteCount data_length,
+    QuicDataWriter* writer) {
+  auto iter = send_buffer_map_.find(id);
+  if (iter == send_buffer_map_.end()) {
+    return STREAM_MISSING;
+  }
+  if (iter->second->WriteStreamData(offset, data_length, writer)) {
+    return WRITE_SUCCESS;
+  }
+  return WRITE_FAILED;
 }
 
 }  // namespace test
 
-}  // namespace net
+}  // namespace quic

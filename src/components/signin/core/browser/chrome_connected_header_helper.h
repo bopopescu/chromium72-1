@@ -7,7 +7,7 @@
 
 #include <string>
 
-#include "components/signin/core/browser/profile_management_switches.h"
+#include "components/signin/core/browser/account_consistency_method.h"
 #include "components/signin/core/browser/signin_header_helper.h"
 
 class GURL;
@@ -41,6 +41,11 @@ class ChromeConnectedHeaderHelper : public SigninHeaderHelper {
                                  const GURL& url,
                                  const std::string& account_id,
                                  int profile_mode_mask);
+
+  // SigninHeaderHelper implementation:
+  bool ShouldBuildRequestHeader(
+      const GURL& url,
+      const content_settings::CookieSettings* cookie_settings) override;
 
  private:
   // Whether mirror account consistency should be used.

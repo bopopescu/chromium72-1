@@ -2,7 +2,6 @@
 # For example, core/rendering/OWNERS for rendering changes.
 
 # Reviewers (comments indicate areas of expertise):
-ager@chromium.org
 # alancutter reviews changes in core/animation, core/css and core/style.
 alancutter@chromium.org
 alexis.menard@intel.com
@@ -27,6 +26,7 @@ fmalita@chromium.org
 # foolip reviews <video>, <track>, WebVTT and Fullscreen.
 foolip@chromium.org
 fs@opera.com
+fserb@chromium.org
 futhark@chromium.org
 haraken@chromium.org
 hayato@chromium.org
@@ -38,7 +38,6 @@ jbroman@chromium.org
 jfernandez@igalia.com
 jianli@chromium.org
 jochen@chromium.org
-junov@chromium.org
 kbr@chromium.org
 keishi@chromium.org
 kenneth.r.christiansen@intel.com
@@ -61,7 +60,6 @@ rob.buis@samsung.com
 robhogan@gmail.com
 schenney@chromium.org
 senorblanco@chromium.org
-sashab@chromium.org
 skobes@chromium.org
 svillar@igalia.com
 szager@chromium.org

@@ -131,7 +131,8 @@ TEST(HttpStreamParser, DataReadErrorSynchronous) {
   request.url = GURL("http://localhost");
   request.upload_data_stream = &upload_data_stream;
 
-  scoped_refptr<GrowableIOBuffer> read_buffer(new GrowableIOBuffer);
+  scoped_refptr<GrowableIOBuffer> read_buffer =
+      base::MakeRefCounted<GrowableIOBuffer>();
   HttpStreamParser parser(socket_handle.get(), &request, read_buffer.get(),
                           NetLogWithSource());
 
@@ -175,7 +176,8 @@ TEST(HttpStreamParser, DataReadErrorAsynchronous) {
   request.url = GURL("http://localhost");
   request.upload_data_stream = &upload_data_stream;
 
-  scoped_refptr<GrowableIOBuffer> read_buffer(new GrowableIOBuffer);
+  scoped_refptr<GrowableIOBuffer> read_buffer =
+      base::MakeRefCounted<GrowableIOBuffer>();
   HttpStreamParser parser(socket_handle.get(), &request, read_buffer.get(),
                           NetLogWithSource());
 
@@ -254,7 +256,8 @@ TEST(HttpStreamParser, InitAsynchronousUploadDataStream) {
   std::unique_ptr<ClientSocketHandle> socket_handle =
       CreateConnectedSocketHandle(&data);
 
-  scoped_refptr<GrowableIOBuffer> read_buffer(new GrowableIOBuffer);
+  scoped_refptr<GrowableIOBuffer> read_buffer =
+      base::MakeRefCounted<GrowableIOBuffer>();
   HttpStreamParser parser(socket_handle.get(), &request, read_buffer.get(),
                           NetLogWithSource());
 
@@ -351,7 +354,7 @@ TEST(HttpStreamParser, ShouldMergeRequestHeadersAndBody_EmptyBody) {
   std::unique_ptr<UploadDataStream> body(
       std::make_unique<ElementsUploadDataStream>(std::move(element_readers),
                                                  0));
-  ASSERT_THAT(body->Init(CompletionCallback(), NetLogWithSource()), IsOk());
+  ASSERT_THAT(body->Init(CompletionOnceCallback(), NetLogWithSource()), IsOk());
   // Shouldn't be merged if upload data is empty.
   ASSERT_FALSE(HttpStreamParser::ShouldMergeRequestHeadersAndBody(
       "some header", body.get()));
@@ -410,7 +413,7 @@ TEST(HttpStreamParser, ShouldMergeRequestHeadersAndBody_SmallBodyInMemory) {
 
   std::unique_ptr<UploadDataStream> body(
       new ElementsUploadDataStream(std::move(element_readers), 0));
-  ASSERT_THAT(body->Init(CompletionCallback(), NetLogWithSource()), IsOk());
+  ASSERT_THAT(body->Init(CompletionOnceCallback(), NetLogWithSource()), IsOk());
   // Yes, should be merged if the in-memory body is small here.
   ASSERT_TRUE(HttpStreamParser::ShouldMergeRequestHeadersAndBody(
       "some header", body.get()));
@@ -424,7 +427,7 @@ TEST(HttpStreamParser, ShouldMergeRequestHeadersAndBody_LargeBodyInMemory) {
 
   std::unique_ptr<UploadDataStream> body(
       new ElementsUploadDataStream(std::move(element_readers), 0));
-  ASSERT_THAT(body->Init(CompletionCallback(), NetLogWithSource()), IsOk());
+  ASSERT_THAT(body->Init(CompletionOnceCallback(), NetLogWithSource()), IsOk());
   // Shouldn't be merged if the in-memory body is large here.
   ASSERT_FALSE(HttpStreamParser::ShouldMergeRequestHeadersAndBody(
       "some header", body.get()));
@@ -443,7 +446,8 @@ TEST(HttpStreamParser, SentBytesNoHeaders) {
   request.method = "GET";
   request.url = GURL("http://localhost");
 
-  scoped_refptr<GrowableIOBuffer> read_buffer(new GrowableIOBuffer);
+  scoped_refptr<GrowableIOBuffer> read_buffer =
+      base::MakeRefCounted<GrowableIOBuffer>();
   HttpStreamParser parser(socket_handle.get(), &request, read_buffer.get(),
                           NetLogWithSource());
 
@@ -472,7 +476,8 @@ TEST(HttpStreamParser, SentBytesWithHeaders) {
   request.method = "GET";
   request.url = GURL("http://localhost");
 
-  scoped_refptr<GrowableIOBuffer> read_buffer(new GrowableIOBuffer);
+  scoped_refptr<GrowableIOBuffer> read_buffer =
+      base::MakeRefCounted<GrowableIOBuffer>();
   HttpStreamParser parser(socket_handle.get(), &request, read_buffer.get(),
                           NetLogWithSource());
 
@@ -504,7 +509,8 @@ TEST(HttpStreamParser, SentBytesWithHeadersMultiWrite) {
   request.method = "GET";
   request.url = GURL("http://localhost");
 
-  scoped_refptr<GrowableIOBuffer> read_buffer(new GrowableIOBuffer);
+  scoped_refptr<GrowableIOBuffer> read_buffer =
+      base::MakeRefCounted<GrowableIOBuffer>();
   HttpStreamParser parser(socket_handle.get(), &request, read_buffer.get(),
                           NetLogWithSource());
 
@@ -537,7 +543,8 @@ TEST(HttpStreamParser, SentBytesWithErrorWritingHeaders) {
   request.method = "GET";
   request.url = GURL("http://localhost");
 
-  scoped_refptr<GrowableIOBuffer> read_buffer(new GrowableIOBuffer);
+  scoped_refptr<GrowableIOBuffer> read_buffer =
+      base::MakeRefCounted<GrowableIOBuffer>();
   HttpStreamParser parser(socket_handle.get(), &request, read_buffer.get(),
                           NetLogWithSource());
 
@@ -579,7 +586,8 @@ TEST(HttpStreamParser, SentBytesPost) {
   request.url = GURL("http://localhost");
   request.upload_data_stream = &upload_data_stream;
 
-  scoped_refptr<GrowableIOBuffer> read_buffer(new GrowableIOBuffer);
+  scoped_refptr<GrowableIOBuffer> read_buffer =
+      base::MakeRefCounted<GrowableIOBuffer>();
   HttpStreamParser parser(socket_handle.get(), &request, read_buffer.get(),
                           NetLogWithSource());
 
@@ -625,7 +633,8 @@ TEST(HttpStreamParser, SentBytesChunkedPostError) {
   request.url = GURL("http://localhost");
   request.upload_data_stream = &upload_data_stream;
 
-  scoped_refptr<GrowableIOBuffer> read_buffer(new GrowableIOBuffer);
+  scoped_refptr<GrowableIOBuffer> read_buffer =
+      base::MakeRefCounted<GrowableIOBuffer>();
   HttpStreamParser parser(socket_handle.get(), &request, read_buffer.get(),
                           NetLogWithSource());
 
@@ -694,7 +703,8 @@ TEST(HttpStreamParser, AsyncSingleChunkAndAsyncSocket) {
   request_info.url = GURL("http://localhost");
   request_info.upload_data_stream = &upload_stream;
 
-  scoped_refptr<GrowableIOBuffer> read_buffer(new GrowableIOBuffer);
+  scoped_refptr<GrowableIOBuffer> read_buffer =
+      base::MakeRefCounted<GrowableIOBuffer>();
   HttpStreamParser parser(socket_handle.get(), &request_info, read_buffer.get(),
                           NetLogWithSource());
 
@@ -724,7 +734,8 @@ TEST(HttpStreamParser, AsyncSingleChunkAndAsyncSocket) {
   ASSERT_THAT(callback.WaitForResult(), IsOk());
 
   // Finally, attempt to read the response body.
-  scoped_refptr<IOBuffer> body_buffer(new IOBuffer(kBodySize));
+  scoped_refptr<IOBuffer> body_buffer =
+      base::MakeRefCounted<IOBuffer>(kBodySize);
   ASSERT_EQ(ERR_IO_PENDING,
             parser.ReadResponseBody(body_buffer.get(), kBodySize,
                                     callback.callback()));
@@ -777,7 +788,8 @@ TEST(HttpStreamParser, SyncSingleChunkAndAsyncSocket) {
   request_info.url = GURL("http://localhost");
   request_info.upload_data_stream = &upload_stream;
 
-  scoped_refptr<GrowableIOBuffer> read_buffer(new GrowableIOBuffer);
+  scoped_refptr<GrowableIOBuffer> read_buffer =
+      base::MakeRefCounted<GrowableIOBuffer>();
   HttpStreamParser parser(socket_handle.get(), &request_info, read_buffer.get(),
                           NetLogWithSource());
 
@@ -800,7 +812,8 @@ TEST(HttpStreamParser, SyncSingleChunkAndAsyncSocket) {
   ASSERT_THAT(callback.WaitForResult(), IsOk());
 
   // Finally, attempt to read the response body.
-  scoped_refptr<IOBuffer> body_buffer(new IOBuffer(kBodySize));
+  scoped_refptr<IOBuffer> body_buffer =
+      base::MakeRefCounted<IOBuffer>(kBodySize);
   ASSERT_EQ(ERR_IO_PENDING,
             parser.ReadResponseBody(body_buffer.get(), kBodySize,
                                     callback.callback()));
@@ -860,7 +873,8 @@ TEST(HttpStreamParser, AsyncChunkAndAsyncSocketWithMultipleChunks) {
   request_info.url = GURL("http://localhost");
   request_info.upload_data_stream = &upload_stream;
 
-  scoped_refptr<GrowableIOBuffer> read_buffer(new GrowableIOBuffer);
+  scoped_refptr<GrowableIOBuffer> read_buffer =
+      base::MakeRefCounted<GrowableIOBuffer>();
   HttpStreamParser parser(socket_handle.get(), &request_info, read_buffer.get(),
                           NetLogWithSource());
 
@@ -899,7 +913,8 @@ TEST(HttpStreamParser, AsyncChunkAndAsyncSocketWithMultipleChunks) {
   ASSERT_THAT(callback.WaitForResult(), IsOk());
 
   // Finally, attempt to read the response body.
-  scoped_refptr<IOBuffer> body_buffer(new IOBuffer(kBodySize));
+  scoped_refptr<IOBuffer> body_buffer =
+      base::MakeRefCounted<IOBuffer>(kBodySize);
   ASSERT_EQ(ERR_IO_PENDING,
             parser.ReadResponseBody(body_buffer.get(), kBodySize,
                                     callback.callback()));
@@ -947,7 +962,8 @@ TEST(HttpStreamParser, AsyncEmptyChunkedUpload) {
   request_info.url = GURL("http://localhost");
   request_info.upload_data_stream = &upload_stream;
 
-  scoped_refptr<GrowableIOBuffer> read_buffer(new GrowableIOBuffer);
+  scoped_refptr<GrowableIOBuffer> read_buffer =
+      base::MakeRefCounted<GrowableIOBuffer>();
   HttpStreamParser parser(socket_handle.get(), &request_info, read_buffer.get(),
                           NetLogWithSource());
 
@@ -975,7 +991,8 @@ TEST(HttpStreamParser, AsyncEmptyChunkedUpload) {
   ASSERT_THAT(callback.WaitForResult(), IsOk());
 
   // Finally, attempt to read the response body.
-  scoped_refptr<IOBuffer> body_buffer(new IOBuffer(kBodySize));
+  scoped_refptr<IOBuffer> body_buffer =
+      base::MakeRefCounted<IOBuffer>(kBodySize);
   ASSERT_EQ(ERR_IO_PENDING,
             parser.ReadResponseBody(body_buffer.get(), kBodySize,
                                     callback.callback()));
@@ -1025,7 +1042,8 @@ TEST(HttpStreamParser, SyncEmptyChunkedUpload) {
   request_info.url = GURL("http://localhost");
   request_info.upload_data_stream = &upload_stream;
 
-  scoped_refptr<GrowableIOBuffer> read_buffer(new GrowableIOBuffer);
+  scoped_refptr<GrowableIOBuffer> read_buffer =
+      base::MakeRefCounted<GrowableIOBuffer>();
   HttpStreamParser parser(socket_handle.get(), &request_info, read_buffer.get(),
                           NetLogWithSource());
 
@@ -1050,7 +1068,8 @@ TEST(HttpStreamParser, SyncEmptyChunkedUpload) {
   ASSERT_THAT(callback.WaitForResult(), IsOk());
 
   // Finally, attempt to read the response body.
-  scoped_refptr<IOBuffer> body_buffer(new IOBuffer(kBodySize));
+  scoped_refptr<IOBuffer> body_buffer =
+      base::MakeRefCounted<IOBuffer>(kBodySize);
   ASSERT_EQ(ERR_IO_PENDING,
             parser.ReadResponseBody(body_buffer.get(), kBodySize,
                                     callback.callback()));
@@ -1128,7 +1147,8 @@ TEST(HttpStreamParser, TruncatedHeaders) {
       }
       request_info.load_flags = LOAD_NORMAL;
 
-      scoped_refptr<GrowableIOBuffer> read_buffer(new GrowableIOBuffer);
+      scoped_refptr<GrowableIOBuffer> read_buffer =
+          base::MakeRefCounted<GrowableIOBuffer>();
       HttpStreamParser parser(socket_handle.get(), &request_info,
                               read_buffer.get(), NetLogWithSource());
 
@@ -1162,7 +1182,7 @@ TEST(HttpStreamParser, TruncatedHeaders) {
 
 // Confirm that on 101 response, the headers are parsed but the data that
 // follows remains in the buffer.
-TEST(HttpStreamParser, Websocket101Response) {
+TEST(HttpStreamParser, WebSocket101Response) {
   MockRead reads[] = {
     MockRead(SYNCHRONOUS, 1,
              "HTTP/1.1 101 Switching Protocols\r\n"
@@ -1185,7 +1205,8 @@ TEST(HttpStreamParser, Websocket101Response) {
   request_info.url = GURL("http://localhost");
   request_info.load_flags = LOAD_NORMAL;
 
-  scoped_refptr<GrowableIOBuffer> read_buffer(new GrowableIOBuffer);
+  scoped_refptr<GrowableIOBuffer> read_buffer =
+      base::MakeRefCounted<GrowableIOBuffer>();
   HttpStreamParser parser(socket_handle.get(), &request_info, read_buffer.get(),
                           NetLogWithSource());
 
@@ -1218,7 +1239,7 @@ class SimpleGetRunner {
   SimpleGetRunner()
       : url_("http://localhost"),
         http_09_on_non_default_ports_enabled_(false),
-        read_buffer_(new GrowableIOBuffer),
+        read_buffer_(base::MakeRefCounted<GrowableIOBuffer>()),
         sequence_number_(0) {
     writes_.push_back(MockWrite(
         SYNCHRONOUS, sequence_number_++, "GET / HTTP/1.1\r\n\r\n"));
@@ -1282,7 +1303,8 @@ class SimpleGetRunner {
 
   std::string ReadBody(int user_buf_len, int* read_lengths) {
     TestCompletionCallback callback;
-    scoped_refptr<IOBuffer> buffer = new IOBuffer(user_buf_len);
+    scoped_refptr<IOBuffer> buffer =
+        base::MakeRefCounted<IOBuffer>(user_buf_len);
     int rv;
     int i = 0;
     std::string body;
@@ -1410,6 +1432,31 @@ TEST(HttpStreamParser, Http09PortTests) {
               static_cast<size_t>(get_runner.parser()->received_bytes()));
     EXPECT_EQ(HttpResponseInfo::CONNECTION_INFO_HTTP0_9,
               get_runner.response_info()->connection_info);
+  }
+}
+
+TEST(HttpStreamParser, NullFails) {
+  const char kTestHeaders[] =
+      "HTTP/1.1 200 OK\r\n"
+      "Foo: Bar\r\n"
+      "Content-Length: 4\r\n\r\n";
+
+  // Try inserting a null at each position in kTestHeaders. Every location
+  // should result in an error.
+  //
+  // Need to start at 4 because HttpStreamParser will treat the response as
+  // HTTP/0.9 if it doesn't see "HTTP", and need to end at -1 because "\r\n\r"
+  // is currently treated as a valid end of header marker.
+  for (size_t i = 4; i < base::size(kTestHeaders) - 1; ++i) {
+    std::string read_data(kTestHeaders);
+    read_data.insert(i, 1, '\0');
+    read_data.append("body");
+    SimpleGetRunner get_runner;
+    get_runner.set_url(GURL("http://foo.test/"));
+    get_runner.AddRead(read_data);
+    get_runner.SetupParserAndSendRequest();
+
+    get_runner.ReadHeadersExpectingError(ERR_INVALID_HTTP_RESPONSE);
   }
 }
 
@@ -1702,7 +1749,8 @@ TEST(HttpStreamParser, ReadAfterUnownedObjectsDestroyed) {
   request_info->method = "GET";
   request_info->url = GURL("http://somewhere/foo.html");
 
-  scoped_refptr<GrowableIOBuffer> read_buffer(new GrowableIOBuffer);
+  scoped_refptr<GrowableIOBuffer> read_buffer =
+      base::MakeRefCounted<GrowableIOBuffer>();
   HttpStreamParser parser(socket_handle.get(), request_info.get(),
                           read_buffer.get(), NetLogWithSource());
 
@@ -1721,7 +1769,8 @@ TEST(HttpStreamParser, ReadAfterUnownedObjectsDestroyed) {
   request_headers.reset();
   response_info.reset();
 
-  scoped_refptr<IOBuffer> body_buffer(new IOBuffer(kBodySize));
+  scoped_refptr<IOBuffer> body_buffer =
+      base::MakeRefCounted<IOBuffer>(kBodySize);
   ASSERT_EQ(kBodySize, parser.ReadResponseBody(
       body_buffer.get(), kBodySize, callback.callback()));
 

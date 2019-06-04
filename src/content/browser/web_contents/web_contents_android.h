@@ -178,12 +178,13 @@ class CONTENT_EXPORT WebContentsAndroid
       const base::android::JavaParamRef<jobject>& overscroll_refresh_handler);
 
   // Relay the access from Java layer to RWHV::CopyFromSurface() through JNI.
-  void GetContentBitmap(JNIEnv* env,
-                        const base::android::JavaParamRef<jobject>& obj,
-                        jint width,
-                        jint height,
-                        const base::android::JavaParamRef<jstring>& jpath,
-                        const base::android::JavaParamRef<jobject>& jcallback);
+  void WriteContentBitmapToDisk(
+      JNIEnv* env,
+      const base::android::JavaParamRef<jobject>& obj,
+      jint width,
+      jint height,
+      const base::android::JavaParamRef<jstring>& jpath,
+      const base::android::JavaParamRef<jobject>& jcallback);
 
   void ReloadLoFiImages(JNIEnv* env,
                         const base::android::JavaParamRef<jobject>& obj);
@@ -236,16 +237,22 @@ class CONTENT_EXPORT WebContentsAndroid
 
   void OnScaleFactorChanged(JNIEnv* env,
                             const base::android::JavaParamRef<jobject>& obj);
+  void SetFocus(JNIEnv* env,
+                const base::android::JavaParamRef<jobject>& obj,
+                jboolean focused);
+  bool IsBeingDestroyed(JNIEnv* env,
+                        const base::android::JavaParamRef<jobject>& obj);
 
-  // Returns the amount of the top controls height if controls are in the state
-  // of shrinking Blink's view size, otherwise 0.
-  int GetTopControlsShrinkBlinkHeightPixForTesting(
-      JNIEnv* env,
-      const base::android::JavaParamRef<jobject>& obj);
+  void SetDisplayCutoutSafeArea(JNIEnv* env,
+                                const base::android::JavaParamRef<jobject>& obj,
+                                int top,
+                                int left,
+                                int bottom,
+                                int right);
 
- private:
   RenderWidgetHostViewAndroid* GetRenderWidgetHostViewAndroid();
 
+ private:
   void OnFinishGetContentBitmap(const base::android::JavaRef<jobject>& obj,
                                 const base::android::JavaRef<jobject>& callback,
                                 const std::string& path,
@@ -258,6 +265,9 @@ class CONTENT_EXPORT WebContentsAndroid
                              const GURL& url,
                              const std::vector<SkBitmap>& bitmaps,
                              const std::vector<gfx::Size>& sizes);
+  void SelectWordAroundCaretAck(bool did_select,
+                                int start_adjust,
+                                int end_adjust);
 
   WebContentsImpl* web_contents_;
 

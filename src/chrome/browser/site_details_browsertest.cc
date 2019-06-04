@@ -17,7 +17,7 @@
 #include "base/path_service.h"
 #include "base/run_loop.h"
 #include "base/strings/stringprintf.h"
-#include "base/test/histogram_tester.h"
+#include "base/test/metrics/histogram_tester.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/extensions/extension_browsertest.h"
 #include "chrome/browser/metrics/metrics_memory_details.h"
@@ -579,13 +579,8 @@ IN_PROC_BROWSER_TEST_F(SiteDetailsBrowserTest, DISABLED_ManyIframes) {
                   ElementsAre(Bucket(12, 1), Bucket(29, 1), Bucket(68, 1))));
 }
 
-// Flaky on Windows and Mac. crbug.com/671891
-#if defined(OS_WIN) || defined(OS_MACOSX)
-#define MAYBE_IsolateExtensions DISABLED_IsolateExtensions
-#else
-#define MAYBE_IsolateExtensions IsolateExtensions
-#endif
-IN_PROC_BROWSER_TEST_F(SiteDetailsBrowserTest, MAYBE_IsolateExtensions) {
+// TODO(crbug.com/671891): This test is flaky.
+IN_PROC_BROWSER_TEST_F(SiteDetailsBrowserTest, DISABLED_IsolateExtensions) {
   // We start on "about:blank", which should be credited with a process in this
   // case.
   scoped_refptr<TestMemoryDetails> details = new TestMemoryDetails();
@@ -857,17 +852,13 @@ IN_PROC_BROWSER_TEST_F(SiteDetailsBrowserTest, MAYBE_IsolateExtensions) {
                   "SiteIsolation.IsolateExtensionsProcessCountNoLimit"),
               HasOneSample(4));
 
-  // As part of https://crbug.com/512560, subframes that require a dedicated
-  // process started reusing existing processes when possible, so under
-  // --site-per-process, tab1's web iframe will share the process with tab2's
-  // web iframe, since they have the same site. This won't affect
-  // --isolate-extensions, because the web iframe's site won't require a
-  // dedicated process in that mode. Hence, with site-per-process, there should
-  // be three total renderer processes: one for the two web iframes, one for
-  // extension3, and one for extension 1's background page. With only
-  // --isolate-extensions, there should be four total renderer processes, as
-  // each web iframe will go into its own process.
-  EXPECT_THAT(GetRenderProcessCount(), DependingOnPolicy(2, 4, 3));
+  // There should be four total renderer processes: one for each of the two web
+  // iframes, one for extension3, and one for extension 1's background page.
+  // Note that the optimization in https://crbug.com/512560, where subframes
+  // that require a dedicated process reuse existing processes where possible,
+  // does not apply to web iframes in extensions anymore -- see
+  // https://crbug.com/899418.
+  EXPECT_THAT(GetRenderProcessCount(), DependingOnPolicy(2, 4, 4));
   EXPECT_THAT(details->GetOutOfProcessIframeCount(),
               DependingOnPolicy(0, 2, 2));
 }

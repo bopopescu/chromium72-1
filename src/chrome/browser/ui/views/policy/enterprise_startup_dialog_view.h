@@ -26,19 +26,25 @@ class EnterpriseStartupDialogView : public views::DialogDelegateView {
   void DisplayLaunchingInformationWithThrobber(
       const base::string16& information);
   void DisplayErrorMessage(const base::string16& error_message,
-                           const base::Optional<base::string16>& accept_button,
-                           const base::Optional<base::string16>& cancel_button);
+                           const base::Optional<base::string16>& accept_button);
   void CloseDialog();
 
   void AddWidgetObserver(views::WidgetObserver* observer);
   void RemoveWidgetObserver(views::WidgetObserver* observer);
 
  private:
+  // Run the dialog modally for MacOSX.
+  void StartModalDialog();
+
+  // Call the dialog callback. |was_accepted| is true if the dialog is confirmed
+  // by user. Otherwise it's false.
+  void RunDialogCallback(bool was_accepted);
+
   // override views::DialogDelegateView
   bool Accept() override;
   bool Cancel() override;
+  bool Close() override;
   bool ShouldShowWindowTitle() const override;
-  bool ShouldShowCloseButton() const override;
   ui::ModalType GetModalType() const override;
   views::View* CreateExtraView() override;
 
@@ -49,12 +55,14 @@ class EnterpriseStartupDialogView : public views::DialogDelegateView {
   gfx::Size CalculatePreferredSize() const override;
 
   // Remove all existing child views from the dialog, show/hide dialog buttons.
-  void ResetDialog(bool show_accept_button, bool show_cancel_button);
+  void ResetDialog(bool show_accept_button);
   // Append child views to the content area, setup the layout.
   void SetupLayout(views::View* icon, views::View* text);
 
   EnterpriseStartupDialog::DialogResultCallback callback_;
   bool can_show_browser_window_;
+
+  base::WeakPtrFactory<EnterpriseStartupDialogView> weak_factory_;
 
   DISALLOW_COPY_AND_ASSIGN(EnterpriseStartupDialogView);
 };
@@ -70,8 +78,7 @@ class EnterpriseStartupDialogImpl : public EnterpriseStartupDialog,
       const base::string16& information) override;
   void DisplayErrorMessage(
       const base::string16& error_message,
-      const base::Optional<base::string16>& accept_button,
-      const base::Optional<base::string16>& cancel_button) override;
+      const base::Optional<base::string16>& accept_button) override;
   bool IsShowing() override;
 
   // views::WidgetObserver:

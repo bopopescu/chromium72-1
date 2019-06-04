@@ -6,7 +6,8 @@
 
 #include "ash/shelf/shelf.h"
 #include "ash/shell.h"
-#include "ash/system/tray/system_tray.h"
+#include "ash/system/status_area_widget.h"
+#include "ash/system/unified/unified_system_tray.h"
 #include "base/command_line.h"
 #include "base/location.h"
 #include "base/run_loop.h"
@@ -22,6 +23,7 @@
 #include "chrome/browser/chromeos/login/ui/login_display_host_webui.h"
 #include "chrome/browser/chromeos/login/wizard_controller.h"
 #include "chrome/browser/chromeos/settings/cros_settings.h"
+#include "chrome/browser/chromeos/settings/scoped_cros_settings_test_helper.h"
 #include "chrome/browser/chromeos/settings/stub_install_attributes.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/profiles/profiles_state.h"
@@ -32,7 +34,6 @@
 #include "chrome/test/base/interactive_test_utils.h"
 #include "chromeos/chromeos_switches.h"
 #include "chromeos/dbus/dbus_thread_manager.h"
-#include "chromeos/dbus/fake_auth_policy_client.h"
 #include "chromeos/settings/cros_settings_names.h"
 #include "components/account_id/account_id.h"
 #include "components/user_manager/user_names.h"
@@ -42,6 +43,7 @@
 #include "extensions/browser/extension_system.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "ui/base/ui_base_features.h"
 #include "ui/gfx/geometry/test/rect_test_util.h"
 
 using ::gfx::test::RectContains;
@@ -96,7 +98,7 @@ class LoginSigninTest : public InProcessBrowserTest {
 
 class LoginTest : public LoginManagerTest {
  public:
-  LoginTest() : LoginManagerTest(true) {}
+  LoginTest() : LoginManagerTest(true, true) {}
   ~LoginTest() override {}
 
   void StartGaiaAuthOffline() {
@@ -178,21 +180,30 @@ class LoginTest : public LoginManagerTest {
     user_context.SetKey(Key(kPassword));
     SetExpectedCredentials(user_context);
   }
+
+ protected:
+  ScopedCrosSettingsTestHelper settings_helper_{
+      /* create_settings_service= */ false};
 };
 
 // Used to make sure that the system tray is visible and within the screen
 // bounds after login.
 void TestSystemTrayIsVisible(bool otr) {
-  ash::SystemTray* tray = ash::Shell::Get()->GetPrimarySystemTray();
   aura::Window* primary_win = ash::Shell::GetPrimaryRootWindow();
   ash::Shelf* shelf = ash::Shelf::ForWindow(primary_win);
+  ash::TrayBackgroundView* tray =
+      shelf->GetStatusAreaWidget()->unified_system_tray();
   SCOPED_TRACE(testing::Message()
                << "ShelfVisibilityState=" << shelf->GetVisibilityState()
                << " ShelfAutoHideBehavior=" << shelf->auto_hide_behavior());
   EXPECT_TRUE(tray->visible());
 
   // This check flakes for LoginGuestTest: https://crbug.com/693106.
-  if (!otr)
+  // This check is suppressed for Mash since the warning button of Mash changes
+  // the tray bounds which triggers the failure. See: https://crbug.com/892730
+  // TODO(jamescook): remove this when Mash is on by default or the button is
+  // removed.
+  if (!otr && !features::IsUsingWindowService())
     EXPECT_TRUE(RectContains(primary_win->bounds(), tray->GetBoundsInScreen()));
 }
 
@@ -247,7 +258,7 @@ IN_PROC_BROWSER_TEST_F(LoginSigninTest, WebUIVisible) {
 IN_PROC_BROWSER_TEST_F(LoginTest, PRE_GaiaAuthOffline) {
   RegisterUser(AccountId::FromUserEmailGaiaId(kTestUser, kGaiaId));
   StartupUtils::MarkOobeCompleted();
-  CrosSettings::Get()->SetBoolean(kAccountsPrefShowUserNamesOnSignIn, false);
+  settings_helper_.SetBoolean(kAccountsPrefShowUserNamesOnSignIn, false);
 }
 
 // Flaky, see http://crbug/692364.

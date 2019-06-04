@@ -8,18 +8,20 @@
 
 #include "base/strings/string16.h"
 #include "base/version.h"
+#include "chrome/browser/android/vr/metrics_util_android.h"
 #include "chrome/browser/android/vr/vr_input_connection.h"
 #include "chrome/browser/android/vr/vr_shell.h"
-#include "chrome/browser/android/vr/vr_shell_gl.h"
 #include "chrome/browser/vr/assets_loader.h"
+#include "chrome/browser/vr/browser_renderer.h"
 #include "chrome/browser/vr/browser_ui_interface.h"
 #include "chrome/browser/vr/model/assets.h"
+#include "chrome/browser/vr/model/location_bar_state.h"
 #include "chrome/browser/vr/model/omnibox_suggestions.h"
-#include "chrome/browser/vr/model/toolbar_state.h"
 #include "chrome/browser/vr/sounds_manager_audio_delegate.h"
-#include "chrome/browser/vr/ui.h"
+#include "chrome/browser/vr/ui_factory.h"
 #include "chrome/browser/vr/ui_test_input.h"
 #include "chrome/common/chrome_features.h"
+#include "third_party/gvr-android-sdk/src/libraries/headers/vr/gvr/capi/include/gvr.h"
 #include "third_party/skia/include/core/SkBitmap.h"
 
 namespace vr {
@@ -32,23 +34,32 @@ VrGLThread::VrGLThread(
     bool reprojected_rendering,
     bool daydream_support,
     bool pause_content,
-    bool low_density)
+    bool low_density,
+    base::WaitableEvent* gl_surface_created_event,
+    base::OnceCallback<gfx::AcceleratedWidget()> surface_callback)
     : base::android::JavaHandlerThread("VrShellGL"),
       weak_vr_shell_(weak_vr_shell),
       main_thread_task_runner_(std::move(main_thread_task_runner)),
-      gvr_api_(gvr_api),
-      ui_initial_state_(ui_initial_state),
-      reprojected_rendering_(reprojected_rendering),
-      daydream_support_(daydream_support),
-      pause_content_(pause_content),
-      low_density_(low_density) {}
+      gvr_api_(gvr::GvrApi::WrapNonOwned(gvr_api)),
+      factory_params_(std::make_unique<BrowserRendererFactory::Params>(
+          gvr_api_.get(),
+          ui_initial_state,
+          reprojected_rendering,
+          gvr_api_->GetViewerType() ==
+              gvr::ViewerType::GVR_VIEWER_TYPE_CARDBOARD,
+          pause_content,
+          low_density,
+          gl_surface_created_event,
+          std::move(surface_callback))) {
+  MetricsUtilAndroid::LogVrViewerType(gvr_api_->GetViewerType());
+}
 
 VrGLThread::~VrGLThread() {
   Stop();
 }
 
-base::WeakPtr<VrShellGl> VrGLThread::GetVrShellGl() {
-  return vr_shell_gl_->GetWeakPtr();
+base::WeakPtr<BrowserRenderer> VrGLThread::GetBrowserRenderer() {
+  return browser_renderer_->GetWeakPtr();
 }
 
 void VrGLThread::SetInputConnection(VrInputConnection* input_connection) {
@@ -57,47 +68,14 @@ void VrGLThread::SetInputConnection(VrInputConnection* input_connection) {
 }
 
 void VrGLThread::Init() {
-  bool keyboard_enabled =
-      !ui_initial_state_.web_vr_autopresentation_expected;
-  if (keyboard_enabled) {
-    keyboard_delegate_ = GvrKeyboardDelegate::Create();
-    text_input_delegate_ = std::make_unique<TextInputDelegate>();
-  }
-  auto* keyboard_delegate =
-      !keyboard_delegate_ ? nullptr : keyboard_delegate_.get();
-  if (!keyboard_delegate)
-    ui_initial_state_.needs_keyboard_update = true;
-
-  audio_delegate_ = std::make_unique<SoundsManagerAudioDelegate>();
-
-  auto ui = std::make_unique<Ui>(this, this, keyboard_delegate,
-                                 text_input_delegate_.get(),
-                                 audio_delegate_.get(), ui_initial_state_);
-  if (keyboard_enabled) {
-    text_input_delegate_->SetRequestFocusCallback(
-        base::BindRepeating(&Ui::RequestFocus, base::Unretained(ui.get())));
-    text_input_delegate_->SetRequestUnfocusCallback(
-        base::BindRepeating(&Ui::RequestUnfocus, base::Unretained(ui.get())));
-    if (keyboard_delegate) {
-      keyboard_delegate_->SetUiInterface(ui.get());
-      text_input_delegate_->SetUpdateInputCallback(
-          base::BindRepeating(&GvrKeyboardDelegate::UpdateInput,
-                              base::Unretained(keyboard_delegate_.get())));
-    }
-  }
-
-  vr_shell_gl_ = std::make_unique<VrShellGl>(
-      this, std::move(ui), gvr_api_, reprojected_rendering_, daydream_support_,
-      ui_initial_state_.in_web_vr, pause_content_, low_density_);
-
-  weak_browser_ui_ = vr_shell_gl_->GetBrowserUiWeakPtr();
-
-  vr_shell_gl_->Initialize();
+  ui_factory_ = std::make_unique<UiFactory>();
+  browser_renderer_ = BrowserRendererFactory::Create(
+      this, ui_factory_.get(), std::move(factory_params_));
+  weak_browser_ui_ = browser_renderer_->GetBrowserUiWeakPtr();
 }
 
 void VrGLThread::CleanUp() {
-  audio_delegate_.reset();
-  vr_shell_gl_.reset();
+  browser_renderer_.reset();
 }
 
 void VrGLThread::ContentSurfaceCreated(jobject surface,
@@ -132,14 +110,11 @@ void VrGLThread::GvrDelegateReady(gvr::ViewerType viewer_type) {
       base::BindOnce(&VrShell::GvrDelegateReady, weak_vr_shell_, viewer_type));
 }
 
-void VrGLThread::SendRequestPresentReply(
-    bool success,
-    device::mojom::VRDisplayFrameTransportOptionsPtr transport_options) {
+void VrGLThread::SendRequestPresentReply(device::mojom::XRSessionPtr session) {
   DCHECK(OnGlThread());
   main_thread_task_runner_->PostTask(
-      FROM_HERE,
-      base::BindOnce(&VrShell::SendRequestPresentReply, weak_vr_shell_, success,
-                     std::move(transport_options)));
+      FROM_HERE, base::BindOnce(&VrShell::SendRequestPresentReply,
+                                weak_vr_shell_, std::move(session)));
 }
 
 void VrGLThread::UpdateGamepadData(device::GvrGamepadData pad) {
@@ -149,9 +124,8 @@ void VrGLThread::UpdateGamepadData(device::GvrGamepadData pad) {
       base::BindOnce(&VrShell::UpdateGamepadData, weak_vr_shell_, pad));
 }
 
-void VrGLThread::ForwardEventToContent(
-    std::unique_ptr<blink::WebInputEvent> event,
-    int content_id) {
+void VrGLThread::ForwardEventToContent(std::unique_ptr<InputEvent> event,
+                                       int content_id) {
   DCHECK(OnGlThread());
   main_thread_task_runner_->PostTask(
       FROM_HERE, base::BindOnce(&VrShell::ProcessContentGesture, weak_vr_shell_,
@@ -182,8 +156,7 @@ void VrGLThread::RequestWebInputText(TextStateUpdateCallback callback) {
   input_connection_->RequestTextState(std::move(callback));
 }
 
-void VrGLThread::ForwardEventToPlatformUi(
-    std::unique_ptr<blink::WebInputEvent> event) {
+void VrGLThread::ForwardEventToPlatformUi(std::unique_ptr<InputEvent> event) {
   DCHECK(OnGlThread());
   main_thread_task_runner_->PostTask(
       FROM_HERE, base::BindOnce(&VrShell::ProcessDialogGesture, weak_vr_shell_,
@@ -200,9 +173,7 @@ void VrGLThread::ExitPresent() {
   DCHECK(OnGlThread());
   main_thread_task_runner_->PostTask(
       FROM_HERE, base::BindOnce(&VrShell::ExitPresent, weak_vr_shell_));
-  // TODO(vollick): Ui should hang onto the appropriate pointer rather than
-  // bouncing through VrGLThread.
-  vr_shell_gl_->OnExitPresent();
+  browser_renderer_->OnExitPresent();
 }
 
 void VrGLThread::ExitFullscreen() {
@@ -243,13 +214,6 @@ void VrGLThread::OpenNewTab(bool incognito) {
       base::BindOnce(&VrShell::OpenNewTab, weak_vr_shell_, incognito));
 }
 
-void VrGLThread::SelectTab(int id, bool incognito) {
-  DCHECK(OnGlThread());
-  main_thread_task_runner_->PostTask(
-      FROM_HERE,
-      base::BindOnce(&VrShell::SelectTab, weak_vr_shell_, id, incognito));
-}
-
 void VrGLThread::OpenBookmarks() {
   DCHECK(OnGlThread());
   main_thread_task_runner_->PostTask(
@@ -286,19 +250,6 @@ void VrGLThread::OpenSettings() {
       FROM_HERE, base::BindOnce(&VrShell::OpenSettings, weak_vr_shell_));
 }
 
-void VrGLThread::CloseTab(int id, bool incognito) {
-  DCHECK(OnGlThread());
-  main_thread_task_runner_->PostTask(
-      FROM_HERE,
-      base::BindOnce(&VrShell::CloseTab, weak_vr_shell_, id, incognito));
-}
-
-void VrGLThread::CloseAllTabs() {
-  DCHECK(OnGlThread());
-  main_thread_task_runner_->PostTask(
-      FROM_HERE, base::BindOnce(&VrShell::CloseAllTabs, weak_vr_shell_));
-}
-
 void VrGLThread::CloseAllIncognitoTabs() {
   DCHECK(OnGlThread());
   main_thread_task_runner_->PostTask(
@@ -310,12 +261,6 @@ void VrGLThread::OpenFeedback() {
   DCHECK(OnGlThread());
   main_thread_task_runner_->PostTask(
       FROM_HERE, base::BindOnce(&VrShell::OpenFeedback, weak_vr_shell_));
-}
-
-void VrGLThread::ExitCct() {
-  DCHECK(OnGlThread());
-  main_thread_task_runner_->PostTask(
-      FROM_HERE, base::BindOnce(&VrShell::ExitCct, weak_vr_shell_));
 }
 
 void VrGLThread::CloseHostedDialog() {
@@ -415,11 +360,11 @@ void VrGLThread::SetLoading(bool loading) {
                                          weak_browser_ui_, loading));
 }
 
-void VrGLThread::SetToolbarState(const ToolbarState& state) {
+void VrGLThread::SetLocationBarState(const LocationBarState& state) {
   DCHECK(OnMainThread());
-  task_runner()->PostTask(FROM_HERE,
-                          base::BindOnce(&BrowserUiInterface::SetToolbarState,
-                                         weak_browser_ui_, state));
+  task_runner()->PostTask(
+      FROM_HERE, base::BindOnce(&BrowserUiInterface::SetLocationBarState,
+                                weak_browser_ui_, state));
 }
 
 void VrGLThread::SetWebVrMode(bool enabled) {
@@ -429,18 +374,15 @@ void VrGLThread::SetWebVrMode(bool enabled) {
                                          weak_browser_ui_, enabled));
 }
 
-void VrGLThread::SetCapturingState(const CapturingStateModel& state) {
-  DCHECK(OnMainThread());
-  task_runner()->PostTask(FROM_HERE,
-                          base::BindOnce(&BrowserUiInterface::SetCapturingState,
-                                         weak_browser_ui_, state));
-}
-
-void VrGLThread::SetIsExiting() {
+void VrGLThread::SetCapturingState(
+    const CapturingStateModel& active_capturing,
+    const CapturingStateModel& background_capturing,
+    const CapturingStateModel& potential_capturing) {
   DCHECK(OnMainThread());
   task_runner()->PostTask(
-      FROM_HERE,
-      base::BindOnce(&BrowserUiInterface::SetIsExiting, weak_browser_ui_));
+      FROM_HERE, base::BindOnce(&BrowserUiInterface::SetCapturingState,
+                                weak_browser_ui_, active_capturing,
+                                background_capturing, potential_capturing));
 }
 
 void VrGLThread::ShowExitVrPrompt(UiUnsupportedMode reason) {
@@ -506,6 +448,20 @@ void VrGLThread::WaitForAssets() {
       base::BindOnce(&BrowserUiInterface::WaitForAssets, weak_browser_ui_));
 }
 
+void VrGLThread::SetRegularTabsOpen(bool open) {
+  DCHECK(OnMainThread());
+  task_runner()->PostTask(
+      FROM_HERE, base::BindOnce(&BrowserUiInterface::SetRegularTabsOpen,
+                                weak_browser_ui_, open));
+}
+
+void VrGLThread::SetIncognitoTabsOpen(bool open) {
+  DCHECK(OnMainThread());
+  task_runner()->PostTask(
+      FROM_HERE, base::BindOnce(&BrowserUiInterface::SetIncognitoTabsOpen,
+                                weak_browser_ui_, open));
+}
+
 void VrGLThread::SetOverlayTextureEmpty(bool empty) {
   DCHECK(OnMainThread());
   task_runner()->PostTask(
@@ -531,35 +487,65 @@ void VrGLThread::UpdateWebInputIndices(int selection_start,
                           composition_start, composition_end));
 }
 
-void VrGLThread::AddOrUpdateTab(int id,
-                                bool incognito,
-                                const base::string16& title) {
-  DCHECK(OnMainThread());
+void VrGLThread::OnSwapContents(int new_content_id) {
   task_runner()->PostTask(
-      FROM_HERE, base::BindOnce(&BrowserUiInterface::AddOrUpdateTab,
-                                weak_browser_ui_, id, incognito, title));
+      FROM_HERE, base::BindRepeating(&BrowserUiInterface::OnSwapContents,
+                                     weak_browser_ui_, new_content_id));
 }
 
-void VrGLThread::RemoveTab(int id, bool incognito) {
-  DCHECK(OnMainThread());
-  task_runner()->PostTask(FROM_HERE,
-                          base::BindOnce(&BrowserUiInterface::RemoveTab,
-                                         weak_browser_ui_, id, incognito));
+void VrGLThread::SetDialogLocation(float x, float y) {
+  task_runner()->PostTask(
+      FROM_HERE, base::BindRepeating(&BrowserUiInterface::SetDialogLocation,
+                                     weak_browser_ui_, x, y));
 }
 
-void VrGLThread::RemoveAllTabs() {
+void VrGLThread::SetDialogFloating(bool floating) {
+  task_runner()->PostTask(
+      FROM_HERE, base::BindRepeating(&BrowserUiInterface::SetDialogFloating,
+                                     weak_browser_ui_, floating));
+}
+
+void VrGLThread::ShowPlatformToast(const base::string16& text) {
+  task_runner()->PostTask(
+      FROM_HERE, base::BindRepeating(&BrowserUiInterface::ShowPlatformToast,
+                                     weak_browser_ui_, text));
+}
+
+void VrGLThread::CancelPlatformToast() {
+  task_runner()->PostTask(
+      FROM_HERE, base::BindRepeating(&BrowserUiInterface::CancelPlatformToast,
+                                     weak_browser_ui_));
+}
+
+void VrGLThread::OnContentBoundsChanged(int width, int height) {
+  task_runner()->PostTask(
+      FROM_HERE,
+      base::BindRepeating(&BrowserUiInterface::OnContentBoundsChanged,
+                          weak_browser_ui_, width, height));
+}
+
+void VrGLThread::PerformKeyboardInputForTesting(
+    KeyboardTestInput keyboard_input) {
   DCHECK(OnMainThread());
   task_runner()->PostTask(
       FROM_HERE,
-      base::BindOnce(&BrowserUiInterface::RemoveAllTabs, weak_browser_ui_));
+      base::BindOnce(&BrowserUiInterface::PerformKeyboardInputForTesting,
+                     weak_browser_ui_, keyboard_input));
 }
 
-void VrGLThread::ReportUiActivityResultForTesting(
-    const VrUiTestActivityResult& result) {
+void VrGLThread::SetVisibleExternalPromptNotification(
+    ExternalPromptNotificationType prompt) {
+  // Not reached on Android.
+  NOTREACHED();
+}
+
+void VrGLThread::ReportUiOperationResultForTesting(
+    const UiTestOperationType& action_type,
+    const UiTestOperationResult& result) {
   DCHECK(OnGlThread());
   main_thread_task_runner_->PostTask(
-      FROM_HERE, base::BindOnce(&VrShell::ReportUiActivityResultForTesting,
-                                weak_vr_shell_, result));
+      FROM_HERE, base::BindOnce(&VrShell::ReportUiOperationResultForTesting,
+                                weak_vr_shell_, action_type, result));
 }
 
 bool VrGLThread::OnMainThread() const {

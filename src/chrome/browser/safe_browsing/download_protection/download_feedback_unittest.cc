@@ -12,16 +12,15 @@
 #include "base/memory/ptr_util.h"
 #include "base/run_loop.h"
 #include "base/single_thread_task_runner.h"
-#include "base/task_scheduler/post_task.h"
+#include "base/task/post_task.h"
 #include "chrome/browser/safe_browsing/download_protection/two_phase_uploader.h"
 #include "components/safe_browsing/proto/csd.pb.h"
+#include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/test/test_browser_thread_bundle.h"
 #include "content/public/test/test_utils.h"
 #include "net/traffic_annotation/network_traffic_annotation_test_helper.h"
-#include "net/url_request/url_request_test_util.h"
-#include "services/network/network_context.h"
-#include "services/network/public/cpp/shared_url_loader_factory.h"
+#include "services/network/test/test_shared_url_loader_factory.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace safe_browsing {
@@ -92,67 +91,19 @@ std::unique_ptr<TwoPhaseUploader> FakeUploaderFactory::CreateTwoPhaseUploader(
   return base::WrapUnique(uploader_);
 }
 
-class SharedURLLoaderFactory : public network::SharedURLLoaderFactory {
- public:
-  explicit SharedURLLoaderFactory(
-      network::mojom::URLLoaderFactory* url_loader_factory)
-      : url_loader_factory_(url_loader_factory) {}
-
-  // network::URLLoaderFactory implementation:
-  void CreateLoaderAndStart(network::mojom::URLLoaderRequest loader,
-                            int32_t routing_id,
-                            int32_t request_id,
-                            uint32_t options,
-                            const network::ResourceRequest& request,
-                            network::mojom::URLLoaderClientPtr client,
-                            const net::MutableNetworkTrafficAnnotationTag&
-                                traffic_annotation) override {
-    url_loader_factory_->CreateLoaderAndStart(
-        std::move(loader), routing_id, request_id, options, std::move(request),
-        std::move(client), traffic_annotation);
-  }
-
-  void Clone(network::mojom::URLLoaderFactoryRequest request) override {
-    NOTREACHED();
-  }
-
-  // network::SharedURLLoaderFactoryInfo implementation
-  std::unique_ptr<network::SharedURLLoaderFactoryInfo> Clone() override {
-    NOTREACHED();
-    return nullptr;
-  }
-
- private:
-  friend class base::RefCounted<SharedURLLoaderFactory>;
-  ~SharedURLLoaderFactory() override = default;
-
-  network::mojom::URLLoaderFactory* url_loader_factory_;
-};
-
 }  // namespace
 
 class DownloadFeedbackTest : public testing::Test {
  public:
   DownloadFeedbackTest()
       : file_task_runner_(base::CreateSequencedTaskRunnerWithTraits(
-            {base::MayBlock(), base::TaskPriority::BACKGROUND})),
-        io_task_runner_(content::BrowserThread::GetTaskRunnerForThread(
-            content::BrowserThread::IO)),
-        url_request_context_(std::make_unique<net::TestURLRequestContext>()),
+            {base::MayBlock(), base::TaskPriority::BEST_EFFORT})),
+        io_task_runner_(base::CreateSingleThreadTaskRunnerWithTraits(
+            {content::BrowserThread::IO})),
         feedback_finish_called_(false) {
     EXPECT_NE(io_task_runner_, file_task_runner_);
-    network::mojom::NetworkContextPtr network_context;
-    network_context_ = std::make_unique<network::NetworkContext>(
-        nullptr, mojo::MakeRequest(&network_context),
-        url_request_context_.get());
-    network::mojom::URLLoaderFactoryParamsPtr params =
-        network::mojom::URLLoaderFactoryParams::New();
-    params->process_id = network::mojom::kBrowserProcessId;
-    params->is_corb_enabled = false;
-    network_context_->CreateURLLoaderFactory(
-        mojo::MakeRequest(&url_loader_factory_), std::move(params));
     shared_url_loader_factory_ =
-        base::MakeRefCounted<SharedURLLoaderFactory>(url_loader_factory_.get());
+        base::MakeRefCounted<network::TestSharedURLLoaderFactory>();
   }
 
   void SetUp() override {
@@ -184,10 +135,7 @@ class DownloadFeedbackTest : public testing::Test {
   scoped_refptr<base::SequencedTaskRunner> file_task_runner_;
   scoped_refptr<base::SingleThreadTaskRunner> io_task_runner_;
   FakeUploaderFactory two_phase_uploader_factory_;
-  std::unique_ptr<net::TestURLRequestContext> url_request_context_;
-  std::unique_ptr<network::NetworkContext> network_context_;
-  network::mojom::URLLoaderFactoryPtr url_loader_factory_;
-  scoped_refptr<SharedURLLoaderFactory> shared_url_loader_factory_;
+  scoped_refptr<network::TestSharedURLLoaderFactory> shared_url_loader_factory_;
 
   bool feedback_finish_called_;
 };

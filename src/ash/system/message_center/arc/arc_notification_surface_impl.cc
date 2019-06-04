@@ -81,9 +81,9 @@ ArcNotificationSurfaceImpl::ArcNotificationSurfaceImpl(
     exo::NotificationSurface* surface)
     : surface_(surface) {
   DCHECK(surface);
-  native_view_ =
-      std::make_unique<aura::Window>(new CustomWindowDelegate(surface));
-  native_view_->SetType(aura::client::WINDOW_TYPE_CONTROL);
+  native_view_ = std::make_unique<aura::Window>(
+      new CustomWindowDelegate(surface), aura::client::WINDOW_TYPE_CONTROL,
+      surface_->host_window()->env());
   native_view_->set_owned_by_parent(false);
   native_view_->Init(ui::LAYER_NOT_DRAWN);
   native_view_->AddChild(surface_->host_window());
@@ -143,11 +143,11 @@ void ArcNotificationSurfaceImpl::FocusSurfaceWindow() {
   return surface_->root_surface()->window()->Focus();
 }
 
-void ArcNotificationSurfaceImpl::SetAXTreeId(int32_t ax_tree_id) {
+void ArcNotificationSurfaceImpl::SetAXTreeId(ui::AXTreeID ax_tree_id) {
   ax_tree_id_ = ax_tree_id;
 }
 
-int32_t ArcNotificationSurfaceImpl::GetAXTreeId() const {
+ui::AXTreeID ArcNotificationSurfaceImpl::GetAXTreeId() const {
   return ax_tree_id_;
 }
 

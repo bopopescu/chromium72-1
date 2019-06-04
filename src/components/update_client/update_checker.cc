@@ -17,15 +17,16 @@
 #include "base/logging.h"
 #include "base/macros.h"
 #include "base/strings/stringprintf.h"
-#include "base/task_scheduler/post_task.h"
+#include "base/task/post_task.h"
 #include "base/threading/thread_checker.h"
 #include "base/threading/thread_task_runner_handle.h"
 #include "build/build_config.h"
 #include "components/update_client/component.h"
 #include "components/update_client/configurator.h"
 #include "components/update_client/persisted_data.h"
-#include "components/update_client/protocol_builder.h"
-#include "components/update_client/protocol_parser.h"
+#include "components/update_client/protocol_definition.h"
+#include "components/update_client/protocol_handler.h"
+#include "components/update_client/protocol_serializer.h"
 #include "components/update_client/request_sender.h"
 #include "components/update_client/task_traits.h"
 #include "components/update_client/update_client.h"
@@ -36,6 +37,11 @@
 namespace update_client {
 
 namespace {
+
+// Returns a sanitized version of the brand or an empty string otherwise.
+std::string SanitizeBrand(const std::string& brand) {
+  return IsValidBrand(brand) ? brand : std::string("");
+}
 
 // Returns true if at least one item requires network encryption.
 bool IsEncryptionRequired(const IdToComponentPtrMap& components) {
@@ -48,6 +54,17 @@ bool IsEncryptionRequired(const IdToComponentPtrMap& components) {
   return false;
 }
 
+// Filters invalid attributes from |installer_attributes|.
+using InstallerAttributesFlatMap = base::flat_map<std::string, std::string>;
+InstallerAttributesFlatMap SanitizeInstallerAttributes(
+    const InstallerAttributes& installer_attributes) {
+  InstallerAttributesFlatMap sanitized_attrs;
+  for (const auto& attr : installer_attributes) {
+    if (IsValidInstallerAttribute(attr))
+      sanitized_attrs.insert(attr);
+  }
+  return sanitized_attrs;
+}
 
 class UpdateCheckerImpl : public UpdateChecker {
  public:
@@ -56,27 +73,27 @@ class UpdateCheckerImpl : public UpdateChecker {
   ~UpdateCheckerImpl() override;
 
   // Overrides for UpdateChecker.
-  void CheckForUpdates(const std::string& session_id,
-                       const std::vector<std::string>& ids_checked,
-                       const IdToComponentPtrMap& components,
-                       const std::string& additional_attributes,
-                       bool enabled_component_updates,
-                       UpdateCheckCallback update_check_callback) override;
+  void CheckForUpdates(
+      const std::string& session_id,
+      const std::vector<std::string>& ids_checked,
+      const IdToComponentPtrMap& components,
+      const base::flat_map<std::string, std::string>& additional_attributes,
+      bool enabled_component_updates,
+      UpdateCheckCallback update_check_callback) override;
 
  private:
   void ReadUpdaterStateAttributes();
-  void CheckForUpdatesHelper(const std::string& session_id,
-                             const IdToComponentPtrMap& components,
-                             const std::string& additional_attributes,
-                             bool enabled_component_updates);
-  void OnRequestSenderComplete(const IdToComponentPtrMap& components,
-                               int error,
+  void CheckForUpdatesHelper(
+      const std::string& session_id,
+      const IdToComponentPtrMap& components,
+      const base::flat_map<std::string, std::string>& additional_attributes,
+      bool enabled_component_updates);
+  void OnRequestSenderComplete(int error,
                                const std::string& response,
                                int retry_after_sec);
-  void UpdateCheckSucceeded(const IdToComponentPtrMap& components,
-                            const ProtocolParser::Results& results,
+  void UpdateCheckSucceeded(const ProtocolParser::Results& results,
                             int retry_after_sec);
-  void UpdateCheckFailed(const IdToComponentPtrMap& components,
+  void UpdateCheckFailed(ErrorCategory error_category,
                          int error,
                          int retry_after_sec);
 
@@ -104,7 +121,7 @@ void UpdateCheckerImpl::CheckForUpdates(
     const std::string& session_id,
     const std::vector<std::string>& ids_checked,
     const IdToComponentPtrMap& components,
-    const std::string& additional_attributes,
+    const base::flat_map<std::string, std::string>& additional_attributes,
     bool enabled_component_updates,
     UpdateCheckCallback update_check_callback) {
   DCHECK(thread_checker_.CalledOnValidThread());
@@ -139,7 +156,7 @@ void UpdateCheckerImpl::ReadUpdaterStateAttributes() {
 void UpdateCheckerImpl::CheckForUpdatesHelper(
     const std::string& session_id,
     const IdToComponentPtrMap& components,
-    const std::string& additional_attributes,
+    const base::flat_map<std::string, std::string>& additional_attributes,
     bool enabled_component_updates) {
   DCHECK(thread_checker_.CalledOnValidThread());
 
@@ -158,21 +175,56 @@ void UpdateCheckerImpl::CheckForUpdatesHelper(
                     return is_foreground == elem.second->is_foreground();
                   }));
 
+  std::vector<protocol_request::App> apps;
+  for (const auto& app_id : ids_checked_) {
+    DCHECK_EQ(1u, components.count(app_id));
+    const auto& component = components.at(app_id);
+    DCHECK_EQ(component->id(), app_id);
+    const auto& crx_component = component->crx_component();
+    DCHECK(crx_component);
+
+    std::string install_source;
+    if (!crx_component->install_source.empty())
+      install_source = crx_component->install_source;
+    else if (component->is_foreground())
+      install_source = "ondemand";
+
+    const bool is_update_disabled =
+        crx_component->supports_group_policy_enable_component_updates &&
+        !enabled_component_updates;
+
+    apps.push_back(MakeProtocolApp(
+        app_id, crx_component->version, SanitizeBrand(config_->GetBrand()),
+        install_source, crx_component->install_location,
+        crx_component->fingerprint,
+        SanitizeInstallerAttributes(crx_component->installer_attributes),
+        metadata_->GetCohort(app_id), metadata_->GetCohortName(app_id),
+        metadata_->GetCohortHint(app_id), crx_component->disabled_reasons,
+        MakeProtocolUpdateCheck(is_update_disabled),
+        MakeProtocolPing(app_id, metadata_)));
+  }
+
+  const auto request = MakeProtocolRequest(
+      session_id, config_->GetProdId(),
+      config_->GetBrowserVersion().GetString(), config_->GetLang(),
+      config_->GetChannel(), config_->GetOSLongName(),
+      config_->GetDownloadPreference(), additional_attributes,
+      updater_state_attributes_.get(), std::move(apps));
+
   request_sender_ = std::make_unique<RequestSender>(config_);
   request_sender_->Send(
       urls,
-      BuildUpdateCheckExtraRequestHeaders(config_, ids_checked_, is_foreground),
-      BuildUpdateCheckRequest(*config_, session_id, ids_checked_, components,
-                              metadata_, additional_attributes,
-                              enabled_component_updates,
-                              updater_state_attributes_),
+      BuildUpdateCheckExtraRequestHeaders(config_->GetProdId(),
+                                          config_->GetBrowserVersion(),
+                                          ids_checked_, is_foreground),
+      config_->GetProtocolHandlerFactory()->CreateSerializer()->Serialize(
+          request),
       config_->EnabledCupSigning(),
       base::BindOnce(&UpdateCheckerImpl::OnRequestSenderComplete,
-                     base::Unretained(this), base::ConstRef(components)));
+                     base::Unretained(this)));
 }
 
 void UpdateCheckerImpl::OnRequestSenderComplete(
-    const IdToComponentPtrMap& components,
     int error,
     const std::string& response,
     int retry_after_sec) {
@@ -180,23 +232,24 @@ void UpdateCheckerImpl::OnRequestSenderComplete(
 
   if (error) {
     VLOG(1) << "RequestSender failed " << error;
-    UpdateCheckFailed(components, error, retry_after_sec);
+    UpdateCheckFailed(ErrorCategory::kUpdateCheck, error, retry_after_sec);
     return;
   }
 
-  ProtocolParser update_response;
-  if (!update_response.Parse(response)) {
-    VLOG(1) << "Parse failed " << update_response.errors();
-    UpdateCheckFailed(components, -1, retry_after_sec);
+  auto parser = config_->GetProtocolHandlerFactory()->CreateParser();
+  if (!parser->Parse(response)) {
+    VLOG(1) << "Parse failed " << parser->errors();
+    UpdateCheckFailed(ErrorCategory::kUpdateCheck,
+                      static_cast<int>(ProtocolError::PARSE_FAILED),
+                      retry_after_sec);
     return;
   }
 
   DCHECK_EQ(0, error);
-  UpdateCheckSucceeded(components, update_response.results(), retry_after_sec);
+  UpdateCheckSucceeded(parser->results(), retry_after_sec);
 }
 
 void UpdateCheckerImpl::UpdateCheckSucceeded(
-    const IdToComponentPtrMap& components,
     const ProtocolParser::Results& results,
     int retry_after_sec) {
   DCHECK(thread_checker_.CalledOnValidThread());
@@ -218,32 +271,23 @@ void UpdateCheckerImpl::UpdateCheckSucceeded(
       metadata_->SetCohortHint(result.extension_id, entry->second);
   }
 
-  for (const auto& result : results.list) {
-    const auto& id = result.extension_id;
-    const auto it = components.find(id);
-    if (it != components.end())
-      it->second->SetParseResult(result);
-  }
-
   base::ThreadTaskRunnerHandle::Get()->PostTask(
       FROM_HERE,
-      base::BindOnce(std::move(update_check_callback_), 0, retry_after_sec));
+      base::BindOnce(std::move(update_check_callback_),
+                     base::make_optional<ProtocolParser::Results>(results),
+                     ErrorCategory::kNone, 0, retry_after_sec));
 }
 
-void UpdateCheckerImpl::UpdateCheckFailed(const IdToComponentPtrMap& components,
+void UpdateCheckerImpl::UpdateCheckFailed(ErrorCategory error_category,
                                           int error,
                                           int retry_after_sec) {
   DCHECK(thread_checker_.CalledOnValidThread());
   DCHECK_NE(0, error);
-  for (const auto& item : components) {
-    DCHECK(item.second);
-    Component& component = *item.second;
-    component.set_update_check_error(error);
-  }
 
   base::ThreadTaskRunnerHandle::Get()->PostTask(
-      FROM_HERE, base::BindOnce(std::move(update_check_callback_), error,
-                                retry_after_sec));
+      FROM_HERE,
+      base::BindOnce(std::move(update_check_callback_), base::nullopt,
+                     error_category, error, retry_after_sec));
 }
 
 }  // namespace

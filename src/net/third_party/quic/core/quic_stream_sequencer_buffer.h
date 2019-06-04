@@ -27,17 +27,17 @@
 //
 // Expected Use:
 //  QuicStreamSequencerBuffer buffer(2.5 * 8 * 1024);
-//  std::string source(1024, 'a');
-//  QuicStringPiece std::string_piece(source.data(), source.size());
+//  QuicString source(1024, 'a');
+//  QuicStringPiece string_piece(source.data(), source.size());
 //  size_t written = 0;
-//  buffer.OnStreamData(800, std::string_piece, GetEpollClockNow(), &written);
-//  source = std::string{800, 'b'};
-//  QuicStringPiece std::string_piece1(source.data(), 800);
+//  buffer.OnStreamData(800, string_piece, GetEpollClockNow(), &written);
+//  source = QuicString{800, 'b'};
+//  QuicStringPiece string_piece1(source.data(), 800);
 //  // Try to write to [1, 801), but should fail due to overlapping,
 //  // res should be QUIC_INVALID_STREAM_DATA
-//  auto res = buffer.OnStreamData(1, std::string_piece1, &written));
+//  auto res = buffer.OnStreamData(1, string_piece1, &written));
 //  // write to [0, 800), res should be QUIC_NO_ERROR
-//  auto res = buffer.OnStreamData(0, std::string_piece1, GetEpollClockNow(),
+//  auto res = buffer.OnStreamData(0, string_piece1, GetEpollClockNow(),
 //                                  &written);
 //
 //  // Read into a iovec array with total capacity of 120 bytes.
@@ -66,10 +66,11 @@
 #include "base/macros.h"
 #include "net/third_party/quic/core/quic_packets.h"
 #include "net/third_party/quic/platform/api/quic_export.h"
+#include "net/third_party/quic/platform/api/quic_iovec.h"
 #include "net/third_party/quic/platform/api/quic_string.h"
 #include "net/third_party/quic/platform/api/quic_string_piece.h"
 
-namespace net {
+namespace quic {
 
 namespace test {
 class QuicStreamSequencerBufferPeer;
@@ -77,14 +78,6 @@ class QuicStreamSequencerBufferPeer;
 
 class QUIC_EXPORT_PRIVATE QuicStreamSequencerBuffer {
  public:
-  // A Gap indicates a missing chunk of bytes between
-  // [begin_offset, end_offset) in the stream
-  struct QUIC_EXPORT_PRIVATE Gap {
-    Gap(QuicStreamOffset begin_offset, QuicStreamOffset end_offset);
-    QuicStreamOffset begin_offset;
-    QuicStreamOffset end_offset;
-  };
-
   // Size of blocks used by this buffer.
   // Choose 8K to make block large enough to hold multiple frames, each of
   // which could be up to 1.5 KB.
@@ -96,6 +89,10 @@ class QUIC_EXPORT_PRIVATE QuicStreamSequencerBuffer {
   };
 
   explicit QuicStreamSequencerBuffer(size_t max_capacity_bytes);
+  QuicStreamSequencerBuffer(const QuicStreamSequencerBuffer&) = delete;
+  QuicStreamSequencerBuffer(QuicStreamSequencerBuffer&&) = default;
+  QuicStreamSequencerBuffer& operator=(const QuicStreamSequencerBuffer&) =
+      delete;
   ~QuicStreamSequencerBuffer();
 
   // Free the space used to buffer data.
@@ -132,10 +129,6 @@ class QUIC_EXPORT_PRIVATE QuicStreamSequencerBuffer {
   // Fills in one iovec with data from the next readable region.
   // Returns false if there is no readable region available.
   bool GetReadableRegion(iovec* iov) const;
-
-  // Copies all of the readable data into |buffer| and marks all of the copied
-  // data as consumed.
-  void Read(QuicString* buffer);
 
   // Called after GetReadableRegions() to free up |bytes_used| space if these
   // bytes are processed.
@@ -231,16 +224,9 @@ class QUIC_EXPORT_PRIVATE QuicStreamSequencerBuffer {
   // Number of bytes in buffer.
   size_t num_bytes_buffered_;
 
-  // For debugging use after free, assigned to 123456 in constructor and 654321
-  // in destructor. As long as it's not 123456, this means either use after free
-  // or memory corruption.
-  int32_t destruction_indicator_;
-
   // Currently received data.
   QuicIntervalSet<QuicStreamOffset> bytes_received_;
-
-  DISALLOW_COPY_AND_ASSIGN(QuicStreamSequencerBuffer);
 };
-}  // namespace net
+}  // namespace quic
 
 #endif  // NET_THIRD_PARTY_QUIC_CORE_QUIC_STREAM_SEQUENCER_BUFFER_H_

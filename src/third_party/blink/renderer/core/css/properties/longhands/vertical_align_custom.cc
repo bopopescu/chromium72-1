@@ -10,18 +10,18 @@
 #include "third_party/blink/renderer/core/style/computed_style.h"
 
 namespace blink {
-namespace CSSLonghand {
+namespace css_longhand {
 
 const CSSValue* VerticalAlign::ParseSingleValue(
     CSSParserTokenRange& range,
     const CSSParserContext& context,
     const CSSParserLocalContext&) const {
-  CSSValue* parsed_value = CSSPropertyParserHelpers::ConsumeIdentRange(
+  CSSValue* parsed_value = css_property_parser_helpers::ConsumeIdentRange(
       range, CSSValueBaseline, CSSValueWebkitBaselineMiddle);
   if (!parsed_value) {
-    parsed_value = CSSPropertyParserHelpers::ConsumeLengthOrPercent(
+    parsed_value = css_property_parser_helpers::ConsumeLengthOrPercent(
         range, context.Mode(), kValueRangeAll,
-        CSSPropertyParserHelpers::UnitlessQuirk::kAllow);
+        css_property_parser_helpers::UnitlessQuirk::kAllow);
   }
   return parsed_value;
 }
@@ -59,5 +59,26 @@ const CSSValue* VerticalAlign::CSSValueFromComputedStyleInternal(
   return nullptr;
 }
 
-}  // namespace CSSLonghand
+void VerticalAlign::ApplyInherit(StyleResolverState& state) const {
+  EVerticalAlign vertical_align = state.ParentStyle()->VerticalAlign();
+  state.Style()->SetVerticalAlign(vertical_align);
+  if (vertical_align == EVerticalAlign::kLength) {
+    state.Style()->SetVerticalAlignLength(
+        state.ParentStyle()->GetVerticalAlignLength());
+  }
+}
+
+void VerticalAlign::ApplyValue(StyleResolverState& state,
+                               const CSSValue& value) const {
+  if (value.IsIdentifierValue()) {
+    state.Style()->SetVerticalAlign(
+        ToCSSIdentifierValue(value).ConvertTo<EVerticalAlign>());
+  } else {
+    state.Style()->SetVerticalAlignLength(
+        ToCSSPrimitiveValue(value).ConvertToLength(
+            state.CssToLengthConversionData()));
+  }
+}
+
+}  // namespace css_longhand
 }  // namespace blink

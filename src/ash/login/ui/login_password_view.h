@@ -48,6 +48,8 @@ class ASH_EXPORT LoginPasswordView : public views::View,
     explicit TestApi(LoginPasswordView* view);
     ~TestApi();
 
+    void SubmitPassword(const std::string& password);
+
     views::Textfield* textfield() const;
     views::View* submit_button() const;
     views::View* easy_unlock_icon() const;
@@ -74,6 +76,9 @@ class ASH_EXPORT LoginPasswordView : public views::View,
             const OnPasswordTextChanged& on_password_text_changed,
             const OnEasyUnlockIconHovered& on_easy_unlock_icon_hovered,
             const OnEasyUnlockIconTapped& on_easy_unlock_icon_tapped);
+
+  // Is the password field enabled when there is no text?
+  void SetEnabledOnEmptyPassword(bool enabled);
 
   // Change the active icon for easy unlock.
   void SetEasyUnlockIcon(mojom::EasyUnlockIconId id,
@@ -115,6 +120,8 @@ class ASH_EXPORT LoginPasswordView : public views::View,
   // views::TextfieldController:
   void ContentsChanged(views::Textfield* sender,
                        const base::string16& new_contents) override;
+  bool HandleKeyEvent(views::Textfield* sender,
+                      const ui::KeyEvent& key_event) override;
 
   // ImeController::Observer:
   void OnCapsLockChanged(bool enabled) override;
@@ -134,6 +141,9 @@ class ASH_EXPORT LoginPasswordView : public views::View,
 
   OnPasswordSubmit on_submit_;
   OnPasswordTextChanged on_password_text_changed_;
+
+  // Is the password field enabled when there is no text?
+  bool enabled_on_empty_password_ = false;
 
   views::View* password_row_ = nullptr;
 

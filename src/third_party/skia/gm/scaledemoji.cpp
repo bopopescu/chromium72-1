@@ -11,6 +11,7 @@
 #include "Resources.h"
 #include "SkCanvas.h"
 #include "SkStream.h"
+#include "SkTo.h"
 #include "SkTypeface.h"
 
 namespace skiagm {
@@ -40,7 +41,7 @@ protected:
 
     void onDraw(SkCanvas* canvas) override {
 
-        canvas->drawColor(sk_tool_utils::color_to_565(SK_ColorGRAY));
+        canvas->drawColor(SK_ColorGRAY);
 
         SkPaint paint;
         paint.setTypeface(fEmojiFont.fTypeface);
@@ -49,7 +50,7 @@ protected:
         // draw text at different point sizes
         // Testing GPU bitmap path, SDF path with no scaling,
         // SDF path with scaling, path rendering with scaling
-        SkPaint::FontMetrics metrics;
+        SkFontMetrics metrics;
         SkScalar y = 0;
         for (SkScalar textSize : { 70, 180, 270, 340 }) {
             paint.setTextSize(textSize);
@@ -90,7 +91,7 @@ protected:
 
     void onDraw(SkCanvas* canvas) override {
 
-        canvas->drawColor(sk_tool_utils::color_to_565(SK_ColorGRAY));
+        canvas->drawColor(SK_ColorGRAY);
 
         SkPaint paint;
         paint.setTypeface(fEmojiFont.fTypeface);
@@ -99,7 +100,7 @@ protected:
         // draw text at different point sizes
         // Testing GPU bitmap path, SDF path with no scaling,
         // SDF path with scaling, path rendering with scaling
-        SkPaint::FontMetrics metrics;
+        SkFontMetrics metrics;
         SkScalar y = 0;
         for (SkScalar textSize : { 70, 180, 270, 340 }) {
             paint.setTextSize(textSize);

@@ -33,8 +33,8 @@
 
 #include "base/macros.h"
 #include "base/memory/scoped_refptr.h"
-#include "third_party/blink/public/platform/modules/indexeddb/web_idb_cursor.h"
-#include "third_party/blink/public/platform/modules/indexeddb/web_idb_types.h"
+#include "third_party/blink/public/common/indexeddb/web_idb_types.h"
+#include "third_party/blink/public/mojom/indexeddb/indexeddb.mojom-blink.h"
 #include "third_party/blink/public/platform/web_blob_info.h"
 #include "third_party/blink/renderer/bindings/core/v8/active_script_wrappable.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_value.h"
@@ -42,12 +42,14 @@
 #include "third_party/blink/renderer/bindings/modules/v8/idb_object_store_or_idb_index_or_idb_cursor.h"
 #include "third_party/blink/renderer/core/dom/dom_string_list.h"
 #include "third_party/blink/renderer/core/dom/events/event_listener.h"
+#include "third_party/blink/renderer/core/dom/events/event_queue.h"
 #include "third_party/blink/renderer/core/dom/events/event_target.h"
 #include "third_party/blink/renderer/core/dom/pausable_object.h"
 #include "third_party/blink/renderer/modules/event_modules.h"
 #include "third_party/blink/renderer/modules/indexeddb/idb_any.h"
 #include "third_party/blink/renderer/modules/indexeddb/idb_transaction.h"
 #include "third_party/blink/renderer/modules/indexeddb/indexed_db.h"
+#include "third_party/blink/renderer/modules/indexeddb/web_idb_cursor.h"
 #include "third_party/blink/renderer/modules/modules_export.h"
 #include "third_party/blink/renderer/platform/bindings/script_state.h"
 #include "third_party/blink/renderer/platform/blob/blob_data.h"
@@ -174,7 +176,10 @@ class MODULES_EXPORT IDBRequest : public EventTargetWithInlineData,
                             const Source&,
                             IDBTransaction*,
                             AsyncTraceState);
+
+  IDBRequest(ScriptState*, const Source&, IDBTransaction*, AsyncTraceState);
   ~IDBRequest() override;
+
   void Trace(blink::Visitor*) override;
 
   v8::Isolate* GetIsolate() const { return isolate_; }
@@ -213,10 +218,10 @@ class MODULES_EXPORT IDBRequest : public EventTargetWithInlineData,
   WebIDBCallbacks* WebCallbacks() const { return web_callbacks_; }
 #endif  // DCHECK_IS_ON()
 
-  DEFINE_ATTRIBUTE_EVENT_LISTENER(success);
-  DEFINE_ATTRIBUTE_EVENT_LISTENER(error);
+  DEFINE_ATTRIBUTE_EVENT_LISTENER(success, kSuccess);
+  DEFINE_ATTRIBUTE_EVENT_LISTENER(error, kError);
 
-  void SetCursorDetails(IndexedDB::CursorType, WebIDBCursorDirection);
+  void SetCursorDetails(indexed_db::CursorType, mojom::IDBCursorDirection);
   void SetPendingCursor(IDBCursor*);
   void Abort();
 
@@ -275,7 +280,7 @@ class MODULES_EXPORT IDBRequest : public EventTargetWithInlineData,
   virtual void EnqueueUpgradeNeeded(int64_t old_version,
                                     std::unique_ptr<WebIDBDatabase>,
                                     const IDBDatabaseMetadata&,
-                                    WebIDBDataLoss,
+                                    mojom::IDBDataLoss,
                                     String data_loss_message) {
     NOTREACHED();
   }
@@ -293,7 +298,6 @@ class MODULES_EXPORT IDBRequest : public EventTargetWithInlineData,
   // EventTarget
   const AtomicString& InterfaceName() const override;
   ExecutionContext* GetExecutionContext() const final;
-  void UncaughtExceptionInEventHandler() final;
 
   // Called by a version change transaction that has finished to set this
   // request back from DONE (following "upgradeneeded") back to PENDING (for
@@ -333,9 +337,7 @@ class MODULES_EXPORT IDBRequest : public EventTargetWithInlineData,
   }
 
  protected:
-  IDBRequest(ScriptState*, const Source&, IDBTransaction*, AsyncTraceState);
   void EnqueueEvent(Event*);
-  void DequeueEvent(Event*);
   virtual bool ShouldEnqueueEvent() const;
   void EnqueueResultInternal(IDBAny*);
   void SetResult(IDBAny*);
@@ -344,7 +346,7 @@ class MODULES_EXPORT IDBRequest : public EventTargetWithInlineData,
   virtual void EnqueueResponse(int64_t);
 
   // EventTarget
-  DispatchEventResult DispatchEventInternal(Event*) override;
+  DispatchEventResult DispatchEventInternal(Event&) override;
 
   // Can be nullptr for requests that are not associated with a transaction,
   // i.e. delete requests and completed or unsuccessful open requests.
@@ -388,11 +390,11 @@ class MODULES_EXPORT IDBRequest : public EventTargetWithInlineData,
   Member<DOMException> error_;
 
   bool has_pending_activity_ = true;
-  HeapVector<Member<Event>> enqueued_events_;
+  Member<EventQueue> event_queue_;
 
   // Only used if the result type will be a cursor.
-  IndexedDB::CursorType cursor_type_ = IndexedDB::kCursorKeyAndValue;
-  WebIDBCursorDirection cursor_direction_ = kWebIDBCursorDirectionNext;
+  indexed_db::CursorType cursor_type_ = indexed_db::kCursorKeyAndValue;
+  mojom::IDBCursorDirection cursor_direction_ = mojom::IDBCursorDirection::Next;
   // When a cursor is continued/advanced, |result_| is cleared and
   // |pendingCursor_| holds it.
   Member<IDBCursor> pending_cursor_;
@@ -407,12 +409,6 @@ class MODULES_EXPORT IDBRequest : public EventTargetWithInlineData,
   bool did_fire_upgrade_needed_event_ = false;
   bool prevent_propagation_ = false;
   bool result_dirty_ = true;
-
-  // Transactions should be aborted after event dispatch if an exception was
-  // not caught. This is cleared before dispatch, set by a call to
-  // UncaughtExceptionInEventHandler() during dispatch, and checked afterwards
-  // to abort if necessary.
-  bool did_throw_in_event_handler_ = false;
 
   // Pointer back to the WebIDBCallbacks that holds a persistent reference to
   // this object.

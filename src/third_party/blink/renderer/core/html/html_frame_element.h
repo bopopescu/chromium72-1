@@ -25,6 +25,7 @@
 #define THIRD_PARTY_BLINK_RENDERER_CORE_HTML_HTML_FRAME_ELEMENT_H_
 
 #include "third_party/blink/public/common/feature_policy/feature_policy.h"
+#include "third_party/blink/public/common/frame/frame_owner_element_type.h"
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/html/html_frame_element_base.h"
 
@@ -36,12 +37,19 @@ class CORE_EXPORT HTMLFrameElement final : public HTMLFrameElementBase {
  public:
   DECLARE_NODE_FACTORY(HTMLFrameElement);
 
+  // Returns attributes that should be checked against Trusted Types
+  const HashSet<AtomicString>& GetCheckedAttributeNames() const override;
+
   bool HasFrameBorder() const { return frame_border_; }
 
   bool NoResize() const;
 
   ParsedFeaturePolicy ConstructContainerPolicy(
       Vector<String>* /* messages */) const override;
+
+  FrameOwnerElementType OwnerType() const final {
+    return FrameOwnerElementType::kFrame;
+  }
 
  private:
   explicit HTMLFrameElement(Document&);

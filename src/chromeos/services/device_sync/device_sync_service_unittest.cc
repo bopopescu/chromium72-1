@@ -9,9 +9,11 @@
 #include "base/optional.h"
 #include "base/run_loop.h"
 #include "base/single_thread_task_runner.h"
+#include "base/test/metrics/histogram_tester.h"
 #include "base/test/null_task_runner.h"
 #include "base/test/scoped_task_environment.h"
 #include "base/test/simple_test_clock.h"
+#include "base/timer/mock_timer.h"
 #include "chromeos/dbus/dbus_thread_manager.h"
 #include "chromeos/services/device_sync/device_sync_impl.h"
 #include "chromeos/services/device_sync/device_sync_service.h"
@@ -33,8 +35,8 @@
 #include "components/gcm_driver/fake_gcm_driver.h"
 #include "components/prefs/pref_registry_simple.h"
 #include "components/prefs/testing_pref_service.h"
-#include "net/url_request/url_request_context_getter.h"
 #include "services/identity/public/cpp/identity_test_environment.h"
+#include "services/network/public/cpp/weak_wrapper_shared_url_loader_factory.h"
 #include "services/service_manager/public/cpp/test/test_connector_factory.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -68,12 +70,6 @@ cryptauth::RemoteDeviceList GenerateTestRemoteDevices() {
   // Arbitrarily choose the 0th device as the local one and set its public key
   // accordingly.
   devices[0].public_key = kLocalDevicePublicKey;
-
-  // Load an empty set of BeaconSeeds for each device.
-  // TODO(khorimoto): Adjust device_sync_mojom_traits.h/cc to allow passing
-  // devices without BeaconSeeds to be sent across Mojo.
-  for (auto& device : devices)
-    device.LoadBeaconSeeds(std::vector<cryptauth::BeaconSeed>());
 
   return devices;
 }
@@ -109,7 +105,8 @@ std::vector<cryptauth::IneligibleDevice> GenerateTestIneligibleDevices(
 class FakeSoftwareFeatureManagerDelegate
     : public cryptauth::FakeSoftwareFeatureManager::Delegate {
  public:
-  FakeSoftwareFeatureManagerDelegate(base::Closure on_delegate_call_closure)
+  explicit FakeSoftwareFeatureManagerDelegate(
+      base::Closure on_delegate_call_closure)
       : on_delegate_call_closure_(on_delegate_call_closure) {}
 
   ~FakeSoftwareFeatureManagerDelegate() override = default;
@@ -287,7 +284,7 @@ class FakeRemoteDeviceProviderFactory
       const std::string& user_private_key) override {
     EXPECT_EQ(fake_cryptauth_device_manager_factory_->instance(),
               device_manager);
-    EXPECT_EQ(identity_manager_->GetPrimaryAccountInfo().account_id, user_id);
+    EXPECT_EQ(identity_manager_->GetPrimaryAccountId(), user_id);
     EXPECT_EQ(fake_cryptauth_enrollment_manager_factory_->instance()
                   ->GetUserPrivateKey(),
               user_private_key);
@@ -335,23 +332,6 @@ class FakeSoftwareFeatureManagerFactory
 
  private:
   cryptauth::FakeSoftwareFeatureManager* instance_ = nullptr;
-};
-
-class FakeURLRequestContextGetter : public net::URLRequestContextGetter {
- public:
-  FakeURLRequestContextGetter() : null_task_runner_(new base::NullTaskRunner) {}
-
-  net::URLRequestContext* GetURLRequestContext() override { return nullptr; }
-
-  scoped_refptr<base::SingleThreadTaskRunner> GetNetworkTaskRunner()
-      const override {
-    return null_task_runner_;
-  }
-
- private:
-  ~FakeURLRequestContextGetter() override {}
-
-  scoped_refptr<base::SingleThreadTaskRunner> null_task_runner_;
 };
 
 }  // namespace
@@ -406,31 +386,35 @@ class DeviceSyncServiceTest : public testing::Test {
 
   class FakeDeviceSyncImplFactory : public DeviceSyncImpl::Factory {
    public:
-    FakeDeviceSyncImplFactory(std::unique_ptr<FakePrefConnectionDelegate>
-                                  fake_pref_connection_delegate,
-                              base::SimpleTestClock* simple_test_clock)
+    FakeDeviceSyncImplFactory(
+        std::unique_ptr<FakePrefConnectionDelegate>
+            fake_pref_connection_delegate,
+        std::unique_ptr<base::MockOneShotTimer> mock_timer,
+        base::SimpleTestClock* simple_test_clock)
         : fake_pref_connection_delegate_(
               std::move(fake_pref_connection_delegate)),
+          mock_timer_(std::move(mock_timer)),
           simple_test_clock_(simple_test_clock) {}
 
     ~FakeDeviceSyncImplFactory() override = default;
 
     // DeviceSyncImpl::Factory:
-    std::unique_ptr<DeviceSyncImpl> BuildInstance(
+    std::unique_ptr<DeviceSyncBase> BuildInstance(
         identity::IdentityManager* identity_manager,
         gcm::GCMDriver* gcm_driver,
         service_manager::Connector* connector,
-        cryptauth::GcmDeviceInfoProvider* gcm_device_info_provider,
-        scoped_refptr<net::URLRequestContextGetter> url_request_context)
-        override {
+        const cryptauth::GcmDeviceInfoProvider* gcm_device_info_provider,
+        scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
+        std::unique_ptr<base::OneShotTimer> timer) override {
       return base::WrapUnique(new DeviceSyncImpl(
           identity_manager, gcm_driver, connector, gcm_device_info_provider,
-          std::move(url_request_context), simple_test_clock_,
-          std::move(fake_pref_connection_delegate_)));
+          std::move(url_loader_factory), simple_test_clock_,
+          std::move(fake_pref_connection_delegate_), std::move(mock_timer_)));
     }
 
    private:
     std::unique_ptr<FakePrefConnectionDelegate> fake_pref_connection_delegate_;
+    std::unique_ptr<base::MockOneShotTimer> mock_timer_;
     base::SimpleTestClock* simple_test_clock_;
   };
 
@@ -496,9 +480,13 @@ class DeviceSyncServiceTest : public testing::Test {
             std::move(test_pref_service));
     fake_pref_connection_delegate_ = fake_pref_connection_delegate.get();
 
+    auto mock_timer = std::make_unique<base::MockOneShotTimer>();
+    mock_timer_ = mock_timer.get();
+
     fake_device_sync_impl_factory_ =
         std::make_unique<FakeDeviceSyncImplFactory>(
-            std::move(fake_pref_connection_delegate), simple_test_clock_.get());
+            std::move(fake_pref_connection_delegate), std::move(mock_timer),
+            simple_test_clock_.get());
     DeviceSyncImpl::Factory::SetInstanceForTesting(
         fake_device_sync_impl_factory_.get());
 
@@ -506,8 +494,12 @@ class DeviceSyncServiceTest : public testing::Test {
         std::make_unique<cryptauth::FakeGcmDeviceInfoProvider>(
             GetTestGcmDeviceInfo());
 
-    fake_url_request_context_getter_ =
-        base::MakeRefCounted<FakeURLRequestContextGetter>();
+    auto shared_url_loader_factory =
+        base::MakeRefCounted<network::WeakWrapperSharedURLLoaderFactory>(
+            base::BindOnce([]() -> network::mojom::URLLoaderFactory* {
+              ADD_FAILURE() << "Did not expect this to actually be used";
+              return nullptr;
+            }));
 
     fake_device_sync_observer_ = std::make_unique<FakeDeviceSyncObserver>();
     connector_factory_ =
@@ -515,7 +507,7 @@ class DeviceSyncServiceTest : public testing::Test {
             std::make_unique<DeviceSyncService>(
                 identity_test_environment_->identity_manager(),
                 fake_gcm_driver_.get(), fake_gcm_device_info_provider_.get(),
-                fake_url_request_context_getter_.get()));
+                shared_url_loader_factory));
   }
 
   void TearDown() override { DBusThreadManager::Shutdown(); }
@@ -659,6 +651,8 @@ class DeviceSyncServiceTest : public testing::Test {
     return fake_pref_connection_delegate_;
   }
 
+  base::MockOneShotTimer* mock_timer() { return mock_timer_; }
+
   cryptauth::FakeCryptAuthEnrollmentManager*
   fake_cryptauth_enrollment_manager() {
     return fake_cryptauth_enrollment_manager_factory_->instance();
@@ -672,12 +666,12 @@ class DeviceSyncServiceTest : public testing::Test {
     return fake_software_feature_manager_factory_->instance();
   }
 
-  std::unique_ptr<base::Optional<std::string>>
+  std::unique_ptr<mojom::NetworkRequestResult>
   GetLastSetSoftwareFeatureStateResponseAndReset() {
     return std::move(last_set_software_feature_state_response_);
   }
 
-  std::unique_ptr<std::pair<base::Optional<std::string>,
+  std::unique_ptr<std::pair<mojom::NetworkRequestResult,
                             mojom::FindEligibleDevicesResponsePtr>>
   GetLastFindEligibleDevicesResponseAndReset() {
     return std::move(last_find_eligible_devices_response_);
@@ -704,13 +698,15 @@ class DeviceSyncServiceTest : public testing::Test {
         cryptauth::SoftwareFeature::BETTER_TOGETHER_HOST, true /* enabled */,
         true /* is_exclusive */);
     auto last_set_response = GetLastSetSoftwareFeatureStateResponseAndReset();
-    EXPECT_EQ(mojom::kErrorNotInitialized, *last_set_response);
+    EXPECT_EQ(mojom::NetworkRequestResult::kServiceNotYetInitialized,
+              *last_set_response);
 
     // Likewise, FindEligibleDevices() should also return a struct with the same
     // error code.
     CallFindEligibleDevices(cryptauth::SoftwareFeature::BETTER_TOGETHER_HOST);
     auto last_find_response = GetLastFindEligibleDevicesResponseAndReset();
-    EXPECT_EQ(mojom::kErrorNotInitialized, last_find_response->first);
+    EXPECT_EQ(mojom::NetworkRequestResult::kServiceNotYetInitialized,
+              last_find_response->first);
     EXPECT_FALSE(last_find_response->second /* response */);
 
     // GetDebugInfo() returns a null DebugInfo before initialization.
@@ -850,6 +846,10 @@ class DeviceSyncServiceTest : public testing::Test {
     return last_debug_info_result_;
   }
 
+  const base::HistogramTester& histogram_tester() const {
+    return histogram_tester_;
+  }
+
  private:
   void OnAddObserverCompleted(base::OnceClosure quit_closure) {
     std::move(quit_closure).Run();
@@ -881,34 +881,34 @@ class DeviceSyncServiceTest : public testing::Test {
   }
 
   void OnSetSoftwareFeatureStateCompleted(
-      const base::Optional<std::string>& error_code) {
+      mojom::NetworkRequestResult result_code) {
     EXPECT_FALSE(last_set_software_feature_state_response_);
     last_set_software_feature_state_response_ =
-        std::make_unique<base::Optional<std::string>>(error_code);
+        std::make_unique<mojom::NetworkRequestResult>(result_code);
   }
 
   void OnSetSoftwareFeatureStateCompletedSynchronously(
       base::OnceClosure quit_closure,
-      const base::Optional<std::string>& error_code) {
-    OnSetSoftwareFeatureStateCompleted(error_code);
+      mojom::NetworkRequestResult result_code) {
+    OnSetSoftwareFeatureStateCompleted(result_code);
     std::move(quit_closure).Run();
   }
 
   void OnFindEligibleDevicesCompleted(
-      const base::Optional<std::string>& error_code,
+      mojom::NetworkRequestResult result_code,
       mojom::FindEligibleDevicesResponsePtr response) {
     EXPECT_FALSE(last_find_eligible_devices_response_);
     last_find_eligible_devices_response_ =
-        std::make_unique<std::pair<base::Optional<std::string>,
+        std::make_unique<std::pair<mojom::NetworkRequestResult,
                                    mojom::FindEligibleDevicesResponsePtr>>(
-            error_code, std::move(response));
+            result_code, std::move(response));
   }
 
   void OnFindEligibleDevicesCompletedSynchronously(
       base::OnceClosure quit_closure,
-      const base::Optional<std::string>& error_code,
+      mojom::NetworkRequestResult result_code,
       mojom::FindEligibleDevicesResponsePtr response) {
-    OnFindEligibleDevicesCompleted(error_code, std::move(response));
+    OnFindEligibleDevicesCompleted(result_code, std::move(response));
     std::move(quit_closure).Run();
   }
 
@@ -929,6 +929,7 @@ class DeviceSyncServiceTest : public testing::Test {
 
   TestingPrefServiceSimple* test_pref_service_;
   FakePrefConnectionDelegate* fake_pref_connection_delegate_;
+  base::MockOneShotTimer* mock_timer_;
   std::unique_ptr<base::SimpleTestClock> simple_test_clock_;
   std::unique_ptr<FakeDeviceSyncImplFactory> fake_device_sync_impl_factory_;
   std::unique_ptr<FakeCryptAuthGCMManagerFactory>
@@ -946,7 +947,6 @@ class DeviceSyncServiceTest : public testing::Test {
   std::unique_ptr<gcm::FakeGCMDriver> fake_gcm_driver_;
   std::unique_ptr<cryptauth::FakeGcmDeviceInfoProvider>
       fake_gcm_device_info_provider_;
-  scoped_refptr<FakeURLRequestContextGetter> fake_url_request_context_getter_;
 
   std::unique_ptr<service_manager::TestConnectorFactory> connector_factory_;
   std::unique_ptr<service_manager::Connector> connector_;
@@ -956,15 +956,17 @@ class DeviceSyncServiceTest : public testing::Test {
   bool last_force_sync_now_result_;
   base::Optional<cryptauth::RemoteDeviceList> last_synced_devices_result_;
   base::Optional<cryptauth::RemoteDevice> last_local_device_metadata_result_;
-  std::unique_ptr<base::Optional<std::string>>
+  std::unique_ptr<mojom::NetworkRequestResult>
       last_set_software_feature_state_response_;
-  std::unique_ptr<std::pair<base::Optional<std::string>,
+  std::unique_ptr<std::pair<mojom::NetworkRequestResult,
                             mojom::FindEligibleDevicesResponsePtr>>
       last_find_eligible_devices_response_;
   base::Optional<mojom::DebugInfo> last_debug_info_result_;
 
   std::unique_ptr<FakeDeviceSyncObserver> fake_device_sync_observer_;
   mojom::DeviceSyncPtr device_sync_;
+
+  base::HistogramTester histogram_tester_;
 
   DISALLOW_COPY_AND_ASSIGN(DeviceSyncServiceTest);
 };
@@ -1118,15 +1120,23 @@ TEST_F(DeviceSyncServiceTest, SyncedDeviceUpdates) {
   EXPECT_EQ(updated_device_list, CallGetSyncedDevices());
 }
 
-TEST_F(DeviceSyncServiceTest, SetSoftwareFeatureState) {
+TEST_F(DeviceSyncServiceTest, SetSoftwareFeatureState_Success) {
   InitializeServiceSuccessfully();
 
   const auto& set_software_calls =
       fake_software_feature_manager()->set_software_feature_state_calls();
   EXPECT_EQ(0u, set_software_calls.size());
 
-  // Enable BETTER_TOGETHER_HOST for device 0.
-  CallSetSoftwareFeatureState(test_devices()[0].public_key,
+  // Set the BETTER_TOGETHER_HOST field to "supported".
+  cryptauth::RemoteDevice device_for_test = test_devices()[0];
+  device_for_test
+      .software_features[cryptauth::SoftwareFeature::BETTER_TOGETHER_HOST] =
+      cryptauth::SoftwareFeatureState::kSupported;
+  EXPECT_TRUE(CallForceSyncNow());
+  SimulateSync(true /* success */, {device_for_test});
+
+  // Enable BETTER_TOGETHER_HOST for the device.
+  CallSetSoftwareFeatureState(device_for_test.public_key,
                               cryptauth::SoftwareFeature::BETTER_TOGETHER_HOST,
                               true /* enabled */, true /* is_exclusive */);
   EXPECT_EQ(1u, set_software_calls.size());
@@ -1140,30 +1150,127 @@ TEST_F(DeviceSyncServiceTest, SetSoftwareFeatureState) {
 
   // Now, invoke the success callback.
   set_software_calls[0]->success_callback.Run();
+
+  // The callback still has not yet been invoked, since a device sync has not
+  // confirmed the feature state change yet.
+  EXPECT_FALSE(GetLastSetSoftwareFeatureStateResponseAndReset());
+
+  // Simulate a sync which includes the device with the correct "enabled" state.
+  device_for_test
+      .software_features[cryptauth::SoftwareFeature::BETTER_TOGETHER_HOST] =
+      cryptauth::SoftwareFeatureState::kEnabled;
   base::RunLoop().RunUntilIdle();
+  SimulateSync(true /* success */, {device_for_test});
+  base::RunLoop().RunUntilIdle();
+
   auto last_response = GetLastSetSoftwareFeatureStateResponseAndReset();
   EXPECT_TRUE(last_response);
-  EXPECT_FALSE(*last_response /* error_code */);
+  EXPECT_EQ(device_sync::mojom::NetworkRequestResult::kSuccess, *last_response);
 
-  // Disable BETTER_TOGETHER_HOST for device 0.
-  CallSetSoftwareFeatureState(test_devices()[0].public_key,
+  histogram_tester().ExpectBucketCount<bool>(
+      "MultiDevice.DeviceSyncService.SetSoftwareFeatureState.Result", false, 0);
+  histogram_tester().ExpectBucketCount<bool>(
+      "MultiDevice.DeviceSyncService.SetSoftwareFeatureState.Result", true, 1);
+  histogram_tester().ExpectTotalCount(
+      "MultiDevice.DeviceSyncService.SetSoftwareFeatureState.Result."
+      "FailureReason",
+      0);
+}
+
+TEST_F(DeviceSyncServiceTest,
+       SetSoftwareFeatureState_RequestSucceedsButDoesNotTakeEffect) {
+  InitializeServiceSuccessfully();
+
+  const auto& set_software_calls =
+      fake_software_feature_manager()->set_software_feature_state_calls();
+  EXPECT_EQ(0u, set_software_calls.size());
+
+  // Set the BETTER_TOGETHER_HOST field to "supported".
+  cryptauth::RemoteDevice device_for_test = test_devices()[0];
+  device_for_test
+      .software_features[cryptauth::SoftwareFeature::BETTER_TOGETHER_HOST] =
+      cryptauth::SoftwareFeatureState::kSupported;
+  EXPECT_TRUE(CallForceSyncNow());
+  SimulateSync(true /* success */, {device_for_test});
+
+  // Enable BETTER_TOGETHER_HOST for the device.
+  CallSetSoftwareFeatureState(device_for_test.public_key,
                               cryptauth::SoftwareFeature::BETTER_TOGETHER_HOST,
-                              false /* enabled */, false /* is_exclusive */);
-  EXPECT_EQ(2u, set_software_calls.size());
+                              true /* enabled */, true /* is_exclusive */);
+  EXPECT_EQ(1u, set_software_calls.size());
   EXPECT_EQ(cryptauth::SoftwareFeature::BETTER_TOGETHER_HOST,
-            set_software_calls[1]->software_feature);
-  EXPECT_FALSE(set_software_calls[1]->enabled);
-  EXPECT_FALSE(set_software_calls[1]->is_exclusive);
+            set_software_calls[0]->software_feature);
+  EXPECT_TRUE(set_software_calls[0]->enabled);
+  EXPECT_TRUE(set_software_calls[0]->is_exclusive);
+
+  // The callback has not yet been invoked.
+  EXPECT_FALSE(GetLastSetSoftwareFeatureStateResponseAndReset());
+
+  // Fire the timer, simulating that the updated device metadata did not arrive
+  // in time.
+  mock_timer()->Fire();
+  base::RunLoop().RunUntilIdle();
+
+  auto last_response = GetLastSetSoftwareFeatureStateResponseAndReset();
+  EXPECT_TRUE(last_response);
+  EXPECT_EQ(device_sync::mojom::NetworkRequestResult::
+                kRequestSucceededButUnexpectedResult,
+            *last_response);
+
+  histogram_tester().ExpectBucketCount<bool>(
+      "MultiDevice.DeviceSyncService.SetSoftwareFeatureState.Result", false, 1);
+  histogram_tester().ExpectTotalCount(
+      "MultiDevice.DeviceSyncService.SetSoftwareFeatureState.Result."
+      "FailureReason",
+      1);
+  histogram_tester().ExpectBucketCount<bool>(
+      "MultiDevice.DeviceSyncService.SetSoftwareFeatureState.Result", true, 0);
+}
+
+TEST_F(DeviceSyncServiceTest, SetSoftwareFeatureState_Error) {
+  InitializeServiceSuccessfully();
+
+  const auto& set_software_calls =
+      fake_software_feature_manager()->set_software_feature_state_calls();
+  EXPECT_EQ(0u, set_software_calls.size());
+
+  // Set the BETTER_TOGETHER_HOST field to "supported".
+  cryptauth::RemoteDevice device_for_test = test_devices()[0];
+  device_for_test
+      .software_features[cryptauth::SoftwareFeature::BETTER_TOGETHER_HOST] =
+      cryptauth::SoftwareFeatureState::kSupported;
+  EXPECT_TRUE(CallForceSyncNow());
+  SimulateSync(true /* success */, {device_for_test});
+
+  // Enable BETTER_TOGETHER_HOST for the device.
+  CallSetSoftwareFeatureState(device_for_test.public_key,
+                              cryptauth::SoftwareFeature::BETTER_TOGETHER_HOST,
+                              true /* enabled */, true /* is_exclusive */);
+  ASSERT_EQ(1u, set_software_calls.size());
+  EXPECT_EQ(cryptauth::SoftwareFeature::BETTER_TOGETHER_HOST,
+            set_software_calls[0]->software_feature);
+  EXPECT_TRUE(set_software_calls[0]->enabled);
+  EXPECT_TRUE(set_software_calls[0]->is_exclusive);
 
   // The callback has not yet been invoked.
   EXPECT_FALSE(GetLastSetSoftwareFeatureStateResponseAndReset());
 
   // Now, invoke the error callback.
-  set_software_calls[1]->error_callback.Run("error");
+  set_software_calls[0]->error_callback.Run(
+      cryptauth::NetworkRequestError::kOffline);
   base::RunLoop().RunUntilIdle();
-  last_response = GetLastSetSoftwareFeatureStateResponseAndReset();
+  auto last_response = GetLastSetSoftwareFeatureStateResponseAndReset();
   EXPECT_TRUE(last_response);
-  EXPECT_EQ("error", *last_response /* error_code */);
+  EXPECT_EQ(mojom::NetworkRequestResult::kOffline, *last_response);
+
+  histogram_tester().ExpectBucketCount<bool>(
+      "MultiDevice.DeviceSyncService.SetSoftwareFeatureState.Result", false, 1);
+  histogram_tester().ExpectTotalCount(
+      "MultiDevice.DeviceSyncService.SetSoftwareFeatureState.Result."
+      "FailureReason",
+      1);
+  histogram_tester().ExpectBucketCount<bool>(
+      "MultiDevice.DeviceSyncService.SetSoftwareFeatureState.Result", true, 0);
 }
 
 TEST_F(DeviceSyncServiceTest, FindEligibleDevices) {
@@ -1193,13 +1300,19 @@ TEST_F(DeviceSyncServiceTest, FindEligibleDevices) {
   base::RunLoop().RunUntilIdle();
   auto last_response = GetLastFindEligibleDevicesResponseAndReset();
   EXPECT_TRUE(last_response);
-  EXPECT_FALSE(last_response->first /* error_code */);
+  EXPECT_EQ(device_sync::mojom::NetworkRequestResult::kSuccess,
+            last_response->first);
   EXPECT_EQ(last_response->second->eligible_devices,
             cryptauth::RemoteDeviceList(test_devices().begin(),
                                         test_devices().begin()));
   EXPECT_EQ(last_response->second->ineligible_devices,
             cryptauth::RemoteDeviceList(test_devices().begin() + 1,
                                         test_devices().end()));
+
+  histogram_tester().ExpectBucketCount<bool>(
+      "MultiDevice.DeviceSyncService.FindEligibleDevices.Result", false, 0);
+  histogram_tester().ExpectBucketCount<bool>(
+      "MultiDevice.DeviceSyncService.FindEligibleDevices.Result", true, 1);
 
   // Find devices which are BETTER_TOGETHER_HOSTs again.
   CallFindEligibleDevices(cryptauth::SoftwareFeature::BETTER_TOGETHER_HOST);
@@ -1211,12 +1324,22 @@ TEST_F(DeviceSyncServiceTest, FindEligibleDevices) {
   EXPECT_FALSE(GetLastFindEligibleDevicesResponseAndReset());
 
   // Now, invoke the error callback.
-  find_eligible_calls[1]->error_callback.Run("error");
+  find_eligible_calls[1]->error_callback.Run(
+      cryptauth::NetworkRequestError::kOffline);
   base::RunLoop().RunUntilIdle();
   last_response = GetLastFindEligibleDevicesResponseAndReset();
   EXPECT_TRUE(last_response);
-  EXPECT_EQ("error", last_response->first /* error_code */);
+  EXPECT_EQ(mojom::NetworkRequestResult::kOffline, last_response->first);
   EXPECT_FALSE(last_response->second /* response */);
+
+  histogram_tester().ExpectBucketCount<bool>(
+      "MultiDevice.DeviceSyncService.FindEligibleDevices.Result", false, 1);
+  histogram_tester().ExpectTotalCount(
+      "MultiDevice.DeviceSyncService.FindEligibleDevices.Result."
+      "FailureReason",
+      1);
+  histogram_tester().ExpectBucketCount<bool>(
+      "MultiDevice.DeviceSyncService.FindEligibleDevices.Result", true, 1);
 }
 
 TEST_F(DeviceSyncServiceTest, GetDebugInfo) {

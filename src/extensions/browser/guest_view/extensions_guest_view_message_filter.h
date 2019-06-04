@@ -7,6 +7,7 @@
 
 #include <stdint.h>
 
+#include <map>
 #include <string>
 
 #include "base/macros.h"
@@ -19,6 +20,9 @@
 
 namespace content {
 class BrowserContext;
+class NavigationHandle;
+class NavigationThrottle;
+class RenderFrameHost;
 class WebContents;
 }
 
@@ -31,6 +35,7 @@ class GuestViewManager;
 }
 
 namespace extensions {
+class MimeHandlerViewGuest;
 
 // This class filters out incoming extensions GuestView-specific IPC messages
 // from thw renderer process. It is created on the UI thread. Messages may be
@@ -40,12 +45,20 @@ class ExtensionsGuestViewMessageFilter
       public content::BrowserAssociatedInterface<mojom::GuestView>,
       public mojom::GuestView {
  public:
+  // During attaching guest to embedder WebContentses the corresponding plugin
+  // frame might be navigated to "about:blank" first. During this time all
+  // navigations for the same FrameTreeNode must be canceled.
+  static std::unique_ptr<content::NavigationThrottle> MaybeCreateThrottle(
+      content::NavigationHandle* navigation_handle);
+
   ExtensionsGuestViewMessageFilter(int render_process_id,
                                    content::BrowserContext* context);
 
  private:
+  class FrameNavigationHelper;
   friend class content::BrowserThread;
   friend class base::DeleteHelper<ExtensionsGuestViewMessageFilter>;
+  friend class ExtensionsGuestViewMessageFilter::FrameNavigationHelper;
 
   ~ExtensionsGuestViewMessageFilter() override;
 
@@ -74,15 +87,45 @@ class ExtensionsGuestViewMessageFilter
       const GURL& original_url,
       int32_t element_instance_id,
       const gfx::Size& element_size,
-      content::mojom::TransferrableURLLoaderPtr transferrable_url_loader)
-      override;
+      content::mojom::TransferrableURLLoaderPtr transferrable_url_loader,
+      int32_t plugin_frame_routing_id) override;
+  void CreateMimeHandlerViewGuest(
+      int32_t render_frame_id,
+      const std::string& view_id,
+      int32_t element_instance_id,
+      const gfx::Size& element_size,
+      mime_handler::BeforeUnloadControlPtr before_unload_control,
+      int32_t plugin_frame_routing_id) override;
+
+  void CreateMimeHandlerViewGuestOnUIThread(
+      int32_t render_frame_id,
+      const std::string& view_id,
+      int32_t element_instance_id,
+      const gfx::Size& element_size,
+      mime_handler::BeforeUnloadControlPtrInfo before_unload_control,
+      int32_t plugin_frame_routing_id,
+      bool is_full_page_plugin);
 
   // Runs on UI thread.
-  void MimeHandlerViewGuestCreatedCallback(int element_instance_id,
-                                           int embedder_render_process_id,
-                                           int embedder_render_frame_id,
-                                           const gfx::Size& element_size,
-                                           content::WebContents* web_contents);
+  void MimeHandlerViewGuestCreatedCallback(
+      int element_instance_id,
+      int embedder_render_process_id,
+      int embedder_render_frame_id,
+      int32_t plugin_frame_routing_id,
+      const gfx::Size& element_size,
+      mime_handler::BeforeUnloadControlPtrInfo before_unload_control,
+      bool is_full_page_plugin,
+      content::WebContents* web_contents);
+
+  // Called by a FrameNavigationHelper on UI thread to notify the message filter
+  // whether or not it should proceed with attaching a guest. if |plugin_rfh| is
+  // nullptr, the MimeHandlerViewGuest associated with |element_instance_id|
+  // will be destroyed and deleted.
+  void ResumeAttachOrDestroy(int32_t element_instance_id,
+                             content::RenderFrameHost* plugin_rfh);
+
+  std::map<int32_t, std::unique_ptr<FrameNavigationHelper>>
+      frame_navigation_helpers_;
 
   static const uint32_t kFilteredMessageClasses[];
 

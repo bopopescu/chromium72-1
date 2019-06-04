@@ -10,9 +10,12 @@
 
 #include "base/files/file.h"
 #include "base/macros.h"
+#include "base/optional.h"
 #include "base/threading/thread_checker.h"
+#include "build/build_config.h"
 #include "content/common/content_export.h"
 #include "content/public/common/media_stream_request.h"
+#include "media/audio/audio_processing.h"
 #include "media/base/audio_point.h"
 #include "third_party/blink/public/platform/web_media_constraints.h"
 #include "third_party/webrtc/api/mediastreaminterface.h"
@@ -22,7 +25,6 @@
 
 namespace webrtc {
 
-class EchoCancellation;
 class TypingDetection;
 
 }
@@ -31,23 +33,49 @@ namespace content {
 
 using webrtc::AudioProcessing;
 
+static constexpr int kAudioProcessingSampleRate =
+#if defined(OS_ANDROID)
+    AudioProcessing::kSampleRate16kHz;
+#else
+    AudioProcessing::kSampleRate48kHz;
+#endif
+
 // Simple struct with audio-processing properties.
 struct CONTENT_EXPORT AudioProcessingProperties {
+  enum class EchoCancellationType {
+    // Echo cancellation disabled.
+    kEchoCancellationDisabled,
+    // The WebRTC-provided AEC2 echo canceller.
+    kEchoCancellationAec2,
+    // The WebRTC-provided AEC3 echo canceller.
+    kEchoCancellationAec3,
+    // System echo canceller, for example an OS-provided or hardware echo
+    // canceller.
+    kEchoCancellationSystem
+  };
+
   // Creates an AudioProcessingProperties object with fields initialized to
   // their default values.
   AudioProcessingProperties();
   AudioProcessingProperties(const AudioProcessingProperties& other);
   AudioProcessingProperties& operator=(const AudioProcessingProperties& other);
-  AudioProcessingProperties(AudioProcessingProperties&& other);
-  AudioProcessingProperties& operator=(AudioProcessingProperties&& other);
-  ~AudioProcessingProperties();
 
   // Disables properties that are enabled by default.
   void DisableDefaultProperties();
 
-  bool enable_sw_echo_cancellation = true;
-  bool disable_hw_echo_cancellation = true;
-  bool enable_experimental_hw_echo_cancellation = false;
+  // Returns whether echo cancellation is enabled.
+  bool EchoCancellationEnabled() const;
+
+  // Returns whether WebRTC-provided echo cancellation is enabled.
+  bool EchoCancellationIsWebRtcProvided() const;
+
+  // Converts this struct to an equivalent media::AudioProcessingSettings.
+  // TODO(https://crbug.com/878757): Eliminate this class in favor of the media
+  // one.
+  media::AudioProcessingSettings ToAudioProcessingSettings() const;
+
+  EchoCancellationType echo_cancellation_type =
+      EchoCancellationType::kEchoCancellationAec2;
   bool disable_hw_noise_suppression = false;
   bool goog_audio_mirroring = false;
   bool goog_auto_gain_control = true;
@@ -60,50 +88,8 @@ struct CONTENT_EXPORT AudioProcessingProperties {
   bool goog_typing_noise_detection = true;
   bool goog_noise_suppression = true;
   bool goog_experimental_noise_suppression = true;
-  bool goog_beamforming = true;
   bool goog_highpass_filter = true;
   bool goog_experimental_auto_gain_control = true;
-  std::vector<media::Point> goog_array_geometry;
-};
-
-// A helper class to log echo information in general and Echo Cancellation
-// quality in particular.
-class CONTENT_EXPORT EchoInformation {
- public:
-  EchoInformation();
-  virtual ~EchoInformation();
-
-  // Updates stats, and reports delay metrics as UMA stats every 5 seconds.
-  // Must be called every time AudioProcessing::ProcessStream() is called.
-  void UpdateAecStats(webrtc::EchoCancellation* echo_cancellation);
-
-  // Reports AEC divergent filter metrics as UMA and resets the associated data.
-  void ReportAndResetAecDivergentFilterStats();
-
- private:
-  void UpdateAecDelayStats(webrtc::EchoCancellation* echo_cancellation);
-  void UpdateAecDivergentFilterStats(
-      webrtc::EchoCancellation* echo_cancellation);
-
-  // Counter to track 5 seconds of data in order to query a new metric from
-  // webrtc::EchoCancellation::GetEchoDelayMetrics().
-  int delay_stats_time_ms_;
-  bool echo_frames_received_;
-
-  // Counter to track 1 second of data in order to query a new divergent filter
-  // fraction metric from webrtc::EchoCancellation::GetMetrics().
-  int divergent_filter_stats_time_ms_;
-
-  // Total number of times we queried for the divergent filter fraction metric.
-  int num_divergent_filter_fraction_;
-
-  // Number of non-zero divergent filter fraction metrics.
-  int num_non_zero_divergent_filter_fraction_;
-
-  // Ensures that this class is accessed on the same thread.
-  base::ThreadChecker thread_checker_;
-
-  DISALLOW_COPY_AND_ASSIGN(EchoInformation);
 };
 
 // Enables the echo cancellation in |audio_processing|.
@@ -130,11 +116,20 @@ void StartEchoCancellationDump(AudioProcessing* audio_processing,
 // |audio_processing|.
 void StopEchoCancellationDump(AudioProcessing* audio_processing);
 
-void EnableAutomaticGainControl(AudioProcessing* audio_processing);
+// Loads fixed gains for pre-amplifier and gain control from config JSON string.
+CONTENT_EXPORT void GetExtraGainConfig(
+    const base::Optional<std::string>& audio_processing_platform_config_json,
+    base::Optional<double>* pre_amplifier_fixed_gain_factor,
+    base::Optional<double>* gain_control_compression_gain_db);
 
-void GetAudioProcessingStats(
-    AudioProcessing* audio_processing,
-    webrtc::AudioProcessorInterface::AudioProcessorStats* stats);
+// Enables automatic gain control. If optional |fixed_gain| is set, will set the
+// gain control mode to use the fixed gain.
+void EnableAutomaticGainControl(AudioProcessing* audio_processing,
+                                base::Optional<double> compression_gain_db);
+
+// Enables pre-amplifier with given gain factor if the optional |factor| is set.
+void ConfigPreAmplifier(webrtc::AudioProcessing::Config* apm_config,
+                        base::Optional<double> fixed_gain_factor);
 
 }  // namespace content
 

@@ -26,8 +26,7 @@ scoped_refptr<blink::StaticBitmapImage> ToStaticBitmapImage(
 
   SkImageInfo info = sk_bitmap.info();
   if (!sk_bitmap.readPixels(info, array_buffer_contents.Data(),
-                            info.minRowBytes(), 0, 0,
-                            SkTransferFunctionBehavior::kIgnore))
+                            info.minRowBytes(), 0, 0))
     return nullptr;
 
   return blink::StaticBitmapImage::Create(array_buffer_contents, info);
@@ -66,19 +65,24 @@ bool StructTraits<blink::mojom::blink::TransferableMessage::DataView,
     Read(blink::mojom::blink::TransferableMessage::DataView data,
          blink::BlinkTransferableMessage* out) {
   Vector<mojo::ScopedMessagePipeHandle> ports;
+  Vector<mojo::ScopedMessagePipeHandle> stream_channels;
   blink::SerializedScriptValue::ArrayBufferContentsArray
       array_buffer_contents_array;
   Vector<SkBitmap> sk_bitmaps;
   if (!data.ReadMessage(static_cast<blink::BlinkCloneableMessage*>(out)) ||
       !data.ReadArrayBufferContentsArray(&array_buffer_contents_array) ||
       !data.ReadImageBitmapContentsArray(&sk_bitmaps) ||
-      !data.ReadPorts(&ports)) {
+      !data.ReadPorts(&ports) || !data.ReadStreamChannels(&stream_channels) ||
+      !data.ReadUserActivation(&out->user_activation)) {
     return false;
   }
 
   out->ports.ReserveInitialCapacity(ports.size());
   out->ports.AppendRange(std::make_move_iterator(ports.begin()),
                          std::make_move_iterator(ports.end()));
+  out->message->GetStreamChannels().AppendRange(
+      std::make_move_iterator(stream_channels.begin()),
+      std::make_move_iterator(stream_channels.end()));
   out->has_user_gesture = data.has_user_gesture();
 
   out->message->SetArrayBufferContentsArray(
@@ -99,7 +103,6 @@ bool StructTraits<blink::mojom::blink::TransferableMessage::DataView,
     image_bitmap_contents_array.push_back(bitmap_contents);
   }
   out->message->SetImageBitmapContentsArray(image_bitmap_contents_array);
-
   return true;
 }
 

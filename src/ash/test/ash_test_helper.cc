@@ -9,42 +9,54 @@
 #include <set>
 #include <utility>
 
+#include "ash/app_list/test/app_list_test_helper.h"
 #include "ash/display/display_configuration_controller_test_api.h"
 #include "ash/display/screen_ash.h"
+#include "ash/keyboard/ash_keyboard_controller.h"
+#include "ash/mojo_test_interface_factory.h"
 #include "ash/public/cpp/ash_switches.h"
-#include "ash/public/cpp/config.h"
+#include "ash/public/cpp/test/test_keyboard_controller_observer.h"
+#include "ash/session/test_session_controller_client.h"
 #include "ash/shell.h"
 #include "ash/shell_init_params.h"
-#include "ash/shell_port.h"
-#include "ash/shell_port_classic.h"
-#include "ash/shell_port_mash.h"
-#include "ash/shell_port_mus.h"
 #include "ash/system/screen_layout_observer.h"
 #include "ash/test/ash_test_environment.h"
 #include "ash/test/ash_test_views_delegate.h"
 #include "ash/test_shell_delegate.h"
-#include "ash/window_manager.h"
-#include "ash/window_manager_service.h"
+#include "ash/ws/window_service_owner.h"
+#include "base/guid.h"
 #include "base/run_loop.h"
 #include "base/strings/string_split.h"
+#include "base/token.h"
 #include "chromeos/audio/cras_audio_handler.h"
 #include "chromeos/cryptohome/system_salt_getter.h"
 #include "chromeos/dbus/dbus_thread_manager.h"
 #include "chromeos/dbus/power_policy_controller.h"
 #include "chromeos/network/network_handler.h"
+#include "chromeos/system/fake_statistics_provider.h"
+#include "components/discardable_memory/public/interfaces/discardable_shared_memory_manager.mojom.h"
 #include "components/prefs/testing_pref_service.h"
 #include "device/bluetooth/bluetooth_adapter_factory.h"
 #include "device/bluetooth/dbus/bluez_dbus_manager.h"
+#include "mojo/public/cpp/bindings/binding_set.h"
+#include "mojo/public/cpp/bindings/interface_request.h"
+#include "services/service_manager/public/cpp/bind_source_info.h"
+#include "services/service_manager/public/cpp/connector.h"
+#include "services/service_manager/public/cpp/identity.h"
+#include "services/service_manager/public/cpp/service.h"
+#include "services/ws/public/cpp/host/gpu_interface_provider.h"
+#include "services/ws/public/mojom/constants.mojom.h"
+#include "services/ws/public/mojom/gpu.mojom.h"
+#include "services/ws/window_service.h"
 #include "ui/aura/env.h"
 #include "ui/aura/input_state_lookup.h"
-#include "ui/aura/mus/window_tree_client.h"
 #include "ui/aura/test/env_test_helper.h"
 #include "ui/aura/test/event_generator_delegate_aura.h"
-#include "ui/aura/test/mus/window_tree_client_private.h"
+#include "ui/aura/test/test_windows.h"
+#include "ui/aura/window.h"
 #include "ui/base/ime/input_method_initializer.h"
 #include "ui/base/material_design/material_design_controller.h"
 #include "ui/base/platform_window_defaults.h"
-#include "ui/base/test/material_design_controller_test_api.h"
 #include "ui/base/ui_base_features.h"
 #include "ui/base/ui_base_switches_util.h"
 #include "ui/compositor/scoped_animation_duration_scale_mode.h"
@@ -60,14 +72,45 @@
 
 namespace ash {
 
-// static
-Config AshTestHelper::config_ = Config::CLASSIC;
+// An implementation of GpuInterfaceProvider that queues up requests for
+// interfaces. The requests are never actually bound, but are kept alive to
+// ensure the requestor doesn't detect a close and try to exit.
+class TestGpuInterfaceProvider : public ws::GpuInterfaceProvider {
+ public:
+  TestGpuInterfaceProvider() = default;
+  ~TestGpuInterfaceProvider() override = default;
+
+  // ws::GpuInterfaceProvider:
+  void RegisterGpuInterfaces(
+      service_manager::BinderRegistry* registry) override {
+    registry->AddInterface(base::BindRepeating(
+        &TestGpuInterfaceProvider::BindDiscardableSharedMemoryManager,
+        base::Unretained(this)));
+    registry->AddInterface(base::BindRepeating(
+        &TestGpuInterfaceProvider::BindGpuRequest, base::Unretained(this)));
+  }
+  void RegisterOzoneGpuInterfaces(
+      service_manager::BinderRegistry* registry) override {}
+
+ private:
+  void BindDiscardableSharedMemoryManager(
+      discardable_memory::mojom::DiscardableSharedMemoryManagerRequest
+          request) {
+    request_handles_.push_back(request.PassMessagePipe());
+  }
+  void BindGpuRequest(ws::mojom::GpuRequest request) {
+    request_handles_.push_back(request.PassMessagePipe());
+  }
+
+  std::vector<mojo::ScopedMessagePipeHandle> request_handles_;
+
+  DISALLOW_COPY_AND_ASSIGN(TestGpuInterfaceProvider);
+};
 
 AshTestHelper::AshTestHelper(AshTestEnvironment* ash_test_environment)
     : ash_test_environment_(ash_test_environment),
       command_line_(std::make_unique<base::test::ScopedCommandLine>()) {
   ui::test::EnableTestConfigForPlatformWindows();
-  aura::test::InitializeAuraEventGeneratorDelegate();
 }
 
 AshTestHelper::~AshTestHelper() {
@@ -77,6 +120,13 @@ AshTestHelper::~AshTestHelper() {
 }
 
 void AshTestHelper::SetUp(bool start_session, bool provide_local_state) {
+#if !defined(NDEBUG)
+  aura::Window::SetEnvArgRequired(
+      "Within ash you must supply a non-null aura::Env when creating a Window, "
+      "use window_factory, or supply the Env obtained from "
+      "Shell::Get()->aura_env()");
+#endif
+
   // TODO(jamescook): Can we do this without changing command line?
   // Use the origin (1,1) so that it doesn't over
   // lap with the native mouse cursor.
@@ -98,12 +148,14 @@ void AshTestHelper::SetUp(bool start_session, bool provide_local_state) {
         switches::kAshDisableSmoothScreenRotation);
   }
 
+  statistics_provider_ =
+      std::make_unique<chromeos::system::ScopedFakeStatisticsProvider>();
+
+  ui::test::EventGeneratorDelegate::SetFactoryFunction(base::BindRepeating(
+      &aura::test::EventGeneratorDelegateAura::Create, nullptr));
+
   display::ResetDisplayIdForTest();
-  if (config_ != Config::CLASSIC)
-    aura::test::EnvTestHelper().SetAlwaysUseLastMouseLocation(true);
-  // WindowManager creates WMState for mash.
-  if (config_ == Config::CLASSIC)
-    wm_state_ = std::make_unique<::wm::WMState>();
+  wm_state_ = std::make_unique<::wm::WMState>();
   test_views_delegate_ = ash_test_environment_->CreateViewsDelegate();
 
   // Disable animations during tests.
@@ -115,51 +167,44 @@ void AshTestHelper::SetUp(bool start_session, bool provide_local_state) {
   if (!test_shell_delegate_)
     test_shell_delegate_ = new TestShellDelegate;
 
-  if (config_ == Config::CLASSIC) {
-    // All of this initialization is done in WindowManagerService for mash.
-
-    if (!chromeos::DBusThreadManager::IsInitialized()) {
-      chromeos::DBusThreadManager::Initialize(
-          chromeos::DBusThreadManager::kShared);
-      dbus_thread_manager_initialized_ = true;
-    }
-
-    if (!bluez::BluezDBusManager::IsInitialized()) {
-      bluez::BluezDBusManager::Initialize(
-          chromeos::DBusThreadManager::Get()->GetSystemBus(),
-          chromeos::DBusThreadManager::Get()->IsUsingFakes());
-      bluez_dbus_manager_initialized_ = true;
-    }
-
-    if (!chromeos::PowerPolicyController::IsInitialized()) {
-      chromeos::PowerPolicyController::Initialize(
-          chromeos::DBusThreadManager::Get()->GetPowerManagerClient());
-      power_policy_controller_initialized_ = true;
-    }
-
-    // Create CrasAudioHandler for testing since g_browser_process is not
-    // created in AshTestBase tests.
-    chromeos::CrasAudioHandler::InitializeForTesting();
-    chromeos::SystemSaltGetter::Initialize();
+  if (!chromeos::DBusThreadManager::IsInitialized()) {
+    chromeos::DBusThreadManager::Initialize(
+        chromeos::DBusThreadManager::kShared);
+    dbus_thread_manager_initialized_ = true;
   }
+
+  if (!bluez::BluezDBusManager::IsInitialized()) {
+    bluez::BluezDBusManager::Initialize();
+    bluez_dbus_manager_initialized_ = true;
+  }
+
+  if (!chromeos::PowerPolicyController::IsInitialized()) {
+    chromeos::PowerPolicyController::Initialize(
+        chromeos::DBusThreadManager::Get()->GetPowerManagerClient());
+    power_policy_controller_initialized_ = true;
+  }
+
+  // Create CrasAudioHandler for testing since g_browser_process is not
+  // created in AshTestBase tests.
+  chromeos::CrasAudioHandler::InitializeForTesting();
+  chromeos::SystemSaltGetter::Initialize();
 
   ash_test_environment_->SetUp();
   // Reset the global state for the cursor manager. This includes the
   // last cursor visibility state, etc.
   ::wm::CursorManager::ResetCursorVisibilityStateForTest();
 
-  // ContentTestSuiteBase might have already initialized
-  // MaterialDesignController in unit_tests suite.
-  ui::test::MaterialDesignControllerTestAPI::Uninitialize();
   ui::MaterialDesignController::Initialize();
 
-  if (config_ != Config::CLASSIC)
-    CreateMashWindowManager();
-  else
-    CreateShell();
+  CreateShell();
 
-  aura::test::EnvTestHelper().SetInputStateLookup(
-      std::unique_ptr<aura::InputStateLookup>());
+  // Reset aura::Env to eliminate test dependency (https://crbug.com/586514).
+  aura::test::EnvTestHelper env_helper(Shell::Get()->aura_env());
+  env_helper.ResetEnvForTesting();
+
+  aura::test::SetEnvForTestWindows(Shell::Get()->aura_env());
+
+  env_helper.SetInputStateLookup(std::unique_ptr<aura::InputStateLookup>());
 
   Shell* shell = Shell::Get();
 
@@ -178,9 +223,8 @@ void AshTestHelper::SetUp(bool start_session, bool provide_local_state) {
       new TestSessionControllerClient(shell->session_controller()));
   session_controller_client_->InitializeAndBind();
 
-  if (start_session) {
+  if (start_session)
     session_controller_client_->CreatePredefinedUserSessions(1);
-  }
 
   // Tests that change the display configuration generally don't care about
   // the notifications and the popup UI can interfere with things like
@@ -191,29 +235,37 @@ void AshTestHelper::SetUp(bool start_session, bool provide_local_state) {
       .DisableChangeDisplayUponHostResize();
   DisplayConfigurationControllerTestApi(
       shell->display_configuration_controller())
-      .DisableDisplayAnimator();
+      .SetDisplayAnimator(false);
 
   app_list_test_helper_ = std::make_unique<AppListTestHelper>();
+
+  CreateWindowService();
+
+  // Create the test keyboard controller observer to respond to
+  // OnKeyboardLoadContents() and enable the virtual keyboard. Note: enabling
+  // the keyboard just makes it available, it does not show it or otherwise
+  // affect behavior.
+  test_keyboard_controller_observer_ =
+      std::make_unique<TestKeyboardControllerObserver>(
+          shell->ash_keyboard_controller());
+  shell->ash_keyboard_controller()->EnableKeyboard();
 }
 
 void AshTestHelper::TearDown() {
+  test_keyboard_controller_observer_.reset();
   app_list_test_helper_.reset();
 
-  window_manager_service_.reset();
+  aura::test::SetEnvForTestWindows(nullptr);
 
-  // WindowManger owns the Shell in mash.
-  if (config_ == Config::CLASSIC)
-    Shell::DeleteInstance();
+  Shell::DeleteInstance();
 
   // Suspend the tear down until all resources are returned via
   // CompositorFrameSinkClient::ReclaimResources()
-  RunAllPendingInMessageLoop();
+  base::RunLoop().RunUntilIdle();
   ash_test_environment_->TearDown();
 
-  if (config_ == Config::CLASSIC) {
-    chromeos::SystemSaltGetter::Shutdown();
-    chromeos::CrasAudioHandler::Shutdown();
-  }
+  chromeos::SystemSaltGetter::Shutdown();
+  chromeos::CrasAudioHandler::Shutdown();
 
   if (power_policy_controller_initialized_) {
     chromeos::PowerPolicyController::Shutdown();
@@ -231,8 +283,16 @@ void AshTestHelper::TearDown() {
     dbus_thread_manager_initialized_ = false;
   }
 
-  if (config_ == Config::CLASSIC)
-    ui::TerminateContextFactoryForTests();
+  ui::TerminateContextFactoryForTests();
+
+  // ui::TerminateContextFactoryForTests() destroyed the context factory (and
+  // context factory private) referenced by Env. Reset Env's members in case
+  // some other test tries to use it. This matters if someone else created Env
+  // (such as the test suite) and is long lived.
+  if (aura::Env::HasInstance()) {
+    aura::Env::GetInstance()->set_context_factory(nullptr);
+    aura::Env::GetInstance()->set_context_factory_private(nullptr);
+  }
 
   ui::ShutdownInputMethodForTesting();
   zero_duration_mode_.reset();
@@ -245,24 +305,22 @@ void AshTestHelper::TearDown() {
   display::Display::ResetForceDeviceScaleFactorForTesting();
   env_window_tree_client_setter_.reset();
 
-  // WindowManager owns the CaptureController for mus/mash.
-  CHECK(config_ != Config::CLASSIC || !::wm::CaptureController::Get());
+  CHECK(!::wm::CaptureController::Get());
+#if !defined(NDEBUG)
+  aura::Window::SetEnvArgRequired(nullptr);
+#endif
+
+  ui::test::EventGeneratorDelegate::SetFactoryFunction(
+      ui::test::EventGeneratorDelegate::FactoryFunction());
+
+  statistics_provider_.reset();
 }
 
-void AshTestHelper::RunAllPendingInMessageLoop() {
-  base::RunLoop run_loop;
-  run_loop.RunUntilIdle();
-}
-
-void AshTestHelper::NotifyClientAboutAcceleratedWidgets() {
-  if (config_ == Config::CLASSIC)
-    return;
-  if (base::FeatureList::IsEnabled(features::kMash))
-    return;
-  // TODO(crbug.com/841941): Remove this. Config::MUS is deprecated.
-  Shell* shell = Shell::Get();
-  window_tree_client_setup_.NotifyClientAboutAcceleratedWidgets(
-      shell->display_manager());
+void AshTestHelper::SetRunningOutsideAsh() {
+  test_views_delegate_->set_running_outside_ash();
+#if DCHECK_IS_ON()
+  aura::Window::SetEnvArgRequired(nullptr);
+#endif
 }
 
 PrefService* AshTestHelper::GetLocalStatePrefService() {
@@ -281,50 +339,35 @@ display::Display AshTestHelper::GetSecondaryDisplay() {
   return Shell::Get()->display_manager()->GetSecondaryDisplay();
 }
 
-void AshTestHelper::CreateMashWindowManager() {
-  CHECK_EQ(config_, Config::MASH);
-  const bool show_primary_root_on_connect = false;
-  window_manager_service_ =
-      std::make_unique<WindowManagerService>(show_primary_root_on_connect);
+service_manager::Connector* AshTestHelper::GetWindowServiceConnector() {
+  return window_service_connector_.get();
+}
 
-  window_manager_service_->window_manager_.reset(
-      new WindowManager(nullptr, show_primary_root_on_connect));
-  window_manager_service_->window_manager()->shell_delegate_.reset(
-      test_shell_delegate_);
+void AshTestHelper::CreateWindowService() {
+  Shell::Get()->window_service_owner()->BindWindowService(
+      test_connector_factory_.RegisterInstance(ws::mojom::kServiceName));
 
-  window_tree_client_setup_.InitForWindowManager(
-      window_manager_service_->window_manager_.get(),
-      window_manager_service_->window_manager_.get());
-  env_window_tree_client_setter_ =
-      std::make_unique<aura::test::EnvWindowTreeClientSetter>(
-          window_tree_client_setup_.window_tree_client());
-  // Classic ash does not start the NetworkHandler in tests, so don't start it
-  // for mash either. The NetworkHandler may cause subtle side effects (such as
-  // additional tray items) that can make for flaky tests.
-  const bool init_network_handler = false;
-  window_manager_service_->InitWindowManager(
-      window_tree_client_setup_.OwnWindowTreeClient(), init_network_handler);
-
-  aura::WindowTreeClient* window_tree_client =
-      window_manager_service_->window_manager()->window_tree_client();
-  window_tree_client_private_ =
-      std::make_unique<aura::WindowTreeClientPrivate>(window_tree_client);
-  window_tree_client_private_->CallOnConnect();
-  NotifyClientAboutAcceleratedWidgets();
+  // WindowService::OnStart() is not immediately called (it happens async over
+  // mojo). If this becomes a problem we could run the MessageLoop here.
+  // Surprisingly running the MessageLooop results in some test failures. These
+  // failures seem to be because spinning the messageloop causes some timers to
+  // fire (perhaps animations too) the results in a slightly different Shell
+  // state.
+  window_service_connector_ = test_connector_factory_.CreateConnector();
 }
 
 void AshTestHelper::CreateShell() {
-  CHECK(config_ == Config::CLASSIC);
   ui::ContextFactory* context_factory = nullptr;
   ui::ContextFactoryPrivate* context_factory_private = nullptr;
   bool enable_pixel_output = false;
   ui::InitializeContextFactoryForTests(enable_pixel_output, &context_factory,
                                        &context_factory_private);
   ShellInitParams init_params;
-  init_params.shell_port = std::make_unique<ash::ShellPortClassic>();
   init_params.delegate.reset(test_shell_delegate_);
   init_params.context_factory = context_factory;
   init_params.context_factory_private = context_factory_private;
+  init_params.gpu_interface_provider =
+      std::make_unique<TestGpuInterfaceProvider>();
   Shell::CreateInstance(std::move(init_params));
 }
 

@@ -15,7 +15,6 @@ import android.text.TextUtils;
 import org.chromium.base.Log;
 import org.chromium.base.SysUtils;
 import org.chromium.base.VisibleForTesting;
-import org.chromium.blink.mojom.MediaSessionAction;
 import org.chromium.chrome.R;
 import org.chromium.chrome.browser.favicon.LargeIconBridge;
 import org.chromium.chrome.browser.metrics.MediaNotificationUma;
@@ -23,11 +22,13 @@ import org.chromium.chrome.browser.metrics.MediaSessionUMA;
 import org.chromium.chrome.browser.tab.EmptyTabObserver;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.tab.TabObserver;
+import org.chromium.chrome.browser.tabmodel.TabModel.TabSelectionType;
 import org.chromium.components.url_formatter.UrlFormatter;
 import org.chromium.content_public.browser.MediaSession;
 import org.chromium.content_public.browser.MediaSessionObserver;
 import org.chromium.content_public.browser.WebContents;
 import org.chromium.content_public.common.MediaMetadata;
+import org.chromium.media_session.mojom.MediaSessionAction;
 import org.chromium.ui.base.WindowAndroid;
 
 import java.net.URI;
@@ -211,7 +212,7 @@ public class MediaSessionTabHelper implements MediaImageCallback {
                 Intent contentIntent = Tab.createBringTabToFrontIntent(mTab.getId());
                 if (contentIntent != null) {
                     contentIntent.putExtra(MediaNotificationUma.INTENT_EXTRA_NAME,
-                            MediaNotificationUma.SOURCE_MEDIA);
+                            MediaNotificationUma.Source.MEDIA);
                 }
 
                 if (mFallbackTitle == null) mFallbackTitle = sanitizeMediaTitle(mTab.getTitle());
@@ -239,7 +240,8 @@ public class MediaSessionTabHelper implements MediaImageCallback {
                 // since we do not need to show default icon then change it to favicon. It is ok to
                 // wait here since the favicon is loaded from local cache in favicon service sql
                 // database.
-                if (mCurrentMediaImage == null && !fetchFaviconImage()) {
+                // Incognito Tabs need the default icon as they don't show the media icon.
+                if (mTab.isIncognito() || (mCurrentMediaImage == null && !fetchFaviconImage())) {
                     mNotificationInfoBuilder.setDefaultNotificationLargeIcon(
                             R.drawable.audio_playing_square);
                 }
@@ -313,7 +315,8 @@ public class MediaSessionTabHelper implements MediaImageCallback {
 
             String origin = mTab.getUrl();
             try {
-                origin = UrlFormatter.formatUrlForSecurityDisplay(new URI(origin), true);
+                URI uri = new URI(origin);
+                origin = UrlFormatter.formatUrlForSecurityDisplay(origin);
             } catch (URISyntaxException | UnsatisfiedLinkError e) {
                 // UnstatisfiedLinkError can only happen in tests as the natives are not initialized
                 // yet.
@@ -354,7 +357,7 @@ public class MediaSessionTabHelper implements MediaImageCallback {
         }
 
         @Override
-        public void onShown(Tab tab) {
+        public void onShown(Tab tab, @TabSelectionType int type) {
             assert tab == mTab;
             MediaNotificationManager.activateAndroidMediaSession(
                     tab.getId(), R.id.media_playback_notification);
@@ -419,17 +422,18 @@ public class MediaSessionTabHelper implements MediaImageCallback {
      *               {@link MediaNotificationListener} interface.
      * @return the corresponding histogram value.
      */
-    public static int convertMediaActionSourceToUMA(int source) {
+    public static @MediaSessionUMA.MediaSessionActionSource int convertMediaActionSourceToUMA(
+            int source) {
         if (source == MediaNotificationListener.ACTION_SOURCE_MEDIA_NOTIFICATION) {
-            return MediaSessionUMA.MEDIA_SESSION_ACTION_SOURCE_MEDIA_NOTIFICATION;
+            return MediaSessionUMA.MediaSessionActionSource.MEDIA_NOTIFICATION;
         } else if (source == MediaNotificationListener.ACTION_SOURCE_MEDIA_SESSION) {
-            return MediaSessionUMA.MEDIA_SESSION_ACTION_SOURCE_MEDIA_SESSION;
+            return MediaSessionUMA.MediaSessionActionSource.MEDIA_SESSION;
         } else if (source == MediaNotificationListener.ACTION_SOURCE_HEADSET_UNPLUG) {
-            return MediaSessionUMA.MEDIA_SESSION_ACTION_SOURCE_HEADSET_UNPLUG;
+            return MediaSessionUMA.MediaSessionActionSource.HEADSET_UNPLUG;
         }
 
         assert false;
-        return MediaSessionUMA.MEDIA_SESSION_ACTION_SOURCE_MAX;
+        return MediaSessionUMA.MediaSessionActionSource.NUM_ENTRIES;
     }
 
     private Activity getActivityFromTab(Tab tab) {

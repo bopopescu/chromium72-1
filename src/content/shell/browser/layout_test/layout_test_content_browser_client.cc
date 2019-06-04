@@ -4,33 +4,43 @@
 
 #include "content/shell/browser/layout_test/layout_test_content_browser_client.h"
 
+#include <algorithm>
+#include <iterator>
+#include <string>
+#include <utility>
+#include <vector>
+
 #include "base/single_thread_task_runner.h"
+#include "base/stl_util.h"
 #include "base/strings/pattern.h"
+#include "base/task/post_task.h"
 #include "content/public/browser/browser_context.h"
+#include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/login_delegate.h"
-#include "content/public/browser/render_frame_host.h"
+#include "content/public/browser/overlay_window.h"
 #include "content/public/browser/render_process_host.h"
 #include "content/public/browser/resource_dispatcher_host.h"
+#include "content/public/browser/site_isolation_policy.h"
 #include "content/public/browser/storage_partition.h"
-#include "content/public/browser/web_package_context.h"
+#include "content/public/common/content_switches.h"
 #include "content/shell/browser/layout_test/blink_test_controller.h"
 #include "content/shell/browser/layout_test/fake_bluetooth_chooser.h"
 #include "content/shell/browser/layout_test/layout_test_bluetooth_fake_adapter_setter_impl.h"
 #include "content/shell/browser/layout_test/layout_test_browser_context.h"
 #include "content/shell/browser/layout_test/layout_test_browser_main_parts.h"
 #include "content/shell/browser/layout_test/layout_test_message_filter.h"
-#include "content/shell/browser/layout_test/layout_test_notification_manager.h"
 #include "content/shell/browser/layout_test/mojo_layout_test_helper.h"
 #include "content/shell/browser/shell_browser_context.h"
 #include "content/shell/common/layout_test/layout_test_switches.h"
 #include "content/shell/common/shell_messages.h"
-#include "content/shell/renderer/layout_test/blink_test_helpers.h"
+#include "content/shell/renderer/web_test/blink_test_helpers.h"
 #include "content/test/mock_clipboard_host.h"
+#include "content/test/mock_platform_notification_service.h"
 #include "device/bluetooth/test/fake_bluetooth.h"
-#include "mojo/public/cpp/bindings/strong_binding.h"
+#include "gpu/config/gpu_switches.h"
 #include "services/service_manager/public/cpp/binder_registry.h"
-#include "third_party/blink/public/mojom/web_package/web_package_internals.mojom.h"
+#include "url/origin.h"
 
 namespace content {
 namespace {
@@ -42,40 +52,44 @@ void BindLayoutTestHelper(mojom::MojoLayoutTestHelperRequest request,
   MojoLayoutTestHelper::Create(std::move(request));
 }
 
-class WebPackageInternalsImpl : public blink::test::mojom::WebPackageInternals {
+class TestOverlayWindow : public OverlayWindow {
  public:
-  explicit WebPackageInternalsImpl(WebPackageContext* web_package_context)
-      : web_package_context_(web_package_context) {}
-  ~WebPackageInternalsImpl() override = default;
+  TestOverlayWindow() = default;
+  ~TestOverlayWindow() override{};
 
-  static void Create(WebPackageContext* web_package_context,
-                     blink::test::mojom::WebPackageInternalsRequest request) {
-    DCHECK_CURRENTLY_ON(BrowserThread::IO);
-    mojo::MakeStrongBinding(
-        std::make_unique<WebPackageInternalsImpl>(web_package_context),
-        std::move(request));
+  static std::unique_ptr<OverlayWindow> Create(
+      PictureInPictureWindowController* controller) {
+    return std::unique_ptr<OverlayWindow>(new TestOverlayWindow());
   }
+
+  bool IsActive() const override { return false; }
+  void Close() override {}
+  void Show() override {}
+  void Hide() override {}
+  void SetPictureInPictureCustomControls(
+      const std::vector<blink::PictureInPictureControlInfo>& controls)
+      override {}
+  bool IsVisible() const override { return false; }
+  bool IsAlwaysOnTop() const override { return false; }
+  ui::Layer* GetLayer() override { return nullptr; }
+  gfx::Rect GetBounds() const override { return gfx::Rect(); }
+  void UpdateVideoSize(const gfx::Size& natural_size) override {}
+  void SetPlaybackState(PlaybackState playback_state) override {}
+  void SetAlwaysHidePlayPauseButton(bool is_visible) override {}
+  ui::Layer* GetWindowBackgroundLayer() override { return nullptr; }
+  ui::Layer* GetVideoLayer() override { return nullptr; }
+  gfx::Rect GetVideoBounds() override { return gfx::Rect(); }
 
  private:
-  void SetSignedExchangeVerificationTime(
-      base::Time time,
-      SetSignedExchangeVerificationTimeCallback callback) override {
-    DCHECK_CURRENTLY_ON(BrowserThread::IO);
-    web_package_context_->SetSignedExchangeVerificationTimeForTesting(time);
-    std::move(callback).Run();
-  }
-
-  WebPackageContext* web_package_context_;
-
-  DISALLOW_COPY_AND_ASSIGN(WebPackageInternalsImpl);
+  DISALLOW_COPY_AND_ASSIGN(TestOverlayWindow);
 };
 
 }  // namespace
 
-LayoutTestContentBrowserClient::LayoutTestContentBrowserClient() {
+LayoutTestContentBrowserClient::LayoutTestContentBrowserClient()
+    : mock_platform_notification_service_(
+          std::make_unique<MockPlatformNotificationService>()) {
   DCHECK(!g_layout_test_browser_client);
-
-  layout_test_notification_manager_.reset(new LayoutTestNotificationManager());
 
   g_layout_test_browser_client = this;
 }
@@ -108,11 +122,6 @@ LayoutTestContentBrowserClient::GetNextFakeBluetoothChooser() {
   return std::move(next_fake_bluetooth_chooser_);
 }
 
-LayoutTestNotificationManager*
-LayoutTestContentBrowserClient::GetLayoutTestNotificationManager() {
-  return layout_test_notification_manager_.get();
-}
-
 void LayoutTestContentBrowserClient::RenderProcessWillLaunch(
     RenderProcessHost* host,
     service_manager::mojom::ServiceRequest* service_request) {
@@ -131,8 +140,8 @@ void LayoutTestContentBrowserClient::ExposeInterfacesToRenderer(
     blink::AssociatedInterfaceRegistry* associated_registry,
     RenderProcessHost* render_process_host) {
   scoped_refptr<base::SingleThreadTaskRunner> ui_task_runner =
-      content::BrowserThread::GetTaskRunnerForThread(
-          content::BrowserThread::UI);
+      base::CreateSingleThreadTaskRunnerWithTraits(
+          {content::BrowserThread::UI});
   registry->AddInterface(
       base::BindRepeating(&LayoutTestBluetoothFakeAdapterSetterImpl::Create),
       ui_task_runner);
@@ -148,10 +157,6 @@ void LayoutTestContentBrowserClient::ExposeInterfacesToRenderer(
           &LayoutTestContentBrowserClient::CreateFakeBluetoothChooser,
           base::Unretained(this)),
       ui_task_runner);
-  registry->AddInterface(base::BindRepeating(
-      &WebPackageInternalsImpl::Create,
-      base::Unretained(
-          render_process_host->GetStoragePartition()->GetWebPackageContext())));
   registry->AddInterface(base::BindRepeating(&MojoLayoutTestHelper::Create));
   registry->AddInterface(
       base::BindRepeating(&LayoutTestContentBrowserClient::BindClipboardHost,
@@ -161,10 +166,8 @@ void LayoutTestContentBrowserClient::ExposeInterfacesToRenderer(
 
 void LayoutTestContentBrowserClient::BindClipboardHost(
     blink::mojom::ClipboardHostRequest request) {
-  if (!mock_clipboard_host_) {
-    mock_clipboard_host_ =
-        std::make_unique<MockClipboardHost>(browser_context());
-  }
+  if (!mock_clipboard_host_)
+    mock_clipboard_host_ = std::make_unique<MockClipboardHost>();
   mock_clipboard_host_->Bind(std::move(request));
 }
 
@@ -221,19 +224,68 @@ void LayoutTestContentBrowserClient::GetQuotaSettings(
   std::move(callback).Run(storage::GetHardCodedSettings(1024 * 1024 * 1024));
 }
 
-bool LayoutTestContentBrowserClient::DoesSiteRequireDedicatedProcess(
-    BrowserContext* browser_context,
-    const GURL& effective_site_url) {
-  if (ShellContentBrowserClient::DoesSiteRequireDedicatedProcess(
-          browser_context, effective_site_url))
-    return true;
-  url::Origin origin = url::Origin::Create(effective_site_url);
-  return base::MatchPattern(origin.Serialize(), "*oopif.test");
+std::unique_ptr<OverlayWindow>
+LayoutTestContentBrowserClient::CreateWindowForPictureInPicture(
+    PictureInPictureWindowController* controller) {
+  return TestOverlayWindow::Create(controller);
+}
+
+std::vector<url::Origin>
+LayoutTestContentBrowserClient::GetOriginsRequiringDedicatedProcess() {
+  // Unconditionally (with and without --site-per-process) isolate some origins
+  // that may be used by tests that only make sense in presence of an OOPIF.
+  std::vector<std::string> origins_to_isolate = {
+      "http://devtools.oopif.test:8000/", "http://devtools.oopif.test:8003/",
+      "http://devtools-extensions.oopif.test:8000/",
+      "https://devtools.oopif.test:8443/",
+  };
+
+  // On platforms with strict Site Isolation, the also isolate WPT origins for
+  // additional OOPIF coverage.
+  //
+  // Don't isolate WPT origins on
+  // 1) platforms where strict Site Isolation is not the default.
+  // 2) in layout tests under virtual/not-site-per-process where
+  //    --disable-site-isolation-trials switch is used.
+  if (SiteIsolationPolicy::UseDedicatedProcessesForAllSites()) {
+    // The list of hostnames below is based on
+    // https://web-platform-tests.org/writing-tests/server-features.html
+    const char* kWptHostnames[] = {
+        "www.web-platform.test",
+        "www1.web-platform.test",
+        "www2.web-platform.test",
+        "xn--n8j6ds53lwwkrqhv28a.web-platform.test",
+        "xn--lve-6lad.web-platform.test",
+    };
+
+    // The list of schemes and ports below is based on
+    // third_party/blink/tools/blinkpy/third_party/wpt/wpt.config.json
+    const char* kOriginTemplates[] = {
+        "http://%s:8001/", "http://%s:8081/", "https://%s:8444/",
+    };
+
+    origins_to_isolate.reserve(origins_to_isolate.size() +
+                               base::size(kWptHostnames) *
+                                   base::size(kOriginTemplates));
+    for (const char* kWptHostname : kWptHostnames) {
+      for (const char* kOriginTemplate : kOriginTemplates) {
+        std::string origin = base::StringPrintf(kOriginTemplate, kWptHostname);
+        origins_to_isolate.push_back(origin);
+      }
+    }
+  }
+
+  // Translate std::vector<std::string> into std::vector<url::Origin>.
+  std::vector<url::Origin> result;
+  result.reserve(origins_to_isolate.size());
+  for (const std::string& s : origins_to_isolate)
+    result.push_back(url::Origin::Create(GURL(s)));
+  return result;
 }
 
 PlatformNotificationService*
 LayoutTestContentBrowserClient::GetPlatformNotificationService() {
-  return layout_test_notification_manager_.get();
+  return mock_platform_notification_service_.get();
 }
 
 bool LayoutTestContentBrowserClient::CanCreateWindow(
@@ -254,6 +306,11 @@ bool LayoutTestContentBrowserClient::CanCreateWindow(
   return !block_popups_ || user_gesture;
 }
 
+bool LayoutTestContentBrowserClient::CanIgnoreCertificateErrorIfNeeded() {
+  return base::CommandLine::ForCurrentProcess()->HasSwitch(
+      switches::kRunWebTests);
+}
+
 void LayoutTestContentBrowserClient::ExposeInterfacesToFrame(
     service_manager::BinderRegistryWithArgs<content::RenderFrameHost*>*
         registry) {
@@ -264,8 +321,10 @@ scoped_refptr<LoginDelegate>
 LayoutTestContentBrowserClient::CreateLoginDelegate(
     net::AuthChallengeInfo* auth_info,
     content::ResourceRequestInfo::WebContentsGetter web_contents_getter,
+    const content::GlobalRequestID& request_id,
     bool is_main_frame,
     const GURL& url,
+    scoped_refptr<net::HttpResponseHeaders> response_headers,
     bool first_auth_attempt,
     LoginAuthRequiredCallback auth_required_callback) {
   return nullptr;

@@ -24,12 +24,6 @@ struct WebSize;
 class WebURL;
 class WebURLRequest;
 class WebView;
-class WebWidget;
-}
-
-namespace device {
-class MotionData;
-class OrientationData;
 }
 
 namespace gfx {
@@ -45,7 +39,6 @@ class WebWidgetTestProxyBase;
 namespace content {
 
 class RenderFrame;
-class RendererGamepadProvider;
 class RenderView;
 class StoragePartition;
 
@@ -85,40 +78,11 @@ test_runner::WebWidgetTestProxyBase* GetWebWidgetTestProxyBase(
 // Enable injecting of a WebViewTestProxy between WebViews and RenderViews,
 // WebWidgetTestProxy between WebWidgets and RenderWidgets and WebFrameTestProxy
 // between WebFrames and RenderFrames.
-// |view_proxy_creation_callback| is invoked after creating WebViewTestProxy.
-// |widget_proxy_creation_callback| is invoked after creating
-// WebWidgetTestProxy.
-// |frame_proxy_creation_callback| is called after creating WebFrameTestProxy.
-using ViewProxyCreationCallback =
-    base::Callback<void(RenderView*, test_runner::WebViewTestProxyBase*)>;
-using WidgetProxyCreationCallback =
-    base::Callback<void(blink::WebWidget*,
-                        test_runner::WebWidgetTestProxyBase*)>;
-using FrameProxyCreationCallback =
-    base::Callback<void(RenderFrame*, test_runner::WebFrameTestProxyBase*)>;
-void EnableWebTestProxyCreation(
-    const ViewProxyCreationCallback& view_proxy_creation_callback,
-    const WidgetProxyCreationCallback& widget_proxy_creation_callback,
-    const FrameProxyCreationCallback& frame_proxy_creation_callback);
+void EnableWebTestProxyCreation();
 
 typedef base::OnceCallback<void(const GURL&, const blink::Manifest&)>
     FetchManifestCallback;
 void FetchManifest(blink::WebView* view, FetchManifestCallback callback);
-
-// Sets gamepad provider to be used for layout tests.
-void SetMockGamepadProvider(std::unique_ptr<RendererGamepadProvider> provider);
-
-// Sets a double that should be used when registering
-// a listener through BlinkPlatformImpl::setDeviceLightListener().
-void SetMockDeviceLightData(const double data);
-
-// Sets MotionData that should be used when registering
-// a listener through BlinkPlatformImpl::setDeviceMotionListener().
-void SetMockDeviceMotionData(const device::MotionData& data);
-
-// Sets OrientationData that should be used when registering
-// a listener through BlinkPlatformImpl::setDeviceOrientationListener().
-void SetMockDeviceOrientationData(const device::OrientationData& data);
 
 // Returns the length of the local session history of a render view.
 int GetLocalSessionHistoryLength(RenderView* render_view);

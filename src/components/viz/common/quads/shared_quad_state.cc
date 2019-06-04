@@ -5,7 +5,7 @@
 #include "components/viz/common/quads/shared_quad_state.h"
 
 #include "base/trace_event/trace_event.h"
-#include "base/trace_event/trace_event_argument.h"
+#include "base/trace_event/traced_value.h"
 #include "base/values.h"
 #include "cc/base/math_util.h"
 #include "components/viz/common/traced_value.h"
@@ -22,9 +22,8 @@ SharedQuadState::SharedQuadState()
 SharedQuadState::SharedQuadState(const SharedQuadState& other) = default;
 
 SharedQuadState::~SharedQuadState() {
-  TRACE_EVENT_OBJECT_DELETED_WITH_ID(
-      TRACE_DISABLED_BY_DEFAULT("cc.debug.quads"), "viz::SharedQuadState",
-      this);
+  TRACE_EVENT_OBJECT_DELETED_WITH_ID(TRACE_DISABLED_BY_DEFAULT("viz.quads"),
+                                     "viz::SharedQuadState", this);
 }
 
 void SharedQuadState::SetAll(const gfx::Transform& quad_to_target_transform,
@@ -60,8 +59,8 @@ void SharedQuadState::AsValueInto(base::trace_event::TracedValue* value) const {
   value->SetDouble("opacity", opacity);
   value->SetString("blend_mode", SkBlendMode_Name(blend_mode));
   TracedValue::MakeDictIntoImplicitSnapshotWithCategory(
-      TRACE_DISABLED_BY_DEFAULT("cc.debug.quads"), value,
-      "viz::SharedQuadState", this);
+      TRACE_DISABLED_BY_DEFAULT("viz.quads"), value, "viz::SharedQuadState",
+      this);
 }
 
 }  // namespace viz

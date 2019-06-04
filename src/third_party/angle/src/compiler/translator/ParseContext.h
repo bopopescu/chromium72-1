@@ -109,9 +109,12 @@ class TParseContext : angle::NonCopyable
                            int vecSize,
                            TVector<int> *fieldOffsets);
 
-    void assignError(const TSourceLoc &line, const char *op, TString left, TString right);
-    void unaryOpError(const TSourceLoc &line, const char *op, TString operand);
-    void binaryOpError(const TSourceLoc &line, const char *op, TString left, TString right);
+    void assignError(const TSourceLoc &line, const char *op, const TType &left, const TType &right);
+    void unaryOpError(const TSourceLoc &line, const char *op, const TType &operand);
+    void binaryOpError(const TSourceLoc &line,
+                       const char *op,
+                       const TType &left,
+                       const TType &right);
 
     // Check functions - the ones that return bool return false if an error was generated.
 
@@ -370,6 +373,10 @@ class TParseContext : angle::NonCopyable
                           const TSourceLoc &intValueLine,
                           const std::string &intValueString,
                           int *numMaxVertices);
+    void parseIndexLayoutQualifier(int intValue,
+                                   const TSourceLoc &intValueLine,
+                                   const std::string &intValueString,
+                                   int *index);
     TLayoutQualifier parseLayoutQualifier(const ImmutableString &qualifierType,
                                           const TSourceLoc &qualifierTypeLine);
     TLayoutQualifier parseLayoutQualifier(const ImmutableString &qualifierType,
@@ -452,7 +459,7 @@ class TParseContext : angle::NonCopyable
     }
 
     // TODO(jmadill): make this private
-    TSymbolTable &symbolTable;   // symbol table that goes with the language currently being parsed
+    TSymbolTable &symbolTable;  // symbol table that goes with the language currently being parsed
 
   private:
     class AtomicCounterBindingState;
@@ -508,6 +515,7 @@ class TParseContext : angle::NonCopyable
     void checkAtomicCounterOffsetDoesNotOverlap(bool forceAppend,
                                                 const TSourceLoc &loc,
                                                 TType *type);
+    void checkIndexIsNotSpecified(const TSourceLoc &location, int index);
     void checkBindingIsValid(const TSourceLoc &identifierLocation, const TType &type);
     void checkBindingIsNotSpecified(const TSourceLoc &location, int binding);
     void checkOffsetIsNotSpecified(const TSourceLoc &location, int offset);

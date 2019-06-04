@@ -12,6 +12,7 @@
 #include "base/strings/utf_string_conversions.h"
 #include "base/values.h"
 #include "components/autofill/core/common/password_form.h"
+#include "components/autofill/core/common/submission_source.h"
 
 namespace autofill {
 
@@ -28,19 +29,22 @@ void PasswordFormToJSON(const PasswordForm& form,
   target->SetString("origin", form.origin.possibly_invalid_spec());
   target->SetString("action", form.action.possibly_invalid_spec());
   target->SetString("submit_element", form.submit_element);
-  target->SetString("username_elem", form.username_element);
+  target->SetBoolean("has_renderer_ids", form.has_renderer_ids);
+  target->SetString("username_element", form.username_element);
+  target->SetInteger("username_element_renderer_id",
+                     form.username_element_renderer_id);
   target->SetBoolean("username_marked_by_site", form.username_marked_by_site);
   target->SetString("username_value", form.username_value);
-  target->SetString("password_elem", form.password_element);
+  target->SetString("password_element", form.password_element);
   target->SetString("password_value", form.password_value);
-  target->SetBoolean("password_value_is_default",
-                     form.password_value_is_default);
   target->SetString("new_password_element", form.new_password_element);
+  target->SetInteger("password_element_renderer_id",
+                     form.password_element_renderer_id);
   target->SetString("new_password_value", form.new_password_value);
-  target->SetBoolean("new_password_value_is_default",
-                     form.new_password_value_is_default);
   target->SetBoolean("new_password_marked_by_site",
                      form.new_password_marked_by_site);
+  target->SetString("confirmation_password_element",
+                    form.confirmation_password_element);
   target->SetString("other_possible_usernames",
                     ValueElementVectorToString(form.other_possible_usernames));
   target->SetString("all_possible_passwords",
@@ -59,9 +63,6 @@ void PasswordFormToJSON(const PasswordForm& form,
   target->SetString("icon_url", form.icon_url.possibly_invalid_spec());
   target->SetString("federation_origin", form.federation_origin.Serialize());
   target->SetBoolean("skip_next_zero_click", form.skip_zero_click);
-  std::ostringstream layout_string_stream;
-  layout_string_stream << form.layout;
-  target->SetString("layout", layout_string_stream.str());
   target->SetBoolean("was_parsed_using_autofill_predictions",
                      form.was_parsed_using_autofill_predictions);
   target->SetString("affiliated_web_realm", form.affiliated_web_realm);
@@ -81,8 +82,6 @@ PasswordForm::PasswordForm()
     : scheme(SCHEME_HTML),
       username_marked_by_site(false),
       form_has_autofilled_value(false),
-      password_value_is_default(false),
-      new_password_value_is_default(false),
       new_password_marked_by_site(false),
       preferred(false),
       blacklisted_by_user(false),
@@ -90,7 +89,6 @@ PasswordForm::PasswordForm()
       times_used(0),
       generation_upload_status(NO_SIGNAL_SENT),
       skip_zero_click(false),
-      layout(Layout::LAYOUT_OTHER),
       was_parsed_using_autofill_predictions(false),
       is_public_suffix_match(false),
       is_affiliation_based_match(false),
@@ -109,8 +107,7 @@ PasswordForm& PasswordForm::operator=(const PasswordForm& form) = default;
 PasswordForm& PasswordForm::operator=(PasswordForm&& form) = default;
 
 bool PasswordForm::IsPossibleChangePasswordForm() const {
-  return !new_password_element.empty() &&
-         layout != PasswordForm::Layout::LAYOUT_LOGIN_AND_SIGNUP;
+  return !new_password_element.empty();
 }
 
 bool PasswordForm::IsPossibleChangePasswordFormWithoutUsername() const {
@@ -121,13 +118,16 @@ bool PasswordForm::operator==(const PasswordForm& form) const {
   return scheme == form.scheme && signon_realm == form.signon_realm &&
          origin == form.origin && action == form.action &&
          submit_element == form.submit_element &&
+         has_renderer_ids == form.has_renderer_ids &&
          username_element == form.username_element &&
+         username_element_renderer_id == form.username_element_renderer_id &&
          username_marked_by_site == form.username_marked_by_site &&
          username_value == form.username_value &&
          other_possible_usernames == form.other_possible_usernames &&
          all_possible_passwords == form.all_possible_passwords &&
          form_has_autofilled_value == form.form_has_autofilled_value &&
          password_element == form.password_element &&
+         password_element_renderer_id == form.password_element_renderer_id &&
          password_value == form.password_value &&
          new_password_element == form.new_password_element &&
          new_password_marked_by_site == form.new_password_marked_by_site &&
@@ -142,7 +142,7 @@ bool PasswordForm::operator==(const PasswordForm& form) const {
          // We compare the serialization of the origins here, as we want unique
          // origins to compare as '=='.
          federation_origin.Serialize() == form.federation_origin.Serialize() &&
-         skip_zero_click == form.skip_zero_click && layout == form.layout &&
+         skip_zero_click == form.skip_zero_click &&
          was_parsed_using_autofill_predictions ==
              form.was_parsed_using_autofill_predictions &&
          is_public_suffix_match == form.is_public_suffix_match &&
@@ -201,18 +201,6 @@ base::string16 ValueElementVectorToString(
   return base::JoinString(pairs, base::ASCIIToUTF16(", "));
 }
 
-std::ostream& operator<<(std::ostream& os, PasswordForm::Layout layout) {
-  switch (layout) {
-    case PasswordForm::Layout::LAYOUT_OTHER:
-      os << "LAYOUT_OTHER";
-      break;
-    case PasswordForm::Layout::LAYOUT_LOGIN_AND_SIGNUP:
-      os << "LAYOUT_LOGIN_AND_SIGNUP";
-      break;
-  }
-  return os;
-}
-
 std::ostream& operator<<(std::ostream& os, const PasswordForm& form) {
   base::DictionaryValue form_json;
   PasswordFormToJSON(form, &form_json);
@@ -239,39 +227,6 @@ std::ostream& operator<<(std::ostream& os, const PasswordForm& form) {
 
 std::ostream& operator<<(std::ostream& os, PasswordForm* form) {
   return os << "&" << *form;
-}
-
-std::ostream& operator<<(
-    std::ostream& os,
-    PasswordForm::SubmissionIndicatorEvent submission_event) {
-  switch (submission_event) {
-    case PasswordForm::SubmissionIndicatorEvent::HTML_FORM_SUBMISSION:
-      os << "HTML_FORM_SUBMISSION";
-      break;
-    case PasswordForm::SubmissionIndicatorEvent::SAME_DOCUMENT_NAVIGATION:
-      os << "SAME_DOCUMENT_NAVIGATION";
-      break;
-    case PasswordForm::SubmissionIndicatorEvent::XHR_SUCCEEDED:
-      os << "XHR_SUCCEEDED";
-      break;
-    case PasswordForm::SubmissionIndicatorEvent::FRAME_DETACHED:
-      os << "FRAME_DETACHED";
-      break;
-    case PasswordForm::SubmissionIndicatorEvent::MANUAL_SAVE:
-      os << "MANUAL_SAVE";
-      break;
-    case PasswordForm::SubmissionIndicatorEvent::DOM_MUTATION_AFTER_XHR:
-      os << "DOM_MUTATION_AFTER_XHR";
-      break;
-    case PasswordForm::SubmissionIndicatorEvent::
-        PROVISIONALLY_SAVED_FORM_ON_START_PROVISIONAL_LOAD:
-      os << "PROVISIONALLY_SAVED_FORM_ON_START_PROVISIONAL_LOAD";
-      break;
-    default:
-      os << "NO_SUBMISSION";
-      break;
-  }
-  return os;
 }
 
 }  // namespace autofill

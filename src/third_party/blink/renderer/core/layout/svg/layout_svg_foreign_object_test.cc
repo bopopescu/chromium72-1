@@ -68,6 +68,17 @@ TEST_F(LayoutSVGForeignObjectTest, DivInForeignObject) {
   EXPECT_EQ(div.GetNode(), HitTest(349, 249));
   EXPECT_EQ(foreign, HitTest(350, 250));
   EXPECT_EQ(svg, HitTest(450, 350));
+
+  // Rect based hit testing
+  auto results = RectBasedHitTest(LayoutRect(0, 0, 300, 300));
+  int count = 0;
+  EXPECT_EQ(3u, results.size());
+  for (auto result : results) {
+    Node* node = result.Get();
+    if (node == svg || node == div.GetNode() || node == foreign)
+      count++;
+  }
+  EXPECT_EQ(3, count);
 }
 
 TEST_F(LayoutSVGForeignObjectTest, IframeInForeignObject) {
@@ -75,7 +86,7 @@ TEST_F(LayoutSVGForeignObjectTest, IframeInForeignObject) {
     <style>body { margin: 0 }</style>
     <svg id='svg' style='width: 500px; height: 450px'>
       <foreignObject id='foreign' x='100' y='100' width='300' height='250'>
-        <iframe style='border: none; margin: 30px;
+        <iframe id=iframe style='border: none; margin: 30px;
              width: 240px; height: 190px'></iframe>
       </foreignObject>
     </svg>
@@ -87,11 +98,12 @@ TEST_F(LayoutSVGForeignObjectTest, IframeInForeignObject) {
     </style>
     <div id='div' style='margin: 70px; width: 100px; height: 50px'></div>
   )HTML");
-  GetDocument().View()->UpdateAllLifecyclePhases();
+  UpdateAllLifecyclePhasesForTest();
 
   const auto& svg = *GetDocument().getElementById("svg");
   const auto& foreign = *GetDocument().getElementById("foreign");
   const auto& foreign_object = *GetLayoutObjectByElementId("foreign");
+  const auto& iframe = *GetDocument().getElementById("iframe");
   const auto& div = *ChildDocument().getElementById("div")->GetLayoutObject();
 
   EXPECT_EQ(FloatRect(100, 100, 300, 250), foreign_object.ObjectBoundingBox());
@@ -136,13 +148,25 @@ TEST_F(LayoutSVGForeignObjectTest, IframeInForeignObject) {
   EXPECT_EQ(ChildDocument().documentElement(), HitTest(369, 319));
   EXPECT_EQ(foreign, HitTest(370, 320));
   EXPECT_EQ(svg, HitTest(450, 400));
+
+  // Rect based hit testing
+  auto results = RectBasedHitTest(LayoutRect(0, 0, 300, 300));
+  int count = 0;
+  EXPECT_EQ(7u, results.size());
+  for (auto result : results) {
+    Node* node = result.Get();
+    if (node == svg || node == div.GetNode() || node == foreign ||
+        node == iframe)
+      count++;
+  }
+  EXPECT_EQ(4, count);
 }
 
 TEST_F(LayoutSVGForeignObjectTest, HitTestZoomedForeignObject) {
   SetBodyInnerHTML(R"HTML(
     <style>* { margin: 0; zoom: 150% }</style>
     <svg id='svg' style='width: 200px; height: 200px'>
-      <foreignObject id='foreign' x='10' y='10' width='100' height='150'>
+      <foreignObject id='foreign' x='10' y='10' width='100' height='150' style='overflow: visible'>
         <div id='div' style='margin: 50px; width: 50px; height: 50px'>
         </div>
       </foreignObject>
@@ -184,6 +208,17 @@ TEST_F(LayoutSVGForeignObjectTest, HitTestZoomedForeignObject) {
   EXPECT_EQ(svg, HitTest(20, 20));
   EXPECT_EQ(foreign, HitTest(280, 280));
   EXPECT_EQ(div, HitTest(290, 290));
+
+  // Rect based hit testing
+  auto results = RectBasedHitTest(LayoutRect(0, 0, 300, 300));
+  int count = 0;
+  EXPECT_EQ(3u, results.size());
+  for (auto result : results) {
+    Node* node = result.Get();
+    if (node == svg || node == &div || node == foreign)
+      count++;
+  }
+  EXPECT_EQ(3, count);
 }
 
 TEST_F(LayoutSVGForeignObjectTest, HitTestViewBoxForeignObject) {
@@ -284,8 +319,9 @@ TEST_F(LayoutSVGForeignObjectTest,
   EXPECT_EQ(foreignObject, GetDocument().ElementFromPoint(205, 255));
 
   HitTestRequest request(HitTestRequest::kReadOnly | HitTestRequest::kActive);
-  HitTestResult result(request, LayoutPoint(206, 206));
-  GetDocument().GetLayoutView()->Layer()->HitTest(result);
+  HitTestLocation location((LayoutPoint(206, 206)));
+  HitTestResult result(request, location);
+  GetDocument().GetLayoutView()->HitTest(location, result);
   EXPECT_EQ(target, result.InnerNode());
   EXPECT_EQ(LayoutPoint(206, 206), result.PointInInnerNodeFrame());
 }
@@ -309,18 +345,57 @@ TEST_F(LayoutSVGForeignObjectTest,
 
   const auto& svg = *GetDocument().getElementById("svg");
   const auto& target = *GetDocument().getElementById("target");
-  const auto& foreignObject = *GetDocument().getElementById("foreignObject");
+  const auto& foreign_object = *GetDocument().getElementById("foreignObject");
 
   EXPECT_EQ(svg, GetDocument().ElementFromPoint(1, 1));
-  EXPECT_EQ(foreignObject, GetDocument().ElementFromPoint(231, 201));
+  EXPECT_EQ(foreign_object, GetDocument().ElementFromPoint(231, 201));
   EXPECT_EQ(target, GetDocument().ElementFromPoint(236, 206));
-  EXPECT_EQ(foreignObject, GetDocument().ElementFromPoint(235, 255));
+  EXPECT_EQ(foreign_object, GetDocument().ElementFromPoint(235, 255));
 
   HitTestRequest request(HitTestRequest::kReadOnly | HitTestRequest::kActive);
-  HitTestResult result(request, LayoutPoint(236, 206));
-  GetDocument().GetLayoutView()->Layer()->HitTest(result);
+  HitTestLocation location((LayoutPoint(236, 206)));
+  HitTestResult result(request, location);
+  GetDocument().GetLayoutView()->HitTest(location, result);
   EXPECT_EQ(target, result.InnerNode());
   EXPECT_EQ(LayoutPoint(236, 206), result.PointInInnerNodeFrame());
+}
+
+TEST_F(LayoutSVGForeignObjectTest, HitTestUnderScrollingAncestor) {
+  SetBodyInnerHTML(R"HTML(
+    <style>
+      * {
+        margin: 0
+      }
+    </style>
+    <div id=scroller style="width: 500px; height: 500px; overflow: auto">
+      <svg width="3000" height="3000">
+        <foreignObject width="3000" height="3000">
+          <div id="target" style="width: 3000px; height: 3000px; background: red">
+          </div>
+        </foreignObject>
+      </svg>
+    </div>
+  )HTML");
+
+  auto& scroller = *GetDocument().getElementById("scroller");
+  const auto& target = *GetDocument().getElementById("target");
+
+  EXPECT_EQ(target, GetDocument().ElementFromPoint(450, 450));
+
+  HitTestRequest request(HitTestRequest::kReadOnly | HitTestRequest::kActive);
+  HitTestLocation location((LayoutPoint(450, 450)));
+  HitTestResult result(request, location);
+  GetDocument().GetLayoutView()->HitTest(location, result);
+  EXPECT_EQ(target, result.InnerNode());
+  EXPECT_EQ(LayoutPoint(450, 450), result.PointInInnerNodeFrame());
+
+  scroller.setScrollTop(3000);
+
+  EXPECT_EQ(target, GetDocument().ElementFromPoint(450, 450));
+
+  GetDocument().GetLayoutView()->HitTest(location, result);
+  EXPECT_EQ(target, result.InnerNode());
+  EXPECT_EQ(LayoutPoint(450, 450), result.PointInInnerNodeFrame());
 }
 
 }  // namespace blink

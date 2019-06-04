@@ -26,6 +26,8 @@
 
 namespace blink {
 
+class GraphicsContext;
+
 // LayoutTextCombine uses different coordinate systems for layout and
 // inlineTextBox, because it is treated as 1em-box character in vertical flow
 // for the layout, while its inline box is in horizontal flow.
@@ -37,7 +39,7 @@ class LayoutTextCombine final : public LayoutText {
   float CombinedTextWidth(const Font& font) const {
     return font.GetFontDescription().ComputedSize();
   }
-  const Font& OriginalFont() const { return Parent()->Style()->GetFont(); }
+  const Font& OriginalFont() const { return Parent()->StyleRef().GetFont(); }
   void TransformToInlineCoordinates(GraphicsContext&,
                                     const LayoutRect& box_rect,
                                     bool clip = false) const;

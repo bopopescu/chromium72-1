@@ -284,8 +284,7 @@ struct winFile {
   int nFetchOut;                /* Number of outstanding xFetch references */
   HANDLE hMap;                  /* Handle for accessing memory mapping */
   void *pMapRegion;             /* Area memory mapped */
-  sqlite3_int64 mmapSize;       /* Usable size of mapped region */
-  sqlite3_int64 mmapSizeActual; /* Actual size of mapped region */
+  sqlite3_int64 mmapSize;       /* Size of mapped region */
   sqlite3_int64 mmapSizeMax;    /* Configured FCNTL_MMAP_SIZE value */
 #endif
 };
@@ -313,22 +312,6 @@ struct winVfsAppData {
  */
 #ifndef SQLITE_WIN32_DBG_BUF_SIZE
 #  define SQLITE_WIN32_DBG_BUF_SIZE   ((int)(4096-sizeof(DWORD)))
-#endif
-
-/*
- * The value used with sqlite3_win32_set_directory() to specify that
- * the data directory should be changed.
- */
-#ifndef SQLITE_WIN32_DATA_DIRECTORY_TYPE
-#  define SQLITE_WIN32_DATA_DIRECTORY_TYPE (1)
-#endif
-
-/*
- * The value used with sqlite3_win32_set_directory() to specify that
- * the temporary directory should be changed.
- */
-#ifndef SQLITE_WIN32_TEMP_DIRECTORY_TYPE
-#  define SQLITE_WIN32_TEMP_DIRECTORY_TYPE (2)
 #endif
 
 /*
@@ -1927,13 +1910,13 @@ char *sqlite3_win32_utf8_to_mbcs_v2(const char *zText, int useAnsi){
 }
 
 /*
-** This function sets the data directory or the temporary directory based on
-** the provided arguments.  The type argument must be 1 in order to set the
-** data directory or 2 in order to set the temporary directory.  The zValue
-** argument is the name of the directory to use.  The return value will be
-** SQLITE_OK if successful.
+** This function is the same as sqlite3_win32_set_directory (below); however,
+** it accepts a UTF-8 string.
 */
-int sqlite3_win32_set_directory(DWORD type, LPCWSTR zValue){
+int sqlite3_win32_set_directory8(
+  unsigned long type, /* Identifier for directory being set or reset */
+  const char *zValue  /* New value for directory being set or reset */
+){
   char **ppDirectory = 0;
 #ifndef SQLITE_OMIT_AUTOINIT
   int rc = sqlite3_initialize();
@@ -1949,18 +1932,51 @@ int sqlite3_win32_set_directory(DWORD type, LPCWSTR zValue){
   );
   assert( !ppDirectory || sqlite3MemdebugHasType(*ppDirectory, MEMTYPE_HEAP) );
   if( ppDirectory ){
-    char *zValueUtf8 = 0;
+    char *zCopy = 0;
     if( zValue && zValue[0] ){
-      zValueUtf8 = winUnicodeToUtf8(zValue);
-      if ( zValueUtf8==0 ){
+      zCopy = sqlite3_mprintf("%s", zValue);
+      if ( zCopy==0 ){
         return SQLITE_NOMEM_BKPT;
       }
     }
     sqlite3_free(*ppDirectory);
-    *ppDirectory = zValueUtf8;
+    *ppDirectory = zCopy;
     return SQLITE_OK;
   }
   return SQLITE_ERROR;
+}
+
+/*
+** This function is the same as sqlite3_win32_set_directory (below); however,
+** it accepts a UTF-16 string.
+*/
+int sqlite3_win32_set_directory16(
+  unsigned long type, /* Identifier for directory being set or reset */
+  const void *zValue  /* New value for directory being set or reset */
+){
+  int rc;
+  char *zUtf8 = 0;
+  if( zValue ){
+    zUtf8 = sqlite3_win32_unicode_to_utf8(zValue);
+    if( zUtf8==0 ) return SQLITE_NOMEM_BKPT;
+  }
+  rc = sqlite3_win32_set_directory8(type, zUtf8);
+  if( zUtf8 ) sqlite3_free(zUtf8);
+  return rc;
+}
+
+/*
+** This function sets the data directory or the temporary directory based on
+** the provided arguments.  The type argument must be 1 in order to set the
+** data directory or 2 in order to set the temporary directory.  The zValue
+** argument is the name of the directory to use.  The return value will be
+** SQLITE_OK if successful.
+*/
+int sqlite3_win32_set_directory(
+  unsigned long type, /* Identifier for directory being set or reset */
+  void *zValue        /* New value for directory being set or reset */
+){
+  return sqlite3_win32_set_directory16(type, zValue);
 }
 
 /*
@@ -2887,6 +2903,29 @@ static int winTruncate(sqlite3_file *id, sqlite3_int64 nByte){
   winFile *pFile = (winFile*)id;  /* File handle object */
   int rc = SQLITE_OK;             /* Return code for this function */
   DWORD lastErrno;
+#if SQLITE_MAX_MMAP_SIZE>0
+  sqlite3_int64 oldMmapSize;
+  if( pFile->nFetchOut>0 ){
+    /* File truncation is a no-op if there are outstanding memory mapped
+    ** pages.  This is because truncating the file means temporarily unmapping
+    ** the file, and that might delete memory out from under existing cursors.
+    **
+    ** This can result in incremental vacuum not truncating the file,
+    ** if there is an active read cursor when the incremental vacuum occurs.
+    ** No real harm comes of this - the database file is not corrupted,
+    ** though some folks might complain that the file is bigger than it
+    ** needs to be.
+    **
+    ** The only feasible work-around is to defer the truncation until after
+    ** all references to memory-mapped content are closed.  That is doable,
+    ** but involves adding a few branches in the common write code path which
+    ** could slow down normal operations slightly.  Hence, we have decided for
+    ** now to simply make trancations a no-op if there are pending reads.  We
+    ** can maybe revisit this decision in the future.
+    */
+    return SQLITE_OK;
+  }
+#endif
 
   assert( pFile );
   SimulateIOError(return SQLITE_IOERR_TRUNCATE);
@@ -2902,6 +2941,15 @@ static int winTruncate(sqlite3_file *id, sqlite3_int64 nByte){
     nByte = ((nByte + pFile->szChunk - 1)/pFile->szChunk) * pFile->szChunk;
   }
 
+#if SQLITE_MAX_MMAP_SIZE>0
+  if( pFile->pMapRegion ){
+    oldMmapSize = pFile->mmapSize;
+  }else{
+    oldMmapSize = 0;
+  }
+  winUnmapfile(pFile);
+#endif
+
   /* SetEndOfFile() returns non-zero when successful, or zero when it fails. */
   if( winSeekFile(pFile, nByte) ){
     rc = winLogError(SQLITE_IOERR_TRUNCATE, pFile->lastErrno,
@@ -2914,12 +2962,12 @@ static int winTruncate(sqlite3_file *id, sqlite3_int64 nByte){
   }
 
 #if SQLITE_MAX_MMAP_SIZE>0
-  /* If the file was truncated to a size smaller than the currently
-  ** mapped region, reduce the effective mapping size as well. SQLite will
-  ** use read() and write() to access data beyond this point from now on.
-  */
-  if( pFile->pMapRegion && nByte<pFile->mmapSize ){
-    pFile->mmapSize = nByte;
+  if( rc==SQLITE_OK && oldMmapSize>0 ){
+    if( oldMmapSize>nByte ){
+      winMapfile(pFile, -1);
+    }else{
+      winMapfile(pFile, oldMmapSize);
+    }
   }
 #endif
 
@@ -4305,9 +4353,9 @@ shmpage_out:
 static int winUnmapfile(winFile *pFile){
   assert( pFile!=0 );
   OSTRACE(("UNMAP-FILE pid=%lu, pFile=%p, hMap=%p, pMapRegion=%p, "
-           "mmapSize=%lld, mmapSizeActual=%lld, mmapSizeMax=%lld\n",
+           "mmapSize=%lld, mmapSizeMax=%lld\n",
            osGetCurrentProcessId(), pFile, pFile->hMap, pFile->pMapRegion,
-           pFile->mmapSize, pFile->mmapSizeActual, pFile->mmapSizeMax));
+           pFile->mmapSize, pFile->mmapSizeMax));
   if( pFile->pMapRegion ){
     if( !osUnmapViewOfFile(pFile->pMapRegion) ){
       pFile->lastErrno = osGetLastError();
@@ -4319,7 +4367,6 @@ static int winUnmapfile(winFile *pFile){
     }
     pFile->pMapRegion = 0;
     pFile->mmapSize = 0;
-    pFile->mmapSizeActual = 0;
   }
   if( pFile->hMap!=NULL ){
     if( !osCloseHandle(pFile->hMap) ){
@@ -4430,7 +4477,6 @@ static int winMapfile(winFile *pFd, sqlite3_int64 nByte){
     }
     pFd->pMapRegion = pNew;
     pFd->mmapSize = nMap;
-    pFd->mmapSizeActual = nMap;
   }
 
   OSTRACE(("MAP-FILE pid=%lu, pFile=%p, rc=SQLITE_OK\n",
@@ -5232,7 +5278,6 @@ static int winOpen(
   pFile->hMap = NULL;
   pFile->pMapRegion = 0;
   pFile->mmapSize = 0;
-  pFile->mmapSizeActual = 0;
   pFile->mmapSizeMax = sqlite3GlobalConfig.szMmap;
 #endif
 

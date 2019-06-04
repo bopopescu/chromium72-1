@@ -20,7 +20,7 @@
 #include "url/url_constants.h"
 #include "url/url_export.h"
 
-// Represents a URL.
+// Represents a URL. GURL is Google's URL parsing library.
 //
 // A parsed canonicalized URL is guaranteed to be UTF-8. Any non-ASCII input
 // characters are UTF-8 encoded and % escaped to ASCII.
@@ -151,8 +151,8 @@ class URL_EXPORT GURL {
   //
   // It is an error to resolve a URL relative to an invalid URL. The result
   // will be the empty URL.
-  GURL Resolve(const std::string& relative) const;
-  GURL Resolve(const base::string16& relative) const;
+  GURL Resolve(base::StringPiece relative) const;
+  GURL Resolve(base::StringPiece16 relative) const;
 
   // Creates a new GURL by replacing the current URL's components with the
   // supplied versions. See the Replacements class in url_canon.h for more.
@@ -258,9 +258,13 @@ class URL_EXPORT GURL {
     return SchemeIs(url::kBlobScheme);
   }
 
-  // The "content" of the URL is everything after the scheme (skipping the
-  // scheme delimiting colon). It is an error to get the content of an invalid
-  // URL: the result will be an empty string.
+  // For most URLs, the "content" is everything after the scheme (skipping the
+  // scheme delimiting colon) and before the fragment (skipping the fragment
+  // delimiting octothorpe). For javascript URLs the "content" also includes the
+  // fragment delimiter and fragment.
+  //
+  // It is an error to get the content of an invalid URL: the result will be an
+  // empty string.
   std::string GetContent() const;
 
   // Returns true if the hostname is an IP address. Note: this function isn't

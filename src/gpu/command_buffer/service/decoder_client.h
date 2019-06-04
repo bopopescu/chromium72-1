@@ -10,6 +10,7 @@
 #include <string>
 
 #include "gpu/gpu_export.h"
+#include "url/gurl.h"
 
 namespace gpu {
 
@@ -51,6 +52,12 @@ class GPU_EXPORT DecoderClient {
   // Called when SwapBuffers, PostSubBufferCHROMIUM,
   // SwapBuffersWithBoundsCHROMIUM or CommitOverlayPlanesCHROMIUM is called.
   virtual void OnSwapBuffers(uint64_t swap_id, uint32_t flags) = 0;
+
+  // Notifies the client that the shared GrContext may have been used by this
+  // decoder and its GPU memory should be cleaned up.
+  virtual void ScheduleGrContextCleanup() = 0;
+
+  virtual void SetActiveURL(GURL url) {}
 };
 
 }  // namespace gpu

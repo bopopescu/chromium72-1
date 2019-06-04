@@ -15,11 +15,11 @@
 #include "base/macros.h"
 #include "base/memory/ptr_util.h"
 #include "base/metrics/histogram_macros.h"
-#include "base/process/process_info.h"
+#include "base/process/process.h"
 #include "base/single_thread_task_runner.h"
 #include "base/strings/string_util.h"
-#include "base/task_scheduler/post_task.h"
-#include "base/task_scheduler/task_traits.h"
+#include "base/task/post_task.h"
+#include "base/task/task_traits.h"
 #include "base/threading/thread_task_runner_handle.h"
 #include "build/build_config.h"
 #include "chrome/browser/chrome_notification_types.h"
@@ -133,7 +133,7 @@ base::TaskShutdownBehavior GetShutdownBehavior() {
 
 // Returns a task runner for blocking tasks in the background.
 scoped_refptr<base::TaskRunner> GetBackgroundTaskRunner() {
-  return base::CreateTaskRunnerWithTraits({base::TaskPriority::BACKGROUND,
+  return base::CreateTaskRunnerWithTraits({base::TaskPriority::BEST_EFFORT,
                                            GetShutdownBehavior(),
                                            base::MayBlock()});
 }
@@ -714,10 +714,10 @@ void IncidentReportingService::OnEnvironmentDataCollected(
   DCHECK(report_ && !report_->has_environment());
   environment_collection_pending_ = false;
 
-// CurrentProcessInfo::CreationTime() is missing on some platforms.
+// Process::Current().CreationTime() is missing on some platforms.
 #if defined(OS_MACOSX) || defined(OS_WIN) || defined(OS_LINUX)
   base::TimeDelta uptime =
-      first_incident_time_ - base::CurrentProcessInfo::CreationTime();
+      first_incident_time_ - base::Process::Current().CreationTime();
   environment_data->mutable_process()->set_uptime_msec(uptime.InMilliseconds());
 #endif
 

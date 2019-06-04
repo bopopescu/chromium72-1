@@ -11,6 +11,7 @@
 #include "components/user_manager/user_type.h"
 #include "ui/aura/client/focus_change_observer.h"
 #include "ui/compositor/layer_animation_observer.h"
+#include "ui/views/controls/label.h"
 #include "ui/views/view.h"
 #include "ui/views/widget/widget_observer.h"
 
@@ -26,13 +27,18 @@ class ASH_EXPORT LoginBubble : public views::WidgetObserver,
                                public ui::LayerAnimationObserver,
                                public aura::client::FocusChangeObserver {
  public:
-  static const int kUserMenuRemoveUserButtonIdForTest;
+  class TestApi {
+   public:
+    explicit TestApi(LoginBaseBubbleView* bubble_view);
+    views::View* user_menu_remove_user_button();
+    views::View* remove_user_confirm_data();
+    views::Label* username_label();
 
-  // Flags passed to ShowErrorBubble().
-  static constexpr uint32_t kFlagsNone = 0;
-  // If set, the shown error bubble will not be closed due to an unrelated user
-  // action - e.g. the bubble will not be closed if the user starts typing.
-  static constexpr uint32_t kFlagPersistent = 1 << 0;
+   private:
+    LoginBaseBubbleView* bubble_view_;
+  };
+
+  static const int kUserMenuRemoveUserButtonIdForTest;
 
   LoginBubble();
   ~LoginBubble() override;
@@ -41,7 +47,7 @@ class ASH_EXPORT LoginBubble : public views::WidgetObserver,
   // |anchor_view| is the anchor for placing the bubble view.
   void ShowErrorBubble(views::View* content,
                        views::View* anchor_view,
-                       uint32_t flags);
+                       bool show_persistently);
 
   // Shows a user menu bubble.
   // |anchor_view| is the anchor for placing the bubble view.
@@ -62,7 +68,7 @@ class ASH_EXPORT LoginBubble : public views::WidgetObserver,
   void ShowTooltip(const base::string16& message, views::View* anchor_view);
 
   // Shows a selection menu.
-  void ShowSelectionMenu(LoginMenuView* menu, LoginButton* bubble_opener);
+  void ShowSelectionMenu(LoginMenuView* menu);
 
   // Schedule animation for closing the bubble.
   // The bubble widget will be closed when the animation is ended.
@@ -79,6 +85,8 @@ class ASH_EXPORT LoginBubble : public views::WidgetObserver,
   // views::WidgetObservers:
   void OnWidgetClosing(views::Widget* widget) override;
   void OnWidgetDestroying(views::Widget* widget) override;
+  void OnWidgetBoundsChanged(views::Widget* widget,
+                             const gfx::Rect& new_bounds) override;
 
   // ui::EventHandler:
   void OnMouseEvent(ui::MouseEvent* event) override;
@@ -111,13 +119,10 @@ class ASH_EXPORT LoginBubble : public views::WidgetObserver,
   // explicitly. False otherwise.
   void Reset(bool widget_already_closing);
 
-  // Flags passed to ShowErrorBubble().
-  uint32_t flags_ = kFlagsNone;
+  // Repositions the bubble view if it extends too far right or down.
+  void EnsureBubbleInScreen();
 
   LoginBaseBubbleView* bubble_view_ = nullptr;
-
-  // A button that could open/close the bubble.
-  LoginButton* bubble_opener_ = nullptr;
 
   // The status of bubble after animation ends.
   bool is_visible_ = false;

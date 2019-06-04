@@ -272,12 +272,12 @@ void TextInputController::SetMarkedText(const std::string& text,
     ime_text_span.start_offset = start;
     ime_text_span.end_offset = start + length;
   }
-  ime_text_span.thickness = ui::mojom::ImeTextSpanThickness::kThick;
+  ime_text_span.thickness = ws::mojom::ImeTextSpanThickness::kThick;
   ime_text_spans.push_back(ime_text_span);
   if (start + length < static_cast<int>(web_text.length())) {
     ime_text_span.start_offset = ime_text_span.end_offset;
     ime_text_span.end_offset = web_text.length();
-    ime_text_span.thickness = ui::mojom::ImeTextSpanThickness::kThin;
+    ime_text_span.thickness = ws::mojom::ImeTextSpanThickness::kThin;
     ime_text_spans.push_back(ime_text_span);
   }
 
@@ -372,7 +372,8 @@ void TextInputController::SetComposition(const std::string& text) {
                                    ui::EventTimeForNow());
 
   key_down.windows_key_code = 0xE5;  // VKEY_PROCESSKEY
-  view()->HandleInputEvent(blink::WebCoalescedInputEvent(key_down));
+  view()->MainFrameWidget()->HandleInputEvent(
+      blink::WebCoalescedInputEvent(key_down));
 
   // The value returned by std::string::length() may not correspond to the
   // actual number of encoded characters in sequences of multi-byte or
@@ -383,7 +384,7 @@ void TextInputController::SetComposition(const std::string& text) {
   std::vector<blink::WebImeTextSpan> ime_text_spans;
   ime_text_spans.push_back(blink::WebImeTextSpan(
       blink::WebImeTextSpan::Type::kComposition, 0, textLength,
-      ui::mojom::ImeTextSpanThickness::kThin, SK_ColorTRANSPARENT));
+      ws::mojom::ImeTextSpanThickness::kThin, SK_ColorTRANSPARENT));
   if (auto* controller = GetInputMethodController()) {
     controller->SetComposition(
         newText, blink::WebVector<blink::WebImeTextSpan>(ime_text_spans),

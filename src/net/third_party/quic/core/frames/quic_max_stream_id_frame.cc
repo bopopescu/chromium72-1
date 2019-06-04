@@ -4,13 +4,17 @@
 
 #include "net/third_party/quic/core/frames/quic_max_stream_id_frame.h"
 
-namespace net {
+namespace quic {
 
-QuicMaxStreamIdFrame::QuicMaxStreamIdFrame() {}
+QuicMaxStreamIdFrame::QuicMaxStreamIdFrame()
+    : QuicInlinedFrame(MAX_STREAM_ID_FRAME),
+      control_frame_id(kInvalidControlFrameId) {}
 
 QuicMaxStreamIdFrame::QuicMaxStreamIdFrame(QuicControlFrameId control_frame_id,
                                            QuicStreamId max_stream_id)
-    : QuicControlFrame(control_frame_id), max_stream_id(max_stream_id) {}
+    : QuicInlinedFrame(MAX_STREAM_ID_FRAME),
+      control_frame_id(control_frame_id),
+      max_stream_id(max_stream_id) {}
 
 std::ostream& operator<<(std::ostream& os, const QuicMaxStreamIdFrame& frame) {
   os << "{ control_frame_id: " << frame.control_frame_id
@@ -18,4 +22,4 @@ std::ostream& operator<<(std::ostream& os, const QuicMaxStreamIdFrame& frame) {
   return os;
 }
 
-}  // namespace net
+}  // namespace quic

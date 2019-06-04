@@ -8,49 +8,49 @@
 
 #include "base/logging.h"
 #include "ui/events/event.h"
+#include "ui/gfx/geometry/point_conversions.h"
 
 namespace ui {
 
-EventTarget::EventTarget()
-    : target_handler_(NULL) {
-}
+EventTarget::EventTarget() = default;
 
-EventTarget::~EventTarget() {
-}
+EventTarget::~EventTarget() = default;
 
 void EventTarget::ConvertEventToTarget(EventTarget* target,
-                                       LocatedEvent* event) {
+                                       LocatedEvent* event) {}
+
+gfx::PointF EventTarget::GetScreenLocationF(
+    const ui::LocatedEvent& event) const {
+  NOTREACHED();
+  return event.root_location_f();
+}
+
+gfx::Point EventTarget::GetScreenLocation(const ui::LocatedEvent& event) const {
+  return gfx::ToFlooredPoint(GetScreenLocationF(event));
 }
 
 void EventTarget::AddPreTargetHandler(EventHandler* handler,
                                       Priority priority) {
-  DCHECK(handler);
-  PrioritizedHandler prioritized = PrioritizedHandler();
+  CHECK(handler);
+  PrioritizedHandler prioritized;
   prioritized.handler = handler;
   prioritized.priority = priority;
-  EventHandlerPriorityList::iterator it;
-  switch (priority) {
-    case Priority::kDefault:
-      pre_target_list_.push_back(prioritized);
-      return;
-    case Priority::kSystem:
-      // Find the beginning of the kSystem part of the list and prepend
-      // this new handler to that section.
-      // TODO(katie): We are adding this to the front of the list because
-      // previously the function PrependPreTargetHandler added items to the
-      // front in this way. See if we can simply put each item in the list and
-      // sort, or insert each item the same way, in a later change.
-      it = std::lower_bound(pre_target_list_.begin(), pre_target_list_.end(),
-                            prioritized);
-      pre_target_list_.insert(it, prioritized);
-      return;
-    case Priority::kAccessibility:
-      pre_target_list_.insert(pre_target_list_.begin(), prioritized);
-      return;
-  }
+  if (priority == Priority::kDefault)
+    pre_target_list_.push_back(prioritized);
+  else
+    pre_target_list_.insert(pre_target_list_.begin(), prioritized);
+  handler->targets_installed_on_.push_back(this);
 }
 
 void EventTarget::RemovePreTargetHandler(EventHandler* handler) {
+  CHECK(handler);
+  // Only erase a single one, which matches the removal code right after this.
+  auto installed_on_iter =
+      std::find(handler->targets_installed_on_.begin(),
+                handler->targets_installed_on_.end(), this);
+  if (installed_on_iter != handler->targets_installed_on_.end())
+    handler->targets_installed_on_.erase(installed_on_iter);
+
   EventHandlerPriorityList::iterator it, end;
   for (it = pre_target_list_.begin(), end = pre_target_list_.end(); it != end;
        ++it) {
@@ -67,10 +67,8 @@ void EventTarget::AddPostTargetHandler(EventHandler* handler) {
 }
 
 void EventTarget::RemovePostTargetHandler(EventHandler* handler) {
-  EventHandlerList::iterator find =
-      std::find(post_target_list_.begin(),
-                post_target_list_.end(),
-                handler);
+  auto find =
+      std::find(post_target_list_.begin(), post_target_list_.end(), handler);
   if (find != post_target_list_.end())
     post_target_list_.erase(find);
 }
@@ -85,30 +83,31 @@ EventHandler* EventTarget::SetTargetHandler(EventHandler* target_handler) {
   return original_target_handler;
 }
 
-// TODO(katie): trigger all kAccessibility handlers in the tree first,
-// then kSystem and finally kDefault, rather than doing each set per
-// parent level.
 void EventTarget::GetPreTargetHandlers(EventHandlerList* list) {
   EventTarget* target = this;
+  EventHandlerPriorityList temp;
   while (target) {
-    EventHandlerPriorityList::reverse_iterator it, rend;
-    for (it = target->pre_target_list_.rbegin(),
-            rend = target->pre_target_list_.rend();
-        it != rend;
-        ++it) {
-      list->insert(list->begin(), it->handler);
-    }
+    // Build a composite list of EventHandlers from targets.
+    temp.insert(temp.begin(), target->pre_target_list_.begin(),
+                target->pre_target_list_.end());
     target = target->GetParentTarget();
   }
+
+  // Sort the list, keeping relative order, but making sure the
+  // accessibility handlers always go first before system, which will
+  // go before default, at all levels of EventTarget.
+  std::stable_sort(temp.begin(), temp.end());
+
+  // Add the sorted handlers to the result list, in order.
+  for (size_t i = 0; i < temp.size(); ++i)
+    list->insert(list->end(), temp[i].handler);
 }
 
 void EventTarget::GetPostTargetHandlers(EventHandlerList* list) {
   EventTarget* target = this;
   while (target) {
-    for (EventHandlerList::iterator it = target->post_target_list_.begin(),
-        end = target->post_target_list_.end(); it != end; ++it) {
-      list->push_back(*it);
-    }
+    list->insert(list->end(), target->post_target_list_.begin(),
+                 target->post_target_list_.end());
     target = target->GetParentTarget();
   }
 }

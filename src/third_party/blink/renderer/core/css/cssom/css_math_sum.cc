@@ -6,6 +6,7 @@
 
 #include "third_party/blink/renderer/core/css/css_calculation_value.h"
 #include "third_party/blink/renderer/core/css/cssom/css_math_negate.h"
+#include "third_party/blink/renderer/platform/wtf/text/string_builder.h"
 
 namespace blink {
 
@@ -51,7 +52,8 @@ bool operator==(const CSSNumericSumValue::Term& a, const UnitMapComparator& b) {
 CSSMathSum* CSSMathSum::Create(const HeapVector<CSSNumberish>& args,
                                ExceptionState& exception_state) {
   if (args.IsEmpty()) {
-    exception_state.ThrowDOMException(kSyntaxError, "Arguments can't be empty");
+    exception_state.ThrowDOMException(DOMExceptionCode::kSyntaxError,
+                                      "Arguments can't be empty");
     return nullptr;
   }
 
@@ -69,8 +71,8 @@ CSSMathSum* CSSMathSum::Create(CSSNumericValueVector values) {
   CSSNumericValueType final_type =
       CSSMathVariadic::TypeCheck(values, CSSNumericValueType::Add, error);
   return error ? nullptr
-               : new CSSMathSum(CSSNumericArray::Create(std::move(values)),
-                                final_type);
+               : MakeGarbageCollected<CSSMathSum>(
+                     CSSNumericArray::Create(std::move(values)), final_type);
 }
 
 base::Optional<CSSNumericSumValue> CSSMathSum::SumValue() const {
@@ -82,7 +84,7 @@ base::Optional<CSSNumericSumValue> CSSMathSum::SumValue() const {
 
     // Collect like-terms
     for (const auto& term : child_sum->terms) {
-      size_t index = sum.terms.Find(UnitMapComparator{term});
+      wtf_size_t index = sum.terms.Find(UnitMapComparator{term});
       if (index == kNotFound)
         sum.terms.push_back(term);
       else
@@ -105,7 +107,7 @@ CSSCalcExpressionNode* CSSMathSum::ToCalcExpressionNode() const {
       NumericValues()[0]->ToCalcExpressionNode(),
       NumericValues()[1]->ToCalcExpressionNode(), kCalcAdd);
 
-  for (size_t i = 2; i < NumericValues().size(); i++) {
+  for (wtf_size_t i = 2; i < NumericValues().size(); i++) {
     node = CSSCalcValue::CreateExpressionNode(
         node, NumericValues()[i]->ToCalcExpressionNode(), kCalcAdd);
   }
@@ -123,7 +125,7 @@ void CSSMathSum::BuildCSSText(Nested nested,
   DCHECK(!values.IsEmpty());
   values[0]->BuildCSSText(Nested::kYes, ParenLess::kNo, result);
 
-  for (size_t i = 1; i < values.size(); i++) {
+  for (wtf_size_t i = 1; i < values.size(); i++) {
     const auto& arg = *values[i];
     if (arg.GetType() == CSSStyleValue::kNegateType) {
       result.Append(" - ");

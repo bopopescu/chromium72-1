@@ -15,7 +15,7 @@ namespace blink {
 class BasePage;
 
 // Visitor used to mark Oilpan objects.
-class PLATFORM_EXPORT MarkingVisitor final : public Visitor {
+class PLATFORM_EXPORT MarkingVisitor : public Visitor {
  public:
   enum MarkingMode {
     // This is a default visitor. This is used for MarkingType=kAtomicMarking
@@ -109,7 +109,7 @@ class PLATFORM_EXPORT MarkingVisitor final : public Visitor {
                desc.callback);
   }
 
-  void Visit(void*, TraceWrapperDescriptor) final {
+  void VisitWithWrappers(void*, TraceDescriptor) final {
     // Ignore as the object is also passed to Visit(void*, TraceDescriptor).
   }
 
@@ -124,6 +124,8 @@ class PLATFORM_EXPORT MarkingVisitor final : public Visitor {
                                  void** object_slot,
                                  TraceDescriptor desc) final {
     RegisterBackingStoreReference(object_slot);
+    if (!object)
+      return;
     Visit(object, desc);
   }
 
@@ -133,6 +135,9 @@ class PLATFORM_EXPORT MarkingVisitor final : public Visitor {
                                TraceDescriptor desc,
                                WeakCallback callback,
                                void* parameter) final {
+    RegisterBackingStoreReference(object_slot);
+    if (!object)
+      return;
     RegisterWeakCallback(parameter, callback);
   }
 
@@ -140,11 +145,13 @@ class PLATFORM_EXPORT MarkingVisitor final : public Visitor {
   // processing. In this case, the contents are processed separately using
   // the corresponding traits but the backing store requires marking.
   void VisitBackingStoreOnly(void* object, void** object_slot) final {
-    MarkHeaderNoTracing(HeapObjectHeader::FromPayload(object));
     RegisterBackingStoreReference(object_slot);
+    if (!object)
+      return;
+    MarkHeaderNoTracing(HeapObjectHeader::FromPayload(object));
   }
 
-  void RegisterBackingStoreCallback(void* backing_store,
+  void RegisterBackingStoreCallback(void** slot,
                                     MovingObjectCallback,
                                     void* callback_data) final;
   bool RegisterWeakTable(const void* closure,
@@ -152,16 +159,16 @@ class PLATFORM_EXPORT MarkingVisitor final : public Visitor {
   void RegisterWeakCallback(void* closure, WeakCallback) final;
 
   // Unused cross-component visit methods.
-  void Visit(const TraceWrapperV8Reference<v8::Value>&) final {}
+  void Visit(const TraceWrapperV8Reference<v8::Value>&) override {}
   void Visit(DOMWrapperMap<ScriptWrappable>*,
-             const ScriptWrappable* key) final {}
+             const ScriptWrappable* key) override {}
 
  private:
   // Exact version of the marking write barriers.
   static void WriteBarrierSlow(void*);
   static void TraceMarkedBackingStoreSlow(void*);
 
-  void RegisterBackingStoreReference(void* slot);
+  void RegisterBackingStoreReference(void** slot);
 
   void ConservativelyMarkHeader(HeapObjectHeader*);
 

@@ -21,10 +21,8 @@
 #include "chrome/browser/ui/tab_contents/core_tab_helper_delegate.h"
 #include "components/favicon/core/favicon_driver_observer.h"
 #include "components/infobars/core/infobar_manager.h"
+#include "components/omnibox/browser/location_bar_model.h"
 #include "components/sessions/core/session_id.h"
-#include "components/toolbar/toolbar_model.h"
-#include "content/public/browser/notification_observer.h"
-#include "content/public/browser/notification_registrar.h"
 #include "content/public/browser/web_contents_observer.h"
 #include "services/service_manager/public/cpp/binder_registry.h"
 #include "third_party/blink/public/platform/media_download_in_product_help.mojom.h"
@@ -54,7 +52,6 @@ class PrerenderManager;
 }
 
 class TabAndroid : public CoreTabHelperDelegate,
-                   public content::NotificationObserver,
                    public favicon::FaviconDriverObserver,
                    public content::WebContentsObserver {
  public:
@@ -91,7 +88,6 @@ class TabAndroid : public CoreTabHelperDelegate,
   scoped_refptr<cc::Layer> GetContentLayer() const;
 
   // Return specific id information regarding this TabAndroid.
-  const SessionID& session_id() const { return session_tab_id_; }
   const SessionID& window_id() const { return session_window_id_; }
 
   int GetAndroidId() const;
@@ -108,9 +104,6 @@ class TabAndroid : public CoreTabHelperDelegate,
   // it.
   bool IsUserInteractable() const;
 
-  // Load the tab if it was unloaded from memory.
-  bool LoadIfNeeded();
-
   // Helper methods to make it easier to access objects from the associated
   // WebContents.  Can return NULL.
   Profile* GetProfile() const;
@@ -126,18 +119,6 @@ class TabAndroid : public CoreTabHelperDelegate,
   void HandlePopupNavigation(NavigateParams* params);
 
   bool HasPrerenderedUrl(GURL gurl);
-
-  // Overridden from CoreTabHelperDelegate:
-  std::unique_ptr<content::WebContents> SwapTabContents(
-      content::WebContents* old_contents,
-      std::unique_ptr<content::WebContents> new_contents,
-      bool did_start_load,
-      bool did_finish_load) override;
-
-  // Overridden from NotificationObserver:
-  void Observe(int type,
-               const content::NotificationSource& source,
-               const content::NotificationDetails& details) override;
 
   // Overridden from favicon::FaviconDriverObserver:
   void OnFaviconUpdated(favicon::FaviconDriver* favicon_driver,
@@ -160,7 +141,7 @@ class TabAndroid : public CoreTabHelperDelegate,
       jboolean incognito,
       jboolean is_background_tab,
       const base::android::JavaParamRef<jobject>& jweb_contents,
-      const base::android::JavaParamRef<jobject>& jparent_web_contents,
+      jint jparent_tab_id,
       const base::android::JavaParamRef<jobject>& jweb_contents_delegate,
       const base::android::JavaParamRef<jobject>& jcontext_menu_populator);
   void UpdateDelegates(
@@ -191,9 +172,9 @@ class TabAndroid : public CoreTabHelperDelegate,
       jint referrer_policy,
       jboolean is_renderer_initiated,
       jboolean should_replace_current_entry,
-      jlong intent_received_timestamp,
       jboolean has_user_gesture,
-      jboolean should_clear_history_list);
+      jboolean should_clear_history_list,
+      jlong omnibox_input_received_timestamp);
   void SetActiveNavigationEntryTitleForUrl(
       JNIEnv* env,
       const base::android::JavaParamRef<jobject>& obj,
@@ -261,9 +242,7 @@ class TabAndroid : public CoreTabHelperDelegate,
       const base::android::JavaParamRef<jobject>& obj,
       const base::android::JavaParamRef<jstring>& scope);
 
-  const std::string& GetWebappManifestScope() const {
-    return webapp_manifest_scope_;
-  }
+  const GURL& GetWebappManifestScope() const { return webapp_manifest_scope_; }
 
   void SetPictureInPictureEnabled(
       JNIEnv* env,
@@ -323,13 +302,8 @@ class TabAndroid : public CoreTabHelperDelegate,
 
   JavaObjectWeakGlobalRef weak_java_tab_;
 
-  // The identifier used by session restore for this tab.
-  SessionID session_tab_id_;
-
   // Identifier of the window the tab is in.
   SessionID session_window_id_;
-
-  content::NotificationRegistrar notification_registrar_;
 
   scoped_refptr<cc::Layer> content_layer_;
   android::TabContentManager* tab_content_manager_;
@@ -340,7 +314,7 @@ class TabAndroid : public CoreTabHelperDelegate,
   scoped_refptr<content::DevToolsAgentHost> devtools_host_;
   std::unique_ptr<browser_sync::SyncedTabDelegateAndroid> synced_tab_delegate_;
 
-  std::string webapp_manifest_scope_;
+  GURL webapp_manifest_scope_;
   bool picture_in_picture_enabled_;
   bool embedded_media_experience_enabled_;
 

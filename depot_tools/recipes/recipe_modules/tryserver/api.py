@@ -16,6 +16,10 @@ class TryserverApi(recipe_api.RecipeApi):
     self._gerrit_change = None  # self.m.buildbucket.common_pb2.GerritChange
     self._gerrit_change_repo_url = None
 
+    self._gerrit_info_initialized = False
+    self._gerrit_change_target_ref = None
+    self._gerrit_change_fetch_ref = None
+
   def initialize(self):
     changes = self.m.buildbucket.build.input.gerrit_changes
     if len(changes) == 1:
@@ -43,6 +47,71 @@ class TryserverApi(recipe_api.RecipeApi):
     """
     return self._gerrit_change_repo_url
 
+  def _ensure_gerrit_change_info(self):
+    """Initializes extra info about gerrit_change, fetched from Gerrit server.
+
+    Initializes _gerrit_change_target_ref and _gerrit_change_fetch_ref.
+
+    May emit a step when called for the first time.
+    """
+    cl = self.gerrit_change
+    if not cl:  # pragma: no cover
+      return
+
+    if self._gerrit_info_initialized:
+      return
+
+    td = self._test_data if self._test_data.enabled else {}
+    mock_res = [{
+      'branch': td.get('gerrit_change_target_ref', 'master'),
+      'revisions': {
+        '184ebe53805e102605d11f6b143486d15c23a09c': {
+          '_number': str(cl.patchset),
+          'ref': 'refs/changes/%02d/%d/%d' % (
+              cl.change % 100, cl.change, cl.patchset),
+        },
+      },
+    }]
+    res = self.m.gerrit.get_changes(
+        host='https://' + cl.host,
+        query_params=[('change', cl.change)],
+        # This list must remain static/hardcoded.
+        # If you need extra info, either change it here (hardcoded) or
+        # fetch separetely.
+        o_params=['ALL_REVISIONS', 'DOWNLOAD_COMMANDS'],
+        limit=1,
+        name='fetch current CL info',
+        step_test_data=lambda: self.m.json.test_api.output(mock_res))[0]
+
+    self._gerrit_change_target_ref = res['branch']
+    if not self._gerrit_change_target_ref.startswith('refs/'):
+      self._gerrit_change_target_ref = (
+          'refs/heads/' + self._gerrit_change_target_ref)
+
+    for rev in res['revisions'].itervalues():
+      if int(rev['_number']) == self.gerrit_change.patchset:
+        self._gerrit_change_fetch_ref = rev['ref']
+        break
+    self._gerrit_info_initialized = True
+
+  @property
+  def gerrit_change_fetch_ref(self):
+    """Returns gerrit patch ref, e.g. "refs/heads/45/12345/6, or None.
+
+    Populated iff gerrit_change is populated.
+    """
+    self._ensure_gerrit_change_info()
+    return self._gerrit_change_fetch_ref
+
+  @property
+  def gerrit_change_target_ref(self):
+    """Returns gerrit change destination ref, e.g. "refs/heads/master".
+
+    Populated iff gerrit_change is populated.
+    """
+    self._ensure_gerrit_change_info()
+    return self._gerrit_change_target_ref
+
   @property
   def is_tryserver(self):
     """Returns true iff we have a change to check out."""
@@ -69,7 +138,7 @@ class TryserverApi(recipe_api.RecipeApi):
 
     Argument:
       patch_root: path relative to api.path['root'], usually obtained from
-        api.gclient.calculate_patch_root(patch_project)
+        api.gclient.get_gerrit_patch_root().
 
     Returned paths will be relative to to patch_root.
     """
@@ -99,15 +168,29 @@ class TryserverApi(recipe_api.RecipeApi):
     """
     assert self.is_tryserver
 
-    step_result = self.m.step.active_result
+    step_result = self.m.step('TRYJOB SET SUBPROJECT_TAG', cmd=None)
     step_result.presentation.properties['subproject_tag'] = subproject_tag
+    step_result.presentation.step_text = subproject_tag
 
   def _set_failure_type(self, failure_type):
     if not self.is_tryserver:
       return
 
-    step_result = self.m.step.active_result
+    # TODO(iannucci): add API to set properties regardless of the current step.
+    step_result = self.m.step('TRYJOB FAILURE', cmd=None)
     step_result.presentation.properties['failure_type'] = failure_type
+    step_result.presentation.step_text = failure_type
+    step_result.presentation.status = 'FAILURE'
+
+  def set_do_not_retry_build(self):
+    """A flag to indicate the build should not be retried by the CQ.
+
+    This mechanism is used to reduce CQ duration when retrying will likely
+    return an identical result.
+    """
+    # TODO(iannucci): add API to set properties regardless of the current step.
+    step_result = self.m.step('TRYJOB DO NOT RETRY', cmd=None)
+    step_result.presentation.properties['do_not_retry'] = True
 
   def set_patch_failure_tryjob_result(self):
     """Mark the tryjob result as failure to apply the patch."""
@@ -158,6 +241,8 @@ class TryserverApi(recipe_api.RecipeApi):
     except self.m.step.StepFailure as e:
       self.add_failure_reason(e.reason)
 
+      # TODO(iannucci): add API to set properties regardless of the current
+      # step.
       try:
         step_result = self.m.step.active_result
       except ValueError:
@@ -178,13 +263,14 @@ class TryserverApi(recipe_api.RecipeApi):
     """
     if patch_text is None:
       if self.gerrit_change:
+        # TODO: reuse _ensure_gerrit_change_info.
         patch_text = self.m.gerrit.get_change_description(
             'https://%s' % self.gerrit_change.host,
             int(self.gerrit_change.change),
             int(self.gerrit_change.patchset))
 
     result = self.m.python(
-        'parse description', self.package_repo_resource('git_footers.py'),
+        'parse description', self.repo_resource('git_footers.py'),
         args=['--json', self.m.json.output()],
         stdin=self.m.raw_io.input(data=patch_text))
     return result.json.output

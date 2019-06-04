@@ -17,10 +17,17 @@ namespace chromeos {
 
 class NetworkStateHandler;
 
+namespace device_sync {
+class DeviceSyncClient;
+}  // namespace device_sync
+
+namespace secure_channel {
+class SecureChannelClient;
+}  // namespace secure_channel
+
 namespace tether {
 
 class ActiveHost;
-class BleConnectionManager;
 class DeviceIdTetherNetworkGuidMap;
 class DisconnectTetheringRequestSender;
 class HostScanCache;
@@ -39,11 +46,12 @@ class TetherConnectorImpl : public TetherConnector,
                             public ConnectTetheringOperation::Observer {
  public:
   TetherConnectorImpl(
+      device_sync::DeviceSyncClient* device_sync_client,
+      secure_channel::SecureChannelClient* secure_channel_client,
       NetworkStateHandler* network_state_handler,
       WifiHotspotConnector* wifi_hotspot_connector,
       ActiveHost* active_host,
       TetherHostFetcher* tether_host_fetcher,
-      BleConnectionManager* connection_manager,
       TetherHostResponseRecorder* tether_host_response_recorder,
       DeviceIdTetherNetworkGuidMap* device_id_tether_network_guid_map,
       HostScanCache* host_scan_cache,
@@ -91,12 +99,13 @@ class TetherConnectorImpl : public TetherConnector,
       const std::string& device_id,
       ConnectTetheringOperation::HostResponseErrorCode error_code);
 
+  device_sync::DeviceSyncClient* device_sync_client_;
+  secure_channel::SecureChannelClient* secure_channel_client_;
   NetworkConnectionHandler* network_connection_handler_;
   NetworkStateHandler* network_state_handler_;
   WifiHotspotConnector* wifi_hotspot_connector_;
   ActiveHost* active_host_;
   TetherHostFetcher* tether_host_fetcher_;
-  BleConnectionManager* connection_manager_;
   TetherHostResponseRecorder* tether_host_response_recorder_;
   DeviceIdTetherNetworkGuidMap* device_id_tether_network_guid_map_;
   HostScanCache* host_scan_cache_;

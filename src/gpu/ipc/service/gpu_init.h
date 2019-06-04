@@ -7,17 +7,24 @@
 
 #include "base/macros.h"
 #include "base/memory/ref_counted.h"
-#include "gpu/command_buffer/service/gpu_preferences.h"
 #include "gpu/config/gpu_feature_info.h"
 #include "gpu/config/gpu_info.h"
+#include "gpu/config/gpu_preferences.h"
 #include "gpu/ipc/service/gpu_ipc_service_export.h"
 #include "gpu/ipc/service/gpu_watchdog_thread.h"
+#include "gpu/vulkan/buildflags.h"
 
 namespace base {
 class CommandLine;
 }
 
+namespace gl {
+class GLSurface;
+}
+
 namespace gpu {
+
+class VulkanImplementation;
 
 class GPU_IPC_SERVICE_EXPORT GpuSandboxHelper {
  public:
@@ -59,7 +66,17 @@ class GPU_IPC_SERVICE_EXPORT GpuInit {
   std::unique_ptr<GpuWatchdogThread> TakeWatchdogThread() {
     return std::move(watchdog_thread_);
   }
+  scoped_refptr<gl::GLSurface> TakeDefaultOffscreenSurface() {
+    return std::move(default_offscreen_surface_);
+  }
   bool init_successful() const { return init_successful_; }
+#if BUILDFLAG(ENABLE_VULKAN)
+  VulkanImplementation* vulkan_implementation() {
+    return vulkan_implementation_.get();
+  }
+#else
+  VulkanImplementation* vulkan_implementation() { return nullptr; }
+#endif
 
  private:
   GpuSandboxHelper* sandbox_helper_ = nullptr;
@@ -67,6 +84,7 @@ class GPU_IPC_SERVICE_EXPORT GpuInit {
   GPUInfo gpu_info_;
   GpuFeatureInfo gpu_feature_info_;
   GpuPreferences gpu_preferences_;
+  scoped_refptr<gl::GLSurface> default_offscreen_surface_;
   bool init_successful_ = false;
 
   // The following data are collected from hardware GPU and saved before
@@ -74,8 +92,11 @@ class GPU_IPC_SERVICE_EXPORT GpuInit {
   base::Optional<GPUInfo> gpu_info_for_hardware_gpu_;
   base::Optional<GpuFeatureInfo> gpu_feature_info_for_hardware_gpu_;
 
+#if BUILDFLAG(ENABLE_VULKAN)
+  std::unique_ptr<VulkanImplementation> vulkan_implementation_;
+#endif
+
   void AdjustInfoToSwiftShader();
-  void AdjustInfoToNoGpu();
 
   DISALLOW_COPY_AND_ASSIGN(GpuInit);
 };

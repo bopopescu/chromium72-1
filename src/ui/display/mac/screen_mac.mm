@@ -93,7 +93,7 @@ Display BuildDisplayForScreen(NSScreen* screen) {
   }
   icc_profile.HistogramDisplay(display.id());
   gfx::ColorSpace screen_color_space = icc_profile.GetColorSpace();
-  if (Display::HasForceColorProfile()) {
+  if (Display::HasForceDisplayColorProfile()) {
     if (Display::HasEnsureForcedColorProfile()) {
       CHECK_EQ(screen_color_space, display.color_space())
           << "The display's color space does not match the color space that "
@@ -136,11 +136,10 @@ CGFloat GetMinimumDistanceToCorner(const NSPoint& point, NSScreen* screen) {
 class ScreenMac : public Screen {
  public:
   ScreenMac()
-      : configure_timer_(
-            FROM_HERE,
-            base::TimeDelta::FromMilliseconds(kConfigureDelayMs),
-            base::Bind(&ScreenMac::ConfigureTimerFired, base::Unretained(this)),
-            false) {
+      : configure_timer_(FROM_HERE,
+                         base::TimeDelta::FromMilliseconds(kConfigureDelayMs),
+                         base::Bind(&ScreenMac::ConfigureTimerFired,
+                                    base::Unretained(this))) {
     old_displays_ = displays_ = BuildDisplaysFromQuartz();
     CGDisplayRegisterReconfigurationCallback(
         ScreenMac::DisplayReconfigurationCallBack, this);
@@ -169,7 +168,8 @@ class ScreenMac : public Screen {
     return gfx::ScreenPointFromNSPoint([NSEvent mouseLocation]);
   }
 
-  bool IsWindowUnderCursor(gfx::NativeWindow window) override {
+  bool IsWindowUnderCursor(gfx::NativeWindow native_window) override {
+    NSWindow* window = native_window.GetNativeNSWindow();
     return [NSWindow windowNumberAtPoint:[NSEvent mouseLocation]
              belowWindowWithWindowNumber:0] == [window windowNumber];
   }
@@ -185,7 +185,9 @@ class ScreenMac : public Screen {
     return displays_;
   }
 
-  Display GetDisplayNearestWindow(gfx::NativeWindow window) const override {
+  Display GetDisplayNearestWindow(
+      gfx::NativeWindow native_window) const override {
+    NSWindow* window = native_window.GetNativeNSWindow();
     EnsureDisplaysValid();
     if (displays_.size() == 1)
       return displays_[0];
@@ -203,7 +205,8 @@ class ScreenMac : public Screen {
     return GetCachedDisplayForScreen(match_screen);
   }
 
-  Display GetDisplayNearestView(gfx::NativeView view) const override {
+  Display GetDisplayNearestView(gfx::NativeView native_view) const override {
+    NSView* view = native_view.GetNativeNSView();
     NSWindow* window = [view window];
     if (!window)
       return GetPrimaryDisplay();
@@ -354,7 +357,7 @@ class ScreenMac : public Screen {
   std::vector<Display> old_displays_;
 
   // The timer to delay configuring outputs and notifying observers.
-  base::Timer configure_timer_;
+  base::RetainingOneShotTimer configure_timer_;
 
   // The observer notified by NSScreenColorSpaceDidChangeNotification.
   base::scoped_nsobject<id> screen_color_change_observer_;
@@ -367,12 +370,14 @@ class ScreenMac : public Screen {
 }  // namespace
 
 // static
-gfx::NativeWindow Screen::GetWindowForView(gfx::NativeView view) {
-  NSWindow* window = nil;
+gfx::NativeWindow Screen::GetWindowForView(gfx::NativeView native_view) {
 #if !defined(USE_AURA)
-  window = [view window];
-#endif
+  NSView* view = native_view.GetNativeNSView();
+  return [view window];
+#else
+  gfx::NativeWindow window = nil;
   return window;
+#endif
 }
 
 #if !defined(USE_AURA)

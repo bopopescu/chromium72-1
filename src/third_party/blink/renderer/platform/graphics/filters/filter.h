@@ -21,12 +21,12 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_PLATFORM_GRAPHICS_FILTERS_FILTER_H_
 #define THIRD_PARTY_BLINK_RENDERER_PLATFORM_GRAPHICS_FILTERS_FILTER_H_
 
+#include "base/macros.h"
 #include "third_party/blink/renderer/platform/geometry/float_point_3d.h"
 #include "third_party/blink/renderer/platform/geometry/float_rect.h"
 #include "third_party/blink/renderer/platform/geometry/int_rect.h"
 #include "third_party/blink/renderer/platform/heap/handle.h"
 #include "third_party/blink/renderer/platform/platform_export.h"
-#include "third_party/blink/renderer/platform/wtf/noncopyable.h"
 
 namespace blink {
 
@@ -34,7 +34,6 @@ class SourceGraphic;
 class FilterEffect;
 
 class PLATFORM_EXPORT Filter final : public GarbageCollected<Filter> {
-  WTF_MAKE_NONCOPYABLE(Filter);
 
  public:
   enum UnitScaling { kUserSpace, kBoundingBox };
@@ -44,6 +43,11 @@ class PLATFORM_EXPORT Filter final : public GarbageCollected<Filter> {
                         float scale,
                         UnitScaling);
   static Filter* Create(float scale);
+
+  Filter(const FloatRect& reference_box,
+         const FloatRect& filter_region,
+         float scale,
+         UnitScaling);
 
   void Trace(blink::Visitor*);
 
@@ -69,11 +73,6 @@ class PLATFORM_EXPORT Filter final : public GarbageCollected<Filter> {
   SourceGraphic* GetSourceGraphic() const { return source_graphic_.Get(); }
 
  private:
-  Filter(const FloatRect& reference_box,
-         const FloatRect& filter_region,
-         float scale,
-         UnitScaling);
-
   FloatRect reference_box_;
   FloatRect filter_region_;
   float scale_;
@@ -81,6 +80,8 @@ class PLATFORM_EXPORT Filter final : public GarbageCollected<Filter> {
 
   Member<SourceGraphic> source_graphic_;
   Member<FilterEffect> last_effect_;
+
+  DISALLOW_COPY_AND_ASSIGN(Filter);
 };
 
 }  // namespace blink

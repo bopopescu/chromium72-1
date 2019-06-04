@@ -1,8 +1,0 @@
-{
-    "name": ["ErrorNameFieldType"],
-    "methods": [
-    ],
-    "comment": [
-        "Interface's 'name' field has wrong type"
-    ]
-}

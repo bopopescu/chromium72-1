@@ -13,13 +13,18 @@
 
 #include <openssl/ossl_typ.h>
 
-#include <string>
+#include <stddef.h>
+#include <stdint.h>
 #include <memory>
+#include <string>
 #include <vector>
 
 #include "rtc_base/buffer.h"
+#include "rtc_base/messagequeue.h"
 #include "rtc_base/opensslidentity.h"
+#include "rtc_base/sslidentity.h"
 #include "rtc_base/sslstreamadapter.h"
+#include "rtc_base/stream.h"
 
 namespace rtc {
 
@@ -47,11 +52,11 @@ namespace rtc {
 
 // Look in sslstreamadapter.h for documentation of the methods.
 
-class OpenSSLIdentity;
+class SSLCertChain;
 
 ///////////////////////////////////////////////////////////////////////////////
 
-class OpenSSLStreamAdapter : public SSLStreamAdapter {
+class OpenSSLStreamAdapter final : public SSLStreamAdapter {
  public:
   explicit OpenSSLStreamAdapter(StreamInterface* stream);
   ~OpenSSLStreamAdapter() override;
@@ -115,7 +120,7 @@ class OpenSSLStreamAdapter : public SSLStreamAdapter {
 
   // Use our timeutils.h source of timing in BoringSSL, allowing us to test
   // using a fake clock.
-  static void enable_time_callback_for_testing();
+  static void EnableTimeCallbackForTesting();
 
  protected:
   void OnEvent(StreamInterface* stream, int events, int err) override;
@@ -125,14 +130,14 @@ class OpenSSLStreamAdapter : public SSLStreamAdapter {
     // Before calling one of the StartSSL methods, data flows
     // in clear text.
     SSL_NONE,
-    SSL_WAIT,  // waiting for the stream to open to start SSL negotiation
+    SSL_WAIT,        // waiting for the stream to open to start SSL negotiation
     SSL_CONNECTING,  // SSL negotiation in progress
-    SSL_CONNECTED,  // SSL stream successfully established
-    SSL_ERROR,  // some SSL error occurred, stream is closed
-    SSL_CLOSED  // Clean close
+    SSL_CONNECTED,   // SSL stream successfully established
+    SSL_ERROR,       // some SSL error occurred, stream is closed
+    SSL_CLOSED       // Clean close
   };
 
-  enum { MSG_TIMEOUT = MSG_MAX+1};
+  enum { MSG_TIMEOUT = MSG_MAX + 1 };
 
   // The following three methods return 0 on success and a negative
   // error code on failure. The error code may be from OpenSSL or -1
@@ -170,11 +175,11 @@ class OpenSSLStreamAdapter : public SSLStreamAdapter {
   // SSL_CTX_set_cert_verify_callback.
   static int SSLVerifyCallback(X509_STORE_CTX* store, void* arg);
 
-  bool waiting_to_verify_peer_certificate() const {
-    return client_auth_enabled() && !peer_certificate_verified_;
+  bool WaitingToVerifyPeerCertificate() const {
+    return GetClientAuthEnabled() && !peer_certificate_verified_;
   }
 
-  bool has_peer_certificate_digest() const {
+  bool HasPeerCertificateDigest() const {
     return !peer_certificate_digest_algorithm_.empty() &&
            !peer_certificate_digest_value_.empty();
   }

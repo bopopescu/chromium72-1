@@ -34,6 +34,8 @@ class HTMLButtonElement final : public HTMLFormControlElement {
  public:
   static HTMLButtonElement* Create(Document&);
 
+  explicit HTMLButtonElement(Document&);
+
   void setType(const AtomicString&);
 
   const AtomicString& Value() const;
@@ -41,8 +43,6 @@ class HTMLButtonElement final : public HTMLFormControlElement {
   bool WillRespondToMouseClickEvents() override;
 
  private:
-  explicit HTMLButtonElement(Document&);
-
   enum Type { SUBMIT, RESET, BUTTON };
 
   const AtomicString& FormControlType() const override;
@@ -52,10 +52,10 @@ class HTMLButtonElement final : public HTMLFormControlElement {
   // HTMLFormControlElement always creates one, but buttons don't need it.
   bool AlwaysCreateUserAgentShadowRoot() const override { return false; }
 
-  Node::InsertionNotificationRequest InsertedInto(ContainerNode*) override;
+  Node::InsertionNotificationRequest InsertedInto(ContainerNode&) override;
   void ParseAttribute(const AttributeModificationParams&) override;
   bool IsPresentationAttribute(const QualifiedName&) const override;
-  void DefaultEventHandler(Event*) override;
+  void DefaultEventHandler(Event&) override;
   bool HasActivationBehavior() const override;
 
   void AppendToFormData(FormData&) override;

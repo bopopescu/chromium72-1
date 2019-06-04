@@ -29,7 +29,6 @@
 #include <utility>
 
 #include "base/memory/ptr_util.h"
-#include "cc/layers/layer.h"
 #include "cc/layers/picture_layer.h"
 #include "cc/paint/display_item_list.h"
 #include "third_party/blink/public/platform/platform.h"
@@ -39,16 +38,17 @@
 #include "third_party/blink/public/web/blink.h"
 #include "third_party/blink/renderer/core/dom/layout_tree_builder_traversal.h"
 #include "third_party/blink/renderer/core/dom/node.h"
-#include "third_party/blink/renderer/core/exported/web_settings_impl.h"
 #include "third_party/blink/renderer/core/exported/web_view_impl.h"
 #include "third_party/blink/renderer/core/frame/local_frame.h"
 #include "third_party/blink/renderer/core/frame/local_frame_view.h"
+#include "third_party/blink/renderer/core/frame/settings.h"
 #include "third_party/blink/renderer/core/frame/web_frame_widget_base.h"
 #include "third_party/blink/renderer/core/frame/web_local_frame_impl.h"
 #include "third_party/blink/renderer/core/layout/layout_box_model_object.h"
 #include "third_party/blink/renderer/core/layout/layout_object.h"
 #include "third_party/blink/renderer/core/paint/compositing/composited_layer_mapping.h"
 #include "third_party/blink/renderer/core/paint/paint_layer.h"
+#include "third_party/blink/renderer/core/paint/paint_layer_scrollable_area.h"
 #include "third_party/blink/renderer/platform/animation/compositor_animation_curve.h"
 #include "third_party/blink/renderer/platform/animation/compositor_float_animation_curve.h"
 #include "third_party/blink/renderer/platform/animation/compositor_keyframe_model.h"
@@ -59,8 +59,7 @@
 #include "third_party/blink/renderer/platform/graphics/paint/drawing_recorder.h"
 #include "third_party/blink/renderer/platform/graphics/paint/paint_canvas.h"
 #include "third_party/blink/renderer/platform/graphics/paint/paint_recorder.h"
-#include "third_party/blink/renderer/platform/layout_test_support.h"
-#include "third_party/blink/renderer/platform/wtf/time.h"
+#include "third_party/blink/renderer/platform/web_test_support.h"
 #include "third_party/blink/renderer/platform/wtf/vector.h"
 #include "third_party/skia/include/core/SkMatrix44.h"
 #include "ui/gfx/geometry/rect.h"
@@ -69,48 +68,36 @@
 
 namespace blink {
 
-std::unique_ptr<LinkHighlightImpl> LinkHighlightImpl::Create(
-    Node* node,
-    WebViewImpl* owning_web_view) {
-  return base::WrapUnique(new LinkHighlightImpl(node, owning_web_view));
+std::unique_ptr<LinkHighlightImpl> LinkHighlightImpl::Create(Node* node) {
+  return base::WrapUnique(new LinkHighlightImpl(node));
 }
 
-LinkHighlightImpl::LinkHighlightImpl(Node* node, WebViewImpl* owning_web_view)
+LinkHighlightImpl::LinkHighlightImpl(Node* node)
     : node_(node),
-      owning_web_view_(owning_web_view),
       current_graphics_layer_(nullptr),
       is_scrolling_graphics_layer_(false),
       geometry_needs_update_(false),
       is_animating_(false),
-      start_time_(CurrentTimeTicksInSeconds()),
+      start_time_(CurrentTimeTicks()),
       unique_id_(NewUniqueObjectId()) {
   DCHECK(node_);
-  DCHECK(owning_web_view);
   content_layer_ = cc::PictureLayer::Create(this);
-  clip_layer_ = cc::Layer::Create();
-  clip_layer_->SetTransformOrigin(FloatPoint3D());
-  clip_layer_->AddChild(content_layer_);
+  content_layer_->SetTransformOrigin(FloatPoint3D());
 
   compositor_animation_ = CompositorAnimation::Create();
   DCHECK(compositor_animation_);
   compositor_animation_->SetAnimationDelegate(this);
-  if (owning_web_view_->LinkHighlightsTimeline())
-    owning_web_view_->LinkHighlightsTimeline()->AnimationAttached(*this);
 
-  CompositorElementId element_id =
-      CompositorElementIdFromUniqueObjectId(unique_id_);
-  compositor_animation_->AttachElement(element_id);
+  compositor_animation_->AttachElement(element_id());
   content_layer_->SetIsDrawable(true);
   content_layer_->SetOpacity(1);
-  content_layer_->SetElementId(element_id);
+  content_layer_->SetElementId(element_id());
   geometry_needs_update_ = true;
 }
 
 LinkHighlightImpl::~LinkHighlightImpl() {
   if (compositor_animation_->IsElementAttached())
     compositor_animation_->DetachElement();
-  if (owning_web_view_->LinkHighlightsTimeline())
-    owning_web_view_->LinkHighlightsTimeline()->AnimationDestroyed(*this);
   compositor_animation_->SetAnimationDelegate(nullptr);
   compositor_animation_.reset();
 
@@ -118,15 +105,12 @@ LinkHighlightImpl::~LinkHighlightImpl() {
   ReleaseResources();
 }
 
-cc::PictureLayer* LinkHighlightImpl::ContentLayer() {
-  return content_layer_.get();
-}
-
-cc::Layer* LinkHighlightImpl::ClipLayer() {
-  return clip_layer_.get();
-}
-
 void LinkHighlightImpl::ReleaseResources() {
+  if (!node_)
+    return;
+
+  if (auto* layout_object = node_->GetLayoutObject())
+    layout_object->SetNeedsPaintPropertyUpdate();
   node_.Clear();
 }
 
@@ -143,8 +127,6 @@ void LinkHighlightImpl::AttachLinkHighlightToCompositingLayer(
   }
   if (!new_graphics_layer)
     return;
-
-  clip_layer_->SetTransform(gfx::Transform());
 
   if (current_graphics_layer_ != new_graphics_layer) {
     if (current_graphics_layer_)
@@ -206,7 +188,7 @@ bool LinkHighlightImpl::ComputeHighlightLayerPathAndPosition(
   DCHECK(quads.size());
   Path new_path;
 
-  for (size_t quad_index = 0; quad_index < quads.size(); ++quad_index) {
+  for (wtf_size_t quad_index = 0; quad_index < quads.size(); ++quad_index) {
     FloatQuad absolute_quad = quads[quad_index];
 
     // Scrolling content layers have the same offset from layout object as the
@@ -218,10 +200,10 @@ bool LinkHighlightImpl::ComputeHighlightLayerPathAndPosition(
       absolute_quad.Move(ToScrollOffset(scroll_position));
     }
 
-    absolute_quad.SetP1(RoundedIntPoint(absolute_quad.P1()));
-    absolute_quad.SetP2(RoundedIntPoint(absolute_quad.P2()));
-    absolute_quad.SetP3(RoundedIntPoint(absolute_quad.P3()));
-    absolute_quad.SetP4(RoundedIntPoint(absolute_quad.P4()));
+    absolute_quad.SetP1(FloatPoint(RoundedIntPoint(absolute_quad.P1())));
+    absolute_quad.SetP2(FloatPoint(RoundedIntPoint(absolute_quad.P2())));
+    absolute_quad.SetP3(FloatPoint(RoundedIntPoint(absolute_quad.P3())));
+    absolute_quad.SetP4(FloatPoint(RoundedIntPoint(absolute_quad.P4())));
     FloatQuad transformed_quad =
         paint_invalidation_container.AbsoluteToLocalQuad(
             absolute_quad, kUseTransforms | kTraverseDocumentBoundaries);
@@ -241,7 +223,9 @@ bool LinkHighlightImpl::ComputeHighlightLayerPathAndPosition(
     // links: these should ideally be merged into a single rect before creating
     // the path, but that's another CL.
     if (quads.size() == 1 && transformed_quad.IsRectilinear() &&
-        !owning_web_view_->SettingsImpl()->MockGestureTapHighlightsEnabled()) {
+        !node_->GetDocument()
+             .GetSettings()
+             ->GetMockGestureTapHighlightsEnabled()) {
       FloatSize rect_rounding_radii(3, 3);
       new_path.AddRoundedRect(transformed_quad.BoundingBox(),
                               rect_rounding_radii);
@@ -262,6 +246,13 @@ bool LinkHighlightImpl::ComputeHighlightLayerPathAndPosition(
 
   content_layer_->SetPosition(bounding_rect.Location());
 
+  if (RuntimeEnabledFeatures::BlinkGenPropertyTreesEnabled()) {
+    FloatPoint offset(current_graphics_layer_->GetOffsetFromTransformNode());
+    offset.MoveBy(bounding_rect.Location());
+    content_layer_->SetOffsetToTransformParent(
+        gfx::Vector2dF(offset.X(), offset.Y()));
+  }
+
   return path_has_changed;
 }
 
@@ -280,13 +271,14 @@ LinkHighlightImpl::PaintContentsToDisplayList(
 
   PaintRecorder recorder;
   gfx::Rect record_bounds = PaintableRegion();
-  PaintCanvas* canvas =
+  cc::PaintCanvas* canvas =
       recorder.beginRecording(record_bounds.width(), record_bounds.height());
 
   PaintFlags flags;
   flags.setStyle(PaintFlags::kFill_Style);
   flags.setAntiAlias(true);
-  flags.setColor(node_->GetLayoutObject()->Style()->TapHighlightColor().Rgb());
+  flags.setColor(
+      node_->GetLayoutObject()->StyleRef().TapHighlightColor().Rgb());
   canvas->drawPath(path_.GetSkPath(), flags);
 
   display_list->StartPaint();
@@ -304,8 +296,8 @@ void LinkHighlightImpl::StartHighlightAnimationIfNeeded() {
   is_animating_ = true;
   const float kStartOpacity = 1;
   // FIXME: Should duration be configurable?
-  const float kFadeDuration = 0.1f;
-  const float kMinPreFadeDuration = 0.1f;
+  constexpr auto kFadeDuration = TimeDelta::FromMilliseconds(100);
+  constexpr auto kMinPreFadeDuration = TimeDelta::FromMilliseconds(100);
 
   content_layer_->SetOpacity(kStartOpacity);
 
@@ -319,28 +311,25 @@ void LinkHighlightImpl::StartHighlightAnimationIfNeeded() {
       CompositorFloatKeyframe(0, kStartOpacity, timing_function));
   // Make sure we have displayed for at least minPreFadeDuration before starting
   // to fade out.
-  float extra_duration_required = std::max(
-      0.f, kMinPreFadeDuration -
-               static_cast<float>(CurrentTimeTicksInSeconds() - start_time_));
-  if (extra_duration_required) {
-    curve->AddKeyframe(CompositorFloatKeyframe(extra_duration_required,
-                                               kStartOpacity, timing_function));
+  TimeDelta extra_duration_required = std::max(
+      TimeDelta(), kMinPreFadeDuration - (CurrentTimeTicks() - start_time_));
+  if (!extra_duration_required.is_zero()) {
+    curve->AddKeyframe(CompositorFloatKeyframe(
+        extra_duration_required.InSecondsF(), kStartOpacity, timing_function));
   }
-  // For layout tests we don't fade out.
+  // For web tests we don't fade out.
   curve->AddKeyframe(CompositorFloatKeyframe(
-      kFadeDuration + extra_duration_required,
-      LayoutTestSupport::IsRunningLayoutTest() ? kStartOpacity : 0,
-      timing_function));
+      (kFadeDuration + extra_duration_required).InSecondsF(),
+      WebTestSupport::IsRunningWebTest() ? kStartOpacity : 0, timing_function));
 
   std::unique_ptr<CompositorKeyframeModel> keyframe_model =
-      CompositorKeyframeModel::Create(*curve, CompositorTargetProperty::OPACITY,
-                                      0, 0);
+      CompositorKeyframeModel::Create(
+          *curve, compositor_target_property::OPACITY, 0, 0);
 
   content_layer_->SetIsDrawable(true);
   compositor_animation_->AddKeyframeModel(std::move(keyframe_model));
 
   Invalidate();
-  owning_web_view_->MainFrameImpl()->FrameWidgetImpl()->ScheduleAnimation();
 }
 
 void LinkHighlightImpl::ClearGraphicsLayerLinkHighlightPointer() {
@@ -365,6 +354,12 @@ class LinkHighlightDisplayItemClientForTracking : public DisplayItemClient {
 };
 
 void LinkHighlightImpl::UpdateGeometry() {
+  if (!node_ || !node_->GetLayoutObject()) {
+    ClearGraphicsLayerLinkHighlightPointer();
+    ReleaseResources();
+    return;
+  }
+
   // To avoid unnecessary updates (e.g. other entities have requested animations
   // from our WebViewImpl), only proceed if we actually requested an update.
   if (!geometry_needs_update_)
@@ -372,28 +367,22 @@ void LinkHighlightImpl::UpdateGeometry() {
 
   geometry_needs_update_ = false;
 
-  bool has_layout_object = node_ && node_->GetLayoutObject();
-  if (has_layout_object) {
-    const LayoutBoxModelObject& paint_invalidation_container =
-        node_->GetLayoutObject()->ContainerForPaintInvalidation();
-    AttachLinkHighlightToCompositingLayer(paint_invalidation_container);
-    if (ComputeHighlightLayerPathAndPosition(paint_invalidation_container)) {
-      // We only need to invalidate the layer if the highlight size has changed,
-      // otherwise we can just re-position the layer without needing to
-      // repaint.
-      content_layer_->SetNeedsDisplay();
+  const LayoutBoxModelObject& paint_invalidation_container =
+      node_->GetLayoutObject()->ContainerForPaintInvalidation();
+  AttachLinkHighlightToCompositingLayer(paint_invalidation_container);
+  if (ComputeHighlightLayerPathAndPosition(paint_invalidation_container)) {
+    // We only need to invalidate the layer if the highlight size has changed,
+    // otherwise we can just re-position the layer without needing to
+    // repaint.
+    content_layer_->SetNeedsDisplay();
 
-      if (current_graphics_layer_) {
-        gfx::Rect rect = gfx::ToEnclosingRect(
-            gfx::RectF(Layer()->position(), gfx::SizeF(Layer()->bounds())));
-        current_graphics_layer_->TrackRasterInvalidation(
-            LinkHighlightDisplayItemClientForTracking(), IntRect(rect),
-            PaintInvalidationReason::kFull);
-      }
+    if (current_graphics_layer_) {
+      gfx::Rect rect = gfx::ToEnclosingRect(
+          gfx::RectF(Layer()->position(), gfx::SizeF(Layer()->bounds())));
+      current_graphics_layer_->TrackRasterInvalidation(
+          LinkHighlightDisplayItemClientForTracking(), IntRect(rect),
+          PaintInvalidationReason::kFullLayer);
     }
-  } else {
-    ClearGraphicsLayerLinkHighlightPointer();
-    ReleaseResources();
   }
 }
 
@@ -409,11 +398,27 @@ void LinkHighlightImpl::Invalidate() {
 }
 
 cc::Layer* LinkHighlightImpl::Layer() {
-  return ClipLayer();
+  return content_layer_.get();
 }
 
 CompositorAnimation* LinkHighlightImpl::GetCompositorAnimation() const {
   return compositor_animation_.get();
+}
+
+CompositorElementId LinkHighlightImpl::element_id() {
+  return CompositorElementIdFromUniqueObjectId(unique_id_);
+}
+
+const EffectPaintPropertyNode* LinkHighlightImpl::effect() {
+  if (!node_)
+    return nullptr;
+
+  if (auto* layout_object = node_->GetLayoutObject()) {
+    if (auto* properties = layout_object->FirstFragment().PaintProperties())
+      return properties->LinkHighlightEffect();
+  }
+
+  return nullptr;
 }
 
 }  // namespace blink

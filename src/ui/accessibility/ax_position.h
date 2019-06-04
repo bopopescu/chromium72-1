@@ -20,6 +20,7 @@
 #include "base/strings/utf_string_conversions.h"
 #include "ui/accessibility/ax_enum_util.h"
 #include "ui/accessibility/ax_enums.mojom.h"
+#include "ui/accessibility/ax_tree_id.h"
 
 namespace ui {
 
@@ -63,7 +64,7 @@ bool operator!=(const AXPosition<AXPositionType, AXNodeType>& first,
 // distinguish between "before text" and "after text" positions. To do this, if
 // the child index is 0 and the anchor is a leaf node, then it's an "after text"
 // position. If the child index is |BEFORE_TEXT| and the anchor is a leaf node,
-// then his is a "before text" position.
+// then this is a "before text" position.
 // It doesn't make sense to have a "before text" position on a text position,
 // because it is identical to setting its offset to the first character.
 //
@@ -80,13 +81,13 @@ bool operator!=(const AXPosition<AXPositionType, AXNodeType>& first,
 //
 // This class can be copied using the |Clone| method. It is designed to be
 // immutable.
+
 template <class AXPositionType, class AXNodeType>
 class AXPosition {
  public:
   using AXPositionInstance =
       std::unique_ptr<AXPosition<AXPositionType, AXNodeType>>;
 
-  static const int INVALID_TREE_ID = -1;
   static const int32_t INVALID_ANCHOR_ID = -1;
   static const int BEFORE_TEXT = -1;
   static const int INVALID_INDEX = -2;
@@ -94,13 +95,13 @@ class AXPosition {
 
   static AXPositionInstance CreateNullPosition() {
     AXPositionInstance new_position(new AXPositionType());
-    new_position->Initialize(AXPositionKind::NULL_POSITION, INVALID_TREE_ID,
+    new_position->Initialize(AXPositionKind::NULL_POSITION, AXTreeIDUnknown(),
                              INVALID_ANCHOR_ID, INVALID_INDEX, INVALID_OFFSET,
                              ax::mojom::TextAffinity::kDownstream);
     return new_position;
   }
 
-  static AXPositionInstance CreateTreePosition(int tree_id,
+  static AXPositionInstance CreateTreePosition(AXTreeID tree_id,
                                                int32_t anchor_id,
                                                int child_index) {
     AXPositionInstance new_position(new AXPositionType());
@@ -111,7 +112,7 @@ class AXPosition {
   }
 
   static AXPositionInstance CreateTextPosition(
-      int tree_id,
+      AXTreeID tree_id,
       int32_t anchor_id,
       int text_offset,
       ax::mojom::TextAffinity affinity) {
@@ -121,8 +122,7 @@ class AXPosition {
     return new_position;
   }
 
-  AXPosition() {}
-  virtual ~AXPosition() {}
+  virtual ~AXPosition() = default;
 
   virtual AXPositionInstance Clone() const = 0;
 
@@ -140,9 +140,9 @@ class AXPosition {
         } else {
           str_child_index = base::IntToString(child_index_);
         }
-        str = "TreePosition tree_id=" + base::IntToString(tree_id_) +
-              " anchor_id=" + base::IntToString(anchor_id_) + " child_index=" +
-              str_child_index;
+        str = "TreePosition tree_id=" + tree_id_.ToString() +
+              " anchor_id=" + base::IntToString(anchor_id_) +
+              " child_index=" + str_child_index;
         break;
       }
       case AXPositionKind::TEXT_POSITION: {
@@ -152,7 +152,7 @@ class AXPosition {
         } else {
           str_text_offset = base::IntToString(text_offset_);
         }
-        str = "TextPosition tree_id=" + base::IntToString(tree_id_) +
+        str = "TextPosition tree_id=" + tree_id_.ToString() +
               " anchor_id=" + base::IntToString(anchor_id_) +
               " text_offset=" + str_text_offset + " affinity=" +
               ui::ToString(static_cast<ax::mojom::TextAffinity>(affinity_));
@@ -177,13 +177,12 @@ class AXPosition {
     return str + " annotated_text=" + annotated_text;
   }
 
-  int tree_id() const { return tree_id_; }
+  AXTreeID tree_id() const { return tree_id_; }
   int32_t anchor_id() const { return anchor_id_; }
 
   AXNodeType* GetAnchor() const {
-    if (tree_id_ == INVALID_TREE_ID || anchor_id_ == INVALID_ANCHOR_ID)
+    if (tree_id_ == AXTreeIDUnknown() || anchor_id_ == INVALID_ANCHOR_ID)
       return nullptr;
-    DCHECK_GE(tree_id_, 0);
     DCHECK_GE(anchor_id_, 0);
     return GetNodeInTree(tree_id_, anchor_id_);
   }
@@ -514,10 +513,10 @@ class AXPosition {
     if (child_index < 0 || child_index >= AnchorChildCount())
       return CreateNullPosition();
 
-    int tree_id = INVALID_TREE_ID;
+    AXTreeID tree_id = AXTreeIDUnknown();
     int32_t child_id = INVALID_ANCHOR_ID;
     AnchorChild(child_index, &tree_id, &child_id);
-    DCHECK_NE(tree_id, INVALID_TREE_ID);
+    DCHECK_NE(tree_id, AXTreeIDUnknown());
     DCHECK_NE(child_id, INVALID_ANCHOR_ID);
     switch (kind_) {
       case AXPositionKind::NULL_POSITION:
@@ -544,10 +543,10 @@ class AXPosition {
     if (IsNullPosition())
       return CreateNullPosition();
 
-    int tree_id = INVALID_TREE_ID;
+    AXTreeID tree_id = AXTreeIDUnknown();
     int32_t parent_id = INVALID_ANCHOR_ID;
     AnchorParent(&tree_id, &parent_id);
-    if (tree_id == INVALID_TREE_ID || parent_id == INVALID_ANCHOR_ID)
+    if (tree_id == AXTreeIDUnknown() || parent_id == INVALID_ANCHOR_ID)
       return CreateNullPosition();
 
     switch (kind_) {
@@ -1143,14 +1142,18 @@ class AXPosition {
   // Returns the text that is present inside the anchor node, including any text
   // found in descendant nodes.
   virtual base::string16 GetInnerText() const = 0;
+  // Returns the length of the text that is present inside the anchor node,
+  // including any text found in descendant text nodes.
+  virtual int MaxTextOffset() const = 0;
 
  protected:
+  AXPosition() = default;
   AXPosition(const AXPosition<AXPositionType, AXNodeType>& other) = default;
   virtual AXPosition<AXPositionType, AXNodeType>& operator=(
       const AXPosition<AXPositionType, AXNodeType>& other) = default;
 
   virtual void Initialize(AXPositionKind kind,
-                          int tree_id,
+                          AXTreeID tree_id,
                           int32_t anchor_id,
                           int child_index,
                           int text_offset,
@@ -1170,7 +1173,7 @@ class AXPosition {
          (text_offset_ < 0 || text_offset_ > MaxTextOffset()))) {
       // Reset to the null position.
       kind_ = AXPositionKind::NULL_POSITION;
-      tree_id_ = INVALID_TREE_ID;
+      tree_id_ = AXTreeIDUnknown();
       anchor_id_ = INVALID_ANCHOR_ID;
       child_index_ = INVALID_INDEX;
       text_offset_ = INVALID_OFFSET;
@@ -1264,15 +1267,13 @@ class AXPosition {
 
   // Abstract methods.
   virtual void AnchorChild(int child_index,
-                           int* tree_id,
+                           AXTreeID* tree_id,
                            int32_t* child_id) const = 0;
   virtual int AnchorChildCount() const = 0;
   virtual int AnchorIndexInParent() const = 0;
-  virtual void AnchorParent(int* tree_id, int32_t* parent_id) const = 0;
-  virtual AXNodeType* GetNodeInTree(int tree_id, int32_t node_id) const = 0;
-  // Returns the length of the text that is present inside the anchor node,
-  // including any text found in descendant text nodes.
-  virtual int MaxTextOffset() const = 0;
+  virtual void AnchorParent(AXTreeID* tree_id, int32_t* parent_id) const = 0;
+  virtual AXNodeType* GetNodeInTree(AXTreeID tree_id,
+                                    int32_t node_id) const = 0;
   // Returns the length of text that this anchor node takes up in its parent.
   // On some platforms, embedded objects are represented in their parent with a
   // single embedded object character.
@@ -1285,7 +1286,7 @@ class AXPosition {
 
  private:
   AXPositionKind kind_;
-  int tree_id_;
+  AXTreeID tree_id_;
   int32_t anchor_id_;
 
   // For text positions, |child_index_| is initially set to |-1| and only
@@ -1298,8 +1299,6 @@ class AXPosition {
   ax::mojom::TextAffinity affinity_;
 };
 
-template <class AXPositionType, class AXNodeType>
-const int AXPosition<AXPositionType, AXNodeType>::INVALID_TREE_ID;
 template <class AXPositionType, class AXNodeType>
 const int32_t AXPosition<AXPositionType, AXNodeType>::INVALID_ANCHOR_ID;
 template <class AXPositionType, class AXNodeType>
@@ -1333,14 +1332,53 @@ bool operator<(const AXPosition<AXPositionType, AXNodeType>& first,
   if (first.IsNullPosition() || second.IsNullPosition())
     return false;
 
+  // It is potentially costly to compute the parent position of a text position,
+  // whilst computing the parent position of a tree position is really
+  // inexpensive. In order to find the lowest common ancestor, especially if
+  // that ancestor is all the way up to the root of the tree, this will need to
+  // be done repeatedly. We avoid the performance hit by converting both
+  // positions to tree positions and only falling back to text positions if both
+  // are text positions and the lowest common ancestor is not one of their
+  // anchors. Essentially, the question we need to answer is: "When are two non
+  // equivalent positions going to have the same lowest common ancestor position
+  // when converted to tree positions?" The answer is when they are both text
+  // positions and they either have the same anchor, or one is the ancestor of
+  // the other.
+  std::unique_ptr<AXPosition<AXPositionType, AXNodeType>> tree_first =
+      first.AsTreePosition();
+  std::unique_ptr<AXPosition<AXPositionType, AXNodeType>> tree_second =
+      second.AsTreePosition();
   std::unique_ptr<AXPosition<AXPositionType, AXNodeType>> first_ancestor =
-      first.LowestCommonAncestor(second)->AsTreePosition();
+      tree_first->LowestCommonAncestor(*tree_second);
   std::unique_ptr<AXPosition<AXPositionType, AXNodeType>> second_ancestor =
-      second.LowestCommonAncestor(first)->AsTreePosition();
+      tree_second->LowestCommonAncestor(*tree_first);
   DCHECK_EQ(first_ancestor->GetAnchor(), second_ancestor->GetAnchor());
-  return !first_ancestor->IsNullPosition() &&
-         first_ancestor->AsTextPosition()->text_offset() <
-             second_ancestor->AsTextPosition()->text_offset();
+  if (first_ancestor->IsNullPosition())
+    return false;
+  DCHECK(first_ancestor->IsTreePosition() && second_ancestor->IsTreePosition());
+
+  if (first.IsTextPosition() && second.IsTextPosition()) {
+    // We avoid recomputing lowest common ancestor, because we already have its
+    // anchor. We just need its text offset.
+    if (first.GetAnchor() == first_ancestor->GetAnchor()) {
+      // If both positions have the same anchor, or if the first is an ancestor
+      // of the second.
+      std::unique_ptr<AXPosition<AXPositionType, AXNodeType>> text_second =
+          second.Clone();
+      while (text_second->GetAnchor() != first.GetAnchor())
+        text_second = text_second->CreateParentPosition();
+      return first.text_offset() < text_second->text_offset();
+    } else if (second.GetAnchor() == second_ancestor->GetAnchor()) {
+      // If the second position is an ancestor of the first.
+      std::unique_ptr<AXPosition<AXPositionType, AXNodeType>> text_first =
+          first.Clone();
+      while (text_first->GetAnchor() != second.GetAnchor())
+        text_first = text_first->CreateParentPosition();
+      return text_first->text_offset() < second.text_offset();
+    }
+  }
+
+  return first_ancestor->child_index() < second_ancestor->child_index();
 }
 
 template <class AXPositionType, class AXNodeType>
@@ -1354,15 +1392,7 @@ bool operator>(const AXPosition<AXPositionType, AXNodeType>& first,
                const AXPosition<AXPositionType, AXNodeType>& second) {
   if (first.IsNullPosition() || second.IsNullPosition())
     return false;
-
-  std::unique_ptr<AXPosition<AXPositionType, AXNodeType>> first_ancestor =
-      first.LowestCommonAncestor(second)->AsTreePosition();
-  std::unique_ptr<AXPosition<AXPositionType, AXNodeType>> second_ancestor =
-      second.LowestCommonAncestor(first)->AsTreePosition();
-  DCHECK_EQ(first_ancestor->GetAnchor(), second_ancestor->GetAnchor());
-  return !first_ancestor->IsNullPosition() &&
-         first_ancestor->AsTextPosition()->text_offset() >
-             second_ancestor->AsTextPosition()->text_offset();
+  return !(first <= second);
 }
 
 template <class AXPositionType, class AXNodeType>

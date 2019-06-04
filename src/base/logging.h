@@ -19,6 +19,7 @@
 #include "base/compiler_specific.h"
 #include "base/debug/debugger.h"
 #include "base/macros.h"
+#include "base/scoped_clear_last_error.h"
 #include "base/strings/string_piece_forward.h"
 #include "base/template_util.h"
 #include "build/build_config.h"
@@ -267,6 +268,12 @@ int GetVlogLevel(const char (&file)[N]) {
 // only.
 BASE_EXPORT void SetLogItems(bool enable_process_id, bool enable_thread_id,
                              bool enable_timestamp, bool enable_tickcount);
+
+// Sets an optional prefix to add to each log message. |prefix| is not copied
+// and should be a raw string constant. |prefix| must only contain ASCII letters
+// to avoid confusion with PIDs and timestamps. Pass null to remove the prefix.
+// Logging defaults to no prefix.
+BASE_EXPORT void SetLogPrefix(const char* prefix);
 
 // Sets whether or not you'd like to see fatal debug messages popped up in
 // a dialog box or not.
@@ -552,29 +559,6 @@ class CheckOpResult {
 #define TRAP_SEQUENCE() __builtin_trap()
 #endif  // ARCH_CPU_*
 
-// CHECK() and the trap sequence can be invoked from a constexpr function.
-// This could make compilation fail on GCC, as it forbids directly using inline
-// asm inside a constexpr function. However, it allows calling a lambda
-// expression including the same asm.
-// The side effect is that the top of the stacktrace will not point to the
-// calling function, but to this anonymous lambda. This is still useful as the
-// full name of the lambda will typically include the name of the function that
-// calls CHECK() and the debugger will still break at the right line of code.
-#if !defined(__clang__)
-#define WRAPPED_TRAP_SEQUENCE() \
-  do {                          \
-    [] { TRAP_SEQUENCE(); }();  \
-  } while (false)
-#else
-#define WRAPPED_TRAP_SEQUENCE() TRAP_SEQUENCE()
-#endif
-
-#define IMMEDIATE_CRASH()    \
-  ({                         \
-    WRAPPED_TRAP_SEQUENCE(); \
-    __builtin_unreachable(); \
-  })
-
 #elif defined(COMPILER_MSVC)
 
 // Clang is cleverer about coalescing int3s, so we need to add a unique-ish
@@ -589,19 +573,41 @@ class CheckOpResult {
 // __COUNTER__, so eventually it will emit the dword form of push.
 // TODO(scottmg): Reinvestigate a short sequence that will work on both
 // compilers once clang supports more intrinsics. See https://crbug.com/693713.
-#if defined(__clang__)
-#define IMMEDIATE_CRASH()                           \
-  ({                                                \
-    {__asm int 3 __asm ud2 __asm push __COUNTER__}; \
-    __builtin_unreachable();                        \
-  })
+#if !defined(__clang__)
+#define TRAP_SEQUENCE() __debugbreak()
+#elif defined(ARCH_CPU_ARM64)
+#define TRAP_SEQUENCE() \
+  __asm volatile("brk #0\n hlt %0\n" ::"i"(__COUNTER__ % 65536));
 #else
-#define IMMEDIATE_CRASH() __debugbreak()
+#define TRAP_SEQUENCE() ({ {__asm int 3 __asm ud2 __asm push __COUNTER__}; })
 #endif  // __clang__
 
 #else
 #error Port
+#endif  // COMPILER_GCC
+
+// CHECK() and the trap sequence can be invoked from a constexpr function.
+// This could make compilation fail on GCC, as it forbids directly using inline
+// asm inside a constexpr function. However, it allows calling a lambda
+// expression including the same asm.
+// The side effect is that the top of the stacktrace will not point to the
+// calling function, but to this anonymous lambda. This is still useful as the
+// full name of the lambda will typically include the name of the function that
+// calls CHECK() and the debugger will still break at the right line of code.
+#if !defined(COMPILER_GCC)
+#define WRAPPED_TRAP_SEQUENCE() TRAP_SEQUENCE()
+#else
+#define WRAPPED_TRAP_SEQUENCE() \
+  do {                          \
+    [] { TRAP_SEQUENCE(); }();  \
+  } while (false)
 #endif
+
+#define IMMEDIATE_CRASH()    \
+  ({                         \
+    WRAPPED_TRAP_SEQUENCE(); \
+    __builtin_unreachable(); \
+  })
 
 // CHECK dies with a fatal error if condition is not true.  It is *not*
 // controlled by NDEBUG, so the check will be executed regardless of
@@ -836,11 +842,11 @@ DEFINE_CHECK_OP_IMPL(GT, > )
 
 #if DCHECK_IS_ON()
 
-#if DCHECK_IS_CONFIGURABLE
+#if defined(DCHECK_IS_CONFIGURABLE)
 BASE_EXPORT extern LogSeverity LOG_DCHECK;
 #else
 const LogSeverity LOG_DCHECK = LOG_FATAL;
-#endif
+#endif  // defined(DCHECK_IS_CONFIGURABLE)
 
 #else  // DCHECK_IS_ON()
 
@@ -903,9 +909,8 @@ const LogSeverity LOG_DCHECK = LOG_FATAL;
 #define DCHECK_OP(name, op, val1, val2)                                \
   switch (0) case 0: default:                                          \
   if (::logging::CheckOpResult true_if_passed =                        \
-      DCHECK_IS_ON() ?                                                 \
       ::logging::Check##name##Impl((val1), (val2),                     \
-                                   #val1 " " #op " " #val2) : nullptr) \
+                                   #val1 " " #op " " #val2))           \
    ;                                                                   \
   else                                                                 \
     ::logging::LogMessage(__FILE__, __LINE__, ::logging::LOG_DCHECK,   \
@@ -1014,25 +1019,10 @@ class BASE_EXPORT LogMessage {
   const char* file_;
   const int line_;
 
-#if defined(OS_WIN)
-  // Stores the current value of GetLastError in the constructor and restores
-  // it in the destructor by calling SetLastError.
   // This is useful since the LogMessage class uses a lot of Win32 calls
   // that will lose the value of GLE and the code that called the log function
   // will have lost the thread error value when the log call returns.
-  class SaveLastError {
-   public:
-    SaveLastError();
-    ~SaveLastError();
-
-    unsigned long get_error() const { return last_error_; }
-
-   protected:
-    unsigned long last_error_;
-  };
-
-  SaveLastError last_error_;
-#endif
+  base::internal::ScopedClearLastError last_error_;
 
   DISALLOW_COPY_AND_ASSIGN(LogMessage);
 };

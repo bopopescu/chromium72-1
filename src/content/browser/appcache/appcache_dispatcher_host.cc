@@ -11,7 +11,6 @@
 #include "content/browser/appcache/chrome_appcache_service.h"
 #include "content/browser/bad_message.h"
 #include "content/public/browser/render_process_host.h"
-#include "content/public/common/browser_side_navigation_policy.h"
 
 namespace content {
 
@@ -32,24 +31,30 @@ AppCacheDispatcherHost::~AppCacheDispatcherHost() = default;
 void AppCacheDispatcherHost::Create(ChromeAppCacheService* appcache_service,
                                     int process_id,
                                     mojom::AppCacheBackendRequest request) {
+  // The process_id is the id of the RenderProcessHost, which can be reused for
+  // a new renderer process if the previous renderer process was shutdown.
+  // It can take some time after shutdown for the pipe error to propagate
+  // and unregister the previous backend. Since the AppCacheService assumes
+  // that there is one backend per process_id, we need to ensure that the
+  // previous backend is unregistered by eagerly unbinding the pipe.
+  appcache_service->Unbind(process_id);
+
   appcache_service->Bind(
       std::make_unique<AppCacheDispatcherHost>(appcache_service, process_id),
-      std::move(request));
+      std::move(request), process_id);
 }
 
 void AppCacheDispatcherHost::RegisterHost(int32_t host_id) {
   if (appcache_service_) {
-    // PlzNavigate
     // The AppCacheHost could have been precreated in which case we want to
     // register it with the backend here.
-    if (IsBrowserSideNavigationEnabled()) {
-      std::unique_ptr<content::AppCacheHost> host =
-          AppCacheNavigationHandleCore::GetPrecreatedHost(host_id);
-      if (host.get()) {
-        backend_impl_.RegisterPrecreatedHost(std::move(host));
-        return;
-      }
+    std::unique_ptr<content::AppCacheHost> host =
+        AppCacheNavigationHandleCore::GetPrecreatedHost(host_id);
+    if (host.get()) {
+      backend_impl_.RegisterPrecreatedHost(std::move(host));
+      return;
     }
+
     if (!backend_impl_.RegisterHost(host_id)) {
       mojo::ReportBadMessage("ACDH_REGISTER");
     }
@@ -83,7 +88,7 @@ void AppCacheDispatcherHost::SelectCache(int32_t host_id,
       mojo::ReportBadMessage("ACDH_SELECT_CACHE");
     }
   } else {
-    frontend_proxy_.OnCacheSelected(host_id, std::move(AppCacheInfo()));
+    frontend_proxy_.OnCacheSelected(host_id, AppCacheInfo());
   }
 }
 
@@ -93,7 +98,7 @@ void AppCacheDispatcherHost::SelectCacheForSharedWorker(int32_t host_id,
     if (!backend_impl_.SelectCacheForSharedWorker(host_id, appcache_id))
       mojo::ReportBadMessage("ACDH_SELECT_CACHE_FOR_SHARED_WORKER");
   } else {
-    frontend_proxy_.OnCacheSelected(host_id, std::move(AppCacheInfo()));
+    frontend_proxy_.OnCacheSelected(host_id, AppCacheInfo());
   }
 }
 

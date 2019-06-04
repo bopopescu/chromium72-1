@@ -23,13 +23,12 @@
 namespace cc {
 
 class Animation;
-class KeyframeModel;
 struct PropertyAnimationState;
 
 typedef size_t KeyframeEffectId;
 
-// An KeyframeEffect owns a group of KeyframeModels for a single target
-// (identified by a ElementId). It is responsible for managing the
+// A KeyframeEffect owns a group of KeyframeModels for a single target
+// (identified by an ElementId). It is responsible for managing the
 // KeyframeModels' running states (starting, running, paused, etc), as well as
 // ticking the KeyframeModels when it is requested to produce new outputs for a
 // given time.
@@ -42,7 +41,7 @@ typedef size_t KeyframeEffectId;
 class CC_ANIMATION_EXPORT KeyframeEffect {
  public:
   explicit KeyframeEffect(KeyframeEffectId id);
-  ~KeyframeEffect();
+  virtual ~KeyframeEffect();
 
   static std::unique_ptr<KeyframeEffect> Create(KeyframeEffectId id);
   std::unique_ptr<KeyframeEffect> CreateImplInstance() const;
@@ -81,7 +80,7 @@ class CC_ANIMATION_EXPORT KeyframeEffect {
   void AttachElement(ElementId element_id);
   void DetachElement();
 
-  void Tick(base::TimeTicks monotonic_time);
+  virtual void Tick(base::TimeTicks monotonic_time);
   static void TickKeyframeModel(base::TimeTicks monotonic_time,
                                 KeyframeModel* keyframe_model,
                                 AnimationTarget* target);
@@ -97,8 +96,8 @@ class CC_ANIMATION_EXPORT KeyframeEffect {
   void PauseKeyframeModel(int keyframe_model_id, double time_offset);
   void RemoveKeyframeModel(int keyframe_model_id);
   void AbortKeyframeModel(int keyframe_model_id);
-  void AbortKeyframeModels(TargetProperty::Type target_property,
-                           bool needs_completion);
+  void AbortKeyframeModelsWithProperty(TargetProperty::Type target_property,
+                                       bool needs_completion);
 
   void ActivateKeyframeEffects();
 

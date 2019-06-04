@@ -26,9 +26,9 @@ static WTF::String PaintPhaseAsDebugString(int paint_phase) {
     case 0:
       return "PaintPhaseBlockBackground";
     case 1:
-      return "PaintPhaseSelfBlockBackground";
+      return "PaintPhaseSelfBlockBackgroundOnly";
     case 2:
-      return "PaintPhaseChildBlockBackgrounds";
+      return "PaintPhaseDescendantBlockBackgroundsOnly";
     case 3:
       return "PaintPhaseFloat";
     case 4:
@@ -36,17 +36,15 @@ static WTF::String PaintPhaseAsDebugString(int paint_phase) {
     case 5:
       return "PaintPhaseOutline";
     case 6:
-      return "PaintPhaseSelfOutline";
+      return "PaintPhaseSelfOutlineOnly";
     case 7:
-      return "PaintPhaseChildOutlines";
+      return "PaintPhaseDescendantOutlinesOnly";
     case 8:
       return "PaintPhaseSelection";
     case 9:
       return "PaintPhaseTextClip";
-    case 10:
-      return "PaintPhaseMask";
     case DisplayItem::kPaintPhaseMax:
-      return "PaintPhaseClippingMask";
+      return "PaintPhaseMask";
     default:
       NOTREACHED();
       return "Unknown";
@@ -72,6 +70,8 @@ static WTF::String SpecialDrawingTypeAsDebugString(DisplayItem::Type type) {
   switch (type) {
     DEBUG_STRING_CASE(BoxDecorationBackground);
     DEBUG_STRING_CASE(Caret);
+    DEBUG_STRING_CASE(CapsLockIndicator);
+    DEBUG_STRING_CASE(ClippingMask);
     DEBUG_STRING_CASE(ColumnRules);
     DEBUG_STRING_CASE(DebugDrawing);
     DEBUG_STRING_CASE(DocumentBackground);
@@ -81,12 +81,14 @@ static WTF::String SpecialDrawingTypeAsDebugString(DisplayItem::Type type) {
     DEBUG_STRING_CASE(SVGImage);
     DEBUG_STRING_CASE(LinkHighlight);
     DEBUG_STRING_CASE(ImageAreaFocusRing);
+    DEBUG_STRING_CASE(OverflowControls);
     DEBUG_STRING_CASE(PageOverlay);
     DEBUG_STRING_CASE(PopupContainerBorder);
     DEBUG_STRING_CASE(PopupListBoxBackground);
     DEBUG_STRING_CASE(PopupListBoxRow);
     DEBUG_STRING_CASE(PrintedContentDestinationLocations);
     DEBUG_STRING_CASE(PrintedContentPDFURLRect);
+    DEBUG_STRING_CASE(ReflectionMask);
     DEBUG_STRING_CASE(Resizer);
     DEBUG_STRING_CASE(SVGClip);
     DEBUG_STRING_CASE(SVGFilter);
@@ -106,9 +108,8 @@ static WTF::String SpecialDrawingTypeAsDebugString(DisplayItem::Type type) {
     DEBUG_STRING_CASE(SelectionTint);
     DEBUG_STRING_CASE(TableCollapsedBorders);
     DEBUG_STRING_CASE(VideoBitmap);
-    DEBUG_STRING_CASE(WebPlugin);
     DEBUG_STRING_CASE(WebFont);
-    DEBUG_STRING_CASE(ReflectionMask);
+    DEBUG_STRING_CASE(WebPlugin);
 
     DEFAULT_CASE;
   }
@@ -126,50 +127,7 @@ static String ForeignLayerTypeAsDebugString(DisplayItem::Type type) {
     DEBUG_STRING_CASE(ForeignLayerVideo);
     DEBUG_STRING_CASE(ForeignLayerWrapper);
     DEBUG_STRING_CASE(ForeignLayerContentsWrapper);
-    DEFAULT_CASE;
-  }
-}
-
-static String ScrollHitTestTypeAsDebugString(DisplayItem::Type type) {
-  switch (type) {
-    DEBUG_STRING_CASE(ScrollHitTest);
-    DEFAULT_CASE;
-  }
-}
-
-static WTF::String ClipTypeAsDebugString(DisplayItem::Type type) {
-  PAINT_PHASE_BASED_DEBUG_STRINGS(ClipBox);
-  PAINT_PHASE_BASED_DEBUG_STRINGS(ClipColumnBounds);
-  PAINT_PHASE_BASED_DEBUG_STRINGS(ClipLayerFragment);
-
-  switch (type) {
-    DEBUG_STRING_CASE(ClipFileUploadControlRect);
-    DEBUG_STRING_CASE(ClipFrameToVisibleContentRect);
-    DEBUG_STRING_CASE(ClipFrameScrollbars);
-    DEBUG_STRING_CASE(ClipLayerBackground);
-    DEBUG_STRING_CASE(ClipLayerColumnBounds);
-    DEBUG_STRING_CASE(ClipLayerFilter);
-    DEBUG_STRING_CASE(ClipLayerForeground);
-    DEBUG_STRING_CASE(ClipLayerParent);
-    DEBUG_STRING_CASE(ClipLayerOverflowControls);
-    DEBUG_STRING_CASE(ClipPopupListBoxFrame);
-    DEBUG_STRING_CASE(ClipScrollbarsToBoxBounds);
-    DEBUG_STRING_CASE(ClipSelectionImage);
-    DEFAULT_CASE;
-  }
-}
-
-static String ScrollTypeAsDebugString(DisplayItem::Type type) {
-  PAINT_PHASE_BASED_DEBUG_STRINGS(Scroll);
-  switch (type) {
-    DEBUG_STRING_CASE(ScrollOverflowControls);
-    DEFAULT_CASE;
-  }
-}
-
-static String Transform3DTypeAsDebugString(DisplayItem::Type type) {
-  switch (type) {
-    DEBUG_STRING_CASE(Transform3DElementTransform);
+    DEBUG_STRING_CASE(ForeignLayerLinkHighlight);
     DEFAULT_CASE;
   }
 }
@@ -181,43 +139,14 @@ WTF::String DisplayItem::TypeAsDebugString(Type type) {
   if (IsForeignLayerType(type))
     return ForeignLayerTypeAsDebugString(type);
 
-  if (IsClipType(type))
-    return ClipTypeAsDebugString(type);
-  if (IsEndClipType(type))
-    return "End" + ClipTypeAsDebugString(endClipTypeToClipType(type));
-
-  PAINT_PHASE_BASED_DEBUG_STRINGS(FloatClip);
-  if (type == kFloatClipClipPathBounds)
-    return "FloatClipClipPathBounds";
-  if (IsEndFloatClipType(type))
-    return "End" + TypeAsDebugString(endFloatClipTypeToFloatClipType(type));
-
-  if (IsScrollType(type))
-    return ScrollTypeAsDebugString(type);
-  if (IsEndScrollType(type))
-    return "End" + ScrollTypeAsDebugString(endScrollTypeToScrollType(type));
-
+  PAINT_PHASE_BASED_DEBUG_STRINGS(Clip);
+  PAINT_PHASE_BASED_DEBUG_STRINGS(Scroll);
   PAINT_PHASE_BASED_DEBUG_STRINGS(SVGTransform);
   PAINT_PHASE_BASED_DEBUG_STRINGS(SVGEffect);
 
-  if (IsTransform3DType(type))
-    return Transform3DTypeAsDebugString(type);
-  if (IsEndTransform3DType(type))
-    return "End" + Transform3DTypeAsDebugString(
-                       endTransform3DTypeToTransform3DType(type));
-
-  if (IsScrollHitTestType(type))
-    return ScrollHitTestTypeAsDebugString(type);
-
   switch (type) {
-    DEBUG_STRING_CASE(BeginFilter);
-    DEBUG_STRING_CASE(EndFilter);
-    DEBUG_STRING_CASE(BeginCompositing);
-    DEBUG_STRING_CASE(EndCompositing);
-    DEBUG_STRING_CASE(BeginTransform);
-    DEBUG_STRING_CASE(EndTransform);
-    DEBUG_STRING_CASE(BeginClipPath);
-    DEBUG_STRING_CASE(EndClipPath);
+    DEBUG_STRING_CASE(HitTest);
+    DEBUG_STRING_CASE(ScrollHitTest);
     DEBUG_STRING_CASE(LayerChunkBackground);
     DEBUG_STRING_CASE(LayerChunkNegativeZOrderChildren);
     DEBUG_STRING_CASE(LayerChunkDescendantBackgrounds);
@@ -243,19 +172,37 @@ void DisplayItem::PropertiesAsJSON(JSONObject& json) const {
   json.SetString("visualRect", VisualRect().ToString());
   if (OutsetForRasterEffects())
     json.SetDouble("outset", OutsetForRasterEffects());
-  if (skipped_cache_)
-    json.SetBoolean("skippedCache", true);
 }
 
-#endif
+#endif  // DCHECK_IS_ON()
 
 String DisplayItem::Id::ToString() const {
 #if DCHECK_IS_ON()
-  return String::Format("%p:%s:%d", &client,
-                        DisplayItem::TypeAsDebugString(type).Ascii().data(),
+  return String::Format("%s:%s:%d", client.ToString().Utf8().data(),
+                        DisplayItem::TypeAsDebugString(type).Utf8().data(),
                         fragment);
 #else
   return String::Format("%p:%d:%d", &client, static_cast<int>(type), fragment);
+#endif
+}
+
+std::ostream& operator<<(std::ostream& os, DisplayItem::Type type) {
+#if DCHECK_IS_ON()
+  return os << DisplayItem::TypeAsDebugString(type).Utf8().data();
+#else
+  return os << static_cast<int>(type);
+#endif
+}
+
+std::ostream& operator<<(std::ostream& os, const DisplayItem::Id& id) {
+  return os << id.ToString().Utf8().data();
+}
+
+std::ostream& operator<<(std::ostream& os, const DisplayItem& item) {
+#if DCHECK_IS_ON()
+  return os << item.AsDebugString().Utf8().data();
+#else
+  return os << "{\"id\": " << item.GetId() << "}";
 #endif
 }
 

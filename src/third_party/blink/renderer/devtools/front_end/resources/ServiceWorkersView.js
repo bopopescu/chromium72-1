@@ -16,7 +16,7 @@ Resources.ServiceWorkersView = class extends UI.VBox {
     this._currentWorkersView.element.classList.add('service-workers-this-origin');
 
     this._toolbar = this._currentWorkersView.createToolbar();
-    this._toolbar.makeWrappable(false, true);
+    this._toolbar.makeWrappable(true /* growVertically */);
 
     /** @type {!Map<!SDK.ServiceWorkerRegistration, !Resources.ServiceWorkersView.Section>} */
     this._sections = new Map();
@@ -34,6 +34,8 @@ Resources.ServiceWorkersView = class extends UI.VBox {
     this._otherSWFilter.setAttribute('role', 'switch');
     this._otherSWFilter.setAttribute('aria-checked', false);
     this._otherSWFilter.addEventListener('keydown', event => {
+      if (event.target !== this._otherSWFilter)
+        return;
       if (isEnterKey(event) || event.keyCode === UI.KeyboardShortcut.Keys.Space.code)
         this._toggleFilter();
     });
@@ -534,12 +536,14 @@ Resources.ServiceWorkersView.Section = class {
    */
   _updateClientInfo(element, targetInfo) {
     if (targetInfo.type !== 'page' && targetInfo.type === 'iframe') {
-      element.createTextChild(Common.UIString('Worker: %s', targetInfo.url));
+      const clientString = element.createChild('span', 'service-worker-client-string');
+      clientString.createTextChild(ls`Worker: ` + targetInfo.url);
       return;
     }
     element.removeChildren();
-    element.createTextChild(targetInfo.url);
-    const focusLabel = element.createChild('label', 'link');
+    const clientString = element.createChild('span', 'service-worker-client-string');
+    clientString.createTextChild(targetInfo.url);
+    const focusLabel = element.createChild('label', 'link service-worker-client-focus-link');
     focusLabel.createTextChild('focus');
     focusLabel.addEventListener('click', this._activateTarget.bind(this, targetInfo.targetId), true);
   }

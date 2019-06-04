@@ -7,11 +7,16 @@
 
 #include "ash/system/message_center/arc/arc_notification_surface.h"
 
+namespace aura {
+class Env;
+}
+
 namespace ash {
 
 class MockArcNotificationSurface : public ArcNotificationSurface {
  public:
-  explicit MockArcNotificationSurface(const std::string& notification_key);
+  explicit MockArcNotificationSurface(const std::string& notification_key,
+                                      aura::Env* aura_env = nullptr);
   ~MockArcNotificationSurface() override;
 
   gfx::Size GetSize() const override;
@@ -23,12 +28,12 @@ class MockArcNotificationSurface : public ArcNotificationSurface {
   bool IsAttached() const override;
   views::NativeViewHost* GetAttachedHost() const override;
   void FocusSurfaceWindow() override;
-  void SetAXTreeId(int32_t ax_tree_id) override;
-  int32_t GetAXTreeId() const override;
+  void SetAXTreeId(ui::AXTreeID ax_tree_id) override;
+  ui::AXTreeID GetAXTreeId() const override;
 
  private:
   const std::string notification_key_;
-  int32_t ax_tree_id_;
+  ui::AXTreeID ax_tree_id_;
   views::NativeViewHost* native_view_host_;
   const std::unique_ptr<aura::Window> window_;
   const std::unique_ptr<aura::Window> content_window_;

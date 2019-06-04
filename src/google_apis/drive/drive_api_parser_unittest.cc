@@ -29,84 +29,6 @@ TEST(DriveAPIParserTest, AboutResourceParser) {
   EXPECT_EQ(8177LL, resource->largest_change_id());
 }
 
-// Test app list parsing.
-TEST(DriveAPIParserTest, AppListParser) {
-  std::string error;
-  std::unique_ptr<base::Value> document =
-      test_util::LoadJSONFile("drive/applist.json");
-  ASSERT_TRUE(document.get());
-
-  ASSERT_EQ(base::Value::Type::DICTIONARY, document->type());
-  std::unique_ptr<AppList> applist(new AppList);
-  EXPECT_TRUE(applist->Parse(*document));
-
-  EXPECT_EQ("\"Jm4BaSnCWNND-noZsHINRqj4ABC/tuqRBw0lvjUdPtc_2msA1tN4XYZ\"",
-            applist->etag());
-  ASSERT_EQ(2U, applist->items().size());
-  // Check Drive app 1
-  const AppResource& app1 = *applist->items()[0];
-  EXPECT_EQ("123456788192", app1.application_id());
-  EXPECT_EQ("Drive app 1", app1.name());
-  EXPECT_EQ("", app1.object_type());
-  EXPECT_TRUE(app1.supports_create());
-  EXPECT_TRUE(app1.is_removable());
-  EXPECT_EQ("abcdefghabcdefghabcdefghabcdefgh", app1.product_id());
-
-  ASSERT_EQ(1U, app1.primary_mimetypes().size());
-  EXPECT_EQ("application/vnd.google-apps.drive-sdk.123456788192",
-            *app1.primary_mimetypes()[0]);
-
-  ASSERT_EQ(2U, app1.secondary_mimetypes().size());
-  EXPECT_EQ("text/html", *app1.secondary_mimetypes()[0]);
-  EXPECT_EQ("text/plain", *app1.secondary_mimetypes()[1]);
-
-  ASSERT_EQ(2U, app1.primary_file_extensions().size());
-  EXPECT_EQ("exe", *app1.primary_file_extensions()[0]);
-  EXPECT_EQ("com", *app1.primary_file_extensions()[1]);
-
-  EXPECT_EQ(0U, app1.secondary_file_extensions().size());
-
-  ASSERT_EQ(6U, app1.icons().size());
-  const DriveAppIcon& icon1 = *app1.icons()[0];
-  EXPECT_EQ(DriveAppIcon::APPLICATION, icon1.category());
-  EXPECT_EQ(10, icon1.icon_side_length());
-  EXPECT_EQ("http://www.example.com/10.png", icon1.icon_url().spec());
-
-  const DriveAppIcon& icon6 = *app1.icons()[5];
-  EXPECT_EQ(DriveAppIcon::SHARED_DOCUMENT, icon6.category());
-  EXPECT_EQ(16, icon6.icon_side_length());
-  EXPECT_EQ("http://www.example.com/ds16.png", icon6.icon_url().spec());
-
-  EXPECT_EQ("https://www.example.com/createForApp1", app1.create_url().spec());
-
-  // Check Drive app 2
-  const AppResource& app2 = *applist->items()[1];
-  EXPECT_EQ("876543210000", app2.application_id());
-  EXPECT_EQ("Drive app 2", app2.name());
-  EXPECT_EQ("", app2.object_type());
-  EXPECT_FALSE(app2.supports_create());
-  EXPECT_FALSE(app2.is_removable());
-  EXPECT_EQ("hgfedcbahgfedcbahgfedcbahgfedcba", app2.product_id());
-
-  ASSERT_EQ(3U, app2.primary_mimetypes().size());
-  EXPECT_EQ("image/jpeg", *app2.primary_mimetypes()[0]);
-  EXPECT_EQ("image/png", *app2.primary_mimetypes()[1]);
-  EXPECT_EQ("application/vnd.google-apps.drive-sdk.876543210000",
-            *app2.primary_mimetypes()[2]);
-
-  EXPECT_EQ(0U, app2.secondary_mimetypes().size());
-  EXPECT_EQ(0U, app2.primary_file_extensions().size());
-  EXPECT_EQ(0U, app2.secondary_file_extensions().size());
-
-  ASSERT_EQ(3U, app2.icons().size());
-  const DriveAppIcon& icon2 = *app2.icons()[1];
-  EXPECT_EQ(DriveAppIcon::DOCUMENT, icon2.category());
-  EXPECT_EQ(10, icon2.icon_side_length());
-  EXPECT_EQ("http://www.example.com/d10.png", icon2.icon_url().spec());
-
-  EXPECT_EQ("https://www.example.com/createForApp2", app2.create_url().spec());
-}
-
 // Test Team Drive resource parsing.
 TEST(DriveAPIParserTest, TeamDriveResourceParser) {
   std::unique_ptr<base::Value> document =
@@ -196,6 +118,7 @@ TEST(DriveAPIParserTest, FileListParser) {
   ASSERT_TRUE(util::GetTimeFromString("2012-07-27T05:30:20.269Z",
                                       &modified_by_me_time));
   EXPECT_EQ(modified_by_me_time, file1.modified_by_me_date());
+  EXPECT_EQ("team_drive_id_1", file1.team_drive_id());
 
   ASSERT_EQ(1U, file1.parents().size());
   EXPECT_EQ("0B4v7G8yEYAWHYW1OcExsUVZLABC", file1.parents()[0].file_id());
@@ -235,6 +158,7 @@ TEST(DriveAPIParserTest, FileListParser) {
   const FileResource& file2 = *filelist->items()[1];
   EXPECT_EQ("Test Google Document", file2.title());
   EXPECT_EQ("application/vnd.google-apps.document", file2.mime_type());
+  EXPECT_EQ("team_drive_id_2", file2.team_drive_id());
 
   EXPECT_TRUE(file2.labels().is_trashed());
   EXPECT_TRUE(file2.labels().is_starred());
@@ -266,6 +190,7 @@ TEST(DriveAPIParserTest, FileListParser) {
   EXPECT_FALSE(file3.IsHostedDocument());
   EXPECT_EQ("TestFolder", file3.title());
   EXPECT_EQ("application/vnd.google-apps.folder", file3.mime_type());
+  EXPECT_EQ("", file3.team_drive_id());
   ASSERT_TRUE(file3.IsDirectory());
   EXPECT_FALSE(file3.shared());
 

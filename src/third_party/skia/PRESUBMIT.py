@@ -40,24 +40,10 @@ AUTHORS_FILE_NAME = 'AUTHORS'
 DOCS_PREVIEW_URL = 'https://skia.org/?cl='
 GOLD_TRYBOT_URL = 'https://gold.skia.org/search?issue='
 
-# Path to CQ bots feature is described in https://bug.skia.org/4364
-PATH_PREFIX_TO_EXTRA_TRYBOTS = {
-    'src/opts/': ('skia.primary:'
-      'Test-Debian9-Clang-GCE-CPU-AVX2-x86_64-Release-All-SKNX_NO_SIMD'),
-    'include/private/SkAtomics.h': ('skia.primary:'
-      'Test-Debian9-Clang-GCE-CPU-AVX2-x86_64-Release-All-TSAN,'
-      'Test-Ubuntu17-Clang-Golo-GPU-QuadroP400-x86_64-Release-All-TSAN'
-    ),
-
-    # Below are examples to show what is possible with this feature.
-    # 'src/svg/': 'master1:abc;master2:def',
-    # 'src/svg/parser/': 'master3:ghi,jkl;master4:mno',
-    # 'src/image/SkImage_Base.h': 'master5:pqr,stu;master1:abc1;master2:def',
-}
-
 SERVICE_ACCOUNT_SUFFIX = [
     '@%s.iam.gserviceaccount.com' % project for project in [
-        'skia-buildbots.google.com', 'skia-swarming-bots']]
+        'skia-buildbots.google.com', 'skia-swarming-bots', 'skia-public',
+        'skia-corp.google.com']]
 
 
 def _CheckChangeHasEol(input_api, output_api, source_file_filter=None):
@@ -78,9 +64,17 @@ def _CheckChangeHasEol(input_api, output_api, source_file_filter=None):
 
 def _PythonChecks(input_api, output_api):
   """Run checks on any modified Python files."""
-  pylint_disabled_files = (
-      'infra/bots/recipes.py',
-  )
+  blacklist = [
+      r'infra[\\\/]bots[\\\/]recipes.py',
+
+      # Blacklist DEPS. Those under third_party are already covered by
+      # input_api.DEFAULT_BLACK_LIST.
+      r'common[\\\/].*',
+      r'buildtools[\\\/].*',
+      r'.*[\\\/]\.recipe_deps[\\\/].*',
+  ]
+  blacklist.extend(input_api.DEFAULT_BLACK_LIST)
+
   pylint_disabled_warnings = (
       'F0401',  # Unable to import.
       'E0611',  # No name in module.
@@ -92,18 +86,10 @@ def _PythonChecks(input_api, output_api):
       'W0613',  # Unused argument.
       'W0105',  # String statement has no effect.
   )
-  # Run Pylint on only the modified python files. Unfortunately it still runs
-  # Pylint on the whole file instead of just the modified lines.
-  affected_python_files = []
-  for affected_file in input_api.AffectedSourceFiles(None):
-    affected_file_path = affected_file.LocalPath()
-    if affected_file_path.endswith('.py'):
-      if affected_file_path not in pylint_disabled_files:
-        affected_python_files.append(affected_file_path)
   return input_api.canned_checks.RunPylint(
       input_api, output_api,
       disabled_warnings=pylint_disabled_warnings,
-      white_list=affected_python_files)
+      black_list=blacklist)
 
 
 def _JsonChecks(input_api, output_api):
@@ -234,6 +220,18 @@ def _CheckGNFormatted(input_api, output_api):
   return results
 
 
+class _WarningsAsErrors():
+  def __init__(self, output_api):
+    self.output_api = output_api
+    self.old_warning = None
+  def __enter__(self):
+    self.old_warning = self.output_api.PresubmitPromptWarning
+    self.output_api.PresubmitPromptWarning = self.output_api.PresubmitError
+    return self.output_api
+  def __exit__(self, ex_type, ex_value, ex_traceback):
+    self.output_api.PresubmitPromptWarning = self.old_warning
+
+
 def _CommonChecks(input_api, output_api):
   """Presubmit checks common to upload and commit."""
   results = []
@@ -246,15 +244,13 @@ def _CommonChecks(input_api, output_api):
                        x.LocalPath().endswith('.c') or
                        x.LocalPath().endswith('.cc') or
                        x.LocalPath().endswith('.cpp'))
-  results.extend(
-      _CheckChangeHasEol(
-          input_api, output_api, source_file_filter=sources))
-  results.extend(
-      input_api.canned_checks.CheckChangeHasNoCR(
-          input_api, output_api, source_file_filter=sources))
-  results.extend(
-      input_api.canned_checks.CheckChangeHasNoStrayWhitespace(
-          input_api, output_api, source_file_filter=sources))
+  results.extend(_CheckChangeHasEol(
+      input_api, output_api, source_file_filter=sources))
+  with _WarningsAsErrors(output_api):
+    results.extend(input_api.canned_checks.CheckChangeHasNoCR(
+        input_api, output_api, source_file_filter=sources))
+    results.extend(input_api.canned_checks.CheckChangeHasNoStrayWhitespace(
+        input_api, output_api, source_file_filter=sources))
   results.extend(_PythonChecks(input_api, output_api))
   results.extend(_JsonChecks(input_api, output_api))
   results.extend(_IfDefChecks(input_api, output_api))
@@ -482,7 +478,6 @@ def PostUploadHook(cl, change, output_api):
     work on them.
   * Adds 'No-Presubmit: true' for non master branch changes since those don't
     run the presubmit checks.
-  * Adds extra trybots for the paths defined in PATH_TO_EXTRA_TRYBOTS.
   """
 
   results = []
@@ -555,22 +550,6 @@ def PostUploadHook(cl, change, output_api):
         results.append(
             output_api.PresubmitNotifyResult(
                 'Branch changes do not run the presubmit checks.'))
-
-    # Automatically set Cq-Include-Trybots if any of the changed files here
-    # begin with the paths of interest.
-    bots_to_include = []
-    for affected_file in change.AffectedFiles():
-      affected_file_path = affected_file.LocalPath()
-      for path_prefix, extra_bots in PATH_PREFIX_TO_EXTRA_TRYBOTS.iteritems():
-        if affected_file_path.startswith(path_prefix):
-          results.append(
-              output_api.PresubmitNotifyResult(
-                  'Your CL modifies the path %s.\nAutomatically adding %s to '
-                  'the CL description.' % (affected_file_path, extra_bots)))
-          bots_to_include.append(extra_bots)
-    if bots_to_include:
-      output_api.EnsureCQIncludeTrybotsAreAdded(
-          cl, bots_to_include, new_description_lines)
 
     # If the description has changed update it.
     if new_description_lines != original_description_lines:

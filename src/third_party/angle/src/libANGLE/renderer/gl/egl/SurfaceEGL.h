@@ -25,11 +25,13 @@ class SurfaceEGL : public SurfaceGL
 
     egl::Error makeCurrent() override;
     egl::Error swap(const gl::Context *context) override;
+    egl::Error swapWithDamage(const gl::Context *context, EGLint *rects, EGLint n_rects) override;
     egl::Error postSubBuffer(const gl::Context *context,
                              EGLint x,
                              EGLint y,
                              EGLint width,
                              EGLint height) override;
+    egl::Error setPresentationTime(EGLnsecsANDROID time) override;
     egl::Error querySurfacePointerANGLE(EGLint attribute, void **value) override;
     egl::Error bindTexImage(const gl::Context *context,
                             gl::Texture *texture,
@@ -41,12 +43,27 @@ class SurfaceEGL : public SurfaceGL
     EGLint isPostSubBufferSupported() const override;
     EGLint getSwapBehavior() const override;
 
+    void setTimestampsEnabled(bool enabled) override;
+    egl::SupportedCompositorTimings getSupportedCompositorTimings() const override;
+    egl::Error getCompositorTiming(EGLint numTimestamps,
+                                   const EGLint *names,
+                                   EGLnsecsANDROID *values) const override;
+    egl::Error getNextFrameId(EGLuint64KHR *frameId) const override;
+    egl::SupportedTimestamps getSupportedTimestamps() const override;
+    egl::Error getFrameTimestamps(EGLuint64KHR frameId,
+                                  EGLint numTimestamps,
+                                  const EGLint *timestamps,
+                                  EGLnsecsANDROID *values) const override;
+
     EGLSurface getSurface() const;
 
   protected:
     const FunctionsEGL *mEGL;
     EGLConfig mConfig;
     EGLSurface mSurface;
+
+  private:
+    bool mHasSwapBuffersWithDamage;
 };
 
 }  // namespace rx

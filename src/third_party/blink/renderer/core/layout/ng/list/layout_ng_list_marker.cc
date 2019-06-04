@@ -4,6 +4,7 @@
 
 #include "third_party/blink/renderer/core/layout/ng/list/layout_ng_list_marker.h"
 
+#include "third_party/blink/renderer/core/layout/layout_text.h"
 #include "third_party/blink/renderer/core/layout/ng/list/layout_ng_list_item.h"
 
 namespace blink {
@@ -58,6 +59,31 @@ void LayoutNGListMarker::WillCollectInlines() {
 
 bool LayoutNGListMarker::IsContentImage() const {
   return ListItem()->IsMarkerImage();
+}
+
+LayoutObject* LayoutNGListMarker::SymbolMarkerLayoutText() const {
+  return ListItem()->SymbolMarkerLayoutText();
+}
+
+String LayoutNGListMarker::TextAlternative() const {
+  // Compute from the list item, in the logical order even in RTL, reflecting
+  // speech order.
+  if (LayoutNGListItem* list_item = ListItem())
+    return list_item->MarkerTextWithSuffix();
+  return g_empty_string;
+}
+
+bool LayoutNGListMarker::NeedsOccupyWholeLine() const {
+  if (!GetDocument().InQuirksMode())
+    return false;
+
+  LayoutObject* next_sibling = NextSibling();
+  if (next_sibling && next_sibling->GetNode() &&
+      (IsHTMLUListElement(*next_sibling->GetNode()) ||
+       IsHTMLOListElement(*next_sibling->GetNode())))
+    return true;
+
+  return false;
 }
 
 }  // namespace blink

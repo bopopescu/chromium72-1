@@ -10,9 +10,9 @@
 #include "net/base/registry_controlled_domains/registry_controlled_domain.h"
 #include "net/base/url_util.h"
 #include "net/http/http_response_headers.h"
+#include "net/http/http_util.h"
 #include "net/url_request/url_request_data_job.h"
 #include "third_party/blink/public/common/mime_util/mime_util.h"
-#include "third_party/blink/public/platform/url_conversion.h"
 #include "third_party/blink/public/platform/web_string.h"
 #include "third_party/blink/renderer/platform/loader/fetch/resource_response.h"
 #include "third_party/blink/renderer/platform/shared_buffer.h"
@@ -24,14 +24,15 @@
 namespace {
 
 net::registry_controlled_domains::PrivateRegistryFilter
-getNetPrivateRegistryFilter(blink::NetworkUtils::PrivateRegistryFilter filter) {
+getNetPrivateRegistryFilter(
+    blink::network_utils::PrivateRegistryFilter filter) {
   switch (filter) {
-    case blink::NetworkUtils::kIncludePrivateRegistries:
+    case blink::network_utils::kIncludePrivateRegistries:
       return net::registry_controlled_domains::INCLUDE_PRIVATE_REGISTRIES;
-    case blink::NetworkUtils::kExcludePrivateRegistries:
+    case blink::network_utils::kExcludePrivateRegistries:
       return net::registry_controlled_domains::EXCLUDE_PRIVATE_REGISTRIES;
   }
-  // There are only two NetworkUtils::PrivateRegistryFilter enum entries, so
+  // There are only two network_utils::PrivateRegistryFilter enum entries, so
   // we should never reach this point. However, we must have a default return
   // value to avoid a compiler error.
   NOTREACHED();
@@ -42,7 +43,7 @@ getNetPrivateRegistryFilter(blink::NetworkUtils::PrivateRegistryFilter filter) {
 
 namespace blink {
 
-namespace NetworkUtils {
+namespace network_utils {
 
 bool IsReservedIPAddress(const String& host) {
   net::IPAddress address;
@@ -78,8 +79,7 @@ scoped_refptr<SharedBuffer> ParseDataURLAndPopulateResponse(
       new net::HttpResponseHeaders(std::string()));
 
   int result = net::URLRequestDataJob::BuildResponse(
-      WebStringToGURL(url.GetString()), &utf8_mime_type, &utf8_charset,
-      &data_string, headers.get());
+      GURL(url), &utf8_mime_type, &utf8_charset, &data_string, headers.get());
   if (result != net::OK)
     return nullptr;
 
@@ -108,8 +108,7 @@ scoped_refptr<SharedBuffer> ParseDataURLAndPopulateResponse(
 bool IsDataURLMimeTypeSupported(const KURL& url) {
   std::string utf8_mime_type;
   std::string utf8_charset;
-  if (net::DataURL::Parse(WebStringToGURL(url.GetString()), &utf8_mime_type,
-                          &utf8_charset, nullptr)) {
+  if (net::DataURL::Parse(GURL(url), &utf8_mime_type, &utf8_charset, nullptr)) {
     return blink::IsSupportedMimeType(utf8_mime_type);
   }
   return false;
@@ -127,6 +126,13 @@ bool IsLegacySymantecCertError(int error_code) {
   return error_code == net::ERR_CERT_SYMANTEC_LEGACY;
 }
 
-}  // NetworkUtils
+String GenerateAcceptLanguageHeader(const String& lang) {
+  CString cstring(lang.Utf8());
+  std::string string(cstring.data(), cstring.length());
+  return WebString::FromUTF8(
+      net::HttpUtil::GenerateAcceptLanguageHeader(string));
+}
+
+}  // namespace network_utils
 
 }  // namespace blink

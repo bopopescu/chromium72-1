@@ -6,12 +6,10 @@
 
 #include "net/third_party/quic/core/quic_session.h"
 
-namespace net {
+namespace quic {
 
-#define ENDPOINT                                                   \
-  (session()->perspective() == Perspective::IS_SERVER ? "Server: " \
-                                                      : "Client:"  \
-                                                        " ")
+#define ENDPOINT \
+  (session()->perspective() == Perspective::IS_SERVER ? "Server: " : "Client: ")
 
 QuicCryptoHandshaker::QuicCryptoHandshaker(QuicCryptoStream* stream,
                                            QuicSession* session)
@@ -23,12 +21,11 @@ QuicCryptoHandshaker::~QuicCryptoHandshaker() {}
 
 void QuicCryptoHandshaker::SendHandshakeMessage(
     const CryptoHandshakeMessage& message) {
-  QUIC_DVLOG(1) << ENDPOINT << "Sending "
-                << message.DebugString(session()->perspective());
+  QUIC_DVLOG(1) << ENDPOINT << "Sending " << message.DebugString();
   session()->NeuterUnencryptedData();
   session()->OnCryptoHandshakeMessageSent(message);
   last_sent_handshake_message_tag_ = message.tag();
-  const QuicData& data = message.GetSerialized(session()->perspective());
+  const QuicData& data = message.GetSerialized();
   stream_->WriteOrBufferData(QuicStringPiece(data.data(), data.length()), false,
                              nullptr);
 }
@@ -40,8 +37,7 @@ void QuicCryptoHandshaker::OnError(CryptoFramer* framer) {
 
 void QuicCryptoHandshaker::OnHandshakeMessage(
     const CryptoHandshakeMessage& message) {
-  QUIC_DVLOG(1) << ENDPOINT << "Received "
-                << message.DebugString(session()->perspective());
+  QUIC_DVLOG(1) << ENDPOINT << "Received " << message.DebugString();
   session()->OnCryptoHandshakeMessageReceived(message);
 }
 
@@ -49,4 +45,5 @@ CryptoMessageParser* QuicCryptoHandshaker::crypto_message_parser() {
   return &crypto_framer_;
 }
 
-}  // namespace net
+#undef ENDPOINT  // undef for jumbo builds
+}  // namespace quic

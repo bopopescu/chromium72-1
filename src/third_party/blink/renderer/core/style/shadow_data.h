@@ -26,10 +26,10 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_STYLE_SHADOW_DATA_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_STYLE_SHADOW_DATA_H_
 
+#include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/css/style_color.h"
 #include "third_party/blink/renderer/platform/geometry/float_point.h"
 #include "third_party/blink/renderer/platform/geometry/float_rect_outsets.h"
-#include "third_party/blink/renderer/platform/graphics/skia/skia_utils.h"
 
 namespace blink {
 
@@ -37,7 +37,7 @@ enum ShadowStyle { kNormal, kInset };
 
 // This class holds information about shadows for the text-shadow and box-shadow
 // properties, as well as the drop-shadow(...) filter operation.
-class ShadowData {
+class CORE_EXPORT ShadowData {
   USING_FAST_MALLOC(ShadowData);
 
  public:
@@ -72,14 +72,7 @@ class ShadowData {
 
   // Outsets needed to adjust a source rectangle to the one cast by this
   // shadow.
-  FloatRectOutsets RectOutsets() const {
-    // 3 * skBlurRadiusToSigma(blur()) is how Skia implements the radius of a
-    // blur. See also https://crbug.com/624175.
-    float blur_and_spread = ceil(3 * SkBlurRadiusToSigma(Blur())) + Spread();
-    return FloatRectOutsets(
-        blur_and_spread - Y() /* top */, blur_and_spread + X() /* right */,
-        blur_and_spread + Y() /* bottom */, blur_and_spread - X() /* left */);
-  }
+  FloatRectOutsets RectOutsets() const;
 
  private:
   FloatPoint location_;

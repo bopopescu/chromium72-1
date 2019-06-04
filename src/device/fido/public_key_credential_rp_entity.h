@@ -11,7 +11,7 @@
 #include "base/component_export.h"
 #include "base/macros.h"
 #include "base/optional.h"
-#include "components/cbor/cbor_values.h"
+#include "components/cbor/values.h"
 #include "url/gurl.h"
 
 namespace device {
@@ -21,6 +21,9 @@ namespace device {
 // and optional relying party display image url.
 class COMPONENT_EXPORT(DEVICE_FIDO) PublicKeyCredentialRpEntity {
  public:
+  static base::Optional<PublicKeyCredentialRpEntity> CreateFromCBORValue(
+      const cbor::Value& cbor);
+
   explicit PublicKeyCredentialRpEntity(std::string rp_id);
   PublicKeyCredentialRpEntity(const PublicKeyCredentialRpEntity& other);
   PublicKeyCredentialRpEntity(PublicKeyCredentialRpEntity&& other);
@@ -29,7 +32,7 @@ class COMPONENT_EXPORT(DEVICE_FIDO) PublicKeyCredentialRpEntity {
   PublicKeyCredentialRpEntity& operator=(PublicKeyCredentialRpEntity&& other);
   ~PublicKeyCredentialRpEntity();
 
-  cbor::CBORValue ConvertToCBOR() const;
+  cbor::Value ConvertToCBOR() const;
 
   PublicKeyCredentialRpEntity& SetRpName(std::string rp_name);
   PublicKeyCredentialRpEntity& SetRpIconUrl(GURL icon_url);

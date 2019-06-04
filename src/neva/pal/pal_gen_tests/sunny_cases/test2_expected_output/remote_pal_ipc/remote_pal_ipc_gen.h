@@ -1,1 +1,0 @@
-IntentAgentInterface* GetIntentAgentInterface() override;

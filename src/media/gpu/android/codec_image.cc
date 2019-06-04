@@ -61,12 +61,16 @@ unsigned CodecImage::GetInternalFormat() {
 }
 
 bool CodecImage::BindTexImage(unsigned target) {
-  return false;
+  // If we're using an overlay, then pretend it's bound.  That way, we'll get
+  // calls to ScheduleOverlayPlane.  Otherwise, fail so that we will be asked
+  // to CopyTexImage.  Note that we could just CopyTexImage here.
+  return !texture_owner_;
 }
 
 void CodecImage::ReleaseTexImage(unsigned target) {}
 
 bool CodecImage::CopyTexImage(unsigned target) {
+  TRACE_EVENT0("media", "CodecImage::CopyTexImage");
   if (!texture_owner_ || target != GL_TEXTURE_EXTERNAL_OES)
     return false;
 
@@ -86,13 +90,15 @@ bool CodecImage::CopyTexSubImage(unsigned target,
   return false;
 }
 
-bool CodecImage::ScheduleOverlayPlane(gfx::AcceleratedWidget widget,
-                                      int z_order,
-                                      gfx::OverlayTransform transform,
-                                      const gfx::Rect& bounds_rect,
-                                      const gfx::RectF& crop_rect,
-                                      bool enable_blend,
-                                      gfx::GpuFence* gpu_fence) {
+bool CodecImage::ScheduleOverlayPlane(
+    gfx::AcceleratedWidget widget,
+    int z_order,
+    gfx::OverlayTransform transform,
+    const gfx::Rect& bounds_rect,
+    const gfx::RectF& crop_rect,
+    bool enable_blend,
+    std::unique_ptr<gfx::GpuFence> gpu_fence) {
+  TRACE_EVENT0("media", "CodecImage::ScheduleOverlayPlane");
   if (texture_owner_) {
     DVLOG(1) << "Invalid call to ScheduleOverlayPlane; this image is "
                 "TextureOwner backed.";
@@ -226,9 +232,17 @@ bool CodecImage::RenderToOverlay() {
   return true;
 }
 
-void CodecImage::SurfaceDestroyed() {
+void CodecImage::ReleaseCodecBuffer() {
   output_buffer_ = nullptr;
   phase_ = Phase::kInvalidated;
+}
+
+std::unique_ptr<gl::GLImage::ScopedHardwareBuffer>
+CodecImage::GetAHardwareBuffer() {
+  DCHECK(texture_owner_);
+
+  RenderToTextureOwnerFrontBuffer(BindingsMode::kDontRestore);
+  return texture_owner_->GetAHardwareBuffer();
 }
 
 }  // namespace media

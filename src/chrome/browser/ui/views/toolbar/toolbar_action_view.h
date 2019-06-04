@@ -10,6 +10,7 @@
 #include "chrome/browser/ui/views/toolbar/toolbar_action_view_delegate_views.h"
 #include "ui/views/context_menu_controller.h"
 #include "ui/views/controls/button/menu_button.h"
+#include "ui/views/controls/button/menu_button_event_handler.h"
 #include "ui/views/controls/button/menu_button_listener.h"
 #include "ui/views/controls/menu/menu_model_adapter.h"
 #include "ui/views/drag_controller.h"
@@ -62,6 +63,8 @@ class ToolbarActionView : public views::MenuButton,
   ~ToolbarActionView() override;
 
   // views::MenuButton:
+  void OnBoundsChanged(const gfx::Rect& previous_bounds) override;
+  gfx::Rect GetAnchorBoundsInScreen() const override;
   void GetAccessibleNodeData(ui::AXNodeData* node_data) override;
   std::unique_ptr<views::LabelButtonBorder> CreateDefaultBorder()
       const override;
@@ -69,11 +72,9 @@ class ToolbarActionView : public views::MenuButton,
   SkColor GetInkDropBaseColor() const override;
   bool ShouldUseFloodFillInkDrop() const override;
   std::unique_ptr<views::InkDrop> CreateInkDrop() override;
-  std::unique_ptr<views::InkDropRipple> CreateInkDropRipple() const override;
   std::unique_ptr<views::InkDropHighlight> CreateInkDropHighlight()
       const override;
-  std::unique_ptr<views::InkDropMask> CreateInkDropMask() const override;
-  void StateChanged(ButtonState old_state) override;
+  bool OnKeyPressed(const ui::KeyEvent& event) override;
 
   // ToolbarActionViewDelegateViews:
   content::WebContents* GetCurrentWebContents() const override;
@@ -101,8 +102,6 @@ class ToolbarActionView : public views::MenuButton,
   // views::MenuButton:
   gfx::Size CalculatePreferredSize() const override;
   bool OnMousePressed(const ui::MouseEvent& event) override;
-  void OnMouseReleased(const ui::MouseEvent& event) override;
-  void OnMouseExited(const ui::MouseEvent& event) override;
   void OnGestureEvent(ui::GestureEvent* event) override;
   void OnDragDone() override;
   void ViewHierarchyChanged(
@@ -134,7 +133,7 @@ class ToolbarActionView : public views::MenuButton,
   void OnMenuClosed();
 
   // A lock to keep the MenuButton pressed when a menu or popup is visible.
-  std::unique_ptr<views::MenuButton::PressedLock> pressed_lock_;
+  std::unique_ptr<views::MenuButtonEventHandler::PressedLock> pressed_lock_;
 
   // The controller for this toolbar action view.
   ToolbarActionViewController* view_controller_;
@@ -148,12 +147,6 @@ class ToolbarActionView : public views::MenuButton,
   // The cached value of whether or not the action wants to run on the current
   // tab.
   bool wants_to_run_;
-
-  // Whether the mouse is currently pressed. We store this separately, since
-  // the button state doesn't correspond to the mouse pressed state for
-  // draggable menu buttons (i.e., they don't enter a pushed state in
-  // OnMouseDown).
-  bool is_mouse_pressed_;
 
   // Responsible for converting the context menu model into |menu_|.
   std::unique_ptr<views::MenuModelAdapter> menu_adapter_;

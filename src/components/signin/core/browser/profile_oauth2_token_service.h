@@ -10,13 +10,19 @@
 #include "base/macros.h"
 #include "base/memory/linked_ptr.h"
 #include "components/keyed_service/core/keyed_service.h"
+#include "components/signin/core/browser/signin_metrics.h"
 #include "google_apis/gaia/oauth2_token_service.h"
 #include "google_apis/gaia/oauth2_token_service_delegate.h"
 #include "net/base/backoff_entry.h"
 
-namespace user_prefs {
-class PrefRegistrySyncable;
+#include <memory>
+
+namespace identity {
+class IdentityManager;
 }
+
+class PrefService;
+class PrefRegistrySimple;
 
 // ProfileOAuth2TokenService is a KeyedService that retrieves
 // OAuth2 access tokens for a given set of scopes using the OAuth2 login
@@ -37,11 +43,12 @@ class ProfileOAuth2TokenService : public OAuth2TokenService,
                                   public KeyedService {
  public:
   ProfileOAuth2TokenService(
+      PrefService* user_prefs,
       std::unique_ptr<OAuth2TokenServiceDelegate> delegate);
   ~ProfileOAuth2TokenService() override;
 
   // Registers per-profile prefs.
-  static void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry);
+  static void RegisterProfilePrefs(PrefRegistrySimple* registry);
 
   // KeyedService implementation.
   void Shutdown() override;
@@ -57,12 +64,26 @@ class ProfileOAuth2TokenService : public OAuth2TokenService,
   // Returns true iff all credentials have been loaded from disk.
   bool AreAllCredentialsLoaded();
 
+  // Returns true if LoadCredentials finished with no errors.
+  bool HasLoadCredentialsFinishedWithNoErrors();
+
   // Updates a |refresh_token| for an |account_id|. Credentials are persisted,
   // and available through |LoadCredentials| after service is restarted.
-  virtual void UpdateCredentials(const std::string& account_id,
-                                 const std::string& refresh_token);
+  void UpdateCredentials(
+      const std::string& account_id,
+      const std::string& refresh_token,
+      signin_metrics::SourceForRefreshTokenOperation source =
+          signin_metrics::SourceForRefreshTokenOperation::kUnknown);
 
-  virtual void RevokeCredentials(const std::string& account_id);
+  void RevokeCredentials(
+      const std::string& account_id,
+      signin_metrics::SourceForRefreshTokenOperation source =
+          signin_metrics::SourceForRefreshTokenOperation::kUnknown);
+
+  // Revokes all credentials.
+  void RevokeAllCredentials(
+      signin_metrics::SourceForRefreshTokenOperation source =
+          signin_metrics::SourceForRefreshTokenOperation::kUnknown);
 
   // Returns a pointer to its instance of net::BackoffEntry or nullptr if there
   // is no such instance.
@@ -73,12 +94,23 @@ class ProfileOAuth2TokenService : public OAuth2TokenService,
   }
 
  private:
+  friend class identity::IdentityManager;
+
   void OnRefreshTokenAvailable(const std::string& account_id) override;
   void OnRefreshTokenRevoked(const std::string& account_id) override;
   void OnRefreshTokensLoaded() override;
 
+  // Creates a new device ID if there are no accounts, or if the current device
+  // ID is empty.
+  void RecreateDeviceIdIfNeeded();
+
+  PrefService* user_prefs_;
+
   // Whether all credentials have been loaded.
   bool all_credentials_loaded_;
+
+  signin_metrics::SourceForRefreshTokenOperation update_refresh_token_source_ =
+      signin_metrics::SourceForRefreshTokenOperation::kUnknown;
 
   DISALLOW_COPY_AND_ASSIGN(ProfileOAuth2TokenService);
 };

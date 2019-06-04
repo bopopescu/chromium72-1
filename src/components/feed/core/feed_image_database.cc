@@ -7,10 +7,12 @@
 #include "base/bind.h"
 #include "base/logging.h"
 #include "base/sequenced_task_runner.h"
-#include "base/sys_info.h"
-#include "base/task_scheduler/post_task.h"
-#include "base/task_scheduler/task_traits.h"
+#include "base/system/sys_info.h"
+#include "base/task/post_task.h"
+#include "base/task/task_traits.h"
 #include "base/threading/thread_task_runner_handle.h"
+#include "base/time/clock.h"
+#include "base/time/default_clock.h"
 #include "base/time/time.h"
 #include "components/feed/core/proto/cached_image.pb.h"
 #include "components/feed/core/time_serialization.h"
@@ -36,15 +38,18 @@ FeedImageDatabase::FeedImageDatabase(const base::FilePath& database_dir)
           database_dir,
           std::make_unique<leveldb_proto::ProtoDatabaseImpl<CachedImageProto>>(
               base::CreateSequencedTaskRunnerWithTraits(
-                  {base::MayBlock(), base::TaskPriority::BACKGROUND,
-                   base::TaskShutdownBehavior::CONTINUE_ON_SHUTDOWN}))) {}
+                  {base::MayBlock(), base::TaskPriority::BEST_EFFORT,
+                   base::TaskShutdownBehavior::CONTINUE_ON_SHUTDOWN})),
+          base::DefaultClock::GetInstance()) {}
 
 FeedImageDatabase::FeedImageDatabase(
     const base::FilePath& database_dir,
     std::unique_ptr<leveldb_proto::ProtoDatabase<CachedImageProto>>
-        image_database)
+        image_database,
+    base::Clock* clock)
     : database_status_(UNINITIALIZED),
       image_database_(std::move(image_database)),
+      clock_(clock),
       weak_ptr_factory_(this) {
   leveldb_env::Options options = leveldb_proto::CreateSimpleOptions();
   if (base::SysInfo::IsLowEndDevice()) {
@@ -76,9 +81,9 @@ void FeedImageDatabase::SaveImage(const std::string& url,
   CachedImageProto image_proto;
   image_proto.set_url(url);
   image_proto.set_data(image_data);
-  image_proto.set_last_used_time(ToDatabaseTime(base::Time::Now()));
+  image_proto.set_last_used_time(ToDatabaseTime(clock_->Now()));
 
-  SaveImageImpl(url, std::move(image_proto));
+  SaveImageImpl(url, image_proto);
 }
 
 void FeedImageDatabase::LoadImage(const std::string& url,
@@ -142,10 +147,10 @@ void FeedImageDatabase::ProcessPendingImageLoads() {
   pending_image_callbacks_.clear();
 }
 
-void FeedImageDatabase::SaveImageImpl(const std::string& url,
-                                      CachedImageProto image_proto) {
+void FeedImageDatabase::SaveImageImpl(std::string url,
+                                      const CachedImageProto& image_proto) {
   auto entries_to_save = std::make_unique<ImageKeyEntryVector>();
-  entries_to_save->emplace_back(url, std::move(image_proto));
+  entries_to_save->emplace_back(std::move(url), image_proto);
 
   image_database_->UpdateEntries(
       std::move(entries_to_save), std::make_unique<std::vector<std::string>>(),
@@ -167,8 +172,8 @@ void FeedImageDatabase::OnImageLoaded(std::string url,
   std::move(callback).Run(entry->data());
 
   // Update timestamp for image.
-  entry->set_last_used_time(ToDatabaseTime(base::Time::Now()));
-  SaveImageImpl(url, std::move(*entry));
+  entry->set_last_used_time(ToDatabaseTime(clock_->Now()));
+  SaveImageImpl(std::move(url), *entry);
 }
 
 void FeedImageDatabase::LoadImageImpl(const std::string& url,

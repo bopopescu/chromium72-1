@@ -14,6 +14,7 @@
 #include "base/compiler_specific.h"
 #include "base/macros.h"
 #include "base/memory/weak_ptr.h"
+#include "base/observer_list.h"
 #include "base/sequence_checker.h"
 #include "components/sync/model/change_processor.h"
 #include "components/sync/model/data_type_error_handler.h"
@@ -147,7 +148,7 @@ class GenericChangeProcessor : public ChangeProcessor,
   UserShare* const share_handle_;
 
   // List of observers that want to be notified of local changes being written.
-  base::ObserverList<LocalChangeObserver> local_change_observers_;
+  base::ObserverList<LocalChangeObserver>::Unchecked local_change_observers_;
 
   base::WeakPtrFactory<GenericChangeProcessor> weak_ptr_factory_;
 

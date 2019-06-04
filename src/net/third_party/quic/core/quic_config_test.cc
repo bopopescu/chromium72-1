@@ -4,19 +4,19 @@
 
 #include "net/third_party/quic/core/quic_config.h"
 
-#include "net/test/gtest_util.h"
 #include "net/third_party/quic/core/crypto/crypto_handshake_message.h"
 #include "net/third_party/quic/core/crypto/crypto_protocol.h"
 #include "net/third_party/quic/core/quic_packets.h"
 #include "net/third_party/quic/core/quic_time.h"
 #include "net/third_party/quic/core/quic_utils.h"
+#include "net/third_party/quic/platform/api/quic_expect_bug.h"
 #include "net/third_party/quic/platform/api/quic_string.h"
 #include "net/third_party/quic/platform/api/quic_test.h"
 #include "net/third_party/quic/platform/api/quic_uint128.h"
 #include "net/third_party/quic/test_tools/quic_config_peer.h"
 #include "net/third_party/quic/test_tools/quic_test_utils.h"
 
-namespace net {
+namespace quic {
 namespace test {
 namespace {
 
@@ -32,7 +32,6 @@ TEST_F(QuicConfigTest, ToHandshakeMessage) {
       kInitialSessionFlowControlWindowForTest);
   config_.SetIdleNetworkTimeout(QuicTime::Delta::FromSeconds(5),
                                 QuicTime::Delta::FromSeconds(2));
-  config_.SetMaxStreamsPerConnection(4, 2);
   CryptoHandshakeMessage msg;
   config_.ToHandshakeMessage(&msg);
 
@@ -40,10 +39,6 @@ TEST_F(QuicConfigTest, ToHandshakeMessage) {
   QuicErrorCode error = msg.GetUint32(kICSL, &value);
   EXPECT_EQ(QUIC_NO_ERROR, error);
   EXPECT_EQ(5u, value);
-
-  error = msg.GetUint32(kMSPC, &value);
-  EXPECT_EQ(QUIC_NO_ERROR, error);
-  EXPECT_EQ(4u, value);
 
   error = msg.GetUint32(kSFCW, &value);
   EXPECT_EQ(QUIC_NO_ERROR, error);
@@ -61,8 +56,6 @@ TEST_F(QuicConfigTest, ProcessClientHello) {
   client_config.SetIdleNetworkTimeout(
       QuicTime::Delta::FromSeconds(2 * kMaximumIdleTimeoutSecs),
       QuicTime::Delta::FromSeconds(kMaximumIdleTimeoutSecs));
-  client_config.SetMaxStreamsPerConnection(2 * kDefaultMaxStreamsPerConnection,
-                                           kDefaultMaxStreamsPerConnection);
   client_config.SetInitialRoundTripTimeUsToSend(10 * kNumMicrosPerMilli);
   client_config.SetInitialStreamFlowControlWindowToSend(
       2 * kInitialStreamFlowControlWindowForTest);
@@ -91,7 +84,6 @@ TEST_F(QuicConfigTest, ProcessClientHello) {
   EXPECT_TRUE(config_.negotiated());
   EXPECT_EQ(QuicTime::Delta::FromSeconds(kMaximumIdleTimeoutSecs),
             config_.IdleNetworkTimeout());
-  EXPECT_EQ(kDefaultMaxStreamsPerConnection, config_.MaxStreamsPerConnection());
   EXPECT_EQ(10 * kNumMicrosPerMilli, config_.ReceivedInitialRoundTripTimeUs());
   EXPECT_TRUE(config_.HasReceivedConnectionOptions());
   EXPECT_EQ(2u, config_.ReceivedConnectionOptions().size());
@@ -114,8 +106,6 @@ TEST_F(QuicConfigTest, ProcessServerHello) {
   server_config.SetIdleNetworkTimeout(
       QuicTime::Delta::FromSeconds(kMaximumIdleTimeoutSecs / 2),
       QuicTime::Delta::FromSeconds(kMaximumIdleTimeoutSecs / 2));
-  server_config.SetMaxStreamsPerConnection(kDefaultMaxStreamsPerConnection / 2,
-                                           kDefaultMaxStreamsPerConnection / 2);
   server_config.SetInitialRoundTripTimeUsToSend(10 * kNumMicrosPerMilli);
   server_config.SetInitialStreamFlowControlWindowToSend(
       2 * kInitialStreamFlowControlWindowForTest);
@@ -132,8 +122,6 @@ TEST_F(QuicConfigTest, ProcessServerHello) {
   EXPECT_TRUE(config_.negotiated());
   EXPECT_EQ(QuicTime::Delta::FromSeconds(kMaximumIdleTimeoutSecs / 2),
             config_.IdleNetworkTimeout());
-  EXPECT_EQ(kDefaultMaxStreamsPerConnection / 2,
-            config_.MaxStreamsPerConnection());
   EXPECT_EQ(10 * kNumMicrosPerMilli, config_.ReceivedInitialRoundTripTimeUs());
   EXPECT_EQ(config_.ReceivedInitialStreamFlowControlWindowBytes(),
             2 * kInitialStreamFlowControlWindowForTest);
@@ -296,4 +284,4 @@ TEST_F(QuicConfigTest, HasClientRequestedIndependentOption) {
 
 }  // namespace
 }  // namespace test
-}  // namespace net
+}  // namespace quic

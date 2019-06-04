@@ -29,7 +29,9 @@ struct NestedMessagePumpAndroid::RunState {
         run_depth(run_depth),
         should_quit(false),
         waitable_event(base::WaitableEvent::ResetPolicy::AUTOMATIC,
-                       base::WaitableEvent::InitialState::NOT_SIGNALED) {}
+                       base::WaitableEvent::InitialState::NOT_SIGNALED) {
+    waitable_event.declare_only_used_while_idle();
+  }
 
   base::MessagePump::Delegate* delegate;
 
@@ -117,7 +119,7 @@ void NestedMessagePumpAndroid::Run(Delegate* delegate) {
   state_ = previous_state;
 }
 
-void NestedMessagePumpAndroid::Start(
+void NestedMessagePumpAndroid::Attach(
     base::MessagePump::Delegate* delegate) {
   JNIEnv* env = base::android::AttachCurrentThread();
   DCHECK(env);

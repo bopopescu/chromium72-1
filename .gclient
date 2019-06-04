@@ -1,6 +1,6 @@
 solutions = [
   { "name"        : "src",
-    "url"         : "https://github.com/webosose/chromium68.git",
+    "url"         : "https://chromium.googlesource.com/chromium/src.git",
     "deps_file"   : "DEPS",
     "managed"     : False,
     "custom_deps" : {

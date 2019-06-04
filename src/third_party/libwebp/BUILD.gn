@@ -131,7 +131,6 @@ static_library("libwebp_dsp") {
     "src/dsp/dec_msa.c",
     "src/dsp/dsp.h",
     "src/dsp/enc.c",
-    "src/dsp/enc_avx2.c",
     "src/dsp/enc_mips32.c",
     "src/dsp/enc_mips_dsp_r2.c",
     "src/dsp/enc_msa.c",
@@ -389,6 +388,7 @@ group("libwebp") {
     ":libwebp_mux",
     ":libwebp_utils",
   ]
+  public_deps = [ ":libwebp_webp" ]
   public_configs = [ ":libwebp_config" ]
   if (use_dsp_neon) {
     deps += [ ":libwebp_dsp_neon" ]
@@ -512,7 +512,6 @@ if (current_toolchain == host_toolchain) {
       ":libwebp",
       ":libwebp_webp",
       "//base",
-      "//build/config:exe_and_shlib_deps",
       "//build/win:default_exe_manifest",
     ]
     configs += [ ":libwebp_config_internal" ]
@@ -538,7 +537,6 @@ if (current_toolchain == host_toolchain) {
       ":libwebp",
       ":libwebp_webp",
       "//base",
-      "//build/config:exe_and_shlib_deps",
       "//build/win:default_exe_manifest",
     ]
     configs += [ ":libwebp_config_internal" ]

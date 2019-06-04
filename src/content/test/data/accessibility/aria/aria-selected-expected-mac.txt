@@ -1,5 +1,0 @@
-#<skip -- Expose AXSelected on selected child>
-AXWebArea
-++AXList AXSelectedChildren=["AXStaticText 1"]
-++++AXStaticText AXTitle='Item 1'
-++++AXStaticText AXTitle='Item 2'

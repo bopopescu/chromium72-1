@@ -38,10 +38,4 @@ void WebScriptController::RegisterExtension(v8::Extension* extension) {
   ScriptController::RegisterExtensionIfNeeded(extension);
 }
 
-#if defined(USE_NEVA_APPRUNTIME)
-void WebScriptController::clearExtensions() {
-  ScriptController::RegisteredExtensions().clear();
-}
-#endif
-
 }  // namespace blink

@@ -88,7 +88,6 @@ ifeq ($(CONFIG_VP9_ENCODER),yes)
   CODEC_EXPORTS-yes += $(addprefix $(VP9_PREFIX),$(VP9_CX_EXPORTS))
   CODEC_SRCS-yes += $(VP9_PREFIX)vp9cx.mk vpx/vp8.h vpx/vp8cx.h
   INSTALL-LIBS-yes += include/vpx/vp8.h include/vpx/vp8cx.h
-  INSTALL-LIBS-yes += include/vpx/svc_context.h
   INSTALL_MAPS += include/vpx/% $(SRC_PATH_BARE)/$(VP9_PREFIX)/%
   CODEC_DOC_SRCS += vpx/vp8.h vpx/vp8cx.h
   CODEC_DOC_SECTIONS += vp9 vp9_encoder
@@ -112,13 +111,6 @@ endif
 ifeq ($(CONFIG_DECODERS),yes)
   CODEC_DOC_SECTIONS += decoder
 endif
-
-# Suppress -Wextra warnings in third party code.
-$(BUILD_PFX)third_party/googletest/%.cc.o: CXXFLAGS += -Wno-missing-field-initializers
-# Suppress -Wextra warnings in first party code pending investigation.
-# https://bugs.chromium.org/p/webm/issues/detail?id=1069
-$(BUILD_PFX)vp8/encoder/onyx_if.c.o: CFLAGS += -Wno-unknown-warning-option -Wno-clobbered
-$(BUILD_PFX)vp8/decoder/onyxd_if.c.o: CFLAGS += -Wno-unknown-warning-option -Wno-clobbered
 
 ifeq ($(CONFIG_MSVS),yes)
 CODEC_LIB=$(if $(CONFIG_STATIC_MSVCRT),vpxmt,vpxmd)
@@ -282,18 +274,6 @@ $(BUILD_PFX)$(LIBVPX_SO): extralibs += -lm
 $(BUILD_PFX)$(LIBVPX_SO): SONAME = libvpx.so.$(SO_VERSION_MAJOR)
 $(BUILD_PFX)$(LIBVPX_SO): EXPORTS_FILE = $(EXPORT_FILE)
 
-libvpx.ver: $(call enabled,CODEC_EXPORTS)
-	@echo "    [CREATE] $@"
-	$(qexec)echo "{ global:" > $@
-	$(qexec)for f in $?; do awk '{print $$2";"}' < $$f >>$@; done
-	$(qexec)echo "local: *; };" >> $@
-CLEAN-OBJS += libvpx.ver
-
-libvpx.syms: $(call enabled,CODEC_EXPORTS)
-	@echo "    [CREATE] $@"
-	$(qexec)awk '{print "_"$$2}' $^ >$@
-CLEAN-OBJS += libvpx.syms
-
 libvpx.def: $(call enabled,CODEC_EXPORTS)
 	@echo "    [CREATE] $@"
 	$(qexec)echo LIBRARY $(LIBVPX_SO:.dll=) INITINSTANCE TERMINSTANCE > $@
@@ -352,6 +332,18 @@ INSTALL-LIBS-yes += $(LIBSUBDIR)/pkgconfig/vpx.pc
 INSTALL_MAPS += $(LIBSUBDIR)/pkgconfig/%.pc %.pc
 CLEAN-OBJS += vpx.pc
 endif
+
+libvpx.ver: $(call enabled,CODEC_EXPORTS)
+	@echo "    [CREATE] $@"
+	$(qexec)echo "{ global:" > $@
+	$(qexec)for f in $?; do awk '{print $$2";"}' < $$f >>$@; done
+	$(qexec)echo "local: *; };" >> $@
+CLEAN-OBJS += libvpx.ver
+
+libvpx.syms: $(call enabled,CODEC_EXPORTS)
+	@echo "    [CREATE] $@"
+	$(qexec)awk '{print "_"$$2}' $^ >$@
+CLEAN-OBJS += libvpx.syms
 
 #
 # Rule to make assembler configuration file from C configuration file

@@ -4,48 +4,33 @@
 
 #include "ui/aura/test/mus/test_window_tree_client_setup.h"
 
-#include "ui/aura/test/mus/test_window_manager_client.h"
 #include "ui/aura/test/mus/test_window_tree.h"
-#include "ui/aura/test/mus/window_tree_client_private.h"
+#include "ui/aura/test/mus/window_tree_client_test_api.h"
+#include "ui/aura/test/window_occlusion_tracker_test_api.h"
+#include "ui/aura/window_occlusion_tracker.h"
 #include "ui/display/display.h"
 
 namespace aura {
 
-TestWindowTreeClientSetup::TestWindowTreeClientSetup() {}
+TestWindowTreeClientSetup::TestWindowTreeClientSetup() = default;
 
-TestWindowTreeClientSetup::~TestWindowTreeClientSetup() {}
+TestWindowTreeClientSetup::~TestWindowTreeClientSetup() {
+  if (window_tree_)
+    window_tree_->set_delegate(nullptr);
+}
 
 void TestWindowTreeClientSetup::Init(
     WindowTreeClientDelegate* window_tree_delegate) {
-  CommonInit(window_tree_delegate, nullptr, WindowTreeClient::Config::kMash);
-  WindowTreeClientPrivate(window_tree_client_.get())
+  CommonInit(window_tree_delegate);
+  WindowTreeClientTestApi(window_tree_client_.get())
       .OnEmbed(window_tree_.get());
 }
 
-void TestWindowTreeClientSetup::InitForWindowManager(
-    WindowTreeClientDelegate* window_tree_delegate,
-    WindowManagerDelegate* window_manager_delegate) {
-  test_window_manager_client_ = std::make_unique<TestWindowManagerClient>();
-  CommonInit(window_tree_delegate, window_manager_delegate,
-             WindowTreeClient::Config::kMash);
-  WindowTreeClientPrivate window_tree_client_private(window_tree_client_.get());
-  window_tree_client_private.SetTree(window_tree_.get());
-  window_tree_->set_window_manager(window_tree_client_.get());
-  window_tree_client_private.SetWindowManagerClient(
-      test_window_manager_client_.get());
-}
-
 void TestWindowTreeClientSetup::InitWithoutEmbed(
-    WindowTreeClientDelegate* window_tree_delegate,
-    WindowTreeClient::Config config) {
-  CommonInit(window_tree_delegate, nullptr, config);
-  WindowTreeClientPrivate(window_tree_client_.get())
+    WindowTreeClientDelegate* window_tree_delegate) {
+  CommonInit(window_tree_delegate);
+  WindowTreeClientTestApi(window_tree_client_.get())
       .SetTree(window_tree_.get());
-}
-
-void TestWindowTreeClientSetup::NotifyClientAboutAcceleratedWidgets(
-    display::DisplayManager* display_manager) {
-  window_tree_->NotifyClientAboutAcceleratedWidgets(display_manager);
 }
 
 std::unique_ptr<WindowTreeClient>
@@ -59,13 +44,29 @@ WindowTreeClient* TestWindowTreeClientSetup::window_tree_client() {
 }
 
 void TestWindowTreeClientSetup::CommonInit(
-    WindowTreeClientDelegate* window_tree_delegate,
-    WindowManagerDelegate* window_manager_delegate,
-    WindowTreeClient::Config config) {
+    WindowTreeClientDelegate* window_tree_delegate) {
   window_tree_ = std::make_unique<TestWindowTree>();
-  window_tree_client_ = WindowTreeClientPrivate::CreateWindowTreeClient(
-      window_tree_delegate, window_manager_delegate, config);
+  window_tree_->set_delegate(this);
+  window_tree_client_ =
+      WindowTreeClientTestApi::CreateWindowTreeClient(window_tree_delegate);
   window_tree_->set_client(window_tree_client_.get());
+
+  window_occlusion_tracker_ = test::WindowOcclusionTrackerTestApi::Create();
+}
+
+void TestWindowTreeClientSetup::TrackOcclusionState(ws::Id window_id) {
+  window_occlusion_tracker_->Track(
+      WindowTreeClientTestApi(window_tree_client_.get())
+          .GetWindowByServerId(window_id));
+}
+
+void TestWindowTreeClientSetup::PauseWindowOcclusionTracking() {
+  test::WindowOcclusionTrackerTestApi(window_occlusion_tracker_.get()).Pause();
+}
+
+void TestWindowTreeClientSetup::UnpauseWindowOcclusionTracking() {
+  test::WindowOcclusionTrackerTestApi(window_occlusion_tracker_.get())
+      .Unpause();
 }
 
 }  // namespace aura

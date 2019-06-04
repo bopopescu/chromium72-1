@@ -20,6 +20,7 @@ import android.widget.TextView;
 import org.chromium.base.ApiCompatibilityUtils;
 import org.chromium.chrome.R;
 import org.chromium.ui.widget.AnchoredPopupWindow;
+import org.chromium.ui.widget.ChromeImageButton;
 import org.chromium.ui.widget.ViewRectProvider;
 
 /**
@@ -28,7 +29,7 @@ import org.chromium.ui.widget.ViewRectProvider;
  * results.
  */
 public class ListMenuButton
-        extends TintedImageButton implements AnchoredPopupWindow.LayoutObserver {
+        extends ChromeImageButton implements AnchoredPopupWindow.LayoutObserver {
     private final static int INVALID_RES_ID = 0;
 
     /** A class that represents a single item in the popup menu. */
@@ -221,7 +222,7 @@ public class ListMenuButton
         ViewRectProvider rectProvider = new ViewRectProvider(this);
         rectProvider.setIncludePadding(true);
         mPopupMenu = new AnchoredPopupWindow(getContext(), this,
-                ApiCompatibilityUtils.getDrawable(getResources(), R.drawable.menu_bg), contentView,
+                ApiCompatibilityUtils.getDrawable(getResources(), R.drawable.popup_bg), contentView,
                 rectProvider);
         mPopupMenu.setVerticalOverlapAnchor(true);
         mPopupMenu.setHorizontalOverlapAnchor(true);

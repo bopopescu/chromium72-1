@@ -5,14 +5,13 @@
 #ifndef NET_THIRD_PARTY_QUIC_CORE_QUIC_PACKET_WRITER_WRAPPER_H_
 #define NET_THIRD_PARTY_QUIC_CORE_QUIC_PACKET_WRITER_WRAPPER_H_
 
-#include <stddef.h>
-
+#include <cstddef>
 #include <memory>
 
 #include "base/macros.h"
 #include "net/third_party/quic/core/quic_packet_writer.h"
 
-namespace net {
+namespace quic {
 
 // Wraps a writer object to allow dynamically extending functionality. Use
 // cases: replace writer while dispatcher and connections hold on to the
@@ -20,6 +19,8 @@ namespace net {
 class QuicPacketWriterWrapper : public QuicPacketWriter {
  public:
   QuicPacketWriterWrapper();
+  QuicPacketWriterWrapper(const QuicPacketWriterWrapper&) = delete;
+  QuicPacketWriterWrapper& operator=(const QuicPacketWriterWrapper&) = delete;
   ~QuicPacketWriterWrapper() override;
 
   // Default implementation of the QuicPacketWriter interface. Passes everything
@@ -34,6 +35,11 @@ class QuicPacketWriterWrapper : public QuicPacketWriter {
   void SetWritable() override;
   QuicByteCount GetMaxPacketSize(
       const QuicSocketAddress& peer_address) const override;
+  bool SupportsReleaseTime() const override;
+  bool IsBatchMode() const override;
+  char* GetNextWriteLocation(const QuicIpAddress& self_address,
+                             const QuicSocketAddress& peer_address) override;
+  WriteResult Flush() override;
 
   // Takes ownership of |writer|.
   void set_writer(QuicPacketWriter* writer);
@@ -50,10 +56,8 @@ class QuicPacketWriterWrapper : public QuicPacketWriter {
 
   QuicPacketWriter* writer_ = nullptr;
   bool owns_writer_ = false;
-
-  DISALLOW_COPY_AND_ASSIGN(QuicPacketWriterWrapper);
 };
 
-}  // namespace net
+}  // namespace quic
 
 #endif  // NET_THIRD_PARTY_QUIC_CORE_QUIC_PACKET_WRITER_WRAPPER_H_

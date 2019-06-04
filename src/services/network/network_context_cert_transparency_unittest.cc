@@ -11,7 +11,7 @@
 #include "base/stl_util.h"
 #include "base/strings/string_piece.h"
 #include "base/test/gtest_util.h"
-#include "base/test/histogram_tester.h"
+#include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/test/scoped_task_environment.h"
 #include "components/certificate_transparency/features.h"
@@ -255,7 +255,7 @@ TEST(NetworkContextCertTransparencyAuditingDisabledTest,
       0 /* options */, request, client.CreateInterfacePtr(),
       net::MutableNetworkTrafficAnnotationTag(TRAFFIC_ANNOTATION_FOR_TESTS));
 
-  client.RunUntilResponseReceived();
+  client.RunUntilComplete();
   EXPECT_TRUE(client.has_received_response());
   EXPECT_TRUE(client.has_received_completion());
 
@@ -390,7 +390,7 @@ TEST(NetworkContextCertTransparencyAuditingEnabledTest,
       0 /* options */, request, client.CreateInterfacePtr(),
       net::MutableNetworkTrafficAnnotationTag(TRAFFIC_ANNOTATION_FOR_TESTS));
 
-  client.RunUntilResponseReceived();
+  client.RunUntilComplete();
   EXPECT_TRUE(client.has_received_response());
   EXPECT_TRUE(client.has_received_completion());
 

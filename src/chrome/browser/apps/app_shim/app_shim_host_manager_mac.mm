@@ -11,21 +11,18 @@
 #include "base/files/file_util.h"
 #include "base/logging.h"
 #include "base/path_service.h"
-#include "base/task_scheduler/post_task.h"
+#include "base/task/post_task.h"
+#include "base/threading/scoped_blocking_call.h"
 #include "chrome/browser/apps/app_shim/app_shim_handler_mac.h"
-#include "chrome/browser/apps/app_shim/app_shim_host_mac.h"
+#include "chrome/browser/apps/app_shim/app_shim_host_bootstrap_mac.h"
 #include "chrome/browser/apps/app_shim/extension_app_shim_handler_mac.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/mac/app_mode_common.h"
 #include "components/version_info/version_info.h"
+#include "content/public/browser/browser_task_traits.h"
 
 namespace {
-
-void CreateAppShimHost(mojo::edk::ScopedInternalPlatformHandle handle) {
-  // AppShimHost takes ownership of itself.
-  (new AppShimHost)->ServeChannel(std::move(handle));
-}
 
 base::FilePath GetDirectoryInTmpTemplate(const base::FilePath& user_data_dir) {
   base::FilePath temp_dir;
@@ -39,7 +36,7 @@ base::FilePath GetDirectoryInTmpTemplate(const base::FilePath& user_data_dir) {
 void DeleteSocketFiles(const base::FilePath& directory_in_tmp,
                        const base::FilePath& symlink_path,
                        const base::FilePath& version_path) {
-  base::AssertBlockingAllowed();
+  base::ScopedBlockingCall scoped_blocking_call(base::BlockingType::MAY_BLOCK);
 
   // Delete in reverse order of creation.
   if (!version_path.empty())
@@ -87,14 +84,14 @@ AppShimHostManager::~AppShimHostManager() {
         user_data_dir.Append(app_mode::kRunningChromeVersionSymlinkName);
   }
   base::PostTaskWithTraits(FROM_HERE,
-                           {base::MayBlock(), base::TaskPriority::BACKGROUND,
+                           {base::MayBlock(), base::TaskPriority::BEST_EFFORT,
                             base::TaskShutdownBehavior::BLOCK_SHUTDOWN},
                            base::BindOnce(&DeleteSocketFiles, directory_in_tmp_,
                                           symlink_path, version_path));
 }
 
 void AppShimHostManager::InitOnBackgroundThread() {
-  base::AssertBlockingAllowed();
+  base::ScopedBlockingCall scoped_blocking_call(base::BlockingType::MAY_BLOCK);
   base::FilePath user_data_dir;
   if (!base::PathService::Get(chrome::DIR_USER_DATA, &user_data_dir))
     return;
@@ -142,7 +139,7 @@ void AppShimHostManager::InitOnBackgroundThread() {
   base::CreateSymbolicLink(base::FilePath(version_info::GetVersionNumber()),
                            version_path);
 
-  content::BrowserThread::GetTaskRunnerForThread(content::BrowserThread::IO)
+  base::CreateSingleThreadTaskRunnerWithTraits({content::BrowserThread::IO})
       ->PostTask(FROM_HERE,
                  base::Bind(&AppShimHostManager::ListenOnIOThread, this));
 }
@@ -150,18 +147,19 @@ void AppShimHostManager::InitOnBackgroundThread() {
 void AppShimHostManager::ListenOnIOThread() {
   DCHECK_CURRENTLY_ON(content::BrowserThread::IO);
   if (!acceptor_->Listen()) {
-    content::BrowserThread::GetTaskRunnerForThread(content::BrowserThread::UI)
+    base::CreateSingleThreadTaskRunnerWithTraits({content::BrowserThread::UI})
         ->PostTask(FROM_HERE,
                    base::Bind(&AppShimHostManager::OnListenError, this));
   }
 }
 
 void AppShimHostManager::OnClientConnected(
-    mojo::edk::ScopedInternalPlatformHandle handle) {
+    mojo::PlatformChannelEndpoint endpoint) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::IO);
-  content::BrowserThread::GetTaskRunnerForThread(content::BrowserThread::UI)
+  base::CreateSingleThreadTaskRunnerWithTraits({content::BrowserThread::UI})
       ->PostTask(FROM_HERE,
-                 base::Bind(&CreateAppShimHost, base::Passed(&handle)));
+                 base::BindOnce(&AppShimHostBootstrap::CreateForChannel,
+                                std::move(endpoint)));
 }
 
 void AppShimHostManager::OnListenError() {

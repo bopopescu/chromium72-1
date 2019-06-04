@@ -12,7 +12,6 @@
 #include "base/logging.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_split.h"
-#include "net/base/completion_callback.h"
 #include "net/base/host_port_pair.h"
 #include "net/cert/ct_policy_enforcer.h"
 #include "net/cert/ct_policy_status.h"
@@ -29,7 +28,6 @@
 #include "net/socket/transport_client_socket_pool.h"
 #include "net/spdy/buffered_spdy_framer.h"
 #include "net/spdy/spdy_http_utils.h"
-#include "net/spdy/spdy_session_pool.h"
 #include "net/spdy/spdy_stream.h"
 #include "net/test/gtest_util.h"
 #include "net/third_party/spdy/core/spdy_alt_svc_wire_format.h"
@@ -322,7 +320,7 @@ SpdySessionDependencies::SpdySessionDependencies(
       cert_transparency_verifier(std::make_unique<DoNothingCTVerifier>()),
       ct_policy_enforcer(std::make_unique<DefaultCTPolicyEnforcer>()),
       proxy_resolution_service(std::move(proxy_resolution_service)),
-      ssl_config_service(base::MakeRefCounted<SSLConfigServiceDefaults>()),
+      ssl_config_service(std::make_unique<SSLConfigServiceDefaults>()),
       socket_factory(std::make_unique<MockClientSocketFactory>()),
       http_auth_handler_factory(
           HttpAuthHandlerFactory::CreateDefault(host_resolver.get())),
@@ -339,13 +337,6 @@ SpdySessionDependencies::SpdySessionDependencies(
       net_log(nullptr),
       http_09_on_non_default_ports_enabled(false),
       disable_idle_sockets_close_on_memory_pressure(false) {
-  // Note: The CancelledTransaction test does cleanup by running all
-  // tasks in the message loop (RunAllPending).  Unfortunately, that
-  // doesn't clean up tasks on the host resolver thread; and
-  // TCPConnectJob is currently not cancellable.  Using synchronous
-  // lookups allows the test to shutdown cleanly.  Until we have
-  // cancellable TCPConnectJobs, use synchronous lookups.
-  host_resolver->set_synchronous_mode(true);
   http2_settings[spdy::SETTINGS_INITIAL_WINDOW_SIZE] =
       kDefaultInitialWindowSize;
 }
@@ -393,6 +384,7 @@ HttpNetworkSession::Params SpdySessionDependencies::CreateSessionParams(
       session_deps->enable_http2_alternative_service;
   params.enable_websocket_over_http2 =
       session_deps->enable_websocket_over_http2;
+  params.greased_http2_frame = session_deps->greased_http2_frame;
   params.http_09_on_non_default_ports_enabled =
       session_deps->http_09_on_non_default_ports_enabled;
   params.disable_idle_sockets_close_on_memory_pressure =
@@ -418,8 +410,12 @@ HttpNetworkSession::Context SpdySessionDependencies::CreateSessionContext(
   context.http_auth_handler_factory =
       session_deps->http_auth_handler_factory.get();
   context.http_server_properties = session_deps->http_server_properties.get();
-  context.proxy_delegate = session_deps->proxy_delegate.get();
   context.net_log = session_deps->net_log;
+#if BUILDFLAG(ENABLE_REPORTING)
+  context.reporting_service = session_deps->reporting_service.get();
+  context.network_error_logging_service =
+      session_deps->network_error_logging_service.get();
+#endif
   return context;
 }
 
@@ -432,7 +428,7 @@ SpdyURLRequestContext::SpdyURLRequestContext() : storage_(this) {
   storage_.set_ct_policy_enforcer(std::make_unique<DefaultCTPolicyEnforcer>());
   storage_.set_cert_transparency_verifier(
       std::make_unique<DoNothingCTVerifier>());
-  storage_.set_ssl_config_service(new SSLConfigServiceDefaults);
+  storage_.set_ssl_config_service(std::make_unique<SSLConfigServiceDefaults>());
   storage_.set_http_auth_handler_factory(
       HttpAuthHandlerFactory::CreateDefault(host_resolver()));
   storage_.set_http_server_properties(
@@ -716,8 +712,7 @@ std::string SpdyTestUtil::ConstructSpdyReplyString(
 spdy::SpdySerializedFrame SpdyTestUtil::ConstructSpdySettings(
     const spdy::SettingsMap& settings) {
   spdy::SpdySettingsIR settings_ir;
-  for (spdy::SettingsMap::const_iterator it = settings.begin();
-       it != settings.end(); ++it) {
+  for (auto it = settings.begin(); it != settings.end(); ++it) {
     settings_ir.AddSetting(it->first, it->second);
   }
   return spdy::SpdySerializedFrame(
@@ -1080,32 +1075,6 @@ HashValue GetTestHashValue(uint8_t label) {
   HashValue hash_value(HASH_VALUE_SHA256);
   memset(hash_value.data(), label, hash_value.size());
   return hash_value;
-}
-
-std::string GetTestPin(uint8_t label) {
-  HashValue hash_value = GetTestHashValue(label);
-  std::string base64;
-  base::Base64Encode(
-      base::StringPiece(reinterpret_cast<char*>(hash_value.data()),
-                        hash_value.size()),
-      &base64);
-
-  return std::string("pin-sha256=\"") + base64 + "\"";
-}
-
-void AddPin(TransportSecurityState* state,
-            const std::string& host,
-            uint8_t primary_label,
-            uint8_t backup_label) {
-  std::string primary_pin = GetTestPin(primary_label);
-  std::string backup_pin = GetTestPin(backup_label);
-  std::string header = "max-age = 10000; " + primary_pin + "; " + backup_pin;
-
-  // Construct a fake SSLInfo that will pass AddHPKPHeader's checks.
-  SSLInfo ssl_info;
-  ssl_info.is_issued_by_known_root = true;
-  ssl_info.public_key_hashes.push_back(GetTestHashValue(primary_label));
-  EXPECT_TRUE(state->AddHPKPHeader(host, header, ssl_info));
 }
 
 TestServerPushDelegate::TestServerPushDelegate() = default;

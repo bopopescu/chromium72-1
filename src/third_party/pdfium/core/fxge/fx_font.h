@@ -7,22 +7,12 @@
 #ifndef CORE_FXGE_FX_FONT_H_
 #define CORE_FXGE_FX_FONT_H_
 
-#include <memory>
-#include <utility>
 #include <vector>
 
+#include "core/fxcrt/fx_coordinates.h"
 #include "core/fxcrt/fx_system.h"
-#include "core/fxcrt/unowned_ptr.h"
 #include "core/fxge/cfx_substfont.h"
-#include "core/fxge/dib/cfx_dibitmap.h"
-#include "core/fxge/fx_dib.h"
 #include "core/fxge/fx_freetype.h"
-
-#if defined _SKIA_SUPPORT_ || defined _SKIA_SUPPORT_PATHS_
-class SkTypeface;
-
-using CFX_TypeFace = SkTypeface;
-#endif
 
 /* Font pitch and family flags */
 #define FXFONT_FF_FIXEDPITCH (1 << 0)
@@ -49,13 +39,18 @@ using CFX_TypeFace = SkTypeface;
 /* Other font flags */
 #define FXFONT_USEEXTERNATTR 0x80000
 #define FXFONT_CIDFONT 0x100000
-#ifdef PDF_ENABLE_XFA
-#define FXFONT_EXACTMATCH 0x80000000
-#endif  // PDF_ENABLE_XFA
 
 #define GET_TT_SHORT(w) (uint16_t)(((w)[0] << 8) | (w)[1])
 #define GET_TT_LONG(w) \
   (uint32_t)(((w)[0] << 24) | ((w)[1] << 16) | ((w)[2] << 8) | (w)[3])
+
+class CFX_DIBitmap;
+
+#if defined _SKIA_SUPPORT_ || defined _SKIA_SUPPORT_PATHS_
+class SkTypeface;
+
+using CFX_TypeFace = SkTypeface;
+#endif
 
 // Sets the given transform on the font, and resets it to the identity when it
 // goes out of scope.
@@ -77,11 +72,6 @@ class CFX_GlyphBitmap {
   int m_Left;
   RetainPtr<CFX_DIBitmap> m_pBitmap;
 };
-
-inline CFX_GlyphBitmap::CFX_GlyphBitmap()
-    : m_pBitmap(pdfium::MakeRetain<CFX_DIBitmap>()) {}
-
-inline CFX_GlyphBitmap::~CFX_GlyphBitmap() = default;
 
 class FXTEXT_GLYPHPOS {
  public:

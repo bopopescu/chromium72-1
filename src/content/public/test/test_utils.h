@@ -13,6 +13,7 @@
 #include "base/run_loop.h"
 #include "base/threading/thread_checker.h"
 #include "build/build_config.h"
+#include "content/common/service_worker/service_worker_types.h"
 #include "content/public/browser/browser_child_process_observer.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/content_browser_client.h"
@@ -21,6 +22,7 @@
 #include "content/public/browser/notification_registrar.h"
 #include "content/public/browser/notification_source.h"
 #include "content/public/browser/web_contents_observer.h"
+#include "third_party/blink/public/platform/modules/fetch/fetch_api_request.mojom.h"
 
 #if defined(OS_ANDROID)
 #include <jni.h>
@@ -38,6 +40,14 @@ namespace content {
 
 class RenderFrameHost;
 class TestServiceManagerContext;
+
+// Create an blink::mojom::FetchAPIRequestPtr with given fields.
+blink::mojom::FetchAPIRequestPtr CreateFetchAPIRequest(
+    const GURL& url,
+    const std::string& method,
+    const base::flat_map<std::string, std::string>& headers,
+    blink::mojom::ReferrerPtr referrer,
+    bool is_reload);
 
 // Deprecated: Use RunLoop::Run(). Use RunLoop::Type::kNestableTasksAllowed to
 // force nesting in browser tests.
@@ -251,15 +261,14 @@ class WindowedNotificationObserver : public NotificationObserver {
                const NotificationDetails& details) override;
 
  private:
-  bool seen_;
-  bool running_;
+  bool seen_ = false;
   NotificationRegistrar registrar_;
 
   ConditionTestCallback callback_;
 
   NotificationSource source_;
   NotificationDetails details_;
-  scoped_refptr<MessageLoopRunner> message_loop_runner_;
+  base::RunLoop run_loop_;
 
   DISALLOW_COPY_AND_ASSIGN(WindowedNotificationObserver);
 };
@@ -330,6 +339,23 @@ class WebContentsDestroyedWatcher : public WebContentsObserver {
   base::RunLoop run_loop_;
 
   DISALLOW_COPY_AND_ASSIGN(WebContentsDestroyedWatcher);
+};
+
+// Watches a web contents for page scales.
+class TestPageScaleObserver : public WebContentsObserver {
+ public:
+  explicit TestPageScaleObserver(WebContents* web_contents);
+  ~TestPageScaleObserver() override;
+  float WaitForPageScaleUpdate();
+
+ private:
+  void OnPageScaleFactorChanged(float page_scale_factor) override;
+
+  base::OnceClosure done_callback_;
+  bool seen_page_scale_change_ = false;
+  float last_scale_ = 0.f;
+
+  DISALLOW_COPY_AND_ASSIGN(TestPageScaleObserver);
 };
 
 // A custom ContentBrowserClient that simulates GetEffectiveURL() translation

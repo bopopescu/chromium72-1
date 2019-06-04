@@ -101,6 +101,30 @@ TEST(String, ArrayAccess) {
   EXPECT_EQ('\0', s[6]);
 }
 
+TEST(String, EqualityOperators) {
+  String a("Foo");
+  String b("Bar");
+
+  EXPECT_TRUE(a == String("Foo"));
+  EXPECT_TRUE(a == "Foo");
+
+  EXPECT_TRUE(b != String("Foo"));
+  EXPECT_TRUE(b != "Foo");
+
+  EXPECT_TRUE(a != b);
+
+  EXPECT_TRUE(b == String("Bar"));
+  EXPECT_TRUE(b == "Bar");
+
+  EXPECT_FALSE(a == "Foo ");
+  EXPECT_FALSE(b == " Bar");
+  EXPECT_FALSE(a == "foo");
+
+  EXPECT_TRUE(a != "Foo ");
+  EXPECT_TRUE(b != " Bar");
+  EXPECT_TRUE(a != "foo");
+}
+
 TEST(String, Resize) {
   String s("A very long string to have fun");
   s.Resize(10);
@@ -185,14 +209,29 @@ TEST(Vector, At) {
   }
 }
 
-TEST(Vector, IndexOf) {
+TEST(Vector, Find) {
   const int kMaxCount = 500;
   Vector<int> v;
   for (int n = 0; n < kMaxCount; ++n)
     v.PushBack(n * 100);
 
   for (int n = 0; n < kMaxCount; ++n) {
-    EXPECT_EQ(n, v.IndexOf(n * 100)) << "Checking v.IndexOf(" << n * 100 << ")";
+    SearchResult r = v.Find(n * 100);
+    EXPECT_TRUE(r.found) << "Looking for " << n * 100;
+    EXPECT_EQ(n, r.pos) << "Looking for " << n * 100;
+  }
+}
+
+TEST(Vector, ForRangeLoop) {
+  const int kMaxCount = 500;
+  Vector<int> v;
+  for (int n = 0; n < kMaxCount; ++n)
+    v.PushBack(n * 100);
+
+  int n = 0;
+  for (const int& value : v) {
+    EXPECT_EQ(n * 100, value) << "Checking v[" << n << "]";
+    n++;
   }
 }
 

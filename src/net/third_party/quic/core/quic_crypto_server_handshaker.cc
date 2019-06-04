@@ -11,7 +11,7 @@
 #include "net/third_party/quic/platform/api/quic_text_utils.h"
 #include "third_party/boringssl/src/include/openssl/sha.h"
 
-namespace net {
+namespace quic {
 
 class QuicCryptoServerHandshaker::ProcessClientHelloCallback
     : public ProcessClientHelloResultCallback {
@@ -22,12 +22,12 @@ class QuicCryptoServerHandshaker::ProcessClientHelloCallback
           ValidateClientHelloResultCallback::Result>& result)
       : parent_(parent), result_(result) {}
 
-  void Run(QuicErrorCode error,
-           const QuicString& error_details,
-           std::unique_ptr<CryptoHandshakeMessage> message,
-           std::unique_ptr<DiversificationNonce> diversification_nonce,
-           std::unique_ptr<net::ProofSource::Details> proof_source_details)
-      override {
+  void Run(
+      QuicErrorCode error,
+      const QuicString& error_details,
+      std::unique_ptr<CryptoHandshakeMessage> message,
+      std::unique_ptr<DiversificationNonce> diversification_nonce,
+      std::unique_ptr<ProofSource::Details> proof_source_details) override {
     if (parent_ == nullptr) {
       return;
     }
@@ -305,8 +305,8 @@ void QuicCryptoServerHandshaker::FinishSendServerConfigUpdate(
   }
 
   QUIC_DVLOG(1) << "Server: Sending server config update: "
-                << message.DebugString(Perspective::IS_SERVER);
-  const QuicData& data = message.GetSerialized(Perspective::IS_SERVER);
+                << message.DebugString();
+  const QuicData& data = message.GetSerialized();
   stream_->WriteOrBufferData(QuicStringPiece(data.data(), data.length()), false,
                              nullptr);
 
@@ -429,7 +429,7 @@ void QuicCryptoServerHandshaker::ProcessClientHello(
   crypto_config_->ProcessClientHello(
       result, /*reject_only=*/false, connection->connection_id(),
       connection->self_address(), GetClientAddress(), connection->version(),
-      connection->supported_versions(), use_stateless_rejects_in_crypto_config,
+      session()->supported_versions(), use_stateless_rejects_in_crypto_config,
       server_designated_connection_id, connection->clock(),
       connection->random_generator(), compressed_certs_cache_,
       crypto_negotiated_params_, signed_config_,
@@ -470,4 +470,4 @@ const QuicSocketAddress QuicCryptoServerHandshaker::GetClientAddress() {
   return session()->connection()->peer_address();
 }
 
-}  // namespace net
+}  // namespace quic

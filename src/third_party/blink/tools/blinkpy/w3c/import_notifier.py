@@ -16,14 +16,16 @@ from collections import defaultdict
 import logging
 import re
 
+from blinkpy.common.net.luci_auth import LuciAuth
 from blinkpy.common.path_finder import PathFinder
+from blinkpy.w3c.common import WPT_GH_URL
 from blinkpy.w3c.directory_owners_extractor import DirectoryOwnersExtractor
 from blinkpy.w3c.monorail import MonorailAPI, MonorailIssue
 from blinkpy.w3c.wpt_expectations_updater import UMBRELLA_BUG
 
 _log = logging.getLogger(__name__)
 
-GITHUB_COMMIT_PREFIX = 'https://github.com/w3c/web-platform-tests/commit/'
+GITHUB_COMMIT_PREFIX = WPT_GH_URL + 'commit/'
 SHORT_GERRIT_PREFIX = 'https://crrev.com/c/'
 
 
@@ -34,6 +36,7 @@ class ImportNotifier(object):
         self.git = chromium_git
         self.local_wpt = local_wpt
 
+        self._monorail_api = MonorailAPI
         self.default_port = host.port_factory.get()
         self.finder = PathFinder(host.filesystem)
         self.owners_extractor = DirectoryOwnersExtractor(host.filesystem)
@@ -55,11 +58,10 @@ class ImportNotifier(object):
             patchset: The patchset number of the import CL (a string).
             dry_run: If True, no bugs will be actually filed to crbug.com.
             service_account_key_json: The path to a JSON private key of a
-                service account for accessing Monorail. If None, try to load
-                from the default location, i.e. the path stored in the
-                environment variable GOOGLE_APPLICATION_CREDENTIALS.
+                service account for accessing Monorail. If None, try to get an
+                access token from luci-auth.
 
-        Note: "test names" are paths of the tests relative to LayoutTests.
+        Note: "test names" are paths of the tests relative to web_tests.
         """
         gerrit_url = SHORT_GERRIT_PREFIX + issue
         gerrit_url_with_ps = gerrit_url + '/' + patchset + '/'
@@ -189,7 +191,7 @@ class ImportNotifier(object):
             description = prologue + failure_list + epilogue + commit_list
 
             bug = MonorailIssue.new_chromium_issue(summary, description, cc, components)
-            _log.info(str(bug))
+            _log.info(unicode(bug))
 
             if is_wpt_notify_enabled:
                 _log.info("WPT-NOTIFY enabled in this directory; adding the bug to the pending list.")
@@ -226,10 +228,10 @@ class ImportNotifier(object):
         """Finds the lowest directory that contains the test and has OWNERS.
 
         Args:
-            The name of the test (a path relative to LayoutTests).
+            The name of the test (a path relative to web_tests).
 
         Returns:
-            The path of the found directory relative to LayoutTests.
+            The path of the found directory relative to web_tests.
         """
         # Always use non-virtual test names when looking up OWNERS.
         if self.default_port.lookup_virtual_test_base(test_name):
@@ -264,7 +266,10 @@ class ImportNotifier(object):
             _log.info('[%d] Filed bug: %s', index, MonorailIssue.crbug_link(response['id']))
 
     def _get_monorail_api(self, service_account_key_json):
-        return MonorailAPI(service_account_key_json=service_account_key_json)
+        if service_account_key_json:
+            return self._monorail_api(service_account_key_json=service_account_key_json)
+        token = LuciAuth(self.host).get_access_token()
+        return self._monorail_api(access_token=token)
 
 
 class TestFailure(object):

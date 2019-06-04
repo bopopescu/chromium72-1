@@ -41,14 +41,6 @@ class DataReductionProxyData : public base::SupportsUserData::Data {
     used_data_reduction_proxy_ = used_data_reduction_proxy;
   }
 
-  // Whether Lo-Fi was requested for this request or navigation. True if the
-  // session is in Lo-Fi control or enabled group, and the network quality is
-  // slow.
-  bool lofi_requested() const { return lofi_requested_; }
-  void set_lofi_requested(bool lofi_requested) {
-    lofi_requested_ = lofi_requested;
-  }
-
   // Whether a lite page response was seen for the request or navigation.
   bool lite_page_received() const { return lite_page_received_; }
   void set_lite_page_received(bool lite_page_received) {
@@ -73,6 +65,16 @@ class DataReductionProxyData : public base::SupportsUserData::Data {
   bool client_lofi_requested() const { return client_lofi_requested_; }
   void set_client_lofi_requested(bool client_lofi_requested) {
     client_lofi_requested_ = client_lofi_requested;
+  }
+
+  // This response was fetched from cache, but the original request used DRP.
+  bool was_cached_data_reduction_proxy_response() const {
+    return was_cached_data_reduction_proxy_response_;
+  }
+  void set_was_cached_data_reduction_proxy_response(
+      bool was_cached_data_reduction_proxy_response) {
+    was_cached_data_reduction_proxy_response_ =
+        was_cached_data_reduction_proxy_response;
   }
 
   // The session key used for this request. Only set for main frame requests.
@@ -111,6 +113,10 @@ class DataReductionProxyData : public base::SupportsUserData::Data {
   const base::Optional<uint64_t>& page_id() const { return page_id_; }
   void set_page_id(uint64_t page_id) { page_id_ = page_id; }
 
+  // Whether the blacklist prevented a preview.
+  bool black_listed() const { return black_listed_; }
+  void set_black_listed(bool black_listed) { black_listed_ = black_listed; }
+
   // Removes |this| from |request|.
   static void ClearData(net::URLRequest* request);
 
@@ -131,19 +137,16 @@ class DataReductionProxyData : public base::SupportsUserData::Data {
   // Whether the DataReductionProxy was used for this request or navigation.
   // Also true if the user is the holdback experiment, and the request would
   // otherwise be eligible to use the proxy.
+  // Cached responses are not considered to have used DRP.
   bool used_data_reduction_proxy_;
-
-  // Whether server Lo-Fi was requested for this request or navigation. True if
-  // the session is in Lo-Fi control or enabled group, and the network quality
-  // is slow.
-  bool lofi_requested_;
 
   // Whether client Lo-Fi was requested for this request. This is only set on
   // image requests that have added a range header to attempt to get a smaller
   // file size image.
   bool client_lofi_requested_;
 
-  // Whether a lite page response was seen for the request or navigation.
+  // Whether a proxy-served lite page response was seen for the HTTP request or
+  // navigation.
   bool lite_page_received_;
 
   // Whether server Lo-Fi directive was received for this navigation. True if
@@ -152,6 +155,12 @@ class DataReductionProxyData : public base::SupportsUserData::Data {
 
   // Whether a lite page response was seen for the request or navigation.
   bool lofi_received_;
+
+  // Whether the blacklist prevented a preview.
+  bool black_listed_;
+
+  // This response was fetched from cache, but the original request used DRP.
+  bool was_cached_data_reduction_proxy_response_;
 
   // The session key used for this request or navigation.
   std::string session_key_;

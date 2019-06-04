@@ -1,4 +1,0 @@
-rootWebArea
-++checkBox checkedState=true
-++checkBox checkedState=false
-++checkBox checkedState=mixed

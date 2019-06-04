@@ -25,7 +25,8 @@ class WebViewTestProxyBase;
 class WebViewTestClient : public blink::WebViewClient {
  public:
   // Caller has to ensure |web_view_test_proxy_base| lives longer than |this|.
-  WebViewTestClient(WebViewTestProxyBase* web_view_test_proxy_base);
+  WebViewTestClient(WebViewTestProxyBase* web_view_test_proxy_base,
+                    std::unique_ptr<blink::WebWidgetClient> web_widget_client);
 
   ~WebViewTestClient() override;
 
@@ -36,12 +37,15 @@ class WebViewTestClient : public blink::WebViewClient {
                              const blink::WebString& frame_name,
                              blink::WebNavigationPolicy policy,
                              bool suppress_opener,
-                             blink::WebSandboxFlags) override;
+                             blink::WebSandboxFlags,
+                             const blink::SessionStorageNamespaceId&) override;
   void PrintPage(blink::WebLocalFrame* frame) override;
   blink::WebString AcceptLanguages() override;
   void DidFocus(blink::WebLocalFrame* calling_frame) override;
   bool CanHandleGestureEvent() override;
   bool CanUpdateLayout() override;
+  blink::WebScreenInfo GetScreenInfo() override;
+  blink::WebWidgetClient* WidgetClient() override;
 
  private:
   WebTestDelegate* delegate();
@@ -49,6 +53,7 @@ class WebViewTestClient : public blink::WebViewClient {
 
   // Borrowed pointer to WebViewTestProxyBase.
   WebViewTestProxyBase* web_view_test_proxy_base_;
+  std::unique_ptr<blink::WebWidgetClient> web_widget_client_;
 
   DISALLOW_COPY_AND_ASSIGN(WebViewTestClient);
 };

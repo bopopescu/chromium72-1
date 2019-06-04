@@ -8,6 +8,7 @@
 #include <stdint.h>
 
 #include <algorithm>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -146,7 +147,7 @@ class ResourceMetadataTest : public testing::Test {
         temp_dir_.GetPath(), base::ThreadTaskRunnerHandle::Get().get()));
     ASSERT_TRUE(metadata_storage_->Initialize());
 
-    fake_free_disk_space_getter_.reset(new FakeFreeDiskSpaceGetter);
+    fake_free_disk_space_getter_ = std::make_unique<FakeFreeDiskSpaceGetter>();
     cache_.reset(new FileCache(metadata_storage_.get(), temp_dir_.GetPath(),
                                base::ThreadTaskRunnerHandle::Get().get(),
                                fake_free_disk_space_getter_.get()));
@@ -561,7 +562,7 @@ TEST_F(ResourceMetadataTest, Iterate) {
   }
 
   EXPECT_EQ(7, file_count);
-  EXPECT_EQ(7, directory_count);
+  EXPECT_EQ(9, directory_count);
 }
 
 TEST_F(ResourceMetadataTest, DuplicatedNames) {
@@ -689,11 +690,12 @@ TEST_F(ResourceMetadataTest, Reset) {
   ASSERT_TRUE(entry.file_info().is_directory());
   EXPECT_EQ(util::kDriveGrandRootLocalId, entry.local_id());
 
-  // There are "other", "trash" and "root" under "drive".
+  // There are "other", "trash" and "root", "team_drives" and "Computers"
+  // under "drive".
   ASSERT_EQ(FILE_ERROR_OK,
             resource_metadata_->ReadDirectoryByPath(
                 base::FilePath::FromUTF8Unsafe("drive"), &entries));
-  EXPECT_EQ(3U, entries.size());
+  EXPECT_EQ(5U, entries.size());
 
   // The "other" directory should be empty.
   ASSERT_EQ(FILE_ERROR_OK,
@@ -705,6 +707,16 @@ TEST_F(ResourceMetadataTest, Reset) {
   ASSERT_EQ(FILE_ERROR_OK,
             resource_metadata_->ReadDirectoryByPath(
                 base::FilePath::FromUTF8Unsafe("drive/trash"), &entries));
+  EXPECT_TRUE(entries.empty());
+
+  ASSERT_EQ(FILE_ERROR_OK,
+            resource_metadata_->ReadDirectoryByPath(
+                base::FilePath::FromUTF8Unsafe("drive/team_drives"), &entries));
+  EXPECT_TRUE(entries.empty());
+
+  ASSERT_EQ(FILE_ERROR_OK,
+            resource_metadata_->ReadDirectoryByPath(
+                base::FilePath::FromUTF8Unsafe("drive/Computers"), &entries));
   EXPECT_TRUE(entries.empty());
 }
 

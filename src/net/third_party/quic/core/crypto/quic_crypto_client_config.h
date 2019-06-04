@@ -20,7 +20,7 @@
 #include "net/third_party/quic/platform/api/quic_string_piece.h"
 #include "third_party/boringssl/src/include/openssl/base.h"
 
-namespace net {
+namespace quic {
 
 class ChannelIDKey;
 class ChannelIDSource;
@@ -58,6 +58,8 @@ class QUIC_EXPORT_PRIVATE QuicCryptoClientConfig : public QuicCryptoConfig {
     };
 
     CachedState();
+    CachedState(const CachedState&) = delete;
+    CachedState& operator=(const CachedState&) = delete;
     ~CachedState();
 
     // IsComplete returns true if this object contains enough information to
@@ -192,8 +194,6 @@ class QUIC_EXPORT_PRIVATE QuicCryptoClientConfig : public QuicCryptoConfig {
     // nonces and connection_ids together in one queue.
     QuicQueue<QuicConnectionId> server_designated_connection_ids_;
     QuicQueue<QuicString> server_nonces_;
-
-    DISALLOW_COPY_AND_ASSIGN(CachedState);
   };
 
   // Used to filter server ids for partial config deletion.
@@ -207,6 +207,8 @@ class QUIC_EXPORT_PRIVATE QuicCryptoClientConfig : public QuicCryptoConfig {
 
   QuicCryptoClientConfig(std::unique_ptr<ProofVerifier> proof_verifier,
                          bssl::UniquePtr<SSL_CTX> ssl_ctx);
+  QuicCryptoClientConfig(const QuicCryptoClientConfig&) = delete;
+  QuicCryptoClientConfig& operator=(const QuicCryptoClientConfig&) = delete;
   ~QuicCryptoClientConfig();
 
   // LookupOrCreate returns a CachedState for the given |server_id|. If no such
@@ -333,15 +335,14 @@ class QUIC_EXPORT_PRIVATE QuicCryptoClientConfig : public QuicCryptoConfig {
   // suffix will be used to initialize the cached state for this server.
   void AddCanonicalSuffix(const QuicString& suffix);
 
-  // Prefers AES-GCM (kAESG) over other AEAD algorithms. Call this method if
-  // the CPU has hardware acceleration for AES-GCM. This method can only be
-  // called after SetDefaults().
-  void PreferAesGcm();
-
   // Saves the |user_agent_id| that will be passed in QUIC's CHLO message.
   void set_user_agent_id(const QuicString& user_agent_id) {
     user_agent_id_ = user_agent_id;
   }
+
+  // Returns the user_agent_id that will be provided in the client hello
+  // handshake message.
+  const QuicString& user_agent_id() const { return user_agent_id_; }
 
   // Saves the |alpn| that will be passed in QUIC's CHLO message.
   void set_alpn(const QuicString& alpn) { alpn_ = alpn; }
@@ -361,7 +362,7 @@ class QUIC_EXPORT_PRIVATE QuicCryptoClientConfig : public QuicCryptoConfig {
   QuicErrorCode CacheNewServerConfig(
       const CryptoHandshakeMessage& message,
       QuicWallTime now,
-      const QuicTransportVersion version,
+      QuicTransportVersion version,
       QuicStringPiece chlo_hash,
       const std::vector<QuicString>& cached_certs,
       CachedState* cached,
@@ -401,10 +402,8 @@ class QUIC_EXPORT_PRIVATE QuicCryptoClientConfig : public QuicCryptoConfig {
   // If non-empty, the client will operate in the pre-shared key mode by
   // incorporating |pre_shared_key_| into the key schedule.
   QuicString pre_shared_key_;
-
-  DISALLOW_COPY_AND_ASSIGN(QuicCryptoClientConfig);
 };
 
-}  // namespace net
+}  // namespace quic
 
 #endif  // NET_THIRD_PARTY_QUIC_CORE_CRYPTO_QUIC_CRYPTO_CLIENT_CONFIG_H_

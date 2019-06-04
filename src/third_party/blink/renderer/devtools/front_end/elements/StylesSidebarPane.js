@@ -47,6 +47,9 @@ Elements.StylesSidebarPane = class extends Elements.ElementsSidebarPane {
     this._pendingWidgetToggle = null;
     this._toolbarPaneElement = this._createStylesSidebarToolbar();
 
+    this._noMatchesElement = this.contentElement.createChild('div', 'gray-info-message hidden');
+    this._noMatchesElement.textContent = ls`No matching selector or style`;
+
     this._sectionsContainer = this.contentElement.createChild('div');
     UI.ARIAUtils.markAsTree(this._sectionsContainer);
     this._sectionsContainer.addEventListener('keydown', this._sectionsContainerKeyDown.bind(this), false);
@@ -144,17 +147,15 @@ Elements.StylesSidebarPane = class extends Elements.ElementsSidebarPane {
    * @param {string} placeholder
    * @param {!Element} container
    * @param {function(?RegExp)} filterCallback
-   * @param {string} activeClassName
    * @return {!Element}
    */
-  static createPropertyFilterElement(placeholder, container, filterCallback, activeClassName) {
+  static createPropertyFilterElement(placeholder, container, filterCallback) {
     const input = createElementWithClass('input');
     input.placeholder = placeholder;
 
     function searchHandler() {
       const regex = input.value ? new RegExp(input.value.escapeForRegExp(), 'i') : null;
       filterCallback(regex);
-      container.classList.toggle(activeClassName, !!input.value);
     }
     input.addEventListener('input', searchHandler, false);
 
@@ -431,8 +432,10 @@ Elements.StylesSidebarPane = class extends Elements.ElementsSidebarPane {
     this._sectionBlocks = [];
 
     const node = this.node();
-    if (!matchedStyles || !node)
+    if (!matchedStyles || !node) {
+      this._noMatchesElement.classList.remove('hidden');
       return;
+    }
 
     this._sectionBlocks =
         await this._rebuildSectionsForMatchedStyleRules(/** @type {!SDK.CSSMatchedStyles} */ (matchedStyles));
@@ -475,6 +478,8 @@ Elements.StylesSidebarPane = class extends Elements.ElementsSidebarPane {
 
     if (this._filterRegex)
       this._updateFilter();
+    else
+      this._noMatchesElement.classList.toggle('hidden', this._sectionBlocks.length > 0);
 
     this._nodeStylesUpdatedForTest(/** @type {!SDK.DOMNode} */ (node), true);
     if (this._decorator) {
@@ -579,8 +584,10 @@ Elements.StylesSidebarPane = class extends Elements.ElementsSidebarPane {
   }
 
   _updateFilter() {
+    let hasAnyVisibleBlock = false;
     for (const block of this._sectionBlocks)
-      block.updateFilter();
+      hasAnyVisibleBlock |= block.updateFilter();
+    this._noMatchesElement.classList.toggle('hidden', hasAnyVisibleBlock);
   }
 
   /**
@@ -615,8 +622,8 @@ Elements.StylesSidebarPane = class extends Elements.ElementsSidebarPane {
     const container = this.contentElement.createChild('div', 'styles-sidebar-pane-toolbar-container');
     const hbox = container.createChild('div', 'hbox styles-sidebar-pane-toolbar');
     const filterContainerElement = hbox.createChild('div', 'styles-sidebar-pane-filter-box');
-    const filterInput = Elements.StylesSidebarPane.createPropertyFilterElement(
-        Common.UIString('Filter'), hbox, this._onFilterChanged.bind(this), 'styles-filter-engaged');
+    const filterInput =
+        Elements.StylesSidebarPane.createPropertyFilterElement(ls`Filter`, hbox, this._onFilterChanged.bind(this));
     UI.ARIAUtils.setAccessibleName(filterInput, Common.UIString('Filter Styles'));
     filterContainerElement.appendChild(filterInput);
     const toolbar = new UI.Toolbar('styles-pane-toolbar', hbox);
@@ -743,12 +750,16 @@ Elements.SectionBlock = class {
     return new Elements.SectionBlock(separatorElement);
   }
 
+  /**
+   * @return {boolean}
+   */
   updateFilter() {
     let hasAnyVisibleSection = false;
     for (const section of this.sections)
       hasAnyVisibleSection |= section._updateFilter();
     if (this._titleElement)
       this._titleElement.classList.toggle('hidden', !hasAnyVisibleSection);
+    return hasAnyVisibleSection;
   }
 
   /**
@@ -996,35 +1007,20 @@ Elements.StylePropertiesSection = class {
     const menuButton = new UI.ToolbarButton('', 'largeicon-menu');
     menuButton.element.tabIndex = -1;
     sectionToolbar.appendToolbarItem(menuButton);
-    setItemsVisibility.call(this, items, false);
-    sectionToolbar.element.addEventListener('mouseenter', setItemsVisibility.bind(this, items, true));
-    sectionToolbar.element.addEventListener('mouseleave', setItemsVisibility.bind(this, items, false));
+    setItemsVisibility(items, false);
+    sectionToolbar.element.addEventListener('mouseenter', setItemsVisibility.bind(null, items, true));
+    sectionToolbar.element.addEventListener('mouseleave', setItemsVisibility.bind(null, items, false));
     UI.ARIAUtils.markAsHidden(sectionToolbar.element);
 
     /**
      * @param {!Array<!UI.ToolbarButton>} items
      * @param {boolean} value
-     * @this {Elements.StylePropertiesSection}
      */
     function setItemsVisibility(items, value) {
       for (let i = 0; i < items.length; ++i)
         items[i].setVisible(value);
       menuButton.setVisible(!value);
-      if (this._isSASSStyle())
-        newRuleButton.setVisible(false);
     }
-  }
-
-  /**
-   * @return {boolean}
-   */
-  _isSASSStyle() {
-    const header =
-        this._style.styleSheetId ? this._style.cssModel().styleSheetHeaderForId(this._style.styleSheetId) : null;
-    if (!header)
-      return false;
-    const sourceMap = header.cssModel().sourceMapManager().sourceMapForClient(header);
-    return sourceMap ? sourceMap.editable() : false;
   }
 
   /**
@@ -1550,7 +1546,7 @@ Elements.StylePropertiesSection = class {
       return;
     }
 
-    if (!this.editable || this._isSASSStyle())
+    if (!this.editable)
       return;
 
     const config = new UI.InplaceEditor.Config(
@@ -1643,6 +1639,8 @@ Elements.StylePropertiesSection = class {
       event.consume(true);
       return;
     }
+    if (this.element.hasSelection())
+      return;
     this._startEditingAtFirstPosition();
     event.consume(true);
   }
@@ -1664,7 +1662,7 @@ Elements.StylePropertiesSection = class {
   }
 
   _startEditingAtFirstPosition() {
-    if (!this.editable || this._isSASSStyle())
+    if (!this.editable)
       return;
 
     if (!this._style.parentRule) {
@@ -2111,18 +2109,16 @@ Elements.StylesSidebarPane.CSSPropertyPrompt = class extends UI.TextPrompt {
       case 'ArrowDown':
       case 'PageUp':
       case 'PageDown':
-        if (this._handleNameOrValueUpDown(event)) {
+        if (!this.isSuggestBoxVisible() && this._handleNameOrValueUpDown(event)) {
           event.preventDefault();
           return;
         }
         break;
       case 'Enter':
         // Accept any available autocompletions and advance to the next field.
-        if (this.textWithCurrentSuggestion() !== this.text()) {
-          this.tabKeyPressed();
-          return;
-        }
-        break;
+        this.tabKeyPressed();
+        event.preventDefault();
+        return;
     }
 
     super.onKeyDown(event);

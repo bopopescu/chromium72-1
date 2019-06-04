@@ -43,9 +43,14 @@ class HEADLESS_EXPORT HeadlessContentMainDelegate
   int RunProcess(
       const std::string& process_type,
       const content::MainFunctionParams& main_function_params) override;
+#if defined(OS_MACOSX)
+  void PreCreateMainMessageLoop() override;
+#endif
   content::ContentBrowserClient* CreateContentBrowserClient() override;
   content::ContentUtilityClient* CreateContentUtilityClient() override;
   content::ContentRendererClient* CreateContentRendererClient() override;
+
+  void PostEarlyInitialization(bool is_running_tests) override;
 
   HeadlessBrowserImpl* browser() const { return browser_.get(); }
 

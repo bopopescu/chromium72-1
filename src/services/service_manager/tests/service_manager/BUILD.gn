@@ -2,15 +2,16 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
+import("//mojo/public/tools/bindings/mojom.gni")
 import("//services/catalog/public/tools/catalog.gni")
 import("//services/service_manager/public/cpp/service.gni")
 import("//services/service_manager/public/service_manifest.gni")
-import("//mojo/public/tools/bindings/mojom.gni")
 import("//testing/test.gni")
 
 source_set("service_manager") {
   testonly = true
   sources = [
+    "service_manager_listener_unittest.cc",
     "service_manager_unittest.cc",
   ]
 
@@ -18,12 +19,16 @@ source_set("service_manager") {
     ":interfaces",
     "//base",
     "//base/test:test_config",
-    "//mojo/edk",
+    "//base/test:test_support",
+    "//mojo/public/cpp/platform",
     "//mojo/public/cpp/system",
+    "//services/service_manager",
     "//services/service_manager/public/cpp",
-    "//services/service_manager/public/cpp:service_test_support",
+    "//services/service_manager/public/cpp/test:test_support",
     "//services/service_manager/public/mojom",
     "//services/service_manager/runner/common",
+    "//services/service_manager/tests:catalog_source",
+    "//testing/gtest",
   ]
 
   data_deps = [
@@ -57,7 +62,6 @@ executable("service_manager_unittest_target") {
   deps = [
     ":interfaces",
     "//base",
-    "//build/config:exe_and_shlib_deps",
     "//build/win:default_exe_manifest",
     "//services/service_manager/public/cpp",
     "//services/service_manager/public/cpp/standalone_service:main",
@@ -73,15 +77,15 @@ service_manifest("embedder_manifest") {
   name = "service_manager_unittest_embedder"
   source = "embedder_manifest.json"
   packaged_services = [
-    ":all_users_manifest",
+    ":shared_instance_across_users_manifest",
     ":regular_manifest",
     ":singleton_manifest",
   ]
 }
 
-service_manifest("all_users_manifest") {
-  name = "service_manager_unittest_all_users"
-  source = "all_users_manifest.json"
+service_manifest("shared_instance_across_users_manifest") {
+  name = "service_manager_unittest_shared_instance_across_users"
+  source = "shared_instance_across_users_manifest.json"
 }
 
 service_manifest("singleton_manifest") {
@@ -105,7 +109,6 @@ service("service_manager_unittest_embedder") {
     ":interfaces",
     "//base",
     "//build/win:default_exe_manifest",
-    "//mojo/edk",
     "//services/service_manager/public/cpp",
     "//services/service_manager/public/cpp/standalone_service:main",
     "//services/service_manager/public/mojom",

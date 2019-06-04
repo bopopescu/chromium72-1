@@ -125,9 +125,10 @@ class ManagePasswordsUIController
   void ChooseCredential(
       const autofill::PasswordForm& form,
       password_manager::CredentialType credential_type) override;
-  void NavigateToSmartLockHelpPage() override;
-  void NavigateToPasswordManagerAccountDashboard() override;
-  void NavigateToPasswordManagerSettingsPage() override;
+  void NavigateToPasswordManagerAccountDashboard(
+      password_manager::ManagePasswordsReferrer referrer) override;
+  void NavigateToPasswordManagerSettingsPage(
+      password_manager::ManagePasswordsReferrer referrer) override;
   void EnableSync(const AccountInfo& account,
                   bool is_default_promo_account) override;
   void OnDialogHidden() override;
@@ -170,6 +171,11 @@ class ManagePasswordsUIController
   bool ShouldBubblePopUp() const {
     return IsAutomaticallyOpeningBubble() ||
            bubble_status_ == SHOULD_POP_UP_AFTER_REAUTH;
+  }
+
+  // Returns whether the bubble is currently open.
+  bool IsShowingBubbleForTest() const {
+    return bubble_status_ != BubbleStatus::NOT_SHOWN;
   }
 
   // content::WebContentsObserver:

@@ -12,6 +12,7 @@
 #include <memory>
 #include <string>
 
+#include "base/callback_list.h"
 #include "base/containers/id_map.h"
 #include "base/process/kill.h"
 #include "base/process/process.h"
@@ -22,6 +23,8 @@
 #include "ipc/ipc_channel_proxy.h"
 #include "ipc/ipc_sender.h"
 #include "media/media_buildflags.h"
+#include "services/network/public/mojom/network_context.mojom.h"
+#include "services/network/public/mojom/url_loader_factory.mojom.h"
 #include "third_party/blink/public/platform/modules/cache_storage/cache_storage.mojom.h"
 #include "ui/gfx/native_widget_types.h"
 
@@ -34,6 +37,7 @@ class GURL;
 namespace base {
 class SharedPersistentMemoryAllocator;
 class TimeDelta;
+class Token;
 }
 
 namespace service_manager {
@@ -48,7 +52,6 @@ namespace content {
 class BrowserContext;
 class BrowserMessageFilter;
 class RenderProcessHostObserver;
-class RenderWidgetHost;
 class RendererAudioOutputStreamFactoryContext;
 class StoragePartition;
 
@@ -75,6 +78,7 @@ class CONTENT_EXPORT RenderProcessHost : public IPC::Sender,
   struct Priority {
     bool is_hidden;
     unsigned int frame_depth;
+    bool intersects_viewport;
 #if defined(OS_ANDROID)
     ChildProcessImportance importance;
 #endif
@@ -147,6 +151,9 @@ class CONTENT_EXPORT RenderProcessHost : public IPC::Sender,
 
   // Get computed frame depth from PriorityClients.
   virtual unsigned int GetFrameDepth() const = 0;
+
+  // Get computed viewport intersection state from PriorityClients.
+  virtual bool GetIntersectsViewport() const = 0;
 
   virtual RendererAudioOutputStreamFactoryContext*
   GetRendererAudioOutputStreamFactoryContext() = 0;
@@ -223,13 +230,11 @@ class CONTENT_EXPORT RenderProcessHost : public IPC::Sender,
 
   // Returns true iff the Init() was called and the process hasn't died yet.
   //
-  // Note that even if HasConnection() returns true, then (for a short duration
-  // after calling Init()) the process might not be fully spawned *yet* - e.g.
-  // IsReady() might return false and GetProcess() might still return an invalid
-  // process with a null handle.
-  //
-  // TODO(lukasza): Rename to IsInitializedAndNotDead().
-  virtual bool HasConnection() const = 0;
+  // Note that even if IsInitializedAndNotDead() returns true, then (for a short
+  // duration after calling Init()) the process might not be fully spawned
+  // *yet*.  For example - IsReady() might return false and GetProcess() might
+  // still return an invalid process with a null handle.
+  virtual bool IsInitializedAndNotDead() const = 0;
 
   // Returns the renderer channel.
   virtual IPC::ChannelProxy* GetChannel() = 0;
@@ -237,9 +242,14 @@ class CONTENT_EXPORT RenderProcessHost : public IPC::Sender,
   // Adds a message filter to the IPC channel.
   virtual void AddFilter(BrowserMessageFilter* filter) = 0;
 
-  // Sets whether input events should be ignored for this process.
-  virtual void SetIgnoreInputEvents(bool ignore_input_events) = 0;
-  virtual bool IgnoreInputEvents() const = 0;
+  // Sets whether this render process is blocked. This means that input events
+  // should not be sent to it, nor other timely signs of life expected from it.
+  virtual void SetBlocked(bool blocked) = 0;
+  virtual bool IsBlocked() const = 0;
+
+  virtual std::unique_ptr<base::CallbackList<void(bool)>::Subscription>
+  RegisterBlockStateChangedCallback(
+      const base::RepeatingCallback<void(bool)>& cb) = 0;
 
   // Schedules the host for deletion and removes it from the all_hosts list.
   virtual void Cleanup() = 0;
@@ -250,9 +260,9 @@ class CONTENT_EXPORT RenderProcessHost : public IPC::Sender,
   virtual void AddPendingView() = 0;
   virtual void RemovePendingView() = 0;
 
-  // Adds and removes the widgets owned by this process.
-  virtual void AddWidget(RenderWidgetHost* widget) = 0;
-  virtual void RemoveWidget(RenderWidgetHost* widget) = 0;
+  // Adds and removes priority clients.
+  virtual void AddPriorityClient(PriorityClient* priority_client) = 0;
+  virtual void RemovePriorityClient(PriorityClient* priority_client) = 0;
 
 #if defined(OS_ANDROID)
   // Return the highest importance of all widgets in this process.
@@ -308,7 +318,8 @@ class CONTENT_EXPORT RenderProcessHost : public IPC::Sender,
 
   // Start/stop event log output from WebRTC on this RPH for the peer connection
   // identified locally within the RPH using the ID |lid|.
-  virtual void SetWebRtcEventLogOutput(int lid, bool enabled) = 0;
+  virtual void EnableWebRtcEventLogOutput(int lid, int output_period_ms) = 0;
+  virtual void DisableWebRtcEventLogOutput(int lid) = 0;
 
   // Binds interfaces exposed to the browser process from the renderer.
   virtual void BindInterface(const std::string& interface_name,
@@ -393,6 +404,23 @@ class CONTENT_EXPORT RenderProcessHost : public IPC::Sender,
   virtual resource_coordinator::ProcessResourceCoordinator*
   GetProcessResourceCoordinator() = 0;
 
+  // Create an URLLoaderFactory that can be used by |origin| being hosted in
+  // |this| process.
+  //
+  // When NetworkService is enabled, |request| will be bound with a new
+  // URLLoaderFactory created from the storage partition's Network Context. Note
+  // that the URLLoaderFactory returned by this method does NOT support
+  // auto-reconnect after a crash of Network Service.
+  // When NetworkService is not enabled, |request| will be bound with a
+  // URLLoaderFactory which routes requests to ResourceDispatcherHost.
+  //
+  // |header_client| will be used in URLLoaderFactoryParams when creating the
+  // factory.
+  virtual void CreateURLLoaderFactory(
+      const url::Origin& origin,
+      network::mojom::TrustedURLLoaderHeaderClientPtrInfo header_client,
+      network::mojom::URLLoaderFactoryRequest request) = 0;
+
   // Whether this process is locked out from ever being reused for sites other
   // than the ones it currently has.
   virtual void SetIsNeverSuitableForReuse() = 0;
@@ -420,6 +448,13 @@ class CONTENT_EXPORT RenderProcessHost : public IPC::Sender,
   // crbug.com/738634.
   virtual bool HostHasNotBeenUsed() = 0;
 
+  // Locks this RenderProcessHost to the 'origin' |lock_url|. This method is
+  // public so that it can be called from SiteInstanceImpl, and used by
+  // MockRenderProcessHost. It isn't meant to be called outside of content.
+  // TODO(creis): Rename LockToOrigin to LockToPrincipal. See
+  // https://crbug.com/846155.
+  virtual void LockToOrigin(const GURL& lock_url) = 0;
+
   // Binds |request| to the CacheStorageDispatcherHost instance. The binding is
   // sent to the IO thread. This is for internal use only, and is only exposed
   // here to support MockRenderProcessHost usage in tests.
@@ -436,6 +471,16 @@ class CONTENT_EXPORT RenderProcessHost : public IPC::Sender,
   // function can only be called on the browser's UI thread (and the |task| will
   // be posted back on the UI thread).
   void PostTaskWhenProcessIsReady(base::OnceClosure task);
+
+  // Controls whether the destructor of RenderProcessHost*Impl* will end up
+  // cleaning the memory used by the exception added via
+  // RenderProcessHostImpl::AddCorbExceptionForPlugin.
+  //
+  // TODO(lukasza): https://crbug.com/652474: This method shouldn't be part of
+  // the //content public API, because it shouldn't be called by anyone other
+  // than RenderProcessHostImpl (from underneath
+  // RenderProcessHostImpl::AddCorbExceptionForPlugin).
+  virtual void CleanupCorbExceptionForPluginUponDestruction() = 0;
 
   // Static management functions -----------------------------------------------
 
@@ -478,11 +523,11 @@ class CONTENT_EXPORT RenderProcessHost : public IPC::Sender,
   // not correspond to a live RenderProcessHost.
   static RenderProcessHost* FromID(int render_process_id);
 
-  // Returns the RenderProcessHost given its renderer's service Identity.
-  // Returns nullptr if the Identity does not correspond to a live
-  // RenderProcessHost.
-  static RenderProcessHost* FromRendererIdentity(
-      const service_manager::Identity& identity);
+  // Returns the RenderProcessHost given its renderer's service instance ID,
+  // generated randomly when launching the renderer. Returns nullptr if the
+  // instance does not correspond to a live RenderProcessHost.
+  static RenderProcessHost* FromRendererInstanceId(
+      const base::Token& instance_id);
 
   // Returns whether the process-per-site model is in use (globally or just for
   // the current site), in which case we should ensure there is only one

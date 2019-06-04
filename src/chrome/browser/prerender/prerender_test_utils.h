@@ -18,7 +18,7 @@
 #include "base/run_loop.h"
 #include "base/scoped_observer.h"
 #include "base/synchronization/lock.h"
-#include "base/test/histogram_tester.h"
+#include "base/test/metrics/histogram_tester.h"
 #include "chrome/browser/external_protocol/external_protocol_handler.h"
 #include "chrome/browser/prerender/prerender_contents.h"
 #include "chrome/browser/prerender/prerender_manager.h"
@@ -109,7 +109,8 @@ class TestPrerenderContents : public PrerenderContents,
                         const GURL& url,
                         const content::Referrer& referrer,
                         Origin origin,
-                        FinalStatus expected_final_status);
+                        FinalStatus expected_final_status,
+                        bool ignore_final_status);
 
   ~TestPrerenderContents() override;
 
@@ -280,6 +281,8 @@ class TestPrerenderContentsFactory : public PrerenderContents::Factory {
   std::unique_ptr<TestPrerender> ExpectPrerenderContents(
       FinalStatus final_status);
 
+  void IgnorePrerenderContents();
+
   PrerenderContents* CreatePrerenderContents(
       PrerenderManager* prerender_manager,
       Profile* profile,
@@ -293,10 +296,12 @@ class TestPrerenderContentsFactory : public PrerenderContents::Factory {
     ExpectedContents(const ExpectedContents& other);
     ExpectedContents(FinalStatus final_status,
                      const base::WeakPtr<TestPrerender>& handle);
+    explicit ExpectedContents(bool ignore);
     ~ExpectedContents();
 
-    FinalStatus final_status;
-    base::WeakPtr<TestPrerender> handle;
+    FinalStatus final_status = FINAL_STATUS_MAX;
+    bool ignore = false;
+    base::WeakPtr<TestPrerender> handle = nullptr;
   };
 
   base::circular_deque<ExpectedContents> expected_contents_queue_;
@@ -311,7 +316,8 @@ class PrerenderInProcessBrowserTest : virtual public InProcessBrowserTest {
   ~PrerenderInProcessBrowserTest() override;
 
   void SetUpCommandLine(base::CommandLine* command_line) override;
-  void SetUpInProcessBrowserTestFixture() override;
+  void CreatedBrowserMainParts(
+      content::BrowserMainParts* browser_main_parts) override;
   void TearDownInProcessBrowserTestFixture() override;
   void SetUpOnMainThread() override;
   content::SessionStorageNamespace* GetSessionStorageNamespace() const;
@@ -416,18 +422,14 @@ class PrerenderInProcessBrowserTest : virtual public InProcessBrowserTest {
 // RAII class to save and restore the prerender mode.
 class RestorePrerenderMode {
  public:
-  RestorePrerenderMode()
-      : prev_mode_(PrerenderManager::GetMode(ORIGIN_NONE)),
-        prev_omnibox_mode_(PrerenderManager::GetMode(ORIGIN_OMNIBOX)) {}
+  RestorePrerenderMode() : prev_mode_(PrerenderManager::GetMode()) {}
 
   ~RestorePrerenderMode() {
     PrerenderManager::SetMode(prev_mode_);
-    PrerenderManager::SetOmniboxMode(prev_omnibox_mode_);
   }
 
  private:
   PrerenderManager::PrerenderManagerMode prev_mode_;
-  PrerenderManager::PrerenderManagerMode prev_omnibox_mode_;
 
   DISALLOW_COPY_AND_ASSIGN(RestorePrerenderMode);
 };

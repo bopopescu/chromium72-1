@@ -24,8 +24,8 @@ CompositorFrameSinkImpl::CompositorFrameSinkImpl(
           false /* is_root */,
           true /* needs_sync_points */)) {
   compositor_frame_sink_binding_.set_connection_error_handler(
-      base::Bind(&CompositorFrameSinkImpl::OnClientConnectionLost,
-                 base::Unretained(this)));
+      base::BindOnce(&CompositorFrameSinkImpl::OnClientConnectionLost,
+                     base::Unretained(this)));
 }
 
 CompositorFrameSinkImpl::~CompositorFrameSinkImpl() = default;
@@ -67,8 +67,8 @@ void CompositorFrameSinkImpl::SubmitCompositorFrameInternal(
     mojom::CompositorFrameSink::SubmitCompositorFrameSyncCallback callback) {
   const auto result = support_->MaybeSubmitCompositorFrame(
       local_surface_id, std::move(frame), std::move(hit_test_region_list),
-      std::move(callback));
-  if (result == CompositorFrameSinkSupport::ACCEPTED)
+      submit_time, std::move(callback));
+  if (result == SubmitResult::ACCEPTED)
     return;
 
   const char* reason =

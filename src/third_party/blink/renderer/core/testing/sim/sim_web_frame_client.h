@@ -5,24 +5,35 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_TESTING_SIM_SIM_WEB_FRAME_CLIENT_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_TESTING_SIM_SIM_WEB_FRAME_CLIENT_H_
 
+#include "third_party/blink/public/platform/web_effective_connection_type.h"
 #include "third_party/blink/renderer/core/frame/frame_test_helpers.h"
+#include "third_party/blink/renderer/core/testing/fake_web_plugin.h"
 
 namespace blink {
 
 class SimTest;
 
-class SimWebFrameClient final : public FrameTestHelpers::TestWebFrameClient {
+class SimWebFrameClient final : public frame_test_helpers::TestWebFrameClient {
  public:
   explicit SimWebFrameClient(SimTest&);
 
-  // WebFrameClient overrides:
+  // WebLocalFrameClient overrides:
   void DidAddMessageToConsole(const WebConsoleMessage&,
                               const WebString& source_name,
                               unsigned source_line,
                               const WebString& stack_trace) override;
 
+  WebEffectiveConnectionType GetEffectiveConnectionType() override;
+  void SetEffectiveConnectionTypeForTesting(
+      WebEffectiveConnectionType) override;
+
+  WebPlugin* CreatePlugin(const WebPluginParams& params) override {
+    return new FakeWebPlugin(params);
+  }
+
  private:
   SimTest* test_;
+  WebEffectiveConnectionType effective_connection_type_;
 };
 
 }  // namespace blink

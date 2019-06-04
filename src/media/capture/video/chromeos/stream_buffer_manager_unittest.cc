@@ -63,6 +63,9 @@ class MockStreamCaptureInterface : public StreamCaptureInterface {
   MOCK_METHOD2(DoProcessCaptureRequest,
                void(cros::mojom::Camera3CaptureRequestPtr& request,
                     base::OnceCallback<void(int32_t)>& callback));
+
+  void Flush(base::OnceCallback<void(int32_t)> callback) { DoFlush(callback); }
+  MOCK_METHOD1(DoFlush, void(base::OnceCallback<void(int32_t)>& callback));
 };
 
 const VideoCaptureFormat kDefaultCaptureFormat(gfx::Size(1280, 720),
@@ -110,10 +113,10 @@ class StreamBufferManagerTest : public ::testing::Test {
         std::move(callback_ops_request),
         std::make_unique<MockStreamCaptureInterface>(), device_context_.get(),
         std::make_unique<FakeCameraBufferFactory>(),
-        base::BindRepeating([](const uint8_t* buffer, const uint32_t bytesused,
-                               const VideoCaptureFormat& capture_format) {
-          return mojom::Blob::New();
-        }),
+        base::BindRepeating(
+            [](const uint8_t* buffer, const uint32_t bytesused,
+               const VideoCaptureFormat& capture_format,
+               const int rotation) { return mojom::Blob::New(); }),
         base::ThreadTaskRunnerHandle::Get());
   }
 
@@ -382,7 +385,7 @@ TEST_F(StreamBufferManagerTest, DeviceErrorTest) {
         test->QuitCaptureLoop();
       },
       base::Unretained(this)));
-  EXPECT_CALL(*GetMockVideoCaptureClient(), OnError(_, _))
+  EXPECT_CALL(*GetMockVideoCaptureClient(), OnError(_, _, _))
       .Times(1)
       .WillOnce(
           InvokeWithoutArgs(this, &StreamBufferManagerTest::QuitCaptureLoop));

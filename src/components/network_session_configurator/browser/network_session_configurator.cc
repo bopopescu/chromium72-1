@@ -4,6 +4,7 @@
 
 #include "components/network_session_configurator/browser/network_session_configurator.h"
 
+#include <limits>
 #include <map>
 #include <unordered_set>
 #include <utility>
@@ -13,6 +14,7 @@
 #include "base/feature_list.h"
 #include "base/metrics/field_trial.h"
 #include "base/metrics/histogram_macros.h"
+#include "base/rand_util.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_piece.h"
 #include "base/strings/string_split.h"
@@ -23,9 +25,14 @@
 #include "components/variations/variations_associated_data.h"
 #include "net/base/host_mapping_rules.h"
 #include "net/http/http_stream_factory.h"
-#include "net/quic/chromium/quic_utils_chromium.h"
+#include "net/quic/quic_utils_chromium.h"
+#include "net/spdy/spdy_session_pool.h"
 #include "net/third_party/quic/core/quic_packets.h"
 #include "net/third_party/spdy/core/spdy_protocol.h"
+
+#if defined(OS_MACOSX) && !defined(OS_IOS)
+#include "base/mac/mac_util.h"
+#endif
 
 namespace {
 
@@ -39,9 +46,7 @@ const char kQuicFieldTrialName[] = "QUIC";
 const char kQuicFieldTrialEnabledGroupName[] = "Enabled";
 const char kQuicFieldTrialHttpsEnabledGroupName[] = "HttpsEnabled";
 
-// Field trial for HTTP/2.
 const char kHttp2FieldTrialName[] = "HTTP2";
-const char kHttp2FieldTrialDisablePrefix[] = "Disable";
 
 // Gets the value of the specified command line switch, as an integer. If unable
 // to convert it to an int (It's not an int, or the switch is not present)
@@ -61,7 +66,7 @@ int GetSwitchValueAsInt(const base::CommandLine& command_line,
 const std::string& GetVariationParam(
     const std::map<std::string, std::string>& params,
     const std::string& key) {
-  std::map<std::string, std::string>::const_iterator it = params.find(key);
+  auto it = params.find(key);
   if (it == params.end())
     return base::EmptyString();
 
@@ -121,11 +126,40 @@ void ConfigureHttp2Params(const base::CommandLine& command_line,
                           base::StringPiece http2_trial_group,
                           const VariationParameters& http2_trial_params,
                           net::HttpNetworkSession::Params* params) {
-  if (http2_trial_group.starts_with(kHttp2FieldTrialDisablePrefix)) {
+  if (GetVariationParam(http2_trial_params, "http2_enabled") == "false") {
     params->enable_http2 = false;
     return;
   }
+
+  // After parsing initial settings, optionally add a setting with reserved
+  // identifier to "grease" settings, see
+  // https://tools.ietf.org/html/draft-bishop-httpbis-grease-00.
   params->http2_settings = GetHttp2Settings(http2_trial_params);
+  if (GetVariationParam(http2_trial_params, "http2_grease_settings") ==
+      "true") {
+    spdy::SpdySettingsId id = 0x0a0a + 0x1000 * base::RandGenerator(0xf + 1) +
+                              0x0010 * base::RandGenerator(0xf + 1);
+    uint32_t value = base::RandGenerator(
+        static_cast<uint64_t>(std::numeric_limits<uint32_t>::max()) + 1);
+    params->http2_settings.insert(std::make_pair(id, value));
+  }
+
+  // Optionally define a frame of reserved type to "grease" frame types, see
+  // https://tools.ietf.org/html/draft-bishop-httpbis-grease-00.
+  if (GetVariationParam(http2_trial_params, "http2_grease_frame_type") ==
+      "true") {
+    const uint8_t type = 0x0b + 0x1f * base::RandGenerator(8);
+    const uint8_t flags =
+        base::RandGenerator(std::numeric_limits<uint8_t>::max() + 1);
+    const size_t length = base::RandGenerator(7);
+    // RandBytesAsString() does not support zero length.
+    const std::string payload =
+        (length > 0) ? base::RandBytesAsString(length) : std::string();
+    params->greased_http2_frame =
+        base::Optional<net::SpdySessionPool::GreasedHttp2Frame>(
+            {type, flags, payload});
+  }
+
   params->enable_websocket_over_http2 =
       ConfigureWebsocketOverHttp2(command_line, http2_trial_params);
 }
@@ -168,23 +202,21 @@ bool ShouldSupportIetfFormatQuicAltSvc(
       "true");
 }
 
-net::QuicTagVector GetQuicConnectionOptions(
+quic::QuicTagVector GetQuicConnectionOptions(
     const VariationParameters& quic_trial_params) {
-  VariationParameters::const_iterator it =
-      quic_trial_params.find("connection_options");
+  auto it = quic_trial_params.find("connection_options");
   if (it == quic_trial_params.end()) {
-    return net::QuicTagVector();
+    return quic::QuicTagVector();
   }
 
   return net::ParseQuicConnectionOptions(it->second);
 }
 
-net::QuicTagVector GetQuicClientConnectionOptions(
+quic::QuicTagVector GetQuicClientConnectionOptions(
     const VariationParameters& quic_trial_params) {
-  VariationParameters::const_iterator it =
-      quic_trial_params.find("client_connection_options");
+  auto it = quic_trial_params.find("client_connection_options");
   if (it == quic_trial_params.end()) {
-    return net::QuicTagVector();
+    return quic::QuicTagVector();
   }
 
   return net::ParseQuicConnectionOptions(it->second);
@@ -194,6 +226,13 @@ bool ShouldQuicCloseSessionsOnIpChange(
     const VariationParameters& quic_trial_params) {
   return base::LowerCaseEqualsASCII(
       GetVariationParam(quic_trial_params, "close_sessions_on_ip_change"),
+      "true");
+}
+
+bool ShouldQuicGoAwaySessionsOnIpChange(
+    const VariationParameters& quic_trial_params) {
+  return base::LowerCaseEqualsASCII(
+      GetVariationParam(quic_trial_params, "goaway_sessions_on_ip_change"),
       "true");
 }
 
@@ -278,12 +317,47 @@ bool ShouldQuicMigrateSessionsEarlyV2(
       "true");
 }
 
+bool ShouldQuicRetryOnAlternateNetworkBeforeHandshake(
+    const VariationParameters& quic_trial_params) {
+  return base::LowerCaseEqualsASCII(
+      GetVariationParam(quic_trial_params,
+                        "retry_on_alternate_network_before_handshake"),
+      "true");
+}
+
+bool ShouldQuicGoawayOnPathDegrading(
+    const VariationParameters& quic_trial_params) {
+  return base::LowerCaseEqualsASCII(
+      GetVariationParam(quic_trial_params, "go_away_on_path_degrading"),
+      "true");
+}
+
+bool ShouldQuicRaceStaleDNSOnConnection(
+    const VariationParameters& quic_trial_params) {
+  return base::LowerCaseEqualsASCII(
+      GetVariationParam(quic_trial_params, "race_stale_dns_on_connection"),
+      "true");
+}
+
 int GetQuicMaxTimeOnNonDefaultNetworkSeconds(
     const VariationParameters& quic_trial_params) {
   int value;
   if (base::StringToInt(
           GetVariationParam(quic_trial_params,
                             "max_time_on_non_default_network_seconds"),
+          &value)) {
+    return value;
+  }
+  return 0;
+}
+
+int GetQuicMaxNumMigrationsToNonDefaultNetworkOnWriteError(
+    const VariationParameters& quic_trial_params) {
+  int value;
+  if (base::StringToInt(
+          GetVariationParam(
+              quic_trial_params,
+              "max_migrations_to_non_default_network_on_write_error"),
           &value)) {
     return value;
   }
@@ -327,7 +401,7 @@ size_t GetQuicMaxPacketLength(const VariationParameters& quic_trial_params) {
   return 0;
 }
 
-net::QuicTransportVersionVector GetQuicVersions(
+quic::QuicTransportVersionVector GetQuicVersions(
     const VariationParameters& quic_trial_params) {
   return network_session_configurator::ParseQuicVersions(
       GetVariationParam(quic_trial_params, "quic_version"));
@@ -368,6 +442,8 @@ void ConfigureQuicParams(base::StringPiece quic_trial_group,
         GetQuicClientConnectionOptions(quic_trial_params);
     params->quic_close_sessions_on_ip_change =
         ShouldQuicCloseSessionsOnIpChange(quic_trial_params);
+    params->quic_goaway_sessions_on_ip_change =
+        ShouldQuicGoAwaySessionsOnIpChange(quic_trial_params);
     int idle_connection_timeout_seconds =
         GetQuicIdleConnectionTimeoutSeconds(quic_trial_params);
     if (idle_connection_timeout_seconds != 0) {
@@ -377,7 +453,7 @@ void ConfigureQuicParams(base::StringPiece quic_trial_group,
     int reduced_ping_timeout_seconds =
         GetQuicReducedPingTimeoutSeconds(quic_trial_params);
     if (reduced_ping_timeout_seconds > 0 &&
-        reduced_ping_timeout_seconds < net::kPingTimeoutSecs) {
+        reduced_ping_timeout_seconds < quic::kPingTimeoutSecs) {
       params->quic_reduced_ping_timeout_seconds = reduced_ping_timeout_seconds;
     }
     int max_time_before_crypto_handshake_seconds =
@@ -402,11 +478,24 @@ void ConfigureQuicParams(base::StringPiece quic_trial_group,
         ShouldQuicMigrateSessionsOnNetworkChangeV2(quic_trial_params);
     params->quic_migrate_sessions_early_v2 =
         ShouldQuicMigrateSessionsEarlyV2(quic_trial_params);
+    params->quic_retry_on_alternate_network_before_handshake =
+        ShouldQuicRetryOnAlternateNetworkBeforeHandshake(quic_trial_params);
+    params->quic_go_away_on_path_degrading =
+        ShouldQuicGoawayOnPathDegrading(quic_trial_params);
+    params->quic_race_stale_dns_on_connection =
+        ShouldQuicRaceStaleDNSOnConnection(quic_trial_params);
     int max_time_on_non_default_network_seconds =
         GetQuicMaxTimeOnNonDefaultNetworkSeconds(quic_trial_params);
     if (max_time_on_non_default_network_seconds > 0) {
       params->quic_max_time_on_non_default_network =
           base::TimeDelta::FromSeconds(max_time_on_non_default_network_seconds);
+    }
+    int max_migrations_to_non_default_network_on_write_error =
+        GetQuicMaxNumMigrationsToNonDefaultNetworkOnWriteError(
+            quic_trial_params);
+    if (max_migrations_to_non_default_network_on_write_error > 0) {
+      params->quic_max_migrations_to_non_default_network_on_write_error =
+          max_migrations_to_non_default_network_on_write_error;
     }
     int max_migrations_to_non_default_network_on_path_degrading =
         GetQuicMaxNumMigrationsToNonDefaultNetworkOnPathDegrading(
@@ -427,7 +516,7 @@ void ConfigureQuicParams(base::StringPiece quic_trial_group,
 
   params->quic_user_agent_id = quic_user_agent_id;
 
-  net::QuicTransportVersionVector supported_versions =
+  quic::QuicTransportVersionVector supported_versions =
       GetQuicVersions(quic_trial_params);
   if (!supported_versions.empty())
     params->quic_supported_versions = supported_versions;
@@ -437,17 +526,17 @@ void ConfigureQuicParams(base::StringPiece quic_trial_group,
 
 namespace network_session_configurator {
 
-net::QuicTransportVersionVector ParseQuicVersions(
+quic::QuicTransportVersionVector ParseQuicVersions(
     const std::string& quic_versions) {
-  net::QuicTransportVersionVector supported_versions;
-  net::QuicTransportVersionVector all_supported_versions =
-      net::AllSupportedTransportVersions();
+  quic::QuicTransportVersionVector supported_versions;
+  quic::QuicTransportVersionVector all_supported_versions =
+      quic::AllSupportedTransportVersions();
 
   for (const base::StringPiece& version : base::SplitStringPiece(
            quic_versions, ",", base::TRIM_WHITESPACE, base::SPLIT_WANT_ALL)) {
     auto it = all_supported_versions.begin();
     while (it != all_supported_versions.end()) {
-      if (net::QuicVersionToString(*it) == version) {
+      if (quic::QuicVersionToString(*it) == version) {
         supported_versions.push_back(*it);
         // Remove the supported version to deduplicate versions extracted from
         // |quic_versions|.
@@ -509,7 +598,7 @@ void ParseCommandLineAndFieldTrials(const base::CommandLine& command_line,
     }
 
     if (command_line.HasSwitch(switches::kQuicVersion)) {
-      net::QuicTransportVersionVector supported_versions =
+      quic::QuicTransportVersionVector supported_versions =
           network_session_configurator::ParseQuicVersions(
               command_line.GetSwitchValueASCII(switches::kQuicVersion));
       if (!supported_versions.empty())
@@ -554,11 +643,6 @@ void ParseCommandLineAndFieldTrials(const base::CommandLine& command_line,
     params->host_mapping_rules.SetRulesFromString(
         command_line.GetSwitchValueASCII(switches::kHostRules));
   }
-
-  params->enable_token_binding =
-      base::FeatureList::IsEnabled(features::kTokenBinding);
-  params->enable_channel_id =
-      base::FeatureList::IsEnabled(features::kChannelID);
 }
 
 net::URLRequestContextBuilder::HttpCacheParams::Type ChooseCacheType(
@@ -572,12 +656,25 @@ net::URLRequestContextBuilder::HttpCacheParams::Type ChooseCacheType(
     if (opt_value.empty() || base::LowerCaseEqualsASCII(opt_value, "on"))
       return net::URLRequestContextBuilder::HttpCacheParams::DISK_SIMPLE;
   }
+
   const std::string experiment_name =
       base::FieldTrialList::FindFullName("SimpleCacheTrial");
   if (base::StartsWith(experiment_name, "Disable",
                        base::CompareCase::INSENSITIVE_ASCII)) {
     return net::URLRequestContextBuilder::HttpCacheParams::DISK_BLOCKFILE;
   }
+
+  // Blockfile breaks on OSX 10.14 (see https://crbug.com/899874); so use
+  // SimpleCache even when we don't enable it via experiment, as long as we
+  // don't force it off (not used at this time). This unfortunately
+  // muddles the experiment data, but as this was written to be considered for
+  // backport, having it behave differently than in stable would be a bigger
+  // problem.
+#if defined(OS_MACOSX) && !defined(OS_IOS)
+  if (base::mac::IsAtLeastOS10_14())
+    return net::URLRequestContextBuilder::HttpCacheParams::DISK_SIMPLE;
+#endif  // defined(OS_MACOSX) && !defined(OS_IOS)
+
   if (base::StartsWith(experiment_name, "ExperimentYes",
                        base::CompareCase::INSENSITIVE_ASCII)) {
     return net::URLRequestContextBuilder::HttpCacheParams::DISK_SIMPLE;

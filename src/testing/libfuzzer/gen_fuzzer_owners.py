@@ -32,6 +32,13 @@ def GetAuthorFromGitBlame(blame_output):
   return None
 
 
+def GetGitCommand():
+  """Returns a git command that does not need to be executed using shell=True.
+  On non-Windows platforms: 'git'. On Windows: 'git.bat'.
+  """
+  return 'git.bat' if sys.platform == 'win32' else 'git'
+
+
 def GetOwnersIfThirdParty(source):
   """Return owners using OWNERS file if in third_party."""
   match_index = source.find(THIRD_PARTY_SEARCH_STRING)
@@ -59,10 +66,11 @@ def GetOwnersForFuzzer(sources):
     return
 
   for source in sources:
-    if not os.path.exists(source):
+    full_source_path = os.path.join(CHROMIUM_SRC_DIR, source)
+    if not os.path.exists(full_source_path):
       continue
 
-    with open(source, 'r') as source_file_handle:
+    with open(full_source_path, 'r') as source_file_handle:
       source_content = source_file_handle.read()
 
     if SubStringExistsIn(
@@ -70,20 +78,82 @@ def GetOwnersForFuzzer(sources):
         source_content):
       # Found the fuzzer source (and not dependency of fuzzer).
 
-      is_git_file = bool(subprocess.check_output(['git', 'ls-files', source]))
+      git_dir = os.path.join(CHROMIUM_SRC_DIR, '.git')
+      git_command = GetGitCommand()
+      is_git_file = bool(subprocess.check_output(
+          [git_command, '--git-dir', git_dir, 'ls-files', source],
+          cwd=CHROMIUM_SRC_DIR))
       if not is_git_file:
         # File is not in working tree. Return owners for third_party.
-        return GetOwnersIfThirdParty(source)
+        return GetOwnersIfThirdParty(full_source_path)
 
       # git log --follow and --reverse don't work together and using just
       # --follow is too slow. Make a best estimate with an assumption that
       # the original author has authored line 1 which is usually the
       # copyright line and does not change even with file rename / move.
       blame_output = subprocess.check_output(
-          ['git', 'blame', '--porcelain', '-L1,1', source])
+          [git_command, '--git-dir', git_dir, 'blame', '--porcelain', '-L1,1',
+           source], cwd=CHROMIUM_SRC_DIR)
       return GetAuthorFromGitBlame(blame_output)
 
   return None
+
+
+def FindGroupsAndDepsInDeps(deps_list, build_dir):
+  """Return list of groups, as well as their deps, from a list of deps."""
+  groups = []
+  deps_for_groups = {}
+  for deps in deps_list:
+    output = subprocess.check_output(
+        [GNPath(), 'desc', '--fail-on-unused-args', build_dir, deps])
+    needle = 'Type: '
+    for line in output.splitlines():
+      if needle and not line.startswith(needle):
+        continue
+      if needle == 'Type: ':
+        if line != 'Type: group':
+          break
+        groups.append(deps)
+        assert deps not in deps_for_groups
+        deps_for_groups[deps] = []
+        needle = 'Direct dependencies'
+      elif needle == 'Direct dependencies':
+        needle = ''
+      else:
+        assert needle == ''
+        if needle == line:
+          break
+        deps_for_groups[deps].append(line.strip())
+
+  return groups, deps_for_groups
+
+
+def TraverseGroups(deps_list, build_dir):
+  """Filter out groups from a deps list. Add groups' direct dependencies."""
+  full_deps_set = set(deps_list)
+  deps_to_check = full_deps_set.copy()
+
+  # Keep track of groups to break circular dependendies, if any.
+  seen_groups = set()
+
+  while deps_to_check:
+    # Look for groups from the deps set.
+    groups, deps_for_groups = FindGroupsAndDepsInDeps(deps_to_check, build_dir)
+    groups = set(groups).difference(seen_groups)
+    if not groups:
+      break
+
+    # Update sets. Filter out groups from the full deps set.
+    full_deps_set.difference_update(groups)
+    deps_to_check.clear()
+    seen_groups.update(groups)
+
+    # Get the direct dependencies, and filter out known groups there too.
+    for group in groups:
+      deps_to_check.update(deps_for_groups[group])
+    deps_to_check.difference_update(seen_groups)
+    full_deps_set.update(deps_to_check)
+  return list(full_deps_set)
 
 
 def GetSourcesFromDeps(deps_list, build_dir):
@@ -91,15 +161,15 @@ def GetSourcesFromDeps(deps_list, build_dir):
   if not deps_list:
     return None
 
+  full_deps_list = TraverseGroups(deps_list, build_dir)
   all_sources = []
-  for deps in deps_list:
+  for deps in full_deps_list:
     output = subprocess.check_output(
-        [GNPath(), 'desc', build_dir, deps, 'sources'])
+        [GNPath(), 'desc', '--fail-on-unused-args', build_dir, deps, 'sources'])
     for source in output.splitlines():
       if source.startswith('//'):
         source = source[2:]
-      actual_source = os.path.join(CHROMIUM_SRC_DIR, source)
-      all_sources.append(actual_source)
+      all_sources.append(source)
 
   return all_sources
 
@@ -117,11 +187,7 @@ def GNPath():
 
 def SubStringExistsIn(substring_list, string):
   """Return true if one of the substring in the list is found in |string|."""
-  for substring in substring_list:
-    if substring in string:
-      return True
-
-  return False
+  return any([substring in string for substring in substring_list])
 
 
 def main():

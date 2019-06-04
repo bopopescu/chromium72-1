@@ -18,6 +18,8 @@
  *
  */
 
+#include "egluNativeDisplay_override.hpp"
+
 #include "tcuANGLENativeDisplayFactory.h"
 
 #include <EGL/egl.h>
@@ -55,7 +57,9 @@ enum
 };
 
 constexpr eglu::NativeDisplay::Capability kDisplayCapabilities =
-    eglu::NativeDisplay::CAPABILITY_GET_DISPLAY_PLATFORM;
+    static_cast<eglu::NativeDisplay::Capability>(
+        eglu::NativeDisplay::CAPABILITY_GET_DISPLAY_PLATFORM |
+        eglu::NativeDisplay::CAPABILITY_GET_DISPLAY_PLATFORM_EXT);
 constexpr eglu::NativePixmap::Capability kBitmapCapabilities =
     eglu::NativePixmap::CAPABILITY_CREATE_SURFACE_LEGACY;
 constexpr eglu::NativeWindow::Capability kWindowCapabilities =
@@ -170,8 +174,7 @@ ANGLENativeDisplay::ANGLENativeDisplay(std::vector<EGLAttrib> attribs)
       mDeviceContext(EGL_DEFAULT_DISPLAY),
       mLibrary(ANGLE_EGL_LIBRARY_FULL_NAME),
       mPlatformAttributes(std::move(attribs))
-{
-}
+{}
 
 // NativePixmap
 
@@ -203,8 +206,7 @@ eglw::EGLNativePixmapType NativePixmap::getLegacyNative()
 
 NativePixmapFactory::NativePixmapFactory()
     : eglu::NativePixmapFactory("bitmap", "ANGLE Bitmap", kBitmapCapabilities)
-{
-}
+{}
 
 eglu::NativePixmap *NativePixmapFactory::createPixmap(eglu::NativeDisplay *nativeDisplay,
                                                       eglw::EGLDisplay display,
@@ -247,8 +249,7 @@ eglu::NativePixmap *NativePixmapFactory::createPixmap(eglu::NativeDisplay *nativ
 
 NativeWindowFactory::NativeWindowFactory(EventState *eventState)
     : eglu::NativeWindowFactory("window", "ANGLE Window", kWindowCapabilities), mEvents(eventState)
-{
-}
+{}
 
 eglu::NativeWindow *NativeWindowFactory::createWindow(eglu::NativeDisplay *nativeDisplay,
                                                       const eglu::WindowParams &params) const
@@ -347,7 +348,7 @@ void NativeWindow::readScreenPixels(tcu::TextureLevel *dst) const
     }
 }
 
-}  // anonymous
+}  // namespace
 
 ANGLENativeDisplayFactory::ANGLENativeDisplayFactory(
     const std::string &name,
@@ -374,4 +375,4 @@ eglu::NativeDisplay *ANGLENativeDisplayFactory::createDisplay(
     return new ANGLENativeDisplay(mPlatformAttributes);
 }
 
-}  // tcu
+}  // namespace tcu

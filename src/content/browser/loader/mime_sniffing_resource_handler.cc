@@ -24,7 +24,6 @@
 #include "content/browser/loader/resource_request_info_impl.h"
 #include "content/browser/loader/stream_resource_handler.h"
 #include "content/browser/web_package/signed_exchange_utils.h"
-#include "content/browser/web_package/web_package_request_handler.h"
 #include "content/public/browser/content_browser_client.h"
 #include "content/public/browser/plugin_service.h"
 #include "content/public/browser/resource_context.h"
@@ -75,6 +74,14 @@ class MimeSniffingResourceHandler::Controller : public ResourceController {
     mime_handler_->ResumeInternal();
   }
 
+  void ResumeForRedirect(const base::Optional<net::HttpRequestHeaders>&
+                             modified_request_headers) override {
+    DCHECK(!modified_request_headers.has_value())
+        << "Redirect with modified headers was not supported yet. "
+           "crbug.com/845683";
+    Resume();
+  }
+
   void Cancel() override {
     MarkAsUsed();
     mime_handler_->Cancel();
@@ -108,7 +115,7 @@ MimeSniffingResourceHandler::MimeSniffingResourceHandler(
     PluginService* plugin_service,
     InterceptingResourceHandler* intercepting_handler,
     net::URLRequest* request,
-    RequestContextType request_context_type)
+    blink::mojom::RequestContextType request_context_type)
     : LayeredResourceHandler(request, std::move(next_handler)),
       state_(STATE_STARTING),
       host_(host),
@@ -154,7 +161,7 @@ void MimeSniffingResourceHandler::OnResponseStarted(
   if (!(response_->head.headers.get() &&
         response_->head.headers->response_code() == 304)) {
     // MIME sniffing should be disabled for a request initiated by fetch().
-    if (request_context_type_ != REQUEST_CONTEXT_TYPE_FETCH &&
+    if (request_context_type_ != blink::mojom::RequestContextType::FETCH &&
         network::ShouldSniffContent(request(), response_.get())) {
       controller->Resume();
       return;
@@ -243,6 +250,7 @@ void MimeSniffingResourceHandler::OnReadCompleted(
   // the mime type. However, even if it returns false, it returns a new type
   // that is probably better than the current one.
   response_->head.mime_type.assign(new_type);
+  response_->head.did_mime_sniff = true;
 
   if (!made_final_decision && (bytes_read > 0)) {
     controller->Resume();

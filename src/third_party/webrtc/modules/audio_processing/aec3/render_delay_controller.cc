@@ -9,10 +9,9 @@
  */
 #include "modules/audio_processing/aec3/render_delay_controller.h"
 
+#include <stdlib.h>
 #include <algorithm>
 #include <memory>
-#include <numeric>
-#include <string>
 #include <vector>
 
 #include "api/audio/echo_canceller3_config.h"
@@ -20,7 +19,9 @@
 #include "modules/audio_processing/aec3/echo_path_delay_estimator.h"
 #include "modules/audio_processing/aec3/render_delay_controller_metrics.h"
 #include "modules/audio_processing/aec3/skew_estimator.h"
+#include "modules/audio_processing/logging/apm_data_dumper.h"
 #include "rtc_base/atomicops.h"
+#include "rtc_base/checks.h"
 #include "rtc_base/constructormagic.h"
 #include "rtc_base/logging.h"
 #include "system_wrappers/include/field_trial.h"
@@ -40,6 +41,14 @@ int GetSkewHysteresis(const EchoCanceller3Config& config) {
   return static_cast<int>(config.delay.skew_hysteresis_blocks);
 }
 
+bool UseOffsetBlocks() {
+  return field_trial::IsEnabled("WebRTC-Aec3UseOffsetBlocks");
+}
+
+bool UseEarlyDelayDetection() {
+  return !field_trial::IsEnabled("WebRTC-Aec3EarlyDelayDetectionKillSwitch");
+}
+
 constexpr int kSkewHistorySizeLog2 = 8;
 
 class RenderDelayControllerImpl final : public RenderDelayController {
@@ -48,39 +57,43 @@ class RenderDelayControllerImpl final : public RenderDelayController {
                             int non_causal_offset,
                             int sample_rate_hz);
   ~RenderDelayControllerImpl() override;
-  void Reset() override;
+  void Reset(bool reset_delay_confidence) override;
   void LogRenderCall() override;
-  rtc::Optional<DelayEstimate> GetDelay(
+  absl::optional<DelayEstimate> GetDelay(
       const DownsampledRenderBuffer& render_buffer,
       size_t render_delay_buffer_delay,
-      const rtc::Optional<int>& echo_remover_delay,
+      const absl::optional<int>& echo_remover_delay,
       rtc::ArrayView<const float> capture) override;
+  bool HasClockdrift() const override;
 
  private:
   static int instance_count_;
   std::unique_ptr<ApmDataDumper> data_dumper_;
+  const bool use_early_delay_detection_;
   const int delay_headroom_blocks_;
   const int hysteresis_limit_1_blocks_;
   const int hysteresis_limit_2_blocks_;
   const int skew_hysteresis_blocks_;
-  rtc::Optional<DelayEstimate> delay_;
+  const bool use_offset_blocks_;
+  absl::optional<DelayEstimate> delay_;
   EchoPathDelayEstimator delay_estimator_;
   std::vector<float> delay_buf_;
   int delay_buf_index_ = 0;
   RenderDelayControllerMetrics metrics_;
   SkewEstimator skew_estimator_;
-  rtc::Optional<DelayEstimate> delay_samples_;
-  rtc::Optional<int> skew_;
+  absl::optional<DelayEstimate> delay_samples_;
+  absl::optional<int> skew_;
   int previous_offset_blocks_ = 0;
   int skew_shift_reporting_counter_ = 0;
   size_t capture_call_counter_ = 0;
   int delay_change_counter_ = 0;
   size_t soft_reset_counter_ = 0;
+  DelayEstimate::Quality last_delay_estimate_quality_;
   RTC_DISALLOW_IMPLICIT_CONSTRUCTORS(RenderDelayControllerImpl);
 };
 
 DelayEstimate ComputeBufferDelay(
-    const rtc::Optional<DelayEstimate>& current_delay,
+    const absl::optional<DelayEstimate>& current_delay,
     int delay_headroom_blocks,
     int hysteresis_limit_1_blocks,
     int hysteresis_limit_2_blocks,
@@ -124,6 +137,7 @@ RenderDelayControllerImpl::RenderDelayControllerImpl(
     int sample_rate_hz)
     : data_dumper_(
           new ApmDataDumper(rtc::AtomicOps::Increment(&instance_count_))),
+      use_early_delay_detection_(UseEarlyDelayDetection()),
       delay_headroom_blocks_(
           static_cast<int>(config.delay.delay_headroom_blocks)),
       hysteresis_limit_1_blocks_(
@@ -131,9 +145,11 @@ RenderDelayControllerImpl::RenderDelayControllerImpl(
       hysteresis_limit_2_blocks_(
           static_cast<int>(config.delay.hysteresis_limit_2_blocks)),
       skew_hysteresis_blocks_(GetSkewHysteresis(config)),
+      use_offset_blocks_(UseOffsetBlocks()),
       delay_estimator_(data_dumper_.get(), config),
       delay_buf_(kBlockSize * non_causal_offset, 0.f),
-      skew_estimator_(kSkewHistorySizeLog2) {
+      skew_estimator_(kSkewHistorySizeLog2),
+      last_delay_estimate_quality_(DelayEstimate::Quality::kCoarse) {
   RTC_DCHECK(ValidFullBandRate(sample_rate_hz));
   delay_estimator_.LogDelayEstimationProperties(sample_rate_hz,
                                                 delay_buf_.size());
@@ -141,26 +157,29 @@ RenderDelayControllerImpl::RenderDelayControllerImpl(
 
 RenderDelayControllerImpl::~RenderDelayControllerImpl() = default;
 
-void RenderDelayControllerImpl::Reset() {
-  delay_ = rtc::nullopt;
-  delay_samples_ = rtc::nullopt;
-  skew_ = rtc::nullopt;
+void RenderDelayControllerImpl::Reset(bool reset_delay_confidence) {
+  delay_ = absl::nullopt;
+  delay_samples_ = absl::nullopt;
+  skew_ = absl::nullopt;
   previous_offset_blocks_ = 0;
   std::fill(delay_buf_.begin(), delay_buf_.end(), 0.f);
-  delay_estimator_.Reset(false);
+  delay_estimator_.Reset(reset_delay_confidence);
   skew_estimator_.Reset();
   delay_change_counter_ = 0;
   soft_reset_counter_ = 0;
+  if (reset_delay_confidence) {
+    last_delay_estimate_quality_ = DelayEstimate::Quality::kCoarse;
+  }
 }
 
 void RenderDelayControllerImpl::LogRenderCall() {
   skew_estimator_.LogRenderCall();
 }
 
-rtc::Optional<DelayEstimate> RenderDelayControllerImpl::GetDelay(
+absl::optional<DelayEstimate> RenderDelayControllerImpl::GetDelay(
     const DownsampledRenderBuffer& render_buffer,
     size_t render_delay_buffer_delay,
-    const rtc::Optional<int>& echo_remover_delay,
+    const absl::optional<int>& echo_remover_delay,
     rtc::ArrayView<const float> capture) {
   RTC_DCHECK_EQ(kBlockSize, capture.size());
   ++capture_call_counter_;
@@ -185,12 +204,9 @@ rtc::Optional<DelayEstimate> RenderDelayControllerImpl::GetDelay(
   delay_buf_index_ = (delay_buf_index_ + kBlockSize) % delay_buf_.size();
 
   // Compute the latest skew update.
-  rtc::Optional<int> skew = skew_estimator_.GetSkewFromCapture();
+  absl::optional<int> skew = skew_estimator_.GetSkewFromCapture();
 
   if (delay_samples) {
-    // TODO(peah): Refactor the rest of the code to assume a kRefined estimate
-    // quality.
-    RTC_DCHECK(DelayEstimate::Quality::kRefined == delay_samples->quality);
     if (!delay_samples_ || delay_samples->delay != delay_samples_->delay) {
       delay_change_counter_ = 0;
     }
@@ -233,19 +249,21 @@ rtc::Optional<DelayEstimate> RenderDelayControllerImpl::GetDelay(
     } else if (soft_reset_counter_ > 10 * kNumBlocksPerSecond) {
       // Soft reset the delay estimator if there is a significant offset
       // detected.
-      delay_estimator_.Reset(true);
+      delay_estimator_.Reset(false);
       soft_reset_counter_ = 0;
     }
   }
+  if (!use_offset_blocks_)
+    offset_blocks = 0;
 
   // Log any changes in the skew.
   skew_shift_reporting_counter_ =
       std::max(0, skew_shift_reporting_counter_ - 1);
-  rtc::Optional<int> skew_shift =
+  absl::optional<int> skew_shift =
       skew_shift_reporting_counter_ == 0 &&
               previous_offset_blocks_ != offset_blocks
-          ? rtc::Optional<int>(offset_blocks - previous_offset_blocks_)
-          : rtc::nullopt;
+          ? absl::optional<int>(offset_blocks - previous_offset_blocks_)
+          : absl::nullopt;
   previous_offset_blocks_ = offset_blocks;
   if (skew_shift) {
     RTC_LOG(LS_WARNING) << "API call skew shift of " << *skew_shift
@@ -256,14 +274,20 @@ rtc::Optional<DelayEstimate> RenderDelayControllerImpl::GetDelay(
 
   if (delay_samples_) {
     // Compute the render delay buffer delay.
-    delay_ = ComputeBufferDelay(
-        delay_, delay_headroom_blocks_, hysteresis_limit_1_blocks_,
-        hysteresis_limit_2_blocks_, offset_blocks, *delay_samples_);
+    const bool use_hysteresis =
+        last_delay_estimate_quality_ == DelayEstimate::Quality::kRefined &&
+        delay_samples_->quality == DelayEstimate::Quality::kRefined;
+    delay_ = ComputeBufferDelay(delay_, delay_headroom_blocks_,
+                                use_hysteresis ? hysteresis_limit_1_blocks_ : 0,
+                                use_hysteresis ? hysteresis_limit_2_blocks_ : 0,
+                                offset_blocks, *delay_samples_);
+    last_delay_estimate_quality_ = delay_samples_->quality;
   }
 
-  metrics_.Update(delay_samples_ ? rtc::Optional<size_t>(delay_samples_->delay)
-                                 : rtc::nullopt,
-                  delay_ ? delay_->delay : 0, skew_shift);
+  metrics_.Update(delay_samples_ ? absl::optional<size_t>(delay_samples_->delay)
+                                 : absl::nullopt,
+                  delay_ ? delay_->delay : 0, skew_shift,
+                  delay_estimator_.Clockdrift());
 
   data_dumper_->DumpRaw("aec3_render_delay_controller_delay",
                         delay_samples ? delay_samples->delay : 0);
@@ -277,6 +301,10 @@ rtc::Optional<DelayEstimate> RenderDelayControllerImpl::GetDelay(
   data_dumper_->DumpRaw("aec3_render_delay_controller_offset", offset_blocks);
 
   return delay_;
+}
+
+bool RenderDelayControllerImpl::HasClockdrift() const {
+  return delay_estimator_.Clockdrift() != ClockdriftDetector::Level::kNone;
 }
 
 }  // namespace

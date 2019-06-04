@@ -55,7 +55,7 @@ ResourceError ResourceError::CancelledDueToAccessCheckError(
     ResourceRequestBlockedReason blocked_reason) {
   ResourceError error = CancelledError(url);
   error.is_access_check_ = true;
-  error.should_collapse_initiator_ =
+  error.blocked_by_subresource_filter_ =
       blocked_reason == ResourceRequestBlockedReason::kSubresourceFilter;
   return error;
 }
@@ -84,13 +84,18 @@ ResourceError ResourceError::Failure(const KURL& url) {
 ResourceError::ResourceError(
     int error_code,
     const KURL& url,
-    base::Optional<network::CORSErrorStatus> cors_error_status)
+    base::Optional<network::CorsErrorStatus> cors_error_status)
     : error_code_(error_code),
       failing_url_(url),
+      is_access_check_(cors_error_status.has_value()),
       cors_error_status_(cors_error_status) {
   DCHECK_NE(error_code_, 0);
   InitializeDescription();
 }
+
+ResourceError::ResourceError(const KURL& url,
+                             const network::CorsErrorStatus& cors_error_status)
+    : ResourceError(net::ERR_FAILED, url, cors_error_status) {}
 
 ResourceError::ResourceError(const WebURLError& error)
     : error_code_(error.reason()),
@@ -146,7 +151,7 @@ bool ResourceError::Compare(const ResourceError& a, const ResourceError& b) {
   if (a.HasCopyInCache() != b.HasCopyInCache())
     return false;
 
-  if (a.CORSErrorStatus() != b.CORSErrorStatus())
+  if (a.CorsErrorStatus() != b.CorsErrorStatus())
     return false;
 
   if (a.extended_error_code_ != b.extended_error_code_)
@@ -169,6 +174,12 @@ bool ResourceError::IsCacheMiss() const {
 
 bool ResourceError::WasBlockedByResponse() const {
   return error_code_ == net::ERR_BLOCKED_BY_RESPONSE;
+}
+
+bool ResourceError::ShouldCollapseInitiator() const {
+  return blocked_by_subresource_filter_ ||
+         GetResourceRequestBlockedReason() ==
+             ResourceRequestBlockedReason::kCollapsedByClient;
 }
 
 base::Optional<ResourceRequestBlockedReason>
@@ -206,6 +217,9 @@ String DescriptionForBlockedByClientOrResponse(int error, int extended_error) {
       break;
     case ResourceRequestBlockedReason::kContentType:
       detail = "ContentType";
+      break;
+    case ResourceRequestBlockedReason::kCollapsedByClient:
+      detail = "Collapsed";
       break;
   }
   return WebString::FromASCII(net::ErrorToString(error) + "." + detail);

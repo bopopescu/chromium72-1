@@ -6,6 +6,17 @@ var wallpaperPickerWindow = null;
 
 var surpriseWallpaper = null;
 
+/**
+ * Returns the highResolutionSuffix.
+ * @param {function} callback A callback function that takes one value:
+ *     |highResolutionSuffix|: the suffix to append to the wallpaper urls.
+ */
+function getHighResolutionSuffix(callback) {
+  chrome.wallpaperPrivate.getStrings(strings => {
+    callback(strings['highResolutionSuffix']);
+  });
+}
+
 function SurpriseWallpaper() {}
 
 /**
@@ -20,100 +31,12 @@ SurpriseWallpaper.getInstance = function() {
 };
 
 /**
- * Tries to change wallpaper to a new one in the background. May fail due to a
- * network issue.
- */
-SurpriseWallpaper.prototype.tryChangeWallpaper = function() {
-  var self = this;
-  var onFailure = function(status) {
-    if (status != 404)
-      self.fallbackToLocalRss_();
-    else
-      self.updateRandomWallpaper_();
-  };
-  // Try to fetch newest rss as document from server first. If the requested
-  // URL is not found (404 error), set a random wallpaper displayed in the
-  // wallpaper picker. If any other error occurs, proceed with local copy of
-  // rss.
-  WallpaperUtil.fetchURL(Constants.WallpaperRssURL, 'document', function(xhr) {
-    WallpaperUtil.saveToLocalStorage(
-        Constants.AccessLocalRssKey,
-        new XMLSerializer().serializeToString(xhr.responseXML));
-    self.updateSurpriseWallpaper(xhr.responseXML);
-  }, onFailure);
-};
-
-/**
  * Retries changing the wallpaper 1 hour later. This is called when fetching the
- * rss or wallpaper from server fails.
+ * wallpaper from server fails.
  * @private
  */
 SurpriseWallpaper.prototype.retryLater_ = function() {
   chrome.alarms.create('RetryAlarm', {delayInMinutes: 60});
-};
-
-/**
- * Fetches the cached rss feed from local storage in the event of being unable
- * to download the online feed.
- * @private
- */
-SurpriseWallpaper.prototype.fallbackToLocalRss_ = function() {
-  var self = this;
-  Constants.WallpaperLocalStorage.get(
-      Constants.AccessLocalRssKey, function(items) {
-        var rssString = items[Constants.AccessLocalRssKey];
-        if (rssString) {
-          self.updateSurpriseWallpaper(
-              new DOMParser().parseFromString(rssString, 'text/xml'));
-        } else {
-          self.updateSurpriseWallpaper();
-        }
-      });
-};
-
-/**
- * Starts to change wallpaper. Called after rss is fetched.
- * @param {Document=} opt_rss The fetched rss document. If opt_rss is null, uses
- *     a random wallpaper.
- */
-SurpriseWallpaper.prototype.updateSurpriseWallpaper = function(opt_rss) {
-  if (opt_rss) {
-    var items = opt_rss.querySelectorAll('item');
-    var date = new Date(new Date().toDateString()).getTime();
-    for (var i = 0; i < items.length; i++) {
-      item = items[i];
-      var disableDate =
-          new Date(item.getElementsByTagNameNS(
-                           Constants.WallpaperNameSpaceURI, 'disableDate')[0]
-                       .textContent)
-              .getTime();
-      var enableDate =
-          new Date(item.getElementsByTagNameNS(
-                           Constants.WallpaperNameSpaceURI, 'enableDate')[0]
-                       .textContent)
-              .getTime();
-      var regionsString = item.getElementsByTagNameNS(
-                                  Constants.WallpaperNameSpaceURI, 'regions')[0]
-                              .textContent;
-      var regions = regionsString.split(', ');
-      if (enableDate <= date && disableDate > date &&
-          regions.indexOf(navigator.language) != -1) {
-        var self = this;
-        this.setWallpaperFromRssItem_(
-            item, function() {},
-            function(status) {
-              if (status != 404)
-                self.retryLater_();
-              else
-                self.updateRandomWallpaper_();
-            });
-        return;
-      }
-    }
-  }
-  // No surprise wallpaper for today at current locale or fetching rss feed
-  // fails. Fallback to use a random one from wallpaper server.
-  this.updateRandomWallpaper_();
 };
 
 /**
@@ -158,44 +81,9 @@ SurpriseWallpaper.prototype.setRandomWallpaper_ = function(dateString) {
         });
   };
 
-  chrome.wallpaperPrivate.getStrings(strings => {
-    var suffix = strings['highResolutionSuffix'];
-    if (strings['useNewWallpaperPicker'])
-      this.setRandomWallpaperFromServer_(onSuccess, suffix);
-    else
-      this.setRandomWallpaperFromManifest_(onSuccess, suffix);
+  getHighResolutionSuffix(highResolutionSuffix => {
+    this.setRandomWallpaperFromServer_(onSuccess, highResolutionSuffix);
   });
-};
-
-/**
- * Sets wallpaper to be a random one found in the stored manifest file. If the
- * wallpaper download fails, retry one hour later. Wallpapers that are disabled
- * for surprise me are excluded.
- * @param {function} onSuccess The success callback.
- * @param {string} suffix The url suffix for high resolution wallpaper.
- * @private
- */
-SurpriseWallpaper.prototype.setRandomWallpaperFromManifest_ = function(
-    onSuccess, suffix) {
-  Constants.WallpaperLocalStorage.get(
-      Constants.AccessLocalManifestKey, items => {
-        var manifest = items[Constants.AccessLocalManifestKey];
-        if (manifest && manifest.wallpaper_list) {
-          var filtered = manifest.wallpaper_list.filter(function(element) {
-            // Older version manifest do not have available_for_surprise_me
-            // field. In this case, no wallpaper should be filtered out.
-            return element.available_for_surprise_me ||
-                element.available_for_surprise_me == undefined;
-          });
-          var index = Math.floor(Math.random() * filtered.length);
-          var wallpaper = filtered[index];
-          var wallpaperUrl = wallpaper.base_url + suffix;
-          WallpaperUtil.setOnlineWallpaperWithoutPreview(
-              wallpaperUrl, wallpaper.default_layout,
-              onSuccess.bind(null, wallpaperUrl, wallpaper.default_layout),
-              this.retryLater_.bind(this));
-        }
-      });
 };
 
 /**
@@ -207,80 +95,62 @@ SurpriseWallpaper.prototype.setRandomWallpaperFromManifest_ = function(
  */
 SurpriseWallpaper.prototype.setRandomWallpaperFromServer_ = function(
     onSuccess, suffix) {
-  // The first step is to get the list of wallpaper collections (ie. categories)
-  // and randomly select one.
-  chrome.wallpaperPrivate.getCollectionsInfo(collectionsInfo => {
-    if (chrome.runtime.lastError) {
-      this.retryLater_();
-      return;
-    }
-    if (collectionsInfo.length == 0) {
-      // Although the fetch succeeds, it's theoretically possible that the
-      // collection list is empty, in this case do nothing.
+  var onDailyRefreshInfoReturned = dailyRefreshInfo => {
+    var setRandomWallpaperFromServerImpl = dailyRefreshInfo => {
+      chrome.wallpaperPrivate.getSurpriseMeImage(
+          dailyRefreshInfo.collectionId, dailyRefreshInfo.resumeToken,
+          (imageInfo, nextResumeToken) => {
+            if (chrome.runtime.lastError) {
+              this.retryLater_();
+              return;
+            }
+            dailyRefreshInfo.resumeToken = nextResumeToken;
+            WallpaperUtil.saveDailyRefreshInfo(dailyRefreshInfo);
+
+            var wallpaperUrl = imageInfo['imageUrl'] + suffix;
+            var layout = Constants.WallpaperThumbnailDefaultLayout;
+            WallpaperUtil.setOnlineWallpaperWithoutPreview(
+                wallpaperUrl, layout,
+                onSuccess.bind(null, wallpaperUrl, layout),
+                this.retryLater_.bind(this));
+          });
+    };
+
+    if (dailyRefreshInfo) {
+      if (dailyRefreshInfo.enabled) {
+        setRandomWallpaperFromServerImpl(dailyRefreshInfo);
+      } else {
+        console.error(
+            'Daily refresh is disabled when the alarm goes off. ' +
+            'This should never happen!');
+      }
       return;
     }
 
-    var randomCollectionIndex =
-        Math.floor(Math.random() * collectionsInfo.length);
-    var collectionId = collectionsInfo[randomCollectionIndex]['collectionId'];
-    // The second step is to get the list of wallpapers that belong to the
-    // particular collection, and randomly select one.
-    chrome.wallpaperPrivate.getImagesInfo(collectionId, imagesInfo => {
+    // Migration: we reach here if the old picker set an alarm and by the time
+    // the alarm goes off, the new picker is already in use. We should ensure
+    // the user transitions to the daily refresh feature.
+    chrome.wallpaperPrivate.getCollectionsInfo(collectionsInfo => {
       if (chrome.runtime.lastError) {
         this.retryLater_();
         return;
       }
-      if (imagesInfo.length == 0) {
+      if (collectionsInfo.length == 0) {
         // Although the fetch succeeds, it's theoretically possible that the
-        // image list is empty, in this case do nothing.
-        // TODO(crbug.com/800945): Consider fetching another collection.
+        // collection list is empty, in this case do nothing.
         return;
       }
-      var randomImageIndex = Math.floor(Math.random() * imagesInfo.length);
-      var wallpaperUrl = imagesInfo[randomImageIndex]['imageUrl'] + suffix;
-      // The backend service doesn't specify the desired layout. Use the default
-      // layout here.
-      var layout = Constants.WallpaperThumbnailDefaultLayout;
-      WallpaperUtil.setOnlineWallpaperWithoutPreview(
-          wallpaperUrl, layout, onSuccess.bind(null, wallpaperUrl, layout),
-          this.retryLater_.bind(this));
+      dailyRefreshInfo = {
+        enabled: true,
+        // Use the first collection (an arbitrary choice).
+        collectionId: collectionsInfo[0]['collectionId'],
+        resumeToken: null
+      };
+      setRandomWallpaperFromServerImpl(dailyRefreshInfo);
     });
-  });
-};
+  };
 
-/**
- * Sets wallpaper to the wallpaper specified by item from rss. If downloading
- * the wallpaper fails, retry one hour later.
- * @param {Element} item The wallpaper rss item element.
- * @param {function} onSuccess Success callback.
- * @param {function} onFailure Failure callback.
- * @private
- */
-SurpriseWallpaper.prototype.setWallpaperFromRssItem_ = function(
-    item, onSuccess, onFailure) {
-  var url = item.querySelector('link').textContent;
-  var layout =
-      item.getElementsByTagNameNS(Constants.WallpaperNameSpaceURI, 'layout')[0]
-          .textContent;
-  var self = this;
-  WallpaperUtil.fetchURL(url, 'arraybuffer', function(xhr) {
-    if (xhr.response != null) {
-      chrome.wallpaperPrivate.setCustomWallpaper(
-          xhr.response, layout, false /*generateThumbnail=*/,
-          'surprise_wallpaper', false /*previewMode=*/, onSuccess);
-      WallpaperUtil.saveWallpaperInfo(
-          url, layout, Constants.WallpaperSourceEnum.Daily, '');
-      var dateString = new Date().toDateString();
-      WallpaperUtil.saveToLocalStorage(
-          Constants.AccessLastSurpriseWallpaperChangedDate, dateString,
-          function() {
-            WallpaperUtil.saveToSyncStorage(
-                Constants.AccessLastSurpriseWallpaperChangedDate, dataString);
-          });
-    } else {
-      self.updateRandomWallpaper_();
-    }
-  }, onFailure);
+  WallpaperUtil.getDailyRefreshInfo(onDailyRefreshInfoReturned.bind(null));
 };
 
 /**
@@ -303,7 +173,7 @@ SurpriseWallpaper.prototype.disable = function() {
 SurpriseWallpaper.prototype.next = function() {
   var nextUpdate = this.nextUpdateTime(new Date());
   chrome.alarms.create({when: nextUpdate});
-  this.tryChangeWallpaper();
+  this.updateRandomWallpaper_();
 };
 
 /**
@@ -323,41 +193,33 @@ chrome.app.runtime.onLaunched.addListener(function() {
     return;
   }
 
-  chrome.commandLinePrivate.hasSwitch('new-wallpaper-picker', result => {
-    var options = result ? {
-      frame: 'none',
-      innerBounds: {width: 768, height: 512, minWidth: 480, minHeight: 480},
-      resizable: true,
-      alphaEnabled: true
-    } :
-                           {
-                             frame: 'none',
-                             width: 574,
-                             height: 420,
-                             resizable: false,
-                             alphaEnabled: true
-                           };
+  var options = {
+    frame: 'none',
+    innerBounds: {width: 768, height: 512, minWidth: 768, minHeight: 512},
+    resizable: true,
+    alphaEnabled: true
+  };
 
-    chrome.app.window.create('main.html', options, function(w) {
-      wallpaperPickerWindow = w;
-      chrome.wallpaperPrivate.minimizeInactiveWindows();
-      w.onClosed.addListener(function() {
-        wallpaperPickerWindow = null;
+  chrome.app.window.create('main.html', options, function(window) {
+    wallpaperPickerWindow = window;
+    chrome.wallpaperPrivate.minimizeInactiveWindows();
+    window.onClosed.addListener(function() {
+      wallpaperPickerWindow = null;
+      // In case the app exits unexpectedly during preview.
+      chrome.wallpaperPrivate.cancelPreviewWallpaper(() => {});
+      // If the app exits during preview, do not restore the previously active
+      // windows. Continue to show the new wallpaper.
+      if (!window.contentWindow.document.body.classList.contains(
+              'preview-mode')) {
         chrome.wallpaperPrivate.restoreMinimizedWindows();
-      });
-      if (result) {
-        // By design, the new wallpaper picker should never be shown on top of
-        // another window.
-        wallpaperPickerWindow.contentWindow.addEventListener(
-            'focus', function() {
-              chrome.wallpaperPrivate.minimizeInactiveWindows();
-            });
-        w.onMinimized.addListener(function() {
-          chrome.wallpaperPrivate.restoreMinimizedWindows();
-        });
       }
-      WallpaperUtil.testSendMessage('wallpaper-window-created');
     });
+    // By design, the wallpaper picker should never be shown on top of
+    // another window.
+    wallpaperPickerWindow.contentWindow.addEventListener('focus', function() {
+      chrome.wallpaperPrivate.minimizeInactiveWindows();
+    });
+    WallpaperUtil.testSendMessage('wallpaper-window-created');
   });
 });
 
@@ -399,6 +261,29 @@ chrome.syncFileSystem.onFileStatusChanged.addListener(function(detail) {
 
 chrome.storage.onChanged.addListener(function(changes, namespace) {
   WallpaperUtil.enabledSyncThemesCallback(function(syncEnabled) {
+    var updateDailyRefreshStates = key => {
+      if (!changes[key])
+        return;
+      var oldDailyRefreshInfo = JSON.parse(changes[key].oldValue);
+      var newDailyRefreshInfo = JSON.parse(changes[key].newValue);
+      // The resume token is expected to change after a new daily refresh
+      // wallpaper is set. Ignore it if it's the only change.
+      if (oldDailyRefreshInfo.enabled === newDailyRefreshInfo.enabled &&
+          oldDailyRefreshInfo.collectionId ===
+              newDailyRefreshInfo.collectionId) {
+        return;
+      }
+      // Although the old and new values may both have enabled == true, they can
+      // have different collection ids, so the old alarm should always be
+      // cleared.
+      chrome.alarms.clearAll();
+      if (newDailyRefreshInfo.enabled)
+        SurpriseWallpaper.getInstance().next();
+    };
+    updateDailyRefreshStates(
+        syncEnabled ? Constants.AccessSyncDailyRefreshInfoKey :
+                      Constants.AccessLocalDailyRefreshInfoKey);
+
     if (syncEnabled) {
       // If sync theme is enabled, use values from chrome.storage.sync to sync
       // wallpaper changes.
@@ -416,16 +301,6 @@ chrome.storage.onChanged.addListener(function(changes, namespace) {
         if (!wallpaperPickerWindow)
           return;
         var wpDocument = wallpaperPickerWindow.contentWindow.document;
-        var hideCheckMarkIfNeeded = () => {
-          chrome.commandLinePrivate.hasSwitch(
-              'new-wallpaper-picker', result => {
-                // Do not hide the check mark on the new picker.
-                if (!result && wpDocument.querySelector('.check')) {
-                  wpDocument.querySelector('.check').style.visibility =
-                      'hidden';
-                }
-              });
-        };
 
         if (!!appName) {
           chrome.wallpaperPrivate.getStrings(function(strings) {
@@ -434,7 +309,6 @@ chrome.storage.onChanged.addListener(function(changes, namespace) {
             wpDocument.querySelector('#wallpaper-set-by-message').textContent =
                 message;
             wpDocument.querySelector('#wallpaper-grid').classList.add('small');
-            hideCheckMarkIfNeeded();
             wpDocument.querySelector('#checkbox').classList.remove('checked');
             wpDocument.querySelector('#categories-list').disabled = false;
             wpDocument.querySelector('#wallpaper-grid').disabled = false;
@@ -452,7 +326,6 @@ chrome.storage.onChanged.addListener(function(changes, namespace) {
                 if (enable) {
                   wpDocument.querySelector('#checkbox')
                       .classList.add('checked');
-                  hideCheckMarkIfNeeded();
                 } else {
                   wpDocument.querySelector('#checkbox')
                       .classList.remove('checked');
@@ -460,13 +333,6 @@ chrome.storage.onChanged.addListener(function(changes, namespace) {
                     wpDocument.querySelector('.check').style.visibility =
                         'visible';
                 }
-                wpDocument.querySelector('#categories-list').disabled = enable;
-                chrome.commandLinePrivate.hasSwitch(
-                    'new-wallpaper-picker', useNewWallpaperPicker => {
-                      if (!useNewWallpaperPicker)
-                        wpDocument.querySelector('#wallpaper-grid').disabled =
-                            enable;
-                    });
               });
         }
       };
@@ -595,13 +461,22 @@ chrome.wallpaperPrivate.onWallpaperChangedBy3rdParty.addListener(function(
         WallpaperUtil.saveToSyncStorage(
             Constants.AccessSyncSurpriseMeEnabledKey, false);
       });
-  SurpriseWallpaper.getInstance().disable();
 
   // Make third party wallpaper syncable through different devices.
-  var filename = Constants.ThirdPartyWallpaperPrefix + new Date().getTime();
-  var thumbnailFilename = filename + Constants.CustomWallpaperThumbnailSuffix;
-  WallpaperUtil.storeWallpaperToSyncFS(filename, wallpaper);
-  WallpaperUtil.storeWallpaperToSyncFS(thumbnailFilename, thumbnail);
+  var fileName = Constants.ThirdPartyWallpaperPrefix + new Date().getTime();
+  var thumbnailFileName = fileName + Constants.CustomWallpaperThumbnailSuffix;
+  WallpaperUtil.storeWallpaperToSyncFS(fileName, wallpaper);
+  WallpaperUtil.storeWallpaperToSyncFS(thumbnailFileName, thumbnail);
   WallpaperUtil.saveWallpaperInfo(
-      filename, layout, Constants.WallpaperSourceEnum.ThirdParty, appName);
+      fileName, layout, Constants.WallpaperSourceEnum.ThirdParty, appName);
+
+    WallpaperUtil.saveDailyRefreshInfo(
+        {enabled: false, collectionId: null, resumeToken: null});
+
+    if (wallpaperPickerWindow) {
+      var event = new CustomEvent(
+          Constants.WallpaperChangedBy3rdParty,
+          {detail: {wallpaperFileName: fileName}});
+      wallpaperPickerWindow.contentWindow.dispatchEvent(event);
+    }
 });

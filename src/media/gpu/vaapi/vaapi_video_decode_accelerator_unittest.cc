@@ -64,9 +64,9 @@ class MockVaapiWrapper : public VaapiWrapper {
  public:
   MockVaapiWrapper() = default;
   MOCK_METHOD4(
-      CreateSurfaces,
+      CreateContextAndSurfaces,
       bool(unsigned int, const gfx::Size&, size_t, std::vector<VASurfaceID>*));
-  MOCK_METHOD0(DestroySurfaces, void());
+  MOCK_METHOD0(DestroyContextAndSurfaces, void());
 
  private:
   ~MockVaapiWrapper() override = default;
@@ -116,15 +116,14 @@ class MockVaapiPictureFactory : public VaapiPictureFactory {
       const scoped_refptr<VaapiWrapper>& vaapi_wrapper,
       const MakeGLContextCurrentCallback& make_context_current_cb,
       const BindGLImageCallback& bind_image_cb,
-      int32_t picture_buffer_id,
-      const gfx::Size& size,
-      uint32_t texture_id,
-      uint32_t client_texture_id,
-      uint32_t texture_target) override {
-    MockCreateVaapiPicture(vaapi_wrapper.get(), size);
+      const PictureBuffer& picture_buffer) override {
+    const uint32_t service_texture_id = picture_buffer.service_texture_ids()[0];
+    const uint32_t client_texture_id = picture_buffer.client_texture_ids()[0];
+    MockCreateVaapiPicture(vaapi_wrapper.get(), picture_buffer.size());
     return std::make_unique<MockVaapiPicture>(
         vaapi_wrapper, make_context_current_cb, bind_image_cb,
-        picture_buffer_id, size, texture_id, client_texture_id, texture_target);
+        picture_buffer.id(), picture_buffer.size(), service_texture_id,
+        client_texture_id, picture_buffer.texture_target());
   }
 };
 
@@ -168,7 +167,8 @@ class VaapiVideoDecodeAcceleratorTest : public TestWithParam<VideoCodecProfile>,
   }
 
   void QueueInputBuffer(const BitstreamBuffer& bitstream_buffer) {
-    vda_.QueueInputBuffer(bitstream_buffer);
+    vda_.QueueInputBuffer(bitstream_buffer.ToDecoderBuffer(),
+                          bitstream_buffer.id());
   }
 
   void AssignPictureBuffers(const std::vector<PictureBuffer>& picture_buffers) {
@@ -205,7 +205,7 @@ class VaapiVideoDecodeAcceleratorTest : public TestWithParam<VideoCodecProfile>,
     EXPECT_CALL(*mock_decoder_, GetRequiredNumOfPictures())
         .WillOnce(Return(num_pictures));
     EXPECT_CALL(*mock_decoder_, GetPicSize()).WillOnce(Return(picture_size));
-    EXPECT_CALL(*mock_vaapi_wrapper_, DestroySurfaces());
+    EXPECT_CALL(*mock_vaapi_wrapper_, DestroyContextAndSurfaces());
 
     if (expect_dismiss_picture_buffers) {
       EXPECT_CALL(*this, DismissPictureBuffer(_))
@@ -234,22 +234,22 @@ class VaapiVideoDecodeAcceleratorTest : public TestWithParam<VideoCodecProfile>,
     ASSERT_TRUE(vda_.curr_input_buffer_)
         << "QueueInputBuffer() should have been called";
 
-    ::testing::InSequence s;
     base::RunLoop run_loop;
     base::Closure quit_closure = run_loop.QuitClosure();
 
     EXPECT_CALL(*mock_vaapi_wrapper_,
-                CreateSurfaces(_, picture_size, num_pictures, _))
-        .WillOnce(DoAll(
-            WithArg<3>(Invoke(
-                [num_pictures](std::vector<VASurfaceID>* va_surface_ids) {
-                  va_surface_ids->resize(num_pictures);
-                })),
-            Return(true)));
+                CreateContextAndSurfaces(_, picture_size, num_pictures, _))
+        .WillOnce(
+            DoAll(WithArg<3>(Invoke(
+                      [num_pictures](std::vector<VASurfaceID>* va_surface_ids) {
+                        va_surface_ids->resize(num_pictures);
+                      })),
+                  Return(true)));
     EXPECT_CALL(*mock_vaapi_picture_factory_,
                 MockCreateVaapiPicture(mock_vaapi_wrapper_.get(), picture_size))
         .Times(num_pictures);
 
+    ::testing::InSequence s;
     EXPECT_CALL(*mock_decoder_, Decode())
         .WillOnce(Return(AcceleratedVideoDecoder::kRanOutOfStreamData));
     EXPECT_CALL(*this, NotifyEndOfBitstreamBuffer(bitstream_id))

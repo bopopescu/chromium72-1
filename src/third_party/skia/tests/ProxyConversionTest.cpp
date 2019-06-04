@@ -9,7 +9,6 @@
 
 #include "Test.h"
 
-#if SK_SUPPORT_GPU
 #include "GrBackendSurface.h"
 #include "GrContextPriv.h"
 #include "GrGpu.h"
@@ -29,15 +28,14 @@ static sk_sp<GrSurfaceProxy> make_wrapped_rt(GrProxyProvider* provider,
     SkASSERT(1 == desc.fSampleCnt);
     GrSRGBEncoded srgbEncoded;
     auto ct = GrPixelConfigToColorTypeAndEncoding(desc.fConfig, &srgbEncoded);
-    auto backendRT = gpu->createTestingOnlyBackendRenderTarget(desc.fWidth, desc.fHeight, ct,
-                                                               GrSRGBEncoded::kNo);
+    auto backendRT = gpu->createTestingOnlyBackendRenderTarget(desc.fWidth, desc.fHeight, ct);
     return provider->wrapBackendRenderTarget(backendRT, origin);
 }
 
 void clean_up_wrapped_rt(GrGpu* gpu, sk_sp<GrSurfaceProxy> proxy) {
     SkASSERT(proxy->isUnique_debugOnly());
-    SkASSERT(proxy->priv().peekRenderTarget());
-    GrBackendRenderTarget rt = proxy->priv().peekRenderTarget()->getBackendRenderTarget();
+    SkASSERT(proxy->peekRenderTarget());
+    GrBackendRenderTarget rt = proxy->peekRenderTarget()->getBackendRenderTarget();
     proxy.reset();
     gpu->deleteTestingOnlyBackendRenderTarget(rt);
 }
@@ -47,13 +45,15 @@ static sk_sp<GrSurfaceProxy> make_offscreen_rt(GrProxyProvider* provider,
                                                GrSurfaceOrigin origin) {
     SkASSERT(kRenderTarget_GrSurfaceFlag == desc.fFlags);
 
-    return provider->createInstantiatedProxy(desc, origin, SkBackingFit::kExact, SkBudgeted::kYes);
+    return provider->testingOnly_createInstantiatedProxy(desc, origin, SkBackingFit::kExact,
+                                                         SkBudgeted::kYes);
 }
 
 static sk_sp<GrSurfaceProxy> make_texture(GrProxyProvider* provider,
                                           const GrSurfaceDesc& desc,
                                           GrSurfaceOrigin origin) {
-    return provider->createInstantiatedProxy(desc, origin, SkBackingFit::kExact, SkBudgeted::kYes);
+    return provider->testingOnly_createInstantiatedProxy(desc, origin, SkBackingFit::kExact,
+                                                         SkBudgeted::kYes);
 }
 
 // Test converting between RenderTargetProxies and TextureProxies for preinstantiated Proxies
@@ -137,9 +137,12 @@ DEF_GPUTEST_FOR_RENDERING_CONTEXTS(DefferredProxyConversionTest, reporter, ctxIn
     desc.fHeight = 64;
     desc.fConfig = kRGBA_8888_GrPixelConfig;
 
+    const GrBackendFormat format =
+            ctxInfo.grContext()->contextPriv().caps()->getBackendFormatFromColorType(
+                    kRGBA_8888_SkColorType);
     {
         sk_sp<GrTextureProxy> proxy = proxyProvider->createProxy(
-                desc, kBottomLeft_GrSurfaceOrigin, SkBackingFit::kApprox, SkBudgeted::kYes);
+                format, desc, kBottomLeft_GrSurfaceOrigin, SkBackingFit::kApprox, SkBudgeted::kYes);
 
         // Both RenderTarget and Texture
         GrRenderTargetProxy* rtProxy = proxy->asRenderTargetProxy();
@@ -152,7 +155,7 @@ DEF_GPUTEST_FOR_RENDERING_CONTEXTS(DefferredProxyConversionTest, reporter, ctxIn
 
     {
         sk_sp<GrTextureProxy> proxy = proxyProvider->createProxy(
-                desc, kBottomLeft_GrSurfaceOrigin, SkBackingFit::kApprox, SkBudgeted::kYes);
+                format, desc, kBottomLeft_GrSurfaceOrigin, SkBackingFit::kApprox, SkBudgeted::kYes);
 
         // Both RenderTarget and Texture - but via GrTextureProxy
         GrTextureProxy* tProxy = proxy->asTextureProxy();
@@ -167,7 +170,7 @@ DEF_GPUTEST_FOR_RENDERING_CONTEXTS(DefferredProxyConversionTest, reporter, ctxIn
         desc.fFlags = kNone_GrSurfaceFlags; // force no-RT
 
         sk_sp<GrTextureProxy> proxy = proxyProvider->createProxy(
-                desc, kTopLeft_GrSurfaceOrigin, SkBackingFit::kApprox, SkBudgeted::kYes);
+                format, desc, kTopLeft_GrSurfaceOrigin, SkBackingFit::kApprox, SkBudgeted::kYes);
         // Texture-only
         GrTextureProxy* tProxy = proxy->asTextureProxy();
         REPORTER_ASSERT(reporter, tProxy);
@@ -175,4 +178,3 @@ DEF_GPUTEST_FOR_RENDERING_CONTEXTS(DefferredProxyConversionTest, reporter, ctxIn
         REPORTER_ASSERT(reporter, !tProxy->asRenderTargetProxy());
     }
 }
-#endif

@@ -29,6 +29,10 @@ bool IsGestureEventFromTouchpad(const blink::WebInputEvent& event) {
   return gesture.SourceDevice() == blink::kWebGestureDeviceTouchpad;
 }
 
+bool IsGestureEventFromAutoscroll(const blink::WebGestureEvent event) {
+  return event.SourceDevice() == blink::kWebGestureDeviceSyntheticAutoscroll;
+}
+
 bool IsGestureScrollUpdateInertialEvent(const blink::WebInputEvent& event) {
   if (event.GetType() != blink::WebInputEvent::kGestureScrollUpdate)
     return false;
@@ -46,9 +50,7 @@ float ClampAbsoluteValue(float value, float max_abs) {
 
 }  // namespace
 
-OverscrollController::OverscrollController()
-    : wheel_scroll_latching_enabled_(base::FeatureList::IsEnabled(
-          features::kTouchpadAndWheelScrollLatching)) {}
+OverscrollController::OverscrollController() {}
 
 OverscrollController::~OverscrollController() {}
 
@@ -68,6 +70,10 @@ bool OverscrollController::ShouldProcessEvent(
       // See crbug.com/533069
       if (gesture.resending_plugin_id != -1 &&
           event.GetType() != blink::WebInputEvent::kGestureScrollUpdate)
+        return false;
+
+      // Gesture events with Autoscroll source don't cause overscrolling.
+      if (IsGestureEventFromAutoscroll(gesture))
         return false;
 
       blink::WebGestureEvent::ScrollUnits scrollUnits;
@@ -343,14 +349,8 @@ bool OverscrollController::ProcessEventForOverscroll(
   bool event_processed = false;
   switch (event.GetType()) {
     case blink::WebInputEvent::kGestureScrollBegin: {
-      // When wheel scroll latching is disabled avoid resetting the state on
-      // GestureScrollBegin generated from the touchpad since it is sent for
-      // every wheel event.
-      if (overscroll_mode_ != OVERSCROLL_NONE &&
-          (!IsGestureEventFromTouchpad(event) ||
-           wheel_scroll_latching_enabled_)) {
+      if (overscroll_mode_ != OVERSCROLL_NONE)
         SetOverscrollMode(OVERSCROLL_NONE, OverscrollSource::NONE);
-      }
       break;
     }
     case blink::WebInputEvent::kGestureScrollEnd: {
@@ -530,6 +530,8 @@ bool OverscrollController::ProcessOverscroll(float delta_x,
 
   if (overscroll_mode_ == OVERSCROLL_NONE)
     return false;
+
+  overscroll_ignored_ = false;
 
   // Tell the delegate about the overscroll update so that it can update
   // the display accordingly (e.g. show history preview etc.).

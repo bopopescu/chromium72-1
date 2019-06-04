@@ -26,6 +26,7 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_MODULES_QUOTA_DOM_ERROR_H_
 #define THIRD_PARTY_BLINK_RENDERER_MODULES_QUOTA_DOM_ERROR_H_
 
+#include "third_party/blink/public/mojom/quota/quota_types.mojom-blink.h"
 #include "third_party/blink/renderer/core/dom/dom_exception.h"
 #include "third_party/blink/renderer/modules/modules_export.h"
 #include "third_party/blink/renderer/platform/bindings/script_wrappable.h"
@@ -38,28 +39,25 @@ class MODULES_EXPORT DOMError : public ScriptWrappable {
   DEFINE_WRAPPERTYPEINFO();
 
  public:
-  static DOMError* Create(const String& name) { return new DOMError(name); }
+  static DOMError* Create(const String& name) {
+    return MakeGarbageCollected<DOMError>(name);
+  }
   static DOMError* Create(const String& name, const String& message) {
-    return new DOMError(name, message);
+    return MakeGarbageCollected<DOMError>(name, message);
   }
-
-  static DOMError* Create(ExceptionCode ec) {
-    return new DOMError(DOMException::GetErrorName(ec),
-                        DOMException::GetErrorMessage(ec));
+  static DOMError* Create(DOMExceptionCode exception_code) {
+    return MakeGarbageCollected<DOMError>(
+        DOMException::GetErrorName(exception_code),
+        DOMException::GetErrorMessage(exception_code));
   }
+  static DOMError* Create(mojom::QuotaStatusCode status_code);
 
-  static DOMError* Create(ExceptionCode ec, const String& message) {
-    return new DOMError(DOMException::GetErrorName(ec), message);
-  }
-
+  explicit DOMError(const String& name);
+  DOMError(const String& name, const String& message);
   ~DOMError() override;
 
   const String& name() const { return name_; }
   const String& message() const { return message_; }
-
- protected:
-  explicit DOMError(const String& name);
-  DOMError(const String& name, const String& message);
 
  private:
   const String name_;

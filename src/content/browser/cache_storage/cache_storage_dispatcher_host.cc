@@ -13,6 +13,7 @@
 #include "base/optional.h"
 #include "base/strings/string16.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/task/post_task.h"
 #include "base/threading/thread_task_runner_handle.h"
 #include "base/time/time.h"
 #include "base/trace_event/trace_event.h"
@@ -20,26 +21,31 @@
 #include "content/browser/cache_storage/cache_storage_cache_handle.h"
 #include "content/browser/cache_storage/cache_storage_context_impl.h"
 #include "content/browser/cache_storage/cache_storage_manager.h"
+#include "content/common/service_worker/service_worker_type_converter.h"
+#include "content/common/service_worker/service_worker_utils.h"
+#include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/content_browser_client.h"
 #include "content/public/common/origin_util.h"
+#include "content/public/common/referrer_type_converters.h"
 #include "mojo/public/cpp/bindings/message.h"
 #include "third_party/blink/public/platform/modules/cache_storage/cache_storage.mojom.h"
+#include "third_party/blink/public/platform/modules/fetch/fetch_api_request.mojom.h"
 #include "url/gurl.h"
 #include "url/origin.h"
-
 
 namespace content {
 
 namespace {
 
 using blink::mojom::CacheStorageError;
+using blink::mojom::CacheStorageVerboseError;
 
 const int32_t kCachePreservationSeconds = 5;
 
 // TODO(lucmult): Check this before binding.
 bool OriginCanAccessCacheStorage(const url::Origin& origin) {
-  return !origin.unique() && IsOriginSecure(origin.GetURL());
+  return !origin.opaque() && IsOriginSecure(origin.GetURL());
 }
 
 void StopPreservingCache(CacheStorageCacheHandle cache_handle) {}
@@ -61,7 +67,7 @@ class CacheStorageDispatcherHost::CacheImpl
   ~CacheImpl() override = default;
 
   // blink::mojom::CacheStorageCache implementation:
-  void Match(const ServiceWorkerFetchRequest& request,
+  void Match(blink::mojom::FetchAPIRequestPtr request,
              blink::mojom::QueryParamsPtr match_params,
              MatchCallback callback) override {
     content::CacheStorageCache* cache = cache_handle_.value();
@@ -72,8 +78,9 @@ class CacheStorageDispatcherHost::CacheImpl
     }
 
     auto scoped_request = std::make_unique<ServiceWorkerFetchRequest>(
-        request.url, request.method, request.headers, request.referrer,
-        request.is_reload);
+        request->url, request->method,
+        ServiceWorkerUtils::ToServiceWorkerHeaderMap(request->headers),
+        request->referrer.To<Referrer>(), request->is_reload);
 
     cache->Match(
         std::move(scoped_request), std::move(match_params),
@@ -84,16 +91,17 @@ class CacheStorageDispatcherHost::CacheImpl
   void OnCacheMatchCallback(
       blink::mojom::CacheStorageCache::MatchCallback callback,
       blink::mojom::CacheStorageError error,
-      std::unique_ptr<ServiceWorkerResponse> response) {
+      blink::mojom::FetchAPIResponsePtr response) {
     if (error != CacheStorageError::kSuccess) {
       std::move(callback).Run(blink::mojom::MatchResult::NewStatus(error));
       return;
     }
 
-    std::move(callback).Run(blink::mojom::MatchResult::NewResponse(*response));
+    std::move(callback).Run(
+        blink::mojom::MatchResult::NewResponse(std::move(response)));
   }
 
-  void MatchAll(const base::Optional<ServiceWorkerFetchRequest>& request,
+  void MatchAll(blink::mojom::FetchAPIRequestPtr request,
                 blink::mojom::QueryParamsPtr match_params,
                 MatchAllCallback callback) override {
     content::CacheStorageCache* cache = cache_handle_.value();
@@ -107,8 +115,9 @@ class CacheStorageDispatcherHost::CacheImpl
 
     if (request && !request->url.is_empty()) {
       request_ptr = std::make_unique<ServiceWorkerFetchRequest>(
-          request->url, request->method, request->headers, request->referrer,
-          request->is_reload);
+          request->url, request->method,
+          ServiceWorkerUtils::ToServiceWorkerHeaderMap(request->headers),
+          request->referrer.To<Referrer>(), request->is_reload);
     }
 
     cache->MatchAll(
@@ -120,7 +129,7 @@ class CacheStorageDispatcherHost::CacheImpl
   void OnCacheMatchAllCallback(
       blink::mojom::CacheStorageCache::MatchAllCallback callback,
       blink::mojom::CacheStorageError error,
-      std::vector<ServiceWorkerResponse> responses) {
+      std::vector<blink::mojom::FetchAPIResponsePtr> responses) {
     if (error != CacheStorageError::kSuccess &&
         error != CacheStorageError::kErrorNotFound) {
       std::move(callback).Run(blink::mojom::MatchAllResult::NewStatus(error));
@@ -131,7 +140,7 @@ class CacheStorageDispatcherHost::CacheImpl
         blink::mojom::MatchAllResult::NewResponses(std::move(responses)));
   }
 
-  void Keys(const base::Optional<ServiceWorkerFetchRequest>& request,
+  void Keys(blink::mojom::FetchAPIRequestPtr request,
             blink::mojom::QueryParamsPtr match_params,
             KeysCallback callback) override {
     content::CacheStorageCache* cache = cache_handle_.value();
@@ -142,12 +151,13 @@ class CacheStorageDispatcherHost::CacheImpl
     }
 
     std::unique_ptr<ServiceWorkerFetchRequest> request_ptr;
-
     if (request) {
       request_ptr = std::make_unique<ServiceWorkerFetchRequest>(
-          request->url, request->method, request->headers, request->referrer,
-          request->is_reload);
+          request->url, request->method,
+          ServiceWorkerUtils::ToServiceWorkerHeaderMap(request->headers),
+          request->referrer.To<Referrer>(), request->is_reload);
     }
+
     cache->Keys(
         std::move(request_ptr), std::move(match_params),
         base::BindOnce(&CacheImpl::OnCacheKeysCallback,
@@ -162,19 +172,27 @@ class CacheStorageDispatcherHost::CacheImpl
       std::move(callback).Run(blink::mojom::CacheKeysResult::NewStatus(error));
       return;
     }
+    std::vector<blink::mojom::FetchAPIRequestPtr> requests_;
+    for (auto request : *requests) {
+      requests_.push_back(
+          mojo::ConvertTo<blink::mojom::FetchAPIRequestPtr>(request));
+    }
 
-    std::move(callback).Run(blink::mojom::CacheKeysResult::NewKeys(*requests));
+    std::move(callback).Run(
+        blink::mojom::CacheKeysResult::NewKeys(std::move(requests_)));
   }
 
   void Batch(std::vector<blink::mojom::BatchOperationPtr> batch_operations,
+             bool fail_on_duplicates,
              BatchCallback callback) override {
     content::CacheStorageCache* cache = cache_handle_.value();
     if (!cache) {
-      std::move(callback).Run(CacheStorageError::kErrorNotFound);
+      std::move(callback).Run(CacheStorageVerboseError::New(
+          CacheStorageError::kErrorNotFound, base::nullopt));
       return;
     }
     cache->BatchOperation(
-        std::move(batch_operations),
+        std::move(batch_operations), fail_on_duplicates,
         base::BindOnce(&CacheImpl::OnCacheBatchCallback,
                        weak_factory_.GetWeakPtr(), std::move(callback)),
         base::BindOnce(&CacheImpl::OnBadMessage, weak_factory_.GetWeakPtr(),
@@ -183,8 +201,8 @@ class CacheStorageDispatcherHost::CacheImpl
 
   void OnCacheBatchCallback(
       blink::mojom::CacheStorageCache::BatchCallback callback,
-      blink::mojom::CacheStorageError error) {
-    std::move(callback).Run(error);
+      blink::mojom::CacheStorageVerboseErrorPtr error) {
+    std::move(callback).Run(std::move(error));
   }
 
   void OnBadMessage(mojo::ReportBadMessageCallback bad_message_callback) {
@@ -207,8 +225,8 @@ CacheStorageDispatcherHost::~CacheStorageDispatcherHost() = default;
 
 void CacheStorageDispatcherHost::Init(CacheStorageContextImpl* context) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
-  BrowserThread::PostTask(
-      BrowserThread::IO, FROM_HERE,
+  base::PostTaskWithTraits(
+      FROM_HERE, {BrowserThread::IO},
       base::BindOnce(&CacheStorageDispatcherHost::CreateCacheListener,
                      base::RetainedRef(this), base::RetainedRef(context)));
 }
@@ -291,7 +309,7 @@ void CacheStorageDispatcherHost::Keys(
 }
 
 void CacheStorageDispatcherHost::Match(
-    const content::ServiceWorkerFetchRequest& request,
+    blink::mojom::FetchAPIRequestPtr request,
     blink::mojom::QueryParamsPtr match_params,
     blink::mojom::CacheStorage::MatchCallback callback) {
   TRACE_EVENT0("CacheStorage",
@@ -304,8 +322,9 @@ void CacheStorageDispatcherHost::Match(
   if (!ValidState())
     return;
   auto scoped_request = std::make_unique<ServiceWorkerFetchRequest>(
-      request.url, request.method, request.headers, request.referrer,
-      request.is_reload);
+      request->url, request->method,
+      ServiceWorkerUtils::ToServiceWorkerHeaderMap(request->headers),
+      request->referrer.To<Referrer>(), request->is_reload);
 
   if (!match_params->cache_name) {
     context_->cache_manager()->MatchAllCaches(
@@ -371,14 +390,14 @@ void CacheStorageDispatcherHost::OnKeysCallback(
 void CacheStorageDispatcherHost::OnMatchCallback(
     blink::mojom::CacheStorage::MatchCallback callback,
     CacheStorageError error,
-    std::unique_ptr<ServiceWorkerResponse> response) {
+    blink::mojom::FetchAPIResponsePtr response) {
   if (error != CacheStorageError::kSuccess) {
     std::move(callback).Run(blink::mojom::MatchResult::NewStatus(error));
     return;
   }
 
   std::move(callback).Run(
-      blink::mojom::MatchResult::NewResponse(std::move(*response)));
+      blink::mojom::MatchResult::NewResponse(std::move(response)));
 }
 
 void CacheStorageDispatcherHost::AddBinding(

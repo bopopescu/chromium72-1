@@ -9,7 +9,7 @@ namespace blink {
 XRInputSourceEvent::XRInputSourceEvent() {}
 
 XRInputSourceEvent::XRInputSourceEvent(const AtomicString& type,
-                                       XRPresentationFrame* frame,
+                                       XRFrame* frame,
                                        XRInputSource* input_source)
     : Event(type, Bubbles::kYes, Cancelable::kNo),
       frame_(frame),
@@ -17,18 +17,18 @@ XRInputSourceEvent::XRInputSourceEvent(const AtomicString& type,
 
 XRInputSourceEvent::XRInputSourceEvent(
     const AtomicString& type,
-    const XRInputSourceEventInit& initializer)
+    const XRInputSourceEventInit* initializer)
     : Event(type, initializer) {
-  if (initializer.hasFrame())
-    frame_ = initializer.frame();
-  if (initializer.hasInputSource())
-    input_source_ = initializer.inputSource();
+  if (initializer->hasFrame())
+    frame_ = initializer->frame();
+  if (initializer->hasInputSource())
+    input_source_ = initializer->inputSource();
 }
 
 XRInputSourceEvent::~XRInputSourceEvent() {}
 
 const AtomicString& XRInputSourceEvent::InterfaceName() const {
-  return EventNames::XRInputSourceEvent;
+  return event_interface_names::kXRInputSourceEvent;
 }
 
 void XRInputSourceEvent::Trace(blink::Visitor* visitor) {

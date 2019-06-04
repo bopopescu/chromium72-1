@@ -40,13 +40,12 @@ class CC_PAINT_EXPORT PaintOpWriter {
   // Write a sequence of arbitrary bytes.
   void WriteData(size_t bytes, const void* input);
 
-  void WriteArray(size_t count, const SkPoint* input);
-
   size_t size() const { return valid_ ? size_ - remaining_bytes_ : 0u; }
 
-  void WriteSize(size_t size);
+  uint64_t* WriteSize(size_t size);
 
   void Write(SkScalar data);
+  void Write(SkMatrix data);
   void Write(uint8_t data);
   void Write(uint32_t data);
   void Write(uint64_t data);
@@ -61,7 +60,7 @@ class CC_PAINT_EXPORT PaintOpWriter {
   void Write(const SkColorSpace* data);
   void Write(const PaintShader* shader, SkFilterQuality quality);
   void Write(const PaintFilter* filter);
-  void Write(const scoped_refptr<PaintTextBlob>& blob);
+  void Write(const sk_sp<SkTextBlob>& blob);
   void Write(SkColorType color_type);
 
   void Write(SkClipOp op) { Write(static_cast<uint8_t>(op)); }
@@ -138,14 +137,15 @@ class CC_PAINT_EXPORT PaintOpWriter {
              const gfx::SizeF& post_scale,
              const SkMatrix& post_matrix_for_analysis);
   void Write(const SkRegion& region);
-  void WriteImage(uint32_t transfer_cache_entry_id);
+  void WriteImage(uint32_t transfer_cache_entry_id, bool needs_mips);
 
   void EnsureBytes(size_t required_bytes);
   sk_sp<PaintShader> TransformShaderIfNecessary(
       const PaintShader* original,
       SkFilterQuality quality,
       uint32_t* paint_image_transfer_cache_entry_id,
-      gfx::SizeF* paint_record_post_scale);
+      gfx::SizeF* paint_record_post_scale,
+      bool* paint_image_needs_mips);
 
   char* memory_ = nullptr;
   size_t size_ = 0u;

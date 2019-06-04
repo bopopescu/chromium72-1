@@ -15,31 +15,29 @@ namespace blink {
 
 Animator::Animator(v8::Isolate* isolate,
                    AnimatorDefinition* definition,
-                   v8::Local<v8::Object> instance)
+                   v8::Local<v8::Value> instance,
+                   int num_effects)
     : definition_(definition),
       instance_(isolate, instance),
-      effect_(new EffectProxy()) {}
+      group_effect_(new WorkletGroupEffectProxy(num_effects)) {
+  DCHECK_GE(num_effects, 1);
+}
 
 Animator::~Animator() = default;
 
 void Animator::Trace(blink::Visitor* visitor) {
   visitor->Trace(definition_);
-  visitor->Trace(effect_);
+  visitor->Trace(group_effect_);
+  visitor->Trace(instance_);
 }
 
-void Animator::TraceWrappers(ScriptWrappableVisitor* visitor) const {
-  visitor->TraceWrappers(definition_);
-  visitor->TraceWrappers(instance_.Cast<v8::Value>());
-}
-
-bool Animator::Animate(ScriptState* script_state,
-                       const CompositorMutatorInputState::AnimationState& input,
-                       CompositorMutatorOutputState::AnimationState* output) {
-  did_animate_ = true;
-
+bool Animator::Animate(
+    ScriptState* script_state,
+    double current_time,
+    AnimationWorkletDispatcherOutput::AnimationState* output) {
   v8::Isolate* isolate = script_state->GetIsolate();
 
-  v8::Local<v8::Object> instance = instance_.NewLocal(isolate);
+  v8::Local<v8::Value> instance = instance_.NewLocal(isolate);
   v8::Local<v8::Function> animate = definition_->AnimateLocal(isolate);
 
   if (IsUndefinedOrNull(instance) || IsUndefinedOrNull(animate))
@@ -51,11 +49,17 @@ bool Animator::Animate(ScriptState* script_state,
 
   // Prepare arguments (i.e., current time and effect) and pass them to animate
   // callback.
-  v8::Local<v8::Value> v8_effect =
-      ToV8(effect_, script_state->GetContext()->Global(), isolate);
+  v8::Local<v8::Value> v8_effect;
+  if (group_effect_->getChildren().size() == 1) {
+    v8_effect = ToV8(group_effect_->getChildren()[0],
+                     script_state->GetContext()->Global(), isolate);
+  } else {
+    v8_effect =
+        ToV8(group_effect_, script_state->GetContext()->Global(), isolate);
+  }
 
   v8::Local<v8::Value> v8_current_time =
-      ToV8(input.current_time, script_state->GetContext()->Global(), isolate);
+      ToV8(current_time, script_state->GetContext()->Global(), isolate);
 
   v8::Local<v8::Value> argv[] = {v8_current_time, v8_effect};
 
@@ -67,8 +71,17 @@ bool Animator::Animate(ScriptState* script_state,
   if (block.HasCaught())
     return false;
 
-  output->local_time = effect_->GetLocalTime();
+  output->local_times = GetLocalTimes();
   return true;
+}
+
+std::vector<base::Optional<TimeDelta>> Animator::GetLocalTimes() const {
+  std::vector<base::Optional<TimeDelta>> local_times;
+  local_times.reserve(group_effect_->getChildren().size());
+  for (const auto& effect : group_effect_->getChildren()) {
+    local_times.push_back(effect->local_time());
+  }
+  return local_times;
 }
 
 }  // namespace blink

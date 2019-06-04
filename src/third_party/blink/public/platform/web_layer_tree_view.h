@@ -27,15 +27,16 @@
 #define THIRD_PARTY_BLINK_PUBLIC_PLATFORM_WEB_LAYER_TREE_VIEW_H_
 
 #include "base/callback.h"
+#include "cc/input/browser_controls_state.h"
+#include "cc/input/event_listener_properties.h"
+#include "cc/input/layer_selection_bound.h"
 #include "cc/input/overscroll_behavior.h"
 #include "cc/layers/layer.h"
+#include "cc/trees/element_id.h"
+#include "cc/trees/layer_tree_host.h"
 #include "cc/trees/layer_tree_mutator.h"
 #include "components/viz/common/surfaces/frame_sink_id.h"
-#include "third_party/blink/public/platform/web_browser_controls_state.h"
 #include "third_party/blink/public/platform/web_common.h"
-#include "third_party/blink/public/platform/web_event_listener_properties.h"
-#include "third_party/blink/public/platform/web_float_point.h"
-#include "third_party/blink/public/platform/web_size.h"
 #include "third_party/skia/include/core/SkColor.h"
 #include "third_party/skia/include/core/SkImage.h"
 #include "third_party/skia/include/core/SkRefCnt.h"
@@ -47,10 +48,12 @@ class AnimationHost;
 class PaintImage;
 }
 
-namespace blink {
+namespace gfx {
+class Size;
+class Vector2d;
+}  // namespace gfx
 
-struct WebPoint;
-class WebSelection;
+namespace blink {
 
 class WebLayerTreeView {
  public:
@@ -84,15 +87,10 @@ class WebLayerTreeView {
   // View properties ---------------------------------------------------
 
   // Viewport size is given in physical pixels.
-  virtual WebSize GetViewportSize() const { return WebSize(); }
+  virtual gfx::Size GetViewportSize() const = 0;
 
   // Sets the background color for the viewport.
   virtual void SetBackgroundColor(SkColor) {}
-
-  // Sets whether this view is visible. In threaded mode, a view that is not
-  // visible will not composite or trigger UpdateAnimations() or Layout() calls
-  // until it becomes visible.
-  virtual void SetVisible(bool) {}
 
   // Sets the current page scale factor and minimum / maximum limits. Both
   // limits are initially 1 (no page scale allowed).
@@ -105,7 +103,7 @@ class WebLayerTreeView {
   // If useAnchor is true, destination is a point on the screen that will remain
   // fixed for the duration of the animation.
   // If useAnchor is false, destination is the final top-left scroll position.
-  virtual void StartPageScaleAnimation(const WebPoint& destination,
+  virtual void StartPageScaleAnimation(const gfx::Vector2d& destination,
                                        bool use_anchor,
                                        float new_page_scale,
                                        double duration_sec) {}
@@ -120,8 +118,8 @@ class WebLayerTreeView {
   virtual void SetBrowserControlsShownRatio(float) {}
 
   // Update browser controls permitted and current states
-  virtual void UpdateBrowserControlsState(WebBrowserControlsState constraints,
-                                          WebBrowserControlsState current,
+  virtual void UpdateBrowserControlsState(cc::BrowserControlsState constraints,
+                                          cc::BrowserControlsState current,
                                           bool animate) {}
 
   // Set browser controls height. If |shrink_viewport| is set to true, then
@@ -143,28 +141,26 @@ class WebLayerTreeView {
   // dirty.
   virtual void SetNeedsBeginFrame() {}
 
-  // Relays the end of a fling animation.
-  virtual void DidStopFlinging() {}
-
   // Run layout and paint of all pending document changes asynchronously.
   virtual void LayoutAndPaintAsync(base::OnceClosure callback) {}
 
   virtual void CompositeAndReadbackAsync(
       base::OnceCallback<void(const SkBitmap&)> callback) {}
 
-  // Synchronously run all lifecycle phases and compositor update with no
-  // raster. Should only be called by layout tests running in synchronous
-  // single-threaded mode.
-  virtual void SynchronouslyCompositeNoRasterForTesting() {}
+  // Synchronously performs the complete set of document lifecycle phases,
+  // including updates to the compositor state, optionally including
+  // rasterization.
+  virtual void UpdateAllLifecyclePhasesAndCompositeForTesting(bool do_raster) {}
 
-  // Synchronously rasterizes and composites a frame.
-  virtual void CompositeWithRasterForTesting() {}
-
-  // Prevents updates to layer tree from becoming visible.
-  virtual void SetDeferCommits(bool defer_commits) {}
+  // Prevents any updates to the input for the layer tree, and the layer tree
+  // itself, and the layer tree from becoming visible.
+  virtual std::unique_ptr<cc::ScopedDeferMainFrameUpdate>
+  DeferMainFrameUpdate() {
+    return nullptr;
+  }
 
   struct ViewportLayers {
-    scoped_refptr<cc::Layer> overscroll_elasticity;
+    cc::ElementId overscroll_elasticity_element_id;
     scoped_refptr<cc::Layer> page_scale;
     scoped_refptr<cc::Layer> inner_viewport_container;
     scoped_refptr<cc::Layer> outer_viewport_container;
@@ -177,7 +173,7 @@ class WebLayerTreeView {
   virtual void ClearViewportLayers() {}
 
   // Used to update the active selection bounds.
-  virtual void RegisterSelection(const WebSelection&) {}
+  virtual void RegisterSelection(const cc::LayerSelection&) {}
   virtual void ClearSelection() {}
 
   // Mutations are plumbed back to the layer tree via the mutator client.
@@ -188,8 +184,8 @@ class WebLayerTreeView {
   virtual void ForceRecalculateRasterScales() {}
 
   // Input properties ---------------------------------------------------
-  virtual void SetEventListenerProperties(WebEventListenerClass,
-                                          WebEventListenerProperties) {}
+  virtual void SetEventListenerProperties(cc::EventListenerClass,
+                                          cc::EventListenerProperties) {}
   virtual void UpdateEventRectsForSubframeIfNecessary() {}
   virtual void SetHaveScrollEventHandlers(bool) {}
 
@@ -198,9 +194,9 @@ class WebLayerTreeView {
 
   // Debugging / dangerous ---------------------------------------------
 
-  virtual WebEventListenerProperties EventListenerProperties(
-      WebEventListenerClass) const {
-    return WebEventListenerProperties::kNothing;
+  virtual cc::EventListenerProperties EventListenerProperties(
+      cc::EventListenerClass) const {
+    return cc::EventListenerProperties::kNone;
   }
   virtual bool HaveScrollEventHandlers() const { return false; }
 
@@ -218,6 +214,9 @@ class WebLayerTreeView {
   // Toggles scroll bottleneck rects on the HUD layer
   virtual void SetShowScrollBottleneckRects(bool) {}
 
+  // Toggles the hit-test borders on layers
+  virtual void SetShowHitTestBorders(bool) {}
+
   // ReportTimeCallback is a callback that should be fired when the
   // corresponding Swap completes (either with DidSwap or DidNotSwap).
   virtual void NotifySwapTime(ReportTimeCallback callback) {}
@@ -226,6 +225,11 @@ class WebLayerTreeView {
 
   virtual void RequestDecode(const cc::PaintImage& image,
                              base::OnceCallback<void(bool)> callback) {}
+
+  // Runs |callback| after a new frame has been submitted to the display
+  // compositor, and the display-compositor has displayed it on screen. Forces a
+  // redraw so that a new frame is submitted.
+  virtual void RequestPresentationCallback(base::OnceClosure callback) {}
 };
 
 }  // namespace blink

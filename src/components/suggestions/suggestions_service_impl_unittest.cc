@@ -20,8 +20,8 @@
 #include "components/suggestions/image_manager.h"
 #include "components/suggestions/proto/suggestions.pb.h"
 #include "components/suggestions/suggestions_store.h"
-#include "components/sync/driver/fake_sync_service.h"
 #include "components/sync/driver/sync_service.h"
+#include "components/sync/driver/test_sync_service.h"
 #include "net/base/url_util.h"
 #include "net/http/http_response_headers.h"
 #include "net/http/http_status_code.h"
@@ -30,6 +30,9 @@
 #include "net/url_request/url_request_test_util.h"
 #include "services/identity/public/cpp/identity_manager.h"
 #include "services/identity/public/cpp/identity_test_environment.h"
+#include "services/network/public/cpp/weak_wrapper_shared_url_loader_factory.h"
+#include "services/network/test/test_url_loader_factory.h"
+#include "services/network/test/test_utils.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/gfx/image/image.h"
@@ -81,20 +84,6 @@ SuggestionsProfile CreateSuggestionsProfile() {
   return profile;
 }
 
-class MockSyncService : public syncer::FakeSyncService {
- public:
-  MockSyncService() {}
-  ~MockSyncService() override {}
-  MOCK_CONST_METHOD0(CanSyncStart, bool());
-  MOCK_CONST_METHOD0(IsSyncActive, bool());
-  MOCK_CONST_METHOD0(ConfigurationDone, bool());
-  MOCK_CONST_METHOD0(IsLocalSyncEnabled, bool());
-  MOCK_CONST_METHOD0(IsUsingSecondaryPassphrase, bool());
-  MOCK_CONST_METHOD0(GetPreferredDataTypes, syncer::ModelTypeSet());
-  MOCK_CONST_METHOD0(GetActiveDataTypes, syncer::ModelTypeSet());
-  MOCK_CONST_METHOD0(GetLastCycleSnapshot, syncer::SyncCycleSnapshot());
-};
-
 class TestSuggestionsStore : public suggestions::SuggestionsStore {
  public:
   TestSuggestionsStore() { cached_suggestions = CreateSuggestionsProfile(); }
@@ -140,12 +129,7 @@ class SuggestionsServiceTest : public testing::Test {
  protected:
   SuggestionsServiceTest()
       : task_runner_(new base::TestMockTimeTaskRunner(
-            base::TestMockTimeTaskRunner::Type::kBoundToThread)),
-        request_context_(
-            new net::TestURLRequestContextGetter(task_runner_.get())),
-        mock_thumbnail_manager_(nullptr),
-        mock_blacklist_store_(nullptr),
-        test_suggestions_store_(nullptr) {
+            base::TestMockTimeTaskRunner::Type::kBoundToThread)) {
     identity_test_env_.MakePrimaryAccountAvailable(kEmail);
     identity_test_env_.SetAutomaticIssueOfAccessTokens(true);
   }
@@ -153,81 +137,65 @@ class SuggestionsServiceTest : public testing::Test {
   ~SuggestionsServiceTest() override {}
 
   void SetUp() override {
-    EXPECT_CALL(*sync_service(), CanSyncStart())
-        .Times(AnyNumber())
-        .WillRepeatedly(Return(true));
-    EXPECT_CALL(*sync_service(), IsSyncActive())
-        .Times(AnyNumber())
-        .WillRepeatedly(Return(true));
-    EXPECT_CALL(*sync_service(), ConfigurationDone())
-        .Times(AnyNumber())
-        .WillRepeatedly(Return(true));
-    EXPECT_CALL(*sync_service(), IsLocalSyncEnabled())
-        .Times(AnyNumber())
-        .WillRepeatedly(Return(false));
-    EXPECT_CALL(*sync_service(), IsUsingSecondaryPassphrase())
-        .Times(AnyNumber())
-        .WillRepeatedly(Return(false));
-    EXPECT_CALL(*sync_service(), GetPreferredDataTypes())
-        .Times(AnyNumber())
-        .WillRepeatedly(
-            Return(syncer::ModelTypeSet(syncer::HISTORY_DELETE_DIRECTIVES)));
-    EXPECT_CALL(*sync_service(), GetActiveDataTypes())
-        .Times(AnyNumber())
-        .WillRepeatedly(
-            Return(syncer::ModelTypeSet(syncer::HISTORY_DELETE_DIRECTIVES)));
-    EXPECT_CALL(*sync_service(), GetLastCycleSnapshot())
-        .Times(AnyNumber())
-        .WillRepeatedly(Return(syncer::SyncCycleSnapshot(
-            syncer::ModelNeutralState(), syncer::ProgressMarkerMap(), false, 5,
-            2, 7, false, 0, base::Time::Now(), base::Time::Now(),
-            std::vector<int>(syncer::MODEL_TYPE_COUNT, 0),
-            std::vector<int>(syncer::MODEL_TYPE_COUNT, 0),
-            sync_pb::SyncEnums::UNKNOWN_ORIGIN,
-            /*short_poll_interval=*/base::TimeDelta::FromMinutes(30),
-            /*long_poll_interval=*/base::TimeDelta::FromMinutes(180),
-            /*has_remaining_local_changes=*/false)));
+    sync_service()->SetPreferredDataTypes({syncer::HISTORY_DELETE_DIRECTIVES});
+    sync_service()->SetActiveDataTypes({syncer::HISTORY_DELETE_DIRECTIVES});
+
     // These objects are owned by the SuggestionsService, but we keep the
     // pointers around for testing.
     test_suggestions_store_ = new TestSuggestionsStore();
     mock_thumbnail_manager_ = new StrictMock<MockImageManager>();
     mock_blacklist_store_ = new StrictMock<MockBlacklistStore>();
     suggestions_service_ = std::make_unique<SuggestionsServiceImpl>(
-        identity_test_env_.identity_manager(), &mock_sync_service_,
-        request_context_.get(), base::WrapUnique(test_suggestions_store_),
+        identity_test_env_.identity_manager(), sync_service(),
+        base::MakeRefCounted<network::WeakWrapperSharedURLLoaderFactory>(
+            url_loader_factory()),
+        base::WrapUnique(test_suggestions_store_),
         base::WrapUnique(mock_thumbnail_manager_),
         base::WrapUnique(mock_blacklist_store_),
         task_runner_->GetMockTickClock());
   }
 
   GURL GetCurrentlyQueriedUrl() {
-    net::TestURLFetcher* fetcher = factory_.GetFetcherByID(0);
-    if (!fetcher) {
+    if (url_loader_factory()->NumPending() == 0)
       return GURL();
-    }
-    return fetcher->GetOriginalURL();
+
+    return url_loader_factory()->pending_requests()->front().request.url;
   }
 
-  void RespondToFetch(const std::string& response_body,
+  bool RespondToSuggestionsFetch(const std::string& response_body,
+                                 net::HttpStatusCode response_code,
+                                 int net_error = net::OK) {
+    return RespondToFetch(SuggestionsServiceImpl::BuildSuggestionsURL(),
+                          response_body, response_code, net_error);
+  }
+
+  bool RespondToBlacklistFetch(const std::string& response_body,
+                               net::HttpStatusCode response_code,
+                               int net_error = net::OK) {
+    return RespondToFetch(SuggestionsServiceImpl::BuildSuggestionsBlacklistURL(
+                              GURL(kBlacklistedUrl)),
+                          response_body, response_code, net_error);
+  }
+
+  bool RespondToFetchWithProfile(const SuggestionsProfile& suggestions) {
+    return RespondToFetch(SuggestionsServiceImpl::BuildSuggestionsURL(),
+                          suggestions.SerializeAsString(), net::HTTP_OK);
+  }
+
+  bool RespondToFetch(const GURL& url,
+                      const std::string& response_body,
                       net::HttpStatusCode response_code,
-                      net::URLRequestStatus status) {
-    net::TestURLFetcher* fetcher = factory_.GetFetcherByID(0);
-    ASSERT_TRUE(fetcher) << "Tried to respond to fetch that is not ongoing!";
-    fetcher->SetResponseString(response_body);
-    fetcher->set_response_code(response_code);
-    fetcher->set_status(status);
-    fetcher->delegate()->OnURLFetchComplete(fetcher);
-  }
-
-  void RespondToFetchWithProfile(const SuggestionsProfile& suggestions) {
-    RespondToFetch(
-        suggestions.SerializeAsString(), net::HTTP_OK,
-        net::URLRequestStatus(net::URLRequestStatus::SUCCESS, net::OK));
+                      int net_error = net::OK) {
+    bool rv = url_loader_factory()->SimulateResponseForPendingRequest(
+        url, network::URLLoaderCompletionStatus(net_error),
+        network::CreateResourceResponseHead(response_code), response_body);
+    task_runner()->RunUntilIdle();
+    return rv;
   }
 
   base::TestMockTimeTaskRunner* task_runner() { return task_runner_.get(); }
 
-  MockSyncService* sync_service() { return &mock_sync_service_; }
+  syncer::TestSyncService* sync_service() { return &test_sync_service_; }
 
   MockImageManager* thumbnail_manager() { return mock_thumbnail_manager_; }
 
@@ -243,16 +211,20 @@ class SuggestionsServiceTest : public testing::Test {
     return &identity_test_env_;
   }
 
+  network::TestURLLoaderFactory* url_loader_factory() {
+    return &url_loader_factory_;
+  }
+
  private:
   scoped_refptr<base::TestMockTimeTaskRunner> task_runner_;
-  net::TestURLFetcherFactory factory_;
   identity::IdentityTestEnvironment identity_test_env_;
-  MockSyncService mock_sync_service_;
-  scoped_refptr<net::TestURLRequestContextGetter> request_context_;
+  syncer::TestSyncService test_sync_service_;
+  network::TestURLLoaderFactory url_loader_factory_;
+
   // Owned by the SuggestionsService.
-  MockImageManager* mock_thumbnail_manager_;
-  MockBlacklistStore* mock_blacklist_store_;
-  TestSuggestionsStore* test_suggestions_store_;
+  MockImageManager* mock_thumbnail_manager_ = nullptr;
+  MockBlacklistStore* mock_blacklist_store_ = nullptr;
+  TestSuggestionsStore* test_suggestions_store_ = nullptr;
 
   std::unique_ptr<SuggestionsServiceImpl> suggestions_service_;
 
@@ -277,7 +249,7 @@ TEST_F(SuggestionsServiceTest, FetchSuggestionsData) {
   task_runner()->RunUntilIdle();
   ASSERT_TRUE(GetCurrentlyQueriedUrl().is_valid());
   EXPECT_EQ(GetCurrentlyQueriedUrl().path(), kSuggestionsUrlPath);
-  RespondToFetchWithProfile(CreateSuggestionsProfile());
+  ASSERT_TRUE(RespondToFetchWithProfile(CreateSuggestionsProfile()));
 
   SuggestionsProfile suggestions;
   suggestions_store()->LoadSuggestions(&suggestions);
@@ -307,7 +279,7 @@ TEST_F(SuggestionsServiceTest, PersistentAuthErrorState) {
 
   GoogleServiceAuthError error =
       GoogleServiceAuthError(GoogleServiceAuthError::SERVICE_ERROR);
-  sync_service()->set_auth_error(std::move(error));
+  sync_service()->SetAuthError(std::move(error));
   // An no-op change should not result in a suggestions refresh.
   static_cast<SyncServiceObserver*>(suggestions_service())
       ->OnStateChanged(sync_service());
@@ -327,10 +299,8 @@ TEST_F(SuggestionsServiceTest, IgnoresUninterestingSyncChange) {
 
   // An uninteresting change should not result in a network request (the
   // SyncState is INITIALIZED_ENABLED_HISTORY before and after).
-  EXPECT_CALL(*sync_service(), GetActiveDataTypes())
-      .Times(AnyNumber())
-      .WillRepeatedly(Return(syncer::ModelTypeSet(
-          syncer::HISTORY_DELETE_DIRECTIVES, syncer::BOOKMARKS)));
+  sync_service()->SetActiveDataTypes(
+      {syncer::HISTORY_DELETE_DIRECTIVES, syncer::BOOKMARKS});
   static_cast<SyncServiceObserver*>(suggestions_service())
       ->OnStateChanged(sync_service());
 
@@ -344,7 +314,8 @@ TEST_F(SuggestionsServiceTest, IgnoresUninterestingSyncChange) {
 // This should *not* result in an automatic fetch.
 TEST_F(SuggestionsServiceTest, DoesNotFetchOnStartup) {
   // The sync service starts out inactive.
-  EXPECT_CALL(*sync_service(), IsSyncActive()).WillRepeatedly(Return(false));
+  sync_service()->SetTransportState(
+      syncer::SyncService::TransportState::INITIALIZING);
   static_cast<SyncServiceObserver*>(suggestions_service())
       ->OnStateChanged(sync_service());
 
@@ -352,7 +323,8 @@ TEST_F(SuggestionsServiceTest, DoesNotFetchOnStartup) {
   ASSERT_FALSE(suggestions_service()->HasPendingRequestForTesting());
 
   // Sync getting enabled should not result in a fetch.
-  EXPECT_CALL(*sync_service(), IsSyncActive()).WillRepeatedly(Return(true));
+  sync_service()->SetTransportState(
+      syncer::SyncService::TransportState::ACTIVE);
   static_cast<SyncServiceObserver*>(suggestions_service())
       ->OnStateChanged(sync_service());
 
@@ -381,11 +353,12 @@ TEST_F(SuggestionsServiceTest, BuildUrlWithDefaultMinZeroParamForFewFeature) {
   EXPECT_TRUE(net::GetValueForKeyInQuery(GetCurrentlyQueriedUrl(), "num",
                                          &min_suggestions));
   EXPECT_EQ(min_suggestions, "0");
-  RespondToFetchWithProfile(CreateSuggestionsProfile());
+  ASSERT_TRUE(RespondToFetchWithProfile(CreateSuggestionsProfile()));
 }
 
 TEST_F(SuggestionsServiceTest, FetchSuggestionsDataSyncNotInitializedEnabled) {
-  EXPECT_CALL(*sync_service(), IsSyncActive()).WillRepeatedly(Return(false));
+  sync_service()->SetTransportState(
+      syncer::SyncService::TransportState::INITIALIZING);
   static_cast<SyncServiceObserver*>(suggestions_service())
       ->OnStateChanged(sync_service());
 
@@ -408,7 +381,10 @@ TEST_F(SuggestionsServiceTest, FetchSuggestionsDataSyncNotInitializedEnabled) {
 }
 
 TEST_F(SuggestionsServiceTest, FetchSuggestionsDataSyncDisabled) {
-  EXPECT_CALL(*sync_service(), CanSyncStart()).WillRepeatedly(Return(false));
+  sync_service()->SetDisableReasons(
+      syncer::SyncService::DISABLE_REASON_USER_CHOICE);
+  sync_service()->SetTransportState(
+      syncer::SyncService::TransportState::DISABLED);
 
   base::MockCallback<SuggestionsService::ResponseCallback> callback;
   auto subscription = suggestions_service()->AddCallback(callback.Get());
@@ -457,9 +433,8 @@ TEST_F(SuggestionsServiceTest, FetchingSuggestionsIgnoresRequestFailure) {
 
   // Wait for the eventual network request.
   task_runner()->RunUntilIdle();
-  RespondToFetch("irrelevant", net::HTTP_OK,
-                 net::URLRequestStatus(net::URLRequestStatus::FAILED,
-                                       net::ERR_INVALID_RESPONSE));
+  ASSERT_TRUE(RespondToSuggestionsFetch("irrelevant", net::HTTP_OK,
+                                        net::ERR_INVALID_RESPONSE));
 }
 
 TEST_F(SuggestionsServiceTest, FetchingSuggestionsClearsStoreIfResponseNotOK) {
@@ -474,9 +449,7 @@ TEST_F(SuggestionsServiceTest, FetchingSuggestionsClearsStoreIfResponseNotOK) {
 
   // Wait for the eventual network request.
   task_runner()->RunUntilIdle();
-  RespondToFetch(
-      "irrelevant", net::HTTP_BAD_REQUEST,
-      net::URLRequestStatus(net::URLRequestStatus::SUCCESS, net::OK));
+  ASSERT_TRUE(RespondToSuggestionsFetch("irrelevant", net::HTTP_BAD_REQUEST));
 
   SuggestionsProfile empty_suggestions;
   EXPECT_FALSE(suggestions_store()->LoadSuggestions(&empty_suggestions));
@@ -509,7 +482,11 @@ TEST_F(SuggestionsServiceTest, BlacklistURL) {
   task_runner()->FastForwardUntilNoTasksRemain();
 
   EXPECT_EQ(GetCurrentlyQueriedUrl().path(), kBlacklistUrlPath);
-  RespondToFetchWithProfile(CreateSuggestionsProfile());
+  // The blacklist fetch needs to contain a valid profile or the favicon will
+  // not be set.
+  ASSERT_TRUE(RespondToBlacklistFetch(
+      CreateSuggestionsProfile().SerializeAsString(), net::HTTP_OK));
+  task_runner()->RunUntilIdle();
 
   SuggestionsProfile suggestions;
   suggestions_store()->LoadSuggestions(&suggestions);
@@ -556,9 +533,8 @@ TEST_F(SuggestionsServiceTest, RetryBlacklistURLRequestAfterFailure) {
   task_runner()->FastForwardUntilNoTasksRemain();
   ASSERT_TRUE(GetCurrentlyQueriedUrl().is_valid());
   EXPECT_EQ(GetCurrentlyQueriedUrl().path(), kBlacklistUrlPath);
-  RespondToFetch("irrelevant", net::HTTP_OK,
-                 net::URLRequestStatus(net::URLRequestStatus::FAILED,
-                                       net::ERR_INVALID_RESPONSE));
+  ASSERT_TRUE(RespondToBlacklistFetch("irrelevant", net::HTTP_OK,
+                                      net::ERR_INVALID_RESPONSE));
 
   // Assert that the failure was processed as expected.
   Mock::VerifyAndClearExpectations(thumbnail_manager());
@@ -580,7 +556,8 @@ TEST_F(SuggestionsServiceTest, RetryBlacklistURLRequestAfterFailure) {
   ASSERT_TRUE(suggestions_service()->HasPendingRequestForTesting());
   ASSERT_TRUE(GetCurrentlyQueriedUrl().is_valid());
   EXPECT_EQ(GetCurrentlyQueriedUrl().path(), kBlacklistUrlPath);
-  RespondToFetchWithProfile(CreateSuggestionsProfile());
+  ASSERT_TRUE(RespondToBlacklistFetch(
+      CreateSuggestionsProfile().SerializeAsString(), net::HTTP_OK));
 
   SuggestionsProfile suggestions;
   suggestions_store()->LoadSuggestions(&suggestions);
@@ -712,15 +689,13 @@ TEST_F(SuggestionsServiceTest, TemporarilyIncreasesBlacklistDelayOnFailure) {
   // Delay unchanged on success.
   suggestions_service()->FetchSuggestionsData();
   task_runner()->RunUntilIdle();
-  RespondToFetchWithProfile(CreateSuggestionsProfile());
+  ASSERT_TRUE(RespondToFetchWithProfile(CreateSuggestionsProfile()));
   EXPECT_EQ(initial_delay, suggestions_service()->BlacklistDelayForTesting());
 
   // Delay increases on failure.
   suggestions_service()->FetchSuggestionsData();
   task_runner()->RunUntilIdle();
-  RespondToFetch(
-      "irrelevant", net::HTTP_BAD_REQUEST,
-      net::URLRequestStatus(net::URLRequestStatus::SUCCESS, net::OK));
+  ASSERT_TRUE(RespondToSuggestionsFetch("irrelevant", net::HTTP_BAD_REQUEST));
   base::TimeDelta delay_after_fail =
       suggestions_service()->BlacklistDelayForTesting();
   EXPECT_GT(delay_after_fail, initial_delay);
@@ -729,7 +704,7 @@ TEST_F(SuggestionsServiceTest, TemporarilyIncreasesBlacklistDelayOnFailure) {
   // time has passed, the actual current delay stays the same.
   suggestions_service()->FetchSuggestionsData();
   task_runner()->RunUntilIdle();
-  RespondToFetchWithProfile(CreateSuggestionsProfile());
+  ASSERT_TRUE(RespondToFetchWithProfile(CreateSuggestionsProfile()));
   EXPECT_EQ(delay_after_fail,
             suggestions_service()->BlacklistDelayForTesting());
 
@@ -737,7 +712,7 @@ TEST_F(SuggestionsServiceTest, TemporarilyIncreasesBlacklistDelayOnFailure) {
   task_runner()->FastForwardBy(delay_after_fail);
   suggestions_service()->FetchSuggestionsData();
   task_runner()->RunUntilIdle();
-  RespondToFetchWithProfile(CreateSuggestionsProfile());
+  ASSERT_TRUE(RespondToFetchWithProfile(CreateSuggestionsProfile()));
   EXPECT_EQ(initial_delay, suggestions_service()->BlacklistDelayForTesting());
 }
 
@@ -756,7 +731,7 @@ TEST_F(SuggestionsServiceTest, DoesNotOverrideDefaultExpiryTime) {
   suggestion->set_title(kTestTitle);
   suggestion->set_url(kTestUrl);
   suggestion->set_expiry_ts(kTestSetExpiry);
-  RespondToFetchWithProfile(profile);
+  ASSERT_TRUE(RespondToFetchWithProfile(profile));
 
   SuggestionsProfile suggestions;
   suggestions_store()->LoadSuggestions(&suggestions);

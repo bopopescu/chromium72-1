@@ -266,6 +266,34 @@ TEST_F(FormAutofillUtilsTest, InferLabelSourceTest) {
   }
 }
 
+TEST_F(FormAutofillUtilsTest, InferButtonTitleForFormTest) {
+  static const AutofillFieldUtilCase test_cases[] = {
+      {"<button>", "<form id='target'><button>Sign Up</button></form>",
+       "Sign Up%"},
+      {"<input type='submit'>",
+       "<form id='target'><input type='submit' value='Sign In'></form>",
+       "Sign In$"},
+      {"several labels",
+       "<form id='target'><button type='button'>Show "
+       "password</button><button type='submit'>Register</button></form>",
+       "Register&Show password%"}};
+  for (const auto& test_case : test_cases) {
+    SCOPED_TRACE(test_case.description);
+    LoadHTML(test_case.html);
+    WebLocalFrame* web_frame = GetMainFrame();
+    ASSERT_NE(nullptr, web_frame);
+    const WebElement& target =
+        web_frame->GetDocument().GetElementById("target");
+    ASSERT_FALSE(target.IsNull());
+    const WebFormElement& form_target = target.ToConst<WebFormElement>();
+    ASSERT_FALSE(form_target.IsNull());
+
+    base::string16 button_title =
+        autofill::form_util::InferButtonTitleForTesting(form_target);
+    EXPECT_EQ(base::UTF8ToUTF16(test_case.expected_label), button_title);
+  }
+}
+
 TEST_F(FormAutofillUtilsTest, IsEnabled) {
   LoadHTML(
       "<input type='text' id='name1'>"
@@ -344,55 +372,6 @@ TEST_F(FormAutofillUtilsTest, IsReadonly) {
   }
 }
 
-TEST_F(FormAutofillUtilsTest, IsDefault) {
-  LoadHTML(
-      "<input type='text' id='name1' value='123'>"
-      "<input type='password' id='name2'>"
-      "<input type='password' id='name3'>"
-      "<input type='text' id='name4' value='321'>");
-
-  const std::vector<blink::WebElement> dummy_fieldsets;
-
-  WebLocalFrame* web_frame = GetMainFrame();
-  ASSERT_TRUE(web_frame);
-
-  web_frame->GetDocument()
-      .GetElementById("name1")
-      .To<blink::WebInputElement>()
-      .SetAutofillValue("abc");
-  web_frame->GetDocument()
-      .GetElementById("name3")
-      .To<blink::WebInputElement>()
-      .SetAutofillValue("abc");
-
-  std::vector<blink::WebFormControlElement> control_elements;
-  blink::WebElementCollection inputs =
-      web_frame->GetDocument().GetElementsByHTMLTagName("input");
-  for (blink::WebElement element = inputs.FirstItem(); !element.IsNull();
-       element = inputs.NextItem()) {
-    control_elements.push_back(element.To<blink::WebFormControlElement>());
-  }
-
-  autofill::FormData target;
-  EXPECT_TRUE(
-      autofill::form_util::UnownedPasswordFormElementsAndFieldSetsToFormData(
-          dummy_fieldsets, control_elements, nullptr, web_frame->GetDocument(),
-          nullptr, autofill::form_util::EXTRACT_NONE, &target, nullptr));
-  const struct {
-    const char* const name;
-    bool is_default;
-  } kExpectedFields[] = {
-      {"name1", false}, {"name2", true}, {"name3", false}, {"name4", true},
-  };
-  const size_t number_of_cases = arraysize(kExpectedFields);
-  ASSERT_EQ(number_of_cases, target.fields.size());
-  for (size_t i = 0; i < number_of_cases; ++i) {
-    EXPECT_EQ(base::UTF8ToUTF16(kExpectedFields[i].name),
-              target.fields[i].name);
-    EXPECT_EQ(kExpectedFields[i].is_default, target.fields[i].is_default);
-  }
-}
-
 TEST_F(FormAutofillUtilsTest, IsFocusable) {
   LoadHTML(
       "<input type='text' id='name1' value='123'>"
@@ -411,40 +390,213 @@ TEST_F(FormAutofillUtilsTest, IsFocusable) {
                                  .GetElementById("name2")
                                  .To<blink::WebFormControlElement>());
 
-  // Computing visibility only happens if causing a layout in Blink is
-  // acceptable. The first block below checks the "layout acceptable"
-  // situation, the one after it the "layout to be avoided" situation.
-  {
-    EXPECT_TRUE(autofill::form_util::IsWebElementVisible(control_elements[0]));
-    EXPECT_FALSE(autofill::form_util::IsWebElementVisible(control_elements[1]));
+  EXPECT_TRUE(autofill::form_util::IsWebElementVisible(control_elements[0]));
+  EXPECT_FALSE(autofill::form_util::IsWebElementVisible(control_elements[1]));
 
-    autofill::FormData target;
-    EXPECT_TRUE(
-        autofill::form_util::UnownedPasswordFormElementsAndFieldSetsToFormData(
-            dummy_fieldsets, control_elements, nullptr,
-            web_frame->GetDocument(), nullptr,
-            autofill::form_util::EXTRACT_NONE, &target, nullptr));
-    ASSERT_EQ(2u, target.fields.size());
-    EXPECT_EQ(base::UTF8ToUTF16("name1"), target.fields[0].name);
-    EXPECT_TRUE(target.fields[0].is_focusable);
-    EXPECT_EQ(base::UTF8ToUTF16("name2"), target.fields[1].name);
-    EXPECT_FALSE(target.fields[1].is_focusable);
-  }
-  {
-    autofill::form_util::ScopedLayoutPreventer preventer;
-    EXPECT_TRUE(autofill::form_util::IsWebElementVisible(control_elements[0]));
-    EXPECT_TRUE(autofill::form_util::IsWebElementVisible(control_elements[1]));
+  autofill::FormData target;
+  EXPECT_TRUE(
+      autofill::form_util::UnownedPasswordFormElementsAndFieldSetsToFormData(
+          dummy_fieldsets, control_elements, nullptr, web_frame->GetDocument(),
+          nullptr, autofill::form_util::EXTRACT_NONE, &target, nullptr));
+  ASSERT_EQ(2u, target.fields.size());
+  EXPECT_EQ(base::UTF8ToUTF16("name1"), target.fields[0].name);
+  EXPECT_TRUE(target.fields[0].is_focusable);
+  EXPECT_EQ(base::UTF8ToUTF16("name2"), target.fields[1].name);
+  EXPECT_FALSE(target.fields[1].is_focusable);
+}
 
-    autofill::FormData target;
-    EXPECT_TRUE(
-        autofill::form_util::UnownedPasswordFormElementsAndFieldSetsToFormData(
-            dummy_fieldsets, control_elements, nullptr,
-            web_frame->GetDocument(), nullptr,
-            autofill::form_util::EXTRACT_NONE, &target, nullptr));
-    ASSERT_EQ(2u, target.fields.size());
-    EXPECT_EQ(base::UTF8ToUTF16("name1"), target.fields[0].name);
-    EXPECT_TRUE(target.fields[0].is_focusable);
-    EXPECT_EQ(base::UTF8ToUTF16("name2"), target.fields[1].name);
-    EXPECT_TRUE(target.fields[1].is_focusable);
+TEST_F(FormAutofillUtilsTest, FindFormByUniqueId) {
+  LoadHTML("<body><form id='form1'></form><form id='form2'></form></body>");
+  WebDocument doc = GetMainFrame()->GetDocument();
+  blink::WebVector<WebFormElement> forms;
+  doc.Forms(forms);
+
+  for (const auto& form : forms) {
+    EXPECT_EQ(form, autofill::form_util::FindFormByUniqueRendererId(
+                        doc, form.UniqueRendererFormId()));
   }
+
+  // Expect null form element for non-existing form id.
+  uint32_t non_existing_id = forms[0].UniqueRendererFormId() + 1000;
+  EXPECT_TRUE(
+      autofill::form_util::FindFormByUniqueRendererId(doc, non_existing_id)
+          .IsNull());
+}
+
+TEST_F(FormAutofillUtilsTest, FindFormControlElementsByUniqueIdNoForm) {
+  LoadHTML("<body><input id='i1'><input id='i2'><input id='i3'></body>");
+  WebDocument doc = GetMainFrame()->GetDocument();
+  auto input1 = doc.GetElementById("i1").To<WebInputElement>();
+  auto input3 = doc.GetElementById("i3").To<WebInputElement>();
+  uint32_t non_existing_id = input3.UniqueRendererFormControlId() + 1000;
+
+  std::vector<uint32_t> renderer_ids = {input3.UniqueRendererFormControlId(),
+                                        non_existing_id,
+                                        input1.UniqueRendererFormControlId()};
+
+  auto elements =
+      autofill::form_util::FindFormControlElementsByUniqueRendererId(
+          doc, renderer_ids);
+
+  ASSERT_EQ(3u, elements.size());
+  EXPECT_EQ(input3, elements[0]);
+  EXPECT_TRUE(elements[1].IsNull());
+  EXPECT_EQ(input1, elements[2]);
+}
+
+TEST_F(FormAutofillUtilsTest, FindFormControlElementsByUniqueIdWithForm) {
+  LoadHTML(
+      "<body><form id='f1'><input id='i1'><input id='i2'></form><input "
+      "id='i3'></body>");
+  WebDocument doc = GetMainFrame()->GetDocument();
+  auto form = doc.GetElementById("f1").To<WebFormElement>();
+  auto input1 = doc.GetElementById("i1").To<WebInputElement>();
+  auto input3 = doc.GetElementById("i3").To<WebInputElement>();
+  uint32_t non_existing_id = input3.UniqueRendererFormControlId() + 1000;
+
+  std::vector<uint32_t> renderer_ids = {input3.UniqueRendererFormControlId(),
+                                        non_existing_id,
+                                        input1.UniqueRendererFormControlId()};
+
+  auto elements =
+      autofill::form_util::FindFormControlElementsByUniqueRendererId(
+          doc, form.UniqueRendererFormId(), renderer_ids);
+
+  // |input3| is not in the form, so it shouldn't be returned.
+  ASSERT_EQ(3u, elements.size());
+  EXPECT_TRUE(elements[0].IsNull());
+  EXPECT_TRUE(elements[1].IsNull());
+  EXPECT_EQ(input1, elements[2]);
+
+  // Expect that no elements are retured for non existing form id.
+  uint32_t non_existing_form_id = form.UniqueRendererFormId() + 1000;
+  elements = autofill::form_util::FindFormControlElementsByUniqueRendererId(
+      doc, non_existing_form_id, renderer_ids);
+  ASSERT_EQ(3u, elements.size());
+  EXPECT_TRUE(elements[0].IsNull());
+  EXPECT_TRUE(elements[1].IsNull());
+  EXPECT_TRUE(elements[2].IsNull());
+}
+
+// Tests the extraction of the aria-label attribute.
+TEST_F(FormAutofillUtilsTest, GetAriaLabel) {
+  LoadHTML("<input id='input' type='text' aria-label='the label'/>");
+
+  WebDocument doc = GetMainFrame()->GetDocument();
+  auto element = doc.GetElementById("input").To<WebInputElement>();
+  EXPECT_EQ(autofill::form_util::GetAriaLabel(doc, element),
+            base::UTF8ToUTF16("the label"));
+}
+
+// Tests that aria-labelledby works. Simple case: only one id referenced.
+TEST_F(FormAutofillUtilsTest, GetAriaLabelledBySingle) {
+  LoadHTML(
+      "<div id='billing'>Billing</div>"
+      "<div>"
+      "    <div id='name'>Name</div>"
+      "    <input id='input' type='text' aria-labelledby='name'/>"
+      "</div>");
+
+  WebDocument doc = GetMainFrame()->GetDocument();
+  auto element = doc.GetElementById("input").To<WebInputElement>();
+  EXPECT_EQ(autofill::form_util::GetAriaLabel(doc, element),
+            base::UTF8ToUTF16("Name"));
+}
+
+// Tests that aria-labelledby works: Complex case: multiple ids referenced.
+TEST_F(FormAutofillUtilsTest, GetAriaLabelledByMulti) {
+  LoadHTML(
+      "<div id='billing'>Billing</div>"
+      "<div>"
+      "    <div id='name'>Name</div>"
+      "    <input id='input' type='text' aria-labelledby='billing name'/>"
+      "</div>");
+
+  WebDocument doc = GetMainFrame()->GetDocument();
+  auto element = doc.GetElementById("input").To<WebInputElement>();
+  EXPECT_EQ(autofill::form_util::GetAriaLabel(doc, element),
+            base::UTF8ToUTF16("Billing Name"));
+}
+
+// Tests that aria-labelledby takes precedence over aria-label
+TEST_F(FormAutofillUtilsTest, GetAriaLabelledByTakesPrecedence) {
+  LoadHTML(
+      "<div id='billing'>Billing</div>"
+      "<div>"
+      "    <div id='name'>Name</div>"
+      "    <input id='input' type='text' aria-label='ignored' "
+      "         aria-labelledby='name'/>"
+      "</div>");
+
+  WebDocument doc = GetMainFrame()->GetDocument();
+  auto element = doc.GetElementById("input").To<WebInputElement>();
+  EXPECT_EQ(autofill::form_util::GetAriaLabel(doc, element),
+            base::UTF8ToUTF16("Name"));
+}
+
+// Tests that an invalid aria-labelledby reference gets ignored (as opposed to
+// crashing, for example).
+TEST_F(FormAutofillUtilsTest, GetAriaLabelledByInvalid) {
+  LoadHTML(
+      "<div id='billing'>Billing</div>"
+      "<div>"
+      "    <div id='name'>Name</div>"
+      "    <input id='input' type='text' aria-labelledby='div1 div2'/>"
+      "</div>");
+
+  WebDocument doc = GetMainFrame()->GetDocument();
+  auto element = doc.GetElementById("input").To<WebInputElement>();
+  EXPECT_EQ(autofill::form_util::GetAriaLabel(doc, element),
+            base::UTF8ToUTF16(""));
+}
+
+// Tests that invalid aria-labelledby references fall back to aria-label.
+TEST_F(FormAutofillUtilsTest, GetAriaLabelledByFallback) {
+  LoadHTML(
+      "<div id='billing'>Billing</div>"
+      "<div>"
+      "    <div id='name'>Name</div>"
+      "    <input id='input' type='text' aria-label='valid' "
+      "          aria-labelledby='div1 div2'/>"
+      "</div>");
+
+  WebDocument doc = GetMainFrame()->GetDocument();
+  auto element = doc.GetElementById("input").To<WebInputElement>();
+  EXPECT_EQ(autofill::form_util::GetAriaLabel(doc, element),
+            base::UTF8ToUTF16("valid"));
+}
+
+// Tests that aria-describedby works: Simple case: a single id referenced.
+TEST_F(FormAutofillUtilsTest, GetAriaDescribedBySingle) {
+  LoadHTML(
+      "<input id='input' type='text' aria-describedby='div1'/>"
+      "<div id='div1'>aria description</div>");
+
+  WebDocument doc = GetMainFrame()->GetDocument();
+  auto element = doc.GetElementById("input").To<WebInputElement>();
+  EXPECT_EQ(autofill::form_util::GetAriaDescription(doc, element),
+            base::UTF8ToUTF16("aria description"));
+}
+
+// Tests that aria-describedby works: Complex case: multiple ids referenced.
+TEST_F(FormAutofillUtilsTest, GetAriaDescribedByMulti) {
+  LoadHTML(
+      "<input id='input' type='text' aria-describedby='div1 div2'/>"
+      "<div id='div2'>description</div>"
+      "<div id='div1'>aria</div>");
+
+  WebDocument doc = GetMainFrame()->GetDocument();
+  auto element = doc.GetElementById("input").To<WebInputElement>();
+  EXPECT_EQ(autofill::form_util::GetAriaDescription(doc, element),
+            base::UTF8ToUTF16("aria description"));
+}
+
+// Tests that invalid aria-describedby returns the empty string.
+TEST_F(FormAutofillUtilsTest, GetAriaDescribedByInvalid) {
+  LoadHTML("<input id='input' type='text' aria-describedby='invalid'/>");
+
+  WebDocument doc = GetMainFrame()->GetDocument();
+  auto element = doc.GetElementById("input").To<WebInputElement>();
+  EXPECT_EQ(autofill::form_util::GetAriaDescription(doc, element),
+            base::UTF8ToUTF16(""));
 }

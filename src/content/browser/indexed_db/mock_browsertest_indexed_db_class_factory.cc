@@ -64,7 +64,7 @@ class IndexedDBTestDatabase : public IndexedDBDatabase {
  protected:
   ~IndexedDBTestDatabase() override {}
 
-  size_t GetMaxMessageSizeInBytes() const override {
+  size_t GetUsableMessageSizeInBytes() const override {
     return 10 * 1024 * 1024;  // 10MB
   }
 };
@@ -75,7 +75,7 @@ class IndexedDBTestTransaction : public IndexedDBTransaction {
       int64_t id,
       IndexedDBConnection* connection,
       const std::set<int64_t>& scope,
-      blink::WebIDBTransactionMode mode,
+      blink::mojom::IDBTransactionMode mode,
       IndexedDBBackingStore::Transaction* backing_store_transaction)
       : IndexedDBTransaction(id,
                              connection,
@@ -282,7 +282,7 @@ MockBrowserTestIndexedDBClassFactory::CreateIndexedDBTransaction(
     int64_t id,
     IndexedDBConnection* connection,
     const std::set<int64_t>& scope,
-    blink::WebIDBTransactionMode mode,
+    blink::mojom::IDBTransactionMode mode,
     IndexedDBBackingStore::Transaction* backing_store_transaction) {
   return std::unique_ptr<IndexedDBTransaction>(new IndexedDBTestTransaction(
       id, connection, scope, mode, backing_store_transaction));

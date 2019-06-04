@@ -4,6 +4,7 @@
 
 #include "chrome/browser/ui/views/content_setting_bubble_contents.h"
 
+#include <utility>
 #include <vector>
 
 #include "base/strings/utf_string_conversions.h"
@@ -11,10 +12,9 @@
 #include "chrome/browser/plugins/plugin_finder.h"
 #include "chrome/browser/plugins/plugin_metadata.h"
 #include "chrome/browser/ui/browser_dialogs.h"
-#include "chrome/browser/ui/layout_constants.h"
+#include "chrome/browser/ui/views/chrome_layout_provider.h"
+#include "chrome/browser/ui/views/chrome_typography.h"
 #include "chrome/browser/ui/views/content_setting_domain_list_view.h"
-#include "chrome/browser/ui/views/harmony/chrome_layout_provider.h"
-#include "chrome/browser/ui/views/harmony/chrome_typography.h"
 #include "chrome/grit/generated_resources.h"
 #include "components/content_settings/core/browser/host_content_settings_map.h"
 #include "components/strings/grit/components_strings.h"
@@ -46,18 +46,6 @@
 #include "ui/views/window/dialog_client_view.h"
 
 namespace {
-
-// If we don't clamp the maximum width, then very long URLs and titles can make
-// the bubble arbitrarily wide.
-const int kMaxContentsWidth = 500;
-
-// The new default width for the content settings bubble. The review process to
-// the width on per-bubble basis is tracked with https://crbug.com/649650.
-const int kMaxDefaultContentsWidth = 320;
-
-// When we have multiline labels, we should set a minimum width lest we get very
-// narrow bubbles with lots of line-wrapping.
-const int kMinMultiLineContentsWidth = 250;
 
 // Display a maximum of 4 visible items in a list before scrolling.
 const int kMaxVisibleListItems = 4;
@@ -110,22 +98,25 @@ class MediaMenuBlock : public views::View {
     constexpr int kColumnSetId = 0;
     views::ColumnSet* column_set = layout->AddColumnSet(kColumnSetId);
     column_set->AddColumn(views::GridLayout::LEADING, views::GridLayout::CENTER,
-                          0, views::GridLayout::USE_PREF, 0, 0);
+                          views::GridLayout::kFixedSize,
+                          views::GridLayout::USE_PREF, 0, 0);
     column_set->AddPaddingColumn(
-        0, provider->GetDistanceMetric(
-               views::DISTANCE_RELATED_CONTROL_HORIZONTAL));
-    column_set->AddColumn(views::GridLayout::FILL, views::GridLayout::FILL, 1,
+        views::GridLayout::kFixedSize,
+        provider->GetDistanceMetric(
+            views::DISTANCE_RELATED_CONTROL_HORIZONTAL));
+    column_set->AddColumn(views::GridLayout::FILL, views::GridLayout::FILL, 1.0,
                           views::GridLayout::FIXED, 0, 0);
 
     bool first_row = true;
     for (auto i = media.cbegin(); i != media.cend(); ++i) {
       if (!first_row) {
-        layout->AddPaddingRow(0, provider->GetDistanceMetric(
-                                     views::DISTANCE_RELATED_CONTROL_VERTICAL));
+        layout->AddPaddingRow(views::GridLayout::kFixedSize,
+                              provider->GetDistanceMetric(
+                                  views::DISTANCE_RELATED_CONTROL_VERTICAL));
       }
       first_row = false;
 
-      layout->StartRow(0, kColumnSetId);
+      layout->StartRow(views::GridLayout::kFixedSize, kColumnSetId);
       content::MediaStreamType stream_type = i->first;
       const ContentSettingBubbleModel::MediaMenu& menu = i->second;
 
@@ -309,7 +300,7 @@ void ContentSettingBubbleContents::ListItemContainer::RemoveRowAtIndex(
   delete children.second;
   list_item_views_.erase(list_item_views_.begin() + index);
 
-  // As views::GridLayout can't remove rows, we have to rebuild it entirely.
+  // As GridLayout can't remove rows, we have to rebuild it entirely.
   ResetLayout();
   for (size_t i = 0; i < list_item_views_.size(); i++)
     AddRowToLayout(list_item_views_[i]);
@@ -326,18 +317,20 @@ int ContentSettingBubbleContents::ListItemContainer::GetRowIndexOf(
 }
 
 void ContentSettingBubbleContents::ListItemContainer::ResetLayout() {
-  using views::GridLayout;
-  GridLayout* layout =
+  views::GridLayout* layout =
       SetLayoutManager(std::make_unique<views::GridLayout>(this));
   views::ColumnSet* item_list_column_set = layout->AddColumnSet(0);
-  item_list_column_set->AddColumn(GridLayout::LEADING, GridLayout::FILL, 0,
-                                  GridLayout::USE_PREF, 0, 0);
+  item_list_column_set->AddColumn(
+      views::GridLayout::LEADING, views::GridLayout::FILL,
+      views::GridLayout::kFixedSize, views::GridLayout::USE_PREF, 0, 0);
   const int related_control_horizontal_spacing =
       ChromeLayoutProvider::Get()->GetDistanceMetric(
           views::DISTANCE_RELATED_CONTROL_HORIZONTAL);
-  item_list_column_set->AddPaddingColumn(0, related_control_horizontal_spacing);
-  item_list_column_set->AddColumn(GridLayout::LEADING, GridLayout::FILL, 1,
-                                  GridLayout::USE_PREF, 0, 0);
+  item_list_column_set->AddPaddingColumn(views::GridLayout::kFixedSize,
+                                         related_control_horizontal_spacing);
+  item_list_column_set->AddColumn(views::GridLayout::LEADING,
+                                  views::GridLayout::FILL, 1.0,
+                                  views::GridLayout::USE_PREF, 0, 0);
   auto* scroll_view = views::ScrollView::GetScrollViewForContents(this);
   // When this function is called from the constructor, the view has not yet
   // been placed into a ScrollView.
@@ -350,7 +343,7 @@ void ContentSettingBubbleContents::ListItemContainer::AddRowToLayout(
   views::GridLayout* layout =
       static_cast<views::GridLayout*>(GetLayoutManager());
   DCHECK(layout);
-  layout->StartRow(0, 0);
+  layout->StartRow(views::GridLayout::kFixedSize, 0);
   layout->AddView(row.first);
   layout->AddView(row.second);
 
@@ -367,21 +360,18 @@ void ContentSettingBubbleContents::ListItemContainer::AddRowToLayout(
 // ContentSettingBubbleContents -----------------------------------------------
 
 ContentSettingBubbleContents::ContentSettingBubbleContents(
-    ContentSettingBubbleModel* content_setting_bubble_model,
+    std::unique_ptr<ContentSettingBubbleModel> content_setting_bubble_model,
     content::WebContents* web_contents,
     views::View* anchor_view,
     views::BubbleBorder::Arrow arrow)
     : content::WebContentsObserver(web_contents),
       BubbleDialogDelegateView(anchor_view, arrow),
-      content_setting_bubble_model_(content_setting_bubble_model),
+      content_setting_bubble_model_(std::move(content_setting_bubble_model)),
       list_item_container_(nullptr),
       custom_link_(nullptr),
       manage_button_(nullptr),
       manage_checkbox_(nullptr),
       learn_more_button_(nullptr) {
-  // Compensate for built-in vertical padding in the anchor view's image.
-  set_anchor_view_insets(gfx::Insets(
-      GetLayoutConstant(LOCATION_BAR_BUBBLE_ANCHOR_VERTICAL_INSET), 0));
   chrome::RecordDialogCreation(
       chrome::DialogIdentifier::CONTENT_SETTING_CONTENTS);
 }
@@ -392,34 +382,16 @@ ContentSettingBubbleContents::~ContentSettingBubbleContents() {
   RemoveAllChildViews(true);
 }
 
+void ContentSettingBubbleContents::WindowClosing() {
+  if (content_setting_bubble_model_)
+    content_setting_bubble_model_->CommitChanges();
+}
+
 gfx::Size ContentSettingBubbleContents::CalculatePreferredSize() const {
-  gfx::Size preferred_size(views::View::CalculatePreferredSize());
-  int preferred_width =
-      (!content_setting_bubble_model_->bubble_content().domain_lists.empty() &&
-       (kMinMultiLineContentsWidth > preferred_size.width()))
-          ? kMinMultiLineContentsWidth
-          : preferred_size.width();
-  if (content_setting_bubble_model_->AsSubresourceFilterBubbleModel()) {
-    preferred_size.set_width(std::min(preferred_width,
-                                      kMaxDefaultContentsWidth));
-  } else {
-    preferred_size.set_width(std::min(preferred_width, kMaxContentsWidth));
-  }
-
-  // These bubbles should all be the "small" dialog width, but only when in
-  // Harmony mode.
-  ChromeLayoutProvider* provider = ChromeLayoutProvider::Get();
-  if (provider->IsHarmonyMode()) {
-    // Subtract out this dialog's margins. The margins are imposed by
-    // DialogClientView around this view, so this view's width plus the width of
-    // these margins must equal the desired width, which is
-    // GetSnappedDialogWidth(0).
-    preferred_size.set_width(provider->GetSnappedDialogWidth(0) -
-                             margins().width());
-    preferred_size.set_height(GetHeightForWidth(preferred_size.width()));
-  }
-
-  return preferred_size;
+  const int width = ChromeLayoutProvider::Get()->GetDistanceMetric(
+                        DISTANCE_BUBBLE_PREFERRED_WIDTH) -
+                    margins().width();
+  return gfx::Size(width, GetHeightForWidth(width));
 }
 
 void ContentSettingBubbleContents::OnListItemAdded(
@@ -435,6 +407,16 @@ void ContentSettingBubbleContents::OnListItemRemovedAt(int index) {
   SizeToContents();
 }
 
+int ContentSettingBubbleContents::GetSelectedRadioOption() {
+  for (RadioGroup::const_iterator i(radio_group_.begin());
+       i != radio_group_.end(); ++i) {
+    if ((*i)->checked())
+      return i - radio_group_.begin();
+  }
+  NOTREACHED();
+  return 0;
+}
+
 void ContentSettingBubbleContents::OnNativeThemeChanged(
     const ui::NativeTheme* theme) {
   views::BubbleDialogDelegateView::OnNativeThemeChanged(theme);
@@ -443,14 +425,17 @@ void ContentSettingBubbleContents::OnNativeThemeChanged(
 }
 
 base::string16 ContentSettingBubbleContents::GetWindowTitle() const {
+  if (!content_setting_bubble_model_)
+    return base::string16();
   return content_setting_bubble_model_->bubble_content().title;
 }
 
 bool ContentSettingBubbleContents::ShouldShowCloseButton() const {
-  return ChromeLayoutProvider::Get()->IsHarmonyMode();
+  return true;
 }
 
 void ContentSettingBubbleContents::Init() {
+  DCHECK(content_setting_bubble_model_);
   const ChromeLayoutProvider* provider = ChromeLayoutProvider::Get();
   SetLayoutManager(std::make_unique<views::BoxLayout>(
       views::BoxLayout::kVertical, gfx::Insets(),
@@ -486,12 +471,10 @@ void ContentSettingBubbleContents::Init() {
   const ContentSettingBubbleModel::RadioGroup& radio_group =
       bubble_content.radio_group;
   if (!radio_group.radio_items.empty()) {
-    for (ContentSettingBubbleModel::RadioItems::const_iterator i(
-         radio_group.radio_items.begin());
+    for (auto i(radio_group.radio_items.begin());
          i != radio_group.radio_items.end(); ++i) {
       auto radio = std::make_unique<views::RadioButton>(*i, 0);
-      radio->SetEnabled(bubble_content.radio_group_enabled);
-      radio->set_listener(this);
+      radio->SetEnabled(radio_group.user_managed);
       radio->SetMultiLine(true);
       radio_group_.push_back(radio.get());
       rows.push_back({std::move(radio), LayoutRowType::INDENTED});
@@ -509,8 +492,7 @@ void ContentSettingBubbleContents::Init() {
          LayoutRowType::INDENTED});
   }
 
-  for (std::vector<ContentSettingBubbleModel::DomainList>::const_iterator i(
-           bubble_content.domain_lists.begin());
+  for (auto i(bubble_content.domain_lists.begin());
        i != bubble_content.domain_lists.end(); ++i) {
     auto list_view =
         std::make_unique<ContentSettingDomainListView>(i->title, i->hosts);
@@ -531,8 +513,7 @@ void ContentSettingBubbleContents::Init() {
   if (bubble_content.manage_text_style ==
       ContentSettingBubbleModel::ManageTextStyle::kCheckbox) {
     auto manage_checkbox =
-        std::make_unique<views::Checkbox>(bubble_content.manage_text);
-    manage_checkbox->set_listener(this);
+        std::make_unique<views::Checkbox>(bubble_content.manage_text, this);
     manage_checkbox_ = manage_checkbox.get();
     rows.push_back({std::move(manage_checkbox), LayoutRowType::DEFAULT});
   }
@@ -556,11 +537,11 @@ void ContentSettingBubbleContents::Init() {
     AddChildView(row.view.release());
   }
 
-  if (list_item_container_)
-    content_setting_bubble_model_->set_owner(this);
+  content_setting_bubble_model_->set_owner(this);
 }
 
 views::View* ContentSettingBubbleContents::CreateExtraView() {
+  DCHECK(content_setting_bubble_model_);
   const auto& bubble_content = content_setting_bubble_model_->bubble_content();
   const auto* layout = ChromeLayoutProvider::Get();
   std::vector<View*> extra_views;
@@ -600,7 +581,6 @@ views::View* ContentSettingBubbleContents::CreateExtraView() {
 }
 
 bool ContentSettingBubbleContents::Accept() {
-  content_setting_bubble_model_->OnDoneClicked();
   return true;
 }
 
@@ -614,6 +594,9 @@ int ContentSettingBubbleContents::GetDialogButtons() const {
 
 base::string16 ContentSettingBubbleContents::GetDialogButtonLabel(
     ui::DialogButton button) const {
+  if (!content_setting_bubble_model_)
+    return base::string16();
+
   const base::string16& done_text =
       content_setting_bubble_model_->bubble_content().done_button_text;
   return done_text.empty() ? l10n_util::GetStringUTF16(IDS_DONE) : done_text;
@@ -645,11 +628,20 @@ void ContentSettingBubbleContents::OnVisibilityChanged(
 }
 
 void ContentSettingBubbleContents::WebContentsDestroyed() {
+  // Destroy the bubble model to ensure that the underlying WebContents outlives
+  // it.
+  content_setting_bubble_model_->CommitChanges();
+  content_setting_bubble_model_.reset();
+
+  // Closing the widget should synchronously hide it (and post a task to delete
+  // it). Subsequent event listener methods should not be invoked on hidden
+  // widgets.
   GetWidget()->Close();
 }
 
 void ContentSettingBubbleContents::ButtonPressed(views::Button* sender,
                                                  const ui::Event& event) {
+  DCHECK(content_setting_bubble_model_);
   if (sender == manage_checkbox_) {
     content_setting_bubble_model_->OnManageCheckboxChecked(
         manage_checkbox_->checked());
@@ -664,15 +656,13 @@ void ContentSettingBubbleContents::ButtonPressed(views::Button* sender,
     GetWidget()->Close();
     content_setting_bubble_model_->OnManageButtonClicked();
   } else {
-    RadioGroup::const_iterator i(
-        std::find(radio_group_.begin(), radio_group_.end(), sender));
-    DCHECK(i != radio_group_.end());
-    content_setting_bubble_model_->OnRadioClicked(i - radio_group_.begin());
+    NOTREACHED();
   }
 }
 
 void ContentSettingBubbleContents::LinkClicked(views::Link* source,
                                                int event_flags) {
+  DCHECK(content_setting_bubble_model_);
   if (source == custom_link_) {
     content_setting_bubble_model_->OnCustomLinkClicked();
     GetWidget()->Close();
@@ -684,6 +674,7 @@ void ContentSettingBubbleContents::LinkClicked(views::Link* source,
 }
 
 void ContentSettingBubbleContents::OnPerformAction(views::Combobox* combobox) {
+  DCHECK(content_setting_bubble_model_);
   MediaComboboxModel* model =
       static_cast<MediaComboboxModel*>(combobox->model());
   content_setting_bubble_model_->OnMediaMenuClicked(

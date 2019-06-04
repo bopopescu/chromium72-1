@@ -6,18 +6,18 @@
  */
 
 #include "GrReducedClip.h"
-
 #include "GrAppliedClip.h"
 #include "GrClip.h"
 #include "GrColor.h"
 #include "GrContextPriv.h"
-#include "GrRenderTargetContext.h"
-#include "GrRenderTargetContextPriv.h"
 #include "GrDrawingManager.h"
 #include "GrFixedClip.h"
 #include "GrPathRenderer.h"
-#include "GrStencilSettings.h"
+#include "GrRenderTargetContext.h"
+#include "GrRenderTargetContextPriv.h"
+#include "GrShape.h"
 #include "GrStencilClip.h"
+#include "GrStencilSettings.h"
 #include "GrStyle.h"
 #include "GrUserStencilSettings.h"
 #include "SkClipOpPriv.h"
@@ -34,7 +34,7 @@
  * take a rect in case the caller knows a bound on what is to be drawn through this clip.
  */
 GrReducedClip::GrReducedClip(const SkClipStack& stack, const SkRect& queryBounds,
-                             const GrShaderCaps* caps, int maxWindowRectangles, int maxAnalyticFPs,
+                             const GrCaps* caps, int maxWindowRectangles, int maxAnalyticFPs,
                              int maxCCPRClipPaths)
         : fCaps(caps)
         , fMaxWindowRectangles(maxWindowRectangles)
@@ -630,7 +630,8 @@ GrReducedClip::ClipResult GrReducedClip::addAnalyticFP(const SkRRect& deviceSpac
         return ClipResult::kNotClipped;
     }
 
-    if (auto fp = GrRRectEffect::Make(GetClipEdgeType(invert, aa), deviceSpaceRRect, *fCaps)) {
+    if (auto fp = GrRRectEffect::Make(GetClipEdgeType(invert, aa), deviceSpaceRRect,
+                                      *fCaps->shaderCaps())) {
         fAnalyticFPs.push_back(std::move(fp));
         return ClipResult::kClipped;
     }
@@ -746,7 +747,8 @@ bool GrReducedClip::drawAlphaClipMask(GrRenderTargetContext* rtc) const {
 
     // The scratch texture that we are drawing into can be substantially larger than the mask. Only
     // clear the part that we care about.
-    GrColor initialCoverage = InitialState::kAllIn == this->initialState() ? -1 : 0;
+    SkPMColor4f initialCoverage =
+        InitialState::kAllIn == this->initialState() ? SK_PMColor4fWHITE : SK_PMColor4fTRANSPARENT;
     rtc->priv().clear(clip, initialCoverage, GrRenderTargetContext::CanClearFullscreen::kYes);
 
     // Set the matrix so that rendered clip elements are transformed to mask space from clip space.
@@ -956,8 +958,7 @@ bool GrReducedClip::drawStencilClipMask(GrContext* context,
 }
 
 std::unique_ptr<GrFragmentProcessor> GrReducedClip::finishAndDetachAnalyticFPs(
-        GrCoverageCountingPathRenderer* ccpr, GrProxyProvider* proxyProvider, uint32_t opListID,
-        int rtWidth, int rtHeight) {
+        GrCoverageCountingPathRenderer* ccpr, uint32_t opListID, int rtWidth, int rtHeight) {
     // Make sure finishAndDetachAnalyticFPs hasn't been called already.
     SkDEBUGCODE(for (const auto& fp : fAnalyticFPs) { SkASSERT(fp); })
 
@@ -966,8 +967,8 @@ std::unique_ptr<GrFragmentProcessor> GrReducedClip::finishAndDetachAnalyticFPs(
         for (const SkPath& ccprClipPath : fCCPRClipPaths) {
             SkASSERT(ccpr);
             SkASSERT(fHasScissor);
-            auto fp = ccpr->makeClipProcessor(proxyProvider, opListID, ccprClipPath, fScissor,
-                                              rtWidth, rtHeight);
+            auto fp = ccpr->makeClipProcessor(opListID, ccprClipPath, fScissor, rtWidth, rtHeight,
+                                              *fCaps);
             fAnalyticFPs.push_back(std::move(fp));
         }
         fCCPRClipPaths.reset();

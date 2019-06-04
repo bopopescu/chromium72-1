@@ -14,9 +14,15 @@ import("//testing/test.gni")
 # Supported attributes:
 # - (required) sources - fuzzer test source files
 # - deps - test dependencies
+# - libs - Additional libraries to link.
 # - additional_configs - additional configs to be used for compilation
 # - dict - a dictionary file for the fuzzer.
-# - libfuzzer_options - options for the fuzzer (e.g. -max_len or -timeout).
+# - environment_variables - certain whitelisted environment variables for the
+# fuzzer (AFL_DRIVER_DONT_DEFER is the only one allowed currently).
+# - libfuzzer_options - options for the fuzzer (e.g. -max_len=N or -timeout=N).
+# - asan_options - AddressSanitizer options (e.g. allow_user_segv_handler=1).
+# - msan_options - MemorySanitizer options.
+# - ubsan_options - UndefinedBehaviorSanitizer options.
 # - seed_corpus - a directory with seed corpus.
 # - seed_corpus_deps - dependencies for generating the seed corpus.
 # - skip_owners - if true, skips writing the owners file.
@@ -83,7 +89,10 @@ template("fuzzer_test") {
       test_deps += [ ":" + target_name + "_seed_corpus" ]
     }
 
-    if (defined(invoker.dict) || defined(invoker.libfuzzer_options)) {
+    if (defined(invoker.dict) || defined(invoker.libfuzzer_options) ||
+        defined(invoker.asan_options) || defined(invoker.msan_options) ||
+        defined(invoker.ubsan_options) ||
+        defined(invoker.environment_variables)) {
       if (defined(invoker.dict)) {
         # Copy dictionary to output.
         copy(target_name + "_dict_copy") {
@@ -119,6 +128,26 @@ template("fuzzer_test") {
           args += invoker.libfuzzer_options
         }
 
+        if (defined(invoker.asan_options)) {
+          args += [ "--asan_options" ]
+          args += invoker.asan_options
+        }
+
+        if (defined(invoker.msan_options)) {
+          args += [ "--msan_options" ]
+          args += invoker.msan_options
+        }
+
+        if (defined(invoker.ubsan_options)) {
+          args += [ "--ubsan_options" ]
+          args += invoker.ubsan_options
+        }
+
+        if (defined(invoker.environment_variables)) {
+          args += [ "--environment_variables" ]
+          args += invoker.environment_variables
+        }
+
         outputs = [
           "$root_build_dir/$config_file_name",
         ]
@@ -136,13 +165,18 @@ template("fuzzer_test") {
       ]
 
       if (defined(invoker.sources) && invoker.sources != []) {
-        args += [ "--sources" ] + rebase_path(invoker.sources, root_build_dir)
+        args += [ "--sources" ] + rebase_path(invoker.sources, "//")
       } else if (defined(invoker.deps) && invoker.deps != []) {
+        _full_deps = []
+        foreach(_dep, invoker.deps) {
+          _full_deps += [ get_label_info(_dep, "dir") + ":" +
+                          get_label_info(_dep, "name") ]
+        }
         args += [
                   "--build-dir",
                   rebase_path("$root_build_dir/", root_build_dir),
                   "--deps",
-                ] + invoker.deps
+                ] + _full_deps
       }
 
       outputs = [
@@ -160,6 +194,7 @@ template("fuzzer_test") {
                                "defines",
                                "include_dirs",
                                "sources",
+                               "libs",
                              ])
       deps = test_deps
 
@@ -171,6 +206,10 @@ template("fuzzer_test") {
       # Used by WebRTC to suppress some Clang warnings in their codebase.
       if (defined(invoker.suppressed_configs)) {
         configs -= invoker.suppressed_configs
+      }
+
+      if (defined(invoker.generated_sources)) {
+        sources += invoker.generated_sources
       }
 
       if (is_mac) {

@@ -17,7 +17,7 @@
 #include "mojo/public/cpp/bindings/binding.h"
 #include "services/device/public/mojom/constants.mojom.h"
 #include "services/device/public/mojom/vibration_manager.mojom.h"
-#include "services/service_manager/public/cpp/service_context.h"
+#include "services/service_manager/public/cpp/service_binding.h"
 
 namespace content {
 
@@ -26,23 +26,23 @@ namespace {
 class VibrationTest : public ContentBrowserTest,
                       public device::mojom::VibrationManager {
  public:
-  VibrationTest() : binding_(this){};
-
-  void SetUpOnMainThread() override {
+  VibrationTest() : binding_(this) {
     // Because Device Service also runs in this process(browser process), here
     // we can directly set our binder to intercept interface requests against
     // it.
-    service_manager::ServiceContext::SetGlobalBinderForTesting(
-        device::mojom::kServiceName, device::mojom::VibrationManager::Name_,
+    service_manager::ServiceBinding::OverrideInterfaceBinderForTesting(
+        device::mojom::kServiceName,
         base::Bind(&VibrationTest::BindVibrationManager,
                    base::Unretained(this)));
   }
 
-  void BindVibrationManager(
-      const std::string& interface_name,
-      mojo::ScopedMessagePipeHandle handle,
-      const service_manager::BindSourceInfo& source_info) {
-    binding_.Bind(device::mojom::VibrationManagerRequest(std::move(handle)));
+  ~VibrationTest() override {
+    service_manager::ServiceBinding::ClearInterfaceBinderOverrideForTesting<
+        device::mojom::VibrationManager>(device::mojom::kServiceName);
+  }
+
+  void BindVibrationManager(device::mojom::VibrationManagerRequest request) {
+    binding_.Bind(std::move(request));
   }
 
  protected:

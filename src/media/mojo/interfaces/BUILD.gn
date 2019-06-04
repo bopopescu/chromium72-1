@@ -21,6 +21,7 @@ mojom("interfaces") {
     "content_decryption_module.mojom",
     "decryptor.mojom",
     "demuxer_stream.mojom",
+    "display_media_information.mojom",
     "interface_factory.mojom",
     "jpeg_decode_accelerator.mojom",
     "jpeg_encode_accelerator.mojom",
@@ -45,6 +46,10 @@ mojom("interfaces") {
       "android_overlay.mojom",
       "media_drm_storage.mojom",
     ]
+  }
+
+  if (is_chromecast) {
+    sources += [ "application_session_id_manager.mojom" ]
   }
 
   public_deps = [

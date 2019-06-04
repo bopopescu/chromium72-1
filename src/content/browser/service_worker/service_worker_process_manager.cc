@@ -15,7 +15,6 @@
 #include "content/browser/storage_partition_impl.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/site_instance.h"
-#include "content/public/common/browser_side_navigation_policy.h"
 #include "content/public/common/child_process_host.h"
 #include "url/gurl.h"
 
@@ -29,6 +28,7 @@ ServiceWorkerProcessManager::ServiceWorkerProcessManager(
       new_process_id_for_test_(ChildProcessHost::kInvalidUniqueID),
       weak_this_factory_(this) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  DCHECK(browser_context);
   weak_this_ = weak_this_factory_.GetWeakPtr();
 }
 
@@ -79,9 +79,9 @@ bool ServiceWorkerProcessManager::IsShutdown() {
   return !browser_context_;
 }
 
-ServiceWorkerStatusCode ServiceWorkerProcessManager::AllocateWorkerProcess(
+blink::ServiceWorkerStatusCode
+ServiceWorkerProcessManager::AllocateWorkerProcess(
     int embedded_worker_id,
-    const GURL& pattern,
     const GURL& script_url,
     bool can_use_existing_process,
     AllocatedProcessInfo* out_info) {
@@ -97,11 +97,11 @@ ServiceWorkerStatusCode ServiceWorkerProcessManager::AllocateWorkerProcess(
     out_info->process_id = result;
     out_info->start_situation =
         ServiceWorkerMetrics::StartSituation::EXISTING_READY_PROCESS;
-    return SERVICE_WORKER_OK;
+    return blink::ServiceWorkerStatusCode::kOk;
   }
 
   if (IsShutdown()) {
-    return SERVICE_WORKER_ERROR_ABORT;
+    return blink::ServiceWorkerStatusCode::kErrorAbort;
   }
 
   DCHECK(!base::ContainsKey(worker_process_map_, embedded_worker_id))
@@ -138,9 +138,9 @@ ServiceWorkerStatusCode ServiceWorkerProcessManager::AllocateWorkerProcess(
          rph->InSameStoragePartition(storage_partition_));
 
   ServiceWorkerMetrics::StartSituation start_situation;
-  if (!rph->HasConnection()) {
-    // HasConnection() is false means that Init() has not been called or the
-    // process has been killed.
+  if (!rph->IsInitializedAndNotDead()) {
+    // IsInitializedAndNotDead() is false means that Init() has not been called
+    // or the process has been killed.
     start_situation = ServiceWorkerMetrics::StartSituation::NEW_PROCESS;
   } else if (!rph->IsReady()) {
     start_situation =
@@ -152,7 +152,7 @@ ServiceWorkerStatusCode ServiceWorkerProcessManager::AllocateWorkerProcess(
 
   if (!rph->Init()) {
     LOG(ERROR) << "Couldn't start a new process!";
-    return SERVICE_WORKER_ERROR_PROCESS_NOT_FOUND;
+    return blink::ServiceWorkerStatusCode::kErrorProcessNotFound;
   }
 
   worker_process_map_.emplace(embedded_worker_id, std::move(site_instance));
@@ -161,7 +161,7 @@ ServiceWorkerStatusCode ServiceWorkerProcessManager::AllocateWorkerProcess(
         RenderProcessHost::KeepAliveClientType::kServiceWorker);
   out_info->process_id = rph->GetID();
   out_info->start_situation = start_situation;
-  return SERVICE_WORKER_OK;
+  return blink::ServiceWorkerStatusCode::kOk;
 }
 
 void ServiceWorkerProcessManager::ReleaseWorkerProcess(int embedded_worker_id) {
@@ -192,6 +192,15 @@ void ServiceWorkerProcessManager::ReleaseWorkerProcess(int embedded_worker_id) {
           RenderProcessHost::KeepAliveClientType::kServiceWorker);
   }
   worker_process_map_.erase(it);
+}
+
+SiteInstance* ServiceWorkerProcessManager::GetSiteInstanceForWorker(
+    int embedded_worker_id) {
+  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  auto it = worker_process_map_.find(embedded_worker_id);
+  if (it == worker_process_map_.end())
+    return nullptr;
+  return it->second.get();
 }
 
 }  // namespace content

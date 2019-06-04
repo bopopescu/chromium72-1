@@ -5,7 +5,10 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_PLATFORM_HEAP_PERSISTENT_H_
 #define THIRD_PARTY_BLINK_RENDERER_PLATFORM_HEAP_PERSISTENT_H_
 
+#include "base/bind.h"
 #include "third_party/blink/renderer/platform/heap/heap.h"
+#include "third_party/blink/renderer/platform/heap/heap_allocator.h"
+#include "third_party/blink/renderer/platform/heap/heap_compact.h"
 #include "third_party/blink/renderer/platform/heap/member.h"
 #include "third_party/blink/renderer/platform/heap/persistent_node.h"
 #include "third_party/blink/renderer/platform/heap/visitor.h"
@@ -114,6 +117,9 @@ class PersistentBase {
     return *raw_;
   }
   explicit operator bool() const { return raw_; }
+  // TODO(https://crbug.com/653394): Consider returning a thread-safe best
+  // guess of validity.
+  bool MaybeValid() const { return true; }
   operator T*() const {
     CheckPointer();
     return raw_;
@@ -175,19 +181,27 @@ class PersistentBase {
     return this;
   }
 
- protected:
   NO_SANITIZE_ADDRESS
-  T* AtomicGet() {
-    return reinterpret_cast<T*>(AcquireLoad(reinterpret_cast<void* volatile*>(
-        const_cast<typename std::remove_const<T>::type**>(&raw_))));
+  void ClearWithLockHeld() {
+    static_assert(
+        crossThreadnessConfiguration == kCrossThreadPersistentConfiguration,
+        "This Persistent does not require the cross-thread lock.");
+#if DCHECK_IS_ON()
+    ProcessHeap::CrossThreadPersistentMutex().AssertAcquired();
+#endif
+    raw_ = nullptr;
+    CrossThreadPersistentRegion& region =
+        weaknessConfiguration == kWeakPersistentConfiguration
+            ? ProcessHeap::GetCrossThreadWeakPersistentRegion()
+            : ProcessHeap::GetCrossThreadPersistentRegion();
+    region.FreePersistentNode(persistent_node_);
   }
 
  private:
   NO_SANITIZE_ADDRESS
   void Assign(T* ptr) {
     if (crossThreadnessConfiguration == kCrossThreadPersistentConfiguration) {
-      RecursiveMutexLocker persistent_lock(
-          ProcessHeap::CrossThreadPersistentMutex());
+      MutexLocker persistent_lock(ProcessHeap::CrossThreadPersistentMutex());
       raw_ = ptr;
     } else {
       raw_ = ptr;
@@ -227,6 +241,7 @@ class PersistentBase {
           weaknessConfiguration == kWeakPersistentConfiguration
               ? ProcessHeap::GetCrossThreadWeakPersistentRegion()
               : ProcessHeap::GetCrossThreadPersistentRegion();
+      MutexLocker lock(ProcessHeap::CrossThreadPersistentMutex());
       region.AllocatePersistentNode(persistent_node_, this, trace_callback);
       return;
     }
@@ -250,6 +265,7 @@ class PersistentBase {
             weaknessConfiguration == kWeakPersistentConfiguration
                 ? ProcessHeap::GetCrossThreadWeakPersistentRegion()
                 : ProcessHeap::GetCrossThreadPersistentRegion();
+        MutexLocker lock(ProcessHeap::CrossThreadPersistentMutex());
         region.FreePersistentNode(persistent_node_);
       }
       return;
@@ -312,7 +328,29 @@ class PersistentBase {
     Base* persistent = reinterpret_cast<Base*>(persistent_pointer);
     T* object = persistent->Get();
     if (object && !ObjectAliveTrait<T>::IsHeapObjectAlive(object))
-      persistent->Clear();
+      ClearWeakPersistent(persistent);
+  }
+
+  static void ClearWeakPersistent(
+      PersistentBase<std::remove_const_t<T>,
+                     kWeakPersistentConfiguration,
+                     kCrossThreadPersistentConfiguration>* persistent) {
+#if DCHECK_IS_ON()
+    ProcessHeap::CrossThreadPersistentMutex().AssertAcquired();
+#endif
+    persistent->ClearWithLockHeld();
+  }
+
+  static void ClearWeakPersistent(
+      PersistentBase<std::remove_const_t<T>,
+                     kWeakPersistentConfiguration,
+                     kSingleThreadPersistentConfiguration>* persistent) {
+    persistent->Clear();
+  }
+
+  template <typename BadPersistent>
+  static void ClearWeakPersistent(BadPersistent* non_weak_persistent) {
+    NOTREACHED();
   }
 
   // m_raw is accessed most, so put it at the first field.
@@ -386,11 +424,11 @@ class Persistent : public PersistentBase<T,
 //
 // We have to construct and destruct WeakPersistent in the same thread.
 //
-// Note that collections of WeakPersistents are not supported. Use a persistent
-// collection of WeakMembers instead.
+// Note that collections of WeakPersistents are not supported. Use a collection
+// of WeakMembers instead.
 //
 //   HashSet<WeakPersistent<T>> m_set; // wrong
-//   PersistentHeapHashSet<WeakMember<T>> m_set; // correct
+//   Persistent<HeapHashSet<WeakMember<T>>> m_set; // correct
 template <typename T>
 class WeakPersistent
     : public PersistentBase<T,
@@ -465,8 +503,6 @@ class CrossThreadPersistent
   template <typename U>
   CrossThreadPersistent(const Member<U>& other) : Parent(other) {}
   CrossThreadPersistent(WTF::HashTableDeletedValueType x) : Parent(x) {}
-
-  T* AtomicGet() { return Parent::AtomicGet(); }
 
   // Instead of using release(), assign then clear() instead.
   // Using release() with per thread heap enabled can cause the object to be
@@ -556,186 +592,6 @@ class CrossThreadWeakPersistent
   }
 };
 
-template <typename Collection>
-class PersistentHeapCollectionBase : public Collection {
-  // We overload the various new and delete operators with using the WTF
-  // PartitionAllocator to ensure persistent heap collections are always
-  // allocated off-heap. This allows persistent collections to be used in
-  // DEFINE_STATIC_LOCAL et. al.
-  USE_ALLOCATOR(PersistentHeapCollectionBase, WTF::PartitionAllocator);
-  IS_PERSISTENT_REFERENCE_TYPE();
-
- public:
-  PersistentHeapCollectionBase() { Initialize(); }
-
-  PersistentHeapCollectionBase(const PersistentHeapCollectionBase& other)
-      : Collection(other) {
-    Initialize();
-  }
-
-  template <typename OtherCollection>
-  PersistentHeapCollectionBase(const OtherCollection& other)
-      : Collection(other) {
-    Initialize();
-  }
-
-  ~PersistentHeapCollectionBase() { Uninitialize(); }
-
-  // Override so we don't copy persistent_node_.
-  PersistentHeapCollectionBase& operator=(
-      const PersistentHeapCollectionBase& other) {
-    Collection::operator=(other);
-    return *this;
-  }
-
-  // See PersistentBase::registerAsStaticReference() comment.
-  PersistentHeapCollectionBase* RegisterAsStaticReference() {
-    if (persistent_node_) {
-      DCHECK(ThreadState::Current());
-      ThreadState::Current()->RegisterStaticPersistentNode(
-          persistent_node_,
-          &PersistentHeapCollectionBase<Collection>::ClearPersistentNode);
-      LEAK_SANITIZER_IGNORE_OBJECT(this);
-    }
-    return this;
-  }
-
- private:
-  template <typename VisitorDispatcher>
-  void TracePersistent(VisitorDispatcher visitor) {
-    static_assert(sizeof(Collection), "Collection must be fully defined");
-    visitor->Trace(*static_cast<Collection*>(this));
-  }
-
-  // Used when the registered PersistentNode of this object is
-  // released during ThreadState shutdown, clearing the association.
-  static void ClearPersistentNode(void* self) {
-    PersistentHeapCollectionBase<Collection>* collection =
-        (reinterpret_cast<PersistentHeapCollectionBase<Collection>*>(self));
-    collection->Uninitialize();
-    collection->clear();
-  }
-
-  NO_SANITIZE_ADDRESS
-  void Initialize() {
-    CHECK(IsMainThread()) << "Persistent heap collections are disabled on "
-                             "non-main threads. Put the heap collection in a "
-                             "Persistent instead.";
-    // FIXME: Derive affinity based on the collection.
-    ThreadState* state = ThreadState::Current();
-    DCHECK(state->CheckThread());
-    persistent_node_ = state->GetPersistentRegion()->AllocatePersistentNode(
-        this,
-        TraceMethodDelegate<PersistentHeapCollectionBase<Collection>,
-                            &PersistentHeapCollectionBase<
-                                Collection>::TracePersistent>::Trampoline);
-#if DCHECK_IS_ON()
-    state_ = state;
-#endif
-  }
-
-  void Uninitialize() {
-    if (!persistent_node_)
-      return;
-    ThreadState* state = ThreadState::Current();
-    DCHECK(state->CheckThread());
-    // Persistent handle must be created and destructed in the same thread.
-#if DCHECK_IS_ON()
-    DCHECK_EQ(state_, state);
-#endif
-    state->FreePersistentNode(state->GetPersistentRegion(), persistent_node_);
-    persistent_node_ = nullptr;
-  }
-
-  PersistentNode* persistent_node_;
-#if DCHECK_IS_ON()
-  ThreadState* state_;
-#endif
-};
-
-template <typename KeyArg,
-          typename MappedArg,
-          typename HashArg = typename DefaultHash<KeyArg>::Hash,
-          typename KeyTraitsArg = HashTraits<KeyArg>,
-          typename MappedTraitsArg = HashTraits<MappedArg>>
-class PersistentHeapHashMap
-    : public PersistentHeapCollectionBase<HeapHashMap<KeyArg,
-                                                      MappedArg,
-                                                      HashArg,
-                                                      KeyTraitsArg,
-                                                      MappedTraitsArg>> {};
-
-template <typename ValueArg,
-          typename HashArg = typename DefaultHash<ValueArg>::Hash,
-          typename TraitsArg = HashTraits<ValueArg>>
-class PersistentHeapHashSet : public PersistentHeapCollectionBase<
-                                  HeapHashSet<ValueArg, HashArg, TraitsArg>> {};
-
-template <typename ValueArg,
-          typename HashArg = typename DefaultHash<ValueArg>::Hash,
-          typename TraitsArg = HashTraits<ValueArg>>
-class PersistentHeapLinkedHashSet
-    : public PersistentHeapCollectionBase<
-          HeapLinkedHashSet<ValueArg, HashArg, TraitsArg>> {};
-
-template <typename ValueArg,
-          size_t inlineCapacity = 0,
-          typename HashArg = typename DefaultHash<ValueArg>::Hash>
-class PersistentHeapListHashSet
-    : public PersistentHeapCollectionBase<
-          HeapListHashSet<ValueArg, inlineCapacity, HashArg>> {};
-
-template <typename ValueArg,
-          typename HashFunctions = typename DefaultHash<ValueArg>::Hash,
-          typename Traits = HashTraits<ValueArg>>
-class PersistentHeapHashCountedSet
-    : public PersistentHeapCollectionBase<
-          HeapHashCountedSet<ValueArg, HashFunctions, Traits>> {};
-
-template <typename T, size_t inlineCapacity = 0>
-class PersistentHeapVector
-    : public PersistentHeapCollectionBase<HeapVector<T, inlineCapacity>> {
- public:
-  PersistentHeapVector() { InitializeUnusedSlots(); }
-
-  explicit PersistentHeapVector(size_t size)
-      : PersistentHeapCollectionBase<HeapVector<T, inlineCapacity>>(size) {
-    InitializeUnusedSlots();
-  }
-
-  PersistentHeapVector(const PersistentHeapVector& other)
-      : PersistentHeapCollectionBase<HeapVector<T, inlineCapacity>>(other) {
-    InitializeUnusedSlots();
-  }
-
-  template <size_t otherCapacity>
-  PersistentHeapVector(const HeapVector<T, otherCapacity>& other)
-      : PersistentHeapCollectionBase<HeapVector<T, inlineCapacity>>(other) {
-    InitializeUnusedSlots();
-  }
-
- private:
-  void InitializeUnusedSlots() {
-    // The PersistentHeapVector is allocated off heap along with its
-    // inline buffer (if any.) Maintain the invariant that unused
-    // slots are cleared for the off-heap inline buffer also.
-    size_t unused_slots = this->capacity() - this->size();
-    if (unused_slots)
-      this->ClearUnusedSlots(this->end(), this->end() + unused_slots);
-  }
-};
-
-template <typename T, size_t inlineCapacity = 0>
-class PersistentHeapDeque
-    : public PersistentHeapCollectionBase<HeapDeque<T, inlineCapacity>> {
- public:
-  PersistentHeapDeque() = default;
-
-  template <size_t otherCapacity>
-  PersistentHeapDeque(const HeapDeque<T, otherCapacity>& other)
-      : PersistentHeapCollectionBase<HeapDeque<T, inlineCapacity>>(other) {}
-};
-
 template <typename T>
 Persistent<T> WrapPersistent(T* value) {
   // There is no technical need to require a complete type here. However, types
@@ -814,6 +670,31 @@ inline bool operator!=(const Persistent<T>& a, const Member<U>& b) {
 
 namespace WTF {
 
+template <
+    typename T,
+    blink::WeaknessPersistentConfiguration weaknessConfiguration,
+    blink::CrossThreadnessPersistentConfiguration crossThreadnessConfiguration>
+struct VectorTraits<blink::PersistentBase<T,
+                                          weaknessConfiguration,
+                                          crossThreadnessConfiguration>>
+    : VectorTraitsBase<blink::PersistentBase<T,
+                                             weaknessConfiguration,
+                                             crossThreadnessConfiguration>> {
+  STATIC_ONLY(VectorTraits);
+  static const bool kNeedsDestruction = true;
+  static const bool kCanInitializeWithMemset = true;
+  static const bool kCanClearUnusedSlotsWithMemset = false;
+  static const bool kCanMoveWithMemcpy = true;
+};
+
+template <typename T>
+struct HashTraits<blink::Persistent<T>>
+    : HandleHashTraits<T, blink::Persistent<T>> {};
+
+template <typename T>
+struct HashTraits<blink::CrossThreadPersistent<T>>
+    : HandleHashTraits<T, blink::CrossThreadPersistent<T>> {};
+
 template <typename T>
 struct DefaultHash<blink::Persistent<T>> {
   STATIC_ONLY(DefaultHash);
@@ -852,8 +733,6 @@ template <typename T>
 struct BindUnwrapTraits<blink::CrossThreadWeakPersistent<T>> {
   static blink::CrossThreadPersistent<T> Unwrap(
       const blink::CrossThreadWeakPersistent<T>& wrapped) {
-    WTF::RecursiveMutexLocker persistent_lock(
-        blink::ProcessHeap::CrossThreadPersistentMutex());
     return blink::CrossThreadPersistent<T>(wrapped.Get());
   }
 };

@@ -13,7 +13,7 @@
 #include "net/third_party/quic/platform/api/quic_flags.h"
 #include "net/third_party/quic/platform/api/quic_pcc_sender.h"
 
-namespace net {
+namespace quic {
 
 class RttStats;
 
@@ -28,12 +28,13 @@ SendAlgorithmInterface* SendAlgorithmInterface::Create(
     QuicPacketCount initial_congestion_window) {
   QuicPacketCount max_congestion_window = kDefaultMaxCongestionWindowPackets;
   switch (congestion_control_type) {
+    case kGoogCC:  // GoogCC is not supported by quic/core, fall back to BBR.
     case kBBR:
       return new BbrSender(rtt_stats, unacked_packets,
                            initial_congestion_window, max_congestion_window,
                            random);
     case kPCC:
-      if (GetQuicReloadableFlag(quic_enable_pcc)) {
+      if (GetQuicReloadableFlag(quic_enable_pcc3)) {
         return CreatePccSender(clock, rtt_stats, unacked_packets, random, stats,
                                initial_congestion_window,
                                max_congestion_window);
@@ -52,4 +53,4 @@ SendAlgorithmInterface* SendAlgorithmInterface::Create(
   return nullptr;
 }
 
-}  // namespace net
+}  // namespace quic

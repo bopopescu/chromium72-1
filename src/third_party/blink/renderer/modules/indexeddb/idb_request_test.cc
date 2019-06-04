@@ -35,7 +35,6 @@
 #include "third_party/blink/renderer/bindings/core/v8/v8_binding_for_core.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_binding_for_testing.h"
 #include "third_party/blink/renderer/core/dom/dom_exception.h"
-#include "third_party/blink/renderer/core/dom/exception_code.h"
 #include "third_party/blink/renderer/core/execution_context/execution_context.h"
 #include "third_party/blink/renderer/core/testing/null_execution_context.h"
 #include "third_party/blink/renderer/modules/indexeddb/idb_database.h"
@@ -83,7 +82,7 @@ class IDBRequestTest : public testing::Test {
     HashSet<String> transaction_scope = {"store"};
     transaction_ = IDBTransaction::CreateNonVersionChange(
         scope.GetScriptState(), kTransactionId, transaction_scope,
-        kWebIDBTransactionModeReadOnly, db_.Get());
+        mojom::IDBTransactionMode::ReadOnly, db_.Get());
 
     IDBKeyPath store_key_path("primaryKey");
     scoped_refptr<IDBObjectStoreMetadata> store_metadata = base::AdoptRef(
@@ -106,8 +105,8 @@ void EnsureIDBCallbacksDontThrow(IDBRequest* request,
   ASSERT_TRUE(request->transaction());
   V8TestingScope scope;
 
-  request->HandleResponse(
-      DOMException::Create(kAbortError, "Description goes here."));
+  request->HandleResponse(DOMException::Create(DOMExceptionCode::kAbortError,
+                                               "Description goes here."));
   request->HandleResponse(nullptr, IDBKey::CreateInvalid(),
                           IDBKey::CreateInvalid(),
                           CreateNullIDBValueForTesting(scope.GetIsolate()));
@@ -231,8 +230,8 @@ TEST_F(IDBRequestTest, AbortErrorAfterAbort) {
 
   // Now simulate the back end having fired an abort error at the request to
   // clear up any intermediaries.  Ensure an assertion is not raised.
-  request->HandleResponse(
-      DOMException::Create(kAbortError, "Description goes here."));
+  request->HandleResponse(DOMException::Create(DOMExceptionCode::kAbortError,
+                                               "Description goes here."));
 
   // Stop the request lest it be GCed and its destructor
   // finds the object in a pending state (and asserts.)
@@ -258,7 +257,7 @@ TEST_F(IDBRequestTest, ConnectionsAfterStopping) {
 
     scope.GetExecutionContext()->NotifyContextDestroyed();
     callbacks->OnUpgradeNeeded(kOldVersion, backend.release(), metadata,
-                               kWebIDBDataLossNone, String());
+                               mojom::IDBDataLoss::None, String());
   }
 
   {

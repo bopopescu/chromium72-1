@@ -11,38 +11,37 @@
 namespace previews {
 
 PreviewsUIService::PreviewsUIService(
-    PreviewsIOData* previews_io_data,
-    const scoped_refptr<base::SingleThreadTaskRunner>& io_task_runner,
-    std::unique_ptr<PreviewsOptOutStore> previews_opt_out_store,
+    std::unique_ptr<PreviewsDeciderImpl> previews_decider_impl,
+    std::unique_ptr<blacklist::OptOutStore> previews_opt_out_store,
     std::unique_ptr<PreviewsOptimizationGuide> previews_opt_guide,
     const PreviewsIsEnabledCallback& is_enabled_callback,
-    std::unique_ptr<PreviewsLogger> logger)
-    : io_task_runner_(io_task_runner),
+    std::unique_ptr<PreviewsLogger> logger,
+    blacklist::BlacklistData::AllowedTypesAndVersions allowed_previews,
+    network::NetworkQualityTracker* network_quality_tracker)
+    : previews_decider_impl_(std::move(previews_decider_impl)),
       logger_(std::move(logger)),
+      network_quality_tracker_(network_quality_tracker),
       weak_factory_(this) {
   DCHECK(logger_);
-  previews_io_data->Initialize(
-      weak_factory_.GetWeakPtr(), std::move(previews_opt_out_store),
-      std::move(previews_opt_guide), is_enabled_callback);
+  DCHECK(previews_decider_impl_);
+  DCHECK(network_quality_tracker_);
+  previews_decider_impl_->Initialize(
+      this, std::move(previews_opt_out_store), std::move(previews_opt_guide),
+      is_enabled_callback, std::move(allowed_previews));
+  network_quality_tracker_->AddEffectiveConnectionTypeObserver(this);
 }
 
 PreviewsUIService::~PreviewsUIService() {
-  DCHECK(thread_checker_.CalledOnValidThread());
-}
-
-void PreviewsUIService::SetIOData(base::WeakPtr<PreviewsIOData> io_data) {
-  DCHECK(thread_checker_.CalledOnValidThread());
-  io_data_ = io_data;
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  network_quality_tracker_->RemoveEffectiveConnectionTypeObserver(this);
 }
 
 void PreviewsUIService::AddPreviewNavigation(const GURL& url,
                                              PreviewsType type,
                                              bool opt_out,
                                              uint64_t page_id) {
-  DCHECK(thread_checker_.CalledOnValidThread());
-  io_task_runner_->PostTask(
-      FROM_HERE, base::Bind(&PreviewsIOData::AddPreviewNavigation, io_data_,
-                            url, opt_out, type, page_id));
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  previews_decider_impl_->AddPreviewNavigation(url, opt_out, type, page_id);
 }
 
 void PreviewsUIService::LogPreviewNavigation(const GURL& url,
@@ -50,7 +49,7 @@ void PreviewsUIService::LogPreviewNavigation(const GURL& url,
                                              bool opt_out,
                                              base::Time time,
                                              uint64_t page_id) {
-  DCHECK(thread_checker_.CalledOnValidThread());
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   logger_->LogPreviewNavigation(url, type, opt_out, time, page_id);
 }
 
@@ -61,50 +60,87 @@ void PreviewsUIService::LogPreviewDecisionMade(
     PreviewsType type,
     std::vector<PreviewsEligibilityReason>&& passed_reasons,
     uint64_t page_id) {
-  DCHECK(thread_checker_.CalledOnValidThread());
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   logger_->LogPreviewDecisionMade(reason, url, time, type,
                                   std::move(passed_reasons), page_id);
 }
 
 void PreviewsUIService::OnNewBlacklistedHost(const std::string& host,
                                              base::Time time) {
-  DCHECK(thread_checker_.CalledOnValidThread());
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   logger_->OnNewBlacklistedHost(host, time);
 }
 
 void PreviewsUIService::OnUserBlacklistedStatusChange(bool blacklisted) {
-  DCHECK(thread_checker_.CalledOnValidThread());
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   logger_->OnUserBlacklistedStatusChange(blacklisted);
 }
 
 void PreviewsUIService::OnBlacklistCleared(base::Time time) {
-  DCHECK(thread_checker_.CalledOnValidThread());
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   logger_->OnBlacklistCleared(time);
 }
 
 void PreviewsUIService::SetIgnorePreviewsBlacklistDecision(bool ignored) {
-  DCHECK(thread_checker_.CalledOnValidThread());
-  io_task_runner_->PostTask(
-      FROM_HERE, base::Bind(&PreviewsIOData::SetIgnorePreviewsBlacklistDecision,
-                            io_data_, ignored));
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  previews_decider_impl_->SetIgnorePreviewsBlacklistDecision(ignored);
 }
 
 void PreviewsUIService::OnIgnoreBlacklistDecisionStatusChanged(bool ignored) {
-  DCHECK(thread_checker_.CalledOnValidThread());
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   logger_->OnIgnoreBlacklistDecisionStatusChanged(ignored);
 }
 
+void PreviewsUIService::SetResourceLoadingHintsResourcePatternsToBlock(
+    const GURL& document_gurl,
+    const std::vector<std::string>& patterns) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  resource_loading_hints_document_gurl_ = document_gurl;
+  resource_loading_hints_patterns_to_block_ = patterns;
+}
+
+std::vector<std::string>
+PreviewsUIService::GetResourceLoadingHintsResourcePatternsToBlock(
+    const GURL& document_gurl) const {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+
+  // TODO(tbansal): https://crbug.com/856243. Read patterns from the proto
+  // optimizations file from the disk, and populate the return value.
+  if (document_gurl != resource_loading_hints_document_gurl_)
+    return std::vector<std::string>();
+  return resource_loading_hints_patterns_to_block_;
+}
+
 PreviewsLogger* PreviewsUIService::previews_logger() const {
-  DCHECK(thread_checker_.CalledOnValidThread());
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   return logger_.get();
+}
+
+PreviewsDeciderImpl* PreviewsUIService::previews_decider_impl() const {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  return previews_decider_impl_.get();
+}
+
+// When triggering previews, prevent long term black list rules.
+void PreviewsUIService::SetIgnoreLongTermBlackListForServerPreviews(
+    bool ignore_long_term_black_list_rules_allowed) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+
+  previews_decider_impl_->SetIgnoreLongTermBlackListForServerPreviews(
+      ignore_long_term_black_list_rules_allowed);
 }
 
 void PreviewsUIService::ClearBlackList(base::Time begin_time,
                                        base::Time end_time) {
-  DCHECK(thread_checker_.CalledOnValidThread());
-  io_task_runner_->PostTask(
-      FROM_HERE, base::Bind(&PreviewsIOData::ClearBlackList, io_data_,
-                            begin_time, end_time));
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  previews_decider_impl_->ClearBlackList(begin_time, end_time);
+}
+
+void PreviewsUIService::OnEffectiveConnectionTypeChanged(
+    net::EffectiveConnectionType type) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  current_effective_connection_type_ = type;
+  previews_decider_impl_->SetEffectiveConnectionType(type);
 }
 
 }  // namespace previews

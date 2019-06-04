@@ -2,9 +2,10 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
+import("//build/config/jumbo.gni")
 import("//build/config/nacl/config.gni")
 
-component("shared_impl") {
+jumbo_component("shared_impl") {
   output_name = "ppapi_shared"
 
   sources = [
@@ -46,8 +47,6 @@ component("shared_impl") {
     "platform_file.cc",
     "platform_file.h",
     "ppapi_constants.h",
-    "ppapi_features.cc",
-    "ppapi_features.h",
     "ppapi_globals.cc",
     "ppapi_globals.h",
     "ppapi_nacl_plugin_args.cc",

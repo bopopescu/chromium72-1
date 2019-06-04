@@ -5,6 +5,8 @@
 #ifndef CHROMEOS_COMPONENTS_TETHER_CONNECT_TETHERING_OPERATION_H_
 #define CHROMEOS_COMPONENTS_TETHER_CONNECT_TETHERING_OPERATION_H_
 
+#include <stdint.h>
+
 #include <map>
 #include <vector>
 
@@ -12,11 +14,19 @@
 #include "base/macros.h"
 #include "base/observer_list.h"
 #include "base/time/clock.h"
-#include "chromeos/components/tether/ble_connection_manager.h"
+#include "base/time/time.h"
 #include "chromeos/components/tether/message_transfer_operation.h"
 #include "components/cryptauth/remote_device_ref.h"
 
 namespace chromeos {
+
+namespace device_sync {
+class DeviceSyncClient;
+}  // namespace device_sync
+
+namespace secure_channel {
+class SecureChannelClient;
+}  // namespace secure_channel
 
 namespace tether {
 
@@ -46,7 +56,8 @@ class ConnectTetheringOperation : public MessageTransferOperation {
    public:
     static std::unique_ptr<ConnectTetheringOperation> NewInstance(
         cryptauth::RemoteDeviceRef device_to_connect,
-        BleConnectionManager* connection_manager,
+        device_sync::DeviceSyncClient* device_sync_client,
+        secure_channel::SecureChannelClient* secure_channel_client,
         TetherHostResponseRecorder* tether_host_response_recorder,
         bool setup_required);
 
@@ -55,7 +66,8 @@ class ConnectTetheringOperation : public MessageTransferOperation {
    protected:
     virtual std::unique_ptr<ConnectTetheringOperation> BuildInstance(
         cryptauth::RemoteDeviceRef devices_to_connect,
-        BleConnectionManager* connection_manager,
+        device_sync::DeviceSyncClient* device_sync_client,
+        secure_channel::SecureChannelClient* secure_channel_client,
         TetherHostResponseRecorder* tether_host_response_recorder,
         bool setup_required);
 
@@ -84,7 +96,8 @@ class ConnectTetheringOperation : public MessageTransferOperation {
  protected:
   ConnectTetheringOperation(
       cryptauth::RemoteDeviceRef device_to_connect,
-      BleConnectionManager* connection_manager,
+      device_sync::DeviceSyncClient* device_sync_client,
+      secure_channel::SecureChannelClient* secure_channel_client,
       TetherHostResponseRecorder* tether_host_response_recorder,
       bool setup_required);
 
@@ -95,7 +108,7 @@ class ConnectTetheringOperation : public MessageTransferOperation {
   void OnOperationFinished() override;
   MessageType GetMessageTypeForConnection() override;
   void OnMessageSent(int sequence_number) override;
-  uint32_t GetTimeoutSeconds() override;
+  uint32_t GetMessageTimeoutSeconds() override;
 
   void NotifyConnectTetheringRequestSent();
   void NotifyObserversOfSuccessfulResponse(const std::string& ssid,
@@ -105,7 +118,17 @@ class ConnectTetheringOperation : public MessageTransferOperation {
  private:
   friend class ConnectTetheringOperationTest;
   FRIEND_TEST_ALL_PREFIXES(ConnectTetheringOperationTest,
-                           TestOperation_SetupRequired);
+                           SuccessWithValidResponse);
+  FRIEND_TEST_ALL_PREFIXES(ConnectTetheringOperationTest,
+                           SuccessButInvalidResponse);
+  FRIEND_TEST_ALL_PREFIXES(ConnectTetheringOperationTest, UnknownError);
+  FRIEND_TEST_ALL_PREFIXES(ConnectTetheringOperationTest, ProvisioningFailed);
+  FRIEND_TEST_ALL_PREFIXES(ConnectTetheringOperationTest,
+                           NotifyConnectTetheringRequest);
+  FRIEND_TEST_ALL_PREFIXES(ConnectTetheringOperationTest,
+                           GetMessageTimeoutSeconds);
+  FRIEND_TEST_ALL_PREFIXES(ConnectTetheringOperationTest,
+                           MessageSentOnceAuthenticated);
 
   HostResponseErrorCode ConnectTetheringResponseCodeToHostResponseErrorCode(
       ConnectTetheringResponse_ResponseCode error_code);
@@ -130,7 +153,7 @@ class ConnectTetheringOperation : public MessageTransferOperation {
   HostResponseErrorCode error_code_to_return_;
   base::Time connect_tethering_request_start_time_;
 
-  base::ObserverList<Observer> observer_list_;
+  base::ObserverList<Observer>::Unchecked observer_list_;
 
   DISALLOW_COPY_AND_ASSIGN(ConnectTetheringOperation);
 };

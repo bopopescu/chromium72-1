@@ -19,7 +19,7 @@
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
-#include "base/sys_info.h"
+#include "base/system/sys_info.h"
 #include "build/build_config.h"
 #include "chrome/browser/diagnostics/diagnostics_test.h"
 #include "chrome/common/channel_info.h"
@@ -29,7 +29,6 @@
 #include "components/version_info/version_info.h"
 
 #if defined(OS_WIN)
-#include "chrome/browser/win/enumerate_modules_model.h"
 #include "chrome/installer/util/install_util.h"
 #endif
 

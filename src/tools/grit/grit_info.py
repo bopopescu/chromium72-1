@@ -110,6 +110,8 @@ def PrintUsage():
 
 
 def DoMain(argv):
+  os.environ['cwd'] = os.getcwd()
+
   parser = optparse.OptionParser()
   parser.add_option("--inputs", action="store_true", dest="inputs")
   parser.add_option("--outputs", action="store_true", dest="outputs")
@@ -169,10 +171,6 @@ def DoMain(argv):
 
 
 def main(argv):
-  if sys.version_info < (2, 6):
-    print "GRIT requires Python 2.6 or later."
-    return 1
-
   try:
     result = DoMain(argv[1:])
   except WrongNumberOfArguments, e:

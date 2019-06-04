@@ -38,6 +38,7 @@
 #include "third_party/blink/renderer/core/loader/link_loader_client.h"
 #include "third_party/blink/renderer/core/script/modulator.h"
 #include "third_party/blink/renderer/platform/cross_origin_attribute_value.h"
+#include "third_party/blink/renderer/platform/loader/fetch/fetch_parameters.h"
 #include "third_party/blink/renderer/platform/loader/fetch/resource.h"
 #include "third_party/blink/renderer/platform/prerender_client.h"
 
@@ -48,6 +49,8 @@ class LinkHeader;
 class LocalFrame;
 class NetworkHintsInterface;
 class PrerenderHandle;
+class Resource;
+enum class ResourceType : uint8_t;
 struct ViewportDescriptionWrapper;
 
 // The parameter object for LinkLoader::LoadLink().
@@ -59,10 +62,11 @@ struct LinkLoadParameters {
                      const String& media,
                      const String& nonce,
                      const String& integrity,
-                     const ReferrerPolicy& referrer_policy,
+                     const String& importance,
+                     network::mojom::ReferrerPolicy referrer_policy,
                      const KURL& href,
-                     const String& srcset,
-                     const String& sizes)
+                     const String& image_srcset,
+                     const String& image_sizes)
       : rel(rel),
         cross_origin(cross_origin),
         type(type),
@@ -70,10 +74,11 @@ struct LinkLoadParameters {
         media(media),
         nonce(nonce),
         integrity(integrity),
+        importance(importance),
         referrer_policy(referrer_policy),
         href(href),
-        srcset(srcset),
-        sizes(sizes) {}
+        image_srcset(image_srcset),
+        image_sizes(image_sizes) {}
   LinkLoadParameters(const LinkHeader&, const KURL& base_url);
 
   LinkRelAttribute rel;
@@ -83,10 +88,11 @@ struct LinkLoadParameters {
   String media;
   String nonce;
   String integrity;
-  ReferrerPolicy referrer_policy;
+  String importance;
+  network::mojom::ReferrerPolicy referrer_policy;
   KURL href;
-  String srcset;
-  String sizes;
+  String image_srcset;
+  String image_sizes;
 };
 
 // The LinkLoader can load link rel types icon, dns-prefetch, prefetch, and
@@ -97,8 +103,11 @@ class CORE_EXPORT LinkLoader final : public SingleModuleClient,
 
  public:
   static LinkLoader* Create(LinkLoaderClient* client) {
-    return new LinkLoader(client, client->GetLoadingTaskRunner());
+    return MakeGarbageCollected<LinkLoader>(client,
+                                            client->GetLoadingTaskRunner());
   }
+
+  LinkLoader(LinkLoaderClient*, scoped_refptr<base::SingleThreadTaskRunner>);
   ~LinkLoader() override;
 
   // from PrerenderClient
@@ -111,6 +120,12 @@ class CORE_EXPORT LinkLoader final : public SingleModuleClient,
   bool LoadLink(const LinkLoadParameters&,
                 Document&,
                 const NetworkHintsInterface&);
+  void LoadStylesheet(const LinkLoadParameters&,
+                      const AtomicString&,
+                      const WTF::TextEncoding&,
+                      FetchParameters::DeferOption,
+                      Document&,
+                      ResourceClient*);
   void DispatchLinkLoadingErroredAsync();
 
   enum CanLoadResources {
@@ -129,7 +144,7 @@ class CORE_EXPORT LinkLoader final : public SingleModuleClient,
                                   CanLoadResources,
                                   MediaPreloadPolicy,
                                   ViewportDescriptionWrapper*);
-  static base::Optional<Resource::Type> GetResourceTypeFromAsAttribute(
+  static base::Optional<ResourceType> GetResourceTypeFromAsAttribute(
       const String& as);
 
   Resource* GetResourceForTesting();
@@ -138,7 +153,6 @@ class CORE_EXPORT LinkLoader final : public SingleModuleClient,
 
  private:
   class FinishObserver;
-  LinkLoader(LinkLoaderClient*, scoped_refptr<base::SingleThreadTaskRunner>);
 
   void NotifyFinished();
   // SingleModuleClient implementation

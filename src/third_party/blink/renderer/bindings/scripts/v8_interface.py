@@ -33,8 +33,13 @@
 
 Design doc: http://www.chromium.org/developers/design-documents/idl-compiler
 """
+import os
+import sys
 from operator import or_
 
+sys.path.append(os.path.join(os.path.dirname(__file__),
+                             '..', '..', 'build', 'scripts'))
+from blinkbuild.name_style_converter import NameStyleConverter
 from idl_definitions import IdlAttribute, IdlOperation, IdlArgument
 from idl_types import IdlType, inherits_interface
 from overload_set_algorithm import effective_overload_set_by_length
@@ -64,10 +69,11 @@ INTERFACE_H_INCLUDES = frozenset([
 ])
 INTERFACE_CPP_INCLUDES = frozenset([
     'base/memory/scoped_refptr.h',
-    'bindings/core/v8/exception_state.h',
     'bindings/core/v8/v8_dom_configuration.h',
-    'platform/bindings/v8_object_constructor.h',
     'core/execution_context/execution_context.h',
+    'platform/bindings/exception_messages.h',
+    'platform/bindings/exception_state.h',
+    'platform/bindings/v8_object_constructor.h',
     'platform/wtf/get_ptr.h',
 ])
 
@@ -247,9 +253,8 @@ def interface_context(interface, interfaces):
         includes.add('bindings/core/v8/binding_security.h')
         includes.add('core/frame/local_dom_window.h')
 
-    # [PrimaryGlobal] and [Global]
-    is_global = ('PrimaryGlobal' in extended_attributes or
-                 'Global' in extended_attributes)
+    # [Global]
+    is_global = 'Global' in extended_attributes
 
     # [ImmutablePrototype]
     # TODO(littledan): Is it possible to deduce this based on inheritance,
@@ -286,6 +291,7 @@ def interface_context(interface, interfaces):
         'has_partial_interface': len(interface.partial_interfaces) > 0,
         'header_includes': header_includes,
         'interface_name': interface.name,
+        'internal_namespace': internal_namespace(interface),
         'is_array_buffer_or_view': is_array_buffer_or_view,
         'is_check_security': is_check_security,
         'is_event_target': is_event_target,
@@ -301,6 +307,7 @@ def interface_context(interface, interfaces):
         'pass_cpp_type': cpp_name(interface) + '*',
         'runtime_call_stats': runtime_call_stats_context(interface),
         'runtime_enabled_feature_name': runtime_enabled_feature_name(interface),  # [RuntimeEnabled]
+        'snake_case_v8_class': NameStyleConverter(v8_class_name).to_snake_case(),
         'v8_class': v8_class_name,
         'v8_class_or_partial': v8_class_name_or_partial,
         'wrapper_class_id': wrapper_class_id,
@@ -341,6 +348,7 @@ def interface_context(interface, interfaces):
                             ' specified on partial interface definitions: '
                             '%s' % interface.name)
         if named_constructor:
+            includes.add('platform/bindings/v8_per_context_data.h')
             includes.add('platform/bindings/v8_private_property.h')
 
         includes.add('platform/bindings/v8_object_constructor.h')
@@ -400,7 +408,6 @@ def interface_context(interface, interfaces):
         # Elements in attributes are broken in following members.
         'accessors': v8_attributes.filter_accessors(attributes),
         'data_attributes': v8_attributes.filter_data_attributes(attributes),
-        'lazy_data_attributes': v8_attributes.filter_lazy_data_attributes(attributes),
         'runtime_enabled_attributes': v8_attributes.filter_runtime_enabled(attributes),
     })
 
@@ -475,6 +482,8 @@ def interface_context(interface, interfaces):
             sorted(origin_trial_features(interface, context['constants'], context['attributes'], context['methods']) +
                    context_enabled_features(context['attributes'])),
     })
+    if context['optional_features']:
+        includes.add('platform/bindings/v8_per_context_data.h')
 
     # Cross-origin interceptors
     has_cross_origin_named_getter = False
@@ -678,7 +687,8 @@ def methods_context(interface):
 
                     # void forEach(Function callback, [Default=Undefined] optional any thisArg)
                     generated_method(IdlType('void'), 'forEach',
-                                     arguments=[generated_argument(IdlType('Function'), 'callback'),
+                                     # TODO(yukishiino): |callback| should be type of Function.
+                                     arguments=[generated_argument(IdlType('CallbackFunctionTreatedAsScriptValue'), 'callback'),
                                                 generated_argument(IdlType('any'), 'thisArg',
                                                                    is_optional=True,
                                                                    extended_attributes={'Default': 'Undefined'})],
@@ -825,6 +835,7 @@ def constant_context(constant, interface):
     extended_attributes = constant.extended_attributes
 
     return {
+        'camel_case_name': NameStyleConverter(constant.name).to_upper_camel_case(),
         'cpp_class': extended_attributes.get('PartialInterfaceImplementedAs'),
         'cpp_type': constant.idl_type.cpp_type,
         'deprecate_as': v8_utilities.deprecate_as(constant),  # [DeprecateAs]
@@ -869,8 +880,7 @@ def compute_method_overloads_context_by_type(interface, methods):
         # package necessary information into |method.overloads| for that method.
         overloads[-1]['overloads'] = overloads_context(interface, overloads)
         overloads[-1]['overloads']['name'] = name
-
-
+        overloads[-1]['overloads']['camel_case_name'] = NameStyleConverter(name).to_upper_camel_case()
 
 
 def overloads_context(interface, overloads):
@@ -893,6 +903,7 @@ def overloads_context(interface, overloads):
     effective_overloads_by_length = effective_overload_set_by_length(overloads)
     lengths = [length for length, _ in effective_overloads_by_length]
     name = overloads[0].get('name', '<constructor>')
+    camel_case_name = NameStyleConverter(name).to_upper_camel_case()
 
     runtime_determined_lengths = None
     function_length = lengths[0]
@@ -913,16 +924,15 @@ def overloads_context(interface, overloads):
             for length, effective_overloads in effective_overloads_by_length:
                 runtime_enabled_feature_names = set(
                     method['runtime_enabled_feature_name']
-                    for method, _, _ in effective_overloads
-                    if method.get('runtime_enabled_feature_name'))
-                if not runtime_enabled_feature_names:
+                    for method, _, _ in effective_overloads)
+                if None in runtime_enabled_feature_names:
                     # This "length" is unconditionally enabled, so stop here.
                     runtime_determined_lengths.append((length, [None]))
                     break
                 runtime_determined_lengths.append(
                     (length, sorted(runtime_enabled_feature_names)))
-            function_length = ('%sV8Internal::%sMethodLength()'
-                               % (cpp_name_or_partial(interface), name))
+            function_length = ('%s::%sMethodLength()'
+                               % (internal_namespace(interface), camel_case_name))
 
         # Check if all overloads with the longest required arguments list are
         # runtime enabled, in which case we need to have a runtime determined
@@ -944,8 +954,8 @@ def overloads_context(interface, overloads):
                     break
                 runtime_determined_maxargs.append(
                     (length, sorted(runtime_enabled_feature_names)))
-            maxarg = ('%sV8Internal::%sMethodMaxArg()'
-                      % (cpp_name_or_partial(interface), name))
+            maxarg = ('%s::%sMethodMaxArg()' %
+                      (internal_namespace(interface), camel_case_name))
 
     # Check and fail if overloads disagree about whether the return type
     # is a Promise or not.
@@ -1168,7 +1178,7 @@ def resolution_tests_methods(effective_overloads):
     # ...
     for idl_type, method in idl_types_methods:
         if idl_type.is_wrapper_type and not idl_type.is_array_buffer_or_view:
-            test = 'V8{idl_type}::hasInstance({cpp_value}, info.GetIsolate())'.format(
+            test = 'V8{idl_type}::HasInstance({cpp_value}, info.GetIsolate())'.format(
                 idl_type=idl_type.base_type, cpp_value=cpp_value)
             yield test, method
 
@@ -1238,7 +1248,7 @@ def resolution_tests_methods(effective_overloads):
         # Either condition should be fulfilled to call this |method|.
         test = '%s->IsArray()' % cpp_value
         yield test, method
-        test = 'HasCallableIteratorSymbol(info.GetIsolate(), %s, exceptionState)' % cpp_value
+        test = 'HasCallableIteratorSymbol(info.GetIsolate(), %s, exception_state)' % cpp_value
         yield test, method
     except StopIteration:
         pass
@@ -1289,7 +1299,8 @@ def resolution_tests_methods(effective_overloads):
     # ...
     try:
         method = next(method for idl_type, method in idl_types_methods
-                      if idl_type.is_string_type or idl_type.is_enum)
+                      if idl_type.is_string_type or idl_type.is_enum
+                      or (idl_type.is_union_type and idl_type.string_member_type))
         yield 'true', method
     except StopIteration:
         pass
@@ -1349,6 +1360,11 @@ def common_value(dicts, key):
     that appears with the same value on all items in an overload set.
     """
     return common(dicts, lambda d: d.get(key))
+
+
+def internal_namespace(interface):
+    return (v8_utilities.to_snake_case(cpp_name_or_partial(interface)) +
+            '_v8_internal')
 
 
 ################################################################################
@@ -1460,9 +1476,9 @@ def property_getter(getter, cpp_arguments):
     cpp_method_name = 'impl->%s' % cpp_name(getter)
 
     if is_call_with_script_state:
-        cpp_arguments.insert(0, 'scriptState')
+        cpp_arguments.insert(0, 'script_state')
     if is_raises_exception:
-        cpp_arguments.append('exceptionState')
+        cpp_arguments.append('exception_state')
     if use_output_parameter_for_result:
         cpp_arguments.append('result')
 
@@ -1521,7 +1537,7 @@ def property_setter(setter, interface):
         'is_raises_exception': is_raises_exception,
         'name': cpp_name(setter),
         'v8_value_to_local_cpp_value': idl_type.v8_value_to_local_cpp_value(
-            extended_attributes, 'v8Value', 'propertyValue'),
+            extended_attributes, 'v8_value', 'property_value'),
     }
 
 

@@ -19,9 +19,11 @@
 #include "base/time/time.h"
 #include "base/trace_event/trace_event.h"
 #include "build/build_config.h"
+#include "components/viz/common/features.h"
 #include "gpu/command_buffer/common/constants.h"
 #include "gpu/command_buffer/common/gpu_memory_buffer_support.h"
 #include "gpu/command_buffer/common/mailbox.h"
+#include "gpu/command_buffer/common/presentation_feedback_utils.h"
 #include "gpu/command_buffer/common/swap_buffers_flags.h"
 #include "gpu/command_buffer/service/gl_context_virtual.h"
 #include "gpu/command_buffer/service/gl_state_restorer_impl.h"
@@ -38,8 +40,6 @@
 #include "gpu/ipc/service/gpu_channel_manager.h"
 #include "gpu/ipc/service/gpu_channel_manager_delegate.h"
 #include "gpu/ipc/service/gpu_memory_buffer_factory.h"
-#include "gpu/ipc/service/gpu_memory_manager.h"
-#include "gpu/ipc/service/gpu_memory_tracking.h"
 #include "gpu/ipc/service/gpu_watchdog_thread.h"
 #include "gpu/ipc/service/image_transport_surface.h"
 #include "ui/gl/gl_bindings.h"
@@ -81,7 +81,7 @@ GLES2CommandBufferStub::~GLES2CommandBufferStub() {}
 gpu::ContextResult GLES2CommandBufferStub::Initialize(
     CommandBufferStub* share_command_buffer_stub,
     const GPUCreateCommandBufferConfig& init_params,
-    std::unique_ptr<base::SharedMemory> shared_state_shm) {
+    base::UnsafeSharedMemoryRegion shared_state_shm) {
   TRACE_EVENT0("gpu", "GLES2CommandBufferStub::Initialize");
   FastSetActiveURL(active_url_, active_url_hash_, channel_);
 
@@ -93,8 +93,8 @@ gpu::ContextResult GLES2CommandBufferStub::Initialize(
     DCHECK(context_group_->bind_generates_resource() ==
            init_params.attribs.bind_generates_resource);
   } else {
-    scoped_refptr<gles2::FeatureInfo> feature_info =
-        new gles2::FeatureInfo(manager->gpu_driver_bug_workarounds());
+    scoped_refptr<gles2::FeatureInfo> feature_info = new gles2::FeatureInfo(
+        manager->gpu_driver_bug_workarounds(), manager->gpu_feature_info());
     gpu::GpuMemoryBufferFactory* gmb_factory =
         manager->gpu_memory_buffer_factory();
     context_group_ = new gles2::ContextGroup(
@@ -105,7 +105,9 @@ gpu::ContextResult GLES2CommandBufferStub::Initialize(
         init_params.attribs.bind_generates_resource, channel_->image_manager(),
         gmb_factory ? gmb_factory->AsImageFactory() : nullptr,
         manager->watchdog() /* progress_reporter */,
-        manager->gpu_feature_info(), manager->discardable_manager());
+        manager->gpu_feature_info(), manager->discardable_manager(),
+        manager->passthrough_discardable_manager(),
+        manager->shared_image_manager());
   }
 
 #if defined(OS_MACOSX)
@@ -123,13 +125,21 @@ gpu::ContextResult GLES2CommandBufferStub::Initialize(
   // only a single context. See crbug.com/510243 for details.
   use_virtualized_gl_context_ |= manager->mailbox_manager()->UsesSync();
 
+  const auto& gpu_feature_info = manager->gpu_feature_info();
+  const bool use_oop_rasterization =
+      gpu_feature_info.status_values[GPU_FEATURE_TYPE_OOP_RASTERIZATION] ==
+      gpu::kGpuFeatureStatusEnabled;
+
+  // With OOP-R, SkiaRenderer and Skia DDL, we will only have one GLContext
+  // and share it with RasterDecoders and DisplayCompositor. So it is not
+  // necessary to use virtualized gl context anymore.
+  // TODO(penghuang): Make virtualized gl context work with SkiaRenderer + DDL +
+  // OOPR. https://crbug.com/838899
+  if (features::IsUsingSkiaDeferredDisplayList() && use_oop_rasterization)
+    use_virtualized_gl_context_ = false;
+
   bool offscreen = (surface_handle_ == kNullSurfaceHandle);
-  gl::GLSurface* default_surface = manager->GetDefaultOffscreenSurface();
-  if (!default_surface) {
-    LOG(ERROR) << "ContextResult::kFatalFailure: "
-                  "Failed to create default offscreen surface.";
-    return gpu::ContextResult::kFatalFailure;
-  }
+  gl::GLSurface* default_surface = manager->default_offscreen_surface();
   // On low-spec Android devices, the default offscreen surface is
   // RGB565, but WebGL rendering contexts still ask for RGBA8888 mode.
   // That combination works for offscreen rendering, we can still use
@@ -200,8 +210,9 @@ gpu::ContextResult GLES2CommandBufferStub::Initialize(
       surface_ = gl::init::CreateOffscreenGLSurfaceWithFormat(gfx::Size(),
                                                               surface_format);
       if (!surface_) {
-        LOG(ERROR) << "ContextResult::kFatalFailure: Failed to create surface.";
-        return gpu::ContextResult::kFatalFailure;
+        LOG(ERROR)
+            << "ContextResult::kSurfaceFailure: Failed to create surface.";
+        return gpu::ContextResult::kSurfaceFailure;
       }
     } else {
       surface_ = default_surface;
@@ -224,8 +235,8 @@ gpu::ContextResult GLES2CommandBufferStub::Initialize(
         weak_ptr_factory_.GetWeakPtr(), surface_handle_, surface_format);
     if (!surface_ || !surface_->Initialize(surface_format)) {
       surface_ = nullptr;
-      LOG(ERROR) << "ContextResult::kFatalFailure: Failed to create surface.";
-      return gpu::ContextResult::kFatalFailure;
+      LOG(ERROR) << "ContextResult::kSurfaceFailure: Failed to create surface.";
+      return gpu::ContextResult::kSurfaceFailure;
     }
     if (init_params.attribs.enable_swap_timestamps_if_supported &&
         surface_->SupportsSwapTimestamps())
@@ -238,7 +249,7 @@ gpu::ContextResult GLES2CommandBufferStub::Initialize(
     if (share_command_buffer_stub) {
       share_group_ = share_command_buffer_stub->share_group();
     } else {
-      share_group_ = new gl::GLShareGroup();
+      share_group_ = base::MakeRefCounted<gl::GLShareGroup>();
     }
   } else {
     // When using the validating command decoder, always use the global share
@@ -340,13 +351,15 @@ gpu::ContextResult GLES2CommandBufferStub::Initialize(
   }
 
   const size_t kSharedStateSize = sizeof(CommandBufferSharedState);
-  if (!shared_state_shm->Map(kSharedStateSize)) {
+  base::WritableSharedMemoryMapping shared_state_mapping =
+      shared_state_shm.MapAt(0, kSharedStateSize);
+  if (!shared_state_mapping.IsValid()) {
     LOG(ERROR) << "ContextResult::kFatalFailure: "
                   "Failed to map shared state buffer.";
     return gpu::ContextResult::kFatalFailure;
   }
   command_buffer_->SetSharedStateBuffer(MakeBackingFromSharedMemory(
-      std::move(shared_state_shm), kSharedStateSize));
+      std::move(shared_state_shm), std::move(shared_state_mapping)));
 
   if (offscreen && !active_url_.is_empty())
     manager->delegate()->DidCreateOffscreenContext(active_url_);
@@ -377,8 +390,8 @@ void GLES2CommandBufferStub::DidCreateAcceleratedSurfaceChildWindow(
     SurfaceHandle parent_window,
     SurfaceHandle child_window) {
   GpuChannelManager* gpu_channel_manager = channel_->gpu_channel_manager();
-  gpu_channel_manager->delegate()->SendAcceleratedSurfaceCreatedChildWindow(
-      parent_window, child_window);
+  gpu_channel_manager->delegate()->SendCreatedChildWindow(parent_window,
+                                                          child_window);
 }
 #endif
 
@@ -397,19 +410,12 @@ const GpuPreferences& GLES2CommandBufferStub::GetGpuPreferences() const {
   return context_group_->gpu_preferences();
 }
 
-void GLES2CommandBufferStub::SetSnapshotRequestedCallback(
-    const base::Closure& callback) {
-  snapshot_requested_callback_ = callback;
-}
-
 void GLES2CommandBufferStub::BufferPresented(
     const gfx::PresentationFeedback& feedback) {
   SwapBufferParams params = pending_presented_params_.front();
   pending_presented_params_.pop_front();
 
-  if (params.flags & gpu::SwapBuffersFlags::kPresentationFeedback ||
-      (params.flags & gpu::SwapBuffersFlags::kVSyncParams &&
-       feedback.flags & gfx::PresentationFeedback::kVSync)) {
+  if (ShouldSendBufferPresented(params.flags, feedback.flags)) {
     Send(new GpuCommandBufferMsg_BufferPresented(route_id_, params.swap_id,
                                                  feedback));
   }

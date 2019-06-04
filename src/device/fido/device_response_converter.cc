@@ -8,11 +8,12 @@
 #include <string>
 #include <utility>
 
+#include "base/containers/span.h"
 #include "base/numerics/safe_conversions.h"
 #include "base/optional.h"
 #include "base/stl_util.h"
-#include "components/cbor/cbor_reader.h"
-#include "components/cbor/cbor_writer.h"
+#include "components/cbor/reader.h"
+#include "components/cbor/writer.h"
 #include "device/fido/authenticator_data.h"
 #include "device/fido/authenticator_supported_options.h"
 #include "device/fido/fido_constants.h"
@@ -21,10 +22,21 @@
 namespace device {
 
 namespace {
+
 constexpr size_t kResponseCodeLength = 1;
+
+ProtocolVersion ConvertStringToProtocolVersion(base::StringPiece version) {
+  if (version == kCtap2Version)
+    return ProtocolVersion::kCtap;
+  if (version == kU2fVersion)
+    return ProtocolVersion::kU2f;
+
+  return ProtocolVersion::kUnknown;
 }
 
-using CBOR = cbor::CBORValue;
+}  // namespace
+
+using CBOR = cbor::Value;
 
 CtapDeviceResponseCode GetResponseCode(base::span<const uint8_t> buffer) {
   if (buffer.empty())
@@ -39,12 +51,12 @@ CtapDeviceResponseCode GetResponseCode(base::span<const uint8_t> buffer) {
 // Decodes byte array response from authenticator to CBOR value object and
 // checks for correct encoding format.
 base::Optional<AuthenticatorMakeCredentialResponse>
-ReadCTAPMakeCredentialResponse(base::span<const uint8_t> buffer) {
+ReadCTAPMakeCredentialResponse(FidoTransportProtocol transport_used,
+                               base::span<const uint8_t> buffer) {
   if (buffer.size() <= kResponseCodeLength)
     return base::nullopt;
 
-  base::Optional<CBOR> decoded_response =
-      cbor::CBORReader::Read(buffer.subspan(1));
+  base::Optional<CBOR> decoded_response = cbor::Reader::Read(buffer.subspan(1));
   if (!decoded_response || !decoded_response->is_map())
     return base::nullopt;
 
@@ -68,6 +80,7 @@ ReadCTAPMakeCredentialResponse(base::span<const uint8_t> buffer) {
     return base::nullopt;
 
   return AuthenticatorMakeCredentialResponse(
+      transport_used,
       AttestationObject(std::move(*authenticator_data),
                         std::make_unique<OpaqueAttestationStatement>(
                             format, it->second.Clone())));
@@ -78,8 +91,7 @@ base::Optional<AuthenticatorGetAssertionResponse> ReadCTAPGetAssertionResponse(
   if (buffer.size() <= kResponseCodeLength)
     return base::nullopt;
 
-  base::Optional<CBOR> decoded_response =
-      cbor::CBORReader::Read(buffer.subspan(1));
+  base::Optional<CBOR> decoded_response = cbor::Reader::Read(buffer.subspan(1));
 
   if (!decoded_response || !decoded_response->is_map())
     return base::nullopt;
@@ -137,8 +149,7 @@ base::Optional<AuthenticatorGetInfoResponse> ReadCTAPGetInfoResponse(
       GetResponseCode(buffer) != CtapDeviceResponseCode::kSuccess)
     return base::nullopt;
 
-  base::Optional<CBOR> decoded_response =
-      cbor::CBORReader::Read(buffer.subspan(1));
+  base::Optional<CBOR> decoded_response = cbor::Reader::Read(buffer.subspan(1));
 
   if (!decoded_response || !decoded_response->is_map())
     return base::nullopt;
@@ -146,23 +157,38 @@ base::Optional<AuthenticatorGetInfoResponse> ReadCTAPGetInfoResponse(
   const auto& response_map = decoded_response->GetMap();
 
   auto it = response_map.find(CBOR(1));
-  if (it == response_map.end() || !it->second.is_array())
+  if (it == response_map.end() || !it->second.is_array() ||
+      it->second.GetArray().size() > 2) {
     return base::nullopt;
+  }
 
-  std::vector<std::string> versions;
+  base::flat_set<ProtocolVersion> protocol_versions;
   for (const auto& version : it->second.GetArray()) {
     if (!version.is_string())
       return base::nullopt;
 
-    versions.push_back(version.GetString());
+    auto protocol = ConvertStringToProtocolVersion(version.GetString());
+    if (protocol == ProtocolVersion::kUnknown) {
+      VLOG(2) << "Unexpected protocol version received.";
+      continue;
+    }
+
+    if (!protocol_versions.insert(protocol).second)
+      return base::nullopt;
   }
 
-  it = response_map.find(CBOR(3));
-  if (it == response_map.end() || !it->second.is_bytestring())
+  if (protocol_versions.empty())
     return base::nullopt;
 
-  AuthenticatorGetInfoResponse response(std::move(versions),
-                                        it->second.GetBytestring());
+  it = response_map.find(CBOR(3));
+  if (it == response_map.end() || !it->second.is_bytestring() ||
+      it->second.GetBytestring().size() != kAaguidLength) {
+    return base::nullopt;
+  }
+
+  AuthenticatorGetInfoResponse response(
+      std::move(protocol_versions),
+      base::make_span<kAaguidLength>(it->second.GetBytestring()));
 
   it = response_map.find(CBOR(2));
   if (it != response_map.end()) {

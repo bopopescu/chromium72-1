@@ -11,15 +11,22 @@
 #include "base/test/simple_test_tick_clock.h"
 #include "base/test/test_mock_time_task_runner.h"
 #include "build/build_config.h"
+#include "chrome/browser/browser_process.h"
 #include "chrome/browser/resource_coordinator/lifecycle_unit_observer.h"
 #include "chrome/browser/resource_coordinator/lifecycle_unit_source_observer.h"
+#include "chrome/browser/resource_coordinator/local_site_characteristics_data_unittest_utils.h"
+#include "chrome/browser/resource_coordinator/tab_helper.h"
 #include "chrome/browser/resource_coordinator/tab_lifecycle_observer.h"
 #include "chrome/browser/resource_coordinator/tab_lifecycle_unit.h"
+#include "chrome/browser/resource_coordinator/test_lifecycle_unit.h"
 #include "chrome/browser/resource_coordinator/time.h"
+#include "chrome/browser/resource_coordinator/utils.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/tabs/test_tab_strip_model_delegate.h"
-#include "chrome/test/base/chrome_render_view_host_test_harness.h"
+#include "chrome/common/pref_names.h"
 #include "chrome/test/base/testing_profile.h"
+#include "components/prefs/pref_registry_simple.h"
+#include "components/prefs/testing_pref_service.h"
 #include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/test/web_contents_tester.h"
@@ -71,8 +78,10 @@ class MockLifecycleUnitObserver : public LifecycleUnitObserver {
  public:
   MockLifecycleUnitObserver() = default;
 
-  MOCK_METHOD2(OnLifecycleUnitStateChanged,
-               void(LifecycleUnit* lifecycle_unit, LifecycleState));
+  MOCK_METHOD3(OnLifecycleUnitStateChanged,
+               void(LifecycleUnit* lifecycle_unit,
+                    LifecycleUnitState,
+                    LifecycleUnitStateChangeReason));
   MOCK_METHOD2(OnLifecycleUnitVisibilityChanged,
                void(LifecycleUnit* lifecycle_unit,
                     content::Visibility visibility));
@@ -86,14 +95,8 @@ bool IsFocused(LifecycleUnit* lifecycle_unit) {
   return lifecycle_unit->GetLastFocusedTime() == base::TimeTicks::Max();
 }
 
-#define EXPECT_FOR_ALL_DISCARD_REASONS(lifecycle_unit, method, value)    \
-  do {                                                                   \
-    EXPECT_EQ(value, lifecycle_unit->method(DiscardReason::kExternal));  \
-    EXPECT_EQ(value, lifecycle_unit->method(DiscardReason::kProactive)); \
-    EXPECT_EQ(value, lifecycle_unit->method(DiscardReason::kUrgent));    \
-  } while (false)
-
-class TabLifecycleUnitSourceTest : public ChromeRenderViewHostTestHarness {
+class TabLifecycleUnitSourceTest
+    : public testing::ChromeTestHarnessWithLocalDB {
  protected:
   TabLifecycleUnitSourceTest()
       : scoped_context_(
@@ -104,9 +107,12 @@ class TabLifecycleUnitSourceTest : public ChromeRenderViewHostTestHarness {
   }
 
   void SetUp() override {
-    ChromeRenderViewHostTestHarness::SetUp();
+    ChromeTestHarnessWithLocalDB::SetUp();
 
-    source_ = TabLifecycleUnitSource::GetInstance();
+    // Force TabManager/TabLifecycleUnitSource creation.
+    g_browser_process->GetTabManager();
+
+    source_ = GetTabLifecycleUnitSource();
     source_->AddObserver(&source_observer_);
     source_->AddTabLifecycleObserver(&tab_observer_);
 
@@ -121,7 +127,7 @@ class TabLifecycleUnitSourceTest : public ChromeRenderViewHostTestHarness {
 
     task_runner_->RunUntilIdle();
     scoped_context_.reset();
-    ChromeRenderViewHostTestHarness::TearDown();
+    ChromeTestHarnessWithLocalDB::TearDown();
   }
 
   // If |focus_tab_strip| is true, focuses the tab strip. Then, appends 2 tabs
@@ -137,8 +143,8 @@ class TabLifecycleUnitSourceTest : public ChromeRenderViewHostTestHarness {
     // Add a foreground tab to the tab strip.
     task_runner_->FastForwardBy(kShortDelay);
     auto time_before_first_tab = NowTicks();
-    EXPECT_CALL(source_observer_, OnLifecycleUnitCreated(testing::_))
-        .WillOnce(testing::Invoke([&](LifecycleUnit* lifecycle_unit) {
+    EXPECT_CALL(source_observer_, OnLifecycleUnitCreated(::testing::_))
+        .WillOnce(::testing::Invoke([&](LifecycleUnit* lifecycle_unit) {
           *first_lifecycle_unit = lifecycle_unit;
 
           if (focus_tab_strip) {
@@ -152,14 +158,19 @@ class TabLifecycleUnitSourceTest : public ChromeRenderViewHostTestHarness {
         CreateAndNavigateWebContents();
     content::WebContents* raw_first_web_contents = first_web_contents.get();
     tab_strip_model_->AppendWebContents(std::move(first_web_contents), true);
-    testing::Mock::VerifyAndClear(&source_observer_);
+    ::testing::Mock::VerifyAndClear(&source_observer_);
     EXPECT_TRUE(source_->GetTabLifecycleUnitExternal(raw_first_web_contents));
+    base::RepeatingClosure run_loop_cb = base::BindRepeating(
+        &base::TestMockTimeTaskRunner::RunUntilIdle, task_runner_);
+    testing::WaitForLocalDBEntryToBeInitialized(raw_first_web_contents,
+                                                run_loop_cb);
+    testing::ExpireLocalDBObservationWindows(raw_first_web_contents);
 
     // Add another foreground tab to the focused tab strip.
     task_runner_->FastForwardBy(kShortDelay);
     auto time_before_second_tab = NowTicks();
-    EXPECT_CALL(source_observer_, OnLifecycleUnitCreated(testing::_))
-        .WillOnce(testing::Invoke([&](LifecycleUnit* lifecycle_unit) {
+    EXPECT_CALL(source_observer_, OnLifecycleUnitCreated(::testing::_))
+        .WillOnce(::testing::Invoke([&](LifecycleUnit* lifecycle_unit) {
           *second_lifecycle_unit = lifecycle_unit;
 
           if (focus_tab_strip) {
@@ -177,8 +188,11 @@ class TabLifecycleUnitSourceTest : public ChromeRenderViewHostTestHarness {
         CreateAndNavigateWebContents();
     content::WebContents* raw_second_web_contents = second_web_contents.get();
     tab_strip_model_->AppendWebContents(std::move(second_web_contents), true);
-    testing::Mock::VerifyAndClear(&source_observer_);
+    ::testing::Mock::VerifyAndClear(&source_observer_);
     EXPECT_TRUE(source_->GetTabLifecycleUnitExternal(raw_second_web_contents));
+    testing::WaitForLocalDBEntryToBeInitialized(raw_second_web_contents,
+                                                run_loop_cb);
+    testing::ExpireLocalDBObservationWindows(raw_second_web_contents);
 
     // TabStripModel doesn't update the visibility of its WebContents by itself.
     raw_first_web_contents->WasHidden();
@@ -198,8 +212,8 @@ class TabLifecycleUnitSourceTest : public ChromeRenderViewHostTestHarness {
     // Add a background tab to the focused tab strip.
     task_runner_->FastForwardBy(kShortDelay);
     LifecycleUnit* third_lifecycle_unit = nullptr;
-    EXPECT_CALL(source_observer_, OnLifecycleUnitCreated(testing::_))
-        .WillOnce(testing::Invoke([&](LifecycleUnit* lifecycle_unit) {
+    EXPECT_CALL(source_observer_, OnLifecycleUnitCreated(::testing::_))
+        .WillOnce(::testing::Invoke([&](LifecycleUnit* lifecycle_unit) {
           third_lifecycle_unit = lifecycle_unit;
 
           if (focus_tab_strip) {
@@ -218,7 +232,7 @@ class TabLifecycleUnitSourceTest : public ChromeRenderViewHostTestHarness {
         CreateAndNavigateWebContents();
     content::WebContents* raw_third_web_contents = third_web_contents.get();
     tab_strip_model_->AppendWebContents(std::move(third_web_contents), false);
-    testing::Mock::VerifyAndClear(&source_observer_);
+    ::testing::Mock::VerifyAndClear(&source_observer_);
     EXPECT_TRUE(source_->GetTabLifecycleUnitExternal(raw_third_web_contents));
 
     // Expect notifications when tabs are closed.
@@ -230,11 +244,12 @@ class TabLifecycleUnitSourceTest : public ChromeRenderViewHostTestHarness {
   void CloseTabsAndExpectNotifications(
       TabStripModel* tab_strip_model,
       std::vector<LifecycleUnit*> lifecycle_units) {
-    std::vector<std::unique_ptr<testing::StrictMock<MockLifecycleUnitObserver>>>
+    std::vector<
+        std::unique_ptr<::testing::StrictMock<MockLifecycleUnitObserver>>>
         observers;
     for (LifecycleUnit* lifecycle_unit : lifecycle_units) {
       observers.emplace_back(
-          std::make_unique<testing::StrictMock<MockLifecycleUnitObserver>>());
+          std::make_unique<::testing::StrictMock<MockLifecycleUnitObserver>>());
       lifecycle_unit->AddObserver(observers.back().get());
       EXPECT_CALL(*observers.back().get(),
                   OnLifecycleUnitDestroyed(lifecycle_unit));
@@ -243,26 +258,32 @@ class TabLifecycleUnitSourceTest : public ChromeRenderViewHostTestHarness {
   }
 
   void TransitionFromPendingDiscardToDiscardedIfNeeded(
-      DiscardReason reason,
+      LifecycleUnitDiscardReason reason,
       LifecycleUnit* lifecycle_unit) {
-    if (reason == DiscardReason::kProactive) {
-      EXPECT_EQ(LifecycleState::PENDING_DISCARD, lifecycle_unit->GetState());
+    if (reason == LifecycleUnitDiscardReason::PROACTIVE) {
+      EXPECT_EQ(LifecycleUnitState::PENDING_DISCARD,
+                lifecycle_unit->GetState());
       task_runner_->FastForwardBy(kProactiveDiscardFreezeTimeout);
     }
-    EXPECT_EQ(LifecycleState::DISCARDED, lifecycle_unit->GetState());
+    EXPECT_EQ(LifecycleUnitState::DISCARDED, lifecycle_unit->GetState());
   }
 
-  void DetachWebContentsTest(DiscardReason reason) {
+  void DiscardAndAttachTabHelpers(LifecycleUnit* lifecycle_unit) {}
+
+  void DetachWebContentsTest(LifecycleUnitDiscardReason reason) {
     LifecycleUnit* first_lifecycle_unit = nullptr;
     LifecycleUnit* second_lifecycle_unit = nullptr;
     CreateTwoTabs(true /* focus_tab_strip */, &first_lifecycle_unit,
                   &second_lifecycle_unit);
 
+    // Advance time so tabs are urgent discardable.
+    task_runner_->AdvanceMockTickClock(kBackgroundUrgentProtectionTime);
+
     // Detach the non-active tab. Verify that it can no longer be discarded.
-    EXPECT_FOR_ALL_DISCARD_REASONS(first_lifecycle_unit, CanDiscard, true);
+    ExpectCanDiscardTrueAllReasons(first_lifecycle_unit);
     std::unique_ptr<content::WebContents> owned_contents =
         tab_strip_model_->DetachWebContentsAt(0);
-    EXPECT_FOR_ALL_DISCARD_REASONS(first_lifecycle_unit, CanDiscard, false);
+    ExpectCanDiscardFalseTrivialAllReasons(first_lifecycle_unit);
 
     // Create a second tab strip.
     NoUnloadListenerTabStripModelDelegate other_tab_strip_model_delegate;
@@ -271,20 +292,20 @@ class TabLifecycleUnitSourceTest : public ChromeRenderViewHostTestHarness {
     other_tab_strip_model.AddObserver(source_);
 
     // Make sure that the second tab strip has a foreground tab.
-    EXPECT_CALL(source_observer_, OnLifecycleUnitCreated(testing::_));
+    EXPECT_CALL(source_observer_, OnLifecycleUnitCreated(::testing::_));
     other_tab_strip_model.AppendWebContents(CreateTestWebContents(),
                                             /*foreground=*/true);
 
     // Insert the tab into the second tab strip without focusing it. Verify that
     // it can be discarded.
     other_tab_strip_model.AppendWebContents(std::move(owned_contents), false);
-    EXPECT_FOR_ALL_DISCARD_REASONS(first_lifecycle_unit, CanDiscard, true);
+    ExpectCanDiscardTrueAllReasons(first_lifecycle_unit);
 
-    EXPECT_EQ(LifecycleState::ACTIVE, first_lifecycle_unit->GetState());
-    EXPECT_CALL(tab_observer_, OnDiscardedStateChange(testing::_, true));
+    EXPECT_EQ(LifecycleUnitState::ACTIVE, first_lifecycle_unit->GetState());
+    EXPECT_CALL(tab_observer_, OnDiscardedStateChange(::testing::_, true));
     first_lifecycle_unit->Discard(reason);
 
-    testing::Mock::VerifyAndClear(&tab_observer_);
+    ::testing::Mock::VerifyAndClear(&tab_observer_);
     TransitionFromPendingDiscardToDiscardedIfNeeded(reason,
                                                     first_lifecycle_unit);
 
@@ -293,7 +314,7 @@ class TabLifecycleUnitSourceTest : public ChromeRenderViewHostTestHarness {
                                     {first_lifecycle_unit});
   }
 
-  void DiscardTest(DiscardReason reason) {
+  void DiscardTest(LifecycleUnitDiscardReason reason) {
     const base::TimeTicks kDummyLastActiveTime =
         base::TimeTicks() + kShortDelay;
 
@@ -303,13 +324,18 @@ class TabLifecycleUnitSourceTest : public ChromeRenderViewHostTestHarness {
                   &foreground_lifecycle_unit);
     content::WebContents* initial_web_contents =
         tab_strip_model_->GetWebContentsAt(0);
-    initial_web_contents->SetLastActiveTime(kDummyLastActiveTime);
+    content::WebContentsTester::For(initial_web_contents)
+        ->SetLastActiveTime(kDummyLastActiveTime);
+
+    // Advance time so tabs are urgent discardable.
+    task_runner_->AdvanceMockTickClock(kBackgroundUrgentProtectionTime);
 
     // Discard the tab.
-    EXPECT_EQ(LifecycleState::ACTIVE, background_lifecycle_unit->GetState());
-    EXPECT_CALL(tab_observer_, OnDiscardedStateChange(testing::_, true));
+    EXPECT_EQ(LifecycleUnitState::ACTIVE,
+              background_lifecycle_unit->GetState());
+    EXPECT_CALL(tab_observer_, OnDiscardedStateChange(::testing::_, true));
     background_lifecycle_unit->Discard(reason);
-    testing::Mock::VerifyAndClear(&tab_observer_);
+    ::testing::Mock::VerifyAndClear(&tab_observer_);
 
     // Expect the tab to be discarded and the last active time to be preserved.
     TransitionFromPendingDiscardToDiscardedIfNeeded(reason,
@@ -325,7 +351,7 @@ class TabLifecycleUnitSourceTest : public ChromeRenderViewHostTestHarness {
     source_->SetFocusedTabStripModelForTesting(nullptr);
   }
 
-  void DiscardAndActivateTest(DiscardReason reason) {
+  void DiscardAndActivateTest(LifecycleUnitDiscardReason reason) {
     LifecycleUnit* background_lifecycle_unit = nullptr;
     LifecycleUnit* foreground_lifecycle_unit = nullptr;
     CreateTwoTabs(true /* focus_tab_strip */, &background_lifecycle_unit,
@@ -333,11 +359,15 @@ class TabLifecycleUnitSourceTest : public ChromeRenderViewHostTestHarness {
     content::WebContents* initial_web_contents =
         tab_strip_model_->GetWebContentsAt(0);
 
+    // Advance time so tabs are urgent discardable.
+    task_runner_->AdvanceMockTickClock(kBackgroundUrgentProtectionTime);
+
     // Discard the tab.
-    EXPECT_EQ(LifecycleState::ACTIVE, background_lifecycle_unit->GetState());
-    EXPECT_CALL(tab_observer_, OnDiscardedStateChange(testing::_, true));
+    EXPECT_EQ(LifecycleUnitState::ACTIVE,
+              background_lifecycle_unit->GetState());
+    EXPECT_CALL(tab_observer_, OnDiscardedStateChange(::testing::_, true));
     background_lifecycle_unit->Discard(reason);
-    testing::Mock::VerifyAndClear(&tab_observer_);
+    ::testing::Mock::VerifyAndClear(&tab_observer_);
 
     TransitionFromPendingDiscardToDiscardedIfNeeded(reason,
                                                     background_lifecycle_unit);
@@ -348,16 +378,17 @@ class TabLifecycleUnitSourceTest : public ChromeRenderViewHostTestHarness {
                      .GetPendingEntry());
 
     // Focus the tab. Expect the state to be ACTIVE.
-    EXPECT_CALL(tab_observer_, OnDiscardedStateChange(testing::_, false));
+    EXPECT_CALL(tab_observer_, OnDiscardedStateChange(::testing::_, false));
     tab_strip_model_->ActivateTabAt(0, true);
-    testing::Mock::VerifyAndClear(&tab_observer_);
-    EXPECT_EQ(LifecycleState::ACTIVE, background_lifecycle_unit->GetState());
+    ::testing::Mock::VerifyAndClear(&tab_observer_);
+    EXPECT_EQ(LifecycleUnitState::ACTIVE,
+              background_lifecycle_unit->GetState());
     EXPECT_TRUE(tab_strip_model_->GetWebContentsAt(0)
                     ->GetController()
                     .GetPendingEntry());
   }
 
-  void DiscardAndExplicitlyReloadTest(DiscardReason reason) {
+  void DiscardAndExplicitlyReloadTest(LifecycleUnitDiscardReason reason) {
     LifecycleUnit* background_lifecycle_unit = nullptr;
     LifecycleUnit* foreground_lifecycle_unit = nullptr;
     CreateTwoTabs(true /* focus_tab_strip */, &background_lifecycle_unit,
@@ -365,11 +396,15 @@ class TabLifecycleUnitSourceTest : public ChromeRenderViewHostTestHarness {
     content::WebContents* initial_web_contents =
         tab_strip_model_->GetWebContentsAt(0);
 
+    // Advance time so tabs are urgent discardable.
+    task_runner_->AdvanceMockTickClock(kBackgroundUrgentProtectionTime);
+
     // Discard the tab.
-    EXPECT_EQ(LifecycleState::ACTIVE, background_lifecycle_unit->GetState());
-    EXPECT_CALL(tab_observer_, OnDiscardedStateChange(testing::_, true));
+    EXPECT_EQ(LifecycleUnitState::ACTIVE,
+              background_lifecycle_unit->GetState());
+    EXPECT_CALL(tab_observer_, OnDiscardedStateChange(::testing::_, true));
     background_lifecycle_unit->Discard(reason);
-    testing::Mock::VerifyAndClear(&tab_observer_);
+    ::testing::Mock::VerifyAndClear(&tab_observer_);
 
     TransitionFromPendingDiscardToDiscardedIfNeeded(reason,
                                                     background_lifecycle_unit);
@@ -380,68 +415,20 @@ class TabLifecycleUnitSourceTest : public ChromeRenderViewHostTestHarness {
                      .GetPendingEntry());
 
     // Explicitly reload the tab. Expect the state to be ACTIVE.
-    EXPECT_CALL(tab_observer_, OnDiscardedStateChange(testing::_, false));
+    EXPECT_CALL(tab_observer_, OnDiscardedStateChange(::testing::_, false));
     tab_strip_model_->GetWebContentsAt(0)->GetController().Reload(
         content::ReloadType::NORMAL, false);
-    testing::Mock::VerifyAndClear(&tab_observer_);
-    EXPECT_EQ(LifecycleState::ACTIVE, background_lifecycle_unit->GetState());
+    ::testing::Mock::VerifyAndClear(&tab_observer_);
+    EXPECT_EQ(LifecycleUnitState::ACTIVE,
+              background_lifecycle_unit->GetState());
     EXPECT_TRUE(tab_strip_model_->GetWebContentsAt(0)
                     ->GetController()
                     .GetPendingEntry());
-  }
-
-  void CanOnlyDiscardOnceTest(DiscardReason reason) {
-    LifecycleUnit* background_lifecycle_unit = nullptr;
-    LifecycleUnit* foreground_lifecycle_unit = nullptr;
-    CreateTwoTabs(true /* focus_tab_strip */, &background_lifecycle_unit,
-                  &foreground_lifecycle_unit);
-    content::WebContents* initial_web_contents =
-        tab_strip_model_->GetWebContentsAt(0);
-
-    // It should be possible to discard the background tab.
-    EXPECT_FOR_ALL_DISCARD_REASONS(background_lifecycle_unit, CanDiscard, true);
-
-    // Discard the tab.
-    EXPECT_EQ(LifecycleState::ACTIVE, background_lifecycle_unit->GetState());
-    EXPECT_CALL(tab_observer_, OnDiscardedStateChange(testing::_, true));
-    background_lifecycle_unit->Discard(reason);
-
-    testing::Mock::VerifyAndClear(&tab_observer_);
-
-    TransitionFromPendingDiscardToDiscardedIfNeeded(reason,
-                                                    background_lifecycle_unit);
-
-    EXPECT_NE(initial_web_contents, tab_strip_model_->GetWebContentsAt(0));
-    EXPECT_FALSE(tab_strip_model_->GetWebContentsAt(0)
-                     ->GetController()
-                     .GetPendingEntry());
-
-    // Explicitly reload the tab. Expect the state to be LOADED.
-    EXPECT_CALL(tab_observer_, OnDiscardedStateChange(testing::_, false));
-    tab_strip_model_->GetWebContentsAt(0)->GetController().Reload(
-        content::ReloadType::NORMAL, false);
-    testing::Mock::VerifyAndClear(&tab_observer_);
-    EXPECT_EQ(LifecycleState::ACTIVE, background_lifecycle_unit->GetState());
-    EXPECT_TRUE(tab_strip_model_->GetWebContentsAt(0)
-                    ->GetController()
-                    .GetPendingEntry());
-
-    // It shouldn't be possible to discard the background tab again, except for
-    // an urgent discard on ChromeOS.
-    EXPECT_FALSE(
-        background_lifecycle_unit->CanDiscard(DiscardReason::kExternal));
-    EXPECT_FALSE(
-        background_lifecycle_unit->CanDiscard(DiscardReason::kProactive));
-#if defined(OS_CHROMEOS)
-    EXPECT_TRUE(background_lifecycle_unit->CanDiscard(DiscardReason::kUrgent));
-#else
-    EXPECT_FALSE(background_lifecycle_unit->CanDiscard(DiscardReason::kUrgent));
-#endif
   }
 
   TabLifecycleUnitSource* source_ = nullptr;
-  testing::StrictMock<MockLifecycleUnitSourceObserver> source_observer_;
-  testing::StrictMock<MockTabLifecycleObserver> tab_observer_;
+  ::testing::StrictMock<MockLifecycleUnitSourceObserver> source_observer_;
+  ::testing::StrictMock<MockTabLifecycleObserver> tab_observer_;
   std::unique_ptr<TabStripModel> tab_strip_model_;
   scoped_refptr<base::TestMockTimeTaskRunner> task_runner_ =
       base::MakeRefCounted<base::TestMockTimeTaskRunner>();
@@ -451,6 +438,9 @@ class TabLifecycleUnitSourceTest : public ChromeRenderViewHostTestHarness {
   std::unique_ptr<content::WebContents> CreateAndNavigateWebContents() {
     std::unique_ptr<content::WebContents> web_contents =
         CreateTestWebContents();
+    // Attach the RC tab helper. In production code the browser
+    // WebContentsDelegate takes care of this.
+    ResourceCoordinatorTabHelper::CreateForWebContents(web_contents.get());
     // Commit an URL to allow discarding.
     content::WebContentsTester::For(web_contents.get())
         ->NavigateAndCommit(GURL("https://www.example.com"));
@@ -499,11 +489,11 @@ TEST_F(TabLifecycleUnitSourceTest, CloseTabInFocusedTabStrip) {
 
   // Close the second tab. The first tab should be focused.
   task_runner_->FastForwardBy(kShortDelay);
-  testing::StrictMock<MockLifecycleUnitObserver> second_observer;
+  ::testing::StrictMock<MockLifecycleUnitObserver> second_observer;
   second_lifecycle_unit->AddObserver(&second_observer);
   EXPECT_CALL(second_observer, OnLifecycleUnitDestroyed(second_lifecycle_unit));
   tab_strip_model_->CloseWebContentsAt(1, 0);
-  testing::Mock::VerifyAndClear(&source_observer_);
+  ::testing::Mock::VerifyAndClear(&source_observer_);
   EXPECT_TRUE(IsFocused(first_lifecycle_unit));
 
   // Expect notifications when tabs are closed.
@@ -542,15 +532,15 @@ TEST_F(TabLifecycleUnitSourceTest, ReplaceWebContents) {
 }
 
 TEST_F(TabLifecycleUnitSourceTest, DetachWebContents_Urgent) {
-  DetachWebContentsTest(DiscardReason::kUrgent);
+  DetachWebContentsTest(LifecycleUnitDiscardReason::URGENT);
 }
 
 TEST_F(TabLifecycleUnitSourceTest, DetachWebContents_Proactive) {
-  DetachWebContentsTest(DiscardReason::kProactive);
+  DetachWebContentsTest(LifecycleUnitDiscardReason::PROACTIVE);
 }
 
 TEST_F(TabLifecycleUnitSourceTest, DetachWebContents_External) {
-  DetachWebContentsTest(DiscardReason::kExternal);
+  DetachWebContentsTest(LifecycleUnitDiscardReason::EXTERNAL);
 }
 
 // Regression test for https://crbug.com/818454. Previously, TabLifecycleUnits
@@ -564,7 +554,7 @@ TEST_F(TabLifecycleUnitSourceTest, DetachAndDeleteWebContents) {
   CreateTwoTabs(true /* focus_tab_strip */, &first_lifecycle_unit,
                 &second_lifecycle_unit);
 
-  testing::StrictMock<MockLifecycleUnitObserver> observer;
+  ::testing::StrictMock<MockLifecycleUnitObserver> observer;
   first_lifecycle_unit->AddObserver(&observer);
 
   // Detach and destroy the non-active tab. Verify that the LifecycleUnit is
@@ -573,7 +563,7 @@ TEST_F(TabLifecycleUnitSourceTest, DetachAndDeleteWebContents) {
       tab_strip_model_->DetachWebContentsAt(0);
   EXPECT_CALL(observer, OnLifecycleUnitDestroyed(first_lifecycle_unit));
   web_contents.reset();
-  testing::Mock::VerifyAndClear(&observer);
+  ::testing::Mock::VerifyAndClear(&observer);
 }
 
 // Tab discarding is tested here rather than in TabLifecycleUnitTest because
@@ -581,51 +571,39 @@ TEST_F(TabLifecycleUnitSourceTest, DetachAndDeleteWebContents) {
 // WebContents in the TabLifecycleUnit.
 
 TEST_F(TabLifecycleUnitSourceTest, Discard_Proactive) {
-  DiscardTest(DiscardReason::kProactive);
+  DiscardTest(LifecycleUnitDiscardReason::PROACTIVE);
 }
 
 TEST_F(TabLifecycleUnitSourceTest, Discard_Urgent) {
-  DiscardTest(DiscardReason::kUrgent);
+  DiscardTest(LifecycleUnitDiscardReason::URGENT);
 }
 
 TEST_F(TabLifecycleUnitSourceTest, Discard_External) {
-  DiscardTest(DiscardReason::kExternal);
+  DiscardTest(LifecycleUnitDiscardReason::EXTERNAL);
 }
 
 TEST_F(TabLifecycleUnitSourceTest, DiscardAndActivate_Urgent) {
-  DiscardAndActivateTest(DiscardReason::kUrgent);
+  DiscardAndActivateTest(LifecycleUnitDiscardReason::URGENT);
 }
 
 TEST_F(TabLifecycleUnitSourceTest, DiscardAndActivate_Proactive) {
-  DiscardAndActivateTest(DiscardReason::kProactive);
+  DiscardAndActivateTest(LifecycleUnitDiscardReason::PROACTIVE);
 }
 
 TEST_F(TabLifecycleUnitSourceTest, DiscardAndActivate_External) {
-  DiscardAndActivateTest(DiscardReason::kExternal);
+  DiscardAndActivateTest(LifecycleUnitDiscardReason::EXTERNAL);
 }
 
 TEST_F(TabLifecycleUnitSourceTest, DiscardAndExplicitlyReload_Urgent) {
-  DiscardAndExplicitlyReloadTest(DiscardReason::kUrgent);
+  DiscardAndExplicitlyReloadTest(LifecycleUnitDiscardReason::URGENT);
 }
 
 TEST_F(TabLifecycleUnitSourceTest, DiscardAndExplicitlyReload_Proactive) {
-  DiscardAndExplicitlyReloadTest(DiscardReason::kProactive);
+  DiscardAndExplicitlyReloadTest(LifecycleUnitDiscardReason::PROACTIVE);
 }
 
 TEST_F(TabLifecycleUnitSourceTest, DiscardAndExplicitlyReload_External) {
-  DiscardAndExplicitlyReloadTest(DiscardReason::kExternal);
-}
-
-TEST_F(TabLifecycleUnitSourceTest, CanOnlyDiscardOnce_Urgent) {
-  CanOnlyDiscardOnceTest(DiscardReason::kUrgent);
-}
-
-TEST_F(TabLifecycleUnitSourceTest, CanOnlyDiscardOnce_Proactive) {
-  CanOnlyDiscardOnceTest(DiscardReason::kProactive);
-}
-
-TEST_F(TabLifecycleUnitSourceTest, CanOnlyDiscardOnce_External) {
-  CanOnlyDiscardOnceTest(DiscardReason::kExternal);
+  DiscardAndExplicitlyReloadTest(LifecycleUnitDiscardReason::EXTERNAL);
 }
 
 TEST_F(TabLifecycleUnitSourceTest, CannotFreezeADiscardedTab) {
@@ -637,16 +615,19 @@ TEST_F(TabLifecycleUnitSourceTest, CannotFreezeADiscardedTab) {
       tab_strip_model_->GetWebContentsAt(0);
   task_runner_->FastForwardBy(kShortDelay);
 
-  // It should be possible to discard the background tab.
-  EXPECT_FOR_ALL_DISCARD_REASONS(background_lifecycle_unit, CanDiscard, true);
+  // Advance time so tabs are urgent discardable.
+  task_runner_->AdvanceMockTickClock(kBackgroundUrgentProtectionTime);
 
-  // Discard the tab. Use DiscardReason::kUrgent to force the discard.
-  EXPECT_EQ(LifecycleState::ACTIVE, background_lifecycle_unit->GetState());
-  EXPECT_CALL(tab_observer_, OnDiscardedStateChange(testing::_, true));
-  background_lifecycle_unit->Discard(DiscardReason::kUrgent);
+  // Discard the tab.
+  EXPECT_EQ(LifecycleUnitState::ACTIVE, background_lifecycle_unit->GetState());
+  EXPECT_CALL(tab_observer_, OnDiscardedStateChange(::testing::_, true));
+  background_lifecycle_unit->Discard(LifecycleUnitDiscardReason::PROACTIVE);
 
-  testing::Mock::VerifyAndClear(&tab_observer_);
-  EXPECT_EQ(LifecycleState::DISCARDED, background_lifecycle_unit->GetState());
+  ::testing::Mock::VerifyAndClear(&tab_observer_);
+  TransitionFromPendingDiscardToDiscardedIfNeeded(
+      LifecycleUnitDiscardReason::PROACTIVE, background_lifecycle_unit);
+  EXPECT_EQ(LifecycleUnitState::DISCARDED,
+            background_lifecycle_unit->GetState());
   EXPECT_NE(initial_web_contents, tab_strip_model_->GetWebContentsAt(0));
   EXPECT_FALSE(
       tab_strip_model_->GetWebContentsAt(0)->GetController().GetPendingEntry());
@@ -654,11 +635,11 @@ TEST_F(TabLifecycleUnitSourceTest, CannotFreezeADiscardedTab) {
   EXPECT_FALSE(background_lifecycle_unit->Freeze());
 
   // Explicitly reload the tab. Expect the state to be LOADED.
-  EXPECT_CALL(tab_observer_, OnDiscardedStateChange(testing::_, false));
+  EXPECT_CALL(tab_observer_, OnDiscardedStateChange(::testing::_, false));
   tab_strip_model_->GetWebContentsAt(0)->GetController().Reload(
       content::ReloadType::NORMAL, false);
-  testing::Mock::VerifyAndClear(&tab_observer_);
-  EXPECT_EQ(LifecycleState::ACTIVE, background_lifecycle_unit->GetState());
+  ::testing::Mock::VerifyAndClear(&tab_observer_);
+  EXPECT_EQ(LifecycleUnitState::ACTIVE, background_lifecycle_unit->GetState());
   EXPECT_TRUE(
       tab_strip_model_->GetWebContentsAt(0)->GetController().GetPendingEntry());
 
@@ -672,22 +653,23 @@ TEST_F(TabLifecycleUnitSourceTest, TabProactiveDiscardedByFrozenCallback) {
   CreateTwoTabs(true /* focus_tab_strip */, &background_lifecycle_unit,
                 &foreground_lifecycle_unit);
 
-  EXPECT_EQ(LifecycleState::ACTIVE, background_lifecycle_unit->GetState());
+  EXPECT_EQ(LifecycleUnitState::ACTIVE, background_lifecycle_unit->GetState());
 
-  EXPECT_CALL(tab_observer_, OnDiscardedStateChange(testing::_, true));
+  EXPECT_CALL(tab_observer_, OnDiscardedStateChange(::testing::_, true));
 
-  background_lifecycle_unit->Discard(DiscardReason::kProactive);
-  EXPECT_EQ(LifecycleState::PENDING_DISCARD,
+  background_lifecycle_unit->Discard(LifecycleUnitDiscardReason::PROACTIVE);
+  EXPECT_EQ(LifecycleUnitState::PENDING_DISCARD,
             background_lifecycle_unit->GetState());
 
   reinterpret_cast<TabLifecycleUnitSource::TabLifecycleUnit*>(
       background_lifecycle_unit)
       ->UpdateLifecycleState(mojom::LifecycleState::kFrozen);
-  EXPECT_EQ(LifecycleState::DISCARDED, background_lifecycle_unit->GetState());
-  EXPECT_CALL(tab_observer_, OnDiscardedStateChange(testing::_, false));
+  EXPECT_EQ(LifecycleUnitState::DISCARDED,
+            background_lifecycle_unit->GetState());
+  EXPECT_CALL(tab_observer_, OnDiscardedStateChange(::testing::_, false));
   tab_strip_model_->GetWebContentsAt(0)->GetController().Reload(
       content::ReloadType::NORMAL, false);
-  testing::Mock::VerifyAndClear(&tab_observer_);
+  ::testing::Mock::VerifyAndClear(&tab_observer_);
 }
 
 TEST_F(TabLifecycleUnitSourceTest, TabProactiveDiscardedByFrozenTimeout) {
@@ -696,20 +678,72 @@ TEST_F(TabLifecycleUnitSourceTest, TabProactiveDiscardedByFrozenTimeout) {
   CreateTwoTabs(true /* focus_tab_strip */, &background_lifecycle_unit,
                 &foreground_lifecycle_unit);
 
-  EXPECT_EQ(LifecycleState::ACTIVE, background_lifecycle_unit->GetState());
-  EXPECT_CALL(tab_observer_, OnDiscardedStateChange(testing::_, true));
+  EXPECT_EQ(LifecycleUnitState::ACTIVE, background_lifecycle_unit->GetState());
+  EXPECT_CALL(tab_observer_, OnDiscardedStateChange(::testing::_, true));
 
-  background_lifecycle_unit->Discard(DiscardReason::kProactive);
-  EXPECT_EQ(LifecycleState::PENDING_DISCARD,
+  background_lifecycle_unit->Discard(LifecycleUnitDiscardReason::PROACTIVE);
+  EXPECT_EQ(LifecycleUnitState::PENDING_DISCARD,
             background_lifecycle_unit->GetState());
-  task_runner_->FastForwardBy(kProactiveDiscardFreezeTimeout);
+  TransitionFromPendingDiscardToDiscardedIfNeeded(
+      LifecycleUnitDiscardReason::PROACTIVE, background_lifecycle_unit);
 
-  EXPECT_EQ(LifecycleState::DISCARDED, background_lifecycle_unit->GetState());
+  EXPECT_EQ(LifecycleUnitState::DISCARDED,
+            background_lifecycle_unit->GetState());
 
-  EXPECT_CALL(tab_observer_, OnDiscardedStateChange(testing::_, false));
+  EXPECT_CALL(tab_observer_, OnDiscardedStateChange(::testing::_, false));
   tab_strip_model_->GetWebContentsAt(0)->GetController().Reload(
       content::ReloadType::NORMAL, false);
-  testing::Mock::VerifyAndClear(&tab_observer_);
+  ::testing::Mock::VerifyAndClear(&tab_observer_);
+}
+
+namespace {
+
+class MockOnPrefChanged {
+ public:
+  MockOnPrefChanged() = default;
+  ~MockOnPrefChanged() = default;
+
+  MOCK_METHOD1(OnPrefChanged, void(bool));
+
+ private:
+  DISALLOW_COPY_AND_ASSIGN(MockOnPrefChanged);
+};
+
+}  // namespace
+
+TEST(TabLifecylesEnterprisePreferenceMonitor, ObservesChanges) {
+  TestingPrefServiceSimple pref_service;
+  pref_service.registry()->RegisterBooleanPref(prefs::kTabLifecyclesEnabled,
+                                               true);
+
+  ::testing::StrictMock<MockOnPrefChanged> obs;
+
+  // Create a monitor that dispatches to the mock. The constructor should have
+  // checked the value and it should return the default.
+  EXPECT_CALL(obs, OnPrefChanged(true));
+  TabLifecylesEnterprisePreferenceMonitor monitor(
+      &pref_service, base::BindRepeating(&MockOnPrefChanged::OnPrefChanged,
+                                         base::Unretained(&obs)));
+  ::testing::Mock::VerifyAndClear(&obs);
+
+  // Set the preference in an unmanaged way to false. The preference should
+  // still be true.
+  EXPECT_CALL(obs, OnPrefChanged(true));
+  pref_service.SetUserPref(prefs::kTabLifecyclesEnabled,
+                           std::make_unique<base::Value>(false));
+  ::testing::Mock::VerifyAndClear(&obs);
+
+  // Set the preference in a managed way to false.
+  EXPECT_CALL(obs, OnPrefChanged(false));
+  pref_service.SetManagedPref(prefs::kTabLifecyclesEnabled,
+                              std::make_unique<base::Value>(false));
+  ::testing::Mock::VerifyAndClear(&obs);
+
+  // Set the preference in a managed way to true.
+  EXPECT_CALL(obs, OnPrefChanged(true));
+  pref_service.SetManagedPref(prefs::kTabLifecyclesEnabled,
+                              std::make_unique<base::Value>(true));
+  ::testing::Mock::VerifyAndClear(&obs);
 }
 
 }  // namespace resource_coordinator

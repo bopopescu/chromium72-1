@@ -11,9 +11,15 @@
 
 namespace chromeos {
 
-namespace tether {
+namespace device_sync {
+class DeviceSyncClient;
+}  // namespace device_sync
 
-class BleConnectionManager;
+namespace secure_channel {
+class SecureChannelClient;
+}  // namespace secure_channel
+
+namespace tether {
 
 // Operation which sends a disconnect message to a tether host.
 class DisconnectTetheringOperation : public MessageTransferOperation {
@@ -22,14 +28,16 @@ class DisconnectTetheringOperation : public MessageTransferOperation {
    public:
     static std::unique_ptr<DisconnectTetheringOperation> NewInstance(
         cryptauth::RemoteDeviceRef device_to_connect,
-        BleConnectionManager* connection_manager);
+        device_sync::DeviceSyncClient* device_sync_client,
+        secure_channel::SecureChannelClient* secure_channel_client);
 
     static void SetInstanceForTesting(Factory* factory);
 
    protected:
     virtual std::unique_ptr<DisconnectTetheringOperation> BuildInstance(
         cryptauth::RemoteDeviceRef device_to_connect,
-        BleConnectionManager* connection_manager);
+        device_sync::DeviceSyncClient* device_sync_client,
+        secure_channel::SecureChannelClient* secure_channel_client);
 
    private:
     static Factory* factory_instance_;
@@ -50,8 +58,10 @@ class DisconnectTetheringOperation : public MessageTransferOperation {
   void RemoveObserver(Observer* observer);
 
  protected:
-  DisconnectTetheringOperation(cryptauth::RemoteDeviceRef device_to_connect,
-                               BleConnectionManager* connection_manager);
+  DisconnectTetheringOperation(
+      cryptauth::RemoteDeviceRef device_to_connect,
+      device_sync::DeviceSyncClient* device_sync_client,
+      secure_channel::SecureChannelClient* secure_channel_client);
 
   void NotifyObserversOperationFinished(bool success);
 
@@ -66,7 +76,7 @@ class DisconnectTetheringOperation : public MessageTransferOperation {
 
   void SetClockForTest(base::Clock* clock_for_test);
 
-  base::ObserverList<Observer> observer_list_;
+  base::ObserverList<Observer>::Unchecked observer_list_;
   cryptauth::RemoteDeviceRef remote_device_;
   int disconnect_message_sequence_number_ = -1;
   bool has_sent_message_;

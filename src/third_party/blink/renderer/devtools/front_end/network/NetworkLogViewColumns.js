@@ -40,6 +40,8 @@ Network.NetworkLogViewColumns = class {
     this._calculatorsMap.set(Network.NetworkLogViewColumns._calculatorTypes.Time, timeCalculator);
     this._calculatorsMap.set(Network.NetworkLogViewColumns._calculatorTypes.Duration, durationCalculator);
 
+    this._lastWheelTime = 0;
+
     this._setupDataGrid();
     this._setupWaterfall();
   }
@@ -166,8 +168,10 @@ Network.NetworkLogViewColumns = class {
   _onMouseWheel(shouldConsume, event) {
     if (shouldConsume)
       event.consume(true);
-    this._activeScroller.scrollTop -= event.wheelDeltaY;
+    const hasRecentWheel = Date.now() - this._lastWheelTime < 80;
+    this._activeScroller.scrollBy({top: -event.wheelDeltaY, behavior: hasRecentWheel ? 'instant' : 'smooth'});
     this._syncScrollers();
+    this._lastWheelTime = Date.now();
   }
 
   _syncScrollers() {
@@ -545,7 +549,7 @@ Network.NetworkLogViewColumns = class {
         const content = Components.JSPresentationUtils.buildStackTracePreviewContents(
             manager ? manager.target() : null, this._popupLinkifier, initiator.stack,
             () => popover.setSizeBehavior(UI.GlassPane.SizeBehavior.MeasureContent));
-        popover.contentElement.appendChild(content);
+        popover.contentElement.appendChild(content.element);
         return Promise.resolve(true);
       },
       hide: this._popupLinkifier.reset.bind(this._popupLinkifier)
@@ -560,11 +564,11 @@ Network.NetworkLogViewColumns = class {
     // TODO(allada) Remove this and pass in the color.
     let color = 'transparent';
     switch (className) {
-      case 'network-blue-divider':
-        color = 'hsla(240, 100%, 80%, 0.7)';
+      case 'network-dcl-divider':
+        color = '#0867CB';
         break;
-      case 'network-red-divider':
-        color = 'rgba(255, 0, 0, 0.5)';
+      case 'network-load-divider':
+        color = '#B31412';
         break;
       default:
         return;

@@ -27,6 +27,7 @@
 
 #include <memory>
 
+#include "cc/layers/picture_layer.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/renderer/platform/graphics/graphics_layer.h"
 #include "third_party/blink/renderer/platform/testing/fake_graphics_layer.h"
@@ -52,7 +53,7 @@ class TestImage : public Image {
     // Image pure virtual stub.
   }
 
-  void Draw(PaintCanvas*,
+  void Draw(cc::PaintCanvas*,
             const PaintFlags&,
             const FloatRect&,
             const FloatRect&,
@@ -130,7 +131,9 @@ TEST(ImageLayerChromiumTest, opaqueImages) {
 
   graphics_layer->SetContentsToImage(opaque_image.get(),
                                      Image::kUnspecifiedDecode);
-  ASSERT_TRUE(graphics_layer->ContentsLayer()->contents_opaque());
+  // This would normally have contents_opaque set but due to crbug.com/870857,
+  // we cannot set image layers as having contents_opaque.
+  ASSERT_FALSE(graphics_layer->ContentsLayer()->contents_opaque());
 
   graphics_layer->SetContentsToImage(non_opaque_image.get(),
                                      Image::kUnspecifiedDecode);

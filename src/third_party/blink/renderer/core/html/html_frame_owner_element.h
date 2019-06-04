@@ -21,13 +21,14 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_HTML_HTML_FRAME_OWNER_ELEMENT_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_HTML_HTML_FRAME_OWNER_ELEMENT_H_
 
+#include "third_party/blink/public/common/frame/frame_owner_element_type.h"
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/dom/document.h"
+#include "third_party/blink/renderer/core/feature_policy/feature_policy.h"
 #include "third_party/blink/renderer/core/frame/dom_window.h"
 #include "third_party/blink/renderer/core/frame/embedded_content_view.h"
 #include "third_party/blink/renderer/core/frame/frame_owner.h"
 #include "third_party/blink/renderer/core/html/html_element.h"
-#include "third_party/blink/renderer/platform/feature_policy/feature_policy.h"
 #include "third_party/blink/renderer/platform/heap/handle.h"
 #include "third_party/blink/renderer/platform/scroll/scroll_types.h"
 #include "third_party/blink/renderer/platform/weborigin/security_policy.h"
@@ -37,9 +38,8 @@ namespace blink {
 
 class ExceptionState;
 class Frame;
-class IntersectionObserver;
-class IntersectionObserverEntry;
 class LayoutEmbeddedContent;
+class LazyLoadFrameObserver;
 class WebPluginContainerImpl;
 
 class CORE_EXPORT HTMLFrameOwnerElement : public HTMLElement,
@@ -62,6 +62,8 @@ class CORE_EXPORT HTMLFrameOwnerElement : public HTMLElement,
   // Whether to collapse the frame owner element in the embedder document. That
   // is, to remove it from the layout as if it did not exist.
   virtual void SetCollapsed(bool) {}
+
+  virtual FrameOwnerElementType OwnerType() const = 0;
 
   Document* getSVGDocument(ExceptionState&) const;
 
@@ -99,10 +101,10 @@ class CORE_EXPORT HTMLFrameOwnerElement : public HTMLElement,
   void DispatchLoad() final;
   SandboxFlags GetSandboxFlags() const final { return sandbox_flags_; }
   bool CanRenderFallbackContent() const override { return false; }
-  void RenderFallbackContent() override {}
+  void RenderFallbackContent(Frame*) override {}
   void IntrinsicSizingInfoChanged() override {}
   AtomicString BrowsingContextContainerName() const override {
-    return getAttribute(HTMLNames::nameAttr);
+    return getAttribute(html_names::kNameAttr);
   }
   ScrollbarMode ScrollingMode() const override { return kScrollbarAuto; }
   int MarginWidth() const override { return -1; }
@@ -117,16 +119,19 @@ class CORE_EXPORT HTMLFrameOwnerElement : public HTMLElement,
   // For unit tests, manually trigger the UpdateContainerPolicy method.
   void UpdateContainerPolicyForTests() { UpdateContainerPolicy(); }
 
+  // This function is to notify ChildFrameCompositor of pointer-events changes
+  // of an OOPIF.
+  void PointerEventsChanged();
+
   void CancelPendingLazyLoad();
 
-  // TODO(sclittle): Make the root margins configurable via field trial
-  // params instead of just hardcoding the value here.
-  static constexpr int kLazyLoadRootMarginPx = 800;
+  void ParseAttribute(const AttributeModificationParams&) override;
 
   void Trace(blink::Visitor*) override;
 
  protected:
   HTMLFrameOwnerElement(const QualifiedName& tag_name, Document&);
+
   void SetSandboxFlags(SandboxFlags);
 
   bool LoadOrRedirectSubframe(const KURL&,
@@ -143,7 +148,7 @@ class CORE_EXPORT HTMLFrameOwnerElement : public HTMLElement,
   // This method is intended to be overridden by specific frame classes.
   virtual scoped_refptr<const SecurityOrigin> GetOriginForFeaturePolicy()
       const {
-    return SecurityOrigin::CreateUnique();
+    return SecurityOrigin::CreateUniqueOpaque();
   }
 
   // Return a feature policy container policy for this frame, based on the
@@ -164,14 +169,9 @@ class CORE_EXPORT HTMLFrameOwnerElement : public HTMLElement,
 
   bool IsFrameOwnerElement() const final { return true; }
 
-  virtual ReferrerPolicy ReferrerPolicyAttribute() {
-    return kReferrerPolicyDefault;
+  virtual network::mojom::ReferrerPolicy ReferrerPolicyAttribute() {
+    return network::mojom::ReferrerPolicy::kDefault;
   }
-
-  void LoadIfHiddenOrNearViewport(
-      const ResourceRequest&,
-      FrameLoadType,
-      const HeapVector<Member<IntersectionObserverEntry>>&);
 
   Member<Frame> content_frame_;
   Member<EmbeddedContentView> embedded_content_view_;
@@ -179,7 +179,7 @@ class CORE_EXPORT HTMLFrameOwnerElement : public HTMLElement,
 
   ParsedFeaturePolicy container_policy_;
 
-  Member<IntersectionObserver> lazy_load_intersection_observer_;
+  Member<LazyLoadFrameObserver> lazy_load_frame_observer_;
   bool should_lazy_load_children_;
 };
 

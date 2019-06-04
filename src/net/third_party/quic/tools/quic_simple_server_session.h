@@ -1,7 +1,7 @@
 // Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
-//
+
 // A toy server specific QuicSession subclass.
 
 #ifndef NET_THIRD_PARTY_QUIC_TOOLS_QUIC_SIMPLE_SERVER_SESSION_H_
@@ -17,16 +17,16 @@
 #include <vector>
 
 #include "base/macros.h"
+#include "net/third_party/quic/core/http/quic_server_session_base.h"
+#include "net/third_party/quic/core/http/quic_spdy_session.h"
 #include "net/third_party/quic/core/quic_crypto_server_stream.h"
 #include "net/third_party/quic/core/quic_packets.h"
-#include "net/third_party/quic/core/quic_server_session_base.h"
-#include "net/third_party/quic/core/quic_spdy_session.h"
 #include "net/third_party/quic/platform/api/quic_containers.h"
 #include "net/third_party/quic/tools/quic_backend_response.h"
 #include "net/third_party/quic/tools/quic_simple_server_backend.h"
 #include "net/third_party/quic/tools/quic_simple_server_stream.h"
 
-namespace net {
+namespace quic {
 
 namespace test {
 class QuicSimpleServerSessionPeer;
@@ -54,19 +54,17 @@ class QuicSimpleServerSession : public QuicServerSessionBase {
 
   // Takes ownership of |connection|.
   QuicSimpleServerSession(const QuicConfig& config,
+                          const ParsedQuicVersionVector& supported_versions,
                           QuicConnection* connection,
                           QuicSession::Visitor* visitor,
                           QuicCryptoServerStream::Helper* helper,
                           const QuicCryptoServerConfig* crypto_config,
                           QuicCompressedCertsCache* compressed_certs_cache,
                           QuicSimpleServerBackend* quic_simple_server_backend);
+  QuicSimpleServerSession(const QuicSimpleServerSession&) = delete;
+  QuicSimpleServerSession& operator=(const QuicSimpleServerSession&) = delete;
 
   ~QuicSimpleServerSession() override;
-
-  // When a stream is marked draining, it will decrease the number of open
-  // streams. If it is an outgoing stream, try to open a new stream to send
-  // remaing push responses.
-  void StreamDraining(QuicStreamId id) override;
 
   // Override base class to detact client sending data on server push stream.
   void OnStreamFrame(const QuicStreamFrame& frame) override;
@@ -81,13 +79,13 @@ class QuicSimpleServerSession : public QuicServerSessionBase {
       QuicStreamId original_stream_id,
       const spdy::SpdyHeaderBlock& original_request_headers);
 
+  void OnCanCreateNewOutgoingStream() override;
+
  protected:
   // QuicSession methods:
-  QuicSpdyStream* CreateIncomingDynamicStream(QuicStreamId id) override;
-  QuicSimpleServerStream* CreateOutgoingDynamicStream() override;
-  // Closing an outgoing stream can reduce open outgoing stream count, try
-  // to handle queued promised streams right now.
-  void CloseStreamInner(QuicStreamId stream_id, bool locally_reset) override;
+  QuicSpdyStream* CreateIncomingStream(QuicStreamId id) override;
+  QuicSimpleServerStream* CreateOutgoingBidirectionalStream() override;
+  QuicSimpleServerStream* CreateOutgoingUnidirectionalStream() override;
   // Override to return true for locally preserved server push stream.
   void HandleFrameOnNonexistentOutgoingStream(QuicStreamId stream_id) override;
   // Override to handle reseting locally preserved streams.
@@ -149,10 +147,8 @@ class QuicSimpleServerSession : public QuicServerSessionBase {
   QuicDeque<PromisedStreamInfo> promised_streams_;
 
   QuicSimpleServerBackend* quic_simple_server_backend_;  // Not owned.
-
-  DISALLOW_COPY_AND_ASSIGN(QuicSimpleServerSession);
 };
 
-}  // namespace net
+}  // namespace quic
 
 #endif  // NET_THIRD_PARTY_QUIC_TOOLS_QUIC_SIMPLE_SERVER_SESSION_H_

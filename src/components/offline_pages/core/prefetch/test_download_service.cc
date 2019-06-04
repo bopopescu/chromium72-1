@@ -69,7 +69,8 @@ void TestDownloadService::FinishDownload(const std::string& guid) {
   const int file_size = static_cast<int>(test_file_data_.size());
   CHECK_EQ(file_size, base::WriteFile(path, test_file_data_.data(), file_size));
   client_->OnDownloadSucceeded(
-      guid, download::CompletionInfo(path, test_file_data_.size()));
+      guid, download::CompletionInfo(path, test_file_data_.size(),
+                                     std::vector<GURL>(), nullptr));
 }
 
 void TestDownloadService::SetTestFileData(const std::string& data) {
@@ -78,7 +79,7 @@ void TestDownloadService::SetTestFileData(const std::string& data) {
 
 void TestDownloadService::OnStartScheduledTask(
     download::DownloadTaskType task_type,
-    const download::TaskFinishedCallback& callback) {
+    download::TaskFinishedCallback callback) {
   NOTIMPLEMENTED();
 }
 bool TestDownloadService::OnStopScheduledTask(

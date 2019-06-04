@@ -9,7 +9,6 @@ import android.animation.AnimatorListenerAdapter;
 import android.animation.ObjectAnimator;
 import android.content.Context;
 import android.graphics.Rect;
-import android.text.Selection;
 import android.util.AttributeSet;
 import android.util.Property;
 import android.view.MotionEvent;
@@ -21,9 +20,8 @@ import org.chromium.chrome.R;
 import org.chromium.chrome.browser.download.DownloadUtils;
 import org.chromium.chrome.browser.ntp.NewTabPage;
 import org.chromium.chrome.browser.tab.Tab;
-import org.chromium.chrome.browser.toolbar.ToolbarTablet;
+import org.chromium.chrome.browser.toolbar.top.ToolbarTablet;
 import org.chromium.chrome.browser.widget.animation.CancelAwareAnimatorListener;
-import org.chromium.ui.UiUtils;
 import org.chromium.ui.base.LocalizationUtils;
 import org.chromium.ui.interpolators.BakedBezierInterpolator;
 
@@ -200,23 +198,16 @@ public class LocationBarTablet extends LocationBarLayout {
     }
 
     private void finishUrlFocusChange(boolean hasFocus) {
+        mStatusViewCoordinator.setSecurityButtonVisibility(!hasFocus);
         if (hasFocus) {
-            if (mSecurityButton.getVisibility() == VISIBLE) mSecurityButton.setVisibility(GONE);
             if (getWindowDelegate().getWindowSoftInputMode()
                     != WindowManager.LayoutParams.SOFT_INPUT_ADJUST_PAN) {
                 getWindowDelegate().setWindowSoftInputMode(
                         WindowManager.LayoutParams.SOFT_INPUT_ADJUST_PAN);
             }
-            UiUtils.showKeyboard(mUrlBar);
+            getWindowAndroid().getKeyboardDelegate().showKeyboard(mUrlBar);
         } else {
-            if (mSecurityButton.getVisibility() == GONE
-                    && mSecurityButton.getDrawable() != null
-                    && mSecurityButton.getDrawable().getIntrinsicWidth() > 0
-                    && mSecurityButton.getDrawable().getIntrinsicHeight() > 0) {
-                mSecurityButton.setVisibility(VISIBLE);
-            }
-            UiUtils.hideKeyboard(mUrlBar);
-            Selection.setSelection(mUrlBar.getText(), 0);
+            getWindowAndroid().getKeyboardDelegate().hideKeyboard(mUrlBar);
             // Convert the keyboard back to resize mode (delay the change for an arbitrary
             // amount of time in hopes the keyboard will be completely hidden before making
             // this change).
@@ -269,6 +260,18 @@ public class LocationBarTablet extends LocationBarLayout {
     }
 
     @Override
+    protected void onMeasure(int widthMeasureSpec, int heightMeasureSpec) {
+        int measuredWidth = getMeasuredWidth();
+
+        super.onMeasure(widthMeasureSpec, heightMeasureSpec);
+
+        if (getMeasuredWidth() != measuredWidth) {
+            setUnfocusedWidth(getMeasuredWidth());
+            super.onMeasure(widthMeasureSpec, heightMeasureSpec);
+        }
+    }
+
+    @Override
     protected void onLayout(boolean changed, int left, int top, int right, int bottom) {
         super.onLayout(changed, left, top, right, bottom);
         mLayoutLeft = left;
@@ -277,11 +280,6 @@ public class LocationBarTablet extends LocationBarLayout {
         if (mAnimatingWidthChange) {
             setWidthChangeAnimationPercent(mWidthChangePercent);
         }
-    }
-
-    @Override
-    public boolean useModernDesign() {
-        return false;
     }
 
     /**

@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "base/bind.h"
+#include "base/bind_helpers.h"
 #include "base/command_line.h"
 #include "base/location.h"
 #include "base/single_thread_task_runner.h"
@@ -18,7 +19,7 @@
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
 #include "base/threading/thread_task_runner_handle.h"
-#include "chromeos/chromeos_switches.h"
+#include "chromeos/dbus/dbus_switches.h"
 #include "chromeos/dbus/dbus_thread_manager.h"
 #include "chromeos/dbus/fake_shill_device_client.h"
 #include "chromeos/dbus/shill_device_client.h"
@@ -154,6 +155,7 @@ const char FakeShillManagerClient::kFakeEthernetNetworkGuid[] = "eth1_guid";
 
 FakeShillManagerClient::FakeShillManagerClient()
     : interactive_delay_(0),
+      cellular_carrier_(shill::kCarrierSprint),
       cellular_technology_(shill::kNetworkTechnologyGsm),
       weak_ptr_factory_(this) {
   ParseCommandLineSwitch();
@@ -349,32 +351,6 @@ void FakeShillManagerClient::GetService(
     const ErrorCallback& error_callback) {
   base::ThreadTaskRunnerHandle::Get()->PostTask(
       FROM_HERE, base::BindOnce(callback, dbus::ObjectPath()));
-}
-
-void FakeShillManagerClient::VerifyDestination(
-    const VerificationProperties& properties,
-    const BooleanCallback& callback,
-    const ErrorCallback& error_callback) {
-  base::ThreadTaskRunnerHandle::Get()->PostTask(FROM_HERE,
-                                                base::BindOnce(callback, true));
-}
-
-void FakeShillManagerClient::VerifyAndEncryptCredentials(
-    const VerificationProperties& properties,
-    const std::string& service_path,
-    const StringCallback& callback,
-    const ErrorCallback& error_callback) {
-  base::ThreadTaskRunnerHandle::Get()->PostTask(
-      FROM_HERE, base::BindOnce(callback, "encrypted_credentials"));
-}
-
-void FakeShillManagerClient::VerifyAndEncryptData(
-    const VerificationProperties& properties,
-    const std::string& data,
-    const StringCallback& callback,
-    const ErrorCallback& error_callback) {
-  base::ThreadTaskRunnerHandle::Get()->PostTask(
-      FROM_HERE, base::BindOnce(callback, "encrypted_data"));
 }
 
 void FakeShillManagerClient::ConnectToBestServices(
@@ -611,6 +587,12 @@ void FakeShillManagerClient::SetNetworkThrottlingStatus(
   base::ThreadTaskRunnerHandle::Get()->PostTask(FROM_HERE, callback);
 }
 
+bool FakeShillManagerClient::GetFastTransitionStatus() {
+  base::Value* fast_transition_status = stub_properties_.FindKey(
+      base::StringPiece(shill::kWifiGlobalFTEnabledProperty));
+  return fast_transition_status && fast_transition_status->GetBool();
+}
+
 void FakeShillManagerClient::SetupDefaultEnvironment() {
   // Bail out from setup if there is no message loop. This will be the common
   // case for tests that are not testing Shill.
@@ -790,6 +772,7 @@ void FakeShillManagerClient::SetupDefaultEnvironment() {
 
   // Cellular
   state = GetInitialStateForType(shill::kTypeCellular, &enabled);
+  VLOG(1) << "Cellular state: " << state << " Enabled: " << enabled;
   if (state == kTechnologyInitializing) {
     SetTechnologyInitializing(shill::kTypeCellular, true);
   } else if (state != kTechnologyUnavailable) {
@@ -802,9 +785,9 @@ void FakeShillManagerClient::SetupDefaultEnvironment() {
     devices->AddDevice("/device/cellular1", shill::kTypeCellular,
                        "stub_cellular_device1");
     SetInitialDeviceProperty("/device/cellular1", shill::kCarrierProperty,
-                             base::Value(shill::kCarrierSprint));
+                             base::Value(cellular_carrier_));
     base::ListValue carrier_list;
-    carrier_list.AppendString(shill::kCarrierSprint);
+    carrier_list.AppendString(cellular_carrier_);
     carrier_list.AppendString(shill::kCarrierGenericUMTS);
     SetInitialDeviceProperty("/device/cellular1",
                              shill::kSupportedCarriersProperty, carrier_list);
@@ -850,6 +833,16 @@ void FakeShillManagerClient::SetupDefaultEnvironment() {
             base::Value(shill::kActivationStateNotActivated));
       }
 
+      base::Value payment_portal(base::Value::Type::DICTIONARY);
+      payment_portal.SetKey(shill::kPaymentPortalMethod, base::Value("POST"));
+      payment_portal.SetKey(shill::kPaymentPortalPostData,
+                            base::Value("iccid=123&imei=456&mdn=789"));
+      payment_portal.SetKey(shill::kPaymentPortalURL,
+                            base::Value(cellular_olp_));
+      services->SetServiceProperty(kCellularServicePath,
+                                   shill::kPaymentPortalProperty,
+                                   std::move(payment_portal));
+
       std::string shill_roaming_state;
       if (roaming_state_ == kRoamingRequired)
         shill_roaming_state = shill::kRoamingStateRoaming;
@@ -868,6 +861,7 @@ void FakeShillManagerClient::SetupDefaultEnvironment() {
                  base::Value("Localized Test APN"));
       apn.SetKey(shill::kApnUsernameProperty, base::Value("User1"));
       apn.SetKey(shill::kApnPasswordProperty, base::Value("password"));
+      apn.SetKey(shill::kApnAuthenticationProperty, base::Value("chap"));
       base::DictionaryValue apn2;
       apn2.SetKey(shill::kApnProperty, base::Value("testapn2"));
       services->SetServiceProperty(kCellularServicePath,
@@ -1128,6 +1122,12 @@ bool FakeShillManagerClient::ParseOption(const std::string& arg0,
     else
       s_tdls_busy_count = 1;
     return true;
+  } else if (arg0 == "carrier") {
+    cellular_carrier_ = arg1;
+    return true;
+  } else if (arg0 == "olp") {
+    cellular_olp_ = arg1;
+    return true;
   } else if (arg0 == "roaming") {
     // "home", "roaming", or "required"
     roaming_state_ = arg1;
@@ -1148,11 +1148,11 @@ bool FakeShillManagerClient::SetInitialNetworkState(
   std::string state;
   if (state_arg.empty() || state_arg == "1" || state_arg == "on" ||
       state_arg == "enabled" || state_arg == "connected" ||
-      state_arg == "online") {
+      state_arg == "online" || state_arg == "inactive") {
     // Enabled and connected (default value)
     state = shill::kStateOnline;
   } else if (state_arg == "0" || state_arg == "off" ||
-             state_arg == "inactive" || state_arg == shill::kStateIdle) {
+             state_arg == shill::kStateIdle) {
     // Technology enabled, services are created but are not connected.
     state = shill::kStateIdle;
   } else if (type_arg == shill::kTypeWifi && state_arg_as_int > 1) {

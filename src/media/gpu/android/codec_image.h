@@ -48,12 +48,13 @@ class MEDIA_GPU_EXPORT CodecImage : public gpu::gles2::GLStreamTextureImage {
                             const gfx::Rect& bounds_rect,
                             const gfx::RectF& crop_rect,
                             bool enable_blend,
-                            gfx::GpuFence* gpu_fence) override;
+                            std::unique_ptr<gfx::GpuFence> gpu_fence) override;
   void SetColorSpace(const gfx::ColorSpace& color_space) override {}
   void Flush() override {}
   void OnMemoryDump(base::trace_event::ProcessMemoryDump* pmd,
                     uint64_t process_tracing_id,
                     const std::string& dump_name) override;
+  std::unique_ptr<ScopedHardwareBuffer> GetAHardwareBuffer() override;
   // gpu::gles2::GLStreamTextureMatrix implementation
   void GetTextureMatrix(float xform[16]) override;
   void NotifyPromotionHint(bool promotion_hint,
@@ -83,9 +84,8 @@ class MEDIA_GPU_EXPORT CodecImage : public gpu::gles2::GLStreamTextureImage {
   // buffer. Returns false if the buffer was invalidated.
   bool RenderToTextureOwnerBackBuffer();
 
-  // Called when we're no longer renderable because our surface is gone.  We'll
-  // discard any codec buffer, and generally do nothing.
-  virtual void SurfaceDestroyed();
+  // Release any codec buffer without rendering, if we have one.
+  virtual void ReleaseCodecBuffer();
 
  protected:
   ~CodecImage() override;

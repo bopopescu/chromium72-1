@@ -5,10 +5,11 @@
 #ifndef CHROMEOS_COMPONENTS_PROXIMITY_AUTH_MESSENGER_H_
 #define CHROMEOS_COMPONENTS_PROXIMITY_AUTH_MESSENGER_H_
 
-namespace cryptauth {
-class Connection;
-class SecureContext;
-}  // namespace cryptauth
+namespace chromeos {
+namespace secure_channel {
+class ClientChannel;
+}  // namespace secure_channel
+}  // namespace chromeos
 
 namespace proximity_auth {
 
@@ -40,14 +41,7 @@ class Messenger {
   // OnUnlockResponse is called for each observer when the response is returned.
   virtual void RequestUnlock() = 0;
 
-  // Returns the SecureContext instance used by the messenger. Ownership of the
-  // SecureContext is not passed.
-  virtual cryptauth::SecureContext* GetSecureContext() const = 0;
-
-  // Returns the underlying raw connection. Note that you should use
-  // |GetSecureContext()| instead if you want to send and receive messages
-  // securely.
-  virtual cryptauth::Connection* GetConnection() const = 0;
+  virtual chromeos::secure_channel::ClientChannel* GetChannel() const = 0;
 };
 
 }  // namespace proximity_auth

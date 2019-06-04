@@ -9,8 +9,8 @@
 #ifndef COMMON_SYSTEM_UTILS_H_
 #define COMMON_SYSTEM_UTILS_H_
 
-#include "common/angleutils.h"
 #include "common/Optional.h"
+#include "common/angleutils.h"
 
 namespace angle
 {
@@ -21,6 +21,7 @@ const char *GetSharedLibraryExtension();
 Optional<std::string> GetCWD();
 bool SetCWD(const char *dirName);
 bool SetEnvironmentVar(const char *variableName, const char *value);
+bool UnsetEnvironmentVar(const char *variableName);
 std::string GetEnvironmentVar(const char *variableName);
 const char *GetPathSeparator();
 bool PrependPathToEnvironmentVar(const char *variableName, const char *path);

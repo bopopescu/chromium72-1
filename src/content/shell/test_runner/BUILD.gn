@@ -3,13 +3,20 @@
 # found in the LICENSE file.
 
 import("//build/config/features.gni")
+import("//build/config/jumbo.gni")
 import("//build/config/ui.gni")
 if (is_android) {
   import("//build/config/android/config.gni")
 }
 
-component("test_runner") {
+jumbo_component("test_runner") {
   testonly = true
+
+  # See comment at the top of //content/BUILD.gn for why this is disabled in
+  # component builds.
+  if (is_component_build) {
+    check_includes = false
+  }
 
   defines = [ "TEST_RUNNER_IMPLEMENTATION" ]
 
@@ -42,8 +49,6 @@ component("test_runner") {
     "mock_web_document_subresource_filter.h",
     "mock_web_midi_accessor.cc",
     "mock_web_midi_accessor.h",
-    "mock_web_speech_recognizer.cc",
-    "mock_web_speech_recognizer.h",
     "mock_web_theme_engine.cc",
     "mock_web_theme_engine.h",
     "pixel_dump.cc",
@@ -98,19 +103,24 @@ component("test_runner") {
     "//cc/paint",
     "//components/viz/common",
     "//content/public/common",
+    "//content/public/common:service_names",
     "//content/public/renderer",
+    "//content/renderer:for_content_tests",
     "//content/shell:layout_test_switches",
+    "//content/shell:layout_test_utils",
     "//content/test:test_runner_support",
+    "//device/base/synchronization",
     "//device/gamepad/public/cpp:shared_with_blink",
+    "//device/gamepad/public/mojom",
     "//gin",
     "//gpu",
     "//gpu/command_buffer/client:gles2_interface",
     "//media/midi:mojo",
     "//net",
-    "//services/device/public/cpp/generic_sensor:shared_with_blink",
     "//services/device/public/mojom",
     "//skia",
     "//third_party/blink/public:blink",
+    "//third_party/blink/public:test_support",
     "//ui/display",
     "//ui/events:dom_keycode_converter",
     "//ui/events:events_base",

@@ -31,7 +31,7 @@
 #include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/sys_byteorder.h"
-#include "base/task_scheduler/post_task.h"
+#include "base/task/post_task.h"
 #include "base/threading/thread_task_runner_handle.h"
 #include "build/build_config.h"
 #include "components/nacl/browser/nacl_browser.h"
@@ -55,7 +55,6 @@
 #include "content/public/common/process_type.h"
 #include "content/public/common/sandboxed_process_launcher_delegate.h"
 #include "ipc/ipc_channel.h"
-#include "mojo/edk/embedder/embedder.h"
 #include "net/socket/socket_descriptor.h"
 #include "ppapi/host/host_factory.h"
 #include "ppapi/host/ppapi_host.h"
@@ -251,7 +250,7 @@ NaClProcessHost::NaClProcessHost(
 
 NaClProcessHost::~NaClProcessHost() {
   // Report exit status only if the process was successfully started.
-  if (process_->GetData().handle != base::kNullProcessHandle) {
+  if (!process_->GetData().GetProcess().IsValid()) {
     content::ChildProcessTerminationInfo info =
         process_->GetTerminationInfo(false /* known_dead */);
     std::string message =
@@ -275,16 +274,16 @@ NaClProcessHost::~NaClProcessHost() {
     // handles.
     base::File file(IPC::PlatformFileForTransitToFile(
         prefetched_resource_files_[i].file));
-    base::PostTaskWithTraits(FROM_HERE,
-                             {base::TaskPriority::BACKGROUND, base::MayBlock()},
-                             base::BindOnce(&CloseFile, std::move(file)));
+    base::PostTaskWithTraits(
+        FROM_HERE, {base::TaskPriority::BEST_EFFORT, base::MayBlock()},
+        base::BindOnce(&CloseFile, std::move(file)));
   }
 #endif
   // Open files need to be closed on the blocking pool.
   if (nexe_file_.IsValid()) {
-    base::PostTaskWithTraits(FROM_HERE,
-                             {base::TaskPriority::BACKGROUND, base::MayBlock()},
-                             base::BindOnce(&CloseFile, std::move(nexe_file_)));
+    base::PostTaskWithTraits(
+        FROM_HERE, {base::TaskPriority::BEST_EFFORT, base::MayBlock()},
+        base::BindOnce(&CloseFile, std::move(nexe_file_)));
   }
 
   if (reply_msg_) {
@@ -428,9 +427,9 @@ void NaClProcessHost::OnChannelConnected(int32_t peer_pid) {
 }
 
 #if defined(OS_WIN)
-void NaClProcessHost::OnProcessLaunchedByBroker(base::ProcessHandle handle) {
+void NaClProcessHost::OnProcessLaunchedByBroker(base::Process process) {
   process_launched_by_broker_ = true;
-  process_->SetHandle(handle);
+  process_->SetProcess(std::move(process));
   SetDebugStubPort(nacl::kGdbDebugStubPortUnknown);
   if (!StartWithLaunchedProcess())
     delete this;
@@ -642,12 +641,10 @@ void NaClProcessHost::ReplyToRenderer(
 
   const ChildProcessData& data = process_->GetData();
   SendMessageToRenderer(
-      NaClLaunchResult(ppapi_channel_handle.release(),
-                       trusted_channel_handle.release(),
-                       manifest_service_channel_handle.release(),
-                       base::GetProcId(data.handle),
-                       data.id,
-                       crash_info_shmem_renderer_handle),
+      NaClLaunchResult(
+          ppapi_channel_handle.release(), trusted_channel_handle.release(),
+          manifest_service_channel_handle.release(), data.GetProcess().Pid(),
+          data.id, crash_info_shmem_renderer_handle),
       error_message);
 
   // Now that the crash information shmem handles have been shared with the
@@ -765,8 +762,8 @@ bool NaClProcessHost::StartNaClExecution() {
   if (uses_nonsfi_mode_) {
     // Currently, non-SFI mode is supported only on Linux.
     if (enable_nacl_debug) {
-      base::ProcessId pid = base::GetProcId(process_->GetData().handle);
-      LOG(WARNING) << "nonsfi nacl plugin running in " << pid;
+      LOG(WARNING) << "nonsfi nacl plugin running in "
+                   << process_->GetData().GetProcess().Pid();
     }
   } else {
     params.validation_cache_enabled = nacl_browser->ValidationCacheIsEnabled();
@@ -828,7 +825,7 @@ bool NaClProcessHost::StartNaClExecution() {
       // compromised renderer to pass an arbitrary fd that could get loaded
       // into the plugin process.
       base::PostTaskWithTraitsAndReplyWithResult(
-          FROM_HERE, {base::MayBlock(), base::TaskPriority::BACKGROUND},
+          FROM_HERE, {base::MayBlock(), base::TaskPriority::BEST_EFFORT},
           base::Bind(OpenNaClReadExecImpl, file_path, true /* is_executable */),
           base::Bind(&NaClProcessHost::StartNaClFileResolved,
                      weak_factory_.GetWeakPtr(), params, file_path));
@@ -847,9 +844,9 @@ void NaClProcessHost::StartNaClFileResolved(
   if (checked_nexe_file.IsValid()) {
     // Release the file received from the renderer. This has to be done on a
     // thread where IO is permitted, though.
-    base::PostTaskWithTraits(FROM_HERE,
-                             {base::TaskPriority::BACKGROUND, base::MayBlock()},
-                             base::BindOnce(&CloseFile, std::move(nexe_file_)));
+    base::PostTaskWithTraits(
+        FROM_HERE, {base::TaskPriority::BEST_EFFORT, base::MayBlock()},
+        base::BindOnce(&CloseFile, std::move(nexe_file_)));
     params.nexe_file_path_metadata = file_path;
     params.nexe_file =
         IPC::TakePlatformFileForTransit(std::move(checked_nexe_file));
@@ -912,12 +909,9 @@ bool NaClProcessHost::StartPPAPIProxy(
   // browser process.
   ppapi_host_.reset(content::BrowserPpapiHost::CreateExternalPluginProcess(
       ipc_proxy_channel_.get(),  // sender
-      permissions_,
-      process_->GetData().handle,
-      ipc_proxy_channel_.get(),
-      nacl_host_message_filter_->render_process_id(),
-      render_view_id_,
-      profile_directory_));
+      permissions_, process_->GetData().GetProcess().Handle(),
+      ipc_proxy_channel_.get(), nacl_host_message_filter_->render_process_id(),
+      render_view_id_, profile_directory_));
 
   ppapi::PpapiNaClPluginArgs args;
   args.off_the_record = nacl_host_message_filter_->off_the_record();
@@ -1058,7 +1052,7 @@ void NaClProcessHost::OnResolveFileToken(uint64_t file_token_lo,
 
   // Open the file.
   base::PostTaskWithTraitsAndReplyWithResult(
-      FROM_HERE, {base::MayBlock(), base::TaskPriority::BACKGROUND},
+      FROM_HERE, {base::MayBlock(), base::TaskPriority::BEST_EFFORT},
       base::Bind(OpenNaClReadExecImpl, file_path, true /* is_executable */),
       base::Bind(&NaClProcessHost::FileResolved, weak_factory_.GetWeakPtr(),
                  file_token_lo, file_token_hi, file_path));
@@ -1111,7 +1105,7 @@ bool NaClProcessHost::AttachDebugExceptionHandler(const std::string& info,
   }
   debug_exception_handler_requested_ = true;
 
-  base::ProcessId nacl_pid = base::GetProcId(process_->GetData().handle);
+  base::ProcessId nacl_pid = process_->GetData().GetProcess().Pid();
   // We cannot use process_->GetData().handle because it does not have
   // the necessary access rights.  We open the new handle here rather
   // than in the NaCl broker process in case the NaCl loader process

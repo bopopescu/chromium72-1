@@ -10,14 +10,17 @@
 
 #include "modules/congestion_controller/goog_cc/acknowledged_bitrate_estimator.h"
 
+#include <stddef.h>
+#include <algorithm>
 #include <utility>
 
+#include "absl/memory/memory.h"
 #include "modules/rtp_rtcp/include/rtp_rtcp_defines.h"
+#include "rtc_base/checks.h"
 #include "rtc_base/numerics/safe_conversions.h"
-#include "rtc_base/ptr_util.h"
+#include "system_wrappers/include/field_trial.h"
 
 namespace webrtc {
-namespace webrtc_cc {
 
 namespace {
 bool IsInSendTimeHistory(const PacketFeedback& packet) {
@@ -26,13 +29,15 @@ bool IsInSendTimeHistory(const PacketFeedback& packet) {
 }  // namespace
 
 AcknowledgedBitrateEstimator::AcknowledgedBitrateEstimator()
-    : AcknowledgedBitrateEstimator(rtc::MakeUnique<BitrateEstimator>()) {}
+    : AcknowledgedBitrateEstimator(absl::make_unique<BitrateEstimator>()) {}
 
 AcknowledgedBitrateEstimator::~AcknowledgedBitrateEstimator() {}
 
 AcknowledgedBitrateEstimator::AcknowledgedBitrateEstimator(
     std::unique_ptr<BitrateEstimator> bitrate_estimator)
-    : bitrate_estimator_(std::move(bitrate_estimator)) {}
+    : account_for_unacknowledged_traffic_(
+          field_trial::IsEnabled("WebRTC-Bwe-AccountForUnacked")),
+      bitrate_estimator_(std::move(bitrate_estimator)) {}
 
 void AcknowledgedBitrateEstimator::IncomingPacketFeedbackVector(
     const std::vector<PacketFeedback>& packet_feedback_vector) {
@@ -42,19 +47,51 @@ void AcknowledgedBitrateEstimator::IncomingPacketFeedbackVector(
   for (const auto& packet : packet_feedback_vector) {
     if (IsInSendTimeHistory(packet)) {
       MaybeExpectFastRateChange(packet.send_time_ms);
-      bitrate_estimator_->Update(packet.arrival_time_ms,
-                                 rtc::dchecked_cast<int>(packet.payload_size));
+      int acknowledged_estimate = rtc::dchecked_cast<int>(packet.payload_size);
+      if (account_for_unacknowledged_traffic_)
+        acknowledged_estimate += packet.unacknowledged_data;
+      bitrate_estimator_->Update(packet.arrival_time_ms, acknowledged_estimate);
     }
   }
 }
 
-rtc::Optional<uint32_t> AcknowledgedBitrateEstimator::bitrate_bps() const {
-  return bitrate_estimator_->bitrate_bps();
+absl::optional<uint32_t> AcknowledgedBitrateEstimator::bitrate_bps() const {
+  auto estimated_bitrate = bitrate_estimator_->bitrate_bps();
+  // If we account for unacknowledged traffic, we should not add the allocated
+  // bitrate for unallocated stream as we expect it to be included already.
+  if (account_for_unacknowledged_traffic_) {
+    return estimated_bitrate;
+  } else {
+    return estimated_bitrate
+               ? *estimated_bitrate + allocated_bitrate_without_feedback_bps_
+               : estimated_bitrate;
+  }
+}
+
+absl::optional<uint32_t> AcknowledgedBitrateEstimator::PeekBps() const {
+  return bitrate_estimator_->PeekBps();
+}
+
+absl::optional<DataRate> AcknowledgedBitrateEstimator::bitrate() const {
+  if (bitrate_bps())
+    return DataRate::bps(*bitrate_bps());
+  return absl::nullopt;
+}
+
+absl::optional<DataRate> AcknowledgedBitrateEstimator::PeekRate() const {
+  if (PeekBps())
+    return DataRate::bps(*PeekBps());
+  return absl::nullopt;
 }
 
 void AcknowledgedBitrateEstimator::SetAlrEndedTimeMs(
     int64_t alr_ended_time_ms) {
   alr_ended_time_ms_.emplace(alr_ended_time_ms);
+}
+
+void AcknowledgedBitrateEstimator::SetAllocatedBitrateWithoutFeedback(
+    uint32_t bitrate_bps) {
+  allocated_bitrate_without_feedback_bps_ = bitrate_bps;
 }
 
 void AcknowledgedBitrateEstimator::MaybeExpectFastRateChange(
@@ -65,5 +102,4 @@ void AcknowledgedBitrateEstimator::MaybeExpectFastRateChange(
   }
 }
 
-}  // namespace webrtc_cc
 }  // namespace webrtc

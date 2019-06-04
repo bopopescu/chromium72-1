@@ -48,8 +48,7 @@ class CollectVariableRefCountsTraverser : public TIntermTraverser
 
 CollectVariableRefCountsTraverser::CollectVariableRefCountsTraverser()
     : TIntermTraverser(true, false, false)
-{
-}
+{}
 
 void CollectVariableRefCountsTraverser::incrementStructTypeRefCount(const TType &type)
 {
@@ -153,8 +152,7 @@ RemoveUnreferencedVariablesTraverser::RemoveUnreferencedVariablesTraverser(
       mSymbolIdRefCounts(symbolIdRefCounts),
       mStructIdRefCounts(structIdRefCounts),
       mRemoveReferences(false)
-{
-}
+{}
 
 void RemoveUnreferencedVariablesTraverser::decrementStructTypeRefCount(const TType &type)
 {
@@ -207,7 +205,7 @@ void RemoveUnreferencedVariablesTraverser::removeVariableDeclaration(TIntermDecl
                 return;
             }
             TVariable *emptyVariable =
-                new TVariable(mSymbolTable, ImmutableString(""), new TType(declarator->getType()),
+                new TVariable(mSymbolTable, kEmptyImmutableString, new TType(declarator->getType()),
                               SymbolType::Empty);
             queueReplacementWithParent(node, declarator, new TIntermSymbol(emptyVariable),
                                        OriginalNode::IS_DROPPED);

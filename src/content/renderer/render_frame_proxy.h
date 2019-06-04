@@ -7,6 +7,7 @@
 
 #include "base/macros.h"
 #include "base/memory/ref_counted.h"
+#include "cc/paint/paint_canvas.h"
 #include "components/viz/common/surfaces/parent_local_surface_id_allocator.h"
 #include "content/common/content_export.h"
 #include "content/common/frame_messages.h"
@@ -16,7 +17,7 @@
 #include "ipc/ipc_listener.h"
 #include "ipc/ipc_sender.h"
 #include "third_party/blink/public/common/feature_policy/feature_policy.h"
-#include "third_party/blink/public/platform/web_canvas.h"
+#include "third_party/blink/public/common/frame/user_activation_update_type.h"
 #include "third_party/blink/public/platform/web_focus_type.h"
 #include "third_party/blink/public/platform/web_insecure_request_policy.h"
 #include "third_party/blink/public/web/web_remote_frame.h"
@@ -126,13 +127,21 @@ class CONTENT_EXPORT RenderFrameProxy : public IPC::Listener,
   // IPC::Listener
   bool OnMessageReceived(const IPC::Message& msg) override;
 
-  // Out-of-process child frames receive a signal from RenderWidgetCompositor
+  // Out-of-process child frames receive a signal from blink::LayerTreeView
   // when a compositor frame will begin.
   void WillBeginCompositorFrame();
 
   // Out-of-process child frames receive a signal from RenderWidget when the
   // ScreenInfo has changed.
   void OnScreenInfoChanged(const ScreenInfo& screen_info);
+
+  // Out-of-process child frames receive a signal from RenderWidget when the
+  // zoom level has changed.
+  void OnZoomLevelChanged(double zoom_level);
+
+  // Out-of-process child frames receive a signal from RenderWidget when the
+  // page scale factor has changed.
+  void OnPageScaleFactorChanged(float page_scale_factor);
 
   // Invoked by RenderWidget when a new capture sequence number was set,
   // indicating that surfaces should be synchronized.
@@ -191,7 +200,8 @@ class CONTENT_EXPORT RenderFrameProxy : public IPC::Listener,
   void FrameRectsChanged(const blink::WebRect& local_frame_rect,
                          const blink::WebRect& screen_space_rect) override;
   void UpdateRemoteViewportIntersection(
-      const blink::WebRect& viewport_intersection) override;
+      const blink::WebRect& viewport_intersection,
+      bool occluded_or_obscured) override;
   void VisibilityChanged(bool visible) override;
   void SetIsInert(bool) override;
   void SetInheritedEffectiveTouchAction(cc::TouchAction) override;
@@ -202,28 +212,28 @@ class CONTENT_EXPORT RenderFrameProxy : public IPC::Listener,
                     blink::WebLocalFrame* source) override;
   void FrameFocused() override;
   base::UnguessableToken GetDevToolsFrameToken() override;
-  uint32_t Print(const blink::WebRect& rect, blink::WebCanvas* canvas) override;
+  uint32_t Print(const blink::WebRect& rect, cc::PaintCanvas* canvas) override;
 
   // IPC handlers
   void OnDidStartLoading();
+
+  void WasEvicted();
 
  private:
   RenderFrameProxy(int routing_id);
 
   void Init(blink::WebRemoteFrame* frame,
             RenderViewImpl* render_view,
-            RenderWidget* render_widget);
+            RenderWidget* render_widget,
+            bool parent_is_local);
 
-  void ResendResizeParams();
-
-  void SetChildFrameSurface(const viz::SurfaceInfo& surface_info);
+  void ResendVisualProperties();
 
   // IPC handlers
   void OnDeleteProxy();
   void OnChildFrameProcessGone();
   void OnCompositorFrameSwapped(const IPC::Message& message);
-  // TODO(fsamuel): Rename OnFirstSurfaceActivation().
-  void OnSetChildFrameSurface(const viz::SurfaceInfo& surface_info);
+  void OnFirstSurfaceActivation(const viz::SurfaceInfo& surface_info);
   void OnIntrinsicSizingInfoOfChildChanged(
       blink::WebIntrinsicSizingInfo sizing_info);
   void OnUpdateOpener(int opener_routing_id);
@@ -249,7 +259,7 @@ class CONTENT_EXPORT RenderFrameProxy : public IPC::Listener,
   void OnSetPageFocus(bool is_focused);
   void OnSetFocusedFrame();
   void OnWillEnterFullscreen();
-  void OnSetHasReceivedUserGesture();
+  void OnUpdateUserActivationState(blink::UserActivationUpdateType update_type);
   void OnScrollRectToVisible(const gfx::Rect& rect_to_scroll,
                              const blink::WebScrollIntoViewParams& params);
   void OnBubbleLogicalScroll(blink::WebScrollDirection direction,
@@ -258,11 +268,10 @@ class CONTENT_EXPORT RenderFrameProxy : public IPC::Listener,
   void OnEnableAutoResize(const gfx::Size& min_size, const gfx::Size& max_size);
   void OnDisableAutoResize();
   void OnSetHasReceivedUserGestureBeforeNavigation(bool value);
+  void OnRenderFallbackContent() const;
 
 #if defined(USE_AURA)
   // MusEmbeddedFrameDelegate
-  void OnMusEmbeddedFrameSurfaceChanged(
-      const viz::SurfaceInfo& surface_info) override;
   void OnMusEmbeddedFrameSinkIdAllocated(
       const viz::FrameSinkId& frame_sink_id) override;
 #endif
@@ -270,7 +279,8 @@ class CONTENT_EXPORT RenderFrameProxy : public IPC::Listener,
   // ChildFrameCompositor:
   cc::Layer* GetLayer() override;
   void SetLayer(scoped_refptr<cc::Layer> layer,
-                bool prevent_contents_opaque_changes) override;
+                bool prevent_contents_opaque_changes,
+                bool is_surface_layer) override;
   SkBitmap* GetSadPageBitmap() override;
 
   const viz::LocalSurfaceId& GetLocalSurfaceId() const;
@@ -285,6 +295,8 @@ class CONTENT_EXPORT RenderFrameProxy : public IPC::Listener,
   // Stores the WebRemoteFrame we are associated with.
   blink::WebRemoteFrame* web_frame_;
   std::string unique_name_;
+
+  // Can be nullptr when this RenderFrameProxy's parent is not a RenderFrame.
   std::unique_ptr<ChildFrameCompositingHelper> compositing_helper_;
 
   RenderViewImpl* render_view_;
@@ -314,6 +326,7 @@ class CONTENT_EXPORT RenderFrameProxy : public IPC::Listener,
 
   gfx::Rect last_intersection_rect_;
   gfx::Rect last_compositor_visible_rect_;
+  bool last_occluded_or_obscured_ = false;
 
 #if defined(USE_AURA)
   std::unique_ptr<MusEmbeddedFrame> mus_embedded_frame_;

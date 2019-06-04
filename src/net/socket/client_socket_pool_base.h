@@ -40,7 +40,7 @@
 #include "base/time/time.h"
 #include "base/timer/timer.h"
 #include "net/base/address_list.h"
-#include "net/base/completion_callback.h"
+#include "net/base/completion_once_callback.h"
 #include "net/base/load_states.h"
 #include "net/base/load_timing_info.h"
 #include "net/base/net_errors.h"
@@ -98,11 +98,17 @@ class NET_EXPORT_PRIVATE ConnectJob {
   // Accessors
   const std::string& group_name() const { return group_name_; }
   const NetLogWithSource& net_log() { return net_log_; }
+  RequestPriority priority() const { return priority_; }
+  ClientSocketPool::RespectLimits respect_limits() const {
+    return respect_limits_;
+  }
 
   // Releases ownership of the underlying socket to the caller.
   // Returns the released socket, or NULL if there was a connection
   // error.
   std::unique_ptr<StreamSocket> PassSocket();
+
+  void ChangePriority(RequestPriority priority);
 
   // Begins connecting the socket.  Returns OK on success, ERR_IO_PENDING if it
   // cannot complete synchronously without blocking, or another net error code
@@ -126,11 +132,8 @@ class NET_EXPORT_PRIVATE ConnectJob {
   const NetLogWithSource& net_log() const { return net_log_; }
 
  protected:
-  RequestPriority priority() const { return priority_; }
+  void set_priority(RequestPriority priority) { priority_ = priority; }
   const SocketTag& socket_tag() const { return socket_tag_; }
-  ClientSocketPool::RespectLimits respect_limits() const {
-    return respect_limits_;
-  }
   void SetSocket(std::unique_ptr<StreamSocket> socket);
   StreamSocket* socket() { return socket_.get(); }
   void NotifyDelegateOfCompletion(int rv);
@@ -142,6 +145,8 @@ class NET_EXPORT_PRIVATE ConnectJob {
  private:
   virtual int ConnectInternal() = 0;
 
+  virtual void ChangePriorityInternal(RequestPriority priority) {}
+
   void LogConnectStart();
   void LogConnectCompletion(int net_error);
 
@@ -150,8 +155,7 @@ class NET_EXPORT_PRIVATE ConnectJob {
 
   const std::string group_name_;
   const base::TimeDelta timeout_duration_;
-  // TODO(akalin): Support reprioritization.
-  const RequestPriority priority_;
+  RequestPriority priority_;
   const SocketTag socket_tag_;
   const ClientSocketPool::RespectLimits respect_limits_;
   // Timer to abort jobs that take too long.
@@ -176,7 +180,7 @@ class NET_EXPORT_PRIVATE ClientSocketPoolBaseHelper
     : public ConnectJob::Delegate,
       public NetworkChangeNotifier::IPAddressObserver {
  public:
-  typedef uint32_t Flags;
+  using Flags = uint32_t;
 
   // Used to specify specific behavior for the ClientSocketPool.
   enum Flag {
@@ -187,7 +191,7 @@ class NET_EXPORT_PRIVATE ClientSocketPoolBaseHelper
   class NET_EXPORT_PRIVATE Request {
    public:
     Request(ClientSocketHandle* handle,
-            const CompletionCallback& callback,
+            CompletionOnceCallback callback,
             RequestPriority priority,
             const SocketTag& socket_tag,
             ClientSocketPool::RespectLimits respect_limits,
@@ -197,7 +201,8 @@ class NET_EXPORT_PRIVATE ClientSocketPoolBaseHelper
     virtual ~Request();
 
     ClientSocketHandle* handle() const { return handle_; }
-    const CompletionCallback& callback() const { return callback_; }
+    bool has_callback() const { return static_cast<bool>(callback_); }
+    CompletionOnceCallback release_callback() { return std::move(callback_); }
     RequestPriority priority() const { return priority_; }
     void set_priority(RequestPriority priority) { priority_ = priority; }
     ClientSocketPool::RespectLimits respect_limits() const {
@@ -206,6 +211,15 @@ class NET_EXPORT_PRIVATE ClientSocketPoolBaseHelper
     Flags flags() const { return flags_; }
     const NetLogWithSource& net_log() const { return net_log_; }
     const SocketTag& socket_tag() const { return socket_tag_; }
+    ConnectJob* job() const { return job_; }
+
+    // Associates a ConnectJob with the request. Must be called on a request
+    // that does not already have a job.
+    void AssignJob(ConnectJob* job);
+
+    // Unassigns the request's |job_| and returns it. Must be called on a
+    // request with a job.
+    ConnectJob* ReleaseJob();
 
     // TODO(eroman): Temporary until crbug.com/467797 is solved.
     void CrashIfInvalid() const;
@@ -218,12 +232,13 @@ class NET_EXPORT_PRIVATE ClientSocketPoolBaseHelper
     };
 
     ClientSocketHandle* const handle_;
-    const CompletionCallback callback_;
+    CompletionOnceCallback callback_;
     RequestPriority priority_;
     const ClientSocketPool::RespectLimits respect_limits_;
     const Flags flags_;
     const NetLogWithSource net_log_;
     const SocketTag socket_tag_;
+    ConnectJob* job_;
 
     // TODO(eroman): Temporary until crbug.com/467797 is solved.
     Liveness liveness_ = ALIVE;
@@ -321,6 +336,10 @@ class NET_EXPORT_PRIVATE ClientSocketPoolBaseHelper
         ClientSocketPool::kMaxConnectRetryIntervalMs);
   }
 
+  int NumNeverAssignedConnectJobsInGroup(const std::string& group_name) const {
+    return group_map_.find(group_name)->second->never_assigned_job_count();
+  }
+
   int NumUnassignedConnectJobsInGroup(const std::string& group_name) const {
     return group_map_.find(group_name)->second->unassigned_job_count();
   }
@@ -331,6 +350,13 @@ class NET_EXPORT_PRIVATE ClientSocketPoolBaseHelper
 
   int NumActiveSocketsInGroup(const std::string& group_name) const {
     return group_map_.find(group_name)->second->active_socket_count();
+  }
+
+  bool RequestInGroupWithHandleHasJobForTesting(
+      const std::string& group_name,
+      const ClientSocketHandle* handle) const {
+    return group_map_.find(group_name)
+        ->second->RequestWithHandleHasJobForTesting(handle);
   }
 
   bool HasGroup(const std::string& group_name) const;
@@ -393,13 +419,15 @@ class NET_EXPORT_PRIVATE ClientSocketPoolBaseHelper
     base::TimeTicks start_time;
   };
 
-  typedef PriorityQueue<Request*> RequestQueue;
-  typedef std::map<const ClientSocketHandle*, Request*> RequestMap;
+  using RequestQueue = PriorityQueue<std::unique_ptr<Request>>;
 
   // A Group is allocated per group_name when there are idle sockets or pending
   // requests.  Otherwise, the Group object is removed from the map.
   // |active_socket_count| tracks the number of sockets held by clients.
-  class Group {
+  // SanityCheck() will always be true, except during the invokation of a
+  // method.  So all public methods expect the Group to pass SanityCheck() when
+  // invoked.
+  class NET_EXPORT_PRIVATE Group {
    public:
     using JobList = std::list<std::unique_ptr<ConnectJob>>;
 
@@ -445,9 +473,9 @@ class NET_EXPORT_PRIVATE ClientSocketPoolBaseHelper
     bool BackupJobTimerIsRunning() const;
 
     // If there's a ConnectJob that's never been assigned to Request,
-    // decrements |unassigned_job_count_| and returns true.
+    // decrements |never_assigned_job_count_| and returns true.
     // Otherwise, returns false.
-    bool TryToUseUnassignedConnectJob();
+    bool TryToUseNeverAssignedConnectJob();
 
     void AddJob(std::unique_ptr<ConnectJob> job, bool is_preconnect);
     // Remove |job| from this group, which must already own |job|.
@@ -491,59 +519,115 @@ class NET_EXPORT_PRIVATE ClientSocketPoolBaseHelper
     void IncrementActiveSocketCount() { active_socket_count_++; }
     void DecrementActiveSocketCount() { active_socket_count_--; }
 
-    int unassigned_job_count() const { return unassigned_job_count_; }
+    // Whether the request in |pending_requests_| with a given handle has a job.
+    bool RequestWithHandleHasJobForTesting(
+        const ClientSocketHandle* handle) const;
+
+    size_t unassigned_job_count() const { return unassigned_jobs_.size(); }
     const JobList& jobs() const { return jobs_; }
     const std::list<IdleSocket>& idle_sockets() const { return idle_sockets_; }
     int active_socket_count() const { return active_socket_count_; }
     std::list<IdleSocket>* mutable_idle_sockets() { return &idle_sockets_; }
+    size_t never_assigned_job_count() const {
+      return never_assigned_job_count_;
+    }
 
    private:
     // Returns the iterator's pending request after removing it from
-    // the queue.
+    // the queue. Expects the Group to pass SanityCheck() when called.
     std::unique_ptr<Request> RemovePendingRequest(
         const RequestQueue::Pointer& pointer);
+
+    // Finds the Request which is associated with the given ConnectJob.
+    // Returns nullptr if none is found. Expects the Group to pass SanityCheck()
+    // when called.
+    RequestQueue::Pointer FindRequestWithJob(const ConnectJob* job) const;
+
+    // Finds the Request in |pending_requests_| which is the first request
+    // without a job. Returns a null pointer if all requests have jobs. Does not
+    // expect the Group to pass SanityCheck() when called, but does expect all
+    // jobs to either be assigned to a request or in |unassigned_jobs_|. Expects
+    // that no requests with jobs come after any requests without a job.
+    RequestQueue::Pointer GetFirstRequestWithoutJob() const;
+
+    // Tries to assign an unassigned |job| to a request. If no requests need a
+    // job, |job| is added to |unassigned_jobs_|.
+    // When called, does not expect the Group to pass SanityCheck(), but does
+    // expect it to have passed SanityCheck() before the given ConnectJob was
+    // either created or had the request it was assigned to removed.
+    void TryToAssignUnassignedJob(ConnectJob* job);
+
+    // Tries to assign a job to the given request. If any unassigned jobs are
+    // available, the first unassigned job is assigned to the request.
+    // Otherwise, if the request is ahead of the last request with a job, the
+    // job is stolen from the last request with a job.
+    // When called, does not expect the Group to pass SanityCheck(), but does
+    // expect that:
+    //  - the request associated with |request_pointer| must not have
+    //    an assigned ConnectJob,
+    //  - the first min( jobs_.size(), pending_requests_.size() - 1 ) Requests
+    //    other than the given request must have ConnectJobs, i.e. the group
+    //    must have passed SanityCheck() before the passed in Request was either
+    //    added or had its job unassigned.
+    void TryToAssignJobToRequest(RequestQueue::Pointer request_pointer);
+
+    // Transfers the associated ConnectJob from one Request to another. Expects
+    // the source request to have a job, and the destination request to not have
+    // a job. Does not expect the Group to pass SanityCheck() when called.
+    void TransferJobBetweenRequests(Request* source, Request* dest);
 
     // Called when the backup socket timer fires.
     void OnBackupJobTimerFired(
         std::string group_name,
         ClientSocketPoolBaseHelper* pool);
 
-    // Checks that |unassigned_job_count_| does not execeed the number of
-    // ConnectJobs.
-    void SanityCheck();
+    // Checks that:
+    //  - |unassigned_jobs_| is empty iff there are at least as many requests
+    //    as jobs.
+    //  - Exactly the first |jobs_.size() - unassigned_jobs_.size()| requests
+    //    have ConnectJobs.
+    //  - No requests are assigned a ConnectJob in |unassigned_jobs_|.
+    //  - No requests are assigned a ConnectJob not in |jobs_|.
+    //  - No two requests are assigned the same ConnectJob.
+    //  - All entries in |unassigned_jobs_| are also in |jobs_|.
+    //  - There are no duplicate entries in |unassigned_jobs_|.
+    void SanityCheck() const;
 
     // Total number of ConnectJobs that have never been assigned to a Request.
     // Since jobs use late binding to requests, which ConnectJobs have or have
     // not been assigned to a request are not tracked.  This is incremented on
     // preconnect and decremented when a preconnect is assigned, or when there
-    // are fewer than |unassigned_job_count_| ConnectJobs.  Not incremented
+    // are fewer than |never_assigned_job_count_| ConnectJobs.  Not incremented
     // when a request is cancelled.
-    size_t unassigned_job_count_;
+    size_t never_assigned_job_count_;
 
     std::list<IdleSocket> idle_sockets_;
-    JobList jobs_;
+    JobList jobs_;  // For bookkeeping purposes, there is a copy of the raw
+                    // pointer of each element of |jobs_| stored either in
+                    // |unassigned_jobs_|, or as the associated |job_| of an
+                    // element of |pending_requests_|.
+    std::list<ConnectJob*> unassigned_jobs_;
     RequestQueue pending_requests_;
     int active_socket_count_;  // number of active sockets used by clients
     // A timer for when to start the backup job.
     base::OneShotTimer backup_job_timer_;
   };
 
-  typedef std::map<std::string, Group*> GroupMap;
-
-  typedef std::set<ConnectJob*> ConnectJobSet;
+  using GroupMap = std::map<std::string, Group*>;
 
   struct CallbackResultPair {
     CallbackResultPair();
-    CallbackResultPair(const CompletionCallback& callback_in, int result_in);
-    CallbackResultPair(const CallbackResultPair& other);
+    CallbackResultPair(CompletionOnceCallback callback_in, int result_in);
+    CallbackResultPair(CallbackResultPair&& other);
+    CallbackResultPair& operator=(CallbackResultPair&& other);
     ~CallbackResultPair();
 
-    CompletionCallback callback;
+    CompletionOnceCallback callback;
     int result;
   };
 
-  typedef std::map<const ClientSocketHandle*, CallbackResultPair>
-      PendingCallbackMap;
+  using PendingCallbackMap =
+      std::map<const ClientSocketHandle*, CallbackResultPair>;
 
   // Closes all idle sockets in |group| if |force| is true.  Else, only closes
   // idle sockets in |group| that timed out with respect to |now| or can't be
@@ -626,7 +710,7 @@ class NET_EXPORT_PRIVATE ClientSocketPoolBaseHelper
   // keyed by |handle|. Apply |socket_tag| to the socket if socket successfully
   // created.
   void InvokeUserCallbackLater(ClientSocketHandle* handle,
-                               const CompletionCallback& callback,
+                               CompletionOnceCallback callback,
                                int rv,
                                const SocketTag& socket_tag);
 
@@ -702,7 +786,7 @@ class ClientSocketPoolBase {
   class Request : public internal::ClientSocketPoolBaseHelper::Request {
    public:
     Request(ClientSocketHandle* handle,
-            const CompletionCallback& callback,
+            CompletionOnceCallback callback,
             RequestPriority priority,
             const SocketTag& socket_tag,
             ClientSocketPool::RespectLimits respect_limits,
@@ -710,7 +794,7 @@ class ClientSocketPoolBase {
             const scoped_refptr<SocketParams>& params,
             const NetLogWithSource& net_log)
         : internal::ClientSocketPoolBaseHelper::Request(handle,
-                                                        callback,
+                                                        std::move(callback),
                                                         priority,
                                                         socket_tag,
                                                         respect_limits,
@@ -782,10 +866,10 @@ class ClientSocketPoolBase {
                     const SocketTag& socket_tag,
                     ClientSocketPool::RespectLimits respect_limits,
                     ClientSocketHandle* handle,
-                    const CompletionCallback& callback,
+                    CompletionOnceCallback callback,
                     const NetLogWithSource& net_log) {
     std::unique_ptr<Request> request(new Request(
-        handle, callback, priority, socket_tag, respect_limits,
+        handle, std::move(callback), priority, socket_tag, respect_limits,
         internal::ClientSocketPoolBaseHelper::NORMAL, params, net_log));
     return helper_.RequestSocket(group_name, std::move(request));
   }
@@ -797,10 +881,10 @@ class ClientSocketPoolBase {
                       const scoped_refptr<SocketParams>& params,
                       int num_sockets,
                       const NetLogWithSource& net_log) {
-    const Request request(nullptr /* no handle */, CompletionCallback(), IDLE,
-                          SocketTag(), ClientSocketPool::RespectLimits::ENABLED,
-                          internal::ClientSocketPoolBaseHelper::NO_IDLE_SOCKETS,
-                          params, net_log);
+    const Request request(
+        nullptr /* no handle */, CompletionOnceCallback(), IDLE, SocketTag(),
+        ClientSocketPool::RespectLimits::ENABLED,
+        internal::ClientSocketPoolBaseHelper::NO_IDLE_SOCKETS, params, net_log);
     helper_.RequestSockets(group_name, request, num_sockets);
   }
 
@@ -851,6 +935,10 @@ class ClientSocketPoolBase {
     return helper_.OnConnectJobComplete(result, job);
   }
 
+  int NumNeverAssignedConnectJobsInGroup(const std::string& group_name) const {
+    return helper_.NumNeverAssignedConnectJobsInGroup(group_name);
+  }
+
   int NumUnassignedConnectJobsInGroup(const std::string& group_name) const {
     return helper_.NumUnassignedConnectJobsInGroup(group_name);
   }
@@ -861,6 +949,12 @@ class ClientSocketPoolBase {
 
   int NumActiveSocketsInGroup(const std::string& group_name) const {
     return helper_.NumActiveSocketsInGroup(group_name);
+  }
+
+  bool RequestInGroupWithHandleHasJobForTesting(
+      const std::string& group_name,
+      const ClientSocketHandle* handle) const {
+    return helper_.RequestInGroupWithHandleHasJobForTesting(group_name, handle);
   }
 
   bool HasGroup(const std::string& group_name) const {
@@ -898,8 +992,8 @@ class ClientSocketPoolBase {
   class ConnectJobFactoryAdaptor
       : public internal::ClientSocketPoolBaseHelper::ConnectJobFactory {
    public:
-    typedef typename ClientSocketPoolBase<SocketParams>::ConnectJobFactory
-        ConnectJobFactory;
+    using ConnectJobFactory =
+        typename ClientSocketPoolBase<SocketParams>::ConnectJobFactory;
 
     explicit ConnectJobFactoryAdaptor(ConnectJobFactory* connect_job_factory)
         : connect_job_factory_(connect_job_factory) {}

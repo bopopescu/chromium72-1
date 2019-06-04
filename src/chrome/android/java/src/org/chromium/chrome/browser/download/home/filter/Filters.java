@@ -5,7 +5,10 @@
 package org.chromium.chrome.browser.download.home.filter;
 
 import android.support.annotation.IntDef;
+import android.text.TextUtils;
 
+import org.chromium.chrome.browser.UrlConstants;
+import org.chromium.components.offline_items_collection.OfflineItem;
 import org.chromium.components.offline_items_collection.OfflineItemFilter;
 
 import java.lang.annotation.Retention;
@@ -13,42 +16,95 @@ import java.lang.annotation.RetentionPolicy;
 
 /** Helper containing a list of Downloads Home filter types and conversion methods. */
 public class Filters {
-    /** A list of possible filter types on offlined items. */
+    // These statics are used for UMA logging. Please update the AndroidDownloadFilterType enum in
+    // histograms.xml if these change.
+    /**
+     * A list of possible filter types on offlined items. Note that not all of these will show
+     * up in the UI.
+     *
+     * As you add or remove entries from this list, please also update
+     * ListUtils#FILTER_TYPE_ORDER_LIST to specify what order the sections should appear in.
+     */
+    @IntDef({FilterType.NONE, FilterType.SITES, FilterType.VIDEOS, FilterType.MUSIC,
+            FilterType.IMAGES, FilterType.DOCUMENT, FilterType.OTHER, FilterType.PREFETCHED})
     @Retention(RetentionPolicy.SOURCE)
-    @IntDef({NONE, VIDEOS, MUSIC, IMAGES, SITES, OTHER, PREFETCHED})
-    public @interface FilterType {}
-    public static final int NONE = 0;
-    public static final int VIDEOS = 1;
-    public static final int MUSIC = 2;
-    public static final int IMAGES = 3;
-    public static final int SITES = 4;
-    public static final int OTHER = 5;
-    public static final int PREFETCHED = 6;
+    public @interface FilterType {
+        int NONE = 0;
+        int SITES = 1;
+        int VIDEOS = 2;
+        int MUSIC = 3;
+        int IMAGES = 4;
+        int DOCUMENT = 5;
+        int OTHER = 6;
+        int PREFETCHED = 7;
+        int NUM_ENTRIES = 8;
+    }
 
     /**
-     * Converts from a {@link OfflineItem#filter} to a {@link FilterType}.  Note that not all
-     * {@link OfflineItem#filter} types have a corresponding match and may return {@link #NONE}
+     * Converts from a {@link OfflineItem} to a {@link FilterType}.  Note that not all
+     * {@link OfflineItem}s have a corresponding match and may return {@link #NONE}
      * as they don't correspond to any UI filter.
      *
+     * @param item The {@link OfflineItem} to convert.
+     * @return     The corresponding {@link FilterType}.
+     */
+    public static @FilterType Integer fromOfflineItem(OfflineItem item) {
+        if (item.isSuggested) return FilterType.PREFETCHED;
+
+        return fromOfflineItem(item.filter);
+    }
+
+    /**
+     * A subset of {@link #fromOfflineItem(OfflineItem)} that only uses {@link OfflineItem#filter}
+     * to make the decision on which type of filter to use.  This will not be comprehensive for all
+     * {@link OfflineItem}s.
      * @param filter The {@link OfflineItem#filter} type to convert.
      * @return       The corresponding {@link FilterType}.
      */
-    public static @FilterType int fromOfflineItem(@OfflineItemFilter int filter) {
+    public static @FilterType Integer fromOfflineItem(@OfflineItemFilter int filter) {
         switch (filter) {
             case OfflineItemFilter.FILTER_PAGE:
-                return SITES;
+                return FilterType.SITES;
             case OfflineItemFilter.FILTER_VIDEO:
-                return VIDEOS;
+                return FilterType.VIDEOS;
             case OfflineItemFilter.FILTER_AUDIO:
-                return MUSIC;
+                return FilterType.MUSIC;
             case OfflineItemFilter.FILTER_IMAGE:
-                return IMAGES;
-            case OfflineItemFilter.FILTER_OTHER:
-            case OfflineItemFilter.FILTER_DOCUMENT:
-                return OTHER;
+                return FilterType.IMAGES;
+            // case OfflineItemFilter.FILTER_OTHER
+            // case OfflineItemFilter.FILTER_DOCUMENT
             default:
-                return NONE;
+                return FilterType.OTHER;
         }
+    }
+
+    /**
+     * Converts {@code filter} into a url.
+     * @see DownloadFilter#getUrlForFilter(int)
+     */
+    public static String toUrl(@FilterType int filter) {
+        return filter == FilterType.NONE ? UrlConstants.DOWNLOADS_URL
+                                         : UrlConstants.DOWNLOADS_FILTER_URL + filter;
+    }
+
+    /**
+     * Converts {@code url} to a {@link FilterType}.
+     * @see DownloadFilter#getFilterFromUrl(String)
+     */
+    public static @FilterType int fromUrl(String url) {
+        if (TextUtils.isEmpty(url) || !url.startsWith(UrlConstants.DOWNLOADS_FILTER_URL)) {
+            return FilterType.NONE;
+        }
+
+        @FilterType
+        int filter = FilterType.NONE;
+        try {
+            filter = Integer.parseInt(url.substring(UrlConstants.DOWNLOADS_FILTER_URL.length()));
+            if (filter < 0 || filter >= FilterType.NUM_ENTRIES) filter = FilterType.NONE;
+        } catch (NumberFormatException ex) {
+        }
+
+        return filter;
     }
 
     private Filters() {}

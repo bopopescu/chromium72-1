@@ -14,7 +14,11 @@
 #include "net/third_party/quic/core/session_notifier_interface.h"
 #include "net/third_party/quic/platform/api/quic_export.h"
 
-namespace net {
+namespace quic {
+
+namespace test {
+class QuicUnackedPacketMapPeer;
+}  // namespace test
 
 // Class which tracks unacked packets for three purposes:
 // 1) Track retransmittable data, including multiple transmissions of frames.
@@ -23,6 +27,8 @@ namespace net {
 class QUIC_EXPORT_PRIVATE QuicUnackedPacketMap {
  public:
   QuicUnackedPacketMap();
+  QuicUnackedPacketMap(const QuicUnackedPacketMap&) = delete;
+  QuicUnackedPacketMap& operator=(const QuicUnackedPacketMap&) = delete;
   ~QuicUnackedPacketMap();
 
   // Adds |serialized_packet| to the map and marks it as sent at |sent_time|.
@@ -75,12 +81,12 @@ class QUIC_EXPORT_PRIVATE QuicUnackedPacketMap {
   // acked.
   bool HasRetransmittableFrames(const QuicTransmissionInfo& info) const;
 
-  // Returns true if there are any unacked packets.
-  bool HasUnackedPackets() const;
-
   // Returns true if there are any unacked packets which have retransmittable
   // frames.
   bool HasUnackedRetransmittableFrames() const;
+
+  // Returns true if there are no packets present in the unacked packet map.
+  bool empty() const { return unacked_packets_.empty(); }
 
   // Returns the largest packet number that has been sent.
   QuicPacketNumber largest_sent_packet() const { return largest_sent_packet_; }
@@ -90,8 +96,12 @@ class QUIC_EXPORT_PRIVATE QuicUnackedPacketMap {
     return largest_sent_retransmittable_packet_;
   }
 
+  QuicPacketNumber largest_sent_largest_acked() const {
+    return largest_sent_largest_acked_;
+  }
+
   // Returns the largest packet number that has been acked.
-  QuicPacketNumber largest_observed() const { return largest_observed_; }
+  QuicPacketNumber largest_acked() const { return largest_acked_; }
 
   // Returns the sum of bytes from all packets in flight.
   QuicByteCount bytes_in_flight() const { return bytes_in_flight_; }
@@ -139,7 +149,7 @@ class QUIC_EXPORT_PRIVATE QuicUnackedPacketMap {
 
   // Returns true if there are any pending crypto packets.
   // TODO(fayang): Remove this method and call session_notifier_'s
-  // HasPendingCryptoData() when session_decides_what_to_write_ is default true.
+  // HasUnackedCryptoData() when session_decides_what_to_write_ is default true.
   bool HasPendingCryptoPackets() const;
 
   // Removes any retransmittable frames from this transmission or an associated
@@ -151,13 +161,24 @@ class QUIC_EXPORT_PRIVATE QuicUnackedPacketMap {
   // RemoveRetransmittability.
   void RemoveRetransmittability(QuicPacketNumber packet_number);
 
-  // Increases the largest observed.  Any packets less or equal to
-  // |largest_acked_packet| are discarded if they are only for the RTT purposes.
-  void IncreaseLargestObserved(QuicPacketNumber largest_observed);
+  // Increases the largest acked.  Any packets less or equal to
+  // |largest_acked| are discarded if they are only for the RTT purposes.
+  void IncreaseLargestAcked(QuicPacketNumber largest_acked);
 
   // Remove any packets no longer needed for retransmission, congestion, or
   // RTT measurement purposes.
   void RemoveObsoletePackets();
+
+  // Try to aggregate acked contiguous stream frames. For noncontiguous stream
+  // frames or control frames, notify the session notifier they get acked
+  // immediately.
+  void MaybeAggregateAckedStreamFrame(const QuicTransmissionInfo& info,
+                                      QuicTime::Delta ack_delay);
+
+  // Notify the session notifier of any stream data aggregated in
+  // aggregated_stream_frame_.  No effect if the stream frame has an invalid
+  // stream id.
+  void NotifyAggregatedStreamFrameAcked(QuicTime::Delta ack_delay);
 
   // Called to start/stop letting session decide what to write.
   void SetSessionDecideWhatToWrite(bool session_decides_what_to_write);
@@ -168,7 +189,13 @@ class QUIC_EXPORT_PRIVATE QuicUnackedPacketMap {
     return session_decides_what_to_write_;
   }
 
+  bool fix_is_useful_for_retransmission() const {
+    return fix_is_useful_for_retransmission_;
+  }
+
  private:
+  friend class test::QuicUnackedPacketMapPeer;
+
   // Called when a packet is retransmitted with a new packet number.
   // |old_packet_number| will remain unacked, but will have no
   // retransmittable data associated with it. Retransmittable frames will be
@@ -198,7 +225,10 @@ class QUIC_EXPORT_PRIVATE QuicUnackedPacketMap {
   QuicPacketNumber largest_sent_packet_;
   // The largest sent packet we expect to receive an ack for.
   QuicPacketNumber largest_sent_retransmittable_packet_;
-  QuicPacketNumber largest_observed_;
+  // The largest sent largest_acked in an ACK frame.
+  QuicPacketNumber largest_sent_largest_acked_;
+  // The largest received largest_acked from an ACK frame.
+  QuicPacketNumber largest_acked_;
 
   // Newly serialized retransmittable packets are added to this map, which
   // contains owning pointers to any contained frames.  If a packet is
@@ -219,15 +249,20 @@ class QUIC_EXPORT_PRIVATE QuicUnackedPacketMap {
   // Time that the last unacked crypto packet was sent.
   QuicTime last_crypto_packet_sent_time_;
 
+  // Aggregates acked stream data across multiple acked sent packets to save CPU
+  // by reducing the number of calls to the session notifier.
+  QuicStreamFrame aggregated_stream_frame_;
+
   // Receives notifications of frames being retransmitted or acknowledged.
   SessionNotifierInterface* session_notifier_;
 
   // If true, let session decides what to write.
   bool session_decides_what_to_write_;
 
-  DISALLOW_COPY_AND_ASSIGN(QuicUnackedPacketMap);
+  // Latched value of quic_reloadable_flag_quic_fix_is_useful_for_retrans.
+  const bool fix_is_useful_for_retransmission_;
 };
 
-}  // namespace net
+}  // namespace quic
 
 #endif  // NET_THIRD_PARTY_QUIC_CORE_QUIC_UNACKED_PACKET_MAP_H_

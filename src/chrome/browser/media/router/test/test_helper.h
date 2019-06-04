@@ -18,8 +18,8 @@
 #include "chrome/browser/media/router/media_routes_observer.h"
 #include "chrome/browser/media/router/media_sinks_observer.h"
 #include "content/public/browser/presentation_service_delegate.h"
-#include "content/public/common/presentation_connection_message.h"
 #include "testing/gmock/include/gmock/gmock.h"
+#include "third_party/blink/public/mojom/presentation/presentation.mojom.h"
 
 #if !defined(OS_ANDROID)
 #include "chrome/browser/media/router/discovery/dial/dial_media_sink_service.h"
@@ -28,6 +28,7 @@
 #include "chrome/browser/media/router/discovery/mdns/cast_media_sink_service_impl.h"
 #include "chrome/browser/media/router/providers/cast/cast_app_discovery_service.h"
 #include "chrome/browser/media/router/providers/dial/dial_activity_manager.h"
+#include "chrome/browser/media/router/providers/dial/dial_internal_message_util.h"
 #include "chrome/common/media_router/discovery/media_sink_internal.h"
 #include "net/base/ip_endpoint.h"
 #include "services/network/test/test_url_loader_factory.h"
@@ -64,9 +65,6 @@ MATCHER_P(StateChangeInfoEquals, other, "") {
          arg.message == other.message;
 }
 
-std::string PresentationConnectionMessageToString(
-    const content::PresentationConnectionMessage& message);
-
 class MockIssuesObserver : public IssuesObserver {
  public:
   explicit MockIssuesObserver(IssueManager* issue_manager);
@@ -101,21 +99,12 @@ class MockMediaRoutesObserver : public MediaRoutesObserver {
 class MockPresentationConnectionProxy
     : public blink::mojom::PresentationConnection {
  public:
-  // PresentationConnectionMessage is move-only.
-  // TODO(crbug.com/729950): Use MOCK_METHOD directly once GMock gets the
-  // move-only type support.
   MockPresentationConnectionProxy();
   ~MockPresentationConnectionProxy() override;
-  void OnMessage(content::PresentationConnectionMessage message,
-                 OnMessageCallback cb) override {
-    OnMessageInternal(message, cb);
-  }
-  MOCK_METHOD2(OnMessageInternal,
-               void(const content::PresentationConnectionMessage&,
-                    OnMessageCallback&));
+  MOCK_METHOD1(OnMessage, void(blink::mojom::PresentationConnectionMessagePtr));
   MOCK_METHOD1(DidChangeState,
                void(blink::mojom::PresentationConnectionState state));
-  MOCK_METHOD0(RequestClose, void());
+  MOCK_METHOD1(DidClose, void(blink::mojom::PresentationConnectionCloseReason));
 };
 
 #if !defined(OS_ANDROID)
@@ -247,6 +236,10 @@ ParsedDialAppInfo CreateParsedDialAppInfo(const std::string& name,
 std::unique_ptr<ParsedDialAppInfo> CreateParsedDialAppInfoPtr(
     const std::string& name,
     DialAppState app_state);
+
+std::unique_ptr<DialInternalMessage> ParseDialInternalMessage(
+    const std::string& message);
+
 #endif  // !defined(OS_ANDROID)
 
 }  // namespace media_router

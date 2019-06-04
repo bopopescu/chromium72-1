@@ -13,8 +13,9 @@ namespace resource_coordinator {
 
 FrameCoordinationUnitImpl::FrameCoordinationUnitImpl(
     const CoordinationUnitID& id,
-    std::unique_ptr<service_manager::ServiceContextRef> service_ref)
-    : CoordinationUnitInterface(id, std::move(service_ref)),
+    CoordinationUnitGraph* graph,
+    std::unique_ptr<service_manager::ServiceKeepaliveRef> keepalive_ref)
+    : CoordinationUnitInterface(id, graph, std::move(keepalive_ref)),
       parent_frame_coordination_unit_(nullptr),
       page_coordination_unit_(nullptr),
       process_coordination_unit_(nullptr) {}
@@ -30,10 +31,20 @@ FrameCoordinationUnitImpl::~FrameCoordinationUnitImpl() {
     child_frame->RemoveParentFrame(this);
 }
 
+void FrameCoordinationUnitImpl::SetProcess(const CoordinationUnitID& cu_id) {
+  ProcessCoordinationUnitImpl* process_cu =
+      ProcessCoordinationUnitImpl::GetCoordinationUnitByID(graph_, cu_id);
+  if (!process_cu)
+    return;
+  DCHECK(!process_coordination_unit_);
+  process_coordination_unit_ = process_cu;
+  process_cu->AddFrame(this);
+}
+
 void FrameCoordinationUnitImpl::AddChildFrame(const CoordinationUnitID& cu_id) {
   DCHECK(cu_id != id());
   FrameCoordinationUnitImpl* frame_cu =
-      FrameCoordinationUnitImpl::GetCoordinationUnitByID(cu_id);
+      FrameCoordinationUnitImpl::GetCoordinationUnitByID(graph_, cu_id);
   if (!frame_cu)
     return;
   if (HasFrameCoordinationUnitInAncestors(frame_cu) ||
@@ -50,7 +61,7 @@ void FrameCoordinationUnitImpl::RemoveChildFrame(
     const CoordinationUnitID& cu_id) {
   DCHECK(cu_id != id());
   FrameCoordinationUnitImpl* frame_cu =
-      FrameCoordinationUnitImpl::GetCoordinationUnitByID(cu_id);
+      FrameCoordinationUnitImpl::GetCoordinationUnitByID(graph_, cu_id);
   if (!frame_cu)
     return;
   if (RemoveChildFrame(frame_cu)) {
@@ -69,13 +80,22 @@ void FrameCoordinationUnitImpl::SetNetworkAlmostIdle(bool idle) {
 }
 
 void FrameCoordinationUnitImpl::SetLifecycleState(mojom::LifecycleState state) {
-  SetProperty(mojom::PropertyType::kLifecycleState,
-              static_cast<int64_t>(state));
-  // The page will have the same lifecycle state as the main frame.
-  if (IsMainFrame() && GetPageCoordinationUnit()) {
-    GetPageCoordinationUnit()->SetProperty(mojom::PropertyType::kLifecycleState,
-                                           static_cast<int64_t>(state));
-  }
+  if (state == lifecycle_state_)
+    return;
+
+  mojom::LifecycleState old_state = lifecycle_state_;
+  lifecycle_state_ = state;
+
+  // Notify parents of this change.
+  if (process_coordination_unit_)
+    process_coordination_unit_->OnFrameLifecycleStateChanged(this, old_state);
+  if (page_coordination_unit_)
+    page_coordination_unit_->OnFrameLifecycleStateChanged(this, old_state);
+}
+
+void FrameCoordinationUnitImpl::SetHasNonEmptyBeforeUnload(
+    bool has_nonempty_beforeunload) {
+  has_nonempty_beforeunload_ = has_nonempty_beforeunload;
 }
 
 void FrameCoordinationUnitImpl::OnAlertFired() {
@@ -166,12 +186,6 @@ void FrameCoordinationUnitImpl::AddPageCoordinationUnit(
     PageCoordinationUnitImpl* page_coordination_unit) {
   DCHECK(!page_coordination_unit_);
   page_coordination_unit_ = page_coordination_unit;
-}
-
-void FrameCoordinationUnitImpl::AddProcessCoordinationUnit(
-    ProcessCoordinationUnitImpl* process_coordination_unit) {
-  DCHECK(!process_coordination_unit_);
-  process_coordination_unit_ = process_coordination_unit;
 }
 
 void FrameCoordinationUnitImpl::RemovePageCoordinationUnit(

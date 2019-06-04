@@ -38,6 +38,7 @@ _NAMED_TYPE_INFO = {
     'valid': [
       'GL_QUERY_RESULT_EXT',
       'GL_QUERY_RESULT_AVAILABLE_EXT',
+      'GL_QUERY_RESULT_AVAILABLE_NO_FLUSH_CHROMIUM_EXT',
     ],
   },
   'QueryTarget': {
@@ -114,7 +115,6 @@ _NAMED_TYPE_INFO = {
   },
   'viz::ResourceFormat': {
     'type': 'viz::ResourceFormat',
-    'is_complete': True,
     'valid': [
       'viz::ResourceFormat::RGBA_8888',
       'viz::ResourceFormat::RGBA_4444',
@@ -122,11 +122,23 @@ _NAMED_TYPE_INFO = {
       'viz::ResourceFormat::ALPHA_8',
       'viz::ResourceFormat::LUMINANCE_8',
       'viz::ResourceFormat::RGB_565',
-      'viz::ResourceFormat::ETC1',
+      'viz::ResourceFormat::BGR_565',
       'viz::ResourceFormat::RED_8',
+      'viz::ResourceFormat::RG_88',
       'viz::ResourceFormat::LUMINANCE_F16',
       'viz::ResourceFormat::RGBA_F16',
       'viz::ResourceFormat::R16_EXT',
+      'viz::ResourceFormat::RGBX_8888',
+      'viz::ResourceFormat::BGRX_8888',
+      'viz::ResourceFormat::RGBX_1010102',
+      'viz::ResourceFormat::BGRX_1010102',
+      'viz::ResourceFormat::YVU_420',
+      'viz::ResourceFormat::YUV_420_BIPLANAR',
+      'viz::ResourceFormat::UYVY_422',
+
+    ],
+    'invalid': [
+      'viz::ResourceFormat::ETC1',
     ],
   },
 }
@@ -214,9 +226,6 @@ _FUNCTION_INFO = {
     'decoder_func': 'DoFlush',
     'trace_level': 1,
   },
-  'GenMailbox': {
-    'type': 'NoCommand',
-  },
   'GetError': {
     'type': 'Is',
     'decoder_func': 'GetErrorState()->GetGLError',
@@ -261,10 +270,6 @@ _FUNCTION_INFO = {
     'impl_func': False,
     'client_test': False,
     'trace_level': 1,
-  },
-  'CompressedCopyTextureCHROMIUM': {
-    'decoder_func': 'DoCompressedCopyTextureCHROMIUM',
-    'unit_test': False,
   },
   'GenQueriesEXT': {
     'type': 'GENn',
@@ -327,6 +332,12 @@ _FUNCTION_INFO = {
     'unit_test': False,
     'extension': 'CHROMIUM_trace_marker',
   },
+  'SetActiveURLCHROMIUM': {
+    'type': 'Custom',
+    'impl_func': False,
+    'client_test': False,
+    'cmd_args': 'GLuint url_bucket_id',
+  },
   'InsertFenceSyncCHROMIUM': {
     'type': 'Custom',
     'internal': True,
@@ -377,6 +388,8 @@ _FUNCTION_INFO = {
   },
   'BeginRasterCHROMIUM': {
     'decoder_func': 'DoBeginRasterCHROMIUM',
+    'type': 'PUT',
+    'count': 16,  # GL_MAILBOX_SIZE_CHROMIUM
     'internal': True,
     'impl_func': False,
     'unit_test': False,
@@ -413,6 +426,21 @@ _FUNCTION_INFO = {
     'internal': True,
     'impl_func': True,
     'client_test': False,
+    'unit_test': False,
+  },
+  'DeletePaintCacheTextBlobsINTERNAL': {
+    'type': 'DELn',
+    'internal': True,
+    'unit_test': False,
+  },
+  'DeletePaintCachePathsINTERNAL': {
+    'type': 'DELn',
+    'internal': True,
+    'unit_test': False,
+  },
+  'ClearPaintCacheINTERNAL': {
+    'decoder_func': 'DoClearPaintCacheINTERNAL',
+    'internal': True,
     'unit_test': False,
   },
   'UnlockTransferCacheEntryINTERNAL': {

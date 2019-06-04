@@ -24,10 +24,12 @@ size_t compute_path_size(const SkPath& path) {
 SkGlyphCache::SkGlyphCache(
     const SkDescriptor& desc,
     std::unique_ptr<SkScalerContext> scaler,
-    const SkPaint::FontMetrics& fontMetrics)
+    const SkFontMetrics& fontMetrics)
     : fDesc{desc}
     , fScalerContext{std::move(scaler)}
-    , fFontMetrics(fontMetrics)
+    , fFontMetrics{fontMetrics}
+    , fIsSubpixel{fScalerContext->isSubpixel()}
+    , fAxisAlignment{fScalerContext->computeAxisAlignmentForHText()}
 {
     SkASSERT(fScalerContext != nullptr);
     fMemoryUsed = sizeof(*this);
@@ -130,6 +132,13 @@ const SkGlyph& SkGlyphCache::getGlyphIDMetrics(uint16_t glyphID, SkFixed x, SkFi
     return *this->lookupByPackedGlyphID(packedGlyphID, kFull_MetricsType);
 }
 
+void SkGlyphCache::getAdvances(SkSpan<const SkGlyphID> glyphIDs, SkPoint advances[]) {
+    for (auto glyphID : glyphIDs) {
+        auto glyph = this->getGlyphIDAdvance(glyphID);
+        *advances++ = SkPoint::Make(glyph.fAdvanceX, glyph.fAdvanceY);
+    }
+}
+
 SkGlyph* SkGlyphCache::lookupByChar(SkUnichar charCode, MetricsType type, SkFixed x, SkFixed y) {
     SkPackedUnicharID id(charCode, x, y);
     CharGlyphRec* rec = this->getCharGlyphRec(id);
@@ -147,7 +156,7 @@ SkGlyph* SkGlyphCache::lookupByPackedGlyphID(SkPackedGlyphID packedGlyphID, Metr
         glyph = this->allocateNewGlyph(packedGlyphID, type);
     } else {
         if (type == kFull_MetricsType && glyph->isJustAdvance()) {
-           fScalerContext->getMetrics(glyph);
+            fScalerContext->getMetrics(glyph);
         }
     }
     return glyph;
@@ -194,43 +203,44 @@ const void* SkGlyphCache::findImage(const SkGlyph& glyph) {
     return glyph.fImage;
 }
 
-bool SkGlyphCache::initializeImage(const volatile void* data, size_t size, SkGlyph* glyph) {
-    if (glyph->fImage) return false;
+void SkGlyphCache::initializeImage(const volatile void* data, size_t size, SkGlyph* glyph) {
+    // Don't overwrite the image if we already have one. We could have used a fallback if the
+    // glyph was missing earlier.
+    if (glyph->fImage) return;
 
     if (glyph->fWidth > 0 && glyph->fWidth < kMaxGlyphWidth) {
         size_t allocSize = glyph->allocImage(&fAlloc);
         // check that alloc() actually succeeded
         if (glyph->fImage) {
             SkAssertResult(size == allocSize);
-            memcpy(glyph->fImage, const_cast<const void*>(data), size);
+            memcpy(glyph->fImage, const_cast<const void*>(data), allocSize);
             fMemoryUsed += size;
         }
     }
-
-    return true;
 }
 
 const SkPath* SkGlyphCache::findPath(const SkGlyph& glyph) {
-    if (glyph.fWidth) {
-        if (glyph.fPathData == nullptr) {
-            SkGlyph::PathData* pathData = fAlloc.make<SkGlyph::PathData>();
-            const_cast<SkGlyph&>(glyph).fPathData = pathData;
-            pathData->fIntercept = nullptr;
-            SkPath* path = new SkPath;
-            if (fScalerContext->getPath(glyph.getPackedID(), path)) {
-                pathData->fPath = path;
-                fMemoryUsed += compute_path_size(*path);
-            } else {
-                pathData->fPath = nullptr;
-                delete path;
-            }
+
+    if (!glyph.isEmpty()) {
+        // If the path already exists, return it.
+        if (glyph.fPathData != nullptr) {
+            return glyph.fPathData->fPath;
+        }
+
+        // Add new path to the glyph, and add it's size to the glyph cache size.
+        if (SkPath* path = const_cast<SkGlyph&>(glyph).addPath(fScalerContext.get(), &fAlloc)) {
+            fMemoryUsed += compute_path_size(*path);
+            return path;
         }
     }
-    return glyph.fPathData ? glyph.fPathData->fPath : nullptr;
+
+    return nullptr;
 }
 
 bool SkGlyphCache::initializePath(SkGlyph* glyph, const volatile void* data, size_t size) {
-    if (glyph->fPathData) return false;
+    // Don't overwrite the path if we already have one. We could have used a fallback if the
+    // glyph was missing earlier.
+    if (glyph->fPathData) return true;
 
     if (glyph->fWidth) {
         SkGlyph::PathData* pathData = fAlloc.make<SkGlyph::PathData>();
@@ -246,6 +256,43 @@ bool SkGlyphCache::initializePath(SkGlyph* glyph, const volatile void* data, siz
     }
 
     return true;
+}
+
+bool SkGlyphCache::belongsToCache(const SkGlyph* glyph) const {
+    return glyph && fGlyphMap.find(glyph->getPackedID()) == glyph;
+}
+
+const SkGlyph* SkGlyphCache::getCachedGlyphAnySubPix(SkGlyphID glyphID,
+                                                     SkPackedGlyphID vetoID) const {
+    for (SkFixed subY = 0; subY < SK_Fixed1; subY += SK_FixedQuarter) {
+        for (SkFixed subX = 0; subX < SK_Fixed1; subX += SK_FixedQuarter) {
+            SkPackedGlyphID packedGlyphID{glyphID, subX, subY};
+            if (packedGlyphID == vetoID) continue;
+            if (const auto* glyph = fGlyphMap.find(packedGlyphID)) {
+                return glyph;
+            }
+        }
+    }
+
+    return nullptr;
+}
+
+void SkGlyphCache::initializeGlyphFromFallback(SkGlyph* glyph, const SkGlyph& fallback) {
+    fMemoryUsed += glyph->copyImageData(fallback, &fAlloc);
+}
+
+SkVector SkGlyphCache::rounding() const {
+    return SkGlyphCacheCommon::PixelRounding(fIsSubpixel, fAxisAlignment);
+}
+
+const SkGlyph& SkGlyphCache::getGlyphMetrics(SkGlyphID glyphID, SkPoint position) {
+    if (!fIsSubpixel) {
+        return this->getGlyphIDMetrics(glyphID);
+    } else {
+        SkIPoint lookupPosition = SkGlyphCacheCommon::SubpixelLookup(fAxisAlignment, position);
+
+        return this->getGlyphIDMetrics(glyphID, lookupPosition.x(), lookupPosition.y());
+    }
 }
 
 #include "../pathops/SkPathOpsCubic.h"
@@ -296,9 +343,9 @@ void SkGlyphCache::AddPoints(const SkPoint* pts, int ptCount, const SkScalar bou
 }
 
 void SkGlyphCache::AddLine(const SkPoint pts[2], SkScalar axis, bool yAxis,
-                     SkGlyph::Intercept* intercept) {
-    SkScalar t = yAxis ? (axis - pts[0].fX) / (pts[1].fX - pts[0].fX)
-            : (axis - pts[0].fY) / (pts[1].fY - pts[0].fY);
+                           SkGlyph::Intercept* intercept) {
+    SkScalar t = yAxis ? sk_ieee_float_divide(axis - pts[0].fX, pts[1].fX - pts[0].fX)
+                       : sk_ieee_float_divide(axis - pts[0].fY, pts[1].fY - pts[0].fY);
     if (0 <= t && t < 1) {   // this handles divide by zero above
         AddInterval(yAxis ? pts[0].fY + t * (pts[1].fY - pts[0].fY)
             : pts[0].fX + t * (pts[1].fX - pts[0].fX), intercept);
@@ -432,6 +479,14 @@ void SkGlyphCache::dump() const {
     SkDebugf("%s\n", msg.c_str());
 }
 
+bool SkGlyphCache::hasImage(const SkGlyph& glyph) {
+    return !glyph.isEmpty() && this->findImage(glyph) != nullptr;
+}
+
+bool SkGlyphCache::hasPath(const SkGlyph& glyph) {
+    return !glyph.isEmpty() && this->findPath(glyph) != nullptr;
+}
+
 #ifdef SK_DEBUG
 void SkGlyphCache::forceValidate() const {
     size_t memoryUsed = sizeof(*this);
@@ -452,7 +507,6 @@ void SkGlyphCache::validate() const {
     forceValidate();
 #endif
 }
-
 #endif
 
 

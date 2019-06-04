@@ -248,6 +248,9 @@ class AudioParamHandler final : public ThreadSafeRefCounted<AudioParamHandler>,
   // The destination node used to get necessary information like the smaple rate
   // and context time.
   scoped_refptr<AudioDestinationHandler> destination_handler_;
+
+  // Audio bus to sum in any connections to the AudioParam.
+  scoped_refptr<AudioBus> summing_bus_;
 };
 
 // AudioParam class represents web-exposed AudioParam interface.
@@ -269,6 +272,8 @@ class AudioParam final : public ScriptWrappable {
       AudioParamHandler::AutomationRateMode rate_mode,
       float min_value = -std::numeric_limits<float>::max(),
       float max_value = std::numeric_limits<float>::max());
+
+  ~AudioParam() override;
 
   void Trace(blink::Visitor*) override;
   // |handler| always returns a valid object.
@@ -325,6 +330,8 @@ class AudioParam final : public ScriptWrappable {
   scoped_refptr<AudioParamHandler> handler_;
   Member<BaseAudioContext> context_;
 
+  // Needed in the destructor, where |context_| is not guaranteed to be alive.
+  scoped_refptr<DeferredTaskHandler> deferred_task_handler_;
 };
 
 }  // namespace blink

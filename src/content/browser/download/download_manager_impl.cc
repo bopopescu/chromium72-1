@@ -20,10 +20,11 @@
 #include "base/strings/sys_string_conversions.h"
 #include "base/supports_user_data.h"
 #include "base/synchronization/lock.h"
+#include "base/task/post_task.h"
 #include "build/build_config.h"
-#include "components/download/downloader/in_progress/download_entry.h"
-#include "components/download/downloader/in_progress/in_progress_cache_impl.h"
+#include "components/download/database/in_progress/download_entry.h"
 #include "components/download/public/common/download_create_info.h"
+#include "components/download/public/common/download_features.h"
 #include "components/download/public/common/download_file.h"
 #include "components/download/public/common/download_interrupt_reasons.h"
 #include "components/download/public/common/download_item_factory.h"
@@ -32,20 +33,22 @@
 #include "components/download/public/common/download_stats.h"
 #include "components/download/public/common/download_task_runner.h"
 #include "components/download/public/common/download_url_loader_factory_getter.h"
+#include "components/download/public/common/download_url_loader_factory_getter_impl.h"
 #include "components/download/public/common/download_url_parameters.h"
 #include "components/download/public/common/download_utils.h"
 #include "components/download/public/common/url_download_handler_factory.h"
 #include "content/browser/byte_stream.h"
 #include "content/browser/child_process_security_policy_impl.h"
-#include "content/browser/devtools/render_frame_devtools_agent_host.h"
-#include "content/browser/download/blob_download_url_loader_factory_getter.h"
+#include "content/browser/devtools/devtools_instrumentation.h"
 #include "content/browser/download/byte_stream_input_stream.h"
 #include "content/browser/download/download_resource_handler.h"
-#include "content/browser/download/download_url_loader_factory_getter_impl.h"
 #include "content/browser/download/download_utils.h"
+#include "content/browser/download/file_download_url_loader_factory_getter.h"
+#include "content/browser/download/file_system_download_url_loader_factory_getter.h"
 #include "content/browser/download/network_download_url_loader_factory_getter.h"
 #include "content/browser/download/url_downloader.h"
 #include "content/browser/download/url_downloader_factory.h"
+#include "content/browser/download/web_ui_download_url_loader_factory_getter.h"
 #include "content/browser/loader/resource_dispatcher_host_impl.h"
 #include "content/browser/loader/resource_request_info_impl.h"
 #include "content/browser/renderer_host/render_view_host_impl.h"
@@ -53,16 +56,17 @@
 #include "content/browser/web_contents/web_contents_impl.h"
 #include "content/common/throttling_url_loader.h"
 #include "content/public/browser/browser_context.h"
+#include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/content_browser_client.h"
 #include "content/public/browser/download_item_utils.h"
 #include "content/public/browser/download_manager_delegate.h"
+#include "content/public/browser/download_request_utils.h"
 #include "content/public/browser/notification_service.h"
 #include "content/public/browser/notification_types.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/render_process_host.h"
 #include "content/public/browser/resource_context.h"
 #include "content/public/browser/web_contents_delegate.h"
-#include "content/public/common/browser_side_navigation_policy.h"
 #include "content/public/common/origin_util.h"
 #include "content/public/common/previews_state.h"
 #include "content/public/common/referrer.h"
@@ -84,6 +88,17 @@
 namespace content {
 namespace {
 
+#if defined(OS_ANDROID)
+void DeleteDownloadedFileOnUIThread(const base::FilePath& file_path) {
+  if (!file_path.empty()) {
+    download::GetDownloadTaskRunner()->PostTask(
+        FROM_HERE,
+        base::BindOnce(base::IgnoreResult(&download::DeleteDownloadedFile),
+                       file_path));
+  }
+}
+#endif
+
 StoragePartitionImpl* GetStoragePartition(BrowserContext* context,
                                           int render_process_id,
                                           int render_frame_id) {
@@ -100,16 +115,16 @@ StoragePartitionImpl* GetStoragePartition(BrowserContext* context,
       BrowserContext::GetStoragePartition(context, site_instance));
 }
 
-bool CanRequestURLFromRenderer(int render_process_id, GURL url) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
-  // Check if the renderer is permitted to request the requested URL.
-  if (!ChildProcessSecurityPolicyImpl::GetInstance()->CanRequestURL(
-          render_process_id, url)) {
-    DVLOG(1) << "Denied unauthorized download request for "
-             << url.possibly_invalid_spec();
-    return false;
-  }
-  return true;
+void OnDownloadStarted(
+    download::DownloadItemImpl* download,
+    const download::DownloadUrlParameters::OnStartedCallback& on_started) {
+  if (on_started.is_null())
+    return;
+
+  if (!download || download->GetState() == download::DownloadItem::CANCELLED)
+    on_started.Run(nullptr, download::DOWNLOAD_INTERRUPT_REASON_USER_CANCELED);
+  else
+    on_started.Run(download, download::DOWNLOAD_INTERRUPT_REASON_NONE);
 }
 
 // Creates an interrupted download and calls StartDownload. Can be called on
@@ -124,8 +139,8 @@ void CreateInterruptedDownload(
   failed_created_info->url_chain.push_back(params->url());
   failed_created_info->result = reason;
   std::unique_ptr<ByteStreamReader> empty_byte_stream;
-  BrowserThread::PostTask(
-      BrowserThread::UI, FROM_HERE,
+  base::PostTaskWithTraits(
+      FROM_HERE, {BrowserThread::UI},
       base::BindOnce(
           &DownloadManager::StartDownload, download_manager,
           std::move(failed_created_info),
@@ -133,11 +148,13 @@ void CreateInterruptedDownload(
           nullptr, params->callback()));
 }
 
-void BeginDownload(std::unique_ptr<download::DownloadUrlParameters> params,
-                   std::unique_ptr<storage::BlobDataHandle> blob_data_handle,
-                   content::ResourceContext* resource_context,
-                   uint32_t download_id,
-                   base::WeakPtr<DownloadManagerImpl> download_manager) {
+void BeginDownload(
+    std::unique_ptr<download::DownloadUrlParameters> params,
+    std::unique_ptr<storage::BlobDataHandle> blob_data_handle,
+    content::ResourceContext* resource_context,
+    scoped_refptr<net::URLRequestContextGetter> url_request_context_getter,
+    bool is_new_download,
+    base::WeakPtr<DownloadManagerImpl> download_manager) {
   DCHECK_CURRENTLY_ON(BrowserThread::IO);
 
   download::UrlDownloadHandler::UniqueUrlDownloadHandlerPtr downloader(
@@ -146,7 +163,8 @@ void BeginDownload(std::unique_ptr<download::DownloadUrlParameters> params,
   params->set_blob_storage_context_getter(
       base::BindOnce(&BlobStorageContextGetter, resource_context));
   std::unique_ptr<net::URLRequest> url_request =
-      DownloadRequestCore::CreateRequestOnIOThread(download_id, params.get());
+      DownloadRequestCore::CreateRequestOnIOThread(
+          is_new_download, params.get(), std::move(url_request_context_getter));
   if (blob_data_handle) {
     storage::BlobProtocolHandler::SetRequestedBlobDataHandle(
         url_request.get(), std::move(blob_data_handle));
@@ -174,8 +192,8 @@ void BeginDownload(std::unique_ptr<download::DownloadUrlParameters> params,
                                                   params.get(), false)
                          .release());
   }
-  BrowserThread::PostTask(
-      BrowserThread::UI, FROM_HERE,
+  base::PostTaskWithTraits(
+      FROM_HERE, {BrowserThread::UI},
       base::BindOnce(
           &download::UrlDownloadHandler::Delegate::OnUrlDownloadHandlerCreated,
           download_manager, std::move(downloader)));
@@ -259,7 +277,7 @@ CreateDownloadURLLoaderFactoryGetter(StoragePartitionImpl* storage_partition,
     network::mojom::URLLoaderFactoryPtrInfo devtools_factory_ptr_info;
     network::mojom::URLLoaderFactoryRequest devtools_factory_request =
         MakeRequest(&devtools_factory_ptr_info);
-    if (RenderFrameDevToolsAgentHost::WillCreateURLLoaderFactory(
+    if (devtools_instrumentation::WillCreateURLLoaderFactory(
             static_cast<RenderFrameHostImpl*>(rfh), true, is_download,
             &devtools_factory_request)) {
       proxy_factory_ptr_info = std::move(devtools_factory_ptr_info);
@@ -281,24 +299,40 @@ DownloadManagerImpl::DownloadManagerImpl(BrowserContext* browser_context)
       in_progress_cache_initialized_(false),
       browser_context_(browser_context),
       delegate_(nullptr),
+      in_progress_manager_(
+          browser_context_->RetriveInProgressDownloadManager()),
+      next_download_id_(download::DownloadItem::kInvalidId),
+      is_history_download_id_retrieved_(false),
+      should_persist_new_download_(false),
+      cancelled_download_cleared_from_history_(0),
+      interrupted_download_cleared_from_history_(0),
       weak_factory_(this) {
   DCHECK(browser_context);
   download::SetIOTaskRunner(
-      BrowserThread::GetTaskRunnerForThread(BrowserThread::IO));
+      base::CreateSingleThreadTaskRunnerWithTraits({BrowserThread::IO}));
   if (!base::FeatureList::IsEnabled(network::features::kNetworkService))
     download::UrlDownloadHandlerFactory::Install(new UrlDownloaderFactory());
-  in_progress_manager_ = std::make_unique<download::InProgressDownloadManager>(
-      this, base::BindRepeating(&IsOriginSecure));
-  in_progress_manager_->Initialize(
-      IsOffTheRecord() ? base::FilePath() : browser_context_->GetPath(),
-      base::BindOnce(&DownloadManagerImpl::PostInitialization,
-                     weak_factory_.GetWeakPtr(),
-                     DOWNLOAD_INITIALIZATION_DEPENDENCY_IN_PROGRESS_CACHE));
+
+  if (!in_progress_manager_) {
+    in_progress_manager_ =
+        std::make_unique<download::InProgressDownloadManager>(
+            this,
+            IsOffTheRecord() ? base::FilePath() : browser_context_->GetPath(),
+            base::BindRepeating(&IsOriginSecure),
+            base::BindRepeating(&DownloadRequestUtils::IsURLSafe));
+  } else {
+    in_progress_manager_->set_delegate(this);
+    in_progress_manager_->set_download_start_observer(nullptr);
+    in_progress_manager_->set_is_origin_secure_cb(
+        base::BindRepeating(&IsOriginSecure));
+  }
+  in_progress_manager_->NotifyWhenInitialized(base::BindOnce(
+      &DownloadManagerImpl::OnInProgressDownloadManagerInitialized,
+      weak_factory_.GetWeakPtr()));
 }
 
 DownloadManagerImpl::~DownloadManagerImpl() {
   DCHECK(!shutdown_needed_);
-  download::SetIOTaskRunner(nullptr);
 }
 
 download::DownloadItemImpl* DownloadManagerImpl::CreateActiveItem(
@@ -311,17 +345,54 @@ download::DownloadItemImpl* DownloadManagerImpl::CreateActiveItem(
 
   downloads_[id] = base::WrapUnique(download);
   downloads_by_guid_[download->GetGuid()] = download;
+  DownloadItemUtils::AttachInfo(
+      download, GetBrowserContext(),
+      WebContentsImpl::FromRenderFrameHostID(info.render_process_id,
+                                             info.render_frame_id));
   return download;
 }
 
-void DownloadManagerImpl::GetNextId(const DownloadIdCallback& callback) {
+void DownloadManagerImpl::GetNextId(GetNextIdCallback callback) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
-  if (delegate_) {
-    delegate_->GetNextId(callback);
+  if (IsNextIdInitialized()) {
+    std::move(callback).Run(next_download_id_++);
     return;
   }
-  static uint32_t next_id = download::DownloadItem::kInvalidId + 1;
-  callback.Run(next_id++);
+
+  id_callbacks_.emplace_back(
+      std::make_unique<GetNextIdCallback>(std::move(callback)));
+  // If we are first time here, call the delegate to get the next ID from
+  // history db.
+  if (!is_history_download_id_retrieved_ && id_callbacks_.size() == 1u) {
+    if (delegate_) {
+      delegate_->GetNextId(
+          base::BindRepeating(&DownloadManagerImpl::OnHistoryNextIdRetrived,
+                              weak_factory_.GetWeakPtr()));
+    } else {
+      OnHistoryNextIdRetrived(download::DownloadItem::kInvalidId);
+    }
+  }
+}
+
+void DownloadManagerImpl::SetNextId(uint32_t next_id) {
+  if (next_id > next_download_id_)
+    next_download_id_ = next_id;
+  if (!IsNextIdInitialized())
+    return;
+
+  for (auto& callback : id_callbacks_)
+    std::move(*callback).Run(next_download_id_++);
+  id_callbacks_.clear();
+}
+
+void DownloadManagerImpl::OnHistoryNextIdRetrived(uint32_t next_id) {
+  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  is_history_download_id_retrieved_ = true;
+  if (next_id == download::DownloadItem::kInvalidId)
+    next_id++;
+  else
+    should_persist_new_download_ = true;
+  SetNextId(next_id);
 }
 
 void DownloadManagerImpl::DetermineDownloadTarget(
@@ -419,6 +490,25 @@ bool DownloadManagerImpl::InterceptDownload(
     const download::DownloadCreateInfo& info) {
   WebContents* web_contents = WebContentsImpl::FromRenderFrameHostID(
       info.render_process_id, info.render_frame_id);
+  if (info.is_new_download &&
+      info.result ==
+          download::DOWNLOAD_INTERRUPT_REASON_SERVER_CROSS_ORIGIN_REDIRECT) {
+    if (web_contents) {
+      std::vector<GURL> url_chain(info.url_chain);
+      GURL url = url_chain.back();
+      url_chain.pop_back();
+      NavigationController::LoadURLParams params(url);
+      params.has_user_gesture = info.has_user_gesture;
+      params.referrer = Referrer(
+          info.referrer_url, Referrer::NetReferrerPolicyToBlinkReferrerPolicy(
+                                 info.referrer_policy));
+      params.redirect_chain = url_chain;
+      web_contents->GetController().LoadURLWithParams(params);
+    }
+    if (info.request_handle)
+      info.request_handle->CancelRequest(false);
+    return true;
+  }
   if (!delegate_ ||
       !delegate_->InterceptDownloadIfApplicable(
           info.url(), info.mime_type, info.request_origin, web_contents)) {
@@ -455,37 +545,69 @@ base::FilePath DownloadManagerImpl::GetDefaultDownloadDirectory() {
   return default_download_directory;
 }
 
-void DownloadManagerImpl::OnNewDownloadStarted(
-    download::DownloadItem* download) {
-  for (auto& observer : observers_)
-    observer.OnDownloadCreated(this, download);
+void DownloadManagerImpl::OnInProgressDownloadManagerInitialized() {
+  std::vector<std::unique_ptr<download::DownloadItemImpl>>
+      in_progress_downloads = in_progress_manager_->TakeInProgressDownloads();
+  uint32_t max_id = download::DownloadItem::kInvalidId;
+  for (auto& download : in_progress_downloads) {
+    uint32_t id = download->GetId();
+    if (base::ContainsKey(in_progress_downloads_, id)) {
+      in_progress_manager_->RemoveInProgressDownload(download->GetGuid());
+      continue;
+    }
+    if (id > max_id)
+      max_id = id;
+#if defined(OS_ANDROID)
+    // On android, clean up cancelled and non resumable interrupted downloads.
+    if (ShouldClearDownloadFromDB(download->GetURL(), download->GetState(),
+                                  download->GetLastReason())) {
+      cleared_download_guids_on_startup_.insert(download->GetGuid());
+      DeleteDownloadedFileOnUIThread(download->GetFullPath());
+      continue;
+    }
+#endif  // defined(OS_ANDROID)
+    in_progress_downloads_[id] = std::move(download);
+  }
+  PostInitialization(DOWNLOAD_INITIALIZATION_DEPENDENCY_IN_PROGRESS_CACHE);
+  SetNextId(max_id + 1);
 }
 
-download::DownloadItemImpl* DownloadManagerImpl::GetDownloadItem(
-    uint32_t id,
-    bool new_download,
-    const download::DownloadCreateInfo& info) {
+void DownloadManagerImpl::StartDownloadItem(
+    std::unique_ptr<download::DownloadCreateInfo> info,
+    const download::DownloadUrlParameters::OnStartedCallback& on_started,
+    download::InProgressDownloadManager::StartDownloadItemCallback callback) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
-  DCHECK_NE(download::DownloadItem::kInvalidId, id);
 
-  download::DownloadItemImpl* download = nullptr;
-  if (new_download) {
-    download = CreateActiveItem(id, info);
+  if (!info->is_new_download) {
+    download::DownloadItemImpl* download = downloads_by_guid_[info->guid];
+    if (!download || download->GetState() == download::DownloadItem::CANCELLED)
+      download = nullptr;
+    std::move(callback).Run(std::move(info), download,
+                            should_persist_new_download_);
+    OnDownloadStarted(download, on_started);
   } else {
-    auto item_iterator = downloads_.find(id);
-    // Trying to resume an interrupted download.
-    if (item_iterator == downloads_.end() ||
-        (item_iterator->second->GetState() ==
-         download::DownloadItem::CANCELLED)) {
-      return nullptr;
-    }
-    download = item_iterator->second.get();
+    GetNextId(base::BindOnce(&DownloadManagerImpl::CreateNewDownloadItemToStart,
+                             weak_factory_.GetWeakPtr(), std::move(info),
+                             on_started, std::move(callback)));
   }
-  DownloadItemUtils::AttachInfo(
-      download, GetBrowserContext(),
-      WebContentsImpl::FromRenderFrameHostID(info.render_process_id,
-                                             info.render_frame_id));
-  return download;
+}
+
+void DownloadManagerImpl::CreateNewDownloadItemToStart(
+    std::unique_ptr<download::DownloadCreateInfo> info,
+    const download::DownloadUrlParameters::OnStartedCallback& on_started,
+    download::InProgressDownloadManager::StartDownloadItemCallback callback,
+    uint32_t id) {
+  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+
+  download::DownloadItemImpl* download = CreateActiveItem(id, *info);
+  std::move(callback).Run(std::move(info), download,
+                          should_persist_new_download_);
+  // For new downloads, we notify here, rather than earlier, so that
+  // the download_file is bound to download and all the usual
+  // setters (e.g. Cancel) work.
+  for (auto& observer : observers_)
+    observer.OnDownloadCreated(this, download);
+  OnDownloadStarted(download, on_started);
 }
 
 net::URLRequestContextGetter* DownloadManagerImpl::GetURLRequestContextGetter(
@@ -514,6 +636,18 @@ void DownloadManagerImpl::CheckForHistoryFilesRemoval() {
   for (const auto& it : downloads_) {
     download::DownloadItemImpl* item = it.second.get();
     CheckForFileRemoval(item);
+  }
+}
+
+void DownloadManagerImpl::OnHistoryQueryComplete(
+    base::OnceClosure load_history_downloads_cb) {
+  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  if (base::FeatureList::IsEnabled(
+          download::features::kDownloadDBForNewDownloads) &&
+      !in_progress_cache_initialized_) {
+    load_history_downloads_cb_ = std::move(load_history_downloads_cb);
+  } else {
+    std::move(load_history_downloads_cb).Run();
   }
 }
 
@@ -558,10 +692,10 @@ void DownloadManagerImpl::CreateSavePackageDownloadItem(
     const DownloadItemImplCreated& item_created) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
   GetNextId(
-      base::Bind(&DownloadManagerImpl::CreateSavePackageDownloadItemWithId,
-                 weak_factory_.GetWeakPtr(), main_file_path, page_url,
-                 mime_type, render_process_id, render_frame_id,
-                 base::Passed(std::move(request_handle)), item_created));
+      base::BindOnce(&DownloadManagerImpl::CreateSavePackageDownloadItemWithId,
+                     weak_factory_.GetWeakPtr(), main_file_path, page_url,
+                     mime_type, render_process_id, render_frame_id,
+                     std::move(request_handle), item_created));
 }
 
 void DownloadManagerImpl::CreateSavePackageDownloadItemWithId(
@@ -581,11 +715,7 @@ void DownloadManagerImpl::CreateSavePackageDownloadItemWithId(
   DownloadItemUtils::AttachInfo(download_item, GetBrowserContext(),
                                 WebContentsImpl::FromRenderFrameHostID(
                                     render_process_id, render_frame_id));
-  downloads_[download_item->GetId()] = base::WrapUnique(download_item);
-  DCHECK(!base::ContainsKey(downloads_by_guid_, download_item->GetGuid()));
-  downloads_by_guid_[download_item->GetGuid()] = download_item;
-  for (auto& observer : observers_)
-    observer.OnDownloadCreated(this, download_item);
+  OnDownloadCreated(base::WrapUnique(download_item));
   if (!item_created.is_null())
     item_created.Run(download_item);
 }
@@ -595,10 +725,9 @@ void DownloadManagerImpl::CreateSavePackageDownloadItemWithId(
 // download.
 void DownloadManagerImpl::ResumeInterruptedDownload(
     std::unique_ptr<download::DownloadUrlParameters> params,
-    uint32_t id,
     const GURL& site_url) {
   BeginDownloadInternal(std::move(params), nullptr /* blob_data_handle */,
-                        nullptr /* blob_url_loader_factory */, id, site_url);
+                        nullptr /* blob_url_loader_factory */, false, site_url);
 }
 
 void DownloadManagerImpl::SetDownloadItemFactoryForTesting(
@@ -697,9 +826,9 @@ download::DownloadInterruptReason DownloadManagerImpl::BeginDownloadRequest(
   // TODO(ananta)
   // Find a better way to create the DownloadResourceHandler instance.
   std::unique_ptr<ResourceHandler> handler(
-      DownloadResourceHandler::CreateForNewRequest(url_request.get(),
-                                                   params->request_origin(),
-                                                   params->download_source()));
+      DownloadResourceHandler::CreateForNewRequest(
+          url_request.get(), params->request_origin(),
+          params->download_source(), params->follow_cross_origin_redirects()));
 
   ResourceDispatcherHostImpl::Get()->BeginURLRequest(
       std::move(url_request), std::move(handler), true,  // download
@@ -784,8 +913,7 @@ void DownloadManagerImpl::DownloadUrl(
   auto* rfh = RenderFrameHost::FromID(params->render_process_host_id(),
                                       params->render_frame_host_routing_id());
   BeginDownloadInternal(std::move(params), std::move(blob_data_handle),
-                        std::move(blob_url_loader_factory),
-                        download::DownloadItem::kInvalidId,
+                        std::move(blob_url_loader_factory), true,
                         rfh ? rfh->GetSiteInstance()->GetSiteURL() : GURL());
 }
 
@@ -823,24 +951,55 @@ download::DownloadItem* DownloadManagerImpl::CreateDownloadItem(
     base::Time last_access_time,
     bool transient,
     const std::vector<download::DownloadItem::ReceivedSlice>& received_slices) {
-  if (base::ContainsKey(downloads_, id)) {
-    NOTREACHED();
+  // Retrive the in-progress download if it exists. Notice that this also
+  // removes it from |in_progress_downloads_|.
+  auto in_progress_download = RetrieveInProgressDownload(id);
+#if defined(OS_ANDROID)
+  // On Android, there is no way to interact with cancelled or non-resumable
+  // download. Simply returning null and don't store them in this class to
+  // reduce memory usage.
+  if (cleared_download_guids_on_startup_.find(guid) !=
+      cleared_download_guids_on_startup_.end()) {
     return nullptr;
   }
-  DCHECK(!base::ContainsKey(downloads_by_guid_, guid));
-  download::DownloadItemImpl* item = item_factory_->CreatePersistedItem(
+  if (url_chain.empty() ||
+      ShouldClearDownloadFromDB(url_chain.back(), state, interrupt_reason)) {
+    DeleteDownloadedFileOnUIThread(current_path);
+    return nullptr;
+  }
+#endif
+  auto item = base::WrapUnique(item_factory_->CreatePersistedItem(
       this, guid, id, current_path, target_path, url_chain, referrer_url,
       site_url, tab_url, tab_refererr_url, mime_type, original_mime_type,
       start_time, end_time, etag, last_modified, received_bytes, total_bytes,
       hash, state, danger_type, interrupt_reason, opened, last_access_time,
-      transient, received_slices);
-  DownloadItemUtils::AttachInfo(item, GetBrowserContext(), nullptr);
-  downloads_[id] = base::WrapUnique(item);
-  downloads_by_guid_[guid] = item;
+      transient, received_slices));
+  if (in_progress_download) {
+    // If the download item from history db is already in terminal state,
+    // remove it from the in-progress db. Otherwise, use the in-progress db one.
+    if (item->IsDone()) {
+      in_progress_manager_->RemoveInProgressDownload(guid);
+    } else {
+      item = std::move(in_progress_download);
+      item->SetDelegate(this);
+    }
+  }
+  download::DownloadItemImpl* download = item.get();
+  DownloadItemUtils::AttachInfo(download, GetBrowserContext(), nullptr);
+  OnDownloadCreated(std::move(item));
+  return download;
+}
+
+void DownloadManagerImpl::OnDownloadCreated(
+    std::unique_ptr<download::DownloadItemImpl> download) {
+  DCHECK(!base::ContainsKey(downloads_, download->GetId()));
+  DCHECK(!base::ContainsKey(downloads_by_guid_, download->GetGuid()));
+  download::DownloadItemImpl* item = download.get();
+  downloads_[item->GetId()] = std::move(download);
+  downloads_by_guid_[item->GetGuid()] = item;
   for (auto& observer : observers_)
     observer.OnDownloadCreated(this, item);
   DVLOG(20) << __func__ << "() download = " << item->DebugString(true);
-  return item;
 }
 
 void DownloadManagerImpl::PostInitialization(
@@ -855,6 +1014,11 @@ void DownloadManagerImpl::PostInitialization(
       break;
     case DOWNLOAD_INITIALIZATION_DEPENDENCY_IN_PROGRESS_CACHE:
       in_progress_cache_initialized_ = true;
+      // Post a task to load downloads from history db.
+      if (load_history_downloads_cb_) {
+        base::ThreadTaskRunnerHandle::Get()->PostTask(
+            FROM_HERE, std::move(load_history_downloads_cb_));
+      }
       break;
     case DOWNLOAD_INITIALIZATION_DEPENDENCY_NONE:
     default:
@@ -866,10 +1030,38 @@ void DownloadManagerImpl::PostInitialization(
   // cache are initialized.
   initialized_ = history_db_initialized_ && in_progress_cache_initialized_;
 
-  if (initialized_) {
+  if (!initialized_)
+    return;
+
+#if defined(OS_ANDROID)
+    for (const auto& guid : cleared_download_guids_on_startup_)
+      in_progress_manager_->RemoveInProgressDownload(guid);
+    if (cancelled_download_cleared_from_history_ > 0) {
+      UMA_HISTOGRAM_COUNTS_1000(
+          "MobileDownload.CancelledDownloadRemovedFromHistory",
+          cancelled_download_cleared_from_history_);
+    }
+
+    if (interrupted_download_cleared_from_history_ > 0) {
+      UMA_HISTOGRAM_COUNTS_1000(
+          "MobileDownload.InterruptedDownloadsRemovedFromHistory",
+          interrupted_download_cleared_from_history_);
+    }
+#endif
+
+    // If there are still downloads in |in_progress_downloads_|, import them
+    // now.
+    for (auto& download : in_progress_downloads_) {
+      auto item = std::move(download.second);
+      item->SetDelegate(this);
+      DownloadItemUtils::AttachInfo(item.get(), GetBrowserContext(), nullptr);
+      OnDownloadCreated(std::move(item));
+    }
+    in_progress_downloads_.clear();
+
+    in_progress_manager_->OnAllInprogressDownloadsLoaded();
     for (auto& observer : observers_)
       observer.OnManagerInitialized();
-  }
 }
 
 bool DownloadManagerImpl::IsManagerInitialized() const {
@@ -1016,9 +1208,8 @@ void DownloadManagerImpl::InterceptNavigationOnChecksComplete(
 
 void DownloadManagerImpl::BeginResourceDownloadOnChecksComplete(
     std::unique_ptr<download::DownloadUrlParameters> params,
-    std::unique_ptr<storage::BlobDataHandle> blob_data_handle,
     scoped_refptr<network::SharedURLLoaderFactory> blob_url_loader_factory,
-    uint32_t id,
+    bool is_new_download,
     const GURL& site_url,
     bool is_download_allowed) {
   if (!is_download_allowed) {
@@ -1038,17 +1229,41 @@ void DownloadManagerImpl::BeginResourceDownloadOnChecksComplete(
     }
   }
 
+  DCHECK_EQ(params->url().SchemeIsBlob(), bool{blob_url_loader_factory});
   scoped_refptr<download::DownloadURLLoaderFactoryGetter>
       url_loader_factory_getter;
   if (blob_url_loader_factory) {
     DCHECK(params->url().SchemeIsBlob());
     url_loader_factory_getter =
-        base::MakeRefCounted<DownloadURLLoaderFactoryGetterImpl>(
+        base::MakeRefCounted<download::DownloadURLLoaderFactoryGetterImpl>(
             blob_url_loader_factory->Clone());
-  } else if (params->url().SchemeIsBlob()) {
+  } else if (params->url().SchemeIsFile()) {
     url_loader_factory_getter =
-        base::MakeRefCounted<BlobDownloadURLLoaderFactoryGetter>(
-            params->url(), std::move(blob_data_handle));
+        base::MakeRefCounted<FileDownloadURLLoaderFactoryGetter>(
+            params->url(), browser_context_->GetPath(),
+            BrowserContext::GetSharedCorsOriginAccessList(browser_context_));
+  } else if (params->url().SchemeIs(content::kChromeUIScheme)) {
+    url_loader_factory_getter =
+        base::MakeRefCounted<WebUIDownloadURLLoaderFactoryGetter>(
+            rfh, params->url());
+  } else if (rfh && params->url().SchemeIsFileSystem()) {
+    StoragePartitionImpl* storage_partition =
+        static_cast<StoragePartitionImpl*>(
+            BrowserContext::GetStoragePartitionForSite(browser_context_,
+                                                       site_url));
+    std::string storage_domain;
+    auto* site_instance = rfh->GetSiteInstance();
+    if (site_instance) {
+      std::string partition_name;
+      bool in_memory;
+      GetContentClient()->browser()->GetStoragePartitionConfigForSite(
+          browser_context_, site_url, true, &storage_domain, &partition_name,
+          &in_memory);
+    }
+    url_loader_factory_getter =
+        base::MakeRefCounted<FileSystemDownloadURLLoaderFactoryGetter>(
+            params->url(), rfh, /*is_navigation=*/false,
+            storage_partition->GetFileSystemContext(), storage_domain);
   } else {
     StoragePartitionImpl* storage_partition =
         static_cast<StoragePartitionImpl*>(
@@ -1058,21 +1273,21 @@ void DownloadManagerImpl::BeginResourceDownloadOnChecksComplete(
         CreateDownloadURLLoaderFactoryGetter(storage_partition, rfh, true);
   }
 
-  in_progress_manager_->BeginDownload(std::move(params),
-                                      std::move(url_loader_factory_getter), id,
-                                      site_url, tab_url, tab_referrer_url);
+  in_progress_manager_->BeginDownload(
+      std::move(params), std::move(url_loader_factory_getter), is_new_download,
+      site_url, tab_url, tab_referrer_url);
 }
 
 void DownloadManagerImpl::BeginDownloadInternal(
     std::unique_ptr<download::DownloadUrlParameters> params,
     std::unique_ptr<storage::BlobDataHandle> blob_data_handle,
     scoped_refptr<network::SharedURLLoaderFactory> blob_url_loader_factory,
-    uint32_t id,
+    bool is_new_download,
     const GURL& site_url) {
   // Check if the renderer is permitted to request the requested URL.
   if (params->render_process_host_id() >= 0 &&
-      !CanRequestURLFromRenderer(params->render_process_host_id(),
-                                 params->url())) {
+      !DownloadRequestUtils::IsURLSafe(params->render_process_host_id(),
+                                       params->url())) {
     CreateInterruptedDownload(
         std::move(params),
         download::DOWNLOAD_INTERRUPT_REASON_NETWORK_INVALID_REQUEST,
@@ -1081,6 +1296,15 @@ void DownloadManagerImpl::BeginDownloadInternal(
   }
 
   if (base::FeatureList::IsEnabled(network::features::kNetworkService)) {
+    // Ideally everywhere a blob: URL is downloaded a URLLoaderFactory for that
+    // blob URL is also passed, but since that isn't always the case, create
+    // a new factory if we don't have one already.
+    if (!blob_url_loader_factory && params->url().SchemeIsBlob()) {
+      blob_url_loader_factory =
+          ChromeBlobStorageContext::URLLoaderFactoryForUrl(browser_context_,
+                                                           params->url());
+    }
+
     auto* rfh = RenderFrameHost::FromID(params->render_process_host_id(),
                                         params->render_frame_host_routing_id());
     bool content_initiated = params->content_initiated();
@@ -1096,8 +1320,7 @@ void DownloadManagerImpl::BeginDownloadInternal(
           on_can_download_checks_done = base::BindOnce(
               &DownloadManagerImpl::BeginResourceDownloadOnChecksComplete,
               weak_factory_.GetWeakPtr(), std::move(params),
-              std::move(blob_data_handle), std::move(blob_url_loader_factory),
-              id, site_url);
+              std::move(blob_url_loader_factory), is_new_download, site_url);
       if (delegate_) {
         delegate_->CheckDownloadAllowed(std::move(web_contents_getter), url,
                                         method,
@@ -1107,21 +1330,53 @@ void DownloadManagerImpl::BeginDownloadInternal(
     }
 
     BeginResourceDownloadOnChecksComplete(
-        std::move(params), std::move(blob_data_handle),
-        std::move(blob_url_loader_factory), id, site_url,
-        rfh ? !content_initiated : true);
+        std::move(params), std::move(blob_url_loader_factory), is_new_download,
+        site_url, rfh ? !content_initiated : true);
   } else {
     StoragePartition* storage_partition =
         BrowserContext::GetStoragePartitionForSite(browser_context_, site_url);
-    params->set_url_request_context_getter(
-        storage_partition->GetURLRequestContext());
-    BrowserThread::PostTask(
-        BrowserThread::IO, FROM_HERE,
-        base::BindOnce(&BeginDownload, std::move(params),
-                       std::move(blob_data_handle),
-                       browser_context_->GetResourceContext(), id,
-                       weak_factory_.GetWeakPtr()));
-   }
+    base::PostTaskWithTraits(
+        FROM_HERE, {BrowserThread::IO},
+        base::BindOnce(
+            &BeginDownload, std::move(params), std::move(blob_data_handle),
+            browser_context_->GetResourceContext(),
+            base::WrapRefCounted(storage_partition->GetURLRequestContext()),
+            is_new_download, weak_factory_.GetWeakPtr()));
+  }
+}
+
+bool DownloadManagerImpl::IsNextIdInitialized() const {
+  return is_history_download_id_retrieved_ && in_progress_cache_initialized_;
+}
+
+#if defined(OS_ANDROID)
+bool DownloadManagerImpl::ShouldClearDownloadFromDB(
+    const GURL& url,
+    download::DownloadItem::DownloadState state,
+    download::DownloadInterruptReason reason) {
+  if (state == download::DownloadItem::CANCELLED) {
+    ++cancelled_download_cleared_from_history_;
+    return true;
+  }
+  if (reason != download::DOWNLOAD_INTERRUPT_REASON_NONE &&
+      download::GetDownloadResumeMode(url, reason, false /* restart_required */,
+                                      false /* user_action_required */) ==
+          download::ResumeMode::INVALID) {
+    ++interrupted_download_cleared_from_history_;
+    return true;
+  }
+  return false;
+}
+#endif  // defined(OS_ANDROID)
+
+std::unique_ptr<download::DownloadItemImpl>
+DownloadManagerImpl::RetrieveInProgressDownload(uint32_t id) {
+  if (base::ContainsKey(in_progress_downloads_, id)) {
+    auto download = std::move(in_progress_downloads_[id]);
+    in_progress_downloads_.erase(id);
+    return download;
+  }
+  return nullptr;
 }
 
 }  // namespace content

@@ -10,14 +10,13 @@
 
 // Description of a decoration to be added inside the location bar, either to
 // the left or to the right.
-struct LocationBarDecoration {
-  LocationBarDecoration(int y,
-                        int height,
-                        bool auto_collapse,
-                        double max_fraction,
-                        int edge_item_padding,
-                        int item_padding,
-                        views::View* view);
+struct DecorationInfo {
+  DecorationInfo(int y,
+                 int height,
+                 bool auto_collapse,
+                 double max_fraction,
+                 int edge_item_padding,
+                 views::View* view);
 
   // The y position of the view inside its parent.
   int y;
@@ -38,28 +37,23 @@ struct LocationBarDecoration {
   // Padding to use if the decoration is the first element next to the edge.
   int edge_item_padding;
 
-  // Padding to use if the decoration follows another decoration.
-  int item_padding;
-
   views::View* view;
 
   // The width computed by the layout process.
   double computed_width;
 };
 
-LocationBarDecoration::LocationBarDecoration(int y,
-                                             int height,
-                                             bool auto_collapse,
-                                             double max_fraction,
-                                             int edge_item_padding,
-                                             int item_padding,
-                                             views::View* view)
+DecorationInfo::DecorationInfo(int y,
+                               int height,
+                               bool auto_collapse,
+                               double max_fraction,
+                               int edge_item_padding,
+                               views::View* view)
     : y(y),
       height(height),
       auto_collapse(auto_collapse),
       max_fraction(max_fraction),
       edge_item_padding(edge_item_padding),
-      item_padding(item_padding),
       view(view),
       computed_width(0) {
   DCHECK((max_fraction == 0.0) || (!auto_collapse && (max_fraction > 0.0)));
@@ -68,12 +62,8 @@ LocationBarDecoration::LocationBarDecoration(int y,
 
 // LocationBarLayout ---------------------------------------------------------
 
-LocationBarLayout::LocationBarLayout(Position position,
-                                     int item_padding,
-                                     int item_edit_padding)
-    : position_(position),
-      item_padding_(item_padding),
-      item_edit_padding_(item_edit_padding) {}
+LocationBarLayout::LocationBarLayout(Position position, int item_edit_padding)
+    : position_(position), item_edit_padding_(item_edit_padding) {}
 
 LocationBarLayout::~LocationBarLayout() {
 }
@@ -83,28 +73,17 @@ void LocationBarLayout::AddDecoration(int y,
                                       bool auto_collapse,
                                       double max_fraction,
                                       int edge_item_padding,
-                                      int item_padding,
                                       views::View* view) {
-  decorations_.push_back(std::make_unique<LocationBarDecoration>(
-      y, height, auto_collapse, max_fraction, edge_item_padding, item_padding,
-      view));
-}
-
-void LocationBarLayout::AddDecoration(int y,
-                                      int height,
-                                      views::View* view) {
-  decorations_.push_back(std::make_unique<LocationBarDecoration>(
-      y, height, false, 0, item_padding_, item_padding_, view));
+  decorations_.push_back(std::make_unique<DecorationInfo>(
+      y, height, auto_collapse, max_fraction, edge_item_padding, view));
 }
 
 void LocationBarLayout::LayoutPass1(int* entry_width) {
   bool first_item = true;
   for (const auto& decoration : decorations_) {
     // Autocollapsing decorations are ignored in this pass.
-    if (!decoration->auto_collapse) {
-      *entry_width -= (first_item ? decoration->edge_item_padding
-                                  : decoration->item_padding);
-    }
+    if (first_item && !decoration->auto_collapse)
+      *entry_width -= decoration->edge_item_padding;
     first_item = false;
     // Resizing decorations are ignored in this pass.
     if (!decoration->auto_collapse && (decoration->max_fraction == 0.0)) {
@@ -130,10 +109,10 @@ void LocationBarLayout::LayoutPass2(int *entry_width) {
 void LocationBarLayout::LayoutPass3(gfx::Rect* bounds, int* available_width) {
   bool first_visible = true;
   for (const auto& decoration : decorations_) {
+    int padding = first_visible ? decoration->edge_item_padding : 0;
+
     // Collapse decorations if needed.
     if (decoration->auto_collapse) {
-      int padding = (first_visible ? decoration->edge_item_padding
-                                   : decoration->item_padding);
       // Try preferred size, if it fails try minimum size, if it fails collapse.
       decoration->computed_width = decoration->view->GetPreferredSize().width();
       if (decoration->computed_width + padding > *available_width)
@@ -141,20 +120,14 @@ void LocationBarLayout::LayoutPass3(gfx::Rect* bounds, int* available_width) {
       if (decoration->computed_width + padding > *available_width) {
         decoration->computed_width = 0;
         decoration->view->SetVisible(false);
-      } else {
-        decoration->view->SetVisible(true);
-        (*available_width) -= decoration->computed_width + padding;
+        continue;
       }
-    } else {
-      decoration->view->SetVisible(true);
+      (*available_width) -= decoration->computed_width + padding;
     }
+    decoration->view->SetVisible(true);
+    first_visible = false;
 
     // Layout visible decorations.
-    if (!decoration->view->visible())
-      continue;
-    int padding = (first_visible ? decoration->edge_item_padding
-                                 : decoration->item_padding);
-    first_visible = false;
     int x = (position_ == LEFT_EDGE)
                 ? (bounds->x() + padding)
                 : (bounds->right() - padding - decoration->computed_width);

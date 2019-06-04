@@ -7,15 +7,15 @@
           "content.mojom.LayoutTestBluetoothFakeAdapterSetter",
           "content.mojom.MojoLayoutTestHelper",
           "content.mojom.FakeBluetoothChooser",
-          "bluetooth.mojom.FakeBluetooth",
-          "blink.test.mojom.WebPackageInternals"
+          "bluetooth.mojom.FakeBluetooth"
         ]
       },
       "requires": {
         "echo": [
           "echo"
         ],
-        "ui": [ "test", "window_tree_host_factory" ]
+        "ui": [ "test" ],
+        "test_ws": [ "test" ]
       }
     },
     "navigation:frame": {

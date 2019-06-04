@@ -16,14 +16,11 @@ namespace rx
 
 TransformFeedbackVk::TransformFeedbackVk(const gl::TransformFeedbackState &state)
     : TransformFeedbackImpl(state)
-{
-}
+{}
 
-TransformFeedbackVk::~TransformFeedbackVk()
-{
-}
+TransformFeedbackVk::~TransformFeedbackVk() {}
 
-void TransformFeedbackVk::begin(GLenum primitiveMode)
+void TransformFeedbackVk::begin(gl::PrimitiveMode primitiveMode)
 {
     UNIMPLEMENTED();
 }

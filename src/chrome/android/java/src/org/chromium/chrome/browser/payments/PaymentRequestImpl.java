@@ -6,7 +6,6 @@ package org.chromium.chrome.browser.payments;
 
 import android.app.Activity;
 import android.content.Context;
-import android.content.Intent;
 import android.os.Handler;
 import android.support.v4.util.ArrayMap;
 import android.text.TextUtils;
@@ -32,10 +31,10 @@ import org.chromium.chrome.browser.payments.ui.PaymentRequestSection.OptionSecti
 import org.chromium.chrome.browser.payments.ui.PaymentRequestUI;
 import org.chromium.chrome.browser.payments.ui.SectionInformation;
 import org.chromium.chrome.browser.payments.ui.ShoppingCart;
+import org.chromium.chrome.browser.preferences.MainPreferences;
 import org.chromium.chrome.browser.preferences.Pref;
 import org.chromium.chrome.browser.preferences.PrefServiceBridge;
 import org.chromium.chrome.browser.preferences.PreferencesLauncher;
-import org.chromium.chrome.browser.preferences.autofill.AutofillAndPaymentsPreferences;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.ssl.SecurityStateModel;
 import org.chromium.chrome.browser.tab.Tab;
@@ -70,6 +69,7 @@ import org.chromium.payments.mojom.PaymentRequestClient;
 import org.chromium.payments.mojom.PaymentResponse;
 import org.chromium.payments.mojom.PaymentShippingOption;
 import org.chromium.payments.mojom.PaymentShippingType;
+import org.chromium.payments.mojom.PaymentValidationErrors;
 
 import java.net.URI;
 import java.util.ArrayList;
@@ -87,7 +87,7 @@ import javax.annotation.Nullable;
 
 /**
  * Android implementation of the PaymentRequest service defined in
- * components/payments/content/payment_request.mojom.
+ * third_party/blink/public/mojom/payments/payment_request.mojom.
  */
 public class PaymentRequestImpl
         implements PaymentRequest, PaymentRequestUI.Client, PaymentApp.InstrumentsCallback,
@@ -129,61 +129,6 @@ public class PaymentRequestImpl
          * Called when the canMakePayment() request has been responded.
          */
         void onPaymentRequestServiceCanMakePaymentQueryResponded();
-    }
-
-    /** The object to keep track of payment queries. */
-    private static class CanMakePaymentQuery {
-        private final Set<PaymentRequestImpl> mObservers = new HashSet<>();
-        private final Map<String, String> mMethods;
-
-        /**
-         * Keeps track of a payment query.
-         *
-         * @param methods The map of the payment methods that are being queried to the corresponding
-         *                payment method data.
-         */
-        public CanMakePaymentQuery(Map<String, PaymentMethodData> methods) {
-            assert methods != null;
-            mMethods = new HashMap<>();
-            for (Map.Entry<String, PaymentMethodData> method : methods.entrySet()) {
-                mMethods.put(method.getKey(),
-                        method.getValue() == null ? "" : method.getValue().stringifiedData);
-            }
-        }
-
-        /**
-         * Checks whether the given payment methods and data match the previously queried payment
-         * methods and data.
-         *
-         * @param methods The map of the payment methods that are being queried to the corresponding
-         *                payment method data.
-         * @return True if the given methods and data match the previously queried payment methods
-         *         and data.
-         */
-        public boolean matchesPaymentMethods(Map<String, PaymentMethodData> methods) {
-            if (!mMethods.keySet().equals(methods.keySet())) return false;
-
-            for (Map.Entry<String, String> thisMethod : mMethods.entrySet()) {
-                PaymentMethodData otherMethod = methods.get(thisMethod.getKey());
-                String otherData = otherMethod == null ? "" : otherMethod.stringifiedData;
-                if (!thisMethod.getValue().equals(otherData)) return false;
-            }
-
-            return true;
-        }
-
-        /** @param response Whether payment can be made. */
-        public void notifyObserversOfResponse(boolean response) {
-            for (PaymentRequestImpl observer : mObservers) {
-                observer.respondCanMakePaymentQuery(response);
-            }
-            mObservers.clear();
-        }
-
-        /** @param observer The observer to notify when the query response is known. */
-        public void addObserver(PaymentRequestImpl observer) {
-            mObservers.add(observer);
-        }
     }
 
     /** Limit in the number of suggested items in a section. */
@@ -232,9 +177,6 @@ public class PaymentRequestImpl
                 return compareInstrumentsByFrecency(b, a);
             };
 
-    /** Every origin can call canMakePayment() every 30 minutes. */
-    private static final int CAN_MAKE_PAYMENT_QUERY_PERIOD_MS = 30 * 60 * 1000;
-
     private static PaymentRequestServiceObserverForTest sObserverForTest;
     private static boolean sIsLocalCanMakePaymentQueryQuotaEnforcedForTest;
 
@@ -243,14 +185,6 @@ public class PaymentRequestImpl
      * one PaymentRequest UI per browser process.
      */
     private static boolean sIsAnyPaymentRequestShowing;
-
-    /**
-     * In-memory mapping of the origins of iframes that have recently called canMakePayment() to the
-     * list of the payment methods that were being queried. Used for throttling the usage of this
-     * call. The mapping is shared among all instances of PaymentRequestImpl in the browser process
-     * on UI thread. The user can reset the throttling mechanism by restarting the browser.
-     */
-    private static Map<String, CanMakePaymentQuery> sCanMakePaymentQueries;
 
     /** Monitors changes in the TabModelSelector. */
     private final TabModelSelectorObserver mSelectorObserver = new EmptyTabModelSelectorObserver() {
@@ -263,7 +197,7 @@ public class PaymentRequestImpl
     /** Monitors changes in the current TabModel. */
     private final TabModelObserver mTabModelObserver = new EmptyTabModelObserver() {
         @Override
-        public void didSelectTab(Tab tab, TabSelectionType type, int lastId) {
+        public void didSelectTab(Tab tab, @TabSelectionType int type, int lastId) {
             if (tab == null || tab.getId() != lastId) onDismiss();
         }
     };
@@ -282,6 +216,7 @@ public class PaymentRequestImpl
     private final boolean mIsIncognito;
 
     private PaymentRequestClient mClient;
+    private boolean mIsCanMakePaymentResponsePending;
     private boolean mIsCurrentPaymentRequestShowing;
 
     /**
@@ -384,10 +319,10 @@ public class PaymentRequestImpl
         mRenderFrameHost = renderFrameHost;
         mWebContents = WebContentsStatics.fromRenderFrameHost(renderFrameHost);
 
-        mPaymentRequestOrigin = UrlFormatter.formatUrlForSecurityDisplay(
-                mRenderFrameHost.getLastCommittedURL(), true);
+        mPaymentRequestOrigin =
+                UrlFormatter.formatUrlForSecurityDisplay(mRenderFrameHost.getLastCommittedURL());
         mTopLevelOrigin =
-                UrlFormatter.formatUrlForSecurityDisplay(mWebContents.getLastCommittedUrl(), true);
+                UrlFormatter.formatUrlForSecurityDisplay(mWebContents.getLastCommittedUrl());
 
         mMerchantName = mWebContents.getTitle();
 
@@ -404,10 +339,7 @@ public class PaymentRequestImpl
                 new AddressEditor(/*emailFieldIncluded=*/false, /*saveToDisk=*/!mIsIncognito);
         mCardEditor = new CardEditor(mWebContents, mAddressEditor, sObserverForTest);
 
-        mJourneyLogger = new JourneyLogger(mIsIncognito, mWebContents.getLastCommittedUrl());
-
-        if (sCanMakePaymentQueries == null) sCanMakePaymentQueries = new ArrayMap<>();
-
+        mJourneyLogger = new JourneyLogger(mIsIncognito, mWebContents);
         mCurrencyFormatterMap = new HashMap<>();
     }
 
@@ -545,6 +477,7 @@ public class PaymentRequestImpl
 
         setIsAnyPaymentRequestShowing(true);
         mUI = new PaymentRequestUI(activity, this, mRequestShipping,
+                /* requestShippingOption= */ mRequestShipping,
                 mRequestPayerName || mRequestPayerPhone || mRequestPayerEmail,
                 mMerchantSupportsAutofillPaymentInstruments,
                 !PaymentPreferencesUtil.isPaymentCompleteOnce(), mMerchantName, mTopLevelOrigin,
@@ -617,7 +550,7 @@ public class PaymentRequestImpl
                 Section.SHIPPING_ADDRESS, addresses.size(), hasCompleteShippingAddress);
 
         mShippingAddressesSection = new SectionInformation(
-                PaymentRequestUI.TYPE_SHIPPING_ADDRESSES, firstCompleteAddressIndex, addresses);
+                PaymentRequestUI.DataType.SHIPPING_ADDRESSES, firstCompleteAddressIndex, addresses);
     }
 
     /**
@@ -641,7 +574,8 @@ public class PaymentRequestImpl
             // one. Only the first one will be shown. This also prevents multiple tabs and windows
             // from showing PaymentRequest UI at the same time.
             mJourneyLogger.setNotShown(NotShownReason.CONCURRENT_REQUESTS);
-            disconnectFromClientWithDebugMessage("A PaymentRequest UI is already showing");
+            disconnectFromClientWithDebugMessage(
+                    "A PaymentRequest UI is already showing", PaymentErrorReason.ALREADY_SHOWING);
             if (sObserverForTest != null) sObserverForTest.onPaymentRequestServiceShowFailed();
             return;
         }
@@ -690,6 +624,7 @@ public class PaymentRequestImpl
                                && !mIsUserGestureShow)) {
                 mUI.show();
             } else {
+                mUI.dimBackground();
                 mDidRecordShowEvent = true;
                 mShouldRecordAbortReason = true;
                 mJourneyLogger.setEventOccurred(Event.SKIPPED_SHOW);
@@ -706,18 +641,12 @@ public class PaymentRequestImpl
         if (methodData == null || methodData.length == 0) return null;
         Map<String, PaymentMethodData> result = new ArrayMap<>();
         for (int i = 0; i < methodData.length; i++) {
-            String[] methods = methodData[i].supportedMethods;
+            String method = methodData[i].supportedMethod;
 
-            // Payment methods are required.
-            if (methods == null || methods.length == 0) return null;
+            if (TextUtils.isEmpty(method)) return null;
+            result.put(method, methodData[i]);
 
-            for (int j = 0; j < methods.length; j++) {
-                // Payment methods should be non-empty.
-                if (TextUtils.isEmpty(methods[j])) return null;
-                result.put(methods[j], methodData[i]);
-            }
-
-            paymentMethodsCollector.addAcceptedPaymentMethodsIfRecognized(methodData[i]);
+            paymentMethodsCollector.addAcceptedPaymentMethodIfRecognized(methodData[i]);
         }
 
         return Collections.unmodifiableMap(result);
@@ -752,11 +681,8 @@ public class PaymentRequestImpl
             }
         }
 
-        if (queryApps.isEmpty()) {
-            CanMakePaymentQuery query = sCanMakePaymentQueries.get(getCanMakePaymentId());
-            if (query != null && query.matchesPaymentMethods(mMethodData)) {
-                query.notifyObserversOfResponse(mCanMakePayment);
-            }
+        if (mIsCanMakePaymentResponsePending && queryApps.isEmpty()) {
+            respondCanMakePaymentQuery(mCanMakePayment);
         }
 
         if (disconnectIfNoPaymentMethodsSupported()) return;
@@ -876,7 +802,7 @@ public class PaymentRequestImpl
             providePaymentInformation();
         } else {
             mUI.updateOrderSummarySection(mUiShoppingCart);
-            mUI.updateSection(PaymentRequestUI.TYPE_SHIPPING_OPTIONS, mUiShippingOptions);
+            mUI.updateSection(PaymentRequestUI.DataType.SHIPPING_OPTIONS, mUiShippingOptions);
         }
     }
 
@@ -918,11 +844,9 @@ public class PaymentRequestImpl
 
         for (int i = 0; i < details.modifiers.length; i++) {
             PaymentDetailsModifier modifier = details.modifiers[i];
-            String[] methods = modifier.methodData.supportedMethods;
-            for (int j = 0; j < methods.length; j++) {
-                if (mModifiers == null) mModifiers = new ArrayMap<>();
-                mModifiers.put(methods[j], modifier);
-            }
+            String method = modifier.methodData.supportedMethod;
+            if (mModifiers == null) mModifiers = new ArrayMap<>();
+            mModifiers.put(method, modifier);
         }
 
         updateInstrumentModifiedTotals();
@@ -1014,7 +938,7 @@ public class PaymentRequestImpl
     private SectionInformation getShippingOptions(@Nullable PaymentShippingOption[] options) {
         // Shipping options are optional.
         if (options == null || options.length == 0) {
-            return new SectionInformation(PaymentRequestUI.TYPE_SHIPPING_OPTIONS);
+            return new SectionInformation(PaymentRequestUI.DataType.SHIPPING_OPTIONS);
         }
 
         List<EditableOption> result = new ArrayList<>();
@@ -1030,7 +954,7 @@ public class PaymentRequestImpl
             if (option.selected) selectedItemIndex = i;
         }
 
-        return new SectionInformation(PaymentRequestUI.TYPE_SHIPPING_OPTIONS, selectedItemIndex,
+        return new SectionInformation(PaymentRequestUI.DataType.SHIPPING_OPTIONS, selectedItemIndex,
                 Collections.unmodifiableList(result));
     }
 
@@ -1129,13 +1053,13 @@ public class PaymentRequestImpl
     public void getSectionInformation(@PaymentRequestUI.DataType final int optionType,
             final Callback<SectionInformation> callback) {
         mHandler.post(() -> {
-            if (optionType == PaymentRequestUI.TYPE_SHIPPING_ADDRESSES) {
+            if (optionType == PaymentRequestUI.DataType.SHIPPING_ADDRESSES) {
                 callback.onResult(mShippingAddressesSection);
-            } else if (optionType == PaymentRequestUI.TYPE_SHIPPING_OPTIONS) {
+            } else if (optionType == PaymentRequestUI.DataType.SHIPPING_OPTIONS) {
                 callback.onResult(mUiShippingOptions);
-            } else if (optionType == PaymentRequestUI.TYPE_CONTACT_DETAILS) {
+            } else if (optionType == PaymentRequestUI.DataType.CONTACT_DETAILS) {
                 callback.onResult(mContactSection);
-            } else if (optionType == PaymentRequestUI.TYPE_PAYMENT_METHODS) {
+            } else if (optionType == PaymentRequestUI.DataType.PAYMENT_METHODS) {
                 assert mPaymentMethodsSection != null;
                 callback.onResult(mPaymentMethodsSection);
             }
@@ -1146,7 +1070,7 @@ public class PaymentRequestImpl
     @PaymentRequestUI.SelectionResult
     public int onSectionOptionSelected(@PaymentRequestUI.DataType int optionType,
             EditableOption option, Callback<PaymentInformation> callback) {
-        if (optionType == PaymentRequestUI.TYPE_SHIPPING_ADDRESSES) {
+        if (optionType == PaymentRequestUI.DataType.SHIPPING_ADDRESSES) {
             // Log the change of shipping address.
             mJourneyLogger.incrementSelectionChanges(Section.SHIPPING_ADDRESS);
             AutofillAddress address = (AutofillAddress) option;
@@ -1157,14 +1081,14 @@ public class PaymentRequestImpl
                 editAddress(address);
             }
             mPaymentInformationCallback = callback;
-            return PaymentRequestUI.SELECTION_RESULT_ASYNCHRONOUS_VALIDATION;
-        } else if (optionType == PaymentRequestUI.TYPE_SHIPPING_OPTIONS) {
+            return PaymentRequestUI.SelectionResult.ASYNCHRONOUS_VALIDATION;
+        } else if (optionType == PaymentRequestUI.DataType.SHIPPING_OPTIONS) {
             // This may update the line items.
             mUiShippingOptions.setSelectedItem(option);
             mClient.onShippingOptionChange(option.getIdentifier());
             mPaymentInformationCallback = callback;
-            return PaymentRequestUI.SELECTION_RESULT_ASYNCHRONOUS_VALIDATION;
-        } else if (optionType == PaymentRequestUI.TYPE_CONTACT_DETAILS) {
+            return PaymentRequestUI.SelectionResult.ASYNCHRONOUS_VALIDATION;
+        } else if (optionType == PaymentRequestUI.DataType.CONTACT_DETAILS) {
             // Log the change of contact info.
             mJourneyLogger.incrementSelectionChanges(Section.CONTACT_INFO);
             AutofillContact contact = (AutofillContact) option;
@@ -1172,16 +1096,16 @@ public class PaymentRequestImpl
                 mContactSection.setSelectedItem(option);
             } else {
                 editContact(contact);
-                return PaymentRequestUI.SELECTION_RESULT_EDITOR_LAUNCH;
+                return PaymentRequestUI.SelectionResult.EDITOR_LAUNCH;
             }
-        } else if (optionType == PaymentRequestUI.TYPE_PAYMENT_METHODS) {
+        } else if (optionType == PaymentRequestUI.DataType.PAYMENT_METHODS) {
             PaymentInstrument paymentInstrument = (PaymentInstrument) option;
             if (paymentInstrument instanceof AutofillPaymentInstrument) {
                 AutofillPaymentInstrument card = (AutofillPaymentInstrument) paymentInstrument;
 
                 if (!card.isComplete()) {
                     editCard(card);
-                    return PaymentRequestUI.SELECTION_RESULT_EDITOR_LAUNCH;
+                    return PaymentRequestUI.SelectionResult.EDITOR_LAUNCH;
                 }
             }
             // Log the change of payment method.
@@ -1191,56 +1115,56 @@ public class PaymentRequestImpl
             mPaymentMethodsSection.setSelectedItem(option);
         }
 
-        return PaymentRequestUI.SELECTION_RESULT_NONE;
+        return PaymentRequestUI.SelectionResult.NONE;
     }
 
     @Override
     @PaymentRequestUI.SelectionResult
     public int onSectionEditOption(@PaymentRequestUI.DataType int optionType, EditableOption option,
             Callback<PaymentInformation> callback) {
-        if (optionType == PaymentRequestUI.TYPE_SHIPPING_ADDRESSES) {
+        if (optionType == PaymentRequestUI.DataType.SHIPPING_ADDRESSES) {
             editAddress((AutofillAddress) option);
             mPaymentInformationCallback = callback;
-            return PaymentRequestUI.SELECTION_RESULT_ASYNCHRONOUS_VALIDATION;
+            return PaymentRequestUI.SelectionResult.ASYNCHRONOUS_VALIDATION;
         }
 
-        if (optionType == PaymentRequestUI.TYPE_CONTACT_DETAILS) {
+        if (optionType == PaymentRequestUI.DataType.CONTACT_DETAILS) {
             editContact((AutofillContact) option);
-            return PaymentRequestUI.SELECTION_RESULT_EDITOR_LAUNCH;
+            return PaymentRequestUI.SelectionResult.EDITOR_LAUNCH;
         }
 
-        if (optionType == PaymentRequestUI.TYPE_PAYMENT_METHODS) {
+        if (optionType == PaymentRequestUI.DataType.PAYMENT_METHODS) {
             editCard((AutofillPaymentInstrument) option);
-            return PaymentRequestUI.SELECTION_RESULT_EDITOR_LAUNCH;
+            return PaymentRequestUI.SelectionResult.EDITOR_LAUNCH;
         }
 
         assert false;
-        return PaymentRequestUI.SELECTION_RESULT_NONE;
+        return PaymentRequestUI.SelectionResult.NONE;
     }
 
     @Override
     @PaymentRequestUI.SelectionResult
     public int onSectionAddOption(
             @PaymentRequestUI.DataType int optionType, Callback<PaymentInformation> callback) {
-        if (optionType == PaymentRequestUI.TYPE_SHIPPING_ADDRESSES) {
+        if (optionType == PaymentRequestUI.DataType.SHIPPING_ADDRESSES) {
             editAddress(null);
             mPaymentInformationCallback = callback;
             // Log the add of shipping address.
             mJourneyLogger.incrementSelectionAdds(Section.SHIPPING_ADDRESS);
-            return PaymentRequestUI.SELECTION_RESULT_ASYNCHRONOUS_VALIDATION;
-        } else if (optionType == PaymentRequestUI.TYPE_CONTACT_DETAILS) {
+            return PaymentRequestUI.SelectionResult.ASYNCHRONOUS_VALIDATION;
+        } else if (optionType == PaymentRequestUI.DataType.CONTACT_DETAILS) {
             editContact(null);
             // Log the add of contact info.
             mJourneyLogger.incrementSelectionAdds(Section.CONTACT_INFO);
-            return PaymentRequestUI.SELECTION_RESULT_EDITOR_LAUNCH;
-        } else if (optionType == PaymentRequestUI.TYPE_PAYMENT_METHODS) {
+            return PaymentRequestUI.SelectionResult.EDITOR_LAUNCH;
+        } else if (optionType == PaymentRequestUI.DataType.PAYMENT_METHODS) {
             editCard(null);
             // Log the add of credit card.
             mJourneyLogger.incrementSelectionAdds(Section.PAYMENT_METHOD);
-            return PaymentRequestUI.SELECTION_RESULT_EDITOR_LAUNCH;
+            return PaymentRequestUI.SelectionResult.EDITOR_LAUNCH;
         }
 
-        return PaymentRequestUI.SELECTION_RESULT_NONE;
+        return PaymentRequestUI.SelectionResult.NONE;
     }
 
     private void editAddress(final AutofillAddress toEdit) {
@@ -1279,7 +1203,7 @@ public class PaymentRequestImpl
                             // update an existing item or add a new one to the end of the list.
                             mContactSection.addOrUpdateWithAutofillAddress(editedAddress);
                             mUI.updateSection(
-                                    PaymentRequestUI.TYPE_CONTACT_DETAILS, mContactSection);
+                                    PaymentRequestUI.DataType.CONTACT_DETAILS, mContactSection);
                         }
 
                         startShippingAddressChangeNormalization(editedAddress);
@@ -1319,7 +1243,7 @@ public class PaymentRequestImpl
                 // If |editedContact| is null, the user has cancelled out of the "Add flow". No
                 // action to take (if a contact was selected in the UI, it will stay selected).
 
-                mUI.updateSection(PaymentRequestUI.TYPE_CONTACT_DETAILS, mContactSection);
+                mUI.updateSection(PaymentRequestUI.DataType.CONTACT_DETAILS, mContactSection);
             }
         });
     }
@@ -1354,7 +1278,8 @@ public class PaymentRequestImpl
                 // selected).
 
                 updateInstrumentModifiedTotals();
-                mUI.updateSection(PaymentRequestUI.TYPE_PAYMENT_METHODS, mPaymentMethodsSection);
+                mUI.updateSection(
+                        PaymentRequestUI.DataType.PAYMENT_METHODS, mPaymentMethodsSection);
             }
         });
     }
@@ -1486,6 +1411,20 @@ public class PaymentRequestImpl
     }
 
     @Override
+    public void retry(PaymentValidationErrors errors) {
+        if (mClient == null) return;
+
+        if (!PaymentValidator.validatePaymentValidationErrors(errors)) {
+            mJourneyLogger.setAborted(AbortReason.INVALID_DATA_FROM_RENDERER);
+            disconnectFromClientWithDebugMessage("Invalid payment validation errors");
+            return;
+        }
+
+        // TODO(zino): Should implement this method (including updating UI part).
+        // Please see https://crbug.com/861704
+    }
+
+    @Override
     public void onCardAndAddressSettingsClicked() {
         Context context = ChromeActivity.fromWebContents(mWebContents);
         if (context == null) {
@@ -1494,9 +1433,7 @@ public class PaymentRequestImpl
             return;
         }
 
-        Intent intent = PreferencesLauncher.createIntentForSettingsPage(
-                context, AutofillAndPaymentsPreferences.class.getName());
-        context.startActivity(intent);
+        PreferencesLauncher.launchSettingsPage(context, MainPreferences.class);
     }
 
     @Override
@@ -1508,12 +1445,13 @@ public class PaymentRequestImpl
 
         if (mShippingAddressesSection != null) {
             mShippingAddressesSection.addAndSelectOrUpdateItem(address);
-            mUI.updateSection(PaymentRequestUI.TYPE_SHIPPING_ADDRESSES, mShippingAddressesSection);
+            mUI.updateSection(
+                    PaymentRequestUI.DataType.SHIPPING_ADDRESSES, mShippingAddressesSection);
         }
 
         if (mContactSection != null) {
             mContactSection.addOrUpdateWithAutofillAddress(address);
-            mUI.updateSection(PaymentRequestUI.TYPE_CONTACT_DETAILS, mContactSection);
+            mUI.updateSection(PaymentRequestUI.DataType.CONTACT_DETAILS, mContactSection);
         }
     }
 
@@ -1545,7 +1483,7 @@ public class PaymentRequestImpl
         updateInstrumentModifiedTotals();
 
         if (mUI != null) {
-            mUI.updateSection(PaymentRequestUI.TYPE_PAYMENT_METHODS, mPaymentMethodsSection);
+            mUI.updateSection(PaymentRequestUI.DataType.PAYMENT_METHODS, mPaymentMethodsSection);
         }
     }
 
@@ -1559,7 +1497,7 @@ public class PaymentRequestImpl
         updateInstrumentModifiedTotals();
 
         if (mUI != null) {
-            mUI.updateSection(PaymentRequestUI.TYPE_PAYMENT_METHODS, mPaymentMethodsSection);
+            mUI.updateSection(PaymentRequestUI.DataType.PAYMENT_METHODS, mPaymentMethodsSection);
         }
     }
 
@@ -1570,54 +1508,28 @@ public class PaymentRequestImpl
     public void canMakePayment() {
         if (mClient == null) return;
 
-        final String canMakePaymentId = getCanMakePaymentId();
-        CanMakePaymentQuery query = sCanMakePaymentQueries.get(canMakePaymentId);
-        if (query == null) {
-            // If there has not been a canMakePayment() query in the last 30 minutes, take a note
-            // that one has happened just now. Remember the payment method names and the
-            // corresponding data for the next 30 minutes. Forget about it after the 30 minute
-            // period expires.
-            query = new CanMakePaymentQuery(Collections.unmodifiableMap(mMethodData));
-            sCanMakePaymentQueries.put(canMakePaymentId, query);
-            mHandler.postDelayed(() -> sCanMakePaymentQueries.remove(canMakePaymentId),
-                    CAN_MAKE_PAYMENT_QUERY_PERIOD_MS);
-        } else if (shouldEnforceCanMakePaymentQueryQuota()
-                && !query.matchesPaymentMethods(Collections.unmodifiableMap(mMethodData))) {
-            // If there has been a canMakePayment() query in the last 30 minutes, but the previous
-            // payment method names and the corresponding data don't match, enforce the
-            // canMakePayment() query quota (unless the quota is turned off).
-            mClient.onCanMakePayment(CanMakePaymentQueryResult.QUERY_QUOTA_EXCEEDED);
-            if (sObserverForTest != null) {
-                sObserverForTest.onPaymentRequestServiceCanMakePaymentQueryResponded();
-            }
-            return;
+        if (isFinishedQueryingPaymentApps()) {
+            respondCanMakePaymentQuery(mCanMakePayment);
+        } else {
+            mIsCanMakePaymentResponsePending = true;
         }
-
-        query.addObserver(this);
-        if (isFinishedQueryingPaymentApps()) query.notifyObserversOfResponse(mCanMakePayment);
     }
 
     private void respondCanMakePaymentQuery(boolean response) {
         if (mClient == null) return;
 
-        boolean isIgnoringQueryQuota = false;
-        if (!shouldEnforceCanMakePaymentQueryQuota()) {
-            CanMakePaymentQuery query = sCanMakePaymentQueries.get(getCanMakePaymentId());
-            // The cached query may have expired between instantiation of PaymentRequest and
-            // finishing the query of the payment apps.
-            if (query != null) {
-                isIgnoringQueryQuota =
-                        !query.matchesPaymentMethods(Collections.unmodifiableMap(mMethodData));
-            }
-        }
+        mIsCanMakePaymentResponsePending = false;
 
-        if (isIgnoringQueryQuota) {
+        if (CanMakePaymentQuery.canQuery(
+                    mWebContents, mTopLevelOrigin, mPaymentRequestOrigin, mMethodData)) {
+            mClient.onCanMakePayment(response ? CanMakePaymentQueryResult.CAN_MAKE_PAYMENT
+                                              : CanMakePaymentQueryResult.CANNOT_MAKE_PAYMENT);
+        } else if (shouldEnforceCanMakePaymentQueryQuota()) {
+            mClient.onCanMakePayment(CanMakePaymentQueryResult.QUERY_QUOTA_EXCEEDED);
+        } else {
             mClient.onCanMakePayment(response
                             ? CanMakePaymentQueryResult.WARNING_CAN_MAKE_PAYMENT
                             : CanMakePaymentQueryResult.WARNING_CANNOT_MAKE_PAYMENT);
-        } else {
-            mClient.onCanMakePayment(response ? CanMakePaymentQueryResult.CAN_MAKE_PAYMENT
-                                              : CanMakePaymentQueryResult.CANNOT_MAKE_PAYMENT);
         }
 
         mJourneyLogger.setCanMakePaymentValue(response || mIsIncognito);
@@ -1633,7 +1545,11 @@ public class PaymentRequestImpl
      * localhost and file:// scheme origins to verify its behavior.
      */
     private boolean shouldEnforceCanMakePaymentQueryQuota() {
-        return !OriginSecurityChecker.isOriginLocalhostOrFile(mWebContents.getLastCommittedUrl())
+        // If |mWebContents| is destroyed, don't bother checking the localhost or file:// scheme
+        // exemption. It doesn't really matter anyways.
+        return mWebContents.isDestroyed()
+                || !OriginSecurityChecker.isOriginLocalhostOrFile(
+                        mWebContents.getLastCommittedUrl())
                 || sIsLocalCanMakePaymentQueryQuotaEnforcedForTest;
     }
 
@@ -1729,13 +1645,10 @@ public class PaymentRequestImpl
                 ? 0
                 : SectionInformation.NO_SELECTION;
 
-        CanMakePaymentQuery query = sCanMakePaymentQueries.get(getCanMakePaymentId());
-        if (query != null && query.matchesPaymentMethods(mMethodData)) {
-            query.notifyObserversOfResponse(mCanMakePayment);
-        }
+        if (mIsCanMakePaymentResponsePending) respondCanMakePaymentQuery(mCanMakePayment);
 
         // The list of payment instruments is ready to display.
-        mPaymentMethodsSection = new SectionInformation(PaymentRequestUI.TYPE_PAYMENT_METHODS,
+        mPaymentMethodsSection = new SectionInformation(PaymentRequestUI.DataType.PAYMENT_METHODS,
                 selection, new ArrayList<>(mPendingInstruments));
         if (mPaymentMethodsSectionAdditionalTextResourceId != 0) {
             Context context = ChromeActivity.fromWebContents(mWebContents);
@@ -1761,11 +1674,6 @@ public class PaymentRequestImpl
         SettingsAutofillAndPaymentsObserver.getInstance().registerObserver(this);
 
         triggerPaymentAppUiSkipIfApplicable();
-    }
-
-    /** @return The identifier for the CanMakePayment query to use. */
-    private String getCanMakePaymentId() {
-        return mPaymentRequestOrigin + ":" + mTopLevelOrigin;
     }
 
     /**
@@ -1852,7 +1760,7 @@ public class PaymentRequestImpl
 
     @Override
     public void onFocusChanged(@PaymentRequestUI.DataType int dataType, boolean willFocus) {
-        assert dataType == PaymentRequestUI.TYPE_SHIPPING_ADDRESSES;
+        assert dataType == PaymentRequestUI.DataType.SHIPPING_ADDRESSES;
 
         if (mShippingAddressesSection.getSelectedItem() == null) return;
 
@@ -1866,7 +1774,7 @@ public class PaymentRequestImpl
             selectedAddress.setShippingAddressLabelWithoutCountry();
         }
 
-        mUI.updateSection(PaymentRequestUI.TYPE_SHIPPING_ADDRESSES, mShippingAddressesSection);
+        mUI.updateSection(PaymentRequestUI.DataType.SHIPPING_ADDRESSES, mShippingAddressesSection);
     }
 
     @Override

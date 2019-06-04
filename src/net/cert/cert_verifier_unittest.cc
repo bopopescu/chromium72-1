@@ -30,15 +30,11 @@ TEST(CertVerifierTest, RequestParamsComparators) {
   // Create a certificate that contains both a leaf and an
   // intermediate/root.
   std::vector<bssl::UniquePtr<CRYPTO_BUFFER>> chain;
-  chain.push_back(x509_util::DupCryptoBuffer(root_cert->cert_buffer()));
+  chain.push_back(bssl::UpRef(root_cert->cert_buffer()));
   const scoped_refptr<X509Certificate> combined_cert =
-      X509Certificate::CreateFromBuffer(
-          x509_util::DupCryptoBuffer(ok_cert->cert_buffer()), std::move(chain));
+      X509Certificate::CreateFromBuffer(bssl::UpRef(ok_cert->cert_buffer()),
+                                        std::move(chain));
   ASSERT_TRUE(combined_cert.get());
-
-  const CertificateList empty_list;
-  CertificateList test_list;
-  test_list.push_back(ok_cert);
 
   struct {
     // Keys to test
@@ -51,62 +47,54 @@ TEST(CertVerifierTest, RequestParamsComparators) {
       {
           // Test for basic equivalence.
           CertVerifier::RequestParams(ok_cert, "www.example.test", 0,
-                                      std::string(), empty_list),
+                                      std::string()),
           CertVerifier::RequestParams(ok_cert, "www.example.test", 0,
-                                      std::string(), empty_list),
+                                      std::string()),
           true,
       },
       {
           // Test that different certificates but with the same CA and for
           // the same host are different validation keys.
           CertVerifier::RequestParams(ok_cert, "www.example.test", 0,
-                                      std::string(), empty_list),
+                                      std::string()),
           CertVerifier::RequestParams(expired_cert, "www.example.test", 0,
-                                      std::string(), empty_list),
+                                      std::string()),
           false,
       },
       {
           // Test that the same EE certificate for the same host, but with
           // different chains are different validation keys.
           CertVerifier::RequestParams(ok_cert, "www.example.test", 0,
-                                      std::string(), empty_list),
+                                      std::string()),
           CertVerifier::RequestParams(combined_cert, "www.example.test", 0,
-                                      std::string(), empty_list),
+                                      std::string()),
           false,
       },
       {
           // The same certificate, with the same chain, but for different
           // hosts are different validation keys.
           CertVerifier::RequestParams(ok_cert, "www1.example.test", 0,
-                                      std::string(), empty_list),
+                                      std::string()),
           CertVerifier::RequestParams(ok_cert, "www2.example.test", 0,
-                                      std::string(), empty_list),
+                                      std::string()),
           false,
       },
       {
           // The same certificate, chain, and host, but with different flags
           // are different validation keys.
-          CertVerifier::RequestParams(ok_cert, "www.example.test",
-                                      CertVerifier::VERIFY_REV_CHECKING_ENABLED,
-                                      std::string(), empty_list),
+          CertVerifier::RequestParams(
+              ok_cert, "www.example.test",
+              CertVerifier::VERIFY_DISABLE_NETWORK_FETCHES, std::string()),
           CertVerifier::RequestParams(ok_cert, "www.example.test", 0,
-                                      std::string(), empty_list),
-          false,
-      },
-      {
-          // Different additional_trust_anchors.
-          CertVerifier::RequestParams(ok_cert, "www.example.test", 0,
-                                      std::string(), empty_list),
-          CertVerifier::RequestParams(ok_cert, "www.example.test", 0,
-                                      std::string(), test_list),
+                                      std::string()),
           false,
       },
       {
           // Different OCSP responses.
           CertVerifier::RequestParams(ok_cert, "www.example.test", 0,
-                                      "ocsp response", empty_list),
+                                      "ocsp response"),
           CertVerifier::RequestParams(ok_cert, "www.example.test", 0,
-                                      std::string(), empty_list),
+                                      std::string()),
           false,
       },
   };

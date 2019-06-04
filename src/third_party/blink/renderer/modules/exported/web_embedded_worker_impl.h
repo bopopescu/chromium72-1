@@ -41,15 +41,13 @@
 #include "third_party/blink/renderer/core/workers/global_scope_creation_params.h"
 #include "third_party/blink/renderer/core/workers/worker_clients.h"
 #include "third_party/blink/renderer/modules/modules_export.h"
-#include "third_party/blink/renderer/modules/serviceworkers/service_worker_content_settings_proxy.h"
+#include "third_party/blink/renderer/modules/service_worker/service_worker_content_settings_proxy.h"
 #include "third_party/blink/renderer/platform/heap/handle.h"
 
 namespace blink {
 
-class ContentSecurityPolicy;
 class ServiceWorkerInstalledScriptsManager;
 class WorkerClassicScriptLoader;
-class WorkerInspectorProxy;
 class WorkerThread;
 
 class MODULES_EXPORT WebEmbeddedWorkerImpl final
@@ -60,7 +58,7 @@ class MODULES_EXPORT WebEmbeddedWorkerImpl final
  public:
   WebEmbeddedWorkerImpl(
       std::unique_ptr<WebServiceWorkerContextClient>,
-      std::unique_ptr<WebServiceWorkerInstalledScriptsManager>,
+      std::unique_ptr<WebServiceWorkerInstalledScriptsManagerParams>,
       std::unique_ptr<ServiceWorkerContentSettingsProxy>,
       mojom::blink::CacheStoragePtrInfo,
       service_manager::mojom::blink::InterfaceProviderPtrInfo);
@@ -72,21 +70,17 @@ class MODULES_EXPORT WebEmbeddedWorkerImpl final
   void ResumeAfterDownload() override;
   void AddMessageToConsole(const WebConsoleMessage&) override;
   void BindDevToolsAgent(
+      mojo::ScopedInterfaceEndpointHandle devtools_agent_host_ptr_info,
       mojo::ScopedInterfaceEndpointHandle devtools_agent_request) override;
-
-  void PostMessageToPageInspector(int session_id, const WTF::String&);
-
-  // Applies the specified CSP and referrer policy to the worker, so that
-  // fetches initiated by the worker (other than for the main worker script
-  // itself) are affected by these policies. This must be called before starting
-  // script execution on the worker thread.
-  void SetContentSecurityPolicyAndReferrerPolicy(ContentSecurityPolicy*,
-                                                 String referrer_policy);
 
   // WorkerShadowPage::Client overrides.
   std::unique_ptr<WebApplicationCacheHost> CreateApplicationCacheHost(
       WebApplicationCacheHostClient*) override;
   void OnShadowPageInitialized() override;
+
+  static std::unique_ptr<WebEmbeddedWorkerImpl> CreateForTesting(
+      std::unique_ptr<WebServiceWorkerContextClient>,
+      std::unique_ptr<ServiceWorkerInstalledScriptsManager>);
 
  private:
   // WebDevToolsAgentImpl::Client overrides.
@@ -107,10 +101,9 @@ class MODULES_EXPORT WebEmbeddedWorkerImpl final
   std::unique_ptr<ServiceWorkerContentSettingsProxy> content_settings_client_;
 
   // Kept around only while main script loading is ongoing.
-  scoped_refptr<WorkerClassicScriptLoader> main_script_loader_;
+  Persistent<WorkerClassicScriptLoader> main_script_loader_;
 
   std::unique_ptr<WorkerThread> worker_thread_;
-  Persistent<WorkerInspectorProxy> worker_inspector_proxy_;
 
   std::unique_ptr<WorkerShadowPage> shadow_page_;
 

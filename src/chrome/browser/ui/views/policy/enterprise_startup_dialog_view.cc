@@ -10,8 +10,9 @@
 #include "base/i18n/message_formatter.h"
 #include "base/strings/string16.h"
 #include "base/strings/utf_string_conversions.h"
+#include "build/build_config.h"
 #include "chrome/app/vector_icons/vector_icons.h"
-#include "chrome/browser/ui/views/harmony/chrome_layout_provider.h"
+#include "chrome/browser/ui/views/chrome_layout_provider.h"
 #include "chrome/grit/chromium_strings.h"
 #include "chrome/grit/theme_resources.h"
 #include "components/constrained_window/constrained_window_views.h"
@@ -28,10 +29,15 @@
 #include "ui/views/layout/grid_layout.h"
 #include "ui/views/window/dialog_client_view.h"
 
+#if defined(OS_MACOSX)
+#include "base/message_loop/message_loop_current.h"
+#include "chrome/browser/ui/views/policy/enterprise_startup_dialog_mac_util.h"
+#endif
+
 namespace policy {
 namespace {
 
-constexpr int kDialogContentHeight = 220;  // The height of dialog content area.
+constexpr int kDialogContentHeight = 190;  // The height of dialog content area.
 constexpr int kDialogContentWidth = 670;   // The width of dialog content area.
 constexpr int kIconSize = 24;      // The size of throbber and error icon.
 constexpr int kLineHeight = 22;    // The height of text line.
@@ -59,17 +65,23 @@ views::Label* CreateText(const base::string16& message) {
 
 EnterpriseStartupDialogView::EnterpriseStartupDialogView(
     EnterpriseStartupDialog::DialogResultCallback callback)
-    : callback_(std::move(callback)), can_show_browser_window_(false) {
-  SetBackground(views::CreateSolidBackground(GetNativeTheme()->GetSystemColor(
-      ui::NativeTheme::kColorId_DialogBackground)));
+    : callback_(std::move(callback)),
+      can_show_browser_window_(false),
+      weak_factory_(this) {
   SetBorder(views::CreateEmptyBorder(GetDialogInsets()));
   CreateDialogWidget(this, nullptr, nullptr)->Show();
+#if defined(OS_MACOSX)
+  base::ThreadTaskRunnerHandle::Get()->PostTask(
+      FROM_HERE, base::BindOnce(&EnterpriseStartupDialogView::StartModalDialog,
+                                weak_factory_.GetWeakPtr()));
+#endif
 }
+
 EnterpriseStartupDialogView::~EnterpriseStartupDialogView() {}
 
 void EnterpriseStartupDialogView::DisplayLaunchingInformationWithThrobber(
     const base::string16& information) {
-  ResetDialog(false, false);
+  ResetDialog(false);
 
   views::Label* text = CreateText(information);
   views::Throbber* throbber = new views::Throbber();
@@ -82,9 +94,8 @@ void EnterpriseStartupDialogView::DisplayLaunchingInformationWithThrobber(
 
 void EnterpriseStartupDialogView::DisplayErrorMessage(
     const base::string16& error_message,
-    const base::Optional<base::string16>& accept_button,
-    const base::Optional<base::string16>& cancel_button) {
-  ResetDialog(accept_button.has_value(), cancel_button.has_value());
+    const base::Optional<base::string16>& accept_button) {
+  ResetDialog(accept_button.has_value());
   views::Label* text = CreateText(error_message);
   views::ImageView* error_icon = new views::ImageView();
   error_icon->SetImage(gfx::CreateVectorIcon(kBrowserToolsErrorIcon, kIconSize,
@@ -92,8 +103,6 @@ void EnterpriseStartupDialogView::DisplayErrorMessage(
 
   if (accept_button)
     GetDialogClientView()->ok_button()->SetText(*accept_button);
-  if (cancel_button)
-    GetDialogClientView()->cancel_button()->SetText(*cancel_button);
   SetupLayout(error_icon, text);
 }
 
@@ -111,20 +120,40 @@ void EnterpriseStartupDialogView::RemoveWidgetObserver(
   GetWidget()->RemoveObserver(observer);
 }
 
+void EnterpriseStartupDialogView::StartModalDialog() {
+#if defined(OS_MACOSX)
+  base::MessageLoopCurrent::ScopedNestableTaskAllower allow_nested;
+  StartModal(GetWidget()->GetNativeWindow());
+#endif
+}
+
+void EnterpriseStartupDialogView::RunDialogCallback(bool was_accepted) {
+#if defined(OS_MACOSX)
+  // On mac, we need to stop the modal message loop before returning the result
+  // to the caller who controls its own run loop.
+  StopModal();
+  base::ThreadTaskRunnerHandle::Get()->PostTask(
+      FROM_HERE, base::BindOnce(std::move(callback_), was_accepted,
+                                can_show_browser_window_));
+#else
+  std::move(callback_).Run(was_accepted, can_show_browser_window_);
+#endif
+}
+
 bool EnterpriseStartupDialogView::Accept() {
-  std::move(callback_).Run(true, can_show_browser_window_);
+  RunDialogCallback(true);
   return true;
 }
 bool EnterpriseStartupDialogView::Cancel() {
-  std::move(callback_).Run(false, can_show_browser_window_);
+  RunDialogCallback(false);
   return true;
 }
 
-bool EnterpriseStartupDialogView::ShouldShowWindowTitle() const {
-  return false;
+bool EnterpriseStartupDialogView::Close() {
+  return Cancel();
 }
 
-bool EnterpriseStartupDialogView::ShouldShowCloseButton() const {
+bool EnterpriseStartupDialogView::ShouldShowWindowTitle() const {
   return false;
 }
 
@@ -139,12 +168,12 @@ views::View* EnterpriseStartupDialogView::CreateExtraView() {
   logo_image->SetImage(ui::ResourceBundle::GetSharedInstance()
                            .GetImageNamed(IDR_PRODUCT_LOGO_ENTERPRISE)
                            .AsImageSkia());
-  logo_image->SetTooltipText(
+  logo_image->set_tooltip_text(
       l10n_util::GetStringUTF16(IDS_PRODUCT_LOGO_ENTERPRISE_ALT_TEXT));
   gfx::Rect logo_bounds = logo_image->GetImageBounds();
   logo_image->SetImageSize(gfx::Size(
       logo_bounds.width() * kLogoHeight / logo_bounds.height(), kLogoHeight));
-  logo_image->SetVerticalAlignment(views::ImageView::TRAILING);
+  logo_image->SetVerticalAlignment(views::ImageView::CENTER);
   return logo_image;
 #else
   return nullptr;
@@ -152,29 +181,22 @@ views::View* EnterpriseStartupDialogView::CreateExtraView() {
 }
 
 int EnterpriseStartupDialogView::GetDialogButtons() const {
-  return ui::DIALOG_BUTTON_OK | ui::DIALOG_BUTTON_CANCEL;
+  return ui::DIALOG_BUTTON_OK;
 }
 
 gfx::Size EnterpriseStartupDialogView::CalculatePreferredSize() const {
   return gfx::Size(kDialogContentWidth, kDialogContentHeight);
 }
 
-void EnterpriseStartupDialogView::ResetDialog(bool show_accept_button,
-                                              bool show_cancel_button) {
+void EnterpriseStartupDialogView::ResetDialog(bool show_accept_button) {
   DCHECK(GetDialogClientView()->ok_button());
-  DCHECK(GetDialogClientView()->cancel_button());
 
   GetDialogClientView()->ok_button()->SetVisible(show_accept_button);
-  GetDialogClientView()->cancel_button()->SetVisible(show_cancel_button);
   RemoveAllChildViews(true);
 }
 
 void EnterpriseStartupDialogView::SetupLayout(views::View* icon,
                                               views::View* text) {
-  gfx::Size icon_size = icon->GetPreferredSize();
-
-  gfx::Insets dialog_insets = GetDialogInsets();
-
   // Padding between icon and text
   int text_padding = ChromeLayoutProvider::Get()->GetDistanceMetric(
       views::DISTANCE_TEXTFIELD_HORIZONTAL_TEXT_PADDING);
@@ -183,21 +205,21 @@ void EnterpriseStartupDialogView::SetupLayout(views::View* icon,
       SetLayoutManager(std::make_unique<views::GridLayout>(this));
   auto* columnset = layout->AddColumnSet(0);
   // Horizontally centre the content.
-  columnset->AddPaddingColumn(1, 0);
-  columnset->AddColumn(views::GridLayout::FILL, views::GridLayout::FILL, 0,
+  columnset->AddPaddingColumn(1.0, 0);
+  columnset->AddColumn(views::GridLayout::FILL, views::GridLayout::FILL,
+                       views::GridLayout::kFixedSize,
                        views::GridLayout::USE_PREF, 0, 0);
-  columnset->AddPaddingColumn(0, text_padding);
-  columnset->AddColumn(views::GridLayout::FILL, views::GridLayout::FILL, 0,
+  columnset->AddPaddingColumn(views::GridLayout::kFixedSize, text_padding);
+  columnset->AddColumn(views::GridLayout::FILL, views::GridLayout::FILL,
+                       views::GridLayout::kFixedSize,
                        views::GridLayout::USE_PREF, 0, 0);
-  columnset->AddPaddingColumn(1, 0);
+  columnset->AddPaddingColumn(1.0, 0);
 
-  // Vertically centre the content.
-  layout->AddPaddingRow(
-      0, (GetDialogClientView()->height() - icon_size.height()) / 2 -
-             dialog_insets.top());
-  layout->StartRow(0, 0);
+  layout->AddPaddingRow(1.0, 0);
+  layout->StartRow(views::GridLayout::kFixedSize, 0);
   layout->AddView(icon);
   layout->AddView(text);
+  layout->AddPaddingRow(1.0, 0);
 
   GetDialogClientView()->Layout();
   GetDialogClientView()->SchedulePaint();
@@ -228,12 +250,9 @@ void EnterpriseStartupDialogImpl::DisplayLaunchingInformationWithThrobber(
 
 void EnterpriseStartupDialogImpl::DisplayErrorMessage(
     const base::string16& error_message,
-    const base::Optional<base::string16>& accept_button,
-    const base::Optional<base::string16>& cancel_button) {
-  if (dialog_view_) {
-    dialog_view_->DisplayErrorMessage(error_message, accept_button,
-                                      cancel_button);
-  }
+    const base::Optional<base::string16>& accept_button) {
+  if (dialog_view_)
+    dialog_view_->DisplayErrorMessage(error_message, accept_button);
 }
 bool EnterpriseStartupDialogImpl::IsShowing() {
   return dialog_view_;

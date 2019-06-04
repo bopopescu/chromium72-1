@@ -73,7 +73,7 @@ V8V0CustomElementLifecycleCallbacks::Create(
   CALLBACK_LIST(SET_PRIVATE_PROPERTY)
 #undef SET_PRIVATE_PROPERTY
 
-  return new V8V0CustomElementLifecycleCallbacks(
+  return MakeGarbageCollected<V8V0CustomElementLifecycleCallbacks>(
       script_state, prototype, created, attached, detached, attribute_changed);
 }
 
@@ -157,7 +157,7 @@ void V8V0CustomElementLifecycleCallbacks::Created(Element* element) {
 
   element->SetV0CustomElementState(Element::kV0Upgraded);
 
-  ScriptState::Scope scope(script_state_.get());
+  ScriptState::Scope scope(script_state_);
   v8::Isolate* isolate = script_state_->GetIsolate();
   v8::Local<v8::Context> context = script_state_->GetContext();
   v8::Local<v8::Value> receiver_value =
@@ -168,10 +168,12 @@ void V8V0CustomElementLifecycleCallbacks::Created(Element* element) {
 
   // Swizzle the prototype of the wrapper.
   v8::Local<v8::Object> prototype = prototype_.NewLocal(isolate);
-  if (prototype.IsEmpty())
+  bool set_prototype;
+  if (prototype.IsEmpty() ||
+      !receiver->SetPrototype(context, prototype).To(&set_prototype) ||
+      !set_prototype) {
     return;
-  if (!V8CallBoolean(receiver->SetPrototype(context, prototype)))
-    return;
+  }
 
   v8::Local<v8::Function> callback = created_.NewLocal(isolate);
   if (callback.IsEmpty())
@@ -179,8 +181,7 @@ void V8V0CustomElementLifecycleCallbacks::Created(Element* element) {
 
   v8::TryCatch exception_catcher(isolate);
   exception_catcher.SetVerbose(true);
-  V8ScriptRunner::CallFunction(callback,
-                               ExecutionContext::From(script_state_.get()),
+  V8ScriptRunner::CallFunction(callback, ExecutionContext::From(script_state_),
                                receiver, 0, nullptr, isolate);
 }
 
@@ -202,7 +203,7 @@ void V8V0CustomElementLifecycleCallbacks::AttributeChanged(
   // Bug 329665 tracks similar behavior for other synchronous events.
   if (!script_state_->ContextIsValid())
     return;
-  ScriptState::Scope scope(script_state_.get());
+  ScriptState::Scope scope(script_state_);
   v8::Isolate* isolate = script_state_->GetIsolate();
   v8::Local<v8::Context> context = script_state_->GetContext();
   v8::Local<v8::Value> receiver = ToV8(element, context->Global(), isolate);
@@ -222,9 +223,8 @@ void V8V0CustomElementLifecycleCallbacks::AttributeChanged(
 
   v8::TryCatch exception_catcher(isolate);
   exception_catcher.SetVerbose(true);
-  V8ScriptRunner::CallFunction(callback,
-                               ExecutionContext::From(script_state_.get()),
-                               receiver, arraysize(argv), argv, isolate);
+  V8ScriptRunner::CallFunction(callback, ExecutionContext::From(script_state_),
+                               receiver, base::size(argv), argv, isolate);
 }
 
 void V8V0CustomElementLifecycleCallbacks::Call(
@@ -235,7 +235,7 @@ void V8V0CustomElementLifecycleCallbacks::Call(
   // Bug 329665 tracks similar behavior for other synchronous events.
   if (!script_state_->ContextIsValid())
     return;
-  ScriptState::Scope scope(script_state_.get());
+  ScriptState::Scope scope(script_state_);
   v8::Isolate* isolate = script_state_->GetIsolate();
   v8::Local<v8::Context> context = script_state_->GetContext();
   v8::Local<v8::Function> callback = weak_callback.NewLocal(isolate);
@@ -248,12 +248,12 @@ void V8V0CustomElementLifecycleCallbacks::Call(
 
   v8::TryCatch exception_catcher(isolate);
   exception_catcher.SetVerbose(true);
-  V8ScriptRunner::CallFunction(callback,
-                               ExecutionContext::From(script_state_.get()),
+  V8ScriptRunner::CallFunction(callback, ExecutionContext::From(script_state_),
                                receiver, 0, nullptr, isolate);
 }
 
 void V8V0CustomElementLifecycleCallbacks::Trace(blink::Visitor* visitor) {
+  visitor->Trace(script_state_);
   V0CustomElementLifecycleCallbacks::Trace(visitor);
 }
 

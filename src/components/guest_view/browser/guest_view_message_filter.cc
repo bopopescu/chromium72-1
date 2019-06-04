@@ -124,11 +124,12 @@ void GuestViewMessageFilter::OnAttachGuest(
                        params);
 }
 
-void GuestViewMessageFilter::OnAttachToEmbedderFrame(
+void GuestViewMessageFilter::AttachToEmbedderFrame(
     int embedder_local_render_frame_id,
     int element_instance_id,
     int guest_instance_id,
-    const base::DictionaryValue& params) {
+    const base::DictionaryValue& params,
+    bool is_full_page_plugin) {
   // We should have a GuestViewManager at this point. If we don't then the
   // embedder is misbehaving.
   auto* manager = GetGuestViewManagerOrKill();
@@ -167,8 +168,8 @@ void GuestViewMessageFilter::OnAttachToEmbedderFrame(
         // frame |embedder_frame| hosts the inner WebContents.
         // NOTE: this must be called after WillAttach, because it could unblock
         // pending requests which depend on the WebViewGuest being initialized.
-        guest_web_contents->AttachToOuterWebContentsFrame(embedder_web_contents,
-                                                          embedder_frame);
+        guest_web_contents->AttachToOuterWebContentsFrame(
+            base::WrapUnique<WebContents>(guest_web_contents), embedder_frame);
 
         // We don't ACK until after AttachToOuterWebContentsFrame, so that
         // |embedder_frame| gets swapped before the AttachIframeGuest callback
@@ -181,10 +182,19 @@ void GuestViewMessageFilter::OnAttachToEmbedderFrame(
       element_instance_id);
 
   guest->WillAttach(
-      embedder_web_contents, element_instance_id, false,
+      embedder_web_contents, element_instance_id, is_full_page_plugin,
       std::move(perform_attach),
       base::Bind(&GuestViewBase::DidAttach,
                  guest->weak_ptr_factory_.GetWeakPtr(), MSG_ROUTING_NONE));
 }
 
+void GuestViewMessageFilter::OnAttachToEmbedderFrame(
+    int embedder_local_render_frame_id,
+    int element_instance_id,
+    int guest_instance_id,
+    const base::DictionaryValue& params) {
+  AttachToEmbedderFrame(embedder_local_render_frame_id, element_instance_id,
+                        guest_instance_id, params,
+                        false /* is_full_page_plugin */);
+}
 }  // namespace guest_view

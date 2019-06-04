@@ -13,6 +13,8 @@
 #include "third_party/blink/renderer/core/layout/svg/svg_resources_cache.h"
 #include "third_party/blink/renderer/core/paint/paint_info.h"
 #include "third_party/blink/renderer/core/style/clip_path_operation.h"
+#include "third_party/blink/renderer/core/style/reference_clip_path_operation.h"
+#include "third_party/blink/renderer/core/style/shape_clip_path_operation.h"
 #include "third_party/blink/renderer/platform/graphics/paint/drawing_display_item.h"
 #include "third_party/blink/renderer/platform/graphics/paint/drawing_recorder.h"
 #include "third_party/blink/renderer/platform/graphics/paint/paint_controller.h"
@@ -69,14 +71,7 @@ FloatRect ClipPathClipper::LocalReferenceBox(const LayoutObject& object) {
     return FloatRect(ToLayoutBox(object).BorderBoxRect());
 
   SECURITY_DCHECK(object.IsLayoutInline());
-  const LayoutInline& layout_inline = ToLayoutInline(object);
-  // This somewhat convoluted computation matches what Gecko does.
-  // See crbug.com/641907.
-  LayoutRect inline_b_box = layout_inline.LinesBoundingBox();
-  const InlineFlowBox* flow_box = layout_inline.FirstLineBox();
-  inline_b_box.SetHeight(flow_box ? flow_box->FrameRect().Height()
-                                  : LayoutUnit(0));
-  return FloatRect(inline_b_box);
+  return FloatRect(ToLayoutInline(object).ReferenceBoxForClipPath());
 }
 
 base::Optional<FloatRect> ClipPathClipper::LocalClipPathBoundingBox(
@@ -145,35 +140,6 @@ ClipPathClipper::ClipPathClipper(GraphicsContext& context,
       layout_object_(layout_object),
       paint_offset_(paint_offset) {
   DCHECK(layout_object.StyleRef().ClipPath());
-
-  // Technically we should apply the mask clip and mask isolation property
-  // nodes to match clip_recorder_ and mask_isolation_recorder_ below,
-  // but we can safely omit those, because they will be applied in bundle
-  // when the contents are painted.
-  if (RuntimeEnabledFeatures::SlimmingPaintV175Enabled())
-    return;
-
-  base::Optional<FloatRect> bounding_box =
-      LocalClipPathBoundingBox(layout_object);
-  if (!bounding_box)
-    return;
-
-  FloatRect adjusted_bounding_box = *bounding_box;
-  adjusted_bounding_box.MoveBy(FloatPoint(paint_offset));
-  clip_recorder_.emplace(context, layout_object,
-                         DisplayItem::kFloatClipClipPathBounds,
-                         adjusted_bounding_box);
-
-  bool is_valid = false;
-  if (base::Optional<Path> as_path =
-          PathBasedClip(layout_object, layout_object.IsSVGChild(),
-                        LocalReferenceBox(layout_object), is_valid)) {
-    as_path->Translate(FloatSize(paint_offset.X(), paint_offset.Y()));
-    clip_path_recorder_.emplace(context, layout_object, *as_path);
-  } else if (is_valid) {
-    mask_isolation_recorder_.emplace(context, layout_object,
-                                     SkBlendMode::kSrcOver, 1.f);
-  }
 }
 
 static AffineTransform MaskToContentTransform(
@@ -195,24 +161,17 @@ static AffineTransform MaskToContentTransform(
 }
 
 ClipPathClipper::~ClipPathClipper() {
-  base::Optional<ScopedPaintChunkProperties> scoped_properties;
-  if (RuntimeEnabledFeatures::SlimmingPaintV175Enabled()) {
-    const auto* properties = layout_object_.FirstFragment().PaintProperties();
-    if (!properties || !properties->ClipPath())
-      return;
-    scoped_properties.emplace(
-        context_.GetPaintController(),
-        layout_object_.FirstFragment().ClipPathProperties(), layout_object_,
-        DisplayItem::kSVGClip);
-  } else if (!mask_isolation_recorder_) {
+  const auto* properties = layout_object_.FirstFragment().PaintProperties();
+  if (!properties || !properties->ClipPath())
     return;
-  }
+  ScopedPaintChunkProperties scoped_properties(
+      context_.GetPaintController(),
+      layout_object_.FirstFragment().ClipPathProperties(), layout_object_,
+      DisplayItem::kSVGClip);
 
   bool is_svg_child = layout_object_.IsSVGChild();
   FloatRect reference_box = LocalReferenceBox(layout_object_);
 
-  CompositingRecorder mask_recorder(context_, layout_object_,
-                                    SkBlendMode::kDstIn, 1.f);
   if (DrawingRecorder::UseCachedDrawingIfPossible(context_, layout_object_,
                                                   DisplayItem::kSVGClip))
     return;

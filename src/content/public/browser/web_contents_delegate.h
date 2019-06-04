@@ -42,8 +42,15 @@ namespace base {
 class FilePath;
 }
 
+namespace blink {
+namespace mojom {
+class FileChooserParams;
+}
+}  // namespace blink
+
 namespace content {
 class ColorChooser;
+class FileSelectListener;
 class JavaScriptDialogManager;
 class RenderFrameHost;
 class RenderProcessHost;
@@ -53,13 +60,9 @@ class SiteInstance;
 class WebContentsImpl;
 struct ContextMenuParams;
 struct DropData;
-struct FileChooserParams;
 struct NativeWebKeyboardEvent;
 struct Referrer;
 struct SecurityStyleExplanations;
-#if defined(USE_NEVA_APPRUNTIME)
-struct WebPreferences;
-#endif
 }  // namespace content
 
 namespace gfx {
@@ -152,13 +155,10 @@ class CONTENT_EXPORT WebContentsDelegate {
   // it needs to do.
   virtual void CloseContents(WebContents* source) {}
 
-  // Request the delegate to move this WebContents to the specified position
-  // in screen coordinates.
-  virtual void MoveContents(WebContents* source, const gfx::Rect& pos) {}
-
-  // Called to determine if the WebContents is contained in a popup window
-  // or a panel window.
-  virtual bool IsPopupOrPanel(const WebContents* source) const;
+  // Request the delegate to resize this WebContents to the specified size in
+  // screen coordinates. The embedder is free to ignore the request.
+  virtual void SetContentsBounds(WebContents* source, const gfx::Rect& bounds) {
+  }
 
   // Notification that the target URL has changed.
   virtual void UpdateTargetURL(WebContents* source,
@@ -253,9 +253,11 @@ class CONTENT_EXPORT WebContentsDelegate {
       const NativeWebKeyboardEvent& event);
 
   // Allows delegates to handle unhandled keyboard messages coming back from
-  // the renderer.
-  virtual void HandleKeyboardEvent(WebContents* source,
-                                   const NativeWebKeyboardEvent& event) {}
+  // the renderer. Returns true if the event was handled, false otherwise. A
+  // true value means no more processing should happen on the event. The default
+  // return value is false
+  virtual bool HandleKeyboardEvent(WebContents* source,
+                                   const NativeWebKeyboardEvent& event);
 
   // Allows delegates to handle gesture events before sending to the renderer.
   // Returns true if the |event| was handled and thus shouldn't be processed
@@ -325,17 +327,25 @@ class CONTENT_EXPORT WebContentsDelegate {
                                   const GURL& target_url,
                                   WebContents* new_contents) {}
 
+  // Notifies the embedder that a Portal WebContents was created.
+  virtual void PortalWebContentsCreated(WebContents* portal_web_contents) {}
+
   // Notification that one of the frames in the WebContents is hung. |source| is
   // the WebContents that is hung, and |render_widget_host| is the
   // RenderWidgetHost that, while routing events to it, discovered the hang.
   //
+  // |hang_monitor_restarter| can be used to restart the timer used to
+  // detect the hang.  The timer is typically restarted when the renderer has
+  // become active, the tab got hidden, or the user has chosen to wait some
+  // more.
+  //
   // Useful member functions on |render_widget_host|:
   // - Getting the hung render process: GetProcess()
   // - Querying whether the process is still hung: IsCurrentlyUnresponsive()
-  // - Waiting for the process to recover on its own:
-  //     RestartHangMonitorTimeoutIfNecessary()
-  virtual void RendererUnresponsive(WebContents* source,
-                                    RenderWidgetHost* render_widget_host) {}
+  virtual void RendererUnresponsive(
+      WebContents* source,
+      RenderWidgetHost* render_widget_host,
+      base::RepeatingClosure hang_monitor_restarter) {}
 
   // Notification that a process in the WebContents is no longer hung. |source|
   // is the WebContents that was hung, and |render_widget_host| is the
@@ -362,15 +372,20 @@ class CONTENT_EXPORT WebContentsDelegate {
       const std::vector<blink::mojom::ColorSuggestionPtr>& suggestions);
 
   // Called when a file selection is to be done.
+  // This function is responsible for calling listener->FileSelected() or
+  // listener->FileSelectionCanceled().
   virtual void RunFileChooser(RenderFrameHost* render_frame_host,
-                              const FileChooserParams& params) {}
+                              std::unique_ptr<FileSelectListener> listener,
+                              const blink::mojom::FileChooserParams& params);
 
   // Request to enumerate a directory.  This is equivalent to running the file
   // chooser in directory-enumeration mode and having the user select the given
   // directory.
+  // This function is responsible for calling listener->FileSelected() or
+  // listener->FileSelectionCanceled().
   virtual void EnumerateDirectory(WebContents* web_contents,
-                                  int request_id,
-                                  const base::FilePath& path) {}
+                                  std::unique_ptr<FileSelectListener> listener,
+                                  const base::FilePath& path);
 
   // Shows a chooser for the user to select a nearby Bluetooth device. The
   // observer must live at least as long as the returned chooser object.
@@ -473,10 +488,9 @@ class CONTENT_EXPORT WebContentsDelegate {
   // request is denied, a call should be made to |callback| with an empty list
   // of devices. |request| has the details of the request (e.g. which of audio
   // and/or video devices are requested, and lists of available devices).
-  virtual void RequestMediaAccessPermission(
-      WebContents* web_contents,
-      const MediaStreamRequest& request,
-      const MediaResponseCallback& callback);
+  virtual void RequestMediaAccessPermission(WebContents* web_contents,
+                                            const MediaStreamRequest& request,
+                                            MediaResponseCallback callback);
 
   // Checks if we have permission to access the microphone or camera. Note that
   // this does not query the user. |type| must be MEDIA_DEVICE_AUDIO_CAPTURE
@@ -492,10 +506,6 @@ class CONTENT_EXPORT WebContentsDelegate {
                                               MediaStreamType type);
 
 #if defined(OS_ANDROID)
-  // Creates a view embedding the video view.
-  virtual base::android::ScopedJavaLocalRef<jobject>
-      GetContentVideoViewEmbedder();
-
   // Returns true if the given media should be blocked to load.
   virtual bool ShouldBlockMediaRequest(const GURL& url);
 
@@ -557,20 +567,8 @@ class CONTENT_EXPORT WebContentsDelegate {
                                                  const url::Origin& origin,
                                                  const GURL& resource_url);
 
-#if defined(USE_NEVA_APPRUNTIME)
-  // Added for neva app-runtime frame focused notification
-  // Notify that the frame was focused
-  virtual void DidFrameFocused() {}
-
-  // Check that it has policy for response, if it has a policy, Blink won't do
-  // nothing 491
-  virtual bool DecidePolicyForResponse(bool isMainFrame,
-                                       int statusCode,
-                                       const GURL& url,
-                                       const base::string16& statusText);
-
-  virtual void OverrideWebkitPrefs(WebPreferences* prefs) {}
-#endif
+  virtual void SetTopControlsShownRatio(WebContents* web_contents,
+                                        float ratio) {}
 
   // Requests to get browser controls info such as the height of the top/bottom
   // controls, and whether they will shrink the Blink's view size.
@@ -579,7 +577,13 @@ class CONTENT_EXPORT WebContentsDelegate {
   // needed by embedder because it's always accompanied by view size change.
   virtual int GetTopControlsHeight() const;
   virtual int GetBottomControlsHeight() const;
-  virtual bool DoBrowserControlsShrinkBlinkSize() const;
+  virtual bool DoBrowserControlsShrinkRendererSize(
+      const WebContents* web_contents) const;
+
+  // Propagates to the browser that gesture scrolling has changed state. This is
+  // used by the browser to assist in controlling the behavior of sliding the
+  // top controls as a result of page gesture scrolling while in tablet mode.
+  virtual void SetTopControlsGestureScrollInProgress(bool in_progress);
 
   // Give WebContentsDelegates the opportunity to adjust the previews state.
   virtual void AdjustPreviewsStateForNavigation(
@@ -607,6 +611,29 @@ class CONTENT_EXPORT WebContentsDelegate {
   // Updates the Picture-in-Picture controller with a signal that
   // Picture-in-Picture mode has ended.
   virtual void ExitPictureInPicture();
+
+#if defined(OS_ANDROID)
+  // Updates information to determine whether a user gesture should carryover to
+  // future navigations. This is needed so navigations within a certain
+  // timeframe of a request initiated by a gesture will be treated as if they
+  // were initiated by a gesture too, otherwise the navigation may be blocked.
+  virtual void UpdateUserGestureCarryoverInfo(WebContents* web_contents) {}
+#endif
+
+  // Returns true if lazy loading of images and frames should be enabled.
+  virtual bool ShouldAllowLazyLoad();
+
+  // Requests the delegate to replace |old_contents| with |new_contents| in the
+  // container that holds |old_contents|. If the  delegate successfully replaces
+  // |old_contents|, the return parameter passes ownership of |old_contents|.
+  // Otherwise, |new_contents| is returned.
+  // |did_finish_load| is true if WebContentsObserver::DidFinishLoad() has
+  // already been called for |new_contents|.
+  virtual std::unique_ptr<content::WebContents> SwapWebContents(
+      content::WebContents* old_contents,
+      std::unique_ptr<content::WebContents> new_contents,
+      bool did_start_load,
+      bool did_finish_load);
 
  protected:
   virtual ~WebContentsDelegate();

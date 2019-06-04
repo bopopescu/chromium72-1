@@ -34,6 +34,7 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_PLATFORM_GRAPHICS_SKIA_SKIA_UTILS_H_
 #define THIRD_PARTY_BLINK_RENDERER_PLATFORM_GRAPHICS_SKIA_SKIA_UTILS_H_
 
+#include "cc/paint/paint_canvas.h"
 #include "third_party/blink/renderer/platform/graphics/graphics_types.h"
 #include "third_party/blink/renderer/platform/graphics/image.h"
 #include "third_party/blink/renderer/platform/platform_export.h"
@@ -75,6 +76,10 @@ SkColor PLATFORM_EXPORT ScaleAlpha(SkColor, float);
 // Convert a SkColorSpace to a gfx::ColorSpace
 gfx::ColorSpace PLATFORM_EXPORT
 SkColorSpaceToGfxColorSpace(const sk_sp<SkColorSpace>);
+
+bool PLATFORM_EXPORT
+ApproximatelyEqualSkColorSpaces(sk_sp<SkColorSpace> src_color_space,
+                                sk_sp<SkColorSpace> dst_color_space);
 
 // Skia has problems when passed infinite, etc floats, filter them to 0.
 inline SkScalar WebCoreFloatToSkScalar(float f) {
@@ -132,16 +137,16 @@ inline SkScalar SkBlurRadiusToSigma(SkScalar radius) {
 
 template <typename PrimitiveType>
 void DrawPlatformFocusRing(const PrimitiveType&,
-                           PaintCanvas*,
+                           cc::PaintCanvas*,
                            SkColor,
                            float width);
 
 // TODO(fmalita): remove in favor of direct SrcRectConstraint use.
-inline PaintCanvas::SrcRectConstraint WebCoreClampingModeToSkiaRectConstraint(
-    Image::ImageClampingMode clamp_mode) {
+inline cc::PaintCanvas::SrcRectConstraint
+WebCoreClampingModeToSkiaRectConstraint(Image::ImageClampingMode clamp_mode) {
   return clamp_mode == Image::kClampImageToSourceRect
-             ? PaintCanvas::kStrict_SrcRectConstraint
-             : PaintCanvas::kFast_SrcRectConstraint;
+             ? cc::PaintCanvas::kStrict_SrcRectConstraint
+             : cc::PaintCanvas::kFast_SrcRectConstraint;
 }
 
 // Skia's smart pointer APIs are preferable over their legacy raw pointer

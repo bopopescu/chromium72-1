@@ -4,6 +4,7 @@
 
 #include "components/password_manager/core/browser/browser_save_password_progress_logger.h"
 
+#include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/values.h"
@@ -16,6 +17,7 @@
 #include "components/password_manager/core/browser/password_manager.h"
 
 using autofill::AutofillUploadContents;
+using base::UintToString;
 
 namespace password_manager {
 
@@ -53,18 +55,24 @@ std::string GenerationTypeToString(
   return std::string();
 }
 
-std::string ClassifierOutcomeToString(
-    AutofillUploadContents::Field::FormClassifierOutcome outcome) {
-  switch (outcome) {
-    case AutofillUploadContents::Field::NO_OUTCOME:
-      return std::string();
-    case AutofillUploadContents::Field::NON_GENERATION_ELEMENT:
-      return "Non generation element";
-    case AutofillUploadContents::Field::GENERATION_ELEMENT:
-      return "Generation element";
+std::string VoteTypeToString(
+    AutofillUploadContents::Field::VoteType vote_type) {
+  switch (vote_type) {
+    case AutofillUploadContents::Field::NO_INFORMATION:
+      return "No information";
+    case AutofillUploadContents::Field::CREDENTIALS_REUSED:
+      return "Credentials reused";
+    case AutofillUploadContents::Field::USERNAME_OVERWRITTEN:
+      return "Username overwritten";
+    case AutofillUploadContents::Field::USERNAME_EDITED:
+      return "Username edited";
+    case AutofillUploadContents::Field::BASE_HEURISTIC:
+      return "Base heuristic";
+    case AutofillUploadContents::Field::HTML_CLASSIFIER:
+      return "HTML classifier";
+    case AutofillUploadContents::Field::FIRST_USE:
+      return "First use";
   }
-  NOTREACHED();
-  return std::string();
 }
 
 }  // namespace
@@ -135,27 +143,39 @@ std::string BrowserSavePasswordProgressLogger::FormStructureToFieldsLogString(
         ScrubNonDigit(field->FieldSignatureAsStr()) +
         ", type=" + ScrubElementID(field->form_control_type);
 
+    field_info += ", renderer_id = " + UintToString(field->unique_renderer_id);
+
     if (!field->autocomplete_attribute.empty())
       field_info +=
           ", autocomplete=" + ScrubElementID(field->autocomplete_attribute);
 
-    if (!field->Type().IsUnknown())
-      field_info += ", SERVER_PREDICTION: " + field->Type().ToString();
+    if (field->server_type() != autofill::NO_SERVER_DATA) {
+      field_info +=
+          ", SERVER_PREDICTION: " +
+          autofill::AutofillType::ServerFieldTypeToString(field->server_type());
+    }
 
     for (autofill::ServerFieldType type : field->possible_types())
       field_info +=
           ", VOTE: " + autofill::AutofillType::ServerFieldTypeToString(type);
 
+    if (field->vote_type())
+      field_info += ", vote_type=" + VoteTypeToString(field->vote_type());
+
     if (field->properties_mask) {
-      field_info += ", properties = ";
+      field_info += ", properties=";
       field_info +=
           (field->properties_mask & autofill::FieldPropertiesFlags::USER_TYPED)
               ? "T"
               : "_";
-      field_info +=
-          (field->properties_mask & autofill::FieldPropertiesFlags::AUTOFILLED)
-              ? "A"
-              : "_";
+      field_info += (field->properties_mask &
+                     autofill::FieldPropertiesFlags::AUTOFILLED_ON_PAGELOAD)
+                        ? "Ap"
+                        : "__";
+      field_info += (field->properties_mask &
+                     autofill::FieldPropertiesFlags::AUTOFILLED_ON_USER_TRIGGER)
+                        ? "Au"
+                        : "__";
       field_info +=
           (field->properties_mask & autofill::FieldPropertiesFlags::HAD_FOCUS)
               ? "F"
@@ -170,11 +190,6 @@ std::string BrowserSavePasswordProgressLogger::FormStructureToFieldsLogString(
     if (!generation.empty())
       field_info += ", GENERATION_EVENT: " + generation;
 
-    std::string classifier_outcome =
-        ClassifierOutcomeToString(field->form_classifier_outcome());
-    if (!classifier_outcome.empty())
-      field_info += ", CLIENT_SIDE_CLASSIFIER: " + classifier_outcome;
-
     result += field_info + "\n";
   }
 
@@ -187,7 +202,7 @@ void BrowserSavePasswordProgressLogger::LogString(StringID label,
 }
 
 void BrowserSavePasswordProgressLogger::LogSuccessfulSubmissionIndicatorEvent(
-    autofill::PasswordForm::SubmissionIndicatorEvent event) {
+    autofill::SubmissionIndicatorEvent event) {
   std::ostringstream submission_event_string_stream;
   submission_event_string_stream << event;
   std::string message =
@@ -213,6 +228,11 @@ void BrowserSavePasswordProgressLogger::LogFormData(
   message += GetStringFromID(STRING_IS_FORM_TAG) + ": " +
              (form.is_form_tag ? "true" : "false") + "\n";
 
+  if (form.is_form_tag) {
+    message +=
+        "Form renderer id: " + UintToString(form.unique_renderer_id) + "\n";
+  }
+
   // Log fields.
   message += GetStringFromID(STRING_FIELDS) + ": " + "\n";
   for (const auto& field : form.fields) {
@@ -223,9 +243,11 @@ void BrowserSavePasswordProgressLogger::LogFormData(
             ? std::string()
             : (", autocomplete=" +
                ScrubElementID(field.autocomplete_attribute));
-    std::string field_info = ScrubElementID(field.name) + ": type=" +
-                             ScrubElementID(field.form_control_type) + ", " +
-                             is_visible + ", " + is_empty + autocomplete + "\n";
+    std::string field_info =
+        ScrubElementID(field.name) +
+        ": type=" + ScrubElementID(field.form_control_type) +
+        ", renderer_id = " + UintToString(field.unique_renderer_id) + ", " +
+        is_visible + ", " + is_empty + autocomplete + "\n";
     message += field_info;
   }
   message += "}";

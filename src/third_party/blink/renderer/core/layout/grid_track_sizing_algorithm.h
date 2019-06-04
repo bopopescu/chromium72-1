@@ -12,7 +12,7 @@
 #include "third_party/blink/renderer/core/layout/layout_box.h"
 #include "third_party/blink/renderer/core/style/grid_positions_resolver.h"
 #include "third_party/blink/renderer/core/style/grid_track_size.h"
-#include "third_party/blink/renderer/platform/layout_unit.h"
+#include "third_party/blink/renderer/platform/geometry/layout_unit.h"
 #include "third_party/blink/renderer/platform/wtf/hash_set.h"
 
 namespace blink {
@@ -94,18 +94,19 @@ class GridTrackSizingAlgorithm final {
 
   // Required by LayoutGrid. Try to minimize the exposed surface.
   const Grid& GetGrid() const { return grid_; }
-  GridTrackSize GetGridTrackSize(GridTrackSizingDirection,
-                                 size_t translated_index) const;
+  // TODO (jfernandez): We should remove any public getter for this attribute
+  // and encapsulate any access in the algorithm class.
+  Grid& GetMutableGrid() const { return grid_; }
   LayoutUnit MinContentSize() const { return min_content_size_; };
   LayoutUnit MaxContentSize() const { return max_content_size_; };
 
-  void UpdateBaselineAlignmentContextIfNeeded(LayoutBox&, GridAxis);
   LayoutUnit BaselineOffsetForChild(const LayoutBox&, GridAxis) const;
-  bool BaselineMayAffectIntrinsicSize(
-      GridTrackSizingDirection direction) const {
-    return baseline_alignment_.BaselineMayAffectIntrinsicSize(*this, direction);
-  }
-  void ClearBaselineAlignment() { baseline_alignment_.Clear(); }
+
+  void CacheBaselineAlignedItem(const LayoutBox&, GridAxis);
+  void CopyBaselineItemsCache(const GridTrackSizingAlgorithm&, GridAxis);
+  void ClearBaselineItemsCache();
+
+  LayoutSize EstimatedGridAreaBreadthForChild(const LayoutBox& child) const;
 
   Vector<GridTrack>& Tracks(GridTrackSizingDirection);
   const Vector<GridTrack>& Tracks(GridTrackSizingDirection) const;
@@ -120,11 +121,22 @@ class GridTrackSizingAlgorithm final {
   bool TracksAreWiderThanMinTrackBreadth() const;
 #endif
 
+  LayoutUnit ComputeTrackBasedSize() const;
+
+  bool HasAnyPercentSizedRowsIndefiniteHeight() const {
+    return has_percent_sized_rows_indefinite_height_;
+  }
+
  private:
   base::Optional<LayoutUnit> AvailableSpace() const;
+  bool IsRelativeGridLengthAsAuto(const GridLength&,
+                                  GridTrackSizingDirection) const;
+  bool IsRelativeSizedTrackAsAuto(const GridTrackSize&,
+                                  GridTrackSizingDirection) const;
+  GridTrackSize GetGridTrackSize(GridTrackSizingDirection,
+                                 size_t translated_index) const;
   GridTrackSize RawGridTrackSize(GridTrackSizingDirection,
                                  size_t translated_index) const;
-  LayoutUnit ComputeTrackBasedSize() const;
 
   // Helper methods for step 1. initializeTrackSizes().
   LayoutUnit InitialBaseSize(const GridTrackSize&) const;
@@ -147,9 +159,17 @@ class GridTrackSizingAlgorithm final {
       Vector<GridTrack*>& tracks,
       Vector<GridTrack*>* grow_beyond_growth_limits_tracks,
       LayoutUnit& available_logical_space) const;
+  LayoutUnit EstimatedGridAreaBreadthForChild(const LayoutBox&,
+                                              GridTrackSizingDirection) const;
   LayoutUnit GridAreaBreadthForChild(const LayoutBox&,
-                                     GridTrackSizingDirection);
+                                     GridTrackSizingDirection) const;
 
+  void ComputeBaselineAlignmentContext();
+  void UpdateBaselineAlignmentContext(const LayoutBox&, GridAxis);
+  bool CanParticipateInBaselineAlignment(const LayoutBox&, GridAxis) const;
+  bool ParticipateInBaselineAlignment(const LayoutBox&, GridAxis) const;
+
+  bool IsIntrinsicSizedGridArea(const LayoutBox&, GridAxis) const;
   void ComputeGridContainerIntrinsicSizes();
 
   // Helper methods for step 4. Strech flexible tracks.
@@ -183,7 +203,9 @@ class GridTrackSizingAlgorithm final {
   bool IsValidTransition() const;
 
   // Data.
+  bool WasSetup() const { return !!strategy_; }
   bool needs_setup_{true};
+  bool has_percent_sized_rows_indefinite_height_{false};
   base::Optional<LayoutUnit> available_space_columns_;
   base::Optional<LayoutUnit> available_space_rows_;
 
@@ -222,6 +244,9 @@ class GridTrackSizingAlgorithm final {
   SizingState sizing_state_;
 
   GridBaselineAlignment baseline_alignment_;
+  typedef HashMap<const LayoutBox*, bool> BaselineItemsCache;
+  BaselineItemsCache column_baseline_items_map_;
+  BaselineItemsCache row_baseline_items_map_;
 
   // This is a RAII class used to ensure that the track sizing algorithm is
   // executed as it is suppossed to be, i.e., first resolve columns and then
@@ -279,9 +304,6 @@ class GridTrackSizingAlgorithmStrategy {
       base::Optional<LayoutUnit> = base::nullopt) const;
   LayoutUnit ComputeTrackBasedSize() const;
 
-  base::Optional<LayoutUnit> ExtentForBaselineAlignment(
-      const LayoutBox& child) const;
-
   GridTrackSizingDirection Direction() const { return algorithm_.direction_; }
   double FindFrUnitSize(const GridSpan& tracks_span,
                         LayoutUnit left_over_space) const;
@@ -290,6 +312,11 @@ class GridTrackSizingAlgorithmStrategy {
   const LayoutGrid* GetLayoutGrid() const { return algorithm_.layout_grid_; }
   base::Optional<LayoutUnit> AvailableSpace() const {
     return algorithm_.AvailableSpace();
+  }
+
+  GridTrackSize GetGridTrackSize(GridTrackSizingDirection direction,
+                                 size_t translated_index) const {
+    return algorithm_.GetGridTrackSize(direction, translated_index);
   }
 
   // Helper functions

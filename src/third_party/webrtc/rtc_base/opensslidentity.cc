@@ -17,23 +17,22 @@
 #if defined(WEBRTC_WIN)
 // Must be included first before openssl headers.
 #include "rtc_base/win32.h"  // NOLINT
-#endif  // WEBRTC_WIN
+#endif                       // WEBRTC_WIN
 
 #include <openssl/bio.h>
 #include <openssl/bn.h>
-#include <openssl/crypto.h>
 #include <openssl/err.h>
 #include <openssl/pem.h>
 #include <openssl/rsa.h>
 
+#include <stdint.h>
+
+#include "absl/memory/memory.h"
 #include "rtc_base/checks.h"
-#include "rtc_base/helpers.h"
 #include "rtc_base/logging.h"
 #include "rtc_base/numerics/safe_conversions.h"
 #include "rtc_base/openssl.h"
-#include "rtc_base/openssldigest.h"
 #include "rtc_base/opensslutility.h"
-#include "rtc_base/ptr_util.h"
 
 namespace rtc {
 
@@ -267,9 +266,8 @@ SSLIdentity* OpenSSLIdentity::FromPEMStrings(const std::string& private_key,
 SSLIdentity* OpenSSLIdentity::FromPEMChainStrings(
     const std::string& private_key,
     const std::string& certificate_chain) {
-  BIO* bio =
-      BIO_new_mem_buf(certificate_chain.data(),
-                      rtc::dchecked_cast<int>(certificate_chain.size()));
+  BIO* bio = BIO_new_mem_buf(certificate_chain.data(),
+                             rtc::dchecked_cast<int>(certificate_chain.size()));
   if (!bio)
     return nullptr;
   BIO_set_mem_eof_return(bio, 0);
@@ -304,7 +302,7 @@ SSLIdentity* OpenSSLIdentity::FromPEMChainStrings(
   }
 
   return new OpenSSLIdentity(std::move(key_pair),
-                             MakeUnique<SSLCertChain>(std::move(certs)));
+                             absl::make_unique<SSLCertChain>(std::move(certs)));
 }
 
 const OpenSSLCertificate& OpenSSLIdentity::certificate() const {
@@ -316,8 +314,8 @@ const SSLCertChain& OpenSSLIdentity::cert_chain() const {
 }
 
 OpenSSLIdentity* OpenSSLIdentity::GetReference() const {
-  return new OpenSSLIdentity(WrapUnique(key_pair_->GetReference()),
-                             WrapUnique(cert_chain_->Copy()));
+  return new OpenSSLIdentity(absl::WrapUnique(key_pair_->GetReference()),
+                             cert_chain_->Clone());
 }
 
 bool OpenSSLIdentity::ConfigureIdentity(SSL_CTX* ctx) {

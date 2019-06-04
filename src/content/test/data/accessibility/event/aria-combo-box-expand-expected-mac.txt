@@ -1,3 +1,0 @@
-AXExpandedChanged on AXComboBox
-AXSelectedChildrenChanged on AXComboBox
-AXSelectedChildrenChanged on AXList

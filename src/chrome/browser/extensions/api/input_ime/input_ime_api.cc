@@ -9,12 +9,10 @@
 
 #include "base/lazy_instance.h"
 #include "chrome/browser/chrome_notification_types.h"
-#include "chrome/common/extensions/api/input_ime.h"
 #include "content/public/browser/notification_registrar.h"
 #include "content/public/browser/notification_service.h"
 #include "extensions/browser/extension_registry.h"
 #include "ui/base/ime/ime_bridge.h"
-#include "ui/keyboard/keyboard_util.h"
 
 namespace input_ime = extensions::api::input_ime;
 namespace KeyEventHandled = extensions::api::input_ime::KeyEventHandled;
@@ -25,8 +23,8 @@ using ui::IMEEngineHandlerInterface;
 using input_method::InputMethodEngineBase;
 
 namespace {
-const char kErrorEngineNotAvailable[] = "Engine is not available";
-const char kErrorSetKeyEventsFail[] = "Could not send key events";
+const char kInputImeApiErrorEngineNotAvailable[] = "Engine is not available";
+const char kInputImeApiErrorSetKeyEventsFail[] = "Could not send key events";
 }
 namespace ui {
 
@@ -58,6 +56,7 @@ void ImeObserver::OnFocus(
       input_ime::ParseInputContextType(ConvertInputContextType(context));
   context_value.auto_correct = ConvertInputContextAutoCorrect(context);
   context_value.auto_complete = ConvertInputContextAutoComplete(context);
+  context_value.auto_capitalize = ConvertInputContextAutoCapitalize(context);
   context_value.spell_check = ConvertInputContextSpellCheck(context);
   context_value.should_do_learning = context.should_do_learning;
 
@@ -198,6 +197,11 @@ bool ImeObserver::HasListener(const std::string& event_name) const {
   return extensions::EventRouter::Get(profile_)->HasEventListener(event_name);
 }
 
+bool ImeObserver::ExtensionHasListener(const std::string& event_name) const {
+  return extensions::EventRouter::Get(profile_)->ExtensionHasEventListener(
+      extension_id_, event_name);
+}
+
 std::string ImeObserver::ConvertInputContextType(
     ui::IMEEngineHandlerInterface::InputContext input_context) {
   std::string input_context_type = "text";
@@ -229,20 +233,29 @@ std::string ImeObserver::ConvertInputContextType(
 
 bool ImeObserver::ConvertInputContextAutoCorrect(
     ui::IMEEngineHandlerInterface::InputContext input_context) {
-  return keyboard::GetKeyboardConfig().auto_correct &&
-         !(input_context.flags & ui::TEXT_INPUT_FLAG_AUTOCORRECT_OFF);
+  return !(input_context.flags & ui::TEXT_INPUT_FLAG_AUTOCORRECT_OFF);
 }
 
 bool ImeObserver::ConvertInputContextAutoComplete(
     ui::IMEEngineHandlerInterface::InputContext input_context) {
-  return keyboard::GetKeyboardConfig().auto_complete &&
-         !(input_context.flags & ui::TEXT_INPUT_FLAG_AUTOCOMPLETE_OFF);
+  return !(input_context.flags & ui::TEXT_INPUT_FLAG_AUTOCOMPLETE_OFF);
+}
+
+input_ime::AutoCapitalizeType ImeObserver::ConvertInputContextAutoCapitalize(
+    ui::IMEEngineHandlerInterface::InputContext input_context) {
+  if (input_context.flags & ui::TEXT_INPUT_FLAG_AUTOCAPITALIZE_NONE)
+    return input_ime::AUTO_CAPITALIZE_TYPE_NONE;
+  if (input_context.flags & ui::TEXT_INPUT_FLAG_AUTOCAPITALIZE_CHARACTERS)
+    return input_ime::AUTO_CAPITALIZE_TYPE_CHARACTERS;
+  if (input_context.flags & ui::TEXT_INPUT_FLAG_AUTOCAPITALIZE_WORDS)
+    return input_ime::AUTO_CAPITALIZE_TYPE_WORDS;
+  // The default value is "sentences".
+  return input_ime::AUTO_CAPITALIZE_TYPE_SENTENCES;
 }
 
 bool ImeObserver::ConvertInputContextSpellCheck(
     ui::IMEEngineHandlerInterface::InputContext input_context) {
-  return keyboard::GetKeyboardConfig().spell_check &&
-         !(input_context.flags & ui::TEXT_INPUT_FLAG_SPELLCHECK_OFF);
+  return !(input_context.flags & ui::TEXT_INPUT_FLAG_SPELLCHECK_OFF);
 }
 
 }  // namespace ui
@@ -262,9 +275,18 @@ InputImeEventRouterFactory::~InputImeEventRouterFactory() {
 InputImeEventRouter* InputImeEventRouterFactory::GetRouter(Profile* profile) {
   if (!profile)
     return nullptr;
+  // The |router_map_| is keyed by the original profile.
+  // Refers to the comments in |RemoveProfile| method for the reason.
+  profile = profile->GetOriginalProfile();
   InputImeEventRouter* router = router_map_[profile];
   if (!router) {
-    router = new InputImeEventRouter(profile);
+    // The router must attach to the profile from which the extension can
+    // receive events. If |profile| has an off-the-record profile, attach the
+    // off-the-record profile. e.g. In guest mode, the extension is running with
+    // the incognito profile instead of its original profile.
+    router = new InputImeEventRouter(profile->HasOffTheRecordProfile()
+                                         ? profile->GetOffTheRecordProfile()
+                                         : profile);
     router_map_[profile] = router;
   }
   return router;
@@ -274,6 +296,10 @@ void InputImeEventRouterFactory::RemoveProfile(Profile* profile) {
   if (!profile || router_map_.empty())
     return;
   auto it = router_map_.find(profile);
+  // The routers are common between an incognito profile and its original
+  // profile, and are keyed on the original profiles.
+  // When a profile is removed, exact matching is used to ensure that the router
+  // is deleted only when the original profile is removed.
   if (it != router_map_.end() && it->first == profile) {
     delete it->second;
     router_map_.erase(it);
@@ -368,7 +394,7 @@ ExtensionFunction::ResponseAction InputImeSendKeyEventsFunction::Run() {
   InputMethodEngineBase* engine =
       event_router ? event_router->GetActiveEngine(extension_id()) : nullptr;
   if (!engine)
-    return RespondNow(Error(kErrorEngineNotAvailable));
+    return RespondNow(Error(kInputImeApiErrorEngineNotAvailable));
 
   std::unique_ptr<SendKeyEvents::Params> parent_params(
       SendKeyEvents::Params::Create(*args_));
@@ -389,7 +415,7 @@ ExtensionFunction::ResponseAction InputImeSendKeyEventsFunction::Run() {
     event.caps_lock = key_event.caps_lock ? *(key_event.caps_lock) : false;
   }
   if (!engine->SendKeyEvents(params.context_id, key_data_out))
-    return RespondNow(Error(kErrorSetKeyEventsFail));
+    return RespondNow(Error(kInputImeApiErrorSetKeyEventsFail));
   return RespondNow(NoArguments());
 }
 
@@ -432,8 +458,6 @@ BrowserContextKeyedAPIFactory<InputImeAPI>* InputImeAPI::GetFactoryInstance() {
 InputImeEventRouter* GetInputImeEventRouter(Profile* profile) {
   if (!profile)
     return nullptr;
-  if (profile->HasOffTheRecordProfile())
-    profile = profile->GetOffTheRecordProfile();
   return extensions::InputImeEventRouterFactory::GetInstance()->GetRouter(
       profile);
 }

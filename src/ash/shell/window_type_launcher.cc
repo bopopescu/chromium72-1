@@ -11,10 +11,7 @@
 #include "ash/session/session_controller.h"
 #include "ash/shell.h"
 #include "ash/shell/example_factory.h"
-#include "ash/shell/panel_window.h"
 #include "ash/shell/toplevel_window.h"
-#include "ash/system/message_center/notification_tray.h"
-#include "ash/system/status_area_widget.h"
 #include "ash/wm/test_child_modal_parent.h"
 #include "base/strings/utf_string_conversions.h"
 #include "ui/aura/window.h"
@@ -178,8 +175,6 @@ WindowTypeLauncher::WindowTypeLauncher(
     const base::Closure& show_views_examples_callback)
     : create_button_(
           MdTextButton::Create(this, base::ASCIIToUTF16("Create Window"))),
-      panel_button_(
-          MdTextButton::Create(this, base::ASCIIToUTF16("Create Panel"))),
       create_nonresizable_button_(MdTextButton::Create(
           this,
           base::ASCIIToUTF16("Create Non-Resizable Window"))),
@@ -219,7 +214,6 @@ WindowTypeLauncher::WindowTypeLauncher(
   column_set->AddColumn(views::GridLayout::LEADING, views::GridLayout::CENTER,
                         0, views::GridLayout::USE_PREF, 0, 0);
   AddViewToLayout(layout, create_button_);
-  AddViewToLayout(layout, panel_button_);
   AddViewToLayout(layout, create_nonresizable_button_);
   AddViewToLayout(layout, bubble_button_);
   AddViewToLayout(layout, lock_button_);
@@ -268,8 +262,6 @@ void WindowTypeLauncher::ButtonPressed(views::Button* sender,
     params.can_resize = true;
     params.can_maximize = true;
     ToplevelWindow::CreateToplevelWindow(params);
-  } else if (sender == panel_button_) {
-    PanelWindow::CreatePanelWindow(gfx::Rect());
   } else if (sender == create_nonresizable_button_) {
     ToplevelWindow::CreateToplevelWindow(ToplevelWindow::CreateParams());
   } else if (sender == bubble_button_) {
@@ -285,27 +277,24 @@ void WindowTypeLauncher::ButtonPressed(views::Button* sender,
     ModalWindow::OpenModalWindow(GetWidget()->GetNativeView(),
                                  ui::MODAL_TYPE_WINDOW);
   } else if (sender == child_modal_button_) {
-    TestChildModalParent::Create();
+    TestChildModalParent::Show(GetWidget()->GetNativeView()->GetRootWindow());
   } else if (sender == transient_button_) {
     NonModalTransient::OpenNonModalTransient(GetWidget()->GetNativeView());
   } else if (sender == show_hide_window_button_) {
     NonModalTransient::ToggleNonModalTransient(GetWidget()->GetNativeView());
   } else if (sender == show_web_notification_) {
-    std::unique_ptr<message_center::Notification> notification;
-    notification.reset(new message_center::Notification(
-        message_center::NOTIFICATION_TYPE_SIMPLE, "id0",
-        base::ASCIIToUTF16("Test Shell Web Notification"),
-        base::ASCIIToUTF16("Notification message body."), gfx::Image(),
-        base::ASCIIToUTF16("www.testshell.org"), GURL(),
-        message_center::NotifierId(message_center::NotifierId::APPLICATION,
-                                   "test-id"),
-        message_center::RichNotificationData(), NULL /* delegate */));
+    std::unique_ptr<message_center::Notification> notification =
+        std::make_unique<message_center::Notification>(
+            message_center::NOTIFICATION_TYPE_SIMPLE, "id0",
+            base::ASCIIToUTF16("Test Shell Web Notification"),
+            base::ASCIIToUTF16("Notification message body."), gfx::Image(),
+            base::ASCIIToUTF16("www.testshell.org"), GURL(),
+            message_center::NotifierId(
+                message_center::NotifierType::APPLICATION, "test-id"),
+            message_center::RichNotificationData(), nullptr /* delegate */);
 
-    Shell::GetPrimaryRootWindowController()
-        ->GetStatusAreaWidget()
-        ->notification_tray()
-        ->message_center()
-        ->AddNotification(std::move(notification));
+    message_center::MessageCenter::Get()->AddNotification(
+        std::move(notification));
   } else if (sender == examples_button_) {
     show_views_examples_callback_.Run();
   }

@@ -9,7 +9,7 @@
 #include "base/bind.h"
 #include "base/files/file_path.h"
 #include "base/strings/sys_string_conversions.h"
-#include "base/task_scheduler/post_task.h"
+#include "base/task/post_task.h"
 #include "base/threading/thread.h"
 #include "ui/gfx/image/image_skia.h"
 #include "ui/gfx/image/image_skia_util_mac.h"
@@ -35,7 +35,7 @@ void IconLoader::ReadIcon() {
 
   if (icon_size_ == ALL) {
     // The NSImage already has all sizes.
-    image = std::make_unique<gfx::Image>([icon retain]);
+    image = std::make_unique<gfx::Image>(icon);
   } else {
     NSSize size = NSZeroSize;
     switch (icon_size_) {

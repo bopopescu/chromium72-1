@@ -29,13 +29,17 @@ static const int kIndicesPerRect = 6;
 
     The vertex attrib order is always pos, color, [local coords].
  */
-static sk_sp<GrGeometryProcessor> make_gp() {
+static sk_sp<GrGeometryProcessor> make_gp(const GrShaderCaps* shaderCaps) {
     using namespace GrDefaultGeoProcFactory;
-    return GrDefaultGeoProcFactory::Make(Color::kPremulGrColorAttribute_Type, Coverage::kSolid_Type,
-                                         LocalCoords::kHasExplicit_Type, SkMatrix::I());
+    return GrDefaultGeoProcFactory::Make(shaderCaps,
+                                         Color::kPremulGrColorAttribute_Type,
+                                         Coverage::kSolid_Type,
+                                         LocalCoords::kHasExplicit_Type,
+                                         SkMatrix::I());
 }
 
-static sk_sp<GrGeometryProcessor> make_perspective_gp(const SkMatrix& viewMatrix,
+static sk_sp<GrGeometryProcessor> make_perspective_gp(const GrShaderCaps* shaderCaps,
+                                                      const SkMatrix& viewMatrix,
                                                       bool hasExplicitLocalCoords,
                                                       const SkMatrix* localMatrix) {
     SkASSERT(viewMatrix.hasPerspective() || (localMatrix && localMatrix->hasPerspective()));
@@ -50,15 +54,16 @@ static sk_sp<GrGeometryProcessor> make_perspective_gp(const SkMatrix& viewMatrix
         LocalCoords localCoords(hasExplicitLocalCoords ? LocalCoords::kHasExplicit_Type
                                                        : LocalCoords::kUsePosition_Type,
                                 localMatrix);
-        return GrDefaultGeoProcFactory::Make(Color::kPremulGrColorAttribute_Type,
+        return GrDefaultGeoProcFactory::Make(shaderCaps, Color::kPremulGrColorAttribute_Type,
                                              Coverage::kSolid_Type, localCoords, viewMatrix);
     } else if (hasExplicitLocalCoords) {
         LocalCoords localCoords(LocalCoords::kHasExplicit_Type, localMatrix);
-        return GrDefaultGeoProcFactory::Make(Color::kPremulGrColorAttribute_Type,
+        return GrDefaultGeoProcFactory::Make(shaderCaps, Color::kPremulGrColorAttribute_Type,
                                              Coverage::kSolid_Type, localCoords, SkMatrix::I());
     } else {
         LocalCoords localCoords(LocalCoords::kUsePosition_Type, localMatrix);
-        return GrDefaultGeoProcFactory::MakeForDeviceSpace(Color::kPremulGrColorAttribute_Type,
+        return GrDefaultGeoProcFactory::MakeForDeviceSpace(shaderCaps,
+                                                           Color::kPremulGrColorAttribute_Type,
                                                            Coverage::kSolid_Type, localCoords,
                                                            viewMatrix);
     }
@@ -104,20 +109,26 @@ private:
     using Helper = GrSimpleMeshDrawOpHelperWithStencil;
 
 public:
-    static std::unique_ptr<GrDrawOp> Make(GrPaint&& paint, const SkMatrix& viewMatrix,
-                                          const SkRect& rect, const SkRect* localRect,
-                                          const SkMatrix* localMatrix, GrAAType aaType,
+    static std::unique_ptr<GrDrawOp> Make(GrContext* context,
+                                          GrPaint&& paint,
+                                          const SkMatrix& viewMatrix,
+                                          const SkRect& rect,
+                                          const SkRect* localRect,
+                                          const SkMatrix* localMatrix,
+                                          GrAAType aaType,
                                           const GrUserStencilSettings* stencilSettings) {
         SkASSERT(GrAAType::kCoverage != aaType);
-        return Helper::FactoryHelper<NonAAFillRectOp>(std::move(paint), viewMatrix, rect, localRect,
-                                                      localMatrix, aaType, stencilSettings);
+        return Helper::FactoryHelper<NonAAFillRectOp>(context, std::move(paint), viewMatrix, rect,
+                                                      localRect, localMatrix, aaType,
+                                                      stencilSettings);
     }
 
     NonAAFillRectOp() = delete;
 
-    NonAAFillRectOp(const Helper::MakeArgs& args, GrColor color, const SkMatrix& viewMatrix,
-                    const SkRect& rect, const SkRect* localRect, const SkMatrix* localMatrix,
-                    GrAAType aaType, const GrUserStencilSettings* stencilSettings)
+    NonAAFillRectOp(const Helper::MakeArgs& args, const SkPMColor4f& color,
+                    const SkMatrix& viewMatrix, const SkRect& rect, const SkRect* localRect,
+                    const SkMatrix* localMatrix, GrAAType aaType,
+                    const GrUserStencilSettings* stencilSettings)
             : INHERITED(ClassID()), fHelper(args, aaType, stencilSettings) {
 
         SkASSERT(!viewMatrix.hasPerspective() && (!localMatrix || !localMatrix->hasPerspective()));
@@ -139,10 +150,11 @@ public:
 
     const char* name() const override { return "NonAAFillRectOp"; }
 
-    void visitProxies(const VisitProxyFunc& func) const override {
+    void visitProxies(const VisitProxyFunc& func, VisitorType) const override {
         fHelper.visitProxies(func);
     }
 
+#ifdef SK_DEBUG
     SkString dumpInfo() const override {
         SkString str;
         str.append(GrMeshDrawOp::dumpInfo());
@@ -150,19 +162,18 @@ public:
         for (int i = 0; i < fRects.count(); ++i) {
             const RectInfo& info = fRects[i];
             str.appendf("%d: Color: 0x%08x, Rect [L: %.2f, T: %.2f, R: %.2f, B: %.2f]\n", i,
-                        info.fColor, info.fRect.fLeft, info.fRect.fTop, info.fRect.fRight,
-                        info.fRect.fBottom);
+                        info.fColor.toBytes_RGBA(), info.fRect.fLeft, info.fRect.fTop,
+                        info.fRect.fRight, info.fRect.fBottom);
         }
         str += fHelper.dumpInfo();
         str += INHERITED::dumpInfo();
         return str;
     }
+#endif
 
-    RequiresDstTexture finalize(const GrCaps& caps, const GrAppliedClip* clip,
-                                GrPixelConfigIsClamped dstIsClamped) override {
-        GrColor* color = &fRects.front().fColor;
-        return fHelper.xpRequiresDstTexture(caps, clip, dstIsClamped,
-                                            GrProcessorAnalysisCoverage::kNone, color);
+    RequiresDstTexture finalize(const GrCaps& caps, const GrAppliedClip* clip) override {
+        SkPMColor4f* color = &fRects.front().fColor;
+        return fHelper.xpRequiresDstTexture(caps, clip, GrProcessorAnalysisCoverage::kNone, color);
     }
 
     FixedFunctionFlags fixedFunctionFlags() const override { return fHelper.fixedFunctionFlags(); }
@@ -171,21 +182,19 @@ public:
 
 private:
     void onPrepareDraws(Target* target) override {
-        sk_sp<GrGeometryProcessor> gp = make_gp();
+        sk_sp<GrGeometryProcessor> gp = make_gp(target->caps().shaderCaps());
         if (!gp) {
             SkDebugf("Couldn't create GrGeometryProcessor\n");
             return;
         }
-        SkASSERT(gp->getVertexStride() ==
-                 sizeof(GrDefaultGeoProcFactory::PositionColorLocalCoordAttr));
 
-        size_t vertexStride = gp->getVertexStride();
+        size_t kVertexStride = gp->vertexStride();
         int rectCount = fRects.count();
 
         sk_sp<const GrBuffer> indexBuffer = target->resourceProvider()->refQuadIndexBuffer();
-        PatternHelper helper(GrPrimitiveType::kTriangles);
-        void* vertices = helper.init(target, vertexStride, indexBuffer.get(), kVertsPerRect,
-                                     kIndicesPerRect, rectCount);
+        PatternHelper helper(target, GrPrimitiveType::kTriangles, kVertexStride, indexBuffer.get(),
+                             kVertsPerRect, kIndicesPerRect, rectCount);
+        void* vertices = helper.vertices();
         if (!vertices || !indexBuffer) {
             SkDebugf("Could not allocate vertices\n");
             return;
@@ -193,25 +202,26 @@ private:
 
         for (int i = 0; i < rectCount; i++) {
             intptr_t verts =
-                    reinterpret_cast<intptr_t>(vertices) + i * kVertsPerRect * vertexStride;
-            tesselate(verts, vertexStride, fRects[i].fColor, &fRects[i].fViewMatrix,
+                    reinterpret_cast<intptr_t>(vertices) + i * kVertsPerRect * kVertexStride;
+            // TODO4F: Preserve float colors
+            tesselate(verts, kVertexStride, fRects[i].fColor.toBytes_RGBA(), &fRects[i].fViewMatrix,
                       fRects[i].fRect, &fRects[i].fLocalQuad);
         }
-        helper.recordDraw(target, gp.get(), fHelper.makePipeline(target));
+        auto pipe = fHelper.makePipeline(target);
+        helper.recordDraw(target, std::move(gp), pipe.fPipeline, pipe.fFixedDynamicState);
     }
 
-    bool onCombineIfPossible(GrOp* t, const GrCaps& caps) override {
+    CombineResult onCombineIfPossible(GrOp* t, const GrCaps& caps) override {
         NonAAFillRectOp* that = t->cast<NonAAFillRectOp>();
         if (!fHelper.isCompatible(that->fHelper, caps, this->bounds(), that->bounds())) {
-            return false;
+            return CombineResult::kCannotCombine;
         }
         fRects.push_back_n(that->fRects.count(), that->fRects.begin());
-        this->joinBounds(*that);
-        return true;
+        return CombineResult::kMerged;
     }
 
     struct RectInfo {
-        GrColor fColor;
+        SkPMColor4f fColor;
         SkMatrix fViewMatrix;
         SkRect fRect;
         GrQuad fLocalQuad;
@@ -228,19 +238,24 @@ private:
     using Helper = GrSimpleMeshDrawOpHelperWithStencil;
 
 public:
-    static std::unique_ptr<GrDrawOp> Make(GrPaint&& paint, const SkMatrix& viewMatrix,
-                                          const SkRect& rect, const SkRect* localRect,
-                                          const SkMatrix* localMatrix, GrAAType aaType,
+    static std::unique_ptr<GrDrawOp> Make(GrContext* context,
+                                          GrPaint&& paint,
+                                          const SkMatrix& viewMatrix,
+                                          const SkRect& rect,
+                                          const SkRect* localRect,
+                                          const SkMatrix* localMatrix,
+                                          GrAAType aaType,
                                           const GrUserStencilSettings* stencilSettings) {
         SkASSERT(GrAAType::kCoverage != aaType);
-        return Helper::FactoryHelper<NonAAFillRectPerspectiveOp>(std::move(paint), viewMatrix, rect,
+        return Helper::FactoryHelper<NonAAFillRectPerspectiveOp>(context, std::move(paint),
+                                                                 viewMatrix, rect,
                                                                  localRect, localMatrix, aaType,
                                                                  stencilSettings);
     }
 
     NonAAFillRectPerspectiveOp() = delete;
 
-    NonAAFillRectPerspectiveOp(const Helper::MakeArgs& args, GrColor color,
+    NonAAFillRectPerspectiveOp(const Helper::MakeArgs& args, const SkPMColor4f& color,
                                const SkMatrix& viewMatrix, const SkRect& rect,
                                const SkRect* localRect, const SkMatrix* localMatrix,
                                GrAAType aaType, const GrUserStencilSettings* stencilSettings)
@@ -264,29 +279,29 @@ public:
 
     const char* name() const override { return "NonAAFillRectPerspectiveOp"; }
 
-    void visitProxies(const VisitProxyFunc& func) const override {
+    void visitProxies(const VisitProxyFunc& func, VisitorType) const override {
         fHelper.visitProxies(func);
     }
 
+#ifdef SK_DEBUG
     SkString dumpInfo() const override {
         SkString str;
         str.appendf("# combined: %d\n", fRects.count());
         for (int i = 0; i < fRects.count(); ++i) {
             const RectInfo& geo = fRects[i];
             str.appendf("%d: Color: 0x%08x, Rect [L: %.2f, T: %.2f, R: %.2f, B: %.2f]\n", i,
-                        geo.fColor, geo.fRect.fLeft, geo.fRect.fTop, geo.fRect.fRight,
-                        geo.fRect.fBottom);
+                        geo.fColor.toBytes_RGBA(), geo.fRect.fLeft, geo.fRect.fTop,
+                        geo.fRect.fRight, geo.fRect.fBottom);
         }
         str += fHelper.dumpInfo();
         str += INHERITED::dumpInfo();
         return str;
     }
+#endif
 
-    RequiresDstTexture finalize(const GrCaps& caps, const GrAppliedClip* clip,
-                                GrPixelConfigIsClamped dstIsClamped) override {
-        GrColor* color = &fRects.front().fColor;
-        return fHelper.xpRequiresDstTexture(caps, clip, dstIsClamped,
-                                            GrProcessorAnalysisCoverage::kNone, color);
+    RequiresDstTexture finalize(const GrCaps& caps, const GrAppliedClip* clip) override {
+        SkPMColor4f* color = &fRects.front().fColor;
+        return fHelper.xpRequiresDstTexture(caps, clip, GrProcessorAnalysisCoverage::kNone, color);
     }
 
     FixedFunctionFlags fixedFunctionFlags() const override { return fHelper.fixedFunctionFlags(); }
@@ -296,24 +311,21 @@ public:
 private:
     void onPrepareDraws(Target* target) override {
         sk_sp<GrGeometryProcessor> gp = make_perspective_gp(
-                fViewMatrix, fHasLocalRect, fHasLocalMatrix ? &fLocalMatrix : nullptr);
+                target->caps().shaderCaps(),
+                fViewMatrix,
+                fHasLocalRect,
+                fHasLocalMatrix ? &fLocalMatrix : nullptr);
         if (!gp) {
             SkDebugf("Couldn't create GrGeometryProcessor\n");
             return;
         }
-        SkASSERT(fHasLocalRect
-                         ? gp->getVertexStride() ==
-                                   sizeof(GrDefaultGeoProcFactory::PositionColorLocalCoordAttr)
-                         : gp->getVertexStride() ==
-                                   sizeof(GrDefaultGeoProcFactory::PositionColorAttr));
-
-        size_t vertexStride = gp->getVertexStride();
+        size_t vertexStride = gp->vertexStride();
         int rectCount = fRects.count();
 
         sk_sp<const GrBuffer> indexBuffer = target->resourceProvider()->refQuadIndexBuffer();
-        PatternHelper helper(GrPrimitiveType::kTriangles);
-        void* vertices = helper.init(target, vertexStride, indexBuffer.get(), kVertsPerRect,
-                                     kIndicesPerRect, rectCount);
+        PatternHelper helper(target, GrPrimitiveType::kTriangles, vertexStride, indexBuffer.get(),
+                             kVertsPerRect, kIndicesPerRect, rectCount);
+        void* vertices = helper.vertices();
         if (!vertices || !indexBuffer) {
             SkDebugf("Could not allocate vertices\n");
             return;
@@ -321,43 +333,45 @@ private:
 
         for (int i = 0; i < rectCount; i++) {
             const RectInfo& info = fRects[i];
+            // TODO4F: Preserve float colors
+            GrColor color = info.fColor.toBytes_RGBA();
             intptr_t verts =
                     reinterpret_cast<intptr_t>(vertices) + i * kVertsPerRect * vertexStride;
             if (fHasLocalRect) {
                 GrQuad quad(info.fLocalRect);
-                tesselate(verts, vertexStride, info.fColor, nullptr, info.fRect, &quad);
+                tesselate(verts, vertexStride, color, nullptr, info.fRect, &quad);
             } else {
-                tesselate(verts, vertexStride, info.fColor, nullptr, info.fRect, nullptr);
+                tesselate(verts, vertexStride, color, nullptr, info.fRect, nullptr);
             }
         }
-        helper.recordDraw(target, gp.get(), fHelper.makePipeline(target));
+        auto pipe = fHelper.makePipeline(target);
+        helper.recordDraw(target, std::move(gp), pipe.fPipeline, pipe.fFixedDynamicState);
     }
 
-    bool onCombineIfPossible(GrOp* t, const GrCaps& caps) override {
+    CombineResult onCombineIfPossible(GrOp* t, const GrCaps& caps) override {
         NonAAFillRectPerspectiveOp* that = t->cast<NonAAFillRectPerspectiveOp>();
         if (!fHelper.isCompatible(that->fHelper, caps, this->bounds(), that->bounds())) {
-            return false;
+            return CombineResult::kCannotCombine;
         }
 
         // We could combine across perspective vm changes if we really wanted to.
         if (!fViewMatrix.cheapEqualTo(that->fViewMatrix)) {
-            return false;
+            return CombineResult::kCannotCombine;
         }
         if (fHasLocalRect != that->fHasLocalRect) {
-            return false;
+            return CombineResult::kCannotCombine;
         }
         if (fHasLocalMatrix && !fLocalMatrix.cheapEqualTo(that->fLocalMatrix)) {
-            return false;
+            return CombineResult::kCannotCombine;
         }
 
         fRects.push_back_n(that->fRects.count(), that->fRects.begin());
-        this->joinBounds(*that);
-        return true;
+        return CombineResult::kMerged;
     }
 
     struct RectInfo {
         SkRect fRect;
-        GrColor fColor;
+        SkPMColor4f fColor;
         SkRect fLocalRect;
     };
 
@@ -375,39 +389,50 @@ private:
 
 namespace GrRectOpFactory {
 
-std::unique_ptr<GrDrawOp> MakeNonAAFill(GrPaint&& paint, const SkMatrix& viewMatrix,
-                                        const SkRect& rect, GrAAType aaType,
+std::unique_ptr<GrDrawOp> MakeNonAAFill(GrContext* context,
+                                        GrPaint&& paint,
+                                        const SkMatrix& viewMatrix,
+                                        const SkRect& rect,
+                                        GrAAType aaType,
                                         const GrUserStencilSettings* stencilSettings) {
     if (viewMatrix.hasPerspective()) {
-        return NonAAFillRectPerspectiveOp::Make(std::move(paint), viewMatrix, rect, nullptr,
-                                                nullptr, aaType, stencilSettings);
+        return NonAAFillRectPerspectiveOp::Make(context, std::move(paint), viewMatrix, rect,
+                                                nullptr, nullptr, aaType, stencilSettings);
     } else {
-        return NonAAFillRectOp::Make(std::move(paint), viewMatrix, rect, nullptr, nullptr, aaType,
-                                     stencilSettings);
-    }
-}
-
-std::unique_ptr<GrDrawOp> MakeNonAAFillWithLocalMatrix(
-        GrPaint&& paint, const SkMatrix& viewMatrix, const SkMatrix& localMatrix,
-        const SkRect& rect, GrAAType aaType, const GrUserStencilSettings* stencilSettings) {
-    if (viewMatrix.hasPerspective() || localMatrix.hasPerspective()) {
-        return NonAAFillRectPerspectiveOp::Make(std::move(paint), viewMatrix, rect, nullptr,
-                                                &localMatrix, aaType, stencilSettings);
-    } else {
-        return NonAAFillRectOp::Make(std::move(paint), viewMatrix, rect, nullptr, &localMatrix,
+        return NonAAFillRectOp::Make(context, std::move(paint), viewMatrix, rect, nullptr, nullptr,
                                      aaType, stencilSettings);
     }
 }
 
-std::unique_ptr<GrDrawOp> MakeNonAAFillWithLocalRect(GrPaint&& paint, const SkMatrix& viewMatrix,
-                                                     const SkRect& rect, const SkRect& localRect,
+std::unique_ptr<GrDrawOp> MakeNonAAFillWithLocalMatrix(
+                                                    GrContext* context,
+                                                    GrPaint&& paint,
+                                                    const SkMatrix& viewMatrix,
+                                                    const SkMatrix& localMatrix,
+                                                    const SkRect& rect,
+                                                    GrAAType aaType,
+                                                    const GrUserStencilSettings* stencilSettings) {
+    if (viewMatrix.hasPerspective() || localMatrix.hasPerspective()) {
+        return NonAAFillRectPerspectiveOp::Make(context, std::move(paint), viewMatrix, rect,
+                                                nullptr, &localMatrix, aaType, stencilSettings);
+    } else {
+        return NonAAFillRectOp::Make(context, std::move(paint), viewMatrix, rect, nullptr,
+                                     &localMatrix, aaType, stencilSettings);
+    }
+}
+
+std::unique_ptr<GrDrawOp> MakeNonAAFillWithLocalRect(GrContext* context,
+                                                     GrPaint&& paint,
+                                                     const SkMatrix& viewMatrix,
+                                                     const SkRect& rect,
+                                                     const SkRect& localRect,
                                                      GrAAType aaType) {
     if (viewMatrix.hasPerspective()) {
-        return NonAAFillRectPerspectiveOp::Make(std::move(paint), viewMatrix, rect, &localRect,
-                                                nullptr, aaType, nullptr);
+        return NonAAFillRectPerspectiveOp::Make(context, std::move(paint), viewMatrix, rect,
+                                                &localRect, nullptr, aaType, nullptr);
     } else {
-        return NonAAFillRectOp::Make(std::move(paint), viewMatrix, rect, &localRect, nullptr,
-                                     aaType, nullptr);
+        return NonAAFillRectOp::Make(context, std::move(paint), viewMatrix, rect, &localRect,
+                                     nullptr, aaType, nullptr);
     }
 }
 
@@ -430,10 +455,11 @@ GR_DRAW_OP_TEST_DEFINE(NonAAFillRectOp) {
     const SkRect* lr = random->nextBool() ? &localRect : nullptr;
     const SkMatrix* lm = random->nextBool() ? &localMatrix : nullptr;
     if (viewMatrix.hasPerspective() || (lm && lm->hasPerspective())) {
-        return NonAAFillRectPerspectiveOp::Make(std::move(paint), viewMatrix, rect, lr, lm, aaType,
-                                                stencil);
+        return NonAAFillRectPerspectiveOp::Make(context, std::move(paint), viewMatrix, rect,
+                                                lr, lm, aaType, stencil);
     } else {
-        return NonAAFillRectOp::Make(std::move(paint), viewMatrix, rect, lr, lm, aaType, stencil);
+        return NonAAFillRectOp::Make(context, std::move(paint), viewMatrix, rect,
+                                     lr, lm, aaType, stencil);
     }
 }
 

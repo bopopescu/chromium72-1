@@ -5,12 +5,11 @@
 #include "net/third_party/quic/core/crypto/quic_random.h"
 
 #include "base/macros.h"
-#include "base/memory/singleton.h"
-#include "crypto/random.h"
 #include "net/third_party/quic/platform/api/quic_bug_tracker.h"
 #include "net/third_party/quic/platform/api/quic_singleton.h"
+#include "third_party/boringssl/src/include/openssl/rand.h"
 
-namespace net {
+namespace quic {
 
 namespace {
 
@@ -21,14 +20,14 @@ class DefaultRandom : public QuicRandom {
   // QuicRandom implementation
   void RandBytes(void* data, size_t len) override;
   uint64_t RandUint64() override;
-  void Reseed(const void* additional_entropy, size_t entropy_len) override;
 
  private:
   DefaultRandom() {}
+  DefaultRandom(const DefaultRandom&) = delete;
+  DefaultRandom& operator=(const DefaultRandom&) = delete;
   ~DefaultRandom() override {}
 
   friend QuicSingletonFriend<DefaultRandom>;
-  DISALLOW_COPY_AND_ASSIGN(DefaultRandom);
 };
 
 DefaultRandom* DefaultRandom::GetInstance() {
@@ -36,17 +35,13 @@ DefaultRandom* DefaultRandom::GetInstance() {
 }
 
 void DefaultRandom::RandBytes(void* data, size_t len) {
-  crypto::RandBytes(data, len);
+  RAND_bytes(reinterpret_cast<uint8_t*>(data), len);
 }
 
 uint64_t DefaultRandom::RandUint64() {
   uint64_t value;
   RandBytes(&value, sizeof(value));
   return value;
-}
-
-void DefaultRandom::Reseed(const void* additional_entropy, size_t entropy_len) {
-  // No such function exists in crypto/random.h.
 }
 
 }  // namespace
@@ -56,4 +51,4 @@ QuicRandom* QuicRandom::GetInstance() {
   return DefaultRandom::GetInstance();
 }
 
-}  // namespace net
+}  // namespace quic

@@ -6,6 +6,7 @@
 
 #include <memory>
 
+#include "base/bind.h"
 #include "base/command_line.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/run_loop.h"
@@ -13,6 +14,10 @@
 #include "chrome/browser/chromeos/arc/arc_util.h"
 #include "chrome/browser/chromeos/arc/test/arc_data_removed_waiter.h"
 #include "chrome/browser/chromeos/login/users/fake_chrome_user_manager.h"
+#include "chrome/browser/consent_auditor/consent_auditor_factory.h"
+#include "chrome/browser/consent_auditor/consent_auditor_test_utils.h"
+#include "chrome/browser/signin/identity_test_environment_profile_adaptor.h"
+#include "chrome/grit/generated_resources.h"
 #include "chrome/test/base/testing_profile.h"
 #include "chromeos/dbus/dbus_thread_manager.h"
 #include "chromeos/dbus/fake_session_manager_client.h"
@@ -20,13 +25,24 @@
 #include "components/arc/arc_session_runner.h"
 #include "components/arc/arc_util.h"
 #include "components/arc/test/fake_arc_session.h"
+#include "components/consent_auditor/fake_consent_auditor.h"
 #include "components/sync_preferences/testing_pref_service_syncable.h"
 #include "components/user_manager/scoped_user_manager.h"
 #include "content/public/test/test_browser_thread_bundle.h"
+#include "services/identity/public/cpp/identity_manager.h"
+#include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
+
+using ArcPlayTermsOfServiceConsent =
+    sync_pb::UserConsentTypes::ArcPlayTermsOfServiceConsent;
+using sync_pb::UserConsentTypes;
+using testing::_;
 
 namespace arc {
 namespace {
+
+constexpr char kTestEmail[] = "user@gmail.com";
+constexpr char kTestGaiaId[] = "1234567890";
 
 class ArcPlayStoreEnabledPreferenceHandlerTest : public testing::Test {
  public:
@@ -45,9 +61,15 @@ class ArcPlayStoreEnabledPreferenceHandlerTest : public testing::Test {
 
     ASSERT_TRUE(temp_dir_.CreateUniqueTempDir());
     TestingProfile::Builder profile_builder;
-    profile_builder.SetProfileName("user@gmail.com");
+    profile_builder.SetProfileName(kTestEmail);
     profile_builder.SetPath(temp_dir_.GetPath().AppendASCII("TestArcProfile"));
-    profile_ = profile_builder.Build();
+    profile_builder.AddTestingFactory(
+        ConsentAuditorFactory::GetInstance(),
+        base::BindRepeating(&BuildFakeConsentAuditor));
+    profile_ = IdentityTestEnvironmentProfileAdaptor::
+        CreateProfileForIdentityTestEnvironment(profile_builder);
+    identity_test_env_profile_adaptor_ =
+        std::make_unique<IdentityTestEnvironmentProfileAdaptor>(profile_.get());
 
     arc_session_manager_ = std::make_unique<ArcSessionManager>(
         std::make_unique<ArcSessionRunner>(base::Bind(FakeArcSession::Create)));
@@ -55,34 +77,52 @@ class ArcPlayStoreEnabledPreferenceHandlerTest : public testing::Test {
         std::make_unique<ArcPlayStoreEnabledPreferenceHandler>(
             profile_.get(), arc_session_manager_.get());
     const AccountId account_id(AccountId::FromUserEmailGaiaId(
-        profile()->GetProfileUserName(), "1234567890"));
+        profile()->GetProfileUserName(), kTestGaiaId));
     GetFakeUserManager()->AddUser(account_id);
     GetFakeUserManager()->LoginUser(account_id);
+
+    identity_test_env_profile_adaptor_->identity_test_env()->SetPrimaryAccount(
+        kTestEmail);
   }
 
   void TearDown() override {
     preference_handler_.reset();
     arc_session_manager_.reset();
+    identity_test_env_profile_adaptor_.reset();
     profile_.reset();
     chromeos::DBusThreadManager::Shutdown();
   }
 
-  TestingProfile* profile() { return profile_.get(); }
-  ArcSessionManager* arc_session_manager() {
+  TestingProfile* profile() const { return profile_.get(); }
+  ArcSessionManager* arc_session_manager() const {
     return arc_session_manager_.get();
   }
-  ArcPlayStoreEnabledPreferenceHandler* preference_handler() {
+  ArcPlayStoreEnabledPreferenceHandler* preference_handler() const {
     return preference_handler_.get();
   }
-  chromeos::FakeChromeUserManager* GetFakeUserManager() {
+  chromeos::FakeChromeUserManager* GetFakeUserManager() const {
     return static_cast<chromeos::FakeChromeUserManager*>(
         user_manager::UserManager::Get());
+  }
+
+  consent_auditor::FakeConsentAuditor* consent_auditor() const {
+    return static_cast<consent_auditor::FakeConsentAuditor*>(
+        ConsentAuditorFactory::GetForProfile(profile()));
+  }
+
+  std::string GetAuthenticatedAccountId() const {
+    auto* identity_manager =
+        identity_test_env_profile_adaptor_->identity_test_env()
+            ->identity_manager();
+    return identity_manager->GetPrimaryAccountInfo().account_id;
   }
 
  private:
   content::TestBrowserThreadBundle thread_bundle_;
   user_manager::ScopedUserManager user_manager_enabler_;
   base::ScopedTempDir temp_dir_;
+  std::unique_ptr<IdentityTestEnvironmentProfileAdaptor>
+      identity_test_env_profile_adaptor_;
   std::unique_ptr<TestingProfile> profile_;
   std::unique_ptr<ArcSessionManager> arc_session_manager_;
   std::unique_ptr<ArcPlayStoreEnabledPreferenceHandler> preference_handler_;
@@ -137,6 +177,34 @@ TEST_F(ArcPlayStoreEnabledPreferenceHandlerTest, RemoveDataDir_Managed) {
   preference_handler()->Start();
   EXPECT_TRUE(
       profile()->GetPrefs()->GetBoolean(prefs::kArcDataRemoveRequested));
+}
+
+TEST_F(ArcPlayStoreEnabledPreferenceHandlerTest, PrefChangeRevokesConsent) {
+  consent_auditor::FakeConsentAuditor* auditor = consent_auditor();
+
+  ArcPlayTermsOfServiceConsent play_consent;
+  play_consent.set_status(UserConsentTypes::NOT_GIVEN);
+  play_consent.set_confirmation_grd_id(
+      IDS_SETTINGS_ANDROID_APPS_DISABLE_DIALOG_REMOVE);
+  play_consent.add_description_grd_ids(
+      IDS_SETTINGS_ANDROID_APPS_DISABLE_DIALOG_MESSAGE);
+  play_consent.set_consent_flow(
+      UserConsentTypes::ArcPlayTermsOfServiceConsent::SETTING_CHANGE);
+  EXPECT_CALL(*auditor, RecordArcPlayConsent(
+                            GetAuthenticatedAccountId(),
+                            consent_auditor::ArcPlayConsentEq(play_consent)));
+
+  ASSERT_FALSE(IsArcPlayStoreEnabledForProfile(profile()));
+  arc_session_manager()->SetProfile(profile());
+  arc_session_manager()->Initialize();
+  preference_handler()->Start();
+
+  SetArcPlayStoreEnabledForProfile(profile(), true);
+  base::RunLoop().RunUntilIdle();
+  EXPECT_EQ(ArcSessionManager::State::NEGOTIATING_TERMS_OF_SERVICE,
+            arc_session_manager()->state());
+
+  SetArcPlayStoreEnabledForProfile(profile(), false);
 }
 
 }  // namespace

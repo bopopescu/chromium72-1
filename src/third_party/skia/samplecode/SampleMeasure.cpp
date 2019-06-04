@@ -4,33 +4,28 @@
  * Use of this source code is governed by a BSD-style license that can be
  * found in the LICENSE file.
  */
-#include "SampleCode.h"
-#include "SkView.h"
+#include "Sample.h"
 #include "SkCanvas.h"
 #include "SkGradientShader.h"
 #include "SkPath.h"
 #include "SkRegion.h"
 #include "SkShader.h"
-#include "SkUtils.h"
+#include "SkUTF.h"
 #include "Sk1DPathEffect.h"
 #include "SkCornerPathEffect.h"
 #include "SkPathMeasure.h"
 #include "SkRandom.h"
 #include "SkColorPriv.h"
 #include "SkColorFilter.h"
-#include "SkDither.h"
 
-// exercise scale/linear/devkern
+// exercise scale/linear
 struct Setting {
     bool        fLinearText;
-    bool        fDevKernText;
 };
 
 static const Setting gSettings[] = {
-    { false,  false   },
-    { false,  true    },
-    { true,   false   },
-    { true,   true    },
+    { false },
+    { true  },
 };
 
 static void doMeasure(SkCanvas* canvas, const SkPaint& paint, const char text[]) {
@@ -46,7 +41,6 @@ static void doMeasure(SkCanvas* canvas, const SkPaint& paint, const char text[])
     SkPaint p(paint);
     for (size_t i = 0; i < SK_ARRAY_COUNT(gSettings); i++) {
         p.setLinearText(gSettings[i].fLinearText);
-        p.setDevKernText(gSettings[i].fDevKernText);
 
         int n = p.getTextWidths(text, len, widths, rects);
         SkScalar w = p.measureText(text, len, &bounds);
@@ -77,7 +71,7 @@ static void doMeasure(SkCanvas* canvas, const SkPaint& paint, const char text[])
     }
 }
 
-class MeasureView : public SampleView {
+class MeasureView : public Sample {
 public:
     SkPaint fPaint;
 
@@ -88,10 +82,9 @@ public:
     }
 
 protected:
-    // overrides from SkEventSink
-    virtual bool onQuery(SkEvent* evt) {
-        if (SampleCode::TitleQ(*evt)) {
-            SampleCode::TitleR(evt, "Measure");
+    virtual bool onQuery(Sample::Event* evt) {
+        if (Sample::TitleQ(*evt)) {
+            Sample::TitleR(evt, "Measure");
             return true;
         }
         return this->INHERITED::onQuery(evt);
@@ -103,10 +96,9 @@ protected:
     }
 
 private:
-    typedef SampleView INHERITED;
+    typedef Sample INHERITED;
 };
 
 //////////////////////////////////////////////////////////////////////////////
 
-static SkView* MyFactory() { return new MeasureView; }
-static SkViewRegister reg(MyFactory);
+DEF_SAMPLE( return new MeasureView(); )

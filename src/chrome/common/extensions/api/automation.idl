@@ -22,6 +22,7 @@
     childrenChanged,
     clicked,
     documentSelectionChanged,
+    documentTitleChanged,
     expandedChanged,
     focus,
     focusContext,
@@ -34,6 +35,7 @@
     liveRegionCreated,
     liveRegionChanged,
     loadComplete,
+    loadStart,
     locationChanged,
     mediaStartedPlaying,
     mediaStoppedPlaying,
@@ -61,6 +63,8 @@
     stateChanged,
     textChanged,
     textSelectionChanged,
+    windowActivated,
+    windowDeactivated,
     treeChanged,
     valueChanged
   };
@@ -90,6 +94,8 @@
     comboBoxGrouping,
     comboBoxMenuButton,
     complementary,
+    contentDeletion,
+    contentInsertion,
     contentInfo,
     date,
     dateTime,
@@ -172,6 +178,7 @@
     imageMap,
     inlineTextBox,
     inputTime,
+    keyboard,
     labelText,
     layoutTable,
     layoutTableCell,
@@ -185,7 +192,6 @@
     listBoxOption,
     listItem,
     listMarker,
-    locationBar,
     log,
     main,
     mark,
@@ -253,13 +259,13 @@
 
   // Describes characteristics of an $(ref:automation.AutomationNode).
   enum StateType {
+    autofillAvailable,
     collapsed,
     default,
     editable,
     expanded,
     focusable,
     focused,
-    hasPopup,
     horizontal,
     hovered,
     ignored,
@@ -284,6 +290,7 @@
     doDefault,
     focus,
     getImageData,
+    getTextLocation,
     hitTest,
     increment,
     loadInlineTextBoxes,
@@ -350,9 +357,11 @@
     uninitialized,
     attribute,
     attributeExplicitlyEmpty,
+    caption,
     contents,
     placeholder,
     relatedElement,
+    title,
     value
   };
 
@@ -480,6 +489,8 @@
   // Callback called for actions with a response.
   callback PerformActionCallback = void(boolean result);
   callback PerformActionCallbackWithNode = void(AutomationNode node);
+  callback BoundsForRangeCallback = void(Rect bounds);
+
 
   dictionary CustomAction {
     long id;
@@ -506,11 +517,12 @@
     // screen coordinates.
     Rect? location;
 
-    // Computes the bounding box of a subrange of this node in global screen
-    // coordinates. Returns the same as |location| if range information
-    // is not available. The start and end indices are zero-based offsets
-    // into the node's "name" string attribute.
-    static Rect boundsForRange(long startIndex, long endIndex);
+    // Determines the location of the text within the node specified by
+    // |startIndex| and |endIndex|, inclusively. Invokes |callback| with the
+    // bounding rectangle, in screen coordinates. |callback| can be invoked
+    // either synchronously or asynchronously.
+    static void boundsForRange(long startIndex, long endIndex,
+        BoundsForRangeCallback callback);
 
     // The location (as a bounding box) of this node in global screen
     // coordinates without applying any clipping from ancestors.
@@ -570,6 +582,9 @@
     // applicable
     AutomationNode? activeDescendant;
 
+    // Reverse relationship for active descendant.
+    AutomationNode[]? activeDescendantFor;
+
     // The target of an in-page link.
     AutomationNode? inPageLinkTarget;
 
@@ -596,6 +611,12 @@
 
     // Reverse relationship for labelledBy.
     AutomationNode[]? labelFor;
+
+    // The column header nodes for a table cell.
+    AutomationNode[]? tableCellColumnHeaders;
+
+    // The row header nodes for a table cell.
+    AutomationNode[]? tableCellRowHeaders;
 
     // An array of standard actions available on this node.
     ActionType[]? standardActions;
@@ -640,6 +661,9 @@
     long? scrollYMin;
     long? scrollYMax;
 
+    // Indicates whether this node is scrollable.
+    boolean? scrollable;
+
     //
     // Editable text field attributes.
     //
@@ -654,9 +678,6 @@
 
     // The input type, like email or number.
     DOMString? textInputType;
-
-    // An array of indexes of the break between lines in editable text.
-    long[] lineBreaks;
 
     // An array of indexes of the start position of each text marker.
     long[] markerStarts;
@@ -843,6 +864,9 @@
     // 'false' | 'true' | 'mixed'
     DOMString? checked;
 
+    // The inner html of this element. Only populated for math content.
+    DOMString? innerHtml;
+
     // The RGBA foreground color of this subtree, as an integer.
     long? color;
 
@@ -1015,6 +1039,9 @@
 
     // Returns whether this node matches the given $(ref:automation.FindParams).
     static boolean matches(FindParams params);
+
+    static AutomationNode getNextTextMatch(
+        DOMString searchStr, boolean backward);
   };
 
   // Called when the <code>AutomationNode</code> for the page is available.

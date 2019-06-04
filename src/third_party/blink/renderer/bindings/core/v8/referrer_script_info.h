@@ -6,10 +6,8 @@
 #define THIRD_PARTY_BLINK_RENDERER_BINDINGS_CORE_V8_REFERRER_SCRIPT_INFO_H_
 
 #include "services/network/public/mojom/fetch_api.mojom-blink.h"
-#include "third_party/blink/public/platform/web_url_request.h"
+#include "services/network/public/mojom/referrer_policy.mojom-shared.h"
 #include "third_party/blink/renderer/core/core_export.h"
-#include "third_party/blink/renderer/platform/loader/fetch/access_control_status.h"
-#include "third_party/blink/renderer/platform/loader/fetch/resource_loader_options.h"
 #include "third_party/blink/renderer/platform/loader/fetch/script_fetch_options.h"
 #include "third_party/blink/renderer/platform/wtf/text/text_position.h"
 #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
@@ -26,16 +24,19 @@ class CORE_EXPORT ReferrerScriptInfo {
   ReferrerScriptInfo(const KURL& base_url,
                      network::mojom::FetchCredentialsMode credentials_mode,
                      const String& nonce,
-                     ParserDisposition parser_state)
+                     ParserDisposition parser_state,
+                     network::mojom::ReferrerPolicy referrer_policy)
       : base_url_(base_url),
         credentials_mode_(credentials_mode),
         nonce_(nonce),
-        parser_state_(parser_state) {}
+        parser_state_(parser_state),
+        referrer_policy_(referrer_policy) {}
   ReferrerScriptInfo(const KURL& base_url, const ScriptFetchOptions& options)
       : ReferrerScriptInfo(base_url,
                            options.CredentialsMode(),
                            options.Nonce(),
-                           options.ParserState()) {}
+                           options.ParserState(),
+                           options.GetReferrerPolicy()) {}
 
   static ReferrerScriptInfo FromV8HostDefinedOptions(
       v8::Local<v8::Context>,
@@ -48,10 +49,14 @@ class CORE_EXPORT ReferrerScriptInfo {
   }
   const String& Nonce() const { return nonce_; }
   ParserDisposition ParserState() const { return parser_state_; }
+  network::mojom::ReferrerPolicy GetReferrerPolicy() const {
+    return referrer_policy_;
+  }
 
   bool IsDefaultValue() const {
     return base_url_.IsNull() &&
-           credentials_mode_ == network::mojom::FetchCredentialsMode::kOmit &&
+           credentials_mode_ ==
+               network::mojom::FetchCredentialsMode::kSameOrigin &&
            nonce_.IsEmpty() && parser_state_ == kNotParserInserted;
   }
 
@@ -65,10 +70,10 @@ class CORE_EXPORT ReferrerScriptInfo {
   const KURL base_url_;
 
   // Spec: "referencing script's credentials mode"
-  // The default value is "omit" per:
+  // The default value is "same-origin" per:
   // https://html.spec.whatwg.org/multipage/webappapis.html#default-classic-script-fetch-options
   const network::mojom::FetchCredentialsMode credentials_mode_ =
-      network::mojom::FetchCredentialsMode::kOmit;
+      network::mojom::FetchCredentialsMode::kSameOrigin;
 
   // Spec: "referencing script's cryptographic nonce"
   const String nonce_;
@@ -77,6 +82,12 @@ class CORE_EXPORT ReferrerScriptInfo {
   // The default value is "not-parser-inserted" per:
   // https://html.spec.whatwg.org/multipage/webappapis.html#default-classic-script-fetch-options
   const ParserDisposition parser_state_ = kNotParserInserted;
+
+  // Spec: "referencing script's referrer policy"
+  // The default value is "the empty string" per:
+  // https://html.spec.whatwg.org/multipage/webappapis.html#default-classic-script-fetch-options
+  const network::mojom::ReferrerPolicy referrer_policy_ =
+      network::mojom::ReferrerPolicy::kDefault;
 };
 
 }  // namespace blink

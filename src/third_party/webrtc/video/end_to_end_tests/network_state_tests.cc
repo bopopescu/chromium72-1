@@ -8,11 +8,14 @@
  *  be found in the AUTHORS file in the root of the source tree.
  */
 
+#include "api/test/simulated_network.h"
+#include "call/fake_network_pipe.h"
+#include "call/simulated_network.h"
 #include "system_wrappers/include/sleep.h"
 #include "test/call_test.h"
-#include "test/encoder_proxy_factory.h"
 #include "test/fake_encoder.h"
 #include "test/gtest.h"
+#include "test/video_encoder_proxy_factory.h"
 
 namespace webrtc {
 namespace {
@@ -79,15 +82,15 @@ void NetworkStateEndToEndTest::VerifyNewVideoSendStreamsRespectNetworkState(
     MediaType network_to_bring_up,
     VideoEncoder* encoder,
     Transport* transport) {
-  test::EncoderProxyFactory encoder_factory(encoder);
+  test::VideoEncoderProxyFactory encoder_factory(encoder);
 
   task_queue_.SendTask([this, network_to_bring_up, &encoder_factory,
                         transport]() {
-    CreateSenderCall(Call::Config(event_log_.get()));
+    CreateSenderCall(Call::Config(send_event_log_.get()));
     sender_call_->SignalChannelNetworkState(network_to_bring_up, kNetworkUp);
 
     CreateSendConfig(1, 0, 0, transport);
-    video_send_config_.encoder_settings.encoder_factory = &encoder_factory;
+    GetVideoSendConfig()->encoder_settings.encoder_factory = &encoder_factory;
     CreateVideoStreams();
     CreateFrameGeneratorCapturer(kDefaultFramerate, kDefaultWidth,
                                  kDefaultHeight);
@@ -111,11 +114,14 @@ void NetworkStateEndToEndTest::VerifyNewVideoReceiveStreamsRespectNetworkState(
 
   task_queue_.SendTask([this, &sender_transport, network_to_bring_up,
                         transport]() {
-    Call::Config config(event_log_.get());
-    CreateCalls(config, config);
+    CreateCalls();
     receiver_call_->SignalChannelNetworkState(network_to_bring_up, kNetworkUp);
-    sender_transport = rtc::MakeUnique<test::DirectTransport>(
-        &task_queue_, sender_call_.get(), payload_type_map_);
+    sender_transport = absl::make_unique<test::DirectTransport>(
+        &task_queue_,
+        absl::make_unique<FakeNetworkPipe>(Clock::GetRealTimeClock(),
+                                           absl::make_unique<SimulatedNetwork>(
+                                               BuiltInNetworkBehaviorConfig())),
+        sender_call_.get(), payload_type_map_);
     sender_transport->SetReceiver(receiver_call_->Receiver());
     CreateSendConfig(1, 0, 0, sender_transport.get());
     CreateMatchingReceiveConfigs(transport);
@@ -152,8 +158,6 @@ TEST_F(NetworkStateEndToEndTest, RespectsNetworkState) {
         : EndToEndTest(kDefaultTimeoutMs),
           FakeEncoder(Clock::GetRealTimeClock()),
           task_queue_(task_queue),
-          encoded_frames_(false, false),
-          packet_event_(false, false),
           sender_call_(nullptr),
           receiver_call_(nullptr),
           encoder_factory_(this),
@@ -335,7 +339,7 @@ TEST_F(NetworkStateEndToEndTest, RespectsNetworkState) {
     rtc::Event packet_event_;
     Call* sender_call_;
     Call* receiver_call_;
-    test::EncoderProxyFactory encoder_factory_;
+    test::VideoEncoderProxyFactory encoder_factory_;
     NetworkState sender_state_ RTC_GUARDED_BY(test_crit_);
     int sender_rtp_ RTC_GUARDED_BY(test_crit_);
     int sender_padding_ RTC_GUARDED_BY(test_crit_);

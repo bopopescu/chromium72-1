@@ -17,12 +17,13 @@
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "build/build_config.h"
+#include "components/autofill/core/common/autofill_features.h"
 #include "components/autofill/core/common/autofill_switches.h"
 
 namespace autofill {
 
-const base::Feature kAutofillKeyboardAccessory{
-    "AutofillKeyboardAccessory", base::FEATURE_DISABLED_BY_DEFAULT};
+using features::kAutofillKeyboardAccessory;
+
 const char kAutofillKeyboardAccessoryAnimationDurationKey[] =
     "animation_duration_millis";
 const char kAutofillKeyboardAccessoryLimitLabelWidthKey[] =
@@ -199,6 +200,14 @@ bool SanitizedFieldIsEmpty(const base::string16& value) {
           .append(base::kWhitespaceUTF16);
 
   return (value.find_first_not_of(formatting) == base::StringPiece::npos);
+}
+
+bool ShouldAutoselectFirstSuggestionOnArrowDown() {
+#if defined(OS_WIN) || defined(OS_MACOSX) || defined(OS_LINUX)
+  return true;
+#else
+  return false;
+#endif
 }
 
 }  // namespace autofill

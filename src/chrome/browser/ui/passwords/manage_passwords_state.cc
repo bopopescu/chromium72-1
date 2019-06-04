@@ -130,23 +130,11 @@ void ManagePasswordsState::OnAutomaticPasswordSave(
   ClearData();
   form_manager_ = std::move(form_manager);
   local_credentials_forms_.reserve(form_manager_->GetBestMatches().size());
-  bool updated = false;
   for (const auto& form : form_manager_->GetBestMatches()) {
     if (form.second->is_public_suffix_match)
       continue;
-    if (form_manager_->GetPendingCredentials().username_value == form.first) {
-      local_credentials_forms_.push_back(
-          std::make_unique<autofill::PasswordForm>(
-              form_manager_->GetPendingCredentials()));
-      updated = true;
-    } else {
-      local_credentials_forms_.push_back(
-          std::make_unique<autofill::PasswordForm>(*form.second));
-    }
-  }
-  if (!updated) {
-    local_credentials_forms_.push_back(std::make_unique<autofill::PasswordForm>(
-        form_manager_->GetPendingCredentials()));
+    local_credentials_forms_.push_back(
+        std::make_unique<autofill::PasswordForm>(*form.second));
   }
   AppendDeepCopyVector(form_manager_->GetFormFetcher()->GetFederatedMatches(),
                        &local_credentials_forms_);
@@ -201,7 +189,10 @@ void ManagePasswordsState::ProcessLoginsChanged(
     return;
 
   bool applied_delete = false;
+  bool all_changes_are_deletion = true;
   for (const password_manager::PasswordStoreChange& change : changes) {
+    if (change.type() != password_manager::PasswordStoreChange::REMOVE)
+      all_changes_are_deletion = false;
     const autofill::PasswordForm& changed_form = change.form();
     if (changed_form.blacklisted_by_user)
       continue;
@@ -220,8 +211,8 @@ void ManagePasswordsState::ProcessLoginsChanged(
   // itself adds a credential, they should not be refetched. The password
   // generation can be confused as the generated password will be refetched and
   // autofilled immediately.
-  if (applied_delete && client_->GetPasswordManager())
-    client_->GetPasswordManager()->UpdateFormManagers();
+  if (applied_delete && all_changes_are_deletion)
+    client_->UpdateFormManagers();
 }
 
 void ManagePasswordsState::ChooseCredential(

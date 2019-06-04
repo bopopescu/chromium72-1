@@ -17,6 +17,11 @@ import gold
 import pngdiffer
 import suppressor
 
+# Arbitrary timestamp, expressed in seconds since the epoch, used to make sure
+# that tests that depend on the current time are stable. Happens to be the
+# timestamp of the first commit to repo, 2014/5/9 17:48:50.
+TEST_SEED_TIME = "1399672130"
+
 class KeyboardInterruptError(Exception): pass
 
 # Nomenclature:
@@ -51,6 +56,8 @@ class TestRunner:
   # tests and outputfiles is a list tuples:
   #          (path_to_image, md5_hash_of_pixelbuffer)
   def GenerateAndTest(self, input_filename, source_dir):
+    use_ahem = 'use_ahem' in source_dir
+
     input_root, _ = os.path.splitext(input_filename)
     expected_txt_path = os.path.join(source_dir, input_root + '_expected.txt')
 
@@ -76,7 +83,7 @@ class TestRunner:
     if os.path.exists(expected_txt_path):
       raised_exception = self.TestText(input_root, expected_txt_path, pdf_path)
     else:
-      raised_exception, results = self.TestPixel(input_root, pdf_path)
+      raised_exception, results = self.TestPixel(input_root, pdf_path, use_ahem)
 
     if raised_exception is not None:
       print 'FAILURE: %s; %s' % (input_filename, raised_exception)
@@ -130,16 +137,23 @@ class TestRunner:
     txt_path = os.path.join(self.working_dir, input_root + '.txt')
 
     with open(txt_path, 'w') as outfile:
-      cmd_to_run = [self.pdfium_test_path, '--send-events', pdf_path]
+      cmd_to_run = [self.pdfium_test_path, '--send-events',
+                    '--time=' + TEST_SEED_TIME, pdf_path]
       subprocess.check_call(cmd_to_run, stdout=outfile)
 
     cmd = [sys.executable, self.text_diff_path, expected_txt_path, txt_path]
     return common.RunCommand(cmd)
 
-  def TestPixel(self, input_root, pdf_path):
-    cmd_to_run = [self.pdfium_test_path, '--send-events', '--png', '--md5']
+  def TestPixel(self, input_root, pdf_path, use_ahem):
+    cmd_to_run = [self.pdfium_test_path, '--send-events', '--png', '--md5',
+                  '--time=' + TEST_SEED_TIME]
+
     if self.oneshot_renderer:
       cmd_to_run.append('--render-oneshot')
+
+    if use_ahem:
+      cmd_to_run.append('--font-dir=%s' % self.font_dir)
+
     cmd_to_run.append(pdf_path)
     return common.RunCommandExtractHashedFiles(cmd_to_run)
 
@@ -153,6 +167,7 @@ class TestRunner:
         # becomes "example_005.pdf.0".
         test_name = os.path.splitext(os.path.split(img_path)[1])[0]
 
+        matched = "suppressed"
         if not self.test_suppressor.IsResultSuppressed(input_filename):
           matched = self.gold_baseline.MatchLocalResult(test_name, md5_hash)
           if matched == gold.GoldBaseline.MISMATCH:
@@ -161,7 +176,7 @@ class TestRunner:
             print 'No Skia Gold baseline found for test case: %s' % test_name
 
         if self.gold_results:
-          self.gold_results.AddTestResult(test_name, md5_hash, img_path)
+          self.gold_results.AddTestResult(test_name, md5_hash, img_path, matched)
 
     if self.test_suppressor.IsResultSuppressed(input_filename):
       self.result_suppressed_cases.append(input_filename)
@@ -219,6 +234,7 @@ class TestRunner:
     finder = common.DirectoryFinder(self.options.build_dir)
     self.fixup_path = finder.ScriptPath('fixup_pdf_template.py')
     self.text_diff_path = finder.ScriptPath('text_diff.py')
+    self.font_dir = os.path.join(finder.TestingDir(), 'resources', 'fonts')
 
     self.source_dir = finder.TestingDir()
     if self.test_dir != 'corpus':
@@ -240,6 +256,11 @@ class TestRunner:
                                                    '--show-config'])
     self.test_suppressor = suppressor.Suppressor(finder, self.feature_string)
     self.image_differ = pngdiffer.PNGDiffer(finder)
+    error_message = self.image_differ.CheckMissingTools(
+        self.options.regenerate_expected)
+    if error_message:
+      print "FAILURE: %s" % error_message
+      return 1
 
     self.gold_baseline = gold.GoldBaseline(self.options.gold_properties)
 

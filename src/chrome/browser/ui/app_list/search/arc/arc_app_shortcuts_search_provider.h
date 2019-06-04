@@ -20,7 +20,8 @@ namespace app_list {
 
 class ArcAppShortcutsSearchProvider : public SearchProvider {
  public:
-  ArcAppShortcutsSearchProvider(Profile* profile,
+  ArcAppShortcutsSearchProvider(int max_results,
+                                Profile* profile,
                                 AppListControllerDelegate* list_controller);
   ~ArcAppShortcutsSearchProvider() override;
 
@@ -28,10 +29,10 @@ class ArcAppShortcutsSearchProvider : public SearchProvider {
   void Start(const base::string16& query) override;
 
  private:
-  void OnGetAppShortcutItems(
-      const base::string16& query,
+  void OnGetAppShortcutGlobalQueryItems(
       std::vector<arc::mojom::AppShortcutItemPtr> shortcut_items);
 
+  const int max_results_;
   Profile* const profile_;                            // Owned by ProfileInfo.
   AppListControllerDelegate* const list_controller_;  // Owned by AppListClient.
 

@@ -16,7 +16,7 @@
 #include "base/strings/nullable_string16.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
-#include "base/test/histogram_tester.h"
+#include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_feature_list.h"
 #include "chrome/browser/android/chrome_feature_list.h"
 #include "chrome/browser/installable/installable_manager.h"
@@ -111,10 +111,10 @@ blink::Manifest BuildDefaultManifest() {
   manifest.start_url = GURL(kDefaultStartUrl);
   manifest.display = kDefaultManifestDisplayMode;
 
-  blink::Manifest::Icon primary_icon;
+  blink::Manifest::ImageResource primary_icon;
   primary_icon.type = base::ASCIIToUTF16("image/png");
   primary_icon.sizes.push_back(gfx::Size(144, 144));
-  primary_icon.purpose.push_back(blink::Manifest::Icon::IconPurpose::ANY);
+  primary_icon.purpose.push_back(blink::Manifest::ImageResource::Purpose::ANY);
   primary_icon.src = GURL(kDefaultIconUrl);
   manifest.icons.push_back(primary_icon);
 
@@ -141,7 +141,8 @@ class TestInstallableManager : public InstallableManager {
       code = NO_ACCEPTABLE_ICON;
       is_installable = false;
     } else if (params.valid_manifest && params.has_worker) {
-      if (!IsManifestValidForWebApp(manifest_)) {
+      if (!IsManifestValidForWebApp(manifest_,
+                                    true /* check_webapp_manifest_display */)) {
         code = valid_manifest_->error;
         is_installable = false;
       } else if (!is_installable_) {
@@ -169,6 +170,7 @@ class TestInstallableManager : public InstallableManager {
     callback.Run({code, GURL(kDefaultManifestUrl), &manifest_,
                   params.valid_primary_icon ? primary_icon_url_ : GURL(),
                   params.valid_primary_icon ? primary_icon_.get() : nullptr,
+                  params.prefer_maskable_icon,
                   params.valid_badge_icon ? badge_icon_url_ : GURL(),
                   params.valid_badge_icon ? badge_icon_.get() : nullptr,
                   params.valid_manifest ? is_installable : false,

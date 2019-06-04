@@ -145,7 +145,7 @@
       "-u",
       "RECIPE_MODULE[skia::flavor]/resources/symbolize_stack_trace.py",
       "[START_DIR]",
-      "[START_DIR]/build/out/Release/dm",
+      "[START_DIR]/build/dm",
       "--some-flag"
     ],
     "cwd": "[START_DIR]/skia",
@@ -158,8 +158,7 @@
     "name": "symbolized dm"
   },
   {
-    "name": "$result",
-    "recipe_result": null,
-    "status_code": 0
+    "jsonResult": null,
+    "name": "$result"
   }
 ]

@@ -9,6 +9,7 @@
 #include "third_party/blink/renderer/core/css/css_function_value.h"
 #include "third_party/blink/renderer/core/css/css_identifier_value.h"
 #include "third_party/blink/renderer/core/css/css_variable_data.h"
+#include "third_party/blink/renderer/core/css/properties/css_property_ref.h"
 #include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/dom/pseudo_element.h"
 #include "third_party/blink/renderer/core/style/computed_style.h"
@@ -167,9 +168,11 @@ unsigned int ComputedStylePropertyMap::size() {
   if (!style)
     return 0;
 
-  const auto& variables = ComputedStyleCSSValueMapping::GetVariables(*style);
+  DCHECK(StyledNode());
   return CSSComputedStyleDeclaration::ComputableProperties().size() +
-         (variables ? variables->size() : 0);
+         ComputedStyleCSSValueMapping::GetVariables(
+             *style, StyledNode()->GetDocument().GetPropertyRegistry())
+             .size();
 }
 
 bool ComputedStylePropertyMap::ComparePropertyNames(const String& a,
@@ -232,7 +235,8 @@ const CSSValue* ComputedStylePropertyMap::GetProperty(
     default:
       return CSSProperty::Get(property_id)
           .CSSValueFromComputedStyle(*style, nullptr /* layout_object */,
-                                     StyledNode(), false);
+                                     StyledNode(),
+                                     false /* allow_visited_style */);
   }
 }
 
@@ -241,8 +245,10 @@ const CSSValue* ComputedStylePropertyMap::GetCustomProperty(
   const ComputedStyle* style = UpdateStyle();
   if (!style)
     return nullptr;
-  return ComputedStyleCSSValueMapping::Get(
-      property_name, *style, node_->GetDocument().GetPropertyRegistry());
+  CSSPropertyRef ref(property_name, node_->GetDocument());
+  return ref.GetProperty().CSSValueFromComputedStyle(
+      *style, nullptr /* layout_object */, StyledNode(),
+      false /* allow_visited_style */);
 }
 
 void ComputedStylePropertyMap::ForEachProperty(
@@ -264,15 +270,12 @@ void ComputedStylePropertyMap::ForEachProperty(
       values.emplace_back(property->GetPropertyNameAtomicString(), value);
   }
 
-  const auto& variables = ComputedStyleCSSValueMapping::GetVariables(*style);
-  if (variables) {
-    for (const auto& name_value : *variables) {
-      if (name_value.value) {
-        values.emplace_back(name_value.key,
-                            CSSCustomPropertyDeclaration::Create(
-                                name_value.key, name_value.value));
-      }
-    }
+  PropertyRegistry* registry =
+      StyledNode()->GetDocument().GetPropertyRegistry();
+
+  for (const auto& name_value :
+       ComputedStyleCSSValueMapping::GetVariables(*style, registry)) {
+    values.emplace_back(name_value.key, name_value.value);
   }
 
   std::sort(values.begin(), values.end(), [](const auto& a, const auto& b) {

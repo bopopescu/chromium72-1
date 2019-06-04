@@ -14,7 +14,6 @@
 #include "content/public/browser/notification_source.h"
 #include "content/public/browser/render_view_host.h"
 #include "ui/base/l10n/l10n_util.h"
-#include "ui/base/material_design/material_design_controller.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/views/accessibility/view_accessibility.h"
 
@@ -25,30 +24,21 @@ LocationBarBubbleDelegateView::WebContentMouseHandler::WebContentMouseHandler(
   DCHECK(bubble_);
   DCHECK(web_contents_);
   event_monitor_ = views::EventMonitor::CreateWindowMonitor(
-      this, web_contents_->GetTopLevelNativeWindow());
+      this, web_contents_->GetTopLevelNativeWindow(),
+      {ui::ET_MOUSE_PRESSED, ui::ET_KEY_PRESSED, ui::ET_TOUCH_PRESSED});
 }
 
 LocationBarBubbleDelegateView::WebContentMouseHandler::
-    ~WebContentMouseHandler() {}
+    ~WebContentMouseHandler() = default;
 
-void LocationBarBubbleDelegateView::WebContentMouseHandler::OnKeyEvent(
-    ui::KeyEvent* event) {
-  if ((event->key_code() == ui::VKEY_ESCAPE ||
-       web_contents_->IsFocusedElementEditable()) &&
-      event->type() == ui::ET_KEY_PRESSED)
-    bubble_->CloseBubble();
-}
+void LocationBarBubbleDelegateView::WebContentMouseHandler::OnEvent(
+    const ui::Event& event) {
+  if (event.IsKeyEvent() && event.AsKeyEvent()->key_code() != ui::VKEY_ESCAPE &&
+      !web_contents_->IsFocusedElementEditable()) {
+    return;
+  }
 
-void LocationBarBubbleDelegateView::WebContentMouseHandler::OnMouseEvent(
-    ui::MouseEvent* event) {
-  if (event->type() == ui::ET_MOUSE_PRESSED)
-    bubble_->CloseBubble();
-}
-
-void LocationBarBubbleDelegateView::WebContentMouseHandler::OnTouchEvent(
-    ui::TouchEvent* event) {
-  if (event->type() == ui::ET_TOUCH_PRESSED)
-    bubble_->CloseBubble();
+  bubble_->CloseBubble();
 }
 
 LocationBarBubbleDelegateView::LocationBarBubbleDelegateView(
@@ -69,29 +59,12 @@ LocationBarBubbleDelegateView::LocationBarBubbleDelegateView(
   }
   if (!anchor_view)
     SetAnchorRect(gfx::Rect(anchor_point, gfx::Size()));
-
-  // Compensate for built-in vertical padding in the anchor view's image.
-  // In the case of Harmony, this is just compensating for the location bar's
-  // border thickness, as the bubble's top border should overlap it.
-  // When anchor is controlled by the |anchor_point| this inset is ignored.
-  set_anchor_view_insets(gfx::Insets(
-      GetLayoutConstant(LOCATION_BAR_BUBBLE_ANCHOR_VERTICAL_INSET), 0));
 }
 
-LocationBarBubbleDelegateView::~LocationBarBubbleDelegateView() {}
+LocationBarBubbleDelegateView::~LocationBarBubbleDelegateView() = default;
 
 void LocationBarBubbleDelegateView::ShowForReason(DisplayReason reason) {
   if (reason == USER_GESTURE) {
-#if defined(OS_MACOSX)
-    // In the USER_GESTURE case, the icon will be in an active state so the
-    // bubble doesn't need an arrow (except on non-MD MacViews).
-    const bool hide_arrow =
-        ui::MaterialDesignController::IsSecondaryUiMaterial();
-#else
-    const bool hide_arrow = true;
-#endif
-    if (hide_arrow)
-      SetArrowPaintType(views::BubbleBorder::PAINT_TRANSPARENT);
     GetWidget()->Show();
   } else {
     GetWidget()->ShowInactive();
@@ -124,6 +97,13 @@ void LocationBarBubbleDelegateView::OnVisibilityChanged(
 
 void LocationBarBubbleDelegateView::WebContentsDestroyed() {
   CloseBubble();
+}
+
+gfx::Rect LocationBarBubbleDelegateView::GetAnchorBoundsInScreen() const {
+  gfx::Rect bounds = GetBoundsInScreen();
+  bounds.Inset(gfx::Insets(
+      GetLayoutConstant(LOCATION_BAR_BUBBLE_ANCHOR_VERTICAL_INSET), 0));
+  return bounds;
 }
 
 void LocationBarBubbleDelegateView::AdjustForFullscreen(

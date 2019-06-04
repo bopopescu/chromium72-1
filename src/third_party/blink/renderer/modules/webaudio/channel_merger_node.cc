@@ -26,15 +26,15 @@
  * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include "third_party/blink/renderer/bindings/core/v8/exception_messages.h"
-#include "third_party/blink/renderer/bindings/core/v8/exception_state.h"
-#include "third_party/blink/renderer/core/dom/exception_code.h"
+#include "third_party/blink/renderer/modules/webaudio/channel_merger_node.h"
+
 #include "third_party/blink/renderer/core/execution_context/execution_context.h"
 #include "third_party/blink/renderer/modules/webaudio/audio_node_input.h"
 #include "third_party/blink/renderer/modules/webaudio/audio_node_output.h"
 #include "third_party/blink/renderer/modules/webaudio/base_audio_context.h"
-#include "third_party/blink/renderer/modules/webaudio/channel_merger_node.h"
 #include "third_party/blink/renderer/modules/webaudio/channel_merger_options.h"
+#include "third_party/blink/renderer/platform/bindings/exception_messages.h"
+#include "third_party/blink/renderer/platform/bindings/exception_state.h"
 
 namespace blink {
 
@@ -64,7 +64,7 @@ scoped_refptr<ChannelMergerHandler> ChannelMergerHandler::Create(
       new ChannelMergerHandler(node, sample_rate, number_of_inputs));
 }
 
-void ChannelMergerHandler::Process(size_t frames_to_process) {
+void ChannelMergerHandler::Process(uint32_t frames_to_process) {
   AudioNodeOutput& output = this->Output(0);
   DCHECK_EQ(frames_to_process, output.Bus()->length());
 
@@ -94,7 +94,7 @@ void ChannelMergerHandler::Process(size_t frames_to_process) {
   }
 }
 
-void ChannelMergerHandler::SetChannelCount(unsigned long channel_count,
+void ChannelMergerHandler::SetChannelCount(unsigned channel_count,
                                            ExceptionState& exception_state) {
   DCHECK(IsMainThread());
   BaseAudioContext::GraphAutoLocker locker(Context());
@@ -102,7 +102,7 @@ void ChannelMergerHandler::SetChannelCount(unsigned long channel_count,
   // channelCount must be 1.
   if (channel_count != 1) {
     exception_state.ThrowDOMException(
-        kInvalidStateError,
+        DOMExceptionCode::kInvalidStateError,
         "ChannelMerger: channelCount cannot be changed from 1");
   }
 }
@@ -116,7 +116,7 @@ void ChannelMergerHandler::SetChannelCountMode(
   // channcelCountMode must be 'explicit'.
   if (mode != "explicit") {
     exception_state.ThrowDOMException(
-        kInvalidStateError,
+        DOMExceptionCode::kInvalidStateError,
         "ChannelMerger: channelCountMode cannot be changed from 'explicit'");
   }
 }
@@ -151,11 +151,12 @@ ChannelMergerNode* ChannelMergerNode::Create(BaseAudioContext& context,
   if (!number_of_inputs ||
       number_of_inputs > BaseAudioContext::MaxNumberOfChannels()) {
     exception_state.ThrowDOMException(
-        kIndexSizeError, ExceptionMessages::IndexOutsideRange<size_t>(
-                             "number of inputs", number_of_inputs, 1,
-                             ExceptionMessages::kInclusiveBound,
-                             BaseAudioContext::MaxNumberOfChannels(),
-                             ExceptionMessages::kInclusiveBound));
+        DOMExceptionCode::kIndexSizeError,
+        ExceptionMessages::IndexOutsideRange<size_t>(
+            "number of inputs", number_of_inputs, 1,
+            ExceptionMessages::kInclusiveBound,
+            BaseAudioContext::MaxNumberOfChannels(),
+            ExceptionMessages::kInclusiveBound));
     return nullptr;
   }
 
@@ -164,10 +165,10 @@ ChannelMergerNode* ChannelMergerNode::Create(BaseAudioContext& context,
 
 ChannelMergerNode* ChannelMergerNode::Create(
     BaseAudioContext* context,
-    const ChannelMergerOptions& options,
+    const ChannelMergerOptions* options,
     ExceptionState& exception_state) {
   ChannelMergerNode* node =
-      Create(*context, options.numberOfInputs(), exception_state);
+      Create(*context, options->numberOfInputs(), exception_state);
 
   if (!node)
     return nullptr;

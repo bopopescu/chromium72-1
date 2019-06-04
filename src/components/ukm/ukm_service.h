@@ -24,7 +24,7 @@ class PrefService;
 
 namespace metrics {
 class MetricsServiceClient;
-class UkmBrowserTest;
+class UkmBrowserTestBase;
 class UkmEGTestHelper;
 }
 
@@ -33,6 +33,14 @@ namespace ukm {
 namespace debug {
 class UkmDebugDataExtractor;
 }
+
+// These values are persisted to logs. Entries should not be renumbered and
+// numeric values should never be reused. This maps to the enum UkmResetReason.
+enum class ResetReason {
+  kOnSyncPrefsChanged = 0,
+  kUpdatePermissions = 1,
+  kMaxValue = kUpdatePermissions,
+};
 
 // The URL-Keyed Metrics (UKM) service is responsible for gathering and
 // uploading reports that contain fine grained performance metrics including
@@ -66,8 +74,9 @@ class UkmService : public UkmRecorderImpl {
   // Deletes any unsent local data.
   void Purge();
 
-  // Resets the client id stored in prefs.
-  void ResetClientId();
+  // Resets the client prefs (client_id/session_id). |reason| should be passed
+  // to provide the reason of the reset - this is only used for UMA logging.
+  void ResetClientState(ResetReason reason);
 
   // Registers the specified |provider| to provide additional metrics into the
   // UKM log. Should be called during MetricsService initialization only.
@@ -81,9 +90,10 @@ class UkmService : public UkmRecorderImpl {
   int32_t report_count() const { return report_count_; }
 
  private:
-  friend ::metrics::UkmBrowserTest;
+  friend ::metrics::UkmBrowserTestBase;
   friend ::metrics::UkmEGTestHelper;
   friend ::ukm::debug::UkmDebugDataExtractor;
+  friend ::ukm::UkmUtilsForTest;
 
   // Starts metrics client initialization.
   void StartInitTask();

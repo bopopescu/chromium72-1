@@ -36,10 +36,10 @@
 
 namespace blink {
 
-using namespace HTMLNames;
+using namespace html_names;
 
 inline HTMLTemplateElement::HTMLTemplateElement(Document& document)
-    : HTMLElement(templateTag, document) {}
+    : HTMLElement(kTemplateTag, document) {}
 
 DEFINE_NODE_FACTORY(HTMLTemplateElement)
 
@@ -74,11 +74,6 @@ void HTMLTemplateElement::DidMoveToNewDocument(Document& old_document) {
 void HTMLTemplateElement::Trace(blink::Visitor* visitor) {
   visitor->Trace(content_);
   HTMLElement::Trace(visitor);
-}
-
-void HTMLTemplateElement::TraceWrappers(ScriptWrappableVisitor* visitor) const {
-  visitor->TraceWrappers(content_);
-  HTMLElement::TraceWrappers(visitor);
 }
 
 }  // namespace blink

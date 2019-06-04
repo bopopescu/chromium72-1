@@ -47,19 +47,19 @@ MockCallback::~MockCallback() = default;
 base::Closure NewExpectedClosure() {
   StrictMock<MockCallback>* callback = new StrictMock<MockCallback>();
   EXPECT_CALL(*callback, Run());
-  return base::Bind(&MockCallback::Run, callback);
+  return base::Bind(&MockCallback::Run, WrapRefCounted(callback));
 }
 
 base::Callback<void(bool)> NewExpectedBoolCB(bool success) {
   StrictMock<MockCallback>* callback = new StrictMock<MockCallback>();
   EXPECT_CALL(*callback, RunWithBool(success));
-  return base::Bind(&MockCallback::RunWithBool, callback);
+  return base::Bind(&MockCallback::RunWithBool, WrapRefCounted(callback));
 }
 
 PipelineStatusCB NewExpectedStatusCB(PipelineStatus status) {
   StrictMock<MockCallback>* callback = new StrictMock<MockCallback>();
   EXPECT_CALL(*callback, RunWithStatus(status));
-  return base::Bind(&MockCallback::RunWithStatus, callback);
+  return base::Bind(&MockCallback::RunWithStatus, WrapRefCounted(callback));
 }
 
 WaitableMessageLoopEvent::WaitableMessageLoopEvent()
@@ -98,7 +98,7 @@ void WaitableMessageLoopEvent::RunAndWaitForStatus(PipelineStatus expected) {
   }
 
   run_loop_.reset(new base::RunLoop());
-  base::Timer timer(false, false);
+  base::OneShotTimer timer;
   timer.Start(
       FROM_HERE, timeout_,
       base::Bind(&WaitableMessageLoopEvent::OnTimeout, base::Unretained(this)));
@@ -127,6 +127,7 @@ void WaitableMessageLoopEvent::OnTimeout() {
 
 static VideoDecoderConfig GetTestConfig(VideoCodec codec,
                                         VideoCodecProfile config,
+                                        const VideoColorSpace& color_space,
                                         VideoRotation rotation,
                                         gfx::Size coded_size,
                                         bool is_encrypted) {
@@ -134,7 +135,7 @@ static VideoDecoderConfig GetTestConfig(VideoCodec codec,
   gfx::Size natural_size = coded_size;
 
   return VideoDecoderConfig(
-      codec, config, PIXEL_FORMAT_I420, COLOR_SPACE_JPEG, rotation, coded_size,
+      codec, config, PIXEL_FORMAT_I420, color_space, rotation, coded_size,
       visible_rect, natural_size, EmptyExtraData(),
       is_encrypted ? AesCtrEncryptionScheme() : Unencrypted());
 }
@@ -145,43 +146,64 @@ static const gfx::Size kLargeSize(640, 480);
 // static
 VideoDecoderConfig TestVideoConfig::Invalid() {
   return GetTestConfig(kUnknownVideoCodec, VIDEO_CODEC_PROFILE_UNKNOWN,
-                       VIDEO_ROTATION_0, kNormalSize, false);
-}
-
-// static
-VideoDecoderConfig TestVideoConfig::Normal(VideoCodec codec) {
-  return GetTestConfig(codec, VIDEO_CODEC_PROFILE_UNKNOWN, VIDEO_ROTATION_0,
-                       kNormalSize, false);
-}
-
-// static
-VideoDecoderConfig TestVideoConfig::NormalH264(VideoCodecProfile config) {
-  return GetTestConfig(kCodecH264, config, VIDEO_ROTATION_0, kNormalSize,
+                       VideoColorSpace::JPEG(), VIDEO_ROTATION_0, kNormalSize,
                        false);
 }
 
 // static
+VideoDecoderConfig TestVideoConfig::Normal(VideoCodec codec) {
+  return GetTestConfig(codec, VIDEO_CODEC_PROFILE_UNKNOWN,
+                       VideoColorSpace::JPEG(), VIDEO_ROTATION_0, kNormalSize,
+                       false);
+}
+
+// static
+VideoDecoderConfig TestVideoConfig::NormalWithColorSpace(
+    VideoCodec codec,
+    const VideoColorSpace& color_space) {
+  return GetTestConfig(codec, VIDEO_CODEC_PROFILE_UNKNOWN, color_space,
+                       VIDEO_ROTATION_0, kNormalSize, false);
+}
+
+// static
+VideoDecoderConfig TestVideoConfig::NormalH264(VideoCodecProfile config) {
+  return GetTestConfig(kCodecH264, config, VideoColorSpace::JPEG(),
+                       VIDEO_ROTATION_0, kNormalSize, false);
+}
+
+// static
+VideoDecoderConfig TestVideoConfig::NormalCodecProfile(
+    VideoCodec codec,
+    VideoCodecProfile profile) {
+  return GetTestConfig(codec, profile, VideoColorSpace::JPEG(),
+                       VIDEO_ROTATION_0, kNormalSize, false);
+}
+
+// static
 VideoDecoderConfig TestVideoConfig::NormalEncrypted(VideoCodec codec) {
-  return GetTestConfig(codec, VIDEO_CODEC_PROFILE_UNKNOWN, VIDEO_ROTATION_0,
-                       kNormalSize, true);
+  return GetTestConfig(codec, VIDEO_CODEC_PROFILE_UNKNOWN,
+                       VideoColorSpace::JPEG(), VIDEO_ROTATION_0, kNormalSize,
+                       true);
 }
 
 // static
 VideoDecoderConfig TestVideoConfig::NormalRotated(VideoRotation rotation) {
-  return GetTestConfig(kCodecVP8, VIDEO_CODEC_PROFILE_UNKNOWN, rotation,
-                       kNormalSize, false);
+  return GetTestConfig(kCodecVP8, VIDEO_CODEC_PROFILE_UNKNOWN,
+                       VideoColorSpace::JPEG(), rotation, kNormalSize, false);
 }
 
 // static
 VideoDecoderConfig TestVideoConfig::Large(VideoCodec codec) {
-  return GetTestConfig(codec, VIDEO_CODEC_PROFILE_UNKNOWN, VIDEO_ROTATION_0,
-                       kLargeSize, false);
+  return GetTestConfig(codec, VIDEO_CODEC_PROFILE_UNKNOWN,
+                       VideoColorSpace::JPEG(), VIDEO_ROTATION_0, kLargeSize,
+                       false);
 }
 
 // static
 VideoDecoderConfig TestVideoConfig::LargeEncrypted(VideoCodec codec) {
-  return GetTestConfig(codec, VIDEO_CODEC_PROFILE_UNKNOWN, VIDEO_ROTATION_0,
-                       kLargeSize, true);
+  return GetTestConfig(codec, VIDEO_CODEC_PROFILE_UNKNOWN,
+                       VideoColorSpace::JPEG(), VIDEO_ROTATION_0, kLargeSize,
+                       true);
 }
 
 // static
@@ -198,6 +220,12 @@ AudioDecoderConfig TestAudioConfig::Normal() {
   return AudioDecoderConfig(kCodecVorbis, kSampleFormatPlanarF32,
                             CHANNEL_LAYOUT_STEREO, 44100, EmptyExtraData(),
                             Unencrypted());
+}
+
+AudioDecoderConfig TestAudioConfig::NormalEncrypted() {
+  return AudioDecoderConfig(kCodecVorbis, kSampleFormatPlanarF32,
+                            CHANNEL_LAYOUT_STEREO, 44100, EmptyExtraData(),
+                            AesCtrEncryptionScheme());
 }
 
 // static

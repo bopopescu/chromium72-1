@@ -23,9 +23,11 @@
 
 #include "api/fec_controller.h"
 #include "api/video/video_frame.h"
+#include "api/video_codecs/video_codec.h"
 #include "modules/include/module.h"
 #include "modules/include/module_common_types.h"
 #include "modules/video_coding/include/video_coding_defines.h"
+#include "rtc_base/deprecation.h"
 #include "system_wrappers/include/event_wrapper.h"
 
 namespace webrtc {
@@ -35,20 +37,6 @@ class EncodedImageCallback;
 class VideoDecoder;
 class VideoEncoder;
 struct CodecSpecificInfo;
-
-class EventFactory {
- public:
-  virtual ~EventFactory() {}
-
-  virtual EventWrapper* CreateEvent() = 0;
-};
-
-class EventFactoryImpl : public EventFactory {
- public:
-  virtual ~EventFactoryImpl() {}
-
-  virtual EventWrapper* CreateEvent() { return EventWrapper::Create(); }
-};
 
 // Used to indicate which decode with errors mode should be used.
 enum VCMDecodeErrorMode {
@@ -68,11 +56,11 @@ class VideoCodingModule : public Module {
   enum SenderNackMode { kNackNone, kNackAll, kNackSelective };
 
   // DEPRECATED.
-  static VideoCodingModule* Create(Clock* clock, EventFactory* event_factory);
+  static VideoCodingModule* Create(Clock* clock);
 
   /*
-  *   Sender
-  */
+   *   Sender
+   */
 
   // Registers a codec to be used for encoding. Calling this
   // API multiple times overwrites any previously registered codecs.
@@ -181,8 +169,8 @@ class VideoCodingModule : public Module {
   virtual int32_t EnableFrameDropper(bool enable) = 0;
 
   /*
-  *   Receiver
-  */
+   *   Receiver
+   */
 
   // Register possible receive codecs, can be called multiple times for
   // different codecs.

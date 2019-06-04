@@ -10,6 +10,7 @@
 #include "third_party/blink/renderer/core/frame/local_frame_view.h"
 #include "third_party/blink/renderer/core/frame/settings.h"
 #include "third_party/blink/renderer/core/layout/layout_object.h"
+#include "third_party/blink/renderer/core/paint/paint_layer_scrollable_area.h"
 #include "third_party/blink/renderer/core/testing/core_unit_test_helper.h"
 #include "third_party/blink/renderer/platform/drag_image.h"
 
@@ -19,9 +20,6 @@ class DataTransferTest : public RenderingTest {
  protected:
   Page& GetPage() const { return *GetDocument().GetPage(); }
   LocalFrame& GetFrame() const { return *GetDocument().GetFrame(); }
-  void UpdateAllLifecyclePhases() {
-    GetDocument().View()->UpdateAllLifecyclePhases();
-  }
 };
 
 TEST_F(DataTransferTest, NodeImage) {
@@ -92,7 +90,7 @@ TEST_F(DataTransferTest, NodeImageWithChangingLayoutObject) {
     <span id=sample>foo</span>
   )HTML");
   Element* sample = GetDocument().getElementById("sample");
-  UpdateAllLifecyclePhases();
+  UpdateAllLifecyclePhasesForTest();
   LayoutObject* before_layout_object = sample->GetLayoutObject();
   const std::unique_ptr<DragImage> image =
       DataTransfer::NodeImage(GetFrame(), *sample);
@@ -104,7 +102,7 @@ TEST_F(DataTransferTest, NodeImageWithChangingLayoutObject) {
       << "#sample has :-webkit-drag.";
 
   // Layout w/o :-webkit-drag
-  UpdateAllLifecyclePhases();
+  UpdateAllLifecyclePhasesForTest();
 
   EXPECT_EQ(Color(0, 0, 255),
             sample->GetLayoutObject()->ResolveColor(GetCSSPropertyColor()))
@@ -137,8 +135,8 @@ TEST_F(DataTransferTest, NodeImageUnderScrollOffset) {
 
   const int scroll_amount = 10;
   LocalFrameView* frame_view = GetDocument().View();
-  frame_view->LayoutViewportScrollableArea()->SetScrollOffset(
-      ScrollOffset(0, scroll_amount), kProgrammaticScroll);
+  frame_view->LayoutViewport()->SetScrollOffset(ScrollOffset(0, scroll_amount),
+                                                kProgrammaticScroll);
 
   // The first div should be offset by the scroll offset.
   Element& first = *GetDocument().getElementById("first");
@@ -178,8 +176,8 @@ TEST_F(DataTransferTest, NodeImageSizeWithPageScaleFactor) {
   // page scale factor.
   const int scroll_amount = 10;
   LocalFrameView* frame_view = GetDocument().View();
-  frame_view->LayoutViewportScrollableArea()->SetScrollOffset(
-      ScrollOffset(0, scroll_amount), kProgrammaticScroll);
+  frame_view->LayoutViewport()->SetScrollOffset(ScrollOffset(0, scroll_amount),
+                                                kProgrammaticScroll);
   const auto image_with_offset = DataTransfer::NodeImage(GetFrame(), node);
   EXPECT_EQ(
       IntSize(node_width * page_scale_factor, node_height * page_scale_factor),
@@ -209,8 +207,8 @@ TEST_F(DataTransferTest, NodeImageSizeWithPageScaleFactorTooLarge) {
   // page scale factor.
   const int scroll_amount = 10;
   LocalFrameView* frame_view = GetDocument().View();
-  frame_view->LayoutViewportScrollableArea()->SetScrollOffset(
-      ScrollOffset(0, scroll_amount), kProgrammaticScroll);
+  frame_view->LayoutViewport()->SetScrollOffset(ScrollOffset(0, scroll_amount),
+                                                kProgrammaticScroll);
   const auto image_with_offset = DataTransfer::NodeImage(GetFrame(), node);
   EXPECT_EQ(IntSize(node_width * page_scale_factor,
                     (node_height - scroll_amount) * page_scale_factor),
@@ -274,8 +272,8 @@ TEST_F(DataTransferTest, NodeImageFullyOffscreen) {
 
   const int scroll_amount = 800;
   LocalFrameView* frame_view = GetDocument().View();
-  frame_view->LayoutViewportScrollableArea()->SetScrollOffset(
-      ScrollOffset(0, scroll_amount), kProgrammaticScroll);
+  frame_view->LayoutViewport()->SetScrollOffset(ScrollOffset(0, scroll_amount),
+                                                kProgrammaticScroll);
 
   Element& target = *GetDocument().getElementById("target");
   const auto image = DataTransfer::NodeImage(GetFrame(), target);

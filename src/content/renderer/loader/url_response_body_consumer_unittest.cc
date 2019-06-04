@@ -7,9 +7,9 @@
 #include "base/bind.h"
 #include "base/callback_forward.h"
 #include "base/macros.h"
-#include "base/message_loop/message_loop.h"
 #include "base/run_loop.h"
 #include "base/single_thread_task_runner.h"
+#include "base/test/scoped_task_environment.h"
 #include "content/public/renderer/request_peer.h"
 #include "content/renderer/loader/navigation_response_override_parameters.h"
 #include "content/renderer/loader/request_extra_data.h"
@@ -55,10 +55,6 @@ class TestRequestPeer : public RequestPeer {
     ADD_FAILURE() << "OnStartLoadingResponseBody should not be called.";
   }
 
-  void OnDownloadedData(int len, int encoded_data_length) override {
-    ADD_FAILURE() << "OnDownloadedData should not be called.";
-  }
-
   void OnReceivedData(std::unique_ptr<ReceivedData> data) override {
     EXPECT_FALSE(context_->complete);
     context_->data.append(data->payload(), data->length());
@@ -75,6 +71,9 @@ class TestRequestPeer : public RequestPeer {
     context_->complete = true;
     context_->error_code = status.error_code;
     context_->run_loop_quit_closure.Run();
+  }
+  scoped_refptr<base::TaskRunner> GetTaskRunner() const override {
+    return blink::scheduler::GetSingleThreadTaskRunnerForTesting();
   }
 
   struct Context {
@@ -132,7 +131,7 @@ class URLResponseBodyConsumerTest : public ::testing::Test {
     request->url = GURL("http://www.example.com/");
     request->priority = net::LOW;
     request->appcache_host_id = 0;
-    request->fetch_request_mode = network::mojom::FetchRequestMode::kNoCORS;
+    request->fetch_request_mode = network::mojom::FetchRequestMode::kNoCors;
     request->fetch_frame_type = network::mojom::RequestContextFrameType::kNone;
 
     const RequestExtraData extra_data;
@@ -158,7 +157,8 @@ class URLResponseBodyConsumerTest : public ::testing::Test {
         blink::scheduler::GetSingleThreadTaskRunnerForTesting(),
         TRAFFIC_ANNOTATION_FOR_TESTS, false,
         false /* pass_response_pipe_to_peer */,
-        std::make_unique<TestRequestPeer>(context, message_loop_.task_runner()),
+        std::make_unique<TestRequestPeer>(
+            context, blink::scheduler::GetSingleThreadTaskRunnerForTesting()),
         base::MakeRefCounted<network::WeakWrapperSharedURLLoaderFactory>(
             &factory_),
         std::vector<std::unique_ptr<URLLoaderThrottle>>(),
@@ -172,7 +172,7 @@ class URLResponseBodyConsumerTest : public ::testing::Test {
     run_loop.Run();
   }
 
-  base::MessageLoop message_loop_;
+  base::test::ScopedTaskEnvironment task_environment_;
   NoopURLLoaderFactory factory_;
   std::unique_ptr<ResourceDispatcher> dispatcher_;
   static const MojoWriteDataFlags kNone = MOJO_WRITE_DATA_FLAG_NONE;
@@ -186,7 +186,7 @@ TEST_F(URLResponseBodyConsumerTest, ReceiveData) {
 
   scoped_refptr<URLResponseBodyConsumer> consumer(new URLResponseBodyConsumer(
       request_id, dispatcher_.get(), std::move(data_pipe.consumer_handle),
-      message_loop_.task_runner()));
+      blink::scheduler::GetSingleThreadTaskRunnerForTesting()));
   consumer->ArmOrNotify();
 
   mojo::ScopedDataPipeProducerHandle writer =
@@ -211,7 +211,7 @@ TEST_F(URLResponseBodyConsumerTest, OnCompleteThenClose) {
 
   scoped_refptr<URLResponseBodyConsumer> consumer(new URLResponseBodyConsumer(
       request_id, dispatcher_.get(), std::move(data_pipe.consumer_handle),
-      message_loop_.task_runner()));
+      blink::scheduler::GetSingleThreadTaskRunnerForTesting()));
   consumer->ArmOrNotify();
 
   consumer->OnComplete(network::URLLoaderCompletionStatus());
@@ -246,7 +246,7 @@ TEST_F(URLResponseBodyConsumerTest, OnCompleteThenCloseWithAsyncRelease) {
 
   scoped_refptr<URLResponseBodyConsumer> consumer(new URLResponseBodyConsumer(
       request_id, dispatcher_.get(), std::move(data_pipe.consumer_handle),
-      message_loop_.task_runner()));
+      blink::scheduler::GetSingleThreadTaskRunnerForTesting()));
   consumer->ArmOrNotify();
 
   consumer->OnComplete(network::URLLoaderCompletionStatus());
@@ -278,7 +278,7 @@ TEST_F(URLResponseBodyConsumerTest, CloseThenOnComplete) {
 
   scoped_refptr<URLResponseBodyConsumer> consumer(new URLResponseBodyConsumer(
       request_id, dispatcher_.get(), std::move(data_pipe.consumer_handle),
-      message_loop_.task_runner()));
+      blink::scheduler::GetSingleThreadTaskRunnerForTesting()));
   consumer->ArmOrNotify();
 
   network::URLLoaderCompletionStatus status;
@@ -321,7 +321,7 @@ TEST_F(URLResponseBodyConsumerTest, TooBigChunkShouldBeSplit) {
 
   scoped_refptr<URLResponseBodyConsumer> consumer(new URLResponseBodyConsumer(
       request_id, dispatcher_.get(), std::move(data_pipe.consumer_handle),
-      message_loop_.task_runner()));
+      blink::scheduler::GetSingleThreadTaskRunnerForTesting()));
   consumer->ArmOrNotify();
 
   Run(&context);

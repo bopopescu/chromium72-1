@@ -5,12 +5,15 @@
 #include "ash/system/accessibility/dictation_button_tray.h"
 
 #include "ash/accessibility/accessibility_controller.h"
+#include "ash/metrics/user_metrics_recorder.h"
+#include "ash/public/interfaces/accessibility_controller.mojom.h"
 #include "ash/resources/vector_icons/vector_icons.h"
 #include "ash/shelf/shelf_constants.h"
 #include "ash/shell.h"
 #include "ash/strings/grit/ash_strings.h"
 #include "ash/system/tray/tray_constants.h"
 #include "ash/system/tray/tray_container.h"
+#include "chromeos/chromeos_switches.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/gfx/paint_vector_icon.h"
 #include "ui/views/border.h"
@@ -24,13 +27,15 @@ DictationButtonTray::DictationButtonTray(Shelf* shelf)
 
   SetInkDropMode(InkDropMode::ON);
 
-  off_image_ = gfx::CreateVectorIcon(kDictationOffIcon, kShelfIconColor);
-  on_image_ = gfx::CreateVectorIcon(kDictationOnIcon, kShelfIconColor);
+  off_image_ = gfx::CreateVectorIcon(kDictationOffNewuiIcon, kShelfIconColor);
+  on_image_ = gfx::CreateVectorIcon(kDictationOnNewuiIcon, kShelfIconColor);
   icon_->SetImage(off_image_);
   const int vertical_padding = (kTrayItemSize - off_image_.height()) / 2;
   const int horizontal_padding = (kTrayItemSize - off_image_.width()) / 2;
   icon_->SetBorder(views::CreateEmptyBorder(
       gfx::Insets(vertical_padding, horizontal_padding)));
+  icon_->set_tooltip_text(
+      l10n_util::GetStringUTF16(IDS_ASH_STATUS_TRAY_ACCESSIBILITY_DICTATION));
   tray_container()->AddChildView(icon_);
   Shell::Get()->AddShellObserver(this);
   Shell::Get()->accessibility_controller()->AddObserver(this);
@@ -42,8 +47,9 @@ DictationButtonTray::~DictationButtonTray() {
 }
 
 bool DictationButtonTray::PerformAction(const ui::Event& event) {
-  Shell::Get()->accelerator_controller()->PerformActionIfEnabled(
-      AcceleratorAction::TOGGLE_DICTATION);
+  Shell::Get()->accessibility_controller()->ToggleDictationFromSource(
+      mojom::DictationToggleSource::kButton);
+
   CheckDictationStatusAndUpdateIcon();
   return true;
 }
@@ -68,7 +74,7 @@ base::string16 DictationButtonTray::GetAccessibleNameForTray() {
 }
 
 void DictationButtonTray::HideBubbleWithView(
-    const views::TrayBubbleView* bubble_view) {
+    const TrayBubbleView* bubble_view) {
   // This class has no bubbles to hide.
 }
 

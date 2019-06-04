@@ -16,7 +16,6 @@
 #include "chrome/browser/chromeos/login/easy_unlock/easy_unlock_service.h"
 #include "chrome/browser/chromeos/login/easy_unlock/easy_unlock_types.h"
 #include "chromeos/components/proximity_auth/screenlock_bridge.h"
-#include "chromeos/login/login_state.h"
 
 namespace cryptauth {
 class RemoteDeviceCache;
@@ -28,15 +27,20 @@ class ProximityAuthLocalStatePrefManager;
 
 namespace chromeos {
 
+namespace secure_channel {
+class SecureChannelClient;
+}  // namespace secure_channel
+
 class EasyUnlockChallengeWrapper;
 
 // EasyUnlockService instance that should be used for signin profile.
 class EasyUnlockServiceSignin
     : public EasyUnlockService,
-      public proximity_auth::ScreenlockBridge::Observer,
-      public LoginState::Observer {
+      public proximity_auth::ScreenlockBridge::Observer {
  public:
-  explicit EasyUnlockServiceSignin(Profile* profile);
+  EasyUnlockServiceSignin(
+      Profile* profile,
+      secure_channel::SecureChannelClient* secure_channel_client);
   ~EasyUnlockServiceSignin() override;
 
   // Wraps the challenge for the remote device identified by |account_id| and
@@ -86,13 +90,9 @@ class EasyUnlockServiceSignin
       override;
   EasyUnlockService::Type GetType() const override;
   AccountId GetAccountId() const override;
-  void LaunchSetup() override;
   void ClearPermitAccess() override;
   const base::ListValue* GetRemoteDevices() const override;
   void SetRemoteDevices(const base::ListValue& devices) override;
-  void RunTurnOffFlow() override;
-  void ResetTurnOffFlow() override;
-  TurnOffFlowStatus GetTurnOffFlowStatus() const override;
   std::string GetChallenge() const override;
   std::string GetWrappedSecret() const override;
   void RecordEasySignInOutcome(const AccountId& account_id,
@@ -114,9 +114,6 @@ class EasyUnlockServiceSignin
       proximity_auth::ScreenlockBridge::LockHandler::ScreenType screen_type)
       override;
   void OnFocusedUserChanged(const AccountId& account_id) override;
-
-  // LoginState::Observer implementation:
-  void LoggedInStateChanged() override;
 
   // Loads the device data associated with the user's Easy unlock keys from
   // crypthome.

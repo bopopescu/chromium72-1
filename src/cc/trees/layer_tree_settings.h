@@ -138,10 +138,6 @@ class CC_EXPORT LayerTreeSettings {
   // produces the active tree as its 'sync tree'.
   bool commit_to_active_tree = true;
 
-  // Whether to use out of process raster.  If true, whenever gpu raster
-  // would have been used, out of process gpu raster will be used instead.
-  bool enable_oop_rasterization = false;
-
   // Whether image animations can be reset to the beginning to avoid skipping
   // many frames.
   bool enable_image_animation_resync = true;
@@ -149,7 +145,7 @@ class CC_EXPORT LayerTreeSettings {
   // Whether to use edge anti-aliasing for all layer types that supports it.
   bool enable_edge_anti_aliasing = true;
 
-  // Whether to request presentation time regardless if existance of
+  // Whether to request presentation time regardless if existence of
   // presentation time callbacks.
   bool always_request_presentation_time = false;
 
@@ -160,6 +156,21 @@ class CC_EXPORT LayerTreeSettings {
   // Whether a HitTestRegionList should be built from the active layer tree when
   // submitting a CompositorFrame.
   bool build_hit_test_data = false;
+
+  // When false, sync tokens are expected to be present, and are verified,
+  // before transfering gpu resources to the display compositor.
+  bool delegated_sync_points_required = true;
+
+  // When true, LayerTreeHostImplClient will be posting a task to call
+  // DidReceiveCompositorFrameAck, used by the Compositor but not the
+  // LayerTreeView.
+  bool send_compositor_frame_ack = true;
+
+  // When false, scroll deltas accumulated on the impl thread are rounded to
+  // integer values when sent to Blink on commit. This flag should eventually
+  // go away and CC should send Blink fractional values:
+  // https://crbug.com/414283.
+  bool commit_fractional_scroll_deltas = false;
 };
 
 }  // namespace cc

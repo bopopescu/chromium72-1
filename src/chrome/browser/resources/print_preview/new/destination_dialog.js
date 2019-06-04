@@ -5,7 +5,7 @@
 Polymer({
   is: 'print-preview-destination-dialog',
 
-  behaviors: [I18nBehavior],
+  behaviors: [I18nBehavior, ListPropertyUpdateBehavior],
 
   properties: {
     /** @type {?print_preview.DestinationStore} */
@@ -62,6 +62,7 @@ Polymer({
       computed: 'computeRecentDestinationList_(' +
           'destinationStore, recentDestinations, recentDestinations.*, ' +
           'userInfo, destinations_.*)',
+      observer: 'onRecentDestinationListChange_',
     },
 
     /** @private {?RegExp} */
@@ -69,6 +70,10 @@ Polymer({
       type: Object,
       value: null,
     },
+  },
+
+  listeners: {
+    'keydown': 'onKeydown_',
   },
 
   /** @private {!EventTracker} */
@@ -100,9 +105,20 @@ Polymer({
   attached: function() {
     this.tracker_.add(
         assert(this.$$('.sign-in')), 'click', this.onSignInClick_.bind(this));
-    this.tracker_.add(
-        assert(this.$$('#cloudprintPromo > .close-button')), 'click',
-        this.onCloudPrintPromoDismissed_.bind(this));
+  },
+
+  /**
+   * @param {!KeyboardEvent} e Event containing the key
+   * @private
+   */
+  onKeydown_: function(e) {
+    e.stopPropagation();
+    const searchInput = this.$.searchBox.getSearchInput();
+    if (e.key == 'Escape' &&
+        (e.composedPath()[0] !== searchInput || !searchInput.value.trim())) {
+      this.$.dialog.cancel();
+      e.preventDefault();
+    }
   },
 
   /** @private */
@@ -113,6 +129,10 @@ Polymer({
         destinationStore,
         print_preview.DestinationStore.EventType.DESTINATIONS_INSERTED,
         this.updateDestinations_.bind(this));
+    this.tracker_.add(
+        destinationStore,
+        print_preview.DestinationStore.EventType.DESTINATIONS_RESET,
+        () => this.destinations_ = []);
     this.tracker_.add(
         destinationStore,
         print_preview.DestinationStore.EventType.DESTINATION_SEARCH_DONE,
@@ -140,15 +160,24 @@ Polymer({
 
   /** @private */
   updateDestinations_: function() {
+    if (this.destinationStore === undefined)
+      return;
+
     this.notifyPath('userInfo.users');
     this.notifyPath('userInfo.activeUser');
     this.notifyPath('userInfo.loggedIn');
     if (this.userInfo.loggedIn)
       this.showCloudPrintPromo = false;
 
-    this.destinations_ = this.userInfo ?
-        this.destinationStore.destinations(this.userInfo.activeUser) :
-        [];
+    if (this.userInfo) {
+      this.updateList(
+          'destinations_',
+          destination => destination.origin + '/' + destination.id,
+          this.destinationStore.destinations(this.userInfo.activeUser));
+    } else {
+      this.destinations_ = [];
+    }
+
     this.loadingDestinations_ =
         this.destinationStore.isPrintDestinationSearchInProgress;
   },
@@ -158,6 +187,9 @@ Polymer({
    * @private
    */
   computeRecentDestinationList_: function() {
+    if (!observerDepsDefined(Array.from(arguments)))
+      return [];
+
     let recentDestinations = [];
     const filterAccount = this.userInfo.activeUser;
     this.recentDestinations.forEach((recentDestination) => {
@@ -170,6 +202,13 @@ Polymer({
       }
     });
     return recentDestinations;
+  },
+
+  /** @private */
+  onRecentDestinationListChange_: function() {
+    const numRecent = Math.max(2, this.recentDestinationList_.length);
+    this.$.recentList.style.maxHeight = `calc(${numRecent} *
+            var(--destination-item-height) + 10px + 20 / 13 * 1rem)`;
   },
 
   /** @private */
@@ -213,7 +252,7 @@ Polymer({
       this.$.provisionalResolver.resolveDestination(destination)
           .then(this.selectDestination_.bind(this))
           .catch(function() {
-            console.error(
+            console.warn(
                 'Failed to resolve provisional destination: ' + destination.id);
           })
           .then(() => {
@@ -240,6 +279,8 @@ Polymer({
               listItem.onConfigureComplete(response.success);
               if (response.success) {
                 destination.capabilities = response.capabilities;
+                if (response.policies)
+                  destination.policies = response.policies;
                 this.selectDestination_(destination);
               }
             },
@@ -260,11 +301,13 @@ Polymer({
   },
 
   show: function() {
-    this.loadingDestinations_ =
-        this.destinationStore.isPrintDestinationSearchInProgress;
     this.$.dialog.showModal();
+    this.loadingDestinations_ = this.destinationStore === undefined ||
+        this.destinationStore.isPrintDestinationSearchInProgress;
     this.metrics_.record(
         print_preview.Metrics.DestinationSearchBucket.DESTINATION_SHOWN);
+    this.$.recentList.forceIronResize();
+    this.$.printList.forceIronResize();
   },
 
   /** @return {boolean} Whether the dialog is open. */

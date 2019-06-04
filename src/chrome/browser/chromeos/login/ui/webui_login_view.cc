@@ -7,14 +7,8 @@
 #include <memory>
 
 #include "ash/accelerators/accelerator_controller.h"
-#include "ash/focus_cycler.h"
 #include "ash/public/cpp/ash_features.h"
-#include "ash/root_window_controller.h"
-#include "ash/shelf/shelf_widget.h"
 #include "ash/shell.h"
-#include "ash/system/status_area_widget.h"
-#include "ash/system/status_area_widget_delegate.h"
-#include "ash/system/tray/system_tray.h"
 #include "ash/system/tray/system_tray_notifier.h"
 #include "base/bind.h"
 #include "base/callback.h"
@@ -38,7 +32,8 @@
 #include "chrome/browser/password_manager/chrome_password_manager_client.h"
 #include "chrome/browser/renderer_preferences_util.h"
 #include "chrome/browser/sessions/session_tab_helper.h"
-#include "chrome/browser/ui/ash/ash_util.h"
+#include "chrome/browser/ui/ash/chrome_keyboard_controller_client.h"
+#include "chrome/browser/ui/ash/login_screen_client.h"
 #include "chrome/browser/ui/ash/system_tray_client.h"
 #include "chrome/browser/ui/autofill/chrome_autofill_client.h"
 #include "chrome/browser/ui/webui/chromeos/internet_detail_dialog.h"
@@ -61,9 +56,9 @@
 #include "content/public/common/renderer_preferences.h"
 #include "extensions/browser/view_type_utils.h"
 #include "third_party/blink/public/platform/web_input_event.h"
+#include "ui/base/ui_base_features.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/geometry/size.h"
-#include "ui/keyboard/keyboard_controller.h"
 #include "ui/views/controls/webview/web_contents_set_background_color.h"
 #include "ui/views/controls/webview/webview.h"
 #include "ui/views/widget/widget.h"
@@ -124,13 +119,7 @@ const char WebUILoginView::kViewClassName[] =
 
 WebUILoginView::WebUILoginView(const WebViewSettings& settings)
     : settings_(settings) {
-  if (keyboard::KeyboardController::GetInstance())
-    keyboard::KeyboardController::GetInstance()->AddObserver(this);
-  // TODO(crbug.com/648733): OnVirtualKeyboardStateChanged not supported in mash
-  if (!ash_util::IsRunningInMash())
-    ash::Shell::Get()->AddShellObserver(this);
-  else
-    NOTIMPLEMENTED();
+  ChromeKeyboardControllerClient::Get()->AddObserver(this);
 
   registrar_.Add(this, chrome::NOTIFICATION_LOGIN_OR_LOCK_WEBUI_VISIBLE,
                  content::NotificationService::AllSources());
@@ -185,7 +174,7 @@ WebUILoginView::WebUILoginView(const WebViewSettings& settings)
       kAccelSendFeedback;
 
   for (AccelMap::iterator i(accel_map_.begin()); i != accel_map_.end(); ++i) {
-    if (!ash_util::IsRunningInMash()) {
+    if (!features::IsMultiProcessMash()) {
       // To make reset accelerator work while system tray is open, register it
       // at accelerator controller.
       ash::Shell::Get()->accelerator_controller()->Register({i->first}, this);
@@ -197,7 +186,7 @@ WebUILoginView::WebUILoginView(const WebViewSettings& settings)
     }
   }
 
-  if (!ash_util::IsRunningInMash())
+  if (!features::IsMultiProcessMash())
     ash::Shell::Get()->system_tray_notifier()->AddSystemTrayFocusObserver(this);
 }
 
@@ -205,19 +194,12 @@ WebUILoginView::~WebUILoginView() {
   for (auto& observer : observer_list_)
     observer.OnHostDestroying();
 
-  // TODO(crbug.com/648733): OnVirtualKeyboardStateChanged not supported in mash
-  if (!ash_util::IsRunningInMash())
-    ash::Shell::Get()->RemoveShellObserver(this);
-  if (keyboard::KeyboardController::GetInstance())
-    keyboard::KeyboardController::GetInstance()->RemoveObserver(this);
-
-  if (!ash_util::IsRunningInMash()) {
+  if (!features::IsMultiProcessMash()) {
     ash::Shell::Get()->system_tray_notifier()->RemoveSystemTrayFocusObserver(
         this);
-  }
-
-  if (!ash_util::IsRunningInMash())
     ash::Shell::Get()->accelerator_controller()->UnregisterAll(this);
+    ChromeKeyboardControllerClient::Get()->RemoveObserver(this);
+  }
 
   // Clear any delegates we have set on the WebView.
   WebContents* web_contents = web_view()->GetWebContents();
@@ -255,7 +237,7 @@ void WebUILoginView::InitializeWebView(views::WebView* web_view,
       web_contents);
   content::RendererPreferences* prefs = web_contents->GetMutableRendererPrefs();
   renderer_preferences_util::UpdateFromSystemSettings(
-      prefs, ProfileHelper::GetSigninProfile(), web_contents);
+      prefs, ProfileHelper::GetSigninProfile());
 }
 
 void WebUILoginView::Init() {
@@ -352,10 +334,6 @@ void WebUILoginView::LoadURL(const GURL& url) {
   if (!is_reusing_webview_)
     web_view()->LoadInitialURL(url);
   web_view()->RequestFocus();
-
-  // There is no Shell instance while running in mash.
-  if (ash_util::IsRunningInMash())
-    return;
 }
 
 content::WebUI* WebUILoginView::GetWebUI() {
@@ -448,37 +426,14 @@ void WebUILoginView::ClearLockScreenAppFocusCyclerDelegate() {
 }
 
 ////////////////////////////////////////////////////////////////////////////////
-// ash::ShellObserver:
+// ChromeKeyboardControllerClient::Observer
 
-void WebUILoginView::OnVirtualKeyboardStateChanged(bool activated,
-                                                   aura::Window* root_window) {
-  auto* keyboard_controller = keyboard::KeyboardController::GetInstance();
-  if (keyboard_controller) {
-    if (activated) {
-      if (!keyboard_controller->HasObserver(this))
-        keyboard_controller->AddObserver(this);
-    } else {
-      keyboard_controller->RemoveObserver(this);
-    }
-  }
-}
-
-////////////////////////////////////////////////////////////////////////////////
-// keyboard::KeyboardControllerObserver:
-
-void WebUILoginView::OnKeyboardAvailabilityChanged(const bool is_available) {
+void WebUILoginView::OnKeyboardVisibilityChanged(bool visible) {
   if (!GetOobeUI())
     return;
   CoreOobeView* view = GetOobeUI()->GetCoreOobeView();
-  if (!is_available) {
-    // Keyboard has been hidden.
-    view->ShowControlBar(true);
-    view->SetVirtualKeyboardShown(false);
-  } else {
-    // Keyboard has been shown.
-    view->ShowControlBar(false);
-    view->SetVirtualKeyboardShown(true);
-  }
+  view->ShowControlBar(!visible);
+  view->SetVirtualKeyboardShown(visible);
 }
 
 // WebUILoginView private: -----------------------------------------------------
@@ -493,15 +448,16 @@ bool WebUILoginView::HandleContextMenu(
 #endif
 }
 
-void WebUILoginView::HandleKeyboardEvent(content::WebContents* source,
+bool WebUILoginView::HandleKeyboardEvent(content::WebContents* source,
                                          const NativeWebKeyboardEvent& event) {
+  bool handled = false;
   if (forward_keyboard_event_) {
     // Disable arrow key traversal because arrow keys are handled via
     // accelerator when this view has focus.
     ScopedArrowKeyTraversal arrow_key_traversal(false);
 
-    unhandled_keyboard_event_handler_.HandleKeyboardEvent(event,
-                                                          GetFocusManager());
+    handled = unhandled_keyboard_event_handler_.HandleKeyboardEvent(
+        event, GetFocusManager());
   }
 
   // Make sure error bubble is cleared on keyboard event. This is needed
@@ -512,10 +468,7 @@ void WebUILoginView::HandleKeyboardEvent(content::WebContents* source,
     if (web_ui)
       web_ui->CallJavascriptFunctionUnsafe("cr.ui.Oobe.clearErrors");
   }
-}
-
-bool WebUILoginView::IsPopupOrPanel(const WebContents* source) const {
-  return true;
+  return handled;
 }
 
 bool WebUILoginView::TakeFocus(content::WebContents* source, bool reverse) {
@@ -552,11 +505,11 @@ bool WebUILoginView::TakeFocus(content::WebContents* source, bool reverse) {
 void WebUILoginView::RequestMediaAccessPermission(
     WebContents* web_contents,
     const content::MediaStreamRequest& request,
-    const content::MediaResponseCallback& callback) {
+    content::MediaResponseCallback callback) {
   // Note: This is needed for taking photos when selecting new user images
   // and SAML logins. Must work for all user types (including supervised).
   MediaCaptureDevicesDispatcher::GetInstance()->ProcessMediaAccessRequest(
-      web_contents, request, callback, nullptr /* extension */);
+      web_contents, request, std::move(callback), nullptr /* extension */);
 }
 
 bool WebUILoginView::CheckMediaAccessPermission(
@@ -600,43 +553,14 @@ void WebUILoginView::OnFocusLeavingSystemTray(bool reverse) {
 }
 
 bool WebUILoginView::MoveFocusToSystemTray(bool reverse) {
-  // Focus is accepted, but the Ash system tray is not available in Mash, so
-  // exit early.
-  if (ash_util::IsRunningInMash())
-    return true;
-
-  // The old system tray is not available when UnifiedSystemTray is enabled.
-  if (ash::features::IsSystemTrayUnifiedEnabled())
-    return true;
-
-  // The focus should not move to the system tray if voice interaction OOOBE is
+  // The focus should not move to the system tray if voice interaction OOBE is
   // active.
   if (LoginDisplayHost::default_host() &&
       LoginDisplayHost::default_host()->IsVoiceInteractionOobe()) {
     return false;
   }
 
-  // If shift+tab is used (|reverse| is true) and views-based shelf is shown,
-  // focus goes to the shelf widget. If views-based shelf is disabled, focus
-  // goes to the system tray, because the web-UI shelf has already been
-  // traversed when we reach here.
-  ash::Shelf* shelf = ash::Shelf::ForWindow(GetWidget()->GetNativeWindow());
-  if (!reverse && ash::ShelfWidget::IsUsingViewsShelf()) {
-    shelf->shelf_widget()->set_default_last_focusable_child(reverse);
-    ash::Shell::Get()->focus_cycler()->FocusWidget(shelf->shelf_widget());
-    return true;
-  }
-
-  ash::SystemTray* tray =
-      ash::RootWindowController::ForWindow(GetWidget()->GetNativeWindow())
-          ->GetSystemTray();
-  if (!tray || !tray->GetWidget()->IsVisible() || !tray->visible())
-    return false;
-
-  shelf->GetStatusAreaWidget()
-      ->status_area_widget_delegate()
-      ->set_default_last_focusable_child(reverse);
-  ash::Shell::Get()->focus_cycler()->FocusWidget(shelf->GetStatusAreaWidget());
+  LoginScreenClient::Get()->login_screen()->FocusLoginShelf(reverse);
   return true;
 }
 

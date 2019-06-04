@@ -8,6 +8,7 @@
 
 #include "ash/public/cpp/shell_window_ids.h"
 #include "ash/public/cpp/window_properties.h"
+#include "ash/session/session_controller.h"
 #include "ash/shell.h"
 #include "ash/wm/focus_rules.h"
 #include "ash/wm/switchable_windows.h"
@@ -25,7 +26,8 @@ namespace {
 using CanActivateWindowPredicate = base::Callback<bool(aura::Window*)>;
 
 bool CallCanActivate(aura::Window* window) {
-  return ::wm::CanActivateWindow(window);
+  return ::wm::CanActivateWindow(window) &&
+         !wm::GetWindowState(window)->IsPip();
 }
 
 // Adds the windows that can be cycled through for the specified window id to
@@ -102,11 +104,13 @@ MruWindowTracker::WindowList BuildWindowListInternal(
 //////////////////////////////////////////////////////////////////////////////
 // MruWindowTracker, public:
 
-MruWindowTracker::MruWindowTracker() : ignore_window_activations_(false) {
+MruWindowTracker::MruWindowTracker() {
   Shell::Get()->activation_client()->AddObserver(this);
+  Shell::Get()->session_controller()->AddObserver(this);
 }
 
 MruWindowTracker::~MruWindowTracker() {
+  Shell::Get()->session_controller()->RemoveObserver(this);
   Shell::Get()->activation_client()->RemoveObserver(this);
   for (auto* window : mru_windows_)
     window->RemoveObserver(this);
@@ -124,26 +128,7 @@ MruWindowTracker::WindowList MruWindowTracker::BuildWindowListIgnoreModal()
 
 MruWindowTracker::WindowList MruWindowTracker::BuildWindowForCycleList() const {
   MruWindowTracker::WindowList window_list = BuildMruWindowList();
-  // Exclude windows:
-  // - non user positionable windows, such as extension popups.
-  // - windows being dragged
-  // - the AppList window, which will hide as soon as cycling starts
-  //   anyway. It doesn't make sense to count it as a "switchable" window, yet
-  //   a lot of code relies on the MRU list returning the app window. If we
-  //   don't manually remove it, the window cycling UI won't crash or misbehave,
-  //   but there will be a flicker as the target window changes. Also exclude
-  //   unselectable windows such as extension popups.
-  auto window_is_ineligible = [](aura::Window* window) {
-    wm::WindowState* state = wm::GetWindowState(window);
-    return !state->IsUserPositionable() || state->is_dragged() ||
-           window->GetRootWindow()
-               ->GetChildById(kShellWindowId_AppListContainer)
-               ->Contains(window) ||
-           !window->GetProperty(kShowInOverviewKey);
-  };
-  window_list.erase(std::remove_if(window_list.begin(), window_list.end(),
-                                   window_is_ineligible),
-                    window_list.end());
+  base::EraseIf(window_list, wm::ShouldExcludeForCycleList);
   return window_list;
 }
 
@@ -154,6 +139,20 @@ void MruWindowTracker::SetIgnoreActivations(bool ignore) {
   // to front.
   if (!ignore)
     SetActiveWindow(wm::GetActiveWindow());
+}
+
+// SessionObserver
+
+// Restore focus after the user session has started. This is needed because some
+// windows can be opened in the background while the login UI is still active
+// since we currently restore browser windows before login UI is deleted.
+void MruWindowTracker::OnUserSessionAdded(const AccountId& account_id) {
+  if (user_session_focus_restored_)
+    return;
+  user_session_focus_restored_ = true;
+  aura::Window::Windows mru_list = BuildMruWindowList();
+  if (!mru_list.empty())
+    mru_list.front()->Focus();
 }
 
 //////////////////////////////////////////////////////////////////////////////

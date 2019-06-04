@@ -12,15 +12,13 @@
 #include "EGLWindow.h"
 #include "OSWindow.h"
 #include "common/debug.h"
-
-// TODO(jmadill): Clean this up at some point.
-#define EGL_PLATFORM_ANGLE_PLATFORM_METHODS_ANGLEX 0x9999
+#include "platform/Platform.h"
 
 EGLPlatformParameters::EGLPlatformParameters()
     : renderer(EGL_PLATFORM_ANGLE_TYPE_DEFAULT_ANGLE),
       majorVersion(EGL_DONT_CARE),
       minorVersion(EGL_DONT_CARE),
-      deviceType(EGL_DONT_CARE),
+      deviceType(EGL_PLATFORM_ANGLE_DEVICE_TYPE_HARDWARE_ANGLE),
       presentPath(EGL_DONT_CARE)
 {
 }
@@ -29,24 +27,19 @@ EGLPlatformParameters::EGLPlatformParameters(EGLint renderer)
     : renderer(renderer),
       majorVersion(EGL_DONT_CARE),
       minorVersion(EGL_DONT_CARE),
-      deviceType(EGL_DONT_CARE),
+      deviceType(EGL_PLATFORM_ANGLE_DEVICE_TYPE_HARDWARE_ANGLE),
       presentPath(EGL_DONT_CARE)
 {
-    if (renderer == EGL_PLATFORM_ANGLE_TYPE_D3D9_ANGLE ||
-        renderer == EGL_PLATFORM_ANGLE_TYPE_D3D11_ANGLE)
-    {
-        deviceType = EGL_PLATFORM_ANGLE_DEVICE_TYPE_HARDWARE_ANGLE;
-    }
 }
 
 EGLPlatformParameters::EGLPlatformParameters(EGLint renderer,
                                              EGLint majorVersion,
                                              EGLint minorVersion,
-                                             EGLint useWarp)
+                                             EGLint deviceType)
     : renderer(renderer),
       majorVersion(majorVersion),
       minorVersion(minorVersion),
-      deviceType(useWarp),
+      deviceType(deviceType),
       presentPath(EGL_DONT_CARE)
 {
 }
@@ -54,12 +47,12 @@ EGLPlatformParameters::EGLPlatformParameters(EGLint renderer,
 EGLPlatformParameters::EGLPlatformParameters(EGLint renderer,
                                              EGLint majorVersion,
                                              EGLint minorVersion,
-                                             EGLint useWarp,
+                                             EGLint deviceType,
                                              EGLint presentPath)
     : renderer(renderer),
       majorVersion(majorVersion),
       minorVersion(minorVersion),
-      deviceType(useWarp),
+      deviceType(deviceType),
       presentPath(presentPath)
 {
 }
@@ -127,6 +120,7 @@ EGLWindow::EGLWindow(EGLint glesMajorVersion,
       mSamples(-1),
       mDebugLayersEnabled(),
       mContextProgramCacheEnabled(),
+      mContextVirtualization(),
       mPlatformMethods(nullptr)
 {
 }
@@ -203,6 +197,12 @@ bool EGLWindow::initializeDisplayAndSurface(OSWindow *osWindow)
     {
         displayAttributes.push_back(EGL_PLATFORM_ANGLE_DEBUG_LAYERS_ENABLED_ANGLE);
         displayAttributes.push_back(mDebugLayersEnabled.value() ? EGL_TRUE : EGL_FALSE);
+    }
+
+    if (mContextVirtualization.valid())
+    {
+        displayAttributes.push_back(EGL_PLATFORM_ANGLE_CONTEXT_VIRTUALIZATION_ANGLE);
+        displayAttributes.push_back(mContextVirtualization.value() ? EGL_TRUE : EGL_FALSE);
     }
 
     if (mPlatformMethods)

@@ -1,4 +1,0 @@
-rootWebArea focusable
-++genericContainer
-++++iframe focusable
-++++++rootWebArea focusable

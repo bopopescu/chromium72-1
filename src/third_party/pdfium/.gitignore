@@ -21,13 +21,15 @@
 /third_party/yasm/source/patched-yasm
 /third_party/zlib
 /tools/clang
-/tools/gyp
+/tools/code_coverage
 /tools/memory
 /v8
 /xcodebuild
 .DS_Store
 .gclient
 .gclient_entries
+.gdb_history
+.gdbinit
 *.aps
 *.filters
 *.opensdf

@@ -127,8 +127,7 @@ bool ImplementationBase::OnMemoryDump(
   if (args.level_of_detail != MemoryDumpLevelOfDetail::BACKGROUND) {
     dump->AddScalar("free_size", MemoryAllocatorDump::kUnitsBytes,
                     transfer_buffer_->GetFragmentedFreeSize());
-    auto shared_memory_guid =
-        transfer_buffer_->shared_memory_handle().GetGUID();
+    auto shared_memory_guid = transfer_buffer_->shared_memory_guid();
     const int kImportance = 2;
     if (!shared_memory_guid.is_empty()) {
       pmd->CreateSharedMemoryOwnershipEdge(dump->guid(), shared_memory_guid,
@@ -156,7 +155,7 @@ gpu::ContextResult ImplementationBase::Initialize(
   if (!transfer_buffer_->Initialize(
           limits.start_transfer_buffer_size, kStartingOffset,
           limits.min_transfer_buffer_size, limits.max_transfer_buffer_size,
-          kAlignment, kSizeToFlush)) {
+          kAlignment)) {
     // TransferBuffer::Initialize doesn't fail for transient reasons such as if
     // the context was lost. See http://crrev.com/c/720269
     LOG(ERROR) << "ContextResult::kFatalFailure: "
@@ -177,16 +176,8 @@ void ImplementationBase::WaitForCmd() {
   helper_->Finish();
 }
 
-void* ImplementationBase::GetResultBuffer() {
-  return transfer_buffer_->GetResultBuffer();
-}
-
 int32_t ImplementationBase::GetResultShmId() {
   return transfer_buffer_->GetShmId();
-}
-
-uint32_t ImplementationBase::GetResultShmOffset() {
-  return transfer_buffer_->GetResultOffset();
 }
 
 bool ImplementationBase::GetBucketContents(uint32_t bucket_id,
@@ -198,16 +189,22 @@ bool ImplementationBase::GetBucketContents(uint32_t bucket_id,
   if (!buffer.valid()) {
     return false;
   }
-  typedef cmd::GetBucketStart::Result Result;
-  Result* result = GetResultAs<Result*>();
-  if (!result) {
-    return false;
+  uint32_t size = 0;
+  {
+    // The Result pointer must be scoped to this block because it can be
+    // invalidated below if resizing the ScopedTransferBufferPtr causes the
+    // transfer buffer to be reallocated.
+    typedef cmd::GetBucketStart::Result Result;
+    auto result = GetResultAs<Result>();
+    if (!result) {
+      return false;
+    }
+    *result = 0;
+    helper_->GetBucketStart(bucket_id, GetResultShmId(), result.offset(),
+                            buffer.size(), buffer.shm_id(), buffer.offset());
+    WaitForCmd();
+    size = *result;
   }
-  *result = 0;
-  helper_->GetBucketStart(bucket_id, GetResultShmId(), GetResultShmOffset(),
-                          buffer.size(), buffer.shm_id(), buffer.offset());
-  WaitForCmd();
-  uint32_t size = *result;
   data->resize(size);
   if (size > 0u) {
     uint32_t offset = 0;
@@ -237,7 +234,7 @@ bool ImplementationBase::GetBucketContents(uint32_t bucket_id,
 
 void ImplementationBase::SetBucketContents(uint32_t bucket_id,
                                            const void* data,
-                                           size_t size) {
+                                           uint32_t size) {
   DCHECK(data);
   helper_->SetBucketSize(bucket_id, size);
   if (size > 0u) {
@@ -262,7 +259,9 @@ void ImplementationBase::SetBucketAsCString(uint32_t bucket_id,
   // NOTE: strings are passed NULL terminated. That means the empty
   // string will have a size of 1 and no-string will have a size of 0
   if (str) {
-    SetBucketContents(bucket_id, str, strlen(str) + 1);
+    base::CheckedNumeric<uint32_t> len = strlen(str);
+    len += 1;
+    SetBucketContents(bucket_id, str, len.ValueOrDefault(0));
   } else {
     helper_->SetBucketSize(bucket_id, 0);
   }
@@ -288,7 +287,9 @@ void ImplementationBase::SetBucketAsString(uint32_t bucket_id,
                                            const std::string& str) {
   // NOTE: strings are passed NULL terminated. That means the empty
   // string will have a size of 1 and no-string will have a size of 0
-  SetBucketContents(bucket_id, str.c_str(), str.size() + 1);
+  base::CheckedNumeric<uint32_t> len = str.size();
+  len += 1;
+  SetBucketContents(bucket_id, str.c_str(), len.ValueOrDefault(0));
 }
 
 bool ImplementationBase::GetVerifiedSyncTokenForIPC(

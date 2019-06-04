@@ -6,7 +6,7 @@
 #define NGMarginStrut_h
 
 #include "third_party/blink/renderer/core/core_export.h"
-#include "third_party/blink/renderer/platform/layout_unit.h"
+#include "third_party/blink/renderer/platform/geometry/layout_unit.h"
 
 namespace blink {
 
@@ -24,15 +24,27 @@ struct CORE_EXPORT NGMarginStrut {
   // See comment inside NGBlockLayoutAlgorithm for when this occurs.
   bool is_quirky_container_start = false;
 
+  // If set, we will discard all adjoining margins, which is the
+  // effect of -webkit-margin-collapse:discard.
+  bool discard_margins = false;
+
   // Appends negative or positive value to the current margin strut.
   void Append(const LayoutUnit& value, bool is_quirky);
 
   // Sum up negative and positive margins of this strut.
-  LayoutUnit Sum() const;
+  LayoutUnit Sum() const {
+    if (discard_margins)
+      return LayoutUnit();
+    return std::max(quirky_positive_margin, positive_margin) + negative_margin;
+  }
 
   // Sum up non-quirky margins of this strut, used by quirky
   // containers to sum up the last margin.
-  LayoutUnit QuirkyContainerSum() const;
+  LayoutUnit QuirkyContainerSum() const {
+    if (discard_margins)
+      return LayoutUnit();
+    return positive_margin + negative_margin;
+  }
 
   // Whether there have been no margins appended to this margin strut.
   bool IsEmpty() const;

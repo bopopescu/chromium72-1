@@ -25,6 +25,7 @@ js_library("internet_page") {
     ":internet_page_browser_proxy",
     "..:route",
     "../settings_page:settings_animated_pages",
+    "//ui/webui/resources/cr_elements/chromeos/network:cr_network_listener_behavior",
     "//ui/webui/resources/cr_elements/chromeos/network:cr_onc_types",
     "//ui/webui/resources/js:assert",
     "//ui/webui/resources/js:i18n_behavior",

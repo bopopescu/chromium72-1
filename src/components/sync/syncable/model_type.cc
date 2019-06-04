@@ -32,7 +32,9 @@ namespace syncer {
 struct ModelTypeInfo {
   ModelType model_type;
   // Model Type notification string.
-  // This needs to match the corresponding proto message name in sync.proto
+  // This needs to match the corresponding proto message name in sync.proto. It
+  // is also used to identify the model type in the SyncModelType
+  // histogram_suffix in histograms.xml. Must always be kept in sync.
   const char* notification_type;
   // Root tag for Model Type
   // This should be the same as the model type but all lowercase.
@@ -49,8 +51,10 @@ struct ModelTypeInfo {
 };
 
 // Below struct entries are in the same order as their definition in the
-// ModelType enum. Don't forget to update the ModelType enum when you make
-// changes to this list.
+// ModelType enum. When making changes to this list, don't forget to
+//  - update the ModelType enum,
+//  - update the SyncModelTypes enum in enums.xml, and
+//  - update the SyncModelType histogram suffix in histograms.xml.
 // Struct field values should be unique across the entire map.
 const ModelTypeInfo kModelTypeInfoMap[] = {
     {UNSPECIFIED, "", "", "Unspecified", -1, 0},
@@ -121,11 +125,11 @@ const ModelTypeInfo kModelTypeInfoMap[] = {
     {DEPRECATED_SUPERVISED_USER_SHARED_SETTINGS, "MANAGED_USER_SHARED_SETTING",
      "managed_user_shared_settings", "Managed User Shared Settings",
      sync_pb::EntitySpecifics::kManagedUserSharedSettingFieldNumber, 30},
-    {ARTICLES, "ARTICLE", "articles", "Articles",
-     sync_pb::EntitySpecifics::kArticleFieldNumber, 28},
+    {DEPRECATED_ARTICLES, "ARTICLE", "deprecated_articles",
+     "Deprecated Articles", sync_pb::EntitySpecifics::kArticleFieldNumber, 28},
     {APP_LIST, "APP_LIST", "app_list", "App List",
      sync_pb::EntitySpecifics::kAppListFieldNumber, 29},
-    {WIFI_CREDENTIALS, "WIFI_CREDENTIAL", "wifi_credentials",
+    {DEPRECATED_WIFI_CREDENTIALS, "WIFI_CREDENTIAL", "wifi_credentials",
      "WiFi Credentials", sync_pb::EntitySpecifics::kWifiCredentialFieldNumber,
      32},
     {SUPERVISED_USER_WHITELISTS, "MANAGED_USER_WHITELIST",
@@ -141,6 +145,11 @@ const ModelTypeInfo kModelTypeInfoMap[] = {
      sync_pb::EntitySpecifics::kUserEventFieldNumber, 39},
     {MOUNTAIN_SHARES, "MOUNTAIN_SHARE", "mountain_shares", "Mountain Shares",
      sync_pb::EntitySpecifics::kMountainShareFieldNumber, 40},
+    {USER_CONSENTS, "USER_CONSENT", "user_consent", "User Consents",
+     sync_pb::EntitySpecifics::kUserConsentFieldNumber, 41},
+    {SEND_TAB_TO_SELF, "SEND_TAB_TO_SELF", "send_tab_to_self",
+     "Send Tab To Self", sync_pb::EntitySpecifics::kSendTabToSelfFieldNumber,
+     42},
     // ---- Proxy types ----
     {PROXY_TABS, "", "", "Tabs", -1, 25},
     // ---- Control Types ----
@@ -152,6 +161,14 @@ const ModelTypeInfo kModelTypeInfoMap[] = {
 
 static_assert(arraysize(kModelTypeInfoMap) == MODEL_TYPE_COUNT,
               "kModelTypeInfoMap should have MODEL_TYPE_COUNT elements");
+
+static_assert(43 == syncer::MODEL_TYPE_COUNT,
+              "When adding a new type, update enum SyncModelTypes in enums.xml "
+              "and suffix SyncModelType in histograms.xml.");
+
+static_assert(43 == syncer::MODEL_TYPE_COUNT,
+              "When adding a new type, update kAllocatorDumpNameWhitelist in "
+              "base/trace_event/memory_infra_background_whitelist.cc.");
 
 void AddDefaultFieldValue(ModelType type, sync_pb::EntitySpecifics* specifics) {
   switch (type) {
@@ -240,13 +257,13 @@ void AddDefaultFieldValue(ModelType type, sync_pb::EntitySpecifics* specifics) {
     case DEPRECATED_SUPERVISED_USER_SHARED_SETTINGS:
       specifics->mutable_managed_user_shared_setting();
       break;
-    case ARTICLES:
+    case DEPRECATED_ARTICLES:
       specifics->mutable_article();
       break;
     case APP_LIST:
       specifics->mutable_app_list();
       break;
-    case WIFI_CREDENTIALS:
+    case DEPRECATED_WIFI_CREDENTIALS:
       specifics->mutable_wifi_credential();
       break;
     case SUPERVISED_USER_WHITELISTS:
@@ -267,6 +284,12 @@ void AddDefaultFieldValue(ModelType type, sync_pb::EntitySpecifics* specifics) {
     case MOUNTAIN_SHARES:
       specifics->mutable_mountain_share();
       break;
+    case USER_CONSENTS:
+      specifics->mutable_user_consent();
+      break;
+    case SEND_TAB_TO_SELF:
+      specifics->mutable_send_tab_to_self();
+      break;
     case PROXY_TABS:
       NOTREACHED() << "No default field value for " << ModelTypeToString(type);
       break;
@@ -284,10 +307,9 @@ void AddDefaultFieldValue(ModelType type, sync_pb::EntitySpecifics* specifics) {
 
 ModelType GetModelTypeFromSpecificsFieldNumber(int field_number) {
   ModelTypeSet protocol_types = ProtocolTypes();
-  for (ModelTypeSet::Iterator iter = protocol_types.First(); iter.Good();
-       iter.Inc()) {
-    if (GetSpecificsFieldNumberFromModelType(iter.Get()) == field_number)
-      return iter.Get();
+  for (ModelType type : protocol_types) {
+    if (GetSpecificsFieldNumberFromModelType(type) == field_number)
+      return type;
   }
   return UNSPECIFIED;
 }
@@ -303,8 +325,8 @@ int GetSpecificsFieldNumberFromModelType(ModelType model_type) {
 
 FullModelTypeSet ToFullModelTypeSet(ModelTypeSet in) {
   FullModelTypeSet out;
-  for (ModelTypeSet::Iterator i = in.First(); i.Good(); i.Inc()) {
-    out.Put(i.Get());
+  for (ModelType type : in) {
+    out.Put(type);
   }
   return out;
 }
@@ -312,10 +334,6 @@ FullModelTypeSet ToFullModelTypeSet(ModelTypeSet in) {
 // Note: keep this consistent with GetModelType in entry.cc!
 ModelType GetModelType(const sync_pb::SyncEntity& sync_entity) {
   DCHECK(!IsRoot(sync_entity));  // Root shouldn't ever go over the wire.
-
-  // Backwards compatibility with old (pre-specifics) protocol.
-  if (sync_entity.has_bookmarkdata())
-    return BOOKMARKS;
 
   ModelType specifics_type = GetModelTypeFromSpecifics(sync_entity.specifics());
   if (specifics_type != UNSPECIFIED)
@@ -336,7 +354,7 @@ ModelType GetModelType(const sync_pb::SyncEntity& sync_entity) {
 }
 
 ModelType GetModelTypeFromSpecifics(const sync_pb::EntitySpecifics& specifics) {
-  static_assert(41 == MODEL_TYPE_COUNT,
+  static_assert(43 == MODEL_TYPE_COUNT,
                 "When adding new protocol types, the following type lookup "
                 "logic must be updated.");
   if (specifics.has_bookmark())
@@ -394,11 +412,11 @@ ModelType GetModelTypeFromSpecifics(const sync_pb::EntitySpecifics& specifics) {
   if (specifics.has_managed_user_shared_setting())
     return DEPRECATED_SUPERVISED_USER_SHARED_SETTINGS;
   if (specifics.has_article())
-    return ARTICLES;
+    return DEPRECATED_ARTICLES;
   if (specifics.has_app_list())
     return APP_LIST;
   if (specifics.has_wifi_credential())
-    return WIFI_CREDENTIALS;
+    return DEPRECATED_WIFI_CREDENTIALS;
   if (specifics.has_managed_user_whitelist())
     return SUPERVISED_USER_WHITELISTS;
   if (specifics.has_arc_package())
@@ -411,10 +429,14 @@ ModelType GetModelTypeFromSpecifics(const sync_pb::EntitySpecifics& specifics) {
     return USER_EVENTS;
   if (specifics.has_mountain_share())
     return MOUNTAIN_SHARES;
+  if (specifics.has_user_consent())
+    return USER_CONSENTS;
   if (specifics.has_nigori())
     return NIGORI;
   if (specifics.has_experiments())
     return EXPERIMENTS;
+  if (specifics.has_send_tab_to_self())
+    return SEND_TAB_TO_SELF;
 
   return UNSPECIFIED;
 }
@@ -422,17 +444,18 @@ ModelType GetModelTypeFromSpecifics(const sync_pb::EntitySpecifics& specifics) {
 ModelTypeNameMap GetUserSelectableTypeNameMap() {
   ModelTypeNameMap type_names;
   ModelTypeSet type_set = UserSelectableTypes();
-  ModelTypeSet::Iterator it = type_set.First();
-  DCHECK_EQ(arraysize(kUserSelectableDataTypeNames), type_set.Size());
-  for (size_t i = 0; i < arraysize(kUserSelectableDataTypeNames) && it.Good();
-       ++i, it.Inc()) {
-    type_names[it.Get()] = kUserSelectableDataTypeNames[i];
+  ModelTypeSet::Iterator it = type_set.begin();
+  DCHECK_EQ(base::size(kUserSelectableDataTypeNames), type_set.Size());
+  for (size_t i = 0;
+       i < base::size(kUserSelectableDataTypeNames) && it != type_set.end();
+       ++i, ++it) {
+    type_names[*it] = kUserSelectableDataTypeNames[i];
   }
   return type_names;
 }
 
 ModelTypeSet EncryptableUserTypes() {
-  static_assert(41 == MODEL_TYPE_COUNT,
+  static_assert(43 == MODEL_TYPE_COUNT,
                 "If adding an unencryptable type, remove from "
                 "encryptable_user_types below.");
   ModelTypeSet encryptable_user_types = UserTypes();
@@ -461,8 +484,10 @@ ModelTypeSet EncryptableUserTypes() {
   // Supervised user whitelists are not encrypted since they are managed
   // server-side.
   encryptable_user_types.Remove(SUPERVISED_USER_WHITELISTS);
-  // User events are not encrypted since they are consumed server-side.
+  // User events and consents are not encrypted since they are consumed
+  // server-side.
   encryptable_user_types.Remove(USER_EVENTS);
+  encryptable_user_types.Remove(USER_CONSENTS);
   // Proxy types have no sync representation and are therefore not encrypted.
   // Note however that proxy types map to one or more protocol types, which
   // may or may not be encrypted themselves.
@@ -480,6 +505,17 @@ const char* ModelTypeToString(ModelType model_type) {
   return "Invalid";
 }
 
+const char* ModelTypeToHistogramSuffix(ModelType model_type) {
+  if (model_type >= UNSPECIFIED && model_type < MODEL_TYPE_COUNT) {
+    // We use the same string that is used for notification types because they
+    // satisfy all we need (being stable and explanatory).
+    return kModelTypeInfoMap[model_type].notification_type;
+  }
+  NOTREACHED() << "No known suffix for model type "
+               << static_cast<int>(model_type) << ".";
+  return "Invalid";
+}
+
 // The normal rules about histograms apply here.  Always append to the bottom of
 // the list, and be careful to not reuse integer values that have already been
 // assigned.
@@ -490,6 +526,12 @@ int ModelTypeToHistogramInt(ModelType model_type) {
   if (model_type >= UNSPECIFIED && model_type < MODEL_TYPE_COUNT)
     return kModelTypeInfoMap[model_type].model_type_histogram_val;
   return 0;
+}
+
+int ModelTypeToStableIdentifier(ModelType model_type) {
+  DCHECK(model_type >= UNSPECIFIED && model_type < MODEL_TYPE_COUNT);
+  // Make sure the value is stable and positive.
+  return ModelTypeToHistogramInt(model_type) + 1;
 }
 
 std::unique_ptr<base::Value> ModelTypeToValue(ModelType model_type) {
@@ -519,11 +561,11 @@ ModelType ModelTypeFromString(const std::string& model_type_string) {
 
 std::string ModelTypeSetToString(ModelTypeSet model_types) {
   std::string result;
-  for (ModelTypeSet::Iterator it = model_types.First(); it.Good(); it.Inc()) {
+  for (ModelType type : model_types) {
     if (!result.empty()) {
       result += ", ";
     }
-    result += ModelTypeToString(it.Get());
+    result += ModelTypeToString(type);
   }
   return result;
 }
@@ -558,8 +600,8 @@ ModelTypeSet ModelTypeSetFromString(const std::string& model_types_string) {
 
 std::unique_ptr<base::ListValue> ModelTypeSetToValue(ModelTypeSet model_types) {
   std::unique_ptr<base::ListValue> value(new base::ListValue());
-  for (ModelTypeSet::Iterator it = model_types.First(); it.Good(); it.Inc()) {
-    value->AppendString(ModelTypeToString(it.Get()));
+  for (ModelType type : model_types) {
+    value->AppendString(ModelTypeToString(type));
   }
   return value;
 }

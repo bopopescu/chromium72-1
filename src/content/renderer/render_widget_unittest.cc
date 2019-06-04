@@ -10,8 +10,11 @@
 #include "base/macros.h"
 #include "base/optional.h"
 #include "base/run_loop.h"
-#include "base/test/histogram_tester.h"
+#include "base/test/metrics/histogram_tester.h"
+#include "base/test/scoped_feature_list.h"
 #include "base/test/scoped_task_environment.h"
+#include "build/build_config.h"
+#include "cc/trees/layer_tree_host.h"
 #include "components/viz/common/features.h"
 #include "components/viz/common/surfaces/parent_local_surface_id_allocator.h"
 #include "content/common/input/input_handler.mojom.h"
@@ -19,11 +22,13 @@
 #include "content/common/input_messages.h"
 #include "content/common/view_messages.h"
 #include "content/common/visual_properties.h"
+#include "content/common/widget_messages.h"
 #include "content/public/common/content_features.h"
 #include "content/public/test/mock_render_thread.h"
 #include "content/renderer/devtools/render_widget_screen_metrics_emulator.h"
-#include "content/renderer/gpu/render_widget_compositor.h"
+#include "content/renderer/gpu/layer_tree_view.h"
 #include "content/renderer/input/widget_input_handler_manager.h"
+#include "content/renderer/render_widget_owner_delegate.h"
 #include "content/test/fake_compositor_dependencies.h"
 #include "content/test/mock_render_process.h"
 #include "ipc/ipc_test_sink.h"
@@ -75,7 +80,7 @@ class MockWidgetInputHandlerHost : public mojom::WidgetInputHandlerHost {
   MockWidgetInputHandlerHost(
       mojo::InterfaceRequest<mojom::WidgetInputHandlerHost> request)
       : binding_(this, std::move(request)) {}
-  MOCK_METHOD0(CancelTouchTimeout, void());
+  MOCK_METHOD1(SetTouchActionFromMain, void(cc::TouchAction));
 
   MOCK_METHOD3(SetWhiteListedTouchAction,
                void(cc::TouchAction, uint32_t, content::InputEventAckState));
@@ -111,8 +116,8 @@ class MockHandledEventCallback {
                       base::Optional<cc::TouchAction>));
 
   HandledEventCallback GetCallback() {
-    return BindOnce(&MockHandledEventCallback::HandleCallback,
-                    base::Unretained(this));
+    return base::BindOnce(&MockHandledEventCallback::HandleCallback,
+                          base::Unretained(this));
   }
 
  private:
@@ -126,7 +131,16 @@ class MockHandledEventCallback {
   DISALLOW_COPY_AND_ASSIGN(MockHandledEventCallback);
 };
 
-class MockWebWidget : public blink::WebWidget {
+class StubWebWidget : public blink::WebWidget {
+ public:
+  void SetLayerTreeView(blink::WebLayerTreeView*) override {}
+  blink::WebURL GetURLForDebugTrace() override { return {}; }
+  blink::WebHitTestResult HitTestResultAt(const gfx::Point&) override {
+    return {};
+  }
+};
+
+class MockWebWidget : public StubWebWidget {
  public:
   MOCK_METHOD0(DispatchBufferedTouchEvents, blink::WebInputEventResult());
   MOCK_METHOD1(
@@ -141,12 +155,12 @@ class InteractiveRenderWidget : public RenderWidget {
   explicit InteractiveRenderWidget(CompositorDependencies* compositor_deps)
       : RenderWidget(++next_routing_id_,
                      compositor_deps,
-                     blink::kWebPopupTypeNone,
+                     WidgetType::kFrame,
                      ScreenInfo(),
+                     blink::kWebDisplayModeUndefined,
                      false,
                      false,
-                     false,
-                     blink::scheduler::GetSingleThreadTaskRunnerForTesting()),
+                     false),
         always_overscroll_(false) {
     Init(RenderWidget::ShowCallback(), mock_webwidget());
 
@@ -161,7 +175,8 @@ class InteractiveRenderWidget : public RenderWidget {
   void SendInputEvent(const blink::WebInputEvent& event,
                       HandledEventCallback callback) {
     HandleInputEvent(blink::WebCoalescedInputEvent(
-                         event, std::vector<const blink::WebInputEvent*>()),
+                         event, std::vector<const blink::WebInputEvent*>(),
+                         std::vector<const blink::WebInputEvent*>()),
                      ui::LatencyInfo(), std::move(callback));
   }
 
@@ -177,8 +192,9 @@ class InteractiveRenderWidget : public RenderWidget {
     return mock_input_handler_host_.get();
   }
 
-  const viz::LocalSurfaceId& local_surface_id_from_parent() const {
-    return local_surface_id_from_parent_;
+  const viz::LocalSurfaceIdAllocation& local_surface_id_allocation_from_parent()
+      const {
+    return local_surface_id_allocation_from_parent_;
   }
 
  protected:
@@ -222,7 +238,11 @@ int InteractiveRenderWidget::next_routing_id_ = 0;
 
 class RenderWidgetUnittest : public testing::Test {
  public:
-  RenderWidgetUnittest() {
+  RenderWidgetUnittest() = default;
+  ~RenderWidgetUnittest() override = default;
+
+  // testing::Test implementation.
+  void SetUp() override {
     widget_ = new InteractiveRenderWidget(&compositor_deps_);
     // RenderWidget::Init does an AddRef that's balanced by a browser-initiated
     // Close IPC. That Close will never happen in this test, so do a Release
@@ -230,8 +250,6 @@ class RenderWidgetUnittest : public testing::Test {
     widget_->Release();
     DCHECK(widget_->HasOneRef());
   }
-
-  ~RenderWidgetUnittest() override {}
 
   InteractiveRenderWidget* widget() const { return widget_.get(); }
 
@@ -251,6 +269,30 @@ class RenderWidgetUnittest : public testing::Test {
 
   DISALLOW_COPY_AND_ASSIGN(RenderWidgetUnittest);
 };
+
+TEST_F(RenderWidgetUnittest, CursorChange) {
+  blink::WebCursorInfo cursor_info;
+  cursor_info.type = blink::WebCursorInfo::Type::kTypePointer;
+
+  widget()->DidChangeCursor(cursor_info);
+  EXPECT_EQ(widget()->sink()->message_count(), 1U);
+  EXPECT_EQ(widget()->sink()->GetMessageAt(0)->type(),
+            WidgetHostMsg_SetCursor::ID);
+  widget()->sink()->ClearMessages();
+
+  widget()->DidChangeCursor(cursor_info);
+  EXPECT_EQ(widget()->sink()->message_count(), 0U);
+
+  widget()->SendInputEvent(SyntheticWebMouseEventBuilder::Build(
+                               blink::WebInputEvent::Type::kMouseLeave),
+                           HandledEventCallback());
+  EXPECT_EQ(widget()->sink()->message_count(), 0U);
+
+  widget()->DidChangeCursor(cursor_info);
+  EXPECT_EQ(widget()->sink()->message_count(), 1U);
+  EXPECT_EQ(widget()->sink()->GetMessageAt(0)->type(),
+            WidgetHostMsg_SetCursor::ID);
+}
 
 TEST_F(RenderWidgetUnittest, EventOverscroll) {
   widget()->set_always_overscroll(true);
@@ -279,25 +321,6 @@ TEST_F(RenderWidgetUnittest, EventOverscroll) {
       .Times(1);
 
   widget()->SendInputEvent(scroll, handled_event.GetCallback());
-}
-
-TEST_F(RenderWidgetUnittest, FlingOverscroll) {
-  ui::DidOverscrollParams expected_overscroll;
-  expected_overscroll.latest_overscroll_delta = gfx::Vector2dF(10, 5);
-  expected_overscroll.accumulated_overscroll = gfx::Vector2dF(5, 5);
-  expected_overscroll.causal_event_viewport_point = gfx::PointF(1, 1);
-  expected_overscroll.current_fling_velocity = gfx::Vector2dF(10, 5);
-
-  EXPECT_CALL(*widget()->mock_input_handler_host(),
-              DidOverscroll(expected_overscroll))
-      .Times(1);
-
-  // Overscroll notifications received outside of handling an input event should
-  // be sent as a separate IPC.
-  widget()->DidOverscroll(blink::WebFloatSize(10, 5), blink::WebFloatSize(5, 5),
-                          blink::WebFloatPoint(1, 1),
-                          blink::WebFloatSize(10, 5), cc::OverscrollBehavior());
-  base::RunLoop().RunUntilIdle();
 }
 
 TEST_F(RenderWidgetUnittest, RenderWidgetInputEventUmaMetrics) {
@@ -372,8 +395,6 @@ TEST_F(RenderWidgetUnittest, RenderWidgetInputEventUmaMetrics) {
 // Tests that if a RenderWidget is auto-resized, it requests a new
 // viz::LocalSurfaceId to be allocated on the impl thread.
 TEST_F(RenderWidgetUnittest, AutoResizeAllocatedLocalSurfaceId) {
-  widget()->InitializeLayerTreeView();
-
   viz::ParentLocalSurfaceIdAllocator allocator;
 
   // Enable auto-resize.
@@ -381,17 +402,25 @@ TEST_F(RenderWidgetUnittest, AutoResizeAllocatedLocalSurfaceId) {
   visual_properties.auto_resize_enabled = true;
   visual_properties.min_size_for_auto_resize = gfx::Size(100, 100);
   visual_properties.max_size_for_auto_resize = gfx::Size(200, 200);
-  visual_properties.local_surface_id = allocator.GetCurrentLocalSurfaceId();
+  allocator.GenerateId();
+  visual_properties.local_surface_id_allocation =
+      allocator.GetCurrentLocalSurfaceIdAllocation();
   widget()->SynchronizeVisualProperties(visual_properties);
-  EXPECT_EQ(allocator.GetCurrentLocalSurfaceId(),
-            widget()->local_surface_id_from_parent());
-  EXPECT_FALSE(widget()->compositor()->HasNewLocalSurfaceIdRequest());
+  EXPECT_EQ(allocator.GetCurrentLocalSurfaceIdAllocation(),
+            widget()->local_surface_id_allocation_from_parent());
+  EXPECT_FALSE(widget()
+                   ->layer_tree_view()
+                   ->layer_tree_host()
+                   ->new_local_surface_id_request_for_testing());
 
   constexpr gfx::Size size(200, 200);
   widget()->DidAutoResize(size);
-  EXPECT_EQ(allocator.GetCurrentLocalSurfaceId(),
-            widget()->local_surface_id_from_parent());
-  EXPECT_TRUE(widget()->compositor()->HasNewLocalSurfaceIdRequest());
+  EXPECT_EQ(allocator.GetCurrentLocalSurfaceIdAllocation(),
+            widget()->local_surface_id_allocation_from_parent());
+  EXPECT_TRUE(widget()
+                  ->layer_tree_view()
+                  ->layer_tree_host()
+                  ->new_local_surface_id_request_for_testing());
 }
 
 class PopupRenderWidget : public RenderWidget {
@@ -399,14 +428,13 @@ class PopupRenderWidget : public RenderWidget {
   explicit PopupRenderWidget(CompositorDependencies* compositor_deps)
       : RenderWidget(routing_id_++,
                      compositor_deps,
-                     blink::kWebPopupTypePage,
+                     WidgetType::kPopup,
                      ScreenInfo(),
+                     blink::kWebDisplayModeUndefined,
                      false,
                      false,
-                     false,
-                     blink::scheduler::GetSingleThreadTaskRunnerForTesting()) {
+                     false) {
     Init(RenderWidget::ShowCallback(), mock_webwidget());
-    did_show_ = true;
   }
 
   IPC::TestSink* sink() { return &sink_; }
@@ -417,8 +445,15 @@ class PopupRenderWidget : public RenderWidget {
       bool,
       const blink::WebDeviceEmulationParams&) override {}
 
+  // Shuts down the metrics emulator, the compositor, and destroys the internal
+  // WebWidget. Should be called before destroying the object.
+  void Shutdown() {
+    RenderWidget::Close();
+    shutdown_ = true;
+  }
+
  protected:
-  ~PopupRenderWidget() override { webwidget_internal_ = nullptr; }
+  ~PopupRenderWidget() override { DCHECK(shutdown_); }
 
   bool Send(IPC::Message* msg) override {
     sink_.OnMessageReceived(*msg);
@@ -427,6 +462,7 @@ class PopupRenderWidget : public RenderWidget {
   }
 
  private:
+  bool shutdown_ = false;
   IPC::TestSink sink_;
   MockWebWidget mock_webwidget_;
   static int routing_id_;
@@ -438,7 +474,11 @@ int PopupRenderWidget::routing_id_ = 1;
 
 class RenderWidgetPopupUnittest : public testing::Test {
  public:
-  RenderWidgetPopupUnittest() {
+  RenderWidgetPopupUnittest() = default;
+  ~RenderWidgetPopupUnittest() override { widget_->Shutdown(); }
+
+  // testing::Test implementation.
+  void SetUp() override {
     widget_ = new PopupRenderWidget(&compositor_deps_);
     // RenderWidget::Init does an AddRef that's balanced by a browser-initiated
     // Close IPC. That Close will never happen in this test, so do a Release
@@ -446,7 +486,6 @@ class RenderWidgetPopupUnittest : public testing::Test {
     widget_->Release();
     DCHECK(widget_->HasOneRef());
   }
-  ~RenderWidgetPopupUnittest() override {}
 
   PopupRenderWidget* widget() const { return widget_.get(); }
   FakeCompositorDependencies compositor_deps_;
@@ -460,6 +499,41 @@ class RenderWidgetPopupUnittest : public testing::Test {
   scoped_refptr<PopupRenderWidget> widget_;
 
   DISALLOW_COPY_AND_ASSIGN(RenderWidgetPopupUnittest);
+};
+
+class StubRenderWidgetOwnerDelegate : public RenderWidgetOwnerDelegate {
+ public:
+  blink::WebWidget* GetWebWidgetForWidget() const override { return nullptr; }
+  bool RenderWidgetWillHandleMouseEventForWidget(
+      const blink::WebMouseEvent& event) override {
+    return false;
+  }
+  void SetActiveForWidget(bool active) override {}
+  bool SupportsMultipleWindowsForWidget() override { return true; }
+  void DidHandleGestureEventForWidget(
+      const blink::WebGestureEvent& event) override {}
+  void DidCloseWidget() override {}
+  void ApplyNewSizeForWidget(const gfx::Size& old_size,
+                             const gfx::Size& new_size) override {}
+  void ApplyNewDisplayModeForWidget(
+      const blink::WebDisplayMode& new_display_mode) override {}
+  void ApplyAutoResizeLimitsForWidget(const gfx::Size& min_size,
+                                      const gfx::Size& max_size) override {}
+  void DisableAutoResizeForWidget() override {}
+  void ScrollFocusedNodeIntoViewForWidget() override {}
+  void DidReceiveSetFocusEventForWidget() override {}
+  void DidChangeFocusForWidget() override {}
+  void DidCommitCompositorFrameForWidget() override {}
+  void DidCompletePageScaleAnimationForWidget() override {}
+  void ResizeWebWidgetForWidget(
+      const gfx::Size& size,
+      float top_controls_height,
+      float bottom_controls_height,
+      bool browser_controls_shrink_blink_size) override {}
+  void RequestScheduleAnimationForWidget() override {}
+  void SetScreenMetricsEmulationParametersForWidget(
+      bool enabled,
+      const blink::WebDeviceEmulationParams& params) override {}
 };
 
 TEST_F(RenderWidgetPopupUnittest, EmulatingPopupRect) {
@@ -489,12 +563,16 @@ TEST_F(RenderWidgetPopupUnittest, EmulatingPopupRect) {
   scoped_refptr<PopupRenderWidget> parent_widget(
       new PopupRenderWidget(&compositor_deps_));
   parent_widget->Release();  // Balance Init().
-  RenderWidgetScreenMetricsEmulator emulator(
-      parent_widget.get(), emulation_params, visual_properties,
-      parent_window_rect, parent_window_rect);
-  emulator.Apply();
 
-  widget()->SetPopupOriginAdjustmentsForEmulation(&emulator);
+  // Emulation only happens for RenderWidgets with an owner delegate.
+  StubRenderWidgetOwnerDelegate delegate;
+  parent_widget->set_owner_delegate(&delegate);
+
+  // Setup emulation on the |parent_widget|.
+  parent_widget->OnSynchronizeVisualProperties(visual_properties);
+  parent_widget->OnEnableDeviceEmulation(emulation_params);
+  // Then use it for the popup widget under test.
+  widget()->ApplyEmulatedScreenMetricsForPopupWidget(parent_widget.get());
 
   // Position of the popup as seen by the emulated widget.
   gfx::Point emulated_position(
@@ -518,6 +596,59 @@ TEST_F(RenderWidgetPopupUnittest, EmulatingPopupRect) {
   EXPECT_EQ(popup_emulated_rect.y, widget()->WindowRect().y);
   EXPECT_EQ(popup_emulated_rect.x, widget()->ViewRect().x);
   EXPECT_EQ(popup_emulated_rect.y, widget()->ViewRect().y);
+
+  parent_widget->Shutdown();
 }
+
+// Verify desktop memory limit calculations.
+#if !defined(OS_ANDROID)
+TEST(RenderWidgetTest, IgnoreGivenMemoryPolicy) {
+  auto policy = RenderWidget::GetGpuMemoryPolicy(cc::ManagedMemoryPolicy(256),
+                                                 gfx::Size(), 1.f);
+  EXPECT_EQ(512u * 1024u * 1024u, policy.bytes_limit_when_visible);
+  EXPECT_EQ(gpu::MemoryAllocation::CUTOFF_ALLOW_NICE_TO_HAVE,
+            policy.priority_cutoff_when_visible);
+}
+
+TEST(RenderWidgetTest, LargeScreensUseMoreMemory) {
+  auto policy = RenderWidget::GetGpuMemoryPolicy(cc::ManagedMemoryPolicy(256),
+                                                 gfx::Size(4096, 2160), 1.f);
+  EXPECT_EQ(2u * 512u * 1024u * 1024u, policy.bytes_limit_when_visible);
+  EXPECT_EQ(gpu::MemoryAllocation::CUTOFF_ALLOW_NICE_TO_HAVE,
+            policy.priority_cutoff_when_visible);
+
+  policy = RenderWidget::GetGpuMemoryPolicy(cc::ManagedMemoryPolicy(256),
+                                            gfx::Size(2048, 1080), 2.f);
+  EXPECT_EQ(2u * 512u * 1024u * 1024u, policy.bytes_limit_when_visible);
+  EXPECT_EQ(gpu::MemoryAllocation::CUTOFF_ALLOW_NICE_TO_HAVE,
+            policy.priority_cutoff_when_visible);
+}
+#endif
+
+#if defined(OS_ANDROID)
+class RenderWidgetSurfaceSyncUnittest : public RenderWidgetUnittest {
+ public:
+  RenderWidgetSurfaceSyncUnittest() = default;
+  ~RenderWidgetSurfaceSyncUnittest() override = default;
+
+  void SetUp() override {
+    feature_list_.InitAndEnableFeature(features::kEnableSurfaceSynchronization);
+    RenderWidgetUnittest::SetUp();
+  }
+
+ private:
+  base::test::ScopedFeatureList feature_list_;
+};
+
+TEST_F(RenderWidgetSurfaceSyncUnittest, ForceSendMetadataOnInput) {
+  auto* layer_tree_host = widget()->layer_tree_view()->layer_tree_host();
+  // We should not have any force send metadata requests at start.
+  EXPECT_FALSE(layer_tree_host->TakeForceSendMetadataRequest());
+  // ShowVirtualKeyboard will trigger a text input state update.
+  widget()->ShowVirtualKeyboard();
+  // We should now have a force send metadata request.
+  EXPECT_TRUE(layer_tree_host->TakeForceSendMetadataRequest());
+}
+#endif  // !defined(OS_ANDROID)
 
 }  // namespace content

@@ -21,6 +21,13 @@ Polymer({
     },
 
     /**
+     * The current sync status, supplied by SyncBrowserProxy.
+     * TODO(dpapad): make |syncStatus| private.
+     * @type {?settings.SyncStatus}
+     */
+    syncStatus: Object,
+
+    /**
      * Results of browsing data counters, keyed by the suffix of
      * the corresponding data type deletion preference, as reported
      * by the C++ side.
@@ -88,32 +95,47 @@ Polymer({
       value: false,
     },
 
-    /** @private {!Array<ImportantSite>} */
-    importantSites_: {
-      type: Array,
-      value: function() {
-        return [];
-      }
+    /** @private */
+    shouldShowCookieException_: {
+      type: Boolean,
+      value: false,
     },
 
     /** @private */
-    importantSitesFlagEnabled_: {
+    isSyncPaused_: {
+      type: Boolean,
+      value: false,
+      computed: 'computeIsSyncPaused_(syncStatus)',
+    },
+
+    /** @private */
+    hasPassphraseError_: {
+      type: Boolean,
+      value: false,
+      computed: 'computeHasPassphraseError_(syncStatus)',
+    },
+
+    /** @private */
+    hasOtherSyncError_: {
+      type: Boolean,
+      value: false,
+      computed:
+          'computeHasOtherError_(syncStatus, isSyncPaused_, hasPassphraseError_)',
+    },
+
+    /**
+     * This flag is used to conditionally show the footer for the dialog.
+     * @private
+     */
+    diceEnabled_: {
       type: Boolean,
       value: function() {
-        return loadTimeData.getBoolean('importantSitesInCbd');
+        let diceEnabled = false;
+        // <if expr="not chromeos">
+        diceEnabled = loadTimeData.getBoolean('diceEnabled');
+        // </if>
+        return diceEnabled;
       },
-    },
-
-    /** @private */
-    showImportantSitesDialog_: {
-      type: Boolean,
-      value: false,
-    },
-
-    /** @private */
-    showImportantSitesCacheSubtitle_: {
-      type: Boolean,
-      value: false,
     },
 
     /**
@@ -131,8 +153,17 @@ Polymer({
   /** @private {settings.ClearBrowsingDataBrowserProxy} */
   browserProxy_: null,
 
+  /** @private {?settings.SyncBrowserProxy} */
+  syncBrowserProxy_: null,
+
   /** @override */
   ready: function() {
+    this.syncBrowserProxy_ = settings.SyncBrowserProxyImpl.getInstance();
+    this.syncBrowserProxy_.getSyncStatus().then(
+        this.handleSyncStatus_.bind(this));
+    this.addWebUIListener(
+        'sync-status-changed', this.handleSyncStatus_.bind(this));
+
     this.addWebUIListener(
         'update-sync-state', this.updateSyncState_.bind(this));
     this.addWebUIListener(
@@ -147,12 +178,15 @@ Polymer({
     this.browserProxy_.initialize().then(() => {
       this.$.clearBrowsingDataDialog.showModal();
     });
+  },
 
-    if (this.importantSitesFlagEnabled_) {
-      this.browserProxy_.getImportantSites().then(sites => {
-        this.importantSites_ = sites;
-      });
-    }
+  /**
+   * Handler for when the sync state is pushed from the browser.
+   * @param {?settings.SyncStatus} syncStatus
+   * @private
+   */
+  handleSyncStatus_: function(syncStatus) {
+    this.syncStatus = syncStatus;
   },
 
   /**
@@ -199,34 +233,54 @@ Polymer({
    *
    * @param {boolean} signedIn Whether the user is signed in.
    * @param {boolean} syncing Whether the user is syncing history.
+   * @param {boolean} shouldShowCookieException Whether the exception about not
+   *    being signed out of your Google account should be shown.
    * @private
    */
-  updateSyncState_: function(signedIn, syncing) {
+  updateSyncState_: function(signedIn, syncing, shouldShowCookieException) {
     this.isSignedIn_ = signedIn;
     this.isSyncingHistory_ = syncing;
+    this.shouldShowCookieException_ = shouldShowCookieException;
     this.$.clearBrowsingDataDialog.classList.add('fully-rendered');
   },
 
   /**
-   * Choose a summary checkbox label.
+   * Choose a label for the history checkbox.
    * @param {boolean} isSignedIn
    * @param {boolean} isSyncingHistory
    * @param {string} historySummary
-   * @param {string} historySummarySigned
+   * @param {string} historySummarySignedIn
    * @param {string} historySummarySynced
    * @return {string}
    * @private
    */
   browsingCheckboxLabel_: function(
-      isSignedIn, isSyncingHistory, historySummary, historySummarySigned,
-      historySummarySynced) {
-    if (isSyncingHistory) {
+      isSignedIn, isSyncingHistory, hasSyncError, historySummary,
+      historySummarySignedIn, historySummarySynced) {
+    if (isSyncingHistory && !hasSyncError) {
       return historySummarySynced;
-    } else if (isSignedIn) {
-      return historySummarySigned;
+    } else if (isSignedIn && !this.isSyncPaused_) {
+      return historySummarySignedIn;
     }
     return historySummary;
   },
+
+  /**
+   * Choose a label for the cookie checkbox.
+   * @param {boolean} shouldShowCookieException
+   * @param {string} cookiesSummary
+   * @param {string} cookiesSummarySignedIn
+   * @return {string}
+   * @private
+   */
+  cookiesCheckboxLabel_: function(
+      shouldShowCookieException, cookiesSummary, cookiesSummarySignedIn) {
+    if (shouldShowCookieException) {
+      return cookiesSummarySignedIn;
+    }
+    return cookiesSummary;
+  },
+
 
   /**
    * Choose a content/site settings label.
@@ -252,54 +306,6 @@ Polymer({
     // Strip the common prefix, i.e. use only "<datatype>".
     const matches = prefName.match(/^browser\.clear_data\.(\w+)$/);
     this.set('counters_.' + assert(matches[1]), text);
-  },
-
-  /**
-   * @return {boolean} Whether the ImportantSites dialog should be shown.
-   * @private
-   */
-  shouldShowImportantSites_: function() {
-    if (!this.importantSitesFlagEnabled_)
-      return false;
-    const tab = this.$.tabs.selectedItem;
-    if (!tab.querySelector('.cookies-checkbox').checked) {
-      return false;
-    }
-
-    const haveImportantSites = this.importantSites_.length > 0;
-    chrome.send(
-        'metricsHandler:recordBooleanHistogram',
-        ['History.ClearBrowsingData.ImportantDialogShown', haveImportantSites]);
-    return haveImportantSites;
-  },
-
-  /**
-   * Handles the tap on the Clear Data button.
-   * @private
-   */
-  onClearBrowsingDataTap_: function() {
-    if (this.shouldShowImportantSites_()) {
-      const tab = this.$.tabs.selectedItem;
-      this.showImportantSitesDialog_ = true;
-      this.showImportantSitesCacheSubtitle_ =
-          tab.querySelector('.cache-checkbox').checked;
-      this.$.clearBrowsingDataDialog.close();
-      // Show important sites dialog after dom-if is applied.
-      this.async(() => this.$$('#importantSitesDialog').showModal());
-    } else {
-      this.clearBrowsingData_();
-    }
-  },
-
-  /**
-   * Handles closing of the clear browsing data dialog. Stops the close
-   * event from propagating if another dialog is shown to prevent the
-   * privacy-page from closing this dialog.
-   * @private
-   */
-  onClearBrowsingDataDialogClose_: function(event) {
-    if (this.showImportantSitesDialog_)
-      event.stopPropagation();
   },
 
   /**
@@ -334,8 +340,7 @@ Polymer({
       chrome.metricsPrivate.recordUserAction('ClearBrowsingData_AdvancedTab');
     }
 
-    this.browserProxy_
-        .clearBrowsingData(dataTypes, timePeriod, this.importantSites_)
+    this.browserProxy_.clearBrowsingData(dataTypes, timePeriod)
         .then(shouldShowNotice => {
           this.clearingInProgress_ = false;
           this.showHistoryDeletionDialog_ = shouldShowNotice;
@@ -343,19 +348,8 @@ Polymer({
               'History.ClearBrowsingData.TimeSpentInDialog',
               Date.now() - this.dialogOpenedTime_);
           if (!shouldShowNotice)
-            this.closeDialogs_();
+            this.$.clearBrowsingDataDialog.close();
         });
-  },
-
-  /**
-   * Closes the clear browsing data or important site dialog if they are open.
-   * @private
-   */
-  closeDialogs_: function() {
-    if (this.$.clearBrowsingDataDialog.open)
-      this.$.clearBrowsingDataDialog.close();
-    if (this.showImportantSitesDialog_)
-      this.$$('#importantSitesDialog').close();
   },
 
   /** @private */
@@ -364,25 +358,12 @@ Polymer({
   },
 
   /**
-   * Handles the tap confirm button in important sites.
-   * @private
-   */
-  onImportantSitesConfirmTap_: function() {
-    this.clearBrowsingData_();
-  },
-
-  /** @private */
-  onImportantSitesCancelTap_: function() {
-    /** @type {!CrDialogElement} */ (this.$$('#importantSitesDialog')).cancel();
-  },
-
-  /**
    * Handles the closing of the notice about other forms of browsing history.
    * @private
    */
   onHistoryDeletionDialogClose_: function() {
     this.showHistoryDeletionDialog_ = false;
-    this.closeDialogs_();
+    this.$.clearBrowsingDataDialog.close();
   },
 
   /**
@@ -398,5 +379,68 @@ Polymer({
       chrome.metricsPrivate.recordUserAction(
           'ClearBrowsingData_SwitchTo_AdvancedTab');
     }
+  },
+
+  /**
+   * Called when the user clicks the link in the footer.
+   * @param {!Event} e
+   * @private
+   */
+  onSyncDescriptionLinkClicked_: function(e) {
+    if (e.target.tagName === 'A') {
+      e.preventDefault();
+      if (!this.syncStatus.hasError) {
+        chrome.metricsPrivate.recordUserAction('ClearBrowsingData_Sync_Pause');
+        this.syncBrowserProxy_.pauseSync();
+      } else if (this.isSyncPaused_) {
+        chrome.metricsPrivate.recordUserAction('ClearBrowsingData_Sync_SignIn');
+        this.syncBrowserProxy_.startSignIn();
+      } else {
+        if (this.hasPassphraseError_) {
+          chrome.metricsPrivate.recordUserAction(
+              'ClearBrowsingData_Sync_NavigateToPassphrase');
+        } else {
+          chrome.metricsPrivate.recordUserAction(
+              'ClearBrowsingData_Sync_NavigateToError');
+        }
+        // In any other error case, navigate to the sync page.
+        settings.navigateTo(settings.routes.SYNC);
+      }
+    }
+  },
+
+  /**
+   * @return {boolean}
+   * @private
+   */
+  computeIsSyncPaused_: function() {
+    return !!this.syncStatus.hasError &&
+        this.syncStatus.statusAction === settings.StatusAction.REAUTHENTICATE;
+  },
+
+  /**
+   * @return {boolean}
+   * @private
+   */
+  computeHasPassphraseError_: function() {
+    return !!this.syncStatus.hasError &&
+        this.syncStatus.statusAction === settings.StatusAction.ENTER_PASSPHRASE;
+  },
+
+  /**
+   * @return {boolean}
+   * @private
+   */
+  computeHasOtherError_: function() {
+    return this.syncStatus !== undefined && !!this.syncStatus.hasError &&
+        !this.isSyncPaused_ && !this.hasPassphraseError_;
+  },
+
+  /**
+   * @return {boolean}
+   * @private
+   */
+  shouldShowFooter_: function() {
+    return this.diceEnabled_ && !!this.syncStatus && !!this.syncStatus.signedIn;
   },
 });

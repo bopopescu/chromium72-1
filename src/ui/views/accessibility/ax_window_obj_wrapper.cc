@@ -9,8 +9,8 @@
 #include "base/strings/utf_string_conversions.h"
 #include "ui/accessibility/ax_enums.mojom.h"
 #include "ui/accessibility/ax_node_data.h"
+#include "ui/accessibility/ax_tree_id.h"
 #include "ui/accessibility/platform/aura_window_properties.h"
-#include "ui/accessibility/platform/ax_unique_id.h"
 #include "ui/aura/client/focus_client.h"
 #include "ui/aura/window.h"
 #include "ui/views/accessibility/ax_aura_obj_cache.h"
@@ -18,26 +18,25 @@
 
 namespace views {
 
-void FireLocationChanges(aura::Window* window) {
+// A helper to fire an event on a window, taking into account its associated
+// widget and that widget's root view.
+void FireEvent(aura::Window* window, ax::mojom::Event event_type) {
   AXAuraObjCache::GetInstance()->FireEvent(
-      AXAuraObjCache::GetInstance()->GetOrCreate(window),
-      ax::mojom::Event::kLocationChanged);
+      AXAuraObjCache::GetInstance()->GetOrCreate(window), event_type);
 
   Widget* widget = Widget::GetWidgetForNativeView(window);
   if (widget) {
     AXAuraObjCache::GetInstance()->FireEvent(
-        AXAuraObjCache::GetInstance()->GetOrCreate(widget),
-        ax::mojom::Event::kLocationChanged);
+        AXAuraObjCache::GetInstance()->GetOrCreate(widget), event_type);
 
     views::View* root_view = widget->GetRootView();
     if (root_view)
-      root_view->NotifyAccessibilityEvent(ax::mojom::Event::kLocationChanged,
-                                          true);
+      root_view->NotifyAccessibilityEvent(event_type, true);
   }
 
   aura::Window::Windows children = window->children();
   for (size_t i = 0; i < children.size(); ++i)
-    FireLocationChanges(children[i]);
+    FireEvent(children[i], ax::mojom::Event::kLocationChanged);
 }
 
 AXWindowObjWrapper::AXWindowObjWrapper(aura::Window* window)
@@ -56,6 +55,10 @@ AXWindowObjWrapper::~AXWindowObjWrapper() {
 
   window_->RemoveObserver(this);
   window_ = NULL;
+}
+
+bool AXWindowObjWrapper::IsIgnored() {
+  return false;
 }
 
 AXAuraObjWrapper* AXWindowObjWrapper::GetParent() {
@@ -80,7 +83,7 @@ void AXWindowObjWrapper::GetChildren(
 }
 
 void AXWindowObjWrapper::Serialize(ui::AXNodeData* out_node_data) {
-  out_node_data->id = GetUniqueId().Get();
+  out_node_data->id = GetUniqueId();
   ax::mojom::Role role = window_->GetProperty(ui::kAXRoleOverride);
   if (role != ax::mojom::Role::kNone)
     out_node_data->role = role;
@@ -91,10 +94,12 @@ void AXWindowObjWrapper::Serialize(ui::AXNodeData* out_node_data) {
                                     base::UTF16ToUTF8(window_->GetTitle()));
   if (!window_->IsVisible())
     out_node_data->AddState(ax::mojom::State::kInvisible);
-  out_node_data->location = gfx::RectF(window_->GetBoundsInScreen());
-  ui::AXTreeIDRegistry::AXTreeID child_ax_tree_id =
-      window_->GetProperty(ui::kChildAXTreeID);
-  if (child_ax_tree_id != ui::AXTreeIDRegistry::kNoAXTreeID) {
+
+  out_node_data->relative_bounds.bounds =
+      gfx::RectF(window_->GetBoundsInScreen());
+  std::string* child_ax_tree_id_ptr = window_->GetProperty(ui::kChildAXTreeID);
+  if (child_ax_tree_id_ptr && ui::AXTreeID::FromString(*child_ax_tree_id_ptr) !=
+                                  ui::AXTreeIDUnknown()) {
     // Most often, child AX trees are parented to Views. We need to handle
     // the case where they're not here, but we don't want the same AX tree
     // to be a child of two different parents.
@@ -106,13 +111,13 @@ void AXWindowObjWrapper::Serialize(ui::AXNodeData* out_node_data) {
       return;
     }
 
-    out_node_data->AddIntAttribute(ax::mojom::IntAttribute::kChildTreeId,
-                                   child_ax_tree_id);
+    out_node_data->AddStringAttribute(ax::mojom::StringAttribute::kChildTreeId,
+                                      *child_ax_tree_id_ptr);
   }
 }
 
-const ui::AXUniqueId& AXWindowObjWrapper::GetUniqueId() const {
-  return unique_id_;
+int32_t AXWindowObjWrapper::GetUniqueId() const {
+  return unique_id_.Get();
 }
 
 void AXWindowObjWrapper::OnWindowDestroyed(aura::Window* window) {
@@ -139,7 +144,7 @@ void AXWindowObjWrapper::OnWindowBoundsChanged(
   if (window != window_)
     return;
 
-  FireLocationChanges(window_);
+  FireEvent(window_, ax::mojom::Event::kLocationChanged);
 }
 
 void AXWindowObjWrapper::OnWindowPropertyChanged(aura::Window* window,
@@ -153,9 +158,20 @@ void AXWindowObjWrapper::OnWindowPropertyChanged(aura::Window* window,
 
 void AXWindowObjWrapper::OnWindowVisibilityChanged(aura::Window* window,
                                                    bool visible) {
-  AXAuraObjCache::GetInstance()->FireEvent(
-      AXAuraObjCache::GetInstance()->GetOrCreate(window_),
-      ax::mojom::Event::kStateChanged);
+  AXAuraObjCache::GetInstance()->FireEvent(this,
+                                           ax::mojom::Event::kStateChanged);
+}
+
+void AXWindowObjWrapper::OnWindowTransformed(aura::Window* window,
+                                             ui::PropertyChangeReason reason) {
+  if (window != window_)
+    return;
+
+  FireEvent(window_, ax::mojom::Event::kLocationChanged);
+}
+
+void AXWindowObjWrapper::OnWindowTitleChanged(aura::Window* window) {
+  FireEvent(window, ax::mojom::Event::kTextChanged);
 }
 
 }  // namespace views

@@ -9,7 +9,7 @@
 #include "base/bind.h"
 #include "base/bind_helpers.h"
 #include "base/logging.h"
-#include "base/task_scheduler/task_scheduler.h"
+#include "base/task/post_task.h"
 #include "base/trace_event/trace_config.h"
 #include "chromecast/tracing/system_tracing_common.h"
 #include "content/public/browser/browser_thread.h"
@@ -45,11 +45,11 @@ CastTracingAgent::CastTracingAgent(service_manager::Connector* connector)
     : BaseAgent(connector,
                 "systemTraceEvents",
                 tracing::mojom::TraceDataType::STRING,
-                false /* supports_explicit_clock_sync */) {
-  task_runner_ =
-      base::TaskScheduler::GetInstance()->CreateSequencedTaskRunnerWithTraits(
-          {base::MayBlock(), base::TaskPriority::BACKGROUND,
-           base::TaskShutdownBehavior::SKIP_ON_SHUTDOWN});
+                false /* supports_explicit_clock_sync */,
+                base::kNullProcessId) {
+  task_runner_ = base::CreateSequencedTaskRunnerWithTraits(
+      {base::MayBlock(), base::TaskPriority::BEST_EFFORT,
+       base::TaskShutdownBehavior::SKIP_ON_SHUTDOWN});
 }
 
 CastTracingAgent::~CastTracingAgent() = default;
@@ -92,7 +92,7 @@ void CastTracingAgent::GetCategories(Agent::GetCategoriesCallback callback) {
 void CastTracingAgent::StartTracingOnIO(
     scoped_refptr<base::TaskRunner> reply_task_runner,
     const std::string& categories) {
-  system_tracer_ = std::make_unique<chromecast::SystemTracer>();
+  system_tracer_ = chromecast::SystemTracer::Create();
 
   system_tracer_->StartTracing(
       categories, base::BindOnce(&CastTracingAgent::FinishStartOnIO,

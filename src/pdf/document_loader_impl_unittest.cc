@@ -232,7 +232,7 @@ class TestClient : public DocumentLoader::Client {
     partial_loader_data_.CallOpenCallback(0);
     uint32_t length = partial_loader_data_.byte_range().length();
     while (length > 0) {
-      const uint32_t max_part_len = kDefaultRequestSize;
+      constexpr uint32_t max_part_len = kDefaultRequestSize;
       const uint32_t part_len = std::min(length, max_part_len);
       partial_loader_data_.CallReadCallback(part_len);
       length -= part_len;
@@ -468,7 +468,7 @@ TEST_F(DocumentLoaderImplTest, CompleteWithPartial) {
 }
 
 TEST_F(DocumentLoaderImplTest, PartialRequestLastChunk) {
-  const uint32_t kLastChunkSize = 300;
+  constexpr uint32_t kLastChunkSize = 300;
   TestClient client;
   client.SetCanUsePartialLoading();
   client.full_page_loader_data()->set_content_length(kDefaultRequestSize * 20 +
@@ -539,8 +539,8 @@ TEST_F(DocumentLoaderImplTest, ClearPendingRequests) {
 
   {
     EXPECT_TRUE(client.partial_loader_data()->IsWaitOpen());
-    const gfx::Range range_requested(15 * kDefaultRequestSize,
-                                     16 * kDefaultRequestSize);
+    constexpr gfx::Range range_requested(15 * kDefaultRequestSize,
+                                         16 * kDefaultRequestSize);
     EXPECT_EQ(range_requested.start(),
               client.partial_loader_data()->open_byte_range().start());
     EXPECT_LE(range_requested.end(),
@@ -575,8 +575,8 @@ TEST_F(DocumentLoaderImplTest, ClearPendingRequests) {
     // Loading should be restarted.
     EXPECT_TRUE(client.partial_loader_data()->IsWaitOpen());
     // The first requested chunk should be processed.
-    const gfx::Range range_requested(35 * kDefaultRequestSize,
-                                     36 * kDefaultRequestSize);
+    constexpr gfx::Range range_requested(35 * kDefaultRequestSize,
+                                         36 * kDefaultRequestSize);
     EXPECT_EQ(range_requested.start(),
               client.partial_loader_data()->open_byte_range().start());
     EXPECT_LE(range_requested.end(),
@@ -597,8 +597,8 @@ TEST_F(DocumentLoaderImplTest, ClearPendingRequests) {
     // Loading should be restarted .
     EXPECT_TRUE(client.partial_loader_data()->IsWaitOpen());
     // The first requested chunk should be processed.
-    const gfx::Range range_requested(70 * kDefaultRequestSize,
-                                     71 * kDefaultRequestSize);
+    constexpr gfx::Range range_requested(70 * kDefaultRequestSize,
+                                         71 * kDefaultRequestSize);
     EXPECT_EQ(range_requested.start(),
               client.partial_loader_data()->open_byte_range().start());
     EXPECT_LE(range_requested.end(),
@@ -676,8 +676,8 @@ TEST_F(DocumentLoaderImplTest, RequestData) {
 
   {
     EXPECT_TRUE(client.partial_loader_data()->IsWaitOpen());
-    const gfx::Range range_requested(13 * kDefaultRequestSize,
-                                     14 * kDefaultRequestSize);
+    constexpr gfx::Range range_requested(13 * kDefaultRequestSize,
+                                         14 * kDefaultRequestSize);
     EXPECT_EQ(range_requested.start(),
               client.partial_loader_data()->open_byte_range().start());
     EXPECT_LE(range_requested.end(),
@@ -694,8 +694,8 @@ TEST_F(DocumentLoaderImplTest, RequestData) {
   client.partial_loader_data()->CallReadCallback(kDefaultRequestSize);
   {
     EXPECT_TRUE(client.partial_loader_data()->IsWaitOpen());
-    const gfx::Range range_requested(26 * kDefaultRequestSize,
-                                     27 * kDefaultRequestSize);
+    constexpr gfx::Range range_requested(26 * kDefaultRequestSize,
+                                         27 * kDefaultRequestSize);
     EXPECT_EQ(range_requested.start(),
               client.partial_loader_data()->open_byte_range().start());
     EXPECT_LE(range_requested.end(),
@@ -711,8 +711,8 @@ TEST_F(DocumentLoaderImplTest, RequestData) {
   client.partial_loader_data()->CallReadCallback(kDefaultRequestSize);
   {
     EXPECT_TRUE(client.partial_loader_data()->IsWaitOpen());
-    const gfx::Range range_requested(39 * kDefaultRequestSize,
-                                     40 * kDefaultRequestSize);
+    constexpr gfx::Range range_requested(39 * kDefaultRequestSize,
+                                         40 * kDefaultRequestSize);
     EXPECT_EQ(range_requested.start(),
               client.partial_loader_data()->open_byte_range().start());
     EXPECT_LE(range_requested.end(),
@@ -796,8 +796,8 @@ TEST_F(DocumentLoaderImplTest, MergePendingRequests) {
   // Send initial data from FullPageLoader.
   client.full_page_loader_data()->CallReadCallback(kDefaultRequestSize);
 
-  const gfx::Range range_requested(16 * kDefaultRequestSize,
-                                   18 * kDefaultRequestSize);
+  constexpr gfx::Range range_requested(16 * kDefaultRequestSize,
+                                       18 * kDefaultRequestSize);
   EXPECT_EQ(range_requested.start(),
             client.partial_loader_data()->open_byte_range().start());
   EXPECT_LE(range_requested.end(),
@@ -1066,6 +1066,101 @@ TEST_F(DocumentLoaderImplTest,
   EXPECT_CALL(client, OnPendingRequestComplete()).Times(1);
   client.SendAllPartialData();
   Mock::VerifyAndClear(&client);
+}
+
+TEST_F(DocumentLoaderImplTest, IgnoreDataMoreThanExpectedWithPartial) {
+  static constexpr uint32_t kDocSize = kDefaultRequestSize * 80 - 321;
+  TestClient client;
+  client.SetCanUsePartialLoading();
+  client.full_page_loader_data()->set_content_length(kDocSize);
+  DocumentLoaderImpl loader(&client);
+  loader.Init(client.CreateFullPageLoader(), "http://url.com");
+  // Request data at and.
+  loader.RequestData(kDocSize - 100, 100);
+
+  // Always send initial data from FullPageLoader.
+  client.full_page_loader_data()->CallReadCallback(kDefaultRequestSize);
+  EXPECT_TRUE(client.full_page_loader_data()->closed());
+  EXPECT_FALSE(client.partial_loader_data()->closed());
+
+  // Request data at middle to continue loading partial, but not all remaining
+  // data.
+  loader.RequestData(kDocSize / 2, 100);
+
+  // Fill data at the end, the partial loding should be started for second
+  // requested data after receive data for first request.
+  client.SendAllPartialData();
+
+  ASSERT_TRUE(client.partial_loader_data()->IsWaitOpen());
+  // Process second request.
+  const uint32_t expected_length =
+      client.partial_loader_data()->open_byte_range().length();
+
+  // Send data.
+  client.partial_loader_data()->set_byte_range(
+      client.partial_loader_data()->open_byte_range());
+  client.partial_loader_data()->CallOpenCallback(0);
+  uint32_t length = expected_length;
+  while (length > 0) {
+    constexpr uint32_t max_part_len = kDefaultRequestSize;
+    const uint32_t part_len = std::min(length, max_part_len);
+    client.partial_loader_data()->CallReadCallback(part_len);
+    length -= part_len;
+  }
+
+  // The partial loading should be finished for current chunks sequence, if
+  // expected range was received, and remaining sequence should start loading.
+  EXPECT_FALSE(client.partial_loader_data()->IsWaitRead());
+  ASSERT_TRUE(client.partial_loader_data()->IsWaitOpen());
+
+  // Send other document data.
+  client.SendAllPartialData();
+  // The downloads should be finished.
+  EXPECT_TRUE(client.full_page_loader_data()->closed());
+  EXPECT_TRUE(client.partial_loader_data()->closed());
+}
+
+TEST_F(DocumentLoaderImplTest, IgnoreDataMoreThanExpectedWithPartialAtFileEnd) {
+  static constexpr uint32_t kExtraSize = 100;
+  static constexpr uint32_t kRealSize = kDefaultRequestSize * 20 - 300;
+  static constexpr uint32_t kDocSize = kRealSize - kExtraSize;
+  TestClient client;
+  client.SetCanUsePartialLoading();
+  client.full_page_loader_data()->set_content_length(kDocSize);
+  DocumentLoaderImpl loader(&client);
+  loader.Init(client.CreateFullPageLoader(), "http://url.com");
+  // Request data at middle.
+  static constexpr uint32_t kFirstPartial = kDefaultRequestSize * 11;
+  loader.RequestData(kFirstPartial, kDefaultRequestSize);
+
+  // Always send initial data from FullPageLoader.
+  client.full_page_loader_data()->CallReadCallback(kDefaultRequestSize);
+  EXPECT_TRUE(client.full_page_loader_data()->closed());
+  EXPECT_FALSE(client.partial_loader_data()->closed());
+
+  // Send data to file end and extra non expected data.
+  client.partial_loader_data()->set_byte_range(
+      gfx::Range(kFirstPartial, kRealSize));
+  client.partial_loader_data()->CallOpenCallback(0);
+  uint32_t length = client.partial_loader_data()->byte_range().length();
+  while (length > 0) {
+    constexpr uint32_t max_part_len = kDefaultRequestSize;
+    const uint32_t part_len = std::min(length, max_part_len);
+    client.partial_loader_data()->CallReadCallback(part_len);
+    length -= part_len;
+  }
+
+  // The partial loading should be finished for current chunks sequence, if
+  // eof was reached, and remaining sequence should start loading.
+  EXPECT_FALSE(client.partial_loader_data()->IsWaitRead());
+  EXPECT_EQ(gfx::Range(kDefaultRequestSize, kFirstPartial),
+            client.partial_loader_data()->open_byte_range());
+
+  // Send other document data.
+  client.SendAllPartialData();
+  // The downloads should be finished.
+  EXPECT_TRUE(client.full_page_loader_data()->closed());
+  EXPECT_TRUE(client.partial_loader_data()->closed());
 }
 
 }  // namespace chrome_pdf

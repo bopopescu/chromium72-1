@@ -31,10 +31,10 @@
 #ifndef THIRD_PARTY_BLINK_PUBLIC_WEB_WEB_HISTORY_ITEM_H_
 #define THIRD_PARTY_BLINK_PUBLIC_WEB_WEB_HISTORY_ITEM_H_
 
+#include "services/network/public/mojom/referrer_policy.mojom-shared.h"
 #include "third_party/blink/public/platform/web_common.h"
 #include "third_party/blink/public/platform/web_history_scroll_restoration_type.h"
 #include "third_party/blink/public/platform/web_private_ptr.h"
-#include "third_party/blink/public/platform/web_referrer_policy.h"
 #include "third_party/blink/public/platform/web_scroll_anchor_data.h"
 #include "third_party/blink/public/platform/web_string.h"
 
@@ -48,11 +48,6 @@ struct WebFloatPoint;
 struct WebPoint;
 template <typename T>
 class WebVector;
-
-enum WebHistoryLoadType {
-  kWebHistorySameDocumentLoad,
-  kWebHistoryDifferentDocumentLoad
-};
 
 // Represents a frame-level navigation entry in session history.  A
 // WebHistoryItem is a node in a tree.
@@ -80,8 +75,9 @@ class WebHistoryItem {
   BLINK_EXPORT void SetURLString(const WebString&);
 
   BLINK_EXPORT WebString GetReferrer() const;
-  BLINK_EXPORT WebReferrerPolicy GetReferrerPolicy() const;
-  BLINK_EXPORT void SetReferrer(const WebString&, WebReferrerPolicy);
+  BLINK_EXPORT network::mojom::ReferrerPolicy GetReferrerPolicy() const;
+  BLINK_EXPORT void SetReferrer(const WebString&,
+                                network::mojom::ReferrerPolicy);
 
   BLINK_EXPORT const WebString& Target() const;
   BLINK_EXPORT void SetTarget(const WebString&);

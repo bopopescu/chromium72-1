@@ -51,7 +51,7 @@ MATCHER_P(IsRtcEventAnaConfigEqualTo, config, "") {
     return false;
   }
   auto ana_event = static_cast<RtcEventAudioNetworkAdaptation*>(arg);
-  return *ana_event->config_ == config;
+  return ana_event->config() == config;
 }
 
 MATCHER_P(EncoderRuntimeConfigIs, config, "") {
@@ -102,8 +102,7 @@ AudioNetworkAdaptorStates CreateAudioNetworkAdaptor() {
   config.event_log = states.event_log.get();
   // AudioNetworkAdaptorImpl governs the lifetime of controller manager.
   states.audio_network_adaptor.reset(new AudioNetworkAdaptorImpl(
-      config,
-      std::move(controller_manager), std::move(debug_dump_writer)));
+      config, std::move(controller_manager), std::move(debug_dump_writer)));
 
   return states;
 }

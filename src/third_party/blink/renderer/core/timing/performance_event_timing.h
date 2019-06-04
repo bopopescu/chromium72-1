@@ -16,7 +16,7 @@ class CORE_EXPORT PerformanceEventTiming final : public PerformanceEntry {
   DEFINE_WRAPPERTYPEINFO();
 
  public:
-  static PerformanceEventTiming* Create(const String& event_type,
+  static PerformanceEventTiming* Create(const AtomicString& event_type,
                                         DOMHighResTimeStamp start_time,
                                         DOMHighResTimeStamp processing_start,
                                         DOMHighResTimeStamp processing_end,
@@ -25,7 +25,16 @@ class CORE_EXPORT PerformanceEventTiming final : public PerformanceEntry {
   static PerformanceEventTiming* CreateFirstInputTiming(
       PerformanceEventTiming* entry);
 
+  PerformanceEventTiming(const AtomicString& event_type,
+                         const AtomicString& entry_type,
+                         DOMHighResTimeStamp start_time,
+                         DOMHighResTimeStamp processing_start,
+                         DOMHighResTimeStamp processing_end,
+                         bool cancelable);
   ~PerformanceEventTiming() override;
+
+  AtomicString entryType() const override { return entry_type_; }
+  PerformanceEntryType EntryTypeEnum() const override;
 
   bool cancelable() const { return cancelable_; }
 
@@ -39,12 +48,7 @@ class CORE_EXPORT PerformanceEventTiming final : public PerformanceEntry {
   void Trace(blink::Visitor*) override;
 
  private:
-  PerformanceEventTiming(const String& event_type,
-                         const String& entry_type,
-                         DOMHighResTimeStamp start_time,
-                         DOMHighResTimeStamp processing_start,
-                         DOMHighResTimeStamp processing_end,
-                         bool cancelable);
+  AtomicString entry_type_;
   DOMHighResTimeStamp processing_start_;
   DOMHighResTimeStamp processing_end_;
   bool cancelable_;

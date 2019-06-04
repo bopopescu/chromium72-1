@@ -4,7 +4,7 @@
 
 #include "chrome/browser/chromeos/login/ui/login_display_host_common.h"
 
-#include "ash/shell.h"
+#include "base/bind_helpers.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/chromeos/login/app_launch_controller.h"
@@ -14,13 +14,13 @@
 #include "chrome/browser/chromeos/login/startup_utils.h"
 #include "chrome/browser/chromeos/mobile_config.h"
 #include "chrome/browser/chromeos/policy/browser_policy_connector_chromeos.h"
+#include "chrome/browser/chromeos/profiles/profile_helper.h"
 #include "chrome/browser/chromeos/system/device_disabling_manager.h"
-#include "chrome/browser/ui/ash/ash_util.h"
 #include "chrome/browser/ui/ash/wallpaper_controller_client.h"
 #include "chrome/browser/ui/webui/chromeos/internet_detail_dialog.h"
 #include "components/keep_alive_registry/keep_alive_types.h"
 #include "components/keep_alive_registry/scoped_keep_alive.h"
-#include "ui/wm/public/scoped_drag_drop_disabler.h"
+#include "ui/base/ui_base_features.h"
 
 namespace chromeos {
 namespace {
@@ -47,15 +47,6 @@ LoginDisplayHostCommon::LoginDisplayHostCommon() : weak_factory_(this) {
       new ScopedKeepAlive(KeepAliveOrigin::LOGIN_DISPLAY_HOST_WEBUI,
                           KeepAliveRestartOption::DISABLED));
 
-  // Disable Drag'n'Drop for the login session.
-  // ash::Shell may be null in tests.
-  if (ash::Shell::HasInstance() && !ash_util::IsRunningInMash()) {
-    scoped_drag_drop_disabler_.reset(
-        new wm::ScopedDragDropDisabler(ash::Shell::GetPrimaryRootWindow()));
-  } else {
-    NOTIMPLEMENTED();
-  }
-
   // Close the login screen on NOTIFICATION_APP_TERMINATING.
   registrar_.Add(this, chrome::NOTIFICATION_APP_TERMINATING,
                  content::NotificationService::AllSources());
@@ -75,6 +66,11 @@ void LoginDisplayHostCommon::BeforeSessionStart() {
 }
 
 void LoginDisplayHostCommon::Finalize(base::OnceClosure completion_callback) {
+  // If finalize is called twice the LoginDisplayHost instance will be deleted
+  // multiple times.
+  CHECK(!is_finalizing_);
+  is_finalizing_ = true;
+
   completion_callbacks_.push_back(std::move(completion_callback));
   OnFinalize();
 }
@@ -184,33 +180,26 @@ void LoginDisplayHostCommon::StartArcKiosk(const AccountId& account_id) {
 }
 
 void LoginDisplayHostCommon::CompleteLogin(const UserContext& user_context) {
-  ExistingUserController* controller =
-      ExistingUserController::current_controller();
-  if (controller)
-    controller->CompleteLogin(user_context);
+  if (GetExistingUserController())
+    GetExistingUserController()->CompleteLogin(user_context);
 }
 
 void LoginDisplayHostCommon::OnGaiaScreenReady() {
-  ExistingUserController* controller =
-      ExistingUserController::current_controller();
-  if (controller)
-    controller->OnGaiaScreenReady();
+  if (GetExistingUserController())
+    GetExistingUserController()->OnGaiaScreenReady();
 }
 
 void LoginDisplayHostCommon::SetDisplayEmail(const std::string& email) {
-  ExistingUserController* controller =
-      ExistingUserController::current_controller();
-  if (controller)
-    controller->SetDisplayEmail(email);
+  if (GetExistingUserController())
+    GetExistingUserController()->SetDisplayEmail(email);
 }
 
 void LoginDisplayHostCommon::SetDisplayAndGivenName(
     const std::string& display_name,
     const std::string& given_name) {
-  ExistingUserController* controller =
-      ExistingUserController::current_controller();
-  if (controller)
-    controller->SetDisplayAndGivenName(display_name, given_name);
+  if (GetExistingUserController())
+    GetExistingUserController()->SetDisplayAndGivenName(display_name,
+                                                        given_name);
 }
 
 void LoginDisplayHostCommon::LoadWallpaper(const AccountId& account_id) {
@@ -222,11 +211,26 @@ void LoginDisplayHostCommon::LoadSigninWallpaper() {
 }
 
 bool LoginDisplayHostCommon::IsUserWhitelisted(const AccountId& account_id) {
-  ExistingUserController* controller =
-      ExistingUserController::current_controller();
-  if (!controller)
+  if (!GetExistingUserController())
     return true;
-  return controller->IsUserWhitelisted(account_id);
+  return GetExistingUserController()->IsUserWhitelisted(account_id);
+}
+
+void LoginDisplayHostCommon::CancelPasswordChangedFlow() {
+  if (GetExistingUserController())
+    GetExistingUserController()->CancelPasswordChangedFlow();
+
+  OnCancelPasswordChangedFlow();
+}
+
+void LoginDisplayHostCommon::MigrateUserData(const std::string& old_password) {
+  if (GetExistingUserController())
+    GetExistingUserController()->MigrateUserData(old_password);
+}
+
+void LoginDisplayHostCommon::ResyncUserData() {
+  if (GetExistingUserController())
+    GetExistingUserController()->ResyncUserData();
 }
 
 void LoginDisplayHostCommon::Observe(
@@ -246,6 +250,8 @@ void LoginDisplayHostCommon::Observe(
   }
 }
 
+void LoginDisplayHostCommon::OnCancelPasswordChangedFlow() {}
+
 void LoginDisplayHostCommon::OnAuthPrewarmDone() {
   auth_prewarmer_.reset();
 }
@@ -254,6 +260,7 @@ void LoginDisplayHostCommon::ShutdownDisplayHost() {
   if (shutting_down_)
     return;
 
+  ProfileHelper::Get()->ClearSigninProfile(base::DoNothing());
   shutting_down_ = true;
   registrar_.RemoveAll();
   base::ThreadTaskRunnerHandle::Get()->DeleteSoon(FROM_HERE, this);

@@ -4,6 +4,7 @@
 
 #include "components/arc/arc_util.h"
 
+#include <algorithm>
 #include <string>
 
 #include "ash/public/cpp/app_types.h"
@@ -31,7 +32,6 @@ const base::Feature kEnableArcFeature{"EnableARC",
 constexpr char kAvailabilityNone[] = "none";
 constexpr char kAvailabilityInstalled[] = "installed";
 constexpr char kAvailabilityOfficiallySupported[] = "officially-supported";
-constexpr char kAlwaysStart[] = "always-start";
 constexpr char kAlwaysStartWithNoPlayStore[] =
     "always-start-with-no-play-store";
 
@@ -71,42 +71,32 @@ bool IsArcAvailable() {
           base::FeatureList::IsEnabled(kEnableArcFeature));
 }
 
-bool IsWebstoreSearchEnabled() {
-  const auto* command_line = base::CommandLine::ForCurrentProcess();
-  if (command_line->HasSwitch(chromeos::switches::kArcAvailability)) {
-    const std::string value =
-        command_line->GetSwitchValueASCII(chromeos::switches::kArcAvailability);
-
-    return value == kAvailabilityNone;
-  }
-  return true;
-}
-
-bool IsPlayStoreAvailable() {
-  if (IsRobotAccountMode())
-    return false;
-  const auto* command_line = base::CommandLine::ForCurrentProcess();
-  if (!command_line->HasSwitch(chromeos::switches::kArcStartMode))
-    return true;
-
-  const std::string value =
-      command_line->GetSwitchValueASCII(chromeos::switches::kArcStartMode);
-  return value != kAlwaysStartWithNoPlayStore;
+bool IsArcVmEnabled() {
+  return base::CommandLine::ForCurrentProcess()->HasSwitch(
+      chromeos::switches::kEnableArcVm);
 }
 
 bool ShouldArcAlwaysStart() {
   const auto* command_line = base::CommandLine::ForCurrentProcess();
   if (!command_line->HasSwitch(chromeos::switches::kArcStartMode))
     return false;
-  const std::string value =
-      command_line->GetSwitchValueASCII(chromeos::switches::kArcStartMode);
-  return value == kAlwaysStartWithNoPlayStore || value == kAlwaysStart;
+  return command_line->GetSwitchValueASCII(chromeos::switches::kArcStartMode) ==
+         kAlwaysStartWithNoPlayStore;
 }
 
-void SetArcAlwaysStartForTesting(bool play_store_available) {
+bool ShouldArcAlwaysStartWithNoPlayStore() {
+  return base::CommandLine::ForCurrentProcess()->GetSwitchValueASCII(
+             chromeos::switches::kArcStartMode) == kAlwaysStartWithNoPlayStore;
+}
+
+bool ShouldShowOptInForTesting() {
+  return base::CommandLine::ForCurrentProcess()->HasSwitch(
+      chromeos::switches::kArcForceShowOptInUi);
+}
+
+void SetArcAlwaysStartWithoutPlayStoreForTesting() {
   base::CommandLine::ForCurrentProcess()->AppendSwitchASCII(
-      chromeos::switches::kArcStartMode,
-      play_store_available ? kAlwaysStart : kAlwaysStartWithNoPlayStore);
+      chromeos::switches::kArcStartMode, kAlwaysStartWithNoPlayStore);
 }
 
 bool IsArcKioskAvailable() {
@@ -138,7 +128,7 @@ bool IsArcKioskMode() {
          user_manager::UserManager::Get()->IsLoggedInAsArcKioskApp();
 }
 
-bool IsRobotAccountMode() {
+bool IsRobotOrOfflineDemoAccountMode() {
   return user_manager::UserManager::IsInitialized() &&
          (user_manager::UserManager::Get()->IsLoggedInAsArcKioskApp() ||
           user_manager::UserManager::Get()->IsLoggedInAsPublicAccount());
@@ -180,7 +170,7 @@ bool IsArcOptInVerificationDisabled() {
       chromeos::switches::kDisableArcOptInVerification);
 }
 
-bool IsArcAppWindow(aura::Window* window) {
+bool IsArcAppWindow(const aura::Window* window) {
   if (!window)
     return false;
   return window->GetProperty(aura::client::kAppType) ==
@@ -204,6 +194,33 @@ void SetArcCpuRestriction(bool do_restrict) {
 bool IsArcDataCleanupOnStartRequested() {
   return base::CommandLine::ForCurrentProcess()->HasSwitch(
       chromeos::switches::kArcDataCleanupOnStart);
+}
+
+bool IsArcAppSyncFlowDisabled() {
+  return base::CommandLine::ForCurrentProcess()->HasSwitch(
+      chromeos::switches::kArcDisableAppSync);
+}
+
+bool IsArcPlayAutoInstallDisabled() {
+  return base::CommandLine::ForCurrentProcess()->HasSwitch(
+      chromeos::switches::kArcDisablePlayAutoInstall);
+}
+
+// static
+int32_t GetLcdDensityForDeviceScaleFactor(float device_scale_factor) {
+  // Keep this consistent with wayland_client.cpp on Android side.
+  // TODO(oshima): Consider sending this through wayland.
+  constexpr float kEpsilon = 0.001;
+  if (std::abs(device_scale_factor - 2.25f) < kEpsilon)
+    return 280;
+  if (std::abs(device_scale_factor - 1.6f) < kEpsilon)
+    return 213;  // TVDPI
+
+  constexpr float kChromeScaleToAndroidScaleRatio = 0.75f;
+  constexpr int32_t kDefaultDensityDpi = 160;
+  return static_cast<int32_t>(
+      std::max(1.0f, device_scale_factor * kChromeScaleToAndroidScaleRatio) *
+      kDefaultDensityDpi);
 }
 
 }  // namespace arc

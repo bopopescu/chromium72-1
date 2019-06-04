@@ -7,11 +7,10 @@
 #include <memory>
 
 #include "ash/assistant/assistant_controller.h"
+#include "ash/assistant/assistant_interaction_controller.h"
 #include "ash/assistant/ui/logo_view/base_logo_view.h"
-#include "ash/resources/vector_icons/vector_icons.h"
-#include "ui/gfx/color_palette.h"
-#include "ui/gfx/paint_vector_icon.h"
-#include "ui/views/controls/image_view.h"
+#include "ash/assistant/util/views_util.h"
+#include "ui/views/layout/box_layout.h"
 #include "ui/views/layout/fill_layout.h"
 
 namespace ash {
@@ -19,104 +18,101 @@ namespace ash {
 namespace {
 
 // Appearance.
-constexpr int kPreferredSizeDip = 20;
+// The desired height for the action view icon is 24dip in mic state to match
+// the static mic button in DialogPlate. The |kMicIcon| resource used for the
+// static button has different internal padding than does that of the icon drawn
+// by LogoView, so we add 2dip for visual consistency.
+constexpr int kIconSizeDip = 26;
+constexpr int kPreferredSizeDip = 32;
 
 }  // namespace
 
-ActionView::ActionView(AssistantController* assistant_controller,
-                       ActionViewListener* listener)
-    : assistant_controller_(assistant_controller),
-      listener_(listener),
-      keyboard_action_view_(new views::ImageView()),
-      voice_action_view_(BaseLogoView::Create()) {
+ActionView::ActionView(views::ButtonListener* listener,
+                       AssistantController* assistant_controller)
+    : AssistantButton(listener), assistant_controller_(assistant_controller) {
   InitLayout();
-  UpdateState(/*animate=*/false);
 
   // The Assistant controller indirectly owns the view hierarchy to which
   // ActionView belongs so is guaranteed to outlive it.
-  assistant_controller_->AddInteractionModelObserver(this);
+  assistant_controller_->interaction_controller()->AddModelObserver(this);
 }
 
 ActionView::~ActionView() {
-  assistant_controller_->RemoveInteractionModelObserver(this);
+  assistant_controller_->interaction_controller()->RemoveModelObserver(this);
+}
+
+const char* ActionView::GetClassName() const {
+  return "ActionView";
 }
 
 gfx::Size ActionView::CalculatePreferredSize() const {
-  return gfx::Size(kPreferredSizeDip, kPreferredSizeDip);
+  return gfx::Size(kPreferredSizeDip, GetHeightForWidth(kPreferredSizeDip));
+}
+
+int ActionView::GetHeightForWidth(int width) const {
+  return kPreferredSizeDip;
 }
 
 void ActionView::InitLayout() {
   SetLayoutManager(std::make_unique<views::FillLayout>());
 
-  gfx::Size size = gfx::Size(kPreferredSizeDip, kPreferredSizeDip);
+  // Voice action container.
+  views::View* voice_action_container_ = new views::View();
+  voice_action_container_->set_can_process_events_within_subtree(false);
+  AddChildView(voice_action_container_);
 
-  // Keyboard action.
-  keyboard_action_view_->SetImage(
-      gfx::CreateVectorIcon(kSendIcon, kPreferredSizeDip, gfx::kGoogleBlue500));
-  keyboard_action_view_->SetImageSize(size);
-  keyboard_action_view_->SetPreferredSize(size);
-  AddChildView(keyboard_action_view_);
+  views::BoxLayout* layout_manager = voice_action_container_->SetLayoutManager(
+      std::make_unique<views::BoxLayout>(
+          views::BoxLayout::Orientation::kVertical));
+
+  layout_manager->set_cross_axis_alignment(
+      views::BoxLayout::CrossAxisAlignment::CROSS_AXIS_ALIGNMENT_CENTER);
+
+  layout_manager->set_main_axis_alignment(
+      views::BoxLayout::MainAxisAlignment::MAIN_AXIS_ALIGNMENT_CENTER);
 
   // Voice action.
-  voice_action_view_->SetPreferredSize(size);
-  AddChildView(voice_action_view_);
-}
+  voice_action_view_ = BaseLogoView::Create();
+  voice_action_view_->SetPreferredSize(gfx::Size(kIconSizeDip, kIconSizeDip));
+  voice_action_container_->AddChildView(voice_action_view_);
 
-void ActionView::OnGestureEvent(ui::GestureEvent* event) {
-  if (event->type() != ui::ET_GESTURE_TAP)
-    return;
-
-  event->SetHandled();
-
-  if (listener_)
-    listener_->OnActionPressed();
-}
-
-bool ActionView::OnMousePressed(const ui::MouseEvent& event) {
-  if (listener_)
-    listener_->OnActionPressed();
-  return true;
-}
-
-void ActionView::OnInputModalityChanged(InputModality input_modality) {
+  // Initialize state.
   UpdateState(/*animate=*/false);
 }
 
 void ActionView::OnMicStateChanged(MicState mic_state) {
+  is_user_speaking_ = false;
   UpdateState(/*animate=*/true);
+}
+
+void ActionView::OnSpeechLevelChanged(float speech_level_db) {
+  // TODO: Work with UX to determine the threshold.
+  constexpr float kSpeechLevelThreshold = -60.0f;
+  if (speech_level_db < kSpeechLevelThreshold)
+    return;
+
+  voice_action_view_->SetSpeechLevel(speech_level_db);
+  if (!is_user_speaking_) {
+    is_user_speaking_ = true;
+    UpdateState(/*animate=*/true);
+  }
 }
 
 void ActionView::UpdateState(bool animate) {
   const AssistantInteractionModel* interaction_model =
-      assistant_controller_->interaction_model();
-
-  InputModality input_modality = interaction_model->input_modality();
-
-  // We don't need to handle stylus input modality.
-  if (input_modality == InputModality::kStylus)
-    return;
-
-  if (input_modality == InputModality::kKeyboard) {
-    voice_action_view_->SetVisible(false);
-    keyboard_action_view_->SetVisible(true);
-    return;
-  }
+      assistant_controller_->interaction_controller()->model();
 
   BaseLogoView::State mic_state;
   switch (interaction_model->mic_state()) {
     case MicState::kClosed:
-      // Do not animate when the first time showing the LogoView in kMic state.
-      // Only animate when changing from kListening or kUserSpeaks states.
-      mic_state = BaseLogoView::State::kMicFab;
+      mic_state = BaseLogoView::State::kMic;
       break;
     case MicState::kOpen:
-      mic_state = BaseLogoView::State::kListening;
+      mic_state = is_user_speaking_ ? BaseLogoView::State::kUserSpeaks
+                                    : BaseLogoView::State::kListening;
       break;
   }
   voice_action_view_->SetState(mic_state, animate);
-
-  keyboard_action_view_->SetVisible(false);
-  voice_action_view_->SetVisible(true);
 }
 
 }  // namespace ash

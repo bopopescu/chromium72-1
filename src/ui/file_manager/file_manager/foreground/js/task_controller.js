@@ -4,18 +4,20 @@
 
 /**
  * @param {DialogType} dialogType
- * @param {!VolumeManagerWrapper} volumeManager
+ * @param {!VolumeManager} volumeManager
  * @param {!FileManagerUI} ui
  * @param {!MetadataModel} metadataModel
  * @param {!DirectoryModel} directoryModel
  * @param {!FileSelectionHandler} selectionHandler
  * @param {!MetadataUpdateController} metadataUpdateController
+ * @param {!NamingController} namingController
+ * @param {!Crostini} crostini
  * @constructor
  * @struct
  */
 function TaskController(
     dialogType, volumeManager, ui, metadataModel, directoryModel,
-    selectionHandler, metadataUpdateController) {
+    selectionHandler, metadataUpdateController, namingController, crostini) {
   /**
    * @private {DialogType}
    * @const
@@ -23,7 +25,7 @@ function TaskController(
   this.dialogType_ = dialogType;
 
   /**
-   * @private {!VolumeManagerWrapper}
+   * @private {!VolumeManager}
    * @const
    */
   this.volumeManager_ = volumeManager;
@@ -58,6 +60,19 @@ function TaskController(
    * @private
    */
   this.metadataUpdateController_ = metadataUpdateController;
+
+  /**
+   * @private {!NamingController}
+   * @const
+   */
+  this.namingController_ = namingController;
+
+  /**
+   * @type {!Crostini}
+   * @const
+   * @private
+   */
+  this.crostini_ = crostini;
 
   /**
    * @type {!TaskHistory}
@@ -140,31 +155,6 @@ function TaskController(
 }
 
 /**
- * Cached the temporary disabled task item. Used inside
- * FileSelectionHandler.createTemporaryDisabledTaskItem_().
- * @type {Object}
- * @private
- */
-TaskController.cachedDisabledTaskItem_ = null;
-
-/**
- * Create the temporary disabled task item.
- * @return {Object} Created disabled item.
- * @private
- */
-TaskController.createTemporaryDisabledTaskItem_ = function() {
-  if (!TaskController.cachedDisabledTaskItem_) {
-    TaskController.cachedDisabledTaskItem_ = {
-      title: str('TASK_OPEN'),
-      disabled: true,
-      taskId: null
-    };
-  }
-
-  return TaskController.cachedDisabledTaskItem_;
-};
-
-/**
  * Task combobox handler.
  *
  * @param {Object} event Event containing task which was clicked.
@@ -186,7 +176,7 @@ TaskController.prototype.onTaskItemClicked_ = function(event) {
             this.ui_.taskMenuButton.showMenu(false);
             break;
           case FileTasks.TaskMenuButtonItemType.RunTask:
-            tasks.execute(item.task.taskId);
+            tasks.execute(item.task);
             break;
           case FileTasks.TaskMenuButtonItemType.ChangeDefaultTask:
             var selection = this.selectionHandler_.selection;
@@ -269,7 +259,11 @@ TaskController.prototype.changeDefaultTask_ = function(selection, task) {
 TaskController.prototype.executeDefaultTask = function() {
   this.getFileTasks()
       .then(function(tasks) {
-        tasks.execute(this.ui_.fileContextMenu.defaultTaskMenuItem.taskId);
+        var task = {
+          taskId: this.ui_.fileContextMenu.defaultTaskMenuItem.taskId,
+          title: this.ui_.fileContextMenu.defaultTaskMenuItem.label,
+        };
+        tasks.execute(task);
       }.bind(this))
       .catch(function(error) {
         if (error)
@@ -315,11 +309,8 @@ TaskController.prototype.onSelectionChanged_ = function() {
       (selection.directoryCount > 0 || selection.fileCount > 0)) {
     // Compare entries while ignoring changes inside directories.
     if (!util.isSameEntries(this.lastSelectedEntries_, selection.entries)) {
-      // Show disabled items for position calculation of the menu. They will be
-      // overridden in this.updateTasks_().
-      this.updateContextMenuTaskItems_(
-          [TaskController.createTemporaryDisabledTaskItem_()],
-          [TaskController.createTemporaryDisabledTaskItem_()]);
+      // Update the context menu if selection changed.
+      this.updateContextMenuTaskItems_([], []);
     }
   } else {
     // Update context menu.
@@ -372,7 +363,7 @@ TaskController.prototype.getFileTasks = function() {
             .create(
                 this.volumeManager_, this.metadataModel_, this.directoryModel_,
                 this.ui_, selection.entries, assert(selection.mimeTypes),
-                this.taskHistory_)
+                this.taskHistory_, this.namingController_, this.crostini_)
             .then(function(tasks) {
               if (this.selectionHandler_.selection !== selection) {
                 if (util.isSameEntries(this.tasksEntries_, selection.entries))
@@ -412,8 +403,10 @@ TaskController.prototype.canExecuteMoreActions = function() {
 /**
  * Updates tasks menu item to match passed task items.
  *
- * @param {!Array<!Object>} openTasks List of OPEN tasks.
- * @param {!Array<!Object>} nonOpenTasks List of non-OPEN tasks.
+ * @param {!Array<!chrome.fileManagerPrivate.FileTask>} openTasks List of OPEN
+ *     tasks.
+ * @param {!Array<!chrome.fileManagerPrivate.FileTask>} nonOpenTasks List of
+ *     non-OPEN tasks.
  * @private
  */
 TaskController.prototype.updateContextMenuTaskItems_ = function(
@@ -431,11 +424,11 @@ TaskController.prototype.updateContextMenuTaskItems_ = function(
       this.ui_.fileContextMenu.defaultTaskMenuItem.style.backgroundImage = '';
     }
 
-    if (defaultTask.taskId === FileTasks.ZIP_UNPACKER_TASK_ID ||
-        defaultTask.taskId === FileTasks.ZIP_ARCHIVER_UNZIP_TASK_ID)
+    if (defaultTask.taskId === FileTasks.ZIP_ARCHIVER_UNZIP_TASK_ID)
       this.ui_.fileContextMenu.defaultTaskMenuItem.label = str('TASK_OPEN');
     else
-      this.ui_.fileContextMenu.defaultTaskMenuItem.label = defaultTask.title;
+      this.ui_.fileContextMenu.defaultTaskMenuItem.label =
+          defaultTask.label || defaultTask.title;
 
     this.ui_.fileContextMenu.defaultTaskMenuItem.disabled =
         !!defaultTask.disabled;
@@ -464,7 +457,7 @@ TaskController.prototype.executeEntryTask = function(entry) {
         .create(
             this.volumeManager_, this.metadataModel_, this.directoryModel_,
             this.ui_, [entry], [props[0].contentMimeType || null],
-            this.taskHistory_)
+            this.taskHistory_, this.namingController_, this.crostini_)
         .then(function(tasks) {
           tasks.executeDefault();
         });

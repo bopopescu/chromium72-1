@@ -5,7 +5,7 @@
 #include "third_party/blink/renderer/core/css/properties/longhands/position.h"
 
 namespace blink {
-namespace CSSLonghand {
+namespace css_longhand {
 
 const CSSValue* Position::CSSValueFromComputedStyleInternal(
     const ComputedStyle& style,
@@ -16,5 +16,10 @@ const CSSValue* Position::CSSValueFromComputedStyleInternal(
   return CSSIdentifierValue::Create(style.GetPosition());
 }
 
-}  // namespace CSSLonghand
+void Position::ApplyInherit(StyleResolverState& state) const {
+  if (!state.ParentNode()->IsDocumentNode())
+    state.Style()->SetPosition(state.ParentStyle()->GetPosition());
+}
+
+}  // namespace css_longhand
 }  // namespace blink

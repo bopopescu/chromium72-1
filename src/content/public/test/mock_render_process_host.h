@@ -34,10 +34,17 @@
 #include "content/public/browser/android/child_process_importance.h"
 #endif
 
+namespace network {
+namespace mojom {
+
+class URLLoaderFactory;
+
+}  // namespace mojom
+}  // namespace network
+
 namespace content {
 
 class MockRenderProcessHostFactory;
-class RenderWidgetHost;
 class SiteInstance;
 class StoragePartition;
 
@@ -74,6 +81,7 @@ class MockRenderProcessHost : public RenderProcessHost {
   void UpdateClientPriority(PriorityClient* client) override;
   int VisibleClientCount() const override;
   unsigned int GetFrameDepth() const override;
+  bool GetIntersectsViewport() const override;
   bool IsForGuestsOnly() const override;
   RendererAudioOutputStreamFactoryContext*
   GetRendererAudioOutputStreamFactoryContext() override;
@@ -88,14 +96,17 @@ class MockRenderProcessHost : public RenderProcessHost {
   const base::Process& GetProcess() const override;
   bool IsReady() const override;
   int GetID() const override;
-  bool HasConnection() const override;
-  void SetIgnoreInputEvents(bool ignore_input_events) override;
-  bool IgnoreInputEvents() const override;
+  bool IsInitializedAndNotDead() const override;
+  void SetBlocked(bool blocked) override;
+  bool IsBlocked() const override;
+  std::unique_ptr<base::CallbackList<void(bool)>::Subscription>
+  RegisterBlockStateChangedCallback(
+      const base::RepeatingCallback<void(bool)>& cb) override;
   void Cleanup() override;
   void AddPendingView() override;
   void RemovePendingView() override;
-  void AddWidget(RenderWidgetHost* widget) override;
-  void RemoveWidget(RenderWidgetHost* widget) override;
+  void AddPriorityClient(PriorityClient* priority_client) override;
+  void RemovePriorityClient(PriorityClient* priority_client) override;
 #if defined(OS_ANDROID)
   ChildProcessImportance GetEffectiveImportance() override;
 #endif
@@ -116,7 +127,8 @@ class MockRenderProcessHost : public RenderProcessHost {
       bool incoming,
       bool outgoing,
       const WebRtcRtpPacketCallback& packet_callback) override;
-  void SetWebRtcEventLogOutput(int lid, bool enabled) override;
+  void EnableWebRtcEventLogOutput(int lid, int output_period_ms) override;
+  void DisableWebRtcEventLogOutput(int lid) override;
   void BindInterface(const std::string& interface_name,
                      mojo::ScopedMessagePipeHandle interface_pipe) override;
   const service_manager::Identity& GetChildIdentity() const override;
@@ -134,6 +146,10 @@ class MockRenderProcessHost : public RenderProcessHost {
   mojom::Renderer* GetRendererInterface() override;
   resource_coordinator::ProcessResourceCoordinator*
   GetProcessResourceCoordinator() override;
+  void CreateURLLoaderFactory(
+      const url::Origin& origin,
+      network::mojom::TrustedURLLoaderHeaderClientPtrInfo header_client,
+      network::mojom::URLLoaderFactoryRequest request) override;
 
   void SetIsNeverSuitableForReuse() override;
   bool MayReuseHost() override;
@@ -141,8 +157,10 @@ class MockRenderProcessHost : public RenderProcessHost {
   void SetIsUsed() override;
 
   bool HostHasNotBeenUsed() override;
+  void LockToOrigin(const GURL& lock_url) override;
   void BindCacheStorage(blink::mojom::CacheStorageRequest request,
                         const url::Origin& origin) override;
+  void CleanupCorbExceptionForPluginUponDestruction() override;
 
   // IPC::Sender via RenderProcessHost.
   bool Send(IPC::Message* msg) override;
@@ -176,6 +194,12 @@ class MockRenderProcessHost : public RenderProcessHost {
       std::unique_ptr<mojo::AssociatedInterfacePtr<mojom::Renderer>>
           renderer_interface);
 
+  void OverrideURLLoaderFactory(network::mojom::URLLoaderFactory* factory);
+
+  bool is_renderer_locked_to_site() const {
+    return is_renderer_locked_to_site_;
+  }
+
  private:
   // Stores IPC messages that would have been sent to the renderer.
   IPC::TestSink sink_;
@@ -184,7 +208,7 @@ class MockRenderProcessHost : public RenderProcessHost {
   int id_;
   bool has_connection_;
   BrowserContext* browser_context_;
-  base::ObserverList<RenderProcessHostObserver> observers_;
+  base::ObserverList<RenderProcessHostObserver>::Unchecked observers_;
 
   base::flat_set<PriorityClient*> priority_clients_;
   int prev_routing_id_;
@@ -203,6 +227,8 @@ class MockRenderProcessHost : public RenderProcessHost {
   std::unique_ptr<resource_coordinator::ProcessResourceCoordinator>
       process_resource_coordinator_;
   service_manager::Identity child_identity_;
+  bool is_renderer_locked_to_site_ = false;
+  network::mojom::URLLoaderFactory* url_loader_factory_;
   blink::mojom::CacheStorageRequest cache_storage_request_;
   base::WeakPtrFactory<MockRenderProcessHost> weak_ptr_factory_;
 
@@ -233,6 +259,10 @@ class MockRenderProcessHostFactory : public RenderProcessHostFactory {
   // for deleting all MockRenderProcessHosts that have not deleted by a test in
   // the destructor and prevent them from being leaked.
   mutable std::vector<std::unique_ptr<MockRenderProcessHost>> processes_;
+
+  // A mock URLLoaderFactory which just fails to create a loader.
+  std::unique_ptr<network::mojom::URLLoaderFactory>
+      default_mock_url_loader_factory_;
 
   DISALLOW_COPY_AND_ASSIGN(MockRenderProcessHostFactory);
 };

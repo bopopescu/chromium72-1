@@ -39,11 +39,12 @@ class InvalidationService;
 }  // namespace invalidation
 
 namespace sync_sessions {
-class SyncSessionsClient;
+class SessionSyncService;
 }  // namespace sync_sessions
 
 namespace syncer {
 
+class ModelTypeStoreService;
 class SyncService;
 class SyncableService;
 
@@ -58,14 +59,13 @@ class SyncClient {
   SyncClient();
   virtual ~SyncClient();
 
-  // Initializes the sync client with the specified sync service.
-  virtual void Initialize() = 0;
-
   // Returns the current SyncService instance.
   virtual SyncService* GetSyncService() = 0;
 
   // Returns the current profile's preference service.
   virtual PrefService* GetPrefService() = 0;
+
+  virtual ModelTypeStoreService* GetModelTypeStoreService() = 0;
 
   // Returns the path to the folder used for storing the local sync database.
   // It is only used when sync is running against a local backend.
@@ -75,12 +75,11 @@ class SyncClient {
   virtual bookmarks::BookmarkModel* GetBookmarkModel() = 0;
   virtual favicon::FaviconService* GetFaviconService() = 0;
   virtual history::HistoryService* GetHistoryService() = 0;
+  virtual sync_sessions::SessionSyncService* GetSessionSyncService() = 0;
   virtual bool HasPasswordStore() = 0;
 
-  // Returns a callback that will register the types specific to the current
-  // platform.
-  virtual SyncApiComponentFactory::RegisterDataTypesMethod
-  GetRegisterPlatformTypesCallback() = 0;
+  // Returns a vector with all supported datatypes and their controllers.
+  virtual DataTypeController::TypeVector CreateDataTypeControllers() = 0;
 
   // Returns a callback that will be invoked when password sync state has
   // potentially been changed.
@@ -90,7 +89,6 @@ class SyncClient {
   virtual BookmarkUndoService* GetBookmarkUndoServiceIfExists() = 0;
   virtual invalidation::InvalidationService* GetInvalidationService() = 0;
   virtual scoped_refptr<ExtensionsActivity> GetExtensionsActivity() = 0;
-  virtual sync_sessions::SyncSessionsClient* GetSyncSessionsClient() = 0;
 
   // Returns a weak pointer to the syncable service specified by |type|.
   // Weak pointer may be unset if service is already destroyed.

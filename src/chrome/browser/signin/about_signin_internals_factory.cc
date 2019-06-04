@@ -9,10 +9,12 @@
 #include "chrome/browser/signin/account_tracker_service_factory.h"
 #include "chrome/browser/signin/chrome_signin_client_factory.h"
 #include "chrome/browser/signin/gaia_cookie_manager_service_factory.h"
+#include "chrome/browser/signin/identity_manager_factory.h"
 #include "chrome/browser/signin/profile_oauth2_token_service_factory.h"
 #include "chrome/browser/signin/signin_error_controller_factory.h"
 #include "chrome/browser/signin/signin_manager_factory.h"
 #include "components/keyed_service/content/browser_context_dependency_manager.h"
+#include "components/pref_registry/pref_registry_syncable.h"
 #include "components/signin/core/browser/about_signin_internals.h"
 #include "components/signin/core/browser/signin_manager.h"
 
@@ -53,6 +55,7 @@ KeyedService* AboutSigninInternalsFactory::BuildServiceInstanceFor(
   AboutSigninInternals* service = new AboutSigninInternals(
       ProfileOAuth2TokenServiceFactory::GetForProfile(profile),
       AccountTrackerServiceFactory::GetForProfile(profile),
+      IdentityManagerFactory::GetForProfile(profile),
       SigninManagerFactory::GetForProfile(profile),
       SigninErrorControllerFactory::GetForProfile(profile),
       GaiaCookieManagerServiceFactory::GetForProfile(profile),

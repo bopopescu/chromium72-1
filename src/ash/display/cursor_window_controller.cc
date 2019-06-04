@@ -16,10 +16,11 @@
 #include "ash/root_window_controller.h"
 #include "ash/session/session_controller.h"
 #include "ash/shell.h"
+#include "ash/window_factory.h"
 #include "base/command_line.h"
 #include "base/metrics/histogram_macros.h"
 #include "components/prefs/pref_service.h"
-#include "services/ui/public/interfaces/window_tree_constants.mojom.h"
+#include "services/ws/public/mojom/window_tree_constants.mojom.h"
 #include "ui/aura/env.h"
 #include "ui/aura/window_delegate.h"
 #include "ui/aura/window_event_dispatcher.h"
@@ -160,7 +161,8 @@ bool CursorWindowController::ShouldEnableCursorCompositing() {
         shell->display_color_manager()->displays_ctm_support();
     UMA_HISTOGRAM_ENUMERATION("Ash.NightLight.DisplayCrtcCtmSupport",
                               displays_ctm_support);
-    return displays_ctm_support != DisplayColorManager::DisplayCtmSupport::kAll;
+    if (displays_ctm_support != DisplayColorManager::DisplayCtmSupport::kAll)
+      return true;
   }
 
   return prefs->GetBoolean(prefs::kAccessibilityLargeCursorEnabled) ||
@@ -218,7 +220,7 @@ void CursorWindowController::SetDisplay(const display::Display& display) {
 void CursorWindowController::UpdateLocation() {
   if (!cursor_window_)
     return;
-  gfx::Point point = aura::Env::GetInstance()->last_mouse_location();
+  gfx::Point point = Shell::Get()->aura_env()->last_mouse_location();
   point.Offset(-bounds_in_screen_.x(), -bounds_in_screen_.y());
   point.Offset(-hot_point_.x(), -hot_point_.y());
   gfx::Rect bounds = cursor_window_->bounds();
@@ -262,11 +264,11 @@ void CursorWindowController::SetContainer(aura::Window* container) {
   } else {
     // Reusing the window does not work when the display is disconnected.
     // Just creates a new one instead. crbug.com/384218.
-    cursor_window_.reset(new aura::Window(delegate_.get()));
+    cursor_window_ = window_factory::NewWindow(delegate_.get());
     cursor_window_->SetTransparent(true);
     cursor_window_->Init(ui::LAYER_TEXTURED);
     cursor_window_->SetEventTargetingPolicy(
-        ui::mojom::EventTargetingPolicy::NONE);
+        ws::mojom::EventTargetingPolicy::NONE);
     cursor_window_->set_owned_by_parent(false);
     // Call UpdateCursorImage() to figure out |cursor_window_|'s desired size.
     UpdateCursorImage();
@@ -338,7 +340,7 @@ void CursorWindowController::UpdateCursorImage() {
   const gfx::ImageSkiaRep& image_rep = resized.GetRepresentation(cursor_scale);
   delegate_->SetCursorImage(
       resized.size(),
-      gfx::ImageSkia(gfx::ImageSkiaRep(image_rep.sk_bitmap(), cursor_scale)));
+      gfx::ImageSkia(gfx::ImageSkiaRep(image_rep.GetBitmap(), cursor_scale)));
   hot_point_ = gfx::ConvertPointToDIP(cursor_scale, hot_point_);
 
   if (cursor_view_) {
@@ -370,7 +372,7 @@ void CursorWindowController::UpdateCursorVisibility() {
 
 void CursorWindowController::UpdateCursorView() {
   cursor_view_.reset(new cursor::CursorView(
-      container_, aura::Env::GetInstance()->last_mouse_location(),
+      container_, Shell::Get()->aura_env()->last_mouse_location(),
       is_cursor_motion_blur_enabled_));
   UpdateCursorImage();
 }

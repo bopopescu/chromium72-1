@@ -17,7 +17,7 @@
 #include "base/macros.h"
 #include "base/memory/ref_counted.h"
 #include "base/memory/weak_ptr.h"
-#include "base/threading/thread_checker.h"
+#include "base/sequence_checker.h"
 #include "components/invalidation/public/invalidation_handler.h"
 #include "components/sync/base/extensions_activity.h"
 #include "components/sync/base/model_type.h"
@@ -63,8 +63,7 @@ class SyncBackendHostImpl : public SyncEngine, public InvalidationHandler {
   void InvalidateCredentials() override;
   void StartConfiguration() override;
   void StartSyncingWithServer() override;
-  void SetEncryptionPassphrase(const std::string& passphrase,
-                               bool is_explicit) override;
+  void SetEncryptionPassphrase(const std::string& passphrase) override;
   void SetDecryptionPassphrase(const std::string& passphrase) override;
   void StopSyncingForShutdown() override;
   void Shutdown(ShutdownReason reason) override;
@@ -75,15 +74,15 @@ class SyncBackendHostImpl : public SyncEngine, public InvalidationHandler {
                                  ModelSafeGroup group,
                                  ChangeProcessor* change_processor) override;
   void DeactivateDirectoryDataType(ModelType type) override;
-  void ActivateNonBlockingDataType(ModelType type,
-                                   std::unique_ptr<ActivationContext>) override;
+  void ActivateNonBlockingDataType(
+      ModelType type,
+      std::unique_ptr<DataTypeActivationResponse>) override;
   void DeactivateNonBlockingDataType(ModelType type) override;
   void EnableEncryptEverything() override;
   UserShare* GetUserShare() const override;
   Status GetDetailedStatus() override;
   void HasUnsyncedItemsForTest(
       base::OnceCallback<void(bool)> cb) const override;
-  bool IsCryptographerReady(const BaseTransaction* trans) const override;
   void GetModelSafeRoutingInfo(ModelSafeRoutingInfo* out) const override;
   void FlushDirectory() const override;
   void RequestBufferedProtocolEventsAndEnableForwarding() override;
@@ -94,6 +93,7 @@ class SyncBackendHostImpl : public SyncEngine, public InvalidationHandler {
   void OnCookieJarChanged(bool account_mismatch,
                           bool empty_jar,
                           const base::Closure& callback) override;
+  void SetInvalidationsForSessionsEnabled(bool enabled) override;
 
   // InvalidationHandler implementation.
   void OnInvalidatorStateChange(InvalidatorState state) override;
@@ -122,7 +122,8 @@ class SyncBackendHostImpl : public SyncEngine, public InvalidationHandler {
       const WeakHandle<JsBackend> js_backend,
       const WeakHandle<DataTypeDebugInfoListener> debug_info_listener,
       std::unique_ptr<ModelTypeConnector> model_type_connector,
-      const std::string& cache_guid);
+      const std::string& cache_guid,
+      const std::string& session_name);
 
   // Forwards a ProtocolEvent to the host. Will not be called unless a call to
   // SetForwardProtocolEvents() explicitly requested that we start forwarding
@@ -173,11 +174,6 @@ class SyncBackendHostImpl : public SyncEngine, public InvalidationHandler {
   void HandleSyncCycleCompletedOnFrontendLoop(
       const SyncCycleSnapshot& snapshot);
 
-  // Called when the syncer failed to perform a configuration and will
-  // eventually retry. FinishingConfigurationOnFrontendLoop(..) will be called
-  // on successful completion.
-  void RetryConfigurationOnFrontendLoop(const base::Closure& retry_callback);
-
   // For convenience, checks if initialization state is INITIALIZED.
   bool initialized() const { return initialized_; }
 
@@ -200,7 +196,7 @@ class SyncBackendHostImpl : public SyncEngine, public InvalidationHandler {
   SyncClient* const sync_client_;
 
   // The task runner where all the sync engine operations happen.
-  scoped_refptr<base::SingleThreadTaskRunner> sync_task_runner_;
+  scoped_refptr<base::SequencedTaskRunner> sync_task_runner_;
 
   // Name used for debugging (set from profile_->GetDebugName()).
   const std::string name_;
@@ -227,9 +223,11 @@ class SyncBackendHostImpl : public SyncEngine, public InvalidationHandler {
 
   invalidation::InvalidationService* invalidator_;
   bool invalidation_handler_registered_ = false;
+  ModelTypeSet last_enabled_types_;
+  bool sessions_invalidation_enabled_ = false;
 
   // Checks that we're on the same thread this was constructed on (UI thread).
-  base::ThreadChecker thread_checker_;
+  SEQUENCE_CHECKER(sequence_checker_);
 
   base::WeakPtrFactory<SyncBackendHostImpl> weak_ptr_factory_;
 

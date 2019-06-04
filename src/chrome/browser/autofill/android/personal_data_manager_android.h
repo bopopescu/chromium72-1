@@ -24,6 +24,15 @@ class PersonalDataManagerAndroid : public PersonalDataManagerObserver {
  public:
   PersonalDataManagerAndroid(JNIEnv* env, jobject obj);
 
+  static void PopulateNativeCreditCardFromJava(
+      const base::android::JavaRef<jobject>& jcard,
+      JNIEnv* env,
+      CreditCard* card);
+  static void PopulateNativeProfileFromJava(
+      const base::android::JavaParamRef<jobject>& jprofile,
+      JNIEnv* env,
+      AutofillProfile* profile);
+
   // Returns true if personal data manager has loaded the initial data.
   jboolean IsDataLoaded(
       JNIEnv* env,
@@ -126,7 +135,8 @@ class PersonalDataManagerAndroid : public PersonalDataManagerObserver {
   // PersonalDataManager::GetCreditCardsToSuggest for more details.
   base::android::ScopedJavaLocalRef<jobjectArray> GetCreditCardGUIDsToSuggest(
       JNIEnv* env,
-      const base::android::JavaParamRef<jobject>& unused_obj);
+      const base::android::JavaParamRef<jobject>& unused_obj,
+      bool include_server_cards);
 
   // Returns the credit card with the specified |jguid|, or NULL if there is
   // no credit card with the specified |jguid|.
@@ -336,6 +346,8 @@ class PersonalDataManagerAndroid : public PersonalDataManagerObserver {
   void SetSyncServiceForTesting(
       JNIEnv* env,
       const base::android::JavaParamRef<jobject>& unused_obj);
+
+  static const char* GetPrefNameExposedToJava(int pref_index);
 
  private:
   ~PersonalDataManagerAndroid() override;

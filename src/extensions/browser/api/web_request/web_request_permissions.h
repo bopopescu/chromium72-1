@@ -20,11 +20,6 @@ class InfoMap;
 struct WebRequestInfo;
 }
 
-// Exposed for unit testing.
-bool IsSensitiveRequest(const extensions::WebRequestInfo& request,
-                        bool is_request_from_browser,
-                        bool is_request_from_webui_renderer);
-
 // This class is used to test whether extensions may modify web requests. It
 // should be used on the IO thread.
 class WebRequestPermissions {
@@ -66,7 +61,6 @@ class WebRequestPermissions {
       int tab_id,
       bool crosses_incognito);
 
- private:
   DISALLOW_IMPLICIT_CONSTRUCTORS(WebRequestPermissions);
 };
 

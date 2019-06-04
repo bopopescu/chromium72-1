@@ -9,7 +9,7 @@
 #include <vector>
 
 #include "content/browser/background_fetch/storage/database_task.h"
-#include "content/common/service_worker/service_worker_status_code.h"
+#include "third_party/blink/public/common/service_worker/service_worker_status_code.h"
 
 namespace content {
 
@@ -20,10 +20,15 @@ namespace background_fetch {
 // completely removed.
 class MarkRegistrationForDeletionTask : public background_fetch::DatabaseTask {
  public:
+  using MarkRegistrationForDeletionCallback =
+      base::OnceCallback<void(blink::mojom::BackgroundFetchError,
+                              blink::mojom::BackgroundFetchFailureReason)>;
+
   MarkRegistrationForDeletionTask(
-      BackgroundFetchDataManager* data_manager,
+      DatabaseTaskHost* host,
       const BackgroundFetchRegistrationId& registration_id,
-      HandleBackgroundFetchErrorCallback callback);
+      bool check_for_failure,
+      MarkRegistrationForDeletionCallback callback);
 
   ~MarkRegistrationForDeletionTask() override;
 
@@ -31,12 +36,23 @@ class MarkRegistrationForDeletionTask : public background_fetch::DatabaseTask {
 
  private:
   void DidGetActiveUniqueId(const std::vector<std::string>& data,
-                            ServiceWorkerStatusCode status);
+                            blink::ServiceWorkerStatusCode status);
 
-  void DidDeactivate(ServiceWorkerStatusCode status);
+  void DidDeactivate(blink::ServiceWorkerStatusCode status);
+
+  void DidGetCompletedRequests(const std::vector<std::string>& data,
+                               blink::ServiceWorkerStatusCode status);
+
+  void FinishWithError(blink::mojom::BackgroundFetchError error) override;
+
+  std::string HistogramName() const override;
 
   BackgroundFetchRegistrationId registration_id_;
-  HandleBackgroundFetchErrorCallback callback_;
+  bool check_for_failure_;
+  MarkRegistrationForDeletionCallback callback_;
+
+  blink::mojom::BackgroundFetchFailureReason failure_reason_ =
+      blink::mojom::BackgroundFetchFailureReason::NONE;
 
   base::WeakPtrFactory<MarkRegistrationForDeletionTask>
       weak_factory_;  // Keep as last.

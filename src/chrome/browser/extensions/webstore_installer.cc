@@ -24,8 +24,7 @@
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
-#include "base/task_scheduler/post_task.h"
-#include "base/threading/thread_restrictions.h"
+#include "base/task/post_task.h"
 #include "base/time/time.h"
 #include "build/build_config.h"
 #include "chrome/browser/chrome_notification_types.h"
@@ -54,7 +53,6 @@
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/render_process_host.h"
 #include "content/public/browser/render_view_host.h"
-#include "content/public/browser/storage_partition.h"
 #include "content/public/browser/web_contents.h"
 #include "extensions/browser/extension_file_task_runner.h"
 #include "extensions/browser/extension_registry.h"
@@ -102,7 +100,8 @@ const char kAppLauncherInstallSource[] = "applauncher";
 // See http://crbug.com/371398.
 const char kAuthUserQueryKey[] = "authuser";
 
-const size_t kTimeRemainingMinutesThreshold = 1u;
+constexpr base::TimeDelta kTimeRemainingThreshold =
+    base::TimeDelta::FromSeconds(1);
 
 // Folder for downloading crx files from the webstore. This is used so that the
 // crx files don't go via the usual downloads folder.
@@ -113,7 +112,6 @@ base::FilePath* g_download_directory_for_tests = NULL;
 
 base::FilePath GetDownloadFilePath(const base::FilePath& download_directory,
                                    const std::string& id) {
-  base::AssertBlockingAllowed();
   // Ensure the download directory exists. TODO(asargent) - make this use
   // common code from the downloads system.
   if (!base::DirectoryExists(download_directory) &&
@@ -205,9 +203,9 @@ GURL WebstoreInstaller::GetWebstoreInstallURL(
   }
 
   base::CommandLine* cmd_line = base::CommandLine::ForCurrentProcess();
-  if (cmd_line->HasSwitch(switches::kAppsGalleryDownloadURL)) {
+  if (cmd_line->HasSwitch(::switches::kAppsGalleryDownloadURL)) {
     std::string download_url =
-        cmd_line->GetSwitchValueASCII(switches::kAppsGalleryDownloadURL);
+        cmd_line->GetSwitchValueASCII(::switches::kAppsGalleryDownloadURL);
     return GURL(base::StringPrintf(download_url.c_str(),
                                    extension_id.c_str()));
   }
@@ -658,9 +656,6 @@ void WebstoreInstaller::StartDownload(const std::string& extension_id,
       contents->GetRenderViewHost()->GetRoutingID();
 
   content::RenderFrameHost* render_frame_host = contents->GetMainFrame();
-  content::StoragePartition* storage_partition =
-      BrowserContext::GetStoragePartition(profile_,
-                                          render_frame_host->GetSiteInstance());
   net::NetworkTrafficAnnotationTag traffic_annotation =
       net::DefineNetworkTrafficAnnotation("webstore_installer", R"(
         semantics {
@@ -693,13 +688,13 @@ void WebstoreInstaller::StartDownload(const std::string& extension_id,
         })");
   std::unique_ptr<DownloadUrlParameters> params(new DownloadUrlParameters(
       download_url_, render_process_host_id, render_view_host_routing_id,
-      render_frame_host->GetRoutingID(),
-      storage_partition->GetURLRequestContext(), traffic_annotation));
+      render_frame_host->GetRoutingID(), traffic_annotation));
   params->set_file_path(file);
   if (controller.GetVisibleEntry()) {
     content::Referrer referrer = content::Referrer::SanitizeForRequest(
-        download_url_, content::Referrer(controller.GetVisibleEntry()->GetURL(),
-                                         blink::kWebReferrerPolicyDefault));
+        download_url_,
+        content::Referrer(controller.GetVisibleEntry()->GetURL(),
+                          network::mojom::ReferrerPolicy::kDefault));
     params->set_referrer(referrer.url);
     params->set_referrer_policy(
         content::Referrer::ReferrerPolicyForUrlRequest(referrer.policy));
@@ -738,13 +733,9 @@ void WebstoreInstaller::UpdateDownloadProgress() {
   // timer.
   base::TimeDelta time_remaining;
   if (download_item_->TimeRemaining(&time_remaining) &&
-      time_remaining >
-          base::TimeDelta::FromSeconds(kTimeRemainingMinutesThreshold)) {
-    download_progress_timer_.Start(
-        FROM_HERE,
-        base::TimeDelta::FromSeconds(kTimeRemainingMinutesThreshold),
-        this,
-        &WebstoreInstaller::UpdateDownloadProgress);
+      time_remaining > kTimeRemainingThreshold) {
+    download_progress_timer_.Start(FROM_HERE, kTimeRemainingThreshold, this,
+                                   &WebstoreInstaller::UpdateDownloadProgress);
   } else {
     download_progress_timer_.Stop();
   }

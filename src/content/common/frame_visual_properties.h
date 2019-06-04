@@ -5,6 +5,9 @@
 #ifndef CONTENT_COMMON_FRAME_VISUAL_PROPERTIES_H_
 #define CONTENT_COMMON_FRAME_VISUAL_PROPERTIES_H_
 
+#include "base/optional.h"
+#include "base/time/time.h"
+#include "components/viz/common/surfaces/local_surface_id_allocation.h"
 #include "content/common/content_export.h"
 #include "content/public/common/screen_info.h"
 #include "ui/gfx/geometry/size.h"
@@ -36,6 +39,16 @@ struct CONTENT_EXPORT FrameVisualProperties {
   gfx::Size local_frame_size;
 
   uint32_t capture_sequence_number = 0u;
+
+  // This represents the page zoom level for a WebContents.
+  // (0 is the default value which results in 1.0 zoom factor.)
+  double zoom_level = 0;
+
+  float page_scale_factor = 1.f;
+
+  // The time at which the viz::LocalSurfaceId used to submit this was
+  // allocated.
+  viz::LocalSurfaceIdAllocation local_surface_id_allocation;
 };
 
 }  // namespace content

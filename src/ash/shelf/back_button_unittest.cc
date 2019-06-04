@@ -7,6 +7,8 @@
 #include <memory>
 
 #include "ash/accelerators/accelerator_controller.h"
+#include "ash/app_list/test/app_list_test_helper.h"
+#include "ash/app_list/views/app_list_view.h"
 #include "ash/shelf/shelf.h"
 #include "ash/shelf/shelf_view.h"
 #include "ash/shelf/shelf_view_test_api.h"
@@ -14,34 +16,10 @@
 #include "ash/test/ash_test_base.h"
 #include "ash/wm/tablet_mode/tablet_mode_controller.h"
 #include "ui/base/accelerators/accelerator.h"
+#include "ui/base/accelerators/test_accelerator_target.h"
 #include "ui/events/test/event_generator.h"
 
 namespace ash {
-
-namespace {
-
-class TestTarget : public ui::AcceleratorTarget {
- public:
-  TestTarget() = default;
-  ~TestTarget() override = default;
-
-  size_t count() const { return count_; }
-
-  // ui::AcceleratorTarget:
-  bool AcceleratorPressed(const ui::Accelerator& accelerator) override {
-    ++count_;
-    return true;
-  }
-
-  bool CanHandleAccelerators() const override { return true; }
-
- private:
-  size_t count_ = 0;
-
-  DISALLOW_COPY_AND_ASSIGN(TestTarget);
-};
-
-}  // namespace
 
 class BackButtonTest : public AshTestBase {
  public:
@@ -108,25 +86,33 @@ TEST_F(BackButtonTest, BackKeySequenceGenerated) {
 
   AcceleratorController* controller = Shell::Get()->accelerator_controller();
 
-  // Register an accelerator that looks for back presses.
+  // Register an accelerator that looks for back presses. Note there is already
+  // an accelerator on AppListView, which will handle the accelerator since it
+  // is targeted before AcceleratorController (switching to tablet mode with no
+  // other windows activates the app list). First remove that accelerator. In
+  // release, there's only the AppList's accelerator, so it's always hit when
+  // the app list is active. (ash/accelerators.cc has VKEY_BROWSER_BACK, but it
+  // also needs Ctrl pressed).
+  GetAppListTestHelper()->GetAppListView()->ResetAccelerators();
+
   ui::Accelerator accelerator_back_press(ui::VKEY_BROWSER_BACK, ui::EF_NONE);
   accelerator_back_press.set_key_state(ui::Accelerator::KeyState::PRESSED);
-  TestTarget target_back_press;
+  ui::TestAcceleratorTarget target_back_press;
   controller->Register({accelerator_back_press}, &target_back_press);
 
   // Register an accelerator that looks for back releases.
   ui::Accelerator accelerator_back_release(ui::VKEY_BROWSER_BACK, ui::EF_NONE);
   accelerator_back_release.set_key_state(ui::Accelerator::KeyState::RELEASED);
-  TestTarget target_back_release;
+  ui::TestAcceleratorTarget target_back_release;
   controller->Register({accelerator_back_release}, &target_back_release);
 
   // Verify that by clicking the back button, a back key sequence will be
   // generated.
-  ui::test::EventGenerator& generator = GetEventGenerator();
-  generator.MoveMouseTo(back_button()->GetBoundsInScreen().CenterPoint());
-  generator.ClickLeftButton();
-  EXPECT_EQ(1u, target_back_press.count());
-  EXPECT_EQ(1u, target_back_release.count());
+  ui::test::EventGenerator* generator = GetEventGenerator();
+  generator->MoveMouseTo(back_button()->GetBoundsInScreen().CenterPoint());
+  generator->ClickLeftButton();
+  EXPECT_EQ(1, target_back_press.accelerator_count());
+  EXPECT_EQ(1, target_back_release.accelerator_count());
 }
 
 }  // namespace ash

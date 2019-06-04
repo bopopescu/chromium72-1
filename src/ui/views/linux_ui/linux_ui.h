@@ -12,7 +12,7 @@
 #include "third_party/skia/include/core/SkColor.h"
 #include "ui/base/ime/linux/linux_input_method_context_factory.h"
 #include "ui/base/ime/linux/text_edit_key_bindings_delegate_auralinux.h"
-#include "ui/gfx/linux_font_delegate.h"
+#include "ui/gfx/skia_font_delegate.h"
 #include "ui/shell_dialogs/shell_dialog_linux.h"
 #include "ui/views/controls/button/button.h"
 #include "ui/views/features.h"
@@ -21,6 +21,8 @@
 
 // The main entrypoint into Linux toolkit specific code. GTK code should only
 // be executed behind this interface.
+
+class PrefService;
 
 namespace aura {
 class Window;
@@ -55,13 +57,8 @@ class NavButtonProvider;
 
 // Adapter class with targets to render like different toolkits. Set by any
 // project that wants to do linux desktop native rendering.
-//
-// TODO(erg): We're hardcoding GTK2, when we'll need to have backends for (at
-// minimum) GTK2 and GTK3. LinuxUI::instance() should actually be a very
-// complex method that pokes around with dlopen against a libuigtk2.so, a
-// liuigtk3.so, etc.
 class VIEWS_EXPORT LinuxUI : public ui::LinuxInputMethodContextFactory,
-                             public gfx::LinuxFontDelegate,
+                             public gfx::SkiaFontDelegate,
                              public ui::ShellDialogLinux,
                              public ui::TextEditKeyBindingsDelegateAuraLinux {
  public:
@@ -101,13 +98,13 @@ class VIEWS_EXPORT LinuxUI : public ui::LinuxInputMethodContextFactory,
 
   virtual void Initialize() = 0;
   virtual bool GetTint(int id, color_utils::HSL* tint) const = 0;
-  virtual bool GetColor(int id, SkColor* color) const = 0;
+  virtual bool GetColor(int id,
+                        SkColor* color,
+                        PrefService* pref_service) const = 0;
+  virtual bool GetDisplayProperty(int id, int* result) const = 0;
 
   // Returns the preferences that we pass to WebKit.
   virtual SkColor GetFocusRingColor() const = 0;
-  virtual SkColor GetThumbActiveColor() const = 0;
-  virtual SkColor GetThumbInactiveColor() const = 0;
-  virtual SkColor GetTrackColor() const = 0;
   virtual SkColor GetActiveSelectionBgColor() const = 0;
   virtual SkColor GetActiveSelectionFgColor() const = 0;
   virtual SkColor GetInactiveSelectionBgColor() const = 0;
@@ -133,10 +130,12 @@ class VIEWS_EXPORT LinuxUI : public ui::LinuxInputMethodContextFactory,
   // Checks for platform support for status icons.
   virtual bool IsStatusIconSupported() const = 0;
 
-  // Create a native status icon.
+  // Create a native status icon. The id_prefix is used to distinguish Chrome's
+  // status icons from other apps' status icons, and should be unique.
   virtual std::unique_ptr<StatusIconLinux> CreateLinuxStatusIcon(
       const gfx::ImageSkia& image,
-      const base::string16& tool_tip) const = 0;
+      const base::string16& tool_tip,
+      const char* id_prefix) const = 0;
 
   // Returns the icon for a given content type from the icon theme.
   // TODO(davidben): Add an observer for the theme changing, so we can drop the
@@ -165,9 +164,9 @@ class VIEWS_EXPORT LinuxUI : public ui::LinuxInputMethodContextFactory,
       NonClientWindowFrameActionSourceType source) = 0;
 
   // Notifies the window manager that start up has completed.
-  // Normally Chromium opens a new window on startup and GTK does this
-  // automatically. In case Chromium does not open a new window on startup,
-  // e.g. an existing browser window already exists, this should be called.
+  // This needs to be called explicitly both on the primary and the "remote"
+  // instances (e.g. an existing browser window already exists), since we no
+  // longer use GTK (which did this automatically) for the main windows.
   virtual void NotifyWindowManagerStartupComplete() = 0;
 
   // Updates the device scale factor so that the default font size can be

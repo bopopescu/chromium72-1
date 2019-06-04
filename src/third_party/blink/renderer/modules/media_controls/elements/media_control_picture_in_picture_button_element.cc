@@ -18,7 +18,7 @@ namespace blink {
 MediaControlPictureInPictureButtonElement::
     MediaControlPictureInPictureButtonElement(MediaControlsImpl& media_controls)
     : MediaControlInputElement(media_controls, kMediaPlayButton) {
-  setType(InputTypeNames::button);
+  setType(input_type_names::kButton);
   SetShadowPseudoId(
       AtomicString("-internal-media-controls-picture-in-picture-button"));
   SetIsWanted(false);
@@ -29,9 +29,29 @@ bool MediaControlPictureInPictureButtonElement::
   return true;
 }
 
+void MediaControlPictureInPictureButtonElement::UpdateDisplayType() {
+  DCHECK(MediaElement().IsHTMLVideoElement());
+  bool isInPictureInPicture =
+      PictureInPictureControllerImpl::From(MediaElement().GetDocument())
+          .IsPictureInPictureElement(&ToHTMLVideoElement(MediaElement()));
+  SetDisplayType(isInPictureInPicture ? kMediaExitPictureInPictureButton
+                                      : kMediaEnterPictureInPictureButton);
+  SetClass("on", isInPictureInPicture);
+  UpdateOverflowString();
+
+  MediaControlInputElement::UpdateDisplayType();
+}
+
 WebLocalizedString::Name
 MediaControlPictureInPictureButtonElement::GetOverflowStringName() const {
-  return WebLocalizedString::kOverflowMenuPictureInPicture;
+  DCHECK(MediaElement().IsHTMLVideoElement());
+  bool isInPictureInPicture =
+      PictureInPictureControllerImpl::From(MediaElement().GetDocument())
+          .IsPictureInPictureElement(&ToHTMLVideoElement(MediaElement()));
+
+  return isInPictureInPicture
+             ? WebLocalizedString::kOverflowMenuExitPictureInPicture
+             : WebLocalizedString::kOverflowMenuEnterPictureInPicture;
 }
 
 bool MediaControlPictureInPictureButtonElement::HasOverflowButton() const {
@@ -45,15 +65,17 @@ const char* MediaControlPictureInPictureButtonElement::GetNameForHistograms()
 }
 
 void MediaControlPictureInPictureButtonElement::DefaultEventHandler(
-    Event* event) {
-  if (event->type() == EventTypeNames::click) {
+    Event& event) {
+  if (event.type() == event_type_names::kClick) {
     PictureInPictureControllerImpl& controller =
         PictureInPictureControllerImpl::From(MediaElement().GetDocument());
 
     DCHECK(MediaElement().IsHTMLVideoElement());
-    // TODO(crbug.com/840516): Toggle PiP instead.
-    controller.EnterPictureInPicture(&ToHTMLVideoElement(MediaElement()),
-                                     nullptr);
+    HTMLVideoElement* video_element = &ToHTMLVideoElement(MediaElement());
+    if (controller.IsPictureInPictureElement(video_element))
+      controller.ExitPictureInPicture(video_element, nullptr);
+    else
+      controller.EnterPictureInPicture(video_element, nullptr);
   }
 
   MediaControlInputElement::DefaultEventHandler(event);

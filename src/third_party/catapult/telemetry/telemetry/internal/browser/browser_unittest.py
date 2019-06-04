@@ -68,6 +68,7 @@ class BrowserTest(browser_test_case.BrowserTestCase):
     self.assertEquals(1, len(self._browser.tabs))
 
   @decorators.Enabled('has tabs')
+  @decorators.Disabled('android')  # http://crbug.com/905359
   def testForegroundTab(self):
     # Should be only one tab at this stage, so that must be the foreground tab
     original_tab = self._browser.tabs[0]
@@ -94,12 +95,11 @@ class BrowserTest(browser_test_case.BrowserTestCase):
     self.assertIsNotNone(crash_minidump_path)
 
   def testGetSystemInfo(self):
-    if not self._browser.supports_system_info:
+    info = self._browser.GetSystemInfo()
+    if not info:
       logging.warning(
           'Browser does not support getting system info, skipping test.')
       return
-
-    info = self._browser.GetSystemInfo()
 
     self.assertTrue(isinstance(info, system_info.SystemInfo))
     self.assertTrue(hasattr(info, 'model_name'))
@@ -111,12 +111,11 @@ class BrowserTest(browser_test_case.BrowserTestCase):
       self.assertTrue(isinstance(g, gpu_device.GPUDevice))
 
   def testGetSystemInfoNotCachedObject(self):
-    if not self._browser.supports_system_info:
+    info_a = self._browser.GetSystemInfo()
+    if not info_a:
       logging.warning(
           'Browser does not support getting system info, skipping test.')
       return
-
-    info_a = self._browser.GetSystemInfo()
     info_b = self._browser.GetSystemInfo()
     self.assertFalse(info_a is info_b)
 
@@ -125,12 +124,12 @@ class BrowserTest(browser_test_case.BrowserTestCase):
       self.skipTest('This test is only run on macOS')
       return
 
-    if not self._browser.supports_system_info:
+    info = self._browser.GetSystemInfo()
+    if not info:
       logging.warning(
           'Browser does not support getting system info, skipping test.')
       return
 
-    info = self._browser.GetSystemInfo()
     model_name_re = r"[a-zA-Z]* [0-9.]*"
     self.assertNotEqual(re.match(model_name_re, info.model_name), None)
 
@@ -245,6 +244,18 @@ class TestBrowserCreation(unittest.TestCase):
       with self.browser_to_create.BrowserSession(self.finder_options):
         pass  # Do nothing.
 
+  def testCreateBrowserTwice(self):
+    try:
+      self.browser_to_create.SetUpEnvironment(self.browser_options)
+      for _ in xrange(2):
+        browser = self.browser_to_create.Create()
+        tab = browser.tabs.New()
+        tab.Navigate('about:blank')
+        self.assertEquals(2, tab.EvaluateJavaScript('1 + 1'))
+        browser.Close()
+    finally:
+      self.browser_to_create.CleanUpEnvironment()
+
   @decorators.Enabled('linux')
   # TODO(crbug.com/782691): enable this on Win
   # TODO(ashleymarie): Re-enable on mac (BUG=catapult:#3523)
@@ -259,6 +270,7 @@ class TestBrowserCreation(unittest.TestCase):
     self.assertEqual(before_browser_run_temp_dir_content,
                      after_browser_run_temp_dir_content)
 
+  @decorators.Disabled('win10')  # crbug.com/902268
   def testSuccessfullyStartBrowserWithSystemCacheClearOptions(self):
     browser_options = self.browser_options
     browser_options.clear_sytem_cache_for_browser_and_profile_on_start = True

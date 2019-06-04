@@ -19,12 +19,15 @@ from dashboard import short_uri
 from dashboard.common import namespaced_stored_object
 from dashboard.common import request_handler
 from dashboard.common import utils
-from dashboard.models import anomaly
 from dashboard.models import bug_data
 from dashboard.models import bug_label_patterns
+from dashboard.models import histogram
 from dashboard.services import crrev_service
 from dashboard.services import gitiles_service
 from dashboard.services import issue_tracker_service
+
+from tracing.value.diagnostics import reserved_infos
+
 
 # A list of bug labels to suggest for all performance regression bugs.
 _DEFAULT_LABELS = [
@@ -183,6 +186,19 @@ class FileBugHandler(request_handler.RequestHandler):
     self.RenderHtml('bug_result.html', template_params)
 
 
+def _GetDocsForTest(test):
+  test_suite = utils.TestKey('/'.join(test.id().split('/')[:3]))
+
+  docs = histogram.SparseDiagnostic.GetMostRecentDataByNamesSync(
+      test_suite, [reserved_infos.DOCUMENTATION_URLS.name])
+
+  if not docs:
+    return None
+
+  docs = docs[reserved_infos.DOCUMENTATION_URLS.name].get('values')
+  return docs[0]
+
+
 def _AdditionalDetails(bug_id, alerts):
   """Returns a message with additional information to add to a bug."""
   base_url = '%s/group_report' % _GetServerURL()
@@ -192,12 +208,30 @@ def _AdditionalDetails(bug_id, alerts):
   comment = '<b>All graphs for this bug:</b>\n  %s\n\n' % bug_page_url
   comment += ('(For debugging:) Original alerts at time of bug-filing:\n  %s\n'
               % alerts_url)
-  bot_names = anomaly.GetBotNamesFromAlerts(alerts)
+  bot_names = {a.bot_name for a in alerts}
   if bot_names:
     comment += '\n\nBot(s) for this bug\'s original alert(s):\n\n'
     comment += '\n'.join(sorted(bot_names))
   else:
     comment += '\nCould not extract bot names from the list of alerts.'
+
+  docs_by_suite = {}
+  for a in alerts:
+    test = a.GetTestMetadataKey()
+
+    suite = test.id().split('/')[2]
+    if suite in docs_by_suite:
+      continue
+
+    docs = _GetDocsForTest(test)
+    if not docs:
+      continue
+
+    docs_by_suite[suite] = docs
+
+  for k, v in docs_by_suite.iteritems():
+    comment += '\n\n%s - %s:\n  %s' % (k, v[0], v[1])
+
   return comment
 
 
@@ -252,7 +286,10 @@ def _FetchBugComponents(alert_keys):
     alert_test = alert.test.id()
     if (alert.ownership and alert.ownership.get('component') and
         most_recent_components.get(alert_test) is None):
-      most_recent_components[alert_test] = alert.ownership['component']
+      if isinstance(alert.ownership['component'], list):
+        most_recent_components[alert_test] = alert.ownership['component'][0]
+      else:
+        most_recent_components[alert_test] = alert.ownership['component']
 
   return set(most_recent_components.values())
 

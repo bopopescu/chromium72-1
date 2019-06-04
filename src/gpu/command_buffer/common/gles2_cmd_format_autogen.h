@@ -1023,6 +1023,11 @@ struct ClearBufferuivImmediate {
     return static_cast<uint32_t>(sizeof(GLuint) * 4);
   }
 
+  static uint32_t ComputeEffectiveDataSize(GLenum buffer) {
+    return static_cast<uint32_t>(
+        sizeof(GLuint) * GLES2Util::CalcClearBufferuivDataCount(buffer));
+  }
+
   static uint32_t ComputeSize() {
     return static_cast<uint32_t>(sizeof(ValueType) + ComputeDataSize());
   }
@@ -1033,7 +1038,12 @@ struct ClearBufferuivImmediate {
     SetHeader();
     buffer = _buffer;
     drawbuffers = _drawbuffers;
-    memcpy(ImmediateDataAddress(this), _value, ComputeDataSize());
+    memcpy(ImmediateDataAddress(this), _value,
+           ComputeEffectiveDataSize(buffer));
+    DCHECK_GE(ComputeDataSize(), ComputeEffectiveDataSize(buffer));
+    char* pointer = reinterpret_cast<char*>(ImmediateDataAddress(this)) +
+                    ComputeEffectiveDataSize(buffer);
+    memset(pointer, 0, ComputeDataSize() - ComputeEffectiveDataSize(buffer));
   }
 
   void* Set(void* cmd,
@@ -11736,6 +11746,229 @@ static_assert(offsetof(BindVertexArrayOES, header) == 0,
 static_assert(offsetof(BindVertexArrayOES, array) == 4,
               "offset of BindVertexArrayOES array should be 4");
 
+struct FramebufferParameteri {
+  typedef FramebufferParameteri ValueType;
+  static const CommandId kCmdId = kFramebufferParameteri;
+  static const cmd::ArgFlags kArgFlags = cmd::kFixed;
+  static const uint8_t cmd_flags = CMD_FLAG_SET_TRACE_LEVEL(3);
+
+  static uint32_t ComputeSize() {
+    return static_cast<uint32_t>(sizeof(ValueType));  // NOLINT
+  }
+
+  void SetHeader() { header.SetCmd<ValueType>(); }
+
+  void Init(GLenum _target, GLenum _pname, GLint _param) {
+    SetHeader();
+    target = _target;
+    pname = _pname;
+    param = _param;
+  }
+
+  void* Set(void* cmd, GLenum _target, GLenum _pname, GLint _param) {
+    static_cast<ValueType*>(cmd)->Init(_target, _pname, _param);
+    return NextCmdAddress<ValueType>(cmd);
+  }
+
+  gpu::CommandHeader header;
+  uint32_t target;
+  uint32_t pname;
+  int32_t param;
+};
+
+static_assert(sizeof(FramebufferParameteri) == 16,
+              "size of FramebufferParameteri should be 16");
+static_assert(offsetof(FramebufferParameteri, header) == 0,
+              "offset of FramebufferParameteri header should be 0");
+static_assert(offsetof(FramebufferParameteri, target) == 4,
+              "offset of FramebufferParameteri target should be 4");
+static_assert(offsetof(FramebufferParameteri, pname) == 8,
+              "offset of FramebufferParameteri pname should be 8");
+static_assert(offsetof(FramebufferParameteri, param) == 12,
+              "offset of FramebufferParameteri param should be 12");
+
+struct BindImageTexture {
+  typedef BindImageTexture ValueType;
+  static const CommandId kCmdId = kBindImageTexture;
+  static const cmd::ArgFlags kArgFlags = cmd::kFixed;
+  static const uint8_t cmd_flags = CMD_FLAG_SET_TRACE_LEVEL(2);
+
+  static uint32_t ComputeSize() {
+    return static_cast<uint32_t>(sizeof(ValueType));  // NOLINT
+  }
+
+  void SetHeader() { header.SetCmd<ValueType>(); }
+
+  void Init(GLuint _unit,
+            GLuint _texture,
+            GLint _level,
+            GLboolean _layered,
+            GLint _layer,
+            GLenum _access,
+            GLenum _format) {
+    SetHeader();
+    unit = _unit;
+    texture = _texture;
+    level = _level;
+    layered = _layered;
+    layer = _layer;
+    access = _access;
+    format = _format;
+  }
+
+  void* Set(void* cmd,
+            GLuint _unit,
+            GLuint _texture,
+            GLint _level,
+            GLboolean _layered,
+            GLint _layer,
+            GLenum _access,
+            GLenum _format) {
+    static_cast<ValueType*>(cmd)->Init(_unit, _texture, _level, _layered,
+                                       _layer, _access, _format);
+    return NextCmdAddress<ValueType>(cmd);
+  }
+
+  gpu::CommandHeader header;
+  uint32_t unit;
+  uint32_t texture;
+  int32_t level;
+  uint32_t layered;
+  int32_t layer;
+  uint32_t access;
+  uint32_t format;
+};
+
+static_assert(sizeof(BindImageTexture) == 32,
+              "size of BindImageTexture should be 32");
+static_assert(offsetof(BindImageTexture, header) == 0,
+              "offset of BindImageTexture header should be 0");
+static_assert(offsetof(BindImageTexture, unit) == 4,
+              "offset of BindImageTexture unit should be 4");
+static_assert(offsetof(BindImageTexture, texture) == 8,
+              "offset of BindImageTexture texture should be 8");
+static_assert(offsetof(BindImageTexture, level) == 12,
+              "offset of BindImageTexture level should be 12");
+static_assert(offsetof(BindImageTexture, layered) == 16,
+              "offset of BindImageTexture layered should be 16");
+static_assert(offsetof(BindImageTexture, layer) == 20,
+              "offset of BindImageTexture layer should be 20");
+static_assert(offsetof(BindImageTexture, access) == 24,
+              "offset of BindImageTexture access should be 24");
+static_assert(offsetof(BindImageTexture, format) == 28,
+              "offset of BindImageTexture format should be 28");
+
+struct DispatchCompute {
+  typedef DispatchCompute ValueType;
+  static const CommandId kCmdId = kDispatchCompute;
+  static const cmd::ArgFlags kArgFlags = cmd::kFixed;
+  static const uint8_t cmd_flags = CMD_FLAG_SET_TRACE_LEVEL(2);
+
+  static uint32_t ComputeSize() {
+    return static_cast<uint32_t>(sizeof(ValueType));  // NOLINT
+  }
+
+  void SetHeader() { header.SetCmd<ValueType>(); }
+
+  void Init(GLuint _num_groups_x, GLuint _num_groups_y, GLuint _num_groups_z) {
+    SetHeader();
+    num_groups_x = _num_groups_x;
+    num_groups_y = _num_groups_y;
+    num_groups_z = _num_groups_z;
+  }
+
+  void* Set(void* cmd,
+            GLuint _num_groups_x,
+            GLuint _num_groups_y,
+            GLuint _num_groups_z) {
+    static_cast<ValueType*>(cmd)->Init(_num_groups_x, _num_groups_y,
+                                       _num_groups_z);
+    return NextCmdAddress<ValueType>(cmd);
+  }
+
+  gpu::CommandHeader header;
+  uint32_t num_groups_x;
+  uint32_t num_groups_y;
+  uint32_t num_groups_z;
+};
+
+static_assert(sizeof(DispatchCompute) == 16,
+              "size of DispatchCompute should be 16");
+static_assert(offsetof(DispatchCompute, header) == 0,
+              "offset of DispatchCompute header should be 0");
+static_assert(offsetof(DispatchCompute, num_groups_x) == 4,
+              "offset of DispatchCompute num_groups_x should be 4");
+static_assert(offsetof(DispatchCompute, num_groups_y) == 8,
+              "offset of DispatchCompute num_groups_y should be 8");
+static_assert(offsetof(DispatchCompute, num_groups_z) == 12,
+              "offset of DispatchCompute num_groups_z should be 12");
+
+struct MemoryBarrierEXT {
+  typedef MemoryBarrierEXT ValueType;
+  static const CommandId kCmdId = kMemoryBarrierEXT;
+  static const cmd::ArgFlags kArgFlags = cmd::kFixed;
+  static const uint8_t cmd_flags = CMD_FLAG_SET_TRACE_LEVEL(2);
+
+  static uint32_t ComputeSize() {
+    return static_cast<uint32_t>(sizeof(ValueType));  // NOLINT
+  }
+
+  void SetHeader() { header.SetCmd<ValueType>(); }
+
+  void Init(GLbitfield _barriers) {
+    SetHeader();
+    barriers = _barriers;
+  }
+
+  void* Set(void* cmd, GLbitfield _barriers) {
+    static_cast<ValueType*>(cmd)->Init(_barriers);
+    return NextCmdAddress<ValueType>(cmd);
+  }
+
+  gpu::CommandHeader header;
+  uint32_t barriers;
+};
+
+static_assert(sizeof(MemoryBarrierEXT) == 8,
+              "size of MemoryBarrierEXT should be 8");
+static_assert(offsetof(MemoryBarrierEXT, header) == 0,
+              "offset of MemoryBarrierEXT header should be 0");
+static_assert(offsetof(MemoryBarrierEXT, barriers) == 4,
+              "offset of MemoryBarrierEXT barriers should be 4");
+
+struct MemoryBarrierByRegion {
+  typedef MemoryBarrierByRegion ValueType;
+  static const CommandId kCmdId = kMemoryBarrierByRegion;
+  static const cmd::ArgFlags kArgFlags = cmd::kFixed;
+  static const uint8_t cmd_flags = CMD_FLAG_SET_TRACE_LEVEL(2);
+
+  static uint32_t ComputeSize() {
+    return static_cast<uint32_t>(sizeof(ValueType));  // NOLINT
+  }
+
+  void SetHeader() { header.SetCmd<ValueType>(); }
+
+  void Init(GLbitfield _barriers) {
+    SetHeader();
+    barriers = _barriers;
+  }
+
+  void* Set(void* cmd, GLbitfield _barriers) {
+    static_cast<ValueType*>(cmd)->Init(_barriers);
+    return NextCmdAddress<ValueType>(cmd);
+  }
+
+  gpu::CommandHeader header;
+  uint32_t barriers;
+};
+
+static_assert(sizeof(MemoryBarrierByRegion) == 8,
+              "size of MemoryBarrierByRegion should be 8");
+static_assert(offsetof(MemoryBarrierByRegion, header) == 0,
+              "offset of MemoryBarrierByRegion header should be 0");
+static_assert(offsetof(MemoryBarrierByRegion, barriers) == 4,
+              "offset of MemoryBarrierByRegion barriers should be 4");
+
 struct SwapBuffers {
   typedef SwapBuffers ValueType;
   static const CommandId kCmdId = kSwapBuffers;
@@ -11753,6 +11986,17 @@ struct SwapBuffers {
     GLES2Util::MapUint64ToTwoUint32(static_cast<uint64_t>(_swap_id), &swap_id_0,
                                     &swap_id_1);
     flags = _flags;
+    bool is_tracing = false;
+    TRACE_EVENT_CATEGORY_GROUP_ENABLED(
+        TRACE_DISABLED_BY_DEFAULT("gpu_cmd_queue"), &is_tracing);
+    if (is_tracing) {
+      trace_id = base::RandUint64();
+      TRACE_EVENT_WITH_FLOW1(
+          TRACE_DISABLED_BY_DEFAULT("gpu_cmd_queue"), "CommandBufferQueue",
+          trace_id, TRACE_EVENT_FLAG_FLOW_OUT, "command", "SwapBuffers");
+    } else {
+      trace_id = 0;
+    }
   }
 
   void* Set(void* cmd, GLuint64 _swap_id, GLbitfield _flags) {
@@ -11769,9 +12013,10 @@ struct SwapBuffers {
   uint32_t swap_id_0;
   uint32_t swap_id_1;
   uint32_t flags;
+  uint32_t trace_id;
 };
 
-static_assert(sizeof(SwapBuffers) == 16, "size of SwapBuffers should be 16");
+static_assert(sizeof(SwapBuffers) == 20, "size of SwapBuffers should be 20");
 static_assert(offsetof(SwapBuffers, header) == 0,
               "offset of SwapBuffers header should be 0");
 static_assert(offsetof(SwapBuffers, swap_id_0) == 4,
@@ -12698,43 +12943,6 @@ static_assert(
     offsetof(CopySubTextureCHROMIUM, unpack_unmultiply_alpha) == 56,
     "offset of CopySubTextureCHROMIUM unpack_unmultiply_alpha should be 56");
 
-struct CompressedCopyTextureCHROMIUM {
-  typedef CompressedCopyTextureCHROMIUM ValueType;
-  static const CommandId kCmdId = kCompressedCopyTextureCHROMIUM;
-  static const cmd::ArgFlags kArgFlags = cmd::kFixed;
-  static const uint8_t cmd_flags = CMD_FLAG_SET_TRACE_LEVEL(3);
-
-  static uint32_t ComputeSize() {
-    return static_cast<uint32_t>(sizeof(ValueType));  // NOLINT
-  }
-
-  void SetHeader() { header.SetCmd<ValueType>(); }
-
-  void Init(GLuint _source_id, GLuint _dest_id) {
-    SetHeader();
-    source_id = _source_id;
-    dest_id = _dest_id;
-  }
-
-  void* Set(void* cmd, GLuint _source_id, GLuint _dest_id) {
-    static_cast<ValueType*>(cmd)->Init(_source_id, _dest_id);
-    return NextCmdAddress<ValueType>(cmd);
-  }
-
-  gpu::CommandHeader header;
-  uint32_t source_id;
-  uint32_t dest_id;
-};
-
-static_assert(sizeof(CompressedCopyTextureCHROMIUM) == 12,
-              "size of CompressedCopyTextureCHROMIUM should be 12");
-static_assert(offsetof(CompressedCopyTextureCHROMIUM, header) == 0,
-              "offset of CompressedCopyTextureCHROMIUM header should be 0");
-static_assert(offsetof(CompressedCopyTextureCHROMIUM, source_id) == 4,
-              "offset of CompressedCopyTextureCHROMIUM source_id should be 4");
-static_assert(offsetof(CompressedCopyTextureCHROMIUM, dest_id) == 8,
-              "offset of CompressedCopyTextureCHROMIUM dest_id should be 8");
-
 struct DrawArraysInstancedANGLE {
   typedef DrawArraysInstancedANGLE ValueType;
   static const CommandId kCmdId = kDrawArraysInstancedANGLE;
@@ -12896,13 +13104,13 @@ struct ProduceTextureDirectCHROMIUMImmediate {
 
   void SetHeader() { header.SetCmdByTotalSize<ValueType>(ComputeSize()); }
 
-  void Init(GLuint _texture, const GLbyte* _mailbox) {
+  void Init(GLuint _texture, GLbyte* _mailbox) {
     SetHeader();
     texture = _texture;
     memcpy(ImmediateDataAddress(this), _mailbox, ComputeDataSize());
   }
 
-  void* Set(void* cmd, GLuint _texture, const GLbyte* _mailbox) {
+  void* Set(void* cmd, GLuint _texture, GLbyte* _mailbox) {
     static_cast<ValueType*>(cmd)->Init(_texture, _mailbox);
     const uint32_t size = ComputeSize();
     return NextImmediateCmdAddressTotalSize<ValueType>(cmd, size);
@@ -13976,7 +14184,7 @@ struct ScheduleDCLayerCHROMIUM {
             GLuint _filter,
             GLuint _shm_id,
             GLuint _shm_offset,
-            bool _is_protected_video) {
+            GLuint _protected_video_type) {
     SetHeader();
     num_textures = _num_textures;
     background_color = _background_color;
@@ -13984,7 +14192,7 @@ struct ScheduleDCLayerCHROMIUM {
     filter = _filter;
     shm_id = _shm_id;
     shm_offset = _shm_offset;
-    is_protected_video = _is_protected_video;
+    protected_video_type = _protected_video_type;
   }
 
   void* Set(void* cmd,
@@ -13994,10 +14202,10 @@ struct ScheduleDCLayerCHROMIUM {
             GLuint _filter,
             GLuint _shm_id,
             GLuint _shm_offset,
-            bool _is_protected_video) {
+            GLuint _protected_video_type) {
     static_cast<ValueType*>(cmd)->Init(_num_textures, _background_color,
                                        _edge_aa_mask, _filter, _shm_id,
-                                       _shm_offset, _is_protected_video);
+                                       _shm_offset, _protected_video_type);
     return NextCmdAddress<ValueType>(cmd);
   }
 
@@ -14008,7 +14216,7 @@ struct ScheduleDCLayerCHROMIUM {
   uint32_t filter;
   uint32_t shm_id;
   uint32_t shm_offset;
-  uint32_t is_protected_video;
+  uint32_t protected_video_type;
 };
 
 static_assert(sizeof(ScheduleDCLayerCHROMIUM) == 32,
@@ -14028,8 +14236,41 @@ static_assert(offsetof(ScheduleDCLayerCHROMIUM, shm_id) == 20,
 static_assert(offsetof(ScheduleDCLayerCHROMIUM, shm_offset) == 24,
               "offset of ScheduleDCLayerCHROMIUM shm_offset should be 24");
 static_assert(
-    offsetof(ScheduleDCLayerCHROMIUM, is_protected_video) == 28,
-    "offset of ScheduleDCLayerCHROMIUM is_protected_video should be 28");
+    offsetof(ScheduleDCLayerCHROMIUM, protected_video_type) == 28,
+    "offset of ScheduleDCLayerCHROMIUM protected_video_type should be 28");
+
+struct SetActiveURLCHROMIUM {
+  typedef SetActiveURLCHROMIUM ValueType;
+  static const CommandId kCmdId = kSetActiveURLCHROMIUM;
+  static const cmd::ArgFlags kArgFlags = cmd::kFixed;
+  static const uint8_t cmd_flags = CMD_FLAG_SET_TRACE_LEVEL(3);
+
+  static uint32_t ComputeSize() {
+    return static_cast<uint32_t>(sizeof(ValueType));  // NOLINT
+  }
+
+  void SetHeader() { header.SetCmd<ValueType>(); }
+
+  void Init(GLuint _url_bucket_id) {
+    SetHeader();
+    url_bucket_id = _url_bucket_id;
+  }
+
+  void* Set(void* cmd, GLuint _url_bucket_id) {
+    static_cast<ValueType*>(cmd)->Init(_url_bucket_id);
+    return NextCmdAddress<ValueType>(cmd);
+  }
+
+  gpu::CommandHeader header;
+  uint32_t url_bucket_id;
+};
+
+static_assert(sizeof(SetActiveURLCHROMIUM) == 8,
+              "size of SetActiveURLCHROMIUM should be 8");
+static_assert(offsetof(SetActiveURLCHROMIUM, header) == 0,
+              "offset of SetActiveURLCHROMIUM header should be 0");
+static_assert(offsetof(SetActiveURLCHROMIUM, url_bucket_id) == 4,
+              "offset of SetActiveURLCHROMIUM url_bucket_id should be 4");
 
 struct MatrixLoadfCHROMIUMImmediate {
   typedef MatrixLoadfCHROMIUMImmediate ValueType;
@@ -16334,5 +16575,299 @@ static_assert(offsetof(DestroyGpuFenceCHROMIUM, header) == 0,
               "offset of DestroyGpuFenceCHROMIUM header should be 0");
 static_assert(offsetof(DestroyGpuFenceCHROMIUM, gpu_fence_id) == 4,
               "offset of DestroyGpuFenceCHROMIUM gpu_fence_id should be 4");
+
+struct SetReadbackBufferShadowAllocationINTERNAL {
+  typedef SetReadbackBufferShadowAllocationINTERNAL ValueType;
+  static const CommandId kCmdId = kSetReadbackBufferShadowAllocationINTERNAL;
+  static const cmd::ArgFlags kArgFlags = cmd::kFixed;
+  static const uint8_t cmd_flags = CMD_FLAG_SET_TRACE_LEVEL(3);
+
+  static uint32_t ComputeSize() {
+    return static_cast<uint32_t>(sizeof(ValueType));  // NOLINT
+  }
+
+  void SetHeader() { header.SetCmd<ValueType>(); }
+
+  void Init(GLuint _buffer_id,
+            GLint _shm_id,
+            GLuint _shm_offset,
+            GLuint _size) {
+    SetHeader();
+    buffer_id = _buffer_id;
+    shm_id = _shm_id;
+    shm_offset = _shm_offset;
+    size = _size;
+  }
+
+  void* Set(void* cmd,
+            GLuint _buffer_id,
+            GLint _shm_id,
+            GLuint _shm_offset,
+            GLuint _size) {
+    static_cast<ValueType*>(cmd)->Init(_buffer_id, _shm_id, _shm_offset, _size);
+    return NextCmdAddress<ValueType>(cmd);
+  }
+
+  gpu::CommandHeader header;
+  uint32_t buffer_id;
+  int32_t shm_id;
+  uint32_t shm_offset;
+  uint32_t size;
+};
+
+static_assert(sizeof(SetReadbackBufferShadowAllocationINTERNAL) == 20,
+              "size of SetReadbackBufferShadowAllocationINTERNAL should be 20");
+static_assert(
+    offsetof(SetReadbackBufferShadowAllocationINTERNAL, header) == 0,
+    "offset of SetReadbackBufferShadowAllocationINTERNAL header should be 0");
+static_assert(offsetof(SetReadbackBufferShadowAllocationINTERNAL, buffer_id) ==
+                  4,
+              "offset of SetReadbackBufferShadowAllocationINTERNAL buffer_id "
+              "should be 4");
+static_assert(
+    offsetof(SetReadbackBufferShadowAllocationINTERNAL, shm_id) == 8,
+    "offset of SetReadbackBufferShadowAllocationINTERNAL shm_id should be 8");
+static_assert(offsetof(SetReadbackBufferShadowAllocationINTERNAL, shm_offset) ==
+                  12,
+              "offset of SetReadbackBufferShadowAllocationINTERNAL shm_offset "
+              "should be 12");
+static_assert(
+    offsetof(SetReadbackBufferShadowAllocationINTERNAL, size) == 16,
+    "offset of SetReadbackBufferShadowAllocationINTERNAL size should be 16");
+
+struct FramebufferTextureMultiviewLayeredANGLE {
+  typedef FramebufferTextureMultiviewLayeredANGLE ValueType;
+  static const CommandId kCmdId = kFramebufferTextureMultiviewLayeredANGLE;
+  static const cmd::ArgFlags kArgFlags = cmd::kFixed;
+  static const uint8_t cmd_flags = CMD_FLAG_SET_TRACE_LEVEL(1);
+
+  static uint32_t ComputeSize() {
+    return static_cast<uint32_t>(sizeof(ValueType));  // NOLINT
+  }
+
+  void SetHeader() { header.SetCmd<ValueType>(); }
+
+  void Init(GLenum _target,
+            GLenum _attachment,
+            GLuint _texture,
+            GLint _level,
+            GLint _baseViewIndex,
+            GLsizei _numViews) {
+    SetHeader();
+    target = _target;
+    attachment = _attachment;
+    texture = _texture;
+    level = _level;
+    baseViewIndex = _baseViewIndex;
+    numViews = _numViews;
+  }
+
+  void* Set(void* cmd,
+            GLenum _target,
+            GLenum _attachment,
+            GLuint _texture,
+            GLint _level,
+            GLint _baseViewIndex,
+            GLsizei _numViews) {
+    static_cast<ValueType*>(cmd)->Init(_target, _attachment, _texture, _level,
+                                       _baseViewIndex, _numViews);
+    return NextCmdAddress<ValueType>(cmd);
+  }
+
+  gpu::CommandHeader header;
+  uint32_t target;
+  uint32_t attachment;
+  uint32_t texture;
+  int32_t level;
+  int32_t baseViewIndex;
+  int32_t numViews;
+};
+
+static_assert(sizeof(FramebufferTextureMultiviewLayeredANGLE) == 28,
+              "size of FramebufferTextureMultiviewLayeredANGLE should be 28");
+static_assert(
+    offsetof(FramebufferTextureMultiviewLayeredANGLE, header) == 0,
+    "offset of FramebufferTextureMultiviewLayeredANGLE header should be 0");
+static_assert(
+    offsetof(FramebufferTextureMultiviewLayeredANGLE, target) == 4,
+    "offset of FramebufferTextureMultiviewLayeredANGLE target should be 4");
+static_assert(
+    offsetof(FramebufferTextureMultiviewLayeredANGLE, attachment) == 8,
+    "offset of FramebufferTextureMultiviewLayeredANGLE attachment should be 8");
+static_assert(
+    offsetof(FramebufferTextureMultiviewLayeredANGLE, texture) == 12,
+    "offset of FramebufferTextureMultiviewLayeredANGLE texture should be 12");
+static_assert(
+    offsetof(FramebufferTextureMultiviewLayeredANGLE, level) == 16,
+    "offset of FramebufferTextureMultiviewLayeredANGLE level should be 16");
+static_assert(offsetof(FramebufferTextureMultiviewLayeredANGLE,
+                       baseViewIndex) == 20,
+              "offset of FramebufferTextureMultiviewLayeredANGLE baseViewIndex "
+              "should be 20");
+static_assert(
+    offsetof(FramebufferTextureMultiviewLayeredANGLE, numViews) == 24,
+    "offset of FramebufferTextureMultiviewLayeredANGLE numViews should be 24");
+
+struct MaxShaderCompilerThreadsKHR {
+  typedef MaxShaderCompilerThreadsKHR ValueType;
+  static const CommandId kCmdId = kMaxShaderCompilerThreadsKHR;
+  static const cmd::ArgFlags kArgFlags = cmd::kFixed;
+  static const uint8_t cmd_flags = CMD_FLAG_SET_TRACE_LEVEL(3);
+
+  static uint32_t ComputeSize() {
+    return static_cast<uint32_t>(sizeof(ValueType));  // NOLINT
+  }
+
+  void SetHeader() { header.SetCmd<ValueType>(); }
+
+  void Init(GLuint _count) {
+    SetHeader();
+    count = _count;
+  }
+
+  void* Set(void* cmd, GLuint _count) {
+    static_cast<ValueType*>(cmd)->Init(_count);
+    return NextCmdAddress<ValueType>(cmd);
+  }
+
+  gpu::CommandHeader header;
+  uint32_t count;
+};
+
+static_assert(sizeof(MaxShaderCompilerThreadsKHR) == 8,
+              "size of MaxShaderCompilerThreadsKHR should be 8");
+static_assert(offsetof(MaxShaderCompilerThreadsKHR, header) == 0,
+              "offset of MaxShaderCompilerThreadsKHR header should be 0");
+static_assert(offsetof(MaxShaderCompilerThreadsKHR, count) == 4,
+              "offset of MaxShaderCompilerThreadsKHR count should be 4");
+
+struct CreateAndTexStorage2DSharedImageINTERNALImmediate {
+  typedef CreateAndTexStorage2DSharedImageINTERNALImmediate ValueType;
+  static const CommandId kCmdId =
+      kCreateAndTexStorage2DSharedImageINTERNALImmediate;
+  static const cmd::ArgFlags kArgFlags = cmd::kAtLeastN;
+  static const uint8_t cmd_flags = CMD_FLAG_SET_TRACE_LEVEL(2);
+
+  static uint32_t ComputeDataSize() {
+    return static_cast<uint32_t>(sizeof(GLbyte) * 16);
+  }
+
+  static uint32_t ComputeSize() {
+    return static_cast<uint32_t>(sizeof(ValueType) + ComputeDataSize());
+  }
+
+  void SetHeader() { header.SetCmdByTotalSize<ValueType>(ComputeSize()); }
+
+  void Init(GLuint _texture, GLenum _internalFormat, const GLbyte* _mailbox) {
+    SetHeader();
+    texture = _texture;
+    internalFormat = _internalFormat;
+    memcpy(ImmediateDataAddress(this), _mailbox, ComputeDataSize());
+  }
+
+  void* Set(void* cmd,
+            GLuint _texture,
+            GLenum _internalFormat,
+            const GLbyte* _mailbox) {
+    static_cast<ValueType*>(cmd)->Init(_texture, _internalFormat, _mailbox);
+    const uint32_t size = ComputeSize();
+    return NextImmediateCmdAddressTotalSize<ValueType>(cmd, size);
+  }
+
+  gpu::CommandHeader header;
+  uint32_t texture;
+  uint32_t internalFormat;
+};
+
+static_assert(
+    sizeof(CreateAndTexStorage2DSharedImageINTERNALImmediate) == 12,
+    "size of CreateAndTexStorage2DSharedImageINTERNALImmediate should be 12");
+static_assert(offsetof(CreateAndTexStorage2DSharedImageINTERNALImmediate,
+                       header) == 0,
+              "offset of CreateAndTexStorage2DSharedImageINTERNALImmediate "
+              "header should be 0");
+static_assert(offsetof(CreateAndTexStorage2DSharedImageINTERNALImmediate,
+                       texture) == 4,
+              "offset of CreateAndTexStorage2DSharedImageINTERNALImmediate "
+              "texture should be 4");
+static_assert(offsetof(CreateAndTexStorage2DSharedImageINTERNALImmediate,
+                       internalFormat) == 8,
+              "offset of CreateAndTexStorage2DSharedImageINTERNALImmediate "
+              "internalFormat should be 8");
+
+struct BeginSharedImageAccessDirectCHROMIUM {
+  typedef BeginSharedImageAccessDirectCHROMIUM ValueType;
+  static const CommandId kCmdId = kBeginSharedImageAccessDirectCHROMIUM;
+  static const cmd::ArgFlags kArgFlags = cmd::kFixed;
+  static const uint8_t cmd_flags = CMD_FLAG_SET_TRACE_LEVEL(3);
+
+  static uint32_t ComputeSize() {
+    return static_cast<uint32_t>(sizeof(ValueType));  // NOLINT
+  }
+
+  void SetHeader() { header.SetCmd<ValueType>(); }
+
+  void Init(GLuint _texture, GLenum _mode) {
+    SetHeader();
+    texture = _texture;
+    mode = _mode;
+  }
+
+  void* Set(void* cmd, GLuint _texture, GLenum _mode) {
+    static_cast<ValueType*>(cmd)->Init(_texture, _mode);
+    return NextCmdAddress<ValueType>(cmd);
+  }
+
+  gpu::CommandHeader header;
+  uint32_t texture;
+  uint32_t mode;
+};
+
+static_assert(sizeof(BeginSharedImageAccessDirectCHROMIUM) == 12,
+              "size of BeginSharedImageAccessDirectCHROMIUM should be 12");
+static_assert(
+    offsetof(BeginSharedImageAccessDirectCHROMIUM, header) == 0,
+    "offset of BeginSharedImageAccessDirectCHROMIUM header should be 0");
+static_assert(
+    offsetof(BeginSharedImageAccessDirectCHROMIUM, texture) == 4,
+    "offset of BeginSharedImageAccessDirectCHROMIUM texture should be 4");
+static_assert(
+    offsetof(BeginSharedImageAccessDirectCHROMIUM, mode) == 8,
+    "offset of BeginSharedImageAccessDirectCHROMIUM mode should be 8");
+
+struct EndSharedImageAccessDirectCHROMIUM {
+  typedef EndSharedImageAccessDirectCHROMIUM ValueType;
+  static const CommandId kCmdId = kEndSharedImageAccessDirectCHROMIUM;
+  static const cmd::ArgFlags kArgFlags = cmd::kFixed;
+  static const uint8_t cmd_flags = CMD_FLAG_SET_TRACE_LEVEL(3);
+
+  static uint32_t ComputeSize() {
+    return static_cast<uint32_t>(sizeof(ValueType));  // NOLINT
+  }
+
+  void SetHeader() { header.SetCmd<ValueType>(); }
+
+  void Init(GLuint _texture) {
+    SetHeader();
+    texture = _texture;
+  }
+
+  void* Set(void* cmd, GLuint _texture) {
+    static_cast<ValueType*>(cmd)->Init(_texture);
+    return NextCmdAddress<ValueType>(cmd);
+  }
+
+  gpu::CommandHeader header;
+  uint32_t texture;
+};
+
+static_assert(sizeof(EndSharedImageAccessDirectCHROMIUM) == 8,
+              "size of EndSharedImageAccessDirectCHROMIUM should be 8");
+static_assert(
+    offsetof(EndSharedImageAccessDirectCHROMIUM, header) == 0,
+    "offset of EndSharedImageAccessDirectCHROMIUM header should be 0");
+static_assert(
+    offsetof(EndSharedImageAccessDirectCHROMIUM, texture) == 4,
+    "offset of EndSharedImageAccessDirectCHROMIUM texture should be 4");
 
 #endif  // GPU_COMMAND_BUFFER_COMMON_GLES2_CMD_FORMAT_AUTOGEN_H_

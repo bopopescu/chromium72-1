@@ -34,7 +34,6 @@
 #include "third_party/blink/renderer/core/script/ignore_destructive_write_count_incrementer.h"
 #include "third_party/blink/renderer/core/script/script_element_base.h"
 #include "third_party/blink/renderer/platform/scheduler/public/frame_scheduler.h"
-#include "third_party/blink/renderer/platform/wtf/time.h"
 
 namespace blink {
 
@@ -58,7 +57,6 @@ PendingScript::PendingScript(ScriptElementBase* element,
                              const TextPosition& starting_position)
     : element_(element),
       starting_position_(starting_position),
-      parser_blocking_load_start_time_(0),
       virtual_time_pauser_(CreateWebScopedVirtualTimePauser(element)),
       client_(nullptr),
       original_context_document_(element->GetDocument().ContextDocument()),
@@ -73,7 +71,7 @@ void PendingScript::Dispose() {
   DCHECK(!IsWatchingForLoad());
 
   starting_position_ = TextPosition::BelowRangePosition();
-  parser_blocking_load_start_time_ = 0;
+  parser_blocking_load_start_time_ = TimeTicks();
 
   DisposeInternal();
   element_ = nullptr;
@@ -91,7 +89,7 @@ void PendingScript::WatchForLoad(PendingScriptClient* client) {
   // notifyFinished and further stopWatchingForLoad().
   client_ = client;
   if (IsReady()) {
-    client_->PendingScriptFinished(this);
+    PendingScriptFinished();
   } else {
     virtual_time_pauser_.PauseVirtualTime();
   }
@@ -106,6 +104,13 @@ void PendingScript::StopWatchingForLoad() {
   virtual_time_pauser_.UnpauseVirtualTime();
 }
 
+void PendingScript::PendingScriptFinished() {
+  virtual_time_pauser_.UnpauseVirtualTime();
+  if (client_) {
+    client_->PendingScriptFinished(this);
+  }
+}
+
 ScriptElementBase* PendingScript::GetElement() const {
   // As mentioned in the comment at |m_element| declaration,
   // |m_element|  must point to the corresponding ScriptLoader's
@@ -115,11 +120,11 @@ ScriptElementBase* PendingScript::GetElement() const {
 }
 
 void PendingScript::MarkParserBlockingLoadStartTime() {
-  DCHECK_EQ(parser_blocking_load_start_time_, 0.0);
-  parser_blocking_load_start_time_ = CurrentTimeTicksInSeconds();
+  DCHECK(parser_blocking_load_start_time_.is_null());
+  parser_blocking_load_start_time_ = CurrentTimeTicks();
 }
 
-// https://html.spec.whatwg.org/multipage/scripting.html#execute-the-script-block
+// <specdef href="https://html.spec.whatwg.org/#execute-the-script-block">
 void PendingScript::ExecuteScriptBlock(const KURL& document_url) {
   Document* context_document = element_->GetDocument().ContextDocument();
   if (!context_document) {
@@ -133,78 +138,85 @@ void PendingScript::ExecuteScriptBlock(const KURL& document_url) {
     return;
   }
 
-  // Do not execute module scripts if they are moved between documents.
-  // TODO(hiroshige): Also do not execute classic scripts. crbug.com/721914
-  if (OriginalContextDocument() != context_document &&
-      GetScriptType() == ScriptType::kModule) {
-    Dispose();
-    return;
+  if (OriginalContextDocument() != context_document) {
+    if (GetScriptType() == mojom::ScriptType::kModule) {
+      // Do not execute module scripts if they are moved between documents.
+      Dispose();
+      return;
+    }
+
+    // TODO(hiroshige): Also do not execute classic scripts.
+    // https://crbug.com/721914
+    UseCounter::Count(frame, WebFeature::kEvaluateScriptMovedBetweenDocuments);
   }
 
-  bool error_occurred = false;
-  Script* script = GetSource(document_url, error_occurred);
+  Script* script = GetSource(document_url);
 
-  if (!error_occurred && !IsExternal()) {
+  if (script && !IsExternal()) {
     bool should_bypass_main_world_csp =
-        frame->GetScriptController().ShouldBypassMainWorldCSP();
+        ContentSecurityPolicy::ShouldBypassMainWorld(&element_->GetDocument());
 
     AtomicString nonce = element_->GetNonceForElement();
     if (!should_bypass_main_world_csp &&
         !element_->AllowInlineScriptForCSP(
             nonce, StartingPosition().line_, script->InlineSourceTextForCSP(),
             ContentSecurityPolicy::InlineType::kBlock)) {
-      // Consider as if "the script's script is null" retrospectively,
-      // if the CSP check fails, which is considered as load failure.
-      error_occurred = true;
+      // Consider as if:
+      //
+      // <spec step="2">If the script's script is null, ...</spec>
+      //
+      // retrospectively, if the CSP check fails, which is considered as load
+      // failure.
+      script = nullptr;
     }
   }
 
   const bool was_canceled = WasCanceled();
   const bool is_external = IsExternal();
   const bool created_during_document_write = WasCreatedDuringDocumentWrite();
-  const double parser_blocking_load_start_time = ParserBlockingLoadStartTime();
+  const TimeTicks parser_blocking_load_start_time =
+      ParserBlockingLoadStartTime();
   const bool is_controlled_by_script_runner = IsControlledByScriptRunner();
   ScriptElementBase* element = element_;
   Dispose();
 
   // ExecuteScriptBlockInternal() is split just in order to prevent accidential
   // access to |this| after Dispose().
-  ExecuteScriptBlockInternal(script, error_occurred, element, was_canceled,
-                             is_external, created_during_document_write,
-                             parser_blocking_load_start_time,
-                             is_controlled_by_script_runner);
+  ExecuteScriptBlockInternal(
+      script, element, was_canceled, is_external, created_during_document_write,
+      parser_blocking_load_start_time, is_controlled_by_script_runner);
 }
 
+// <specdef href="https://html.spec.whatwg.org/#execute-the-script-block">
 void PendingScript::ExecuteScriptBlockInternal(
     Script* script,
-    bool error_occurred,
     ScriptElementBase* element,
     bool was_canceled,
     bool is_external,
     bool created_during_document_write,
-    double parser_blocking_load_start_time,
+    TimeTicks parser_blocking_load_start_time,
     bool is_controlled_by_script_runner) {
   Document& element_document = element->GetDocument();
   Document* context_document = element_document.ContextDocument();
 
   // <spec step="2">If the script's script is null, fire an event named error at
   // the element, and return.</spec>
-  if (error_occurred) {
+  if (!script) {
     element->DispatchErrorEvent();
     return;
   }
 
-  if (parser_blocking_load_start_time > 0.0) {
+  if (parser_blocking_load_start_time > TimeTicks()) {
     DocumentParserTiming::From(element_document)
         .RecordParserBlockedOnScriptLoadDuration(
-            CurrentTimeTicksInSeconds() - parser_blocking_load_start_time,
+            CurrentTimeTicks() - parser_blocking_load_start_time,
             created_during_document_write);
   }
 
   if (was_canceled)
     return;
 
-  double script_exec_start_time = CurrentTimeTicksInSeconds();
+  TimeTicks script_exec_start_time = CurrentTimeTicks();
 
   {
     if (element->ElementHasDuplicateAttributes()) {
@@ -217,7 +229,7 @@ void PendingScript::ExecuteScriptBlockInternal(
     // <spec step="3">If the script is from an external file, or the script's
     // type is "module", ...</spec>
     const bool needs_increment =
-        is_external || script->GetScriptType() == ScriptType::kModule ||
+        is_external || script->GetScriptType() == mojom::ScriptType::kModule ||
         is_imported_script;
     // <spec step="3">... then increment the ignore-destructive-writes counter
     // of the script element's node document. Let neutralized doc be that
@@ -233,29 +245,29 @@ void PendingScript::ExecuteScriptBlockInternal(
 
     // <spec step="5">Switch on the script's type:</spec>
     //
-    // Step 5.A. "classic" [spec text]
+    // <spec step="5.A">"classic"</spec>
     //
     // <spec step="5.A.1">If the script element's root is not a shadow root,
     // then set the script element's node document's currentScript attribute to
     // the script element. Otherwise, set it to null.</spec>
     //
-    // Step 5.B. "module" [spec text]
+    // <spec step="5.B">"module"</spec>
     //
     // <spec step="5.B.1">Set the script element's node document's currentScript
     // attribute to null.</spec>
     ScriptElementBase* current_script = nullptr;
-    if (script->GetScriptType() == ScriptType::kClassic)
+    if (script->GetScriptType() == mojom::ScriptType::kClassic)
       current_script = element;
     context_document->PushCurrentScript(current_script);
 
-    // Step 5.A. "classic" [spec text]
+    // <spec step="5.A">"classic"</spec>
     //
     // <spec step="5.A.2">Run the classic script given by the script's
     // script.</spec>
     //
     // Note: This is where the script is compiled and actually executed.
     //
-    // Step 5.B. "module" [spec text]
+    // <spec step="5.B">"module"</spec>
     //
     // <spec step="5.B.2">Run the module script given by the script's
     // script.</spec>
@@ -279,7 +291,7 @@ void PendingScript::ExecuteScriptBlockInternal(
   if (!is_controlled_by_script_runner) {
     DocumentParserTiming::From(element_document)
         .RecordParserBlockedOnScriptExecutionDuration(
-            CurrentTimeTicksInSeconds() - script_exec_start_time,
+            CurrentTimeTicks() - script_exec_start_time,
             created_during_document_write);
   }
 

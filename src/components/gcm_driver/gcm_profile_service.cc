@@ -28,7 +28,8 @@
 #include "components/gcm_driver/gcm_client_factory.h"
 #include "components/gcm_driver/gcm_desktop_utils.h"
 #include "components/gcm_driver/gcm_driver_desktop.h"
-#include "net/url_request/url_request_context_getter.h"
+#include "services/identity/public/cpp/identity_manager.h"
+#include "services/network/public/cpp/shared_url_loader_factory.h"
 #endif
 
 namespace gcm {
@@ -36,26 +37,26 @@ namespace gcm {
 #if !BUILDFLAG(USE_GCM_FROM_PLATFORM)
 // Identity observer only has actual work to do when the user is actually signed
 // in. It ensures that account tracker is taking
-class GCMProfileService::IdentityObserver : public SigninManagerBase::Observer {
+class GCMProfileService::IdentityObserver
+    : public identity::IdentityManager::Observer {
  public:
-  IdentityObserver(SigninManagerBase* signin_manager,
-                   ProfileOAuth2TokenService* token_service,
-                   net::URLRequestContextGetter* request_context,
-                   GCMDriver* driver);
+  IdentityObserver(
+      identity::IdentityManager* identity_manager,
+      scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
+      GCMDriver* driver);
   ~IdentityObserver() override;
 
-  // SigninManagerBase::Observer:
-  void GoogleSigninSucceeded(const std::string& account_id,
-                             const std::string& username) override;
-  void GoogleSignedOut(const std::string& account_id,
-                       const std::string& username) override;
+  // identity::IdentityManager::Observer:
+  void OnPrimaryAccountSet(const AccountInfo& primary_account_info) override;
+  void OnPrimaryAccountCleared(
+      const AccountInfo& previous_primary_account_info) override;
 
  private:
-  void StartAccountTracker(net::URLRequestContextGetter* request_context);
+  void StartAccountTracker(
+      scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory);
 
   GCMDriver* driver_;
-  SigninManagerBase* signin_manager_;
-  ProfileOAuth2TokenService* token_service_;
+  identity::IdentityManager* identity_manager_;
   std::unique_ptr<GCMAccountTracker> gcm_account_tracker_;
 
   // The account ID that this service is responsible for. Empty when the service
@@ -68,42 +69,37 @@ class GCMProfileService::IdentityObserver : public SigninManagerBase::Observer {
 };
 
 GCMProfileService::IdentityObserver::IdentityObserver(
-    SigninManagerBase* signin_manager,
-    ProfileOAuth2TokenService* token_service,
-    net::URLRequestContextGetter* request_context,
+    identity::IdentityManager* identity_manager,
+    scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
     GCMDriver* driver)
     : driver_(driver),
-      signin_manager_(signin_manager),
-      token_service_(token_service),
+      identity_manager_(identity_manager),
       weak_ptr_factory_(this) {
-  signin_manager_->AddObserver(this);
+  identity_manager_->AddObserver(this);
 
-  GoogleSigninSucceeded(signin_manager_->GetAuthenticatedAccountId(),
-                        signin_manager_->GetAuthenticatedAccountInfo().email);
-  StartAccountTracker(request_context);
+  OnPrimaryAccountSet(identity_manager_->GetPrimaryAccountInfo());
+  StartAccountTracker(std::move(url_loader_factory));
 }
 
 GCMProfileService::IdentityObserver::~IdentityObserver() {
   if (gcm_account_tracker_)
     gcm_account_tracker_->Shutdown();
-  signin_manager_->RemoveObserver(this);
+  identity_manager_->RemoveObserver(this);
 }
 
-void GCMProfileService::IdentityObserver::GoogleSigninSucceeded(
-    const std::string& account_id,
-    const std::string& username) {
+void GCMProfileService::IdentityObserver::OnPrimaryAccountSet(
+    const AccountInfo& primary_account_info) {
   // This might be called multiple times when the password changes.
-  if (account_id == account_id_)
+  if (primary_account_info.account_id == account_id_)
     return;
-  account_id_ = account_id;
+  account_id_ = primary_account_info.account_id;
 
   // Still need to notify GCMDriver for UMA purpose.
   driver_->OnSignedIn();
 }
 
-void GCMProfileService::IdentityObserver::GoogleSignedOut(
-    const std::string& account_id,
-    const std::string& username) {
+void GCMProfileService::IdentityObserver::OnPrimaryAccountCleared(
+    const AccountInfo& previous_primary_account_info) {
   account_id_.clear();
 
   // Still need to notify GCMDriver for UMA purpose.
@@ -111,15 +107,15 @@ void GCMProfileService::IdentityObserver::GoogleSignedOut(
 }
 
 void GCMProfileService::IdentityObserver::StartAccountTracker(
-    net::URLRequestContextGetter* request_context) {
+    scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory) {
   if (gcm_account_tracker_)
     return;
 
   std::unique_ptr<AccountTracker> gaia_account_tracker(
-      new AccountTracker(signin_manager_, token_service_, request_context));
+      new AccountTracker(identity_manager_, std::move(url_loader_factory)));
 
   gcm_account_tracker_.reset(new GCMAccountTracker(
-      std::move(gaia_account_tracker), token_service_, driver_));
+      std::move(gaia_account_tracker), identity_manager_, driver_));
 
   gcm_account_tracker_->Start();
 }
@@ -146,26 +142,32 @@ GCMProfileService::GCMProfileService(
 GCMProfileService::GCMProfileService(
     PrefService* prefs,
     base::FilePath path,
-    net::URLRequestContextGetter* request_context,
+    base::RepeatingCallback<
+        void(base::WeakPtr<GCMProfileService>,
+             network::mojom::ProxyResolvingSocketFactoryRequest)>
+        get_socket_factory_callback,
+    scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
+    network::NetworkConnectionTracker* network_connection_tracker,
     version_info::Channel channel,
     const std::string& product_category_for_subtypes,
-    SigninManagerBase* signin_manager,
-    ProfileOAuth2TokenService* token_service,
+    identity::IdentityManager* identity_manager,
     std::unique_ptr<GCMClientFactory> gcm_client_factory,
     const scoped_refptr<base::SequencedTaskRunner>& ui_task_runner,
     const scoped_refptr<base::SequencedTaskRunner>& io_task_runner,
     scoped_refptr<base::SequencedTaskRunner>& blocking_task_runner)
-    : signin_manager_(signin_manager),
-      token_service_(token_service),
-      request_context_(request_context) {
+    : identity_manager_(identity_manager),
+      url_loader_factory_(url_loader_factory) {
   driver_ = CreateGCMDriverDesktop(
       std::move(gcm_client_factory), prefs,
-      path.Append(gcm_driver::kGCMStoreDirname), request_context_, channel,
+      path.Append(gcm_driver::kGCMStoreDirname),
+      base::BindRepeating(get_socket_factory_callback,
+                          weak_ptr_factory_.GetWeakPtr()),
+      url_loader_factory, network_connection_tracker, channel,
       product_category_for_subtypes, ui_task_runner, io_task_runner,
       blocking_task_runner);
 
   identity_observer_.reset(new IdentityObserver(
-      signin_manager_, token_service_, request_context_, driver_.get()));
+      identity_manager_, url_loader_factory, driver_.get()));
 }
 #endif  // BUILDFLAG(USE_GCM_FROM_PLATFORM)
 
@@ -189,7 +191,7 @@ void GCMProfileService::SetDriverForTesting(std::unique_ptr<GCMDriver> driver) {
 #if !BUILDFLAG(USE_GCM_FROM_PLATFORM)
   if (identity_observer_) {
     identity_observer_ = std::make_unique<IdentityObserver>(
-        signin_manager_, token_service_, request_context_, driver.get());
+        identity_manager_, url_loader_factory_, driver.get());
   }
 #endif  // !BUILDFLAG(USE_GCM_FROM_PLATFORM)
 }

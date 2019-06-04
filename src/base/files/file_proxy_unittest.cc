@@ -15,8 +15,8 @@
 #include "base/files/scoped_temp_dir.h"
 #include "base/macros.h"
 #include "base/memory/weak_ptr.h"
-#include "base/message_loop/message_loop.h"
 #include "base/run_loop.h"
+#include "base/test/scoped_task_environment.h"
 #include "base/threading/thread.h"
 #include "base/threading/thread_restrictions.h"
 #include "build/build_config.h"
@@ -27,7 +27,9 @@ namespace base {
 class FileProxyTest : public testing::Test {
  public:
   FileProxyTest()
-      : file_thread_("FileProxyTestFileThread"),
+      : scoped_task_environment_(
+            test::ScopedTaskEnvironment::MainThreadType::IO),
+        file_thread_("FileProxyTestFileThread"),
         error_(File::FILE_OK),
         bytes_written_(-1),
         weak_factory_(this) {}
@@ -93,7 +95,7 @@ class FileProxyTest : public testing::Test {
   const FilePath TestPath() const { return dir_.GetPath().AppendASCII("test"); }
 
   ScopedTempDir dir_;
-  MessageLoopForIO message_loop_;
+  test::ScopedTaskEnvironment scoped_task_environment_;
   Thread file_thread_;
 
   File::Error error_;
@@ -310,8 +312,10 @@ TEST_F(FileProxyTest, WriteAndFlush) {
   }
 }
 
-#if defined(OS_ANDROID)
+#if defined(OS_ANDROID) || defined(OS_FUCHSIA)
 // Flaky on Android, see http://crbug.com/489602
+// TODO(crbug.com/851734): Implementation depends on stat, which is not
+// implemented on Fuchsia
 #define MAYBE_SetTimes DISABLED_SetTimes
 #else
 #define MAYBE_SetTimes SetTimes

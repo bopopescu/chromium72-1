@@ -4,22 +4,16 @@
 
 #include "media/gpu/vaapi/vaapi_vp9_accelerator.h"
 
+#include "media/gpu/decode_surface_handler.h"
+#include "media/gpu/macros.h"
 #include "media/gpu/vaapi/vaapi_common.h"
-#include "media/gpu/vaapi/vaapi_video_decode_accelerator.h"
 #include "media/gpu/vaapi/vaapi_wrapper.h"
 #include "media/gpu/vp9_picture.h"
-
-#define ARRAY_MEMCPY_CHECKED(to, from)                               \
-  do {                                                               \
-    static_assert(sizeof(to) == sizeof(from),                        \
-                  #from " and " #to " arrays must be of same size"); \
-    memcpy(to, from, sizeof(to));                                    \
-  } while (0)
 
 namespace media {
 
 VaapiVP9Accelerator::VaapiVP9Accelerator(
-    VaapiVideoDecodeAccelerator* vaapi_dec,
+    DecodeSurfaceHandler<VASurface>* vaapi_dec,
     scoped_refptr<VaapiWrapper> vaapi_wrapper)
     : vaapi_wrapper_(vaapi_wrapper), vaapi_dec_(vaapi_dec) {
   DCHECK(vaapi_wrapper_);
@@ -34,8 +28,7 @@ VaapiVP9Accelerator::~VaapiVP9Accelerator() {
 
 scoped_refptr<VP9Picture> VaapiVP9Accelerator::CreateVP9Picture() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-
-  const auto va_surface = vaapi_dec_->CreateVASurface();
+  const auto va_surface = vaapi_dec_->CreateSurface();
   if (!va_surface)
     return nullptr;
 
@@ -50,7 +43,7 @@ bool VaapiVP9Accelerator::SubmitDecode(
     const base::Closure& done_cb) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   // |done_cb| should be null as we return false from IsFrameContextRequired().
-  DCHECK(done_cb.is_null());
+  DCHECK(!done_cb);
 
   VADecPictureParameterBufferVP9 pic_param;
   memset(&pic_param, 0, sizeof(pic_param));
@@ -109,16 +102,15 @@ bool VaapiVP9Accelerator::SubmitDecode(
   pic_param.frame_header_length_in_bytes = frame_hdr->uncompressed_header_size;
   pic_param.first_partition_size = frame_hdr->header_size_in_bytes;
 
-  ARRAY_MEMCPY_CHECKED(pic_param.mb_segment_tree_probs, seg.tree_probs);
-  ARRAY_MEMCPY_CHECKED(pic_param.segment_pred_probs, seg.pred_probs);
+  SafeArrayMemcpy(pic_param.mb_segment_tree_probs, seg.tree_probs);
+  SafeArrayMemcpy(pic_param.segment_pred_probs, seg.pred_probs);
 
   pic_param.profile = frame_hdr->profile;
   pic_param.bit_depth = frame_hdr->bit_depth;
   DCHECK((pic_param.profile == 0 && pic_param.bit_depth == 8) ||
          (pic_param.profile == 2 && pic_param.bit_depth == 10));
 
-  if (!vaapi_wrapper_->SubmitBuffer(VAPictureParameterBufferType,
-                                    sizeof(pic_param), &pic_param))
+  if (!vaapi_wrapper_->SubmitBuffer(VAPictureParameterBufferType, &pic_param))
     return false;
 
   VASliceParameterBufferVP9 slice_param;
@@ -142,7 +134,7 @@ bool VaapiVP9Accelerator::SubmitDecode(
                  seg.FeatureEnabled(i, Vp9SegmentationParams::SEG_LVL_SKIP));
 #undef SEG_TO_SP_SF
 
-    ARRAY_MEMCPY_CHECKED(seg_param.filter_level, lf.lvl[i]);
+    SafeArrayMemcpy(seg_param.filter_level, lf.lvl[i]);
 
     seg_param.luma_dc_quant_scale = seg.y_dequant[i][0];
     seg_param.luma_ac_quant_scale = seg.y_dequant[i][1];
@@ -150,24 +142,24 @@ bool VaapiVP9Accelerator::SubmitDecode(
     seg_param.chroma_ac_quant_scale = seg.uv_dequant[i][1];
   }
 
-  if (!vaapi_wrapper_->SubmitBuffer(VASliceParameterBufferType,
-                                    sizeof(slice_param), &slice_param))
+  if (!vaapi_wrapper_->SubmitBuffer(VASliceParameterBufferType, &slice_param))
     return false;
 
-  void* non_const_ptr = const_cast<uint8_t*>(frame_hdr->data);
   if (!vaapi_wrapper_->SubmitBuffer(VASliceDataBufferType,
-                                    frame_hdr->frame_size, non_const_ptr))
+                                    frame_hdr->frame_size, frame_hdr->data))
     return false;
 
-  return vaapi_dec_->DecodeVASurface(pic->AsVaapiVP9Picture()->va_surface());
+  return vaapi_wrapper_->ExecuteAndDestroyPendingBuffers(
+      pic->AsVaapiVP9Picture()->va_surface()->id());
 }
 
 bool VaapiVP9Accelerator::OutputPicture(const scoped_refptr<VP9Picture>& pic) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
   const VaapiVP9Picture* vaapi_pic = pic->AsVaapiVP9Picture();
-  vaapi_dec_->VASurfaceReady(vaapi_pic->va_surface(), vaapi_pic->bitstream_id(),
-                             vaapi_pic->visible_rect());
+  vaapi_dec_->SurfaceReady(vaapi_pic->va_surface(), vaapi_pic->bitstream_id(),
+                           vaapi_pic->visible_rect(),
+                           vaapi_pic->get_colorspace());
   return true;
 }
 

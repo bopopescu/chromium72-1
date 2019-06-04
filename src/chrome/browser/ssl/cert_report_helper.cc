@@ -16,6 +16,7 @@
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ssl/ssl_cert_reporter.h"
+#include "chrome/browser/unified_consent/unified_consent_service_factory.h"
 #include "chrome/common/channel_info.h"
 #include "chrome/common/pref_names.h"
 #include "components/prefs/pref_service.h"
@@ -23,6 +24,7 @@
 #include "components/security_interstitials/core/controller_client.h"
 #include "components/security_interstitials/core/metrics_helper.h"
 #include "components/strings/grit/components_strings.h"
+#include "components/unified_consent/unified_consent_service.h"
 #include "components/variations/variations_associated_data.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/web_contents.h"
@@ -103,10 +105,7 @@ void CertReportHelper::PopulateExtendedReportingOption(
 
   load_time_data->SetString(
       security_interstitials::kOptInLink,
-      l10n_util::GetStringFUTF16(safe_browsing::ChooseOptInTextResource(
-                                     *GetProfile(web_contents_)->GetPrefs(),
-                                     IDS_SAFE_BROWSING_MALWARE_REPORTING_AGREE,
-                                     IDS_SAFE_BROWSING_SCOUT_REPORTING_AGREE),
+      l10n_util::GetStringFUTF16(IDS_SAFE_BROWSING_SCOUT_REPORTING_AGREE,
                                  base::UTF8ToUTF16(privacy_link)));
 }
 
@@ -142,9 +141,6 @@ void CertReportHelper::HandleReportingCommands(
 }
 
 void CertReportHelper::FinishCertCollection() {
-  if (!ShouldShowCertificateReporterCheckbox())
-    return;
-
   if (!safe_browsing::IsExtendedReportingEnabled(
           *GetProfile(web_contents_)->GetPrefs()))
     return;
@@ -187,11 +183,13 @@ void CertReportHelper::FinishCertCollection() {
 }
 
 bool CertReportHelper::ShouldShowCertificateReporterCheckbox() {
-  // Only show the checkbox iff the user is part of the respective Finch group
-  // and the window is not incognito and the feature is not disabled by policy.
+  // Only show the checkbox or send reports iff the user is part of the
+  // respective Finch group and the window is not incognito and the feature is
+  // not disabled by policy.
   const bool in_incognito =
       web_contents_->GetBrowserContext()->IsOffTheRecord();
-  const PrefService* pref_service = GetProfile(web_contents_)->GetPrefs();
+  Profile* profile = GetProfile(web_contents_);
+  const PrefService* pref_service = profile->GetPrefs();
   bool can_show_checkbox =
       safe_browsing::IsExtendedReportingOptInAllowed(*pref_service) &&
       !safe_browsing::IsExtendedReportingPolicyManaged(*pref_service);
@@ -202,7 +200,8 @@ bool CertReportHelper::ShouldShowCertificateReporterCheckbox() {
 }
 
 bool CertReportHelper::ShouldReportCertificateError() {
-  DCHECK(ShouldShowCertificateReporterCheckbox());
+  if (!ShouldShowCertificateReporterCheckbox())
+    return false;
 
   bool is_official_build = g_is_fake_official_build_for_cert_report_testing;
 #if defined(OFFICIAL_BUILD) && defined(GOOGLE_CHROME_BUILD)

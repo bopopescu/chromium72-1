@@ -34,6 +34,7 @@
 #include <memory>
 
 #include "cc/base/region.h"
+#include "cc/layers/picture_layer.h"
 #include "third_party/blink/public/platform/web_float_point.h"
 #include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/dom/dom_node_ids.h"
@@ -49,14 +50,16 @@
 #include "third_party/blink/renderer/core/page/page.h"
 #include "third_party/blink/renderer/core/paint/compositing/composited_layer_mapping.h"
 #include "third_party/blink/renderer/core/paint/compositing/paint_layer_compositor.h"
+#include "third_party/blink/renderer/core/paint/paint_layer_scrollable_area.h"
 #include "third_party/blink/renderer/platform/geometry/int_rect.h"
 #include "third_party/blink/renderer/platform/graphics/compositing_reasons.h"
 #include "third_party/blink/renderer/platform/graphics/compositor_element_id.h"
 #include "third_party/blink/renderer/platform/graphics/graphics_layer.h"
 #include "third_party/blink/renderer/platform/graphics/picture_snapshot.h"
 #include "third_party/blink/renderer/platform/transforms/transformation_matrix.h"
-#include "third_party/blink/renderer/platform/wtf/text/base64.h"
 #include "third_party/blink/renderer/platform/wtf/text/string_builder.h"
+#include "third_party/skia/include/core/SkPicture.h"
+#include "third_party/skia/include/core/SkRefCnt.h"
 #include "ui/gfx/geometry/rect.h"
 
 namespace blink {
@@ -129,7 +132,7 @@ static GraphicsLayer* FindLayerByElementId(GraphicsLayer* root,
                                            CompositorElementId element_id) {
   if (root->CcLayer()->element_id() == element_id)
     return root;
-  for (size_t i = 0, size = root->Children().size(); i < size; ++i) {
+  for (wtf_size_t i = 0, size = root->Children().size(); i < size; ++i) {
     if (GraphicsLayer* layer =
             FindLayerByElementId(root->Children()[i], element_id))
       return layer;
@@ -303,16 +306,14 @@ InspectorLayerTreeAgent::BuildLayerTree() {
   std::unique_ptr<Array<protocol::LayerTree::Layer>> layers =
       Array<protocol::LayerTree::Layer>::create();
   BuildLayerIdToNodeIdMap(compositor->RootLayer(), layer_id_to_node_id_map);
-  auto* layer_for_scrolling = inspected_frames_->Root()
-                                  ->View()
-                                  ->LayoutViewportScrollableArea()
-                                  ->LayerForScrolling();
+  auto* layer_for_scrolling =
+      inspected_frames_->Root()->View()->LayoutViewport()->LayerForScrolling();
   int scrolling_layer_id =
       layer_for_scrolling ? layer_for_scrolling->CcLayer()->id() : 0;
   bool have_blocking_wheel_event_handlers =
       inspected_frames_->Root()->GetChromeClient().EventListenerProperties(
-          inspected_frames_->Root(), WebEventListenerClass::kMouseWheel) ==
-      WebEventListenerProperties::kBlocking;
+          inspected_frames_->Root(), cc::EventListenerClass::kMouseWheel) ==
+      cc::EventListenerProperties::kBlocking;
 
   GatherGraphicsLayers(RootGraphicsLayer(), layer_id_to_node_id_map, layers,
                        have_blocking_wheel_event_handlers, scrolling_layer_id);
@@ -327,7 +328,7 @@ void InspectorLayerTreeAgent::BuildLayerIdToNodeIdMap(
       GraphicsLayer* graphics_layer =
           root->GetCompositedLayerMapping()->ChildForSuperlayers();
       layer_id_to_node_id_map.Set(graphics_layer->CcLayer()->id(),
-                                  IdForNode(node));
+                                  IdentifiersFactory::IntIdForNode(node));
     }
   }
   for (PaintLayer* child = root->FirstChild(); child;
@@ -362,13 +363,9 @@ void InspectorLayerTreeAgent::GatherGraphicsLayers(
   layers->addItem(BuildObjectForLayer(
       RootGraphicsLayer(), layer, layer_id_to_node_id_map.at(layer_id),
       has_wheel_event_handlers && layer_id == scrolling_layer_id));
-  for (size_t i = 0, size = layer->Children().size(); i < size; ++i)
+  for (wtf_size_t i = 0, size = layer->Children().size(); i < size; ++i)
     GatherGraphicsLayers(layer->Children()[i], layer_id_to_node_id_map, layers,
                          has_wheel_event_handlers, scrolling_layer_id);
-}
-
-int InspectorLayerTreeAgent::IdForNode(Node* node) {
-  return DOMNodeIds::IdForNode(node);
 }
 
 PaintLayerCompositor* InspectorLayerTreeAgent::GetPaintLayerCompositor() {
@@ -388,7 +385,7 @@ GraphicsLayer* InspectorLayerTreeAgent::RootGraphicsLayer() {
 static GraphicsLayer* FindLayerById(GraphicsLayer* root, int layer_id) {
   if (root->CcLayer()->id() == layer_id)
     return root;
-  for (size_t i = 0, size = root->Children().size(); i < size; ++i) {
+  for (wtf_size_t i = 0, size = root->Children().size(); i < size; ++i) {
     if (GraphicsLayer* layer = FindLayerById(root->Children()[i], layer_id))
       return layer;
   }
@@ -434,8 +431,7 @@ Response InspectorLayerTreeAgent::makeSnapshot(const String& layer_id,
   if (!layer->DrawsContent())
     return Response::Error("Layer does not draw content");
 
-  IntSize size = ExpandedIntSize(layer->Size());
-  IntRect interest_rect(IntPoint(0, 0), size);
+  IntRect interest_rect(IntPoint(), IntSize(layer->Size()));
   suppress_layer_paint_events_ = true;
 
   // If we hit a devtool break point in the middle of document lifecycle, for
@@ -474,14 +470,18 @@ Response InspectorLayerTreeAgent::loadSnapshot(
     String* snapshot_id) {
   if (!tiles->length())
     return Response::Error("Invalid argument, no tiles provided");
+  if (tiles->length() > UINT_MAX)
+    return Response::Error("Invalid argument, too many tiles provided");
+  wtf_size_t tiles_length = static_cast<wtf_size_t>(tiles->length());
   Vector<scoped_refptr<PictureSnapshot::TilePictureStream>> decoded_tiles;
-  decoded_tiles.Grow(tiles->length());
-  for (size_t i = 0; i < tiles->length(); ++i) {
+  decoded_tiles.Grow(tiles_length);
+  for (wtf_size_t i = 0; i < tiles_length; ++i) {
     protocol::LayerTree::PictureTile* tile = tiles->get(i);
     decoded_tiles[i] = base::AdoptRef(new PictureSnapshot::TilePictureStream());
     decoded_tiles[i]->layer_offset.Set(tile->getX(), tile->getY());
-    if (!Base64Decode(tile->getPicture(), decoded_tiles[i]->data))
-      return Response::Error("Invalid base64 encoding");
+    const protocol::Binary& data = tile->getPicture();
+    decoded_tiles[i]->picture =
+        SkPicture::MakeFromData(data.data(), data.size());
   }
   scoped_refptr<PictureSnapshot> snapshot =
       PictureSnapshot::Load(decoded_tiles);
@@ -523,14 +523,15 @@ Response InspectorLayerTreeAgent::replaySnapshot(const String& snapshot_id,
   Response response = GetSnapshotById(snapshot_id, snapshot);
   if (!response.isSuccess())
     return response;
-  std::unique_ptr<Vector<char>> base64_data = snapshot->Replay(
+  Vector<char> base64_data = snapshot->Replay(
       from_step.fromMaybe(0), to_step.fromMaybe(0), scale.fromMaybe(1.0));
-  if (!base64_data)
+  if (base64_data.IsEmpty())
     return Response::Error("Image encoding failed");
+  static constexpr char kUrlPrefix[] = "data:image/png;base64,";
   StringBuilder url;
-  url.Append("data:image/png;base64,");
-  url.ReserveCapacity(url.length() + base64_data->size());
-  url.Append(base64_data->begin(), base64_data->size());
+  url.ReserveCapacity(sizeof(kUrlPrefix) + base64_data.size());
+  url.Append(kUrlPrefix);
+  url.Append(base64_data.begin(), base64_data.size());
   *data_url = url.ToString();
   return Response::OK();
 }
@@ -553,15 +554,15 @@ Response InspectorLayerTreeAgent::profileSnapshot(
   FloatRect rect;
   if (clip_rect.isJust())
     ParseRect(clip_rect.fromJust(), &rect);
-  std::unique_ptr<PictureSnapshot::Timings> timings = snapshot->Profile(
-      min_repeat_count.fromMaybe(1), min_duration.fromMaybe(0),
-      clip_rect.isJust() ? &rect : nullptr);
+  auto timings =
+      snapshot->Profile(min_repeat_count.fromMaybe(1),
+                        TimeDelta::FromSecondsD(min_duration.fromMaybe(0)),
+                        clip_rect.isJust() ? &rect : nullptr);
   *out_timings = Array<Array<double>>::create();
-  for (size_t i = 0; i < timings->size(); ++i) {
-    const Vector<double>& row = (*timings)[i];
+  for (const auto& row : timings) {
     std::unique_ptr<Array<double>> out_row = Array<double>::create();
-    for (size_t j = 0; j < row.size(); ++j)
-      out_row->addItem(row[j]);
+    for (TimeDelta delta : row)
+      out_row->addItem(delta.InSecondsF());
     (*out_timings)->addItem(std::move(out_row));
   }
   return Response::OK();

@@ -7,6 +7,7 @@
 #include "base/bind.h"
 #include "base/macros.h"
 #include "components/cryptauth/mock_cryptauth_client.h"
+#include "components/cryptauth/proto/enum_util.h"
 #include "components/cryptauth/remote_device_ref.h"
 #include "components/cryptauth/remote_device_test_util.h"
 #include "testing/gmock/include/gmock/gmock.h"
@@ -19,9 +20,18 @@ namespace cryptauth {
 
 namespace {
 
-const char kSuccessResult[] = "success";
-const char kErrorSetSoftwareFeatureState[] = "setSoftwareFeatureStateError";
-const char kErrorFindEligibleDevices[] = "findEligibleDevicesError";
+enum class Result { kSuccess, kErrorSettingFeature, kErrorFindingEligible };
+
+// Arbitrarily choose different error types which match to Result types.
+const NetworkRequestError kErrorSettingFeatureNetworkRequestError =
+    NetworkRequestError::kOffline;
+const NetworkRequestError kErrorFindingEligibleNetworkRequestError =
+    NetworkRequestError::kEndpointNotFound;
+
+const char kBetterTogetherHostCallbackBluetoothAddress[] =
+    "BETTER_TOGETHER_HOST";
+const char kBetterTogetherClientCallbackBluetoothAddress[] =
+    "BETTER_TOGETHER_CLIENT";
 
 std::vector<cryptauth::ExternalDeviceInfo>
 CreateExternalDeviceInfosForRemoteDevices(
@@ -86,7 +96,7 @@ class CryptAuthSoftwareFeatureManagerImplTest
     last_toggle_request_ = request;
     toggle_easy_unlock_callback_ = callback;
     error_callback_ = error_callback;
-    error_code_ = kErrorSetSoftwareFeatureState;
+    error_code_ = kErrorSettingFeatureNetworkRequestError;
   }
 
   // Mock CryptAuthClient::FindEligibleUnlockDevices() implementation.
@@ -97,7 +107,7 @@ class CryptAuthSoftwareFeatureManagerImplTest
     last_find_request_ = request;
     find_eligible_unlock_devices_callback_ = callback;
     error_callback_ = error_callback;
-    error_code_ = kErrorFindEligibleDevices;
+    error_code_ = kErrorFindingEligibleNetworkRequestError;
   }
 
   FindEligibleUnlockDevicesResponse CreateFindEligibleUnlockDevicesResponse() {
@@ -166,17 +176,24 @@ class CryptAuthSoftwareFeatureManagerImplTest
                    base::Unretained(this)));
   }
 
-  void OnSoftwareFeatureStateSet() { result_ = kSuccessResult; }
+  void OnSoftwareFeatureStateSet() { result_ = Result::kSuccess; }
 
   void OnEligibleDevicesFound(
       const std::vector<ExternalDeviceInfo>& eligible_devices,
       const std::vector<IneligibleDevice>& ineligible_devices) {
-    result_ = kSuccessResult;
+    result_ = Result::kSuccess;
     result_eligible_devices_ = eligible_devices;
     result_ineligible_devices_ = ineligible_devices;
   }
 
-  void OnError(const std::string& error_message) { result_ = error_message; }
+  void OnError(NetworkRequestError error) {
+    if (error == kErrorSettingFeatureNetworkRequestError)
+      result_ = Result::kErrorSettingFeature;
+    else if (error == kErrorFindingEligibleNetworkRequestError)
+      result_ = Result::kErrorFindingEligible;
+    else
+      NOTREACHED();
+  }
 
   void InvokeSetSoftwareFeatureCallback() {
     CryptAuthClient::ToggleEasyUnlockCallback success_callback =
@@ -199,12 +216,13 @@ class CryptAuthSoftwareFeatureManagerImplTest
     CryptAuthClient::ErrorCallback error_callback = error_callback_;
     ASSERT_TRUE(!error_callback.is_null());
     error_callback_.Reset();
-    error_callback.Run(error_code_);
+    error_callback.Run(*error_code_);
   }
 
-  std::string GetResultAndReset() {
-    std::string result;
-    result.swap(result_);
+  Result GetResultAndReset() {
+    EXPECT_TRUE(result_);
+    Result result = *result_;
+    result_.reset();
     return result;
   }
 
@@ -220,11 +238,11 @@ class CryptAuthSoftwareFeatureManagerImplTest
 
   // Set when a CryptAuthClient function returns. If empty, no callback has been
   // invoked.
-  std::string result_;
+  base::Optional<Result> result_;
 
   // The code passed to the error callback; varies depending on what
   // CryptAuthClient function is invoked.
-  std::string error_code_;
+  base::Optional<NetworkRequestError> error_code_;
 
   // For SetSoftwareFeatureState() tests.
   ToggleEasyUnlockRequest last_toggle_request_;
@@ -251,30 +269,36 @@ TEST_F(CryptAuthSoftwareFeatureManagerImplTest, TestOrderUponMultipleRequests) {
                           false /* enable */);
   FindEligibleDevices(SoftwareFeature::BETTER_TOGETHER_CLIENT);
 
-  EXPECT_EQ(SoftwareFeature::BETTER_TOGETHER_HOST,
+  EXPECT_EQ(SoftwareFeatureEnumToString(SoftwareFeature::BETTER_TOGETHER_HOST),
             last_toggle_request_.feature());
   EXPECT_EQ(true, last_toggle_request_.enable());
   EXPECT_EQ(false, last_toggle_request_.is_exclusive());
   InvokeSetSoftwareFeatureCallback();
-  EXPECT_EQ(kSuccessResult, GetResultAndReset());
+  EXPECT_EQ(Result::kSuccess, GetResultAndReset());
 
-  EXPECT_EQ(SoftwareFeature::BETTER_TOGETHER_HOST,
+  EXPECT_EQ(SoftwareFeatureEnumToString(SoftwareFeature::BETTER_TOGETHER_HOST),
             last_find_request_.feature());
+  EXPECT_EQ(kBetterTogetherHostCallbackBluetoothAddress,
+            last_find_request_.callback_bluetooth_address());
   InvokeFindEligibleDevicesCallback(CreateFindEligibleUnlockDevicesResponse());
-  EXPECT_EQ(kSuccessResult, GetResultAndReset());
+  EXPECT_EQ(Result::kSuccess, GetResultAndReset());
   VerifyDeviceEligibility();
 
-  EXPECT_EQ(SoftwareFeature::BETTER_TOGETHER_CLIENT,
-            last_toggle_request_.feature());
+  EXPECT_EQ(
+      SoftwareFeatureEnumToString(SoftwareFeature::BETTER_TOGETHER_CLIENT),
+      last_toggle_request_.feature());
   EXPECT_EQ(false, last_toggle_request_.enable());
   EXPECT_EQ(false, last_toggle_request_.is_exclusive());
   InvokeSetSoftwareFeatureCallback();
-  EXPECT_EQ(kSuccessResult, GetResultAndReset());
+  EXPECT_EQ(Result::kSuccess, GetResultAndReset());
 
-  EXPECT_EQ(SoftwareFeature::BETTER_TOGETHER_CLIENT,
-            last_find_request_.feature());
+  EXPECT_EQ(
+      SoftwareFeatureEnumToString(SoftwareFeature::BETTER_TOGETHER_CLIENT),
+      last_find_request_.feature());
+  EXPECT_EQ(kBetterTogetherClientCallbackBluetoothAddress,
+            last_find_request_.callback_bluetooth_address());
   InvokeFindEligibleDevicesCallback(CreateFindEligibleUnlockDevicesResponse());
-  EXPECT_EQ(kSuccessResult, GetResultAndReset());
+  EXPECT_EQ(Result::kSuccess, GetResultAndReset());
   VerifyDeviceEligibility();
 }
 
@@ -290,26 +314,27 @@ TEST_F(CryptAuthSoftwareFeatureManagerImplTest,
                           test_eligible_external_devices_infos_[2],
                           true /* enable */);
 
-  EXPECT_EQ(SoftwareFeature::BETTER_TOGETHER_HOST,
+  EXPECT_EQ(SoftwareFeatureEnumToString(SoftwareFeature::BETTER_TOGETHER_HOST),
             last_toggle_request_.feature());
   EXPECT_EQ(true, last_toggle_request_.enable());
   EXPECT_EQ(false, last_toggle_request_.is_exclusive());
   InvokeErrorCallback();
-  EXPECT_EQ(kErrorSetSoftwareFeatureState, GetResultAndReset());
+  EXPECT_EQ(Result::kErrorSettingFeature, GetResultAndReset());
 
-  EXPECT_EQ(SoftwareFeature::BETTER_TOGETHER_CLIENT,
-            last_toggle_request_.feature());
+  EXPECT_EQ(
+      SoftwareFeatureEnumToString(SoftwareFeature::BETTER_TOGETHER_CLIENT),
+      last_toggle_request_.feature());
   EXPECT_EQ(false, last_toggle_request_.enable());
   EXPECT_EQ(false, last_toggle_request_.is_exclusive());
   InvokeSetSoftwareFeatureCallback();
-  EXPECT_EQ(kSuccessResult, GetResultAndReset());
+  EXPECT_EQ(Result::kSuccess, GetResultAndReset());
 
-  EXPECT_EQ(SoftwareFeature::BETTER_TOGETHER_HOST,
+  EXPECT_EQ(SoftwareFeatureEnumToString(SoftwareFeature::BETTER_TOGETHER_HOST),
             last_toggle_request_.feature());
   EXPECT_EQ(true, last_toggle_request_.enable());
   EXPECT_EQ(false, last_toggle_request_.is_exclusive());
   InvokeSetSoftwareFeatureCallback();
-  EXPECT_EQ(kSuccessResult, GetResultAndReset());
+  EXPECT_EQ(Result::kSuccess, GetResultAndReset());
 }
 
 TEST_F(CryptAuthSoftwareFeatureManagerImplTest,
@@ -318,21 +343,28 @@ TEST_F(CryptAuthSoftwareFeatureManagerImplTest,
   FindEligibleDevices(SoftwareFeature::BETTER_TOGETHER_CLIENT);
   FindEligibleDevices(SoftwareFeature::BETTER_TOGETHER_HOST);
 
-  EXPECT_EQ(SoftwareFeature::BETTER_TOGETHER_HOST,
+  EXPECT_EQ(SoftwareFeatureEnumToString(SoftwareFeature::BETTER_TOGETHER_HOST),
             last_find_request_.feature());
+  EXPECT_EQ(kBetterTogetherHostCallbackBluetoothAddress,
+            last_find_request_.callback_bluetooth_address());
   InvokeFindEligibleDevicesCallback(CreateFindEligibleUnlockDevicesResponse());
-  EXPECT_EQ(kSuccessResult, GetResultAndReset());
+  EXPECT_EQ(Result::kSuccess, GetResultAndReset());
   VerifyDeviceEligibility();
 
-  EXPECT_EQ(SoftwareFeature::BETTER_TOGETHER_CLIENT,
-            last_find_request_.feature());
+  EXPECT_EQ(
+      SoftwareFeatureEnumToString(SoftwareFeature::BETTER_TOGETHER_CLIENT),
+      last_find_request_.feature());
+  EXPECT_EQ(kBetterTogetherClientCallbackBluetoothAddress,
+            last_find_request_.callback_bluetooth_address());
   InvokeErrorCallback();
-  EXPECT_EQ(kErrorFindEligibleDevices, GetResultAndReset());
+  EXPECT_EQ(Result::kErrorFindingEligible, GetResultAndReset());
 
-  EXPECT_EQ(SoftwareFeature::BETTER_TOGETHER_HOST,
+  EXPECT_EQ(SoftwareFeatureEnumToString(SoftwareFeature::BETTER_TOGETHER_HOST),
             last_find_request_.feature());
+  EXPECT_EQ(kBetterTogetherHostCallbackBluetoothAddress,
+            last_find_request_.callback_bluetooth_address());
   InvokeFindEligibleDevicesCallback(CreateFindEligibleUnlockDevicesResponse());
-  EXPECT_EQ(kSuccessResult, GetResultAndReset());
+  EXPECT_EQ(Result::kSuccess, GetResultAndReset());
   VerifyDeviceEligibility();
 }
 
@@ -342,15 +374,17 @@ TEST_F(CryptAuthSoftwareFeatureManagerImplTest, TestOrderViaMultipleErrors) {
                           true /* enable */);
   FindEligibleDevices(SoftwareFeature::BETTER_TOGETHER_HOST);
 
-  EXPECT_EQ(SoftwareFeature::BETTER_TOGETHER_HOST,
+  EXPECT_EQ(SoftwareFeatureEnumToString(SoftwareFeature::BETTER_TOGETHER_HOST),
             last_toggle_request_.feature());
   InvokeErrorCallback();
-  EXPECT_EQ(kErrorSetSoftwareFeatureState, GetResultAndReset());
+  EXPECT_EQ(Result::kErrorSettingFeature, GetResultAndReset());
 
-  EXPECT_EQ(SoftwareFeature::BETTER_TOGETHER_HOST,
+  EXPECT_EQ(SoftwareFeatureEnumToString(SoftwareFeature::BETTER_TOGETHER_HOST),
             last_find_request_.feature());
+  EXPECT_EQ(kBetterTogetherHostCallbackBluetoothAddress,
+            last_find_request_.callback_bluetooth_address());
   InvokeErrorCallback();
-  EXPECT_EQ(kErrorFindEligibleDevices, GetResultAndReset());
+  EXPECT_EQ(Result::kErrorFindingEligible, GetResultAndReset());
 }
 
 TEST_F(CryptAuthSoftwareFeatureManagerImplTest, TestIsExclusive) {
@@ -358,12 +392,12 @@ TEST_F(CryptAuthSoftwareFeatureManagerImplTest, TestIsExclusive) {
                           test_eligible_external_devices_infos_[0],
                           true /* enable */, true /* is_exclusive */);
 
-  EXPECT_EQ(SoftwareFeature::BETTER_TOGETHER_HOST,
+  EXPECT_EQ(SoftwareFeatureEnumToString(SoftwareFeature::BETTER_TOGETHER_HOST),
             last_toggle_request_.feature());
   EXPECT_EQ(true, last_toggle_request_.enable());
   EXPECT_EQ(true, last_toggle_request_.is_exclusive());
   InvokeErrorCallback();
-  EXPECT_EQ(kErrorSetSoftwareFeatureState, GetResultAndReset());
+  EXPECT_EQ(Result::kErrorSettingFeature, GetResultAndReset());
 }
 
 TEST_F(CryptAuthSoftwareFeatureManagerImplTest, TestEasyUnlockSpecialCase) {
@@ -371,12 +405,14 @@ TEST_F(CryptAuthSoftwareFeatureManagerImplTest, TestEasyUnlockSpecialCase) {
                           test_eligible_external_devices_infos_[0],
                           false /* enable */);
 
-  EXPECT_EQ(SoftwareFeature::EASY_UNLOCK_HOST, last_toggle_request_.feature());
+  EXPECT_EQ(SoftwareFeatureEnumToString(SoftwareFeature::EASY_UNLOCK_HOST),
+            last_toggle_request_.feature());
   EXPECT_EQ(false, last_toggle_request_.enable());
   // apply_to_all() should be false when disabling EasyUnlock host capabilities.
   EXPECT_EQ(true, last_toggle_request_.apply_to_all());
+  EXPECT_FALSE(last_toggle_request_.has_public_key());
   InvokeErrorCallback();
-  EXPECT_EQ(kErrorSetSoftwareFeatureState, GetResultAndReset());
+  EXPECT_EQ(Result::kErrorSettingFeature, GetResultAndReset());
 }
 
 }  // namespace cryptauth

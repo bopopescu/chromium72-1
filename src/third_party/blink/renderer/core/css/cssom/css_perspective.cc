@@ -4,10 +4,10 @@
 
 #include "third_party/blink/renderer/core/css/cssom/css_perspective.h"
 
-#include "third_party/blink/renderer/bindings/core/v8/exception_state.h"
 #include "third_party/blink/renderer/core/css/css_calculation_value.h"
 #include "third_party/blink/renderer/core/css/cssom/css_unit_value.h"
 #include "third_party/blink/renderer/core/geometry/dom_matrix.h"
+#include "third_party/blink/renderer/platform/bindings/exception_state.h"
 
 namespace blink {
 
@@ -26,7 +26,7 @@ CSSPerspective* CSSPerspective::Create(CSSNumericValue* length,
     exception_state.ThrowTypeError("Must pass length to CSSPerspective");
     return nullptr;
   }
-  return new CSSPerspective(length);
+  return MakeGarbageCollected<CSSPerspective>(length);
 }
 
 void CSSPerspective::setLength(CSSNumericValue* length,
@@ -43,7 +43,7 @@ CSSPerspective* CSSPerspective::FromCSSValue(const CSSFunctionValue& value) {
   DCHECK_EQ(value.length(), 1U);
   CSSNumericValue* length =
       CSSNumericValue::FromCSSValue(ToCSSPrimitiveValue(value.Item(0)));
-  return new CSSPerspective(length);
+  return MakeGarbageCollected<CSSPerspective>(length);
 }
 
 DOMMatrix* CSSPerspective::toMatrix(ExceptionState& exception_state) const {

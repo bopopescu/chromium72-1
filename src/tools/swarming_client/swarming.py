@@ -5,7 +5,7 @@
 
 """Client tool to trigger tasks or retrieve results from a Swarming server."""
 
-__version__ = '0.12'
+__version__ = '0.14'
 
 import collections
 import datetime
@@ -37,6 +37,9 @@ from utils import tools
 import auth
 import cipd
 import isolateserver
+import isolate_storage
+import isolated_format
+import local_caching
 import run_isolated
 
 
@@ -126,6 +129,16 @@ TaskProperties = collections.namedtuple(
 
 
 # See ../appengine/swarming/swarming_rpcs.py.
+TaskSlice = collections.namedtuple(
+    'TaskSlice',
+    [
+      'expiration_secs',
+      'properties',
+      'wait_for_capacity',
+    ])
+
+
+# See ../appengine/swarming/swarming_rpcs.py.
 NewTaskRequest = collections.namedtuple(
     'NewTaskRequest',
     [
@@ -136,6 +149,7 @@ NewTaskRequest = collections.namedtuple(
       'service_account',
       'tags',
       'user',
+      'pool_task_template',
     ])
 
 
@@ -161,15 +175,12 @@ def task_request_to_raw_request(task_request):
   # use it at all.
   if not out['service_account']:
     out.pop('service_account')
-  out['task_slices'][0]['properties']['dimensions'] = [
-    {'key': k, 'value': v}
-    for k, v in out['task_slices'][0]['properties']['dimensions']
-  ]
-  out['task_slices'][0]['properties']['env'] = [
-    {'key': k, 'value': v}
-    for k, v in out['task_slices'][0]['properties']['env'].iteritems()
-  ]
-  out['task_slices'][0]['properties']['env'].sort(key=lambda x: x['key'])
+  for task_slice in out['task_slices']:
+    task_slice['properties']['env'] = [
+      {'key': k, 'value': v}
+      for k, v in task_slice['properties']['env'].iteritems()
+    ]
+    task_slice['properties']['env'].sort(key=lambda x: x['key'])
   return out
 
 
@@ -190,7 +201,7 @@ def swarming_trigger(swarming, raw_request):
   logging.info('Triggering: %s', raw_request['name'])
 
   result = net.url_read_json(
-      swarming + '/api/swarming/v1/tasks/new', data=raw_request)
+      swarming + '/_ah/api/swarming/v1/tasks/new', data=raw_request)
   if not result:
     on_error.report('Failed to trigger task %s' % raw_request['name'])
     return None
@@ -232,8 +243,9 @@ def trigger_task_shards(swarming, task_request, shards):
   def convert(index):
     req = task_request_to_raw_request(task_request)
     if shards > 1:
-      req['task_slices'][0]['properties']['env'] = setup_googletest(
-          req['task_slices'][0]['properties']['env'], shards, index)
+      for task_slice in req['task_slices']:
+        task_slice['properties']['env'] = setup_googletest(
+            task_slice['properties']['env'], shards, index)
       req['name'] += ':%s:%s' % (index, shards)
     return req
 
@@ -272,16 +284,17 @@ def trigger_task_shards(swarming, task_request, shards):
 
 
 # How often to print status updates to stdout in 'collect'.
-STATUS_UPDATE_INTERVAL = 15 * 60.
+STATUS_UPDATE_INTERVAL = 5 * 60.
 
 
-class State(object):
-  """States in which a task can be.
+class TaskState(object):
+  """Represents the current task state.
 
-  WARNING: Copy-pasted from appengine/swarming/server/task_result.py. These
-  values are part of the API so if they change, the API changed.
+  For documentation, see the comments in the swarming_rpcs.TaskState enum, which
+  is the source of truth for these values:
+  https://cs.chromium.org/chromium/infra/luci/appengine/swarming/swarming_rpcs.py?q=TaskState\(
 
-  It's in fact an enum. Values should be in decreasing order of importance.
+  It's in fact an enum.
   """
   RUNNING = 0x10
   PENDING = 0x20
@@ -293,27 +306,7 @@ class State(object):
   KILLED = 0x80
   NO_RESOURCE = 0x100
 
-  STATES = (
-      'RUNNING', 'PENDING', 'EXPIRED', 'TIMED_OUT', 'BOT_DIED', 'CANCELED',
-      'COMPLETED', 'KILLED', 'NO_RESOURCE')
-  STATES_RUNNING = ('RUNNING', 'PENDING')
-  STATES_NOT_RUNNING = (
-      'EXPIRED', 'TIMED_OUT', 'BOT_DIED', 'CANCELED', 'COMPLETED', 'KILLED',
-      'NO_RESOURCE')
-  STATES_DONE = ('TIMED_OUT', 'COMPLETED', 'KILLED')
-  STATES_ABANDONED = ('EXPIRED', 'BOT_DIED', 'CANCELED', 'NO_RESOURCE')
-
-  _NAMES = {
-    RUNNING: 'Running',
-    PENDING: 'Pending',
-    EXPIRED: 'Expired',
-    TIMED_OUT: 'Execution timed out',
-    BOT_DIED: 'Bot died',
-    CANCELED: 'User canceled',
-    COMPLETED: 'Completed',
-    KILLED: 'User killed',
-    NO_RESOURCE: 'No resource',
-  }
+  STATES_RUNNING = ('PENDING', 'RUNNING')
 
   _ENUMS = {
     'RUNNING': RUNNING,
@@ -326,13 +319,6 @@ class State(object):
     'KILLED': KILLED,
     'NO_RESOURCE': NO_RESOURCE,
   }
-
-  @classmethod
-  def to_string(cls, state):
-    """Returns a user-readable string representing a State."""
-    if state not in cls._NAMES:
-      raise ValueError('Invalid state %s' % state)
-    return cls._NAMES[state]
 
   @classmethod
   def from_enum(cls, state):
@@ -352,7 +338,8 @@ class TaskOutputCollector(object):
   function, in particular they call 'process_shard_result' method in parallel.
   """
 
-  def __init__(self, task_output_dir, task_output_stdout, shard_count):
+  def __init__(self, task_output_dir, task_output_stdout, shard_count,
+               filter_cb):
     """Initializes TaskOutputCollector, ensures |task_output_dir| exists.
 
     Args:
@@ -364,6 +351,7 @@ class TaskOutputCollector(object):
         if task_output_dir else task_output_dir)
     self.task_output_stdout = task_output_stdout
     self.shard_count = shard_count
+    self.filter_cb = filter_cb
 
     self._lock = threading.Lock()
     self._per_shard_results = {}
@@ -405,19 +393,20 @@ class TaskOutputCollector(object):
 
     # Fetch output files if necessary.
     if self.task_output_dir and result.get('outputs_ref'):
-      storage = self._get_storage(
-          result['outputs_ref']['isolatedserver'],
-          result['outputs_ref']['namespace'])
+      server_ref = isolate_storage.ServerRef(
+            result['outputs_ref']['isolatedserver'],
+            result['outputs_ref']['namespace'])
+      storage = self._get_storage(server_ref)
       if storage:
         # Output files are supposed to be small and they are not reused across
-        # tasks. So use MemoryCache for them instead of on-disk cache. Make
-        # files writable, so that calling script can delete them.
+        # tasks. So use MemoryContentAddressedCache for them instead of on-disk
+        # cache. Make files writable, so that calling script can delete them.
         isolateserver.fetch_isolated(
             result['outputs_ref']['isolated'],
             storage,
-            isolateserver.MemoryCache(file_mode_mask=0700),
+            local_caching.MemoryContentAddressedCache(file_mode_mask=0700),
             os.path.join(self.task_output_dir, str(shard_index)),
-            False)
+            False, self.filter_cb)
 
   def finalize(self):
     """Assembles and returns task summary JSON, shutdowns underlying Storage."""
@@ -450,23 +439,23 @@ class TaskOutputCollector(object):
         self._storage = None
       return summary
 
-  def _get_storage(self, isolate_server, namespace):
+  def _get_storage(self, server_ref):
     """Returns isolateserver.Storage to use to fetch files."""
     assert self.task_output_dir
     with self._lock:
       if not self._storage:
-        self._storage = isolateserver.get_storage(isolate_server, namespace)
+        self._storage = isolateserver.get_storage(server_ref)
       else:
         # Shards must all use exact same isolate server and namespace.
-        if self._storage.location != isolate_server:
+        if self._storage.server_ref.url != server_ref.url:
           logging.error(
               'Task shards are using multiple isolate servers: %s and %s',
-              self._storage.location, isolate_server)
+              self._storage.server_ref.url, server_ref.url)
           return None
-        if self._storage.namespace != namespace:
+        if self._storage.server_ref.namespace != server_ref.namespace:
           logging.error(
               'Task shards are using multiple namespaces: %s and %s',
-              self._storage.namespace, namespace)
+              self._storage.server_ref.namespace, server_ref.namespace)
           return None
       return self._storage
 
@@ -498,10 +487,10 @@ def retrieve_results(
     None on failure.
   """
   assert timeout is None or isinstance(timeout, float), timeout
-  result_url = '%s/api/swarming/v1/task/%s/result' % (base_url, task_id)
+  result_url = '%s/_ah/api/swarming/v1/task/%s/result' % (base_url, task_id)
   if include_perf:
     result_url += '?include_performance_stats=true'
-  output_url = '%s/api/swarming/v1/task/%s/stdout' % (base_url, task_id)
+  output_url = '%s/_ah/api/swarming/v1/task/%s/stdout' % (base_url, task_id)
   started = now()
   deadline = started + timeout if timeout > 0 else None
   attempt = 0
@@ -556,7 +545,7 @@ def retrieve_results(
 
     # When timeout == -1, always return on first attempt. 500s are already
     # retried in this case.
-    if result['state'] in State.STATES_NOT_RUNNING or timeout == -1:
+    if result['state'] not in TaskState.STATES_RUNNING or timeout == -1:
       if fetch_stdout:
         out = net.url_read_json(output_url)
         result['output'] = out.get('output', '') if out else ''
@@ -569,51 +558,6 @@ def retrieve_results(
       elif result['state'] == 'BOT_DIED':
         logging.error('Bot died!')
       return result
-
-
-def convert_to_old_format(result):
-  """Converts the task result data from Endpoints API format to old API format
-  for compatibility.
-
-  This goes into the file generated as --task-summary-json.
-  """
-  # Sets default.
-  result.setdefault('abandoned_ts', None)
-  result.setdefault('bot_id', None)
-  result.setdefault('bot_version', None)
-  result.setdefault('children_task_ids', [])
-  result.setdefault('completed_ts', None)
-  result.setdefault('cost_saved_usd', None)
-  result.setdefault('costs_usd', None)
-  result.setdefault('deduped_from', None)
-  result.setdefault('name', None)
-  result.setdefault('outputs_ref', None)
-  result.setdefault('server_versions', None)
-  result.setdefault('started_ts', None)
-  result.setdefault('tags', None)
-  result.setdefault('user', None)
-
-  # Convertion back to old API.
-  duration = result.pop('duration', None)
-  result['durations'] = [duration] if duration else []
-  exit_code = result.pop('exit_code', None)
-  result['exit_codes'] = [int(exit_code)] if exit_code else []
-  result['id'] = result.pop('task_id')
-  result['isolated_out'] = result.get('outputs_ref', None)
-  output = result.pop('output', None)
-  result['outputs'] = [output] if output else []
-  # server_version
-  # Endpoints result 'state' as string. For compatibility with old code, convert
-  # to int.
-  result['state'] = State.from_enum(result['state'])
-  result['try_number'] = (
-      int(result['try_number']) if result.get('try_number') else None)
-  if 'bot_dimensions' in result:
-    result['bot_dimensions'] = {
-      i['key']: i.get('value', []) for i in result['bot_dimensions']
-    }
-  else:
-    result['bot_dimensions'] = None
 
 
 def yield_results(
@@ -646,6 +590,7 @@ def yield_results(
       # Adds a task to the thread pool to call 'retrieve_results' and return
       # the results together with shard_index that produced them (as a tuple).
       def enqueue_retrieve_results(shard_index, task_id):
+        # pylint: disable=no-value-for-parameter
         task_fn = lambda *args: (shard_index, retrieve_results(*args))
         pool.add_task(
             0, results_channel.wrap_task(task_fn), swarm_base_url, shard_index,
@@ -662,13 +607,17 @@ def yield_results(
       while active_task_count:
         shard_index, result = None, None
         try:
-          shard_index, result = results_channel.pull(
+          shard_index, result = results_channel.next(
               timeout=STATUS_UPDATE_INTERVAL)
         except threading_utils.TaskChannel.Timeout:
           if print_status_updates:
+            time_now = str(datetime.datetime.now())
+            _, time_now = time_now.split(' ')
             print(
+                '%s '
                 'Waiting for results from the following shards: %s' %
-                ', '.join(map(str, shards_remaining)))
+                (time_now, ', '.join(map(str, shards_remaining)))
+            )
             sys.stdout.flush()
           continue
         except Exception:
@@ -761,15 +710,20 @@ def decorate_shard_output(swarming, shard_index, metadata, include_stdout):
 def collect(
     swarming, task_ids, timeout, decorate, print_status_updates,
     task_summary_json, task_output_dir, task_output_stdout,
-    include_perf):
+    include_perf, filepath_filter):
   """Retrieves results of a Swarming task.
 
   Returns:
     process exit code that should be returned to the user.
   """
+
+  filter_cb = None
+  if filepath_filter:
+    filter_cb = re.compile(filepath_filter).match
+
   # Collect summary JSON and output files (if task_output_dir is not None).
   output_collector = TaskOutputCollector(
-      task_output_dir, task_output_stdout, len(task_ids))
+      task_output_dir, task_output_stdout, len(task_ids), filter_cb)
 
   seen_shards = set()
   exit_code = None
@@ -811,10 +765,6 @@ def collect(
   finally:
     summary = output_collector.finalize()
     if task_summary_json:
-      # TODO(maruel): Make this optional.
-      for i in summary['shards']:
-        if i:
-          convert_to_old_format(i)
       tools.write_json(task_summary_json, summary, False)
 
   if decorate and total_duration:
@@ -916,22 +866,42 @@ def add_filter_options(parser):
       '-d', '--dimension', default=[], action='append', nargs=2,
       dest='dimensions', metavar='FOO bar',
       help='dimension to filter on')
+  parser.filter_group.add_option(
+      '--optional-dimension', default=[], action='append', nargs=3,
+      dest='optional_dimensions', metavar='key value expiration',
+      help='optional dimensions which will result in additional task slices ')
   parser.add_option_group(parser.filter_group)
+
+
+def _validate_filter_option(parser, key, value, expiration, argname):
+  if ':' in key:
+    parser.error('%s key cannot contain ":"' % argname)
+  if key.strip() != key:
+    parser.error('%s key has whitespace' % argname)
+  if not key:
+    parser.error('%s key is empty' % argname)
+
+  if value.strip() != value:
+    parser.error('%s value has whitespace' % argname)
+  if not value:
+    parser.error('%s value is empty' % argname)
+
+  if expiration is not None:
+    try:
+      expiration = int(expiration)
+    except ValueError:
+      parser.error('%s expiration is not an integer' % argname)
+    if expiration <= 0:
+      parser.error('%s expiration should be positive' % argname)
+    if expiration % 60 != 0:
+      parser.error('%s expiration is not divisible by 60' % argname)
 
 
 def process_filter_options(parser, options):
   for key, value in options.dimensions:
-    if ':' in key:
-      parser.error('--dimension key cannot contain ":"')
-    if key.strip() != key:
-      parser.error('--dimension key has whitespace')
-    if not key:
-      parser.error('--dimension key is empty')
-
-    if value.strip() != value:
-      parser.error('--dimension value has whitespace')
-    if not value:
-      parser.error('--dimension value is empty')
+    _validate_filter_option(parser, key, value, None, 'dimension')
+  for key, value, exp in options.optional_dimensions:
+    _validate_filter_option(parser, key, value, exp, 'optional-dimension')
   options.dimensions.sort()
 
 
@@ -948,7 +918,7 @@ def add_trigger_options(parser):
   isolateserver.add_isolate_server_options(parser)
   add_filter_options(parser)
 
-  group = optparse.OptionGroup(parser, 'Task properties')
+  group = optparse.OptionGroup(parser, 'TaskSlice properties')
   group.add_option(
       '-s', '--isolated', metavar='HASH',
       help='Hash of the .isolated to grab from the isolate server')
@@ -998,15 +968,28 @@ def add_trigger_options(parser):
            'bot itself is using to authenticate to Swarming. Don\'t use task '
            'service accounts if not given (default).')
   group.add_option(
+      '--pool-task-template',
+      choices=('AUTO', 'CANARY_PREFER', 'CANARY_NEVER', 'SKIP'),
+      default='AUTO',
+      help='Set how you want swarming to apply the pool\'s TaskTemplate. '
+           'By default, the pool\'s TaskTemplate is automatically selected, '
+           'according the pool configuration on the server. Choices are: '
+           'AUTO, CANARY_PREFER, CANARY_NEVER, and SKIP (default: AUTO).')
+  group.add_option(
       '-o', '--output', action='append', default=[], metavar='PATH',
       help='A list of files to return in addition to those written to '
            '${ISOLATED_OUTDIR}. An error will occur if a file specified by'
            'this option is also written directly to ${ISOLATED_OUTDIR}.')
+  group.add_option(
+      '--wait-for-capacity', action='store_true', default=False,
+      help='Instructs to leave the task PENDING even if there\'s no known bot '
+           'that could run this task, otherwise the task will be denied with '
+           'NO_RESOURCE')
   parser.add_option_group(group)
 
-  group = optparse.OptionGroup(parser, 'Task request')
+  group = optparse.OptionGroup(parser, 'TaskRequest details')
   group.add_option(
-      '--priority', type='int', default=100,
+      '--priority', type='int', default=200,
       help='The lower value, the more important the task is')
   group.add_option(
       '-T', '--task-name', metavar='NAME',
@@ -1044,6 +1027,8 @@ def process_trigger_options(parser, options, args):
 
   if not options.dimensions:
     parser.error('Please at least specify one --dimension')
+  if not any(k == 'pool' for k, _v in options.dimensions):
+    parser.error('You must specify --dimension pool <value>')
   if not all(len(t.split(':', 1)) == 2 for t in options.tags):
     parser.error('--tags must be in the format key:value')
   if options.raw_cmd and not args:
@@ -1104,7 +1089,7 @@ def process_trigger_options(parser, options, args):
   # Secrets
   secret_bytes = None
   if options.secret_bytes_path:
-    with open(options.secret_bytes_path, 'r') as f:
+    with open(options.secret_bytes_path, 'rb') as f:
       secret_bytes = f.read().encode('base64')
 
   # Named caches
@@ -1117,12 +1102,19 @@ def process_trigger_options(parser, options, args):
   for k, v in options.env_prefix:
     env_prefixes.setdefault(k, []).append(v)
 
+  # Get dimensions into the key/value format we can manipulate later.
+  orig_dims = [
+      {'key': key, 'value': value} for key, value in options.dimensions]
+  orig_dims.sort(key=lambda x: (x['key'], x['value']))
+
+  # Construct base properties that we will use for all the slices, adding in
+  # optional dimensions for the fallback slices.
   properties = TaskProperties(
       caches=caches,
       cipd_input=cipd_input,
       command=command,
       relative_cwd=options.relative_cwd,
-      dimensions=options.dimensions,
+      dimensions=orig_dims,
       env=options.env,
       env_prefixes=[StringListPair(k, v) for k, v in env_prefixes.iteritems()],
       execution_timeout_secs=options.hard_timeout,
@@ -1134,19 +1126,69 @@ def process_trigger_options(parser, options, args):
       outputs=options.output,
       secret_bytes=secret_bytes)
 
+  slices = []
+
+  # Group the optional dimensions by expiration.
+  dims_by_exp = {}
+  for key, value, exp_secs in options.optional_dimensions:
+    dims_by_exp.setdefault(int(exp_secs), []).append(
+        {'key': key, 'value': value})
+
+  # Create the optional slices with expiration deltas, we fix up the properties
+  # below.
+  last_exp = 0
+  for expiration_secs in sorted(dims_by_exp):
+    t = TaskSlice(
+        expiration_secs=expiration_secs - last_exp,
+        properties=properties,
+        wait_for_capacity=False)
+    slices.append(t)
+    last_exp = expiration_secs
+
+  # Add back in the default slice (the last one).
+  exp = max(int(options.expiration) - last_exp, 60)
+  base_task_slice = TaskSlice(
+      expiration_secs=exp,
+      properties=properties,
+      wait_for_capacity=options.wait_for_capacity)
+  slices.append(base_task_slice)
+
+  # Add optional dimensions to the task slices, replacing a dimension that
+  # has the same key if it is a dimension where repeating isn't valid (otherwise
+  # we append it).  Currently the only dimension we can repeat is "caches"; the
+  # rest (os, cpu, etc) shouldn't be repeated.
+  extra_dims = []
+  for i, (_, kvs) in enumerate(sorted(dims_by_exp.iteritems(), reverse=True)):
+    dims = list(orig_dims)
+    # Replace or append the key/value pairs for this expiration in extra_dims;
+    # we keep extra_dims around because we are iterating backwards and filling
+    # in slices with shorter expirations.  Dimensions expire as time goes on so
+    # the slices that expire earlier will generally have more dimensions.
+    for kv in kvs:
+      if kv['key'] == 'caches':
+        extra_dims.append(kv)
+      else:
+        extra_dims = [x for x in extra_dims if x['key'] != kv['key']] + [kv]
+    # Then, add all the optional dimensions to the original dimension set, again
+    # replacing if needed.
+    for kv in extra_dims:
+      if kv['key'] == 'caches':
+        dims.append(kv)
+      else:
+        dims = [x for x in dims if x['key'] != kv['key']] + [kv]
+    dims.sort(key=lambda x: (x['key'], x['value']))
+    slice_properties = properties._replace(dimensions=dims)
+    slices[-2 - i] = slices[-2 - i]._replace(properties=slice_properties)
+
   return NewTaskRequest(
       name=default_task_name(options),
       parent_task_id=os.environ.get('SWARMING_TASK_ID', ''),
       priority=options.priority,
-      task_slices=[
-        {
-          'expiration_secs': options.expiration,
-          'properties': properties,
-        },
-      ],
+      task_slices=slices,
       service_account=options.service_account,
       tags=options.tags,
-      user=options.user)
+      user=options.user,
+      pool_task_template=options.pool_task_template)
 
 
 class TaskOutputStdoutOption(optparse.Option):
@@ -1208,6 +1250,10 @@ def add_collect_options(parser):
   parser.task_output_group.add_option(TaskOutputStdoutOption(
       '--task-output-stdout'))
   parser.task_output_group.add_option(
+    '--filepath-filter',
+    help='This is regexp filter used to specify downloaded filepath when '
+         'collecting isolated output.')
+  parser.task_output_group.add_option(
       '--perf', action='store_true', default=False,
       help='Includes performance statistics')
   parser.add_option_group(parser.task_output_group)
@@ -1240,7 +1286,7 @@ def CMDbot_delete(parser, args):
 
   result = 0
   for bot in bots:
-    url = '%s/api/swarming/v1/bot/%s/delete' % (options.swarming, bot)
+    url = '%s/_ah/api/swarming/v1/bot/%s/delete' % (options.swarming, bot)
     if net.url_read_json(url, data={}, method='POST') is None:
       print('Deleting %s failed. Probably already gone' % bot)
       result = 1
@@ -1279,7 +1325,7 @@ def CMDbots(parser, args):
   if options.mp and options.non_mp:
     parser.error('Use only one of --mp or --non-mp')
 
-  url = options.swarming + '/api/swarming/v1/bots/list?'
+  url = options.swarming + '/_ah/api/swarming/v1/bots/list?'
   values = []
   if options.dead_only:
     values.append(('is_dead', 'TRUE'))
@@ -1335,7 +1381,7 @@ def CMDcancel(parser, args):
     parser.error('Please specify the task to cancel')
   data = {'kill_running': options.kill_running}
   for task_id in args:
-    url = '%s/api/swarming/v1/task/%s/cancel' % (options.swarming, task_id)
+    url = '%s/_ah/api/swarming/v1/task/%s/cancel' % (options.swarming, task_id)
     resp = net.url_read_json(url, data=data, method='POST')
     if resp is None:
       print('Deleting %s failed. Probably already gone' % task_id)
@@ -1400,7 +1446,8 @@ def CMDcollect(parser, args):
         options.task_summary_json,
         options.task_output_dir,
         options.task_output_stdout,
-        options.perf)
+        options.perf,
+        options.filepath_filter)
   except Failure:
     on_error.report(None)
     return 1
@@ -1417,7 +1464,7 @@ def CMDpost(parser, args):
   options, args = parser.parse_args(args)
   if len(args) != 1:
     parser.error('Must specify only API name')
-  url = options.swarming + '/api/swarming/v1/' + args[0]
+  url = options.swarming + '/_ah/api/swarming/v1/' + args[0]
   data = sys.stdin.read()
   try:
     resp = net.url_read(url, data=data, method='POST')
@@ -1466,7 +1513,7 @@ def CMDquery(parser, args):
     parser.error(
         'Must specify only method name and optionally query args properly '
         'escaped.')
-  base_url = options.swarming + '/api/swarming/v1/' + args[0]
+  base_url = options.swarming + '/_ah/api/swarming/v1/' + args[0]
   try:
     data, yielder = get_yielder(base_url, options.limit)
     for items in yielder():
@@ -1580,11 +1627,11 @@ def CMDrun(parser, args):
   if not options.timeout:
     offset = 0
     for s in task_request.task_slices:
-      m = (offset + s['properties'].execution_timeout_secs +
-            s['expiration_secs'])
+      m = (offset + s.properties.execution_timeout_secs +
+            s.expiration_secs)
       if m > options.timeout:
         options.timeout = m
-      offset += s['expiration_secs']
+      offset += s.expiration_secs
     options.timeout += 10.
   try:
     return collect(
@@ -1596,7 +1643,8 @@ def CMDrun(parser, args):
         options.task_summary_json,
         options.task_output_dir,
         options.task_output_stdout,
-        options.perf)
+        options.perf,
+        options.filepath_filter)
   except Failure:
     on_error.report(None)
     return 1
@@ -1614,8 +1662,17 @@ def CMDreproduce(parser, args):
   them after --.
   """
   parser.add_option(
-      '--output-dir', metavar='DIR', default='out',
+      '--output', metavar='DIR', default='out',
       help='Directory that will have results stored into')
+  parser.add_option(
+      '--work', metavar='DIR', default='work',
+      help='Directory to map the task input files into')
+  parser.add_option(
+      '--cache', metavar='DIR', default='cache',
+      help='Directory that contains the input cache')
+  parser.add_option(
+      '--leak', action='store_true',
+      help='Do not delete the working directory after execution')
   options, args = parser.parse_args(args)
   extra_args = []
   if not args:
@@ -1627,15 +1684,15 @@ def CMDreproduce(parser, args):
     else:
       extra_args = args[1:]
 
-  url = options.swarming + '/api/swarming/v1/task/%s/request' % args[0]
+  url = options.swarming + '/_ah/api/swarming/v1/task/%s/request' % args[0]
   request = net.url_read_json(url)
   if not request:
     print >> sys.stderr, 'Failed to retrieve request data for the task'
     return 1
 
-  workdir = unicode(os.path.abspath('work'))
+  workdir = unicode(os.path.abspath(options.work))
   if fs.isdir(workdir):
-    parser.error('Please delete the directory \'work\' first')
+    parser.error('Please delete the directory %r first' % options.work)
   fs.mkdir(workdir)
   cachedir = unicode(os.path.abspath('cipd_cache'))
   if not fs.exists(cachedir):
@@ -1668,15 +1725,19 @@ def CMDreproduce(parser, args):
   command = []
   if (properties.get('inputs_ref') or {}).get('isolated'):
     # Create the tree.
-    with isolateserver.get_storage(
+    server_ref = isolate_storage.ServerRef(
           properties['inputs_ref']['isolatedserver'],
-          properties['inputs_ref']['namespace']) as storage:
+          properties['inputs_ref']['namespace'])
+    with isolateserver.get_storage(server_ref) as storage:
+      # Do not use MemoryContentAddressedCache here, as on 32-bits python,
+      # inputs larger than ~1GiB will not fit in memory. This is effectively a
+      # leak.
+      policies = local_caching.CachePolicies(0, 0, 0, 0)
+      cache = local_caching.DiskContentAddressedCache(
+          unicode(os.path.abspath(options.cache)), policies,
+          server_ref.hash_algo, False)
       bundle = isolateserver.fetch_isolated(
-          properties['inputs_ref']['isolated'],
-          storage,
-          isolateserver.MemoryCache(file_mode_mask=0700),
-          workdir,
-          False)
+          properties['inputs_ref']['isolated'], storage, cache, workdir, False)
       command = bundle.command
       if bundle.relative_cwd:
         workdir = os.path.join(workdir, bundle.relative_cwd)
@@ -1685,19 +1746,19 @@ def CMDreproduce(parser, args):
   if properties.get('command'):
     command.extend(properties['command'])
 
-  # https://github.com/luci/luci-py/blob/master/appengine/swarming/doc/Magic-Values.md
+  # https://chromium.googlesource.com/infra/luci/luci-py.git/+/master/appengine/swarming/doc/Magic-Values.md
   command = tools.fix_python_cmd(command, env)
-  if not options.output_dir:
+  if not options.output:
     new_command = run_isolated.process_command(command, 'invalid', None)
     if new_command != command:
       parser.error('The task has outputs, you must use --output-dir')
   else:
     # Make the path absolute, as the process will run from a subdirectory.
-    options.output_dir = os.path.abspath(options.output_dir)
+    options.output = os.path.abspath(options.output)
     new_command = run_isolated.process_command(
-        command, options.output_dir, None)
-    if not os.path.isdir(options.output_dir):
-      os.makedirs(options.output_dir)
+        command, options.output, None)
+    if not os.path.isdir(options.output):
+      os.makedirs(options.output)
   command = new_command
   file_path.ensure_command_has_abs_path(command, workdir)
 
@@ -1723,6 +1784,10 @@ def CMDreproduce(parser, args):
     print >> sys.stderr, 'Failed to run: %s' % ' '.join(command)
     print >> sys.stderr, str(e)
     return 1
+  finally:
+    # Do not delete options.cache.
+    if not options.leak:
+      file_path.rmtree(workdir)
 
 
 @subcommand.usage('bot_id')
@@ -1737,7 +1802,7 @@ def CMDterminate(parser, args):
   options, args = parser.parse_args(args)
   if len(args) != 1:
     parser.error('Please provide the bot id')
-  url = options.swarming + '/api/swarming/v1/bot/%s/terminate' % args[0]
+  url = options.swarming + '/_ah/api/swarming/v1/bot/%s/terminate' % args[0]
   request = net.url_read_json(url, data={})
   if not request:
     print >> sys.stderr, 'Failed to ask for termination'
@@ -1752,7 +1817,8 @@ def CMDterminate(parser, args):
         None,
         None,
         [],
-        False)
+        False,
+        None)
   else:
     print request['task_id']
   return 0
@@ -1788,11 +1854,11 @@ def CMDtrigger(parser, args):
         }
         tools.write_json(unicode(options.dump_json), data, True)
         print('To collect results, use:')
-        print('  swarming.py collect -S %s --json %s' %
+        print('  tools/swarming_client/swarming.py collect -S %s --json %s' %
             (options.swarming, options.dump_json))
       else:
         print('To collect results, use:')
-        print('  swarming.py collect -S %s %s' %
+        print('  tools/swarming_client/swarming.py collect -S %s %s' %
             (options.swarming, ' '.join(t['task_id'] for t in tasks_sorted)))
       print('Or visit:')
       for t in tasks_sorted:

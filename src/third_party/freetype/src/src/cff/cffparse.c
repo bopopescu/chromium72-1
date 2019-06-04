@@ -1,19 +1,19 @@
-/***************************************************************************/
-/*                                                                         */
-/*  cffparse.c                                                             */
-/*                                                                         */
-/*    CFF token stream parser (body)                                       */
-/*                                                                         */
-/*  Copyright 1996-2018 by                                                 */
-/*  David Turner, Robert Wilhelm, and Werner Lemberg.                      */
-/*                                                                         */
-/*  This file is part of the FreeType project, and may only be used,       */
-/*  modified, and distributed under the terms of the FreeType project      */
-/*  license, LICENSE.TXT.  By continuing to use, modify, or distribute     */
-/*  this file you indicate that you have read the license and              */
-/*  understand and accept it fully.                                        */
-/*                                                                         */
-/***************************************************************************/
+/****************************************************************************
+ *
+ * cffparse.c
+ *
+ *   CFF token stream parser (body)
+ *
+ * Copyright 1996-2018 by
+ * David Turner, Robert Wilhelm, and Werner Lemberg.
+ *
+ * This file is part of the FreeType project, and may only be used,
+ * modified, and distributed under the terms of the FreeType project
+ * license, LICENSE.TXT.  By continuing to use, modify, or distribute
+ * this file you indicate that you have read the license and
+ * understand and accept it fully.
+ *
+ */
 
 
 #include <ft2build.h>
@@ -22,19 +22,20 @@
 #include FT_INTERNAL_DEBUG_H
 #include FT_INTERNAL_CALC_H
 #include FT_INTERNAL_POSTSCRIPT_AUX_H
+#include FT_LIST_H
 
 #include "cfferrs.h"
 #include "cffload.h"
 
 
-  /*************************************************************************/
-  /*                                                                       */
-  /* The macro FT_COMPONENT is used in trace mode.  It is an implicit      */
-  /* parameter of the FT_TRACE() and FT_ERROR() macros, used to print/log  */
-  /* messages during execution.                                            */
-  /*                                                                       */
+  /**************************************************************************
+   *
+   * The macro FT_COMPONENT is used in trace mode.  It is an implicit
+   * parameter of the FT_TRACE() and FT_ERROR() macros, used to print/log
+   * messages during execution.
+   */
 #undef  FT_COMPONENT
-#define FT_COMPONENT  trace_cffparse
+#define FT_COMPONENT  cffparse
 
 
   FT_LOCAL_DEF( FT_Error )
@@ -604,7 +605,6 @@
     FT_Vector*       offset = &dict->font_offset;
     FT_ULong*        upm    = &dict->units_per_em;
     FT_Byte**        data   = parser->stack;
-    FT_Error         error  = FT_ERR( Stack_Underflow );
 
 
     if ( parser->top >= parser->stack + 6 )
@@ -615,8 +615,6 @@
       FT_Long  min_scaling, max_scaling;
       int      i;
 
-
-      error = FT_Err_Ok;
 
       dict->has_font_matrix = TRUE;
 
@@ -646,22 +644,11 @@
            ( max_scaling - min_scaling ) < 0 ||
            ( max_scaling - min_scaling ) > 9 )
       {
-        /* Return default matrix in case of unlikely values. */
-
         FT_TRACE1(( "cff_parse_font_matrix:"
                     " strange scaling values (minimum %d, maximum %d),\n"
                     "                      "
                     " using default matrix\n", min_scaling, max_scaling ));
-
-        matrix->xx = 0x10000L;
-        matrix->yx = 0;
-        matrix->xy = 0;
-        matrix->yy = 0x10000L;
-        offset->x  = 0;
-        offset->y  = 0;
-        *upm       = 1;
-
-        goto Exit;
+        goto Unlikely;
       }
 
       for ( i = 0; i < 6; i++ )
@@ -708,10 +695,31 @@
                   (double)matrix->yy / *upm / 65536,
                   (double)offset->x  / *upm / 65536,
                   (double)offset->y  / *upm / 65536 ));
-    }
 
-  Exit:
-    return error;
+      if ( !FT_Matrix_Check( matrix ) )
+      {
+        FT_TRACE1(( "cff_parse_font_matrix:"
+                    " degenerate values, using default matrix\n" ));
+        goto Unlikely;
+      }
+
+      return FT_Err_Ok;
+    }
+    else
+      return FT_THROW( Stack_Underflow );
+
+  Unlikely:
+    /* Return default matrix in case of unlikely values. */
+
+    matrix->xx = 0x10000L;
+    matrix->yx = 0;
+    matrix->xy = 0;
+    matrix->yy = 0x10000L;
+    offset->x  = 0;
+    offset->y  = 0;
+    *upm       = 1;
+
+    return FT_Err_Ok;
   }
 
 
@@ -801,7 +809,7 @@
 
 #ifdef FT_DEBUG_LEVEL_TRACE
     /* beautify tracing message */
-    if ( ft_trace_levels[FT_COMPONENT] < 4 )
+    if ( ft_trace_levels[FT_TRACE_COMP( FT_COMPONENT )] < 4 )
       FT_TRACE1(( "Multiple Master CFFs not supported yet,"
                   " handling first master design only\n" ));
     else
@@ -1114,21 +1122,35 @@
 #endif /* FT_DEBUG_LEVEL_TRACE */
 
 
+  static void
+  destruct_t2s_item( FT_Memory  memory,
+                     void*      data,
+                     void*      user )
+  {
+    FT_UNUSED( user );
+    memory->free( memory, data );
+  }
+
+
   FT_LOCAL_DEF( FT_Error )
   cff_parser_run( CFF_Parser  parser,
                   FT_Byte*    start,
                   FT_Byte*    limit )
   {
+    FT_Byte*  p     = start;
+    FT_Error  error = FT_Err_Ok;
+
 #ifdef CFF_CONFIG_OPTION_OLD_ENGINE
     PSAux_Service  psaux;
-#endif
 
-    FT_Byte*    p       = start;
-    FT_Error    error   = FT_Err_Ok;
     FT_Library  library = parser->library;
+    FT_Memory   memory  = library->memory;
 
-    FT_UNUSED( library );
+    FT_ListRec  t2s;
 
+
+    FT_ZERO( &t2s );
+#endif
 
     parser->top    = parser->stack;
     parser->start  = start;
@@ -1138,6 +1160,7 @@
     while ( p < limit )
     {
       FT_UInt  v = *p;
+
 
       /* Opcode 31 is legacy MM T2 operator, not a number.      */
       /* Opcode 255 is reserved and should not appear in fonts; */
@@ -1187,8 +1210,9 @@
         FT_Byte*     charstring_base;
         FT_ULong     charstring_len;
 
-        FT_Fixed*  stack;
-        FT_Byte*   q;
+        FT_Fixed*    stack;
+        FT_ListNode  node;
+        FT_Byte*     q;
 
 
         charstring_base = ++p;
@@ -1223,17 +1247,29 @@
 
         error = psaux->cff_decoder_funcs->parse_charstrings_old(
                   &decoder, charstring_base, charstring_len, 1 );
+        if ( error )
+          goto Exit;
 
         /* Now copy the stack data in the temporary decoder object,    */
         /* converting it back to charstring number representations     */
         /* (this is ugly, I know).                                     */
-        /*                                                             */
-        /* We overwrite the original top DICT charstring under the     */
-        /* assumption that the charstring representation of the result */
-        /* of `cff_decoder_parse_charstrings' is shorter, which should */
-        /* be always true.                                             */
 
-        q     = charstring_base - 1;
+        node = (FT_ListNode)memory->alloc( memory,
+                                           sizeof ( FT_ListNodeRec ) );
+        if ( !node )
+          goto Out_Of_Memory_Error;
+
+        /* `5' is the conservative upper bound of required bytes per stack */
+        /* element.                                                        */
+        q = (FT_Byte*)memory->alloc( memory,
+                                     5 * ( decoder.top - decoder.stack ) );
+        if ( !q )
+          goto Out_Of_Memory_Error;
+
+        node->data = q;
+
+        FT_List_Add( &t2s, node );
+
         stack = decoder.stack;
 
         while ( stack < decoder.top )
@@ -1249,7 +1285,7 @@
 
           if ( *stack < 0 )
           {
-            num = (FT_ULong)-*stack;
+            num = (FT_ULong)NEG_LONG( *stack );
             neg = 1;
           }
           else
@@ -1490,10 +1526,19 @@
           parser->top = parser->stack;
       }
       p++;
-    }
+    } /* while ( p < limit ) */
 
   Exit:
+#ifdef CFF_CONFIG_OPTION_OLD_ENGINE
+    FT_List_Finalize( &t2s, destruct_t2s_item, memory, NULL );
+#endif
     return error;
+
+#ifdef CFF_CONFIG_OPTION_OLD_ENGINE
+  Out_Of_Memory_Error:
+    error = FT_THROW( Out_Of_Memory );
+    goto Exit;
+#endif
 
   Stack_Overflow:
     error = FT_THROW( Invalid_Argument );

@@ -33,8 +33,6 @@ class ShellContentBrowserClient : public ContentBrowserClient {
   // ContentBrowserClient overrides.
   BrowserMainParts* CreateBrowserMainParts(
       const MainFunctionParams& parameters) override;
-  bool DoesSiteRequireDedicatedProcess(BrowserContext* browser_context,
-                                       const GURL& effective_site_url) override;
   bool IsHandledURL(const GURL& url) override;
   void BindInterfaceRequestFromFrame(
       content::RenderFrameHost* render_frame_host,
@@ -43,12 +41,19 @@ class ShellContentBrowserClient : public ContentBrowserClient {
   void RegisterInProcessServices(StaticServiceMap* services,
                                  ServiceManagerConnection* connection) override;
   void RegisterOutOfProcessServices(OutOfProcessServiceMap* services) override;
+  void HandleServiceRequest(
+      const std::string& service_name,
+      service_manager::mojom::ServiceRequest request) override;
   bool ShouldTerminateOnServiceQuit(
       const service_manager::Identity& id) override;
   std::unique_ptr<base::Value> GetServiceManifestOverlay(
       base::StringPiece name) override;
   void AppendExtraCommandLineSwitches(base::CommandLine* command_line,
                                       int child_process_id) override;
+  void AdjustUtilityServiceProcessCommandLine(
+      const service_manager::Identity& identity,
+      base::CommandLine* command_line) override;
+  std::string GetAcceptLangs(BrowserContext* context) override;
   void ResourceDispatcherHostCreated() override;
   std::string GetDefaultDownloadName() override;
   WebContentsViewDelegate* GetWebContentsViewDelegate(
@@ -58,6 +63,8 @@ class ShellContentBrowserClient : public ContentBrowserClient {
       content::BrowserContext* context,
       content::StoragePartition* partition,
       storage::OptionalQuotaSettingsCallback callback) override;
+  GeneratedCodeCacheSettings GetGeneratedCodeCacheSettings(
+      content::BrowserContext* context) override;
   void SelectClientCertificate(
       WebContents* web_contents,
       net::SSLCertRequestInfo* cert_request_info,
@@ -67,14 +74,16 @@ class ShellContentBrowserClient : public ContentBrowserClient {
       override;
   net::NetLog* GetNetLog() override;
   DevToolsManagerDelegate* GetDevToolsManagerDelegate() override;
-  void OpenURL(BrowserContext* browser_context,
+  void OpenURL(SiteInstance* site_instance,
                const OpenURLParams& params,
                const base::Callback<void(WebContents*)>& callback) override;
   scoped_refptr<LoginDelegate> CreateLoginDelegate(
       net::AuthChallengeInfo* auth_info,
       content::ResourceRequestInfo::WebContentsGetter web_contents_getter,
+      const content::GlobalRequestID& request_id,
       bool is_main_frame,
       const GURL& url,
+      scoped_refptr<net::HttpResponseHeaders> response_headers,
       bool first_auth_attempt,
       LoginAuthRequiredCallback auth_required_callback) override;
 

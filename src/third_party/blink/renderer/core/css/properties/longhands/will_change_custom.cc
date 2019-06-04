@@ -12,14 +12,14 @@
 #include "third_party/blink/renderer/core/style/computed_style.h"
 
 namespace blink {
-namespace CSSLonghand {
+namespace css_longhand {
 
 const CSSValue* WillChange::ParseSingleValue(
     CSSParserTokenRange& range,
     const CSSParserContext& context,
     const CSSParserLocalContext&) const {
   if (range.Peek().Id() == CSSValueAuto)
-    return CSSPropertyParserHelpers::ConsumeIdent(range);
+    return css_property_parser_helpers::ConsumeIdent(range);
 
   CSSValueList* values = CSSValueList::CreateCommaSeparated();
   // Every comma-separated list of identifiers is a valid will-change value,
@@ -53,7 +53,7 @@ const CSSValue* WillChange::ParseSingleValue(
           return nullptr;
         case CSSValueContents:
         case CSSValueScrollPosition:
-          values->Append(*CSSPropertyParserHelpers::ConsumeIdent(range));
+          values->Append(*css_property_parser_helpers::ConsumeIdent(range));
           break;
         default:
           range.ConsumeIncludingWhitespace();
@@ -63,7 +63,7 @@ const CSSValue* WillChange::ParseSingleValue(
 
     if (range.AtEnd())
       break;
-    if (!CSSPropertyParserHelpers::ConsumeCommaIncludingWhitespace(range))
+    if (!css_property_parser_helpers::ConsumeCommaIncludingWhitespace(range))
       return nullptr;
   }
 
@@ -81,5 +81,56 @@ const CSSValue* WillChange::CSSValueFromComputedStyleInternal(
       style.WillChangeScrollPosition());
 }
 
-}  // namespace CSSLonghand
+void WillChange::ApplyInitial(StyleResolverState& state) const {
+  state.Style()->SetWillChangeContents(false);
+  state.Style()->SetWillChangeScrollPosition(false);
+  state.Style()->SetWillChangeProperties(Vector<CSSPropertyID>());
+  state.Style()->SetSubtreeWillChangeContents(
+      state.ParentStyle()->SubtreeWillChangeContents());
+}
+
+void WillChange::ApplyInherit(StyleResolverState& state) const {
+  state.Style()->SetWillChangeContents(
+      state.ParentStyle()->WillChangeContents());
+  state.Style()->SetWillChangeScrollPosition(
+      state.ParentStyle()->WillChangeScrollPosition());
+  state.Style()->SetWillChangeProperties(
+      state.ParentStyle()->WillChangeProperties());
+  state.Style()->SetSubtreeWillChangeContents(
+      state.ParentStyle()->SubtreeWillChangeContents());
+}
+
+void WillChange::ApplyValue(StyleResolverState& state,
+                            const CSSValue& value) const {
+  bool will_change_contents = false;
+  bool will_change_scroll_position = false;
+  Vector<CSSPropertyID> will_change_properties;
+
+  if (value.IsIdentifierValue()) {
+    DCHECK_EQ(ToCSSIdentifierValue(value).GetValueID(), CSSValueAuto);
+  } else {
+    DCHECK(value.IsValueList());
+    for (auto& will_change_value : ToCSSValueList(value)) {
+      if (will_change_value->IsCustomIdentValue()) {
+        will_change_properties.push_back(
+            ToCSSCustomIdentValue(*will_change_value).ValueAsPropertyID());
+      } else if (ToCSSIdentifierValue(*will_change_value).GetValueID() ==
+                 CSSValueContents) {
+        will_change_contents = true;
+      } else if (ToCSSIdentifierValue(*will_change_value).GetValueID() ==
+                 CSSValueScrollPosition) {
+        will_change_scroll_position = true;
+      } else {
+        NOTREACHED();
+      }
+    }
+  }
+  state.Style()->SetWillChangeContents(will_change_contents);
+  state.Style()->SetWillChangeScrollPosition(will_change_scroll_position);
+  state.Style()->SetWillChangeProperties(will_change_properties);
+  state.Style()->SetSubtreeWillChangeContents(
+      will_change_contents || state.ParentStyle()->SubtreeWillChangeContents());
+}
+
+}  // namespace css_longhand
 }  // namespace blink

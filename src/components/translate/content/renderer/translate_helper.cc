@@ -74,7 +74,10 @@ TranslateHelper::TranslateHelper(content::RenderFrame* render_frame,
       world_id_(world_id),
       extension_scheme_(extension_scheme),
       binding_(this),
-      weak_method_factory_(this) {}
+      weak_method_factory_(this) {
+  translate_task_runner_ = this->render_frame()->GetTaskRunner(
+      blink::TaskType::kInternalTranslation);
+}
 
 TranslateHelper::~TranslateHelper() {
 }
@@ -131,7 +134,9 @@ void TranslateHelper::PageCaptured(const base::string16& contents) {
   // captured, it should be treated as a new page to do translation.
   ResetPage();
   mojom::PagePtr page;
-  binding_.Bind(mojo::MakeRequest(&page));
+  binding_.Bind(
+      mojo::MakeRequest(&page),
+      main_frame->GetTaskRunner(blink::TaskType::kInternalTranslation));
   GetTranslateHandler()->RegisterPage(
       std::move(page), details, !details.has_notranslate && !language.empty());
 }
@@ -213,7 +218,7 @@ bool TranslateHelper::ExecuteScriptAndGetBoolResult(const std::string& script,
     return fallback;
   }
 
-  return result->BooleanValue();
+  return result.As<v8::Boolean>()->Value();
 }
 
 std::string TranslateHelper::ExecuteScriptAndGetStringResult(
@@ -222,7 +227,8 @@ std::string TranslateHelper::ExecuteScriptAndGetStringResult(
   if (!main_frame)
     return std::string();
 
-  v8::HandleScope handle_scope(v8::Isolate::GetCurrent());
+  v8::Isolate* isolate = v8::Isolate::GetCurrent();
+  v8::HandleScope handle_scope(isolate);
   WebScriptSource source = WebScriptSource(WebString::FromASCII(script));
   v8::Local<v8::Value> result =
       main_frame->ExecuteScriptInIsolatedWorldAndReturnValue(world_id_, source);
@@ -232,9 +238,9 @@ std::string TranslateHelper::ExecuteScriptAndGetStringResult(
   }
 
   v8::Local<v8::String> v8_str = result.As<v8::String>();
-  int length = v8_str->Utf8Length() + 1;
+  int length = v8_str->Utf8Length(isolate) + 1;
   std::unique_ptr<char[]> str(new char[length]);
-  v8_str->WriteUtf8(str.get(), length);
+  v8_str->WriteUtf8(isolate, str.get(), length);
   return std::string(str.get());
 }
 
@@ -253,7 +259,7 @@ double TranslateHelper::ExecuteScriptAndGetDoubleResult(
     return 0.0;
   }
 
-  return result->NumberValue();
+  return result.As<v8::Number>()->Value();
 }
 
 int64_t TranslateHelper::ExecuteScriptAndGetIntegerResult(
@@ -271,7 +277,7 @@ int64_t TranslateHelper::ExecuteScriptAndGetIntegerResult(
     return 0;
   }
 
-  return result->IntegerValue();
+  return result.As<v8::Integer>()->Value();
 }
 
 // mojom::Page implementations.
@@ -385,9 +391,10 @@ void TranslateHelper::CheckTranslateStatus() {
   }
 
   // The translation is still pending, check again later.
-  base::ThreadTaskRunnerHandle::Get()->PostDelayedTask(
-      FROM_HERE, base::Bind(&TranslateHelper::CheckTranslateStatus,
-                            weak_method_factory_.GetWeakPtr()),
+  translate_task_runner_->PostDelayedTask(
+      FROM_HERE,
+      base::BindOnce(&TranslateHelper::CheckTranslateStatus,
+                     weak_method_factory_.GetWeakPtr()),
       AdjustDelay(kTranslateStatusCheckDelayMs));
 }
 
@@ -409,8 +416,9 @@ void TranslateHelper::TranslatePageImpl(int count) {
       return;
     }
     base::ThreadTaskRunnerHandle::Get()->PostDelayedTask(
-        FROM_HERE, base::Bind(&TranslateHelper::TranslatePageImpl,
-                              weak_method_factory_.GetWeakPtr(), count),
+        FROM_HERE,
+        base::BindOnce(&TranslateHelper::TranslatePageImpl,
+                       weak_method_factory_.GetWeakPtr(), count),
         AdjustDelay(count * kTranslateInitCheckDelayMs));
     return;
   }
@@ -427,9 +435,10 @@ void TranslateHelper::TranslatePageImpl(int count) {
     return;
   }
   // Check the status of the translation.
-  base::ThreadTaskRunnerHandle::Get()->PostDelayedTask(
-      FROM_HERE, base::Bind(&TranslateHelper::CheckTranslateStatus,
-                            weak_method_factory_.GetWeakPtr()),
+  translate_task_runner_->PostDelayedTask(
+      FROM_HERE,
+      base::BindOnce(&TranslateHelper::CheckTranslateStatus,
+                     weak_method_factory_.GetWeakPtr()),
       AdjustDelay(kTranslateStatusCheckDelayMs));
 }
 

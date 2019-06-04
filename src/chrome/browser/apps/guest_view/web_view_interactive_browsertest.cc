@@ -17,7 +17,7 @@
 #include "base/threading/thread_task_runner_handle.h"
 #include "build/build_config.h"
 #include "chrome/app/chrome_command_ids.h"
-#include "chrome/browser/apps/app_browsertest_util.h"
+#include "chrome/browser/apps/platform_apps/app_browsertest_util.h"
 #include "chrome/browser/chrome_content_browser_client.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/renderer_context_menu/render_view_context_menu_browsertest_util.h"
@@ -52,6 +52,7 @@
 #include "ui/base/ime/ime_text_span.h"
 #include "ui/base/ime/text_input_client.h"
 #include "ui/base/test/ui_controls.h"
+#include "ui/base/ui_features.h"
 #include "ui/events/keycodes/keyboard_codes.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/range/range.h"
@@ -871,14 +872,6 @@ IN_PROC_BROWSER_TEST_F(WebViewFocusInteractiveTest, Focus_AdvanceFocus) {
     // move the focus to the next focusable element.
     ExtensionTestMessageListener listener("button1-advance-focus", false);
     listener.set_failure_message("TEST_FAILED");
-    // TODO(fsamuel): A third Tab key press should not be necessary.
-    // The <webview> will take keyboard focus but it will not focus an initial
-    // element. The initial element is dependent upon tab direction which blink
-    // does not propagate to the plugin.
-    // See http://crbug.com/147644.
-    content::SimulateKeyPress(embedder_web_contents, ui::DomKey::TAB,
-                              ui::DomCode::TAB, ui::VKEY_TAB, false, false,
-                              false, false);
     content::SimulateKeyPress(embedder_web_contents, ui::DomKey::TAB,
                               ui::DomCode::TAB, ui::VKEY_TAB, false, false,
                               false, false);
@@ -965,7 +958,8 @@ IN_PROC_BROWSER_TEST_F(WebViewInteractiveTest, EditCommands) {
 }
 
 // Tests that guests receive edit commands and respond appropriately.
-IN_PROC_BROWSER_TEST_F(WebViewInteractiveTest, EditCommandsNoMenu) {
+// Flaky test - crbug.com/859478
+IN_PROC_BROWSER_TEST_F(WebViewInteractiveTest, DISABLED_EditCommandsNoMenu) {
   SetupTest("web_view/edit_commands_no_menu",
       "/extensions/platform_apps/web_view/edit_commands_no_menu/"
       "guest.html");
@@ -978,6 +972,14 @@ IN_PROC_BROWSER_TEST_F(WebViewInteractiveTest, EditCommandsNoMenu) {
 
   ExtensionTestMessageListener start_of_line_listener("StartOfLine", false);
   SendStartOfLineKeyPressToPlatformApp();
+#if defined(OS_MACOSX)
+  // On macOS, sending an accelerator [key-down] will also cause the subsequent
+  // key-up to be swallowed. The implementation of guest.html is waiting for a
+  // key-up to send the caret-position message. So we send a key-down/key-up of
+  // a character that otherwise has no effect.
+  ASSERT_TRUE(ui_test_utils::SendKeyPressToWindowSync(
+      GetPlatformAppWindow(), ui::VKEY_UP, false, false, false, false));
+#endif
   // Wait for the guest to receive a 'copy' edit command.
   ASSERT_TRUE(start_of_line_listener.WaitUntilSatisfied());
 }
@@ -1670,7 +1672,8 @@ IN_PROC_BROWSER_TEST_F(WebViewFocusInteractiveTest, MAYBE_FocusAndVisibility) {
 
 // Flaky on MacOSX, crbug.com/817066.
 // Flaky timeouts on Linux. https://crbug.com/709202
-#if defined(OS_LINUX) || defined(OS_MACOSX)
+// Flaky timeouts on Win. https://crbug.com/846695
+#if defined(OS_LINUX) || defined(OS_MACOSX) || defined(OS_WIN)
 #define MAYBE_KeyboardFocusSimple DISABLED_KeyboardFocusSimple
 #else
 #define MAYBE_KeyboardFocusSimple KeyboardFocusSimple
@@ -1714,7 +1717,8 @@ IN_PROC_BROWSER_TEST_F(WebViewInteractiveTest, MAYBE_KeyboardFocusSimple) {
 // http://crbug.com/660044.
 // Flaky on MacOSX, crbug.com/817067.
 // Flaky on linux, crbug.com/706830.
-#if defined(OS_LINUX) || defined(OS_MACOSX)
+// Flaky on Windows, crbug.com/847201.
+#if defined(OS_LINUX) || defined(OS_MACOSX) || defined(OS_WIN)
 #define MAYBE_KeyboardFocusWindowCycle DISABLED_KeyboardFocusWindowCycle
 #else
 #define MAYBE_KeyboardFocusWindowCycle KeyboardFocusWindowCycle

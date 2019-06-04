@@ -3,28 +3,23 @@
 // found in the LICENSE file.
 
 window.metrics = {
-  recordEnum: function() {}
+  recordEnum: function() {},
+  recordSmallCount: function() {},
 };
 
 var mockTaskHistory = {
   getLastExecutedTime: function(id) {
     return 0;
-  }
-};
-
-loadTimeData.data = {
-  NO_TASK_FOR_EXECUTABLE: 'NO_TASK_FOR_EXECUTABLE',
-  NO_TASK_FOR_FILE_URL: 'NO_TASK_FOR_FILE_URL',
-  NO_TASK_FOR_FILE: 'NO_TASK_FOR_FILE',
-  NO_TASK_FOR_DMG: 'NO_TASK_FOR_DMG',
-  NO_TASK_FOR_CRX: 'NO_TASK_FOR_CRX',
-  NO_TASK_FOR_CRX_TITLE: 'NO_TASK_FOR_CRX_TITLE',
-  OPEN_WITH_BUTTON_LABEL: 'OPEN_WITH_BUTTON_LABEL',
-  TASK_OPEN: 'TASK_OPEN',
-  MORE_ACTIONS_BUTTON_LABEL: 'MORE_ACTIONS_BUTTON_LABEL'
+  },
+  recordTaskExecuted: function(id) {}
 };
 
 function setUp() {
+  window.loadTimeData.data = {
+    DRIVE_FS_ENABLED: false,
+  };
+  window.loadTimeData.getString = id => id;
+
   window.chrome = {
     commandLinePrivate: {
       hasSwitch: function(name, callback) {
@@ -43,9 +38,12 @@ function setUp() {
       },
       executeTask: function(taskId, entries, onViewFiles) {
         onViewFiles('failed');
-      }
+      },
+      sharePathsWithCrostini: function(entries, persist, callback) {
+        callback();
+      },
     },
-    runtime: {id: 'test-extension-id'}
+    runtime: {id: 'test-extension-id'},
   };
 }
 
@@ -54,29 +52,35 @@ function setUp() {
  * @return {!FileManager}
  */
 function getMockFileManager() {
-  return {
+  const result = {
     volumeManager: {
+      getLocationInfo: function(entry) {
+        return {rootType: VolumeManagerCommon.RootType.DRIVE};
+      },
       getDriveConnectionState: function() {
         return VolumeManagerCommon.DriveConnectionType.ONLINE;
       },
-      getVolumeInfo: function() {
+      getVolumeInfo: function(entry) {
         return {
           volumeType: VolumeManagerCommon.VolumeType.DRIVE
         };
       }
     },
     ui: {
-      alertDialog: {
-        showHtml: function(title, text, onOk, onCancel, onShow) {}
-      }
+      alertDialog: {showHtml: function(title, text, onOk, onCancel, onShow) {}},
+      speakA11yMessage: (text) => {},
     },
     metadataModel: {},
     directoryModel: {
       getCurrentRootType: function() {
         return null;
       }
-    }
+    },
+    namingController: {},
+    crostini: new Crostini(),
   };
+  result.crostini.init(result.volumeManager);
+  return result;
 }
 
 /**
@@ -102,7 +106,7 @@ function showHtmlOfAlertDialogIsCalled(entries, expectedTitle, expectedText) {
         .create(
             fileManager.volumeManager, fileManager.metadataModel,
             fileManager.directoryModel, fileManager.ui, entries, [null],
-            mockTaskHistory)
+            mockTaskHistory, fileManager.namingController, fileManager.crostini)
         .then(function(tasks) {
           tasks.executeDefault();
         });
@@ -129,7 +133,7 @@ function openSuggestAppsDialogIsCalled(entries, mimeTypes) {
         .create(
             fileManager.volumeManager, fileManager.metadataModel,
             fileManager.directoryModel, fileManager.ui, entries, mimeTypes,
-            mockTaskHistory)
+            mockTaskHistory, fileManager.namingController, fileManager.crostini)
         .then(function(tasks) {
           tasks.executeDefault();
         });
@@ -157,7 +161,7 @@ function showDefaultTaskDialogCalled(entries, mimeTypes) {
         .create(
             fileManager.volumeManager, fileManager.metadataModel,
             fileManager.directoryModel, fileManager.ui, entries, mimeTypes,
-            mockTaskHistory)
+            mockTaskHistory, fileManager.namingController, fileManager.crostini)
         .then(function(tasks) {
           tasks.executeDefault();
         });
@@ -204,15 +208,12 @@ function testOpenSuggestAppsDialogWithMetadata(callback) {
   var showByExtensionAndMimeIsCalled = new Promise(function(resolve, reject) {
     var fileSystem = new MockFileSystem('volumeId');
     var entry = new MockFileEntry(fileSystem, '/test.rtf');
+    var fileManager = getMockFileManager();
 
     FileTasks
         .create(
-            {
-              getDriveConnectionState: function() {
-                return VolumeManagerCommon.DriveConnectionType.ONLINE;
-              }
-            },
-            {}, {}, {
+            fileManager.volumeManager, fileManager.metadataModel,
+            fileManager.directoryModel, {
               taskMenuButton: document.createElement('button'),
               fileContextMenu:
                   {defaultActionMenuItem: document.createElement('div')},
@@ -225,7 +226,8 @@ function testOpenSuggestAppsDialogWithMetadata(callback) {
                 }
               }
             },
-            [entry], ['application/rtf'], mockTaskHistory)
+            [entry], ['application/rtf'], mockTaskHistory,
+            fileManager.namingController, fileManager.crostini)
         .then(function(tasks) {
           tasks.openSuggestAppsDialog(
               function() {}, function() {}, function() {});
@@ -244,20 +246,13 @@ function testOpenSuggestAppsDialogFailure(callback) {
   var onFailureIsCalled = new Promise(function(resolve, reject) {
     var fileSystem = new MockFileSystem('volumeId');
     var entry = new MockFileEntry(fileSystem, '/test');
+    var fileManager = getMockFileManager();
 
     FileTasks
         .create(
-            {
-              getDriveConnectionState: function() {
-                return VolumeManagerCommon.DriveConnectionType.ONLINE;
-              }
-            },
-            {}, {}, {
-              taskMenuButton: document.createElement('button'),
-              fileContextMenu:
-                  {defaultActionMenuItem: document.createElement('div')}
-            },
-            [entry], [null], mockTaskHistory)
+            fileManager.volumeManager, fileManager.metadataModel,
+            fileManager.directoryModel, fileManager.ui, [entry], [null],
+            mockTaskHistory, fileManager.namingController, fileManager.crostini)
         .then(function(tasks) {
           tasks.openSuggestAppsDialog(function() {}, function() {}, resolve);
         });
@@ -362,7 +357,7 @@ function testOpenWithMostRecentlyExecuted(callback) {
         .create(
             fileManager.volumeManager, fileManager.metadataModel,
             fileManager.directoryModel, fileManager.ui, [mockEntry], [null],
-            taskHistory)
+            taskHistory, fileManager.namingController, fileManager.crostini)
         .then(function(tasks) {
           tasks.executeDefault();
           assertEquals(latestTaskId, executedTask);
@@ -372,12 +367,16 @@ function testOpenWithMostRecentlyExecuted(callback) {
   reportPromise(promise, callback);
 }
 
-function testChooseZipArchiverOverZipUnpacker(callback) {
-  var zipUnpackerTaskId = 'oedeeodfidgoollimchfdnbmhcpnklnd|app|zip';
+function testOpenZipWithZipArchiver(callback) {
   var zipArchiverTaskId = 'dmboannefpncccogfdikhmhpmdnddgoe|app|open';
 
   chrome.commandLinePrivate.hasSwitch = function(name, callback) {
-    callback(name == 'enable-zip-archiver-unpacker');
+    if (name == 'enable-zip-archiver-unpacker') {
+      // This flag used to exist and was used to switch between the "Zip
+      // Unpacker" and "Zip Archiver" component extensions.
+      failWithMessage('run zip archiver', 'zip archiver flags checked');
+    }
+    callback(false);
   };
 
   window.chrome.fileManagerPrivate.getFileTasks = function(entries, callback) {
@@ -390,13 +389,6 @@ function testChooseZipArchiverOverZipUnpacker(callback) {
                 isDefault: false,
                 isGenericFileHandler: false,
                 title: 'Zip Archiver',
-              },
-              // Zip unpacker. Will be hidden because Zip Archiver is enabled.
-              {
-                taskId: zipUnpackerTaskId,
-                isDefault: false,
-                isGenericFileHandler: false,
-                title: 'ZIP unpacker',
               },
             ]),
         0);
@@ -430,7 +422,7 @@ function testChooseZipArchiverOverZipUnpacker(callback) {
         .create(
             fileManager.volumeManager, fileManager.metadataModel,
             fileManager.directoryModel, fileManager.ui, [mockEntry], [null],
-            taskHistory)
+            taskHistory, fileManager.namingController, fileManager.crostini)
         .then(function(tasks) {
           tasks.executeDefault();
           assertEquals(zipArchiverTaskId, executedTask);
@@ -438,4 +430,151 @@ function testChooseZipArchiverOverZipUnpacker(callback) {
         });
   });
   reportPromise(promise, callback);
+}
+
+function testOpenInstallLinuxPackageDialog(callback) {
+  window.chrome.fileManagerPrivate.getFileTasks = function(entries, callback) {
+    setTimeout(
+        callback.bind(
+            null,
+            [
+              {
+                taskId: 'test-extension-id|file|install-linux-package',
+                isDefault: false,
+                isGenericFileHandler: false,
+                title: '__MSG_INSTALL_LINUX_PACKAGE__',
+              },
+            ]),
+        0);
+  };
+
+  var mockFileSystem = new MockFileSystem('volumeId');
+  var mockEntry = new MockFileEntry(mockFileSystem, '/test.deb');
+  var promise = new Promise(function(resolve, reject) {
+    var fileManager = getMockFileManager();
+    fileManager.ui.installLinuxPackageDialog = {
+      showInstallLinuxPackageDialog: function(entry) {
+        resolve();
+      }
+    };
+
+    fileManager.volumeManager.getLocationInfo = function(entry) {
+      return {rootType: VolumeManagerCommon.RootType.CROSTINI};
+    };
+
+    FileTasks
+        .create(
+            fileManager.volumeManager, fileManager.metadataModel,
+            fileManager.directoryModel, fileManager.ui, [mockEntry], [null],
+            mockTaskHistory, fileManager.namingController, fileManager.crostini)
+        .then(function(tasks) {
+          tasks.executeDefault();
+        });
+  });
+  reportPromise(promise, callback);
+}
+
+function testMaybeShareCrostiniOrShowDialog() {
+  const volumeManagerDownloads = {
+    getLocationInfo: (entry) => {
+      return {rootType: entry.filesystem.name};
+    }
+  };
+  const mockFsDownloads = new MockFileSystem('downloads');
+  const sharedDir = new MockDirectoryEntry(mockFsDownloads, '/shared');
+  const shared = new MockFileEntry(mockFsDownloads, '/shared/file');
+
+  const crostini = new Crostini();
+  crostini.init(volumeManagerDownloads);
+  crostini.setEnabled(true);
+  crostini.registerSharedPath(sharedDir, volumeManagerDownloads);
+  const notShared1 = new MockFileEntry(mockFsDownloads, '/notShared/file1');
+  const notShared2 = new MockFileEntry(mockFsDownloads, '/notShared/file2');
+  const otherNotShared =
+      new MockFileEntry(mockFsDownloads, '/otherNotShared/file');
+  const mockFsUnsharable = new MockFileSystem('unsharable');
+  const unsharable = new MockDirectoryEntry(mockFsUnsharable, '/unsharable');
+
+  function expect(
+      comment, entries, expectSuccess, expectedDialogTitle,
+      expectedDialogMessage) {
+    let showHtmlCalled = false;
+    function showHtml(title, message) {
+      showHtmlCalled = true;
+      assertEquals(
+          expectedDialogTitle, title,
+          'crostini share dialog title: ' + comment);
+      assertEquals(
+          expectedDialogMessage, message,
+          'crostini share dialog message: ' + comment);
+    }
+    const fakeFilesTask = {
+      entries_: entries,
+      crostini_: crostini,
+      ui_: {
+        alertDialog: {showHtml: showHtml},
+        confirmDialog: {showHtml: showHtml},
+      },
+      volumeManager_: volumeManagerDownloads,
+    };
+    const crostiniTask = {taskId: '|crostini|'};
+
+    let success = false;
+    FileTasks.prototype.maybeShareWithCrostiniOrShowDialog_.call(
+        fakeFilesTask, crostiniTask, () => {
+          success = true;
+        });
+
+    assertEquals(expectSuccess, success, 'success: ' + comment);
+    assertEquals(expectSuccess, !showHtmlCalled, 'showHtml called:' + comment);
+  }
+
+  expect('No entries', [], true, '', '');
+
+  crostini.setEnabled(false);
+  expect(
+      'Single entry, crostini-files not enabled', [notShared1], false,
+      'UNABLE_TO_OPEN_CROSTINI_TITLE', 'UNABLE_TO_OPEN_CROSTINI');
+
+  crostini.setEnabled(true);
+
+  expect('Single entry, not shared', [notShared1], true, '', '');
+
+  expect('Single entry, shared', [shared], true, '', '');
+
+  expect(
+      '2 entries, not shared, same dir', [notShared1, notShared2], true, '',
+      '');
+
+  expect(
+      '2 entries, not shared, different dir', [notShared1, otherNotShared],
+      true, '', '');
+
+  expect(
+      '2 entries, 1 not shared, different dir, not shared first',
+      [notShared1, shared], true, '', '');
+
+  expect(
+      '2 entries, 1 not shared, different dir, shared first',
+      [shared, notShared1], true, '', '');
+
+  expect(
+      '3 entries, 2 not shared, different dir',
+      [shared, notShared1, notShared2], true, '', '');
+
+  expect(
+      '2 entries, 1 not sharable', [notShared1, unsharable], false,
+      'UNABLE_TO_OPEN_CROSTINI_TITLE', 'UNABLE_TO_OPEN_CROSTINI');
+}
+
+function task(id) {
+  return /** @type{!chrome.fileManagerPrivate.FileTask} */ ({taskId: id});
+}
+
+function testTaskRequiresCrostiniSharing() {
+  assertTrue(
+      FileTasks.taskRequiresCrostiniSharing(task('app|crostini|open-with')));
+  assertTrue(FileTasks.taskRequiresCrostiniSharing(
+      task('appId|x|install-linux-package')));
+  assertFalse(FileTasks.taskRequiresCrostiniSharing(task('appId|x|open-with')));
 }

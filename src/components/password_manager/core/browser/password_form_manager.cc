@@ -4,7 +4,6 @@
 
 #include "components/password_manager/core/browser/password_form_manager.h"
 
-#include <ctype.h>
 #include <stddef.h>
 
 #include <algorithm>
@@ -16,14 +15,11 @@
 #include "base/logging.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/metrics/user_metrics.h"
-#include "base/rand_util.h"
 #include "base/stl_util.h"
 #include "base/strings/string16.h"
 #include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
 #include "base/time/time.h"
-#include "components/autofill/core/browser/autofill_manager.h"
-#include "components/autofill/core/browser/proto/server.pb.h"
 #include "components/autofill/core/browser/validation.h"
 #include "components/autofill/core/common/password_form.h"
 #include "components/password_manager/core/browser/android_affiliation/affiliation_utils.h"
@@ -54,27 +50,9 @@ namespace password_manager {
 
 namespace {
 
-bool DoesStringContainOnlyDigits(const base::string16& s) {
-  for (auto c : s) {
-    if (!base::IsAsciiDigit(c))
-      return false;
-  }
-  return true;
-}
-
-// Heuristics to determine that a string is very unlikely to be a username.
-bool IsProbablyNotUsername(const base::string16& s) {
-  return !s.empty() && DoesStringContainOnlyDigits(s) && s.size() < 3;
-}
-
-// Update |credential| to reflect usage.
-void UpdateMetadataForUsage(PasswordForm* credential) {
-  ++credential->times_used;
-
-  // Remove alternate usernames. At this point we assume that we have found
-  // the right username.
-  credential->other_possible_usernames.clear();
-}
+// This namespace is for fixing Jumbo builds, because the same functions are
+// defined in new_password_form_manager.cc.
+namespace password_form_manager_helpers {
 
 // Returns true iff |best_matches| contain a preferred credential with a
 // username other than |preferred_username|.
@@ -110,6 +88,21 @@ void SanitizePossibleUsernames(PasswordForm* form) {
   });
 }
 
+}  // namespace password_form_manager_helpers
+
+bool DoesStringContainOnlyDigits(const base::string16& s) {
+  for (auto c : s) {
+    if (!base::IsAsciiDigit(c))
+      return false;
+  }
+  return true;
+}
+
+// Heuristics to determine that a string is very unlikely to be a username.
+bool IsProbablyNotUsername(const base::string16& s) {
+  return !s.empty() && DoesStringContainOnlyDigits(s) && s.size() < 3;
+}
+
 // Copies field properties masks from the form |from| to the form |to|.
 void CopyFieldPropertiesMasks(const PasswordForm& from, PasswordForm* to) {
   // Skip copying if the number of fields is different.
@@ -122,86 +115,6 @@ void CopyFieldPropertiesMasks(const PasswordForm& from, PasswordForm* to) {
             ? from.form_data.fields[i].properties_mask
             : autofill::FieldPropertiesFlags::ERROR_OCCURRED;
   }
-}
-
-// Sets autofill types of password and new password fields in |field_types|.
-// |password_type| (the autofill type of new password field) should be equal to
-// NEW_PASSWORD, PROBABLY_NEW_PASSWORD or NOT_NEW_PASSWORD. These values
-// correspond to cases when the user confirmed password update, did nothing or
-// declined to update password respectively.
-void SetFieldLabelsOnUpdate(const autofill::ServerFieldType password_type,
-                            const autofill::PasswordForm& submitted_form,
-                            FieldTypeMap* field_types) {
-  DCHECK(password_type == autofill::NEW_PASSWORD ||
-         password_type == autofill::PROBABLY_NEW_PASSWORD ||
-         password_type == autofill::NOT_NEW_PASSWORD)
-      << password_type;
-  DCHECK(!submitted_form.new_password_element.empty());
-
-  (*field_types)[submitted_form.password_element] = autofill::PASSWORD;
-  (*field_types)[submitted_form.new_password_element] = password_type;
-}
-
-// Sets the autofill type of the password field stored in |submitted_form| to
-// |password_type| in |field_types| map.
-void SetFieldLabelsOnSave(const autofill::ServerFieldType password_type,
-                          const autofill::PasswordForm& form,
-                          FieldTypeMap* field_types) {
-  DCHECK(password_type == autofill::PASSWORD ||
-         password_type == autofill::ACCOUNT_CREATION_PASSWORD ||
-         password_type == autofill::NOT_ACCOUNT_CREATION_PASSWORD)
-      << password_type;
-
-  if (!form.new_password_element.empty()) {
-    (*field_types)[form.new_password_element] = password_type;
-  } else {
-    DCHECK(!form.password_element.empty());
-    (*field_types)[form.password_element] = password_type;
-  }
-}
-
-// Label username and password fields with autofill types in |form_structure|
-// based on |field_types|, and vote types based on |vote_types|. The function
-// also adds the types to |available_field_types|. For fields of |USERNAME|
-// type, a vote type must exist.
-void LabelFields(const FieldTypeMap& field_types,
-                 const VoteTypeMap& vote_types,
-                 FormStructure* form_structure,
-                 autofill::ServerFieldTypeSet* available_field_types) {
-  for (size_t i = 0; i < form_structure->field_count(); ++i) {
-    autofill::AutofillField* field = form_structure->field(i);
-
-    autofill::ServerFieldType type = autofill::UNKNOWN_TYPE;
-    if (!field->name.empty()) {
-      auto iter = field_types.find(field->name);
-      if (iter != field_types.end()) {
-        type = iter->second;
-        available_field_types->insert(type);
-      }
-
-      auto vote_type_iter = vote_types.find(field->name);
-      if (vote_type_iter != vote_types.end())
-        field->set_vote_type(vote_type_iter->second);
-      DCHECK(type != autofill::USERNAME ||
-             field->vote_type() !=
-                 autofill::AutofillUploadContents::Field::NO_INFORMATION);
-    }
-
-    autofill::ServerFieldTypeSet types;
-    types.insert(type);
-    field->set_possible_types(types);
-  }
-}
-
-// Returns true iff |credentials| has the same password as an entry in |matches|
-// which doesn't have a username.
-bool IsAddingUsernameToExistingMatch(
-    const PasswordForm& credentials,
-    const std::map<base::string16, const autofill::PasswordForm*>& matches) {
-  const auto match = matches.find(base::string16());
-  return !credentials.username_value.empty() && match != matches.end() &&
-         !match->second->is_public_suffix_match &&
-         match->second->password_value == credentials.password_value;
 }
 
 }  // namespace
@@ -217,10 +130,6 @@ PasswordFormManager::PasswordFormManager(
       observed_form_signature_(CalculateFormSignature(observed_form.form_data)),
       is_new_login_(true),
       has_generated_password_(false),
-      generated_password_changed_(false),
-      is_manual_generation_(false),
-      generation_popup_was_shown_(false),
-      form_classifier_outcome_(kNoOutcome),
       password_overridden_(false),
       retry_password_form_password_update_(false),
       password_manager_(password_manager),
@@ -238,7 +147,7 @@ PasswordFormManager::PasswordFormManager(
                              true /* should_migrate_http_passwords */,
                              true /* should_query_suppressed_https_forms */)),
       form_fetcher_(form_fetcher ? form_fetcher : owned_form_fetcher_.get()),
-      is_main_frame_secure_(client->IsMainFrameSecure()) {
+      votes_uploader_(client, observed_form.IsPossibleChangePasswordForm()) {
   // Non-HTML forms should not need any interaction with the renderer, and hence
   // no driver. Note that cloned PasswordFormManager instances can have HTML
   // forms without drivers as well.
@@ -260,8 +169,10 @@ void PasswordFormManager::Init(
 
   metrics_recorder_->RecordFormSignature(observed_form_signature_);
 
-  if (owned_form_fetcher_)
+  if (owned_form_fetcher_ &&
+      !observed_form_.is_gaia_with_skip_save_password_form) {
     owned_form_fetcher_->Fetch();
+  }
   form_fetcher_->AddConsumer(this);
 }
 
@@ -394,28 +305,39 @@ void PasswordFormManager::Save() {
       submitted_form_->submission_event);
 
   if ((user_action_ == UserAction::kNone) &&
-      DidPreferenceChange(best_matches_, pending_credentials_.username_value)) {
+      password_form_manager_helpers::DidPreferenceChange(
+          best_matches_, pending_credentials_.username_value)) {
     SetUserAction(UserAction::kChoose);
+  }
+  if (user_action_ == UserAction::kOverridePassword &&
+      pending_credentials_.type == PasswordForm::TYPE_GENERATED &&
+      !HasGeneratedPassword()) {
+    metrics_util::LogPasswordGenerationSubmissionEvent(
+        metrics_util::PASSWORD_OVERRIDDEN);
+    pending_credentials_.type = PasswordForm::TYPE_MANUAL;
   }
 
   if (is_new_login_) {
-    SanitizePossibleUsernames(&pending_credentials_);
+    UMA_HISTOGRAM_BOOLEAN(
+        "PasswordManager.NewlySavedPasswordIsGenerated",
+        pending_credentials_.type == PasswordForm::TYPE_GENERATED);
+    password_form_manager_helpers::SanitizePossibleUsernames(
+        &pending_credentials_);
     pending_credentials_.date_created = base::Time::Now();
-    SendVotesOnSave();
+    votes_uploader_.SendVotesOnSave(observed_form_.form_data, *submitted_form_,
+                                    best_matches_, &pending_credentials_);
     form_saver_->Save(pending_credentials_, best_matches_);
   } else {
     ProcessUpdate();
-    std::vector<PasswordForm> credentials_to_update;
-    base::Optional<PasswordForm> old_primary_key =
-        UpdatePendingAndGetOldKey(&credentials_to_update);
+    std::vector<PasswordForm> credentials_to_update =
+        FindOtherCredentialsToUpdate();
     form_saver_->Update(pending_credentials_, best_matches_,
-                        &credentials_to_update,
-                        old_primary_key ? &old_primary_key.value() : nullptr);
+                        &credentials_to_update, nullptr);
   }
 
-  // This is not in ProcessUpdate() to catch PSL matched credentials.
-  if (pending_credentials_.times_used != 0 &&
+  if (pending_credentials_.times_used == 1 &&
       pending_credentials_.type == PasswordForm::TYPE_GENERATED) {
+    // This also includes PSL matched credentials.
     metrics_util::LogPasswordGenerationSubmissionEvent(
         metrics_util::PASSWORD_USED);
   }
@@ -429,11 +351,6 @@ void PasswordFormManager::Update(
       submitted_form_->submission_event);
   metrics_recorder_->SetSubmissionIndicatorEvent(
       submitted_form_->submission_event);
-  if (observed_form_.IsPossibleChangePasswordForm()) {
-    FormStructure form_structure(credentials_to_update.form_data);
-    UploadPasswordVote(observed_form_, autofill::NEW_PASSWORD,
-                       form_structure.FormSignatureAsStr());
-  }
   base::string16 password_to_save = pending_credentials_.password_value;
   bool skip_zero_click = pending_credentials_.skip_zero_click;
   pending_credentials_ = credentials_to_update;
@@ -442,12 +359,10 @@ void PasswordFormManager::Update(
   pending_credentials_.preferred = true;
   is_new_login_ = false;
   ProcessUpdate();
-  std::vector<PasswordForm> more_credentials_to_update;
-  base::Optional<PasswordForm> old_primary_key =
-      UpdatePendingAndGetOldKey(&more_credentials_to_update);
+  std::vector<PasswordForm> more_credentials_to_update =
+      FindOtherCredentialsToUpdate();
   form_saver_->Update(pending_credentials_, best_matches_,
-                      &more_credentials_to_update,
-                      old_primary_key ? &old_primary_key.value() : nullptr);
+                      &more_credentials_to_update, nullptr);
 
   password_manager_->UpdateFormManagers();
 }
@@ -462,7 +377,7 @@ void PasswordFormManager::UpdateUsername(const base::string16& new_username) {
   // |has_username_edited_vote_| is true iff |new_username| was typed in another
   // field. Otherwise, |has_username_edited_vote_| is false and no vote will be
   // uploaded.
-  has_username_edited_vote_ = false;
+  votes_uploader_.set_has_username_edited_vote(false);
   if (!new_username.empty()) {
     for (size_t i = 0; i < credential.other_possible_usernames.size(); ++i) {
       if (credential.other_possible_usernames[i].first == new_username) {
@@ -473,7 +388,7 @@ void PasswordFormManager::UpdateUsername(const base::string16& new_username) {
             credential.other_possible_usernames.begin() + i);
 
         // Set |corrected_username_element_| to upload a username vote.
-        has_username_edited_vote_ = true;
+        votes_uploader_.set_has_username_edited_vote(true);
         break;
       }
     }
@@ -523,21 +438,46 @@ void PasswordFormManager::UpdatePasswordValue(
 
 void PasswordFormManager::PresaveGeneratedPassword(
     const autofill::PasswordForm& form) {
-  form_saver()->PresaveGeneratedPassword(form);
-  metrics_recorder_->SetHasGeneratedPassword(true);
-  if (has_generated_password_) {
-    generated_password_changed_ = true;
+  if ((best_matches_.find(form.username_value) == best_matches_.end()) ||
+      form.username_value.empty()) {
+    form_saver()->PresaveGeneratedPassword(form);
   } else {
-    SetHasGeneratedPassword(true);
-    generated_password_changed_ = false;
+    autofill::PasswordForm form_without_username(form);
+    form_without_username.username_value.clear();
+    form_saver()->PresaveGeneratedPassword(form_without_username);
   }
+
+  if (!has_generated_password_) {
+    votes_uploader_.set_generated_password_changed(false);
+    metrics_recorder_->SetGeneratedPasswordStatus(
+        PasswordFormMetricsRecorder::GeneratedPasswordStatus::
+            kPasswordAccepted);
+  } else {
+    // If the password is already generated and the new value to presave differs
+    // from the presaved one, then mark that the generated password was changed.
+    // If a user recovers the original generated password, it will be recorded
+    // as a password change.
+    if (generated_password_ != form.password_value) {
+      votes_uploader_.set_generated_password_changed(true);
+      metrics_recorder_->SetGeneratedPasswordStatus(
+          PasswordFormMetricsRecorder::GeneratedPasswordStatus::
+              kPasswordEdited);
+    }
+  }
+  has_generated_password_ = true;
+  generated_password_ = form.password_value;
+  votes_uploader_.set_has_generated_password(true);
 }
 
 void PasswordFormManager::PasswordNoLongerGenerated() {
   DCHECK(has_generated_password_);
   form_saver()->RemovePresavedPassword();
-  SetHasGeneratedPassword(false);
-  generated_password_changed_ = false;
+  has_generated_password_ = false;
+  generated_password_.clear();
+  votes_uploader_.set_has_generated_password(false);
+  votes_uploader_.set_generated_password_changed(false);
+  metrics_recorder_->SetGeneratedPasswordStatus(
+      PasswordFormMetricsRecorder::GeneratedPasswordStatus::kPasswordDeleted);
 }
 
 void PasswordFormManager::SaveSubmittedFormTypeForMetrics(
@@ -550,9 +490,7 @@ void PasswordFormManager::SaveSubmittedFormTypeForMetrics(
 
   PasswordFormMetricsRecorder::SubmittedFormType type =
       PasswordFormMetricsRecorder::kSubmittedFormTypeUnspecified;
-  if (form.layout == PasswordForm::Layout::LAYOUT_LOGIN_AND_SIGNUP) {
-    type = PasswordFormMetricsRecorder::kSubmittedFormTypeLoginAndSignup;
-  } else if (is_change_password_form) {
+  if (is_change_password_form) {
     type = PasswordFormMetricsRecorder::kSubmittedFormTypeChangePasswordEnabled;
   } else if (is_signup_form) {
     if (no_username)
@@ -597,7 +535,7 @@ void PasswordFormManager::ProcessMatches(
         return form->blacklisted_by_user && !form->is_public_suffix_match;
       });
 
-  UMA_HISTOGRAM_COUNTS(
+  UMA_HISTOGRAM_COUNTS_1M(
       "PasswordManager.NumPasswordsNotShown",
       non_federated.size() + filtered_count - best_matches_.size());
 
@@ -665,7 +603,7 @@ void PasswordFormManager::ProcessLoginPrompt() {
 
 void PasswordFormManager::ProcessUpdate() {
   DCHECK_EQ(FormFetcher::State::NOT_WAITING, form_fetcher_->GetState());
-  DCHECK(preferred_match_ || !pending_credentials_.federation_origin.unique());
+  DCHECK(preferred_match_ || !pending_credentials_.federation_origin.opaque());
   // If we're doing an Update, we either autofilled correctly and need to
   // update the stats, or the user typed in a new password for autofilled
   // username, or the user selected one of the non-preferred matches,
@@ -673,7 +611,7 @@ void PasswordFormManager::ProcessUpdate() {
   DCHECK(!IsNewLogin() && pending_credentials_.preferred);
   DCHECK(!client_->IsIncognito());
 
-  UpdateMetadataForUsage(&pending_credentials_);
+  password_manager_util::UpdateMetadataForUsage(&pending_credentials_);
 
   base::RecordAction(
       base::UserMetricsAction("PasswordManager_LoginFollowingAutofill"));
@@ -681,323 +619,20 @@ void PasswordFormManager::ProcessUpdate() {
   // Check to see if this form is a candidate for password generation.
   // Do not send votes on change password forms, since they were already sent in
   // Update() method.
-  if (!observed_form_.IsPossibleChangePasswordForm())
-    SendVoteOnCredentialsReuse(observed_form_, &pending_credentials_);
-
-  // TODO(crbug.com/840384): If there is no username, we should vote again when
-  // the credential is updated with a username.
-  if (pending_credentials_.times_used == 1)
-    UploadFirstLoginVotes(*submitted_form_);
-}
-
-bool PasswordFormManager::FindUsernameInOtherPossibleUsernames(
-    const autofill::PasswordForm& match,
-    const base::string16& username) {
-  DCHECK(!username_correction_vote_);
-
-  for (const ValueElementPair& pair : match.other_possible_usernames) {
-    if (pair.first == username) {
-      username_correction_vote_.reset(new autofill::PasswordForm(match));
-      username_correction_vote_->username_element = pair.second;
-      return true;
-    }
+  if (!observed_form_.IsPossibleChangePasswordForm()) {
+    votes_uploader_.SendVoteOnCredentialsReuse(
+        observed_form_.form_data, *submitted_form_, &pending_credentials_);
   }
-  return false;
-}
-
-bool PasswordFormManager::FindCorrectedUsernameElement(
-    const base::string16& username,
-    const base::string16& password) {
-  if (username.empty())
-    return false;
-  for (const auto& key_value : best_matches_) {
-    const PasswordForm* match = key_value.second;
-    if ((match->password_value == password) &&
-        FindUsernameInOtherPossibleUsernames(*match, username))
-      return true;
-  }
-  for (const autofill::PasswordForm* match : not_best_matches_) {
-    if ((match->password_value == password) &&
-        FindUsernameInOtherPossibleUsernames(*match, username))
-      return true;
-  }
-  return false;
-}
-
-void PasswordFormManager::SendVoteOnCredentialsReuse(
-    const PasswordForm& observed,
-    PasswordForm* pending) {
-  // Ignore |pending_structure| if its FormData has no fields. This is to
-  // weed out those credentials that were saved before FormData was added
-  // to PasswordForm. Even without this check, these FormStructure's won't
-  // be uploaded, but it makes it hard to see if we are encountering
-  // unexpected errors.
-  if (pending->form_data.fields.empty())
-    return;
-
-  FormStructure pending_structure(pending->form_data);
-  FormStructure observed_structure(observed.form_data);
-
-  if (pending_structure.form_signature() !=
-      observed_structure.form_signature()) {
-    // Only upload if this is the first time the password has been used.
-    // Otherwise the credentials have been used on the same field before so
-    // they aren't from an account creation form.
-    // Also bypass uploading if the username was edited. Offering generation
-    // in cases where we currently save the wrong username isn't great.
-    // TODO(gcasto): Determine if generation should be offered in this case.
-    if (pending->times_used == 1) {
-      if (UploadPasswordVote(*pending, autofill::ACCOUNT_CREATION_PASSWORD,
-                             observed_structure.FormSignatureAsStr())) {
-        pending->generation_upload_status =
-            autofill::PasswordForm::POSITIVE_SIGNAL_SENT;
-      }
-    }
-  } else if (pending->generation_upload_status ==
-             autofill::PasswordForm::POSITIVE_SIGNAL_SENT) {
-    // A signal was sent that this was an account creation form, but the
-    // credential is now being used on the same form again. This cancels out
-    // the previous vote.
-    if (UploadPasswordVote(*pending, autofill::NOT_ACCOUNT_CREATION_PASSWORD,
-                           std::string())) {
-      pending->generation_upload_status =
-          autofill::PasswordForm::NEGATIVE_SIGNAL_SENT;
-    }
-  } else if (generation_popup_was_shown_) {
-    // Even if there is no autofill vote to be sent, send the vote about the
-    // usage of the generation popup.
-    UploadPasswordVote(*pending, autofill::UNKNOWN_TYPE, std::string());
-  }
-}
-
-bool PasswordFormManager::UploadPasswordVote(
-    const autofill::PasswordForm& form_to_upload,
-    const autofill::ServerFieldType& autofill_type,
-    const std::string& login_form_signature) {
-  // Check if there is any vote to be sent.
-  bool has_autofill_vote = autofill_type != autofill::UNKNOWN_TYPE;
-  bool has_password_generation_vote = generation_popup_was_shown_;
-  if (!has_autofill_vote && !has_password_generation_vote)
-    return false;
-
-  autofill::AutofillManager* autofill_manager =
-      client_->GetAutofillManagerForMainFrame();
-  if (!autofill_manager || !autofill_manager->download_manager())
-    return false;
-
-  // If this is an update, a vote about the observed form is sent. If the user
-  // re-uses credentials, a vote about the saved form is sent. If the user saves
-  // credentials, the observed and pending forms are the same.
-  FormStructure form_structure(form_to_upload.form_data);
-  if (!autofill_manager->ShouldUploadForm(form_structure)) {
-    UMA_HISTOGRAM_BOOLEAN("PasswordGeneration.UploadStarted", false);
-    return false;
+  if (IsPasswordUpdate()) {
+    votes_uploader_.UploadPasswordVote(
+        *submitted_form_, *submitted_form_, autofill::NEW_PASSWORD,
+        autofill::FormStructure(pending_credentials_.form_data)
+            .FormSignatureAsStr());
   }
 
-  autofill::ServerFieldTypeSet available_field_types;
-  // A map from field names to field types.
-  FieldTypeMap field_types;
-  auto username_vote_type =
-      autofill::AutofillUploadContents::Field::NO_INFORMATION;
-  if (autofill_type != autofill::USERNAME) {
-    if (has_autofill_vote) {
-      bool is_update = autofill_type == autofill::NEW_PASSWORD ||
-                       autofill_type == autofill::PROBABLY_NEW_PASSWORD ||
-                       autofill_type == autofill::NOT_NEW_PASSWORD;
-
-      if (is_update) {
-        if (form_to_upload.new_password_element.empty())
-          return false;
-        SetFieldLabelsOnUpdate(autofill_type, form_to_upload, &field_types);
-      } else {  // Saving.
-        SetFieldLabelsOnSave(autofill_type, form_to_upload, &field_types);
-      }
-      if (autofill_type != autofill::ACCOUNT_CREATION_PASSWORD) {
-        // If |autofill_type| == autofill::ACCOUNT_CREATION_PASSWORD, Chrome
-        // will upload a vote for another form: the one that the credential was
-        // saved on.
-        field_types[submitted_form_->confirmation_password_element] =
-            autofill::CONFIRMATION_PASSWORD;
-        form_structure.set_passwords_were_revealed(
-            has_passwords_revealed_vote_);
-      }
-    }
-    if (autofill_type != autofill::ACCOUNT_CREATION_PASSWORD) {
-      if (generation_popup_was_shown_)
-        AddGeneratedVote(&form_structure);
-      if (form_classifier_outcome_ != kNoOutcome)
-        AddFormClassifierVote(&form_structure);
-      if (has_username_edited_vote_) {
-        field_types[form_to_upload.username_element] = autofill::USERNAME;
-        username_vote_type =
-            autofill::AutofillUploadContents::Field::USERNAME_EDITED;
-      }
-    } else {  // User reuses credentials.
-      // If the saved username value was used, then send a confirmation vote for
-      // username.
-      if (!submitted_form_->username_value.empty()) {
-        DCHECK(submitted_form_->username_value ==
-               form_to_upload.username_value);
-        field_types[form_to_upload.username_element] = autofill::USERNAME;
-        username_vote_type =
-            autofill::AutofillUploadContents::Field::CREDENTIALS_REUSED;
-      }
-    }
-    if (autofill_type == autofill::PASSWORD) {
-      // The password attributes should be uploaded only on the first save.
-      DCHECK(pending_credentials_.times_used == 0);
-      GeneratePasswordAttributesVote(pending_credentials_.password_value,
-                                     &form_structure);
-    }
-  } else {  // User overwrites username.
-    field_types[form_to_upload.username_element] = autofill::USERNAME;
-    field_types[form_to_upload.password_element] =
-        autofill::ACCOUNT_CREATION_PASSWORD;
-    username_vote_type =
-        autofill::AutofillUploadContents::Field::USERNAME_OVERWRITTEN;
-  }
-  LabelFields(field_types,
-              {{form_to_upload.username_element, username_vote_type}},
-              &form_structure, &available_field_types);
-
-  // Force uploading as these events are relatively rare and we want to make
-  // sure to receive them.
-  form_structure.set_upload_required(UPLOAD_REQUIRED);
-
-  if (password_manager_util::IsLoggingActive(client_)) {
-    BrowserSavePasswordProgressLogger logger(client_->GetLogManager());
-    logger.LogFormStructure(Logger::STRING_FORM_VOTES, form_structure);
-  }
-
-  bool success = autofill_manager->download_manager()->StartUploadRequest(
-      form_structure, false /* was_autofilled */, available_field_types,
-      login_form_signature, true /* observed_submission */);
-
-  UMA_HISTOGRAM_BOOLEAN("PasswordGeneration.UploadStarted", success);
-  return success;
-}
-
-void PasswordFormManager::AddGeneratedVote(
-    autofill::FormStructure* form_structure) {
-  DCHECK(form_structure);
-  DCHECK(generation_popup_was_shown_);
-
-  if (generation_element_.empty())
-    return;
-
-  autofill::AutofillUploadContents::Field::PasswordGenerationType type =
-      autofill::AutofillUploadContents::Field::NO_GENERATION;
-  if (has_generated_password_) {
-    if (is_manual_generation_) {
-      type = observed_form_.IsPossibleChangePasswordForm()
-                 ? autofill::AutofillUploadContents::Field::
-                       MANUALLY_TRIGGERED_GENERATION_ON_CHANGE_PASSWORD_FORM
-                 : autofill::AutofillUploadContents::Field::
-                       MANUALLY_TRIGGERED_GENERATION_ON_SIGN_UP_FORM;
-    } else {
-      type =
-          observed_form_.IsPossibleChangePasswordForm()
-              ? autofill::AutofillUploadContents::Field::
-                    AUTOMATICALLY_TRIGGERED_GENERATION_ON_CHANGE_PASSWORD_FORM
-              : autofill::AutofillUploadContents::Field::
-                    AUTOMATICALLY_TRIGGERED_GENERATION_ON_SIGN_UP_FORM;
-    }
-  } else
-    type = autofill::AutofillUploadContents::Field::IGNORED_GENERATION_POPUP;
-
-  for (size_t i = 0; i < form_structure->field_count(); ++i) {
-    autofill::AutofillField* field = form_structure->field(i);
-    if (field->name == generation_element_) {
-      field->set_generation_type(type);
-      if (has_generated_password_) {
-        field->set_generated_password_changed(generated_password_changed_);
-        UMA_HISTOGRAM_BOOLEAN("PasswordGeneration.GeneratedPasswordWasEdited",
-                              generated_password_changed_);
-      }
-      break;
-    }
-  }
-}
-
-void PasswordFormManager::AddFormClassifierVote(
-    autofill::FormStructure* form_structure) {
-  DCHECK(form_structure);
-  DCHECK(form_classifier_outcome_ != kNoOutcome);
-
-  for (size_t i = 0; i < form_structure->field_count(); ++i) {
-    autofill::AutofillField* field = form_structure->field(i);
-    if (form_classifier_outcome_ == kFoundGenerationElement &&
-        field->name == generation_element_detected_by_classifier_) {
-      field->set_form_classifier_outcome(
-          autofill::AutofillUploadContents::Field::GENERATION_ELEMENT);
-    } else {
-      field->set_form_classifier_outcome(
-          autofill::AutofillUploadContents::Field::NON_GENERATION_ELEMENT);
-    }
-  }
-}
-
-// TODO(crbug.com/840384): Share common code with UploadPasswordVote.
-void PasswordFormManager::UploadFirstLoginVotes(
-    const PasswordForm& form_to_upload) {
-  autofill::AutofillManager* autofill_manager =
-      client_->GetAutofillManagerForMainFrame();
-  if (!autofill_manager || !autofill_manager->download_manager())
-    return;
-
-  FormStructure form_structure(form_to_upload.form_data);
-  if (!autofill_manager->ShouldUploadForm(form_structure))
-    return;
-
-  FieldTypeMap field_types = {
-      {form_to_upload.username_element, autofill::USERNAME}};
-  VoteTypeMap vote_types = {
-      {form_to_upload.username_element,
-       autofill::AutofillUploadContents::Field::FIRST_USE}};
-  if (!password_overridden_) {
-    field_types[form_to_upload.password_element] = autofill::PASSWORD;
-    vote_types[form_to_upload.password_element] =
-        autofill::AutofillUploadContents::Field::FIRST_USE;
-  }
-
-  autofill::ServerFieldTypeSet available_field_types;
-  LabelFields(field_types, vote_types, &form_structure, &available_field_types);
-  SetKnownValueFlag(&form_structure);
-
-  // Force uploading as these events are relatively rare and we want to make
-  // sure to receive them.
-  form_structure.set_upload_required(UPLOAD_REQUIRED);
-
-  if (password_manager_util::IsLoggingActive(client_)) {
-    BrowserSavePasswordProgressLogger logger(client_->GetLogManager());
-    logger.LogFormStructure(Logger::STRING_FORM_VOTES, form_structure);
-  }
-
-  autofill_manager->download_manager()->StartUploadRequest(
-      form_structure, false /* was_autofilled */, available_field_types,
-      std::string(), true /* observed_submission */);
-}
-
-void PasswordFormManager::SetKnownValueFlag(autofill::FormStructure* form) {
-  DCHECK(!password_overridden_ ||
-         best_matches_.find(pending_credentials_.username_value) !=
-             best_matches_.end())
-      << "The credential is being overriden, but it does not exist in "
-         "the best matches.";
-
-  const base::string16& known_username = pending_credentials_.username_value;
-  // If we are updating a password, the known value is the old password, not
-  // the new one.
-  const base::string16& known_password =
-      password_overridden_ ? best_matches_[known_username]->password_value
-                           : pending_credentials_.password_value;
-
-  for (auto& field : *form) {
-    if (field->value.empty())
-      continue;
-    if (known_username == field->value || known_password == field->value) {
-      field->properties_mask |= autofill::FieldPropertiesFlags::KNOWN_VALUE;
-    }
+  if (pending_credentials_.times_used == 1) {
+    votes_uploader_.UploadFirstLoginVotes(best_matches_, pending_credentials_,
+                                          *submitted_form_);
   }
 }
 
@@ -1007,16 +642,14 @@ void PasswordFormManager::CreatePendingCredentials() {
 
   // Look for the actually submitted credentials in the list of previously saved
   // credentials that were available to autofilling.
-  // This first match via FindBestSavedMatch focuses on matches by username and
-  // falls back to password based matches if |submitted_form_| has no username
-  // filled.
   const PasswordForm* saved_form = FindBestSavedMatch(submitted_form_.get());
-  if (saved_form != nullptr) {
+  if (saved_form) {
     // The user signed in with a login we autofilled.
     pending_credentials_ = *saved_form;
-    password_overridden_ =
-        pending_credentials_.password_value != password_to_save.first;
-    if (IsPendingCredentialsPublicSuffixMatch()) {
+    SetPasswordOverridden(pending_credentials_.password_value !=
+                          password_to_save.first);
+
+    if (pending_credentials_.is_public_suffix_match) {
       // If the autofilled credentials were a PSL match or credentials stored
       // from Android apps, store a copy with the current origin and signon
       // realm. This ensures that on the next visit, a precise match is found.
@@ -1028,11 +661,7 @@ void PasswordFormManager::CreatePendingCredentials() {
       // If this isn't updated, then password generation uploads are off for
       // sites where PSL matching is required to fill the login form, as two
       // PASSWORD votes are uploaded per saved password instead of one.
-      //
-      // TODO(gcasto): It would be nice if other state were shared such that if
-      // say a password was updated on one match it would update on all related
-      // passwords. This is a much larger change.
-      UpdateMetadataForUsage(&pending_credentials_);
+      password_manager_util::UpdateMetadataForUsage(&pending_credentials_);
 
       // Update |pending_credentials_| in order to be able correctly save it.
       pending_credentials_.origin = submitted_form_->origin;
@@ -1048,8 +677,7 @@ void PasswordFormManager::CreatePendingCredentials() {
       // actually correspond to two different accounts (see
       // http://crbug.com/385619). In that case the user should be asked again
       // before saving the password. This is ensured by setting
-      // |password_overriden_| on |pending_credentials_| to false and setting
-      // |origin| and |signon_realm| to correct values.
+      // |password_overriden_| on |pending_credentials_| to false.
       //
       // There is still the edge case when the autofilled credentials represent
       // the same account as |submitted_form_| but the stored password
@@ -1062,7 +690,7 @@ void PasswordFormManager::CreatePendingCredentials() {
       // here again.
       if (password_overridden_) {
         pending_credentials_.is_public_suffix_match = false;
-        password_overridden_ = false;
+        SetPasswordOverridden(false);
       }
     } else {  // Not a PSL match but a match of an already stored credential.
       is_new_login_ = false;
@@ -1095,7 +723,7 @@ void PasswordFormManager::CreatePendingCredentials() {
     if (best_update_match) {
       // Chose |best_update_match| to be updated.
       pending_credentials_ = *best_update_match;
-    } else if (has_generated_password_) {
+    } else if (HasGeneratedPassword()) {
       // If a password was generated and we didn't find a match, we have to save
       // it in a separate entry since we have to store it but we don't know
       // where.
@@ -1114,8 +742,10 @@ void PasswordFormManager::CreatePendingCredentials() {
     // save new credentials.
     CreatePendingCredentialsForNewCredentials(password_to_save.second);
     // Generate username correction votes.
-    bool username_correction_found = FindCorrectedUsernameElement(
-        submitted_form_->username_value, submitted_form_->password_value);
+    bool username_correction_found =
+        votes_uploader_.FindCorrectedUsernameElement(
+            best_matches_, not_best_matches_, submitted_form_->username_value,
+            submitted_form_->password_value);
     UMA_HISTOGRAM_BOOLEAN("PasswordManager.UsernameCorrectionFound",
                           username_correction_found);
     if (username_correction_found) {
@@ -1125,14 +755,8 @@ void PasswordFormManager::CreatePendingCredentials() {
     }
   }
 
-  if (!IsValidAndroidFacetURI(pending_credentials_.signon_realm)) {
+  if (!IsValidAndroidFacetURI(pending_credentials_.signon_realm))
     pending_credentials_.action = submitted_form_->action;
-    // If the user selected credentials we autofilled from a PasswordForm
-    // that contained no action URL (IE6/7 imported passwords, for example),
-    // bless it with the action URL from the observed form. See b/1107719.
-    if (pending_credentials_.action.is_empty())
-      pending_credentials_.action = observed_form_.action;
-  }
 
   pending_credentials_.password_value = password_to_save.first;
   pending_credentials_.preferred = submitted_form_->preferred;
@@ -1150,19 +774,13 @@ void PasswordFormManager::CreatePendingCredentials() {
     pending_credentials_.display_name = submitted_form_->display_name;
     pending_credentials_.federation_origin = submitted_form_->federation_origin;
     pending_credentials_.icon_url = submitted_form_->icon_url;
-    // Take the correct signon_realm for federated credentials.
+    // It's important to override |signon_realm| for federated credentials
+    // because it has format "federation://" + origin_host + "/" +
+    // federation_host
     pending_credentials_.signon_realm = submitted_form_->signon_realm;
   }
 
-  if (user_action_ == UserAction::kOverridePassword &&
-      pending_credentials_.type == PasswordForm::TYPE_GENERATED &&
-      !has_generated_password_) {
-    metrics_util::LogPasswordGenerationSubmissionEvent(
-        metrics_util::PASSWORD_OVERRIDDEN);
-    pending_credentials_.type = PasswordForm::TYPE_MANUAL;
-  }
-
-  if (has_generated_password_)
+  if (HasGeneratedPassword())
     pending_credentials_.type = PasswordForm::TYPE_GENERATED;
 }
 
@@ -1175,7 +793,7 @@ const PasswordForm* PasswordFormManager::FindBestMatchForUpdatePassword(
   // This function is called for forms that do not contain a username field.
   // This means that we cannot update credentials based on a matching username
   // and that we may need to show an update prompt.
-  if (best_matches_.size() == 1 && !has_generated_password_) {
+  if (best_matches_.size() == 1 && !HasGeneratedPassword()) {
     // In case the submitted form contained no username but a password, and if
     // the user has only one credential stored, return it as the one that should
     // be updated.
@@ -1194,7 +812,7 @@ const PasswordForm* PasswordFormManager::FindBestMatchForUpdatePassword(
 
 const PasswordForm* PasswordFormManager::FindBestSavedMatch(
     const PasswordForm* submitted_form) const {
-  if (!submitted_form->federation_origin.unique())
+  if (!submitted_form->federation_origin.opaque())
     return nullptr;
 
   // Return form with matching |username_value|.
@@ -1247,32 +865,57 @@ void PasswordFormManager::CreatePendingCredentialsForNewCredentials(
 }
 
 void PasswordFormManager::OnNopeUpdateClicked() {
-  UploadPasswordVote(observed_form_, autofill::NOT_NEW_PASSWORD, std::string());
+  votes_uploader_.UploadPasswordVote(observed_form_, *submitted_form_,
+                                     autofill::NOT_NEW_PASSWORD, std::string());
 }
 
 void PasswordFormManager::OnNeverClicked() {
-  UploadPasswordVote(pending_credentials_, autofill::UNKNOWN_TYPE,
-                     std::string());
+  votes_uploader_.UploadPasswordVote(pending_credentials_, *submitted_form_,
+                                     autofill::UNKNOWN_TYPE, std::string());
   PermanentlyBlacklist();
 }
 
 void PasswordFormManager::OnNoInteraction(bool is_update) {
   if (is_update) {
-    UploadPasswordVote(observed_form_, autofill::PROBABLY_NEW_PASSWORD,
-                       std::string());
+    votes_uploader_.UploadPasswordVote(observed_form_, *submitted_form_,
+                                       autofill::PROBABLY_NEW_PASSWORD,
+                                       std::string());
   } else {
-    UploadPasswordVote(pending_credentials_, autofill::UNKNOWN_TYPE,
-                       std::string());
+    votes_uploader_.UploadPasswordVote(pending_credentials_, *submitted_form_,
+                                       autofill::UNKNOWN_TYPE, std::string());
   }
 }
 
 void PasswordFormManager::OnPasswordsRevealed() {
-  has_passwords_revealed_vote_ = true;
+  votes_uploader_.set_has_passwords_revealed_vote(true);
 }
 
-void PasswordFormManager::SetHasGeneratedPassword(bool generated_password) {
-  has_generated_password_ = generated_password;
-  metrics_recorder_->SetHasGeneratedPassword(generated_password);
+bool PasswordFormManager::HasGeneratedPassword() const {
+  return has_generated_password_;
+}
+
+void PasswordFormManager::SetGenerationElement(
+    const base::string16& generation_element) {
+  votes_uploader_.set_generation_element(generation_element);
+}
+
+void PasswordFormManager::SetGenerationPopupWasShown(
+    bool generation_popup_was_shown,
+    bool is_manual_generation) {
+  votes_uploader_.set_generation_popup_was_shown(generation_popup_was_shown);
+  votes_uploader_.set_is_manual_generation(is_manual_generation);
+  metrics_recorder_->SetPasswordGenerationPopupShown(generation_popup_was_shown,
+                                                     is_manual_generation);
+}
+
+bool PasswordFormManager::RetryPasswordFormPasswordUpdate() const {
+  return retry_password_form_password_update_;
+}
+
+bool PasswordFormManager::IsPasswordUpdate() const {
+  return (!GetBestMatches().empty() &&
+          IsPossibleChangePasswordFormWithoutUsername()) ||
+         IsPasswordOverridden() || RetryPasswordFormPasswordUpdate();
 }
 
 void PasswordFormManager::LogSubmitPassed() {
@@ -1285,6 +928,19 @@ void PasswordFormManager::LogSubmitFailed() {
 
 void PasswordFormManager::MarkGenerationAvailable() {
   metrics_recorder_->MarkGenerationAvailable();
+}
+
+bool PasswordFormManager::IsPossibleChangePasswordFormWithoutUsername() const {
+  return is_possible_change_password_form_without_username_;
+}
+
+std::vector<base::WeakPtr<PasswordManagerDriver>>
+PasswordFormManager::GetDrivers() const {
+  return drivers_;
+}
+
+const PasswordForm* PasswordFormManager::GetSubmittedForm() const {
+  return submitted_form_.get();
 }
 
 FormFetcher* PasswordFormManager::GetFormFetcher() {
@@ -1329,22 +985,6 @@ bool PasswordFormManager::IsPasswordOverridden() const {
 
 const autofill::PasswordForm* PasswordFormManager::GetPreferredMatch() const {
   return preferred_match_;
-}
-
-void PasswordFormManager::WipeStoreCopyIfOutdated() {
-  UMA_HISTOGRAM_BOOLEAN(
-      "PasswordManager.StoreReadyWhenWiping",
-      form_fetcher_->GetState() == FormFetcher::State::NOT_WAITING);
-
-  form_saver_->WipeOutdatedCopies(pending_credentials_, &best_matches_,
-                                  &preferred_match_);
-}
-
-void PasswordFormManager::SaveGenerationFieldDetectedByClassifier(
-    const base::string16& generation_field) {
-  form_classifier_outcome_ =
-      generation_field.empty() ? kNoGenerationElement : kFoundGenerationElement;
-  generation_element_detected_by_classifier_ = generation_field;
 }
 
 void PasswordFormManager::ResetStoredMatches() {
@@ -1396,114 +1036,20 @@ std::unique_ptr<PasswordFormManager> PasswordFormManager::Clone() {
   //       by the cloned FormFetcher.
   if (submitted_form_)
     result->submitted_form_ = std::make_unique<PasswordForm>(*submitted_form_);
-  if (username_correction_vote_) {
-    result->username_correction_vote_ =
-        std::make_unique<PasswordForm>(*username_correction_vote_);
-  }
+
   result->pending_credentials_ = pending_credentials_;
   result->is_new_login_ = is_new_login_;
   result->has_generated_password_ = has_generated_password_;
-  result->generated_password_changed_ = generated_password_changed_;
-  result->is_manual_generation_ = is_manual_generation_;
-  result->generation_element_ = generation_element_;
-  result->generation_popup_was_shown_ = generation_popup_was_shown_;
-  result->form_classifier_outcome_ = form_classifier_outcome_;
-  result->generation_element_detected_by_classifier_ =
-      generation_element_detected_by_classifier_;
+  result->generated_password_ = generated_password_;
   result->password_overridden_ = password_overridden_;
   result->retry_password_form_password_update_ =
       retry_password_form_password_update_;
   result->is_possible_change_password_form_without_username_ =
       is_possible_change_password_form_without_username_;
   result->user_action_ = user_action_;
+  result->votes_uploader_ = votes_uploader_;
 
   return result;
-}
-
-void PasswordFormManager::SendVotesOnSave() {
-  if (observed_form_.IsPossibleChangePasswordFormWithoutUsername())
-    return;
-
-  // Send votes for sign-in form.
-  autofill::FormData& form_data = pending_credentials_.form_data;
-  if (form_data.fields.size() == 2 &&
-      form_data.fields[0].form_control_type == "text" &&
-      form_data.fields[1].form_control_type == "password") {
-    // |form_data| is received from the renderer and does not contain field
-    // values. Fill username field value with username to allow AutofillManager
-    // to detect username autofill type.
-    form_data.fields[0].value = pending_credentials_.username_value;
-    SendSignInVote(form_data);
-  }
-
-  if (pending_credentials_.times_used == 1 ||
-      IsAddingUsernameToExistingMatch(pending_credentials_, best_matches_)) {
-    UploadFirstLoginVotes(*submitted_form_);
-  }
-
-  // Upload credentials the first time they are saved. This data is used
-  // by password generation to help determine account creation sites.
-  // Credentials that have been previously used (e.g., PSL matches) are checked
-  // to see if they are valid account creation forms.
-  if (pending_credentials_.times_used == 0) {
-    UploadPasswordVote(pending_credentials_, autofill::PASSWORD, std::string());
-    if (username_correction_vote_) {
-      UploadPasswordVote(
-          *username_correction_vote_, autofill::USERNAME,
-          FormStructure(observed_form_.form_data).FormSignatureAsStr());
-    }
-  } else {
-    SendVoteOnCredentialsReuse(observed_form_, &pending_credentials_);
-  }
-}
-
-void PasswordFormManager::SendSignInVote(const FormData& form_data) {
-  autofill::AutofillManager* autofill_manager =
-      client_->GetAutofillManagerForMainFrame();
-  if (!autofill_manager)
-    return;
-  std::unique_ptr<FormStructure> form_structure(new FormStructure(form_data));
-  form_structure->set_is_signin_upload(true);
-  DCHECK(form_structure->ShouldBeUploaded());
-  DCHECK_EQ(2u, form_structure->field_count());
-  form_structure->field(1)->set_possible_types({autofill::PASSWORD});
-  autofill_manager->MaybeStartVoteUploadProcess(std::move(form_structure),
-                                                base::TimeTicks::Now(),
-                                                /*observed_submission=*/true);
-}
-
-void PasswordFormManager::GeneratePasswordAttributesVote(
-    const base::string16& password_value,
-    FormStructure* form_structure) {
-  // Select a password attribute to upload. Do upload symbols more often as
-  // 2/3rd of issues are because of missing special symbols.
-  int bucket = base::RandGenerator(9);
-  int (*predicate)(int c) = nullptr;
-  autofill::PasswordAttribute attribute =
-      autofill::PasswordAttribute::kHasSpecialSymbol;
-  if (bucket == 0) {
-    predicate = &islower;
-    attribute = autofill::PasswordAttribute::kHasLowercaseLetter;
-  } else if (bucket == 1) {
-    predicate = &isupper;
-    attribute = autofill::PasswordAttribute::kHasUppercaseLetter;
-  } else if (bucket == 2) {
-    predicate = &isdigit;
-    attribute = autofill::PasswordAttribute::kHasNumeric;
-  } else {  //  3 <= bucket < 9
-    predicate = &ispunct;
-    attribute = autofill::PasswordAttribute::kHasSpecialSymbol;
-  }
-  bool actual_value =
-      std::any_of(password_value.begin(), password_value.end(), predicate);
-
-  // Apply the randomized response technique to noisify the actual value
-  // (https://en.wikipedia.org/wiki/Randomized_response).
-  bool randomized_value =
-      base::RandGenerator(2) ? actual_value : base::RandGenerator(2);
-
-  form_structure->set_password_attributes_vote(
-      std::make_pair(attribute, randomized_value));
 }
 
 void PasswordFormManager::SetUserAction(UserAction user_action) {
@@ -1511,56 +1057,26 @@ void PasswordFormManager::SetUserAction(UserAction user_action) {
   metrics_recorder_->SetUserAction(user_action);
 }
 
-base::Optional<PasswordForm> PasswordFormManager::UpdatePendingAndGetOldKey(
-    std::vector<PasswordForm>* credentials_to_update) {
-  base::Optional<PasswordForm> old_primary_key;
-  bool update_related_credentials = false;
+std::vector<PasswordForm> PasswordFormManager::FindOtherCredentialsToUpdate() {
+  std::vector<autofill::PasswordForm> credentials_to_update;
+  if (!pending_credentials_.federation_origin.opaque())
+    return credentials_to_update;
 
-  if (pending_credentials_.federation_origin.unique() &&
-      !IsValidAndroidFacetURI(pending_credentials_.signon_realm) &&
-      (pending_credentials_.password_element.empty() ||
-       pending_credentials_.username_element.empty() ||
-       pending_credentials_.submit_element.empty())) {
-    // Given that |password_element| and |username_element| are part of Sync and
-    // PasswordStore primary key, the old primary key must be used in order to
-    // match and update the existing entry.
-    old_primary_key = pending_credentials_;
-    // TODO(crbug.com/833171) It is possible for best_matches to not contain the
-    // username being updated. Add comments and a test, when we realise why.
-    auto best_match = best_matches_.find(pending_credentials_.username_value);
-    if (best_match != best_matches_.end()) {
-      old_primary_key->username_element = best_match->second->username_element;
-      old_primary_key->password_element = best_match->second->password_element;
-    }
-    pending_credentials_.password_element = observed_form_.password_element;
-    pending_credentials_.username_element = observed_form_.username_element;
-    pending_credentials_.submit_element = observed_form_.submit_element;
-    update_related_credentials = true;
-  } else {
-    update_related_credentials =
-        pending_credentials_.federation_origin.unique();
-  }
-
-  // If this was a password update, then update all non-best matches entries
-  // with the same username and the same old password.
-  if (update_related_credentials) {
-    auto updated_password_it =
-        best_matches_.find(pending_credentials_.username_value);
-    DCHECK(best_matches_.end() != updated_password_it);
-    const base::string16& old_password =
-        updated_password_it->second->password_value;
-    for (auto* not_best_match : not_best_matches_) {
-      if (not_best_match->username_value ==
-              pending_credentials_.username_value &&
-          not_best_match->password_value == old_password) {
-        credentials_to_update->push_back(*not_best_match);
-        credentials_to_update->back().password_value =
-            pending_credentials_.password_value;
-      }
+  auto updated_password_it =
+      best_matches_.find(pending_credentials_.username_value);
+  DCHECK(best_matches_.end() != updated_password_it);
+  const base::string16& old_password =
+      updated_password_it->second->password_value;
+  for (auto* not_best_match : not_best_matches_) {
+    if (not_best_match->username_value == pending_credentials_.username_value &&
+        not_best_match->password_value == old_password) {
+      credentials_to_update.push_back(*not_best_match);
+      credentials_to_update.back().password_value =
+          pending_credentials_.password_value;
     }
   }
 
-  return old_primary_key;
+  return credentials_to_update;
 }
 
 }  // namespace password_manager

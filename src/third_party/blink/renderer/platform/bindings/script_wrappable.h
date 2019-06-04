@@ -32,7 +32,7 @@
 #define THIRD_PARTY_BLINK_RENDERER_PLATFORM_BINDINGS_SCRIPT_WRAPPABLE_H_
 
 #include "build/build_config.h"
-#include "third_party/blink/renderer/platform/bindings/trace_wrapper_base.h"
+#include "third_party/blink/renderer/platform/bindings/name_client.h"
 #include "third_party/blink/renderer/platform/bindings/trace_wrapper_v8_reference.h"
 #include "third_party/blink/renderer/platform/bindings/wrapper_type_info.h"
 #include "third_party/blink/renderer/platform/heap/handle.h"
@@ -51,18 +51,13 @@ namespace blink {
 // objects for other worlds are stored in DOMWrapperMap.
 class PLATFORM_EXPORT ScriptWrappable
     : public GarbageCollectedFinalized<ScriptWrappable>,
-      public TraceWrapperBase {
+      public NameClient {
   WTF_MAKE_NONCOPYABLE(ScriptWrappable);
 
  public:
   virtual ~ScriptWrappable() = default;
 
   virtual void Trace(blink::Visitor*);
-
-  // Traces wrapper objects corresponding to this ScriptWrappable in all worlds.
-  void TraceWrappers(ScriptWrappableVisitor*) const override;
-
-  bool IsScriptWrappable() const override { return true; }
 
   const char* NameInHeapSnapshot() const override;
 
@@ -161,13 +156,6 @@ class PLATFORM_EXPORT ScriptWrappable
     return main_world_wrapper_.NewLocal(isolate);
   }
 
-  // Only use when really necessary, i.e., when passing over this
-  // ScriptWrappable's reference to V8. Should only be needed by GC
-  // infrastructure.
-  const v8::Persistent<v8::Object>* RawMainWorldWrapper() const {
-    return &main_world_wrapper_.Get();
-  }
-
   TraceWrapperV8Reference<v8::Object> main_world_wrapper_;
 };
 
@@ -194,9 +182,10 @@ class PLATFORM_EXPORT ScriptWrappable
 // i.e. "extern template class EXPORT_API X;"
 // However, once we instantiate X, we cannot specialize X after
 // the instantiation. i.e. we will see "error: explicit specialization of ...
-// after instantiation". So we cannot define X's s_wrapperTypeInfo in generated
-// code by using specialization. Instead, we need to implement wrapperTypeInfo
-// in X's cpp code, and instantiate X, i.e. "template class X;".
+// after instantiation". So we cannot define X's s_wrapper_type_info in
+// generated code by using specialization. Instead, we need to implement
+// wrapper_type_info in X's cpp code, and instantiate X, i.e. "template class
+// X;".
 #define DECLARE_WRAPPERTYPEINFO()                             \
  public:                                                      \
   const WrapperTypeInfo* GetWrapperTypeInfo() const override; \

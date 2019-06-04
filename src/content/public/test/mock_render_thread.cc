@@ -21,6 +21,7 @@
 #include "ipc/message_filter.h"
 #include "services/service_manager/public/cpp/connector.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "third_party/blink/public/common/dom_storage/session_storage_namespace_id.h"
 #include "third_party/blink/public/web/web_script_controller.h"
 
 namespace content {
@@ -44,7 +45,6 @@ class MockRenderMessageFilterImpl : public mojom::RenderMessageFilter {
   }
 
   void CreateNewWidget(int32_t opener_id,
-                       blink::WebPopupType popup_type,
                        mojom::WidgetPtr widget,
                        CreateNewWidgetCallback callback) override {
     // See comment in CreateNewWindow().
@@ -52,10 +52,9 @@ class MockRenderMessageFilterImpl : public mojom::RenderMessageFilter {
   }
 
   bool CreateNewWidget(int32_t opener_id,
-                       blink::WebPopupType popup_type,
                        mojom::WidgetPtr widget,
                        int32_t* route_id) override {
-    thread_->OnCreateWidget(opener_id, popup_type, route_id);
+    thread_->OnCreateWidget(opener_id, route_id);
     return true;
   }
 
@@ -63,21 +62,6 @@ class MockRenderMessageFilterImpl : public mojom::RenderMessageFilter {
       int opener_id,
       mojom::WidgetPtr widget,
       CreateFullscreenWidgetCallback callback) override {
-    NOTREACHED();
-  }
-
-  void DidGenerateCacheableMetadata(const GURL& url,
-                                    base::Time expected_response_time,
-                                    const std::vector<uint8_t>& data) override {
-    NOTREACHED();
-  }
-
-  void DidGenerateCacheableMetadataInCacheStorage(
-      const GURL& url,
-      base::Time expected_response_time,
-      const std::vector<uint8_t>& data,
-      const url::Origin& cache_storage_origin,
-      const std::string& cache_storage_cache_name) override {
     NOTREACHED();
   }
 
@@ -217,18 +201,6 @@ void MockRenderThread::RegisterExtension(v8::Extension* extension) {
   blink::WebScriptController::RegisterExtension(extension);
 }
 
-void MockRenderThread::ScheduleIdleHandler(int64_t initial_delay_ms) {}
-
-void MockRenderThread::IdleHandler() {
-}
-
-int64_t MockRenderThread::GetIdleNotificationDelayInMs() const {
-  return 0;
-}
-
-void MockRenderThread::SetIdleNotificationDelayInMs(
-    int64_t idle_notification_delay_in_ms) {}
-
 int MockRenderThread::PostTaskToAllWebWorkers(const base::Closure& closure) {
   return 0;
 }
@@ -245,8 +217,12 @@ int32_t MockRenderThread::GetClientId() {
   return 1;
 }
 
+bool MockRenderThread::IsOnline() {
+  return true;
+}
+
 void MockRenderThread::SetRendererProcessType(
-    blink::scheduler::RendererProcessType type) {}
+    blink::scheduler::WebRendererProcessType type) {}
 
 blink::WebString MockRenderThread::GetUserAgent() const {
   return blink::WebString();
@@ -257,13 +233,6 @@ void MockRenderThread::PreCacheFont(const LOGFONT& log_font) {
 }
 
 void MockRenderThread::ReleaseCachedFonts() {
-}
-#elif defined(OS_MACOSX)
-bool MockRenderThread::LoadFont(const base::string16& font_name,
-                                float font_point_size,
-                                mojo::ScopedSharedBufferHandle* out_font_data,
-                                uint32_t* out_font_id) {
-  return false;  // Not implemented.
 }
 #endif
 
@@ -288,7 +257,6 @@ int32_t MockRenderThread::GetNextRoutingID() {
 
 // The Widget expects to be returned a valid route_id.
 void MockRenderThread::OnCreateWidget(int opener_id,
-                                      blink::WebPopupType popup_type,
                                       int* route_id) {
   *route_id = GetNextRoutingID();
 }
@@ -370,11 +338,9 @@ void MockRenderThread::OnCreateWindow(
   frame_routing_id_to_initial_interface_provider_requests_.emplace(
       reply->main_frame_route_id,
       mojo::MakeRequest(&reply->main_frame_interface_provider));
-  // TODO(avi): Widget routing IDs should be distinct from the view routing IDs,
-  // once RenderWidgetHost is distilled from RenderViewHostImpl.
-  // See: https://crbug.com/545684.
-  reply->main_frame_widget_route_id = reply->route_id;
-  reply->cloned_session_storage_namespace_id = "";
+  reply->main_frame_widget_route_id = GetNextRoutingID();
+  reply->cloned_session_storage_namespace_id =
+      blink::AllocateSessionStorageNamespaceId();
 }
 
 }  // namespace content

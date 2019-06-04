@@ -13,11 +13,11 @@
 #include "components/viz/common/quads/draw_quad.h"
 #include "components/viz/common/quads/render_pass.h"
 #include "components/viz/common/quads/texture_draw_quad.h"
-#include "components/viz/common/resources/shared_bitmap_manager.h"
 #include "components/viz/common/surfaces/frame_sink_id.h"
 #include "components/viz/service/display/display.h"
 #include "components/viz/service/display/display_scheduler.h"
 #include "components/viz/service/display/output_surface.h"
+#include "components/viz/service/display/shared_bitmap_manager.h"
 #include "components/viz/service/display_embedder/server_shared_bitmap_manager.h"
 #include "components/viz/test/fake_output_surface.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -99,7 +99,8 @@ class RemoveOverdrawQuadPerfTest : public testing::Test {
         quad->SetNew(shared_quad_state, rect, rect, needs_blending, resource_id,
                      premultiplied_alpha, uv_top_left, uv_bottom_right,
                      background_color, vertex_opacity, y_flipped,
-                     nearest_neighbor, false);
+                     nearest_neighbor, /*secure_output_only=*/false,
+                     ui::ProtectedVideoType::kClear);
         j += quad_height;
       }
       j = y_top;

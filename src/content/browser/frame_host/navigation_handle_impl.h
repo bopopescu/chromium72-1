@@ -18,6 +18,8 @@
 #include "base/macros.h"
 #include "base/memory/ref_counted.h"
 #include "base/optional.h"
+#include "base/time/time.h"
+#include "base/timer/timer.h"
 #include "content/browser/frame_host/frame_tree_node.h"
 #include "content/browser/frame_host/render_frame_host_impl.h"
 #include "content/common/content_export.h"
@@ -26,7 +28,7 @@
 #include "content/public/browser/navigation_throttle.h"
 #include "content/public/browser/navigation_type.h"
 #include "content/public/browser/restore_type.h"
-#include "content/public/common/request_context_type.h"
+#include "third_party/blink/public/platform/modules/fetch/fetch_api_request.mojom.h"
 #include "third_party/blink/public/platform/web_mixed_content_context_type.h"
 #include "url/gurl.h"
 
@@ -51,17 +53,15 @@ class CONTENT_EXPORT NavigationHandleImpl : public NavigationHandle {
  public:
   // If |redirect_chain| is empty, then the redirect chain will be created to
   // start with |url|. Otherwise |redirect_chain| is used as the starting point.
-  // |navigation_start| comes from the DidStartProvisionalLoad IPC, which tracks
-  // both renderer-initiated and browser-initiated navigation start.
-  // PlzNavigate: This value always comes from the CommonNavigationParams
-  // associated with this navigation.
+  // |navigation_start| comes from the CommonNavigationParams associated with
+  // this navigation.
   static std::unique_ptr<NavigationHandleImpl> Create(
       const GURL& url,
       const std::vector<GURL>& redirect_chain,
       FrameTreeNode* frame_tree_node,
       bool is_renderer_initiated,
       bool is_same_document,
-      const base::TimeTicks& navigation_start,
+      base::TimeTicks navigation_start,
       int pending_nav_entry_id,
       bool started_from_context_menu,
       CSPDisposition should_check_main_world_csp,
@@ -75,10 +75,12 @@ class CONTENT_EXPORT NavigationHandleImpl : public NavigationHandle {
       bool has_user_gesture = false,
       ui::PageTransition transition = ui::PAGE_TRANSITION_LINK,
       bool is_external_protocol = false,
-      RequestContextType request_context_type =
-          REQUEST_CONTEXT_TYPE_UNSPECIFIED,
+      blink::mojom::RequestContextType request_context_type =
+          blink::mojom::RequestContextType::UNSPECIFIED,
       blink::WebMixedContentContextType mixed_content_context_type =
-          blink::WebMixedContentContextType::kBlockable);
+          blink::WebMixedContentContextType::kBlockable,
+      const std::string& href_translate = std::string(),
+      base::TimeTicks input_start = base::TimeTicks());
 
   ~NavigationHandleImpl() override;
 
@@ -110,7 +112,8 @@ class CONTENT_EXPORT NavigationHandleImpl : public NavigationHandle {
   const std::vector<GURL>& GetRedirectChain() override;
   int GetFrameTreeNodeId() override;
   RenderFrameHostImpl* GetParentFrame() override;
-  const base::TimeTicks& NavigationStart() override;
+  base::TimeTicks NavigationStart() override;
+  base::TimeTicks NavigationInputStart() override;
   bool IsPost() override;
   const scoped_refptr<network::ResourceRequestBody>& GetResourceRequestBody()
       override;
@@ -147,9 +150,12 @@ class CONTENT_EXPORT NavigationHandleImpl : public NavigationHandle {
       base::Optional<net::SSLInfo> ssl_info) override;
   NavigationThrottle::ThrottleCheckResult CallWillProcessResponseForTesting(
       RenderFrameHost* render_frame_host,
-      const std::string& raw_response_header) override;
+      const std::string& raw_response_header,
+      bool was_cached,
+      const net::ProxyServer& proxy_server) override;
   void CallDidCommitNavigationForTesting(const GURL& url) override;
   void CallResumeForTesting() override;
+  bool IsDeferredForTesting() override;
   bool WasStartedFromContextMenu() const override;
   const GURL& GetSearchableFormURL() override;
   const std::string& GetSearchableFormEncoding() override;
@@ -159,6 +165,15 @@ class CONTENT_EXPORT NavigationHandleImpl : public NavigationHandle {
   const GlobalRequestID& GetGlobalRequestID() override;
   bool IsDownload() override;
   bool IsFormSubmission() override;
+  bool IsSignedExchangeInnerResponse() override;
+  bool WasResponseCached() override;
+  const net::ProxyServer& GetProxyServer() override;
+  const std::string& GetHrefTranslate() override;
+
+  const std::string& origin_policy() const { return origin_policy_; }
+  void set_origin_policy(const std::string& origin_policy) {
+    origin_policy_ = origin_policy;
+  }
 
   // Resume and CancelDeferredNavigation must only be called by the
   // NavigationThrottle that is currently deferring the navigation.
@@ -187,7 +202,7 @@ class CONTENT_EXPORT NavigationHandleImpl : public NavigationHandle {
   // expose the NavigationHandle when navigating to an InterstitialPage.
   NavigatorDelegate* GetDelegate() const;
 
-  RequestContextType request_context_type() const {
+  blink::mojom::RequestContextType request_context_type() const {
     DCHECK_GE(state_, WILL_SEND_REQUEST);
     return request_context_type_;
   }
@@ -204,15 +219,6 @@ class CONTENT_EXPORT NavigationHandleImpl : public NavigationHandle {
 
   void set_net_error_code(net::Error net_error_code) {
     net_error_code_ = net_error_code;
-  }
-
-  // Returns whether the navigation is currently being transferred from one
-  // RenderFrameHost to another. In particular, a DidStartProvisionalLoad IPC
-  // for the navigation URL, received in the new RenderFrameHost, should not
-  // indicate the start of a new navigation in that case.
-  bool is_transferring() const { return is_transferring_; }
-  void set_is_transferring(bool is_transferring) {
-    is_transferring_ = is_transferring;
   }
 
   // Updates the RenderFrameHost that is about to commit the navigation. This
@@ -296,6 +302,8 @@ class CONTENT_EXPORT NavigationHandleImpl : public NavigationHandle {
       bool should_replace_current_entry,
       bool is_download,
       bool is_stream,
+      bool is_signed_exchange_inner_response,
+      bool was_cached,
       const ThrottleChecksFinishedCallback& callback);
 
   // Returns the FrameTreeNode this navigation is happening in.
@@ -363,10 +371,22 @@ class CONTENT_EXPORT NavigationHandleImpl : public NavigationHandle {
     source_location_ = source_location;
   }
 
+  void set_proxy_server(const net::ProxyServer& proxy_server) {
+    proxy_server_ = proxy_server;
+  }
+
   // Sets ID of the RenderProcessHost we expect the navigation to commit in.
   // This is used to inform the RenderProcessHost to expect a navigation to the
   // url we're navigating to.
   void SetExpectedProcess(RenderProcessHost* expected_process);
+
+  NavigationThrottle* GetDeferringThrottleForTesting() const {
+    return GetDeferringThrottle();
+  }
+
+  // Sets the READY_TO_COMMIT -> DID_COMMIT timeout.  Resets the timeout to the
+  // default value if |timeout| is zero.
+  static void SetCommitTimeoutForTesting(const base::TimeDelta& timeout);
 
  private:
   friend class NavigationHandleImplTest;
@@ -377,7 +397,7 @@ class CONTENT_EXPORT NavigationHandleImpl : public NavigationHandle {
       FrameTreeNode* frame_tree_node,
       bool is_renderer_initiated,
       bool is_same_document,
-      const base::TimeTicks& navigation_start,
+      base::TimeTicks navigation_start,
       int pending_nav_entry_id,
       bool started_from_context_menu,
       CSPDisposition should_check_main_world_csp,
@@ -390,8 +410,10 @@ class CONTENT_EXPORT NavigationHandleImpl : public NavigationHandle {
       bool has_user_gesture,
       ui::PageTransition transition,
       bool is_external_protocol,
-      RequestContextType request_context_type,
-      blink::WebMixedContentContextType mixed_content_context_type);
+      blink::mojom::RequestContextType request_context_type,
+      blink::WebMixedContentContextType mixed_content_context_type,
+      const std::string& href_translate,
+      base::TimeTicks input_start);
 
   NavigationThrottle::ThrottleCheckResult CheckWillStartRequest();
   NavigationThrottle::ThrottleCheckResult CheckWillRedirectRequest();
@@ -431,6 +453,17 @@ class CONTENT_EXPORT NavigationHandleImpl : public NavigationHandle {
   // nullptr;
   NavigationThrottle* GetDeferringThrottle() const;
 
+  // Called if READY_TO_COMMIT -> COMMIT state transition takes an unusually
+  // long time.
+  void OnCommitTimeout();
+
+  // Called by the RenderProcessHost to handle the case when the process
+  // changed its state of being blocked.
+  void RenderProcessBlockedStateChanged(bool blocked);
+
+  void StopCommitTimeout();
+  void RestartCommitTimeout();
+
   // See NavigationHandle for a description of those member variables.
   GURL url_;
   scoped_refptr<SiteInstance> starting_site_instance_;
@@ -449,6 +482,7 @@ class CONTENT_EXPORT NavigationHandleImpl : public NavigationHandle {
   scoped_refptr<net::HttpResponseHeaders> response_headers_;
   net::HttpResponseInfo::ConnectionInfo connection_info_;
   net::SSLInfo ssl_info_;
+  std::string href_translate_;
 
   // The original url of the navigation. This may differ from |url_| if the
   // navigation encounters redirects.
@@ -483,14 +517,27 @@ class CONTENT_EXPORT NavigationHandleImpl : public NavigationHandle {
   // The time this navigation started.
   const base::TimeTicks navigation_start_;
 
+  // The time the input event that lead to this navigation started.
+  // Currently available only if the navigation was initiated by
+  // the user clicking a link in the renderer.
+  const base::TimeTicks input_start_;
+
   // The time this naviagtion was ready to commit.
   base::TimeTicks ready_to_commit_time_;
+
+  // Timer for detecting an unexpectedly long time to commit a navigation.
+  base::OneShotTimer commit_timeout_timer_;
+
+  // The subscription to the notification of the changing of the render
+  // process's blocked state.
+  std::unique_ptr<base::CallbackList<void(bool)>::Subscription>
+      render_process_blocked_state_changed_subscription_;
 
   // The unique id of the corresponding NavigationEntry.
   int pending_nav_entry_id_;
 
   // The fetch request context type.
-  RequestContextType request_context_type_;
+  blink::mojom::RequestContextType request_context_type_;
 
   // The mixed content context type for potential mixed content checks.
   blink::WebMixedContentContextType mixed_content_context_type_;
@@ -557,9 +604,8 @@ class CONTENT_EXPORT NavigationHandleImpl : public NavigationHandle {
   // in it.
   int expected_render_process_host_id_;
 
-  // Whether the navigation is in the middle of a transfer. Set to false when
-  // the DidStartProvisionalLoad is received from the new renderer.
-  bool is_transferring_;
+  // The origin policy that applies to this navigation. Empty if none applies.
+  std::string origin_policy_;
 
   // Whether or not the navigation results from the submission of a form.
   bool is_form_submission_;
@@ -570,6 +616,15 @@ class CONTENT_EXPORT NavigationHandleImpl : public NavigationHandle {
   // Whether the navigation ended up being a download or a stream.
   bool is_download_;
   bool is_stream_;
+
+  // True if the target is an inner response of a signed exchange.
+  bool is_signed_exchange_inner_response_;
+
+  // Whether the response was cached.
+  bool was_cached_;
+
+  // Which proxy server was used for this navigation, if any.
+  net::ProxyServer proxy_server_;
 
   // False by default unless the navigation started within a context menu.
   bool started_from_context_menu_;

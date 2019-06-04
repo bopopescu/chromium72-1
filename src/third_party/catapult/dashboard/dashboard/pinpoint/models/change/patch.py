@@ -3,15 +3,10 @@
 # found in the LICENSE file.
 
 import collections
+import re
 import urlparse
 
 from dashboard.services import gerrit_service
-
-
-def FromDict(data):
-  # If we have more Patch types in the future, we can loop
-  # through them all and try each one's FromDict() in turn.
-  return GerritPatch.FromDict(data)
 
 
 class GerritPatch(collections.namedtuple(
@@ -65,8 +60,8 @@ class GerritPatch(collections.namedtuple(
     }
 
   @classmethod
-  def FromDict(cls, data):
-    """Creates a new GerritPatch from the given data.
+  def FromData(cls, data):
+    """Creates a new GerritPatch from the given request data.
 
     Args:
       data: A patch URL string, for example:
@@ -80,34 +75,76 @@ class GerritPatch(collections.namedtuple(
       A GerritPatch.
 
     Raises:
-      KeyError: The patch doesn't have the given revision.
+      KeyError: The patch doesn't exist or doesn't have the given revision.
       ValueError: The URL has an unrecognized format.
     """
     if isinstance(data, basestring):
-      url_parts = urlparse.urlparse(data)
-      server = urlparse.urlunsplit(
-          (url_parts.scheme, url_parts.netloc, '', '', ''))
-
-      path_parts = iter(url_parts.path.split('/'))
-      for path_part in path_parts:
-        if path_part == '+':
-          break
-      else:
-        raise ValueError('Unknown patch URL format: ' + data)
-
-      change = path_parts.next()
-      try:
-        revision = int(path_parts.next())
-      except StopIteration:
-        revision = None
+      return cls.FromUrl(data)
     else:
-      server = data['server']
-      change = data['change']
-      revision = data.get('revision')
+      return cls.FromDict(data)
+
+  @classmethod
+  def FromUrl(cls, url):
+    """Creates a new GerritPatch from the given URL.
+
+    Args:
+      url: A patch URL string, for example:
+        https://chromium-review.googlesource.com/c/chromium/tools/build/+/679595
+
+    Returns:
+      A GerritPatch.
+
+    Raises:
+      KeyError: The patch doesn't have the given revision.
+      ValueError: The URL has an unrecognized format.
+    """
+    url_parts = urlparse.urlparse(url)
+    server = urlparse.urlunsplit(
+        (url_parts.scheme, url_parts.netloc, '', '', ''))
+
+    change_rev_match = re.match(r'^.*\/\+\/(\d+)(?:\/(\d+))?\/?$', url)
+    change_match = re.match(r'^\/(\d+)\/?$', url_parts.path)
+    if change_rev_match:
+      change = change_rev_match.group(1)
+      revision = change_rev_match.group(2)
+    elif change_match:  # support URLs returned by the 'git cl issue' command
+      change = change_match.group(1)
+      revision = None
+    else:
+      raise ValueError('Unknown patch URL format: ' + url)
+
+    return cls.FromDict({
+        'server': server,
+        'change': int(change),
+        'revision': int(revision) if revision else None,
+    })
+
+  @classmethod
+  def FromDict(cls, data):
+    """Creates a new GerritPatch from the given dict.
+
+    Args:
+      data: A dict containing {server, change, revision [optional]}.
+        change is a {change-id} as described in the Gerrit API documentation.
+        revision is a commit ID hash or numeric patch number.
+        If revision is omitted, it is the change's current revision.
+
+    Returns:
+      A GerritPatch.
+
+    Raises:
+      KeyError: The patch doesn't have the given revision.
+    """
+    server = data['server']
+    change = data['change']
+    revision = data.get('revision')
 
     # Look up the patch and convert everything to a canonical format.
-    patch_info = gerrit_service.GetChange(
-        server, change, fields=('ALL_REVISIONS',))
+    try:
+      patch_info = gerrit_service.GetChange(
+          server, change, fields=('ALL_REVISIONS',))
+    except gerrit_service.NotFoundError as e:
+      raise KeyError(str(e))
     change = patch_info['id']
 
     # Revision can be a revision ID or numeric patch number.

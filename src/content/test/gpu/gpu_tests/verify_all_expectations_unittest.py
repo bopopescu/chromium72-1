@@ -59,10 +59,6 @@ class StubBrowser(object):
       gl_renderer, passthrough_cmd_decoder)
     self.browser_type = browser_type
 
-  @property
-  def supports_system_info(self):
-    return True
-
   def GetSystemInfo(self):
     return self._system_info
 
@@ -150,6 +146,7 @@ class VerifyTestExpectations(unittest.TestCase):
       'info_collection_test.InfoCollectionExpectations',
       'maps_expectations.MapsExpectations',
       'pixel_expectations.PixelExpectations',
+      'power_measurement_integration_test.PowerMeasurementExpectations',
       'screenshot_sync_expectations.ScreenshotSyncExpectations',
       'trace_test_expectations.TraceTestExpectations',
       'webgl_conformance_expectations.WebGLConformanceExpectations',

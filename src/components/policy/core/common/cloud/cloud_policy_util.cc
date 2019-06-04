@@ -16,6 +16,12 @@
 #include <wincred.h>
 #endif
 
+#if defined(OS_LINUX) && !defined(OS_CHROMEOS) || defined(OS_MACOSX)
+#include <pwd.h>
+#include <sys/types.h>
+#include <unistd.h>
+#endif
+
 #if defined(OS_MACOSX)
 #import <SystemConfiguration/SCDynamicStoreCopySpecific.h>
 #include <stddef.h>
@@ -29,7 +35,7 @@
 #include <utility>
 
 #include "base/logging.h"
-#include "base/sys_info.h"
+#include "base/system/sys_info.h"
 #include "components/version_info/version_info.h"
 
 #if defined(OS_WIN)
@@ -40,16 +46,18 @@
 
 #if defined(OS_MACOSX)
 #include "base/mac/scoped_cftyperef.h"
-#include "base/sys_info.h"
 #include "base/strings/string_util.h"
 #include "base/strings/sys_string_conversions.h"
+#include "base/system/sys_info.h"
 #endif
 
 #if defined(OS_LINUX) && !defined(OS_CHROMEOS)
-#include "base/sys_info.h"
+#include "base/system/sys_info.h"
 #endif
 
 namespace policy {
+
+namespace em = enterprise_management;
 
 std::string GetMachineName() {
 #if defined(OS_LINUX) && !defined(OS_CHROMEOS)
@@ -125,7 +133,13 @@ std::string GetOSArchitecture() {
 }
 
 std::string GetOSUsername() {
-#if defined(OS_WIN)
+#if defined(OS_LINUX) && !defined(OS_CHROMEOS) || defined(OS_MACOSX)
+  struct passwd* creds = getpwuid(getuid());
+  if (!creds || !creds->pw_name)
+    return std::string();
+
+  return creds->pw_name;
+#elif defined(OS_WIN)
   WCHAR username[CREDUI_MAX_USERNAME_LENGTH + 1] = {};
   DWORD username_length = sizeof(username);
 
@@ -139,10 +153,24 @@ std::string GetOSUsername() {
 
   return base::WideToUTF8(username);
 #else
-  // TODO(crbug.com/847265): For now, this is only supported on Windows. Other
-  // platforms will be added when enabled.
+  NOTREACHED();
   return std::string();
-#endif  // OS_WIN
+#endif
+}
+
+em::Channel ConvertToProtoChannel(version_info::Channel channel) {
+  switch (channel) {
+    case version_info::Channel::UNKNOWN:
+      return em::CHANNEL_UNKNOWN;
+    case version_info::Channel::CANARY:
+      return em::CHANNEL_CANARY;
+    case version_info::Channel::DEV:
+      return em::CHANNEL_DEV;
+    case version_info::Channel::BETA:
+      return em::CHANNEL_BETA;
+    case version_info::Channel::STABLE:
+      return em::CHANNEL_STABLE;
+  }
 }
 
 }  // namespace policy

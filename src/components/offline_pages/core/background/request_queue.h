@@ -10,6 +10,7 @@
 #include <memory>
 #include <set>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "base/callback.h"
@@ -24,11 +25,12 @@
 #include "components/offline_pages/core/background/save_page_request.h"
 #include "components/offline_pages/core/offline_page_item.h"
 #include "components/offline_pages/core/offline_store_types.h"
-#include "components/offline_pages/core/task_queue.h"
+#include "components/offline_pages/task/task_queue.h"
 
 namespace offline_pages {
 
 class CleanupTaskFactory;
+class ClientPolicyController;
 class RequestQueueStore;
 
 // Class responsible for managing save page requests.
@@ -45,8 +47,7 @@ class RequestQueue : public TaskQueue::Delegate {
       AddRequestCallback;
 
   // Callback used by |ChangeRequestsState|.
-  typedef base::OnceCallback<void(std::unique_ptr<UpdateRequestsResult>)>
-      UpdateCallback;
+  typedef base::OnceCallback<void(UpdateRequestsResult)> UpdateCallback;
 
   // Callback used by |UdpateRequest|.
   typedef base::OnceCallback<void(UpdateRequestResult)> UpdateRequestCallback;
@@ -87,6 +88,10 @@ class RequestQueue : public TaskQueue::Delegate {
   // |callback|.
   void MarkAttemptAborted(int64_t request_id, UpdateCallback callback);
 
+  // Marks attempt with |request_id| as deferred. Results are returned through
+  // |callback|.
+  void MarkAttemptDeferred(int64_t request_id, UpdateCallback callback);
+
   // Marks attempt with |request_id| as completed. The attempt may have
   // completed with either success or failure (stored in FailState). Results are
   // returned through |callback|.
@@ -98,12 +103,13 @@ class RequestQueue : public TaskQueue::Delegate {
   // callbacks.
   void PickNextRequest(
       OfflinerPolicy* policy,
+      ClientPolicyController* policy_controller,
       PickRequestTask::RequestPickedCallback picked_callback,
       PickRequestTask::RequestNotPickedCallback not_picked_callback,
       PickRequestTask::RequestCountCallback request_count_callback,
-      DeviceConditions& conditions,
-      std::set<int64_t>& disabled_requests,
-      base::circular_deque<int64_t>& prioritized_requests);
+      DeviceConditions conditions,
+      const std::set<int64_t>& disabled_requests,
+      base::circular_deque<int64_t>* prioritized_requests);
 
   // Reconcile any requests that were active the last time chrome exited.
   void ReconcileRequests(UpdateCallback callback);
@@ -119,6 +125,8 @@ class RequestQueue : public TaskQueue::Delegate {
   void SetCleanupFactory(std::unique_ptr<CleanupTaskFactory> factory) {
     cleanup_factory_ = std::move(factory);
   }
+
+  RequestQueueStore* GetStoreForTesting() { return store_.get(); }
 
  private:
   // Store initialization functions.

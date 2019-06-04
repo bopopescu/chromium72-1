@@ -29,6 +29,7 @@
 
 #include "base/macros.h"
 #include "third_party/blink/renderer/core/core_export.h"
+#include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/dom/document_shutdown_observer.h"
 #include "third_party/blink/renderer/core/editing/frame_selection.h"
 #include "third_party/blink/renderer/core/editing/position_with_affinity.h"
@@ -48,6 +49,8 @@ class CORE_EXPORT SelectionController final
 
  public:
   static SelectionController* Create(LocalFrame&);
+
+  explicit SelectionController(LocalFrame&);
   virtual ~SelectionController();
   void Trace(blink::Visitor*) override;
 
@@ -83,8 +86,6 @@ class CORE_EXPORT SelectionController final
  private:
   friend class SelectionControllerTest;
 
-  explicit SelectionController(LocalFrame&);
-
   enum class AppendTrailingWhitespace { kShouldAppend, kDontAppend };
   enum class SelectInputEventType { kTouch, kMouse };
   enum EndPointsAdjustmentMode {
@@ -118,7 +119,7 @@ class CORE_EXPORT SelectionController final
   FrameSelection& Selection() const;
 
   // Implements |DocumentShutdownObserver|.
-  // TODO(yosin): We should relocate |m_originalBaseInFlatTree| when DOM tree
+  // TODO(yosin): We should relocate |original_base_in_flat_tree_| when DOM tree
   // changed.
   void ContextDestroyed(Document*) final;
 

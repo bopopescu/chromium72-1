@@ -7,14 +7,13 @@
 
 #include <cstddef>
 
-#include "base/compiler_specific.h"
 #include "base/macros.h"
 #include "net/third_party/quic/core/crypto/quic_encrypter.h"
-#include "net/third_party/quic/core/crypto/scoped_evp_aead_ctx.h"
 #include "net/third_party/quic/platform/api/quic_export.h"
 #include "net/third_party/quic/platform/api/quic_string_piece.h"
+#include "third_party/boringssl/src/include/openssl/aead.h"
 
-namespace net {
+namespace quic {
 
 // AeadBaseEncrypter is the base class of AEAD QuicEncrypter subclasses.
 class QUIC_EXPORT_PRIVATE AeadBaseEncrypter : public QuicEncrypter {
@@ -26,6 +25,8 @@ class QUIC_EXPORT_PRIVATE AeadBaseEncrypter : public QuicEncrypter {
                     size_t auth_tag_size,
                     size_t nonce_size,
                     bool use_ietf_nonce_construction);
+  AeadBaseEncrypter(const AeadBaseEncrypter&) = delete;
+  AeadBaseEncrypter& operator=(const AeadBaseEncrypter&) = delete;
   ~AeadBaseEncrypter() override;
 
   // QuicEncrypter implementation
@@ -73,11 +74,9 @@ class QUIC_EXPORT_PRIVATE AeadBaseEncrypter : public QuicEncrypter {
   // The IV used to construct the nonce.
   unsigned char iv_[kMaxNonceSize];
 
-  ScopedEVPAEADCtx ctx_;
-
-  DISALLOW_COPY_AND_ASSIGN(AeadBaseEncrypter);
+  bssl::ScopedEVP_AEAD_CTX ctx_;
 };
 
-}  // namespace net
+}  // namespace quic
 
 #endif  // NET_THIRD_PARTY_QUIC_CORE_CRYPTO_AEAD_BASE_ENCRYPTER_H_

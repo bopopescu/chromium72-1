@@ -32,10 +32,13 @@ namespace blink {
 struct AttributeTriggers;
 class Color;
 class DocumentFragment;
+class ElementInternals;
 class ExceptionState;
 class FormAssociated;
 class HTMLFormElement;
 class KeyboardEvent;
+class StringOrTrustedScript;
+class StringTreatNullAsEmptyStringOrTrustedScript;
 
 enum TranslateAttributeMode {
   kTranslateAttributeYes,
@@ -57,6 +60,12 @@ class CORE_EXPORT HTMLElement : public Element {
   int tabIndex() const override;
 
   void setInnerText(const String&, ExceptionState&);
+  virtual void setInnerText(const StringOrTrustedScript&, ExceptionState&);
+  virtual void setInnerText(const StringTreatNullAsEmptyStringOrTrustedScript&,
+                            ExceptionState&);
+  String innerText();
+  void innerText(StringOrTrustedScript& result);
+  void innerText(StringTreatNullAsEmptyStringOrTrustedScript& result);
   void setOuterText(const String&, ExceptionState&);
 
   virtual bool HasCustomFocusLogic() const;
@@ -102,7 +111,7 @@ class CORE_EXPORT HTMLElement : public Element {
   virtual bool IsLabelable() const { return false; }
   // http://www.whatwg.org/specs/web-apps/current-work/multipage/elements.html#interactive-content
   virtual bool IsInteractiveContent() const;
-  void DefaultEventHandler(Event*) override;
+  void DefaultEventHandler(Event&) override;
 
   static const AtomicString& EventNameForAttributeName(
       const QualifiedName& attr_name);
@@ -121,7 +130,9 @@ class CORE_EXPORT HTMLElement : public Element {
 
   Element* unclosedOffsetParent();
 
-  virtual FormAssociated* ToFormAssociatedOrNull() { return nullptr; };
+  ElementInternals* attachInternals(ExceptionState& exception_state);
+  virtual FormAssociated* ToFormAssociatedOrNull() { return nullptr; }
+  bool IsFormAssociatedCustomElement() const;
 
  protected:
   HTMLElement(const QualifiedName& tag_name, Document&, ConstructionType);
@@ -154,7 +165,9 @@ class CORE_EXPORT HTMLElement : public Element {
   void ChildrenChanged(const ChildrenChange&) override;
   void CalculateAndAdjustDirectionality();
 
-  InsertionNotificationRequest InsertedInto(ContainerNode*) override;
+  InsertionNotificationRequest InsertedInto(ContainerNode&) override;
+  void RemovedFrom(ContainerNode& insertion_point) override;
+  void DidMoveToNewDocument(Document& old_document) override;
 
  private:
   String DebugNodeName() const final;
@@ -178,7 +191,7 @@ class CORE_EXPORT HTMLElement : public Element {
 
   TranslateAttributeMode GetTranslateAttributeMode() const;
 
-  void HandleKeypressEvent(KeyboardEvent*);
+  void HandleKeypressEvent(KeyboardEvent&);
 
   static AttributeTriggers* TriggersForAttributeName(
       const QualifiedName& attr_name);

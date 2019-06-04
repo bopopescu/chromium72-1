@@ -20,7 +20,7 @@ namespace test {
 
 FakeFidoDiscovery::FakeFidoDiscovery(FidoTransportProtocol transport,
                                      StartMode mode)
-    : FidoDiscovery(transport), mode_(mode) {}
+    : FidoDeviceDiscovery(transport), mode_(mode) {}
 FakeFidoDiscovery::~FakeFidoDiscovery() = default;
 
 void FakeFidoDiscovery::WaitForCallToStart() {
@@ -43,7 +43,7 @@ void FakeFidoDiscovery::StartInternal() {
   if (mode_ == StartMode::kAutomatic) {
     base::SequencedTaskRunnerHandle::Get()->PostTask(
         FROM_HERE, base::BindOnce(&FakeFidoDiscovery::SimulateStarted,
-                                  base::Unretained(this), true /* success */));
+                                  AsWeakPtr(), true /* success */));
   }
 }
 
@@ -80,7 +80,7 @@ FakeFidoDiscovery* ScopedFakeFidoDiscoveryFactory::ForgeNextCableDiscovery(
   return next_cable_discovery_.get();
 }
 
-std::unique_ptr<FidoDiscovery>
+std::unique_ptr<FidoDiscoveryBase>
 ScopedFakeFidoDiscoveryFactory::CreateFidoDiscovery(
     FidoTransportProtocol transport,
     ::service_manager::Connector* connector) {

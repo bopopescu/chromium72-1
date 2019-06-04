@@ -18,24 +18,28 @@
 #include "third_party/blink/renderer/core/script/document_write_intervention.h"
 #include "third_party/blink/renderer/core/script/script_loader.h"
 #include "third_party/blink/renderer/platform/bindings/script_state.h"
+#include "third_party/blink/renderer/platform/histogram.h"
 #include "third_party/blink/renderer/platform/loader/fetch/cached_metadata.h"
 #include "third_party/blink/renderer/platform/loader/fetch/memory_cache.h"
 #include "third_party/blink/renderer/platform/loader/fetch/raw_resource.h"
 #include "third_party/blink/renderer/platform/loader/fetch/resource_client.h"
 #include "third_party/blink/renderer/platform/loader/fetch/source_keyed_cached_metadata_handler.h"
 #include "third_party/blink/renderer/platform/runtime_enabled_features.h"
+#include "third_party/blink/renderer/platform/wtf/functional.h"
 
 namespace blink {
 
+// <specdef href="https://html.spec.whatwg.org/#fetch-a-classic-script">
 ClassicPendingScript* ClassicPendingScript::Fetch(
     const KURL& url,
     Document& element_document,
     const ScriptFetchOptions& options,
+    CrossOriginAttributeValue cross_origin,
     const WTF::TextEncoding& encoding,
     ScriptElementBase* element,
     FetchParameters::DeferOption defer) {
   FetchParameters params = options.CreateFetchParameters(
-      url, element_document.GetSecurityOrigin(), encoding, defer);
+      url, element_document.GetSecurityOrigin(), cross_origin, encoding, defer);
 
   ClassicPendingScript* pending_script = new ClassicPendingScript(
       element, TextPosition(), ScriptSourceLocationType::kExternalFile, options,
@@ -49,12 +53,15 @@ ClassicPendingScript* ClassicPendingScript::Fetch(
   pending_script->intervened_ =
       MaybeDisallowFetchForDocWrittenScript(params, element_document);
 
-  // <spec
-  // href="https://html.spec.whatwg.org/multipage/webappapis.html#fetch-a-classic-script"
-  // step="2">Set request's client to settings object.</spec>
+  // <spec step="2">Set request's client to settings object.</spec>
   //
   // Note: |element_document| corresponds to the settings object.
-  ScriptResource::Fetch(params, element_document.Fetcher(), pending_script);
+  //
+  // We allow streaming, as WatchForLoad() is always called when the script
+  // needs to execute and the ScriptResource is not finished, so
+  // SetClientIsWaitingForFinished is always set on the resource.
+  ScriptResource::Fetch(params, element_document.Fetcher(), pending_script,
+                        ScriptResource::kAllowStreaming);
   pending_script->CheckState();
   return pending_script;
 }
@@ -81,6 +88,8 @@ ClassicPendingScript::ClassicPendingScript(
       options_(options),
       base_url_for_inline_script_(
           is_external ? KURL() : element->GetDocument().BaseURL()),
+      source_text_for_inline_script_(is_external ? String()
+                                                 : element->TextFromChildren()),
       source_location_type_(source_location_type),
       is_external_(is_external),
       ready_state_(is_external ? kWaitingForResource : kReady),
@@ -94,67 +103,114 @@ ClassicPendingScript::~ClassicPendingScript() {}
 
 NOINLINE void ClassicPendingScript::CheckState() const {
   // TODO(hiroshige): Turn these CHECK()s into DCHECK() before going to beta.
-  CHECK(!prefinalizer_called_);
   CHECK(GetElement());
   CHECK_EQ(is_external_, !!GetResource());
-  CHECK(GetResource() || !streamer_);
 }
 
-void ClassicPendingScript::Prefinalize() {
-  // TODO(hiroshige): Consider moving this to ScriptStreamer's prefinalizer.
-  // https://crbug.com/715309
-  CancelStreaming();
-  prefinalizer_called_ = true;
+namespace {
+
+enum class StreamedBoolean {
+  // Must match BooleanStreamed in enums.xml.
+  kNotStreamed = 0,
+  kStreamed = 1,
+  kMaxValue = kStreamed
+};
+
+void RecordStartedStreamingHistogram(ScriptSchedulingType type,
+                                     bool did_use_streamer) {
+  StreamedBoolean streamed = did_use_streamer ? StreamedBoolean::kStreamed
+                                              : StreamedBoolean::kNotStreamed;
+  switch (type) {
+    case ScriptSchedulingType::kParserBlocking: {
+      UMA_HISTOGRAM_ENUMERATION(
+          "WebCore.Scripts.ParsingBlocking.StartedStreaming", streamed);
+      break;
+    }
+    case ScriptSchedulingType::kDefer: {
+      UMA_HISTOGRAM_ENUMERATION("WebCore.Scripts.Deferred.StartedStreaming",
+                                streamed);
+      break;
+    }
+    case ScriptSchedulingType::kAsync: {
+      UMA_HISTOGRAM_ENUMERATION("WebCore.Scripts.Async.StartedStreaming",
+                                streamed);
+      break;
+    }
+    default: {
+      UMA_HISTOGRAM_ENUMERATION("WebCore.Scripts.Other.StartedStreaming",
+                                streamed);
+      break;
+    }
+  }
+}
+
+void RecordNotStreamingReasonHistogram(
+    ScriptSchedulingType type,
+    ScriptStreamer::NotStreamingReason reason) {
+  switch (type) {
+    case ScriptSchedulingType::kParserBlocking: {
+      UMA_HISTOGRAM_ENUMERATION(
+          "WebCore.Scripts.ParsingBlocking.NotStreamingReason", reason,
+          ScriptStreamer::NotStreamingReason::kCount);
+      break;
+    }
+    case ScriptSchedulingType::kDefer: {
+      UMA_HISTOGRAM_ENUMERATION("WebCore.Scripts.Deferred.NotStreamingReason",
+                                reason,
+                                ScriptStreamer::NotStreamingReason::kCount);
+      break;
+    }
+    case ScriptSchedulingType::kAsync: {
+      UMA_HISTOGRAM_ENUMERATION("WebCore.Scripts.Async.NotStreamingReason",
+                                reason,
+                                ScriptStreamer::NotStreamingReason::kCount);
+      break;
+    }
+    default: {
+      UMA_HISTOGRAM_ENUMERATION("WebCore.Scripts.Other.NotStreamingReason",
+                                reason,
+                                ScriptStreamer::NotStreamingReason::kCount);
+      break;
+    }
+  }
+}
+
+}  // namespace
+
+void ClassicPendingScript::RecordStreamingHistogram(
+    ScriptSchedulingType type,
+    bool can_use_streamer,
+    ScriptStreamer::NotStreamingReason reason) {
+  RecordStartedStreamingHistogram(type, can_use_streamer);
+  if (!can_use_streamer) {
+    DCHECK_NE(ScriptStreamer::kInvalid, reason);
+    RecordNotStreamingReasonHistogram(type, reason);
+  }
 }
 
 void ClassicPendingScript::DisposeInternal() {
   MemoryCoordinator::Instance().UnregisterClient(this);
   ClearResource();
   integrity_failure_ = false;
-  CancelStreaming();
 }
 
-void ClassicPendingScript::StreamingFinished() {
-  CheckState();
-  DCHECK(streamer_);  // Should only be called by ScriptStreamer.
-  DCHECK(IsCurrentlyStreaming());
-
-  if (ready_state_ == kWaitingForStreaming) {
-    FinishWaitingForStreaming();
-  } else if (ready_state_ == kReadyStreaming) {
-    FinishReadyStreaming();
-  } else {
-    NOTREACHED();
+void ClassicPendingScript::WatchForLoad(PendingScriptClient* client) {
+  if (is_external_) {
+    // Once we are watching the ClassicPendingScript for load, we won't ever
+    // try to start streaming this resource via this ClassicPendingScript, so
+    // we mark the resource to instead get a finished notification when loading
+    // (rather than streaming) completes.
+    //
+    // Do this in a task rather than directly to make sure the IsReady state
+    // of PendingScript does not change during this call.
+    GetElement()
+        ->GetDocument()
+        .GetTaskRunner(TaskType::kNetworking)
+        ->PostTask(FROM_HERE,
+                   WTF::Bind(&ScriptResource::SetClientIsWaitingForFinished,
+                             WrapPersistent(ToScriptResource(GetResource()))));
   }
-
-  DCHECK(!IsCurrentlyStreaming());
-}
-
-void ClassicPendingScript::FinishWaitingForStreaming() {
-  CheckState();
-  DCHECK(GetResource());
-  DCHECK_EQ(ready_state_, kWaitingForStreaming);
-
-  bool error_occurred = GetResource()->ErrorOccurred() || integrity_failure_;
-  AdvanceReadyState(error_occurred ? kErrorOccurred : kReady);
-}
-
-void ClassicPendingScript::FinishReadyStreaming() {
-  CheckState();
-  DCHECK(GetResource());
-  DCHECK_EQ(ready_state_, kReadyStreaming);
-  AdvanceReadyState(kReady);
-}
-
-void ClassicPendingScript::CancelStreaming() {
-  if (!streamer_)
-    return;
-
-  streamer_->Cancel();
-  streamer_ = nullptr;
-  streamer_done_.Reset();
-  is_currently_streaming_ = false;
-  DCHECK(!IsCurrentlyStreaming());
+  PendingScript::WatchForLoad(client);
 }
 
 void ClassicPendingScript::NotifyFinished(Resource* resource) {
@@ -181,6 +237,7 @@ void ClassicPendingScript::NotifyFinished(Resource* resource) {
   //
   // See https://crbug.com/500701 for more information.
   CheckState();
+  DCHECK(GetResource());
   ScriptElementBase* element = GetElement();
   if (element) {
     SubresourceIntegrityHelper::DoReport(element->GetDocument(),
@@ -198,28 +255,17 @@ void ClassicPendingScript::NotifyFinished(Resource* resource) {
   }
 
   if (intervened_) {
+    CrossOriginAttributeValue cross_origin =
+        GetCrossOriginAttributeValue(element->CrossOriginAttributeValue());
     PossiblyFetchBlockedDocWriteScript(resource, element->GetDocument(),
-                                       options_);
+                                       options_, cross_origin);
   }
 
-  // We are now waiting for script streaming to finish.
-  // If there is no script streamer, this step completes immediately.
-  AdvanceReadyState(kWaitingForStreaming);
-  if (streamer_)
-    streamer_->NotifyFinished();
-  else
-    FinishWaitingForStreaming();
-}
-
-void ClassicPendingScript::DataReceived(Resource* resource,
-                                        const char*,
-                                        size_t) {
-  if (streamer_)
-    streamer_->NotifyAppendData(ToScriptResource(resource));
+  bool error_occurred = GetResource()->ErrorOccurred() || integrity_failure_;
+  AdvanceReadyState(error_occurred ? kErrorOccurred : kReady);
 }
 
 void ClassicPendingScript::Trace(blink::Visitor* visitor) {
-  visitor->Trace(streamer_);
   ResourceClient::Trace(visitor);
   MemoryCoordinatorClient::Trace(visitor);
   PendingScript::Trace(visitor);
@@ -244,15 +290,15 @@ static SingleCachedMetadataHandler* GetInlineCacheHandler(const String& source,
   return document_cache_handler->HandlerForSource(source);
 }
 
-ClassicScript* ClassicPendingScript::GetSource(const KURL& document_url,
-                                               bool& error_occurred) const {
+ClassicScript* ClassicPendingScript::GetSource(const KURL& document_url) const {
   CheckState();
   DCHECK(IsReady());
 
-  error_occurred = ErrorOccurred();
+  if (ready_state_ == kErrorOccurred)
+    return nullptr;
+
   if (!is_external_) {
     SingleCachedMetadataHandler* cache_handler = nullptr;
-    String source = GetElement()->TextFromChildren();
     // We only create an inline cache handler for html-embedded scripts, not
     // for scripts produced by document.write, or not parser-inserted. This is
     // because we expect those to be too dynamic to benefit from caching.
@@ -262,13 +308,20 @@ ClassicScript* ClassicPendingScript::GetSource(const KURL& document_url,
     // used for behavioural changes (and if yes, update its documentation), or
     // otherwise trigger this behaviour differently.
     if (source_location_type_ == ScriptSourceLocationType::kInline) {
-      cache_handler =
-          GetInlineCacheHandler(source, GetElement()->GetDocument());
+      cache_handler = GetInlineCacheHandler(source_text_for_inline_script_,
+                                            GetElement()->GetDocument());
     }
-    ScriptSourceCode source_code(source, source_location_type_, cache_handler,
+
+    DCHECK(!GetResource());
+    RecordStreamingHistogram(GetSchedulingType(), false,
+                             ScriptStreamer::kInlineScript);
+
+    ScriptSourceCode source_code(source_text_for_inline_script_,
+                                 source_location_type_, cache_handler,
                                  document_url, StartingPosition());
     return ClassicScript::Create(source_code, base_url_for_inline_script_,
-                                 options_, kSharableCrossOrigin);
+                                 options_,
+                                 SanitizeScriptErrors::kDoNotSanitize);
   }
 
   DCHECK(GetResource()->IsLoaded());
@@ -277,36 +330,42 @@ ClassicScript* ClassicPendingScript::GetSource(const KURL& document_url,
   // If the MIME check fails, which is considered as load failure.
   if (!AllowedByNosniff::MimeTypeAsScript(
           GetElement()->GetDocument().ContextDocument(),
-          resource->GetResponse())) {
-    error_occurred = true;
+          resource->GetResponse(), AllowedByNosniff::MimeTypeCheck::kLax)) {
+    return nullptr;
   }
 
-  bool streamer_ready = (ready_state_ == kReady) && streamer_ &&
-                        !streamer_->StreamingSuppressed();
-  ScriptSourceCode source_code(streamer_ready ? streamer_ : nullptr, resource);
+  // Check if we can use the script streamer.
+  bool streamer_ready = false;
+  ScriptStreamer::NotStreamingReason not_streamed_reason =
+      resource->NoStreamerReason();
+  ScriptStreamer* streamer = resource->TakeStreamer();
+  if (streamer) {
+    DCHECK_EQ(not_streamed_reason, ScriptStreamer::kInvalid);
+    if (streamer->StreamingSuppressed()) {
+      not_streamed_reason = streamer->StreamingSuppressedReason();
+    } else if (ready_state_ == kErrorOccurred) {
+      not_streamed_reason = ScriptStreamer::kErrorOccurred;
+    } else {
+      // Streamer can be used to compile script.
+      CHECK_EQ(ready_state_, kReady);
+      not_streamed_reason = ScriptStreamer::kInvalid;
+      streamer_ready = true;
+    }
+  }
+  RecordStreamingHistogram(GetSchedulingType(), streamer_ready,
+                           not_streamed_reason);
+
+  ScriptSourceCode source_code(streamer_ready ? streamer : nullptr, resource,
+                               not_streamed_reason);
   // The base URL for external classic script is
-  // "the URL from which the script was obtained" [spec text]
-  // https://html.spec.whatwg.org/multipage/webappapis.html#concept-script-base-url
+  //
+  // <spec href="https://html.spec.whatwg.org/#concept-script-base-url">
+  // ... the URL from which the script was obtained, ...</spec>
   const KURL& base_url = source_code.Url();
-  return ClassicScript::Create(
-      source_code, base_url, options_,
-      resource->CalculateAccessControlStatus(
-          GetElement()->GetDocument().GetSecurityOrigin()));
-}
-
-void ClassicPendingScript::SetStreamer(ScriptStreamer* streamer) {
-  DCHECK(streamer);
-  DCHECK(!streamer_);
-  DCHECK(!IsWatchingForLoad() || ready_state_ != kWaitingForResource);
-  DCHECK(!streamer->IsFinished());
-  DCHECK(ready_state_ == kWaitingForResource || ready_state_ == kReady);
-
-  streamer_ = streamer;
-  is_currently_streaming_ = true;
-  if (streamer && ready_state_ == kReady)
-    AdvanceReadyState(kReadyStreaming);
-
-  CheckState();
+  return ClassicScript::Create(source_code, base_url, options_,
+                               resource->GetResponse().IsCorsSameOrigin()
+                                   ? SanitizeScriptErrors::kDoNotSanitize
+                                   : SanitizeScriptErrors::kSanitize);
 }
 
 bool ClassicPendingScript::IsReady() const {
@@ -314,29 +373,15 @@ bool ClassicPendingScript::IsReady() const {
   return ready_state_ >= kReady;
 }
 
-bool ClassicPendingScript::ErrorOccurred() const {
-  CheckState();
-  return ready_state_ == kErrorOccurred;
-}
-
 void ClassicPendingScript::AdvanceReadyState(ReadyState new_ready_state) {
   // We will allow exactly these state transitions:
   //
-  // kWaitingForResource -> kWaitingForStreaming -> [kReady, kErrorOccurred]
-  // kReady -> kReadyStreaming -> kReady
+  // kWaitingForResource -> [kReady, kErrorOccurred]
   switch (ready_state_) {
     case kWaitingForResource:
-      CHECK_EQ(new_ready_state, kWaitingForStreaming);
-      break;
-    case kWaitingForStreaming:
       CHECK(new_ready_state == kReady || new_ready_state == kErrorOccurred);
       break;
     case kReady:
-      CHECK_EQ(new_ready_state, kReadyStreaming);
-      break;
-    case kReadyStreaming:
-      CHECK_EQ(new_ready_state, kReady);
-      break;
     case kErrorOccurred:
       NOTREACHED();
       break;
@@ -345,9 +390,11 @@ void ClassicPendingScript::AdvanceReadyState(ReadyState new_ready_state) {
   bool old_is_ready = IsReady();
   ready_state_ = new_ready_state;
 
+  ScriptResource* resource = ToScriptResource(GetResource());
+
   // Did we transition into a 'ready' state?
   if (IsReady() && !old_is_ready && IsWatchingForLoad())
-    Client()->PendingScriptFinished(this);
+    PendingScriptFinished();
 
   // Did we finish streaming?
   if (IsCurrentlyStreaming()) {
@@ -367,17 +414,16 @@ void ClassicPendingScript::AdvanceReadyState(ReadyState new_ready_state) {
   // To help diagnose crbug.com/78426, we'll temporarily add some DCHECKs
   // that are a subset of the DCHECKs below:
   if (IsCurrentlyStreaming()) {
-    DCHECK(streamer_);
-    DCHECK(!streamer_->IsFinished());
+    DCHECK(resource->HasStreamer());
+    DCHECK(!resource->HasFinishedStreamer());
   }
 
   // IsCurrentlyStreaming should match what streamer_ thinks.
-  DCHECK_EQ(IsCurrentlyStreaming(), streamer_ && !streamer_->IsFinished());
+  DCHECK_EQ(IsCurrentlyStreaming(),
+            resource->HasStreamer() && !resource->HasFinishedStreamer());
   // IsCurrentlyStreaming should match the ready_state_.
   DCHECK_EQ(IsCurrentlyStreaming(),
-            ready_state_ == kReadyStreaming ||
-                (streamer_ && (ready_state_ == kWaitingForResource ||
-                               ready_state_ == kWaitingForStreaming)));
+            resource->HasStreamer() && ready_state_ == kWaitingForResource);
   // We can only have a streamer_done_ callback if we are actually streaming.
   DCHECK(IsCurrentlyStreaming() || !streamer_done_);
 }
@@ -390,7 +436,6 @@ void ClassicPendingScript::OnPurgeMemory() {
 }
 
 bool ClassicPendingScript::StartStreamingIfPossible(
-    ScriptStreamer::Type streamer_type,
     base::OnceClosure done) {
   if (IsCurrentlyStreaming())
     return false;
@@ -404,46 +449,27 @@ bool ClassicPendingScript::StartStreamingIfPossible(
   if (!document || !document->GetFrame())
     return false;
 
-  ScriptState* script_state = ToScriptStateForMainWorld(document->GetFrame());
-  if (!script_state)
-    return false;
-
-  // To support streaming re-try, we'll clear the existing streamer if
-  // it exists; it claims to be finished; but it's finished because streaming
-  // has been suppressed.
-  if (streamer_ && streamer_->StreamingSuppressed() &&
-      streamer_->IsFinished()) {
-    DCHECK_EQ(ready_state_, kReady);
-    DCHECK(!streamer_done_);
-    DCHECK(!IsCurrentlyStreaming());
-    streamer_.Clear();
-  }
-
-  if (streamer_)
-    return false;
-
-  // The two checks above should imply that we're not presently streaming.
-  DCHECK(!IsCurrentlyStreaming());
-
   // Parser blocking scripts tend to do a lot of work in the 'finished'
   // callbacks, while async + in-order scripts all do control-like activities
   // (like posting new tasks). Use the 'control' queue only for control tasks.
   // (More details in discussion for cl 500147.)
-  auto task_type = streamer_type == ScriptStreamer::kParsingBlocking
+  auto task_type = GetSchedulingType() == ScriptSchedulingType::kParserBlocking
                        ? TaskType::kNetworking
                        : TaskType::kNetworkingControl;
 
-  DCHECK(!streamer_);
   DCHECK(!IsCurrentlyStreaming());
   DCHECK(!streamer_done_);
-  ScriptStreamer::StartStreaming(
-      this, streamer_type, document->GetFrame()->GetSettings(), script_state,
-      document->GetTaskRunner(task_type));
-  bool success = streamer_ && !streamer_->IsStreamingFinished();
+
+  ReadyState ready_state_before_stream = ready_state_;
+  bool success = ToScriptResource(GetResource())
+                     ->StartStreaming(document->GetTaskRunner(task_type));
+  // We have to make sure that the ready state is not changed by starting
+  // streaming, just in case we're relying on IsReady being false.
+  CHECK_EQ(ready_state_before_stream, ready_state_);
 
   // If we have successfully started streaming, we are required to call the
   // callback.
-  DCHECK_EQ(success, IsCurrentlyStreaming());
+  is_currently_streaming_ = success;
   if (success)
     streamer_done_ = std::move(done);
   return success;

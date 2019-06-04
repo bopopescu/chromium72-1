@@ -7,7 +7,6 @@
 #include <string>
 
 #include "ash/public/cpp/ash_pref_names.h"
-#include "ash/public/cpp/config.h"
 #include "ash/public/cpp/shelf_model.h"
 #include "ash/public/cpp/shelf_model_observer.h"
 #include "ash/public/cpp/shelf_prefs.h"
@@ -43,7 +42,7 @@ void BuildAndSendNotification(message_center::MessageCenter* message_center,
                               const std::string& app_id,
                               const std::string& notification_id) {
   const message_center::NotifierId notifier_id(
-      message_center::NotifierId::APPLICATION, app_id);
+      message_center::NotifierType::APPLICATION, app_id);
   std::unique_ptr<message_center::Notification> notification =
       std::make_unique<message_center::Notification>(
           message_center::NOTIFICATION_TYPE_SIMPLE, notification_id,
@@ -210,26 +209,26 @@ TEST_F(ShelfControllerTest, ShelfItemImageSynchronization) {
   EXPECT_FALSE(controller->model()->items()[index].image.isNull());
 }
 
-class ShelfControllerTouchableContextMenuTest : public AshTestBase {
+class ShelfControllerNotificationIndicatorTest : public AshTestBase {
  public:
-  ShelfControllerTouchableContextMenuTest() = default;
-  ~ShelfControllerTouchableContextMenuTest() override = default;
+  ShelfControllerNotificationIndicatorTest() = default;
+  ~ShelfControllerNotificationIndicatorTest() override = default;
 
   void SetUp() override {
-    scoped_feature_list_.InitAndEnableFeature(
-        features::kTouchableAppContextMenu);
+    scoped_feature_list_.InitWithFeatures({features::kNotificationIndicator},
+                                          {});
     AshTestBase::SetUp();
   }
 
  private:
   base::test::ScopedFeatureList scoped_feature_list_;
 
-  DISALLOW_COPY_AND_ASSIGN(ShelfControllerTouchableContextMenuTest);
+  DISALLOW_COPY_AND_ASSIGN(ShelfControllerNotificationIndicatorTest);
 };
 
 // Tests that the ShelfController keeps the ShelfModel updated on new
 // notifications.
-TEST_F(ShelfControllerTouchableContextMenuTest, HasNotificationBasic) {
+TEST_F(ShelfControllerNotificationIndicatorTest, HasNotificationBasic) {
   ShelfController* controller = Shell::Get()->shelf_controller();
   const std::string app_id("app_id");
   ShelfItem item;
@@ -433,17 +432,17 @@ TEST_F(ShelfControllerPrefsTest, ShelfSettingsInTabletMode) {
   ASSERT_EQ(SHELF_AUTO_HIDE_BEHAVIOR_ALWAYS, shelf->auto_hide_behavior());
 
   // Verify after entering tablet mode, the shelf alignment is bottom and the
-  // auto hide behavior is never.
+  // auto hide behavior has not changed.
   Shell::Get()->tablet_mode_controller()->EnableTabletModeWindowManager(true);
   EXPECT_EQ(SHELF_ALIGNMENT_BOTTOM, shelf->alignment());
-  EXPECT_EQ(SHELF_AUTO_HIDE_BEHAVIOR_NEVER, shelf->auto_hide_behavior());
+  EXPECT_EQ(SHELF_AUTO_HIDE_BEHAVIOR_ALWAYS, shelf->auto_hide_behavior());
 
   // Verify that screen rotation does not change alignment or auto-hide.
   display_manager()->SetDisplayRotation(
       display::Screen::GetScreen()->GetPrimaryDisplay().id(),
       display::Display::ROTATE_90, display::Display::RotationSource::ACTIVE);
   EXPECT_EQ(SHELF_ALIGNMENT_BOTTOM, shelf->alignment());
-  EXPECT_EQ(SHELF_AUTO_HIDE_BEHAVIOR_NEVER, shelf->auto_hide_behavior());
+  EXPECT_EQ(SHELF_AUTO_HIDE_BEHAVIOR_ALWAYS, shelf->auto_hide_behavior());
 
   // Verify after exiting tablet mode, the shelf alignment and auto hide
   // behavior get their stored pref values.

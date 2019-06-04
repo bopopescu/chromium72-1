@@ -31,13 +31,10 @@
 #include "third_party/blink/renderer/bindings/core/v8/v8_window.h"
 
 #include "third_party/blink/renderer/bindings/core/v8/binding_security.h"
-#include "third_party/blink/renderer/bindings/core/v8/exception_messages.h"
-#include "third_party/blink/renderer/bindings/core/v8/exception_state.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_controller.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_source_code.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_binding_for_core.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_event.h"
-#include "third_party/blink/renderer/bindings/core/v8/v8_event_listener.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_html_collection.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_node.h"
 #include "third_party/blink/renderer/core/frame/csp/content_security_policy.h"
@@ -58,13 +55,14 @@
 #include "third_party/blink/renderer/core/loader/frame_loader.h"
 #include "third_party/blink/renderer/core/messaging/message_port.h"
 #include "third_party/blink/renderer/core/typed_arrays/dom_array_buffer.h"
+#include "third_party/blink/renderer/platform/bindings/exception_messages.h"
+#include "third_party/blink/renderer/platform/bindings/exception_state.h"
 #include "third_party/blink/renderer/platform/bindings/v8_private_property.h"
-#include "third_party/blink/renderer/platform/layout_test_support.h"
 #include "third_party/blink/renderer/platform/wtf/assertions.h"
 
 namespace blink {
 
-void V8Window::locationAttributeGetterCustom(
+void V8Window::LocationAttributeGetterCustom(
     const v8::PropertyCallbackInfo<v8::Value>& info) {
   v8::Isolate* isolate = info.GetIsolate();
   v8::Local<v8::Object> holder = info.Holder();
@@ -85,15 +83,15 @@ void V8Window::locationAttributeGetterCustom(
   // cross-origin status changes by changing properties like |document.domain|.
   if (window->IsRemoteDOMWindow()) {
     DOMWrapperWorld& world = DOMWrapperWorld::Current(isolate);
-    const auto* wrapper_type_info = location->GetWrapperTypeInfo();
+    const auto* location_wrapper_type = location->GetWrapperTypeInfo();
     v8::Local<v8::Object> new_wrapper =
-        wrapper_type_info->domTemplate(isolate, world)
+        location_wrapper_type->DomTemplate(isolate, world)
             ->NewRemoteInstance()
             .ToLocalChecked();
 
     DCHECK(!DOMDataStore::ContainsWrapper(location, isolate));
     wrapper = V8DOMWrapper::AssociateObjectWithWrapper(
-        isolate, location, wrapper_type_info, new_wrapper);
+        isolate, location, location_wrapper_type, new_wrapper);
   } else {
     wrapper = ToV8(location, holder, isolate);
   }
@@ -101,7 +99,7 @@ void V8Window::locationAttributeGetterCustom(
   V8SetReturnValue(info, wrapper);
 }
 
-void V8Window::eventAttributeGetterCustom(
+void V8Window::EventAttributeGetterCustom(
     const v8::FunctionCallbackInfo<v8::Value>& info) {
   LocalDOMWindow* impl = ToLocalDOMWindow(V8Window::ToImpl(info.Holder()));
   v8::Isolate* isolate = info.GetIsolate();
@@ -137,7 +135,7 @@ void V8Window::eventAttributeGetterCustom(
   V8SetReturnValue(info, js_event);
 }
 
-void V8Window::frameElementAttributeGetterCustom(
+void V8Window::FrameElementAttributeGetterCustom(
     const v8::FunctionCallbackInfo<v8::Value>& info) {
   LocalDOMWindow* impl = ToLocalDOMWindow(V8Window::ToImpl(info.Holder()));
   Element* frameElement = impl->frameElement();
@@ -162,7 +160,7 @@ void V8Window::frameElementAttributeGetterCustom(
   V8SetReturnValue(info, wrapper);
 }
 
-void V8Window::openerAttributeSetterCustom(
+void V8Window::OpenerAttributeSetterCustom(
     v8::Local<v8::Value> value,
     const v8::PropertyCallbackInfo<void>& info) {
   v8::Isolate* isolate = info.GetIsolate();
@@ -198,70 +196,7 @@ void V8Window::openerAttributeSetterCustom(
   }
 }
 
-void V8Window::postMessageMethodCustom(
-    const v8::FunctionCallbackInfo<v8::Value>& info) {
-  ExceptionState exception_state(info.GetIsolate(),
-                                 ExceptionState::kExecutionContext, "Window",
-                                 "postMessage");
-  if (UNLIKELY(info.Length() < 2)) {
-    exception_state.ThrowTypeError(
-        ExceptionMessages::NotEnoughArguments(2, info.Length()));
-    return;
-  }
-
-  // None of these need to be RefPtr because info and context are guaranteed
-  // to hold on to them.
-  DOMWindow* window = V8Window::ToImpl(info.Holder());
-  // TODO(yukishiino): The HTML spec specifies that we should use the
-  // Incumbent Realm instead of the Current Realm, but currently we don't have
-  // a way to retrieve the Incumbent Realm.  See also:
-  // https://html.spec.whatwg.org/multipage/comms.html#dom-window-postmessage
-  LocalDOMWindow* source = CurrentDOMWindow(info.GetIsolate());
-
-  DCHECK(window);
-  UseCounter::Count(source->GetFrame(), WebFeature::kWindowPostMessage);
-
-  // If called directly by WebCore we don't have a calling context.
-  if (!source) {
-    exception_state.ThrowTypeError("No active calling context exists.");
-    return;
-  }
-
-  // This function has variable arguments and can be:
-  //   postMessage(message, targetOrigin)
-  //   postMessage(message, targetOrigin, {sequence of transferrables})
-  // TODO(foolip): Type checking of the arguments should happen in order, so
-  // that e.g. postMessage({}, { toString: () => { throw Error(); } }, 0)
-  // throws the Error from toString, not the TypeError for argument 3.
-  Transferables transferables;
-  const int kTargetOriginArgIndex = 1;
-  if (info.Length() > 2) {
-    const int kTransferablesArgIndex = 2;
-    if (!SerializedScriptValue::ExtractTransferables(
-            info.GetIsolate(), info[kTransferablesArgIndex],
-            kTransferablesArgIndex, transferables, exception_state)) {
-      return;
-    }
-  }
-  // TODO(foolip): targetOrigin should be a USVString in IDL and treated as
-  // such here, without TreatNullAndUndefinedAsNullString.
-  TOSTRING_VOID(V8StringResource<kTreatNullAndUndefinedAsNullString>,
-                target_origin, info[kTargetOriginArgIndex]);
-
-  SerializedScriptValue::SerializeOptions options;
-  options.transferables = &transferables;
-  scoped_refptr<SerializedScriptValue> message =
-      SerializedScriptValue::Serialize(info.GetIsolate(), info[0], options,
-                                       exception_state);
-  if (exception_state.HadException())
-    return;
-
-  message->UnregisterMemoryAllocatedWithCurrentScriptContext();
-  window->postMessage(std::move(message), transferables.message_ports,
-                      target_origin, source, exception_state);
-}
-
-void V8Window::namedPropertyGetterCustom(
+void V8Window::NamedPropertyGetterCustom(
     const AtomicString& name,
     const v8::PropertyCallbackInfo<v8::Value>& info) {
   DOMWindow* window = V8Window::ToImpl(info.Holder());
@@ -299,13 +234,16 @@ void V8Window::namedPropertyGetterCustom(
         CurrentExecutionContext(info.GetIsolate()),
         WebFeature::
             kNamedAccessOnWindow_ChildBrowsingContext_CrossOriginNameMismatch);
-    // In addition to the above spec'ed case, we return the child window
-    // regardless of step 3 due to crbug.com/701489 for the time being.
-    // TODO(yukishiino): Makes iframe.name update the browsing context name
-    // appropriately and makes the new name available in the named access on
-    // window.  Then, removes the following two lines.
-    V8SetReturnValueFast(info, child->DomWindow(), window);
-    return;
+    if (!RuntimeEnabledFeatures::
+            IgnoreCrossOriginWindowWhenNamedAccessOnWindowEnabled()) {
+      // In addition to the above spec'ed case, we return the child window
+      // regardless of step 3 due to crbug.com/701489 for the time being.
+      // TODO(yukishiino): Makes iframe.name update the browsing context name
+      // appropriately and makes the new name available in the named access on
+      // window.  Then, removes the following two lines.
+      V8SetReturnValueFast(info, child->DomWindow(), window);
+      return;
+    }
   }
 
   // This is a cross-origin interceptor. Check that the caller has access to the

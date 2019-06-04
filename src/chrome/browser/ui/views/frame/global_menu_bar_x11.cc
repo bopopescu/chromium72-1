@@ -8,6 +8,9 @@
 #include <glib-object.h>
 #include <stddef.h>
 
+#include <utility>
+#include <vector>
+
 #include "base/debug/leak_annotations.h"
 #include "base/logging.h"
 #include "base/macros.h"
@@ -230,6 +233,7 @@ GlobalMenuBarCommand tools_menu[] = {
 
     {IDS_VIEW_SOURCE, IDC_VIEW_SOURCE},
     {IDS_DEV_TOOLS, IDC_DEV_TOOLS},
+    {IDS_DEV_TOOLS_ELEMENTS, IDC_DEV_TOOLS_INSPECT},
     {IDS_DEV_TOOLS_CONSOLE, IDC_DEV_TOOLS_CONSOLE},
     {IDS_DEV_TOOLS_DEVICES, IDC_DEV_TOOLS_DEVICES},
 
@@ -352,7 +356,7 @@ GlobalMenuBarX11::~GlobalMenuBarX11() {
 }
 
 // static
-std::string GlobalMenuBarX11::GetPathForWindow(unsigned long xid) {
+std::string GlobalMenuBarX11::GetPathForWindow(XID xid) {
   return base::StringPrintf("/com/canonical/menu/%lX", xid);
 }
 
@@ -376,10 +380,10 @@ DbusmenuMenuitem* GlobalMenuBarX11::BuildMenuItem(
   return item;
 }
 
-void GlobalMenuBarX11::InitServer(unsigned long xid) {
+void GlobalMenuBarX11::InitServer(XID xid) {
   std::string path = GetPathForWindow(xid);
   {
-    ANNOTATE_SCOPED_MEMORY_LEAK; // http://crbug.com/314087
+    ANNOTATE_SCOPED_MEMORY_LEAK;  // http://crbug.com/314087
     server_ = server_new(path.c_str());
   }
 
@@ -461,8 +465,8 @@ DbusmenuMenuitem* GlobalMenuBarX11::BuildStaticMenu(
   DbusmenuMenuitem* top = menuitem_new();
   menuitem_property_set(
       top, kPropertyLabel,
-      ui::RemoveWindowsStyleAccelerators(
-          l10n_util::GetStringUTF8(menu_str_id)).c_str());
+      ui::RemoveWindowsStyleAccelerators(l10n_util::GetStringUTF8(menu_str_id))
+          .c_str());
   menuitem_property_set_bool(top, kPropertyVisible, true);
 
   for (int i = 0; commands[i].str_id != MENU_END; ++i) {
@@ -594,8 +598,7 @@ void GlobalMenuBarX11::OnTopSitesReceived(
 }
 
 void GlobalMenuBarX11::OnBookmarkBarVisibilityChanged() {
-  CommandIDMenuItemMap::iterator it =
-      id_to_menu_item_.find(IDC_SHOW_BOOKMARK_BAR);
+  auto it = id_to_menu_item_.find(IDC_SHOW_BOOKMARK_BAR);
   if (it != id_to_menu_item_.end()) {
     PrefService* prefs = browser_->profile()->GetPrefs();
     // Note: Unlike the GTK version, we don't appear to need to do tricks where
@@ -720,7 +723,7 @@ void GlobalMenuBarX11::OnBrowserSetLastActive(Browser* browser) {
 }
 
 void GlobalMenuBarX11::EnabledStateChangedForCommand(int id, bool enabled) {
-  CommandIDMenuItemMap::iterator it = id_to_menu_item_.find(id);
+  auto it = id_to_menu_item_.find(id);
   if (it != id_to_menu_item_.end())
     menuitem_property_set_bool(it->second, kPropertyEnabled, enabled);
 }
@@ -745,8 +748,7 @@ void GlobalMenuBarX11::TabRestoreServiceChanged(
                                         TAG_RECENTLY_CLOSED_HEADER) + 1;
 
   unsigned int added_count = 0;
-  for (sessions::TabRestoreService::Entries::const_iterator it =
-           entries.begin();
+  for (auto it = entries.begin();
        it != entries.end() && added_count < kRecentlyClosedCount; ++it) {
     sessions::TabRestoreService::Entry* entry = it->get();
 
@@ -817,14 +819,14 @@ void GlobalMenuBarX11::TabRestoreServiceDestroyed(
   tab_restore_service_ = nullptr;
 }
 
-void GlobalMenuBarX11::OnWindowMapped(unsigned long xid) {
+void GlobalMenuBarX11::OnWindowMapped(XID xid) {
   if (!server_)
     InitServer(xid);
 
   GlobalMenuBarRegistrarX11::GetInstance()->OnWindowMapped(xid);
 }
 
-void GlobalMenuBarX11::OnWindowUnmapped(unsigned long xid) {
+void GlobalMenuBarX11::OnWindowUnmapped(XID xid) {
   GlobalMenuBarRegistrarX11::GetInstance()->OnWindowUnmapped(xid);
 }
 

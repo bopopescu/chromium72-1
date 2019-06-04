@@ -21,7 +21,7 @@ BrowserControls::BrowserControls(const Page& page)
       baseline_content_offset_(0),
       accumulated_scroll_delta_(0),
       shrink_viewport_(false),
-      permitted_state_(kWebBrowserControlsBoth) {}
+      permitted_state_(cc::BrowserControlsState::kBoth) {}
 
 void BrowserControls::Trace(blink::Visitor* visitor) {
   visitor->Trace(page_);
@@ -32,9 +32,9 @@ void BrowserControls::ScrollBegin() {
 }
 
 FloatSize BrowserControls::ScrollBy(FloatSize pending_delta) {
-  if ((permitted_state_ == kWebBrowserControlsShown &&
+  if ((permitted_state_ == cc::BrowserControlsState::kShown &&
        pending_delta.Height() > 0) ||
-      (permitted_state_ == kWebBrowserControlsHidden &&
+      (permitted_state_ == cc::BrowserControlsState::kHidden &&
        pending_delta.Height() < 0))
     return pending_delta;
 
@@ -104,31 +104,15 @@ void BrowserControls::SetShownRatio(float shown_ratio) {
 }
 
 void BrowserControls::UpdateConstraintsAndState(
-    WebBrowserControlsState constraints,
-    WebBrowserControlsState current,
+    cc::BrowserControlsState constraints,
+    cc::BrowserControlsState current,
     bool animate) {
   permitted_state_ = constraints;
 
-  DCHECK(!(constraints == kWebBrowserControlsShown &&
-           current == kWebBrowserControlsHidden));
-  DCHECK(!(constraints == kWebBrowserControlsHidden &&
-           current == kWebBrowserControlsShown));
-
-  // If the change should be animated, let the impl thread drive the change.
-  // Otherwise, immediately set the shown ratio so we don't have to wait for
-  // a commit from the impl thread.
-  if (animate)
-    return;
-
-  if (constraints == kWebBrowserControlsBoth &&
-      current == kWebBrowserControlsBoth)
-    return;
-
-  if (constraints == kWebBrowserControlsHidden ||
-      current == kWebBrowserControlsHidden)
-    SetShownRatio(0.f);
-  else
-    SetShownRatio(1.f);
+  DCHECK(!(constraints == cc::BrowserControlsState::kShown &&
+           current == cc::BrowserControlsState::kHidden));
+  DCHECK(!(constraints == cc::BrowserControlsState::kHidden &&
+           current == cc::BrowserControlsState::kShown));
 }
 
 void BrowserControls::SetHeight(float top_height,

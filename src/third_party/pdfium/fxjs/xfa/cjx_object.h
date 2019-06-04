@@ -14,13 +14,16 @@
 
 #include "core/fxcrt/unowned_ptr.h"
 #include "core/fxcrt/widestring.h"
-#include "core/fxcrt/xml/cfx_xmlelement.h"
-#include "fxjs/CJX_Define.h"
+#include "fxjs/jse_define.h"
 #include "third_party/base/optional.h"
+#include "third_party/base/span.h"
 #include "xfa/fxfa/fxfa_basic.h"
+#include "xfa/fxfa/parser/cxfa_measurement.h"
 
+class CFX_XMLElement;
 class CFXJSE_Value;
 class CFX_V8;
+class CJX_Object;
 class CXFA_CalcData;
 class CXFA_Document;
 class CXFA_LayoutItem;
@@ -28,7 +31,7 @@ class CXFA_Node;
 class CXFA_Object;
 struct XFA_MAPMODULEDATA;
 
-typedef CJS_Return (*CJX_MethodCall)(
+typedef CJS_Result (*CJX_MethodCall)(
     CJX_Object* obj,
     CFX_V8* runtime,
     const std::vector<v8::Local<v8::Value>>& params);
@@ -56,12 +59,10 @@ class CJX_Object {
   explicit CJX_Object(CXFA_Object* obj);
   virtual ~CJX_Object();
 
-  JS_PROP(className);
-
-  CXFA_Object* GetXFAObject() { return object_.Get(); }
-  const CXFA_Object* GetXFAObject() const { return object_.Get(); }
+  JSE_PROP(className);
 
   CXFA_Document* GetDocument() const;
+  CXFA_Object* GetXFAObject() const { return object_.Get(); }
 
   void SetCalcRecursionCount(size_t count) { calc_recursion_count_ = count; }
   size_t GetCalcRecursionCount() const { return calc_recursion_count_; }
@@ -70,7 +71,7 @@ class CJX_Object {
   CXFA_LayoutItem* GetLayoutItem() const { return layout_item_; }
 
   bool HasMethod(const WideString& func) const;
-  CJS_Return RunMethod(const WideString& func,
+  CJS_Result RunMethod(const WideString& func,
                        const std::vector<v8::Local<v8::Value>>& params);
 
   bool HasAttribute(XFA_Attribute eAttr);
@@ -218,11 +219,10 @@ class CJX_Object {
   void ThrowTooManyOccurancesException(const WideString& obj) const;
 
  protected:
-  void DefineMethods(const CJX_MethodSpec method_specs[], size_t count);
-
+  void DefineMethods(pdfium::span<const CJX_MethodSpec> methods);
   void MoveBufferMapData(CXFA_Object* pSrcModule, CXFA_Object* pDstModule);
   void SetMapModuleString(void* pKey, const WideStringView& wsValue);
-  void ThrowException(const wchar_t* str, ...) const;
+  void ThrowException(const WideString& str) const;
 
  private:
   void Script_Boolean_DefaultValue(CFXJSE_Value* pValue,
@@ -283,6 +283,17 @@ class CJX_Object {
   std::unique_ptr<CXFA_CalcData> calc_data_;
   std::map<ByteString, CJX_MethodCall> method_specs_;
   size_t calc_recursion_count_ = 0;
+};
+
+typedef void (CJX_Object::*XFA_ATTRIBUTE_CALLBACK)(CFXJSE_Value* pValue,
+                                                   bool bSetting,
+                                                   XFA_Attribute eAttribute);
+
+struct XFA_SCRIPTATTRIBUTEINFO {
+  uint32_t uHash;
+  XFA_Attribute attribute;
+  XFA_ScriptType eValueType;
+  XFA_ATTRIBUTE_CALLBACK callback;
 };
 
 #endif  // FXJS_XFA_CJX_OBJECT_H_

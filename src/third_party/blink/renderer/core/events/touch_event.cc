@@ -28,6 +28,8 @@
 
 #include "third_party/blink/public/platform/web_coalesced_input_event.h"
 #include "third_party/blink/renderer/core/dom/events/event_dispatcher.h"
+#include "third_party/blink/renderer/core/dom/events/event_path.h"
+#include "third_party/blink/renderer/core/event_interface_names.h"
 #include "third_party/blink/renderer/core/frame/frame_console.h"
 #include "third_party/blink/renderer/core/frame/intervention.h"
 #include "third_party/blink/renderer/core/frame/local_dom_window.h"
@@ -36,6 +38,7 @@
 #include "third_party/blink/renderer/core/html/html_element.h"
 #include "third_party/blink/renderer/core/input/input_device_capabilities.h"
 #include "third_party/blink/renderer/core/inspector/console_message.h"
+#include "third_party/blink/renderer/core/paint/paint_layer_scrollable_area.h"
 #include "third_party/blink/renderer/platform/bindings/dom_wrapper_world.h"
 #include "third_party/blink/renderer/platform/bindings/script_state.h"
 #include "third_party/blink/renderer/platform/histogram.h"
@@ -181,7 +184,7 @@ void LogTouchTargetHistogram(EventTarget* event_target,
 
   if (document) {
     LocalFrameView* view = document->View();
-    if (view && view->IsScrollable())
+    if (view && view->LayoutViewport()->ScrollsOverflow())
       result += kTouchTargetHistogramScrollableDocumentOffset;
   }
 
@@ -240,17 +243,17 @@ TouchEvent::TouchEvent(const WebCoalescedInputEvent& event,
 }
 
 TouchEvent::TouchEvent(const AtomicString& type,
-                       const TouchEventInit& initializer)
+                       const TouchEventInit* initializer)
     : UIEventWithKeyState(type, initializer),
-      touches_(TouchList::Create(initializer.touches())),
-      target_touches_(TouchList::Create(initializer.targetTouches())),
-      changed_touches_(TouchList::Create(initializer.changedTouches())),
+      touches_(TouchList::Create(initializer->touches())),
+      target_touches_(TouchList::Create(initializer->targetTouches())),
+      changed_touches_(TouchList::Create(initializer->changedTouches())),
       current_touch_action_(TouchAction::kTouchActionAuto) {}
 
 TouchEvent::~TouchEvent() = default;
 
 const AtomicString& TouchEvent::InterfaceName() const {
-  return EventNames::TouchEvent;
+  return event_interface_names::kTouchEvent;
 }
 
 bool TouchEvent::IsTouchEvent() const {
@@ -263,11 +266,13 @@ void TouchEvent::preventDefault() {
   // A common developer error is to wait too long before attempting to stop
   // scrolling by consuming a touchmove event. Generate an error if this
   // event is uncancelable.
+  String id;
   String message;
   switch (HandlingPassive()) {
     case PassiveMode::kNotPassive:
     case PassiveMode::kNotPassiveDefault:
       if (!cancelable()) {
+        id = "IgnoredEventCancel";
         message = "Ignored attempt to cancel a " + type() +
                   " event with cancelable=false, for example "
                   "because scrolling is in progress and "
@@ -279,6 +284,7 @@ void TouchEvent::preventDefault() {
       // an author may use touch action but call preventDefault for interop with
       // browsers that don't support touch-action.
       if (current_touch_action_ == TouchAction::kTouchActionAuto) {
+        id = "PreventDefaultPassive";
         message =
             "Unable to preventDefault inside passive event listener due to "
             "target being treated as passive. See "
@@ -291,11 +297,12 @@ void TouchEvent::preventDefault() {
 
   if (!message.IsEmpty() && view() && view()->IsLocalDOMWindow() &&
       view()->GetFrame()) {
-    Intervention::GenerateReport(ToLocalDOMWindow(view())->GetFrame(), message);
+    Intervention::GenerateReport(ToLocalDOMWindow(view())->GetFrame(), id,
+                                 message);
   }
 
-  if ((type() == EventTypeNames::touchstart ||
-       type() == EventTypeNames::touchmove) &&
+  if ((type() == event_type_names::kTouchstart ||
+       type() == event_type_names::kTouchmove) &&
       view() && view()->IsLocalDOMWindow() && view()->GetFrame() &&
       current_touch_action_ == TouchAction::kTouchActionAuto) {
     switch (HandlingPassive()) {

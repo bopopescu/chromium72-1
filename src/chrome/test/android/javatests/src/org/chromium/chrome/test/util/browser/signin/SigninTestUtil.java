@@ -6,8 +6,7 @@ package org.chromium.chrome.test.util.browser.signin;
 
 import android.accounts.Account;
 import android.annotation.SuppressLint;
-import android.app.Instrumentation;
-import android.content.Context;
+import android.support.annotation.WorkerThread;
 
 import org.chromium.base.ContextUtils;
 import org.chromium.base.ThreadUtils;
@@ -33,8 +32,6 @@ public final class SigninTestUtil {
     private static final String DEFAULT_ACCOUNT = "test@gmail.com";
 
     @SuppressLint("StaticFieldLeak")
-    private static Context sContext;
-    @SuppressLint("StaticFieldLeak")
     private static FakeAccountManagerDelegate sAccountManager;
     @SuppressLint("StaticFieldLeak")
     private static List<AccountHolder> sAddedAccounts = new ArrayList<>();
@@ -44,15 +41,10 @@ public final class SigninTestUtil {
      *
      * This must be called before native is loaded.
      */
-    public static void setUpAuthForTest(Instrumentation instrumentation) {
-        assert sContext == null;
-        sContext = instrumentation.getTargetContext();
-        ThreadUtils.runOnUiThreadBlocking(new Runnable() {
-            @Override
-            public void run() {
-                ProcessInitializationHandler.getInstance().initializePreNative();
-            }
-        });
+    @WorkerThread
+    public static void setUpAuthForTest() {
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> ProcessInitializationHandler.getInstance().initializePreNative());
         sAccountManager = new FakeAccountManagerDelegate(
                 FakeAccountManagerDelegate.DISABLE_PROFILE_DATA_SOURCE);
         AccountManagerFacade.overrideAccountManagerFacadeForTests(sAccountManager);
@@ -63,21 +55,18 @@ public final class SigninTestUtil {
     /**
      * Tears down the test authentication environment.
      */
+    @WorkerThread
     public static void tearDownAuthForTest() {
-        ThreadUtils.runOnUiThreadBlocking(() -> {
-            for (AccountHolder accountHolder : sAddedAccounts) {
-                sAccountManager.removeAccountHolderExplicitly(accountHolder);
-            }
-        });
+        for (AccountHolder accountHolder : sAddedAccounts) {
+            sAccountManager.removeAccountHolderBlocking(accountHolder);
+        }
         sAddedAccounts.clear();
-        sContext = null;
     }
 
     /**
      * Returns the currently signed in account.
      */
     public static Account getCurrentAccount() {
-        assert sContext != null;
         return ChromeSigninController.get().getSignedInUser();
     }
 
@@ -114,21 +103,18 @@ public final class SigninTestUtil {
     }
 
     private static void overrideAccountIdProvider() {
-        ThreadUtils.runOnUiThreadBlocking(new Runnable() {
-            @Override
-            public void run() {
-                AccountIdProvider.setInstanceForTest(new AccountIdProvider() {
-                    @Override
-                    public String getAccountId(String accountName) {
-                        return "gaia-id-" + accountName;
-                    }
+        ThreadUtils.runOnUiThreadBlocking(() -> {
+            AccountIdProvider.setInstanceForTest(new AccountIdProvider() {
+                @Override
+                public String getAccountId(String accountName) {
+                    return "gaia-id-" + accountName;
+                }
 
-                    @Override
-                    public boolean canBeUsed() {
-                        return true;
-                    }
-                });
-            }
+                @Override
+                public boolean canBeUsed() {
+                    return true;
+                }
+            });
         });
     }
 
@@ -141,7 +127,7 @@ public final class SigninTestUtil {
         ChromeSigninController.get().setSignedInAccountName(null);
         ContextUtils.getAppSharedPreferences()
                 .edit()
-                .putStringSet(OAuth2TokenService.STORED_ACCOUNTS_KEY, new HashSet<String>())
+                .putStringSet(OAuth2TokenService.STORED_ACCOUNTS_KEY, new HashSet<>())
                 .apply();
     }
 

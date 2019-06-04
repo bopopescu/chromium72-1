@@ -17,7 +17,6 @@
 #include "ui/base/win/scoped_ole_initializer.h"
 #endif
 
-class ExtensionService;
 class TestingProfile;
 
 namespace base {
@@ -33,6 +32,7 @@ namespace extensions {
 
 class Extension;
 class ExtensionPrefs;
+class ExtensionService;
 class TestExtensionSystem;
 
 // This class provides a minimal environment in which to create
@@ -83,7 +83,8 @@ class TestExtensionEnvironment {
 
   // Generates a valid packaged app manifest with the given ID. If |install|
   // it gets added to the ExtensionService in |profile|.
-  scoped_refptr<Extension> MakePackagedApp(const std::string& id, bool install);
+  scoped_refptr<const Extension> MakePackagedApp(const std::string& id,
+                                                 bool install);
 
   // Returns a test web contents that has a tab id.
   std::unique_ptr<content::WebContents> MakeTab() const;

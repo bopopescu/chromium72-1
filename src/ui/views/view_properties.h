@@ -8,6 +8,8 @@
 #include "ui/base/class_property.h"
 #include "ui/views/views_export.h"
 
+class SkPath;
+
 namespace gfx {
 class Insets;
 }  // namespace gfx
@@ -15,6 +17,10 @@ class Insets;
 namespace views {
 
 class BubbleDialogDelegateView;
+
+// The hit test component (e.g. HTCLIENT) for a View in a window frame. Defaults
+// to HTNOWHERE.
+VIEWS_EXPORT extern const ui::ClassProperty<int>* const kHitTestComponentKey;
 
 // A property to store margins around the outer perimeter of the view. Margins
 // are outside the bounds of the view. This is used by various layout managers
@@ -26,6 +32,11 @@ VIEWS_EXPORT extern const ui::ClassProperty<gfx::Insets*>* const kMarginsKey;
 VIEWS_EXPORT extern const ui::ClassProperty<BubbleDialogDelegateView*>* const
     kAnchoredDialogKey;
 
+// A property to store a highlight path related to the view. This is nominally
+// used by the default inkdrop and focus ring that are both used to highlight
+// the view in different ways.
+VIEWS_EXPORT extern const ui::ClassProperty<SkPath*>* const kHighlightPathKey;
+
 }  // namespace views
 
 // Declaring the template specialization here to make sure that the
@@ -36,5 +47,5 @@ VIEWS_EXPORT extern const ui::ClassProperty<BubbleDialogDelegateView*>* const
 DECLARE_EXPORTED_UI_CLASS_PROPERTY_TYPE(VIEWS_EXPORT, gfx::Insets*);
 DECLARE_EXPORTED_UI_CLASS_PROPERTY_TYPE(VIEWS_EXPORT,
                                         views::BubbleDialogDelegateView*);
-
+DECLARE_EXPORTED_UI_CLASS_PROPERTY_TYPE(VIEWS_EXPORT, SkPath*);
 #endif  // UI_VIEWS_VIEW_PROPERTIES_H_

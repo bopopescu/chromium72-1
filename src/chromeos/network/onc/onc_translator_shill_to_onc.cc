@@ -623,14 +623,14 @@ void ShillToONCTranslator::TranslateNetworkWithState() {
   if (shill_dictionary_->GetStringWithoutPathExpansion(
           shill::kProxyConfigProperty, &proxy_config_str) &&
       !proxy_config_str.empty()) {
-    std::unique_ptr<base::DictionaryValue> proxy_config_value(
+    std::unique_ptr<base::Value> proxy_config_value(
         ReadDictionaryFromJson(proxy_config_str));
     if (proxy_config_value) {
-      std::unique_ptr<base::DictionaryValue> proxy_settings =
-          ConvertProxyConfigToOncProxySettings(std::move(proxy_config_value));
-      if (proxy_settings) {
-        onc_object_->SetWithoutPathExpansion(
-            ::onc::network_config::kProxySettings, std::move(proxy_settings));
+      base::Value proxy_settings =
+          ConvertProxyConfigToOncProxySettings(*proxy_config_value);
+      if (!proxy_settings.is_none()) {
+        onc_object_->SetKey(::onc::network_config::kProxySettings,
+                            std::move(proxy_settings));
       }
     }
   }

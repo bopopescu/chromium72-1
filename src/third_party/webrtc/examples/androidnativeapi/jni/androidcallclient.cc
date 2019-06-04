@@ -12,15 +12,16 @@
 
 #include <utility>
 
+#include "absl/memory/memory.h"
 #include "api/audio_codecs/builtin_audio_decoder_factory.h"
 #include "api/audio_codecs/builtin_audio_encoder_factory.h"
 #include "api/peerconnectioninterface.h"
+#include "api/video/builtin_video_bitrate_allocator_factory.h"
 #include "examples/androidnativeapi/generated_jni/jni/CallClient_jni.h"
 #include "media/engine/internaldecoderfactory.h"
 #include "media/engine/internalencoderfactory.h"
 #include "media/engine/webrtcmediaengine.h"
 #include "modules/audio_processing/include/audio_processing.h"
-#include "rtc_base/ptr_util.h"
 #include "sdk/android/native_api/jni/java_types.h"
 #include "sdk/android/native_api/video/wrapper.h"
 
@@ -53,7 +54,7 @@ class CreateOfferObserver : public webrtc::CreateSessionDescriptionObserver {
       rtc::scoped_refptr<webrtc::PeerConnectionInterface> pc);
 
   void OnSuccess(webrtc::SessionDescriptionInterface* desc) override;
-  void OnFailure(const std::string& error) override;
+  void OnFailure(webrtc::RTCError error) override;
 
  private:
   const rtc::scoped_refptr<webrtc::PeerConnectionInterface> pc_;
@@ -69,16 +70,18 @@ class SetLocalSessionDescriptionObserver
     : public webrtc::SetSessionDescriptionObserver {
  public:
   void OnSuccess() override;
-  void OnFailure(const std::string& error) override;
+  void OnFailure(webrtc::RTCError error) override;
 };
 
 }  // namespace
 
 AndroidCallClient::AndroidCallClient()
-    : call_started_(false), pc_observer_(rtc::MakeUnique<PCObserver>(this)) {
+    : call_started_(false), pc_observer_(absl::make_unique<PCObserver>(this)) {
   thread_checker_.DetachFromThread();
   CreatePeerConnectionFactory();
 }
+
+AndroidCallClient::~AndroidCallClient() = default;
 
 void AndroidCallClient::Call(JNIEnv* env,
                              const webrtc::JavaRef<jobject>& cls,
@@ -97,7 +100,8 @@ void AndroidCallClient::Call(JNIEnv* env,
   remote_sink_ = webrtc::JavaToNativeVideoSink(env, remote_sink.obj());
 
   video_source_ = webrtc::CreateJavaVideoSource(env, signaling_thread_.get(),
-                                                false /* is_screencast */);
+                                                /* is_screencast= */ false,
+                                                /* align_timestamps= */ true);
 
   CreatePeerConnection();
   Connect();
@@ -155,8 +159,9 @@ void AndroidCallClient::CreatePeerConnectionFactory() {
       cricket::WebRtcMediaEngineFactory::Create(
           nullptr /* adm */, webrtc::CreateBuiltinAudioEncoderFactory(),
           webrtc::CreateBuiltinAudioDecoderFactory(),
-          rtc::MakeUnique<webrtc::InternalEncoderFactory>(),
-          rtc::MakeUnique<webrtc::InternalDecoderFactory>(),
+          absl::make_unique<webrtc::InternalEncoderFactory>(),
+          absl::make_unique<webrtc::InternalDecoderFactory>(),
+          webrtc::CreateBuiltinVideoBitrateAllocatorFactory(),
           nullptr /* audio_mixer */, webrtc::AudioProcessingBuilder().Create());
   RTC_LOG(LS_INFO) << "Media engine created: " << media_engine.get();
 
@@ -260,8 +265,9 @@ void CreateOfferObserver::OnSuccess(webrtc::SessionDescriptionInterface* desc) {
       new rtc::RefCountedObject<SetRemoteSessionDescriptionObserver>());
 }
 
-void CreateOfferObserver::OnFailure(const std::string& error) {
-  RTC_LOG(LS_INFO) << "Failed to create offer: " << error;
+void CreateOfferObserver::OnFailure(webrtc::RTCError error) {
+  RTC_LOG(LS_INFO) << "Failed to create offer: " << ToString(error.type())
+                   << ": " << error.message();
 }
 
 void SetRemoteSessionDescriptionObserver::OnSetRemoteDescriptionComplete(
@@ -273,8 +279,9 @@ void SetLocalSessionDescriptionObserver::OnSuccess() {
   RTC_LOG(LS_INFO) << "Set local description success!";
 }
 
-void SetLocalSessionDescriptionObserver::OnFailure(const std::string& error) {
-  RTC_LOG(LS_INFO) << "Set local description failure: " << error;
+void SetLocalSessionDescriptionObserver::OnFailure(webrtc::RTCError error) {
+  RTC_LOG(LS_INFO) << "Set local description failure: "
+                   << ToString(error.type()) << ": " << error.message();
 }
 
 static jlong JNI_CallClient_CreateClient(

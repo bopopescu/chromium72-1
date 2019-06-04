@@ -6,18 +6,19 @@
 
 #include <iterator>
 #include <limits>
+#include <utility>
 
 #include "base/logging.h"
 #include "base/strings/string16.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/sys_byteorder.h"
-#include "content/common/indexed_db/indexed_db_key.h"
-#include "content/common/indexed_db/indexed_db_key_path.h"
 
 // See leveldb_coding_scheme.md for detailed documentation of the coding
 // scheme implemented here.
 
 using base::StringPiece;
+using blink::IndexedDBKey;
+using blink::IndexedDBKeyPath;
 using blink::WebIDBKeyType;
 using blink::kWebIDBKeyTypeArray;
 using blink::kWebIDBKeyTypeBinary;
@@ -390,21 +391,21 @@ bool DecodeIDBKey(StringPiece* slice, std::unique_ptr<IndexedDBKey>* value) {
           return false;
         array.push_back(*key);
       }
-      *value = std::make_unique<IndexedDBKey>(array);
+      *value = std::make_unique<IndexedDBKey>(std::move(array));
       return true;
     }
     case kIndexedDBKeyBinaryTypeByte: {
       std::string binary;
       if (!DecodeBinary(slice, &binary))
         return false;
-      *value = std::make_unique<IndexedDBKey>(binary);
+      *value = std::make_unique<IndexedDBKey>(std::move(binary));
       return true;
     }
     case kIndexedDBKeyStringTypeByte: {
       base::string16 s;
       if (!DecodeStringWithLength(slice, &s))
         return false;
-      *value = std::make_unique<IndexedDBKey>(s);
+      *value = std::make_unique<IndexedDBKey>(std::move(s));
       return true;
     }
     case kIndexedDBKeyDateTypeByte: {

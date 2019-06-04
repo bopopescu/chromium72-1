@@ -10,7 +10,7 @@
 #include "base/strings/utf_string_conversions.h"
 #include "base/threading/thread_task_runner_handle.h"
 #include "base/trace_event/trace_event.h"
-#include "content/browser/devtools/devtools_session.h"
+#include "content/browser/devtools/devtools_agent_host_impl.h"
 #include "content/browser/devtools/protocol/native_input_event_builder.h"
 #include "content/browser/frame_host/render_frame_host_impl.h"
 #include "content/browser/renderer_host/input/touch_emulator.h"
@@ -19,12 +19,13 @@
 #include "content/common/input/synthetic_pinch_gesture_params.h"
 #include "content/common/input/synthetic_smooth_scroll_gesture_params.h"
 #include "content/common/input/synthetic_tap_gesture_params.h"
-#include "content/public/common/content_features.h"
+#include "content/public/browser/web_contents.h"
 #include "ui/events/base_event_utils.h"
 #include "ui/events/blink/web_input_event_traits.h"
 #include "ui/events/gesture_detection/gesture_provider_config_helper.h"
 #include "ui/events/keycodes/dom/keycode_converter.h"
 #include "ui/gfx/geometry/point.h"
+#include "ui/gfx/range/range.h"
 
 namespace content {
 namespace protocol {
@@ -285,15 +286,12 @@ class InputHandler::InputInjector
       return;
     }
 
-    if (base::FeatureList::IsEnabled(
-            features::kTouchpadAndWheelScrollLatching)) {
-      // Send a synthetic wheel event with phaseEnded to finish scrolling.
-      wheel_event->delta_x = 0;
-      wheel_event->delta_y = 0;
-      wheel_event->phase = blink::WebMouseWheelEvent::kPhaseEnded;
-      wheel_event->dispatch_type = blink::WebInputEvent::kEventNonBlocking;
-      widget_host_->ForwardWheelEvent(*wheel_event);
-    }
+    // Send a synthetic wheel event with phaseEnded to finish scrolling.
+    wheel_event->delta_x = 0;
+    wheel_event->delta_y = 0;
+    wheel_event->phase = blink::WebMouseWheelEvent::kPhaseEnded;
+    wheel_event->dispatch_type = blink::WebInputEvent::kEventNonBlocking;
+    widget_host_->ForwardWheelEvent(*wheel_event);
   }
 
   void InjectMouseEvent(const blink::WebMouseEvent& mouse_event,
@@ -416,8 +414,7 @@ InputHandler::~InputHandler() {
 // static
 std::vector<InputHandler*> InputHandler::ForAgentHost(
     DevToolsAgentHostImpl* host) {
-  return DevToolsSession::HandlersForAgentHost<InputHandler>(
-      host, Input::Metainfo::domainName);
+  return host->HandlersByName<InputHandler>(Input::Metainfo::domainName);
 }
 
 void InputHandler::SetRenderer(int process_host_id,
@@ -425,11 +422,18 @@ void InputHandler::SetRenderer(int process_host_id,
   if (frame_host == host_)
     return;
   ClearInputState();
-  if (host_ && ignore_input_events_)
-    host_->GetRenderWidgetHost()->SetIgnoreInputEvents(false);
+
+  WebContents* old_web_contents = WebContents::FromRenderFrameHost(host_);
+  WebContents* new_web_contents = WebContents::FromRenderFrameHost(frame_host);
+
   host_ = frame_host;
-  if (host_ && ignore_input_events_)
-    host_->GetRenderWidgetHost()->SetIgnoreInputEvents(true);
+
+  if (ignore_input_events_ && old_web_contents != new_web_contents) {
+    if (old_web_contents)
+      old_web_contents->SetIgnoreInputEvents(false);
+    if (new_web_contents)
+      new_web_contents->SetIgnoreInputEvents(true);
+  }
 }
 
 void InputHandler::Wire(UberDispatcher* dispatcher) {
@@ -442,8 +446,9 @@ void InputHandler::OnPageScaleFactorChanged(float page_scale_factor) {
 
 Response InputHandler::Disable() {
   ClearInputState();
-  if (host_ && ignore_input_events_)
-    host_->GetRenderWidgetHost()->SetIgnoreInputEvents(false);
+  WebContents* web_contents = WebContents::FromRenderFrameHost(host_);
+  if (web_contents && ignore_input_events_)
+    web_contents->SetIgnoreInputEvents(false);
   ignore_input_events_ = false;
   touch_points_.clear();
   return Response::OK();
@@ -539,6 +544,31 @@ void InputHandler::DispatchKeyEvent(
   EnsureInjector(widget_host)->InjectKeyboardEvent(event, std::move(callback));
 }
 
+void InputHandler::InsertText(const std::string& text,
+                              std::unique_ptr<InsertTextCallback> callback) {
+  base::string16 text16 = base::UTF8ToUTF16(text);
+  base::OnceClosure closure =
+      base::BindOnce(&InsertTextCallback::sendSuccess, std::move(callback));
+
+  if (!host_ || !host_->GetRenderWidgetHost()) {
+    callback->sendFailure(Response::InternalError());
+    return;
+  }
+
+  RenderWidgetHostImpl* widget_host = host_->GetRenderWidgetHost();
+  if (!host_->GetParent() && widget_host->delegate()) {
+    RenderWidgetHostImpl* target_host =
+        widget_host->delegate()->GetFocusedRenderWidgetHost(widget_host);
+    if (target_host)
+      widget_host = target_host;
+  }
+
+  widget_host->Focus();
+  widget_host->GetWidgetInputHandler()->ImeCommitText(
+      text16, std::vector<ui::ImeTextSpan>(), gfx::Range::InvalidRange(), 0,
+      std::move(closure));
+}
+
 void InputHandler::DispatchMouseEvent(
     const std::string& event_type,
     double x,
@@ -585,11 +615,8 @@ void InputHandler::DispatchMouseEvent(
     }
     wheel_event->delta_x = static_cast<float>(-delta_x.fromJust());
     wheel_event->delta_y = static_cast<float>(-delta_y.fromJust());
-    if (base::FeatureList::IsEnabled(
-            features::kTouchpadAndWheelScrollLatching)) {
-      wheel_event->phase = blink::WebMouseWheelEvent::kPhaseBegan;
-      wheel_event->dispatch_type = blink::WebInputEvent::kBlocking;
-    }
+    wheel_event->phase = blink::WebMouseWheelEvent::kPhaseBegan;
+    wheel_event->dispatch_type = blink::WebInputEvent::kBlocking;
   } else {
     mouse_event.reset(new blink::WebMouseEvent(type, modifiers, timestamp));
   }
@@ -802,10 +829,7 @@ Response InputHandler::EmulateTouchFromMouseEvent(const std::string& type,
     event.reset(wheel_event);
     wheel_event->delta_x = static_cast<float>(delta_x.fromJust());
     wheel_event->delta_y = static_cast<float>(delta_y.fromJust());
-    if (base::FeatureList::IsEnabled(
-            features::kTouchpadAndWheelScrollLatching)) {
-      wheel_event->phase = blink::WebMouseWheelEvent::kPhaseBegan;
-    }
+    wheel_event->phase = blink::WebMouseWheelEvent::kPhaseBegan;
   } else {
     mouse_event = new blink::WebMouseEvent(
         event_type,
@@ -828,15 +852,12 @@ Response InputHandler::EmulateTouchFromMouseEvent(const std::string& type,
 
   if (wheel_event) {
     host_->GetRenderWidgetHost()->ForwardWheelEvent(*wheel_event);
-    if (base::FeatureList::IsEnabled(
-            features::kTouchpadAndWheelScrollLatching)) {
-      // Send a synthetic wheel event with phaseEnded to finish scrolling.
-      wheel_event->delta_x = 0;
-      wheel_event->delta_y = 0;
-      wheel_event->phase = blink::WebMouseWheelEvent::kPhaseEnded;
-      wheel_event->dispatch_type = blink::WebInputEvent::kEventNonBlocking;
-      host_->GetRenderWidgetHost()->ForwardWheelEvent(*wheel_event);
-    }
+    // Send a synthetic wheel event with phaseEnded to finish scrolling.
+    wheel_event->delta_x = 0;
+    wheel_event->delta_y = 0;
+    wheel_event->phase = blink::WebMouseWheelEvent::kPhaseEnded;
+    wheel_event->dispatch_type = blink::WebInputEvent::kEventNonBlocking;
+    host_->GetRenderWidgetHost()->ForwardWheelEvent(*wheel_event);
   } else {
     host_->GetRenderWidgetHost()->ForwardMouseEvent(*mouse_event);
   }
@@ -845,8 +866,9 @@ Response InputHandler::EmulateTouchFromMouseEvent(const std::string& type,
 
 Response InputHandler::SetIgnoreInputEvents(bool ignore) {
   ignore_input_events_ = ignore;
-  if (host_)
-    host_->GetRenderWidgetHost()->SetIgnoreInputEvents(ignore);
+  WebContents* web_contents = WebContents::FromRenderFrameHost(host_);
+  if (web_contents)
+    web_contents->SetIgnoreInputEvents(ignore);
   return Response::OK();
 }
 

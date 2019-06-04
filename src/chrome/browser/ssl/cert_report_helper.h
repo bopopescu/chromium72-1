@@ -79,12 +79,15 @@ class CertReportHelper {
   void FinishCertCollection();
 
  private:
-  // Checks whether a checkbox should be shown on the page that allows
-  // the user to opt in to Safe Browsing extended reporting.
+  // Returns false if we shouldn't show the checkbox nor send reports. Holds
+  // checks that are common to showing the checbox and reporting (Incognito
+  // mode, policy, and whether the user is in the correct Finch group).
   bool ShouldShowCertificateReporterCheckbox();
 
   // Returns true if a certificate report should be sent for the SSL
-  // error for this page.
+  // error for this page. There are cases (e.g., certain variations
+  // configurations) where the checkbox will be shown but reports will not be
+  // sent.
   bool ShouldReportCertificateError();
 
   // Handles reports of invalid SSL certificates.

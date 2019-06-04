@@ -2,14 +2,9 @@ include_rules = [
   "-components/devtools_bridge",
   "+cc/layers/layer.h",
   "+chrome_jni_registration/chrome_jni_registration.h",
-  "+components/ntp_snippets",
-  "+components/spellcheck/browser",
-  "+components/sync/android",
-  "+components/sync/test/fake_server/android",
-  "+components/toolbar",
-  "+components/viz/common/gpu/context_provider.h",
-  "+components/web_contents_delegate_android",
   "+device/vr/buildflags/buildflags.h",
+  "+media/gpu",
+  "+media/video",
   "+sandbox/linux/seccomp-bpf/sandbox_bpf.h",
   "+sandbox/linux/seccomp-bpf-helpers",
   "+sandbox/sandbox_buildflags.h",
@@ -22,5 +17,9 @@ specific_include_rules = {
   # Special-case where monochrome composes chrome+webview
   "monochrome_entry_point\.cc": [
     "+android_webview",
-  ]
+  ],
+  # Allowed for test setup.
+  "chrome_entry_point_for_test\.cc": [
+    "+chrome/utility/chrome_content_utility_client.h",
+  ],
 }

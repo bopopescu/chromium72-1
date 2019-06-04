@@ -10,6 +10,7 @@
 #include "base/bind.h"
 #include "base/macros.h"
 #include "base/metrics/user_metrics.h"
+#include "base/stl_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "chrome/app/chrome_command_ids.h"
 #include "chrome/browser/browser_process.h"
@@ -20,6 +21,7 @@
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
 #include "chrome/common/pref_names.h"
+#include "components/language/core/browser/pref_names.h"
 #include "components/language/core/common/locale_util.h"
 #include "components/prefs/pref_service.h"
 #include "content/public/browser/notification_service.h"
@@ -94,11 +96,6 @@ void LocaleChangeGuard::RevertLocaleChange() {
   chrome::AttemptUserExit();
 }
 
-void LocaleChangeGuard::RevertLocaleChangeCallback(
-    const base::ListValue* list) {
-  RevertLocaleChange();
-}
-
 void LocaleChangeGuard::Observe(int type,
                                 const content::NotificationSource& source,
                                 const content::NotificationDetails& details) {
@@ -142,7 +139,8 @@ void LocaleChangeGuard::OwnershipStatusChanged() {
     return;
   PrefService* prefs = profile_->GetPrefs();
   DCHECK(prefs);
-  std::string owner_locale = prefs->GetString(prefs::kApplicationLocale);
+  std::string owner_locale =
+      prefs->GetString(language::prefs::kApplicationLocale);
   language::ConvertToActualUILocale(&owner_locale);
   if (!owner_locale.empty())
     local_state->SetString(prefs::kOwnerLocale, owner_locale);
@@ -161,7 +159,7 @@ void LocaleChangeGuard::Check() {
     return;
   }
 
-  std::string to_locale = prefs->GetString(prefs::kApplicationLocale);
+  std::string to_locale = prefs->GetString(language::prefs::kApplicationLocale);
   language::ConvertToActualUILocale(&to_locale);
   if (to_locale != cur_locale) {
     // This conditional branch can occur in cases like:
@@ -170,8 +168,8 @@ void LocaleChangeGuard::Check() {
 
     // Ensure that synchronization does not change the locale to a value not
     // allowed by enterprise policy.
-    if (!chromeos::locale_util::IsAllowedLocale(to_locale, prefs))
-      prefs->SetString(prefs::kApplicationLocale, cur_locale);
+    if (!chromeos::locale_util::IsAllowedUILanguage(to_locale, prefs))
+      prefs->SetString(language::prefs::kApplicationLocale, cur_locale);
     return;
   }
 
@@ -230,7 +228,7 @@ void LocaleChangeGuard::AcceptLocaleChange() {
     NOTREACHED();
     return;
   }
-  if (prefs->GetString(prefs::kApplicationLocale) != to_locale_)
+  if (prefs->GetString(language::prefs::kApplicationLocale) != to_locale_)
     return;
   base::RecordAction(UserMetricsAction("LanguageChange_Accept"));
   prefs->SetString(prefs::kApplicationLocaleBackup, to_locale_);
@@ -259,11 +257,7 @@ bool LocaleChangeGuard::ShouldShowLocaleChangeNotification(
   if (from_lang != to_lang)
     return true;
 
-  const char* const* begin = kSkipShowNotificationLanguages;
-  const char* const* end = kSkipShowNotificationLanguages +
-                           arraysize(kSkipShowNotificationLanguages);
-
-  return std::find(begin, end, from_lang) == end;
+  return !base::ContainsValue(kSkipShowNotificationLanguages, from_lang);
 }
 
 // static

@@ -9,7 +9,7 @@
 #include "net/third_party/quic/core/quic_packet_writer_wrapper.h"
 #include "net/third_party/quic/core/quic_packets.h"
 
-namespace net {
+namespace quic {
 namespace test {
 
 // Simulates a connection over a link with fixed MTU.  Drops packets which
@@ -17,6 +17,8 @@ namespace test {
 class LimitedMtuTestWriter : public QuicPacketWriterWrapper {
  public:
   explicit LimitedMtuTestWriter(QuicByteCount mtu);
+  LimitedMtuTestWriter(const LimitedMtuTestWriter&) = delete;
+  LimitedMtuTestWriter& operator=(const LimitedMtuTestWriter&) = delete;
   ~LimitedMtuTestWriter() override;
 
   // Inherited from QuicPacketWriterWrapper.
@@ -28,11 +30,9 @@ class LimitedMtuTestWriter : public QuicPacketWriterWrapper {
 
  private:
   QuicByteCount mtu_;
-
-  DISALLOW_COPY_AND_ASSIGN(LimitedMtuTestWriter);
 };
 
 }  // namespace test
-}  // namespace net
+}  // namespace quic
 
 #endif  // NET_THIRD_PARTY_QUIC_TEST_TOOLS_LIMITED_MTU_TEST_WRITER_H_

@@ -6,7 +6,7 @@
 
 #include "base/command_line.h"
 #include "base/metrics/histogram_macros.h"
-#include "base/task_scheduler/post_task.h"
+#include "base/task/post_task.h"
 #include "base/values.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/chromeos/login/screens/base_screen_delegate.h"
@@ -75,6 +75,9 @@ void StartTPMFirmwareUpdate(
     case tpm_firmware_update::Mode::kPreserveDeviceState:
       mode_string = "preserve_stateful";
       break;
+    case tpm_firmware_update::Mode::kCleanup:
+      mode_string = "cleanup";
+      break;
   }
 
   if (mode_string.empty()) {
@@ -134,8 +137,9 @@ void ResetScreen::Show() {
 
   ContextEditor context_editor = GetContextEditor();
 
-  bool restart_required = !base::CommandLine::ForCurrentProcess()->HasSwitch(
-      switches::kFirstExecAfterBoot);
+  bool restart_required = user_manager::UserManager::Get()->IsUserLoggedIn() ||
+                          !base::CommandLine::ForCurrentProcess()->HasSwitch(
+                              switches::kFirstExecAfterBoot);
   if (restart_required) {
     context_editor.SetInteger(kContextKeyScreenState, STATE_RESTART_REQUIRED);
     dialog_type = reset::DIALOG_SHORTCUT_RESTART_REQUIRED;

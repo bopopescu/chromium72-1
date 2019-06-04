@@ -45,6 +45,7 @@
 #include "content/renderer/p2p/filtering_network_manager.h"
 #include "content/renderer/p2p/ipc_network_manager.h"
 #include "content/renderer/p2p/ipc_socket_factory.h"
+#include "content/renderer/p2p/mdns_responder_adapter.h"
 #include "content/renderer/p2p/port_allocator.h"
 #include "content/renderer/render_frame_impl.h"
 #include "content/renderer/render_thread_impl.h"
@@ -61,6 +62,7 @@
 #include "third_party/blink/public/platform/web_url.h"
 #include "third_party/blink/public/web/web_document.h"
 #include "third_party/blink/public/web/web_local_frame.h"
+#include "third_party/webrtc/api/create_peerconnection_factory.h"
 #include "third_party/webrtc/api/mediaconstraintsinterface.h"
 #include "third_party/webrtc/api/video_codecs/video_decoder_factory.h"
 #include "third_party/webrtc/api/video_codecs/video_encoder_factory.h"
@@ -101,6 +103,25 @@ bool IsValidPortRange(uint16_t min_port, uint16_t max_port) {
   DCHECK(min_port <= max_port);
   return min_port != 0 && max_port != 0;
 }
+
+// PeerConnectionDependencies wants to own the factory, so we provide a simple
+// object that delegates calls to the IpcPacketSocketFactory.
+// TODO(zstein): Move the creation logic from IpcPacketSocketFactory in to this
+// class.
+class ProxyAsyncResolverFactory final : public webrtc::AsyncResolverFactory {
+ public:
+  ProxyAsyncResolverFactory(IpcPacketSocketFactory* ipc_psf)
+      : ipc_psf_(ipc_psf) {
+    DCHECK(ipc_psf);
+  }
+
+  rtc::AsyncResolverInterface* Create() override {
+    return ipc_psf_->CreateAsyncResolver();
+  }
+
+ private:
+  IpcPacketSocketFactory* ipc_psf_;
+};
 
 }  // namespace
 
@@ -188,11 +209,18 @@ void PeerConnectionDependencyFactory::CreatePeerConnectionFactory() {
   base::WaitableEvent create_network_manager_event(
       base::WaitableEvent::ResetPolicy::MANUAL,
       base::WaitableEvent::InitialState::NOT_SIGNALED);
+  std::unique_ptr<MdnsResponderAdapter> mdns_responder;
+#if BUILDFLAG(ENABLE_MDNS)
+  if (base::FeatureList::IsEnabled(features::kWebRtcHideLocalIpsWithMdns)) {
+    mdns_responder = std::make_unique<MdnsResponderAdapter>();
+  }
+#endif  // BUILDFLAG(ENABLE_MDNS)
   chrome_worker_thread_.task_runner()->PostTask(
       FROM_HERE,
       base::BindOnce(&PeerConnectionDependencyFactory::
                          CreateIpcNetworkManagerOnWorkerThread,
-                     base::Unretained(this), &create_network_manager_event));
+                     base::Unretained(this), &create_network_manager_event,
+                     std::move(mdns_responder)));
 
   start_worker_event.Wait();
   create_network_manager_event.Wait();
@@ -317,10 +345,6 @@ void PeerConnectionDependencyFactory::InitializeSignalingThread(
   factory_options.disable_sctp_data_channels = false;
   factory_options.disable_encryption =
       cmd_line->HasSwitch(switches::kDisableWebRtcEncryption);
-  factory_options.crypto_options.enable_gcm_crypto_suites =
-      cmd_line->HasSwitch(switches::kEnableWebRtcSrtpAesGcm);
-  factory_options.crypto_options.enable_encrypted_rtp_header_extensions =
-      cmd_line->HasSwitch(switches::kEnableWebRtcSrtpEncryptedHeaders);
   pc_factory_->SetOptions(factory_options);
 
   event->Signal();
@@ -339,6 +363,20 @@ PeerConnectionDependencyFactory::CreatePeerConnection(
   CHECK(observer);
   if (!GetPcFactory().get())
     return nullptr;
+
+  webrtc::PeerConnectionDependencies dependencies(observer);
+  dependencies.allocator = CreatePortAllocator(web_frame);
+  dependencies.async_resolver_factory =
+      std::make_unique<ProxyAsyncResolverFactory>(socket_factory_.get());
+  return GetPcFactory()
+      ->CreatePeerConnection(config, std::move(dependencies))
+      .get();
+}
+
+std::unique_ptr<P2PPortAllocator>
+PeerConnectionDependencyFactory::CreatePortAllocator(
+    blink::WebLocalFrame* web_frame) {
+  DCHECK(web_frame);
 
   // Copy the flag from Preference associated with this WebLocalFrame.
   P2PPortAllocator::Config port_config;
@@ -438,22 +476,19 @@ PeerConnectionDependencyFactory::CreatePeerConnection(
   std::unique_ptr<rtc::NetworkManager> network_manager;
   if (port_config.enable_multiple_routes) {
     FilteringNetworkManager* filtering_network_manager =
-        new FilteringNetworkManager(network_manager_, requesting_origin,
+        new FilteringNetworkManager(network_manager_.get(), requesting_origin,
                                     media_permission);
     network_manager.reset(filtering_network_manager);
   } else {
-    network_manager.reset(new EmptyNetworkManager(network_manager_));
+    network_manager.reset(new EmptyNetworkManager(network_manager_.get()));
   }
-  std::unique_ptr<P2PPortAllocator> port_allocator(new P2PPortAllocator(
+  auto port_allocator = std::make_unique<P2PPortAllocator>(
       p2p_socket_dispatcher_, std::move(network_manager), socket_factory_.get(),
-      port_config, requesting_origin));
+      port_config, requesting_origin);
   if (IsValidPortRange(min_port, max_port))
     port_allocator->SetPortRange(min_port, max_port);
 
-  return GetPcFactory()
-      ->CreatePeerConnection(config, std::move(port_allocator),
-                             nullptr, observer)
-      .get();
+  return port_allocator;
 }
 
 scoped_refptr<webrtc::MediaStreamInterface>
@@ -520,22 +555,6 @@ void PeerConnectionDependencyFactory::TryScheduleStunProbeTrial() {
   if (!cmd_line->HasSwitch(switches::kWebRtcStunProbeTrialParameter))
     return;
 
-  // The underneath IPC channel has to be connected before sending any IPC
-  // message.
-  if (!p2p_socket_dispatcher_->connected()) {
-    base::ThreadTaskRunnerHandle::Get()->PostDelayedTask(
-        FROM_HERE,
-        base::BindOnce(
-            &PeerConnectionDependencyFactory::TryScheduleStunProbeTrial,
-            base::Unretained(this)),
-        base::TimeDelta::FromSeconds(1));
-    return;
-  }
-
-  // GetPcFactory could trigger an IPC message. If done before
-  // |p2p_socket_dispatcher_| is connected, that'll put the
-  // |p2p_socket_dispatcher_| in a bad state such that no other IPC message can
-  // be processed.
   GetPcFactory();
 
   const std::string params =
@@ -553,21 +572,22 @@ void PeerConnectionDependencyFactory::StartStunProbeTrialOnWorkerThread(
     const std::string& params) {
   DCHECK(network_manager_);
   DCHECK(chrome_worker_thread_.task_runner()->BelongsToCurrentThread());
-  stun_trial_.reset(
-      new StunProberTrial(network_manager_, params, socket_factory_.get()));
+  stun_trial_.reset(new StunProberTrial(network_manager_.get(), params,
+                                        socket_factory_.get()));
 }
 
 void PeerConnectionDependencyFactory::CreateIpcNetworkManagerOnWorkerThread(
-    base::WaitableEvent* event) {
+    base::WaitableEvent* event,
+    std::unique_ptr<MdnsResponderAdapter> mdns_responder) {
   DCHECK(chrome_worker_thread_.task_runner()->BelongsToCurrentThread());
-  network_manager_ = new IpcNetworkManager(p2p_socket_dispatcher_.get());
+  network_manager_ = std::make_unique<IpcNetworkManager>(
+      p2p_socket_dispatcher_.get(), std::move(mdns_responder));
   event->Signal();
 }
 
 void PeerConnectionDependencyFactory::DeleteIpcNetworkManager() {
   DCHECK(chrome_worker_thread_.task_runner()->BelongsToCurrentThread());
-  delete network_manager_;
-  network_manager_ = nullptr;
+  network_manager_.reset();
 }
 
 void PeerConnectionDependencyFactory::CleanupPeerConnectionFactory() {
@@ -604,6 +624,12 @@ PeerConnectionDependencyFactory::GetWebRtcWorkerThread() const {
                                            : nullptr;
 }
 
+rtc::Thread* PeerConnectionDependencyFactory::GetWebRtcWorkerThreadRtcThread()
+    const {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  return chrome_worker_thread_.IsRunning() ? worker_thread_ : nullptr;
+}
+
 scoped_refptr<base::SingleThreadTaskRunner>
 PeerConnectionDependencyFactory::GetWebRtcSignalingThread() const {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
@@ -618,6 +644,32 @@ void PeerConnectionDependencyFactory::EnsureWebRtcAudioDeviceImpl() {
     return;
 
   audio_device_ = new rtc::RefCountedObject<WebRtcAudioDeviceImpl>();
+}
+
+std::unique_ptr<webrtc::RtpCapabilities>
+PeerConnectionDependencyFactory::GetSenderCapabilities(
+    const std::string& kind) {
+  if (kind == "audio") {
+    return std::make_unique<webrtc::RtpCapabilities>(
+        GetPcFactory()->GetRtpSenderCapabilities(cricket::MEDIA_TYPE_AUDIO));
+  } else if (kind == "video") {
+    return std::make_unique<webrtc::RtpCapabilities>(
+        GetPcFactory()->GetRtpSenderCapabilities(cricket::MEDIA_TYPE_VIDEO));
+  }
+  return nullptr;
+}
+
+std::unique_ptr<webrtc::RtpCapabilities>
+PeerConnectionDependencyFactory::GetReceiverCapabilities(
+    const std::string& kind) {
+  if (kind == "audio") {
+    return std::make_unique<webrtc::RtpCapabilities>(
+        GetPcFactory()->GetRtpReceiverCapabilities(cricket::MEDIA_TYPE_AUDIO));
+  } else if (kind == "video") {
+    return std::make_unique<webrtc::RtpCapabilities>(
+        GetPcFactory()->GetRtpReceiverCapabilities(cricket::MEDIA_TYPE_VIDEO));
+  }
+  return nullptr;
 }
 
 }  // namespace content

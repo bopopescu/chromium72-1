@@ -39,8 +39,6 @@
 #include "third_party/blink/renderer/platform/fonts/font_description.h"
 #include "third_party/blink/renderer/platform/fonts/font_orientation.h"
 #include "third_party/blink/renderer/platform/fonts/small_caps_iterator.h"
-#include "third_party/blink/renderer/platform/graphics/paint/paint_font.h"
-#include "third_party/blink/renderer/platform/graphics/paint/paint_typeface.h"
 #include "third_party/blink/renderer/platform/platform_export.h"
 #include "third_party/blink/renderer/platform/wtf/allocator.h"
 #include "third_party/blink/renderer/platform/wtf/forward.h"
@@ -49,6 +47,7 @@
 #include "third_party/blink/renderer/platform/wtf/text/string_impl.h"
 #include "third_party/blink/renderer/platform/wtf/vector.h"
 #include "third_party/skia/include/core/SkRefCnt.h"
+#include "third_party/skia/include/core/SkTypeface.h"
 
 #if defined(OS_MACOSX)
 OBJC_CLASS NSFont;
@@ -66,6 +65,7 @@ inline NSFont* toNSFont(CTFontRef ctFontRef) {
 }
 #endif  // defined(OS_MACOSX)
 
+class SkFont;
 class SkTypeface;
 typedef uint32_t SkFontID;
 
@@ -100,7 +100,7 @@ class PLATFORM_EXPORT FontPlatformData {
                    FontOrientation,
                    FontVariationSettings*);
 #endif
-  FontPlatformData(const PaintTypeface&,
+  FontPlatformData(const sk_sp<SkTypeface>,
                    const CString& name,
                    float text_size,
                    bool synthetic_bold,
@@ -154,10 +154,14 @@ class PLATFORM_EXPORT FontPlatformData {
   const WebFontRenderStyle& GetFontRenderStyle() const { return style_; }
 #endif
 
-  void SetupPaintFont(PaintFont*,
-                      float device_scale_factor = 1,
-                      const Font* = nullptr) const;
-  const PaintTypeface& GetPaintTypeface() const;
+  // TODO(reed): SetupSkPaint is deprecated. Remove this once all call sites
+  // are moved to SetupSkFont.
+  void SetupSkPaint(SkPaint*,
+                    float device_scale_factor = 1,
+                    const Font* = nullptr) const;
+  void SetupSkFont(SkFont*,
+                   float device_scale_factor = 1,
+                   const Font* = nullptr) const;
 
 #if defined(OS_WIN)
   int PaintTextFlags() const { return paint_text_flags_; }
@@ -175,7 +179,7 @@ class PLATFORM_EXPORT FontPlatformData {
   void QuerySystemForRenderStyle();
 #endif
 
-  PaintTypeface paint_typeface_;
+  sk_sp<SkTypeface> typeface_;
 #if !defined(OS_WIN)
   CString family_;
 #endif
@@ -192,7 +196,7 @@ class PLATFORM_EXPORT FontPlatformData {
   WebFontRenderStyle style_;
 #endif
 
-  mutable scoped_refptr<HarfBuzzFace> harf_buzz_face_;
+  mutable scoped_refptr<HarfBuzzFace> harfbuzz_face_;
   bool is_hash_table_deleted_value_;
 #if defined(OS_WIN)
   // TODO(https://crbug.com/808221): Replace |paint_text_flags_| with |style_|.

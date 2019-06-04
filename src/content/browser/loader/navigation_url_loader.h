@@ -6,9 +6,16 @@
 #define CONTENT_BROWSER_LOADER_NAVIGATION_URL_LOADER_H_
 
 #include <memory>
+#include <string>
+#include <vector>
 
 #include "base/macros.h"
+#include "base/optional.h"
 #include "content/common/content_export.h"
+
+namespace net {
+class HttpRequestHeaders;
+}
 
 namespace content {
 
@@ -51,7 +58,10 @@ class CONTENT_EXPORT NavigationURLLoader {
 
   // Called in response to OnRequestRedirected to continue processing the
   // request.
-  virtual void FollowRedirect() = 0;
+  virtual void FollowRedirect(const base::Optional<std::vector<std::string>>&
+                                  to_be_removed_request_headers,
+                              const base::Optional<net::HttpRequestHeaders>&
+                                  modified_request_headers) = 0;
 
   // Called in response to OnResponseStarted to process the response.
   virtual void ProceedWithResponse() = 0;

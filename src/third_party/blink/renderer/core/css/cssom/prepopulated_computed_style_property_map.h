@@ -7,9 +7,11 @@
 
 #include "base/macros.h"
 #include "third_party/blink/renderer/core/css/css_property_id_templates.h"
-#include "third_party/blink/renderer/core/css/cssom/style_property_map_read_only.h"
+#include "third_party/blink/renderer/core/css/cssom/style_property_map_read_only_main_thread.h"
 
 namespace blink {
+
+class ComputedStyle;
 
 // This class has the same behaviour as the ComputedStylePropertyMap, except it
 // only contains the properties given to the constructor.
@@ -22,7 +24,7 @@ namespace blink {
 // result when the ComputedStyle changes UpdateStyle needs to be called to
 // re-populate the internal maps.
 class CORE_EXPORT PrepopulatedComputedStylePropertyMap
-    : public StylePropertyMapReadOnly {
+    : public StylePropertyMapReadOnlyMainThread {
  public:
   // NOTE: styled_node may be null, in the case where this map is for an
   // anonymous box.

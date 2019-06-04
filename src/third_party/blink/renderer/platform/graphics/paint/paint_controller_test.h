@@ -5,8 +5,8 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_PLATFORM_GRAPHICS_PAINT_PAINT_CONTROLLER_TEST_H_
 #define THIRD_PARTY_BLINK_RENDERER_PLATFORM_GRAPHICS_PAINT_PAINT_CONTROLLER_TEST_H_
 
+#include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/blink/renderer/platform/graphics/paint/clip_recorder.h"
 #include "third_party/blink/renderer/platform/graphics/paint/drawing_recorder.h"
 #include "third_party/blink/renderer/platform/graphics/paint/paint_controller.h"
 #include "third_party/blink/renderer/platform/testing/fake_display_item_client.h"
@@ -18,12 +18,6 @@ class GraphicsContext;
 
 class PaintControllerTestBase : public testing::Test {
  public:
-  PaintControllerTestBase()
-      : root_paint_property_client_("root"),
-        root_paint_chunk_id_(root_paint_property_client_,
-                             DisplayItem::kUninitializedType),
-        paint_controller_(PaintController::Create()) {}
-
   static void DrawNothing(GraphicsContext& context,
                           const DisplayItemClient& client,
                           DisplayItem::Type type) {
@@ -43,14 +37,22 @@ class PaintControllerTestBase : public testing::Test {
     context.DrawRect(RoundedIntRect(FloatRect(bounds)));
   }
 
-  void InitRootChunk() {
-    if (RuntimeEnabledFeatures::SlimmingPaintV175Enabled()) {
-      GetPaintController().UpdateCurrentPaintChunkProperties(
-          root_paint_chunk_id_, DefaultPaintChunkProperties());
-    }
+ protected:
+  PaintControllerTestBase()
+      : root_paint_property_client_("root"),
+        root_paint_chunk_id_(root_paint_property_client_,
+                             DisplayItem::kUninitializedType),
+        paint_controller_(PaintController::Create()) {}
+
+  void InitRootChunk() { InitRootChunk(GetPaintController()); }
+  void InitRootChunk(PaintController& paint_controller) {
+    paint_controller.UpdateCurrentPaintChunkProperties(
+        root_paint_chunk_id_, DefaultPaintChunkProperties());
+  }
+  const PaintChunk::Id DefaultRootChunkId() const {
+    return root_paint_chunk_id_;
   }
 
- protected:
   PaintController& GetPaintController() { return *paint_controller_; }
 
   int NumCachedNewItems() const {
@@ -69,6 +71,11 @@ class PaintControllerTestBase : public testing::Test {
 
   void InvalidateAll() { paint_controller_->InvalidateAllForTesting(); }
 
+  void CommitAndFinishCycle() {
+    paint_controller_->CommitNewDisplayItems();
+    paint_controller_->FinishCycle();
+  }
+
   using SubsequenceMarkers = PaintController::SubsequenceMarkers;
   SubsequenceMarkers* GetSubsequenceMarkers(const DisplayItemClient& client) {
     return paint_controller_->GetSubsequenceMarkers(client);
@@ -83,48 +90,45 @@ class PaintControllerTestBase : public testing::Test {
     return ClientCacheIsValid(*paint_controller_, client);
   }
 
-  const ChunkRasterInvalidationRects* GetRasterInvalidationRects(size_t i) {
-    return GetPaintController().GetPaintArtifact().GetRasterInvalidationRects(
-        i);
-  }
-
  private:
   FakeDisplayItemClient root_paint_property_client_;
   PaintChunk::Id root_paint_chunk_id_;
   std::unique_ptr<PaintController> paint_controller_;
 };
 
-class TestDisplayItem final : public DisplayItem {
- public:
-  TestDisplayItem(const DisplayItemClient& client, Type type)
-      : DisplayItem(client, type, sizeof(*this)) {}
+// Matcher for checking display item list. Sample usage:
+// EXPECT_THAT(paint_controller.GetDisplayItemList(),
+//             ElementsAre(IsSameId(client1, kBackgroundType),
+//                         IsSameId(client2, kForegroundType)));
+MATCHER_P(IsSameId, id, "") {
+  return arg.GetId() == id;
+}
+MATCHER_P2(IsSameId, client, type, "") {
+  return arg.GetId() == DisplayItem::Id(*client, type);
+}
 
-  void Replay(GraphicsContext&) const final { NOTREACHED(); }
-  void AppendToDisplayItemList(const FloatSize&,
-                               cc::DisplayItemList&) const final {
-    NOTREACHED();
-  }
-};
-
-#define EXPECT_DISPLAY_LIST(actual, expected_size, ...)                   \
-  do {                                                                    \
-    EXPECT_EQ((size_t)expected_size, actual.size());                      \
-    if (expected_size != actual.size())                                   \
-      break;                                                              \
-    const TestDisplayItem expected[] = {__VA_ARGS__};                     \
-    for (size_t i = 0; i < expected_size; ++i) {                          \
-      SCOPED_TRACE(                                                       \
-          String::Format("%d: Expected:(client=%p:\"%s\" type=%d) "       \
-                         "Actual:(client=%p:%s type=%d)",                 \
-                         (int)i, &expected[i].Client(),                   \
-                         expected[i].Client().DebugName().Ascii().data(), \
-                         (int)expected[i].GetType(), &actual[i].Client(), \
-                         actual[i].Client().DebugName().Ascii().data(),   \
-                         (int)actual[i].GetType()));                      \
-      EXPECT_EQ(&expected[i].Client(), &actual[i].Client());              \
-      EXPECT_EQ(expected[i].GetType(), actual[i].GetType());              \
-    }                                                                     \
-  } while (false);
+// Matcher for checking paint chunks. Sample usage:
+// EXPACT_THAT(paint_controller.PaintChunks(),
+//             ELementsAre(IsPaintChunk(0, 1, id1, properties1),
+//                         IsPaintChunk(1, 3, id2, properties2)));
+inline bool CheckChunk(const PaintChunk& chunk,
+                       size_t begin,
+                       size_t end,
+                       const PaintChunk::Id& id,
+                       const PropertyTreeState& properties,
+                       const HitTestData* hit_test_data = nullptr) {
+  return chunk.begin_index == begin && chunk.end_index == end &&
+         chunk.id == id && chunk.properties == properties &&
+         ((!chunk.hit_test_data && !hit_test_data) ||
+          (chunk.hit_test_data && hit_test_data &&
+           *chunk.hit_test_data == *hit_test_data));
+}
+MATCHER_P4(IsPaintChunk, begin, end, id, properties, "") {
+  return CheckChunk(arg, begin, end, id, properties);
+}
+MATCHER_P5(IsPaintChunk, begin, end, id, properties, hit_test_data, "") {
+  return CheckChunk(arg, begin, end, id, properties, &hit_test_data);
+}
 
 // Shorter names for frequently used display item types in tests.
 const DisplayItem::Type kBackgroundType = DisplayItem::kBoxDecorationBackground;
@@ -133,7 +137,7 @@ const DisplayItem::Type kForegroundType =
 const DisplayItem::Type kDocumentBackgroundType =
     DisplayItem::kDocumentBackground;
 const DisplayItem::Type kScrollHitTestType = DisplayItem::kScrollHitTest;
-const DisplayItem::Type kClipType = DisplayItem::kClipFirst;
+const DisplayItem::Type kClipType = DisplayItem::kClipPaintPhaseFirst;
 
 }  // namespace blink
 

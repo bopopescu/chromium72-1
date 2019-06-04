@@ -25,7 +25,7 @@ const bluetoothApis = window['bluetoothApis'] || {
 Polymer({
   is: 'settings-bluetooth-page',
 
-  behaviors: [PrefsBehavior],
+  behaviors: [I18nBehavior, PrefsBehavior],
 
   properties: {
     /** Preferences state. */
@@ -74,7 +74,7 @@ Polymer({
         if (settings.routes.BLUETOOTH_DEVICES) {
           map.set(
               settings.routes.BLUETOOTH_DEVICES.path,
-              '#bluetoothDevices .subpage-arrow');
+              '#bluetoothDevices .subpage-arrow button');
         }
         return map;
       },
@@ -98,6 +98,30 @@ Polymer({
     bluetoothPrivate: {
       type: Object,
       value: chrome.bluetoothPrivate,
+    },
+
+    /**
+     * Whether the user is a secondary user.
+     * @private
+     */
+    isSecondaryUser_: {
+      type: Boolean,
+      value: function() {
+        return loadTimeData.getBoolean('isSecondaryUser');
+      },
+      readOnly: true,
+    },
+
+    /**
+     * Email address for the primary user.
+     * @private
+     */
+    primaryUserEmail_: {
+      type: String,
+      value: function() {
+        return loadTimeData.getString('primaryUserEmail');
+      },
+      readOnly: true,
     },
   },
 
@@ -138,13 +162,16 @@ Polymer({
   },
 
   /**
+   * @param {boolean} bluetoothToggleState
    * @return {string}
    * @private
    */
-  getIcon_: function() {
-    if (!this.bluetoothToggleState_)
+  getIcon_: function(bluetoothToggleState) {
+    // Don't use |this.bluetoothToggleState_| here, since it has not been
+    // updated yet to the latest value.
+    if (!bluetoothToggleState)
       return 'settings:bluetooth-disabled';
-    return 'settings:bluetooth';
+    return 'cr:bluetooth';
   },
 
   /**

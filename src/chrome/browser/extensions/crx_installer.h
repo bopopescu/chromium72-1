@@ -7,6 +7,7 @@
 
 #include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "base/compiler_specific.h"
@@ -28,7 +29,6 @@
 #include "extensions/common/extension.h"
 #include "extensions/common/manifest.h"
 
-class ExtensionService;
 class ExtensionServiceTest;
 class SkBitmap;
 struct WebApplicationInfo;
@@ -43,6 +43,7 @@ class Connector;
 
 namespace extensions {
 class CrxInstallError;
+class ExtensionService;
 class ExtensionUpdaterTest;
 class PreloadCheckGroup;
 
@@ -248,6 +249,7 @@ class CrxInstaller : public SandboxedUnpackerClient {
  private:
   friend class ::ExtensionServiceTest;
   friend class ExtensionUpdaterTest;
+  friend class BookmarkAppInstallerTest;
 
   CrxInstaller(base::WeakPtr<ExtensionService> service_weak,
                std::unique_ptr<ExtensionInstallPrompt> client,
@@ -393,11 +395,6 @@ class CrxInstaller : public SandboxedUnpackerClient {
   // to false.
   bool delete_source_;
 
-  // Whether to create an app shortcut after successful installation. This is
-  // set based on the user's selection in the UI and can only ever be true for
-  // apps.
-  bool create_app_shortcut_;
-
   // The ordinal of the NTP apps page |extension_| will be shown on.
   syncer::StringOrdinal page_ordinal_;
 
@@ -449,7 +446,7 @@ class CrxInstaller : public SandboxedUnpackerClient {
   extension_misc::CrxInstallCause install_cause_;
 
   // Creation flags to use for the extension.  These flags will be used
-  // when calling Extenion::Create() by the crx installer.
+  // when calling Extension::Create() by the crx installer.
   int creation_flags_;
 
   // Whether to allow off store installation.

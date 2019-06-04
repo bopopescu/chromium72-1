@@ -26,10 +26,11 @@
 
 #include "third_party/blink/renderer/modules/navigatorcontentutils/navigator_content_utils.h"
 
-#include "third_party/blink/renderer/bindings/core/v8/exception_state.h"
-#include "third_party/blink/renderer/core/dom/exception_code.h"
+#include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/frame/local_frame.h"
 #include "third_party/blink/renderer/core/frame/use_counter.h"
+#include "third_party/blink/renderer/platform/bindings/exception_state.h"
+#include "third_party/blink/renderer/platform/weborigin/security_origin.h"
 #include "third_party/blink/renderer/platform/wtf/text/string_builder.h"
 
 namespace blink {
@@ -56,7 +57,7 @@ static bool VerifyCustomHandlerURL(const Document& document,
   int index = url.Find(kToken);
   if (-1 == index) {
     exception_state.ThrowDOMException(
-        kSyntaxError,
+        DOMExceptionCode::kSyntaxError,
         "The url provided ('" + url + "') does not contain '%s'.");
     return false;
   }
@@ -69,7 +70,7 @@ static bool VerifyCustomHandlerURL(const Document& document,
 
   if (kurl.IsEmpty() || !kurl.IsValid()) {
     exception_state.ThrowDOMException(
-        kSyntaxError,
+        DOMExceptionCode::kSyntaxError,
         "The custom handler URL created by removing '%s' and prepending '" +
             document.BaseURL().GetString() + "' is invalid.");
     return false;
@@ -91,7 +92,7 @@ static bool IsSchemeWhitelisted(const String& scheme) {
     InitCustomSchemeHandlerWhitelist();
 
   StringBuilder builder;
-  builder.Append(scheme.DeprecatedLower().Ascii().data());
+  builder.Append(scheme.LowerASCII());
 
   return g_scheme_whitelist->Contains(builder.ToString());
 }
@@ -191,7 +192,8 @@ const char NavigatorContentUtils::kSupplementName[] = "NavigatorContentUtils";
 void NavigatorContentUtils::ProvideTo(Navigator& navigator,
                                       NavigatorContentUtilsClient* client) {
   Supplement<Navigator>::ProvideTo(
-      navigator, new NavigatorContentUtils(navigator, client));
+      navigator,
+      MakeGarbageCollected<NavigatorContentUtils>(navigator, client));
 }
 
 }  // namespace blink

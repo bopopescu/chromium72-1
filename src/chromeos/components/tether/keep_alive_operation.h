@@ -11,9 +11,15 @@
 
 namespace chromeos {
 
-namespace tether {
+namespace device_sync {
+class DeviceSyncClient;
+}  // namespace device_sync
 
-class BleConnectionManager;
+namespace secure_channel {
+class SecureChannelClient;
+}  // namespace secure_channel
+
+namespace tether {
 
 // Operation which sends a keep-alive message to a tether host and receives an
 // update about the host's status.
@@ -23,14 +29,16 @@ class KeepAliveOperation : public MessageTransferOperation {
    public:
     static std::unique_ptr<KeepAliveOperation> NewInstance(
         cryptauth::RemoteDeviceRef device_to_connect,
-        BleConnectionManager* connection_manager);
+        device_sync::DeviceSyncClient* device_sync_client,
+        secure_channel::SecureChannelClient* secure_channel_client);
 
     static void SetInstanceForTesting(Factory* factory);
 
    protected:
     virtual std::unique_ptr<KeepAliveOperation> BuildInstance(
         cryptauth::RemoteDeviceRef device_to_connect,
-        BleConnectionManager* connection_manager);
+        device_sync::DeviceSyncClient* device_sync_client,
+        secure_channel::SecureChannelClient* secure_channel_client);
 
    private:
     static Factory* factory_instance_;
@@ -51,8 +59,10 @@ class KeepAliveOperation : public MessageTransferOperation {
   void RemoveObserver(Observer* observer);
 
  protected:
-  KeepAliveOperation(cryptauth::RemoteDeviceRef device_to_connect,
-                     BleConnectionManager* connection_manager);
+  KeepAliveOperation(
+      cryptauth::RemoteDeviceRef device_to_connect,
+      device_sync::DeviceSyncClient* device_sync_client,
+      secure_channel::SecureChannelClient* secure_channel_client);
 
   // MessageTransferOperation:
   void OnDeviceAuthenticated(cryptauth::RemoteDeviceRef remote_device) override;
@@ -70,7 +80,7 @@ class KeepAliveOperation : public MessageTransferOperation {
 
   cryptauth::RemoteDeviceRef remote_device_;
   base::Clock* clock_;
-  base::ObserverList<Observer> observer_list_;
+  base::ObserverList<Observer>::Unchecked observer_list_;
 
   base::Time keep_alive_tickle_request_start_time_;
 

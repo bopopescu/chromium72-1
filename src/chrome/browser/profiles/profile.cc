@@ -19,6 +19,7 @@
 #include "components/browser_sync/profile_sync_service.h"
 #include "components/data_reduction_proxy/core/browser/data_reduction_proxy_prefs.h"
 #include "components/keyed_service/content/browser_context_dependency_manager.h"
+#include "components/language/core/browser/pref_names.h"
 #include "components/pref_registry/pref_registry_syncable.h"
 #include "components/prefs/pref_service.h"
 #include "components/safe_browsing/common/safe_browsing_prefs.h"
@@ -175,18 +176,11 @@ void Profile::RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry) {
   // In the future we may want to maintain kApplicationLocale
   // in user's profile for other platforms as well.
   registry->RegisterStringPref(
-      prefs::kApplicationLocale,
-      std::string(),
+      language::prefs::kApplicationLocale, std::string(),
       user_prefs::PrefRegistrySyncable::SYNCABLE_PRIORITY_PREF);
   registry->RegisterStringPref(prefs::kApplicationLocaleBackup, std::string());
   registry->RegisterStringPref(prefs::kApplicationLocaleAccepted,
                                std::string());
-  registry->RegisterListPref(prefs::kAllowedLocales,
-                             std::make_unique<base::ListValue>());
-#endif
-
-#if defined(OS_ANDROID)
-  registry->RegisterBooleanPref(prefs::kDevToolsRemoteEnabled, false);
 #endif
 
   registry->RegisterBooleanPref(prefs::kDataSaverEnabled, false);
@@ -257,9 +251,11 @@ bool Profile::ShouldPersistSessionCookies() {
   return false;
 }
 
-network::mojom::NetworkContextPtr Profile::CreateMainNetworkContext() {
+network::mojom::NetworkContextPtr Profile::CreateNetworkContext(
+    bool in_memory,
+    const base::FilePath& relative_partition_path) {
   return ProfileNetworkContextServiceFactory::GetForContext(this)
-      ->CreateMainNetworkContext();
+      ->CreateNetworkContext(in_memory, relative_partition_path);
 }
 
 bool Profile::IsNewProfile() {
@@ -273,7 +269,12 @@ bool Profile::IsNewProfile() {
 
 bool Profile::IsSyncAllowed() {
   if (ProfileSyncServiceFactory::HasProfileSyncService(this)) {
-    return ProfileSyncServiceFactory::GetForProfile(this)->IsSyncAllowed();
+    browser_sync::ProfileSyncService* sync_service =
+        ProfileSyncServiceFactory::GetForProfile(this);
+    return !sync_service->HasDisableReason(
+               syncer::SyncService::DISABLE_REASON_PLATFORM_OVERRIDE) &&
+           !sync_service->HasDisableReason(
+               syncer::SyncService::DISABLE_REASON_ENTERPRISE_POLICY);
   }
 
   // No ProfileSyncService created yet - we don't want to create one, so just

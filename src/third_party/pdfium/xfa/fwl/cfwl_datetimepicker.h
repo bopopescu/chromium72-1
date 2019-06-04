@@ -30,7 +30,7 @@
 
 class CFWL_DateTimeEdit;
 
-class CFWL_DateTimePicker : public CFWL_Widget {
+class CFWL_DateTimePicker final : public CFWL_Widget {
  public:
   explicit CFWL_DateTimePicker(const CFWL_App* pApp);
   ~CFWL_DateTimePicker() override;
@@ -49,13 +49,24 @@ class CFWL_DateTimePicker : public CFWL_Widget {
   void SetCurSel(int32_t iYear, int32_t iMonth, int32_t iDay);
 
   void SetEditText(const WideString& wsText);
+  int32_t GetEditTextLength() const;
   WideString GetEditText() const;
+  void ClearText();
 
+  void SelectAll();
+  void ClearSelection();
   bool HasSelection() const { return m_pEdit->HasSelection(); }
   // Returns <start, count> of the selection.
   std::pair<size_t, size_t> GetSelection() const {
     return m_pEdit->GetSelection();
   }
+  Optional<WideString> Copy();
+  Optional<WideString> Cut();
+  bool Paste(const WideString& wsPaste);
+  bool Undo();
+  bool Redo();
+  bool CanUndo();
+  bool CanRedo();
 
   CFX_RectF GetBBox() const;
   void SetEditLimit(int32_t nLimit) { m_pEdit->SetLimit(nLimit); }

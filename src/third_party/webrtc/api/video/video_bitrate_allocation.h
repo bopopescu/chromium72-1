@@ -11,12 +11,13 @@
 #ifndef API_VIDEO_VIDEO_BITRATE_ALLOCATION_H_
 #define API_VIDEO_VIDEO_BITRATE_ALLOCATION_H_
 
+#include <stddef.h>
+#include <stdint.h>
 #include <limits>
 #include <string>
 #include <vector>
 
-#include "api/optional.h"
-#include "typedefs.h"  // NOLINT(build/include)
+#include "absl/types/optional.h"
 
 namespace webrtc {
 
@@ -62,6 +63,12 @@ class VideoBitrateAllocation {
   // layer with a defined bitrate.
   std::vector<uint32_t> GetTemporalLayerAllocation(size_t spatial_index) const;
 
+  // Returns one VideoBitrateAllocation for each spatial layer. This is used to
+  // configure simulcast streams. Note that the length of the returned vector is
+  // always kMaxSpatialLayers, the optional is unset for unused layers.
+  std::vector<absl::optional<VideoBitrateAllocation>> GetSimulcastAllocations()
+      const;
+
   uint32_t get_sum_bps() const { return sum_; }  // Sum of all bitrates.
   uint32_t get_sum_kbps() const {
     // Round down to not exceed the allocated bitrate.
@@ -77,7 +84,7 @@ class VideoBitrateAllocation {
 
  private:
   uint32_t sum_;
-  rtc::Optional<uint32_t> bitrates_[kMaxSpatialLayers][kMaxTemporalStreams];
+  absl::optional<uint32_t> bitrates_[kMaxSpatialLayers][kMaxTemporalStreams];
 };
 
 }  // namespace webrtc

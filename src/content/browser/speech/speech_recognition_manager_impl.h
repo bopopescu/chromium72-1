@@ -16,7 +16,7 @@
 #include "content/public/browser/speech_recognition_manager.h"
 #include "content/public/browser/speech_recognition_session_config.h"
 #include "content/public/browser/speech_recognition_session_context.h"
-#include "content/public/common/speech_recognition_error.h"
+#include "third_party/blink/public/mojom/speech/speech_recognition_error.mojom.h"
 
 namespace media {
 class AudioSystem;
@@ -76,10 +76,13 @@ class CONTENT_EXPORT SpeechRecognitionManagerImpl
   void OnSoundEnd(int session_id) override;
   void OnAudioEnd(int session_id) override;
   void OnRecognitionEnd(int session_id) override;
-  void OnRecognitionResults(int session_id,
-                            const SpeechRecognitionResults& result) override;
-  void OnRecognitionError(int session_id,
-                          const SpeechRecognitionError& error) override;
+  void OnRecognitionResults(
+      int session_id,
+      const std::vector<blink::mojom::SpeechRecognitionResultPtr>& result)
+      override;
+  void OnRecognitionError(
+      int session_id,
+      const blink::mojom::SpeechRecognitionError& error) override;
   void OnAudioLevelsChange(int session_id,
                            float volume,
                            float noise_volume) override;
@@ -172,6 +175,8 @@ class CONTENT_EXPORT SpeechRecognitionManagerImpl
   SpeechRecognitionEventListener* GetDelegateListener() const;
   int GetNextSessionID();
 
+  static int next_requester_id_;
+
   // This class lives on the UI thread; all access to it must be done on that
   // thread.
   std::unique_ptr<FrameDeletionObserver, BrowserThread::DeleteOnUIThread>
@@ -184,6 +189,7 @@ class CONTENT_EXPORT SpeechRecognitionManagerImpl
   int last_session_id_;
   bool is_dispatching_event_;
   std::unique_ptr<SpeechRecognitionManagerDelegate> delegate_;
+  const int requester_id_;
 
   // Used for posting asynchronous tasks (on the IO thread) without worrying
   // about this class being destroyed in the meanwhile (due to browser shutdown)

@@ -14,6 +14,7 @@
 
 import("build/crashpad_buildconfig.gni")
 import("build/test.gni")
+import("util/net/tls.gni")
 
 config("crashpad_config") {
   include_dirs = [ "." ]
@@ -40,10 +41,10 @@ if (crashpad_is_in_chromium || crashpad_is_in_fuchsia) {
 
       deps = [
         ":crashpad_tests",
-        "snapshot:crashpad_snapshot_test_both_dt_hash_styles(//build/toolchain/fuchsia:$current_cpu-shared)",
-        "snapshot:crashpad_snapshot_test_module(//build/toolchain/fuchsia:$current_cpu-shared)",
-        "snapshot:crashpad_snapshot_test_module_large(//build/toolchain/fuchsia:$current_cpu-shared)",
-        "snapshot:crashpad_snapshot_test_module_small(//build/toolchain/fuchsia:$current_cpu-shared)",
+        "snapshot:crashpad_snapshot_test_both_dt_hash_styles",
+        "snapshot:crashpad_snapshot_test_module",
+        "snapshot:crashpad_snapshot_test_module_large",
+        "snapshot:crashpad_snapshot_test_module_small",
         "test:crashpad_test_test_multiprocess_exec_test_child",
         "util:http_transport_test_server",
       ]
@@ -52,17 +53,25 @@ if (crashpad_is_in_chromium || crashpad_is_in_fuchsia) {
         {
           name = "crashpad_tests"
         },
+      ]
+
+      # Note that the infix of "crashpad_tests" below in
+      # binary/resource entries should be removed once
+      # crashpad_tests is moved out of the system image;
+      # until then, it is used to disambiguate the crashpad
+      # binaries and data from others within /system/(bin|data).
+      binaries = [
         {
           name = "crashpad_test_test_multiprocess_exec_test_child"
-          dest = "crashpad_test_data/crashpad_test_test_multiprocess_exec_test_child"
+          dest = "crashpad_tests/crashpad_test_test_multiprocess_exec_test_child"
         },
         {
           name = "http_transport_test_server"
-          dest = "crashpad_test_data/http_transport_test_server"
+          dest = "crashpad_tests/http_transport_test_server"
         },
       ]
 
-      libraries = [
+      loadable_modules = [
         {
           name = "crashpad_snapshot_test_both_dt_hash_styles.so"
         },
@@ -79,18 +88,34 @@ if (crashpad_is_in_chromium || crashpad_is_in_fuchsia) {
 
       resources = [
         {
-          path = rebase_path("util/net/testdata/ascii_http_body.txt")
-          dest = "crashpad_test_data/util/net/testdata/ascii_http_body.txt"
+          path = "util/net/testdata/ascii_http_body.txt"
+          dest = "crashpad_tests/util/net/testdata/ascii_http_body.txt"
         },
         {
-          path = rebase_path("util/net/testdata/binary_http_body.dat")
-          dest = "crashpad_test_data/util/net/testdata/binary_http_body.dat"
+          path = "util/net/testdata/binary_http_body.dat"
+          dest = "crashpad_tests/util/net/testdata/binary_http_body.dat"
         },
         {
-          path = rebase_path("test/test_paths_test_data_root.txt")
-          dest = "crashpad_test_data/test/test_paths_test_data_root.txt"
+          path = "test/test_paths_test_data_root.txt"
+          dest = "crashpad_tests/test/test_paths_test_data_root.txt"
         },
       ]
+
+      if (crashpad_use_boringssl_for_http_transport_socket) {
+        deps += [
+          "util:generate_test_server_key",
+        ]
+        resources += [
+          {
+            path = "$root_out_dir/crashpad_util_test_cert.pem"
+            dest = "crashpad_tests/crashpad_util_test_cert.pem"
+          },
+          {
+            path = "$root_out_dir/crashpad_util_test_key.pem"
+            dest = "crashpad_tests/crashpad_util_test_key.pem"
+          },
+        ]
+      }
     }
 
     package("crashpad_handler") {

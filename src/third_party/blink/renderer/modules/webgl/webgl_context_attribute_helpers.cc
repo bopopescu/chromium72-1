@@ -9,31 +9,31 @@
 
 namespace blink {
 
-WebGLContextAttributes ToWebGLContextAttributes(
+WebGLContextAttributes* ToWebGLContextAttributes(
     const CanvasContextCreationAttributesCore& attrs) {
-  WebGLContextAttributes result;
-  result.setAlpha(attrs.alpha);
-  result.setDepth(attrs.depth);
-  result.setStencil(attrs.stencil);
-  result.setAntialias(attrs.antialias);
-  result.setPremultipliedAlpha(attrs.premultiplied_alpha);
-  result.setPreserveDrawingBuffer(attrs.preserve_drawing_buffer);
-  result.setFailIfMajorPerformanceCaveat(
+  WebGLContextAttributes* result = WebGLContextAttributes::Create();
+  result->setAlpha(attrs.alpha);
+  result->setDepth(attrs.depth);
+  result->setStencil(attrs.stencil);
+  result->setAntialias(attrs.antialias);
+  result->setPremultipliedAlpha(attrs.premultiplied_alpha);
+  result->setPreserveDrawingBuffer(attrs.preserve_drawing_buffer);
+  result->setFailIfMajorPerformanceCaveat(
       attrs.fail_if_major_performance_caveat);
-  result.setCompatibleXRDevice(
+  result->setCompatibleXRDevice(
       static_cast<XRDevice*>(attrs.compatible_xr_device.Get()));
+  result->setLowLatency(attrs.low_latency);
   return result;
 }
 
 Platform::ContextAttributes ToPlatformContextAttributes(
     const CanvasContextCreationAttributesCore& attrs,
-    unsigned web_gl_version,
+    Platform::ContextType context_type,
     bool support_own_offscreen_surface) {
   Platform::ContextAttributes result;
   result.fail_if_major_performance_caveat =
       attrs.fail_if_major_performance_caveat;
-  result.context_type = web_gl_version == 2 ? Platform::kWebGL2ContextType
-                                            : Platform::kWebGL1ContextType;
+  result.context_type = context_type;
   if (support_own_offscreen_surface) {
     // Only ask for alpha/depth/stencil/antialias if we may be using the default
     // framebuffer. They are not needed for standard offscreen rendering.

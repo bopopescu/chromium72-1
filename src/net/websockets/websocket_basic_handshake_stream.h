@@ -28,7 +28,7 @@ class HttpResponseInfo;
 class HttpStreamParser;
 class WebSocketEndpointLockManager;
 struct WebSocketExtensionParams;
-class WebSocketStreamRequest;
+class WebSocketStreamRequestAPI;
 
 class NET_EXPORT_PRIVATE WebSocketBasicHandshakeStream final
     : public WebSocketHandshakeStreamBase {
@@ -43,7 +43,7 @@ class NET_EXPORT_PRIVATE WebSocketBasicHandshakeStream final
       bool using_proxy,
       std::vector<std::string> requested_sub_protocols,
       std::vector<std::string> requested_extensions,
-      WebSocketStreamRequest* request,
+      WebSocketStreamRequestAPI* request,
       WebSocketEndpointLockManager* websocket_endpoint_lock_manager);
 
   ~WebSocketBasicHandshakeStream() override;
@@ -74,9 +74,6 @@ class NET_EXPORT_PRIVATE WebSocketBasicHandshakeStream final
   void GetSSLInfo(SSLInfo* ssl_info) override;
   void GetSSLCertRequestInfo(SSLCertRequestInfo* cert_request_info) override;
   bool GetRemoteEndpoint(IPEndPoint* endpoint) override;
-  Error GetTokenBindingSignature(crypto::ECPrivateKey* key,
-                                 TokenBindingType tb_type,
-                                 std::vector<uint8_t>* out) override;
   void Drain(HttpNetworkSession* session) override;
   void SetPriority(RequestPriority priority) override;
   void PopulateNetErrorDetails(NetErrorDetails* details) override;
@@ -122,7 +119,7 @@ class NET_EXPORT_PRIVATE WebSocketBasicHandshakeStream final
 
   // Owned by another object.
   // |connect_delegate| will live during the lifetime of this object.
-  WebSocketStream::ConnectDelegate* connect_delegate_;
+  WebSocketStream::ConnectDelegate* const connect_delegate_;
 
   // This is stored in SendRequest() for use by ReadResponseHeaders().
   HttpResponseInfo* http_response_info_;
@@ -150,7 +147,7 @@ class NET_EXPORT_PRIVATE WebSocketBasicHandshakeStream final
   // to avoid including extension-related header files here.
   std::unique_ptr<WebSocketExtensionParams> extension_params_;
 
-  WebSocketStreamRequest* const stream_request_;
+  WebSocketStreamRequestAPI* const stream_request_;
 
   WebSocketEndpointLockManager* const websocket_endpoint_lock_manager_;
 

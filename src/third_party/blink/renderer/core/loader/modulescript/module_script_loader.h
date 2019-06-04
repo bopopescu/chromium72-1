@@ -16,6 +16,7 @@
 
 namespace blink {
 
+class FetchClientSettingsObjectSnapshot;
 class Modulator;
 class ModuleScript;
 class ModuleScriptLoaderClient;
@@ -44,17 +45,20 @@ class CORE_EXPORT ModuleScriptLoader final
   };
 
  public:
-  static ModuleScriptLoader* Create(Modulator* modulator,
-                                    const ScriptFetchOptions& options,
-                                    ModuleScriptLoaderRegistry* registry,
-                                    ModuleScriptLoaderClient* client) {
-    return new ModuleScriptLoader(modulator, options, registry, client);
-  }
-
+  ModuleScriptLoader(Modulator*,
+                     const ScriptFetchOptions&,
+                     ModuleScriptLoaderRegistry*,
+                     ModuleScriptLoaderClient*);
   ~ModuleScriptLoader();
 
-  void Fetch(const ModuleScriptFetchRequest&,
-             ModuleGraphLevel);
+  static void Fetch(
+      const ModuleScriptFetchRequest&,
+      FetchClientSettingsObjectSnapshot* fetch_client_settings_object,
+      ModuleGraphLevel,
+      Modulator* module_map_settings_object,
+      ModuleScriptCustomFetchType,
+      ModuleScriptLoaderRegistry*,
+      ModuleScriptLoaderClient*);
 
   // Implements ModuleScriptFetcher::Client.
   void NotifyFetchFinished(
@@ -67,10 +71,11 @@ class CORE_EXPORT ModuleScriptLoader final
   void Trace(blink::Visitor*) override;
 
  private:
-  ModuleScriptLoader(Modulator*,
-                     const ScriptFetchOptions&,
-                     ModuleScriptLoaderRegistry*,
-                     ModuleScriptLoaderClient*);
+  void FetchInternal(
+      const ModuleScriptFetchRequest&,
+      FetchClientSettingsObjectSnapshot* fetch_client_settings_object,
+      ModuleGraphLevel,
+      ModuleScriptCustomFetchType);
 
   void AdvanceState(State new_state);
 #if DCHECK_IS_ON()

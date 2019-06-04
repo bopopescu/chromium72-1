@@ -23,14 +23,13 @@ public:
 
     bool isOpaque() const override;
 
-    void toString(SkString* str) const override;
-    SK_DECLARE_PUBLIC_FLATTENABLE_DESERIALIZATION_PROCS(SkImageShader)
-
 #if SK_SUPPORT_GPU
     std::unique_ptr<GrFragmentProcessor> asFragmentProcessor(const GrFPArgs&) const override;
 #endif
 
 private:
+    SK_FLATTENABLE_HOOKS(SkImageShader)
+
     SkImageShader(sk_sp<SkImage>,
                   SkShader::TileMode tx,
                   SkShader::TileMode ty,
@@ -38,9 +37,8 @@ private:
                   bool clampAsIfUnpremul);
 
     void flatten(SkWriteBuffer&) const override;
+#ifdef SK_ENABLE_LEGACY_SHADERCONTEXT
     Context* onMakeContext(const ContextRec&, SkArenaAlloc* storage) const override;
-#ifdef SK_SUPPORT_LEGACY_SHADER_ISABITMAP
-    bool onIsABitmap(SkBitmap*, SkMatrix*, SkShader::TileMode*) const override;
 #endif
     SkImage* onIsAImage(SkMatrix*, SkShader::TileMode*) const override;
 

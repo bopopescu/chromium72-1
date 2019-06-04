@@ -11,7 +11,7 @@
 #include "net/third_party/quic/core/crypto/aead_base_decrypter.h"
 #include "net/third_party/quic/platform/api/quic_export.h"
 
-namespace net {
+namespace quic {
 
 // A ChaCha20Poly1305TlsDecrypter is a QuicDecrypter that implements the
 // AEAD_CHACHA20_POLY1305 algorithm specified in RFC 7539 for use in IETF QUIC.
@@ -26,14 +26,14 @@ class QUIC_EXPORT_PRIVATE ChaCha20Poly1305TlsDecrypter
   };
 
   ChaCha20Poly1305TlsDecrypter();
+  ChaCha20Poly1305TlsDecrypter(const ChaCha20Poly1305TlsDecrypter&) = delete;
+  ChaCha20Poly1305TlsDecrypter& operator=(const ChaCha20Poly1305TlsDecrypter&) =
+      delete;
   ~ChaCha20Poly1305TlsDecrypter() override;
 
   uint32_t cipher_id() const override;
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(ChaCha20Poly1305TlsDecrypter);
 };
 
-}  // namespace net
+}  // namespace quic
 
 #endif  // NET_THIRD_PARTY_QUIC_CORE_CRYPTO_CHACHA20_POLY1305_TLS_DECRYPTER_H_

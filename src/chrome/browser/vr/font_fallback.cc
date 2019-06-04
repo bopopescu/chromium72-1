@@ -12,11 +12,12 @@
 #include "base/lazy_instance.h"
 #include "base/memory/ptr_util.h"
 #include "build/build_config.h"
+#include "chrome/browser/vr/ui_support.h"
 #include "third_party/icu/source/common/unicode/uscript.h"
+#include "third_party/skia/include/core/SkFontMgr.h"
 #include "third_party/skia/include/core/SkPaint.h"
 #include "third_party/skia/include/core/SkTypeface.h"
-#include "third_party/skia/include/ports/SkFontMgr.h"
-#include "ui/gfx/platform_font_linux.h"
+#include "ui/gfx/platform_font_skia.h"
 
 namespace vr {
 
@@ -40,14 +41,13 @@ class CachedFont {
     // character based. This also limits the cache size to the number of Unicode
     // scripts (174 at the time of writing).
     UErrorCode err = UErrorCode::U_ZERO_ERROR;
-    UScriptCode script = uscript_getScript(character, &err);
+    UScriptCode script = UScriptGetScript(character, &err);
     if (!U_SUCCESS(err) || script == UScriptCode::USCRIPT_INVALID_CODE)
       return false;
     auto& supported = supported_scripts_[script];
     if (supported != UNDEFINED)
       return supported == KNOWN;
-    uint16_t glyph_id;
-    paint_.textToGlyphs(&character, sizeof(UChar32), &glyph_id);
+    uint16_t glyph_id = typeface_->unicharToGlyph(character);
     supported = glyph_id ? KNOWN : UNKNOWN;
     return supported == KNOWN;
   }
@@ -58,11 +58,10 @@ class CachedFont {
     SkString sk_name;
     skia_face->getFamilyName(&sk_name);
     name_ = std::string(sk_name.c_str(), sk_name.size());
-    paint_.setTypeface(std::move(skia_face));
-    paint_.setTextEncoding(SkPaint::kUTF32_TextEncoding);
+    typeface_ = std::move(skia_face);
   }
 
-  SkPaint paint_;
+  sk_sp<SkTypeface> typeface_;
   std::map<UScriptCode, KnownGlyph> supported_scripts_;
   std::string name_;
 
@@ -131,7 +130,7 @@ bool FontSupportsChar(const gfx::Font& font, UChar32 c) {
   return true;  // TODO(crbug/770893): Implement this on Windows.
 #else
   sk_sp<SkTypeface> typeface =
-      static_cast<gfx::PlatformFontLinux*>(font.platform_font())->typeface();
+      static_cast<gfx::PlatformFontSkia*>(font.platform_font())->typeface();
   std::unique_ptr<CachedFont>& cached_font =
       g_fonts.Get()[typeface->uniqueID()];
   if (!cached_font)

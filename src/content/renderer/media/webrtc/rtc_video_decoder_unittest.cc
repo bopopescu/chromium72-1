@@ -70,6 +70,8 @@ class RTCVideoDecoderTest
     capabilities_.supported_profiles.push_back(supported_profile);
     supported_profile.profile = media::VP8PROFILE_ANY;
     capabilities_.supported_profiles.push_back(supported_profile);
+    supported_profile.profile = media::VP9PROFILE_MIN;
+    capabilities_.supported_profiles.push_back(supported_profile);
 
     EXPECT_CALL(*mock_gpu_factories_.get(), GetTaskRunner())
         .WillRepeatedly(Return(vda_task_runner_));
@@ -229,6 +231,24 @@ TEST_F(RTCVideoDecoderTest, DecodeReturnsErrorOnMissingFrames) {
   EXPECT_EQ(
       WEBRTC_VIDEO_CODEC_ERROR,
       rtc_decoder_->Decode(input_image, missingFrames, nullptr, 0));
+}
+
+TEST_F(RTCVideoDecoderTest, FallBackToSoftwareOnVp9Svc) {
+  // HW VP9 decoders don't handle more than one spatial layer. See
+  // https://crbug.com/webrtc/9304, https://crbug.com/webrtc/9518 for details.
+  // The RTC video decoder triggers software fallback if it receives stream
+  // with more than one spatial layer.
+  CreateDecoder(webrtc::kVideoCodecVP9);
+  Initialize();
+
+  webrtc::CodecSpecificInfo codec_specific_info;
+  codec_specific_info.codecType = webrtc::kVideoCodecVP9;
+  codec_specific_info.codecSpecific.VP9.ss_data_available = true;
+  codec_specific_info.codecSpecific.VP9.num_spatial_layers = 2;
+
+  webrtc::EncodedImage input_image;
+  EXPECT_EQ(WEBRTC_VIDEO_CODEC_FALLBACK_SOFTWARE,
+            rtc_decoder_->Decode(input_image, false, &codec_specific_info, 0));
 }
 
 TEST_F(RTCVideoDecoderTest, ReleaseReturnsOk) {
@@ -394,6 +414,30 @@ TEST_P(RTCVideoDecoderTest, GetVDAErrorCounterForRunningOutOfPendingBuffers) {
   }
   // We have run out of kMaxNumDecodeRequests without forcing an error.
   ASSERT_TRUE(false);
+}
+
+// Tests/Verifies that |rtc_decoder_| increases its error counter when it keeps
+// getting frames with no size set.
+TEST_P(RTCVideoDecoderTest, GetVDAErrorCounterForSendingFramesWithoutSize) {
+  const webrtc::VideoCodecType codec_type = GetParam();
+  CreateDecoder(codec_type);
+  Initialize();
+
+  webrtc::EncodedImage input_image;
+  uint8_t buffer[1];
+  input_image._buffer = buffer;
+  input_image._completeFrame = true;
+  input_image._encodedWidth = 0;
+  input_image._encodedHeight = 0;
+  input_image._frameType = webrtc::kVideoFrameKey;
+  input_image._length = sizeof(buffer);
+  const int kNumDecodeRequests = 3;
+  for (int i = 0; i < kNumDecodeRequests; i++) {
+    const int32_t result = rtc_decoder_->Decode(input_image, false, nullptr, 0);
+    RunUntilIdle();
+    EXPECT_EQ(WEBRTC_VIDEO_CODEC_ERROR, result);
+    EXPECT_EQ(i + 1, rtc_decoder_->GetVDAErrorCounterForTesting());
+  }
 }
 
 TEST_P(RTCVideoDecoderTest, Reinitialize) {

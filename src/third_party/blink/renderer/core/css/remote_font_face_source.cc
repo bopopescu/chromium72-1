@@ -189,14 +189,13 @@ void RemoteFontFaceSource::UpdatePeriod() {
 }
 
 bool RemoteFontFaceSource::ShouldTriggerWebFontsIntervention() {
-  if (!font_selector_->GetExecutionContext()->IsDocument())
+  const auto* document =
+      DynamicTo<Document>(font_selector_->GetExecutionContext());
+  if (!document)
     return false;
 
   WebEffectiveConnectionType connection_type =
-      ToDocument(font_selector_->GetExecutionContext())
-          ->GetFrame()
-          ->Client()
-          ->GetEffectiveConnectionType();
+      document->GetFrame()->Client()->GetEffectiveConnectionType();
 
   bool network_is_slow =
       WebEffectiveConnectionType::kTypeOffline <= connection_type &&
@@ -236,9 +235,9 @@ RemoteFontFaceSource::CreateLoadingFallbackFontData(
     const FontDescription& font_description) {
   // This temporary font is not retained and should not be returned.
   FontCachePurgePreventer font_cache_purge_preventer;
-  SimpleFontData* temporary_font =
-      FontCache::GetFontCache()->GetNonRetainedLastResortFallbackFont(
-          font_description);
+  scoped_refptr<SimpleFontData> temporary_font =
+      FontCache::GetFontCache()->GetLastResortFallbackFont(font_description,
+                                                           kDoNotRetain);
   if (!temporary_font) {
     NOTREACHED();
     return nullptr;
@@ -253,6 +252,8 @@ void RemoteFontFaceSource::BeginLoadIfNeeded() {
   if (IsLoaded())
     return;
   DCHECK(GetResource());
+
+  SetDisplay(face_->GetFontFace()->GetFontDisplayWithFallback());
 
   FontResource* font = ToFontResource(GetResource());
   if (font->StillNeedsLoad()) {
@@ -331,11 +332,11 @@ void RemoteFontFaceSource::FontLoadHistograms::RecordRemoteFont(
     int duration = static_cast<int>(CurrentTimeMS() - load_start_time_);
     RecordLoadTimeHistogram(font, duration);
 
-    enum { kCORSFail, kCORSSuccess, kCORSEnumMax };
+    enum { kCorsFail, kCorsSuccess, kCorsEnumMax };
     int cors_value =
-        font->IsSameOriginOrCORSSuccessful() ? kCORSSuccess : kCORSFail;
+        font->GetResponse().IsCorsSameOrigin() ? kCorsSuccess : kCorsFail;
     DEFINE_THREAD_SAFE_STATIC_LOCAL(EnumerationHistogram, cors_histogram,
-                                    ("WebFont.CORSSuccess", kCORSEnumMax));
+                                    ("WebFont.CORSSuccess", kCorsEnumMax));
     cors_histogram.Count(cors_value);
   }
 }
@@ -371,7 +372,7 @@ void RemoteFontFaceSource::FontLoadHistograms::RecordLoadTimeHistogram(
     return;
   }
 
-  unsigned size = font->EncodedSize();
+  size_t size = font->EncodedSize();
   if (size < 10 * 1024) {
     DEFINE_THREAD_SAFE_STATIC_LOCAL(
         CustomCountHistogram, under10k_histogram,

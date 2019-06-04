@@ -25,13 +25,14 @@
 
 #include <memory>
 #include "third_party/blink/renderer/core/core_export.h"
-#include "third_party/blink/renderer/core/css/parser/css_parser_context.h"
 #include "third_party/blink/renderer/core/css/parser/css_parser_mode.h"
 #include "third_party/blink/renderer/core/dom/qualified_name.h"
 #include "third_party/blink/renderer/core/style/computed_style_constants.h"
 #include "third_party/blink/renderer/platform/wtf/ref_counted.h"
 
 namespace blink {
+
+class CSSParserContext;
 class CSSSelectorList;
 
 // This class represents a simple selector for a StyleRule.
@@ -102,6 +103,10 @@ class CORE_EXPORT CSSSelector {
 
   bool operator==(const CSSSelector&) const;
 
+  static constexpr unsigned kIdSpecificity = 0x010000;
+  static constexpr unsigned kClassLikeSpecificity = 0x000100;
+  static constexpr unsigned kTagSpecificity = 0x000001;
+
   // http://www.w3.org/TR/css3-selectors/#specificity
   // We use 256 as the base of the specificity number system.
   unsigned Specificity() const;
@@ -132,7 +137,6 @@ class CORE_EXPORT CSSSelector {
     kDirectAdjacent,    // + combinator
     kIndirectAdjacent,  // ~ combinator
     // Special cases for shadow DOM related selectors.
-    kShadowPiercingDescendant,  // >>> combinator
     kShadowDeep,                // /deep/ combinator
     kShadowDeepAsDescendant,    // /deep/ as an alias for descendant
     kShadowPseudo,              // ::shadow pseudo element
@@ -159,11 +163,13 @@ class CORE_EXPORT CSSSelector {
     kPseudoLink,
     kPseudoVisited,
     kPseudoAny,
-    kPseudoMatches,
-    kPseudoIS,
+    kPseudoIs,
+    kPseudoWhere,
     kPseudoAnyLink,
     kPseudoWebkitAnyLink,
     kPseudoAutofill,
+    kPseudoAutofillPreviewed,
+    kPseudoAutofillSelected,
     kPseudoHover,
     kPseudoDrag,
     kPseudoFocus,
@@ -236,6 +242,7 @@ class CORE_EXPORT CSSSelector {
     kPseudoHostContext,
     kPseudoShadow,
     kPseudoSpatialNavigationFocus,
+    kPseudoIsHtml,
     kPseudoListBox,
     kPseudoHostHasAppearance,
     kPseudoSlotted,
@@ -373,13 +380,14 @@ class CORE_EXPORT CSSSelector {
   }
 
   bool MatchesPseudoElement() const;
+  bool IsTreeAbidingPseudoElement() const;
 
   bool HasContentPseudo() const;
   bool HasSlottedPseudo() const;
   bool HasDeepCombinatorOrShadowPseudo() const;
   bool NeedsUpdatedDistribution() const;
-  bool HasPseudoMatches() const;
-  bool HasPseudoIS() const;
+  bool HasPseudoIs() const;
+  bool HasPseudoWhere() const;
 
  private:
   unsigned relation_ : 4;     // enum RelationType
@@ -458,7 +466,7 @@ inline CSSSelector::AttributeMatchType CSSSelector::AttributeMatch() const {
 }
 
 inline bool CSSSelector::IsASCIILower(const AtomicString& value) {
-  for (size_t i = 0; i < value.length(); ++i) {
+  for (wtf_size_t i = 0; i < value.length(); ++i) {
     if (IsASCIIUpper(value[i]))
       return false;
   }

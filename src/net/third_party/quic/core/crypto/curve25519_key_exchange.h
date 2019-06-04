@@ -7,13 +7,12 @@
 
 #include <cstdint>
 
-#include "base/compiler_specific.h"
 #include "net/third_party/quic/core/crypto/key_exchange.h"
 #include "net/third_party/quic/platform/api/quic_export.h"
 #include "net/third_party/quic/platform/api/quic_string.h"
 #include "net/third_party/quic/platform/api/quic_string_piece.h"
 
-namespace net {
+namespace quic {
 
 class QuicRandom;
 
@@ -25,18 +24,21 @@ class QUIC_EXPORT_PRIVATE Curve25519KeyExchange : public KeyExchange {
 
   // New creates a new object from a private key. If the private key is
   // invalid, nullptr is returned.
-  static Curve25519KeyExchange* New(QuicStringPiece private_key);
+  static std::unique_ptr<Curve25519KeyExchange> New(
+      QuicStringPiece private_key);
 
   // NewPrivateKey returns a private key, generated from |rand|, suitable for
   // passing to |New|.
   static QuicString NewPrivateKey(QuicRandom* rand);
 
   // KeyExchange interface.
-  KeyExchange* NewKeyPair(QuicRandom* rand) const override;
+  const Factory& GetFactory() const override;
   bool CalculateSharedKey(QuicStringPiece peer_public_value,
                           QuicString* shared_key) const override;
+  void CalculateSharedKey(QuicStringPiece peer_public_value,
+                          QuicString* shared_key,
+                          std::unique_ptr<Callback> callback) const override;
   QuicStringPiece public_value() const override;
-  QuicTag tag() const override;
 
  private:
   Curve25519KeyExchange();
@@ -45,6 +47,6 @@ class QUIC_EXPORT_PRIVATE Curve25519KeyExchange : public KeyExchange {
   uint8_t public_key_[32];
 };
 
-}  // namespace net
+}  // namespace quic
 
 #endif  // NET_THIRD_PARTY_QUIC_CORE_CRYPTO_CURVE25519_KEY_EXCHANGE_H_

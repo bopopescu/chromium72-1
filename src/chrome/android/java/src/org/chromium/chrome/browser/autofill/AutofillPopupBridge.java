@@ -7,7 +7,7 @@ package org.chromium.chrome.browser.autofill;
 import android.app.Activity;
 import android.content.Context;
 import android.content.DialogInterface;
-import android.os.Handler;
+import android.content.res.Configuration;
 import android.support.v7.app.AlertDialog;
 import android.view.View;
 
@@ -15,6 +15,7 @@ import org.chromium.base.annotations.CalledByNative;
 import org.chromium.base.annotations.JNINamespace;
 import org.chromium.chrome.R;
 import org.chromium.chrome.browser.ChromeActivity;
+import org.chromium.chrome.browser.ChromeFeatureList;
 import org.chromium.chrome.browser.ResourceId;
 import org.chromium.components.autofill.AutofillDelegate;
 import org.chromium.components.autofill.AutofillPopup;
@@ -38,17 +39,16 @@ public class AutofillPopupBridge implements AutofillDelegate, DialogInterface.On
             WindowAndroid windowAndroid) {
         mNativeAutofillPopup = nativeAutofillPopupViewAndroid;
         Activity activity = windowAndroid.getActivity().get();
-        if (activity == null) {
+        if (activity == null || notEnoughScreenSpace(activity)) {
             mAutofillPopup = null;
             mContext = null;
-            // Clean up the native counterpart.  This is posted to allow the native counterpart
-            // to fully finish the construction of this glue object before we attempt to delete it.
-            new Handler().post(() -> dismissed());
         } else {
             mAutofillPopup = new AutofillPopup(activity, anchorView, this);
             mContext = activity;
+            ChromeActivity chromeActivity = (ChromeActivity) activity;
+            chromeActivity.getManualFillingController().notifyPopupAvailable(mAutofillPopup);
             mWebContentsAccessibility = WebContentsAccessibility.fromWebContents(
-                    ((ChromeActivity) activity).getCurrentWebContents());
+                    chromeActivity.getCurrentWebContents());
         }
     }
 
@@ -98,21 +98,11 @@ public class AutofillPopupBridge implements AutofillDelegate, DialogInterface.On
      * Shows an Autofill popup with specified suggestions.
      * @param suggestions Autofill suggestions to be displayed.
      * @param isRtl @code true if right-to-left text.
-     * @param backgroundColor popup background color, or {@code Color.TRANSPARENT} if not specified
-     * in experiment.
-     * @param dividerColor color for divider between popup items, or {@code Color.TRANSPARENT} if
-     * not specified in experiment.
-     * @param dropdownItemHeight height of each dropdown item in dimension independent pixel units,
-     * 0 if not specified in experiment.
-     * @param margin Margin for icon, label and between icon and label in dimension independent
-     * pixel units, 0 if not specified in experiment.
      */
     @CalledByNative
-    private void show(AutofillSuggestion[] suggestions, boolean isRtl, int backgroundColor,
-            int dividerColor, int dropdownItemHeight, int margin) {
+    private void show(AutofillSuggestion[] suggestions, boolean isRtl) {
         if (mAutofillPopup != null) {
-            mAutofillPopup.filterAndShow(
-                    suggestions, isRtl, backgroundColor, dividerColor, dropdownItemHeight, margin);
+            mAutofillPopup.filterAndShow(suggestions, isRtl, shouldUseRefreshStyle());
             mWebContentsAccessibility.onAutofillPopupDisplayed(mAutofillPopup.getListView());
         }
     }
@@ -126,6 +116,29 @@ public class AutofillPopupBridge implements AutofillDelegate, DialogInterface.On
                 .setPositiveButton(R.string.ok, this)
                 .create();
         mDeletionDialog.show();
+    }
+
+    @CalledByNative
+    private boolean wasSuppressed() {
+        return mAutofillPopup == null;
+    }
+
+    private static boolean shouldUseRefreshStyle() {
+        return ChromeFeatureList.isEnabled(ChromeFeatureList.AUTOFILL_REFRESH_STYLE_ANDROID);
+    }
+
+    private static boolean notEnoughScreenSpace(Context context) {
+        Configuration config = context.getResources().getConfiguration();
+        // In landscape mode, most vertical space is used by the on-screen keyboard. When refresh
+        // style is used, the footer is sticky, so there is not much space to even show the first
+        // suggestion. In those cases, the dropdown should only be shown on very large screen
+        // devices, such as tablets.
+        //
+        // TODO(crbug.com/907634): This is a simple first approach to not provide a degraded
+        //                         experience. Explore other alternatives when this happens such as
+        //                         showing suggestions on the keyboard accessory.
+        return shouldUseRefreshStyle() && config.orientation == Configuration.ORIENTATION_LANDSCAPE
+                && !config.isLayoutSizeAtLeast(Configuration.SCREENLAYOUT_SIZE_XLARGE);
     }
 
     // Helper methods for AutofillSuggestion

@@ -5,7 +5,9 @@
 #include "chrome/browser/ui/extensions/hosted_app_browser_controller.h"
 
 #include "base/metrics/histogram_macros.h"
+#include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/engagement/site_engagement_service.h"
+#include "chrome/browser/extensions/extension_util.h"
 #include "chrome/browser/extensions/tab_helper.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ssl/security_state_tab_helper.h"
@@ -13,7 +15,7 @@
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/location_bar/location_bar.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
-#include "chrome/browser/web_applications/web_app.h"
+#include "chrome/browser/web_applications/components/web_app_helpers.h"
 #include "chrome/common/chrome_features.h"
 #include "chrome/common/extensions/api/url_handlers/url_handlers_parser.h"
 #include "chrome/common/extensions/manifest_handlers/app_launch_info.h"
@@ -25,8 +27,11 @@
 #include "content/public/browser/render_view_host.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/renderer_preferences.h"
+#include "content/public/common/url_constants.h"
 #include "content/public/common/web_preferences.h"
 #include "extensions/browser/extension_registry.h"
+#include "extensions/browser/extension_system.h"
+#include "extensions/browser/management_policy.h"
 #include "extensions/common/constants.h"
 #include "extensions/common/extension.h"
 #include "ui/gfx/favicon_size.h"
@@ -36,20 +41,6 @@
 namespace extensions {
 
 namespace {
-
-// Returns the scheme that page URLs should be, in order to be considered
-// "secure", for an app URL of scheme |scheme|.
-//
-// All pages (even if the app was created with scheme "http") are expected to
-// have scheme "https", since "http" is not secure. As a special exception,
-// pages for "chrome-extension" apps are expected to have the same scheme (since
-// that scheme is secure).
-base::StringPiece ExpectedSchemeForApp(base::StringPiece scheme) {
-  if (scheme == kExtensionScheme)
-    return scheme;
-
-  return url::kHttpsScheme;
-}
 
 bool IsSiteSecure(const content::WebContents* web_contents) {
   const SecurityStateTabHelper* helper =
@@ -74,17 +65,38 @@ bool IsSiteSecure(const content::WebContents* web_contents) {
   return false;
 }
 
-// Returns true if |page_url| is both secure (not http) and on the same origin
-// as |app_url|. Note that even if |app_url| is http, this still returns true as
-// long as |page_url| is https. To avoid breaking Hosted Apps and Bookmark Apps
-// that might redirect to sites in the same domain but with "www.", this returns
-// true if |page_url| is secure and in the same origin as |app_url| with "www.".
-bool IsSameOriginAndSecure(const GURL& app_url, const GURL& page_url) {
-  return ExpectedSchemeForApp(app_url.scheme_piece()) ==
-             page_url.scheme_piece() &&
-         (app_url.host_piece() == page_url.host_piece() ||
+// Returns true if |app_url| and |page_url| are the same origin. To avoid
+// breaking Hosted Apps and Bookmark Apps that might redirect to sites in the
+// same domain but with "www.", this returns true if |page_url| is secure and in
+// the same origin as |app_url| with "www.".
+bool IsSameHostAndPort(const GURL& app_url, const GURL& page_url) {
+  return (app_url.host_piece() == page_url.host_piece() ||
           std::string("www.") + app_url.host() == page_url.host_piece()) &&
          app_url.port() == page_url.port();
+}
+
+// Returns true if |page_url| is in the scope of the app for |app_url|. If the
+// app has no scope defined (as in a bookmark app), we fall back to checking
+// |page_url| has the same origin as |app_url|.
+bool IsSameScope(const GURL& app_url,
+                 const GURL& page_url,
+                 content::BrowserContext* profile) {
+  // We can only check scope on apps that are installed PWAs, so fall
+  // back to same origin check if PWA windowing is not enabled
+  // (GetInstalledPwaForUrl requires this).
+  if (!base::FeatureList::IsEnabled(::features::kDesktopPWAWindowing))
+    return IsSameHostAndPort(app_url, page_url);
+
+  const Extension* app_for_window = extensions::util::GetInstalledPwaForUrl(
+      profile, app_url, extensions::LAUNCH_CONTAINER_WINDOW);
+
+  // We don't have a scope, fall back to same origin check.
+  if (!app_for_window)
+    return IsSameHostAndPort(app_url, page_url);
+
+  return app_for_window ==
+         extensions::util::GetInstalledPwaForUrl(
+             profile, page_url, extensions::LAUNCH_CONTAINER_WINDOW);
 }
 
 // Gets the icon to use if the extension app icon is not available.
@@ -107,23 +119,10 @@ const char kPwaWindowEngagementTypeHistogram[] =
     "Webapp.Engagement.EngagementType";
 
 // static
-bool HostedAppBrowserController::IsForHostedApp(const Browser* browser) {
-  if (!browser)
-    return false;
-
-  const std::string extension_id =
-      web_app::GetExtensionIdFromApplicationName(browser->app_name());
-  const Extension* extension =
-      ExtensionRegistry::Get(browser->profile())->GetExtensionById(
-          extension_id, ExtensionRegistry::EVERYTHING);
-  return extension && extension->is_hosted_app();
-}
-
-// static
 bool HostedAppBrowserController::IsForExperimentalHostedAppBrowser(
     const Browser* browser) {
-  return base::FeatureList::IsEnabled(features::kDesktopPWAWindowing) &&
-         IsForHostedApp(browser);
+  return browser && browser->hosted_app_controller() &&
+         browser->hosted_app_controller()->IsForExperimentalHostedAppBrowser();
 }
 
 // static
@@ -138,6 +137,9 @@ void HostedAppBrowserController::SetAppPrefsForWebContents(
   // This function could be called for non Hosted Apps.
   if (!controller)
     return;
+
+  extensions::TabHelper::FromWebContents(web_contents)
+      ->SetExtensionApp(controller->GetExtension());
 
   web_contents->NotifyPreferencesChanged();
 }
@@ -156,13 +158,12 @@ base::string16 HostedAppBrowserController::FormatUrlOrigin(const GURL& url) {
 HostedAppBrowserController::HostedAppBrowserController(Browser* browser)
     : SiteEngagementObserver(SiteEngagementService::Get(browser->profile())),
       browser_(browser),
-      extension_id_(
-          web_app::GetExtensionIdFromApplicationName(browser->app_name())),
+      extension_id_(web_app::GetAppIdFromApplicationName(browser->app_name())),
       // If a bookmark app has a URL handler, then it is a PWA.
       // TODO(https://crbug.com/774918): Replace once there is a more explicit
       // indicator of a Bookmark App for an installable website.
       created_for_installed_pwa_(
-          base::FeatureList::IsEnabled(features::kDesktopPWAWindowing) &&
+          base::FeatureList::IsEnabled(::features::kDesktopPWAWindowing) &&
           UrlHandlers::GetUrlHandlers(GetExtension())) {
   browser_->tab_strip_model()->AddObserver(this);
 }
@@ -171,48 +172,82 @@ HostedAppBrowserController::~HostedAppBrowserController() {
   browser_->tab_strip_model()->RemoveObserver(this);
 }
 
-bool HostedAppBrowserController::ShouldShowLocationBar() const {
+bool HostedAppBrowserController::IsForSystemWebApp() const {
   const Extension* extension = GetExtension();
 
-  const content::WebContents* web_contents =
+  return extension && extension->from_bookmark() &&
+         extension->location() == Manifest::EXTERNAL_COMPONENT;
+}
+
+bool HostedAppBrowserController::IsForExperimentalHostedAppBrowser() const {
+  return base::FeatureList::IsEnabled(::features::kDesktopPWAWindowing);
+}
+
+bool HostedAppBrowserController::ShouldShowToolbar() const {
+  // The extension can be null if this is invoked after uninstall.
+  const Extension* extension = GetExtension();
+  if (!extension)
+    return false;
+
+  DCHECK(extension->is_hosted_app());
+
+  content::WebContents* web_contents =
       browser_->tab_strip_model()->GetActiveWebContents();
 
-  // Default to not showing the location bar if either |extension| or
-  // |web_contents| are null. |extension| is null for the dev tools.
-  if (!extension || !web_contents)
-    return false;
-
-  if (!extension->is_hosted_app())
-    return false;
-
-  // Don't show a location bar until a navigation has occurred.
-  if (web_contents->GetLastCommittedURL().is_empty())
+  // Don't show a toolbar until a navigation has occurred.
+  if (!web_contents || web_contents->GetLastCommittedURL().is_empty())
     return false;
 
   GURL launch_url = AppLaunchInfo::GetLaunchWebURL(extension);
-  if (!IsSameOriginAndSecure(launch_url, web_contents->GetLastCommittedURL()))
-    return true;
+  base::StringPiece launch_scheme = launch_url.scheme_piece();
 
-  // Check the visible URL, because we would like to indicate to the user that
-  // they are navigating to a different origin than that of the app as soon as
-  // the navigation starts, even if the navigation hasn't committed yet.
-  if (!IsSameOriginAndSecure(launch_url, web_contents->GetVisibleURL()))
-    return true;
+  bool is_internal_launch_scheme = launch_scheme == kExtensionScheme ||
+                                   launch_scheme == content::kChromeUIScheme;
 
-  // We consider URLs with kExtensionScheme secure.
-  if (!(IsSiteSecure(web_contents) ||
-        web_contents->GetLastCommittedURL().scheme_piece() ==
-            kExtensionScheme)) {
+  GURL last_committed_url = web_contents->GetLastCommittedURL();
+
+  // We check the visible URL to indicate to the user that they are navigating
+  // to a different origin than that of the app as soon as the navigation
+  // starts, even if the navigation hasn't committed yet.
+  GURL visible_url = web_contents->GetVisibleURL();
+
+  // The current page must be secure for us to hide the toolbar. However,
+  // the chrome-extension:// and chrome:// launch URL apps can hide the toolbar,
+  // if the current WebContents URLs are the same as the launch scheme.
+  //
+  // Note that the launch scheme may be insecure, but as long as the current
+  // page's scheme is secure, we can hide the toolbar.
+  base::StringPiece secure_page_scheme =
+      is_internal_launch_scheme ? launch_scheme : url::kHttpsScheme;
+
+  // Insecure page schemes show the toolbar.
+  if (last_committed_url.scheme_piece() != secure_page_scheme ||
+      visible_url.scheme_piece() != secure_page_scheme) {
     return true;
   }
+
+  // Page URLs that are not within scope
+  // (https://www.w3.org/TR/appmanifest/#dfn-within-scope) of the app
+  // corresponding to |launch_url| show the toolbar.
+  if (!IsSameScope(launch_url, last_committed_url,
+                   web_contents->GetBrowserContext()) ||
+      !IsSameScope(launch_url, visible_url, web_contents->GetBrowserContext()))
+    return true;
+
+  // Insecure external web sites show the toolbar.
+  if (!is_internal_launch_scheme && !IsSiteSecure(web_contents))
+    return true;
 
   return false;
 }
 
-void HostedAppBrowserController::UpdateLocationBarVisibility(
-    bool animate) const {
-  browser_->window()->GetLocationBar()->UpdateLocationBarVisibility(
-      ShouldShowLocationBar(), animate);
+void HostedAppBrowserController::UpdateToolbarVisibility(bool animate) const {
+  browser_->window()->UpdateToolbarVisibility(ShouldShowToolbar(), animate);
+}
+
+bool HostedAppBrowserController::ShouldShowHostedAppButtonContainer() const {
+  // System Web Apps don't get the Hosted App buttons.
+  return IsForExperimentalHostedAppBrowser() && !IsForSystemWebApp();
 }
 
 gfx::ImageSkia HostedAppBrowserController::GetWindowAppIcon() const {
@@ -246,10 +281,28 @@ base::Optional<SkColor> HostedAppBrowserController::GetThemeColor() const {
   ExtensionRegistry* registry = ExtensionRegistry::Get(browser_->profile());
   const Extension* extension =
       registry->GetExtensionById(extension_id_, ExtensionRegistry::EVERYTHING);
-  return AppThemeColorInfo::GetThemeColor(extension);
+  if (extension) {
+    const base::Optional<SkColor> color =
+        AppThemeColorInfo::GetThemeColor(extension);
+    if (color) {
+      // The frame/tabstrip code expects an opaque color.
+      return SkColorSetA(*color, SK_AlphaOPAQUE);
+    }
+  }
+  return base::nullopt;
 }
 
 base::string16 HostedAppBrowserController::GetTitle() const {
+  // When showing the location bar, display the name of the app, instead of the
+  // current page as the title.
+  // Note: We only do this when the CustomTab UI is enabled, as otherwise the
+  // title of the current page will not be displayed anywhere.
+  if (ShouldShowToolbar() &&
+      base::FeatureList::IsEnabled(features::kDesktopPWAsCustomTabUI)) {
+    const Extension* extension = GetExtension();
+    return base::UTF8ToUTF16(extension->name());
+  }
+
   content::WebContents* web_contents =
       browser_->tab_strip_model()->GetActiveWebContents();
   if (!web_contents)
@@ -265,12 +318,29 @@ const Extension* HostedAppBrowserController::GetExtension() const {
       ->GetExtensionById(extension_id_, ExtensionRegistry::EVERYTHING);
 }
 
+const Extension* HostedAppBrowserController::GetExtensionForTesting() const {
+  return GetExtension();
+}
+
 std::string HostedAppBrowserController::GetAppShortName() const {
   return GetExtension()->short_name();
 }
 
 base::string16 HostedAppBrowserController::GetFormattedUrlOrigin() const {
   return FormatUrlOrigin(AppLaunchInfo::GetLaunchWebURL(GetExtension()));
+}
+
+bool HostedAppBrowserController::CanUninstall() const {
+  return extensions::ExtensionSystem::Get(browser_->profile())
+      ->management_policy()
+      ->UserMayModifySettings(GetExtension(), nullptr);
+}
+
+void HostedAppBrowserController::Uninstall(UninstallReason reason,
+                                           UninstallSource source) {
+  uninstall_dialog_.reset(ExtensionUninstallDialog::Create(
+      browser_->profile(), browser_->window()->GetNativeWindow(), this));
+  uninstall_dialog_->ConfirmUninstall(GetExtension(), reason, source);
 }
 
 void HostedAppBrowserController::OnEngagementEvent(
@@ -291,20 +361,30 @@ void HostedAppBrowserController::OnEngagementEvent(
                             SiteEngagementService::ENGAGEMENT_LAST);
 }
 
-void HostedAppBrowserController::TabInsertedAt(TabStripModel* tab_strip_model,
-                                               content::WebContents* contents,
-                                               int index,
-                                               bool foreground) {
+void HostedAppBrowserController::OnTabStripModelChanged(
+    TabStripModel* tab_strip_model,
+    const TabStripModelChange& change,
+    const TabStripSelectionChange& selection) {
+  if (change.type() == TabStripModelChange::kInserted) {
+    for (const auto& delta : change.deltas())
+      OnTabInserted(delta.insert.contents);
+  } else if (change.type() == TabStripModelChange::kRemoved) {
+    for (const auto& delta : change.deltas())
+      OnTabRemoved(delta.remove.contents);
+  }
+}
+
+void HostedAppBrowserController::OnTabInserted(content::WebContents* contents) {
   HostedAppBrowserController::SetAppPrefsForWebContents(this, contents);
 }
 
-void HostedAppBrowserController::TabDetachedAt(content::WebContents* contents,
-                                               int index,
-                                               bool was_active) {
+void HostedAppBrowserController::OnTabRemoved(content::WebContents* contents) {
   auto* rvh = contents->GetRenderViewHost();
 
   contents->GetMutableRendererPrefs()->can_accept_load_drops = true;
   rvh->SyncRendererPrefs();
+
+  extensions::TabHelper::FromWebContents(contents)->SetExtensionApp(nullptr);
 
   contents->NotifyPreferencesChanged();
 }

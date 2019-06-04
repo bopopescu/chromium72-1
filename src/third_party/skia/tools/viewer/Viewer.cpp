@@ -5,9 +5,6 @@
 * found in the LICENSE file.
 */
 
-#include "Viewer.h"
-#include <stdlib.h>
-#include <map>
 #include "BisectSlide.h"
 #include "GMSlide.h"
 #include "GrContext.h"
@@ -18,7 +15,6 @@
 #include "SampleSlide.h"
 #include "SkCanvas.h"
 #include "SkColorSpacePriv.h"
-#include "SkColorSpaceXformCanvas.h"
 #include "SkCommandLineFlags.h"
 #include "SkCommonFlags.h"
 #include "SkCommonFlagsGpu.h"
@@ -26,6 +22,7 @@
 #include "SkFontMgrPriv.h"
 #include "SkGraphics.h"
 #include "SkImagePriv.h"
+#include "SkJSONWriter.h"
 #include "SkMakeUnique.h"
 #include "SkOSFile.h"
 #include "SkOSPath.h"
@@ -36,14 +33,23 @@
 #include "SkSurface.h"
 #include "SkTaskGroup.h"
 #include "SkTestFontMgr.h"
-#include "SkThreadedBMPDevice.h"
+#include "SkTo.h"
 #include "SlideDir.h"
 #include "SvgSlide.h"
+#include "Viewer.h"
 #include "ccpr/GrCoverageCountingPathRenderer.h"
+
+#include <stdlib.h>
+#include <map>
+
 #include "imgui.h"
 
 #if defined(SK_ENABLE_SKOTTIE)
     #include "SkottieSlide.h"
+#endif
+
+#if !(defined(SK_BUILD_FOR_WIN) && defined(__clang__))
+    #include "NIMASlide.h"
 #endif
 
 using namespace sk_app;
@@ -171,7 +177,10 @@ Viewer::Viewer(int argc, char** argv, void* platformData)
     , fShowSlidePicker(false)
     , fShowImGuiTestWindow(false)
     , fShowZoomWindow(false)
+    , fZoomWindowFixed(false)
+    , fZoomWindowLocation{0.0f, 0.0f}
     , fLastImage(nullptr)
+    , fZoomUI(false)
     , fBackendType(sk_app::Window::kNativeGL_BackendType)
     , fColorMode(ColorMode::kLegacy)
     , fColorSpacePrimaries(gSrgbPrimaries)
@@ -179,16 +188,16 @@ Viewer::Viewer(int argc, char** argv, void* platformData)
     , fColorSpaceTransferFn(g2Dot2_TransferFn)
     , fZoomLevel(0.0f)
     , fRotation(0.0f)
+    , fOffset{0.5f, 0.5f}
     , fGestureDevice(GestureDevice::kNone)
+    , fTiled(false)
+    , fDrawTileBoundaries(false)
+    , fTileScale{0.25f, 0.25f}
     , fPerspectiveMode(kPerspective_Off)
-    , fTileCnt(0)
-    , fThreadCnt(0)
 {
     SkGraphics::Init();
 
     gPathRendererNames[GpuPathRenderers::kAll] = "All Path Renderers";
-    gPathRendererNames[GpuPathRenderers::kDefault] =
-            "Default Ganesh Behavior (best path renderer, not including CCPR)";
     gPathRendererNames[GpuPathRenderers::kStencilAndCover] = "NV_path_rendering";
     gPathRendererNames[GpuPathRenderers::kSmall] = "Small paths (cached sdf or alpha masks)";
     gPathRendererNames[GpuPathRenderers::kCoverageCounting] = "Coverage counting";
@@ -258,6 +267,10 @@ Viewer::Viewer(int argc, char** argv, void* platformData)
         this->fShowZoomWindow = !this->fShowZoomWindow;
         fWindow->inval();
     });
+    fCommands.addCommand('Z', "GUI", "Toggle zoom window state", [this]() {
+        this->fZoomWindowFixed = !this->fZoomWindowFixed;
+        fWindow->inval();
+    });
     fCommands.addCommand('s', "Overlays", "Toggle stats display", [this]() {
         fStatsLayer.setActive(!fStatsLayer.getActive());
         fWindow->inval();
@@ -270,15 +283,12 @@ Viewer::Viewer(int argc, char** argv, void* platformData)
     fCommands.addCommand('c', "Modes", "Cycle color mode", [this]() {
         switch (fColorMode) {
             case ColorMode::kLegacy:
-                this->setColorMode(ColorMode::kColorManagedSRGB8888_NonLinearBlending);
+                this->setColorMode(ColorMode::kColorManaged8888);
                 break;
-            case ColorMode::kColorManagedSRGB8888_NonLinearBlending:
-                this->setColorMode(ColorMode::kColorManagedSRGB8888);
+            case ColorMode::kColorManaged8888:
+                this->setColorMode(ColorMode::kColorManagedF16);
                 break;
-            case ColorMode::kColorManagedSRGB8888:
-                this->setColorMode(ColorMode::kColorManagedLinearF16);
-                break;
-            case ColorMode::kColorManagedLinearF16:
+            case ColorMode::kColorManagedF16:
                 this->setColorMode(ColorMode::kLegacy);
                 break;
         }
@@ -310,40 +320,6 @@ Viewer::Viewer(int argc, char** argv, void* platformData)
         }
 #endif
         this->setBackend(newBackend);
-    });
-    fCommands.addCommand('+', "Threaded Backend", "Increase tile count", [this]() {
-        fTileCnt++;
-        if (fThreadCnt == 0) {
-            this->resetExecutor();
-        }
-        this->updateTitle();
-        fWindow->inval();
-    });
-    fCommands.addCommand('-', "Threaded Backend", "Decrease tile count", [this]() {
-        fTileCnt = SkTMax(0, fTileCnt - 1);
-        if (fThreadCnt == 0) {
-            this->resetExecutor();
-        }
-        this->updateTitle();
-        fWindow->inval();
-    });
-    fCommands.addCommand('>', "Threaded Backend", "Increase thread count", [this]() {
-        if (fTileCnt == 0) {
-            return;
-        }
-        fThreadCnt = (fThreadCnt + 1) % fTileCnt;
-        this->resetExecutor();
-        this->updateTitle();
-        fWindow->inval();
-    });
-    fCommands.addCommand('<', "Threaded Backend", "Decrease thread count", [this]() {
-        if (fTileCnt == 0) {
-            return;
-        }
-        fThreadCnt = (fThreadCnt + fTileCnt - 1) % fTileCnt;
-        this->resetExecutor();
-        this->updateTitle();
-        fWindow->inval();
     });
     fCommands.addCommand('K', "IO", "Save slide to SKP", [this]() {
         fSaveToSKP = true;
@@ -382,20 +358,20 @@ Viewer::Viewer(int argc, char** argv, void* platformData)
     fCommands.addCommand('H', "Paint", "Hinting mode", [this]() {
         if (!fPaintOverrides.fHinting) {
             fPaintOverrides.fHinting = true;
-            fPaint.setHinting(SkPaint::kNo_Hinting);
+            fPaint.setHinting(kNo_SkFontHinting);
         } else {
-            switch (fPaint.getHinting()) {
-                case SkPaint::kNo_Hinting:
-                    fPaint.setHinting(SkPaint::kSlight_Hinting);
+            switch ((SkFontHinting)fPaint.getHinting()) {
+                case kNo_SkFontHinting:
+                    fPaint.setHinting(kSlight_SkFontHinting);
                     break;
-                case SkPaint::kSlight_Hinting:
-                    fPaint.setHinting(SkPaint::kNormal_Hinting);
+                case kSlight_SkFontHinting:
+                    fPaint.setHinting(kNormal_SkFontHinting);
                     break;
-                case SkPaint::kNormal_Hinting:
-                    fPaint.setHinting(SkPaint::kFull_Hinting);
+                case kNormal_SkFontHinting:
+                    fPaint.setHinting(kFull_SkFontHinting);
                     break;
-                case SkPaint::kFull_Hinting:
-                    fPaint.setHinting(SkPaint::kNo_Hinting);
+                case kFull_SkFontHinting:
+                    fPaint.setHinting(kNo_SkFontHinting);
                     fPaintOverrides.fHinting = false;
                     break;
             }
@@ -502,6 +478,11 @@ Viewer::Viewer(int argc, char** argv, void* platformData)
         this->updateTitle();
         fWindow->inval();
     });
+    fCommands.addCommand('u', "GUI", "Zoom UI", [this]() {
+        fZoomUI = !fZoomUI;
+        fStatsLayer.setDisplayScale(fZoomUI ? 2.0f : 1.0f);
+        fWindow->inval();
+    });
 
     // set up slides
     this->initSlides();
@@ -527,8 +508,6 @@ Viewer::Viewer(int argc, char** argv, void* platformData)
 }
 
 void Viewer::initSlides() {
-    fAllSlideNames = Json::Value(Json::arrayValue);
-
     using SlideFactory = sk_sp<Slide>(*)(const SkString& name, const SkString& path);
     static const struct {
         const char*                            fExtension;
@@ -545,18 +524,26 @@ void Viewer::initSlides() {
                 return sk_make_sp<ImageSlide>(name, path);}
         },
 #if defined(SK_ENABLE_SKOTTIE)
-        { ".json", "skottie-dir", FLAGS_jsons,
+        { ".json", "skottie-dir", FLAGS_lotties,
             [](const SkString& name, const SkString& path) -> sk_sp<Slide> {
                 return sk_make_sp<SkottieSlide>(name, path);}
         },
 #endif
+#if defined(SK_XML)
         { ".svg", "svg-dir", FLAGS_svgs,
             [](const SkString& name, const SkString& path) -> sk_sp<Slide> {
                 return sk_make_sp<SvgSlide>(name, path);}
         },
+#endif
+#if !(defined(SK_BUILD_FOR_WIN) && defined(__clang__))
+        { ".nima", "nima-dir", FLAGS_nimas,
+            [](const SkString& name, const SkString& path) -> sk_sp<Slide> {
+                return sk_make_sp<NIMASlide>(name, path);}
+        },
+#endif
     };
 
-    SkTArray<sk_sp<Slide>, true> dirSlides;
+    SkTArray<sk_sp<Slide>> dirSlides;
 
     const auto addSlide = [&](const SkString& name,
                               const SkString& path,
@@ -606,16 +593,12 @@ void Viewer::initSlides() {
 
     // GMs
     int firstGM = fSlides.count();
-    const skiagm::GMRegistry* gms(skiagm::GMRegistry::Head());
-    while (gms) {
-        std::unique_ptr<skiagm::GM> gm(gms->factory()(nullptr));
-
+    for (skiagm::GMFactory gmFactory : skiagm::GMRegistry::Range()) {
+        std::unique_ptr<skiagm::GM> gm(gmFactory(nullptr));
         if (!SkCommandLineFlags::ShouldSkip(FLAGS_match, gm->getName())) {
             sk_sp<Slide> slide(new GMSlide(gm.release()));
             fSlides.push_back(std::move(slide));
         }
-
-        gms = gms->next();
     }
     // reverse gms
     int numGMs = fSlides.count() - firstGM;
@@ -624,13 +607,11 @@ void Viewer::initSlides() {
     }
 
     // samples
-    const SkViewRegister* reg = SkViewRegister::Head();
-    while (reg) {
-        sk_sp<Slide> slide(new SampleSlide(reg->factory()));
+    for (const SampleFactory factory : SampleRegistry::Range()) {
+        sk_sp<Slide> slide(new SampleSlide(factory));
         if (!SkCommandLineFlags::ShouldSkip(FLAGS_match, slide->getName().c_str())) {
             fSlides.push_back(slide);
         }
-        reg = reg->next();
     }
 
     for (const auto& info : gExternalSlidesInfo) {
@@ -646,7 +627,6 @@ void Viewer::initSlides() {
                     addSlide(name, SkOSPath::Join(flag.c_str(), name.c_str()), info.fFactory);
                 }
             }
-
             if (!dirSlides.empty()) {
                 fSlides.push_back(
                     sk_make_sp<SlideDir>(SkStringPrintf("%s[%s]", info.fDirName, flag.c_str()),
@@ -727,45 +707,33 @@ void Viewer::updateTitle() {
               "Bitmap Text", "No Bitmap Text");
     paintFlag(SkPaint::kAutoHinting_Flag, &SkPaint::isAutohinted,
               "Force Autohint", "No Force Autohint");
-    paintFlag(SkPaint::kVerticalText_Flag, &SkPaint::isVerticalText,
-              "Vertical Text", "No Vertical Text");
 
     if (fPaintOverrides.fHinting) {
-        switch (fPaint.getHinting()) {
-            case SkPaint::kNo_Hinting:
+        switch ((SkFontHinting)fPaint.getHinting()) {
+            case kNo_SkFontHinting:
                 paintTitle.append("No Hinting");
                 break;
-            case SkPaint::kSlight_Hinting:
+            case kSlight_SkFontHinting:
                 paintTitle.append("Slight Hinting");
                 break;
-            case SkPaint::kNormal_Hinting:
+            case kNormal_SkFontHinting:
                 paintTitle.append("Normal Hinting");
                 break;
-            case SkPaint::kFull_Hinting:
+            case kFull_SkFontHinting:
                 paintTitle.append("Full Hinting");
                 break;
         }
     }
     paintTitle.done();
 
-    if (fTileCnt > 0) {
-        title.appendf(" T%d", fTileCnt);
-        if (fThreadCnt > 0) {
-            title.appendf("/%d", fThreadCnt);
-        }
-    }
-
     switch (fColorMode) {
         case ColorMode::kLegacy:
             title.append(" Legacy 8888");
             break;
-        case ColorMode::kColorManagedSRGB8888_NonLinearBlending:
-            title.append(" ColorManaged 8888 (Nonlinear blending)");
-            break;
-        case ColorMode::kColorManagedSRGB8888:
+        case ColorMode::kColorManaged8888:
             title.append(" ColorManaged 8888");
             break;
-        case ColorMode::kColorManagedLinearF16:
+        case ColorMode::kColorManagedF16:
             title.append(" ColorManaged F16");
             break;
     }
@@ -778,11 +746,9 @@ void Viewer::updateTitle() {
                 break;
             }
         }
-        title.appendf(" %s", curPrimaries >= 0 ? gNamedPrimaries[curPrimaries].fName : "Custom");
-
-        if (ColorMode::kColorManagedSRGB8888_NonLinearBlending == fColorMode) {
-            title.appendf(" Gamma %f", fColorSpaceTransferFn.fG);
-        }
+        title.appendf(" %s Gamma %f",
+                      curPrimaries >= 0 ? gNamedPrimaries[curPrimaries].fName : "Custom",
+                      fColorSpaceTransferFn.fG);
     }
 
     const DisplayParams& params = fWindow->getRequestedDisplayParams();
@@ -819,7 +785,7 @@ void Viewer::updateTitle() {
     title.append("]");
 
     GpuPathRenderers pr = fWindow->getRequestedDisplayParams().fGrContextOptions.fGpuPathRenderers;
-    if (GpuPathRenderers::kDefault != pr) {
+    if (GpuPathRenderers::kAll != pr) {
         title.appendf(" [Path renderer: %s]", gPathRendererNames[pr].c_str());
     }
 
@@ -937,6 +903,7 @@ SkMatrix Viewer::computePreTouchMatrix() {
     SkMatrix m = fDefaultMatrix;
     SkScalar zoomScale = (fZoomLevel < 0) ? SK_Scalar1 / (SK_Scalar1 - fZoomLevel)
                                           : SK_Scalar1 + fZoomLevel;
+    m.preTranslate((fOffset.x() - 0.5f) * 2.0f, (fOffset.y() - 0.5f) * 2.0f);
     m.preScale(zoomScale, zoomScale);
 
     const SkISize slideSize = fSlides[fCurrentSlide]->getDimensions();
@@ -989,18 +956,6 @@ void Viewer::setBackend(sk_app::Window::BackendType backendType) {
 
 void Viewer::setColorMode(ColorMode colorMode) {
     fColorMode = colorMode;
-
-    // When we're in color managed mode, we tag our window surface as sRGB. If we've switched into
-    // or out of legacy/nonlinear mode, we need to update our window configuration.
-    DisplayParams params = fWindow->getRequestedDisplayParams();
-    bool wasInLegacy = !SkToBool(params.fColorSpace);
-    bool wantLegacy = (ColorMode::kLegacy == fColorMode) ||
-                      (ColorMode::kColorManagedSRGB8888_NonLinearBlending == fColorMode);
-    if (wasInLegacy != wantLegacy) {
-        params.fColorSpace = wantLegacy ? nullptr : SkColorSpace::MakeSRGB();
-        fWindow->setRequestedDisplayParams(params);
-    }
-
     this->updateTitle();
     fWindow->inval();
 }
@@ -1010,9 +965,79 @@ public:
     OveridePaintFilterCanvas(SkCanvas* canvas, SkPaint* paint, Viewer::SkPaintFields* fields)
         : SkPaintFilterCanvas(canvas), fPaint(paint), fPaintOverrides(fields)
     { }
+    const SkTextBlob* filterTextBlob(const SkPaint& paint, const SkTextBlob* blob,
+                                     sk_sp<SkTextBlob>* cache) {
+        bool blobWillChange = false;
+        for (SkTextBlobRunIterator it(blob); !it.done(); it.next()) {
+            SkPaint blobPaint = paint;
+            it.applyFontToPaint(&blobPaint);
+            SkTCopyOnFirstWrite<SkPaint> filteredPaint(blobPaint);
+            bool shouldDraw = this->onFilter(&filteredPaint, kTextBlob_Type);
+            if (blobPaint != *filteredPaint || !shouldDraw) {
+                blobWillChange = true;
+                break;
+            }
+        }
+        if (!blobWillChange) {
+            return blob;
+        }
+
+        SkTextBlobBuilder builder;
+        for (SkTextBlobRunIterator it(blob); !it.done(); it.next()) {
+            SkPaint blobPaint = paint;
+            it.applyFontToPaint(&blobPaint);
+            SkTCopyOnFirstWrite<SkPaint> filteredPaint(blobPaint);
+            bool shouldDraw = this->onFilter(&filteredPaint, kTextBlob_Type);
+            if (!shouldDraw) {
+                continue;
+            }
+
+            const SkTextBlobBuilder::RunBuffer& runBuffer
+                = it.positioning() == SkTextBlobRunIterator::kDefault_Positioning
+                    ? SkTextBlobBuilderPriv::AllocRunText(&builder, *filteredPaint,
+                        it.offset().x(),it.offset().y(), it.glyphCount(), it.textSize(), SkString())
+                : it.positioning() == SkTextBlobRunIterator::kHorizontal_Positioning
+                    ? SkTextBlobBuilderPriv::AllocRunTextPosH(&builder, *filteredPaint,
+                        it.offset().y(), it.glyphCount(), it.textSize(), SkString())
+                : it.positioning() == SkTextBlobRunIterator::kFull_Positioning
+                    ? SkTextBlobBuilderPriv::AllocRunTextPos(&builder, *filteredPaint,
+                        it.glyphCount(), it.textSize(), SkString())
+                : (SkASSERT_RELEASE(false), SkTextBlobBuilder::RunBuffer());
+            uint32_t glyphCount = it.glyphCount();
+            if (it.glyphs()) {
+                size_t glyphSize = sizeof(decltype(*it.glyphs()));
+                memcpy(runBuffer.glyphs, it.glyphs(), glyphCount * glyphSize);
+            }
+            if (it.pos()) {
+                size_t posSize = sizeof(decltype(*it.pos()));
+                uint8_t positioning = it.positioning();
+                memcpy(runBuffer.pos, it.pos(), glyphCount * positioning * posSize);
+            }
+            if (it.text()) {
+                size_t textSize = sizeof(decltype(*it.text()));
+                uint32_t textCount = it.textSize();
+                memcpy(runBuffer.utf8text, it.text(), textCount * textSize);
+            }
+            if (it.clusters()) {
+                size_t clusterSize = sizeof(decltype(*it.clusters()));
+                memcpy(runBuffer.clusters, it.clusters(), glyphCount * clusterSize);
+            }
+        }
+        *cache = builder.make();
+        return cache->get();
+    }
+    void onDrawTextBlob(const SkTextBlob* blob, SkScalar x, SkScalar y,
+                        const SkPaint& paint) override {
+        sk_sp<SkTextBlob> cache;
+        this->SkPaintFilterCanvas::onDrawTextBlob(
+            this->filterTextBlob(paint, blob, &cache), x, y, paint);
+    }
     bool onFilter(SkTCopyOnFirstWrite<SkPaint>* paint, Type) const override {
         if (*paint == nullptr) {
             return true;
+        }
+        if (fPaintOverrides->fTextSize) {
+            paint->writable()->setTextSize(fPaint->getTextSize());
         }
         if (fPaintOverrides->fHinting) {
             paint->writable()->setHinting(fPaint->getHinting());
@@ -1042,9 +1067,6 @@ public:
         if (fPaintOverrides->fFlags & SkPaint::kAutoHinting_Flag) {
             paint->writable()->setAutohinted(fPaint->isAutohinted());
         }
-        if (fPaintOverrides->fFlags & SkPaint::kVerticalText_Flag) {
-            paint->writable()->setVerticalText(fPaint->isVerticalText());
-        }
 
         return true;
     }
@@ -1060,29 +1082,17 @@ void Viewer::drawSlide(SkCanvas* canvas) {
     fLastImage.reset();
 
     // If we're in any of the color managed modes, construct the color space we're going to use
-    sk_sp<SkColorSpace> cs = nullptr;
+    sk_sp<SkColorSpace> colorSpace = nullptr;
     if (ColorMode::kLegacy != fColorMode) {
-        auto transferFn = (ColorMode::kColorManagedLinearF16 == fColorMode)
-            ? SkColorSpace::kLinear_RenderTargetGamma : SkColorSpace::kSRGB_RenderTargetGamma;
-        SkMatrix44 toXYZ(SkMatrix44::kIdentity_Constructor);
+        SkMatrix44 toXYZ;
         SkAssertResult(fColorSpacePrimaries.toXYZD50(&toXYZ));
-        if (ColorMode::kColorManagedSRGB8888_NonLinearBlending == fColorMode) {
-            cs = SkColorSpace::MakeRGB(fColorSpaceTransferFn, toXYZ);
-        } else {
-            cs = SkColorSpace::MakeRGB(transferFn, toXYZ);
-        }
+        colorSpace = SkColorSpace::MakeRGB(fColorSpaceTransferFn, toXYZ);
     }
 
     if (fSaveToSKP) {
         SkPictureRecorder recorder;
         SkCanvas* recorderCanvas = recorder.beginRecording(
                 SkRect::Make(fSlides[fCurrentSlide]->getDimensions()));
-        // In xform-canvas mode, record the transformed output
-        std::unique_ptr<SkCanvas> xformCanvas = nullptr;
-        if (ColorMode::kColorManagedSRGB8888_NonLinearBlending == fColorMode) {
-            xformCanvas = SkCreateColorSpaceXformCanvas(recorderCanvas, cs);
-            recorderCanvas = xformCanvas.get();
-        }
         fSlides[fCurrentSlide]->draw(recorderCanvas);
         sk_sp<SkPicture> picture(recorder.finishRecordingAsPicture());
         SkFILEWStream stream("sample_app.skp");
@@ -1090,61 +1100,74 @@ void Viewer::drawSlide(SkCanvas* canvas) {
         fSaveToSKP = false;
     }
 
-    // If we're in F16, or we're zooming, or we're in color correct 8888 and the gamut isn't sRGB,
-    // we need to render offscreen. We also need to render offscreen if we're in any raster mode,
-    // because the window surface is actually GL, or we're doing fake perspective.
+    // Grab some things we'll need to make surfaces (for tiling or general offscreen rendering)
+    SkColorType colorType = (ColorMode::kColorManagedF16 == fColorMode) ? kRGBA_F16_SkColorType
+                                                                        : kN32_SkColorType;
+    SkSurfaceProps props(SkSurfaceProps::kLegacyFontHost_InitType);
+    canvas->getProps(&props);
+
+    auto make_surface = [=](int w, int h) {
+        SkImageInfo info = SkImageInfo::Make(w, h, colorType, kPremul_SkAlphaType, colorSpace);
+        return Window::kRaster_BackendType == this->fBackendType
+                ? SkSurface::MakeRaster(info, &props)
+                : canvas->makeSurface(info, &props);
+    };
+
+    // We need to render offscreen if we're...
+    // ... in fake perspective or zooming (so we have a snapped copy of the results)
+    // ... in any raster mode, because the window surface is actually GL
+    // ... in any color managed mode, because we always make the window surface with no color space
     sk_sp<SkSurface> offscreenSurface = nullptr;
-    std::unique_ptr<SkCanvas> threadedCanvas;
-    if (Window::kRaster_BackendType == fBackendType ||
-        kPerspective_Fake == fPerspectiveMode ||
-        ColorMode::kColorManagedLinearF16 == fColorMode ||
+    if (kPerspective_Fake == fPerspectiveMode ||
         fShowZoomWindow ||
-        (ColorMode::kColorManagedSRGB8888 == fColorMode &&
-         !primaries_equal(fColorSpacePrimaries, gSrgbPrimaries))) {
+        Window::kRaster_BackendType == fBackendType ||
+        colorSpace != nullptr) {
 
-        SkColorType colorType = (ColorMode::kColorManagedLinearF16 == fColorMode)
-            ? kRGBA_F16_SkColorType : kN32_SkColorType;
-        // In nonlinear blending mode, we actually use a legacy off-screen canvas, and wrap it
-        // with a special canvas (below) that has the color space attached
-        sk_sp<SkColorSpace> offscreenColorSpace =
-            (ColorMode::kColorManagedSRGB8888_NonLinearBlending == fColorMode) ? nullptr : cs;
-        SkImageInfo info = SkImageInfo::Make(fWindow->width(), fWindow->height(), colorType,
-                                             kPremul_SkAlphaType, std::move(offscreenColorSpace));
-        SkSurfaceProps props(SkSurfaceProps::kLegacyFontHost_InitType);
-        canvas->getProps(&props);
-        offscreenSurface = Window::kRaster_BackendType == fBackendType
-                         ? SkSurface::MakeRaster(info, &props)
-                         : canvas->makeSurface(info);
-        SkPixmap offscreenPixmap;
-        if (fTileCnt > 0 && offscreenSurface->peekPixels(&offscreenPixmap)) {
-            SkBitmap offscreenBitmap;
-            offscreenBitmap.installPixels(offscreenPixmap);
-            threadedCanvas =
-                skstd::make_unique<SkCanvas>(
-                    sk_make_sp<SkThreadedBMPDevice>(
-                         offscreenBitmap, fTileCnt, fThreadCnt, fExecutor.get()));
-            slideCanvas = threadedCanvas.get();
-        } else {
-            slideCanvas = offscreenSurface->getCanvas();
-        }
-    }
-
-    std::unique_ptr<SkCanvas> xformCanvas = nullptr;
-    if (ColorMode::kColorManagedSRGB8888_NonLinearBlending == fColorMode) {
-        xformCanvas = SkCreateColorSpaceXformCanvas(slideCanvas, cs);
-        slideCanvas = xformCanvas.get();
+        offscreenSurface = make_surface(fWindow->width(), fWindow->height());
+        slideCanvas = offscreenSurface->getCanvas();
     }
 
     int count = slideCanvas->save();
     slideCanvas->clear(SK_ColorWHITE);
-    slideCanvas->concat(computeMatrix());
-    if (kPerspective_Real == fPerspectiveMode) {
-        slideCanvas->clipRect(SkRect::MakeWH(fWindow->width(), fWindow->height()));
-    }
     // Time the painting logic of the slide
     fStatsLayer.beginTiming(fPaintTimer);
-    OveridePaintFilterCanvas filterCanvas(slideCanvas, &fPaint, &fPaintOverrides);
-    fSlides[fCurrentSlide]->draw(&filterCanvas);
+    if (fTiled) {
+        int tileW = SkScalarCeilToInt(fWindow->width() * fTileScale.width());
+        int tileH = SkScalarCeilToInt(fWindow->height() * fTileScale.height());
+        sk_sp<SkSurface> tileSurface = make_surface(tileW, tileH);
+        SkCanvas* tileCanvas = tileSurface->getCanvas();
+        SkMatrix m = this->computeMatrix();
+        for (int y = 0; y < fWindow->height(); y += tileH) {
+            for (int x = 0; x < fWindow->width(); x += tileW) {
+                SkAutoCanvasRestore acr(tileCanvas, true);
+                tileCanvas->translate(-x, -y);
+                tileCanvas->clear(SK_ColorTRANSPARENT);
+                tileCanvas->concat(m);
+                OveridePaintFilterCanvas filterCanvas(tileCanvas, &fPaint, &fPaintOverrides);
+                fSlides[fCurrentSlide]->draw(&filterCanvas);
+                tileSurface->draw(slideCanvas, x, y, nullptr);
+            }
+        }
+
+        // Draw borders between tiles
+        if (fDrawTileBoundaries) {
+            SkPaint border;
+            border.setColor(0x60FF00FF);
+            border.setStyle(SkPaint::kStroke_Style);
+            for (int y = 0; y < fWindow->height(); y += tileH) {
+                for (int x = 0; x < fWindow->width(); x += tileW) {
+                    slideCanvas->drawRect(SkRect::MakeXYWH(x, y, tileW, tileH), border);
+                }
+            }
+        }
+    } else {
+        slideCanvas->concat(this->computeMatrix());
+        if (kPerspective_Real == fPerspectiveMode) {
+            slideCanvas->clipRect(SkRect::MakeWH(fWindow->width(), fWindow->height()));
+        }
+        OveridePaintFilterCanvas filterCanvas(slideCanvas, &fPaint, &fPaintOverrides);
+        fSlides[fCurrentSlide]->draw(&filterCanvas);
+    }
     fStatsLayer.endTiming(fPaintTimer);
     slideCanvas->restoreToCount(count);
 
@@ -1157,10 +1180,6 @@ void Viewer::drawSlide(SkCanvas* canvas) {
     if (offscreenSurface) {
         fLastImage = offscreenSurface->makeImageSnapshot();
 
-        // Tag the image with the sRGB gamut, so no further color space conversion happens
-        sk_sp<SkColorSpace> srgb = (ColorMode::kColorManagedLinearF16 == fColorMode)
-            ? SkColorSpace::MakeSRGBLinear() : SkColorSpace::MakeSRGB();
-        auto retaggedImage = SkImageMakeRasterCopyAndAssignColorSpace(fLastImage.get(), srgb.get());
         SkPaint paint;
         paint.setBlendMode(SkBlendMode::kSrc);
         int prePerspectiveCount = canvas->save();
@@ -1169,7 +1188,7 @@ void Viewer::drawSlide(SkCanvas* canvas) {
             canvas->clear(SK_ColorWHITE);
             canvas->concat(this->computePerspectiveMatrix());
         }
-        canvas->drawImage(retaggedImage, 0, 0, &paint);
+        canvas->drawImage(fLastImage, 0, 0, &paint);
         canvas->restoreToCount(prePerspectiveCount);
     }
 }
@@ -1185,6 +1204,17 @@ void Viewer::onPaint(SkCanvas* canvas) {
     fCommands.drawHelp(canvas);
 
     this->drawImGui();
+
+    if (GrContext* ctx = fWindow->getGrContext()) {
+        // Clean out cache items that haven't been used in more than 10 seconds.
+        ctx->performDeferredCleanup(std::chrono::seconds(10));
+    }
+}
+
+void Viewer::onResize(int width, int height) {
+    if (fCurrentSlide >= 0) {
+        fSlides[fCurrentSlide]->resize(width, height);
+    }
 }
 
 SkPoint Viewer::mapEvent(float x, float y) {
@@ -1211,6 +1241,23 @@ bool Viewer::onTouch(intptr_t owner, Window::InputState state, float x, float y)
     switch (state) {
         case Window::kUp_InputState: {
             fGesture.touchEnd(castedOwner);
+#if defined(SK_BUILD_FOR_IOS)
+            // TODO: move IOS swipe detection higher up into the platform code
+            SkPoint dir;
+            if (fGesture.isFling(&dir)) {
+                // swiping left or right
+                if (SkTAbs(dir.fX) > SkTAbs(dir.fY)) {
+                    if (dir.fX < 0) {
+                        this->setCurrentSlide(fCurrentSlide < fSlides.count() - 1 ?
+                                              fCurrentSlide + 1 : 0);
+                    } else {
+                        this->setCurrentSlide(fCurrentSlide > 0 ?
+                                              fCurrentSlide - 1 : fSlides.count() - 1);
+                    }
+                }
+                fGesture.reset();
+            }
+#endif
             break;
         }
         case Window::kDown_InputState: {
@@ -1343,6 +1390,28 @@ static ImVec2 ImGui_DragPoint(const char* label, SkPoint* p,
     return ImVec2(pos.x + p->fX * size.x, pos.y + p->fY * size.y);
 }
 
+static bool ImGui_DragLocation(SkPoint* pt) {
+    ImDrawList* drawList = ImGui::GetWindowDrawList();
+
+    // Fit our image/canvas to the available width, and scale the height to maintain aspect ratio.
+    float canvasWidth = SkTMax(ImGui::GetContentRegionAvailWidth(), 50.0f);
+    ImVec2 size = ImVec2(canvasWidth, canvasWidth);
+    ImVec2 pos = ImGui::GetCursorScreenPos();
+
+    // Background rectangle
+    drawList->AddRectFilled(pos, ImVec2(pos.x + size.x, pos.y + size.y), IM_COL32(0, 0, 0, 128));
+
+    // Location marker
+    bool dragging = false;
+    ImVec2 tl = ImGui_DragPoint("SL", pt + 0, pos, size, &dragging);
+    drawList->AddCircle(tl, 5.0f, 0xFFFFFFFF);
+
+    ImGui::SetCursorScreenPos(ImVec2(pos.x, pos.y + size.y));
+    ImGui::Spacing();
+
+    return dragging;
+}
+
 static bool ImGui_DragQuad(SkPoint* pts) {
     ImDrawList* drawList = ImGui::GetWindowDrawList();
 
@@ -1380,13 +1449,13 @@ static bool ImGui_DragQuad(SkPoint* pts) {
 void Viewer::drawImGui() {
     // Support drawing the ImGui demo window. Superfluous, but gives a good idea of what's possible
     if (fShowImGuiTestWindow) {
-        ImGui::ShowTestWindow(&fShowImGuiTestWindow);
+        ImGui::ShowDemoWindow(&fShowImGuiTestWindow);
     }
 
     if (fShowImGuiDebugWindow) {
         // We have some dynamic content that sizes to fill available size. If the scroll bar isn't
         // always visible, we can end up in a layout feedback loop.
-        ImGui::SetNextWindowSize(ImVec2(400, 400), ImGuiSetCond_FirstUseEver);
+        ImGui::SetNextWindowSize(ImVec2(400, 400), ImGuiCond_FirstUseEver);
         DisplayParams params = fWindow->getRequestedDisplayParams();
         bool paramsChanged = false;
         if (ImGui::Begin("Tools", &fShowImGuiDebugWindow,
@@ -1476,7 +1545,6 @@ void Viewer::drawImGui() {
                     if (!ctx) {
                         ImGui::RadioButton("Software", true);
                     } else if (fWindow->sampleCount() > 1) {
-                        prButton(GpuPathRenderers::kDefault);
                         prButton(GpuPathRenderers::kAll);
                         if (ctx->contextPriv().caps()->shaderCaps()->pathRenderingSupport()) {
                             prButton(GpuPathRenderers::kStencilAndCover);
@@ -1484,7 +1552,6 @@ void Viewer::drawImGui() {
                         prButton(GpuPathRenderers::kTessellating);
                         prButton(GpuPathRenderers::kNone);
                     } else {
-                        prButton(GpuPathRenderers::kDefault);
                         prButton(GpuPathRenderers::kAll);
                         if (GrCoverageCountingPathRenderer::IsSupported(
                                     *ctx->contextPriv().caps())) {
@@ -1511,31 +1578,48 @@ void Viewer::drawImGui() {
                     this->preTouchMatrixChanged();
                     paramsChanged = true;
                 }
+                if (ImGui::CollapsingHeader("Subpixel offset", ImGuiTreeNodeFlags_NoTreePushOnOpen)) {
+                    if (ImGui_DragLocation(&fOffset)) {
+                        this->preTouchMatrixChanged();
+                        paramsChanged = true;
+                    }
+                } else if (fOffset != SkVector{0.5f, 0.5f}) {
+                    this->preTouchMatrixChanged();
+                    paramsChanged = true;
+                    fOffset = {0.5f, 0.5f};
+                }
+                if (ImGui::CollapsingHeader("Tiling")) {
+                    ImGui::Checkbox("Enable", &fTiled);
+                    ImGui::Checkbox("Draw Boundaries", &fDrawTileBoundaries);
+                    ImGui::SliderFloat("Horizontal", &fTileScale.fWidth, 0.1f, 1.0f);
+                    ImGui::SliderFloat("Vertical", &fTileScale.fHeight, 0.1f, 1.0f);
+                }
                 int perspectiveMode = static_cast<int>(fPerspectiveMode);
                 if (ImGui::Combo("Perspective", &perspectiveMode, "Off\0Real\0Fake\0\0")) {
                     fPerspectiveMode = static_cast<PerspectiveMode>(perspectiveMode);
                     this->preTouchMatrixChanged();
-                    this->updateTitle();
+                    paramsChanged = true;
                 }
-                if (ImGui_DragQuad(fPerspectivePoints)) {
+                if (perspectiveMode != kPerspective_Off && ImGui_DragQuad(fPerspectivePoints)) {
                     this->preTouchMatrixChanged();
+                    paramsChanged = true;
                 }
             }
 
             if (ImGui::CollapsingHeader("Paint")) {
                 int hintingIdx = 0;
                 if (fPaintOverrides.fHinting) {
-                    hintingIdx = fPaint.getHinting() + 1;
+                    hintingIdx = static_cast<unsigned>(fPaint.getHinting()) + 1;
                 }
                 if (ImGui::Combo("Hinting", &hintingIdx,
                                  "Default\0None\0Slight\0Normal\0Full\0\0"))
                 {
                     if (hintingIdx == 0) {
                         fPaintOverrides.fHinting = false;
-                        fPaint.setHinting(SkPaint::kNo_Hinting);
+                        fPaint.setHinting(kNo_SkFontHinting);
                     } else {
                         fPaintOverrides.fHinting = true;
-                        SkPaint::Hinting hinting = SkTo<SkPaint::Hinting>(hintingIdx - 1);
+                        SkFontHinting hinting = SkTo<SkFontHinting>(hintingIdx - 1);
                         fPaint.setHinting(hinting);
                     }
                     paramsChanged = true;
@@ -1643,10 +1727,21 @@ void Viewer::drawImGui() {
                           SkPaint::kAutoHinting_Flag,
                           &SkPaint::isAutohinted, &SkPaint::setAutohinted);
 
-                paintFlag("Vertical Text",
-                          "Default\0No Vertical Text\0Vertical Text\0\0",
-                          SkPaint::kVerticalText_Flag,
-                          &SkPaint::isVerticalText, &SkPaint::setVerticalText);
+                ImGui::Checkbox("Override TextSize", &fPaintOverrides.fTextSize);
+                if (fPaintOverrides.fTextSize) {
+                    ImGui::DragFloat2("TextRange", fPaintOverrides.fTextSizeRange,
+                                      0.001f, -10.0f, 300.0f, "%.6f", 2.0f);
+                    float textSize = fPaint.getTextSize();
+                    if (ImGui::DragFloat("TextSize", &textSize, 0.001f,
+                                         fPaintOverrides.fTextSizeRange[0],
+                                         fPaintOverrides.fTextSizeRange[1],
+                                         "%.6f", 2.0f))
+                    {
+                        fPaint.setTextSize(textSize);
+                        this->preTouchMatrixChanged();
+                        paramsChanged = true;
+                    }
+                }
             }
 
             {
@@ -1657,19 +1752,17 @@ void Viewer::drawImGui() {
                         const char* name;
                         SkMetaData::Type type;
                         int count;
-                        bool found = false;
-                        while ((name = iter.next(&type, &count)) != nullptr && found == false) {
+                        while ((name = iter.next(&type, &count)) != nullptr) {
                             if (type == SkMetaData::kScalar_Type) {
                                 float val[3];
                                 SkASSERT(count == 3);
                                 controls.findScalars(name, &count, val);
                                 if (ImGui::SliderFloat(name, &val[0], val[1], val[2])) {
                                     controls.setScalars(name, 3, val);
-                                    fSlides[fCurrentSlide]->onSetControls(controls);
-                                    found = paramsChanged = true;
                                 }
                             }
                         }
+                        fSlides[fCurrentSlide]->onSetControls(controls);
                     }
                 }
             }
@@ -1717,17 +1810,11 @@ void Viewer::drawImGui() {
                 };
 
                 cmButton(ColorMode::kLegacy, "Legacy 8888");
-                cmButton(ColorMode::kColorManagedSRGB8888_NonLinearBlending,
-                         "Color Managed 8888 (Nonlinear blending)");
-                cmButton(ColorMode::kColorManagedSRGB8888, "Color Managed 8888");
-                cmButton(ColorMode::kColorManagedLinearF16, "Color Managed F16");
+                cmButton(ColorMode::kColorManaged8888, "Color Managed 8888");
+                cmButton(ColorMode::kColorManagedF16, "Color Managed F16");
 
                 if (newMode != fColorMode) {
-                    // It isn't safe to switch color mode now (in the middle of painting). We might
-                    // tear down the back-end, etc... Defer this change until the next onIdle.
-                    fDeferredActions.push_back([=]() {
-                        this->setColorMode(newMode);
-                    });
+                    this->setColorMode(newMode);
                 }
 
                 // Pick from common gamuts:
@@ -1739,10 +1826,8 @@ void Viewer::drawImGui() {
                     }
                 }
 
-                // When we're in xform canvas mode, we can alter the transfer function, too
-                if (ColorMode::kColorManagedSRGB8888_NonLinearBlending == fColorMode) {
-                    ImGui::SliderFloat("Gamma", &fColorSpaceTransferFn.fG, 0.5f, 3.5f);
-                }
+                // Let user adjust the gamma
+                ImGui::SliderFloat("Gamma", &fColorSpaceTransferFn.fG, 0.5f, 3.5f);
 
                 if (ImGui::Combo("Primaries", &primariesIdx,
                                  "sRGB\0AdobeRGB\0P3\0Rec. 2020\0Custom\0\0")) {
@@ -1766,7 +1851,8 @@ void Viewer::drawImGui() {
     }
 
     if (fShowZoomWindow && fLastImage) {
-        if (ImGui::Begin("Zoom", &fShowZoomWindow, ImVec2(200, 200))) {
+        ImGui::SetNextWindowSize(ImVec2(200, 200), ImGuiCond_FirstUseEver);
+        if (ImGui::Begin("Zoom", &fShowZoomWindow)) {
             static int zoomFactor = 8;
             if (ImGui::Button("<<")) {
                 zoomFactor = SkTMax(zoomFactor / 2, 4);
@@ -1776,15 +1862,22 @@ void Viewer::drawImGui() {
                 zoomFactor = SkTMin(zoomFactor * 2, 32);
             }
 
-            ImVec2 mousePos = ImGui::GetMousePos();
+            if (!fZoomWindowFixed) {
+                ImVec2 mousePos = ImGui::GetMousePos();
+                fZoomWindowLocation = SkPoint::Make(mousePos.x, mousePos.y);
+            }
+            SkScalar x = fZoomWindowLocation.x();
+            SkScalar y = fZoomWindowLocation.y();
+            int xInt = SkScalarRoundToInt(x);
+            int yInt = SkScalarRoundToInt(y);
             ImVec2 avail = ImGui::GetContentRegionAvail();
 
             uint32_t pixel = 0;
             SkImageInfo info = SkImageInfo::MakeN32Premul(1, 1);
-            if (fLastImage->readPixels(info, &pixel, info.minRowBytes(), mousePos.x, mousePos.y)) {
+            if (fLastImage->readPixels(info, &pixel, info.minRowBytes(), xInt, yInt)) {
                 ImGui::SameLine();
                 ImGui::Text("(X, Y): %d, %d RGBA: %x %x %x %x",
-                            sk_float_round2int(mousePos.x), sk_float_round2int(mousePos.y),
+                            xInt, yInt,
                             SkGetPackedR32(pixel), SkGetPackedG32(pixel),
                             SkGetPackedB32(pixel), SkGetPackedA32(pixel));
             }
@@ -1793,13 +1886,13 @@ void Viewer::drawImGui() {
                 // Translate so the region of the image that's under the mouse cursor is centered
                 // in the zoom canvas:
                 c->scale(zoomFactor, zoomFactor);
-                c->translate(avail.x * 0.5f / zoomFactor - mousePos.x - 0.5f,
-                             avail.y * 0.5f / zoomFactor - mousePos.y - 0.5f);
+                c->translate(avail.x * 0.5f / zoomFactor - x - 0.5f,
+                             avail.y * 0.5f / zoomFactor - y - 0.5f);
                 c->drawImage(this->fLastImage, 0, 0);
 
                 SkPaint outline;
                 outline.setStyle(SkPaint::kStroke_Style);
-                c->drawRect(SkRect::MakeXYWH(mousePos.x, mousePos.y, 1, 1), outline);
+                c->drawRect(SkRect::MakeXYWH(x, y, 1, 1), outline);
             });
         }
 
@@ -1819,10 +1912,33 @@ void Viewer::onIdle() {
     fStatsLayer.endTiming(fAnimateTimer);
 
     ImGuiIO& io = ImGui::GetIO();
-    if (animateWantsInval || fStatsLayer.getActive() || fRefresh || io.MetricsActiveWindows) {
+    // ImGui always has at least one "active" window, which is the default "Debug" window. It may
+    // not be visible, though. So we need to redraw if there is at least one visible window, or
+    // more than one active window. Newly created windows are active but not visible for one frame
+    // while they determine their layout and sizing.
+    if (animateWantsInval || fStatsLayer.getActive() || fRefresh ||
+        io.MetricsActiveWindows > 1 || io.MetricsRenderWindows > 0) {
         fWindow->inval();
     }
 }
+
+template <typename OptionsFunc>
+static void WriteStateObject(SkJSONWriter& writer, const char* name, const char* value,
+                             OptionsFunc&& optionsFunc) {
+    writer.beginObject();
+    {
+        writer.appendString(kName , name);
+        writer.appendString(kValue, value);
+
+        writer.beginArray(kOptions);
+        {
+            optionsFunc(writer);
+        }
+        writer.endArray();
+    }
+    writer.endObject();
+}
+
 
 void Viewer::updateUIState() {
     if (!fWindow) {
@@ -1832,85 +1948,88 @@ void Viewer::updateUIState() {
         return; // Surface hasn't been created yet.
     }
 
+    SkDynamicMemoryWStream memStream;
+    SkJSONWriter writer(&memStream);
+    writer.beginArray();
+
     // Slide state
-    Json::Value slideState(Json::objectValue);
-    slideState[kName] = kSlideStateName;
-    slideState[kValue] = fSlides[fCurrentSlide]->getName().c_str();
-    if (fAllSlideNames.size() == 0) {
-        for(auto slide : fSlides) {
-            fAllSlideNames.append(Json::Value(slide->getName().c_str()));
-        }
-    }
-    slideState[kOptions] = fAllSlideNames;
+    WriteStateObject(writer, kSlideStateName, fSlides[fCurrentSlide]->getName().c_str(),
+        [this](SkJSONWriter& writer) {
+            for(const auto& slide : fSlides) {
+                writer.appendString(slide->getName().c_str());
+            }
+        });
 
     // Backend state
-    Json::Value backendState(Json::objectValue);
-    backendState[kName] = kBackendStateName;
-    backendState[kValue] = kBackendTypeStrings[fBackendType];
-    backendState[kOptions] = Json::Value(Json::arrayValue);
-    for (auto str : kBackendTypeStrings) {
-        backendState[kOptions].append(Json::Value(str));
-    }
+    WriteStateObject(writer, kBackendStateName, kBackendTypeStrings[fBackendType],
+        [](SkJSONWriter& writer) {
+            for (const auto& str : kBackendTypeStrings) {
+                writer.appendString(str);
+            }
+        });
 
     // MSAA state
-    Json::Value msaaState(Json::objectValue);
-    msaaState[kName] = kMSAAStateName;
-    msaaState[kValue] = fWindow->sampleCount();
-    msaaState[kOptions] = Json::Value(Json::arrayValue);
-    if (sk_app::Window::kRaster_BackendType == fBackendType) {
-        msaaState[kOptions].append(Json::Value(0));
-    } else {
-        for (int msaa : {0, 4, 8, 16}) {
-            msaaState[kOptions].append(Json::Value(msaa));
-        }
-    }
+    const auto countString = SkStringPrintf("%d", fWindow->sampleCount());
+    WriteStateObject(writer, kMSAAStateName, countString.c_str(),
+        [this](SkJSONWriter& writer) {
+            writer.appendS32(0);
+
+            if (sk_app::Window::kRaster_BackendType == fBackendType) {
+                return;
+            }
+
+            for (int msaa : {4, 8, 16}) {
+                writer.appendS32(msaa);
+            }
+        });
 
     // Path renderer state
     GpuPathRenderers pr = fWindow->getRequestedDisplayParams().fGrContextOptions.fGpuPathRenderers;
-    Json::Value prState(Json::objectValue);
-    prState[kName] = kPathRendererStateName;
-    prState[kValue] = gPathRendererNames[pr];
-    prState[kOptions] = Json::Value(Json::arrayValue);
-    const GrContext* ctx = fWindow->getGrContext();
-    if (!ctx) {
-        prState[kOptions].append("Software");
-    } else if (fWindow->sampleCount() > 1) {
-        prState[kOptions].append(gPathRendererNames[GpuPathRenderers::kDefault]);
-        prState[kOptions].append(gPathRendererNames[GpuPathRenderers::kAll]);
-        if (ctx->contextPriv().caps()->shaderCaps()->pathRenderingSupport()) {
-            prState[kOptions].append(gPathRendererNames[GpuPathRenderers::kStencilAndCover]);
-        }
-        prState[kOptions].append(gPathRendererNames[GpuPathRenderers::kTessellating]);
-        prState[kOptions].append(gPathRendererNames[GpuPathRenderers::kNone]);
-    } else {
-        prState[kOptions].append(gPathRendererNames[GpuPathRenderers::kDefault]);
-        prState[kOptions].append(gPathRendererNames[GpuPathRenderers::kAll]);
-        if (GrCoverageCountingPathRenderer::IsSupported(*ctx->contextPriv().caps())) {
-            prState[kOptions].append(gPathRendererNames[GpuPathRenderers::kCoverageCounting]);
-        }
-        prState[kOptions].append(gPathRendererNames[GpuPathRenderers::kSmall]);
-        prState[kOptions].append(gPathRendererNames[GpuPathRenderers::kTessellating]);
-        prState[kOptions].append(gPathRendererNames[GpuPathRenderers::kNone]);
-    }
+    WriteStateObject(writer, kPathRendererStateName, gPathRendererNames[pr].c_str(),
+        [this](SkJSONWriter& writer) {
+            const GrContext* ctx = fWindow->getGrContext();
+            if (!ctx) {
+                writer.appendString("Software");
+            } else {
+                const auto* caps = ctx->contextPriv().caps();
+
+                writer.appendString(gPathRendererNames[GpuPathRenderers::kAll].c_str());
+                if (fWindow->sampleCount() > 1) {
+                    if (caps->shaderCaps()->pathRenderingSupport()) {
+                        writer.appendString(
+                            gPathRendererNames[GpuPathRenderers::kStencilAndCover].c_str());
+                    }
+                } else {
+                    if(GrCoverageCountingPathRenderer::IsSupported(*caps)) {
+                        writer.appendString(
+                            gPathRendererNames[GpuPathRenderers::kCoverageCounting].c_str());
+                    }
+                    writer.appendString(gPathRendererNames[GpuPathRenderers::kSmall].c_str());
+                }
+                    writer.appendString(
+                        gPathRendererNames[GpuPathRenderers::kTessellating].c_str());
+                    writer.appendString(gPathRendererNames[GpuPathRenderers::kNone].c_str());
+            }
+        });
 
     // Softkey state
-    Json::Value softkeyState(Json::objectValue);
-    softkeyState[kName] = kSoftkeyStateName;
-    softkeyState[kValue] = kSoftkeyHint;
-    softkeyState[kOptions] = Json::Value(Json::arrayValue);
-    softkeyState[kOptions].append(kSoftkeyHint);
-    for (const auto& softkey : fCommands.getCommandsAsSoftkeys()) {
-        softkeyState[kOptions].append(Json::Value(softkey.c_str()));
-    }
+    WriteStateObject(writer, kSoftkeyStateName, kSoftkeyHint,
+        [this](SkJSONWriter& writer) {
+            writer.appendString(kSoftkeyHint);
+            for (const auto& softkey : fCommands.getCommandsAsSoftkeys()) {
+                writer.appendString(softkey.c_str());
+            }
+        });
 
-    Json::Value state(Json::arrayValue);
-    state.append(slideState);
-    state.append(backendState);
-    state.append(msaaState);
-    state.append(prState);
-    state.append(softkeyState);
+    writer.endArray();
+    writer.flush();
 
-    fWindow->setUIState(state.toStyledString().c_str());
+    auto data = memStream.detachAsData();
+
+    // TODO: would be cool to avoid this copy
+    const SkString cstring(static_cast<const char*>(data->data()), data->size());
+
+    fWindow->setUIState(cstring.c_str());
 }
 
 void Viewer::onUIStateChanged(const SkString& stateName, const SkString& stateValue) {

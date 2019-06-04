@@ -31,15 +31,14 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_BINDINGS_CORE_V8_SCRIPT_CONTROLLER_H_
 #define THIRD_PARTY_BLINK_RENDERER_BINDINGS_CORE_V8_SCRIPT_CONTROLLER_H_
 
+#include "third_party/blink/renderer/bindings/core/v8/sanitize_script_errors.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_source_location_type.h"
 #include "third_party/blink/renderer/bindings/core/v8/window_proxy_manager.h"
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/execution_context/execution_context.h"
 #include "third_party/blink/renderer/platform/bindings/shared_persistent.h"
 #include "third_party/blink/renderer/platform/heap/handle.h"
-#include "third_party/blink/renderer/platform/loader/fetch/access_control_status.h"
 #include "third_party/blink/renderer/platform/loader/fetch/script_fetch_options.h"
-#include "third_party/blink/renderer/platform/wtf/hash_map.h"
 #include "third_party/blink/renderer/platform/wtf/noncopyable.h"
 #include "third_party/blink/renderer/platform/wtf/text/text_position.h"
 #include "third_party/blink/renderer/platform/wtf/vector.h"
@@ -49,12 +48,11 @@ namespace blink {
 
 class DOMWrapperWorld;
 class Element;
+class ExecutionContext;
 class KURL;
 class LocalFrame;
 class ScriptSourceCode;
 class SecurityOrigin;
-
-typedef WTF::Vector<v8::Extension*> V8Extensions;
 
 // This class exposes methods to run script in a frame (in the main world and
 // in isolated worlds). An instance can be obtained by using
@@ -72,9 +70,12 @@ class CORE_EXPORT ScriptController final
   static ScriptController* Create(
       LocalFrame& frame,
       LocalWindowProxyManager& window_proxy_manager) {
-    return new ScriptController(frame, window_proxy_manager);
+    return MakeGarbageCollected<ScriptController>(frame, window_proxy_manager);
   }
 
+  ScriptController(LocalFrame& frame,
+                   LocalWindowProxyManager& window_proxy_manager)
+      : frame_(&frame), window_proxy_manager_(&window_proxy_manager) {}
   void Trace(blink::Visitor*);
 
   // This returns an initialized window proxy. (If the window proxy is not
@@ -90,20 +91,21 @@ class CORE_EXPORT ScriptController final
       ExecuteScriptPolicy = kDoNotExecuteScriptWhenScriptsDisabled);
   void ExecuteScriptInMainWorld(
       const ScriptSourceCode&,
-      const KURL& base_url = KURL(),
-      const ScriptFetchOptions& = ScriptFetchOptions(),
-      AccessControlStatus = kNotSharableCrossOrigin);
+      const KURL& base_url,
+      SanitizeScriptErrors,
+      const ScriptFetchOptions& = ScriptFetchOptions());
   v8::Local<v8::Value> ExecuteScriptInMainWorldAndReturnValue(
       const ScriptSourceCode&,
-      const KURL& base_url = KURL(),
+      const KURL& base_url,
+      SanitizeScriptErrors,
       const ScriptFetchOptions& = ScriptFetchOptions(),
       ExecuteScriptPolicy = kDoNotExecuteScriptWhenScriptsDisabled);
   v8::Local<v8::Value> ExecuteScriptAndReturnValue(
       v8::Local<v8::Context>,
       const ScriptSourceCode&,
-      const KURL& base_url = KURL(),
-      const ScriptFetchOptions& = ScriptFetchOptions(),
-      AccessControlStatus = kNotSharableCrossOrigin);
+      const KURL& base_url,
+      SanitizeScriptErrors,
+      const ScriptFetchOptions& = ScriptFetchOptions());
 
   // Executes JavaScript in an isolated world. The script gets its own global
   // scope, its own prototypes for intrinsic JavaScript objects (String, Array,
@@ -111,11 +113,11 @@ class CORE_EXPORT ScriptController final
   //
   // If an isolated world with the specified ID already exists, it is reused.
   // Otherwise, a new world is created.
-  //
-  // FIXME: We don't want to support multiple scripts.
-  void ExecuteScriptInIsolatedWorld(int world_id,
-                                    const HeapVector<ScriptSourceCode>& sources,
-                                    Vector<v8::Local<v8::Value>>* results);
+  v8::Local<v8::Value> ExecuteScriptInIsolatedWorld(
+      int world_id,
+      const ScriptSourceCode&,
+      const KURL& base_url,
+      SanitizeScriptErrors sanitize_script_errors);
 
   // Returns true if argument is a JavaScript URL.
   bool ExecuteScriptIfJavaScriptURL(const KURL&, Element*);
@@ -124,11 +126,6 @@ class CORE_EXPORT ScriptController final
   // |world_name| and returns it id or nullptr on failure.
   scoped_refptr<DOMWrapperWorld> CreateNewInspectorIsolatedWorld(
       const String& world_name);
-
-  // Returns true if the current world is isolated, and has its own Content
-  // Security Policy. In this case, the policy of the main world should be
-  // ignored when evaluating resources injected into the DOM.
-  bool ShouldBypassMainWorldCSP();
 
   void DisableEval(const String& error_message);
 
@@ -145,13 +142,9 @@ class CORE_EXPORT ScriptController final
   // affect v8 contexts initialized after this call. Takes ownership of
   // the v8::Extension object passed.
   static void RegisterExtensionIfNeeded(v8::Extension*);
-  static V8Extensions& RegisteredExtensions();
+  static v8::ExtensionConfiguration ExtensionsFor(const ExecutionContext*);
 
  private:
-  ScriptController(LocalFrame& frame,
-                   LocalWindowProxyManager& window_proxy_manager)
-      : frame_(&frame), window_proxy_manager_(&window_proxy_manager) {}
-
   LocalFrame* GetFrame() const { return frame_; }
   v8::Isolate* GetIsolate() const {
     return window_proxy_manager_->GetIsolate();
@@ -160,8 +153,8 @@ class CORE_EXPORT ScriptController final
 
   v8::Local<v8::Value> EvaluateScriptInMainWorld(const ScriptSourceCode&,
                                                  const KURL& base_url,
+                                                 SanitizeScriptErrors,
                                                  const ScriptFetchOptions&,
-                                                 AccessControlStatus,
                                                  ExecuteScriptPolicy);
 
   const Member<LocalFrame> frame_;

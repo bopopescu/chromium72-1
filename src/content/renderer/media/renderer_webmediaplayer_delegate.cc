@@ -9,12 +9,13 @@
 #include "base/auto_reset.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/metrics/user_metrics_action.h"
-#include "base/sys_info.h"
+#include "base/system/sys_info.h"
 #include "content/common/media/media_player_delegate_messages.h"
 #include "content/public/common/content_client.h"
 #include "content/public/renderer/content_renderer_client.h"
 #include "content/public/renderer/render_frame.h"
 #include "content/public/renderer/render_thread.h"
+#include "third_party/blink/public/common/picture_in_picture/picture_in_picture_control_info.h"
 #include "third_party/blink/public/platform/web_fullscreen_video_status.h"
 #include "third_party/blink/public/platform/web_size.h"
 #include "third_party/blink/public/web/web_scoped_user_gesture.h"
@@ -38,7 +39,11 @@ RendererWebMediaPlayerDelegate::RendererWebMediaPlayerDelegate(
     content::RenderFrame* render_frame)
     : RenderFrameObserver(render_frame),
       allow_idle_cleanup_(
-          content::GetContentClient()->renderer()->AllowIdleMediaSuspend()),
+          content::GetContentClient()->renderer()->IsIdleMediaSuspendEnabled()),
+      background_suspend_enabled_(
+          content::GetContentClient()
+              ->renderer()
+              ->IsBackgroundMediaSuspendEnabled(render_frame)),
       tick_clock_(base::DefaultTickClock::GetInstance()) {
   idle_cleanup_interval_ = base::TimeDelta::FromSeconds(5);
   idle_timeout_ = base::TimeDelta::FromSeconds(15);
@@ -122,12 +127,14 @@ void RendererWebMediaPlayerDelegate::DidPictureInPictureModeStart(
     int delegate_id,
     const viz::SurfaceId& surface_id,
     const gfx::Size& natural_size,
-    blink::WebMediaPlayer::PipWindowOpenedCallback callback) {
+    blink::WebMediaPlayer::PipWindowOpenedCallback callback,
+    bool show_play_pause_button) {
   int request_id = next_picture_in_picture_callback_id_++;
   enter_picture_in_picture_callback_map_.insert(
       std::make_pair(request_id, std::move(callback)));
   Send(new MediaPlayerDelegateHostMsg_OnPictureInPictureModeStarted(
-      routing_id(), delegate_id, surface_id, natural_size, request_id));
+      routing_id(), delegate_id, surface_id, natural_size, request_id,
+      show_play_pause_button));
 }
 
 void RendererWebMediaPlayerDelegate::DidPictureInPictureModeEnd(
@@ -140,12 +147,21 @@ void RendererWebMediaPlayerDelegate::DidPictureInPictureModeEnd(
       routing_id(), delegate_id, request_id));
 }
 
+void RendererWebMediaPlayerDelegate::DidSetPictureInPictureCustomControls(
+    int delegate_id,
+    const std::vector<blink::PictureInPictureControlInfo>& controls) {
+  Send(new MediaPlayerDelegateHostMsg_OnSetPictureInPictureCustomControls(
+      routing_id(), delegate_id, controls));
+}
+
 void RendererWebMediaPlayerDelegate::DidPictureInPictureSurfaceChange(
     int delegate_id,
     const viz::SurfaceId& surface_id,
-    const gfx::Size& natural_size) {
+    const gfx::Size& natural_size,
+    bool show_play_pause_button) {
   Send(new MediaPlayerDelegateHostMsg_OnPictureInPictureSurfaceChanged(
-      routing_id(), delegate_id, surface_id, natural_size));
+      routing_id(), delegate_id, surface_id, natural_size,
+      show_play_pause_button));
 }
 
 void RendererWebMediaPlayerDelegate::
@@ -154,6 +170,10 @@ void RendererWebMediaPlayerDelegate::
         blink::WebMediaPlayer::PipWindowResizedCallback callback) {
   picture_in_picture_window_resize_observer_ =
       std::make_pair(player_id, std::move(callback));
+}
+
+bool RendererWebMediaPlayerDelegate::IsBackgroundMediaSuspendEnabled() {
+  return background_suspend_enabled_;
 }
 
 void RendererWebMediaPlayerDelegate::DidPause(int player_id) {
@@ -215,8 +235,8 @@ void RendererWebMediaPlayerDelegate::ClearStaleFlag(int player_id) {
   if (!idle_cleanup_timer_.IsRunning() && !pending_update_task_) {
     idle_cleanup_timer_.Start(
         FROM_HERE, idle_cleanup_interval_,
-        base::Bind(&RendererWebMediaPlayerDelegate::UpdateTask,
-                   base::Unretained(this)));
+        base::BindOnce(&RendererWebMediaPlayerDelegate::UpdateTask,
+                       base::Unretained(this)));
   }
 }
 
@@ -276,6 +296,8 @@ bool RendererWebMediaPlayerDelegate::OnMessageReceived(
                         OnMediaDelegateBecamePersistentVideo)
     IPC_MESSAGE_HANDLER(MediaPlayerDelegateMsg_EndPictureInPictureMode,
                         OnPictureInPictureModeEnded)
+    IPC_MESSAGE_HANDLER(MediaPlayerDelegateMsg_ClickPictureInPictureControl,
+                        OnPictureInPictureControlClicked)
     IPC_MESSAGE_HANDLER(MediaPlayerDelegateMsg_OnPictureInPictureModeEnded_ACK,
                         OnPictureInPictureModeEndedAck)
     IPC_MESSAGE_HANDLER(
@@ -394,6 +416,14 @@ void RendererWebMediaPlayerDelegate::OnPictureInPictureModeEnded(
     observer->OnPictureInPictureModeEnded();
 }
 
+void RendererWebMediaPlayerDelegate::OnPictureInPictureControlClicked(
+    int player_id,
+    const std::string& control_id) {
+  Observer* observer = id_map_.Lookup(player_id);
+  if (observer)
+    observer->OnPictureInPictureControlClicked(control_id);
+}
+
 void RendererWebMediaPlayerDelegate::OnPictureInPictureModeEndedAck(
     int player_id,
     int request_id) {
@@ -475,8 +505,8 @@ void RendererWebMediaPlayerDelegate::UpdateTask() {
   if (!idle_player_map_.empty()) {
     idle_cleanup_timer_.Start(
         FROM_HERE, idle_cleanup_interval_,
-        base::Bind(&RendererWebMediaPlayerDelegate::UpdateTask,
-                   base::Unretained(this)));
+        base::BindOnce(&RendererWebMediaPlayerDelegate::UpdateTask,
+                       base::Unretained(this)));
   }
 }
 
@@ -530,19 +560,5 @@ void RendererWebMediaPlayerDelegate::CleanUpIdlePlayers(
 void RendererWebMediaPlayerDelegate::OnDestruct() {
   delete this;
 }
-#if defined(USE_NEVA_MEDIA)
-void RendererWebMediaPlayerDelegate::OnSuppressedMediaPlay(bool suppressed) {
-  for (base::IDMap<Observer*>::iterator it(&id_map_); !it.IsAtEnd();
-       it.Advance())
-    it.GetCurrentValue()->OnSuppressedMediaPlay(suppressed);
-}
-#endif
-#if defined(VIDEO_HOLE) && defined(USE_NEVA_MEDIA)
-void RendererWebMediaPlayerDelegate::DidCommitCompositorFrame() {
-  // Finally this updates video-hole boundary.
-  for (base::IDMap<Observer*>::iterator it(&id_map_); !it.IsAtEnd();
-       it.Advance())
-    it.GetCurrentValue()->OnDidCommitCompositorFrame();
-}
-#endif
+
 }  // namespace media

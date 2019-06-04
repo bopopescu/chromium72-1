@@ -210,8 +210,7 @@ void SwitchFullScreenModes(FullScreenMode from_mode, FullScreenMode to_mode) {
 }
 
 bool SetFileBackupExclusion(const FilePath& file_path) {
-  NSString* file_path_ns =
-      [NSString stringWithUTF8String:file_path.value().c_str()];
+  NSString* file_path_ns = base::mac::FilePathToNSString(file_path);
   NSURL* file_url = [NSURL fileURLWithPath:file_path_ns];
 
   // When excludeByPath is true the application must be running with root
@@ -264,9 +263,7 @@ void AddToLoginItems(bool hide_on_startup) {
 
   BOOL hide = hide_on_startup ? YES : NO;
   NSDictionary* properties =
-      [NSDictionary
-        dictionaryWithObject:[NSNumber numberWithBool:hide]
-                      forKey:(NSString*)kLSSharedFileListLoginItemHidden];
+      @{(NSString*)kLSSharedFileListLoginItemHidden : @(hide) };
 
   ScopedCFTypeRef<LSSharedFileListItemRef> new_item;
   new_item.reset(LSSharedFileListInsertItemURL(
@@ -422,7 +419,7 @@ int MacOSXMinorVersionInternal() {
   // immediate death.
   CHECK(darwin_major_version >= 6);
   int mac_os_x_minor_version = darwin_major_version - 4;
-  DLOG_IF(WARNING, darwin_major_version > 17)
+  DLOG_IF(WARNING, darwin_major_version > 18)
       << "Assuming Darwin " << base::IntToString(darwin_major_version)
       << " is macOS 10." << base::IntToString(mac_os_x_minor_version);
 

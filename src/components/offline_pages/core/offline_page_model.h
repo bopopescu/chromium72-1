@@ -19,8 +19,7 @@
 #include "components/offline_pages/core/offline_page_archiver.h"
 #include "components/offline_pages/core/offline_page_thumbnail.h"
 #include "components/offline_pages/core/offline_page_types.h"
-
-class GURL;
+#include "url/gurl.h"
 
 namespace offline_pages {
 
@@ -28,18 +27,6 @@ struct ClientId;
 
 // Service for saving pages offline, storing the offline copy and metadata, and
 // retrieving them upon request.
-//
-// Example usage:
-//   class ArchiverImpl : public OfflinePageArchiver {
-//     // This is a class that knows how to create archiver
-//     void CreateArchiver(...) override;
-//     ...
-//   }
-//
-//   // In code using the OfflinePagesModel to save a page:
-//   std::unique_ptr<ArchiverImpl> archiver(new ArchiverImpl());
-//   // Callback is of type SavePageCallback.
-//   model->SavePage(url, std::move(archiver), callback);
 //
 // TODO(fgorski): Things to describe:
 // * how to cancel requests and what to expect
@@ -137,14 +124,29 @@ class OfflinePageModel : public base::SupportsUserData, public KeyedService {
   // Attempts to save a page offline per |save_page_params|. Requires that the
   // model is loaded.  Generates a new offline id or uses the proposed offline
   // id in |save_page_params| and returns it.
+  //
+  // Example usage:
+  //   class ArchiverImpl : public OfflinePageArchiver {
+  //     // This is a class that knows how to create archiver
+  //     void CreateArchiver(...) override;
+  //     ...
+  //   }
+  //
+  //   // In code using the OfflinePagesModel to save a page:
+  //   std::unique_ptr<ArchiverImpl> archiver(new ArchiverImpl());
+  //   // Callback is of type SavePageCallback.
+  //   model->SavePage(url, std::move(archiver), std::move(callback));
+  //
+  // TODO(https://crbug.com/849424): This method's implementation shouldn't
+  // take ownership of OfflinePageArchiver.
   virtual void SavePage(const SavePageParams& save_page_params,
                         std::unique_ptr<OfflinePageArchiver> archiver,
                         content::WebContents* web_contents,
-                        const SavePageCallback& callback) = 0;
+                        SavePageCallback callback) = 0;
 
   // Adds a page entry to the metadata store.
   virtual void AddPage(const OfflinePageItem& page,
-                       const AddPageCallback& callback) = 0;
+                       AddPageCallback callback) = 0;
 
   // Marks that the offline page related to the passed |offline_id| has been
   // accessed. Its access info, including last access time and access count,
@@ -153,23 +155,22 @@ class OfflinePageModel : public base::SupportsUserData, public KeyedService {
 
   // Deletes pages based on |offline_ids|.
   virtual void DeletePagesByOfflineId(const std::vector<int64_t>& offline_ids,
-                                      const DeletePageCallback& callback) = 0;
+                                      DeletePageCallback callback) = 0;
 
   // Deletes all pages associated with any of |client_ids|.
   virtual void DeletePagesByClientIds(const std::vector<ClientId>& client_ids,
-                                      const DeletePageCallback& callback) = 0;
+                                      DeletePageCallback callback) = 0;
 
   // Deletes all pages associated with any of the |client_ids| provided the page
   // also was created by origin.
   virtual void DeletePagesByClientIdsAndOrigin(
       const std::vector<ClientId>& client_ids,
       const std::string& origin,
-      const DeletePageCallback& callback) = 0;
+      DeletePageCallback callback) = 0;
 
   // Deletes cached offline pages matching the URL predicate.
-  virtual void DeleteCachedPagesByURLPredicate(
-      const UrlPredicate& predicate,
-      const DeletePageCallback& callback) = 0;
+  virtual void DeleteCachedPagesByURLPredicate(const UrlPredicate& predicate,
+                                               DeletePageCallback callback) = 0;
 
   // Gets all offline pages.
   virtual void GetAllPages(MultipleOfflinePageItemCallback callback) = 0;
@@ -189,10 +190,12 @@ class OfflinePageModel : public base::SupportsUserData, public KeyedService {
       const std::vector<ClientId>& client_ids,
       MultipleOfflinePageItemCallback callback) = 0;
 
-  // Returns the offline pages that are related to |url|. |url_search_mode|
-  // controls how the url match is done. See URLSearchMode for more details.
+  // Returns via callback all offline pages related to |url|. The provided URL
+  // is matched both against the original and the actual URL fields (they
+  // sometimes differ because of possible redirects). The returned list is
+  // sorted by descending creation date so that the most recent offline page
+  // will be the first element of the list.
   virtual void GetPagesByURL(const GURL& url,
-                             URLSearchMode url_search_mode,
                              MultipleOfflinePageItemCallback callback) = 0;
 
   // Returns the offline pages that belong in |name_space|.
@@ -220,9 +223,8 @@ class OfflinePageModel : public base::SupportsUserData, public KeyedService {
       SingleOfflinePageItemCallback callback) = 0;
 
   // Gets all offline ids where the offline page has the matching client id.
-  virtual void GetOfflineIdsForClientId(
-      const ClientId& client_id,
-      const MultipleOfflineIdCallback& callback) = 0;
+  virtual void GetOfflineIdsForClientId(const ClientId& client_id,
+                                        MultipleOfflineIdCallback callback) = 0;
 
   // Stores a new page thumbnail in the page_thumbnails table.
   virtual void StoreThumbnail(const OfflinePageThumbnail& thumb) = 0;
@@ -241,6 +243,9 @@ class OfflinePageModel : public base::SupportsUserData, public KeyedService {
   // Publishes an offline page from the internal offline page directory.  This
   // includes putting it in a public directory, updating the system download
   // manager, if any, and updating the offline page model database.
+  //
+  // TODO(https://crbug.com/849424): This method's implementation shouldn't
+  // take ownership of OfflinePageArchiver.
   virtual void PublishInternalArchive(
       const OfflinePageItem& offline_page,
       std::unique_ptr<OfflinePageArchiver> archiver,

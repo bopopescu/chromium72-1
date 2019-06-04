@@ -118,7 +118,7 @@ public final class MultiprocessTestClientLauncher {
     @GuardedBy("mConnectedLock")
     private boolean mConnected;
 
-    private IChildProcessService mService = null;
+    private IChildProcessService mService;
     private int mPid;
     private ITestController mTestController;
 
@@ -319,6 +319,26 @@ public final class MultiprocessTestClientLauncher {
             launcherThread.start();
             sLauncherHandler = new Handler(launcherThread.getLooper());
         }
+    }
+
+    @CalledByNative
+    private static boolean hasCleanExit(final int pid) {
+        return runOnLauncherAndGetResult(new Callable<Boolean>() {
+            @Override
+            public Boolean call() {
+                return hasCleanExitOnLauncherThread(pid);
+            }
+        });
+    }
+
+    private static boolean hasCleanExitOnLauncherThread(int pid) {
+        assert isRunningOnLauncherThread();
+
+        MultiprocessTestClientLauncher launcher = sPidToLauncher.get(pid);
+        if (launcher == null) {
+            return false;
+        }
+        return launcher.mLauncher.getConnection().hasCleanExit();
     }
 
     /** Does not take ownership of of fds. */

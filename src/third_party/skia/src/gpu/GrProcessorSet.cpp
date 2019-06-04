@@ -77,6 +77,7 @@ GrProcessorSet::~GrProcessorSet() {
     }
 }
 
+#ifdef SK_DEBUG
 SkString dump_fragment_processor_tree(const GrFragmentProcessor* fp, int indentCnt) {
     SkString result;
     SkString indentString;
@@ -126,6 +127,7 @@ SkString GrProcessorSet::dumpProcessors() const {
     }
     return result;
 }
+#endif
 
 bool GrProcessorSet::operator==(const GrProcessorSet& that) const {
     SkASSERT(this->isFinalized());
@@ -160,8 +162,7 @@ GrProcessorSet::Analysis GrProcessorSet::finalize(const GrProcessorAnalysisColor
                                                   const GrProcessorAnalysisCoverage coverageInput,
                                                   const GrAppliedClip* clip, bool isMixedSamples,
                                                   const GrCaps& caps,
-                                                  GrPixelConfigIsClamped dstIsClamped,
-                                                  GrColor* overrideInputColor) {
+                                                  SkPMColor4f* overrideInputColor) {
     SkASSERT(!this->isFinalized());
     SkASSERT(!fFragmentProcessorOffset);
 
@@ -207,7 +208,7 @@ GrProcessorSet::Analysis GrProcessorSet::finalize(const GrProcessorAnalysisColor
     }
 
     GrXPFactory::AnalysisProperties props = GrXPFactory::GetAnalysisProperties(
-            this->xpFactory(), colorAnalysis.outputColor(), outputCoverage, caps, dstIsClamped);
+            this->xpFactory(), colorAnalysis.outputColor(), outputCoverage, caps);
     if (!this->numCoverageFragmentProcessors() &&
         GrProcessorAnalysisCoverage::kNone == coverageInput) {
         analysis.fCanCombineOverlappedStencilAndCover = SkToBool(
@@ -241,7 +242,7 @@ GrProcessorSet::Analysis GrProcessorSet::finalize(const GrProcessorAnalysisColor
     fColorFragmentProcessorCnt -= colorFPsToEliminate;
 
     auto xp = GrXPFactory::MakeXferProcessor(this->xpFactory(), colorAnalysis.outputColor(),
-                                             outputCoverage, isMixedSamples, caps, dstIsClamped);
+                                             outputCoverage, isMixedSamples, caps);
     fXP.fProcessor = xp.release();
 
     fFlags |= kFinalized_Flag;

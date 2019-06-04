@@ -8,15 +8,27 @@
 
 from recipe_engine import recipe_api
 
-from . import default_flavor
-from . import gn_android_flavor
-from . import gn_chromebook_flavor
-from . import gn_chromecast_flavor
-from . import gn_flavor
-from . import ios_flavor
-from . import valgrind_flavor
+from . import android
+from . import chromebook
+from . import chromecast
+from . import default
+from . import ios
+from . import valgrind
 
 
+"""Abstractions for running code on various platforms.
+
+The methods in this module define how certain high-level functions should work.
+Each flavor should correspond to a subclass of DefaultFlavor which may override
+any of these functions as appropriate for that flavor.
+
+For example, the AndroidFlavor will override the functions for copying files
+between the host and Android device, as well as the 'step' function, so that
+commands may be run through ADB.
+"""
+
+
+VERSION_FILE_LOTTIE = 'LOTTIE_VERSION'
 VERSION_FILE_SK_IMAGE = 'SK_IMAGE_VERSION'
 VERSION_FILE_SKP = 'SKP_VERSION'
 VERSION_FILE_SVG = 'SVG_VERSION'
@@ -50,17 +62,17 @@ class SkiaFlavorApi(recipe_api.RecipeApi):
   def get_flavor(self, vars_api):
     """Return a flavor utils object specific to the given builder."""
     if is_chromecast(vars_api):
-      return gn_chromecast_flavor.GNChromecastFlavorUtils(self)
+      return chromecast.ChromecastFlavor(self)
     if is_chromebook(vars_api):
-      return gn_chromebook_flavor.GNChromebookFlavorUtils(self)
+      return chromebook.ChromebookFlavor(self)
     if is_android(vars_api) and not is_test_skqp(vars_api):
-      return gn_android_flavor.GNAndroidFlavorUtils(self)
+      return android.AndroidFlavor(self)
     elif is_ios(vars_api):
-      return ios_flavor.iOSFlavorUtils(self)
+      return ios.iOSFlavor(self)
     elif is_valgrind(vars_api):
-      return valgrind_flavor.ValgrindFlavorUtils(self)
+      return valgrind.ValgrindFlavor(self)
     else:
-      return gn_flavor.GNFlavorUtils(self)
+      return default.DefaultFlavor(self)
 
   def setup(self):
     self._f = self.get_flavor(self.m.vars)
@@ -95,10 +107,8 @@ class SkiaFlavorApi(recipe_api.RecipeApi):
   def remove_file_on_device(self, path):
     return self._f.remove_file_on_device(path)
 
-  def install_everything(self):
-    self.install(skps=True, images=True, svgs=True, resources=True)
-
-  def install(self, skps=False, images=False, svgs=False, resources=False):
+  def install(self, skps=False, images=False, lotties=False, svgs=False,
+              resources=False):
     self._f.install()
 
     # TODO(borenet): Only copy files which have changed.
@@ -111,6 +121,8 @@ class SkiaFlavorApi(recipe_api.RecipeApi):
       self._copy_skps()
     if images:
       self._copy_images()
+    if lotties:
+      self._copy_lotties()
     if svgs:
       self._copy_svgs()
 
@@ -139,7 +151,7 @@ class SkiaFlavorApi(recipe_api.RecipeApi):
         self.copy_file_to_device(actual_version_file, device_version_file)
 
   def _copy_images(self):
-    """Download and copy test images if needed."""
+    """Copy test images if needed."""
     version = self.m.run.asset_version('skimage', self._skia_dir)
     self.m.run.writefile(
         self.m.path.join(self.m.vars.tmp_dir, VERSION_FILE_SK_IMAGE),
@@ -152,8 +164,22 @@ class SkiaFlavorApi(recipe_api.RecipeApi):
         self.device_dirs.images_dir)
     return version
 
+  def _copy_lotties(self):
+    """Copy test lotties if needed."""
+    version = self.m.run.asset_version('lottie-samples', self._skia_dir)
+    self.m.run.writefile(
+        self.m.path.join(self.m.vars.tmp_dir, VERSION_FILE_LOTTIE),
+        version)
+    self._copy_dir(
+        version,
+        VERSION_FILE_LOTTIE,
+        self.m.vars.tmp_dir,
+        self.host_dirs.lotties_dir,
+        self.device_dirs.lotties_dir)
+    return version
+
   def _copy_skps(self):
-    """Download and copy the SKPs if needed."""
+    """Copy the SKPs if needed."""
     version = self.m.run.asset_version('skp', self._skia_dir)
     self.m.run.writefile(
         self.m.path.join(self.m.vars.tmp_dir, VERSION_FILE_SKP),
@@ -167,7 +193,7 @@ class SkiaFlavorApi(recipe_api.RecipeApi):
     return version
 
   def _copy_svgs(self):
-    """Download and copy the SVGs if needed."""
+    """Copy the SVGs if needed."""
     version = self.m.run.asset_version('svg', self._skia_dir)
     self.m.run.writefile(
         self.m.path.join(self.m.vars.tmp_dir, VERSION_FILE_SVG),

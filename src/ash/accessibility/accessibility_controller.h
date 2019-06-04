@@ -11,6 +11,7 @@
 #include "ash/public/cpp/ash_constants.h"
 #include "ash/public/interfaces/accessibility_controller.mojom.h"
 #include "ash/session/session_observer.h"
+#include "ash/wm/tablet_mode/tablet_mode_observer.h"
 #include "base/macros.h"
 #include "base/observer_list.h"
 #include "base/time/time.h"
@@ -21,15 +22,12 @@ class PrefChangeRegistrar;
 class PrefRegistrySimple;
 class PrefService;
 
-namespace service_manager {
-class Connector;
-}
-
 namespace ash {
 
 class AccessibilityHighlightController;
 class AccessibilityObserver;
 class ScopedBacklightsForcedOff;
+class SelectToSpeakEventHandler;
 
 enum AccessibilityNotificationVisibility {
   A11Y_NOTIFICATION_NONE,
@@ -41,9 +39,10 @@ enum AccessibilityNotificationVisibility {
 // Uses preferences to communicate with chrome to support mash.
 class ASH_EXPORT AccessibilityController
     : public mojom::AccessibilityController,
-      public SessionObserver {
+      public SessionObserver,
+      public TabletModeObserver {
  public:
-  explicit AccessibilityController(service_manager::Connector* connector);
+  AccessibilityController();
   ~AccessibilityController() override;
 
   // See Shell::RegisterProfilePrefs().
@@ -55,8 +54,23 @@ class ASH_EXPORT AccessibilityController
   // Binds the mojom::AccessibilityController interface to this object.
   void BindRequest(mojom::AccessibilityControllerRequest request);
 
+  // The following functions read and write to their associated preference.
+  // These values are then used to determine whether the accelerator
+  // confirmation dialog for the respective preference has been accepted before.
+  void SetHighContrastAcceleratorDialogAccepted();
+  bool HasHighContrastAcceleratorDialogBeenAccepted() const;
+  void SetScreenMagnifierAcceleratorDialogAccepted();
+  bool HasScreenMagnifierAcceleratorDialogBeenAccepted() const;
+  void SetDockedMagnifierAcceleratorDialogAccepted();
+  bool HasDockedMagnifierAcceleratorDialogBeenAccepted() const;
+  void SetDictationAcceleratorDialogAccepted();
+  bool HasDictationAcceleratorDialogBeenAccepted() const;
+  void SetDisplayRotationAcceleratorDialogBeenAccepted();
+  bool HasDisplayRotationAcceleratorDialogBeenAccepted() const;
+
   void SetAutoclickEnabled(bool enabled);
   bool IsAutoclickEnabled() const;
+  void SetAutoclickEventType(mojom::AutoclickEventType event_type);
 
   void SetCaretHighlightEnabled(bool enabled);
   bool IsCaretHighlightEnabled() const;
@@ -69,6 +83,8 @@ class ASH_EXPORT AccessibilityController
 
   void SetFocusHighlightEnabled(bool enabled);
   bool IsFocusHighlightEnabled() const;
+
+  void SetFullscreenMagnifierEnabled(bool enabled);
 
   void SetHighContrastEnabled(bool enabled);
   bool IsHighContrastEnabled() const;
@@ -146,8 +162,15 @@ class ASH_EXPORT AccessibilityController
   void SetDarkenScreen(bool darken) override;
   void BrailleDisplayStateChanged(bool connected) override;
   void SetFocusHighlightRect(const gfx::Rect& bounds_in_screen) override;
-  void SetAccessibilityPanelFullscreen(bool fullscreen) override;
+  void SetCaretBounds(const gfx::Rect& bounds_in_screen) override;
+  void SetAccessibilityPanelAlwaysVisible(bool always_visible) override;
+  void SetAccessibilityPanelBounds(
+      const gfx::Rect& bounds,
+      mojom::AccessibilityPanelState state) override;
   void SetSelectToSpeakState(mojom::SelectToSpeakState state) override;
+  void SetSelectToSpeakEventHandlerDelegate(
+      mojom::SelectToSpeakEventHandlerDelegatePtr delegate) override;
+  void ToggleDictationFromSource(mojom::DictationToggleSource source) override;
 
   // SessionObserver:
   void OnSigninScreenPrefServiceInitialized(PrefService* prefs) override;
@@ -157,12 +180,19 @@ class ASH_EXPORT AccessibilityController
   void FlushMojoForTest();
 
  private:
+  // TabletModeObserver:
+  void OnTabletModeStarted() override;
+  void OnTabletModeEnded() override;
+
   // Observes either the signin screen prefs or active user prefs and loads
   // initial settings.
   void ObservePrefs(PrefService* prefs);
 
   void UpdateAutoclickFromPref();
   void UpdateAutoclickDelayFromPref();
+  void UpdateAutoclickEventTypeFromPref();
+  void UpdateAutoclickRevertToLeftClickFromPref();
+  void UpdateAutoclickMovementThresholdFromPref();
   void UpdateCaretHighlightFromPref();
   void UpdateCursorHighlightFromPref();
   void UpdateDictationFromPref();
@@ -176,7 +206,7 @@ class ASH_EXPORT AccessibilityController
   void UpdateVirtualKeyboardFromPref();
   void UpdateAccessibilityHighlightingFromPrefs();
 
-  service_manager::Connector* connector_ = nullptr;
+  void MaybeCreateSelectToSpeakEventHandler();
 
   // The pref service of the currently active user or the signin profile before
   // user logs in. Can be null in ash_unittests.
@@ -208,6 +238,9 @@ class ASH_EXPORT AccessibilityController
 
   mojom::SelectToSpeakState select_to_speak_state_ =
       mojom::SelectToSpeakState::kSelectToSpeakStateInactive;
+  std::unique_ptr<SelectToSpeakEventHandler> select_to_speak_event_handler_;
+  mojom::SelectToSpeakEventHandlerDelegatePtr
+      select_to_speak_event_handler_delegate_ptr_;
 
   // Used to control the highlights of caret, cursor and focus.
   std::unique_ptr<AccessibilityHighlightController>
@@ -216,7 +249,7 @@ class ASH_EXPORT AccessibilityController
   // Used to force the backlights off to darken the screen.
   std::unique_ptr<ScopedBacklightsForcedOff> scoped_backlights_forced_off_;
 
-  base::ObserverList<AccessibilityObserver> observers_;
+  base::ObserverList<AccessibilityObserver>::Unchecked observers_;
 
   DISALLOW_COPY_AND_ASSIGN(AccessibilityController);
 };

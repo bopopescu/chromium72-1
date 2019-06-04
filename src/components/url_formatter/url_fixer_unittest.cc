@@ -306,6 +306,7 @@ struct FixupCase {
     {"about:foo", "chrome://foo/"},
     {"about:version", "chrome://version/"},
     {"about:blank", "about:blank"},
+    {"About:blaNk", "about:blank"},
     {"about:usr:pwd@hst:20/pth?qry#ref", "chrome://hst/pth?qry#ref"},
     {"about://usr:pwd@hst/pth?qry#ref", "chrome://hst/pth?qry#ref"},
     {"chrome:usr:pwd@hst/pth?qry#ref", "chrome://hst/pth?qry#ref"},
@@ -462,7 +463,7 @@ TEST(URLFixerTest, FixupFile) {
     //   {"file:///foo:/bar", "file://foo/bar"},
     //   {"file:/\\/server\\folder/file", "file://server/folder/file"},
   };
-#elif defined(OS_POSIX)
+#elif defined(OS_POSIX) || defined(OS_FUCHSIA)
 
 #if defined(OS_MACOSX)
 #define HOME "/Users/"
@@ -511,7 +512,8 @@ TEST(URLFixerTest, FixupRelativeFile) {
     base::FilePath input = base::FilePath::FromUTF8Unsafe(value.input);
     EXPECT_EQ(value.output,
               url_formatter::FixupRelativeFile(temp_dir_.GetPath(), input)
-                  .possibly_invalid_spec());
+                  .possibly_invalid_spec())
+        << "input: " << value.input;
   }
 
   // make sure the existing file got fixed-up to a file URL, and that there

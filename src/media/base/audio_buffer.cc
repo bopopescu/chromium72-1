@@ -22,6 +22,11 @@ static base::TimeDelta CalculateDuration(int frames, double sample_rate) {
 AudioBufferMemoryPool::AudioBufferMemoryPool() = default;
 AudioBufferMemoryPool::~AudioBufferMemoryPool() = default;
 
+size_t AudioBufferMemoryPool::GetPoolSizeForTesting() {
+  base::AutoLock al(entry_lock_);
+  return entries_.size();
+}
+
 AudioBufferMemoryPool::AudioMemory AudioBufferMemoryPool::CreateBuffer(
     size_t size) {
   base::AutoLock al(entry_lock_);
@@ -366,20 +371,8 @@ void AudioBuffer::TrimRange(int start, int end) {
   CHECK_LE(frames_to_trim, adjusted_frame_count_);
 
   const int bytes_per_channel = SampleFormatToBytesPerChannel(sample_format_);
-
-#if defined(USE_NEVA_MEDIA)
-  // TODO(neva): Below line will be complained when we sync upstream.
-  // We applied this change beforehand because this change is needed
-  // for supporting platform media backend.
-  // Please simply keep below change if your conflict indicates same change.
-  // But please just remove this comment.
-
   // Empty buffers do not have frames to copy backed by data_.
-  const int frames_to_copy = data_size_ > 0 ? adjusted_frame_count_ - end : 0;
-#else
   const int frames_to_copy = data_ ? adjusted_frame_count_ - end : 0;
-#endif
-
   if (frames_to_copy > 0) {
     switch (sample_format_) {
       case kSampleFormatPlanarS16:

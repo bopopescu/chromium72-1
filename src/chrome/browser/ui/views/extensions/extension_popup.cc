@@ -152,14 +152,19 @@ void ExtensionPopup::AddedToWidget() {
 
 void ExtensionPopup::OnWidgetActivationChanged(views::Widget* widget,
                                                bool active) {
-  if (active && widget == anchor_widget())
+  // Don't close if we haven't shown the widget yet (the widget is shown once
+  // the WebContents finishes loading).
+  if (GetWidget()->IsVisible() && active && widget == anchor_widget())
     CloseUnlessUnderInspection();
 }
 
-void ExtensionPopup::ActiveTabChanged(content::WebContents* old_contents,
-                                      content::WebContents* new_contents,
-                                      int index,
-                                      int reason) {
+void ExtensionPopup::OnTabStripModelChanged(
+    TabStripModel* tab_strip_model,
+    const TabStripModelChange& change,
+    const TabStripSelectionChange& selection) {
+  if (tab_strip_model->empty() || !selection.active_tab_changed())
+    return;
+
   GetWidget()->Close();
 }
 

@@ -11,13 +11,8 @@
 #include <vector>
 
 #include "core/fxcrt/fx_system.h"
-#include "core/fxge/cfx_defaultrenderdevice.h"
 #include "core/fxge/cfx_graphstatedata.h"
-#include "core/fxge/cfx_renderdevice.h"
-#include "core/fxge/fx_dib.h"
 #include "xfa/fxgraphics/cxfa_gecolor.h"
-
-class CXFA_GEPath;
 
 using FX_FillMode = int32_t;
 
@@ -30,7 +25,9 @@ enum class FX_HatchStyle {
   DiagonalCross = 5
 };
 
+class CFX_DIBBase;
 class CFX_RenderDevice;
+class CXFA_GEPath;
 
 class CXFA_Graphics {
  public:
@@ -45,7 +42,7 @@ class CXFA_Graphics {
   CFX_RenderDevice* GetRenderDevice();
 
   void SetLineCap(CFX_GraphStateData::LineCap lineCap);
-  void SetLineDash(float dashPhase, float* dashArray, int32_t dashCount);
+  void SetLineDash(float dashPhase, const float* dashArray, size_t dashCount);
   void SetSolidLineDash();
   void SetLineWidth(float lineWidth);
   void EnableActOnDash();
@@ -87,7 +84,7 @@ class CXFA_Graphics {
                            FX_FillMode fillMode,
                            const CFX_Matrix& matrix);
 
-  void SetDIBitsWithMatrix(const RetainPtr<CFX_DIBSource>& source,
+  void SetDIBitsWithMatrix(const RetainPtr<CFX_DIBBase>& source,
                            const CFX_Matrix& matrix);
 
   CFX_RenderDevice* const m_renderDevice;  // Not owned.

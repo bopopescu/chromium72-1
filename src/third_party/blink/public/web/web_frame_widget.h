@@ -47,14 +47,16 @@ struct WebFloatPoint;
 
 class WebFrameWidget : public WebWidget {
  public:
-  BLINK_EXPORT static WebFrameWidget* Create(WebWidgetClient*, WebLocalFrame*);
-
-  // Sets the visibility of the WebFrameWidget.
-  // We still track page-level visibility, but additionally we need to notify a
-  // WebFrameWidget when its owning RenderWidget receives a Show or Hide
-  // directive, so that it knows whether it needs to draw or not.
-  virtual void SetVisibilityState(mojom::PageVisibilityState visibility_state) {
-  }
+  // Makes a WebFrameWidget that wraps a pre-existing WebWidget from the
+  // RenderView/WebView, for a new local main frame.
+  BLINK_EXPORT static WebFrameWidget* CreateForMainFrame(
+      WebWidgetClient*,
+      WebLocalFrame* main_frame);
+  // Makes a WebFrameWidget that wraps a WebLocalFrame that is not a main frame,
+  // providing a WebWidget to interact with the child local root frame.
+  BLINK_EXPORT static WebFrameWidget* CreateForChildLocalRoot(
+      WebWidgetClient*,
+      WebLocalFrame* local_root);
 
   // Overrides the WebFrameWidget's background and base background color. You
   // can use this to enforce a transparent background, which is useful if you
@@ -116,10 +118,11 @@ class WebFrameWidget : public WebWidget {
   // ended.
   virtual void DragSourceSystemDragEnded() = 0;
 
-  // Constrains the viewport intersection for use by IntersectionObserver.
-  // This is needed for out-of-process iframes to know if they are clipped
-  // by ancestor frames in another process.
-  virtual void SetRemoteViewportIntersection(const WebRect&) {}
+  // Constrains the viewport intersection for use by IntersectionObserver,
+  // and indicates whether the frame may be painted over or obscured in the
+  // parent. This is needed for out-of-process iframes to know if they are
+  // clipped or obscured by ancestor frames in another process.
+  virtual void SetRemoteViewportIntersection(const WebRect&, bool) {}
 
   // Sets the inert bit on an out-of-process iframe, causing it to ignore
   // input.

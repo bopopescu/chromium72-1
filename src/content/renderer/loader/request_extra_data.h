@@ -12,6 +12,7 @@
 #include "content/common/content_export.h"
 #include "content/common/navigation_params.h"
 #include "content/public/common/url_loader_throttle.h"
+#include "content/renderer/loader/frame_request_blocker.h"
 #include "content/renderer/loader/navigation_response_override_parameters.h"
 #include "content/renderer/loader/web_url_loader_impl.h"
 #include "third_party/blink/public/mojom/page/page_visibility_state.mojom.h"
@@ -72,12 +73,6 @@ class CONTENT_EXPORT RequestExtraData : public blink::WebURLRequest::ExtraData {
   void set_custom_user_agent(const blink::WebString& custom_user_agent) {
     custom_user_agent_ = custom_user_agent;
   }
-  const blink::WebString& requested_with() const {
-    return requested_with_;
-  }
-  void set_requested_with(const blink::WebString& requested_with) {
-    requested_with_ = requested_with;
-  }
 
   // PlzNavigate: |navigation_response_override| is used to override certain
   // parameters of navigation requests.
@@ -109,15 +104,6 @@ class CONTENT_EXPORT RequestExtraData : public blink::WebURLRequest::ExtraData {
   bool is_for_no_state_prefetch() const { return is_for_no_state_prefetch_; }
   void set_is_for_no_state_prefetch(bool prefetch) {
     is_for_no_state_prefetch_ = prefetch;
-  }
-
-  // The request is downloaded to the network cache, but not rendered or
-  // executed.
-  bool download_to_network_cache_only() const {
-    return download_to_network_cache_only_;
-  }
-  void set_download_to_network_cache_only(bool download_to_cache) {
-    download_to_network_cache_only_ = download_to_cache;
   }
 
   // Copy of the settings value determining if mixed plugin content should be
@@ -152,6 +138,15 @@ class CONTENT_EXPORT RequestExtraData : public blink::WebURLRequest::ExtraData {
     url_loader_throttles_ = std::move(throttles);
   }
 
+  void set_frame_request_blocker(
+      scoped_refptr<FrameRequestBlocker> frame_request_blocker) {
+    frame_request_blocker_ = frame_request_blocker;
+  }
+
+  scoped_refptr<FrameRequestBlocker> frame_request_blocker() {
+    return frame_request_blocker_;
+  }
+
   void CopyToResourceRequest(network::ResourceRequest* request) const;
 
  private:
@@ -163,7 +158,6 @@ class CONTENT_EXPORT RequestExtraData : public blink::WebURLRequest::ExtraData {
   int service_worker_provider_id_;
   bool originated_from_service_worker_;
   blink::WebString custom_user_agent_;
-  blink::WebString requested_with_;
   std::unique_ptr<NavigationResponseOverrideParameters>
       navigation_response_override_;
   // TODO(arthursonzogni): Move most of the |navigation_response_override_|
@@ -171,11 +165,11 @@ class CONTENT_EXPORT RequestExtraData : public blink::WebURLRequest::ExtraData {
   base::OnceClosure continue_navigation_function_;
   bool initiated_in_secure_context_;
   bool is_for_no_state_prefetch_;
-  bool download_to_network_cache_only_;
   bool block_mixed_plugin_content_;
   bool navigation_initiated_by_renderer_;
   bool attach_same_site_cookies_;
   std::vector<std::unique_ptr<URLLoaderThrottle>> url_loader_throttles_;
+  scoped_refptr<FrameRequestBlocker> frame_request_blocker_;
 
   DISALLOW_COPY_AND_ASSIGN(RequestExtraData);
 };

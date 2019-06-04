@@ -20,10 +20,10 @@
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/common/secure_origin_whitelist.h"
+#include "components/omnibox/browser/omnibox_field_trial.h"
 #include "components/prefs/pref_service.h"
 #include "components/safe_browsing/features.h"
 #include "components/security_state/content/content_utils.h"
-#include "components/toolbar/toolbar_field_trial.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/navigation_entry.h"
 #include "content/public/browser/navigation_handle.h"
@@ -78,8 +78,6 @@ bool IsOriginSecureWithWhitelist(
 }
 
 }  // namespace
-
-DEFINE_WEB_CONTENTS_USER_DATA_KEY(SecurityStateTabHelper);
 
 using safe_browsing::SafeBrowsingUIManager;
 
@@ -150,7 +148,7 @@ void SecurityStateTabHelper::DidFinishNavigation(
     UMA_HISTOGRAM_ENUMERATION(
         "Security.CertificateTransparency.MainFrameNavigationCompliance",
         entry->GetSSL().ct_policy_compliance,
-        net::ct::CTPolicyCompliance::CT_POLICY_MAX);
+        net::ct::CTPolicyCompliance::CT_POLICY_COUNT);
   }
 
   logged_http_warning_on_current_navigation_ = false;
@@ -179,14 +177,14 @@ void SecurityStateTabHelper::DidFinishNavigation(
   // the console to reduce developer confusion about the experimental UI
   // treatments for HTTPS pages with EV certificates.
   const std::string parameter =
-      base::FeatureList::IsEnabled(toolbar::features::kSimplifyHttpsIndicator)
+      base::FeatureList::IsEnabled(omnibox::kSimplifyHttpsIndicator)
           ? base::GetFieldTrialParamValueByFeature(
-                toolbar::features::kSimplifyHttpsIndicator,
-                toolbar::features::kSimplifyHttpsIndicatorParameterName)
+                omnibox::kSimplifyHttpsIndicator,
+                OmniboxFieldTrial::kSimplifyHttpsIndicatorParameterName)
           : std::string();
   if (security_info.security_level == security_state::EV_SECURE) {
     if (parameter ==
-        toolbar::features::kSimplifyHttpsIndicatorParameterEvToSecure) {
+        OmniboxFieldTrial::kSimplifyHttpsIndicatorParameterEvToSecure) {
       web_contents()->GetMainFrame()->AddMessageToConsole(
           content::CONSOLE_MESSAGE_LEVEL_INFO,
           "As part of an experiment, Chrome temporarily shows only the "
@@ -194,7 +192,7 @@ void SecurityStateTabHelper::DidFinishNavigation(
           "Extended Validation is still valid.");
     }
     if (parameter ==
-        toolbar::features::kSimplifyHttpsIndicatorParameterBothToLock) {
+        OmniboxFieldTrial::kSimplifyHttpsIndicatorParameterBothToLock) {
       web_contents()->GetMainFrame()->AddMessageToConsole(
           content::CONSOLE_MESSAGE_LEVEL_INFO,
           "As part of an experiment, Chrome temporarily shows only the lock "
@@ -286,7 +284,6 @@ SecurityStateTabHelper::GetMaliciousContentStatus() const {
     switch (threat_type) {
       case safe_browsing::SB_THREAT_TYPE_UNUSED:
       case safe_browsing::SB_THREAT_TYPE_SAFE:
-        break;
       case safe_browsing::SB_THREAT_TYPE_URL_PHISHING:
       case safe_browsing::SB_THREAT_TYPE_URL_CLIENT_SIDE_PHISHING:
         return security_state::MALICIOUS_CONTENT_STATUS_SOCIAL_ENGINEERING;
@@ -295,17 +292,38 @@ SecurityStateTabHelper::GetMaliciousContentStatus() const {
         return security_state::MALICIOUS_CONTENT_STATUS_MALWARE;
       case safe_browsing::SB_THREAT_TYPE_URL_UNWANTED:
         return security_state::MALICIOUS_CONTENT_STATUS_UNWANTED_SOFTWARE;
-      case safe_browsing::SB_THREAT_TYPE_PASSWORD_REUSE:
+      case safe_browsing::SB_THREAT_TYPE_SIGN_IN_PASSWORD_REUSE:
 #if defined(SAFE_BROWSING_DB_LOCAL)
         if (safe_browsing::ChromePasswordProtectionService::
-                ShouldShowChangePasswordSettingUI(Profile::FromBrowserContext(
-                    web_contents()->GetBrowserContext()))) {
-          return security_state::MALICIOUS_CONTENT_STATUS_PASSWORD_REUSE;
+                ShouldShowPasswordReusePageInfoBubble(
+                    web_contents(),
+                    safe_browsing::LoginReputationClientRequest::
+                        PasswordReuseEvent::SIGN_IN_PASSWORD)) {
+          return security_state::
+              MALICIOUS_CONTENT_STATUS_SIGN_IN_PASSWORD_REUSE;
         }
         // If user has already changed Gaia password, returns the regular
         // social engineering content status.
         return security_state::MALICIOUS_CONTENT_STATUS_SOCIAL_ENGINEERING;
 #endif
+      case safe_browsing::SB_THREAT_TYPE_ENTERPRISE_PASSWORD_REUSE:
+#if defined(SAFE_BROWSING_DB_LOCAL)
+        if (safe_browsing::ChromePasswordProtectionService::
+                ShouldShowPasswordReusePageInfoBubble(
+                    web_contents(),
+                    safe_browsing::LoginReputationClientRequest::
+                        PasswordReuseEvent::ENTERPRISE_PASSWORD)) {
+          return security_state::
+              MALICIOUS_CONTENT_STATUS_ENTERPRISE_PASSWORD_REUSE;
+        }
+        // If user has already changed Gaia password, returns the regular
+        // social engineering content status.
+        return security_state::MALICIOUS_CONTENT_STATUS_SOCIAL_ENGINEERING;
+#endif
+      case safe_browsing::SB_THREAT_TYPE_BILLING:
+        return base::FeatureList::IsEnabled(safe_browsing::kBillingInterstitial)
+                   ? security_state::MALICIOUS_CONTENT_STATUS_BILLING
+                   : security_state::MALICIOUS_CONTENT_STATUS_NONE;
       case safe_browsing::
           DEPRECATED_SB_THREAT_TYPE_URL_PASSWORD_PROTECTION_PHISHING:
       case safe_browsing::SB_THREAT_TYPE_URL_BINARY_MALWARE:

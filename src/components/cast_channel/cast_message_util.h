@@ -15,18 +15,34 @@ class AuthContext;
 class CastMessage;
 class DeviceAuthMessage;
 
+// Reserved message namespaces for internal messages.
+static constexpr char kCastInternalNamespacePrefix[] =
+    "urn:x-cast:com.google.cast.";
+static constexpr char kAuthNamespace[] =
+    "urn:x-cast:com.google.cast.tp.deviceauth";
+static constexpr char kHeartbeatNamespace[] =
+    "urn:x-cast:com.google.cast.tp.heartbeat";
+static constexpr char kConnectionNamespace[] =
+    "urn:x-cast:com.google.cast.tp.connection";
+static constexpr char kReceiverNamespace[] =
+    "urn:x-cast:com.google.cast.receiver";
+static constexpr char kBroadcastNamespace[] =
+    "urn:x-cast:com.google.cast.broadcast";
+
 // Sender and receiver IDs to use for platform messages.
-constexpr char kPlatformSenderId[] = "sender-0";
-constexpr char kPlatformReceiverId[] = "receiver-0";
+static constexpr char kPlatformSenderId[] = "sender-0";
+static constexpr char kPlatformReceiverId[] = "receiver-0";
 
 // Cast application protocol message types.
 enum class CastMessageType {
   kPing,
   kPong,
   kGetAppAvailability,
-  kConnect,    // Virtual connection request
-  kBroadcast,  // Application broadcast / precache
-  kLaunch,     // Session launch request
+  kConnect,          // Virtual connection request
+  kCloseConnection,  // Close virtual connection
+  kBroadcast,        // Application broadcast / precache
+  kLaunch,           // Session launch request
+  kStop,             // Session stop request
   kReceiverStatus,
   kLaunchError,
   kOther  // Add new types above |kOther|.
@@ -35,21 +51,12 @@ enum class CastMessageType {
 // Checks if the contents of |message_proto| are valid.
 bool IsCastMessageValid(const CastMessage& message_proto);
 
-// Parses and returns the UTF-8 payload from |message|. Returns nullptr
-// if the UTF-8 payload doesn't exist, or if it is not a dictionary.
-std::unique_ptr<base::DictionaryValue> GetDictionaryFromCastMessage(
-    const CastMessage& message);
-
 // Returns true if |message_namespace| is a namespace reserved for internal
 // messages.
 bool IsCastInternalNamespace(const std::string& message_namespace);
 
-// Parses the JSON-encoded payload of |message| and returns the value in the
-// "type" field or |kUnknown| if the parse fails or the field is not found.
-// The result is only valid if |message| is a Cast application protocol message.
-CastMessageType ParseMessageType(const CastMessage& message);
-
-// Similar to |ParseMessageType()|, but |payload| is already JSON-parsed.
+// Returns the value in the "type" field or |kOther| if the field is not found.
+// The result is only valid if |payload| is a Cast application protocol message.
 CastMessageType ParseMessageTypeFromPayload(const base::Value& payload);
 
 // Returns a human readable string for |message_type|.
@@ -132,6 +139,14 @@ CastMessage CreateLaunchRequest(const std::string& source_id,
                                 const std::string& app_id,
                                 const std::string& locale);
 
+CastMessage CreateStopRequest(const std::string& source_id,
+                              int request_id,
+                              const std::string& session_id);
+
+CastMessage CreateStopRequest(const std::string& source_id,
+                              int request_id,
+                              const std::string& session_id);
+
 // Creates a generic CastMessage with |message| as the string payload. Used for
 // app messages.
 CastMessage CreateCastMessage(const std::string& message_namespace,
@@ -168,16 +183,15 @@ struct LaunchSessionResponse {
   ~LaunchSessionResponse();
 
   Result result = Result::kUnknown;
-
   // Populated if |result| is |kOk|.
   base::Optional<base::Value> receiver_status;
 };
 
 // Parses |payload| into a LaunchSessionResponse. Returns an empty
 // LaunchSessionResponse if |payload| is not a properly formatted launch
-// response. |payload| must be from the string payload of a CastMessage.
-LaunchSessionResponse GetLaunchSessionResponse(
-    const base::DictionaryValue& payload);
+// response. |payload| must be a dictionary from the string payload of a
+// CastMessage.
+LaunchSessionResponse GetLaunchSessionResponse(const base::Value& payload);
 
 }  // namespace cast_channel
 

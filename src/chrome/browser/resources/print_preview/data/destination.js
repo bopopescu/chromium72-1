@@ -163,6 +163,31 @@ print_preview.ColorMode = {
 };
 
 /**
+ * Enumeration of duplex modes used by Chromium.
+ * This has to coincide with |printing::DuplexModeRestriction| as defined in
+ * printing/backend/printing_restrictions.h
+ * @enum {number}
+ */
+print_preview.DuplexModeRestriction = {
+  NONE: 0x0,
+  SIMPLEX: 0x1,
+  LONG_EDGE: 0x2,
+  SHORT_EDGE: 0x4,
+  DUPLEX: 0x6
+};
+
+/**
+ * Policies affecting a destination.
+ * @typedef {{
+ *   allowedColorModes: ?print_preview.ColorMode,
+ *   allowedDuplexModes: ?print_preview.DuplexModeRestriction,
+ *   defaultColorMode: ?print_preview.ColorMode,
+ *   defaultDuplexMode: ?print_preview.DuplexModeRestriction,
+ * }}
+ */
+print_preview.Policies;
+
+/**
  * @typedef {{id: string,
  *            origin: print_preview.DestinationOrigin,
  *            account: string,
@@ -218,7 +243,8 @@ cr.define('print_preview', function() {
      *          extensionName: (string|undefined),
      *          description: (string|undefined),
      *          certificateStatus:
-     *              (print_preview.DestinationCertificateStatus|undefined)
+     *              (print_preview.DestinationCertificateStatus|undefined),
+     *          policies: (print_preview.Policies|undefined),
      *         }=} opt_params Optional
      *     parameters for the destination.
      */
@@ -265,6 +291,12 @@ cr.define('print_preview', function() {
        * @private {?print_preview.Cdd}
        */
       this.capabilities_ = null;
+
+      /**
+       * Policies affecting the destination.
+       * @private {?print_preview.Policies}
+       */
+      this.policies_ = (opt_params && opt_params.policies) || null;
 
       /**
        * Whether the destination is owned by the user.
@@ -521,6 +553,22 @@ cr.define('print_preview', function() {
     }
 
     /**
+     * @return {?print_preview.Policies} Print policies affecting the
+     *     destination.
+     */
+    get policies() {
+      return this.policies_;
+    }
+
+    /**
+     * @param {?print_preview.Policies} policies Print policies affecting the
+     *     destination.
+     */
+    set policies(policies) {
+      this.policies_ = policies;
+    }
+
+    /**
      * @return {!print_preview.DestinationConnectionStatus} Connection status
      *     of the print destination.
      */
@@ -610,6 +658,32 @@ cr.define('print_preview', function() {
      */
     get lastAccessTime() {
       return this.lastAccessTime_;
+    }
+
+    /** @return {string} Path to the SVG for the destination's icon. */
+    get icon() {
+      if (this.id_ == Destination.GooglePromotedId.DOCS) {
+        return 'print-preview:save-to-drive';
+      }
+      if (this.id_ == Destination.GooglePromotedId.SAVE_AS_PDF) {
+        return 'print-preview:insert-drive-file';
+      }
+      if (this.isEnterprisePrinter) {
+        return 'print-preview:business';
+      }
+      if (this.isLocal) {
+        return 'print-preview:print';
+      }
+      if (this.type_ == print_preview.DestinationType.MOBILE && this.isOwned_) {
+        return 'print-preview:smartphone';
+      }
+      if (this.type_ == print_preview.DestinationType.MOBILE) {
+        return 'print-preview:smartphone';
+      }
+      if (this.isOwned_) {
+        return 'print-preview:print';
+      }
+      return 'print-preview:printer-shared';
     }
 
     /** @return {string} Relative URL of the destination's icon. */
@@ -723,6 +797,25 @@ cr.define('print_preview', function() {
     }
 
     /**
+     * @return {?print_preview.ColorMode} Color mode set by policy.
+     */
+    get colorPolicy() {
+      return this.policies && this.policies.allowedColorModes ?
+          this.policies.allowedColorModes :
+          null;
+    }
+
+    /**
+     * @return {?print_preview.DuplexModeRestriction} Duplex modes allowed by
+     *     policy.
+     */
+    get duplexPolicy() {
+      return this.policies && this.policies.allowedDuplexModes ?
+          this.policies.allowedDuplexModes :
+          null;
+    }
+
+    /**
      * @return {boolean} Whether the printer supports both black and white and
      *     color printing.
      */
@@ -739,6 +832,22 @@ cr.define('print_preview', function() {
             hasMonochrome || this.MONOCHROME_TYPES_.includes(option.type);
       });
       return hasColor && hasMonochrome;
+    }
+
+    /**
+     * @return {?print_preview.ColorMode} Value of default color setting given
+     *     by policy.
+     */
+    get defaultColorPolicy() {
+      return this.policies && this.policies.defaultColorMode;
+    }
+
+    /**
+     * @return {?print_preview.DuplexModeRestriction} Value of default duplex
+     *     setting given by policy.
+     */
+    get defaultDuplexPolicy() {
+      return this.policies && this.policies.defaultDuplexMode;
     }
 
     /**

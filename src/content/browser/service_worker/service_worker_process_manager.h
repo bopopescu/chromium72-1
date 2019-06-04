@@ -14,7 +14,7 @@
 #include "base/memory/weak_ptr.h"
 #include "base/synchronization/lock.h"
 #include "content/browser/service_worker/service_worker_metrics.h"
-#include "content/common/service_worker/service_worker_status_code.h"
+#include "third_party/blink/public/common/service_worker/service_worker_status_code.h"
 
 class GURL;
 
@@ -59,22 +59,22 @@ class CONTENT_EXPORT ServiceWorkerProcessManager {
   bool IsShutdown();
 
   // Returns a reference to a renderer process suitable for starting the service
-  // worker described by |emdedded_worker_id|, |pattern|, and |script_url|. The
-  // process will be kept alive until ReleaseWorkerProcess() is called.
+  // worker described by |emdedded_worker_id|, and |script_url|. The process
+  // will be kept alive until ReleaseWorkerProcess() is called.
   //
   // An existing process is used when possible. If |can_use_existing_process| is
   // false, or a suitable existing process is not found, a new process may be
   // created.
   //
-  // If SERVICE_WORKER_OK is returned, |out_info| contains information about the
-  // process.
+  // If blink::ServiceWorkerStatusCode::kOk is returned,
+  // |out_info| contains information about the process.
   //
   // Called on the UI thread.
-  ServiceWorkerStatusCode AllocateWorkerProcess(int embedded_worker_id,
-                                                const GURL& pattern,
-                                                const GURL& script_url,
-                                                bool can_use_existing_process,
-                                                AllocatedProcessInfo* out_info);
+  blink::ServiceWorkerStatusCode AllocateWorkerProcess(
+      int embedded_worker_id,
+      const GURL& script_url,
+      bool can_use_existing_process,
+      AllocatedProcessInfo* out_info);
 
   // Drops a reference to a process that was running a Service Worker, and its
   // SiteInstance. This must match a call to AllocateWorkerProcess().
@@ -103,6 +103,8 @@ class CONTENT_EXPORT ServiceWorkerProcessManager {
   void set_storage_partition(StoragePartitionImpl* storage_partition) {
     storage_partition_ = storage_partition;
   }
+
+  SiteInstance* GetSiteInstanceForWorker(int embedded_worker_id);
 
  private:
   friend class ServiceWorkerProcessManagerTest;

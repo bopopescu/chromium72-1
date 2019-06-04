@@ -51,6 +51,7 @@ class Json3OutputFormatterTest(unittest.TestCase):
 
   def testOutputAndParse(self):
     results = page_test_results.PageTestResults()
+    results.telemetry_info.benchmark_name = 'benchmark_name'
     results.telemetry_info.benchmark_start_epoch = 1501773200
     self._output.truncate(0)
 
@@ -65,6 +66,7 @@ class Json3OutputFormatterTest(unittest.TestCase):
 
   def testAsDictBaseKeys(self):
     results = page_test_results.PageTestResults()
+    results.telemetry_info.benchmark_name = 'benchmark_name'
     results.telemetry_info.benchmark_start_epoch = 1501773200
     d = json_3_output_formatter.ResultsAsDict(results)
 
@@ -96,7 +98,7 @@ class Json3OutputFormatterTest(unittest.TestCase):
 
   def testAsDictWithTwoPages(self):
     results = page_test_results.PageTestResults()
-    results.telemetry_info.benchmark_start_epoc = 1501773200
+    results.telemetry_info.benchmark_start_epoch = 1501773200
     results.telemetry_info.benchmark_name = 'benchmark_name'
     results.WillRunPage(self._story_set[0])
     v0 = scalar.ScalarValue(results.current_page, 'foo', 'seconds', 3,
@@ -184,6 +186,10 @@ class Json3OutputFormatterTest(unittest.TestCase):
     results.Skip('fake_skip')
     results.DidRunPage(self._story_set[0])
 
+    results.WillRunPage(self._story_set[0])
+    results.Skip('unexpected_skip', False)
+    results.DidRunPage(self._story_set[0])
+
     results.WillRunPage(self._story_set[1])
     results.Fail('fake_failure')
     results.DidRunPage(self._story_set[1])
@@ -191,9 +197,9 @@ class Json3OutputFormatterTest(unittest.TestCase):
     d = json_3_output_formatter.ResultsAsDict(results)
 
     foo_story_result = d['tests']['benchmark_name']['Foo']
-    self.assertEquals(foo_story_result['actual'], 'PASS SKIP')
+    self.assertEquals(foo_story_result['actual'], 'PASS SKIP SKIP')
     self.assertEquals(foo_story_result['expected'], 'PASS SKIP')
-    self.assertFalse(foo_story_result['is_unexpected'])
+    self.assertTrue(foo_story_result['is_unexpected'])
 
     bar_story_result = d['tests']['benchmark_name']['Bar']
     self.assertEquals(bar_story_result['actual'], 'PASS FAIL')
@@ -201,7 +207,7 @@ class Json3OutputFormatterTest(unittest.TestCase):
     self.assertTrue(bar_story_result['is_unexpected'])
 
     self.assertEquals(
-        d['num_failures_by_type'], {'PASS': 2, 'FAIL': 1, 'SKIP': 1})
+        d['num_failures_by_type'], {'PASS': 2, 'FAIL': 1, 'SKIP': 2})
 
   def testIntegrationCreateJsonTestResultsWithDisabledBenchmark(self):
     benchmark_metadata = benchmark.BenchmarkMetadata('test_benchmark')

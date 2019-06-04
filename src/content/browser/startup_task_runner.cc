@@ -10,9 +10,10 @@
 namespace content {
 
 StartupTaskRunner::StartupTaskRunner(
-    base::Callback<void(int)> const startup_complete_callback,
+    base::OnceCallback<void(int)> startup_complete_callback,
     scoped_refptr<base::SingleThreadTaskRunner> proxy)
-    : startup_complete_callback_(startup_complete_callback), proxy_(proxy) {}
+    : startup_complete_callback_(std::move(startup_complete_callback)),
+      proxy_(proxy) {}
 
 StartupTaskRunner::~StartupTaskRunner() {}
 
@@ -25,9 +26,7 @@ void StartupTaskRunner::StartRunningTasksAsync() {
   int result = 0;
   if (task_list_.empty()) {
     if (!startup_complete_callback_.is_null()) {
-      startup_complete_callback_.Run(result);
-      // Clear the callback to prevent it being called a second time
-      startup_complete_callback_.Reset();
+      std::move(startup_complete_callback_).Run(result);
     }
   } else {
     const base::Closure next_task =
@@ -38,17 +37,13 @@ void StartupTaskRunner::StartRunningTasksAsync() {
 
 void StartupTaskRunner::RunAllTasksNow() {
   int result = 0;
-  for (std::list<StartupTask>::iterator it = task_list_.begin();
-       it != task_list_.end();
-       it++) {
+  for (auto it = task_list_.begin(); it != task_list_.end(); it++) {
     result = it->Run();
     if (result > 0) break;
   }
   task_list_.clear();
   if (!startup_complete_callback_.is_null()) {
-    startup_complete_callback_.Run(result);
-    // Clear the callback to prevent it being called a second time
-    startup_complete_callback_.Reset();
+    std::move(startup_complete_callback_).Run(result);
   }
 }
 
@@ -67,9 +62,7 @@ void StartupTaskRunner::WrappedTask() {
   }
   if (task_list_.empty()) {
     if (!startup_complete_callback_.is_null()) {
-      startup_complete_callback_.Run(result);
-      // Clear the callback to prevent it being called a second time
-      startup_complete_callback_.Reset();
+      std::move(startup_complete_callback_).Run(result);
     }
   } else {
     const base::Closure next_task =

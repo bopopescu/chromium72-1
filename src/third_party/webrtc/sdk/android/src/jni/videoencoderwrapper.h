@@ -45,14 +45,10 @@ class VideoEncoderWrapper : public VideoEncoder {
                  const CodecSpecificInfo* codec_specific_info,
                  const std::vector<FrameType>* frame_types) override;
 
-  int32_t SetChannelParameters(uint32_t packet_loss, int64_t rtt) override;
-
   int32_t SetRateAllocation(const VideoBitrateAllocation& allocation,
                             uint32_t framerate) override;
 
-  ScalingSettings GetScalingSettings() const override;
-
-  bool SupportsNativeHandle() const override;
+  EncoderInfo GetEncoderInfo() const override;
 
   // Should only be called by JNI.
   void OnEncodedFrame(JNIEnv* jni,
@@ -66,11 +62,9 @@ class VideoEncoderWrapper : public VideoEncoder {
                       jboolean complete_frame,
                       const JavaRef<jobject>& j_qp);
 
-  const char* ImplementationName() const override;
-
  private:
   struct FrameExtraInfo {
-    uint64_t capture_time_ns;  // Used as an identifier of the frame.
+    int64_t capture_time_ns;  // Used as an identifier of the frame.
 
     uint32_t timestamp_rtp;
   };
@@ -92,10 +86,10 @@ class VideoEncoderWrapper : public VideoEncoder {
       const VideoBitrateAllocation& allocation);
   std::string GetImplementationName(JNIEnv* jni) const;
 
+  ScalingSettings GetScalingSettingsInternal(JNIEnv* jni) const;
+
   const ScopedJavaGlobalRef<jobject> encoder_;
   const ScopedJavaGlobalRef<jclass> int_array_class_;
-
-  std::string implementation_name_;
 
   rtc::TaskQueue* encoder_queue_;
   std::deque<FrameExtraInfo> frame_extra_infos_;
@@ -104,17 +98,23 @@ class VideoEncoderWrapper : public VideoEncoder {
   int num_resets_;
   int number_of_cores_;
   VideoCodec codec_settings_;
+  EncoderInfo encoder_info_;
   H264BitstreamParser h264_bitstream_parser_;
-
-  // RTP state.
-  uint16_t picture_id_;
-  uint8_t tl0_pic_idx_;
 
   // VP9 variables to populate codec specific structure.
   GofInfoVP9 gof_;  // Contains each frame's temporal information for
                     // non-flexible VP9 mode.
   size_t gof_idx_;
 };
+
+/* If the j_encoder is a wrapped native encoder, unwrap it. If it is not,
+ * wrap it in a VideoEncoderWrapper.
+ */
+std::unique_ptr<VideoEncoder> JavaToNativeVideoEncoder(
+    JNIEnv* jni,
+    const JavaRef<jobject>& j_encoder);
+
+bool IsHardwareVideoEncoder(JNIEnv* jni, const JavaRef<jobject>& j_encoder);
 
 }  // namespace jni
 }  // namespace webrtc

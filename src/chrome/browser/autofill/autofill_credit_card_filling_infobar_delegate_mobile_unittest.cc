@@ -7,7 +7,7 @@
 #include <memory>
 
 #include "base/macros.h"
-#include "base/test/histogram_tester.h"
+#include "base/test/metrics/histogram_tester.h"
 #include "chrome/test/base/chrome_render_view_host_test_harness.h"
 #include "components/autofill/core/browser/autofill_test_utils.h"
 #include "components/infobars/core/confirm_infobar_delegate.h"
@@ -41,9 +41,9 @@ AutofillCreditCardFillingInfoBarDelegateMobileTest::CreateDelegate() {
   std::unique_ptr<AutofillCreditCardFillingInfoBarDelegateMobile> delegate(
       new AutofillCreditCardFillingInfoBarDelegateMobile(
           credit_card,
-          base::Bind(&AutofillCreditCardFillingInfoBarDelegateMobileTest::
-                         AcceptInfoBarCallback,
-                     base::Unretained(this))));
+          base::BindOnce(&AutofillCreditCardFillingInfoBarDelegateMobileTest::
+                             AcceptInfoBarCallback,
+                         base::Unretained(this))));
   delegate->set_was_shown();
   return delegate;
 }

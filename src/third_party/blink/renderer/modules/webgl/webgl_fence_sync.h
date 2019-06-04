@@ -17,10 +17,12 @@ class WebGLFenceSync : public WebGLSync {
                            GLenum condition,
                            GLbitfield flags);
 
- protected:
   WebGLFenceSync(WebGL2RenderingContextBase*,
                  GLenum condition,
                  GLbitfield flags);
+
+ private:
+  GLuint insertQuery(WebGL2RenderingContextBase*);
 };
 
 }  // namespace blink

@@ -210,12 +210,19 @@ bool CreateKeyAndSelfSignedCert(const std::string& subject,
 
   bool success = CreateSelfSignedCert(new_key->key(), kSignatureDigestAlgorithm,
                                       subject, serial_number, not_valid_before,
-                                      not_valid_after, der_cert);
+                                      not_valid_after, {}, der_cert);
   if (success)
     *key = std::move(new_key);
 
   return success;
 }
+
+Extension::Extension(base::span<const uint8_t> in_oid,
+                     bool in_critical,
+                     base::span<const uint8_t> in_contents)
+    : oid(in_oid), critical(in_critical), contents(in_contents) {}
+Extension::~Extension() {}
+Extension::Extension(const Extension&) = default;
 
 bool CreateSelfSignedCert(EVP_PKEY* key,
                           DigestAlgorithm alg,
@@ -223,6 +230,7 @@ bool CreateSelfSignedCert(EVP_PKEY* key,
                           uint32_t serial_number,
                           base::Time not_valid_before,
                           base::Time not_valid_after,
+                          const std::vector<Extension>& extension_specs,
                           std::string* der_encoded) {
   crypto::EnsureOpenSSLInit();
   crypto::OpenSSLErrStackTracer err_tracer(FROM_HERE);
@@ -255,10 +263,40 @@ bool CreateSelfSignedCert(EVP_PKEY* key,
       !AddTime(&validity, not_valid_before) ||
       !AddTime(&validity, not_valid_after) ||
       !AddNameWithCommonName(&tbs_cert, common_name) ||  // subject
-      !EVP_marshal_public_key(&tbs_cert, key) ||         // subjectPublicKeyInfo
-      !CBB_finish(cbb.get(), &tbs_cert_bytes, &tbs_cert_len)) {
+      !EVP_marshal_public_key(&tbs_cert, key)) {         // subjectPublicKeyInfo
     return false;
   }
+
+  if (!extension_specs.empty()) {
+    CBB outer_extensions, extensions;
+    if (!CBB_add_asn1(&tbs_cert, &outer_extensions,
+                      3 | CBS_ASN1_CONTEXT_SPECIFIC | CBS_ASN1_CONSTRUCTED) ||
+        !CBB_add_asn1(&outer_extensions, &extensions, CBS_ASN1_SEQUENCE)) {
+      return false;
+    }
+
+    for (const auto& extension_spec : extension_specs) {
+      CBB extension, oid, value;
+      if (!CBB_add_asn1(&extensions, &extension, CBS_ASN1_SEQUENCE) ||
+          !CBB_add_asn1(&extension, &oid, CBS_ASN1_OBJECT) ||
+          !CBB_add_bytes(&oid, extension_spec.oid.data(),
+                         extension_spec.oid.size()) ||
+          (extension_spec.critical && !CBB_add_asn1_bool(&extension, 1)) ||
+          !CBB_add_asn1(&extension, &value, CBS_ASN1_OCTETSTRING) ||
+          !CBB_add_bytes(&value, extension_spec.contents.data(),
+                         extension_spec.contents.size()) ||
+          !CBB_flush(&extensions)) {
+        return false;
+      }
+    }
+
+    if (!CBB_flush(&tbs_cert)) {
+      return false;
+    }
+  }
+
+  if (!CBB_finish(cbb.get(), &tbs_cert_bytes, &tbs_cert_len))
+    return false;
   bssl::UniquePtr<uint8_t> delete_tbs_cert_bytes(tbs_cert_bytes);
 
   // Sign the TBSCertificate and write the entire certificate.
@@ -308,11 +346,6 @@ bssl::UniquePtr<CRYPTO_BUFFER> CreateCryptoBuffer(
                         data.size(), GetBufferPool()));
 }
 
-bssl::UniquePtr<CRYPTO_BUFFER> DupCryptoBuffer(CRYPTO_BUFFER* buffer) {
-  CRYPTO_BUFFER_up_ref(buffer);
-  return bssl::UniquePtr<CRYPTO_BUFFER>(buffer);
-}
-
 bool CryptoBufferEqual(const CRYPTO_BUFFER* a, const CRYPTO_BUFFER* b) {
   DCHECK(a && b);
   if (a == b)
@@ -338,10 +371,10 @@ scoped_refptr<X509Certificate> CreateX509CertificateFromBuffers(
   std::vector<bssl::UniquePtr<CRYPTO_BUFFER>> intermediate_chain;
   for (size_t i = 1; i < sk_CRYPTO_BUFFER_num(buffers); ++i) {
     intermediate_chain.push_back(
-        DupCryptoBuffer(sk_CRYPTO_BUFFER_value(buffers, i)));
+        bssl::UpRef(sk_CRYPTO_BUFFER_value(buffers, i)));
   }
   return X509Certificate::CreateFromBuffer(
-      DupCryptoBuffer(sk_CRYPTO_BUFFER_value(buffers, 0)),
+      bssl::UpRef(sk_CRYPTO_BUFFER_value(buffers, 0)),
       std::move(intermediate_chain));
 }
 

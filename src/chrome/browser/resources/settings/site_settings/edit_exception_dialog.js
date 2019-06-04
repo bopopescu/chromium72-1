@@ -22,6 +22,12 @@ Polymer({
     origin_: String,
 
     /**
+     * The localized error message to display when the pattern is invalid.
+     * @private
+     */
+    errorMessage_: String,
+
+    /**
      * Whether the current input is invalid.
      * @private
      */
@@ -66,14 +72,16 @@ Polymer({
 
   /** @private */
   validate_: function() {
-    if (this.$$('paper-input').value.trim() == '') {
+    if (this.$$('cr-input').value.trim() == '') {
       this.invalid_ = true;
       return;
     }
 
-    this.browserProxy_.isPatternValid(this.origin_).then(isValid => {
-      this.invalid_ = !isValid;
-    });
+    this.browserProxy_.isPatternValidForType(this.origin_, this.model.category)
+        .then(({isValid, reason}) => {
+          this.invalid_ = !isValid;
+          this.errorMessage_ = reason || '';
+        });
   },
 
   /** @private */

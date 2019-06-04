@@ -9,12 +9,9 @@
 #include "third_party/blink/public/platform/blame_context.h"
 #include "third_party/blink/renderer/platform/platform_export.h"
 #include "third_party/blink/renderer/platform/scheduler/public/frame_scheduler.h"
+#include "third_party/blink/renderer/platform/scheduler/public/page_lifecycle_state.h"
 #include "third_party/blink/renderer/platform/wtf/functional.h"
 #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
-
-namespace ukm {
-class UkmRecorder;
-}
 
 namespace blink {
 
@@ -25,17 +22,17 @@ class PLATFORM_EXPORT PageScheduler {
     virtual ~Delegate() = default;
 
     virtual void ReportIntervention(const WTF::String& message) = 0;
-    virtual void RequestBeginMainFrameNotExpected(bool new_state) = 0;
-    virtual void SetPageFrozen(bool frozen) = 0;
-    virtual ukm::UkmRecorder* GetUkmRecorder() = 0;
-    virtual int64_t GetUkmSourceId() = 0;
+    // Returns true if the request has been succcessfully relayed to the
+    // compositor.
+    virtual bool RequestBeginMainFrameNotExpected(bool new_state) = 0;
+    virtual void SetLifecycleState(PageLifecycleState) = 0;
   };
 
   virtual ~PageScheduler() = default;
 
   // The scheduler may throttle tasks associated with background pages.
   virtual void SetPageVisible(bool) = 0;
-  // The scheduler transitions app to and from STOPPED state in background.
+  // The scheduler transitions app to and from FROZEN state in background.
   virtual void SetPageFrozen(bool) = 0;
   // Tells the scheduler about "keep-alive" state which can be due to:
   // service workers, shared workers, or fetch keep-alive.
@@ -49,6 +46,7 @@ class PLATFORM_EXPORT PageScheduler {
   // it. All tasks executed by the frame scheduler will be attributed to
   // |blame_context|.
   virtual std::unique_ptr<FrameScheduler> CreateFrameScheduler(
+      FrameScheduler::Delegate* delegate,
       BlameContext*,
       FrameScheduler::FrameType) = 0;
 
@@ -149,7 +147,9 @@ class PLATFORM_EXPORT PageScheduler {
 
   virtual bool HasActiveConnectionForTest() const = 0;
 
-  virtual void RequestBeginMainFrameNotExpected(bool new_state) = 0;
+  // Returns true if the request has been succcessfully relayed to the
+  // compositor.
+  virtual bool RequestBeginMainFrameNotExpected(bool new_state) = 0;
 };
 
 }  // namespace blink

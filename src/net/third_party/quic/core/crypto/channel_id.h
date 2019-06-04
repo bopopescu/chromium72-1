@@ -13,7 +13,7 @@
 #include "net/third_party/quic/platform/api/quic_string.h"
 #include "net/third_party/quic/platform/api/quic_string_piece.h"
 
-namespace net {
+namespace quic {
 
 // ChannelIDKey is an interface that supports signing with and serializing a
 // ChannelID key.
@@ -66,6 +66,8 @@ class QUIC_EXPORT_PRIVATE ChannelIDSource {
 // ChannelIDVerifier verifies ChannelID signatures.
 class QUIC_EXPORT_PRIVATE ChannelIDVerifier {
  public:
+  ChannelIDVerifier() = delete;
+
   // kContextStr is prepended to the data to be signed in order to ensure that
   // a ChannelID signature cannot be used in a different context. (The
   // terminating NUL byte is inclued.)
@@ -89,11 +91,8 @@ class QUIC_EXPORT_PRIVATE ChannelIDVerifier {
                         QuicStringPiece signed_data,
                         QuicStringPiece signature,
                         bool is_channel_id_signature);
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(ChannelIDVerifier);
 };
 
-}  // namespace net
+}  // namespace quic
 
 #endif  // NET_THIRD_PARTY_QUIC_CORE_CRYPTO_CHANNEL_ID_H_

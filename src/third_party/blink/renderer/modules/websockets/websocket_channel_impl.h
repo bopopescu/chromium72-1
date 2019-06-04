@@ -39,8 +39,6 @@
 #include "third_party/blink/public/platform/web_callbacks.h"
 #include "third_party/blink/renderer/bindings/core/v8/source_location.h"
 #include "third_party/blink/renderer/core/fileapi/blob.h"
-#include "third_party/blink/renderer/core/fileapi/file_error.h"
-#include "third_party/blink/renderer/core/loader/threadable_loading_context.h"
 #include "third_party/blink/renderer/modules/modules_export.h"
 #include "third_party/blink/renderer/modules/websockets/websocket_channel.h"
 #include "third_party/blink/renderer/modules/websockets/websocket_handle.h"
@@ -52,10 +50,13 @@
 #include "third_party/blink/renderer/platform/wtf/text/cstring.h"
 #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
 #include "third_party/blink/renderer/platform/wtf/vector.h"
+#include "third_party/blink/renderer/platform/wtf/wtf_size_t.h"
 
 namespace blink {
 
-class WebSocketHandshakeRequest;
+class BaseFetchContext;
+enum class FileErrorCode;
+class WebSocketChannelClient;
 class WebSocketHandshakeThrottle;
 
 // This is an implementation of WebSocketChannel. This is created on the main
@@ -70,17 +71,9 @@ class MODULES_EXPORT WebSocketChannelImpl final
   // explicitly by passing the last parameter.
   // In the usual case, they are set automatically and you don't have to
   // pass it.
-  static WebSocketChannelImpl* Create(
-      ExecutionContext* context,
-      WebSocketChannelClient* client,
-      std::unique_ptr<SourceLocation> location) {
-    DCHECK(context);
-    return Create(ThreadableLoadingContext::Create(*context), client,
-                  std::move(location));
-  }
-  static WebSocketChannelImpl* Create(ThreadableLoadingContext*,
-                                      WebSocketChannelClient*,
-                                      std::unique_ptr<SourceLocation>);
+  static WebSocketChannelImpl* Create(ExecutionContext* context,
+                                      WebSocketChannelClient* client,
+                                      std::unique_ptr<SourceLocation> location);
   static WebSocketChannelImpl* CreateForTesting(
       Document*,
       WebSocketChannelClient*,
@@ -88,6 +81,10 @@ class MODULES_EXPORT WebSocketChannelImpl final
       WebSocketHandle*,
       std::unique_ptr<WebSocketHandshakeThrottle>);
 
+  WebSocketChannelImpl(ExecutionContext*,
+                       WebSocketChannelClient*,
+                       std::unique_ptr<SourceLocation>,
+                       std::unique_ptr<WebSocketHandle>);
   ~WebSocketChannelImpl() override;
 
   // Allows the caller to provide the Mojo pipe through which the socket is
@@ -134,15 +131,9 @@ class MODULES_EXPORT WebSocketChannelImpl final
     Vector<char> data;
   };
 
-  WebSocketChannelImpl(ThreadableLoadingContext*,
-                       WebSocketChannelClient*,
-                       std::unique_ptr<SourceLocation>,
-                       std::unique_ptr<WebSocketHandle>,
-                       std::unique_ptr<WebSocketHandshakeThrottle>);
-
   void SendInternal(WebSocketHandle::MessageType,
                     const char* data,
-                    size_t total_size,
+                    wtf_size_t total_size,
                     uint64_t* consumed_buffered_amount);
   void ProcessSendQueue();
   void FlowControlIfNecessary();
@@ -155,17 +146,16 @@ class MODULES_EXPORT WebSocketChannelImpl final
                       unsigned short code,
                       const String& reason);
 
-  ExecutionContext* GetExecutionContext() const;
-
   // WebSocketHandleClient functions.
   void DidConnect(WebSocketHandle*,
                   const String& selected_protocol,
                   const String& extensions) override;
   void DidStartOpeningHandshake(
       WebSocketHandle*,
-      scoped_refptr<WebSocketHandshakeRequest>) override;
-  void DidFinishOpeningHandshake(WebSocketHandle*,
-                                 const WebSocketHandshakeResponse*) override;
+      network::mojom::blink::WebSocketHandshakeRequestPtr) override;
+  void DidFinishOpeningHandshake(
+      WebSocketHandle*,
+      network::mojom::blink::WebSocketHandshakeResponsePtr) override;
   void DidFail(WebSocketHandle*, const String& message) override;
   void DidReceiveData(WebSocketHandle*,
                       bool fin,
@@ -186,10 +176,12 @@ class MODULES_EXPORT WebSocketChannelImpl final
 
   // Methods for BlobLoader.
   void DidFinishLoadingBlob(DOMArrayBuffer*);
-  void DidFailLoadingBlob(FileError::ErrorCode);
+  void DidFailLoadingBlob(FileErrorCode);
 
   void TearDownFailedConnection();
   bool ShouldDisallowConnection(const KURL&);
+
+  BaseFetchContext* GetBaseFetchContext() const;
 
   // |handle_| is a handle of the connection.
   // |handle_| == nullptr means this channel is closed.
@@ -203,17 +195,17 @@ class MODULES_EXPORT WebSocketChannelImpl final
   Member<BlobLoader> blob_loader_;
   HeapDeque<Member<Message>> messages_;
   Vector<char> receiving_message_data_;
-  Member<ThreadableLoadingContext> loading_context_;
+  Member<ExecutionContext> execution_context_;
 
   bool receiving_message_type_is_text_;
   uint64_t sending_quota_;
   uint64_t received_data_size_for_flow_control_;
-  size_t sent_size_of_top_message_;
+  wtf_size_t sent_size_of_top_message_;
   std::unique_ptr<FrameScheduler::ActiveConnectionHandle>
       connection_handle_for_scheduler_;
 
   std::unique_ptr<SourceLocation> location_at_construction_;
-  scoped_refptr<WebSocketHandshakeRequest> handshake_request_;
+  network::mojom::blink::WebSocketHandshakeRequestPtr handshake_request_;
   std::unique_ptr<WebSocketHandshakeThrottle> handshake_throttle_;
   // This field is only initialised if the object is still waiting for a
   // throttle response when DidConnect is called.

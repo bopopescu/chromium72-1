@@ -7,12 +7,14 @@
 
 #include <stdint.h>
 
-#include "base/memory/shared_memory.h"
+#include "base/memory/read_only_shared_memory_region.h"
 #include "base/sync_socket.h"
 #include "media/base/audio_parameters.h"
 #include "media/base/media_export.h"
 
 namespace media {
+
+class AudioProcessorControls;
 
 // Contains IPC notifications for the state of the server side
 // (AudioInputController) audio state changes and when an AudioInputController
@@ -22,9 +24,10 @@ class MEDIA_EXPORT AudioInputIPCDelegate {
   // Called when an AudioInputController has been created.
   // See media/mojo/interfaces/audio_data_pipe.mojom for documentation of
   // |handle| and |socket_handle|.
-  virtual void OnStreamCreated(base::SharedMemoryHandle handle,
-                               base::SyncSocket::Handle socket_handle,
-                               bool initially_muted) = 0;
+  virtual void OnStreamCreated(
+      base::ReadOnlySharedMemoryRegion shared_memory_region,
+      base::SyncSocket::Handle socket_handle,
+      bool initially_muted) = 0;
 
   // Called when state of an audio stream has changed.
   virtual void OnError() = 0;
@@ -70,6 +73,10 @@ class MEDIA_EXPORT AudioInputIPC {
   // |output_device_id| can be gotten from a device enumeration. Must not be
   // called before the stream has been successfully created.
   virtual void SetOutputDeviceForAec(const std::string& output_device_id) = 0;
+
+  // If the input has built-in processing, returns a pointer to processing
+  // controls. Valid after the stream has been created.
+  virtual AudioProcessorControls* GetProcessorControls();
 
   // Closes the audio stream, which should shut down the corresponding
   // AudioInputController in the peer process.

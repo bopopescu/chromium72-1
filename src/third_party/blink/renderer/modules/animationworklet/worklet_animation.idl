@@ -12,11 +12,12 @@
                 optional (DocumentTimeline or ScrollTimeline) timeline,
                 optional SerializedScriptValue options),
     RaisesException=Constructor,
+    ConstructorCallWith=ScriptState,
     MeasureAs=WorkletAnimationConstructor,
     OriginTrialEnabled=AnimationWorklet
 ] interface WorkletAnimation {
   readonly attribute AnimationTimeline? timeline;
   readonly attribute AnimationPlayState playState;
-  void play();
+  [RaisesException] void play();
   void cancel();
 };

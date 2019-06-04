@@ -8,6 +8,7 @@
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/dom/node_computed_style.h"
+#include "third_party/blink/renderer/core/dom/text.h"
 #include "third_party/blink/renderer/core/editing/frame_selection.h"
 #include "third_party/blink/renderer/core/editing/position.h"
 #include "third_party/blink/renderer/core/frame/local_frame_view.h"
@@ -28,6 +29,11 @@ class TextControlElementTest : public testing::Test {
   TextControlElement& TextControl() const { return *text_control_; }
   HTMLInputElement& Input() const { return *input_; }
 
+  void UpdateAllLifecyclePhases() {
+    GetDocument().View()->UpdateAllLifecyclePhases(
+        DocumentLifecycle::LifecycleUpdateReason::kTest);
+  }
+
  private:
   std::unique_ptr<DummyPageHolder> dummy_page_holder_;
 
@@ -45,7 +51,7 @@ void TextControlElementTest::SetUp() {
   document_ = &dummy_page_holder_->GetDocument();
   document_->documentElement()->SetInnerHTMLFromString(
       "<body><textarea id=textarea></textarea><input id=input /></body>");
-  document_->View()->UpdateAllLifecyclePhases();
+  UpdateAllLifecyclePhases();
   text_control_ = ToTextControl(document_->getElementById("textarea"));
   text_control_->focus();
   input_ = ToHTMLInputElement(document_->getElementById("input"));
@@ -72,10 +78,10 @@ TEST_F(TextControlElementTest, SetSelectionRangeDoesNotCauseLayout) {
   // Force layout if document().updateStyleAndLayoutIgnorePendingStylesheets()
   // is called.
   GetDocument().body()->AppendChild(GetDocument().createTextNode("foo"));
-  const int start_layout_count = Page().GetFrameView().LayoutCount();
+  unsigned start_layout_count = Page().GetFrameView().LayoutCountForTesting();
   EXPECT_TRUE(GetDocument().NeedsLayoutTreeUpdate());
   Input().SetSelectionRange(2, 2);
-  EXPECT_EQ(start_layout_count, Page().GetFrameView().LayoutCount());
+  EXPECT_EQ(start_layout_count, Page().GetFrameView().LayoutCountForTesting());
 }
 
 TEST_F(TextControlElementTest, IndexForPosition) {
@@ -87,27 +93,27 @@ TEST_F(TextControlElementTest, IndexForPosition) {
 }
 
 TEST_F(TextControlElementTest, ReadOnlyAttributeChangeEditability) {
-  Input().setAttribute(HTMLNames::styleAttr, "all:initial");
-  Input().setAttribute(HTMLNames::readonlyAttr, "");
-  GetDocument().View()->UpdateAllLifecyclePhases();
+  Input().setAttribute(html_names::kStyleAttr, "all:initial");
+  Input().setAttribute(html_names::kReadonlyAttr, "");
+  UpdateAllLifecyclePhases();
   EXPECT_EQ(EUserModify::kReadOnly,
             Input().InnerEditorElement()->GetComputedStyle()->UserModify());
 
-  Input().removeAttribute(HTMLNames::readonlyAttr);
-  GetDocument().View()->UpdateAllLifecyclePhases();
+  Input().removeAttribute(html_names::kReadonlyAttr);
+  UpdateAllLifecyclePhases();
   EXPECT_EQ(EUserModify::kReadWritePlaintextOnly,
             Input().InnerEditorElement()->GetComputedStyle()->UserModify());
 }
 
 TEST_F(TextControlElementTest, DisabledAttributeChangeEditability) {
-  Input().setAttribute(HTMLNames::styleAttr, "all:initial");
-  Input().setAttribute(HTMLNames::disabledAttr, "");
-  GetDocument().View()->UpdateAllLifecyclePhases();
+  Input().setAttribute(html_names::kStyleAttr, "all:initial");
+  Input().setAttribute(html_names::kDisabledAttr, "");
+  UpdateAllLifecyclePhases();
   EXPECT_EQ(EUserModify::kReadOnly,
             Input().InnerEditorElement()->GetComputedStyle()->UserModify());
 
-  Input().removeAttribute(HTMLNames::disabledAttr);
-  GetDocument().View()->UpdateAllLifecyclePhases();
+  Input().removeAttribute(html_names::kDisabledAttr);
+  UpdateAllLifecyclePhases();
   EXPECT_EQ(EUserModify::kReadWritePlaintextOnly,
             Input().InnerEditorElement()->GetComputedStyle()->UserModify());
 }

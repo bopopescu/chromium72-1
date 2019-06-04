@@ -6,6 +6,7 @@
 
 #include "third_party/blink/renderer/core/css/css_calculation_value.h"
 #include "third_party/blink/renderer/core/css/cssom/css_math_invert.h"
+#include "third_party/blink/renderer/platform/wtf/text/string_builder.h"
 
 namespace blink {
 
@@ -33,7 +34,8 @@ CSSNumericSumValue::UnitMap MultiplyUnitMaps(
 CSSMathProduct* CSSMathProduct::Create(const HeapVector<CSSNumberish>& args,
                                        ExceptionState& exception_state) {
   if (args.IsEmpty()) {
-    exception_state.ThrowDOMException(kSyntaxError, "Arguments can't be empty");
+    exception_state.ThrowDOMException(DOMExceptionCode::kSyntaxError,
+                                      "Arguments can't be empty");
     return nullptr;
   }
 
@@ -51,8 +53,8 @@ CSSMathProduct* CSSMathProduct::Create(CSSNumericValueVector values) {
   CSSNumericValueType final_type =
       CSSMathVariadic::TypeCheck(values, CSSNumericValueType::Multiply, error);
   return error ? nullptr
-               : new CSSMathProduct(CSSNumericArray::Create(std::move(values)),
-                                    final_type);
+               : MakeGarbageCollected<CSSMathProduct>(
+                     CSSNumericArray::Create(std::move(values)), final_type);
 }
 
 base::Optional<CSSNumericSumValue> CSSMathProduct::SumValue() const {
@@ -87,7 +89,7 @@ CSSCalcExpressionNode* CSSMathProduct::ToCalcExpressionNode() const {
       NumericValues()[0]->ToCalcExpressionNode(),
       NumericValues()[1]->ToCalcExpressionNode(), kCalcMultiply);
 
-  for (size_t i = 2; i < NumericValues().size(); i++) {
+  for (wtf_size_t i = 2; i < NumericValues().size(); i++) {
     node = CSSCalcValue::CreateExpressionNode(
         node, NumericValues()[i]->ToCalcExpressionNode(), kCalcMultiply);
   }
@@ -105,7 +107,7 @@ void CSSMathProduct::BuildCSSText(Nested nested,
   DCHECK(!values.IsEmpty());
   values[0]->BuildCSSText(Nested::kYes, ParenLess::kNo, result);
 
-  for (size_t i = 1; i < values.size(); i++) {
+  for (wtf_size_t i = 1; i < values.size(); i++) {
     const auto& arg = *values[i];
     if (arg.GetType() == CSSStyleValue::kInvertType) {
       result.Append(" / ");

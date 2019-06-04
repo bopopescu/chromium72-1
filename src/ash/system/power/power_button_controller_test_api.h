@@ -64,6 +64,9 @@ class PowerButtonControllerTestApi {
   // True if |controller_|'s menu has a lock screen item.
   bool MenuHasLockScreenItem() const;
 
+  // True if |controller_|'s menu has a feedback item.
+  bool MenuHasFeedbackItem() const;
+
   PowerButtonScreenshotController* GetScreenshotController();
 
   void SetPowerButtonType(PowerButtonController::ButtonType button_type);
@@ -71,6 +74,9 @@ class PowerButtonControllerTestApi {
   void SetTickClock(const base::TickClock* tick_clock);
 
   void SetShowMenuAnimationDone(bool show_menu_animation_done);
+
+  // Gets |show_menu_animation_done_| of |controller_|.
+  bool ShowMenuAnimationDone() const;
 
  private:
   PowerButtonController* controller_;  // Not owned.

@@ -18,6 +18,20 @@ const NightLightScheduleType = {
   CUSTOM: 2,
 };
 
+/**
+ * @typedef {{
+ *   value: (!{
+ *     recommended: (boolean|undefined),
+ *     external_width: (number|undefined),
+ *     external_height: (number|undefined),
+ *     external_use_native: (boolean|undefined),
+ *     external_scale_percentage: (number|undefined),
+ *     internal_scale_percentage: (number|undefined)
+ *   }|null)
+ * }}
+ */
+let DisplayResolutionPrefObject;
+
 cr.define('settings.display', function() {
   const systemDisplayApi =
       /** @type {!SystemDisplay} */ (chrome.system.display);
@@ -102,7 +116,9 @@ Polymer({
     /** @private {!Array<number>} Mode index values for slider. */
     modeValues_: Array,
 
-    /** @private {SliderTicks} Display zoom slider tick values. */
+    /**
+     * @private {!Array<cr_slider.SliderTick>} Display zoom slider tick values.
+     */
     zoomValues_: Array,
 
     /** @private {!DropdownMenuOptionList} */
@@ -170,12 +186,6 @@ Polymer({
     },
 
     /** @private */
-    showDisplayZoomSetting_: {
-      type: Boolean,
-      value: loadTimeData.getBoolean('enableDisplayZoomSetting'),
-    },
-
-    /** @private */
     nightLightScheduleSubLabel_: String,
 
     /** @private */
@@ -186,7 +196,7 @@ Polymer({
     'updateNightLightScheduleSettings_(prefs.ash.night_light.schedule_type.*,' +
         ' prefs.ash.night_light.enabled.*)',
     'onSelectedModeChange_(selectedModePref_.value)',
-    'onSelectedZoomChange_(selectedZoomPref_.value)',
+    'onSelectedZoomChange_(selectedZoomPref_.value)'
   ],
 
   /** @private {number} Selected mode index received from chrome. */
@@ -207,6 +217,7 @@ Polymer({
         this.displayChangedListener_);
 
     this.getDisplayInfo_();
+    this.$.displaySizeSlider.updateValueInstantly = false;
   },
 
   /** @override */
@@ -288,6 +299,69 @@ Polymer({
   },
 
   /**
+   * Checks if the given device policy is enabled.
+   * @param {DisplayResolutionPrefObject} policyPref
+   * @return {boolean}
+   * @private
+   */
+  isDevicePolicyEnabled_: function(policyPref) {
+    return policyPref !== undefined && policyPref.value !== null;
+  },
+
+  /**
+   * Checks if display resolution is managed by device policy.
+   * @param {DisplayResolutionPrefObject} resolutionPref
+   * @return {boolean}
+   * @private
+   */
+  isDisplayResolutionManagedByPolicy_: function(resolutionPref) {
+    return this.isDevicePolicyEnabled_(resolutionPref) &&
+        (resolutionPref.value.external_use_native !== undefined ||
+         (resolutionPref.value.external_width !== undefined &&
+          resolutionPref.value.external_height !== undefined));
+  },
+
+  /**
+   * Checks if display resolution is managed by policy and the policy
+   * is mandatory.
+   * @param {DisplayResolutionPrefObject} resolutionPref
+   * @return {boolean}
+   * @private
+   */
+  isDisplayResolutionMandatory_: function(resolutionPref) {
+    return this.isDisplayResolutionManagedByPolicy_(resolutionPref) &&
+        !resolutionPref.value.recommended;
+  },
+
+  /**
+   * Checks if display scale factor is managed by device policy.
+   * @param {chrome.system.display.DisplayUnitInfo} selectedDisplay
+   * @param {DisplayResolutionPrefObject} resolutionPref
+   * @return {boolean}
+   * @private
+   */
+  isDisplayScaleManagedByPolicy_: function(selectedDisplay, resolutionPref) {
+    if (!this.isDevicePolicyEnabled_(resolutionPref) || !selectedDisplay)
+      return false;
+    if (selectedDisplay.isInternal)
+      return resolutionPref.value.internal_scale_percentage !== undefined;
+    return resolutionPref.value.external_scale_percentage !== undefined;
+  },
+
+  /**
+   * Checks if display scale factor is managed by policy and the policy
+   * is mandatory.
+   * @param {DisplayResolutionPrefObject} resolutionPref
+   * @return {boolean}
+   * @private
+   */
+  isDisplayScaleMandatory_: function(selectedDisplay, resolutionPref) {
+    return this.isDisplayScaleManagedByPolicy_(
+               selectedDisplay, resolutionPref) &&
+        !resolutionPref.value.recommended;
+  },
+
+  /**
    * Returns the list of display modes that is shown to the user in a drop down
    * menu.
    * @param {!chrome.system.display.DisplayUnitInfo} selectedDisplay
@@ -337,19 +411,17 @@ Polymer({
    * Given the display with the current display mode, this function lists all
    * the display zoom values and their labels to be used by the slider.
    * @param {!chrome.system.display.DisplayUnitInfo} selectedDisplay
-   * @return {SliderTicks}
+   * @return {!Array<cr_slider.SliderTick>}
    */
   getZoomValues_: function(selectedDisplay) {
-    /** @type {SliderTicks} */
-    let zoomValues = [];
-    for (let i = 0; i < selectedDisplay.availableDisplayZoomFactors.length;
-         i++) {
-      const value = selectedDisplay.availableDisplayZoomFactors[i];
-      const label =
-          this.i18n('displayZoomValue', Math.round(value * 100).toString());
-      zoomValues.push({value: value, label: label});
-    }
-    return zoomValues;
+    return selectedDisplay.availableDisplayZoomFactors.map(value => {
+      const ariaValue = Math.round(value * 100);
+      return {
+        value,
+        ariaValue,
+        label: this.i18n('displayZoomValue', ariaValue.toString())
+      };
+    });
   },
 
   /**
@@ -370,14 +442,12 @@ Polymer({
     const numModes = selectedDisplay.modes.length;
     this.modeValues_ = numModes == 0 ? [] : Array.from(Array(numModes).keys());
 
-    if (this.showDisplayZoomSetting_) {
-      // Note that the display zoom values has the same number of ticks for all
-      // displays, so the above problem doesn't apply here.
-      this.zoomValues_ = this.getZoomValues_(selectedDisplay);
-      this.set(
-          'selectedZoomPref_.value',
-          this.getSelectedDisplayZoom_(selectedDisplay));
-    }
+    // Note that the display zoom values has the same number of ticks for all
+    // displays, so the above problem doesn't apply here.
+    this.zoomValues_ = this.getZoomValues_(selectedDisplay);
+    this.set(
+        'selectedZoomPref_.value',
+        this.getSelectedDisplayZoom_(selectedDisplay));
 
     this.displayModeList_ = this.getDisplayModeOptionList_(selectedDisplay);
     // Set |selectedDisplay| first since only the resolution slider depends
@@ -401,8 +471,7 @@ Polymer({
    * @private
    */
   showDropDownResolutionSetting_: function(display) {
-    return !display.isInternal &&
-        loadTimeData.getBoolean('enableDisplayZoomSetting');
+    return !display.isInternal;
   },
 
   /**
@@ -504,6 +573,9 @@ Polymer({
    * @private
    */
   showMirror_: function(unifiedDesktopMode, displays) {
+    if (displays === undefined)
+      return false;
+
     return this.isMirrored_(displays) ||
         (!unifiedDesktopMode &&
          ((this.multiMirroringAvailable_ && displays.length > 1) ||
@@ -516,7 +588,8 @@ Polymer({
    * @private
    */
   isMirrored_: function(displays) {
-    return displays.length > 0 && !!displays[0].mirroringSourceId;
+    return displays !== undefined && displays.length > 0 &&
+        !!displays[0].mirroringSourceId;
   },
 
   /**
@@ -600,7 +673,7 @@ Polymer({
    * @private
    */
   updateLogicalResolutionText_: function(zoomFactor) {
-    if (!this.showDisplayZoomSetting_ || !this.selectedDisplay.isInternal) {
+    if (!this.selectedDisplay.isInternal) {
       this.logicalResolutionText_ = '';
       return;
     }
@@ -630,6 +703,8 @@ Polymer({
    * @private
    */
   onDisplaySizeSliderDrag_: function(e) {
+    if (!this.selectedDisplay)
+      return;
     this.updateLogicalResolutionText_(/** @type {number} */ (e.detail.value));
   },
 
@@ -718,11 +793,7 @@ Polymer({
    */
   onSelectedModeChange_: function(newModeIndex) {
     // We want to ignore all value changes to the pref due to the slider being
-    // dragged. Since this can only happen when the slider is present which is
-    // when display zoom is disabled, we can use this check.
-    // See http://crbug/845712 for more info.
-    if (!this.showDisplayZoomSetting_)
-      return;
+    // dragged. See http://crbug/845712 for more info.
     if (this.currentSelectedModeIndex_ == newModeIndex)
       return;
     this.onSelectedModeSliderChange_();

@@ -128,7 +128,7 @@ class WebGL2RenderingContextBase : public WebGLRenderingContextBase {
                   GLint,
                   GLenum,
                   GLenum,
-                  HTMLCanvasElement*,
+                  CanvasRenderingContextHost*,
                   ExceptionState&);
   void texImage2D(ExecutionContext*,
                   GLenum,
@@ -200,7 +200,7 @@ class WebGL2RenderingContextBase : public WebGLRenderingContextBase {
                      GLsizei,
                      GLenum,
                      GLenum,
-                     HTMLCanvasElement*,
+                     CanvasRenderingContextHost*,
                      ExceptionState&);
   void texSubImage2D(ExecutionContext*,
                      GLenum,
@@ -252,7 +252,7 @@ class WebGL2RenderingContextBase : public WebGLRenderingContextBase {
                   GLint,
                   GLenum,
                   GLenum,
-                  HTMLCanvasElement*,
+                  CanvasRenderingContextHost*,
                   ExceptionState&);
   void texImage2D(ExecutionContext*,
                   GLenum,
@@ -286,7 +286,7 @@ class WebGL2RenderingContextBase : public WebGLRenderingContextBase {
                      GLint,
                      GLenum,
                      GLenum,
-                     HTMLCanvasElement*,
+                     CanvasRenderingContextHost*,
                      ExceptionState&);
   void texSubImage2D(ExecutionContext*,
                      GLenum,
@@ -361,7 +361,7 @@ class WebGL2RenderingContextBase : public WebGLRenderingContextBase {
                   GLint,
                   GLenum,
                   GLenum,
-                  HTMLCanvasElement*,
+                  CanvasRenderingContextHost*,
                   ExceptionState&);
   void texImage3D(ExecutionContext*,
                   GLenum,
@@ -454,7 +454,7 @@ class WebGL2RenderingContextBase : public WebGLRenderingContextBase {
                      GLsizei,
                      GLenum,
                      GLenum,
-                     HTMLCanvasElement*,
+                     CanvasRenderingContextHost*,
                      ExceptionState&);
   void texSubImage3D(ExecutionContext*,
                      GLenum,
@@ -903,6 +903,8 @@ class WebGL2RenderingContextBase : public WebGLRenderingContextBase {
   bool ValidateTransformFeedbackPrimitiveMode(const char* function_name,
                                               GLenum primitive_mode);
 
+  void OnBeforeDrawCall() override;
+
   /* Uniform Buffer Objects and Transform Feedback Buffers */
   void bindBufferBase(GLenum, GLuint, WebGLBuffer*);
   void bindBufferRange(GLenum, GLuint, WebGLBuffer*, long long, long long);
@@ -934,7 +936,7 @@ class WebGL2RenderingContextBase : public WebGLRenderingContextBase {
                   GLenum format,
                   GLenum type,
                   MaybeShared<DOMArrayBufferView> pixels,
-                  GLuint offset);
+                  long long offset);
   void readPixels(GLint x,
                   GLint y,
                   GLsizei width,
@@ -970,7 +972,6 @@ class WebGL2RenderingContextBase : public WebGLRenderingContextBase {
   GLint GetMaxTransformFeedbackSeparateAttribs() const;
 
   void Trace(blink::Visitor*) override;
-  void TraceWrappers(ScriptWrappableVisitor*) const override;
 
  protected:
   friend class V8WebGL2RenderingContext;
@@ -980,7 +981,8 @@ class WebGL2RenderingContextBase : public WebGLRenderingContextBase {
       CanvasRenderingContextHost*,
       std::unique_ptr<WebGraphicsContext3DProvider>,
       bool using_gpu_compositing,
-      const CanvasContextCreationAttributesCore& requested_attributes);
+      const CanvasContextCreationAttributesCore& requested_attributes,
+      Platform::ContextType context_type);
 
   // DrawingBuffer::Client implementation.
   void DrawingBufferClientRestorePixelUnpackBufferBinding() override;
@@ -1125,10 +1127,16 @@ class WebGL2RenderingContextBase : public WebGLRenderingContextBase {
   TraceWrapperMember<WebGLBuffer> bound_pixel_unpack_buffer_;
   TraceWrapperMember<WebGLBuffer> bound_transform_feedback_buffer_;
   TraceWrapperMember<WebGLBuffer> bound_uniform_buffer_;
+  TraceWrapperMember<WebGLBuffer> bound_atomic_counter_buffer_;
+  TraceWrapperMember<WebGLBuffer> bound_shader_storage_buffer_;
 
+  HeapVector<TraceWrapperMember<WebGLBuffer>>
+      bound_indexed_atomic_counter_buffers_;
+  HeapVector<TraceWrapperMember<WebGLBuffer>>
+      bound_indexed_shader_storage_buffers_;
   HeapVector<TraceWrapperMember<WebGLBuffer>> bound_indexed_uniform_buffers_;
   GLint max_transform_feedback_separate_attribs_;
-  size_t max_bound_uniform_buffer_index_;
+  wtf_size_t max_bound_uniform_buffer_index_;
 
   TraceWrapperMember<WebGLQuery> current_boolean_occlusion_query_;
   TraceWrapperMember<WebGLQuery>
@@ -1147,10 +1155,11 @@ DEFINE_TYPE_CASTS(WebGL2RenderingContextBase,
                   CanvasRenderingContext,
                   context,
                   context->Is3d() &&
-                      WebGLRenderingContextBase::GetWebGLVersion(context) >= 2,
+                      WebGLRenderingContextBase::GetWebGLVersion(context) ==
+                          Platform::kWebGL2ContextType,
                   context.Is3d() &&
-                      WebGLRenderingContextBase::GetWebGLVersion(&context) >=
-                          2);
+                      WebGLRenderingContextBase::GetWebGLVersion(&context) ==
+                          Platform::kWebGL2ContextType);
 
 }  // namespace blink
 

@@ -7,6 +7,7 @@
 #include <stddef.h>
 
 #include <algorithm>
+#include <set>
 #include <string>
 #include <unordered_set>
 
@@ -15,6 +16,8 @@
 #include "base/logging.h"
 #include "base/macros.h"
 #include "base/metrics/histogram_macros.h"
+#include "base/no_destructor.h"
+#include "base/stl_util.h"
 #include "base/strings/string_piece.h"
 #include "base/strings/string_util.h"
 #include "net/base/mime_sniffer.h"
@@ -153,19 +156,17 @@ SniffingResult MaybeSkipHtmlComment(StringPiece* data) {
   return CrossOriginReadBlocking::kYes;
 }
 
-// Headers from
-// https://fetch.spec.whatwg.org/#cors-safelisted-response-header-name.
+// Removes headers that should be blocked in cross-origin case.
 //
-// Note that XSDB doesn't block responses allowed through CORS - this means
+// Note that corbSanitizedResponse in https://fetch.spec.whatwg.org/#main-fetch
+// has an empty list of headers, but the code below doesn't remove all the
+// headers for improved user experience - for better error messages for CORS.
+// See also https://github.com/whatwg/fetch/pull/686#issuecomment-383711732 and
+// the http/tests/xmlhttprequest/origin-exact-matching/07.html layout test.
+//
+// Note that CORB doesn't block responses allowed through CORS - this means
 // that the list of allowed headers below doesn't have to consider header
 // names listed in the Access-Control-Expose-Headers header.
-const char* const kCorsSafelistedHeaders[] = {
-    "cache-control", "content-language", "content-type",
-    "expires",       "last-modified",    "pragma",
-};
-
-// Removes headers that should be blocked in cross-origin case.
-// See https://fetch.spec.whatwg.org/#cors-safelisted-response-header-name.
 void BlockResponseHeaders(
     const scoped_refptr<net::HttpResponseHeaders>& headers) {
   DCHECK(headers);
@@ -186,16 +187,16 @@ void BlockResponseHeaders(
       continue;
     }
 
-    // Remove all other headers (but note the final exclusion below).
+    // Remove all other headers.
     names_of_headers_to_remove.insert(base::ToLowerASCII(name));
   }
 
-  // Exclude from removals headers from
-  // https://fetch.spec.whatwg.org/#cors-safelisted-response-header-name.
-  for (const char* header : kCorsSafelistedHeaders)
-    names_of_headers_to_remove.erase(header);
-
   headers->RemoveHeaders(names_of_headers_to_remove);
+}
+
+std::set<int>& GetPluginProxyingProcesses() {
+  static base::NoDestructor<std::set<int>> set;
+  return *set;
 }
 
 }  // namespace
@@ -445,14 +446,6 @@ void CrossOriginReadBlocking::SanitizeBlockedResponse(
 }
 
 // static
-std::vector<std::string>
-CrossOriginReadBlocking::GetCorsSafelistedHeadersForTesting() {
-  return std::vector<std::string>(
-      kCorsSafelistedHeaders,
-      kCorsSafelistedHeaders + arraysize(kCorsSafelistedHeaders));
-}
-
-// static
 void CrossOriginReadBlocking::LogAction(Action action) {
   UMA_HISTOGRAM_ENUMERATION("SiteIsolation.XSD.Browser.Action", action);
 }
@@ -558,6 +551,9 @@ CrossOriginReadBlocking::ResponseAnalyzer::ResponseAnalyzer(
     const net::URLRequest& request,
     const ResourceResponse& response) {
   content_length_ = response.head.content_length;
+  http_response_code_ =
+      response.head.headers ? response.head.headers->response_code() : 0;
+
   should_block_based_on_headers_ = ShouldBlockBasedOnHeaders(request, response);
   if (should_block_based_on_headers_ == kNeedToSniffMore)
     CreateSniffers();
@@ -611,9 +607,9 @@ CrossOriginReadBlocking::ResponseAnalyzer::ShouldBlockBasedOnHeaders(
   // unless the initiator opted out of CORS / opted into receiving an opaque
   // response.  See also https://crbug.com/803672.
   if (response.head.was_fetched_via_service_worker) {
-    switch (response.head.response_type_via_service_worker) {
+    switch (response.head.response_type) {
       case network::mojom::FetchResponseType::kBasic:
-      case network::mojom::FetchResponseType::kCORS:
+      case network::mojom::FetchResponseType::kCors:
       case network::mojom::FetchResponseType::kDefault:
       case network::mojom::FetchResponseType::kError:
         // Non-opaque responses shouldn't be blocked.
@@ -778,7 +774,7 @@ void CrossOriginReadBlocking::ResponseAnalyzer::SniffResponseBody(
   }
 }
 
-bool CrossOriginReadBlocking::ResponseAnalyzer::should_allow() const {
+bool CrossOriginReadBlocking::ResponseAnalyzer::ShouldAllow() const {
   switch (should_block_based_on_headers_) {
     case kAllow:
       return true;
@@ -789,7 +785,7 @@ bool CrossOriginReadBlocking::ResponseAnalyzer::should_allow() const {
   }
 }
 
-bool CrossOriginReadBlocking::ResponseAnalyzer::should_block() const {
+bool CrossOriginReadBlocking::ResponseAnalyzer::ShouldBlock() const {
   switch (should_block_based_on_headers_) {
     case kAllow:
       return false;
@@ -800,25 +796,46 @@ bool CrossOriginReadBlocking::ResponseAnalyzer::should_block() const {
   }
 }
 
+bool CrossOriginReadBlocking::ResponseAnalyzer::ShouldReportBlockedResponse()
+    const {
+  if (!ShouldBlock())
+    return false;
+
+  // Don't bother showing a warning message when blocking responses that are
+  // already empty.
+  if (content_length() == 0)
+    return false;
+  if (http_response_code() == 204)
+    return false;
+
+  // Don't bother showing a warning message when blocking responses that are
+  // associated with error responses (e.g. it is quite common to serve a
+  // text/html 404 error page for an <img> tag pointing to a wrong URL).
+  if (400 <= http_response_code() && http_response_code() <= 599)
+    return false;
+
+  return true;
+}
+
 void CrossOriginReadBlocking::ResponseAnalyzer::LogBytesReadForSniffing() {
   if (bytes_read_for_sniffing_ >= 0) {
-    UMA_HISTOGRAM_COUNTS("SiteIsolation.XSD.Browser.BytesReadForSniffing",
-                         bytes_read_for_sniffing_);
+    UMA_HISTOGRAM_COUNTS_1M("SiteIsolation.XSD.Browser.BytesReadForSniffing",
+                            bytes_read_for_sniffing_);
   }
 }
 
 void CrossOriginReadBlocking::ResponseAnalyzer::LogAllowedResponse() {
   // Note that if a response is allowed because of hitting EOF or
   // kMaxBytesToSniff, then |sniffers_| are not emptied and consequently
-  // should_allow doesn't start returning true.  This means that we can't
-  // DCHECK(should_allow()) or DCHECK(sniffers_.empty()) here - the decision to
+  // ShouldAllow doesn't start returning true.  This means that we can't
+  // DCHECK(ShouldAllow()) or DCHECK(sniffers_.empty()) here - the decision to
   // allow the response could have been made in the
   // CrossSiteDocumentResourceHandler layer without CrossOriginReadBlocking
   // realizing that it has hit EOF or kMaxBytesToSniff.
 
-  // Note that the response might be allowed even if should_block() returns true
+  // Note that the response might be allowed even if ShouldBlock() returns true
   // - for example to allow responses to requests initiated by content scripts.
-  // This means that we cannot DCHECK(!should_block()) here.
+  // This means that we cannot DCHECK(!ShouldBlock()) here.
 
   CrossOriginReadBlocking::LogAction(
       needs_sniffing()
@@ -829,8 +846,8 @@ void CrossOriginReadBlocking::ResponseAnalyzer::LogAllowedResponse() {
 }
 
 void CrossOriginReadBlocking::ResponseAnalyzer::LogBlockedResponse() {
-  DCHECK(!should_allow());
-  DCHECK(should_block());
+  DCHECK(!ShouldAllow());
+  DCHECK(ShouldBlock());
   DCHECK(sniffers_.empty());
 
   CrossOriginReadBlocking::LogAction(
@@ -848,6 +865,25 @@ void CrossOriginReadBlocking::ResponseAnalyzer::LogBlockedResponse() {
   }
 
   LogBytesReadForSniffing();
+}
+
+// static
+void CrossOriginReadBlocking::AddExceptionForPlugin(int process_id) {
+  std::set<int>& plugin_proxies = GetPluginProxyingProcesses();
+  plugin_proxies.insert(process_id);
+}
+
+// static
+bool CrossOriginReadBlocking::ShouldAllowForPlugin(int process_id) {
+  std::set<int>& plugin_proxies = GetPluginProxyingProcesses();
+  return base::ContainsKey(plugin_proxies, process_id);
+}
+
+// static
+void CrossOriginReadBlocking::RemoveExceptionForPlugin(int process_id) {
+  std::set<int>& plugin_proxies = GetPluginProxyingProcesses();
+  size_t number_of_elements_removed = plugin_proxies.erase(process_id);
+  DCHECK_EQ(1u, number_of_elements_removed);
 }
 
 }  // namespace network

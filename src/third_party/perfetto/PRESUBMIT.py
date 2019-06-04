@@ -25,10 +25,12 @@ def CheckChange(input, output):
     results += input.canned_checks.CheckChangeHasNoTabs(input, output)
     results += input.canned_checks.CheckLongLines(
             input, output, 80, source_file_filter=long_line_sources)
-    results += input.canned_checks.CheckPatchFormatted(input, output)
+    results += input.canned_checks.CheckPatchFormatted(
+            input, output, check_js=True)
     results += input.canned_checks.CheckGNFormatted(input, output)
     results += CheckIncludeGuards(input, output)
     results += CheckAndroidBlueprint(input, output)
+    results += CheckBinaryDescriptors(input, output)
     results += CheckMergedTraceConfigProto(input, output)
     results += CheckWhitelist(input, output)
     return results
@@ -80,6 +82,21 @@ def CheckIncludeGuards(input_api, output_api):
     return []
 
 
+def CheckBinaryDescriptors(input_api, output_api):
+    tool = 'tools/gen_binary_descriptors'
+    file_filter = lambda x: input_api.FilterSourceFile(
+          x,
+          white_list=('protos/perfetto/.*[.]proto$', '.*[.]h', tool))
+    if not input_api.AffectedSourceFiles(file_filter):
+        return []
+    if subprocess.call([tool, '--check-only']):
+        return [
+            output_api.PresubmitError(
+                'Please run ' + tool + ' to update binary descriptors.')
+        ]
+    return []
+
+
 def CheckMergedTraceConfigProto(input_api, output_api):
     tool = 'tools/gen_merged_protos'
     build_file_filter = lambda x: input_api.FilterSourceFile(
@@ -101,7 +118,8 @@ def CheckWhitelist(input_api, output_api):
   for f in input_api.AffectedFiles():
     if f.LocalPath() != 'tools/ftrace_proto_gen/event_whitelist':
       continue
-    if any(new_line != 'removed' and new_line != old_line for old_line, new_line
+    if any((not new_line.startswith('removed'))
+            and new_line != old_line for old_line, new_line
            in itertools.izip(f.OldContents(), f.NewContents())):
       return [
         output_api.PresubmitError(

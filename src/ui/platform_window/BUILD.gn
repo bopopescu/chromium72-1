@@ -9,15 +9,10 @@ source_set("platform_window") {
     "platform_ime_controller.h",
     "platform_window.h",
     "platform_window_delegate.h",
+    "platform_window_init_properties.cc",
+    "platform_window_init_properties.h",
     "text_input_state.cc",
     "text_input_state.h",
-  ]
-
-  sources += [
-    "neva/window_group_configuration.cc",
-    "neva/window_group_configuration.h",
-    "neva/window_group_configuration_param_traits.cc",
-    "neva/window_group_configuration_param_traits.h",
   ]
 
   deps = [
@@ -26,6 +21,18 @@ source_set("platform_window") {
     "//ui/base/ime:text_input_types",
     "//ui/gfx",
   ]
+
+  if (is_fuchsia) {
+    sources += [
+      "fuchsia/initialize_presenter_api_view.cc",
+      "fuchsia/initialize_presenter_api_view.h",
+    ]
+
+    public_deps = [
+      "//third_party/fuchsia-sdk/sdk:policy",
+      "//third_party/fuchsia-sdk/sdk:zx",
+    ]
+  }
 }
 
 group("platform_impls") {

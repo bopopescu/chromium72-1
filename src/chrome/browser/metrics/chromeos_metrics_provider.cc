@@ -14,8 +14,8 @@
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
-#include "base/task_scheduler/post_task.h"
-#include "base/task_scheduler/task_traits.h"
+#include "base/task/post_task.h"
+#include "base/task/task_traits.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/chromeos/arc/arc_session_manager.h"
 #include "chrome/browser/chromeos/policy/browser_policy_connector_chromeos.h"
@@ -85,9 +85,6 @@ void IncrementPrefValue(const char* path) {
   pref->SetInteger(path, value + 1);
 }
 
-const base::Feature kUmaShortHWClass{"UmaShortHWClass",
-                                     base::FEATURE_ENABLED_BY_DEFAULT};
-
 // Called on a background thread to load hardware class information.
 std::string GetFullHardwareClassOnBackgroundThread() {
   std::string full_hardware_class;
@@ -97,6 +94,16 @@ std::string GetFullHardwareClassOnBackgroundThread() {
 }
 
 }  // namespace
+
+namespace features {
+
+// Populates hardware class field in system_profile proto with the
+// short hardware class if enabled. If disabled, hardware class will have same
+// value as full hardware class.
+const base::Feature kUmaShortHWClass{"UmaShortHWClass",
+                                     base::FEATURE_ENABLED_BY_DEFAULT};
+
+}  // namespace features
 
 ChromeOSMetricsProvider::ChromeOSMetricsProvider()
     : registered_user_count_at_log_initialization_(false),
@@ -140,7 +147,7 @@ ChromeOSMetricsProvider::GetEnrollmentStatus() {
 }
 
 void ChromeOSMetricsProvider::Init() {
-  if (base::FeatureList::IsEnabled(kUmaShortHWClass)) {
+  if (base::FeatureList::IsEnabled(features::kUmaShortHWClass)) {
     hardware_class_ =
         variations::VariationsFieldTrialCreator::GetShortHardwareClass();
   }
@@ -169,7 +176,7 @@ void ChromeOSMetricsProvider::InitTaskGetFullHardwareClass(
   base::PostTaskWithTraitsAndReplyWithResult(
       FROM_HERE,
       {base::MayBlock(), base::WithBaseSyncPrimitives(),
-       base::TaskPriority::BACKGROUND,
+       base::TaskPriority::BEST_EFFORT,
        base::TaskShutdownBehavior::SKIP_ON_SHUTDOWN},
       base::BindOnce(&GetFullHardwareClassOnBackgroundThread),
       base::BindOnce(&ChromeOSMetricsProvider::SetFullHardwareClass,
@@ -330,7 +337,7 @@ void ChromeOSMetricsProvider::SetBluetoothAdapter(
 void ChromeOSMetricsProvider::SetFullHardwareClass(
     base::Closure callback,
     std::string full_hardware_class) {
-  if (!base::FeatureList::IsEnabled(kUmaShortHWClass)) {
+  if (!base::FeatureList::IsEnabled(features::kUmaShortHWClass)) {
     DCHECK(hardware_class_.empty());
     hardware_class_ = full_hardware_class;
   }

@@ -8,7 +8,7 @@
 #include "base/macros.h"
 #include "net/third_party/quic/core/quic_dispatcher.h"
 
-namespace net {
+namespace quic {
 
 class QuicPacketWriterWrapper;
 
@@ -16,6 +16,8 @@ namespace test {
 
 class QuicDispatcherPeer {
  public:
+  QuicDispatcherPeer() = delete;
+
   static void SetTimeWaitListManager(
       QuicDispatcher* dispatcher,
       QuicTimeWaitListManager* time_wait_list_manager);
@@ -52,7 +54,8 @@ class QuicDispatcherPeer {
   static void SendPublicReset(QuicDispatcher* dispatcher,
                               const QuicSocketAddress& server_address,
                               const QuicSocketAddress& client_address,
-                              QuicConnectionId connection_id);
+                              QuicConnectionId connection_id,
+                              bool ietf_quic);
 
   static std::unique_ptr<QuicDispatcher::PerPacketContext> GetPerPacketContext(
       QuicDispatcher* dispatcher);
@@ -60,12 +63,9 @@ class QuicDispatcherPeer {
   static void RestorePerPacketContext(
       QuicDispatcher* dispatcher,
       std::unique_ptr<QuicDispatcher::PerPacketContext>);
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(QuicDispatcherPeer);
 };
 
 }  // namespace test
-}  // namespace net
+}  // namespace quic
 
 #endif  // NET_THIRD_PARTY_QUIC_TEST_TOOLS_QUIC_DISPATCHER_PEER_H_

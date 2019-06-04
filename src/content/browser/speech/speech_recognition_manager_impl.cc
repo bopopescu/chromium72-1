@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <map>
 #include <utility>
+#include <vector>
 
 #include "base/bind.h"
 #include "base/callback.h"
@@ -14,6 +15,7 @@
 #include "base/memory/ref_counted_delete_on_sequence.h"
 #include "base/sequenced_task_runner.h"
 #include "base/single_thread_task_runner.h"
+#include "base/task/post_task.h"
 #include "base/threading/thread_task_runner_handle.h"
 #include "build/build_config.h"
 #include "content/browser/browser_main_loop.h"
@@ -21,6 +23,9 @@
 #include "content/browser/renderer_host/media/media_stream_ui_proxy.h"
 #include "content/browser/speech/speech_recognition_engine.h"
 #include "content/browser/speech/speech_recognizer_impl.h"
+#include "content/browser/storage_partition_impl.h"
+#include "content/public/browser/browser_task_traits.h"
+#include "content/public/browser/browser_thread.h"
 #include "content/public/browser/content_browser_client.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/resource_context.h"
@@ -30,9 +35,9 @@
 #include "content/public/browser/speech_recognition_session_context.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_contents_observer.h"
-#include "content/public/common/speech_recognition_error.h"
-#include "content/public/common/speech_recognition_result.h"
 #include "media/audio/audio_device_description.h"
+#include "third_party/blink/public/mojom/speech/speech_recognition_error.mojom.h"
+#include "third_party/blink/public/mojom/speech/speech_recognition_result.mojom.h"
 #include "url/gurl.h"
 #include "url/origin.h"
 
@@ -51,6 +56,8 @@ namespace {
 SpeechRecognitionManagerImpl* g_speech_recognition_manager_impl;
 
 }  // namespace
+
+int SpeechRecognitionManagerImpl::next_requester_id_ = 0;
 
 class SpeechRecognitionManagerImpl::FrameDeletionObserver {
  public:
@@ -188,7 +195,7 @@ void SpeechRecognitionManagerImpl::FrameDeletionObserver::ContentsObserver::
     RenderFrameDeleted(RenderFrameHost* render_frame_host) {
   auto iters = observed_frames_.equal_range(render_frame_host);
   for (auto it = iters.first; it != iters.second; ++it) {
-    BrowserThread::GetTaskRunnerForThread(BrowserThread::IO)
+    base::CreateSingleThreadTaskRunnerWithTraits({BrowserThread::IO})
         ->PostTask(FROM_HERE,
                    base::BindOnce(parent_observer_->frame_deleted_callback_,
                                   it->second));
@@ -227,6 +234,7 @@ SpeechRecognitionManagerImpl::SpeechRecognitionManagerImpl(
       delegate_(GetContentClient()
                     ->browser()
                     ->CreateSpeechRecognitionManagerDelegate()),
+      requester_id_(next_requester_id_++),
       weak_factory_(this) {
   DCHECK(!g_speech_recognition_manager_impl);
   g_speech_recognition_manager_impl = this;
@@ -280,8 +288,8 @@ int SpeechRecognitionManagerImpl::CreateSession(
   remote_engine_config.auth_scope = config.auth_scope;
   remote_engine_config.preamble = config.preamble;
 
-  SpeechRecognitionEngine* google_remote_engine =
-      new SpeechRecognitionEngine(config.url_request_context_getter.get());
+  SpeechRecognitionEngine* google_remote_engine = new SpeechRecognitionEngine(
+      config.shared_url_loader_factory, config.accept_language);
   google_remote_engine->SetConfig(remote_engine_config);
 
   session->recognizer = new SpeechRecognizerImpl(
@@ -295,7 +303,7 @@ int SpeechRecognitionManagerImpl::CreateSession(
 
   // The deletion observer is owned by this class, so it's safe to use
   // Unretained.
-  BrowserThread::GetTaskRunnerForThread(BrowserThread::UI)
+  base::CreateSingleThreadTaskRunnerWithTraits({BrowserThread::UI})
       ->PostTask(
           FROM_HERE,
           base::BindOnce(&SpeechRecognitionManagerImpl::FrameDeletionObserver::
@@ -346,8 +354,8 @@ void SpeechRecognitionManagerImpl::RecognitionAllowedCallback(int session_id,
   if (ask_user) {
     SpeechRecognitionSessionContext& context = session->context;
     context.label = media_stream_manager_->MakeMediaAccessRequest(
-        context.render_process_id, context.render_frame_id, session_id,
-        StreamControls(true, false), context.security_origin,
+        context.render_process_id, context.render_frame_id, requester_id_,
+        session_id, StreamControls(true, false), context.security_origin,
         base::BindOnce(
             &SpeechRecognitionManagerImpl::MediaRequestPermissionCallback,
             weak_factory_.GetWeakPtr(), session_id));
@@ -360,8 +368,10 @@ void SpeechRecognitionManagerImpl::RecognitionAllowedCallback(int session_id,
         base::BindOnce(&SpeechRecognitionManagerImpl::DispatchEvent,
                        weak_factory_.GetWeakPtr(), session_id, EVENT_START));
   } else {
-    OnRecognitionError(session_id, SpeechRecognitionError(
-        SPEECH_RECOGNITION_ERROR_NOT_ALLOWED));
+    OnRecognitionError(
+        session_id, blink::mojom::SpeechRecognitionError(
+                        blink::mojom::SpeechRecognitionErrorCode::kNotAllowed,
+                        blink::mojom::SpeechAudioErrorDetails::kNone));
     base::ThreadTaskRunnerHandle::Get()->PostTask(
         FROM_HERE,
         base::BindOnce(&SpeechRecognitionManagerImpl::DispatchEvent,
@@ -403,7 +413,7 @@ void SpeechRecognitionManagerImpl::AbortSession(int session_id) {
 
   // The deletion observer is owned by this class, so it's safe to use
   // Unretained.
-  BrowserThread::GetTaskRunnerForThread(BrowserThread::UI)
+  base::CreateSingleThreadTaskRunnerWithTraits({BrowserThread::UI})
       ->PostTask(
           FROM_HERE,
           base::BindOnce(&SpeechRecognitionManagerImpl::FrameDeletionObserver::
@@ -539,7 +549,8 @@ void SpeechRecognitionManagerImpl::OnAudioEnd(int session_id) {
 }
 
 void SpeechRecognitionManagerImpl::OnRecognitionResults(
-    int session_id, const SpeechRecognitionResults& results) {
+    int session_id,
+    const std::vector<blink::mojom::SpeechRecognitionResultPtr>& results) {
   DCHECK_CURRENTLY_ON(BrowserThread::IO);
   if (!SessionExists(session_id))
     return;
@@ -551,7 +562,8 @@ void SpeechRecognitionManagerImpl::OnRecognitionResults(
 }
 
 void SpeechRecognitionManagerImpl::OnRecognitionError(
-    int session_id, const SpeechRecognitionError& error) {
+    int session_id,
+    const blink::mojom::SpeechRecognitionError& error) {
   DCHECK_CURRENTLY_ON(BrowserThread::IO);
   if (!SessionExists(session_id))
     return;

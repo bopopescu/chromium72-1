@@ -36,7 +36,7 @@
 
     Below are optional defines that add, subtract, or change default behavior
     in Skia. Your port can locally edit this file to enable/disable flags as
-    you choose, or these can be delared on your command line (i.e. -Dfoo).
+    you choose, or these can be declared on your command line (i.e. -Dfoo).
 
     By default, this include file will always default to having all of the flags
     commented out, so including it will have no effect.
@@ -61,50 +61,10 @@
     #define SK_DEBUG
 #endif
 
-/*  If, in debugging mode, Skia needs to stop (presumably to invoke a debugger)
-    it will call SK_CRASH(). If this is not defined it, it is defined in
-    SkPostConfig.h to write to an illegal address
- */
-//#define SK_CRASH() *(int *)(uintptr_t)0 = 0
-
-
-/*  preconfig will have attempted to determine the endianness of the system,
-    but you can change these mutually exclusive flags here.
- */
-//#define SK_CPU_BENDIAN
-//#define SK_CPU_LENDIAN
-
 /*  Define this to provide font subsetter for font subsetting when generating
     PDF documents.
  */
 #define SK_PDF_USE_SFNTLY
-
-/*  To write debug messages to a console, skia will call SkDebugf(...) following
-    printf conventions (e.g. const char* format, ...). If you want to redirect
-    this to something other than printf, define yours here
- */
-//#define SkDebugf(...)  MyFunction(__VA_ARGS__)
-
-
-/*  If SK_DEBUG is defined, then you can optionally define SK_SUPPORT_UNITTEST
-    which will run additional self-tests at startup. These can take a long time,
-    so this flag is optional.
- */
-#ifdef SK_DEBUG
-#define SK_SUPPORT_UNITTEST
-#endif
-
-/* If your system embeds skia and has complex event logging, define this
-   symbol to name a file that maps the following macros to your system's
-   equivalents:
-       SK_TRACE_EVENT0(event)
-       SK_TRACE_EVENT1(event, name1, value1)
-       SK_TRACE_EVENT2(event, name1, value1, name2, value2)
-   src/utils/SkDebugTrace.h has a trivial implementation that writes to
-   the debug output stream. If SK_USER_TRACE_INCLUDE_FILE is not defined,
-   SkTrace.h will define the above three macros to do nothing.
-*/
-#undef SK_USER_TRACE_INCLUDE_FILE
 
 // ===== Begin Chrome-specific definitions =====
 
@@ -116,8 +76,6 @@
 
 #define SK_MSCALAR_IS_FLOAT
 #undef SK_MSCALAR_IS_DOUBLE
-
-#define GR_MAX_OFFSCREEN_AA_DIM     512
 
 // Log the file and line number for assertions.
 #define SkDebugf(...) SkDebugf_FileLine(__FILE__, __LINE__, false, __VA_ARGS__)
@@ -172,7 +130,8 @@ SK_API void SkDebugf_FileLine(const char* file, int line, bool fatal,
 // until we update our call-sites (typically these are for API changes).
 //
 // Remove these as we update our sites.
-//
+
+#define SK_LEGACY_PLATFORM_MATRIX_PROCS
 
 // Workaround for poor anisotropic mipmap quality,
 // pending Skia ripmap support.
@@ -187,55 +146,29 @@ SK_API void SkDebugf_FileLine(const char* file, int line, bool fatal,
 #define SK_USE_LEGACY_DISTANCE_FIELDS
 #endif
 
+// To stage layout result changes (minor) related to convexity calculations
+#ifndef SK_SUPPORT_LEGACY_CACHE_CONVEXITY
+#define SK_SUPPORT_LEGACY_CACHE_CONVEXITY
+#endif
+
 // Skia is enabling this feature soon. Chrome probably does
 // not want it for M64
 #ifndef SK_DISABLE_EXPLICIT_GPU_RESOURCE_ALLOCATION
 #define SK_DISABLE_EXPLICIT_GPU_RESOURCE_ALLOCATION
 #endif
 
-// Skia is enabling this feature soon. Chrome probably does
-// not want it for M64
-#ifndef SK_DISABLE_RENDER_TARGET_SORTING
-#define SK_DISABLE_RENDER_TARGET_SORTING
-#endif
-
-#ifndef SK_SUPPORT_LEGACY_TILED_BITMAPS
-#define SK_SUPPORT_LEGACY_TILED_BITMAPS
-#endif
-
-// The matrix image filter imperceptibly alters the following two layout tests:
-//   fast/css/transformed-mask.html
-//   fast/reflections/opacity-reflection-transform.html
-// and changes the following cc_unittests:
-//   LayerTreeHostCommonTest.VisibleRectWithScalingClippingAndFilters
-//   LayerTreeHostCommonTest.VisibleRectWithClippingAndFilters
-// Landing the fix in Skia behind this flag will allow those all to be updated
-// together in Chrome (along with the removal of this flag).
-#ifndef SK_IGNORE_MATRIX_IMAGE_FILTER_FIX
-#define SK_IGNORE_MATRIX_IMAGE_FILTER_FIX
-#endif
-
-// remove after rebaselining svg layout tests
-#ifndef SK_SUPPORT_LEGACY_SVG_ARC_TO
-#define SK_SUPPORT_LEGACY_SVG_ARC_TO
-#endif
-
-#ifndef SK_SUPPORT_LEGACY_YUV_COLORSPACE
-#define SK_SUPPORT_LEGACY_YUV_COLORSPACE
+#ifndef SK_IGNORE_LINEONLY_AA_CONVEX_PATH_OPTS
+#define SK_IGNORE_LINEONLY_AA_CONVEX_PATH_OPTS
 #endif
 
 // Max. verb count for paths rendered by the edge-AA tessellating path renderer.
-#define GR_AA_TESSELLATOR_MAX_VERB_COUNT 10
+#define GR_AA_TESSELLATOR_MAX_VERB_COUNT 100
 
-#define SK_DISABLE_LOWP_BILERP_CLAMP_CLAMP_STAGE
-
-
-#ifndef SK_SUPPORT_LEGACY_THREADED_DAA_BUGS
-#define SK_SUPPORT_LEGACY_THREADED_DAA_BUGS
+#ifndef SK_SUPPORT_LEGACY_AAA_CHOICE
+#define SK_SUPPORT_LEGACY_AAA_CHOICE
 #endif
 
-#define SK_DONT_OPTIMIZE_SRC_PROFILES_FOR_SPEED
-#define SK_DONT_OPTIMIZE_DST_PROFILES_FOR_SPEED
+#define SK_LEGACY_SRGB_STAGE_CHOICE
 
 ///////////////////////// Imported from BUILD.gn and skia_common.gypi
 
@@ -252,10 +185,5 @@ SK_API void SkDebugf_FileLine(const char* file, int line, bool fatal,
 
 #define SK_ATTR_DEPRECATED          SK_NOTHING_ARG1
 #define GR_GL_CUSTOM_SETUP_HEADER   "GrGLConfig_chrome.h"
-
-// mtklein's fiddling with Src / SrcOver.  Will rebaseline these only once when done.
-#define SK_SUPPORT_LEGACY_X86_BLITS
-
-// ===== End Chrome-specific definitions =====
 
 #endif

@@ -15,7 +15,7 @@
 #include "base/metrics/histogram_macros.h"
 #include "base/path_service.h"
 #include "base/sequenced_task_runner.h"
-#include "base/task_scheduler/post_task.h"
+#include "base/task/post_task.h"
 #include "base/threading/thread_task_runner_handle.h"
 #include "base/time/time.h"
 #include "chrome/browser/browser_process.h"
@@ -26,8 +26,8 @@
 #include "chrome/browser/chromeos/policy/user_cloud_policy_store_chromeos.h"
 #include "chrome/browser/chromeos/profiles/profile_helper.h"
 #include "chrome/browser/chromeos/settings/cros_settings.h"
-#include "chrome/browser/chromeos/settings/install_attributes.h"
 #include "chrome/browser/lifetime/application_lifetime.h"
+#include "chrome/browser/net/system_network_context_manager.h"
 #include "chrome/browser/policy/schema_registry_service.h"
 #include "chrome/browser/policy/schema_registry_service_factory.h"
 #include "chrome/browser/profiles/profile.h"
@@ -35,6 +35,7 @@
 #include "chromeos/chromeos_paths.h"
 #include "chromeos/chromeos_switches.h"
 #include "chromeos/dbus/dbus_thread_manager.h"
+#include "chromeos/settings/install_attributes.h"
 #include "components/arc/arc_features.h"
 #include "components/keyed_service/content/browser_context_dependency_manager.h"
 #include "components/policy/core/browser/browser_policy_connector.h"
@@ -47,8 +48,8 @@
 #include "components/user_manager/known_user.h"
 #include "components/user_manager/user.h"
 #include "components/user_manager/user_manager.h"
-#include "content/public/browser/browser_thread.h"
 #include "net/url_request/url_request_context_getter.h"
+#include "services/network/public/cpp/shared_url_loader_factory.h"
 
 using user_manager::known_user::ProfileRequiresPolicy;
 namespace policy {
@@ -371,15 +372,12 @@ UserPolicyManagerFactoryChromeOS::CreateManagerForProfile(
 
   scoped_refptr<base::SequencedTaskRunner> backend_task_runner =
       base::CreateSequencedTaskRunnerWithTraits(
-          {base::MayBlock(), base::TaskPriority::BACKGROUND,
+          {base::MayBlock(), base::TaskPriority::BEST_EFFORT,
            base::TaskShutdownBehavior::SKIP_ON_SHUTDOWN});
-  scoped_refptr<base::SequencedTaskRunner> io_task_runner =
-      content::BrowserThread::GetTaskRunnerForThread(
-          content::BrowserThread::IO);
   std::unique_ptr<CloudExternalDataManager> external_data_manager(
       new UserCloudExternalDataManager(base::Bind(&GetChromePolicyDetails),
-                                       backend_task_runner, io_task_runner,
-                                       external_data_dir, store.get()));
+                                       backend_task_runner, external_data_dir,
+                                       store.get()));
   if (force_immediate_load)
     store->LoadImmediately();
 
@@ -404,7 +402,7 @@ UserPolicyManagerFactoryChromeOS::CreateManagerForProfile(
             base::BindOnce(&OnUserPolicyFatalError, account_id,
                            MetricUserPolicyChromeOSSessionAbortType::
                                kInitWithGoogleCloudManagement),
-            account_id, base::ThreadTaskRunnerHandle::Get(), io_task_runner);
+            account_id, base::ThreadTaskRunnerHandle::Get());
 
     bool wildcard_match = false;
     if (connector->IsEnterpriseManaged() &&
@@ -419,7 +417,7 @@ UserPolicyManagerFactoryChromeOS::CreateManagerForProfile(
         SchemaRegistryServiceFactory::GetForContext(profile)->registry());
     manager->Connect(g_browser_process->local_state(),
                      device_management_service,
-                     g_browser_process->system_request_context());
+                     g_browser_process->shared_url_loader_factory());
 
     cloud_managers_[profile] = manager.get();
     return std::move(manager);

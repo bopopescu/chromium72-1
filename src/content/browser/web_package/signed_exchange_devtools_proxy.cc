@@ -4,10 +4,13 @@
 
 #include "content/browser/web_package/signed_exchange_devtools_proxy.h"
 
+#include "base/task/post_task.h"
 #include "base/trace_event/trace_event.h"
-#include "content/browser/devtools/render_frame_devtools_agent_host.h"
+#include "content/browser/devtools/devtools_instrumentation.h"
 #include "content/browser/frame_host/frame_tree_node.h"
-#include "content/browser/web_package/signed_exchange_header.h"
+#include "content/browser/web_package/signed_exchange_envelope.h"
+#include "content/browser/web_package/signed_exchange_error.h"
+#include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/web_contents.h"
@@ -38,7 +41,7 @@ void CertificateRequestSentOnUI(
       FrameTreeNode::GloballyFindByID(frame_tree_node_id_getter.Run());
   if (!frame_tree_node)
     return;
-  RenderFrameDevToolsAgentHost::OnSignedExchangeCertificateRequestSent(
+  devtools_instrumentation::OnSignedExchangeCertificateRequestSent(
       frame_tree_node, request_id, loader_id, request, signed_exchange_url);
 }
 
@@ -52,7 +55,7 @@ void CertificateResponseReceivedOnUI(
       FrameTreeNode::GloballyFindByID(frame_tree_node_id_getter.Run());
   if (!frame_tree_node)
     return;
-  RenderFrameDevToolsAgentHost::OnSignedExchangeCertificateResponseReceived(
+  devtools_instrumentation::OnSignedExchangeCertificateResponseReceived(
       frame_tree_node, request_id, loader_id, url, response->head);
 }
 
@@ -64,7 +67,7 @@ void CertificateRequestCompletedOnUI(
       FrameTreeNode::GloballyFindByID(frame_tree_node_id_getter.Run());
   if (!frame_tree_node)
     return;
-  RenderFrameDevToolsAgentHost::OnSignedExchangeCertificateRequestCompleted(
+  devtools_instrumentation::OnSignedExchangeCertificateRequestCompleted(
       frame_tree_node, request_id, status);
 }
 
@@ -73,16 +76,17 @@ void OnSignedExchangeReceivedOnUI(
     const GURL& outer_request_url,
     scoped_refptr<network::ResourceResponse> outer_response,
     base::Optional<const base::UnguessableToken> devtools_navigation_token,
-    base::Optional<SignedExchangeHeader> header,
+    base::Optional<SignedExchangeEnvelope> envelope,
+    scoped_refptr<net::X509Certificate> certificate,
     base::Optional<net::SSLInfo> ssl_info,
-    std::vector<std::string> error_messages) {
+    std::vector<SignedExchangeError> errors) {
   FrameTreeNode* frame_tree_node =
       FrameTreeNode::GloballyFindByID(frame_tree_node_id_getter.Run());
   if (!frame_tree_node)
     return;
-  RenderFrameDevToolsAgentHost::OnSignedExchangeReceived(
+  devtools_instrumentation::OnSignedExchangeReceived(
       frame_tree_node, devtools_navigation_token, outer_request_url,
-      outer_response->head, header, ssl_info, error_messages);
+      outer_response->head, envelope, certificate, ssl_info, errors);
 }
 
 }  // namespace
@@ -105,12 +109,13 @@ SignedExchangeDevToolsProxy::~SignedExchangeDevToolsProxy() {
   DCHECK_CURRENTLY_ON(BrowserThread::IO);
 }
 
-void SignedExchangeDevToolsProxy::ReportErrorMessage(
-    const std::string& message) {
+void SignedExchangeDevToolsProxy::ReportError(
+    const std::string& message,
+    base::Optional<SignedExchangeError::FieldIndexPair> error_field) {
   DCHECK_CURRENTLY_ON(BrowserThread::IO);
-  error_messages_.push_back(message);
-  BrowserThread::PostTask(
-      BrowserThread::UI, FROM_HERE,
+  errors_.push_back(SignedExchangeError(message, std::move(error_field)));
+  base::PostTaskWithTraits(
+      FROM_HERE, {BrowserThread::UI},
       base::BindOnce(&AddErrorMessageToConsoleOnUI, frame_tree_node_id_getter_,
                      std::move(message)));
 }
@@ -121,8 +126,8 @@ void SignedExchangeDevToolsProxy::CertificateRequestSent(
   if (!devtools_enabled_)
     return;
 
-  BrowserThread::PostTask(
-      BrowserThread::UI, FROM_HERE,
+  base::PostTaskWithTraits(
+      FROM_HERE, {BrowserThread::UI},
       base::BindOnce(
           &CertificateRequestSentOnUI, frame_tree_node_id_getter_, request_id,
           devtools_navigation_token_ ? *devtools_navigation_token_ : request_id,
@@ -140,8 +145,8 @@ void SignedExchangeDevToolsProxy::CertificateResponseReceived(
   auto resource_response = base::MakeRefCounted<network::ResourceResponse>();
   resource_response->head = head;
 
-  BrowserThread::PostTask(
-      BrowserThread::UI, FROM_HERE,
+  base::PostTaskWithTraits(
+      FROM_HERE, {BrowserThread::UI},
       base::BindOnce(
           &CertificateResponseReceivedOnUI, frame_tree_node_id_getter_,
           request_id,
@@ -154,14 +159,15 @@ void SignedExchangeDevToolsProxy::CertificateRequestCompleted(
     const network::URLLoaderCompletionStatus& status) {
   if (!devtools_enabled_)
     return;
-  BrowserThread::PostTask(
-      BrowserThread::UI, FROM_HERE,
+  base::PostTaskWithTraits(
+      FROM_HERE, {BrowserThread::UI},
       base::BindOnce(&CertificateRequestCompletedOnUI,
                      frame_tree_node_id_getter_, request_id, status));
 }
 
 void SignedExchangeDevToolsProxy::OnSignedExchangeReceived(
-    const base::Optional<SignedExchangeHeader>& header,
+    const base::Optional<SignedExchangeEnvelope>& envelope,
+    const scoped_refptr<net::X509Certificate>& certificate,
     const net::SSLInfo* ssl_info) {
   DCHECK_CURRENTLY_ON(BrowserThread::IO);
   if (!devtools_enabled_)
@@ -174,12 +180,12 @@ void SignedExchangeDevToolsProxy::OnSignedExchangeReceived(
   auto resource_response = base::MakeRefCounted<network::ResourceResponse>();
   resource_response->head = outer_response_;
 
-  BrowserThread::PostTask(
-      BrowserThread::UI, FROM_HERE,
+  base::PostTaskWithTraits(
+      FROM_HERE, {BrowserThread::UI},
       base::BindOnce(&OnSignedExchangeReceivedOnUI, frame_tree_node_id_getter_,
                      outer_request_url_, resource_response->DeepCopy(),
-                     devtools_navigation_token_, header,
-                     std::move(ssl_info_opt), std::move(error_messages_)));
+                     devtools_navigation_token_, envelope, certificate,
+                     std::move(ssl_info_opt), std::move(errors_)));
 }
 
 }  // namespace content

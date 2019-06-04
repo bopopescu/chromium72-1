@@ -110,7 +110,7 @@ class DraggedFileUtilTest : public testing::Test {
     SimulateDropFiles();
 
     file_system_context_ = CreateFileSystemContextForTesting(
-        NULL /* quota_manager */, partition_dir_.GetPath());
+        nullptr /* quota_manager */, partition_dir_.GetPath());
 
     isolated_context()->AddReference(filesystem_id_);
   }
@@ -270,7 +270,7 @@ class DraggedFileUtilTest : public testing::Test {
         base::FilePath root = root_path().Append(
             kRootPaths[(root_path_index++) % arraysize(kRootPaths)]);
         toplevel_root_map_[toplevel] = root;
-        toplevels.AddPath(root.Append(path), NULL);
+        toplevels.AddPath(root.Append(path), nullptr);
       }
 
       SetUpOneFileSystemTestCase(toplevel_root_map_[toplevel], test_case);
@@ -380,7 +380,7 @@ TEST_F(DraggedFileUtilTest, ReadDirectoryTest) {
       entry.name = current.BaseName();
       expected_entry_map[entry.name.value()] = entry;
 
-#if defined(OS_POSIX) && !defined(OS_FUCHSIA)
+#if defined(OS_POSIX)
       // Creates a symlink for each file/directory.
       // They should be ignored by ReadDirectory, so we don't add them
       // to expected_entry_map.
@@ -401,7 +401,7 @@ TEST_F(DraggedFileUtilTest, ReadDirectoryTest) {
     EXPECT_EQ(expected_entry_map.size(), entries.size());
     for (size_t i = 0; i < entries.size(); ++i) {
       const filesystem::mojom::DirectoryEntry& entry = entries[i];
-      EntryMap::iterator found = expected_entry_map.find(entry.name.value());
+      auto found = expected_entry_map.find(entry.name.value());
       EXPECT_TRUE(found != expected_entry_map.end());
       EXPECT_EQ(found->second.name, entry.name);
       EXPECT_EQ(found->second.type, entry.type);

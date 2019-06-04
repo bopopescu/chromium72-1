@@ -11,6 +11,8 @@ namespace blink {
 
 class HTMLVideoElement;
 class PictureInPictureWindow;
+class TreeScope;
+struct WebSize;
 
 // The PictureInPictureControllerImpl is keeping the state and implementing the
 // logic around the Picture-in-Picture feature. It is meant to be used as well
@@ -25,6 +27,7 @@ class PictureInPictureControllerImpl : public PictureInPictureController {
   WTF_MAKE_NONCOPYABLE(PictureInPictureControllerImpl);
 
  public:
+  explicit PictureInPictureControllerImpl(Document&);
   ~PictureInPictureControllerImpl() override;
 
   // Meant to be called internally by PictureInPictureController::From()
@@ -43,30 +46,28 @@ class PictureInPictureControllerImpl : public PictureInPictureController {
   // request Picture-in-Picture.
   Status IsDocumentAllowed() const;
 
-  // Enter Picture-in-Picture for a video element and resolve promise.
-  void EnterPictureInPicture(HTMLVideoElement*, ScriptPromiseResolver*);
-
-  // Meant to be called internally when an element has entered successfully
-  // Picture-in-Picture.
-  void OnEnteredPictureInPicture(HTMLVideoElement*,
-                                 ScriptPromiseResolver*,
-                                 const WebSize& picture_in_picture_window_size);
-
-  // Exit Picture-in-Picture for a video element and resolve promise if any.
-  void ExitPictureInPicture(HTMLVideoElement*, ScriptPromiseResolver*);
-
   // Returns element currently in Picture-in-Picture if any. Null otherwise.
+  Element* PictureInPictureElement() const;
   Element* PictureInPictureElement(TreeScope&) const;
 
   // Implementation of PictureInPictureController.
-  void OnExitedPictureInPicture(ScriptPromiseResolver*) override;
+  void EnterPictureInPicture(HTMLVideoElement*,
+                             ScriptPromiseResolver*) override;
+  void ExitPictureInPicture(HTMLVideoElement*, ScriptPromiseResolver*) override;
+  void SetPictureInPictureCustomControls(
+      HTMLVideoElement*,
+      const std::vector<PictureInPictureControlInfo>&) override;
   Status IsElementAllowed(const HTMLVideoElement&) const override;
   bool IsPictureInPictureElement(const Element*) const override;
 
   void Trace(blink::Visitor*) override;
 
  private:
-  explicit PictureInPictureControllerImpl(Document&);
+  void OnEnteredPictureInPicture(HTMLVideoElement*,
+                                 ScriptPromiseResolver*,
+                                 const WebSize& picture_in_picture_window_size);
+  void OnExitedPictureInPicture(ScriptPromiseResolver*) override;
+  void OnPictureInPictureControlClicked(const WebString& control_id) override;
 
   // The Picture-in-Picture element for the associated document.
   Member<HTMLVideoElement> picture_in_picture_element_;

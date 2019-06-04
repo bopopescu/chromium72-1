@@ -11,15 +11,14 @@
 #include "base/macros.h"
 #include "base/strings/utf_string_conversions.h"
 #include "services/service_manager/public/cpp/service_context.h"
-#include "services/ui/public/cpp/property_type_converters.h"
-#include "services/ui/public/interfaces/window_manager_constants.mojom.h"
+#include "services/ws/public/cpp/property_type_converters.h"
+#include "services/ws/public/mojom/window_manager.mojom.h"
+#include "services/ws/public/mojom/window_tree_constants.mojom.h"
 #include "ui/aura/mus/property_converter.h"
 #include "ui/display/display.h"
 #include "ui/display/screen.h"
 #include "ui/views/mus/aura_init.h"
 #include "ui/views/mus/mus_client.h"
-#include "ui/views/mus/pointer_watcher_event_router.h"
-#include "ui/views/pointer_watcher.h"
 #include "ui/views/widget/widget.h"
 #include "ui/views/widget/widget_delegate.h"
 
@@ -29,14 +28,15 @@ TapVisualizerApp::TapVisualizerApp() = default;
 
 TapVisualizerApp::~TapVisualizerApp() {
   display::Screen::GetScreen()->RemoveObserver(this);
-  views::MusClient::Get()->pointer_watcher_event_router()->RemovePointerWatcher(
-      this);
+  aura::Env::GetInstance()->RemoveEventObserver(this);
 }
 
 void TapVisualizerApp::Start() {
   // Watches moves so the user can drag around a touch point.
-  views::MusClient::Get()->pointer_watcher_event_router()->AddPointerWatcher(
-      this, true /* want_moves */);
+  aura::Env* env = aura::Env::GetInstance();
+  std::set<ui::EventType> types = {ui::ET_TOUCH_PRESSED, ui::ET_TOUCH_RELEASED,
+                                   ui::ET_TOUCH_MOVED, ui::ET_TOUCH_CANCELLED};
+  env->AddEventObserver(this, env, types);
   display::Screen::GetScreen()->AddObserver(this);
   for (const display::Display& display :
        display::Screen::GetScreen()->GetAllDisplays()) {
@@ -45,11 +45,11 @@ void TapVisualizerApp::Start() {
 }
 
 void TapVisualizerApp::OnStart() {
-  const bool register_path_provider = false;
-  aura_init_ = views::AuraInit::Create(
-      context()->connector(), context()->identity(), "views_mus_resources.pak",
-      std::string(), nullptr, views::AuraInit::Mode::AURA_MUS2,
-      register_path_provider);
+  views::AuraInit::InitParams params;
+  params.connector = context()->connector();
+  params.identity = context()->identity();
+  params.register_path_provider = false;
+  aura_init_ = views::AuraInit::Create(params);
   if (!aura_init_) {
     context()->QuitNow();
     return;
@@ -57,20 +57,19 @@ void TapVisualizerApp::OnStart() {
   Start();
 }
 
-void TapVisualizerApp::OnPointerEventObserved(
-    const ui::PointerEvent& event,
-    const gfx::Point& location_in_screen,
-    gfx::NativeView target) {
-  if (!event.IsTouchPointerEvent())
+void TapVisualizerApp::OnEvent(const ui::Event& event) {
+  if (!event.IsTouchEvent())
     return;
 
+  // The event never targets this app, so the location is in screen coordinates.
+  const gfx::Point screen_location = event.AsTouchEvent()->root_location();
   int64_t display_id = display::Screen::GetScreen()
-                           ->GetDisplayNearestPoint(location_in_screen)
+                           ->GetDisplayNearestPoint(screen_location)
                            .id();
   auto it = display_id_to_renderer_.find(display_id);
   if (it != display_id_to_renderer_.end()) {
     TapRenderer* renderer = it->second.get();
-    renderer->HandleTouchEvent(event);
+    renderer->HandleTouchEvent(*event.AsTouchEvent());
   }
 }
 
@@ -92,10 +91,10 @@ void TapVisualizerApp::CreateWidgetForDisplay(int64_t display_id) {
   params.activatable = views::Widget::InitParams::ACTIVATABLE_NO;
   params.accept_events = false;
   params.delegate = new views::WidgetDelegateView;
-  params.mus_properties[ui::mojom::WindowManager::kContainerId_InitProperty] =
+  params.mus_properties[ws::mojom::WindowManager::kContainerId_InitProperty] =
       mojo::ConvertTo<std::vector<uint8_t>>(
           static_cast<int32_t>(ash::kShellWindowId_OverlayContainer));
-  params.mus_properties[ui::mojom::WindowManager::kDisplayId_InitProperty] =
+  params.mus_properties[ws::mojom::WindowManager::kDisplayId_InitProperty] =
       mojo::ConvertTo<std::vector<uint8_t>>(display_id);
   params.show_state = ui::SHOW_STATE_FULLSCREEN;
   params.name = "TapVisualizer";

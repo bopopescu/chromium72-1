@@ -32,6 +32,7 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_TIMING_WINDOW_PERFORMANCE_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_TIMING_WINDOW_PERFORMANCE_H_
 
+#include "third_party/blink/public/platform/web_layer_tree_view.h"
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/dom/context_lifecycle_observer.h"
 #include "third_party/blink/renderer/core/frame/performance_monitor.h"
@@ -51,8 +52,10 @@ class CORE_EXPORT WindowPerformance final : public Performance,
 
  public:
   static WindowPerformance* Create(LocalDOMWindow* window) {
-    return new WindowPerformance(window);
+    return MakeGarbageCollected<WindowPerformance>(window);
   }
+
+  explicit WindowPerformance(LocalDOMWindow*);
   ~WindowPerformance() override;
 
   ExecutionContext* GetExecutionContext() const override;
@@ -62,37 +65,43 @@ class CORE_EXPORT WindowPerformance final : public Performance,
 
   MemoryInfo* memory() const override;
 
+  bool shouldYield() const override;
+
   void UpdateLongTaskInstrumentation() override;
 
-  bool ObservingEventTimingEntries();
   bool ShouldBufferEventTiming();
+
+  bool FirstInputDetected() const { return first_input_detected_; }
 
   // This method creates a PerformanceEventTiming and if needed creates a swap
   // promise to calculate the |duration| attribute when such promise is
   // resolved.
-  void RegisterEventTiming(String event_type,
+  void RegisterEventTiming(const AtomicString& event_type,
                            TimeTicks start_time,
                            TimeTicks processing_start,
                            TimeTicks processing_end,
                            bool cancelable);
 
+  void AddElementTiming(const AtomicString& name,
+                        const IntRect& rect,
+                        TimeTicks timestamp);
+
+  void AddLayoutJankFraction(double jank_fraction);
+
   void Trace(blink::Visitor*) override;
-  using Performance::TraceWrappers;
 
  private:
-  explicit WindowPerformance(LocalDOMWindow*);
-
   PerformanceNavigationTiming* CreateNavigationTimingInstance() override;
 
-  static std::pair<String, DOMWindow*> SanitizedAttribution(
+  static std::pair<AtomicString, DOMWindow*> SanitizedAttribution(
       ExecutionContext*,
       bool has_multiple_contexts,
       LocalFrame* observer_frame);
 
   // PerformanceMonitor::Client implementation.
   void ReportLongTask(
-      double start_time,
-      double end_time,
+      base::TimeTicks start_time,
+      base::TimeTicks end_time,
       ExecutionContext* task_context,
       bool has_multiple_contexts,
       const SubTaskAttribution::EntriesVector& sub_task_attributions) override;

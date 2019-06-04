@@ -42,6 +42,7 @@
 #include "third_party/boringssl/src/include/openssl/evp.h"
 #include "third_party/boringssl/src/include/openssl/mem.h"
 #include "third_party/boringssl/src/include/openssl/rsa.h"
+#include "ui/gfx/color_palette.h"
 #include "ui/views/controls/label.h"
 #include "ui/views/controls/textfield/textfield.h"
 #include "ui/views/widget/widget.h"
@@ -140,7 +141,8 @@ void EnterWrongPin(chromeos::CertificateProviderService* service) {
   // Check that we have an error message displayed.
   chromeos::RequestPinView* view =
       service->pin_dialog_manager()->active_view_for_testing();
-  EXPECT_EQ(SK_ColorRED, view->error_label_for_testing()->enabled_color());
+  EXPECT_EQ(gfx::kGoogleRed600,
+            view->error_label_for_testing()->enabled_color());
 }
 
 class CertificateProviderApiTest : public extensions::ExtensionApiTest {
@@ -253,7 +255,10 @@ IN_PROC_BROWSER_TEST_F(CertificateProviderApiTest, Basic) {
 
   VLOG(1) << "Sign the digest using the private key.";
   std::string key_pk8;
-  base::ReadFileToString(extension_path.AppendASCII("l1_leaf.pk8"), &key_pk8);
+  {
+    base::ScopedAllowBlockingForTesting allow_io;
+    base::ReadFileToString(extension_path.AppendASCII("l1_leaf.pk8"), &key_pk8);
+  }
 
   const uint8_t* const key_pk8_begin =
       reinterpret_cast<const uint8_t*>(key_pk8.data());

@@ -51,6 +51,53 @@ enum {
   ANDROID_VIEW_ACCESSIBILITY_RANGE_TYPE_FLOAT = 1
 };
 
+static bool HasListAncestor(const content::BrowserAccessibility* node) {
+  if (node == nullptr)
+    return false;  // Base case
+
+  if (ui::IsStaticList(node->GetRole()))
+    return true;
+
+  return HasListAncestor(node->InternalGetParent());
+}
+
+static bool HasListDescendant(const content::BrowserAccessibility* current,
+                              const content::BrowserAccessibility* root) {
+  // Only check role of descendants
+  if (current != root) {
+    if (ui::IsStaticList(current->GetRole()))
+      return true;
+  }
+
+  int num_children = current->InternalChildCount();
+
+  for (int i = 0; i < num_children; ++i) {
+    if (HasListDescendant(current->InternalGetChild(i), root))
+      return true;
+  }
+  return false;
+}
+
+/*
+Determines:
+1. If this is an ancestor of any lists
+2. If this list is a descendant of any lists
+Talkback uses this information to report if the list has levels, and if so,
+which level is currently selected
+*/
+static bool IsHierarchicalList(const content::BrowserAccessibility* node) {
+  // Only makes sense to run if |node| is already a list
+  DCHECK(ui::IsStaticList(node->GetRole()));
+
+  if (node == nullptr)
+    return false;
+
+  bool found_list_in_descendants = HasListDescendant(node, node);
+  bool found_list_in_ancestors = HasListAncestor(node->InternalGetParent());
+
+  return (found_list_in_descendants || found_list_in_ancestors);
+}
+
 }  // namespace
 
 namespace content {
@@ -162,6 +209,10 @@ bool BrowserAccessibilityAndroid::PlatformIsLeaf() const {
   return false;
 }
 
+bool BrowserAccessibilityAndroid::CanFireEvents() const {
+  return true;
+}
+
 bool BrowserAccessibilityAndroid::IsCheckable() const {
   return HasIntAttribute(ax::mojom::IntAttribute::kCheckedState);
 }
@@ -193,8 +244,7 @@ bool BrowserAccessibilityAndroid::IsCollapsed() const {
 
 // TODO(dougt) Move to ax_role_properties?
 bool BrowserAccessibilityAndroid::IsCollection() const {
-  return (ui::IsTableLikeRole(GetRole()) ||
-          GetRole() == ax::mojom::Role::kList ||
+  return (ui::IsTableLike(GetRole()) || GetRole() == ax::mojom::Role::kList ||
           GetRole() == ax::mojom::Role::kListBox ||
           GetRole() == ax::mojom::Role::kDescriptionList ||
           GetRole() == ax::mojom::Role::kTree);
@@ -257,9 +307,8 @@ bool BrowserAccessibilityAndroid::IsHeading() const {
 }
 
 bool BrowserAccessibilityAndroid::IsHierarchical() const {
-  return (GetRole() == ax::mojom::Role::kList ||
-          GetRole() == ax::mojom::Role::kDescriptionList ||
-          GetRole() == ax::mojom::Role::kTree);
+  return (GetRole() == ax::mojom::Role::kTree ||
+          (ui::IsStaticList(GetRole()) && IsHierarchicalList(this)));
 }
 
 bool BrowserAccessibilityAndroid::IsLink() const {
@@ -302,6 +351,10 @@ bool BrowserAccessibilityAndroid::IsInterestingOnAndroid() const {
   // The root is not interesting if it doesn't have a title, even
   // though it's focusable.
   if (GetRole() == ax::mojom::Role::kRootWebArea && GetText().empty())
+    return false;
+
+  // Mark as uninteresting if it's hidden, even if it is focusable.
+  if (HasState(ax::mojom::State::kInvisible))
     return false;
 
   // Focusable nodes are always interesting. Note that IsFocusable()
@@ -510,7 +563,7 @@ base::string16 BrowserAccessibilityAndroid::GetRoleDescription() const {
       // No role description.
       break;
     case ax::mojom::Role::kCell:
-      message_id = IDS_AX_ROLE_CELL;
+      // No role description.
       break;
     case ax::mojom::Role::kCheckBox:
       message_id = IDS_AX_ROLE_CHECK_BOX;
@@ -535,6 +588,12 @@ base::string16 BrowserAccessibilityAndroid::GetRoleDescription() const {
       break;
     case ax::mojom::Role::kComplementary:
       message_id = IDS_AX_ROLE_COMPLEMENTARY;
+      break;
+    case ax::mojom::Role::kContentDeletion:
+      message_id = IDS_AX_ROLE_CONTENT_DELETION;
+      break;
+    case ax::mojom::Role::kContentInsertion:
+      message_id = IDS_AX_ROLE_CONTENT_INSERTION;
       break;
     case ax::mojom::Role::kContentInfo:
       message_id = IDS_AX_ROLE_CONTENT_INFO;
@@ -754,6 +813,9 @@ base::string16 BrowserAccessibilityAndroid::GetRoleDescription() const {
     case ax::mojom::Role::kInputTime:
       message_id = IDS_AX_ROLE_INPUT_TIME;
       break;
+    case ax::mojom::Role::kKeyboard:
+      // No role description.
+      break;
     case ax::mojom::Role::kLabelText:
       // No role description.
       break;
@@ -785,9 +847,6 @@ base::string16 BrowserAccessibilityAndroid::GetRoleDescription() const {
       // No role description.
       break;
     case ax::mojom::Role::kList:
-      // No role description.
-      break;
-    case ax::mojom::Role::kLocationBar:
       // No role description.
       break;
     case ax::mojom::Role::kLog:
@@ -1319,9 +1378,8 @@ int BrowserAccessibilityAndroid::AndroidRangeType() const {
 }
 
 int BrowserAccessibilityAndroid::RowCount() const {
-  if (ui::IsTableLikeRole(GetRole())) {
-    return CountChildrenWithRole(ax::mojom::Role::kRow);
-  }
+  if (ui::IsTableLike(GetRole()))
+    return node()->GetTableRowCount();
 
   if (GetRole() == ax::mojom::Role::kList ||
       GetRole() == ax::mojom::Role::kListBox ||
@@ -1334,9 +1392,9 @@ int BrowserAccessibilityAndroid::RowCount() const {
 }
 
 int BrowserAccessibilityAndroid::ColumnCount() const {
-  if (ui::IsTableLikeRole(GetRole())) {
-    return CountChildrenWithRole(ax::mojom::Role::kColumn);
-  }
+  if (ui::IsTableLike(GetRole()))
+    return node()->GetTableColCount();
+
   return 0;
 }
 
@@ -1347,19 +1405,19 @@ int BrowserAccessibilityAndroid::RowIndex() const {
     return GetIndexInParent();
   }
 
-  return GetIntAttribute(ax::mojom::IntAttribute::kTableCellRowIndex);
+  return node()->GetTableCellRowIndex();
 }
 
 int BrowserAccessibilityAndroid::RowSpan() const {
-  return GetIntAttribute(ax::mojom::IntAttribute::kTableCellRowSpan);
+  return node()->GetTableCellRowSpan();
 }
 
 int BrowserAccessibilityAndroid::ColumnIndex() const {
-  return GetIntAttribute(ax::mojom::IntAttribute::kTableCellColumnIndex);
+  return node()->GetTableCellColIndex();
 }
 
 int BrowserAccessibilityAndroid::ColumnSpan() const {
-  return GetIntAttribute(ax::mojom::IntAttribute::kTableCellColumnSpan);
+  return node()->GetTableCellColSpan();
 }
 
 float BrowserAccessibilityAndroid::RangeMin() const {

@@ -11,6 +11,7 @@
 #include "ash/public/interfaces/window_pin_type.mojom.h"
 #include "chrome/browser/ui/app_list/arc/arc_app_utils.h"
 #include "chrome/browser/ui/ash/launcher/arc_app_window_launcher_controller.h"
+#include "components/arc/metrics/arc_metrics_constants.h"
 #include "ui/aura/env.h"
 #include "ui/events/event_constants.h"
 
@@ -24,7 +25,8 @@ ArcKioskAppLauncher::ArcKioskAppLauncher(content::BrowserContext* context,
   prefs_->AddObserver(this);
   aura::Env::GetInstance()->AddObserver(this);
   // Launching the app by app id in landscape mode and in non-touch mode.
-  arc::LaunchApp(context, app_id_, ui::EF_NONE);
+  arc::LaunchApp(context, app_id_, ui::EF_NONE,
+                 arc::UserInteractionType::NOT_USER_INITIATED);
 }
 
 ArcKioskAppLauncher::~ArcKioskAppLauncher() {

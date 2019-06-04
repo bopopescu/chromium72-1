@@ -4,16 +4,17 @@
 
 #include "third_party/blink/renderer/bindings/core/v8/v8_element.h"
 
-#include "third_party/blink/renderer/bindings/core/v8/exception_state.h"
 #include "third_party/blink/renderer/bindings/core/v8/idl_types.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_trusted_html.h"
+#include "third_party/blink/renderer/core/html/custom/ce_reactions_scope.h"
 #include "third_party/blink/renderer/core/html/custom/v0_custom_element_processing_stack.h"
+#include "third_party/blink/renderer/platform/bindings/exception_state.h"
 
 namespace blink {
 
 // HTMLElement -----------------------------------------------------------------
 
-void V8Element::innerHTMLAttributeSetterCustom(
+void V8Element::InnerHTMLAttributeSetterCustom(
     v8::Local<v8::Value> value,
     const v8::FunctionCallbackInfo<v8::Value>& info) {
   v8::Isolate* isolate = info.GetIsolate();
@@ -26,6 +27,7 @@ void V8Element::innerHTMLAttributeSetterCustom(
 
   ExceptionState exception_state(isolate, ExceptionState::kSetterContext,
                                  "Element", "innerHTML");
+  CEReactionsScope ce_reactions_scope;
 
   // Prepare the value to be set.
   StringOrTrustedHTML cpp_value;
@@ -35,7 +37,7 @@ void V8Element::innerHTMLAttributeSetterCustom(
   if (value->IsNull()) {
     cpp_value.SetString(String());
   } else {
-    V8StringOrTrustedHTML::ToImpl(info.GetIsolate(), value, cpp_value,
+    V8StringOrTrustedHTML::ToImpl(isolate, value, cpp_value,
                                   UnionTypeConversionMode::kNotNullable,
                                   exception_state);
   }
@@ -45,7 +47,7 @@ void V8Element::innerHTMLAttributeSetterCustom(
   impl->setInnerHTML(cpp_value, exception_state);
 }
 
-void V8Element::outerHTMLAttributeSetterCustom(
+void V8Element::OuterHTMLAttributeSetterCustom(
     v8::Local<v8::Value> value,
     const v8::FunctionCallbackInfo<v8::Value>& info) {
   v8::Isolate* isolate = info.GetIsolate();
@@ -58,6 +60,7 @@ void V8Element::outerHTMLAttributeSetterCustom(
 
   ExceptionState exception_state(isolate, ExceptionState::kSetterContext,
                                  "Element", "outerHTML");
+  CEReactionsScope ce_reactions_scope;
 
   // Prepare the value to be set.
   StringOrTrustedHTML cpp_value;
@@ -67,7 +70,7 @@ void V8Element::outerHTMLAttributeSetterCustom(
   if (value->IsNull()) {
     cpp_value.SetString(String());
   } else {
-    V8StringOrTrustedHTML::ToImpl(info.GetIsolate(), value, cpp_value,
+    V8StringOrTrustedHTML::ToImpl(isolate, value, cpp_value,
                                   UnionTypeConversionMode::kNotNullable,
                                   exception_state);
   }

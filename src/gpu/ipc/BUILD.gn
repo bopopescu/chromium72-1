@@ -6,6 +6,8 @@ import("//build/config/ui.gni")
 
 component("gl_in_process_context") {
   sources = [
+    "command_buffer_task_executor.cc",
+    "command_buffer_task_executor.h",
     "gl_in_process_context.cc",
     "gl_in_process_context.h",
     "gl_in_process_context_export.h",
@@ -35,6 +37,7 @@ component("gl_in_process_context") {
     "//gpu/command_buffer/service:gles2",
     "//gpu/config",
     "//gpu/ipc/client",
+    "//gpu/ipc/common",
     "//gpu/ipc/common:surface_handle_type",
     "//gpu/ipc/host",
     "//gpu/ipc/service",
@@ -43,5 +46,30 @@ component("gl_in_process_context") {
     "//ui/gfx/geometry",
     "//ui/gl",
     "//ui/gl/init",
+  ]
+}
+
+component("gpu_thread_holder") {
+  testonly = true
+
+  sources = [
+    "in_process_gpu_thread_holder.cc",
+    "in_process_gpu_thread_holder.h",
+    "test_gpu_thread_holder.cc",
+    "test_gpu_thread_holder.h",
+  ]
+
+  defines = [ "IS_GPU_THREAD_HOLDER_IMPL" ]
+
+  public_deps = [
+    "//gpu/config",
+  ]
+
+  deps = [
+    ":gl_in_process_context",
+    "//base",
+    "//gpu/command_buffer/service",
+    "//gpu/command_buffer/service:gles2",
+    "//gpu/ipc/service",
   ]
 }

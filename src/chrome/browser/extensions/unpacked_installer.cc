@@ -4,16 +4,16 @@
 
 #include "chrome/browser/extensions/unpacked_installer.h"
 
+#include <utility>
+
 #include "base/bind.h"
 #include "base/callback.h"
 #include "base/files/file_util.h"
-#include "base/json/json_file_value_serializer.h"
 #include "base/path_service.h"
 #include "base/strings/string16.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
-#include "base/task_scheduler/post_task.h"
-#include "base/threading/thread_restrictions.h"
+#include "base/task/post_task.h"
 #include "chrome/browser/extensions/extension_management.h"
 #include "chrome/browser/extensions/extension_service.h"
 #include "chrome/browser/extensions/load_error_reporter.h"
@@ -21,6 +21,7 @@
 #include "chrome/browser/profiles/profile.h"
 #include "components/crx_file/id_util.h"
 #include "components/sync/model/string_ordinal.h"
+#include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
 #include "extensions/browser/api/declarative_net_request/utils.h"
 #include "extensions/browser/extension_file_task_runner.h"
@@ -239,8 +240,6 @@ int UnpackedInstaller::GetFlags() {
 bool UnpackedInstaller::LoadExtension(Manifest::Location location,
                                       int flags,
                                       std::string* error) {
-  base::AssertBlockingAllowed();
-
   // Clean up the kMetadataFolder if necessary. This prevents spurious
   // warnings/errors and ensures we don't treat a user provided file as one by
   // the Extension system.
@@ -265,7 +264,6 @@ bool UnpackedInstaller::LoadExtension(Manifest::Location location,
 
 bool UnpackedInstaller::IndexAndPersistRulesIfNeeded(std::string* error) {
   DCHECK(extension());
-  base::AssertBlockingAllowed();
 
   const ExtensionResource* resource =
       declarative_net_request::DNRManifestData::GetRulesetResource(extension());
@@ -275,26 +273,17 @@ bool UnpackedInstaller::IndexAndPersistRulesIfNeeded(std::string* error) {
 
   // TODO(crbug.com/761107): Change this so that we don't need to parse JSON
   // in the browser process.
-  JSONFileValueDeserializer deserializer(resource->GetFilePath());
-  std::unique_ptr<base::Value> root = deserializer.Deserialize(nullptr, error);
-  if (!root)
-    return false;
-
-  if (!root->is_list()) {
-    *error = manifest_errors::kDeclarativeNetRequestListNotPassed;
+  declarative_net_request::IndexAndPersistRulesResult result =
+      declarative_net_request::IndexAndPersistRulesUnsafe(*extension());
+  if (!result.success) {
+    *error = std::move(result.error);
     return false;
   }
 
-  std::vector<InstallWarning> warnings;
-  int ruleset_checksum;
-  if (!declarative_net_request::IndexAndPersistRules(
-          *base::ListValue::From(std::move(root)), *extension(), error,
-          &warnings, &ruleset_checksum)) {
-    return false;
-  }
+  dnr_ruleset_checksum_ = result.ruleset_checksum;
+  if (!result.warnings.empty())
+    extension_->AddInstallWarnings(std::move(result.warnings));
 
-  dnr_ruleset_checksum_ = ruleset_checksum;
-  extension_->AddInstallWarnings(warnings);
   return true;
 }
 
@@ -308,12 +297,10 @@ bool UnpackedInstaller::IsLoadingUnpackedAllowed() const {
 }
 
 void UnpackedInstaller::GetAbsolutePath() {
-  base::AssertBlockingAllowed();
-
   extension_path_ = base::MakeAbsoluteFilePath(extension_path_);
 
-  BrowserThread::PostTask(
-      BrowserThread::UI, FROM_HERE,
+  base::PostTaskWithTraits(
+      FROM_HERE, {BrowserThread::UI},
       base::BindOnce(&UnpackedInstaller::CheckExtensionFileAccess, this));
 }
 
@@ -333,19 +320,17 @@ void UnpackedInstaller::CheckExtensionFileAccess() {
 }
 
 void UnpackedInstaller::LoadWithFileAccess(int flags) {
-  base::AssertBlockingAllowed();
-
   std::string error;
   if (!LoadExtension(Manifest::UNPACKED, flags, &error)) {
-    BrowserThread::PostTask(
-        BrowserThread::UI, FROM_HERE,
+    base::PostTaskWithTraits(
+        FROM_HERE, {BrowserThread::UI},
         base::BindOnce(&UnpackedInstaller::ReportExtensionLoadError, this,
                        error));
     return;
   }
 
-  BrowserThread::PostTask(
-      BrowserThread::UI, FROM_HERE,
+  base::PostTaskWithTraits(
+      FROM_HERE, {BrowserThread::UI},
       base::BindOnce(&UnpackedInstaller::StartInstallChecks, this));
 }
 

@@ -14,19 +14,14 @@
 #include "base/logging.h"
 #include "base/message_loop/message_loop_current.h"
 #include "base/single_thread_task_runner.h"
-#include "base/sys_info.h"
+#include "base/system/sys_info.h"
 #include "base/threading/thread_task_runner_handle.h"
 #include "build/build_config.h"
 #include "gin/debug_impl.h"
 #include "gin/function_template.h"
 #include "gin/per_isolate_data.h"
-#include "gin/run_microtasks_observer.h"
 #include "gin/v8_initializer.h"
 #include "gin/v8_isolate_memory_dump_provider.h"
-
-#if defined(USE_MEMORY_TRACE)
-#include "gin/neva/v8_isolate_memory_trace_provider.h"
-#endif
 
 namespace gin {
 
@@ -36,23 +31,29 @@ const intptr_t* g_reference_table = nullptr;
 }  // namespace
 
 IsolateHolder::IsolateHolder(
-    scoped_refptr<base::SingleThreadTaskRunner> task_runner)
-    : IsolateHolder(std::move(task_runner), AccessMode::kSingleThread) {}
+    scoped_refptr<base::SingleThreadTaskRunner> task_runner,
+    IsolateType isolate_type)
+    : IsolateHolder(std::move(task_runner),
+                    AccessMode::kSingleThread,
+                    isolate_type) {}
 
 IsolateHolder::IsolateHolder(
     scoped_refptr<base::SingleThreadTaskRunner> task_runner,
-    AccessMode access_mode)
+    AccessMode access_mode,
+    IsolateType isolate_type)
     : IsolateHolder(std::move(task_runner),
                     access_mode,
                     kAllowAtomicsWait,
+                    isolate_type,
                     IsolateCreationMode::kNormal) {}
 
 IsolateHolder::IsolateHolder(
     scoped_refptr<base::SingleThreadTaskRunner> task_runner,
     AccessMode access_mode,
     AllowAtomicsWaitMode atomics_wait_mode,
+    IsolateType isolate_type,
     IsolateCreationMode isolate_creation_mode)
-    : access_mode_(access_mode) {
+    : access_mode_(access_mode), isolate_type_(isolate_type) {
   DCHECK(task_runner);
   DCHECK(task_runner->BelongsToCurrentThread());
 
@@ -70,7 +71,6 @@ IsolateHolder::IsolateHolder(
     DCHECK_EQ(isolate_, snapshot_creator_->GetIsolate());
   } else {
     v8::Isolate::CreateParams params;
-    params.entry_hook = DebugImpl::GetFunctionEntryHook();
     params.code_event_handler = DebugImpl::GetJitCodeEventHandler();
     params.constraints.ConfigureDefaults(
         base::SysInfo::AmountOfPhysicalMemory(),
@@ -86,9 +86,6 @@ IsolateHolder::IsolateHolder(
 
   isolate_memory_dump_provider_.reset(
       new V8IsolateMemoryDumpProvider(this, task_runner));
-#if defined(USE_MEMORY_TRACE)
-  isolate_memory_trace_provider_.reset(new neva::V8IsolateMemoryTraceProvider(this));
-#endif
 #if defined(OS_WIN)
   {
     void* code_range;
@@ -103,8 +100,6 @@ IsolateHolder::IsolateHolder(
 }
 
 IsolateHolder::~IsolateHolder() {
-  if (task_observer_.get())
-    base::MessageLoopCurrent::Get()->RemoveTaskObserver(task_observer_.get());
 #if defined(OS_WIN)
   {
     void* code_range;
@@ -131,18 +126,6 @@ void IsolateHolder::Initialize(ScriptMode mode,
   V8Initializer::Initialize(mode, v8_extras_mode);
   g_array_buffer_allocator = allocator;
   g_reference_table = reference_table;
-}
-
-void IsolateHolder::AddRunMicrotasksObserver() {
-  DCHECK(!task_observer_.get());
-  task_observer_.reset(new RunMicrotasksObserver(isolate_));
-  base::MessageLoopCurrent::Get()->AddTaskObserver(task_observer_.get());
-}
-
-void IsolateHolder::RemoveRunMicrotasksObserver() {
-  DCHECK(task_observer_.get());
-  base::MessageLoopCurrent::Get()->RemoveTaskObserver(task_observer_.get());
-  task_observer_.reset();
 }
 
 void IsolateHolder::EnableIdleTasks(

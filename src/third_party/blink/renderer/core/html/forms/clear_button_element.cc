@@ -33,7 +33,7 @@
 
 namespace blink {
 
-using namespace HTMLNames;
+using namespace html_names;
 
 inline ClearButtonElement::ClearButtonElement(
     Document& document,
@@ -46,7 +46,7 @@ ClearButtonElement* ClearButtonElement::Create(
   ClearButtonElement* element =
       new ClearButtonElement(document, clear_button_owner);
   element->SetShadowPseudoId(AtomicString("-webkit-clear-button"));
-  element->setAttribute(idAttr, ShadowElementNames::ClearButton());
+  element->setAttribute(kIdAttr, shadow_element_names::ClearButton());
   return element;
 }
 
@@ -54,28 +54,28 @@ void ClearButtonElement::DetachLayoutTree(const AttachContext& context) {
   HTMLDivElement::DetachLayoutTree(context);
 }
 
-void ClearButtonElement::DefaultEventHandler(Event* event) {
+void ClearButtonElement::DefaultEventHandler(Event& event) {
   if (!clear_button_owner_) {
-    if (!event->DefaultHandled())
+    if (!event.DefaultHandled())
       HTMLDivElement::DefaultEventHandler(event);
     return;
   }
 
   if (!clear_button_owner_->ShouldClearButtonRespondToMouseEvents()) {
-    if (!event->DefaultHandled())
+    if (!event.DefaultHandled())
       HTMLDivElement::DefaultEventHandler(event);
     return;
   }
 
-  if (event->type() == EventTypeNames::click) {
+  if (event.type() == event_type_names::kClick) {
     if (GetLayoutObject() && GetLayoutObject()->VisibleToHitTesting()) {
       clear_button_owner_->FocusAndSelectClearButtonOwner();
       clear_button_owner_->ClearValue();
-      event->SetDefaultHandled();
+      event.SetDefaultHandled();
     }
   }
 
-  if (!event->DefaultHandled())
+  if (!event.DefaultHandled())
     HTMLDivElement::DefaultEventHandler(event);
 }
 

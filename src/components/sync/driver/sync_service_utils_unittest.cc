@@ -4,99 +4,33 @@
 
 #include "components/sync/driver/sync_service_utils.h"
 
-#include <vector>
 #include "components/sync/base/model_type.h"
-#include "components/sync/driver/fake_sync_service.h"
 #include "components/sync/driver/sync_service.h"
+#include "components/sync/driver/test_sync_service.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace syncer {
 
-class TestSyncService : public FakeSyncService {
- public:
-  TestSyncService() = default;
-  ~TestSyncService() override = default;
-
-  void SetSyncAllowed(bool allowed) { sync_allowed_ = allowed; }
-  void SetSyncActive(bool active) { sync_active_ = active; }
-  void SetLocalSyncEnabled(bool local) { local_sync_enabled_ = local; }
-  void SetPreferredDataTypes(const ModelTypeSet& types) {
-    preferred_data_types_ = types;
-  }
-  void SetConfigurationDone(bool done) { configuration_done_ = done; }
-  void SetCustomPassphraseEnabled(bool enabled) {
-    custom_passphrase_enabled_ = enabled;
-  }
-  void SetSyncCycleComplete(bool complete) { sync_cycle_complete_ = complete; }
-
-  // SyncService implementation.
-  bool IsSyncAllowed() const override { return sync_allowed_; }
-  bool CanSyncStart() const override { return sync_allowed_; }
-  bool IsSyncActive() const override { return sync_active_; }
-  bool IsLocalSyncEnabled() const override { return local_sync_enabled_; }
-  ModelTypeSet GetPreferredDataTypes() const override {
-    return preferred_data_types_;
-  }
-  ModelTypeSet GetActiveDataTypes() const override {
-    if (!sync_active_)
-      return ModelTypeSet();
-    return preferred_data_types_;
-  }
-  ModelTypeSet GetEncryptedDataTypes() const override {
-    if (!custom_passphrase_enabled_) {
-      // PASSWORDS are always encrypted.
-      return ModelTypeSet(syncer::PASSWORDS);
-    }
-    // Some types can never be encrypted, e.g. DEVICE_INFO and
-    // AUTOFILL_WALLET_DATA, so make sure we don't report them as encrypted.
-    return syncer::Intersection(preferred_data_types_,
-                                syncer::EncryptableUserTypes());
-  }
-  SyncCycleSnapshot GetLastCycleSnapshot() const override {
-    if (sync_cycle_complete_) {
-      return SyncCycleSnapshot(
-          ModelNeutralState(), ProgressMarkerMap(), false, 5, 2, 7, false, 0,
-          base::Time::Now(), base::Time::Now(),
-          std::vector<int>(MODEL_TYPE_COUNT, 0),
-          std::vector<int>(MODEL_TYPE_COUNT, 0),
-          sync_pb::SyncEnums::UNKNOWN_ORIGIN,
-          /*short_poll_interval=*/base::TimeDelta::FromMinutes(30),
-          /*long_poll_interval=*/base::TimeDelta::FromMinutes(180),
-          /*has_remaining_local_changes=*/false);
-    }
-    return SyncCycleSnapshot();
-  }
-  bool ConfigurationDone() const override { return configuration_done_; }
-  bool IsUsingSecondaryPassphrase() const override {
-    return custom_passphrase_enabled_;
-  }
-
- private:
-  bool sync_allowed_ = false;
-  bool sync_active_ = false;
-  bool sync_cycle_complete_ = false;
-  bool local_sync_enabled_ = false;
-  ModelTypeSet preferred_data_types_;
-  bool configuration_done_ = false;
-  bool custom_passphrase_enabled_ = false;
-};
-
 TEST(SyncServiceUtilsTest, UploadToGoogleDisabledIfSyncNotAllowed) {
   TestSyncService service;
 
-  // If sync is not allowed, uploading should never be enabled, even if
-  // configuration is done and all the data types are enabled.
-  service.SetSyncAllowed(false);
+  // If sync is not allowed, uploading should never be enabled, even if all the
+  // data types are enabled.
+  service.SetDisableReasons(
+      syncer::SyncService::DISABLE_REASON_ENTERPRISE_POLICY);
+  service.SetTransportState(syncer::SyncService::TransportState::DISABLED);
 
-  service.SetConfigurationDone(true);
   service.SetPreferredDataTypes(ProtocolTypes());
+  service.SetActiveDataTypes(ProtocolTypes());
 
   EXPECT_EQ(UploadState::NOT_ACTIVE,
             GetUploadToGoogleState(&service, syncer::BOOKMARKS));
 
   // Once sync gets allowed (e.g. policy is updated), uploading should not be
   // disabled anymore (though not necessarily active yet).
-  service.SetSyncAllowed(true);
+  service.SetDisableReasons(syncer::SyncService::DISABLE_REASON_NONE);
+  service.SetTransportState(
+      syncer::SyncService::TransportState::WAITING_FOR_START_REQUEST);
 
   EXPECT_NE(UploadState::NOT_ACTIVE,
             GetUploadToGoogleState(&service, syncer::BOOKMARKS));
@@ -105,37 +39,37 @@ TEST(SyncServiceUtilsTest, UploadToGoogleDisabledIfSyncNotAllowed) {
 TEST(SyncServiceUtilsTest,
      UploadToGoogleInitializingUntilConfiguredAndActiveAndSyncCycleComplete) {
   TestSyncService service;
-  service.SetSyncAllowed(true);
+  service.SetDisableReasons(syncer::SyncService::DISABLE_REASON_NONE);
+  service.SetTransportState(
+      syncer::SyncService::TransportState::WAITING_FOR_START_REQUEST);
   service.SetPreferredDataTypes(ProtocolTypes());
+  service.SetActiveDataTypes(ProtocolTypes());
+  service.SetEmptyLastCycleSnapshot();
 
   // By default, if sync isn't disabled, we should be INITIALIZING.
   EXPECT_EQ(UploadState::INITIALIZING,
             GetUploadToGoogleState(&service, syncer::BOOKMARKS));
 
   // Finished configuration is not enough, still INITIALIZING.
-  service.SetConfigurationDone(true);
+  service.SetTransportState(syncer::SyncService::TransportState::ACTIVE);
   EXPECT_EQ(UploadState::INITIALIZING,
             GetUploadToGoogleState(&service, syncer::BOOKMARKS));
 
-  service.SetSyncActive(true);
-  EXPECT_EQ(UploadState::INITIALIZING,
-            GetUploadToGoogleState(&service, syncer::BOOKMARKS));
-
-  // Only after sync is both configured and active is upload actually ACTIVE.
-  service.SetSyncCycleComplete(true);
+  // Only after a sync cycle has been completed is upload actually ACTIVE.
+  service.SetNonEmptyLastCycleSnapshot();
   EXPECT_EQ(UploadState::ACTIVE,
             GetUploadToGoogleState(&service, syncer::BOOKMARKS));
 }
 
 TEST(SyncServiceUtilsTest, UploadToGoogleDisabledForModelType) {
   TestSyncService service;
-  service.SetSyncAllowed(true);
-  service.SetConfigurationDone(true);
-  service.SetSyncActive(true);
-  service.SetSyncCycleComplete(true);
+  service.SetDisableReasons(syncer::SyncService::DISABLE_REASON_NONE);
+  service.SetTransportState(syncer::SyncService::TransportState::ACTIVE);
+  service.SetNonEmptyLastCycleSnapshot();
 
   // Sync is enabled only for a specific model type.
   service.SetPreferredDataTypes(ModelTypeSet(syncer::BOOKMARKS));
+  service.SetActiveDataTypes(ModelTypeSet(syncer::BOOKMARKS));
 
   // Sanity check: Upload is ACTIVE for this model type.
   ASSERT_EQ(UploadState::ACTIVE,
@@ -149,13 +83,35 @@ TEST(SyncServiceUtilsTest, UploadToGoogleDisabledForModelType) {
             GetUploadToGoogleState(&service, syncer::PREFERENCES));
 }
 
+TEST(SyncServiceUtilsTest,
+     UploadToGoogleDisabledForModelTypeThatFailedToStart) {
+  TestSyncService service;
+  service.SetDisableReasons(syncer::SyncService::DISABLE_REASON_NONE);
+  service.SetTransportState(syncer::SyncService::TransportState::ACTIVE);
+  service.SetNonEmptyLastCycleSnapshot();
+
+  // Sync is enabled for some model types.
+  service.SetPreferredDataTypes(
+      ModelTypeSet(syncer::BOOKMARKS, syncer::PREFERENCES));
+  // But one of them fails to actually start up!
+  service.SetActiveDataTypes(ModelTypeSet(syncer::BOOKMARKS));
+
+  // Sanity check: Upload is ACTIVE for the model type that did start up.
+  ASSERT_EQ(UploadState::ACTIVE,
+            GetUploadToGoogleState(&service, syncer::BOOKMARKS));
+
+  // ...but not for the type that failed.
+  EXPECT_EQ(UploadState::NOT_ACTIVE,
+            GetUploadToGoogleState(&service, syncer::PREFERENCES));
+}
+
 TEST(SyncServiceUtilsTest, UploadToGoogleDisabledIfLocalSyncEnabled) {
   TestSyncService service;
-  service.SetSyncAllowed(true);
+  service.SetDisableReasons(syncer::SyncService::DISABLE_REASON_NONE);
   service.SetPreferredDataTypes(ProtocolTypes());
-  service.SetSyncActive(true);
-  service.SetConfigurationDone(true);
-  service.SetSyncCycleComplete(true);
+  service.SetActiveDataTypes(ProtocolTypes());
+  service.SetTransportState(syncer::SyncService::TransportState::ACTIVE);
+  service.SetNonEmptyLastCycleSnapshot();
 
   // Sanity check: Upload is active now.
   ASSERT_EQ(UploadState::ACTIVE,
@@ -171,23 +127,23 @@ TEST(SyncServiceUtilsTest, UploadToGoogleDisabledIfLocalSyncEnabled) {
 
 TEST(SyncServiceUtilsTest, UploadToGoogleDisabledOnPersistentAuthError) {
   TestSyncService service;
-  service.SetSyncAllowed(true);
+  service.SetDisableReasons(syncer::SyncService::DISABLE_REASON_NONE);
   service.SetPreferredDataTypes(ProtocolTypes());
-  service.SetSyncActive(true);
-  service.SetConfigurationDone(true);
-  service.SetSyncCycleComplete(true);
+  service.SetActiveDataTypes(ProtocolTypes());
+  service.SetTransportState(syncer::SyncService::TransportState::ACTIVE);
+  service.SetNonEmptyLastCycleSnapshot();
 
   // Sanity check: Upload is active now.
   ASSERT_EQ(UploadState::ACTIVE,
             GetUploadToGoogleState(&service, syncer::BOOKMARKS));
 
-  // On a transient error, uploading remains active.
+  // On a transient error, uploading goes back to INITIALIZING.
   GoogleServiceAuthError transient_error(
       GoogleServiceAuthError::CONNECTION_FAILED);
   ASSERT_TRUE(transient_error.IsTransientError());
-  service.set_auth_error(transient_error);
+  service.SetAuthError(transient_error);
 
-  EXPECT_EQ(UploadState::ACTIVE,
+  EXPECT_EQ(UploadState::INITIALIZING,
             GetUploadToGoogleState(&service, syncer::BOOKMARKS));
 
   // On a persistent error, uploading is not considered active anymore (even
@@ -195,14 +151,15 @@ TEST(SyncServiceUtilsTest, UploadToGoogleDisabledOnPersistentAuthError) {
   GoogleServiceAuthError persistent_error(
       GoogleServiceAuthError::INVALID_GAIA_CREDENTIALS);
   ASSERT_TRUE(persistent_error.IsPersistentError());
-  service.set_auth_error(persistent_error);
+  service.SetAuthError(persistent_error);
 
   EXPECT_EQ(UploadState::NOT_ACTIVE,
             GetUploadToGoogleState(&service, syncer::BOOKMARKS));
 
   // Once the auth error is resolved (e.g. user re-authenticated), uploading is
   // active again.
-  service.set_auth_error(GoogleServiceAuthError(GoogleServiceAuthError::NONE));
+  service.SetAuthError(GoogleServiceAuthError(GoogleServiceAuthError::NONE));
+  service.SetTransportState(syncer::SyncService::TransportState::ACTIVE);
 
   EXPECT_EQ(UploadState::ACTIVE,
             GetUploadToGoogleState(&service, syncer::BOOKMARKS));
@@ -210,11 +167,11 @@ TEST(SyncServiceUtilsTest, UploadToGoogleDisabledOnPersistentAuthError) {
 
 TEST(SyncServiceUtilsTest, UploadToGoogleDisabledIfCustomPassphraseInUse) {
   TestSyncService service;
-  service.SetSyncAllowed(true);
+  service.SetDisableReasons(syncer::SyncService::DISABLE_REASON_NONE);
   service.SetPreferredDataTypes(ProtocolTypes());
-  service.SetSyncActive(true);
-  service.SetConfigurationDone(true);
-  service.SetSyncCycleComplete(true);
+  service.SetActiveDataTypes(ProtocolTypes());
+  service.SetTransportState(syncer::SyncService::TransportState::ACTIVE);
+  service.SetNonEmptyLastCycleSnapshot();
 
   // Sanity check: Upload is ACTIVE, even for data types that are always
   // encrypted implicitly (PASSWORDS).
@@ -227,7 +184,7 @@ TEST(SyncServiceUtilsTest, UploadToGoogleDisabledIfCustomPassphraseInUse) {
 
   // Once a custom passphrase is in use, upload should be considered disabled:
   // Even if we're technically still uploading, Google can't inspect the data.
-  service.SetCustomPassphraseEnabled(true);
+  service.SetIsUsingSecondaryPassphrase(true);
 
   EXPECT_EQ(UploadState::NOT_ACTIVE,
             GetUploadToGoogleState(&service, syncer::BOOKMARKS));
@@ -236,6 +193,30 @@ TEST(SyncServiceUtilsTest, UploadToGoogleDisabledIfCustomPassphraseInUse) {
   // But unencryptable types like DEVICE_INFO are still active.
   EXPECT_EQ(UploadState::ACTIVE,
             GetUploadToGoogleState(&service, syncer::DEVICE_INFO));
+}
+
+TEST(SyncServiceUtilsTest, UploadToGoogleDisabledForSecondaryAccount) {
+  TestSyncService service;
+  service.SetDisableReasons(syncer::SyncService::DISABLE_REASON_NONE);
+  service.SetPreferredDataTypes(ProtocolTypes());
+  service.SetActiveDataTypes(ProtocolTypes());
+  service.SetTransportState(syncer::SyncService::TransportState::ACTIVE);
+  service.SetNonEmptyLastCycleSnapshot();
+
+  // Sanity check: Everything's looking good, so upload is considered active.
+  ASSERT_EQ(UploadState::ACTIVE,
+            GetUploadToGoogleState(&service, syncer::BOOKMARKS));
+
+  // Mark the syncing account as non-primary. With this, only Sync-the-transport
+  // (not Sync-the-feature) can run.
+  service.SetIsAuthenticatedAccountPrimary(false);
+  ASSERT_FALSE(service.CanSyncFeatureStart());
+
+  // Upload should NOT be active now. Even though the data type is active, we're
+  // running in standalone transport mode, so we don't have consent for
+  // uploading.
+  EXPECT_EQ(UploadState::NOT_ACTIVE,
+            GetUploadToGoogleState(&service, syncer::BOOKMARKS));
 }
 
 }  // namespace syncer

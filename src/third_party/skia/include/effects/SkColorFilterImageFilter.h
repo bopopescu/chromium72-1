@@ -8,20 +8,14 @@
 #ifndef SkColorFilterImageFilter_DEFINED
 #define SkColorFilterImageFilter_DEFINED
 
-#include "SkFlattenable.h"
 #include "SkImageFilter.h"
-
-class SkColorFilter;
+#include "SkColorFilter.h"
 
 class SK_API SkColorFilterImageFilter : public SkImageFilter {
 public:
     static sk_sp<SkImageFilter> Make(sk_sp<SkColorFilter> cf,
                                      sk_sp<SkImageFilter> input,
                                      const CropRect* cropRect = nullptr);
-
-    void toString(SkString* str) const override;
-
-    Factory getFactory() const override { return CreateProc; }
 
 protected:
     void flatten(SkWriteBuffer&) const override;
@@ -33,11 +27,11 @@ protected:
     bool affectsTransparentBlack() const override;
 
 private:
+    SK_FLATTENABLE_HOOKS(SkColorFilterImageFilter)
+
     SkColorFilterImageFilter(sk_sp<SkColorFilter> cf,
                              sk_sp<SkImageFilter> input,
                              const CropRect* cropRect);
-    static sk_sp<SkFlattenable> CreateProc(SkReadBuffer&);
-    friend class SkFlattenable::PrivateInitializer;
 
     sk_sp<SkColorFilter> fColorFilter;
 

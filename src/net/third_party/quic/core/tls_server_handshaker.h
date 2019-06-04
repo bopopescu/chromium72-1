@@ -15,7 +15,7 @@
 #include "third_party/boringssl/src/include/openssl/pool.h"
 #include "third_party/boringssl/src/include/openssl/ssl.h"
 
-namespace net {
+namespace quic {
 
 // An implementation of QuicCryptoServerStream::HandshakerDelegate which uses
 // TLS 1.3 for the crypto handshake protocol.
@@ -27,6 +27,8 @@ class QUIC_EXPORT_PRIVATE TlsServerHandshaker
                       QuicSession* session,
                       SSL_CTX* ssl_ctx,
                       ProofSource* proof_source);
+  TlsServerHandshaker(const TlsServerHandshaker&) = delete;
+  TlsServerHandshaker& operator=(const TlsServerHandshaker&) = delete;
 
   ~TlsServerHandshaker() override;
 
@@ -93,7 +95,10 @@ class QUIC_EXPORT_PRIVATE TlsServerHandshaker
   // Called when the TLS handshake is complete.
   void FinishHandshake();
 
-  void CloseConnection();
+  void CloseConnection(const QuicString& reason_phrase);
+
+  bool SetTransportParameters();
+  bool ProcessTransportParameters(QuicString* error_details);
 
   // Calls the instance method PrivateKeySign after looking up the
   // TlsServerHandshaker from |ssl|.
@@ -137,7 +142,10 @@ class QUIC_EXPORT_PRIVATE TlsServerHandshaker
   // Configures the certificate to use on |ssl_| based on the SNI sent by the
   // client. Returns an SSL_TLSEXT_ERR_* value (see
   // https://commondatastorage.googleapis.com/chromium-boringssl-docs/ssl.h.html#SSL_CTX_set_tlsext_servername_callback).
-  int SelectCertificate();
+  //
+  // If SelectCertificate returns SSL_TLSEXT_ERR_ALERT_FATAL, then it puts in
+  // |*out_alert| the TLS alert value that the server will send.
+  int SelectCertificate(int* out_alert);
 
   static TlsServerHandshaker* HandshakerFromSsl(SSL* ssl);
 
@@ -153,10 +161,8 @@ class QUIC_EXPORT_PRIVATE TlsServerHandshaker
   bool handshake_confirmed_ = false;
   QuicReferenceCountedPointer<QuicCryptoNegotiatedParameters>
       crypto_negotiated_params_;
-
-  DISALLOW_COPY_AND_ASSIGN(TlsServerHandshaker);
 };
 
-}  // namespace net
+}  // namespace quic
 
 #endif  // NET_THIRD_PARTY_QUIC_CORE_TLS_SERVER_HANDSHAKER_H_

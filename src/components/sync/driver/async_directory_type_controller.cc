@@ -11,6 +11,7 @@
 #include "components/sync/base/bind_to_task_runner.h"
 #include "components/sync/base/data_type_histogram.h"
 #include "components/sync/base/model_type.h"
+#include "components/sync/driver/configure_context.h"
 #include "components/sync/driver/generic_change_processor_factory.h"
 #include "components/sync/driver/sync_api_component_factory.h"
 #include "components/sync/driver/sync_client.h"
@@ -43,13 +44,18 @@ AsyncDirectoryTypeController::AsyncDirectoryTypeController(
       model_thread_(std::move(model_thread)) {}
 
 void AsyncDirectoryTypeController::LoadModels(
+    const ConfigureContext& configure_context,
     const ModelLoadCallback& model_load_callback) {
   DCHECK(CalledOnValidThread());
+  DCHECK_EQ(configure_context.storage_option, STORAGE_ON_DISK)
+      << " for type " << ModelTypeToString(type());
+
   model_load_callback_ = model_load_callback;
+
   if (state() != NOT_RUNNING) {
-    model_load_callback.Run(type(),
-                            SyncError(FROM_HERE, SyncError::DATATYPE_ERROR,
-                                      "Model already running", type()));
+    model_load_callback_.Run(type(),
+                             SyncError(FROM_HERE, SyncError::DATATYPE_ERROR,
+                                       "Model already running", type()));
     return;
   }
 
@@ -96,7 +102,7 @@ bool AsyncDirectoryTypeController::PostTaskOnModelThread(
 }
 
 void AsyncDirectoryTypeController::StartAssociating(
-    const StartCallback& start_callback) {
+    StartCallback start_callback) {
   DCHECK(CalledOnValidThread());
   DCHECK(!start_callback.is_null());
   DCHECK_EQ(state_, MODEL_LOADED);
@@ -107,7 +113,7 @@ void AsyncDirectoryTypeController::StartAssociating(
   DCHECK(sync_client_->GetSyncService());
   user_share_ = sync_client_->GetSyncService()->GetUserShare();
 
-  start_callback_ = start_callback;
+  start_callback_ = std::move(start_callback);
   if (!StartAssociationAsync()) {
     SyncError error(FROM_HERE, SyncError::DATATYPE_ERROR,
                     "Failed to post StartAssociation", type());
@@ -120,7 +126,7 @@ void AsyncDirectoryTypeController::StartAssociating(
   }
 }
 
-void AsyncDirectoryTypeController::Stop() {
+void AsyncDirectoryTypeController::Stop(ShutdownReason shutdown_reason) {
   DCHECK(CalledOnValidThread());
 
   if (state() == NOT_RUNNING)
@@ -171,7 +177,7 @@ void AsyncDirectoryTypeController::StartDone(
   if (IsSuccessfulResult(start_result)) {
     new_state = RUNNING;
   } else {
-    new_state = (start_result == ASSOCIATION_FAILED ? DISABLED : NOT_RUNNING);
+    new_state = (start_result == ASSOCIATION_FAILED ? FAILED : NOT_RUNNING);
   }
 
   // If we failed to start up, and we haven't been stopped yet, we need to
@@ -196,13 +202,14 @@ void AsyncDirectoryTypeController::StartDone(
     RecordStartFailure(start_result);
   }
 
-  start_callback_.Run(start_result, local_merge_result, syncer_merge_result);
+  std::move(start_callback_)
+      .Run(start_result, local_merge_result, syncer_merge_result);
 }
 
 void AsyncDirectoryTypeController::RecordStartFailure(ConfigureResult result) {
   DCHECK(CalledOnValidThread());
   // TODO(wychen): enum uma should be strongly typed. crbug.com/661401
-  UMA_HISTOGRAM_ENUMERATION("Sync.DataTypeStartFailures",
+  UMA_HISTOGRAM_ENUMERATION("Sync.DataTypeStartFailures2",
                             ModelTypeToHistogramInt(type()),
                             static_cast<int>(MODEL_TYPE_COUNT));
 #define PER_DATA_TYPE_MACRO(type_str)                                    \
@@ -214,7 +221,7 @@ void AsyncDirectoryTypeController::RecordStartFailure(ConfigureResult result) {
 
 void AsyncDirectoryTypeController::DisableImpl(const SyncError& error) {
   DCHECK(CalledOnValidThread());
-  if (!model_load_callback_.is_null()) {
+  if (model_load_callback_) {
     model_load_callback_.Run(type(), error);
   }
 }
@@ -241,7 +248,7 @@ ChangeProcessor* AsyncDirectoryTypeController::GetChangeProcessor() const {
 void AsyncDirectoryTypeController::DisconnectSharedChangeProcessor() {
   DCHECK(CalledOnValidThread());
   // |shared_change_processor_| can already be null if Stop() is
-  // called after StartDone(_, DISABLED, _).
+  // called after StartDone(_, FAILED, _).
   if (shared_change_processor_) {
     shared_change_processor_->Disconnect();
   }

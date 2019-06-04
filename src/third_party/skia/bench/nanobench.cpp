@@ -27,6 +27,7 @@
 #include "SkBitmapRegionDecoder.h"
 #include "SkCanvas.h"
 #include "SkCodec.h"
+#include "SkColorSpacePriv.h"
 #include "SkCommonFlags.h"
 #include "SkCommonFlagsConfig.h"
 #include "SkCommonFlagsGpu.h"
@@ -60,23 +61,19 @@ extern bool gSkForceRasterPipelineBlitter;
 
 #endif
 
-#if SK_SUPPORT_GPU
-    #include "GrCaps.h"
-    #include "GrContextFactory.h"
-    #include "GrContextPriv.h"
-    #include "SkGr.h"
-    #include "gl/GrGLDefines.h"
-    #include "gl/GrGLGpu.h"
-    #include "gl/GrGLUtil.h"
+#include "GrCaps.h"
+#include "GrContextFactory.h"
+#include "GrContextPriv.h"
+#include "SkGr.h"
+#include "gl/GrGLDefines.h"
+#include "gl/GrGLGpu.h"
+#include "gl/GrGLUtil.h"
 
-    using sk_gpu_test::ContextInfo;
-    using sk_gpu_test::GrContextFactory;
-    using sk_gpu_test::TestContext;
+using sk_gpu_test::ContextInfo;
+using sk_gpu_test::GrContextFactory;
+using sk_gpu_test::TestContext;
 
-    GrContextOptions grContextOpts;
-#endif
-
-    struct GrContextOptions;
+GrContextOptions grContextOpts;
 
 static const int kAutoTuneLoops = 0;
 
@@ -171,7 +168,6 @@ bool Target::capturePixels(SkBitmap* bmp) {
     return true;
 }
 
-#if SK_SUPPORT_GPU
 struct GPUTarget : public Target {
     explicit GPUTarget(const Config& c) : Target(c) {}
     ContextInfo contextInfo;
@@ -219,7 +215,7 @@ struct GPUTarget : public Target {
     }
     void fillOptions(ResultsWriter* log) override {
         const GrGLubyte* version;
-        if (this->contextInfo.backend() == kOpenGL_GrBackend) {
+        if (this->contextInfo.backend() == GrBackendApi::kOpenGL) {
             const GrGLInterface* gl =
                     static_cast<GrGLGpu*>(this->contextInfo.grContext()->contextPriv().getGpu())
                             ->glInterface();
@@ -242,8 +238,6 @@ struct GPUTarget : public Target {
         this->contextInfo.grContext()->contextPriv().printGpuStats();
     }
 };
-
-#endif
 
 static double time(int loops, Benchmark* bench, Target* target) {
     SkCanvas* canvas = target->getCanvas();
@@ -409,17 +403,10 @@ static int setup_gpu_bench(Target* target, Benchmark* bench, int maxGpuFrameLag)
     return loops;
 }
 
-#if SK_SUPPORT_GPU
 #define kBogusContextType GrContextFactory::kGL_ContextType
 #define kBogusContextOverrides GrContextFactory::ContextOverrides::kNone
-#else
-#define kBogusContextType 0
-#define kBogusContextOverrides 0
-#endif
 
 static void create_config(const SkCommandLineConfig* config, SkTArray<Config>* configs) {
-
-#if SK_SUPPORT_GPU
     if (const auto* gpuConfig = config->asConfigGpu()) {
         if (!FLAGS_gpu) {
             SkDebugf("Skipping config '%s' as requested.\n", config->getTag().c_str());
@@ -438,8 +425,7 @@ static void create_config(const SkCommandLineConfig* config, SkTArray<Config>* c
 
         GrContextFactory factory(grContextOpts);
         if (const GrContext* ctx = factory.get(ctxType, ctxOverrides)) {
-            GrPixelConfig grPixConfig =
-                    SkImageInfo2GrPixelConfig(colorType, colorSpace, *ctx->contextPriv().caps());
+            GrPixelConfig grPixConfig = SkColorType2GrPixelConfig(colorType);
             int supportedSampleCount =
                     ctx->contextPriv().caps()->getRenderTargetSampleCount(sampleCount, grPixConfig);
             if (sampleCount != supportedSampleCount) {
@@ -468,7 +454,6 @@ static void create_config(const SkCommandLineConfig* config, SkTArray<Config>* c
         configs->push_back(target);
         return;
     }
-#endif
 
     #define CPU_CONFIG(name, backend, color, alpha, colorSpace)                \
         if (config->getTag().equals(#name)) {                                  \
@@ -488,18 +473,23 @@ static void create_config(const SkCommandLineConfig* config, SkTArray<Config>* c
     CPU_CONFIG(nonrendering, kNonRendering_Backend,
                kUnknown_SkColorType, kUnpremul_SkAlphaType, nullptr)
 
-    CPU_CONFIG(a8, kRaster_Backend,
-               kAlpha_8_SkColorType, kPremul_SkAlphaType, nullptr)
-    CPU_CONFIG(8888, kRaster_Backend,
-               kN32_SkColorType, kPremul_SkAlphaType, nullptr)
-    CPU_CONFIG(565,  kRaster_Backend,
-               kRGB_565_SkColorType, kOpaque_SkAlphaType, nullptr)
-    auto srgbColorSpace = SkColorSpace::MakeSRGB();
-    CPU_CONFIG(srgb, kRaster_Backend,
-               kN32_SkColorType,  kPremul_SkAlphaType, srgbColorSpace)
-    auto srgbLinearColorSpace = SkColorSpace::MakeSRGBLinear();
-    CPU_CONFIG(f16,  kRaster_Backend,
-               kRGBA_F16_SkColorType, kPremul_SkAlphaType, srgbLinearColorSpace)
+    CPU_CONFIG(a8,   kRaster_Backend, kAlpha_8_SkColorType, kPremul_SkAlphaType, nullptr)
+    CPU_CONFIG(8888, kRaster_Backend,     kN32_SkColorType, kPremul_SkAlphaType, nullptr)
+    CPU_CONFIG(565,  kRaster_Backend, kRGB_565_SkColorType, kOpaque_SkAlphaType, nullptr)
+
+    // 'narrow' has a gamut narrower than sRGB, and different transfer function.
+    SkMatrix44 narrow_gamut;
+    narrow_gamut.set3x3RowMajorf(gNarrow_toXYZD50);
+
+    auto narrow = SkColorSpace::MakeRGB(k2Dot2Curve_SkGammaNamed, narrow_gamut),
+           srgb = SkColorSpace::MakeSRGB(),
+     srgbLinear = SkColorSpace::MakeSRGBLinear();
+
+    CPU_CONFIG(    f16, kRaster_Backend,  kRGBA_F16_SkColorType, kPremul_SkAlphaType, srgbLinear)
+    CPU_CONFIG(   srgb, kRaster_Backend, kRGBA_8888_SkColorType, kPremul_SkAlphaType, srgb      )
+    CPU_CONFIG(  esrgb, kRaster_Backend,  kRGBA_F16_SkColorType, kPremul_SkAlphaType, srgb      )
+    CPU_CONFIG( narrow, kRaster_Backend, kRGBA_8888_SkColorType, kPremul_SkAlphaType, narrow    )
+    CPU_CONFIG(enarrow, kRaster_Backend,  kRGBA_F16_SkColorType, kPremul_SkAlphaType, narrow    )
 
     #undef CPU_CONFIG
 
@@ -544,11 +534,9 @@ static Target* is_enabled(Benchmark* bench, const Config& config) {
     Target* target = nullptr;
 
     switch (config.backend) {
-#if SK_SUPPORT_GPU
     case Benchmark::kGPU_Backend:
         target = new GPUTarget(config);
         break;
-#endif
     default:
         target = new Target(config);
         break;
@@ -611,7 +599,6 @@ public:
     BenchmarkStream() : fBenches(BenchRegistry::Head())
                       , fGMs(skiagm::GMRegistry::Head())
                       , fCurrentRecording(0)
-                      , fCurrentPiping(0)
                       , fCurrentDeserialPicture(0)
                       , fCurrentScale(0)
                       , fCurrentSKP(0)
@@ -682,13 +669,14 @@ public:
     }
 
     static sk_sp<SkPicture> ReadSVGPicture(const char* path) {
-        SkFILEStream stream(path);
-        if (!stream.isValid()) {
+        sk_sp<SkData> data(SkData::MakeFromFileName(path));
+        if (!data) {
             SkDebugf("Could not read %s.\n", path);
             return nullptr;
         }
 
 #ifdef SK_XML
+        SkMemoryStream stream(std::move(data));
         sk_sp<SkSVGDOM> svgDom = SkSVGDOM::MakeFromStream(stream);
         if (!svgDom) {
             SkDebugf("Could not parse %s.\n", path);
@@ -724,7 +712,7 @@ public:
 
     Benchmark* rawNext() {
         if (fBenches) {
-            Benchmark* bench = fBenches->factory()(nullptr);
+            Benchmark* bench = fBenches->get()(nullptr);
             fBenches = fBenches->next();
             fSourceType = "bench";
             fBenchType  = "micro";
@@ -732,7 +720,7 @@ public:
         }
 
         while (fGMs) {
-            std::unique_ptr<skiagm::GM> gm(fGMs->factory()(nullptr));
+            std::unique_ptr<skiagm::GM> gm(fGMs->get()(nullptr));
             fGMs = fGMs->next();
             if (gm->runAsBench()) {
                 fSourceType = "gm";
@@ -754,21 +742,6 @@ public:
             fSKPBytes = static_cast<double>(pic->approximateBytesUsed());
             fSKPOps   = pic->approximateOpCount();
             return new RecordingBench(name.c_str(), pic.get(), FLAGS_bbh, FLAGS_lite);
-        }
-
-        // Add all .skps as PipeBenches.
-        while (fCurrentPiping < fSKPs.count()) {
-            const SkString& path = fSKPs[fCurrentPiping++];
-            sk_sp<SkPicture> pic = ReadPicture(path.c_str());
-            if (!pic) {
-                continue;
-            }
-            SkString name = SkOSPath::Basename(path.c_str());
-            fSourceType = "skp";
-            fBenchType  = "piping";
-            fSKPBytes = static_cast<double>(pic->approximateBytesUsed());
-            fSKPOps   = pic->approximateOpCount();
-            return new PipingBench(name.c_str(), pic.get());
         }
 
         // Add all .skps as DeserializePictureBenchs.
@@ -1096,7 +1069,6 @@ private:
     const char* fSourceType;  // What we're benching: bench, GM, SKP, ...
     const char* fBenchType;   // How we bench it: micro, recording, playback, ...
     int fCurrentRecording;
-    int fCurrentPiping;
     int fCurrentDeserialPicture;
     int fCurrentScale;
     int fCurrentSKP;
@@ -1141,9 +1113,7 @@ int main(int argc, char** argv) {
     SkAutoGraphics ag;
     SkTaskGroup::Enabler enabled(FLAGS_threads);
 
-#if SK_SUPPORT_GPU
     SetCtxOptionsFromCommonFlags(&grContextOpts);
-#endif
 
     if (FLAGS_veryVerbose) {
         FLAGS_verbose = true;
@@ -1295,7 +1265,6 @@ int main(int argc, char** argv) {
                 }
             }
 
-#if SK_SUPPORT_GPU
             SkTArray<SkString> keys;
             SkTArray<double> values;
             bool gpuStatsDump = FLAGS_gpuStatsDump && Benchmark::kGPU_Backend == configs[i].backend;
@@ -1303,7 +1272,6 @@ int main(int argc, char** argv) {
                 // TODO cache stats
                 bench->getGpuStats(canvas, &keys, &values);
             }
-#endif
 
             bench->perCanvasPostDraw(canvas);
 
@@ -1315,14 +1283,17 @@ int main(int argc, char** argv) {
                 write_canvas_png(target, pngFilename);
             }
 
-            Stats stats(samples);
+            // Building stats.plot often shows up in profiles,
+            // so skip building it when we're not going to print it anyway.
+            const bool want_plot = !FLAGS_quiet;
+
+            Stats stats(samples, want_plot);
             log->config(config);
             log->configOption("name", bench->getName());
             benchStream.fillCurrentOptions(log.get());
             target->fillOptions(log.get());
             log->metric("min_ms",    stats.min);
             log->metrics("samples",    samples);
-#if SK_SUPPORT_GPU
             if (gpuStatsDump) {
                 // dump to json, only SKPBench currently returns valid keys / values
                 SkASSERT(keys.count() == values.count());
@@ -1330,7 +1301,6 @@ int main(int argc, char** argv) {
                     log->metric(keys[i].c_str(), values[i]);
                 }
             }
-#endif
 
             if (runs++ % FLAGS_flushEvery == 0) {
                 log->flush();
@@ -1382,11 +1352,9 @@ int main(int argc, char** argv) {
                         );
             }
 
-#if SK_SUPPORT_GPU
             if (FLAGS_gpuStats && Benchmark::kGPU_Backend == configs[i].backend) {
                 target->dumpStats();
             }
-#endif
 
             if (FLAGS_verbose) {
                 SkDebugf("Samples:  ");

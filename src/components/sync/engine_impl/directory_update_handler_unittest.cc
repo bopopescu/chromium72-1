@@ -84,7 +84,7 @@ class DirectoryUpdateHandlerProcessUpdateTest : public ::testing::Test {
 
  protected:
   // Used in the construction of DirectoryTypeDebugInfoEmitters.
-  base::ObserverList<TypeDebugInfoObserver> type_observers_;
+  base::ObserverList<TypeDebugInfoObserver>::Unchecked type_observers_;
 
  private:
   base::MessageLoop loop_;  // Needed to initialize the directory.
@@ -111,7 +111,9 @@ void DirectoryUpdateHandlerProcessUpdateTest::UpdateSyncEntities(
     const SyncEntityList& applicable_updates,
     StatusController* status) {
   syncable::ModelNeutralWriteTransaction trans(FROM_HERE, UNITTEST, dir());
-  handler->UpdateSyncEntities(&trans, applicable_updates, status);
+  // We pick is_initial_sync arbitrarily as it has only impact on counters.
+  handler->UpdateSyncEntities(&trans, applicable_updates,
+                              /*is_initial_sync=*/true, status);
 }
 
 void DirectoryUpdateHandlerProcessUpdateTest::UpdateProgressMarkers(
@@ -279,8 +281,10 @@ TEST_F(DirectoryUpdateHandlerProcessUpdateTest, GarbageCollectionByVersion) {
   updates.push_back(e2.get());
 
   // Process and apply updates.
-  EXPECT_EQ(SYNCER_OK, handler.ProcessGetUpdatesResponse(progress, context,
-                                                         updates, &status));
+  EXPECT_EQ(
+      SyncerError::SYNCER_OK,
+      handler.ProcessGetUpdatesResponse(progress, context, updates, &status)
+          .value());
   handler.ApplyUpdates(&status);
 
   // Verify none is deleted because they are unapplied during GC.
@@ -290,8 +294,11 @@ TEST_F(DirectoryUpdateHandlerProcessUpdateTest, GarbageCollectionByVersion) {
 
   // Process and apply again. Old entry is deleted but not root.
   progress.mutable_gc_directive()->set_version_watermark(kDefaultVersion + 20);
-  EXPECT_EQ(SYNCER_OK, handler.ProcessGetUpdatesResponse(
-                           progress, context, SyncEntityList(), &status));
+  EXPECT_EQ(SyncerError::SYNCER_OK,
+            handler
+                .ProcessGetUpdatesResponse(progress, context, SyncEntityList(),
+                                           &status)
+                .value());
   handler.ApplyUpdates(&status);
   EXPECT_FALSE(EntryExists(e1->id_string()));
   EXPECT_TRUE(EntryExists(e2->id_string()));
@@ -335,8 +342,10 @@ TEST_F(DirectoryUpdateHandlerProcessUpdateTest, GarbageCollectionByAge) {
   updates.push_back(e2.get());
 
   // Process and apply updates.
-  EXPECT_EQ(SYNCER_OK, handler.ProcessGetUpdatesResponse(progress, context,
-                                                         updates, &status));
+  EXPECT_EQ(
+      SyncerError::SYNCER_OK,
+      handler.ProcessGetUpdatesResponse(progress, context, updates, &status)
+          .value());
   handler.ApplyUpdates(&status);
 
   // Verify none is deleted because they are unapplied during GC.
@@ -347,8 +356,11 @@ TEST_F(DirectoryUpdateHandlerProcessUpdateTest, GarbageCollectionByAge) {
   // Process and apply again. 15-days-old entry is deleted but not 5-days-old
   // entry.
   progress.mutable_gc_directive()->set_age_watermark_in_days(10);
-  EXPECT_EQ(SYNCER_OK, handler.ProcessGetUpdatesResponse(
-                           progress, context, SyncEntityList(), &status));
+  EXPECT_EQ(SyncerError::SYNCER_OK,
+            handler
+                .ProcessGetUpdatesResponse(progress, context, SyncEntityList(),
+                                           &status)
+                .value());
   handler.ApplyUpdates(&status);
   EXPECT_FALSE(EntryExists(e1->id_string()));
   EXPECT_TRUE(EntryExists(e2->id_string()));
@@ -400,8 +412,10 @@ TEST_F(DirectoryUpdateHandlerProcessUpdateTest, GarbageCollectionByItemLimit) {
   updates.push_back(e3.get());
 
   // Process and apply updates.
-  EXPECT_EQ(SYNCER_OK, handler.ProcessGetUpdatesResponse(progress, context,
-                                                         updates, &status));
+  EXPECT_EQ(
+      SyncerError::SYNCER_OK,
+      handler.ProcessGetUpdatesResponse(progress, context, updates, &status)
+          .value());
   handler.ApplyUpdates(&status);
 
   // Verify none is deleted because they are unapplied during GC.
@@ -411,8 +425,11 @@ TEST_F(DirectoryUpdateHandlerProcessUpdateTest, GarbageCollectionByItemLimit) {
 
   // Process and apply again. 15-days-old entry is deleted.
   progress.mutable_gc_directive()->set_max_number_of_items(2);
-  EXPECT_EQ(SYNCER_OK, handler.ProcessGetUpdatesResponse(
-                           progress, context, SyncEntityList(), &status));
+  EXPECT_EQ(SyncerError::SYNCER_OK,
+            handler
+                .ProcessGetUpdatesResponse(progress, context, SyncEntityList(),
+                                           &status)
+                .value());
   handler.ApplyUpdates(&status);
   EXPECT_FALSE(EntryExists(e1->id_string()));
   EXPECT_TRUE(EntryExists(e2->id_string()));
@@ -444,8 +461,10 @@ TEST_F(DirectoryUpdateHandlerProcessUpdateTest, ContextVersion) {
   updates.push_back(e1.get());
 
   // The first response should be processed fine.
-  EXPECT_EQ(SYNCER_OK, handler.ProcessGetUpdatesResponse(progress, old_context,
-                                                         updates, &status));
+  EXPECT_EQ(
+      SyncerError::SYNCER_OK,
+      handler.ProcessGetUpdatesResponse(progress, old_context, updates, &status)
+          .value());
   handler.ApplyUpdates(&status);
 
   // The PREFERENCES root should be auto-created.
@@ -474,9 +493,10 @@ TEST_F(DirectoryUpdateHandlerProcessUpdateTest, ContextVersion) {
 
   // The second response, with an old context version, should result in an
   // error and the updates should be dropped.
-  EXPECT_EQ(DATATYPE_TRIGGERED_RETRY,
-            handler.ProcessGetUpdatesResponse(progress, new_context, updates,
-                                              &status));
+  EXPECT_EQ(
+      SyncerError::DATATYPE_TRIGGERED_RETRY,
+      handler.ProcessGetUpdatesResponse(progress, new_context, updates, &status)
+          .value());
   handler.ApplyUpdates(&status);
 
   EXPECT_FALSE(EntryExists(e2->id_string()));
@@ -542,7 +562,7 @@ class DirectoryUpdateHandlerApplyUpdateTest : public ::testing::Test {
         passive_worker_(new FakeModelWorker(GROUP_PASSIVE)),
         bookmarks_emitter_(BOOKMARKS, &type_observers_),
         passwords_emitter_(PASSWORDS, &type_observers_),
-        articles_emitter_(ARTICLES, &type_observers_) {}
+        articles_emitter_(DEPRECATED_ARTICLES, &type_observers_) {}
 
   void SetUp() override {
     dir_maker_.SetUp();
@@ -556,9 +576,6 @@ class DirectoryUpdateHandlerApplyUpdateTest : public ::testing::Test {
         PASSWORDS,
         std::make_unique<DirectoryUpdateHandler>(
             directory(), PASSWORDS, password_worker_, &passwords_emitter_)));
-    update_handler_map_.insert(std::make_pair(
-        ARTICLES, std::make_unique<DirectoryUpdateHandler>(
-                      directory(), ARTICLES, ui_worker_, &articles_emitter_)));
   }
 
   void TearDown() override { dir_maker_.TearDown(); }
@@ -584,10 +601,6 @@ class DirectoryUpdateHandlerApplyUpdateTest : public ::testing::Test {
     update_handler_map_.find(PASSWORDS)->second->ApplyUpdates(status);
   }
 
-  void ApplyArticlesUpdates(StatusController* status) {
-    update_handler_map_.find(ARTICLES)->second->ApplyUpdates(status);
-  }
-
   TestEntryFactory* entry_factory() { return entry_factory_.get(); }
 
   syncable::Directory* directory() { return dir_maker_.directory(); }
@@ -601,7 +614,7 @@ class DirectoryUpdateHandlerApplyUpdateTest : public ::testing::Test {
   scoped_refptr<FakeModelWorker> password_worker_;
   scoped_refptr<FakeModelWorker> passive_worker_;
 
-  base::ObserverList<TypeDebugInfoObserver> type_observers_;
+  base::ObserverList<TypeDebugInfoObserver>::Unchecked type_observers_;
   DirectoryTypeDebugInfoEmitter bookmarks_emitter_;
   DirectoryTypeDebugInfoEmitter passwords_emitter_;
   DirectoryTypeDebugInfoEmitter articles_emitter_;
@@ -1001,7 +1014,7 @@ TEST_F(DirectoryUpdateHandlerApplyUpdateTest, DecryptablePassword) {
     cryptographer = directory()->GetCryptographer(&trans);
   }
 
-  KeyParams params = {"localhost", "dummy", "foobar"};
+  KeyParams params = {KeyDerivationParams::CreateForPbkdf2(), "foobar"};
   cryptographer->AddKey(params);
 
   sync_pb::EntitySpecifics specifics;
@@ -1091,7 +1104,7 @@ TEST_F(DirectoryUpdateHandlerApplyUpdateTest, SomeUndecryptablePassword) {
       syncable::ReadTransaction trans(FROM_HERE, directory());
       cryptographer = directory()->GetCryptographer(&trans);
 
-      KeyParams params = {"localhost", "dummy", "foobar"};
+      KeyParams params = {KeyDerivationParams::CreateForPbkdf2(), "foobar"};
       cryptographer->AddKey(params);
 
       cryptographer->Encrypt(data,
@@ -1103,7 +1116,7 @@ TEST_F(DirectoryUpdateHandlerApplyUpdateTest, SomeUndecryptablePassword) {
   {
     // Create a new cryptographer, independent of the one in the cycle.
     Cryptographer other_cryptographer(cryptographer->encryptor());
-    KeyParams params = {"localhost", "dummy", "bazqux"};
+    KeyParams params = {KeyDerivationParams::CreateForPbkdf2(), "bazqux"};
     other_cryptographer.AddKey(params);
 
     sync_pb::EntitySpecifics specifics;

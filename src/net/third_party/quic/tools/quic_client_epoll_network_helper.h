@@ -14,18 +14,18 @@
 
 #include "base/command_line.h"
 #include "base/macros.h"
-#include "net/third_party/quic/core/quic_client_push_promise_index.h"
+#include "net/third_party/quic/core/http/quic_client_push_promise_index.h"
+#include "net/third_party/quic/core/http/quic_spdy_client_session.h"
+#include "net/third_party/quic/core/http/quic_spdy_stream.h"
 #include "net/third_party/quic/core/quic_config.h"
 #include "net/third_party/quic/core/quic_packet_reader.h"
 #include "net/third_party/quic/core/quic_process_packet_interface.h"
-#include "net/third_party/quic/core/quic_spdy_client_session.h"
-#include "net/third_party/quic/core/quic_spdy_stream.h"
 #include "net/third_party/quic/platform/api/quic_containers.h"
 #include "net/third_party/quic/tools/quic_client_base.h"
 #include "net/third_party/quic/tools/quic_spdy_client_base.h"
 #include "net/tools/epoll_server/epoll_server.h"
 
-namespace net {
+namespace quic {
 
 namespace test {
 class QuicClientPeer;
@@ -34,25 +34,31 @@ class QuicClientPeer;
 // An implementation of the QuicClientBase::NetworkHelper based off
 // the epoll server.
 class QuicClientEpollNetworkHelper : public QuicClientBase::NetworkHelper,
-                                     public EpollCallbackInterface,
+                                     public net::EpollCallbackInterface,
                                      public ProcessPacketInterface {
  public:
   // Create a quic client, which will have events managed by an externally owned
-  // EpollServer.
-  QuicClientEpollNetworkHelper(EpollServer* epoll_server,
+  // net::EpollServer.
+  QuicClientEpollNetworkHelper(net::EpollServer* epoll_server,
                                QuicClientBase* client);
+  QuicClientEpollNetworkHelper(const QuicClientEpollNetworkHelper&) = delete;
+  QuicClientEpollNetworkHelper& operator=(const QuicClientEpollNetworkHelper&) =
+      delete;
 
   ~QuicClientEpollNetworkHelper() override;
 
-  // From EpollCallbackInterface
-  void OnRegistration(EpollServer* eps, int fd, int event_mask) override;
+  // Return a name describing the class for use in debug/error reporting.
+  QuicString Name() const override;
+
+  // From net::EpollCallbackInterface
+  void OnRegistration(net::EpollServer* eps, int fd, int event_mask) override;
   void OnModification(int fd, int event_mask) override;
-  void OnEvent(int fd, EpollEvent* event) override;
+  void OnEvent(int fd, net::EpollEvent* event) override;
   // |fd_| can be unregistered without the client being disconnected. This
   // happens in b3m QuicProber where we unregister |fd_| to feed in events to
   // the client from the SelectServer.
   void OnUnregistration(int fd, bool replaced) override;
-  void OnShutdown(EpollServer* eps, int fd) override;
+  void OnShutdown(net::EpollServer* eps, int fd) override;
 
   // From ProcessPacketInterface. This will be called for each received
   // packet.
@@ -71,7 +77,7 @@ class QuicClientEpollNetworkHelper : public QuicClientBase::NetworkHelper,
 
   // Accessors provided for convenience, not part of any interface.
 
-  EpollServer* epoll_server() { return epoll_server_; }
+  net::EpollServer* epoll_server() { return epoll_server_; }
 
   const QuicLinkedHashMap<int, QuicSocketAddress>& fd_address_map() const {
     return fd_address_map_;
@@ -106,7 +112,7 @@ class QuicClientEpollNetworkHelper : public QuicClientBase::NetworkHelper,
   void CleanUpUDPSocketImpl(int fd);
 
   // Listens for events on the client socket.
-  EpollServer* epoll_server_;
+  net::EpollServer* epoll_server_;
 
   // Map mapping created UDP sockets to their addresses. By using linked hash
   // map, the order of socket creation can be recorded.
@@ -127,10 +133,8 @@ class QuicClientEpollNetworkHelper : public QuicClientBase::NetworkHelper,
   QuicClientBase* client_;
 
   int max_reads_per_epoll_loop_;
-
-  DISALLOW_COPY_AND_ASSIGN(QuicClientEpollNetworkHelper);
 };
 
-}  // namespace net
+}  // namespace quic
 
 #endif  // NET_THIRD_PARTY_QUIC_TOOLS_QUIC_CLIENT_EPOLL_NETWORK_HELPER_H_

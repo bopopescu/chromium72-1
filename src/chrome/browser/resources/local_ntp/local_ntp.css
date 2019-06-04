@@ -4,8 +4,8 @@
 
 html {
   /* Material Design constants */
-  --md-tile-height: 104px;
-  --md-tile-margin: 8px;
+  --md-tile-height: 112px;
+  --md-tile-margin: 16px;
 
   /* This will be overridden based on the viewport width, see below. */
   --column-count: 2;
@@ -68,7 +68,6 @@ body {
   font-size: small;
   margin: 0;
   min-height: 100%;
-  overflow-x: hidden;
 }
 
 body.inited {
@@ -82,6 +81,10 @@ button {
   border: 0;
   margin: 0;
   padding: 0;
+}
+
+.mouse-navigation {
+  outline: none;
 }
 
 #ntp-contents {
@@ -98,14 +101,20 @@ button {
 }
 
 .non-google-page #ntp-contents {
+  /* The inherited height from #ntp-contents applies from the "top" location,
+   * but uses the size of the overall NTP content area, resulting in an
+   * unnecessary scrollbar. This height corresponds to MV tile height for a
+   * single row, but also works for a row of icons, and works well on small
+   * screens (like Pixelbook), as well as high-res screens. */
+  height: 155px;
   left: calc(50% - var(--content-width)/2);
   position: absolute;
   top: calc(50% - 155px);
 }
 
-body.hide-fakebox-logo #logo,
-body.hide-fakebox-logo #fakebox {
+body.hide-fakebox #fakebox {
   opacity: 0;
+  visibility: hidden;
 }
 
 #logo {
@@ -139,6 +148,10 @@ body.hide-fakebox-logo #fakebox {
 #logo-doodle-button.show-logo,
 #logo-doodle-iframe.show-logo {
   display: block;
+}
+
+#logo-doodle-image {
+  outline: none;
 }
 
 #logo-default.fade,
@@ -274,7 +287,7 @@ body.alternate-logo #logo-non-white {
 }
 
 #fakebox-container {
-  margin: 0 auto 8px auto;
+  margin: 0 auto 0 auto;
   width: var(--content-width);
 }
 
@@ -298,6 +311,14 @@ body.alternate-logo #logo-non-white {
   box-shadow: none;
   margin: 0 auto;
   max-width: 560px;
+  opacity: 1;
+  transition: background-color 300ms ease-in-out;
+  /* Transition should be similar to .mv-tile/.md-tile opacity transition. */
+  transition: opacity 200ms;
+}
+
+.md #fakebox:hover {
+  background-color: rgb(232, 234, 237);
 }
 
 .non-google-page #fakebox-container {
@@ -336,7 +357,7 @@ html[dir=rtl] #fakebox > input {
   right: 0;
 }
 
-.md html[dir=rtl] #fakebox > input {
+html[dir=rtl] .md  #fakebox > input {
   padding-right: 20px;
 }
 
@@ -371,6 +392,11 @@ html[dir=rtl] #fakebox-text {
   right: 13px;
 }
 
+html[dir=rtl] .md #fakebox-text {
+  padding-right: 20px;
+  right: 0;
+}
+
 #fakebox-cursor {
   background: #333;
   bottom: 12px;
@@ -390,12 +416,12 @@ html[dir=rtl] #fakebox-cursor {
   right: 13px;
 }
 
-.md html[dir=rtl] #fakebox-cursor {
+html[dir=rtl] .md #fakebox-cursor {
   right: 20px;
 }
 
 #fakebox-microphone {
-  background: url(googlemic_clr_24px.svg) no-repeat center;
+  background: url(icons/googlemic_clr_24px.svg) no-repeat center;
   background-size: 24px 24px;
   bottom: 0;
   cursor: pointer;
@@ -407,7 +433,6 @@ html[dir=rtl] #fakebox-cursor {
 }
 
 .md #fakebox-microphone {
-  background-size: 16px 16px;
   margin-right: 12px;
   width: 28px;
 }
@@ -415,6 +440,10 @@ html[dir=rtl] #fakebox-cursor {
 html[dir=rtl] #fakebox-microphone {
   left: 0;
   right: auto;
+}
+
+html[dir=rtl] .md #fakebox-microphone {
+  margin-left: 12px;
 }
 
 @keyframes blink {
@@ -446,8 +475,10 @@ body.fakebox-focused #fakebox-cursor {
   user-select: none;
 }
 
-.md-icons #most-visited {
-  margin-top: 30px;
+#most-visited.md-icons {
+  /* Total of 40px margin between fakebox and MV tiles: 8px fakebox
+   * margin-bottom + 22px here margin-top + 10px MV margin-top */
+  margin-top: 22px;
 }
 
 /* Non-Google pages have no Fakebox, so don't need top margin. */
@@ -467,10 +498,13 @@ body.fakebox-focused #fakebox-cursor {
 }
 
 .md-icons #mv-tiles {
-  /* Two rows of tiles of 104px each, 8px of spacing after each row, and 10px of
-   * margin on top and bottom. If you change this, also change the corresponding
-   * values in most_visited_single.css. */
-  height: calc(2*(var(--md-tile-height) + var(--md-tile-margin)) + 2*10px);
+  /* Two rows of tiles of 112px each, 16px of spacing after each row, and 10px
+   * of margin on top. If you change this, also change the corresponding values
+   * in most_visited_single.css. */
+  height: calc(2*(var(--md-tile-height) + var(--md-tile-margin)) + 10px);
+  /* Add 2*5px to account for drop shadow on the tiles. If you change this, also
+   * change the corresponding values in most_visited_single.css. */
+  width: calc(var(--content-width) + 2*5px);
 }
 
 #mv-notice-x {
@@ -519,11 +553,23 @@ html[dir=rtl] #mv-notice-x {
   transition: bottom 400ms;
 }
 
+/* Required to allow click events through the wrapping div of the toast
+ * notification container. */
+.md-icons #mv-notice-container,
+#error-notice-container {
+  pointer-events: none;
+}
+.md-icons #mv-notice-container > div,
+#error-notice-container > div {
+  pointer-events: all;
+}
+
+
 .md-icons #mv-notice-container.float-up {
   bottom: 0;
 }
 
-.md-icons #mv-notice-container.mv-notice-hide {
+.md-icons #mv-notice-container.notice-hide {
   display: none;
 }
 
@@ -539,10 +585,10 @@ html[dir=rtl] #mv-notice-x {
   background-color: white;
   border: 1px solid rgb(218, 220, 224);
   /* Necessary for a "pill" shape. Using 50% creates an oval. */
-  border-radius: 500px;
-  font-family: 'Roboto';
+  border-radius: 16px;
+  font-family: 'Roboto', arial, sans-serif;
   font-weight: normal;
-  height: 32px;
+  height: fit-content;
   margin: 0 auto;
   padding: 0;
   width: fit-content;
@@ -565,19 +611,20 @@ html[dir=rtl] #mv-notice-x {
 
 /* Links in the notification. */
 #mv-notice-links span {
-  -webkit-margin-start: 6px;
   color: var(--text-color-link);
   cursor: pointer;
+  margin-inline-start: 6px;
   outline: none;
   padding: 0 4px;
 }
 
 .md-icons #mv-notice-links span {
-  -webkit-margin-start: 0;
   /* Necessary for a "pill" shape. Using 50% creates an oval. */
-  border-radius: 500px;
-  color: rgb(26,115,232);
+  border-radius: 16px;
+  color: rgb(26, 115, 232);
+  margin-inline-start: 0;
   padding: 0 16px;
+  position: relative;
 }
 
 #mv-notice-links span:hover,
@@ -600,11 +647,11 @@ html[dir=rtl] #mv-notice-x {
   padding: 0 16px;
 }
 
-.default-theme.dark #mv-msg {
+.default-theme.dark #mv-msg :not(.md-icons) {
   color: #fff;
 }
 
-.default-theme.dark #mv-notice-links span {
+.default-theme.dark #mv-notice-links :not(.md-icons) span {
   color: #fff;
 }
 
@@ -614,7 +661,7 @@ html[dir=rtl] #mv-notice-x {
   transition-property: opacity;
 }
 
-#mv-notice.mv-notice-hide {
+#mv-notice.notice-hide {
   display: none;
 }
 
@@ -645,37 +692,43 @@ html[dir=rtl] #attribution,
   width: 100%;
 }
 
+#custom-links-edit-dialog {
+  background: transparent;
+  border: none;
+  height: 100%;
+  padding: 0;
+  position: fixed;
+  top: 0;
+  width: 100%;
+}
+
+#custom-links-edit-dialog::backdrop {
+  background-color: rgba(255, 255, 255, .75);
+}
+
+#custom-links-edit {
+  border: none;
+  height: 100%;
+  position: absolute;
+  top: 0;
+  width: 100%;
+}
+
+#custom-links-edit.show {
+  display: block;
+}
+
 #one-google {
   position: absolute;
-  right: 0;
   top: 0;
   transition: opacity 130ms;
+  /* One Google Bar can automatically align to left and right
+    based on the profile language preference */
+  width: 100%;
 }
 
 #one-google.hidden {
   opacity: 0;
-}
-
-.ripple-container {
-  height: 0;
-  left: 0;
-  overflow: hidden;
-  pointer-events: none;
-  position: absolute;
-  top: 0;
-  width: 0;
-  z-index: 100;
-}
-
-.ripple-effect {
-  background-color: rgba(26, 115, 232, 0.1);
-  border-radius: 50%;
-  height: 1px;
-  pointer-events: none;
-  transition: width, height, margin, background-color 400ms 250ms;
-  transition-duration: 400ms;
-  transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
-  width: 1px;
 }
 
 /* The box containing the slider */
@@ -740,3 +793,163 @@ input:checked + .toggle::before {
   transform: translateX(26px);
 }
 
+#error-notice-container {
+  bottom: -50px;
+  margin-bottom: 16px;
+  position: fixed;
+  transition: bottom 400ms;
+  user-select: none;
+  width: 100%;
+}
+
+#error-notice-container.float-up {
+  bottom: 0;
+}
+
+#error-notice {
+  background-color: white;
+  border: 1px solid rgb(218, 220, 224);
+  /* Necessary for a "pill" shape. Using 50% creates an oval. */
+  border-radius: 16px;
+  color: rgb(217, 48, 37);
+  display: flex;
+  font-family: 'Roboto', arial, sans-serif;
+  font-size: 12px;
+  font-weight: normal;
+  height: fit-content;
+  margin: 0 auto;
+  opacity: 1;
+  padding: 0;
+  position: relative;
+  width: fit-content;
+}
+
+#error-notice.notice-hide {
+  display: none;
+}
+
+#error-notice span {
+  align-self: center;
+  display: inline-block;
+  line-height: 32px;
+}
+
+#error-notice-icon {
+  background: url(../../../../ui/webui/resources/images/error.svg) no-repeat center;
+  background-size: 18px 18px;
+  height: 32px;
+  padding: 0 8px;
+  width: 18px;
+}
+
+#error-notice-msg {
+  cursor: default;
+  padding-right: 16px;
+}
+
+html[dir=rtl] #error-notice-msg {
+  padding-left: 16px;
+  padding-right: 0;
+}
+
+#error-notice.has-link #error-notice-msg {
+  padding-right: 0;
+}
+
+html[dir=rtl] #error-notice.has-link #error-notice-msg {
+  padding: 0;
+}
+
+#error-notice-link {
+  /* Necessary for a "pill" shape. Using 50% creates an oval. */
+  border-radius: 16px;
+  color: rgb(26, 115, 232);
+  cursor: pointer;
+  display: none;
+  outline: none;
+  padding: 0 16px;
+  position: relative;
+}
+
+#error-notice:not(.has-link) #error-notice-link {
+  display: none;
+}
+
+#error-notice-link:hover,
+#error-notice-link:focus {
+  text-decoration: underline;
+}
+
+#error-notice-link:hover,
+#error-notice-link:active {
+  background-color: rgba(26,115,232, 0.1);
+  text-decoration: none;
+  transition: background-color 200ms;
+}
+
+#promo {
+  bottom: 16px;
+  left: 0;
+  pointer-events: none;
+  position: fixed;
+  right: 0;
+  text-align: center;
+  transition: bottom 400ms;
+}
+
+#promo.float-down {
+  bottom: -50px;
+}
+
+#promo > div {
+  background-color: #FFF;
+  border: 1px solid rgb(218, 220, 224);
+  border-radius: 16px;
+  box-sizing: border-box;
+  color: rgb(95, 99, 104);
+  display: inline-block;
+  font-family: 'Roboto', arial, sans-serif;
+  font-size: 12px;
+  line-height: 32px;
+  margin-bottom: 0;
+  max-width: 505px;
+  overflow: hidden;
+  padding: 0 16px;
+  pointer-events: all;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/**
+ * Hide the promo if the window is too small:
+ * max-width = promo.max-width (505px) + 2 * edit gear icon (16px + 28px + 8px)
+ * max-height = ntp-contents.max-height (628px) + promo div height (16px + 22px)
+ */
+@media only screen and (max-width: 609px),
+            screen and (max-height: 666px)  {
+  #promo > div {
+    display: none;
+  }
+}
+
+#promo > div > a {
+  color: rgb(51, 103, 214) !important;
+  text-decoration: none;
+}
+
+#promo > div > a:visited {
+  color: rgb(51, 103, 214) !important;
+}
+
+#promo > div > img {
+  border-radius: 50%;
+  height: 24px;
+  margin: 0 8px 0 -12px;
+  object-fit: cover;
+  vertical-align: middle;
+  width: 24px;
+}
+
+#promo.notice-hide {
+  display: none;
+}

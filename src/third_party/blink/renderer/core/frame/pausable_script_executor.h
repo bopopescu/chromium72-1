@@ -43,6 +43,20 @@ class CORE_EXPORT PausableScriptExecutor final
                            int argc,
                            v8::Local<v8::Value> argv[],
                            WebScriptExecutionCallback*);
+
+  class Executor : public GarbageCollectedFinalized<Executor> {
+   public:
+    virtual ~Executor() = default;
+
+    virtual Vector<v8::Local<v8::Value>> Execute(LocalFrame*) = 0;
+
+    virtual void Trace(blink::Visitor* visitor) {}
+  };
+
+  PausableScriptExecutor(LocalFrame*,
+                         ScriptState*,
+                         WebScriptExecutionCallback*,
+                         Executor*);
   ~PausableScriptExecutor() override;
 
   void Run();
@@ -51,27 +65,13 @@ class CORE_EXPORT PausableScriptExecutor final
 
   void Trace(blink::Visitor*) override;
 
-  class Executor : public GarbageCollectedFinalized<Executor> {
-   public:
-    virtual ~Executor() = default;
-
-    virtual Vector<v8::Local<v8::Value>> Execute(LocalFrame*) = 0;
-
-    virtual void Trace(blink::Visitor* visitor){};
-  };
-
  private:
-  PausableScriptExecutor(LocalFrame*,
-                         ScriptState*,
-                         WebScriptExecutionCallback*,
-                         Executor*);
-
   void Fired() override;
 
   void ExecuteAndDestroySelf();
   void Dispose();
 
-  scoped_refptr<ScriptState> script_state_;
+  Member<ScriptState> script_state_;
   WebScriptExecutionCallback* callback_;
   BlockingOption blocking_option_;
 

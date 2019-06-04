@@ -78,7 +78,7 @@ class MockRendererAudioInputStreamFactoryClient
   void StreamCreated(
       media::mojom::AudioInputStreamPtr input_stream,
       media::mojom::AudioInputStreamClientRequest client_request,
-      media::mojom::AudioDataPipePtr data_pipe,
+      media::mojom::ReadOnlyAudioDataPipePtr data_pipe,
       bool initially_muted,
       const base::Optional<base::UnguessableToken>& stream_id) override {
     EXPECT_TRUE(stream_id.has_value());
@@ -154,8 +154,8 @@ class OldOldRenderFrameAudioInputStreamFactoryTest : public testing::Test {
 
 TEST_F(OldOldRenderFrameAudioInputStreamFactoryTest, CreateStream) {
   factory_ptr_->CreateStream(std::move(client_ptr_), kSessionId,
-                             GetTestAudioParameters(), kAGC,
-                             kSharedMemoryCount);
+                             GetTestAudioParameters(), kAGC, kSharedMemoryCount,
+                             nullptr);
 
   // Wait for delegate to be created and |event_handler| set.
   base::RunLoop().RunUntilIdle();

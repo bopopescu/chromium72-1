@@ -51,12 +51,14 @@ SpdySessionPool::SpdySessionPool(
     SSLConfigService* ssl_config_service,
     HttpServerProperties* http_server_properties,
     TransportSecurityState* transport_security_state,
-    const QuicTransportVersionVector& quic_supported_versions,
+    const quic::QuicTransportVersionVector& quic_supported_versions,
     bool enable_ping_based_connection_checking,
     bool support_ietf_format_quic_altsvc,
     size_t session_max_recv_window_size,
     const spdy::SettingsMap& initial_settings,
-    SpdySessionPool::TimeFunc time_func)
+    const base::Optional<GreasedHttp2Frame>& greased_http2_frame,
+    SpdySessionPool::TimeFunc time_func,
+    NetworkQualityEstimator* network_quality_estimator)
     : http_server_properties_(http_server_properties),
       transport_security_state_(transport_security_state),
       ssl_config_service_(ssl_config_service),
@@ -68,10 +70,12 @@ SpdySessionPool::SpdySessionPool(
       support_ietf_format_quic_altsvc_(support_ietf_format_quic_altsvc),
       session_max_recv_window_size_(session_max_recv_window_size),
       initial_settings_(initial_settings),
+      greased_http2_frame_(greased_http2_frame),
       time_func_(time_func),
-      push_delegate_(nullptr) {
+      push_delegate_(nullptr),
+      network_quality_estimator_(network_quality_estimator) {
   NetworkChangeNotifier::AddIPAddressObserver(this);
-  if (ssl_config_service_.get())
+  if (ssl_config_service_)
     ssl_config_service_->AddObserver(this);
   CertDatabase::GetInstance()->AddObserver(this);
 }
@@ -88,7 +92,7 @@ SpdySessionPool::~SpdySessionPool() {
     RemoveUnavailableSession((*sessions_.begin())->GetWeakPtr());
   }
 
-  if (ssl_config_service_.get())
+  if (ssl_config_service_)
     ssl_config_service_->RemoveObserver(this);
   NetworkChangeNotifier::RemoveIPAddressObserver(this);
   CertDatabase::GetInstance()->RemoveObserver(this);
@@ -99,7 +103,7 @@ base::WeakPtr<SpdySession> SpdySessionPool::CreateAvailableSessionFromSocket(
     bool is_trusted_proxy,
     std::unique_ptr<ClientSocketHandle> connection,
     const NetLogWithSource& net_log) {
-  TRACE_EVENT0(kNetTracingCategory,
+  TRACE_EVENT0(NetTracingCategory(),
                "SpdySessionPool::CreateAvailableSessionFromSocket");
 
   UMA_HISTOGRAM_ENUMERATION(
@@ -107,10 +111,12 @@ base::WeakPtr<SpdySession> SpdySessionPool::CreateAvailableSessionFromSocket(
 
   auto new_session = std::make_unique<SpdySession>(
       key, http_server_properties_, transport_security_state_,
-      quic_supported_versions_, enable_sending_initial_data_,
-      enable_ping_based_connection_checking_, support_ietf_format_quic_altsvc_,
-      is_trusted_proxy, session_max_recv_window_size_, initial_settings_,
-      time_func_, push_delegate_, net_log.net_log());
+      ssl_config_service_, quic_supported_versions_,
+      enable_sending_initial_data_, enable_ping_based_connection_checking_,
+      support_ietf_format_quic_altsvc_, is_trusted_proxy,
+      session_max_recv_window_size_, initial_settings_, greased_http2_frame_,
+      time_func_, push_delegate_, network_quality_estimator_,
+      net_log.net_log());
 
   new_session->InitializeWithSocket(std::move(connection), this);
 
@@ -141,7 +147,7 @@ base::WeakPtr<SpdySession> SpdySessionPool::FindAvailableSession(
     bool enable_ip_based_pooling,
     bool is_websocket,
     const NetLogWithSource& net_log) {
-  AvailableSessionMap::iterator it = LookupAvailableSessionByKey(key);
+  auto it = LookupAvailableSessionByKey(key);
   if (it != available_sessions_.end() &&
       (!is_websocket || it->second->support_websocket())) {
     if (key == it->second->spdy_session_key()) {
@@ -200,8 +206,7 @@ base::WeakPtr<SpdySession> SpdySessionPool::FindAvailableSession(
         continue;
       }
 
-      AvailableSessionMap::iterator available_session_it =
-          LookupAvailableSessionByKey(alias_key);
+      auto available_session_it = LookupAvailableSessionByKey(alias_key);
       if (available_session_it == available_sessions_.end()) {
         NOTREACHED();  // It shouldn't be in the aliases table if we can't get
                        // it!
@@ -292,8 +297,7 @@ void SpdySessionPool::MakeSessionUnavailable(
   UnmapKey(available_session->spdy_session_key());
   RemoveAliases(available_session->spdy_session_key());
   const std::set<SpdySessionKey>& aliases = available_session->pooled_aliases();
-  for (std::set<SpdySessionKey>::const_iterator it = aliases.begin();
-       it != aliases.end(); ++it) {
+  for (auto it = aliases.begin(); it != aliases.end(); ++it) {
     UnmapKey(*it);
     RemoveAliases(*it);
   }
@@ -307,7 +311,7 @@ void SpdySessionPool::RemoveUnavailableSession(
   unavailable_session->net_log().AddEvent(
       NetLogEventType::HTTP2_SESSION_POOL_REMOVE_SESSION);
 
-  SessionSet::iterator it = sessions_.find(unavailable_session.get());
+  auto it = sessions_.find(unavailable_session.get());
   CHECK(it != sessions_.end());
   std::unique_ptr<SpdySession> owned_session(*it);
   sessions_.erase(it);
@@ -341,8 +345,8 @@ std::unique_ptr<base::Value> SpdySessionPool::SpdySessionPoolInfoToValue()
     const {
   auto list = std::make_unique<base::ListValue>();
 
-  for (AvailableSessionMap::const_iterator it = available_sessions_.begin();
-       it != available_sessions_.end(); ++it) {
+  for (auto it = available_sessions_.begin(); it != available_sessions_.end();
+       ++it) {
     // Only add the session if the key in the map matches the main
     // host_port_proxy_pair (not an alias).
     const SpdySessionKey& key = it->first;
@@ -525,8 +529,8 @@ void SpdySessionPool::DumpMemoryStats(
 
 bool SpdySessionPool::IsSessionAvailable(
     const base::WeakPtr<SpdySession>& session) const {
-  for (AvailableSessionMap::const_iterator it = available_sessions_.begin();
-       it != available_sessions_.end(); ++it) {
+  for (auto it = available_sessions_.begin(); it != available_sessions_.end();
+       ++it) {
     if (it->second.get() == session.get())
       return true;
   }
@@ -549,7 +553,7 @@ SpdySessionPool::LookupAvailableSessionByKey(
 }
 
 void SpdySessionPool::UnmapKey(const SpdySessionKey& key) {
-  AvailableSessionMap::iterator it = LookupAvailableSessionByKey(key);
+  auto it = LookupAvailableSessionByKey(key);
   CHECK(it != available_sessions_.end());
   available_sessions_.erase(it);
 }
@@ -557,9 +561,9 @@ void SpdySessionPool::UnmapKey(const SpdySessionKey& key) {
 void SpdySessionPool::RemoveAliases(const SpdySessionKey& key) {
   // Walk the aliases map, find references to this pair.
   // TODO(mbelshe):  Figure out if this is too expensive.
-  for (AliasMap::iterator it = aliases_.begin(); it != aliases_.end(); ) {
+  for (auto it = aliases_.begin(); it != aliases_.end();) {
     if (it->second == key) {
-      AliasMap::iterator old_it = it;
+      auto old_it = it;
       ++it;
       aliases_.erase(old_it);
     } else {
@@ -570,8 +574,7 @@ void SpdySessionPool::RemoveAliases(const SpdySessionKey& key) {
 
 SpdySessionPool::WeakSessionList SpdySessionPool::GetCurrentSessions() const {
   WeakSessionList current_sessions;
-  for (SessionSet::const_iterator it = sessions_.begin();
-       it != sessions_.end(); ++it) {
+  for (auto it = sessions_.begin(); it != sessions_.end(); ++it) {
     current_sessions.push_back((*it)->GetWeakPtr());
   }
   return current_sessions;

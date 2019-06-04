@@ -1,4 +1,4 @@
-// Copyright (c) 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,6 +10,8 @@ namespace chrome_cleaner {
 
 // Set the timeout for the cleaning phase, in minutes. 0 disables the timeout
 // entirely.
+// WARNING: this switch is used by internal test systems. Be careful when making
+// changes.
 const char kCleaningTimeoutMinutesSwitch[] = "cleaning-timeout";
 
 // Identifier used to group all reports generated during the same run of the
@@ -29,7 +31,8 @@ const char kCrashSwitch[] = "crash";
 
 // Dump the raw logs to a file with the same base name as the executable. The
 // dumped file is a raw protobuf and has a "pb" extension.
-// WARNING: this switch is used internally. Be careful when making changes.
+// WARNING: this switch is used by internal test systems. Be careful when making
+// changes.
 const char kDumpRawLogsSwitch[] = "dump-raw-logs";
 
 // Identify that the process is already supposed to be elevated, so that we
@@ -48,7 +51,8 @@ const char kForceSelfDeleteSwitch[] = "force-self-delete";
 
 // Log all removable UwS that were not detected, but the scanner found some
 // UwS-related footprints.
-// WARNING: this switch is used internally. Be careful when making changes.
+// WARNING: this switch is used by internal test systems. Be careful when making
+// changes.
 const char kForceUwsDetectionSwitch[] = "force-uws-detection";
 
 // The handle of an event to signal when the initialization of the main process
@@ -82,7 +86,8 @@ const char kNoCrashUploadSwitch[] = "no-crash-upload";
 const char kNoRecoveryComponentSwitch[] = "no-recovery-component";
 
 // Prevent the logging service from uploading logs and reports.
-// WARNING: this switch is used internally, be careful when making changes.
+// WARNING: this switch is used by internal test systems. Be careful when making
+// changes.
 const char kNoReportUploadSwitch[] = "no-report-upload";
 
 // Prevent the executable from deleting itself after running.
@@ -102,9 +107,15 @@ const char kPostRebootTriggerSwitch[] = "post-reboot-trigger";
 const char kPostRebootSwitchesInOtherRegistryKeySwitch[] =
     "post-reboot-override-cmd";
 
+// Specifies the quarantine folder instead of the default one.
+const char kQuarantineDirSwitch[] = "quarantine-dir";
+
 // Allow the engine to remove UwS that isn't marked cleanable. For testing
 // only.
 const char kRemoveScanOnlyUwS[] = "remove-scan-only-uws";
+
+// Enable reporting of force-installed Chrome extensions.
+const char kReportExtensionsSwitch[] = "report-extensions";
 
 // Mojo pipe token generated in the broker process and passed to the sandbox
 // process to bind with the EngineCommands IPC interface.
@@ -114,8 +125,15 @@ const char kSandboxMojoPipeTokenSwitch[] = "sandbox-mojo-pipe-token";
 // to be spawned.
 const char kSandboxedProcessIdSwitch[] = "sandboxed-process-id";
 
+// Used to limit trace locations that will be scanned. Trace locations should be
+// specified as integers, separated by commas. For example:
+//   --scan-locations=1,2,3,5
+const char kScanLocationsSwitch[] = "scan-locations";
+
 // Set the timeout for the scanning phase, in minutes. 0 disables the timeout
 // entirely.
+// WARNING: this switch is used by internal test systems. Be careful when making
+// changes.
 const char kScanningTimeoutMinutesSwitch[] = "scanning-timeout";
 
 // Set a test logging URL, where logs will be uploaded.
@@ -123,7 +141,8 @@ const char kTestLoggingURLSwitch[] = "test-logging-url";
 
 // Flag set during testing and stored as a crash key, to differentiate from
 // crashes received from actual users.
-// WARNING: this switch is used internally, be careful when making changes.
+// WARNING: this switch is used by internal test systems. Be careful when making
+// changes.
 const char kTestingSwitch[] = "testing";
 
 // Specifies the full path to a protocol buffer log file to be uploaded.

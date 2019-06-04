@@ -30,11 +30,13 @@ extern const char kDataReductionProxyServerAlternative7[];
 extern const char kDataReductionProxyServerAlternative8[];
 extern const char kDataReductionProxyServerAlternative9[];
 extern const char kDataReductionProxyServerAlternative10[];
+extern const char kDataReductionProxyServerClientConfig[];
 extern const char kEnableDataReductionProxy[];
 extern const char kEnableDataReductionProxyBypassWarning[];
 extern const char kEnableDataReductionProxyForcePingback[];
 extern const char kEnableDataReductionProxySavingsPromo[];
 extern const char kDisableDataReductionProxyWarmupURLFetch[];
+extern const char kDisableDataReductionProxyWarmupURLFetchCallback[];
 
 }  // namespace switches
 }  // namespace data_reduction_proxy

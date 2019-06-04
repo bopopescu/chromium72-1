@@ -2,6 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "net/third_party/quic/core/quic_utils.h"
 #include "net/third_party/quic/core/tls_client_handshaker.h"
 #include "net/third_party/quic/core/tls_server_handshaker.h"
 #include "net/third_party/quic/platform/api/quic_arraysize.h"
@@ -13,7 +14,7 @@
 #include "net/third_party/quic/test_tools/mock_quic_session_visitor.h"
 #include "net/third_party/quic/test_tools/quic_test_utils.h"
 
-namespace net {
+namespace quic {
 namespace test {
 namespace {
 
@@ -57,6 +58,10 @@ class FakeProofVerifier : public ProofVerifier {
         hostname, certs, context, error_details, details, std::move(callback),
         verifier_.get()));
     return QUIC_PENDING;
+  }
+
+  std::unique_ptr<ProofVerifyContext> CreateDefaultContext() override {
+    return nullptr;
   }
 
   void Activate() { active_ = true; }
@@ -167,7 +172,9 @@ class TestQuicCryptoStream : public QuicCryptoStream {
   void SendFramesToStream(QuicCryptoStream* stream) {
     QUIC_LOG(INFO) << "Sending " << pending_writes_.size() << " frames";
     for (size_t i = 0; i < pending_writes_.size(); ++i) {
-      QuicStreamFrame frame(kCryptoStreamId, false, stream->stream_bytes_read(),
+      QuicStreamFrame frame(QuicUtils::GetCryptoStreamId(
+                                session()->connection()->transport_version()),
+                            false, stream->stream_bytes_read(),
                             pending_writes_[i]);
       stream->OnStreamFrame(frame);
     }
@@ -187,10 +194,11 @@ class TestQuicCryptoClientStream : public TestQuicCryptoStream {
         handshaker_(new TlsClientHandshaker(
             this,
             session,
-            QuicServerId("test.example.com", 443),
+            QuicServerId("test.example.com", 443, false),
             proof_verifier_.get(),
             ssl_ctx_.get(),
-            crypto_test_utils::ProofVerifyContextForTesting())) {}
+            crypto_test_utils::ProofVerifyContextForTesting(),
+            "quic-tester")) {}
 
   ~TestQuicCryptoClientStream() override = default;
 
@@ -261,6 +269,8 @@ class TlsHandshakerTest : public QuicTest {
     server_stream_ =
         new TestQuicCryptoServerStream(&server_session_, &proof_source_);
     server_session_.SetCryptoStream(server_stream_);
+    client_session_.Initialize();
+    server_session_.Initialize();
     EXPECT_FALSE(client_stream_->encryption_established());
     EXPECT_FALSE(client_stream_->handshake_confirmed());
     EXPECT_FALSE(server_stream_->encryption_established());
@@ -370,9 +380,10 @@ TEST_F(TlsHandshakerTest, ClientConnectionClosedOnTlsAlert) {
       2,   // AlertLevel fatal
       80,  // AlertDescription internal_error
   };
-  QuicStreamFrame alert(kCryptoStreamId, false,
-                        client_stream_->stream_bytes_read(),
-                        QuicStringPiece(alert_msg, QUIC_ARRAYSIZE(alert_msg)));
+  QuicStreamFrame alert(
+      QuicUtils::GetCryptoStreamId(client_conn_->transport_version()), false,
+      client_stream_->stream_bytes_read(),
+      QuicStringPiece(alert_msg, QUIC_ARRAYSIZE(alert_msg)));
   client_stream_->OnStreamFrame(alert);
 
   EXPECT_FALSE(client_stream_->handshake_confirmed());
@@ -391,9 +402,10 @@ TEST_F(TlsHandshakerTest, ServerConnectionClosedOnTlsAlert) {
       2,   // AlertLevel fatal
       80,  // AlertDescription internal_error
   };
-  QuicStreamFrame alert(kCryptoStreamId, false,
-                        server_stream_->stream_bytes_read(),
-                        QuicStringPiece(alert_msg, QUIC_ARRAYSIZE(alert_msg)));
+  QuicStreamFrame alert(
+      QuicUtils::GetCryptoStreamId(server_conn_->transport_version()), false,
+      server_stream_->stream_bytes_read(),
+      QuicStringPiece(alert_msg, QUIC_ARRAYSIZE(alert_msg)));
   server_stream_->OnStreamFrame(alert);
 
   EXPECT_FALSE(server_stream_->handshake_confirmed());
@@ -401,4 +413,4 @@ TEST_F(TlsHandshakerTest, ServerConnectionClosedOnTlsAlert) {
 
 }  // namespace
 }  // namespace test
-}  // namespace net
+}  // namespace quic

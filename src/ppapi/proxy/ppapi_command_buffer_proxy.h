@@ -37,7 +37,7 @@ class PPAPI_PROXY_EXPORT PpapiCommandBufferProxy : public gpu::CommandBuffer,
                           InstanceData::FlushInfo* flush_info,
                           LockedSender* sender,
                           const gpu::Capabilities& capabilities,
-                          const SerializedHandle& shared_state,
+                          SerializedHandle shared_state,
                           gpu::CommandBufferId command_buffer_id);
   ~PpapiCommandBufferProxy() override;
 
@@ -59,8 +59,7 @@ class PPAPI_PROXY_EXPORT PpapiCommandBufferProxy : public gpu::CommandBuffer,
   const gpu::Capabilities& GetCapabilities() const override;
   int32_t CreateImage(ClientBuffer buffer,
                       size_t width,
-                      size_t height,
-                      unsigned internalformat) override;
+                      size_t height) override;
   void DestroyImage(int32_t id) override;
   void SignalQuery(uint32_t query, base::OnceClosure callback) override;
   void CreateGpuFence(uint32_t gpu_fence_id, ClientGpuFence source) override;
@@ -78,7 +77,6 @@ class PPAPI_PROXY_EXPORT PpapiCommandBufferProxy : public gpu::CommandBuffer,
                        base::OnceClosure callback) override;
   void WaitSyncTokenHint(const gpu::SyncToken& sync_token) override;
   bool CanWaitUnverifiedSyncToken(const gpu::SyncToken& sync_token) override;
-  void SetSnapshotRequested() override;
 
  private:
   bool Send(IPC::Message* msg);
@@ -96,7 +94,7 @@ class PPAPI_PROXY_EXPORT PpapiCommandBufferProxy : public gpu::CommandBuffer,
 
   gpu::Capabilities capabilities_;
   State last_state_;
-  std::unique_ptr<base::SharedMemory> shared_state_shm_;
+  base::WritableSharedMemoryMapping shared_state_mapping_;
 
   HostResource resource_;
   InstanceData::FlushInfo* flush_info_;

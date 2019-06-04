@@ -313,27 +313,27 @@ ByteString GetColorStringWithDefault(CPDF_Array* pColor,
 }
 
 float GetBorderWidth(const CPDF_Dictionary& pAnnotDict) {
-  if (CPDF_Dictionary* pBorderStyleDict = pAnnotDict.GetDictFor("BS")) {
+  if (const CPDF_Dictionary* pBorderStyleDict = pAnnotDict.GetDictFor("BS")) {
     if (pBorderStyleDict->KeyExist("W"))
       return pBorderStyleDict->GetNumberFor("W");
   }
 
-  if (CPDF_Array* pBorderArray = pAnnotDict.GetArrayFor("Border")) {
-    if (pBorderArray->GetCount() > 2)
+  if (const CPDF_Array* pBorderArray = pAnnotDict.GetArrayFor("Border")) {
+    if (pBorderArray->size() > 2)
       return pBorderArray->GetNumberAt(2);
   }
 
   return 1;
 }
 
-CPDF_Array* GetDashArray(const CPDF_Dictionary& pAnnotDict) {
-  if (CPDF_Dictionary* pBorderStyleDict = pAnnotDict.GetDictFor("BS")) {
+const CPDF_Array* GetDashArray(const CPDF_Dictionary& pAnnotDict) {
+  if (const CPDF_Dictionary* pBorderStyleDict = pAnnotDict.GetDictFor("BS")) {
     if (pBorderStyleDict->GetStringFor("S") == "D")
       return pBorderStyleDict->GetArrayFor("D");
   }
 
-  if (CPDF_Array* pBorderArray = pAnnotDict.GetArrayFor("Border")) {
-    if (pBorderArray->GetCount() == 4)
+  if (const CPDF_Array* pBorderArray = pAnnotDict.GetArrayFor("Border")) {
+    if (pBorderArray->size() == 4)
       return pBorderArray->GetArrayAt(3);
   }
 
@@ -341,12 +341,12 @@ CPDF_Array* GetDashArray(const CPDF_Dictionary& pAnnotDict) {
 }
 
 ByteString GetDashPatternString(const CPDF_Dictionary& pAnnotDict) {
-  CPDF_Array* pDashArray = GetDashArray(pAnnotDict);
+  const CPDF_Array* pDashArray = GetDashArray(pAnnotDict);
   if (!pDashArray || pDashArray->IsEmpty())
     return ByteString();
 
   // Support maximum of ten elements in the dash array.
-  size_t pDashArrayCount = std::min<size_t>(pDashArray->GetCount(), 10);
+  size_t pDashArrayCount = std::min<size_t>(pDashArray->size(), 10);
   std::ostringstream sDashStream;
 
   sDashStream << "[";
@@ -399,13 +399,11 @@ std::unique_ptr<CPDF_Dictionary> GenerateResourceFontDict(
   CPDF_Dictionary* pFontDict = pDoc->NewIndirect<CPDF_Dictionary>();
   pFontDict->SetNewFor<CPDF_Name>("Type", "Font");
   pFontDict->SetNewFor<CPDF_Name>("Subtype", "Type1");
-  pFontDict->SetNewFor<CPDF_Name>("BaseFont", "Helvetica");
+  pFontDict->SetNewFor<CPDF_Name>("BaseFont", CFX_Font::kDefaultAnsiFontName);
   pFontDict->SetNewFor<CPDF_Name>("Encoding", "WinAnsiEncoding");
 
-  auto pResourceFontDict =
-      pdfium::MakeUnique<CPDF_Dictionary>(pDoc->GetByteStringPool());
-  pResourceFontDict->SetNewFor<CPDF_Reference>(sFontDictName, pDoc,
-                                               pFontDict->GetObjNum());
+  auto pResourceFontDict = pDoc->New<CPDF_Dictionary>();
+  pResourceFontDict->SetFor(sFontDictName, pFontDict->MakeReference(pDoc));
   return pResourceFontDict;
 }
 
@@ -490,8 +488,7 @@ std::unique_ptr<CPDF_Dictionary> GenerateResourceDict(
     CPDF_Document* pDoc,
     std::unique_ptr<CPDF_Dictionary> pExtGStateDict,
     std::unique_ptr<CPDF_Dictionary> pResourceFontDict) {
-  auto pResourceDict =
-      pdfium::MakeUnique<CPDF_Dictionary>(pDoc->GetByteStringPool());
+  auto pResourceDict = pDoc->New<CPDF_Dictionary>();
   if (pExtGStateDict)
     pResourceDict->SetFor("ExtGState", std::move(pExtGStateDict));
   if (pResourceFontDict)
@@ -505,13 +502,13 @@ void GenerateAndSetAPDict(CPDF_Document* pDoc,
                           std::unique_ptr<CPDF_Dictionary> pResourceDict,
                           bool bIsTextMarkupAnnotation) {
   CPDF_Stream* pNormalStream = pDoc->NewIndirect<CPDF_Stream>();
-  pNormalStream->SetData(psAppStream);
+  pNormalStream->SetDataFromStringstream(psAppStream);
 
   CPDF_Dictionary* pAPDict = pAnnotDict->GetDictFor("AP");
   if (!pAPDict)
     pAPDict = pAnnotDict->SetNewFor<CPDF_Dictionary>("AP");
 
-  pAPDict->SetNewFor<CPDF_Reference>("N", pDoc, pNormalStream->GetObjNum());
+  pAPDict->SetFor("N", pNormalStream->MakeReference(pDoc));
 
   CPDF_Dictionary* pStreamDict = pNormalStream->GetDict();
   pStreamDict->SetNewFor<CPDF_Number>("FormType", 1);
@@ -658,15 +655,15 @@ bool GenerateInkAP(CPDF_Document* pDoc, CPDF_Dictionary* pAnnotDict) {
   rect.Inflate(fBorderWidth / 2, fBorderWidth / 2);
   pAnnotDict->SetRectFor("Rect", rect);
 
-  for (size_t i = 0; i < pInkList->GetCount(); i++) {
+  for (size_t i = 0; i < pInkList->size(); i++) {
     CPDF_Array* pInkCoordList = pInkList->GetArrayAt(i);
-    if (!pInkCoordList || pInkCoordList->GetCount() < 2)
+    if (!pInkCoordList || pInkCoordList->size() < 2)
       continue;
 
     sAppStream << pInkCoordList->GetNumberAt(0) << " "
                << pInkCoordList->GetNumberAt(1) << " m ";
 
-    for (size_t j = 0; j < pInkCoordList->GetCount() - 1; j += 2) {
+    for (size_t j = 0; j < pInkCoordList->size() - 1; j += 2) {
       sAppStream << pInkCoordList->GetNumberAt(j) << " "
                  << pInkCoordList->GetNumberAt(j + 1) << " l ";
     }
@@ -764,8 +761,8 @@ bool GeneratePopupAP(CPDF_Document* pDoc, CPDF_Dictionary* pAnnotDict) {
 
   auto pExtGStateDict =
       GenerateExtGStateDict(*pAnnotDict, sExtGSDictName, "Normal");
-  auto pResourceDict = GenerateResourceDict(pDoc, std::move(pResourceFontDict),
-                                            std::move(pExtGStateDict));
+  auto pResourceDict = GenerateResourceDict(pDoc, std::move(pExtGStateDict),
+                                            std::move(pResourceFontDict));
 
   sAppStream << GetPopupContentsString(pDoc, *pAnnotDict, pDefFont, sFontName);
   GenerateAndSetAPDict(pDoc, pAnnotDict, &sAppStream, std::move(pResourceDict),
@@ -804,7 +801,7 @@ bool GenerateSquareAP(CPDF_Document* pDoc, CPDF_Dictionary* pAnnotDict) {
     rect.Deflate(fBorderWidth / 2, fBorderWidth / 2);
   }
 
-  bool bIsFillRect = pInteriorColor && (pInteriorColor->GetCount() > 0);
+  bool bIsFillRect = pInteriorColor && (pInteriorColor->size() > 0);
 
   sAppStream << rect.left << " " << rect.bottom << " " << rect.Width() << " "
              << rect.Height() << " re "
@@ -907,11 +904,11 @@ bool GenerateStrikeOutAP(CPDF_Document* pDoc, CPDF_Dictionary* pAnnotDict) {
 void CPVT_GenerateAP::GenerateFormAP(Type type,
                                      CPDF_Document* pDoc,
                                      CPDF_Dictionary* pAnnotDict) {
-  const CPDF_Dictionary* pRootDict = pDoc->GetRoot();
+  CPDF_Dictionary* pRootDict = pDoc->GetRoot();
   if (!pRootDict)
     return;
 
-  const CPDF_Dictionary* pFormDict = pRootDict->GetDictFor("AcroForm");
+  CPDF_Dictionary* pFormDict = pRootDict->GetDictFor("AcroForm");
   if (!pFormDict)
     return;
 
@@ -930,10 +927,7 @@ void CPVT_GenerateAP::GenerateFormAP(Type type,
   if (!font)
     return;
 
-  ByteString sFontName = PDF_NameDecode(font->AsStringView());
-  if (sFontName.IsEmpty())
-    return;
-
+  ByteString font_name = *font;
   CFX_Color crText = CFX_Color::ParseColor(DA);
   CPDF_Dictionary* pDRDict = pFormDict->GetDictFor("DR");
   if (!pDRDict)
@@ -943,17 +937,14 @@ void CPVT_GenerateAP::GenerateFormAP(Type type,
   if (!pDRFontDict)
     return;
 
-  CPDF_Dictionary* pFontDict =
-      pDRFontDict->GetDictFor(sFontName.Right(sFontName.GetLength() - 1));
+  CPDF_Dictionary* pFontDict = pDRFontDict->GetDictFor(font_name);
   if (!pFontDict) {
     pFontDict = pDoc->NewIndirect<CPDF_Dictionary>();
     pFontDict->SetNewFor<CPDF_Name>("Type", "Font");
     pFontDict->SetNewFor<CPDF_Name>("Subtype", "Type1");
-    pFontDict->SetNewFor<CPDF_Name>("BaseFont", "Helvetica");
+    pFontDict->SetNewFor<CPDF_Name>("BaseFont", CFX_Font::kDefaultAnsiFontName);
     pFontDict->SetNewFor<CPDF_Name>("Encoding", "WinAnsiEncoding");
-    pDRFontDict->SetNewFor<CPDF_Reference>(
-        sFontName.Right(sFontName.GetLength() - 1), pDoc,
-        pFontDict->GetObjNum());
+    pDRFontDict->SetFor(font_name, pFontDict->MakeReference(pDoc));
   }
   CPDF_Font* pDefFont = pDoc->LoadFont(pFontDict);
   if (!pDefFont)
@@ -1062,7 +1053,7 @@ void CPVT_GenerateAP::GenerateFormAP(Type type,
   CPDF_Stream* pNormalStream = pAPDict->GetStreamFor("N");
   if (!pNormalStream) {
     pNormalStream = pDoc->NewIndirect<CPDF_Stream>();
-    pAPDict->SetNewFor<CPDF_Reference>("N", pDoc, pNormalStream->GetObjNum());
+    pAPDict->SetFor("N", pNormalStream->MakeReference(pDoc));
   }
   CPDF_Dictionary* pStreamDict = pNormalStream->GetDict();
   if (pStreamDict) {
@@ -1073,9 +1064,8 @@ void CPVT_GenerateAP::GenerateFormAP(Type type,
       CPDF_Dictionary* pStreamResFontList = pStreamResList->GetDictFor("Font");
       if (!pStreamResFontList)
         pStreamResFontList = pStreamResList->SetNewFor<CPDF_Dictionary>("Font");
-      if (!pStreamResFontList->KeyExist(sFontName)) {
-        pStreamResFontList->SetNewFor<CPDF_Reference>(sFontName, pDoc,
-                                                      pFontDict->GetObjNum());
+      if (!pStreamResFontList->KeyExist(font_name)) {
+        pStreamResFontList->SetFor(font_name, pFontDict->MakeReference(pDoc));
       }
     } else {
       pStreamDict->SetFor("Resources", pFormDict->GetDictFor("DR")->Clone());
@@ -1100,7 +1090,7 @@ void CPVT_GenerateAP::GenerateFormAP(Type type,
               : 0;
       CPVT_FontMap map(
           pDoc, pStreamDict ? pStreamDict->GetDictFor("Resources") : nullptr,
-          pDefFont, sFontName.Right(sFontName.GetLength() - 1));
+          pDefFont, font_name);
       CPDF_VariableText::Provider prd(&map);
       CPDF_VariableText vt;
       vt.SetProvider(&prd);
@@ -1161,7 +1151,7 @@ void CPVT_GenerateAP::GenerateFormAP(Type type,
               : WideString();
       CPVT_FontMap map(
           pDoc, pStreamDict ? pStreamDict->GetDictFor("Resources") : nullptr,
-          pDefFont, sFontName.Right(sFontName.GetLength() - 1));
+          pDefFont, font_name);
       CPDF_VariableText::Provider prd(&map);
       CPDF_VariableText vt;
       vt.SetProvider(&prd);
@@ -1229,7 +1219,7 @@ void CPVT_GenerateAP::GenerateFormAP(Type type,
     case CPVT_GenerateAP::kListBox: {
       CPVT_FontMap map(
           pDoc, pStreamDict ? pStreamDict->GetDictFor("Resources") : nullptr,
-          pDefFont, sFontName.Right(sFontName.GetLength() - 1));
+          pDefFont, font_name);
       CPDF_VariableText::Provider prd(&map);
       CPDF_Array* pOpts = ToArray(FPDF_GetFieldAttr(pAnnotDict, "Opt"));
       CPDF_Array* pSels = ToArray(FPDF_GetFieldAttr(pAnnotDict, "I"));
@@ -1238,7 +1228,7 @@ void CPVT_GenerateAP::GenerateFormAP(Type type,
       std::ostringstream sBody;
       if (pOpts) {
         float fy = rcBody.top;
-        for (size_t i = nTop, sz = pOpts->GetCount(); i < sz; i++) {
+        for (size_t i = nTop, sz = pOpts->size(); i < sz; i++) {
           if (IsFloatSmaller(fy, rcBody.bottom))
             break;
 
@@ -1251,7 +1241,7 @@ void CPVT_GenerateAP::GenerateFormAP(Type type,
 
             bool bSelected = false;
             if (pSels) {
-              for (size_t s = 0, ssz = pSels->GetCount(); s < ssz; s++) {
+              for (size_t s = 0, ssz = pSels->size(); s < ssz; s++) {
                 int value = pSels->GetIntegerAt(s);
                 if (value >= 0 && i == static_cast<size_t>(value)) {
                   bSelected = true;
@@ -1308,7 +1298,7 @@ void CPVT_GenerateAP::GenerateFormAP(Type type,
   }
 
   if (pNormalStream) {
-    pNormalStream->SetDataAndRemoveFilter(&sAppStream);
+    pNormalStream->SetDataFromStringstreamAndRemoveFilter(&sAppStream);
     pStreamDict = pNormalStream->GetDict();
     if (pStreamDict) {
       pStreamDict->SetMatrixFor("Matrix", matrix);
@@ -1321,9 +1311,8 @@ void CPVT_GenerateAP::GenerateFormAP(Type type,
           pStreamResFontList =
               pStreamResList->SetNewFor<CPDF_Dictionary>("Font");
         }
-        if (!pStreamResFontList->KeyExist(sFontName)) {
-          pStreamResFontList->SetNewFor<CPDF_Reference>(sFontName, pDoc,
-                                                        pFontDict->GetObjNum());
+        if (!pStreamResFontList->KeyExist(font_name)) {
+          pStreamResFontList->SetFor(font_name, pFontDict->MakeReference(pDoc));
         }
       } else {
         pStreamDict->SetFor("Resources", pFormDict->GetDictFor("DR")->Clone());

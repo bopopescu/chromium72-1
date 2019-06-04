@@ -10,7 +10,6 @@
 #include "base/memory/ptr_util.h"
 #include "base/optional.h"
 #include "base/time/tick_clock.h"
-#include "third_party/blink/renderer/platform/scheduler/base/real_time_domain.h"
 #include "third_party/blink/renderer/platform/scheduler/common/thread_scheduler_impl.h"
 #include "third_party/blink/renderer/platform/scheduler/common/throttling/budget_pool.h"
 #include "third_party/blink/renderer/platform/scheduler/common/throttling/throttled_time_domain.h"
@@ -102,8 +101,6 @@ TaskQueueThrottler::~TaskQueueThrottler() {
 }
 
 void TaskQueueThrottler::IncreaseThrottleRefCount(TaskQueue* task_queue) {
-  DCHECK_NE(task_queue, control_task_runner_.get());
-
   std::pair<TaskQueueMap::iterator, bool> insert_result =
       queue_details_.insert(std::make_pair(task_queue, Metadata()));
   insert_result.first->second.throttling_ref_count++;
@@ -239,7 +236,8 @@ void TaskQueueThrottler::PumpThrottledTasks() {
 
   for (const TaskQueueMap::value_type& map_entry : queue_details_) {
     TaskQueue* task_queue = map_entry.first;
-    UpdateQueueThrottlingStateInternal(lazy_now.Now(), task_queue, true);
+    UpdateQueueSchedulingLifecycleStateInternal(lazy_now.Now(), task_queue,
+                                                true);
   }
 }
 
@@ -314,14 +312,16 @@ void TaskQueueThrottler::OnTaskRunTimeReported(TaskQueue* task_queue,
   }
 }
 
-void TaskQueueThrottler::UpdateQueueThrottlingState(base::TimeTicks now,
-                                                    TaskQueue* queue) {
-  UpdateQueueThrottlingStateInternal(now, queue, false);
+void TaskQueueThrottler::UpdateQueueSchedulingLifecycleState(
+    base::TimeTicks now,
+    TaskQueue* queue) {
+  UpdateQueueSchedulingLifecycleStateInternal(now, queue, false);
 }
 
-void TaskQueueThrottler::UpdateQueueThrottlingStateInternal(base::TimeTicks now,
-                                                            TaskQueue* queue,
-                                                            bool is_wake_up) {
+void TaskQueueThrottler::UpdateQueueSchedulingLifecycleStateInternal(
+    base::TimeTicks now,
+    TaskQueue* queue,
+    bool is_wake_up) {
   if (!queue->IsQueueEnabled() || !IsThrottled(queue)) {
     return;
   }
@@ -444,7 +444,7 @@ void TaskQueueThrottler::AsValueInto(base::trace_event::TracedValue* state,
   for (const auto& map_entry : queue_details_) {
     state->BeginDictionaryWithCopiedName(PointerToString(map_entry.first));
     state->SetInteger("throttling_ref_count",
-                      map_entry.second.throttling_ref_count);
+                      static_cast<int>(map_entry.second.throttling_ref_count));
     state->EndDictionary();
   }
   state->EndDictionary();
@@ -572,7 +572,7 @@ void TaskQueueThrottler::EnableThrottling() {
     // to enforce task alignment.
     queue->InsertFence(TaskQueue::InsertFencePosition::kBeginningOfTime);
     queue->SetTimeDomain(time_domain_.get());
-    UpdateQueueThrottlingState(lazy_now.Now(), queue);
+    UpdateQueueSchedulingLifecycleState(lazy_now.Now(), queue);
   }
 
   TRACE_EVENT0("renderer.scheduler", "TaskQueueThrottler_EnableThrottling");

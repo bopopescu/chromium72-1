@@ -9,8 +9,7 @@
 
 namespace crostini {
 
-class CrostiniRemover : public crostini::CrostiniManager::RestartObserver,
-                        public base::RefCountedThreadSafe<CrostiniRemover> {
+class CrostiniRemover : public base::RefCountedThreadSafe<CrostiniRemover> {
  public:
   CrostiniRemover(Profile* profile,
                   std::string vm_name,
@@ -19,22 +18,17 @@ class CrostiniRemover : public crostini::CrostiniManager::RestartObserver,
 
   void RemoveCrostini();
 
-  // crostini::CrostiniManager::RestartObserver
-  void OnComponentLoaded(crostini::ConciergeClientResult result) override {}
-  void OnConciergeStarted(crostini::ConciergeClientResult result) override;
-  void OnDiskImageCreated(crostini::ConciergeClientResult result) override {}
-  void OnVmStarted(crostini::ConciergeClientResult result) override {}
-
  private:
   friend class base::RefCountedThreadSafe<CrostiniRemover>;
-  ~CrostiniRemover() override;
-  void OnRestartCrostini(crostini::ConciergeClientResult result);
-  void StopVmFinished(crostini::ConciergeClientResult result);
-  void DestroyDiskImageFinished(crostini::ConciergeClientResult result);
-  void StopConciergeFinished(bool success);
 
-  crostini::CrostiniManager::RestartId restart_id_ =
-      crostini::CrostiniManager::kUninitializedRestartId;
+  ~CrostiniRemover();
+
+  void OnComponentLoaded(crostini::CrostiniResult result);
+  void OnConciergeStarted(bool is_successful);
+  void StopVmFinished(crostini::CrostiniResult result);
+  void DestroyDiskImageFinished(crostini::CrostiniResult result);
+  void StopConciergeFinished(bool is_successful);
+
   Profile* profile_;
   std::string vm_name_;
   std::string container_name_;

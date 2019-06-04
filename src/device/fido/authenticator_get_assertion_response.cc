@@ -7,6 +7,8 @@
 #include <utility>
 
 #include "base/optional.h"
+#include "components/cbor/values.h"
+#include "components/cbor/writer.h"
 #include "device/fido/authenticator_data.h"
 #include "device/fido/fido_parsing_utils.h"
 
@@ -25,34 +27,32 @@ constexpr size_t kSignatureIndex = 5;
 // static
 base::Optional<AuthenticatorGetAssertionResponse>
 AuthenticatorGetAssertionResponse::CreateFromU2fSignResponse(
-    const std::vector<uint8_t>& relying_party_id_hash,
-    const std::vector<uint8_t>& u2f_data,
-    const std::vector<uint8_t>& key_handle) {
+    base::span<const uint8_t, kRpIdHashLength> relying_party_id_hash,
+    base::span<const uint8_t> u2f_data,
+    base::span<const uint8_t> key_handle) {
+  if (u2f_data.size() <= kSignatureIndex)
+    return base::nullopt;
+
   if (key_handle.empty())
     return base::nullopt;
 
-  auto flags = fido_parsing_utils::Extract(u2f_data, kFlagIndex, kFlagLength);
-  if (flags.empty())
+  auto flags = u2f_data.subspan<kFlagIndex, kFlagLength>()[0];
+  if (flags &
+      (static_cast<uint8_t>(AuthenticatorData::Flag::kExtensionDataIncluded) |
+       static_cast<uint8_t>(AuthenticatorData::Flag::kAttestation))) {
+    // U2F responses cannot assert CTAP2 features.
     return base::nullopt;
+  }
+  auto counter = u2f_data.subspan<kCounterIndex, kCounterLength>();
+  AuthenticatorData authenticator_data(relying_party_id_hash, flags, counter,
+                                       base::nullopt);
 
-  auto counter =
-      fido_parsing_utils::Extract(u2f_data, kCounterIndex, kCounterLength);
-  if (counter.empty())
-    return base::nullopt;
-
-  AuthenticatorData authenticator_data(relying_party_id_hash, flags[0],
-                                       std::move(counter), base::nullopt);
-
-  auto signature = fido_parsing_utils::Extract(
-      u2f_data, kSignatureIndex, u2f_data.size() - kSignatureIndex);
-  if (signature.empty())
-    return base::nullopt;
-
+  auto signature =
+      fido_parsing_utils::Materialize(u2f_data.subspan(kSignatureIndex));
   AuthenticatorGetAssertionResponse response(std::move(authenticator_data),
                                              std::move(signature));
-  response.SetCredential(
-      PublicKeyCredentialDescriptor(CredentialType::kPublicKey, key_handle));
-
+  response.SetCredential(PublicKeyCredentialDescriptor(
+      CredentialType::kPublicKey, fido_parsing_utils::Materialize(key_handle)));
   return std::move(response);
 }
 
@@ -71,8 +71,8 @@ AuthenticatorGetAssertionResponse& AuthenticatorGetAssertionResponse::operator=(
 AuthenticatorGetAssertionResponse::~AuthenticatorGetAssertionResponse() =
     default;
 
-const std::vector<uint8_t>& AuthenticatorGetAssertionResponse::GetRpIdHash()
-    const {
+const std::array<uint8_t, kRpIdHashLength>&
+AuthenticatorGetAssertionResponse::GetRpIdHash() const {
   return authenticator_data_.application_parameter();
 }
 
@@ -95,6 +95,26 @@ AuthenticatorGetAssertionResponse&
 AuthenticatorGetAssertionResponse::SetNumCredentials(uint8_t num_credentials) {
   num_credentials_ = num_credentials;
   return *this;
+}
+
+std::vector<uint8_t> GetSerializedCtapDeviceResponse(
+    const AuthenticatorGetAssertionResponse& response) {
+  cbor::Value::MapValue response_map;
+  if (response.credential())
+    response_map.emplace(1, response.credential()->ConvertToCBOR());
+
+  response_map.emplace(2, response.auth_data().SerializeToByteArray());
+  response_map.emplace(3, response.signature());
+
+  if (response.user_entity())
+    response_map.emplace(4, response.user_entity()->ConvertToCBOR());
+
+  // Multiple account selection is not supported.
+  response_map.emplace(5, 1);
+  auto encoded_response =
+      cbor::Writer::Write(cbor::Value(std::move(response_map)));
+  DCHECK(encoded_response);
+  return *encoded_response;
 }
 
 }  // namespace device

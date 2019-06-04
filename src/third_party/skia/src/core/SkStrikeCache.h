@@ -12,6 +12,7 @@
 #include <unordered_set>
 
 #include "SkDescriptor.h"
+#include "SkGlyphCache.h"
 #include "SkSpinlock.h"
 #include "SkTemplates.h"
 
@@ -39,7 +40,7 @@ public:
 };
 
 class SkStrikeCache {
-    struct Node;
+    class Node;
 
 public:
     SkStrikeCache() = default;
@@ -67,12 +68,28 @@ public:
         Node* fNode;
     };
 
+    static SkStrikeCache* GlobalStrikeCache();
+
     static ExclusiveStrikePtr FindStrikeExclusive(const SkDescriptor&);
+    ExclusiveStrikePtr findStrikeExclusive(const SkDescriptor&);
+    Node* findAndDetachStrike(const SkDescriptor&);
 
     static ExclusiveStrikePtr CreateStrikeExclusive(
             const SkDescriptor& desc,
             std::unique_ptr<SkScalerContext> scaler,
-            SkPaint::FontMetrics* maybeMetrics = nullptr,
+            SkFontMetrics* maybeMetrics = nullptr,
+            std::unique_ptr<SkStrikePinner> = nullptr);
+
+    ExclusiveStrikePtr createStrikeExclusive(
+            const SkDescriptor& desc,
+            std::unique_ptr<SkScalerContext> scaler,
+            SkFontMetrics* maybeMetrics = nullptr,
+            std::unique_ptr<SkStrikePinner> = nullptr);
+
+    Node* createStrike(
+            const SkDescriptor& desc,
+            std::unique_ptr<SkScalerContext> scaler,
+            SkFontMetrics* maybeMetrics = nullptr,
             std::unique_ptr<SkStrikePinner> = nullptr);
 
     static ExclusiveStrikePtr FindOrCreateStrikeExclusive(
@@ -80,19 +97,55 @@ public:
             const SkScalerContextEffects& effects,
             const SkTypeface& typeface);
 
-    static ExclusiveStrikePtr FindOrCreateStrikeExclusive(
-            const SkPaint& paint,
-            const SkSurfaceProps* surfaceProps,
-            SkScalerContextFlags scalerContextFlags,
-            const SkMatrix* deviceMatrix);
+    ExclusiveStrikePtr findOrCreateStrikeExclusive(
+            const SkDescriptor& desc,
+            const SkScalerContextEffects& effects,
+            const SkTypeface& typeface);
 
-    static ExclusiveStrikePtr FindOrCreateStrikeExclusive(const SkPaint& paint);
+    Node* findOrCreateStrike(
+            const SkDescriptor& desc,
+            const SkScalerContextEffects& effects,
+            const SkTypeface& typeface);
+
+    // Routines to find suitable data when working in a remote cache situation. These are
+    // suitable as substitutes for similar calls in SkScalerContext.
+    bool desperationSearchForImage(const SkDescriptor& desc,
+                                   SkGlyph* glyph,
+                                   SkGlyphCache* targetCache);
+    bool desperationSearchForPath(const SkDescriptor& desc, SkGlyphID glyphID, SkPath* path);
+
+    static ExclusiveStrikePtr FindOrCreateStrikeExclusive(
+            const SkFont& font,
+            const SkPaint& paint,
+            const SkSurfaceProps& surfaceProps,
+            SkScalerContextFlags scalerContextFlags,
+            const SkMatrix& deviceMatrix);
+
+    SkGlyphCacheInterface* findOrCreateGlyphCache(
+            const SkFont& font,
+            const SkPaint& paint,
+            const SkSurfaceProps& surfaceProps,
+            SkScalerContextFlags scalerContextFlags,
+            const SkMatrix& deviceMatrix);
+
+    Node* findOrCreateStrike(
+            const SkFont& font,
+            const SkPaint& paint,
+            const SkSurfaceProps& surfaceProps,
+            SkScalerContextFlags scalerContextFlags,
+            const SkMatrix& deviceMatrix);
+
+    // cons up a default paint, which is only needed for patheffects/maskfilter
+    static ExclusiveStrikePtr FindOrCreateStrikeWithNoDeviceExclusive(const SkFont&);
+
+    static ExclusiveStrikePtr FindOrCreateStrikeWithNoDeviceExclusive(const SkFont& font,
+                                                                      const SkPaint& paint);
 
     static std::unique_ptr<SkScalerContext> CreateScalerContext(
             const SkDescriptor&, const SkScalerContextEffects&, const SkTypeface&);
 
     static void PurgeAll();
-    static void Validate();
+    static void ValidateGlyphCacheDataSize();
     static void Dump();
 
     // Dump memory usage statistics of all the attaches caches in the process using the
@@ -101,7 +154,6 @@ public:
 
     // call when a glyphcache is available for caching (i.e. not in use)
     void attachNode(Node* node);
-    ExclusiveStrikePtr findStrikeExclusive(const SkDescriptor&);
 
     void purgeAll(); // does not change budget
 
@@ -117,13 +169,16 @@ public:
     int  setCachePointSizeLimit(int limit);
 
 #ifdef SK_DEBUG
+    // A simple accounting of what each glyph cache reports and the strike cache total.
     void validate() const;
+    // Make sure that each glyph cache's memory tracking and actual memory used are in sync.
+    void validateGlyphCacheDataSize() const;
 #else
     void validate() const {}
+    void validateGlyphCacheDataSize() const {}
 #endif
 
 private:
-    static void Attach(Node* node);
 
     // The following methods can only be called when mutex is already held.
     Node* internalGetHead() const { return fHead; }

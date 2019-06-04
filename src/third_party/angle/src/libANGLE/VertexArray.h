@@ -35,12 +35,12 @@ class Buffer;
 class VertexArrayState final : angle::NonCopyable
 {
   public:
-    VertexArrayState(size_t maxAttribs, size_t maxBindings);
+    VertexArrayState(VertexArray *vertexArray, size_t maxAttribs, size_t maxBindings);
     ~VertexArrayState();
 
     const std::string &getLabel() const { return mLabel; }
 
-    const BindingPointer<Buffer> &getElementArrayBuffer() const { return mElementArrayBuffer; }
+    Buffer *getElementArrayBuffer() const { return mElementArrayBuffer.get(); }
     size_t getMaxAttribs() const { return mVertexAttributes.size(); }
     size_t getMaxBindings() const { return mVertexBindings.size(); }
     const AttributesMask &getEnabledAttributesMask() const { return mEnabledAttributesMask; }
@@ -63,20 +63,25 @@ class VertexArrayState final : angle::NonCopyable
         return mVertexAttributes[attribIndex].bindingIndex;
     }
 
-    // Combines mClientMemoryAttribsMask with mEnabledAttributesMask.
-    gl::AttributesMask getEnabledClientMemoryAttribsMask() const;
+    void setAttribBinding(size_t attribIndex, GLuint newBindingIndex);
 
     // Extra validation performed on the Vertex Array.
     bool hasEnabledNullPointerClientArray() const;
+
+    // Get all the attributes in an AttributesMask that are using the given binding.
+    AttributesMask getBindingToAttributesMask(GLuint bindingIndex) const;
 
   private:
     friend class VertexArray;
     std::string mLabel;
     std::vector<VertexAttribute> mVertexAttributes;
-    BindingPointer<Buffer> mElementArrayBuffer;
+    SubjectBindingPointer<Buffer> mElementArrayBuffer;
     std::vector<VertexBinding> mVertexBindings;
     AttributesMask mEnabledAttributesMask;
     ComponentTypeMask mVertexAttributesTypeMask;
+
+    // This is a performance optimization for buffer binding. Allows element array buffer updates.
+    friend class State;
 
     // From the GLES 3.1 spec:
     // When a generic attribute array is sourced from client memory, the vertex attribute binding
@@ -84,9 +89,15 @@ class VertexArrayState final : angle::NonCopyable
     // attribs.
     gl::AttributesMask mClientMemoryAttribsMask;
     gl::AttributesMask mNullPointerClientMemoryAttribsMask;
+
+    // Used for validation cache. Indexed by attribute.
+    AttributesMask mCachedMappedArrayBuffers;
+    AttributesMask mCachedEnabledMappedArrayBuffers;
 };
 
-class VertexArray final : public angle::ObserverInterface, public LabeledObject
+class VertexArray final : public angle::ObserverInterface,
+                          public LabeledObject,
+                          public angle::Subject
 {
   public:
     VertexArray(rx::GLImplFactory *factory, GLuint id, size_t maxAttribs, size_t maxAttribBindings);
@@ -142,12 +153,7 @@ class VertexArray final : public angle::ObserverInterface, public LabeledObject
                               GLintptr offset,
                               GLsizei stride);
 
-    void setElementArrayBuffer(const Context *context, Buffer *buffer);
-
-    const BindingPointer<Buffer> &getElementArrayBuffer() const
-    {
-        return mState.getElementArrayBuffer();
-    }
+    Buffer *getElementArrayBuffer() const { return mState.getElementArrayBuffer(); }
     size_t getMaxAttribs() const { return mState.getMaxAttribs(); }
     size_t getMaxBindings() const { return mState.getMaxBindings(); }
 
@@ -167,14 +173,16 @@ class VertexArray final : public angle::ObserverInterface, public LabeledObject
         return mState.getEnabledAttributesMask();
     }
 
-    gl::AttributesMask getEnabledClientMemoryAttribsMask() const
-    {
-        return mState.getEnabledClientMemoryAttribsMask();
-    }
+    gl::AttributesMask getClientAttribsMask() const { return mState.mClientMemoryAttribsMask; }
 
     bool hasEnabledNullPointerClientArray() const
     {
         return mState.hasEnabledNullPointerClientArray();
+    }
+
+    bool hasMappedEnabledArrayBuffer() const
+    {
+        return mState.mCachedEnabledMappedArrayBuffers.any();
     }
 
     // Observer implementation
@@ -230,7 +238,7 @@ class VertexArray final : public angle::ObserverInterface, public LabeledObject
         DIRTY_BINDING_MAX = DIRTY_BINDING_UNKNOWN,
     };
 
-    using DirtyBits = angle::BitSet<DIRTY_BIT_MAX>;
+    using DirtyBits             = angle::BitSet<DIRTY_BIT_MAX>;
     using DirtyAttribBits       = angle::BitSet<DIRTY_ATTRIB_MAX>;
     using DirtyBindingBits      = angle::BitSet<DIRTY_BINDING_MAX>;
     using DirtyAttribBitsArray  = std::array<DirtyAttribBits, gl::MAX_VERTEX_ATTRIBS>;
@@ -238,17 +246,35 @@ class VertexArray final : public angle::ObserverInterface, public LabeledObject
 
     static size_t GetVertexIndexFromDirtyBit(size_t dirtyBit);
 
-    gl::Error syncState(const Context *context);
+    angle::Result syncState(const Context *context);
     bool hasAnyDirtyBit() const { return mDirtyBits.any(); }
 
     ComponentTypeMask getAttributesTypeMask() const { return mState.mVertexAttributesTypeMask; }
     AttributesMask getAttributesMask() const { return mState.mEnabledAttributesMask; }
 
-    void onBindingChanged(const Context *context, bool bound);
-    bool hasTransformFeedbackBindingConflict(const AttributesMask &activeAttribues) const;
+    void onBindingChanged(const Context *context, int incr);
+    bool hasTransformFeedbackBindingConflict(const gl::Context *context) const;
+
+    ANGLE_INLINE angle::Result getIndexRange(const Context *context,
+                                             GLenum type,
+                                             GLsizei indexCount,
+                                             const void *indices,
+                                             IndexRange *indexRangeOut) const
+    {
+        Buffer *elementArrayBuffer = mState.mElementArrayBuffer.get();
+        if (elementArrayBuffer && mIndexRangeCache.get(type, indexCount, indices, indexRangeOut))
+        {
+            return angle::Result::Continue();
+        }
+
+        return getIndexRangeImpl(context, type, indexCount, indices, indexRangeOut);
+    }
 
   private:
     ~VertexArray() override;
+
+    // This is a performance optimization for buffer binding. Allows element array buffer updates.
+    friend class State;
 
     void setDirtyAttribBit(size_t attribIndex, DirtyAttribBitType dirtyAttribBit);
     void setDirtyBindingBit(size_t bindingIndex, DirtyBindingBitType dirtyBindingBit);
@@ -260,9 +286,15 @@ class VertexArray final : public angle::ObserverInterface, public LabeledObject
                               angle::SubjectIndex index);
 
     // These are used to optimize draw call validation.
-    void updateCachedVertexAttributeSize(size_t attribIndex);
-    void updateCachedBufferBindingSize(size_t bindingIndex);
+    void updateCachedBufferBindingSize(VertexBinding *binding);
     void updateCachedTransformFeedbackBindingValidation(size_t bindingIndex, const Buffer *buffer);
+    void updateCachedMappedArrayBuffers(VertexBinding *binding);
+
+    angle::Result getIndexRangeImpl(const Context *context,
+                                    GLenum type,
+                                    GLsizei indexCount,
+                                    const void *indices,
+                                    IndexRange *indexRangeOut) const;
 
     GLuint mId;
 
@@ -275,11 +307,40 @@ class VertexArray final : public angle::ObserverInterface, public LabeledObject
     rx::VertexArrayImpl *mVertexArray;
 
     std::vector<angle::ObserverBinding> mArrayBufferObserverBindings;
-    angle::ObserverBinding mElementArrayBufferObserverBinding;
 
     AttributesMask mCachedTransformFeedbackConflictedBindingsMask;
+
+    class IndexRangeCache final : angle::NonCopyable
+    {
+      public:
+        IndexRangeCache();
+
+        void invalidate() { mTypeKey = GL_NONE; }
+
+        bool get(GLenum type, GLsizei indexCount, const void *indices, IndexRange *indexRangeOut)
+        {
+            size_t offset = reinterpret_cast<uintptr_t>(indices);
+            if (mTypeKey == type && mIndexCountKey == indexCount && mOffsetKey == offset)
+            {
+                *indexRangeOut = mPayload;
+                return true;
+            }
+
+            return false;
+        }
+
+        void put(GLenum type, GLsizei indexCount, size_t offset, const IndexRange &indexRange);
+
+      private:
+        GLenum mTypeKey;
+        GLsizei mIndexCountKey;
+        size_t mOffsetKey;
+        IndexRange mPayload;
+    };
+
+    mutable IndexRangeCache mIndexRangeCache;
 };
 
 }  // namespace gl
 
-#endif // LIBANGLE_VERTEXARRAY_H_
+#endif  // LIBANGLE_VERTEXARRAY_H_

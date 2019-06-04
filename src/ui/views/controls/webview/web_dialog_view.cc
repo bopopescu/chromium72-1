@@ -116,7 +116,7 @@ bool WebDialogView::CanClose() {
   if (!is_attempting_close_dialog_) {
     // Fire beforeunload event when user attempts to close the dialog.
     is_attempting_close_dialog_ = true;
-    web_view_->web_contents()->DispatchBeforeUnload();
+    web_view_->web_contents()->DispatchBeforeUnload(false /* auto_cancel */);
   }
   return false;
 }
@@ -138,6 +138,12 @@ base::string16 WebDialogView::GetWindowTitle() const {
   if (delegate_)
     return delegate_->GetDialogTitle();
   return base::string16();
+}
+
+base::string16 WebDialogView::GetAccessibleWindowTitle() const {
+  if (delegate_)
+    return delegate_->GetAccessibleDialogTitle();
+  return GetWindowTitle();
 }
 
 std::string WebDialogView::GetWindowName() const {
@@ -271,21 +277,23 @@ bool WebDialogView::HandleContextMenu(
 ////////////////////////////////////////////////////////////////////////////////
 // content::WebContentsDelegate implementation:
 
-void WebDialogView::MoveContents(WebContents* source, const gfx::Rect& pos) {
+void WebDialogView::SetContentsBounds(WebContents* source,
+                                      const gfx::Rect& bounds) {
   // The contained web page wishes to resize itself. We let it do this because
   // if it's a dialog we know about, we trust it not to be mean to the user.
-  GetWidget()->SetBounds(pos);
+  GetWidget()->SetBounds(bounds);
 }
 
 // A simplified version of BrowserView::HandleKeyboardEvent().
 // We don't handle global keyboard shortcuts here, but that's fine since
 // they're all browser-specific. (This may change in the future.)
-void WebDialogView::HandleKeyboardEvent(content::WebContents* source,
+bool WebDialogView::HandleKeyboardEvent(content::WebContents* source,
                                         const NativeWebKeyboardEvent& event) {
   if (!event.os_event)
-    return;
+    return false;
 
   GetWidget()->native_widget_private()->RepostNativeEvent(event.os_event);
+  return true;
 }
 
 void WebDialogView::CloseContents(WebContents* source) {

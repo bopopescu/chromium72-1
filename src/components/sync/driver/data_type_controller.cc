@@ -38,8 +38,8 @@ std::string DataTypeController::StateToString(State state) {
       return "Running";
     case STOPPING:
       return "Stopping";
-    case DISABLED:
-      return "Disabled";
+    case FAILED:
+      return "Failed";
   }
   NOTREACHED();
   return "Invalid";
@@ -51,6 +51,11 @@ bool DataTypeController::ReadyForStart() const {
 
 bool DataTypeController::CalledOnValidThread() const {
   return sequence_checker_.CalledOnValidSequence();
+}
+
+std::unique_ptr<SyncEncryptionHandler::Observer>
+DataTypeController::GetEncryptionObserverProxy() {
+  return nullptr;
 }
 
 }  // namespace syncer

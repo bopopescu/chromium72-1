@@ -13,6 +13,7 @@
     "64": "common/images/icon64.png",
     "96": "common/images/icon96.png",
     "128": "common/images/icon128.png",
+    "192": "common/images/icon192.png",
     "256": "common/images/icon256.png"
   },
   "permissions": [
@@ -138,6 +139,14 @@
         "filesystem:*.gslides"
       ]
     },
+    {
+      "id": "install-linux-package",
+      "default_title": "__MSG_INSTALL_LINUX_PACKAGE__",
+      "default_icon": "common/images/file_types/200/generic.png",
+      "file_filters": [
+        "filesystem:*.deb"
+      ]
+    },
     // The following handlers are used only internally, therefore they do not
     // have any file filter.
     // Selects the passed file after launching the Files app.
@@ -169,6 +178,7 @@
     "foreground/elements/files_toggle_ripple.js",
     "foreground/elements/files_tooltip.html",
     "foreground/elements/files_tooltip.js",
+    "background/js/runtime_loaded_test_util.js",
     "background/js/background_common_scripts.js",
     "foreground/js/metadata/byte_reader.js",
     "foreground/js/metadata/exif_parser.js",
@@ -185,7 +195,6 @@
   "app": {
     "background": {
       "scripts": [
-        "chrome://resources/js/analytics.js",
         "chrome://resources/js/cr.js",
         "chrome://resources/js/cr/event_target.js",
         "chrome://resources/js/cr/ui/array_data_model.js",
@@ -195,6 +204,6 @@
       ]
     },
     // chrome-extension://pmfjbimdmchhbnneeidfognadeopoehp is the image loader extension.
-    "content_security_policy": "default-src 'none'; script-src 'self' blob: filesystem: chrome://resources chrome-extension://pmfjbimdmchhbnneeidfognadeopoehp chrome-extension://fbjakikfhfdajcamjleinfciajelkpek; style-src 'self' blob: filesystem: 'unsafe-inline' chrome://resources chrome-extension://fbjakikfhfdajcamjleinfciajelkpek; frame-src 'self' blob: filesystem: about:; img-src 'self' blob: filesystem: chrome://resources chrome://theme data: https://docs.google.com https://*.googleusercontent.com chrome://extension-icon; media-src 'self' blob: filesystem: https://*.googleusercontent.com; connect-src https://drive.google.com https://www.google-analytics.com chrome://resources; object-src 'self' blob: filesystem:; font-src chrome://resources;"
+    "content_security_policy": "default-src 'none'; script-src 'self' blob: filesystem: chrome://resources chrome-extension://pmfjbimdmchhbnneeidfognadeopoehp; style-src 'self' blob: filesystem: 'unsafe-inline' chrome://resources; frame-src 'self' blob: filesystem: about:; img-src 'self' blob: filesystem: chrome://resources chrome://theme data: https://docs.google.com https://*.googleusercontent.com chrome://extension-icon; media-src 'self' blob: filesystem: https://*.googleusercontent.com; connect-src https://drive.google.com https://www.google-analytics.com chrome://resources; object-src 'self' blob: filesystem:; font-src chrome://resources;"
   }
 }

@@ -9,7 +9,6 @@
 #include "third_party/blink/renderer/platform/heap/heap.h"
 #include "third_party/blink/renderer/platform/heap/heap_buildflags.h"
 #include "third_party/blink/renderer/platform/heap/marking_visitor.h"
-#include "third_party/blink/renderer/platform/heap/persistent.h"
 #include "third_party/blink/renderer/platform/heap/trace_traits.h"
 #include "third_party/blink/renderer/platform/wtf/allocator.h"
 #include "third_party/blink/renderer/platform/wtf/assertions.h"
@@ -72,7 +71,7 @@ class PLATFORM_EXPORT HeapAllocator {
     ThreadState* state =
         ThreadStateFor<ThreadingTrait<T>::kAffinity>::GetState();
     DCHECK(state->IsAllocationAllowed());
-    size_t gc_info_index = GCInfoTrait<HeapVectorBacking<T>>::Index();
+    uint32_t gc_info_index = GCInfoTrait<HeapVectorBacking<T>>::Index();
     NormalPageArena* arena = static_cast<NormalPageArena*>(
         state->Heap().VectorBackingArena(gc_info_index));
     return reinterpret_cast<T*>(arena->AllocateObject(
@@ -83,7 +82,7 @@ class PLATFORM_EXPORT HeapAllocator {
     ThreadState* state =
         ThreadStateFor<ThreadingTrait<T>::kAffinity>::GetState();
     DCHECK(state->IsAllocationAllowed());
-    size_t gc_info_index = GCInfoTrait<HeapVectorBacking<T>>::Index();
+    uint32_t gc_info_index = GCInfoTrait<HeapVectorBacking<T>>::Index();
     NormalPageArena* arena = static_cast<NormalPageArena*>(
         state->Heap().ExpandedVectorBackingArena(gc_info_index));
     return reinterpret_cast<T*>(arena->AllocateObject(
@@ -96,7 +95,7 @@ class PLATFORM_EXPORT HeapAllocator {
                                   size_t quantized_shrunk_size);
   template <typename T>
   static T* AllocateInlineVectorBacking(size_t size) {
-    size_t gc_info_index = GCInfoTrait<HeapVectorBacking<T>>::Index();
+    uint32_t gc_info_index = GCInfoTrait<HeapVectorBacking<T>>::Index();
     ThreadState* state =
         ThreadStateFor<ThreadingTrait<T>::kAffinity>::GetState();
     const char* type_name = WTF_HEAP_PROFILER_TYPE_NAME(HeapVectorBacking<T>);
@@ -112,7 +111,7 @@ class PLATFORM_EXPORT HeapAllocator {
 
   template <typename T, typename HashTable>
   static T* AllocateHashTableBacking(size_t size) {
-    size_t gc_info_index =
+    uint32_t gc_info_index =
         GCInfoTrait<HeapHashTableBacking<HashTable>>::Index();
     ThreadState* state =
         ThreadStateFor<ThreadingTrait<T>::kAffinity>::GetState();
@@ -125,7 +124,7 @@ class PLATFORM_EXPORT HeapAllocator {
   static T* AllocateZeroedHashTableBacking(size_t size) {
     return AllocateHashTableBacking<T, HashTable>(size);
   }
-  static void FreeHashTableBacking(void* address, bool is_weak_table);
+  static void FreeHashTableBacking(void* address);
   static bool ExpandHashTableBacking(void*, size_t);
 
   static void TraceMarkedBackingStore(void* address) {
@@ -142,15 +141,9 @@ class PLATFORM_EXPORT HeapAllocator {
         size, IsEagerlyFinalizedType<Metadata>::value));
   }
 
-#if defined(OS_WIN) && defined(COMPILER_MSVC)
-  // MSVC eagerly instantiates the unused 'operator delete',
-  // provide a version that asserts and fails at run-time if
-  // used.
-  // Elsewhere we expect compilation to fail if 'delete' is
-  // attempted used and instantiated with a HeapAllocator-based
-  // object, as HeapAllocator::free is not provided.
+  // Compilers sometimes eagerly instantiates the unused 'operator delete', so
+  // we provide a version that asserts and fails at run-time if used.
   static void Free(void*) { NOTREACHED(); }
-#endif
 
   template <typename T>
   static void* NewArray(size_t bytes) {
@@ -166,6 +159,10 @@ class PLATFORM_EXPORT HeapAllocator {
 
   static bool IsObjectResurrectionForbidden() {
     return ThreadState::Current()->IsObjectResurrectionForbidden();
+  }
+
+  static bool IsSweepForbidden() {
+    return ThreadState::Current()->SweepForbidden();
   }
 
   template <typename T>
@@ -188,11 +185,11 @@ class PLATFORM_EXPORT HeapAllocator {
 
   template <typename T, typename VisitorDispatcher>
   static void RegisterBackingStoreCallback(VisitorDispatcher visitor,
-                                           T* backing_store,
+                                           T** backing_store_slot,
                                            MovingObjectCallback callback,
                                            void* callback_data) {
-    visitor->RegisterBackingStoreCallback(backing_store, callback,
-                                          callback_data);
+    visitor->RegisterBackingStoreCallback(
+        reinterpret_cast<void**>(backing_store_slot), callback, callback_data);
   }
 
   static void EnterGCForbiddenScope() {
@@ -305,7 +302,7 @@ class PLATFORM_EXPORT HeapAllocator {
                             size_t quantized_current_size,
                             size_t quantized_shrunk_size);
 
-  template <typename T, size_t u, typename V>
+  template <typename T, wtf_size_t u, typename V>
   friend class WTF::Vector;
   template <typename T, typename U, typename V, typename W>
   friend class WTF::HashSet;
@@ -335,7 +332,7 @@ static void TraceListHashSetValue(VisitorDispatcher visitor, Value& value) {
 // This inherits from the static-only HeapAllocator trait class, but we do
 // declare pointers to instances.  These pointers are always null, and no
 // objects are instantiated.
-template <typename ValueArg, size_t inlineCapacity>
+template <typename ValueArg, wtf_size_t inlineCapacity>
 class HeapListHashSetAllocator : public HeapAllocator {
   DISALLOW_NEW();
 
@@ -393,7 +390,9 @@ void HeapVectorBacking<T, Traits>::Finalize(void* pointer) {
       "HeapVectorBacking doesn't support objects that cannot be cleared as "
       "unused with memset or don't have a vtable");
 
-  DCHECK(!WTF::IsTriviallyDestructible<T>::value);
+  static_assert(
+      !std::is_trivially_destructible<T>::value,
+      "Finalization of trivially destructible classes should not happen.");
   HeapObjectHeader* header = HeapObjectHeader::FromPayload(pointer);
   // Use the payload size as recorded by the heap to determine how many
   // elements to finalize.
@@ -420,7 +419,9 @@ void HeapVectorBacking<T, Traits>::Finalize(void* pointer) {
 template <typename Table>
 void HeapHashTableBacking<Table>::Finalize(void* pointer) {
   using Value = typename Table::ValueType;
-  DCHECK(!WTF::IsTriviallyDestructible<Value>::value);
+  static_assert(
+      !std::is_trivially_destructible<Value>::value,
+      "Finalization of trivially destructible classes should not happen.");
   HeapObjectHeader* header = HeapObjectHeader::FromPayload(pointer);
   // Use the payload size as recorded by the heap to determine how many
   // elements to finalize.
@@ -444,10 +445,30 @@ class HeapHashMap : public HashMap<KeyArg,
                                    MappedTraitsArg,
                                    HeapAllocator> {
   IS_GARBAGE_COLLECTED_TYPE();
+  using Base =
+      HashMap<KeyArg, MappedArg, HashArg, KeyTraitsArg, MappedTraitsArg>;
   static_assert(WTF::IsTraceable<KeyArg>::value ||
                     WTF::IsTraceable<MappedArg>::value,
                 "For hash maps without traceable elements, use HashMap<> "
                 "instead of HeapHashMap<>");
+
+ public:
+  static void* AllocateObject(size_t size, bool eagerly_sweep) {
+    return ThreadHeap::Allocate<
+        HeapHashMap<KeyArg, MappedArg, HashArg, KeyTraitsArg, MappedTraitsArg>>(
+        size, eagerly_sweep);
+  }
+
+  void* operator new(size_t size) = delete;
+  void operator delete(void* p) = delete;
+  void* operator new[](size_t size) = delete;
+  void operator delete[](void* p) = delete;
+  void* operator new(size_t size, NotNullTag null_tag, void* location) {
+    return Base::operator new(size, null_tag, location);
+  }
+  void* operator new(size_t size, void* location) {
+    return Base::operator new(size, location);
+  }
 };
 
 template <typename ValueArg,
@@ -456,9 +477,27 @@ template <typename ValueArg,
 class HeapHashSet
     : public HashSet<ValueArg, HashArg, TraitsArg, HeapAllocator> {
   IS_GARBAGE_COLLECTED_TYPE();
+  using Base = HashSet<ValueArg, HashArg, TraitsArg>;
   static_assert(WTF::IsTraceable<ValueArg>::value,
                 "For hash sets without traceable elements, use HashSet<> "
                 "instead of HeapHashSet<>");
+
+ public:
+  static void* AllocateObject(size_t size, bool eagerly_sweep) {
+    return ThreadHeap::Allocate<HeapHashSet<ValueArg, HashArg, TraitsArg>>(
+        size, eagerly_sweep);
+  }
+
+  void* operator new(size_t size) = delete;
+  void operator delete(void* p) = delete;
+  void* operator new[](size_t size) = delete;
+  void operator delete[](void* p) = delete;
+  void* operator new(size_t size, NotNullTag null_tag, void* location) {
+    return Base::operator new(size, null_tag, location);
+  }
+  void* operator new(size_t size, void* location) {
+    return Base::operator new(size, location);
+  }
 };
 
 template <typename ValueArg,
@@ -467,14 +506,33 @@ template <typename ValueArg,
 class HeapLinkedHashSet
     : public LinkedHashSet<ValueArg, HashArg, TraitsArg, HeapAllocator> {
   IS_GARBAGE_COLLECTED_TYPE();
+  using Base = LinkedHashSet<ValueArg, HashArg, TraitsArg>;
   static_assert(WTF::IsTraceable<ValueArg>::value,
                 "For sets without traceable elements, use LinkedHashSet<> "
                 "instead of HeapLinkedHashSet<>");
+
+ public:
+  static void* AllocateObject(size_t size, bool eagerly_sweep) {
+    return ThreadHeap::Allocate<
+        HeapLinkedHashSet<ValueArg, HashArg, TraitsArg>>(size, eagerly_sweep);
+  }
+
+  void* operator new(size_t size) = delete;
+  void operator delete(void* p) = delete;
+  void* operator new[](size_t size) = delete;
+  void operator delete[](void* p) = delete;
+  void* operator new(size_t size, NotNullTag null_tag, void* location) {
+    return Base::operator new(size, null_tag, location);
+  }
+  void* operator new(size_t size, void* location) {
+    return Base::operator new(size, location);
+  }
 };
 
 template <typename ValueArg,
-          size_t inlineCapacity = 0,  // The inlineCapacity is just a dummy to
-                                      // match ListHashSet (off-heap).
+          wtf_size_t inlineCapacity =
+              0,  // The inlineCapacity is just a dummy to
+                  // match ListHashSet (off-heap).
           typename HashArg = typename DefaultHash<ValueArg>::Hash>
 class HeapListHashSet
     : public ListHashSet<ValueArg,
@@ -482,9 +540,28 @@ class HeapListHashSet
                          HashArg,
                          HeapListHashSetAllocator<ValueArg, inlineCapacity>> {
   IS_GARBAGE_COLLECTED_TYPE();
+  using Base = ListHashSet<ValueArg, inlineCapacity, HashArg>;
   static_assert(WTF::IsTraceable<ValueArg>::value,
                 "For sets without traceable elements, use ListHashSet<> "
                 "instead of HeapListHashSet<>");
+
+ public:
+  static void* AllocateObject(size_t size, bool eagerly_sweep) {
+    return ThreadHeap::Allocate<
+        HeapListHashSet<ValueArg, inlineCapacity, HashArg>>(size,
+                                                            eagerly_sweep);
+  }
+
+  void* operator new(size_t size) = delete;
+  void operator delete(void* p) = delete;
+  void* operator new[](size_t size) = delete;
+  void operator delete[](void* p) = delete;
+  void* operator new(size_t size, NotNullTag null_tag, void* location) {
+    return Base::operator new(size, null_tag, location);
+  }
+  void* operator new(size_t size, void* location) {
+    return Base::operator new(size, location);
+  }
 };
 
 template <typename Value,
@@ -498,9 +575,10 @@ class HeapHashCountedSet
                 "HashCountedSet<> instead of HeapHashCountedSet<>");
 };
 
-template <typename T, size_t inlineCapacity = 0>
+template <typename T, wtf_size_t inlineCapacity = 0>
 class HeapVector : public Vector<T, inlineCapacity, HeapAllocator> {
   IS_GARBAGE_COLLECTED_TYPE();
+  using Base = Vector<T, inlineCapacity, HeapAllocator>;
 
  public:
   HeapVector() {
@@ -509,20 +587,42 @@ class HeapVector : public Vector<T, inlineCapacity, HeapAllocator> {
                   "instead of HeapVector<>");
   }
 
-  explicit HeapVector(size_t size)
+  static void* AllocateObject(size_t size, bool eagerly_sweep) {
+    // On-heap HeapVectors generally should not have inline capacity, but it is
+    // hard to avoid when using a type alias. Hence we only disallow the
+    // VectorTraits<T>::kNeedsDestruction case for now.
+    static_assert(inlineCapacity == 0 || !VectorTraits<T>::kNeedsDestruction,
+                  "on-heap HeapVector<> should not have an inline capacity");
+    return ThreadHeap::Allocate<HeapVector<T, inlineCapacity>>(size,
+                                                               eagerly_sweep);
+  }
+
+  void* operator new(size_t size) = delete;
+  void operator delete(void* p) = delete;
+  void* operator new[](size_t size) = delete;
+  void operator delete[](void* p) = delete;
+  void* operator new(size_t size, NotNullTag null_tag, void* location) {
+    return Base::operator new(size, null_tag, location);
+  }
+  void* operator new(size_t size, void* location) {
+    return Base::operator new(size, location);
+  }
+
+  explicit HeapVector(wtf_size_t size)
       : Vector<T, inlineCapacity, HeapAllocator>(size) {}
 
-  HeapVector(size_t size, const T& val)
+  HeapVector(wtf_size_t size, const T& val)
       : Vector<T, inlineCapacity, HeapAllocator>(size, val) {}
 
-  template <size_t otherCapacity>
+  template <wtf_size_t otherCapacity>
   HeapVector(const HeapVector<T, otherCapacity>& other)
       : Vector<T, inlineCapacity, HeapAllocator>(other) {}
 };
 
-template <typename T, size_t inlineCapacity = 0>
+template <typename T, wtf_size_t inlineCapacity = 0>
 class HeapDeque : public Deque<T, inlineCapacity, HeapAllocator> {
   IS_GARBAGE_COLLECTED_TYPE();
+  using Base = Deque<T, inlineCapacity, HeapAllocator>;
 
  public:
   HeapDeque() {
@@ -531,10 +631,31 @@ class HeapDeque : public Deque<T, inlineCapacity, HeapAllocator> {
                   "of HeapDeque<>");
   }
 
-  explicit HeapDeque(size_t size)
+  static void* AllocateObject(size_t size, bool eagerly_sweep) {
+    // On-heap HeapDeques generally should not have inline capacity, but it is
+    // hard to avoid when using a type alias. Hence we only disallow the
+    // VectorTraits<T>::kNeedsDestruction case for now.
+    static_assert(inlineCapacity == 0 || !VectorTraits<T>::kNeedsDestruction,
+                  "on-heap HeapDeque<> should not have an inline capacity");
+    return ThreadHeap::Allocate<HeapVector<T, inlineCapacity>>(size,
+                                                               eagerly_sweep);
+  }
+
+  void* operator new(size_t size) = delete;
+  void operator delete(void* p) = delete;
+  void* operator new[](size_t size) = delete;
+  void operator delete[](void* p) = delete;
+  void* operator new(size_t size, NotNullTag null_tag, void* location) {
+    return Base::operator new(size, null_tag, location);
+  }
+  void* operator new(size_t size, void* location) {
+    return Base::operator new(size, location);
+  }
+
+  explicit HeapDeque(wtf_size_t size)
       : Deque<T, inlineCapacity, HeapAllocator>(size) {}
 
-  HeapDeque(size_t size, const T& val)
+  HeapDeque(wtf_size_t size, const T& val)
       : Deque<T, inlineCapacity, HeapAllocator>(size, val) {}
 
   HeapDeque& operator=(const HeapDeque& other) {
@@ -543,7 +664,7 @@ class HeapDeque : public Deque<T, inlineCapacity, HeapAllocator> {
     return *this;
   }
 
-  template <size_t otherCapacity>
+  template <wtf_size_t otherCapacity>
   HeapDeque(const HeapDeque<T, otherCapacity>& other)
       : Deque<T, inlineCapacity, HeapAllocator>(other) {}
 };
@@ -621,23 +742,6 @@ struct VectorTraits<blink::UntracedMember<T>>
   static const bool kCanMoveWithMemcpy = true;
 };
 
-template <
-    typename T,
-    blink::WeaknessPersistentConfiguration weaknessConfiguration,
-    blink::CrossThreadnessPersistentConfiguration crossThreadnessConfiguration>
-struct VectorTraits<blink::PersistentBase<T,
-                                          weaknessConfiguration,
-                                          crossThreadnessConfiguration>>
-    : VectorTraitsBase<blink::PersistentBase<T,
-                                             weaknessConfiguration,
-                                             crossThreadnessConfiguration>> {
-  STATIC_ONLY(VectorTraits);
-  static const bool kNeedsDestruction = true;
-  static const bool kCanInitializeWithMemset = true;
-  static const bool kCanClearUnusedSlotsWithMemset = false;
-  static const bool kCanMoveWithMemcpy = true;
-};
-
 template <typename T>
 struct VectorTraits<blink::HeapVector<T, 0>>
     : VectorTraitsBase<blink::HeapVector<T, 0>> {
@@ -658,7 +762,7 @@ struct VectorTraits<blink::HeapDeque<T, 0>>
   static const bool kCanMoveWithMemcpy = true;
 };
 
-template <typename T, size_t inlineCapacity>
+template <typename T, wtf_size_t inlineCapacity>
 struct VectorTraits<blink::HeapVector<T, inlineCapacity>>
     : VectorTraitsBase<blink::HeapVector<T, inlineCapacity>> {
   STATIC_ONLY(VectorTraits);
@@ -670,7 +774,7 @@ struct VectorTraits<blink::HeapVector<T, inlineCapacity>>
   static const bool kCanMoveWithMemcpy = VectorTraits<T>::kCanMoveWithMemcpy;
 };
 
-template <typename T, size_t inlineCapacity>
+template <typename T, wtf_size_t inlineCapacity>
 struct VectorTraits<blink::HeapDeque<T, inlineCapacity>>
     : VectorTraitsBase<blink::HeapDeque<T, inlineCapacity>> {
   STATIC_ONLY(VectorTraits);
@@ -861,7 +965,7 @@ struct HashTraits<blink::UntracedMember<T>>
   }
 };
 
-template <typename T, size_t inlineCapacity>
+template <typename T, wtf_size_t inlineCapacity>
 struct IsTraceable<
     ListHashSetNode<T, blink::HeapListHashSetAllocator<T, inlineCapacity>>*> {
   STATIC_ONLY(IsTraceable);
@@ -872,7 +976,7 @@ struct IsTraceable<
   static const bool value = true;
 };
 
-template <typename T, size_t inlineCapacity>
+template <typename T, wtf_size_t inlineCapacity>
 struct IsGarbageCollectedType<
     ListHashSetNode<T, blink::HeapListHashSetAllocator<T, inlineCapacity>>> {
   static const bool value = true;
@@ -925,14 +1029,6 @@ struct HandleHashTraits : SimpleClassHashTraits<H> {
 
   static PeekOutType Peek(const H& value) { return value; }
 };
-
-template <typename T>
-struct HashTraits<blink::Persistent<T>>
-    : HandleHashTraits<T, blink::Persistent<T>> {};
-
-template <typename T>
-struct HashTraits<blink::CrossThreadPersistent<T>>
-    : HandleHashTraits<T, blink::CrossThreadPersistent<T>> {};
 
 template <typename Value,
           typename HashFunctions,

@@ -7,6 +7,7 @@
 #include <algorithm>
 
 #include "base/command_line.h"
+#include "base/containers/flat_map.h"
 #include "base/no_destructor.h"
 #include "base/version.h"
 #include "chrome/browser/component_updater/component_updater_utils.h"
@@ -16,6 +17,7 @@
 #include "chrome/common/channel_info.h"
 #include "components/prefs/pref_service.h"
 #include "components/update_client/activity_data_service.h"
+#include "components/update_client/protocol_handler.h"
 #include "components/update_client/update_query_params.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/browser_thread.h"
@@ -154,7 +156,8 @@ std::string ChromeUpdateClientConfig::GetOSLongName() const {
   return impl_.GetOSLongName();
 }
 
-std::string ChromeUpdateClientConfig::ExtraRequestParams() const {
+base::flat_map<std::string, std::string>
+ChromeUpdateClientConfig::ExtraRequestParams() const {
   return impl_.ExtraRequestParams();
 }
 
@@ -162,10 +165,10 @@ std::string ChromeUpdateClientConfig::GetDownloadPreference() const {
   return std::string();
 }
 
-scoped_refptr<net::URLRequestContextGetter>
-ChromeUpdateClientConfig::RequestContext() const {
+scoped_refptr<network::SharedURLLoaderFactory>
+ChromeUpdateClientConfig::URLLoaderFactory() const {
   return content::BrowserContext::GetDefaultStoragePartition(context_)
-      ->GetURLRequestContext();
+      ->GetURLLoaderFactoryForBrowserProcess();
 }
 
 std::unique_ptr<service_manager::Connector>
@@ -207,6 +210,15 @@ bool ChromeUpdateClientConfig::IsPerUserInstall() const {
 
 std::vector<uint8_t> ChromeUpdateClientConfig::GetRunActionKeyHash() const {
   return impl_.GetRunActionKeyHash();
+}
+
+std::string ChromeUpdateClientConfig::GetAppGuid() const {
+  return impl_.GetAppGuid();
+}
+
+std::unique_ptr<update_client::ProtocolHandlerFactory>
+ChromeUpdateClientConfig::GetProtocolHandlerFactory() const {
+  return impl_.GetProtocolHandlerFactory();
 }
 
 ChromeUpdateClientConfig::~ChromeUpdateClientConfig() {}

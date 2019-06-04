@@ -16,7 +16,7 @@
  * @param {!QuickViewUma} quickViewUma
  * @param {!MetadataBoxController} metadataBoxController
  * @param {DialogType} dialogType
- * @param {!VolumeManagerWrapper} volumeManager
+ * @param {!VolumeManager} volumeManager
  *
  * @constructor
  */
@@ -85,7 +85,7 @@ function QuickViewController(
   this.dialogType_ = dialogType;
 
   /**
-   * @type {!VolumeManagerWrapper}
+   * @type {!VolumeManager}
    * @private
    */
   this.volumeManager_ = volumeManager;
@@ -134,6 +134,8 @@ QuickViewController.LOCAL_VOLUME_TYPES_ = [
   VolumeManagerCommon.VolumeType.DOWNLOADS,
   VolumeManagerCommon.VolumeType.REMOVABLE,
   VolumeManagerCommon.VolumeType.ANDROID_FILES,
+  VolumeManagerCommon.VolumeType.CROSTINI,
+  VolumeManagerCommon.VolumeType.MEDIA_VIEW,
 ];
 
 /**
@@ -199,10 +201,11 @@ QuickViewController.prototype.onOpenInNewButtonTap_ = function(event) {
  * @private
  */
 QuickViewController.prototype.onKeyDownToOpen_ = function(event) {
-  if (this.entries_.length == 0)
-    return;
   if (event.key === ' ') {
     event.preventDefault();
+    if (this.entries_.length != 1) {
+      return;
+    }
     event.stopImmediatePropagation();
     this.display_(QuickViewUma.WayToOpen.SPACE_KEY);
   }
@@ -269,6 +272,9 @@ QuickViewController.prototype.onFileSelectionChanged_ = function(event) {
   if (this.quickView_ && this.quickView_.isOpened()) {
     assert(this.entries_.length > 0);
     var entry = this.entries_[0];
+    if (util.isSameEntry(entry, this.quickViewModel_.getSelectedEntry())) {
+      return;
+    }
     this.quickViewModel_.setSelectedEntry(entry);
     this.display_();
   }
@@ -276,7 +282,7 @@ QuickViewController.prototype.onFileSelectionChanged_ = function(event) {
 
 /**
  * @param {!FileEntry} entry
- * @return {!Promise<!Array<!FileTask>>}
+ * @return {!Promise<!Array<!chrome.fileManagerPrivate.FileTask>>}
  * @private
  */
 QuickViewController.prototype.getAvailableTasks_ = function(entry) {
@@ -313,7 +319,8 @@ QuickViewController.prototype.updateQuickView_ = function() {
       ])
       .then(function(values) {
         var items = (/**@type{Array<MetadataItem>}*/ (values[0]));
-        var tasks = (/**@type{!Array<!FileTask>}*/ (values[1]));
+        var tasks = (/**@type{!Array<!chrome.fileManagerPrivate.FileTask>}*/ (
+            values[1]));
         return this.onMetadataLoaded_(entry, items, tasks);
       }.bind(this))
       .catch(console.error);
@@ -324,7 +331,7 @@ QuickViewController.prototype.updateQuickView_ = function() {
  *
  * @param {!FileEntry} entry
  * @param {Array<MetadataItem>} items
- * @param {!Array<!FileTask>} tasks
+ * @param {!Array<!chrome.fileManagerPrivate.FileTask>} tasks
  * @private
  */
 QuickViewController.prototype.onMetadataLoaded_ = function(
@@ -360,7 +367,7 @@ var QuickViewParams;
 /**
  * @param {!FileEntry} entry
  * @param {Array<MetadataItem>} items
- * @param {!Array<!FileTask>} tasks
+ * @param {!Array<!chrome.fileManagerPrivate.FileTask>} tasks
  * @return !Promise<!QuickViewParams>
  *
  * @private
@@ -477,6 +484,7 @@ QuickViewController.prototype.getQuickViewParameters_ = function(
  */
 QuickViewController.prototype.loadThumbnailFromDrive_ = function(url) {
   return new Promise(function(resolve) {
-    ImageLoaderClient.getInstance().load(url, resolve);
+    ImageLoaderClient.getInstance().load(
+        LoadImageRequest.createForUrl(url), resolve);
   });
 };

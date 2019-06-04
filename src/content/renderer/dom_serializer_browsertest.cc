@@ -131,15 +131,10 @@ class MAYBE_DomSerializerTests : public ContentBrowserTest,
                     const GURL& base_url,
                     const WebString encoding_info) {
     FrameLoadWaiter waiter(GetRenderView()->GetMainRenderFrame());
-    // If input encoding is empty, use UTF-8 as default encoding.
-    if (encoding_info.IsEmpty()) {
-      GetMainFrame()->LoadHTMLString(contents, base_url);
-    } else {
-      // Do not use WebFrame.LoadHTMLString because it assumes that input
-      // html contents use UTF-8 encoding.
-      WebData data(contents.data(), contents.length());
-      GetMainFrame()->LoadData(data, "text/html", encoding_info, base_url);
-    }
+    GetRenderView()->GetMainRenderFrame()->LoadHTMLString(
+        contents, base_url,
+        encoding_info.IsEmpty() ? "UTF-8" : encoding_info.Utf8(), GURL(),
+        false /* replace_current_item */);
     base::MessageLoopCurrent::ScopedNestableTaskAllower allow;
     waiter.Wait();
   }
@@ -673,7 +668,7 @@ IN_PROC_BROWSER_TEST_F(MAYBE_DomSerializerTests,
   std::string original_contents;
   {
     // Read original contents for later comparison.
-    base::ThreadRestrictions::ScopedAllowIO allow_io_for_test_verifications;
+    base::ScopedAllowBlockingForTesting allow_blocking;
     ASSERT_TRUE(base::ReadFileToString(xml_file_path, &original_contents));
   }
 
@@ -699,7 +694,7 @@ IN_PROC_BROWSER_TEST_F(MAYBE_DomSerializerTests,
   std::string original_contents;
   {
     // Read original contents for later comparison .
-    base::ThreadRestrictions::ScopedAllowIO allow_io_for_test_verifications;
+    base::ScopedAllowBlockingForTesting allow_blocking;
     ASSERT_TRUE(base::ReadFileToString(page_file_path, &original_contents));
   }
 

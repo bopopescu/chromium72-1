@@ -48,16 +48,18 @@ class CORE_EXPORT InspectorLogAgent
 
  private:
   // PerformanceMonitor::Client implementation.
-  void ReportLongLayout(double duration) override;
+  void ReportLongLayout(base::TimeDelta duration) override;
   void ReportGenericViolation(PerformanceMonitor::Violation,
                               const String& text,
-                              double time,
+                              base::TimeDelta time,
                               SourceLocation*) override;
+  void InnerEnable();
 
-  bool enabled_;
   Member<ConsoleMessageStorage> storage_;
   Member<PerformanceMonitor> performance_monitor_;
   v8_inspector::V8InspectorSession* v8_session_;
+  InspectorAgentState::Boolean enabled_;
+  InspectorAgentState::DoubleMap violation_thresholds_;
   DISALLOW_COPY_AND_ASSIGN(InspectorLogAgent);
 };
 

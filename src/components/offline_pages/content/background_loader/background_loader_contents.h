@@ -84,14 +84,14 @@ class BackgroundLoaderContents : public content::WebContentsDelegate {
   void RequestMediaAccessPermission(
       content::WebContents* contents,
       const content::MediaStreamRequest& request,
-      const content::MediaResponseCallback& callback) override;
+      content::MediaResponseCallback callback) override;
   bool CheckMediaAccessPermission(content::RenderFrameHost* render_frame_host,
                                   const GURL& security_origin,
                                   content::MediaStreamType type) override;
-
   void AdjustPreviewsStateForNavigation(
       content::WebContents* web_contents,
       content::PreviewsState* previews_state) override;
+  bool ShouldAllowLazyLoad() override;
 
  private:
   friend class BackgroundLoaderContentsTest;

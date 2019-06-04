@@ -7,12 +7,13 @@
 #include <memory>
 #include <utility>
 
+#include "ash/public/cpp/notification_utils.h"
 #include "ash/public/cpp/vector_icons/vector_icons.h"
 #include "ash/public/interfaces/session_controller.mojom.h"
 #include "ash/session/session_controller.h"
 #include "ash/shell.h"
 #include "ash/strings/grit/ash_strings.h"
-#include "ash/system/tray/system_tray_controller.h"
+#include "ash/system/model/system_tray_model.h"
 #include "base/bind_helpers.h"
 #include "base/memory/ptr_util.h"
 #include "base/metrics/histogram_macros.h"
@@ -58,19 +59,15 @@ MultiDeviceNotificationPresenter::OpenUiDelegate::~OpenUiDelegate() = default;
 
 void MultiDeviceNotificationPresenter::OpenUiDelegate::
     OpenMultiDeviceSetupUi() {
-  Shell::Get()->system_tray_controller()->ShowMultiDeviceSetup();
-}
-
-void MultiDeviceNotificationPresenter::OpenUiDelegate::
-    OpenChangeConnectedPhoneSettings() {
-  // TODO(jordynass): Open the "Settings/Connected Devices/Change Device"
-  // subpage once it has been implemented
+  Shell::Get()->system_tray_model()->client_ptr()->ShowMultiDeviceSetup();
 }
 
 void MultiDeviceNotificationPresenter::OpenUiDelegate::
     OpenConnectedDevicesSettings() {
-  // TODO(jordynass): Open the "Settings/Connected Devices" subpage once it
-  // has been implemented
+  Shell::Get()
+      ->system_tray_model()
+      ->client_ptr()
+      ->ShowConnectedDevicesSettings();
 }
 
 // static
@@ -110,6 +107,7 @@ MultiDeviceNotificationPresenter::MultiDeviceNotificationPresenter(
 }
 
 MultiDeviceNotificationPresenter::~MultiDeviceNotificationPresenter() {
+  message_center_->RemoveObserver(this);
   Shell::Get()->session_controller()->RemoveObserver(this);
 }
 
@@ -121,19 +119,28 @@ void MultiDeviceNotificationPresenter::OnPotentialHostExistsForNewUser() {
   ShowNotification(Status::kNewUserNotificationVisible, title, message);
 }
 
-void MultiDeviceNotificationPresenter::
-    OnConnectedHostSwitchedForExistingUser() {
-  base::string16 title = l10n_util::GetStringUTF16(
-      IDS_ASH_MULTI_DEVICE_SETUP_EXISTING_USER_HOST_SWITCHED_TITLE);
+void MultiDeviceNotificationPresenter::OnNoLongerNewUser() {
+  if (notification_status_ != Status::kNewUserNotificationVisible)
+    return;
+  RemoveMultiDeviceSetupNotification();
+}
+
+void MultiDeviceNotificationPresenter::OnConnectedHostSwitchedForExistingUser(
+    const std::string& new_host_device_name) {
+  base::string16 title = l10n_util::GetStringFUTF16(
+      IDS_ASH_MULTI_DEVICE_SETUP_EXISTING_USER_HOST_SWITCHED_TITLE,
+      base::ASCIIToUTF16(new_host_device_name));
   base::string16 message = l10n_util::GetStringUTF16(
       IDS_ASH_MULTI_DEVICE_SETUP_EXISTING_USER_HOST_SWITCHED_MESSAGE);
   ShowNotification(Status::kExistingUserHostSwitchedNotificationVisible, title,
                    message);
 }
 
-void MultiDeviceNotificationPresenter::OnNewChromebookAddedForExistingUser() {
-  base::string16 title = l10n_util::GetStringUTF16(
-      IDS_ASH_MULTI_DEVICE_SETUP_EXISTING_USER_NEW_CHROMEBOOK_ADDED_TITLE);
+void MultiDeviceNotificationPresenter::OnNewChromebookAddedForExistingUser(
+    const std::string& new_host_device_name) {
+  base::string16 title = l10n_util::GetStringFUTF16(
+      IDS_ASH_MULTI_DEVICE_SETUP_EXISTING_USER_NEW_CHROMEBOOK_ADDED_TITLE,
+      base::ASCIIToUTF16(new_host_device_name));
   base::string16 message = l10n_util::GetStringUTF16(
       IDS_ASH_MULTI_DEVICE_SETUP_EXISTING_USER_NEW_CHROMEBOOK_ADDED_MESSAGE);
   ShowNotification(Status::kExistingUserNewChromebookNotificationVisible, title,
@@ -156,8 +163,50 @@ void MultiDeviceNotificationPresenter::OnSessionStateChanged(
   ObserveMultiDeviceSetupIfPossible();
 }
 
+void MultiDeviceNotificationPresenter::OnNotificationRemoved(
+    const std::string& notification_id,
+    bool by_user) {
+  if (by_user && notification_id == kNotificationId) {
+    UMA_HISTOGRAM_ENUMERATION(
+        "MultiDeviceSetup_NotificationDismissed",
+        GetMetricValueForNotification(notification_status_),
+        kNotificationTypeMax);
+  }
+}
+
+void MultiDeviceNotificationPresenter::OnNotificationClicked(
+    const std::string& notification_id,
+    const base::Optional<int>& button_index,
+    const base::Optional<base::string16>& reply) {
+  if (notification_id != kNotificationId)
+    return;
+
+  DCHECK(notification_status_ != Status::kNoNotificationVisible);
+  PA_LOG(VERBOSE) << "User clicked "
+                  << GetNotificationDescriptionForLogging(notification_status_)
+                  << ".";
+  UMA_HISTOGRAM_ENUMERATION("MultiDeviceSetup_NotificationClicked",
+                            GetMetricValueForNotification(notification_status_),
+                            kNotificationTypeMax);
+  switch (notification_status_) {
+    case Status::kNewUserNotificationVisible:
+      open_ui_delegate_->OpenMultiDeviceSetupUi();
+      break;
+    case Status::kExistingUserHostSwitchedNotificationVisible:
+      // Clicks on the 'host switched' and 'Chromebook added' notifications have
+      // the same effect, i.e. opening the Settings subpage.
+      FALLTHROUGH;
+    case Status::kExistingUserNewChromebookNotificationVisible:
+      open_ui_delegate_->OpenConnectedDevicesSettings();
+      break;
+    case Status::kNoNotificationVisible:
+      NOTREACHED();
+  }
+  RemoveMultiDeviceSetupNotification();
+}
+
 void MultiDeviceNotificationPresenter::ObserveMultiDeviceSetupIfPossible() {
-  // If already observing, there is nothing else to do.
+  // If already the delegate, there is nothing else to do.
   if (multidevice_setup_ptr_)
     return;
 
@@ -177,52 +226,36 @@ void MultiDeviceNotificationPresenter::ObserveMultiDeviceSetupIfPossible() {
   if (!user_session)
     return;
 
-  std::string service_user_id = user_session->user_info->service_user_id;
-  DCHECK(!service_user_id.empty());
+  base::Optional<base::Token> service_instance_group =
+      user_session->user_info->service_instance_group;
+
+  // Cannot proceed if there is no known service instance group.
+  if (!service_instance_group)
+    return;
 
   connector_->BindInterface(
-      service_manager::Identity(
-          chromeos::multidevice_setup::mojom::kServiceName, service_user_id),
+      service_manager::ServiceFilter::ByNameInGroup(
+          chromeos::multidevice_setup::mojom::kServiceName,
+          *service_instance_group),
       &multidevice_setup_ptr_);
 
-  // Start observing the MultiDeviceSetup Service.
-  chromeos::multidevice_setup::mojom::MultiDeviceSetupObserverPtr observer_ptr;
-  binding_.Bind(mojo::MakeRequest(&observer_ptr));
-  multidevice_setup_ptr_->SetObserver(std::move(observer_ptr),
-                                      base::DoNothing());
-}
+  // Add this object as the delegate of the MultiDeviceSetup Service.
+  chromeos::multidevice_setup::mojom::AccountStatusChangeDelegatePtr
+      delegate_ptr;
+  binding_.Bind(mojo::MakeRequest(&delegate_ptr));
+  multidevice_setup_ptr_->SetAccountStatusChangeDelegate(
+      std::move(delegate_ptr));
 
-void MultiDeviceNotificationPresenter::OnNotificationClicked() {
-  DCHECK(notification_status_ != Status::kNoNotificationVisible);
-  PA_LOG(INFO) << "User clicked "
-               << GetNotificationDescriptionForLogging(notification_status_)
-               << ".";
-  UMA_HISTOGRAM_ENUMERATION("MultiDeviceSetup_NotificationClicked",
-                            GetMetricValueForNotification(notification_status_),
-                            kNotificationTypeMax);
-  switch (notification_status_) {
-    case Status::kNewUserNotificationVisible:
-      open_ui_delegate_->OpenMultiDeviceSetupUi();
-      break;
-    case Status::kExistingUserHostSwitchedNotificationVisible:
-      open_ui_delegate_->OpenChangeConnectedPhoneSettings();
-      break;
-    case Status::kExistingUserNewChromebookNotificationVisible:
-      open_ui_delegate_->OpenConnectedDevicesSettings();
-      break;
-    case Status::kNoNotificationVisible:
-      NOTREACHED();
-  }
-  RemoveMultiDeviceSetupNotification();
+  message_center_->AddObserver(this);
 }
 
 void MultiDeviceNotificationPresenter::ShowNotification(
     const Status notification_status,
     const base::string16& title,
     const base::string16& message) {
-  PA_LOG(INFO) << "Showing "
-               << GetNotificationDescriptionForLogging(notification_status)
-               << ".";
+  PA_LOG(VERBOSE) << "Showing "
+                  << GetNotificationDescriptionForLogging(notification_status)
+                  << ".";
   UMA_HISTOGRAM_ENUMERATION("MultiDeviceSetup_NotificationShown",
                             GetMetricValueForNotification(notification_status),
                             kNotificationTypeMax);
@@ -239,17 +272,13 @@ std::unique_ptr<message_center::Notification>
 MultiDeviceNotificationPresenter::CreateNotification(
     const base::string16& title,
     const base::string16& message) {
-  return message_center::Notification::CreateSystemNotification(
+  return ash::CreateSystemNotification(
       message_center::NotificationType::NOTIFICATION_TYPE_SIMPLE,
-      kNotificationId, title, message, gfx::Image() /* image */,
-      base::string16() /* display_source */, GURL() /* origin_url */,
-      message_center::NotifierId(
-          message_center::NotifierId::NotifierType::SYSTEM_COMPONENT,
-          kNotifierMultiDevice),
-      message_center::RichNotificationData(),
-      new message_center::HandleNotificationClickDelegate(base::BindRepeating(
-          &MultiDeviceNotificationPresenter::OnNotificationClicked,
-          weak_ptr_factory_.GetWeakPtr())),
+      kNotificationId, title, message, base::string16() /* display_source */,
+      GURL() /* origin_url */,
+      message_center::NotifierId(message_center::NotifierType::SYSTEM_COMPONENT,
+                                 kNotifierMultiDevice),
+      message_center::RichNotificationData(), nullptr /* delegate */,
       ash::kNotificationMultiDeviceSetupIcon,
       message_center::SystemNotificationWarningLevel::NORMAL);
 }

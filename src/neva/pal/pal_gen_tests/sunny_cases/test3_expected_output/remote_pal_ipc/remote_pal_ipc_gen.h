@@ -1,1 +1,0 @@
-SampleInterface* GetSampleInterface() override;

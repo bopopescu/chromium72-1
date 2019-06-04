@@ -2,7 +2,6 @@
 <!DOCTYPE translationbundle>
 <translationbundle lang="ar">
 <translation id="1018939186200882850">عنصر القائمة</translation>
-<translation id="1020833440720551630">كتم صوت المقطع الصوتي</translation>
 <translation id="10623998915015855">زر التبديل</translation>
 <translation id="1088086359088493902">ثوانٍ‬‬</translation>
 <translation id="1171774979989969504">يُرجى إدخال عنوان البريد الإلكتروني.</translation>
@@ -12,6 +11,7 @@
 <translation id="1206693055195146388">شريط تمرير</translation>
 <translation id="1211441953136645838">تعليق ختامي</translation>
 <translation id="1281252709823657822">مربع حوار</translation>
+<translation id="1289247557029249093">الخروج من وضع "نافذة ضمن النافذة"</translation>
 <translation id="1335095011850992622">إسهامات</translation>
 <translation id="1342835525016946179">article</translation>
 <translation id="1359897965706325498">إعلان بانر</translation>
@@ -25,10 +25,12 @@
 <translation id="1821985195704844674">شبكة متفرعة</translation>
 <translation id="1822429046913737220">صباحًا/مساءً</translation>
 <translation id="1832974991323546415">تشغيل على جهاز بعيد</translation>
+<translation id="190587075670221089">حذف</translation>
 <translation id="1907737156431278478">مثال</translation>
 <translation id="1921819250265091946">يوم</translation>
 <translation id="1930711995431081526">الحالة</translation>
 <translation id="1938124657309484470">يجب أن تكون القيمة <ph name="MAXIMUM_DATE_OR_TIME" /> أو قبل ذلك.</translation>
+<translation id="1946271899482435442">عرض منتقي التاريخ</translation>
 <translation id="1993104285338243655">تم التبديل إلى النسخ المطابق.</translation>
 <translation id="2060505056492490888">تم استخدام "<ph name="DOT" />" في موضع خاطئ في "<ph name="INVALIDDOMAIN" />".</translation>
 <translation id="2148716181193084225">اليوم</translation>
@@ -48,6 +50,7 @@
 <translation id="2653659639078652383">إرسال</translation>
 <translation id="2657045182931379222">كائن رسومي</translation>
 <translation id="2674318244760992338">تذييل</translation>
+<translation id="2706474812903655270">يتم تشغيل هذا الفيديو في الوضع "نافذة ضمن النافذة".</translation>
 <translation id="2709516037105925701">الملء التلقائي</translation>
 <translation id="2723001399770238859">الصوت</translation>
 <translation id="2746543609216772311">يجب أن تكون القيمة <ph name="MINIMUM_DATE_OR_TIME" /> أو بعد ذلك.</translation>
@@ -98,6 +101,7 @@
 <translation id="4664250907885839816">يجب ألا يشتمل الجزء الذي يلي العلامة "<ph name="ATSIGN" />" على الرمز "<ph name="INVALIDCHARACTER" />".</translation>
 <translation id="4668956016107839909">ملحق</translation>
 <translation id="4742539557769756338">غلاف</translation>
+<translation id="4748357248530471599">تبديل صورة مقطوعة للشاشة إلى وضع ملء الشاشة</translation>
 <translation id="4757246831282535685">لوحة علامة التبويب</translation>
 <translation id="4763480195061959176">فيديو</translation>
 <translation id="479989351350248267">بحث</translation>
@@ -111,7 +115,6 @@
 <translation id="5117590920725113268">عرض الشهر التالي</translation>
 <translation id="512758898067543763">عنوان الصف</translation>
 <translation id="5143125788380636750">تتِّمة</translation>
-<translation id="5153163864850940242">يتم تشغيل هذا الفيديو في الوضع "نافذة ضمن النافذة".</translation>
 <translation id="5164977714490026579">يجب أن تكون القيمة أكبر من أو تساوي <ph name="MINIMUM" />.</translation>
 <translation id="520299402983819650"><ph name="QUANTITY" /> بيتابايت</translation>
 <translation id="5307600278924710095">يُرجى إدخال جزء متبوع بعلامة "<ph name="ATSIGN" />"، حيث إن "<ph name="INVALIDADDRESS" />" غير مكتمل.</translation>
@@ -125,7 +128,6 @@
 <translation id="561939826962581046">الوقت</translation>
 <translation id="5630795885300617244">انقر مرّتين جهة اليمين أو اليسار لتخطي 10 ثوانٍ.</translation>
 <translation id="5631759159893697722">نبذة مختصرة</translation>
-<translation id="5641012560118721995">إيقاف التشغيل مؤقتًا</translation>
 <translation id="5643186887447432888">زر</translation>
 <translation id="5677946354068040947">خيارات إضافية</translation>
 <translation id="576709008726043716">مقدمة</translation>
@@ -136,9 +138,9 @@
 <translation id="5939518447894949180">إعادة</translation>
 <translation id="5966707198760109579">الأسبوع</translation>
 <translation id="5987525920412732405">زر الدوران</translation>
+<translation id="6011459053400940133">شريط تمرير مستوى الصوت</translation>
 <translation id="6015796118275082299">عام</translation>
 <translation id="6023896073578205740">مربع القائمة</translation>
-<translation id="6101327004457443354">إعادة صوت المقطع الصوتي</translation>
 <translation id="6150588977291308318">قائمة مراجع</translation>
 <translation id="6164829606128959761">متر</translation>
 <translation id="6166809985690652833">كلمة ختامية</translation>
@@ -165,6 +167,7 @@
 <translation id="689129560213475294">إشارة ناشر</translation>
 <translation id="6934078000481955284">علامة اقتباس فقرة</translation>
 <translation id="6941933287844615239">تنزيل وسائط</translation>
+<translation id="6981594929165378967">إدراج</translation>
 <translation id="6989848892321993519">يُرجى إطالة هذا النص إلى <ph name="MIN_CHARACTERS" /> من الحروف أو أكثر (أنت الآن تستخدم حرفًا واحدًا).</translation>
 <translation id="709897737746224366">يُرجى مطابقة التنسيق المطلوب.</translation>
 <translation id="7139483182332611405">تمهيد</translation>
@@ -184,8 +187,8 @@
 <translation id="7673697353781729403">ساعات</translation>
 <translation id="7681220483256441252">فهرس</translation>
 <translation id="7720026100085573005">المدة المتبقية</translation>
-<translation id="7740016676195725605">إيقاف عرض الترجمة والشرح</translation>
 <translation id="7740050170769002709">‏محتوى HTML</translation>
+<translation id="7750228210027921155">نافذة ضمن النافذة</translation>
 <translation id="7789962463072032349">إيقاف مؤقت</translation>
 <translation id="7802800022689234070">مثلث الإفصاح</translation>
 <translation id="7888071071722539607">يُرجى تضمين العلامة "<ph name="ATSIGN" />" في عنوان البريد الإلكتروني، حيث يفتقر "<ph name="INVALIDADDRESS" />" إلى العلامة "<ph name="ATSIGN" />".</translation>
@@ -194,9 +197,7 @@
 <translation id="8053789581856978548">الحقل النصي للبحث</translation>
 <translation id="8057695513531652401">ملاحظة</translation>
 <translation id="8105797009065549151">ملاحظة مرجعية</translation>
-<translation id="8115662671911883373">بدء عرض الترجمة والشرح</translation>
 <translation id="8117451130807776954">هذا الأسبوع</translation>
-<translation id="819205353528511139">تشغيل الفيلم في وضع ملء الشاشة</translation>
 <translation id="8199524924445686405">سنة</translation>
 <translation id="8284326494547611709">الترجمة والشرح</translation>
 <translation id="835897206747267392">قيمة غير صحيحة</translation>
@@ -215,9 +216,7 @@
 <translation id="860475260694818407">جدول المحتويات</translation>
 <translation id="8613126697340063924">التحكم في التشغيل عن بعد</translation>
 <translation id="862370744433916922">ترجمة مصاحِبة</translation>
-<translation id="8741316211671074806">نافذة ضمن النافذة</translation>
 <translation id="8750798805984357768">يُرجى اختيار أحد هذه الخيارات.</translation>
-<translation id="8785498733064193001">بدء التشغيل</translation>
 <translation id="8808573423886751634">فصل</translation>
 <translation id="8845239796550121995">يتم الآن الإرسال إلى جهاز التلفزيون</translation>
 <translation id="8851136666856101339">main</translation>
@@ -228,11 +227,13 @@
 <translation id="9048119486235211610">تنقل</translation>
 <translation id="9050748414552849310">عرض الترجمة والشرح</translation>
 <translation id="9062295712474918030">المستند</translation>
+<translation id="9093215626363556771">الخروج من وضع "نافذة ضمن نافذة"</translation>
 <translation id="9108370397979208512">math</translation>
 <translation id="9132465097189459683">آخر...</translation>
 <translation id="9138385573473225930">تنبيه</translation>
 <translation id="9155987714137265666"><ph name="WEEK" />، ابتداء من <ph name="WEEK_START_DATE" /></translation>
+<translation id="916607977885256133">نافذة ضمن النافذة</translation>
 <translation id="9168329111483466115">حاشية سُفلية</translation>
-<translation id="947831847158436616">خلية</translation>
+<translation id="954003015749068518">الدخول في وضع "نافذة ضمن نافذة"</translation>
 <translation id="966787709310836684">القائمة</translation>
 </translationbundle>

@@ -7,6 +7,7 @@
 #include "ui/gfx/canvas.h"
 #include "ui/views/controls/focusable_border.h"
 #include "ui/views/style/platform_style.h"
+#include "ui/views/view_properties.h"
 
 namespace {
 
@@ -34,12 +35,12 @@ std::unique_ptr<FocusRing> FocusRing::Install(View* parent) {
 
 // static
 bool FocusRing::IsPathUseable(const SkPath& path) {
-  return path.isRect(nullptr) || path.isOval(nullptr) || path.isRRect(nullptr);
+  return !path.isEmpty() && (path.isRect(nullptr) || path.isOval(nullptr) ||
+                             path.isRRect(nullptr));
 }
 
 void FocusRing::SetPath(const SkPath& path) {
-  DCHECK(IsPathUseable(path));
-  path_ = path;
+  path_ = IsPathUseable(path) ? path : SkPath();
   SchedulePaint();
 }
 
@@ -79,6 +80,11 @@ void FocusRing::OnPaint(gfx::Canvas* canvas) {
   paint.setStrokeWidth(PlatformStyle::kFocusHaloThickness);
 
   SkPath path = path_;
+  if (path.isEmpty()) {
+    SkPath* highlight_path = parent()->GetProperty(kHighlightPathKey);
+    if (highlight_path)
+      path = *highlight_path;
+  }
   if (path.isEmpty())
     path.addRect(RectToSkRect(parent()->GetLocalBounds()));
 

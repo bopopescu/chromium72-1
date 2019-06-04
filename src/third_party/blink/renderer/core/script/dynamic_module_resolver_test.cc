@@ -51,8 +51,7 @@ class DynamicModuleResolverTestModulator final : public DummyModulator {
 
  private:
   // Implements Modulator:
-  ReferrerPolicy GetReferrerPolicy() override { return kReferrerPolicyDefault; }
-  ScriptState* GetScriptState() final { return script_state_.get(); }
+  ScriptState* GetScriptState() final { return script_state_; }
 
   ModuleScript* GetFetchedModuleScript(const KURL& url) final {
     EXPECT_EQ(TestReferrerURL(), url);
@@ -61,11 +60,26 @@ class DynamicModuleResolverTestModulator final : public DummyModulator {
     return module_script;
   }
 
+  KURL ResolveModuleSpecifier(const String& module_request,
+                              const KURL& base_url,
+                              String* failure_reason) final {
+    if (module_request == "invalid-specifier")
+      return KURL();
+
+    return KURL(base_url, module_request);
+  }
+
   void FetchTree(const KURL& url,
-                 WebURLRequest::RequestContext,
+                 FetchClientSettingsObjectSnapshot*,
+                 mojom::RequestContextType,
                  const ScriptFetchOptions&,
+                 ModuleScriptCustomFetchType custom_fetch_type,
                  ModuleTreeClient* client) final {
     EXPECT_EQ(expected_fetch_tree_url_, url);
+
+    // Currently there are no usage of custom fetch hooks for dynamic import in
+    // web specifications.
+    EXPECT_EQ(ModuleScriptCustomFetchType::kNone, custom_fetch_type);
 
     pending_client_ = client;
     fetch_tree_was_called_ = true;
@@ -75,17 +89,18 @@ class DynamicModuleResolverTestModulator final : public DummyModulator {
                             CaptureEvalErrorFlag capture_error) final {
     EXPECT_EQ(CaptureEvalErrorFlag::kCapture, capture_error);
 
-    ScriptState::Scope scope(script_state_.get());
-    return module_script->Record().Evaluate(script_state_.get());
+    ScriptState::Scope scope(script_state_);
+    return module_script->Record().Evaluate(script_state_);
   }
 
-  scoped_refptr<ScriptState> script_state_;
+  Member<ScriptState> script_state_;
   Member<ModuleTreeClient> pending_client_;
   KURL expected_fetch_tree_url_;
   bool fetch_tree_was_called_ = false;
 };
 
 void DynamicModuleResolverTestModulator::Trace(blink::Visitor* visitor) {
+  visitor->Trace(script_state_);
   visitor->Trace(pending_client_);
   DummyModulator::Trace(visitor);
 }
@@ -116,7 +131,7 @@ class CaptureExportedStringFunction final : public ScriptFunction {
     v8::Local<v8::Value> exported_value =
         module_namespace->Get(context, V8String(isolate, export_name_))
             .ToLocalChecked();
-    captured_value_ = ToCoreString(exported_value->ToString());
+    captured_value_ = ToCoreString(exported_value->ToString(isolate));
 
     return ScriptValue();
   }
@@ -150,11 +165,11 @@ class CaptureErrorFunction final : public ScriptFunction {
 
     v8::Local<v8::Value> name =
         error_object->Get(context, V8String(isolate, "name")).ToLocalChecked();
-    name_ = ToCoreString(name->ToString());
+    name_ = ToCoreString(name->ToString(isolate));
     v8::Local<v8::Value> message =
         error_object->Get(context, V8String(isolate, "message"))
             .ToLocalChecked();
-    message_ = ToCoreString(message->ToString());
+    message_ = ToCoreString(message->ToString(isolate));
 
     return ScriptValue();
   }
@@ -208,8 +223,8 @@ TEST(DynamicModuleResolverTest, ResolveSuccess) {
 
   ScriptModule record = ScriptModule::Compile(
       scope.GetIsolate(), "export const foo = 'hello';", TestReferrerURL(),
-      TestReferrerURL(), ScriptFetchOptions(), kSharableCrossOrigin,
-      TextPosition::MinimumPosition(), ASSERT_NO_EXCEPTION);
+      TestReferrerURL(), ScriptFetchOptions(), TextPosition::MinimumPosition(),
+      ASSERT_NO_EXCEPTION);
   ModuleScript* module_script =
       ModuleScript::CreateForTest(modulator, record, TestDependencyURL());
   EXPECT_TRUE(record.Instantiate(scope.GetScriptState()).IsEmpty());
@@ -297,8 +312,8 @@ TEST(DynamicModuleResolverTest, ExceptionThrown) {
 
   ScriptModule record = ScriptModule::Compile(
       scope.GetIsolate(), "throw Error('bar')", TestReferrerURL(),
-      TestReferrerURL(), ScriptFetchOptions(), kSharableCrossOrigin,
-      TextPosition::MinimumPosition(), ASSERT_NO_EXCEPTION);
+      TestReferrerURL(), ScriptFetchOptions(), TextPosition::MinimumPosition(),
+      ASSERT_NO_EXCEPTION);
   ModuleScript* module_script =
       ModuleScript::CreateForTest(modulator, record, TestDependencyURL());
   EXPECT_TRUE(record.Instantiate(scope.GetScriptState()).IsEmpty());
@@ -337,7 +352,7 @@ TEST(DynamicModuleResolverTest, ResolveWithNullReferrerScriptSuccess) {
 
   ScriptModule record = ScriptModule::Compile(
       scope.GetIsolate(), "export const foo = 'hello';", TestDependencyURL(),
-      TestDependencyURL(), ScriptFetchOptions(), kSharableCrossOrigin,
+      TestDependencyURL(), ScriptFetchOptions(),
       TextPosition::MinimumPosition(), ASSERT_NO_EXCEPTION);
   ModuleScript* module_script =
       ModuleScript::CreateForTest(modulator, record, TestDependencyURL());

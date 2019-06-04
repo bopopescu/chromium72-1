@@ -17,7 +17,7 @@ DocumentParserTiming& DocumentParserTiming::From(Document& document) {
   DocumentParserTiming* timing =
       Supplement<Document>::From<DocumentParserTiming>(document);
   if (!timing) {
-    timing = new DocumentParserTiming(document);
+    timing = MakeGarbageCollected<DocumentParserTiming>(document);
     ProvideTo(document, timing);
   }
   return *timing;
@@ -44,7 +44,7 @@ void DocumentParserTiming::MarkParserDetached() {
 }
 
 void DocumentParserTiming::RecordParserBlockedOnScriptLoadDuration(
-    double duration,
+    TimeDelta duration,
     bool script_inserted_via_document_write) {
   if (parser_detached_ || parser_start_.is_null() || !parser_stop_.is_null())
     return;
@@ -55,7 +55,7 @@ void DocumentParserTiming::RecordParserBlockedOnScriptLoadDuration(
 }
 
 void DocumentParserTiming::RecordParserBlockedOnScriptExecutionDuration(
-    double duration,
+    TimeDelta duration,
     bool script_inserted_via_document_write) {
   if (parser_detached_ || parser_start_.is_null() || !parser_stop_.is_null())
     return;

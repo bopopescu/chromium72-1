@@ -5,12 +5,14 @@
 #include "chromeos/services/device_sync/device_sync_impl.h"
 
 #include "base/memory/ptr_util.h"
+#include "base/metrics/histogram_macros.h"
 #include "base/no_destructor.h"
 #include "base/optional.h"
 #include "base/time/default_clock.h"
 #include "chromeos/components/proximity_auth/logging/logging.h"
-#include "chromeos/services/device_sync/cryptauth_client_factory_impl.h"
 #include "chromeos/services/device_sync/cryptauth_enroller_factory_impl.h"
+#include "chromeos/services/device_sync/device_sync_type_converters.h"
+#include "components/cryptauth/cryptauth_client_impl.h"
 #include "components/cryptauth/cryptauth_device_manager_impl.h"
 #include "components/cryptauth/cryptauth_enrollment_manager_impl.h"
 #include "components/cryptauth/cryptauth_gcm_manager_impl.h"
@@ -22,8 +24,8 @@
 #include "components/cryptauth/software_feature_manager_impl.h"
 #include "components/prefs/pref_registry_simple.h"
 #include "components/prefs/pref_service.h"
-#include "net/url_request/url_request_context_getter.h"
 #include "services/identity/public/cpp/identity_manager.h"
+#include "services/network/public/cpp/shared_url_loader_factory.h"
 #include "services/service_manager/public/cpp/connector.h"
 
 namespace chromeos {
@@ -38,6 +40,149 @@ void RegisterDeviceSyncPrefs(PrefRegistrySimple* registry) {
   cryptauth::CryptAuthEnrollmentManager::RegisterPrefs(registry);
 }
 
+constexpr base::TimeDelta kSetFeatureEnabledTimeout =
+    base::TimeDelta::FromSeconds(5);
+
+// This enum is tied directly to a UMA enum defined in
+// //tools/metrics/histograms/enums.xml, and should always reflect it (do not
+// change one without changing the other). Entries should be never modified
+// or deleted. Only additions possible.
+enum class DeviceSyncRequestFailureReason {
+  kRequestSucceededButUnexpectedResult = 0,
+  kServiceNotYetInitialized = 1,
+  kOffline = 2,
+  kEndpointNotFound = 3,
+  kAuthenticationError = 4,
+  kBadRequest = 5,
+  kResponseMalformed = 6,
+  kInternalServerError = 7,
+  kUnknownNetworkError = 8,
+  kUnknown = 9,
+  kMaxValue = kUnknown
+};
+
+// This enum is tied directly to a UMA enum defined in
+// //tools/metrics/histograms/enums.xml, and should always reflect it (do not
+// change one without changing the other). Entries should be never modified
+// or deleted. Only additions possible.
+enum class ForceCryptAuthOperationResult {
+  kSuccess = 0,
+  kServiceNotReady = 1,
+  kMaxValue = kServiceNotReady
+};
+
+// This enum is tied directly to a UMA enum defined in
+// //tools/metrics/histograms/enums.xml, and should always reflect it (do not
+// change one without changing the other). Entries should be never modified
+// or deleted. Only additions possible.
+enum class DeviceSyncSetSoftwareFeature {
+  kUnknown = 0,
+  kBetterTogetherSuite = 1,
+  kSmartLock = 2,
+  kInstantTethering = 3,
+  kMessages = 4,
+  kUnexpectedClientFeature = 5,
+  kMaxValue = kUnexpectedClientFeature
+};
+
+DeviceSyncRequestFailureReason GetDeviceSyncRequestFailureReason(
+    mojom::NetworkRequestResult failure_reason) {
+  switch (failure_reason) {
+    case mojom::NetworkRequestResult::kRequestSucceededButUnexpectedResult:
+      return DeviceSyncRequestFailureReason::
+          kRequestSucceededButUnexpectedResult;
+    case mojom::NetworkRequestResult::kServiceNotYetInitialized:
+      return DeviceSyncRequestFailureReason::kServiceNotYetInitialized;
+    case mojom::NetworkRequestResult::kOffline:
+      return DeviceSyncRequestFailureReason::kOffline;
+    case mojom::NetworkRequestResult::kEndpointNotFound:
+      return DeviceSyncRequestFailureReason::kEndpointNotFound;
+    case mojom::NetworkRequestResult::kAuthenticationError:
+      return DeviceSyncRequestFailureReason::kAuthenticationError;
+    case mojom::NetworkRequestResult::kBadRequest:
+      return DeviceSyncRequestFailureReason::kBadRequest;
+    case mojom::NetworkRequestResult::kResponseMalformed:
+      return DeviceSyncRequestFailureReason::kResponseMalformed;
+    case mojom::NetworkRequestResult::kInternalServerError:
+      return DeviceSyncRequestFailureReason::kInternalServerError;
+    case mojom::NetworkRequestResult::kUnknown:
+      return DeviceSyncRequestFailureReason::kUnknownNetworkError;
+    default:
+      return DeviceSyncRequestFailureReason::kUnknown;
+  }
+  NOTREACHED();
+}
+
+void RecordSetSoftwareFeatureStateResult(bool success) {
+  UMA_HISTOGRAM_BOOLEAN(
+      "MultiDevice.DeviceSyncService.SetSoftwareFeatureState.Result", success);
+}
+
+void RecordSetSoftwareFeatureStateResultFailureReason(
+    DeviceSyncRequestFailureReason failure_reason) {
+  UMA_HISTOGRAM_ENUMERATION(
+      "MultiDevice.DeviceSyncService.SetSoftwareFeatureState.Result."
+      "FailureReason",
+      failure_reason);
+}
+
+DeviceSyncSetSoftwareFeature GetDeviceSyncSoftwareFeature(
+    cryptauth::SoftwareFeature software_feature) {
+  switch (software_feature) {
+    case cryptauth::SoftwareFeature::UNKNOWN_FEATURE:
+      return DeviceSyncSetSoftwareFeature::kUnknown;
+    case cryptauth::SoftwareFeature::BETTER_TOGETHER_HOST:
+      return DeviceSyncSetSoftwareFeature::kBetterTogetherSuite;
+    case cryptauth::SoftwareFeature::EASY_UNLOCK_HOST:
+      return DeviceSyncSetSoftwareFeature::kSmartLock;
+    case cryptauth::SoftwareFeature::MAGIC_TETHER_HOST:
+      return DeviceSyncSetSoftwareFeature::kInstantTethering;
+    case cryptauth::SoftwareFeature::SMS_CONNECT_HOST:
+      return DeviceSyncSetSoftwareFeature::kMessages;
+    default:
+      NOTREACHED();
+      return DeviceSyncSetSoftwareFeature::kUnexpectedClientFeature;
+  }
+}
+
+void RecordSetSoftwareFailedFeature(bool enabled,
+                                    cryptauth::SoftwareFeature feature) {
+  if (enabled) {
+    UMA_HISTOGRAM_ENUMERATION(
+        "MultiDevice.DeviceSyncService.SetSoftwareFeatureState.Enable."
+        "FailedFeature",
+        GetDeviceSyncSoftwareFeature(feature));
+  } else {
+    UMA_HISTOGRAM_ENUMERATION(
+        "MultiDevice.DeviceSyncService.SetSoftwareFeatureState.Disable."
+        "FailedFeature",
+        GetDeviceSyncSoftwareFeature(feature));
+  }
+}
+
+void RecordFindEligibleDevicesResult(bool success) {
+  UMA_HISTOGRAM_BOOLEAN(
+      "MultiDevice.DeviceSyncService.FindEligibleDevices.Result", success);
+}
+
+void RecordFindEligibleDevicesResultFailureReason(
+    DeviceSyncRequestFailureReason failure_reason) {
+  UMA_HISTOGRAM_ENUMERATION(
+      "MultiDevice.DeviceSyncService.FindEligibleDevices.Result."
+      "FailureReason",
+      failure_reason);
+}
+
+void RecordForceEnrollmentNowResult(ForceCryptAuthOperationResult result) {
+  UMA_HISTOGRAM_ENUMERATION(
+      "MultiDevice.DeviceSyncService.ForceEnrollmentNow.Result", result);
+}
+
+void RecordForceSyncNowResult(ForceCryptAuthOperationResult result) {
+  UMA_HISTOGRAM_ENUMERATION("MultiDevice.DeviceSyncService.ForceSyncNow.Result",
+                            result);
+}
+
 }  // namespace
 
 // static
@@ -45,22 +190,12 @@ DeviceSyncImpl::Factory* DeviceSyncImpl::Factory::test_factory_instance_ =
     nullptr;
 
 // static
-std::unique_ptr<DeviceSyncImpl> DeviceSyncImpl::Factory::NewInstance(
-    identity::IdentityManager* identity_manager,
-    gcm::GCMDriver* gcm_driver,
-    service_manager::Connector* connector,
-    cryptauth::GcmDeviceInfoProvider* gcm_device_info_provider,
-    scoped_refptr<net::URLRequestContextGetter> url_request_context) {
-  if (test_factory_instance_) {
-    return test_factory_instance_->BuildInstance(
-        identity_manager, gcm_driver, connector, gcm_device_info_provider,
-        std::move(url_request_context));
-  }
+DeviceSyncImpl::Factory* DeviceSyncImpl::Factory::Get() {
+  if (test_factory_instance_)
+    return test_factory_instance_;
 
-  static base::NoDestructor<DeviceSyncImpl::Factory> default_factory;
-  return default_factory->BuildInstance(identity_manager, gcm_driver, connector,
-                                        gcm_device_info_provider,
-                                        std::move(url_request_context));
+  static base::NoDestructor<Factory> factory;
+  return factory.get();
 }
 
 // static
@@ -70,16 +205,17 @@ void DeviceSyncImpl::Factory::SetInstanceForTesting(Factory* test_factory) {
 
 DeviceSyncImpl::Factory::~Factory() = default;
 
-std::unique_ptr<DeviceSyncImpl> DeviceSyncImpl::Factory::BuildInstance(
+std::unique_ptr<DeviceSyncBase> DeviceSyncImpl::Factory::BuildInstance(
     identity::IdentityManager* identity_manager,
     gcm::GCMDriver* gcm_driver,
     service_manager::Connector* connector,
-    cryptauth::GcmDeviceInfoProvider* gcm_device_info_provider,
-    scoped_refptr<net::URLRequestContextGetter> url_request_context) {
+    const cryptauth::GcmDeviceInfoProvider* gcm_device_info_provider,
+    scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
+    std::unique_ptr<base::OneShotTimer> timer) {
   return base::WrapUnique(new DeviceSyncImpl(
       identity_manager, gcm_driver, connector, gcm_device_info_provider,
-      std::move(url_request_context), base::DefaultClock::GetInstance(),
-      std::make_unique<PrefConnectionDelegate>()));
+      std::move(url_loader_factory), base::DefaultClock::GetInstance(),
+      std::make_unique<PrefConnectionDelegate>(), std::move(timer)));
 }
 
 DeviceSyncImpl::PrefConnectionDelegate::~PrefConnectionDelegate() = default;
@@ -99,24 +235,76 @@ void DeviceSyncImpl::PrefConnectionDelegate::ConnectToPrefService(
                               std::move(pref_registry), std::move(callback));
 }
 
+DeviceSyncImpl::PendingSetSoftwareFeatureRequest::
+    PendingSetSoftwareFeatureRequest(
+        const std::string& device_public_key,
+        cryptauth::SoftwareFeature software_feature,
+        bool enabled,
+        cryptauth::RemoteDeviceProvider* remote_device_provider,
+        SetSoftwareFeatureStateCallback callback)
+    : device_public_key_(device_public_key),
+      software_feature_(software_feature),
+      enabled_(enabled),
+      remote_device_provider_(remote_device_provider),
+      callback_(std::move(callback)) {}
+
+DeviceSyncImpl::PendingSetSoftwareFeatureRequest::
+    ~PendingSetSoftwareFeatureRequest() = default;
+
+bool DeviceSyncImpl::PendingSetSoftwareFeatureRequest::IsFulfilled() const {
+  const auto& synced_devices = remote_device_provider_->GetSyncedDevices();
+  const auto& devices_it =
+      std::find_if(synced_devices.begin(), synced_devices.end(),
+                   [this](const auto& remote_device) {
+                     return device_public_key_ == remote_device.public_key;
+                   });
+
+  // If the device to edit no longer exists, the request is not fulfilled.
+  if (devices_it == synced_devices.end())
+    return false;
+
+  const auto& features_map_it =
+      devices_it->software_features.find(software_feature_);
+
+  // If the device does not contain an entry for |software_feature_|, the
+  // request is not fulfilled.
+  if (features_map_it == devices_it->software_features.end())
+    return false;
+
+  if (enabled_)
+    return features_map_it->second == cryptauth::SoftwareFeatureState::kEnabled;
+
+  return features_map_it->second == cryptauth::SoftwareFeatureState::kSupported;
+}
+
+void DeviceSyncImpl::PendingSetSoftwareFeatureRequest::InvokeCallback(
+    mojom::NetworkRequestResult result) {
+  // Callback should only be invoked once.
+  DCHECK(callback_);
+  std::move(callback_).Run(result);
+}
+
 DeviceSyncImpl::DeviceSyncImpl(
     identity::IdentityManager* identity_manager,
     gcm::GCMDriver* gcm_driver,
     service_manager::Connector* connector,
-    cryptauth::GcmDeviceInfoProvider* gcm_device_info_provider,
-    scoped_refptr<net::URLRequestContextGetter> url_request_context,
+    const cryptauth::GcmDeviceInfoProvider* gcm_device_info_provider,
+    scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
     base::Clock* clock,
-    std::unique_ptr<PrefConnectionDelegate> pref_connection_delegate)
-    : identity_manager_(identity_manager),
+    std::unique_ptr<PrefConnectionDelegate> pref_connection_delegate,
+    std::unique_ptr<base::OneShotTimer> timer)
+    : DeviceSyncBase(gcm_driver),
+      identity_manager_(identity_manager),
       gcm_driver_(gcm_driver),
       connector_(connector),
       gcm_device_info_provider_(gcm_device_info_provider),
-      url_request_context_(url_request_context),
+      url_loader_factory_(std::move(url_loader_factory)),
       clock_(clock),
       pref_connection_delegate_(std::move(pref_connection_delegate)),
+      set_software_feature_timer_(std::move(timer)),
       status_(Status::FETCHING_ACCOUNT_INFO),
       weak_ptr_factory_(this) {
-  PA_LOG(INFO) << "DeviceSyncImpl: Initializing.";
+  PA_LOG(VERBOSE) << "DeviceSyncImpl: Initializing.";
   ProcessPrimaryAccountInfo(identity_manager_->GetPrimaryAccountInfo());
 }
 
@@ -128,27 +316,21 @@ DeviceSyncImpl::~DeviceSyncImpl() {
     remote_device_provider_->RemoveObserver(this);
 }
 
-void DeviceSyncImpl::BindRequest(mojom::DeviceSyncRequest request) {
-  bindings_.AddBinding(this, std::move(request));
-}
-
-void DeviceSyncImpl::AddObserver(mojom::DeviceSyncObserverPtr observer,
-                                 AddObserverCallback callback) {
-  observers_.AddPtr(std::move(observer));
-  std::move(callback).Run();
-}
-
 void DeviceSyncImpl::ForceEnrollmentNow(ForceEnrollmentNowCallback callback) {
   if (status_ != Status::READY) {
     PA_LOG(WARNING) << "DeviceSyncImpl::ForceEnrollmentNow() invoked before "
                     << "initialization was complete. Cannot force enrollment.";
     std::move(callback).Run(false /* success */);
+    RecordForceEnrollmentNowResult(
+        ForceCryptAuthOperationResult::kServiceNotReady /* result */);
     return;
   }
 
   cryptauth_enrollment_manager_->ForceEnrollmentNow(
       cryptauth::INVOCATION_REASON_MANUAL);
   std::move(callback).Run(true /* success */);
+  RecordForceEnrollmentNowResult(
+      ForceCryptAuthOperationResult::kSuccess /* result */);
 }
 
 void DeviceSyncImpl::ForceSyncNow(ForceSyncNowCallback callback) {
@@ -156,11 +338,15 @@ void DeviceSyncImpl::ForceSyncNow(ForceSyncNowCallback callback) {
     PA_LOG(WARNING) << "DeviceSyncImpl::ForceSyncNow() invoked before "
                     << "initialization was complete. Cannot force sync.";
     std::move(callback).Run(false /* success */);
+    RecordForceSyncNowResult(
+        ForceCryptAuthOperationResult::kServiceNotReady /* result */);
     return;
   }
 
   cryptauth_device_manager_->ForceSyncNow(cryptauth::INVOCATION_REASON_MANUAL);
   std::move(callback).Run(true /* success */);
+  RecordForceSyncNowResult(
+      ForceCryptAuthOperationResult::kSuccess /* result */);
 }
 
 void DeviceSyncImpl::GetLocalDeviceMetadata(
@@ -198,17 +384,29 @@ void DeviceSyncImpl::SetSoftwareFeatureState(
   if (status_ != Status::READY) {
     PA_LOG(WARNING) << "DeviceSyncImpl::SetSoftwareFeatureState() invoked "
                     << "before initialization was complete. Cannot set state.";
-    std::move(callback).Run(mojom::kErrorNotInitialized);
+    std::move(callback).Run(
+        mojom::NetworkRequestResult::kServiceNotYetInitialized);
+
+    RecordSetSoftwareFeatureStateResult(false /* success */);
+    RecordSetSoftwareFeatureStateResultFailureReason(
+        DeviceSyncRequestFailureReason::kServiceNotYetInitialized);
+    RecordSetSoftwareFailedFeature(enabled, software_feature);
     return;
   }
 
-  auto callback_holder = base::AdaptCallbackForRepeating(std::move(callback));
+  auto request_id = base::UnguessableToken::Create();
+  id_to_pending_set_software_feature_request_map_.emplace(
+      request_id, std::make_unique<PendingSetSoftwareFeatureRequest>(
+                      device_public_key, software_feature, enabled,
+                      remote_device_provider_.get(), std::move(callback)));
+  StartSetSoftwareFeatureTimer();
+
   software_feature_manager_->SetSoftwareFeatureState(
       device_public_key, software_feature, enabled,
       base::Bind(&DeviceSyncImpl::OnSetSoftwareFeatureStateSuccess,
-                 weak_ptr_factory_.GetWeakPtr(), callback_holder),
+                 weak_ptr_factory_.GetWeakPtr()),
       base::Bind(&DeviceSyncImpl::OnSetSoftwareFeatureStateError,
-                 weak_ptr_factory_.GetWeakPtr(), callback_holder),
+                 weak_ptr_factory_.GetWeakPtr(), request_id),
       is_exclusive);
 }
 
@@ -218,8 +416,9 @@ void DeviceSyncImpl::FindEligibleDevices(
   if (status_ != Status::READY) {
     PA_LOG(WARNING) << "DeviceSyncImpl::FindEligibleDevices() invoked before "
                     << "initialization was complete. Cannot find devices.";
-    std::move(callback).Run(mojom::kErrorNotInitialized,
-                            nullptr /* response */);
+    std::move(callback).Run(
+        mojom::NetworkRequestResult::kServiceNotYetInitialized,
+        nullptr /* response */);
     return;
   }
 
@@ -252,7 +451,8 @@ void DeviceSyncImpl::GetDebugInfo(GetDebugInfoCallback callback) {
 }
 
 void DeviceSyncImpl::OnEnrollmentFinished(bool success) {
-  PA_LOG(INFO) << "DeviceSyncImpl: Enrollment finished; success = " << success;
+  PA_LOG(VERBOSE) << "DeviceSyncImpl: Enrollment finished; success = "
+                  << success;
 
   if (!success)
     return;
@@ -260,14 +460,46 @@ void DeviceSyncImpl::OnEnrollmentFinished(bool success) {
   if (status_ == Status::WAITING_FOR_ENROLLMENT)
     CompleteInitializationAfterSuccessfulEnrollment();
 
-  observers_.ForAllPtrs(
-      [](auto* observer) { observer->OnEnrollmentFinished(); });
+  NotifyOnEnrollmentFinished();
 }
 
 void DeviceSyncImpl::OnSyncDeviceListChanged() {
-  PA_LOG(INFO) << "DeviceSyncImpl: Synced devices changed; notifying "
-               << "observers.";
-  observers_.ForAllPtrs([](auto* observer) { observer->OnNewDevicesSynced(); });
+  PA_LOG(VERBOSE) << "DeviceSyncImpl: Synced devices changed; notifying "
+                  << "observers.";
+  NotifyOnNewDevicesSynced();
+
+  // Iterate through pending SetSoftwareFeature() requests. If any of them have
+  // been fulfilled, invoke their callbacks.
+  auto it = id_to_pending_set_software_feature_request_map_.begin();
+  while (it != id_to_pending_set_software_feature_request_map_.end()) {
+    if (!it->second->IsFulfilled()) {
+      ++it;
+      continue;
+    }
+
+    PA_LOG(VERBOSE)
+        << "DeviceSyncImpl::OnSyncDeviceListChanged(): Feature state "
+        << "updated via device sync; notifying success callbacks.";
+    it->second->InvokeCallback(mojom::NetworkRequestResult::kSuccess);
+    it = id_to_pending_set_software_feature_request_map_.erase(it);
+  }
+}
+
+void DeviceSyncImpl::Shutdown() {
+  software_feature_manager_.reset();
+  remote_device_provider_.reset();
+  cryptauth_device_manager_.reset();
+  cryptauth_enrollment_manager_.reset();
+  cryptauth_client_factory_.reset();
+  cryptauth_gcm_manager_.reset();
+  pref_connection_delegate_.reset();
+
+  identity_manager_ = nullptr;
+  gcm_driver_ = nullptr;
+  connector_ = nullptr;
+  gcm_device_info_provider_ = nullptr;
+  url_loader_factory_ = nullptr;
+  clock_ = nullptr;
 }
 
 void DeviceSyncImpl::ProcessPrimaryAccountInfo(
@@ -279,10 +511,8 @@ void DeviceSyncImpl::ProcessPrimaryAccountInfo(
   if (primary_account_info.account_id.empty()) {
     PA_LOG(ERROR) << "Primary account information is invalid; cannot proceed.";
 
-    // This situation should never occur in practice. The log above is added to
-    // ensure that this is flagged in release builds where NOTREACHED() does not
-    // crash the process.
-    NOTREACHED();
+    // This situation should never occur in practice; early return here to
+    // prevent test failures.
     return;
   }
 
@@ -297,7 +527,7 @@ void DeviceSyncImpl::ConnectToPrefStore() {
   auto pref_registry = pref_connection_delegate_->CreatePrefRegistry();
   RegisterDeviceSyncPrefs(pref_registry.get());
 
-  PA_LOG(INFO) << "DeviceSyncImpl: Connecting to pref service.";
+  PA_LOG(VERBOSE) << "DeviceSyncImpl: Connecting to pref service.";
   pref_connection_delegate_->ConnectToPrefService(
       connector_, std::move(pref_registry),
       base::Bind(&DeviceSyncImpl::OnConnectedToPrefService,
@@ -309,8 +539,8 @@ void DeviceSyncImpl::OnConnectedToPrefService(
   DCHECK(status_ == Status::CONNECTING_TO_USER_PREFS);
   status_ = Status::WAITING_FOR_ENROLLMENT;
 
-  PA_LOG(INFO) << "DeviceSyncImpl: Connected to pref service; initializing "
-               << "CryptAuth managers.";
+  PA_LOG(VERBOSE) << "DeviceSyncImpl: Connected to pref service; initializing "
+                  << "CryptAuth managers.";
   pref_service_ = std::move(pref_service);
   InitializeCryptAuthManagementObjects();
 
@@ -318,7 +548,7 @@ void DeviceSyncImpl::OnConnectedToPrefService(
   // continue. Once enrollment has finished, OnEnrollmentFinished() is invoked,
   // which finishes the initialization flow.
   if (!cryptauth_enrollment_manager_->IsEnrollmentValid()) {
-    PA_LOG(INFO) << "DeviceSyncImpl: Waiting for enrollment to complete.";
+    PA_LOG(VERBOSE) << "DeviceSyncImpl: Waiting for enrollment to complete.";
     return;
   }
 
@@ -335,9 +565,10 @@ void DeviceSyncImpl::InitializeCryptAuthManagementObjects() {
           gcm_driver_, pref_service_.get());
   cryptauth_gcm_manager_->StartListening();
 
-  cryptauth_client_factory_ = std::make_unique<CryptAuthClientFactoryImpl>(
-      identity_manager_, url_request_context_,
-      cryptauth::device_classifier_util::GetDeviceClassifier());
+  cryptauth_client_factory_ =
+      std::make_unique<cryptauth::CryptAuthClientFactoryImpl>(
+          identity_manager_, url_loader_factory_,
+          cryptauth::device_classifier_util::GetDeviceClassifier());
 
   // Initialize |crypauth_device_manager_| and start observing. Start() is not
   // called yet since the device has not completed enrollment.
@@ -380,8 +611,8 @@ void DeviceSyncImpl::CompleteInitializationAfterSuccessfulEnrollment() {
 
   status_ = Status::READY;
 
-  PA_LOG(INFO) << "DeviceSyncImpl: CryptAuth Enrollment is valid; service "
-               << "fully initialized.";
+  PA_LOG(VERBOSE) << "DeviceSyncImpl: CryptAuth Enrollment is valid; service "
+                  << "fully initialized.";
 }
 
 base::Optional<cryptauth::RemoteDevice>
@@ -402,21 +633,41 @@ DeviceSyncImpl::GetSyncedDeviceWithPublicKey(
   return *it;
 }
 
-void DeviceSyncImpl::OnSetSoftwareFeatureStateSuccess(
-    const base::RepeatingCallback<void(const base::Optional<std::string>&)>&
-        callback) {
-  callback.Run(base::nullopt /* error_code */);
+void DeviceSyncImpl::OnSetSoftwareFeatureStateSuccess() {
+  PA_LOG(VERBOSE) << "DeviceSyncImpl::OnSetSoftwareFeatureStateSuccess(): "
+                  << "Successfully completed SetSoftwareFeatureState() call; "
+                  << "requesting force sync.";
+  cryptauth_device_manager_->ForceSyncNow(
+      cryptauth::INVOCATION_REASON_FEATURE_TOGGLED);
+
+  RecordSetSoftwareFeatureStateResult(true /* success */);
 }
 
 void DeviceSyncImpl::OnSetSoftwareFeatureStateError(
-    const base::RepeatingCallback<void(const base::Optional<std::string>&)>&
-        callback,
-    const std::string& error) {
-  callback.Run(error);
+    const base::UnguessableToken& request_id,
+    cryptauth::NetworkRequestError error) {
+  auto it = id_to_pending_set_software_feature_request_map_.find(request_id);
+  if (it == id_to_pending_set_software_feature_request_map_.end()) {
+    PA_LOG(ERROR) << "DeviceSyncImpl::OnSetSoftwareFeatureStateError(): "
+                  << "Could not find request entry with ID " << request_id;
+    NOTREACHED();
+    return;
+  }
+
+  RecordSetSoftwareFeatureStateResult(false /* success */);
+  RecordSetSoftwareFeatureStateResultFailureReason(
+      GetDeviceSyncRequestFailureReason(
+          mojo::ConvertTo<mojom::NetworkRequestResult>(error)));
+  RecordSetSoftwareFailedFeature(it->second->enabled(),
+                                 it->second->software_feature());
+
+  it->second->InvokeCallback(
+      mojo::ConvertTo<mojom::NetworkRequestResult>(error));
+  id_to_pending_set_software_feature_request_map_.erase(it);
 }
 
 void DeviceSyncImpl::OnFindEligibleDevicesSuccess(
-    const base::RepeatingCallback<void(const base::Optional<std::string>&,
+    const base::RepeatingCallback<void(mojom::NetworkRequestResult,
                                        mojom::FindEligibleDevicesResponsePtr)>&
         callback,
     const std::vector<cryptauth::ExternalDeviceInfo>& eligible_device_infos,
@@ -445,17 +696,57 @@ void DeviceSyncImpl::OnFindEligibleDevicesSuccess(
     }
   }
 
-  callback.Run(base::nullopt /* error_code */,
+  callback.Run(mojom::NetworkRequestResult::kSuccess,
                mojom::FindEligibleDevicesResponse::New(
                    eligible_remote_devices, ineligible_remote_devices));
+
+  RecordFindEligibleDevicesResult(true /* success */);
 }
 
 void DeviceSyncImpl::OnFindEligibleDevicesError(
-    const base::RepeatingCallback<void(const base::Optional<std::string>&,
+    const base::RepeatingCallback<void(mojom::NetworkRequestResult,
                                        mojom::FindEligibleDevicesResponsePtr)>&
         callback,
-    const std::string& error) {
-  callback.Run(error, nullptr /* response */);
+    cryptauth::NetworkRequestError error) {
+  callback.Run(mojo::ConvertTo<mojom::NetworkRequestResult>(error),
+               nullptr /* response */);
+
+  RecordFindEligibleDevicesResult(false /* success */);
+  RecordFindEligibleDevicesResultFailureReason(
+      GetDeviceSyncRequestFailureReason(
+          mojo::ConvertTo<mojom::NetworkRequestResult>(error)));
+}
+
+void DeviceSyncImpl::StartSetSoftwareFeatureTimer() {
+  set_software_feature_timer_->Start(
+      FROM_HERE, kSetFeatureEnabledTimeout,
+      base::Bind(&DeviceSyncImpl::OnSetSoftwareFeatureTimerFired,
+                 base::Unretained(this)));
+}
+
+void DeviceSyncImpl::OnSetSoftwareFeatureTimerFired() {
+  if (id_to_pending_set_software_feature_request_map_.empty())
+    return;
+
+  PA_LOG(WARNING)
+      << "DeviceSyncImpl::OnSetSoftwareFeatureTimerFired(): Timed out waiting "
+      << "for device feature states to update. Invoking failure "
+      << "callbacks.";
+
+  // Any pending requests that are still present have timed out, so invoke their
+  // callbacks and remove them from the map.
+  auto it = id_to_pending_set_software_feature_request_map_.begin();
+  while (it != id_to_pending_set_software_feature_request_map_.end()) {
+    RecordSetSoftwareFeatureStateResult(false /* success */);
+    RecordSetSoftwareFeatureStateResultFailureReason(
+        DeviceSyncRequestFailureReason::kRequestSucceededButUnexpectedResult);
+    RecordSetSoftwareFailedFeature(it->second->enabled(),
+                                   it->second->software_feature());
+
+    it->second->InvokeCallback(
+        mojom::NetworkRequestResult::kRequestSucceededButUnexpectedResult);
+    it = id_to_pending_set_software_feature_request_map_.erase(it);
+  }
 }
 
 void DeviceSyncImpl::SetPrefConnectionDelegateForTesting(

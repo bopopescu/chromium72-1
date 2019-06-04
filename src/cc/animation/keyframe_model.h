@@ -10,6 +10,7 @@
 #include "base/macros.h"
 #include "base/time/time.h"
 #include "cc/animation/animation_export.h"
+#include "cc/trees/element_id.h"
 
 namespace cc {
 
@@ -69,6 +70,9 @@ class CC_ANIMATION_EXPORT KeyframeModel {
   int group() const { return group_; }
   int target_property_id() const { return target_property_id_; }
 
+  ElementId element_id() const { return element_id_; }
+  void set_element_id(ElementId element_id) { element_id_ = element_id; }
+
   RunState run_state() const { return run_state_; }
   void SetRunState(RunState run_state, base::TimeTicks monotonic_time);
 
@@ -94,6 +98,9 @@ class CC_ANIMATION_EXPORT KeyframeModel {
   void set_time_offset(base::TimeDelta monotonic_time) {
     time_offset_ = monotonic_time;
   }
+
+  // Pause the keyframe effect at local time |pause_offset|.
+  void Pause(base::TimeDelta pause_offset);
 
   Direction direction() { return direction_; }
   void set_direction(Direction direction) { direction_ = direction; }
@@ -168,7 +175,35 @@ class CC_ANIMATION_EXPORT KeyframeModel {
                 int group_id,
                 int target_property_id);
 
-  base::TimeDelta ConvertToActiveTime(base::TimeTicks monotonic_time) const;
+  // Return local time for this keyframe model given the absolute monotonic
+  // time.
+  //
+  // Local time represents the time value that is used to tick this keyframe
+  // model and is relative to its start time. It is closely related to the local
+  // time concept in web animations [1]. It is:
+  //  - for playing animation : wall time - start time - paused duration
+  //  - for paused animation  : paused time
+  //  - otherwise             : zero
+  //
+  // Here is small diagram that shows how active, local, and monotonic times
+  // relate to each other and to the run state.
+  //
+  //      run state   Starting  (R)unning  Paused (R) Paused (R)  Finished
+  //                    ^                                          ^
+  //                    |                                          |
+  // monotonic time  ------------------------------------------------->
+  //                    |                                          |
+  //     local time     +-----------------+      +---+      +--------->
+  //                    |                                          |
+  //    active time     +          +------+      +---+      +------+
+  //                      (-offset)
+  //
+  // [1] https://drafts.csswg.org/web-animations/#local-time-section
+  base::TimeDelta ConvertMonotonicTimeToLocalTime(
+      base::TimeTicks monotonic_time) const;
+
+  base::TimeDelta TrimLocalTimeToCurrentIteration(
+      base::TimeDelta local_time) const;
 
   std::unique_ptr<AnimationCurve> curve_;
 
@@ -180,6 +215,10 @@ class CC_ANIMATION_EXPORT KeyframeModel {
   // time and no other KeyframeModels may animate any of the group's target
   // properties until all KeyframeModels in the group have finished animating.
   int group_;
+
+  // If specified, overrides the ElementId to apply this KeyframeModel's effect
+  // value on.
+  ElementId element_id_;
 
   int target_property_id_;
   RunState run_state_;
@@ -199,12 +238,12 @@ class CC_ANIMATION_EXPORT KeyframeModel {
   bool needs_synchronized_start_time_;
   bool received_finished_event_;
 
-  // These are used in TrimTimeToCurrentIteration to account for time
+  // These are used when converting monotonic to local time to account for time
   // spent while paused. This is not included in AnimationState since it
   // there is absolutely no need for clients of this controller to know
   // about these values.
   base::TimeTicks pause_time_;
-  base::TimeDelta total_paused_time_;
+  base::TimeDelta total_paused_duration_;
 
   // KeyframeModels lead dual lives. An active keyframe model will be
   // conceptually owned by two controllers, one on the impl thread and one on

@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "base/bind.h"
+#include "base/metrics/histogram_macros.h"
 #include "base/metrics/user_metrics.h"
 #include "base/threading/thread_task_runner_handle.h"
 #include "chrome/browser/consent_auditor/consent_auditor_factory.h"
@@ -19,10 +20,12 @@
 #include "chrome/browser/ui/webui/signin/login_ui_service_factory.h"
 #include "chrome/browser/ui/webui/signin/signin_utils.h"
 #include "chrome/browser/ui/webui/signin/sync_confirmation_ui.h"
+#include "chrome/common/webui_url_constants.h"
 #include "components/consent_auditor/consent_auditor.h"
 #include "components/signin/core/browser/account_tracker_service.h"
 #include "components/signin/core/browser/avatar_icon_util.h"
 #include "components/signin/core/browser/signin_manager.h"
+#include "components/unified_consent/feature.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_ui.h"
 #include "url/gurl.h"
@@ -31,11 +34,13 @@ const int kProfileImageSize = 128;
 
 SyncConfirmationHandler::SyncConfirmationHandler(
     Browser* browser,
-    const std::unordered_map<std::string, int>& string_to_grd_id_map)
+    const std::unordered_map<std::string, int>& string_to_grd_id_map,
+    consent_auditor::Feature consent_feature)
     : profile_(browser->profile()),
       browser_(browser),
       did_user_explicitly_interact(false),
-      string_to_grd_id_map_(string_to_grd_id_map) {
+      string_to_grd_id_map_(string_to_grd_id_map),
+      consent_feature_(consent_feature) {
   DCHECK(profile_);
   DCHECK(browser_);
   BrowserList::AddObserver(this);
@@ -73,6 +78,10 @@ void SyncConfirmationHandler::RegisterMessages() {
       "initializedWithSize",
       base::BindRepeating(&SyncConfirmationHandler::HandleInitializedWithSize,
                           base::Unretained(this)));
+  web_ui()->RegisterMessageCallback(
+      "accountImageRequest",
+      base::BindRepeating(&SyncConfirmationHandler::HandleAccountImageRequest,
+                          base::Unretained(this)));
 }
 
 void SyncConfirmationHandler::HandleConfirm(const base::ListValue* args) {
@@ -90,6 +99,21 @@ void SyncConfirmationHandler::HandleGoToSettings(const base::ListValue* args) {
 void SyncConfirmationHandler::HandleUndo(const base::ListValue* args) {
   did_user_explicitly_interact = true;
   CloseModalSigninWindow(LoginUIService::ABORT_SIGNIN);
+}
+
+void SyncConfirmationHandler::HandleAccountImageRequest(
+    const base::ListValue* args) {
+  std::string account_id = SigninManagerFactory::GetForProfile(profile_)
+                               ->GetAuthenticatedAccountId();
+  AccountInfo account_info =
+      AccountTrackerServiceFactory::GetForProfile(profile_)->GetAccountInfo(
+          account_id);
+
+  // Fire the "account-image-changed" listener from |SetUserImageURL()|.
+  // Note: If the account info is not available yet in the
+  // AccountTrackerService, i.e. account_info is empty, the listener will be
+  // fired again through |OnAccountUpdated()|.
+  SetUserImageURL(account_info.picture_url);
 }
 
 void SyncConfirmationHandler::RecordConsent(const base::ListValue* args) {
@@ -116,11 +140,31 @@ void SyncConfirmationHandler::RecordConsent(const base::ListValue* args) {
                                              << consent_confirmation;
   int consent_confirmation_id = iter->second;
 
-  ConsentAuditorFactory::GetForProfile(profile_)->RecordGaiaConsent(
-      SigninManagerFactory::GetForProfile(profile_)
-          ->GetAuthenticatedAccountId(),
-      consent_auditor::Feature::CHROME_SYNC, consent_text_ids,
-      consent_confirmation_id, consent_auditor::ConsentStatus::GIVEN);
+  consent_auditor::ConsentAuditor* consent_auditor =
+      ConsentAuditorFactory::GetForProfile(profile_);
+  const std::string& account_id = SigninManagerFactory::GetForProfile(profile_)
+                                      ->GetAuthenticatedAccountId();
+  // TODO(markusheintz): Use a bool unified_consent_enabled instead of a
+  // consent_auditor::Feature type variable.
+  if (consent_feature_ == consent_auditor::Feature::CHROME_UNIFIED_CONSENT) {
+    sync_pb::UserConsentTypes::UnifiedConsent unified_consent;
+    unified_consent.set_confirmation_grd_id(consent_confirmation_id);
+    for (int id : consent_text_ids) {
+      unified_consent.add_description_grd_ids(id);
+    }
+    unified_consent.set_status(sync_pb::UserConsentTypes::ConsentStatus::
+                                   UserConsentTypes_ConsentStatus_GIVEN);
+    consent_auditor->RecordUnifiedConsent(account_id, unified_consent);
+  } else {
+    sync_pb::UserConsentTypes::SyncConsent sync_consent;
+    sync_consent.set_confirmation_grd_id(consent_confirmation_id);
+    for (int id : consent_text_ids) {
+      sync_consent.add_description_grd_ids(id);
+    }
+    sync_consent.set_status(sync_pb::UserConsentTypes::ConsentStatus::
+                                UserConsentTypes_ConsentStatus_GIVEN);
+    consent_auditor->RecordSyncConsent(account_id, sync_consent);
+  }
 }
 
 void SyncConfirmationHandler::SetUserImageURL(const std::string& picture_url) {
@@ -138,6 +182,11 @@ void SyncConfirmationHandler::SetUserImageURL(const std::string& picture_url) {
   base::Value picture_url_value(picture_url_to_load);
   web_ui()->CallJavascriptFunctionUnsafe("sync.confirmation.setUserImageURL",
                                          picture_url_value);
+
+  if (unified_consent::IsUnifiedConsentFeatureEnabled()) {
+    AllowJavascript();
+    FireWebUIListener("account-image-changed", picture_url_value);
+  }
 }
 
 void SyncConfirmationHandler::OnAccountUpdated(const AccountInfo& info) {

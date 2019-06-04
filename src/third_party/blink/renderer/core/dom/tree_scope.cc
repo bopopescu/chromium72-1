@@ -34,6 +34,7 @@
 #include "third_party/blink/renderer/core/dom/element_traversal.h"
 #include "third_party/blink/renderer/core/dom/events/event_path.h"
 #include "third_party/blink/renderer/core/dom/id_target_observer_registry.h"
+#include "third_party/blink/renderer/core/dom/node_child_removal_tracker.h"
 #include "third_party/blink/renderer/core/dom/node_computed_style.h"
 #include "third_party/blink/renderer/core/dom/shadow_root.h"
 #include "third_party/blink/renderer/core/dom/tree_scope_adopter.h"
@@ -48,6 +49,7 @@
 #include "third_party/blink/renderer/core/layout/layout_view.h"
 #include "third_party/blink/renderer/core/page/focus_controller.h"
 #include "third_party/blink/renderer/core/page/page.h"
+#include "third_party/blink/renderer/core/paint/paint_layer_scrollable_area.h"
 #include "third_party/blink/renderer/core/svg/svg_text_content_element.h"
 #include "third_party/blink/renderer/core/svg/svg_tree_scope_resources.h"
 #include "third_party/blink/renderer/platform/bindings/script_forbidden_scope.h"
@@ -55,7 +57,7 @@
 
 namespace blink {
 
-using namespace HTMLNames;
+using namespace html_names;
 
 TreeScope::TreeScope(ContainerNode& root_node, Document& document)
     : root_node_(&root_node),
@@ -114,22 +116,28 @@ Element* TreeScope::getElementById(const AtomicString& element_id) const {
     return nullptr;
   if (!elements_by_id_)
     return nullptr;
-  return elements_by_id_->GetElementById(element_id, *this);
+  Element* element = elements_by_id_->GetElementById(element_id, *this);
+  if (element && &RootNode() == &GetDocument() &&
+      GetDocument().InDOMNodeRemovedHandler()) {
+    if (NodeChildRemovalTracker::IsBeingRemoved(element))
+      GetDocument().CountDetachingNodeAccessInDOMNodeRemovedHandler();
+  }
+  return element;
 }
 
 const HeapVector<Member<Element>>& TreeScope::GetAllElementsById(
     const AtomicString& element_id) const {
-  DEFINE_STATIC_LOCAL(HeapVector<Member<Element>>, empty_vector,
-                      (new HeapVector<Member<Element>>));
+  DEFINE_STATIC_LOCAL(Persistent<HeapVector<Member<Element>>>, empty_vector,
+                      (MakeGarbageCollected<HeapVector<Member<Element>>>()));
   if (element_id.IsEmpty())
-    return empty_vector;
+    return *empty_vector;
   if (!elements_by_id_)
-    return empty_vector;
+    return *empty_vector;
   return elements_by_id_->GetAllElementsById(element_id, *this);
 }
 
 void TreeScope::AddElementById(const AtomicString& element_id,
-                               Element* element) {
+                               Element& element) {
   if (!elements_by_id_)
     elements_by_id_ = TreeOrderedMap::Create();
   elements_by_id_->Add(element_id, element);
@@ -137,7 +145,7 @@ void TreeScope::AddElementById(const AtomicString& element_id,
 }
 
 void TreeScope::RemoveElementById(const AtomicString& element_id,
-                                  Element* element) {
+                                  Element& element) {
   if (!elements_by_id_)
     return;
   elements_by_id_->Remove(element_id, element);
@@ -157,8 +165,8 @@ Node* TreeScope::AncestorInThisScope(Node* node) const {
   return nullptr;
 }
 
-void TreeScope::AddImageMap(HTMLMapElement* image_map) {
-  const AtomicString& name = image_map->GetName();
+void TreeScope::AddImageMap(HTMLMapElement& image_map) {
+  const AtomicString& name = image_map.GetName();
   if (!name)
     return;
   if (!image_maps_by_name_)
@@ -166,10 +174,10 @@ void TreeScope::AddImageMap(HTMLMapElement* image_map) {
   image_maps_by_name_->Add(name, image_map);
 }
 
-void TreeScope::RemoveImageMap(HTMLMapElement* image_map) {
+void TreeScope::RemoveImageMap(HTMLMapElement& image_map) {
   if (!image_maps_by_name_)
     return;
-  const AtomicString& name = image_map->GetName();
+  const AtomicString& name = image_map.GetName();
   if (!name)
     return;
   image_maps_by_name_->Remove(name, image_map);
@@ -180,8 +188,10 @@ HTMLMapElement* TreeScope::GetImageMap(const String& url) const {
     return nullptr;
   if (!image_maps_by_name_)
     return nullptr;
-  size_t hash_pos = url.find('#');
-  String name = hash_pos == kNotFound ? url : url.Substring(hash_pos + 1);
+  wtf_size_t hash_pos = url.find('#');
+  if (hash_pos == kNotFound)
+    return nullptr;
+  String name = url.Substring(hash_pos + 1);
   return ToHTMLMapElement(
       image_maps_by_name_->GetElementByMapName(AtomicString(name), *this));
 }
@@ -200,7 +210,7 @@ static bool PointInFrameContentIfVisible(Document& document,
   // The VisibleContentRect check below requires that scrollbars are up-to-date.
   document.UpdateStyleAndLayoutIgnorePendingStylesheets();
 
-  auto* scrollable_area = frame_view->LayoutViewportScrollableArea();
+  auto* scrollable_area = frame_view->LayoutViewport();
   IntRect visible_frame_rect(IntPoint(),
                              scrollable_area->VisibleContentRect().Size());
   visible_frame_rect.Scale(1 / frame->PageZoomFactor());
@@ -222,8 +232,9 @@ HitTestResult HitTestInDocument(Document* document,
   if (!PointInFrameContentIfVisible(*document, hit_point))
     return HitTestResult();
 
-  HitTestResult result(request, LayoutPoint(hit_point));
-  document->GetLayoutView()->HitTest(result);
+  HitTestLocation location(hit_point);
+  HitTestResult result(request, location);
+  document->GetLayoutView()->HitTest(location, result);
   return result;
 }
 
@@ -277,8 +288,8 @@ static bool ShouldAcceptNonElementNode(const Node& node) {
 
 HeapVector<Member<Element>> TreeScope::ElementsFromHitTestResult(
     HitTestResult& result) const {
+  DCHECK(RootNode().isConnected());
   HeapVector<Member<Element>> elements;
-
   Node* last_node = nullptr;
   for (const auto rect_based_node : result.ListBasedTestResult()) {
     Node* node = rect_based_node.Get();
@@ -295,14 +306,10 @@ HeapVector<Member<Element>> TreeScope::ElementsFromHitTestResult(
       last_node = node;
     }
   }
-
-  if (RootNode().IsDocumentNode()) {
-    if (Element* root_element = ToDocument(RootNode()).documentElement()) {
-      if (elements.IsEmpty() || elements.back() != root_element)
-        elements.push_back(root_element);
-    }
+  if (Element* document_element = GetDocument().documentElement()) {
+    if (elements.IsEmpty() || elements.back() != document_element)
+      elements.push_back(document_element);
   }
-
   return elements;
 }
 
@@ -313,35 +320,66 @@ HeapVector<Member<Element>> TreeScope::ElementsFromPoint(double x,
   if (!PointInFrameContentIfVisible(document, hit_point))
     return HeapVector<Member<Element>>();
 
+  HitTestLocation location(hit_point);
   HitTestRequest request(HitTestRequest::kReadOnly | HitTestRequest::kActive |
                          HitTestRequest::kListBased |
                          HitTestRequest::kPenetratingList);
-  HitTestResult result(request, LayoutPoint(hit_point));
-  document.GetLayoutView()->HitTest(result);
+  HitTestResult result(request, location);
+  document.GetLayoutView()->HitTest(location, result);
 
   return ElementsFromHitTestResult(result);
 }
 
 SVGTreeScopeResources& TreeScope::EnsureSVGTreeScopedResources() {
-  if (!svg_tree_scoped_resources_)
-    svg_tree_scoped_resources_ = new SVGTreeScopeResources(this);
+  if (!svg_tree_scoped_resources_) {
+    svg_tree_scoped_resources_ =
+        MakeGarbageCollected<SVGTreeScopeResources>(this);
+  }
   return *svg_tree_scoped_resources_;
 }
 
-bool TreeScope::HasMoreStyleSheets() const {
-  return more_style_sheets_ && more_style_sheets_->length() > 0;
+bool TreeScope::HasAdoptedStyleSheets() const {
+  return adopted_style_sheets_ && adopted_style_sheets_->length() > 0;
 }
 
-StyleSheetList& TreeScope::MoreStyleSheets() {
-  if (!more_style_sheets_)
-    SetMoreStyleSheets(StyleSheetList::Create());
-  return *more_style_sheets_;
+StyleSheetList& TreeScope::AdoptedStyleSheets() {
+  if (!adopted_style_sheets_)
+    SetAdoptedStyleSheets(StyleSheetList::Create());
+  return *adopted_style_sheets_;
 }
 
-void TreeScope::SetMoreStyleSheets(StyleSheetList* more_style_sheets) {
-  GetDocument().GetStyleEngine().MoreStyleSheetsWillChange(
-      *this, more_style_sheets_, more_style_sheets);
-  more_style_sheets_ = more_style_sheets;
+void TreeScope::SetAdoptedStyleSheets(StyleSheetList* adopted_style_sheets,
+                                      ExceptionState& exception_state) {
+  unsigned style_sheets_count =
+      adopted_style_sheets ? adopted_style_sheets->length() : 0;
+  for (unsigned i = 0; i < style_sheets_count; ++i) {
+    CSSStyleSheet* style_sheet = ToCSSStyleSheet(adopted_style_sheets->item(i));
+    Document* associated_document = style_sheet->AssociatedDocument();
+    Node* owner_node = style_sheet->ownerNode();
+    if (associated_document && *associated_document != GetDocument()) {
+      exception_state.ThrowDOMException(DOMExceptionCode::kNotAllowedError,
+                                        "Sharing constructable stylesheets in "
+                                        "multiple documents is not allowed");
+      return;
+    }
+    if (owner_node && owner_node->GetDocument() != GetDocument()) {
+      exception_state.ThrowDOMException(
+          DOMExceptionCode::kNotAllowedError,
+          "When the style sheet's owner node and the AdoptedStyleSheets' tree "
+          "scope is not in the same Document tree, adding non-constructed "
+          "stylesheets to AdoptedStyleSheets is not allowed");
+      return;
+    }
+    // TODO(momon): Don't allow using non-constructed stylesheets, pending
+    // resolution of https://github.com/WICG/construct-stylesheets/issues/34
+  }
+  SetAdoptedStyleSheets(adopted_style_sheets);
+}
+
+void TreeScope::SetAdoptedStyleSheets(StyleSheetList* adopted_style_sheets) {
+  GetDocument().GetStyleEngine().AdoptedStyleSheetsWillChange(
+      *this, adopted_style_sheets_, adopted_style_sheets);
+  adopted_style_sheets_ = adopted_style_sheets;
 }
 
 DOMSelection* TreeScope::GetSelection() const {
@@ -451,7 +489,7 @@ Element* TreeScope::AdjustedFocusedElement() const {
     return nullptr;
   }
 
-  EventPath* event_path = new EventPath(*element);
+  EventPath* event_path = MakeGarbageCollected<EventPath>(*element);
   for (const auto& context : event_path->NodeEventContexts()) {
     if (context.GetNode() == RootNode()) {
       // context.target() is one of the followings:
@@ -564,7 +602,7 @@ Element* TreeScope::GetElementByAccessKey(const String& key) const {
   Element* result = nullptr;
   Node& root = RootNode();
   for (Element& element : ElementTraversal::DescendantsOf(root)) {
-    if (DeprecatedEqualIgnoringCase(element.FastGetAttribute(accesskeyAttr),
+    if (DeprecatedEqualIgnoringCase(element.FastGetAttribute(kAccesskeyAttr),
                                     key))
       result = &element;
     if (ShadowRoot* shadow_root = element.GetShadowRoot()) {
@@ -581,10 +619,11 @@ void TreeScope::SetNeedsStyleRecalcForViewportUnits() {
     if (ShadowRoot* root = element->GetShadowRoot())
       root->SetNeedsStyleRecalcForViewportUnits();
     const ComputedStyle* style = element->GetComputedStyle();
-    if (style && style->HasViewportUnits())
+    if (style && style->HasViewportUnits()) {
       element->SetNeedsStyleRecalc(kLocalStyleChange,
                                    StyleChangeReasonForTracing::Create(
-                                       StyleChangeReason::kViewportUnits));
+                                       style_change_reason::kViewportUnits));
+    }
   }
 }
 
@@ -599,7 +638,7 @@ void TreeScope::Trace(blink::Visitor* visitor) {
   visitor->Trace(scoped_style_resolver_);
   visitor->Trace(radio_button_group_scope_);
   visitor->Trace(svg_tree_scoped_resources_);
-  visitor->Trace(more_style_sheets_);
+  visitor->Trace(adopted_style_sheets_);
 }
 
 }  // namespace blink

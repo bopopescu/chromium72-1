@@ -24,15 +24,17 @@
 #define THIRD_PARTY_BLINK_RENDERER_CORE_PAGE_CHROME_CLIENT_H_
 
 #include <memory>
+
 #include "base/gtest_prod_util.h"
 #include "base/optional.h"
+#include "cc/input/event_listener_properties.h"
+#include "third_party/blink/public/common/dom_storage/session_storage_namespace_id.h"
 #include "third_party/blink/public/platform/blame_context.h"
 #include "third_party/blink/public/platform/web_drag_operation.h"
-#include "third_party/blink/public/platform/web_event_listener_properties.h"
 #include "third_party/blink/public/platform/web_focus_type.h"
+#include "third_party/blink/public/platform/web_layer_tree_view.h"
+#include "third_party/blink/renderer/core/accessibility/ax_object_cache.h"
 #include "third_party/blink/renderer/core/core_export.h"
-#include "third_party/blink/renderer/core/dom/animation_worklet_proxy_client.h"
-#include "third_party/blink/renderer/core/dom/ax_object_cache.h"
 #include "third_party/blink/renderer/core/frame/sandbox_flags.h"
 #include "third_party/blink/renderer/core/html/forms/popup_menu.h"
 #include "third_party/blink/renderer/core/inspector/console_types.h"
@@ -42,7 +44,6 @@
 #include "third_party/blink/renderer/platform/cursor.h"
 #include "third_party/blink/renderer/platform/graphics/touch_action.h"
 #include "third_party/blink/renderer/platform/heap/handle.h"
-#include "third_party/blink/renderer/platform/platform_chrome_client.h"
 #include "third_party/blink/renderer/platform/scroll/scroll_types.h"
 #include "third_party/blink/renderer/platform/text/text_direction.h"
 #include "third_party/blink/renderer/platform/wtf/forward.h"
@@ -71,6 +72,7 @@ class GraphicsLayer;
 class HTMLFormControlElement;
 class HTMLInputElement;
 class HTMLSelectElement;
+class HitTestLocation;
 class HitTestResult;
 class IntRect;
 class KeyboardEvent;
@@ -82,21 +84,29 @@ class PagePopup;
 class PagePopupClient;
 class PopupOpeningObserver;
 class WebDragData;
-class WebImage;
 class WebLayerTreeView;
 class WebViewImpl;
 
-struct CompositedSelection;
 struct DateTimeChooserParameters;
 struct FrameLoadRequest;
 struct ViewportDescription;
 struct WebCursorInfo;
-struct WebPoint;
 struct WebScreenInfo;
 struct WebWindowFeatures;
 
-class CORE_EXPORT ChromeClient : public PlatformChromeClient {
+class CORE_EXPORT ChromeClient
+    : public GarbageCollectedFinalized<ChromeClient> {
+  DISALLOW_COPY_AND_ASSIGN(ChromeClient);
+
  public:
+  virtual ~ChromeClient() = default;
+
+  // Converts the scalar value from the window coordinates to the viewport
+  // scale.
+  virtual float WindowToViewportScalar(const float) const = 0;
+
+  virtual bool IsPopup() { return false; }
+
   virtual void ChromeDestroyed() = 0;
 
   // Requests the host invalidate the contents.
@@ -130,8 +140,8 @@ class CORE_EXPORT ChromeClient : public PlatformChromeClient {
   virtual void StartDragging(LocalFrame*,
                              const WebDragData&,
                              WebDragOperationsMask,
-                             const WebImage& drag_image,
-                             const WebPoint& drag_image_offset) = 0;
+                             const SkBitmap& drag_image,
+                             const gfx::Point& drag_image_offset) = 0;
   virtual bool AcceptsLoadDrops() const = 0;
 
   // The LocalFrame pointer provides the ChromeClient with context about which
@@ -140,11 +150,12 @@ class CORE_EXPORT ChromeClient : public PlatformChromeClient {
   // created Page has its show method called.
   // The FrameLoadRequest parameter is only for ChromeClient to check if the
   // request could be fulfilled. The ChromeClient should not load the request.
-  virtual Page* CreateWindow(LocalFrame*,
-                             const FrameLoadRequest&,
-                             const WebWindowFeatures&,
-                             NavigationPolicy,
-                             SandboxFlags) = 0;
+  Page* CreateWindow(LocalFrame*,
+                     const FrameLoadRequest&,
+                     const WebWindowFeatures&,
+                     NavigationPolicy,
+                     SandboxFlags,
+                     const SessionStorageNamespaceId&);
   virtual void Show(NavigationPolicy) = 0;
 
   // All the parameters should be in viewport space. That is, if an event
@@ -184,10 +195,8 @@ class CORE_EXPORT ChromeClient : public PlatformChromeClient {
 
   virtual WebViewImpl* GetWebView() const = 0;
 
-  // Methods used by PlatformChromeClient.
   virtual WebScreenInfo GetScreenInfo() const = 0;
   virtual void SetCursor(const Cursor&, LocalFrame* local_root) = 0;
-  // End methods used by PlatformChromeClient.
 
   virtual void SetCursorOverridden(bool) = 0;
 
@@ -210,6 +219,8 @@ class CORE_EXPORT ChromeClient : public PlatformChromeClient {
   virtual void DispatchViewportPropertiesDidChange(
       const ViewportDescription&) const {}
 
+  virtual bool DoubleTapToZoomEnabled() const { return false; }
+
   virtual void ContentsSizeChanged(LocalFrame*, const IntSize&) const = 0;
   virtual void PageScaleFactorChanged() const {}
   virtual float ClampPageScaleFactorToLimits(float scale) const {
@@ -217,9 +228,11 @@ class CORE_EXPORT ChromeClient : public PlatformChromeClient {
   }
   virtual void MainFrameScrollOffsetChanged() const {}
   virtual void ResizeAfterLayout() const {}
-  virtual void LayoutUpdated() const {}
+  virtual void MainFrameLayoutUpdated() const {}
 
-  void MouseDidMoveOverElement(LocalFrame&, const HitTestResult&);
+  void MouseDidMoveOverElement(LocalFrame&,
+                               const HitTestLocation&,
+                               const HitTestResult&);
   virtual void SetToolTip(LocalFrame&, const String&, TextDirection) = 0;
   void ClearToolTip(LocalFrame&);
 
@@ -244,10 +257,6 @@ class CORE_EXPORT ChromeClient : public PlatformChromeClient {
 
   virtual void OpenFileChooser(LocalFrame*, scoped_refptr<FileChooser>) = 0;
 
-  // Asychronous request to enumerate all files in a directory chosen by the
-  // user.
-  virtual void EnumerateChosenDirectory(FileChooser*) = 0;
-
   // Pass nullptr as the GraphicsLayer to detach the root layer.
   // This sets the graphics layer for the LocalFrame's WebWidget, if it has
   // one. Otherwise it sets it for the WebViewImpl.
@@ -265,21 +274,20 @@ class CORE_EXPORT ChromeClient : public PlatformChromeClient {
   virtual void DetachCompositorAnimationTimeline(CompositorAnimationTimeline*,
                                                  LocalFrame* local_root) {}
 
-  virtual void EnterFullscreen(LocalFrame&, const FullscreenOptions&) {}
+  virtual void EnterFullscreen(LocalFrame&, const FullscreenOptions*) {}
   virtual void ExitFullscreen(LocalFrame&) {}
   virtual void FullscreenElementChanged(Element* old_element,
                                         Element* new_element) {}
 
-  virtual void ClearCompositedSelection(LocalFrame*) {}
-  virtual void UpdateCompositedSelection(LocalFrame*,
-                                         const CompositedSelection&) {}
+  virtual void ClearLayerSelection(LocalFrame*) {}
+  virtual void UpdateLayerSelection(LocalFrame*, const cc::LayerSelection&) {}
 
   virtual void SetEventListenerProperties(LocalFrame*,
-                                          WebEventListenerClass,
-                                          WebEventListenerProperties) = 0;
-  virtual WebEventListenerProperties EventListenerProperties(
+                                          cc::EventListenerClass,
+                                          cc::EventListenerProperties) = 0;
+  virtual cc::EventListenerProperties EventListenerProperties(
       LocalFrame*,
-      WebEventListenerClass) const = 0;
+      cc::EventListenerClass) const = 0;
   virtual void SetHasScrollEventHandlers(LocalFrame*, bool) = 0;
   virtual void SetNeedsLowLatencyInput(LocalFrame*, bool) = 0;
   virtual void RequestUnbufferedInputEvents(LocalFrame*) = 0;
@@ -299,19 +307,19 @@ class CORE_EXPORT ChromeClient : public PlatformChromeClient {
 
   virtual String AcceptLanguages() = 0;
 
-  enum DialogType {
+  enum class UIElementType {
     kAlertDialog = 0,
     kConfirmDialog = 1,
     kPromptDialog = 2,
-    kHTMLDialog = 3,
-    kPrintDialog = 4
+    kPrintDialog = 3,
+    kPopup = 4
   };
-  virtual bool ShouldOpenModalDialogDuringPageDismissal(
+  virtual bool ShouldOpenUIElementDuringPageDismissal(
       LocalFrame&,
-      DialogType,
+      UIElementType,
       const String&,
       Document::PageDismissalType) const {
-    return true;
+    return false;
   }
 
   virtual bool IsSVGImageChromeClient() const { return false; }
@@ -360,10 +368,10 @@ class CORE_EXPORT ChromeClient : public PlatformChromeClient {
     std::move(callback).Run(false);
   }
 
-  void Trace(blink::Visitor*) override;
+  virtual void Trace(blink::Visitor*);
 
  protected:
-  ~ChromeClient() override = default;
+  ChromeClient() = default;
 
   virtual void ShowMouseOverURL(const HitTestResult&) = 0;
   virtual void SetWindowRect(const IntRect&, LocalFrame&) = 0;
@@ -376,18 +384,25 @@ class CORE_EXPORT ChromeClient : public PlatformChromeClient {
                                             const String& default_value,
                                             String& result) = 0;
   virtual void PrintDelegate(LocalFrame*) = 0;
+  virtual Page* CreateWindowDelegate(LocalFrame*,
+                                     const FrameLoadRequest&,
+                                     const WebWindowFeatures&,
+                                     NavigationPolicy,
+                                     SandboxFlags,
+                                     const SessionStorageNamespaceId&) = 0;
 
  private:
-  bool CanOpenModalIfDuringPageDismissal(Frame& main_frame,
-                                         DialogType,
-                                         const String& message);
-  void SetToolTip(LocalFrame&, const HitTestResult&);
+  bool CanOpenUIElementIfDuringPageDismissal(Frame& main_frame,
+                                             UIElementType,
+                                             const String& message);
+  void SetToolTip(LocalFrame&, const HitTestLocation&, const HitTestResult&);
 
   WeakMember<Node> last_mouse_over_node_;
   LayoutPoint last_tool_tip_point_;
   String last_tool_tip_text_;
 
   FRIEND_TEST_ALL_PREFIXES(ChromeClientTest, SetToolTipFlood);
+  FRIEND_TEST_ALL_PREFIXES(ChromeClientTest, SetToolTipEmptyString);
 };
 
 }  // namespace blink

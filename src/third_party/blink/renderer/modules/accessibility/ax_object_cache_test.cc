@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "third_party/blink/renderer/core/dom/ax_object_cache.h"
+#include "third_party/blink/renderer/core/accessibility/ax_object_cache.h"
 
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/renderer/core/dom/document.h"
@@ -10,6 +10,7 @@
 #include "third_party/blink/renderer/modules/accessibility/testing/accessibility_test.h"
 
 namespace blink {
+namespace test {
 
 // TODO(nektar): Break test up into multiple tests.
 TEST_F(AccessibilityTest, IsARIAWidget) {
@@ -55,4 +56,5 @@ TEST_F(AccessibilityTest, IsARIAWidget) {
       *root->getElementById("focusable-parent")));
 }
 
+}  // namespace test
 }  // namespace blink

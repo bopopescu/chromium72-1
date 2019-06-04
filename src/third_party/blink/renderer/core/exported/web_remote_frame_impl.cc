@@ -19,6 +19,7 @@
 #include "third_party/blink/renderer/core/execution_context/security_context.h"
 #include "third_party/blink/renderer/core/exported/web_view_impl.h"
 #include "third_party/blink/renderer/core/frame/csp/content_security_policy.h"
+#include "third_party/blink/renderer/core/frame/local_dom_window.h"
 #include "third_party/blink/renderer/core/frame/local_frame_view.h"
 #include "third_party/blink/renderer/core/frame/remote_frame_client_impl.h"
 #include "third_party/blink/renderer/core/frame/remote_frame_owner.h"
@@ -34,7 +35,6 @@
 #include "third_party/blink/renderer/core/timing/dom_window_performance.h"
 #include "third_party/blink/renderer/core/timing/window_performance.h"
 #include "third_party/blink/renderer/platform/bindings/dom_wrapper_world.h"
-#include "third_party/blink/renderer/platform/feature_policy/feature_policy.h"
 #include "third_party/blink/renderer/platform/geometry/float_quad.h"
 #include "third_party/blink/renderer/platform/geometry/layout_rect.h"
 #include "third_party/blink/renderer/platform/heap/handle.h"
@@ -46,7 +46,7 @@ namespace {
 FloatRect DeNormalizeRect(const WebFloatRect& normalized, const IntRect& base) {
   FloatRect result = normalized;
   result.Scale(base.Width(), base.Height());
-  result.MoveBy(base.Location());
+  result.MoveBy(FloatPoint(base.Location()));
   return result;
 }
 }  // namespace
@@ -64,7 +64,8 @@ WebRemoteFrame* WebRemoteFrame::CreateMainFrame(WebView* web_view,
 
 WebRemoteFrameImpl* WebRemoteFrameImpl::Create(WebTreeScopeType scope,
                                                WebRemoteFrameClient* client) {
-  WebRemoteFrameImpl* frame = new WebRemoteFrameImpl(scope, client);
+  WebRemoteFrameImpl* frame =
+      MakeGarbageCollected<WebRemoteFrameImpl>(scope, client);
   return frame;
 }
 
@@ -72,8 +73,8 @@ WebRemoteFrameImpl* WebRemoteFrameImpl::CreateMainFrame(
     WebView* web_view,
     WebRemoteFrameClient* client,
     WebFrame* opener) {
-  WebRemoteFrameImpl* frame =
-      new WebRemoteFrameImpl(WebTreeScopeType::kDocument, client);
+  WebRemoteFrameImpl* frame = MakeGarbageCollected<WebRemoteFrameImpl>(
+      WebTreeScopeType::kDocument, client);
   frame->SetOpener(opener);
   Page& page = *static_cast<WebViewImpl*>(web_view)->GetPage();
   // It would be nice to DCHECK that the main frame is not set yet here.
@@ -141,18 +142,19 @@ WebLocalFrame* WebRemoteFrameImpl::CreateLocalChild(
     WebTreeScopeType scope,
     const WebString& name,
     WebSandboxFlags sandbox_flags,
-    WebFrameClient* client,
+    WebLocalFrameClient* client,
     blink::InterfaceRegistry* interface_registry,
     WebFrame* previous_sibling,
     const ParsedFeaturePolicy& container_policy,
     const WebFrameOwnerProperties& frame_owner_properties,
+    FrameOwnerElementType frame_owner_element_type,
     WebFrame* opener) {
   WebLocalFrameImpl* child =
       WebLocalFrameImpl::Create(scope, client, interface_registry, opener);
   InsertAfter(child, previous_sibling);
-  RemoteFrameOwner* owner =
-      RemoteFrameOwner::Create(static_cast<SandboxFlags>(sandbox_flags),
-                               container_policy, frame_owner_properties);
+  RemoteFrameOwner* owner = RemoteFrameOwner::Create(
+      static_cast<SandboxFlags>(sandbox_flags), container_policy,
+      frame_owner_properties, frame_owner_element_type);
   child->InitializeCoreFrame(*GetFrame()->GetPage(), owner, name);
   DCHECK(child->GetFrame());
   return child;
@@ -171,24 +173,24 @@ WebRemoteFrame* WebRemoteFrameImpl::CreateRemoteChild(
     const WebString& name,
     WebSandboxFlags sandbox_flags,
     const ParsedFeaturePolicy& container_policy,
+    FrameOwnerElementType frame_owner_element_type,
     WebRemoteFrameClient* client,
     WebFrame* opener) {
   WebRemoteFrameImpl* child = WebRemoteFrameImpl::Create(scope, client);
   child->SetOpener(opener);
   AppendChild(child);
-  RemoteFrameOwner* owner =
-      RemoteFrameOwner::Create(static_cast<SandboxFlags>(sandbox_flags),
-                               container_policy, WebFrameOwnerProperties());
+  RemoteFrameOwner* owner = RemoteFrameOwner::Create(
+      static_cast<SandboxFlags>(sandbox_flags), container_policy,
+      WebFrameOwnerProperties(), frame_owner_element_type);
   child->InitializeCoreFrame(*GetFrame()->GetPage(), owner, name);
   return child;
 }
 
 void WebRemoteFrameImpl::SetCcLayer(cc::Layer* layer,
-                                    bool prevent_contents_opaque_changes) {
-  if (!GetFrame())
-    return;
-
-  GetFrame()->SetCcLayer(layer, prevent_contents_opaque_changes);
+                                    bool prevent_contents_opaque_changes,
+                                    bool is_surface_layer) {
+  GetFrame()->SetCcLayer(layer, prevent_contents_opaque_changes,
+                         is_surface_layer);
 }
 
 void WebRemoteFrameImpl::SetCoreFrame(RemoteFrame* frame) {
@@ -202,13 +204,6 @@ WebRemoteFrameImpl* WebRemoteFrameImpl::FromFrame(RemoteFrame& frame) {
       static_cast<RemoteFrameClientImpl*>(frame.Client());
   return client->GetWebFrame();
 }
-
-#if defined(USE_NEVA_APPRUNTIME)
-void WebRemoteFrameImpl::ReplaceBaseURL(const WebString& url) const {
-  NOTREACHED();
-  // used in WebLocalFrameImpl for container application
-}
-#endif
 
 void WebRemoteFrameImpl::SetReplicatedOrigin(
     const WebSecurityOrigin& origin,
@@ -320,11 +315,7 @@ void WebRemoteFrameImpl::DidStopLoading() {
 }
 
 bool WebRemoteFrameImpl::IsIgnoredForHitTest() const {
-  HTMLFrameOwnerElement* owner = GetFrame()->DeprecatedLocalOwner();
-  if (!owner || !owner->GetLayoutObject())
-    return false;
-  return owner->GetLayoutObject()->Style()->PointerEvents() ==
-         EPointerEvents::kNone;
+  return GetFrame()->IsIgnoredForHitTest();
 }
 
 void WebRemoteFrameImpl::WillEnterFullscreen() {
@@ -345,14 +336,23 @@ void WebRemoteFrameImpl::WillEnterFullscreen() {
   // future, this should plumb in information about which request type
   // (prefixed or unprefixed) to use for firing fullscreen events.
   Fullscreen::RequestFullscreen(
-      *owner_element, FullscreenOptions(),
+      *owner_element, FullscreenOptions::Create(),
       Fullscreen::RequestType::kPrefixedForCrossProcessDescendant);
 }
 
-void WebRemoteFrameImpl::SetHasReceivedUserGesture() {
-  RemoteFrame* frame = GetFrame();
-  if (frame)
-    frame->NotifyUserActivationInLocalTree();
+void WebRemoteFrameImpl::UpdateUserActivationState(
+    UserActivationUpdateType update_type) {
+  switch (update_type) {
+    case UserActivationUpdateType::kNotifyActivation:
+      GetFrame()->NotifyUserActivationInLocalTree();
+      break;
+    case UserActivationUpdateType::kConsumeTransientActivation:
+      GetFrame()->ConsumeTransientUserActivationInLocalTree();
+      break;
+    case UserActivationUpdateType::kClearActivation:
+      GetFrame()->ClearUserActivationInLocalTree();
+      break;
+  }
 }
 
 void WebRemoteFrameImpl::ScrollRectToVisible(
@@ -394,7 +394,7 @@ void WebRemoteFrameImpl::ScrollRectToVisible(
   IntRect rect_in_document =
       view_impl->MainFrameImpl()->GetFrame()->View()->RootFrameToDocument(
           EnclosingIntRect(
-              owner_element->GetDocument().View()->AbsoluteToRootFrame(
+              owner_element->GetDocument().View()->ConvertToRootFrame(
                   absolute_rect)));
   IntRect element_bounds_in_document = EnclosingIntRect(
       DeNormalizeRect(params.relative_element_bounds, rect_in_document));
@@ -444,6 +444,15 @@ v8::Local<v8::Object> WebRemoteFrameImpl::GlobalProxy() const {
 
 WebRect WebRemoteFrameImpl::GetCompositingRect() {
   return GetFrame()->View()->GetCompositingRect();
+}
+
+void WebRemoteFrameImpl::RenderFallbackContent() const {
+  // TODO(ekaramad): If the owner renders its own content, then the current
+  // ContentFrame() should detach and free-up the OOPIF process (see
+  // https://crbug.com/850223).
+  auto* owner = frame_->DeprecatedLocalOwner();
+  DCHECK(IsHTMLObjectElement(owner));
+  owner->RenderFallbackContent(frame_);
 }
 
 WebRemoteFrameImpl::WebRemoteFrameImpl(WebTreeScopeType scope,

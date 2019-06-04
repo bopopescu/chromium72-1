@@ -25,6 +25,7 @@
 #define THIRD_PARTY_BLINK_RENDERER_CORE_HTML_HTML_IFRAME_ELEMENT_H_
 
 #include "third_party/blink/public/common/feature_policy/feature_policy.h"
+#include "third_party/blink/public/common/frame/frame_owner_element_type.h"
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/html/html_frame_element_base.h"
 #include "third_party/blink/renderer/core/html/html_iframe_element_sandbox.h"
@@ -47,8 +48,15 @@ class CORE_EXPORT HTMLIFrameElement final
   // Support JS introspection of frame policy (e.g. feature policy)
   Policy* policy();
 
+  // Returns attributes that should be checked against Trusted Types
+  const HashSet<AtomicString>& GetCheckedAttributeNames() const override;
+
   ParsedFeaturePolicy ConstructContainerPolicy(
       Vector<String>* /* messages */) const override;
+
+  FrameOwnerElementType OwnerType() const final {
+    return FrameOwnerElementType::kIframe;
+  }
 
  private:
   explicit HTMLIFrameElement(Document&);
@@ -62,15 +70,15 @@ class CORE_EXPORT HTMLIFrameElement final
       const AtomicString&,
       MutableCSSPropertyValueSet*) override;
 
-  InsertionNotificationRequest InsertedInto(ContainerNode*) override;
-  void RemovedFrom(ContainerNode*) override;
+  InsertionNotificationRequest InsertedInto(ContainerNode&) override;
+  void RemovedFrom(ContainerNode&) override;
 
   bool LayoutObjectIsNeeded(const ComputedStyle&) const override;
   LayoutObject* CreateLayoutObject(const ComputedStyle&) override;
 
   bool IsInteractiveContent() const override;
 
-  ReferrerPolicy ReferrerPolicyAttribute() override;
+  network::mojom::ReferrerPolicy ReferrerPolicyAttribute() override;
 
   // FrameOwner overrides:
   bool AllowFullscreen() const override { return allow_fullscreen_; }
@@ -86,7 +94,7 @@ class CORE_EXPORT HTMLIFrameElement final
   Member<HTMLIFrameElementSandbox> sandbox_;
   Member<Policy> policy_;
 
-  ReferrerPolicy referrer_policy_;
+  network::mojom::ReferrerPolicy referrer_policy_;
 };
 
 }  // namespace blink

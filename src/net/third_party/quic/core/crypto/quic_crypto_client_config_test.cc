@@ -17,7 +17,7 @@
 
 using testing::StartsWith;
 
-namespace net {
+namespace quic {
 namespace test {
 namespace {
 
@@ -182,7 +182,7 @@ TEST_F(QuicCryptoClientConfigTest, InchoateChlo) {
   QuicReferenceCountedPointer<QuicCryptoNegotiatedParameters> params(
       new QuicCryptoNegotiatedParameters);
   CryptoHandshakeMessage msg;
-  QuicServerId server_id("www.google.com", 443, PRIVACY_MODE_DISABLED);
+  QuicServerId server_id("www.google.com", 443, false);
   MockRandom rand;
   config.FillInchoateClientHello(server_id, QuicVersionMax(), &state, &rand,
                                  /* demand_x509_proof= */ true, params, &msg);
@@ -201,13 +201,16 @@ TEST_F(QuicCryptoClientConfigTest, InchoateChlo) {
   EXPECT_EQ("hq", alpn);
 }
 
+// Make sure AES-GCM is the preferred encryption algorithm if it has hardware
+// acceleration.
 TEST_F(QuicCryptoClientConfigTest, PreferAesGcm) {
   QuicCryptoClientConfig config(crypto_test_utils::ProofVerifierForTesting(),
                                 TlsClientHandshaker::CreateSslCtx());
-  if (config.aead.size() > 1)
-    EXPECT_NE(kAESG, config.aead[0]);
-  config.PreferAesGcm();
-  EXPECT_EQ(kAESG, config.aead[0]);
+  if (EVP_has_aes_hardware() == 1) {
+    EXPECT_EQ(kAESG, config.aead[0]);
+  } else {
+    EXPECT_EQ(kCC20, config.aead[0]);
+  }
 }
 
 TEST_F(QuicCryptoClientConfigTest, InchoateChloSecure) {
@@ -217,7 +220,7 @@ TEST_F(QuicCryptoClientConfigTest, InchoateChloSecure) {
   QuicReferenceCountedPointer<QuicCryptoNegotiatedParameters> params(
       new QuicCryptoNegotiatedParameters);
   CryptoHandshakeMessage msg;
-  QuicServerId server_id("www.google.com", 443, PRIVACY_MODE_DISABLED);
+  QuicServerId server_id("www.google.com", 443, false);
   MockRandom rand;
   config.FillInchoateClientHello(server_id, QuicVersionMax(), &state, &rand,
                                  /* demand_x509_proof= */ true, params, &msg);
@@ -239,16 +242,15 @@ TEST_F(QuicCryptoClientConfigTest, InchoateChloSecureWithSCIDNoEXPY) {
   QuicString details;
   QuicWallTime now = QuicWallTime::FromUNIXSeconds(1);
   QuicWallTime expiry = QuicWallTime::FromUNIXSeconds(2);
-  state.SetServerConfig(
-      scfg.GetSerialized(Perspective::IS_CLIENT).AsStringPiece(), now, expiry,
-      &details);
+  state.SetServerConfig(scfg.GetSerialized().AsStringPiece(), now, expiry,
+                        &details);
 
   QuicCryptoClientConfig config(crypto_test_utils::ProofVerifierForTesting(),
                                 TlsClientHandshaker::CreateSslCtx());
   QuicReferenceCountedPointer<QuicCryptoNegotiatedParameters> params(
       new QuicCryptoNegotiatedParameters);
   CryptoHandshakeMessage msg;
-  QuicServerId server_id("www.google.com", 443, PRIVACY_MODE_DISABLED);
+  QuicServerId server_id("www.google.com", 443, false);
   MockRandom rand;
   config.FillInchoateClientHello(server_id, QuicVersionMax(), &state, &rand,
                                  /* demand_x509_proof= */ true, params, &msg);
@@ -266,17 +268,16 @@ TEST_F(QuicCryptoClientConfigTest, InchoateChloSecureWithSCID) {
   scfg.SetValue(kEXPY, future);
   scfg.SetStringPiece(kSCID, "12345678");
   QuicString details;
-  state.SetServerConfig(
-      scfg.GetSerialized(Perspective::IS_CLIENT).AsStringPiece(),
-      QuicWallTime::FromUNIXSeconds(1), QuicWallTime::FromUNIXSeconds(0),
-      &details);
+  state.SetServerConfig(scfg.GetSerialized().AsStringPiece(),
+                        QuicWallTime::FromUNIXSeconds(1),
+                        QuicWallTime::FromUNIXSeconds(0), &details);
 
   QuicCryptoClientConfig config(crypto_test_utils::ProofVerifierForTesting(),
                                 TlsClientHandshaker::CreateSslCtx());
   QuicReferenceCountedPointer<QuicCryptoNegotiatedParameters> params(
       new QuicCryptoNegotiatedParameters);
   CryptoHandshakeMessage msg;
-  QuicServerId server_id("www.google.com", 443, PRIVACY_MODE_DISABLED);
+  QuicServerId server_id("www.google.com", 443, false);
   MockRandom rand;
   config.FillInchoateClientHello(server_id, QuicVersionMax(), &state, &rand,
                                  /* demand_x509_proof= */ true, params, &msg);
@@ -296,7 +297,7 @@ TEST_F(QuicCryptoClientConfigTest, FillClientHello) {
   QuicString error_details;
   MockRandom rand;
   CryptoHandshakeMessage chlo;
-  QuicServerId server_id("www.google.com", 443, PRIVACY_MODE_DISABLED);
+  QuicServerId server_id("www.google.com", 443, false);
   config.FillClientHello(server_id, kConnectionId, QuicVersionMax(), &state,
                          QuicWallTime::Zero(), &rand,
                          nullptr,  // channel_id_key
@@ -340,15 +341,14 @@ TEST_F(QuicCryptoClientConfigTest, ProcessServerDowngradeAttack) {
 TEST_F(QuicCryptoClientConfigTest, InitializeFrom) {
   QuicCryptoClientConfig config(crypto_test_utils::ProofVerifierForTesting(),
                                 TlsClientHandshaker::CreateSslCtx());
-  QuicServerId canonical_server_id("www.google.com", 443,
-                                   PRIVACY_MODE_DISABLED);
+  QuicServerId canonical_server_id("www.google.com", 443, false);
   QuicCryptoClientConfig::CachedState* state =
       config.LookupOrCreate(canonical_server_id);
   // TODO(rch): Populate other fields of |state|.
   state->set_source_address_token("TOKEN");
   state->SetProofValid();
 
-  QuicServerId other_server_id("mail.google.com", 443, PRIVACY_MODE_DISABLED);
+  QuicServerId other_server_id("mail.google.com", 443, false);
   config.InitializeFrom(other_server_id, canonical_server_id, &config);
   QuicCryptoClientConfig::CachedState* other =
       config.LookupOrCreate(other_server_id);
@@ -363,8 +363,8 @@ TEST_F(QuicCryptoClientConfigTest, Canonical) {
   QuicCryptoClientConfig config(crypto_test_utils::ProofVerifierForTesting(),
                                 TlsClientHandshaker::CreateSslCtx());
   config.AddCanonicalSuffix(".google.com");
-  QuicServerId canonical_id1("www.google.com", 443, PRIVACY_MODE_DISABLED);
-  QuicServerId canonical_id2("mail.google.com", 443, PRIVACY_MODE_DISABLED);
+  QuicServerId canonical_id1("www.google.com", 443, false);
+  QuicServerId canonical_id2("mail.google.com", 443, false);
   QuicCryptoClientConfig::CachedState* state =
       config.LookupOrCreate(canonical_id1);
   // TODO(rch): Populate other fields of |state|.
@@ -380,7 +380,7 @@ TEST_F(QuicCryptoClientConfigTest, Canonical) {
   EXPECT_EQ(state->certs(), other->certs());
   EXPECT_EQ(1u, other->generation_counter());
 
-  QuicServerId different_id("mail.google.org", 443, PRIVACY_MODE_DISABLED);
+  QuicServerId different_id("mail.google.org", 443, false);
   EXPECT_TRUE(config.LookupOrCreate(different_id)->IsEmpty());
 }
 
@@ -388,8 +388,8 @@ TEST_F(QuicCryptoClientConfigTest, CanonicalNotUsedIfNotValid) {
   QuicCryptoClientConfig config(crypto_test_utils::ProofVerifierForTesting(),
                                 TlsClientHandshaker::CreateSslCtx());
   config.AddCanonicalSuffix(".google.com");
-  QuicServerId canonical_id1("www.google.com", 443, PRIVACY_MODE_DISABLED);
-  QuicServerId canonical_id2("mail.google.com", 443, PRIVACY_MODE_DISABLED);
+  QuicServerId canonical_id1("www.google.com", 443, false);
+  QuicServerId canonical_id2("mail.google.com", 443, false);
   QuicCryptoClientConfig::CachedState* state =
       config.LookupOrCreate(canonical_id1);
   // TODO(rch): Populate other fields of |state|.
@@ -407,7 +407,7 @@ TEST_F(QuicCryptoClientConfigTest, ClearCachedStates) {
   // Create two states on different origins.
   struct TestCase {
     TestCase(const QuicString& host, QuicCryptoClientConfig* config)
-        : server_id(host, 443, PRIVACY_MODE_DISABLED),
+        : server_id(host, 443, false),
           state(config->LookupOrCreate(server_id)) {
       // TODO(rch): Populate other fields of |state|.
       CryptoHandshakeMessage scfg;
@@ -416,10 +416,9 @@ TEST_F(QuicCryptoClientConfigTest, ClearCachedStates) {
       scfg.SetValue(kEXPY, future);
       scfg.SetStringPiece(kSCID, "12345678");
       QuicString details;
-      state->SetServerConfig(
-          scfg.GetSerialized(Perspective::IS_CLIENT).AsStringPiece(),
-          QuicWallTime::FromUNIXSeconds(0),
-          QuicWallTime::FromUNIXSeconds(future), &details);
+      state->SetServerConfig(scfg.GetSerialized().AsStringPiece(),
+                             QuicWallTime::FromUNIXSeconds(0),
+                             QuicWallTime::FromUNIXSeconds(future), &details);
 
       std::vector<QuicString> certs(1);
       certs[0] = "Hello Cert for " + host;
@@ -604,4 +603,4 @@ TEST_F(QuicCryptoClientConfigTest, ServerNonceinSHLO) {
 }
 
 }  // namespace test
-}  // namespace net
+}  // namespace quic

@@ -16,7 +16,7 @@ MockQuotaManagerProxy::MockQuotaManagerProxy(
       storage_modified_count_(0),
       last_notified_type_(blink::mojom::StorageType::kUnknown),
       last_notified_delta_(0),
-      registered_client_(NULL) {}
+      registered_client_(nullptr) {}
 
 void MockQuotaManagerProxy::RegisterClient(QuotaClient* client) {
   DCHECK(!registered_client_);
@@ -28,7 +28,7 @@ void MockQuotaManagerProxy::SimulateQuotaManagerDestroyed() {
     // We cannot call this in the destructor as the client (indirectly)
     // holds a refptr of the proxy.
     registered_client_->OnQuotaManagerDestroyed();
-    registered_client_ = NULL;
+    registered_client_ = nullptr;
   }
 }
 
@@ -38,8 +38,7 @@ void MockQuotaManagerProxy::GetUsageAndQuota(
     blink::mojom::StorageType type,
     QuotaManager::UsageAndQuotaCallback callback) {
   if (mock_manager()) {
-    mock_manager()->GetUsageAndQuota(origin.GetURL(), type,
-                                     std::move(callback));
+    mock_manager()->GetUsageAndQuota(origin, type, std::move(callback));
   }
 }
 
@@ -62,7 +61,7 @@ void MockQuotaManagerProxy::NotifyStorageModified(
   last_notified_type_ = type;
   last_notified_delta_ = delta;
   if (mock_manager())
-    mock_manager()->UpdateUsage(origin.GetURL(), type, delta);
+    mock_manager()->UpdateUsage(origin, type, delta);
 }
 
 MockQuotaManagerProxy::~MockQuotaManagerProxy() {

@@ -34,6 +34,8 @@ std::string UIElement::GetTypeName() const {
       return "View";
     case UIElementType::FRAMESINK:
       return "FrameSink";
+    case UIElementType::SURFACE:
+      return "Surface";
   }
   NOTREACHED();
   return std::string();
@@ -48,6 +50,10 @@ void UIElement::AddChild(UIElement* child, UIElement* before) {
     children_.push_back(child);
   }
   delegate_->OnUIElementAdded(this, child);
+}
+
+void UIElement::ClearChildren() {
+  children_.clear();
 }
 
 void UIElement::RemoveChild(UIElement* child) {

@@ -15,7 +15,7 @@
 #include "net/third_party/quic/core/quic_write_blocked_list.h"
 #include "net/third_party/quic/platform/api/quic_containers.h"
 
-namespace net {
+namespace quic {
 
 class QuicCryptoStream;
 class QuicSession;
@@ -25,6 +25,8 @@ namespace test {
 
 class QuicSessionPeer {
  public:
+  QuicSessionPeer() = delete;
+
   static QuicStreamId GetNextOutgoingStreamId(QuicSession* session);
   static void SetNextOutgoingStreamId(QuicSession* session, QuicStreamId id);
   static void SetMaxOpenIncomingStreams(QuicSession* session,
@@ -55,13 +57,12 @@ class QuicSessionPeer {
 
   static QuicStream* GetStream(QuicSession* session, QuicStreamId id);
   static bool IsStreamWriteBlocked(QuicSession* session, QuicStreamId id);
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(QuicSessionPeer);
+  static QuicAlarm* GetCleanUpClosedStreamsAlarm(QuicSession* session);
+  static QuicStreamIdManager* v99_streamid_manager(QuicSession* session);
 };
 
 }  // namespace test
 
-}  // namespace net
+}  // namespace quic
 
 #endif  // NET_THIRD_PARTY_QUIC_TEST_TOOLS_QUIC_SESSION_PEER_H_

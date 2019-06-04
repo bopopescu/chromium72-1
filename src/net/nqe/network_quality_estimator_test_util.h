@@ -64,11 +64,11 @@ class TestNetworkQualityEstimator : public NetworkQualityEstimator {
       const std::string& network_id);
 
   // Returns a GURL hosted at the embedded test server.
-  const GURL GetEchoURL() const;
+  const GURL GetEchoURL();
 
   // Returns a GURL hosted at the embedded test server which contains redirect
   // to another HTTPS URL.
-  const GURL GetRedirectURL() const;
+  const GURL GetRedirectURL();
 
   void set_effective_connection_type(EffectiveConnectionType type) {
     effective_connection_type_ = type;
@@ -107,7 +107,8 @@ class TestNetworkQualityEstimator : public NetworkQualityEstimator {
       base::TimeDelta* transport_rtt,
       base::TimeDelta* end_to_end_rtt,
       int32_t* downstream_throughput_kbps,
-      size_t* observations_count) const override;
+      size_t* observations_count,
+      size_t* end_to_end_rtt_observation_count) const override;
 
   void NotifyObserversOfRTTOrThroughputComputed() const override;
 
@@ -175,17 +176,22 @@ class TestNetworkQualityEstimator : public NetworkQualityEstimator {
     rtt_estimate_internal_ = value;
   }
 
+  void set_start_time_null_end_to_end_rtt(const base::TimeDelta rtt) {
+    // Callers should not set effective connection type along with the
+    // lower-layer metrics.
+    DCHECK(!effective_connection_type_ && !recent_effective_connection_type_);
+    start_time_null_end_to_end_rtt_ = rtt;
+  }
+
+  void set_start_time_null_end_to_end_rtt_observation_count(size_t count) {
+    end_to_end_rtt_observation_count_at_last_ect_computation_ = count;
+  }
+
   void SetAccuracyRecordingIntervals(
       const std::vector<base::TimeDelta>& accuracy_recording_intervals);
 
   const std::vector<base::TimeDelta>& GetAccuracyRecordingIntervals()
       const override;
-
-  void set_bandwidth_delay_product_kbits(int32_t value) {
-    bandwidth_delay_product_kbits_ = value;
-  }
-
-  base::Optional<int32_t> GetBandwidthDelayProductKbits() const override;
 
   // Returns the number of entries in |net_log_| that have type set to |type|.
   int GetEntriesCount(NetLogEventType type) const;
@@ -211,6 +217,9 @@ class TestNetworkQualityEstimator : public NetworkQualityEstimator {
     transport_rtt_observation_count_last_ect_computation_ = count;
   }
 
+  // Returns count of ping RTTs received from H2/spdy connections.
+  size_t ping_rtt_received_count() const { return ping_rtt_received_count_; }
+
   const NetworkQualityEstimatorParams* params() const;
 
   using NetworkQualityEstimator::SetTickClockForTesting;
@@ -230,10 +239,13 @@ class TestNetworkQualityEstimator : public NetworkQualityEstimator {
       std::unique_ptr<NetworkQualityEstimatorParams> params,
       std::unique_ptr<BoundTestNetLog> net_log);
 
+  void RecordSpdyPingLatency(const HostPortPair& host_port_pair,
+                             base::TimeDelta rtt) override;
+
   // NetworkQualityEstimator implementation that returns the overridden
-  // network
-  // id (instead of invoking platform APIs).
+  // network id and signal strength (instead of invoking platform APIs).
   nqe::internal::NetworkID GetCurrentNetworkID() const override;
+  int32_t GetCurrentSignalStrength() const override;
 
   // Net log provided to network quality estimator.
   std::unique_ptr<net::BoundTestNetLog> net_log_;
@@ -271,14 +283,15 @@ class TestNetworkQualityEstimator : public NetworkQualityEstimator {
   // If set, GetRTTEstimateInternal() would return the set value.
   base::Optional<base::TimeDelta> rtt_estimate_internal_;
 
-  // If set, GetBandwidthDelayProductKbits() would return its set value.
-  // Otherwise, the base implementation is called.
-  base::Optional<int32_t> bandwidth_delay_product_kbits_;
+  // If set, GetRTTEstimateInternal() would return the set value.
+  base::Optional<base::TimeDelta> start_time_null_end_to_end_rtt_;
 
   LocalHttpTestServer embedded_test_server_;
 
   // If true, notifications are not sent to any of the observers.
   const bool suppress_notifications_for_testing_;
+
+  size_t ping_rtt_received_count_ = 0;
 
   base::Optional<size_t> transport_rtt_observation_count_last_ect_computation_;
 

@@ -37,8 +37,8 @@
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/dom/context_lifecycle_observer.h"
 #include "third_party/blink/renderer/core/dom/document.h"
-#include "third_party/blink/renderer/core/html/canvas/canvas_image_source.h"
 #include "third_party/blink/renderer/core/html/canvas/canvas_rendering_context_host.h"
+#include "third_party/blink/renderer/core/html/canvas/image_encode_options.h"
 #include "third_party/blink/renderer/core/html/html_element.h"
 #include "third_party/blink/renderer/core/imagebitmap/image_bitmap_source.h"
 #include "third_party/blink/renderer/core/page/page_visibility_observer.h"
@@ -63,7 +63,6 @@ class Layer;
 namespace blink {
 
 class Canvas2DLayerBridge;
-class CanvasColorParams;
 class CanvasContextCreationAttributesCore;
 class CanvasDrawListener;
 class CanvasRenderingContext;
@@ -75,16 +74,22 @@ class Image;
 class ImageBitmapOptions;
 class IntSize;
 
+#if defined(SUPPORT_WEBGL2_COMPUTE_CONTEXT)
+class
+    CanvasRenderingContext2DOrWebGLRenderingContextOrWebGL2RenderingContextOrWebGL2ComputeRenderingContextOrImageBitmapRenderingContextOrXRPresentationContext;
+typedef CanvasRenderingContext2DOrWebGLRenderingContextOrWebGL2RenderingContextOrWebGL2ComputeRenderingContextOrImageBitmapRenderingContextOrXRPresentationContext
+    RenderingContext;
+#else
 class
     CanvasRenderingContext2DOrWebGLRenderingContextOrWebGL2RenderingContextOrImageBitmapRenderingContextOrXRPresentationContext;
 typedef CanvasRenderingContext2DOrWebGLRenderingContextOrWebGL2RenderingContextOrImageBitmapRenderingContextOrXRPresentationContext
     RenderingContext;
+#endif
 
 class CORE_EXPORT HTMLCanvasElement final
     : public HTMLElement,
       public ContextLifecycleObserver,
       public PageVisibilityObserver,
-      public CanvasImageSource,
       public CanvasRenderingContextHost,
       public WebSurfaceLayerBridgeObserver,
       public ImageBitmapSource,
@@ -149,24 +154,16 @@ class CORE_EXPORT HTMLCanvasElement final
     return context_.Get();
   }
 
-  scoped_refptr<Image> CopiedImage(SourceDrawingBuffer, AccelerationHint);
-  void ClearCopiedImage();
-
   bool OriginClean() const override;
   void SetOriginTainted() override { origin_clean_ = false; }
 
-  bool Is3d() const;
-  bool Is2d() const;
   bool IsAnimated2d() const;
 
   Canvas2DLayerBridge* GetCanvas2DLayerBridge() {
     return canvas2d_bridge_.get();
   }
   Canvas2DLayerBridge* GetOrCreateCanvas2DLayerBridge();
-  CanvasResourceProvider* GetOrCreateCanvasResourceProviderForWebGL();
-  CanvasResourceProvider* ResourceProviderForWebGL() const {
-    return webgl_resource_provider_.get();
-  }
+
   void DiscardResourceProvider() override;
 
   FontSelector* GetFontSelector() override;
@@ -175,13 +172,18 @@ class CORE_EXPORT HTMLCanvasElement final
 
   const AtomicString ImageSourceURL() const override;
 
-  InsertionNotificationRequest InsertedInto(ContainerNode*) override;
+  InsertionNotificationRequest InsertedInto(ContainerNode&) override;
 
   bool IsDirty() { return !dirty_rect_.IsEmpty(); }
 
   void DoDeferredPaintInvalidation();
 
   void FinalizeFrame() override;
+
+  CanvasResourceDispatcher* GetOrCreateResourceDispatcher() override;
+
+  void PushFrame(scoped_refptr<CanvasResource> image,
+                 const SkIRect& damage_rect) override;
 
   // ContextLifecycleObserver and PageVisibilityObserver implementation
   void ContextDestroyed(ExecutionContext*) override;
@@ -208,6 +210,12 @@ class CORE_EXPORT HTMLCanvasElement final
   void NotifyGpuContextLost() override;
   void SetNeedsCompositingUpdate() override;
   void UpdateMemoryUsage() override;
+  bool ShouldAccelerate2dContext() const override;
+  unsigned GetMSAASampleCountFor2dContext() const override;
+  SkFilterQuality FilterQuality() const override;
+  bool LowLatencyEnabled() const override { return !!frame_dispatcher_; }
+  CanvasResourceProvider* GetOrCreateCanvasResourceProvider(
+      AccelerationHint hint) override;
 
   void DisableAcceleration(std::unique_ptr<Canvas2DLayerBridge>
                                unaccelerated_bridge_used_for_testing = nullptr);
@@ -217,19 +225,18 @@ class CORE_EXPORT HTMLCanvasElement final
   ScriptPromise CreateImageBitmap(ScriptState*,
                                   EventTarget&,
                                   base::Optional<IntRect> crop_rect,
-                                  const ImageBitmapOptions&) override;
+                                  const ImageBitmapOptions*) override;
 
   // OffscreenCanvasPlaceholder implementation.
-  void SetPlaceholderFrame(scoped_refptr<StaticBitmapImage>,
-                           base::WeakPtr<OffscreenCanvasFrameDispatcher>,
+  void SetPlaceholderFrame(scoped_refptr<CanvasResource>,
+                           base::WeakPtr<CanvasResourceDispatcher>,
                            scoped_refptr<base::SingleThreadTaskRunner>,
                            unsigned resource_id) override;
   void Trace(blink::Visitor*) override;
 
-  void TraceWrappers(ScriptWrappableVisitor*) const override;
-
-  void CreateCanvas2DLayerBridgeForTesting(std::unique_ptr<Canvas2DLayerBridge>,
-                                           const IntSize&);
+  void SetResourceProviderForTesting(std::unique_ptr<CanvasResourceProvider>,
+                                     std::unique_ptr<Canvas2DLayerBridge>,
+                                     const IntSize&);
 
   static void RegisterRenderingContextFactory(
       std::unique_ptr<CanvasRenderingContextFactory>);
@@ -263,7 +270,7 @@ class CORE_EXPORT HTMLCanvasElement final
   }
 
   DispatchEventResult HostDispatchEvent(Event* event) override {
-    return DispatchEvent(event);
+    return DispatchEvent(*event);
   }
 
   bool IsWebGL1Enabled() const override;
@@ -289,7 +296,8 @@ class CORE_EXPORT HTMLCanvasElement final
     needs_unbuffered_input_ = value;
   }
 
-  bool LowLatencyEnabled() const { return !!frame_dispatcher_; }
+  scoped_refptr<StaticBitmapImage> Snapshot(SourceDrawingBuffer,
+                                            AccelerationHint) const;
 
  protected:
   void DidMoveToNewDocument(Document& old_document) override;
@@ -315,18 +323,13 @@ class CORE_EXPORT HTMLCanvasElement final
 
   void Reset();
 
-  std::unique_ptr<Canvas2DLayerBridge> CreateAccelerated2dBuffer(
-      int* msaa_sample_count);
+  std::unique_ptr<Canvas2DLayerBridge> CreateAccelerated2dBuffer();
   std::unique_ptr<Canvas2DLayerBridge> CreateUnaccelerated2dBuffer();
-  void CreateCanvas2DLayerBridgeInternal(std::unique_ptr<Canvas2DLayerBridge>);
+  void SetCanvas2DLayerBridgeInternal(std::unique_ptr<Canvas2DLayerBridge>);
 
   void SetSurfaceSize(const IntSize&);
 
   bool PaintsIntoCanvasBuffer() const;
-  CanvasColorParams ColorParams() const;
-
-  scoped_refptr<StaticBitmapImage> ToStaticBitmapImage(SourceDrawingBuffer,
-                                                       AccelerationHint) const;
 
   String ToDataURLInternal(const String& mime_type,
                            const double& quality,
@@ -344,6 +347,8 @@ class CORE_EXPORT HTMLCanvasElement final
   // Used only for WebGL currently.
   bool context_creation_was_blocked_;
 
+  bool canvas_is_clear_ = true;
+
   bool ignore_reset_;
   FloatRect dirty_rect_;
 
@@ -352,24 +357,13 @@ class CORE_EXPORT HTMLCanvasElement final
 
   // It prevents repeated attempts in allocating resources after the first
   // attempt failed.
-  mutable bool did_fail_to_create_resource_provider_;
-
   bool HasResourceProvider() {
-    return canvas2d_bridge_ || webgl_resource_provider_;
+    return canvas2d_bridge_ || !!CanvasResourceHost::ResourceProvider();
   }
-
-  bool resource_provider_is_clear_;
-
-  // This is only used by canvas with webgl rendering context.
-  std::unique_ptr<CanvasResourceProvider> webgl_resource_provider_;
 
   // Canvas2DLayerBridge is used when canvas has 2d rendering context
   std::unique_ptr<Canvas2DLayerBridge> canvas2d_bridge_;
   void ReplaceExisting2dLayerBridge(std::unique_ptr<Canvas2DLayerBridge>);
-
-  // FIXME: This is temporary for platforms that have to copy the image buffer
-  // to render (and for CSSCanvasValue).
-  mutable scoped_refptr<Image> copied_image_;
 
   // Used for OffscreenCanvas that controls this HTML canvas element
   // and for low latency mode.
@@ -377,7 +371,7 @@ class CORE_EXPORT HTMLCanvasElement final
 
   // Used for low latency mode.
   // TODO: rename to CanvasFrameDispatcher.
-  std::unique_ptr<OffscreenCanvasFrameDispatcher> frame_dispatcher_;
+  std::unique_ptr<CanvasResourceDispatcher> frame_dispatcher_;
 
   bool did_notify_listeners_for_current_frame_ = false;
 

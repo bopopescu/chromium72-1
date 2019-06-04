@@ -213,6 +213,8 @@ enum ScrollBehavior {
 // by scrolling.
 struct ScrollResult {
   STACK_ALLOCATED();
+
+ public:
   explicit ScrollResult()
       : did_scroll_x(false),
         did_scroll_y(false),
@@ -264,16 +266,6 @@ inline ScrollGranularity ToPlatformScrollGranularity(
       NOTREACHED();
       return ScrollGranularity::kScrollByPrecisePixel;
   }
-}
-
-inline ScrollOffset ScrollPositionToOffset(FloatPoint position,
-                                           FloatPoint origin) {
-  return position - origin;
-}
-
-inline FloatPoint ScrollOffsetToPosition(ScrollOffset offset,
-                                         FloatPoint origin) {
-  return origin + offset;
 }
 
 typedef unsigned ScrollbarControlPartMask;

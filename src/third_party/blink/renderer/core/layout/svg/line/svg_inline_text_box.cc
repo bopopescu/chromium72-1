@@ -57,7 +57,9 @@ void SVGInlineTextBox::DirtyLineBoxes() {
     next_box->DirtyLineBoxes();
 }
 
-int SVGInlineTextBox::OffsetForPosition(LayoutUnit, bool) const {
+int SVGInlineTextBox::OffsetForPosition(LayoutUnit,
+                                        IncludePartialGlyphsOption,
+                                        BreakGlyphsOption) const {
   // SVG doesn't use the standard offset <-> position selection system, as it's
   // not suitable for SVGs complex needs. Vertical text selection, inline boxes
   // spanning multiple lines (contrary to HTML, etc.)
@@ -80,11 +82,10 @@ int SVGInlineTextBox::OffsetForPositionInFragment(
   if (fragment.AffectedByTextLength())
     position /= fragment.length_adjust_scale;
 
-  const bool include_partial_glyphs = true;
   TextRun text_run = ConstructTextRun(line_layout_item.StyleRef(), fragment);
   return fragment.character_offset - Start() +
          line_layout_item.ScaledFont().OffsetForPosition(
-             text_run, position, include_partial_glyphs);
+             text_run, position, IncludePartialGlyphs, BreakGlyphs);
 }
 
 LayoutUnit SVGInlineTextBox::PositionForOffset(int) const {
@@ -275,6 +276,25 @@ FloatRect SVGInlineTextBox::CalculateBoundaries() const {
   return text_bounding_rect;
 }
 
+bool SVGInlineTextBox::HitTestFragments(
+    const HitTestLocation& location_in_container) const {
+  auto line_layout_item = LineLayoutSVGInlineText(GetLineLayoutItem());
+  const SimpleFontData* font_data = line_layout_item.ScaledFont().PrimaryFont();
+  DCHECK(font_data);
+  if (!font_data)
+    return false;
+
+  DCHECK(line_layout_item.ScalingFactor());
+  float baseline = font_data->GetFontMetrics().FloatAscent() /
+                   line_layout_item.ScalingFactor();
+  for (const SVGTextFragment& fragment : text_fragments_) {
+    FloatQuad fragment_quad = fragment.BoundingQuad(baseline);
+    if (location_in_container.Intersects(fragment_quad))
+      return true;
+  }
+  return false;
+}
+
 bool SVGInlineTextBox::NodeAtPoint(HitTestResult& result,
                                    const HitTestLocation& location_in_container,
                                    const LayoutPoint& accumulated_offset,
@@ -298,27 +318,14 @@ bool SVGInlineTextBox::NodeAtPoint(HitTestResult& result,
     LayoutRect rect(Location(), Size());
     rect.MoveBy(accumulated_offset);
     if (location_in_container.Intersects(rect)) {
-      const SimpleFontData* font_data =
-          line_layout_item.ScaledFont().PrimaryFont();
-      DCHECK(font_data);
-      if (!font_data)
-        return false;
-
-      DCHECK(line_layout_item.ScalingFactor());
-      float baseline = font_data->GetFontMetrics().FloatAscent() /
-                       line_layout_item.ScalingFactor();
-      FloatPoint float_location = FloatPoint(location_in_container.Point());
-      for (const SVGTextFragment& fragment : text_fragments_) {
-        FloatQuad fragment_quad = fragment.BoundingQuad(baseline);
-        if (fragment_quad.ContainsPoint(float_location)) {
-          line_layout_item.UpdateHitTestResult(
-              result,
-              location_in_container.Point() - ToLayoutSize(accumulated_offset));
-          if (result.AddNodeToListBasedTestResult(line_layout_item.GetNode(),
-                                                  location_in_container,
-                                                  rect) == kStopHitTesting)
-            return true;
-        }
+      if (HitTestFragments(location_in_container)) {
+        line_layout_item.UpdateHitTestResult(
+            result,
+            location_in_container.Point() - ToLayoutSize(accumulated_offset));
+        if (result.AddNodeToListBasedTestResult(line_layout_item.GetNode(),
+                                                location_in_container,
+                                                rect) == kStopHitTesting)
+          return true;
       }
     }
   }

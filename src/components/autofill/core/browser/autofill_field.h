@@ -10,14 +10,20 @@
 #include <string>
 
 #include "base/macros.h"
+#include "base/optional.h"
 #include "base/strings/string16.h"
+#include "components/autofill/core/browser/autofill_profile.h"
 #include "components/autofill/core/browser/autofill_type.h"
 #include "components/autofill/core/browser/field_types.h"
+#include "components/autofill/core/browser/proto/password_requirements.pb.h"
 #include "components/autofill/core/browser/proto/server.pb.h"
 #include "components/autofill/core/common/form_field_data.h"
 #include "components/autofill/core/common/signatures_util.h"
 
 namespace autofill {
+
+typedef std::map<ServerFieldType, std::vector<AutofillProfile::ValidityState>>
+    ServerFieldTypeValidityStatesMap;
 
 class AutofillField : public FormFieldData {
  public:
@@ -42,6 +48,9 @@ class AutofillField : public FormFieldData {
   HtmlFieldType html_type() const { return html_type_; }
   HtmlFieldMode html_mode() const { return html_mode_; }
   const ServerFieldTypeSet& possible_types() const { return possible_types_; }
+  const ServerFieldTypeValidityStatesMap& possible_types_validities() const {
+    return possible_types_validities_;
+  }
   PhonePart phone_part() const { return phone_part_; }
   bool previously_autofilled() const { return previously_autofilled_; }
   const base::string16& parseable_name() const { return parseable_name_; }
@@ -50,6 +59,9 @@ class AutofillField : public FormFieldData {
   // Setters for the detected types.
   void set_heuristic_type(ServerFieldType type);
   void set_server_type(ServerFieldType type);
+  void add_possible_types_validities(
+      const std::map<ServerFieldType, AutofillProfile::ValidityState>&
+          possible_types_validities);
   void set_server_predictions(
       const std::vector<AutofillQueryResponseContents::Field::FieldPrediction>
           predictions) {
@@ -58,6 +70,13 @@ class AutofillField : public FormFieldData {
   void set_possible_types(const ServerFieldTypeSet& possible_types) {
     possible_types_ = possible_types;
   }
+  void set_possible_types_validities(
+      const ServerFieldTypeValidityStatesMap& possible_types_validities) {
+    possible_types_validities_ = possible_types_validities;
+  }
+  std::vector<AutofillProfile::ValidityState> get_validities_for_possible_type(
+      ServerFieldType);
+
   void SetHtmlType(HtmlFieldType type, HtmlFieldMode mode);
   void set_previously_autofilled(bool previously_autofilled) {
     previously_autofilled_ = previously_autofilled;
@@ -131,21 +150,27 @@ class AutofillField : public FormFieldData {
     return generated_password_changed_;
   }
 
-  void set_form_classifier_outcome(
-      AutofillUploadContents::Field::FormClassifierOutcome outcome) {
-    form_classifier_outcome_ = outcome;
-  }
-  AutofillUploadContents::Field::FormClassifierOutcome form_classifier_outcome()
-      const {
-    return form_classifier_outcome_;
-  }
-
   void set_vote_type(AutofillUploadContents::Field::VoteType type) {
     vote_type_ = type;
   }
   AutofillUploadContents::Field::VoteType vote_type() const {
     return vote_type_;
   }
+
+  void SetPasswordRequirements(PasswordRequirementsSpec spec);
+  const base::Optional<PasswordRequirementsSpec>& password_requirements()
+      const {
+    return password_requirements_;
+  }
+
+  // For each type in |possible_types_| that's missing from
+  // |possible_types_validities_|, will add it to the
+  // |possible_types_validities_| and will set its validity to UNVALIDATED. This
+  // is to avoid inconsistencies between |possible_types_| and
+  // |possible_types_validities_|. Used especially when the server validity map
+  // is not available (is empty), and as a result the
+  // |possible_types_validities_| would also be empty.
+  void NormalizePossibleTypesValidities();
 
  private:
   // Whether the heuristics or server predict a credit card field.
@@ -161,6 +186,10 @@ class AutofillField : public FormFieldData {
   // including |server_type_| as the first item.
   std::vector<AutofillQueryResponseContents::Field::FieldPrediction>
       server_predictions_;
+
+  // Requirements the site imposes to passwords (for password generation).
+  // Corresponds to the requirements determined by the Autofill server.
+  base::Optional<PasswordRequirementsSpec> password_requirements_;
 
   // The type of the field, as determined by the local heuristics.
   ServerFieldType heuristic_type_;
@@ -180,6 +209,9 @@ class AutofillField : public FormFieldData {
 
   // The set of possible types for this field.
   ServerFieldTypeSet possible_types_;
+
+  // The set of possible types and their validity for this field.
+  ServerFieldTypeValidityStatesMap possible_types_validities_;
 
   // Used to track whether this field is a phone prefix or suffix.
   PhonePart phone_part_;
@@ -207,9 +239,6 @@ class AutofillField : public FormFieldData {
 
   // Whether the generated password was changed by user.
   bool generated_password_changed_;
-
-  // The outcome of HTML parsing based form classifier.
-  AutofillUploadContents::Field::FormClassifierOutcome form_classifier_outcome_;
 
   // The vote type, if the autofill type is USERNAME or any password vote.
   // Otherwise, the field is ignored. |vote_type_| provides context as to what

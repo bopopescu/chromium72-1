@@ -62,10 +62,32 @@ class SRGBTextureTest : public ANGLETest
         ANGLETest::TearDown();
     }
 
+    GLenum getSRGBA8TextureInternalFormat() const
+    {
+        return getClientMajorVersion() >= 3 ? GL_SRGB8_ALPHA8 : GL_SRGB_ALPHA_EXT;
+    }
+
+    GLenum getSRGBA8TextureFormat() const
+    {
+        return getClientMajorVersion() >= 3 ? GL_RGBA : GL_SRGB_ALPHA_EXT;
+    }
+
+    GLenum getSRGB8TextureInternalFormat() const
+    {
+        return getClientMajorVersion() >= 3 ? GL_SRGB8 : GL_SRGB_EXT;
+    }
+
+    GLenum getSRGB8TextureFormat() const
+    {
+        return getClientMajorVersion() >= 3 ? GL_RGB : GL_SRGB_EXT;
+    }
+
     GLuint mProgram        = 0;
     GLint mTextureLocation = -1;
 };
 
+// GenerateMipmaps should generate INVALID_OPERATION in ES 2.0 / WebGL 1.0 with EXT_sRGB.
+// https://bugs.chromium.org/p/chromium/issues/detail?id=769989
 TEST_P(SRGBTextureTest, SRGBValidation)
 {
     // TODO(fjhenigman): Figure out why this fails on Ozone Intel.
@@ -77,15 +99,18 @@ TEST_P(SRGBTextureTest, SRGBValidation)
     glGenTextures(1, &tex);
     glBindTexture(GL_TEXTURE_2D, tex);
 
-    GLubyte pixel[3] = { 0 };
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_SRGB, 1, 1, 0, GL_SRGB, GL_UNSIGNED_BYTE, pixel);
+    GLubyte pixel[3] = {0};
+    glTexImage2D(GL_TEXTURE_2D, 0, getSRGB8TextureInternalFormat(), 1, 1, 0,
+                 getSRGB8TextureFormat(), GL_UNSIGNED_BYTE, pixel);
     if (supported)
     {
         EXPECT_GL_NO_ERROR();
 
-        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 0, 0, GL_SRGB, GL_UNSIGNED_BYTE, pixel);
+        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 0, 0, getSRGB8TextureFormat(), GL_UNSIGNED_BYTE,
+                        pixel);
         EXPECT_GL_NO_ERROR();
 
+        // Mipmap generation always generates errors for SRGB unsized in ES2 or SRGB8 sized in ES3.
         glGenerateMipmap(GL_TEXTURE_2D);
         EXPECT_GL_ERROR(GL_INVALID_OPERATION);
     }
@@ -108,17 +133,26 @@ TEST_P(SRGBTextureTest, SRGBAValidation)
     glGenTextures(1, &tex);
     glBindTexture(GL_TEXTURE_2D, tex);
 
-    GLubyte pixel[4] = { 0 };
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_SRGB_ALPHA_EXT, 1, 1, 0, GL_SRGB_ALPHA_EXT, GL_UNSIGNED_BYTE, pixel);
+    GLubyte pixel[4] = {0};
+    glTexImage2D(GL_TEXTURE_2D, 0, getSRGBA8TextureInternalFormat(), 1, 1, 0,
+                 getSRGBA8TextureFormat(), GL_UNSIGNED_BYTE, pixel);
     if (supported)
     {
         EXPECT_GL_NO_ERROR();
 
-        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 0, 0, GL_SRGB_ALPHA_EXT, GL_UNSIGNED_BYTE, pixel);
+        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 0, 0, getSRGBA8TextureFormat(), GL_UNSIGNED_BYTE,
+                        pixel);
         EXPECT_GL_NO_ERROR();
 
         glGenerateMipmap(GL_TEXTURE_2D);
-        EXPECT_GL_ERROR(GL_INVALID_OPERATION);
+        if (getClientMajorVersion() < 3)
+        {
+            EXPECT_GL_ERROR(GL_INVALID_OPERATION);
+        }
+        else
+        {
+            EXPECT_GL_NO_ERROR();
+        }
     }
     else
     {
@@ -141,7 +175,8 @@ TEST_P(SRGBTextureTest, SRGBASizedValidation)
     glBindTexture(GL_TEXTURE_2D, tex);
 
     GLubyte pixel[4] = {0};
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_SRGB8_ALPHA8, 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixel);
+    glTexImage2D(GL_TEXTURE_2D, 0, getSRGBA8TextureInternalFormat(), 1, 1, 0,
+                 getSRGBA8TextureFormat(), GL_UNSIGNED_BYTE, pixel);
 
     EXPECT_GL_NO_ERROR();
 
@@ -182,7 +217,8 @@ TEST_P(SRGBTextureTest, SRGBARenderbuffer)
 
     GLint colorEncoding = 0;
     glGetFramebufferAttachmentParameteriv(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
-                                          GL_FRAMEBUFFER_ATTACHMENT_COLOR_ENCODING_EXT, &colorEncoding);
+                                          GL_FRAMEBUFFER_ATTACHMENT_COLOR_ENCODING_EXT,
+                                          &colorEncoding);
     if (supported)
     {
         EXPECT_GL_NO_ERROR();
@@ -221,8 +257,8 @@ TEST_P(SRGBTextureTest, SRGBDecodeTextureParameter)
 
     GLTexture tex;
     glBindTexture(GL_TEXTURE_2D, tex.get());
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_SRGB_ALPHA_EXT, 1, 1, 0, GL_SRGB_ALPHA_EXT, GL_UNSIGNED_BYTE,
-                 &linearColor);
+    glTexImage2D(GL_TEXTURE_2D, 0, getSRGBA8TextureInternalFormat(), 1, 1, 0,
+                 getSRGBA8TextureFormat(), GL_UNSIGNED_BYTE, &linearColor);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_SRGB_DECODE_EXT, GL_DECODE_EXT);
     ASSERT_GL_NO_ERROR();
 
@@ -251,8 +287,8 @@ TEST_P(SRGBTextureTest, SRGBDecodeSamplerParameter)
 
     GLTexture tex;
     glBindTexture(GL_TEXTURE_2D, tex.get());
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_SRGB_ALPHA_EXT, 1, 1, 0, GL_SRGB_ALPHA_EXT, GL_UNSIGNED_BYTE,
-                 &linearColor);
+    glTexImage2D(GL_TEXTURE_2D, 0, getSRGBA8TextureInternalFormat(), 1, 1, 0,
+                 getSRGBA8TextureFormat(), GL_UNSIGNED_BYTE, &linearColor);
     ASSERT_GL_NO_ERROR();
 
     GLSampler sampler;
@@ -332,7 +368,8 @@ TEST_P(SRGBTextureTest, GenerateMipmaps)
     }
 }
 
-// Use this to select which configurations (e.g. which renderer, which GLES major version) these tests should be run against.
+// Use this to select which configurations (e.g. which renderer, which GLES major version) these
+// tests should be run against.
 ANGLE_INSTANTIATE_TEST(SRGBTextureTest,
                        ES2_D3D9(),
                        ES2_D3D11(),
@@ -340,6 +377,7 @@ ANGLE_INSTANTIATE_TEST(SRGBTextureTest,
                        ES2_OPENGL(),
                        ES3_OPENGL(),
                        ES2_OPENGLES(),
-                       ES3_OPENGLES());
+                       ES3_OPENGLES(),
+                       ES2_VULKAN());
 
-} // namespace
+}  // namespace angle

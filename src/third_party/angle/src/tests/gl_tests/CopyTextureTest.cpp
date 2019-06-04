@@ -120,7 +120,8 @@ class CopyTextureTest : public ANGLETest
     }
 
     GLuint mTextures[2] = {
-        0, 0,
+        0,
+        0,
     };
     GLuint mFramebuffer = 0;
 
@@ -129,8 +130,7 @@ class CopyTextureTest : public ANGLETest
 };
 
 class CopyTextureTestDest : public CopyTextureTest
-{
-};
+{};
 
 class CopyTextureTestWebGL : public CopyTextureTest
 {
@@ -139,8 +139,7 @@ class CopyTextureTestWebGL : public CopyTextureTest
 };
 
 class CopyTextureTestES3 : public CopyTextureTest
-{
-};
+{};
 
 // Test to ensure that the basic functionality of the extension works.
 TEST_P(CopyTextureTest, BasicCopyTexture)
@@ -1272,7 +1271,6 @@ TEST_P(CopyTextureTestES3, ES3UnormFormats)
                                                   bool flipY, bool premultiplyAlpha,
                                                   bool unmultiplyAlpha,
                                                   const GLColor &expectedColor) {
-
         GLTexture sourceTexture;
         glBindTexture(GL_TEXTURE_2D, sourceTexture);
         glTexImage2D(GL_TEXTURE_2D, 0, sourceInternalFormat, 1, 1, 0, sourceFormat, sourceType,
@@ -1294,7 +1292,6 @@ TEST_P(CopyTextureTestES3, ES3UnormFormats)
                                       GLenum destInternalFormat, GLenum destFormat, GLenum destType,
                                       bool flipY, bool premultiplyAlpha, bool unmultiplyAlpha,
                                       const GLColor &expectedColor) {
-
         GLTexture sourceTexture;
         glBindTexture(GL_TEXTURE_2D, sourceTexture);
         glTexImage2D(GL_TEXTURE_2D, 0, sourceInternalFormat, 1, 1, 0, sourceFormat, sourceType,
@@ -1331,28 +1328,31 @@ TEST_P(CopyTextureTestES3, ES3UnormFormats)
                         GL_UNSIGNED_BYTE, false, true, false, GLColor(0, 0, 0, 128));
 
     // New sRGB dest formats
-    testCopyCombination(GL_RGBA, GL_RGBA, GL_UNSIGNED_BYTE, GLColor(128, 64, 32, 128), GL_SRGB,
-                        GL_UNSIGNED_BYTE, false, false, false, GLColor(55, 13, 4, 255));
-    testCopyCombination(GL_RGBA, GL_RGBA, GL_UNSIGNED_BYTE, GLColor(128, 64, 32, 128), GL_SRGB,
-                        GL_UNSIGNED_BYTE, false, true, false, GLColor(13, 4, 1, 255));
-    testCopyCombination(GL_RGBA, GL_RGBA, GL_UNSIGNED_BYTE, GLColor(128, 64, 32, 128),
-                        GL_SRGB_ALPHA_EXT, GL_UNSIGNED_BYTE, false, false, false,
-                        GLColor(55, 13, 4, 128));
+    if (extensionEnabled("GL_EXT_sRGB"))
+    {
+        testCopyCombination(GL_RGBA, GL_RGBA, GL_UNSIGNED_BYTE, GLColor(128, 64, 32, 128), GL_SRGB,
+                            GL_UNSIGNED_BYTE, false, false, false, GLColor(55, 13, 4, 255));
+        testCopyCombination(GL_RGBA, GL_RGBA, GL_UNSIGNED_BYTE, GLColor(128, 64, 32, 128), GL_SRGB,
+                            GL_UNSIGNED_BYTE, false, true, false, GLColor(13, 4, 1, 255));
+        testCopyCombination(GL_RGBA, GL_RGBA, GL_UNSIGNED_BYTE, GLColor(128, 64, 32, 128),
+                            GL_SRGB_ALPHA_EXT, GL_UNSIGNED_BYTE, false, false, false,
+                            GLColor(55, 13, 4, 128));
 
-    testSubCopyCombination(GL_RGBA, GL_RGBA, GL_UNSIGNED_BYTE, GLColor(128, 64, 32, 128), GL_SRGB,
-                           GL_SRGB, GL_UNSIGNED_BYTE, false, false, false, GLColor(55, 13, 4, 255));
-    testSubCopyCombination(GL_RGBA, GL_RGBA, GL_UNSIGNED_BYTE, GLColor(128, 64, 32, 128), GL_SRGB,
-                           GL_SRGB, GL_UNSIGNED_BYTE, false, true, false, GLColor(13, 4, 1, 255));
-    testSubCopyCombination(GL_RGBA, GL_RGBA, GL_UNSIGNED_BYTE, GLColor(128, 64, 32, 128),
-                           GL_SRGB_ALPHA_EXT, GL_SRGB_ALPHA_EXT, GL_UNSIGNED_BYTE, false, false,
-                           false, GLColor(55, 13, 4, 128));
+        testSubCopyCombination(GL_RGBA, GL_RGBA, GL_UNSIGNED_BYTE, GLColor(128, 64, 32, 128),
+                               GL_SRGB, GL_SRGB, GL_UNSIGNED_BYTE, false, false, false,
+                               GLColor(55, 13, 4, 255));
+        testSubCopyCombination(GL_RGBA, GL_RGBA, GL_UNSIGNED_BYTE, GLColor(128, 64, 32, 128),
+                               GL_SRGB, GL_SRGB, GL_UNSIGNED_BYTE, false, true, false,
+                               GLColor(13, 4, 1, 255));
+        testSubCopyCombination(GL_RGBA, GL_RGBA, GL_UNSIGNED_BYTE, GLColor(128, 64, 32, 128),
+                               GL_SRGB_ALPHA_EXT, GL_SRGB_ALPHA_EXT, GL_UNSIGNED_BYTE, false, false,
+                               false, GLColor(55, 13, 4, 128));
+    }
 }
 
 // Test the newly added ES3 float formats
 TEST_P(CopyTextureTestES3, ES3FloatFormats)
 {
-    ANGLE_SKIP_TEST_IF(IsIntel() && IsWindows() && IsOpenGL());
-
     if (!checkExtensions())
     {
         return;
@@ -1410,7 +1410,6 @@ TEST_P(CopyTextureTestES3, ES3FloatFormats)
                                                   bool flipY, bool premultiplyAlpha,
                                                   bool unmultiplyAlpha,
                                                   const GLColor32F &expectedColor) {
-
         GLTexture sourceTexture;
         glBindTexture(GL_TEXTURE_2D, sourceTexture);
         glTexImage2D(GL_TEXTURE_2D, 0, sourceInternalFormat, 1, 1, 0, sourceFormat, sourceType,
@@ -1542,7 +1541,6 @@ TEST_P(CopyTextureTestES3, ES3UintFormats)
                                                   bool flipY, bool premultiplyAlpha,
                                                   bool unmultiplyAlpha,
                                                   const GLColor32U &expectedColor) {
-
         GLTexture sourceTexture;
         glBindTexture(GL_TEXTURE_2D, sourceTexture);
         glTexImage2D(GL_TEXTURE_2D, 0, sourceInternalFormat, 1, 1, 0, sourceFormat, sourceType,
@@ -1589,8 +1587,18 @@ TEST_P(CopyTextureTestES3, ES3UintFormats)
 
 // Use this to select which configurations (e.g. which renderer, which GLES major version) these
 // tests should be run against.
-ANGLE_INSTANTIATE_TEST(CopyTextureTest, ES2_D3D9(), ES2_D3D11(), ES2_OPENGL(), ES2_OPENGLES());
-ANGLE_INSTANTIATE_TEST(CopyTextureTestWebGL, ES2_D3D9(), ES2_D3D11(), ES2_OPENGL(), ES2_OPENGLES());
+ANGLE_INSTANTIATE_TEST(CopyTextureTest,
+                       ES2_D3D9(),
+                       ES2_D3D11(),
+                       ES2_OPENGL(),
+                       ES2_OPENGLES(),
+                       ES2_VULKAN());
+ANGLE_INSTANTIATE_TEST(CopyTextureTestWebGL,
+                       ES2_D3D9(),
+                       ES2_D3D11(),
+                       ES2_OPENGL(),
+                       ES2_OPENGLES(),
+                       ES2_VULKAN());
 ANGLE_INSTANTIATE_TEST(CopyTextureTestDest, ES2_D3D11());
 ANGLE_INSTANTIATE_TEST(CopyTextureTestES3, ES3_D3D11(), ES3_OPENGL(), ES3_OPENGLES());
 

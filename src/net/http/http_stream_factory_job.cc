@@ -40,8 +40,8 @@
 #include "net/log/net_log_event_type.h"
 #include "net/log/net_log_source.h"
 #include "net/log/net_log_source_type.h"
-#include "net/quic/chromium/bidirectional_stream_quic_impl.h"
-#include "net/quic/chromium/quic_http_stream.h"
+#include "net/quic/bidirectional_stream_quic_impl.h"
+#include "net/quic/quic_http_stream.h"
 #include "net/socket/client_socket_handle.h"
 #include "net/socket/client_socket_pool.h"
 #include "net/socket/client_socket_pool_manager.h"
@@ -163,7 +163,7 @@ HttpStreamFactory::Job::Job(Delegate* delegate,
                             HostPortPair destination,
                             GURL origin_url,
                             NextProto alternative_protocol,
-                            QuicTransportVersion quic_version,
+                            quic::QuicTransportVersion quic_version,
                             const ProxyServer& alternative_proxy_server,
                             bool is_websocket,
                             bool enable_ip_based_pooling,
@@ -195,8 +195,7 @@ HttpStreamFactory::Job::Job(Delegate* delegate,
                  origin_url_.SchemeIs(url::kWssScheme)),
       using_quic_(
           alternative_protocol == kProtoQUIC ||
-          (ShouldForceQuic(session, destination, origin_url, proxy_info) &&
-           !(proxy_info.is_quic() && using_ssl_))),
+          ShouldForceQuic(session, destination, origin_url, proxy_info)),
       quic_version_(quic_version),
       expect_spdy_(alternative_protocol == kProtoHTTP2 && !using_quic_),
       using_spdy_(false),
@@ -223,13 +222,13 @@ HttpStreamFactory::Job::Job(Delegate* delegate,
       ptr_factory_(this) {
   // The Job is forced to use QUIC without a designated version, try the
   // preferred QUIC version that is supported by default.
-  if (quic_version_ == QUIC_VERSION_UNSUPPORTED &&
+  if (quic_version_ == quic::QUIC_VERSION_UNSUPPORTED &&
       ShouldForceQuic(session, destination, origin_url, proxy_info)) {
     quic_version_ = session->params().quic_supported_versions[0];
   }
 
   if (using_quic_)
-    DCHECK_NE(quic_version_, QUIC_VERSION_UNSUPPORTED);
+    DCHECK_NE(quic_version_, quic::QUIC_VERSION_UNSUPPORTED);
 
   DCHECK(session);
   if (alternative_protocol != kProtoUnknown) {
@@ -562,12 +561,12 @@ int HttpStreamFactory::Job::OnHostResolution(
 }
 
 void HttpStreamFactory::Job::OnIOComplete(int result) {
-  TRACE_EVENT0(kNetTracingCategory, "HttpStreamFactory::Job::OnIOComplete");
+  TRACE_EVENT0(NetTracingCategory(), "HttpStreamFactory::Job::OnIOComplete");
   RunLoop(result);
 }
 
 void HttpStreamFactory::Job::RunLoop(int result) {
-  TRACE_EVENT0(kNetTracingCategory, "HttpStreamFactory::Job::RunLoop");
+  TRACE_EVENT0(NetTracingCategory(), "HttpStreamFactory::Job::RunLoop");
   result = DoLoop(result);
 
   if (result == ERR_IO_PENDING)
@@ -863,15 +862,21 @@ int HttpStreamFactory::Job::DoInitConnectionImpl() {
 
   if (proxy_info_.is_https() || proxy_info_.is_quic()) {
     InitSSLConfig(&proxy_ssl_config_, /*is_proxy=*/true);
-    // Disable revocation checking for HTTPS proxies since the revocation
-    // requests are probably going to need to go through the proxy too.
-    proxy_ssl_config_.rev_checking_enabled = false;
+    // Disable network fetches for HTTPS proxies, since the network requests
+    // are probably going to need to go through the proxy too.
+    proxy_ssl_config_.disable_cert_verification_network_fetches = true;
   }
   if (using_ssl_) {
     InitSSLConfig(&server_ssl_config_, /*is_proxy=*/false);
   }
 
   if (using_quic_) {
+    if (proxy_info_.is_quic() &&
+        !request_info_.url.SchemeIs(url::kHttpScheme)) {
+      NOTREACHED();
+      // TODO(rch): support QUIC proxies for HTTPS urls.
+      return ERR_NOT_IMPLEMENTED;
+    }
     HostPortPair destination;
     SSLConfig* ssl_config;
     GURL url(request_info_.url);
@@ -901,7 +906,10 @@ int HttpStreamFactory::Job::DoInitConnectionImpl() {
     int rv = quic_request_.Request(
         destination, quic_version_, request_info_.privacy_mode, priority_,
         request_info_.socket_tag, ssl_config->GetCertVerifyFlags(), url,
-        net_log_, &net_error_details_, io_callback_);
+        net_log_, &net_error_details_,
+        base::BindOnce(&Job::OnFailedOnDefaultNetwork,
+                       ptr_factory_.GetWeakPtr()),
+        io_callback_);
     if (rv == OK) {
       using_existing_quic_session_ = true;
     } else if (rv == ERR_IO_PENDING) {
@@ -942,7 +950,7 @@ int HttpStreamFactory::Job::DoInitConnectionImpl() {
     }
   }
 
-  if (proxy_info_.is_http() || proxy_info_.is_https() || proxy_info_.is_quic())
+  if (proxy_info_.is_http() || proxy_info_.is_https())
     establishing_tunnel_ = using_ssl_;
 
   HttpServerProperties* http_server_properties =
@@ -997,6 +1005,12 @@ void HttpStreamFactory::Job::OnQuicHostResolution(int result) {
   DCHECK(expect_on_quic_host_resolution_);
   expect_on_quic_host_resolution_ = false;
   delegate_->OnConnectionInitialized(this, result);
+}
+
+void HttpStreamFactory::Job::OnFailedOnDefaultNetwork(int result) {
+  DCHECK_EQ(job_type_, ALTERNATIVE);
+  DCHECK(using_quic_);
+  delegate_->OnFailedOnDefaultNetwork(this);
 }
 
 int HttpStreamFactory::Job::DoInitConnectionComplete(int result) {
@@ -1197,8 +1211,7 @@ int HttpStreamFactory::Job::DoCreateStream() {
   if (!using_spdy_) {
     DCHECK(!expect_spdy_);
     // We may get ftp scheme when fetching ftp resources through proxy.
-    bool using_proxy = (proxy_info_.is_http() || proxy_info_.is_https() ||
-                        proxy_info_.is_quic()) &&
+    bool using_proxy = (proxy_info_.is_http() || proxy_info_.is_https()) &&
                        (request_info_.url.SchemeIs(url::kHttpScheme) ||
                         request_info_.url.SchemeIs(url::kFtpScheme));
     if (is_websocket_) {
@@ -1294,8 +1307,7 @@ int HttpStreamFactory::Job::DoCreateStreamComplete(int result) {
   if (result < 0)
     return result;
 
-  session_->proxy_resolution_service()->ReportSuccess(
-      proxy_info_, session_->context().proxy_delegate);
+  session_->proxy_resolution_service()->ReportSuccess(proxy_info_);
   next_state_ = STATE_NONE;
   return OK;
 }
@@ -1408,11 +1420,10 @@ int HttpStreamFactory::Job::HandleCertificateError(int error) {
   server_ssl_config_.allowed_bad_certs.emplace_back(ssl_info.cert,
                                                     ssl_info.cert_status);
 
-  int load_flags = request_info_.load_flags;
-  if (session_->params().ignore_certificate_errors)
-    load_flags |= LOAD_IGNORE_ALL_CERT_ERRORS;
-  if (SSLClientSocket::IgnoreCertError(error, load_flags))
+  if (session_->params().ignore_certificate_errors &&
+      IsCertificateError(error)) {
     return OK;
+  }
   return error;
 }
 
@@ -1467,8 +1478,8 @@ HttpStreamFactory::JobFactory::CreateMainJob(
   return std::make_unique<HttpStreamFactory::Job>(
       delegate, job_type, session, request_info, priority, proxy_info,
       server_ssl_config, proxy_ssl_config, destination, origin_url,
-      kProtoUnknown, QUIC_VERSION_UNSUPPORTED, ProxyServer(), is_websocket,
-      enable_ip_based_pooling, net_log);
+      kProtoUnknown, quic::QUIC_VERSION_UNSUPPORTED, ProxyServer(),
+      is_websocket, enable_ip_based_pooling, net_log);
 }
 
 std::unique_ptr<HttpStreamFactory::Job>
@@ -1484,7 +1495,7 @@ HttpStreamFactory::JobFactory::CreateAltSvcJob(
     HostPortPair destination,
     GURL origin_url,
     NextProto alternative_protocol,
-    QuicTransportVersion quic_version,
+    quic::QuicTransportVersion quic_version,
     bool is_websocket,
     bool enable_ip_based_pooling,
     NetLog* net_log) {
@@ -1514,7 +1525,7 @@ HttpStreamFactory::JobFactory::CreateAltProxyJob(
   return std::make_unique<HttpStreamFactory::Job>(
       delegate, job_type, session, request_info, priority, proxy_info,
       server_ssl_config, proxy_ssl_config, destination, origin_url,
-      kProtoUnknown, QUIC_VERSION_UNSUPPORTED, alternative_proxy_server,
+      kProtoUnknown, quic::QUIC_VERSION_UNSUPPORTED, alternative_proxy_server,
       is_websocket, enable_ip_based_pooling, net_log);
 }
 

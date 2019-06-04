@@ -37,8 +37,10 @@
 #include "base/memory/ptr_util.h"
 #include "third_party/blink/renderer/platform/bindings/origin_trial_features.h"
 #include "third_party/blink/renderer/platform/bindings/script_state.h"
+#include "third_party/blink/renderer/platform/bindings/v0_custom_element_binding.h"
 #include "third_party/blink/renderer/platform/bindings/v8_binding.h"
 #include "third_party/blink/renderer/platform/bindings/v8_object_constructor.h"
+#include "third_party/blink/renderer/platform/bindings/wrapper_type_info.h"
 #include "third_party/blink/renderer/platform/instance_counters.h"
 
 namespace blink {
@@ -50,7 +52,7 @@ V8PerContextData::V8PerContextData(v8::Local<v8::Context> context)
       context_holder_(std::make_unique<gin::ContextHolder>(isolate_)),
       context_(isolate_, context),
       activity_logger_(nullptr),
-      data_map_(new DataMap()) {
+      data_map_(MakeGarbageCollected<DataMap>()) {
   context_holder_->SetContext(context);
   context_.Get().AnnotateStrongRetainer("blink::V8PerContextData::context_");
 

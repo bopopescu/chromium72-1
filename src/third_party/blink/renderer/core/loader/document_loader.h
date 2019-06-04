@@ -34,18 +34,23 @@
 #include "base/memory/scoped_refptr.h"
 #include "base/unguessable_token.h"
 #include "third_party/blink/public/platform/web_loading_behavior_flag.h"
+#include "third_party/blink/public/web/web_frame_load_type.h"
 #include "third_party/blink/public/web/web_global_object_reuse_policy.h"
+#include "third_party/blink/public/web/web_navigation_params.h"
+#include "third_party/blink/public/web/web_navigation_type.h"
 #include "third_party/blink/renderer/bindings/core/v8/source_location.h"
 #include "third_party/blink/renderer/core/core_export.h"
-#include "third_party/blink/renderer/core/dom/viewport_description.h"
 #include "third_party/blink/renderer/core/dom/weak_identifier_map.h"
 #include "third_party/blink/renderer/core/frame/csp/content_security_policy.h"
 #include "third_party/blink/renderer/core/frame/frame_types.h"
+#include "third_party/blink/renderer/core/frame/use_counter.h"
 #include "third_party/blink/renderer/core/html/parser/parser_synchronization_policy.h"
 #include "third_party/blink/renderer/core/loader/document_load_timing.h"
 #include "third_party/blink/renderer/core/loader/frame_loader_types.h"
 #include "third_party/blink/renderer/core/loader/link_loader.h"
 #include "third_party/blink/renderer/core/loader/navigation_policy.h"
+#include "third_party/blink/renderer/core/loader/previews_resource_loading_hints.h"
+#include "third_party/blink/renderer/core/page/viewport_description.h"
 #include "third_party/blink/renderer/platform/loader/fetch/client_hints_preferences.h"
 #include "third_party/blink/renderer/platform/loader/fetch/raw_resource.h"
 #include "third_party/blink/renderer/platform/loader/fetch/resource_error.h"
@@ -60,7 +65,6 @@
 namespace blink {
 
 class ApplicationCacheHost;
-class CSSPreloaderResourceClient;
 class Document;
 class DocumentParser;
 class FrameLoader;
@@ -81,24 +85,21 @@ class CORE_EXPORT DocumentLoader
   USING_GARBAGE_COLLECTED_MIXIN(DocumentLoader);
 
  public:
-  static DocumentLoader* Create(
-      LocalFrame* frame,
-      const ResourceRequest& request,
-      const SubstituteData& data,
-      ClientRedirectPolicy client_redirect_policy,
-      const base::UnguessableToken& devtools_navigation_token) {
-    DCHECK(frame);
-
-    return new DocumentLoader(frame, request, data, client_redirect_policy,
-                              devtools_navigation_token);
-  }
+  DocumentLoader(LocalFrame*,
+                 const ResourceRequest&,
+                 const SubstituteData&,
+                 ClientRedirectPolicy,
+                 const base::UnguessableToken& devtools_navigation_token,
+                 WebFrameLoadType load_type,
+                 WebNavigationType navigation_type,
+                 std::unique_ptr<WebNavigationParams> navigation_params);
   ~DocumentLoader() override;
 
   LocalFrame* GetFrame() const { return frame_; }
 
   ResourceTimingInfo* GetNavigationTimingInfo() const;
 
-  virtual void DetachFromFrame();
+  virtual void DetachFromFrame(bool flush_microtask_queue);
 
   unsigned long MainResourceIdentifier() const;
 
@@ -119,6 +120,13 @@ class CORE_EXPORT DocumentLoader
   SubresourceFilter* GetSubresourceFilter() const {
     return subresource_filter_.Get();
   }
+  void SetPreviewsResourceLoadingHints(
+      PreviewsResourceLoadingHints* resource_loading_hints) {
+    resource_loading_hints_ = resource_loading_hints;
+  }
+  PreviewsResourceLoadingHints* GetPreviewsResourceLoadingHints() const {
+    return resource_loading_hints_;
+  }
 
   const SubstituteData& GetSubstituteData() const { return substitute_data_; }
 
@@ -132,7 +140,7 @@ class CORE_EXPORT DocumentLoader
                                        SameDocumentNavigationSource,
                                        scoped_refptr<SerializedScriptValue>,
                                        HistoryScrollRestorationType,
-                                       FrameLoadType,
+                                       WebFrameLoadType,
                                        Document*);
   const ResourceResponse& GetResponse() const { return response_; }
   bool IsClientRedirect() const { return is_client_redirect_; }
@@ -160,11 +168,11 @@ class CORE_EXPORT DocumentLoader
   void SetSentDidFinishLoad() { state_ = kSentDidFinishLoad; }
   bool SentDidFinishLoad() const { return state_ == kSentDidFinishLoad; }
 
-  FrameLoadType LoadType() const { return load_type_; }
-  void SetLoadType(FrameLoadType load_type) { load_type_ = load_type; }
+  WebFrameLoadType LoadType() const { return load_type_; }
+  void SetLoadType(WebFrameLoadType load_type) { load_type_ = load_type; }
 
-  NavigationType GetNavigationType() const { return navigation_type_; }
-  void SetNavigationType(NavigationType navigation_type) {
+  WebNavigationType GetNavigationType() const { return navigation_type_; }
+  void SetNavigationType(WebNavigationType navigation_type) {
     navigation_type_ = navigation_type;
   }
 
@@ -194,7 +202,6 @@ class CORE_EXPORT DocumentLoader
         : was_scrolled_by_user(false), did_restore_from_history(false) {}
 
     bool was_scrolled_by_user;
-    bool was_scrolled_by_js;
     bool did_restore_from_history;
   };
   InitialScrollState& GetInitialScrollState() { return initial_scroll_state_; }
@@ -205,9 +212,7 @@ class CORE_EXPORT DocumentLoader
   void DispatchLinkHeaderPreloads(ViewportDescriptionWrapper*,
                                   LinkLoader::MediaPreloadPolicy);
 
-  Resource* StartPreload(Resource::Type,
-                         FetchParameters&,
-                         CSSPreloaderResourceClient*);
+  Resource* StartPreload(ResourceType, FetchParameters&);
 
   void SetServiceWorkerNetworkProvider(
       std::unique_ptr<WebServiceWorkerNetworkProvider>);
@@ -219,8 +224,9 @@ class CORE_EXPORT DocumentLoader
     return service_worker_network_provider_.get();
   }
 
+  // Allows to specify the SourceLocation that triggered the navigation.
+  void ResetSourceLocation();
   std::unique_ptr<SourceLocation> CopySourceLocation() const;
-  void SetSourceLocation(std::unique_ptr<SourceLocation>);
 
   void LoadFailed(const ResourceError&);
 
@@ -244,27 +250,28 @@ class CORE_EXPORT DocumentLoader
     return devtools_navigation_token_;
   }
 
-#if defined(USE_NEVA_APPRUNTIME)
-    void CommitNonFirstMeaningfulPaintAfterLoad();
-#endif
-
   // Can be used to temporarily suspend feeding the parser with new data. The
   // parser will be allowed to read new data when ResumeParser() is called the
   // same number of time than BlockParser().
   void BlockParser();
   void ResumeParser();
 
- protected:
-  DocumentLoader(LocalFrame*,
-                 const ResourceRequest&,
-                 const SubstituteData&,
-                 ClientRedirectPolicy,
-                 const base::UnguessableToken& devtools_navigation_token);
+  // Returns the currently stored content security policy, if this is called
+  // after the document has been installed it will return nullptr as the
+  // CSP belongs to the document at that point.
+  const ContentSecurityPolicy* GetContentSecurityPolicy() const {
+    return content_security_policy_.Get();
+  }
 
+  UseCounter& GetUseCounter() { return use_counter_; }
+
+ protected:
   static bool ShouldClearWindowName(
       const LocalFrame&,
       const SecurityOrigin* previous_security_origin,
       const Document& new_document);
+
+  bool had_transient_activation() const { return had_transient_activation_; }
 
   Vector<KURL> redirect_chain_;
 
@@ -282,7 +289,7 @@ class CORE_EXPORT DocumentLoader
                           InstallNewDocumentReason,
                           ParserSynchronizationPolicy,
                           const KURL& overriding_url);
-  void DidInstallNewDocument(Document*);
+  void DidInstallNewDocument(Document*, const ContentSecurityPolicy*);
   void WillCommitNavigation();
   void DidCommitNavigation(WebGlobalObjectReusePolicy);
 
@@ -307,7 +314,7 @@ class CORE_EXPORT DocumentLoader
     kHistoryApi
   };
   void SetHistoryItemStateForCommit(HistoryItem* old_item,
-                                    FrameLoadType,
+                                    WebFrameLoadType,
                                     HistoryNavigationType);
 
   // RawResourceClient implementation
@@ -335,6 +342,9 @@ class CORE_EXPORT DocumentLoader
   // to the parser in a nested message loop.
   void ProcessDataBuffer();
 
+  // Sends an intervention report if the page is being served as a preview.
+  void ReportPreviewsIntervention() const;
+
   Member<LocalFrame> frame_;
   Member<ResourceFetcher> fetcher_;
 
@@ -346,6 +356,9 @@ class CORE_EXPORT DocumentLoader
   Member<DocumentParser> parser_;
 
   Member<SubresourceFilter> subresource_filter_;
+
+  // Stores the resource loading hints for this document.
+  Member<PreviewsResourceLoadingHints> resource_loading_hints_;
 
   // A reference to actual request used to create the data source.
   // The only part of this request that should change is the url, and
@@ -361,13 +374,13 @@ class CORE_EXPORT DocumentLoader
 
   ResourceResponse response_;
 
-  FrameLoadType load_type_;
+  WebFrameLoadType load_type_;
 
   bool is_client_redirect_;
   bool replaces_current_history_item_;
   bool data_received_;
 
-  NavigationType navigation_type_;
+  WebNavigationType navigation_type_;
 
   DocumentLoadTiming document_load_timing_;
 
@@ -402,8 +415,17 @@ class CORE_EXPORT DocumentLoader
   scoped_refptr<SharedBuffer> data_buffer_;
   base::UnguessableToken devtools_navigation_token_;
 
-  // Whether this load request comes from a user activation.
-  bool user_activated_;
+  // Whether this load request comes with a sitcky user activation.
+  bool had_sticky_activation_;
+  // Whether this load request had a user activation when created.
+  bool had_transient_activation_;
+
+  // This UseCounter tracks feature usage associated with the lifetime of the
+  // document load. Features recorded prior to commit will be recorded locally.
+  // Once commited, feature usage will be piped to the browser side page load
+  // metrics that aggregates usage from frames to one page load and report
+  // feature usage to UMA histograms per page load.
+  UseCounter use_counter_;
 };
 
 DECLARE_WEAK_IDENTIFIER_MAP(DocumentLoader);

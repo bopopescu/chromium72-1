@@ -97,8 +97,6 @@ class ScopedBundleSwizzlerMac;
 // By default a single Browser is created in BrowserMain(). You can obviously
 // create more as needed.
 
-// InProcessBrowserTest disables the sandbox when running.
-//
 // See ui_test_utils for a handful of methods designed for use with this class.
 //
 // It's possible to write browser tests that span a restart by splitting each
@@ -152,6 +150,11 @@ class InProcessBrowserTest : public content::BrowserTestBase {
   // outstanding resources.
   void CloseAllBrowsers();
 
+  // Runs the main thread message loop until the BrowserProcess indicates
+  // we should quit. This will normally be called automatically during test
+  // teardown, but may instead be run manually by the test, if necessary.
+  void RunUntilBrowserProcessQuits();
+
   // Convenience methods for adding tabs to a Browser.
   void AddTabAtIndexToBrowser(Browser* browser,
                               int index,
@@ -175,6 +178,9 @@ class InProcessBrowserTest : public content::BrowserTestBase {
   // directory before the browser starts up, it can do so here. Returns true if
   // successful.
   virtual bool SetUpUserDataDirectory() WARN_UNUSED_RESULT;
+
+  // Initializes the display::Screen instance on X11.
+  virtual void SetScreenInstance();
 
   // BrowserTestBase:
   void PreRunTestOnMainThread() override;
@@ -246,6 +252,9 @@ class InProcessBrowserTest : public content::BrowserTestBase {
 
   // Browser created in BrowserMain().
   Browser* browser_;
+
+  // Used to run the process until the BrowserProcess signals the test to quit.
+  std::unique_ptr<base::RunLoop> run_loop_;
 
   // Temporary user data directory. Used only when a user data directory is not
   // specified in the command line.

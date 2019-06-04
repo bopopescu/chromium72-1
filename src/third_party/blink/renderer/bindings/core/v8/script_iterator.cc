@@ -4,10 +4,10 @@
 
 #include "third_party/blink/renderer/bindings/core/v8/script_iterator.h"
 
-#include "third_party/blink/renderer/bindings/core/v8/exception_state.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_controller.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_binding_for_core.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_string_resource.h"
+#include "third_party/blink/renderer/platform/bindings/exception_state.h"
 
 namespace blink {
 
@@ -72,16 +72,14 @@ bool ScriptIterator::Next(ExecutionContext* execution_context,
   }
 
   v8::Local<v8::Value> done;
-  v8::Local<v8::Boolean> done_boolean;
-  if (!result_object->Get(context, done_key_).ToLocal(&done) ||
-      !done->ToBoolean(context).ToLocal(&done_boolean)) {
+  if (!result_object->Get(context, done_key_).ToLocal(&done)) {
     CHECK(!try_catch.Exception().IsEmpty());
     exception_state.RethrowV8Exception(try_catch.Exception());
     done_ = true;
     return false;
   }
 
-  done_ = done_boolean->Value();
+  done_ = done->BooleanValue(isolate_);
   return !done_;
 }
 

@@ -69,8 +69,9 @@ LocalCaretRect LocalCaretRectOfPositionTemplate(
     // DCHECK hit, we should pass primary direction to the latter function.
     // TODO(crbug.com/793098): Fix it so that we don't need to bother about
     // primary direction.
-    DCHECK_EQ(PrimaryDirectionOf(*position.AnchorNode()),
-              PrimaryDirectionOf(*adjusted.AnchorNode()));
+    DCHECK_EQ(
+        PrimaryDirectionOf(*position.GetPosition().ComputeContainerNode()),
+        PrimaryDirectionOf(*adjusted.GetPosition().ComputeContainerNode()));
     const InlineBoxPosition& box_position =
         ComputeInlineBoxPositionForInlineAdjustedPosition(adjusted);
 
@@ -122,8 +123,8 @@ LocalCaretRect LocalSelectionRectOfPositionTemplate(
   // DCHECK hit, we should pass primary direction to the latter function.
   // TODO(crbug.com/793098): Fix it so that we don't need to bother about
   // primary direction.
-  DCHECK_EQ(PrimaryDirectionOf(*position.AnchorNode()),
-            PrimaryDirectionOf(*adjusted.AnchorNode()));
+  DCHECK_EQ(PrimaryDirectionOf(*position.GetPosition().ComputeContainerNode()),
+            PrimaryDirectionOf(*adjusted.GetPosition().ComputeContainerNode()));
   const InlineBoxPosition& box_position =
       ComputeInlineBoxPositionForInlineAdjustedPosition(adjusted);
 
@@ -177,17 +178,15 @@ LocalCaretRect LocalSelectionRectOfPosition(
 
 template <typename Strategy>
 static IntRect AbsoluteCaretBoundsOfAlgorithm(
-    const VisiblePositionTemplate<Strategy>& visible_position) {
-  DCHECK(visible_position.IsValid()) << visible_position;
-  const LocalCaretRect& caret_rect =
-      LocalCaretRectOfPosition(visible_position.ToPositionWithAffinity());
+    const PositionWithAffinityTemplate<Strategy>& position) {
+  const LocalCaretRect& caret_rect = LocalCaretRectOfPosition(position);
   if (caret_rect.IsEmpty())
     return IntRect();
   return LocalToAbsoluteQuadOf(caret_rect).EnclosingBoundingBox();
 }
 
-IntRect AbsoluteCaretBoundsOf(const VisiblePosition& visible_position) {
-  return AbsoluteCaretBoundsOfAlgorithm<EditingStrategy>(visible_position);
+IntRect AbsoluteCaretBoundsOf(const PositionWithAffinity& position) {
+  return AbsoluteCaretBoundsOfAlgorithm<EditingStrategy>(position);
 }
 
 // TODO(editing-dev): This function does pretty much the same thing as
@@ -222,10 +221,8 @@ IntRect AbsoluteSelectionBoundsOf(const VisiblePosition& visible_position) {
   return AbsoluteSelectionBoundsOfAlgorithm<EditingStrategy>(visible_position);
 }
 
-IntRect AbsoluteCaretBoundsOf(
-    const VisiblePositionInFlatTree& visible_position) {
-  return AbsoluteCaretBoundsOfAlgorithm<EditingInFlatTreeStrategy>(
-      visible_position);
+IntRect AbsoluteCaretBoundsOf(const PositionInFlatTreeWithAffinity& position) {
+  return AbsoluteCaretBoundsOfAlgorithm<EditingInFlatTreeStrategy>(position);
 }
 
 }  // namespace blink

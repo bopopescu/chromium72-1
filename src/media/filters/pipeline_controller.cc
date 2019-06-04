@@ -26,12 +26,12 @@ PipelineController::PipelineController(
       error_cb_(error_cb),
       weak_factory_(this) {
   DCHECK(pipeline_);
-  DCHECK(!renderer_factory_cb_.is_null());
-  DCHECK(!seeked_cb_.is_null());
-  DCHECK(!suspended_cb_.is_null());
-  DCHECK(!before_resume_cb_.is_null());
-  DCHECK(!resumed_cb_.is_null());
-  DCHECK(!error_cb_.is_null());
+  DCHECK(renderer_factory_cb_);
+  DCHECK(seeked_cb_);
+  DCHECK(suspended_cb_);
+  DCHECK(before_resume_cb_);
+  DCHECK(resumed_cb_);
+  DCHECK(error_cb_);
 }
 
 PipelineController::~PipelineController() {
@@ -72,6 +72,7 @@ void PipelineController::Seek(base::TimeDelta time, bool time_updated) {
   if (time_updated)
     pending_time_updated_ = true;
   pending_seeked_cb_ = true;
+  pending_seek_except_start_ = true;
 
   // If we are already seeking to |time|, and the media is static, elide the
   // seek.
@@ -109,6 +110,11 @@ void PipelineController::Resume() {
 bool PipelineController::IsStable() {
   DCHECK(thread_checker_.CalledOnValidThread());
   return state_ == State::PLAYING;
+}
+
+bool PipelineController::IsPendingSeek() {
+  DCHECK(thread_checker_.CalledOnValidThread());
+  return pending_seek_except_start_;
 }
 
 bool PipelineController::IsSuspended() {
@@ -287,6 +293,7 @@ void PipelineController::Dispatch() {
     // immediately.
     pending_startup_ = false;
     pending_seeked_cb_ = false;
+    pending_seek_except_start_ = false;
     bool was_pending_time_updated = pending_time_updated_;
     pending_time_updated_ = false;
     seeked_cb_.Run(was_pending_time_updated);
@@ -301,6 +308,7 @@ void PipelineController::Stop() {
   demuxer_ = nullptr;
   waiting_for_seek_ = false;
   pending_seeked_cb_ = false;
+  pending_seek_except_start_ = false;
   pending_time_updated_ = false;
   pending_seek_ = false;
   pending_suspend_ = false;
@@ -391,10 +399,4 @@ void PipelineController::OnTrackChangeComplete(State previous_state) {
   Dispatch();
 }
 
-#if defined(USE_NEVA_MEDIA)
-void PipelineController::SetMediaPlatformAPI(
-    const scoped_refptr<MediaPlatformAPI>& media_platform_api) {
-  pipeline_->SetMediaPlatformAPI(media_platform_api);
-}
-#endif
 }  // namespace media

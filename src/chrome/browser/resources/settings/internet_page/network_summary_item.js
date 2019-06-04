@@ -51,14 +51,14 @@ Polymer({
      * @type {!NetworkingPrivate}
      */
     networkingPrivate: Object,
-  },
 
-  /**
-   * @return {string}
-   * @private
-   */
-  getNetworkName_: function() {
-    return CrOncStrings['OncType' + this.activeNetworkState.Type];
+    /**
+     * Title line describing the network type to appear in the row's top line.
+     * If it is undefined, the title text is a default from CrOncStrings (see
+     * this.getTitleText_() below).
+     * @type {string|undefined}
+     */
+    networkTitleText: String,
   },
 
   /**
@@ -102,7 +102,7 @@ Polymer({
    * @private
    */
   getConnectionStateText_: function(networkState) {
-    const state = networkState.ConnectionState;
+    const state = networkState ? networkState.ConnectionState : null;
     if (!state)
       return '';
     const name = CrOnc.getNetworkName(networkState);
@@ -130,8 +130,9 @@ Polymer({
    * @private
    */
   showPolicyIndicator_: function(activeNetworkState) {
-    return activeNetworkState.ConnectionState ==
-        CrOnc.ConnectionState.CONNECTED ||
+    return (activeNetworkState !== undefined &&
+            activeNetworkState.ConnectionState ==
+                CrOnc.ConnectionState.CONNECTED) ||
         this.isPolicySource(activeNetworkState.Source);
   },
 
@@ -332,6 +333,15 @@ Polymer({
     const type = this.deviceState ? this.deviceState.Type : '';
     this.fire(
         'device-enabled-toggled', {enabled: !deviceIsEnabled, type: type});
+  },
+
+  /**
+   * @return {string}
+   * @private
+   */
+  getTitleText_: function() {
+    return this.networkTitleText ||
+        CrOncStrings['OncType' + this.activeNetworkState.Type];
   },
 
   /**

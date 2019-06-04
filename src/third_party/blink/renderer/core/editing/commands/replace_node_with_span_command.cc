@@ -30,16 +30,14 @@
 
 #include "third_party/blink/renderer/core/editing/commands/replace_node_with_span_command.h"
 
-#include "third_party/blink/renderer/bindings/core/v8/exception_state.h"
 #include "third_party/blink/renderer/core/editing/editing_utilities.h"
 #include "third_party/blink/renderer/core/html/html_element.h"
 #include "third_party/blink/renderer/core/html/html_span_element.h"
 #include "third_party/blink/renderer/core/html_names.h"
+#include "third_party/blink/renderer/platform/bindings/exception_state.h"
 #include "third_party/blink/renderer/platform/wtf/assertions.h"
 
 namespace blink {
-
-using namespace HTMLNames;
 
 ReplaceNodeWithSpanCommand::ReplaceNodeWithSpanCommand(HTMLElement* element)
     : SimpleEditCommand(element->GetDocument()), element_to_replace_(element) {

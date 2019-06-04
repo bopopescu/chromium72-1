@@ -25,11 +25,11 @@
 
 #include "third_party/blink/renderer/modules/webaudio/audio_param.h"
 
-#include "third_party/blink/renderer/core/dom/exception_code.h"
 #include "third_party/blink/renderer/core/inspector/console_message.h"
 #include "third_party/blink/renderer/modules/webaudio/audio_node.h"
 #include "third_party/blink/renderer/modules/webaudio/audio_node_output.h"
 #include "third_party/blink/renderer/platform/audio/audio_utilities.h"
+#include "third_party/blink/renderer/platform/bindings/exception_state.h"
 #include "third_party/blink/renderer/platform/histogram.h"
 #include "third_party/blink/renderer/platform/wtf/math_extras.h"
 
@@ -52,7 +52,9 @@ AudioParamHandler::AudioParamHandler(BaseAudioContext& context,
       automation_rate_(rate),
       rate_mode_(rate_mode),
       min_value_(min_value),
-      max_value_(max_value) {
+      max_value_(max_value),
+      summing_bus_(
+          AudioBus::Create(1, audio_utilities::kRenderQuantumFrames, false)) {
   // The destination MUST exist because we need the destination handler for the
   // AudioParam.
   CHECK(context.destination());
@@ -258,23 +260,25 @@ void AudioParamHandler::CalculateFinalValues(float* values,
     SetIntrinsicValue(value);
   }
 
-  // Now sum all of the audio-rate connections together (unity-gain summing
-  // junction).  Note that connections would normally be mono, but we mix down
-  // to mono if necessary.
-  scoped_refptr<AudioBus> summing_bus =
-      AudioBus::Create(1, number_of_values, false);
-  summing_bus->SetChannelMemory(0, values, number_of_values);
+  // If there are any connections, sum all of the audio-rate connections
+  // together (unity-gain summing junction).  Note that connections would
+  // normally be mono, but we mix down to mono if necessary.
+  if (NumberOfRenderingConnections() > 0) {
+    DCHECK_LE(number_of_values, audio_utilities::kRenderQuantumFrames);
 
-  for (unsigned i = 0; i < NumberOfRenderingConnections(); ++i) {
-    AudioNodeOutput* output = RenderingOutput(i);
-    DCHECK(output);
+    summing_bus_->SetChannelMemory(0, values, number_of_values);
 
-    // Render audio from this output.
-    AudioBus* connection_bus =
-        output->Pull(nullptr, AudioUtilities::kRenderQuantumFrames);
+    for (unsigned i = 0; i < NumberOfRenderingConnections(); ++i) {
+      AudioNodeOutput* output = RenderingOutput(i);
+      DCHECK(output);
 
-    // Sum, with unity-gain.
-    summing_bus->SumFrom(*connection_bus);
+      // Render audio from this output.
+      AudioBus* connection_bus =
+          output->Pull(nullptr, audio_utilities::kRenderQuantumFrames);
+
+      // Sum, with unity-gain.
+      summing_bus_->SumFrom(*connection_bus);
+    }
   }
 }
 
@@ -282,7 +286,7 @@ void AudioParamHandler::CalculateTimelineValues(float* values,
                                                 unsigned number_of_values) {
   // Calculate values for this render quantum.  Normally
   // |numberOfValues| will equal to
-  // AudioUtilities::kRenderQuantumFrames (the render quantum size).
+  // audio_utilities::kRenderQuantumFrames (the render quantum size).
   double sample_rate = DestinationHandler().SampleRate();
   size_t start_frame = DestinationHandler().CurrentSampleFrame();
   size_t end_frame = start_frame + number_of_values;
@@ -295,7 +299,7 @@ void AudioParamHandler::CalculateTimelineValues(float* values,
 }
 
 void AudioParamHandler::Connect(AudioNodeOutput& output) {
-  DCHECK(GetDeferredTaskHandler().IsGraphOwner());
+  GetDeferredTaskHandler().AssertGraphOwner();
 
   if (outputs_.Contains(&output))
     return;
@@ -306,7 +310,7 @@ void AudioParamHandler::Connect(AudioNodeOutput& output) {
 }
 
 void AudioParamHandler::Disconnect(AudioNodeOutput& output) {
-  DCHECK(GetDeferredTaskHandler().IsGraphOwner());
+  GetDeferredTaskHandler().AssertGraphOwner();
 
   if (outputs_.Contains(&output)) {
     outputs_.erase(&output);
@@ -339,7 +343,8 @@ AudioParam::AudioParam(BaseAudioContext& context,
                                          rate_mode,
                                          min_value,
                                          max_value)),
-      context_(context) {}
+      context_(context),
+      deferred_task_handler_(&context.GetDeferredTaskHandler()) {}
 
 AudioParam* AudioParam::Create(BaseAudioContext& context,
                                AudioParamType param_type,
@@ -362,6 +367,15 @@ AudioParam* AudioParam::Create(BaseAudioContext& context,
 
   return new AudioParam(context, param_type, default_value, rate, rate_mode,
                         min_value, max_value);
+}
+
+AudioParam::~AudioParam() {
+  // The graph lock is required to destroy the handler. And we can't use
+  // |context_| to touch it, since that object may also be a dead heap object.
+  {
+    DeferredTaskHandler::GraphAutoLocker locker(*deferred_task_handler_);
+    handler_ = nullptr;
+  }
 }
 
 void AudioParam::Trace(blink::Visitor* visitor) {
@@ -436,7 +450,7 @@ void AudioParam::setAutomationRate(const String& rate,
                                    ExceptionState& exception_state) {
   if (Handler().IsAutomationRateFixed()) {
     exception_state.ThrowDOMException(
-        kInvalidStateError,
+        DOMExceptionCode::kInvalidStateError,
         Handler().GetParamName() +
             ".automationRate is fixed and cannot be changed to \"" + rate +
             "\"");

@@ -9,6 +9,8 @@
 goog.provide('Panel');
 
 goog.require('BrailleCommandData');
+goog.require('EventSourceType');
+goog.require('GestureCommandData');
 goog.require('ISearchUI');
 goog.require('Msgs');
 goog.require('PanelCommand');
@@ -133,16 +135,8 @@ Panel.init = function() {
     Panel.exec(/** @type {PanelCommand} */ (command));
   }, false);
 
-  if (Panel.isUserSessionBlocked_) {
-    $('menus_button').disabled = true;
-    $('triangle').hidden = true;
-
-    $('options').disabled = true;
-  } else {
-    $('menus_button').addEventListener('mousedown', Panel.onOpenMenus, false);
-    $('options').addEventListener('click', Panel.onOptions, false);
-  }
-
+  $('menus_button').addEventListener('mousedown', Panel.onOpenMenus, false);
+  $('options').addEventListener('click', Panel.onOptions, false);
   $('close').addEventListener('click', Panel.onClose, false);
 
   $('tutorial_next').addEventListener('click', Panel.onTutorialNext, false);
@@ -255,9 +249,6 @@ Panel.setMode = function(mode) {
   if (Panel.mode_ == mode)
     return;
 
-  if (Panel.isUserSessionBlocked_ && mode != Panel.Mode.COLLAPSED &&
-      mode != Panel.Mode.FOCUSED)
-    return;
   Panel.mode_ = mode;
 
   document.title = Msgs.getMsg(Panel.ModeInfo[Panel.mode_].title);
@@ -281,6 +272,12 @@ Panel.setMode = function(mode) {
  * @param {*=} opt_activateMenuTitle Title msg id of menu to open.
  */
 Panel.onOpenMenus = function(opt_event, opt_activateMenuTitle) {
+  // If the menu was already open, close it now and exit early.
+  if (Panel.mode_ != Panel.Mode.COLLAPSED) {
+    Panel.setMode(Panel.Mode.COLLAPSED);
+    return;
+  }
+
   // Eat the event so that a mousedown isn't turned into a drag, allowing
   // users to click-drag-release to select a menu item.
   if (opt_event) {
@@ -348,6 +345,7 @@ Panel.onOpenMenus = function(opt_event, opt_activateMenuTitle) {
 
   // Insert items from the bindings into the menus.
   var sawBindingSet = {};
+  var gestures = Object.keys(GestureCommandData.GESTURE_COMMAND_MAP);
   sortedBindings.forEach(goog.bind(function(binding) {
     var command = binding.command;
     if (sawBindingSet[command])
@@ -355,10 +353,26 @@ Panel.onOpenMenus = function(opt_event, opt_activateMenuTitle) {
     sawBindingSet[command] = true;
     var category = cvox.CommandStore.categoryForCommand(binding.command);
     var menu = category ? categoryToMenu[category] : null;
+    var eventSource = bkgnd['EventSourceState']['get']();
     if (binding.title && menu) {
+      var keyText;
+      var brailleText;
+      var gestureText;
+      if (eventSource == EventSourceType.TOUCH_GESTURE) {
+        for (var i = 0, gesture; gesture = gestures[i]; i++) {
+          var data = GestureCommandData.GESTURE_COMMAND_MAP[gesture];
+          if (data && data.command == command) {
+            gestureText = Msgs.getMsg(data.msgId);
+            break;
+          }
+        }
+      } else {
+        keyText = binding.keySeq;
+        brailleText = BrailleCommandData.getDotShortcut(binding.command, true);
+      }
+
       menu.addMenuItem(
-          binding.title, binding.keySeq,
-          BrailleCommandData.getDotShortcut(binding.command, true), function() {
+          binding.title, keyText, brailleText, gestureText, function() {
             var CommandHandler =
                 chrome.extension.getBackgroundPage()['CommandHandler'];
             CommandHandler['onCommand'](binding.command);
@@ -376,13 +390,13 @@ Panel.onOpenMenus = function(opt_event, opt_activateMenuTitle) {
           if (tabs[j].active && windows[i].id == lastFocusedWindow.id)
             title += ' ' + Msgs.getMsg('active_tab');
           tabsMenu.addMenuItem(
-              title, '', '', (function(win, tab) {
-                               bkgnd.chrome.windows.update(
-                                   win.id, {focused: true}, function() {
-                                     bkgnd.chrome.tabs.update(
-                                         tab.id, {active: true});
-                                   });
-                             }).bind(this, windows[i], tabs[j]));
+              title, '', '', '', (function(win, tab) {
+                                   bkgnd.chrome.windows.update(
+                                       win.id, {focused: true}, function() {
+                                         bkgnd.chrome.tabs.update(
+                                             tab.id, {active: true});
+                                       });
+                                 }).bind(this, windows[i], tabs[j]));
         }
       }
     });
@@ -390,7 +404,7 @@ Panel.onOpenMenus = function(opt_event, opt_activateMenuTitle) {
 
   // Add a menu item that disables / closes ChromeVox.
   chromevoxMenu.addMenuItem(
-      Msgs.getMsg('disable_chromevox'), 'Ctrl+Alt+Z', '', function() {
+      Msgs.getMsg('disable_chromevox'), 'Ctrl+Alt+Z', '', '', function() {
         Panel.onClose();
       });
 
@@ -422,6 +436,7 @@ Panel.onOpenMenus = function(opt_event, opt_activateMenuTitle) {
       var actionDesc = Msgs.getMsg(actionMsg);
       actionsMenu.addMenuItem(
           actionDesc, '' /* menuItemShortcut */, '' /* menuItemBraille */,
+          '' /* gesture */,
           node.performStandardAction.bind(node, standardAction));
     }
   }
@@ -431,7 +446,7 @@ Panel.onOpenMenus = function(opt_event, opt_activateMenuTitle) {
       var customAction = node.customActions[i];
       actionsMenu.addMenuItem(
           customAction.description, '' /* menuItemShortcut */,
-          '' /* menuItemBraille */,
+          '' /* menuItemBraille */, '' /* gesture */,
           node.performCustomAction.bind(node, customAction.id));
     }
   }
@@ -451,7 +466,6 @@ Panel.onSearch = function() {
   Panel.clearMenus();
   Panel.pendingCallback_ = null;
   Panel.updateFromPrefs();
-
   ISearchUI.init(Panel.searchInput_);
 };
 
@@ -830,30 +844,29 @@ Panel.getCallbackForCurrentItem = function() {
 Panel.closeMenusAndRestoreFocus = function() {
   var bkgnd = chrome.extension.getBackgroundPage();
   bkgnd.chrome.automation.getDesktop(function(desktop) {
-    // Watch for a blur on the panel, then a focus on the page.
+    // Watch for a blur on the panel.
+    var pendingCallback = Panel.pendingCallback_;
+    Panel.pendingCallback_ = null;
     var onFocus = function(evt) {
-      desktop.removeEventListener(
-          chrome.automation.EventType.FOCUS, onFocus, true);
-      if (Panel.pendingCallback_) {
-        // Clear it before calling it, in case the callback itself triggers
-        // another pending callback.
-        var pendingCallback = Panel.pendingCallback_;
-        Panel.pendingCallback_ = null;
-        pendingCallback();
-      }
-    };
-
-    var onBlur = function(evt) {
-      if (evt.target.docUrl != location.href)
+      if (evt.target.docUrl == location.href)
         return;
 
       desktop.removeEventListener(
-          chrome.automation.EventType.BLUR, onBlur, true);
-      desktop.addEventListener(
           chrome.automation.EventType.FOCUS, onFocus, true);
+
+      // Clears focus on the page by focusing the root explicitly. This makes
+      // sure we don't get future focus events as a result of giving this entire
+      // page focus and that would have interfered with with our desired range.
+      if (evt.target.root)
+        evt.target.root.focus();
+
+      setTimeout(function() {
+        if (pendingCallback)
+          pendingCallback();
+      }, 0);
     };
 
-    desktop.addEventListener(chrome.automation.EventType.BLUR, onBlur, true);
+    desktop.addEventListener(chrome.automation.EventType.FOCUS, onFocus, true);
 
     // Make sure all menus are cleared to avoid bogous output when we re-open.
     Panel.clearMenus();
@@ -914,10 +927,15 @@ window.addEventListener('load', function() {
 }, false);
 
 window.addEventListener('hashchange', function() {
-  if (location.hash == '#fullscreen' || location.hash == '#focus') {
-    Panel.originalStickyState_ = cvox.ChromeVox.isStickyPrefOn;
-    cvox.ChromeVox.isStickyPrefOn = false;
-  } else {
-    cvox.ChromeVox.isStickyPrefOn = Panel.originalStickyState_;
-  }
+  var bkgnd = chrome.extension.getBackgroundPage();
+
+  // Save the sticky state when a user first focuses the panel.
+  if (location.hash == '#fullscreen' || location.hash == '#focus')
+    Panel.originalStickyState_ = bkgnd['cvox']['ChromeVox']['isStickyPrefOn'];
+
+  // If the original sticky state was on when we first entered the panel, toggle
+  // it in in every case. (fullscreen/focus turns the state off, collapse
+  // turns it back on).
+  if (Panel.originalStickyState_)
+    bkgnd['CommandHandler']['onCommand']('toggleStickyMode');
 }, false);

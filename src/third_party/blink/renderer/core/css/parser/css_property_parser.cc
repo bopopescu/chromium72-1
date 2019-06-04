@@ -23,7 +23,7 @@
 
 namespace blink {
 
-using namespace CSSPropertyParserHelpers;
+using namespace css_property_parser_helpers;
 
 class CSSIdentifierValue;
 
@@ -96,13 +96,14 @@ bool CSSPropertyParser::ParseValueStart(CSSPropertyID unresolved_property,
   bool is_shorthand = property.IsShorthand();
   DCHECK(context_);
   if (is_shorthand) {
+    const auto local_context =
+        CSSParserLocalContext()
+            .WithAliasParsing(isPropertyAlias(unresolved_property))
+            .WithCurrentShorthand(property_id);
     // Variable references will fail to parse here and will fall out to the
     // variable ref parser below.
     if (ToShorthand(property).ParseShorthand(
-            important, range_, *context_,
-            CSSParserLocalContext(isPropertyAlias(unresolved_property),
-                                  property_id),
-            *parsed_properties_))
+            important, range_, *context_, local_context, *parsed_properties_))
       return true;
   } else {
     if (const CSSValue* parsed_value = ParseLonghand(
@@ -118,7 +119,8 @@ bool CSSPropertyParser::ParseValueStart(CSSPropertyID unresolved_property,
   if (CSSVariableParser::ContainsValidVariableReferences(original_range)) {
     bool is_animation_tainted = false;
     CSSVariableReferenceValue* variable = CSSVariableReferenceValue::Create(
-        CSSVariableData::Create(original_range, is_animation_tainted, true),
+        CSSVariableData::Create(original_range, is_animation_tainted, true,
+                                context_->BaseURL(), context_->Charset()),
         *context_);
 
     if (is_shorthand) {

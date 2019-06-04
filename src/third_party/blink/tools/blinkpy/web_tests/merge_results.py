@@ -504,7 +504,10 @@ class DirMerger(Merger):
 
             to_merge = [self.filesystem.join(d, partial_file_path) for d in in_dirs]
 
-            _log.debug("Creating merged %s from %s", out_path, to_merge)
+            # If we're only 'merging' one file, don't output to the log. Not a
+            # very useful message.
+            if len(to_merge) > 1:
+              _log.debug("Creating merged %s from %s", out_path, to_merge)
 
             for match_func, merge_func in reversed(self.helpers):
 
@@ -545,7 +548,6 @@ class JSONTestResultsMerger(JSONMerger):
             ':has_pretty_patch$',
             ':has_wdiff$',
             ':path_delimiter$',
-            ':pixel_tests_enabled$',
             ':random_order_seed$',
             ':version$',
         ]

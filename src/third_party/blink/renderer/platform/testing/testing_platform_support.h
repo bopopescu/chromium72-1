@@ -34,9 +34,12 @@
 #include <memory>
 #include <utility>
 
+#include "base/auto_reset.h"
+#include "base/callback.h"
 #include "base/macros.h"
 #include "third_party/blink/public/platform/platform.h"
 #include "third_party/blink/renderer/platform/platform_export.h"
+#include "third_party/blink/renderer/platform/testing/code_cache_loader_mock.h"
 #include "third_party/blink/renderer/platform/wtf/allocator.h"
 #include "third_party/blink/renderer/platform/wtf/assertions.h"
 
@@ -45,7 +48,6 @@ class TestDiscardableMemoryAllocator;
 }
 
 namespace blink {
-class WebThread;
 
 // A base class to override Platform methods for testing.  You can override the
 // behavior by subclassing TestingPlatformSupport or using
@@ -58,22 +60,42 @@ class TestingPlatformSupport : public Platform {
 
   // Platform:
   WebString DefaultLocale() override;
-  WebThread* CurrentThread() override;
   WebBlobRegistry* GetBlobRegistry() override;
-  WebIDBFactory* IdbFactory() override;
   WebURLLoaderMockFactory* GetURLLoaderMockFactory() override;
   std::unique_ptr<blink::WebURLLoaderFactory> CreateDefaultURLLoaderFactory()
       override;
+  std::unique_ptr<CodeCacheLoader> CreateCodeCacheLoader() override {
+    return std::make_unique<CodeCacheLoaderMock>();
+  }
   WebData GetDataResource(const char* name) override;
   InterfaceProvider* GetInterfaceProvider() override;
+  bool IsThreadedAnimationEnabled() override;
 
   virtual void RunUntilIdle();
+  void SetThreadedAnimationEnabled(bool enabled);
+
+  // Overrides the handling of GetInterface on the platform's associated
+  // interface provider.
+  class ScopedOverrideMojoInterface {
+   public:
+    using GetInterfaceCallback =
+        base::RepeatingCallback<void(const char*,
+                                     mojo::ScopedMessagePipeHandle)>;
+    explicit ScopedOverrideMojoInterface(GetInterfaceCallback);
+    ~ScopedOverrideMojoInterface();
+
+   private:
+    base::AutoReset<GetInterfaceCallback> auto_reset_;
+  };
 
  protected:
   class TestingInterfaceProvider;
 
   Platform* const old_platform_;
   std::unique_ptr<TestingInterfaceProvider> interface_provider_;
+
+ private:
+  bool is_threaded_animation_enabled_ = false;
 
   DISALLOW_COPY_AND_ASSIGN(TestingPlatformSupport);
 };
@@ -137,11 +159,10 @@ class ScopedUnittestsEnvironmentSetup final {
   ~ScopedUnittestsEnvironmentSetup();
 
  private:
-  class DummyPlatform;
   class DummyRendererResourceCoordinator;
   std::unique_ptr<base::TestDiscardableMemoryAllocator>
       discardable_memory_allocator_;
-  std::unique_ptr<DummyPlatform> dummy_platform_;
+  std::unique_ptr<Platform> dummy_platform_;
   std::unique_ptr<DummyRendererResourceCoordinator>
       dummy_renderer_resource_coordinator_;
   std::unique_ptr<TestingPlatformSupport> testing_platform_support_;

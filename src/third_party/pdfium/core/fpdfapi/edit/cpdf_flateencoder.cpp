@@ -7,15 +7,17 @@
 #include "core/fpdfapi/edit/cpdf_flateencoder.h"
 
 #include <memory>
+#include <utility>
 
 #include "constants/stream_dict_common.h"
+#include "core/fpdfapi/parser/cpdf_dictionary.h"
 #include "core/fpdfapi/parser/cpdf_name.h"
 #include "core/fpdfapi/parser/cpdf_number.h"
 #include "core/fpdfapi/parser/fpdf_parser_decode.h"
 
 CPDF_FlateEncoder::CPDF_FlateEncoder(const CPDF_Stream* pStream,
                                      bool bFlateEncode)
-    : m_dwSize(0), m_pAcc(pdfium::MakeRetain<CPDF_StreamAcc>(pStream)) {
+    : m_pAcc(pdfium::MakeRetain<CPDF_StreamAcc>(pStream)), m_dwSize(0) {
   m_pAcc->LoadAllDataRaw();
 
   bool bHasFilter = pStream && pStream->HasFilter();
@@ -39,10 +41,10 @@ CPDF_FlateEncoder::CPDF_FlateEncoder(const CPDF_Stream* pStream,
   }
 
   // TODO(thestig): Move to Init() and check return value.
-  uint8_t* buffer = nullptr;
-  ::FlateEncode(m_pAcc->GetData(), m_pAcc->GetSize(), &buffer, &m_dwSize);
+  std::unique_ptr<uint8_t, FxFreeDeleter> buffer;
+  ::FlateEncode(m_pAcc->GetSpan(), &buffer, &m_dwSize);
 
-  m_pData = std::unique_ptr<uint8_t, FxFreeDeleter>(buffer);
+  m_pData = std::move(buffer);
   m_pClonedDict = ToDictionary(pStream->GetDict()->Clone());
   m_pClonedDict->SetNewFor<CPDF_Number>("Length", static_cast<int>(m_dwSize));
   m_pClonedDict->SetNewFor<CPDF_Name>("Filter", "FlateDecode");

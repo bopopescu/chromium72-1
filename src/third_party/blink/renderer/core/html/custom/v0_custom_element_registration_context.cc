@@ -30,7 +30,6 @@
 
 #include "third_party/blink/renderer/core/html/custom/v0_custom_element_registration_context.h"
 
-#include "third_party/blink/renderer/bindings/core/v8/exception_state.h"
 #include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/dom/element.h"
 #include "third_party/blink/renderer/core/html/custom/v0_custom_element.h"
@@ -41,6 +40,7 @@
 #include "third_party/blink/renderer/core/html_names.h"
 #include "third_party/blink/renderer/core/svg/svg_unknown_element.h"
 #include "third_party/blink/renderer/core/svg_names.h"
+#include "third_party/blink/renderer/platform/bindings/exception_state.h"
 
 namespace blink {
 
@@ -51,10 +51,9 @@ void V0CustomElementRegistrationContext::RegisterElement(
     Document* document,
     V0CustomElementConstructorBuilder* constructor_builder,
     const AtomicString& type,
-    V0CustomElement::NameSet valid_names,
     ExceptionState& exception_state) {
   V0CustomElementDefinition* definition = registry_.RegisterElement(
-      document, constructor_builder, type, valid_names, exception_state);
+      document, constructor_builder, type, exception_state);
 
   if (!definition)
     return;
@@ -77,9 +76,9 @@ Element* V0CustomElementRegistrationContext::CreateCustomTagElement(
 
   Element* element;
 
-  if (HTMLNames::xhtmlNamespaceURI == tag_name.NamespaceURI()) {
+  if (html_names::xhtmlNamespaceURI == tag_name.NamespaceURI()) {
     element = HTMLElement::Create(tag_name, document);
-  } else if (SVGNames::svgNamespaceURI == tag_name.NamespaceURI()) {
+  } else if (svg_names::kNamespaceURI == tag_name.NamespaceURI()) {
     element = SVGUnknownElement::Create(tag_name, document);
   } else {
     // XML elements are not custom elements, so return early.
@@ -133,7 +132,7 @@ void V0CustomElementRegistrationContext::SetIsAttributeAndTypeExtension(
     const AtomicString& type) {
   DCHECK(element);
   DCHECK(!type.IsEmpty());
-  element->setAttribute(HTMLNames::isAttr, type);
+  element->setAttribute(html_names::kIsAttr, type);
   SetTypeExtension(element, type);
 }
 

@@ -22,7 +22,6 @@
 #include "base/strings/utf_string_conversions.h"
 #include "base/threading/thread.h"
 #include "base/threading/thread_restrictions.h"
-#include "chrome/browser/ui/libgtkui/gtk_signal.h"
 #include "chrome/browser/ui/libgtkui/gtk_util.h"
 #include "chrome/browser/ui/libgtkui/select_file_dialog_impl.h"
 #include "ui/aura/window_observer.h"
@@ -33,6 +32,23 @@
 #include "ui/views/widget/desktop_aura/desktop_window_tree_host_x11.h"
 
 namespace {
+
+#if GTK_CHECK_VERSION(3, 90, 0)
+// GTK stock items have been deprecated.  The docs say to switch to using the
+// strings "_Open", etc.  However this breaks i18n.  We could supply our own
+// internationalized strings, but the "_" in these strings is significant: it's
+// the keyboard shortcut to select these actions.  TODO(thomasanderson): Provide
+// internationalized strings when GTK provides support for it.
+const char kCancelLabel[] = "_Cancel";
+const char kOpenLabel[] = "_Open";
+const char kSaveLabel[] = "_Save";
+#else
+G_GNUC_BEGIN_IGNORE_DEPRECATIONS;
+const char* const kCancelLabel = GTK_STOCK_CANCEL;
+const char* const kOpenLabel = GTK_STOCK_OPEN;
+const char* const kSaveLabel = GTK_STOCK_SAVE;
+G_GNUC_END_IGNORE_DEPRECATIONS;
+#endif
 
 // Makes sure that .jpg also shows .JPG.
 gboolean FileFilterCaseInsensitive(const GtkFileFilterInfo* file_info,
@@ -188,7 +204,9 @@ void SelectFileDialogImplGTK::SelectFileImpl(
     }
   }
 
+#if !GTK_CHECK_VERSION(3, 90, 0)
   gtk_widget_show_all(dialog);
+#endif
 
   // We need to call gtk_window_present after making the widgets visible to make
   // sure window gets correctly raised and gets focus.
@@ -296,11 +314,9 @@ GtkWidget* SelectFileDialogImplGTK::CreateFileOpenHelper(
     const std::string& title,
     const base::FilePath& default_path,
     gfx::NativeWindow parent) {
-  G_GNUC_BEGIN_IGNORE_DEPRECATIONS;
   GtkWidget* dialog = gtk_file_chooser_dialog_new(
-      title.c_str(), nullptr, GTK_FILE_CHOOSER_ACTION_OPEN, GTK_STOCK_CANCEL,
-      GTK_RESPONSE_CANCEL, GTK_STOCK_OPEN, GTK_RESPONSE_ACCEPT, nullptr);
-  G_GNUC_END_IGNORE_DEPRECATIONS;
+      title.c_str(), nullptr, GTK_FILE_CHOOSER_ACTION_OPEN, kCancelLabel,
+      GTK_RESPONSE_CANCEL, kOpenLabel, GTK_RESPONSE_ACCEPT, nullptr);
   SetGtkTransientForAura(dialog, parent);
   AddFilters(GTK_FILE_CHOOSER(dialog));
 
@@ -333,18 +349,16 @@ GtkWidget* SelectFileDialogImplGTK::CreateSelectFolderDialog(
             ? l10n_util::GetStringUTF8(IDS_SELECT_UPLOAD_FOLDER_DIALOG_TITLE)
             : l10n_util::GetStringUTF8(IDS_SELECT_FOLDER_DIALOG_TITLE);
   }
-  G_GNUC_BEGIN_IGNORE_DEPRECATIONS;
   std::string accept_button_label =
       (type == SELECT_UPLOAD_FOLDER)
           ? l10n_util::GetStringUTF8(
                 IDS_SELECT_UPLOAD_FOLDER_DIALOG_UPLOAD_BUTTON)
-          : GTK_STOCK_OPEN;
+          : kOpenLabel;
 
   GtkWidget* dialog = gtk_file_chooser_dialog_new(
       title_string.c_str(), nullptr, GTK_FILE_CHOOSER_ACTION_SELECT_FOLDER,
-      GTK_STOCK_CANCEL, GTK_RESPONSE_CANCEL, accept_button_label.c_str(),
+      kCancelLabel, GTK_RESPONSE_CANCEL, accept_button_label.c_str(),
       GTK_RESPONSE_ACCEPT, nullptr);
-  G_GNUC_END_IGNORE_DEPRECATIONS;
   SetGtkTransientForAura(dialog, parent);
   GtkFileChooser* chooser = GTK_FILE_CHOOSER(dialog);
   if (type == SELECT_UPLOAD_FOLDER || type == SELECT_EXISTING_FOLDER)
@@ -407,12 +421,9 @@ GtkWidget* SelectFileDialogImplGTK::CreateSaveAsDialog(
       !title.empty() ? title
                      : l10n_util::GetStringUTF8(IDS_SAVE_AS_DIALOG_TITLE);
 
-  G_GNUC_BEGIN_IGNORE_DEPRECATIONS;
   GtkWidget* dialog = gtk_file_chooser_dialog_new(
-      title_string.c_str(), nullptr, GTK_FILE_CHOOSER_ACTION_SAVE,
-      GTK_STOCK_CANCEL, GTK_RESPONSE_CANCEL, GTK_STOCK_SAVE,
-      GTK_RESPONSE_ACCEPT, nullptr);
-  G_GNUC_END_IGNORE_DEPRECATIONS;
+      title_string.c_str(), nullptr, GTK_FILE_CHOOSER_ACTION_SAVE, kCancelLabel,
+      GTK_RESPONSE_CANCEL, kSaveLabel, GTK_RESPONSE_ACCEPT, nullptr);
   SetGtkTransientForAura(dialog, parent);
 
   AddFilters(GTK_FILE_CHOOSER(dialog));

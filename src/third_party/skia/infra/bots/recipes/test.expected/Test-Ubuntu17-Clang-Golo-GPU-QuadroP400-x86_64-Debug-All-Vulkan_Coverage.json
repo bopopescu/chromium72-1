@@ -133,7 +133,7 @@
       "RECIPE_MODULE[skia::flavor]/resources/symbolize_stack_trace.py",
       "[START_DIR]",
       "catchsegv",
-      "[START_DIR]/build/out/Debug/dm",
+      "[START_DIR]/build/dm",
       "--resourcePath",
       "[START_DIR]/skia/resources",
       "--skps",
@@ -195,6 +195,10 @@
       "svg",
       "_",
       "svgparse_",
+      "_",
+      "image",
+      "gen_platf",
+      "error",
       "_",
       "image",
       "_",
@@ -288,6 +292,7 @@
       "_",
       ".SRW",
       "--nonativeFonts",
+      "--reduceOpListSplitting",
       "--verbose"
     ],
     "cwd": "[START_DIR]/skia",
@@ -300,8 +305,7 @@
     "name": "symbolized dm"
   },
   {
-    "name": "$result",
-    "recipe_result": null,
-    "status_code": 0
+    "jsonResult": null,
+    "name": "$result"
   }
 ]

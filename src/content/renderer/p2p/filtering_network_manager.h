@@ -12,7 +12,7 @@
 #include "content/common/content_export.h"
 #include "content/renderer/p2p/network_manager_uma.h"
 #include "third_party/webrtc/rtc_base/network.h"
-#include "third_party/webrtc/rtc_base/sigslot.h"
+#include "third_party/webrtc/rtc_base/third_party/sigslot/sigslot.h"
 #include "url/gurl.h"
 
 namespace media {
@@ -53,6 +53,8 @@ class FilteringNetworkManager : public rtc::NetworkManagerBase,
   void GetNetworks(NetworkList* networks) const override;
   bool GetDefaultLocalAddress(int family,
                               rtc::IPAddress* ipaddress) const override;
+
+  webrtc::MdnsResponderInterface* GetMdnsResponder() const override;
 
  private:
   // Check mic/camera permission.

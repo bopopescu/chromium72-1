@@ -5,6 +5,7 @@
 #include "third_party/blink/renderer/core/resize_observer/resize_observer.h"
 
 #include "third_party/blink/public/web/web_heap.h"
+#include "third_party/blink/renderer/bindings/core/v8/sanitize_script_errors.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_controller.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_source_code.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_gc_controller.h"
@@ -73,9 +74,9 @@ TEST_F(ResizeObserverUnitTest, ResizeObservationSize) {
   Element* dom_target = GetDocument().getElementById("domTarget");
   Element* svg_target = GetDocument().getElementById("svgTarget");
   ResizeObservation* dom_observation =
-      new ResizeObservation(dom_target, observer);
+      MakeGarbageCollected<ResizeObservation>(dom_target, observer);
   ResizeObservation* svg_observation =
-      new ResizeObservation(svg_target, observer);
+      MakeGarbageCollected<ResizeObservation>(svg_target, observer);
 
   // Initial observation is out of sync
   ASSERT_TRUE(dom_observation->ObservationSizeOutOfSync());
@@ -116,13 +117,16 @@ TEST_F(ResizeObserverUnitTest, TestMemoryLeaks) {
   //
   script_controller.ExecuteScriptInMainWorldAndReturnValue(
       ScriptSourceCode("var ro = new ResizeObserver( entries => {});"), KURL(),
-      ScriptFetchOptions(),
+      SanitizeScriptErrors::kSanitize, ScriptFetchOptions(),
       ScriptController::kExecuteScriptWhenScriptsDisabled);
   ASSERT_EQ(observers.size(), 1U);
   script_controller.ExecuteScriptInMainWorldAndReturnValue(
-      ScriptSourceCode("ro = undefined;"), KURL(), ScriptFetchOptions(),
+      ScriptSourceCode("ro = undefined;"), KURL(),
+      SanitizeScriptErrors::kSanitize, ScriptFetchOptions(),
       ScriptController::kExecuteScriptWhenScriptsDisabled);
-  V8GCController::CollectAllGarbageForTesting(v8::Isolate::GetCurrent());
+  V8GCController::CollectAllGarbageForTesting(
+      v8::Isolate::GetCurrent(),
+      v8::EmbedderHeapTracer::EmbedderStackState::kEmpty);
   WebHeap::CollectAllGarbageForTesting();
   ASSERT_EQ(observers.IsEmpty(), true);
 
@@ -134,16 +138,21 @@ TEST_F(ResizeObserverUnitTest, TestMemoryLeaks) {
                        "var el = document.createElement('div');"
                        "ro.observe(el);"
                        "ro = undefined;"),
-      KURL(), ScriptFetchOptions(),
+      KURL(), SanitizeScriptErrors::kSanitize, ScriptFetchOptions(),
       ScriptController::kExecuteScriptWhenScriptsDisabled);
   ASSERT_EQ(observers.size(), 1U);
-  V8GCController::CollectAllGarbageForTesting(v8::Isolate::GetCurrent());
+  V8GCController::CollectAllGarbageForTesting(
+      v8::Isolate::GetCurrent(),
+      v8::EmbedderHeapTracer::EmbedderStackState::kEmpty);
   WebHeap::CollectAllGarbageForTesting();
   ASSERT_EQ(observers.size(), 1U);
   script_controller.ExecuteScriptInMainWorldAndReturnValue(
-      ScriptSourceCode("el = undefined;"), KURL(), ScriptFetchOptions(),
+      ScriptSourceCode("el = undefined;"), KURL(),
+      SanitizeScriptErrors::kSanitize, ScriptFetchOptions(),
       ScriptController::kExecuteScriptWhenScriptsDisabled);
-  V8GCController::CollectAllGarbageForTesting(v8::Isolate::GetCurrent());
+  V8GCController::CollectAllGarbageForTesting(
+      v8::Isolate::GetCurrent(),
+      v8::EmbedderHeapTracer::EmbedderStackState::kEmpty);
   WebHeap::CollectAllGarbageForTesting();
   ASSERT_EQ(observers.IsEmpty(), true);
 }

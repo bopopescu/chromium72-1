@@ -12,13 +12,13 @@
 #include "base/optional.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/stringprintf.h"
-#include "base/test/histogram_tester.h"
+#include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_feature_list.h"
+#include "chrome/browser/search/ntp_features.h"
 #include "chrome/browser/search_provider_logos/logo_service_factory.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/search/instant_test_utils.h"
 #include "chrome/browser/ui/search/local_ntp_test_utils.h"
-#include "chrome/common/chrome_features.h"
 #include "chrome/common/url_constants.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
@@ -214,7 +214,7 @@ class LocalNTPDoodleTest : public InProcessBrowserTest {
 
   void OnWillCreateBrowserContextServices(content::BrowserContext* context) {
     LogoServiceFactory::GetInstance()->SetTestingFactory(
-        context, &LocalNTPDoodleTest::CreateLogoService);
+        context, base::BindRepeating(&LocalNTPDoodleTest::CreateLogoService));
   }
 
   base::test::ScopedFeatureList feature_list_;

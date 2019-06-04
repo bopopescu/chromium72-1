@@ -12,7 +12,7 @@ TestWallpaperController::~TestWallpaperController() = default;
 
 void TestWallpaperController::ShowWallpaperImage(const gfx::ImageSkia& image) {
   current_wallpaper = image;
-  test_observers_.ForAllPtrs([this](ash::mojom::WallpaperObserver* observer) {
+  test_observers_.ForAllPtrs([](ash::mojom::WallpaperObserver* observer) {
     observer->OnWallpaperChanged(dummy_image_id);
   });
 }
@@ -63,7 +63,8 @@ void TestWallpaperController::SetOnlineWallpaperFromData(
     const std::string& image_data,
     const std::string& url,
     ash::WallpaperLayout layout,
-    bool preview_mode) {
+    bool preview_mode,
+    SetOnlineWallpaperFromDataCallback callback) {
   NOTIMPLEMENTED();
 }
 
@@ -122,6 +123,11 @@ void TestWallpaperController::ShowUserWallpaper(
 }
 
 void TestWallpaperController::ShowSigninWallpaper() {
+  NOTIMPLEMENTED();
+}
+
+void TestWallpaperController::ShowOneShotWallpaper(
+    const gfx::ImageSkia& image) {
   NOTIMPLEMENTED();
 }
 
@@ -189,8 +195,8 @@ void TestWallpaperController::IsActiveUserWallpaperControlledByPolicy(
   NOTIMPLEMENTED();
 }
 
-void TestWallpaperController::GetActiveUserWallpaperLocation(
-    ash::mojom::WallpaperController::GetActiveUserWallpaperLocationCallback
+void TestWallpaperController::GetActiveUserWallpaperInfo(
+    ash::mojom::WallpaperController::GetActiveUserWallpaperInfoCallback
         callback) {
   NOTIMPLEMENTED();
 }

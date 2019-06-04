@@ -28,10 +28,9 @@
 
 #include "base/macros.h"
 #include "base/memory/scoped_refptr.h"
-#include "third_party/blink/renderer/bindings/core/v8/script_streamer.h"
 #include "third_party/blink/renderer/core/html/parser/html_parser_reentry_permit.h"
 #include "third_party/blink/renderer/core/script/pending_script.h"
-#include "third_party/blink/renderer/platform/bindings/script_wrappable.h"
+#include "third_party/blink/renderer/platform/bindings/name_client.h"
 #include "third_party/blink/renderer/platform/bindings/trace_wrapper_member.h"
 #include "third_party/blink/renderer/platform/heap/handle.h"
 #include "third_party/blink/renderer/platform/loader/fetch/resource_client.h"
@@ -57,15 +56,20 @@ class ScriptLoader;
 class HTMLParserScriptRunner final
     : public GarbageCollectedFinalized<HTMLParserScriptRunner>,
       public PendingScriptClient,
-      public TraceWrapperBase {
+      public NameClient {
   USING_GARBAGE_COLLECTED_MIXIN(HTMLParserScriptRunner);
 
  public:
   static HTMLParserScriptRunner* Create(HTMLParserReentryPermit* reentry_permit,
                                         Document* document,
                                         HTMLParserScriptRunnerHost* host) {
-    return new HTMLParserScriptRunner(reentry_permit, document, host);
+    return MakeGarbageCollected<HTMLParserScriptRunner>(reentry_permit,
+                                                        document, host);
   }
+
+  HTMLParserScriptRunner(HTMLParserReentryPermit*,
+                         Document*,
+                         HTMLParserScriptRunnerHost*);
   ~HTMLParserScriptRunner() override;
 
   // Invoked when the parser is detached.
@@ -98,21 +102,16 @@ class HTMLParserScriptRunner final
   }
 
   void Trace(blink::Visitor*) override;
-  void TraceWrappers(ScriptWrappableVisitor*) const override;
   const char* NameInHeapSnapshot() const override {
     return "HTMLParserScriptRunner";
   }
 
  private:
-  HTMLParserScriptRunner(HTMLParserReentryPermit*,
-                         Document*,
-                         HTMLParserScriptRunnerHost*);
-
   // PendingScriptClient
   void PendingScriptFinished(PendingScript*) override;
 
-  void ExecutePendingScriptAndDispatchEvent(PendingScript*,
-                                            ScriptStreamer::Type);
+  void ExecutePendingParserBlockingScriptAndDispatchEvent();
+  void ExecutePendingDeferredScriptAndDispatchEvent(PendingScript*);
   void ExecuteParsingBlockingScripts();
 
   void RequestParsingBlockingScript(ScriptLoader*);

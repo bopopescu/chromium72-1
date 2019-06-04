@@ -20,8 +20,18 @@
 #include "SkScanPriv.h"
 #include "SkTSort.h"
 #include "SkTemplates.h"
-#include "SkUtils.h"
+#include "SkTo.h"
+#include "SkUTF.h"
 
+#include <utility>
+
+#if defined(SK_DISABLE_AAA)
+void SkScan::AAAFillPath(const SkPath& path, SkBlitter* blitter, const SkIRect& ir,
+                         const SkIRect& clipBounds, bool forceRLE) {
+    SkDEBUGFAIL("AAA Disabled");
+    return;
+}
+#else
 ///////////////////////////////////////////////////////////////////////////////
 
 /*
@@ -580,8 +590,8 @@ static inline SkAlpha f2a(SkFixed f) {
 // Suppose that line (l1, y)-(r1, y+1) intersects with (l2, y)-(r2, y+1),
 // approximate (very coarsely) the x coordinate of the intersection.
 static inline SkFixed approximateIntersection(SkFixed l1, SkFixed r1, SkFixed l2, SkFixed r2) {
-    if (l1 > r1) { SkTSwap(l1, r1); }
-    if (l2 > r2) { SkTSwap(l2, r2); }
+    if (l1 > r1) { using std::swap; swap(l1, r1); }
+    if (l2 > r2) { using std::swap; swap(l2, r2); }
     return (SkTMax(l1, l2) + SkTMin(r1, r2)) >> 1;
 }
 
@@ -829,8 +839,8 @@ static SK_ALWAYS_INLINE void blit_trapezoid_row(AdditiveBlitter* blitter, int y,
     // to exclude the area that's not covered by the path.
     // Swapping (ul, ll) or (ur, lr) won't affect that exclusion
     // so we'll do that for simplicity.
-    if (ul > ll) { SkTSwap(ul, ll); }
-    if (ur > lr) { SkTSwap(ur, lr); }
+    if (ul > ll) { using std::swap; swap(ul, ll); }
+    if (ur > lr) { using std::swap; swap(ur, lr); }
 
     SkFixed joinLeft = SkFixedCeilToFixed(ll);
     SkFixed joinRite = SkFixedFloorToFixed(ur);
@@ -977,7 +987,8 @@ static inline bool isSmoothEnough(SkAnalyticEdge* leftE, SkAnalyticEdge* riteE,
     }
     // Ensure that currE is the next left edge and nextCurrE is the next right edge. Swap if not.
     if (nextCurrE->fUpperX < currE->fUpperX) {
-        SkTSwap(currE, nextCurrE);
+        using std::swap;
+        swap(currE, nextCurrE);
     }
     return isSmoothEnough(leftE, currE, stop_y) && isSmoothEnough(riteE, nextCurrE, stop_y);
 }
@@ -1036,7 +1047,8 @@ static inline void aaa_walk_convex_edges(SkAnalyticEdge* prevHead,
 
         if (leftE->fX > riteE->fX || (leftE->fX == riteE->fX &&
                                       leftE->fDX > riteE->fDX)) {
-            SkTSwap(leftE, riteE);
+            using std::swap;
+            swap(leftE, riteE);
         }
 
         SkFixed local_bot_fixed = SkMin32(leftE->fLowerY, riteE->fLowerY);
@@ -1582,9 +1594,8 @@ static SK_ALWAYS_INLINE void aaa_fill_path(const SkPath& path, const SkIRect& cl
         bool isUsingMask, bool forceRLE) { // forceRLE implies that SkAAClip is calling us
     SkASSERT(blitter);
 
-    SkEdgeBuilder builder;
-    int count = builder.build_edges(path, &clipRect, 0, pathContainedInClip,
-                                    SkEdgeBuilder::kAnalyticEdge);
+    SkAnalyticEdgeBuilder builder;
+    int count = builder.buildEdges(path, pathContainedInClip ? nullptr : &clipRect);
     SkAnalyticEdge** list = builder.analyticEdgeList();
 
     SkIRect rect = clipRect;
@@ -1710,3 +1721,4 @@ void SkScan::AAAFillPath(const SkPath& path, SkBlitter* blitter, const SkIRect& 
                 containedInClip, false, forceRLE);
     }
 }
+#endif //defined(SK_DISABLE_AAA)

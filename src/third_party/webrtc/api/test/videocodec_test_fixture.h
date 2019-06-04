@@ -52,12 +52,7 @@ struct BitstreamThresholds {
   size_t max_max_nalu_size_bytes;
 };
 
-// Should video files be saved persistently to disk for post-run visualization?
-struct VisualizationParams {
-  bool save_encoded_ivf;
-  bool save_decoded_y4m;
-};
-
+// NOTE: This class is still under development and may change without notice.
 class VideoCodecTestFixture {
  public:
   class EncodedFrameChecker {
@@ -66,6 +61,7 @@ class VideoCodecTestFixture {
     virtual void CheckEncodedFrame(webrtc::VideoCodecType codec,
                                    const EncodedImage& encoded_frame) const = 0;
   };
+
   struct Config {
     Config();
     void SetCodecSettings(std::string codec_name,
@@ -85,7 +81,6 @@ class VideoCodecTestFixture {
 
     std::string ToString() const;
     std::string CodecName() const;
-    bool IsAsyncCodec() const;
 
     // Plain name of YUV file to process without file extension.
     std::string filename;
@@ -109,6 +104,9 @@ class VideoCodecTestFixture {
     // If set to true, the encoding will run in real-time.
     bool measure_cpu = false;
 
+    // Simulate frames arriving in real-time by adding delays between frames.
+    bool encode_in_real_time = false;
+
     // If > 0: forces the encoder to create a keyframe every Nth frame.
     size_t keyframe_interval = 0;
 
@@ -125,22 +123,17 @@ class VideoCodecTestFixture {
           webrtc::H264PacketizationMode::NonInterleaved;
     } h264_codec_settings;
 
-    // Should hardware accelerated codecs be used?
-    bool hw_encoder = false;
-    bool hw_decoder = false;
-
-    // Should the encoder be wrapped in a SimulcastEncoderAdapter?
-    bool simulcast_adapted_encoder = false;
-
-    // Should the hardware codecs be wrapped in software fallbacks?
-    bool sw_fallback_encoder = false;
-    bool sw_fallback_decoder = false;
-
     // Custom checker that will be called for each frame.
     const EncodedFrameChecker* encoded_frame_checker = nullptr;
 
     // Print out frame level stats.
     bool print_frame_level_stats = false;
+
+    // Should video be saved persistently to disk for post-run visualization?
+    struct VisualizationParams {
+      bool save_encoded_ivf = false;
+      bool save_decoded_y4m = false;
+    } visualization_params;
   };
 
   virtual ~VideoCodecTestFixture() = default;
@@ -148,8 +141,7 @@ class VideoCodecTestFixture {
   virtual void RunTest(const std::vector<RateProfile>& rate_profiles,
                        const std::vector<RateControlThresholds>* rc_thresholds,
                        const std::vector<QualityThresholds>* quality_thresholds,
-                       const BitstreamThresholds* bs_thresholds,
-                       const VisualizationParams* visualization_params) = 0;
+                       const BitstreamThresholds* bs_thresholds) = 0;
   virtual VideoCodecTestStats& GetStats() = 0;
 };
 

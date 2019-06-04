@@ -6,6 +6,10 @@
 
 namespace switches {
 
+// Enables background and upload trace to trace-upload-url. Trigger rules are
+// pass as an argument.
+const char kEnableBackgroundTracing[] = "enable-background-tracing";
+
 // Causes TRACE_EVENT flags to be recorded from startup.
 // This flag will be ignored if --trace-startup or --trace-shutdown is provided.
 const char kTraceConfigFile[]               = "trace-config-file";
@@ -50,19 +54,16 @@ const char kTraceStartupFile[]              = "trace-startup-file";
 // "record-until-full" mode will be used.
 const char kTraceStartupRecordMode[] = "trace-startup-record-mode";
 
+// If supplied, will enable Perfetto startup tracing and stream the
+// output to the given file.
+// TODO(oysteine): Remove once Perfetto starts early enough after
+// process startup to be able to replace the legacy startup tracing.
+const char kPerfettoOutputFile[] = "perfetto-output-file";
+
 // Sends a pretty-printed version of tracing info to the console.
 const char kTraceToConsole[]                = "trace-to-console";
 
 // Sets the target URL for uploading tracing data.
 const char kTraceUploadURL[]                = "trace-upload-url";
-
-#if defined(USE_MEMORY_TRACE)
-const char kTraceMemoryBrowser[]            = "trace-memory-browser";
-const char kTraceMemoryRenderer[]           = "trace-memory-renderer";
-const char kTraceMemoryInterval[]           = "trace-memory-interval";
-const char kTraceMemoryToFile[]             = "trace-memory-to-file";
-const char kTraceMemoryLogFormat[]          = "trace-memory-log-format";
-const char kTraceMemoryByteUnit[]           = "trace-memory-byte-unit";
-#endif
 
 }  // namespace switches

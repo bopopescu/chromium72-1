@@ -4,7 +4,7 @@
 
 #include "content/browser/loader/resource_message_filter.h"
 
-#include "base/feature_list.h"
+#include "base/command_line.h"
 #include "base/logging.h"
 #include "content/browser/appcache/chrome_appcache_service.h"
 #include "content/browser/blob_storage/chrome_blob_storage_context.h"
@@ -18,7 +18,8 @@
 #include "content/common/resource_messages.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/resource_context.h"
-#include "content/public/common/content_features.h"
+#include "content/public/browser/shared_cors_origin_access_list.h"
+#include "content/public/common/content_switches.h"
 #include "services/network/cors/cors_url_loader_factory.h"
 #include "services/network/public/cpp/features.h"
 #include "services/network/public/cpp/weak_wrapper_shared_url_loader_factory.h"
@@ -45,6 +46,7 @@ ResourceMessageFilter::ResourceMessageFilter(
     storage::FileSystemContext* file_system_context,
     ServiceWorkerContextWrapper* service_worker_context,
     PrefetchURLLoaderService* prefetch_url_loader_service,
+    const SharedCorsOriginAccessList* shared_cors_origin_access_list,
     const GetContextsCallback& get_contexts_callback,
     const scoped_refptr<base::SingleThreadTaskRunner>& io_thread_runner)
     : BrowserMessageFilter(ResourceMsgStart),
@@ -58,6 +60,7 @@ ResourceMessageFilter::ResourceMessageFilter(
                                                    service_worker_context,
                                                    get_contexts_callback)),
       prefetch_url_loader_service_(prefetch_url_loader_service),
+      shared_cors_origin_access_list_(shared_cors_origin_access_list),
       io_thread_task_runner_(io_thread_runner),
       weak_ptr_factory_(this) {}
 
@@ -146,6 +149,10 @@ void ResourceMessageFilter::CreateLoaderAndStart(
 
 void ResourceMessageFilter::Clone(
     network::mojom::URLLoaderFactoryRequest request) {
+  if (!url_loader_factory_) {
+    queued_clone_requests_.emplace_back(std::move(request));
+    return;
+  }
   url_loader_factory_->Clone(std::move(request));
 }
 
@@ -175,15 +182,27 @@ void ResourceMessageFilter::InitializeOnIOThread() {
   // The WeakPtr of the filter must be created on the IO thread. So sets the
   // WeakPtr of |requester_info_| now.
   requester_info_->set_filter(GetWeakPtr());
-  url_loader_factory_ = std::make_unique<URLLoaderFactoryImpl>(requester_info_);
-
-  if (base::FeatureList::IsEnabled(network::features::kOutOfBlinkCORS)) {
-    url_loader_factory_ = std::make_unique<network::cors::CORSURLLoaderFactory>(
-        std::move(url_loader_factory_),
+  if (base::FeatureList::IsEnabled(network::features::kNetworkService)) {
+    // ResourceMessageFilter should not be used if NetworkService is enabled,
+    // but still some tests rely on it.
+    url_loader_factory_ =
+        std::make_unique<URLLoaderFactoryImpl>(requester_info_);
+  } else {
+    url_loader_factory_ = std::make_unique<network::cors::CorsURLLoaderFactory>(
+        base::CommandLine::ForCurrentProcess()->HasSwitch(
+            switches::kDisableWebSecurity),
+        std::make_unique<URLLoaderFactoryImpl>(requester_info_),
         base::BindRepeating(&ResourceDispatcherHostImpl::CancelRequest,
                             base::Unretained(ResourceDispatcherHostImpl::Get()),
-                            requester_info_->child_id()));
+                            requester_info_->child_id()),
+        &shared_cors_origin_access_list_->GetOriginAccessList());
   }
+
+  std::vector<network::mojom::URLLoaderFactoryRequest> requests =
+      std::move(queued_clone_requests_);
+  for (auto& request : requests)
+    Clone(std::move(request));
+  queued_clone_requests_.clear();
 }
 
 }  // namespace content

@@ -8,10 +8,10 @@ import unittest
 
 from blinkpy.common.net.buildbot import Build
 from blinkpy.common.net.layout_test_results import LayoutTestResults
+from blinkpy.common.path_finder import RELATIVE_WEB_TESTS
 from blinkpy.common.system.executive_mock import MockExecutive
 from blinkpy.tool.commands.rebaseline import (
-    AbstractParallelRebaselineCommand, Rebaseline, RebaselineExpectations,
-    TestBaselineSet
+    AbstractParallelRebaselineCommand, Rebaseline, TestBaselineSet
 )
 from blinkpy.tool.mock_tool import MockBlinkTool
 from blinkpy.web_tests.builder_list import BuilderList
@@ -131,25 +131,25 @@ class TestAbstractParallelRebaselineCommand(BaseTestCase):
         # pylint: disable=protected-access
         baseline_paths = self.command._generic_baseline_paths(test_baseline_set)
         self.assertEqual(baseline_paths, [
-            '/test.checkout/LayoutTests/passes/text-expected.png',
-            '/test.checkout/LayoutTests/passes/text-expected.txt',
-            '/test.checkout/LayoutTests/passes/text-expected.wav',
+            '/test.checkout/wtests/passes/text-expected.png',
+            '/test.checkout/wtests/passes/text-expected.txt',
+            '/test.checkout/wtests/passes/text-expected.wav',
         ])
 
     def test_unstaged_baselines(self):
         git = self.tool.git()
         git.unstaged_changes = lambda: {
-            'third_party/WebKit/LayoutTests/x/foo-expected.txt': 'M',
-            'third_party/WebKit/LayoutTests/x/foo-expected.something': '?',
-            'third_party/WebKit/LayoutTests/x/foo-expected.png': '?',
-            'third_party/WebKit/LayoutTests/x/foo.html': 'M',
+            RELATIVE_WEB_TESTS + 'x/foo-expected.txt': 'M',
+            RELATIVE_WEB_TESTS + 'x/foo-expected.something': '?',
+            RELATIVE_WEB_TESTS + 'x/foo-expected.png': '?',
+            RELATIVE_WEB_TESTS + 'x/foo.html': 'M',
             'docs/something.md': '?',
         }
         self.assertEqual(
             self.command.unstaged_baselines(),
             [
-                '/mock-checkout/third_party/WebKit/LayoutTests/x/foo-expected.png',
-                '/mock-checkout/third_party/WebKit/LayoutTests/x/foo-expected.txt',
+                '/mock-checkout/' + RELATIVE_WEB_TESTS + 'x/foo-expected.png',
+                '/mock-checkout/' + RELATIVE_WEB_TESTS + 'x/foo-expected.txt',
             ])
 
 
@@ -218,6 +218,7 @@ class TestRebaseline(BaseTestCase):
                     '--suffixes', 'txt,png',
                     '--port-name', 'test-win-win7',
                     '--builder', 'MOCK Win7',
+                    '--step-name', 'webkit_layout_tests (with patch)',
                 ]],
                 [[
                     'python', 'echo', 'optimize-baselines',
@@ -250,6 +251,7 @@ class TestRebaseline(BaseTestCase):
                     '--suffixes', 'txt,png',
                     '--port-name', 'test-win-win7',
                     '--builder', 'MOCK Win7 (dbg)',
+                    '--step-name', 'webkit_layout_tests (with patch)',
                 ]],
                 [[
                     'python', 'echo', 'optimize-baselines',
@@ -282,6 +284,7 @@ class TestRebaseline(BaseTestCase):
                     '--suffixes', 'txt,png',
                     '--port-name', 'test-win-win7',
                     '--builder', 'MOCK Win7',
+                    '--step-name', 'webkit_layout_tests (with patch)',
                 ]]
             ])
 
@@ -308,6 +311,7 @@ class TestRebaseline(BaseTestCase):
                     '--port-name', 'test-win-win7',
                     '--builder', 'MOCK Win7',
                     '--results-directory', '/tmp',
+                    '--step-name', 'webkit_layout_tests (with patch)',
                 ]],
             ])
 
@@ -334,6 +338,7 @@ class TestRebaseline(BaseTestCase):
                     '--suffixes', 'txt,png',
                     '--port-name', 'test-win-win10',
                     '--builder', 'MOCK Win7',
+                    '--step-name', 'webkit_layout_tests (with patch)',
                 ]],
                 [[
                     'python', 'echo', 'optimize-baselines',
@@ -638,6 +643,7 @@ class TestRebaselineExecute(BaseTestCase):
                     '--suffixes', 'txt,png',
                     '--port-name', 'test-win-win7',
                     '--builder', 'MOCK Win7',
+                    '--step-name', 'webkit_layout_tests (with patch)',
                 ]]
             ])
 
@@ -675,6 +681,7 @@ class TestRebaselineExecute(BaseTestCase):
                         '--suffixes', 'txt,png',
                         '--port-name', 'test-win-win7',
                         '--builder', 'MOCK Win7',
+                        '--step-name', 'webkit_layout_tests (with patch)',
                     ],
                     [
                         'python', 'echo', 'rebaseline-test-internal',
@@ -683,294 +690,10 @@ class TestRebaselineExecute(BaseTestCase):
                         '--suffixes', 'txt,png',
                         '--port-name', 'test-win-win7',
                         '--builder', 'MOCK Win7',
+                        '--step-name', 'webkit_layout_tests (with patch)',
                     ]
                 ]
             ])
-
-
-class TestRebaselineExpectations(BaseTestCase):
-    """Tests for the blink_tool.py rebaseline-expectations command."""
-
-    command_constructor = RebaselineExpectations
-
-    def setUp(self):
-        super(TestRebaselineExpectations, self).setUp()
-        self.tool.executive = MockExecutive()
-        self._zero_out_test_expectations()
-
-    @staticmethod
-    def options():
-        return optparse.Values({
-            'optimize': False,
-            'builders': None,
-            'suffixes': ['txt'],
-            'verbose': False,
-            'platform': None,
-            'results_directory': None
-        })
-
-    def test_rebaseline_expectations(self):
-        for builder in ['MOCK Mac10.10', 'MOCK Mac10.11']:
-            self.tool.buildbot.set_results(Build(builder), LayoutTestResults({
-                'tests': {
-                    'userscripts': {
-                        'another-test.html': {
-                            'expected': 'PASS',
-                            'actual': 'PASS TEXT'
-                        },
-                        'images.svg': {
-                            'expected': 'FAIL',
-                            'actual': 'IMAGE+TEXT'
-                        }
-                    }
-                }
-            }))
-
-        self._write('userscripts/another-test.html', 'Dummy test contents')
-        self._write('userscripts/images.svg', 'Dummy test contents')
-        self.command._tests_to_rebaseline = lambda port: {
-            'userscripts/another-test.html',
-            'userscripts/images.svg',
-            'userscripts/not-actually-failing.html',
-        }
-
-        self.command.execute(self.options(), [], self.tool)
-
-        self.assertEqual(self.tool.executive.calls, [
-            [
-                [
-                    'python', 'echo', 'copy-existing-baselines-internal',
-                    '--test', 'userscripts/another-test.html',
-                    '--suffixes', 'txt',
-                    '--port-name', 'test-mac-mac10.10',
-                ],
-                [
-                    'python', 'echo', 'copy-existing-baselines-internal',
-                    '--test', 'userscripts/another-test.html',
-                    '--suffixes', 'txt',
-                    '--port-name', 'test-mac-mac10.11',
-                ],
-                [
-                    'python', 'echo', 'copy-existing-baselines-internal',
-                    '--test', 'userscripts/images.svg',
-                    '--suffixes', 'txt,png',
-                    '--port-name', 'test-mac-mac10.10',
-                ],
-                [
-                    'python', 'echo', 'copy-existing-baselines-internal',
-                    '--test', 'userscripts/images.svg',
-                    '--suffixes', 'txt,png',
-                    '--port-name', 'test-mac-mac10.11',
-                ],
-            ],
-            [
-                [
-                    'python', 'echo', 'rebaseline-test-internal',
-                    '--test', 'userscripts/another-test.html',
-                    '--suffixes', 'txt',
-                    '--port-name', 'test-mac-mac10.10',
-                    '--builder', 'MOCK Mac10.10',
-                ],
-                [
-                    'python', 'echo', 'rebaseline-test-internal',
-                    '--test', 'userscripts/another-test.html',
-                    '--suffixes', 'txt',
-                    '--port-name', 'test-mac-mac10.11',
-                    '--builder', 'MOCK Mac10.11',
-                ],
-                [
-                    'python', 'echo', 'rebaseline-test-internal',
-                    '--test', 'userscripts/images.svg',
-                    '--suffixes', 'txt,png',
-                    '--port-name', 'test-mac-mac10.10',
-                    '--builder', 'MOCK Mac10.10',
-                ],
-                [
-                    'python', 'echo', 'rebaseline-test-internal',
-                    '--test', 'userscripts/images.svg',
-                    '--suffixes', 'txt,png',
-                    '--port-name', 'test-mac-mac10.11',
-                    '--builder', 'MOCK Mac10.11',
-                ],
-            ],
-        ])
-
-    def test_rebaseline_expectations_reftests(self):
-        for builder in ['MOCK Mac10.10', 'MOCK Mac10.11']:
-            self.tool.buildbot.set_results(Build(builder), LayoutTestResults({
-                'tests': {
-                    'userscripts': {
-                        'reftest-text.html': {
-                            'expected': 'PASS',
-                            'actual': 'TEXT'
-                        },
-                        'reftest-image.html': {
-                            'expected': 'FAIL',
-                            'actual': 'IMAGE'
-                        },
-                        'reftest-image-text.html': {
-                            'expected': 'FAIL',
-                            'actual': 'IMAGE+TEXT'
-                        }
-                    }
-                }
-            }))
-
-        self._write('userscripts/reftest-text.html', 'Dummy test contents')
-        self._write('userscripts/reftest-text-expected.html', 'Dummy test contents')
-        self._write('userscripts/reftest-text-expected.html', 'Dummy test contents')
-        self.command._tests_to_rebaseline = lambda port: {
-            'userscripts/reftest-text.html': set(['txt']),
-            'userscripts/reftest-image.html': set(['png']),
-            'userscripts/reftest-image-text.html': set(['png', 'txt']),
-        }
-
-        self.command.execute(self.options(), [], self.tool)
-
-        self.assertEqual(self.tool.executive.calls, [
-            [
-                [
-                    'python', 'echo', 'copy-existing-baselines-internal',
-                    '--test', 'userscripts/reftest-text.html',
-                    '--suffixes', 'txt',
-                    '--port-name', 'test-mac-mac10.10',
-                ],
-                [
-                    'python', 'echo', 'copy-existing-baselines-internal',
-                    '--test', 'userscripts/reftest-text.html',
-                    '--suffixes', 'txt',
-                    '--port-name', 'test-mac-mac10.11',
-                ],
-            ],
-            [
-                [
-                    'python', 'echo', 'rebaseline-test-internal',
-                    '--test', 'userscripts/reftest-text.html',
-                    '--suffixes', 'txt',
-                    '--port-name', 'test-mac-mac10.10',
-                    '--builder', 'MOCK Mac10.10',
-                ],
-                [
-                    'python', 'echo', 'rebaseline-test-internal',
-                    '--test', 'userscripts/reftest-text.html',
-                    '--suffixes', 'txt',
-                    '--port-name', 'test-mac-mac10.11',
-                    '--builder', 'MOCK Mac10.11',
-                ],
-            ],
-        ])
-
-    def test_rebaseline_expectations_noop(self):
-        self.command.execute(self.options(), [], self.tool)
-        self.assertEqual(self.tool.filesystem.written_files, {})
-
-    def disabled_test_overrides_are_included_correctly(self):
-        # TODO(qyearsley): Fix or remove this test method.
-        # This tests that any tests marked as REBASELINE in the overrides are found, but
-        # that the overrides do not get written into the main file.
-
-        self._write(self.test_expectations_path, '')
-        self.mac_port.expectations_dict = lambda: {
-            self.test_expectations_path: '',
-            'overrides': ('Bug(x) userscripts/another-test.html [ Failure Rebaseline ]\n'
-                          'Bug(y) userscripts/test.html [ Crash ]\n')}
-        self._write('/userscripts/another-test.html', '')
-
-        self.assertDictEqual(self.command._tests_to_rebaseline(self.mac_port),
-                             {'userscripts/another-test.html': set(['png', 'txt', 'wav'])})
-        self.assertEqual(self._read(self.test_expectations_path), '')
-
-    def test_rebaseline_without_other_expectations(self):
-        self._write('userscripts/another-test.html', 'Dummy test contents')
-        self._write(self.test_expectations_path, 'Bug(x) userscripts/another-test.html [ Rebaseline ]\n')
-        self.assertEqual(self.command._tests_to_rebaseline(self.mac_port), ['userscripts/another-test.html'])
-
-    def test_rebaseline_missing(self):
-        self.tool.buildbot.set_results(Build('MOCK Mac10.10'), LayoutTestResults({
-            'tests': {
-                'fast': {
-                    'dom': {
-                        'missing-text.html': {
-                            'expected': 'PASS',
-                            'actual': 'MISSING',
-                            'is_unexpected': True,
-                            'is_missing_text': True
-                        },
-                        'missing-text-and-image.html': {
-                            'expected': 'PASS',
-                            'actual': 'MISSING',
-                            'is_unexpected': True,
-                            'is_missing_text': True,
-                            'is_missing_image': True
-                        },
-                        'missing-image.html': {
-                            'expected': 'PASS',
-                            'actual': 'MISSING',
-                            'is_unexpected': True,
-                            'is_missing_image': True
-                        }
-                    }
-                }
-            }
-        }))
-
-        self._write('fast/dom/missing-text.html', 'Dummy test contents')
-        self._write('fast/dom/missing-text-and-image.html', 'Dummy test contents')
-        self._write('fast/dom/missing-image.html', 'Dummy test contents')
-
-        self.command._tests_to_rebaseline = lambda port: {
-            'fast/dom/missing-text.html': set(['txt', 'png']),
-            'fast/dom/missing-text-and-image.html': set(['txt', 'png']),
-            'fast/dom/missing-image.html': set(['txt', 'png']),
-        }
-
-        self.command.execute(self.options(), [], self.tool)
-
-        self.assertEqual(self.tool.executive.calls, [
-            [
-                [
-                    'python', 'echo', 'copy-existing-baselines-internal',
-                    '--test', 'fast/dom/missing-text.html',
-                    '--suffixes', 'txt',
-                    '--port-name', 'test-mac-mac10.10',
-                ],
-                [
-                    'python', 'echo', 'copy-existing-baselines-internal',
-                    '--test', 'fast/dom/missing-text-and-image.html',
-                    '--suffixes', 'txt,png',
-                    '--port-name', 'test-mac-mac10.10',
-                ],
-                [
-                    'python', 'echo', 'copy-existing-baselines-internal',
-                    '--test', 'fast/dom/missing-image.html',
-                    '--suffixes', 'png',
-                    '--port-name', 'test-mac-mac10.10',
-                ],
-            ],
-            [
-                [
-                    'python', 'echo', 'rebaseline-test-internal',
-                    '--test', 'fast/dom/missing-text.html',
-                    '--suffixes', 'txt',
-                    '--port-name', 'test-mac-mac10.10',
-                    '--builder', 'MOCK Mac10.10',
-                ],
-                [
-                    'python', 'echo', 'rebaseline-test-internal',
-                    '--test', 'fast/dom/missing-text-and-image.html',
-                    '--suffixes', 'txt,png',
-                    '--port-name', 'test-mac-mac10.10',
-                    '--builder', 'MOCK Mac10.10',
-                ],
-                [
-                    'python', 'echo', 'rebaseline-test-internal',
-                    '--test', 'fast/dom/missing-image.html',
-                    '--suffixes', 'png',
-                    '--port-name', 'test-mac-mac10.10',
-                    '--builder', 'MOCK Mac10.10',
-                ],
-            ]
-        ])
 
 
 class TestBaselineSetTest(unittest.TestCase):

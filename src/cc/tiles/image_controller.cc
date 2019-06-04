@@ -5,8 +5,8 @@
 #include "cc/tiles/image_controller.h"
 
 #include "base/bind.h"
-#include "base/task_scheduler/post_task.h"
-#include "base/task_scheduler/task_traits.h"
+#include "base/task/post_task.h"
+#include "base/task/task_traits.h"
 #include "base/threading/thread_restrictions.h"
 #include "base/trace_event/trace_event.h"
 #include "cc/base/completion_event.h"
@@ -117,7 +117,9 @@ void ImageController::StopWorkerTasks() {
         request.task->DidComplete();
       }
     }
-    cache_->UnrefImage(request.draw_image);
+
+    if (request.need_unref)
+      cache_->UnrefImage(request.draw_image);
 
     // Orphan the request so that we can still run it when a new cache is set.
     request.task = nullptr;

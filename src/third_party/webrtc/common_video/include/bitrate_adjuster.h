@@ -11,10 +11,13 @@
 #ifndef COMMON_VIDEO_INCLUDE_BITRATE_ADJUSTER_H_
 #define COMMON_VIDEO_INCLUDE_BITRATE_ADJUSTER_H_
 
-#include <functional>
+#include <stddef.h>
+#include <stdint.h>
 
+#include "absl/types/optional.h"
 #include "rtc_base/criticalsection.h"
 #include "rtc_base/rate_statistics.h"
+#include "rtc_base/thread_annotations.h"
 
 namespace webrtc {
 
@@ -44,7 +47,7 @@ class BitrateAdjuster {
   uint32_t GetAdjustedBitrateBps() const;
 
   // Returns what we think the current bitrate is.
-  rtc::Optional<uint32_t> GetEstimatedBitrateBps();
+  absl::optional<uint32_t> GetEstimatedBitrateBps();
 
   // This should be called after each frame is encoded. The timestamp at which
   // it is called is used to estimate the output bitrate of the encoder.

@@ -41,6 +41,8 @@ NavigationPresence GetNavigationPresence(
       return kCannotHave;
     case UserEventSpecifics::kGaiaPasswordReuseEvent:
       return kMustHave;
+    case UserEventSpecifics::kGaiaPasswordCapturedEvent:
+      return kCannotHave;
     case UserEventSpecifics::EVENT_NOT_SET:
       break;
   }
@@ -87,8 +89,8 @@ void UserEventServiceImpl::RecordUserEvent(
   RecordUserEvent(std::make_unique<UserEventSpecifics>(specifics));
 }
 
-base::WeakPtr<ModelTypeSyncBridge> UserEventServiceImpl::GetSyncBridge() {
-  return bridge_->AsWeakPtr();
+ModelTypeSyncBridge* UserEventServiceImpl::GetSyncBridge() {
+  return bridge_.get();
 }
 
 // static
@@ -99,10 +101,23 @@ bool UserEventServiceImpl::MightRecordEvents(bool off_the_record,
 }
 
 bool UserEventServiceImpl::CanRecordHistory() {
-  // Before the engine is initialized, we cannot trust the other fields.
+  // Before the engine is initialized, Sync doesn't know if there is a
+  // secondary passphrase. Similarly, unless the Sync feature is enabled,
+  // GetPreferredDataTypes() isn't meaningful.
   return sync_service_->IsEngineInitialized() &&
          !sync_service_->IsUsingSecondaryPassphrase() &&
+         sync_service_->IsSyncFeatureEnabled() &&
          sync_service_->GetPreferredDataTypes().Has(HISTORY_DELETE_DIRECTIVES);
+}
+
+bool UserEventServiceImpl::IsUserEventsDatatypeEnabled() {
+  // Before the engine is initialized, Sync doesn't know if there is a
+  // secondary passphrase. Similarly, unless the Sync feature is enabled,
+  // GetPreferredDataTypes() isn't meaningful.
+  return sync_service_->IsEngineInitialized() &&
+         !sync_service_->IsUsingSecondaryPassphrase() &&
+         sync_service_->IsSyncFeatureEnabled() &&
+         sync_service_->GetPreferredDataTypes().Has(USER_EVENTS);
 }
 
 bool UserEventServiceImpl::ShouldRecordEvent(
@@ -116,7 +131,18 @@ bool UserEventServiceImpl::ShouldRecordEvent(
     return false;
   }
 
+  // TODO(vitaliii): Checking HISTORY_DELETE_DIRECTIVES directly should not be
+  // needed once USER_CONSENTS are fully launched. Then USER_EVENTS datatype
+  // should depend on History in Sync layers instead of here.
   if (specifics.has_navigation_id() && !CanRecordHistory()) {
+    return false;
+  }
+
+  // TODO(vitaliii): Checking USER_EVENTS directly should not be needed once
+  // https://crbug.com/830535 is fixed. Then disabling USER_EVENTS should be
+  // honored by the processor and it should drop all events.
+  if (!IsUserEventsDatatypeEnabled()) {
+    DCHECK(!specifics.has_user_consent());
     return false;
   }
 

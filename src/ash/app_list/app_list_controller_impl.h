@@ -9,34 +9,34 @@
 #include <string>
 #include <vector>
 
-#include "ash/app_list/app_list_presenter_impl.h"
+#include "ash/app_list/app_list_view_delegate.h"
 #include "ash/app_list/model/app_list_model.h"
 #include "ash/app_list/model/app_list_model_observer.h"
 #include "ash/app_list/model/app_list_view_state.h"
 #include "ash/app_list/model/search/search_model.h"
+#include "ash/app_list/presenter/app_list_presenter_impl.h"
 #include "ash/ash_export.h"
+#include "ash/display/window_tree_host_manager.h"
 #include "ash/public/cpp/app_list/app_list_constants.h"
+#include "ash/public/cpp/assistant/default_voice_interaction_observer.h"
 #include "ash/public/interfaces/app_list.mojom.h"
+#include "ash/public/interfaces/voice_interaction_controller.mojom.h"
 #include "ash/session/session_observer.h"
 #include "ash/shell_observer.h"
 #include "ash/wallpaper/wallpaper_controller_observer.h"
 #include "ash/wm/tablet_mode/tablet_mode_observer.h"
-#include "base/scoped_observer.h"
 #include "components/sync/model/string_ordinal.h"
 #include "mojo/public/cpp/bindings/binding_set.h"
 #include "mojo/public/cpp/bindings/interface_ptr_set.h"
-#include "ui/app_list/app_list_view_delegate.h"
 #include "ui/keyboard/keyboard_controller_observer.h"
 
 namespace ui {
 class MouseWheelEvent;
 }  // namespace ui
 
-namespace app_list {
-class AnswerCardContentsRegistry;
-}  // namespace app_list
-
 namespace ash {
+
+class HomeLauncherGestureHandler;
 
 // Ash's AppListController owns the AppListModel and implements interface
 // functions that allow Chrome to modify and observe the Shelf and AppListModel
@@ -49,7 +49,9 @@ class ASH_EXPORT AppListControllerImpl
       public ash::ShellObserver,
       public TabletModeObserver,
       public keyboard::KeyboardControllerObserver,
-      public WallpaperControllerObserver {
+      public WallpaperControllerObserver,
+      public DefaultVoiceInteractionObserver,
+      public WindowTreeHostManager::Observer {
  public:
   using AppListItemMetadataPtr = mojom::AppListItemMetadataPtr;
   using SearchResultMetadataPtr = mojom::SearchResultMetadataPtr;
@@ -118,7 +120,7 @@ class ASH_EXPORT AppListControllerImpl
   void OnAppListItemUpdated(app_list::AppListItem* item) override;
 
   // SessionObserver:
-  void OnSessionStateChanged(session_manager::SessionState state) override;
+  void OnActiveUserPrefServiceChanged(PrefService* pref_service) override;
 
   // Methods used in ash:
   bool GetTargetVisibility() const;
@@ -134,10 +136,20 @@ class ASH_EXPORT AppListControllerImpl
                      app_list::AppListShowSource show_source,
                      base::TimeTicks event_time_stamp);
   app_list::AppListViewState GetAppListViewState();
+  HomeLauncherGestureHandler* home_launcher_gesture_handler() {
+    return home_launcher_gesture_handler_.get();
+  }
+
+  // Called when a window starts/ends dragging. If we're in tablet mode and home
+  // launcher is enabled, we should hide the home launcher during dragging a
+  // window and reshow it when the drag ends.
+  void OnWindowDragStarted();
+  void OnWindowDragEnded();
 
   // app_list::AppListViewDelegate:
   app_list::AppListModel* GetModel() override;
   app_list::SearchModel* GetSearchModel() override;
+  void StartAssistant() override;
   void StartSearch(const base::string16& raw_query) override;
   void OpenSearchResult(const std::string& result_id, int event_flags) override;
   void InvokeSearchResultAction(const std::string& result_id,
@@ -153,6 +165,7 @@ class ASH_EXPORT AppListControllerImpl
                                            int event_flags) override;
   void ViewShown(int64_t display_id) override;
   void ViewClosing() override;
+  void ViewClosed() override;
   void GetWallpaperProminentColors(
       GetWallpaperProminentColorsCallback callback) override;
   void ActivateItem(const std::string& id, int event_flags) override;
@@ -163,6 +176,12 @@ class ASH_EXPORT AppListControllerImpl
                                int event_flags) override;
   void ShowWallpaperContextMenu(const gfx::Point& onscreen_location,
                                 ui::MenuSourceType source_type) override;
+  bool ProcessHomeLauncherGesture(ui::GestureEvent* event,
+                                  const gfx::Point& screen_location) override;
+  bool CanProcessEventsOnApplistViews() override;
+  void GetNavigableContentsFactory(
+      content::mojom::NavigableContentsFactoryRequest request) override;
+
   void OnVisibilityChanged(bool visible);
   void OnTargetVisibilityChanged(bool visible);
   void StartVoiceInteractionSession();
@@ -171,27 +190,43 @@ class ASH_EXPORT AppListControllerImpl
   void FlushForTesting();
 
   // ShellObserver:
-  void OnVirtualKeyboardStateChanged(bool activated,
-                                     aura::Window* root_window) override;
   void OnOverviewModeStarting() override;
   void OnOverviewModeEnding() override;
+  void OnOverviewModeEndingAnimationComplete(bool canceled) override;
 
   // TabletModeObserver:
   void OnTabletModeStarted() override;
   void OnTabletModeEnded() override;
 
   // KeyboardControllerObserver:
-  void OnKeyboardAvailabilityChanged(const bool is_available) override;
+  void OnKeyboardVisibilityStateChanged(bool is_visible) override;
 
   // WallpaperControllerObserver:
   void OnWallpaperColorsChanged() override;
   void OnWallpaperPreviewStarted() override;
   void OnWallpaperPreviewEnded() override;
 
+  // mojom::VoiceInteractionObserver:
+  void OnVoiceInteractionSettingsEnabled(bool enabled) override;
+  void OnAssistantFeatureAllowedChanged(
+      mojom::AssistantAllowedState state) override;
+
+  // WindowTreeHostManager::Observer:
+  void OnDisplayConfigurationChanged() override;
+
   bool onscreen_keyboard_shown() const { return onscreen_keyboard_shown_; }
 
-  // Returns true if the home launcher is enabled in tablet mode.
-  bool IsHomeLauncherEnabledInTabletMode() const;
+  // Performs the 'back' action for the active page.
+  void Back();
+
+  // Handles app list button press event. (Search key should trigger the same
+  // behavior.) All three parameters are only used in clamshell mode.
+  // |display_id| is the id of display where app list should toggle.
+  // |show_source| is the source of the event. |event_time_stamp| records the
+  // event timestamp.
+  void OnAppListButtonPressed(int64_t display_id,
+                              app_list::AppListShowSource show_source,
+                              base::TimeTicks event_time_stamp);
 
  private:
   syncer::StringOrdinal GetOemFolderPos();
@@ -202,6 +237,14 @@ class ASH_EXPORT AppListControllerImpl
   // Update the visibility of the home launcher based on e.g. if the device is
   // in overview mode.
   void UpdateHomeLauncherVisibility();
+
+  // Update the visibility of Assistant functionality.
+  void UpdateAssistantVisibility();
+
+  int64_t GetDisplayIdToShowAppListOn();
+
+  // Shows the home launcher in tablet mode.
+  void ShowHomeLauncher();
 
   base::string16 last_raw_query_;
 
@@ -217,27 +260,24 @@ class ASH_EXPORT AppListControllerImpl
   // Bindings for the AppListController interface.
   mojo::BindingSet<mojom::AppListController> bindings_;
 
-  // Token to view map for classic/mus ash (i.e. non-mash).
-  std::unique_ptr<app_list::AnswerCardContentsRegistry>
-      answer_card_contents_registry_;
-
-  ScopedObserver<keyboard::KeyboardController,
-                 keyboard::KeyboardControllerObserver>
-      keyboard_observer_;
+  // Owned pointer to the object which handles gestures related to the home
+  // launcher.
+  std::unique_ptr<HomeLauncherGestureHandler> home_launcher_gesture_handler_;
 
   // Whether the on-screen keyboard is shown.
   bool onscreen_keyboard_shown_ = false;
 
-  // Whether the home launcher feature is enabled.
-  const bool is_home_launcher_enabled_;
-
-  // Whether the device is in overview mode. The home launcher (if enabled)
-  // should be hidden during overview mode.
-  bool in_overview_mode_ = false;
+  // Each time overview mode is exited, set this variable based on whether
+  // overview mode is sliding out, so the home launcher knows what to do when
+  // overview mode exit animations are finished.
+  bool use_slide_to_exit_overview_mode_ = false;
 
   // Whether the wallpaper is being previewed. The home launcher (if enabled)
   // should be hidden during wallpaper preview.
   bool in_wallpaper_preview_ = false;
+
+  // Whether we're currently in a window dragging process.
+  bool in_window_dragging_ = false;
 
   DISALLOW_COPY_AND_ASSIGN(AppListControllerImpl);
 };

@@ -6,6 +6,7 @@ import unittest
 
 
 from py_utils import expectations_parser
+from telemetry.core import os_version as os_version_module
 from telemetry.story import expectations
 from telemetry.testing import fakes
 
@@ -162,8 +163,8 @@ class TestConditionTest(unittest.TestCase):
   def testAndroidNexus6PReturnsFalseOnNotAndroid(self):
     self._platform.SetOSName('not_android')
     self.assertFalse(
-        expectations.ANDROID_NEXUS6.ShouldDisable(self._platform,
-                                                  self._finder_options))
+        expectations.ANDROID_NEXUS6P.ShouldDisable(self._platform,
+                                                   self._finder_options))
 
   def testAndroidNexus7ReturnsFalseOnNotAndroid(self):
     self._platform.SetOSName('not_android')
@@ -204,8 +205,8 @@ class TestConditionTest(unittest.TestCase):
   def testAndroidNexus6PReturnsFalseOnAndroidNotNexus6P(self):
     self._platform.SetOSName('android')
     self.assertFalse(
-        expectations.ANDROID_NEXUS6.ShouldDisable(self._platform,
-                                                  self._finder_options))
+        expectations.ANDROID_NEXUS6P.ShouldDisable(self._platform,
+                                                   self._finder_options))
 
   def testAndroidNexus7ReturnsFalseOnAndroidNotNexus7(self):
     self._platform.SetOSName('android')
@@ -250,8 +251,8 @@ class TestConditionTest(unittest.TestCase):
     self._platform.SetOSName('android')
     self._platform.SetDeviceTypeName('Nexus 6P')
     self.assertTrue(
-        expectations.ANDROID_NEXUS6.ShouldDisable(self._platform,
-                                                  self._finder_options))
+        expectations.ANDROID_NEXUS6P.ShouldDisable(self._platform,
+                                                   self._finder_options))
 
   def testAndroidNexus7ReturnsTrueOnAndroidNexus7(self):
     self._platform.SetOSName('android')
@@ -426,6 +427,22 @@ class TestConditionTest(unittest.TestCase):
     self.assertTrue(
         expectations.ANDROID_NEXUS5X_WEBVIEW.ShouldDisable(
             self._platform, self._finder_options))
+
+  def testWin7(self):
+    self._platform.SetOSName('win')
+    self._platform.SetOSVersionName(os_version_module.WIN7)
+    self.assertTrue(
+        expectations.WIN_7.ShouldDisable(
+            self._platform, self._finder_options))
+    self.assertEquals('Win 7', str(expectations.WIN_7))
+
+  def testWin10(self):
+    self._platform.SetOSName('win')
+    self._platform.SetOSVersionName(os_version_module.WIN10)
+    self.assertTrue(
+        expectations.WIN_10.ShouldDisable(
+            self._platform, self._finder_options))
+    self.assertEquals('Win 10', str(expectations.WIN_10))
 
 
 class StoryExpectationsTest(unittest.TestCase):

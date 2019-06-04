@@ -50,11 +50,8 @@ class LayoutEmbeddedObject final : public LayoutEmbeddedContent {
   }
 
  private:
-  void PaintContents(const PaintInfo&, const LayoutPoint&) const final;
-  void PaintReplaced(const PaintInfo&, const LayoutPoint&) const final;
-  void Paint(const PaintInfo&, const LayoutPoint&) const final;
-  PaintInvalidationReason InvalidatePaint(
-      const PaintInvalidatorContext&) const final;
+  void PaintReplaced(const PaintInfo&,
+                     const LayoutPoint& paint_offset) const final;
 
   void UpdateLayout() final;
 
@@ -64,8 +61,6 @@ class LayoutEmbeddedObject final : public LayoutEmbeddedContent {
   }
   void ComputeIntrinsicSizingInfo(IntrinsicSizingInfo&) const override;
   bool NeedsPreferredWidthsRecalculation() const override;
-
-  PaintLayerType LayerTypeRequired() const final;
 
   CompositingReasons AdditionalCompositingReasons() const override;
 

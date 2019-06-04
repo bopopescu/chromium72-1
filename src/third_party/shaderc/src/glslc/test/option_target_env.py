@@ -18,7 +18,7 @@ from placeholder import FileShader
 
 
 def opengl_compat_fragment_shader():
-    return """#version 140
+    return """#version 330
 uniform highp sampler2D tex;
 void main() {
   gl_FragColor = texture2D(tex, vec2(0.0, 0.0));
@@ -26,13 +26,20 @@ void main() {
 
 
 def opengl_vertex_shader():
-    return """#version 150
+    return """#version 330
 void main() { int t = gl_VertexID; }"""
 
 
 def vulkan_vertex_shader():
     return """#version 310 es
 void main() { int t = gl_VertexIndex; }"""
+
+
+def vulkan_compute_subgroup_shader():
+    """Returns a compute shader that requires Vulkan 1.1"""
+    return """#version 450
+              #extension GL_KHR_shader_subgroup_basic : enable
+              void main() { subgroupBarrier(); }"""
 
 
 @inside_glslc_testsuite('OptionTargetEnv')
@@ -50,8 +57,9 @@ class TestTargetEnvEqOpenglWithOpenGlCompatShader(expect.ErrorMessageSubstr):
     shader = FileShader(opengl_compat_fragment_shader(), '.frag')
     glslc_args = ['--target-env=opengl', shader]
     expected_error_substr = [shader, ":4: error: 'assign' :  ",
-                             "cannot convert from 'const float' to ",
-                             "'fragColor"]
+                             "cannot convert from ' const float' to ",
+                             "'layout( location=0) out 4-component ",
+                             "vector of float"]
 
 
 @inside_glslc_testsuite('OptionTargetEnv')
@@ -79,11 +87,51 @@ class TestDefaultTargetEnvWithVulkanShader(expect.ValidObjectFile):
 
 
 @inside_glslc_testsuite('OptionTargetEnv')
-class TestTargetEnvEqVulkanWithVulkanShader(expect.ValidObjectFile):
-    """Tests that compiling a Vulkan-specific shader succeeds with
+class TestTargetEnvEqVulkanWithVulkan1_0ShaderSucceeds(expect.ValidObjectFile):
+    """Tests that compiling a Vulkan-specific Vulkan 1.0 shader succeeds with
     --target-env=vulkan"""
     shader = FileShader(vulkan_vertex_shader(), '.vert')
     glslc_args = ['--target-env=vulkan', '-c', shader]
+
+
+@inside_glslc_testsuite('OptionTargetEnv')
+class TestTargetEnvEqVulkan1_0WithVulkan1_0ShaderSucceeds(expect.ValidObjectFile):
+    """Tests that compiling a Vulkan-specific Vulkan 1.0 shader succeeds with
+    --target-env=vulkan1.0"""
+    shader = FileShader(vulkan_vertex_shader(), '.vert')
+    glslc_args = ['--target-env=vulkan1.0', '-c', shader]
+
+
+@inside_glslc_testsuite('OptionTargetEnv')
+class TestTargetEnvEqVulkan1_0WithVulkan1_1ShaderFails(expect.ErrorMessageSubstr):
+    shader = FileShader(vulkan_compute_subgroup_shader(), '.comp')
+    glslc_args = ['--target-env=vulkan1.0', '-c', shader]
+    expected_error_substr = "error: 'subgroup op' : requires SPIR-V 1.3"
+
+
+@inside_glslc_testsuite('OptionTargetEnv')
+class TestTargetEnvEqVulkan1_1WithVulkan1_0ShaderSucceeds(expect.ValidObjectFile1_3):
+    shader = FileShader(vulkan_vertex_shader(), '.vert')
+    glslc_args = ['--target-env=vulkan1.1', '-c', shader]
+
+
+@inside_glslc_testsuite('OptionTargetEnv')
+class TestTargetEnvEqVulkan1_1WithVulkan1_1ShaderSucceeds(expect.ValidObjectFile1_3):
+    shader = FileShader(vulkan_compute_subgroup_shader(), '.comp')
+    glslc_args = ['--target-env=vulkan1.1', '-c', shader]
+
+
+@inside_glslc_testsuite('OptionTargetEnv')
+class TestTargetEnvEqOpenGL4_5WithOpenGLShaderSucceeds(expect.ValidObjectFile):
+    shader = FileShader(opengl_vertex_shader(), '.vert')
+    glslc_args = ['--target-env=opengl4.5', '-c', shader]
+
+
+@inside_glslc_testsuite('OptionTargetEnv')
+class TestTargetEnvEqOpenGL4_6WithOpenGLShaderFailsUnsupported(expect.ErrorMessageSubstr):
+    shader = FileShader(opengl_vertex_shader(), '.vert')
+    glslc_args = ['--target-env=opengl4.6', '-c', shader]
+    expected_error_substr = "invalid value 'opengl4.6' in '--target-env=opengl4.6'"
 
 
 # Note: Negative tests are covered in the libshaderc_util unit tests.

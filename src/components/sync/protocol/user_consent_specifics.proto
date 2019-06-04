@@ -16,7 +16,7 @@ package sync_pb;
 import "sync_enums.proto";
 import "user_consent_types.proto";
 
-// Next id: 13
+// Next id: 14
 message UserConsentSpecifics {
   // ===========================================================================
   // Fields common to all Chrome User Consents.
@@ -53,6 +53,11 @@ message UserConsentSpecifics {
 
     UserConsentTypes.ArcMetricsAndUsageConsent arc_metrics_and_usage_consent =
         11;
+
+    UserConsentTypes.UnifiedConsent unified_consent = 13;
+
+    UserConsentTypes.AssistantActivityControlConsent
+        assistant_activity_control_consent = 14;
   }
 
   // ===========================================================================
@@ -86,6 +91,11 @@ message UserConsentSpecifics {
     PLAY_STORE = 2;
     BACKUP_AND_RESTORE = 3;
     GOOGLE_LOCATION_SERVICE = 4;
+    CHROME_UNIFIED_CONSENT = 5;
+    // TODO(markusheintz): ASSISTANT_ACTIVITY_CONTROL was only added for
+    // compatibility with the Feature enum in UserEventSpecifics.UserConsent.
+    // Delete this value once the value is deleted from the other proto.
+    ASSISTANT_ACTIVITY_CONTROL = 6;
   }
   optional Feature feature = 1 [deprecated = true];
   // Ids of the strings of the consent text presented to the user.

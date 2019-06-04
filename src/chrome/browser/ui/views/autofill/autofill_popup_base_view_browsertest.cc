@@ -12,11 +12,11 @@
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/test/base/in_process_browser_test.h"
-#include "chrome/test/views/scoped_macviews_browser_mode.h"
 #include "components/autofill/core/browser/suggestion.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/events/event_utils.h"
+#include "ui/views/border.h"
 #include "ui/views/test/views_test_base.h"
 #include "ui/views/widget/widget.h"
 
@@ -38,7 +38,7 @@ class MockAutofillPopupViewDelegate : public AutofillPopupViewDelegate {
 
   // TODO(jdduke): Mock this method upon resolution of crbug.com/352463.
   MOCK_CONST_METHOD0(popup_bounds, gfx::Rect());
-  MOCK_METHOD0(container_view, gfx::NativeView());
+  MOCK_CONST_METHOD0(container_view, gfx::NativeView());
   MOCK_CONST_METHOD0(element_bounds, gfx::RectF&());
   MOCK_CONST_METHOD0(IsRTL, bool());
   MOCK_METHOD0(GetSuggestions, const std::vector<autofill::Suggestion>());
@@ -85,59 +85,53 @@ class AutofillPopupBaseViewTest : public InProcessBrowserTest {
   }
 
  protected:
-  test::ScopedMacViewsBrowserMode views_mode_{true};
   testing::NiceMock<MockAutofillPopupViewDelegate> mock_delegate_;
   AutofillPopupBaseView* view_;
 
   DISALLOW_COPY_AND_ASSIGN(AutofillPopupBaseViewTest);
 };
 
-// Flaky on Win and Linux.  http://crbug.com/376299
-#if defined(OS_LINUX) || defined(OS_WIN)
-#define MAYBE_GestureTest DISABLED_GestureTest
-#else
-#define MAYBE_GestureTest GestureTest
-#endif
-
-IN_PROC_BROWSER_TEST_F(AutofillPopupBaseViewTest, MAYBE_GestureTest) {
-  gfx::Rect bounds(0, 0, 5, 5);
-  gfx::Point point = bounds.CenterPoint();
-  EXPECT_CALL(mock_delegate_, popup_bounds()).WillRepeatedly(Return(bounds));
-
+IN_PROC_BROWSER_TEST_F(AutofillPopupBaseViewTest, GestureTest) {
+  const int kElementSize = 5;
+  gfx::RectF bounds(0, 0, kElementSize, kElementSize);
+  EXPECT_CALL(mock_delegate_, element_bounds())
+      .WillRepeatedly(ReturnRef(bounds));
+  view_->SetPreferredSize(gfx::Size(2 * kElementSize, 2 * kElementSize));
   ShowView();
 
-  // Expectations.
-  {
-    testing::InSequence dummy;
-    EXPECT_CALL(mock_delegate_, SetSelectionAtPoint(point)).Times(2);
-    EXPECT_CALL(mock_delegate_, AcceptSelectedLine());
-    EXPECT_CALL(mock_delegate_, SelectionCleared());
-  }
+  gfx::Point point = view_->GetLocalBounds().CenterPoint();
+  testing::InSequence dummy;
 
   // Tap down will select an element.
   ui::GestureEvent tap_down_event = CreateGestureEvent(ui::ET_GESTURE_TAP_DOWN,
                                                        point);
+  EXPECT_CALL(mock_delegate_, SetSelectionAtPoint(point));
   SimulateGesture(&tap_down_event);
-
 
   // Tapping will accept the selection.
   ui::GestureEvent tap_event = CreateGestureEvent(ui::ET_GESTURE_TAP, point);
+  EXPECT_CALL(mock_delegate_, SetSelectionAtPoint(point));
+  EXPECT_CALL(mock_delegate_, AcceptSelectedLine());
   SimulateGesture(&tap_event);
 
   // Tapping outside the bounds clears any selection.
   ui::GestureEvent outside_tap = CreateGestureEvent(ui::ET_GESTURE_TAP,
                                                     gfx::Point(100, 100));
+  EXPECT_CALL(mock_delegate_, SelectionCleared());
   SimulateGesture(&outside_tap);
 }
 
 IN_PROC_BROWSER_TEST_F(AutofillPopupBaseViewTest, DoubleClickTest) {
-  gfx::Rect bounds(0, 0, 5, 5);
-  EXPECT_CALL(mock_delegate_, popup_bounds()).WillRepeatedly(Return(bounds));
+  gfx::RectF bounds(0, 0, 5, 5);
+  EXPECT_CALL(mock_delegate_, element_bounds())
+      .WillRepeatedly(ReturnRef(bounds));
 
+  view_->SetPreferredSize(gfx::Size(10, 10));
   ShowView();
 
-  ui::MouseEvent mouse_down(ui::ET_MOUSE_PRESSED, gfx::Point(0, 0),
-                            gfx::Point(0, 0), ui::EventTimeForNow(), 0, 0);
+  gfx::Point point = view_->GetLocalBounds().CenterPoint();
+  ui::MouseEvent mouse_down(ui::ET_MOUSE_PRESSED, point, point,
+                            ui::EventTimeForNow(), 0, 0);
   EXPECT_TRUE(static_cast<views::View*>(view_)->OnMousePressed(mouse_down));
 
   // Ignore double clicks.
@@ -147,8 +141,9 @@ IN_PROC_BROWSER_TEST_F(AutofillPopupBaseViewTest, DoubleClickTest) {
 
 // Regression test for crbug.com/391316
 IN_PROC_BROWSER_TEST_F(AutofillPopupBaseViewTest, CorrectBoundsTest) {
-  gfx::Rect bounds(100, 150, 5, 5);
-  EXPECT_CALL(mock_delegate_, popup_bounds()).WillRepeatedly(Return(bounds));
+  gfx::RectF bounds(100, 150, 5, 5);
+  EXPECT_CALL(mock_delegate_, element_bounds())
+      .WillRepeatedly(ReturnRef(bounds));
 
   ShowView();
 
@@ -156,11 +151,18 @@ IN_PROC_BROWSER_TEST_F(AutofillPopupBaseViewTest, CorrectBoundsTest) {
                                  ->GetWidget()
                                  ->GetClientAreaBoundsInScreen()
                                  .origin();
-  gfx::Point expected_point = bounds.origin();
+  // The expected origin is shifted to accomodate the border of the bubble.
+  gfx::Point expected_point = gfx::ToRoundedPoint(bounds.bottom_left());
+  expected_point.Offset(0, AutofillPopupBaseView::kElementBorderPadding);
+  gfx::Insets border = view_->GetWidget()->GetRootView()->border()->GetInsets();
+  expected_point.Offset(-border.left(), -border.top());
   EXPECT_EQ(expected_point, display_point);
 }
 
 IN_PROC_BROWSER_TEST_F(AutofillPopupBaseViewTest, MouseExitedTest) {
+  gfx::RectF bounds(0, 0, 5, 5);
+  EXPECT_CALL(mock_delegate_, element_bounds())
+      .WillRepeatedly(ReturnRef(bounds));
   for (bool has_selection : {true, false}) {
     EXPECT_CALL(mock_delegate_, HasSelection()).WillOnce(Return(has_selection));
     EXPECT_CALL(mock_delegate_, SelectionCleared())

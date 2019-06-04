@@ -5,10 +5,9 @@
 #include "net/third_party/quic/core/quic_trace_visitor.h"
 
 #include "net/third_party/quic/platform/api/quic_endian.h"
+#include "net/third_party/quic/platform/api/quic_string.h"
 
-using std::string;
-
-namespace net {
+namespace quic {
 
 quic_trace::EncryptionLevel EncryptionLevelToProto(EncryptionLevel level) {
   switch (level) {
@@ -32,8 +31,8 @@ QuicTraceVisitor::QuicTraceVisitor(const QuicConnection* connection)
   // the standard treats it as an opaque blob.
   QuicConnectionId connection_id =
       QuicEndian::HostToNet64(connection->connection_id());
-  string binary_connection_id(reinterpret_cast<const char*>(&connection_id),
-                              sizeof(connection_id));
+  QuicString binary_connection_id(reinterpret_cast<const char*>(&connection_id),
+                                  sizeof(connection_id));
 
   // We assume that the connection ID in gQUIC is equivalent to the
   // server-chosen client-selected ID.
@@ -80,15 +79,17 @@ void QuicTraceVisitor::OnPacketSent(const SerializedPacket& serialized_packet,
         break;
 
       // New IETF frames, not used in current gQUIC version.
-      // TODO(vasilvv): actually support those.
       case APPLICATION_CLOSE_FRAME:
       case NEW_CONNECTION_ID_FRAME:
+      case RETIRE_CONNECTION_ID_FRAME:
       case MAX_STREAM_ID_FRAME:
       case STREAM_ID_BLOCKED_FRAME:
       case PATH_RESPONSE_FRAME:
       case PATH_CHALLENGE_FRAME:
       case STOP_SENDING_FRAME:
-
+      case MESSAGE_FRAME:
+      case CRYPTO_FRAME:
+      case NEW_TOKEN_FRAME:
         break;
 
       // Ignore gQUIC-specific frames.
@@ -100,6 +101,13 @@ void QuicTraceVisitor::OnPacketSent(const SerializedPacket& serialized_packet,
         break;
     }
   }
+
+  // Output PCC DebugState on packet sent for analysis.
+  if (connection_->sent_packet_manager()
+          .GetSendAlgorithm()
+          ->GetCongestionControlType() == kPCC) {
+    PopulateTransportState(event->mutable_transport_state());
+  }
 }
 
 void QuicTraceVisitor::PopulateFrameInfo(const QuicFrame& frame,
@@ -110,10 +118,10 @@ void QuicTraceVisitor::PopulateFrameInfo(const QuicFrame& frame,
 
       quic_trace::StreamFrameInfo* info =
           frame_record->mutable_stream_frame_info();
-      info->set_stream_id(frame.stream_frame->stream_id);
-      info->set_fin(frame.stream_frame->fin);
-      info->set_offset(frame.stream_frame->offset);
-      info->set_length(frame.stream_frame->data_length);
+      info->set_stream_id(frame.stream_frame.stream_id);
+      info->set_fin(frame.stream_frame.fin);
+      info->set_offset(frame.stream_frame.offset);
+      info->set_length(frame.stream_frame.data_length);
       break;
     }
 
@@ -198,14 +206,17 @@ void QuicTraceVisitor::PopulateFrameInfo(const QuicFrame& frame,
       break;
 
     // New IETF frames, not used in current gQUIC version.
-    // TODO(vasilvv): actually support those.
     case APPLICATION_CLOSE_FRAME:
     case NEW_CONNECTION_ID_FRAME:
+    case RETIRE_CONNECTION_ID_FRAME:
     case MAX_STREAM_ID_FRAME:
     case STREAM_ID_BLOCKED_FRAME:
     case PATH_RESPONSE_FRAME:
     case PATH_CHALLENGE_FRAME:
     case STOP_SENDING_FRAME:
+    case MESSAGE_FRAME:
+    case CRYPTO_FRAME:
+    case NEW_TOKEN_FRAME:
       break;
 
     case NUM_FRAME_TYPES:
@@ -258,8 +269,32 @@ void QuicTraceVisitor::OnWindowUpdateFrame(const QuicWindowUpdateFrame& frame,
 void QuicTraceVisitor::OnSuccessfulVersionNegotiation(
     const ParsedQuicVersion& version) {
   uint32_t tag = QuicEndian::HostToNet32(CreateQuicVersionLabel(version));
-  string binary_tag(reinterpret_cast<const char*>(&tag), sizeof(tag));
+  QuicString binary_tag(reinterpret_cast<const char*>(&tag), sizeof(tag));
   trace_.set_protocol_version(binary_tag);
+}
+
+void QuicTraceVisitor::OnApplicationLimited() {
+  quic_trace::Event* event = trace_.add_events();
+  event->set_time_us(
+      ConvertTimestampToRecordedFormat(connection_->clock()->ApproximateNow()));
+  event->set_event_type(quic_trace::APPLICATION_LIMITED);
+}
+
+void QuicTraceVisitor::OnAdjustNetworkParameters(QuicBandwidth bandwidth,
+                                                 QuicTime::Delta rtt) {
+  quic_trace::Event* event = trace_.add_events();
+  event->set_time_us(
+      ConvertTimestampToRecordedFormat(connection_->clock()->ApproximateNow()));
+  event->set_event_type(quic_trace::EXTERNAL_PARAMETERS);
+
+  quic_trace::ExternalNetworkParameters* parameters =
+      event->mutable_external_network_parameters();
+  if (!bandwidth.IsZero()) {
+    parameters->set_bandwidth_bps(bandwidth.ToBitsPerSecond());
+  }
+  if (!rtt.IsZero()) {
+    parameters->set_rtt_us(rtt.ToMicroseconds());
+  }
 }
 
 uint64_t QuicTraceVisitor::ConvertTimestampToRecordedFormat(
@@ -288,6 +323,13 @@ void QuicTraceVisitor::PopulateTransportState(
                                  .GetSendAlgorithm()
                                  ->PacingRate(in_flight)
                                  .ToBitsPerSecond());
+
+  if (connection_->sent_packet_manager()
+          .GetSendAlgorithm()
+          ->GetCongestionControlType() == kPCC) {
+    state->set_congestion_control_state(
+        connection_->sent_packet_manager().GetSendAlgorithm()->GetDebugState());
+  }
 }
 
-};  // namespace net
+};  // namespace quic

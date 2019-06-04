@@ -11,13 +11,17 @@
 #include "base/memory/ref_counted.h"
 #include "base/values.h"
 #include "content/public/browser/browser_context.h"
+#include "content/public/browser/browser_thread.h"
+#include "content/public/browser/render_process_host.h"
 #include "content/public/browser/site_instance.h"
 #include "content/public/browser/storage_partition.h"
 #include "mojo/public/cpp/bindings/strong_binding.h"
 #include "net/reporting/reporting_report.h"
 #include "net/reporting/reporting_service.h"
+#include "net/url_request/http_user_agent_settings.h"
 #include "net/url_request/url_request_context.h"
 #include "net/url_request/url_request_context_getter.h"
+#include "services/network/public/mojom/network_context.mojom.h"
 #include "third_party/blink/public/platform/reporting.mojom.h"
 #include "url/gurl.h"
 
@@ -27,40 +31,45 @@ namespace {
 
 class ReportingServiceProxyImpl : public blink::mojom::ReportingServiceProxy {
  public:
-  ReportingServiceProxyImpl(
-      scoped_refptr<net::URLRequestContextGetter> request_context_getter)
-      : request_context_getter_(std::move(request_context_getter)) {}
+  explicit ReportingServiceProxyImpl(int render_process_id)
+      : render_process_id_(render_process_id) {}
 
   // blink::mojom::ReportingServiceProxy:
 
   void QueueInterventionReport(const GURL& url,
                                const std::string& message,
-                               const std::string& source_file,
+                               const base::Optional<std::string>& source_file,
                                int line_number,
                                int column_number) override {
     auto body = std::make_unique<base::DictionaryValue>();
     body->SetString("message", message);
-    body->SetString("sourceFile", source_file);
-    body->SetInteger("lineNumber", line_number);
-    body->SetInteger("columnNumber", column_number);
+    if (source_file)
+      body->SetString("sourceFile", *source_file);
+    if (line_number)
+      body->SetInteger("lineNumber", line_number);
+    if (column_number)
+      body->SetInteger("columnNumber", column_number);
     QueueReport(url, "default", "intervention", std::move(body));
   }
 
   void QueueDeprecationReport(const GURL& url,
                               const std::string& id,
-                              base::Time anticipatedRemoval,
+                              base::Optional<base::Time> anticipatedRemoval,
                               const std::string& message,
-                              const std::string& source_file,
+                              const base::Optional<std::string>& source_file,
                               int line_number,
                               int column_number) override {
     auto body = std::make_unique<base::DictionaryValue>();
     body->SetString("id", id);
-    if (anticipatedRemoval.is_null())
-      body->SetDouble("anticipatedRemoval", anticipatedRemoval.ToDoubleT());
+    if (anticipatedRemoval)
+      body->SetDouble("anticipatedRemoval", anticipatedRemoval->ToDoubleT());
     body->SetString("message", message);
-    body->SetString("sourceFile", source_file);
-    body->SetInteger("lineNumber", line_number);
-    body->SetInteger("columnNumber", column_number);
+    if (source_file)
+      body->SetString("sourceFile", *source_file);
+    if (line_number)
+      body->SetInteger("lineNumber", line_number);
+    if (column_number)
+      body->SetInteger("columnNumber", column_number);
     QueueReport(url, "default", "deprecation", std::move(body));
   }
 
@@ -75,7 +84,7 @@ class ReportingServiceProxyImpl : public blink::mojom::ReportingServiceProxy {
                                const std::string& blocked_uri,
                                int line_number,
                                int column_number,
-                               const std::string& source_file,
+                               const base::Optional<std::string>& source_file,
                                int status_code,
                                const std::string& script_sample) override {
     auto body = std::make_unique<base::DictionaryValue>();
@@ -90,11 +99,34 @@ class ReportingServiceProxyImpl : public blink::mojom::ReportingServiceProxy {
       body->SetInteger("line-number", line_number);
     if (column_number)
       body->SetInteger("column-number", column_number);
-    body->SetString("source-file", source_file);
+    if (source_file)
+      body->SetString("sourceFile", *source_file);
     if (status_code)
       body->SetInteger("status-code", status_code);
     body->SetString("script-sample", script_sample);
     QueueReport(url, group, "csp", std::move(body));
+  }
+
+  void QueueFeaturePolicyViolationReport(
+      const GURL& url,
+      const std::string& policy_id,
+      const std::string& disposition,
+      const base::Optional<std::string>& message,
+      const base::Optional<std::string>& source_file,
+      int line_number,
+      int column_number) override {
+    auto body = std::make_unique<base::DictionaryValue>();
+    body->SetString("policyId", policy_id);
+    body->SetString("disposition", disposition);
+    if (message)
+      body->SetString("message", *message);
+    if (source_file)
+      body->SetString("sourceFile", *source_file);
+    if (line_number)
+      body->SetInteger("lineNumber", line_number);
+    if (column_number)
+      body->SetInteger("columnNumber", column_number);
+    QueueReport(url, "default", "feature-policy-violation", std::move(body));
   }
 
  private:
@@ -102,51 +134,29 @@ class ReportingServiceProxyImpl : public blink::mojom::ReportingServiceProxy {
                    const std::string& group,
                    const std::string& type,
                    std::unique_ptr<base::Value> body) {
-    net::URLRequestContext* request_context =
-        request_context_getter_->GetURLRequestContext();
-    if (!request_context) {
-      net::ReportingReport::RecordReportDiscardedForNoURLRequestContext();
+    auto* rph = RenderProcessHost::FromID(render_process_id_);
+    if (!rph)
       return;
-    }
 
-    net::ReportingService* reporting_service =
-        request_context->reporting_service();
-    if (!reporting_service) {
-      net::ReportingReport::RecordReportDiscardedForNoReportingService();
-      return;
-    }
-
-    // Depth is only non-zero for NEL reports, and those can't come from the
-    // renderer.
-    reporting_service->QueueReport(url, group, type, std::move(body),
-                                   /* depth= */ 0);
+    rph->GetStoragePartition()->GetNetworkContext()->QueueReport(
+        type, group, url, /*user_agent=*/base::nullopt,
+        base::Value::FromUniquePtrValue(std::move(body)));
   }
 
-  scoped_refptr<net::URLRequestContextGetter> request_context_getter_;
+  int render_process_id_;
 };
-
-void CreateReportingServiceProxyOnNetworkTaskRunner(
-    blink::mojom::ReportingServiceProxyRequest request,
-    scoped_refptr<net::URLRequestContextGetter> request_context_getter) {
-  mojo::MakeStrongBinding(std::make_unique<ReportingServiceProxyImpl>(
-                              std::move(request_context_getter)),
-                          std::move(request));
-}
 
 }  // namespace
 
 // static
 void CreateReportingServiceProxy(
-    StoragePartition* storage_partition,
+    int render_process_id,
     blink::mojom::ReportingServiceProxyRequest request) {
-  scoped_refptr<net::URLRequestContextGetter> request_context_getter(
-      storage_partition->GetURLRequestContext());
-  scoped_refptr<base::SingleThreadTaskRunner> network_task_runner(
-      request_context_getter->GetNetworkTaskRunner());
-  network_task_runner->PostTask(
-      FROM_HERE,
-      base::BindOnce(&CreateReportingServiceProxyOnNetworkTaskRunner,
-                     std::move(request), std::move(request_context_getter)));
+  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+
+  mojo::MakeStrongBinding(
+      std::make_unique<ReportingServiceProxyImpl>(render_process_id),
+      std::move(request));
 }
 
 }  // namespace content

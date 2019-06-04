@@ -366,7 +366,11 @@ struct HistoryAddPageArgs {
   //   HistoryAddPageArgs(
   //       GURL(), base::Time(), NULL, 0, GURL(),
   //       RedirectList(), ui::PAGE_TRANSITION_LINK,
-  //       false, SOURCE_BROWSED, false, true)
+  //       false, SOURCE_BROWSED, false, true,
+  //       base::nullopt)
+  //
+  // TODO(avi): Is ContextID needed, now that we have a globally-unique
+  // nav_entry_id? https://crbug.com/859902
   HistoryAddPageArgs();
   HistoryAddPageArgs(const GURL& url,
                      base::Time time,
@@ -378,7 +382,8 @@ struct HistoryAddPageArgs {
                      bool hidden,
                      VisitSource source,
                      bool did_replace_entry,
-                     bool consider_for_ntp_most_visited);
+                     bool consider_for_ntp_most_visited,
+                     base::Optional<base::string16> title = base::nullopt);
   HistoryAddPageArgs(const HistoryAddPageArgs& other);
   ~HistoryAddPageArgs();
 
@@ -397,6 +402,7 @@ struct HistoryAddPageArgs {
   // doesn't guarantee it's relevant for Most Visited, since other requirements
   // exist (e.g. certain page transition types).
   bool consider_for_ntp_most_visited;
+  base::Optional<base::string16> title;
 };
 
 // TopSites -------------------------------------------------------------------
@@ -462,9 +468,6 @@ class MostVisitedThumbnails
   DISALLOW_COPY_AND_ASSIGN(MostVisitedThumbnails);
 };
 
-// Map from host to visit count, sorted by visit count descending.
-typedef std::vector<std::pair<std::string, int>> TopHostsList;
-
 // Map from origins to a count of matching URLs and the last visited time to any
 // URL under that origin.
 typedef std::map<GURL, std::pair<int, base::Time>> OriginCountAndLastVisitMap;
@@ -472,10 +475,11 @@ typedef std::map<GURL, std::pair<int, base::Time>> OriginCountAndLastVisitMap;
 // Statistics -----------------------------------------------------------------
 
 // HistoryCountResult encapsulates the result of a call to
-// HistoryBackend::GetHistoryCount.
+// HistoryBackend::GetHistoryCount or
+// HistoryBackend::CountUniqueHostsVisitedLastMonth.
 struct HistoryCountResult {
-  // Indicates whether the call to HistoryBackend::GetHistoryCount was
-  // successful or not. If false, then |count| is undefined.
+  // Indicates whether the call was successful or not. If false, then |count|
+  // is undefined.
   bool success = false;
   int count = 0;
 };

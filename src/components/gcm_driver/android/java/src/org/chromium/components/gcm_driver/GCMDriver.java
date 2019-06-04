@@ -4,15 +4,19 @@
 
 package org.chromium.components.gcm_driver;
 
-import android.os.AsyncTask;
+import android.os.SystemClock;
 
 import org.chromium.base.Log;
 import org.chromium.base.ThreadUtils;
 import org.chromium.base.VisibleForTesting;
 import org.chromium.base.annotations.CalledByNative;
 import org.chromium.base.annotations.JNINamespace;
+import org.chromium.base.metrics.RecordHistogram;
+import org.chromium.base.task.AsyncTask;
 
 import java.io.IOException;
+import java.util.Set;
+import java.util.concurrent.TimeUnit;
 
 /**
  * This class is the Java counterpart to the C++ GCMDriverAndroid class.
@@ -48,6 +52,30 @@ public class GCMDriver {
             throw new IllegalStateException("Already instantiated");
         }
         sInstance = new GCMDriver(nativeGCMDriverAndroid);
+        // Don't bother to read the stored messages unless there are actually
+        // messages persisted on disk. Calling
+        // LazySubscriptionsManager.hasPersistedMessages() should be a cheap way
+        // to avoid unnecessary disk reads.
+        if (LazySubscriptionsManager.hasPersistedMessages()) {
+            long time = SystemClock.elapsedRealtime();
+            Set<String> lazySubscriptionIds = LazySubscriptionsManager.getLazySubscriptionIds();
+            for (String id : lazySubscriptionIds) {
+                GCMMessage[] messages = LazySubscriptionsManager.readMessages(id);
+                for (GCMMessage message : messages) {
+                    dispatchMessage(message);
+                }
+                LazySubscriptionsManager.deletePersistedMessagesForSubscriptionId(id);
+            }
+            LazySubscriptionsManager.storeHasPersistedMessages(/*hasPersistedMessages=*/false);
+
+            long duration = SystemClock.elapsedRealtime() - time;
+            // Call RecordHistogram.recordTimesHistogram() on a background thread to avoid expensive
+            // JNI calls in the critical path.
+            AsyncTask.THREAD_POOL_EXECUTOR.execute(() -> {
+                RecordHistogram.recordTimesHistogram("PushMessaging.TimeToReadPersistedMessages",
+                        duration, TimeUnit.MILLISECONDS);
+            });
+        }
         return sInstance;
     }
 
@@ -64,9 +92,9 @@ public class GCMDriver {
 
     @CalledByNative
     private void register(final String appId, final String senderId) {
-        new AsyncTask<Void, Void, String>() {
+        new AsyncTask<String>() {
             @Override
-            protected String doInBackground(Void... voids) {
+            protected String doInBackground() {
                 try {
                     String subtype = appId;
                     String registrationId = mSubscriber.subscribe(senderId, subtype, null);
@@ -81,14 +109,15 @@ public class GCMDriver {
                 nativeOnRegisterFinished(mNativeGCMDriverAndroid, appId, registrationId,
                                          !registrationId.isEmpty());
             }
-        }.execute();
+        }
+                .executeOnExecutor(AsyncTask.THREAD_POOL_EXECUTOR);
     }
 
     @CalledByNative
     private void unregister(final String appId, final String senderId) {
-        new AsyncTask<Void, Void, Boolean>() {
+        new AsyncTask<Boolean>() {
             @Override
-            protected Boolean doInBackground(Void... voids) {
+            protected Boolean doInBackground() {
                 try {
                     String subtype = appId;
                     mSubscriber.unsubscribe(senderId, subtype, null);
@@ -103,7 +132,8 @@ public class GCMDriver {
             protected void onPostExecute(Boolean success) {
                 nativeOnUnregisterFinished(mNativeGCMDriverAndroid, appId, success);
             }
-        }.execute();
+        }
+                .executeOnExecutor(AsyncTask.THREAD_POOL_EXECUTOR);
     }
 
     // The caller of this function is responsible for ensuring the browser process is initialized.

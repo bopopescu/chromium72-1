@@ -15,15 +15,8 @@
 #include "ui/display/display.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/geometry/size.h"
+#include "ui/platform_window/platform_window_init_properties.h"
 #include "ui/wm/core/default_screen_position_client.h"
-
-// neva include
-#include "components/guest_view/browser/guest_view_base.h"
-#include "content/public/browser/browser_context.h"
-#include "content/public/browser/browser_plugin_guest_manager.h"
-#include "content/public/browser/render_frame_host.h"
-#include "content/public/browser/web_contents.h"
-#include "extensions/browser/guest_view/web_view/web_view_guest.h"
 
 namespace extensions {
 
@@ -110,8 +103,9 @@ RootWindowController::RootWindowController(
       screen_position_client_(std::make_unique<ScreenPositionClient>()) {
   DCHECK(desktop_delegate_);
   DCHECK(browser_context_);
-  host_.reset(aura::WindowTreeHost::Create(bounds));
 
+  host_ =
+      aura::WindowTreeHost::Create(ui::PlatformWindowInitProperties{bounds});
   host_->InitHost();
   host_->window()->Show();
 
@@ -180,47 +174,6 @@ void RootWindowController::OnHostCloseRequested(aura::WindowTreeHost* host) {
   // The ShellDesktopControllerAura will delete us.
   desktop_delegate_->CloseRootWindowController(this);
 }
-
-#if defined(USE_OZONE) && defined(OZONE_PLATFORM_WAYLAND_EXTERNAL)
-void RootWindowController::OnWindowHostStateChanged(aura::WindowTreeHost* host,
-                                                    ui::WidgetState new_state) {
-  if (app_windows_.empty())
-    return;
-
-  if (new_state == ui::WidgetState::MINIMIZED ||
-      new_state == ui::WidgetState::MAXIMIZED) {
-    for (AppWindow* app_window : app_windows_) {
-      content::WebContents* web_contents = app_window->web_contents();
-      if (web_contents == nullptr)
-        continue;
-      content::BrowserContext* browser_context =
-          web_contents->GetBrowserContext();
-      if (browser_context == nullptr ||
-          browser_context->GetGuestManager() == nullptr)
-        continue;
-      browser_context->GetGuestManager()->ForEachGuest(
-          web_contents,
-          base::Bind([](ui::WidgetState new_state, content::WebContents* guest_contents) {
-            WebViewGuest* guest_view =
-                guest_view::GuestViewBase::FromWebContents(guest_contents)
-                    ->As<WebViewGuest>();
-            // Suspend or resume only for non-suspended WebViewGuest
-            // Embeder will take care of suspended WebViewGuest
-#if defined(USE_NEVA_MEDIA)
-            if (guest_view != nullptr && !guest_view->is_suspended())
-              for (auto* rfh : guest_contents->GetAllFrames()) {
-                if (new_state == ui::WidgetState::MINIMIZED)
-                  rfh->SuspendMedia();
-                else if (new_state == ui::WidgetState::MAXIMIZED)
-                  rfh->ResumeMedia();
-              }
-#endif
-            return false;
-          }, new_state));
-    }
-  }
-}
-#endif
 
 void RootWindowController::OnAppWindowRemoved(AppWindow* window) {
   if (app_windows_.empty())

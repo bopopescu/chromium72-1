@@ -9,11 +9,10 @@
 #include "ui/accessibility/ax_node_data.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/views/layout/fill_layout.h"
-
 namespace ash {
 
 TrayInfoLabel::TrayInfoLabel(TrayInfoLabel::Delegate* delegate, int message_id)
-    : ActionableView(nullptr /* owner */, TrayPopupInkDropStyle::FILL_BOUNDS),
+    : ActionableView(TrayPopupInkDropStyle::FILL_BOUNDS),
       label_(TrayPopupUtils::CreateDefaultLabel()),
       message_id_(message_id),
       delegate_(delegate) {
@@ -30,6 +29,8 @@ TrayInfoLabel::TrayInfoLabel(TrayInfoLabel::Delegate* delegate, int message_id)
   tri_view->AddView(TriView::Container::CENTER, label_);
 
   AddChildView(tri_view);
+  SetFocusBehavior(IsClickable() ? FocusBehavior::ALWAYS
+                                 : FocusBehavior::NEVER);
 
   Update(message_id);
 }
@@ -42,10 +43,10 @@ void TrayInfoLabel::Update(int message_id) {
   TrayPopupItemStyle::FontStyle font_style;
 
   if (IsClickable()) {
-    SetInkDropMode(InkDropHostView::InkDropMode::ON);
+    SetInkDropMode(InkDropMode::ON);
     font_style = TrayPopupItemStyle::FontStyle::CLICKABLE_SYSTEM_INFO;
   } else {
-    SetInkDropMode(InkDropHostView::InkDropMode::OFF);
+    SetInkDropMode(InkDropMode::OFF);
     font_style = TrayPopupItemStyle::FontStyle::SYSTEM_INFO;
   }
 
@@ -55,6 +56,8 @@ void TrayInfoLabel::Update(int message_id) {
   base::string16 text = l10n_util::GetStringUTF16(message_id);
   label_->SetText(text);
   SetAccessibleName(text);
+  SetFocusBehavior(IsClickable() ? FocusBehavior::ALWAYS
+                                 : FocusBehavior::NEVER);
 }
 
 bool TrayInfoLabel::PerformAction(const ui::Event& event) {

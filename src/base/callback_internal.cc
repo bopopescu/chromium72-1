@@ -11,8 +11,16 @@ namespace internal {
 
 namespace {
 
-bool ReturnFalse(const BindStateBase*) {
-  return false;
+bool QueryCancellationTraitsForNonCancellables(
+    const BindStateBase*,
+    BindStateBase::CancellationQueryMode mode) {
+  switch (mode) {
+    case BindStateBase::IS_CANCELLED:
+      return false;
+    case BindStateBase::MAYBE_VALID:
+      return true;
+  }
+  NOTREACHED();
 }
 
 }  // namespace
@@ -23,17 +31,19 @@ void BindStateBaseRefCountTraits::Destruct(const BindStateBase* bind_state) {
 
 BindStateBase::BindStateBase(InvokeFuncStorage polymorphic_invoke,
                              void (*destructor)(const BindStateBase*))
-    : BindStateBase(polymorphic_invoke, destructor, &ReturnFalse) {
-}
+    : BindStateBase(polymorphic_invoke,
+                    destructor,
+                    &QueryCancellationTraitsForNonCancellables) {}
 
-BindStateBase::BindStateBase(InvokeFuncStorage polymorphic_invoke,
-                             void (*destructor)(const BindStateBase*),
-                             bool (*is_cancelled)(const BindStateBase*))
+BindStateBase::BindStateBase(
+    InvokeFuncStorage polymorphic_invoke,
+    void (*destructor)(const BindStateBase*),
+    bool (*query_cancellation_traits)(const BindStateBase*,
+                                      CancellationQueryMode))
     : polymorphic_invoke_(polymorphic_invoke),
       destructor_(destructor),
-      is_cancelled_(is_cancelled) {}
+      query_cancellation_traits_(query_cancellation_traits) {}
 
-CallbackBase::CallbackBase(CallbackBase&& c) noexcept = default;
 CallbackBase& CallbackBase::operator=(CallbackBase&& c) noexcept = default;
 CallbackBase::CallbackBase(const CallbackBaseCopyable& c)
     : bind_state_(c.bind_state_) {}
@@ -62,24 +72,20 @@ bool CallbackBase::IsCancelled() const {
   return bind_state_->IsCancelled();
 }
 
+bool CallbackBase::MaybeValid() const {
+  DCHECK(bind_state_);
+  return bind_state_->MaybeValid();
+}
+
 bool CallbackBase::EqualsInternal(const CallbackBase& other) const {
   return bind_state_ == other.bind_state_;
 }
 
-CallbackBase::CallbackBase(BindStateBase* bind_state)
-    : bind_state_(bind_state ? AdoptRef(bind_state) : nullptr) {
-  DCHECK(!bind_state_.get() || bind_state_->HasOneRef());
-}
-
 CallbackBase::~CallbackBase() = default;
 
-CallbackBaseCopyable::CallbackBaseCopyable(const CallbackBaseCopyable& c)
-    : CallbackBase(nullptr) {
+CallbackBaseCopyable::CallbackBaseCopyable(const CallbackBaseCopyable& c) {
   bind_state_ = c.bind_state_;
 }
-
-CallbackBaseCopyable::CallbackBaseCopyable(CallbackBaseCopyable&& c) noexcept =
-    default;
 
 CallbackBaseCopyable& CallbackBaseCopyable::operator=(
     const CallbackBaseCopyable& c) {

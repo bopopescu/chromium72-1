@@ -32,45 +32,48 @@ namespace syncer {
 
 class SyncPrefObserver {
  public:
-  // Called whenever the pref that controls whether sync is managed
-  // changes.
+  // Called whenever the pref that controls whether sync is managed changes.
   virtual void OnSyncManagedPrefChange(bool is_sync_managed) = 0;
 
  protected:
   virtual ~SyncPrefObserver();
 };
 
-// Use this for the unique machine tag used for session sync.
-class SessionSyncPrefs {
+// Use this for crypto/passphrase-related parts of sync prefs.
+class CryptoSyncPrefs {
  public:
-  virtual ~SessionSyncPrefs();
-  virtual std::string GetSyncSessionsGUID() const = 0;
-  virtual void SetSyncSessionsGUID(const std::string& guid) = 0;
+  virtual ~CryptoSyncPrefs();
+
+  // Use this encryption bootstrap token if we're using an explicit passphrase.
+  virtual std::string GetEncryptionBootstrapToken() const = 0;
+  virtual void SetEncryptionBootstrapToken(const std::string& token) = 0;
+
+  // Use this keystore bootstrap token if we're not using an explicit
+  // passphrase.
+  virtual std::string GetKeystoreEncryptionBootstrapToken() const = 0;
+  virtual void SetKeystoreEncryptionBootstrapToken(
+      const std::string& token) = 0;
+
+  // Get/set for flag indicating that passphrase encryption transition is in
+  // progress.
+  virtual void SetPassphraseEncryptionTransitionInProgress(bool value) = 0;
+  virtual bool GetPassphraseEncryptionTransitionInProgress() const = 0;
+
+  // Get/set for saved Nigori specifics that must be passed to backend
+  // initialization after transition.
+  virtual void SetNigoriSpecificsForPassphraseTransition(
+      const sync_pb::NigoriSpecifics& nigori_specifics) = 0;
+  virtual void GetNigoriSpecificsForPassphraseTransition(
+      sync_pb::NigoriSpecifics* nigori_specifics) const = 0;
 };
 
-// SyncPrefs is a helper class that manages getting, setting, and
-// persisting global sync preferences.  It is not thread-safe, and
-// lives on the UI thread.
-//
-// TODO(akalin): Some classes still read the prefs directly.  Consider
-// passing down a pointer to SyncPrefs to them.  A list of files:
-//
-//   profile_sync_service_startup_unittest.cc
-//   profile_sync_service.cc
-//   sync_setup_flow.cc
-//   sync_setup_wizard.cc
-//   sync_setup_wizard_unittest.cc
-//   two_client_preferences_sync_test.cc
-class SyncPrefs : public SessionSyncPrefs,
+// SyncPrefs is a helper class that manages getting, setting, and persisting
+// global sync preferences. It is not thread-safe, and lives on the UI thread.
+class SyncPrefs : public CryptoSyncPrefs,
                   public base::SupportsWeakPtr<SyncPrefs> {
  public:
-  // |pref_service| may not be null.
-  // Does not take ownership of |pref_service|.
+  // |pref_service| must not be null and must outlive this object.
   explicit SyncPrefs(PrefService* pref_service);
-
-  // For testing.
-  SyncPrefs();
-
   ~SyncPrefs() override;
 
   static void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry);
@@ -78,7 +81,10 @@ class SyncPrefs : public SessionSyncPrefs,
   void AddSyncPrefObserver(SyncPrefObserver* sync_pref_observer);
   void RemoveSyncPrefObserver(SyncPrefObserver* sync_pref_observer);
 
-  // Clears important sync preferences.
+  // Clears "bookkeeping" sync preferences, such as the last synced time,
+  // whether the last shutdown was clean, etc. Does *not* clear sync preferences
+  // which are directly user-controlled, such as the set of preferred data
+  // types.
   void ClearPreferences();
 
   // Getters and setters for global sync prefs.
@@ -111,6 +117,7 @@ class SyncPrefs : public SessionSyncPrefs,
   // |registered_types|.  Returns |registered_types| directly if
   // HasKeepEverythingSynced() is true.
   ModelTypeSet GetPreferredDataTypes(ModelTypeSet registered_types) const;
+
   // |preferred_types| should be a subset of |registered_types|.  All
   // types in |preferred_types| are marked preferred, and all types in
   // |registered_types| \ |preferred_types| are marked not preferred.
@@ -120,21 +127,19 @@ class SyncPrefs : public SessionSyncPrefs,
   void SetPreferredDataTypes(ModelTypeSet registered_types,
                              ModelTypeSet preferred_types);
 
-  // This pref is set outside of sync.
+  // Whether Sync is forced off by enterprise policy. Note that this only covers
+  // one out of two types of policy, "browser" policy. The second kind, "cloud"
+  // policy, is handled directly in ProfileSyncService.
   bool IsManaged() const;
 
   // Use this encryption bootstrap token if we're using an explicit passphrase.
-  std::string GetEncryptionBootstrapToken() const;
-  void SetEncryptionBootstrapToken(const std::string& token);
+  std::string GetEncryptionBootstrapToken() const override;
+  void SetEncryptionBootstrapToken(const std::string& token) override;
 
   // Use this keystore bootstrap token if we're not using an explicit
   // passphrase.
-  std::string GetKeystoreEncryptionBootstrapToken() const;
-  void SetKeystoreEncryptionBootstrapToken(const std::string& token);
-
-  // Use this for the unique machine tag used for session sync.
-  std::string GetSyncSessionsGUID() const override;
-  void SetSyncSessionsGUID(const std::string& guid) override;
+  std::string GetKeystoreEncryptionBootstrapToken() const override;
+  void SetKeystoreEncryptionBootstrapToken(const std::string& token) override;
 
   // Maps |type| to its corresponding preference name.
   static const char* GetPrefNameForDataType(ModelType type);
@@ -184,28 +189,26 @@ class SyncPrefs : public SessionSyncPrefs,
 
   // Get/set for flag indicating that passphrase encryption transition is in
   // progress.
-  void SetPassphraseEncryptionTransitionInProgress(bool value);
-  bool GetPassphraseEncryptionTransitionInProgress() const;
+  void SetPassphraseEncryptionTransitionInProgress(bool value) override;
+  bool GetPassphraseEncryptionTransitionInProgress() const override;
 
   // Get/set for saved Nigori specifics that must be passed to backend
   // initialization after transition.
   void SetNigoriSpecificsForPassphraseTransition(
-      const sync_pb::NigoriSpecifics& nigori_specifics);
+      const sync_pb::NigoriSpecifics& nigori_specifics) override;
   void GetNigoriSpecificsForPassphraseTransition(
-      sync_pb::NigoriSpecifics* nigori_specifics) const;
+      sync_pb::NigoriSpecifics* nigori_specifics) const override;
 
-  // Gets the local sync backend enabled state and its database location.
+  // Gets the local sync backend enabled state.
   bool IsLocalSyncEnabled() const;
-  base::FilePath GetLocalSyncBackendDir() const;
 
   // Returns a ModelTypeSet based on |types| expanded to include pref groups
   // (see |pref_groups_|), but as a subset of |registered_types|.
-  ModelTypeSet ResolvePrefGroups(ModelTypeSet registered_types,
-                                 ModelTypeSet types) const;
+  // Exposed for testing.
+  static ModelTypeSet ResolvePrefGroups(ModelTypeSet registered_types,
+                                        ModelTypeSet types);
 
  private:
-  void RegisterPrefGroups();
-
   static void RegisterDataTypePreferredPref(
       user_prefs::PrefRegistrySyncable* prefs,
       ModelType type,
@@ -215,26 +218,16 @@ class SyncPrefs : public SessionSyncPrefs,
 
   void OnSyncManagedPrefChanged();
 
-  // May be null.
+  // Never null.
   PrefService* const pref_service_;
 
-  base::ObserverList<SyncPrefObserver> sync_pref_observers_;
+  base::ObserverList<SyncPrefObserver>::Unchecked sync_pref_observers_;
 
   // The preference that controls whether sync is under control by
   // configuration management.
   BooleanPrefMember pref_sync_managed_;
 
   bool local_sync_enabled_;
-
-  // Groups of prefs that always have the same value as a "master" pref.
-  // For example, the APPS group has {APP_NOTIFICATIONS, APP_SETTINGS}
-  // (as well as APPS, but that is implied), so
-  //   pref_groups_[APPS] =       { APP_NOTIFICATIONS,
-  //                                          APP_SETTINGS }
-  //   pref_groups_[EXTENSIONS] = { EXTENSION_SETTINGS }
-  // etc.
-  using PrefGroupsMap = std::map<ModelType, ModelTypeSet>;
-  PrefGroupsMap pref_groups_;
 
   SEQUENCE_CHECKER(sequence_checker_);
 

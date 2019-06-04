@@ -12,20 +12,21 @@
 #include "cc/input/touch_action.h"
 #include "content/public/common/console_message_level.h"
 #include "content/public/common/referrer.h"
+#include "content/public/common/renderer_preferences.h"
 #include "content/public/common/web_preferences.h"
 #include "content/public/common/webplugininfo_param_traits.h"
 #include "ipc/ipc_message_macros.h"
-#include "net/base/network_change_notifier.h"
 #include "services/network/public/cpp/network_ipc_param_traits.h"
+#include "services/network/public/mojom/referrer_policy.mojom.h"
 #include "third_party/blink/public/platform/modules/permissions/permission_status.mojom.h"
 #include "third_party/blink/public/platform/web_history_scroll_restoration_type.h"
 #include "third_party/blink/public/platform/web_point.h"
 #include "third_party/blink/public/platform/web_rect.h"
-#include "third_party/blink/public/platform/web_referrer_policy.h"
 #include "third_party/blink/public/platform/web_security_style.h"
 #include "third_party/blink/public/platform/web_url_request.h"
 #include "third_party/blink/public/web/web_frame_serializer_cache_control_policy.h"
 #include "third_party/blink/public/web/window_features.mojom.h"
+#include "ui/accessibility/ax_event.h"
 #include "ui/accessibility/ax_node_data.h"
 #include "ui/accessibility/ax_relative_bounds.h"
 #include "ui/accessibility/ax_tree_update.h"
@@ -43,14 +44,12 @@ IPC_ENUM_TRAITS_VALIDATE(ui::PageTransition,
                          ((value &
                            ui::PageTransition::PAGE_TRANSITION_CORE_MASK) <=
                           ui::PageTransition::PAGE_TRANSITION_LAST_CORE))
-IPC_ENUM_TRAITS_MAX_VALUE(net::NetworkChangeNotifier::ConnectionType,
-                          net::NetworkChangeNotifier::CONNECTION_LAST)
 IPC_ENUM_TRAITS_MAX_VALUE(content::ConsoleMessageLevel,
                           content::CONSOLE_MESSAGE_LEVEL_LAST)
 IPC_ENUM_TRAITS_MAX_VALUE(blink::WebFrameSerializerCacheControlPolicy,
                           blink::WebFrameSerializerCacheControlPolicy::kLast)
-IPC_ENUM_TRAITS_MAX_VALUE(blink::WebReferrerPolicy,
-                          blink::kWebReferrerPolicyLast)
+IPC_ENUM_TRAITS_MAX_VALUE(network::mojom::ReferrerPolicy,
+                          network::mojom::ReferrerPolicy::kMaxValue)
 IPC_ENUM_TRAITS_MAX_VALUE(blink::WebHistoryScrollRestorationType,
                           blink::kWebHistoryScrollRestorationManual)
 IPC_ENUM_TRAITS_MAX_VALUE(blink::WebSecurityStyle, blink::kWebSecurityStyleLast)
@@ -134,7 +133,7 @@ IPC_STRUCT_TRAITS_BEGIN(content::WebPreferences)
   IPC_STRUCT_TRAITS_MEMBER(application_cache_enabled)
   IPC_STRUCT_TRAITS_MEMBER(tabs_to_links)
   IPC_STRUCT_TRAITS_MEMBER(history_entry_requires_user_gesture)
-  IPC_STRUCT_TRAITS_MEMBER(disable_pushstate_throttle)
+  IPC_STRUCT_TRAITS_MEMBER(disable_ipc_flooding_protection)
   IPC_STRUCT_TRAITS_MEMBER(hyperlink_auditing_enabled)
   IPC_STRUCT_TRAITS_MEMBER(allow_universal_access_from_file_urls)
   IPC_STRUCT_TRAITS_MEMBER(allow_file_access_from_file_urls)
@@ -198,13 +197,13 @@ IPC_STRUCT_TRAITS_BEGIN(content::WebPreferences)
   IPC_STRUCT_TRAITS_MEMBER(user_gesture_required_for_presentation)
   IPC_STRUCT_TRAITS_MEMBER(text_track_margin_percentage)
   IPC_STRUCT_TRAITS_MEMBER(save_previous_document_resources)
-#if defined(OS_ANDROID)
   IPC_STRUCT_TRAITS_MEMBER(text_autosizing_enabled)
+  IPC_STRUCT_TRAITS_MEMBER(double_tap_to_zoom_enabled)
+#if defined(OS_ANDROID)
   IPC_STRUCT_TRAITS_MEMBER(font_scale_factor)
   IPC_STRUCT_TRAITS_MEMBER(device_scale_adjustment)
   IPC_STRUCT_TRAITS_MEMBER(force_enable_zoom)
   IPC_STRUCT_TRAITS_MEMBER(fullscreen_supported)
-  IPC_STRUCT_TRAITS_MEMBER(double_tap_to_zoom_enabled)
   IPC_STRUCT_TRAITS_MEMBER(media_playback_gesture_whitelist_scope)
   IPC_STRUCT_TRAITS_MEMBER(default_video_poster_url)
   IPC_STRUCT_TRAITS_MEMBER(support_deprecated_target_density_dpi)
@@ -233,16 +232,17 @@ IPC_STRUCT_TRAITS_BEGIN(content::WebPreferences)
   IPC_STRUCT_TRAITS_MEMBER(default_minimum_page_scale_factor)
   IPC_STRUCT_TRAITS_MEMBER(default_maximum_page_scale_factor)
   IPC_STRUCT_TRAITS_MEMBER(hide_download_ui)
-  IPC_STRUCT_TRAITS_MEMBER(background_video_track_optimization_enabled)
   IPC_STRUCT_TRAITS_MEMBER(presentation_receiver)
   IPC_STRUCT_TRAITS_MEMBER(media_controls_enabled)
   IPC_STRUCT_TRAITS_MEMBER(do_not_update_selection_on_mutating_selection_range)
-#if defined(USE_NEVA_MEDIA)
-  IPC_STRUCT_TRAITS_MEMBER(max_timeupdate_event_frequency)
-#endif
   IPC_STRUCT_TRAITS_MEMBER(autoplay_policy)
   IPC_STRUCT_TRAITS_MEMBER(low_priority_iframes_threshold)
   IPC_STRUCT_TRAITS_MEMBER(picture_in_picture_enabled)
+  IPC_STRUCT_TRAITS_MEMBER(translate_service_available)
+  IPC_STRUCT_TRAITS_MEMBER(network_quality_estimator_web_holdback)
+  IPC_STRUCT_TRAITS_MEMBER(lazy_load_enabled)
+  IPC_STRUCT_TRAITS_MEMBER(lazy_frame_loading_distance_thresholds_px)
+  IPC_STRUCT_TRAITS_MEMBER(lazy_image_loading_distance_thresholds_px)
 IPC_STRUCT_TRAITS_END()
 
 IPC_STRUCT_TRAITS_BEGIN(blink::mojom::WindowFeatures)
@@ -282,6 +282,66 @@ IPC_STRUCT_TRAITS_BEGIN(ui::AXRelativeBounds)
   IPC_STRUCT_TRAITS_MEMBER(offset_container_id)
   IPC_STRUCT_TRAITS_MEMBER(bounds)
   IPC_STRUCT_TRAITS_MEMBER(transform)
+IPC_STRUCT_TRAITS_END()
+
+IPC_STRUCT_TRAITS_BEGIN(ui::AXEvent)
+  IPC_STRUCT_TRAITS_MEMBER(event_type)
+  IPC_STRUCT_TRAITS_MEMBER(id)
+  IPC_STRUCT_TRAITS_MEMBER(event_from)
+  IPC_STRUCT_TRAITS_MEMBER(action_request_id)
+IPC_STRUCT_TRAITS_END()
+
+IPC_ENUM_TRAITS_MAX_VALUE(gfx::FontRenderParams::Hinting,
+                          gfx::FontRenderParams::HINTING_MAX)
+IPC_ENUM_TRAITS_MAX_VALUE(gfx::FontRenderParams::SubpixelRendering,
+                          gfx::FontRenderParams::SUBPIXEL_RENDERING_MAX)
+
+IPC_STRUCT_TRAITS_BEGIN(content::RendererPreferences)
+  IPC_STRUCT_TRAITS_MEMBER(can_accept_load_drops)
+  IPC_STRUCT_TRAITS_MEMBER(should_antialias_text)
+  IPC_STRUCT_TRAITS_MEMBER(hinting)
+  IPC_STRUCT_TRAITS_MEMBER(use_autohinter)
+  IPC_STRUCT_TRAITS_MEMBER(use_bitmaps)
+  IPC_STRUCT_TRAITS_MEMBER(subpixel_rendering)
+  IPC_STRUCT_TRAITS_MEMBER(use_subpixel_positioning)
+  IPC_STRUCT_TRAITS_MEMBER(focus_ring_color)
+  IPC_STRUCT_TRAITS_MEMBER(active_selection_bg_color)
+  IPC_STRUCT_TRAITS_MEMBER(active_selection_fg_color)
+  IPC_STRUCT_TRAITS_MEMBER(inactive_selection_bg_color)
+  IPC_STRUCT_TRAITS_MEMBER(inactive_selection_fg_color)
+  IPC_STRUCT_TRAITS_MEMBER(browser_handles_all_top_level_requests)
+  IPC_STRUCT_TRAITS_MEMBER(caret_blink_interval)
+  IPC_STRUCT_TRAITS_MEMBER(use_custom_colors)
+  IPC_STRUCT_TRAITS_MEMBER(enable_referrers)
+  IPC_STRUCT_TRAITS_MEMBER(enable_do_not_track)
+  IPC_STRUCT_TRAITS_MEMBER(enable_encrypted_media)
+  IPC_STRUCT_TRAITS_MEMBER(webrtc_ip_handling_policy)
+  IPC_STRUCT_TRAITS_MEMBER(webrtc_udp_min_port)
+  IPC_STRUCT_TRAITS_MEMBER(webrtc_udp_max_port)
+  IPC_STRUCT_TRAITS_MEMBER(user_agent_override)
+  IPC_STRUCT_TRAITS_MEMBER(accept_languages)
+  IPC_STRUCT_TRAITS_MEMBER(disable_client_blocked_error_page)
+  IPC_STRUCT_TRAITS_MEMBER(plugin_fullscreen_allowed)
+  IPC_STRUCT_TRAITS_MEMBER(network_contry_iso)
+#if defined(OS_LINUX)
+  IPC_STRUCT_TRAITS_MEMBER(system_font_family_name)
+#endif
+#if defined(OS_WIN)
+  IPC_STRUCT_TRAITS_MEMBER(caption_font_family_name)
+  IPC_STRUCT_TRAITS_MEMBER(caption_font_height)
+  IPC_STRUCT_TRAITS_MEMBER(small_caption_font_family_name)
+  IPC_STRUCT_TRAITS_MEMBER(small_caption_font_height)
+  IPC_STRUCT_TRAITS_MEMBER(menu_font_family_name)
+  IPC_STRUCT_TRAITS_MEMBER(menu_font_height)
+  IPC_STRUCT_TRAITS_MEMBER(status_font_family_name)
+  IPC_STRUCT_TRAITS_MEMBER(status_font_height)
+  IPC_STRUCT_TRAITS_MEMBER(message_font_family_name)
+  IPC_STRUCT_TRAITS_MEMBER(message_font_height)
+  IPC_STRUCT_TRAITS_MEMBER(vertical_scroll_bar_width_in_dips)
+  IPC_STRUCT_TRAITS_MEMBER(horizontal_scroll_bar_height_in_dips)
+  IPC_STRUCT_TRAITS_MEMBER(arrow_bitmap_height_vertical_scroll_bar_in_dips)
+  IPC_STRUCT_TRAITS_MEMBER(arrow_bitmap_width_horizontal_scroll_bar_in_dips)
+#endif
 IPC_STRUCT_TRAITS_END()
 
 #endif  // CONTENT_PUBLIC_COMMON_COMMON_PARAM_TRAITS_MACROS_H_

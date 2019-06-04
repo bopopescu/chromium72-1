@@ -7,9 +7,11 @@
 
 #include <stdint.h>
 
+#include <memory>
 #include <string>
 #include <vector>
 
+#include "base/containers/flat_map.h"
 #include "base/macros.h"
 #include "url/gurl.h"
 
@@ -19,6 +21,7 @@ class Version;
 
 namespace update_client {
 class CommandLineConfigPolicy;
+class ProtocolHandlerFactory;
 }
 
 namespace component_updater {
@@ -61,9 +64,8 @@ class ConfiguratorImpl {
   std::string GetOSLongName() const;
 
   // Parameters added to each url request. It can be empty if none are needed.
-  // The return string must be safe for insertion as an attribute in an
-  // XML element.
-  std::string ExtraRequestParams() const;
+  // Returns a map of name-value pairs that match ^[-_a-zA-Z0-9]$ regex.
+  base::flat_map<std::string, std::string> ExtraRequestParams() const;
 
   // Provides a hint for the server to control the order in which multiple
   // download urls are returned.
@@ -85,14 +87,24 @@ class ConfiguratorImpl {
   // Returns the key hash corresponding to a CRX trusted by ActionRun.
   std::vector<uint8_t> GetRunActionKeyHash() const;
 
+  // Returns the app GUID with which Chrome is registered with Google Update, or
+  // an empty string if this brand does not integrate with Google Update.
+  std::string GetAppGuid() const;
+
+  // Returns the class factory to create protocol parser and protocol
+  // serializer object instances.
+  std::unique_ptr<update_client::ProtocolHandlerFactory>
+  GetProtocolHandlerFactory() const;
+
  private:
-  std::string extra_info_;
-  bool background_downloads_enabled_;
-  bool deltas_enabled_;
-  bool fast_update_;
-  bool pings_enabled_;
-  bool require_encryption_;
-  GURL url_source_override_;
+  base::flat_map<std::string, std::string> extra_info_;
+  const bool background_downloads_enabled_;
+  const bool deltas_enabled_;
+  const bool fast_update_;
+  const bool pings_enabled_;
+  const bool require_encryption_;
+  const GURL url_source_override_;
+  const int initial_delay_;
 
   DISALLOW_COPY_AND_ASSIGN(ConfiguratorImpl);
 };

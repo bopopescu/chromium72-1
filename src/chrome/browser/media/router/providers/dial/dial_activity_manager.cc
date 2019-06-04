@@ -5,7 +5,6 @@
 #include "chrome/browser/media/router/providers/dial/dial_activity_manager.h"
 
 #include "base/strings/string_split.h"
-#include "base/strings/stringprintf.h"
 #include "chrome/browser/media/router/providers/dial/dial_internal_message_util.h"
 #include "chrome/common/media_router/media_source_helper.h"
 #include "net/base/url_util.h"
@@ -47,16 +46,6 @@ GURL GetApplicationInstanceURL(
     return GURL();
 
   return app_instance_url;
-}
-
-MediaRoute::Id GetMediaRouteId(const std::string& presentation_id,
-                               const MediaSink::Id& sink_id,
-                               const MediaSource& source) {
-  // TODO(https://crbug.com/816628): Can the route ID just be the presentation
-  // id?
-  return base::StringPrintf("urn:x-org.chromium:media:route:%s/%s/%s",
-                            presentation_id.c_str(), sink_id.c_str(),
-                            source.id().c_str());
 }
 
 }  // namespace
@@ -110,9 +99,10 @@ std::unique_ptr<DialActivity> DialActivity::From(
 
   const MediaSink::Id& sink_id = sink.sink().id();
   DialLaunchInfo launch_info(app_name, post_data, client_id, app_launch_url);
-  MediaRoute route(GetMediaRouteId(presentation_id, sink_id, source), source,
-                   sink_id, app_name,
-                   /* is_local */ true, /* for_display */ true);
+  MediaRoute route(
+      MediaRoute::GetMediaRouteId(presentation_id, sink_id, source), source,
+      sink_id, app_name,
+      /* is_local */ true, /* for_display */ true);
   route.set_presentation_id(presentation_id);
   route.set_incognito(incognito);
   return std::make_unique<DialActivity>(launch_info, route);
@@ -292,9 +282,10 @@ void DialActivityManager::OnLaunchError(const MediaRoute::Id& route_id,
   if (record_it == records_.end())
     return;
 
-  // Clean up the activity / route.
-  std::move(record_it->second->pending_launch_request->callback).Run(false);
+  // Move the callback out of the record since we are erasing the record.
+  auto cb = std::move(record_it->second->pending_launch_request->callback);
   records_.erase(record_it);
+  std::move(cb).Run(false);
 }
 
 void DialActivityManager::OnStopSuccess(const MediaRoute::Id& route_id,

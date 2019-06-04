@@ -28,11 +28,11 @@
 
 #if defined(TOOLKIT_VIEWS)
 #include "chrome/browser/ui/views/chrome_constrained_window_views_client.h"
-#include "chrome/browser/ui/views/harmony/chrome_layout_provider.h"
+#include "chrome/browser/ui/views/chrome_layout_provider.h"
 #include "components/constrained_window/constrained_window_views.h"
 
 #if defined(OS_CHROMEOS)
-#include "chrome/test/base/ash_test_environment_chrome.h"
+#include "ash/test/ash_test_views_delegate.h"
 #else
 #include "ui/views/test/test_views_delegate.h"
 #endif
@@ -44,16 +44,32 @@ using content::RenderFrameHostTester;
 using content::WebContents;
 
 BrowserWithTestWindowTest::BrowserWithTestWindowTest()
-    : BrowserWithTestWindowTest(Browser::TYPE_TABBED, false) {}
+    : BrowserWithTestWindowTest(Browser::TYPE_TABBED,
+                                false,
+                                content::TestBrowserThreadBundle::DEFAULT) {}
+
+BrowserWithTestWindowTest::BrowserWithTestWindowTest(
+    content::TestBrowserThreadBundle::Options thread_bundle_options)
+    : BrowserWithTestWindowTest(Browser::TYPE_TABBED,
+                                false,
+                                thread_bundle_options) {}
 
 BrowserWithTestWindowTest::BrowserWithTestWindowTest(Browser::Type browser_type,
                                                      bool hosted_app)
-    : browser_type_(browser_type), hosted_app_(hosted_app) {
+    : BrowserWithTestWindowTest(browser_type,
+                                hosted_app,
+                                content::TestBrowserThreadBundle::DEFAULT) {}
+
+BrowserWithTestWindowTest::BrowserWithTestWindowTest(
+    Browser::Type browser_type,
+    bool hosted_app,
+    content::TestBrowserThreadBundle::Options thread_bundle_options)
+    : thread_bundle_(thread_bundle_options),
 #if defined(OS_CHROMEOS)
-  ash_test_environment_ = std::make_unique<AshTestEnvironmentChrome>();
-  ash_test_helper_ =
-      std::make_unique<ash::AshTestHelper>(ash_test_environment_.get());
+      ash_test_helper_(&ash_test_environment_),
 #endif
+      browser_type_(browser_type),
+      hosted_app_(hosted_app) {
 }
 
 BrowserWithTestWindowTest::~BrowserWithTestWindowTest() {}
@@ -61,10 +77,16 @@ BrowserWithTestWindowTest::~BrowserWithTestWindowTest() {}
 void BrowserWithTestWindowTest::SetUp() {
   testing::Test::SetUp();
 #if defined(OS_CHROMEOS)
-  ash_test_helper_->SetUp(true);
+  ash_test_helper_.SetUp(true);
+  ash_test_helper_.SetRunningOutsideAsh();
 #elif defined(TOOLKIT_VIEWS)
   views_test_helper_.reset(new views::ScopedViewsTestHelper());
 #endif
+
+  // This must be created after ash_test_helper_ is set up so that it doesn't
+  // create an InputDeviceManager.
+  rvh_test_enabler_ = std::make_unique<content::RenderViewHostTestEnabler>();
+
 #if defined(TOOLKIT_VIEWS)
   SetConstrainedWindowViewsClient(CreateChromeConstrainedWindowViewsClient());
 
@@ -111,7 +133,7 @@ void BrowserWithTestWindowTest::TearDown() {
   profile_manager_.reset();
 
 #if defined(OS_CHROMEOS)
-  ash_test_helper_->TearDown();
+  ash_test_helper_.TearDown();
 #elif defined(TOOLKIT_VIEWS)
   views_test_helper_.reset();
 #endif
@@ -126,7 +148,7 @@ void BrowserWithTestWindowTest::TearDown() {
 
 gfx::NativeWindow BrowserWithTestWindowTest::GetContext() {
 #if defined(OS_CHROMEOS)
-  return ash_test_helper_->CurrentContext();
+  return ash_test_helper_.CurrentContext();
 #elif defined(TOOLKIT_VIEWS)
   return views_test_helper_->GetContext();
 #else

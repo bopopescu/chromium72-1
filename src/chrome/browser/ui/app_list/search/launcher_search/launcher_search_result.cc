@@ -6,7 +6,7 @@
 
 #include <utility>
 
-#include "ash/public/cpp/app_list/app_list_constants.h"
+#include "ash/public/cpp/app_list/app_list_config.h"
 #include "base/memory/ptr_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/chromeos/launcher_search_provider/launcher_search_provider_service.h"
@@ -40,7 +40,8 @@ LauncherSearchResult::LauncherSearchResult(
             chromeos::launcher_search_provider::kMaxSearchResultScore);
 
   icon_image_loader_ = base::MakeRefCounted<LauncherSearchIconImageLoaderImpl>(
-      icon_url, profile, extension, GetPreferredIconDimension(display_type()),
+      icon_url, profile, extension,
+      AppListConfig::instance().GetPreferredIconDimension(display_type()),
       std::move(error_reporter));
   icon_image_loader_->LoadResources();
 
@@ -76,7 +77,7 @@ void LauncherSearchResult::OnIconImageChanged(
 void LauncherSearchResult::OnBadgeIconImageChanged(
     LauncherSearchIconImageLoader* image_loader) {
   DCHECK_EQ(image_loader, icon_image_loader_.get());
-  SetBadgeIcon(icon_image_loader_->GetBadgeIconImage());
+  // No badging is required.
 }
 
 LauncherSearchResult::LauncherSearchResult(
@@ -105,7 +106,6 @@ void LauncherSearchResult::Initialize() {
   icon_image_loader_->AddObserver(this);
 
   SetIcon(icon_image_loader_->GetIconImage());
-  SetBadgeIcon(icon_image_loader_->GetBadgeIconImage());
 }
 
 std::string LauncherSearchResult::GetSearchResultId() {

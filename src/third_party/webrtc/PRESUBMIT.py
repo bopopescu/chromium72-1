@@ -39,7 +39,6 @@ CPPLINT_BLACKLIST = [
   'test',
   'tools_webrtc',
   'voice_engine',
-  'third_party',
 ]
 
 # These filters will always be removed, even if the caller specifies a filter
@@ -109,6 +108,14 @@ SOURCES_RE = re.compile(r'sources \+?= \[(?P<sources>.*?)\]',
 
 # FILE_PATH_RE matchies a file path.
 FILE_PATH_RE = re.compile(r'"(?P<file_path>(\w|\/)+)(?P<extension>\.\w+)"')
+
+
+def FindSrcDirPath(starting_dir):
+  """Returns the abs path to the src/ dir of the project."""
+  src_dir = starting_dir
+  while os.path.basename(src_dir) != 'src':
+    src_dir = os.path.normpath(os.path.join(src_dir, os.pardir))
+  return src_dir
 
 
 @contextmanager
@@ -416,14 +423,37 @@ def CheckNoPackageBoundaryViolations(input_api, gn_files, output_api):
   return []
 
 
-def _ReportErrorFileAndLineNumber(filename, line_num):
+def _ReportFileAndLine(filename, line_num):
   """Default error formatter for _FindNewViolationsOfRule."""
   return '%s (line %s)' % (filename, line_num)
 
 
+def CheckNoWarningSuppressionFlagsAreAdded(gn_files, input_api, output_api,
+                                           error_formatter=_ReportFileAndLine):
+  """Make sure that warning suppression flags are not added wihtout a reason."""
+  msg = ('Usage of //build/config/clang:extra_warnings is discouraged '
+         'in WebRTC.\n'
+         'If you are not adding this code (e.g. you are just moving '
+         'existing code) or you want to add an exception,\n'
+         'you can add a comment on the line that causes the problem:\n\n'
+         '"-Wno-odr"  # no-presubmit-check TODO(bugs.webrtc.org/BUG_ID)\n'
+         '\n'
+         'Affected files:\n')
+  errors = []  # 2-element tuples with (file, line number)
+  clang_warn_re = input_api.re.compile(r'//build/config/clang:extra_warnings')
+  no_presubmit_re = input_api.re.compile(
+      r'# no-presubmit-check TODO\(bugs\.webrtc\.org/\d+\)')
+  for f in gn_files:
+    for line_num, line in f.ChangedContents():
+      if clang_warn_re.search(line) and not no_presubmit_re.search(line):
+        errors.append(error_formatter(f.LocalPath(), line_num))
+  if errors:
+    return [output_api.PresubmitError(msg, errors)]
+  return []
+
 def CheckNoStreamUsageIsAdded(input_api, output_api,
                               source_file_filter,
-                              error_formatter=_ReportErrorFileAndLineNumber):
+                              error_formatter=_ReportFileAndLine):
   """Make sure that no more dependencies on stringstream are added."""
   error_msg = ('Usage of <sstream>, <istream> and <ostream> in WebRTC is '
                'deprecated.\n'
@@ -451,7 +481,8 @@ def CheckNoStreamUsageIsAdded(input_api, output_api,
   file_filter = lambda x: (input_api.FilterSourceFile(x)
                            and source_file_filter(x))
   for f in input_api.AffectedSourceFiles(file_filter):
-    if f.LocalPath() == 'PRESUBMIT.py':
+    # Usage of stringstream is allowed under examples/.
+    if f.LocalPath() == 'PRESUBMIT.py' or f.LocalPath().startswith('examples'):
       continue
     for line_num, line in f.ChangedContents():
       if ((include_re.search(line) or usage_re.search(line))
@@ -502,11 +533,10 @@ def CheckCheckIncludesIsNotUsed(gn_files, output_api):
   return result
 
 
-def CheckGnChanges(input_api, output_api, source_file_filter):
+def CheckGnChanges(input_api, output_api):
   file_filter = lambda x: (input_api.FilterSourceFile(
       x, white_list=(r'.+\.(gn|gni)$',),
-      black_list=(r'.*/presubmit_checks_lib/testdata/.*',))
-      and source_file_filter(x))
+      black_list=(r'.*/presubmit_checks_lib/testdata/.*',)))
 
   gn_files = []
   for f in input_api.AffectedSourceFiles(file_filter):
@@ -520,6 +550,8 @@ def CheckGnChanges(input_api, output_api, source_file_filter):
                                                    output_api))
     result.extend(CheckPublicDepsIsNotUsed(gn_files, input_api, output_api))
     result.extend(CheckCheckIncludesIsNotUsed(gn_files, output_api))
+    result.extend(CheckNoWarningSuppressionFlagsAreAdded(gn_files, input_api,
+                                                          output_api))
   return result
 
 
@@ -531,7 +563,7 @@ def CheckGnGen(input_api, output_api):
   with _AddToPath(input_api.os_path.join(
       input_api.PresubmitLocalPath(), 'tools_webrtc', 'presubmit_checks_lib')):
     from gn_check import RunGnCheck
-  errors = RunGnCheck(input_api.PresubmitLocalPath())[:5]
+  errors = RunGnCheck(FindSrcDirPath(input_api.PresubmitLocalPath()))[:5]
   if errors:
     return [output_api.PresubmitPromptWarning(
         'Some #includes do not match the build dependency graph. Please run:\n'
@@ -550,8 +582,8 @@ def CheckUnwantedDependencies(input_api, output_api, source_file_filter):
   # We need to wait until we have an input_api object and use this
   # roundabout construct to import checkdeps because this file is
   # eval-ed and thus doesn't have __file__.
-  checkdeps_path = input_api.os_path.join(input_api.PresubmitLocalPath(),
-                                          'buildtools', 'checkdeps')
+  src_path = FindSrcDirPath(input_api.PresubmitLocalPath())
+  checkdeps_path = input_api.os_path.join(src_path, 'buildtools', 'checkdeps')
   if not os.path.exists(checkdeps_path):
     return [output_api.PresubmitError(
         'Cannot find checkdeps at %s\nHave you run "gclient sync" to '
@@ -766,11 +798,9 @@ def CommonChecks(input_api, output_api):
                   r'^out.*[\\\/].*\.py$',
                   r'^testing[\\\/].*\.py$',
                   r'^third_party[\\\/].*\.py$',
-                  r'^third_party_chromium[\\\/].*\.py$',
                   r'^tools[\\\/].*\.py$',
                   # TODO(phoglund): should arguably be checked.
                   r'^tools_webrtc[\\\/]mb[\\\/].*\.py$',
-                  r'^tools_webrtc[\\\/]valgrind[\\\/].*\.py$',
                   r'^xcodebuild.*[\\\/].*\.py$',),
       pylintrc='pylintrc'))
 
@@ -785,8 +815,7 @@ def CommonChecks(input_api, output_api):
   # Skip long-lines check for DEPS and GN files.
   build_file_filter_list = (r'.+\.gn$', r'.+\.gni$', 'DEPS')
   # Also we will skip most checks for third_party directory.
-  third_party_filter_list = (r'^third_party[\\\/].+',
-                             r'^third_party_chromium[\\\/].+')
+  third_party_filter_list = (r'^third_party[\\\/].+',)
   eighty_char_sources = lambda x: input_api.FilterSourceFile(x,
       black_list=build_file_filter_list + objc_filter_list +
                  third_party_filter_list)
@@ -795,7 +824,6 @@ def CommonChecks(input_api, output_api):
   non_third_party_sources = lambda x: input_api.FilterSourceFile(x,
       black_list=third_party_filter_list)
 
-  results.extend(CheckNoGitRepoInThirdParty(input_api, output_api))
   results.extend(input_api.canned_checks.CheckLongLines(
       input_api, output_api, maxlen=80, source_file_filter=eighty_char_sources))
   results.extend(input_api.canned_checks.CheckLongLines(
@@ -806,9 +834,13 @@ def CommonChecks(input_api, output_api):
   results.extend(input_api.canned_checks.CheckChangeHasNoStrayWhitespace(
       input_api, output_api, source_file_filter=non_third_party_sources))
   results.extend(input_api.canned_checks.CheckAuthorizedAuthor(
-      input_api, output_api))
+      input_api, output_api, bot_whitelist=[
+          'chromium-webrtc-autoroll@webrtc-ci.iam.gserviceaccount.com'
+      ]))
   results.extend(input_api.canned_checks.CheckChangeTodoHasOwner(
       input_api, output_api, source_file_filter=non_third_party_sources))
+  results.extend(input_api.canned_checks.CheckPatchFormatted(
+      input_api, output_api))
   results.extend(CheckNativeApiHeaderChanges(input_api, output_api))
   results.extend(CheckNoIOStreamInHeaders(
       input_api, output_api, source_file_filter=non_third_party_sources))
@@ -816,8 +848,7 @@ def CommonChecks(input_api, output_api):
       input_api, output_api, source_file_filter=non_third_party_sources))
   results.extend(CheckNoFRIEND_TEST(
       input_api, output_api, source_file_filter=non_third_party_sources))
-  results.extend(CheckGnChanges(
-      input_api, output_api, source_file_filter=non_third_party_sources))
+  results.extend(CheckGnChanges(input_api, output_api))
   results.extend(CheckUnwantedDependencies(
       input_api, output_api, source_file_filter=non_third_party_sources))
   results.extend(CheckJSONParseErrors(
@@ -831,27 +862,90 @@ def CommonChecks(input_api, output_api):
       input_api, output_api, source_file_filter=non_third_party_sources))
   results.extend(CheckNoStreamUsageIsAdded(
       input_api, output_api, non_third_party_sources))
-  results.extend(CheckThirdPartyChanges(input_api, output_api))
+  results.extend(CheckAddedDepsHaveTargetApprovals(input_api, output_api))
+  results.extend(CheckApiDepsFileIsUpToDate(input_api, output_api))
+  results.extend(CheckAbslMemoryInclude(
+      input_api, output_api, non_third_party_sources))
   return results
 
 
-def CheckNoGitRepoInThirdParty(input_api, output_api):
-  if os.path.isdir(input_api.os_path.join(
-      input_api.PresubmitLocalPath(), 'third_party', '.git')):
-    return [output_api.PresubmitError("Please remove third_party/.git "
-                                      "directory. This error means that "
-                                      "possibly you also have to apply other "
-                                      "instructions from the May 11th PSA from "
-                                      "titovartem@.")]
+def CheckApiDepsFileIsUpToDate(input_api, output_api):
+  """Check that 'include_rules' in api/DEPS is up to date.
+
+  The file api/DEPS must be kept up to date in order to avoid to avoid to
+  include internal header from WebRTC's api/ headers.
+
+  This check is focused on ensuring that 'include_rules' contains a deny
+  rule for each root level directory. More focused allow rules can be
+  added to 'specific_include_rules'.
+  """
+  results = []
+  api_deps = os.path.join(input_api.PresubmitLocalPath(), 'api', 'DEPS')
+  with open(api_deps) as f:
+    deps_content = _ParseDeps(f.read())
+
+  include_rules = deps_content.get('include_rules', [])
+
+  # Only check top level directories affected by the current CL.
+  dirs_to_check = set()
+  for f in input_api.AffectedFiles():
+    path_tokens = [t for t in f.LocalPath().split(os.sep) if t]
+    if len(path_tokens) > 1:
+      if (path_tokens[0] != 'api' and
+          os.path.isdir(os.path.join(input_api.PresubmitLocalPath(),
+                                     path_tokens[0]))):
+        dirs_to_check.add(path_tokens[0])
+
+  missing_include_rules = set()
+  for p in dirs_to_check:
+    rule = '-%s' % p
+    if rule not in include_rules:
+      missing_include_rules.add(rule)
+
+  if missing_include_rules:
+    error_msg = [
+      'include_rules = [\n',
+      '  ...\n',
+    ]
+
+    for r in sorted(missing_include_rules):
+      error_msg.append('  "%s",\n' % str(r))
+
+    error_msg.append('  ...\n')
+    error_msg.append(']\n')
+
+    results.append(output_api.PresubmitError(
+        'New root level directory detected! WebRTC api/ headers should '
+        'not #include headers from \n'
+        'the new directory, so please update "include_rules" in file\n'
+        '"%s". Example:\n%s\n' % (api_deps, ''.join(error_msg))))
+
+  return results
+
+def CheckAbslMemoryInclude(input_api, output_api, source_file_filter):
+  pattern = input_api.re.compile(
+      r'^#include\s*"absl/memory/memory.h"', input_api.re.MULTILINE)
+  file_filter = lambda f: (f.LocalPath().endswith(('.cc', '.h'))
+                           and source_file_filter(f))
+
+  files = []
+  for f in input_api.AffectedFiles(
+      include_deletes=False, file_filter=file_filter):
+    contents = input_api.ReadFile(f)
+    if pattern.search(contents):
+      continue
+    for _, line in f.ChangedContents():
+      if 'absl::make_unique' in line:
+        files.append(f)
+        break
+
+  if len(files):
+    return [output_api.PresubmitError(
+        'Please include "absl/memory/memory.h" header for'
+        ' absl::make_unique.\nThis header may or may not be included'
+        ' transitively depends on the C++ standard version.',
+        files)]
   return []
-
-
-def CheckThirdPartyChanges(input_api, output_api):
-  with _AddToPath(input_api.os_path.join(
-      input_api.PresubmitLocalPath(), 'tools_webrtc', 'presubmit_checks_lib')):
-    from check_3pp import CheckThirdPartyDirectory
-  return CheckThirdPartyDirectory(input_api, output_api)
-
 
 def CheckChangeOnUpload(input_api, output_api):
   results = []
@@ -864,23 +958,9 @@ def CheckChangeOnUpload(input_api, output_api):
 
 def CheckChangeOnCommit(input_api, output_api):
   results = []
-
-  # We have to skip OWNERS check for chromium-specific third_party deps.
-  chromium_deps_file = input_api.os_path.join(
-      input_api.PresubmitLocalPath(),
-      'THIRD_PARTY_CHROMIUM_DEPS.json')
-  with open(chromium_deps_file, 'rb') as f:
-    chromium_deps = json.load(f).get('dependencies', [])
-  deps_blacklist = []
-  for dep in chromium_deps:
-    deps_blacklist.append(r'^third_party[\\\/]%s[\\\/].+' % dep)
-  deps_filter = lambda x: input_api.FilterSourceFile(
-      x, black_list=deps_blacklist)
-
   results.extend(CommonChecks(input_api, output_api))
   results.extend(VerifyNativeApiHeadersListIsValid(input_api, output_api))
-  results.extend(input_api.canned_checks.CheckOwners(input_api, output_api,
-      source_file_filter=deps_filter))
+  results.extend(input_api.canned_checks.CheckOwners(input_api, output_api))
   results.extend(input_api.canned_checks.CheckChangeWasUploaded(
       input_api, output_api))
   results.extend(input_api.canned_checks.CheckChangeHasDescription(
@@ -935,3 +1015,151 @@ def CheckNewlineAtTheEndOfProtoFiles(input_api, output_api, source_file_filter):
       if len(lines) > 0 and not lines[-1].endswith('\n'):
         results.append(output_api.PresubmitError(error_msg.format(file_path)))
   return results
+
+
+def _ExtractAddRulesFromParsedDeps(parsed_deps):
+  """Extract the rules that add dependencies from a parsed DEPS file.
+
+  Args:
+    parsed_deps: the locals dictionary from evaluating the DEPS file."""
+  add_rules = set()
+  add_rules.update([
+      rule[1:] for rule in parsed_deps.get('include_rules', [])
+      if rule.startswith('+') or rule.startswith('!')
+  ])
+  for _, rules in parsed_deps.get('specific_include_rules',
+                                              {}).iteritems():
+    add_rules.update([
+        rule[1:] for rule in rules
+        if rule.startswith('+') or rule.startswith('!')
+    ])
+  return add_rules
+
+
+def _ParseDeps(contents):
+  """Simple helper for parsing DEPS files."""
+  # Stubs for handling special syntax in the root DEPS file.
+  class VarImpl(object):
+
+    def __init__(self, local_scope):
+      self._local_scope = local_scope
+
+    def Lookup(self, var_name):
+      """Implements the Var syntax."""
+      try:
+        return self._local_scope['vars'][var_name]
+      except KeyError:
+        raise Exception('Var is not defined: %s' % var_name)
+
+  local_scope = {}
+  global_scope = {
+      'Var': VarImpl(local_scope).Lookup,
+  }
+  exec contents in global_scope, local_scope
+  return local_scope
+
+
+def _CalculateAddedDeps(os_path, old_contents, new_contents):
+  """Helper method for _CheckAddedDepsHaveTargetApprovals. Returns
+  a set of DEPS entries that we should look up.
+
+  For a directory (rather than a specific filename) we fake a path to
+  a specific filename by adding /DEPS. This is chosen as a file that
+  will seldom or never be subject to per-file include_rules.
+  """
+  # We ignore deps entries on auto-generated directories.
+  auto_generated_dirs = ['grit', 'jni']
+
+  old_deps = _ExtractAddRulesFromParsedDeps(_ParseDeps(old_contents))
+  new_deps = _ExtractAddRulesFromParsedDeps(_ParseDeps(new_contents))
+
+  added_deps = new_deps.difference(old_deps)
+
+  results = set()
+  for added_dep in added_deps:
+    if added_dep.split('/')[0] in auto_generated_dirs:
+      continue
+    # Assume that a rule that ends in .h is a rule for a specific file.
+    if added_dep.endswith('.h'):
+      results.add(added_dep)
+    else:
+      results.add(os_path.join(added_dep, 'DEPS'))
+  return results
+
+
+def CheckAddedDepsHaveTargetApprovals(input_api, output_api):
+  """When a dependency prefixed with + is added to a DEPS file, we
+  want to make sure that the change is reviewed by an OWNER of the
+  target file or directory, to avoid layering violations from being
+  introduced. This check verifies that this happens.
+  """
+  virtual_depended_on_files = set()
+
+  file_filter = lambda f: not input_api.re.match(
+      r"^third_party[\\\/](WebKit|blink)[\\\/].*", f.LocalPath())
+  for f in input_api.AffectedFiles(include_deletes=False,
+                                   file_filter=file_filter):
+    filename = input_api.os_path.basename(f.LocalPath())
+    if filename == 'DEPS':
+      virtual_depended_on_files.update(_CalculateAddedDeps(
+          input_api.os_path,
+          '\n'.join(f.OldContents()),
+          '\n'.join(f.NewContents())))
+
+  if not virtual_depended_on_files:
+    return []
+
+  if input_api.is_committing:
+    if input_api.tbr:
+      return [output_api.PresubmitNotifyResult(
+          '--tbr was specified, skipping OWNERS check for DEPS additions')]
+    if input_api.dry_run:
+      return [output_api.PresubmitNotifyResult(
+          'This is a dry run, skipping OWNERS check for DEPS additions')]
+    if not input_api.change.issue:
+      return [output_api.PresubmitError(
+          "DEPS approval by OWNERS check failed: this change has "
+          "no change number, so we can't check it for approvals.")]
+    output = output_api.PresubmitError
+  else:
+    output = output_api.PresubmitNotifyResult
+
+  owners_db = input_api.owners_db
+  owner_email, reviewers = (
+      input_api.canned_checks.GetCodereviewOwnerAndReviewers(
+        input_api,
+        owners_db.email_regexp,
+        approval_needed=input_api.is_committing))
+
+  owner_email = owner_email or input_api.change.author_email
+
+  reviewers_plus_owner = set(reviewers)
+  if owner_email:
+    reviewers_plus_owner.add(owner_email)
+  missing_files = owners_db.files_not_covered_by(virtual_depended_on_files,
+                                                 reviewers_plus_owner)
+
+  # We strip the /DEPS part that was added by
+  # _FilesToCheckForIncomingDeps to fake a path to a file in a
+  # directory.
+  def StripDeps(path):
+    start_deps = path.rfind('/DEPS')
+    if start_deps != -1:
+      return path[:start_deps]
+    else:
+      return path
+  unapproved_dependencies = ["'+%s'," % StripDeps(path)
+                             for path in missing_files]
+
+  if unapproved_dependencies:
+    output_list = [
+      output('You need LGTM from owners of depends-on paths in DEPS that were '
+             'modified in this CL:\n    %s' %
+                 '\n    '.join(sorted(unapproved_dependencies)))]
+    suggested_owners = owners_db.reviewers_for(missing_files, owner_email)
+    output_list.append(output(
+        'Suggested missing target path OWNERS:\n    %s' %
+            '\n    '.join(suggested_owners or [])))
+    return output_list
+
+  return []

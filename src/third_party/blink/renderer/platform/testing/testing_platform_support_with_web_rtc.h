@@ -8,15 +8,19 @@
 #include "base/single_thread_task_runner.h"
 #include "third_party/blink/public/platform/web_rtc_peer_connection_handler.h"
 #include "third_party/blink/renderer/platform/testing/testing_platform_support.h"
+#include "third_party/webrtc/api/peerconnectioninterface.h"
 
 namespace blink {
 
+// TODO(https://crbug.com/908461): This is currently implemented as NO-OPs or to
+// create dummy objects whose methods return default values. Consider renaming
+// the class, changing it to be GMOCK friendly or deleting it.
 class MockWebRTCPeerConnectionHandler : public WebRTCPeerConnectionHandler {
  public:
   MockWebRTCPeerConnectionHandler();
   ~MockWebRTCPeerConnectionHandler() override;
 
-  bool Initialize(const WebRTCConfiguration&,
+  bool Initialize(const webrtc::PeerConnectionInterface::RTCConfiguration&,
                   const WebMediaConstraints&) override;
 
   void CreateOffer(const WebRTCSessionDescriptionRequest&,
@@ -33,13 +37,28 @@ class MockWebRTCPeerConnectionHandler : public WebRTCPeerConnectionHandler {
                             const WebRTCSessionDescription&) override;
   WebRTCSessionDescription LocalDescription() override;
   WebRTCSessionDescription RemoteDescription() override;
-  webrtc::RTCErrorType SetConfiguration(const WebRTCConfiguration&) override;
+  WebRTCSessionDescription CurrentLocalDescription() override;
+  WebRTCSessionDescription CurrentRemoteDescription() override;
+  WebRTCSessionDescription PendingLocalDescription() override;
+  WebRTCSessionDescription PendingRemoteDescription() override;
+  const webrtc::PeerConnectionInterface::RTCConfiguration& GetConfiguration()
+      const override;
+  webrtc::RTCErrorType SetConfiguration(
+      const webrtc::PeerConnectionInterface::RTCConfiguration&) override;
   void GetStats(const WebRTCStatsRequest&) override;
-  void GetStats(std::unique_ptr<WebRTCStatsReportCallback>) override;
-  std::unique_ptr<WebRTCRtpSender> AddTrack(
+  void GetStats(std::unique_ptr<WebRTCStatsReportCallback>,
+                RTCStatsFilter) override;
+  webrtc::RTCErrorOr<std::unique_ptr<WebRTCRtpTransceiver>>
+  AddTransceiverWithTrack(const WebMediaStreamTrack&,
+                          const webrtc::RtpTransceiverInit&) override;
+  webrtc::RTCErrorOr<std::unique_ptr<WebRTCRtpTransceiver>>
+  AddTransceiverWithKind(std::string kind,
+                         const webrtc::RtpTransceiverInit&) override;
+  webrtc::RTCErrorOr<std::unique_ptr<WebRTCRtpTransceiver>> AddTrack(
       const WebMediaStreamTrack&,
       const WebVector<WebMediaStream>&) override;
-  bool RemoveTrack(WebRTCRtpSender*) override;
+  webrtc::RTCErrorOr<std::unique_ptr<WebRTCRtpTransceiver>> RemoveTrack(
+      WebRTCRtpSender*) override;
   WebRTCDataChannelHandler* CreateDataChannel(
       const WebString& label,
       const WebRTCDataChannelInit&) override;

@@ -6,27 +6,29 @@
 
 #include <utility>
 
-#include "ash/content/content_gpu_support.h"
 #include "ash/display/display_prefs.h"
 #include "ash/shell.h"
 #include "ash/shell_init_params.h"
-#include "ash/shell_port_classic.h"
-#include "ash/window_manager.h"
 #include "chrome/browser/browser_process.h"
-#include "chrome/browser/ui/ash/chrome_shell_content_state.h"
 #include "chrome/browser/ui/ash/chrome_shell_delegate.h"
 #include "content/public/browser/context_factory.h"
+#include "content/public/browser/gpu_interface_provider_factory.h"
+#include "content/public/common/service_manager_connection.h"
+#include "ui/aura/window_tree_host.h"
 
 namespace {
 
 void CreateClassicShell() {
   ash::ShellInitParams shell_init_params;
-  shell_init_params.shell_port = std::make_unique<ash::ShellPortClassic>();
   shell_init_params.delegate = std::make_unique<ChromeShellDelegate>();
   shell_init_params.context_factory = content::GetContextFactory();
   shell_init_params.context_factory_private =
       content::GetContextFactoryPrivate();
-  shell_init_params.gpu_support = std::make_unique<ash::ContentGpuSupport>();
+  shell_init_params.gpu_interface_provider =
+      content::CreateGpuInterfaceProvider();
+  shell_init_params.connector =
+      content::ServiceManagerConnection::GetForProcess()->GetConnector();
+  DCHECK(shell_init_params.connector);
   // Pass the initial display prefs to ash::Shell as a Value dictionary.
   // This is done this way to avoid complexities with registering the display
   // prefs in multiple places (i.e. in g_browser_process->local_state() and
@@ -48,13 +50,10 @@ void AshShellInit::RegisterDisplayPrefs(PrefRegistrySimple* registry) {
 }
 
 AshShellInit::AshShellInit() {
-  // Balanced by a call to DestroyInstance() below.
-  ash::ShellContentState::SetInstance(new ChromeShellContentState);
   CreateClassicShell();
   ash::Shell::GetPrimaryRootWindow()->GetHost()->Show();
 }
 
 AshShellInit::~AshShellInit() {
   ash::Shell::DeleteInstance();
-  ash::ShellContentState::DestroyInstance();
 }

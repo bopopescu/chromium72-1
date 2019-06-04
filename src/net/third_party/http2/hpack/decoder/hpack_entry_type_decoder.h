@@ -10,11 +10,13 @@
 // The integer represents an index into static or dynamic table, which may be
 // zero, or is the new size limit of the dynamic table.
 
+#include <cstdint>
+
 #include "base/logging.h"
 #include "net/third_party/http2/decoder/decode_buffer.h"
 #include "net/third_party/http2/decoder/decode_status.h"
-#include "net/third_party/http2/hpack/decoder/hpack_varint_decoder.h"
 #include "net/third_party/http2/hpack/http2_hpack_constants.h"
+#include "net/third_party/http2/hpack/varint/hpack_varint_decoder.h"
 #include "net/third_party/http2/platform/api/http2_export.h"
 #include "net/third_party/http2/platform/api/http2_string.h"
 
@@ -43,8 +45,8 @@ class HTTP2_EXPORT_PRIVATE HpackEntryTypeDecoder {
  private:
   HpackVarintDecoder varint_decoder_;
 
-  // This field is initialized just to keep memory corruption detectores
-  // happy about reading it from DebugString().
+  // This field is initialized just to keep ASAN happy about reading it
+  // from DebugString().
   HpackEntryType entry_type_ = HpackEntryType::kIndexedHeader;
 };
 

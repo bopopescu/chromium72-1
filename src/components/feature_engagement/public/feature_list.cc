@@ -21,6 +21,7 @@ const base::Feature* const kAllFeatures[] = {
     &kIPHDownloadHomeFeature,
     &kIPHDownloadPageFeature,
     &kIPHDownloadPageScreenshotFeature,
+    &kIPHChromeDuetFeature,
     &kIPHChromeHomeExpandFeature,
     &kIPHChromeHomePullToRefreshFeature,
     &kIPHMediaDownloadFeature,
@@ -33,14 +34,20 @@ const base::Feature* const kAllFeatures[] = {
     &kIPHDownloadInfoBarDownloadContinuingFeature,
     &kIPHDownloadInfoBarDownloadsAreFasterFeature,
     &kIPHHomePageButtonFeature,
+    &kIPHHomepageTileFeature,
     &kIPHNewTabPageButtonFeature,
+    &kIPHPreviewsOmniboxUIFeature,
+    &kIPHTranslateMenuButtonFeature,
 #endif  // defined(OS_ANDROID)
 #if BUILDFLAG(ENABLE_DESKTOP_IN_PRODUCT_HELP)
     &kIPHBookmarkFeature,
     &kIPHIncognitoWindowFeature,
     &kIPHNewTabFeature,
+    &kIPHReopenTabFeature,
 #endif  // BUILDFLAG(ENABLE_DESKTOP_IN_PRODUCT_HELP)
 #if defined(OS_IOS)
+    &kIPHBottomToolbarTipFeature,
+    &kIPHLongPressToolbarTipFeature,
     &kIPHNewTabTipFeature,
     &kIPHNewIncognitoTabTipFeature,
     &kIPHBadgedReadingListFeature,

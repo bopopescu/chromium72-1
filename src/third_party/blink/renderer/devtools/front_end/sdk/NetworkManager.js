@@ -443,7 +443,7 @@ SDK.NetworkDispatcher = class {
    * @param {!Protocol.Network.TimeSinceEpoch} wallTime
    * @param {!Protocol.Network.Initiator} initiator
    * @param {!Protocol.Network.Response=} redirectResponse
-   * @param {!Protocol.Page.ResourceType=} resourceType
+   * @param {!Protocol.Network.ResourceType=} resourceType
    * @param {!Protocol.Page.FrameId=} frameId
    */
   requestWillBeSent(
@@ -457,8 +457,10 @@ SDK.NetworkDispatcher = class {
       // ignores the internally generated |redirectResponse|. The
       // |outerResponse| of SignedExchangeInfo was set to |networkRequest| in
       // signedExchangeReceived().
-      if (!networkRequest.signedExchangeInfo())
-        this.responseReceived(requestId, loaderId, time, Protocol.Page.ResourceType.Other, redirectResponse, frameId);
+      if (!networkRequest.signedExchangeInfo()) {
+        this.responseReceived(
+            requestId, loaderId, time, Protocol.Network.ResourceType.Other, redirectResponse, frameId);
+      }
       networkRequest = this._appendRedirect(requestId, time, request.url);
       this._manager.dispatchEventToListeners(SDK.NetworkManager.Events.RequestRedirected, networkRequest);
     } else {
@@ -469,7 +471,7 @@ SDK.NetworkDispatcher = class {
     this._updateNetworkRequestWithRequest(networkRequest, request);
     networkRequest.setIssueTime(time, wallTime);
     networkRequest.setResourceType(
-        resourceType ? Common.resourceTypes[resourceType] : Protocol.Page.ResourceType.Other);
+        resourceType ? Common.resourceTypes[resourceType] : Protocol.Network.ResourceType.Other);
 
     this._startNetworkRequest(networkRequest);
   }
@@ -491,7 +493,7 @@ SDK.NetworkDispatcher = class {
    * @param {!Protocol.Network.RequestId} requestId
    * @param {!Protocol.Network.LoaderId} loaderId
    * @param {!Protocol.Network.MonotonicTime} time
-   * @param {!Protocol.Page.ResourceType} resourceType
+   * @param {!Protocol.Network.ResourceType} resourceType
    * @param {!Protocol.Network.Response} response
    * @param {!Protocol.Page.FrameId=} frameId
    */
@@ -571,22 +573,22 @@ SDK.NetworkDispatcher = class {
    * @param {!Protocol.Network.RequestId} requestId
    * @param {!Protocol.Network.MonotonicTime} finishTime
    * @param {number} encodedDataLength
-   * @param {boolean=} blockedCrossSiteDocument
+   * @param {boolean=} shouldReportCorbBlocking
    */
-  loadingFinished(requestId, finishTime, encodedDataLength, blockedCrossSiteDocument) {
+  loadingFinished(requestId, finishTime, encodedDataLength, shouldReportCorbBlocking) {
     let networkRequest = this._inflightRequestsById[requestId];
     if (!networkRequest)
       networkRequest = this._maybeAdoptMainResourceRequest(requestId);
     if (!networkRequest)
       return;
-    this._finishNetworkRequest(networkRequest, finishTime, encodedDataLength, blockedCrossSiteDocument);
+    this._finishNetworkRequest(networkRequest, finishTime, encodedDataLength, shouldReportCorbBlocking);
   }
 
   /**
    * @override
    * @param {!Protocol.Network.RequestId} requestId
    * @param {!Protocol.Network.MonotonicTime} time
-   * @param {!Protocol.Page.ResourceType} resourceType
+   * @param {!Protocol.Network.ResourceType} resourceType
    * @param {string} localizedDescription
    * @param {boolean=} canceled
    * @param {!Protocol.Network.BlockedReason=} blockedReason
@@ -751,7 +753,7 @@ SDK.NetworkDispatcher = class {
    * @param {!Protocol.Network.InterceptionId} interceptionId
    * @param {!Protocol.Network.Request} request
    * @param {!Protocol.Page.FrameId} frameId
-   * @param {!Protocol.Page.ResourceType} resourceType
+   * @param {!Protocol.Network.ResourceType} resourceType
    * @param {boolean} isNavigationRequest
    * @param {boolean=} isDownload
    * @param {string=} redirectUrl
@@ -834,9 +836,9 @@ SDK.NetworkDispatcher = class {
    * @param {!SDK.NetworkRequest} networkRequest
    * @param {!Protocol.Network.MonotonicTime} finishTime
    * @param {number} encodedDataLength
-   * @param {boolean=} blockedCrossSiteDocument
+   * @param {boolean=} shouldReportCorbBlocking
    */
-  _finishNetworkRequest(networkRequest, finishTime, encodedDataLength, blockedCrossSiteDocument) {
+  _finishNetworkRequest(networkRequest, finishTime, encodedDataLength, shouldReportCorbBlocking) {
     networkRequest.endTime = finishTime;
     networkRequest.finished = true;
     if (encodedDataLength >= 0)
@@ -846,7 +848,7 @@ SDK.NetworkDispatcher = class {
     delete this._inflightRequestsByURL[networkRequest.url()];
     SDK.multitargetNetworkManager._inflightMainResourceRequests.delete(networkRequest.requestId());
 
-    if (blockedCrossSiteDocument) {
+    if (shouldReportCorbBlocking) {
       const message = Common.UIString(
           `Cross-Origin Read Blocking (CORB) blocked cross-origin response %s with MIME type %s. ` +
               `See https://www.chromestatus.com/feature/5629709824032768 for more details.`,
@@ -884,7 +886,7 @@ SDK.NetworkDispatcher = class {
 };
 
 /**
- * @implements {SDK.TargetManager.Observer}
+ * @implements {SDK.SDKModelObserver<!SDK.NetworkManager>}
  * @unrestricted
  */
 SDK.MultitargetNetworkManager = class extends Common.Object {
@@ -909,7 +911,7 @@ SDK.MultitargetNetworkManager = class extends Common.Object {
     /** @type {!Multimap<!SDK.MultitargetNetworkManager.RequestInterceptor, !SDK.MultitargetNetworkManager.InterceptionPattern>} */
     this._urlsForRequestInterceptor = new Multimap();
 
-    SDK.targetManager.observeTargets(this, SDK.Target.Capability.Network);
+    SDK.targetManager.observeModels(SDK.NetworkManager, this);
   }
 
   /**
@@ -927,10 +929,10 @@ SDK.MultitargetNetworkManager = class extends Common.Object {
 
   /**
    * @override
-   * @param {!SDK.Target} target
+   * @param {!SDK.NetworkManager} networkManager
    */
-  targetAdded(target) {
-    const networkAgent = target.networkAgent();
+  modelAdded(networkManager) {
+    const networkAgent = networkManager.target().networkAgent();
     if (this._extraHeaders)
       networkAgent.setExtraHTTPHeaders(this._extraHeaders);
     if (this._currentUserAgent())
@@ -946,16 +948,16 @@ SDK.MultitargetNetworkManager = class extends Common.Object {
 
   /**
    * @override
-   * @param {!SDK.Target} target
+   * @param {!SDK.NetworkManager} networkManager
    */
-  targetRemoved(target) {
+  modelRemoved(networkManager) {
     for (const entry of this._inflightMainResourceRequests) {
       const manager = SDK.NetworkManager.forRequest(/** @type {!SDK.NetworkRequest} */ (entry[1]));
-      if (manager.target() !== target)
+      if (manager !== networkManager)
         continue;
       this._inflightMainResourceRequests.delete(/** @type {string} */ (entry[0]));
     }
-    this._agents.delete(target.networkAgent());
+    this._agents.delete(networkManager.target().networkAgent());
   }
 
   /**
@@ -1219,7 +1221,7 @@ SDK.MultitargetNetworkManager.InterceptedRequest = class {
    * @param {!Protocol.Network.InterceptionId} interceptionId
    * @param {!Protocol.Network.Request} request
    * @param {!Protocol.Page.FrameId} frameId
-   * @param {!Protocol.Page.ResourceType} resourceType
+   * @param {!Protocol.Network.ResourceType} resourceType
    * @param {boolean} isNavigationRequest
    * @param {boolean=} isDownload
    * @param {string=} redirectUrl

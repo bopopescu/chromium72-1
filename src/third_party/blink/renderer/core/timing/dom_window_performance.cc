@@ -17,12 +17,6 @@ void DOMWindowPerformance::Trace(blink::Visitor* visitor) {
   Supplement<LocalDOMWindow>::Trace(visitor);
 }
 
-void DOMWindowPerformance::TraceWrappers(
-    ScriptWrappableVisitor* visitor) const {
-  visitor->TraceWrappers(performance_);
-  Supplement<LocalDOMWindow>::TraceWrappers(visitor);
-}
-
 // static
 const char DOMWindowPerformance::kSupplementName[] = "DOMWindowPerformance";
 
@@ -31,7 +25,7 @@ DOMWindowPerformance& DOMWindowPerformance::From(LocalDOMWindow& window) {
   DOMWindowPerformance* supplement =
       Supplement<LocalDOMWindow>::From<DOMWindowPerformance>(window);
   if (!supplement) {
-    supplement = new DOMWindowPerformance(window);
+    supplement = MakeGarbageCollected<DOMWindowPerformance>(window);
     ProvideTo(window, supplement);
   }
   return *supplement;

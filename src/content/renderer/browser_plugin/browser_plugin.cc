@@ -19,6 +19,7 @@
 #include "base/strings/utf_string_conversions.h"
 #include "base/threading/thread_task_runner_handle.h"
 #include "components/viz/common/features.h"
+#include "components/viz/common/surfaces/local_surface_id_allocation.h"
 #include "components/viz/common/surfaces/surface_info.h"
 #include "content/common/browser_plugin/browser_plugin_constants.h"
 #include "content/common/browser_plugin/browser_plugin_messages.h"
@@ -72,13 +73,13 @@ static base::LazyInstance<PluginContainerMap>::DestructorAtExit
 namespace content {
 
 // static
-BrowserPlugin* BrowserPlugin::GetFromNode(blink::WebNode& node) {
+BrowserPlugin* BrowserPlugin::GetFromNode(const blink::WebNode& node) {
   blink::WebPluginContainer* container = node.PluginContainer();
   if (!container)
     return nullptr;
 
   PluginContainerMap* browser_plugins = g_plugin_container_map.Pointer();
-  PluginContainerMap::iterator it = browser_plugins->find(container);
+  auto it = browser_plugins->find(container);
   return it == browser_plugins->end() ? nullptr : it->second;
 }
 
@@ -101,10 +102,14 @@ BrowserPlugin::BrowserPlugin(
   browser_plugin_instance_id_ =
       BrowserPluginManager::Get()->GetNextInstanceID();
 
+  // TODO(jonross): Address the Surface Invariants Violations that led to the
+  // addition of ParentLocalSurfaceIdAllocator::Reset used within
+  // BrowserPlugin::OnAttachACK. Then have BrowserPlugin only generate new ids
+  // as needed.
+  parent_local_surface_id_allocator_.GenerateId();
+
   if (delegate_)
     delegate_->SetElementInstanceID(browser_plugin_instance_id_);
-
-  enable_surface_synchronization_ = features::IsSurfaceSynchronizationEnabled();
 }
 
 BrowserPlugin::~BrowserPlugin() {
@@ -136,25 +141,8 @@ bool BrowserPlugin::OnMessageReceived(const IPC::Message& message) {
 #endif
     IPC_MESSAGE_HANDLER(BrowserPluginMsg_ShouldAcceptTouchEvents,
                         OnShouldAcceptTouchEvents)
-    IPC_MESSAGE_HANDLER(BrowserPluginMsg_SetChildFrameSurface,
-                        OnSetChildFrameSurface)
   IPC_END_MESSAGE_MAP()
   return handled;
-}
-
-void BrowserPlugin::OnSetChildFrameSurface(
-    int browser_plugin_instance_id,
-    const viz::SurfaceInfo& surface_info) {
-  if (!attached() || base::FeatureList::IsEnabled(features::kMash))
-    return;
-
-  if (!enable_surface_synchronization_) {
-    compositing_helper_->SetPrimarySurfaceId(
-        surface_info.id(), screen_space_rect().size(),
-        cc::DeadlinePolicy::UseDefaultDeadline());
-  }
-  compositing_helper_->SetFallbackSurfaceId(surface_info.id(),
-                                            screen_space_rect().size());
 }
 
 void BrowserPlugin::UpdateDOMAttribute(const std::string& attribute_name,
@@ -226,7 +214,8 @@ void BrowserPlugin::Detach() {
 }
 
 const viz::LocalSurfaceId& BrowserPlugin::GetLocalSurfaceId() const {
-  return parent_local_surface_id_allocator_.GetCurrentLocalSurfaceId();
+  return parent_local_surface_id_allocator_.GetCurrentLocalSurfaceIdAllocation()
+      .local_surface_id();
 }
 
 #if defined(USE_AURA)
@@ -264,6 +253,10 @@ void BrowserPlugin::SynchronizeVisualProperties() {
                       sent_visual_properties_->screen_space_rect.size() !=
                           pending_visual_properties_.screen_space_rect.size();
 
+  bool zoom_changed =
+      !sent_visual_properties_ || sent_visual_properties_->zoom_level !=
+                                      pending_visual_properties_.zoom_level;
+
   // Note that the following flag is true if the capture sequence number
   // actually changed. That is, it is false if we did not have
   // |sent_visual_properties_|, which is different from the other local flags
@@ -274,22 +267,25 @@ void BrowserPlugin::SynchronizeVisualProperties() {
           pending_visual_properties_.capture_sequence_number;
 
   bool synchronized_props_changed =
-      !sent_visual_properties_ || size_changed ||
+      !sent_visual_properties_ || size_changed || zoom_changed ||
       sent_visual_properties_->screen_info !=
           pending_visual_properties_.screen_info ||
       capture_sequence_number_changed;
 
-  if (synchronized_props_changed)
+  if (synchronized_props_changed) {
     parent_local_surface_id_allocator_.GenerateId();
+    pending_visual_properties_.local_surface_id_allocation =
+        parent_local_surface_id_allocator_.GetCurrentLocalSurfaceIdAllocation();
+  }
 
-  if (enable_surface_synchronization_ && frame_sink_id_.is_valid()) {
+  if (frame_sink_id_.is_valid()) {
     // If we're synchronizing surfaces, then use an infinite deadline to ensure
     // everything is synchronized.
     cc::DeadlinePolicy deadline =
         capture_sequence_number_changed
             ? cc::DeadlinePolicy::UseInfiniteDeadline()
             : cc::DeadlinePolicy::UseDefaultDeadline();
-    compositing_helper_->SetPrimarySurfaceId(
+    compositing_helper_->SetSurfaceId(
         viz::SurfaceId(frame_sink_id_, GetLocalSurfaceId()),
         screen_space_rect().size(), deadline);
   }
@@ -305,8 +301,7 @@ void BrowserPlugin::SynchronizeVisualProperties() {
     // Let the browser know about the updated view rect.
     BrowserPluginManager::Get()->Send(
         new BrowserPluginHostMsg_SynchronizeVisualProperties(
-            browser_plugin_instance_id_, GetLocalSurfaceId(),
-            pending_visual_properties_));
+            browser_plugin_instance_id_, pending_visual_properties_));
   }
 
   if (delegate_ && size_changed)
@@ -316,7 +311,7 @@ void BrowserPlugin::SynchronizeVisualProperties() {
     sent_visual_properties_ = pending_visual_properties_;
 
 #if defined(USE_AURA)
-  if (features::IsMashEnabled() && mus_embedded_frame_) {
+  if (features::IsMultiProcessMash() && mus_embedded_frame_) {
     mus_embedded_frame_->SetWindowBounds(GetLocalSurfaceId(),
                                          FrameRectInPixels());
   }
@@ -333,12 +328,8 @@ void BrowserPlugin::OnAdvanceFocus(int browser_plugin_instance_id,
   render_view->GetWebView()->AdvanceFocus(reverse);
 }
 
-void BrowserPlugin::OnAttachACK(
-    int browser_plugin_instance_id,
-    const base::Optional<viz::LocalSurfaceId>& child_local_surface_id) {
+void BrowserPlugin::OnAttachACK(int browser_plugin_instance_id) {
   attached_ = true;
-  if (child_local_surface_id)
-    parent_local_surface_id_allocator_.Reset(*child_local_surface_id);
   SynchronizeVisualProperties();
 }
 
@@ -360,7 +351,8 @@ void BrowserPlugin::OnDidUpdateVisualProperties(
     int browser_plugin_instance_id,
     const cc::RenderFrameMetadata& metadata) {
   if (!parent_local_surface_id_allocator_.UpdateFromChild(
-          metadata.local_surface_id.value_or(viz::LocalSurfaceId()))) {
+          metadata.local_surface_id_allocation.value_or(
+              viz::LocalSurfaceIdAllocation()))) {
     return;
   }
 
@@ -390,22 +382,19 @@ void BrowserPlugin::OnSetCursor(int browser_plugin_instance_id,
 
 void BrowserPlugin::OnSetMouseLock(int browser_plugin_instance_id,
                                    bool enable) {
-  auto* render_frame =
-      RenderFrameImpl::FromRoutingID(render_frame_routing_id());
-  auto* render_view = static_cast<RenderViewImpl*>(
-      render_frame ? render_frame->GetRenderView() : nullptr);
+  RenderWidget* render_widget = GetMainWidget();
   if (enable) {
-    if (mouse_locked_ || !render_view)
+    if (mouse_locked_ || !render_widget)
       return;
-    render_view->mouse_lock_dispatcher()->LockMouse(this);
+    render_widget->mouse_lock_dispatcher()->LockMouse(this);
   } else {
     if (!mouse_locked_) {
       OnLockMouseACK(false);
       return;
     }
-    if (!render_view)
+    if (!render_widget)
       return;
-    render_view->mouse_lock_dispatcher()->UnlockMouse(this);
+    render_widget->mouse_lock_dispatcher()->UnlockMouse(this);
   }
 }
 
@@ -413,7 +402,7 @@ void BrowserPlugin::OnSetMouseLock(int browser_plugin_instance_id,
 void BrowserPlugin::OnSetMusEmbedToken(
     int instance_id,
     const base::UnguessableToken& embed_token) {
-  DCHECK(base::FeatureList::IsEnabled(features::kMash));
+  DCHECK(features::IsMultiProcessMash());
   if (!attached_) {
     pending_embed_token_ = embed_token;
   } else {
@@ -442,6 +431,20 @@ gfx::Rect BrowserPlugin::FrameRectInPixels() const {
 
 float BrowserPlugin::GetDeviceScaleFactor() const {
   return pending_visual_properties_.screen_info.device_scale_factor;
+}
+
+RenderWidget* BrowserPlugin::GetMainWidget() const {
+  RenderFrameImpl* frame =
+      RenderFrameImpl::FromRoutingID(render_frame_routing_id());
+  if (frame) {
+    RenderViewImpl* render_view =
+        static_cast<RenderViewImpl*>(frame->GetRenderView());
+    if (render_view) {
+      return render_view->GetWidget();
+    }
+  }
+
+  return nullptr;
 }
 
 void BrowserPlugin::UpdateInternalInstanceId() {
@@ -475,6 +478,11 @@ void BrowserPlugin::ScreenInfoChanged(const ScreenInfo& screen_info) {
   SynchronizeVisualProperties();
 }
 
+void BrowserPlugin::OnZoomLevelChanged(double zoom_level) {
+  pending_visual_properties_.zoom_level = zoom_level;
+  SynchronizeVisualProperties();
+}
+
 void BrowserPlugin::UpdateCaptureSequenceNumber(
     uint32_t capture_sequence_number) {
   pending_visual_properties_.capture_sequence_number = capture_sequence_number;
@@ -483,12 +491,9 @@ void BrowserPlugin::UpdateCaptureSequenceNumber(
 
 bool BrowserPlugin::ShouldGuestBeFocused() const {
   bool embedder_focused = false;
-  auto* render_frame =
-      RenderFrameImpl::FromRoutingID(render_frame_routing_id());
-  auto* render_view = static_cast<RenderViewImpl*>(
-      render_frame ? render_frame->GetRenderView() : nullptr);
-  if (render_view)
-    embedder_focused = render_view->has_focus();
+  RenderWidget* render_widget = GetMainWidget();
+  if (render_widget)
+    embedder_focused = render_widget->has_focus();
   return plugin_focused_ && embedder_focused;
 }
 
@@ -539,12 +544,9 @@ void BrowserPlugin::Destroy() {
 
   container_ = nullptr;
   // Will be a no-op if the mouse is not currently locked.
-  auto* render_frame =
-      RenderFrameImpl::FromRoutingID(render_frame_routing_id());
-  auto* render_view = static_cast<RenderViewImpl*>(
-      render_frame ? render_frame->GetRenderView() : nullptr);
-  if (render_view)
-    render_view->mouse_lock_dispatcher()->OnLockTargetDestroyed(this);
+  RenderWidget* render_widget = GetMainWidget();
+  if (render_widget)
+    render_widget->mouse_lock_dispatcher()->OnLockTargetDestroyed(this);
 
   task_runner_->DeleteSoon(FROM_HERE, this);
 }
@@ -708,7 +710,7 @@ bool BrowserPlugin::HandleDragStatusUpdate(blink::WebDragStatus drag_status,
 
 void BrowserPlugin::DidReceiveResponse(const blink::WebURLResponse& response) {}
 
-void BrowserPlugin::DidReceiveData(const char* data, int data_length) {
+void BrowserPlugin::DidReceiveData(const char* data, size_t data_length) {
   if (delegate_)
     delegate_->PluginDidReceiveData(data, data_length);
 }
@@ -835,19 +837,10 @@ bool BrowserPlugin::HandleMouseLockedInputEvent(
 }
 
 #if defined(USE_AURA)
-void BrowserPlugin::OnMusEmbeddedFrameSurfaceChanged(
-    const viz::SurfaceInfo& surface_info) {
-  if (!attached_)
-    return;
-
-  compositing_helper_->SetFallbackSurfaceId(surface_info.id(),
-                                            screen_space_rect().size());
-}
-
 void BrowserPlugin::OnMusEmbeddedFrameSinkIdAllocated(
     const viz::FrameSinkId& frame_sink_id) {
   // RendererWindowTreeClient should only call this when mus is hosting viz.
-  DCHECK(base::FeatureList::IsEnabled(features::kMash));
+  DCHECK(features::IsMultiProcessMash());
   OnGuestReady(browser_plugin_instance_id_, frame_sink_id);
 }
 #endif
@@ -857,7 +850,8 @@ cc::Layer* BrowserPlugin::GetLayer() {
 }
 
 void BrowserPlugin::SetLayer(scoped_refptr<cc::Layer> layer,
-                             bool prevent_contents_opaque_changes) {
+                             bool prevent_contents_opaque_changes,
+                             bool is_surface_layer) {
   if (container_)
     container_->SetCcLayer(layer.get(), prevent_contents_opaque_changes);
   embedded_layer_ = std::move(layer);

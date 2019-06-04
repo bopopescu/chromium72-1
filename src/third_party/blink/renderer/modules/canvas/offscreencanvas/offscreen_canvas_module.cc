@@ -16,11 +16,11 @@ void OffscreenCanvasModule::getContext(
     ExecutionContext* execution_context,
     OffscreenCanvas& offscreen_canvas,
     const String& id,
-    const CanvasContextCreationAttributesModule& attributes,
+    const CanvasContextCreationAttributesModule* attributes,
     ExceptionState& exception_state,
     OffscreenRenderingContext& result) {
   if (offscreen_canvas.IsNeutered()) {
-    exception_state.ThrowDOMException(kInvalidStateError,
+    exception_state.ThrowDOMException(DOMExceptionCode::kInvalidStateError,
                                       "OffscreenCanvas object is detached");
     return;
   }

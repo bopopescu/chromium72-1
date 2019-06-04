@@ -20,6 +20,7 @@
 
 namespace base {
 class RefCountedMemory;
+class DictionaryValue;
 }
 
 namespace blink {
@@ -138,6 +139,11 @@ class CONTENT_EXPORT ContentClient {
     // Registers a URL scheme as strictly empty documents, allowing them to
     // commit synchronously.
     std::vector<std::string> empty_document_schemes;
+#if defined(OS_ANDROID)
+    // Normally, non-standard schemes canonicalize to opaque origins. However,
+    // Android WebView requires non-standard schemes to still be preserved.
+    bool allow_non_standard_schemes_in_origins = false;
+#endif
   };
 
   virtual void AddAdditionalSchemes(Schemes* schemes) {}
@@ -172,6 +178,14 @@ class CONTENT_EXPORT ContentClient {
   // Called by content::GetProcessTypeNameInEnglish for process types that it
   // doesn't know about because they're from the embedder.
   virtual std::string GetProcessTypeNameInEnglish(int type);
+
+  // Called once during initialization of NetworkService to provide constants
+  // to NetLog.  (Though it may be called multiples times if NetworkService
+  // crashes and needs to be reinitialized).  The return value is merged with
+  // |GetNetConstants()| and passed to FileNetLogObserver - see documentation
+  // of |FileNetLogObserver::CreateBounded()| for more information.  The
+  // convention is to put new constants under a subdict at the key "clientInfo".
+  virtual base::DictionaryValue GetNetLogConstants() const;
 
   // Returns whether or not V8 script extensions should be allowed for a
   // service worker.

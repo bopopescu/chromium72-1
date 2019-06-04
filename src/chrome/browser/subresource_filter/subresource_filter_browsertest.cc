@@ -20,7 +20,7 @@
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
-#include "base/test/histogram_tester.h"
+#include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_feature_list.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/metrics/subprocess_metrics_provider.h"
@@ -40,17 +40,16 @@
 #include "components/security_interstitials/content/unsafe_resource.h"
 #include "components/subresource_filter/content/browser/async_document_subresource_filter.h"
 #include "components/subresource_filter/content/browser/async_document_subresource_filter_test_utils.h"
-#include "components/subresource_filter/content/browser/content_ruleset_service.h"
+#include "components/subresource_filter/content/browser/ruleset_service.h"
 #include "components/subresource_filter/core/browser/subresource_filter_constants.h"
 #include "components/subresource_filter/core/browser/subresource_filter_features.h"
 #include "components/subresource_filter/core/browser/subresource_filter_features_test_support.h"
 #include "components/subresource_filter/core/common/activation_decision.h"
-#include "components/subresource_filter/core/common/activation_level.h"
-#include "components/subresource_filter/core/common/activation_state.h"
 #include "components/subresource_filter/core/common/common_features.h"
 #include "components/subresource_filter/core/common/scoped_timers.h"
 #include "components/subresource_filter/core/common/test_ruleset_creator.h"
 #include "components/subresource_filter/core/common/test_ruleset_utils.h"
+#include "components/subresource_filter/mojom/subresource_filter.mojom.h"
 #include "components/url_pattern_index/proto/rules.pb.h"
 #include "content/public/browser/notification_service.h"
 #include "content/public/browser/notification_types.h"
@@ -128,7 +127,7 @@ const char kActivationListHistogram[] =
     "SubresourceFilter.PageLoad.ActivationList";
 
 // Other histograms.
-const char kSubresourceFilterActionsHistogram[] = "SubresourceFilter.Actions";
+const char kSubresourceFilterActionsHistogram[] = "SubresourceFilter.Actions2";
 
 GURL GetURLWithFragment(const GURL& url, base::StringPiece fragment) {
   GURL::Replacements replacements;
@@ -136,44 +135,12 @@ GURL GetURLWithFragment(const GURL& url, base::StringPiece fragment) {
   return url.ReplaceComponents(replacements);
 }
 
-void OpenAndPublishRuleset(ContentRulesetService* content_ruleset_service,
-                           const base::FilePath& path) {
-  base::File index_file;
-  base::RunLoop open_loop;
-  auto open_callback = base::BindRepeating(
-      [](base::OnceClosure quit_closure, base::File* out, base::File result) {
-        *out = std::move(result);
-        std::move(quit_closure).Run();
-      },
-      open_loop.QuitClosure(), &index_file);
-  content_ruleset_service->TryOpenAndSetRulesetFile(path,
-                                                    std::move(open_callback));
-  open_loop.Run();
-  ASSERT_TRUE(index_file.IsValid());
-  content_ruleset_service->PublishNewRulesetVersion(std::move(index_file));
-}
-
-RulesetVerificationStatus GetRulesetVerification() {
-  ContentRulesetService* service =
-      g_browser_process->subresource_filter_ruleset_service();
-  VerifiedRulesetDealer::Handle* dealer_handle = service->ruleset_dealer();
-
-  auto callback_method = [](base::OnceClosure quit_closure,
-                            RulesetVerificationStatus* status,
-                            VerifiedRulesetDealer* verified_dealer) {
-    *status = verified_dealer->status();
-    std::move(quit_closure).Run();
-  };
-
-  RulesetVerificationStatus status;
-  base::RunLoop run_loop;
-  auto callback =
-      base::BindRepeating(callback_method, run_loop.QuitClosure(), &status);
-
-  dealer_handle->GetDealerAsync(callback);
-  run_loop.Run();
-  return status;
-}
+// This string comes from GetErrorStringForDisallowedLoad() in
+// blink/renderer/core/loader/subresource_filter.cc
+constexpr const char kBlinkDisallowSubframeConsoleMessageFormat[] =
+    "Chrome blocked resource %s on this site because this site tends to show "
+    "ads that interrupt, distract, mislead, or prevent user control. Learn "
+    "more at https://www.chromestatus.com/feature/5738264052891648";
 
 }  // namespace
 
@@ -189,7 +156,7 @@ IN_PROC_BROWSER_TEST_F(SubresourceFilterListInsertingBrowserTest,
   ASSERT_NO_FATAL_FAILURE(SetRulesetToDisallowURLsWithPathSuffix(
       "suffix-that-does-not-match-anything"));
 
-  Configuration config(subresource_filter::ActivationLevel::ENABLED,
+  Configuration config(subresource_filter::mojom::ActivationLevel::kEnabled,
                        subresource_filter::ActivationScope::ACTIVATION_LIST,
                        subresource_filter::ActivationList::SUBRESOURCE_FILTER);
   ResetConfiguration(std::move(config));
@@ -221,7 +188,7 @@ IN_PROC_BROWSER_TEST_F(SubresourceFilterListInsertingBrowserTest,
   ASSERT_NO_FATAL_FAILURE(SetRulesetToDisallowURLsWithPathSuffix(
       "suffix-that-does-not-match-anything"));
 
-  Configuration config(subresource_filter::ActivationLevel::ENABLED,
+  Configuration config(subresource_filter::mojom::ActivationLevel::kEnabled,
                        subresource_filter::ActivationScope::ACTIVATION_LIST,
                        subresource_filter::ActivationList::BETTER_ADS);
   ResetConfiguration(std::move(config));
@@ -320,10 +287,10 @@ IN_PROC_BROWSER_TEST_F(SubresourceFilterBrowserTest,
 }
 
 IN_PROC_BROWSER_TEST_F(SubresourceFilterBrowserTest, SubFrameActivation) {
-  std::ostringstream message_filter;
-  message_filter << kDisallowSubframeConsoleMessagePrefix << "*";
+  std::string message_filter =
+      base::StringPrintf(kBlinkDisallowSubframeConsoleMessageFormat, "*");
   content::ConsoleObserverDelegate console_observer(web_contents(),
-                                                    message_filter.str());
+                                                    message_filter);
   web_contents()->SetDelegate(&console_observer);
 
   GURL url(GetTestUrl(kTestFrameSetPath));
@@ -338,25 +305,26 @@ IN_PROC_BROWSER_TEST_F(SubresourceFilterBrowserTest, SubFrameActivation) {
   ASSERT_NO_FATAL_FAILURE(ExpectParsedScriptElementLoadedStatusInFrames(
       kSubframeNames, kExpectScriptInFrameToLoad));
 
-  tester.ExpectBucketCount(kSubresourceFilterActionsHistogram, kActionUIShown,
-                           1);
+  tester.ExpectBucketCount(kSubresourceFilterActionsHistogram,
+                           SubresourceFilterAction::kUIShown, 1);
 
   // Console message for subframe blocking should be displayed.
-  std::ostringstream result;
-  result << kDisallowSubframeConsoleMessagePrefix << "*included_script.js*";
-  EXPECT_TRUE(base::MatchPattern(console_observer.message(), result.str()));
+  EXPECT_TRUE(base::MatchPattern(
+      console_observer.message(),
+      base::StringPrintf(kBlinkDisallowSubframeConsoleMessageFormat,
+                         "*included_script.js")));
 }
 
 IN_PROC_BROWSER_TEST_F(SubresourceFilterBrowserTest,
                        ActivationDisabled_NoConsoleMessage) {
-  std::ostringstream message_filter;
-  message_filter << kDisallowSubframeConsoleMessageSuffix << "*";
+  std::string message_filter =
+      base::StringPrintf(kBlinkDisallowSubframeConsoleMessageFormat, "*");
   content::ConsoleObserverDelegate console_observer(web_contents(),
-                                                    message_filter.str());
+                                                    message_filter);
   web_contents()->SetDelegate(&console_observer);
 
   Configuration config(
-      subresource_filter::ActivationLevel::DISABLED,
+      subresource_filter::mojom::ActivationLevel::kDisabled,
       subresource_filter::ActivationScope::ACTIVATION_LIST,
       subresource_filter::ActivationList::PHISHING_INTERSTITIAL);
   ResetConfiguration(std::move(config));
@@ -374,14 +342,14 @@ IN_PROC_BROWSER_TEST_F(SubresourceFilterBrowserTest,
 
 IN_PROC_BROWSER_TEST_F(SubresourceFilterBrowserTest,
                        ActivationDryRun_NoConsoleMessage) {
-  std::ostringstream message_filter;
-  message_filter << kDisallowSubframeConsoleMessageSuffix << "*";
+  std::string message_filter =
+      base::StringPrintf(kBlinkDisallowSubframeConsoleMessageFormat, "*");
   content::ConsoleObserverDelegate console_observer(web_contents(),
-                                                    message_filter.str());
+                                                    message_filter);
   web_contents()->SetDelegate(&console_observer);
 
   Configuration config(
-      subresource_filter::ActivationLevel::DRYRUN,
+      subresource_filter::mojom::ActivationLevel::kDryRun,
       subresource_filter::ActivationScope::ACTIVATION_LIST,
       subresource_filter::ActivationList::PHISHING_INTERSTITIAL);
   ResetConfiguration(std::move(config));
@@ -422,7 +390,7 @@ IN_PROC_BROWSER_TEST_F(SubresourceFilterBrowserTest,
       kSubframeNames, kExpectOnlySecondSubframe));
   ExpectFramesIncludedInLayout(kSubframeNames, kExpectOnlySecondSubframe);
   histogram_tester.ExpectBucketCount(kSubresourceFilterActionsHistogram,
-                                     kActionUIShown, 1);
+                                     SubresourceFilterAction::kUIShown, 1);
 
   // Now navigate the first subframe to an allowed URL and ensure that the load
   // successfully commits and the frame gets restored (no longer collapsed).
@@ -621,96 +589,6 @@ IN_PROC_BROWSER_TEST_F(SubresourceFilterBrowserTest, DynamicFrame) {
 }
 
 IN_PROC_BROWSER_TEST_F(SubresourceFilterBrowserTest,
-                       RulesetVerified_Activation) {
-  ASSERT_NO_FATAL_FAILURE(
-      SetRulesetToDisallowURLsWithPathSuffix("included_script.js"));
-  ContentRulesetService* service =
-      g_browser_process->subresource_filter_ruleset_service();
-  ASSERT_TRUE(service->ruleset_dealer());
-  auto ruleset_handle =
-      std::make_unique<VerifiedRuleset::Handle>(service->ruleset_dealer());
-  AsyncDocumentSubresourceFilter::InitializationParams params(
-      GURL("https://example.com/"), ActivationLevel::ENABLED, false);
-
-  testing::TestActivationStateCallbackReceiver receiver;
-  AsyncDocumentSubresourceFilter filter(ruleset_handle.get(), std::move(params),
-                                        receiver.GetCallback());
-  receiver.WaitForActivationDecision();
-  receiver.ExpectReceivedOnce(ActivationState(ActivationLevel::ENABLED));
-}
-
-IN_PROC_BROWSER_TEST_F(SubresourceFilterBrowserTest, NoRuleset_NoActivation) {
-  // Do not set the ruleset, which results in an invalid ruleset.
-  ContentRulesetService* service =
-      g_browser_process->subresource_filter_ruleset_service();
-  ASSERT_TRUE(service->ruleset_dealer());
-  auto ruleset_handle =
-      std::make_unique<VerifiedRuleset::Handle>(service->ruleset_dealer());
-  AsyncDocumentSubresourceFilter::InitializationParams params(
-      GURL("https://example.com/"), ActivationLevel::ENABLED, false);
-
-  testing::TestActivationStateCallbackReceiver receiver;
-  AsyncDocumentSubresourceFilter filter(ruleset_handle.get(), std::move(params),
-                                        receiver.GetCallback());
-  receiver.WaitForActivationDecision();
-  receiver.ExpectReceivedOnce(ActivationState(ActivationLevel::DISABLED));
-}
-
-IN_PROC_BROWSER_TEST_F(SubresourceFilterBrowserTest,
-                       InvalidRuleset_NoActivation) {
-  const char kTestRulesetSuffix[] = "foo";
-  const int kNumberOfRules = 500;
-  TestRulesetCreator ruleset_creator;
-  TestRulesetPair test_ruleset_pair;
-  ASSERT_NO_FATAL_FAILURE(
-      ruleset_creator.CreateRulesetToDisallowURLsWithManySuffixes(
-          kTestRulesetSuffix, kNumberOfRules, &test_ruleset_pair));
-  testing::TestRuleset::CorruptByTruncating(test_ruleset_pair.indexed, 123);
-
-  // Just publish the corrupt indexed file directly, to simulate it being
-  // corrupt on startup.
-  ContentRulesetService* service =
-      g_browser_process->subresource_filter_ruleset_service();
-  ASSERT_TRUE(service->ruleset_dealer());
-  OpenAndPublishRuleset(service, test_ruleset_pair.indexed.path);
-
-  auto ruleset_handle =
-      std::make_unique<VerifiedRuleset::Handle>(service->ruleset_dealer());
-  AsyncDocumentSubresourceFilter::InitializationParams params(
-      GURL("https://example.com/"), ActivationLevel::ENABLED, false);
-
-  testing::TestActivationStateCallbackReceiver receiver;
-  AsyncDocumentSubresourceFilter filter(ruleset_handle.get(), std::move(params),
-                                        receiver.GetCallback());
-  receiver.WaitForActivationDecision();
-  receiver.ExpectReceivedOnce(ActivationState(ActivationLevel::DISABLED));
-  RulesetVerificationStatus dealer_status = GetRulesetVerification();
-  EXPECT_EQ(RulesetVerificationStatus::CORRUPT, dealer_status);
-}
-
-IN_PROC_BROWSER_TEST_F(SubresourceFilterBrowserTest, LazyRulesetValidation) {
-  // The ruleset shouldn't be validated until it's used, unless ad tagging is
-  // enabled.
-  base::test::ScopedFeatureList feature_list;
-  feature_list.InitAndDisableFeature(subresource_filter::kAdTagging);
-  SetRulesetToDisallowURLsWithPathSuffix("included_script.js");
-  RulesetVerificationStatus dealer_status = GetRulesetVerification();
-  EXPECT_EQ(RulesetVerificationStatus::NOT_VERIFIED, dealer_status);
-}
-
-IN_PROC_BROWSER_TEST_F(SubresourceFilterBrowserTest,
-                       AdsTaggingImmediateRulesetValidation) {
-  // When Ads Tagging is enabled, the ruleset should be validated as soon as
-  // it's published.
-  base::test::ScopedFeatureList feature_list;
-  feature_list.InitAndEnableFeature(subresource_filter::kAdTagging);
-
-  SetRulesetToDisallowURLsWithPathSuffix("included_script.js");
-  RulesetVerificationStatus dealer_status = GetRulesetVerification();
-  EXPECT_EQ(RulesetVerificationStatus::INTACT, dealer_status);
-}
-
-IN_PROC_BROWSER_TEST_F(SubresourceFilterBrowserTest,
                        PRE_MainFrameActivationOnStartup) {
   SetRulesetToDisallowURLsWithPathSuffix("included_script.js");
 }
@@ -735,18 +613,18 @@ IN_PROC_BROWSER_TEST_F(SubresourceFilterBrowserTest,
   ConfigureAsPhishingURL(url);
   base::HistogramTester tester;
   ui_test_utils::NavigateToURL(browser(), url);
-  tester.ExpectBucketCount(kSubresourceFilterActionsHistogram, kActionUIShown,
-                           1);
+  tester.ExpectBucketCount(kSubresourceFilterActionsHistogram,
+                           SubresourceFilterAction::kUIShown, 1);
   // Check that the bubble is not shown again for this navigation.
   EXPECT_FALSE(IsDynamicScriptElementLoaded(FindFrameByName("five")));
-  tester.ExpectBucketCount(kSubresourceFilterActionsHistogram, kActionUIShown,
-                           1);
+  tester.ExpectBucketCount(kSubresourceFilterActionsHistogram,
+                           SubresourceFilterAction::kUIShown, 1);
   // Check that bubble is shown for new navigation. Must be cross site to avoid
   // triggering smart UI on Android.
   ConfigureAsPhishingURL(a_url);
   ui_test_utils::NavigateToURL(browser(), a_url);
-  tester.ExpectBucketCount(kSubresourceFilterActionsHistogram, kActionUIShown,
-                           2);
+  tester.ExpectBucketCount(kSubresourceFilterActionsHistogram,
+                           SubresourceFilterAction::kUIShown, 2);
 }
 
 IN_PROC_BROWSER_TEST_F(SubresourceFilterBrowserTest,
@@ -838,7 +716,8 @@ void ExpectHistogramsAreRecordedForTestFrameSet(
 
   tester.ExpectUniqueSample(
       kDocumentLoadActivationLevel,
-      static_cast<base::Histogram::Sample>(ActivationLevel::ENABLED), 6);
+      static_cast<base::Histogram::Sample>(mojom::ActivationLevel::kEnabled),
+      6);
 
   EXPECT_THAT(tester.GetAllSamples(kSubresourceLoadsTotal),
               ::testing::ElementsAre(base::Bucket(0, 3), base::Bucket(2, 3)));
@@ -912,7 +791,8 @@ IN_PROC_BROWSER_TEST_F(SubresourceFilterBrowserTest,
   // Although SubresourceFilterAgents still record the activation decision.
   tester.ExpectUniqueSample(
       kDocumentLoadActivationLevel,
-      static_cast<base::Histogram::Sample>(ActivationLevel::DISABLED), 6);
+      static_cast<base::Histogram::Sample>(mojom::ActivationLevel::kDisabled),
+      6);
 }
 
 IN_PROC_BROWSER_TEST_F(SubresourceFilterBrowserTest,

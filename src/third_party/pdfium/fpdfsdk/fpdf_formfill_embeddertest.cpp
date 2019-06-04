@@ -12,6 +12,7 @@
 #include "public/cpp/fpdf_scopers.h"
 #include "public/fpdf_formfill.h"
 #include "public/fpdf_fwlevent.h"
+#include "public/fpdf_progressive.h"
 #include "testing/embedder_test.h"
 #include "testing/embedder_test_mock_delegate.h"
 #include "testing/embedder_test_timer_handling_delegate.h"
@@ -62,6 +63,12 @@ class FPDFFormFillInteractiveEmbeddertest : public FPDFFormFillEmbeddertest {
     FORM_OnMouseMove(form_handle(), page_, 0, point.x, point.y);
     FORM_OnLButtonDown(form_handle(), page_, 0, point.x, point.y);
     FORM_OnLButtonUp(form_handle(), page_, 0, point.x, point.y);
+  }
+
+  void DoubleClickOnFormFieldAtPoint(const CFX_PointF& point) {
+    // Click on the text field or combobox as specified by coordinates.
+    FORM_OnMouseMove(form_handle(), page_, 0, point.x, point.y);
+    FORM_OnLButtonDoubleClick(form_handle(), page_, 0, point.x, point.y);
   }
 
   void TypeTextIntoTextField(int num_chars, const CFX_PointF& point) {
@@ -379,6 +386,81 @@ TEST_F(FPDFFormFillEmbeddertest, BUG_514690) {
   UnloadPage(page);
 }
 
+TEST_F(FPDFFormFillEmbeddertest, BUG_900552) {
+  EmbedderTestTimerHandlingDelegate delegate;
+  SetDelegate(&delegate);
+
+  EXPECT_TRUE(OpenDocument("bug_900552.pdf"));
+  FPDF_PAGE page = LoadPage(0);
+  ASSERT_TRUE(page);
+  DoOpenActions();
+  delegate.AdvanceTime(4000);
+
+  // Simulate a repaint.
+  FPDF_BITMAP bitmap = FPDFBitmap_Create(512, 512, 0);
+  ASSERT_TRUE(bitmap);
+  FPDF_RenderPageBitmap_Start(bitmap, page, 0, 0, 512, 512, 0, 0, nullptr);
+  FPDFBitmap_Destroy(bitmap);
+  UnloadPage(page);
+}
+
+TEST_F(FPDFFormFillEmbeddertest, BUG_901654) {
+  EmbedderTestTimerHandlingDelegate delegate;
+  SetDelegate(&delegate);
+
+  EXPECT_TRUE(OpenDocument("bug_901654.pdf"));
+  FPDF_PAGE page = LoadPage(0);
+  ASSERT_TRUE(page);
+  DoOpenActions();
+  delegate.AdvanceTime(4000);
+
+  // Simulate a repaint.
+  {
+    ScopedFPDFBitmap bitmap(FPDFBitmap_Create(512, 512, 0));
+    FPDF_RenderPageBitmap_Start(bitmap.get(), page, 0, 0, 512, 512, 0, 0,
+                                nullptr);
+  }
+  UnloadPage(page);
+}
+
+TEST_F(FPDFFormFillEmbeddertest, BUG_901654_2) {
+  EmbedderTestTimerHandlingDelegate delegate;
+  SetDelegate(&delegate);
+
+  EXPECT_TRUE(OpenDocument("bug_901654_2.pdf"));
+  FPDF_PAGE page = LoadPage(0);
+  ASSERT_TRUE(page);
+  DoOpenActions();
+  delegate.AdvanceTime(4000);
+
+  // Simulate a repaint.
+  {
+    ScopedFPDFBitmap bitmap(FPDFBitmap_Create(512, 512, 0));
+    FPDF_RenderPageBitmap_Start(bitmap.get(), page, 0, 0, 512, 512, 0, 0,
+                                nullptr);
+  }
+  UnloadPage(page);
+}
+
+class DoURIActionBlockedDelegate final : public EmbedderTest::Delegate {
+ public:
+  void DoURIAction(FPDF_BYTESTRING uri) override {
+    FAIL() << "Navigated to " << uri;
+  }
+};
+
+TEST_F(FPDFFormFillEmbeddertest, BUG_851821) {
+  DoURIActionBlockedDelegate delegate;
+  SetDelegate(&delegate);
+
+  EXPECT_TRUE(OpenDocument("redirect.pdf"));
+  FPDF_PAGE page = LoadPage(0);
+  EXPECT_TRUE(page);
+  DoOpenActions();
+
+  UnloadPage(page);
+}
+
 #ifdef PDF_ENABLE_V8
 TEST_F(FPDFFormFillEmbeddertest, DisableJavaScript) {
   // Test that timers and intervals can't fire without JS.
@@ -408,6 +490,30 @@ TEST_F(FPDFFormFillEmbeddertest, DisableJavaScript) {
   delegate.AdvanceTime(1000);
   EXPECT_EQ(0U, alerts.size());  // nothing fired.
   UnloadPage(page);
+}
+
+TEST_F(FPDFFormFillEmbeddertest, DocumentAActions) {
+  EmbedderTestTimerHandlingDelegate delegate;
+  SetDelegate(&delegate);
+
+  EXPECT_TRUE(OpenDocument("document_aactions.pdf"));
+  FPDF_PAGE page = LoadPage(0);
+  EXPECT_TRUE(page);
+
+  const auto& alerts = delegate.GetAlerts();
+  EXPECT_EQ(0U, alerts.size());
+
+  FORM_DoDocumentAAction(form_handle(), FPDFDOC_AACTION_WS);
+  FORM_DoDocumentAAction(form_handle(), FPDFDOC_AACTION_DS);
+  FORM_DoDocumentAAction(form_handle(), FPDFDOC_AACTION_WP);
+  FORM_DoDocumentAAction(form_handle(), FPDFDOC_AACTION_DP);
+  UnloadPage(page);
+
+  ASSERT_EQ(4U, alerts.size());
+  EXPECT_STREQ(L"Will Save", alerts[0].message.c_str());
+  EXPECT_STREQ(L"Did Save", alerts[1].message.c_str());
+  EXPECT_STREQ(L"Will Print", alerts[2].message.c_str());
+  EXPECT_STREQ(L"Did Print", alerts[3].message.c_str());
 }
 
 TEST_F(FPDFFormFillEmbeddertest, BUG_551248) {
@@ -569,7 +675,6 @@ TEST_F(FPDFFormFillEmbeddertest, BUG_765384) {
   FORM_OnLButtonUp(form_handle(), page, 0, 140, 590);
   UnloadPage(page);
 }
-
 #endif  // PDF_ENABLE_V8
 
 TEST_F(FPDFFormFillEmbeddertest, FormText) {
@@ -577,6 +682,10 @@ TEST_F(FPDFFormFillEmbeddertest, FormText) {
   const char md5_1[] = "5f11dbe575fe197a37c3fb422559f8ff";
   const char md5_2[] = "35b1a4b679eafc749a0b6fda750c0e8d";
   const char md5_3[] = "65c64a7c355388f719a752aa1e23f6fe";
+#elif _FX_PLATFORM_ == _FX_PLATFORM_WINDOWS_
+  const char md5_1[] = "d3204faa62b607f0bd3893c9c22cabcb";
+  const char md5_2[] = "29d1c3fd226ca6a69597f75937690320";
+  const char md5_3[] = "5e678a55912cb568fd677bf34abb8727";
 #else
   const char md5_1[] = "b890950d4b9bc163b1a96797f3004b53";
   const char md5_2[] = "11487d5597599a26e8912b9c1d9422cb";
@@ -1012,6 +1121,7 @@ TEST_F(FPDFFormFillTextFormEmbeddertest, InsertTextInEmptyTextField) {
 
   // Select entire contents of text field to check that insertion worked
   // as expected.
+  CheckSelection(L"");
   SelectAllRegularFormTextWithMouse();
   CheckSelection(L"Hello");
 }
@@ -1032,6 +1142,7 @@ TEST_F(FPDFFormFillTextFormEmbeddertest, InsertTextInPopulatedTextFieldLeft) {
 
   // Select entire contents of text field to check that insertion worked
   // as expected.
+  CheckSelection(L"");
   SelectAllRegularFormTextWithMouse();
   CheckSelection(L"HelloABCDEFGH");
 }
@@ -1050,6 +1161,7 @@ TEST_F(FPDFFormFillTextFormEmbeddertest, InsertTextInPopulatedTextFieldMiddle) {
 
   // Select entire contents of text field to check that insertion worked
   // as expected.
+  CheckSelection(L"");
   SelectAllRegularFormTextWithMouse();
   CheckSelection(L"ABCDHelloEFGH");
 }
@@ -1068,6 +1180,7 @@ TEST_F(FPDFFormFillTextFormEmbeddertest, InsertTextInPopulatedTextFieldRight) {
 
   // Select entire contents of text field to check that insertion worked
   // as expected.
+  CheckSelection(L"");
   SelectAllRegularFormTextWithMouse();
   CheckSelection(L"ABCDEFGHHello");
 }
@@ -1077,6 +1190,7 @@ TEST_F(FPDFFormFillTextFormEmbeddertest,
   TypeTextIntoTextField(12, RegularFormBegin());
 
   // Select entire string in text field.
+  CheckSelection(L"");
   SelectTextWithKeyboard(12, FWL_VKEY_Left, RegularFormEnd());
   CheckSelection(L"ABCDEFGHIJKL");
 
@@ -1088,6 +1202,7 @@ TEST_F(FPDFFormFillTextFormEmbeddertest,
 
   // Select entire contents of text field to check that insertion worked
   // as expected.
+  CheckSelection(L"");
   SelectAllRegularFormTextWithMouse();
   CheckSelection(L"Hello");
 }
@@ -1097,6 +1212,7 @@ TEST_F(FPDFFormFillTextFormEmbeddertest,
   TypeTextIntoTextField(12, RegularFormBegin());
 
   // Select left portion of string in text field.
+  CheckSelection(L"");
   SelectTextWithKeyboard(6, FWL_VKEY_Left, RegularFormAtX(148.0));
   CheckSelection(L"ABCDEF");
 
@@ -1108,6 +1224,7 @@ TEST_F(FPDFFormFillTextFormEmbeddertest,
 
   // Select entire contents of text field to check that insertion worked
   // as expected.
+  CheckSelection(L"");
   SelectAllRegularFormTextWithMouse();
   CheckSelection(L"HelloGHIJKL");
 }
@@ -1117,6 +1234,7 @@ TEST_F(FPDFFormFillTextFormEmbeddertest,
   TypeTextIntoTextField(12, RegularFormBegin());
 
   // Select middle portion of string in text field.
+  CheckSelection(L"");
   SelectTextWithKeyboard(6, FWL_VKEY_Left, RegularFormAtX(171.0));
   CheckSelection(L"DEFGHI");
 
@@ -1127,6 +1245,7 @@ TEST_F(FPDFFormFillTextFormEmbeddertest,
 
   // Select entire contents of text field to check that insertion worked
   // as expected.
+  CheckSelection(L"");
   SelectAllRegularFormTextWithMouse();
   CheckSelection(L"ABCHelloJKL");
 }
@@ -1136,6 +1255,7 @@ TEST_F(FPDFFormFillTextFormEmbeddertest,
   TypeTextIntoTextField(12, RegularFormBegin());
 
   // Select right portion of string in text field.
+  CheckSelection(L"");
   SelectTextWithKeyboard(6, FWL_VKEY_Left, RegularFormEnd());
   CheckSelection(L"GHIJKL");
 
@@ -1146,6 +1266,7 @@ TEST_F(FPDFFormFillTextFormEmbeddertest,
 
   // Select entire contents of text field to check that insertion worked
   // as expected.
+  CheckSelection(L"");
   SelectAllRegularFormTextWithMouse();
   CheckSelection(L"ABCDEFHello");
 }
@@ -1163,6 +1284,7 @@ TEST_F(FPDFFormFillComboBoxFormEmbeddertest,
 
   // Select entire contents of user-editable combobox text field to check that
   // insertion worked as expected.
+  CheckSelection(L"");
   SelectAllEditableFormTextWithMouse();
   CheckSelection(L"Hello");
 }
@@ -1181,6 +1303,7 @@ TEST_F(FPDFFormFillComboBoxFormEmbeddertest,
 
   // Select entire contents of user-editable combobox text field to check that
   // insertion worked as expected.
+  CheckSelection(L"");
   SelectAllEditableFormTextWithMouse();
   CheckSelection(L"HelloABCDEF");
 }
@@ -1200,6 +1323,7 @@ TEST_F(FPDFFormFillComboBoxFormEmbeddertest,
 
   // Select entire contents of user-editable combobox text field to check that
   // insertion worked as expected.
+  CheckSelection(L"");
   SelectAllEditableFormTextWithMouse();
   CheckSelection(L"ABCHelloDEF");
 }
@@ -1218,6 +1342,7 @@ TEST_F(FPDFFormFillComboBoxFormEmbeddertest,
 
   // Select entire contents of user-editable combobox text field to check that
   // insertion worked as expected.
+  CheckSelection(L"");
   SelectAllEditableFormTextWithMouse();
   CheckSelection(L"ABCDEFHello");
 }
@@ -1227,6 +1352,7 @@ TEST_F(FPDFFormFillComboBoxFormEmbeddertest,
   TypeTextIntoTextField(10, EditableFormBegin());
 
   // Select entire string in user-editable combobox.
+  CheckSelection(L"");
   SelectTextWithKeyboard(10, FWL_VKEY_Left, EditableFormEnd());
   CheckSelection(L"ABCDEFGHIJ");
 
@@ -1237,6 +1363,7 @@ TEST_F(FPDFFormFillComboBoxFormEmbeddertest,
 
   // Select entire contents of user-editable combobox text field to check that
   // insertion worked as expected.
+  CheckSelection(L"");
   SelectAllEditableFormTextWithMouse();
   CheckSelection(L"Hello");
 }
@@ -1246,6 +1373,7 @@ TEST_F(FPDFFormFillComboBoxFormEmbeddertest,
   TypeTextIntoTextField(10, EditableFormBegin());
 
   // Select left portion of string in user-editable combobox.
+  CheckSelection(L"");
   SelectTextWithKeyboard(5, FWL_VKEY_Left, EditableFormAtX(142.0));
   CheckSelection(L"ABCDE");
 
@@ -1256,6 +1384,7 @@ TEST_F(FPDFFormFillComboBoxFormEmbeddertest,
 
   // Select entire contents of user-editable combobox text field to check that
   // insertion worked as expected.
+  CheckSelection(L"");
   SelectAllEditableFormTextWithMouse();
   CheckSelection(L"HelloFGHIJ");
 }
@@ -1265,6 +1394,7 @@ TEST_F(FPDFFormFillComboBoxFormEmbeddertest,
   TypeTextIntoTextField(10, EditableFormBegin());
 
   // Select middle portion of string in user-editable combobox.
+  CheckSelection(L"");
   SelectTextWithKeyboard(5, FWL_VKEY_Left, EditableFormAtX(167.0));
   CheckSelection(L"DEFGH");
 
@@ -1275,6 +1405,7 @@ TEST_F(FPDFFormFillComboBoxFormEmbeddertest,
 
   // Select entire contents of user-editable combobox text field to check that
   // insertion worked as expected.
+  CheckSelection(L"");
   SelectAllEditableFormTextWithMouse();
   CheckSelection(L"ABCHelloIJ");
 }
@@ -1284,6 +1415,7 @@ TEST_F(FPDFFormFillComboBoxFormEmbeddertest,
   TypeTextIntoTextField(10, EditableFormBegin());
 
   // Select right portion of string in user-editable combobox.
+  CheckSelection(L"");
   SelectTextWithKeyboard(5, FWL_VKEY_Left, EditableFormEnd());
   CheckSelection(L"FGHIJ");
 
@@ -1294,6 +1426,7 @@ TEST_F(FPDFFormFillComboBoxFormEmbeddertest,
 
   // Select entire contents of user-editable combobox text field to check that
   // insertion worked as expected.
+  CheckSelection(L"");
   SelectAllEditableFormTextWithMouse();
   CheckSelection(L"ABCDEHello");
 }
@@ -1306,6 +1439,7 @@ TEST_F(FPDFFormFillTextFormEmbeddertest,
   CheckFocusedFieldText(L"Elephant");
 
   // Delete pre-filled contents of text field with char limit.
+  CheckSelection(L"");
   SelectAllCharLimitFormTextWithMouse();
   CheckSelection(L"Elephant");
   FORM_ReplaceSelection(form_handle(), page(), nullptr);
@@ -1320,6 +1454,7 @@ TEST_F(FPDFFormFillTextFormEmbeddertest,
 
   // Select entire contents of text field to check that insertion worked
   // as expected.
+  CheckSelection(L"");
   SelectAllCharLimitFormTextWithMouse();
   CheckSelection(L"Hippopotam");
 }
@@ -1331,6 +1466,7 @@ TEST_F(FPDFFormFillTextFormEmbeddertest,
   CheckFocusedFieldText(L"Elephant");
 
   // Delete pre-filled contents of text field with char limit.
+  CheckSelection(L"");
   SelectAllCharLimitFormTextWithMouse();
   CheckSelection(L"Elephant");
   FORM_ReplaceSelection(form_handle(), page(), nullptr);
@@ -1344,6 +1480,7 @@ TEST_F(FPDFFormFillTextFormEmbeddertest,
 
   // Select entire contents of text field to check that insertion worked
   // as expected.
+  CheckSelection(L"");
   SelectAllCharLimitFormTextWithMouse();
   CheckSelection(L"Zebra");
 }
@@ -1360,6 +1497,7 @@ TEST_F(FPDFFormFillTextFormEmbeddertest,
 
   // Select entire contents of text field to check that insertion worked
   // as expected.
+  CheckSelection(L"");
   SelectAllCharLimitFormTextWithMouse();
   CheckSelection(L"HiElephant");
 }
@@ -1382,6 +1520,7 @@ TEST_F(FPDFFormFillTextFormEmbeddertest,
 
   // Select entire contents of text field to check that insertion worked
   // as expected.
+  CheckSelection(L"");
   SelectAllCharLimitFormTextWithMouse();
   CheckSelection(L"ElephHiant");
 }
@@ -1400,6 +1539,7 @@ TEST_F(FPDFFormFillTextFormEmbeddertest,
 
   // Select entire contents of text field to check that insertion worked
   // as expected.
+  CheckSelection(L"");
   SelectAllCharLimitFormTextWithMouse();
   CheckSelection(L"ElephantHi");
 }
@@ -1409,6 +1549,7 @@ TEST_F(FPDFFormFillTextFormEmbeddertest,
   TypeTextIntoTextField(12, RegularFormBegin());
 
   // Select entire string in text field.
+  CheckSelection(L"");
   SelectTextWithKeyboard(12, FWL_VKEY_Left, CharLimitFormEnd());
   CheckSelection(L"Elephant");
 
@@ -1419,6 +1560,7 @@ TEST_F(FPDFFormFillTextFormEmbeddertest,
 
   // Select entire contents of text field to check that insertion worked
   // as expected.
+  CheckSelection(L"");
   SelectAllCharLimitFormTextWithMouse();
   CheckSelection(L"Hippopotam");
 }
@@ -1428,6 +1570,7 @@ TEST_F(FPDFFormFillTextFormEmbeddertest,
   TypeTextIntoTextField(12, RegularFormBegin());
 
   // Select left portion of string in text field.
+  CheckSelection(L"");
   SelectTextWithKeyboard(4, FWL_VKEY_Left, CharLimitFormAtX(122.0));
   CheckSelection(L"Elep");
 
@@ -1438,6 +1581,7 @@ TEST_F(FPDFFormFillTextFormEmbeddertest,
 
   // Select entire contents of text field to check that insertion worked
   // as expected.
+  CheckSelection(L"");
   SelectAllCharLimitFormTextWithMouse();
   CheckSelection(L"Hippophant");
 }
@@ -1447,6 +1591,7 @@ TEST_F(FPDFFormFillTextFormEmbeddertest,
   TypeTextIntoTextField(12, RegularFormBegin());
 
   // Select middle portion of string in text field.
+  CheckSelection(L"");
   SelectTextWithKeyboard(4, FWL_VKEY_Left, CharLimitFormAtX(136.0));
   CheckSelection(L"epha");
 
@@ -1457,6 +1602,7 @@ TEST_F(FPDFFormFillTextFormEmbeddertest,
 
   // Select entire contents of text field to check that insertion worked
   // as expected.
+  CheckSelection(L"");
   SelectAllCharLimitFormTextWithMouse();
   CheckSelection(L"ElHippopnt");
 }
@@ -1466,6 +1612,7 @@ TEST_F(FPDFFormFillTextFormEmbeddertest,
   TypeTextIntoTextField(12, RegularFormBegin());
 
   // Select right portion of string in text field.
+  CheckSelection(L"");
   SelectTextWithKeyboard(4, FWL_VKEY_Left, CharLimitFormAtX(152.0));
   CheckSelection(L"hant");
 
@@ -1476,8 +1623,26 @@ TEST_F(FPDFFormFillTextFormEmbeddertest,
 
   // Select entire contents of text field to check that insertion worked
   // as expected.
+  CheckSelection(L"");
   SelectAllCharLimitFormTextWithMouse();
   CheckSelection(L"ElepHippop");
+}
+
+TEST_F(FPDFFormFillTextFormEmbeddertest, DoubleClickInTextField) {
+  CheckFocusedFieldText(L"");
+  ClickOnFormFieldAtPoint(RegularFormBegin());
+  CheckFocusedFieldText(L"");
+
+  // Test inserting text into empty text field.
+  std::unique_ptr<unsigned short, pdfium::FreeDeleter> text_to_insert =
+      GetFPDFWideString(L"Hello World");
+  FORM_ReplaceSelection(form_handle(), page(), text_to_insert.get());
+  CheckFocusedFieldText(L"Hello World");
+
+  // Make sure double clicking selects the entire line.
+  CheckSelection(L"");
+  DoubleClickOnFormFieldAtPoint(RegularFormBegin());
+  CheckSelection(L"Hello World");
 }
 
 TEST_F(FPDFFormFillTextFormEmbeddertest, FocusChanges) {

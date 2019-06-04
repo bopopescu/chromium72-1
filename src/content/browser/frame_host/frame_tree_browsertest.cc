@@ -31,11 +31,8 @@ namespace content {
 
 namespace {
 
-std::string GetOriginFromRenderer(FrameTreeNode* node) {
-  std::string origin;
-  EXPECT_TRUE(ExecuteScriptAndExtractString(
-      node, "window.domAutomationController.send(document.origin);", &origin));
-  return origin;
+EvalJsResult GetOriginFromRenderer(FrameTreeNode* node) {
+  return EvalJs(node, "self.origin");
 }
 
 }  // namespace
@@ -278,7 +275,7 @@ IN_PROC_BROWSER_TEST_F(FrameTreeBrowserTest, OriginSetOnNavigation) {
   // Navigating to a data URL should set a unique origin.  This is represented
   // as "null" per RFC 6454.
   EXPECT_EQ("null", root->current_origin().Serialize());
-  EXPECT_TRUE(contents->GetMainFrame()->GetLastCommittedOrigin().unique());
+  EXPECT_TRUE(contents->GetMainFrame()->GetLastCommittedOrigin().opaque());
   EXPECT_EQ("null", GetOriginFromRenderer(root));
 
   // Re-navigating to a normal URL should update the origin.
@@ -288,7 +285,7 @@ IN_PROC_BROWSER_TEST_F(FrameTreeBrowserTest, OriginSetOnNavigation) {
   EXPECT_EQ(
       main_url.GetOrigin().spec(),
       contents->GetMainFrame()->GetLastCommittedOrigin().Serialize() + '/');
-  EXPECT_FALSE(contents->GetMainFrame()->GetLastCommittedOrigin().unique());
+  EXPECT_FALSE(contents->GetMainFrame()->GetLastCommittedOrigin().opaque());
   EXPECT_EQ(root->current_origin().Serialize(), GetOriginFromRenderer(root));
 }
 
@@ -314,37 +311,34 @@ IN_PROC_BROWSER_TEST_F(FrameTreeBrowserTest, NavigateGrandchildToBlob) {
   // target of the navigation.
   FrameTreeNode* target = root->child_at(0)->child_at(0);
 
-  std::string blob_url_string;
   RenderFrameDeletedObserver deleted_observer(target->current_frame_host());
-  EXPECT_TRUE(ExecuteScriptAndExtractString(
-      root,
-      "function receiveMessage(event) {"
+  std::string html =
+      "<html><body><div>This is blob content.</div>"
+      "<script>"
+      "window.parent.parent.postMessage('HI', self.origin);"
+      "</script></body></html>";
+  std::string script = JsReplace(
+      "new Promise((resolve) => {"
+      "  window.addEventListener('message', resolve, false);"
+      "  var blob = new Blob([$1], {type: 'text/html'});"
+      "  var blob_url = URL.createObjectURL(blob);"
+      "  frames[0][0].location.href = blob_url;"
+      "}).then((event) => {"
       "  document.body.appendChild(document.createTextNode(event.data));"
-      "  domAutomationController.send(event.source.location.href);"
-      "}"
-      "window.addEventListener('message', receiveMessage, false);"
-      "var blob = new Blob(["
-      "    '<html><body><div>This is blob content.</div><script>"
-      "         window.parent.parent.postMessage(\"HI\", document.origin);"
-      "     </script></body></html>'], {type: 'text/html'});"
-      "var blob_url = URL.createObjectURL(blob);"
-      "frames[0][0].location.href = blob_url;",
-      &blob_url_string));
+      "  return event.source.location.href;"
+      "});",
+      html);
+  std::string blob_url_string = EvalJs(root, script).ExtractString();
   // Wait for the RenderFrame to go away, if this will be cross-process.
   if (AreAllSitesIsolatedForTesting())
     deleted_observer.WaitUntilDeleted();
   EXPECT_EQ(GURL(blob_url_string), target->current_url());
   EXPECT_EQ(url::kBlobScheme, target->current_url().scheme());
-  EXPECT_FALSE(target->current_origin().unique());
+  EXPECT_FALSE(target->current_origin().opaque());
   EXPECT_EQ("a.com", target->current_origin().host());
   EXPECT_EQ(url::kHttpScheme, target->current_origin().scheme());
-
-  std::string document_body;
-  EXPECT_TRUE(ExecuteScriptAndExtractString(
-      target,
-      "domAutomationController.send(document.body.children[0].innerHTML);",
-      &document_body));
-  EXPECT_EQ("This is blob content.", document_body);
+  EXPECT_EQ("This is blob content.",
+            EvalJs(target, "document.body.children[0].innerHTML"));
   EXPECT_EQ(reference_tree, FrameTreeVisualizer().DepictFrameTree(root));
 }
 
@@ -362,38 +356,34 @@ IN_PROC_BROWSER_TEST_F(FrameTreeBrowserTest, NavigateChildToAboutBlank) {
   FrameTreeNode* initiator = target->parent();
 
   // Give the target a name.
-  EXPECT_TRUE(ExecuteScript(target, "window.name = 'target';"));
+  EXPECT_TRUE(ExecJs(target, "window.name = 'target';"));
 
   // Use window.open(about:blank), then poll the document for access.
-  std::string about_blank_origin;
-  EXPECT_TRUE(ExecuteScriptAndExtractString(
+  EvalJsResult about_blank_origin = EvalJs(
       initiator,
-      "var didNavigate = false;"
-      "var intervalID = setInterval(function() {"
-      "  if (!didNavigate) {"
-      "    didNavigate = true;"
-      "    window.open('about:blank', 'target');"
-      "  }"
-      "  // Poll the document until it doesn't throw a SecurityError.\n"
-      "  try {"
-      "    frames[0].document.write('Hi from ' + document.domain);"
-      "  } catch (e) { return; }"
-      "  clearInterval(intervalID);"
-      "  domAutomationController.send(frames[0].document.origin);"
-      "}, 16);",
-      &about_blank_origin));
+      "new Promise(resolve => {"
+      "  var didNavigate = false;"
+      "  var intervalID = setInterval(function() {"
+      "    if (!didNavigate) {"
+      "      didNavigate = true;"
+      "      window.open('about:blank', 'target');"
+      "    }"
+      "    // Poll the document until it doesn't throw a SecurityError.\n"
+      "    try {"
+      "      frames[0].document.write('Hi from ' + document.domain);"
+      "    } catch (e) { return; }"
+      "    clearInterval(intervalID);"
+      "    resolve(frames[0].self.origin);"
+      "  }, 16);"
+      "});");
+  EXPECT_EQ(target->current_origin(), about_blank_origin);
   EXPECT_EQ(GURL(url::kAboutBlankURL), target->current_url());
   EXPECT_EQ(url::kAboutScheme, target->current_url().scheme());
-  EXPECT_FALSE(target->current_origin().unique());
+  EXPECT_FALSE(target->current_origin().opaque());
   EXPECT_EQ("b.com", target->current_origin().host());
   EXPECT_EQ(url::kHttpScheme, target->current_origin().scheme());
-  EXPECT_EQ(target->current_origin().Serialize(), about_blank_origin);
 
-  std::string document_body;
-  EXPECT_TRUE(ExecuteScriptAndExtractString(
-      target, "domAutomationController.send(document.body.innerHTML);",
-      &document_body));
-  EXPECT_EQ("Hi from b.com", document_body);
+  EXPECT_EQ("Hi from b.com", EvalJs(target, "document.body.innerHTML"));
 }
 
 // Nested iframes, three origins: A(B(C)). Frame A navigates C to about:blank
@@ -414,36 +404,34 @@ IN_PROC_BROWSER_TEST_F(FrameTreeBrowserTest,
   FrameTreeNode* initiator = target->parent()->parent();
 
   // Give the target a name.
-  EXPECT_TRUE(ExecuteScript(target, "window.name = 'target';"));
+  EXPECT_TRUE(ExecJs(target, "window.name = 'target';"));
 
   // Use window.open(about:blank), then poll the document for access.
-  std::string about_blank_origin;
-  EXPECT_TRUE(ExecuteScriptAndExtractString(
-      initiator,
-      "var didNavigate = false;"
-      "var intervalID = setInterval(function() {"
-      "  if (!didNavigate) {"
-      "    didNavigate = true;"
-      "    window.open('about:blank', 'target');"
-      "  }"
-      "  // May raise a SecurityError, that's expected.\n"
-      "  frames[0][0].document.write('Hi from ' + document.domain);"
-      "  clearInterval(intervalID);"
-      "  domAutomationController.send(frames[0][0].document.origin);"
-      "}, 16);",
-      &about_blank_origin));
+  EvalJsResult about_blank_origin =
+      EvalJs(initiator,
+             "new Promise((resolve) => {"
+             "  var didNavigate = false;"
+             "  var intervalID = setInterval(() => {"
+             "    if (!didNavigate) {"
+             "      didNavigate = true;"
+             "      window.open('about:blank', 'target');"
+             "    }"
+             "    // May raise a SecurityError, that's expected.\n"
+             "    try {"
+             "      frames[0][0].document.write('Hi from ' + document.domain);"
+             "    } catch (e) { return; }"
+             "    clearInterval(intervalID);"
+             "    resolve(frames[0][0].self.origin);"
+             "  }, 16);"
+             "});");
+  EXPECT_EQ(target->current_origin(), about_blank_origin);
   EXPECT_EQ(GURL(url::kAboutBlankURL), target->current_url());
   EXPECT_EQ(url::kAboutScheme, target->current_url().scheme());
-  EXPECT_FALSE(target->current_origin().unique());
+  EXPECT_FALSE(target->current_origin().opaque());
   EXPECT_EQ("a.com", target->current_origin().host());
   EXPECT_EQ(url::kHttpScheme, target->current_origin().scheme());
-  EXPECT_EQ(target->current_origin().Serialize(), about_blank_origin);
 
-  std::string document_body;
-  EXPECT_TRUE(ExecuteScriptAndExtractString(
-      target, "domAutomationController.send(document.body.innerHTML);",
-      &document_body));
-  EXPECT_EQ("Hi from a.com", document_body);
+  EXPECT_EQ("Hi from a.com", EvalJs(target, "document.body.innerHTML"));
 }
 
 // Ensures that iframe with srcdoc is always put in the same origin as its
@@ -458,9 +446,7 @@ IN_PROC_BROWSER_TEST_F(FrameTreeBrowserTest, ChildFrameWithSrcdoc) {
   EXPECT_EQ(1U, root->child_count());
 
   FrameTreeNode* child = root->child_at(0);
-  std::string frame_origin;
-  EXPECT_TRUE(ExecuteScriptAndExtractString(
-      child, "domAutomationController.send(document.origin);", &frame_origin));
+  std::string frame_origin = EvalJs(child, "self.origin;").ExtractString();
   EXPECT_TRUE(
       child->current_frame_host()->GetLastCommittedOrigin().IsSameOriginWith(
           url::Origin::Create(GURL(frame_origin))));
@@ -475,18 +461,16 @@ IN_PROC_BROWSER_TEST_F(FrameTreeBrowserTest, ChildFrameWithSrcdoc) {
                        "f.srcdoc = 'some content';"
                        "document.body.appendChild(f)");
     TestNavigationObserver observer(shell()->web_contents());
-    EXPECT_TRUE(ExecuteScript(root, script));
+    EXPECT_TRUE(ExecJs(root, script));
     EXPECT_EQ(2U, root->child_count());
     observer.Wait();
 
     EXPECT_EQ(GURL(kAboutSrcDocURL), root->child_at(1)->current_url());
-    EXPECT_TRUE(ExecuteScriptAndExtractString(
-        root->child_at(1), "domAutomationController.send(document.origin);",
-        &frame_origin));
+    EvalJsResult frame_origin = EvalJs(root->child_at(1), "self.origin");
     EXPECT_EQ(root->current_frame_host()->GetLastCommittedURL().GetOrigin(),
-              GURL(frame_origin));
+              GURL(frame_origin.ExtractString()));
     EXPECT_NE(child->current_frame_host()->GetLastCommittedURL().GetOrigin(),
-              GURL(frame_origin));
+              GURL(frame_origin.ExtractString()));
   }
 
   // Set srcdoc on the existing cross-site frame. It should navigate the frame
@@ -495,15 +479,14 @@ IN_PROC_BROWSER_TEST_F(FrameTreeBrowserTest, ChildFrameWithSrcdoc) {
     std::string script("var f = document.getElementById('child-0');"
                        "f.srcdoc = 'some content';");
     TestNavigationObserver observer(shell()->web_contents());
-    EXPECT_TRUE(ExecuteScript(root, script));
+    EXPECT_TRUE(ExecJs(root, script));
     observer.Wait();
 
     EXPECT_EQ(GURL(kAboutSrcDocURL), child->current_url());
-    EXPECT_TRUE(ExecuteScriptAndExtractString(
-        child, "domAutomationController.send(document.origin);",
-        &frame_origin));
-    EXPECT_EQ(root->current_frame_host()->GetLastCommittedURL().GetOrigin(),
-              GURL(frame_origin));
+    EXPECT_EQ(
+        url::Origin::Create(root->current_frame_host()->GetLastCommittedURL())
+            .Serialize(),
+        EvalJs(child, "self.origin"));
   }
 }
 
@@ -687,8 +670,8 @@ IN_PROC_BROWSER_TEST_F(FrameTreeBrowserTest, SubframeOpenerSetForNewWindow) {
   // Open a new window from a subframe.
   ShellAddedObserver new_shell_observer;
   GURL popup_url(embedded_test_server()->GetURL("foo.com", "/title1.html"));
-  EXPECT_TRUE(ExecuteScript(root->child_at(0),
-                            "window.open('" + popup_url.spec() + "');"));
+  EXPECT_TRUE(
+      ExecJs(root->child_at(0), JsReplace("window.open($1);", popup_url)));
   Shell* new_shell = new_shell_observer.GetShell();
   WebContents* new_contents = new_shell->web_contents();
   WaitForLoadStop(new_contents);
@@ -702,6 +685,36 @@ IN_PROC_BROWSER_TEST_F(FrameTreeBrowserTest, SubframeOpenerSetForNewWindow) {
   // Close the original window.  This should clear the new window's opener.
   shell()->Close();
   EXPECT_EQ(nullptr, popup_root->opener());
+}
+
+// Tests that the user activation bits get cleared when a same-site document is
+// installed in the frame.
+IN_PROC_BROWSER_TEST_F(FrameTreeBrowserTest,
+                       ClearUserActivationForNewDocument) {
+  GURL main_url(embedded_test_server()->GetURL("/frame_tree/top.html"));
+  EXPECT_TRUE(NavigateToURL(shell(), main_url));
+
+  // It is safe to obtain the root frame tree node here, as it doesn't change.
+  FrameTreeNode* root = static_cast<WebContentsImpl*>(shell()->web_contents())
+                            ->GetFrameTree()
+                            ->root();
+
+  EXPECT_FALSE(root->HasBeenActivated());
+  EXPECT_FALSE(root->HasTransientUserActivation());
+
+  // Set the user activation bits.
+  root->UpdateUserActivationState(
+      blink::UserActivationUpdateType::kNotifyActivation);
+  EXPECT_TRUE(root->HasBeenActivated());
+  EXPECT_TRUE(root->HasTransientUserActivation());
+
+  // Install a new same-site document to check the clearing of user activation
+  // bits.
+  GURL url(embedded_test_server()->GetURL("/title1.html"));
+  EXPECT_TRUE(NavigateToURL(shell(), url));
+
+  EXPECT_FALSE(root->HasBeenActivated());
+  EXPECT_FALSE(root->HasTransientUserActivation());
 }
 
 class CrossProcessFrameTreeBrowserTest : public ContentBrowserTest {
@@ -856,6 +869,37 @@ IN_PROC_BROWSER_TEST_F(CrossProcessFrameTreeBrowserTest,
             popup_root->current_frame_host()->active_sandbox_flags());
 }
 
+// Tests that the user activation bits get cleared when a cross-site document is
+// installed in the frame.
+IN_PROC_BROWSER_TEST_F(CrossProcessFrameTreeBrowserTest,
+                       ClearUserActivationForNewDocument) {
+  GURL main_url(embedded_test_server()->GetURL("/frame_tree/top.html"));
+  EXPECT_TRUE(NavigateToURL(shell(), main_url));
+
+  // It is safe to obtain the root frame tree node here, as it doesn't change.
+  FrameTreeNode* root = static_cast<WebContentsImpl*>(shell()->web_contents())
+                            ->GetFrameTree()
+                            ->root();
+
+  EXPECT_FALSE(root->HasBeenActivated());
+  EXPECT_FALSE(root->HasTransientUserActivation());
+
+  // Set the user activation bits.
+  root->UpdateUserActivationState(
+      blink::UserActivationUpdateType::kNotifyActivation);
+  EXPECT_TRUE(root->HasBeenActivated());
+  EXPECT_TRUE(root->HasTransientUserActivation());
+
+  // Install a new cross-site document to check the clearing of user activation
+  // bits.
+  GURL cross_site_url(
+      embedded_test_server()->GetURL("foo.com", "/title2.html"));
+  EXPECT_TRUE(NavigateToURL(shell(), cross_site_url));
+
+  EXPECT_FALSE(root->HasBeenActivated());
+  EXPECT_FALSE(root->HasTransientUserActivation());
+}
+
 // FrameTreeBrowserTest variant where we isolate http://*.is, Iceland's top
 // level domain. This is an analogue to isolating extensions, which we can use
 // inside content_browsertests, where extensions don't exist. Iceland, like an
@@ -866,11 +910,15 @@ class IsolateIcelandFrameTreeBrowserTest : public ContentBrowserTest {
   IsolateIcelandFrameTreeBrowserTest() {}
 
   void SetUpCommandLine(base::CommandLine* command_line) override {
-    // blink suppresses navigations to blob URLs of origins different from the
+    // Blink suppresses navigations to blob URLs of origins different from the
     // frame initiating the navigation. We disable those checks for this test,
     // to test what happens in a compromise scenario.
     command_line->AppendSwitch(switches::kDisableWebSecurity);
-    command_line->AppendSwitchASCII(switches::kIsolateSitesForTesting, "*.is");
+
+    // ProcessSwitchForIsolatedBlob test below requires that one of URLs used in
+    // the test (blob:http://b.is:2932/) belongs to an isolated origin.
+    command_line->AppendSwitchASCII(switches::kIsolateOrigins,
+                                    "http://b.is:2932/");
   }
 
   void SetUpOnMainThread() override {
@@ -896,16 +944,16 @@ IN_PROC_BROWSER_TEST_F(IsolateIcelandFrameTreeBrowserTest,
 
   // The navigation targets an invalid blob url; that's intentional to trigger
   // an error response. The response should commit in a process dedicated to
-  // http://b.is.
-  std::string result;
-  EXPECT_TRUE(ExecuteScriptAndExtractString(
-      root,
-      "var iframe_element = document.getElementsByTagName('iframe')[0];"
-      "iframe_element.onload = () => {"
-      "    domAutomationController.send('done');"
-      "};"
-      "iframe_element.src = 'blob:http://b.is:2932/';",
-      &result));
+  // http://b.is:2932.
+  EXPECT_EQ(
+      "done",
+      EvalJs(
+          root,
+          "new Promise((resolve) => {"
+          "  var iframe_element = document.getElementsByTagName('iframe')[0];"
+          "  iframe_element.onload = () => resolve('done');"
+          "  iframe_element.src = 'blob:http://b.is:2932/';"
+          "});"));
   WaitForLoadStop(contents);
 
   // Make sure we did a process transfer back to "b.is".
@@ -913,7 +961,7 @@ IN_PROC_BROWSER_TEST_F(IsolateIcelandFrameTreeBrowserTest,
       " Site A ------------ proxies for B\n"
       "   +--Site B ------- proxies for A\n"
       "Where A = http://a.com/\n"
-      "      B = http://b.is/",
+      "      B = http://b.is:2932/",
       FrameTreeVisualizer().DepictFrameTree(root));
 }
 

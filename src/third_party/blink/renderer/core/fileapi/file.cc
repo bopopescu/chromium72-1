@@ -26,12 +26,12 @@
 #include "third_party/blink/renderer/core/fileapi/file.h"
 
 #include <memory>
+
 #include "third_party/blink/public/platform/file_path_conversion.h"
 #include "third_party/blink/public/platform/platform.h"
-#include "third_party/blink/renderer/bindings/core/v8/exception_state.h"
-#include "third_party/blink/renderer/core/dom/exception_code.h"
 #include "third_party/blink/renderer/core/fileapi/file_property_bag.h"
 #include "third_party/blink/renderer/core/frame/use_counter.h"
+#include "third_party/blink/renderer/platform/bindings/exception_state.h"
 #include "third_party/blink/renderer/platform/bindings/script_state.h"
 #include "third_party/blink/renderer/platform/blob/blob_data.h"
 #include "third_party/blink/renderer/platform/file_metadata.h"
@@ -70,6 +70,11 @@ static std::unique_ptr<BlobData> CreateBlobDataForFileWithType(
 static std::unique_ptr<BlobData> CreateBlobDataForFile(
     const String& path,
     File::ContentTypeLookupPolicy policy) {
+  if (path.IsEmpty()) {
+    std::unique_ptr<BlobData> blob_data = BlobData::Create();
+    blob_data->SetContentType("application/octet-stream");
+    return blob_data;
+  }
   return CreateBlobDataForFileWithType(
       path, GetContentTypeFromFileName(path, policy));
 }
@@ -121,22 +126,22 @@ File* File::Create(
     ExecutionContext* context,
     const HeapVector<ArrayBufferOrArrayBufferViewOrBlobOrUSVString>& file_bits,
     const String& file_name,
-    const FilePropertyBag& options,
+    const FilePropertyBag* options,
     ExceptionState& exception_state) {
-  DCHECK(options.hasType());
+  DCHECK(options->hasType());
 
   double last_modified;
-  if (options.hasLastModified())
-    last_modified = static_cast<double>(options.lastModified());
+  if (options->hasLastModified())
+    last_modified = static_cast<double>(options->lastModified());
   else
     last_modified = CurrentTimeMS();
-  DCHECK(options.hasEndings());
-  bool normalize_line_endings_to_native = options.endings() == "native";
+  DCHECK(options->hasEndings());
+  bool normalize_line_endings_to_native = options->endings() == "native";
   if (normalize_line_endings_to_native)
     UseCounter::Count(context, WebFeature::kFileAPINativeLineEndings);
 
   std::unique_ptr<BlobData> blob_data = BlobData::Create();
-  blob_data->SetContentType(NormalizeType(options.type()));
+  blob_data->SetContentType(NormalizeType(options->type()));
   PopulateBlobData(blob_data.get(), file_bits,
                    normalize_line_endings_to_native);
 
@@ -147,7 +152,8 @@ File* File::Create(
 
 File* File::CreateWithRelativePath(const String& path,
                                    const String& relative_path) {
-  File* file = new File(path, File::kAllContentTypes, File::kIsUserVisible);
+  File* file = MakeGarbageCollected<File>(path, File::kAllContentTypes,
+                                          File::kIsUserVisible);
   file->relative_path_ = relative_path;
   return file;
 }
@@ -243,7 +249,7 @@ File::File(const File& other)
       relative_path_(other.relative_path_) {}
 
 File* File::Clone(const String& name) const {
-  File* file = new File(*this);
+  File* file = MakeGarbageCollected<File>(*this);
   if (!name.IsNull())
     file->name_ = name;
   return file;

@@ -16,16 +16,12 @@
 #include "base/threading/thread_task_runner_handle.h"
 #include "components/offline_pages/core/offline_store_types.h"
 #include "components/offline_pages/core/prefetch/store/prefetch_store_schema.h"
-#include "sql/connection.h"
+#include "sql/database.h"
 
 namespace offline_pages {
 namespace {
 
 const char kPrefetchStoreFileName[] = "PrefetchStore.db";
-
-using InitializeCallback =
-    base::Callback<void(InitializationStatus,
-                        std::unique_ptr<sql::Connection>)>;
 
 bool PrepareDirectory(const base::FilePath& path) {
   base::File::Error error = base::File::FILE_OK;
@@ -43,7 +39,7 @@ bool PrepareDirectory(const base::FilePath& path) {
 // benefit from a better status code reportable through UMA to better capture
 // the reason for failure, aiding the process of repeated attempts to
 // open/initialize the database.
-bool InitializeSync(sql::Connection* db,
+bool InitializeSync(sql::Database* db,
                     const base::FilePath& path,
                     bool in_memory) {
   // These values are default.
@@ -71,7 +67,7 @@ bool InitializeSync(sql::Connection* db,
 }
 
 void CloseDatabaseSync(
-    sql::Connection* db,
+    sql::Database* db,
     scoped_refptr<base::SingleThreadTaskRunner> callback_runner,
     base::OnceClosure callback) {
   if (db)
@@ -80,8 +76,7 @@ void CloseDatabaseSync(
 }
 
 void ReportStoreEvent(OfflinePagesStoreEvent event) {
-  UMA_HISTOGRAM_ENUMERATION("OfflinePages.PrefetchStore.StoreEvent", event,
-                            OfflinePagesStoreEvent::STORE_EVENT_COUNT);
+  UMA_HISTOGRAM_ENUMERATION("OfflinePages.PrefetchStore.StoreEvent", event);
 }
 
 }  // namespace
@@ -118,20 +113,20 @@ void PrefetchStore::Initialize(base::OnceClosure pending_command) {
   initialization_status_ = InitializationStatus::INITIALIZING;
 
   if (!last_closing_time_.is_null()) {
-    ReportStoreEvent(OfflinePagesStoreEvent::STORE_REOPENED);
+    ReportStoreEvent(OfflinePagesStoreEvent::kReopened);
     UMA_HISTOGRAM_CUSTOM_TIMES("OfflinePages.PrefetchStore.TimeFromCloseToOpen",
                                base::Time::Now() - last_closing_time_,
                                base::TimeDelta::FromMilliseconds(10),
                                base::TimeDelta::FromMinutes(10),
                                50 /* buckets */);
   } else {
-    ReportStoreEvent(OfflinePagesStoreEvent::STORE_OPENED_FIRST_TIME);
+    ReportStoreEvent(OfflinePagesStoreEvent::kOpenedFirstTime);
   }
 
   // This is how we reset a pointer and provide deleter. This is necessary to
   // ensure that we can close the store more than once.
-  db_ = std::unique_ptr<sql::Connection, base::OnTaskRunnerDeleter>(
-      new sql::Connection, base::OnTaskRunnerDeleter(blocking_task_runner_));
+  db_ = DatabaseUniquePtr(new sql::Database,
+                          base::OnTaskRunnerDeleter(blocking_task_runner_));
 
   base::PostTaskAndReplyWithResult(
       blocking_task_runner_.get(), FROM_HERE,
@@ -167,13 +162,13 @@ void PrefetchStore::OnInitializeDone(base::OnceClosure pending_command,
 
 void PrefetchStore::CloseInternal() {
   if (initialization_status_ != InitializationStatus::SUCCESS) {
-    ReportStoreEvent(OfflinePagesStoreEvent::STORE_CLOSE_SKIPPED);
+    ReportStoreEvent(OfflinePagesStoreEvent::kCloseSkipped);
     return;
   }
   TRACE_EVENT_ASYNC_STEP_PAST0("offline_pages", "Prefetch Store", this, "Open");
 
   last_closing_time_ = base::Time::Now();
-  ReportStoreEvent(OfflinePagesStoreEvent::STORE_CLOSED);
+  ReportStoreEvent(OfflinePagesStoreEvent::kClosed);
 
   initialization_status_ = InitializationStatus::NOT_INITIALIZED;
   blocking_task_runner_->PostTask(
@@ -184,8 +179,7 @@ void PrefetchStore::CloseInternal() {
                          weak_ptr_factory_.GetWeakPtr(), std::move(db_))));
 }
 
-void PrefetchStore::CloseInternalDone(
-    std::unique_ptr<sql::Connection, base::OnTaskRunnerDeleter> db) {
+void PrefetchStore::CloseInternalDone(DatabaseUniquePtr db) {
   db.reset();
   TRACE_EVENT_ASYNC_STEP_PAST0("offline_pages", "Prefetch Store", this,
                                "Closing");

@@ -22,21 +22,19 @@ testcase.tabindexSearchBoxFocus = function() {
     // Press the Ctrl-F key.
     function(element) {
       remoteCall.callRemoteTestUtil(
-          'fakeKeyDown', appId,
-          ['body', 'f', 'U+0046', true, false, false],
-          this.next);
+          'fakeKeyDown', appId, ['body', 'f', true, false, false], this.next);
     },
     // Check that the search box has the focus.
     function(result) {
       chrome.test.assertTrue(result);
-      remoteCall.waitForElement(appId, ['#search-box input:focus']).
-          then(this.next); },
+      remoteCall.waitForElement(appId, ['#search-box cr-input:focus-within'])
+          .then(this.next);
+    },
     // Press the Esc key.
     function(element) {
       remoteCall.callRemoteTestUtil(
           'fakeKeyDown', appId,
-          ['#search-box input', 'Escape', 'U+001B', false, false, false],
-          this.next);
+          ['#search-box cr-input', 'Escape', false, false, false], this.next);
     },
     // Check that the file list has the focus.
     function(result) {
@@ -115,12 +113,13 @@ testcase.tabindexFocusDownloads = function() {
     function(results) {
       appId = results.windowId;
       remoteCall.waitForElement(appId, ['#file-list:focus']).then(this.next);
-    },
-    // Press the Tab key.
-    function(element) {
+    }, function(element) {
       remoteCall.callRemoteTestUtil('getActiveElement', appId, [], this.next);
     }, function(element) {
       chrome.test.assertEq('list', element.attributes['class']);
+      remoteCall.checkNextTabFocus(appId, 'breadcrumb-path-0').then(this.next);
+    }, function(result) {
+      chrome.test.assertTrue(result);
       remoteCall.checkNextTabFocus(appId, 'search-button').then(this.next);
     }, function(result) {
       chrome.test.assertTrue(result);
@@ -254,7 +253,7 @@ function tabindexFocus(dialogParams, volumeName, expectedSet, initialize,
     if (dialogParams.type === 'saveFile') {
       promise = promise.then(function() {
         return remoteCall.waitForElement(
-            appId, ['#filename-input-textbox:focus']);
+            appId, ['#filename-input-textbox:focus-within']);
       });
     } else {
       promise = promise.then(function() {
@@ -284,8 +283,7 @@ function tabindexFocus(dialogParams, volumeName, expectedSet, initialize,
     promise = promise.then(function() {
       // Closes the window by pressing Enter.
       return remoteCall.callRemoteTestUtil(
-          'fakeKeyDown', appId, ['#file-list', 'Enter', 'Enter', false, false,
-                                 false]);
+          'fakeKeyDown', appId, ['#file-list', 'Enter', false, false, false]);
     });
 
     return promise;
@@ -307,9 +305,11 @@ testcase.tabindexOpenDialogDownloads = function() {
         return remoteCall.callRemoteTestUtil(
             'selectFile', appId, ['hello.txt']);
       },
-      ['#ok-button:not([disabled])'],
-      ['ok-button', 'cancel-button', 'search-button', 'view-button',
-       'sort-button', 'gear-button', 'directory-tree', 'file-list']));
+      ['#ok-button:not([disabled])'], [
+        'cancel-button', 'ok-button', 'breadcrumb-path-0', 'search-button',
+        'view-button', 'sort-button', 'gear-button', 'directory-tree',
+        'file-list'
+      ]));
 };
 
 /**
@@ -322,9 +322,10 @@ testcase.tabindexOpenDialogDrive = function() {
         return remoteCall.callRemoteTestUtil(
             'selectFile', appId, ['hello.txt']);
       },
-      ['#ok-button:not([disabled])'],
-      ['ok-button', 'cancel-button', 'search-button', 'view-button',
-       'sort-button', 'gear-button', 'directory-tree', 'file-list']));
+      ['#ok-button:not([disabled])'], [
+        'cancel-button', 'ok-button', 'search-button', 'view-button',
+        'sort-button', 'gear-button', 'directory-tree', 'file-list'
+      ]));
 };
 
 /**
@@ -336,11 +337,12 @@ testcase.tabindexSaveFileDialogDownloads = function() {
         type: 'saveFile',
         suggestedName: 'hoge.txt'  // Prevent showing a override prompt
       },
-      'downloads', BASIC_LOCAL_ENTRY_SET, null,
-      ['#ok-button:not([disabled])'],
-      ['ok-button', 'cancel-button', 'search-button', 'view-button',
-       'sort-button', 'gear-button', 'directory-tree', 'file-list',
-       'new-folder-button', 'filename-input-textbox']));
+      'downloads', BASIC_LOCAL_ENTRY_SET, null, ['#ok-button:not([disabled])'],
+      [
+        'cancel-button', 'ok-button', 'breadcrumb-path-0', 'search-button',
+        'view-button', 'sort-button', 'gear-button', 'directory-tree',
+        'file-list', 'new-folder-button', 'filename-input-textbox'
+      ]));
 };
 
 /**
@@ -352,9 +354,9 @@ testcase.tabindexSaveFileDialogDrive = function() {
         type: 'saveFile',
         suggestedName: 'hoge.txt'  // Prevent showing a override prompt
       },
-      'drive', BASIC_DRIVE_ENTRY_SET, null,
-      ['#ok-button:not([disabled])'],
-      ['ok-button', 'cancel-button', 'search-button', 'view-button',
-       'sort-button', 'gear-button', 'directory-tree', 'file-list',
-       'new-folder-button', 'filename-input-textbox']));
+      'drive', BASIC_DRIVE_ENTRY_SET, null, ['#ok-button:not([disabled])'], [
+        'cancel-button', 'ok-button', 'search-button', 'view-button',
+        'sort-button', 'gear-button', 'directory-tree', 'file-list',
+        'new-folder-button', 'filename-input-textbox'
+      ]));
 };

@@ -5,12 +5,11 @@
 #ifndef CHROME_UTILITY_MASH_SERVICE_FACTORY_H_
 #define CHROME_UTILITY_MASH_SERVICE_FACTORY_H_
 
-#include <memory>
-
 #include "content/public/utility/content_utility_client.h"
+#include "services/service_manager/public/mojom/service.mojom.h"
 
-namespace ui {
-class ImageCursorsSet;
+namespace service_manager {
+class Service;
 }
 
 // Lives on the utility process main thread.
@@ -23,10 +22,13 @@ class MashServiceFactory {
   void RegisterOutOfProcessServices(
       content::ContentUtilityClient::StaticServiceMap* services);
 
- private:
-  // Must live on the utility main thread.
-  std::unique_ptr<ui::ImageCursorsSet> cursors_;
+  // Handles an incoming service request for this utility process. Returns
+  // null if the named service is unknown or cannot be created.
+  std::unique_ptr<service_manager::Service> HandleServiceRequest(
+      const std::string& service_name,
+      service_manager::mojom::ServiceRequest request);
 
+ private:
   DISALLOW_COPY_AND_ASSIGN(MashServiceFactory);
 };
 

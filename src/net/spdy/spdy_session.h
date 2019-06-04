@@ -20,6 +20,7 @@
 #include "base/memory/ref_counted.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
+#include "base/optional.h"
 #include "base/strings/string_piece.h"
 #include "base/time/time.h"
 #include "net/base/completion_once_callback.h"
@@ -52,10 +53,6 @@
 #include "net/traffic_annotation/network_traffic_annotation.h"
 #include "url/gurl.h"
 #include "url/scheme_host_port.h"
-
-namespace crypto {
-class ECPrivateKey;
-}
 
 namespace net {
 
@@ -91,6 +88,7 @@ const spdy::SpdyStreamId kLastStreamId = 0x7fffffff;
 
 struct LoadTimingInfo;
 class NetLog;
+class NetworkQualityEstimator;
 class SpdyStream;
 class SSLInfo;
 class TransportSecurityState;
@@ -179,7 +177,9 @@ enum class SpdyPushedStreamFate {
   kVaryMismatch = 16,
   kAcceptedNoVary = 17,
   kAcceptedMatchingVary = 18,
-  kMaxValue = kAcceptedMatchingVary
+  kPushDisabled = 19,
+  kAlreadyInCache = 20,
+  kMaxValue = kAlreadyInCache
 };
 
 // If these compile asserts fail then SpdyProtocolErrorDetails needs
@@ -226,6 +226,10 @@ class NET_EXPORT_PRIVATE SpdyStreamRequest {
   // OK or |callback| is called with OK. The caller must immediately
   // set a delegate for the returned stream (except for test code).
   base::WeakPtr<SpdyStream> ReleaseStream();
+
+  // Changes the priority of the stream, or changes the priority of the queued
+  // request in the session.
+  void SetPriority(RequestPriority priority);
 
   // Returns the estimate of dynamically allocated memory in bytes.
   size_t EstimateMemoryUsage() const;
@@ -282,6 +286,7 @@ class NET_EXPORT SpdySession : public BufferedSpdyFramerVisitorInterface,
   // |old_hostname| associated with |ssl_info|.
   static bool CanPool(TransportSecurityState* transport_security_state,
                       const SSLInfo& ssl_info,
+                      const SSLConfigService& ssl_config_service,
                       const std::string& old_hostname,
                       const std::string& new_hostname);
 
@@ -292,15 +297,19 @@ class NET_EXPORT SpdySession : public BufferedSpdyFramerVisitorInterface,
   SpdySession(const SpdySessionKey& spdy_session_key,
               HttpServerProperties* http_server_properties,
               TransportSecurityState* transport_security_state,
-              const QuicTransportVersionVector& quic_supported_versions,
+              SSLConfigService* ssl_config_service,
+              const quic::QuicTransportVersionVector& quic_supported_versions,
               bool enable_sending_initial_data,
               bool enable_ping_based_connection_checking,
               bool support_ietf_format_quic_altsvc,
               bool is_trusted_proxy,
               size_t session_max_recv_window_size,
               const spdy::SettingsMap& initial_settings,
+              const base::Optional<SpdySessionPool::GreasedHttp2Frame>&
+                  greased_http2_frame,
               TimeFunc time_func,
               ServerPushDelegate* push_delegate,
+              NetworkQualityEstimator* network_quality_estimator,
               NetLog* net_log);
 
   ~SpdySession() override;
@@ -314,31 +323,21 @@ class NET_EXPORT SpdySession : public BufferedSpdyFramerVisitorInterface,
   const SpdySessionKey& spdy_session_key() const {
     return spdy_session_key_;
   }
-  // Get a pushed stream for a given |url|.  If the server initiates a
-  // stream, it might already exist for a given path.  The server
-  // might also not have initiated the stream yet, but indicated it
-  // will via X-Associated-Content.  Returns OK if a stream was found
-  // and put into |spdy_stream|, or if one was not found but it is
-  // okay to create a new stream (in which case |spdy_stream| is
-  // reset).  Returns an error (not ERR_IO_PENDING) otherwise, and
-  // resets |spdy_stream|.
+
+  // Get a pushed stream for a given |url| with stream ID |pushed_stream_id|.
+  // The caller must have already claimed the stream from Http2PushPromiseIndex.
+  // |pushed_stream_id| must not be kNoPushedStreamFound.
   //
-  // If |pushed_stream_id != kNoPushedStreamFound|, then the pushed stream with
-  // pushed_stream_id is used.  An error is returned if that stream is not
-  // available.
-  //
-  // If |pushed_stream_id == kNoPushedStreamFound|, then any matching pushed
-  // stream that has not been claimed by another request can be used.  This can
-  // happen, for example, with http scheme pushed streams, or if the pushed
-  // stream was received from the server in the meanwhile.
-  //
-  // If a stream was found and the stream is still open, the priority
-  // of that stream is updated to match |priority|.
+  // Returns ERR_CONNECTION_CLOSED if the connection is being closed.
+  // Returns ERR_SPDY_PUSHED_STREAM_NOT_AVAILABLE if the pushed stream is not
+  //   available any longer, for example, if the server has reset it.
+  // Returns OK if the stream is still available, and returns the stream in
+  //   |*spdy_stream|.  If the stream is still open, updates its priority to
+  //   |priority|.
   int GetPushedStream(const GURL& url,
                       spdy::SpdyStreamId pushed_stream_id,
                       RequestPriority priority,
-                      SpdyStream** spdy_stream,
-                      const NetLogWithSource& stream_net_log);
+                      SpdyStream** spdy_stream);
 
   // Called when the pushed stream should be cancelled. If the pushed stream is
   // not claimed and active, sends RST to the server to cancel the stream.
@@ -389,6 +388,11 @@ class NET_EXPORT SpdySession : public BufferedSpdyFramerVisitorInterface,
                                                int len,
                                                spdy::SpdyDataFlags flags);
 
+  // Send PRIORITY frames according to the new priority of an existing stream.
+  void UpdateStreamPriority(SpdyStream* stream,
+                            RequestPriority old_priority,
+                            RequestPriority new_priority);
+
   // Close the stream with the given ID, which must exist and be
   // active. Note that that stream may hold the last reference to the
   // session.
@@ -416,9 +420,6 @@ class NET_EXPORT SpdySession : public BufferedSpdyFramerVisitorInterface,
   // MultiplexedSession methods:
   bool GetRemoteEndpoint(IPEndPoint* endpoint) override;
   bool GetSSLInfo(SSLInfo* ssl_info) const override;
-  Error GetTokenBindingSignature(crypto::ECPrivateKey* key,
-                                 TokenBindingType tb_type,
-                                 std::vector<uint8_t>* out) override;
 
   // Returns true if ALPN was negotiated for the underlying socket.
   bool WasAlpnNegotiated() const;
@@ -609,8 +610,14 @@ class NET_EXPORT SpdySession : public BufferedSpdyFramerVisitorInterface,
                    base::WeakPtr<SpdyStream>* stream);
 
   // Called by SpdyStreamRequest to remove |request| from the stream
-  // creation queue.
-  void CancelStreamRequest(const base::WeakPtr<SpdyStreamRequest>& request);
+  // creation queue. Returns whether a request was removed from the queue.
+  bool CancelStreamRequest(const base::WeakPtr<SpdyStreamRequest>& request);
+
+  // Removes |request| from the stream creation queue and reinserts it into the
+  // queue at the new |priority|.
+  void ChangeStreamRequestPriority(
+      const base::WeakPtr<SpdyStreamRequest>& request,
+      RequestPriority priority);
 
   // Returns the next pending stream request to process, or NULL if
   // there is none.
@@ -927,6 +934,7 @@ class NET_EXPORT SpdySession : public BufferedSpdyFramerVisitorInterface,
   HttpServerProperties* http_server_properties_;
 
   TransportSecurityState* transport_security_state_;
+  SSLConfigService* ssl_config_service_;
 
   // The socket handle for this session.
   std::unique_ptr<ClientSocketHandle> connection_;
@@ -1020,6 +1028,11 @@ class NET_EXPORT SpdySession : public BufferedSpdyFramerVisitorInterface,
   // and maximum HPACK dynamic table size.
   const spdy::SettingsMap initial_settings_;
 
+  // If set, an HTTP/2 frame with a reserved frame type will be sent after every
+  // valid HTTP/2 frame.  See
+  // https://tools.ietf.org/html/draft-bishop-httpbis-grease-00.
+  const base::Optional<SpdySessionPool::GreasedHttp2Frame> greased_http2_frame_;
+
   // Limits
   size_t max_concurrent_streams_;
   size_t max_concurrent_pushed_streams_;
@@ -1030,8 +1043,9 @@ class NET_EXPORT SpdySession : public BufferedSpdyFramerVisitorInterface,
   int streams_pushed_and_claimed_count_;
   int streams_abandoned_count_;
 
-  // Count of all pings on the wire, for which we have not gotten a response.
-  int64_t pings_in_flight_;
+  // True if there has been a ping sent for which we have not received a
+  // response yet.  There is always at most one ping in flight.
+  bool ping_in_flight_;
 
   // This is the next ping_id (unique_id) to be sent in PING frame.
   spdy::SpdyPingId next_ping_id_;
@@ -1090,18 +1104,22 @@ class NET_EXPORT SpdySession : public BufferedSpdyFramerVisitorInterface,
   NetLogWithSource net_log_;
 
   // Versions of QUIC which may be used.
-  const QuicTransportVersionVector quic_supported_versions_;
+  const quic::QuicTransportVersionVector quic_supported_versions_;
 
   // Outside of tests, these should always be true.
-  bool enable_sending_initial_data_;
-  bool enable_ping_based_connection_checking_;
+  const bool enable_sending_initial_data_;
+  const bool enable_ping_based_connection_checking_;
 
   // If true, alt-svc headers advertising QUIC in IETF format will be supported.
-  bool support_ietf_format_quic_altsvc_;
+  const bool support_ietf_format_quic_altsvc_;
 
   // If true, this session is being made to a trusted SPDY/HTTP2 proxy that is
   // allowed to push cross-origin resources.
   const bool is_trusted_proxy_;
+
+  // If true, accept pushed streams from server.
+  // If false, reset pushed streams immediately.
+  const bool enable_push_;
 
   // True if the server has advertised WebSocket support via
   // spdy::SETTINGS_ENABLE_CONNECT_PROTOCOL, see
@@ -1133,6 +1151,10 @@ class NET_EXPORT SpdySession : public BufferedSpdyFramerVisitorInterface,
   TimeFunc time_func_;
 
   Http2PriorityDependencies priority_dependency_state_;
+
+  // Network quality estimator to which the ping RTTs should be reported. May be
+  // nullptr.
+  NetworkQualityEstimator* network_quality_estimator_;
 
   // Used for posting asynchronous IO tasks.  We use this even though
   // SpdySession is refcounted because we don't need to keep the SpdySession

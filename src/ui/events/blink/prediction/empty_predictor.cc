@@ -12,6 +12,10 @@ EmptyPredictor::EmptyPredictor() {
 
 EmptyPredictor::~EmptyPredictor() = default;
 
+const char* EmptyPredictor::GetName() const {
+  return "Empty";
+}
+
 void EmptyPredictor::Reset() {
   last_input_.time_stamp = base::TimeTicks();
 }
@@ -27,8 +31,7 @@ bool EmptyPredictor::HasPrediction() const {
 bool EmptyPredictor::GeneratePrediction(base::TimeTicks frame_time,
                                         InputData* result) const {
   if (!last_input_.time_stamp.is_null()) {
-    result->pos_x = last_input_.pos_x;
-    result->pos_y = last_input_.pos_y;
+    result->pos = last_input_.pos;
     return true;
   }
   return false;

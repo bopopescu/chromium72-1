@@ -7,13 +7,17 @@
 #include "base/command_line.h"
 #include "base/run_loop.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/task/post_task.h"
 #include "build/build_config.h"
 #include "chrome/browser/chrome_content_browser_client.h"
 #include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/location_bar/location_bar.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/interactive_test_utils.h"
 #include "chrome/test/base/ui_test_utils.h"
+#include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/content_browser_client.h"
 #include "content/public/browser/render_frame_host.h"
@@ -639,6 +643,41 @@ IN_PROC_BROWSER_TEST_F(SitePerProcessTextInputManagerTest,
   reset_state_observer.Wait();
 }
 
+#if defined(USE_AURA)
+// This test creates a blank page and adds an <input> to it. Then, the <input>
+// is focused, UI is focused, then the input is refocused. The test verifies
+// that selection bounds change with the refocus (see https://crbug.com/864563).
+IN_PROC_BROWSER_TEST_F(SitePerProcessTextInputManagerTest,
+                       SelectionBoundsChangeAfterRefocusInput) {
+  CreateIframePage("a()");
+  content::RenderFrameHost* main_frame = GetFrame(IndexVector{});
+  content::RenderWidgetHostView* view = main_frame->GetView();
+  content::WebContents* web_contents = active_contents();
+  AddInputFieldToFrame(main_frame, "text", "", false);
+
+  auto focus_input_and_wait_for_selection_bounds_change =
+      [&main_frame, &web_contents, &view]() {
+        ViewSelectionBoundsChangedObserver bounds_observer(web_contents, view);
+        // SimulateKeyPress(web_contents, ui::DomKey::TAB, ui::DomCode::TAB,
+        //               ui::VKEY_TAB, false, true, false, false);
+        EXPECT_TRUE(ExecuteScript(main_frame,
+                                  "document.querySelector('input').focus();"));
+        bounds_observer.Wait();
+      };
+
+  focus_input_and_wait_for_selection_bounds_change();
+
+  // Focus location bar.
+  BrowserWindow* window = browser()->window();
+  ASSERT_TRUE(window);
+  LocationBar* location_bar = window->GetLocationBar();
+  ASSERT_TRUE(location_bar);
+  location_bar->FocusLocation(true);
+
+  focus_input_and_wait_for_selection_bounds_change();
+}
+#endif
+
 // This test verifies that if we have a focused <input> in the main frame and
 // the tab is closed, TextInputManager handles unregistering itself and
 // notifying the observers properly (see https://crbug.com/669375).
@@ -744,13 +783,21 @@ IN_PROC_BROWSER_TEST_F(SitePerProcessTextInputManagerTest,
     send_tab_set_composition_wait_for_bounds_change(view);
 }
 
+// Failing on Mac - http://crbug.com/852452
+#if defined(OS_MACOSX)
+#define MAYBE_TrackTextSelectionForAllFrames \
+  DISABLED_TrackTextSelectionForAllFrames
+#else
+#define MAYBE_TrackTextSelectionForAllFrames TrackTextSelectionForAllFrames
+#endif
+
 // This test creates a page with multiple child frames and adds an <input> to
 // each frame. Then, sequentially, each <input> is focused by sending a tab key.
 // After focusing each input, a sequence of key presses (character 'E') are sent
 // to the focused widget. The test then verifies that the selection length
 // equals the length of the sequence of 'E's.
 IN_PROC_BROWSER_TEST_F(SitePerProcessTextInputManagerTest,
-                       TrackTextSelectionForAllFrames) {
+                       MAYBE_TrackTextSelectionForAllFrames) {
   CreateIframePage("a(b,c(a,b),d)");
   std::vector<content::RenderFrameHost*> frames{
       GetFrame(IndexVector{}),     GetFrame(IndexVector{0}),
@@ -799,8 +846,14 @@ IN_PROC_BROWSER_TEST_F(SitePerProcessTextInputManagerTest,
 // corresponding to a focused frame with a focused <input> to commit some text.
 // Then, it verifies that the <input>'s value matches the committed text
 // (https://crbug.com/688842).
+// Flaky on Android and Linux http://crbug.com/852274
+#if defined(OS_MACOSX)
+#define MAYBE_ImeCommitTextForAllFrames DISABLED_ImeCommitTextForAllFrames
+#else
+#define MAYBE_ImeCommitTextForAllFrames ImeCommitTextForAllFrames
+#endif
 IN_PROC_BROWSER_TEST_F(SitePerProcessTextInputManagerTest,
-                       ImeCommitTextForAllFrames) {
+                       MAYBE_ImeCommitTextForAllFrames) {
   CreateIframePage("a(b,c(a))");
   std::vector<content::RenderFrameHost*> frames{
       GetFrame(IndexVector{}), GetFrame(IndexVector{0}),
@@ -1063,7 +1116,8 @@ class InputMethodObserverForShowIme : public InputMethodObserverBase {
  public:
   explicit InputMethodObserverForShowIme(content::WebContents* web_contents)
       : InputMethodObserverBase(web_contents) {
-    test_observer()->SetOnShowImeIfNeededCallback(success_closure());
+    test_observer()->SetOnShowVirtualKeyboardIfEnabledCallback(
+        success_closure());
   }
 
  private:
@@ -1078,7 +1132,7 @@ class InputMethodObserverForShowIme : public InputMethodObserverBase {
 // the TextInputState has not changed (according to the platform), e.g., in
 // aura when receiving two consecutive updates with same |TextInputState.type|.
 IN_PROC_BROWSER_TEST_F(SitePerProcessTextInputManagerTest,
-                       CorrectlyShowImeIfNeeded) {
+                       CorrectlyShowVirtualKeyboardIfEnabled) {
   // We only need the <iframe> page to create RWHV.
   CreateIframePage("a()");
   content::RenderFrameHost* main_frame = GetFrame(IndexVector{});
@@ -1101,14 +1155,17 @@ IN_PROC_BROWSER_TEST_F(SitePerProcessTextInputManagerTest,
   EXPECT_FALSE(send_and_check_show_ime());
 
   // Set |TextInputState.show_ime_if_needed| to true. Expect IME.
-  sender.SetShowImeIfNeeded(true);
+  sender.SetShowVirtualKeyboardIfEnabled(true);
+#if defined(OS_WIN)
+  sender.SetLastPointerType(ui::EventPointerType::POINTER_TYPE_TOUCH);
+#endif
   EXPECT_TRUE(send_and_check_show_ime());
 
   // Send the same message. Expect IME (no change).
   EXPECT_TRUE(send_and_check_show_ime());
 
   // Reset |TextInputState.show_ime_if_needed|. Expect no IME.
-  sender.SetShowImeIfNeeded(false);
+  sender.SetShowVirtualKeyboardIfEnabled(false);
   EXPECT_FALSE(send_and_check_show_ime());
 
   // Setting an irrelevant field. Expect no IME.
@@ -1116,8 +1173,14 @@ IN_PROC_BROWSER_TEST_F(SitePerProcessTextInputManagerTest,
   EXPECT_FALSE(send_and_check_show_ime());
 
   // Set |TextInputState.show_ime_if_needed|. Expect IME.
-  sender.SetShowImeIfNeeded(true);
+  sender.SetShowVirtualKeyboardIfEnabled(true);
   EXPECT_TRUE(send_and_check_show_ime());
+
+#if defined(OS_WIN)
+  // Set input type to mouse. Expect no IME.
+  sender.SetLastPointerType(ui::EventPointerType::POINTER_TYPE_MOUSE);
+  EXPECT_FALSE(send_and_check_show_ime());
+#endif
 
   // Set |TextInputState.type| to ui::TEXT_INPUT_TYPE_NONE. Expect no IME.
   sender.SetType(ui::TEXT_INPUT_TYPE_NONE);
@@ -1259,10 +1322,11 @@ class ShowDefinitionForWordObserver
   DISALLOW_COPY_AND_ASSIGN(ShowDefinitionForWordObserver);
 };
 
+// Flakey (https:://crbug.com/874417).
 // This test verifies that requests for dictionary lookup based on selection
 // range are routed to the focused RenderWidgetHost.
 IN_PROC_BROWSER_TEST_F(SitePerProcessTextInputManagerTest,
-                       LookUpStringForRangeRoutesToFocusedWidget) {
+                       DISABLED_LookUpStringForRangeRoutesToFocusedWidget) {
   CreateIframePage("a(b)");
   std::vector<content::RenderFrameHost*> frames{GetFrame(IndexVector{}),
                                                 GetFrame(IndexVector{0})};
@@ -1416,8 +1480,8 @@ IN_PROC_BROWSER_TEST_F(
 
         // Quit the run loop on IO to make sure the message handler of
         // TextInputClientMac has successfully run on UI thread.
-        content::BrowserThread::PostTask(content::BrowserThread::IO, FROM_HERE,
-                                         callback_on_io);
+        base::PostTaskWithTraits(FROM_HERE, {content::BrowserThread::IO},
+                                 callback_on_io);
       },
       child_process_id, child_frame_routing_id,
       test_complete_waiter.QuitClosure()));
@@ -1486,8 +1550,8 @@ IN_PROC_BROWSER_TEST_F(
 
         // Quit the run loop on IO to make sure the message handler of
         // TextInputClientMac has successfully run on UI thread.
-        content::BrowserThread::PostTask(content::BrowserThread::IO, FROM_HERE,
-                                         callback_on_io);
+        base::PostTaskWithTraits(FROM_HERE, {content::BrowserThread::IO},
+                                 callback_on_io);
       },
       main_frame_process_id, main_frame_routing_id,
       test_complete_waiter.QuitClosure()));

@@ -41,18 +41,26 @@ UI.TreeOutline = class extends Common.Object {
     this._comparator = null;
 
     this.contentElement = this._rootElement._childrenListNode;
-    this.contentElement.addEventListener('keydown', this._treeKeyDown.bind(this), true);
+    this.contentElement.addEventListener('keydown', this._treeKeyDown.bind(this), false);
 
+    this._preventTabOrder = false;
+    this._showSelectionOnKeyboardFocus = false;
     this._focusable = true;
     this.setFocusable(this._focusable);
     if (this._focusable)
       this.contentElement.setAttribute('tabIndex', -1);
     this.element = this.contentElement;
     UI.ARIAUtils.markAsTree(this.element);
+  }
 
-    // Adjust to allow computing margin-left for the selection element.
-    // Check the padding-left for the li element for correct value.
-    this._paddingSize = 0;
+  /**
+   * @param {boolean} show
+   * @param {boolean=} preventTabOrder
+   */
+  setShowSelectionOnKeyboardFocus(show, preventTabOrder) {
+    this.contentElement.classList.toggle('hide-selection-when-blurred', show);
+    this._preventTabOrder = !!preventTabOrder;
+    this._showSelectionOnKeyboardFocus = show;
   }
 
   _createRootElement() {
@@ -220,7 +228,7 @@ UI.TreeOutline = class extends Common.Object {
   /**
    * @return {boolean}
    */
-  _selectFirst() {
+  selectFirst() {
     let first = this.firstChild();
     while (first && !first.selectable)
       first = first.traverseNextTreeElement(true);
@@ -244,18 +252,10 @@ UI.TreeOutline = class extends Common.Object {
   }
 
   /**
-   * @param {number} paddingSize
-   */
-  setPaddingSize(paddingSize) {
-    this._paddingSize = paddingSize;
-  }
-
-  /**
    * @param {!Event} event
    */
   _treeKeyDown(event) {
-    if (!this.selectedTreeElement || event.target !== this.selectedTreeElement.listItemElement || event.shiftKey ||
-        event.metaKey || event.ctrlKey)
+    if (!this.selectedTreeElement || event.shiftKey || event.metaKey || event.ctrlKey || UI.isEditing())
       return;
 
     let handled = false;
@@ -279,7 +279,7 @@ UI.TreeOutline = class extends Common.Object {
     } else if (event.keyCode === UI.KeyboardShortcut.Keys.Space.code) {
       handled = this.selectedTreeElement.onspace();
     } else if (event.key === 'Home') {
-      handled = this._selectFirst();
+      handled = this.selectFirst();
     } else if (event.key === 'End') {
       handled = this._selectLast();
     }
@@ -787,27 +787,12 @@ UI.TreeElement = class {
     }
   }
 
-  /**
-   * @return {number}
-   */
-  computeLeftMargin() {
-    let treeElement = this.parent;
-    let depth = 0;
-    while (treeElement !== null) {
-      depth++;
-      treeElement = treeElement.parent;
-    }
-
-    return -(this.treeOutline._paddingSize * (depth - 1) + 4);
-  }
 
   _ensureSelection() {
     if (!this.treeOutline || !this.treeOutline._renderSelection)
       return;
     if (!this._selectionElement)
       this._selectionElement = createElementWithClass('div', 'selection fill');
-    if (this.treeOutline._paddingSize)
-      this._selectionElement.style.setProperty('margin-left', this.computeLeftMargin() + 'px');
     this._listItemNode.insertBefore(this._selectionElement, this.listItemElement.firstChild);
   }
 
@@ -819,7 +804,9 @@ UI.TreeElement = class {
     if (element.treeElement !== this || element.hasSelection())
       return;
 
-    const toggleOnClick = this.toggleOnClick && !this.selectable;
+    console.assert(!!this.treeOutline);
+    const showSelectionOnKeyboardFocus = this.treeOutline ? this.treeOutline._showSelectionOnKeyboardFocus : false;
+    const toggleOnClick = this.toggleOnClick && (showSelectionOnKeyboardFocus || !this.selectable);
     const isInTriangle = this.isEventWithinDisclosureTriangle(event);
     if (!toggleOnClick && !isInTriangle)
       return;
@@ -952,7 +939,7 @@ UI.TreeElement = class {
    * @return {boolean}
    */
   collapseOrAscend(altKey) {
-    if (this.expanded) {
+    if (this.expanded && this._collapsible) {
       if (altKey)
         this.collapseRecursively();
       else
@@ -1035,6 +1022,14 @@ UI.TreeElement = class {
   selectOnMouseDown(event) {
     if (this.select(false, true))
       event.consume(true);
+
+    if (this._listItemNode.draggable && this._selectionElement) {
+      const marginLeft =
+          this.treeOutline.element.getBoundingClientRect().left - this._listItemNode.getBoundingClientRect().left;
+      // By default the left margin extends far off screen. This is not a problem except when dragging an element.
+      // Setting the margin once here should be fine, because we believe the left margin should never change.
+      this._selectionElement.style.setProperty('margin-left', marginLeft + 'px');
+    }
   }
 
   /**
@@ -1043,8 +1038,11 @@ UI.TreeElement = class {
    * @return {boolean}
    */
   select(omitFocus, selectedByUser) {
-    if (!this.treeOutline || !this.selectable || this.selected)
+    if (!this.treeOutline || !this.selectable || this.selected) {
+      if (!omitFocus)
+        this.listItemElement.focus();
       return false;
+    }
     // Wait to deselect this element so that focus only changes once
     const lastSelected = this.treeOutline.selectedTreeElement;
     this.treeOutline.selectedTreeElement = null;
@@ -1052,6 +1050,8 @@ UI.TreeElement = class {
     if (this.treeOutline._rootElement === this) {
       if (lastSelected)
         lastSelected.deselect();
+      if (!omitFocus)
+        this.listItemElement.focus();
       return false;
     }
 
@@ -1075,7 +1075,7 @@ UI.TreeElement = class {
    */
   _setFocusable(focusable) {
     if (focusable) {
-      this._listItemNode.setAttribute('tabIndex', 0);
+      this._listItemNode.setAttribute('tabIndex', this.treeOutline && this.treeOutline._preventTabOrder ? -1 : 0);
       this._listItemNode.addEventListener('focus', this._boundOnFocus, false);
       this._listItemNode.addEventListener('blur', this._boundOnBlur, false);
     } else {
@@ -1086,11 +1086,13 @@ UI.TreeElement = class {
   }
 
   _onFocus() {
-    this._listItemNode.classList.add('force-white-icons');
+    if (!this.treeOutline.contentElement.classList.contains('hide-selection-when-blurred'))
+      this._listItemNode.classList.add('force-white-icons');
   }
 
   _onBlur() {
-    this._listItemNode.classList.remove('force-white-icons');
+    if (!this.treeOutline.contentElement.classList.contains('hide-selection-when-blurred'))
+      this._listItemNode.classList.remove('force-white-icons');
   }
 
   /**

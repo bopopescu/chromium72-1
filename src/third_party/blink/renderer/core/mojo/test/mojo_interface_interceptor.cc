@@ -8,7 +8,6 @@
 #include "services/service_manager/public/cpp/interface_provider.h"
 #include "third_party/blink/public/platform/platform.h"
 #include "third_party/blink/public/platform/task_type.h"
-#include "third_party/blink/renderer/bindings/core/v8/exception_state.h"
 #include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/execution_context/execution_context.h"
 #include "third_party/blink/renderer/core/frame/local_dom_window.h"
@@ -18,6 +17,7 @@
 #include "third_party/blink/renderer/core/mojo/test/mojo_interface_request_event.h"
 #include "third_party/blink/renderer/core/workers/worker_global_scope.h"
 #include "third_party/blink/renderer/core/workers/worker_thread.h"
+#include "third_party/blink/renderer/platform/bindings/exception_state.h"
 #include "third_party/blink/renderer/platform/bindings/script_state.h"
 #include "third_party/blink/renderer/platform/wtf/text/string_utf8_adaptor.h"
 
@@ -32,12 +32,13 @@ MojoInterfaceInterceptor* MojoInterfaceInterceptor::Create(
   bool process_scope = scope == "process";
   if (process_scope && !context->IsDocument()) {
     exception_state.ThrowDOMException(
-        kNotSupportedError,
+        DOMExceptionCode::kNotSupportedError,
         "\"process\" scope interception is unavailable outside a Document.");
     return nullptr;
   }
 
-  return new MojoInterfaceInterceptor(context, interface_name, process_scope);
+  return MakeGarbageCollected<MojoInterfaceInterceptor>(context, interface_name,
+                                                        process_scope);
 }
 
 MojoInterfaceInterceptor::~MojoInterfaceInterceptor() = default;
@@ -49,7 +50,7 @@ void MojoInterfaceInterceptor::start(ExceptionState& exception_state) {
   service_manager::InterfaceProvider* interface_provider =
       GetInterfaceProvider();
   if (!interface_provider) {
-    exception_state.ThrowDOMException(kInvalidStateError,
+    exception_state.ThrowDOMException(DOMExceptionCode::kInvalidStateError,
                                       "The interface provider is unavailable.");
     return;
   }
@@ -58,21 +59,21 @@ void MojoInterfaceInterceptor::start(ExceptionState& exception_state) {
       StringUTF8Adaptor(interface_name_).AsStringPiece().as_string();
 
   if (process_scope_) {
-    service_manager::Identity identity(
+    service_manager::Connector* connector = Platform::Current()->GetConnector();
+    auto browser_service_filter = service_manager::ServiceFilter::ByName(
         Platform::Current()->GetBrowserServiceName());
-    service_manager::Connector::TestApi test_api(
-        Platform::Current()->GetConnector());
-    if (test_api.HasBinderOverride(identity, interface_name)) {
+    if (connector->HasBinderOverrideForTesting(browser_service_filter,
+                                               interface_name)) {
       exception_state.ThrowDOMException(
-          kInvalidModificationError,
+          DOMExceptionCode::kInvalidModificationError,
           "Interface " + interface_name_ +
               " is already intercepted by another MojoInterfaceInterceptor.");
       return;
     }
 
     started_ = true;
-    test_api.OverrideBinderForTesting(
-        identity, interface_name,
+    connector->OverrideBinderForTesting(
+        browser_service_filter, interface_name,
         WTF::BindRepeating(&MojoInterfaceInterceptor::OnInterfaceRequest,
                            WrapWeakPersistent(this)));
     return;
@@ -81,7 +82,7 @@ void MojoInterfaceInterceptor::start(ExceptionState& exception_state) {
   service_manager::InterfaceProvider::TestApi test_api(interface_provider);
   if (test_api.HasBinderForName(interface_name)) {
     exception_state.ThrowDOMException(
-        kInvalidModificationError,
+        DOMExceptionCode::kInvalidModificationError,
         "Interface " + interface_name_ +
             " is already intercepted by another MojoInterfaceInterceptor.");
     return;
@@ -103,12 +104,12 @@ void MojoInterfaceInterceptor::stop() {
       StringUTF8Adaptor(interface_name_).AsStringPiece().as_string();
 
   if (process_scope_) {
-    service_manager::Identity identity(
+    auto filter = service_manager::ServiceFilter::ByName(
         Platform::Current()->GetBrowserServiceName());
     service_manager::Connector::TestApi test_api(
         Platform::Current()->GetConnector());
-    DCHECK(test_api.HasBinderOverride(identity, interface_name));
-    test_api.ClearBinderOverride(identity, interface_name);
+    DCHECK(test_api.HasBinderOverride(filter, interface_name));
+    test_api.ClearBinderOverride(filter, interface_name);
     return;
   }
 
@@ -125,7 +126,7 @@ void MojoInterfaceInterceptor::Trace(blink::Visitor* visitor) {
 }
 
 const AtomicString& MojoInterfaceInterceptor::InterfaceName() const {
-  return EventTargetNames::MojoInterfaceInterceptor;
+  return event_target_names::kMojoInterfaceInterceptor;
 }
 
 ExecutionContext* MojoInterfaceInterceptor::GetExecutionContext() const {
@@ -173,7 +174,7 @@ void MojoInterfaceInterceptor::OnInterfaceRequest(
 
 void MojoInterfaceInterceptor::DispatchInterfaceRequestEvent(
     mojo::ScopedMessagePipeHandle handle) {
-  DispatchEvent(MojoInterfaceRequestEvent::Create(
+  DispatchEvent(*MojoInterfaceRequestEvent::Create(
       MojoHandle::Create(mojo::ScopedHandle::From(std::move(handle)))));
 }
 

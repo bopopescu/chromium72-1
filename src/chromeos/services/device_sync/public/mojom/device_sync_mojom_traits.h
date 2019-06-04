@@ -33,16 +33,12 @@ template <>
 class StructTraits<chromeos::device_sync::mojom::RemoteDeviceDataView,
                    cryptauth::RemoteDevice> {
  public:
-  static const std::string& public_key(
-      const cryptauth::RemoteDevice& remote_device);
+  static std::string device_id(const cryptauth::RemoteDevice& remote_device);
   static const std::string& user_id(
       const cryptauth::RemoteDevice& remote_device);
   static const std::string& device_name(
       const cryptauth::RemoteDevice& remote_device);
   static const std::string& persistent_symmetric_key(
-      const cryptauth::RemoteDevice& remote_device);
-  static bool unlock_key(const cryptauth::RemoteDevice& remote_device);
-  static bool supports_mobile_hotspot(
       const cryptauth::RemoteDevice& remote_device);
   static base::Time last_update_time(
       const cryptauth::RemoteDevice& remote_device);

@@ -13,8 +13,7 @@
 #include "base/memory/ref_counted.h"
 #include "base/run_loop.h"
 #include "chrome/browser/chromeos/login/users/scoped_test_user_manager.h"
-#include "chrome/browser/chromeos/settings/cros_settings.h"
-#include "chrome/browser/chromeos/settings/device_settings_service.h"
+#include "chrome/browser/chromeos/settings/scoped_cros_settings_test_helper.h"
 #include "chrome/browser/extensions/extension_service.h"
 #include "chrome/browser/extensions/test_extension_system.h"
 #include "chrome/test/base/testing_browser_process.h"
@@ -252,7 +251,7 @@ class RendererFreezerTestWithExtensions : public RendererFreezerTest {
   }
 
  protected:
-  void CreateRenderProcessForExtension(extensions::Extension* extension) {
+  void CreateRenderProcessForExtension(const extensions::Extension* extension) {
     std::unique_ptr<content::MockRenderProcessHostFactory> rph_factory(
         new content::MockRenderProcessHostFactory());
     scoped_refptr<content::SiteInstance> site_instance(
@@ -277,10 +276,8 @@ class RendererFreezerTestWithExtensions : public RendererFreezerTest {
   std::unique_ptr<TestingProfileManager> profile_manager_;
 
  private:
-  // Chrome OS needs extra services to run in the following order.
-  chromeos::ScopedTestDeviceSettingsService test_device_settings_service_;
-  chromeos::ScopedTestCrosSettings test_cros_settings_;
-  chromeos::ScopedTestUserManager test_user_manager_;
+  // Chrome OS needs the CrosSettings test helper.
+  chromeos::ScopedCrosSettingsTestHelper cros_settings_test_helper_;
 
   DISALLOW_COPY_AND_ASSIGN(RendererFreezerTestWithExtensions);
 };
@@ -313,7 +310,7 @@ TEST_F(RendererFreezerTestWithExtensions, DoesNotFreezeGcmExtensionRenderers) {
   Init();
 
   // First build the GCM extension.
-  scoped_refptr<extensions::Extension> gcm_app =
+  scoped_refptr<const extensions::Extension> gcm_app =
       extensions::ExtensionBuilder()
           .SetManifest(
               extensions::DictionaryBuilder()
@@ -349,7 +346,7 @@ TEST_F(RendererFreezerTestWithExtensions, FreezesNonGcmExtensionRenderers) {
   Init();
 
   // First build the extension.
-  scoped_refptr<extensions::Extension> background_app =
+  scoped_refptr<const extensions::Extension> background_app =
       extensions::ExtensionBuilder()
           .SetManifest(
               extensions::DictionaryBuilder()

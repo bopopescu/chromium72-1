@@ -9,6 +9,7 @@
 #include "sk_tool_utils.h"
 #include "Resources.h"
 #include "SkPath.h"
+#include "SkTextUtils.h"
 #include "SkTypeface.h"
 
 class SkJSCanvas {
@@ -205,21 +206,22 @@ protected:
         matrix.setPolyToPoly(src, dst, count);
         canvas->concat(matrix);
 
-        paint->setColor(sk_tool_utils::color_to_565(SK_ColorGRAY));
+        paint->setColor(SK_ColorGRAY);
         paint->setStyle(SkPaint::kStroke_Style);
         const SkScalar D = 64;
         canvas->drawRect(SkRect::MakeWH(D, D), *paint);
         canvas->drawLine(0, 0, D, D, *paint);
         canvas->drawLine(0, D, D, 0, *paint);
 
-        SkPaint::FontMetrics fm;
+        SkFontMetrics fm;
         paint->getFontMetrics(&fm);
         paint->setColor(SK_ColorRED);
         paint->setStyle(SkPaint::kFill_Style);
         SkScalar x = D/2;
         SkScalar y = D/2 - (fm.fAscent + fm.fDescent)/2;
         uint16_t glyphID = 3; // X
-        canvas->drawText((void*) &glyphID, sizeof(glyphID), x, y, *paint);
+        SkTextUtils::DrawText(canvas, &glyphID, sizeof(glyphID), x, y, *paint,
+                              SkTextUtils::kCenter_Align);
         canvas->restore();
     }
 
@@ -236,7 +238,6 @@ protected:
         paint.setTextEncoding(SkPaint::kGlyphID_TextEncoding);
         paint.setStrokeWidth(SkIntToScalar(4));
         paint.setTextSize(SkIntToScalar(40));
-        paint.setTextAlign(SkPaint::kCenter_Align);
 
         canvas->save();
         canvas->translate(SkIntToScalar(10), SkIntToScalar(10));

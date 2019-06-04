@@ -9,7 +9,9 @@
 #include "chrome/browser/media/router/discovery/dial/dial_registry.h"
 #include "chrome/browser/media/router/test/test_helper.h"
 #include "content/public/test/test_browser_thread_bundle.h"
+#include "services/data_decoder/data_decoder_service.h"
 #include "services/service_manager/public/cpp/connector.h"
+#include "services/service_manager/public/cpp/test/test_connector_factory.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -46,8 +48,12 @@ class DialMediaSinkServiceImplTest : public ::testing::Test {
  public:
   DialMediaSinkServiceImplTest()
       : thread_bundle_(content::TestBrowserThreadBundle::IO_MAINLOOP),
+        connector_factory_(
+            service_manager::TestConnectorFactory::CreateForUniqueService(
+                std::make_unique<data_decoder::DataDecoderService>())),
+        connector_(connector_factory_->CreateConnector()),
         media_sink_service_(new DialMediaSinkServiceImpl(
-            std::unique_ptr<service_manager::Connector>(),
+            connector_.get(),
             mock_sink_discovered_cb_.Get(),
             base::SequencedTaskRunnerHandle::Get())) {}
 
@@ -61,8 +67,7 @@ class DialMediaSinkServiceImplTest : public ::testing::Test {
     media_sink_service_->SetDescriptionServiceForTest(
         std::move(mock_description_service));
 
-    mock_timer_ =
-        new base::MockTimer(true /*retain_user_task*/, false /*is_repeating*/);
+    mock_timer_ = new base::MockOneShotTimer();
     media_sink_service_->SetTimerForTest(base::WrapUnique(mock_timer_));
 
     auto mock_app_discovery_service =
@@ -70,6 +75,7 @@ class DialMediaSinkServiceImplTest : public ::testing::Test {
     mock_app_discovery_service_ = mock_app_discovery_service.get();
     media_sink_service_->SetAppDiscoveryServiceForTest(
         std::move(mock_app_discovery_service));
+    base::RunLoop().RunUntilIdle();
   }
 
   DialMediaSinkServiceImpl::SinkQueryByAppSubscription
@@ -97,6 +103,8 @@ class DialMediaSinkServiceImplTest : public ::testing::Test {
 
  protected:
   const content::TestBrowserThreadBundle thread_bundle_;
+  std::unique_ptr<service_manager::TestConnectorFactory> connector_factory_;
+  std::unique_ptr<service_manager::Connector> connector_;
 
   base::MockCallback<OnSinksDiscoveredCallback> mock_sink_discovered_cb_;
   base::MockCallback<
@@ -109,7 +117,7 @@ class DialMediaSinkServiceImplTest : public ::testing::Test {
   TestDialRegistry test_dial_registry_;
   MockDeviceDescriptionService* mock_description_service_;
   MockDialAppDiscoveryService* mock_app_discovery_service_;
-  base::MockTimer* mock_timer_;
+  base::MockOneShotTimer* mock_timer_;
 
   std::unique_ptr<DialMediaSinkServiceImpl> media_sink_service_;
 

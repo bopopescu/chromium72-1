@@ -20,7 +20,7 @@ namespace blink {
 
 namespace {
 
-using ::blink::mojom::blink::MediaSessionAction;
+using ::media_session::mojom::blink::MediaSessionAction;
 
 const AtomicString& MojomActionToActionName(MediaSessionAction action) {
   DEFINE_STATIC_LOCAL(const AtomicString, play_action_name, ("play"));
@@ -35,17 +35,17 @@ const AtomicString& MojomActionToActionName(MediaSessionAction action) {
                       ("seekforward"));
 
   switch (action) {
-    case MediaSessionAction::PLAY:
+    case MediaSessionAction::kPlay:
       return play_action_name;
-    case MediaSessionAction::PAUSE:
+    case MediaSessionAction::kPause:
       return pause_action_name;
-    case MediaSessionAction::PREVIOUS_TRACK:
+    case MediaSessionAction::kPreviousTrack:
       return previous_track_action_name;
-    case MediaSessionAction::NEXT_TRACK:
+    case MediaSessionAction::kNextTrack:
       return next_track_action_name;
-    case MediaSessionAction::SEEK_BACKWARD:
+    case MediaSessionAction::kSeekBackward:
       return seek_backward_action_name;
-    case MediaSessionAction::SEEK_FORWARD:
+    case MediaSessionAction::kSeekForward:
       return seek_forward_action_name;
     default:
       NOTREACHED();
@@ -56,17 +56,17 @@ const AtomicString& MojomActionToActionName(MediaSessionAction action) {
 base::Optional<MediaSessionAction> ActionNameToMojomAction(
     const String& action_name) {
   if ("play" == action_name)
-    return MediaSessionAction::PLAY;
+    return MediaSessionAction::kPlay;
   if ("pause" == action_name)
-    return MediaSessionAction::PAUSE;
+    return MediaSessionAction::kPause;
   if ("previoustrack" == action_name)
-    return MediaSessionAction::PREVIOUS_TRACK;
+    return MediaSessionAction::kPreviousTrack;
   if ("nexttrack" == action_name)
-    return MediaSessionAction::NEXT_TRACK;
+    return MediaSessionAction::kNextTrack;
   if ("seekbackward" == action_name)
-    return MediaSessionAction::SEEK_BACKWARD;
+    return MediaSessionAction::kSeekBackward;
   if ("seekforward" == action_name)
-    return MediaSessionAction::SEEK_FORWARD;
+    return MediaSessionAction::kSeekForward;
 
   NOTREACHED();
   return base::nullopt;
@@ -108,7 +108,7 @@ MediaSession::MediaSession(ExecutionContext* execution_context)
       client_binding_(this) {}
 
 MediaSession* MediaSession::Create(ExecutionContext* execution_context) {
-  return new MediaSession(execution_context);
+  return MakeGarbageCollected<MediaSession>(execution_context);
 }
 
 void MediaSession::Dispose() {
@@ -194,9 +194,7 @@ mojom::blink::MediaSessionService* MediaSession::GetService() {
   if (!GetExecutionContext())
     return nullptr;
 
-  DCHECK(GetExecutionContext()->IsDocument())
-      << "MediaSession::getService() is only available from a frame";
-  Document* document = ToDocument(GetExecutionContext());
+  Document* document = To<Document>(GetExecutionContext());
   LocalFrame* frame = document->GetFrame();
   if (!frame)
     return nullptr;
@@ -215,11 +213,11 @@ mojom::blink::MediaSessionService* MediaSession::GetService() {
 }
 
 void MediaSession::DidReceiveAction(
-    blink::mojom::blink::MediaSessionAction action) {
-  DCHECK(GetExecutionContext()->IsDocument());
-  Document* document = ToDocument(GetExecutionContext());
+    media_session::mojom::blink::MediaSessionAction action) {
+  Document* document = To<Document>(GetExecutionContext());
   std::unique_ptr<UserGestureIndicator> gesture_indicator =
-      Frame::NotifyUserActivation(document ? document->GetFrame() : nullptr);
+      LocalFrame::NotifyUserActivation(document ? document->GetFrame()
+                                                : nullptr);
 
   auto iter = action_handlers_.find(MojomActionToActionName(action));
   if (iter == action_handlers_.end())
@@ -233,12 +231,6 @@ void MediaSession::Trace(blink::Visitor* visitor) {
   visitor->Trace(action_handlers_);
   ScriptWrappable::Trace(visitor);
   ContextClient::Trace(visitor);
-}
-
-void MediaSession::TraceWrappers(ScriptWrappableVisitor* visitor) const {
-  for (auto handler : action_handlers_.Values())
-    visitor->TraceWrappers(handler);
-  ScriptWrappable::TraceWrappers(visitor);
 }
 
 }  // namespace blink

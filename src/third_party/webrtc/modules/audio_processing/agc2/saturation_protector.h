@@ -14,7 +14,7 @@
 #include <array>
 
 #include "modules/audio_processing/agc2/agc2_common.h"
-#include "modules/audio_processing/vad/vad_with_level.h"
+#include "modules/audio_processing/agc2/vad_with_level.h"
 
 namespace webrtc {
 
@@ -23,6 +23,9 @@ class ApmDataDumper;
 class SaturationProtector {
  public:
   explicit SaturationProtector(ApmDataDumper* apm_data_dumper);
+
+  SaturationProtector(ApmDataDumper* apm_data_dumper,
+                      float extra_saturation_margin_db);
 
   // Update and return margin estimate. This method should be called
   // whenever a frame is reliably classified as 'speech'.
@@ -34,6 +37,9 @@ class SaturationProtector {
   // Returns latest computed margin. Used in cases when speech is not
   // detected.
   float LastMargin() const;
+
+  // Resets the internal memory.
+  void Reset();
 
   void DebugDumpEstimate() const;
 
@@ -55,8 +61,9 @@ class SaturationProtector {
 
   ApmDataDumper* apm_data_dumper_;
 
-  float last_margin_ = kInitialSaturationMarginDb;
+  float last_margin_;
   PeakEnveloper peak_enveloper_;
+  const float extra_saturation_margin_db_;
 };
 
 }  // namespace webrtc

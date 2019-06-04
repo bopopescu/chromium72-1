@@ -12,6 +12,7 @@
 #include "base/compiler_specific.h"
 #include "base/location.h"
 #include "base/logging.h"
+#include "base/metrics/histogram_functions.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/single_thread_task_runner.h"
 #include "base/strings/string_number_conversions.h"
@@ -210,10 +211,11 @@ void SpdyStream::SetPriority(RequestPriority priority) {
   if (priority_ == priority) {
     return;
   }
-  priority_ = priority;
 
-  // TODO(bnc): Fix https://crbug.com/841511 and call
-  // session_->UpdateStreamPriority().
+  session_->UpdateStreamPriority(this, /* old_priority = */ priority_,
+                                 /* new_priority = */ priority);
+
+  priority_ = priority;
 }
 
 bool SpdyStream::AdjustSendWindowSize(int32_t delta_window_size) {
@@ -402,6 +404,8 @@ void SpdyStream::OnHeadersReceived(
           return;
         }
 
+        base::UmaHistogramSparse("Net.SpdyResponseCode", status);
+
         // Ignore informational headers like 103 Early Hints.
         // TODO(bnc): Add support for 103 Early Hints, https://crbug.com/671310.
         // However, do not ignore 101 Switching Protocols, because broken
@@ -582,6 +586,12 @@ void SpdyStream::OnFrameWriteComplete(spdy::SpdyFrameType frame_type,
     return;
   }
 
+  // Frame types reserved in
+  // https://tools.ietf.org/html/draft-bishop-httpbis-grease-00 ought to be
+  // ignored.
+  if (static_cast<uint8_t>(frame_type) % 0x1f == 0x0b)
+    return;
+
   DCHECK_NE(type_, SPDY_PUSH_STREAM);
   CHECK(frame_type == spdy::SpdyFrameType::HEADERS ||
         frame_type == spdy::SpdyFrameType::DATA)
@@ -735,19 +745,13 @@ void SpdyStream::SendData(IOBuffer* data,
   CHECK(io_state_ == STATE_OPEN ||
         io_state_ == STATE_HALF_CLOSED_REMOTE) << io_state_;
   CHECK(!pending_send_data_.get());
-  pending_send_data_ = new DrainableIOBuffer(data, length);
+  pending_send_data_ = base::MakeRefCounted<DrainableIOBuffer>(data, length);
   pending_send_status_ = send_status;
   QueueNextDataFrame();
 }
 
 bool SpdyStream::GetSSLInfo(SSLInfo* ssl_info) const {
   return session_->GetSSLInfo(ssl_info);
-}
-
-Error SpdyStream::GetTokenBindingSignature(crypto::ECPrivateKey* key,
-                                           TokenBindingType tb_type,
-                                           std::vector<uint8_t>* out) const {
-  return session_->GetTokenBindingSignature(key, tb_type, out);
 }
 
 bool SpdyStream::WasAlpnNegotiated() const {

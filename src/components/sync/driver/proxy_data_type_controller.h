@@ -8,6 +8,7 @@
 #include <memory>
 #include <string>
 
+#include "base/callback_forward.h"
 #include "base/macros.h"
 #include "components/sync/driver/data_type_controller.h"
 
@@ -18,25 +19,30 @@ namespace syncer {
 // service.
 class ProxyDataTypeController : public DataTypeController {
  public:
-  explicit ProxyDataTypeController(ModelType type);
+  // |state_changed_cb| can be used to listen to state changes.
+  ProxyDataTypeController(
+      ModelType type,
+      const base::RepeatingCallback<void(State)>& state_changed_cb);
   ~ProxyDataTypeController() override;
 
   // DataTypeController interface.
   bool ShouldLoadModelBeforeConfigure() const override;
   void BeforeLoadModels(ModelTypeConfigurer* configurer) override;
-  void LoadModels(const ModelLoadCallback& model_load_callback) override;
-  void RegisterWithBackend(base::Callback<void(bool)> set_downloaded,
+  void LoadModels(const ConfigureContext& configure_context,
+                  const ModelLoadCallback& model_load_callback) override;
+  void RegisterWithBackend(base::OnceCallback<void(bool)> set_downloaded,
                            ModelTypeConfigurer* configurer) override;
-  void StartAssociating(const StartCallback& start_callback) override;
-  void Stop() override;
+  void StartAssociating(StartCallback start_callback) override;
+  void Stop(ShutdownReason shutdown_reason, StopCallback callback) override;
   State state() const override;
   void ActivateDataType(ModelTypeConfigurer* configurer) override;
   void DeactivateDataType(ModelTypeConfigurer* configurer) override;
-  void GetAllNodes(const AllNodesCallback& callback) override;
-  void GetStatusCounters(const StatusCountersCallback& callback) override;
-  void RecordMemoryUsageHistogram() override;
+  void GetAllNodes(AllNodesCallback callback) override;
+  void GetStatusCounters(StatusCountersCallback callback) override;
+  void RecordMemoryUsageAndCountsHistograms() override;
 
  private:
+  const base::RepeatingCallback<void(State)> state_changed_cb_;
   State state_;
 
   DISALLOW_COPY_AND_ASSIGN(ProxyDataTypeController);

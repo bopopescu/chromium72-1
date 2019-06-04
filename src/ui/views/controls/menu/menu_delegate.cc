@@ -19,13 +19,7 @@ base::string16 MenuDelegate::GetLabel(int id) const {
   return base::string16();
 }
 
-const gfx::FontList* MenuDelegate::GetLabelFontList(int id) const {
-  return NULL;
-}
-
-bool MenuDelegate::GetShouldUseNormalForegroundColor(int command_id) const {
-  return false;
-}
+void MenuDelegate::GetLabelStyle(int id, LabelStyle* style) const {}
 
 base::string16 MenuDelegate::GetTooltipText(int id,
                                       const gfx::Point& screen_loc) const {
@@ -155,6 +149,10 @@ void MenuDelegate::GetHorizontalIconMargins(int command_id,
 }
 
 bool MenuDelegate::ShouldReserveSpaceForSubmenuIndicator() const {
+  return true;
+}
+
+bool MenuDelegate::ShouldTryPositioningBesideAnchor() const {
   return true;
 }
 

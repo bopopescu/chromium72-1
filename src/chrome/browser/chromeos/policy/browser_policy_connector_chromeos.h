@@ -20,6 +20,10 @@
 class PrefRegistrySimple;
 class PrefService;
 
+namespace enterprise_management {
+class PolicyData;
+}
+
 namespace chromeos {
 
 class InstallAttributes;
@@ -29,10 +33,6 @@ class AttestationFlow;
 }
 
 }  // namespace chromeos
-
-namespace net {
-class URLRequestContextGetter;
-}
 
 namespace policy {
 
@@ -60,12 +60,14 @@ class BrowserPolicyConnectorChromeOS
   ~BrowserPolicyConnectorChromeOS() override;
 
   // ChromeBrowserPolicyConnector:
-  void Init(
-      PrefService* local_state,
-      scoped_refptr<net::URLRequestContextGetter> request_context) override;
+  void Init(PrefService* local_state,
+            scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory)
+      override;
 
   // Checks whether this devices is under any kind of enterprise management.
   bool IsEnterpriseManaged() const override;
+
+  bool HasMachineLevelPolicies() override;
 
   // Shutdown() is called from BrowserProcessImpl::StartTearDown() but |this|
   // observes some objects that get destroyed earlier. PreShutdown() is called
@@ -96,6 +98,9 @@ class BrowserPolicyConnectorChromeOS
   // Returns the device asset ID if it is set.
   std::string GetDeviceAssetID() const;
 
+  // Returns the machine name if it is set.
+  std::string GetMachineName() const;
+
   // Returns the device annotated location if it is set.
   std::string GetDeviceAnnotatedLocation() const;
 
@@ -107,6 +112,9 @@ class BrowserPolicyConnectorChromeOS
   // locked empty, or DEVICE_MODE_UNKNOWN if the device has not been owned yet.
   // For other OSes the function will always return DEVICE_MODE_CONSUMER.
   DeviceMode GetDeviceMode() const;
+
+  // Delegates to chromeos::InstallAttributes::Get()
+  chromeos::InstallAttributes* GetInstallAttributes() const;
 
   // Get the enrollment configuration for the device as decided by various
   // factors. See DeviceCloudPolicyInitializer::GetPrescribedEnrollmentConfig()
@@ -134,10 +142,6 @@ class BrowserPolicyConnectorChromeOS
     return device_local_account_policy_service_.get();
   }
 
-  chromeos::InstallAttributes* GetInstallAttributes() const {
-    return install_attributes_.get();
-  }
-
   // May be nullptr, e.g. for devices managed by Active Directory.
   ServerBackedStateKeysBroker* GetStateKeysBroker() const {
     return state_keys_broker_.get();
@@ -151,6 +155,9 @@ class BrowserPolicyConnectorChromeOS
       const {
     return device_network_configuration_updater_.get();
   }
+
+  // Returns device's market segment.
+  MarketSegment GetEnterpriseMarketSegment() const;
 
   // The browser-global PolicyService is created before Profiles are ready, to
   // provide managed values for the local state PrefService. It includes a
@@ -166,13 +173,6 @@ class BrowserPolicyConnectorChromeOS
   // Sets the device cloud policy initializer for testing.
   void SetDeviceCloudPolicyInitializerForTesting(
       std::unique_ptr<DeviceCloudPolicyInitializer> initializer);
-
-  // Sets the install attributes for testing. Must be called before the browser
-  // is created. RemoveInstallAttributesForTesting must be called after the test
-  // to free the attributes.
-  static void SetInstallAttributesForTesting(
-      chromeos::InstallAttributes* attributes);
-  static void RemoveInstallAttributesForTesting();
 
   // Registers device refresh rate pref.
   static void RegisterPrefs(PrefRegistrySimple* registry);
@@ -201,9 +201,11 @@ class BrowserPolicyConnectorChromeOS
   std::unique_ptr<chromeos::attestation::AttestationFlow>
   CreateAttestationFlow();
 
+  // Returns the device policy data or nullptr if it does not exist.
+  const enterprise_management::PolicyData* GetDevicePolicy() const;
+
   // Components of the device cloud policy implementation.
   std::unique_ptr<ServerBackedStateKeysBroker> state_keys_broker_;
-  std::unique_ptr<chromeos::InstallAttributes> install_attributes_;
   std::unique_ptr<AffiliatedInvalidationServiceProvider>
       affiliated_invalidation_service_provider_;
   DeviceCloudPolicyManagerChromeOS* device_cloud_policy_manager_ = nullptr;

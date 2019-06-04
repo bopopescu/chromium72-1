@@ -24,7 +24,6 @@
 #include "ir/SkSLVarDeclarationsStatement.h"
 #include "ir/SkSLVariableReference.h"
 #include "SkRasterPipeline.h"
-#include "../jumper/SkJumper.h"
 
 namespace SkSL {
 
@@ -38,7 +37,7 @@ void Interpreter::run() {
             }
         }
     }
-    ASSERT(false);
+    SkASSERT(false);
 }
 
 static int SizeOf(const Type& type) {
@@ -87,7 +86,7 @@ void Interpreter::runStatement() {
             if (!b.fStatements.size()) {
                 break;
             }
-            ASSERT(index < b.fStatements.size());
+            SkASSERT(index < b.fStatements.size());
             if (index < b.fStatements.size() - 1) {
                 fCurrentIndex.push_back({ &b, index + 1 });
             }
@@ -95,18 +94,18 @@ void Interpreter::runStatement() {
             break;
         }
         case Statement::kBreak_Kind:
-            ASSERT(index == 0);
+            SkASSERT(index == 0);
             abort();
         case Statement::kContinue_Kind:
-            ASSERT(index == 0);
+            SkASSERT(index == 0);
             abort();
         case Statement::kDiscard_Kind:
-            ASSERT(index == 0);
+            SkASSERT(index == 0);
             abort();
         case Statement::kDo_Kind:
             abort();
         case Statement::kExpression_Kind:
-            ASSERT(index == 0);
+            SkASSERT(index == 0);
             this->evaluate(*((const ExpressionStatement&) stmt).fExpression);
             break;
         case Statement::kFor_Kind: {
@@ -136,7 +135,7 @@ void Interpreter::runStatement() {
                     fCurrentIndex.push_back({ &f, 1 });
                     break;
                 default:
-                    ASSERT(false);
+                    SkASSERT(false);
             }
             break;
         }
@@ -152,15 +151,15 @@ void Interpreter::runStatement() {
             break;
         }
         case Statement::kNop_Kind:
-            ASSERT(index == 0);
+            SkASSERT(index == 0);
             break;
         case Statement::kReturn_Kind:
-            ASSERT(index == 0);
+            SkASSERT(index == 0);
             abort();
         case Statement::kSwitch_Kind:
             abort();
         case Statement::kVarDeclarations_Kind:
-            ASSERT(index == 0);
+            SkASSERT(index == 0);
             for (const auto& decl :((const VarDeclarationsStatement&) stmt).fDeclaration->fVars) {
                 const Variable* var = ((VarDeclaration&) *decl).fVar;
                 StackIndex pos = this->stackAlloc(SizeOf(var->fType));
@@ -197,8 +196,8 @@ Interpreter::StackIndex Interpreter::getLValue(const Expression& expr) {
         case Expression::kSwizzle_Kind:
             break;
         case Expression::kVariableReference_Kind:
-            ASSERT(fVars.size());
-            ASSERT(fVars.back().find(&((VariableReference&) expr).fVariable) !=
+            SkASSERT(fVars.size());
+            SkASSERT(fVars.back().find(&((VariableReference&) expr).fVariable) !=
                    fVars.back().end());
             return fVars.back()[&((VariableReference&) expr).fVariable];
         case Expression::kTernary_Kind: {
@@ -213,12 +212,12 @@ Interpreter::StackIndex Interpreter::getLValue(const Expression& expr) {
     ABORT("unsupported lvalue");
 }
 
-struct CallbackCtx : public SkJumper_CallbackCtx {
+struct CallbackCtx : public SkRasterPipeline_CallbackCtx {
     Interpreter* fInterpreter;
     const FunctionDefinition* fFunction;
 };
 
-static void do_callback(SkJumper_CallbackCtx* raw, int activePixels) {
+static void do_callback(SkRasterPipeline_CallbackCtx* raw, int activePixels) {
     CallbackCtx& ctx = (CallbackCtx&) *raw;
     for (int i = 0; i < activePixels; ++i) {
         ctx.fInterpreter->push(Interpreter::Value(ctx.rgba[i * 4 + 0]));
@@ -234,13 +233,13 @@ static void do_callback(SkJumper_CallbackCtx* raw, int activePixels) {
 void Interpreter::appendStage(const AppendStage& a) {
     switch (a.fStage) {
         case SkRasterPipeline::matrix_4x5: {
-            ASSERT(a.fArguments.size() == 1);
+            SkASSERT(a.fArguments.size() == 1);
             StackIndex transpose = evaluate(*a.fArguments[0]).fInt;
             fPipeline.append(SkRasterPipeline::matrix_4x5, &fStack[transpose]);
             break;
         }
         case SkRasterPipeline::callback: {
-            ASSERT(a.fArguments.size() == 1);
+            SkASSERT(a.fArguments.size() == 1);
             CallbackCtx* ctx = new CallbackCtx();
             ctx->fInterpreter = this;
             ctx->fn = do_callback;
@@ -430,7 +429,7 @@ Interpreter::Value Interpreter::evaluate(const Expression& expr) {
                     if (Token::PLUSPLUS == p.fOperator) {
                         ++fStack[lvalue].fFloat;
                     } else {
-                        ASSERT(Token::MINUSMINUS == p.fOperator);
+                        SkASSERT(Token::MINUSMINUS == p.fOperator);
                         --fStack[lvalue].fFloat;
                     }
                     break;
@@ -438,7 +437,7 @@ Interpreter::Value Interpreter::evaluate(const Expression& expr) {
                     if (Token::PLUSPLUS == p.fOperator) {
                         ++fStack[lvalue].fInt;
                     } else {
-                        ASSERT(Token::MINUSMINUS == p.fOperator);
+                        SkASSERT(Token::MINUSMINUS == p.fOperator);
                         --fStack[lvalue].fInt;
                     }
                     break;
@@ -452,8 +451,8 @@ Interpreter::Value Interpreter::evaluate(const Expression& expr) {
         case Expression::kSwizzle_Kind:
             break;
         case Expression::kVariableReference_Kind:
-            ASSERT(fVars.size());
-            ASSERT(fVars.back().find(&((VariableReference&) expr).fVariable) !=
+            SkASSERT(fVars.size());
+            SkASSERT(fVars.back().find(&((VariableReference&) expr).fVariable) !=
                    fVars.back().end());
             return fStack[fVars.back()[&((VariableReference&) expr).fVariable]];
         case Expression::kTernary_Kind: {

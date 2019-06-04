@@ -19,12 +19,11 @@ typedef ServiceWorkerRegisterJobBase::RegistrationJobType RegistrationJobType;
 
 ServiceWorkerUnregisterJob::ServiceWorkerUnregisterJob(
     base::WeakPtr<ServiceWorkerContextCore> context,
-    const GURL& pattern)
+    const GURL& scope)
     : context_(context),
-      pattern_(pattern),
+      scope_(scope),
       is_promise_resolved_(false),
-      weak_factory_(this) {
-}
+      weak_factory_(this) {}
 
 ServiceWorkerUnregisterJob::~ServiceWorkerUnregisterJob() {}
 
@@ -33,21 +32,21 @@ void ServiceWorkerUnregisterJob::AddCallback(UnregistrationCallback callback) {
 }
 
 void ServiceWorkerUnregisterJob::Start() {
-  context_->storage()->FindRegistrationForPattern(
-      pattern_, base::BindOnce(&ServiceWorkerUnregisterJob::OnRegistrationFound,
-                               weak_factory_.GetWeakPtr()));
+  context_->storage()->FindRegistrationForScope(
+      scope_, base::BindOnce(&ServiceWorkerUnregisterJob::OnRegistrationFound,
+                             weak_factory_.GetWeakPtr()));
 }
 
 void ServiceWorkerUnregisterJob::Abort() {
   CompleteInternal(blink::mojom::kInvalidServiceWorkerRegistrationId,
-                   SERVICE_WORKER_ERROR_ABORT);
+                   blink::ServiceWorkerStatusCode::kErrorAbort);
 }
 
 bool ServiceWorkerUnregisterJob::Equals(
     ServiceWorkerRegisterJobBase* job) const {
   if (job->GetType() != GetType())
     return false;
-  return static_cast<ServiceWorkerUnregisterJob*>(job)->pattern_ == pattern_;
+  return static_cast<ServiceWorkerUnregisterJob*>(job)->scope_ == scope_;
 }
 
 RegistrationJobType ServiceWorkerUnregisterJob::GetType() const {
@@ -55,16 +54,17 @@ RegistrationJobType ServiceWorkerUnregisterJob::GetType() const {
 }
 
 void ServiceWorkerUnregisterJob::OnRegistrationFound(
-    ServiceWorkerStatusCode status,
+    blink::ServiceWorkerStatusCode status,
     scoped_refptr<ServiceWorkerRegistration> registration) {
-  if (status == SERVICE_WORKER_ERROR_NOT_FOUND) {
+  if (status == blink::ServiceWorkerStatusCode::kErrorNotFound) {
     DCHECK(!registration.get());
     Complete(blink::mojom::kInvalidServiceWorkerRegistrationId,
-             SERVICE_WORKER_ERROR_NOT_FOUND);
+             blink::ServiceWorkerStatusCode::kErrorNotFound);
     return;
   }
 
-  if (status != SERVICE_WORKER_OK || registration->is_uninstalling()) {
+  if (status != blink::ServiceWorkerStatusCode::kOk ||
+      registration->is_uninstalling()) {
     Complete(blink::mojom::kInvalidServiceWorkerRegistrationId, status);
     return;
   }
@@ -72,29 +72,30 @@ void ServiceWorkerUnregisterJob::OnRegistrationFound(
   // TODO: "7. If registration.updatePromise is not null..."
 
   // "8. Resolve promise."
-  ResolvePromise(registration->id(), SERVICE_WORKER_OK);
+  ResolvePromise(registration->id(), blink::ServiceWorkerStatusCode::kOk);
 
   registration->ClearWhenReady();
 
-  Complete(registration->id(), SERVICE_WORKER_OK);
+  Complete(registration->id(), blink::ServiceWorkerStatusCode::kOk);
 }
 
-void ServiceWorkerUnregisterJob::Complete(int64_t registration_id,
-                                          ServiceWorkerStatusCode status) {
+void ServiceWorkerUnregisterJob::Complete(
+    int64_t registration_id,
+    blink::ServiceWorkerStatusCode status) {
   CompleteInternal(registration_id, status);
-  context_->job_coordinator()->FinishJob(pattern_, this);
+  context_->job_coordinator()->FinishJob(scope_, this);
 }
 
 void ServiceWorkerUnregisterJob::CompleteInternal(
     int64_t registration_id,
-    ServiceWorkerStatusCode status) {
+    blink::ServiceWorkerStatusCode status) {
   if (!is_promise_resolved_)
     ResolvePromise(registration_id, status);
 }
 
 void ServiceWorkerUnregisterJob::ResolvePromise(
     int64_t registration_id,
-    ServiceWorkerStatusCode status) {
+    blink::ServiceWorkerStatusCode status) {
   DCHECK(!is_promise_resolved_);
   is_promise_resolved_ = true;
   for (UnregistrationCallback& callback : callbacks_)

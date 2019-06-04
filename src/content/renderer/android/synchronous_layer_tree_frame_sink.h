@@ -20,6 +20,8 @@
 #include "cc/trees/managed_memory_policy.h"
 #include "components/viz/common/frame_sinks/begin_frame_source.h"
 #include "components/viz/common/quads/compositor_frame.h"
+#include "components/viz/common/surfaces/local_surface_id_allocation.h"
+#include "components/viz/common/surfaces/parent_local_surface_id_allocator.h"
 #include "components/viz/service/display/display_client.h"
 #include "components/viz/service/display_embedder/server_shared_bitmap_manager.h"
 #include "ipc/ipc_message.h"
@@ -50,7 +52,7 @@ class SynchronousCompositorRegistry;
 class SynchronousLayerTreeFrameSinkClient {
  public:
   virtual void DidActivatePendingTree() = 0;
-  virtual void Invalidate() = 0;
+  virtual void Invalidate(bool needs_draw) = 0;
   virtual void SubmitCompositorFrame(uint32_t layer_tree_frame_sink_id,
                                      viz::CompositorFrame frame) = 0;
   virtual void SetNeedsBeginFrames(bool needs_begin_frames) = 0;
@@ -91,28 +93,27 @@ class SynchronousLayerTreeFrameSink
   // cc::LayerTreeFrameSink implementation.
   bool BindToClient(cc::LayerTreeFrameSinkClient* sink_client) override;
   void DetachFromClient() override;
-  void SubmitCompositorFrame(viz::CompositorFrame frame) override;
+  void SubmitCompositorFrame(viz::CompositorFrame frame,
+                             bool show_hit_test_borders) override;
   void DidNotProduceFrame(const viz::BeginFrameAck& ack) override;
   void DidAllocateSharedBitmap(mojo::ScopedSharedBufferHandle buffer,
                                const viz::SharedBitmapId& id) override;
   void DidDeleteSharedBitmap(const viz::SharedBitmapId& id) override;
-  void Invalidate() override;
+  void Invalidate(bool needs_draw) override;
 
   // Partial SynchronousCompositor API implementation.
   void DemandDrawHw(const gfx::Size& viewport_size,
                     const gfx::Rect& viewport_rect_for_tile_priority,
                     const gfx::Transform& transform_for_tile_priority);
   void DemandDrawSw(SkCanvas* canvas);
+  void WillSkipDraw();
 
   // viz::mojom::CompositorFrameSinkClient implementation.
   void DidReceiveCompositorFrameAck(
       const std::vector<viz::ReturnedResource>& resources) override;
-  void DidPresentCompositorFrame(uint32_t presentation_token,
-                                 base::TimeTicks time,
-                                 base::TimeDelta refresh,
-                                 uint32_t flags) override;
-  void DidDiscardCompositorFrame(uint32_t presentation_token) override;
-  void OnBeginFrame(const viz::BeginFrameArgs& args) override;
+  void OnBeginFrame(const viz::BeginFrameArgs& args,
+                    const base::flat_map<uint32_t, gfx::PresentationFeedback>&
+                        feedbacks) override;
   void ReclaimResources(
       const std::vector<viz::ReturnedResource>& resources) override;
   void OnBeginFramePausedChanged(bool paused) override;
@@ -166,12 +167,12 @@ class SynchronousLayerTreeFrameSink
 
   class StubDisplayClient : public viz::DisplayClient {
     void DisplayOutputSurfaceLost() override {}
-    void DisplayWillDrawAndSwap(
-        bool will_draw_and_swap,
-        const viz::RenderPassList& render_passes) override {}
+    void DisplayWillDrawAndSwap(bool will_draw_and_swap,
+                                viz::RenderPassList* render_passes) override {}
     void DisplayDidDrawAndSwap() override {}
     void DisplayDidReceiveCALayerParams(
         const gfx::CALayerParams& ca_layer_params) override {}
+    void DisplayDidCompleteSwapWithSize(const gfx::Size& pixel_size) override {}
     void DidSwapAfterSnapshotRequestReceived(
         const std::vector<ui::LatencyInfo>& latency_info) override {}
   };
@@ -179,10 +180,10 @@ class SynchronousLayerTreeFrameSink
   // TODO(danakj): These don't to be stored in unique_ptrs when OutputSurface
   // is owned/destroyed on the compositor thread.
   std::unique_ptr<viz::FrameSinkManagerImpl> frame_sink_manager_;
-  std::unique_ptr<viz::ParentLocalSurfaceIdAllocator>
-      parent_local_surface_id_allocator_;
-  viz::LocalSurfaceId child_local_surface_id_;
-  viz::LocalSurfaceId root_local_surface_id_;
+  viz::ParentLocalSurfaceIdAllocator root_local_surface_id_allocator_;
+  viz::ParentLocalSurfaceIdAllocator child_local_surface_id_allocator_;
+  viz::LocalSurfaceIdAllocation child_local_surface_id_allocation_;
+  viz::LocalSurfaceIdAllocation root_local_surface_id_allocation_;
   gfx::Size child_size_;
   gfx::Size display_size_;
   float device_scale_factor_ = 0;

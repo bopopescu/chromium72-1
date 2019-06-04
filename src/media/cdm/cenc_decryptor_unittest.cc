@@ -6,6 +6,7 @@
 
 #include <stdint.h>
 
+#include <algorithm>
 #include <string>
 #include <vector>
 
@@ -129,7 +130,8 @@ TEST_F(CencDecryptorTest, OneBlock) {
   auto encrypted_block = Encrypt(one_block_, *key_, iv_);
 
   // Only 1 subsample, all encrypted data.
-  std::vector<SubsampleEntry> subsamples = {{0, encrypted_block.size()}};
+  std::vector<SubsampleEntry> subsamples = {
+      {0, static_cast<uint32_t>(encrypted_block.size())}};
 
   auto encrypted_buffer =
       CreateEncryptedBuffer(encrypted_block, iv_, subsamples);
@@ -140,7 +142,8 @@ TEST_F(CencDecryptorTest, ExtraData) {
   auto encrypted_block = Encrypt(one_block_, *key_, iv_);
 
   // Only 1 subsample, all encrypted data.
-  std::vector<SubsampleEntry> subsamples = {{0, encrypted_block.size()}};
+  std::vector<SubsampleEntry> subsamples = {
+      {0, static_cast<uint32_t>(encrypted_block.size())}};
 
   auto encrypted_buffer =
       CreateEncryptedBuffer(encrypted_block, iv_, subsamples);
@@ -158,10 +161,11 @@ TEST_F(CencDecryptorTest, ExtraData) {
   EXPECT_EQ(encrypted_buffer->is_key_frame(), decrypted_buffer->is_key_frame());
   EXPECT_EQ(encrypted_buffer->side_data_size(),
             decrypted_buffer->side_data_size());
-  EXPECT_EQ(base::make_span(encrypted_buffer->side_data(),
-                            encrypted_buffer->side_data_size()),
-            base::make_span(decrypted_buffer->side_data(),
-                            decrypted_buffer->side_data_size()));
+  EXPECT_TRUE(std::equal(
+      encrypted_buffer->side_data(),
+      encrypted_buffer->side_data() + encrypted_buffer->side_data_size(),
+      decrypted_buffer->side_data(),
+      decrypted_buffer->side_data() + encrypted_buffer->side_data_size()));
 }
 
 TEST_F(CencDecryptorTest, NoSubsamples) {
@@ -179,7 +183,8 @@ TEST_F(CencDecryptorTest, BadSubsamples) {
   auto encrypted_block = Encrypt(one_block_, *key_, iv_);
 
   // Subsample size > data size.
-  std::vector<SubsampleEntry> subsamples = {{0, encrypted_block.size() + 1}};
+  std::vector<SubsampleEntry> subsamples = {
+      {0, static_cast<uint32_t>(encrypted_block.size() + 1)}};
 
   auto encrypted_buffer =
       CreateEncryptedBuffer(encrypted_block, iv_, subsamples);
@@ -189,7 +194,8 @@ TEST_F(CencDecryptorTest, BadSubsamples) {
 TEST_F(CencDecryptorTest, InvalidIv) {
   auto encrypted_block = Encrypt(one_block_, *key_, iv_);
 
-  std::vector<SubsampleEntry> subsamples = {{0, encrypted_block.size()}};
+  std::vector<SubsampleEntry> subsamples = {
+      {0, static_cast<uint32_t>(encrypted_block.size())}};
 
   // Use an invalid IV for decryption. Call should succeed, but return
   // something other than the original data.
@@ -204,7 +210,8 @@ TEST_F(CencDecryptorTest, InvalidKey) {
       crypto::SymmetricKey::AES, std::string(arraysize(kKey), 'b'));
   auto encrypted_block = Encrypt(one_block_, *key_, iv_);
 
-  std::vector<SubsampleEntry> subsamples = {{0, encrypted_block.size()}};
+  std::vector<SubsampleEntry> subsamples = {
+      {0, static_cast<uint32_t>(encrypted_block.size())}};
 
   // Use a different key for decryption. Call should succeed, but return
   // something other than the original data.
@@ -217,7 +224,8 @@ TEST_F(CencDecryptorTest, PartialBlock) {
   auto encrypted_block = Encrypt(partial_block_, *key_, iv_);
 
   // Only 1 subsample, all encrypted data.
-  std::vector<SubsampleEntry> subsamples = {{0, encrypted_block.size()}};
+  std::vector<SubsampleEntry> subsamples = {
+      {0, static_cast<uint32_t>(encrypted_block.size())}};
 
   auto encrypted_buffer =
       CreateEncryptedBuffer(encrypted_block, iv_, subsamples);
@@ -230,7 +238,9 @@ TEST_F(CencDecryptorTest, MultipleSubsamples) {
 
   // Treat as 3 subsamples.
   std::vector<SubsampleEntry> subsamples = {
-      {0, one_block_.size()}, {0, one_block_.size()}, {0, one_block_.size()}};
+      {0, static_cast<uint32_t>(one_block_.size())},
+      {0, static_cast<uint32_t>(one_block_.size())},
+      {0, static_cast<uint32_t>(one_block_.size())}};
 
   auto encrypted_buffer =
       CreateEncryptedBuffer(encrypted_block, iv_, subsamples);
@@ -258,9 +268,11 @@ TEST_F(CencDecryptorTest, MultipleSubsamplesWithClearBytes) {
   auto expected_result = Combine(
       {one_block_, partial_block_, partial_block_, one_block_, partial_block_});
   std::vector<SubsampleEntry> subsamples = {
-      {one_block_.size(), partial_block_.size()},
-      {partial_block_.size(), one_block_.size()},
-      {partial_block_.size(), 0}};
+      {static_cast<uint32_t>(one_block_.size()),
+       static_cast<uint32_t>(partial_block_.size())},
+      {static_cast<uint32_t>(partial_block_.size()),
+       static_cast<uint32_t>(one_block_.size())},
+      {static_cast<uint32_t>(partial_block_.size()), 0}};
 
   auto encrypted_buffer = CreateEncryptedBuffer(input_data, iv_, subsamples);
   EXPECT_EQ(expected_result, DecryptWithKey(encrypted_buffer, *key_));

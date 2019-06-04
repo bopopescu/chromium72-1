@@ -21,6 +21,8 @@ Polymer({
       notify: true,
     },
 
+    showCrostini: Boolean,
+
     /**
      * |hasMouse_| and |hasTouchpad_| start undefined so observers don't trigger
      * until they have been populated.
@@ -52,23 +54,53 @@ Polymer({
       readOnly: true,
     },
 
+    /**
+     * Whether storage management info should be hidden.
+     * @private
+     */
+    hideStorageInfo_: {
+      type: Boolean,
+      value: function() {
+        // TODO(crbug.com/868747): Show an explanatory message instead.
+        return loadTimeData.valueExists('isDemoSession') &&
+            loadTimeData.getBoolean('isDemoSession');
+      },
+      readOnly: true,
+    },
+
     /** @private {!Map<string, string>} */
     focusConfig_: {
       type: Object,
       value: function() {
         const map = new Map();
-        if (settings.routes.POINTERS)
-          map.set(settings.routes.POINTERS.path, '#pointersRow .subpage-arrow');
-        if (settings.routes.KEYBOARD)
-          map.set(settings.routes.KEYBOARD.path, '#keyboardRow .subpage-arrow');
-        if (settings.routes.STYLUS)
-          map.set(settings.routes.STYLUS.path, '#stylusRow .subpage-arrow');
-        if (settings.routes.DISPLAY)
-          map.set(settings.routes.DISPLAY.path, '#displayRow .subpage-arrow');
-        if (settings.routes.STORAGE)
-          map.set(settings.routes.STORAGE.path, '#storageRow .subpage-arrow');
-        if (settings.routes.POWER)
-          map.set(settings.routes.POWER.path, '#powerRow .subpage-arrow');
+        if (settings.routes.POINTERS) {
+          map.set(
+              settings.routes.POINTERS.path,
+              '#pointersRow .subpage-arrow button');
+        }
+        if (settings.routes.KEYBOARD) {
+          map.set(
+              settings.routes.KEYBOARD.path,
+              '#keyboardRow .subpage-arrow button');
+        }
+        if (settings.routes.STYLUS) {
+          map.set(
+              settings.routes.STYLUS.path, '#stylusRow .subpage-arrow button');
+        }
+        if (settings.routes.DISPLAY) {
+          map.set(
+              settings.routes.DISPLAY.path,
+              '#displayRow .subpage-arrow button');
+        }
+        if (settings.routes.STORAGE) {
+          map.set(
+              settings.routes.STORAGE.path,
+              '#storageRow .subpage-arrow button');
+        }
+        if (settings.routes.POWER) {
+          map.set(
+              settings.routes.POWER.path, '#powerRow .subpage-arrow button');
+        }
         return map;
       },
     },

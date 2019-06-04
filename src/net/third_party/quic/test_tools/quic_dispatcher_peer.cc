@@ -7,7 +7,7 @@
 #include "net/third_party/quic/core/quic_dispatcher.h"
 #include "net/third_party/quic/core/quic_packet_writer_wrapper.h"
 
-namespace net {
+namespace quic {
 namespace test {
 
 // static
@@ -86,10 +86,10 @@ void QuicDispatcherPeer::SendPublicReset(
     QuicDispatcher* dispatcher,
     const QuicSocketAddress& server_address,
     const QuicSocketAddress& client_address,
-    QuicConnectionId connection_id) {
+    QuicConnectionId connection_id,
+    bool ietf_quic) {
   dispatcher->time_wait_list_manager()->SendPublicReset(
-      server_address, client_address, connection_id,
-      dispatcher->framer_.last_packet_is_ietf_quic());
+      server_address, client_address, connection_id, ietf_quic);
 }
 
 // static
@@ -106,4 +106,4 @@ void QuicDispatcherPeer::RestorePerPacketContext(
 }
 
 }  // namespace test
-}  // namespace net
+}  // namespace quic

@@ -19,7 +19,7 @@
 #include "components/arc/common/video_decode_accelerator.mojom.h"
 #include "components/arc/common/video_encode_accelerator.mojom.h"
 #include "components/arc/common/video_protected_buffer_allocator.mojom.h"
-#include "gpu/command_buffer/service/gpu_preferences.h"
+#include "gpu/config/gpu_preferences.h"
 
 namespace arc {
 class ProtectedBufferManager;
@@ -42,7 +42,7 @@ class ChromeContentGpuClient : public content::ContentGpuClient {
 
 #if BUILDFLAG(ENABLE_LIBRARY_CDMS)
   std::unique_ptr<media::CdmProxy> CreateCdmProxy(
-      const std::string& cdm_guid) override;
+      const base::Token& cdm_guid) override;
 #endif
 
  private:

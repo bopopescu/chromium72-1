@@ -788,28 +788,6 @@ sqlite3_int64 sqlite3StmtCurrentTime(sqlite3_context *p){
 }
 
 /*
-** The following is the implementation of an SQL function that always
-** fails with an error message stating that the function is used in the
-** wrong context.  The sqlite3_overload_function() API might construct
-** SQL function that use this routine so that the functions will exist
-** for name resolution but are actually overloaded by the xFindFunction
-** method of virtual tables.
-*/
-void sqlite3InvalidFunction(
-  sqlite3_context *context,  /* The function calling context */
-  int NotUsed,               /* Number of arguments to the function */
-  sqlite3_value **NotUsed2   /* Value of each argument */
-){
-  const char *zName = context->pFunc->zName;
-  char *zErr;
-  UNUSED_PARAMETER2(NotUsed, NotUsed2);
-  zErr = sqlite3_mprintf(
-      "unable to use function %s in the requested context", zName);
-  sqlite3_result_error(context, zErr, -1);
-  sqlite3_free(zErr);
-}
-
-/*
 ** Create a new aggregate context for p and return a pointer to
 ** its pMem->z element.
 */
@@ -992,7 +970,7 @@ static const Mem *columnNullValue(void){
         /* .xDel       = */ (void(*)(void*))0,
 #ifdef SQLITE_DEBUG
         /* .pScopyFrom = */ (Mem*)0,
-        /* .pFiller    = */ (void*)0,
+        /* .mScopyFlags= */ 0,
 #endif
       };
   return &nullMem;
@@ -1723,6 +1701,16 @@ char *sqlite3_expanded_sql(sqlite3_stmt *pStmt){
   return z;
 #endif
 }
+
+#ifdef SQLITE_ENABLE_NORMALIZE
+/*
+** Return the normalized SQL associated with a prepared statement.
+*/
+const char *sqlite3_normalized_sql(sqlite3_stmt *pStmt){
+  Vdbe *p = (Vdbe *)pStmt;
+  return p ? p->zNormSql : 0;
+}
+#endif /* SQLITE_ENABLE_NORMALIZE */
 
 #ifdef SQLITE_ENABLE_PREUPDATE_HOOK
 /*

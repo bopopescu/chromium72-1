@@ -6,12 +6,12 @@
 
 #include "net/third_party/quic/platform/api/quic_ptr_util.h"
 
-namespace net {
+namespace quic {
 
 std::unique_ptr<QuicSpdyClientStream>
 QuicSimpleClientSession::CreateClientStream() {
-  return QuicMakeUnique<QuicSimpleClientStream>(GetNextOutgoingStreamId(), this,
-                                                drop_response_body_);
+  return QuicMakeUnique<QuicSimpleClientStream>(
+      GetNextOutgoingStreamId(), this, BIDIRECTIONAL, drop_response_body_);
 }
 
-}  // namespace net
+}  // namespace quic

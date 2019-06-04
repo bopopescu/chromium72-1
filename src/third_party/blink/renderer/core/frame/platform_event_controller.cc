@@ -4,14 +4,13 @@
 
 #include "third_party/blink/renderer/core/frame/platform_event_controller.h"
 
+#include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/page/page.h"
 
 namespace blink {
 
 PlatformEventController::PlatformEventController(Document* document)
-    : PageVisibilityObserver(document && document->GetFrame()
-                                 ? document->GetFrame()->GetPage()
-                                 : nullptr),
+    : PageVisibilityObserver(document ? document->GetPage() : nullptr),
       has_event_listener_(false),
       is_active_(false),
       document_(document) {}

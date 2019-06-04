@@ -1,4 +1,3 @@
-#!/usr/bin/env python
 # Copyright (c) 2012 The Chromium Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
@@ -58,4 +57,3 @@ def ElementToClass(name, typeattr):
   if name not in _ELEMENT_TO_CLASS:
     raise exception.UnknownElement()
   return _ELEMENT_TO_CLASS[name]
-

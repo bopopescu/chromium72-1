@@ -33,23 +33,10 @@
 #include "core/fxge/cfx_renderdevice.h"
 #include "core/fxge/cfx_unicodeencodingex.h"
 #include "fxbarcode/BC_Writer.h"
-#include "third_party/base/ptr_util.h"
 
-CBC_OneDimWriter::CBC_OneDimWriter() {
-  m_locTextLoc = BC_TEXT_LOC_BELOWEMBED;
-  m_bPrintChecksum = true;
-  m_iDataLenth = 0;
-  m_bCalcChecksum = false;
-  m_pFont = nullptr;
-  m_fFontSize = 10;
-  m_iFontStyle = 0;
-  m_fontColor = 0xff000000;
-  m_iContentLen = 0;
-  m_bLeftPadding = false;
-  m_bRightPadding = false;
-}
+CBC_OneDimWriter::CBC_OneDimWriter() = default;
 
-CBC_OneDimWriter::~CBC_OneDimWriter() {}
+CBC_OneDimWriter::~CBC_OneDimWriter() = default;
 
 void CBC_OneDimWriter::SetPrintChecksum(bool checksum) {
   m_bPrintChecksum = checksum;
@@ -83,13 +70,6 @@ void CBC_OneDimWriter::SetFontColor(FX_ARGB color) {
   m_fontColor = color;
 }
 
-wchar_t CBC_OneDimWriter::Upper(wchar_t ch) {
-  if (ch >= 'a' && ch <= 'z') {
-    ch = ch - ('a' - 'A');
-  }
-  return ch;
-}
-
 uint8_t* CBC_OneDimWriter::EncodeWithHint(const ByteString& contents,
                                           BCFORMAT format,
                                           int32_t& outWidth,
@@ -110,20 +90,15 @@ int32_t CBC_OneDimWriter::AppendPattern(uint8_t* target,
                                         int32_t pos,
                                         const int8_t* pattern,
                                         int32_t patternLength,
-                                        int32_t startColor,
-                                        int32_t& e) {
-  if (startColor != 0 && startColor != 1) {
-    e = BCExceptionValueMustBeEither0or1;
-    return 0;
-  }
-  uint8_t color = (uint8_t)startColor;
+                                        bool startColor) {
+  bool color = startColor;
   int32_t numAdded = 0;
   for (int32_t i = 0; i < patternLength; i++) {
     for (int32_t j = 0; j < pattern[i]; j++) {
-      target[pos++] = color;
+      target[pos++] = color ? 1 : 0;
       numAdded += 1;
     }
-    color ^= 1;
+    color = !color;
   }
   return numAdded;
 }
@@ -135,7 +110,7 @@ void CBC_OneDimWriter::CalcTextInfo(const ByteString& text,
                                     int32_t fontSize,
                                     float& charsLen) {
   std::unique_ptr<CFX_UnicodeEncodingEx> encoding =
-      FX_CreateFontEncodingEx(cFont, FXFM_ENCODING_NONE);
+      FX_CreateFontEncodingEx(cFont);
 
   size_t length = text.GetLength();
   uint32_t* pCharCode = FX_Alloc(uint32_t, text.GetLength());

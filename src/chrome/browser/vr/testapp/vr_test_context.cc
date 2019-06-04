@@ -5,6 +5,8 @@
 #include "chrome/browser/vr/testapp/vr_test_context.h"
 
 #include <memory>
+#include <utility>
+#include <vector>
 
 #include "base/i18n/icu_util.h"
 #include "base/numerics/ranges.h"
@@ -13,10 +15,13 @@
 #include "base/strings/utf_string_conversions.h"
 #include "base/version.h"
 #include "chrome/browser/vr/assets_load_status.h"
+#include "chrome/browser/vr/gl_texture_location.h"
+#include "chrome/browser/vr/graphics_delegate.h"
 #include "chrome/browser/vr/model/assets.h"
+#include "chrome/browser/vr/model/location_bar_state.h"
 #include "chrome/browser/vr/model/model.h"
 #include "chrome/browser/vr/model/omnibox_suggestions.h"
-#include "chrome/browser/vr/model/toolbar_state.h"
+#include "chrome/browser/vr/render_info.h"
 #include "chrome/browser/vr/speech_recognizer.h"
 #include "chrome/browser/vr/test/constants.h"
 #include "chrome/browser/vr/testapp/assets_component_version.h"
@@ -31,8 +36,7 @@
 #include "chrome/grit/vr_testapp_resources.h"
 #include "components/omnibox/browser/vector_icons.h"
 #include "components/security_state/core/security_state.h"
-#include "components/toolbar/vector_icons.h"
-#include "third_party/blink/public/platform/web_gesture_event.h"
+#include "components/vector_icons/vector_icons.h"
 #include "third_party/skia/include/core/SkCanvas.h"
 #include "third_party/skia/include/core/SkSurface.h"
 #include "ui/base/resource/resource_bundle.h"
@@ -79,25 +83,27 @@ bool LoadPng(int resource_id, std::unique_ptr<SkBitmap>* out_image) {
       out_image->get());
 }
 
-GestureList CreateScrollGestureEventList(blink::WebGestureEvent::Type type) {
-  auto gesture = std::make_unique<blink::WebGestureEvent>();
-  gesture->SetType(type);
-  GestureList list;
+InputEventList CreateScrollGestureEventList(InputEvent::Type type) {
+  std::unique_ptr<InputEvent> gesture = std::make_unique<InputEvent>(type);
+  InputEventList list;
   list.push_back(std::move(gesture));
   return list;
 }
 
-GestureList CreateScrollGestureEventList(blink::WebGestureEvent::Type type,
-                                         const gfx::Vector2dF& delta) {
+InputEventList CreateScrollGestureEventList(InputEvent::Type type,
+                                            const gfx::Vector2dF& delta) {
   auto list = CreateScrollGestureEventList(type);
-  list.front()->data.scroll_update.delta_x = delta.x();
-  list.front()->data.scroll_update.delta_y = delta.y();
+  InputEvent* event = static_cast<InputEvent*>(list.front().get());
+  event->scroll_data.delta_x = delta.x();
+  event->scroll_data.delta_y = delta.y();
   return list;
 }
 
 }  // namespace
 
-VrTestContext::VrTestContext() : view_scale_factor_(kDefaultViewScaleFactor) {
+VrTestContext::VrTestContext(GraphicsDelegate* graphics_delegate)
+    : view_scale_factor_(kDefaultViewScaleFactor),
+      graphics_delegate_(graphics_delegate) {
   base::FilePath pak_path;
   base::PathService::Get(base::DIR_MODULE, &pak_path);
   ui::ResourceBundle::InitSharedInstanceWithPakPath(
@@ -105,53 +111,56 @@ VrTestContext::VrTestContext() : view_scale_factor_(kDefaultViewScaleFactor) {
 
   base::i18n::InitializeICU();
 
-  text_input_delegate_ = std::make_unique<TextInputDelegate>();
-  keyboard_delegate_ = std::make_unique<TestKeyboardDelegate>();
+  auto text_input_delegate = std::make_unique<TextInputDelegate>();
+  auto keyboard_delegate = std::make_unique<TestKeyboardDelegate>();
+  keyboard_delegate_ = keyboard_delegate.get();
+  text_input_delegate->SetUpdateInputCallback(
+      base::BindRepeating(&TestKeyboardDelegate::UpdateInput,
+                          base::Unretained(keyboard_delegate.get())));
 
   UiInitialState ui_initial_state;
-  ui_initial_state.create_tabs_view = true;
-  ui_ = std::make_unique<Ui>(this, nullptr, keyboard_delegate_.get(),
-                             text_input_delegate_.get(), nullptr,
-                             ui_initial_state);
-  LoadAssets();
+  ui_instance_ = std::make_unique<Ui>(
+      this, nullptr, std::move(keyboard_delegate),
+      std::move(text_input_delegate), nullptr, ui_initial_state);
+  ui_ = ui_instance_.get();
 
-  text_input_delegate_->SetRequestFocusCallback(
-      base::BindRepeating(&vr::Ui::RequestFocus, base::Unretained(ui_.get())));
-  text_input_delegate_->SetRequestUnfocusCallback(base::BindRepeating(
-      &vr::Ui::RequestUnfocus, base::Unretained(ui_.get())));
-  text_input_delegate_->SetUpdateInputCallback(
-      base::BindRepeating(&TestKeyboardDelegate::UpdateInput,
-                          base::Unretained(keyboard_delegate_.get())));
-  keyboard_delegate_->SetUiInterface(ui_.get());
+  LoadAssets();
 
   touchpad_touch_position_ = kInitialTouchPosition;
 
-  model_ = ui_->model_for_test();
+  model_ = ui_instance_->model_for_test();
 
   CycleOrigin();
-  ui_->SetHistoryButtonsEnabled(true, true);
-  ui_->SetLoading(true);
-  ui_->SetLoadProgress(0.4);
-  CapturingStateModel capturing_state;
-  capturing_state.video_capture_potentially_enabled = true;
-  capturing_state.background_screen_capture_enabled = true;
-  capturing_state.bluetooth_connected = true;
-  capturing_state.location_access_enabled = true;
-  ui_->SetCapturingState(capturing_state);
-  ui_->input_manager()->set_hit_test_strategy(
+  auto browser_ui = ui_->GetBrowserUiWeakPtr();
+  browser_ui->SetHistoryButtonsEnabled(true, true);
+  browser_ui->SetLoading(true);
+  browser_ui->SetLoadProgress(0.4);
+  CapturingStateModel active_capturing;
+  CapturingStateModel background_capturing;
+  CapturingStateModel potential_capturing;
+  potential_capturing.video_capture_enabled = true;
+  background_capturing.screen_capture_enabled = true;
+  active_capturing.bluetooth_connected = true;
+  active_capturing.location_access_enabled = true;
+  browser_ui->SetCapturingState(active_capturing, background_capturing,
+                                potential_capturing);
+  ui_instance_->input_manager()->set_hit_test_strategy(
       UiInputManager::PROJECT_TO_LASER_ORIGIN_FOR_TEST);
-  for (size_t i = 0; i < 5; i++) {
-    ui_->AddOrUpdateTab(tab_id_++, false,
-                        base::UTF8ToUTF16("Wikipedia, the free encyclopedia"));
-    ui_->AddOrUpdateTab(tab_id_++, false, base::UTF8ToUTF16("New tab"));
-    ui_->AddOrUpdateTab(tab_id_++, false, base::UTF8ToUTF16(""));
-    ui_->AddOrUpdateTab(tab_id_++, true, base::UTF8ToUTF16("Home - YouTube"));
-    ui_->AddOrUpdateTab(tab_id_++, true,
-                        base::UTF8ToUTF16("VR - Google Search"));
-  }
+
+  InitializeGl();
 }
 
 VrTestContext::~VrTestContext() = default;
+
+void VrTestContext::InitializeGl() {
+  unsigned int content_texture_id = CreateTexture(0xFF000080);
+  unsigned int ui_texture_id = CreateTexture(0xFF008000);
+  ui_->OnGlInitialized(kGlTextureLocationLocal, content_texture_id,
+                       content_texture_id, ui_texture_id);
+  keyboard_delegate_->Initialize(
+      ui_instance_->scene()->SurfaceProviderForTesting(),
+      ui_instance_->ui_element_renderer());
+}
 
 void VrTestContext::DrawFrame() {
   base::TimeTicks current_time = base::TimeTicks::Now();
@@ -159,26 +168,30 @@ void VrTestContext::DrawFrame() {
   RenderInfo render_info = GetRenderInfo();
 
   // Update the render position of all UI elements (including desktop).
-  ui_->scene()->OnBeginFrame(current_time, head_pose_);
+  ui_->OnBeginFrame(current_time, head_pose_);
   ui_->OnProjMatrixChanged(render_info.left_eye_model.proj_matrix);
 
   UpdateController(render_info, current_time);
 
-  ui_->scene()->UpdateTextures();
+  graphics_delegate_->RunInSkiaContext(
+      base::BindOnce(&UiInterface::UpdateSceneTextures, base::Unretained(ui_)));
 
   auto load_progress = (current_time - page_load_start_).InMilliseconds() /
                        kPageLoadTimeMilliseconds;
-  ui_->SetLoading(load_progress < 1.0f);
-  ui_->SetLoadProgress(std::min(load_progress, 1.0f));
+  auto browser_ui = ui_->GetBrowserUiWeakPtr();
+  browser_ui->SetLoading(load_progress < 1.0f);
+  browser_ui->SetLoadProgress(std::min(load_progress, 1.0f));
 
-  if (web_vr_mode_ && ui_->ShouldRenderWebVr() && webvr_frames_received_) {
-    ui_->ui_renderer()->DrawWebVrOverlayForeground(render_info);
+  if (web_vr_mode_ && model_->web_vr.state == kWebVrPresenting &&
+      webvr_frames_received_) {
+    ui_->DrawWebVrOverlayForeground(render_info);
   } else {
-    ui_->ui_renderer()->Draw(render_info);
+    ui_->Draw(render_info);
   }
 }
 
 void VrTestContext::HandleInput(ui::Event* event) {
+  auto browser_ui = ui_->GetBrowserUiWeakPtr();
   if (event->IsKeyEvent()) {
     if (event->type() != ui::ET_KEY_PRESSED) {
       return;
@@ -198,32 +211,32 @@ void VrTestContext::HandleInput(ui::Event* event) {
         break;
       case ui::DomCode::US_F:
         fullscreen_ = !fullscreen_;
-        ui_->SetFullscreen(fullscreen_);
+        browser_ui->SetFullscreen(fullscreen_);
         break;
       case ui::DomCode::US_A:
         if (model_->platform_toast) {
-          ui_->CancelPlatformToast();
+          browser_ui->CancelPlatformToast();
         } else {
-          ui_->ShowPlatformToast(base::UTF8ToUTF16("Downloading"));
+          browser_ui->ShowPlatformToast(base::UTF8ToUTF16("Downloading"));
         }
         break;
       case ui::DomCode::US_H:
-        handedness_ = handedness_ == PlatformController::kRightHanded
-                          ? PlatformController::kLeftHanded
-                          : PlatformController::kRightHanded;
+        handedness_ = handedness_ == ControllerModel::kRightHanded
+                          ? ControllerModel::kLeftHanded
+                          : ControllerModel::kRightHanded;
         break;
       case ui::DomCode::US_I:
         incognito_ = !incognito_;
-        ui_->SetIncognito(incognito_);
+        browser_ui->SetIncognito(incognito_);
         break;
       case ui::DomCode::US_C:
         CycleIndicators();
         break;
       case ui::DomCode::US_D:
-        ui_->Dump(false);
+        ui_instance_->Dump(false);
         break;
       case ui::DomCode::US_B:
-        ui_->Dump(true);
+        ui_instance_->Dump(true);
         break;
       case ui::DomCode::US_V:
         CreateFakeVoiceSearchResult();
@@ -236,17 +249,16 @@ void VrTestContext::HandleInput(ui::Event* event) {
         break;
       case ui::DomCode::US_R: {
         webvr_frames_received_ = true;
-        CapturingStateModel capturing_state;
-        capturing_state.bluetooth_connected = true;
-        capturing_state.location_access_enabled = true;
-        ui_->SetCapturingState(capturing_state);
-        ui_->OnWebVrFrameAvailable();
+        CapturingStateModel active_capturing;
+        CapturingStateModel background_capturing;
+        CapturingStateModel potential_capturing;
+        active_capturing.bluetooth_connected = true;
+        active_capturing.location_access_enabled = true;
+        browser_ui->SetCapturingState(active_capturing, background_capturing,
+                                      potential_capturing);
+        ui_->GetSchedulerUiPtr()->OnWebXrFrameAvailable();
         break;
       }
-      case ui::DomCode::US_E:
-        model_->experimental_features_enabled =
-            !model_->experimental_features_enabled;
-        break;
       case ui::DomCode::US_O:
         CycleOrigin();
         model_->can_navigate_back = !model_->can_navigate_back;
@@ -256,9 +268,6 @@ void VrTestContext::HandleInput(ui::Event* event) {
         break;
       case ui::DomCode::US_G:
         recentered_ = true;
-        break;
-      case ui::DomCode::US_X:
-        ui_->OnAppButtonClicked();
         break;
       case ui::DomCode::US_T:
         touching_touchpad_ = !touching_touchpad_;
@@ -272,6 +281,14 @@ void VrTestContext::HandleInput(ui::Event* event) {
       }
       case ui::DomCode::US_L:
         model_->standalone_vr_device = !model_->standalone_vr_device;
+        break;
+      case ui::DomCode::US_N:
+        if (hosted_ui_enabled_) {
+          CloseHostedDialog();
+        } else {
+          ui_->SetAlertDialogEnabled(true, nullptr, 100, 50);
+          hosted_ui_enabled_ = true;
+        }
         break;
       default:
         break;
@@ -291,8 +308,8 @@ void VrTestContext::HandleInput(ui::Event* event) {
           touchpad_touch_position_.y() + kTouchpadPositionDelta * direction,
           0.0f, 1.0f));
     } else {
-      gesture_lists_.push(CreateScrollGestureEventList(
-          blink::WebGestureEvent::kGestureScrollBegin));
+      input_event_lists_.push(
+          CreateScrollGestureEventList(InputEvent::kScrollBegin));
 
       auto offset = gfx::Vector2dF(event->AsMouseWheelEvent()->offset());
       if (event->IsShiftDown()) {
@@ -301,11 +318,11 @@ void VrTestContext::HandleInput(ui::Event* event) {
       } else {
         offset.Scale(kVerticalScrollScaleFactor);
       }
-      gesture_lists_.push(CreateScrollGestureEventList(
-          blink::WebGestureEvent::kGestureScrollUpdate, offset));
+      input_event_lists_.push(
+          CreateScrollGestureEventList(InputEvent::kScrollUpdate, offset));
 
-      gesture_lists_.push(CreateScrollGestureEventList(
-          blink::WebGestureEvent::kGestureScrollEnd));
+      input_event_lists_.push(
+          CreateScrollGestureEventList(InputEvent::kScrollEnd));
     }
     return;
   }
@@ -316,10 +333,12 @@ void VrTestContext::HandleInput(ui::Event* event) {
 
   const ui::MouseEvent* mouse_event = event->AsMouseEvent();
 
-  if (mouse_event->IsMiddleMouseButton()) {
-    if (mouse_event->type() == ui::ET_MOUSE_RELEASED) {
-      ui_->OnAppButtonClicked();
-    }
+  if (mouse_event->IsMiddleMouseButton() &&
+      mouse_event->type() == ui::ET_MOUSE_RELEASED) {
+    InputEventList list;
+    list.push_back(
+        std::make_unique<InputEvent>(InputEvent::kMenuButtonClicked));
+    input_event_lists_.push(std::move(list));
   }
 
   // TODO(cjgrant): Figure out why, quite regularly, mouse click events do not
@@ -389,7 +408,8 @@ ControllerModel VrTestContext::UpdateController(const RenderInfo& render_info,
 
   ControllerModel controller_model;
   controller_model.touchpad_button_state =
-      touchpad_pressed_ ? UiInputManager::DOWN : UiInputManager::UP;
+      touchpad_pressed_ ? ControllerModel::ButtonState::kDown
+                        : ControllerModel::ButtonState::kUp;
   controller_model.touchpad_touch_position = touchpad_touch_position_;
   controller_model.touching_touchpad = touching_touchpad_;
   controller_model.recentered = recentered_;
@@ -409,13 +429,13 @@ ControllerModel VrTestContext::UpdateController(const RenderInfo& render_info,
   RotateToward(controller_model.laser_direction, &controller_model.transform);
 
   // Hit testing is done in terms of this synthesized controller model.
-  if (gesture_lists_.empty()) {
-    gesture_lists_.push(GestureList());
+  if (input_event_lists_.empty()) {
+    input_event_lists_.push(InputEventList());
   }
   ReticleModel reticle_model;
-  ui_->input_manager()->HandleInput(current_time, render_info, controller_model,
-                                    &reticle_model, &gesture_lists_.front());
-  gesture_lists_.pop();
+  ui_->HandleInput(current_time, render_info, controller_model, &reticle_model,
+                   &input_event_lists_.front());
+  input_event_lists_.pop();
 
   // Now that we have accurate hit information, we use this to construct a
   // controller model for display.
@@ -438,21 +458,10 @@ ControllerModel VrTestContext::UpdateController(const RenderInfo& render_info,
   return controller_model;
 }
 
-void VrTestContext::OnGlInitialized() {
-  unsigned int content_texture_id = CreateFakeContentTexture();
-
-  ui_->OnGlInitialized(
-      content_texture_id, UiElementRenderer::kTextureLocationLocal,
-      content_texture_id, UiElementRenderer::kTextureLocationLocal, 0, false);
-
-  keyboard_delegate_->Initialize(ui_->scene()->SurfaceProviderForTesting(),
-                                 ui_->ui_element_renderer());
-}
-
-unsigned int VrTestContext::CreateFakeContentTexture() {
+unsigned int VrTestContext::CreateTexture(SkColor color) {
   sk_sp<SkSurface> surface = SkSurface::MakeRasterN32Premul(1, 1);
   SkCanvas* canvas = surface->getCanvas();
-  canvas->clear(0xFF000080);
+  canvas->clear(color);
 
   SkPixmap pixmap;
   CHECK(surface->peekPixels(&pixmap));
@@ -473,33 +482,33 @@ unsigned int VrTestContext::CreateFakeContentTexture() {
 void VrTestContext::CreateFakeVoiceSearchResult() {
   if (!model_->voice_search_enabled())
     return;
-  ui_->SetRecognitionResult(
+  auto browser_ui = ui_->GetBrowserUiWeakPtr();
+  browser_ui->SetRecognitionResult(
       base::UTF8ToUTF16("I would like to see cat videos, please."));
-  ui_->SetSpeechRecognitionEnabled(false);
+  browser_ui->SetSpeechRecognitionEnabled(false);
 }
 
 void VrTestContext::CycleWebVrModes() {
+  auto browser_ui = ui_->GetBrowserUiWeakPtr();
   switch (model_->web_vr.state) {
     case kWebVrNoTimeoutPending: {
       web_vr_mode_ = true;
       webvr_frames_received_ = false;
-      ui_->SetWebVrMode(true);
+      browser_ui->SetWebVrMode(true);
       break;
     }
-    case kWebVrAwaitingMinSplashScreenDuration:
-      break;
     case kWebVrAwaitingFirstFrame:
-      ui_->OnWebVrTimeoutImminent();
+      ui_->GetSchedulerUiPtr()->OnWebXrTimeoutImminent();
       break;
     case kWebVrTimeoutImminent:
-      ui_->OnWebVrTimedOut();
+      ui_->GetSchedulerUiPtr()->OnWebXrTimedOut();
       break;
     case kWebVrTimedOut:
-      ui_->SetWebVrMode(false);
+      browser_ui->SetWebVrMode(false);
       web_vr_mode_ = false;
       break;
     case kWebVrPresenting:
-      ui_->SetWebVrMode(false);
+      browser_ui->SetWebVrMode(false);
       web_vr_mode_ = false;
       break;
     default:
@@ -514,9 +523,9 @@ void VrTestContext::ToggleSplashScreen() {
     UiInitialState state;
     state.in_web_vr = true;
     state.web_vr_autopresentation_expected = true;
-    ui_->ReinitializeForTest(state);
+    ui_instance_->ReinitializeForTest(state);
   } else {
-    ui_->ReinitializeForTest(UiInitialState());
+    ui_instance_->ReinitializeForTest(UiInitialState());
   }
   show_web_vr_splash_screen_ = !show_web_vr_splash_screen_;
 }
@@ -541,25 +550,26 @@ void VrTestContext::SetVoiceSearchActive(bool active) {
         UiUnsupportedMode::kVoiceSearchNeedsRecordAudioOsPermission);
     return;
   }
-  ui_->SetSpeechRecognitionEnabled(active);
+  auto browser_ui = ui_->GetBrowserUiWeakPtr();
+  browser_ui->SetSpeechRecognitionEnabled(active);
   if (active)
-    ui_->OnSpeechRecognitionStateChanged(SPEECH_RECOGNITION_RECOGNIZING);
+    browser_ui->OnSpeechRecognitionStateChanged(SPEECH_RECOGNITION_RECOGNIZING);
 }
 
 void VrTestContext::ExitPresent() {
   web_vr_mode_ = false;
-  ui_->SetWebVrMode(false);
+  ui_->GetBrowserUiWeakPtr()->SetWebVrMode(false);
 }
 
 void VrTestContext::ExitFullscreen() {
   fullscreen_ = false;
-  ui_->SetFullscreen(false);
+  ui_->GetBrowserUiWeakPtr()->SetFullscreen(false);
 }
 
 void VrTestContext::Navigate(GURL gurl, NavigationMethod method) {
-  ToolbarState state(gurl, security_state::SecurityLevel::HTTP_SHOW_WARNING,
-                     &toolbar::kHttpIcon, true, false);
-  ui_->SetToolbarState(state);
+  LocationBarState state(gurl, security_state::SecurityLevel::HTTP_SHOW_WARNING,
+                         &omnibox::kHttpIcon, true, false);
+  ui_->GetBrowserUiWeakPtr()->SetLocationBarState(state);
   page_load_start_ = base::TimeTicks::Now();
 }
 
@@ -581,11 +591,10 @@ void VrTestContext::ReloadTab() {
 
 void VrTestContext::OpenNewTab(bool incognito) {
   incognito_ = incognito;
-  ui_->SetIncognito(incognito);
-  ui_->AddOrUpdateTab(tab_id_++, incognito, base::UTF8ToUTF16("test"));
+  auto browser_ui = ui_->GetBrowserUiWeakPtr();
+  browser_ui->SetIncognito(incognito);
+  model_->incognito_tabs_open = model_->incognito_tabs_open || incognito;
 }
-
-void VrTestContext::SelectTab(int id, bool incognito) {}
 
 void VrTestContext::OpenBookmarks() {}
 void VrTestContext::OpenRecentTabs() {}
@@ -594,34 +603,24 @@ void VrTestContext::OpenDownloads() {}
 void VrTestContext::OpenShare() {}
 void VrTestContext::OpenSettings() {}
 
-void VrTestContext::CloseTab(int id, bool incognito) {
-  ui_->RemoveTab(id, incognito);
-}
-
-void VrTestContext::CloseAllTabs() {
-  incognito_ = false;
-  ui_->SetIncognito(false);
-  model_->incognito_tabs.clear();
-  model_->regular_tabs.clear();
-}
-
 void VrTestContext::CloseAllIncognitoTabs() {
   incognito_ = false;
-  ui_->SetIncognito(false);
-  model_->incognito_tabs.clear();
+  ui_->GetBrowserUiWeakPtr()->SetIncognito(false);
+  model_->incognito_tabs_open = false;
 }
 
 void VrTestContext::OpenFeedback() {}
 
-void VrTestContext::ExitCct() {}
-
 void VrTestContext::OnUnsupportedMode(vr::UiUnsupportedMode mode) {
   if (mode == UiUnsupportedMode::kVoiceSearchNeedsRecordAudioOsPermission) {
-    ui_->ShowExitVrPrompt(mode);
+    ui_->GetBrowserUiWeakPtr()->ShowExitVrPrompt(mode);
   }
 }
 
-void VrTestContext::CloseHostedDialog() {}
+void VrTestContext::CloseHostedDialog() {
+  ui_->SetAlertDialogEnabled(false, nullptr, 0, 0);
+  hosted_ui_enabled_ = false;
+}
 
 void VrTestContext::OnExitVrPromptResult(vr::ExitVrPromptChoice choice,
                                          vr::UiUnsupportedMode reason) {
@@ -636,9 +635,10 @@ void VrTestContext::OnContentScreenBoundsChanged(const gfx::SizeF& bounds) {}
 
 void VrTestContext::StartAutocomplete(const AutocompleteRequest& request) {
   auto result = std::make_unique<OmniboxSuggestions>();
+  auto browser_ui = ui_->GetBrowserUiWeakPtr();
 
   if (request.text.empty()) {
-    ui_->SetOmniboxSuggestions(std::move(result));
+    browser_ui->SetOmniboxSuggestions(std::move(result));
     return;
   }
 
@@ -648,29 +648,27 @@ void VrTestContext::StartAutocomplete(const AutocompleteRequest& request) {
       full_string.find(request.text) == 0) {
     result->suggestions.emplace_back(OmniboxSuggestion(
         full_string, base::string16(), ACMatchClassifications(),
-        ACMatchClassifications(), AutocompleteMatch::Type::VOICE_SUGGEST,
-        GURL(), request.text, full_string.substr(request.text.size())));
+        ACMatchClassifications(), &vector_icons::kSearchIcon, GURL(),
+        request.text, full_string.substr(request.text.size())));
   }
 
   // Supply a verbatim search match.
   result->suggestions.emplace_back(OmniboxSuggestion(
       request.text, base::string16(), ACMatchClassifications(),
-      ACMatchClassifications(), AutocompleteMatch::Type::VOICE_SUGGEST, GURL(),
+      ACMatchClassifications(), &vector_icons::kSearchIcon, GURL(),
       base::string16(), base::string16()));
 
   // Add a suggestion to exercise classification text styling.
   result->suggestions.emplace_back(OmniboxSuggestion(
       base::UTF8ToUTF16("Suggestion with classification"),
-      base::UTF8ToUTF16("none url match dim invsible"),
-      ACMatchClassifications(),
+      base::UTF8ToUTF16("none url match dim"), ACMatchClassifications(),
       {
           ACMatchClassification(0, ACMatchClassification::NONE),
           ACMatchClassification(5, ACMatchClassification::URL),
           ACMatchClassification(9, ACMatchClassification::MATCH),
           ACMatchClassification(15, ACMatchClassification::DIM),
-          ACMatchClassification(19, ACMatchClassification::INVISIBLE),
       },
-      AutocompleteMatch::Type::VOICE_SUGGEST, GURL("http://www.test.com/"),
+      &vector_icons::kSearchIcon, GURL("http://www.test.com/"),
       base::string16(), base::string16()));
 
   while (result->suggestions.size() < 4) {
@@ -680,19 +678,21 @@ void VrTestContext::StartAutocomplete(const AutocompleteRequest& request) {
             "Very lengthy description of the suggestion that would wrap "
             "if not truncated through some other means."),
         ACMatchClassifications(), ACMatchClassifications(),
-        AutocompleteMatch::Type::VOICE_SUGGEST, GURL("http://www.test.com/"),
+        &vector_icons::kSearchIcon, GURL("http://www.test.com/"),
         base::string16(), base::string16()));
   }
 
-  ui_->SetOmniboxSuggestions(std::move(result));
+  browser_ui->SetOmniboxSuggestions(std::move(result));
 }
 
 void VrTestContext::StopAutocomplete() {
-  ui_->SetOmniboxSuggestions(std::make_unique<OmniboxSuggestions>());
+  ui_->GetBrowserUiWeakPtr()->SetOmniboxSuggestions(
+      std::make_unique<OmniboxSuggestions>());
 }
 
 void VrTestContext::ShowPageInfo() {
-  ui_->ShowExitVrPrompt(UiUnsupportedMode::kUnhandledPageInfo);
+  ui_->GetBrowserUiWeakPtr()->ShowExitVrPrompt(
+      UiUnsupportedMode::kUnhandledPageInfo);
 }
 
 void VrTestContext::CycleIndicators() {
@@ -707,64 +707,64 @@ void VrTestContext::CycleIndicators() {
 
   state = (state + 1) % (1 << (signals.size() + 1));
   for (size_t i = 0; i < signals.size(); ++i) {
-    model_->capturing_state.*signals[i] = state & (1 << i);
+    model_->active_capturing.*signals[i] = state & (1 << i);
   }
 }
 
 void VrTestContext::CycleOrigin() {
-  const std::vector<ToolbarState> states = {
+  const std::vector<LocationBarState> states = {
       {GURL("http://domain.com"),
-       security_state::SecurityLevel::HTTP_SHOW_WARNING, &toolbar::kHttpIcon,
+       security_state::SecurityLevel::HTTP_SHOW_WARNING, &omnibox::kHttpIcon,
        true, false},
       {GURL("https://www.domain.com/path/segment/directory/file.html"),
-       security_state::SecurityLevel::SECURE, &toolbar::kHttpsValidIcon, true,
+       security_state::SecurityLevel::SECURE, &omnibox::kHttpsValidIcon, true,
        false},
       {GURL("https://www.domain.com/path/segment/directory/file.html"),
-       security_state::SecurityLevel::DANGEROUS, &toolbar::kHttpsInvalidIcon,
+       security_state::SecurityLevel::DANGEROUS, &omnibox::kHttpsInvalidIcon,
        true, false},
       // Do not show URL
       {GURL(), security_state::SecurityLevel::HTTP_SHOW_WARNING,
-       &toolbar::kHttpIcon, false, false},
-      {GURL(), security_state::SecurityLevel::SECURE, &toolbar::kHttpsValidIcon,
+       &omnibox::kHttpIcon, false, false},
+      {GURL(), security_state::SecurityLevel::SECURE, &omnibox::kHttpsValidIcon,
        true, false},
       {GURL("file://very-very-very-long-file-hostname/path/path/path/path"),
-       security_state::SecurityLevel::HTTP_SHOW_WARNING, &toolbar::kHttpIcon,
+       security_state::SecurityLevel::HTTP_SHOW_WARNING, &omnibox::kHttpIcon,
        true, false},
       {GURL("file:///path/path/path/path/path/path/path/path/path"),
-       security_state::SecurityLevel::HTTP_SHOW_WARNING, &toolbar::kHttpIcon,
+       security_state::SecurityLevel::HTTP_SHOW_WARNING, &omnibox::kHttpIcon,
        true, false},
       // Elision-related cases.
       {GURL("http://domaaaaaaaaaaain.com"),
-       security_state::SecurityLevel::HTTP_SHOW_WARNING, &toolbar::kHttpIcon,
+       security_state::SecurityLevel::HTTP_SHOW_WARNING, &omnibox::kHttpIcon,
        true, false},
       {GURL("http://domaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaain.com"),
-       security_state::SecurityLevel::HTTP_SHOW_WARNING, &toolbar::kHttpIcon,
+       security_state::SecurityLevel::HTTP_SHOW_WARNING, &omnibox::kHttpIcon,
        true, false},
       {GURL("http://domain.com/a/"),
-       security_state::SecurityLevel::HTTP_SHOW_WARNING, &toolbar::kHttpIcon,
+       security_state::SecurityLevel::HTTP_SHOW_WARNING, &omnibox::kHttpIcon,
        true, false},
       {GURL("http://domain.com/aaaaaaa/"),
-       security_state::SecurityLevel::HTTP_SHOW_WARNING, &toolbar::kHttpIcon,
+       security_state::SecurityLevel::HTTP_SHOW_WARNING, &omnibox::kHttpIcon,
        true, false},
       {GURL("http://domain.com/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/"),
-       security_state::SecurityLevel::HTTP_SHOW_WARNING, &toolbar::kHttpIcon,
+       security_state::SecurityLevel::HTTP_SHOW_WARNING, &omnibox::kHttpIcon,
        true, false},
       {GURL("http://domaaaaaaaaaaaaaaaaain.com/aaaaaaaaaaaaaaaaaaaaaaaaaaaaa/"),
-       security_state::SecurityLevel::HTTP_SHOW_WARNING, &toolbar::kHttpIcon,
+       security_state::SecurityLevel::HTTP_SHOW_WARNING, &omnibox::kHttpIcon,
        true, false},
       {GURL("http://domaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaain.com/aaaaaaaaaa/"),
-       security_state::SecurityLevel::HTTP_SHOW_WARNING, &toolbar::kHttpIcon,
+       security_state::SecurityLevel::HTTP_SHOW_WARNING, &omnibox::kHttpIcon,
        true, false},
       {GURL("http://www.domain.com/path/segment/directory/file.html"),
-       security_state::SecurityLevel::HTTP_SHOW_WARNING, &toolbar::kHttpIcon,
+       security_state::SecurityLevel::HTTP_SHOW_WARNING, &omnibox::kHttpIcon,
        true, false},
       {GURL("http://subdomain.domain.com/"),
-       security_state::SecurityLevel::HTTP_SHOW_WARNING, &toolbar::kHttpIcon,
+       security_state::SecurityLevel::HTTP_SHOW_WARNING, &omnibox::kHttpIcon,
        true, false},
   };
 
   static int state = 0;
-  ui_->SetToolbarState(states[state]);
+  ui_->GetBrowserUiWeakPtr()->SetLocationBarState(states[state]);
   state = (state + 1) % states.size();
 }
 
@@ -781,7 +781,7 @@ RenderInfo VrTestContext::GetRenderInfo() const {
 
 gfx::Point3F VrTestContext::LaserOrigin() const {
   gfx::Point3F origin = kDefaultLaserOrigin;
-  if (handedness_ == PlatformController::kLeftHanded) {
+  if (handedness_ == ControllerModel::kLeftHanded) {
     origin.set_x(-origin.x());
   }
   return origin;
@@ -795,12 +795,12 @@ void VrTestContext::LoadAssets() {
         LoadPng(IDR_VR_INCOGNITO_GRADIENT_IMAGE, &assets->incognito_gradient) &&
         LoadPng(IDR_VR_FULLSCREEN_GRADIENT_IMAGE,
                 &assets->fullscreen_gradient))) {
-    ui_->OnAssetsLoaded(AssetsLoadStatus::kInvalidContent, nullptr,
-                        assets_component_version);
+    ui_->GetBrowserUiWeakPtr()->OnAssetsLoaded(
+        AssetsLoadStatus::kInvalidContent, nullptr, assets_component_version);
     return;
   }
-  ui_->OnAssetsLoaded(AssetsLoadStatus::kSuccess, std::move(assets),
-                      assets_component_version);
+  ui_->GetBrowserUiWeakPtr()->OnAssetsLoaded(
+      AssetsLoadStatus::kSuccess, std::move(assets), assets_component_version);
 }
 
 }  // namespace vr

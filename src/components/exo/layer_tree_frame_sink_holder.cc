@@ -5,6 +5,7 @@
 #include "components/exo/layer_tree_frame_sink_holder.h"
 
 #include "ash/shell.h"
+#include "base/stl_util.h"
 #include "base/threading/thread_task_runner_handle.h"
 #include "cc/trees/layer_tree_frame_sink.h"
 #include "components/exo/surface_tree_host.h"
@@ -54,12 +55,15 @@ void LayerTreeFrameSinkHolder::DeleteWhenLastResourceHasBeenReclaimed(
       viz::BeginFrameArgs::kStartingFrameNumber;
   frame.metadata.begin_frame_ack.has_damage = true;
   frame.metadata.device_scale_factor = holder->last_frame_device_scale_factor_;
+  frame.metadata.local_surface_id_allocation_time =
+      holder->last_local_surface_id_allocation_time_;
   std::unique_ptr<viz::RenderPass> pass = viz::RenderPass::Create();
   pass->SetNew(1, gfx::Rect(holder->last_frame_size_in_pixels_),
                gfx::Rect(holder->last_frame_size_in_pixels_), gfx::Transform());
   frame.render_pass_list.push_back(std::move(pass));
   holder->last_frame_resources_.clear();
-  holder->frame_sink_->SubmitCompositorFrame(std::move(frame));
+  holder->frame_sink_->SubmitCompositorFrame(std::move(frame),
+                                             /*show_hit_test_borders=*/false);
 
   // Delete sink holder immediately if not waiting for resources to be
   // reclaimed.
@@ -80,10 +84,13 @@ void LayerTreeFrameSinkHolder::SubmitCompositorFrame(
     viz::CompositorFrame frame) {
   last_frame_size_in_pixels_ = frame.size_in_pixels();
   last_frame_device_scale_factor_ = frame.metadata.device_scale_factor;
+  last_local_surface_id_allocation_time_ =
+      frame.metadata.local_surface_id_allocation_time;
   last_frame_resources_.clear();
   for (auto& resource : frame.resource_list)
     last_frame_resources_.push_back(resource.id);
-  frame_sink_->SubmitCompositorFrame(std::move(frame));
+  frame_sink_->SubmitCompositorFrame(std::move(frame),
+                                     /*show_hit_test_borders=*/false);
 }
 
 void LayerTreeFrameSinkHolder::DidNotProduceFrame(
@@ -114,12 +121,6 @@ base::WeakPtr<LayerTreeFrameSinkHolder> LayerTreeFrameSinkHolder::GetWeakPtr() {
 ////////////////////////////////////////////////////////////////////////////////
 // cc::LayerTreeFrameSinkClient overrides:
 
-void LayerTreeFrameSinkHolder::SetBeginFrameSource(
-    viz::BeginFrameSource* source) {
-  if (surface_tree_host_)
-    surface_tree_host_->SetBeginFrameSource(source);
-}
-
 base::Optional<viz::HitTestRegionList>
 LayerTreeFrameSinkHolder::BuildHitTestData() {
   return {};
@@ -130,8 +131,7 @@ void LayerTreeFrameSinkHolder::ReclaimResources(
   for (auto& resource : resources) {
     // Skip resources that are also in last frame. This can happen if
     // the frame sink id changed.
-    if (std::find(last_frame_resources_.begin(), last_frame_resources_.end(),
-                  resource.id) != last_frame_resources_.end()) {
+    if (base::ContainsValue(last_frame_resources_, resource.id)) {
       continue;
     }
     auto it = release_callbacks_.find(resource.id);
@@ -153,18 +153,9 @@ void LayerTreeFrameSinkHolder::DidReceiveCompositorFrameAck() {
 
 void LayerTreeFrameSinkHolder::DidPresentCompositorFrame(
     uint32_t presentation_token,
-    base::TimeTicks time,
-    base::TimeDelta refresh,
-    uint32_t flags) {
+    const gfx::PresentationFeedback& feedback) {
   if (surface_tree_host_)
-    surface_tree_host_->DidPresentCompositorFrame(presentation_token, time,
-                                                  refresh, flags);
-}
-
-void LayerTreeFrameSinkHolder::DidDiscardCompositorFrame(
-    uint32_t presentation_token) {
-  if (surface_tree_host_)
-    surface_tree_host_->DidDiscardCompositorFrame(presentation_token);
+    surface_tree_host_->DidPresentCompositorFrame(presentation_token, feedback);
 }
 
 void LayerTreeFrameSinkHolder::DidLoseLayerTreeFrameSink() {

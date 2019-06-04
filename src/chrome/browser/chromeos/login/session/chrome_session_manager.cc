@@ -8,7 +8,7 @@
 
 #include "base/command_line.h"
 #include "base/logging.h"
-#include "base/sys_info.h"
+#include "base/system/sys_info.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/browser_process_platform_part_chromeos.h"
 #include "chrome/browser/chrome_notification_types.h"
@@ -17,19 +17,27 @@
 #include "chrome/browser/chromeos/app_mode/kiosk_app_manager.h"
 #include "chrome/browser/chromeos/arc/arc_service_launcher.h"
 #include "chrome/browser/chromeos/boot_times_recorder.h"
+#include "chrome/browser/chromeos/child_accounts/consumer_status_reporting_service_factory.h"
 #include "chrome/browser/chromeos/child_accounts/screen_time_controller_factory.h"
+#include "chrome/browser/chromeos/crostini/crostini_manager.h"
 #include "chrome/browser/chromeos/lock_screen_apps/state_controller.h"
+#include "chrome/browser/chromeos/login/demo_mode/demo_resources.h"
+#include "chrome/browser/chromeos/login/demo_mode/demo_session.h"
 #include "chrome/browser/chromeos/login/lock/webui_screen_locker.h"
 #include "chrome/browser/chromeos/login/login_wizard.h"
+#include "chrome/browser/chromeos/login/screens/arc_terms_of_service_screen.h"
+#include "chrome/browser/chromeos/login/screens/sync_consent_screen.h"
 #include "chrome/browser/chromeos/login/session/user_session_manager.h"
+#include "chrome/browser/chromeos/login/startup_utils.h"
 #include "chrome/browser/chromeos/login/wizard_controller.h"
 #include "chrome/browser/chromeos/policy/app_install_event_log_manager_wrapper.h"
 #include "chrome/browser/chromeos/policy/browser_policy_connector_chromeos.h"
+#include "chrome/browser/chromeos/profiles/profile_helper.h"
 #include "chrome/browser/chromeos/tether/tether_service.h"
+#include "chrome/browser/chromeos/tpm_firmware_update_notification.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/signin/identity_manager_factory.h"
 #include "chrome/browser/ui/app_list/app_list_client_impl.h"
-#include "chrome/browser/ui/ash/ash_util.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/pref_names.h"
 #include "chromeos/chromeos_switches.h"
@@ -58,7 +66,11 @@ bool ShouldAutoLaunchKioskApp(const base::CommandLine& command_line) {
   return command_line.HasSwitch(switches::kLoginManager) &&
          !command_line.HasSwitch(switches::kForceLoginManagerInTests) &&
          app_manager->IsAutoLaunchEnabled() &&
-         KioskAppLaunchError::Get() == KioskAppLaunchError::NONE;
+         KioskAppLaunchError::Get() == KioskAppLaunchError::NONE &&
+         // IsOobeCompleted() is needed to prevent kiosk session start in case
+         // of enterprise rollback, when keeping the enrollment, policy, not
+         // clearing TPM, but wiping stateful partition.
+         StartupUtils::IsOobeCompleted();
 }
 
 // Starts kiosk app auto launch and shows the splash screen.
@@ -109,10 +121,26 @@ void StartUserSession(Profile* user_profile, const std::string& login_user_id) {
       LOG(ERROR) << "Could not get active user after crash.";
       return;
     }
+
+    chromeos::DemoSession* demo_session = chromeos::DemoSession::Get();
+    // In demo session, delay starting user session until the offline demo
+    // session resources have been loaded.
+    if (demo_session && demo_session->started() &&
+        !demo_session->resources()->loaded()) {
+      demo_session->EnsureOfflineResourcesLoaded(
+          base::BindOnce(&StartUserSession, user_profile, login_user_id));
+      LOG(WARNING) << "Delay demo user session start until offline demo "
+                   << "resources are loaded";
+      return;
+    }
+
     user_session_mgr->InitRlz(user_profile);
     user_session_mgr->InitializeCerts(user_profile);
     user_session_mgr->InitializeCRLSetFetcher(user);
     user_session_mgr->InitializeCertificateTransparencyComponents(user);
+
+    ProfileHelper::Get()->ProfileStartup(user_profile);
+
     if (lock_screen_apps::StateController::IsEnabled())
       lock_screen_apps::StateController::Get()->SetPrimaryProfile(user_profile);
 
@@ -125,8 +153,15 @@ void StartUserSession(Profile* user_profile, const std::string& login_user_id) {
     }
     arc::ArcServiceLauncher::Get()->OnPrimaryUserProfilePrepared(user_profile);
 
-    if (user->GetType() == user_manager::USER_TYPE_CHILD)
+    crostini::CrostiniManager* crostini_manager =
+        crostini::CrostiniManager::GetForProfile(user_profile);
+    if (crostini_manager)
+      crostini_manager->MaybeUpgradeCrostini();
+
+    if (user->GetType() == user_manager::USER_TYPE_CHILD) {
       ScreenTimeControllerFactory::GetForBrowserContext(user_profile);
+      ConsumerStatusReportingServiceFactory::GetForBrowserContext(user_profile);
+    }
 
     // Send the PROFILE_PREPARED notification and call SessionStarted()
     // so that the Launcher and other Profile dependent classes are created.
@@ -161,11 +196,15 @@ void StartUserSession(Profile* user_profile, const std::string& login_user_id) {
   }
 
   UserSessionManager::GetInstance()->CheckEolStatus(user_profile);
+  tpm_firmware_update::ShowNotificationIfNeeded(user_profile);
+  ArcTermsOfServiceScreen::MaybeLaunchArcSettings(user_profile);
+  SyncConsentScreen::MaybeLaunchSyncConsentSettings(user_profile);
 }
 
 }  // namespace
 
-ChromeSessionManager::ChromeSessionManager() {}
+ChromeSessionManager::ChromeSessionManager()
+    : oobe_configuration_(std::make_unique<OobeConfiguration>()) {}
 ChromeSessionManager::~ChromeSessionManager() {}
 
 void ChromeSessionManager::Initialize(
@@ -192,11 +231,15 @@ void ChromeSessionManager::Initialize(
     return;
   }
 
+  DemoSession::PreloadOfflineResourcesIfInDemoMode();
   if (parsed_command_line.HasSwitch(switches::kLoginManager) &&
       (!is_running_test || force_login_screen_in_test)) {
     VLOG(1) << "Starting Chrome with login/oobe screen.";
+    oobe_configuration_->CheckConfiguration();
     StartLoginOobeSession();
     return;
+  } else if (is_running_test) {
+    oobe_configuration_->CheckConfiguration();
   }
 
   if (!base::SysInfo::IsRunningOnChromeOS() &&

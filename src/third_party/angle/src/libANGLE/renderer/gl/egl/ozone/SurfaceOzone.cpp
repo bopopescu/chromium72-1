@@ -16,8 +16,7 @@ namespace rx
 
 SurfaceOzone::SurfaceOzone(const egl::SurfaceState &state, DisplayOzone::Buffer *buffer)
     : SurfaceGL(state), mBuffer(buffer)
-{
-}
+{}
 
 SurfaceOzone::~SurfaceOzone()
 {
@@ -29,9 +28,10 @@ egl::Error SurfaceOzone::initialize(const egl::Display *display)
     return egl::NoError();
 }
 
-FramebufferImpl *SurfaceOzone::createDefaultFramebuffer(const gl::FramebufferState &state)
+FramebufferImpl *SurfaceOzone::createDefaultFramebuffer(const gl::Context *context,
+                                                        const gl::FramebufferState &state)
 {
-    return mBuffer->framebufferGL(state);
+    return mBuffer->framebufferGL(context, state);
 }
 
 egl::Error SurfaceOzone::makeCurrent()
@@ -41,7 +41,7 @@ egl::Error SurfaceOzone::makeCurrent()
 
 egl::Error SurfaceOzone::swap(const gl::Context *context)
 {
-    mBuffer->present();
+    mBuffer->present(context);
     return egl::NoError();
 }
 

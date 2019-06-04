@@ -4,15 +4,12 @@
 
 import json
 
-from dashboard.api import api_auth
 from dashboard.api import api_request_handler
-from dashboard.common import namespaced_stored_object
+from dashboard.common import bot_configurations
+from dashboard.common import utils
 from dashboard.pinpoint.models import change
 from dashboard.pinpoint.models import job as job_module
 from dashboard.pinpoint.models import quest as quest_module
-
-
-_BOT_CONFIGURATIONS = 'bot_configurations'
 
 
 _ERROR_BUG_ID = 'Bug ID must be an integer.'
@@ -22,17 +19,19 @@ _ERROR_TAGS_DICT = 'Tags must be a dict of key/value string pairs.'
 class New(api_request_handler.ApiRequestHandler):
   """Handler that cooks up a fresh Pinpoint job."""
 
-  def AuthorizedPost(self):
-    try:
-      job = _CreateJob(self.request)
-      job.Start()
+  def _CheckUser(self):
+    self._CheckIsLoggedIn()
+    if not utils.IsTryjobUser():
+      raise api_request_handler.ForbiddenError()
 
-      return {
-          'jobId': job.job_id,
-          'jobUrl': job.url,
-      }
-    except (KeyError, TypeError, ValueError) as e:
-      raise api_request_handler.BadRequestError(e.message)
+  def Post(self):
+    job = _CreateJob(self.request)
+    job.Start()
+
+    return {
+        'jobId': job.job_id,
+        'jobUrl': job.url,
+    }
 
 
 def _CreateJob(request):
@@ -43,8 +42,13 @@ def _CreateJob(request):
   # Validate arguments and convert them to canonical internal representation.
   quests = _GenerateQuests(arguments)
   changes = _ValidateChanges(arguments)
+
   bug_id = _ValidateBugId(arguments.get('bug_id'))
   comparison_mode = _ValidateComparisonMode(arguments.get('comparison_mode'))
+  comparison_magnitude = _ValidateComparisonMagnitude(
+      arguments.get('comparison_magnitude'))
+  gerrit_server, gerrit_change_id = _ValidatePatch(arguments.get('patch'))
+  name = arguments.get('name')
   pin = _ValidatePin(arguments.get('pin'))
   tags = _ValidateTags(arguments.get('tags'))
   user = _ValidateUser(arguments.get('user'))
@@ -52,7 +56,10 @@ def _CreateJob(request):
   # Create job.
   return job_module.Job.New(
       quests, changes, arguments=original_arguments, bug_id=bug_id,
-      comparison_mode=comparison_mode, pin=pin, tags=tags, user=user)
+      comparison_mode=comparison_mode,
+      comparison_magnitude=comparison_magnitude, gerrit_server=gerrit_server,
+      gerrit_change_id=gerrit_change_id,
+      name=name, pin=pin, tags=tags, user=user)
 
 
 def _ArgumentsWithConfiguration(original_arguments):
@@ -60,8 +67,7 @@ def _ArgumentsWithConfiguration(original_arguments):
   # arguments. Pull any arguments from the specified "configuration", if any.
   configuration = original_arguments.get('configuration')
   if configuration:
-    configurations = namespaced_stored_object.Get(_BOT_CONFIGURATIONS)
-    new_arguments = configurations[configuration]
+    new_arguments = bot_configurations.Get(configuration)
   else:
     new_arguments = {}
 
@@ -84,28 +90,35 @@ def _ValidateBugId(bug_id):
 def _ValidateChanges(arguments):
   changes = arguments.get('changes')
   if changes:
-    # FromDict() performs input validation.
-    return [change.Change.FromDict(c) for c in json.loads(changes)]
+    # FromData() performs input validation.
+    return [change.Change.FromData(c) for c in json.loads(changes)]
 
-  change_1 = {
-      'commits': [{
-          'repository': arguments.get('repository'),
-          'git_hash': arguments.get('start_git_hash')
-      }],
-  }
+  commit_1 = change.Commit.FromDict({
+      'repository': arguments.get('repository'),
+      'git_hash': arguments.get('start_git_hash'),
+  })
 
-  change_2 = {
-      'commits': [{
-          'repository': arguments.get('repository'),
-          'git_hash': arguments.get('end_git_hash')
-      }]
-  }
+  commit_2 = change.Commit.FromDict({
+      'repository': arguments.get('repository'),
+      'git_hash': arguments.get('end_git_hash'),
+  })
 
-  if arguments.get('patch'):
-    change_2['patch'] = arguments.get('patch')
+  if 'patch' in arguments:
+    patch = change.GerritPatch.FromUrl(arguments['patch'])
+  else:
+    patch = None
 
-  # FromDict() performs input validation.
-  return (change.Change.FromDict(change_1), change.Change.FromDict(change_2))
+  change_1 = change.Change(commits=(commit_1,))
+  change_2 = change.Change(commits=(commit_2,), patch=patch)
+
+  return change_1, change_2
+
+
+def _ValidatePatch(patch_data):
+  if patch_data:
+    patch_details = change.GerritPatch.FromData(patch_data)
+    return patch_details.server, patch_details.change
+  return None, None
 
 
 def _ValidateComparisonMode(comparison_mode):
@@ -113,6 +126,12 @@ def _ValidateComparisonMode(comparison_mode):
     raise ValueError('`comparison_mode` should be one of %s. Got "%s".' %
                      (job_module.COMPARISON_MODES + (None,), comparison_mode))
   return comparison_mode
+
+
+def _ValidateComparisonMagnitude(comparison_magnitude):
+  if not comparison_magnitude:
+    return 1.0
+  return float(comparison_magnitude)
 
 
 def _GenerateQuests(arguments):
@@ -128,30 +147,38 @@ def _GenerateQuests(arguments):
     A tuple of (arguments, quests), where arguments is a dict containing the
     request arguments that were used, and quests is a list of Quests.
   """
-  target = arguments.get('target')
-  if target in ('performance_test_suite', 'telemetry_perf_tests',
-                'telemetry_perf_webview_tests'):
-    quest_classes = (quest_module.FindIsolate, quest_module.RunTelemetryTest,
-                     quest_module.ReadHistogramsJsonValue)
+  quests = arguments.get('quests')
+  if quests:
+    if isinstance(quests, basestring):
+      quests = quests.split(',')
+    quest_classes = []
+    for quest in quests:
+      if not hasattr(quest_module, quest):
+        raise ValueError('Unknown quest: "%s"' % quest)
+      quest_classes.append(getattr(quest_module, quest))
   else:
-    quest_classes = (quest_module.FindIsolate, quest_module.RunGTest,
-                     quest_module.ReadGraphJsonValue)
+    # TODO: Require users to specify a list of quests. Do not imply defaults.
+    target = arguments.get('target')
+    if target in ('performance_test_suite', 'performance_webview_test_suite',
+                  'telemetry_perf_tests', 'telemetry_perf_webview_tests'):
+      quest_classes = (quest_module.FindIsolate, quest_module.RunTelemetryTest,
+                       quest_module.ReadHistogramsJsonValue)
+    else:
+      quest_classes = (quest_module.FindIsolate, quest_module.RunGTest,
+                       quest_module.ReadGraphJsonValue)
 
-  quests = []
+  quest_instances = []
   for quest_class in quest_classes:
     # FromDict() performs input validation.
-    quest = quest_class.FromDict(arguments)
-    if not quest:
-      break
-    quests.append(quest)
+    quest_instances.append(quest_class.FromDict(arguments))
 
-  return quests
+  return quest_instances
 
 
 def _ValidatePin(pin):
   if not pin:
     return None
-  return change.Change.FromDict({'commits': [], 'patch': pin})
+  return change.Change.FromData(pin)
 
 
 def _ValidateTags(tags):
@@ -171,4 +198,4 @@ def _ValidateTags(tags):
 
 
 def _ValidateUser(user):
-  return user or api_auth.Email()
+  return user or utils.GetEmail()

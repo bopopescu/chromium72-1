@@ -6,6 +6,9 @@
 
 #include "base/process/process.h"
 #include "chrome/browser/resource_coordinator/browser_child_process_watcher.h"
+#include "chrome/browser/resource_coordinator/page_signal_receiver.h"
+#include "chrome/browser/resource_coordinator/render_process_probe.h"
+#include "chrome/browser/resource_coordinator/utils.h"
 #include "content/public/common/service_manager_connection.h"
 #include "services/resource_coordinator/public/cpp/process_resource_coordinator.h"
 #include "services/resource_coordinator/public/cpp/resource_coordinator_features.h"
@@ -18,16 +21,28 @@ ChromeBrowserMainExtraPartsResourceCoordinator::
 void ChromeBrowserMainExtraPartsResourceCoordinator::
     ServiceManagerConnectionStarted(
         content::ServiceManagerConnection* connection) {
-  if (!resource_coordinator::IsResourceCoordinatorEnabled())
-    return;
-
   process_resource_coordinator_ =
       std::make_unique<resource_coordinator::ProcessResourceCoordinator>(
           connection->GetConnector());
 
-  process_resource_coordinator_->SetLaunchTime(base::Time::Now());
-  process_resource_coordinator_->SetPID(base::Process::Current().Pid());
+  process_resource_coordinator_->OnProcessLaunched(base::Process::Current());
 
   browser_child_process_watcher_ =
       std::make_unique<resource_coordinator::BrowserChildProcessWatcher>();
+}
+
+void ChromeBrowserMainExtraPartsResourceCoordinator::PreBrowserStart() {
+  if (base::FeatureList::IsEnabled(features::kPerformanceMeasurement)) {
+    DCHECK(resource_coordinator::RenderProcessProbe::IsEnabled());
+    resource_coordinator::PageSignalReceiver* page_signal_receiver =
+        resource_coordinator::GetPageSignalReceiver();
+
+    DCHECK(resource_coordinator::PageSignalReceiver::IsEnabled());
+    resource_coordinator::RenderProcessProbe* render_process_probe =
+        resource_coordinator::RenderProcessProbe::GetInstance();
+
+    performance_measurement_manager_ =
+        std::make_unique<resource_coordinator::PerformanceMeasurementManager>(
+            page_signal_receiver, render_process_probe);
+  }
 }

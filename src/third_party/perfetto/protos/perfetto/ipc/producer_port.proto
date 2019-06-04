@@ -41,7 +41,14 @@ service ProducerPort {
   // Sent by the client to request the service to:
   // 1) Move some chunks from the shmem buffer into the logging buffer.
   // 2) Patch the content of some chunks previously moved.
+  // 3) Acknowledge a Flush() request.
   rpc CommitData(protos.CommitDataRequest) returns (CommitDataResponse) {}
+
+  // Sent by the client in response to a StopDataSource message, when a data
+  // source is succesfully stopped. This is expected only for data sources that
+  // set the DataSourceDescriptor.will_notify_on_stop flag when registering.
+  rpc NotifyDataSourceStopped(NotifyDataSourceStoppedRequest)
+      returns (NotifyDataSourceStoppedResponse) {}
 
   // This is a backchannel to get asynchronous commands / notifications back
   // from the Service.
@@ -97,13 +104,32 @@ message UnregisterDataSourceResponse {}
 
 message CommitDataResponse {}
 
+// Arguments for rpc NotifyDataSourceStoppedRequest().
+
+message NotifyDataSourceStoppedRequest {
+  // ID of the data source that has successfully stopped.
+  optional uint64 data_source_id = 1;
+}
+
+message NotifyDataSourceStoppedResponse {}
+
 // Arguments for rpc GetAsyncCommand().
 
 message GetAsyncCommandRequest {}
 
 message GetAsyncCommandResponse {
+  // Called after SetupTracing and before StartDataSource.
+  // This message was introduced in Android Q.
+  message SetupDataSource {
+    optional uint64 new_instance_id = 1;
+    optional protos.DataSourceConfig config = 2;
+  }
+
   message StartDataSource {
     optional uint64 new_instance_id = 1;
+
+    // For backwards compat reasons (with Android P), the config passed here
+    // is identical to the one passed to SetupDataSource.config.
     optional protos.DataSourceConfig config = 2;
   }
 
@@ -124,10 +150,12 @@ message GetAsyncCommandResponse {
     optional uint64 request_id = 2;
   }
 
+  // Next id: 7.
   oneof cmd {
+    SetupTracing setup_tracing = 3;
+    SetupDataSource setup_data_source = 6;
     StartDataSource start_data_source = 1;
     StopDataSource stop_data_source = 2;
-    SetupTracing setup_tracing = 3;
     // id == 4 was teardown_tracing, never implemented.
     Flush flush = 5;
   }

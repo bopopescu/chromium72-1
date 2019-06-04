@@ -16,23 +16,25 @@
 #include "base/logging.h"
 #include "base/macros.h"
 #include "base/metrics/histogram_macros.h"
+#include "base/stl_util.h"
 #include "base/syslog_logging.h"
 #include "base/threading/thread_restrictions.h"
 #include "base/values.h"
-#include "chrome/browser/browser_process.h"
 #include "chrome/browser/chromeos/ownership/owner_settings_service_chromeos.h"
-#include "chrome/browser/chromeos/policy/browser_policy_connector_chromeos.h"
-#include "chrome/browser/chromeos/policy/device_local_account.h"
+#include "chrome/browser/chromeos/policy/device_policy_decoder_chromeos.h"
 #include "chrome/browser/chromeos/policy/off_hours/off_hours_proto_parser.h"
 #include "chrome/browser/chromeos/settings/cros_settings.h"
 #include "chrome/browser/chromeos/settings/device_settings_cache.h"
 #include "chrome/browser/chromeos/tpm_firmware_update.h"
-#include "chrome/browser/metrics/metrics_reporting_state.h"
 #include "chromeos/chromeos_switches.h"
 #include "chromeos/dbus/cryptohome_client.h"
 #include "chromeos/dbus/dbus_thread_manager.h"
 #include "chromeos/settings/cros_settings_names.h"
+#include "chromeos/settings/install_attributes.h"
+#include "components/policy/core/common/chrome_schema.h"
 #include "components/policy/core/common/cloud/cloud_policy_constants.h"
+#include "components/policy/core/common/schema.h"
+#include "components/policy/policy_constants.h"
 #include "components/policy/proto/device_management_backend.pb.h"
 #include "components/prefs/pref_service.h"
 
@@ -74,12 +76,14 @@ const char* const kKnownSettings[] = {
     kDeviceLoginScreenLocales,
     kDeviceOffHours,
     kDeviceOwner,
-    kDevicePrintersAccessMode,
-    kDevicePrintersBlacklist,
-    kDevicePrintersConfigurations,
-    kDevicePrintersWhitelist,
+    kDeviceNativePrinters,
+    kDeviceNativePrintersAccessMode,
+    kDeviceNativePrintersBlacklist,
+    kDeviceNativePrintersWhitelist,
     kDeviceQuirksDownloadEnabled,
+    kDeviceUnaffiliatedCrostiniAllowed,
     kDeviceWallpaperImage,
+    kDeviceDisplayResolution,
     kDisplayRotationDefault,
     kExtensionCacheSize,
     kHeartbeatEnabled,
@@ -116,11 +120,27 @@ const char* const kKnownSettings[] = {
     kVariationsRestrictParameter,
     kVirtualMachinesAllowed,
     kSamlLoginAuthenticationType,
+    kDeviceAutoUpdateTimeRestrictions,
 };
 
-void DecodeLoginPolicies(
-    const em::ChromeDeviceSettingsProto& policy,
-    PrefValueMap* new_values_cache) {
+// Re-use the DecodeJsonStringAndNormalize from device_policy_decoder_chromeos.h
+// here to decode the json string and validate it against |policy_name|'s
+// schema. If the json string is valid, the decoded base::Value will be stored
+// as |setting_name| in |pref_value_map|. The error can be ignored here since it
+// is already reported during decoding in device_policy_decoder_chromeos.cc.
+void SetJsonDeviceSetting(const std::string& setting_name,
+                          const std::string& policy_name,
+                          const std::string& json_string,
+                          PrefValueMap* pref_value_map) {
+  std::string error;
+  std::unique_ptr<base::Value> decoded_json =
+      policy::DecodeJsonStringAndNormalize(json_string, policy_name, &error);
+  if (decoded_json)
+    pref_value_map->SetValue(setting_name, std::move(decoded_json));
+}
+
+void DecodeLoginPolicies(const em::ChromeDeviceSettingsProto& policy,
+                         PrefValueMap* new_values_cache) {
   // For all our boolean settings the following is applicable:
   // true is default permissive value and false is safe prohibitive value.
   // Exceptions:
@@ -157,19 +177,9 @@ void DecodeLoginPolicies(
       !policy.guest_mode_enabled().has_guest_mode_enabled() ||
       policy.guest_mode_enabled().guest_mode_enabled());
 
-  policy::BrowserPolicyConnectorChromeOS* connector =
-      g_browser_process->platform_part()->browser_policy_connector_chromeos();
   bool supervised_users_enabled = false;
-  if (connector->IsEnterpriseManaged()) {
-    supervised_users_enabled =
-        policy.has_supervised_users_settings() &&
-        policy.supervised_users_settings().has_supervised_users_enabled() &&
-        policy.supervised_users_settings().supervised_users_enabled();
-  } else {
-    supervised_users_enabled =
-        !policy.has_supervised_users_settings() ||
-        !policy.supervised_users_settings().has_supervised_users_enabled() ||
-        policy.supervised_users_settings().supervised_users_enabled();
+  if (!InstallAttributes::Get()->IsEnterpriseManaged()) {
+    supervised_users_enabled = true;
   }
   new_values_cache->SetBoolean(
       kAccountsPrefSupervisedUsersEnabled, supervised_users_enabled);
@@ -246,7 +256,8 @@ void DecodeLoginPolicies(
                          base::Value(entry->deprecated_public_session_id()));
       entry_dict->SetKey(
           kAccountsPrefDeviceLocalAccountsKeyType,
-          base::Value(policy::DeviceLocalAccount::TYPE_PUBLIC_SESSION));
+          base::Value(
+              em::DeviceLocalAccountInfoProto::ACCOUNT_TYPE_PUBLIC_SESSION));
     }
     account_list->Append(std::move(entry_dict));
   }
@@ -400,6 +411,13 @@ void DecodeAutoUpdatePolicies(
       new_values_cache->SetValue(kAllowedConnectionTypesForUpdate,
                                  std::move(list));
     }
+
+    if (au_settings_proto.has_disallowed_time_intervals()) {
+      SetJsonDeviceSetting(kDeviceAutoUpdateTimeRestrictions,
+                           policy::key::kDeviceAutoUpdateTimeRestrictions,
+                           au_settings_proto.disallowed_time_intervals(),
+                           new_values_cache);
+    }
   }
 }
 
@@ -480,9 +498,8 @@ void DecodeHeartbeatPolicies(
   }
 }
 
-void DecodeGenericPolicies(
-    const em::ChromeDeviceSettingsProto& policy,
-    PrefValueMap* new_values_cache) {
+void DecodeGenericPolicies(const em::ChromeDeviceSettingsProto& policy,
+                           PrefValueMap* new_values_cache) {
   if (policy.has_metrics_enabled() &&
       policy.metrics_enabled().has_metrics_enabled()) {
     new_values_cache->SetBoolean(kStatsReportingPref,
@@ -490,10 +507,8 @@ void DecodeGenericPolicies(
   } else {
     // If the policy is missing, default to reporting enabled on enterprise-
     // enrolled devices, c.f. crbug/456186.
-    policy::BrowserPolicyConnectorChromeOS* connector =
-        g_browser_process->platform_part()->browser_policy_connector_chromeos();
-    bool is_enterprise_managed = connector->IsEnterpriseManaged();
-    new_values_cache->SetBoolean(kStatsReportingPref, is_enterprise_managed);
+    new_values_cache->SetBoolean(
+        kStatsReportingPref, InstallAttributes::Get()->IsEnterpriseManaged());
   }
 
   if (!policy.has_release_channel() ||
@@ -570,6 +585,19 @@ void DecodeGenericPolicies(
         policy.display_rotation_default().display_rotation_default());
   }
 
+  if (policy.has_device_display_resolution() &&
+      policy.device_display_resolution().has_device_display_resolution()) {
+    SetJsonDeviceSetting(
+        kDeviceDisplayResolution, policy::key::kDeviceDisplayResolution,
+        policy.device_display_resolution().device_display_resolution(),
+        new_values_cache);
+  } else {
+    // Set empty value if policy is missing, to make sure that webui
+    // will receive setting update.
+    new_values_cache->SetValue(kDeviceDisplayResolution,
+                               std::make_unique<base::DictionaryValue>());
+  }
+
   if (policy.has_allow_bluetooth() &&
       policy.allow_bluetooth().has_allow_bluetooth()) {
     new_values_cache->SetBoolean(kAllowBluetooth,
@@ -587,16 +615,10 @@ void DecodeGenericPolicies(
 
   if (policy.has_device_wallpaper_image() &&
       policy.device_wallpaper_image().has_device_wallpaper_image()) {
-    const std::string& wallpaper_policy(
-        policy.device_wallpaper_image().device_wallpaper_image());
-    std::unique_ptr<base::DictionaryValue> dict_val =
-        base::DictionaryValue::From(base::JSONReader::Read(wallpaper_policy));
-    if (dict_val) {
-      new_values_cache->SetValue(kDeviceWallpaperImage, std::move(dict_val));
-    } else {
-      SYSLOG(ERROR) << "Value of wallpaper policy has invalid format: "
-                    << wallpaper_policy;
-    }
+    SetJsonDeviceSetting(
+        kDeviceWallpaperImage, policy::key::kDeviceWallpaperImage,
+        policy.device_wallpaper_image().device_wallpaper_image(),
+        new_values_cache);
   }
 
   if (policy.has_device_off_hours()) {
@@ -654,10 +676,19 @@ void DecodeGenericPolicies(
   } else {
     // If the policy is missing, default to false on enterprise-enrolled
     // devices.
-    policy::BrowserPolicyConnectorChromeOS* connector =
-        g_browser_process->platform_part()->browser_policy_connector_chromeos();
-    if (connector->IsEnterpriseManaged()) {
+    if (InstallAttributes::Get()->IsEnterpriseManaged()) {
       new_values_cache->SetBoolean(kVirtualMachinesAllowed, false);
+    }
+  }
+
+  if (policy.has_device_unaffiliated_crostini_allowed()) {
+    const em::DeviceUnaffiliatedCrostiniAllowedProto& container(
+        policy.device_unaffiliated_crostini_allowed());
+    if (container.has_device_unaffiliated_crostini_allowed()) {
+      new_values_cache->SetValue(
+          kDeviceUnaffiliatedCrostiniAllowed,
+          std::make_unique<base::Value>(
+              container.device_unaffiliated_crostini_allowed()));
     }
   }
 }
@@ -695,9 +726,11 @@ void DecodeDeviceState(const em::PolicyData& policy_data,
 
 DeviceSettingsProvider::DeviceSettingsProvider(
     const NotifyObserversCallback& notify_cb,
-    DeviceSettingsService* device_settings_service)
+    DeviceSettingsService* device_settings_service,
+    PrefService* local_state)
     : CrosSettingsProvider(notify_cb),
       device_settings_service_(device_settings_service),
+      local_state_(local_state),
       trusted_status_(TEMPORARILY_UNTRUSTED),
       ownership_status_(device_settings_service_->GetOwnershipStatus()),
       store_callback_factory_(this) {
@@ -716,8 +749,7 @@ DeviceSettingsProvider::~DeviceSettingsProvider() {
 
 // static
 bool DeviceSettingsProvider::IsDeviceSetting(const std::string& name) {
-  const char* const* end = kKnownSettings + arraysize(kKnownSettings);
-  return std::find(kKnownSettings, end, name) != end;
+  return base::ContainsValue(kKnownSettings, name);
 }
 
 // static
@@ -772,7 +804,7 @@ void DeviceSettingsProvider::DoSet(const std::string& path,
     // Set the cache to the updated value.
     UpdateValuesCache(data, device_settings_, TEMPORARILY_UNTRUSTED);
 
-    if (!device_settings_cache::Store(data, g_browser_process->local_state())) {
+    if (!device_settings_cache::Store(data, local_state_)) {
       LOG(ERROR) << "Couldn't store to the temp storage.";
       NotifyObservers(path);
       return;
@@ -838,8 +870,7 @@ void DeviceSettingsProvider::OnTentativeChangesInPolicy(
 
 void DeviceSettingsProvider::RetrieveCachedData() {
   em::PolicyData policy_data;
-  if (!device_settings_cache::Retrieve(&policy_data,
-                                       g_browser_process->local_state()) ||
+  if (!device_settings_cache::Retrieve(&policy_data, local_state_) ||
       !device_settings_.ParseFromString(policy_data.policy_value())) {
     VLOG(1) << "Can't retrieve temp store, possibly not created yet.";
   }
@@ -903,9 +934,7 @@ void DeviceSettingsProvider::UpdateValuesCache(
 bool DeviceSettingsProvider::MitigateMissingPolicy() {
   // First check if the device has been owned already and if not exit
   // immediately.
-  policy::BrowserPolicyConnectorChromeOS* connector =
-      g_browser_process->platform_part()->browser_policy_connector_chromeos();
-  if (connector->GetDeviceMode() != policy::DEVICE_MODE_CONSUMER)
+  if (InstallAttributes::Get()->GetMode() != policy::DEVICE_MODE_CONSUMER)
     return false;
 
   // If we are here the policy file were corrupted or missing. This can happen
@@ -973,8 +1002,7 @@ bool DeviceSettingsProvider::UpdateFromService() {
       const em::ChromeDeviceSettingsProto* device_settings =
           device_settings_service_->device_settings();
       if (policy_data && device_settings) {
-        if (!device_settings_cache::Store(*policy_data,
-                                          g_browser_process->local_state())) {
+        if (!device_settings_cache::Store(*policy_data, local_state_)) {
           LOG(ERROR) << "Couldn't update the local state cache.";
         }
         UpdateValuesCache(*policy_data, *device_settings, TRUSTED);
@@ -997,11 +1025,14 @@ bool DeviceSettingsProvider::UpdateFromService() {
       break;
     case DeviceSettingsService::STORE_VALIDATION_ERROR:
     case DeviceSettingsService::STORE_INVALID_POLICY:
-    case DeviceSettingsService::STORE_OPERATION_FAILED:
-      LOG(ERROR) << "Failed to retrieve cros policies. Reason: "
-                 << device_settings_service_->status();
+    case DeviceSettingsService::STORE_OPERATION_FAILED: {
+      DeviceSettingsService::Status status = device_settings_service_->status();
+      LOG(ERROR) << "Failed to retrieve cros policies. Reason: " << status
+                 << " (" << DeviceSettingsService::StatusToString(status)
+                 << ")";
       trusted_status_ = PERMANENTLY_UNTRUSTED;
       break;
+    }
   }
 
   // Notify the observers we are done.

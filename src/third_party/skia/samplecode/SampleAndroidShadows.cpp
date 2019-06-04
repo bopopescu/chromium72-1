@@ -5,7 +5,7 @@
  * Use of this source code is governed by a BSD-style license that can be
  * found in the LICENSE file.
  */
-#include "SampleCode.h"
+#include "Sample.h"
 #include "SkAnimTimer.h"
 #include "SkBlurMask.h"
 #include "SkBlurMaskFilter.h"
@@ -16,13 +16,12 @@
 #include "SkPathOps.h"
 #include "SkPoint3.h"
 #include "SkShadowUtils.h"
-#include "SkUtils.h"
-#include "SkView.h"
+#include "SkUTF.h"
 #include "sk_tool_utils.h"
 
 ////////////////////////////////////////////////////////////////////////////
 
-class ShadowsView : public SampleView {
+class ShadowsView : public Sample {
     SkPath    fRectPath;
     SkPath    fRRPath;
     SkPath    fCirclePath;
@@ -107,15 +106,14 @@ protected:
         fLightPos = SkPoint3::Make(350, 0, 600);
     }
 
-    // overrides from SkEventSink
-    bool onQuery(SkEvent* evt) override {
-        if (SampleCode::TitleQ(*evt)) {
-            SampleCode::TitleR(evt, "AndroidShadows");
+    bool onQuery(Sample::Event* evt) override {
+        if (Sample::TitleQ(*evt)) {
+            Sample::TitleR(evt, "AndroidShadows");
             return true;
         }
 
         SkUnichar uni;
-        if (SampleCode::CharQ(*evt, &uni)) {
+        if (Sample::CharQ(*evt, &uni)) {
             bool handled = false;
             switch (uni) {
                 case 'W':
@@ -306,8 +304,8 @@ protected:
         canvas->setMatrix(persp);
         SkScalar radians = SkDegreesToRadians(fAnimAngle);
         zPlaneParams = SkPoint3::Make(0,
-                                      SkScalarSin(-radians),
-                                      SkTMax(1.0f, 16 + fZDelta) - SkScalarSin(-radians)*pivot.fY);
+                                      SkScalarSin(radians),
+                                      SkTMax(1.0f, 16 + fZDelta) - SkScalarSin(radians)*pivot.fY);
         this->drawShadowedPath(canvas, fWideRectPath, zPlaneParams, paint, .1f,
                                lightPos, kLightWidth, .5f);
 
@@ -315,6 +313,7 @@ protected:
                               fWideOvalPath.getBounds().height() / 2);
         translate = SkPoint::Make(100, 600);
         view.restore();
+        view.save();
         view.rotateY(fAnimAngle);
         view.getMatrix(&persp);
         persp.preTranslate(-pivot.fX, -pivot.fY);
@@ -324,6 +323,21 @@ protected:
                                       0,
                                       SkTMax(1.0f, 32 + fZDelta) + SkScalarSin(radians)*pivot.fX);
         this->drawShadowedPath(canvas, fWideOvalPath, zPlaneParams, paint, .1f,
+                               lightPos, kLightWidth, .5f);
+
+        pivot = SkPoint::Make(fStarPath.getBounds().width() / 2,
+                              fStarPath.getBounds().height() / 2);
+        translate = SkPoint::Make(700, 250);
+        view.restore();
+        view.rotateY(fAnimAngle);
+        view.getMatrix(&persp);
+        persp.preTranslate(-pivot.fX, -pivot.fY);
+        persp.postTranslate(pivot.fX + translate.fX, pivot.fY + translate.fY);
+        canvas->setMatrix(persp);
+        zPlaneParams = SkPoint3::Make(-SkScalarSin(radians),
+                                      0,
+                                      SkTMax(1.0f, 8 + fZDelta) + SkScalarSin(radians)*pivot.fX);
+        this->drawShadowedPath(canvas, fStarPath, zPlaneParams, paint, .1f,
                                lightPos, kLightWidth, .5f);
     }
 
@@ -337,10 +351,9 @@ protected:
     }
 
 private:
-    typedef SampleView INHERITED;
+    typedef Sample INHERITED;
 };
 
 //////////////////////////////////////////////////////////////////////////////
 
-static SkView* MyFactory() { return new ShadowsView; }
-static SkViewRegister reg(MyFactory);
+DEF_SAMPLE( return new ShadowsView(); )

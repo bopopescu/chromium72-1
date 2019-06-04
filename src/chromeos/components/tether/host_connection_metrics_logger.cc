@@ -12,17 +12,12 @@ namespace chromeos {
 namespace tether {
 
 HostConnectionMetricsLogger::HostConnectionMetricsLogger(
-    BleConnectionManager* connection_manager,
     ActiveHost* active_host)
-    : connection_manager_(connection_manager),
-      active_host_(active_host),
-      clock_(base::DefaultClock::GetInstance()) {
-  connection_manager_->AddMetricsObserver(this);
+    : active_host_(active_host), clock_(base::DefaultClock::GetInstance()) {
   active_host_->AddObserver(this);
 }
 
 HostConnectionMetricsLogger::~HostConnectionMetricsLogger() {
-  connection_manager_->RemoveMetricsObserver(this);
   active_host_->RemoveObserver(this);
 }
 
@@ -109,13 +104,6 @@ void HostConnectionMetricsLogger::RecordConnectionToHostResult(
   };
 }
 
-void HostConnectionMetricsLogger::OnAdvertisementReceived(
-    const std::string& device_id,
-    bool is_background_advertisement) {
-  device_id_to_received_background_advertisement_[device_id] =
-      is_background_advertisement;
-}
-
 void HostConnectionMetricsLogger::OnActiveHostChanged(
     const ActiveHost::ActiveHostChangeInfo& change_info) {
   if (change_info.new_status == ActiveHost::ActiveHostStatus::CONNECTING) {
@@ -139,19 +127,11 @@ void HostConnectionMetricsLogger::RecordConnectionResultSuccess(
     ConnectionToHostResult_SuccessEventType event_type) {
   DCHECK(!active_host_device_id_.empty());
 
-  bool is_background_advertisement =
-      device_id_to_received_background_advertisement_[active_host_device_id_];
   active_host_device_id_.clear();
 
-  if (is_background_advertisement) {
-    UMA_HISTOGRAM_ENUMERATION(
-        "InstantTethering.ConnectionToHostResult.SuccessRate.Background",
-        event_type, ConnectionToHostResult_SuccessEventType::SUCCESS_MAX);
-  } else {
-    UMA_HISTOGRAM_ENUMERATION(
-        "InstantTethering.ConnectionToHostResult.SuccessRate", event_type,
-        ConnectionToHostResult_SuccessEventType::SUCCESS_MAX);
-  }
+  UMA_HISTOGRAM_ENUMERATION(
+      "InstantTethering.ConnectionToHostResult.SuccessRate.Background",
+      event_type, ConnectionToHostResult_SuccessEventType::SUCCESS_MAX);
 
   RecordConnectionResultProvisioningFailure(
       ConnectionToHostResult_ProvisioningFailureEventType::OTHER);
@@ -195,22 +175,13 @@ void HostConnectionMetricsLogger::RecordConnectToHostDuration(
     const std::string device_id) {
   DCHECK(!connect_to_host_start_time_.is_null());
 
-  bool is_background_advertisement =
-      device_id_to_received_background_advertisement_[device_id];
-
   base::TimeDelta connect_to_host_duration =
       clock_->Now() - connect_to_host_start_time_;
   connect_to_host_start_time_ = base::Time();
 
-  if (is_background_advertisement) {
-    UMA_HISTOGRAM_MEDIUM_TIMES(
-        "InstantTethering.Performance.ConnectToHostDuration.Background",
-        connect_to_host_duration);
-  } else {
-    UMA_HISTOGRAM_MEDIUM_TIMES(
-        "InstantTethering.Performance.ConnectToHostDuration",
-        connect_to_host_duration);
-  }
+  UMA_HISTOGRAM_MEDIUM_TIMES(
+      "InstantTethering.Performance.ConnectToHostDuration.Background",
+      connect_to_host_duration);
 }
 
 void HostConnectionMetricsLogger::SetClockForTesting(base::Clock* test_clock) {

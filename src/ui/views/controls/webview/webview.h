@@ -76,6 +76,11 @@ class WEBVIEW_EXPORT WebView : public View,
   //         resizing performance during interactive resizes and animations.
   void SetFastResize(bool fast_resize);
 
+  // If enabled, this will make the WebView's preferred size dependent on the
+  // WebContents' size.
+  void EnableSizingFromWebContents(const gfx::Size& min_size,
+                                   const gfx::Size& max_size);
+
   // Set the background color to use while resizing with a clip. This is white
   // by default.
   void SetResizeBackgroundColor(SkColor resize_background_color);
@@ -94,6 +99,10 @@ class WEBVIEW_EXPORT WebView : public View,
   // Overridden from View:
   const char* GetClassName() const override;
 
+  // Overridden from content::WebContentsDelegate:
+  void ResizeDueToAutoResize(content::WebContents* source,
+                             const gfx::Size& new_size) override;
+
   NativeViewHost* holder() { return holder_; }
   using WebContentsCreator =
       base::RepeatingCallback<std::unique_ptr<content::WebContents>(
@@ -111,17 +120,15 @@ class WEBVIEW_EXPORT WebView : public View,
   };
 
  protected:
-  // Swaps the owned WebContents |wc_owner_| with |new_web_contents|. Returns
-  // the previously owned WebContents.
-  std::unique_ptr<content::WebContents> SwapWebContents(
-      std::unique_ptr<content::WebContents> new_web_contents);
-
   // Called when the web contents is successfully attached.
   virtual void OnWebContentsAttached() {}
   // Called when letterboxing (scaling the native view to preserve aspect
   // ratio) is enabled or disabled.
   virtual void OnLetterboxingChanged() {}
   bool is_letterboxing() const { return is_letterboxing_; }
+
+  const gfx::Size& min_size() const { return min_size_; }
+  const gfx::Size& max_size() const { return max_size_; }
 
   // Overridden from View:
   void OnBoundsChanged(const gfx::Rect& previous_bounds) override;
@@ -138,6 +145,7 @@ class WEBVIEW_EXPORT WebView : public View,
   bool EmbedsFullscreenWidget() const override;
 
   // Overridden from content::WebContentsObserver:
+  void RenderViewCreated(content::RenderViewHost* render_view_host) override;
   void RenderViewReady() override;
   void RenderViewDeleted(content::RenderViewHost* render_view_host) override;
   void RenderViewHostChanged(content::RenderViewHost* old_host,
@@ -167,6 +175,11 @@ class WEBVIEW_EXPORT WebView : public View,
   void UpdateCrashedOverlayView();
   void NotifyAccessibilityWebContentsChanged();
 
+  // Registers for ResizeDueToAutoResize() notifications from the
+  // RenderWidgetHostView whenever it is created or changes, if
+  // EnableSizingFromWebContents() has been called.
+  void MaybeEnableAutoResize();
+
   // Create a regular or test web contents (based on whether we're running
   // in a unit test or not).
   std::unique_ptr<content::WebContents> CreateWebContents(
@@ -187,6 +200,15 @@ class WEBVIEW_EXPORT WebView : public View,
   content::BrowserContext* browser_context_;
   bool allow_accelerators_;
   View* crashed_overlay_view_ = nullptr;
+
+  // Minimum and maximum sizes to determine WebView bounds for auto-resizing.
+  // Empty if auto resize is not enabled.
+  gfx::Size min_size_;
+  gfx::Size max_size_;
+
+  // Tracks the child accessibility tree id which is associated with the
+  // WebContents's main RenderFrameHost.
+  ui::AXTreeID child_ax_tree_id_;
 
   DISALLOW_COPY_AND_ASSIGN(WebView);
 };

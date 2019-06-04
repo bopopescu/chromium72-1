@@ -106,10 +106,10 @@
       "--json-output",
       "/path/to/tmp/json",
       "rmtree",
-      "[START_DIR]/[SWARM_OUT_DIR]/perfdata/Perf-Win10-Clang-NUCD34010WYKH-GPU-IntelHD4400-x86_64-Release-All/data"
+      "[START_DIR]/[SWARM_OUT_DIR]"
     ],
     "infra_step": true,
-    "name": "rmtree data"
+    "name": "rmtree [SWARM_OUT_DIR]"
   },
   {
     "cmd": [
@@ -121,10 +121,10 @@
       "ensure-directory",
       "--mode",
       "0777",
-      "[START_DIR]/[SWARM_OUT_DIR]/perfdata/Perf-Win10-Clang-NUCD34010WYKH-GPU-IntelHD4400-x86_64-Release-All/data"
+      "[START_DIR]/[SWARM_OUT_DIR]"
     ],
     "infra_step": true,
-    "name": "makedirs data"
+    "name": "makedirs [SWARM_OUT_DIR]"
   },
   {
     "cmd": [
@@ -156,7 +156,7 @@
   },
   {
     "cmd": [
-      "[START_DIR]/build/out/Release_x64/nanobench",
+      "[START_DIR]/build/nanobench",
       "-i",
       "[START_DIR]/skia/resources",
       "--skps",
@@ -176,6 +176,7 @@
       "--config",
       "gl",
       "glsrgb",
+      "--reduceOpListSplitting",
       "--match",
       "~inc0.gif",
       "~inc1.gif",
@@ -197,7 +198,7 @@
       "~inc0.webp",
       "~inc1.webp",
       "--outResultsFile",
-      "[START_DIR]/[SWARM_OUT_DIR]/perfdata/Perf-Win10-Clang-NUCD34010WYKH-GPU-IntelHD4400-x86_64-Release-All/data/nanobench_abc123_1337000001.json",
+      "[START_DIR]/[SWARM_OUT_DIR]/nanobench_abc123_1337000001.json",
       "--properties",
       "gitHash",
       "abc123",
@@ -241,14 +242,13 @@
       "ensure-directory",
       "--mode",
       "0777",
-      "[START_DIR]/[SWARM_OUT_DIR]/perfdata/Perf-Win10-Clang-NUCD34010WYKH-GPU-IntelHD4400-x86_64-Release-All"
+      "[START_DIR]/[SWARM_OUT_DIR]"
     ],
     "infra_step": true,
     "name": "makedirs perf_dir"
   },
   {
-    "name": "$result",
-    "recipe_result": null,
-    "status_code": 0
+    "jsonResult": null,
+    "name": "$result"
   }
 ]

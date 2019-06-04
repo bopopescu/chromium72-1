@@ -5,6 +5,7 @@
 #include "third_party/blink/renderer/modules/media_controls/elements/media_control_fullscreen_button_element.h"
 
 #include "third_party/blink/public/platform/platform.h"
+#include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/dom/events/event.h"
 #include "third_party/blink/renderer/core/frame/settings.h"
 #include "third_party/blink/renderer/core/html/media/html_media_element.h"
@@ -16,7 +17,7 @@ namespace blink {
 MediaControlFullscreenButtonElement::MediaControlFullscreenButtonElement(
     MediaControlsImpl& media_controls)
     : MediaControlInputElement(media_controls, kMediaEnterFullscreenButton) {
-  setType(InputTypeNames::button);
+  setType(input_type_names::kButton);
   SetShadowPseudoId(AtomicString("-webkit-media-controls-fullscreen-button"));
   SetIsFullscreen(MediaElement().IsFullscreen());
   SetIsWanted(false);
@@ -47,14 +48,14 @@ const char* MediaControlFullscreenButtonElement::GetNameForHistograms() const {
   return IsOverflowElement() ? "FullscreenOverflowButton" : "FullscreenButton";
 }
 
-void MediaControlFullscreenButtonElement::DefaultEventHandler(Event* event) {
-  if (event->type() == EventTypeNames::click) {
+void MediaControlFullscreenButtonElement::DefaultEventHandler(Event& event) {
+  if (event.type() == event_type_names::kClick) {
     RecordClickMetrics();
     if (MediaElement().IsFullscreen())
       GetMediaControls().ExitFullscreen();
     else
       GetMediaControls().EnterFullscreen();
-    event->SetDefaultHandled();
+    event.SetDefaultHandled();
   }
   MediaControlInputElement::DefaultEventHandler(event);
 }

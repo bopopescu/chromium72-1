@@ -12,6 +12,7 @@
 #include "components/viz/common/constants.h"
 #include "components/viz/common/frame_sinks/begin_frame_source.h"
 #include "components/viz/common/surfaces/parent_local_surface_id_allocator.h"
+#include "components/viz/service/display_embedder/server_shared_bitmap_manager.h"
 #include "components/viz/service/frame_sinks/compositor_frame_sink_support.h"
 #include "components/viz/test/begin_frame_source_test.h"
 #include "components/viz/test/compositor_frame_helpers.h"
@@ -55,7 +56,9 @@ struct RootCompositorFrameSinkData {
 class FrameSinkManagerTest : public testing::Test {
  public:
   FrameSinkManagerTest()
-      : manager_(kDefaultActivationDeadlineInFrames, &display_provider_) {}
+      : manager_(&shared_bitmap_manager_,
+                 kDefaultActivationDeadlineInFrames,
+                 &display_provider_) {}
   ~FrameSinkManagerTest() override = default;
 
   std::unique_ptr<CompositorFrameSinkSupport> CreateCompositorFrameSinkSupport(
@@ -69,9 +72,16 @@ class FrameSinkManagerTest : public testing::Test {
     return support->begin_frame_source_;
   }
 
+  void ExpireAllTemporaryReferencesAndGarbageCollect() {
+    manager_.surface_manager()->ExpireOldTemporaryReferences();
+    manager_.surface_manager()->ExpireOldTemporaryReferences();
+    manager_.surface_manager()->GarbageCollectSurfaces();
+  }
+
   // Checks if a [Root]CompositorFrameSinkImpl exists for |frame_sink_id|.
   bool CompositorFrameSinkExists(const FrameSinkId& frame_sink_id) {
-    return base::ContainsKey(manager_.sink_map_, frame_sink_id);
+    return base::ContainsKey(manager_.sink_map_, frame_sink_id) ||
+           base::ContainsKey(manager_.root_sink_map_, frame_sink_id);
   }
 
   // testing::Test implementation.
@@ -81,15 +91,19 @@ class FrameSinkManagerTest : public testing::Test {
 
     // Make sure test cleans up all [Root]CompositorFrameSinkImpls.
     EXPECT_TRUE(manager_.support_map_.empty());
+
+    // Make sure test has invalidated all registered FrameSinkIds.
+    EXPECT_TRUE(manager_.frame_sink_data_.empty());
   }
 
  protected:
+  ServerSharedBitmapManager shared_bitmap_manager_;
   TestDisplayProvider display_provider_;
   FrameSinkManagerImpl manager_;
 };
 
 TEST_F(FrameSinkManagerTest, CreateRootCompositorFrameSink) {
-  manager_.RegisterFrameSinkId(kFrameSinkIdRoot);
+  manager_.RegisterFrameSinkId(kFrameSinkIdRoot, true /* report_activation */);
 
   // Create a RootCompositorFrameSinkImpl.
   RootCompositorFrameSinkData root_data;
@@ -103,7 +117,7 @@ TEST_F(FrameSinkManagerTest, CreateRootCompositorFrameSink) {
 }
 
 TEST_F(FrameSinkManagerTest, CreateCompositorFrameSink) {
-  manager_.RegisterFrameSinkId(kFrameSinkIdA);
+  manager_.RegisterFrameSinkId(kFrameSinkIdA, true /* report_activation */);
 
   // Create a CompositorFrameSinkImpl.
   MockCompositorFrameSinkClient compositor_frame_sink_client;
@@ -119,7 +133,7 @@ TEST_F(FrameSinkManagerTest, CreateCompositorFrameSink) {
 }
 
 TEST_F(FrameSinkManagerTest, CompositorFrameSinkConnectionLost) {
-  manager_.RegisterFrameSinkId(kFrameSinkIdA);
+  manager_.RegisterFrameSinkId(kFrameSinkIdA, true /* report_activation */);
 
   // Create a CompositorFrameSinkImpl.
   MockCompositorFrameSinkClient compositor_frame_sink_client;
@@ -407,8 +421,12 @@ TEST_F(FrameSinkManagerTest,
 // next garbage collection.
 TEST_F(FrameSinkManagerTest, EvictSurfaces) {
   ParentLocalSurfaceIdAllocator allocator;
-  LocalSurfaceId local_surface_id1 = allocator.GenerateId();
-  LocalSurfaceId local_surface_id2 = allocator.GenerateId();
+  allocator.GenerateId();
+  LocalSurfaceId local_surface_id1 =
+      allocator.GetCurrentLocalSurfaceIdAllocation().local_surface_id();
+  allocator.GenerateId();
+  LocalSurfaceId local_surface_id2 =
+      allocator.GetCurrentLocalSurfaceIdAllocation().local_surface_id();
   SurfaceId surface_id1(kFrameSinkIdA, local_surface_id1);
   SurfaceId surface_id2(kFrameSinkIdB, local_surface_id2);
 
@@ -420,15 +438,28 @@ TEST_F(FrameSinkManagerTest, EvictSurfaces) {
 
   // |surface_id1| and |surface_id2| should remain alive after garbage
   // collection because they're not marked for destruction.
-  manager_.surface_manager()->GarbageCollectSurfaces();
+  ExpireAllTemporaryReferencesAndGarbageCollect();
   EXPECT_TRUE(manager_.surface_manager()->GetSurfaceForId(surface_id1));
   EXPECT_TRUE(manager_.surface_manager()->GetSurfaceForId(surface_id2));
 
   // Call EvictSurfaces. Now the garbage collector can destroy the surfaces.
   manager_.EvictSurfaces({surface_id1, surface_id2});
-  manager_.surface_manager()->GarbageCollectSurfaces();
+  ExpireAllTemporaryReferencesAndGarbageCollect();
   EXPECT_FALSE(manager_.surface_manager()->GetSurfaceForId(surface_id1));
   EXPECT_FALSE(manager_.surface_manager()->GetSurfaceForId(surface_id2));
+}
+
+// Verify that setting debug label works and that debug labels are cleared when
+// FrameSinkId is invalidated.
+TEST_F(FrameSinkManagerTest, DebugLabel) {
+  const std::string label = "Test Label";
+
+  manager_.RegisterFrameSinkId(kFrameSinkIdA, true /* report_activation */);
+  manager_.SetFrameSinkDebugLabel(kFrameSinkIdA, label);
+  EXPECT_EQ(label, manager_.GetFrameSinkDebugLabel(kFrameSinkIdA));
+
+  manager_.InvalidateFrameSinkId(kFrameSinkIdA);
+  EXPECT_EQ("", manager_.GetFrameSinkDebugLabel(kFrameSinkIdA));
 }
 
 namespace {

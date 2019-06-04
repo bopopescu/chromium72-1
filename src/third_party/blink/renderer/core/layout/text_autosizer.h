@@ -35,6 +35,7 @@
 #include <memory>
 #include "base/macros.h"
 #include "third_party/blink/renderer/core/core_export.h"
+#include "third_party/blink/renderer/platform/geometry/layout_unit.h"
 #include "third_party/blink/renderer/platform/heap/handle.h"
 #include "third_party/blink/renderer/platform/wtf/hash_map.h"
 #include "third_party/blink/renderer/platform/wtf/hash_set.h"
@@ -49,6 +50,7 @@ class LayoutObject;
 class LayoutTable;
 class LayoutText;
 class LocalFrame;
+class NGBlockNode;
 class Page;
 class SubtreeLayoutScope;
 
@@ -58,11 +60,17 @@ class SubtreeLayoutScope;
 class CORE_EXPORT TextAutosizer final
     : public GarbageCollectedFinalized<TextAutosizer> {
  public:
+  explicit TextAutosizer(const Document*);
   ~TextAutosizer();
+
   static TextAutosizer* Create(const Document* document) {
-    return new TextAutosizer(document);
+    return MakeGarbageCollected<TextAutosizer>(document);
   }
-  static float ComputeAutosizedFontSize(float specified_size, float multiplier);
+
+  // computed_size should include zoom.
+  static float ComputeAutosizedFontSize(float computed_size,
+                                        float multiplier,
+                                        float effective_zoom);
 
   void UpdatePageInfoInAllFrames();
   void UpdatePageInfo();
@@ -91,6 +99,18 @@ class CORE_EXPORT TextAutosizer final
 
    public:
     explicit TableLayoutScope(LayoutTable*);
+  };
+
+  class NGLayoutScope {
+    STACK_ALLOCATED();
+
+   public:
+    explicit NGLayoutScope(const NGBlockNode& node, LayoutUnit inline_size);
+    ~NGLayoutScope();
+
+   protected:
+    Member<TextAutosizer> text_autosizer_;
+    LayoutBlock* block_;
   };
 
   class CORE_EXPORT DeferUpdatePageInfo {
@@ -198,6 +218,8 @@ class CORE_EXPORT TextAutosizer final
 
   struct FingerprintSourceData {
     STACK_ALLOCATED();
+
+   public:
     FingerprintSourceData()
         : parent_hash_(0),
           qualified_name_hash_(0),
@@ -275,8 +297,6 @@ class CORE_EXPORT TextAutosizer final
     bool has_autosized_;
     bool setting_enabled_;
   };
-
-  explicit TextAutosizer(const Document*);
 
   void BeginLayout(LayoutBlock*, SubtreeLayoutScope*);
   void EndLayout(LayoutBlock*);

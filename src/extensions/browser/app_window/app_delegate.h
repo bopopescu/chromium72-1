@@ -10,19 +10,29 @@
 #include "third_party/skia/include/core/SkColor.h"
 #include "ui/base/window_open_disposition.h"
 
+namespace blink {
+namespace mojom {
+class FileChooserParams;
+}
+}  // namespace blink
+
 namespace content {
 class BrowserContext;
 class ColorChooser;
+class FileSelectListener;
 class RenderFrameHost;
 class RenderViewHost;
 class WebContents;
-struct FileChooserParams;
 struct OpenURLParams;
 }
 
 namespace gfx {
 class Rect;
 class Size;
+}
+
+namespace viz {
+class SurfaceId;
 }
 
 namespace extensions {
@@ -59,12 +69,14 @@ class AppDelegate {
   virtual content::ColorChooser* ShowColorChooser(
       content::WebContents* web_contents,
       SkColor initial_color) = 0;
-  virtual void RunFileChooser(content::RenderFrameHost* render_frame_host,
-                              const content::FileChooserParams& params) = 0;
+  virtual void RunFileChooser(
+      content::RenderFrameHost* render_frame_host,
+      std::unique_ptr<content::FileSelectListener> listener,
+      const blink::mojom::FileChooserParams& params) = 0;
   virtual void RequestMediaAccessPermission(
       content::WebContents* web_contents,
       const content::MediaStreamRequest& request,
-      const content::MediaResponseCallback& callback,
+      content::MediaResponseCallback callback,
       const Extension* extension) = 0;
   virtual bool CheckMediaAccessPermission(
       content::RenderFrameHost* render_frame_host,
@@ -89,6 +101,17 @@ class AppDelegate {
   // a chance to handle the focus change.
   // Return whether focus has been handled.
   virtual bool TakeFocus(content::WebContents* web_contents, bool reverse) = 0;
+
+  // Notifies the Picture-in-Picture controller that there is a new player
+  // entering Picture-in-Picture.
+  // Returns the size of the Picture-in-Picture window.
+  virtual gfx::Size EnterPictureInPicture(content::WebContents* web_contents,
+                                          const viz::SurfaceId& surface_id,
+                                          const gfx::Size& natural_size) = 0;
+
+  // Updates the Picture-in-Picture controller with a signal that
+  // Picture-in-Picture mode has ended.
+  virtual void ExitPictureInPicture() = 0;
 };
 
 }  // namespace extensions

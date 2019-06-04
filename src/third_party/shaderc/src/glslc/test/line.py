@@ -243,7 +243,8 @@ class TestErrorsFromMultipleFiles(expect.ErrorMessage):
     including_file = '''#version 310 es
 #include "error.glsl"
 int no_return() {}
-#include "main.glsl"'''
+#include "main.glsl"
+'''
 
     environment = Directory('.', [
         File('a.vert', including_file),
@@ -256,8 +257,8 @@ int no_return() {}
         "error.glsl:1: error: 'return' : type does not match, or is not "
         "convertible to, the function's return type\n",
         "a.vert:3: error: '' : function does not return a value: no_return\n",
-        "main.glsl:2: error: '=' :  cannot convert from 'const float' to "
-        "'temp highp int'\n",
+        "main.glsl:2: error: '=' :  cannot convert from ' const float' to "
+        "' temp highp int'\n",
         "4 errors generated.\n"]
 
 
@@ -272,7 +273,8 @@ int plus1(int a) { return a + 1; }
 #include "inc.glsl"
 int plus2(int a) { return a + 2; }
 #line 55555
-#include "main.glsl"'''
+#include "main.glsl"
+'''
 
     environment = Directory('.', [
         File('a.vert', including_file),

@@ -17,10 +17,23 @@ FakeUpstartClient::~FakeUpstartClient() = default;
 
 void FakeUpstartClient::Init(dbus::Bus* bus) {}
 
+void FakeUpstartClient::StartJob(const std::string& job,
+                                 const std::vector<std::string>& upstart_env,
+                                 VoidDBusMethodCallback callback) {
+  base::ThreadTaskRunnerHandle::Get()->PostTask(
+      FROM_HERE, base::BindOnce(std::move(callback), true));
+}
+
+void FakeUpstartClient::StopJob(const std::string& job,
+                                VoidDBusMethodCallback callback) {
+  base::ThreadTaskRunnerHandle::Get()->PostTask(
+      FROM_HERE, base::BindOnce(std::move(callback), true));
+}
+
 void FakeUpstartClient::StartAuthPolicyService() {
   static_cast<FakeAuthPolicyClient*>(
       DBusThreadManager::Get()->GetAuthPolicyClient())
-      ->set_started(true);
+      ->SetStarted(true);
 }
 
 void FakeUpstartClient::RestartAuthPolicyService() {
@@ -28,7 +41,7 @@ void FakeUpstartClient::RestartAuthPolicyService() {
       DBusThreadManager::Get()->GetAuthPolicyClient());
   DLOG_IF(WARNING, !authpolicy_client->started())
       << "Trying to restart authpolicyd which is not started";
-  authpolicy_client->set_started(true);
+  authpolicy_client->SetStarted(true);
 }
 
 void FakeUpstartClient::StartMediaAnalytics(

@@ -36,6 +36,10 @@ class ChromeRenderThreadObserver : public content::RenderThreadObserver,
 
   static bool is_incognito_process() { return is_incognito_process_; }
 
+  // Return the dynamic parameters - those that may change while the
+  // render process is running.
+  static const chrome::mojom::DynamicParams& GetDynamicParams();
+
   // Returns a pointer to the content setting rules owned by
   // |ChromeRenderThreadObserver|.
   const RendererContentSettingRules* content_setting_rules() const;
@@ -53,6 +57,7 @@ class ChromeRenderThreadObserver : public content::RenderThreadObserver,
 
   // chrome::mojom::RendererConfiguration:
   void SetInitialConfiguration(bool is_incognito_process) override;
+  void SetConfiguration(chrome::mojom::DynamicParamsPtr params) override;
   void SetContentSettingRules(
       const RendererContentSettingRules& rules) override;
   void SetFieldTrialGroup(const std::string& trial_name,

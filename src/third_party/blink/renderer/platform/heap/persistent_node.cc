@@ -6,6 +6,7 @@
 
 #include "base/debug/alias.h"
 #include "third_party/blink/renderer/platform/heap/handle.h"
+#include "third_party/blink/renderer/platform/heap/persistent.h"
 #include "third_party/blink/renderer/platform/heap/process_heap.h"
 
 namespace blink {
@@ -167,9 +168,9 @@ void CrossThreadPersistentRegion::PrepareForThreadStateTermination(
   // For heaps belonging to a thread that's detaching, any cross-thread
   // persistents pointing into them needs to be disabled. Do that by clearing
   // out the underlying heap reference.
-  RecursiveMutexLocker lock(ProcessHeap::CrossThreadPersistentMutex());
+  MutexLocker lock(ProcessHeap::CrossThreadPersistentMutex());
 
-  PersistentNodeSlots* slots = persistent_region_->slots_;
+  PersistentNodeSlots* slots = persistent_region_.slots_;
   while (slots) {
     for (int i = 0; i < PersistentNodeSlots::kSlotCount; ++i) {
       if (slots->slot_[i].IsUnused())
@@ -181,13 +182,13 @@ void CrossThreadPersistentRegion::PrepareForThreadStateTermination(
           reinterpret_cast<CrossThreadPersistent<DummyGCBase>*>(
               slots->slot_[i].Self());
       DCHECK(persistent);
-      void* raw_object = persistent->AtomicGet();
+      void* raw_object = persistent->Get();
       if (!raw_object)
         continue;
       BasePage* page = PageFromObject(raw_object);
       DCHECK(page);
       if (page->Arena()->GetThreadState() == thread_state) {
-        persistent->Clear();
+        persistent->ClearWithLockHeld();
         DCHECK(slots->slot_[i].IsUnused());
       }
     }
@@ -197,9 +198,11 @@ void CrossThreadPersistentRegion::PrepareForThreadStateTermination(
 
 #if defined(ADDRESS_SANITIZER)
 void CrossThreadPersistentRegion::UnpoisonCrossThreadPersistents() {
-  RecursiveMutexLocker lock(ProcessHeap::CrossThreadPersistentMutex());
+#if DCHECK_IS_ON()
+  ProcessHeap::CrossThreadPersistentMutex().AssertAcquired();
+#endif
   int persistent_count = 0;
-  for (PersistentNodeSlots* slots = persistent_region_->slots_; slots;
+  for (PersistentNodeSlots* slots = persistent_region_.slots_; slots;
        slots = slots->next_) {
     for (int i = 0; i < PersistentNodeSlots::kSlotCount; ++i) {
       const PersistentNode& node = slots->slot_[i];
@@ -211,7 +214,7 @@ void CrossThreadPersistentRegion::UnpoisonCrossThreadPersistents() {
     }
   }
 #if DCHECK_IS_ON()
-  DCHECK_EQ(persistent_count, persistent_region_->persistent_count_);
+  DCHECK_EQ(persistent_count, persistent_region_.persistent_count_);
 #endif
 }
 #endif

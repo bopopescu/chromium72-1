@@ -12,7 +12,7 @@
 #include "net/third_party/quic/core/quic_types.h"
 #include "net/third_party/quic/platform/api/quic_export.h"
 
-namespace net {
+namespace quic {
 
 // Stores details of a single sent packet.
 struct QUIC_EXPORT_PRIVATE QuicTransmissionInfo {
@@ -50,6 +50,8 @@ struct QUIC_EXPORT_PRIVATE QuicTransmissionInfo {
   int16_t num_padding_bytes;
   // Stores the packet number of the next retransmission of this packet.
   // Zero if the packet has not been retransmitted.
+  // TODO(fayang): rename this to first_sent_after_loss_ when deprecating
+  // QUIC_VERSION_41.
   QuicPacketNumber retransmission;
   // The largest_acked in the ack frame, if the packet contains an ack.
   QuicPacketNumber largest_acked;
@@ -60,6 +62,6 @@ struct QUIC_EXPORT_PRIVATE QuicTransmissionInfo {
 // 64-bit iOS resulted in an 88-byte struct that is greater than the 84-byte
 // limit on other platforms.  Removing per ianswett's request.
 
-}  // namespace net
+}  // namespace quic
 
 #endif  // NET_THIRD_PARTY_QUIC_CORE_QUIC_TRANSMISSION_INFO_H_

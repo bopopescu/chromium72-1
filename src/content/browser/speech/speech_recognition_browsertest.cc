@@ -17,12 +17,14 @@
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/sys_byteorder.h"
+#include "base/task/post_task.h"
 #include "base/threading/thread_task_runner_handle.h"
 #include "build/build_config.h"
 #include "content/browser/speech/proto/google_streaming_api.pb.h"
 #include "content/browser/speech/speech_recognition_engine.h"
 #include "content/browser/speech/speech_recognition_manager_impl.h"
 #include "content/browser/speech/speech_recognizer_impl.h"
+#include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/notification_types.h"
 #include "content/public/browser/web_contents.h"
@@ -58,8 +60,8 @@ class MockAudioSystem : public media::AudioSystem {
 
     // Posting callback to allow current SpeechRecognizerImpl dispatching event
     // to complete before transitioning to the next FSM state.
-    content::BrowserThread::PostTask(
-        content::BrowserThread::IO, FROM_HERE,
+    base::PostTaskWithTraits(
+        FROM_HERE, {content::BrowserThread::IO},
         base::BindOnce(std::move(on_params_cb),
                        media::AudioParameters::UnavailableDeviceParams()));
   }
@@ -128,16 +130,18 @@ std::string MakeGoodResponse() {
   proto::SpeechRecognitionEvent proto_event;
   proto_event.set_status(proto::SpeechRecognitionEvent::STATUS_SUCCESS);
   proto::SpeechRecognitionResult* proto_result = proto_event.add_result();
-  SpeechRecognitionResult result;
-  result.hypotheses.push_back(SpeechRecognitionHypothesis(
+  blink::mojom::SpeechRecognitionResultPtr result =
+      blink::mojom::SpeechRecognitionResult::New();
+  result->hypotheses.push_back(blink::mojom::SpeechRecognitionHypothesis::New(
       base::UTF8ToUTF16("Pictures of the moon"), 1.0F));
-  proto_result->set_final(!result.is_provisional);
-  for (size_t i = 0; i < result.hypotheses.size(); ++i) {
+  proto_result->set_final(!result->is_provisional);
+  for (size_t i = 0; i < result->hypotheses.size(); ++i) {
     proto::SpeechRecognitionAlternative* proto_alternative =
         proto_result->add_alternative();
-    const SpeechRecognitionHypothesis& hypothesis = result.hypotheses[i];
-    proto_alternative->set_confidence(hypothesis.confidence);
-    proto_alternative->set_transcript(base::UTF16ToUTF8(hypothesis.utterance));
+    const blink::mojom::SpeechRecognitionHypothesisPtr& hypothesis =
+        result->hypotheses[i];
+    proto_alternative->set_confidence(hypothesis->confidence);
+    proto_alternative->set_transcript(base::UTF16ToUTF8(hypothesis->utterance));
   }
 
   std::string msg_string;
@@ -225,8 +229,8 @@ class SpeechRecognitionBrowserTest : public ContentBrowserTest {
     // AudioCaptureSourcer::Stop() again.
     SpeechRecognizerImpl::SetAudioEnvironmentForTesting(nullptr, nullptr);
 
-    content::BrowserThread::PostTask(
-        content::BrowserThread::UI, FROM_HERE,
+    base::PostTaskWithTraits(
+        FROM_HERE, {content::BrowserThread::UI},
         base::BindOnce(&SpeechRecognitionBrowserTest::SendResponse,
                        base::Unretained(this)));
   }

@@ -5,14 +5,17 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_MODULES_ACCESSIBILITY_AX_SELECTION_H_
 #define THIRD_PARTY_BLINK_RENDERER_MODULES_ACCESSIBILITY_AX_SELECTION_H_
 
-#include <base/logging.h>
 #include <stdint.h>
+
 #include <ostream>
 
+#include <base/logging.h>
+#include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/editing/forward.h"
 #include "third_party/blink/renderer/modules/accessibility/ax_position.h"
 #include "third_party/blink/renderer/modules/modules_export.h"
 #include "third_party/blink/renderer/platform/wtf/allocator.h"
+#include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
 
 namespace blink {
 
@@ -20,16 +23,31 @@ namespace blink {
 // accessibility tree but not in the DOM tree, determines whether setting the
 // selection will shrink or extend the |AXSelection| to encompass endpoints that
 // are in the DOM.
+// Conversely, if a DOM selection is converted to an |AXSelection| via the
+// |AsSelection| method, but the endpoints of the DOM selection are not present
+// in the accessibility tree, e.g. they are aria-hidden, determines whether the
+// conversion will shrink or extend the DOM selection to encompass endpoints
+// that are in the accessibility tree.
 enum class AXSelectionBehavior {
   kShrinkToValidDOMRange,
   kExtendToValidDOMRange
 };
 
 class MODULES_EXPORT AXSelection final {
-  DISALLOW_NEW_EXCEPT_PLACEMENT_NEW();
+  DISALLOW_NEW();
 
  public:
   class Builder;
+
+  static void ClearCurrentSelection(Document&);
+
+  static AXSelection FromCurrentSelection(
+      const Document&,
+      const AXSelectionBehavior = AXSelectionBehavior::kExtendToValidDOMRange);
+
+  static AXSelection FromSelection(
+      const SelectionInDOMTree&,
+      const AXSelectionBehavior = AXSelectionBehavior::kExtendToValidDOMRange);
 
   AXSelection(const AXSelection&) = default;
   AXSelection& operator=(const AXSelection&) = default;
@@ -42,13 +60,20 @@ class MODULES_EXPORT AXSelection final {
   // invalid, or if the positions are in two separate documents.
   bool IsValid() const;
 
+  operator bool() const { return IsValid(); }
+
   const SelectionInDOMTree AsSelection(
       const AXSelectionBehavior =
           AXSelectionBehavior::kExtendToValidDOMRange) const;
 
-  // Tries to set the DOM selection to this.
-  void Select(
+  // Tries to set the DOM selection to this. Returns |false| if the selection
+  // has been cancelled via the "selectionstart" event or if the selection could
+  // not be set for any other reason.
+  bool Select(
       const AXSelectionBehavior = AXSelectionBehavior::kExtendToValidDOMRange);
+
+  // Returns a string representation of this object.
+  String ToString() const;
 
  private:
   AXSelection();
@@ -60,7 +85,8 @@ class MODULES_EXPORT AXSelection final {
   AXPosition extent_;
 
 #if DCHECK_IS_ON()
-  // TODO(ax-dev): Use layout tree version in place of DOM and style versions.
+  // TODO(accessibility): Use layout tree version in place of DOM and style
+  // versions.
   uint64_t dom_tree_version_;
   uint64_t style_version_;
 #endif

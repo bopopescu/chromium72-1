@@ -4,10 +4,11 @@
 
 #import "chrome/browser/chrome_browser_application_mac.h"
 
-#include "base/auto_reset.h"
 #include "base/command_line.h"
 #include "base/logging.h"
 #include "base/mac/call_with_eh_frame.h"
+#include "base/mac/sdk_forward_declarations.h"
+#include "base/observer_list.h"
 #include "base/strings/stringprintf.h"
 #include "base/strings/sys_string_conversions.h"
 #include "base/trace_event/trace_event.h"
@@ -18,11 +19,19 @@
 #include "components/crash/core/common/crash_key.h"
 #import "components/crash/core/common/objc_zombie.h"
 #include "content/public/browser/browser_accessibility_state.h"
+#include "content/public/browser/native_event_processor_mac.h"
+#include "content/public/browser/native_event_processor_observer_mac.h"
+#include "ui/base/ui_base_switches.h"
 
 namespace chrome_browser_application_mac {
 
 void RegisterBrowserCrApp() {
   [BrowserCrApplication sharedApplication];
+
+  // If there was an invocation to NSApp prior to this method, then the NSApp
+  // will not be a BrowserCrApplication, but will instead be an NSApplication.
+  // This is undesirable and we must enforce that this doesn't happen.
+  CHECK([NSApp isKindOfClass:[BrowserCrApplication class]]);
 };
 
 void Terminate() {
@@ -91,10 +100,10 @@ std::string DescriptionForNSEvent(NSEvent* event) {
 
 }  // namespace
 
-// Method exposed for the purposes of overriding.
-// Used to determine when a Panel window can become the key window.
-@interface NSApplication (PanelsCanBecomeKey)
-- (void)_cycleWindowsReversed:(BOOL)arg1;
+@interface BrowserCrApplication ()<NativeEventProcessor> {
+  base::ObserverList<content::NativeEventProcessorObserver>::Unchecked
+      observers_;
+}
 @end
 
 @implementation BrowserCrApplication
@@ -111,14 +120,12 @@ std::string DescriptionForNSEvent(NSEvent* event) {
 
 - (id)init {
   self = [super init];
-
-  // Sanity check to alert if overridden methods are not supported.
-  DCHECK([NSApplication
-      instancesRespondToSelector:@selector(_cycleWindowsReversed:)]);
-  DCHECK([NSApplication
-      instancesRespondToSelector:@selector(_removeWindow:)]);
-  DCHECK([NSApplication
-      instancesRespondToSelector:@selector(_setKeyWindow:)]);
+  if (base::CommandLine::ForCurrentProcess()->HasSwitch(
+          switches::kForceDarkMode)) {
+    if (@available(macOS 10.14, *)) {
+      self.appearance = [NSAppearance appearanceNamed:NSAppearanceNameDarkAqua];
+    }
+  }
 
   return self;
 }
@@ -325,6 +332,8 @@ std::string DescriptionForNSEvent(NSEvent* event) {
 
       default: {
         base::mac::ScopedSendingEvent sendingEventScoper;
+        content::ScopedNotifyNativeEventProcessorObserver
+            scopedObserverNotifier(&observers_, event);
         [super sendEvent:event];
       }
     }
@@ -344,13 +353,14 @@ std::string DescriptionForNSEvent(NSEvent* event) {
   return [super accessibilitySetValue:value forAttribute:attribute];
 }
 
-- (void)_cycleWindowsReversed:(BOOL)arg1 {
-  base::AutoReset<BOOL> pin(&cyclingWindows_, YES);
-  [super _cycleWindowsReversed:arg1];
+- (void)addNativeEventProcessorObserver:
+    (content::NativeEventProcessorObserver*)observer {
+  observers_.AddObserver(observer);
 }
 
-- (BOOL)isCyclingWindows {
-  return cyclingWindows_;
+- (void)removeNativeEventProcessorObserver:
+    (content::NativeEventProcessorObserver*)observer {
+  observers_.RemoveObserver(observer);
 }
 
 @end

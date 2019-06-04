@@ -38,6 +38,7 @@
 #include "third_party/blink/renderer/core/loader/link_loader.h"
 #include "third_party/blink/renderer/core/loader/link_loader_client.h"
 #include "third_party/blink/renderer/platform/bindings/trace_wrapper_member.h"
+#include "third_party/blink/renderer/platform/loader/fetch/fetch_parameters.h"
 
 namespace blink {
 
@@ -52,7 +53,12 @@ class CORE_EXPORT HTMLLinkElement final : public HTMLElement,
 
  public:
   static HTMLLinkElement* Create(Document&, const CreateElementFlags);
+
+  HTMLLinkElement(Document&, const CreateElementFlags);
   ~HTMLLinkElement() override;
+
+  // Returns attributes that should be checked against Trusted Types
+  const HashSet<AtomicString>& GetCheckedAttributeNames() const override;
 
   KURL Href() const;
   const AtomicString& Rel() const;
@@ -60,7 +66,10 @@ class CORE_EXPORT HTMLLinkElement final : public HTMLElement,
   String TypeValue() const { return type_; }
   String AsValue() const { return as_; }
   String IntegrityValue() const { return integrity_; }
-  ReferrerPolicy GetReferrerPolicy() const { return referrer_policy_; }
+  String ImportanceValue() const { return importance_; }
+  network::mojom::ReferrerPolicy GetReferrerPolicy() const {
+    return referrer_policy_;
+  }
   const LinkRelAttribute& RelAttribute() const { return rel_attribute_; }
   DOMTokenList& relList() const {
     return static_cast<DOMTokenList&>(*rel_list_);
@@ -97,9 +106,14 @@ class CORE_EXPORT HTMLLinkElement final : public HTMLElement,
 
   // From LinkLoaderClient
   bool ShouldLoadLink() override;
+  bool IsLinkCreatedByParser() override;
 
   // For LinkStyle
   bool LoadLink(const LinkLoadParameters&);
+  void LoadStylesheet(const LinkLoadParameters&,
+                      const WTF::TextEncoding&,
+                      FetchParameters::DeferOption,
+                      ResourceClient*);
   bool IsAlternate() const {
     return GetLinkStyle()->IsUnset() && rel_attribute_.IsAlternate();
   }
@@ -110,11 +124,7 @@ class CORE_EXPORT HTMLLinkElement final : public HTMLElement,
 
   void Trace(blink::Visitor*) override;
 
-  void TraceWrappers(ScriptWrappableVisitor*) const override;
-
  private:
-  HTMLLinkElement(Document&, const CreateElementFlags);
-
   LinkStyle* GetLinkStyle() const;
   LinkImport* GetLinkImport() const;
   LinkResource* LinkResourceToProcess();
@@ -128,8 +138,8 @@ class CORE_EXPORT HTMLLinkElement final : public HTMLElement,
 
   // From Node and subclassses
   void ParseAttribute(const AttributeModificationParams&) override;
-  InsertionNotificationRequest InsertedInto(ContainerNode*) override;
-  void RemovedFrom(ContainerNode*) override;
+  InsertionNotificationRequest InsertedInto(ContainerNode&) override;
+  void RemovedFrom(ContainerNode&) override;
   bool IsURLAttribute(const Attribute&) const override;
   bool HasLegalLinkAttribute(const QualifiedName&) const override;
   const QualifiedName& SubResourceAttributeName() const override;
@@ -156,7 +166,8 @@ class CORE_EXPORT HTMLLinkElement final : public HTMLElement,
   String as_;
   String media_;
   String integrity_;
-  ReferrerPolicy referrer_policy_;
+  String importance_;
+  network::mojom::ReferrerPolicy referrer_policy_;
   Member<DOMTokenList> sizes_;
   Vector<IntSize> icon_sizes_;
   TraceWrapperMember<RelList> rel_list_;

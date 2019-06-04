@@ -11,6 +11,7 @@
 #include "base/logging.h"
 #include "base/run_loop.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/task/post_task.h"
 #include "build/build_config.h"
 #include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/net/url_request_mock_util.h"
@@ -24,6 +25,7 @@
 #include "chrome/test/base/ui_test_utils.h"
 #include "components/app_modal/javascript_app_modal_dialog.h"
 #include "components/app_modal/native_app_modal_dialog.h"
+#include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/notification_service.h"
 #include "content/public/browser/render_frame_host.h"
@@ -146,15 +148,20 @@ class UnloadTestBase : public InProcessBrowserTest {
 
   void SetUpOnMainThread() override {
     host_resolver()->AddRule("*", "127.0.0.1");
-    BrowserThread::PostTask(
-        BrowserThread::IO, FROM_HERE,
+    base::PostTaskWithTraits(
+        FROM_HERE, {BrowserThread::IO},
         base::Bind(&chrome_browser_net::SetUrlRequestMocksEnabled, true));
   }
 
-  void CheckTitle(const char* expected_title) {
+  void CheckTitle(const char* expected_title, bool wait = false) {
+    auto* web_contents = browser()->tab_strip_model()->GetActiveWebContents();
     base::string16 expected = base::ASCIIToUTF16(expected_title);
-    EXPECT_EQ(expected,
-              browser()->tab_strip_model()->GetActiveWebContents()->GetTitle());
+    base::string16 actual;
+    if (wait)
+      actual = content::TitleWatcher(web_contents, expected).WaitAndGetTitle();
+    else
+      actual = web_contents->GetTitle();
+    EXPECT_EQ(expected, actual);
   }
 
   void NavigateToDataURL(const char* html_content, const char* expected_title) {
@@ -635,15 +642,13 @@ IN_PROC_BROWSER_TEST_P(UnloadTest, BrowserCloseTabWhenOtherTabHasListener) {
   content::WindowedNotificationObserver observer(
         chrome::NOTIFICATION_TAB_ADDED,
         content::NotificationService::AllSources());
-  content::WindowedNotificationObserver load_stop_observer(
-      content::NOTIFICATION_LOAD_STOP,
-      content::NotificationService::AllSources());
   content::SimulateMouseClick(
       browser()->tab_strip_model()->GetActiveWebContents(), 0,
       blink::WebMouseEvent::Button::kLeft);
   observer.Wait();
-  load_stop_observer.Wait();
-  CheckTitle("popup");
+  // Need to wait for the title, because the initial page (about:blank) can stop
+  // loading before the click handler calls document.write.
+  CheckTitle("popup", true);
 
   content::WebContentsDestroyedWatcher destroyed_watcher(
       browser()->tab_strip_model()->GetActiveWebContents());
@@ -790,9 +795,13 @@ class FastTabCloseTabStripModelObserver : public TabStripModelObserver {
   }
 
   // TabStripModelObserver:
-  void TabDetachedAt(content::WebContents* contents,
-                     int index,
-                     bool was_active) override {
+  void OnTabStripModelChanged(
+      TabStripModel* tab_strip_model,
+      const TabStripModelChange& change,
+      const TabStripSelectionChange& selection) override {
+    if (change.type() != TabStripModelChange::kRemoved)
+      return;
+
     run_loop_->Quit();
   }
 

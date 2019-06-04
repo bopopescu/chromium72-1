@@ -139,11 +139,6 @@ void LegacyRenderWidgetHostHWND::SetBounds(const gfx::Rect& bounds) {
     direct_manipulation_helper_->SetSize(bounds_in_pixel.size());
 }
 
-void LegacyRenderWidgetHostHWND::MoveCaretTo(const gfx::Rect& bounds) {
-  DCHECK(ax_system_caret_);
-  ax_system_caret_->MoveCaretTo(bounds);
-}
-
 void LegacyRenderWidgetHostHWND::OnFinalMessage(HWND hwnd) {
   if (host_) {
     host_->OnLegacyWindowDestroyed();
@@ -182,7 +177,7 @@ bool LegacyRenderWidgetHostHWND::Init() {
   DCHECK(SUCCEEDED(hr));
 
   ui::AXMode mode =
-      BrowserAccessibilityStateImpl::GetInstance()->accessibility_mode();
+      BrowserAccessibilityStateImpl::GetInstance()->GetAccessibilityMode();
   if (!mode.has_mode(ui::AXMode::kNativeAPIs)) {
     // Attempt to detect screen readers or other clients who want full
     // accessibility support, by seeing if they respond to this event.
@@ -226,8 +221,10 @@ LRESULT LegacyRenderWidgetHostHWND::OnGetObject(UINT message,
     // When an MSAA client has responded to our fake event on this id,
     // enable basic accessibility support. (Full screen reader support is
     // detected later when specific more advanced APIs are accessed.)
-    BrowserAccessibilityStateImpl::GetInstance()->AddAccessibilityModeFlags(
-        ui::AXMode::kNativeAPIs | ui::AXMode::kWebContents);
+    for (ui::IAccessible2UsageObserver& observer :
+         ui::GetIAccessible2UsageObserverList()) {
+      observer.OnScreenReaderHoneyPotQueried();
+    }
     return static_cast<LRESULT>(0L);
   }
 

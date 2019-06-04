@@ -11,6 +11,7 @@
 #include <memory>
 
 #include "base/callback.h"
+#include "base/containers/flat_set.h"
 #include "base/macros.h"
 #include "base/memory/weak_ptr.h"
 #include "base/observer_list.h"
@@ -20,6 +21,7 @@
 #include "components/viz/common/gpu/raster_context_provider.h"
 #include "components/viz/test/test_context_support.h"
 #include "gpu/command_buffer/client/gles2_interface_stub.h"
+#include "gpu/command_buffer/client/shared_image_interface.h"
 #include "gpu/config/gpu_feature_info.h"
 #include "third_party/skia/include/core/SkRefCnt.h"
 
@@ -28,26 +30,49 @@ class GrContextForGLES2Interface;
 }
 
 namespace viz {
-class TestWebGraphicsContext3D;
 class TestGLES2Interface;
+
+class TestSharedImageInterface : public gpu::SharedImageInterface {
+ public:
+  TestSharedImageInterface();
+  ~TestSharedImageInterface() override;
+
+  gpu::Mailbox CreateSharedImage(ResourceFormat format,
+                                 const gfx::Size& size,
+                                 const gfx::ColorSpace& color_space,
+                                 uint32_t usage) override;
+
+  gpu::Mailbox CreateSharedImage(
+      gfx::GpuMemoryBuffer* gpu_memory_buffer,
+      gpu::GpuMemoryBufferManager* gpu_memory_buffer_manager,
+      const gfx::ColorSpace& color_space,
+      uint32_t usage) override;
+
+  void UpdateSharedImage(const gpu::SyncToken& sync_token,
+                         const gpu::Mailbox& mailbox) override;
+
+  void DestroySharedImage(const gpu::SyncToken& sync_token,
+                          const gpu::Mailbox& mailbox) override;
+
+  gpu::SyncToken GenUnverifiedSyncToken() override;
+
+  size_t shared_image_count() const { return shared_images_.size(); }
+
+ private:
+  uint64_t release_id_ = 0;
+  base::flat_set<gpu::Mailbox> shared_images_;
+};
 
 class TestContextProvider
     : public base::RefCountedThreadSafe<TestContextProvider>,
       public ContextProvider,
       public RasterContextProvider {
  public:
-  static scoped_refptr<TestContextProvider> Create();
+  static scoped_refptr<TestContextProvider> Create(
+      std::string additional_extensions = std::string());
   // Creates a worker context provider that can be used on any thread. This is
   // equivalent to: Create(); BindToCurrentThread().
   static scoped_refptr<TestContextProvider> CreateWorker();
-  static scoped_refptr<TestContextProvider> Create(
-      std::unique_ptr<TestWebGraphicsContext3D> context);
-  static scoped_refptr<TestContextProvider> Create(
-      std::unique_ptr<TestWebGraphicsContext3D> context,
-      std::unique_ptr<TestContextSupport> support);
-  static scoped_refptr<TestContextProvider> CreateWorker(
-      std::unique_ptr<TestWebGraphicsContext3D> context,
-      std::unique_ptr<TestContextSupport> support);
   static scoped_refptr<TestContextProvider> CreateWorker(
       std::unique_ptr<TestContextSupport> support);
   static scoped_refptr<TestContextProvider> Create(
@@ -58,7 +83,6 @@ class TestContextProvider
   explicit TestContextProvider(
       std::unique_ptr<TestContextSupport> support,
       std::unique_ptr<TestGLES2Interface> gl,
-      std::unique_ptr<TestWebGraphicsContext3D> context,
       bool support_locking);
 
   // ContextProvider / RasterContextProvider implementation.
@@ -71,20 +95,18 @@ class TestContextProvider
   gpu::raster::RasterInterface* RasterInterface() override;
   gpu::ContextSupport* ContextSupport() override;
   class GrContext* GrContext() override;
+  TestSharedImageInterface* SharedImageInterface() override;
   ContextCacheController* CacheController() override;
   base::Lock* GetLock() override;
   void AddObserver(ContextLostObserver* obs) override;
   void RemoveObserver(ContextLostObserver* obs) override;
 
-  TestWebGraphicsContext3D* TestContext3d();
-
-  // This returns the TestWebGraphicsContext3D but is valid to call
+  TestGLES2Interface* TestContextGL();
+  // This returns the TestGLES2Interface but is valid to call
   // before the context is bound to a thread. This is needed to set up
-  // state on the test context before binding. Don't call
-  // InitializeOnCurrentThread on the context returned from this method.
-  TestWebGraphicsContext3D* UnboundTestContext3d();
+  // state on the test interface before binding.
+  TestGLES2Interface* UnboundTestContextGL() { return context_gl_.get(); }
 
-  TestGLES2Interface* TestContextGL() { return context_gl_.get(); }
   TestContextSupport* support() { return support_.get(); }
 
  protected:
@@ -104,11 +126,11 @@ class TestContextProvider
   }
 
   std::unique_ptr<TestContextSupport> support_;
-  std::unique_ptr<TestWebGraphicsContext3D> context3d_;
   std::unique_ptr<TestGLES2Interface> context_gl_;
   std::unique_ptr<gpu::raster::RasterInterface> raster_context_;
   std::unique_ptr<skia_bindings::GrContextForGLES2Interface> gr_context_;
   std::unique_ptr<ContextCacheController> cache_controller_;
+  std::unique_ptr<TestSharedImageInterface> shared_image_interface_;
   const bool support_locking_ ALLOW_UNUSED_TYPE;
   bool bound_ = false;
 
@@ -119,7 +141,7 @@ class TestContextProvider
 
   base::Lock context_lock_;
 
-  base::ObserverList<ContextLostObserver> observers_;
+  base::ObserverList<ContextLostObserver>::Unchecked observers_;
 
   base::WeakPtrFactory<TestContextProvider> weak_ptr_factory_;
 

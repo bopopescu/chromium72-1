@@ -36,14 +36,8 @@ class WebURLRequest;
 class WebView;
 }
 
-namespace device {
-class MotionData;
-class OrientationData;
-}
-
 namespace test_runner {
 
-class GamepadController;
 class WebWidgetTestProxyBase;
 struct TestPreferences;
 
@@ -56,17 +50,6 @@ class WebTestDelegate {
   virtual void ClearEditCommand() = 0;
   virtual void SetEditCommand(const std::string& name,
                               const std::string& value) = 0;
-
-  // Sets gamepad provider to be used for tests.
-  virtual void SetGamepadProvider(GamepadController* controller) = 0;
-
-  // Set data to return when registering via
-  // Platform::setDeviceMotionListener().
-  virtual void SetDeviceMotionData(const device::MotionData& data) = 0;
-  // Set data to return when registering via
-  // Platform::setDeviceOrientationListener().
-  virtual void SetDeviceOrientationData(
-      const device::OrientationData& data) = 0;
 
   // Add a message to stderr (not saved to expected output files, for debugging
   // only).
@@ -94,8 +77,8 @@ class WebTestDelegate {
   // Reads in the given file and returns its contents as data URL.
   virtual blink::WebURL LocalFileToDataURL(const blink::WebURL& file_url) = 0;
 
-  // Replaces file:///tmp/LayoutTests/ with the actual path to the
-  // LayoutTests directory, or rewrite URLs generated from absolute
+  // Replaces file:///tmp/web_tests/ with the actual path to the
+  // web_tests directory, or rewrite URLs generated from absolute
   // path links in web-platform-tests.
   virtual blink::WebURL RewriteLayoutTestsURL(const std::string& utf8_url,
                                               bool is_wpt_mode) = 0;

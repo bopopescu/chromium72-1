@@ -27,11 +27,6 @@
 #error "Failed to include content/common/drag_messages.h"
 #endif
 #include "content/common/drag_traits.h"
-#undef CONTENT_COMMON_FILEAPI_FILE_SYSTEM_MESSAGES_H_
-#include "content/common/fileapi/file_system_messages.h"
-#ifndef CONTENT_COMMON_FILEAPI_FILE_SYSTEM_MESSAGES_H_
-#error "Failed to include content/common/fileapi/file_system_messages.h"
-#endif
 #undef CONTENT_COMMON_FILEAPI_WEBBLOB_MESSAGES_H_
 #include "content/common/fileapi/webblob_messages.h"
 #ifndef CONTENT_COMMON_FILEAPI_WEBBLOB_MESSAGES_H_
@@ -57,11 +52,6 @@
 #ifndef CONTENT_COMMON_MEDIA_MEDIA_PLAYER_DELEGATE_MESSAGES_H_
 #error "Failed to include content/common/media/media_player_delegate_messages.h"
 #endif
-#undef CONTENT_COMMON_MEDIA_MIDI_MESSAGES_H_
-#include "content/common/media/midi_messages.h"
-#ifndef CONTENT_COMMON_MEDIA_MIDI_MESSAGES_H_
-#error "Failed to include content/common/media/midi_messages.h"
-#endif
 #undef CONTENT_COMMON_MEDIA_PEER_CONNECTION_TRACKER_MESSAGES_H_
 #include "content/common/media/peer_connection_tracker_messages.h"
 #ifndef CONTENT_COMMON_MEDIA_PEER_CONNECTION_TRACKER_MESSAGES_H_
@@ -73,21 +63,10 @@
 #ifndef CONTENT_COMMON_PAGE_MESSAGES_H_
 #error "Failed to include content/common/page_messages.h"
 #endif
-#undef CONTENT_COMMON_PLATFORM_NOTIFICATION_MESSAGES_H_
-#include "content/common/platform_notification_messages.h"
-#ifndef CONTENT_COMMON_PLATFORM_NOTIFICATION_MESSAGES_H_
-#error "Failed to include content/common/platform_notification_messages.h"
-#endif
 #undef CONTENT_COMMON_RESOURCE_MESSAGES_H_
 #include "content/common/resource_messages.h"
 #ifndef CONTENT_COMMON_RESOURCE_MESSAGES_H_
 #error "Failed to include content/common/resource_messages.h"
-#endif
-#undef CONTENT_COMMON_SERVICE_WORKER_SERVICE_WORKER_MESSAGES_H_
-#include "content/common/service_worker/service_worker_messages.h"
-#ifndef CONTENT_COMMON_SERVICE_WORKER_SERVICE_WORKER_MESSAGES_H_
-#error \
-    "Failed to include content/common/service_worker/service_worker_messages.h"
 #endif
 #undef CONTENT_COMMON_TEXT_INPUT_CLIENT_MESSAGES_H_
 #include "content/common/text_input_client_messages.h"
@@ -99,18 +78,17 @@
 #ifndef CONTENT_COMMON_VIEW_MESSAGES_H_
 #error "Failed to include content/common/view_messages.h"
 #endif
+#undef CONTENT_COMMON_WIDGET_MESSAGES_H_
+#include "content/common/widget_messages.h"
+#ifndef CONTENT_COMMON_WIDGET_MESSAGES_H_
+#error "Failed to include content/common/widget_messages.h"
+#endif
 #include "media/media_buildflags.h"
 
 #undef CONTENT_COMMON_SYNC_COMPOSITOR_MESSAGES_H_
 #include "content/common/input/sync_compositor_messages.h"
 #ifndef CONTENT_COMMON_SYNC_COMPOSITOR_MESSAGES_H_
 #error "Failed to include content/common/input/sync_compositor_messages.h"
-#endif
-
-#undef CONTENT_COMMON_P2P_MESSAGES_H_
-#include "content/common/p2p_messages.h"
-#ifndef CONTENT_COMMON_P2P_MESSAGES_H_
-#error "Failed to include content/common/p2p_messages.h"
 #endif
 
 #if defined(OS_ANDROID)
@@ -123,11 +101,5 @@
 #include "content/common/media/media_player_messages_android.h"
 #ifndef CONTENT_COMMON_MEDIA_MEDIA_PLAYER_MESSAGES_ANDROID_H_
 #error "Failed to include content/common/media/media_player_messages_android.h"
-#endif
-#undef CONTENT_COMMON_MEDIA_SURFACE_VIEW_MANAGER_MESSAGES_ANDROID_H_
-#include "content/common/media/surface_view_manager_messages_android.h"
-#ifndef CONTENT_COMMON_MEDIA_SURFACE_VIEW_MANAGER_MESSAGES_ANDROID_H_
-#error \
-    "Failed to include content/common/media/surface_view_manager_messages_android.h"
 #endif
 #endif  // defined(OS_ANDROID)

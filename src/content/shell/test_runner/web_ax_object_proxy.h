@@ -94,6 +94,7 @@ class WebAXObjectProxy : public gin::Wrappable<WebAXObjectProxy> {
   int SelectionEndLineNumber();
 
   bool IsAtomic();
+  bool IsAutofillAvailable();
   bool IsBusy();
   bool IsRequired();
   bool IsEditableRoot();
@@ -110,6 +111,8 @@ class WebAXObjectProxy : public gin::Wrappable<WebAXObjectProxy> {
   bool IsExpanded();
   std::string Checked();
   bool IsVisible();
+  // Exposes the visited state of a link.
+  bool IsVisited();
   bool IsOffScreen();
   bool IsCollapsed();
   bool IsValid();

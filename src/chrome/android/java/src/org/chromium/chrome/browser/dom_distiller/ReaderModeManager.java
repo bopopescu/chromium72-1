@@ -22,6 +22,8 @@ import org.chromium.chrome.browser.customtabs.CustomTabIntentDataProvider;
 import org.chromium.chrome.browser.document.ChromeLauncherActivity;
 import org.chromium.chrome.browser.infobar.ReaderModeInfoBar;
 import org.chromium.chrome.browser.tab.Tab;
+import org.chromium.chrome.browser.tab.Tab.TabHidingType;
+import org.chromium.chrome.browser.tabmodel.TabModel.TabSelectionType;
 import org.chromium.chrome.browser.tabmodel.TabModelSelector;
 import org.chromium.chrome.browser.tabmodel.TabModelSelectorTabObserver;
 import org.chromium.chrome.browser.util.IntentUtils;
@@ -34,7 +36,7 @@ import org.chromium.content_public.browser.NavigationController;
 import org.chromium.content_public.browser.NavigationEntry;
 import org.chromium.content_public.browser.WebContents;
 import org.chromium.content_public.browser.WebContentsObserver;
-import org.chromium.ui.UiUtils;
+import org.chromium.ui.KeyboardVisibilityDelegate;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -146,7 +148,7 @@ public class ReaderModeManager extends TabModelSelectorTabObserver {
     }
 
     @Override
-    public void onShown(Tab shownTab) {
+    public void onShown(Tab shownTab, @TabSelectionType int type) {
         if (mTabModelSelector == null) return;
 
         int shownTabId = shownTab.getId();
@@ -186,7 +188,7 @@ public class ReaderModeManager extends TabModelSelectorTabObserver {
     }
 
     @Override
-    public void onHidden(Tab tab) {
+    public void onHidden(Tab tab, @TabHidingType int reason) {
         ReaderModeTabInfo info = mTabStatusMap.get(tab.getId());
         if (info != null && info.isViewingReaderModePage()) {
             long timeMs = info.onExitReaderMode();
@@ -267,7 +269,7 @@ public class ReaderModeManager extends TabModelSelectorTabObserver {
     /**
      * Notify the manager that the panel has completely closed.
      */
-    public void onClosed(StateChangeReason reason) {
+    public void onClosed(@StateChangeReason int reason) {
         if (mTabModelSelector == null) return;
 
         RecordHistogram.recordBooleanHistogram("DomDistiller.InfoBarUsage", false);
@@ -290,11 +292,12 @@ public class ReaderModeManager extends TabModelSelectorTabObserver {
 
     /**
      * @return True if the keyboard might be showing. This is not 100% accurate; see
-     *         UiUtils.isKeyboardShowing(...).
+     *         {@link KeyboardVisibilityDelegate#isKeyboardShowing}.
      */
     protected boolean isKeyboardShowing() {
-        return mChromeActivity != null && UiUtils.isKeyboardShowing(mChromeActivity,
-                mChromeActivity.findViewById(android.R.id.content));
+        return mChromeActivity != null && mChromeActivity.getWindowAndroid() != null
+                && mChromeActivity.getWindowAndroid().getKeyboardDelegate().isKeyboardShowing(
+                           mChromeActivity, mChromeActivity.findViewById(android.R.id.content));
     }
 
     protected WebContentsObserver createWebContentsObserver(final WebContents webContents) {
@@ -338,8 +341,8 @@ public class ReaderModeManager extends TabModelSelectorTabObserver {
             @Override
             public void didFinishNavigation(String url, boolean isInMainFrame, boolean isErrorPage,
                     boolean hasCommitted, boolean isSameDocument, boolean isFragmentNavigation,
-                    Integer pageTransition, int errorCode, String errorDescription,
-                    int httpStatusCode) {
+                    boolean isRendererInitiated, boolean isDownload, Integer pageTransition,
+                    int errorCode, String errorDescription, int httpStatusCode) {
                 // TODO(cjhopman): This should possibly ignore navigations that replace the entry
                 // (like those from history.replaceState()).
                 if (!hasCommitted || !isInMainFrame || isSameDocument) return;
@@ -358,8 +361,8 @@ public class ReaderModeManager extends TabModelSelectorTabObserver {
 
                 tabInfo.setStatus(POSSIBLE);
                 if (!TextUtils.equals(url,
-                        DomDistillerUrlUtils.getOriginalUrlFromDistillerUrl(
-                                mReaderModePageUrl))) {
+                            DomDistillerUrlUtils.getOriginalUrlFromDistillerUrl(
+                                    mReaderModePageUrl))) {
                     tabInfo.setStatus(NOT_POSSIBLE);
                     mIsUmaRecorded = false;
                 }
@@ -497,10 +500,7 @@ public class ReaderModeManager extends TabModelSelectorTabObserver {
         if (mTabModelSelector == null) return;
 
         Tab currentTab = mTabModelSelector.getTabById(tabId);
-        if (currentTab == null || currentTab.getWebContents() == null
-                || currentTab.getContentViewCore() == null) {
-            return;
-        }
+        if (currentTab == null || currentTab.getWebContents() == null) return;
 
         DistillablePageUtils.setDelegate(
                 currentTab.getWebContents(), (isDistillable, isLast, isMobileOptimized) -> {

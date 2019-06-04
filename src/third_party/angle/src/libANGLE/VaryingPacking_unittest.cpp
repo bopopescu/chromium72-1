@@ -38,7 +38,7 @@ class VaryingPackingTest : public ::testing::TestWithParam<GLuint>
         InfoLog infoLog;
         std::vector<std::string> transformFeedbackVaryings;
 
-        return varyingPacking->packUserVaryings(infoLog, packedVaryings, transformFeedbackVaryings);
+        return varyingPacking->packUserVaryings(infoLog, packedVaryings);
     }
 
     // Uses the "relaxed" ANGLE packing mode.
@@ -68,10 +68,10 @@ std::vector<sh::Varying> MakeVaryings(GLenum type, size_t count, size_t arraySiz
         strstr << type << index;
 
         sh::Varying varying;
-        varying.type          = type;
-        varying.precision     = GL_MEDIUM_FLOAT;
-        varying.name          = strstr.str();
-        varying.mappedName    = strstr.str();
+        varying.type       = type;
+        varying.precision  = GL_MEDIUM_FLOAT;
+        varying.name       = strstr.str();
+        varying.mappedName = strstr.str();
         if (arraySize > 0)
         {
             varying.arraySizes.push_back(static_cast<unsigned int>(arraySize));

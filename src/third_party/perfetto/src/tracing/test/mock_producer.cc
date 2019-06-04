@@ -43,7 +43,7 @@ MockProducer::~MockProducer() {
   task_runner_->RunUntilCheckpoint(checkpoint_name);
 }
 
-void MockProducer::Connect(Service* svc,
+void MockProducer::Connect(TracingService* svc,
                            const std::string& producer_name,
                            uid_t uid,
                            size_t shared_memory_size_hint_bytes) {
@@ -56,9 +56,10 @@ void MockProducer::Connect(Service* svc,
   task_runner_->RunUntilCheckpoint(checkpoint_name);
 }
 
-void MockProducer::RegisterDataSource(const std::string& name) {
+void MockProducer::RegisterDataSource(const std::string& name, bool ack_stop) {
   DataSourceDescriptor ds_desc;
   ds_desc.set_name(name);
+  ds_desc.set_will_notify_on_stop(ack_stop);
   service_endpoint_->RegisterDataSource(ds_desc);
 }
 
@@ -75,18 +76,42 @@ void MockProducer::WaitForTracingSetup() {
   task_runner_->RunUntilCheckpoint(checkpoint_name);
 }
 
-void MockProducer::WaitForDataSourceStart(const std::string& name) {
+void MockProducer::WaitForDataSourceSetup(const std::string& name) {
   static int i = 0;
-  auto checkpoint_name = "on_ds_start_" + name + "_" + std::to_string(i++);
+  auto checkpoint_name = "on_ds_setup_" + name + "_" + std::to_string(i++);
   auto on_ds_start = task_runner_->CreateCheckpoint(checkpoint_name);
-  EXPECT_CALL(*this, CreateDataSourceInstance(
-                         _, Property(&DataSourceConfig::name, Eq(name))))
+  EXPECT_CALL(*this,
+              SetupDataSource(_, Property(&DataSourceConfig::name, Eq(name))))
       .WillOnce(Invoke([on_ds_start, this](DataSourceInstanceID ds_id,
                                            const DataSourceConfig& cfg) {
         EXPECT_FALSE(data_source_instances_.count(cfg.name()));
         auto target_buffer = static_cast<BufferID>(cfg.target_buffer());
-        data_source_instances_.emplace(cfg.name(),
-                                       EnabledDataSource{ds_id, target_buffer});
+        auto session_id =
+            static_cast<TracingSessionID>(cfg.tracing_session_id());
+        data_source_instances_.emplace(
+            cfg.name(), EnabledDataSource{ds_id, target_buffer, session_id});
+        on_ds_start();
+      }));
+  task_runner_->RunUntilCheckpoint(checkpoint_name);
+}
+
+void MockProducer::WaitForDataSourceStart(const std::string& name) {
+  static int i = 0;
+  auto checkpoint_name = "on_ds_start_" + name + "_" + std::to_string(i++);
+  auto on_ds_start = task_runner_->CreateCheckpoint(checkpoint_name);
+  EXPECT_CALL(*this,
+              StartDataSource(_, Property(&DataSourceConfig::name, Eq(name))))
+      .WillOnce(Invoke([on_ds_start, this](DataSourceInstanceID ds_id,
+                                           const DataSourceConfig& cfg) {
+        // The data source might have been seen already through
+        // WaitForDataSourceSetup().
+        if (data_source_instances_.count(cfg.name()) == 0) {
+          auto target_buffer = static_cast<BufferID>(cfg.target_buffer());
+          auto session_id =
+              static_cast<TracingSessionID>(cfg.tracing_session_id());
+          data_source_instances_.emplace(
+              cfg.name(), EnabledDataSource{ds_id, target_buffer, session_id});
+        }
         on_ds_start();
       }));
   task_runner_->RunUntilCheckpoint(checkpoint_name);
@@ -98,7 +123,7 @@ void MockProducer::WaitForDataSourceStop(const std::string& name) {
   auto on_ds_stop = task_runner_->CreateCheckpoint(checkpoint_name);
   ASSERT_EQ(1u, data_source_instances_.count(name));
   DataSourceInstanceID ds_id = data_source_instances_[name].id;
-  EXPECT_CALL(*this, TearDownDataSourceInstance(ds_id))
+  EXPECT_CALL(*this, StopDataSource(ds_id))
       .WillOnce(InvokeWithoutArgs(on_ds_stop));
   task_runner_->RunUntilCheckpoint(checkpoint_name);
   data_source_instances_.erase(name);
@@ -121,6 +146,18 @@ void MockProducer::WaitForFlush(TraceWriter* writer_to_flush) {
         writer_to_flush->Flush();
         service_endpoint_->NotifyFlushComplete(flush_req_id);
       }));
+}
+
+DataSourceInstanceID MockProducer::GetDataSourceInstanceId(
+    const std::string& name) {
+  auto it = data_source_instances_.find(name);
+  return it == data_source_instances_.end() ? 0 : it->second.id;
+}
+
+const MockProducer::EnabledDataSource* MockProducer::GetDataSourceInstance(
+    const std::string& name) {
+  auto it = data_source_instances_.find(name);
+  return it == data_source_instances_.end() ? nullptr : &it->second;
 }
 
 }  // namespace perfetto

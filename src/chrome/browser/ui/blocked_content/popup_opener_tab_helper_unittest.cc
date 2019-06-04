@@ -12,13 +12,12 @@
 #include "base/bind.h"
 #include "base/macros.h"
 #include "base/strings/stringprintf.h"
-#include "base/test/histogram_tester.h"
+#include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/test/simple_test_tick_clock.h"
 #include "base/time/time.h"
 #include "build/build_config.h"
 #include "chrome/browser/content_settings/tab_specific_content_settings.h"
-#include "chrome/browser/engagement/site_engagement_service.h"
 #include "chrome/browser/infobars/infobar_service.h"
 #include "chrome/browser/ui/blocked_content/list_item_position.h"
 #include "chrome/browser/ui/blocked_content/popup_tracker.h"
@@ -29,11 +28,11 @@
 #include "chrome/test/base/testing_profile.h"
 #include "components/ukm/content/source_url_recorder.h"
 #include "components/ukm/test_ukm_recorder.h"
-#include "components/ukm/ukm_source.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/test/navigation_simulator.h"
 #include "content/public/test/test_utils.h"
 #include "services/metrics/public/cpp/ukm_builders.h"
+#include "services/metrics/public/cpp/ukm_source.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "url/gurl.h"
 
@@ -51,7 +50,6 @@ constexpr char kTabUnderVisibleTimeBefore[] = "Tab.TabUnder.VisibleTimeBefore";
 constexpr char kPopupToTabUnder[] = "Tab.TabUnder.PopupToTabUnderTime";
 constexpr char kTabUnderActionOTR[] = "Tab.TabUnderAction.OTR";
 constexpr char kTabUnderActionNonOTR[] = "Tab.TabUnderAction.NonOTR";
-constexpr char kEngagementScore[] = "Tab.TabUnder.EngagementScore";
 
 class PopupOpenerTabHelperTest : public ChromeRenderViewHostTestHarness {
  public:
@@ -517,13 +515,7 @@ TEST_F(BlockTabUnderTest, TabUnderWithSubsequentGesture_IsNotBlocked) {
   // A subsequent navigation should be allowed, even if it is classified as a
   // suspicious redirect.
   EXPECT_TRUE(NavigateAndCommitWithoutGesture(GURL("https://example.test2/")));
-#if defined(OS_ANDROID)
   ExpectUIShown(false);
-#else
-  EXPECT_EQ(1u, FramebustBlockTabHelper::FromWebContents(web_contents())
-                    ->blocked_urls()
-                    .size());
-#endif
 }
 
 TEST_F(BlockTabUnderTest, MultipleRedirectAttempts_AreBlocked) {
@@ -616,7 +608,7 @@ TEST_P(BlockTabUnderIncognitoTest, DisableFeature_LogsDidTabUnder) {
 }
 
 TEST_F(BlockTabUnderTest, LogsUkm) {
-  using UkmEntry = ukm::builders::AbusiveExperienceHeuristic;
+  using UkmEntry = ukm::builders::AbusiveExperienceHeuristic_TabUnder;
 
   ukm::InitializeSourceUrlRecorderForWebContents(web_contents());
   ukm::TestAutoSetUkmRecorder test_ukm_recorder;
@@ -685,50 +677,6 @@ TEST_F(BlockTabUnderTest, SlowRedirectAfterPopup_IsNotBlocked) {
             candidate_navigation->GetLastThrottleCheckResult());
   candidate_navigation->Commit();
   EXPECT_EQ(main_rfh(), candidate_navigation->GetFinalRenderFrameHost());
-}
-
-TEST_F(BlockTabUnderTest, SiteEngagement_None) {
-  EXPECT_TRUE(NavigateAndCommitWithoutGesture(GURL("https://first.test/")));
-  SimulatePopup();
-  const GURL blocked_url("https://example.test/");
-  EXPECT_FALSE(NavigateAndCommitWithoutGesture(blocked_url));
-  ExpectUIShown(true);
-  histogram_tester()->ExpectUniqueSample(kEngagementScore, 0, 1);
-}
-
-TEST_F(BlockTabUnderTest, SiteEngagement_Some) {
-  EXPECT_TRUE(NavigateAndCommitWithoutGesture(GURL("https://first.test/")));
-  SimulatePopup();
-  const GURL blocked_url("https://example.test/");
-
-  auto* site_engagement_service = SiteEngagementService::Get(profile());
-  site_engagement_service->AddPointsForTesting(blocked_url, 1);
-
-  EXPECT_TRUE(NavigateAndCommitWithoutGesture(blocked_url));
-  ExpectUIShown(false);
-  histogram_tester()->ExpectTotalCount(kEngagementScore, 1);
-  auto samples = histogram_tester()->GetAllSamples(kEngagementScore);
-  EXPECT_LT(0, samples[0].min);
-}
-
-TEST_F(BlockTabUnderTest, SiteEngagementNoThreshold_Blocks) {
-  base::test::ScopedFeatureList scoped_features;
-  scoped_features.InitAndEnableFeatureWithParameters(
-      TabUnderNavigationThrottle::kBlockTabUnders,
-      {{"engagement_threshold", "-1"}});
-
-  EXPECT_TRUE(NavigateAndCommitWithoutGesture(GURL("https://first.test/")));
-  SimulatePopup();
-  const GURL blocked_url("https://example.test/");
-
-  auto* site_engagement_service = SiteEngagementService::Get(profile());
-  site_engagement_service->AddPointsForTesting(blocked_url, 1);
-
-  EXPECT_FALSE(NavigateAndCommitWithoutGesture(blocked_url));
-  ExpectUIShown(true);
-  histogram_tester()->ExpectTotalCount(kEngagementScore, 1);
-  auto samples = histogram_tester()->GetAllSamples(kEngagementScore);
-  EXPECT_LT(0, samples[0].min);
 }
 
 // Ensure that even though the *redirect* occurred in the background, if the

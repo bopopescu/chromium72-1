@@ -38,7 +38,7 @@ inline AudioNodeInput::AudioNodeInput(AudioHandler& handler)
       handler_(handler) {
   // Set to mono by default.
   internal_summing_bus_ =
-      AudioBus::Create(1, AudioUtilities::kRenderQuantumFrames);
+      AudioBus::Create(1, audio_utilities::kRenderQuantumFrames);
 }
 
 std::unique_ptr<AudioNodeInput> AudioNodeInput::Create(AudioHandler& handler) {
@@ -46,7 +46,7 @@ std::unique_ptr<AudioNodeInput> AudioNodeInput::Create(AudioHandler& handler) {
 }
 
 void AudioNodeInput::Connect(AudioNodeOutput& output) {
-  DCHECK(GetDeferredTaskHandler().IsGraphOwner());
+  GetDeferredTaskHandler().AssertGraphOwner();
 
   // Check if we're already connected to this output.
   if (outputs_.Contains(&output))
@@ -58,7 +58,7 @@ void AudioNodeInput::Connect(AudioNodeOutput& output) {
 }
 
 void AudioNodeInput::Disconnect(AudioNodeOutput& output) {
-  DCHECK(GetDeferredTaskHandler().IsGraphOwner());
+  GetDeferredTaskHandler().AssertGraphOwner();
 
   // First try to disconnect from "active" connections.
   if (outputs_.Contains(&output)) {
@@ -83,7 +83,7 @@ void AudioNodeInput::Disconnect(AudioNodeOutput& output) {
 }
 
 void AudioNodeInput::Disable(AudioNodeOutput& output) {
-  DCHECK(GetDeferredTaskHandler().IsGraphOwner());
+  GetDeferredTaskHandler().AssertGraphOwner();
   DCHECK(outputs_.Contains(&output));
 
   disabled_outputs_.insert(&output);
@@ -95,7 +95,7 @@ void AudioNodeInput::Disable(AudioNodeOutput& output) {
 }
 
 void AudioNodeInput::Enable(AudioNodeOutput& output) {
-  DCHECK(GetDeferredTaskHandler().IsGraphOwner());
+  GetDeferredTaskHandler().AssertGraphOwner();
 
   // Move output from disabled list to active list.
   outputs_.insert(&output);
@@ -115,7 +115,7 @@ void AudioNodeInput::DidUpdate() {
 
 void AudioNodeInput::UpdateInternalBus() {
   DCHECK(GetDeferredTaskHandler().IsAudioThread());
-  DCHECK(GetDeferredTaskHandler().IsGraphOwner());
+  GetDeferredTaskHandler().AssertGraphOwner();
 
   unsigned number_of_input_channels = NumberOfChannels();
 
@@ -123,7 +123,7 @@ void AudioNodeInput::UpdateInternalBus() {
     return;
 
   internal_summing_bus_ = AudioBus::Create(
-      number_of_input_channels, AudioUtilities::kRenderQuantumFrames);
+      number_of_input_channels, audio_utilities::kRenderQuantumFrames);
 }
 
 unsigned AudioNodeInput::NumberOfChannels() const {
@@ -168,7 +168,7 @@ AudioBus* AudioNodeInput::InternalSummingBus() {
 }
 
 void AudioNodeInput::SumAllConnections(AudioBus* summing_bus,
-                                       size_t frames_to_process) {
+                                       uint32_t frames_to_process) {
   DCHECK(GetDeferredTaskHandler().IsAudioThread());
 
   // We shouldn't be calling this method if there's only one connection, since
@@ -198,7 +198,7 @@ void AudioNodeInput::SumAllConnections(AudioBus* summing_bus,
 }
 
 AudioBus* AudioNodeInput::Pull(AudioBus* in_place_bus,
-                               size_t frames_to_process) {
+                               uint32_t frames_to_process) {
   DCHECK(GetDeferredTaskHandler().IsAudioThread());
 
   // Handle single connection case.

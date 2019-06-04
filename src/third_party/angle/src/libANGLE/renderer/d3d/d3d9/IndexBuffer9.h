@@ -21,16 +21,24 @@ class IndexBuffer9 : public IndexBuffer
     explicit IndexBuffer9(Renderer9 *const renderer);
     ~IndexBuffer9() override;
 
-    gl::Error initialize(unsigned int bufferSize, GLenum indexType, bool dynamic) override;
+    angle::Result initialize(const gl::Context *context,
+                             unsigned int bufferSize,
+                             GLenum indexType,
+                             bool dynamic) override;
 
-    gl::Error mapBuffer(unsigned int offset, unsigned int size, void **outMappedMemory) override;
-    gl::Error unmapBuffer() override;
+    angle::Result mapBuffer(const gl::Context *context,
+                            unsigned int offset,
+                            unsigned int size,
+                            void **outMappedMemory) override;
+    angle::Result unmapBuffer(const gl::Context *context) override;
 
     GLenum getIndexType() const override;
     unsigned int getBufferSize() const override;
-    gl::Error setSize(unsigned int bufferSize, GLenum indexType) override;
+    angle::Result setSize(const gl::Context *context,
+                          unsigned int bufferSize,
+                          GLenum indexType) override;
 
-    gl::Error discard() override;
+    angle::Result discard(const gl::Context *context) override;
 
     D3DFORMAT getIndexFormat() const;
     IDirect3DIndexBuffer9 *getBuffer() const;
@@ -44,6 +52,6 @@ class IndexBuffer9 : public IndexBuffer
     bool mDynamic;
 };
 
-}
+}  // namespace rx
 
-#endif // LIBANGLE_RENDERER_D3D_D3D9_INDEXBUFFER9_H_
+#endif  // LIBANGLE_RENDERER_D3D_D3D9_INDEXBUFFER9_H_

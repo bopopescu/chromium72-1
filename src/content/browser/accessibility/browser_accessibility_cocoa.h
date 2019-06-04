@@ -35,7 +35,7 @@ struct AXTextEdit {
 // This class converts it into a format Cocoa can query.
 @interface BrowserAccessibilityCocoa : NSObject {
  @private
-  content::BrowserAccessibility* browserAccessibility_;
+  content::BrowserAccessibility* owner_;
   base::scoped_nsobject<NSMutableArray> children_;
   // Stores the previous value of an edit field.
   base::string16 oldValue_;
@@ -62,7 +62,7 @@ struct AXTextEdit {
 - (content::BrowserAccessibilityDelegate*)delegate;
 
 // Get the BrowserAccessibility that this object wraps.
-- (content::BrowserAccessibility*)browserAccessibility;
+- (content::BrowserAccessibility*)owner;
 
 // Computes the text that was added or deleted in a text field after an edit.
 - (content::AXTextEdit)computeTextEdit;
@@ -70,9 +70,10 @@ struct AXTextEdit {
 // Determines if this object is alive, i.e. it hasn't been detached.
 - (BOOL)instanceActive;
 
-// Convert the local objet's origin to a global point.
-- (NSPoint)pointInScreen:(NSPoint)origin
-                    size:(NSSize)size;
+// Convert from the view's local coordinate system (with the origin in the upper
+// left) to the primary NSScreen coordinate system (with the origin in the lower
+// left).
+- (NSRect)rectInScreen:(gfx::Rect)rect;
 
 // Return the method name for the given attribute. For testing only.
 - (NSString*)methodNameForAttribute:(NSString*)attribute;
@@ -82,9 +83,6 @@ struct AXTextEdit {
 
 - (NSString*)valueForRange:(NSRange)range;
 - (NSAttributedString*)attributedValueForRange:(NSRange)range;
-
-- (BOOL)isRowHeaderForCurrentCell:(content::BrowserAccessibility*)header;
-- (BOOL)isColumnHeaderForCurrentCell:(content::BrowserAccessibility*)header;
 
 // Internally-used property.
 @property(nonatomic, readonly) NSPoint origin;

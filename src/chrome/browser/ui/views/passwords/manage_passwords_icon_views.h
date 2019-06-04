@@ -18,6 +18,8 @@ class CommandUpdater;
 class ManagePasswordsIconViews : public ManagePasswordsIconView,
                                  public PageActionIconView {
  public:
+  static const char kClassName[];
+
   ManagePasswordsIconViews(CommandUpdater* updater,
                            PageActionIconView::Delegate* delegate);
   ~ManagePasswordsIconViews() override;
@@ -27,7 +29,7 @@ class ManagePasswordsIconViews : public ManagePasswordsIconView,
 
   // PageActionIconView:
   views::BubbleDialogDelegateView* GetBubble() const override;
-  bool Refresh() override;
+  bool Update() override;
   void OnExecuting(PageActionIconView::ExecuteSource source) override;
   bool OnMousePressed(const ui::MouseEvent& event) override;
   bool OnKeyPressed(const ui::KeyEvent& event) override;
@@ -36,6 +38,7 @@ class ManagePasswordsIconViews : public ManagePasswordsIconView,
 
   // views::View:
   void AboutToRequestFocusFromTabTraversal(bool reverse) override;
+  const char* GetClassName() const override;
 
  private:
   friend class ManagePasswordsIconViewTest;

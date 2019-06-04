@@ -45,8 +45,9 @@ public final class OfflineItemBridge {
     private static OfflineItem createOfflineItemAndMaybeAddToList(ArrayList<OfflineItem> list,
             String nameSpace, String id, String title, String description,
             @OfflineItemFilter int filter, boolean isTransient, boolean isSuggested,
-            boolean isAccelerated, long totalSizeBytes, boolean externallyRemoved,
-            long creationTimeMs, long lastAccessedTimeMs, boolean isOpenable, String filePath,
+            boolean isAccelerated, boolean refreshVisuals, boolean promoteOrigin,
+            long totalSizeBytes, boolean externallyRemoved, long creationTimeMs,
+            long completionTimeMs, long lastAccessedTimeMs, boolean isOpenable, String filePath,
             String mimeType, String pageUrl, String originalUrl, boolean isOffTheRecord,
             @OfflineItemState int state, @PendingState int pendingState, boolean isResumable,
             boolean allowMetered, long receivedBytes, long progressValue, long progressMax,
@@ -60,9 +61,12 @@ public final class OfflineItemBridge {
         item.isTransient = isTransient;
         item.isSuggested = isSuggested;
         item.isAccelerated = isAccelerated;
+        item.refreshVisuals = refreshVisuals;
+        item.promoteOrigin = promoteOrigin;
         item.totalSizeBytes = totalSizeBytes;
         item.externallyRemoved = externallyRemoved;
         item.creationTimeMs = creationTimeMs;
+        item.completionTimeMs = completionTimeMs;
         item.lastAccessedTimeMs = lastAccessedTimeMs;
         item.isOpenable = isOpenable;
         item.filePath = filePath;

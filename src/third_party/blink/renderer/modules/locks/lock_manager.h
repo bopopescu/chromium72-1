@@ -34,18 +34,13 @@ class LockManager final : public ScriptWrappable,
                         ExceptionState&);
   ScriptPromise request(ScriptState*,
                         const String& name,
-                        const LockOptions&,
+                        const LockOptions*,
                         V8LockGrantedCallback*,
                         ExceptionState&);
 
   ScriptPromise query(ScriptState*, ExceptionState&);
 
   void Trace(blink::Visitor*) override;
-
-  // Wrapper tracing is needed for callbacks. The reference chain is
-  // NavigatorLocksImpl -> LockManager -> LockRequestImpl ->
-  // V8LockGrantedCallback.
-  void TraceWrappers(ScriptWrappableVisitor*) const override;
 
   // Terminate all outstanding requests when the context is destroyed, since
   // this can unblock requests by other contexts.

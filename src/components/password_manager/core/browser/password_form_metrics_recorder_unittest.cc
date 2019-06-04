@@ -6,14 +6,14 @@
 
 #include "base/logging.h"
 #include "base/metrics/metrics_hashes.h"
-#include "base/test/histogram_tester.h"
+#include "base/test/metrics/histogram_tester.h"
+#include "base/test/metrics/user_action_tester.h"
 #include "base/test/scoped_task_environment.h"
-#include "base/test/user_action_tester.h"
 #include "components/password_manager/core/browser/password_manager_metrics_util.h"
 #include "components/ukm/test_ukm_recorder.h"
-#include "components/ukm/ukm_source.h"
 #include "services/metrics/public/cpp/ukm_builders.h"
 #include "services/metrics/public/cpp/ukm_recorder.h"
+#include "services/metrics/public/cpp/ukm_source.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -93,7 +93,11 @@ TEST(PasswordFormMetricsRecorder, Generation) {
           /*is_main_frame_secure*/ true, &test_ukm_recorder);
       if (test.generation_available)
         recorder->MarkGenerationAvailable();
-      recorder->SetHasGeneratedPassword(test.has_generated_password);
+      if (test.has_generated_password) {
+        recorder->SetGeneratedPasswordStatus(
+            PasswordFormMetricsRecorder::GeneratedPasswordStatus::
+                kPasswordAccepted);
+      }
       switch (test.submission) {
         case PasswordFormMetricsRecorder::kSubmitResultNotSubmitted:
           // Do nothing.
@@ -674,6 +678,37 @@ TEST(PasswordFormMetricsRecorder, RecordShowManualFallbackForSavingLatestOnly) {
   test_ukm_recorder.ExpectEntryMetric(
       entries[0], UkmEntry::kSaving_ShowedManualFallbackForSavingName,
       1 + 2 + 4);
+}
+
+TEST(PasswordFormMetricsRecorder, FormChangeBitmapNoMetricRecorded) {
+  base::HistogramTester histogram_tester;
+  auto recorder =
+      CreatePasswordFormMetricsRecorder(true /*is_main_frame_secure*/, nullptr);
+  recorder.reset();
+  histogram_tester.ExpectTotalCount("PasswordManager.DynamicFormChanges", 0);
+}
+
+TEST(PasswordFormMetricsRecorder, FormChangeBitmapRecordedOnce) {
+  base::HistogramTester histogram_tester;
+  auto recorder =
+      CreatePasswordFormMetricsRecorder(true /*is_main_frame_secure*/, nullptr);
+  recorder->RecordFormChangeBitmask(PasswordFormMetricsRecorder::kFieldsNumber);
+  recorder.reset();
+  histogram_tester.ExpectUniqueSample("PasswordManager.DynamicFormChanges",
+                                      1 /* kFieldsNumber */, 1);
+}
+
+TEST(PasswordFormMetricsRecorder, FormChangeBitmapRecordedMultipleTimes) {
+  base::HistogramTester histogram_tester;
+  auto recorder =
+      CreatePasswordFormMetricsRecorder(true /*is_main_frame_secure*/, nullptr);
+  recorder->RecordFormChangeBitmask(PasswordFormMetricsRecorder::kFieldsNumber);
+  recorder->RecordFormChangeBitmask(
+      PasswordFormMetricsRecorder::kFormControlTypes);
+  recorder.reset();
+  uint32_t expected = 1 /* fields number */ | (1 << 3) /* control types */;
+  histogram_tester.ExpectUniqueSample("PasswordManager.DynamicFormChanges",
+                                      expected, 1);
 }
 
 }  // namespace password_manager

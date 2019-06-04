@@ -345,12 +345,7 @@ void MenuViewDragAndDropTestTestInMenuDrag::Step4() {
 // Disabled for being flaky. Tracked in:
 // TODO(erg): Fix DND tests on linux_aura. http://crbug.com/163931.
 // TODO(tapted): De-flake and run on Mac. http://crbug.com/449058.
-#if defined(OS_WIN)
-#define MAYBE_TestInMenuDrag TestInMenuDrag
-#else
-#define MAYBE_TestInMenuDrag DISABLED_TestInMenuDrag
-#endif
-VIEW_TEST(MenuViewDragAndDropTestTestInMenuDrag, MAYBE_TestInMenuDrag)
+VIEW_TEST(MenuViewDragAndDropTestTestInMenuDrag, DISABLED_TestInMenuDrag)
 
 class MenuViewDragAndDropTestNestedDrag : public MenuViewDragAndDropTest {
  public:
@@ -517,5 +512,10 @@ void MenuViewDragAndDropForDropCancel::DoTestWithMenuOpen() {
 
 // Test that if a menu is opened for a drop handled entirely by menu code, the
 // menu will try to close if it does not receive any drag updates.
-// If this flakes, disable and log details in http://crbug.com/523255.
-VIEW_TEST(MenuViewDragAndDropForDropCancel, MenuViewCancelsForOwnDrag)
+// Disabled for being flaky. Tracked in http://crbug.com/863296.
+#if defined(OS_MACOSX)
+#define MAYBE_MenuViewCancelsForOwnDrag DISABLED_MenuViewCancelsForOwnDrag
+#else
+#define MAYBE_MenuViewCancelsForOwnDrag MenuViewCancelsForOwnDrag
+#endif
+VIEW_TEST(MenuViewDragAndDropForDropCancel, MAYBE_MenuViewCancelsForOwnDrag)

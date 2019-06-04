@@ -27,6 +27,7 @@
 #define THIRD_PARTY_BLINK_RENDERER_CORE_FRAME_HISTORY_H_
 
 #include "base/gtest_prod_util.h"
+#include "third_party/blink/public/web/web_frame_load_type.h"
 #include "third_party/blink/renderer/bindings/core/v8/serialization/serialized_script_value.h"
 #include "third_party/blink/renderer/core/dom/context_lifecycle_observer.h"
 #include "third_party/blink/renderer/core/loader/frame_loader_types.h"
@@ -50,7 +51,11 @@ class CORE_EXPORT History final : public ScriptWrappable,
   USING_GARBAGE_COLLECTED_MIXIN(History);
 
  public:
-  static History* Create(LocalFrame* frame) { return new History(frame); }
+  static History* Create(LocalFrame* frame) {
+    return MakeGarbageCollected<History>(frame);
+  }
+
+  explicit History(LocalFrame*);
 
   unsigned length(ExceptionState&) const;
   SerializedScriptValue* state(ExceptionState&);
@@ -67,10 +72,7 @@ class CORE_EXPORT History final : public ScriptWrappable,
   void replaceState(scoped_refptr<SerializedScriptValue> data,
                     const String& title,
                     const String& url,
-                    ExceptionState& exception_state) {
-    StateObjectAdded(std::move(data), title, url, ScrollRestorationInternal(),
-                     kFrameLoadTypeReplaceCurrentItem, exception_state);
-  }
+                    ExceptionState& exception_state);
 
   void setScrollRestoration(const String& value, ExceptionState&);
   String scrollRestoration(ExceptionState&);
@@ -85,8 +87,6 @@ class CORE_EXPORT History final : public ScriptWrappable,
   FRIEND_TEST_ALL_PREFIXES(HistoryTest, CanChangeToURLInFileOrigin);
   FRIEND_TEST_ALL_PREFIXES(HistoryTest, CanChangeToURLInUniqueOrigin);
 
-  explicit History(LocalFrame*);
-
   static bool CanChangeToUrl(const KURL&,
                              const SecurityOrigin*,
                              const KURL& document_url);
@@ -97,18 +97,12 @@ class CORE_EXPORT History final : public ScriptWrappable,
                         const String& title,
                         const String& url,
                         HistoryScrollRestorationType,
-                        FrameLoadType,
+                        WebFrameLoadType,
                         ExceptionState&);
   SerializedScriptValue* StateInternal() const;
   HistoryScrollRestorationType ScrollRestorationInternal() const;
 
-  bool ShouldThrottleStateObjectChanges();
-
   scoped_refptr<SerializedScriptValue> last_state_object_requested_;
-  struct {
-    int count;
-    TimeTicks last_updated;
-  } state_flood_guard;
 };
 
 }  // namespace blink

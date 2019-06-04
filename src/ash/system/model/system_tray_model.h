@@ -9,6 +9,7 @@
 
 #include "ash/public/interfaces/system_tray.mojom.h"
 #include "base/macros.h"
+#include "mojo/public/cpp/bindings/binding_set.h"
 
 namespace ash {
 
@@ -17,14 +18,16 @@ class EnterpriseDomainModel;
 class SessionLengthLimitModel;
 class TracingModel;
 class UpdateModel;
+class VirtualKeyboardModel;
 
 // Top level model of SystemTray.
-// TODO(tetsui): Eventually migrate all of the mojom::SystemTray implementation
-// from SystemTrayController, and bind SystemTrayRequest directly.
 class SystemTrayModel : public mojom::SystemTray {
  public:
   SystemTrayModel();
   ~SystemTrayModel() override;
+
+  // Binds the mojom::SystemTray interface to this object.
+  void BindRequest(mojom::SystemTrayRequest request);
 
   // mojom::SystemTray:
   void SetClient(mojom::SystemTrayClientPtr client) override;
@@ -34,10 +37,18 @@ class SystemTrayModel : public mojom::SystemTray {
   void SetEnterpriseDisplayDomain(const std::string& enterprise_display_domain,
                                   bool active_directory_managed) override;
   void SetPerformanceTracingIconVisible(bool visible) override;
+  void SetLocaleList(std::vector<mojom::LocaleInfoPtr> locale_list,
+                     const std::string& current_locale_iso_code) override;
   void ShowUpdateIcon(mojom::UpdateSeverity severity,
                       bool factory_reset_required,
+                      bool rollback,
                       mojom::UpdateType update_type) override;
+  void SetUpdateNotificationState(
+      mojom::NotificationStyle style,
+      const base::string16& notification_title,
+      const base::string16& notification_body) override;
   void SetUpdateOverCellularAvailableIconVisible(bool visible) override;
+  void ShowVolumeSliderBubble() override;
 
   ClockModel* clock() { return clock_.get(); }
   EnterpriseDomainModel* enterprise_domain() {
@@ -48,6 +59,16 @@ class SystemTrayModel : public mojom::SystemTray {
   }
   TracingModel* tracing() { return tracing_.get(); }
   UpdateModel* update_model() { return update_model_.get(); }
+  VirtualKeyboardModel* virtual_keyboard() { return virtual_keyboard_.get(); }
+
+  const std::vector<mojom::LocaleInfoPtr>& locale_list() {
+    return locale_list_;
+  }
+  std::string current_locale_iso_code() const {
+    return current_locale_iso_code_;
+  }
+
+  const mojom::SystemTrayClientPtr& client_ptr() { return client_ptr_; }
 
  private:
   std::unique_ptr<ClockModel> clock_;
@@ -55,9 +76,19 @@ class SystemTrayModel : public mojom::SystemTray {
   std::unique_ptr<SessionLengthLimitModel> session_length_limit_;
   std::unique_ptr<TracingModel> tracing_;
   std::unique_ptr<UpdateModel> update_model_;
+  std::unique_ptr<VirtualKeyboardModel> virtual_keyboard_;
+
+  std::vector<mojom::LocaleInfoPtr> locale_list_;
+  std::string current_locale_iso_code_;
 
   // TODO(tetsui): Add following as a sub-model of SystemTrayModel:
   // * BluetoothModel
+
+  // Bindings for users of the mojo interface.
+  mojo::BindingSet<mojom::SystemTray> bindings_;
+
+  // Client interface in chrome browser. May be null in tests.
+  mojom::SystemTrayClientPtr client_ptr_;
 
   DISALLOW_COPY_AND_ASSIGN(SystemTrayModel);
 };

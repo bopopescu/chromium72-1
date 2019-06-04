@@ -19,7 +19,7 @@
 #include "base/values.h"
 #include "chrome/browser/media/router/media_router_metrics.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/signin/signin_manager_factory.h"
+#include "chrome/browser/signin/identity_manager_factory.h"
 #include "chrome/browser/sync/profile_sync_service_factory.h"
 #include "chrome/browser/ui/webui/media_router/media_router_ui.h"
 #include "chrome/common/chrome_features.h"
@@ -28,9 +28,9 @@
 #include "components/browser_sync/profile_sync_service.h"
 #include "components/prefs/pref_service.h"
 #include "components/signin/core/browser/account_tracker_service.h"
-#include "components/signin/core/browser/signin_manager.h"
 #include "content/public/browser/web_ui.h"
 #include "extensions/common/constants.h"
+#include "services/identity/public/cpp/identity_manager.h"
 #include "ui/base/l10n/l10n_util.h"
 
 namespace media_router {
@@ -541,7 +541,7 @@ void MediaRouterWebUIMessageHandler::OnRequestInitialData(
       media_router_ui_->routes_and_cast_modes()));
   initial_data.Set("routes", std::move(routes));
 
-  const std::set<MediaCastMode> cast_modes = media_router_ui_->cast_modes();
+  const std::set<MediaCastMode>& cast_modes = media_router_ui_->GetCastModes();
   std::unique_ptr<base::ListValue> cast_modes_list(CastModesToValue(
       cast_modes, media_router_ui_->GetPresentationRequestSourceName(),
       media_router_ui_->forced_cast_mode()));
@@ -610,7 +610,7 @@ void MediaRouterWebUIMessageHandler::OnAcknowledgeFirstRunFlow(
     const base::ListValue* args) {
   DVLOG(1) << "OnAcknowledgeFirstRunFlow";
   Profile::FromWebUI(web_ui())->GetPrefs()->SetBoolean(
-      prefs::kMediaRouterFirstRunFlowAcknowledged, true);
+      ::prefs::kMediaRouterFirstRunFlowAcknowledged, true);
 
   bool enabled_cloud_services = false;
   // Do not set the relevant cloud services prefs if the user was not shown
@@ -621,9 +621,9 @@ void MediaRouterWebUIMessageHandler::OnAcknowledgeFirstRunFlow(
   }
 
   PrefService* pref_service = Profile::FromWebUI(web_ui())->GetPrefs();
-  pref_service->SetBoolean(prefs::kMediaRouterEnableCloudServices,
+  pref_service->SetBoolean(::prefs::kMediaRouterEnableCloudServices,
                            enabled_cloud_services);
-  pref_service->SetBoolean(prefs::kMediaRouterCloudServicesPrefSet, true);
+  pref_service->SetBoolean(::prefs::kMediaRouterCloudServicesPrefSet, true);
 }
 
 void MediaRouterWebUIMessageHandler::OnActOnIssue(const base::ListValue* args) {
@@ -645,7 +645,7 @@ void MediaRouterWebUIMessageHandler::OnActOnIssue(const base::ListValue* args) {
       static_cast<IssueInfo::Action>(action_type_num);
   if (ActOnIssueType(action_type, args_dict))
     DVLOG(1) << "ActOnIssueType failed for Issue ID " << issue_id;
-  media_router_ui_->ClearIssue(issue_id);
+  media_router_ui_->RemoveIssue(issue_id);
 }
 
 void MediaRouterWebUIMessageHandler::OnJoinRoute(const base::ListValue* args) {
@@ -700,7 +700,11 @@ void MediaRouterWebUIMessageHandler::OnCloseRoute(const base::ListValue* args) {
     return;
   }
   media_router_ui_->TerminateRoute(route_id);
-  UMA_HISTOGRAM_BOOLEAN("MediaRouter.Ui.Action.StopRoute", !is_local);
+  if (is_local) {
+    MediaRouterMetrics::RecordStopLocalRoute();
+  } else {
+    MediaRouterMetrics::RecordStopRemoteRoute();
+  }
 }
 
 void MediaRouterWebUIMessageHandler::OnCloseDialog(
@@ -737,8 +741,7 @@ void MediaRouterWebUIMessageHandler::OnReportClickedSinkIndex(
     DVLOG(1) << "Unable to extract args.";
     return;
   }
-  base::UmaHistogramSparse("MediaRouter.Ui.Action.StartLocalPosition",
-                           std::min(index, 100));
+  MediaRouterMetrics::RecordStartRouteDeviceIndex(index);
 }
 
 void MediaRouterWebUIMessageHandler::OnReportFilter(const base::ListValue*) {
@@ -800,9 +803,8 @@ void MediaRouterWebUIMessageHandler::OnReportRouteCreation(
     DVLOG(1) << "Unable to extract args.";
     return;
   }
-
-  UMA_HISTOGRAM_BOOLEAN("MediaRouter.Ui.Action.StartLocalSessionSuccessful",
-                        route_created_successfully);
+  MediaRouterMetrics::RecordStartLocalSessionSuccessful(
+      route_created_successfully);
 }
 
 void MediaRouterWebUIMessageHandler::OnReportRouteCreationOutcome(
@@ -841,7 +843,7 @@ void MediaRouterWebUIMessageHandler::OnReportSinkCount(
     DVLOG(1) << "Unable to extract args.";
     return;
   }
-  UMA_HISTOGRAM_COUNTS_100("MediaRouter.Ui.Device.Count", sink_count);
+  MediaRouterMetrics::RecordDeviceCount(sink_count);
 }
 
 void MediaRouterWebUIMessageHandler::OnReportTimeToClickSink(
@@ -852,8 +854,8 @@ void MediaRouterWebUIMessageHandler::OnReportTimeToClickSink(
     DVLOG(1) << "Unable to extract args.";
     return;
   }
-  UMA_HISTOGRAM_TIMES("MediaRouter.Ui.Action.StartLocal.Latency",
-                      base::TimeDelta::FromMillisecondsD(time_to_click));
+  MediaRouterMetrics::RecordStartLocalSessionLatency(
+      base::TimeDelta::FromMillisecondsD(time_to_click));
 }
 
 void MediaRouterWebUIMessageHandler::OnReportWebUIRouteControllerLoaded(
@@ -876,8 +878,8 @@ void MediaRouterWebUIMessageHandler::OnReportTimeToInitialActionClose(
     DVLOG(1) << "Unable to extract args.";
     return;
   }
-  UMA_HISTOGRAM_TIMES("MediaRouter.Ui.Action.CloseLatency",
-                      base::TimeDelta::FromMillisecondsD(time_to_close));
+  MediaRouterMetrics::RecordCloseDialogLatency(
+      base::TimeDelta::FromMillisecondsD(time_to_close));
 }
 
 void MediaRouterWebUIMessageHandler::OnSearchSinksAndCreateRoute(
@@ -1068,23 +1070,26 @@ void MediaRouterWebUIMessageHandler::MaybeUpdateFirstRunFlowData() {
   PrefService* pref_service = profile->GetPrefs();
 
   bool first_run_flow_acknowledged =
-      pref_service->GetBoolean(prefs::kMediaRouterFirstRunFlowAcknowledged);
+      pref_service->GetBoolean(::prefs::kMediaRouterFirstRunFlowAcknowledged);
   bool show_cloud_pref = false;
   // Cloud services preference is shown if user is logged in. If the user
   // enables sync after acknowledging the first run flow, this is treated as
   // the user opting into Google services, including cloud services, if the
   // browser is a Chrome branded build.
-  if (!pref_service->GetBoolean(prefs::kMediaRouterCloudServicesPrefSet)) {
-    SigninManagerBase* signin_manager =
-        SigninManagerFactory::GetForProfile(profile);
-    if (signin_manager && signin_manager->IsAuthenticated()) {
+  if (!pref_service->GetBoolean(::prefs::kMediaRouterCloudServicesPrefSet)) {
+    identity::IdentityManager* identity_manager =
+        IdentityManagerFactory::GetForProfile(profile);
+    if (identity_manager && identity_manager->HasPrimaryAccount()) {
       // If the user had previously acknowledged the first run flow without
       // being shown the cloud services option, and is now logged in with sync
       // enabled, turn on cloud services.
       if (first_run_flow_acknowledged &&
-          ProfileSyncServiceFactory::GetForProfile(profile)->IsSyncActive()) {
-        pref_service->SetBoolean(prefs::kMediaRouterEnableCloudServices, true);
-        pref_service->SetBoolean(prefs::kMediaRouterCloudServicesPrefSet, true);
+          ProfileSyncServiceFactory::GetForProfile(profile)
+              ->IsSyncFeatureActive()) {
+        pref_service->SetBoolean(::prefs::kMediaRouterEnableCloudServices,
+                                 true);
+        pref_service->SetBoolean(::prefs::kMediaRouterCloudServicesPrefSet,
+                                 true);
         // Return early since the first run flow won't be surfaced.
         return;
       }
@@ -1112,10 +1117,10 @@ void MediaRouterWebUIMessageHandler::MaybeUpdateFirstRunFlowData() {
 }
 
 AccountInfo MediaRouterWebUIMessageHandler::GetAccountInfo() {
-  SigninManagerBase* signin_manager =
-      SigninManagerFactory::GetForProfile(Profile::FromWebUI(web_ui()));
-  return signin_manager ? signin_manager->GetAuthenticatedAccountInfo()
-                        : AccountInfo();
+  identity::IdentityManager* identity_manager =
+      IdentityManagerFactory::GetForProfile(Profile::FromWebUI(web_ui()));
+  return identity_manager ? identity_manager->GetPrimaryAccountInfo()
+                          : AccountInfo();
 }
 
 int MediaRouterWebUIMessageHandler::CurrentCastModeForRouteId(

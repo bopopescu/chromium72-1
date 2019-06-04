@@ -32,6 +32,7 @@
 #include "third_party/blink/renderer/core/dom/dom_implementation.h"
 #include "third_party/blink/renderer/platform/loader/fetch/resource.h"
 #include "third_party/blink/renderer/platform/loader/fetch/resource_response.h"
+#include "third_party/blink/renderer/platform/network/encoded_form_data.h"
 #include "third_party/blink/renderer/platform/shared_buffer.h"
 
 namespace blink {
@@ -45,7 +46,8 @@ XHRReplayData* XHRReplayData::Create(const AtomicString& method,
                                      const KURL& url,
                                      bool async,
                                      bool include_credentials) {
-  return new XHRReplayData(method, url, async, include_credentials);
+  return MakeGarbageCollected<XHRReplayData>(method, url, async,
+                                             include_credentials);
 }
 
 void XHRReplayData::AddHeader(const AtomicString& key,
@@ -201,8 +203,8 @@ void NetworkResourcesData::ResourceCreated(
     const KURL& requested_url,
     scoped_refptr<EncodedFormData> post_data) {
   EnsureNoDataForRequestId(request_id);
-  ResourceData* data =
-      new ResourceData(this, context, request_id, loader_id, requested_url);
+  ResourceData* data = MakeGarbageCollected<ResourceData>(
+      this, context, request_id, loader_id, requested_url);
   request_id_to_resource_data_map_.Set(request_id, data);
   if (post_data &&
       PrepareToAddResourceData(request_id, post_data->SizeInBytes())) {
@@ -221,23 +223,6 @@ void NetworkResourcesData::ResponseReceived(const String& request_id,
   resource_data->SetTextEncodingName(response.TextEncodingName());
   resource_data->SetHTTPStatusCode(response.HttpStatusCode());
   resource_data->SetRawHeaderSize(response.EncodedDataLength());
-
-  String file_path = response.DownloadedFilePath();
-  if (!file_path.IsEmpty()) {
-    std::unique_ptr<BlobData> blob_data =
-        BlobData::CreateForFileWithUnknownSize(file_path);
-    AtomicString mime_type;
-    if (response.IsHTTP())
-      mime_type = ExtractMIMETypeFromMediaType(
-          response.HttpHeaderField(HTTPNames::Content_Type));
-    if (mime_type.IsEmpty())
-      mime_type = response.MimeType();
-    if (mime_type.IsEmpty())
-      mime_type = AtomicString("text/plain");
-    blob_data->SetContentType(mime_type);
-    resource_data->SetDownloadedFileBlob(
-        BlobDataHandle::Create(std::move(blob_data), -1));
-  }
 }
 
 void NetworkResourcesData::BlobReceived(const String& request_id,
@@ -323,12 +308,8 @@ void NetworkResourcesData::MaybeAddResourceData(
   DCHECK(data);
   if (ResourceData* resource_data =
           PrepareToAddResourceData(request_id, data->size())) {
-    data->ForEachSegment([&resource_data](const char* segment,
-                                          size_t segment_size,
-                                          size_t segment_offset) {
-      resource_data->AppendData(segment, segment_size);
-      return true;
-    });
+    for (const auto& span : *data)
+      resource_data->AppendData(span.data(), span.size());
   }
 }
 
@@ -388,20 +369,21 @@ NetworkResourcesData::Resources() {
   return result;
 }
 
-int NetworkResourcesData::GetAndClearPendingEncodedDataLength(
+int64_t NetworkResourcesData::GetAndClearPendingEncodedDataLength(
     const String& request_id) {
   ResourceData* resource_data = ResourceDataForRequestId(request_id);
   if (!resource_data)
     return 0;
 
-  int pending_encoded_data_length = resource_data->PendingEncodedDataLength();
+  int64_t pending_encoded_data_length =
+      resource_data->PendingEncodedDataLength();
   resource_data->ClearPendingEncodedDataLength();
   return pending_encoded_data_length;
 }
 
 void NetworkResourcesData::AddPendingEncodedDataLength(
     const String& request_id,
-    int encoded_data_length) {
+    size_t encoded_data_length) {
   ResourceData* resource_data = ResourceDataForRequestId(request_id);
   if (!resource_data)
     return;

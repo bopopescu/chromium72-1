@@ -13,41 +13,24 @@
 
 namespace keyboard {
 
-KeyboardUI::KeyboardUI() : keyboard_controller_(nullptr) {}
-KeyboardUI::~KeyboardUI() {}
+KeyboardUI::KeyboardUI() = default;
 
-void KeyboardUI::ShowKeyboardContainer(aura::Window* container) {
-  if (HasContentsWindow()) {
-    {
-      TRACE_EVENT0("vk", "ShowKeyboardContainerWindow");
-      GetContentsWindow()->Show();
-    }
-    {
-      TRACE_EVENT0("vk", "ShowKeyboardContainer");
-      container->Show();
-    }
+KeyboardUI::~KeyboardUI() = default;
+
+void KeyboardUI::ShowKeyboardWindow() {
+  DVLOG(1) << "ShowKeyboardWindow";
+  aura::Window* window = GetKeyboardWindow();
+  if (window) {
+    TRACE_EVENT0("vk", "ShowKeyboardWindow");
+    window->Show();
   }
 }
 
-void KeyboardUI::HideKeyboardContainer(aura::Window* container) {
-  if (HasContentsWindow()) {
-    container->Hide();
-    GetContentsWindow()->Hide();
-  }
-}
-
-void KeyboardUI::EnsureCaretInWorkArea(const gfx::Rect& occluded_bounds) {
-  if (!GetInputMethod())
-    return;
-
-  TRACE_EVENT0("vk", "EnsureCaretInWorkArea");
-
-  if (keyboard_controller_->IsOverscrollAllowed()) {
-    GetInputMethod()->SetOnScreenKeyboardBounds(occluded_bounds);
-  } else if (GetInputMethod()->GetTextInputClient()) {
-    GetInputMethod()->GetTextInputClient()->EnsureCaretNotInRect(
-        occluded_bounds);
-  }
+void KeyboardUI::HideKeyboardWindow() {
+  DVLOG(1) << "HideKeyboardWindow";
+  aura::Window* window = GetKeyboardWindow();
+  if (window)
+    window->Hide();
 }
 
 void KeyboardUI::SetController(KeyboardController* controller) {

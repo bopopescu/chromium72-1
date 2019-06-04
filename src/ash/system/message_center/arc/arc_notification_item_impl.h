@@ -37,7 +37,9 @@ class ArcNotificationItemImpl : public ArcNotificationItem {
   void Close(bool by_user) override;
   void Click() override;
   void OpenSettings() override;
+  void OpenSnooze() override;
   void ToggleExpansion() override;
+  void OnRemoteInputActivationChanged(bool activated) override;
   void AddObserver(Observer* observer) override;
   void RemoveObserver(Observer* observer) override;
   void IncrementWindowRefCount() override;
@@ -46,10 +48,10 @@ class ArcNotificationItemImpl : public ArcNotificationItem {
   arc::mojom::ArcNotificationType GetNotificationType() const override;
   arc::mojom::ArcNotificationExpandState GetExpandState() const override;
   bool IsManuallyExpandedOrCollapsed() const override;
-  arc::mojom::ArcNotificationShownContents GetShownContents() const override;
   gfx::Rect GetSwipeInputRect() const override;
   const std::string& GetNotificationKey() const override;
   const std::string& GetNotificationId() const override;
+  void CancelPress() override;
 
  private:
   ArcNotificationManager* const manager_;
@@ -71,7 +73,7 @@ class ArcNotificationItemImpl : public ArcNotificationItem {
   // The reference counter of the window.
   int window_ref_count_ = 0;
 
-  base::ObserverList<Observer> observers_;
+  base::ObserverList<Observer>::Unchecked observers_;
 
   const AccountId profile_id_;
   const std::string notification_key_;

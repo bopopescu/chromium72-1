@@ -13,6 +13,10 @@
 #include "components/viz/host/viz_host_export.h"
 #include "ui/gfx/geometry/point_f.h"
 
+namespace content {
+class HitTestRegionObserver;
+}
+
 namespace viz {
 
 struct Target {
@@ -92,13 +96,22 @@ class VIZ_HOST_EXPORT HitTestQuery {
   bool GetTransformToTarget(const FrameSinkId& target,
                             gfx::Transform* transform) const;
 
+  // Returns whether client has submitted hit test data for |frame_sink_id|.
+  // Note that this returns false even if the embedder has submitted hit-test
+  // data for |frame_sink_id|.
+  bool ContainsActiveFrameSinkId(const FrameSinkId& frame_sink_id) const;
+
+  // Returns hit-test data, using indentation to visualize the tree structure.
+  std::string PrintHitTestData() const;
+
  private:
+  friend class content::HitTestRegionObserver;
   // Helper function to find |target| for |location_in_parent| in the
   // |region_index|, returns true if a target is found and false otherwise.
   // |location_in_parent| is in the coordinate space of |region_index|'s parent.
   bool FindTargetInRegionForLocation(EventSource event_source,
                                      const gfx::PointF& location_in_parent,
-                                     uint32_t region_index,
+                                     size_t region_index,
                                      Target* target) const;
 
   // Transform |location_in_target| to be in |region_index|'s coordinate space.
@@ -108,17 +121,18 @@ class VIZ_HOST_EXPORT HitTestQuery {
       EventSource event_source,
       const std::vector<FrameSinkId>& target_ancestors,
       size_t target_ancestor,
-      uint32_t region_index,
+      size_t region_index,
       gfx::PointF* location_in_target) const;
 
   bool GetTransformToTargetRecursively(const FrameSinkId& target,
-                                       uint32_t region_index,
+                                       size_t region_index,
                                        gfx::Transform* transform) const;
 
   void ReceivedBadMessageFromGpuProcess() const;
 
+  void RecordSlowPathHitTestReasons(uint32_t) const;
+
   std::vector<AggregatedHitTestRegion> hit_test_data_;
-  uint32_t hit_test_data_size_ = 0;
 
   // Log bad message and shut down Viz process when it is compromised.
   base::RepeatingClosure bad_message_gpu_callback_;

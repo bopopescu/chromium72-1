@@ -9,15 +9,14 @@ import android.view.InputDevice;
 import android.view.KeyEvent;
 import android.view.MotionEvent;
 
+import org.chromium.base.UserData;
 import org.chromium.base.annotations.CalledByNative;
 import org.chromium.base.annotations.JNINamespace;
 import org.chromium.content.browser.input.ImeAdapterImpl;
 import org.chromium.content.browser.webcontents.WebContentsImpl;
-import org.chromium.content.browser.webcontents.WebContentsUserData;
-import org.chromium.content_public.browser.ContentViewCore;
+import org.chromium.content.browser.webcontents.WebContentsImpl.UserDataFactory;
+import org.chromium.content_public.browser.ViewEventSink.InternalAccessDelegate;
 import org.chromium.content_public.browser.WebContents;
-import org.chromium.content_public.browser.WebContents.UserDataFactory;
-import org.chromium.device.gamepad.GamepadList;
 import org.chromium.ui.base.EventForwarder;
 
 /**
@@ -25,9 +24,9 @@ import org.chromium.ui.base.EventForwarder;
  * content components.
  */
 @JNINamespace("content")
-public class ContentUiEventHandler {
+public class ContentUiEventHandler implements UserData {
     private final WebContentsImpl mWebContents;
-    private ContentViewCore.InternalAccessDelegate mEventDelegate;
+    private InternalAccessDelegate mEventDelegate;
     private long mNativeContentUiEventHandler;
 
     private static final class UserDataFactoryLazyHolder {
@@ -36,8 +35,8 @@ public class ContentUiEventHandler {
     }
 
     public static ContentUiEventHandler fromWebContents(WebContents webContents) {
-        return WebContentsUserData.fromWebContents(
-                webContents, ContentUiEventHandler.class, UserDataFactoryLazyHolder.INSTANCE);
+        return ((WebContentsImpl) webContents)
+                .getOrSetUserData(ContentUiEventHandler.class, UserDataFactoryLazyHolder.INSTANCE);
     }
 
     public ContentUiEventHandler(WebContents webContents) {
@@ -45,7 +44,7 @@ public class ContentUiEventHandler {
         mNativeContentUiEventHandler = nativeInit(webContents);
     }
 
-    public void setEventDelegate(ContentViewCore.InternalAccessDelegate delegate) {
+    public void setEventDelegate(InternalAccessDelegate delegate) {
         mEventDelegate = delegate;
     }
 
@@ -61,7 +60,7 @@ public class ContentUiEventHandler {
 
     @CalledByNative
     private boolean onGenericMotionEvent(MotionEvent event) {
-        if (GamepadList.onGenericMotionEvent(event)) return true;
+        if (Gamepad.from(mWebContents).onGenericMotionEvent(event)) return true;
         if (JoystickHandler.fromWebContents(mWebContents).onGenericMotionEvent(event)) return true;
         if ((event.getSource() & InputDevice.SOURCE_CLASS_POINTER) != 0) {
             switch (event.getActionMasked()) {
@@ -111,17 +110,12 @@ public class ContentUiEventHandler {
 
     @CalledByNative
     private boolean onKeyUp(int keyCode, KeyEvent event) {
-        TapDisambiguator tapDisambiguator = TapDisambiguator.fromWebContents(mWebContents);
-        if (tapDisambiguator.isShowing() && keyCode == KeyEvent.KEYCODE_BACK) {
-            tapDisambiguator.backButtonPressed();
-            return true;
-        }
         return mEventDelegate.super_onKeyUp(keyCode, event);
     }
 
     @CalledByNative
     private boolean dispatchKeyEvent(KeyEvent event) {
-        if (GamepadList.dispatchKeyEvent(event)) return true;
+        if (Gamepad.from(mWebContents).dispatchKeyEvent(event)) return true;
         if (!shouldPropagateKeyEvent(event)) {
             return mEventDelegate.super_dispatchKeyEvent(event);
         }

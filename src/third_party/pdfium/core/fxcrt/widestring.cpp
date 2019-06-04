@@ -12,7 +12,6 @@
 #include <cctype>
 #include <cwctype>
 
-#include "core/fxcrt/cfx_utf8decoder.h"
 #include "core/fxcrt/fx_codepage.h"
 #include "core/fxcrt/fx_extension.h"
 #include "core/fxcrt/fx_safe_types.h"
@@ -277,43 +276,6 @@ Optional<WideString> TryVSWPrintf(size_t size,
   return {str};
 }
 
-#ifndef NDEBUG
-bool IsValidWideCodePage(uint16_t codepage) {
-  switch (codepage) {
-    case FX_CODEPAGE_DefANSI:
-    case FX_CODEPAGE_ShiftJIS:
-    case FX_CODEPAGE_ChineseSimplified:
-    case FX_CODEPAGE_Hangul:
-    case FX_CODEPAGE_ChineseTraditional:
-      return true;
-    default:
-      return false;
-  }
-}
-#endif
-
-WideString GetWideString(uint16_t codepage, const ByteStringView& bstr) {
-#ifndef NDEBUG
-  ASSERT(IsValidWideCodePage(codepage));
-#endif
-
-  int src_len = bstr.GetLength();
-  int dest_len = FXSYS_MultiByteToWideChar(
-      codepage, 0, bstr.unterminated_c_str(), src_len, nullptr, 0);
-  if (!dest_len)
-    return WideString();
-
-  WideString wstr;
-  {
-    // Span's lifetime must end before ReleaseBuffer() below.
-    pdfium::span<wchar_t> dest_buf = wstr.GetBuffer(dest_len);
-    FXSYS_MultiByteToWideChar(codepage, 0, bstr.unterminated_c_str(), src_len,
-                              dest_buf.data(), dest_len);
-  }
-  wstr.ReleaseBuffer(dest_len);
-  return wstr;
-}
-
 }  // namespace
 
 namespace fxcrt {
@@ -441,9 +403,16 @@ const WideString& WideString::operator=(const WideStringView& stringSrc) {
   return *this;
 }
 
-const WideString& WideString::operator=(const WideString& stringSrc) {
-  if (m_pData != stringSrc.m_pData)
-    m_pData = stringSrc.m_pData;
+const WideString& WideString::operator=(const WideString& that) {
+  if (m_pData != that.m_pData)
+    m_pData = that.m_pData;
+
+  return *this;
+}
+
+const WideString& WideString::operator=(WideString&& that) {
+  if (m_pData != that.m_pData)
+    m_pData = std::move(that.m_pData);
 
   return *this;
 }
@@ -662,11 +631,49 @@ void WideString::Concat(const wchar_t* pSrcData, size_t nSrcLen) {
   m_pData.Swap(pNewData);
 }
 
-ByteString WideString::UTF8Encode() const {
+intptr_t WideString::ReferenceCountForTesting() const {
+  return m_pData ? m_pData->m_nRefs : 0;
+}
+
+bool WideString::IsASCII() const {
+  for (wchar_t wc : *this) {
+    if (wc <= 0 || wc > 127)  // Questionable signedness of wchar_t.
+      return false;
+  }
+  return true;
+}
+
+ByteString WideString::ToASCII() const {
+  ByteString result;
+  result.Reserve(GetLength());
+  for (wchar_t wc : *this)
+    result.InsertAtBack(static_cast<char>(wc & 0x7f));
+  return result;
+}
+
+ByteString WideString::ToDefANSI() const {
+  int src_len = GetLength();
+  int dest_len = FXSYS_WideCharToMultiByte(
+      FX_CODEPAGE_DefANSI, 0, c_str(), src_len, nullptr, 0, nullptr, nullptr);
+  if (!dest_len)
+    return ByteString();
+
+  ByteString bstr;
+  {
+    // Span's lifetime must end before ReleaseBuffer() below.
+    pdfium::span<char> dest_buf = bstr.GetBuffer(dest_len);
+    FXSYS_WideCharToMultiByte(FX_CODEPAGE_DefANSI, 0, c_str(), src_len,
+                              dest_buf.data(), dest_len, nullptr, nullptr);
+  }
+  bstr.ReleaseBuffer(dest_len);
+  return bstr;
+}
+
+ByteString WideString::ToUTF8() const {
   return FX_UTF8Encode(AsStringView());
 }
 
-ByteString WideString::UTF16LE_Encode() const {
+ByteString WideString::ToUTF16LE() const {
   if (!m_pData)
     return ByteString("\0\0", 2);
 
@@ -872,26 +879,36 @@ size_t WideString::Replace(const WideStringView& pOld,
 }
 
 // static
-WideString WideString::FromLocal(const ByteStringView& str) {
-  return FromCodePage(str, 0);
+WideString WideString::FromASCII(const ByteStringView& bstr) {
+  WideString result;
+  result.Reserve(bstr.GetLength());
+  for (char c : bstr)
+    result.InsertAtBack(static_cast<wchar_t>(c & 0x7f));
+  return result;
 }
 
 // static
-WideString WideString::FromCodePage(const ByteStringView& str,
-                                    uint16_t codepage) {
-  return GetWideString(codepage, str);
+WideString WideString::FromDefANSI(const ByteStringView& bstr) {
+  int src_len = bstr.GetLength();
+  int dest_len = FXSYS_MultiByteToWideChar(
+      FX_CODEPAGE_DefANSI, 0, bstr.unterminated_c_str(), src_len, nullptr, 0);
+  if (!dest_len)
+    return WideString();
+
+  WideString wstr;
+  {
+    // Span's lifetime must end before ReleaseBuffer() below.
+    pdfium::span<wchar_t> dest_buf = wstr.GetBuffer(dest_len);
+    FXSYS_MultiByteToWideChar(FX_CODEPAGE_DefANSI, 0, bstr.unterminated_c_str(),
+                              src_len, dest_buf.data(), dest_len);
+  }
+  wstr.ReleaseBuffer(dest_len);
+  return wstr;
 }
 
 // static
 WideString WideString::FromUTF8(const ByteStringView& str) {
-  if (str.IsEmpty())
-    return WideString();
-
-  CFX_UTF8Decoder decoder;
-  for (size_t i = 0; i < str.GetLength(); i++)
-    decoder.Input(str[i]);
-
-  return WideString(decoder.GetResult());
+  return FX_UTF8Decode(str);
 }
 
 // static
@@ -1031,46 +1048,8 @@ void WideString::TrimRight(const WideStringView& targets) {
   }
 }
 
-float FX_wtof(const wchar_t* str, int len) {
-  if (len == 0) {
-    return 0.0;
-  }
-  int cc = 0;
-  bool bNegative = false;
-  if (str[0] == '+') {
-    cc++;
-  } else if (str[0] == '-') {
-    bNegative = true;
-    cc++;
-  }
-  int integer = 0;
-  while (cc < len) {
-    if (str[cc] == '.') {
-      break;
-    }
-    integer = integer * 10 + FXSYS_DecimalCharToInt(str[cc]);
-    cc++;
-  }
-  float fraction = 0;
-  if (str[cc] == '.') {
-    cc++;
-    float scale = 0.1f;
-    while (cc < len) {
-      fraction += scale * FXSYS_DecimalCharToInt(str[cc]);
-      scale *= 0.1f;
-      cc++;
-    }
-  }
-  fraction += static_cast<float>(integer);
-  return bNegative ? -fraction : fraction;
-}
-
 int WideString::GetInteger() const {
   return m_pData ? FXSYS_wtoi(m_pData->m_String) : 0;
-}
-
-float WideString::GetFloat() const {
-  return m_pData ? FX_wtof(m_pData->m_String, m_pData->m_nDataLength) : 0.0f;
 }
 
 std::wostream& operator<<(std::wostream& os, const WideString& str) {
@@ -1078,7 +1057,7 @@ std::wostream& operator<<(std::wostream& os, const WideString& str) {
 }
 
 std::ostream& operator<<(std::ostream& os, const WideString& str) {
-  os << str.UTF8Encode();
+  os << str.ToUTF8();
   return os;
 }
 

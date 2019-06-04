@@ -87,10 +87,6 @@ all_devtools_files = [
   "front_end/bindings_test_runner/module.json",
   "front_end/bindings_test_runner/PersistenceTestRunner.js",
   "front_end/bindings_test_runner/OverridesTestRunner.js",
-  "front_end/browser_components/ImagePreview.js",
-  "front_end/browser_components/imagePreview.css",
-  "front_end/browser_console/BrowserConsole.js",
-  "front_end/browser_console/module.json",
   "front_end/browser_debugger/DOMBreakpointsSidebarPane.js",
   "front_end/browser_debugger/EventListenerBreakpointsSidebarPane.js",
   "front_end/browser_debugger/ObjectEventListenersSidebarPane.js",
@@ -99,9 +95,7 @@ all_devtools_files = [
   "front_end/browser_debugger/eventListenerBreakpoints.css",
   "front_end/browser_debugger/module.json",
   "front_end/browser_debugger/xhrBreakpointsSidebarPane.css",
-  "front_end/browser_sdk/HAREntry.js",
   "front_end/browser_sdk/LogManager.js",
-  "front_end/browser_sdk/NetworkLog.js",
   "front_end/browser_sdk/module.json",
   "front_end/changes/ChangesHighlighter.js",
   "front_end/changes/changesView.css",
@@ -164,6 +158,8 @@ all_devtools_files = [
   "front_end/common/UIString.js",
   "front_end/common/Worker.js",
   "front_end/components/DockController.js",
+  "front_end/components/ImagePreview.js",
+  "front_end/components/imagePreview.css",
   "front_end/components/JSPresentationUtils.js",
   "front_end/components/Linkifier.js",
   "front_end/components/TargetDetachedDialog.js",
@@ -174,9 +170,12 @@ all_devtools_files = [
   "front_end/console/ConsoleFilter.js",
   "front_end/console/ConsoleSidebar.js",
   "front_end/console/ConsolePanel.js",
+  "front_end/console/ConsolePinPane.js",
   "front_end/console/ConsolePrompt.js",
   "front_end/console/consoleView.css",
   "front_end/console/consoleContextSelector.css",
+  "front_end/console/consolePinPane.css",
+  "front_end/console/consolePrompt.css",
   "front_end/console/consoleSidebar.css",
   "front_end/console/ConsoleView.js",
   "front_end/console/ConsoleViewMessage.js",
@@ -447,6 +446,7 @@ all_devtools_files = [
   "front_end/object_ui/customPreviewComponent.css",
   "front_end/object_ui/CustomPreviewComponent.js",
   "front_end/object_ui/JavaScriptAutocomplete.js",
+  "front_end/object_ui/JavaScriptREPL.js",
   "front_end/object_ui/module.json",
   "front_end/object_ui/objectPopover.css",
   "front_end/object_ui/ObjectPopoverHelper.js",
@@ -488,6 +488,7 @@ all_devtools_files = [
   "front_end/persistence/Persistence.js",
   "front_end/persistence/PersistenceActions.js",
   "front_end/persistence/PersistenceUtils.js",
+  "front_end/persistence/PlatformFileSystem.js",
   "front_end/persistence/workspaceSettingsTab.css",
   "front_end/persistence/WorkspaceSettingsTab.js",
   "front_end/platform/module.json",
@@ -506,11 +507,12 @@ all_devtools_files = [
   "front_end/profiler/CPUProfileView.js",
   "front_end/profiler/heapProfiler.css",
   "front_end/profiler/HeapProfileView.js",
+  "front_end/profiler/HeapProfilerPanel.js",
   "front_end/profiler/HeapSnapshotDataGrids.js",
   "front_end/profiler/HeapSnapshotGridNodes.js",
   "front_end/profiler/HeapSnapshotProxy.js",
   "front_end/profiler/HeapSnapshotView.js",
-  "front_end/profiler/HeapProfilerPanel.js",
+  "front_end/profiler/HeapTimelineOverview.js",
   "front_end/profiler/IsolateSelector.js",
   "front_end/profiler/module.json",
   "front_end/profiler/ProfileDataGrid.js",
@@ -524,6 +526,7 @@ all_devtools_files = [
   "front_end/profiler/ProfileTypeRegistry.js",
   "front_end/profiler/ProfileView.js",
   "front_end/profiler/TopDownProfileDataGrid.js",
+  "front_end/protocol/NodeURL.js",
   "front_end/protocol/InspectorBackend.js",
   "front_end/protocol/module.json",
   "front_end/quick_open/CommandMenu.js",
@@ -586,10 +589,12 @@ all_devtools_files = [
   "front_end/sdk/DOMModel.js",
   "front_end/sdk/EmulationModel.js",
   "front_end/sdk/FilmStripModel.js",
+  "front_end/sdk/HARLog.js",
   "front_end/sdk/HeapProfilerModel.js",
   "front_end/sdk/LayerTreeBase.js",
   "front_end/sdk/LogModel.js",
   "front_end/sdk/module.json",
+  "front_end/sdk/NetworkLog.js",
   "front_end/sdk/NetworkManager.js",
   "front_end/sdk/NetworkRequest.js",
   "front_end/sdk/OverlayModel.js",
@@ -635,9 +640,8 @@ all_devtools_files = [
   "front_end/settings/settingsScreen.css",
   "front_end/settings/SettingsScreen.js",
   "front_end/snippets/module.json",
-  "front_end/snippets/ScriptSnippetModel.js",
+  "front_end/snippets/ScriptSnippetFileSystem.js",
   "front_end/snippets/SnippetsQuickOpen.js",
-  "front_end/snippets/SnippetStorage.js",
   "front_end/source_frame/fontView.css",
   "front_end/source_frame/FontView.js",
   "front_end/source_frame/imageView.css",
@@ -656,6 +660,8 @@ all_devtools_files = [
   "front_end/source_frame/xmlView.css",
   "front_end/source_frame/XMLView.js",
   "front_end/sources/AddSourceMapURLDialog.js",
+  "front_end/sources/breakpointEditDialog.css",
+  "front_end/sources/BreakpointEditDialog.js",
   "front_end/sources/callStackSidebarPane.css",
   "front_end/sources/CallStackSidebarPane.js",
   "front_end/sources/CSSPlugin.js",
@@ -682,6 +688,7 @@ all_devtools_files = [
   "front_end/sources/scopeChainSidebarPane.css",
   "front_end/sources/ScopeChainSidebarPane.js",
   "front_end/sources/ScriptFormatterEditorAction.js",
+  "front_end/sources/ScriptOriginPlugin.js",
   "front_end/sources/SearchSourcesView.js",
   "front_end/sources/serviceWorkersSidebar.css",
   "front_end/sources/SimpleHistoryManager.js",
@@ -1019,7 +1026,6 @@ generated_applications = [
 generated_non_autostart_non_remote_modules = [
   "$resources_out_dir/animation/animation_module.js",
   "$resources_out_dir/audits2/audits2_module.js",
-  "$resources_out_dir/browser_console/browser_console_module.js",
   "$resources_out_dir/browser_debugger/browser_debugger_module.js",
   "$resources_out_dir/changes/changes_module.js",
   "$resources_out_dir/protocol_monitor/protocol_monitor_module.js",
@@ -1099,6 +1105,7 @@ group("devtools_frontend_resources") {
     ":build_release_devtools",
     ":copy_embedder_scripts",
     ":copy_emulated_devices_images",
+    ":copy_htaccess",
     ":copy_inspector_images",
     ":devtools_extension_api",
     ":frontend_protocol_sources",
@@ -1116,6 +1123,15 @@ copy("copy_embedder_scripts") {
   sources = devtools_embedder_scripts
   outputs = [
     "$resources_out_dir/{{source_file_part}}",
+  ]
+}
+
+copy("copy_htaccess") {
+  sources = [
+    "htaccess",
+  ]
+  outputs = [
+    "$resources_out_dir/.htaccess",
   ]
 }
 
@@ -1188,7 +1204,7 @@ action("supported_css_properties") {
   script = "scripts/build/generate_supported_css.py"
 
   inputs = [
-    "../core/css/CSSProperties.json5",
+    "../core/css/css_properties.json5",
   ]
 
   outputs = [

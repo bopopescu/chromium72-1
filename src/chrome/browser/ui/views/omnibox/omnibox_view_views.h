@@ -16,6 +16,7 @@
 #include "base/scoped_observer.h"
 #include "build/build_config.h"
 #include "components/omnibox/browser/omnibox_view.h"
+#include "components/search_engines/template_url_service_observer.h"
 #include "components/security_state/core/security_state.h"
 #include "ui/base/window_open_disposition.h"
 #include "ui/compositor/compositor.h"
@@ -52,7 +53,8 @@ class OmniboxViewViews : public OmniboxView,
                              CandidateWindowObserver,
 #endif
                          public views::TextfieldController,
-                         public ui::CompositorObserver {
+                         public ui::CompositorObserver,
+                         public TemplateURLServiceObserver {
  public:
   // The internal view class name.
   static const char kViewClassName[];
@@ -83,6 +85,16 @@ class OmniboxViewViews : public OmniboxView,
 
   // Called to clear the saved state for |web_contents|.
   void ResetTabState(content::WebContents* web_contents);
+
+  // Installs the placeholder text with the name of the current default search
+  // provider. For example, if Google is the default search provider, this shows
+  // "Search Google or type a URL" when the Omnibox is empty and unfocused.
+  void InstallPlaceholderText();
+
+  // Indicates if the cursor is at one end of the input. Requires that both
+  // ends of the selection reside there.
+  bool SelectionAtBeginning() const;
+  bool SelectionAtEnd() const;
 
   // OmniboxView:
   void EmphasizeURLComponents() override;
@@ -115,6 +127,9 @@ class OmniboxViewViews : public OmniboxView,
     return popup_view_.get();
   }
 
+  // views::Textfield:
+  bool IsDropCursorForInsertion() const override;
+
  private:
   FRIEND_TEST_ALL_PREFIXES(OmniboxViewViewsTest, CloseOmniboxPopupOnTextDrag);
   FRIEND_TEST_ALL_PREFIXES(OmniboxViewViewsTest, FriendlyAccessibleLabel);
@@ -122,6 +137,8 @@ class OmniboxViewViews : public OmniboxView,
   FRIEND_TEST_ALL_PREFIXES(OmniboxViewViewsTest, MaintainCursorAfterFocusCycle);
   FRIEND_TEST_ALL_PREFIXES(OmniboxViewViewsTest, OnBlur);
   FRIEND_TEST_ALL_PREFIXES(OmniboxViewViewsTest, DoNotNavigateOnDrop);
+  FRIEND_TEST_ALL_PREFIXES(OmniboxViewViewsTest,
+                           MouseMoveAndExitSetsHoveredState);
   FRIEND_TEST_ALL_PREFIXES(OmniboxViewViewsSteadyStateElisionsTest,
                            FirstMouseClickFocusesOnly);
   FRIEND_TEST_ALL_PREFIXES(OmniboxViewViewsSteadyStateElisionsTest,
@@ -166,14 +183,33 @@ class OmniboxViewViews : public OmniboxView,
   // Handle keyword hint tab-to-search and tabbing through dropdown results.
   bool HandleEarlyTabActions(const ui::KeyEvent& event);
 
-  // Updates |security_level_| based on the toolbar model's current value.
+  // Updates |security_level_| based on the location bar model's current value.
   void UpdateSecurityLevel();
 
   void ClearAccessibilityLabel();
 
+  // Selects the whole omnibox contents as a result of the user gesture. This
+  // may also unapply steady state elisions depending on user preferences.
+  void SelectAllForUserGesture();
+
   // Returns true if the user text was updated with the full URL (without
   // steady-state elisions).  |gesture| is the user gesture causing unelision.
   bool UnapplySteadyStateElisions(UnelisionGesture gesture);
+
+  // Informs if text and UI direction match (otherwise what "at end" means must
+  // flip.)
+  bool TextAndUIDirectionMatch() const;
+
+  // Returns true if the caret is completely at the end of the input, and if
+  // there's a tab match present. Helper function for MaybeFocusTabButton()
+  // and MaybeUnfocusTabButton().
+  bool AtEndWithTabMatch() const;
+
+  // Attempts to either focus or unfocus the tab switch button (tests if all
+  // conditions are met and makes necessary subroutine call) and returns
+  // whether it succeeded.
+  bool MaybeFocusTabButton();
+  bool MaybeUnfocusTabButton();
 
   // OmniboxView:
   void SetWindowTextAndCaretPos(const base::string16& text,
@@ -198,11 +234,15 @@ class OmniboxViewViews : public OmniboxView,
   gfx::NativeView GetRelativeWindowForPopup() const override;
   int GetWidth() const override;
   bool IsImeShowingPopup() const override;
-  void ShowImeIfNeeded() override;
+  void ShowVirtualKeyboardIfEnabled() override;
   void HideImeIfNeeded() override;
   int GetOmniboxTextLength() const override;
   void SetEmphasis(bool emphasize, const gfx::Range& range) override;
   void UpdateSchemeStyle(const gfx::Range& range) override;
+
+  // views::View
+  void OnMouseMoved(const ui::MouseEvent& event) override;
+  void OnMouseExited(const ui::MouseEvent& event) override;
 
   // views::Textfield:
   bool IsItemForCommandIdDynamic(int command_id) const override;
@@ -223,6 +263,7 @@ class OmniboxViewViews : public OmniboxView,
   void DoInsertChar(base::char16 ch) override;
   bool IsTextEditCommandEnabled(ui::TextEditCommand command) const override;
   void ExecuteTextEditCommand(ui::TextEditCommand command) override;
+  bool ShouldShowPlaceholderText() const override;
 
   // chromeos::input_method::InputMethodManager::CandidateWindowObserver:
 #if defined(OS_CHROMEOS)
@@ -253,9 +294,11 @@ class OmniboxViewViews : public OmniboxView,
   void OnCompositingStarted(ui::Compositor* compositor,
                             base::TimeTicks start_time) override;
   void OnCompositingEnded(ui::Compositor* compositor) override;
-  void OnCompositingLockStateChanged(ui::Compositor* compositor) override;
   void OnCompositingChildResizing(ui::Compositor* compositor) override;
   void OnCompositingShuttingDown(ui::Compositor* compositor) override;
+
+  // TemplateURLServiceObserver:
+  void OnTemplateURLServiceChanged() override;
 
   // When true, the location bar view is read only and also is has a slightly
   // different presentation (smaller font size). This is used for popups.
@@ -323,7 +366,10 @@ class OmniboxViewViews : public OmniboxView,
   // this is set to 7 (the length of "Google ").
   int friendly_suggestion_text_prefix_length_;
 
-  ScopedObserver<ui::Compositor, ui::CompositorObserver> scoped_observer_;
+  ScopedObserver<ui::Compositor, ui::CompositorObserver>
+      scoped_compositor_observer_;
+  ScopedObserver<TemplateURLService, TemplateURLServiceObserver>
+      scoped_template_url_service_observer_;
 
   DISALLOW_COPY_AND_ASSIGN(OmniboxViewViews);
 };

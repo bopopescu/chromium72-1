@@ -14,6 +14,7 @@
 #include <jni.h>
 
 #include "api/mediastreaminterface.h"
+#include "rtc_base/thread.h"
 #include "sdk/android/native_api/jni/scoped_java_ref.h"
 
 namespace webrtc {
@@ -22,8 +23,8 @@ namespace webrtc {
 // Java object that can be used to feed frames to the source.
 class JavaVideoTrackSourceInterface : public VideoTrackSourceInterface {
  public:
-  // Returns VideoCapturer.CapturerObserver object that can be used to feed
-  // frames to the video source.
+  // Returns CapturerObserver object that can be used to feed frames to the
+  // video source.
   virtual ScopedJavaLocalRef<jobject> GetJavaVideoCapturerObserver(
       JNIEnv* env) = 0;
 };
@@ -32,7 +33,8 @@ class JavaVideoTrackSourceInterface : public VideoTrackSourceInterface {
 rtc::scoped_refptr<JavaVideoTrackSourceInterface> CreateJavaVideoSource(
     JNIEnv* env,
     rtc::Thread* signaling_thread,
-    bool is_screencast);
+    bool is_screencast,
+    bool align_timestamps);
 
 }  // namespace webrtc
 

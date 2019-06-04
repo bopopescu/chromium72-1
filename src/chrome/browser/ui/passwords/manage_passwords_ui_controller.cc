@@ -23,11 +23,14 @@
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/chrome_pages.h"
 #include "chrome/browser/ui/location_bar/location_bar.h"
+#include "chrome/browser/ui/page_action/page_action_icon_container.h"
 #include "chrome/browser/ui/passwords/manage_passwords_icon_view.h"
+#include "chrome/browser/ui/passwords/manage_passwords_view_utils.h"
 #include "chrome/browser/ui/passwords/password_dialog_controller_impl.h"
 #include "chrome/browser/ui/passwords/password_dialog_prompts.h"
 #include "chrome/browser/ui/tab_dialogs.h"
 #include "chrome/common/url_constants.h"
+#include "chrome/grit/generated_resources.h"
 #include "components/password_manager/core/browser/browser_save_password_progress_logger.h"
 #include "components/password_manager/core/browser/password_bubble_experiment.h"
 #include "components/password_manager/core/browser/password_form_manager_for_ui.h"
@@ -35,6 +38,7 @@
 #include "components/password_manager/core/browser/statistics_table.h"
 #include "components/password_manager/core/common/credential_manager_types.h"
 #include "content/public/browser/navigation_handle.h"
+#include "ui/base/l10n/l10n_util.h"
 
 #if defined(OS_WIN)
 #include "chrome/browser/password_manager/password_manager_util_win.h"
@@ -64,8 +68,6 @@ std::vector<std::unique_ptr<autofill::PasswordForm>> CopyFormVector(
 }
 
 }  // namespace
-
-DEFINE_WEB_CONTENTS_USER_DATA_KEY(ManagePasswordsUIController);
 
 ManagePasswordsUIController::ManagePasswordsUIController(
     content::WebContents* web_contents)
@@ -373,7 +375,12 @@ void ManagePasswordsUIController::OnNopeUpdateClicked() {
 void ManagePasswordsUIController::NeverSavePassword() {
   DCHECK_EQ(password_manager::ui::PENDING_PASSWORD_STATE, GetState());
   NeverSavePasswordInternal();
-  // The state stays the same.
+  ClearPopUpFlagForBubble();
+  if (passwords_data_.GetCurrentForms().empty())
+    passwords_data_.OnInactive();
+  else
+    passwords_data_.TransitionToState(password_manager::ui::MANAGE_STATE);
+  UpdateBubbleAndIconVisibility();
 }
 
 void ManagePasswordsUIController::OnPasswordsRevealed() {
@@ -444,27 +451,17 @@ void ManagePasswordsUIController::ChooseCredential(
   UpdateBubbleAndIconVisibility();
 }
 
-void ManagePasswordsUIController::NavigateToSmartLockHelpPage() {
-  NavigateParams params(chrome::FindBrowserWithWebContents(web_contents()),
-                        GURL(chrome::kSmartLockHelpPage),
-                        ui::PAGE_TRANSITION_LINK);
-  params.disposition = WindowOpenDisposition::NEW_FOREGROUND_TAB;
-  Navigate(&params);
+void ManagePasswordsUIController::NavigateToPasswordManagerSettingsPage(
+    password_manager::ManagePasswordsReferrer referrer) {
+  NavigateToManagePasswordsPage(
+      chrome::FindBrowserWithWebContents(web_contents()), referrer);
 }
 
-void ManagePasswordsUIController::NavigateToPasswordManagerSettingsPage() {
-  chrome::ShowSettingsSubPage(
-      chrome::FindBrowserWithWebContents(web_contents()),
-      chrome::kPasswordManagerSubPage);
-}
-
-void ManagePasswordsUIController::NavigateToPasswordManagerAccountDashboard() {
-  NavigateParams params(
-      chrome::FindBrowserWithWebContents(web_contents()),
-      GURL(password_manager::kPasswordManagerAccountDashboardURL),
-      ui::PAGE_TRANSITION_LINK);
-  params.disposition = WindowOpenDisposition::NEW_FOREGROUND_TAB;
-  Navigate(&params);
+void ManagePasswordsUIController::NavigateToPasswordManagerAccountDashboard(
+    password_manager::ManagePasswordsReferrer referrer) {
+  NavigateToGooglePasswordManager(
+      Profile::FromBrowserContext(web_contents()->GetBrowserContext()),
+      referrer);
 }
 
 void ManagePasswordsUIController::EnableSync(const AccountInfo& account,
@@ -535,9 +532,8 @@ void ManagePasswordsUIController::UpdateBubbleAndIconVisibility() {
   if (!browser)
     return;
 
-  LocationBar* location_bar = browser->window()->GetLocationBar();
-  DCHECK(location_bar);
-  location_bar->UpdateManagePasswordsIconAndBubble();
+  browser->window()->GetPageActionIconContainer()->UpdatePageActionIcon(
+      PageActionIconType::kManagePasswords);
 }
 
 AccountChooserPrompt* ManagePasswordsUIController::CreateAccountChooser(

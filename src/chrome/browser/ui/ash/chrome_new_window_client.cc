@@ -4,11 +4,13 @@
 
 #include "chrome/browser/ui/ash/chrome_new_window_client.h"
 
-#include "ash/content/keyboard_overlay/keyboard_overlay_view.h"
 #include "ash/public/cpp/ash_features.h"
 #include "ash/public/interfaces/constants.mojom.h"
 #include "base/macros.h"
+#include "chrome/browser/chromeos/arc/arc_web_contents_data.h"
+#include "chrome/browser/chromeos/arc/fileapi/arc_content_file_system_url_util.h"
 #include "chrome/browser/chromeos/file_manager/app_id.h"
+#include "chrome/browser/chromeos/profiles/profile_helper.h"
 #include "chrome/browser/extensions/api/terminal/terminal_extension_helper.h"
 #include "chrome/browser/extensions/extension_service.h"
 #include "chrome/browser/extensions/extension_util.h"
@@ -16,6 +18,7 @@
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/sessions/tab_restore_service_factory.h"
 #include "chrome/browser/ui/ash/ksv/keyboard_shortcut_viewer_util.h"
+#include "chrome/browser/ui/ash/multi_user/multi_user_util.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
 #include "chrome/browser/ui/browser_finder.h"
@@ -28,15 +31,22 @@
 #include "chrome/browser/ui/scoped_tabbed_browser_displayer.h"
 #include "chrome/browser/ui/webui/chrome_web_contents_handler.h"
 #include "chrome/common/url_constants.h"
+#include "components/arc/intent_helper/arc_intent_helper_bridge.h"
 #include "components/sessions/core/tab_restore_service.h"
 #include "components/sessions/core/tab_restore_service_observer.h"
 #include "components/url_formatter/url_fixer.h"
+#include "components/user_manager/user.h"
+#include "components/user_manager/user_manager.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/service_manager_connection.h"
+#include "content/public/common/was_activated_option.h"
 #include "extensions/browser/extension_system.h"
 #include "extensions/common/constants.h"
+#include "extensions/common/extension.h"
 #include "services/service_manager/public/cpp/connector.h"
+#include "ui/base/page_transition_types.h"
 #include "ui/base/window_open_disposition.h"
+#include "url/url_constants.h"
 
 namespace {
 
@@ -58,6 +68,8 @@ bool IsIncognitoAllowed() {
 }  // namespace
 
 ChromeNewWindowClient::ChromeNewWindowClient() : binding_(this) {
+  arc::ArcIntentHelperBridge::SetOpenUrlDelegate(this);
+
   service_manager::Connector* connector =
       content::ServiceManagerConnection::GetForProcess()->GetConnector();
   connector->BindInterface(ash::mojom::kServiceName, &new_window_controller_);
@@ -74,6 +86,8 @@ ChromeNewWindowClient::ChromeNewWindowClient() : binding_(this) {
 ChromeNewWindowClient::~ChromeNewWindowClient() {
   DCHECK_EQ(g_chrome_new_window_client_instance, this);
   g_chrome_new_window_client_instance = nullptr;
+
+  arc::ArcIntentHelperBridge::SetOpenUrlDelegate(nullptr);
 }
 
 // static
@@ -142,12 +156,9 @@ void ChromeNewWindowClient::NewTab() {
   browser->SetFocusToLocationBar(false);
 }
 
-void ChromeNewWindowClient::NewTabWithUrl(const GURL& url) {
-  NavigateParams navigate_params(
-      ProfileManager::GetActiveUserProfile(), url,
-      ui::PageTransitionFromInt(ui::PAGE_TRANSITION_LINK |
-                                ui::PAGE_TRANSITION_FROM_API));
-  Navigate(&navigate_params);
+void ChromeNewWindowClient::NewTabWithUrl(const GURL& url,
+                                          bool from_user_interaction) {
+  OpenUrlImpl(url, from_user_interaction);
 }
 
 void ChromeNewWindowClient::NewWindow(bool is_incognito) {
@@ -165,7 +176,7 @@ void ChromeNewWindowClient::NewWindow(bool is_incognito) {
 void ChromeNewWindowClient::OpenFileManager() {
   using file_manager::kFileManagerAppId;
   Profile* const profile = ProfileManager::GetActiveUserProfile();
-  const ExtensionService* const service =
+  const extensions::ExtensionService* const service =
       extensions::ExtensionSystem::Get(profile)->extension_service();
   if (!service || !extensions::util::IsAppLaunchableWithoutEnabling(
                       kFileManagerAppId, profile)) {
@@ -225,23 +236,8 @@ void ChromeNewWindowClient::RestoreTab() {
   }
 }
 
-// TODO(crbug.com/755448): Remove this when the new shortcut viewer is enabled.
-void ChromeNewWindowClient::ShowKeyboardOverlay() {
-  // Show the new keyboard shortcut viewer if the feature is enabled.
-  if (ash::features::IsKeyboardShortcutViewerEnabled()) {
-    keyboard_shortcut_viewer_util::ShowKeyboardShortcutViewer();
-    return;
-  }
-
-  // TODO(mazda): Move the show logic to ash (http://crbug.com/124222).
-  Profile* profile = ProfileManager::GetActiveUserProfile();
-  std::string url(chrome::kChromeUIKeyboardOverlayURL);
-  ash::KeyboardOverlayView::ShowDialog(profile, new ChromeWebContentsHandler,
-                                       GURL(url));
-}
-
 void ChromeNewWindowClient::ShowKeyboardShortcutViewer() {
-  keyboard_shortcut_viewer_util::ShowKeyboardShortcutViewer();
+  keyboard_shortcut_viewer_util::ToggleKeyboardShortcutViewer();
 }
 
 void ChromeNewWindowClient::ShowTaskManager() {
@@ -251,4 +247,95 @@ void ChromeNewWindowClient::ShowTaskManager() {
 void ChromeNewWindowClient::OpenFeedbackPage() {
   chrome::OpenFeedbackDialog(chrome::FindBrowserWithActiveWindow(),
                              chrome::kFeedbackSourceAsh);
+}
+
+void ChromeNewWindowClient::OpenUrlFromArc(const GURL& url) {
+  if (!url.is_valid())
+    return;
+
+  GURL url_to_open = url;
+  if (url.SchemeIs(url::kFileScheme) || url.SchemeIs(url::kContentScheme)) {
+    // Chrome cannot open this URL. Read the contents via ARC content file
+    // system with an external file URL.
+    url_to_open = arc::ArcUrlToExternalFileUrl(url_to_open);
+  }
+
+  content::WebContents* tab =
+      OpenUrlImpl(url_to_open, false /* from_user_interaction */);
+  if (!tab)
+    return;
+
+  // Add a flag to remember this tab originated in the ARC context.
+  tab->SetUserData(&arc::ArcWebContentsData::kArcTransitionFlag,
+                   std::make_unique<arc::ArcWebContentsData>());
+}
+
+void ChromeNewWindowClient::OpenWebAppFromArc(const GURL& url) {
+  DCHECK(url.is_valid() && url.SchemeIs(url::kHttpsScheme));
+
+  // Fetch the profile associated with ARC. This method should only be called
+  // for a |url| which was installed via ARC, and so we want the web app that is
+  // opened through here to be installed in the profile associated with ARC.
+  // |user| may be null if sign-in hasn't happened yet
+  const auto* user = user_manager::UserManager::Get()->GetPrimaryUser();
+  if (!user)
+    return;
+
+  // |profile| may be null if sign-in has happened but the profile isn't loaded
+  // yet.
+  Profile* profile = chromeos::ProfileHelper::Get()->GetProfileByUser(user);
+  if (!profile)
+    return;
+
+  const extensions::Extension* extension =
+      extensions::util::GetInstalledPwaForUrl(
+          profile, url, extensions::LAUNCH_CONTAINER_WINDOW);
+  if (!extension) {
+    OpenUrlFromArc(url);
+    return;
+  }
+
+  AppLaunchParams params = CreateAppLaunchParamsUserContainer(
+      profile, extension, WindowOpenDisposition::NEW_WINDOW,
+      extensions::SOURCE_ARC);
+  params.override_url = url;
+  content::WebContents* tab = OpenApplication(params);
+  if (!tab)
+    return;
+
+  // Add a flag to remember this tab originated in the ARC context.
+  tab->SetUserData(&arc::ArcWebContentsData::kArcTransitionFlag,
+                   std::make_unique<arc::ArcWebContentsData>());
+}
+
+content::WebContents* ChromeNewWindowClient::OpenUrlImpl(
+    const GURL& url,
+    bool from_user_interaction) {
+  // If the url is for system settings, show the settings in a window instead of
+  // a browser tab.
+  if (url.GetContent() == "settings" &&
+      (url.SchemeIs(url::kAboutScheme) ||
+       url.SchemeIs(content::kChromeUIScheme))) {
+    chrome::ShowSettingsSubPageForProfile(
+        ProfileManager::GetActiveUserProfile(), /*sub_page=*/std::string());
+    return nullptr;
+  }
+
+  NavigateParams navigate_params(
+      ProfileManager::GetActiveUserProfile(), url,
+      ui::PageTransitionFromInt(ui::PAGE_TRANSITION_LINK |
+                                ui::PAGE_TRANSITION_FROM_API));
+
+  if (from_user_interaction)
+    navigate_params.was_activated = content::WasActivatedOption::kYes;
+
+  Navigate(&navigate_params);
+
+  if (navigate_params.browser) {
+    // The browser window might be on another user's desktop, and hence not
+    // visible. Ensure the browser becomes visible on this user's desktop.
+    multi_user_util::MoveWindowToCurrentDesktop(
+        navigate_params.browser->window()->GetNativeWindow());
+  }
+  return navigate_params.navigated_or_inserted_contents;
 }

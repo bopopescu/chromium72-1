@@ -15,7 +15,6 @@
 
 #include "modules/desktop_capture/desktop_capture_types.h"
 #include "modules/desktop_capture/desktop_geometry.h"
-#include "typedefs.h"  // NOLINT(build/include)
 
 namespace webrtc {
 
@@ -110,4 +109,3 @@ class MouseCursorMonitor {
 }  // namespace webrtc
 
 #endif  // MODULES_DESKTOP_CAPTURE_MOUSE_CURSOR_MONITOR_H_
-

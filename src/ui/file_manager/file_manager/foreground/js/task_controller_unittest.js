@@ -6,15 +6,10 @@ window.metrics = {
   recordEnum: function() {}
 };
 
-function MockMetadataModel(properties) {
-  this.properties_ = properties;
-}
-
-MockMetadataModel.prototype.get = function() {
-  return Promise.resolve([this.properties_]);
-};
-
 function setUp() {
+  window.loadTimeData.getBoolean = key => false;
+  window.loadTimeData.getString = id => id;
+
   // Behavior of window.chrome depends on each test case. window.chrome should
   // be initialized properly inside each test function.
   window.chrome = {
@@ -39,6 +34,16 @@ function setUp() {
   cr.ui.decorate('command', cr.ui.Command);
 }
 
+function createCrostini() {
+  const crostini = new Crostini();
+  crostini.init({
+    getLocationInfo: () => {
+      return 'test';
+    }
+  });
+  return crostini;
+}
+
 function testExecuteEntryTask(callback) {
   window.chrome.fileManagerPrivate = {
     getFileTasks: function(entries, callback) {
@@ -57,6 +62,9 @@ function testExecuteEntryTask(callback) {
       new MockFileEntry(fileSystem, '/test.png', {});
   var controller = new TaskController(
       DialogType.FULL_PAGE, {
+        getLocationInfo: function(entry) {
+          return VolumeManagerCommon.RootType.DRIVE;
+        },
         getDriveConnectionState: function() {
           return VolumeManagerCommon.DriveConnectionType.ONLINE;
         },
@@ -69,14 +77,15 @@ function testExecuteEntryTask(callback) {
       {
         taskMenuButton: document.createElement('button'),
         shareMenuButton: {menu: document.createElement('div')},
-        fileContextMenu:
-            {defaultActionMenuItem: document.createElement('div')}
+        fileContextMenu: {defaultActionMenuItem: document.createElement('div')},
+        speakA11yMessage: text => {},
       },
       new MockMetadataModel({}), {
         getCurrentRootType: function() {
           return null;
         }
-      }, new cr.EventTarget(), null);
+      },
+      new cr.EventTarget(), null, null, createCrostini());
 
   controller.executeEntryTask(fileSystem.entries['/test.png']);
   reportPromise(new Promise(function(fulfill) {
@@ -129,17 +138,22 @@ function setupFileManagerPrivate() {
 
 function createTaskController(selectionHandler) {
   return new TaskController(
-      DialogType.FULL_PAGE, {}, {
+      DialogType.FULL_PAGE, {
+        getLocationInfo: function(entry) {
+          return VolumeManagerCommon.RootType.DRIVE;
+        }
+      },
+      {
         taskMenuButton: document.createElement('button'),
         shareMenuButton: {menu: document.createElement('div')},
-        fileContextMenu:
-            {defaultActionMenuItem: document.createElement('div')}
+        fileContextMenu: {defaultActionMenuItem: document.createElement('div')}
       },
       new MockMetadataModel({}), {
         getCurrentRootType: function() {
           return null;
         }
-      }, selectionHandler, null);
+      },
+      selectionHandler, null, null, createCrostini());
 }
 
 // TaskController.getFileTasks should not call fileManagerPrivate.getFileTasks

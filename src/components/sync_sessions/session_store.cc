@@ -16,7 +16,7 @@
 #include "base/metrics/histogram_macros.h"
 #include "base/pickle.h"
 #include "base/strings/stringprintf.h"
-#include "components/sync/base/sync_prefs.h"
+#include "base/trace_event/trace_event.h"
 #include "components/sync/base/time.h"
 #include "components/sync/device_info/device_info.h"
 #include "components/sync/device_info/device_info_util.h"
@@ -25,6 +25,7 @@
 #include "components/sync/model/mutable_data_batch.h"
 #include "components/sync/protocol/model_type_state.pb.h"
 #include "components/sync/protocol/sync.pb.h"
+#include "components/sync_sessions/session_sync_prefs.h"
 #include "components/sync_sessions/sync_sessions_client.h"
 
 namespace sync_sessions {
@@ -77,7 +78,8 @@ std::unique_ptr<syncer::EntityData> MoveToEntityData(
 }
 
 std::string GetSessionTagWithPrefs(const std::string& cache_guid,
-                                   syncer::SessionSyncPrefs* sync_prefs) {
+                                   SessionSyncPrefs* sync_prefs) {
+  DCHECK(sync_prefs);
   const std::string persisted_guid = sync_prefs->GetSyncSessionsGUID();
   if (!persisted_guid.empty()) {
     DVLOG(1) << "Restoring persisted session sync guid: " << persisted_guid;
@@ -91,43 +93,6 @@ std::string GetSessionTagWithPrefs(const std::string& cache_guid,
   return new_guid;
 }
 
-void OnLocalDeviceInfoAvailable(
-    syncer::SessionSyncPrefs* sync_prefs,
-    const syncer::LocalDeviceInfoProvider* provider,
-    const base::RepeatingCallback<void(const SessionStore::SessionInfo&)>&
-        callback) {
-  const syncer::DeviceInfo* device_info = provider->GetLocalDeviceInfo();
-  const std::string cache_guid = provider->GetLocalSyncCacheGUID();
-  DCHECK(device_info);
-  DCHECK(!cache_guid.empty());
-
-  SessionStore::SessionInfo session_info;
-  session_info.client_name = device_info->client_name();
-  session_info.device_type = device_info->device_type();
-  session_info.session_tag = GetSessionTagWithPrefs(cache_guid, sync_prefs);
-  callback.Run(session_info);
-}
-
-// Listens to local device information and triggers the provided callback
-// when the object is constructed (once DeviceInfo is available). Caller is
-// responsible for storing the returned subscription as a mechanism to cancel
-// the creation request (the subscription must not outlive |provider|).
-std::unique_ptr<syncer::LocalDeviceInfoProvider::Subscription>
-SubscribeToSessionInfo(
-    syncer::SessionSyncPrefs* sync_prefs,
-    syncer::LocalDeviceInfoProvider* provider,
-    const base::RepeatingCallback<void(const SessionStore::SessionInfo&)>&
-        callback) {
-  if (provider->GetLocalDeviceInfo()) {
-    OnLocalDeviceInfoAvailable(sync_prefs, provider, callback);
-    return nullptr;
-  }
-
-  return provider->RegisterOnInitializedCallback(base::BindRepeating(
-      &OnLocalDeviceInfoAvailable, base::Unretained(sync_prefs),
-      base::Unretained(provider), callback));
-}
-
 void ForwardError(syncer::OnceModelErrorHandler error_handler,
                   const base::Optional<syncer::ModelError>& error) {
   if (error) {
@@ -139,60 +104,37 @@ class FactoryImpl : public base::SupportsWeakPtr<FactoryImpl> {
  public:
   // Raw pointers must not be null and must outlive this object.
   FactoryImpl(SyncSessionsClient* sessions_client,
-              syncer::SessionSyncPrefs* sync_prefs,
-              syncer::LocalDeviceInfoProvider* local_device_info_provider,
-              const syncer::RepeatingModelTypeStoreFactory& store_factory,
               const SessionStore::RestoredForeignTabCallback&
                   restored_foreign_tab_callback)
       : sessions_client_(sessions_client),
-        store_factory_(store_factory),
         restored_foreign_tab_callback_(restored_foreign_tab_callback) {
     DCHECK(sessions_client);
-    DCHECK(sync_prefs);
-    DCHECK(local_device_info_provider);
-    DCHECK(store_factory_);
-    local_device_info_subscription_ = SubscribeToSessionInfo(
-        sync_prefs, local_device_info_provider,
-        base::BindRepeating(&FactoryImpl::OnSessionInfoAvailable,
-                            base::Unretained(this)));
   }
 
   ~FactoryImpl() {}
 
-  void Create(SessionStore::FactoryCompletionCallback callback) {
-    if (!session_info_.has_value()) {
-      DVLOG(1) << "Deferring creation of store until session info is available";
-      deferred_creations_.push_back(std::move(callback));
-      return;
-    }
+  void Create(const syncer::DeviceInfo& device_info,
+              SessionStore::FactoryCompletionCallback callback) {
+    const std::string& cache_guid = device_info.guid();
+    DCHECK(!cache_guid.empty());
 
-    CreateImpl(std::move(callback));
+    SessionStore::SessionInfo session_info;
+    session_info.client_name = device_info.client_name();
+    session_info.device_type = device_info.device_type();
+    session_info.session_tag = GetSessionTagWithPrefs(
+        cache_guid, sessions_client_->GetSessionSyncPrefs());
+
+    DVLOG(1) << "Initiating creation of session store";
+
+    sessions_client_->GetStoreFactory().Run(
+        syncer::SESSIONS,
+        base::BindOnce(&FactoryImpl::OnStoreCreated, base::AsWeakPtr(this),
+                       session_info, std::move(callback)));
   }
 
  private:
-  void OnSessionInfoAvailable(const SessionStore::SessionInfo& session_info) {
-    local_device_info_subscription_.reset();
-    session_info_ = session_info;
-
-    std::vector<SessionStore::FactoryCompletionCallback> deferred_creations;
-    std::swap(deferred_creations, deferred_creations_);
-    for (SessionStore::FactoryCompletionCallback& callback :
-         deferred_creations) {
-      CreateImpl(std::move(callback));
-    }
-  }
-
-  void CreateImpl(SessionStore::FactoryCompletionCallback callback) {
-    DCHECK(session_info_.has_value());
-    DCHECK(deferred_creations_.empty());
-    DVLOG(1) << "Initiating creation of session store";
-    store_factory_.Run(
-        syncer::SESSIONS,
-        base::BindOnce(&FactoryImpl::OnStoreCreated, base::AsWeakPtr(this),
-                       std::move(callback)));
-  }
-
-  void OnStoreCreated(SessionStore::FactoryCompletionCallback callback,
+  void OnStoreCreated(const SessionStore::SessionInfo& session_info,
+                      SessionStore::FactoryCompletionCallback callback,
                       const base::Optional<syncer::ModelError>& error,
                       std::unique_ptr<ModelTypeStore> store) {
     if (error) {
@@ -205,10 +147,11 @@ class FactoryImpl : public base::SupportsWeakPtr<FactoryImpl> {
     ModelTypeStore* store_copy = store.get();
     store_copy->ReadAllData(
         base::BindOnce(&FactoryImpl::OnReadAllData, base::AsWeakPtr(this),
-                       std::move(callback), std::move(store)));
+                       session_info, std::move(callback), std::move(store)));
   }
 
-  void OnReadAllData(SessionStore::FactoryCompletionCallback callback,
+  void OnReadAllData(const SessionStore::SessionInfo& session_info,
+                     SessionStore::FactoryCompletionCallback callback,
                      std::unique_ptr<ModelTypeStore> store,
                      const base::Optional<syncer::ModelError>& error,
                      std::unique_ptr<ModelTypeStore::RecordList> record_list) {
@@ -218,17 +161,21 @@ class FactoryImpl : public base::SupportsWeakPtr<FactoryImpl> {
       return;
     }
 
-    store->ReadAllMetadata(base::BindOnce(
-        &FactoryImpl::OnReadAllMetadata, base::AsWeakPtr(this),
+    ModelTypeStore* store_raw = store.get();
+    store_raw->ReadAllMetadata(base::BindOnce(
+        &FactoryImpl::OnReadAllMetadata, base::AsWeakPtr(this), session_info,
         std::move(callback), std::move(store), std::move(record_list)));
   }
 
   void OnReadAllMetadata(
+      const SessionStore::SessionInfo& session_info,
       SessionStore::FactoryCompletionCallback callback,
       std::unique_ptr<ModelTypeStore> store,
       std::unique_ptr<ModelTypeStore::RecordList> record_list,
       const base::Optional<syncer::ModelError>& error,
       std::unique_ptr<syncer::MetadataBatch> metadata_batch) {
+    // Remove after fixing https://crbug.com/902203.
+    TRACE_EVENT0("browser", "FactoryImpl::OnReadAllMetadata");
     if (error) {
       std::move(callback).Run(error, /*store=*/nullptr,
                               /*metadata_batch=*/nullptr);
@@ -248,7 +195,7 @@ class FactoryImpl : public base::SupportsWeakPtr<FactoryImpl> {
     }
 
     auto session_store = std::make_unique<SessionStore>(
-        sessions_client_, *session_info_, std::move(store),
+        sessions_client_, session_info, std::move(store),
         std::move(initial_data), metadata_batch->GetAllMetadata(),
         restored_foreign_tab_callback_);
 
@@ -257,12 +204,7 @@ class FactoryImpl : public base::SupportsWeakPtr<FactoryImpl> {
   }
 
   SyncSessionsClient* const sessions_client_;
-  const syncer::RepeatingModelTypeStoreFactory store_factory_;
   const SessionStore::RestoredForeignTabCallback restored_foreign_tab_callback_;
-  base::Optional<SessionStore::SessionInfo> session_info_;
-  std::vector<SessionStore::FactoryCompletionCallback> deferred_creations_;
-  std::unique_ptr<syncer::LocalDeviceInfoProvider::Subscription>
-      local_device_info_subscription_;
 };
 
 }  // namespace
@@ -270,13 +212,9 @@ class FactoryImpl : public base::SupportsWeakPtr<FactoryImpl> {
 // static
 SessionStore::Factory SessionStore::CreateFactory(
     SyncSessionsClient* sessions_client,
-    syncer::SessionSyncPrefs* sync_prefs,
-    syncer::LocalDeviceInfoProvider* local_device_info_provider,
-    const syncer::RepeatingModelTypeStoreFactory& store_factory,
     const RestoredForeignTabCallback& restored_foreign_tab_callback) {
-  auto factory = std::make_unique<FactoryImpl>(
-      sessions_client, sync_prefs, local_device_info_provider, store_factory,
-      restored_foreign_tab_callback);
+  auto factory = std::make_unique<FactoryImpl>(sessions_client,
+                                               restored_foreign_tab_callback);
   return base::BindRepeating(&FactoryImpl::Create, std::move(factory));
 }
 
@@ -449,13 +387,6 @@ SessionStore::SessionStore(
                                     local_session_info.client_name,
                                     local_session_info.device_type);
 
-  // Map of all rewritten local ids. Because ids are reset on each restart,
-  // and id generation happens outside of Sync, all ids from a previous local
-  // session must be rewritten in order to be valid (i.e not collide with
-  // newly assigned IDs). Otherwise, SyncedSessionTracker could mix up IDs.
-  // Key: previous session id. Value: new session id.
-  std::map<SessionID::id_type, SessionID> session_id_map;
-
   bool found_local_header = false;
 
   for (auto& storage_key_and_specifics : initial_data) {
@@ -471,8 +402,7 @@ SessionStore::SessionStore(
     // Metadata should be available if data is available. If not, it means
     // the local store is corrupt, because we delete all data and metadata
     // at the same time (e.g. sync is disabled).
-    syncer::EntityMetadataMap::const_iterator metadata_it =
-        initial_metadata.find(storage_key);
+    auto metadata_it = initial_metadata.find(storage_key);
     if (metadata_it == initial_metadata.end()) {
       continue;
     }
@@ -498,26 +428,8 @@ SessionStore::SessionStore(
       DCHECK(!found_local_header);
       found_local_header = true;
 
-      // Go through and generate new tab and window ids as necessary, updating
-      // the specifics in place.
-      for (auto& window : *specifics.mutable_header()->mutable_window()) {
-        session_id_map.emplace(window.window_id(), SessionID::NewUnique());
-        window.set_window_id(session_id_map.at(window.window_id()).id());
-
-        for (int& tab_id : *window.mutable_tab()) {
-          if (session_id_map.count(tab_id) == 0) {
-            session_id_map.emplace(tab_id, SessionID::NewUnique());
-          }
-          tab_id = session_id_map.at(tab_id).id();
-          // Note: the tab id of the SessionTab will be updated when the tab
-          // node itself is processed.
-        }
-      }
-
       UpdateTrackerWithSpecifics(specifics, mtime, &session_tracker_);
-
-      DVLOG(1) << "Loaded local header and rewrote " << session_id_map.size()
-               << " ids.";
+      DVLOG(1) << "Loaded local header.";
     } else {
       DCHECK(specifics.has_tab());
 
@@ -526,20 +438,12 @@ SessionStore::SessionStore(
       DVLOG(1) << "Associating local tab " << specifics.tab().tab_id()
                << " with node " << specifics.tab_node_id();
 
-      // Now file the tab under the new tab id.
-      SessionID new_tab_id = SessionID::InvalidValue();
-      auto iter = session_id_map.find(specifics.tab().tab_id());
-      if (iter != session_id_map.end()) {
-        new_tab_id = iter->second;
-      } else {
-        new_tab_id = SessionID::NewUnique();
-        session_id_map.emplace(specifics.tab().tab_id(), new_tab_id);
-      }
-      DVLOG(1) << "Remapping tab " << specifics.tab().tab_id() << " to "
-               << new_tab_id;
-
-      specifics.mutable_tab()->set_tab_id(new_tab_id.id());
-      session_tracker_.ReassociateLocalTab(specifics.tab_node_id(), new_tab_id);
+      // TODO(mastiz): Move call to ReassociateLocalTab() into
+      // UpdateTrackerWithSpecifics(), possibly merge with OnTabNodeSeen(). Also
+      // consider merging this branch with processing of foreign tabs above.
+      session_tracker_.ReassociateLocalTab(
+          specifics.tab_node_id(),
+          SessionID::FromSerializedValue(specifics.tab().tab_id()));
       UpdateTrackerWithSpecifics(specifics, mtime, &session_tracker_);
     }
   }
@@ -552,7 +456,7 @@ SessionStore::SessionStore(
   }
 }
 
-SessionStore::~SessionStore() {}
+SessionStore::~SessionStore() = default;
 
 std::unique_ptr<syncer::DataBatch> SessionStore::GetSessionDataForKeys(
     const std::vector<std::string>& storage_keys) const {

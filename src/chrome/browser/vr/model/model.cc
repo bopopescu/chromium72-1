@@ -13,10 +13,8 @@ bool IsOpaqueUiMode(UiMode mode) {
     case kModeBrowsing:
     case kModeFullscreen:
     case kModeWebVr:
-    case kModeWebVrAutopresented:
     case kModeVoiceSearch:
     case kModeEditingOmnibox:
-    case kModeTabsView:
       return true;
     case kModeRepositionWindow:
     case kModeModalPrompt:
@@ -114,12 +112,7 @@ bool Model::fullscreen_enabled() const {
 }
 
 bool Model::web_vr_enabled() const {
-  return get_last_opaque_mode() == kModeWebVr ||
-         get_last_opaque_mode() == kModeWebVrAutopresented;
-}
-
-bool Model::web_vr_autopresentation_enabled() const {
-  return get_last_opaque_mode() == kModeWebVrAutopresented;
+  return get_last_opaque_mode() == kModeWebVr;
 }
 
 bool Model::reposition_window_enabled() const {

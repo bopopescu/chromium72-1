@@ -13,11 +13,19 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include <map>
+#include <memory>
 #include <string>
+#include <vector>
 
-#include "api/optional.h"
+#include "absl/types/optional.h"
+#include "api/bitrate_constraints.h"
+#include "api/crypto/cryptooptions.h"
+#include "api/fec_controller.h"
 #include "api/transport/bitrate_settings.h"
-#include "call/bitrate_constraints.h"
+#include "call/rtp_config.h"
+#include "logging/rtc_event_log/rtc_event_log.h"
+#include "modules/rtp_rtcp/include/rtp_rtcp_defines.h"
 
 namespace rtc {
 struct SentPacket;
@@ -26,17 +34,40 @@ class TaskQueue;
 }  // namespace rtc
 namespace webrtc {
 
+class CallStats;
 class CallStatsObserver;
+class FrameEncryptorInterface;
 class TargetTransferRateObserver;
+class Transport;
 class Module;
 class PacedSender;
 class PacketFeedbackObserver;
 class PacketRouter;
+class RtpVideoSenderInterface;
 class RateLimiter;
 class RtcpBandwidthObserver;
 class RtpPacketSender;
 struct RtpKeepAliveConfig;
+class SendDelayStats;
+class SendStatisticsProxy;
 class TransportFeedbackObserver;
+
+struct RtpSenderObservers {
+  RtcpRttStats* rtcp_rtt_stats;
+  RtcpIntraFrameObserver* intra_frame_callback;
+  RtcpStatisticsCallback* rtcp_stats;
+  StreamDataCountersCallback* rtp_stats;
+  BitrateStatisticsObserver* bitrate_observer;
+  FrameCountObserver* frame_count_observer;
+  RtcpPacketTypeCounterObserver* rtcp_type_observer;
+  SendSideDelayObserver* send_delay_observer;
+  SendPacketObserver* send_packet_observer;
+};
+
+struct RtpSenderFrameEncryptionConfig {
+  FrameEncryptorInterface* frame_encryptor = nullptr;
+  CryptoOptions crypto_options;
+};
 
 // An RtpTransportController should own everything related to the RTP
 // transport to/from a remote endpoint. We should have separate
@@ -66,6 +97,22 @@ class RtpTransportControllerSendInterface {
   virtual ~RtpTransportControllerSendInterface() {}
   virtual rtc::TaskQueue* GetWorkerQueue() = 0;
   virtual PacketRouter* packet_router() = 0;
+
+  virtual RtpVideoSenderInterface* CreateRtpVideoSender(
+      const std::vector<uint32_t>& ssrcs,
+      std::map<uint32_t, RtpState> suspended_ssrcs,
+      // TODO(holmer): Move states into RtpTransportControllerSend.
+      const std::map<uint32_t, RtpPayloadState>& states,
+      const RtpConfig& rtp_config,
+      int rtcp_report_interval_ms,
+      Transport* send_transport,
+      const RtpSenderObservers& observers,
+      RtcEventLog* event_log,
+      std::unique_ptr<FecController> fec_controller,
+      const RtpSenderFrameEncryptionConfig& frame_encryption_config) = 0;
+  virtual void DestroyRtpVideoSender(
+      RtpVideoSenderInterface* rtp_video_sender) = 0;
+
   virtual TransportFeedbackObserver* transport_feedback_observer() = 0;
 
   virtual RtpPacketSender* packet_sender() = 0;
@@ -110,6 +157,11 @@ class RtpTransportControllerSendInterface {
       const BitrateConstraints& constraints) = 0;
   virtual void SetClientBitratePreferences(
       const BitrateSettings& preferences) = 0;
+
+  virtual void SetAllocatedBitrateWithoutFeedback(uint32_t bitrate_bps) = 0;
+
+  virtual void OnTransportOverheadChanged(
+      size_t transport_overhead_per_packet) = 0;
 };
 
 }  // namespace webrtc

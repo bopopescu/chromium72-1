@@ -13,7 +13,7 @@
 #include "components/assist_ranker/proto/ranker_model.pb.h"
 #include "components/assist_ranker/ranker_model.h"
 #include "components/assist_ranker/ranker_model_loader_impl.h"
-#include "net/url_request/url_request_context_getter.h"
+#include "services/network/public/cpp/shared_url_loader_factory.h"
 
 namespace assist_ranker {
 
@@ -26,7 +26,7 @@ BinaryClassifierPredictor::~BinaryClassifierPredictor(){};
 std::unique_ptr<BinaryClassifierPredictor> BinaryClassifierPredictor::Create(
     const PredictorConfig& config,
     const base::FilePath& model_path,
-    net::URLRequestContextGetter* request_context_getter) {
+    scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory) {
   std::unique_ptr<BinaryClassifierPredictor> predictor(
       new BinaryClassifierPredictor(config));
   if (!predictor->is_query_enabled()) {
@@ -36,11 +36,13 @@ std::unique_ptr<BinaryClassifierPredictor> BinaryClassifierPredictor::Create(
   const GURL& model_url = predictor->GetModelUrl();
   DVLOG(1) << "Creating predictor instance for " << predictor->GetModelName();
   DVLOG(1) << "Model URL: " << model_url;
+  DVLOG(1) << "Using predict threshold replacement: "
+           << predictor->GetPredictThresholdReplacement();
   auto model_loader = std::make_unique<RankerModelLoaderImpl>(
       base::BindRepeating(&BinaryClassifierPredictor::ValidateModel),
       base::BindRepeating(&BinaryClassifierPredictor::OnModelAvailable,
                           base::Unretained(predictor.get())),
-      request_context_getter, model_path, model_url, config.uma_prefix);
+      url_loader_factory, model_path, model_url, config.uma_prefix);
   predictor->LoadModel(std::move(model_loader));
   return predictor;
 }
@@ -52,7 +54,13 @@ bool BinaryClassifierPredictor::Predict(const RankerExample& example,
     return false;
   }
 
-  *prediction = inference_module_->Predict(PreprocessExample(example));
+  float predict_threshold_replacement = GetPredictThresholdReplacement();
+  if (predict_threshold_replacement != kNoPredictThresholdReplacement) {
+    *prediction = inference_module_->PredictScore(PreprocessExample(example)) >=
+                  predict_threshold_replacement;
+  } else {
+    *prediction = inference_module_->Predict(PreprocessExample(example));
+  }
   DVLOG(1) << "Predictor " << GetModelName() << " predicted: " << *prediction;
   return true;
 }

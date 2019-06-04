@@ -25,10 +25,10 @@
 #include "components/prefs/testing_pref_service.h"
 #include "components/ukm/persisted_logs_metrics_impl.h"
 #include "components/ukm/ukm_pref_names.h"
-#include "components/ukm/ukm_source.h"
 #include "components/variations/variations_associated_data.h"
 #include "services/metrics/public/cpp/ukm_builders.h"
 #include "services/metrics/public/cpp/ukm_entry_builder.h"
+#include "services/metrics/public/cpp/ukm_source.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/metrics_proto/ukm/report.pb.h"
 #include "third_party/metrics_proto/ukm/source.pb.h"
@@ -53,10 +53,17 @@ std::string Entry1And2Whitelist() {
 // A small shim exposing UkmRecorder methods to tests.
 class TestRecordingHelper {
  public:
-  explicit TestRecordingHelper(UkmRecorder* recorder) : recorder_(recorder) {}
+  explicit TestRecordingHelper(UkmRecorder* recorder) : recorder_(recorder) {
+    recorder_->DisableSamplingForTesting();
+  }
 
   void UpdateSourceURL(SourceId source_id, const GURL& url) {
     recorder_->UpdateSourceURL(source_id, url);
+  }
+
+  void RecordNavigation(SourceId source_id,
+                        const UkmSource::NavigationData& navigation_data) {
+    recorder_->RecordNavigation(source_id, navigation_data);
   }
 
  private:
@@ -220,6 +227,27 @@ TEST_F(UkmServiceTest, PersistAndPurge) {
   EXPECT_EQ(GetPersistedLogCount(), 0);
 }
 
+TEST_F(UkmServiceTest, Purge) {
+  UkmService service(&prefs_, &client_,
+                     true /* restrict_to_whitelisted_entries */);
+  TestRecordingHelper recorder(&service);
+  EXPECT_EQ(GetPersistedLogCount(), 0);
+  service.Initialize();
+  task_runner_->RunUntilIdle();
+  service.EnableRecording(/*extensions=*/false);
+  service.EnableReporting();
+
+  // Record some data
+  auto id = GetWhitelistedSourceId(0);
+  recorder.UpdateSourceURL(id, GURL("https://google.com/foobar1"));
+  TestEvent1(id).Record(&service);
+
+  // Purge should delete data, so there shouldn't be anything left to upload.
+  service.Purge();
+  service.Flush();
+  EXPECT_EQ(0, GetPersistedLogCount());
+}
+
 TEST_F(UkmServiceTest, SourceSerialization) {
   UkmService service(&prefs_, &client_,
                      true /* restrict_to_whitelisted_entries */);
@@ -230,10 +258,12 @@ TEST_F(UkmServiceTest, SourceSerialization) {
   service.EnableRecording(/*extensions=*/false);
   service.EnableReporting();
 
+  UkmSource::NavigationData navigation_data;
+  navigation_data.urls = {GURL("https://google.com/initial"),
+                          GURL("https://google.com/final")};
+
   ukm::SourceId id = GetWhitelistedSourceId(0);
-  recorder.UpdateSourceURL(id, GURL("https://google.com/initial"));
-  recorder.UpdateSourceURL(id, GURL("https://google.com/intermediate"));
-  recorder.UpdateSourceURL(id, GURL("https://google.com/foobar"));
+  recorder.RecordNavigation(id, navigation_data);
 
   service.Flush();
   EXPECT_EQ(GetPersistedLogCount(), 1);
@@ -244,7 +274,7 @@ TEST_F(UkmServiceTest, SourceSerialization) {
   const Source& proto_source = proto_report.sources(0);
 
   EXPECT_EQ(id, proto_source.id());
-  EXPECT_EQ(GURL("https://google.com/foobar").spec(), proto_source.url());
+  EXPECT_EQ(GURL("https://google.com/final").spec(), proto_source.url());
   EXPECT_FALSE(proto_source.has_initial_url());
 }
 
@@ -419,9 +449,10 @@ TEST_F(UkmServiceTest, RecordInitialUrl) {
     service.EnableReporting();
 
     ukm::SourceId id = GetWhitelistedSourceId(0);
-    recorder.UpdateSourceURL(id, GURL("https://google.com/initial"));
-    recorder.UpdateSourceURL(id, GURL("https://google.com/intermediate"));
-    recorder.UpdateSourceURL(id, GURL("https://google.com/foobar"));
+    UkmSource::NavigationData navigation_data;
+    navigation_data.urls = {GURL("https://google.com/initial"),
+                            GURL("https://google.com/final")};
+    recorder.RecordNavigation(id, navigation_data);
 
     service.Flush();
     EXPECT_EQ(GetPersistedLogCount(), 1);
@@ -431,7 +462,7 @@ TEST_F(UkmServiceTest, RecordInitialUrl) {
     const Source& proto_source = proto_report.sources(0);
 
     EXPECT_EQ(id, proto_source.id());
-    EXPECT_EQ(GURL("https://google.com/foobar").spec(), proto_source.url());
+    EXPECT_EQ(GURL("https://google.com/final").spec(), proto_source.url());
     EXPECT_EQ(should_record_initial_url, proto_source.has_initial_url());
     if (should_record_initial_url) {
       EXPECT_EQ(GURL("https://google.com/initial").spec(),
@@ -555,6 +586,7 @@ TEST_F(UkmServiceTest, PurgeMidUpload) {
   task_runner_->RunUntilIdle();
   service.EnableRecording(/*extensions=*/false);
   service.EnableReporting();
+
   auto id = GetWhitelistedSourceId(0);
   recorder.UpdateSourceURL(id, GURL("https://google.com/foobar1"));
   // Should init, generate a log, and start an upload.
@@ -937,6 +969,7 @@ TEST_F(UkmServiceTest, SupportedSchemes) {
       {"ftp://google.ca/", true},
       {"about:blank", true},
       {"chrome://version/", true},
+      {"app://play/abcdefghijklmnopqrstuvwxyzabcdef/", true},
       // chrome-extension are controlled by TestIsWebstoreExtension, above.
       {"chrome-extension://bhcnanendmgjjeghamaccjnochlnhcgj/", true},
       {"chrome-extension://abcdefghijklmnopqrstuvwxyzabcdef/", false},
@@ -996,6 +1029,7 @@ TEST_F(UkmServiceTest, SupportedSchemesNoExtensions) {
       {"ftp://google.ca/", true},
       {"about:blank", true},
       {"chrome://version/", true},
+      {"app://play/abcdefghijklmnopqrstuvwxyzabcdef/", true},
       {"chrome-extension://bhcnanendmgjjeghamaccjnochlnhcgj/", false},
       {"chrome-extension://abcdefghijklmnopqrstuvwxyzabcdef/", false},
       {"file:///tmp/", false},

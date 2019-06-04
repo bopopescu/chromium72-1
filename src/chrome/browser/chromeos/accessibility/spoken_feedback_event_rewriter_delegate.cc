@@ -7,6 +7,7 @@
 #include "ash/public/interfaces/constants.mojom.h"
 #include "chrome/browser/chromeos/accessibility/accessibility_manager.h"
 #include "chrome/browser/chromeos/accessibility/event_handler_common.h"
+#include "chrome/browser/ui/aura/accessibility/automation_manager_aura.h"
 #include "content/public/browser/native_web_keyboard_event.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/service_manager_connection.h"
@@ -31,37 +32,27 @@ SpokenFeedbackEventRewriterDelegate::SpokenFeedbackEventRewriterDelegate()
 SpokenFeedbackEventRewriterDelegate::~SpokenFeedbackEventRewriterDelegate() {}
 
 void SpokenFeedbackEventRewriterDelegate::DispatchKeyEventToChromeVox(
-    std::unique_ptr<ui::Event> event) {
-  if (!ShouldDispatchKeyEventToChromeVox(event.get())) {
-    OnUnhandledSpokenFeedbackEvent(std::move(event));
-    return;
-  }
-
-  bool capture =
-      chromeos::AccessibilityManager::Get()->keyboard_listener_capture();
-  const ui::KeyEvent* key_event = event->AsKeyEvent();
-
-  // Always capture the Search key.
-  capture |= key_event->IsCommandDown();
-
-  // Don't capture tab as it gets consumed by Blink so never comes back
-  // unhandled. In third_party/WebKit/Source/core/input/EventHandler.cpp, a
-  // default tab handler consumes tab even when no focusable nodes are found; it
-  // sets focus to Chrome and eats the event.
-  if (key_event->GetDomKey() == ui::DomKey::TAB)
-    capture = false;
-
+    std::unique_ptr<ui::Event> event,
+    bool capture) {
   extensions::ExtensionHost* host = chromeos::GetAccessibilityExtensionHost(
       extension_misc::kChromeVoxExtensionId);
+  if (!host)
+    return;
+
   // Listen for any unhandled keyboard events from ChromeVox's background page
   // when capturing keys to reinject.
   host->host_contents()->SetDelegate(capture ? this : nullptr);
 
   // Forward the event to ChromeVox's background page.
-  chromeos::ForwardKeyToExtension(*key_event, host);
+  chromeos::ForwardKeyToExtension(*(event->AsKeyEvent()), host);
+}
 
-  if (!capture)
-    OnUnhandledSpokenFeedbackEvent(std::move(event));
+void SpokenFeedbackEventRewriterDelegate::DispatchMouseEventToChromeVox(
+    std::unique_ptr<ui::Event> event) {
+  if (event->type() == ui::ET_MOUSE_MOVED) {
+    AutomationManagerAura::GetInstance()->HandleEvent(
+        ax::mojom::Event::kMouseMoved);
+  }
 }
 
 bool SpokenFeedbackEventRewriterDelegate::ShouldDispatchKeyEventToChromeVox(
@@ -90,9 +81,9 @@ void SpokenFeedbackEventRewriterDelegate::OnUnhandledSpokenFeedbackEvent(
       std::move(event));
 }
 
-void SpokenFeedbackEventRewriterDelegate::HandleKeyboardEvent(
+bool SpokenFeedbackEventRewriterDelegate::HandleKeyboardEvent(
     content::WebContents* source,
     const content::NativeWebKeyboardEvent& event) {
-  OnUnhandledSpokenFeedbackEvent(
-      ui::Event::Clone(*static_cast<ui::Event*>(event.os_event)));
+  OnUnhandledSpokenFeedbackEvent(ui::Event::Clone(*event.os_event));
+  return true;
 }

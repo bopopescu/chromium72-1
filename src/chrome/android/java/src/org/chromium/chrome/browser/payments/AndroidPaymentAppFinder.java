@@ -158,6 +158,8 @@ public class AndroidPaymentAppFinder implements ManifestVerifyCallback {
         // https://w3c.github.io/webpayments-methods-credit-transfer-direct-debit/
         supportedNonUriPaymentMethods.add("payee-credit-transfer");
         supportedNonUriPaymentMethods.add("payer-credit-transfer");
+        // https://w3c.github.io/webpayments-methods-tokenization/
+        supportedNonUriPaymentMethods.add("tokenized-card");
 
         mNonUriPaymentMethods = new HashSet<>();
         mUriPaymentMethods = new HashSet<>();
@@ -302,7 +304,7 @@ public class AndroidPaymentAppFinder implements ManifestVerifyCallback {
         for (URI uriMethodName : uriMethods) {
             if (!methodToAppsMapping.containsKey(uriMethodName.toString())) continue;
 
-            if (!mParser.isNativeInitialized()) mParser.createNative();
+            if (!mParser.isNativeInitialized()) mParser.createNative(mWebContents);
 
             // Initialize the native side of the downloader, once we know that a manifest file needs
             // to be downloaded.

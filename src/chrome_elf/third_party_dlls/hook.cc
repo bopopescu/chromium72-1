@@ -4,6 +4,8 @@
 
 #include "chrome_elf/third_party_dlls/hook.h"
 
+#include <atomic>
+#include <limits>
 #include <memory>
 
 #include <assert.h>
@@ -16,6 +18,8 @@
 #include "chrome_elf/third_party_dlls/logs.h"
 #include "chrome_elf/third_party_dlls/main.h"
 #include "chrome_elf/third_party_dlls/packed_list_file.h"
+#include "chrome_elf/third_party_dlls/packed_list_format.h"
+#include "chrome_elf/third_party_dlls/public_api.h"
 #include "sandbox/win/src/interception_internal.h"
 #include "sandbox/win/src/internal_types.h"
 #include "sandbox/win/src/nt_internals.h"
@@ -46,6 +50,12 @@ NtUnmapViewOfSectionFunction g_nt_unmap_view_of_section_func = nullptr;
 
 // Set if and when ApplyHook() has been successfully executed.
 bool g_hook_active = false;
+
+// Indicates if the hook was disabled after the hook was activated.
+std::atomic<bool> g_hook_disabled(false);
+
+// Set to a different NTSTATUS if an error occured while applying the hook.
+std::atomic<int32_t> g_apply_hook_result(STATUS_SUCCESS);
 
 // Set up NTDLL function pointers.
 bool InitImports() {
@@ -147,7 +157,9 @@ bool UTF16ToUTF8(const std::wstring& utf16, std::string* utf8) {
 }
 
 // Helper function to contain the data mining for the values needed.
-// - All strings returned are lowercase UTF-8.
+// - |image_name| and |section_basename| will be lowercased.  |section_path|
+//   will be left untouched, preserved for case-sensitive operations with it.
+// - All strings returned are UTF-8.  Treat accordingly.
 // - This function succeeds if image_name || section_* is found.
 // Note: |section_path| contains |section_basename|, if the section name is
 //       successfully mined.
@@ -165,7 +177,8 @@ bool GetDataFromImage(PVOID buffer,
   section_path->clear();
   section_basename->clear();
 
-  pe_image_safe::PEImageSafe image(buffer, buffer_size);
+  pe_image_safe::PEImageSafe image(reinterpret_cast<HMODULE>(buffer),
+                                   buffer_size);
   PIMAGE_FILE_HEADER file_header = image.GetFileHeader();
   if (!file_header ||
       image.GetImageBitness() == pe_image_safe::ImageBitness::kUnknown) {
@@ -195,15 +208,15 @@ bool GetDataFromImage(PVOID buffer,
     *image_name = std::string(name, ::strnlen(name, MAX_PATH));
   }
 
+  // Lowercase |image_name|.
   for (size_t i = 0; i < image_name->size(); i++)
     (*image_name)[i] = tolower((*image_name)[i]);
 
   std::wstring temp_section_path = GetSectionName(buffer);
-  for (size_t i = 0; i < temp_section_path.size(); i++)
-    temp_section_path[i] = towlower(temp_section_path[i]);
 
   // For now, consider it a success if at least one source results in a name.
   // Allow for the rare case of one or the other not being there.
+  // (E.g.: a module could have no export directory.)
   if (image_name->empty() && temp_section_path.empty())
     return false;
 
@@ -220,7 +233,11 @@ bool GetDataFromImage(PVOID buffer,
     temp_section_basename = temp_section_path.substr(sep + 1);
   }
 
-  // Convert strings from UTF-16 to UTF-8.
+  // Lowercase |section_basename|.
+  for (size_t i = 0; i < temp_section_basename.size(); i++)
+    temp_section_basename[i] = towlower(temp_section_basename[i]);
+
+  // Convert section strings from UTF-16 to UTF-8.
   return UTF16ToUTF8(temp_section_path, section_path) &&
          UTF16ToUTF8(temp_section_basename, section_basename);
 }
@@ -233,9 +250,8 @@ bool GetDataFromImage(PVOID buffer,
 // 3) Mine the data needed out of the PE headers.
 // 4) Lookup module in local cache (blocking).
 // 5) Temporarily check old (deprecated) blacklist.
-// 6) IME check (rare).
-// 7) Unmap view if blocking required.
-// 8) Log the result either way.
+// 6) Unmap view if blocking required.
+// 7) Log the result either way.
 //------------------------------------------------------------------------------
 
 NTSTATUS NewNtMapViewOfSectionImpl(
@@ -259,6 +275,9 @@ NTSTATUS NewNtMapViewOfSectionImpl(
                                        commit_size, offset, view_size, inherit,
                                        allocation_type, protect);
 
+  if (g_hook_disabled.load(std::memory_order_relaxed))
+    return ret;
+
   // If there was an OS-level failure, if the mapping target is NOT this
   // process, or if the section is not a (valid) Portable Executable,
   // we're not interested.  Return the OS-level result code.
@@ -273,65 +292,65 @@ NTSTATUS NewNtMapViewOfSectionImpl(
   std::string image_name;
   std::string section_path;
   std::string section_basename;
-  if (!GetDataFromImage(*base, *view_size, &time_date_stamp, &image_size,
-                        &image_name, &section_path, &section_basename)) {
+
+  assert(*view_size < std::numeric_limits<DWORD>::max());
+  // A memory section can be > 32-bits, but an image/PE in memory can only be <=
+  // 32-bits in size.  That's a limitation of Windows and its interactions with
+  // processors.  No section that appears to be an image (checked above) should
+  // have such a large size.
+  if (!GetDataFromImage(*base, static_cast<DWORD>(*view_size), &time_date_stamp,
+                        &image_size, &image_name, &section_path,
+                        &section_basename)) {
     return ret;
   }
 
-  // Note that one of either image_name or section_basename can be empty, and
-  // the resulting hash string would be empty as well.
-  std::string image_name_hash = elf_sha1::SHA1HashString(image_name);
-  std::string section_basename_hash =
-      elf_sha1::SHA1HashString(section_basename);
-  std::string fingerprint_hash =
-      GetFingerprintHash(image_size, time_date_stamp);
+  // Note that one of either image_name or section_basename can be empty.
+  elf_sha1::Digest image_name_hash;
+  if (!image_name.empty())
+    image_name_hash = elf_sha1::SHA1HashString(image_name);
+  elf_sha1::Digest section_basename_hash;
+  if (!section_basename.empty())
+    section_basename_hash = elf_sha1::SHA1HashString(section_basename);
+  elf_sha1::Digest fingerprint_hash = elf_sha1::SHA1HashString(
+      GetFingerprintString(time_date_stamp, image_size));
 
   // Check sources for blacklist decision.
   bool block = false;
-  std::string* name_matched = nullptr;
 
-  if (!image_name_hash.empty() &&
+  if (!image_name.empty() &&
       IsModuleListed(image_name_hash, fingerprint_hash)) {
     // 1) Third-party DLL blacklist, check for image name from PE header.
     block = true;
-    name_matched = &image_name_hash;
-  } else if (!section_basename_hash.empty() &&
-             section_basename_hash.compare(image_name_hash) != 0 &&
+  } else if (!section_basename.empty() &&
+             section_basename_hash != image_name_hash &&
              IsModuleListed(section_basename_hash, fingerprint_hash)) {
     // 2) Third-party DLL blacklist, check for image name from the section.
     block = true;
-    name_matched = &section_basename_hash;
   } else if (!image_name.empty() && blacklist::DllMatch(image_name)) {
     // 3) Hard-coded blacklist with name from PE header (deprecated).
     block = true;
-    name_matched = &image_name_hash;
   } else if (!section_basename.empty() &&
              section_basename.compare(image_name) != 0 &&
              blacklist::DllMatch(section_basename)) {
     // 4) Hard-coded blacklist with name from the section (deprecated).
     block = true;
-    name_matched = &section_basename_hash;
-  } else {
-    // No block.
-    // Ensure a non-null image name for the log.  Prefer the section basename
-    // (to match the path).
-    name_matched = section_basename.empty() ? &image_name : &section_basename;
   }
-  // IME is an explicit whitelist.
-  // TODO(pennymac): create an explicit allow LogType?
+  // Else, no block.
 
   // UNMAP the view.  This image is being blocked.
   if (block) {
-    assert(name_matched);
     assert(g_nt_unmap_view_of_section_func);
     g_nt_unmap_view_of_section_func(process, *base);
+    *base = nullptr;
     ret = STATUS_UNSUCCESSFUL;
   }
 
   // LOG!
+  // - If there was a failure getting |section_path|, at least pass image_name.
   LogLoadAttempt((block ? third_party_dlls::LogType::kBlocked
                         : third_party_dlls::LogType::kAllowed),
-                 *name_matched, fingerprint_hash, section_path);
+                 image_size, time_date_stamp,
+                 section_path.empty() ? image_name : section_path);
 
   return ret;
 }
@@ -388,18 +407,18 @@ NTSTATUS WINAPI NewNtMapViewOfSection64(HANDLE section,
 }
 #endif
 
-HookStatus ApplyHook() {
+ThirdPartyStatus ApplyHook() {
   // Debug check: ApplyHook() should not be called more than once.
   assert(!g_hook_active);
 
   if (!InitImports())
-    return HookStatus::kInitImportsFailure;
+    return ThirdPartyStatus::kHookInitImportsFailure;
 
   // Prep system-service thunk via the appropriate ServiceResolver instance.
   std::unique_ptr<sandbox::ServiceResolverThunk> thunk(
       elf_hook::HookSystemService(false));
   if (!thunk)
-    return HookStatus::kUnsupportedOs;
+    return ThirdPartyStatus::kHookUnsupportedOs;
 
   // Set target process to self.
   thunk->AllowLocalPatches();
@@ -409,7 +428,7 @@ HookStatus ApplyHook() {
   DWORD old_protect = 0;
   if (!::VirtualProtect(&g_thunk_storage, sizeof(g_thunk_storage),
                         PAGE_EXECUTE_READWRITE, &old_protect)) {
-    return HookStatus::kVirtualProtectFail;
+    return ThirdPartyStatus::kHookVirtualProtectFailure;
   }
 
   // Replace the default NtMapViewOfSection system service with our patched
@@ -446,8 +465,12 @@ HookStatus ApplyHook() {
                    thunk_storage, sizeof(sandbox::ThunkData), nullptr);
 #endif  // defined(_WIN64)
 
-  if (!NT_SUCCESS(ntstatus))
-    return HookStatus::kApplyHookFail;
+  if (!NT_SUCCESS(ntstatus)) {
+    // Remember the status code.
+    g_apply_hook_result.store(ntstatus, std::memory_order_relaxed);
+
+    return ThirdPartyStatus::kHookApplyFailure;
+  }
 
   // Mark the thunk storage (original system service) as executable and prevent
   // any future writes to it.
@@ -459,7 +482,31 @@ HookStatus ApplyHook() {
 
   g_hook_active = true;
 
-  return HookStatus::kSuccess;
+  return ThirdPartyStatus::kSuccess;
+}
+
+bool GetDataFromImageForTesting(PVOID mapped_image,
+                                DWORD* time_date_stamp,
+                                DWORD* image_size,
+                                std::string* image_name,
+                                std::string* section_path,
+                                std::string* section_basename) {
+  if (!g_nt_query_virtual_memory_func)
+    InitImports();
+
+  return GetDataFromImage(mapped_image, pe_image_safe::kImageSizeNotSet,
+                          time_date_stamp, image_size, image_name, section_path,
+                          section_basename);
 }
 
 }  // namespace third_party_dlls
+
+using namespace third_party_dlls;
+
+void DisableHook() {
+  g_hook_disabled.store(true, std::memory_order_relaxed);
+}
+
+int32_t GetApplyHookResult() {
+  return g_apply_hook_result.load(std::memory_order_relaxed);
+}

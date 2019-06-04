@@ -43,7 +43,6 @@
 #include "third_party/blink/renderer/core/css/style_change_reason.h"
 #include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/dom/dom_node_ids.h"
-#include "third_party/blink/renderer/core/dom/exception_code.h"
 #include "third_party/blink/renderer/core/events/animation_playback_event.h"
 #include "third_party/blink/renderer/core/execution_context/execution_context.h"
 #include "third_party/blink/renderer/core/frame/use_counter.h"
@@ -72,7 +71,7 @@ Animation* Animation::Create(AnimationEffect* effect,
                              ExceptionState& exception_state) {
   if (!timeline || !timeline->IsDocumentTimeline()) {
     // FIXME: Support creating animations without a timeline.
-    exception_state.ThrowDOMException(kNotSupportedError,
+    exception_state.ThrowDOMException(DOMExceptionCode::kNotSupportedError,
                                       "Animations can currently only be "
                                       "created with a non-null "
                                       "DocumentTimeline");
@@ -97,7 +96,7 @@ Animation* Animation::Create(ExecutionContext* execution_context,
                              ExceptionState& exception_state) {
   DCHECK(RuntimeEnabledFeatures::WebAnimationsAPIEnabled());
 
-  Document* document = ToDocument(execution_context);
+  Document* document = To<Document>(execution_context);
   return Create(effect, &document->Timeline(), exception_state);
 }
 
@@ -581,7 +580,7 @@ void Animation::pause(ExceptionState& exception_state) {
     if (playback_rate_ < 0 &&
         EffectEnd() == std::numeric_limits<double>::infinity()) {
       exception_state.ThrowDOMException(
-          kInvalidStateError,
+          DOMExceptionCode::kInvalidStateError,
           "Cannot pause, Animation has infinite target effect end.");
       return;
     }
@@ -618,7 +617,7 @@ void Animation::play(ExceptionState& exception_state) {
   if (playback_rate_ < 0 && current_time <= 0 &&
       EffectEnd() == std::numeric_limits<double>::infinity()) {
     exception_state.ThrowDOMException(
-        kInvalidStateError,
+        DOMExceptionCode::kInvalidStateError,
         "Cannot play reversed Animation with infinite target effect end.");
     return;
   }
@@ -659,14 +658,14 @@ void Animation::finish(ExceptionState& exception_state) {
 
   if (!playback_rate_) {
     exception_state.ThrowDOMException(
-        kInvalidStateError,
+        DOMExceptionCode::kInvalidStateError,
         "Cannot finish Animation with a playbackRate of 0.");
     return;
   }
   if (playback_rate_ > 0 &&
       EffectEnd() == std::numeric_limits<double>::infinity()) {
     exception_state.ThrowDOMException(
-        kInvalidStateError,
+        DOMExceptionCode::kInvalidStateError,
         "Cannot finish Animation with an infinite target effect end.");
     return;
   }
@@ -706,7 +705,7 @@ ScriptPromise Animation::ready(ScriptState* script_state) {
 }
 
 const AtomicString& Animation::InterfaceName() const {
-  return EventTargetNames::Animation;
+  return event_target_names::kAnimation;
 }
 
 ExecutionContext* Animation::GetExecutionContext() const {
@@ -719,7 +718,7 @@ bool Animation::HasPendingActivity() const {
       finished_promise_->GetState() == ScriptPromisePropertyBase::kPending;
 
   return pending_finished_event_ || has_pending_promise ||
-         (!finished_ && HasEventListeners(EventTypeNames::finish));
+         (!finished_ && HasEventListeners(event_type_names::kFinish));
 }
 
 void Animation::ContextDestroyed(ExecutionContext*) {
@@ -729,8 +728,8 @@ void Animation::ContextDestroyed(ExecutionContext*) {
   pending_finished_event_ = nullptr;
 }
 
-DispatchEventResult Animation::DispatchEventInternal(Event* event) {
-  if (pending_finished_event_ == event)
+DispatchEventResult Animation::DispatchEventInternal(Event& event) {
+  if (pending_finished_event_ == &event)
     pending_finished_event_ = nullptr;
   return EventTargetWithInlineData::DispatchEventInternal(event);
 }
@@ -798,18 +797,17 @@ CompositorAnimations::FailureCode Animation::CheckCanStartAnimationOnCompositor(
     const base::Optional<CompositorElementIdSet>& composited_element_ids)
     const {
   CompositorAnimations::FailureCode code =
-      CheckCanStartAnimationOnCompositorInternal(composited_element_ids);
+      CheckCanStartAnimationOnCompositorInternal();
   if (!code.Ok()) {
     return code;
   }
   return ToKeyframeEffect(content_.Get())
-      ->CheckCanStartAnimationOnCompositor(playback_rate_);
+      ->CheckCanStartAnimationOnCompositor(composited_element_ids,
+                                           playback_rate_);
 }
 
 CompositorAnimations::FailureCode
-Animation::CheckCanStartAnimationOnCompositorInternal(
-    const base::Optional<CompositorElementIdSet>& composited_element_ids)
-    const {
+Animation::CheckCanStartAnimationOnCompositorInternal() const {
   if (is_composited_animation_disabled_for_testing_) {
     return CompositorAnimations::FailureCode::NonActionable(
         "Accelerated animations disabled for testing");
@@ -850,35 +848,6 @@ Animation::CheckCanStartAnimationOnCompositorInternal(
         "Animation effect is not keyframe-based");
   }
 
-  // If the optional element id set has no value we must be in SPv1 mode in
-  // which case we trust the compositing logic will create a layer if needed.
-  if (composited_element_ids) {
-    DCHECK(RuntimeEnabledFeatures::BlinkGenPropertyTreesEnabled() ||
-           RuntimeEnabledFeatures::SlimmingPaintV2Enabled());
-    Element* target_element = ToKeyframeEffect(content_.Get())->target();
-    if (!target_element) {
-      return CompositorAnimations::FailureCode::Actionable(
-          "Animation is not attached to an element");
-    }
-
-    bool has_own_layer_id = false;
-    if (target_element->GetLayoutObject() &&
-        target_element->GetLayoutObject()->IsBoxModelObject() &&
-        target_element->GetLayoutObject()->HasLayer()) {
-      CompositorElementId target_element_id =
-          CompositorElementIdFromUniqueObjectId(
-              target_element->GetLayoutObject()->UniqueId(),
-              CompositorElementIdNamespace::kPrimary);
-      if (composited_element_ids->Contains(target_element_id)) {
-        has_own_layer_id = true;
-      }
-    }
-    if (!has_own_layer_id) {
-      return CompositorAnimations::FailureCode::NonActionable(
-          "Target element does not have its own compositing layer");
-    }
-  }
-
   if (!Playing()) {
     return CompositorAnimations::FailureCode::Actionable(
         "Animation is not playing");
@@ -896,7 +865,8 @@ void Animation::StartAnimationOnCompositor(
   base::Optional<double> start_time = base::nullopt;
   double time_offset = 0;
   if (start_time_) {
-    start_time = TimelineInternal()->ZeroTime() + start_time_.value();
+    start_time = TimeTicksInSeconds(TimelineInternal()->ZeroTime()) +
+                 start_time_.value();
     if (reversed)
       start_time = start_time.value() - (EffectEnd() / fabs(playback_rate_));
   } else {
@@ -907,6 +877,7 @@ void Animation::StartAnimationOnCompositor(
 
   DCHECK(!start_time || !IsNull(start_time.value()));
   DCHECK_NE(compositor_group_, 0);
+  DCHECK(ToKeyframeEffect(content_.Get()));
   ToKeyframeEffect(content_.Get())
       ->StartAnimationOnCompositor(compositor_group_, start_time, time_offset,
                                    playback_rate_);
@@ -987,12 +958,20 @@ bool Animation::Update(TimingUpdateReason reason) {
     if (inherited_time == 0 && playback_rate_ < 0)
       inherited_time = -1;
     content_->UpdateInheritedTime(inherited_time, reason);
+
+    // After updating the animation time if the animation is no longer current
+    // blink will no longer composite the element (see
+    // CompositingReasonFinder::RequiresCompositingFor*Animation). We cancel any
+    // running compositor animation so that we don't try to animate the
+    // non-existent element on the compositor.
+    if (!content_->IsCurrent())
+      CancelAnimationOnCompositor();
   }
 
   if ((idle || Limited()) && !finished_) {
     if (reason == kTimingUpdateForAnimationFrame && (idle || start_time_)) {
       if (idle) {
-        const AtomicString& event_type = EventTypeNames::cancel;
+        const AtomicString& event_type = event_type_names::kCancel;
         if (GetExecutionContext() && HasEventListeners(event_type)) {
           double event_current_time = NullValue();
           pending_cancelled_event_ =
@@ -1004,7 +983,7 @@ bool Animation::Update(TimingUpdateReason reason) {
               pending_cancelled_event_);
         }
       } else {
-        const AtomicString& event_type = EventTypeNames::finish;
+        const AtomicString& event_type = event_type_names::kFinish;
         if (GetExecutionContext() && HasEventListeners(event_type)) {
           double event_current_time = CurrentTimeInternal() * 1000;
           pending_finished_event_ =
@@ -1163,19 +1142,21 @@ Animation::PlayStateUpdateScope::~PlayStateUpdateScope() {
   if (old_play_state != new_play_state) {
     bool was_active = old_play_state == kPending || old_play_state == kRunning;
     bool is_active = new_play_state == kPending || new_play_state == kRunning;
-    if (!was_active && is_active)
+    if (!was_active && is_active) {
       TRACE_EVENT_NESTABLE_ASYNC_BEGIN1(
           "blink.animations,devtools.timeline,benchmark,rail", "Animation",
-          animation_, "data", InspectorAnimationEvent::Data(*animation_));
-    else if (was_active && !is_active)
+          animation_, "data", inspector_animation_event::Data(*animation_));
+    } else if (was_active && !is_active) {
       TRACE_EVENT_NESTABLE_ASYNC_END1(
           "blink.animations,devtools.timeline,benchmark,rail", "Animation",
           animation_, "endData",
-          InspectorAnimationStateEvent::Data(*animation_));
-    else
+          inspector_animation_state_event::Data(*animation_));
+    } else {
       TRACE_EVENT_NESTABLE_ASYNC_INSTANT1(
           "blink.animations,devtools.timeline,benchmark,rail", "Animation",
-          animation_, "data", InspectorAnimationStateEvent::Data(*animation_));
+          animation_, "data",
+          inspector_animation_state_event::Data(*animation_));
+    }
   }
 
   // Ordering is important, the ready promise should resolve/reject before
@@ -1252,7 +1233,7 @@ void Animation::AddedEventListener(
     RegisteredEventListener& registered_listener) {
   EventTargetWithInlineData::AddedEventListener(event_type,
                                                 registered_listener);
-  if (event_type == EventTypeNames::finish)
+  if (event_type == event_type_names::kFinish)
     UseCounter::Count(GetExecutionContext(), WebFeature::kAnimationFinishEvent);
 }
 
@@ -1290,7 +1271,7 @@ void Animation::InvalidateKeyframeEffect(const TreeScope& tree_scope) {
       CSSAnimations::IsAffectedByKeyframesFromScope(*target, tree_scope)) {
     target->SetNeedsStyleRecalc(kLocalStyleChange,
                                 StyleChangeReasonForTracing::Create(
-                                    StyleChangeReason::kStyleSheetChange));
+                                    style_change_reason::kStyleSheetChange));
   }
 }
 
@@ -1307,7 +1288,7 @@ void Animation::ResolvePromiseMaybeAsync(AnimationPromise* promise) {
 }
 
 void Animation::RejectAndResetPromise(AnimationPromise* promise) {
-  promise->Reject(DOMException::Create(kAbortError));
+  promise->Reject(DOMException::Create(DOMExceptionCode::kAbortError));
   promise->Reset();
 }
 

@@ -29,10 +29,14 @@
 
 #include <memory>
 
+#include "base/macros.h"
 #include "base/memory/weak_ptr.h"
 #include "cc/input/overscroll_behavior.h"
+#include "cc/input/scroll_snap_data.h"
 #include "cc/layers/content_layer_client.h"
+#include "cc/layers/layer.h"
 #include "cc/layers/layer_client.h"
+#include "cc/layers/layer_sticky_position_constraint.h"
 #include "third_party/blink/renderer/platform/geometry/float_point.h"
 #include "third_party/blink/renderer/platform/geometry/float_point_3d.h"
 #include "third_party/blink/renderer/platform/geometry/float_size.h"
@@ -56,7 +60,6 @@
 #include "third_party/skia/include/core/SkRefCnt.h"
 
 namespace cc {
-class Layer;
 class PictureImageLayer;
 class PictureLayer;
 }
@@ -64,13 +67,11 @@ class PictureLayer;
 namespace blink {
 
 class CompositorFilterOperations;
-class CompositedLayerRasterInvalidator;
 class Image;
-class JSONObject;
 class LinkHighlight;
 class PaintController;
 class RasterInvalidationTracking;
-class ScrollableArea;
+class RasterInvalidator;
 
 typedef Vector<GraphicsLayer*, 64> GraphicsLayerVector;
 
@@ -79,7 +80,6 @@ typedef Vector<GraphicsLayer*, 64> GraphicsLayerVector;
 class PLATFORM_EXPORT GraphicsLayer : public cc::LayerClient,
                                       public DisplayItemClient,
                                       private cc::ContentLayerClient {
-  WTF_MAKE_NONCOPYABLE(GraphicsLayer);
   USING_FAST_MALLOC(GraphicsLayer);
 
  public:
@@ -94,6 +94,9 @@ class PLATFORM_EXPORT GraphicsLayer : public cc::LayerClient,
   }
   CompositingReasons GetCompositingReasons() const {
     return compositing_reasons_;
+  }
+  SquashingDisallowedReasons GetSquashingDisallowedReasons() const {
+    return squashing_disallowed_reasons_;
   }
   void SetSquashingDisallowedReasons(SquashingDisallowedReasons reasons) {
     squashing_disallowed_reasons_ = reasons;
@@ -116,47 +119,37 @@ class PLATFORM_EXPORT GraphicsLayer : public cc::LayerClient,
   void RemoveFromParent();
 
   GraphicsLayer* MaskLayer() const { return mask_layer_; }
-  void SetMaskLayer(GraphicsLayer*);
+  void SetMaskLayer(GraphicsLayer*, bool is_rounded_corner_mask);
 
   GraphicsLayer* ContentsClippingMaskLayer() const {
     return contents_clipping_mask_layer_;
   }
   void SetContentsClippingMaskLayer(GraphicsLayer*);
 
-  enum ShouldSetNeedsDisplay { kDontSetNeedsDisplay, kSetNeedsDisplay };
-
   // The offset is the origin of the layoutObject minus the origin of the
   // graphics layer (so either zero or negative).
   IntSize OffsetFromLayoutObject() const {
-    return FlooredIntSize(offset_from_layout_object_);
-  }
-  void SetOffsetFromLayoutObject(const IntSize&,
-                                 ShouldSetNeedsDisplay = kSetNeedsDisplay);
-  LayoutSize OffsetFromLayoutObjectWithSubpixelAccumulation() const;
-
-  // The double version is only used in updateScrollingLayerGeometry() for
-  // detecting a scroll offset change at floating point precision.
-  DoubleSize OffsetDoubleFromLayoutObject() const {
     return offset_from_layout_object_;
   }
-  void SetOffsetDoubleFromLayoutObject(
-      const DoubleSize&,
-      ShouldSetNeedsDisplay = kSetNeedsDisplay);
+  void SetOffsetFromLayoutObject(const IntSize&);
+  LayoutSize OffsetFromLayoutObjectWithSubpixelAccumulation() const;
 
   // The position of the layer (the location of its top-left corner in its
   // parent).
-  const FloatPoint& GetPosition() const { return position_; }
-  void SetPosition(const FloatPoint&);
+  const gfx::PointF& GetPosition() const;
+  void SetPosition(const gfx::PointF&);
 
-  const FloatPoint3D& TransformOrigin() const { return transform_origin_; }
-  void SetTransformOrigin(const FloatPoint3D&);
+  const gfx::Point3F& TransformOrigin() const;
+  void SetTransformOrigin(const gfx::Point3F&);
 
   // The size of the layer.
-  const IntSize& Size() const { return size_; }
-  void SetSize(const IntSize&);
+  const gfx::Size& Size() const;
+  void SetSize(const gfx::Size&);
 
   const TransformationMatrix& Transform() const { return transform_; }
   void SetTransform(const TransformationMatrix&);
+
+  bool ShouldFlattenTransform() const;
   void SetShouldFlattenTransform(bool);
   void SetRenderingContext(int id);
 
@@ -175,24 +168,26 @@ class PLATFORM_EXPORT GraphicsLayer : public cc::LayerClient,
   // For special cases, e.g. drawing missing tiles on Android.
   // The compositor should never paint this color in normal cases because the
   // Layer will paint the background by itself.
-  Color BackgroundColor() const { return background_color_; }
-  void SetBackgroundColor(const Color&);
+  RGBA32 BackgroundColor() const;
+  void SetBackgroundColor(RGBA32);
 
   // Opaque means that we know the layer contents have no alpha.
-  bool ContentsOpaque() const { return contents_opaque_; }
+  bool ContentsOpaque() const;
   void SetContentsOpaque(bool);
 
-  bool BackfaceVisibility() const { return backface_visibility_; }
+  bool BackfaceVisibility() const;
   void SetBackfaceVisibility(bool visible);
 
-  float Opacity() const { return opacity_; }
+  float Opacity() const;
   void SetOpacity(float);
 
+  BlendMode GetBlendMode() const;
   void SetBlendMode(BlendMode);
+  bool IsRootForIsolatedGroup() const;
   void SetIsRootForIsolatedGroup(bool);
 
   void SetHitTestableWithoutDrawsContent(bool);
-  bool GetHitTestableWithoutDrawsContentForTesting() {
+  bool GetHitTestableWithoutDrawsContent() const {
     return hit_testable_without_draws_content_;
   }
 
@@ -208,11 +203,6 @@ class PLATFORM_EXPORT GraphicsLayer : public cc::LayerClient,
   void SetPaintingPhase(GraphicsLayerPaintingPhase);
 
   void SetNeedsDisplay();
-  // Mark the given rect (in layer coords) as needing display. Never goes deep.
-  void SetNeedsDisplayInRect(const IntRect&,
-                             PaintInvalidationReason,
-                             const DisplayItemClient&);
-
   void SetContentsNeedsDisplay();
 
   // Set that the position/size of the contents (image or video).
@@ -235,7 +225,7 @@ class PLATFORM_EXPORT GraphicsLayer : public cc::LayerClient,
   cc::Layer* ContentsLayer() const { return contents_layer_; }
 
   // For hosting this GraphicsLayer in a native layer hierarchy.
-  cc::Layer* CcLayer() const;
+  cc::PictureLayer* CcLayer() const;
 
   int PaintCount() const { return paint_count_; }
 
@@ -243,8 +233,6 @@ class PLATFORM_EXPORT GraphicsLayer : public cc::LayerClient,
   // true, pointers for the layers and timing data will be included in the
   // returned string.
   String GetLayerTreeAsTextForTesting(LayerTreeFlags = kLayerTreeNormal) const;
-
-  std::unique_ptr<JSONObject> LayerTreeAsJSON(LayerTreeFlags) const;
 
   void UpdateTrackingRasterInvalidations();
   void ResetTrackedRasterInvalidations();
@@ -256,16 +244,11 @@ class PLATFORM_EXPORT GraphicsLayer : public cc::LayerClient,
 
   void AddLinkHighlight(LinkHighlight*);
   void RemoveLinkHighlight(LinkHighlight*);
-  // Exposed for tests
-  unsigned NumLinkHighlights() { return link_highlights_.size(); }
-  LinkHighlight* GetLinkHighlight(int i) { return link_highlights_[i]; }
+  const Vector<LinkHighlight*>& GetLinkHighlights() const {
+    return link_highlights_;
+  }
 
-  void SetScrollableArea(ScrollableArea*);
-  ScrollableArea* GetScrollableArea() const { return scrollable_area_; }
-
-  void ScrollableAreaDisposed();
-
-  cc::PictureLayer* ContentLayer() const { return layer_.get(); }
+  int GetRenderingContext3D() const { return rendering_context3d_; }
 
   static void RegisterContentsLayer(cc::Layer*);
   static void UnregisterContentsLayer(cc::Layer*);
@@ -299,11 +282,23 @@ class PLATFORM_EXPORT GraphicsLayer : public cc::LayerClient,
   void SetIsResizedByBrowserControls(bool);
   void SetIsContainerForFixedPositionLayers(bool);
 
+  bool HasLayerState() const { return layer_state_.get(); }
   void SetLayerState(const PropertyTreeState&, const IntPoint& layer_offset);
   const PropertyTreeState& GetPropertyTreeState() const {
     return layer_state_->state;
   }
   IntPoint GetOffsetFromTransformNode() const { return layer_state_->offset; }
+
+  void SetContentsLayerState(const PropertyTreeState&,
+                             const IntPoint& layer_offset);
+  const PropertyTreeState& GetContentsPropertyTreeState() const {
+    return contents_layer_state_ ? contents_layer_state_->state
+                                 : GetPropertyTreeState();
+  }
+  IntPoint GetContentsOffsetFromTransformNode() const {
+    return contents_layer_state_ ? contents_layer_state_->offset
+                                 : GetOffsetFromTransformNode();
+  }
 
   // Capture the last painted result into a PaintRecord. This GraphicsLayer
   // must DrawsContent. The result is never nullptr.
@@ -313,9 +308,11 @@ class PLATFORM_EXPORT GraphicsLayer : public cc::LayerClient,
     needs_check_raster_invalidation_ = true;
   }
 
+  bool HasScrollParent() const { return has_scroll_parent_; }
+  bool HasClipParent() const { return has_clip_parent_; }
+
  protected:
   String DebugName(cc::Layer*) const;
-  bool ShouldFlattenTransform() const { return should_flatten_transform_; }
 
   explicit GraphicsLayer(GraphicsLayerClient&);
 
@@ -359,48 +356,21 @@ class PLATFORM_EXPORT GraphicsLayer : public cc::LayerClient,
   cc::Layer* ContentsLayerIfRegistered();
   void SetContentsLayer(cc::Layer*);
 
-  typedef HashMap<int, int> RenderingContextMap;
-  std::unique_ptr<JSONObject> LayerTreeAsJSONInternal(
-      LayerTreeFlags,
-      RenderingContextMap&) const;
-  std::unique_ptr<JSONObject> LayerAsJSONInternal(
-      LayerTreeFlags,
-      RenderingContextMap&,
-      const FloatPoint& position) const;
-  void AddTransformJSONProperties(JSONObject&, RenderingContextMap&) const;
-  void AddFlattenInheritedTransformJSON(JSONObject&) const;
-  class LayersAsJSONArray;
-
-  CompositedLayerRasterInvalidator& EnsureRasterInvalidator();
-  void SetNeedsDisplayInRectInternal(const IntRect&);
+  RasterInvalidator& EnsureRasterInvalidator();
+  void SetNeedsDisplayInRect(const IntRect&);
 
   FloatSize VisualRectSubpixelOffset() const;
 
   GraphicsLayerClient& client_;
 
   // Offset from the owning layoutObject
-  DoubleSize offset_from_layout_object_;
-
-  // Position is relative to the parent GraphicsLayer
-  FloatPoint position_;
-  IntSize size_;
+  IntSize offset_from_layout_object_;
 
   TransformationMatrix transform_;
-  FloatPoint3D transform_origin_;
 
-  Color background_color_;
-  float opacity_;
-
-  BlendMode blend_mode_;
-
-  bool has_transform_origin_ : 1;
-  bool contents_opaque_ : 1;
   bool prevent_contents_opaque_changes_ : 1;
-  bool should_flatten_transform_ : 1;
-  bool backface_visibility_ : 1;
   bool draws_content_ : 1;
   bool contents_visible_ : 1;
-  bool is_root_for_isolated_group_ : 1;
   bool hit_testable_without_draws_content_ : 1;
   bool needs_check_raster_invalidation_ : 1;
 
@@ -436,7 +406,6 @@ class PLATFORM_EXPORT GraphicsLayer : public cc::LayerClient,
 
   Vector<LinkHighlight*> link_highlights_;
 
-  WeakPersistent<ScrollableArea> scrollable_area_;
   int rendering_context3d_;
 
   CompositingReasons compositing_reasons_ = CompositingReason::kNone;
@@ -453,38 +422,17 @@ class PLATFORM_EXPORT GraphicsLayer : public cc::LayerClient,
     IntPoint offset;
   };
   std::unique_ptr<LayerState> layer_state_;
+  std::unique_ptr<LayerState> contents_layer_state_;
 
-  std::unique_ptr<CompositedLayerRasterInvalidator> raster_invalidator_;
+  std::unique_ptr<RasterInvalidator> raster_invalidator_;
 
   base::WeakPtrFactory<GraphicsLayer> weak_ptr_factory_;
 
   FRIEND_TEST_ALL_PREFIXES(CompositingLayerPropertyUpdaterTest, MaskLayerState);
-};
 
-// ObjectPaintInvalidatorWithContext::InvalidatePaintRectangleWithContext uses
-// this to reduce differences between layout test results of SPv1 and SPv2.
-class PLATFORM_EXPORT ScopedSetNeedsDisplayInRectForTrackingOnly {
- public:
-  ScopedSetNeedsDisplayInRectForTrackingOnly() {
-    DCHECK(!s_enabled_);
-    s_enabled_ = true;
-  }
-  ~ScopedSetNeedsDisplayInRectForTrackingOnly() {
-    DCHECK(s_enabled_);
-    s_enabled_ = false;
-  }
-
- private:
-  friend class GraphicsLayer;
-  static bool s_enabled_;
+  DISALLOW_COPY_AND_ASSIGN(GraphicsLayer);
 };
 
 }  // namespace blink
-
-#if DCHECK_IS_ON()
-// Outside the blink namespace for ease of invocation from gdb.
-void PLATFORM_EXPORT showGraphicsLayerTree(const blink::GraphicsLayer*);
-void PLATFORM_EXPORT showGraphicsLayers(const blink::GraphicsLayer*);
-#endif
 
 #endif  // THIRD_PARTY_BLINK_RENDERER_PLATFORM_GRAPHICS_GRAPHICS_LAYER_H_

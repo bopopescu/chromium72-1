@@ -4,7 +4,6 @@
 
 #include "third_party/blink/renderer/platform/fonts/script_run_iterator.h"
 
-#include <string>
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/renderer/platform/wtf/assertions.h"
 #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
@@ -13,7 +12,7 @@
 namespace blink {
 
 struct ScriptTestRun {
-  std::string text;
+  const char* const text;
   UScriptCode code;
 };
 
@@ -34,7 +33,7 @@ class MockScriptData : public ScriptData {
     return &mock_script_data;
   }
 
-  void GetScripts(UChar32 ch, Vector<UScriptCode>& dst) const override {
+  void GetScripts(UChar32 ch, UScriptCodeList& dst) const override {
     DCHECK_GE(ch, kMockCharMin);
     DCHECK_LT(ch, kMockCharLimit);
 
@@ -290,7 +289,7 @@ class ScriptRunIteratorTest : public testing::Test {
     String text(g_empty_string16_bit);
     Vector<ScriptExpectedRun> expect;
     for (auto& run : runs) {
-      text.append(String::FromUTF8(run.text.c_str()));
+      text.append(String::FromUTF8(run.text));
       expect.push_back(ScriptExpectedRun(text.length(), run.code));
     }
     ScriptRunIterator script_run_iterator(text.Characters16(), text.length());
@@ -369,6 +368,50 @@ TEST_F(ScriptRunIteratorTest, Latin) {
 
 TEST_F(ScriptRunIteratorTest, Chinese) {
   CHECK_SCRIPT_RUNS({{"萬國碼", USCRIPT_HAN}});
+}
+
+struct JapaneseMixedScript {
+  const char* string;
+  // The expected primary_script when the string alone was evaluated.
+  UScriptCode script;
+} japanese_mixed_scripts[] = {{"あ", USCRIPT_HIRAGANA},
+                              // Katakana should be normalized to Hiragana
+                              {"ア", USCRIPT_HIRAGANA},
+                              // Script_Extensions=Hira Kana
+                              {"\u30FC", USCRIPT_HIRAGANA},
+                              // Script_Extensions=Hani Hira Kana
+                              {"\u303C", USCRIPT_HAN},
+                              // Script_Extensions=Bopo Hang Hani Hira Kana
+                              {"\u3003", USCRIPT_BOPOMOFO},
+                              // Script_Extensions=Bopo Hang Hani Hira Kana Yiii
+                              {"\u3001", USCRIPT_BOPOMOFO}};
+
+class JapaneseMixedScriptTest
+    : public ScriptRunIteratorTest,
+      public testing::WithParamInterface<JapaneseMixedScript> {};
+
+INSTANTIATE_TEST_CASE_P(ScriptRunIteratorTest,
+                        JapaneseMixedScriptTest,
+                        testing::ValuesIn(japanese_mixed_scripts));
+
+TEST_P(JapaneseMixedScriptTest, Data) {
+  const auto& data = GetParam();
+  std::string string(data.string);
+
+  CheckRuns({{string.data(), data.script}});
+
+  // If the string follows Hiragana or Katakana, or is followed by Hiragnaa or
+  // Katakana, it should be normalized as Hiragana.
+  std::string hiragana("か");
+  std::string katakana("カ");
+  CheckRuns({{(hiragana + string).data(), USCRIPT_HIRAGANA}});
+  CheckRuns({{(string + hiragana).data(), USCRIPT_HIRAGANA}});
+
+  CheckRuns({{(katakana + string).data(), USCRIPT_HIRAGANA}});
+  CheckRuns({{(string + katakana).data(), USCRIPT_HIRAGANA}});
+
+  CheckRuns({{(hiragana + string + katakana).data(), USCRIPT_HIRAGANA}});
+  CheckRuns({{(katakana + string + hiragana).data(), USCRIPT_HIRAGANA}});
 }
 
 // Close bracket without matching open is ignored
@@ -663,7 +706,7 @@ TEST_F(ScriptRunIteratorICUDataTest, ValidateICUMaxScriptExtensions) {
 TEST_F(ScriptRunIteratorICUDataTest, ICUDataGetScriptsReturnsAllExtensions) {
   int max_extensions;
   UChar32 cp = GetACharWithMaxExtensions(&max_extensions);
-  Vector<UScriptCode> extensions;
+  ScriptData::UScriptCodeList extensions;
   ICUScriptData::Instance()->GetScripts(cp, extensions);
 
   // It's possible that GetScripts adds the primary script to the list of
@@ -673,7 +716,7 @@ TEST_F(ScriptRunIteratorICUDataTest, ICUDataGetScriptsReturnsAllExtensions) {
 }
 
 TEST_F(ScriptRunIteratorICUDataTest, CommonHaveNoMoreThanOneExtension) {
-  Vector<UScriptCode> extensions;
+  ScriptData::UScriptCodeList extensions;
   for (UChar32 cp = 0; cp < 0x110000; ++cp) {
     ICUScriptData::Instance()->GetScripts(cp, extensions);
     UScriptCode primary = extensions.at(0);

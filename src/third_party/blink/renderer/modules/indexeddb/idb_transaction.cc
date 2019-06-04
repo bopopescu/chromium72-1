@@ -25,10 +25,10 @@
 
 #include "third_party/blink/renderer/modules/indexeddb/idb_transaction.h"
 
-#include "third_party/blink/renderer/bindings/core/v8/exception_state.h"
+#include <memory>
+
 #include "third_party/blink/renderer/core/dom/dom_exception.h"
 #include "third_party/blink/renderer/core/dom/events/event_queue.h"
-#include "third_party/blink/renderer/core/dom/exception_code.h"
 #include "third_party/blink/renderer/core/execution_context/execution_context.h"
 #include "third_party/blink/renderer/modules/indexed_db_names.h"
 #include "third_party/blink/renderer/modules/indexeddb/idb_database.h"
@@ -38,10 +38,10 @@
 #include "third_party/blink/renderer/modules/indexeddb/idb_open_db_request.h"
 #include "third_party/blink/renderer/modules/indexeddb/idb_request_queue_item.h"
 #include "third_party/blink/renderer/modules/indexeddb/idb_tracing.h"
+#include "third_party/blink/renderer/platform/bindings/exception_state.h"
 #include "third_party/blink/renderer/platform/bindings/script_state.h"
 #include "third_party/blink/renderer/platform/bindings/v8_per_isolate_data.h"
-
-#include <memory>
+#include "third_party/blink/renderer/platform/wtf/functional.h"
 
 using blink::WebIDBDatabase;
 
@@ -55,7 +55,7 @@ IDBTransaction* IDBTransaction::CreateObserver(
   DCHECK(!scope.IsEmpty()) << "Observer transactions must operate on a "
                               "well-defined set of stores";
   IDBTransaction* transaction =
-      new IDBTransaction(execution_context, id, scope, db);
+      MakeGarbageCollected<IDBTransaction>(execution_context, id, scope, db);
   return transaction;
 }
 
@@ -63,12 +63,13 @@ IDBTransaction* IDBTransaction::CreateNonVersionChange(
     ScriptState* script_state,
     int64_t id,
     const HashSet<String>& scope,
-    WebIDBTransactionMode mode,
+    mojom::IDBTransactionMode mode,
     IDBDatabase* db) {
-  DCHECK_NE(mode, kWebIDBTransactionModeVersionChange);
+  DCHECK_NE(mode, mojom::IDBTransactionMode::VersionChange);
   DCHECK(!scope.IsEmpty()) << "Non-version transactions should operate on a "
                               "well-defined set of stores";
-  return new IDBTransaction(script_state, id, scope, mode, db);
+  return MakeGarbageCollected<IDBTransaction>(script_state, id, scope, mode,
+                                              db);
 }
 
 IDBTransaction* IDBTransaction::CreateVersionChange(
@@ -77,8 +78,8 @@ IDBTransaction* IDBTransaction::CreateVersionChange(
     IDBDatabase* db,
     IDBOpenDBRequest* open_db_request,
     const IDBDatabaseMetadata& old_metadata) {
-  return new IDBTransaction(execution_context, id, db, open_db_request,
-                            old_metadata);
+  return MakeGarbageCollected<IDBTransaction>(execution_context, id, db,
+                                              open_db_request, old_metadata);
 }
 
 IDBTransaction::IDBTransaction(ExecutionContext* execution_context,
@@ -88,9 +89,11 @@ IDBTransaction::IDBTransaction(ExecutionContext* execution_context,
     : ContextLifecycleObserver(execution_context),
       id_(id),
       database_(db),
-      mode_(kWebIDBTransactionModeReadOnly),
+      mode_(mojom::IDBTransactionMode::ReadOnly),
       scope_(scope),
-      state_(kActive) {
+      state_(kActive),
+      event_queue_(
+          EventQueue::Create(execution_context, TaskType::kInternalIndexedDB)) {
   DCHECK(database_);
   DCHECK(!scope_.IsEmpty()) << "Observer transactions must operate "
                                "on a well-defined set of stores";
@@ -100,18 +103,20 @@ IDBTransaction::IDBTransaction(ExecutionContext* execution_context,
 IDBTransaction::IDBTransaction(ScriptState* script_state,
                                int64_t id,
                                const HashSet<String>& scope,
-                               WebIDBTransactionMode mode,
+                               mojom::IDBTransactionMode mode,
                                IDBDatabase* db)
     : ContextLifecycleObserver(ExecutionContext::From(script_state)),
       id_(id),
       database_(db),
       mode_(mode),
-      scope_(scope) {
+      scope_(scope),
+      event_queue_(EventQueue::Create(ExecutionContext::From(script_state),
+                                      TaskType::kInternalIndexedDB)) {
   DCHECK(database_);
   DCHECK(!scope_.IsEmpty()) << "Non-versionchange transactions must operate "
                                "on a well-defined set of stores";
-  DCHECK(mode_ == kWebIDBTransactionModeReadOnly ||
-         mode_ == kWebIDBTransactionModeReadWrite)
+  DCHECK(mode_ == mojom::IDBTransactionMode::ReadOnly ||
+         mode_ == mojom::IDBTransactionMode::ReadWrite)
       << "Invalid transaction mode";
 
   DCHECK_EQ(state_, kActive);
@@ -131,9 +136,11 @@ IDBTransaction::IDBTransaction(ExecutionContext* execution_context,
       id_(id),
       database_(db),
       open_db_request_(open_db_request),
-      mode_(kWebIDBTransactionModeVersionChange),
+      mode_(mojom::IDBTransactionMode::VersionChange),
       state_(kInactive),
-      old_database_metadata_(old_metadata) {
+      old_database_metadata_(old_metadata),
+      event_queue_(
+          EventQueue::Create(execution_context, TaskType::kInternalIndexedDB)) {
   DCHECK(database_);
   DCHECK(open_db_request_);
   DCHECK(scope_.IsEmpty());
@@ -157,6 +164,7 @@ void IDBTransaction::Trace(blink::Visitor* visitor) {
   visitor->Trace(object_store_map_);
   visitor->Trace(old_store_metadata_);
   visitor->Trace(deleted_indexes_);
+  visitor->Trace(event_queue_);
   EventTargetWithInlineData::Trace(visitor);
   ContextLifecycleObserver::Trace(visitor);
 }
@@ -175,7 +183,8 @@ IDBObjectStore* IDBTransaction::objectStore(const String& name,
                                             ExceptionState& exception_state) {
   if (IsFinished() || IsFinishing()) {
     exception_state.ThrowDOMException(
-        kInvalidStateError, IDBDatabase::kTransactionFinishedErrorMessage);
+        DOMExceptionCode::kInvalidStateError,
+        IDBDatabase::kTransactionFinishedErrorMessage);
     return nullptr;
   }
 
@@ -185,7 +194,8 @@ IDBObjectStore* IDBTransaction::objectStore(const String& name,
 
   if (!IsVersionChange() && !scope_.Contains(name)) {
     exception_state.ThrowDOMException(
-        kNotFoundError, IDBDatabase::kNoSuchObjectStoreErrorMessage);
+        DOMExceptionCode::kNotFoundError,
+        IDBDatabase::kNoSuchObjectStoreErrorMessage);
     return nullptr;
   }
 
@@ -193,7 +203,8 @@ IDBObjectStore* IDBTransaction::objectStore(const String& name,
   if (object_store_id == IDBObjectStoreMetadata::kInvalidId) {
     DCHECK(IsVersionChange());
     exception_state.ThrowDOMException(
-        kNotFoundError, IDBDatabase::kNoSuchObjectStoreErrorMessage);
+        DOMExceptionCode::kNotFoundError,
+        IDBDatabase::kNoSuchObjectStoreErrorMessage);
     return nullptr;
   }
 
@@ -221,7 +232,7 @@ void IDBTransaction::ObjectStoreCreated(const String& name,
                                         IDBObjectStore* object_store) {
   DCHECK_NE(state_, kFinished)
       << "A finished transaction created an object store";
-  DCHECK_EQ(mode_, kWebIDBTransactionModeVersionChange)
+  DCHECK_EQ(mode_, mojom::IDBTransactionMode::VersionChange)
       << "A non-versionchange transaction created an object store";
   DCHECK(!object_store_map_.Contains(name))
       << "An object store was created with the name of an existing store";
@@ -234,7 +245,7 @@ void IDBTransaction::ObjectStoreDeleted(const int64_t object_store_id,
                                         const String& name) {
   DCHECK_NE(state_, kFinished)
       << "A finished transaction deleted an object store";
-  DCHECK_EQ(mode_, kWebIDBTransactionModeVersionChange)
+  DCHECK_EQ(mode_, mojom::IDBTransactionMode::VersionChange)
       << "A non-versionchange transaction deleted an object store";
   IDBObjectStoreMap::iterator it = object_store_map_.find(name);
   if (it == object_store_map_.end()) {
@@ -272,7 +283,7 @@ void IDBTransaction::ObjectStoreRenamed(const String& old_name,
                                         const String& new_name) {
   DCHECK_NE(state_, kFinished)
       << "A finished transaction renamed an object store";
-  DCHECK_EQ(mode_, kWebIDBTransactionModeVersionChange)
+  DCHECK_EQ(mode_, mojom::IDBTransactionMode::VersionChange)
       << "A non-versionchange transaction renamed an object store";
 
   DCHECK(!object_store_map_.Contains(new_name));
@@ -333,7 +344,8 @@ void IDBTransaction::SetActive(bool active) {
 void IDBTransaction::abort(ExceptionState& exception_state) {
   if (state_ == kFinishing || state_ == kFinished) {
     exception_state.ThrowDOMException(
-        kInvalidStateError, IDBDatabase::kTransactionFinishedErrorMessage);
+        DOMExceptionCode::kInvalidStateError,
+        IDBDatabase::kTransactionFinishedErrorMessage);
     return;
   }
 
@@ -413,7 +425,7 @@ void IDBTransaction::OnAbort(DOMException* error) {
 
   // Enqueue events before notifying database, as database may close which
   // enqueues more events and order matters.
-  EnqueueEvent(Event::CreateBubble(EventTypeNames::abort));
+  EnqueueEvent(Event::CreateBubble(event_type_names::kAbort));
   Finished();
 }
 
@@ -429,7 +441,7 @@ void IDBTransaction::OnComplete() {
 
   // Enqueue events before notifying database, as database may close which
   // enqueues more events and order matters.
-  EnqueueEvent(Event::Create(EventTypeNames::complete));
+  EnqueueEvent(Event::Create(event_type_names::kComplete));
   Finished();
 }
 
@@ -441,15 +453,16 @@ bool IDBTransaction::HasPendingActivity() const {
   return has_pending_activity_ && GetExecutionContext();
 }
 
-WebIDBTransactionMode IDBTransaction::StringToMode(const String& mode_string) {
-  if (mode_string == IndexedDBNames::readonly)
-    return kWebIDBTransactionModeReadOnly;
-  if (mode_string == IndexedDBNames::readwrite)
-    return kWebIDBTransactionModeReadWrite;
-  if (mode_string == IndexedDBNames::versionchange)
-    return kWebIDBTransactionModeVersionChange;
+mojom::IDBTransactionMode IDBTransaction::StringToMode(
+    const String& mode_string) {
+  if (mode_string == indexed_db_names::kReadonly)
+    return mojom::IDBTransactionMode::ReadOnly;
+  if (mode_string == indexed_db_names::kReadwrite)
+    return mojom::IDBTransactionMode::ReadWrite;
+  if (mode_string == indexed_db_names::kVersionchange)
+    return mojom::IDBTransactionMode::VersionChange;
   NOTREACHED();
-  return kWebIDBTransactionModeReadOnly;
+  return mojom::IDBTransactionMode::ReadOnly;
 }
 
 WebIDBDatabase* IDBTransaction::BackendDB() const {
@@ -458,18 +471,18 @@ WebIDBDatabase* IDBTransaction::BackendDB() const {
 
 const String& IDBTransaction::mode() const {
   switch (mode_) {
-    case kWebIDBTransactionModeReadOnly:
-      return IndexedDBNames::readonly;
+    case mojom::IDBTransactionMode::ReadOnly:
+      return indexed_db_names::kReadonly;
 
-    case kWebIDBTransactionModeReadWrite:
-      return IndexedDBNames::readwrite;
+    case mojom::IDBTransactionMode::ReadWrite:
+      return indexed_db_names::kReadwrite;
 
-    case kWebIDBTransactionModeVersionChange:
-      return IndexedDBNames::versionchange;
+    case mojom::IDBTransactionMode::VersionChange:
+      return indexed_db_names::kVersionchange;
   }
 
   NOTREACHED();
-  return IndexedDBNames::readonly;
+  return indexed_db_names::kReadonly;
 }
 
 DOMStringList* IDBTransaction::objectStoreNames() const {
@@ -484,7 +497,7 @@ DOMStringList* IDBTransaction::objectStoreNames() const {
 }
 
 const AtomicString& IDBTransaction::InterfaceName() const {
-  return EventTargetNames::IDBTransaction;
+  return event_target_names::kIDBTransaction;
 }
 
 ExecutionContext* IDBTransaction::GetExecutionContext() const {
@@ -507,7 +520,7 @@ const char* IDBTransaction::InactiveErrorMessage() const {
   return nullptr;
 }
 
-DispatchEventResult IDBTransaction::DispatchEventInternal(Event* event) {
+DispatchEventResult IDBTransaction::DispatchEventInternal(Event& event) {
   IDB_TRACE1("IDBTransaction::dispatchEvent", "txn.id", id_);
   if (!GetExecutionContext()) {
     state_ = kFinished;
@@ -516,7 +529,7 @@ DispatchEventResult IDBTransaction::DispatchEventInternal(Event* event) {
   DCHECK_NE(state_, kFinished);
   DCHECK(has_pending_activity_);
   DCHECK(GetExecutionContext());
-  DCHECK_EQ(event->target(), this);
+  DCHECK_EQ(event.target(), this);
   state_ = kFinished;
 
   HeapVector<Member<EventTarget>> targets;
@@ -525,8 +538,8 @@ DispatchEventResult IDBTransaction::DispatchEventInternal(Event* event) {
 
   // FIXME: When we allow custom event dispatching, this will probably need to
   // change.
-  DCHECK(event->type() == EventTypeNames::complete ||
-         event->type() == EventTypeNames::abort);
+  DCHECK(event.type() == event_type_names::kComplete ||
+         event.type() == event_type_names::kAbort);
   DispatchEventResult dispatch_result =
       IDBEventDispatcher::Dispatch(event, targets);
   // FIXME: Try to construct a test where |this| outlives openDBRequest and we
@@ -546,9 +559,8 @@ void IDBTransaction::EnqueueEvent(Event* event) {
   if (!GetExecutionContext())
     return;
 
-  EventQueue* event_queue = GetExecutionContext()->GetEventQueue();
   event->SetTarget(this);
-  event_queue->EnqueueEvent(FROM_HERE, event);
+  event_queue_->EnqueueEvent(FROM_HERE, *event);
 }
 
 void IDBTransaction::AbortOutstandingRequests() {

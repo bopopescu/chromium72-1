@@ -52,6 +52,7 @@ class CORE_EXPORT FontFaceSetDocument final : public FontFaceSet,
  public:
   static const char kSupplementName[];
 
+  explicit FontFaceSetDocument(Document&);
   ~FontFaceSetDocument() override;
 
   ScriptPromise ready(ScriptState*) override;
@@ -74,7 +75,6 @@ class CORE_EXPORT FontFaceSetDocument final : public FontFaceSet,
   static size_t ApproximateBlankCharacterCount(Document&);
 
   void Trace(blink::Visitor*) override;
-  void TraceWrappers(ScriptWrappableVisitor*) const override;
 
  protected:
   bool InActiveContext() const override;
@@ -86,10 +86,8 @@ class CORE_EXPORT FontFaceSetDocument final : public FontFaceSet,
 
  private:
   static FontFaceSetDocument* Create(Document& document) {
-    return new FontFaceSetDocument(document);
+    return MakeGarbageCollected<FontFaceSetDocument>(document);
   }
-
-  explicit FontFaceSetDocument(Document&);
 
   void FireDoneEventIfPossible() override;
   const HeapLinkedHashSet<Member<FontFace>>& CSSConnectedFontFaceList()

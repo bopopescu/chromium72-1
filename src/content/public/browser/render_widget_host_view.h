@@ -16,6 +16,7 @@
 #include "third_party/skia/include/core/SkColor.h"
 #include "ui/gfx/geometry/point_conversions.h"
 #include "ui/gfx/native_widget_types.h"
+#include "ui/gfx/range/range.h"
 
 namespace gfx {
 class Point;
@@ -214,7 +215,7 @@ class CONTENT_EXPORT RenderWidgetHostView {
       base::OnceCallback<void(const SkBitmap&)> callback) = 0;
 
   // Ensures that all surfaces are synchronized for the next call to
-  // CopyFromSurface. This is used by LayoutTests.
+  // CopyFromSurface. This is used by web tests.
   virtual void EnsureSurfaceSynchronizedForLayoutTest() = 0;
 
   // Creates a video capturer, which will allow the caller to receive a stream

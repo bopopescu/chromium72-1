@@ -20,11 +20,9 @@ namespace policy {
 namespace {
 
 constexpr wchar_t kClientId1[] = L"fake-client-id-1";
-constexpr wchar_t kClientId2[] = L"fake-client-id-2";
 constexpr wchar_t kEnrollmentToken1[] = L"fake-enrollment-token-1";
 constexpr wchar_t kEnrollmentToken2[] = L"fake-enrollment-token-2";
 constexpr char kDMToken1[] = "fake-dm-token-1";
-constexpr char kDMToken2[] = "fake-dm-token-2";
 
 }  // namespace
 
@@ -48,12 +46,27 @@ class BrowserDMTokenStorageWinTest : public testing::Test {
   bool SetEnrollmentToken(const wchar_t* enrollment_token) {
     base::string16 key_path;
     base::string16 value_name;
+    base::string16 old_value_name;
     InstallUtil::GetMachineLevelUserCloudPolicyEnrollmentTokenRegistryPath(
-        &key_path, &value_name);
+        &key_path, &value_name, &old_value_name);
     base::win::RegKey key;
     return (key.Create(HKEY_LOCAL_MACHINE, key_path.c_str(), KEY_SET_VALUE) ==
             ERROR_SUCCESS) &&
            (key.WriteValue(value_name.c_str(), enrollment_token) ==
+            ERROR_SUCCESS);
+  }
+
+  // TODO(crbug.com/907589): Remove once no longer in use.
+  bool SetOldEnrollmentToken(const wchar_t* enrollment_token) {
+    base::string16 key_path;
+    base::string16 value_name;
+    base::string16 old_value_name;
+    InstallUtil::GetMachineLevelUserCloudPolicyEnrollmentTokenRegistryPath(
+        &key_path, &value_name, &old_value_name);
+    base::win::RegKey key;
+    return (key.Create(HKEY_LOCAL_MACHINE, key_path.c_str(), KEY_SET_VALUE) ==
+            ERROR_SUCCESS) &&
+           (key.WriteValue(old_value_name.c_str(), enrollment_token) ==
             ERROR_SUCCESS);
   }
 
@@ -73,53 +86,66 @@ class BrowserDMTokenStorageWinTest : public testing::Test {
   registry_util::RegistryOverrideManager registry_override_manager_;
 };
 
-TEST_F(BrowserDMTokenStorageWinTest, RetrieveClientId) {
+TEST_F(BrowserDMTokenStorageWinTest, InitClientId) {
   ASSERT_TRUE(SetMachineGuid(kClientId1));
   BrowserDMTokenStorageWin storage;
-  EXPECT_EQ(base::WideToUTF8(kClientId1), storage.RetrieveClientId());
-
-  // The client ID value should be cached in memory and not read from the system
-  // again.
-  ASSERT_TRUE(SetMachineGuid(kClientId2));
-  EXPECT_EQ(base::WideToUTF8(kClientId1), storage.RetrieveClientId());
+  EXPECT_EQ(base::WideToUTF8(kClientId1), storage.InitClientId());
 }
 
-TEST_F(BrowserDMTokenStorageWinTest, RetrieveEnrollmentToken) {
+TEST_F(BrowserDMTokenStorageWinTest, InitEnrollmentToken) {
   ASSERT_TRUE(SetMachineGuid(kClientId1));
   ASSERT_TRUE(SetEnrollmentToken(kEnrollmentToken1));
 
   BrowserDMTokenStorageWin storage;
-  EXPECT_EQ(base::WideToUTF8(kEnrollmentToken1),
-            storage.RetrieveEnrollmentToken());
-  // The enrollment token should be cached in memory and not read from the
-  // system again.
-  ASSERT_TRUE(SetEnrollmentToken(kEnrollmentToken2));
-  EXPECT_EQ(base::WideToUTF8(kEnrollmentToken1),
-            storage.RetrieveEnrollmentToken());
+  EXPECT_EQ(base::WideToUTF8(kEnrollmentToken1), storage.InitEnrollmentToken());
 }
 
-TEST_F(BrowserDMTokenStorageWinTest, RetrieveDMToken) {
+// TODO(crbug.com/907589): Remove once no longer in use.
+TEST_F(BrowserDMTokenStorageWinTest, InitOldEnrollmentToken) {
+  ASSERT_TRUE(SetMachineGuid(kClientId1));
+  ASSERT_TRUE(SetOldEnrollmentToken(kEnrollmentToken1));
+
+  BrowserDMTokenStorageWin storage;
+  EXPECT_EQ(base::WideToUTF8(kEnrollmentToken1), storage.InitEnrollmentToken());
+}
+
+// This test ensures that the new location has precedence over the old one, if
+// both are set.
+// TODO(crbug.com/907589): Remove once no longer in use.
+TEST_F(BrowserDMTokenStorageWinTest, InitOldEnrollmentTokenPriority) {
   ASSERT_TRUE(SetMachineGuid(kClientId1));
 
-  // The DM token will not be read from the system if there is no enrollment
-  // token.
+  base::string16 key_path;
+  base::string16 value_name;
+  base::string16 old_value_name;
+  InstallUtil::GetMachineLevelUserCloudPolicyEnrollmentTokenRegistryPath(
+      &key_path, &value_name, &old_value_name);
+
+  base::win::RegKey key;
+  bool success1 = (key.Create(HKEY_LOCAL_MACHINE, key_path.c_str(),
+                              KEY_SET_VALUE) == ERROR_SUCCESS) &&
+                  (key.WriteValue(L"CloudManagementEnrollmentToken",
+                                  kEnrollmentToken1) == ERROR_SUCCESS);
+
+  ASSERT_TRUE(success1);
+
+  bool success2 = (key.Create(HKEY_LOCAL_MACHINE, key_path.c_str(),
+                              KEY_SET_VALUE) == ERROR_SUCCESS) &&
+                  (key.WriteValue(L"MachineLevelUserCloudPolicyEnrollmentToken",
+                                  kEnrollmentToken2) == ERROR_SUCCESS);
+
+  ASSERT_TRUE(success2);
+
+  BrowserDMTokenStorageWin storage;
+  EXPECT_EQ(base::WideToUTF8(kEnrollmentToken1), storage.InitEnrollmentToken());
+}
+
+TEST_F(BrowserDMTokenStorageWinTest, InitDMToken) {
+  ASSERT_TRUE(SetMachineGuid(kClientId1));
+
   ASSERT_TRUE(SetDMToken(kDMToken1));
   BrowserDMTokenStorageWin storage;
-  EXPECT_THAT(storage.RetrieveDMToken(), IsEmpty());
-
-  // With the enrollment token now set, an already initialized
-  // BrowserDMTokenStorageWin should still return empty DM token because it
-  // should cache the value.
-  ASSERT_TRUE(SetEnrollmentToken(kEnrollmentToken1));
-  EXPECT_THAT(storage.RetrieveDMToken(), IsEmpty());
-
-  // But if enrollment token is set when BrowserDMTokenStorageWin is first used,
-  // it should return the DM token.
-  BrowserDMTokenStorageWin storage2;
-  EXPECT_EQ(std::string(kDMToken1), storage2.RetrieveDMToken());
-
-  // The DM token should be cached in memory and not read from the system again.
-  ASSERT_TRUE(SetDMToken(kDMToken2));
-  EXPECT_EQ(std::string(kDMToken1), storage2.RetrieveDMToken());
+  EXPECT_EQ(std::string(kDMToken1), storage.InitDMToken());
 }
+
 }  // namespace policy

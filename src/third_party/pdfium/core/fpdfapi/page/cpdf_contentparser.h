@@ -11,7 +11,6 @@
 #include <set>
 #include <vector>
 
-#include "core/fpdfapi/page/cpdf_pageobjectholder.h"
 #include "core/fpdfapi/page/cpdf_streamcontentparser.h"
 #include "core/fpdfapi/parser/cpdf_stream_acc.h"
 #include "core/fxcrt/maybe_owned.h"
@@ -20,6 +19,7 @@
 class CPDF_AllStates;
 class CPDF_Form;
 class CPDF_Page;
+class CPDF_PageObjectHolder;
 class CPDF_StreamAcc;
 class CPDF_Type3Char;
 
@@ -58,6 +58,7 @@ class CPDF_ContentParser {
   UnownedPtr<CPDF_Type3Char> m_pType3Char;  // Only used when parsing forms.
   RetainPtr<CPDF_StreamAcc> m_pSingleStream;
   std::vector<RetainPtr<CPDF_StreamAcc>> m_StreamArray;
+  std::vector<uint32_t> m_StreamSegmentOffsets;
   MaybeOwned<uint8_t, FxFreeDeleter> m_pData;
   uint32_t m_nStreams = 0;
   uint32_t m_Size = 0;

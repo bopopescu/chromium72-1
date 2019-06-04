@@ -4,10 +4,11 @@
 
 #include "ash/system/date/date_view.h"
 
+#include "ash/session/session_controller.h"
+#include "ash/shell.h"
 #include "ash/strings/grit/ash_strings.h"
 #include "ash/system/model/clock_model.h"
 #include "ash/system/model/system_tray_model.h"
-#include "ash/system/tray/system_tray_controller.h"
 #include "ash/system/tray/tray_constants.h"
 #include "ash/system/tray/tray_popup_item_style.h"
 #include "ash/system/tray/tray_popup_utils.h"
@@ -53,17 +54,6 @@ const int kVerticalClockMinutesTopOffset = -2;
 // when the shelf is vertically aligned.
 const int kClockLeadingPadding = 8;
 
-base::string16 FormatDate(const base::Time& time) {
-  // Use 'short' month format (e.g., "Oct") followed by non-padded day of
-  // month (e.g., "2", "10").
-  return base::TimeFormatWithPattern(time, "LLLd");
-}
-
-base::string16 FormatDayOfWeek(const base::Time& time) {
-  // Use 'short' day of week format (e.g., "Wed").
-  return base::TimeFormatWithPattern(time, "EEE");
-}
-
 }  // namespace
 
 BaseDateTimeView::~BaseDateTimeView() {
@@ -103,9 +93,8 @@ base::HourClockType BaseDateTimeView::GetHourTypeForTesting() const {
   return model_->hour_clock_type();
 }
 
-BaseDateTimeView::BaseDateTimeView(SystemTrayItem* owner, ClockModel* model)
-    : ActionableView(owner, TrayPopupInkDropStyle::INSET_BOUNDS),
-      model_(model) {
+BaseDateTimeView::BaseDateTimeView(ClockModel* model)
+    : ActionableView(TrayPopupInkDropStyle::INSET_BOUNDS), model_(model) {
   SetTimer(base::Time::Now());
   SetFocusBehavior(FocusBehavior::NEVER);
   model_->AddObserver(this);
@@ -148,72 +137,8 @@ void BaseDateTimeView::ChildPreferredSizeChanged(views::View* child) {
 
 ///////////////////////////////////////////////////////////////////////////////
 
-DateView::DateView(SystemTrayItem* owner, ClockModel* model)
-    : BaseDateTimeView(owner, model), action_(DateAction::NONE) {
-  auto box_layout = std::make_unique<views::BoxLayout>(
-      views::BoxLayout::kHorizontal,
-      gfx::Insets(0, kTrayPopupLabelHorizontalPadding), 0);
-  box_layout->set_main_axis_alignment(
-      views::BoxLayout::MAIN_AXIS_ALIGNMENT_CENTER);
-  box_layout->set_cross_axis_alignment(
-      views::BoxLayout::CROSS_AXIS_ALIGNMENT_CENTER);
-  SetLayoutManager(std::move(box_layout));
-  date_label_ = TrayPopupUtils::CreateDefaultLabel();
-  UpdateTextInternal(base::Time::Now());
-  TrayPopupItemStyle style(TrayPopupItemStyle::FontStyle::SYSTEM_INFO);
-  style.SetupLabel(date_label_);
-  AddChildView(date_label_);
-
-  OnSystemClockCanSetTimeChanged(model_->can_set_time());
-}
-
-DateView::~DateView() = default;
-
-void DateView::SetAction(DateAction action) {
-  if (action == action_)
-    return;
-  action_ = action;
-  SetFocusBehavior(action_ != DateAction::NONE ? FocusBehavior::ALWAYS
-                                               : FocusBehavior::NEVER);
-
-  // Disable |this| when not clickable so that the ripple is not shown.
-  SetEnabled(action_ != DateAction::NONE);
-  if (action_ != DateAction::NONE)
-    SetInkDropMode(views::InkDropHostView::InkDropMode::ON);
-}
-
-void DateView::UpdateTextInternal(const base::Time& now) {
-  BaseDateTimeView::UpdateTextInternal(now);
-  date_label_->SetText(l10n_util::GetStringFUTF16(
-      IDS_ASH_STATUS_TRAY_DATE, FormatDayOfWeek(now), FormatDate(now)));
-}
-
-void DateView::OnSystemClockCanSetTimeChanged(bool can_set_time) {
-  // Outside of a logged-in session, the date button should launch the set time
-  // dialog if the time can be set.
-  if (model_->IsLoggedIn())
-    SetAction(can_set_time ? DateAction::SET_SYSTEM_TIME : DateAction::NONE);
-}
-
-bool DateView::PerformAction(const ui::Event& event) {
-  switch (action_) {
-    case DateAction::SHOW_DATE_SETTINGS:
-      model_->ShowDateSettings();
-      break;
-    case DateAction::SET_SYSTEM_TIME:
-      model_->ShowSetTimeDialog();
-      break;
-    case DateAction::NONE:
-      return false;
-  }
-  CloseSystemBubble();
-  return true;
-}
-
-///////////////////////////////////////////////////////////////////////////////
-
 TimeView::TimeView(ClockLayout clock_layout, ClockModel* model)
-    : BaseDateTimeView(nullptr, model) {
+    : BaseDateTimeView(model) {
   SetupLabels();
   UpdateTextInternal(base::Time::Now());
   UpdateClockLayout(clock_layout);
@@ -235,6 +160,8 @@ void TimeView::UpdateTextInternal(const base::Time& now) {
       now, model_->hour_clock_type(), base::kDropAmPm);
   horizontal_label_->SetText(current_time);
   horizontal_label_->SetTooltipText(base::TimeFormatFriendlyDate(now));
+  horizontal_label_->NotifyAccessibilityEvent(ax::mojom::Event::kTextChanged,
+                                              true);
 
   // Calculate vertical clock layout labels.
   size_t colon_pos = current_time.find(base::ASCIIToUTF16(":"));
@@ -248,6 +175,10 @@ void TimeView::UpdateTextInternal(const base::Time& now) {
 
   vertical_label_hours_->SetText(hour);
   vertical_label_minutes_->SetText(minute);
+  vertical_label_hours_->NotifyAccessibilityEvent(
+      ax::mojom::Event::kTextChanged, true);
+  vertical_label_minutes_->NotifyAccessibilityEvent(
+      ax::mojom::Event::kTextChanged, true);
   Layout();
 }
 
@@ -269,7 +200,7 @@ void TimeView::OnGestureEvent(ui::GestureEvent* event) {
 }
 
 void TimeView::UpdateClockLayout(ClockLayout clock_layout) {
-  SetBorderFromLayout(clock_layout);
+  SetBorder(views::NullBorder());
   if (clock_layout == ClockLayout::HORIZONTAL_CLOCK) {
     RemoveChildView(vertical_label_hours_.get());
     RemoveChildView(vertical_label_minutes_.get());
@@ -289,21 +220,24 @@ void TimeView::UpdateClockLayout(ClockLayout clock_layout) {
     layout->AddView(vertical_label_hours_.get());
     layout->StartRow(0, kColumnId);
     layout->AddView(vertical_label_minutes_.get());
-    layout->AddPaddingRow(
-        0, kTrayImageItemPadding + kVerticalClockMinutesTopOffset);
+    layout->AddPaddingRow(0, kVerticalClockMinutesTopOffset);
   }
   Layout();
 }
 
-void TimeView::Refresh() {
-  UpdateText();
+void TimeView::SetTextColorBasedOnSession(
+    session_manager::SessionState session_state) {
+  auto set_color = [&](std::unique_ptr<views::Label>& label) {
+    label->SetEnabledColor(TrayIconColor(session_state));
+  };
+
+  set_color(horizontal_label_);
+  set_color(vertical_label_hours_);
+  set_color(vertical_label_minutes_);
 }
 
-void TimeView::SetBorderFromLayout(ClockLayout clock_layout) {
-  if (clock_layout == ClockLayout::HORIZONTAL_CLOCK)
-    SetBorder(views::CreateEmptyBorder(gfx::Insets(0, kTrayImageItemPadding)));
-  else
-    SetBorder(views::NullBorder());
+void TimeView::Refresh() {
+  UpdateText();
 }
 
 void TimeView::SetupLabels() {

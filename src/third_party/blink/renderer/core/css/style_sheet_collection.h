@@ -33,7 +33,7 @@
 #include "base/macros.h"
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/css/active_style_sheets.h"
-#include "third_party/blink/renderer/platform/bindings/script_wrappable.h"
+#include "third_party/blink/renderer/platform/bindings/name_client.h"
 #include "third_party/blink/renderer/platform/bindings/trace_wrapper_member.h"
 #include "third_party/blink/renderer/platform/heap/handle.h"
 #include "third_party/blink/renderer/platform/wtf/allocator.h"
@@ -45,12 +45,16 @@ class StyleSheet;
 
 class CORE_EXPORT StyleSheetCollection
     : public GarbageCollected<StyleSheetCollection>,
-      public TraceWrapperBase {
+      public NameClient {
  public:
   friend class ActiveDocumentStyleSheetCollector;
   friend class ImportedDocumentStyleSheetCollector;
 
-  static StyleSheetCollection* Create() { return new StyleSheetCollection; }
+  static StyleSheetCollection* Create() {
+    return MakeGarbageCollected<StyleSheetCollection>();
+  }
+
+  StyleSheetCollection();
 
   const ActiveStyleSheetVector& ActiveAuthorStyleSheets() const {
     return active_author_style_sheets_;
@@ -67,7 +71,6 @@ class CORE_EXPORT StyleSheetCollection
   void MarkSheetListDirty() { sheet_list_dirty_ = true; }
 
   virtual void Trace(blink::Visitor*);
-  void TraceWrappers(ScriptWrappableVisitor*) const override;
   const char* NameInHeapSnapshot() const override {
     return "StyleSheetCollection";
   }
@@ -75,8 +78,6 @@ class CORE_EXPORT StyleSheetCollection
   void Dispose();
 
  protected:
-  StyleSheetCollection();
-
   HeapVector<TraceWrapperMember<StyleSheet>> style_sheets_for_style_sheet_list_;
   ActiveStyleSheetVector active_author_style_sheets_;
   bool sheet_list_dirty_ = true;

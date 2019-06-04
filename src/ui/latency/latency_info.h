@@ -75,10 +75,10 @@ enum LatencyComponentType {
   INPUT_EVENT_LATENCY_RENDERING_SCHEDULED_IMPL_COMPONENT,
   // Timestamp when a scroll update is forwarded to the main thread.
   INPUT_EVENT_LATENCY_FORWARD_SCROLL_UPDATE_TO_MAIN_COMPONENT,
+  // Original timestamp of the last event that has been coalesced into this one.
+  INPUT_EVENT_LATENCY_SCROLL_UPDATE_LAST_EVENT_COMPONENT,
   // Timestamp when the event's ack is received by the RWH.
   INPUT_EVENT_LATENCY_ACK_RWH_COMPONENT,
-  // Timestamp when a tab is requested to be shown.
-  TAB_SHOW_COMPONENT,
   // Timestamp when the frame is swapped in renderer.
   INPUT_EVENT_LATENCY_RENDERER_SWAP_COMPONENT,
   // Timestamp of when the display compositor receives a compositor frame from
@@ -86,65 +86,36 @@ enum LatencyComponentType {
   // Display compositor can be either in the browser process or in Mus.
   DISPLAY_COMPOSITOR_RECEIVED_FRAME_COMPONENT,
   // Timestamp of when the gpu service began swap buffers, unlike
-  // INPUT_EVENT_LATENCY_TERMINATED_FRAME_SWAP_COMPONENT which measures after.
+  // INPUT_EVENT_LATENCY_FRAME_SWAP_COMPONENT which measures after.
   INPUT_EVENT_GPU_SWAP_BUFFER_COMPONENT,
-  // Timestamp of when the gesture scroll update is generated from a mouse wheel
-  // event.
-  INPUT_EVENT_LATENCY_GENERATE_SCROLL_UPDATE_FROM_MOUSE_WHEEL,
-  // ---------------------------TERMINAL COMPONENT-----------------------------
-  // Timestamp when the event is acked from renderer when it does not
-  // cause any rendering to be scheduled.
-  INPUT_EVENT_LATENCY_TERMINATED_NO_SWAP_COMPONENT,
   // Timestamp when the frame is swapped (i.e. when the rendering caused by
   // input event actually takes effect).
-  INPUT_EVENT_LATENCY_TERMINATED_FRAME_SWAP_COMPONENT,
-  // This component indicates that the input causes a commit to be scheduled
-  // but the commit failed.
-  INPUT_EVENT_LATENCY_TERMINATED_COMMIT_FAILED_COMPONENT,
-  // This component indicates that the input causes a commit to be scheduled
-  // but the commit was aborted since it carried no new information.
-  INPUT_EVENT_LATENCY_TERMINATED_COMMIT_NO_UPDATE_COMPONENT,
-  // This component indicates that the input causes a swap to be scheduled
-  // but the swap failed.
-  INPUT_EVENT_LATENCY_TERMINATED_SWAP_FAILED_COMPONENT,
-  LATENCY_COMPONENT_TYPE_LAST =
-      INPUT_EVENT_LATENCY_TERMINATED_SWAP_FAILED_COMPONENT,
+  INPUT_EVENT_LATENCY_FRAME_SWAP_COMPONENT,
+
+  LATENCY_COMPONENT_TYPE_LAST = INPUT_EVENT_LATENCY_FRAME_SWAP_COMPONENT,
 };
 
-enum SourceEventType {
+enum class SourceEventType {
   UNKNOWN,
   WHEEL,
   MOUSE,
   TOUCH,
   INERTIAL,
   KEY_PRESS,
+  // TODO(crbug.com/868056) Touchpad scrolling latency report as WHEEL.
+  TOUCHPAD,
   FRAME,
   OTHER,
-  SOURCE_EVENT_TYPE_LAST = OTHER,
+  LAST = OTHER,
 };
 
 class LatencyInfo {
  public:
-  struct LatencyComponent {
-    // Average time of events that happened in this component.
-    base::TimeTicks event_time;
-    // Count of events that happened in this component
-    uint32_t event_count;
-    // Time of the oldest event that happened in this component.
-    base::TimeTicks first_event_time;
-    // Time of the most recent event that happened in this component.
-    base::TimeTicks last_event_time;
-  };
-
   enum : size_t { kMaxInputCoordinates = 2 };
 
   // Map a Latency Component (with a component-specific int64_t id) to a
-  // component info.
-  using LatencyMap = base::flat_map<std::pair<LatencyComponentType, int64_t>,
-                                    LatencyComponent>;
-
-  // Map a frame sink id to the snapshot id.
-  using SnapshotMap = std::map<int64_t, int64_t>;
+  // timestamp.
+  using LatencyMap = base::flat_map<LatencyComponentType, base::TimeTicks>;
 
   LatencyInfo();
   LatencyInfo(const LatencyInfo& other);
@@ -169,44 +140,39 @@ class LatencyInfo {
       const std::vector<LatencyInfo>& latency_info,
       const char* trace_name);
 
-  // Copy LatencyComponents with type |type| from |other| into |this|.
+  // Copy timestamp with type |type| from |other| into |this|.
   void CopyLatencyFrom(const LatencyInfo& other, LatencyComponentType type);
 
-  // Add LatencyComponents that are in |other| but not in |this|.
+  // Add timestamps for components that are in |other| but not in |this|.
   void AddNewLatencyFrom(const LatencyInfo& other);
 
   // Modifies the current sequence number for a component, and adds a new
   // sequence number with the current timestamp.
-  void AddLatencyNumber(LatencyComponentType component, int64_t id);
+  void AddLatencyNumber(LatencyComponentType component);
 
   // Similar to |AddLatencyNumber|, and also appends |trace_name_str| to
   // the trace event's name.
   // This function should only be called when adding a BEGIN component.
   void AddLatencyNumberWithTraceName(LatencyComponentType component,
-                                     int64_t id,
                                      const char* trace_name_str);
 
   // Modifies the current sequence number and adds a certain number of events
   // for a specific component.
   void AddLatencyNumberWithTimestamp(LatencyComponentType component,
-                                     int64_t id,
                                      base::TimeTicks time,
                                      uint32_t event_count);
-
-  // Returns true if the a component with |type| and |id| is found in
-  // the latency_components and the component is stored to |output| if
-  // |output| is not NULL. Returns false if no such component is found.
-  bool FindLatency(LatencyComponentType type,
-                   int64_t id,
-                   LatencyComponent* output) const;
 
   // Returns true if a component with |type| is found in the latency component.
   // The first such component (when iterating over latency_components_) is
   // stored to |output| if |output| is not NULL. Returns false if no such
   // component is found.
-  bool FindLatency(LatencyComponentType type, LatencyComponent* output) const;
+  bool FindLatency(LatencyComponentType type, base::TimeTicks* output) const;
 
-  void RemoveLatency(LatencyComponentType type);
+  void Terminate();
+
+  // When GestureScrollUpdate events are coalesced, update the aggregated
+  // event's scroll_update_delta and the SCROLL_UPDATE_LAST_EVENT_COMPONENT.
+  void CoalesceScrollUpdateWith(const LatencyInfo& other);
 
   const LatencyMap& latency_components() const { return latency_components_; }
 
@@ -217,11 +183,6 @@ class LatencyInfo {
     source_event_type_ = type;
   }
 
-  void AddSnapshot(int64_t frame_sink_id, int64_t snapshot_id) {
-    snapshots_[frame_sink_id] = snapshot_id;
-  }
-  const SnapshotMap& Snapshots() const { return snapshots_; }
-  void RemoveSnapshots() { snapshots_.clear(); }
   bool began() const { return began_; }
   bool terminated() const { return terminated_; }
   void set_coalesced() { coalesced_ = true; }
@@ -231,10 +192,11 @@ class LatencyInfo {
   ukm::SourceId ukm_source_id() const { return ukm_source_id_; }
   void set_ukm_source_id(ukm::SourceId id) { ukm_source_id_ = id; }
   const std::string& trace_name() const { return trace_name_; }
+  void set_scroll_update_delta(float delta) { scroll_update_delta_ = delta; };
+  float scroll_update_delta() const { return scroll_update_delta_; }
 
  private:
   void AddLatencyNumberWithTimestampImpl(LatencyComponentType component,
-                                         int64_t id,
                                          base::TimeTicks time,
                                          uint32_t event_count,
                                          const char* trace_name_str);
@@ -251,8 +213,6 @@ class LatencyInfo {
 
   // The unique id for matching the ASYNC_BEGIN/END trace event.
   int64_t trace_id_;
-  // Snapshot ids to be used to sync snapshot requests.
-  SnapshotMap snapshots_;
   // UKM Source id to be used for recording UKM metrics associated with this
   // event.
   ukm::SourceId ukm_source_id_;
@@ -264,6 +224,8 @@ class LatencyInfo {
   bool terminated_;
   // Stores the type of the first source event.
   SourceEventType source_event_type_;
+
+  float scroll_update_delta_;
 
 #if !defined(OS_IOS)
   friend struct IPC::ParamTraits<ui::LatencyInfo>;

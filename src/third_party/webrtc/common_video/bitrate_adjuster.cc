@@ -13,7 +13,6 @@
 #include <algorithm>
 #include <cmath>
 
-#include "rtc_base/checks.h"
 #include "rtc_base/logging.h"
 #include "rtc_base/timeutils.h"
 
@@ -68,7 +67,7 @@ uint32_t BitrateAdjuster::GetAdjustedBitrateBps() const {
   return adjusted_bitrate_bps_;
 }
 
-rtc::Optional<uint32_t> BitrateAdjuster::GetEstimatedBitrateBps() {
+absl::optional<uint32_t> BitrateAdjuster::GetEstimatedBitrateBps() {
   rtc::CritScope cs(&crit_);
   return bitrate_tracker_.Rate(rtc::TimeMillis());
 }

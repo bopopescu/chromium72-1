@@ -16,6 +16,7 @@
 #include "content/public/test/content_browser_test_utils.h"
 #include "content/public/test/test_utils.h"
 #include "media/base/media_switches.h"
+#include "media/webrtc/webrtc_switches.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
 #include "testing/gtest/include/gtest/gtest-param-test.h"
 
@@ -62,8 +63,8 @@ class WebRtcAudioBrowserTest : public WebRtcContentBrowserTestBase,
 
     ASSERT_TRUE(base::CommandLine::ForCurrentProcess()->HasSwitch(
         switches::kUseFakeDeviceForMediaStream))
-            << "Must run with fake devices since the test will explicitly look "
-            << "for the fake device signal.";
+        << "Must run with fake devices since the test will explicitly look "
+        << "for the fake device signal.";
 
     MakeTypicalCall(javascript, "/media/peerconnection-call-audio.html");
   }

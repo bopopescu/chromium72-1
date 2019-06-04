@@ -20,9 +20,10 @@
 #include <vector>
 
 #include "rtc_base/ipaddress.h"
+#include "rtc_base/mdns_responder_interface.h"
 #include "rtc_base/messagehandler.h"
 #include "rtc_base/networkmonitor.h"
-#include "rtc_base/sigslot.h"
+#include "rtc_base/third_party/sigslot/sigslot.h"
 
 #if defined(WEBRTC_POSIX)
 struct ifaddrs;
@@ -44,7 +45,8 @@ const int kDefaultNetworkIgnoreMask = ADAPTER_TYPE_LOOPBACK;
 // Makes a string key for this network. Used in the network manager's maps.
 // Network objects are keyed on interface name, network prefix and the
 // length of that prefix.
-std::string MakeNetworkKey(const std::string& name, const IPAddress& prefix,
+std::string MakeNetworkKey(const std::string& name,
+                           const IPAddress& prefix,
                            int prefix_length);
 
 // Utility function that attempts to determine an adapter type by an interface
@@ -110,7 +112,7 @@ class NetworkManager : public DefaultLocalAddressProvider {
   // include ignored networks.
   virtual void GetNetworks(NetworkList* networks) const = 0;
 
-  // return the current permission state of GetNetworks()
+  // Returns the current permission state of GetNetworks().
   virtual EnumerationPermission enumeration_permission() const;
 
   // "AnyAddressNetwork" is a network which only contains single "any address"
@@ -136,6 +138,10 @@ class NetworkManager : public DefaultLocalAddressProvider {
       ipv6_network_count = 0;
     }
   };
+
+  // Returns the mDNS responder that can be used to obfuscate the local IP
+  // addresses of ICE host candidates by mDNS hostnames.
+  virtual webrtc::MdnsResponderInterface* GetMdnsResponder() const;
 };
 
 // Base class for NetworkManager implementations.
@@ -352,9 +358,22 @@ class Network {
   // detected. Passing true to already_changed skips this check.
   bool SetIPs(const std::vector<InterfaceAddress>& ips, bool already_changed);
   // Get the list of IP Addresses associated with this network.
-  const std::vector<InterfaceAddress>& GetIPs() const { return ips_;}
+  const std::vector<InterfaceAddress>& GetIPs() const { return ips_; }
   // Clear the network's list of addresses.
   void ClearIPs() { ips_.clear(); }
+  // Sets the mDNS responder that can be used to obfuscate the local IP
+  // addresses of host candidates by mDNS names in ICE gathering. After a
+  // name-address mapping is created by the mDNS responder, queries for the
+  // created name will be resolved by the responder.
+  //
+  // The mDNS responder, if not null, should outlive this rtc::Network.
+  void SetMdnsResponder(webrtc::MdnsResponderInterface* mdns_responder) {
+    mdns_responder_ = mdns_responder;
+  }
+  // Returns the mDNS responder, which is null by default.
+  webrtc::MdnsResponderInterface* GetMdnsResponder() const {
+    return mdns_responder_;
+  }
 
   // Returns the scope-id of the network's address.
   // Should only be relevant for link-local IPv6 addresses.
@@ -427,6 +446,7 @@ class Network {
   int prefix_length_;
   std::string key_;
   std::vector<InterfaceAddress> ips_;
+  webrtc::MdnsResponderInterface* mdns_responder_ = nullptr;
   int scope_id_;
   bool ignored_;
   AdapterType type_;

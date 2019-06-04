@@ -10,12 +10,18 @@
 #include "base/macros.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/single_thread_task_runner.h"
+#include "gpu/ipc/command_buffer_task_executor.h"
 #include "gpu/ipc/in_process_command_buffer.h"
+
+namespace base {
+class TestSimpleTaskRunner;
+}  // namespace base
 
 namespace gpu {
 class CommandBufferHelper;
 class ContextSupport;
 class ServiceTransferCache;
+class SharedImageInterface;
 class TransferBuffer;
 struct GpuFeatureInfo;
 struct SharedMemoryLimits;
@@ -36,31 +42,41 @@ class RasterInProcessContext {
   // pairs. |gpu_channel_manager| should be non-null when used in the GPU
   // process.
   ContextResult Initialize(
-      scoped_refptr<InProcessCommandBuffer::Service> service,
+      scoped_refptr<CommandBufferTaskExecutor> task_executor,
       const ContextCreationAttribs& attribs,
       const SharedMemoryLimits& memory_limits,
       GpuMemoryBufferManager* gpu_memory_buffer_manager,
       ImageFactory* image_factory,
       GpuChannelManagerDelegate* gpu_channel_manager_delegate,
-      scoped_refptr<base::SingleThreadTaskRunner> task_runner);
+      gpu::raster::GrShaderCache* gr_shader_cache,
+      GpuProcessActivityFlags* activity_flags);
 
   const Capabilities& GetCapabilities() const;
   const GpuFeatureInfo& GetGpuFeatureInfo() const;
 
   // Allows direct access to the RasterImplementation so a
   // RasterInProcessContext can be used without making it current.
-  raster::RasterInterface* GetImplementation();
+  gpu::raster::RasterInterface* GetImplementation();
 
   ContextSupport* GetContextSupport();
 
+  SharedImageInterface* GetSharedImageInterface();
+
   // Test only functions.
   ServiceTransferCache* GetTransferCacheForTest() const;
+  InProcessCommandBuffer* GetCommandBufferForTest() const;
+  int GetRasterDecoderIdForTest() const;
+
+  // Test only function. Returns false if using passthrough decoding, which is
+  // currently unsupported.
+  static bool SupportedInTest();
 
  private:
   std::unique_ptr<CommandBufferHelper> helper_;
   std::unique_ptr<TransferBuffer> transfer_buffer_;
   std::unique_ptr<raster::RasterImplementation> raster_implementation_;
   std::unique_ptr<InProcessCommandBuffer> command_buffer_;
+  scoped_refptr<base::TestSimpleTaskRunner> client_task_runner_;
 
   DISALLOW_COPY_AND_ASSIGN(RasterInProcessContext);
 };

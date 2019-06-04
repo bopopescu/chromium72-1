@@ -12,7 +12,7 @@
 #include "net/third_party/quic/core/quic_framer.h"
 #include "net/third_party/quic/core/quic_packets.h"
 
-namespace net {
+namespace quic {
 
 struct QuicAckFrame;
 
@@ -27,6 +27,8 @@ class SimpleQuicFramer {
   explicit SimpleQuicFramer(const ParsedQuicVersionVector& supported_versions);
   SimpleQuicFramer(const ParsedQuicVersionVector& supported_versions,
                    Perspective perspective);
+  SimpleQuicFramer(const SimpleQuicFramer&) = delete;
+  SimpleQuicFramer& operator=(const SimpleQuicFramer&) = delete;
   ~SimpleQuicFramer();
 
   bool ProcessPacket(const QuicEncryptedPacket& packet);
@@ -37,7 +39,10 @@ class SimpleQuicFramer {
   const std::vector<QuicAckFrame>& ack_frames() const;
   const std::vector<QuicConnectionCloseFrame>& connection_close_frames() const;
   const std::vector<QuicStopWaitingFrame>& stop_waiting_frames() const;
+  const std::vector<QuicPathChallengeFrame>& path_challenge_frames() const;
+  const std::vector<QuicPathResponseFrame>& path_response_frames() const;
   const std::vector<QuicPingFrame>& ping_frames() const;
+  const std::vector<QuicMessageFrame>& message_frames() const;
   const std::vector<QuicWindowUpdateFrame>& window_update_frames() const;
   const std::vector<QuicGoAwayFrame>& goaway_frames() const;
   const std::vector<QuicRstStreamFrame>& rst_stream_frames() const;
@@ -54,11 +59,10 @@ class SimpleQuicFramer {
  private:
   QuicFramer framer_;
   std::unique_ptr<SimpleFramerVisitor> visitor_;
-  DISALLOW_COPY_AND_ASSIGN(SimpleQuicFramer);
 };
 
 }  // namespace test
 
-}  // namespace net
+}  // namespace quic
 
 #endif  // NET_THIRD_PARTY_QUIC_TEST_TOOLS_SIMPLE_QUIC_FRAMER_H_

@@ -31,14 +31,13 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_PLATFORM_BINDINGS_DOM_DATA_STORE_H_
 #define THIRD_PARTY_BLINK_RENDERER_PLATFORM_BINDINGS_DOM_DATA_STORE_H_
 
-#include <memory>
-
 #include "base/optional.h"
 #include "third_party/blink/renderer/platform/bindings/dom_wrapper_map.h"
 #include "third_party/blink/renderer/platform/bindings/dom_wrapper_world.h"
 #include "third_party/blink/renderer/platform/bindings/script_wrappable.h"
 #include "third_party/blink/renderer/platform/bindings/script_wrappable_marking_visitor.h"
 #include "third_party/blink/renderer/platform/bindings/wrapper_type_info.h"
+#include "third_party/blink/renderer/platform/heap/unified_heap_marking_visitor.h"
 #include "third_party/blink/renderer/platform/wtf/allocator.h"
 #include "third_party/blink/renderer/platform/wtf/noncopyable.h"
 #include "third_party/blink/renderer/platform/wtf/stack_util.h"
@@ -139,17 +138,14 @@ class DOMDataStore {
     if (updated) {
       ScriptWrappableMarkingVisitor::WriteBarrier(
           isolate, &wrapper_map_.value(), object);
+      UnifiedHeapMarkingVisitor::WriteBarrier(isolate, &wrapper_map_.value(),
+                                              object);
     }
     return updated;
   }
 
   void Trace(const ScriptWrappable* script_wrappable, Visitor* visitor) {
     visitor->Trace(&wrapper_map_.value(), script_wrappable);
-  }
-
-  void TraceWrappers(const ScriptWrappable* script_wrappable,
-                     ScriptWrappableVisitor* visitor) {
-    visitor->TraceWrappers(&wrapper_map_.value(), script_wrappable);
   }
 
   void MarkWrapper(ScriptWrappable* script_wrappable) {

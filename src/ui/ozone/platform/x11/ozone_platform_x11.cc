@@ -17,14 +17,15 @@
 #include "ui/gfx/x/x11.h"
 #include "ui/ozone/common/stub_overlay_manager.h"
 #include "ui/ozone/platform/x11/x11_cursor_factory_ozone.h"
+#include "ui/ozone/platform/x11/x11_screen_ozone.h"
 #include "ui/ozone/platform/x11/x11_surface_factory.h"
 #include "ui/ozone/platform/x11/x11_window_manager_ozone.h"
 #include "ui/ozone/platform/x11/x11_window_ozone.h"
-#include "ui/ozone/public/gpu_platform_support.h"
 #include "ui/ozone/public/gpu_platform_support_host.h"
 #include "ui/ozone/public/input_controller.h"
 #include "ui/ozone/public/ozone_platform.h"
 #include "ui/platform_window/platform_window.h"
+#include "ui/platform_window/platform_window_init_properties.h"
 
 namespace ui {
 
@@ -58,19 +59,15 @@ class OzonePlatformX11 : public OzonePlatform {
     return input_controller_.get();
   }
 
-  GpuPlatformSupport* GetGpuPlatformSupport() override {
-    return gpu_platform_support_.get();
-  }
-
   GpuPlatformSupportHost* GetGpuPlatformSupportHost() override {
     return gpu_platform_support_host_.get();
   }
 
   std::unique_ptr<PlatformWindow> CreatePlatformWindow(
       PlatformWindowDelegate* delegate,
-      const gfx::Rect& bounds) override {
+      PlatformWindowInitProperties properties) override {
     std::unique_ptr<X11WindowOzone> window = std::make_unique<X11WindowOzone>(
-        window_manager_.get(), delegate, bounds);
+        window_manager_.get(), delegate, properties.bounds);
     window->SetTitle(base::ASCIIToUTF16("Ozone X11"));
     return std::move(window);
   }
@@ -78,6 +75,10 @@ class OzonePlatformX11 : public OzonePlatform {
   std::unique_ptr<display::NativeDisplayDelegate> CreateNativeDisplayDelegate()
       override {
     return std::make_unique<display::FakeDisplayDelegate>();
+  }
+
+  std::unique_ptr<PlatformScreen> CreateScreen() override {
+    return std::make_unique<X11ScreenOzone>();
   }
 
   void InitializeUI(const InitParams& params) override {
@@ -101,7 +102,6 @@ class OzonePlatformX11 : public OzonePlatform {
       CreatePlatformEventSource();
 
     surface_factory_ozone_ = std::make_unique<X11SurfaceFactory>();
-    gpu_platform_support_.reset(CreateStubGpuPlatformSupport());
   }
 
   base::MessageLoop::Type GetMessageLoopTypeForGpu() override {
@@ -150,7 +150,6 @@ class OzonePlatformX11 : public OzonePlatform {
 
   // Objects in the GPU process.
   std::unique_ptr<X11SurfaceFactory> surface_factory_ozone_;
-  std::unique_ptr<GpuPlatformSupport> gpu_platform_support_;
 
   // Objects in both UI and GPU process.
   std::unique_ptr<X11EventSourceLibevent> event_source_;

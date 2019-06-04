@@ -4,6 +4,8 @@
 
 #include "net/socket/udp_server_socket.h"
 
+#include <utility>
+
 #include "net/base/net_errors.h"
 
 namespace net {
@@ -12,7 +14,8 @@ UDPServerSocket::UDPServerSocket(net::NetLog* net_log,
                                  const net::NetLogSource& source)
     : socket_(DatagramSocket::DEFAULT_BIND, net_log, source),
       allow_address_reuse_(false),
-      allow_broadcast_(false) {}
+      allow_broadcast_(false),
+      allow_address_sharing_for_multicast_(false) {}
 
 UDPServerSocket::~UDPServerSocket() = default;
 
@@ -37,21 +40,29 @@ int UDPServerSocket::Listen(const IPEndPoint& address) {
     }
   }
 
+  if (allow_address_sharing_for_multicast_) {
+    rv = socket_.AllowAddressSharingForMulticast();
+    if (rv != OK) {
+      socket_.Close();
+      return rv;
+    }
+  }
+
   return socket_.Bind(address);
 }
 
 int UDPServerSocket::RecvFrom(IOBuffer* buf,
                               int buf_len,
                               IPEndPoint* address,
-                              const CompletionCallback& callback) {
-  return socket_.RecvFrom(buf, buf_len, address, callback);
+                              CompletionOnceCallback callback) {
+  return socket_.RecvFrom(buf, buf_len, address, std::move(callback));
 }
 
 int UDPServerSocket::SendTo(IOBuffer* buf,
                             int buf_len,
                             const IPEndPoint& address,
-                            const CompletionCallback& callback) {
-  return socket_.SendTo(buf, buf_len, address, callback);
+                            CompletionOnceCallback callback) {
+  return socket_.SendTo(buf, buf_len, address, std::move(callback));
 }
 
 int UDPServerSocket::SetReceiveBufferSize(int32_t size) {
@@ -92,6 +103,10 @@ void UDPServerSocket::AllowAddressReuse() {
 
 void UDPServerSocket::AllowBroadcast() {
   allow_broadcast_ = true;
+}
+
+void UDPServerSocket::AllowAddressSharingForMulticast() {
+  allow_address_sharing_for_multicast_ = true;
 }
 
 int UDPServerSocket::JoinGroup(const IPAddress& group_address) const {

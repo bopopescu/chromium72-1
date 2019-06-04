@@ -3,7 +3,6 @@ from __future__ import print_function, unicode_literals
 import abc
 import argparse
 import ast
-import itertools
 import json
 import os
 import re
@@ -157,7 +156,7 @@ def check_git_ignore(repo_root, paths):
                 if filter_string[0] != '!':
                     errors += [("IGNORED PATH", "%s matches an ignore filter in .gitignore - "
                                 "please add a .gitignore exception" % path, path, None)]
-        except subprocess.CalledProcessError as e:
+        except subprocess.CalledProcessError:
             # Nonzero return code means that no match exists.
             pass
     return errors
@@ -217,7 +216,8 @@ def check_css_globally_unique(repo_root, paths):
         elif source_file.name_is_reference:
             ref_files[source_file.name].add(path)
         else:
-            test_files[source_file.name].add(path)
+            name = source_file.name.replace('-manual', '')
+            test_files[name].add(path)
 
     errors = []
 
@@ -458,10 +458,15 @@ def check_parsed(repo_root, path, f):
     if source_file.type == "visual" and not source_file.name_is_visual:
         errors.append(("CONTENT-VISUAL", "Visual test whose filename doesn't end in '-visual'", path, None))
 
+    about_blank_parts = urlsplit("about:blank")
     for reftest_node in source_file.reftest_nodes:
         href = reftest_node.attrib.get("href", "").strip(space_chars)
         parts = urlsplit(href)
-        if (parts.scheme or parts.netloc) and parts != urlsplit("about:blank"):
+
+        if parts == about_blank_parts:
+            continue
+
+        if (parts.scheme or parts.netloc):
             errors.append(("ABSOLUTE-URL-REF",
                      "Reference test with a reference file specified via an absolute URL: '%s'" % href, path, None))
             continue
@@ -664,6 +669,8 @@ def check_script_metadata(repo_root, path, f):
             elif key == b"timeout":
                 if value != b"long":
                     errors.append(("UNKNOWN-TIMEOUT-METADATA", "Unexpected value for timeout metadata", path, idx + 1))
+            elif key == b"title":
+                pass
             elif key == b"script":
                 pass
             elif key == b"variant":

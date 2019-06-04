@@ -18,6 +18,10 @@ class GalleryBrowserTestBase : public FileManagerBrowserTestBase {
     return test_case_name_.c_str();
   }
 
+  std::string GetFullTestCaseName() const override {
+    return test_case_name_;
+  }
+
   const char* GetTestExtensionManifestName() const override {
     return "gallery_test_manifest.json";
   }
@@ -68,6 +72,12 @@ IN_PROC_BROWSER_TEST_F(GalleryBrowserTest,
 
 IN_PROC_BROWSER_TEST_F(GalleryBrowserTest, OpenMultipleImagesOnDrive) {
   set_test_case_name("openMultipleImagesOnDrive");
+  StartTest();
+}
+
+IN_PROC_BROWSER_TEST_F(GalleryBrowserTest,
+                       CheckAvailabilityOfEditAndPrintButtons) {
+  set_test_case_name("checkAvailabilityOfEditAndPrintButtons");
   StartTest();
 }
 
@@ -312,6 +322,36 @@ IN_PROC_BROWSER_TEST_F(GalleryBrowserTest, StopStartSlideshowOnDownloads) {
 
 IN_PROC_BROWSER_TEST_F(GalleryBrowserTest, StopStartSlideshowOnDrive) {
   set_test_case_name("stopStartSlideshowOnDrive");
+  StartTest();
+}
+
+IN_PROC_BROWSER_TEST_F(GalleryBrowserTest, ActivateVideoFromThumbnailMode) {
+  set_test_case_name("activateVideoFromThumbnailMode");
+  StartTest();
+}
+
+IN_PROC_BROWSER_TEST_F(GalleryBrowserTest, DeleteSingleOpenPhotoOnDownloads) {
+  set_test_case_name("deleteSingleOpenPhotoOnDownloads");
+  StartTest();
+}
+
+IN_PROC_BROWSER_TEST_F(GalleryBrowserTest, OneImageSlideshowNoPauseButtonOnDownloads) {
+  set_test_case_name("oneImageSlideshowNoPauseButtonOnDownloads");
+  StartTest();
+}
+
+IN_PROC_BROWSER_TEST_F(GalleryBrowserTest, OneImageSlideshowNoPauseButtonOnDrive) {
+  set_test_case_name("oneImageSlideshowNoPauseButtonOnDrive");
+  StartTest();
+}
+
+IN_PROC_BROWSER_TEST_F(GalleryBrowserTest, ShiftSelectFromNothingSelectedOnDownloads) {
+  set_test_case_name("shiftSelectFromNothingSelectedOnDownloads");
+  StartTest();
+}
+
+IN_PROC_BROWSER_TEST_F(GalleryBrowserTest, ShiftSelectFromNothingSelectedOnDrive) {
+  set_test_case_name("shiftSelectFromNothingSelectedOnDrive");
   StartTest();
 }
 

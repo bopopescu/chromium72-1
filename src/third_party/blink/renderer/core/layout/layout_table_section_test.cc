@@ -18,17 +18,17 @@ class LayoutTableSectionTest : public RenderingTest {
   }
 
   LayoutTableSection* CreateSection(unsigned rows, unsigned columns) {
-    auto* table = GetDocument().CreateRawElement(HTMLNames::tableTag);
+    auto* table = GetDocument().CreateRawElement(html_names::kTableTag);
     GetDocument().body()->appendChild(table);
-    auto* section = GetDocument().CreateRawElement(HTMLNames::tbodyTag);
+    auto* section = GetDocument().CreateRawElement(html_names::kTbodyTag);
     table->appendChild(section);
     for (unsigned i = 0; i < rows; ++i) {
-      auto* row = GetDocument().CreateRawElement(HTMLNames::trTag);
+      auto* row = GetDocument().CreateRawElement(html_names::kTrTag);
       section->appendChild(row);
       for (unsigned i = 0; i < columns; ++i)
-        row->appendChild(GetDocument().CreateRawElement(HTMLNames::tdTag));
+        row->appendChild(GetDocument().CreateRawElement(html_names::kTdTag));
     }
-    GetDocument().View()->UpdateAllLifecyclePhases();
+    UpdateAllLifecyclePhasesForTest();
     return ToLayoutTableSection(section->GetLayoutObject());
   }
 };
@@ -316,8 +316,10 @@ TEST_F(LayoutTableSectionTest, VisualOverflowWithCollapsedBorders) {
 }
 
 static void SetCellsOverflowInRow(LayoutTableRow* row) {
-  for (auto* cell = row->FirstCell(); cell; cell = cell->NextCell())
-    ToElement(cell->GetNode())->setAttribute(HTMLNames::classAttr, "overflow");
+  for (auto* cell = row->FirstCell(); cell; cell = cell->NextCell()) {
+    ToElement(cell->GetNode())
+        ->setAttribute(html_names::kClassAttr, "overflow");
+  }
 }
 
 TEST_F(LayoutTableSectionTest, OverflowingCells) {
@@ -345,7 +347,7 @@ TEST_F(LayoutTableSectionTest, OverflowingCells) {
 
   SetCellsOverflowInRow(small_section->FirstRow());
   SetCellsOverflowInRow(big_section->FirstRow());
-  GetDocument().View()->UpdateAllLifecyclePhases();
+  UpdateAllLifecyclePhasesForTest();
 
   // Small sections with overflowing cells always use the full paint path.
   EXPECT_TRUE(small_section->HasOverflowingCell());
@@ -365,7 +367,7 @@ TEST_F(LayoutTableSectionTest, OverflowingCells) {
     SetCellsOverflowInRow(row);
   for (auto* row = big_section->FirstRow(); row; row = row->NextRow())
     SetCellsOverflowInRow(row);
-  GetDocument().View()->UpdateAllLifecyclePhases();
+  UpdateAllLifecyclePhasesForTest();
 
   // Small sections with overflowing cells always use the full paint path.
   EXPECT_TRUE(small_section->HasOverflowingCell());
@@ -381,6 +383,22 @@ TEST_F(LayoutTableSectionTest, OverflowingCells) {
   big_section->DirtiedRowsAndEffectiveColumns(paint_rect, rows, columns);
   EXPECT_EQ(big_section->FullSectionRowSpan(), rows);
   EXPECT_EQ(big_section->FullTableEffectiveColumnSpan(), columns);
+}
+
+TEST_F(LayoutTableSectionTest, RowCollapseNegativeHeightCrash) {
+  // Table % height triggers the heuristic check for relayout of cells at
+  // https://cs.chromium.org/chromium/src/third_party/blink/renderer/core/layout/layout_table_section.cc?rcl=5ea6fa63d8809f990d662182d971facbf557f812&l=1899
+  // Cell child needs a % height to set cell_children_flex at line 1907, which
+  // caused a negative override height to get set at 1929, which DCHECKed.
+  SetBodyInnerHTML(R"HTML(
+    <table style="height:50%">
+      <tr style="visibility:collapse">
+        <td>
+          <div style="height:50%"></div>
+        </td>
+      </tr>
+    </table>
+  )HTML");
 }
 
 }  // anonymous namespace

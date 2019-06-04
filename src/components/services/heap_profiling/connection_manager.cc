@@ -147,12 +147,8 @@ void ConnectionManager::OnNewConnection(base::ProcessId pid,
   // when the user is attempting to manually start profiling for processes, so
   // we ignore this edge case.
 
-  base::PlatformFile receiver_handle;
-  CHECK_EQ(MOJO_RESULT_OK, mojo::UnwrapPlatformFile(
-                               std::move(receiver_pipe_end), &receiver_handle));
-  scoped_refptr<ReceiverPipe> new_pipe =
-      new ReceiverPipe(mojo::edk::ScopedInternalPlatformHandle(
-          mojo::edk::InternalPlatformHandle(receiver_handle)));
+  scoped_refptr<ReceiverPipe> new_pipe = new ReceiverPipe(
+      mojo::UnwrapPlatformHandle(std::move(receiver_pipe_end)));
 
   // The allocation tracker will call this on a background thread, so thunk
   // back to the current thread with weak pointers.
@@ -173,7 +169,8 @@ void ConnectionManager::OnNewConnection(base::ProcessId pid,
   new_pipe->SetReceiver(connection->thread.task_runner(), connection->parser);
 
   connection->thread.task_runner()->PostTask(
-      FROM_HERE, base::Bind(&ReceiverPipe::StartReadingOnIOThread, new_pipe));
+      FROM_HERE,
+      base::BindOnce(&ReceiverPipe::StartReadingOnIOThread, new_pipe));
 
   // Request the client start sending us data.
   connection->client->StartProfiling(std::move(params));

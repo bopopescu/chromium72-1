@@ -8,6 +8,8 @@
 #ifndef GrVkTexture_DEFINED
 #define GrVkTexture_DEFINED
 
+#include "GrVkVulkan.h"
+
 #include "GrTexture.h"
 #include "GrVkImage.h"
 
@@ -17,25 +19,25 @@ struct GrVkImageInfo;
 
 class GrVkTexture : public GrTexture, public virtual GrVkImage {
 public:
-    static sk_sp<GrVkTexture> CreateNewTexture(GrVkGpu*,
-                                               SkBudgeted budgeted,
-                                               const GrSurfaceDesc&,
-                                               const GrVkImage::ImageDesc&,
-                                               GrMipMapsStatus);
+    static sk_sp<GrVkTexture> MakeNewTexture(GrVkGpu*,
+                                             SkBudgeted budgeted,
+                                             const GrSurfaceDesc&,
+                                             const GrVkImage::ImageDesc&,
+                                             GrMipMapsStatus);
 
     static sk_sp<GrVkTexture> MakeWrappedTexture(GrVkGpu*, const GrSurfaceDesc&,
-                                                 GrWrapOwnership, const GrVkImageInfo&,
-                                                 sk_sp<GrVkImageLayout>);
+                                                 GrWrapOwnership, bool purgeImmediatley,
+                                                 const GrVkImageInfo&, sk_sp<GrVkImageLayout>);
 
     ~GrVkTexture() override;
 
     GrBackendTexture getBackendTexture() const override;
 
+    GrBackendFormat backendFormat() const override { return this->getBackendFormat(); }
+
     void textureParamsModified() override {}
 
-    const GrVkImageView* textureView(bool allowSRGB);
-
-    bool reallocForMipmap(GrVkGpu* gpu, uint32_t mipLevels);
+    const GrVkImageView* textureView();
 
     // In Vulkan we call the release proc after we are finished with the underlying
     // GrVkImage::Resource object (which occurs after the GPU has finsihed all work on it).
@@ -64,10 +66,9 @@ private:
                 GrMipMapsStatus);
     GrVkTexture(GrVkGpu*, Wrapped, const GrSurfaceDesc&, const GrVkImageInfo&,
                 sk_sp<GrVkImageLayout> layout, const GrVkImageView* imageView, GrMipMapsStatus,
-                GrBackendObjectOwnership);
+                GrBackendObjectOwnership, bool purgeImmediately);
 
     const GrVkImageView*     fTextureView;
-    const GrVkImageView*     fLinearTextureView;
 
     typedef GrTexture INHERITED;
 };

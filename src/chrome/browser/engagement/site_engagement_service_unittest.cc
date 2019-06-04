@@ -7,11 +7,13 @@
 #include <algorithm>
 #include <utility>
 
+#include "base/bind.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/macros.h"
 #include "base/memory/ptr_util.h"
 #include "base/run_loop.h"
-#include "base/test/histogram_tester.h"
+#include "base/task/post_task.h"
+#include "base/test/metrics/histogram_tester.h"
 #include "base/test/simple_test_clock.h"
 #include "base/values.h"
 #include "chrome/browser/content_settings/host_content_settings_map_factory.h"
@@ -33,11 +35,13 @@
 #include "components/history/core/browser/history_service.h"
 #include "components/history/core/test/test_history_database.h"
 #include "components/prefs/pref_service.h"
+#include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/navigation_entry.h"
 #include "content/public/browser/page_navigator.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/test/navigation_simulator.h"
+#include "content/public/test/test_utils.h"
 #include "content/public/test/web_contents_tester.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -64,10 +68,11 @@ class SiteEngagementChangeWaiter : public content_settings::Observer {
   }
 
   // Overridden from content_settings::Observer:
-  void OnContentSettingChanged(const ContentSettingsPattern& primary_pattern,
-                               const ContentSettingsPattern& secondary_pattern,
-                               ContentSettingsType content_type,
-                               std::string resource_identifier) override {
+  void OnContentSettingChanged(
+      const ContentSettingsPattern& primary_pattern,
+      const ContentSettingsPattern& secondary_pattern,
+      ContentSettingsType content_type,
+      const std::string& resource_identifier) override {
     if (content_type == CONTENT_SETTINGS_TYPE_SITE_ENGAGEMENT)
       Proceed();
   }
@@ -162,7 +167,7 @@ class SiteEngagementServiceTest : public ChromeRenderViewHostTestHarness {
     ASSERT_TRUE(temp_dir_.CreateUniqueTempDir());
     g_temp_history_dir = temp_dir_.GetPath();
     HistoryServiceFactory::GetInstance()->SetTestingFactory(
-        profile(), &BuildTestHistoryService);
+        profile(), base::BindRepeating(&BuildTestHistoryService));
     SiteEngagementScore::SetParamValuesForTesting();
     service_ = base::WrapUnique(new SiteEngagementService(profile(), &clock_));
   }
@@ -211,12 +216,13 @@ class SiteEngagementServiceTest : public ChromeRenderViewHostTestHarness {
       const GURL& url) {
     double score = 0;
     base::RunLoop run_loop;
-    content::BrowserThread::GetTaskRunnerForThread(thread_id)->PostTaskAndReply(
-        FROM_HERE,
-        base::BindOnce(&SiteEngagementServiceTest::CheckScoreFromSettings,
-                       base::Unretained(this), base::RetainedRef(settings_map),
-                       url, &score),
-        run_loop.QuitClosure());
+    base::CreateSingleThreadTaskRunnerWithTraits({thread_id})
+        ->PostTaskAndReply(
+            FROM_HERE,
+            base::BindOnce(&SiteEngagementServiceTest::CheckScoreFromSettings,
+                           base::Unretained(this),
+                           base::RetainedRef(settings_map), url, &score),
+            run_loop.QuitClosure());
     run_loop.Run();
     return score;
   }
@@ -566,7 +572,7 @@ TEST_F(SiteEngagementServiceTest, CheckHistograms) {
                               0);
 
   // Record metrics for an empty engagement system.
-  service_->RecordMetrics();
+  service_->RecordMetrics(service_->GetAllDetails());
 
   histograms.ExpectUniqueSample(
       SiteEngagementMetrics::kTotalEngagementHistogram, 0, 1);
@@ -606,6 +612,9 @@ TEST_F(SiteEngagementServiceTest, CheckHistograms) {
                             SiteEngagementService::ENGAGEMENT_MOUSE);
   NavigateAndCommit(url2);
   service_->HandleMediaPlaying(web_contents(), true);
+
+  // Wait until the background metrics recording happens.
+  content::RunAllTasksUntilIdle();
 
   histograms.ExpectTotalCount(SiteEngagementMetrics::kTotalEngagementHistogram,
                               2);
@@ -673,6 +682,9 @@ TEST_F(SiteEngagementServiceTest, CheckHistograms) {
   NavigateAndCommit(url2);
   service_->HandleUserInput(web_contents(),
                             SiteEngagementService::ENGAGEMENT_TOUCH_GESTURE);
+
+  // Wait until the background metrics recording happens.
+  content::RunAllTasksUntilIdle();
 
   histograms.ExpectTotalCount(SiteEngagementMetrics::kTotalEngagementHistogram,
                               3);
@@ -754,6 +766,9 @@ TEST_F(SiteEngagementServiceTest, CheckHistograms) {
 
   clock_.SetNow(clock_.Now() + base::TimeDelta::FromMinutes(60));
   service_->HandleNavigation(web_contents(), ui::PAGE_TRANSITION_TYPED);
+
+  // Wait until the background metrics recording happens.
+  content::RunAllTasksUntilIdle();
 
   histograms.ExpectTotalCount(SiteEngagementMetrics::kTotalEngagementHistogram,
                               4);

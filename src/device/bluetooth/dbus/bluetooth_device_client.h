@@ -126,6 +126,9 @@ class DEVICE_BLUETOOTH_EXPORT BluetoothDeviceClient : public BluezDBusClient {
     // The MTU used in ATT communication with the remote device. Read-only.
     dbus::Property<uint16_t> mtu;
 
+    // The EIR advertised by the remote device. Read-only.
+    dbus::Property<std::vector<uint8_t>> eir;
+
     Properties(dbus::ObjectProxy* object_proxy,
                const std::string& interface_name,
                const PropertyChangedCallback& callback);
@@ -241,6 +244,16 @@ class DEVICE_BLUETOOTH_EXPORT BluetoothDeviceClient : public BluezDBusClient {
   virtual void GetServiceRecords(const dbus::ObjectPath& object_path,
                                  const ServiceRecordsCallback& callback,
                                  const ErrorCallback& error_callback) = 0;
+
+  // Executes all the privous prepare writes in a reliable write session.
+  virtual void ExecuteWrite(const dbus::ObjectPath& object_path,
+                            const base::Closure& callback,
+                            const ErrorCallback& error_callback) = 0;
+
+  // Aborts all the privous prepare writes in a reliable write session.
+  virtual void AbortWrite(const dbus::ObjectPath& object_path,
+                          const base::Closure& callback,
+                          const ErrorCallback& error_callback) = 0;
 
   // Creates the instance.
   static BluetoothDeviceClient* Create();

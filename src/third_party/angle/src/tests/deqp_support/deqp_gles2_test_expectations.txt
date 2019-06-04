@@ -30,9 +30,6 @@
 998 DEBUG RELEASE : dEQP-GLES2.performance.* = SKIP
 998 DEBUG RELEASE : dEQP-GLES2.stress.* = SKIP
 
-// Tests that we fail because they're not in line with the WebGL spec
-1335 DEBUG RELEASE : dEQP-GLES2.functional.shaders.preprocessor.conditional_inclusion.basic_2* = FAIL
-
 // Failures related to not supporting separate depth/stencil masks on D3D11.
 1655 D3D11 : dEQP-GLES2.functional.fragment_ops.depth_stencil.stencil_depth_funcs.stencil_* = FAIL
 1655 D3D11 : dEQP-GLES2.functional.fragment_ops.depth_stencil.stencil_ops.* = FAIL
@@ -113,6 +110,7 @@
 1143 MAC : dEQP-GLES2.functional.shaders.scoping.valid.local_struct_variable_hides_struct_type_* = FAIL
 1143 MAC : dEQP-GLES2.functional.shaders.scoping.valid.function_parameter_hides_struct_type_* = FAIL
 1143 MAC : dEQP-GLES2.functional.shaders.random.trigonometric.vertex.65 = FAIL
+2631 MAC : dEQP-GLES2.functional.shaders.operator.sequence.side_effects.affect_* = FAIL
 
 // Mac Intel specific
 2137 MAC INTEL : dEQP-GLES2.functional.color_clear.complex_rgb = FAIL
@@ -178,129 +176,71 @@
 1489 GLES ANDROID : dEQP-GLES2.functional.texture.mipmap.cube.generate.l8_nicest = FAIL
 1489 GLES ANDROID : dEQP-GLES2.functional.texture.mipmap.cube.generate.la88_fastest = FAIL
 1489 GLES ANDROID : dEQP-GLES2.functional.texture.mipmap.cube.generate.la88_nicest = FAIL
-// Android Vulkan backend only failures
-2549 VULKAN ANDROID : dEQP-GLES2.functional.fragment_ops.depth_stencil.* = SKIP
-2550 VULKAN ANDROID : dEQP-GLES2.functional.rasterization.interpolation.* = SKIP
+2631 GLES ANDROID : dEQP-GLES2.functional.shaders.operator.sequence.side_effects.affect_* = FAIL
+2630 GLES ANDROID : dEQP-GLES2.functional.shaders.struct.uniform.sampler_in_array_function_arg_* = FAIL
+2630 GLES ANDROID : dEQP-GLES2.functional.shaders.struct.uniform.sampler_in_function_arg_* = FAIL
 
 // Windows Linux and Mac failures
 1028 WIN LINUX MAC : dEQP-GLES2.functional.fbo.completeness.renderable.texture.color0.srgb8 = FAIL
 1028 WIN LINUX MAC : dEQP-GLES2.functional.fbo.completeness.renderable.texture.stencil.srgb8 = FAIL
 1028 WIN LINUX MAC : dEQP-GLES2.functional.fbo.completeness.renderable.texture.depth.srgb8 = FAIL
 
-// Vulkan failures
-2161 VULKAN : dEQP-GLES2.functional.prerequisite.* = SKIP
-2161 VULKAN : dEQP-GLES2.functional.implementation_limits.* = SKIP
-2161 VULKAN : dEQP-GLES2.functional.buffer.* = SKIP
-2161 VULKAN : dEQP-GLES2.functional.light_amount.* = SKIP
-2161 VULKAN : dEQP-GLES2.functional.shaders.* = SKIP
-2161 VULKAN : dEQP-GLES2.functional.texture.mipmap.2d.generate.* = SKIP
-2161 VULKAN : dEQP-GLES2.functional.texture.mipmap.cube.generate.* = SKIP
-2161 VULKAN : dEQP-GLES2.functional.texture.completeness.* = SKIP
-2161 VULKAN : dEQP-GLES2.functional.texture.vertex.* = SKIP
-2161 VULKAN : dEQP-GLES2.functional.fragment_ops.random.* = SKIP
-2161 VULKAN : dEQP-GLES2.functional.fragment_ops.interaction.* = SKIP
-2161 VULKAN : dEQP-GLES2.functional.fbo.* = SKIP
-2161 VULKAN : dEQP-GLES2.functional.vertex_arrays.* = SKIP
-2161 VULKAN : dEQP-GLES2.functional.shader_api.* = SKIP
-2161 VULKAN : dEQP-GLES2.functional.negative_api.* = SKIP
-2161 VULKAN : dEQP-GLES2.functional.rasterization.primitives.* = SKIP
-2161 VULKAN : dEQP-GLES2.functional.rasterization.limits.* = SKIP
-2161 VULKAN : dEQP-GLES2.functional.attribute_location.* = SKIP
-2161 VULKAN : dEQP-GLES2.functional.multisample.* = SKIP
-2161 VULKAN : dEQP-GLES2.functional.uniform_api.info_query.basic_array.sampler2D_* = SKIP
-2161 VULKAN : dEQP-GLES2.functional.uniform_api.info_query.basic_struct.sampler2D_* = SKIP
-2161 VULKAN : dEQP-GLES2.functional.uniform_api.info_query.struct_in_array.sampler2D_* = SKIP
-2161 VULKAN : dEQP-GLES2.functional.uniform_api.info_query.array_in_struct.sampler2D_* = SKIP
-2161 VULKAN : dEQP-GLES2.functional.uniform_api.info_query.nested_structs_arrays.sampler2D_* = SKIP
-2161 VULKAN : dEQP-GLES2.functional.uniform_api.info_query.multiple_basic_array.sampler2D_* = SKIP
-2161 VULKAN : dEQP-GLES2.functional.uniform_api.info_query.multiple_nested_structs_arrays.sampler2D_* = SKIP
-2161 VULKAN : dEQP-GLES2.functional.uniform_api.info_query.unused_uniforms.* = SKIP
-2161 VULKAN : dEQP-GLES2.functional.uniform_api.value.initial.get_uniform.basic.sampler* = SKIP
-2161 VULKAN : dEQP-GLES2.functional.uniform_api.value.initial.get_uniform.basic_array.sampler2D_* = SKIP
-2161 VULKAN : dEQP-GLES2.functional.uniform_api.value.initial.get_uniform.basic_struct.sampler2D_* = SKIP
-2161 VULKAN : dEQP-GLES2.functional.uniform_api.value.initial.get_uniform.struct_in_array.sampler2D_* = SKIP
-2161 VULKAN : dEQP-GLES2.functional.uniform_api.value.initial.get_uniform.array_in_struct.sampler2D_* = SKIP
-2161 VULKAN : dEQP-GLES2.functional.uniform_api.value.initial.get_uniform.nested_structs_arrays.sampler2D_* = SKIP
-2161 VULKAN : dEQP-GLES2.functional.uniform_api.value.initial.get_uniform.multiple_basic.vertex = SKIP
-2161 VULKAN : dEQP-GLES2.functional.uniform_api.value.initial.get_uniform.multiple_basic.fragment = SKIP
-2161 VULKAN : dEQP-GLES2.functional.uniform_api.value.initial.get_uniform.multiple_basic.both = SKIP
-2161 VULKAN : dEQP-GLES2.functional.uniform_api.value.initial.get_uniform.multiple_basic_array.* = SKIP
-2161 VULKAN : dEQP-GLES2.functional.uniform_api.value.initial.get_uniform.multiple_nested_structs_arrays.* = SKIP
-2161 VULKAN : dEQP-GLES2.functional.uniform_api.value.initial.render.basic.samplerCube_* = SKIP
-2161 VULKAN : dEQP-GLES2.functional.uniform_api.value.initial.render.basic_array.sampler2D_* = SKIP
-2161 VULKAN : dEQP-GLES2.functional.uniform_api.value.initial.render.basic_struct.* = SKIP
-2161 VULKAN : dEQP-GLES2.functional.uniform_api.value.initial.render.struct_in_array.* = SKIP
-2161 VULKAN : dEQP-GLES2.functional.uniform_api.value.initial.render.array_in_struct.* = SKIP
-2161 VULKAN : dEQP-GLES2.functional.uniform_api.value.initial.render.multiple_basic_array.* = SKIP
-2161 VULKAN : dEQP-GLES2.functional.uniform_api.value.initial.render.multiple_nested_structs_arrays.* = SKIP
-2161 VULKAN : dEQP-GLES2.functional.uniform_api.value.initial.render.nested_structs_arrays.* = SKIP
-2161 VULKAN : dEQP-GLES2.functional.uniform_api.value.assigned.by_pointer.get_uniform.basic.sampler* = SKIP
-2161 VULKAN : dEQP-GLES2.functional.uniform_api.value.assigned.by_pointer.get_uniform.basic_array.sampler2D_* = SKIP
-2161 VULKAN : dEQP-GLES2.functional.uniform_api.value.assigned.by_pointer.get_uniform.basic_struct.sampler2D_* = SKIP
-2161 VULKAN : dEQP-GLES2.functional.uniform_api.value.assigned.by_pointer.get_uniform.basic_struct.bool_* = SKIP
-2161 VULKAN : dEQP-GLES2.functional.uniform_api.value.assigned.by_pointer.get_uniform.struct_in_array.sampler2D_* = SKIP
-2161 VULKAN : dEQP-GLES2.functional.uniform_api.value.assigned.by_pointer.get_uniform.struct_in_array.bool_* = SKIP
-2161 VULKAN : dEQP-GLES2.functional.uniform_api.value.assigned.by_pointer.get_uniform.array_in_struct.sampler2D_* = SKIP
-2161 VULKAN : dEQP-GLES2.functional.uniform_api.value.assigned.by_pointer.get_uniform.nested_structs_arrays.sampler2D_* = SKIP
-2161 VULKAN : dEQP-GLES2.functional.uniform_api.value.assigned.by_pointer.get_uniform.basic_array_first_elem_without_brackets.* = SKIP
-2161 VULKAN : dEQP-GLES2.functional.uniform_api.value.assigned.by_pointer.get_uniform.multiple_basic.vertex = SKIP
-2161 VULKAN : dEQP-GLES2.functional.uniform_api.value.assigned.by_pointer.get_uniform.multiple_basic.fragment = SKIP
-2161 VULKAN : dEQP-GLES2.functional.uniform_api.value.assigned.by_pointer.get_uniform.multiple_basic.both = SKIP
-2161 VULKAN : dEQP-GLES2.functional.uniform_api.value.assigned.by_pointer.get_uniform.multiple_basic_array.* = SKIP
-2161 VULKAN : dEQP-GLES2.functional.uniform_api.value.assigned.by_pointer.get_uniform.multiple_nested_structs_arrays.* = SKIP
-2161 VULKAN : dEQP-GLES2.functional.uniform_api.value.assigned.by_pointer.render.basic.mat2_* = SKIP
-2161 VULKAN : dEQP-GLES2.functional.uniform_api.value.assigned.by_pointer.render.basic.mat3_* = SKIP
-2161 VULKAN : dEQP-GLES2.functional.uniform_api.value.assigned.by_pointer.render.basic.samplerCube* = SKIP
-2161 VULKAN : dEQP-GLES2.functional.uniform_api.value.assigned.by_pointer.render.basic_array.sampler2D_* = SKIP
-2161 VULKAN : dEQP-GLES2.functional.uniform_api.value.assigned.by_pointer.render.basic_struct.sampler2D_* = SKIP
-2161 VULKAN : dEQP-GLES2.functional.uniform_api.value.assigned.by_pointer.render.struct_in_array.sampler2D_* = SKIP
-2161 VULKAN : dEQP-GLES2.functional.uniform_api.value.assigned.by_pointer.render.array_in_struct.sampler2D_* = SKIP
-2161 VULKAN : dEQP-GLES2.functional.uniform_api.value.assigned.by_pointer.render.multiple_basic.* = SKIP
-2161 VULKAN : dEQP-GLES2.functional.uniform_api.value.assigned.by_pointer.render.nested_structs_arrays.sampler2D_* = SKIP
-2161 VULKAN : dEQP-GLES2.functional.uniform_api.value.assigned.by_value.get_uniform.basic.sampler* = SKIP
-2161 VULKAN : dEQP-GLES2.functional.uniform_api.value.assigned.by_value.get_uniform.basic_array.sampler2D_* = SKIP
-2161 VULKAN : dEQP-GLES2.functional.uniform_api.value.assigned.by_value.get_uniform.basic_struct.sampler2D_* = SKIP
-2161 VULKAN : dEQP-GLES2.functional.uniform_api.value.assigned.by_value.get_uniform.struct_in_array.sampler2D_* = SKIP
-2161 VULKAN : dEQP-GLES2.functional.uniform_api.value.assigned.by_value.get_uniform.array_in_struct.sampler2D_* = SKIP
-2161 VULKAN : dEQP-GLES2.functional.uniform_api.value.assigned.by_value.get_uniform.nested_structs_arrays.sampler2D_* = SKIP
-2161 VULKAN : dEQP-GLES2.functional.uniform_api.value.assigned.by_value.get_uniform.multiple_basic_array.vertex = SKIP
-2161 VULKAN : dEQP-GLES2.functional.uniform_api.value.assigned.by_value.get_uniform.multiple_nested_structs_arrays.* = SKIP
-2161 VULKAN : dEQP-GLES2.functional.uniform_api.value.assigned.by_value.get_uniform.basic_array_first_elem_without_brackets.sampler2D_* = SKIP
-2161 VULKAN : dEQP-GLES2.functional.uniform_api.value.assigned.by_value.render.basic.samplerCube* = SKIP
-2161 VULKAN : dEQP-GLES2.functional.uniform_api.value.assigned.by_value.render.basic_array.sampler2D_* = SKIP
-2161 VULKAN : dEQP-GLES2.functional.uniform_api.value.assigned.by_value.render.basic_struct.sampler2D_* = SKIP
-2161 VULKAN : dEQP-GLES2.functional.uniform_api.value.assigned.by_value.render.struct_in_array.sampler2D_* = SKIP
-2161 VULKAN : dEQP-GLES2.functional.uniform_api.value.assigned.by_value.render.array_in_struct.sampler2D_* = SKIP
-2161 VULKAN : dEQP-GLES2.functional.uniform_api.value.assigned.by_value.render.nested_structs_arrays.sampler2D_* = SKIP
-2161 VULKAN : dEQP-GLES2.functional.uniform_api.value.assigned.basic_array_assign_full.array_in_struct.sampler2D_* = SKIP
-2161 VULKAN : dEQP-GLES2.functional.uniform_api.value.assigned.basic_array_assign_full.basic_array.sampler2D_* = SKIP
-2161 VULKAN : dEQP-GLES2.functional.uniform_api.value.assigned.basic_array_assign_full.multiple_basic_array.* = SKIP
-2161 VULKAN : dEQP-GLES2.functional.uniform_api.value.assigned.basic_array_assign_partial.basic_array.sampler2D_* = SKIP
-2161 VULKAN : dEQP-GLES2.functional.uniform_api.value.assigned.basic_array_assign_partial.array_in_struct.sampler2D_* = SKIP
-2161 VULKAN : dEQP-GLES2.functional.uniform_api.value.assigned.basic_array_assign_partial.multiple_basic_array.* = SKIP
-2161 VULKAN : dEQP-GLES2.functional.uniform_api.value.assigned.unused_uniforms.* = SKIP
-2161 VULKAN : dEQP-GLES2.functional.uniform_api.random.* = SKIP
-2161 VULKAN : dEQP-GLES2.functional.dither.* = SKIP
-2161 VULKAN : dEQP-GLES2.functional.state_query.* = SKIP
-2161 VULKAN : dEQP-GLES2.functional.clipping.* = SKIP
-2161 VULKAN : dEQP-GLES2.functional.polygon_offset.* = SKIP
-2161 VULKAN : dEQP-GLES2.functional.draw.draw_arrays.points.default_attribute = SKIP
-2161 VULKAN : dEQP-GLES2.functional.draw.draw_arrays.triangles.default_attribute = SKIP
-2161 VULKAN : dEQP-GLES2.functional.draw.draw_arrays.triangle_fan.default_attribute = SKIP
-2161 VULKAN : dEQP-GLES2.functional.draw.draw_arrays.triangle_strip.default_attribute = SKIP
-2161 VULKAN : dEQP-GLES2.functional.draw.draw_arrays.lines.default_attribute = SKIP
-2161 VULKAN : dEQP-GLES2.functional.draw.draw_arrays.line_strip.default_attribute = SKIP
-2161 VULKAN : dEQP-GLES2.functional.draw.draw_arrays.line_loop.default_attribute = SKIP
-2161 VULKAN : dEQP-GLES2.functional.draw.draw_elements.indices.default_attribute = SKIP
-2161 VULKAN : dEQP-GLES2.functional.draw.draw_elements.indices.buffer.*  = SKIP
-2161 VULKAN : dEQP-GLES2.functional.draw.draw_elements.points.default_attribute = SKIP
-2161 VULKAN : dEQP-GLES2.functional.draw.draw_elements.triangles.default_attribute = SKIP
-2161 VULKAN : dEQP-GLES2.functional.draw.draw_elements.triangle_fan.default_attribute = SKIP
-2161 VULKAN : dEQP-GLES2.functional.draw.draw_elements.triangle_strip.default_attribute = SKIP
-2161 VULKAN : dEQP-GLES2.functional.draw.draw_elements.lines.default_attribute = SKIP
-2161 VULKAN : dEQP-GLES2.functional.draw.draw_elements.line_strip.default_attribute = SKIP
-2161 VULKAN : dEQP-GLES2.functional.draw.draw_elements.line_loop.default_attribute = SKIP
-2161 VULKAN : dEQP-GLES2.functional.draw.random.* = SKIP
-2161 VULKAN : dEQP-GLES2.functional.default_vertex_attrib.* = SKIP
-2161 VULKAN : dEQP-GLES2.functional.lifetime.* = SKIP
-2161 VULKAN : dEQP-GLES2.functional.debug_marker.* = SKIP
+// General Vulkan failures
+// Nothing here!
+
+// Android Vulkan backend only failures
+2549 VULKAN ANDROID : dEQP-GLES2.functional.fragment_ops.depth_stencil.stencil* = SKIP
+
+// Line segment rasterization has a bug that affects Android configs.
+2830 VULKAN ANDROID : dEQP-GLES2.functional.rasterization.primitives.line* = SKIP
+
+// Passes on Pixel XL. Fails on 5x and Pixel 2. Might be fixed in latest driver.
+2609 VULKAN ANDROID : dEQP-GLES2.functional.texture.mipmap.cube.generate.* = SKIP
+
+// Fails on Nexus 5x only. TODO(jmadill): Remove suppression when possible. http://anglebug.com/2791
+2791 VULKAN ANDROID : dEQP-GLES2.functional.clipping.* = SKIP
+2599 VULKAN ANDROID : dEQP-GLES2.functional.rasterization.limits.points = FAIL
+
+// Failing on the Pixel 2.
+2727 VULKAN ANDROID : dEQP-GLES2.functional.shaders.builtin_variable.pointcoord = FAIL
+2808 VULKAN ANDROID : dEQP-GLES2.functional.shaders.builtin_variable.fragcoord_w = FAIL
+
+// Vulkan AMD drivers don't seem to support wide point clipping.
+2463 VULKAN WIN AMD : dEQP-GLES2.functional.clipping.point.wide_point_clip = FAIL
+
+// These failures are possibly due to an AMD driver bug.
+2847 VULKAN WIN AMD : dEQP-GLES2.functional.draw.random.14 = SKIP
+2847 VULKAN WIN AMD : dEQP-GLES2.functional.draw.random.30 = SKIP
+2847 VULKAN WIN AMD : dEQP-GLES2.functional.draw.random.41 = SKIP
+2847 VULKAN WIN AMD : dEQP-GLES2.functional.vertex_arrays.single_attribute.first.byte_first* = SKIP
+2847 VULKAN WIN AMD : dEQP-GLES2.functional.vertex_arrays.single_attribute.first.float_first* = SKIP
+2847 VULKAN WIN AMD : dEQP-GLES2.functional.vertex_arrays.single_attribute.offset.buffer_1_17_byte* = SKIP
+2847 VULKAN WIN AMD : dEQP-GLES2.functional.vertex_arrays.single_attribute.offset.buffer_1_2_byte* = SKIP
+2847 VULKAN WIN AMD : dEQP-GLES2.functional.vertex_arrays.single_attribute.offset.buffer_1_32_byte* = SKIP
+2847 VULKAN WIN AMD : dEQP-GLES2.functional.vertex_arrays.single_attribute.offset.buffer_17_17_byte* = SKIP
+2847 VULKAN WIN AMD : dEQP-GLES2.functional.vertex_arrays.single_attribute.offset.buffer_17_2_byte* = SKIP
+2847 VULKAN WIN AMD : dEQP-GLES2.functional.vertex_arrays.single_attribute.offset.buffer_17_32_byte* = SKIP
+2847 VULKAN WIN AMD : dEQP-GLES2.functional.vertex_arrays.single_attribute.offset.buffer_32_17_byte* = SKIP
+2847 VULKAN WIN AMD : dEQP-GLES2.functional.vertex_arrays.single_attribute.offset.buffer_32_32_byte* = SKIP
+2847 VULKAN WIN AMD : dEQP-GLES2.functional.vertex_arrays.single_attribute.offset.buffer_32_32_float* = SKIP
+2847 VULKAN WIN AMD : dEQP-GLES2.functional.vertex_arrays.single_attribute.offset.buffer_4_17_byte* = SKIP
+2847 VULKAN WIN AMD : dEQP-GLES2.functional.vertex_arrays.single_attribute.offset.buffer_4_32_byte* = SKIP
+2847 VULKAN WIN AMD : dEQP-GLES2.functional.vertex_arrays.single_attribute.offset.buffer_4_32_float* = SKIP
+2847 VULKAN WIN AMD : dEQP-GLES2.functional.vertex_arrays.single_attribute.strides.buffer_0_17_byte* = SKIP
+2847 VULKAN WIN AMD : dEQP-GLES2.functional.vertex_arrays.single_attribute.strides.buffer_0_32_byte* = SKIP
+2847 VULKAN WIN AMD : dEQP-GLES2.functional.vertex_arrays.single_attribute.strides.buffer_0_32_float* = SKIP
+2847 VULKAN WIN AMD : dEQP-GLES2.functional.vertex_arrays.single_attribute.strides.buffer_0_32_short* = SKIP
+2847 VULKAN WIN AMD : dEQP-GLES2.functional.vertex_arrays.single_attribute.strides.buffer_0_3_byte* = SKIP
+2847 VULKAN WIN AMD : dEQP-GLES2.functional.vertex_arrays.single_attribute.strides.buffer_0_6_short* = SKIP
+2847 VULKAN WIN AMD : dEQP-GLES2.functional.vertex_arrays.single_attribute.usages.buffer_0_0_byte* = SKIP
+2847 VULKAN WIN AMD : dEQP-GLES2.functional.vertex_arrays.single_attribute.usages.buffer_0_0_short* = SKIP
+2847 VULKAN WIN AMD : dEQP-GLES2.functional.vertex_arrays.single_attribute.usages.buffer_0_17_byte* = SKIP
+2847 VULKAN WIN AMD : dEQP-GLES2.functional.vertex_arrays.single_attribute.usages.buffer_0_32_byte* = SKIP
+2847 VULKAN WIN AMD : dEQP-GLES2.functional.vertex_arrays.single_attribute.usages.buffer_0_32_float* = SKIP
+2847 VULKAN WIN AMD : dEQP-GLES2.functional.vertex_arrays.single_attribute.usages.buffer_0_32_short* = SKIP
+
+// Fails after OpenGL line rasterization rules implementation. Possibly a bug in FragCoord.
+2809 VULKAN WIN AMD : dEQP-GLES2.functional.clipping.line.long_line_clip = FAIL
+
+// Failures on newer NVIDIA drivers (411.95) and passes on older drivers (388.16).
+2976 VULKAN NVIDIA : dEQP-GLES2.functional.shaders.invariance.* = FAIL

@@ -13,7 +13,6 @@
 #include "base/values.h"
 #include "chrome/browser/ui/ash/multi_user/multi_user_util.h"
 #include "components/account_id/account_id.h"
-#include "components/signin/core/browser/profile_oauth2_token_service.h"
 #include "components/user_manager/known_user.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/common/url_constants.h"
@@ -22,6 +21,8 @@
 #include "net/base/load_flags.h"
 #include "net/http/http_status_code.h"
 #include "net/url_request/url_request_context_getter.h"
+#include "services/identity/public/cpp/access_token_fetcher.h"
+#include "services/identity/public/cpp/access_token_info.h"
 #include "services/network/public/cpp/resource_request.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
 #include "services/network/public/cpp/simple_url_loader.h"
@@ -39,8 +40,8 @@ constexpr char kDeviceId[] = "device_id";
 constexpr char kDeviceType[] = "device_type";
 constexpr char kDeviceTypeArc[] = "arc_plus_plus";
 constexpr char kLoginScopedToken[] = "login_scoped_token";
-constexpr char kGetAuthCodeHeaders[] =
-    "Content-Type: application/json; charset=utf-8";
+constexpr char kGetAuthCodeKey[] = "Content-Type";
+constexpr char kGetAuthCodeValue[] = "application/json; charset=utf-8";
 constexpr char kContentTypeJSON[] = "application/json";
 
 }  // namespace
@@ -51,22 +52,23 @@ const char kAuthTokenExchangeEndPoint[] =
 ArcBackgroundAuthCodeFetcher::ArcBackgroundAuthCodeFetcher(
     scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
     Profile* profile,
-    ArcAuthContext* context,
-    bool initial_signin)
-    : OAuth2TokenService::Consumer(kConsumerName),
-      url_loader_factory_(std::move(url_loader_factory)),
+    const std::string& account_id,
+    bool initial_signin,
+    bool is_primary_account)
+    : url_loader_factory_(std::move(url_loader_factory)),
       profile_(profile),
-      context_(context),
+      context_(profile_, account_id),
       initial_signin_(initial_signin),
+      is_primary_account_(is_primary_account),
       weak_ptr_factory_(this) {}
 
 ArcBackgroundAuthCodeFetcher::~ArcBackgroundAuthCodeFetcher() = default;
 
-void ArcBackgroundAuthCodeFetcher::Fetch(const FetchCallback& callback) {
+void ArcBackgroundAuthCodeFetcher::Fetch(FetchCallback callback) {
   DCHECK(callback_.is_null());
-  callback_ = callback;
-  context_->Prepare(base::Bind(&ArcBackgroundAuthCodeFetcher::OnPrepared,
-                               weak_ptr_factory_.GetWeakPtr()));
+  callback_ = std::move(callback);
+  context_.Prepare(base::Bind(&ArcBackgroundAuthCodeFetcher::OnPrepared,
+                              weak_ptr_factory_.GetWeakPtr()));
 }
 
 void ArcBackgroundAuthCodeFetcher::OnPrepared(
@@ -76,28 +78,31 @@ void ArcBackgroundAuthCodeFetcher::OnPrepared(
     return;
   }
 
-  // Get token service and account ID to fetch auth tokens.
-  ProfileOAuth2TokenService* const token_service = context_->token_service();
-  const std::string& account_id = context_->account_id();
-  DCHECK(token_service->RefreshTokenIsAvailable(account_id));
-
-  OAuth2TokenService::ScopeSet scopes;
+  identity::ScopeSet scopes;
   scopes.insert(GaiaConstants::kOAuth1LoginScope);
-  login_token_request_ = token_service->StartRequest(account_id, scopes, this);
+  access_token_fetcher_ = context_.CreateAccessTokenFetcher(
+      kConsumerName, scopes,
+      base::BindOnce(&ArcBackgroundAuthCodeFetcher::OnAccessTokenFetchComplete,
+                     base::Unretained(this)));
 }
 
-void ArcBackgroundAuthCodeFetcher::OnGetTokenSuccess(
-    const OAuth2TokenService::Request* request,
-    const std::string& access_token,
-    const base::Time& expiration_time) {
+void ArcBackgroundAuthCodeFetcher::OnAccessTokenFetchComplete(
+    GoogleServiceAuthError error,
+    identity::AccessTokenInfo token_info) {
   ResetFetchers();
+
+  if (error.state() != GoogleServiceAuthError::NONE) {
+    LOG(WARNING) << "Failed to get LST " << error.ToString() << ".";
+    ReportResult(std::string(), OptInSilentAuthCode::NO_LST_TOKEN);
+    return;
+  }
 
   const std::string device_id = user_manager::known_user::GetDeviceId(
       multi_user_util::GetAccountIdFromProfile(profile_));
   DCHECK(!device_id.empty());
 
   base::DictionaryValue request_data;
-  request_data.SetString(kLoginScopedToken, access_token);
+  request_data.SetString(kLoginScopedToken, token_info.token);
   request_data.SetString(kDeviceType, kDeviceTypeArc);
   request_data.SetString(kDeviceId, device_id);
   std::string request_string;
@@ -131,7 +136,7 @@ void ArcBackgroundAuthCodeFetcher::OnGetTokenSuccess(
       net::LOAD_DISABLE_CACHE | net::LOAD_BYPASS_CACHE |
       net::LOAD_DO_NOT_SEND_COOKIES | net::LOAD_DO_NOT_SAVE_COOKIES;
   resource_request->method = "POST";
-  resource_request->headers.AddHeaderFromString(kGetAuthCodeHeaders);
+  resource_request->headers.SetHeader(kGetAuthCodeKey, kGetAuthCodeValue);
   simple_url_loader_ = network::SimpleURLLoader::Create(
       std::move(resource_request), traffic_annotation);
   simple_url_loader_->AttachStringForUpload(request_string, kContentTypeJSON);
@@ -145,14 +150,6 @@ void ArcBackgroundAuthCodeFetcher::OnGetTokenSuccess(
       url_loader_factory_.get(),
       base::BindOnce(&ArcBackgroundAuthCodeFetcher::OnSimpleLoaderComplete,
                      base::Unretained(this)));
-}
-
-void ArcBackgroundAuthCodeFetcher::OnGetTokenFailure(
-    const OAuth2TokenService::Request* request,
-    const GoogleServiceAuthError& error) {
-  LOG(WARNING) << "Failed to get LST " << error.ToString() << ".";
-  ResetFetchers();
-  ReportResult(std::string(), OptInSilentAuthCode::NO_LST_TOKEN);
 }
 
 void ArcBackgroundAuthCodeFetcher::OnSimpleLoaderComplete(
@@ -223,18 +220,27 @@ void ArcBackgroundAuthCodeFetcher::OnSimpleLoaderComplete(
 }
 
 void ArcBackgroundAuthCodeFetcher::ResetFetchers() {
-  login_token_request_.reset();
+  access_token_fetcher_.reset();
   simple_url_loader_.reset();
 }
 
 void ArcBackgroundAuthCodeFetcher::ReportResult(
     const std::string& auth_code,
     OptInSilentAuthCode uma_status) {
-  if (initial_signin_)
+  if (initial_signin_) {
     UpdateSilentAuthCodeUMA(uma_status);
-  else
-    UpdateReauthorizationSilentAuthCodeUMA(uma_status);
+  } else {
+    // Not the initial provisioning.
+    if (is_primary_account_)
+      UpdateReauthorizationSilentAuthCodeUMA(uma_status);
+    else
+      UpdateSecondaryAccountSilentAuthCodeUMA(uma_status);
+  }
   std::move(callback_).Run(!auth_code.empty(), auth_code);
+}
+
+void ArcBackgroundAuthCodeFetcher::SkipMergeSessionForTesting() {
+  context_.SkipMergeSessionForTesting();
 }
 
 }  // namespace arc

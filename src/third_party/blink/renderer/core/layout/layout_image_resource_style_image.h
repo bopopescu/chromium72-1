@@ -37,10 +37,11 @@ class LayoutObject;
 
 class LayoutImageResourceStyleImage final : public LayoutImageResource {
  public:
+  explicit LayoutImageResourceStyleImage(StyleImage*);
   ~LayoutImageResourceStyleImage() override;
 
   static LayoutImageResource* Create(StyleImage* style_image) {
-    return new LayoutImageResourceStyleImage(style_image);
+    return MakeGarbageCollected<LayoutImageResourceStyleImage>(style_image);
   }
   void Initialize(LayoutObject*) override;
   void Shutdown() override;
@@ -53,12 +54,13 @@ class LayoutImageResourceStyleImage final : public LayoutImageResource {
     return style_image_->ImageHasRelativeSize();
   }
   FloatSize ImageSize(float multiplier) const override;
+  FloatSize ImageSizeWithDefaultSize(float multiplier,
+                                     const LayoutSize&) const override;
   WrappedImagePtr ImagePtr() const override { return style_image_->Data(); }
 
   void Trace(blink::Visitor*) override;
 
  private:
-  explicit LayoutImageResourceStyleImage(StyleImage*);
   Member<StyleImage> style_image_;
 };
 

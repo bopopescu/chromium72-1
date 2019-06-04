@@ -13,7 +13,6 @@
 
 #include <openssl/ossl_typ.h>
 #include <string>
-#include "rtc_base/sslcertificate.h"
 
 namespace rtc {
 // The openssl namespace holds static helper methods. All methods related
@@ -28,12 +27,12 @@ bool VerifyPeerCertMatchesHost(SSL* ssl, const std::string& host);
 // prefix can be provided for context.
 void LogSSLErrors(const std::string& prefix);
 
-#ifndef WEBRTC_DISABLE_BUILT_IN_SSL_ROOT_CERTIFICATES
+#ifndef WEBRTC_EXCLUDE_BUILT_IN_SSL_ROOT_CERTS
 // Attempt to add the certificates from the loader into the SSL_CTX. False is
 // returned only if there are no certificates returned from the loader or none
 // of them can be added to the TrustStore for the provided context.
 bool LoadBuiltinSSLRootCertificates(SSL_CTX* ssl_ctx);
-#endif  // WEBRTC_DISABLE_BUILT_IN_SSL_ROOT_CERTIFICATES
+#endif  // WEBRTC_EXCLUDE_BUILT_IN_SSL_ROOT_CERTS
 
 }  // namespace openssl
 }  // namespace rtc

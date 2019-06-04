@@ -7,7 +7,7 @@
 
 #include "net/third_party/quic/core/quic_packet_writer_wrapper.h"
 
-namespace net {
+namespace quic {
 
 namespace test {
 
@@ -33,13 +33,13 @@ class PacketReorderingWriter : public QuicPacketWriterWrapper {
  private:
   bool delay_next_ = false;
   size_t num_packets_to_wait_ = 0;
-  std::string delayed_data_;
+  QuicString delayed_data_;
   QuicIpAddress delayed_self_address_;
   QuicSocketAddress delayed_peer_address_;
   std::unique_ptr<PerPacketOptions> delayed_options_;
 };
 
 }  // namespace test
-}  // namespace net
+}  // namespace quic
 
 #endif  // NET_THIRD_PARTY_QUIC_TEST_TOOLS_PACKET_REORDERING_WRITER_H_

@@ -24,7 +24,7 @@
 #if defined(OS_WIN)
 #include <windows.h>
 #elif defined(OS_FUCHSIA)
-#include <launchpad/launchpad.h>
+#include <lib/fdio/spawn.h>
 #include <zircon/types.h>
 #endif
 
@@ -39,6 +39,10 @@ class CommandLine;
 #if defined(OS_WIN)
 typedef std::vector<HANDLE> HandlesToInheritVector;
 #elif defined(OS_FUCHSIA)
+struct PathToTransfer {
+  base::FilePath path;
+  zx_handle_t handle;
+};
 struct HandleToTransfer {
   uint32_t id;
   zx_handle_t handle;
@@ -52,7 +56,7 @@ typedef std::vector<std::pair<int, int>> FileHandleMappingVector;
 // Options for launching a subprocess that are passed to LaunchProcess().
 // The default constructor constructs the object with default options.
 struct BASE_EXPORT LaunchOptions {
-#if defined(OS_POSIX) || defined(OS_FUCHSIA)
+#if (defined(OS_POSIX) || defined(OS_FUCHSIA)) && !defined(OS_MACOSX)
   // Delegate to be run in between fork and exec in the subprocess (see
   // pre_exec_delegate below)
   class BASE_EXPORT PreExecDelegate {
@@ -82,6 +86,10 @@ struct BASE_EXPORT LaunchOptions {
 
 #if defined(OS_WIN)
   bool start_hidden = false;
+
+  // Sets STARTF_FORCEOFFFEEDBACK so that the feedback cursor is forced off
+  // while the process is starting.
+  bool feedback_cursor_off = false;
 
   // Windows can inherit handles when it launches child processes.
   // See https://blogs.msdn.microsoft.com/oldnewthing/20111216-00/?p=8873
@@ -187,29 +195,30 @@ struct BASE_EXPORT LaunchOptions {
   zx_handle_t job_handle = ZX_HANDLE_INVALID;
 
   // Specifies additional handles to transfer (not duplicate) to the child
-  // process. The handles remain valid in this process if launch fails.
-  // Each entry is an <id,handle> pair, with an |id| created using the PA_HND()
-  // macro. The child retrieves the handle |zx_get_startup_handle(id)|.
+  // process. Each entry is an <id,handle> pair, with an |id| created using the
+  // PA_HND() macro. The child retrieves the handle
+  // |zx_take_startup_handle(id)|. The supplied handles are consumed by
+  // LaunchProcess() even on failure.
   HandlesToTransferVector handles_to_transfer;
 
-  // If set, specifies which capabilities should be granted (cloned) to the
-  // child process.
-  // A zero value indicates that the child process will receive
-  // no capabilities.
-  // By default the child will inherit the same capabilities, job, and CWD
-  // from the parent process.
-  uint32_t clone_flags =
-      LP_CLONE_FDIO_NAMESPACE | LP_CLONE_DEFAULT_JOB | LP_CLONE_FDIO_STDIO;
+  // Specifies which basic capabilities to grant to the child process.
+  // By default the child process will receive the caller's complete namespace,
+  // access to the current base::fuchsia::DefaultJob(), handles for stdio and
+  // access to the dynamic library loader.
+  // Note that the child is always provided access to the loader service.
+  uint32_t spawn_flags = FDIO_SPAWN_CLONE_NAMESPACE | FDIO_SPAWN_CLONE_STDIO |
+                         FDIO_SPAWN_CLONE_JOB;
 
-  // Specifies the namespace paths which are to be cloned in the child process'
-  // namespace. If left unset, the child process will be launched with an empty
-  // namespace.
-  // This flag allows the parent to pass only the bare minimum OS capabilities
-  // to the child process, so that the potential attack surface is reduced in
-  // case child process is compromised.
-  // Cannot be combined with the clone flag LP_CLONE_FDIO_NAMESPACE, which is
-  // equivalent to cloning every path.
-  std::vector<FilePath> paths_to_map;
+  // Specifies paths to clone from the calling process' namespace into that of
+  // the child process. If |paths_to_clone| is empty then the process will
+  // receive either a full copy of the parent's namespace, or an empty one,
+  // depending on whether FDIO_SPAWN_CLONE_NAMESPACE is set.
+  std::vector<FilePath> paths_to_clone;
+
+  // Specifies handles which will be installed as files or directories in the
+  // child process' namespace. Paths installed by |paths_to_clone| will be
+  // overridden by these entries.
+  std::vector<PathToTransfer> paths_to_transfer;
 #endif  // defined(OS_FUCHSIA)
 
 #if defined(OS_POSIX)
@@ -218,6 +227,7 @@ struct BASE_EXPORT LaunchOptions {
   // argv[0].
   base::FilePath real_path;
 
+#if !defined(OS_MACOSX)
   // If non-null, a delegate to be run immediately prior to executing the new
   // program in the child process.
   //
@@ -225,6 +235,7 @@ struct BASE_EXPORT LaunchOptions {
   // code running in this delegate essentially needs to be async-signal safe
   // (see man 7 signal for a list of allowed functions).
   PreExecDelegate* pre_exec_delegate = nullptr;
+#endif  // !defined(OS_MACOSX)
 
   // Each element is an RLIMIT_* constant that should be raised to its
   // rlim_max.  This pointer is owned by the caller and must live through
@@ -290,10 +301,12 @@ BASE_EXPORT Process LaunchElevatedProcess(const CommandLine& cmdline,
 BASE_EXPORT Process LaunchProcess(const std::vector<std::string>& argv,
                                   const LaunchOptions& options);
 
+#if !defined(OS_MACOSX)
 // Close all file descriptors, except those which are a destination in the
 // given multimap. Only call this function in a child process where you know
 // that there aren't any other threads.
 BASE_EXPORT void CloseSuperfluousFds(const InjectiveMultimap& saved_map);
+#endif  // defined(OS_MACOSX)
 #endif  // defined(OS_WIN)
 
 #if defined(OS_WIN)
@@ -344,23 +357,6 @@ BASE_EXPORT bool GetAppOutputAndError(const std::vector<std::string>& argv,
 // If supported on the platform, and the user has sufficent rights, increase
 // the current process's scheduling priority to a high priority.
 BASE_EXPORT void RaiseProcessToHighPriority();
-
-#if defined(OS_MACOSX)
-// An implementation of LaunchProcess() that uses posix_spawn() instead of
-// fork()+exec(). This does not support the |pre_exec_delegate| and
-// |current_directory| options.
-Process LaunchProcessPosixSpawn(const std::vector<std::string>& argv,
-                                const LaunchOptions& options);
-
-// Restore the default exception handler, setting it to Apple Crash Reporter
-// (ReportCrash).  When forking and execing a new process, the child will
-// inherit the parent's exception ports, which may be set to the Breakpad
-// instance running inside the parent.  The parent's Breakpad instance should
-// not handle the child's exceptions.  Calling RestoreDefaultExceptionHandler
-// in the child after forking will restore the standard exception handler.
-// See http://crbug.com/20371/ for more details.
-void RestoreDefaultExceptionHandler();
-#endif  // defined(OS_MACOSX)
 
 // Creates a LaunchOptions object suitable for launching processes in a test
 // binary. This should not be called in production/released code.

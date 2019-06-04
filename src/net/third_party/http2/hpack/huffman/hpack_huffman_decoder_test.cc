@@ -11,8 +11,9 @@
 #include "base/macros.h"
 #include "net/third_party/http2/decoder/decode_buffer.h"
 #include "net/third_party/http2/decoder/decode_status.h"
+#include "net/third_party/http2/platform/api/http2_arraysize.h"
 #include "net/third_party/http2/platform/api/http2_string_utils.h"
-#include "net/third_party/http2/tools/failure.h"
+#include "net/third_party/http2/platform/api/http2_test_helpers.h"
 #include "net/third_party/http2/tools/random_decoder_test.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -143,11 +144,7 @@ TEST(HuffmanBitBufferTest, AppendBytesUnaligned) {
       << "\n expected: " << expected;
 }
 
-enum class DecoderChoice { IF_TREE, SHORT_CODE };
-
-class HpackHuffmanDecoderTest
-    : public RandomDecoderTest,
-      public ::testing::WithParamInterface<DecoderChoice> {
+class HpackHuffmanDecoderTest : public RandomDecoderTest {
  protected:
   HpackHuffmanDecoderTest() {
     // The decoder may return true, and its accumulator may be empty, at
@@ -166,7 +163,7 @@ class HpackHuffmanDecoderTest
   DecodeStatus ResumeDecoding(DecodeBuffer* b) override {
     input_bytes_seen_ += b->Remaining();
     Http2StringPiece sp(b->cursor(), b->Remaining());
-    if (DecodeFragment(sp)) {
+    if (decoder_.Decode(sp, &output_buffer_)) {
       b->AdvanceCursor(b->Remaining());
       // Successfully decoded (or buffered) the bytes in Http2StringPiece.
       EXPECT_LE(input_bytes_seen_, input_bytes_expected_);
@@ -183,29 +180,13 @@ class HpackHuffmanDecoderTest
     return DecodeStatus::kDecodeError;
   }
 
-  bool DecodeFragment(Http2StringPiece sp) {
-    switch (GetParam()) {
-      case DecoderChoice::IF_TREE:
-        return decoder_.DecodeWithIfTreeAndStruct(sp, &output_buffer_);
-      case DecoderChoice::SHORT_CODE:
-        return decoder_.DecodeShortCodesFirst(sp, &output_buffer_);
-    }
-
-    NOTREACHED();
-    return false;
-  }
-
   HpackHuffmanDecoder decoder_;
   Http2String output_buffer_;
   size_t input_bytes_seen_;
   size_t input_bytes_expected_;
 };
-INSTANTIATE_TEST_CASE_P(AllDecoders,
-                        HpackHuffmanDecoderTest,
-                        ::testing::Values(DecoderChoice::IF_TREE,
-                                          DecoderChoice::SHORT_CODE));
 
-TEST_P(HpackHuffmanDecoderTest, SpecRequestExamples) {
+TEST_F(HpackHuffmanDecoderTest, SpecRequestExamples) {
   HpackHuffmanDecoder decoder;
   Http2String test_table[] = {
       Http2HexDecode("f1e3c2e5f23a6ba0ab90f4ff"),
@@ -217,7 +198,7 @@ TEST_P(HpackHuffmanDecoderTest, SpecRequestExamples) {
       Http2HexDecode("25a849e95bb8e8b4bf"),
       "custom-value",
   };
-  for (size_t i = 0; i != arraysize(test_table); i += 2) {
+  for (size_t i = 0; i != HTTP2_ARRAYSIZE(test_table); i += 2) {
     const Http2String& huffman_encoded(test_table[i]);
     const Http2String& plain_string(test_table[i + 1]);
     Http2String buffer;
@@ -228,7 +209,7 @@ TEST_P(HpackHuffmanDecoderTest, SpecRequestExamples) {
   }
 }
 
-TEST_P(HpackHuffmanDecoderTest, SpecResponseExamples) {
+TEST_F(HpackHuffmanDecoderTest, SpecResponseExamples) {
   HpackHuffmanDecoder decoder;
   // clang-format off
   Http2String test_table[] = {
@@ -248,7 +229,7 @@ TEST_P(HpackHuffmanDecoderTest, SpecResponseExamples) {
     "foo=ASDJKHQKBZXOQWEOPIUAXQWEOIU; max-age=3600; version=1",
   };
   // clang-format on
-  for (size_t i = 0; i != arraysize(test_table); i += 2) {
+  for (size_t i = 0; i != HTTP2_ARRAYSIZE(test_table); i += 2) {
     const Http2String& huffman_encoded(test_table[i]);
     const Http2String& plain_string(test_table[i + 1]);
     Http2String buffer;

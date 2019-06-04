@@ -9,9 +9,5 @@ module blink.mojom;
 enum PageVisibilityState {
   kVisible,
   kHidden,
-///@name: USE_NEVA_APPRUNTIME
-///@{
-  kLaunching,
-///@}
   kPrerender,
 };

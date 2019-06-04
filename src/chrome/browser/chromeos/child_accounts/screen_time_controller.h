@@ -5,15 +5,24 @@
 #ifndef CHROME_BROWSER_CHROMEOS_CHILD_ACCOUNTS_SCREEN_TIME_CONTROLLER_H_
 #define CHROME_BROWSER_CHROMEOS_CHILD_ACCOUNTS_SCREEN_TIME_CONTROLLER_H_
 
+#include <memory>
+
 #include "base/time/time.h"
-#include "base/timer/timer.h"
+#include "chrome/browser/chromeos/child_accounts/time_limit_notifier.h"
 #include "chrome/browser/chromeos/child_accounts/usage_time_limit_processor.h"
+#include "chromeos/dbus/system_clock_client.h"
 #include "components/keyed_service/core/keyed_service.h"
 #include "components/prefs/pref_change_registrar.h"
 #include "components/session_manager/core/session_manager_observer.h"
 
 class PrefRegistrySimple;
 class PrefService;
+
+namespace base {
+class Clock;
+class TickClock;
+class OneShotTimer;
+}  // namespace base
 
 namespace content {
 class BrowserContext;
@@ -26,7 +35,9 @@ namespace chromeos {
 // usage) when necessary to determine the current lock screen state.
 // Schedule notifications and lock/unlock screen based on the processor output.
 class ScreenTimeController : public KeyedService,
-                             public session_manager::SessionManagerObserver {
+                             public session_manager::SessionManagerObserver,
+                             public system::TimezoneSettings::Observer,
+                             public chromeos::SystemClockClient::Observer {
  public:
   // Registers preferences.
   static void RegisterProfilePrefs(PrefRegistrySimple* registry);
@@ -34,45 +45,37 @@ class ScreenTimeController : public KeyedService,
   explicit ScreenTimeController(content::BrowserContext* context);
   ~ScreenTimeController() override;
 
-  // Returns the screen time duration. This includes time in
-  // kScreenTimeMinutesUsed plus time passed since |current_screen_start_time_|.
-  base::TimeDelta GetScreenTimeDuration() const;
+  // Returns the child's screen time duration. This is how long the child has
+  // used the device today (since the last reset).
+  base::TimeDelta GetScreenTimeDuration();
 
-  // Call time limit processor for new state.
-  void CheckTimeLimit();
+  void SetClocksForTesting(const base::Clock* clock,
+                           const base::TickClock* tick_clock);
 
  private:
-  // The types of time limit notifications. |SCREEN_TIME| is used when the
-  // the screen time limit is about to be used up, and |BED_TIME| is used when
-  // the bed time is approaching.
-  enum TimeLimitNotificationType { kScreenTime, kBedTime };
+  // Call time limit processor for new state.
+  void CheckTimeLimit(const std::string& source);
 
-  // Show and update the lock screen when necessary.
-  // |force_lock_by_policy|: If true, force to lock the screen based on the
-  //                         screen time policy.
-  // |come_back_time|:       When the screen is available again.
-  void LockScreen(bool force_lock_by_policy, base::Time come_back_time);
+  // Request to lock the screen and show the time limits message when the screen
+  // is locked.
+  void ForceScreenLockByPolicy(base::Time next_unlock_time);
 
-  // Show a notification indicating the remaining screen time.
-  void ShowNotification(ScreenTimeController::TimeLimitNotificationType type,
-                        const base::TimeDelta& time_remaining);
-
-  // Reset time tracking relevant prefs and local timestamps.
-  void RefreshScreenLimit();
+  // Update visibility and content of the time limits message in the lock
+  // screen.
+  // |visible|: If true, user authentication is disabled and a message is shown
+  //            to indicate when user will be able to unlock the screen.
+  //            If false, message is dismissed and user is able to unlock
+  //            immediately.
+  // |next_unlock_time|: When user will be able to unlock the screen, only valid
+  //                     when |visible| is true.
+  void UpdateTimeLimitsMessage(bool visible, base::Time next_unlock_time);
 
   // Called when the policy of time limits changes.
   void OnPolicyChanged();
 
   // Reset any currently running timers.
-  void ResetTimers();
-
-  // Save the screen time progress when screen is locked, or user sign out or
-  // power down the device.
-  void SaveScreenTimeProgressBeforeExit();
-
-  // Save the screen time progress periodically in case of a crash or power
-  // outage.
-  void SaveScreenTimeProgressPeriodically();
+  void ResetStateTimers();
+  void ResetInSessionTimers();
 
   // Save the |state| to |prefs::kScreenTimeLastState|.
   void SaveCurrentStateToPref(const usage_time_limit::State& state);
@@ -84,26 +87,29 @@ class ScreenTimeController : public KeyedService,
   // session_manager::SessionManagerObserver:
   void OnSessionStateChanged() override;
 
+  // system::TimezoneSettings::Observer:
+  void TimezoneChanged(const icu::TimeZone& timezone) override;
+
+  // chromeos::SystemClockClient::Observer:
+  void SystemClockUpdated() override;
+
   content::BrowserContext* context_;
   PrefService* pref_service_;
-  base::OneShotTimer warning_notification_timer_;
-  base::OneShotTimer exit_notification_timer_;
-  base::OneShotTimer next_state_timer_;
-  base::RepeatingTimer save_screen_time_timer_;
 
-  // Timestamp to keep track of the screen start time for the current active
-  // screen. This timestamp is periodically updated by
-  // SaveScreenTimeProgressPeriodically(), and is cleared when user exits the
-  // active screen(lock, sign out, shutdown).
-  base::Time current_screen_start_time_;
+  // Points to the base::DefaultClock by default.
+  const base::Clock* clock_;
 
-  // Timestamp to keep track of the screen start time when user starts using
-  // the device for the first time of the day.
-  // Used to calculate the screen time limit and this will be refreshed by
-  // RefreshScreenLimit();
-  base::Time first_screen_start_time_;
+  // Timer scheduled for when the next lock screen state change event is
+  // expected to happen, e.g. when bedtime is over or the usage limit ends.
+  std::unique_ptr<base::OneShotTimer> next_state_timer_;
+
+  // Used to set up timers when a time limit is approaching.
+  TimeLimitNotifier time_limit_notifier_;
 
   PrefChangeRegistrar pref_change_registrar_;
+
+  // Used to update the time limits message, if any, when screen is locked.
+  base::Optional<base::Time> next_unlock_time_;
 
   DISALLOW_COPY_AND_ASSIGN(ScreenTimeController);
 };

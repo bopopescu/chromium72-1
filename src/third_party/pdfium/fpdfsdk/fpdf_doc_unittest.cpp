@@ -9,6 +9,7 @@
 
 #include "core/fpdfapi/cpdf_modulemgr.h"
 #include "core/fpdfapi/parser/cpdf_array.h"
+#include "core/fpdfapi/parser/cpdf_dictionary.h"
 #include "core/fpdfapi/parser/cpdf_document.h"
 #include "core/fpdfapi/parser/cpdf_name.h"
 #include "core/fpdfapi/parser/cpdf_null.h"
@@ -23,9 +24,9 @@
 #include "testing/test_support.h"
 #include "third_party/base/ptr_util.h"
 
-class CPDF_TestDocument : public CPDF_Document {
+class CPDF_TestDocument final : public CPDF_Document {
  public:
-  CPDF_TestDocument() : CPDF_Document(nullptr) {}
+  CPDF_TestDocument() : CPDF_Document() {}
 
   void SetRoot(CPDF_Dictionary* root) { m_pRootDict = root; }
   CPDF_IndirectObjectHolder* GetHolder() { return this; }
@@ -42,13 +43,13 @@ class PDFDocTest : public testing::Test {
     CPDF_ModuleMgr::Get()->Init();
     auto pTestDoc = pdfium::MakeUnique<CPDF_TestDocument>();
     m_pIndirectObjs = pTestDoc->GetHolder();
-    m_pRootObj = pdfium::MakeUnique<CPDF_Dictionary>();
-    pTestDoc->SetRoot(m_pRootObj.get());
+    m_pRootObj = m_pIndirectObjs->NewIndirect<CPDF_Dictionary>();
+    pTestDoc->SetRoot(m_pRootObj.Get());
     m_pDoc.reset(FPDFDocumentFromCPDFDocument(pTestDoc.release()));
   }
 
   void TearDown() override {
-    m_pRootObj.reset();
+    m_pRootObj = nullptr;
     m_pIndirectObjs = nullptr;
     m_pDoc.reset();
     CPDF_ModuleMgr::Destroy();
@@ -67,7 +68,7 @@ class PDFDocTest : public testing::Test {
  protected:
   ScopedFPDFDocument m_pDoc;
   UnownedPtr<CPDF_IndirectObjectHolder> m_pIndirectObjs;
-  std::unique_ptr<CPDF_Dictionary> m_pRootObj;
+  UnownedPtr<CPDF_Dictionary> m_pRootObj;
 };
 
 TEST_F(PDFDocTest, FindBookmark) {

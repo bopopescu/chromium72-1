@@ -8,7 +8,7 @@
 #include "third_party/blink/renderer/modules/event_modules.h"
 #include "third_party/blink/renderer/modules/modules_export.h"
 #include "third_party/blink/renderer/modules/notifications/notification.h"
-#include "third_party/blink/renderer/modules/serviceworkers/extendable_event.h"
+#include "third_party/blink/renderer/modules/service_worker/extendable_event.h"
 #include "third_party/blink/renderer/platform/heap/handle.h"
 
 namespace blink {
@@ -20,15 +20,20 @@ class MODULES_EXPORT NotificationEvent final : public ExtendableEvent {
 
  public:
   static NotificationEvent* Create(const AtomicString& type,
-                                   const NotificationEventInit& initializer) {
-    return new NotificationEvent(type, initializer);
+                                   const NotificationEventInit* initializer) {
+    return MakeGarbageCollected<NotificationEvent>(type, initializer);
   }
   static NotificationEvent* Create(const AtomicString& type,
-                                   const NotificationEventInit& initializer,
+                                   const NotificationEventInit* initializer,
                                    WaitUntilObserver* observer) {
-    return new NotificationEvent(type, initializer, observer);
+    return MakeGarbageCollected<NotificationEvent>(type, initializer, observer);
   }
 
+  NotificationEvent(const AtomicString& type,
+                    const NotificationEventInit* initializer);
+  NotificationEvent(const AtomicString& type,
+                    const NotificationEventInit* initializer,
+                    WaitUntilObserver* observer);
   ~NotificationEvent() override;
 
   Notification* getNotification() const { return notification_.Get(); }
@@ -41,12 +46,6 @@ class MODULES_EXPORT NotificationEvent final : public ExtendableEvent {
   void Trace(blink::Visitor* visitor) override;
 
  private:
-  NotificationEvent(const AtomicString& type,
-                    const NotificationEventInit& initializer);
-  NotificationEvent(const AtomicString& type,
-                    const NotificationEventInit& initializer,
-                    WaitUntilObserver* observer);
-
   Member<Notification> notification_;
   String action_;
   String reply_;

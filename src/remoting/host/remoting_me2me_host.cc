@@ -26,17 +26,16 @@
 #include "base/strings/string_util.h"
 #include "base/strings/stringize_macros.h"
 #include "base/strings/utf_string_conversions.h"
-#include "base/task_scheduler/task_scheduler.h"
+#include "base/task/task_scheduler/task_scheduler.h"
 #include "build/build_config.h"
 #include "components/policy/policy_constants.h"
 #include "ipc/ipc_channel.h"
 #include "ipc/ipc_channel_proxy.h"
 #include "ipc/ipc_listener.h"
 #include "jingle/glue/thread_wrapper.h"
-#include "mojo/edk/embedder/embedder.h"
-#include "mojo/edk/embedder/incoming_broker_client_invitation.h"
-#include "mojo/edk/embedder/platform_channel_pair.h"
-#include "mojo/edk/embedder/scoped_ipc_support.h"
+#include "mojo/core/embedder/scoped_ipc_support.h"
+#include "mojo/public/cpp/platform/platform_channel.h"
+#include "mojo/public/cpp/system/invitation.h"
 #include "net/base/network_change_notifier.h"
 #include "net/base/url_util.h"
 #include "net/socket/client_socket_factory.h"
@@ -100,6 +99,7 @@
 #include "remoting/protocol/transport_context.h"
 #include "remoting/signaling/push_notification_subscriber.h"
 #include "remoting/signaling/xmpp_signal_strategy.h"
+#include "services/network/public/cpp/shared_url_loader_factory.h"
 #include "third_party/webrtc/rtc_base/scoped_ref_ptr.h"
 
 #if defined(OS_POSIX)
@@ -112,7 +112,9 @@
 #endif  // defined(OS_POSIX)
 
 #if defined(OS_MACOSX)
+#include "base/mac/mac_util.h"
 #include "base/mac/scoped_cftyperef.h"
+#include "remoting/host/mac/permission_utils.h"
 #endif  // defined(OS_MACOSX)
 
 #if defined(OS_LINUX)
@@ -430,7 +432,7 @@ class HostProcess : public ConfigWatcher::Delegate,
   scoped_refptr<HostProcess> self_;
 
 #if defined(REMOTING_MULTI_PROCESS)
-  std::unique_ptr<mojo::edk::ScopedIPCSupport> ipc_support_;
+  std::unique_ptr<mojo::core::ScopedIPCSupport> ipc_support_;
 
   // Accessed on the UI thread.
   std::unique_ptr<IPC::ChannelProxy> daemon_channel_;
@@ -492,18 +494,18 @@ bool HostProcess::InitWithCommandLine(const base::CommandLine* cmd_line) {
   // Mojo keeps the task runner passed to it alive forever, so an
   // AutoThreadTaskRunner should not be passed to it. Otherwise, the process may
   // never shut down cleanly.
-  ipc_support_ = std::make_unique<mojo::edk::ScopedIPCSupport>(
+  ipc_support_ = std::make_unique<mojo::core::ScopedIPCSupport>(
       context_->network_task_runner()->task_runner(),
-      mojo::edk::ScopedIPCSupport::ShutdownPolicy::FAST);
+      mojo::core::ScopedIPCSupport::ShutdownPolicy::FAST);
 
-  auto invitation =
-      mojo::edk::IncomingBrokerClientInvitation::AcceptFromCommandLine(
-          mojo::edk::TransportProtocol::kLegacy);
+  auto endpoint =
+      mojo::PlatformChannel::RecoverPassedEndpointFromCommandLine(*cmd_line);
+  auto invitation = mojo::IncomingInvitation::Accept(std::move(endpoint));
 
   // Connect to the daemon process.
   daemon_channel_ = IPC::ChannelProxy::Create(
       invitation
-          ->ExtractMessagePipe(cmd_line->GetSwitchValueASCII(kMojoPipeToken))
+          .ExtractMessagePipe(cmd_line->GetSwitchValueASCII(kMojoPipeToken))
           .release(),
       IPC::Channel::MODE_CLIENT, this, context_->network_task_runner(),
       base::ThreadTaskRunnerHandle::Get());
@@ -1425,15 +1427,14 @@ void HostProcess::InitializeSignaling() {
 
   // Create SignalingConnector.
   std::unique_ptr<DnsBlackholeChecker> dns_blackhole_checker(
-      new DnsBlackholeChecker(context_->url_request_context_getter(),
+      new DnsBlackholeChecker(context_->url_loader_factory(),
                               talkgadget_prefix_));
   std::unique_ptr<OAuthTokenGetter::OAuthAuthorizationCredentials>
       oauth_credentials(new OAuthTokenGetter::OAuthAuthorizationCredentials(
           xmpp_server_config_.username, oauth_refresh_token_,
           use_service_account_));
-  oauth_token_getter_.reset(
-      new OAuthTokenGetterImpl(std::move(oauth_credentials),
-                               context_->url_request_context_getter(), false));
+  oauth_token_getter_.reset(new OAuthTokenGetterImpl(
+      std::move(oauth_credentials), context_->url_loader_factory(), false));
   signaling_connector_.reset(new SignalingConnector(
       xmpp_signal_strategy, std::move(dns_blackhole_checker),
       oauth_token_getter_.get(),
@@ -1443,8 +1444,8 @@ void HostProcess::InitializeSignaling() {
   // Create objects to manage GCD state.
   ServiceUrls* service_urls = ServiceUrls::GetInstance();
   std::unique_ptr<GcdRestClient> gcd_rest_client(new GcdRestClient(
-      service_urls->gcd_base_url(), host_id_,
-      context_->url_request_context_getter(), oauth_token_getter_.get()));
+      service_urls->gcd_base_url(), host_id_, context_->url_loader_factory(),
+      oauth_token_getter_.get()));
   gcd_state_updater_.reset(new GcdStateUpdater(
       base::Bind(&HostProcess::OnHeartbeatSuccessful, base::Unretained(this)),
       base::Bind(&HostProcess::OnUnknownHostIdError, base::Unretained(this)),
@@ -1514,7 +1515,7 @@ void HostProcess::StartHost() {
           signal_strategy_.get(),
           std::make_unique<protocol::ChromiumPortAllocatorFactory>(),
           std::make_unique<ChromiumUrlRequestFactory>(
-              context_->url_request_context_getter()),
+              context_->url_loader_factory()),
           network_settings, protocol::TransportRole::SERVER);
   transport_context->set_ice_config_url(
       ServiceUrls::GetInstance()->ice_config_url(), oauth_token_getter_.get());
@@ -1569,6 +1570,19 @@ void HostProcess::StartHost() {
   host_event_logger_ =
       HostEventLogger::Create(host_->status_monitor(), kApplicationName);
 #endif  // !defined(REMOTING_MULTI_PROCESS)
+
+#if defined(OS_MACOSX)
+  // Ensure we are not running as root (i.e. at the login screen).
+  DCHECK_NE(getuid(), 0U);
+
+  // MacOs 10.14+ requires an addition, runtime permission for injecting input
+  // using CGEventPost (we use this in our input injector for Mac).  This method
+  // will request that the user enable this permission for us if they are on an
+  // affected platform and the permission has not already been approved.
+  if (base::mac::IsAtLeastOS10_14()) {
+    mac::PromptUserToChangeTrustStateIfNeeded(context_->ui_task_runner());
+  }
+#endif
 
   host_->Start(host_owner_email_);
 
@@ -1714,7 +1728,11 @@ int HostProcessMain() {
     // Required for any calls into GTK functions, such as the Disconnect and
     // Continue windows, though these should not be used for the Me2Me case
     // (crbug.com/104377).
+#if GTK_CHECK_VERSION(3, 90, 0)
+    gtk_init();
+#else
     gtk_init(nullptr, nullptr);
+#endif
   }
 
   // Need to prime the host OS version value for linux to prevent IO on the
@@ -1726,10 +1744,10 @@ int HostProcessMain() {
 
   // Create the main message loop and start helper threads.
   base::MessageLoopForUI message_loop;
+  base::RunLoop run_loop;
   std::unique_ptr<ChromotingHostContext> context =
       ChromotingHostContext::Create(new AutoThreadTaskRunner(
-          message_loop.task_runner(),
-          base::RunLoop::QuitCurrentWhenIdleClosureDeprecated()));
+          message_loop.task_runner(), run_loop.QuitClosure()));
   if (!context)
     return kInitializationFailed;
 
@@ -1746,7 +1764,7 @@ int HostProcessMain() {
   new HostProcess(std::move(context), &exit_code, &shutdown_watchdog);
 
   // Run the main (also UI) message loop until the host no longer needs it.
-  base::RunLoop().Run();
+  run_loop.Run();
 
   // Block until tasks blocking shutdown have completed their execution.
   base::TaskScheduler::GetInstance()->Shutdown();

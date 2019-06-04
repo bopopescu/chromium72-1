@@ -7,6 +7,7 @@
 #include "third_party/blink/public/platform/platform.h"
 #include "third_party/blink/public/platform/task_type.h"
 #include "third_party/blink/renderer/core/execution_context/execution_context.h"
+#include "third_party/blink/renderer/platform/scheduler/public/thread.h"
 #include "third_party/blink/renderer/platform/wtf/assertions.h"
 #include "third_party/blink/renderer/platform/wtf/threading_primitives.h"
 
@@ -16,11 +17,11 @@ ParentExecutionContextTaskRunners* ParentExecutionContextTaskRunners::Create(
     ExecutionContext* context) {
   DCHECK(context);
   DCHECK(context->IsContextThread());
-  return new ParentExecutionContextTaskRunners(context);
+  return MakeGarbageCollected<ParentExecutionContextTaskRunners>(context);
 }
 
 ParentExecutionContextTaskRunners* ParentExecutionContextTaskRunners::Create() {
-  return new ParentExecutionContextTaskRunners(nullptr);
+  return MakeGarbageCollected<ParentExecutionContextTaskRunners>(nullptr);
 }
 
 ParentExecutionContextTaskRunners::ParentExecutionContextTaskRunners(
@@ -29,13 +30,12 @@ ParentExecutionContextTaskRunners::ParentExecutionContextTaskRunners(
   // For now we only support very limited task types. Sort in the TaskType enum
   // value order.
   for (auto type : {TaskType::kNetworking, TaskType::kPostedMessage,
-                    TaskType::kInternalDefault, TaskType::kInternalLoading,
-                    TaskType::kInternalTest, TaskType::kInternalMedia,
-                    TaskType::kInternalInspector, TaskType::kInternalWorker,
-                    TaskType::kUnthrottled}) {
-    auto task_runner =
-        context ? context->GetTaskRunner(type)
-                : Platform::Current()->CurrentThread()->GetTaskRunner();
+                    TaskType::kWorkerAnimation, TaskType::kInternalDefault,
+                    TaskType::kInternalLoading, TaskType::kInternalTest,
+                    TaskType::kInternalMedia, TaskType::kInternalInspector,
+                    TaskType::kInternalWorker}) {
+    auto task_runner = context ? context->GetTaskRunner(type)
+                               : Thread::Current()->GetTaskRunner();
     task_runners_.insert(type, std::move(task_runner));
   }
 }
@@ -53,7 +53,7 @@ void ParentExecutionContextTaskRunners::Trace(blink::Visitor* visitor) {
 void ParentExecutionContextTaskRunners::ContextDestroyed(ExecutionContext*) {
   MutexLocker lock(mutex_);
   for (auto& entry : task_runners_)
-    entry.value = Platform::Current()->CurrentThread()->GetTaskRunner();
+    entry.value = Thread::Current()->GetTaskRunner();
 }
 
 }  // namespace blink

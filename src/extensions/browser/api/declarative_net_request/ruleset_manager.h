@@ -13,6 +13,8 @@
 #include "base/sequence_checker.h"
 #include "base/time/time.h"
 #include "extensions/common/extension_id.h"
+#include "extensions/common/permissions/permissions_data.h"
+#include "extensions/common/url_pattern_set.h"
 
 class GURL;
 
@@ -30,18 +32,25 @@ class RulesetManager {
  public:
   enum class Action {
     NONE,
+    // Block the network request.
     BLOCK,
+    // Block the network request and collapse the corresponding DOM element.
+    COLLAPSE,
+    // Redirect the network request.
     REDIRECT,
   };
 
   explicit RulesetManager(const InfoMap* info_map);
   ~RulesetManager();
 
-  // An interface used for testing purposes.
+  // An observer used for testing purposes.
   class TestObserver {
    public:
     virtual void OnEvaluateRequest(const WebRequestInfo& request,
-                                   bool is_incognito_context) = 0;
+                                   bool is_incognito_context) {}
+
+    // Called whenever a ruleset is added or removed.
+    virtual void OnRulesetCountChanged(size_t new_count) {}
 
    protected:
     virtual ~TestObserver() {}
@@ -50,11 +59,15 @@ class RulesetManager {
   // Adds the ruleset for the given |extension_id|. Should not be called twice
   // in succession for an extension.
   void AddRuleset(const ExtensionId& extension_id,
-                  std::unique_ptr<RulesetMatcher> ruleset_matcher);
+                  std::unique_ptr<RulesetMatcher> ruleset_matcher,
+                  URLPatternSet allowed_pages);
 
   // Removes the ruleset for |extension_id|. Should be called only after a
   // corresponding AddRuleset.
   void RemoveRuleset(const ExtensionId& extension_id);
+
+  void UpdateAllowedPages(const ExtensionId& extension_id,
+                          URLPatternSet allowed_pages);
 
   // Returns the action to take for the given request. |redirect_url| will be
   // populated if the returned action is |REDIRECT|. Blocking rules have higher
@@ -73,9 +86,10 @@ class RulesetManager {
 
  private:
   struct ExtensionRulesetData {
-    ExtensionRulesetData(const ExtensionId&,
-                         const base::Time&,
-                         std::unique_ptr<RulesetMatcher>);
+    ExtensionRulesetData(const ExtensionId& extension_id,
+                         const base::Time& extension_install_time,
+                         std::unique_ptr<RulesetMatcher> matcher,
+                         URLPatternSet allowed_pages);
     ~ExtensionRulesetData();
     ExtensionRulesetData(ExtensionRulesetData&& other);
     ExtensionRulesetData& operator=(ExtensionRulesetData&& other);
@@ -83,6 +97,7 @@ class RulesetManager {
     ExtensionId extension_id;
     base::Time extension_install_time;
     std::unique_ptr<RulesetMatcher> matcher;
+    URLPatternSet allowed_pages;
 
     bool operator<(const ExtensionRulesetData& other) const;
 
@@ -94,6 +109,7 @@ class RulesetManager {
   bool ShouldEvaluateRequest(const WebRequestInfo& request) const;
 
   // Returns whether |ruleset| should be evaluated for the given |request|.
+  // Note: this does not take the extension's host permissions into account.
   bool ShouldEvaluateRulesetForRequest(const ExtensionRulesetData& ruleset,
                                        const WebRequestInfo& request,
                                        bool is_incognito_context) const;

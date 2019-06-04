@@ -31,11 +31,11 @@
 namespace perfetto {
 
 // static. (Declared in include/tracing/ipc/consumer_ipc_client.h).
-std::unique_ptr<Service::ConsumerEndpoint> ConsumerIPCClient::Connect(
+std::unique_ptr<TracingService::ConsumerEndpoint> ConsumerIPCClient::Connect(
     const char* service_sock_name,
     Consumer* consumer,
     base::TaskRunner* task_runner) {
-  return std::unique_ptr<Service::ConsumerEndpoint>(
+  return std::unique_ptr<TracingService::ConsumerEndpoint>(
       new ConsumerIPCClientImpl(service_sock_name, consumer, task_runner));
 }
 
@@ -85,6 +85,22 @@ void ConsumerIPCClientImpl::EnableTracing(const TraceConfig& trace_config,
   // |fd| will be closed when this function returns, but it's fine because the
   // IPC layer dup()'s it when sending the IPC.
   consumer_port_.EnableTracing(req, std::move(async_response), *fd);
+}
+
+void ConsumerIPCClientImpl::StartTracing() {
+  if (!connected_) {
+    PERFETTO_DLOG("Cannot StartTracing(), not connected to tracing service");
+    return;
+  }
+
+  ipc::Deferred<protos::StartTracingResponse> async_response;
+  async_response.Bind(
+      [](ipc::AsyncResult<protos::StartTracingResponse> response) {
+        if (!response)
+          PERFETTO_DLOG("StartTracing() failed");
+      });
+  protos::StartTracingRequest req;
+  consumer_port_.StartTracing(req, std::move(async_response));
 }
 
 void ConsumerIPCClientImpl::DisableTracing() {

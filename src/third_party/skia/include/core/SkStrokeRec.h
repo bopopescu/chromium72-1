@@ -8,6 +8,7 @@
 #ifndef SkStrokeRec_DEFINED
 #define SkStrokeRec_DEFINED
 
+#include "../private/SkMacros.h"
 #include "SkPaint.h"
 
 class SkPath;
@@ -112,6 +113,9 @@ public:
      * effect).
      */
     static SkScalar GetInflationRadius(const SkPaint&, SkPaint::Style);
+
+    static SkScalar GetInflationRadius(SkPaint::Join, SkScalar miterLimit, SkPaint::Cap,
+                                       SkScalar strokeWidth);
 
     /**
      * Compare if two SkStrokeRecs have an equal effect on a path.

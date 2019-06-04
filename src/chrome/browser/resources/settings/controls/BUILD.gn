@@ -9,13 +9,14 @@ js_type_check("closure_compile") {
     ":controlled_button",
     ":controlled_radio_button",
     ":extension_controlled_indicator",
-    ":important_site_checkbox",
+    ":password_prompt_dialog",
     ":pref_control_behavior",
     ":settings_boolean_control_behavior",
     ":settings_checkbox",
     ":settings_dropdown_menu",
     ":settings_radio_group",
     ":settings_slider",
+    ":settings_textarea",
     ":settings_toggle_button",
   ]
 }
@@ -47,11 +48,14 @@ js_library("extension_controlled_indicator") {
   ]
 }
 
-js_library("important_site_checkbox") {
+js_library("password_prompt_dialog") {
   deps = [
-    ":settings_boolean_control_behavior",
-    "../clear_browsing_data_dialog:clear_browsing_data_browser_proxy",
+    "..:route",
+    "//ui/webui/resources/cr_elements/cr_dialog:cr_dialog",
+    "//ui/webui/resources/cr_elements/cr_input:cr_input",
   ]
+  externs_list = [ "$externs_path/quick_unlock_private.js" ]
+  extra_sources = [ "$interfaces_path/quick_unlock_private_interface.js" ]
 }
 
 js_library("pref_control_behavior") {
@@ -100,10 +104,13 @@ js_library("settings_radio_group") {
 
 js_library("settings_slider") {
   deps = [
-    "//third_party/polymer/v1_0/components-chromium/paper-slider:paper-slider-extracted",
+    "//ui/webui/resources/cr_elements/cr_slider:cr_slider",
     "//ui/webui/resources/cr_elements/policy:cr_policy_pref_behavior",
     "//ui/webui/resources/js:assert",
   ]
+}
+
+js_library("settings_textarea") {
 }
 
 js_library("settings_toggle_button") {

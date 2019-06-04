@@ -293,6 +293,15 @@ TEST_F(TimeTest, UTCExplode) {
   EXPECT_TRUE((a - b) < TimeDelta::FromSeconds(1));
 }
 
+TEST_F(TimeTest, UTCMidnight) {
+  Time::Exploded exploded;
+  Time::Now().UTCMidnight().UTCExplode(&exploded);
+  EXPECT_EQ(0, exploded.hour);
+  EXPECT_EQ(0, exploded.minute);
+  EXPECT_EQ(0, exploded.second);
+  EXPECT_EQ(0, exploded.millisecond);
+}
+
 TEST_F(TimeTest, LocalMidnight) {
   Time::Exploded exploded;
   Time::Now().LocalMidnight().LocalExplode(&exploded);
@@ -989,14 +998,7 @@ TEST(ThreadTicks, MAYBE_NowOverride) {
   EXPECT_GT(ThreadTicks::Max(), subtle::ThreadTicksNowIgnoringOverride());
 }
 
-// Fails frequently on Android http://crbug.com/352633 with:
-// Expected: (delta_thread.InMicroseconds()) > (0), actual: 0 vs 0
-#if defined(OS_ANDROID)
-#define MAYBE_ThreadNow DISABLED_ThreadNow
-#else
-#define MAYBE_ThreadNow ThreadNow
-#endif
-TEST(ThreadTicks, MAYBE_ThreadNow) {
+TEST(ThreadTicks, ThreadNow) {
   if (ThreadTicks::IsSupported()) {
     ThreadTicks::WaitUntilInitialized();
     TimeTicks begin = TimeTicks::Now();
@@ -1010,7 +1012,7 @@ TEST(ThreadTicks, MAYBE_ThreadNow) {
     TimeDelta delta = end - begin;
     TimeDelta delta_thread = end_thread - begin_thread;
     // Make sure that some thread time have elapsed.
-    EXPECT_GT(delta_thread.InMicroseconds(), 0);
+    EXPECT_GE(delta_thread.InMicroseconds(), 0);
     // But the thread time is at least 9ms less than clock time.
     TimeDelta difference = delta - delta_thread;
     EXPECT_GE(difference.InMicroseconds(), 9000);
@@ -1538,6 +1540,70 @@ TEST(TimeDelta, Overflows) {
   TimeTicks ticks_now = TimeTicks::Now();
   EXPECT_EQ(-kOneSecond, (ticks_now - kOneSecond) - ticks_now);
   EXPECT_EQ(kOneSecond, (ticks_now + kOneSecond) - ticks_now);
+}
+
+constexpr TimeTicks TestTimeTicksConstexprCopyAssignment() {
+  TimeTicks a = TimeTicks::FromInternalValue(12345);
+  TimeTicks b;
+  b = a;
+  return b;
+}
+
+TEST(TimeTicks, ConstexprAndTriviallyCopiable) {
+  // "Trivially copyable" is necessary for use in std::atomic<TimeTicks>.
+  static_assert(std::is_trivially_copyable<TimeTicks>(), "");
+
+  // Copy ctor.
+  constexpr TimeTicks a = TimeTicks::FromInternalValue(12345);
+  constexpr TimeTicks b{a};
+  static_assert(a.ToInternalValue() == b.ToInternalValue(), "");
+
+  // Copy assignment.
+  static_assert(a.ToInternalValue() ==
+                    TestTimeTicksConstexprCopyAssignment().ToInternalValue(),
+                "");
+}
+
+constexpr ThreadTicks TestThreadTicksConstexprCopyAssignment() {
+  ThreadTicks a = ThreadTicks::FromInternalValue(12345);
+  ThreadTicks b;
+  b = a;
+  return b;
+}
+
+TEST(ThreadTicks, ConstexprAndTriviallyCopiable) {
+  // "Trivially copyable" is necessary for use in std::atomic<ThreadTicks>.
+  static_assert(std::is_trivially_copyable<ThreadTicks>(), "");
+
+  // Copy ctor.
+  constexpr ThreadTicks a = ThreadTicks::FromInternalValue(12345);
+  constexpr ThreadTicks b{a};
+  static_assert(a.ToInternalValue() == b.ToInternalValue(), "");
+
+  // Copy assignment.
+  static_assert(a.ToInternalValue() ==
+                    TestThreadTicksConstexprCopyAssignment().ToInternalValue(),
+                "");
+}
+
+constexpr TimeDelta TestTimeDeltaConstexprCopyAssignment() {
+  TimeDelta a = TimeDelta::FromSeconds(1);
+  TimeDelta b;
+  b = a;
+  return b;
+}
+
+TEST(TimeDelta, ConstexprAndTriviallyCopiable) {
+  // "Trivially copyable" is necessary for use in std::atomic<TimeDelta>.
+  static_assert(std::is_trivially_copyable<TimeDelta>(), "");
+
+  // Copy ctor.
+  constexpr TimeDelta a = TimeDelta::FromSeconds(1);
+  constexpr TimeDelta b{a};
+  static_assert(a == b, "");
+
+  // Copy assignment.
+  static_assert(a == TestTimeDeltaConstexprCopyAssignment(), "");
 }
 
 TEST(TimeDeltaLogging, DCheckEqCompiles) {

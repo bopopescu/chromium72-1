@@ -38,10 +38,6 @@ namespace login {
 class NetworkStateHelper;
 }
 
-namespace test {
-class WebUIScreenLockerTester;
-}
-
 // Displays a WebUI lock screen based on the Oobe account picker screen.
 class WebUIScreenLocker : public WebUILoginView,
                           public ScreenLocker::Delegate,
@@ -62,8 +58,9 @@ class WebUIScreenLocker : public WebUILoginView,
   // ScreenLockReady is called when all initialization has finished.
   void LockScreen();
 
+  bool webui_ready_for_testing() const { return webui_ready_; }
+
  private:
-  friend class test::WebUIScreenLockerTester;
 
   // Returns true if the lock screen should be preloaded.
   static bool ShouldPreloadLockScreen();
@@ -75,22 +72,21 @@ class WebUIScreenLocker : public WebUILoginView,
   void ShowErrorMessage(int error_msg_id,
                         HelpAppLauncher::HelpTopic help_topic_id) override;
   void ClearErrors() override;
-  void AnimateAuthenticationSuccess() override;
   void OnLockWebUIReady() override;
   void OnLockBackgroundDisplayed() override;
   void OnHeaderBarVisible() override;
   void OnAshLockAnimationFinished() override;
   void SetFingerprintState(const AccountId& account_id,
-                           ScreenLocker::FingerprintState state) override;
+                           ash::mojom::FingerprintState state) override;
+  void NotifyFingerprintAuthResult(const AccountId& account_id,
+                                   bool success) override;
   content::WebContents* GetWebContents() override;
 
   // LoginDisplay::Delegate:
-  void CancelPasswordChangedFlow() override;
   base::string16 GetConnectedNetworkName() override;
   bool IsSigninInProgress() const override;
   void Login(const UserContext& user_context,
              const SigninSpecifics& specifics) override;
-  void MigrateUserData(const std::string& old_password) override;
   void OnSigninScreenReady() override;
   void OnStartEnterpriseEnrollment() override;
   void OnStartEnableDebuggingScreen() override;
@@ -99,7 +95,6 @@ class WebUIScreenLocker : public WebUILoginView,
   void ShowWrongHWIDScreen() override;
   void ShowUpdateRequiredScreen() override;
   void ResetAutoLoginTimer() override;
-  void ResyncUserData() override;
   void Signout() override;
 
   // WidgetObserver:
@@ -115,8 +110,6 @@ class WebUIScreenLocker : public WebUILoginView,
   void RenderProcessGone(base::TerminationStatus status) override;
 
   // display::DisplayObserver:
-  void OnDisplayAdded(const display::Display& new_display) override;
-  void OnDisplayRemoved(const display::Display& old_display) override;
   void OnDisplayMetricsChanged(const display::Display& display,
                                uint32_t changed_metrics) override;
 

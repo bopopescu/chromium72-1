@@ -6,6 +6,7 @@
 
 #include <stdint.h>
 #include <string>
+#include <utility>
 
 #include "base/bind.h"
 #include "base/bind_helpers.h"
@@ -36,7 +37,6 @@ ProxyResolvingClientSocket::ProxyResolvingClientSocket(
     : network_session_(network_session),
       socket_handle_(std::make_unique<net::ClientSocketHandle>()),
       ssl_config_(ssl_config),
-      proxy_resolve_request_(nullptr),
       url_(url),
       use_tls_(use_tls),
       net_log_(net::NetLogWithSource::Make(network_session_->net_log(),
@@ -58,6 +58,24 @@ int ProxyResolvingClientSocket::Read(net::IOBuffer* buf,
   if (socket_handle_->socket())
     return socket_handle_->socket()->Read(buf, buf_len, std::move(callback));
   return net::ERR_SOCKET_NOT_CONNECTED;
+}
+
+int ProxyResolvingClientSocket::ReadIfReady(
+    net::IOBuffer* buf,
+    int buf_len,
+    net::CompletionOnceCallback callback) {
+  if (socket_handle_->socket()) {
+    return socket_handle_->socket()->ReadIfReady(buf, buf_len,
+                                                 std::move(callback));
+  }
+  return net::ERR_SOCKET_NOT_CONNECTED;
+}
+
+int ProxyResolvingClientSocket::CancelReadIfReady() {
+  if (socket_handle_->socket())
+    return socket_handle_->socket()->CancelReadIfReady();
+  // Return net::OK as ReadIfReady() is canceled when socket is disconnected.
+  return net::OK;
 }
 
 int ProxyResolvingClientSocket::Write(
@@ -99,9 +117,7 @@ int ProxyResolvingClientSocket::Connect(net::CompletionOnceCallback callback) {
 void ProxyResolvingClientSocket::Disconnect() {
   CloseSocket(true /*close_connection*/);
   if (proxy_resolve_request_) {
-    network_session_->proxy_resolution_service()->CancelRequest(
-        proxy_resolve_request_);
-    proxy_resolve_request_ = nullptr;
+    proxy_resolve_request_.reset();
   }
   user_connect_callback_.Reset();
 }
@@ -232,25 +248,22 @@ int ProxyResolvingClientSocket::DoLoop(int result) {
 
 int ProxyResolvingClientSocket::DoProxyResolve() {
   next_state_ = STATE_PROXY_RESOLVE_COMPLETE;
-  // TODO(xunjieli): Having a null ProxyDelegate is bad. Figure out how to
-  // interact with the new interface for proxy delegate.
-  // https://crbug.com/793071.
   // base::Unretained(this) is safe because resolution request is canceled when
   // |proxy_resolve_request_| is destroyed.
   return network_session_->proxy_resolution_service()->ResolveProxy(
       url_, "POST", &proxy_info_,
       base::BindRepeating(&ProxyResolvingClientSocket::OnIOComplete,
                           base::Unretained(this)),
-      &proxy_resolve_request_, nullptr /*proxy_delegate*/, net_log_);
+      &proxy_resolve_request_, net_log_);
 }
 
 int ProxyResolvingClientSocket::DoProxyResolveComplete(int result) {
   proxy_resolve_request_ = nullptr;
   if (result == net::OK) {
-    next_state_ = STATE_INIT_CONNECTION;
     // Removes unsupported proxies from the list. Currently, this removes
-    // just the SCHEME_QUIC proxy, which doesn't yet support tunneling.
-    // TODO(xunjieli): Allow QUIC proxy once it supports tunneling.
+    // just the SCHEME_QUIC proxy.
+    // TODO(crbug.com/876885): Allow QUIC proxy once net::QuicProxyClientSocket
+    // supports ReadIfReady() and CancelReadIfReady().
     proxy_info_.RemoveProxiesWithoutScheme(
         net::ProxyServer::SCHEME_DIRECT | net::ProxyServer::SCHEME_HTTP |
         net::ProxyServer::SCHEME_HTTPS | net::ProxyServer::SCHEME_SOCKS4 |
@@ -259,8 +272,10 @@ int ProxyResolvingClientSocket::DoProxyResolveComplete(int result) {
     if (proxy_info_.is_empty()) {
       // No proxies/direct to choose from. This happens when we don't support
       // any of the proxies in the returned list.
-      result = net::ERR_NO_SUPPORTED_PROXIES;
+      return net::ERR_NO_SUPPORTED_PROXIES;
     }
+    next_state_ = STATE_INIT_CONNECTION;
+    return net::OK;
   }
   return result;
 }
@@ -316,8 +331,7 @@ int ProxyResolvingClientSocket::DoInitConnectionComplete(int result) {
     return ReconsiderProxyAfterError(result);
   }
 
-  network_session_->proxy_resolution_service()->ReportSuccess(proxy_info_,
-                                                              nullptr);
+  network_session_->proxy_resolution_service()->ReportSuccess(proxy_info_);
   return net::OK;
 }
 

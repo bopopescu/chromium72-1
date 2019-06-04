@@ -29,7 +29,7 @@
 #define THIRD_PARTY_BLINK_RENDERER_CORE_STYLE_COMPUTED_STYLE_CONSTANTS_H_
 
 #include <cstddef>
-#include "third_party/blink/renderer/core/computed_style_base_constants.h"
+#include "third_party/blink/renderer/core/style/computed_style_base_constants.h"
 
 namespace blink {
 
@@ -64,7 +64,7 @@ enum StyleRecalcChange {
 enum PseudoId {
   // The order must be NOP ID, public IDs, and then internal IDs.
   // If you add or remove a public ID, you must update the field_size of
-  // "PseudoBits" in ComputedStyleExtraFields.json5.
+  // "PseudoBits" in computed_style_extra_fields.json5.
   kPseudoIdNone,
   kPseudoIdFirstLine,
   kPseudoIdFirstLetter,
@@ -189,6 +189,22 @@ inline Containment operator|(Containment a, Containment b) {
   return Containment(int(a) | int(b));
 }
 inline Containment& operator|=(Containment& a, Containment b) {
+  return a = a | b;
+}
+
+static const size_t kTextUnderlinePositionBits = 3;
+enum TextUnderlinePosition {
+  kTextUnderlinePositionAuto = 0x0,
+  kTextUnderlinePositionUnder = 0x1,
+  kTextUnderlinePositionLeft = 0x2,
+  kTextUnderlinePositionRight = 0x4
+};
+inline TextUnderlinePosition operator|(TextUnderlinePosition a,
+                                       TextUnderlinePosition b) {
+  return TextUnderlinePosition(int(a) | int(b));
+}
+inline TextUnderlinePosition& operator|=(TextUnderlinePosition& a,
+                                         TextUnderlinePosition b) {
   return a = a | b;
 }
 

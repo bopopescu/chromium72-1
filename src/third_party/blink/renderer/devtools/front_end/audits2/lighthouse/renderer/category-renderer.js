@@ -1,7 +1,18 @@
 /**
- * @license Copyright 2017 Google Inc. All Rights Reserved.
- * Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with the License. You may obtain a copy of the License at http://www.apache.org/licenses/LICENSE-2.0
- * Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the specific language governing permissions and limitations under the License.
+ * @license
+ * Copyright 2017 Google Inc. All Rights Reserved.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS-IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 'use strict';
 
@@ -9,9 +20,6 @@
 
 /** @typedef {import('./dom.js')} DOM */
 /** @typedef {import('./report-renderer.js')} ReportRenderer */
-/** @typedef {import('./report-renderer.js').AuditJSON} AuditJSON */
-/** @typedef {import('./report-renderer.js').CategoryJSON} CategoryJSON */
-/** @typedef {import('./report-renderer.js').GroupJSON} GroupJSON */
 /** @typedef {import('./details-renderer.js')} DetailsRenderer */
 /** @typedef {import('./util.js')} Util */
 
@@ -32,7 +40,7 @@ class CategoryRenderer {
   }
 
   /**
-   * @param {AuditJSON} audit
+   * @param {LH.ReportResult.AuditRef} audit
    * @param {number} index
    * @return {Element}
    */
@@ -43,7 +51,7 @@ class CategoryRenderer {
 
   /**
    * Populate an DOM tree with audit details. Used by renderAudit and renderOpportunity
-   * @param {AuditJSON} audit
+   * @param {LH.ReportResult.AuditRef} audit
    * @param {number} index
    * @param {DocumentFragment} tmpl
    * @return {Element}
@@ -78,10 +86,10 @@ class CategoryRenderer {
     if (audit.result.scoreDisplayMode === 'error') {
       auditEl.classList.add(`lh-audit--error`);
       const textEl = this.dom.find('.lh-audit__display-text', auditEl);
-      textEl.textContent = 'Error!';
+      textEl.textContent = Util.UIStrings.errorLabel;
       textEl.classList.add('tooltip-boundary');
       const tooltip = this.dom.createChildOf(textEl, 'div', 'tooltip tooltip--error');
-      tooltip.textContent = audit.result.errorMessage || 'Report error: no audit information';
+      tooltip.textContent = audit.result.errorMessage || Util.UIStrings.errorMissingAuditInfo;
     } else if (audit.result.explanation) {
       const explEl = this.dom.createChildOf(titleEl, 'div', 'lh-audit-explanation');
       explEl.textContent = audit.result.explanation;
@@ -92,9 +100,9 @@ class CategoryRenderer {
     // Add list of warnings or singular warning
     const warningsEl = this.dom.createChildOf(titleEl, 'div', 'lh-warnings');
     if (warnings.length === 1) {
-      warningsEl.textContent = `Warning: ${warnings.join('')}`;
+      warningsEl.textContent = `${Util.UIStrings.warningHeader} ${warnings.join('')}`;
     } else {
-      warningsEl.textContent = 'Warnings: ';
+      warningsEl.textContent = Util.UIStrings.warningHeader;
       const warningsUl = this.dom.createChildOf(warningsEl, 'ul');
       for (const warning of warnings) {
         const item = this.dom.createChildOf(warningsUl, 'li');
@@ -105,7 +113,7 @@ class CategoryRenderer {
   }
 
   /**
-   * @return {!HTMLElement}
+   * @return {HTMLElement}
    */
   _createChevron() {
     const chevronTmpl = this.dom.cloneTemplate('#tmpl-lh-chevron', this.templateContext);
@@ -114,7 +122,7 @@ class CategoryRenderer {
   }
 
   /**
-   * @param {!Element} element DOM node to populate with values.
+   * @param {Element} element DOM node to populate with values.
    * @param {number|null} score
    * @param {string} scoreDisplayMode
    * @return {Element}
@@ -126,7 +134,7 @@ class CategoryRenderer {
   }
 
   /**
-   * @param {CategoryJSON} category
+   * @param {LH.ReportResult.Category} category
    * @return {Element}
    */
   renderCategoryHeader(category) {
@@ -149,7 +157,7 @@ class CategoryRenderer {
   /**
    * Renders the group container for a group of audits. Individual audit elements can be added
    * directly to the returned element.
-   * @param {GroupJSON} group
+   * @param {LH.Result.ReportGroup} group
    * @param {{expandable: boolean, itemCount?: number}} opts
    * @return {Element}
    */
@@ -161,7 +169,7 @@ class CategoryRenderer {
     const itemCountEl = this.dom.createChildOf(summmaryEl, 'div', 'lh-audit-group__itemcount');
     if (expandable) {
       const chevronEl = summmaryEl.appendChild(this._createChevron());
-      chevronEl.title = 'Show audits';
+      chevronEl.title = Util.UIStrings.auditGroupExpandTooltip;
     }
 
     if (group.description) {
@@ -172,6 +180,7 @@ class CategoryRenderer {
     headerEl.textContent = group.title;
 
     if (opts.itemCount) {
+      // TODO(i18n): support multiple locales here
       itemCountEl.textContent = `${opts.itemCount} audits`;
     }
     return groupEl;
@@ -214,7 +223,7 @@ class CategoryRenderer {
    */
   renderPassedAuditsSection(elements) {
     const passedElem = this.renderAuditGroup({
-      title: `Passed audits`,
+      title: Util.UIStrings.passedAuditsGroupTitle,
     }, {expandable: true, itemCount: this._getTotalAuditsLength(elements)});
     passedElem.classList.add('lh-passed-audits');
     elements.forEach(elem => passedElem.appendChild(elem));
@@ -227,7 +236,7 @@ class CategoryRenderer {
    */
   _renderNotApplicableAuditsSection(elements) {
     const notApplicableElem = this.renderAuditGroup({
-      title: `Not applicable`,
+      title: Util.UIStrings.notApplicableAuditsGroupTitle,
     }, {expandable: true, itemCount: this._getTotalAuditsLength(elements)});
     notApplicableElem.classList.add('lh-audit-group--not-applicable');
     elements.forEach(elem => notApplicableElem.appendChild(elem));
@@ -235,12 +244,12 @@ class CategoryRenderer {
   }
 
   /**
-   * @param {Array<AuditJSON>} manualAudits
-   * @param {string} manualDescription
+   * @param {Array<LH.ReportResult.AuditRef>} manualAudits
+   * @param {string} [manualDescription]
    * @return {Element}
    */
   _renderManualAudits(manualAudits, manualDescription) {
-    const group = {title: 'Additional items to manually check', description: manualDescription};
+    const group = {title: Util.UIStrings.manualAuditsGroupTitle, description: manualDescription};
     const auditGroupElem = this.renderAuditGroup(group,
         {expandable: true, itemCount: manualAudits.length});
     auditGroupElem.classList.add('lh-audit-group--manual');
@@ -259,7 +268,7 @@ class CategoryRenderer {
   }
 
   /**
-   * @param {CategoryJSON} category
+   * @param {LH.ReportResult.Category} category
    * @return {DocumentFragment}
    */
   renderScoreGauge(category) {
@@ -285,7 +294,7 @@ class CategoryRenderer {
     percentageEl.textContent = scoreOutOf100.toString();
     if (category.score === null) {
       percentageEl.textContent = '?';
-      percentageEl.title = 'Errors occurred while auditing';
+      percentageEl.title = Util.UIStrings.errorLabel;
     }
 
     this.dom.find('.lh-gauge__label', tmpl).textContent = category.title;
@@ -293,8 +302,8 @@ class CategoryRenderer {
   }
 
   /**
-   * @param {CategoryJSON} category
-   * @param {Object<string, GroupJSON>} groupDefinitions
+   * @param {LH.ReportResult.Category} category
+   * @param {Object<string, LH.Result.ReportGroup>} [groupDefinitions]
    * @return {Element}
    */
   render(category, groupDefinitions) {
@@ -306,7 +315,7 @@ class CategoryRenderer {
     const manualAudits = auditRefs.filter(audit => audit.result.scoreDisplayMode === 'manual');
     const nonManualAudits = auditRefs.filter(audit => !manualAudits.includes(audit));
 
-    /** @type {Object<string, {passed: Array<AuditJSON>, failed: Array<AuditJSON>, notApplicable: Array<AuditJSON>}>} */
+    /** @type {Object<string, {passed: Array<LH.ReportResult.AuditRef>, failed: Array<LH.ReportResult.AuditRef>, notApplicable: Array<LH.ReportResult.AuditRef>}>} */
     const auditsGroupedByGroup = {};
     const auditsUngrouped = {passed: [], failed: [], notApplicable: []};
 
@@ -339,14 +348,14 @@ class CategoryRenderer {
     const passedElements = /** @type {Array<Element>} */ ([]);
     const notApplicableElements = /** @type {Array<Element>} */ ([]);
 
-    auditsUngrouped.failed.forEach((/** @type {AuditJSON} */ audit, i) =>
-      failedElements.push(this.renderAudit(audit, i)));
-    auditsUngrouped.passed.forEach((/** @type {AuditJSON} */ audit, i) =>
-      passedElements.push(this.renderAudit(audit, i)));
-    auditsUngrouped.notApplicable.forEach((/** @type {AuditJSON} */ audit, i) =>
-      notApplicableElements.push(this.renderAudit(audit, i)));
+    auditsUngrouped.failed.forEach((audit, i) => failedElements.push(this.renderAudit(audit, i)));
+    auditsUngrouped.passed.forEach((audit, i) => passedElements.push(this.renderAudit(audit, i)));
+    auditsUngrouped.notApplicable.forEach((audit, i) => notApplicableElements.push(
+        this.renderAudit(audit, i)));
 
     Object.keys(auditsGroupedByGroup).forEach(groupId => {
+      if (!groupDefinitions) return; // We never reach here if there aren't groups, but TSC needs convincing
+
       const group = groupDefinitions[groupId];
       const groups = auditsGroupedByGroup[groupId];
 

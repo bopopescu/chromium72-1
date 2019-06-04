@@ -11,12 +11,9 @@
 
 #include "ash/login_status.h"
 #include "ash/public/interfaces/session_controller.mojom.h"
-#include "ash/session/session_controller.h"
 #include "ash/session/session_observer.h"
 #include "ash/session/test_session_controller_client.h"
 #include "ash/shell.h"
-#include "ash/system/message_center/notification_tray.h"
-#include "ash/system/screen_security/screen_tray_item.h"
 #include "ash/system/tray/system_tray_notifier.h"
 #include "ash/test/ash_test_base.h"
 #include "ash/wm/overview/window_selector_controller.h"
@@ -51,6 +48,8 @@ class TestSessionObserver : public SessionObserver {
     user_session_account_ids_.push_back(account_id);
   }
 
+  void OnFirstSessionStarted() override { first_session_started_ = true; }
+
   void OnSessionStateChanged(SessionState state) override { state_ = state; }
 
   void OnActiveUserPrefServiceChanged(PrefService* pref_service) override {
@@ -67,6 +66,7 @@ class TestSessionObserver : public SessionObserver {
 
   SessionState state() const { return state_; }
   const AccountId& active_account_id() const { return active_account_id_; }
+  bool first_session_started() const { return first_session_started_; }
   const std::vector<AccountId>& user_session_account_ids() const {
     return user_session_account_ids_;
   }
@@ -78,6 +78,7 @@ class TestSessionObserver : public SessionObserver {
  private:
   SessionState state_ = SessionState::UNKNOWN;
   AccountId active_account_id_;
+  bool first_session_started_ = false;
   std::vector<AccountId> user_session_account_ids_;
   PrefService* last_user_pref_service_ = nullptr;
 
@@ -170,6 +171,18 @@ TEST_F(SessionControllerTest, SimpleSessionInfo) {
   EXPECT_FALSE(controller()->CanLockScreen());
   EXPECT_FALSE(controller()->ShouldLockScreenAutomatically());
   EXPECT_TRUE(controller()->IsRunningInAppMode());
+}
+
+TEST_F(SessionControllerTest, OnFirstSessionStarted) {
+  // Simulate chrome starting a user session.
+  mojom::SessionInfo info;
+  FillDefaultSessionInfo(&info);
+  SetSessionInfo(info);
+  UpdateSession(1u, "user1@test.com");
+  controller()->SetUserSessionOrder({1u});
+
+  // Observer is notified.
+  EXPECT_TRUE(observer()->first_session_started());
 }
 
 // Tests that the CanLockScreen is only true with an active user session.
@@ -300,6 +313,26 @@ TEST_F(SessionControllerTest, GetLoginStateForActiveSession) {
     EXPECT_EQ(test_case.expected_status, controller()->login_status())
         << "Test case user_type=" << static_cast<int>(test_case.user_type);
   }
+}
+
+TEST_F(SessionControllerTest, GetLoginStateForOwner) {
+  // Simulate an active user session.
+  mojom::SessionInfo info;
+  FillDefaultSessionInfo(&info);
+  info.state = SessionState::ACTIVE;
+  SetSessionInfo(info);
+
+  mojom::UserSessionPtr session = mojom::UserSession::New();
+  session->session_id = 1u;
+  session->user_info = mojom::UserInfo::New();
+  session->user_info->type = user_manager::USER_TYPE_REGULAR;
+  session->user_info->account_id = AccountId::FromUserEmail("owner@test.com");
+  session->user_info->display_name = "Owner";
+  session->user_info->display_email = "owner@test.com";
+  session->user_info->is_device_owner = true;
+  controller()->UpdateUserSession(std::move(session));
+
+  EXPECT_EQ(LoginStatus::OWNER, controller()->login_status());
 }
 
 // Tests that user sessions can be set and updated.
@@ -557,14 +590,8 @@ class CanSwitchUserTest : public AshTestBase {
   CanSwitchUserTest() = default;
   ~CanSwitchUserTest() override = default;
 
-  void SetUp() override {
-    AshTestBase::SetUp();
-    NotificationTray::DisableAnimationsForTest(true);
-  }
-
   void TearDown() override {
     RunAllPendingInMessageLoop();
-    NotificationTray::DisableAnimationsForTest(false);
     AshTestBase::TearDown();
   }
 
@@ -574,7 +601,7 @@ class CanSwitchUserTest : public AshTestBase {
     Shell::Get()->system_tray_notifier()->NotifyScreenCaptureStart(
         base::BindRepeating(&CanSwitchUserTest::StopCaptureCallback,
                             base::Unretained(this)),
-        base::EmptyString16());
+        base::string16());
   }
 
   // The callback which gets called when the screen capture gets stopped.
@@ -591,7 +618,7 @@ class CanSwitchUserTest : public AshTestBase {
     Shell::Get()->system_tray_notifier()->NotifyScreenShareStart(
         base::BindRepeating(&CanSwitchUserTest::StopShareCallback,
                             base::Unretained(this)),
-        base::EmptyString16());
+        base::string16());
   }
 
   // Simulates a screen share session stop.

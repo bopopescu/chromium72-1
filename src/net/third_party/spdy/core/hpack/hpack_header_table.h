@@ -74,6 +74,8 @@ class SPDY_EXPORT_PRIVATE HpackHeaderTable {
       unordered_map<SpdyStringPiece, const HpackEntry*, base::StringPieceHash>;
 
   HpackHeaderTable();
+  HpackHeaderTable(const HpackHeaderTable&) = delete;
+  HpackHeaderTable& operator=(const HpackHeaderTable&) = delete;
 
   ~HpackHeaderTable();
 
@@ -140,8 +142,10 @@ class SPDY_EXPORT_PRIVATE HpackHeaderTable {
   // Evicts |count| oldest entries from the table.
   void Evict(size_t count);
 
-  // |static_entries_| and |static_index_| are owned by HpackStaticTable
-  // singleton.
+  // |static_entries_|, |static_index_|, and |static_name_index_| are owned by
+  // HpackStaticTable singleton.
+
+  // Tracks HpackEntries by index.
   const EntryTable& static_entries_;
   EntryTable dynamic_entries_;
 
@@ -171,8 +175,6 @@ class SPDY_EXPORT_PRIVATE HpackHeaderTable {
   size_t total_insertions_;
 
   std::unique_ptr<DebugVisitorInterface> debug_visitor_;
-
-  DISALLOW_COPY_AND_ASSIGN(HpackHeaderTable);
 };
 
 }  // namespace spdy

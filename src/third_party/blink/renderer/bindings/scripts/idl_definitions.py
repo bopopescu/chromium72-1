@@ -64,6 +64,7 @@ Design doc: http://www.chromium.org/developers/design-documents/idl-compiler
 
 import abc
 
+from idl_types import IdlAnnotatedType
 from idl_types import IdlFrozenArrayType
 from idl_types import IdlNullableType
 from idl_types import IdlRecordType
@@ -383,6 +384,9 @@ class IdlInterface(object):
                 raise ValueError('Value iterators (iterable<V>) must be accompanied by an indexed '
                                  'property getter and an integer-typed length attribute.')
 
+        if 'Unforgeable' in self.extended_attributes:
+            raise ValueError('[Unforgeable] cannot appear on interfaces.')
+
     def accept(self, visitor):
         visitor.visit_interface(self)
         for attribute in self.attributes:
@@ -449,6 +453,9 @@ class IdlAttribute(TypedObject):
                     self.extended_attributes = ext_attributes_node_to_extended_attributes(child)
                 else:
                     raise ValueError('Unrecognized node class: %s' % child_class)
+
+        if 'Unforgeable' in self.extended_attributes and self.is_static:
+            raise ValueError('[Unforgeable] cannot appear on static attributes.')
 
     def accept(self, visitor):
         visitor.visit_attribute(self)
@@ -574,6 +581,9 @@ class IdlOperation(TypedObject):
                 self.extended_attributes = ext_attributes_node_to_extended_attributes(child)
             else:
                 raise ValueError('Unrecognized node class: %s' % child_class)
+
+        if 'Unforgeable' in self.extended_attributes and self.is_static:
+            raise ValueError('[Unforgeable] cannot appear on static operations.')
 
     @classmethod
     def constructor_from_arguments_node(cls, name, arguments_node):
@@ -942,7 +952,7 @@ def type_node_to_type(node):
     base_type = type_node_inner_to_type(children[0])
     if len(children) == 2:
         extended_attributes = ext_attributes_node_to_extended_attributes(children[1])
-        base_type.set_extended_attributes(extended_attributes)
+        base_type = IdlAnnotatedType(base_type, extended_attributes)
 
     if node.GetProperty('NULLABLE'):
         base_type = IdlNullableType(base_type)

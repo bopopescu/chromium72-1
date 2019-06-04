@@ -7,22 +7,19 @@
 
 
 DEPS = [
+  'checkout',
+  'infra',
   'recipe_engine/context',
-  'recipe_engine/path',
   'recipe_engine/properties',
   'recipe_engine/step',
-  'core',
-  'infra',
-  'run',
   'vars',
 ]
 
 
 def RunSteps(api):
   api.vars.setup()
-  checkout_root = api.core.default_checkout_root
-  api.core.checkout_bot_update(checkout_root=checkout_root)
-  api.infra.update_go_deps()
+  checkout_root = api.checkout.default_checkout_root
+  api.checkout.bot_update(checkout_root=checkout_root)
 
   # Run the infra tests.
   repo_name = api.properties['repository'].split('/')[-1]
@@ -41,28 +38,4 @@ def GenTests(api):
                      revision='abc123',
                      path_config='kitchen',
                      swarm_out_dir='[SWARM_OUT_DIR]')
-  )
-
-  yield (
-    api.test('failed_one_update') +
-      api.properties(buildername='Housekeeper-PerCommit-InfraTests',
-                     repository='https://skia.googlesource.com/skia.git',
-                     revision='abc123',
-                     path_config='kitchen',
-                     swarm_out_dir='[SWARM_OUT_DIR]') +
-    api.step_data('update go pkgs', retcode=1)
-  )
-
-  yield (
-    api.test('failed_all_updates') +
-      api.properties(buildername='Housekeeper-PerCommit-InfraTests',
-                     repository='https://skia.googlesource.com/skia.git',
-                     revision='abc123',
-                     path_config='kitchen',
-                     swarm_out_dir='[SWARM_OUT_DIR]') +
-    api.step_data('update go pkgs', retcode=1) +
-    api.step_data('update go pkgs (attempt 2)', retcode=1) +
-    api.step_data('update go pkgs (attempt 3)', retcode=1) +
-    api.step_data('update go pkgs (attempt 4)', retcode=1) +
-    api.step_data('update go pkgs (attempt 5)', retcode=1)
   )

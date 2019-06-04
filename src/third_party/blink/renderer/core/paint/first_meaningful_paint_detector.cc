@@ -14,11 +14,6 @@
 #include "third_party/blink/renderer/platform/instrumentation/tracing/trace_event.h"
 #include "third_party/blink/renderer/platform/loader/fetch/resource_fetcher.h"
 
-#if defined(USE_NEVA_APPRUNTIME)
-#include "third_party/blink/renderer/core/dom/document.h"
-#include "third_party/blink/renderer/core/loader/document_loader.h"
-#endif
-
 namespace blink {
 
 namespace {
@@ -35,17 +30,8 @@ FirstMeaningfulPaintDetector& FirstMeaningfulPaintDetector::From(
 }
 
 FirstMeaningfulPaintDetector::FirstMeaningfulPaintDetector(
-    PaintTiming* paint_timing,
-    Document& document)
-    : paint_timing_(paint_timing),
-      network0_quiet_timer_(
-          document.GetTaskRunner(TaskType::kInternalDefault),
-          this,
-          &FirstMeaningfulPaintDetector::Network0QuietTimerFired),
-      network2_quiet_timer_(
-          document.GetTaskRunner(TaskType::kInternalDefault),
-          this,
-          &FirstMeaningfulPaintDetector::Network2QuietTimerFired) {}
+    PaintTiming* paint_timing)
+    : paint_timing_(paint_timing) {}
 
 Document* FirstMeaningfulPaintDetector::GetDocument() {
   return paint_timing_->GetSupplementable();
@@ -78,7 +64,7 @@ void FirstMeaningfulPaintDetector::MarkNextPaintAsMeaningfulIfNeeded(
 
   // If the page has many blank characters, the significance value is
   // accumulated until the text become visible.
-  int approximate_blank_character_count =
+  size_t approximate_blank_character_count =
       FontFaceSetDocument::ApproximateBlankCharacterCount(*GetDocument());
   if (approximate_blank_character_count > kBlankCharactersThreshold) {
     accumulated_significance_while_having_blank_text_ += significance;
@@ -118,43 +104,10 @@ void FirstMeaningfulPaintDetector::NotifyInputEvent() {
   had_user_input_ = kHadUserInput;
 }
 
-int FirstMeaningfulPaintDetector::ActiveConnections() {
-  DCHECK(GetDocument());
-  ResourceFetcher* fetcher = GetDocument()->Fetcher();
-  return fetcher->BlockingRequestCount() + fetcher->NonblockingRequestCount();
-}
-
-// This function is called when the number of active connections is decreased
-// and when the document is parsed.
-void FirstMeaningfulPaintDetector::CheckNetworkStable() {
-  DCHECK(GetDocument());
-  if (!GetDocument()->HasFinishedParsing())
-    return;
-
-  SetNetworkQuietTimers(ActiveConnections());
-}
-
-void FirstMeaningfulPaintDetector::SetNetworkQuietTimers(
-    int active_connections) {
-  if (!network2_quiet_reached_ && active_connections <= 2) {
-    // If activeConnections < 2 and the timer is already running, current
-    // 2-quiet window continues; the timer shouldn't be restarted.
-    if (active_connections == 2 || !network2_quiet_timer_.IsActive()) {
-      network2_quiet_timer_.StartOneShot(kNetwork2QuietWindowSeconds,
-                                         FROM_HERE);
-    }
-  }
-  if (!network0_quiet_reached_ && active_connections == 0) {
-    // This restarts 0-quiet timer if it's already running.
-    network0_quiet_timer_.StartOneShot(kNetwork0QuietWindowSeconds, FROM_HERE);
-  }
-}
-
-void FirstMeaningfulPaintDetector::Network0QuietTimerFired(TimerBase*) {
-  if (!GetDocument() || network0_quiet_reached_ || ActiveConnections() > 0 ||
-      paint_timing_->FirstContentfulPaintRendered().is_null())
-    return;
+void FirstMeaningfulPaintDetector::OnNetwork0Quiet() {
   network0_quiet_reached_ = true;
+  if (!GetDocument() || paint_timing_->FirstContentfulPaintRendered().is_null())
+    return;
 
   if (!provisional_first_meaningful_paint_.is_null()) {
     // Enforce FirstContentfulPaint <= FirstMeaningfulPaint.
@@ -165,20 +118,10 @@ void FirstMeaningfulPaintDetector::Network0QuietTimerFired(TimerBase*) {
   ReportHistograms();
 }
 
-void FirstMeaningfulPaintDetector::Network2QuietTimerFired(TimerBase*) {
-#if defined(USE_NEVA_APPRUNTIME)
-  if (!GetDocument() || network2_quiet_reached_ || ActiveConnections() > 2)
-    return;
-  if (paint_timing_->FirstContentfulPaintRendered().is_null()) {
-    // notify paint when First Meaningful Paint was not detected until loading resources
-    NotifyNonFirstMeaningfulPaint();
-    return;
-  }
-#else
-  if (!GetDocument() || network2_quiet_reached_ || ActiveConnections() > 2 ||
+void FirstMeaningfulPaintDetector::OnNetwork2Quiet() {
+  if (!GetDocument() || network2_quiet_reached_ ||
       paint_timing_->FirstContentfulPaintRendered().is_null())
     return;
-#endif
   network2_quiet_reached_ = true;
 
   if (!provisional_first_meaningful_paint_.is_null()) {
@@ -213,12 +156,6 @@ void FirstMeaningfulPaintDetector::Network2QuietTimerFired(TimerBase*) {
                               first_meaningful_paint2_quiet_swap);
     }
   }
-#if defined(USE_NEVA_APPRUNTIME)
-  else {
-    // notify paint when First Meaningful Paint was not detected until loading resources
-    NotifyNonFirstMeaningfulPaint();
-  }
-#endif
   ReportHistograms();
 }
 
@@ -327,7 +264,6 @@ void FirstMeaningfulPaintDetector::SetFirstMeaningfulPaint(
     TimeTicks stamp,
     TimeTicks swap_stamp) {
   DCHECK(paint_timing_->FirstMeaningfulPaint().is_null());
-  DCHECK_GE(swap_stamp, stamp);
   DCHECK(!swap_stamp.is_null());
   DCHECK(network2_quiet_reached_);
 
@@ -343,34 +279,6 @@ void FirstMeaningfulPaintDetector::SetFirstMeaningfulPaint(
       stamp, swap_stamp,
       had_user_input_before_provisional_first_meaningful_paint_);
 }
-
-#if defined(USE_NEVA_APPRUNTIME)
-void FirstMeaningfulPaintDetector::StopNetwork2QuietWindowTimer() {
-  if (network2_quiet_timer_.IsActive())
-    network2_quiet_timer_.Stop();
-}
-
-void FirstMeaningfulPaintDetector::ResetStateToMarkNextPaintForContainer() {
-  next_paint_is_meaningful_ = false;
-  had_user_input_ = kNoUserInput;
-  had_user_input_before_provisional_first_meaningful_paint_ = kNoUserInput;
-  max_significance_so_far_ = 0.0;
-  provisional_first_meaningful_paint_ = TimeTicks::Now();
-  provisional_first_meaningful_paint_swap_ = TimeTicks::Now();
-  accumulated_significance_while_having_blank_text_ = 0.0;
-  prev_layout_object_count_ = 0;
-  seen_first_meaningful_paint_candidate_ = false;
-  outstanding_swap_promise_count_ = 0;
-  defer_first_meaningful_paint_ = kDoNotDefer;
-}
-
-void FirstMeaningfulPaintDetector::NotifyNonFirstMeaningfulPaint() {
-  DCHECK(GetDocument());
-
-  if (GetDocument() && GetDocument()->Loader())
-    GetDocument()->Loader()->CommitNonFirstMeaningfulPaintAfterLoad();
-}
-#endif
 
 void FirstMeaningfulPaintDetector::Trace(blink::Visitor* visitor) {
   visitor->Trace(paint_timing_);

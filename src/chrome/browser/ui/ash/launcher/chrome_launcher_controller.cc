@@ -13,15 +13,13 @@
 #include "ash/public/cpp/shelf_item.h"
 #include "ash/public/cpp/shelf_model.h"
 #include "ash/public/cpp/shelf_prefs.h"
+#include "ash/public/cpp/window_animation_types.h"
 #include "ash/public/interfaces/constants.mojom.h"
-#include "ash/shell.h"
-#include "ash/strings/grit/ash_strings.h"
 #include "base/strings/pattern.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/threading/thread_task_runner_handle.h"
 #include "chrome/browser/chromeos/arc/arc_util.h"
-#include "chrome/browser/chromeos/ash_config.h"
 #include "chrome/browser/chromeos/crostini/crostini_util.h"
 #include "chrome/browser/extensions/chrome_app_icon_loader.h"
 #include "chrome/browser/extensions/extension_util.h"
@@ -35,7 +33,8 @@
 #include "chrome/browser/ui/app_list/arc/arc_app_utils.h"
 #include "chrome/browser/ui/app_list/crostini/crostini_app_icon_loader.h"
 #include "chrome/browser/ui/app_list/internal_app/internal_app_icon_loader.h"
-#include "chrome/browser/ui/ash/ash_util.h"
+#include "chrome/browser/ui/app_list/md_icon_normalizer.h"
+#include "chrome/browser/ui/ash/chrome_keyboard_controller_client.h"
 #include "chrome/browser/ui/ash/chrome_launcher_prefs.h"
 #include "chrome/browser/ui/ash/launcher/app_shortcut_launcher_item_controller.h"
 #include "chrome/browser/ui/ash/launcher/app_window_launcher_controller.h"
@@ -56,16 +55,19 @@
 #include "chrome/browser/ui/ash/multi_user/multi_user_util.h"
 #include "chrome/browser/ui/ash/multi_user/multi_user_window_manager.h"
 #include "chrome/browser/ui/ash/session_controller_client.h"
+#include "chrome/browser/ui/ash/tablet_mode_client.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_finder.h"
 #include "chrome/browser/ui/browser_list.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
-#include "chrome/browser/web_applications/web_app.h"
+#include "chrome/browser/web_applications/components/web_app_helpers.h"
 #include "chrome/common/pref_names.h"
+#include "chrome/grit/chrome_unscaled_resources.h"
 #include "chrome/grit/chromium_strings.h"
 #include "chrome/grit/generated_resources.h"
 #include "chrome/grit/theme_resources.h"
+#include "chromeos/strings/grit/chromeos_strings.h"
 #include "components/account_id/account_id.h"
 #include "components/arc/arc_prefs.h"
 #include "components/favicon/content/content_favicon_driver.h"
@@ -79,8 +81,8 @@
 #include "ui/aura/window.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/resource/resource_bundle.h"
+#include "ui/base/ui_base_features.h"
 #include "ui/display/types/display_constants.h"
-#include "ui/keyboard/keyboard_util.h"
 #include "ui/resources/grit/ui_resources.h"
 
 using extension_misc::kChromeAppId;
@@ -90,9 +92,9 @@ namespace {
 
 // Calls ItemSelected with |source|, default arguments, and no callback.
 void SelectItemWithSource(ash::ShelfItemDelegate* delegate,
-                          ash::ShelfLaunchSource source) {
-  delegate->ItemSelected(nullptr, display::kInvalidDisplayId, source,
-                         base::DoNothing());
+                          ash::ShelfLaunchSource source,
+                          int64_t display_id) {
+  delegate->ItemSelected(nullptr, display_id, source, base::DoNothing());
 }
 
 // Returns true if the given |item| has a pinned shelf item type.
@@ -249,9 +251,11 @@ ChromeLauncherController::ChromeLauncherController(Profile* profile,
   app_window_controllers_.push_back(std::move(extension_app_window_controller));
   app_window_controllers_.push_back(
       std::make_unique<ArcAppWindowLauncherController>(this));
-  if (IsCrostiniUIAllowedForProfile(profile)) {
-    app_window_controllers_.push_back(
-        std::make_unique<CrostiniAppWindowShelfController>(this));
+  if (crostini::IsCrostiniUIAllowedForProfile(profile)) {
+    std::unique_ptr<CrostiniAppWindowShelfController> crostini_controller =
+        std::make_unique<CrostiniAppWindowShelfController>(this);
+    crostini_app_window_shelf_controller_ = crostini_controller.get();
+    app_window_controllers_.emplace_back(std::move(crostini_controller));
   }
   app_window_controllers_.push_back(
       std::make_unique<InternalAppWindowShelfController>(this));
@@ -263,6 +267,9 @@ ChromeLauncherController::~ChromeLauncherController() {
 
   // Reset the app window controllers here since it has a weak pointer to this.
   app_window_controllers_.clear();
+
+  // Destroy the ShelfSpinnerController before clearing delegates.
+  shelf_spinner_controller_.reset();
 
   // Destroy local shelf item delegates; some subclasses have complex cleanup.
   model_->DestroyItemDelegates();
@@ -282,10 +289,7 @@ ChromeLauncherController::~ChromeLauncherController() {
 void ChromeLauncherController::Init() {
   CreateBrowserShortcutLauncherItem();
   UpdateAppLaunchersFromPref();
-
-  // TODO(sky): update unit test so that this test isn't necessary.
-  if (ash::Shell::HasInstance())
-    SetVirtualKeyboardBehaviorFromPrefs();
+  SetVirtualKeyboardBehaviorFromPrefs();
 }
 
 ash::ShelfID ChromeLauncherController::CreateAppLauncherItem(
@@ -404,12 +408,13 @@ void ChromeLauncherController::LaunchApp(const ash::ShelfID& id,
 
 void ChromeLauncherController::ActivateApp(const std::string& app_id,
                                            ash::ShelfLaunchSource source,
-                                           int event_flags) {
+                                           int event_flags,
+                                           int64_t display_id) {
   // If there is an existing delegate for this app, select it.
   const ash::ShelfID shelf_id(app_id);
   ash::ShelfItemDelegate* delegate = model_->GetShelfItemDelegate(shelf_id);
   if (delegate) {
-    SelectItemWithSource(delegate, source);
+    SelectItemWithSource(delegate, source, display_id);
     return;
   }
 
@@ -417,9 +422,9 @@ void ChromeLauncherController::ActivateApp(const std::string& app_id,
   std::unique_ptr<AppShortcutLauncherItemController> item_delegate =
       AppShortcutLauncherItemController::Create(shelf_id);
   if (!item_delegate->GetRunningApplications().empty())
-    SelectItemWithSource(item_delegate.get(), source);
+    SelectItemWithSource(item_delegate.get(), source, display_id);
   else
-    LaunchApp(shelf_id, source, event_flags, display::kInvalidDisplayId);
+    LaunchApp(shelf_id, source, event_flags, display_id);
 }
 
 void ChromeLauncherController::SetLauncherItemImage(
@@ -446,7 +451,7 @@ void ChromeLauncherController::UpdateLauncherItemImage(
 }
 
 void ChromeLauncherController::UpdateAppState(content::WebContents* contents,
-                                              AppState app_state) {
+                                              bool remove) {
   ash::ShelfID shelf_id(launcher_controller_helper_->GetAppID(contents));
 
   // Check if the gMail app is loaded and it matches the given content.
@@ -465,7 +470,7 @@ void ChromeLauncherController::UpdateAppState(content::WebContents* contents,
     }
   }
 
-  if (app_state == APP_STATE_REMOVED)
+  if (remove)
     web_contents_to_app_id_.erase(contents);
   else
     web_contents_to_app_id_[contents] = shelf_id.app_id;
@@ -513,10 +518,18 @@ ash::ShelfAction ChromeLauncherController::ActivateWindowOrMinimizeIfActive(
     return ash::SHELF_ACTION_WINDOW_ACTIVATED;
   }
 
+  AppListClientImpl* app_list_client = AppListClientImpl::GetInstance();
   if (window->IsActive() && allow_minimize &&
-      !AppListClientImpl::GetInstance()->app_list_target_visibility()) {
+      !(app_list_client && app_list_client->app_list_target_visibility())) {
     window->Minimize();
     return ash::SHELF_ACTION_WINDOW_MINIMIZED;
+  }
+
+  if (TabletModeClient::Get() &&
+      TabletModeClient::Get()->tablet_mode_enabled()) {
+    // Run slide down animation to show the window.
+    wm::SetWindowVisibilityAnimationType(
+        native_window, ash::wm::WINDOW_VISIBILITY_ANIMATION_TYPE_SLIDE_DOWN);
   }
 
   window->Show();
@@ -547,12 +560,6 @@ void ChromeLauncherController::ActiveUserChanged(
   // Restore the order of running, but unpinned applications for the activated
   // user.
   RestoreUnpinnedRunningApplicationOrder(user_email);
-  // TODO(crbug.com/557406): Fix this interaction pattern in Mash.
-  if (!ash_util::IsRunningInMash()) {
-    // Force on-screen keyboard to reset.
-    if (keyboard::IsKeyboardEnabled())
-      ash::Shell::Get()->CreateKeyboard();
-  }
 }
 
 void ChromeLauncherController::AdditionalUserAddedToSession(Profile* profile) {
@@ -764,8 +771,8 @@ void ChromeLauncherController::OnAppImageUpdated(const std::string& app_id,
   for (int index = 0; index < model_->item_count(); ++index) {
     ash::ShelfItem item = model_->items()[index];
     ash::ShelfItemDelegate* delegate = model_->GetShelfItemDelegate(item.id);
-    if (item.type == ash::TYPE_APP_PANEL || !delegate ||
-        delegate->image_set_by_controller() || item.id.app_id != app_id) {
+    if (!delegate || delegate->image_set_by_controller() ||
+        item.id.app_id != app_id) {
       continue;
     }
     item.image = image;
@@ -987,24 +994,20 @@ void ChromeLauncherController::UpdatePolicyPinnedAppsFromPrefs() {
 }
 
 void ChromeLauncherController::SetVirtualKeyboardBehaviorFromPrefs() {
+  using keyboard::mojom::KeyboardEnableFlag;
+  if (!ChromeKeyboardControllerClient::HasInstance())  // May be null in tests
+    return;
+  auto* client = ChromeKeyboardControllerClient::Get();
   const PrefService* service = profile()->GetPrefs();
-  const bool was_enabled = keyboard::IsKeyboardEnabled();
-  if (!service->HasPrefPath(prefs::kTouchVirtualKeyboardEnabled)) {
-    keyboard::SetKeyboardShowOverride(keyboard::KEYBOARD_SHOW_OVERRIDE_NONE);
+  if (service->HasPrefPath(prefs::kTouchVirtualKeyboardEnabled)) {
+    // Since these flags are mutually exclusive, setting one clears the other.
+    client->SetEnableFlag(
+        service->GetBoolean(prefs::kTouchVirtualKeyboardEnabled)
+            ? KeyboardEnableFlag::kPolicyEnabled
+            : KeyboardEnableFlag::kPolicyDisabled);
   } else {
-    const bool enable =
-        service->GetBoolean(prefs::kTouchVirtualKeyboardEnabled);
-    keyboard::SetKeyboardShowOverride(
-        enable ? keyboard::KEYBOARD_SHOW_OVERRIDE_ENABLED
-               : keyboard::KEYBOARD_SHOW_OVERRIDE_DISABLED);
-  }
-  // TODO(crbug.com/557406): Fix this interaction pattern in Mash.
-  if (!ash_util::IsRunningInMash()) {
-    const bool is_enabled = keyboard::IsKeyboardEnabled();
-    if (was_enabled && !is_enabled)
-      ash::Shell::Get()->DestroyKeyboard();
-    else if (is_enabled && !was_enabled)
-      ash::Shell::Get()->CreateKeyboard();
+    client->ClearEnableFlag(KeyboardEnableFlag::kPolicyDisabled);
+    client->ClearEnableFlag(KeyboardEnableFlag::kPolicyEnabled);
   }
 }
 
@@ -1033,8 +1036,6 @@ ash::ShelfID ChromeLauncherController::InsertAppLauncherItem(
     const base::string16& title) {
   CHECK(item_delegate);
   CHECK(!GetItem(item_delegate->shelf_id()));
-  // Ash's ShelfWindowWatcher handles app panel windows separately.
-  DCHECK_NE(ash::TYPE_APP_PANEL, shelf_item_type);
   ash::ShelfItem item;
   item.status = status;
   item.type = shelf_item_type;
@@ -1056,7 +1057,7 @@ void ChromeLauncherController::CreateBrowserShortcutLauncherItem() {
   browser_shortcut.type = ash::TYPE_BROWSER_SHORTCUT;
   browser_shortcut.id = ash::ShelfID(kChromeAppId);
   ui::ResourceBundle& rb = ui::ResourceBundle::GetSharedInstance();
-  browser_shortcut.image = *rb.GetImageSkiaNamed(IDR_PRODUCT_LOGO_32);
+  browser_shortcut.image = *rb.GetImageSkiaNamed(IDR_CHROME_APP_ICON_192);
   browser_shortcut.title = l10n_util::GetStringUTF16(IDS_PRODUCT_NAME);
   std::unique_ptr<BrowserShortcutLauncherItemController> item_delegate =
       std::make_unique<BrowserShortcutLauncherItemController>(model_);
@@ -1069,7 +1070,7 @@ void ChromeLauncherController::CreateBrowserShortcutLauncherItem() {
 }
 
 bool ChromeLauncherController::IsIncognito(
-    const content::WebContents* web_contents) const {
+    content::WebContents* web_contents) const {
   const Profile* profile =
       Profile::FromBrowserContext(web_contents->GetBrowserContext());
   return profile->IsOffTheRecord() && !profile->IsGuestSession() &&
@@ -1097,8 +1098,7 @@ void ChromeLauncherController::CloseWindowedAppsFromRemovedExtension(
     Browser* browser = *it;
     if (!browser->is_type_tabbed() && browser->is_type_popup() &&
         browser->is_app() &&
-        app_id ==
-            web_app::GetExtensionIdFromApplicationName(browser->app_name()) &&
+        app_id == web_app::GetAppIdFromApplicationName(browser->app_name()) &&
         profile == browser->profile()) {
       browser_to_close.push_back(browser);
     }
@@ -1129,25 +1129,26 @@ void ChromeLauncherController::AttachProfile(Profile* profile_to_attach) {
   // if the icon cache gets deleted upon user switch.
   std::unique_ptr<AppIconLoader> chrome_app_icon_loader =
       std::make_unique<extensions::ChromeAppIconLoader>(
-          profile_, extension_misc::EXTENSION_ICON_SMALL, this);
+          profile_, extension_misc::EXTENSION_ICON_MEDIUM,
+          base::BindRepeating(&app_list::MaybeResizeAndPadIconForMd), this);
   app_icon_loaders_.push_back(std::move(chrome_app_icon_loader));
 
   if (arc::IsArcAllowedForProfile(profile_)) {
     std::unique_ptr<AppIconLoader> arc_app_icon_loader =
         std::make_unique<ArcAppIconLoader>(
-            profile_, extension_misc::EXTENSION_ICON_SMALL, this);
+            profile_, extension_misc::EXTENSION_ICON_MEDIUM, this);
     app_icon_loaders_.push_back(std::move(arc_app_icon_loader));
   }
 
   std::unique_ptr<AppIconLoader> internal_app_icon_loader =
       std::make_unique<InternalAppIconLoader>(
-          profile_, extension_misc::EXTENSION_ICON_SMALL, this);
+          profile_, extension_misc::EXTENSION_ICON_MEDIUM, this);
   app_icon_loaders_.push_back(std::move(internal_app_icon_loader));
 
-  if (IsCrostiniUIAllowedForProfile(profile_)) {
+  if (crostini::IsCrostiniUIAllowedForProfile(profile_)) {
     std::unique_ptr<AppIconLoader> crostini_app_icon_loader =
         std::make_unique<CrostiniAppIconLoader>(
-            profile_, extension_misc::EXTENSION_ICON_SMALL, this);
+            profile_, extension_misc::EXTENSION_ICON_MEDIUM, this);
     app_icon_loaders_.push_back(std::move(crostini_app_icon_loader));
   }
 
@@ -1178,7 +1179,7 @@ void ChromeLauncherController::AttachProfile(Profile* profile_to_attach) {
     app_updaters_.push_back(std::move(arc_app_updater));
   }
 
-  if (IsCrostiniUIAllowedForProfile(profile())) {
+  if (crostini::IsCrostiniUIAllowedForProfile(profile())) {
     std::unique_ptr<LauncherAppUpdater> crostini_app_updater(
         new LauncherCrostiniAppUpdater(this, profile()));
     app_updaters_.push_back(std::move(crostini_app_updater));

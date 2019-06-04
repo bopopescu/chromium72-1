@@ -9,12 +9,14 @@
 
 #include "SkTypes.h"
 
-#if SK_SUPPORT_GPU && defined(SK_VULKAN)
+#if defined(SK_VULKAN)
 
+#include "vk/GrVkVulkan.h"
+
+#include "GrBackendSurface.h"
 #include "GrContextPriv.h"
 #include "GrContextFactory.h"
 #include "GrRenderTarget.h"
-#include "GrTest.h"
 #include "GrTexture.h"
 
 #include "Test.h"
@@ -28,18 +30,19 @@ using sk_gpu_test::GrContextFactory;
 const int kW = 1024;
 const int kH = 1024;
 const GrPixelConfig kPixelConfig = kRGBA_8888_GrPixelConfig;
+const GrColorType kColorType = GrColorType::kRGBA_8888;
 
 void wrap_tex_test(skiatest::Reporter* reporter, GrContext* context) {
 
     GrVkGpu* gpu = static_cast<GrVkGpu*>(context->contextPriv().getGpu());
 
     GrBackendTexture origBackendTex = gpu->createTestingOnlyBackendTexture(nullptr, kW, kH,
-                                                                           kPixelConfig, false,
+                                                                           kColorType, false,
                                                                            GrMipMapped::kNo);
     GrVkImageInfo imageInfo;
     SkAssertResult(origBackendTex.getVkImageInfo(&imageInfo));
 
-    sk_sp<GrTexture> tex = gpu->wrapBackendTexture(origBackendTex, kBorrow_GrWrapOwnership);
+    sk_sp<GrTexture> tex = gpu->wrapBackendTexture(origBackendTex, kBorrow_GrWrapOwnership, false);
     REPORTER_ASSERT(reporter, tex);
 
     // image is null
@@ -47,9 +50,10 @@ void wrap_tex_test(skiatest::Reporter* reporter, GrContext* context) {
         GrVkImageInfo backendCopy = imageInfo;
         backendCopy.fImage = VK_NULL_HANDLE;
         GrBackendTexture backendTex = GrBackendTexture(kW, kH, backendCopy);
-        tex = gpu->wrapBackendTexture(backendTex, kBorrow_GrWrapOwnership);
+        backendTex.setPixelConfig(kPixelConfig);
+        tex = gpu->wrapBackendTexture(backendTex, kBorrow_GrWrapOwnership, false);
         REPORTER_ASSERT(reporter, !tex);
-        tex = gpu->wrapBackendTexture(backendTex, kAdopt_GrWrapOwnership);
+        tex = gpu->wrapBackendTexture(backendTex, kAdopt_GrWrapOwnership, false);
         REPORTER_ASSERT(reporter, !tex);
     }
 
@@ -58,9 +62,10 @@ void wrap_tex_test(skiatest::Reporter* reporter, GrContext* context) {
         GrVkImageInfo backendCopy = imageInfo;
         backendCopy.fAlloc = GrVkAlloc();
         GrBackendTexture backendTex = GrBackendTexture(kW, kH, backendCopy);
-        tex = gpu->wrapBackendTexture(backendTex, kBorrow_GrWrapOwnership);
+        backendTex.setPixelConfig(kPixelConfig);
+        tex = gpu->wrapBackendTexture(backendTex, kBorrow_GrWrapOwnership, false);
         REPORTER_ASSERT(reporter, !tex);
-        tex = gpu->wrapBackendTexture(backendTex, kAdopt_GrWrapOwnership);
+        tex = gpu->wrapBackendTexture(backendTex, kAdopt_GrWrapOwnership, false);
         REPORTER_ASSERT(reporter, !tex);
     }
 
@@ -68,7 +73,8 @@ void wrap_tex_test(skiatest::Reporter* reporter, GrContext* context) {
     {
         GrVkImageInfo backendCopy = imageInfo;
         GrBackendTexture backendTex = GrBackendTexture(kW, kH, backendCopy);
-        tex = gpu->wrapBackendTexture(backendTex, kAdopt_GrWrapOwnership);
+        backendTex.setPixelConfig(kPixelConfig);
+        tex = gpu->wrapBackendTexture(backendTex, kAdopt_GrWrapOwnership, false);
 
         REPORTER_ASSERT(reporter, tex);
     }
@@ -78,12 +84,14 @@ void wrap_rt_test(skiatest::Reporter* reporter, GrContext* context) {
     GrVkGpu* gpu = static_cast<GrVkGpu*>(context->contextPriv().getGpu());
 
     GrBackendTexture origBackendTex = gpu->createTestingOnlyBackendTexture(nullptr, kW, kH,
-                                                                           kPixelConfig, true,
+                                                                           kColorType, true,
                                                                            GrMipMapped::kNo);
+
     GrVkImageInfo imageInfo;
     SkAssertResult(origBackendTex.getVkImageInfo(&imageInfo));
 
     GrBackendRenderTarget origBackendRT(kW, kH, 1, 0, imageInfo);
+    origBackendRT.setPixelConfig(kPixelConfig);
 
     sk_sp<GrRenderTarget> rt = gpu->wrapBackendRenderTarget(origBackendRT);
     REPORTER_ASSERT(reporter, rt);
@@ -93,6 +101,7 @@ void wrap_rt_test(skiatest::Reporter* reporter, GrContext* context) {
         GrVkImageInfo backendCopy = imageInfo;
         backendCopy.fImage = VK_NULL_HANDLE;
         GrBackendRenderTarget backendRT(kW, kH, 1, 0, backendCopy);
+        backendRT.setPixelConfig(kPixelConfig);
         rt = gpu->wrapBackendRenderTarget(backendRT);
         REPORTER_ASSERT(reporter, !rt);
     }
@@ -103,6 +112,7 @@ void wrap_rt_test(skiatest::Reporter* reporter, GrContext* context) {
         backendCopy.fAlloc = GrVkAlloc();
         // can wrap null alloc
         GrBackendRenderTarget backendRT(kW, kH, 1, 0, backendCopy);
+        backendRT.setPixelConfig(kPixelConfig);
         rt = gpu->wrapBackendRenderTarget(backendRT);
         REPORTER_ASSERT(reporter, rt);
     }
@@ -116,7 +126,7 @@ void wrap_trt_test(skiatest::Reporter* reporter, GrContext* context) {
     GrVkGpu* gpu = static_cast<GrVkGpu*>(context->contextPriv().getGpu());
 
     GrBackendTexture origBackendTex = gpu->createTestingOnlyBackendTexture(nullptr, kW, kH,
-                                                                           kPixelConfig, true,
+                                                                           kColorType, true,
                                                                            GrMipMapped::kNo);
     GrVkImageInfo imageInfo;
     SkAssertResult(origBackendTex.getVkImageInfo(&imageInfo));
@@ -130,6 +140,7 @@ void wrap_trt_test(skiatest::Reporter* reporter, GrContext* context) {
         GrVkImageInfo backendCopy = imageInfo;
         backendCopy.fImage = VK_NULL_HANDLE;
         GrBackendTexture backendTex = GrBackendTexture(kW, kH, backendCopy);
+        backendTex.setPixelConfig(kPixelConfig);
         tex = gpu->wrapRenderableBackendTexture(backendTex, 1, kBorrow_GrWrapOwnership);
         REPORTER_ASSERT(reporter, !tex);
         tex = gpu->wrapRenderableBackendTexture(backendTex, 1, kAdopt_GrWrapOwnership);
@@ -141,6 +152,7 @@ void wrap_trt_test(skiatest::Reporter* reporter, GrContext* context) {
         GrVkImageInfo backendCopy = imageInfo;
         backendCopy.fAlloc = GrVkAlloc();
         GrBackendTexture backendTex = GrBackendTexture(kW, kH, backendCopy);
+        backendTex.setPixelConfig(kPixelConfig);
         tex = gpu->wrapRenderableBackendTexture(backendTex, 1, kBorrow_GrWrapOwnership);
         REPORTER_ASSERT(reporter, !tex);
         tex = gpu->wrapRenderableBackendTexture(backendTex, 1, kAdopt_GrWrapOwnership);
@@ -151,6 +163,7 @@ void wrap_trt_test(skiatest::Reporter* reporter, GrContext* context) {
     {
         GrVkImageInfo backendCopy = imageInfo;
         GrBackendTexture backendTex = GrBackendTexture(kW, kH, backendCopy);
+        backendTex.setPixelConfig(kPixelConfig);
         tex = gpu->wrapRenderableBackendTexture(backendTex, 1, kAdopt_GrWrapOwnership);
         REPORTER_ASSERT(reporter, tex);
     }

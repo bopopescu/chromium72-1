@@ -5,12 +5,20 @@
 #include "ash/system/brightness/unified_brightness_slider_controller.h"
 
 #include "ash/shell.h"
-#include "ash/system/brightness/tray_brightness.h"
 #include "ash/system/brightness/unified_brightness_view.h"
 #include "ash/system/brightness_control_delegate.h"
 #include "ash/system/unified/unified_system_tray_model.h"
 
 namespace ash {
+namespace {
+
+// We don't let the screen brightness go lower than this when it's being
+// adjusted via the slider.  Otherwise, if the user doesn't know about the
+// brightness keys, they may turn the backlight off and not know how to turn it
+// back on.
+constexpr double kMinBrightnessPercent = 5.0;
+
+}  // namespace
 
 UnifiedBrightnessSliderController::UnifiedBrightnessSliderController(
     UnifiedSystemTrayModel* model)
@@ -37,13 +45,25 @@ void UnifiedBrightnessSliderController::SliderValueChanged(
     views::SliderChangeReason reason) {
   if (reason != views::VALUE_CHANGED_BY_USER)
     return;
+
   BrightnessControlDelegate* brightness_control_delegate =
       Shell::Get()->brightness_control_delegate();
-  if (brightness_control_delegate) {
-    double percent =
-        std::max<float>(value * 100.f, tray::kMinBrightnessPercent);
-    brightness_control_delegate->SetBrightnessPercent(percent, true);
+  if (!brightness_control_delegate)
+    return;
+
+  double percent = value * 100.;
+  // If previous percentage and current percentage are both below the minimum,
+  // we don't update the actual brightness.
+  if (percent < kMinBrightnessPercent &&
+      previous_percent_ < kMinBrightnessPercent) {
+    return;
   }
+  // We have to store previous manually set value because |old_value| might be
+  // set by UnifiedSystemTrayModel::Observer.
+  previous_percent_ = percent;
+
+  percent = std::max(kMinBrightnessPercent, percent);
+  brightness_control_delegate->SetBrightnessPercent(percent, true);
 }
 
 }  // namespace ash

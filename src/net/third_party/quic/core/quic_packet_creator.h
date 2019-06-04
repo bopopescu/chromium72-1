@@ -1,7 +1,7 @@
 // Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
-//
+
 // Accumulates frames for the next packet until more frames no longer fit or
 // it's time to create a packet from them.
 
@@ -20,7 +20,7 @@
 #include "net/third_party/quic/core/quic_pending_retransmission.h"
 #include "net/third_party/quic/platform/api/quic_export.h"
 
-namespace net {
+namespace quic {
 namespace test {
 class QuicPacketCreatorPeer;
 }
@@ -32,6 +32,9 @@ class QUIC_EXPORT_PRIVATE QuicPacketCreator {
       : public QuicConnectionCloseDelegateInterface {
    public:
     ~DelegateInterface() override {}
+    // Get a buffer of kMaxPacketSize bytes to serialize the next packet.
+    // If return nullptr, QuicPacketCreator will serialize on a stack buffer.
+    virtual char* GetPacketBuffer() = 0;
     // Called when a packet is serialized. Delegate does not take the ownership
     // of |serialized_packet|, but takes ownership of any frames it removes
     // from |packet.retransmittable_frames|.
@@ -52,6 +55,12 @@ class QUIC_EXPORT_PRIVATE QuicPacketCreator {
   QuicPacketCreator(QuicConnectionId connection_id,
                     QuicFramer* framer,
                     DelegateInterface* delegate);
+  QuicPacketCreator(QuicConnectionId connection_id,
+                    QuicFramer* framer,
+                    QuicRandom* random,
+                    DelegateInterface* delegate);
+  QuicPacketCreator(const QuicPacketCreator&) = delete;
+  QuicPacketCreator& operator=(const QuicPacketCreator&) = delete;
 
   ~QuicPacketCreator();
 
@@ -73,7 +82,8 @@ class QUIC_EXPORT_PRIVATE QuicPacketCreator {
   // The overhead the framing will add for a packet with one frame.
   static size_t StreamFramePacketOverhead(
       QuicTransportVersion version,
-      QuicConnectionIdLength connection_id_length,
+      QuicConnectionIdLength destination_connection_id_length,
+      QuicConnectionIdLength source_connection_id_length,
       bool include_version,
       bool include_diversification_nonce,
       QuicPacketNumberLength packet_number_length,
@@ -92,8 +102,14 @@ class QUIC_EXPORT_PRIVATE QuicPacketCreator {
                    QuicFrame* frame);
 
   // Returns true if current open packet can accommodate more stream frames of
-  // stream |id| at |offset|, false otherwise.
-  bool HasRoomForStreamFrame(QuicStreamId id, QuicStreamOffset offset);
+  // stream |id| at |offset| and data length |data_size|, false otherwise.
+  bool HasRoomForStreamFrame(QuicStreamId id,
+                             QuicStreamOffset offset,
+                             size_t data_size);
+
+  // Returns true if current open packet can accomoodate a message frame of
+  // |length|.
+  bool HasRoomForMessageFrame(QuicByteCount length);
 
   // Re-serializes frames with the original packet's packet number length.
   // Used for retransmitting packets to ensure they aren't too long.
@@ -156,14 +172,31 @@ class QUIC_EXPORT_PRIVATE QuicPacketCreator {
       bool ietf_quic,
       const ParsedQuicVersionVector& supported_versions);
 
-  // Creates a connectivity probing packet.
+  // Creates a connectivity probing packet for versions prior to version 99.
   OwningSerializedPacketPointer SerializeConnectivityProbingPacket();
+
+  // Create connectivity probing request and response packets using PATH
+  // CHALLENGE and PATH RESPONSE frames, respectively, for version 99/IETF QUIC.
+  // SerializePathChallengeConnectivityProbingPacket will pad the packet to be
+  // MTU bytes long.
+  OwningSerializedPacketPointer SerializePathChallengeConnectivityProbingPacket(
+      QuicPathFrameBuffer* payload);
+
+  // If |is_padded| is true then SerializePathResponseConnectivityProbingPacket
+  // will pad the packet to be MTU bytes long, else it will not pad the packet.
+  // |payloads| is cleared.
+  OwningSerializedPacketPointer SerializePathResponseConnectivityProbingPacket(
+      const QuicDeque<QuicPathFrameBuffer>& payloads,
+      const bool is_padded);
 
   // Returns a dummy packet that is valid but contains no useful information.
   static SerializedPacket NoPacket();
 
-  // Returns length of connection ID to send over the wire.
-  QuicConnectionIdLength GetConnectionIdLength() const;
+  // Returns length of destination connection ID to send over the wire.
+  QuicConnectionIdLength GetDestinationConnectionIdLength() const;
+
+  // Returns length of source connection ID to send over the wire.
+  QuicConnectionIdLength GetSourceConnectionIdLength() const;
 
   // Sets the encryption level that will be applied to new packets.
   void set_encryption_level(EncryptionLevel level) {
@@ -204,6 +237,9 @@ class QUIC_EXPORT_PRIVATE QuicPacketCreator {
   // Sets long header type of next constructed packets.
   void SetLongHeaderType(QuicLongHeaderType type);
 
+  // Returns the largest payload that will fit into a single MESSAGE frame.
+  QuicPacketLength GetLargestMessagePayload() const;
+
   void set_debug_delegate(DebugDelegate* debug_delegate) {
     debug_delegate_ = debug_delegate;
   }
@@ -213,6 +249,10 @@ class QUIC_EXPORT_PRIVATE QuicPacketCreator {
   }
 
   QuicByteCount pending_padding_bytes() const { return pending_padding_bytes_; }
+
+  QuicTransportVersion transport_version() const {
+    return framer_->transport_version();
+  }
 
  private:
   friend class test::QuicPacketCreatorPeer;
@@ -275,6 +315,7 @@ class QUIC_EXPORT_PRIVATE QuicPacketCreator {
   DelegateInterface* delegate_;
   DebugDelegate* debug_delegate_;
   QuicFramer* framer_;
+  QuicRandom* random_;
 
   // Controls whether version should be included while serializing the packet.
   // send_version_in_packet_ should never be read directly, use
@@ -319,10 +360,8 @@ class QUIC_EXPORT_PRIVATE QuicPacketCreator {
   // If true, packet_'s transmission type is only set by
   // SetPacketTransmissionType and does not get cleared in ClearPacket.
   bool can_set_transmission_type_;
-
-  DISALLOW_COPY_AND_ASSIGN(QuicPacketCreator);
 };
 
-}  // namespace net
+}  // namespace quic
 
 #endif  // NET_THIRD_PARTY_QUIC_CORE_QUIC_PACKET_CREATOR_H_

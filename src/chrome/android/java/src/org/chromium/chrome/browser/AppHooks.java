@@ -6,11 +6,15 @@ package org.chromium.chrome.browser;
 
 import android.app.Notification;
 import android.content.Intent;
-import android.os.Build;
+import android.content.pm.PackageInfo;
+import android.content.pm.PackageManager;
 import android.os.Handler;
 import android.os.Looper;
 import android.support.annotation.Nullable;
 import android.support.v4.content.ContextCompat;
+
+import com.google.android.gms.common.ConnectionResult;
+import com.google.android.gms.common.GoogleApiAvailability;
 
 import org.chromium.base.Callback;
 import org.chromium.base.ContextUtils;
@@ -18,7 +22,6 @@ import org.chromium.base.VisibleForTesting;
 import org.chromium.base.annotations.CalledByNative;
 import org.chromium.chrome.browser.banners.AppDetailsDelegate;
 import org.chromium.chrome.browser.customtabs.CustomTabsConnection;
-import org.chromium.chrome.browser.datausage.ExternalDataUseObserver;
 import org.chromium.chrome.browser.externalauth.ExternalAuthUtils;
 import org.chromium.chrome.browser.feedback.AsyncFeedbackSource;
 import org.chromium.chrome.browser.feedback.FeedbackCollector;
@@ -38,17 +41,18 @@ import org.chromium.chrome.browser.omaha.RequestGenerator;
 import org.chromium.chrome.browser.partnerbookmarks.PartnerBookmark;
 import org.chromium.chrome.browser.partnerbookmarks.PartnerBookmarksProviderIterator;
 import org.chromium.chrome.browser.partnercustomizations.PartnerBrowserCustomizations;
+import org.chromium.chrome.browser.password_manager.ManagePasswordsUIProvider;
 import org.chromium.chrome.browser.policy.PolicyAuditor;
 import org.chromium.chrome.browser.preferences.LocationSettings;
 import org.chromium.chrome.browser.rlz.RevenueStats;
 import org.chromium.chrome.browser.services.AndroidEduOwnerCheckCallback;
 import org.chromium.chrome.browser.signin.GoogleActivityController;
 import org.chromium.chrome.browser.survey.SurveyController;
-import org.chromium.chrome.browser.sync.GmsCoreSyncListener;
 import org.chromium.chrome.browser.tab.AuthenticatorNavigationInterceptor;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.webapps.GooglePlayWebApkInstallDelegate;
 import org.chromium.chrome.browser.webauth.Fido2ApiHandler;
+import org.chromium.chrome.browser.widget.FeatureHighlightProvider;
 import org.chromium.components.signin.AccountManagerDelegate;
 import org.chromium.components.signin.SystemAccountManagerDelegate;
 import org.chromium.policy.AppRestrictionsProvider;
@@ -75,9 +79,7 @@ public abstract class AppHooks {
 
     @CalledByNative
     public static AppHooks get() {
-        if (sInstance == null) {
-            sInstance = new AppHooksImpl();
-        }
+        if (sInstance == null) sInstance = new AppHooksImpl();
         return sInstance;
     }
 
@@ -145,26 +147,10 @@ public abstract class AppHooks {
     }
 
     /**
-     * @return An external observer of data use.
-     * @param nativePtr Pointer to the native ExternalDataUseObserver object.
-     */
-    public ExternalDataUseObserver createExternalDataUseObserver(long nativePtr) {
-        return new ExternalDataUseObserver(nativePtr);
-    }
-
-    /**
      * @return An instance of {@link FeedbackReporter} to report feedback.
      */
     public FeedbackReporter createFeedbackReporter() {
         return new FeedbackReporter() {};
-    }
-
-    /**
-     * @return An instance of GmsCoreSyncListener to notify GmsCore of sync encryption key changes.
-     *         Will be null if one is unavailable.
-     */
-    public GmsCoreSyncListener createGmsCoreSyncListener() {
-        return null;
     }
 
     /**
@@ -198,6 +184,14 @@ public abstract class AppHooks {
      */
     public LocaleManager createLocaleManager() {
         return new LocaleManager();
+    }
+
+    /**
+     * @return An instance of {@link ManagePasswordsUIProvider} that can be used to show one of
+     *         the two possible UI surfaces for managing passwords.
+     */
+    public ManagePasswordsUIProvider createManagePasswordsUIProvider() {
+        return new ManagePasswordsUIProvider();
     }
 
     /**
@@ -276,16 +270,6 @@ public abstract class AppHooks {
     }
 
     /**
-     * @return Whether the renderer should detect whether video elements are in fullscreen. The
-     * detection results can be retrieved through
-     * {@link WebContents.hasActiveEffectivelyFullscreenVideo()}.
-     */
-    @CalledByNative
-    public boolean shouldDetectVideoFullscreen() {
-        return Build.VERSION.SDK_INT >= Build.VERSION_CODES.O;
-    }
-
-    /**
      * @return A callback that will be run each time an offline page is saved in the custom tabs
      * namespace.
      */
@@ -340,5 +324,37 @@ public abstract class AppHooks {
      */
     public Fido2ApiHandler createFido2ApiHandler() {
         return new Fido2ApiHandler();
+    }
+
+    /**
+     * @return A new {@link FeatureHighlightProvider}.
+     */
+    public FeatureHighlightProvider createFeatureHighlightProvider() {
+        return new FeatureHighlightProvider();
+    }
+
+    /**
+     * Checks the Google Play services availability on the this device.
+     *
+     * This is a workaround for the
+     * versioned API of {@link GoogleApiAvailability#isGooglePlayServicesAvailable()}. The current
+     * Google Play services SDK version doesn't have this API yet.
+     *
+     * TODO(zqzhang): Remove this method after the SDK is updated.
+     *
+     * @return status code indicating whether there was an error. The possible return values are the
+     * same as {@link GoogleApiAvailability#isGooglePlayServicesAvailable()}.
+     */
+    public int isGoogleApiAvailableWithMinApkVersion(int minApkVersion) {
+        try {
+            PackageInfo gmsPackageInfo =
+                    ContextUtils.getApplicationContext().getPackageManager().getPackageInfo(
+                            GoogleApiAvailability.GOOGLE_PLAY_SERVICES_PACKAGE, /* flags= */ 0);
+            int apkVersion = gmsPackageInfo.versionCode;
+            if (apkVersion >= minApkVersion) return ConnectionResult.SUCCESS;
+        } catch (PackageManager.NameNotFoundException e) {
+            return ConnectionResult.SERVICE_MISSING;
+        }
+        return ConnectionResult.SERVICE_VERSION_UPDATE_REQUIRED;
     }
 }

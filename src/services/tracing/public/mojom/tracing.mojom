@@ -4,6 +4,7 @@
 
 module tracing.mojom;
 
+import "mojo/public/mojom/base/process_id.mojom";
 import "mojo/public/mojom/base/time.mojom";
 import "mojo/public/mojom/base/values.mojom";
 
@@ -20,8 +21,8 @@ enum TraceDataType {
   STRING
 };
 
-// Tracing agents, like |chrome|, |etw|, |battor|, and |cros|, use this
-// interface to register themselves to the tracing service.
+// Tracing agents, like |chrome|, |etw|, and |cros|, use this interface to
+// register themselves to the tracing service.
 //
 // This is a separate interface from |Coordinator| for security and privacy
 // reasons: although we want to let almost every process be able to send tracing
@@ -29,7 +30,8 @@ enum TraceDataType {
 // to collect traces from other processes using the |Coordinator| interface.
 interface AgentRegistry {
   RegisterAgent(Agent agent, string label, TraceDataType type,
-                bool supports_explicit_clock_sync_);
+                bool supports_explicit_clock_sync,
+                mojo_base.mojom.ProcessId pid);
 };
 
 // When the tracing service calls |StopAndFlush| on an agent, the agent begins

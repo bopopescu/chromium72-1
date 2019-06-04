@@ -13,6 +13,7 @@
 /gsutil.vpython recipes
 
 # Extensionless tools we want and support scripts.
+/autoninja*                   recipes
 /clang*                       recipes
 /depot-tools-auth             recipes
 /download_from_google_storage recipes
@@ -24,6 +25,7 @@
 /pylint*                      recipes
 /repo                         recipes
 /roll-dep*                    recipes
+/yapf*                        recipes
 
 # Symlinks
 /cbuildbot      recipes

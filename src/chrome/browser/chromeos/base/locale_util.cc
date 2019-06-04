@@ -7,18 +7,20 @@
 #include <utility>
 #include <vector>
 
-#include "base/task_scheduler/post_task.h"
+#include "base/task/post_task.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/chromeos/login/session/user_session_manager.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/common/pref_names.h"
+#include "components/language/core/common/locale_util.h"
 #include "components/prefs/pref_service.h"
+#include "components/translate/core/browser/translate_prefs.h"
 #include "content/public/browser/browser_thread.h"
 #include "ui/base/ime/chromeos/input_method_manager.h"
 #include "ui/base/ime/chromeos/input_method_util.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/resource/resource_bundle.h"
-#include "ui/gfx/platform_font_linux.h"
+#include "ui/gfx/platform_font_skia.h"
 
 namespace chromeos {
 
@@ -98,16 +100,25 @@ void FinishSwitchLanguage(std::unique_ptr<SwitchLanguageData> data) {
   // The font clean up of ResourceBundle should be done on UI thread, since the
   // cached fonts are thread unsafe.
   ui::ResourceBundle::GetSharedInstance().ReloadFonts();
-  gfx::PlatformFontLinux::ReloadDefaultFont();
+  gfx::PlatformFontSkia::ReloadDefaultFont();
   if (!data->callback.is_null())
     data->callback.Run(data->result);
+}
+
+// Get parsed list of preferred languages from the 'kLanguagePreferredLanguages'
+// setting.
+std::vector<std::string> GetPreferredLanguagesList(const PrefService* prefs) {
+  std::string preferred_languages_string =
+      prefs->GetString(prefs::kLanguagePreferredLanguages);
+  return base::SplitString(preferred_languages_string, ",",
+                           base::TRIM_WHITESPACE, base::SPLIT_WANT_NONEMPTY);
 }
 
 }  // namespace
 
 namespace locale_util {
 
-constexpr const char* kAllowedLocalesFallbackLocale = "en-US";
+constexpr const char* kAllowedUILanguageFallback = "en-US";
 
 LanguageSwitchResult::LanguageSwitchResult(const std::string& requested_locale,
                                            const std::string& loaded_locale,
@@ -129,47 +140,102 @@ void SwitchLanguage(const std::string& locale,
   base::Closure reloader(
       base::Bind(&SwitchLanguageDoReloadLocale, base::Unretained(data.get())));
   base::PostTaskWithTraitsAndReply(
-      FROM_HERE, {base::MayBlock(), base::TaskPriority::BACKGROUND}, reloader,
+      FROM_HERE, {base::MayBlock(), base::TaskPriority::BEST_EFFORT}, reloader,
       base::Bind(&FinishSwitchLanguage, base::Passed(std::move(data))));
 }
 
-bool IsAllowedLocale(const std::string& locale_code, const PrefService* prefs) {
-  const base::Value::ListStorage& allowed_locales =
-      prefs->GetList(prefs::kAllowedLocales)->GetList();
+bool IsAllowedLanguage(const std::string& language, const PrefService* prefs) {
+  const base::Value::ListStorage& allowed_languages =
+      prefs->GetList(prefs::kAllowedLanguages)->GetList();
 
-  // Empty list means all locales are allowed.
-  if (allowed_locales.empty())
+  // Empty list means all languages are allowed.
+  if (allowed_languages.empty())
     return true;
 
-  // Check if locale is in list of allowed locales.
-  return base::ContainsValue(allowed_locales, base::Value(locale_code));
+  // Check if locale is in list of allowed UI locales.
+  return base::ContainsValue(allowed_languages, base::Value(language));
 }
 
-std::string GetAllowedFallbackLocale(const PrefService* prefs) {
-  // Check the user's preferred languages if one of them is allowed.
+bool IsAllowedUILanguage(const std::string& language,
+                         const PrefService* prefs) {
+  return IsAllowedLanguage(language, prefs) && IsNativeUILanguage(language);
+}
+
+bool IsNativeUILanguage(const std::string& locale) {
+  std::string resolved_locale = locale;
+
+  // The locale is a UI locale or can be converted to a UI locale.
+  if (base::FeatureList::IsEnabled(translate::kRegionalLocalesAsDisplayUI))
+    return language::ConvertToActualUILocale(&resolved_locale);
+  return language::ConvertToFallbackUILocale(&resolved_locale);
+}
+
+void RemoveDisallowedLanguagesFromPreferred(PrefService* prefs) {
+  // Do nothing if all languages are allowed
+  if (prefs->GetList(prefs::kAllowedLanguages)->GetList().empty())
+    return;
+
+  std::vector<std::string> preferred_languages =
+      GetPreferredLanguagesList(prefs);
+  std::vector<std::string> updated_preferred_languages;
+  bool have_ui_language = false;
+  for (const std::string& language : preferred_languages) {
+    if (IsAllowedLanguage(language, prefs)) {
+      updated_preferred_languages.push_back(language);
+      if (IsNativeUILanguage(language))
+        have_ui_language = true;
+    }
+  }
+  if (!have_ui_language)
+    updated_preferred_languages.push_back(GetAllowedFallbackUILanguage(prefs));
+
+  // Do not set setting if it did not change to not cause the update callback
+  if (preferred_languages != updated_preferred_languages) {
+    prefs->SetString(prefs::kLanguagePreferredLanguages,
+                     base::JoinString(updated_preferred_languages, ","));
+  }
+}
+
+std::string GetAllowedFallbackUILanguage(const PrefService* prefs) {
+  // Check the user's preferred languages if one of them is an allowed UI
+  // locale.
+  std::string preferred_languages_string =
+      prefs->GetString(prefs::kLanguagePreferredLanguages);
+  std::vector<std::string> preferred_languages =
+      GetPreferredLanguagesList(prefs);
+  for (const std::string& language : preferred_languages) {
+    if (IsAllowedUILanguage(language, prefs))
+      return language;
+  }
+
+  // Check the allowed UI locales and return the first valid entry.
+  const base::Value::ListStorage& allowed_languages =
+      prefs->GetList(prefs::kAllowedLanguages)->GetList();
+  for (const base::Value& value : allowed_languages) {
+    const std::string& locale = value.GetString();
+    if (IsAllowedUILanguage(locale, prefs))
+      return locale;
+  }
+
+  // default fallback
+  return kAllowedUILanguageFallback;
+}
+
+bool AddLocaleToPreferredLanguages(const std::string& locale,
+                                   PrefService* prefs) {
   std::string preferred_languages_string =
       prefs->GetString(prefs::kLanguagePreferredLanguages);
   std::vector<std::string> preferred_languages =
       base::SplitString(preferred_languages_string, ",", base::TRIM_WHITESPACE,
                         base::SPLIT_WANT_NONEMPTY);
-  for (const std::string& language : preferred_languages) {
-    if (IsAllowedLocale(language, prefs))
-      return language;
+  if (!base::ContainsValue(preferred_languages, locale)) {
+    preferred_languages.push_back(locale);
+    prefs->SetString(prefs::kLanguagePreferredLanguages,
+                     base::JoinString(preferred_languages, ","));
+    return true;
   }
 
-  // Check the allowed languages and return the first valid entry.
-  const base::Value::ListStorage& allowed_locales =
-      prefs->GetList(prefs::kAllowedLocales)->GetList();
-  const std::vector<std::string>& available_locales =
-      l10n_util::GetAvailableLocales();
-  for (const base::Value& value : allowed_locales) {
-    const std::string& locale = value.GetString();
-    if (base::ContainsValue(available_locales, locale))
-      return locale;
-  }
-
-  // default fallback
-  return kAllowedLocalesFallbackLocale;
+  return false;
 }
 
 }  // namespace locale_util

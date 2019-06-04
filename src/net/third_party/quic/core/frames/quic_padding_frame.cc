@@ -4,9 +4,7 @@
 
 #include "net/third_party/quic/core/frames/quic_padding_frame.h"
 
-using std::string;
-
-namespace net {
+namespace quic {
 
 std::ostream& operator<<(std::ostream& os,
                          const QuicPaddingFrame& padding_frame) {
@@ -14,4 +12,4 @@ std::ostream& operator<<(std::ostream& os,
   return os;
 }
 
-}  // namespace net
+}  // namespace quic

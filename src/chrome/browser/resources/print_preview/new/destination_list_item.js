@@ -54,10 +54,11 @@ Polymer({
     'onDestinationPropertiesChange_(' +
         'destination.displayName, destination.isOfflineOrInvalid, ' +
         'destination.isExtension)',
+    'updateHighlightsAndHint_(destination, searchQuery)',
   ],
 
-  /** @private {boolean} */
-  highlighted_: false,
+  /** @private {!Array<!Node>} */
+  highlights_: [],
 
   /** @private */
   onDestinationPropertiesChange_: function() {
@@ -71,12 +72,6 @@ Polymer({
           'url(chrome://extension-icon/' + this.destination.extensionId +
           '/48/1) 2x)';
     }
-  },
-
-  /** @private */
-  onLearnMoreLinkClick_: function() {
-    print_preview.NativeLayer.getInstance().forceOpenNewTab(
-        loadTimeData.getString('gcpCertificateErrorLearnMoreURL'));
   },
 
   // <if expr="chromeos">
@@ -113,9 +108,11 @@ Polymer({
   },
   // </if>
 
-  update: function() {
+  /** @private */
+  updateHighlightsAndHint_: function() {
     this.updateSearchHint_();
-    this.updateHighlighting_();
+    cr.search_highlight_utils.removeHighlights(this.highlights_);
+    this.highlights_ = this.updateHighlighting_().highlights;
   },
 
   /** @private */
@@ -127,9 +124,12 @@ Polymer({
             .join(' ');
   },
 
-  /** @private */
+  /**
+   * @return {!print_preview.HighlightResults} The highlight wrappers and
+   *     search bubbles that were created.
+   * @private
+   */
   updateHighlighting_: function() {
-    this.highlighted_ = print_preview.updateHighlights(
-        this, this.searchQuery, this.highlighted_);
+    return print_preview.updateHighlights(this, this.searchQuery);
   },
 });

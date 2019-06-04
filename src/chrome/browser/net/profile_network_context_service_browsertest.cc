@@ -11,6 +11,7 @@
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
+#include "base/stl_util.h"
 #include "base/strings/string_piece.h"
 #include "base/strings/string_split.h"
 #include "base/threading/thread_restrictions.h"
@@ -108,12 +109,7 @@ IN_PROC_BROWSER_TEST_P(ProfileNetworkContextServiceBrowsertest, BrotliEnabled) {
   std::unique_ptr<network::ResourceRequest> request =
       std::make_unique<network::ResourceRequest>();
   request->url = https_server.GetURL("/echoheader?accept-encoding");
-// On OSX, test certs aren't currently hooked up correctly when using the
-// network service.
-// TODO(mmenke): Remove this line once that's fixed.
-#if defined(OS_MACOSX)
-  request->load_flags |= net::LOAD_IGNORE_ALL_CERT_ERRORS;
-#endif  // !defined(OS_MACOSX)
+
   content::SimpleURLLoaderTestHelper simple_loader_helper;
   std::unique_ptr<network::SimpleURLLoader> simple_loader =
       network::SimpleURLLoader::Create(std::move(request),
@@ -125,8 +121,7 @@ IN_PROC_BROWSER_TEST_P(ProfileNetworkContextServiceBrowsertest, BrotliEnabled) {
   std::vector<std::string> encodings =
       base::SplitString(*simple_loader_helper.response_body(), ",",
                         base::TRIM_WHITESPACE, base::SPLIT_WANT_NONEMPTY);
-  EXPECT_TRUE(encodings.end() !=
-              std::find(encodings.begin(), encodings.end(), "br"));
+  EXPECT_TRUE(base::ContainsValue(encodings, "br"));
 }
 
 // Test subclass that adds switches::kDiskCacheDir to the command line, to make

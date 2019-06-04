@@ -5,12 +5,13 @@
 package org.chromium.chrome.browser.compositor.bottombar;
 
 import android.content.Context;
-import android.graphics.Color;
+import android.support.annotation.Nullable;
 import android.view.ViewGroup;
 
 import org.chromium.base.ApiCompatibilityUtils;
 import org.chromium.base.VisibleForTesting;
 import org.chromium.chrome.R;
+import org.chromium.chrome.browser.ChromeActivity;
 import org.chromium.chrome.browser.compositor.bottombar.OverlayPanel.PanelState;
 import org.chromium.chrome.browser.compositor.bottombar.OverlayPanel.StateChangeReason;
 import org.chromium.chrome.browser.util.MathUtils;
@@ -170,13 +171,13 @@ abstract class OverlayPanelBase {
      * @param reason The reason for the change of panel state.
      * @param animate If the panel should animate closed.
      */
-    protected abstract void closePanel(StateChangeReason reason, boolean animate);
+    protected abstract void closePanel(@StateChangeReason int reason, boolean animate);
 
     /**
      * Event notification that the Panel did get closed.
      * @param reason The reason the panel is closing.
      */
-    protected abstract void onClosed(StateChangeReason reason);
+    protected abstract void onClosed(@StateChangeReason int reason);
 
     /**
      * TODO(mdjones): This method should be removed from this class.
@@ -296,7 +297,7 @@ abstract class OverlayPanelBase {
     /**
      * @return The fullscreen width.
      */
-    private float getFullscreenWidth() {
+    public float getFullscreenWidth() {
         return mLayoutWidth;
     }
 
@@ -508,18 +509,6 @@ abstract class OverlayPanelBase {
         return mBasePageBrightness;
     }
 
-    /**
-     * @return The color to fill the base page when viewport is resized/changes orientation.
-     */
-    public int getBasePageBackgroundColor() {
-        // TODO(pedrosimonetti): Get the color from the CVC and apply a proper brightness transform.
-        // NOTE(pedrosimonetti): Assumes the background color of the base page to be white (255)
-        // and applies a simple brightness transformation based on the base page value.
-        int value = Math.round(255 * mBasePageBrightness);
-        value = MathUtils.clamp(value, 0, 255);
-        return Color.rgb(value, value, value);
-    }
-
     // --------------------------------------------------------------------------------------------
     // Progress Bar states
     // --------------------------------------------------------------------------------------------
@@ -587,7 +576,7 @@ abstract class OverlayPanelBase {
      * @param state The panel state to transition to.
      * @param reason The reason for a change in the panel's state.
      */
-    protected void setPanelState(PanelState state, StateChangeReason reason) {
+    protected void setPanelState(PanelState state, @StateChangeReason int reason) {
         if (state == PanelState.CLOSED) {
             mHeight = 0;
             onClosed(reason);
@@ -657,7 +646,7 @@ abstract class OverlayPanelBase {
      * @param state The state whose height will be calculated.
      * @return The height of the Overlay Panel in dps for a given |state|.
      */
-    public float getPanelHeightFromState(PanelState state) {
+    public float getPanelHeightFromState(@Nullable PanelState state) {
         if (state == PanelState.PEEKED) {
             return getPeekedHeight();
         } else if (state == PanelState.EXPANDED) {
@@ -701,8 +690,10 @@ abstract class OverlayPanelBase {
         // constructor, once we are able to get the Activity during instantiation. The Activity
         // is needed in order to get the correct height of the Toolbar, which varies depending
         // on the Activity (WebApps have a smaller toolbar for example).
-        mToolbarHeight = mContext.getResources().getDimension(
-                getControlContainerHeightResource()) * mPxToDp;
+        int toolbarHeightResource = getControlContainerHeightResource();
+        mToolbarHeight = toolbarHeightResource == ChromeActivity.NO_CONTROL_CONTAINER
+                ? 0
+                : mContext.getResources().getDimension(toolbarHeightResource) * mPxToDp;
     }
 
     /**
@@ -729,9 +720,7 @@ abstract class OverlayPanelBase {
         PanelState nextState = PanelState.values()[0];
         PanelState prevState = nextState;
         for (PanelState state : PanelState.values()) {
-            if (!isValidUiState(state)) {
-                continue;
-            }
+            if (!isValidUiState(state)) continue;
             prevState = nextState;
             nextState = state;
             // The values in PanelState are ascending, they should be kept that way in order for
@@ -808,6 +797,8 @@ abstract class OverlayPanelBase {
         } else if (endState == PanelState.MAXIMIZED) {
             updatePanelForMaximization(percentage);
         }
+
+        updateStatusBar();
     }
 
     /**
@@ -840,9 +831,7 @@ abstract class OverlayPanelBase {
         // Iterate over all states and find the largest one which is being
         // transitioned to/from.
         for (PanelState state : PanelState.values()) {
-            if (!isValidUiState(state)) {
-                continue;
-            }
+            if (!isValidUiState(state)) continue;
             if (panelHeight <= getPanelHeightFromState(state)) {
                 stateFound = state;
                 break;
@@ -1020,20 +1009,25 @@ abstract class OverlayPanelBase {
         updateBarShadow();
     }
 
+    /** Updates the Status Bar. */
+    protected void updateStatusBar() {}
+
+    /** @return the maximum brightness of the base page. */
+    protected float getMaxBasePageBrightness() {
+        return BASE_PAGE_BRIGHTNESS_STATE_PEEKED;
+    }
+
+    /** @return the minimum brightness of the base page. */
+    protected float getMinBasePageBrightness() {
+        return BASE_PAGE_BRIGHTNESS_STATE_MAXIMIZED;
+    }
+
     private float getBarHeightExpanded() {
-        if (isFullWidthSizePanel()) {
-            return mBarHeightExpanded;
-        } else {
-            return mBarHeightPeeking;
-        }
+        return isFullWidthSizePanel() ? mBarHeightExpanded : mBarHeightPeeking;
     }
 
     private float getBarHeightMaximized() {
-        if (isFullWidthSizePanel()) {
-            return mBarHeightMaximized;
-        } else {
-            return mBarHeightPeeking;
-        }
+        return isFullWidthSizePanel() ? mBarHeightMaximized : mBarHeightPeeking;
     }
 
     /**

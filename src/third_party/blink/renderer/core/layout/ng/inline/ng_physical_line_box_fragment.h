@@ -12,20 +12,39 @@
 
 namespace blink {
 
+class NGLineBoxFragmentBuilder;
+
 class CORE_EXPORT NGPhysicalLineBoxFragment final
     : public NGPhysicalContainerFragment {
  public:
-  // This modifies the passed-in children vector.
-  NGPhysicalLineBoxFragment(const ComputedStyle&,
-                            NGStyleVariant style_variant,
-                            NGPhysicalSize size,
-                            Vector<scoped_refptr<NGPhysicalFragment>>& children,
-                            const NGPhysicalOffsetRect& contents_visual_rect,
-                            const NGPhysicalOffsetRect& scrollable_overflow,
-                            const NGLineHeightMetrics&,
-                            TextDirection base_direction,
-                            scoped_refptr<NGBreakToken> break_token = nullptr);
+  enum NGLineBoxType {
+    kNormalLineBox,
+    // This is an "empty" line box, or "certain zero-height line boxes":
+    // https://drafts.csswg.org/css2/visuren.html#phantom-line-box
+    // that are ignored for margin collapsing and for other purposes.
+    // https://drafts.csswg.org/css2/box.html#collapsing-margins
+    // Also see |NGInlineItem::IsEmptyItem|.
+    kEmptyLineBox
+  };
 
+  static scoped_refptr<const NGPhysicalLineBoxFragment> Create(
+      NGLineBoxFragmentBuilder* builder);
+
+  ~NGPhysicalLineBoxFragment() {
+    for (const NGLinkStorage& child : Children())
+      child.fragment->Release();
+  }
+
+  NGLineBoxType LineBoxType() const {
+    return static_cast<NGLineBoxType>(sub_type_);
+  }
+  bool IsEmptyLineBox() const { return LineBoxType() == kEmptyLineBox; }
+
+  ChildLinkList Children() const final {
+    return ChildLinkList(num_children_, &children_[0]);
+  }
+
+  const ComputedStyle& Style() const { return *style_; }
   const NGLineHeightMetrics& Metrics() const { return metrics_; }
 
   // The base direction of this line. Also known as the paragraph direction.
@@ -36,37 +55,36 @@ class CORE_EXPORT NGPhysicalLineBoxFragment final
   }
 
   // Compute baseline for the specified baseline type.
-  LayoutUnit BaselinePosition(FontBaseline) const;
+  NGLineHeightMetrics BaselineMetrics(FontBaseline) const;
 
-  // VisualRect of itself including contents, in the local coordinate.
-  NGPhysicalOffsetRect VisualRectWithContents() const;
+  // Ink overflow of itself including contents, in the local coordinate.
+  NGPhysicalOffsetRect InkOverflow() const;
+
+  // Ink overflow of children in local coordinates.
+  NGPhysicalOffsetRect ContentsInkOverflow() const;
 
   // Scrollable overflow. including contents, in the local coordinate.
-  NGPhysicalOffsetRect ScrollableOverflow() const {
-    return scrollable_overflow_;
-  }
+  // ScrollableOverflow is not precomputed/cached because it cannot be computed
+  // when LineBox is generated because it needs container dimensions to
+  // resolve relative position of its children.
+  NGPhysicalOffsetRect ScrollableOverflow(
+      const ComputedStyle* container_style,
+      NGPhysicalSize container_physical_size) const;
 
   // Returns the first/last leaf fragment in the line in logical order. Returns
   // nullptr if the line box is empty.
   const NGPhysicalFragment* FirstLogicalLeaf() const;
   const NGPhysicalFragment* LastLogicalLeaf() const;
-  // Returns the last leaf fragment in the line in logical order except line
-  // break. Returns nullptr if such fragment doesn't exist.
-  const NGPhysicalFragment* LastLogicalLeafIgnoringLineBreak() const;
 
   // Whether the content soft-wraps to the next line.
   bool HasSoftWrapToNextLine() const;
 
-  scoped_refptr<NGPhysicalFragment> CloneWithoutOffset() const {
-    Vector<scoped_refptr<NGPhysicalFragment>> children_copy(children_);
-    return base::AdoptRef(new NGPhysicalLineBoxFragment(
-        Style(), StyleVariant(), size_, children_copy, contents_visual_rect_,
-        scrollable_overflow_, metrics_, BaseDirection(), break_token_));
-  }
-
  private:
-  NGPhysicalOffsetRect scrollable_overflow_;
+  NGPhysicalLineBoxFragment(NGLineBoxFragmentBuilder* builder);
+
+  scoped_refptr<const ComputedStyle> style_;
   NGLineHeightMetrics metrics_;
+  NGLinkStorage children_[];
 };
 
 DEFINE_TYPE_CASTS(NGPhysicalLineBoxFragment,

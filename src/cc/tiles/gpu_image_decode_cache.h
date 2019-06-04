@@ -11,7 +11,7 @@
 
 #include "base/containers/mru_cache.h"
 #include "base/memory/discardable_memory.h"
-#include "base/memory/memory_coordinator_client.h"
+#include "base/memory/memory_pressure_listener.h"
 #include "base/synchronization/lock.h"
 #include "base/trace_event/memory_dump_provider.h"
 #include "cc/cc_export.h"
@@ -97,8 +97,7 @@ namespace cc {
 //
 class CC_EXPORT GpuImageDecodeCache
     : public ImageDecodeCache,
-      public base::trace_event::MemoryDumpProvider,
-      public base::MemoryCoordinatorClient {
+      public base::trace_event::MemoryDumpProvider {
  public:
   enum class DecodeTaskType { kPartOfUploadTask, kStandAloneDecodeTask };
 
@@ -106,8 +105,13 @@ class CC_EXPORT GpuImageDecodeCache
                                bool use_transfer_cache,
                                SkColorType color_type,
                                size_t max_working_set_bytes,
-                               int max_texture_size);
+                               int max_texture_size,
+                               PaintImage::GeneratorClientId client_id,
+                               sk_sp<SkColorSpace> target_color_space);
   ~GpuImageDecodeCache() override;
+
+  // Returns the GL texture ID backing the given SkImage.
+  static GrGLuint GlIdFromSkImage(const SkImage* image);
 
   // ImageDecodeCache overrides.
 
@@ -126,14 +130,16 @@ class CC_EXPORT GpuImageDecodeCache
       bool aggressively_free_resources) override;
   void ClearCache() override;
   size_t GetMaximumMemoryLimitBytes() const override;
+  bool UseCacheForDrawImage(const DrawImage& image) const override;
 
   // MemoryDumpProvider overrides.
   bool OnMemoryDump(const base::trace_event::MemoryDumpArgs& args,
                     base::trace_event::ProcessMemoryDump* pmd) override;
 
-  // base::MemoryCoordinatorClient overrides.
-  void OnMemoryStateChange(base::MemoryState state) override;
-  void OnPurgeMemory() override;
+  // TODO(gyuyoung): OnMemoryPressure is deprecated. So this should be removed
+  // when the memory coordinator is enabled by default.
+  void OnMemoryPressure(
+      base::MemoryPressureListener::MemoryPressureLevel level);
 
   // Called by Decode / Upload tasks.
   void DecodeImageInTask(const DrawImage& image, TaskType task_type);
@@ -147,8 +153,9 @@ class CC_EXPORT GpuImageDecodeCache
   bool SupportsColorSpaceConversion() const;
 
   // For testing only.
-  void SetWorkingSetLimitForTesting(size_t limit) {
-    max_working_set_bytes_ = limit;
+  void SetWorkingSetLimitsForTesting(size_t bytes_limit, size_t items_limit) {
+    max_working_set_bytes_ = bytes_limit;
+    max_working_set_items_ = items_limit;
   }
   size_t GetWorkingSetBytesForTesting() const { return working_set_bytes_; }
   size_t GetNumCacheEntriesForTesting() const {
@@ -161,6 +168,9 @@ class CC_EXPORT GpuImageDecodeCache
   bool IsInInUseCacheForTesting(const DrawImage& image) const;
   bool IsInPersistentCacheForTesting(const DrawImage& image) const;
   sk_sp<SkImage> GetSWImageDecodeForTesting(const DrawImage& image);
+  size_t paint_image_entries_count_for_testing() const {
+    return paint_image_entries_.size();
+  }
 
  private:
   enum class DecodedDataMode { kGpu, kCpu, kTransferCache };
@@ -262,6 +272,14 @@ class CC_EXPORT GpuImageDecodeCache
       return transfer_cache_id_;
     }
 
+    void set_unmipped_image(sk_sp<SkImage> image) {
+      unmipped_image_ = std::move(image);
+    }
+    sk_sp<SkImage> take_unmipped_image() {
+      DCHECK(!is_locked_);
+      return std::move(unmipped_image_);
+    }
+
    private:
     // Used for internal DCHECKs only.
     enum class Mode {
@@ -281,25 +299,30 @@ class CC_EXPORT GpuImageDecodeCache
 
     // Used if |mode_| == kTransferCache.
     base::Optional<uint32_t> transfer_cache_id_;
+
+    // The original un-mipped image, retained until it can be safely deleted.
+    sk_sp<SkImage> unmipped_image_;
   };
 
   struct ImageData : public base::RefCountedThreadSafe<ImageData> {
-    ImageData(DecodedDataMode mode,
+    ImageData(PaintImage::Id paint_image_id,
+              DecodedDataMode mode,
               size_t size,
-              const gfx::ColorSpace& target_color_space,
               SkFilterQuality quality,
-              int mip_level,
+              int upload_scale_mip_level,
+              bool needs_mips,
               bool is_bitmap_backed);
 
     bool IsGpuOrTransferCache() const;
     bool HasUploadedData() const;
     void ValidateBudgeted() const;
 
+    const PaintImage::Id paint_image_id;
     const DecodedDataMode mode;
     const size_t size;
-    gfx::ColorSpace target_color_space;
     SkFilterQuality quality;
-    int mip_level;
+    int upload_scale_mip_level;
+    bool needs_mips = false;
     bool is_bitmap_backed;
     bool is_budgeted = false;
 
@@ -339,9 +362,8 @@ class CC_EXPORT GpuImageDecodeCache
     explicit InUseCacheKey(const DrawImage& draw_image);
 
     PaintImage::FrameKey frame_key;
-    int mip_level;
+    int upload_scale_mip_level;
     SkFilterQuality filter_quality;
-    gfx::ColorSpace target_color_space;
   };
   struct InUseCacheKeyHash {
     size_t operator()(const InUseCacheKey&) const;
@@ -364,10 +386,13 @@ class CC_EXPORT GpuImageDecodeCache
                                            const TracingInfo& tracing_info,
                                            DecodeTaskType task_type);
 
-  void RefImageDecode(const DrawImage& draw_image);
-  void UnrefImageDecode(const DrawImage& draw_image);
-  void RefImage(const DrawImage& draw_image);
-  void UnrefImageInternal(const DrawImage& draw_image);
+  void RefImageDecode(const DrawImage& draw_image,
+                      const InUseCacheKey& cache_key);
+  void UnrefImageDecode(const DrawImage& draw_image,
+                        const InUseCacheKey& cache_key);
+  void RefImage(const DrawImage& draw_image, const InUseCacheKey& cache_key);
+  void UnrefImageInternal(const DrawImage& draw_image,
+                          const InUseCacheKey& cache_key);
 
   // Called any time the ownership of an object changed. This includes changes
   // to ref-count or to orphaned status.
@@ -391,7 +416,8 @@ class CC_EXPORT GpuImageDecodeCache
 
   // Finds the ImageData that should be used for the given DrawImage. Looks
   // first in the |in_use_cache_|, and then in the |persistent_cache_|.
-  ImageData* GetImageDataForDrawImage(const DrawImage& image);
+  ImageData* GetImageDataForDrawImage(const DrawImage& image,
+                                      const InUseCacheKey& key);
 
   // Returns true if the given ImageData can be used to draw the specified
   // DrawImage.
@@ -434,13 +460,19 @@ class CC_EXPORT GpuImageDecodeCache
   using PersistentCache = base::HashingMRUCache<PaintImage::FrameKey,
                                                 scoped_refptr<ImageData>,
                                                 PaintImage::FrameKeyHash>;
-  PersistentCache::iterator RemoveFromPersistentCache(
-      PersistentCache::iterator it);
+  void AddToPersistentCache(const DrawImage& draw_image,
+                            scoped_refptr<ImageData> data);
+  template <typename Iterator>
+  Iterator RemoveFromPersistentCache(Iterator it);
+
+  // Adds mips to an image if required.
+  void UpdateMipsIfNeeded(const DrawImage& draw_image, ImageData* image_data);
 
   const SkColorType color_type_;
   const bool use_transfer_cache_ = false;
   viz::RasterContextProvider* context_;
   int max_texture_size_ = 0;
+  const PaintImage::GeneratorClientId generator_client_id_;
 
   // All members below this point must only be accessed while holding |lock_|.
   // The exception are const members like |normal_max_cache_bytes_| that can
@@ -452,6 +484,10 @@ class CC_EXPORT GpuImageDecodeCache
   struct CacheEntries {
     PaintImage::ContentId content_ids[2] = {PaintImage::kInvalidContentId,
                                             PaintImage::kInvalidContentId};
+
+    // The number of cache entries for a PaintImage. Note that there can be
+    // multiple entries per content_id.
+    size_t count = 0u;
   };
   // A map of PaintImage::Id to entries for this image in the
   // |persistent_cache_|.
@@ -464,8 +500,9 @@ class CC_EXPORT GpuImageDecodeCache
   InUseCache in_use_cache_;
 
   size_t max_working_set_bytes_ = 0;
+  size_t max_working_set_items_ = 0;
   size_t working_set_bytes_ = 0;
-  base::MemoryState memory_state_ = base::MemoryState::NORMAL;
+  size_t working_set_items_ = 0;
   bool aggressively_freeing_resources_ = false;
 
   // We can't modify GPU backed SkImages without holding the context lock, so
@@ -473,6 +510,7 @@ class CC_EXPORT GpuImageDecodeCache
   std::vector<SkImage*> images_pending_complete_lock_;
   std::vector<SkImage*> images_pending_unlock_;
   std::vector<sk_sp<SkImage>> images_pending_deletion_;
+  const sk_sp<SkColorSpace> target_color_space_;
 
   std::vector<uint32_t> ids_pending_unlock_;
   std::vector<uint32_t> ids_pending_deletion_;
@@ -480,6 +518,8 @@ class CC_EXPORT GpuImageDecodeCache
   // Records the maximum number of items in the cache over the lifetime of the
   // cache. This is updated anytime we are requested to reduce cache usage.
   size_t lifetime_max_items_in_cache_ = 0u;
+
+  std::unique_ptr<base::MemoryPressureListener> memory_pressure_listener_;
 };
 
 }  // namespace cc

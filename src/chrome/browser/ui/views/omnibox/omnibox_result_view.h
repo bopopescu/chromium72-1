@@ -22,7 +22,9 @@
 #include "ui/views/controls/image_view.h"
 #include "ui/views/view.h"
 
+class OmniboxMatchCellView;
 class OmniboxPopupContentsView;
+class OmniboxTabSwitchButton;
 enum class OmniboxPart;
 enum class OmniboxPartState;
 enum class OmniboxTint;
@@ -30,9 +32,6 @@ enum class OmniboxTint;
 namespace gfx {
 class Image;
 }
-
-class OmniboxMatchCellView;
-class OmniboxTabSwitchButton;
 
 class OmniboxResultView : public views::View,
                           private gfx::AnimationDelegate,
@@ -56,6 +55,9 @@ class OmniboxResultView : public views::View,
   // Invoked when this result view has been selected.
   void OnSelected();
 
+  // Whether |this| matches the model's selected index.
+  bool IsSelected() const;
+
   OmniboxPartState GetThemeState() const;
   OmniboxTint GetTint() const;
 
@@ -70,7 +72,11 @@ class OmniboxResultView : public views::View,
   // Called when tab switch button pressed, due to being a listener.
   void ButtonPressed(views::Button* sender, const ui::Event& event) override;
 
+  // Called to indicate tab switch button has been focused.
+  void ProvideButtonFocusHint();
+
   // views::View:
+  void Layout() override;
   bool OnMousePressed(const ui::MouseEvent& event) override;
   bool OnMouseDragged(const ui::MouseEvent& event) override;
   void OnMouseReleased(const ui::MouseEvent& event) override;
@@ -89,14 +95,12 @@ class OmniboxResultView : public views::View,
   // Sets the hovered state of this result.
   void SetHovered(bool hovered);
 
-  // Whether |this| matches the model's selected index.
-  bool IsSelected() const;
-
-  // Call model's OpenMatch() with the selected index and provided disposition.
-  void OpenMatch(WindowOpenDisposition disposition);
+  // Call model's OpenMatch() with the selected index and provided disposition
+  // and timestamp the match was selected (base::TimeTicks() if unknown).
+  void OpenMatch(WindowOpenDisposition disposition,
+                 base::TimeTicks match_selection_timestamp);
 
   // views::View:
-  void Layout() override;
   const char* GetClassName() const override;
   void OnBoundsChanged(const gfx::Rect& previous_bounds) override;
 

@@ -10,9 +10,9 @@
 #include "base/containers/id_map.h"
 #include "base/single_thread_task_runner.h"
 #include "content/child/child_thread_impl.h"
-#include "content/child/scoped_child_process_reference.h"
 #include "content/common/service_worker/embedded_worker.mojom.h"
 #include "mojo/public/cpp/bindings/binding.h"
+#include "third_party/blink/public/common/privacy_preferences.h"
 #include "third_party/blink/public/mojom/service_worker/service_worker_installed_scripts_manager.mojom.h"
 #include "third_party/blink/public/web/worker_content_settings_proxy.mojom.h"
 
@@ -59,7 +59,6 @@ class EmbeddedWorkerInstanceClientImpl
   // TODO(shimazu): Create a service worker's execution context by this method
   // instead of just creating an instance of EmbeddedWorkerInstanceClient.
   static void Create(
-      base::TimeTicks blink_initialized_time,
       scoped_refptr<base::SingleThreadTaskRunner> io_thread_runner,
       mojom::EmbeddedWorkerInstanceClientRequest request);
 
@@ -68,42 +67,33 @@ class EmbeddedWorkerInstanceClientImpl
   // Called from ServiceWorkerContextClient.
   void WorkerContextDestroyed();
 
+  // mojom::EmbeddedWorkerInstanceClient implementation (partially exposed to
+  // public)
+  void StopWorker() override;
+
  private:
-  // A thin wrapper of WebEmbeddedWorker which also adds and releases process
-  // references automatically.
-  class WorkerWrapper {
-   public:
-    explicit WorkerWrapper(std::unique_ptr<blink::WebEmbeddedWorker> worker);
-    ~WorkerWrapper();
-
-    blink::WebEmbeddedWorker* worker() { return worker_.get(); }
-
-   private:
-    ScopedChildProcessReference process_ref_;
-    std::unique_ptr<blink::WebEmbeddedWorker> worker_;
-  };
-
   EmbeddedWorkerInstanceClientImpl(
       scoped_refptr<base::SingleThreadTaskRunner> io_thread_runner,
       mojom::EmbeddedWorkerInstanceClientRequest request);
 
   // mojom::EmbeddedWorkerInstanceClient implementation
   void StartWorker(mojom::EmbeddedWorkerStartParamsPtr params) override;
-  void StopWorker() override;
   void ResumeAfterDownload() override;
   void AddMessageToConsole(blink::WebConsoleMessage::Level level,
                            const std::string& message) override;
   void BindDevToolsAgent(
+      blink::mojom::DevToolsAgentHostAssociatedPtrInfo host,
       blink::mojom::DevToolsAgentAssociatedRequest request) override;
 
   // Handler of connection error bound to |binding_|.
   void OnError();
 
-  std::unique_ptr<WorkerWrapper> StartWorkerContext(
+  std::unique_ptr<blink::WebEmbeddedWorker> StartWorkerContext(
       mojom::EmbeddedWorkerStartParamsPtr params,
       std::unique_ptr<ServiceWorkerContextClient> context_client,
       blink::mojom::CacheStoragePtrInfo cache_storage,
-      service_manager::mojom::InterfaceProviderPtrInfo interface_provider);
+      service_manager::mojom::InterfaceProviderPtrInfo interface_provider,
+      blink::PrivacyPreferences privacy_preferences);
 
   mojo::Binding<mojom::EmbeddedWorkerInstanceClient> binding_;
 
@@ -112,10 +102,7 @@ class EmbeddedWorkerInstanceClientImpl
   std::unique_ptr<EmbeddedWorkerInstanceClientImpl> temporal_self_;
 
   // nullptr means the worker is not running.
-  std::unique_ptr<WorkerWrapper> wrapper_;
-
-  // For UMA.
-  base::TimeTicks blink_initialized_time_;
+  std::unique_ptr<blink::WebEmbeddedWorker> worker_;
 
   scoped_refptr<base::SingleThreadTaskRunner> io_thread_runner_;
 

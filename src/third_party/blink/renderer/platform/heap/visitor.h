@@ -120,8 +120,6 @@ class PLATFORM_EXPORT Visitor {
     static_assert(IsGarbageCollectedType<T>::value,
                   "T needs to be a garbage collected object");
 
-    if (!backing_store)
-      return;
     VisitBackingStoreStrongly(reinterpret_cast<void*>(backing_store),
                               reinterpret_cast<void**>(backing_store_slot),
                               TraceDescriptorFor(backing_store));
@@ -136,8 +134,6 @@ class PLATFORM_EXPORT Visitor {
     static_assert(IsGarbageCollectedType<T>::value,
                   "T needs to be a garbage collected object");
 
-    if (!backing_store)
-      return;
     VisitBackingStoreWeakly(reinterpret_cast<void*>(backing_store),
                             reinterpret_cast<void**>(backing_store_slot),
                             TraceTrait<T>::GetTraceDescriptor(
@@ -151,8 +147,6 @@ class PLATFORM_EXPORT Visitor {
     static_assert(IsGarbageCollectedType<T>::value,
                   "T needs to be a garbage collected object");
 
-    if (!backing_store)
-      return;
     VisitBackingStoreOnly(reinterpret_cast<void*>(backing_store),
                           reinterpret_cast<void**>(backing_store_slot));
   }
@@ -228,8 +222,8 @@ class PLATFORM_EXPORT Visitor {
     // the TraceDescriptor versions.
     Visit(const_cast<void*>(reinterpret_cast<const void*>(t)),
           TraceDescriptorFor(t));
-    Visit(const_cast<void*>(reinterpret_cast<const void*>(t)),
-          TraceWrapperDescriptorFor(t));
+    VisitWithWrappers(const_cast<void*>(reinterpret_cast<const void*>(t)),
+                      TraceDescriptorFor(t));
   }
 
   void Trace(DOMWrapperMap<ScriptWrappable>* wrapper_map,
@@ -248,9 +242,7 @@ class PLATFORM_EXPORT Visitor {
   virtual void Visit(void*, TraceDescriptor) = 0;
   // Subgraph of objects that are interested in wrappers. Note that the same
   // object is also passed to Visit(void*, TraceDescriptor).
-  // TODO(mlippautz): Remove this visit method once wrapper tracing also uses
-  // Trace() instead of TraceWrappers().
-  virtual void Visit(void*, TraceWrapperDescriptor) = 0;
+  virtual void VisitWithWrappers(void*, TraceDescriptor) = 0;
 
   // Visits an object through a weak reference.
   virtual void VisitWeak(void*, void**, TraceDescriptor, WeakCallback) = 0;
@@ -272,7 +264,7 @@ class PLATFORM_EXPORT Visitor {
 
   // Registers backing store pointers so that they can be moved and properly
   // updated.
-  virtual void RegisterBackingStoreCallback(void* backing_store,
+  virtual void RegisterBackingStoreCallback(void** slot,
                                             MovingObjectCallback,
                                             void* callback_data) = 0;
 
@@ -296,12 +288,6 @@ class PLATFORM_EXPORT Visitor {
   template <typename T>
   static inline TraceDescriptor TraceDescriptorFor(const T* traceable) {
     return TraceTrait<T>::GetTraceDescriptor(const_cast<T*>(traceable));
-  }
-
-  template <typename T>
-  static inline TraceWrapperDescriptor TraceWrapperDescriptorFor(
-      const T* traceable) {
-    return TraceTrait<T>::GetTraceWrapperDescriptor(const_cast<T*>(traceable));
   }
 
  private:

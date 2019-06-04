@@ -32,7 +32,7 @@
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/platform/geometry/int_rect.h"
 #include "third_party/blink/renderer/platform/graphics/compositor_element_id.h"
-#include "third_party/blink/renderer/platform/graphics/touch_action_rect.h"
+#include "third_party/blink/renderer/platform/graphics/hit_test_rect.h"
 #include "third_party/blink/renderer/platform/heap/handle.h"
 #include "third_party/blink/renderer/platform/scroll/main_thread_scrolling_reason.h"
 #include "third_party/blink/renderer/platform/scroll/scroll_types.h"
@@ -82,6 +82,7 @@ class CORE_EXPORT ScrollingCoordinator final
 
   static ScrollingCoordinator* Create(Page*);
 
+  explicit ScrollingCoordinator(Page*);
   ~ScrollingCoordinator();
   void Trace(blink::Visitor*);
 
@@ -104,7 +105,10 @@ class CORE_EXPORT ScrollingCoordinator final
   // Called when any layoutBox has transform changed
   void NotifyTransformChanged(LocalFrame*, const LayoutBox&);
 
-  void UpdateAfterCompositingChangeIfNeeded(LocalFrameView*);
+  // Update non-fast scrollable regions, touch event target rects, main thread
+  // scrolling reasons, and whether the visual viewport is user scrollable.
+  // TODO(pdr): Refactor this out of ScrollingCoordinator.
+  void UpdateAfterPaint(LocalFrameView*);
 
   // Should be called whenever the slow repaint objects counter changes between
   // zero and one.
@@ -120,7 +124,8 @@ class CORE_EXPORT ScrollingCoordinator final
       ScrollbarOrientation,
       int thumb_thickness,
       int track_start,
-      bool is_left_side_vertical_scrollbar);
+      bool is_left_side_vertical_scrollbar,
+      cc::ElementId);
 
   void WillDestroyScrollableArea(ScrollableArea*);
 
@@ -135,7 +140,7 @@ class CORE_EXPORT ScrollingCoordinator final
   // blink uses a separate layer. To ensure the compositor scroll layer has the
   // updated scroll container bounds, this needs to be called when the scrolling
   // contents layer is resized.
-  bool ScrollableAreaScrollLayerDidChange(ScrollableArea*);
+  void ScrollableAreaScrollLayerDidChange(ScrollableArea*);
   void ScrollableAreaScrollbarLayerDidChange(ScrollableArea*,
                                              ScrollbarOrientation);
   void UpdateLayerPositionConstraint(PaintLayer*);
@@ -169,8 +174,6 @@ class CORE_EXPORT ScrollingCoordinator final
   void Reset(LocalFrame*);
 
  protected:
-  explicit ScrollingCoordinator(Page*);
-
   bool IsForRootLayer(ScrollableArea*) const;
   bool IsForMainFrame(ScrollableArea*) const;
 
@@ -188,7 +191,7 @@ class CORE_EXPORT ScrollingCoordinator final
 
   void SetShouldHandleScrollGestureOnMainThreadRegion(const Region&,
                                                       LocalFrameView*);
-  void SetTouchEventTargetRects(LocalFrame*, LayerHitTestRects&);
+  void SetTouchEventTargetRects(LocalFrame*, const LayerHitTestRects&);
   void ComputeTouchEventTargetRects(LocalFrame*, LayerHitTestRects&);
 
   void AddScrollbarLayerGroup(ScrollableArea*,

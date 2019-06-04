@@ -88,22 +88,20 @@ void BlobURLLoader::Start(const network::ResourceRequest& request) {
     }
   }
 
+  mojo::DataPipe data_pipe(kDefaultAllocationSize);
+  response_body_consumer_handle_ = std::move(data_pipe.consumer_handle);
+
   MojoBlobReader::Create(blob_handle_.get(), byte_range_,
-                         base::WrapUnique(this));
+                         base::WrapUnique(this),
+                         std::move(data_pipe.producer_handle));
 }
 
 void BlobURLLoader::FollowRedirect(
-    const base::Optional<net::HttpRequestHeaders>& modified_request_headers) {
+    const base::Optional<std::vector<std::string>>&
+        to_be_removed_request_headers,
+    const base::Optional<net::HttpRequestHeaders>& modified_request_headers,
+    const base::Optional<GURL>& new_url) {
   NOTREACHED();
-}
-void BlobURLLoader::ProceedWithResponse() {
-  NOTREACHED();
-}
-
-mojo::ScopedDataPipeProducerHandle BlobURLLoader::PassDataPipe() {
-  mojo::DataPipe data_pipe(kDefaultAllocationSize);
-  response_body_consumer_handle_ = std::move(data_pipe.consumer_handle);
-  return std::move(data_pipe.producer_handle);
 }
 
 MojoBlobReader::Delegate::RequestSideData BlobURLLoader::DidCalculateSize(
@@ -129,14 +127,6 @@ MojoBlobReader::Delegate::RequestSideData BlobURLLoader::DidCalculateSize(
 
 void BlobURLLoader::DidReadSideData(net::IOBufferWithSize* data) {
   HeadersCompleted(net::HTTP_OK, total_size_, data);
-}
-
-void BlobURLLoader::DidRead(int num_bytes) {
-  if (response_body_consumer_handle_.is_valid()) {
-    // Send the data pipe on the first OnReadCompleted call.
-    client_->OnStartLoadingResponseBody(
-        std::move(response_body_consumer_handle_));
-  }
 }
 
 void BlobURLLoader::OnComplete(net::Error error_code,
@@ -165,7 +155,7 @@ void BlobURLLoader::HeadersCompleted(net::HttpStatusCode status_code,
 
   // TODO(jam): some of this code can be shared with
   // services/network/url_loader.h
-  client_->OnReceiveResponse(response, nullptr);
+  client_->OnReceiveResponse(response);
   sent_headers_ = true;
 
   if (metadata) {
@@ -173,6 +163,9 @@ void BlobURLLoader::HeadersCompleted(net::HttpStatusCode status_code,
     client_->OnReceiveCachedMetadata(
         std::vector<uint8_t>(data, data + metadata->size()));
   }
+
+  client_->OnStartLoadingResponseBody(
+      std::move(response_body_consumer_handle_));
 }
 
 }  // namespace storage

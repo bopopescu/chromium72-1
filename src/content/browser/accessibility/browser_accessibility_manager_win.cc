@@ -40,7 +40,6 @@ BrowserAccessibilityManagerWin::BrowserAccessibilityManagerWin(
       load_complete_pending_(false) {
   ui::win::CreateATLModuleIfNeeded();
   Initialize(initial_tree);
-  ui::GetIAccessible2UsageObserverList().AddObserver(this);
 }
 
 BrowserAccessibilityManagerWin::~BrowserAccessibilityManagerWin() {
@@ -48,7 +47,6 @@ BrowserAccessibilityManagerWin::~BrowserAccessibilityManagerWin() {
   // destructor, otherwise our overrides of functions like
   // OnNodeWillBeDeleted won't be called.
   tree_.reset(NULL);
-  ui::GetIAccessible2UsageObserverList().RemoveObserver(this);
 }
 
 // static
@@ -72,14 +70,6 @@ HWND BrowserAccessibilityManagerWin::GetParentHWND() {
   return delegate->AccessibilityGetAcceleratedWidget();
 }
 
-void BrowserAccessibilityManagerWin::OnIAccessible2Used() {
-  // When IAccessible2 APIs have been used elsewhere in the codebase,
-  // enable basic web accessibility support. (Full screen reader support is
-  // detected later when specific more advanced APIs are accessed.)
-  BrowserAccessibilityStateImpl::GetInstance()->AddAccessibilityModeFlags(
-      ui::AXMode::kNativeAPIs | ui::AXMode::kWebContents);
-}
-
 void BrowserAccessibilityManagerWin::UserIsReloading() {
   if (GetRoot())
     FireWinAccessibilityEvent(IA2_EVENT_DOCUMENT_RELOAD, GetRoot());
@@ -94,13 +84,6 @@ void BrowserAccessibilityManagerWin::FireFocusEvent(
     BrowserAccessibility* node) {
   BrowserAccessibilityManager::FireFocusEvent(node);
   DCHECK(node);
-  // On Windows, we always fire a FOCUS event on the root of a frame before
-  // firing a focus event within that frame.
-  if (node->manager() != last_focused_manager_ &&
-      node != node->manager()->GetRoot()) {
-    FireWinAccessibilityEvent(EVENT_OBJECT_FOCUS, node->manager()->GetRoot());
-  }
-
   FireWinAccessibilityEvent(EVENT_OBJECT_FOCUS, node);
 }
 
@@ -151,6 +134,17 @@ void BrowserAccessibilityManagerWin::FireGeneratedEvent(
       FireWinAccessibilityEvent(EVENT_OBJECT_REORDER, node);
       break;
     case Event::LIVE_REGION_CHANGED:
+      // This event is redundant with the IA2_EVENT_TEXT_INSERTED events;
+      // however, JAWS 2018 and earlier do not process the text inserted
+      // events when "virtual cursor mode" is turned off (Insert+Z).
+      // Fortunately, firing the redudant event does not cause duplicate
+      // verbalizations in either screen reader.
+      // Future versions of JAWS may process the text inserted event when
+      // in focus mode, and so at some point the live region
+      // changed events may truly become redundant with the text inserted
+      // events. Note: Firefox does not fire this event, but JAWS processes
+      // Firefox live region events differently (utilizes MSAA's
+      // EVENT_OBJECT_SHOW).
       FireWinAccessibilityEvent(EVENT_OBJECT_LIVEREGIONCHANGED, node);
       break;
     case Event::LOAD_COMPLETE:
@@ -166,7 +160,7 @@ void BrowserAccessibilityManagerWin::FireGeneratedEvent(
       // Fire the event on the object where the focus of the selection is.
       int32_t focus_id = GetTreeData().sel_focus_object_id;
       BrowserAccessibility* focus_object = GetFromID(focus_id);
-      if (focus_object)
+      if (focus_object && focus_object->HasVisibleCaretOrSelection())
         FireWinAccessibilityEvent(IA2_EVENT_TEXT_CARET_MOVED, focus_object);
       break;
     }
@@ -178,6 +172,7 @@ void BrowserAccessibilityManagerWin::FireGeneratedEvent(
     case Event::INVALID_STATUS_CHANGED:
     case Event::LIVE_REGION_CREATED:
     case Event::LIVE_REGION_NODE_CHANGED:
+    case Event::LOAD_START:
     case Event::MENU_ITEM_SELECTED:
     case Event::NAME_CHANGED:
     case Event::OTHER_ATTRIBUTE_CHANGED:
@@ -196,6 +191,9 @@ void BrowserAccessibilityManagerWin::FireGeneratedEvent(
 void BrowserAccessibilityManagerWin::FireWinAccessibilityEvent(
     LONG win_event_type,
     BrowserAccessibility* node) {
+  if (!node->CanFireEvents())
+    return;
+
   // If there's no root delegate, this may be a new frame that hasn't
   // yet been swapped in or added to the frame tree. Suppress firing events
   // until then.

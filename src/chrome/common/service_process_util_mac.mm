@@ -4,6 +4,7 @@
 
 #import <Foundation/Foundation.h>
 #include <launch.h>
+#include <sys/un.h>
 
 #include <memory>
 #include <vector>
@@ -20,14 +21,13 @@
 #include "base/path_service.h"
 #include "base/strings/string_util.h"
 #include "base/strings/sys_string_conversions.h"
-#include "base/threading/thread_restrictions.h"
+#include "base/threading/scoped_blocking_call.h"
 #include "base/version.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/mac/launchd.h"
 #include "chrome/common/service_process_util_posix.h"
 #include "components/version_info/version_info.h"
-#include "mojo/edk/embedder/named_platform_handle_utils.h"
 
 using ::base::FilePathWatcher;
 
@@ -62,7 +62,7 @@ NSString* GetServiceProcessLaunchDSocketKey() {
 
 bool RemoveFromLaunchd() {
   // We're killing a file.
-  base::AssertBlockingAllowed();
+  base::ScopedBlockingCall scoped_blocking_call(base::BlockingType::MAY_BLOCK);
   base::ScopedCFTypeRef<CFStringRef> name(CopyServiceProcessLaunchDName());
   return Launchd::GetInstance()->DeletePlist(Launchd::User,
                                              Launchd::Agent,
@@ -86,28 +86,29 @@ base::FilePath GetServiceProcessSocketName() {
   base::PathService::Get(base::DIR_TEMP, &socket_name);
   std::string pipe_name = GetServiceProcessScopedName("srv");
   socket_name = socket_name.Append(pipe_name);
-  CHECK_LT(socket_name.value().size(), mojo::edk::kMaxSocketNameLength);
+
+  // Max allowed on Mac.
+  constexpr size_t kMaxSocketNameLength = sizeof(sockaddr_un().sun_path);
+  CHECK_LT(socket_name.value().size(), kMaxSocketNameLength);
+
   return socket_name;
 }
 
 }  // namespace
 
-mojo::edk::NamedPlatformHandle GetServiceProcessChannel() {
+mojo::NamedPlatformChannel::ServerName GetServiceProcessServerName() {
   base::FilePath socket_name = GetServiceProcessSocketName();
   VLOG(1) << "ServiceProcessChannel: " << socket_name.value();
-  return mojo::edk::NamedPlatformHandle(socket_name.value());
+  return socket_name.value();
 }
 
 bool ForceServiceProcessShutdown(const std::string& /* version */,
                                  base::ProcessId /* process_id */) {
-  base::mac::ScopedNSAutoreleasePool pool;
-  CFStringRef label = base::mac::NSToCFCast(GetServiceProcessLaunchDLabel());
-  CFErrorRef err = NULL;
-  bool ret = Launchd::GetInstance()->RemoveJob(label, &err);
+  const std::string& label =
+      base::SysNSStringToUTF8(GetServiceProcessLaunchDLabel());
+  bool ret = Launchd::GetInstance()->RemoveJob(label);
   if (!ret) {
-    DLOG(ERROR) << "ForceServiceProcessShutdown: " << err << " "
-                << base::SysCFStringRefToUTF8(label);
-    CFRelease(err);
+    DLOG(ERROR) << "ForceServiceProcessShutdown: " << label;
   }
   return ret;
 }
@@ -173,8 +174,8 @@ bool ServiceProcessState::Initialize() {
   return true;
 }
 
-mojo::edk::ScopedInternalPlatformHandle
-ServiceProcessState::GetServiceProcessChannel() {
+mojo::PlatformChannelServerEndpoint
+ServiceProcessState::GetServiceProcessServerEndpoint() {
   DCHECK(state_);
   NSDictionary* ns_launchd_conf = base::mac::CFToNSCast(state_->launchd_conf);
   NSDictionary* socket_dict =
@@ -183,8 +184,8 @@ ServiceProcessState::GetServiceProcessChannel() {
       [socket_dict objectForKey:GetServiceProcessLaunchDSocketKey()];
   DCHECK_EQ([sockets count], 1U);
   int socket = [[sockets objectAtIndex:0] intValue];
-  return mojo::edk::ScopedInternalPlatformHandle(
-      mojo::edk::InternalPlatformHandle(socket));
+  return mojo::PlatformChannelServerEndpoint(
+      mojo::PlatformHandle(base::ScopedFD(socket)));
 }
 
 bool CheckServiceProcessReady() {
@@ -212,6 +213,24 @@ bool CheckServiceProcessReady() {
     ForceServiceProcessShutdown(version, pid);
   }
   return ready;
+}
+
+mac::services::JobOptions GetServiceProcessJobOptions(
+    base::CommandLine* cmd_line,
+    bool for_auto_launch) {
+  mac::services::JobOptions options;
+
+  options.label = base::SysNSStringToUTF8(GetServiceProcessLaunchDLabel());
+  options.executable_path = cmd_line->GetProgram().value();
+  options.arguments = cmd_line->argv();
+  options.socket_name = GetServiceProcessSocketName().value();
+  options.socket_key =
+      base::SysNSStringToUTF8(GetServiceProcessLaunchDSocketKey());
+
+  options.run_at_load = for_auto_launch;
+  options.auto_launch = for_auto_launch;
+
+  return options;
 }
 
 CFDictionaryRef CreateServiceProcessLaunchdPlist(base::CommandLine* cmd_line,
@@ -270,7 +289,7 @@ CFDictionaryRef CreateServiceProcessLaunchdPlist(base::CommandLine* cmd_line,
 // auto launched on the next user login.
 bool ServiceProcessState::AddToAutoRun() {
   // We're creating directories and writing a file.
-  base::AssertBlockingAllowed();
+  base::ScopedBlockingCall scoped_blocking_call(base::BlockingType::MAY_BLOCK);
   DCHECK(autorun_command_line_.get());
   base::ScopedCFTypeRef<CFStringRef> name(CopyServiceProcessLaunchDName());
   base::ScopedCFTypeRef<CFDictionaryRef> plist(
@@ -439,12 +458,10 @@ void ExecFilePathWatcherCallback::NotifyPathChanged(const base::FilePath& path,
       }
     }
     if (needs_shutdown) {
-      CFStringRef label =
-          base::mac::NSToCFCast(GetServiceProcessLaunchDLabel());
-      CFErrorRef err = NULL;
-      if (!Launchd::GetInstance()->RemoveJob(label, &err)) {
-        base::ScopedCFTypeRef<CFErrorRef> scoped_err(err);
-        DLOG(ERROR) << "RemoveJob " << err;
+      const std::string& label =
+          base::SysNSStringToUTF8(GetServiceProcessLaunchDLabel());
+      if (!Launchd::GetInstance()->RemoveJob(label)) {
+        DLOG(ERROR) << "RemoveJob " << label;
         // Exiting with zero, so launchd doesn't restart the process.
         exit(0);
       }

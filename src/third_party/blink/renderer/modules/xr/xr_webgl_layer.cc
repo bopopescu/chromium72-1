@@ -4,8 +4,6 @@
 
 #include "third_party/blink/renderer/modules/xr/xr_webgl_layer.h"
 
-#include "third_party/blink/renderer/bindings/core/v8/exception_messages.h"
-#include "third_party/blink/renderer/bindings/core/v8/exception_state.h"
 #include "third_party/blink/renderer/core/imagebitmap/image_bitmap.h"
 #include "third_party/blink/renderer/modules/webgl/webgl2_rendering_context.h"
 #include "third_party/blink/renderer/modules/webgl/webgl_framebuffer.h"
@@ -16,6 +14,7 @@
 #include "third_party/blink/renderer/modules/xr/xr_session.h"
 #include "third_party/blink/renderer/modules/xr/xr_view.h"
 #include "third_party/blink/renderer/modules/xr/xr_viewport.h"
+#include "third_party/blink/renderer/platform/bindings/exception_state.h"
 #include "third_party/blink/renderer/platform/geometry/double_size.h"
 #include "third_party/blink/renderer/platform/geometry/float_point.h"
 #include "third_party/blink/renderer/platform/geometry/int_size.h"
@@ -25,7 +24,6 @@ namespace blink {
 namespace {
 
 const double kFramebufferMinScale = 0.2;
-const double kFramebufferMaxScale = 1.0;
 
 const double kViewportMinScale = 0.2;
 const double kViewportMaxScale = 1.0;
@@ -40,10 +38,10 @@ double ClampToRange(const double value, const double min, const double max) {
 XRWebGLLayer* XRWebGLLayer::Create(
     XRSession* session,
     const WebGLRenderingContextOrWebGL2RenderingContext& context,
-    const XRWebGLLayerInit& initializer,
+    const XRWebGLLayerInit* initializer,
     ExceptionState& exception_state) {
   if (session->ended()) {
-    exception_state.ThrowDOMException(kInvalidStateError,
+    exception_state.ThrowDOMException(DOMExceptionCode::kInvalidStateError,
                                       "Cannot create an XRWebGLLayer for an "
                                       "XRSession which has already ended.");
     return nullptr;
@@ -57,7 +55,7 @@ XRWebGLLayer* XRWebGLLayer::Create(
   }
 
   if (webgl_context->isContextLost()) {
-    exception_state.ThrowDOMException(kInvalidStateError,
+    exception_state.ThrowDOMException(DOMExceptionCode::kInvalidStateError,
                                       "Cannot create an XRWebGLLayer with a "
                                       "lost WebGL context.");
     return nullptr;
@@ -65,29 +63,34 @@ XRWebGLLayer* XRWebGLLayer::Create(
 
   if (!webgl_context->IsXRDeviceCompatible(session->device())) {
     exception_state.ThrowDOMException(
-        kInvalidStateError,
+        DOMExceptionCode::kInvalidStateError,
         "The session's device is not the compatible device for this context.");
     return nullptr;
   }
 
-  bool want_antialiasing = initializer.antialias();
-  bool want_depth_buffer = initializer.depth();
-  bool want_stencil_buffer = initializer.stencil();
-  bool want_alpha_channel = initializer.alpha();
-  bool want_multiview = initializer.multiview();
+  bool want_antialiasing = initializer->antialias();
+  bool want_depth_buffer = initializer->depth();
+  bool want_stencil_buffer = initializer->stencil();
+  bool want_alpha_channel = initializer->alpha();
+  bool want_multiview = initializer->multiview();
 
-  double framebuffer_scale = session->DefaultFramebufferScale();
+  double framebuffer_scale = 1.0;
 
-  if (initializer.hasFramebufferScaleFactor() &&
-      initializer.framebufferScaleFactor() != 0.0) {
+  if (initializer->hasFramebufferScaleFactor()) {
+    // The max size will be either the native resolution or the default
+    // if that happens to be larger than the native res. (That can happen on
+    // desktop systems.)
+    double max_scale = std::max(session->NativeFramebufferScale(), 1.0);
+
     // Clamp the developer-requested framebuffer size to ensure it's not too
     // small to see or unreasonably large.
-    framebuffer_scale =
-        ClampToRange(initializer.framebufferScaleFactor(), kFramebufferMinScale,
-                     kFramebufferMaxScale);
+    // TODO: Would be best to have the max value communicated from the service
+    // rather than limited to the native res.
+    framebuffer_scale = ClampToRange(initializer->framebufferScaleFactor(),
+                                     kFramebufferMinScale, max_scale);
   }
 
-  DoubleSize framebuffers_size = session->IdealFramebufferSize();
+  DoubleSize framebuffers_size = session->DefaultFramebufferSize();
 
   IntSize desired_size(framebuffers_size.Width() * framebuffer_scale,
                        framebuffers_size.Height() * framebuffer_scale);
@@ -102,13 +105,14 @@ XRWebGLLayer* XRWebGLLayer::Create(
           want_stencil_buffer, want_antialiasing, want_multiview);
 
   if (!drawing_buffer) {
-    exception_state.ThrowDOMException(kOperationError,
+    exception_state.ThrowDOMException(DOMExceptionCode::kOperationError,
                                       "Unable to create a framebuffer.");
     return nullptr;
   }
 
-  return new XRWebGLLayer(session, webgl_context, std::move(drawing_buffer),
-                          framebuffer, framebuffer_scale);
+  return MakeGarbageCollected<XRWebGLLayer>(session, webgl_context,
+                                            std::move(drawing_buffer),
+                                            framebuffer, framebuffer_scale);
 }
 
 XRWebGLLayer::XRWebGLLayer(XRSession* session,
@@ -118,13 +122,12 @@ XRWebGLLayer::XRWebGLLayer(XRSession* session,
                            double framebuffer_scale)
     : XRLayer(session, kXRWebGLLayerType),
       webgl_context_(webgl_context),
-      drawing_buffer_(drawing_buffer),
+      drawing_buffer_(std::move(drawing_buffer)),
       framebuffer_(framebuffer),
       framebuffer_scale_(framebuffer_scale) {
-  DCHECK(drawing_buffer);
+  DCHECK(drawing_buffer_);
   // If the contents need mirroring, indicate that to the drawing buffer.
-  if (session->exclusive() && session->outputContext() &&
-      session->device()->external()) {
+  if (session->immersive() && session->outputContext() && session->External()) {
     mirroring_ = true;
     drawing_buffer_->SetMirrorClient(this);
   }
@@ -134,11 +137,12 @@ XRWebGLLayer::XRWebGLLayer(XRSession* session,
 XRWebGLLayer::~XRWebGLLayer() {
   if (mirroring_)
     drawing_buffer_->SetMirrorClient(nullptr);
+  drawing_buffer_->BeginDestruction();
 }
 
 void XRWebGLLayer::getXRWebGLRenderingContext(
     WebGLRenderingContextOrWebGL2RenderingContext& result) const {
-  if (webgl_context_->Version() == 2) {
+  if (webgl_context_->ContextType() == Platform::kWebGL2ContextType) {
     result.SetWebGL2RenderingContext(
         static_cast<WebGL2RenderingContext*>(webgl_context_.Get()));
   } else {
@@ -154,7 +158,7 @@ XRViewport* XRWebGLLayer::getViewport(XRView* view) {
   return GetViewportForEye(view->EyeValue());
 }
 
-XRViewport* XRWebGLLayer::GetViewportForEye(XRView::Eye eye) {
+XRViewport* XRWebGLLayer::GetViewportForEye(XRView::XREye eye) {
   if (viewports_dirty_)
     UpdateViewports();
 
@@ -165,9 +169,9 @@ XRViewport* XRWebGLLayer::GetViewportForEye(XRView::Eye eye) {
 }
 
 void XRWebGLLayer::requestViewportScaling(double scale_factor) {
-  if (!session()->exclusive()) {
+  if (!session()->immersive()) {
     // TODO(bajones): For the moment we're just going to ignore viewport changes
-    // in non-exclusive mode. This is legal, but probably not what developers
+    // in non-immersive mode. This is legal, but probably not what developers
     // would like to see. Look into making viewport scale apply properly.
     scale_factor = 1.0;
   } else {
@@ -182,20 +186,24 @@ void XRWebGLLayer::requestViewportScaling(double scale_factor) {
   requested_viewport_scale_ = scale_factor;
 }
 
+double XRWebGLLayer::getNativeFramebufferScaleFactor(XRSession* session) {
+  return session->NativeFramebufferScale();
+}
+
 void XRWebGLLayer::UpdateViewports() {
   long framebuffer_width = framebufferWidth();
   long framebuffer_height = framebufferHeight();
 
   viewports_dirty_ = false;
 
-  if (session()->exclusive()) {
-    left_viewport_ =
-        new XRViewport(0, 0, framebuffer_width * 0.5 * viewport_scale_,
-                       framebuffer_height * viewport_scale_);
-    right_viewport_ =
-        new XRViewport(framebuffer_width * 0.5 * viewport_scale_, 0,
-                       framebuffer_width * 0.5 * viewport_scale_,
-                       framebuffer_height * viewport_scale_);
+  if (session()->immersive()) {
+    left_viewport_ = MakeGarbageCollected<XRViewport>(
+        0, 0, framebuffer_width * 0.5 * viewport_scale_,
+        framebuffer_height * viewport_scale_);
+    right_viewport_ = MakeGarbageCollected<XRViewport>(
+        framebuffer_width * 0.5 * viewport_scale_, 0,
+        framebuffer_width * 0.5 * viewport_scale_,
+        framebuffer_height * viewport_scale_);
 
     session()->device()->frameProvider()->UpdateWebGLLayerViewports(this);
 
@@ -236,8 +244,9 @@ void XRWebGLLayer::UpdateViewports() {
                                         FloatPoint(right, bottom));
     }
   } else {
-    left_viewport_ = new XRViewport(0, 0, framebuffer_width * viewport_scale_,
-                                    framebuffer_height * viewport_scale_);
+    left_viewport_ = MakeGarbageCollected<XRViewport>(
+        0, 0, framebuffer_width * viewport_scale_,
+        framebuffer_height * viewport_scale_);
   }
 }
 
@@ -245,6 +254,7 @@ void XRWebGLLayer::OverwriteColorBufferFromMailboxTexture(
     const gpu::MailboxHolder& mailbox_holder,
     const IntSize& size) {
   drawing_buffer_->OverwriteColorBufferFromMailboxTexture(mailbox_holder, size);
+  framebuffer_->SetContentsChanged(true);
 }
 
 void XRWebGLLayer::OnFrameStart(
@@ -273,7 +283,7 @@ void XRWebGLLayer::OnFrameEnd() {
   }
 
   // Submit the frame to the XR compositor.
-  if (session()->exclusive()) {
+  if (session()->immersive()) {
     // Always call submit, but notify if the contents were changed or not.
     session()->device()->frameProvider()->SubmitWebGLLayer(
         this, framebuffer_->HaveContentsChanged());
@@ -288,19 +298,25 @@ void XRWebGLLayer::OnFrameEnd() {
 }
 
 void XRWebGLLayer::OnResize() {
-  if (!session()->exclusive()) {
-    // For non-exclusive sessions a resize indicates we should adjust the
+  if (!session()->immersive()) {
+    // For non-immersive sessions a resize indicates we should adjust the
     // drawing buffer size to match the canvas.
-    DoubleSize framebuffers_size = session()->IdealFramebufferSize();
+    DoubleSize framebuffers_size = session()->DefaultFramebufferSize();
 
     IntSize desired_size(framebuffers_size.Width() * framebuffer_scale_,
                          framebuffers_size.Height() * framebuffer_scale_);
     drawing_buffer_->Resize(desired_size);
   }
 
-  // With both exclusive and non-exclusive session the viewports should be
+  // With both immersive and non-immersive session the viewports should be
   // recomputed when the output canvas resizes.
   viewports_dirty_ = true;
+}
+
+void XRWebGLLayer::HandleBackgroundImage(
+    const gpu::MailboxHolder& mailbox_holder,
+    const IntSize& size) {
+  OverwriteColorBufferFromMailboxTexture(mailbox_holder, size);
 }
 
 scoped_refptr<StaticBitmapImage> XRWebGLLayer::TransferToStaticBitmapImage(
@@ -331,11 +347,6 @@ void XRWebGLLayer::Trace(blink::Visitor* visitor) {
   visitor->Trace(webgl_context_);
   visitor->Trace(framebuffer_);
   XRLayer::Trace(visitor);
-}
-
-void XRWebGLLayer::TraceWrappers(ScriptWrappableVisitor* visitor) const {
-  visitor->TraceWrappers(webgl_context_);
-  XRLayer::TraceWrappers(visitor);
 }
 
 }  // namespace blink

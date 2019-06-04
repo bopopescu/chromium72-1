@@ -31,12 +31,17 @@ class XRWebGLLayer final : public XRLayer,
   DEFINE_WRAPPERTYPEINFO();
 
  public:
+  XRWebGLLayer(XRSession*,
+               WebGLRenderingContextBase*,
+               scoped_refptr<XRWebGLDrawingBuffer>,
+               WebGLFramebuffer*,
+               double framebuffer_scale);
   ~XRWebGLLayer() override;
 
   static XRWebGLLayer* Create(
       XRSession*,
       const WebGLRenderingContextOrWebGL2RenderingContext&,
-      const XRWebGLLayerInit&,
+      const XRWebGLLayerInit*,
       ExceptionState&);
 
   WebGLRenderingContextBase* context() const { return webgl_context_; }
@@ -44,10 +49,8 @@ class XRWebGLLayer final : public XRLayer,
       WebGLRenderingContextOrWebGL2RenderingContext&) const;
 
   WebGLFramebuffer* framebuffer() const { return framebuffer_; }
-  unsigned long framebufferWidth() const {
-    return drawing_buffer_->size().Width();
-  }
-  unsigned long framebufferHeight() const {
+  uint32_t framebufferWidth() const { return drawing_buffer_->size().Width(); }
+  uint32_t framebufferHeight() const {
     return drawing_buffer_->size().Height();
   }
 
@@ -60,13 +63,17 @@ class XRWebGLLayer final : public XRLayer,
   XRViewport* getViewport(XRView*);
   void requestViewportScaling(double scale_factor);
 
-  XRViewport* GetViewportForEye(XRView::Eye);
+  static double getNativeFramebufferScaleFactor(XRSession* session);
+
+  XRViewport* GetViewportForEye(XRView::XREye);
 
   void UpdateViewports();
 
   void OnFrameStart(const base::Optional<gpu::MailboxHolder>&) override;
   void OnFrameEnd() override;
   void OnResize() override;
+  void HandleBackgroundImage(const gpu::MailboxHolder&,
+                             const IntSize&) override;
 
   void OverwriteColorBufferFromMailboxTexture(const gpu::MailboxHolder&,
                                               const IntSize& size);
@@ -80,15 +87,8 @@ class XRWebGLLayer final : public XRLayer,
       std::unique_ptr<viz::SingleReleaseCallback>) override;
 
   void Trace(blink::Visitor*) override;
-  void TraceWrappers(ScriptWrappableVisitor*) const override;
 
  private:
-  XRWebGLLayer(XRSession*,
-               WebGLRenderingContextBase*,
-               scoped_refptr<XRWebGLDrawingBuffer>,
-               WebGLFramebuffer*,
-               double framebuffer_scale);
-
   Member<XRViewport> left_viewport_;
   Member<XRViewport> right_viewport_;
 

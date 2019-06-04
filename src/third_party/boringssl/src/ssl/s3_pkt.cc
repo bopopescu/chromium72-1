@@ -122,7 +122,7 @@
 #include "internal.h"
 
 
-namespace bssl {
+BSSL_NAMESPACE_BEGIN
 
 static int do_ssl3_write(SSL *ssl, int type, const uint8_t *in, unsigned len);
 
@@ -163,9 +163,11 @@ int ssl3_write_app_data(SSL *ssl, bool *out_needs_handshake, const uint8_t *in,
   for (;;) {
     // max contains the maximum number of bytes that we can put into a record.
     unsigned max = ssl->max_send_fragment;
-    if (is_early_data_write && max > ssl->session->ticket_max_early_data -
-                                         ssl->s3->hs->early_data_written) {
-      max = ssl->session->ticket_max_early_data - ssl->s3->hs->early_data_written;
+    if (is_early_data_write &&
+        max > ssl->session->ticket_max_early_data -
+                  ssl->s3->hs->early_data_written) {
+      max =
+          ssl->session->ticket_max_early_data - ssl->s3->hs->early_data_written;
       if (max == 0) {
         ssl->s3->wnum = tot;
         ssl->s3->hs->can_early_write = false;
@@ -234,6 +236,9 @@ static int do_ssl3_write(SSL *ssl, int type, const uint8_t *in, unsigned len) {
     return 0;
   }
 
+  if (!tls_flush_pending_hs_data(ssl)) {
+    return -1;
+  }
   size_t flight_len = 0;
   if (ssl->s3->pending_flight != nullptr) {
     flight_len =
@@ -313,11 +318,7 @@ ssl_open_record_t ssl3_open_app_data(SSL *ssl, Span<uint8_t> *out,
       return ssl_open_record_error;
     }
 
-    if (!ssl->s3->hs_buf) {
-      ssl->s3->hs_buf.reset(BUF_MEM_new());
-    }
-    if (!ssl->s3->hs_buf ||
-        !BUF_MEM_append(ssl->s3->hs_buf.get(), body.data(), body.size())) {
+    if (!tls_append_handshake_data(ssl, body)) {
       *out_alert = SSL_AD_INTERNAL_ERROR;
       return ssl_open_record_error;
     }
@@ -403,15 +404,24 @@ int ssl_send_alert(SSL *ssl, int level, int desc) {
 }
 
 int ssl3_dispatch_alert(SSL *ssl) {
-  int ret = do_ssl3_write(ssl, SSL3_RT_ALERT, &ssl->s3->send_alert[0], 2);
-  if (ret <= 0) {
-    return ret;
+  if (ssl->ctx->quic_method) {
+    if (!ssl->ctx->quic_method->send_alert(ssl, ssl->s3->write_level,
+                                           ssl->s3->send_alert[1])) {
+      OPENSSL_PUT_ERROR(SSL, SSL_R_QUIC_INTERNAL_ERROR);
+      return 0;
+    }
+  } else {
+    int ret = do_ssl3_write(ssl, SSL3_RT_ALERT, &ssl->s3->send_alert[0], 2);
+    if (ret <= 0) {
+      return ret;
+    }
   }
+
   ssl->s3->alert_dispatch = 0;
 
   // If the alert is fatal, flush the BIO now.
   if (ssl->s3->send_alert[0] == SSL3_AL_FATAL) {
-    BIO_flush(ssl->wbio);
+    BIO_flush(ssl->wbio.get());
   }
 
   ssl_do_msg_callback(ssl, 1 /* write */, SSL3_RT_ALERT, ssl->s3->send_alert);
@@ -422,4 +432,4 @@ int ssl3_dispatch_alert(SSL *ssl) {
   return 1;
 }
 
-}  // namespace bssl
+BSSL_NAMESPACE_END

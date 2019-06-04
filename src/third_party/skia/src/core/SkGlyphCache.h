@@ -10,6 +10,7 @@
 #include "SkArenaAlloc.h"
 #include "SkDescriptor.h"
 #include "SkGlyph.h"
+#include "SkGlyphRunPainter.h"
 #include "SkPaint.h"
 #include "SkTHash.h"
 #include "SkScalerContext.h"
@@ -29,12 +30,12 @@
     The Find*Exclusive() method returns SkExclusiveStrikePtr, which releases exclusive ownership
     when they go out of scope.
 */
-class SkGlyphCache {
+class SkGlyphCache : public SkGlyphCacheInterface {
 public:
     SkGlyphCache(const SkDescriptor& desc,
                  std::unique_ptr<SkScalerContext> scaler,
-                 const SkPaint::FontMetrics&);
-    ~SkGlyphCache();
+                 const SkFontMetrics&);
+    ~SkGlyphCache() override;
 
     const SkDescriptor& getDescriptor() const;
 
@@ -67,6 +68,8 @@ public:
     const SkGlyph& getUnicharMetrics(SkUnichar, SkFixed x, SkFixed y);
     const SkGlyph& getGlyphIDMetrics(uint16_t, SkFixed x, SkFixed y);
 
+    void getAdvances(SkSpan<const SkGlyphID>, SkPoint[]);
+
     /** Return the glyphID for the specified Unichar. If the char has already been seen, use the
         existing cache entry. If not, ask the scalercontext to compute it for us.
     */
@@ -88,10 +91,9 @@ public:
     */
     const void* findImage(const SkGlyph&);
 
-    /** Initializes the image associated with the glyph with |data|. Returns false if an image
-     * already exists.
+    /** Initializes the image associated with the glyph with |data|.
      */
-    bool initializeImage(const volatile void* data, size_t size, SkGlyph*);
+    void initializeImage(const volatile void* data, size_t size, SkGlyph*);
 
     /** If the advance axis intersects the glyph's path, append the positions scaled and offset
         to the array (if non-null), and set the count to the updated array length.
@@ -104,14 +106,24 @@ public:
     */
     const SkPath* findPath(const SkGlyph&);
 
-    /** Initializes the path associated with the glyph with |data|. Returns false if a path
-     * already exits or data is invalid.
+    /** Initializes the path associated with the glyph with |data|. Returns false if
+     *  data is invalid.
      */
     bool initializePath(SkGlyph*, const volatile void* data, size_t size);
 
+    /** Fallback glyphs used during font remoting if the original glyph can't be found.
+     */
+    bool belongsToCache(const SkGlyph* glyph) const;
+    /** Find any glyph in this cache with the given ID, regardless of subpixel positioning.
+     *  If set and present, skip over the glyph with vetoID.
+     */
+    const SkGlyph* getCachedGlyphAnySubPix(SkGlyphID,
+                                           SkPackedGlyphID vetoID = SkPackedGlyphID()) const;
+    void initializeGlyphFromFallback(SkGlyph* glyph, const SkGlyph&);
+
     /** Return the vertical metrics for this strike.
     */
-    const SkPaint::FontMetrics& getFontMetrics() const {
+    const SkFontMetrics& getFontMetrics() const {
         return fFontMetrics;
     }
 
@@ -120,8 +132,16 @@ public:
     }
 
     bool isSubpixel() const {
-        return fScalerContext->isSubpixel();
+        return fIsSubpixel;
     }
+
+    SkVector rounding() const override;
+
+    const SkGlyph& getGlyphMetrics(SkGlyphID glyphID, SkPoint position) override;
+
+    bool hasImage(const SkGlyph& glyph) override;
+
+    bool hasPath(const SkGlyph& glyph) override;
 
     /** Return the approx RAM usage for this cache. */
     size_t getMemoryUsed() const { return fMemoryUsed; }
@@ -205,7 +225,7 @@ private:
 
     const SkAutoDescriptor fDesc;
     const std::unique_ptr<SkScalerContext> fScalerContext;
-    SkPaint::FontMetrics   fFontMetrics;
+    SkFontMetrics          fFontMetrics;
 
     // Map from a combined GlyphID and sub-pixel position to a SkGlyph.
     SkTHashTable<SkGlyph, SkPackedGlyphID, SkGlyph::HashTraits> fGlyphMap;
@@ -221,6 +241,9 @@ private:
 
     // used to track (approx) how much ram is tied-up in this cache
     size_t                  fMemoryUsed;
+
+    const bool              fIsSubpixel;
+    const SkAxisAlignment   fAxisAlignment;
 };
 
 #endif  // SkGlyphCache_DEFINED

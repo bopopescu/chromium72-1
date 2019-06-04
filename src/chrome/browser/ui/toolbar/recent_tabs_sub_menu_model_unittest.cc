@@ -6,13 +6,16 @@
 
 #include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
+#include "base/bind.h"
 #include "base/command_line.h"
 #include "base/macros.h"
 #include "base/memory/ptr_util.h"
 #include "base/run_loop.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/test/bind_test_util.h"
 #include "build/build_config.h"
 #include "chrome/app/chrome_command_ids.h"
 #include "chrome/browser/sessions/chrome_tab_restore_service_client.h"
@@ -20,36 +23,27 @@
 #include "chrome/browser/sessions/session_service_factory.h"
 #include "chrome/browser/sessions/tab_restore_service_factory.h"
 #include "chrome/browser/sync/profile_sync_service_factory.h"
-#include "chrome/browser/sync/profile_sync_test_util.h"
+#include "chrome/browser/sync/session_sync_service_factory.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_tabstrip.h"
-#include "chrome/browser/ui/sync/browser_synced_window_delegates_getter.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/toolbar/recent_tabs_builder_test_helper.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/test/base/browser_with_test_window_test.h"
 #include "chrome/test/base/menu_model_test.h"
-#include "chrome/test/base/testing_profile.h"
-#include "components/browser_sync/profile_sync_service_mock.h"
-#include "components/keyed_service/content/browser_context_dependency_manager.h"
+#include "components/browser_sync/profile_sync_service.h"
 #include "components/sessions/core/persistent_tab_restore_service.h"
 #include "components/sessions/core/serialized_navigation_entry_test_helper.h"
 #include "components/sessions/core/session_types.h"
-#include "components/sync/base/sync_prefs.h"
 #include "components/sync/device_info/local_device_info_provider_mock.h"
-#include "components/sync/driver/sync_client.h"
-#include "components/sync/model/fake_sync_change_processor.h"
-#include "components/sync/model/sync_error_factory_mock.h"
-#include "components/sync_sessions/sessions_sync_manager.h"
+#include "components/sync/driver/data_type_controller.h"
+#include "components/sync/engine/data_type_activation_response.h"
+#include "components/sync/model/data_type_activation_request.h"
+#include "components/sync_sessions/session_sync_service_impl.h"
 #include "components/sync_sessions/synced_session.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/test/test_utils.h"
-#include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
-
-using testing::_;
-using testing::Invoke;
-using testing::Return;
 
 namespace {
 
@@ -113,35 +107,6 @@ class TestRecentTabsMenuModelDelegate : public ui::MenuModelDelegate {
   DISALLOW_COPY_AND_ASSIGN(TestRecentTabsMenuModelDelegate);
 };
 
-class FakeSyncServiceObserverList {
- public:
-  FakeSyncServiceObserverList() {}
-  ~FakeSyncServiceObserverList() {}
-
-  void AddObserver(syncer::SyncServiceObserver* observer) {
-    observers_.AddObserver(observer);
-  }
-
-  void RemoveObserver(syncer::SyncServiceObserver* observer) {
-    observers_.RemoveObserver(observer);
-  }
-
-  void NotifyConfigureDone() {
-    for (auto& observer : observers_)
-      observer.OnSyncConfigurationCompleted(nullptr);
-  }
-
-  void NotifyForeignSessionUpdated() {
-    for (auto& observer : observers_)
-      observer.OnForeignSessionUpdated(nullptr);
-  }
-
- private:
-  base::ObserverList<syncer::SyncServiceObserver, true> observers_;
-
-  DISALLOW_COPY_AND_ASSIGN(FakeSyncServiceObserverList);
-};
-
 }  // namespace
 
 class RecentTabsSubMenuModelTest
@@ -149,79 +114,46 @@ class RecentTabsSubMenuModelTest
  public:
   RecentTabsSubMenuModelTest() {}
 
-  void SetUp() override {
-    // Set up our mock sync service factory before the sync service (and any
-    // other services that depend on it) gets created.
-    will_create_browser_context_services_subscription_ =
-        BrowserContextDependencyManager::GetInstance()
-            ->RegisterWillCreateBrowserContextServicesCallbackForTesting(
-                base::Bind(OnWillCreateBrowserContextServices));
-
-    BrowserWithTestWindowTest::SetUp();
-
-    local_device_ = std::make_unique<syncer::LocalDeviceInfoProviderMock>(
-        "RecentTabsSubMenuModelTest", "Test Machine", "Chromium 10k",
-        "Chrome 10k", sync_pb::SyncEnums_DeviceType_TYPE_LINUX, "device_id");
-
-    sync_prefs_ = std::make_unique<syncer::SyncPrefs>(profile()->GetPrefs());
-
-    mock_sync_service_ = static_cast<browser_sync::ProfileSyncServiceMock*>(
-        ProfileSyncServiceFactory::GetForProfile(profile()));
-
-    EXPECT_CALL(*mock_sync_service_, AddObserver(_))
-        .WillRepeatedly(Invoke(&fake_sync_service_observer_list_,
-                               &FakeSyncServiceObserverList::AddObserver));
-    EXPECT_CALL(*mock_sync_service_, RemoveObserver(_))
-        .WillRepeatedly(Invoke(&fake_sync_service_observer_list_,
-                               &FakeSyncServiceObserverList::RemoveObserver));
-
-    manager_ = std::make_unique<sync_sessions::SessionsSyncManager>(
-        mock_sync_service_->GetSyncClient()->GetSyncSessionsClient(),
-        sync_prefs_.get(), local_device_.get(),
-        base::Bind(&FakeSyncServiceObserverList::NotifyForeignSessionUpdated,
-                   base::Unretained(&fake_sync_service_observer_list_)));
-
-    manager_->MergeDataAndStartSyncing(
-        syncer::SESSIONS, syncer::SyncDataList(),
-        std::unique_ptr<syncer::SyncChangeProcessor>(
-            new syncer::FakeSyncChangeProcessor),
-        std::unique_ptr<syncer::SyncErrorFactory>(
-            new syncer::SyncErrorFactoryMock));
-  }
-
-  void TearDown() override {
-    manager_.reset();
-    sync_prefs_.reset();
-    local_device_.reset();
-    BrowserWithTestWindowTest::TearDown();
-  }
-
   void WaitForLoadFromLastSession() { content::RunAllTasksUntilIdle(); }
 
-  void DisableSync() {
-    EXPECT_CALL(*mock_sync_service_, IsSyncActive())
-        .WillRepeatedly(Return(false));
-    EXPECT_CALL(*mock_sync_service_, IsDataTypeControllerRunning(_))
-        .WillRepeatedly(Return(false));
-    EXPECT_CALL(*mock_sync_service_, GetOpenTabsUIDelegateMock())
-        .WillRepeatedly(Return(nullptr));
+  void SetUp() override {
+    BrowserWithTestWindowTest::SetUp();
+    session_sync_service_ = SessionSyncServiceFactory::GetForProfile(profile());
+
+    syncer::DataTypeActivationRequest activation_request;
+    activation_request.cache_guid = "test_cache_guid";
+    activation_request.error_handler = base::DoNothing();
+
+    ProfileSyncServiceFactory::GetForProfile(profile())
+        ->GetLocalDeviceInfoProviderForTest()
+        ->Initialize(activation_request.cache_guid, "Test Machine",
+                     "device_id");
+
+    std::unique_ptr<syncer::DataTypeActivationResponse> activation_response;
+    base::RunLoop loop;
+    session_sync_service_->GetControllerDelegate()->OnSyncStarting(
+        activation_request,
+        base::BindLambdaForTesting(
+            [&](std::unique_ptr<syncer::DataTypeActivationResponse> response) {
+              activation_response = std::move(response);
+              loop.Quit();
+            }));
+    loop.Run();
+    ASSERT_NE(nullptr, activation_response);
+    ASSERT_NE(nullptr, activation_response->type_processor);
+    sync_processor_ = std::move(activation_response->type_processor);
+
+    EnableSync();
   }
 
   void EnableSync() {
-    EXPECT_CALL(*mock_sync_service_, IsSyncActive())
-        .WillRepeatedly(Return(true));
-    EXPECT_CALL(*mock_sync_service_,
-                IsDataTypeControllerRunning(syncer::SESSIONS))
-        .WillRepeatedly(Return(true));
-    EXPECT_CALL(*mock_sync_service_,
-                IsDataTypeControllerRunning(syncer::PROXY_TABS))
-        .WillRepeatedly(Return(true));
-    EXPECT_CALL(*mock_sync_service_, GetOpenTabsUIDelegateMock())
-        .WillRepeatedly(Return(manager_->GetOpenTabsUIDelegate()));
+    session_sync_service_->ProxyTabsStateChanged(
+        syncer::DataTypeController::RUNNING);
   }
 
-  void NotifySyncEnabled() {
-    fake_sync_service_observer_list_.NotifyConfigureDone();
+  void DisableSync() {
+    session_sync_service_->ProxyTabsStateChanged(
+        syncer::DataTypeController::NOT_RUNNING);
   }
 
   static std::unique_ptr<KeyedService> GetTabRestoreService(
@@ -233,25 +165,18 @@ class RecentTabsSubMenuModelTest
   }
 
   void RegisterRecentTabs(RecentTabsBuilderTestHelper* helper) {
-    helper->ExportToSessionsSyncManager(manager_.get());
+    helper->ExportToSessionSync(
+        sync_processor_.get(),
+        static_cast<sync_sessions::SessionSyncServiceImpl*>(
+            session_sync_service_)
+            ->GetUnderlyingOpenTabsUIDelegateForTest());
   }
 
  private:
-  static void OnWillCreateBrowserContextServices(
-      content::BrowserContext* context) {
-    ProfileSyncServiceFactory::GetInstance()->SetTestingFactory(
-        context, BuildMockProfileSyncService);
-  }
+  sync_sessions::SessionSyncService* session_sync_service_;
+  std::unique_ptr<syncer::ModelTypeProcessor> sync_processor_;
 
-  std::unique_ptr<
-      base::CallbackList<void(content::BrowserContext*)>::Subscription>
-      will_create_browser_context_services_subscription_;
-
-  std::unique_ptr<syncer::LocalDeviceInfoProviderMock> local_device_;
-  std::unique_ptr<syncer::SyncPrefs> sync_prefs_;
-  FakeSyncServiceObserverList fake_sync_service_observer_list_;
-  browser_sync::ProfileSyncServiceMock* mock_sync_service_ = nullptr;
-  std::unique_ptr<sync_sessions::SessionsSyncManager> manager_;
+  DISALLOW_COPY_AND_ASSIGN(RecentTabsSubMenuModelTest);
 };
 
 // Test disabled "Recently closed" header with no foreign tabs.
@@ -295,7 +220,8 @@ TEST_F(RecentTabsSubMenuModelTest, RecentlyClosedTabsFromCurrentSession) {
   DisableSync();
 
   TabRestoreServiceFactory::GetInstance()->SetTestingFactory(
-      profile(), RecentTabsSubMenuModelTest::GetTabRestoreService);
+      profile(),
+      base::BindRepeating(&RecentTabsSubMenuModelTest::GetTabRestoreService));
 
   // Add 2 tabs and close them.
   AddTab(browser(), GURL("http://foo/1"));
@@ -360,7 +286,8 @@ TEST_F(RecentTabsSubMenuModelTest,
   DisableSync();
 
   TabRestoreServiceFactory::GetInstance()->SetTestingFactory(
-      profile(), RecentTabsSubMenuModelTest::GetTabRestoreService);
+      profile(),
+      base::BindRepeating(&RecentTabsSubMenuModelTest::GetTabRestoreService));
 
   // Add 2 tabs and close them.
   AddTab(browser(), GURL("http://wnd/tab0"));
@@ -394,7 +321,8 @@ TEST_F(RecentTabsSubMenuModelTest,
   // Create a new TabRestoreService so that it'll load the recently closed tabs
   // and windows afresh.
   TabRestoreServiceFactory::GetInstance()->SetTestingFactory(
-      profile(), RecentTabsSubMenuModelTest::GetTabRestoreService);
+      profile(),
+      base::BindRepeating(&RecentTabsSubMenuModelTest::GetTabRestoreService));
   // Let the shutdown of previous TabRestoreService run.
   content::RunAllTasksUntilIdle();
 
@@ -480,8 +408,6 @@ TEST_F(RecentTabsSubMenuModelTest,
 // Test disabled "Recently closed" header with multiple sessions, multiple
 // windows, and multiple enabled tabs from other devices.
 TEST_F(RecentTabsSubMenuModelTest, OtherDevices) {
-  EnableSync();
-
   // Tabs are populated in decreasing timestamp.
   base::Time timestamp = base::Time::Now();
   const base::TimeDelta time_delta = base::TimeDelta::FromMinutes(10);
@@ -635,7 +561,6 @@ TEST_F(RecentTabsSubMenuModelTest, MAYBE_OtherDevicesDynamicUpdate) {
   int previous_execute_count = model.execute_count();
 
   EnableSync();
-  NotifySyncEnabled();
 
   // Verify that data is populated correctly in RecentTabsSubMenuModel.
   // Expected menu:
@@ -707,8 +632,6 @@ TEST_F(RecentTabsSubMenuModelTest, MAYBE_OtherDevicesDynamicUpdate) {
 }
 
 TEST_F(RecentTabsSubMenuModelTest, MaxSessionsAndRecency) {
-  EnableSync();
-
   // Create 4 sessions : each session has 1 window with 1 tab each.
   RecentTabsBuilderTestHelper recent_tabs_builder;
   for (int s = 0; s < 4; ++s) {

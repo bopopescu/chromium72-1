@@ -118,4 +118,10 @@ TEST_F(DNSUtilTest, IsValidDNSDomain) {
   }
 }
 
+TEST_F(DNSUtilTest, GetURLFromTemplateWithoutParameters) {
+  EXPECT_EQ("https://dnsserver.example.net/dns-query",
+            GetURLFromTemplateWithoutParameters(
+                "https://dnsserver.example.net/dns-query{?dns}"));
+}
+
 }  // namespace net

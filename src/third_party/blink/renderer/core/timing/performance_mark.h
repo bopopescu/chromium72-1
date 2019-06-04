@@ -33,31 +33,31 @@
 
 namespace blink {
 
-class ScriptWrappableVisitor;
-
 class CORE_EXPORT PerformanceMark final : public PerformanceEntry {
   DEFINE_WRAPPERTYPEINFO();
 
  public:
   static PerformanceMark* Create(ScriptState* script_state,
-                                 const String& name,
+                                 const AtomicString& name,
                                  double start_time,
                                  const ScriptValue& detail) {
-    return new PerformanceMark(script_state, name, start_time, detail);
+    return MakeGarbageCollected<PerformanceMark>(script_state, name, start_time,
+                                                 detail);
   }
+
+  PerformanceMark(ScriptState*,
+                  const AtomicString& name,
+                  double start_time,
+                  const ScriptValue& detail);
+
+  AtomicString entryType() const override;
+  PerformanceEntryType EntryTypeEnum() const override;
 
   ScriptValue detail(ScriptState*) const;
 
   void Trace(blink::Visitor*) override;
 
-  void TraceWrappers(ScriptWrappableVisitor*) const override;
-
  private:
-  PerformanceMark(ScriptState*,
-                  const String& name,
-                  double start_time,
-                  const ScriptValue& detail);
-
   ~PerformanceMark() override = default;
 
   scoped_refptr<DOMWrapperWorld> world_;

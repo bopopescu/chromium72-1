@@ -8,17 +8,20 @@
 #include <memory>
 #include <vector>
 
+#include "ash/public/interfaces/ash_window_manager.mojom.h"
+#include "ash/public/interfaces/menu.mojom.h"
+#include "ash/wm/window_state_observer.h"  // mash-ok
 #include "base/gtest_prod_util.h"
+#include "base/scoped_observer.h"
+#include "chrome/browser/ui/ash/multi_user/multi_user_window_manager.h"
 #include "chrome/browser/ui/ash/tablet_mode_client_observer.h"
 #include "chrome/browser/ui/exclusive_access/exclusive_access_context.h"
 #include "chrome/browser/ui/views/apps/chrome_native_app_window_views_aura.h"
 #include "chrome/browser/ui/views/exclusive_access_bubble_views_context.h"
+#include "mojo/public/cpp/bindings/binding.h"
+#include "ui/aura/window_observer.h"
 #include "ui/base/accelerators/accelerator.h"
 #include "ui/views/context_menu_controller.h"
-
-namespace ash {
-class ImmersiveFullscreenController;
-}
 
 namespace ui {
 class MenuModel;
@@ -39,7 +42,11 @@ class ChromeNativeAppWindowViewsAuraAsh
       public TabletModeClientObserver,
       public ui::AcceleratorProvider,
       public ExclusiveAccessContext,
-      public ExclusiveAccessBubbleViewsContext {
+      public ExclusiveAccessBubbleViewsContext,
+      public ash::wm::WindowStateObserver,
+      public aura::WindowObserver,
+      public MultiUserWindowManager::Observer,
+      public ash::mojom::MenuDelegate {
  public:
   ChromeNativeAppWindowViewsAuraAsh();
   ~ChromeNativeAppWindowViewsAuraAsh() override;
@@ -55,8 +62,6 @@ class ChromeNativeAppWindowViewsAuraAsh
       const extensions::AppWindow::CreateParams& create_params,
       views::Widget::InitParams* init_params,
       views::Widget* widget) override;
-  void OnBeforePanelWidgetInit(views::Widget::InitParams* init_params,
-                               views::Widget* widget) override;
   views::NonClientFrameView* CreateNonStandardAppFrame() override;
   bool ShouldRemoveStandardFrame() override;
 
@@ -73,6 +78,7 @@ class ChromeNativeAppWindowViewsAuraAsh
   // WidgetDelegate:
   views::NonClientFrameView* CreateNonClientFrameView(
       views::Widget* widget) override;
+  ui::ModalType GetModalType() const override;
 
   // NativeAppWindow:
   void SetFullscreen(int fullscreen_types) override;
@@ -102,8 +108,7 @@ class ChromeNativeAppWindowViewsAuraAsh
   content::WebContents* GetActiveWebContents() override;
   void UnhideDownloadShelf() override;
   void HideDownloadShelf() override;
-  bool ShouldHideUIForFullscreen() const override;
-  ExclusiveAccessBubbleViews* GetExclusiveAccessBubble() override;
+  bool CanUserExitFullscreen() const override;
 
   // ExclusiveAccessBubbleViewsContext:
   ExclusiveAccessManager* GetExclusiveAccessManager() override;
@@ -120,6 +125,24 @@ class ChromeNativeAppWindowViewsAuraAsh
   // WidgetObserver:
   void OnWidgetActivationChanged(views::Widget* widget, bool active) override;
 
+  // ash::wm::WindowStateObserver
+  void OnPostWindowStateTypeChange(
+      ash::wm::WindowState* window_state,
+      ash::mojom::WindowStateType old_type) override;
+
+  // aura::WindowObserver:
+  void OnWindowPropertyChanged(aura::Window* window,
+                               const void* key,
+                               intptr_t old) override;
+  void OnWindowDestroying(aura::Window* window) override;
+
+  // MultiUserWindowManager::Observer:
+  void OnOwnerEntryAdded(aura::Window* window) override;
+  void OnOwnerEntryChanged(aura::Window* window) override;
+
+  // ash::mojom::MenuDelegate:
+  void MenuItemActivated(int command_id) override;
+
  private:
   FRIEND_TEST_ALL_PREFIXES(ChromeNativeAppWindowViewsAuraAshBrowserTest,
                            ImmersiveWorkFlow);
@@ -129,6 +152,8 @@ class ChromeNativeAppWindowViewsAuraAsh
                            NoImmersiveModeWhenForcedFullscreen);
   FRIEND_TEST_ALL_PREFIXES(ChromeNativeAppWindowViewsAuraAshBrowserTest,
                            PublicSessionImmersiveMode);
+  FRIEND_TEST_ALL_PREFIXES(ChromeNativeAppWindowViewsAuraAshBrowserTest,
+                           RestoreImmersiveMode);
   FRIEND_TEST_ALL_PREFIXES(ChromeNativeAppWindowViewsAuraAshInteractiveTest,
                            NoImmersiveOrBubbleOutsidePublicSessionWindow);
   FRIEND_TEST_ALL_PREFIXES(ChromeNativeAppWindowViewsAuraAshInteractiveTest,
@@ -143,6 +168,9 @@ class ChromeNativeAppWindowViewsAuraAsh
   // Callback for MenuRunner
   void OnMenuClosed();
 
+  // Callback for Ash-controlled context menus, invoked over Mojo.
+  void ExecuteContextMenuItem(int command_id);
+
   // Whether immersive mode should be enabled.
   bool ShouldEnableImmersiveMode() const;
 
@@ -150,14 +178,7 @@ class ChromeNativeAppWindowViewsAuraAsh
   // app's and window manager's state.
   void UpdateImmersiveMode();
 
-  // Used to put non-frameless windows into immersive fullscreen on ChromeOS. In
-  // immersive fullscreen, the window header (title bar and window controls)
-  // slides onscreen as an overlay when the mouse is hovered at the top of the
-  // screen.
-  std::unique_ptr<ash::ImmersiveFullscreenController>
-      immersive_fullscreen_controller_;
-
-  // Used to show the system menu.
+  // Used to show the system menu. Only used in !Mash.
   std::unique_ptr<ui::MenuModel> menu_model_;
   std::unique_ptr<views::MenuRunner> menu_runner_;
 
@@ -166,6 +187,14 @@ class ChromeNativeAppWindowViewsAuraAsh
   std::unique_ptr<ExclusiveAccessBubbleViews> exclusive_access_bubble_;
 
   bool tablet_mode_enabled_ = false;
+
+  // Only used in mash.
+  ash::mojom::AshWindowManagerAssociatedPtr ash_window_manager_;
+  mojo::Binding<ash::mojom::MenuDelegate> binding_{this};
+
+  ScopedObserver<aura::Window, aura::WindowObserver> observed_window_{this};
+  ScopedObserver<ash::wm::WindowState, ash::wm::WindowStateObserver>
+      observed_window_state_{this};
 
   DISALLOW_COPY_AND_ASSIGN(ChromeNativeAppWindowViewsAuraAsh);
 };

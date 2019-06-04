@@ -34,9 +34,7 @@ class RtpDataEngine : public DataEngineInterface {
 
   virtual DataMediaChannel* CreateChannel(const MediaConfig& config);
 
-  virtual const std::vector<DataCodec>& data_codecs() {
-    return data_codecs_;
-  }
+  virtual const std::vector<DataCodec>& data_codecs() { return data_codecs_; }
 
  private:
   std::vector<DataCodec> data_codecs_;
@@ -84,14 +82,13 @@ class RtpDataMediaChannel : public DataMediaChannel {
     return true;
   }
   virtual void OnPacketReceived(rtc::CopyOnWriteBuffer* packet,
-                                const rtc::PacketTime& packet_time);
+                                int64_t packet_time_us);
   virtual void OnRtcpReceived(rtc::CopyOnWriteBuffer* packet,
-                              const rtc::PacketTime& packet_time) {}
+                              int64_t packet_time_us) {}
   virtual void OnReadyToSend(bool ready) {}
-  virtual bool SendData(
-    const SendDataParams& params,
-    const rtc::CopyOnWriteBuffer& payload,
-    SendDataResult* result);
+  virtual bool SendData(const SendDataParams& params,
+                        const rtc::CopyOnWriteBuffer& payload,
+                        SendDataResult* result);
   virtual rtc::DiffServCodePoint PreferredDscp() const;
 
  private:

@@ -37,6 +37,8 @@ class CORE_EXPORT HTMLStyleElement final : public HTMLElement,
 
  public:
   static HTMLStyleElement* Create(Document&, const CreateElementFlags);
+
+  HTMLStyleElement(Document&, const CreateElementFlags);
   ~HTMLStyleElement() override;
 
   using StyleElement::sheet;
@@ -47,17 +49,14 @@ class CORE_EXPORT HTMLStyleElement final : public HTMLElement,
   void Trace(blink::Visitor*) override;
 
  private:
-  HTMLStyleElement(Document&, const CreateElementFlags);
-
   // Always call this asynchronously because this can cause synchronous
   // Document load event and JavaScript execution.
   void DispatchPendingEvent(std::unique_ptr<IncrementLoadEventDelayCount>);
 
   // overload from HTMLElement
   void ParseAttribute(const AttributeModificationParams&) override;
-  InsertionNotificationRequest InsertedInto(ContainerNode*) override;
-  void DidNotifySubtreeInsertionsToDocument() override;
-  void RemovedFrom(ContainerNode*) override;
+  InsertionNotificationRequest InsertedInto(ContainerNode&) override;
+  void RemovedFrom(ContainerNode&) override;
   void ChildrenChanged(const ChildrenChange&) override;
 
   void FinishParsingChildren() override;

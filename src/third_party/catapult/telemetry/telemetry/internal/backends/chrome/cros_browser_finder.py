@@ -86,7 +86,7 @@ class PossibleCrOSBrowser(possible_browser.PossibleBrowser):
     for extension in self._browser_options.extensions_to_load:
       self._platform_backend.cri.RmRF(posixpath.dirname(extension.local_path))
 
-  def Create(self):
+  def Create(self, clear_caches=True):
     startup_args = self.GetBrowserStartupArgs(self._browser_options)
 
     browser_backend = cros_browser_backend.CrOSBrowserBackend(
@@ -94,7 +94,9 @@ class PossibleCrOSBrowser(possible_browser.PossibleBrowser):
         self.browser_directory, self.profile_directory,
         self._is_guest)
 
-    self._ClearCachesOnStart()
+    # TODO(crbug.com/811244): Remove when this is handled by shared state.
+    if clear_caches:
+      self._ClearCachesOnStart()
 
     if self._browser_options.create_browser_with_oobe:
       return cros_browser_with_oobe.CrOSBrowserWithOOBE(
@@ -108,6 +110,7 @@ class PossibleCrOSBrowser(possible_browser.PossibleBrowser):
 
   def GetBrowserStartupArgs(self, browser_options):
     startup_args = chrome_startup_args.GetFromBrowserOptions(browser_options)
+
     startup_args.extend(chrome_startup_args.GetReplayArgs(
         self._platform_backend.network_controller_backend))
 
@@ -123,8 +126,9 @@ class PossibleCrOSBrowser(possible_browser.PossibleBrowser):
         '--remote-debugging-port=0',
         # Open a maximized window.
         '--start-maximized',
-        # Disable system startup sound.
+        # Disable sounds.
         '--ash-disable-system-sounds',
+        '--mute-audio',
         # Skip user image selection screen, and post login screens.
         '--oobe-skip-postlogin',
         # Disable chrome logging redirect. crbug.com/724273.

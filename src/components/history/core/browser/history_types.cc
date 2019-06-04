@@ -41,7 +41,7 @@ QueryResults::~QueryResults() {}
 
 const size_t* QueryResults::MatchesForURL(const GURL& url,
                                           size_t* num_matches) const {
-  URLToResultIndices::const_iterator found = url_to_results_.find(url);
+  auto found = url_to_results_.find(url);
   if (found == url_to_results_.end()) {
     if (num_matches)
       *num_matches = 0;
@@ -94,7 +94,7 @@ void QueryResults::DeleteRange(size_t begin, size_t end) {
 
   // Delete the indicies referencing the deleted entries.
   for (const auto& url : urls_modified) {
-    URLToResultIndices::iterator found = url_to_results_.find(url);
+    auto found = url_to_results_.find(url);
     if (found == url_to_results_.end()) {
       NOTREACHED();
       continue;
@@ -121,7 +121,7 @@ void QueryResults::DeleteRange(size_t begin, size_t end) {
 }
 
 void QueryResults::AddURLUsageAtIndex(const GURL& url, size_t index) {
-  URLToResultIndices::iterator found = url_to_results_.find(url);
+  auto found = url_to_results_.find(url);
   if (found != url_to_results_.end()) {
     // The URL is already in the list, so we can just append the new index.
     found->second->push_back(index);
@@ -135,8 +135,7 @@ void QueryResults::AddURLUsageAtIndex(const GURL& url, size_t index) {
 }
 
 void QueryResults::AdjustResultMap(size_t begin, size_t end, ptrdiff_t delta) {
-  for (URLToResultIndices::iterator i = url_to_results_.begin();
-       i != url_to_results_.end(); ++i) {
+  for (auto i = url_to_results_.begin(); i != url_to_results_.end(); ++i) {
     for (size_t match = 0; match < i->second->size(); match++) {
       size_t match_index = i->second[match];
       if (match_index >= begin && match_index <= end)
@@ -260,7 +259,8 @@ HistoryAddPageArgs::HistoryAddPageArgs()
                          false,
                          SOURCE_BROWSED,
                          false,
-                         true) {}
+                         true,
+                         base::nullopt) {}
 
 HistoryAddPageArgs::HistoryAddPageArgs(const GURL& url,
                                        base::Time time,
@@ -272,7 +272,8 @@ HistoryAddPageArgs::HistoryAddPageArgs(const GURL& url,
                                        bool hidden,
                                        VisitSource source,
                                        bool did_replace_entry,
-                                       bool consider_for_ntp_most_visited)
+                                       bool consider_for_ntp_most_visited,
+                                       base::Optional<base::string16> title)
     : url(url),
       time(time),
       context_id(context_id),
@@ -283,7 +284,8 @@ HistoryAddPageArgs::HistoryAddPageArgs(const GURL& url,
       hidden(hidden),
       visit_source(source),
       did_replace_entry(did_replace_entry),
-      consider_for_ntp_most_visited(consider_for_ntp_most_visited) {}
+      consider_for_ntp_most_visited(consider_for_ntp_most_visited),
+      title(title) {}
 
 HistoryAddPageArgs::HistoryAddPageArgs(const HistoryAddPageArgs& other) =
     default;

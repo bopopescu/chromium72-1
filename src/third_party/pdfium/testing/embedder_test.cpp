@@ -6,23 +6,21 @@
 
 #include <limits.h>
 
-#include <fstream>
 #include <list>
 #include <map>
 #include <memory>
 #include <string>
 #include <utility>
-#include <vector>
 
-#include "core/fdrm/crypto/fx_crypt.h"
+#include "core/fdrm/fx_crypt.h"
 #include "public/cpp/fpdf_scopers.h"
 #include "public/fpdf_dataavail.h"
 #include "public/fpdf_edit.h"
 #include "public/fpdf_text.h"
 #include "public/fpdfview.h"
 #include "testing/gmock/include/gmock/gmock.h"
-#include "testing/image_diff/image_diff_png.h"
 #include "testing/test_support.h"
+#include "testing/utils/bitmap_saver.h"
 #include "testing/utils/path_service.h"
 #include "third_party/base/logging.h"
 #include "third_party/base/ptr_util.h"
@@ -95,6 +93,12 @@ void EmbedderTest::TearDown() {
   FPDF_DestroyLibrary();
   delete loader_;
 }
+
+#ifdef PDF_ENABLE_V8
+void EmbedderTest::SetExternalIsolate(void* isolate) {
+  external_isolate_ = static_cast<v8::Isolate*>(isolate);
+}
+#endif  // PDF_ENABLE_V8
 
 bool EmbedderTest::CreateEmptyDocument() {
   document_ = FPDF_CreateNewDocument();
@@ -243,6 +247,8 @@ FPDF_FORMHANDLE EmbedderTest::SetupFormFillEnvironment(
   formfillinfo->FFI_SetTimer = SetTimerTrampoline;
   formfillinfo->FFI_KillTimer = KillTimerTrampoline;
   formfillinfo->FFI_GetPage = GetPageTrampoline;
+  formfillinfo->FFI_DoURIAction = DoURIActionTrampoline;
+
   if (javascript_option == JavaScriptOption::kEnableJavaScript)
     formfillinfo->m_pJsPlatform = platform;
 
@@ -276,6 +282,14 @@ int EmbedderTest::GetPageCount() {
 }
 
 FPDF_PAGE EmbedderTest::LoadPage(int page_number) {
+  return LoadPageCommon(page_number, true);
+}
+
+FPDF_PAGE EmbedderTest::LoadPageNoEvents(int page_number) {
+  return LoadPageCommon(page_number, false);
+}
+
+FPDF_PAGE EmbedderTest::LoadPageCommon(int page_number, bool do_events) {
   ASSERT(form_handle_);
   ASSERT(page_number >= 0);
   ASSERT(!pdfium::ContainsKey(page_map_, page_number));
@@ -284,25 +298,34 @@ FPDF_PAGE EmbedderTest::LoadPage(int page_number) {
   if (!page)
     return nullptr;
 
-  FORM_OnAfterLoadPage(page, form_handle_);
-  FORM_DoPageAAction(page, form_handle_, FPDFPAGE_AACTION_OPEN);
+  if (do_events) {
+    FORM_OnAfterLoadPage(page, form_handle_);
+    FORM_DoPageAAction(page, form_handle_, FPDFPAGE_AACTION_OPEN);
+  }
   page_map_[page_number] = page;
   return page;
 }
 
 void EmbedderTest::UnloadPage(FPDF_PAGE page) {
-  ASSERT(form_handle_);
+  UnloadPageCommon(page, true);
+}
 
+void EmbedderTest::UnloadPageNoEvents(FPDF_PAGE page) {
+  UnloadPageCommon(page, false);
+}
+
+void EmbedderTest::UnloadPageCommon(FPDF_PAGE page, bool do_events) {
+  ASSERT(form_handle_);
   int page_number = GetPageNumberForLoadedPage(page);
   if (page_number < 0) {
     NOTREACHED();
     return;
   }
-
-  FORM_DoPageAAction(page, form_handle_, FPDFPAGE_AACTION_CLOSE);
-  FORM_OnBeforeClosePage(page, form_handle_);
+  if (do_events) {
+    FORM_DoPageAAction(page, form_handle_, FPDFPAGE_AACTION_CLOSE);
+    FORM_OnBeforeClosePage(page, form_handle_);
+  }
   FPDF_ClosePage(page);
-
   page_map_.erase(page_number);
 }
 
@@ -351,7 +374,9 @@ FPDF_DOCUMENT EmbedderTest::OpenSavedDocument(const char* password) {
   memset(&saved_file_access_, 0, sizeof(saved_file_access_));
   saved_file_access_.m_FileLen = data_string_.size();
   saved_file_access_.m_GetBlock = GetBlockFromString;
-  saved_file_access_.m_Param = &data_string_;
+  // Copy data to prevent clearing it before saved document close.
+  saved_document_file_data_ = data_string_;
+  saved_file_access_.m_Param = &saved_document_file_data_;
 
   saved_fake_file_access_ =
       pdfium::MakeUnique<FakeFileAccess>(&saved_file_access_);
@@ -418,7 +443,7 @@ void EmbedderTest::VerifySavedRendering(FPDF_PAGE page,
 }
 
 void EmbedderTest::VerifySavedDocument(int width, int height, const char* md5) {
-  OpenSavedDocument();
+  OpenSavedDocument(nullptr);
   FPDF_PAGE page = LoadSavedPage(0);
   VerifySavedRendering(page, width, height, md5);
   CloseSavedPage(page);
@@ -478,6 +503,13 @@ FPDF_PAGE EmbedderTest::GetPageTrampoline(FPDF_FORMFILLINFO* info,
 }
 
 // static
+void EmbedderTest::DoURIActionTrampoline(FPDF_FORMFILLINFO* info,
+                                         FPDF_BYTESTRING uri) {
+  EmbedderTest* test = static_cast<EmbedderTest*>(info);
+  return test->delegate_->DoURIAction(uri);
+}
+
+// static
 std::string EmbedderTest::HashBitmap(FPDF_BITMAP bitmap) {
   uint8_t digest[16];
   CRYPT_MD5Generate(static_cast<uint8_t*>(FPDFBitmap_GetBuffer(bitmap)),
@@ -492,32 +524,7 @@ std::string EmbedderTest::HashBitmap(FPDF_BITMAP bitmap) {
 // static
 void EmbedderTest::WriteBitmapToPng(FPDF_BITMAP bitmap,
                                     const std::string& filename) {
-  const int stride = FPDFBitmap_GetStride(bitmap);
-  const int width = FPDFBitmap_GetWidth(bitmap);
-  const int height = FPDFBitmap_GetHeight(bitmap);
-  const auto* buffer =
-      static_cast<const unsigned char*>(FPDFBitmap_GetBuffer(bitmap));
-
-  std::vector<unsigned char> png_encoding;
-  bool encoded;
-  if (FPDFBitmap_GetFormat(bitmap) == FPDFBitmap_Gray) {
-    encoded = image_diff_png::EncodeGrayPNG(buffer, width, height, stride,
-                                            &png_encoding);
-  } else {
-    encoded = image_diff_png::EncodeBGRAPNG(buffer, width, height, stride,
-                                            /*discard_transparency=*/false,
-                                            &png_encoding);
-  }
-
-  ASSERT_TRUE(encoded);
-  ASSERT_LT(filename.size(), 256u);
-
-  std::ofstream png_file;
-  png_file.open(filename, std::ios_base::out | std::ios_base::binary);
-  png_file.write(reinterpret_cast<char*>(&png_encoding.front()),
-                 png_encoding.size());
-  ASSERT_TRUE(png_file.good());
-  png_file.close();
+  BitmapSaver::WriteBitmapToPng(bitmap, filename);
 }
 #endif
 
@@ -546,7 +553,12 @@ int EmbedderTest::WriteBlockCallback(FPDF_FILEWRITE* pFileWrite,
                                      const void* data,
                                      unsigned long size) {
   EmbedderTest* pThis = static_cast<EmbedderTest*>(pFileWrite);
+
   pThis->data_string_.append(static_cast<const char*>(data), size);
+
+  if (pThis->filestream_.is_open())
+    pThis->filestream_.write(static_cast<const char*>(data), size);
+
   return 1;
 }
 
@@ -586,4 +598,12 @@ int EmbedderTest::GetPageNumberForLoadedPage(FPDF_PAGE page) const {
 
 int EmbedderTest::GetPageNumberForSavedPage(FPDF_PAGE page) const {
   return GetPageNumberForPage(saved_page_map_, page);
+}
+
+void EmbedderTest::OpenPDFFileForWrite(const char* filename) {
+  filestream_.open(filename, std::ios_base::binary);
+}
+
+void EmbedderTest::ClosePDFFileForWrite() {
+  filestream_.close();
 }

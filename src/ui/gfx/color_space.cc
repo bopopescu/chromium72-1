@@ -5,6 +5,7 @@
 #include "ui/gfx/color_space.h"
 
 #include <iomanip>
+#include <limits>
 #include <map>
 #include <sstream>
 
@@ -47,23 +48,12 @@ static bool IsAlmostZero(float value) {
 // static
 int ColorSpace::kInvalidId = -1;
 
-ColorSpace::ColorSpace() {}
-
 ColorSpace::ColorSpace(PrimaryID primaries,
                        TransferID transfer)
     : primaries_(primaries),
       transfer_(transfer),
       matrix_(MatrixID::RGB),
       range_(RangeID::FULL) {}
-
-ColorSpace::ColorSpace(PrimaryID primaries,
-                       TransferID transfer,
-                       MatrixID matrix,
-                       RangeID range)
-    : primaries_(primaries),
-      transfer_(transfer),
-      matrix_(matrix),
-      range_(range) {}
 
 ColorSpace::ColorSpace(PrimaryID primaries,
                        const SkColorSpaceTransferFn& fn,
@@ -73,49 +63,66 @@ ColorSpace::ColorSpace(PrimaryID primaries,
   SetCustomTransferFunction(fn);
 }
 
-ColorSpace::ColorSpace(const ColorSpace& other)
-    : primaries_(other.primaries_),
-      transfer_(other.transfer_),
-      matrix_(other.matrix_),
-      range_(other.range_),
-      icc_profile_id_(other.icc_profile_id_) {
-  if (transfer_ == TransferID::CUSTOM) {
-    memcpy(custom_transfer_params_, other.custom_transfer_params_,
-           sizeof(custom_transfer_params_));
+ColorSpace::ColorSpace(const SkColorSpace& sk_color_space)
+    : ColorSpace(PrimaryID::INVALID,
+                 TransferID::INVALID,
+                 MatrixID::RGB,
+                 RangeID::FULL) {
+  switch (sk_color_space.gammaNamed()) {
+    case kLinear_SkGammaNamed:
+      transfer_ = TransferID::LINEAR;
+      break;
+    case kSRGB_SkGammaNamed:
+      transfer_ = TransferID::IEC61966_2_1;
+      break;
+    default: {
+      SkColorSpaceTransferFn transfer_fn;
+      if (sk_color_space.isNumericalTransferFn(&transfer_fn)) {
+        transfer_ = TransferID::CUSTOM;
+        SetCustomTransferFunction(transfer_fn);
+      } else {
+        // Construct an invalid result: Unable to determine transfer function.
+        return;
+      }
+      break;
+    }
   }
-  if (primaries_ == PrimaryID::CUSTOM) {
-    memcpy(custom_primary_matrix_, other.custom_primary_matrix_,
-           sizeof(custom_primary_matrix_));
+
+  // As of this writing, Skia doesn't provide a property accessor for its named
+  // gamuts. Therefore, the following attempts to detect by "guess and check"
+  // for the commonly-used primaries.
+  primaries_ = PrimaryID::BT709;
+  if (SkColorSpace::Equals(&sk_color_space, ToSkColorSpace().get())) {
+    return;
   }
+  primaries_ = PrimaryID::ADOBE_RGB;
+  if (SkColorSpace::Equals(&sk_color_space, ToSkColorSpace().get())) {
+    return;
+  }
+  primaries_ = PrimaryID::SMPTEST432_1;
+  if (SkColorSpace::Equals(&sk_color_space, ToSkColorSpace().get())) {
+    return;
+  }
+  primaries_ = PrimaryID::BT2020;
+  if (SkColorSpace::Equals(&sk_color_space, ToSkColorSpace().get())) {
+    return;
+  }
+
+  // Use custom primaries, if they are representable as a "to XYZD50" matrix.
+  SkMatrix44 to_XYZD50{SkMatrix44::kUninitialized_Constructor};
+  if (sk_color_space.toXYZD50(&to_XYZD50)) {
+    primaries_ = PrimaryID::CUSTOM;
+    SetCustomPrimaries(to_XYZD50);
+    return;
+  }
+
+  // If this point is reached, there is no way to represent the primaries.
+  primaries_ = PrimaryID::INVALID;
 }
-
-ColorSpace::ColorSpace(ColorSpace&& other) = default;
-
-ColorSpace& ColorSpace::operator=(const ColorSpace& other) = default;
-
-ColorSpace::~ColorSpace() = default;
 
 bool ColorSpace::IsValid() const {
   return primaries_ != PrimaryID::INVALID && transfer_ != TransferID::INVALID &&
          matrix_ != MatrixID::INVALID && range_ != RangeID::INVALID;
-}
-
-// static
-ColorSpace ColorSpace::CreateSRGB() {
-  return ColorSpace(PrimaryID::BT709, TransferID::IEC61966_2_1, MatrixID::RGB,
-                    RangeID::FULL);
-}
-
-// static
-ColorSpace ColorSpace::CreateDisplayP3D65() {
-  return ColorSpace(PrimaryID::SMPTEST432_1, TransferID::IEC61966_2_1,
-                    MatrixID::RGB, RangeID::FULL);
-}
-
-// static
-ColorSpace ColorSpace::CreateExtendedSRGB() {
-  return ColorSpace(PrimaryID::BT709, TransferID::IEC61966_2_1_HDR,
-                    MatrixID::RGB, RangeID::FULL);
 }
 
 // static
@@ -159,38 +166,6 @@ ColorSpace ColorSpace::CreateCustom(const SkMatrix44& to_XYZD50,
                     ColorSpace::MatrixID::RGB, ColorSpace::RangeID::FULL);
   result.SetCustomPrimaries(to_XYZD50);
   return result;
-}
-
-// static
-ColorSpace ColorSpace::CreateSCRGBLinear() {
-  return ColorSpace(PrimaryID::BT709, TransferID::LINEAR_HDR, MatrixID::RGB,
-                    RangeID::FULL);
-}
-
-// Static
-ColorSpace ColorSpace::CreateXYZD50() {
-  return ColorSpace(PrimaryID::XYZ_D50, TransferID::LINEAR, MatrixID::RGB,
-                    RangeID::FULL);
-}
-
-// static
-ColorSpace ColorSpace::CreateJpeg() {
-  // TODO(ccameron): Determine which primaries and transfer function were
-  // intended here.
-  return ColorSpace(PrimaryID::BT709, TransferID::IEC61966_2_1,
-                    MatrixID::SMPTE170M, RangeID::FULL);
-}
-
-// static
-ColorSpace ColorSpace::CreateREC601() {
-  return ColorSpace(PrimaryID::SMPTE170M, TransferID::SMPTE170M,
-                    MatrixID::SMPTE170M, RangeID::LIMITED);
-}
-
-// static
-ColorSpace ColorSpace::CreateREC709() {
-  return ColorSpace(PrimaryID::BT709, TransferID::BT709, MatrixID::BT709,
-                    RangeID::LIMITED);
 }
 
 // static
@@ -400,6 +375,7 @@ std::string ColorSpace::ToString() const {
     PRINT_ENUM_CASE(MatrixID, BT2020_NCL)
     PRINT_ENUM_CASE(MatrixID, BT2020_CL)
     PRINT_ENUM_CASE(MatrixID, YDZDX)
+    PRINT_ENUM_CASE(MatrixID, GBR)
   }
   ss << ", range:";
   switch (range_) {
@@ -908,6 +884,14 @@ void ColorSpace::GetTransferMatrix(SkMatrix44* matrix) const {
       matrix->setRowMajorf(data);
       return;
     }
+    case ColorSpace::MatrixID::GBR: {
+      float data[16] = {0.0f, 1.0f, 0.0f, 0.0f,  // G
+                        0.0f, 0.0f, 1.0f, 0.0f,  // B
+                        1.0f, 0.0f, 0.0f, 0.0f,  // R
+                        0.0f, 0.0f, 0.0f, 1.0f};
+      matrix->setRowMajorf(data);
+      return;
+    }
   }
   float Kg = 1.0f - Kr - Kb;
   float u_m = 0.5f / (1.0f - Kb);
@@ -934,6 +918,7 @@ void ColorSpace::GetRangeAdjustMatrix(SkMatrix44* matrix) const {
   }
   switch (matrix_) {
     case MatrixID::RGB:
+    case MatrixID::GBR:
     case MatrixID::INVALID:
     case MatrixID::YCOCG:
       matrix->setScale(255.0f/219.0f, 255.0f/219.0f, 255.0f/219.0f);

@@ -14,11 +14,11 @@
 #include "base/single_thread_task_runner.h"
 #include "base/threading/thread_checker.h"
 #include "cc/cc_export.h"
+#include "components/viz/client/shared_bitmap_reporter.h"
 #include "components/viz/common/gpu/context_lost_observer.h"
 #include "components/viz/common/gpu/context_provider.h"
 #include "components/viz/common/gpu/raster_context_provider.h"
 #include "components/viz/common/resources/returned_resource.h"
-#include "components/viz/common/resources/shared_bitmap_reporter.h"
 #include "gpu/command_buffer/common/texture_in_use_response.h"
 #include "ui/gfx/color_space.h"
 
@@ -44,21 +44,6 @@ class LayerTreeFrameSinkClient;
 class CC_EXPORT LayerTreeFrameSink : public viz::SharedBitmapReporter,
                                      public viz::ContextLostObserver {
  public:
-  struct Capabilities {
-    Capabilities() = default;
-
-    // True if we must always swap, even if there is no damage to the frame.
-    // Needed for both the browser compositor as well as layout tests.
-    // TODO(ericrk): This should be test-only for layout tests, but tab
-    // capture has issues capturing offscreen tabs whithout this. We should
-    // remove this dependency. crbug.com/680196
-    bool must_always_swap = false;
-
-    // True if sync points for resources are needed when swapping delegated
-    // frames.
-    bool delegated_sync_points_required = true;
-  };
-
   // Constructor for GL-based and/or software resources.
   //
   // |compositor_task_runner| is used to post worker context lost callback and
@@ -96,8 +81,6 @@ class CC_EXPORT LayerTreeFrameSink : public viz::SharedBitmapReporter,
 
   bool HasClient() { return !!client_; }
 
-  const Capabilities& capabilities() const { return capabilities_; }
-
   // The viz::ContextProviders may be null if frames should be submitted with
   // software SharedMemory resources.
   viz::ContextProvider* context_provider() const {
@@ -116,13 +99,17 @@ class CC_EXPORT LayerTreeFrameSink : public viz::SharedBitmapReporter,
 
   // Support for a pull-model where draws are requested by the implementation of
   // LayerTreeFrameSink. This is called by the compositor to notify that there's
-  // new content.
-  virtual void Invalidate() {}
+  // new content. Can be called when nothing needs to be drawn if tile
+  // priorities should be updated.
+  virtual void Invalidate(bool needs_draw) {}
 
   // For successful swaps, the implementation must call
   // DidReceiveCompositorFrameAck() asynchronously when the frame has been
-  // processed in order to unthrottle the next frame.
-  virtual void SubmitCompositorFrame(viz::CompositorFrame frame) = 0;
+  // processed in order to unthrottle the next frame. |show_hit_test_borders|
+  // controls whether viz will insert debug borders over hit-test data and is
+  // passed from LayerTreeDebugState.
+  virtual void SubmitCompositorFrame(viz::CompositorFrame frame,
+                                     bool show_hit_test_borders) = 0;
 
   // Signals that a BeginFrame issued by the viz::BeginFrameSource provided to
   // the client did not lead to a CompositorFrame submission.
@@ -133,6 +120,10 @@ class CC_EXPORT LayerTreeFrameSink : public viz::SharedBitmapReporter,
                                const viz::SharedBitmapId& id) override = 0;
   void DidDeleteSharedBitmap(const viz::SharedBitmapId& id) override = 0;
 
+  // Ensure next CompositorFrame is submitted to a new surface. Only used when
+  // surface synchronization is off.
+  virtual void ForceAllocateNewId() {}
+
  protected:
   class ContextLostForwarder;
 
@@ -141,7 +132,6 @@ class CC_EXPORT LayerTreeFrameSink : public viz::SharedBitmapReporter,
 
   LayerTreeFrameSinkClient* client_ = nullptr;
 
-  struct LayerTreeFrameSink::Capabilities capabilities_;
   scoped_refptr<viz::ContextProvider> context_provider_;
   scoped_refptr<viz::RasterContextProvider> worker_context_provider_;
   scoped_refptr<base::SingleThreadTaskRunner> compositor_task_runner_;

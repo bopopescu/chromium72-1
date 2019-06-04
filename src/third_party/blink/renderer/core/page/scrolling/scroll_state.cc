@@ -7,48 +7,44 @@
 #include <memory>
 #include "third_party/blink/renderer/core/dom/dom_node_ids.h"
 #include "third_party/blink/renderer/core/dom/element.h"
-#include "third_party/blink/renderer/core/dom/exception_code.h"
 #include "third_party/blink/renderer/core/layout/layout_object.h"
 #include "third_party/blink/renderer/platform/graphics/compositor_element_id.h"
 
 namespace blink {
 
 namespace {
-Element* ElementForId(int element_id) {
-  Node* node = DOMNodeIds::NodeForId(element_id);
+Node* NodeForId(DOMNodeId node_id) {
+  Node* node = DOMNodeIds::NodeForId(node_id);
   DCHECK(node);
-  if (!node)
-    return nullptr;
-  DCHECK(node->IsElementNode());
-  if (!node->IsElementNode())
-    return nullptr;
-  return static_cast<Element*>(node);
+  return node;
 }
 }  // namespace
 
-ScrollState* ScrollState::Create(ScrollStateInit init) {
+ScrollState* ScrollState::Create(ScrollStateInit* init) {
   std::unique_ptr<ScrollStateData> scroll_state_data =
       std::make_unique<ScrollStateData>();
-  scroll_state_data->delta_x = init.deltaX();
-  scroll_state_data->delta_y = init.deltaY();
-  scroll_state_data->delta_x_hint = init.deltaXHint();
-  scroll_state_data->delta_y_hint = init.deltaYHint();
-  scroll_state_data->position_x = init.positionX();
-  scroll_state_data->position_y = init.positionY();
-  scroll_state_data->velocity_x = init.velocityX();
-  scroll_state_data->velocity_y = init.velocityY();
-  scroll_state_data->is_beginning = init.isBeginning();
-  scroll_state_data->is_in_inertial_phase = init.isInInertialPhase();
-  scroll_state_data->is_ending = init.isEnding();
-  scroll_state_data->from_user_input = init.fromUserInput();
-  scroll_state_data->is_direct_manipulation = init.isDirectManipulation();
-  scroll_state_data->delta_granularity = init.deltaGranularity();
-  ScrollState* scroll_state = new ScrollState(std::move(scroll_state_data));
+  scroll_state_data->delta_x = init->deltaX();
+  scroll_state_data->delta_y = init->deltaY();
+  scroll_state_data->delta_x_hint = init->deltaXHint();
+  scroll_state_data->delta_y_hint = init->deltaYHint();
+  scroll_state_data->position_x = init->positionX();
+  scroll_state_data->position_y = init->positionY();
+  scroll_state_data->velocity_x = init->velocityX();
+  scroll_state_data->velocity_y = init->velocityY();
+  scroll_state_data->is_beginning = init->isBeginning();
+  scroll_state_data->is_in_inertial_phase = init->isInInertialPhase();
+  scroll_state_data->is_ending = init->isEnding();
+  scroll_state_data->from_user_input = init->fromUserInput();
+  scroll_state_data->is_direct_manipulation = init->isDirectManipulation();
+  scroll_state_data->delta_granularity = init->deltaGranularity();
+  ScrollState* scroll_state =
+      MakeGarbageCollected<ScrollState>(std::move(scroll_state_data));
   return scroll_state;
 }
 
 ScrollState* ScrollState::Create(std::unique_ptr<ScrollStateData> data) {
-  ScrollState* scroll_state = new ScrollState(std::move(data));
+  ScrollState* scroll_state =
+      MakeGarbageCollected<ScrollState>(std::move(data));
   return scroll_state;
 }
 
@@ -61,12 +57,13 @@ void ScrollState::consumeDelta(double x,
   if ((data_->delta_x > 0 && 0 > x) || (data_->delta_x < 0 && 0 < x) ||
       (data_->delta_y > 0 && 0 > y) || (data_->delta_y < 0 && 0 < y)) {
     exception_state.ThrowDOMException(
-        kInvalidModificationError, "Can't increase delta using consumeDelta");
+        DOMExceptionCode::kInvalidModificationError,
+        "Can't increase delta using consumeDelta");
     return;
   }
   if (fabs(x) > fabs(data_->delta_x) || fabs(y) > fabs(data_->delta_y)) {
     exception_state.ThrowDOMException(
-        kInvalidModificationError,
+        DOMExceptionCode::kInvalidModificationError,
         "Can't change direction of delta using consumeDelta");
     return;
   }
@@ -75,9 +72,9 @@ void ScrollState::consumeDelta(double x,
 
 void ScrollState::distributeToScrollChainDescendant() {
   if (!scroll_chain_.empty()) {
-    int descendant_id = scroll_chain_.front();
+    DOMNodeId descendant_id = scroll_chain_.front();
     scroll_chain_.pop_front();
-    ElementForId(descendant_id)->CallDistributeScroll(*this);
+    NodeForId(descendant_id)->CallDistributeScroll(*this);
   }
 }
 
@@ -93,18 +90,18 @@ void ScrollState::ConsumeDeltaNative(double x, double y) {
     data_->delta_consumed_for_scroll_sequence = true;
 }
 
-Element* ScrollState::CurrentNativeScrollingElement() {
+Node* ScrollState::CurrentNativeScrollingNode() {
   if (data_->current_native_scrolling_element() == CompositorElementId()) {
-    element_.Clear();
+    node_.Clear();
     return nullptr;
   }
-  return element_;
+  return node_;
 }
 
-void ScrollState::SetCurrentNativeScrollingElement(Element* element) {
-  element_ = element;
+void ScrollState::SetCurrentNativeScrollingNode(Node* node) {
+  node_ = node;
   data_->set_current_native_scrolling_element(
-      CompositorElementIdFromDOMNodeId(DOMNodeIds::IdForNode(element)));
+      CompositorElementIdFromDOMNodeId(DOMNodeIds::IdForNode(node)));
 }
 
 }  // namespace blink

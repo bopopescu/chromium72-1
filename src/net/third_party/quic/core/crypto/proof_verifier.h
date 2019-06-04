@@ -14,7 +14,7 @@
 #include "net/third_party/quic/platform/api/quic_string.h"
 #include "net/third_party/quic/platform/api/quic_string_piece.h"
 
-namespace net {
+namespace quic {
 
 // ProofVerifyDetails is an abstract class that acts as a container for any
 // implementation specific details that a ProofVerifier wishes to return. These
@@ -107,8 +107,13 @@ class QUIC_EXPORT_PRIVATE ProofVerifier {
       QuicString* error_details,
       std::unique_ptr<ProofVerifyDetails>* details,
       std::unique_ptr<ProofVerifierCallback> callback) = 0;
+
+  // Returns a ProofVerifyContext instance which can be use for subsequent
+  // verifications. Applications may chose create a different context and
+  // supply it for verifications instead.
+  virtual std::unique_ptr<ProofVerifyContext> CreateDefaultContext() = 0;
 };
 
-}  // namespace net
+}  // namespace quic
 
 #endif  // NET_THIRD_PARTY_QUIC_CORE_CRYPTO_PROOF_VERIFIER_H_

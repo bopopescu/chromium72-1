@@ -57,11 +57,11 @@ namespace {
 
 KeyboardEvent* CreateKeyboardEventWithLocation(
     KeyboardEvent::KeyLocationCode location) {
-  KeyboardEventInit key_event_init;
-  key_event_init.setBubbles(true);
-  key_event_init.setCancelable(true);
-  key_event_init.setLocation(location);
-  return new KeyboardEvent("keydown", key_event_init);
+  KeyboardEventInit* key_event_init = KeyboardEventInit::Create();
+  key_event_init->setBubbles(true);
+  key_event_init->setCancelable(true);
+  key_event_init->setLocation(location);
+  return MakeGarbageCollected<KeyboardEvent>("keydown", key_event_init);
 }
 
 int GetModifiersForKeyLocationCode(KeyboardEvent::KeyLocationCode location) {
@@ -72,9 +72,9 @@ int GetModifiersForKeyLocationCode(KeyboardEvent::KeyLocationCode location) {
 
 void RegisterMockedURL(const std::string& base_url,
                        const std::string& file_name) {
-  URLTestHelpers::RegisterMockedURLLoadFromBase(WebString::FromUTF8(base_url),
-                                                test::CoreTestDataPath(),
-                                                WebString::FromUTF8(file_name));
+  url_test_helpers::RegisterMockedURLLoadFromBase(
+      WebString::FromUTF8(base_url), test::CoreTestDataPath(),
+      WebString::FromUTF8(file_name));
 }
 
 }  // namespace
@@ -117,14 +117,15 @@ TEST(WebInputEventConversionTest, InputEventsScaling) {
   const std::string file_name("fixed_layout.html");
 
   RegisterMockedURL(base_url, file_name);
-  FrameTestHelpers::WebViewHelper web_view_helper;
+  frame_test_helpers::WebViewHelper web_view_helper;
   WebViewImpl* web_view =
       web_view_helper.InitializeAndLoad(base_url + file_name);
   web_view->GetSettings()->SetViewportEnabled(true);
   int page_width = 640;
   int page_height = 480;
   web_view->Resize(WebSize(page_width, page_height));
-  web_view->UpdateAllLifecyclePhases();
+  web_view->MainFrameWidget()->UpdateAllLifecyclePhases(
+      WebWidget::LifecycleUpdateReason::kTest);
 
   web_view->SetPageScaleFactor(3);
 
@@ -148,10 +149,8 @@ TEST(WebInputEventConversionTest, InputEventsScaling) {
     EXPECT_EQ(15, transformed_event.PositionInScreen().x);
     EXPECT_EQ(15, transformed_event.PositionInScreen().y);
 
-    IntPoint movement =
-        FlooredIntPoint(transformed_event.MovementInRootFrame());
-    EXPECT_EQ(5, movement.X());
-    EXPECT_EQ(5, movement.Y());
+    EXPECT_EQ(15, transformed_event.movement_x);
+    EXPECT_EQ(15, transformed_event.movement_y);
   }
 
   {
@@ -322,8 +321,8 @@ TEST(WebInputEventConversionTest, InputEventsScaling) {
     EXPECT_FLOAT_EQ(3.5f, transformed_event.PositionInWidget().y);
     EXPECT_FLOAT_EQ(2.2f, transformed_event.width);
     EXPECT_FLOAT_EQ(3.3f, transformed_event.height);
-    EXPECT_EQ(10, transformed_event.movement_x);
-    EXPECT_EQ(10, transformed_event.movement_y);
+    EXPECT_EQ(30, transformed_event.movement_x);
+    EXPECT_EQ(30, transformed_event.movement_y);
   }
 }
 
@@ -332,14 +331,15 @@ TEST(WebInputEventConversionTest, InputEventsTransform) {
   const std::string file_name("fixed_layout.html");
 
   RegisterMockedURL(base_url, file_name);
-  FrameTestHelpers::WebViewHelper web_view_helper;
+  frame_test_helpers::WebViewHelper web_view_helper;
   WebViewImpl* web_view =
       web_view_helper.InitializeAndLoad(base_url + file_name);
   web_view->GetSettings()->SetViewportEnabled(true);
   int page_width = 640;
   int page_height = 480;
   web_view->Resize(WebSize(page_width, page_height));
-  web_view->UpdateAllLifecyclePhases();
+  web_view->MainFrameWidget()->UpdateAllLifecyclePhases(
+      WebWidget::LifecycleUpdateReason::kTest);
 
   web_view->SetPageScaleFactor(2);
   web_view->MainFrameImpl()->SetInputEventsScaleForEmulation(1.5);
@@ -363,11 +363,8 @@ TEST(WebInputEventConversionTest, InputEventsTransform) {
     EXPECT_FLOAT_EQ(30, position.Y());
     EXPECT_EQ(90, transformed_event.PositionInScreen().x);
     EXPECT_EQ(90, transformed_event.PositionInScreen().y);
-
-    IntPoint movement =
-        FlooredIntPoint(transformed_event.MovementInRootFrame());
-    EXPECT_EQ(20, movement.X());
-    EXPECT_EQ(20, movement.Y());
+    EXPECT_EQ(60, transformed_event.movement_x);
+    EXPECT_EQ(60, transformed_event.movement_y);
   }
 
   {
@@ -400,10 +397,8 @@ TEST(WebInputEventConversionTest, InputEventsTransform) {
     EXPECT_EQ(90, coalescedevents[0].PositionInScreen().x);
     EXPECT_EQ(90, coalescedevents[0].PositionInScreen().y);
 
-    IntPoint movement =
-        FlooredIntPoint(coalescedevents[0].MovementInRootFrame());
-    EXPECT_EQ(20, movement.X());
-    EXPECT_EQ(20, movement.Y());
+    EXPECT_EQ(60, coalescedevents[0].movement_x);
+    EXPECT_EQ(60, coalescedevents[0].movement_y);
 
     position = coalescedevents[1].PositionInRootFrame();
     EXPECT_FLOAT_EQ(30, position.X());
@@ -411,9 +406,8 @@ TEST(WebInputEventConversionTest, InputEventsTransform) {
     EXPECT_EQ(90, coalescedevents[1].PositionInScreen().x);
     EXPECT_EQ(120, coalescedevents[1].PositionInScreen().y);
 
-    movement = FlooredIntPoint(coalescedevents[1].MovementInRootFrame());
-    EXPECT_EQ(20, movement.X());
-    EXPECT_EQ(10, movement.Y());
+    EXPECT_EQ(60, coalescedevents[1].movement_x);
+    EXPECT_EQ(30, coalescedevents[1].movement_y);
   }
 
   {
@@ -595,13 +589,14 @@ TEST(WebInputEventConversionTest, InputEventsConversions) {
   const std::string file_name("fixed_layout.html");
 
   RegisterMockedURL(base_url, file_name);
-  FrameTestHelpers::WebViewHelper web_view_helper;
+  frame_test_helpers::WebViewHelper web_view_helper;
   WebViewImpl* web_view =
       web_view_helper.InitializeAndLoad(base_url + file_name);
   int page_width = 640;
   int page_height = 480;
   web_view->Resize(WebSize(page_width, page_height));
-  web_view->UpdateAllLifecyclePhases();
+  web_view->MainFrameWidget()->UpdateAllLifecyclePhases(
+      WebWidget::LifecycleUpdateReason::kTest);
 
   LocalFrameView* view = ToLocalFrame(web_view->GetPage()->MainFrame())->View();
   {
@@ -632,17 +627,18 @@ TEST(WebInputEventConversionTest, VisualViewportOffset) {
   const std::string file_name("fixed_layout.html");
 
   RegisterMockedURL(base_url, file_name);
-  FrameTestHelpers::WebViewHelper web_view_helper;
+  frame_test_helpers::WebViewHelper web_view_helper;
   WebViewImpl* web_view =
       web_view_helper.InitializeAndLoad(base_url + file_name);
   int page_width = 640;
   int page_height = 480;
   web_view->Resize(WebSize(page_width, page_height));
-  web_view->UpdateAllLifecyclePhases();
+  web_view->MainFrameWidget()->UpdateAllLifecyclePhases(
+      WebWidget::LifecycleUpdateReason::kTest);
 
   web_view->SetPageScaleFactor(2);
 
-  IntPoint visual_offset(35, 60);
+  FloatPoint visual_offset(35, 60);
   web_view->GetPage()->GetVisualViewport().SetLocation(visual_offset);
 
   LocalFrameView* view = ToLocalFrame(web_view->GetPage()->MainFrame())->View();
@@ -730,19 +726,20 @@ TEST(WebInputEventConversionTest, ElasticOverscroll) {
   const std::string file_name("fixed_layout.html");
 
   RegisterMockedURL(base_url, file_name);
-  FrameTestHelpers::WebViewHelper web_view_helper;
+  frame_test_helpers::WebViewHelper web_view_helper;
   WebViewImpl* web_view =
       web_view_helper.InitializeAndLoad(base_url + file_name);
   int page_width = 640;
   int page_height = 480;
   web_view->Resize(WebSize(page_width, page_height));
-  web_view->UpdateAllLifecyclePhases();
+  web_view->MainFrameWidget()->UpdateAllLifecyclePhases(
+      WebWidget::LifecycleUpdateReason::kTest);
 
   LocalFrameView* view = ToLocalFrame(web_view->GetPage()->MainFrame())->View();
 
-  FloatSize elastic_overscroll(10, -20);
-  web_view->ApplyViewportDeltas(WebFloatSize(), WebFloatSize(),
-                                elastic_overscroll, 1.0f, 0.0f);
+  gfx::Vector2dF elastic_overscroll(10, -20);
+  web_view->ApplyViewportChanges(
+      {gfx::ScrollOffset(), elastic_overscroll, 1.0f, 0.0f});
 
   // Just elastic overscroll.
   {
@@ -757,11 +754,10 @@ TEST(WebInputEventConversionTest, ElasticOverscroll) {
     IntPoint position =
         FlooredIntPoint(transformed_mouse_event.PositionInRootFrame());
 
-    EXPECT_EQ(web_mouse_event.PositionInWidget().x + elastic_overscroll.Width(),
+    EXPECT_EQ(web_mouse_event.PositionInWidget().x + elastic_overscroll.x(),
               position.X());
-    EXPECT_EQ(
-        web_mouse_event.PositionInWidget().y + elastic_overscroll.Height(),
-        position.Y());
+    EXPECT_EQ(web_mouse_event.PositionInWidget().y + elastic_overscroll.y(),
+              position.Y());
     EXPECT_EQ(web_mouse_event.PositionInScreen().x,
               transformed_mouse_event.PositionInScreen().x);
     EXPECT_EQ(web_mouse_event.PositionInScreen().y,
@@ -773,7 +769,7 @@ TEST(WebInputEventConversionTest, ElasticOverscroll) {
   // pinch-zoom).
   float page_scale = 2;
   web_view->SetPageScaleFactor(page_scale);
-  IntPoint visual_offset(35, 60);
+  FloatPoint visual_offset(35, 60);
   web_view->GetPage()->GetVisualViewport().SetLocation(visual_offset);
   {
     WebMouseEvent web_mouse_event(WebInputEvent::kMouseMove,
@@ -788,10 +784,10 @@ TEST(WebInputEventConversionTest, ElasticOverscroll) {
         FlooredIntPoint(transformed_mouse_event.PositionInRootFrame());
 
     EXPECT_EQ(web_mouse_event.PositionInWidget().x / page_scale +
-                  visual_offset.X() + elastic_overscroll.Width(),
+                  visual_offset.X() + elastic_overscroll.x(),
               position.X());
     EXPECT_EQ(web_mouse_event.PositionInWidget().y / page_scale +
-                  visual_offset.Y() + elastic_overscroll.Height(),
+                  visual_offset.Y() + elastic_overscroll.y(),
               position.Y());
     EXPECT_EQ(web_mouse_event.PositionInScreen().x,
               transformed_mouse_event.PositionInScreen().x);
@@ -806,18 +802,20 @@ TEST(WebInputEventConversionTest, ElasticOverscrollWithPageReload) {
   const std::string file_name("fixed_layout.html");
 
   RegisterMockedURL(base_url, file_name);
-  FrameTestHelpers::WebViewHelper web_view_helper;
+  frame_test_helpers::WebViewHelper web_view_helper;
   WebViewImpl* web_view =
       web_view_helper.InitializeAndLoad(base_url + file_name);
   int page_width = 640;
   int page_height = 480;
   web_view->Resize(WebSize(page_width, page_height));
-  web_view->UpdateAllLifecyclePhases();
+  web_view->MainFrameWidget()->UpdateAllLifecyclePhases(
+      WebWidget::LifecycleUpdateReason::kTest);
 
-  FloatSize elastic_overscroll(10, -20);
-  web_view->ApplyViewportDeltas(WebFloatSize(), WebFloatSize(),
-                                elastic_overscroll, 1.0f, 0.0f);
-  FrameTestHelpers::ReloadFrame(web_view_helper.GetWebView()->MainFrameImpl());
+  gfx::Vector2dF elastic_overscroll(10, -20);
+  web_view->ApplyViewportChanges(
+      {gfx::ScrollOffset(), elastic_overscroll, 1.0f, 0.0f});
+  frame_test_helpers::ReloadFrame(
+      web_view_helper.GetWebView()->MainFrameImpl());
   LocalFrameView* view = ToLocalFrame(web_view->GetPage()->MainFrame())->View();
 
   // Just elastic overscroll.
@@ -833,11 +831,10 @@ TEST(WebInputEventConversionTest, ElasticOverscrollWithPageReload) {
     IntPoint position =
         FlooredIntPoint(transformed_mouse_event.PositionInRootFrame());
 
-    EXPECT_EQ(web_mouse_event.PositionInWidget().x + elastic_overscroll.Width(),
+    EXPECT_EQ(web_mouse_event.PositionInWidget().x + elastic_overscroll.x(),
               position.X());
-    EXPECT_EQ(
-        web_mouse_event.PositionInWidget().y + elastic_overscroll.Height(),
-        position.Y());
+    EXPECT_EQ(web_mouse_event.PositionInWidget().y + elastic_overscroll.y(),
+              position.Y());
     EXPECT_EQ(web_mouse_event.PositionInScreen().x,
               transformed_mouse_event.PositionInScreen().x);
     EXPECT_EQ(web_mouse_event.PositionInScreen().y,

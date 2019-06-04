@@ -145,7 +145,7 @@
       "-u",
       "RECIPE_MODULE[skia::flavor]/resources/symbolize_stack_trace.py",
       "[START_DIR]",
-      "[START_DIR]/build/out/Debug/nanobench",
+      "[START_DIR]/build/nanobench",
       "--some-flag"
     ],
     "cwd": "[START_DIR]/skia",
@@ -157,8 +157,7 @@
     "name": "symbolized nanobench"
   },
   {
-    "name": "$result",
-    "recipe_result": null,
-    "status_code": 0
+    "jsonResult": null,
+    "name": "$result"
   }
 ]

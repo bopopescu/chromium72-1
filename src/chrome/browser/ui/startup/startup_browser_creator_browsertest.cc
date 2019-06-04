@@ -15,7 +15,7 @@
 #include "base/memory/ptr_util.h"
 #include "base/path_service.h"
 #include "base/strings/utf_string_conversions.h"
-#include "base/test/histogram_tester.h"
+#include "base/test/metrics/histogram_tester.h"
 #include "base/threading/thread_restrictions.h"
 #include "build/build_config.h"
 #include "chrome/browser/browser_process.h"
@@ -82,6 +82,7 @@ using testing::Return;
 #endif  // !defined(OS_CHROMEOS)
 
 #if BUILDFLAG(ENABLE_SUPERVISED_USERS)
+#include "chrome/browser/supervised_user/supervised_user_constants.h"
 #include "chrome/browser/supervised_user/supervised_user_navigation_observer.h"
 #include "chrome/browser/supervised_user/supervised_user_service.h"
 #include "chrome/browser/supervised_user/supervised_user_service_factory.h"
@@ -176,8 +177,9 @@ class StartupBrowserCreatorTest : public extensions::ExtensionBrowserTest {
                const Extension** out_app_extension) {
     ASSERT_TRUE(LoadExtension(test_data_dir_.AppendASCII(app_name.c_str())));
 
-    ExtensionService* service = extensions::ExtensionSystem::Get(
-        browser()->profile())->extension_service();
+    extensions::ExtensionService* service =
+        extensions::ExtensionSystem::Get(browser()->profile())
+            ->extension_service();
     *out_app_extension = service->GetExtensionById(
         last_loaded_extension_id(), false);
     ASSERT_TRUE(*out_app_extension);
@@ -646,13 +648,19 @@ IN_PROC_BROWSER_TEST_F(StartupBrowserCreatorTest, PRE_UpdateWithTwoProfiles) {
   // Create two profiles.
   base::FilePath dest_path = profile_manager->user_data_dir();
 
-  Profile* profile1 = profile_manager->GetProfile(
-      dest_path.Append(FILE_PATH_LITERAL("New Profile 1")));
-  ASSERT_TRUE(profile1);
+  Profile* profile1 = nullptr;
+  Profile* profile2 = nullptr;
+  {
+    base::ScopedAllowBlockingForTesting allow_blocking;
+    profile1 = profile_manager->GetProfile(
+        dest_path.Append(FILE_PATH_LITERAL("New Profile 1")));
+    ASSERT_TRUE(profile1);
 
-  Profile* profile2 = profile_manager->GetProfile(
-      dest_path.Append(FILE_PATH_LITERAL("New Profile 2")));
-  ASSERT_TRUE(profile2);
+    profile2 = profile_manager->GetProfile(
+        dest_path.Append(FILE_PATH_LITERAL("New Profile 2")));
+    ASSERT_TRUE(profile2);
+  }
+  DisableWelcomePages({profile1, profile2});
 
   // Open some urls with the browsers, and close them.
   Browser* browser1 =
@@ -691,10 +699,7 @@ IN_PROC_BROWSER_TEST_F(StartupBrowserCreatorTest, PRE_UpdateWithTwoProfiles) {
   profile2->GetPrefs()->CommitPendingWrite();
 }
 
-// See crbug.com/376184 about improvements to this test on Mac.
-// Disabled because it's flaky. http://crbug.com/379579
-IN_PROC_BROWSER_TEST_F(StartupBrowserCreatorTest,
-                       DISABLED_UpdateWithTwoProfiles) {
+IN_PROC_BROWSER_TEST_F(StartupBrowserCreatorTest, UpdateWithTwoProfiles) {
   // Make StartupBrowserCreator::WasRestarted() return true.
   StartupBrowserCreator::was_restarted_read_ = false;
   PrefService* pref_service = g_browser_process->local_state();
@@ -705,13 +710,18 @@ IN_PROC_BROWSER_TEST_F(StartupBrowserCreatorTest,
   // Open the two profiles.
   base::FilePath dest_path = profile_manager->user_data_dir();
 
-  Profile* profile1 = profile_manager->GetProfile(
-      dest_path.Append(FILE_PATH_LITERAL("New Profile 1")));
-  ASSERT_TRUE(profile1);
+  Profile* profile1 = nullptr;
+  Profile* profile2 = nullptr;
+  {
+    base::ScopedAllowBlockingForTesting allow_blocking;
+    profile1 = profile_manager->GetProfile(
+        dest_path.Append(FILE_PATH_LITERAL("New Profile 1")));
+    ASSERT_TRUE(profile1);
 
-  Profile* profile2 = profile_manager->GetProfile(
-      dest_path.Append(FILE_PATH_LITERAL("New Profile 2")));
-  ASSERT_TRUE(profile2);
+    profile2 = profile_manager->GetProfile(
+        dest_path.Append(FILE_PATH_LITERAL("New Profile 2")));
+    ASSERT_TRUE(profile2);
+  }
 
   // Simulate a launch after a browser update.
   base::CommandLine dummy(base::CommandLine::NO_PROGRAM);
@@ -1024,7 +1034,8 @@ IN_PROC_BROWSER_TEST_F(StartupBrowserCreatorTest,
 class SupervisedUserBrowserCreatorTest : public InProcessBrowserTest {
  protected:
   void SetUpCommandLine(base::CommandLine* command_line) override {
-    command_line->AppendSwitchASCII(switches::kSupervisedUserId, "asdf");
+    command_line->AppendSwitchASCII(switches::kSupervisedUserId,
+                                    supervised_users::kChildAccountSUID);
   }
 };
 
@@ -1085,14 +1096,7 @@ void StartupBrowserCreatorFirstRunTest::SetUpInProcessBrowserTestFixture() {
   policy::BrowserPolicyConnector::SetPolicyProviderForTesting(&provider_);
 }
 
-// http://crbug.com/691707
-#if defined(OS_MACOSX)
-#define MAYBE_AddFirstRunTab DISABLED_AddFirstRunTab
-#else
-#define MAYBE_AddFirstRunTab AddFirstRunTab
-#endif
-IN_PROC_BROWSER_TEST_F(StartupBrowserCreatorFirstRunTest,
-                       MAYBE_AddFirstRunTab) {
+IN_PROC_BROWSER_TEST_F(StartupBrowserCreatorFirstRunTest, AddFirstRunTab) {
   ASSERT_TRUE(embedded_test_server()->Start());
   StartupBrowserCreator browser_creator;
   browser_creator.AddFirstRunTab(
@@ -1227,13 +1231,7 @@ IN_PROC_BROWSER_TEST_F(StartupBrowserCreatorFirstRunTest,
             tab_strip->GetWebContentsAt(0)->GetURL().ExtractFileName());
 }
 
-// http://crbug.com/691707
-#if defined(OS_MACOSX)
-#define MAYBE_WelcomePages DISABLED_WelcomePages
-#else
-#define MAYBE_WelcomePages WelcomePages
-#endif
-IN_PROC_BROWSER_TEST_F(StartupBrowserCreatorFirstRunTest, MAYBE_WelcomePages) {
+IN_PROC_BROWSER_TEST_F(StartupBrowserCreatorFirstRunTest, WelcomePages) {
   ASSERT_TRUE(embedded_test_server()->Start());
 
   ProfileManager* profile_manager = g_browser_process->profile_manager();
@@ -1284,14 +1282,8 @@ IN_PROC_BROWSER_TEST_F(StartupBrowserCreatorFirstRunTest, MAYBE_WelcomePages) {
             tab_strip->GetWebContentsAt(0)->GetURL().possibly_invalid_spec());
 }
 
-// http://crbug.com/691707
-#if defined(OS_MACOSX)
-#define MAYBE_WelcomePagesWithPolicy DISABLED_WelcomePagesWithPolicy
-#else
-#define MAYBE_WelcomePagesWithPolicy WelcomePagesWithPolicy
-#endif
 IN_PROC_BROWSER_TEST_F(StartupBrowserCreatorFirstRunTest,
-                       MAYBE_WelcomePagesWithPolicy) {
+                       WelcomePagesWithPolicy) {
   ASSERT_TRUE(embedded_test_server()->Start());
 
   // Set the following user policies:

@@ -9,15 +9,9 @@
 
 namespace blink {
 
-class WebLayerTreeView;
-
-class SimWebViewClient final : public FrameTestHelpers::TestWebViewClient {
+class SimWebViewClient final : public frame_test_helpers::TestWebViewClient {
  public:
-  explicit SimWebViewClient(WebLayerTreeView&);
-
-  WebLayerTreeView* InitializeLayerTreeView() override {
-    return layer_tree_view_;
-  }
+  explicit SimWebViewClient(content::LayerTreeViewDelegate* delegate);
 
   int VisuallyNonEmptyLayoutCount() const {
     return visually_non_empty_layout_count_;
@@ -29,24 +23,25 @@ class SimWebViewClient final : public FrameTestHelpers::TestWebViewClient {
     return finished_loading_layout_count_;
   }
 
+  // WebViewClient implementation.
   WebView* CreateView(WebLocalFrame* opener,
                       const WebURLRequest&,
                       const WebWindowFeatures&,
                       const WebString& name,
                       WebNavigationPolicy,
                       bool,
-                      WebSandboxFlags) override;
+                      WebSandboxFlags,
+                      const SessionStorageNamespaceId&) override;
 
  private:
   // WebWidgetClient overrides.
   void DidMeaningfulLayout(WebMeaningfulLayout) override;
 
-  int visually_non_empty_layout_count_;
-  int finished_parsing_layout_count_;
-  int finished_loading_layout_count_;
+  int visually_non_empty_layout_count_ = 0;
+  int finished_parsing_layout_count_ = 0;
+  int finished_loading_layout_count_ = 0;
 
-  WebLayerTreeView* layer_tree_view_;
-  FrameTestHelpers::WebViewHelper web_view_helper_;
+  frame_test_helpers::WebViewHelper web_view_helper_;
 };
 
 }  // namespace blink

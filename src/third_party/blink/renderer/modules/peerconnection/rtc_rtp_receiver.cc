@@ -7,9 +7,13 @@
 #include "third_party/blink/public/platform/web_media_stream.h"
 #include "third_party/blink/public/platform/web_media_stream_track.h"
 #include "third_party/blink/public/platform/web_rtc_rtp_contributing_source.h"
+#include "third_party/blink/renderer/modules/peerconnection/rtc_rtp_capabilities.h"
+#include "third_party/blink/renderer/modules/peerconnection/rtc_stats_report.h"
 #include "third_party/blink/renderer/modules/peerconnection/web_rtc_stats_report_callback_resolver.h"
 #include "third_party/blink/renderer/platform/bindings/microtask.h"
+#include "third_party/blink/renderer/platform/wtf/std_lib_extras.h"
 #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
+#include "third_party/webrtc/api/rtpparameters.h"
 
 namespace blink {
 
@@ -21,11 +25,6 @@ RTCRtpReceiver::RTCRtpReceiver(std::unique_ptr<WebRTCRtpReceiver> receiver,
       streams_(std::move(streams)) {
   DCHECK(receiver_);
   DCHECK(track_);
-  // Some bots require #if around the DCHECK to avoid compile error about
-  // |StateMatchesWebReceiver| (which is behind #if) not being defined.
-#if DCHECK_IS_ON()
-  DCHECK(StateMatchesWebReceiver());
-#endif  // DCHECK_IS_ON()
 }
 
 MediaStreamTrack* RTCRtpReceiver::track() const {
@@ -41,7 +40,8 @@ RTCRtpReceiver::getContributingSources() {
 ScriptPromise RTCRtpReceiver::getStats(ScriptState* script_state) {
   ScriptPromiseResolver* resolver = ScriptPromiseResolver::Create(script_state);
   ScriptPromise promise = resolver->Promise();
-  receiver_->GetStats(WebRTCStatsReportCallbackResolver::Create(resolver));
+  receiver_->GetStats(WebRTCStatsReportCallbackResolver::Create(resolver),
+                      GetRTCStatsFilter(script_state));
   return promise;
 }
 
@@ -53,26 +53,9 @@ MediaStreamVector RTCRtpReceiver::streams() const {
   return streams_;
 }
 
-#if DCHECK_IS_ON()
-
-bool RTCRtpReceiver::StateMatchesWebReceiver() const {
-  if (track_->Component() !=
-      static_cast<MediaStreamComponent*>(receiver_->Track())) {
-    return false;
-  }
-  WebVector<WebMediaStream> web_streams = receiver_->Streams();
-  if (streams_.size() != web_streams.size())
-    return false;
-  for (size_t i = 0; i < streams_.size(); ++i) {
-    if (streams_[i]->Descriptor() !=
-        static_cast<MediaStreamDescriptor*>(web_streams[i])) {
-      return false;
-    }
-  }
-  return true;
+void RTCRtpReceiver::set_streams(MediaStreamVector streams) {
+  streams_ = std::move(streams);
 }
-
-#endif  // DCHECK_IS_ON()
 
 void RTCRtpReceiver::UpdateSourcesIfNeeded() {
   if (!contributing_sources_needs_updating_)
@@ -89,7 +72,8 @@ void RTCRtpReceiver::UpdateSourcesIfNeeded() {
     DCHECK_EQ(web_contributing_source->SourceType(),
               WebRTCRtpContributingSourceType::CSRC);
     RTCRtpContributingSource* contributing_source =
-        new RTCRtpContributingSource(this, *web_contributing_source);
+        MakeGarbageCollected<RTCRtpContributingSource>(
+            this, *web_contributing_source);
     contributing_sources_.push_back(contributing_source);
   }
   // Clear the flag and schedule a microtask to reset it to true. This makes
@@ -112,6 +96,55 @@ void RTCRtpReceiver::Trace(blink::Visitor* visitor) {
   visitor->Trace(streams_);
   visitor->Trace(contributing_sources_);
   ScriptWrappable::Trace(visitor);
+}
+
+RTCRtpCapabilities* RTCRtpReceiver::getCapabilities(const String& kind) {
+  if (kind != "audio" && kind != "video")
+    return nullptr;
+
+  RTCRtpCapabilities* capabilities = RTCRtpCapabilities::Create();
+  capabilities->setCodecs(HeapVector<Member<RTCRtpCodecCapability>>());
+  capabilities->setHeaderExtensions(
+      HeapVector<Member<RTCRtpHeaderExtensionCapability>>());
+
+  std::unique_ptr<webrtc::RtpCapabilities> rtc_capabilities =
+      blink::Platform::Current()->GetRtpSenderCapabilities(kind);
+
+  HeapVector<Member<RTCRtpCodecCapability>> codecs;
+  codecs.ReserveInitialCapacity(
+      SafeCast<wtf_size_t>(rtc_capabilities->codecs.size()));
+  for (const auto& rtc_codec : rtc_capabilities->codecs) {
+    auto* codec = RTCRtpCodecCapability::Create();
+    codec->setMimeType(WTF::String::FromUTF8(rtc_codec.mime_type().c_str()));
+    if (rtc_codec.clock_rate)
+      codec->setClockRate(rtc_codec.clock_rate.value());
+    if (rtc_codec.num_channels)
+      codec->setChannels(rtc_codec.num_channels.value());
+    if (rtc_codec.parameters.size()) {
+      std::string sdp_fmtp_line;
+      for (const auto& parameter : rtc_codec.parameters) {
+        if (sdp_fmtp_line.size())
+          sdp_fmtp_line += ";";
+        sdp_fmtp_line += parameter.first + "=" + parameter.second;
+      }
+      codec->setSdpFmtpLine(sdp_fmtp_line.c_str());
+    }
+    codecs.push_back(codec);
+  }
+  capabilities->setCodecs(codecs);
+
+  HeapVector<Member<RTCRtpHeaderExtensionCapability>> header_extensions;
+  header_extensions.ReserveInitialCapacity(
+      SafeCast<wtf_size_t>(rtc_capabilities->header_extensions.size()));
+  for (const auto& rtc_header_extension : rtc_capabilities->header_extensions) {
+    auto* header_extension = RTCRtpHeaderExtensionCapability::Create();
+    header_extension->setUri(
+        WTF::String::FromUTF8(rtc_header_extension.uri.c_str()));
+    header_extensions.push_back(header_extension);
+  }
+  capabilities->setHeaderExtensions(header_extensions);
+
+  return capabilities;
 }
 
 }  // namespace blink

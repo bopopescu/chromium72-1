@@ -16,11 +16,10 @@
 #include "cc/raster/raster_buffer_provider.h"
 #include "cc/raster/synchronous_task_graph_runner.h"
 #include "cc/raster/zero_copy_raster_buffer_provider.h"
-#include "cc/resources/layer_tree_resource_provider.h"
 #include "cc/resources/resource_pool.h"
 #include "cc/test/fake_layer_tree_frame_sink.h"
-#include "cc/test/fake_resource_provider.h"
 #include "cc/tiles/tile_task_manager.h"
+#include "components/viz/client/client_resource_provider.h"
 #include "components/viz/common/gpu/context_cache_controller.h"
 #include "components/viz/common/gpu/context_provider.h"
 #include "components/viz/common/resources/platform_color.h"
@@ -87,7 +86,7 @@ class PerfContextProvider
     capabilities_.sync_query = true;
 
     raster_context_ = std::make_unique<gpu::raster::RasterImplementationGLES>(
-        context_gl_.get(), nullptr, capabilities_);
+        context_gl_.get(), capabilities_);
   }
 
   // viz::ContextProvider implementation.
@@ -117,6 +116,12 @@ class PerfContextProvider
       test_context_provider_ = viz::TestContextProvider::Create();
     }
     return test_context_provider_->GrContext();
+  }
+  gpu::SharedImageInterface* SharedImageInterface() override {
+    if (!test_context_provider_) {
+      test_context_provider_ = viz::TestContextProvider::Create();
+    }
+    return test_context_provider_->SharedImageInterface();
   }
   viz::ContextCacheController* CacheController() override {
     return &cache_controller_;
@@ -306,7 +311,7 @@ class RasterBufferProviderPerfTestBase {
 
       for (auto& decode_task : raster_task->dependencies()) {
         // Add decode task if it doesn't already exist in graph.
-        TaskGraph::Node::Vector::iterator decode_it =
+        auto decode_it =
             std::find_if(graph->nodes.begin(), graph->nodes.end(),
                          [decode_task](const TaskGraph::Node& node) {
                            return node.task == decode_task;
@@ -331,7 +336,7 @@ class RasterBufferProviderPerfTestBase {
   scoped_refptr<viz::ContextProvider> compositor_context_provider_;
   scoped_refptr<viz::RasterContextProvider> worker_context_provider_;
   std::unique_ptr<FakeLayerTreeFrameSink> layer_tree_frame_sink_;
-  std::unique_ptr<LayerTreeResourceProvider> resource_provider_;
+  std::unique_ptr<viz::ClientResourceProvider> resource_provider_;
   scoped_refptr<base::TestSimpleTaskRunner> task_runner_;
   std::unique_ptr<ResourcePool> resource_pool_;
   std::unique_ptr<SynchronousTaskGraphRunner> task_graph_runner_;
@@ -501,14 +506,12 @@ class RasterBufferProviderPerfTest
 
  private:
   void Create3dResourceProvider() {
-    resource_provider_ = FakeResourceProvider::CreateLayerTreeResourceProvider(
-        compositor_context_provider_.get());
+    resource_provider_ = std::make_unique<viz::ClientResourceProvider>(true);
   }
 
   void CreateSoftwareResourceProvider() {
     layer_tree_frame_sink_ = FakeLayerTreeFrameSink::CreateSoftware();
-    resource_provider_ =
-        FakeResourceProvider::CreateLayerTreeResourceProvider(nullptr);
+    resource_provider_ = std::make_unique<viz::ClientResourceProvider>(true);
   }
 
   std::string TestModifierString() const {
@@ -571,8 +574,7 @@ class RasterBufferProviderCommonPerfTest
  public:
   // Overridden from testing::Test:
   void SetUp() override {
-    resource_provider_ = FakeResourceProvider::CreateLayerTreeResourceProvider(
-        compositor_context_provider_.get());
+    resource_provider_ = std::make_unique<viz::ClientResourceProvider>(true);
     resource_pool_ = std::make_unique<ResourcePool>(
         resource_provider_.get(), compositor_context_provider_.get(),
         task_runner_, ResourcePool::kDefaultExpirationDelay, false);

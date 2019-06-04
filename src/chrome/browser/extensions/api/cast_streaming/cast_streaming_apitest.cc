@@ -189,8 +189,7 @@ class TestPatternReceiver : public media::cast::InProcessReceiver {
     VLOG(1) << "Current audio tone frequency: " << frequency;
 
     const int kTargetWindowHz = 20;
-    for (std::vector<int>::iterator it = expected_tones_.begin();
-         it != expected_tones_.end(); ++it) {
+    for (auto it = expected_tones_.begin(); it != expected_tones_.end(); ++it) {
       if (abs(static_cast<int>(frequency) - *it) < kTargetWindowHz) {
         LOG(INFO) << "Heard tone at frequency " << *it << " Hz.";
         expected_tones_.erase(it);
@@ -233,8 +232,10 @@ class TestPatternReceiver : public media::cast::InProcessReceiver {
     VLOG(1) << "Current video color: yuv(" << current_color.y << ", "
             << current_color.u << ", " << current_color.v << ')';
 
-    const int kTargetWindow = 10;
-    for (std::vector<YUVColor>::iterator it = expected_yuv_colors_.begin();
+    // TODO(crbug.com/810131): Reduce this back to 10 once color space info is
+    // fully plumbed-through, and all compositors respect color space.
+    const int kTargetWindow = 50;
+    for (auto it = expected_yuv_colors_.begin();
          it != expected_yuv_colors_.end(); ++it) {
       if (abs(current_color.y - it->y) < kTargetWindow &&
           abs(current_color.u - it->u) < kTargetWindow &&
@@ -401,9 +402,9 @@ IN_PROC_BROWSER_TEST_P(CastStreamingApiTestWithPixelOutput, MAYBE_EndToEnd) {
   receiver->AddExpectedTone(200 /* Hz */);
   receiver->AddExpectedTone(500 /* Hz */);
   receiver->AddExpectedTone(1800 /* Hz */);
-  receiver->AddExpectedColor(YUVColor(82, 90, 240));  // rgb(255, 0, 0)
-  receiver->AddExpectedColor(YUVColor(145, 54, 34));  // rgb(0, 255, 0)
-  receiver->AddExpectedColor(YUVColor(41, 240, 110));  // rgb(0, 0, 255)
+  receiver->AddExpectedColor(YUVColor(63, 102, 239));  // rgb(255, 0, 0)
+  receiver->AddExpectedColor(YUVColor(173, 41, 26));   // rgb(0, 255, 0)
+  receiver->AddExpectedColor(YUVColor(32, 239, 117));  // rgb(0, 0, 255)
   receiver->Start();
   receiver->WaitForExpectedTonesAndColors();
   receiver->Stop();

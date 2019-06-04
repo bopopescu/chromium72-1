@@ -89,26 +89,35 @@ namespace sw
 	{
 		enum Type { FRAGMENTS_PASSED, TRANSFORM_FEEDBACK_PRIMITIVES_WRITTEN };
 
-		Query(Type type) : building(false), reference(0), data(0), type(type)
-		{
-		}
+		Query(Type type);
 
-		void begin()
+		void addRef();
+		void release();
+
+		inline void begin()
 		{
 			building = true;
 			data = 0;
 		}
 
-		void end()
+		inline void end()
 		{
 			building = false;
 		}
 
+		inline bool isReady() const
+		{
+			return (reference == 1);
+		}
+
 		bool building;
-		AtomicInt reference;
 		AtomicInt data;
 
 		const Type type;
+	private:
+		~Query() {} // Only delete a query within the release() function
+
+		AtomicInt reference;
 	};
 
 	struct DrawData
@@ -304,6 +313,7 @@ namespace sw
 		void setMaxLevel(SamplerType type, int sampler, int maxLevel);
 		void setMinLod(SamplerType type, int sampler, float minLod);
 		void setMaxLod(SamplerType type, int sampler, float maxLod);
+		void setSyncRequired(SamplerType type, int sampler, bool syncRequired);
 
 		void setPointSpriteEnable(bool pointSpriteEnable);
 		void setPointScaleEnable(bool pointScaleEnable);

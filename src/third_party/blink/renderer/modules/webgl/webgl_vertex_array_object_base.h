@@ -33,7 +33,7 @@ class WebGLVertexArrayObjectBase : public WebGLContextObject {
   }
   void SetElementArrayBuffer(WebGLBuffer*);
 
-  WebGLBuffer* GetArrayBufferForAttrib(size_t);
+  WebGLBuffer* GetArrayBufferForAttrib(GLuint);
   void SetArrayBufferForAttrib(GLuint, WebGLBuffer*);
   void SetAttribEnabled(GLuint, bool);
   bool GetAttribEnabled(GLuint) const;
@@ -43,7 +43,6 @@ class WebGLVertexArrayObjectBase : public WebGLContextObject {
   void UnbindBuffer(WebGLBuffer*);
 
   void Trace(blink::Visitor*) override;
-  void TraceWrappers(ScriptWrappableVisitor*) const override;
 
  protected:
   WebGLVertexArrayObjectBase(WebGLRenderingContextBase*, VaoType);

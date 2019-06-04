@@ -15,6 +15,7 @@ class GpuIntegrationTest(
     serially_executed_browser_test_case.SeriallyExecutedBrowserTestCase):
 
   _cached_expectations = None
+  _also_run_disabled_tests = False
 
   # Several of the tests in this directory need to be able to relaunch
   # the browser on demand with a new set of command line arguments
@@ -38,6 +39,18 @@ class GpuIntegrationTest(
     cls._original_finder_options = cls._finder_options.Copy()
 
   @classmethod
+  def AddCommandlineArgs(cls, parser):
+    """Adds command line arguments understood by the test harness.
+
+    Subclasses overriding this method must invoke the superclass's
+    version!"""
+    parser.add_option(
+      '--also-run-disabled-tests',
+      dest='also_run_disabled_tests',
+      action='store_true', default=False,
+      help='Run disabled tests, ignoring Skip and Fail expectations')
+
+  @classmethod
   def CustomizeBrowserArgs(cls, browser_args):
     """Customizes the browser's command line arguments.
 
@@ -48,6 +61,12 @@ class GpuIntegrationTest(
       browser_args = []
     cls._finder_options = cls._original_finder_options.Copy()
     browser_options = cls._finder_options.browser_options
+    # A non-sandboxed, 15-seconds-delayed gpu process is currently running in
+    # the browser to collect gpu info. A command line switch is added here to
+    # skip this gpu process for all gpu integration tests to prevent any
+    # interference with the test results.
+    browser_args.append(
+      '--disable-gpu-process-for-dx12-vulkan-info-collection')
     # Append the new arguments.
     browser_options.AppendExtraBrowserArgs(browser_args)
     cls._last_launched_browser_args = set(browser_args)
@@ -74,6 +93,7 @@ class GpuIntegrationTest(
 
   @classmethod
   def GenerateTestCases__RunGpuTest(cls, options):
+    cls._also_run_disabled_tests = options.also_run_disabled_tests
     for test_name, url, args in cls.GenerateGpuTests(options):
       yield test_name, (url, test_name, args)
 
@@ -118,6 +138,9 @@ class GpuIntegrationTest(
     expectations = self.__class__.GetExpectations()
     expectation = expectations.GetExpectationForTest(
       self.browser, url, test_name)
+    if self.__class__._also_run_disabled_tests:
+      # Ignore test expectations if the user has requested it.
+      expectation = 'pass'
     if expectation == 'skip':
       # skipTest in Python's unittest harness raises an exception, so
       # aborts the control flow here.
@@ -142,7 +165,7 @@ class GpuIntegrationTest(
         # expectations, and since minidump symbolization is slow
         # (upwards of one minute on a fast laptop), symbolizing all the
         # stacks could slow down the tests' running time unacceptably.
-        self._SymbolizeUnsymbolizedMinidumps()
+        self.browser.LogSymbolizedUnsymbolizedMinidumps(logging.ERROR)
         # This failure might have been caused by a browser or renderer
         # crash, so restart the browser to make sure any state doesn't
         # propagate to the next test iteration.
@@ -189,25 +212,6 @@ class GpuIntegrationTest(
       if expectation == 'fail':
         logging.warning(
             '%s was expected to fail, but passed.\n', test_name)
-
-  def _SymbolizeUnsymbolizedMinidumps(self):
-    # The fakes used for unit tests don't mock this entry point yet.
-    if not hasattr(self.browser, 'GetAllUnsymbolizedMinidumpPaths'):
-      return
-    i = 10
-    if self.browser.GetAllUnsymbolizedMinidumpPaths():
-      logging.error('Symbolizing minidump paths: ' + str(
-        self.browser.GetAllUnsymbolizedMinidumpPaths()))
-    else:
-      logging.error('No minidump paths to symbolize')
-    while i > 0 and self.browser.GetAllUnsymbolizedMinidumpPaths():
-      i = i - 1
-      sym = self.browser.SymbolizeMinidump(
-        self.browser.GetAllUnsymbolizedMinidumpPaths()[0])
-      if sym[0]:
-        logging.error('Symbolized minidump:\n' + sym[1])
-      else:
-        logging.error('Minidump symbolization failed:\n' + sym[1])
 
   @classmethod
   def GenerateGpuTests(cls, options):

@@ -52,7 +52,7 @@ cr.define('extensions', function() {
      * @return {?Element}
      */
     getDetailsButton: function(id) {
-      return this.$$(`#${id} /deep/ #details-button`);
+      return this.$$(`#${id}`).getDetailsButton();
     },
 
     /**
@@ -60,7 +60,7 @@ cr.define('extensions', function() {
      * @return {?Element}
      */
     getErrorsButton: function(id) {
-      return this.$$(`#${id} /deep/ #errors-button`);
+      return this.$$(`#${id}`).getErrorsButton();
     },
 
     /**
@@ -79,6 +79,9 @@ cr.define('extensions', function() {
 
     /** @private */
     shouldShowEmptyItemsMessage_: function() {
+      if (!this.apps || !this.extensions)
+        return;
+
       return this.apps.length === 0 && this.extensions.length === 0;
     },
 
@@ -99,10 +102,14 @@ cr.define('extensions', function() {
       if (this.computedFilter_) {
         Polymer.IronA11yAnnouncer.requestAvailability();
         this.async(() => {  // Async to allow list to update.
+          const total = this.shownAppsCount_ + this.shownExtensionsCount_;
           this.fire('iron-announce', {
             text: this.shouldShowEmptySearchMessage_() ?
                 this.i18n('noSearchResults') :
-                this.i18n('searchResults', this.filter),
+                (total == 1 ?
+                     this.i18n('searchResultsSingular', this.filter) :
+                     this.i18n(
+                         'searchResultsPlural', total.toString(), this.filter)),
           });
         });
       }

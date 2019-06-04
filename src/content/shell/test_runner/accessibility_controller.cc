@@ -12,6 +12,7 @@
 #include "gin/object_template_builder.h"
 #include "gin/wrappable.h"
 #include "third_party/blink/public/web/blink.h"
+#include "third_party/blink/public/web/web_ax_context.h"
 #include "third_party/blink/public/web/web_document.h"
 #include "third_party/blink/public/web/web_element.h"
 #include "third_party/blink/public/web/web_frame.h"
@@ -148,7 +149,7 @@ void AccessibilityController::Reset() {
 }
 
 void AccessibilityController::Install(blink::WebLocalFrame* frame) {
-  frame->View()->GetSettings()->SetAccessibilityEnabled(true);
+  ax_context_.reset(new blink::WebAXContext(frame->GetDocument()));
   frame->View()->GetSettings()->SetInlineTextBoxAccessibilityEnabled(true);
 
   AccessibilityControllerBindings::Install(weak_factory_.GetWeakPtr(), frame);
@@ -190,9 +191,11 @@ void AccessibilityController::NotificationReceived(
 
   // Call global notification listeners.
   v8::Local<v8::Value> argv[] = {
-      element_handle, v8::String::NewFromUtf8(isolate, notification_name.data(),
-                                              v8::String::kNormalString,
-                                              notification_name.size()),
+      element_handle,
+      v8::String::NewFromUtf8(isolate, notification_name.data(),
+                              v8::NewStringType::kNormal,
+                              notification_name.size())
+          .ToLocalChecked(),
   };
   local_frame->CallFunctionEvenIfScriptDisabled(
       v8::Local<v8::Function>::New(isolate, notification_callback_),

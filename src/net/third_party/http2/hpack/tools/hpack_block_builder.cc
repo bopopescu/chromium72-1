@@ -4,7 +4,8 @@
 
 #include "net/third_party/http2/hpack/tools/hpack_block_builder.h"
 
-#include "net/third_party/http2/tools/http2_bug_tracker.h"
+#include "net/third_party/http2/hpack/varint/hpack_varint_encoder.h"
+#include "net/third_party/http2/platform/api/http2_bug_tracker.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace http2 {
@@ -13,31 +14,24 @@ namespace test {
 void HpackBlockBuilder::AppendHighBitsAndVarint(uint8_t high_bits,
                                                 uint8_t prefix_length,
                                                 uint64_t varint) {
-  EXPECT_LE(4, prefix_length);
+  EXPECT_LE(3, prefix_length);
   EXPECT_LE(prefix_length, 7);
 
-  // prefix_mask defines the sequence of low-order bits of the first byte
-  // that encode the prefix of the value. It is also the marker in those bits
-  // of the first byte indicating that at least one extension byte is needed.
-  uint8_t prefix_mask = (1 << prefix_length) - 1;
-  EXPECT_EQ(0, high_bits & prefix_mask);
+  HpackVarintEncoder varint_encoder;
 
-  if (varint < prefix_mask) {
-    uint8_t b = high_bits | static_cast<uint8_t>(varint);
-    buffer_.push_back(static_cast<char>(b));
+  unsigned char c =
+      varint_encoder.StartEncoding(high_bits, prefix_length, varint);
+  buffer_.push_back(c);
+
+  if (!varint_encoder.IsEncodingInProgress()) {
     return;
   }
 
-  // We need extension bytes.
-  buffer_.push_back(static_cast<char>(high_bits | prefix_mask));
-  varint -= prefix_mask;
-  while (varint >= 128) {
-    uint8_t b = static_cast<uint8_t>((varint % 128) + 128);
-    buffer_.push_back(static_cast<char>(b));
-    varint = varint / 128;
-  }
-  char c = static_cast<char>(varint);
-  buffer_.push_back(c);
+  // After the prefix, at most 63 bits can remain to be encoded.
+  // Each octet holds 7 bits, so at most 9 octets are necessary.
+  // TODO(bnc): Move this into a constant in HpackVarintEncoder.
+  varint_encoder.ResumeEncoding(/* max_encoded_bytes = */ 10, &buffer_);
+  DCHECK(!varint_encoder.IsEncodingInProgress());
 }
 
 void HpackBlockBuilder::AppendEntryTypeAndVarint(HpackEntryType entry_type,
@@ -69,6 +63,7 @@ void HpackBlockBuilder::AppendEntryTypeAndVarint(HpackEntryType entry_type,
       HTTP2_BUG << "Unreached, entry_type=" << entry_type;
       high_bits = 0;
       prefix_length = 0;
+      break;
   }
   AppendHighBitsAndVarint(high_bits, prefix_length, varint);
 }

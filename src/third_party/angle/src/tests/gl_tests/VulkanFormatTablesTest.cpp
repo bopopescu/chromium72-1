@@ -26,8 +26,7 @@ namespace
 {
 
 class VulkanFormatTablesTest : public ANGLETest
-{
-};
+{};
 
 struct ParametersToTest
 {
@@ -43,7 +42,7 @@ TEST_P(VulkanFormatTablesTest, TestFormatSupport)
     ASSERT_TRUE(IsVulkan());
 
     // Hack the angle!
-    const gl::Context *context = reinterpret_cast<gl::Context *>(getEGLWindow()->getContext());
+    const gl::Context *context = static_cast<gl::Context *>(getEGLWindow()->getContext());
     auto *contextVk            = rx::GetImplAs<rx::ContextVk>(context);
     rx::RendererVk *renderer   = contextVk->getRenderer();
 
@@ -106,7 +105,8 @@ TEST_P(VulkanFormatTablesTest, TestFormatSupport)
                     params.createFlags, &imageProperties)) == VK_SUCCESS;
 
             bool isRenderable = isRenderableColor || isRenderableDepthStencil;
-            EXPECT_EQ(isRenderable, textureCaps.renderable) << vkFormat.vkTextureFormat;
+            EXPECT_EQ(isRenderable, textureCaps.textureAttachment) << vkFormat.vkTextureFormat;
+            EXPECT_EQ(isRenderable, textureCaps.renderbuffer) << vkFormat.vkTextureFormat;
         }
     }
 }

@@ -172,7 +172,7 @@ void ExtensionApiTest::SetUpOnMainThread() {
   }
   test_config_->SetBoolean(
       kNativeCrxBindingsEnabled,
-      base::FeatureList::IsEnabled(features::kNativeCrxBindings));
+      base::FeatureList::IsEnabled(extensions_features::kNativeCrxBindings));
   TestGetConfigFunction::set_test_config_state(test_config_.get());
 }
 
@@ -231,6 +231,13 @@ bool ExtensionApiTest::RunComponentExtensionTest(
                               kFlagEnableFileAccess | kFlagLoadAsComponent);
 }
 
+bool ExtensionApiTest::RunComponentExtensionTestWithArg(
+    const std::string& extension_name,
+    const char* custom_arg) {
+  return RunExtensionTestImpl(extension_name, std::string(), custom_arg,
+                              kFlagEnableFileAccess | kFlagLoadAsComponent);
+}
+
 bool ExtensionApiTest::RunExtensionTestNoFileAccess(
     const std::string& extension_name) {
   return RunExtensionTestImpl(extension_name, std::string(), NULL, kFlagNone);
@@ -240,16 +247,6 @@ bool ExtensionApiTest::RunExtensionTestIncognitoNoFileAccess(
     const std::string& extension_name) {
   return RunExtensionTestImpl(
       extension_name, std::string(), NULL, kFlagEnableIncognito);
-}
-
-bool ExtensionApiTest::ExtensionSubtestsAreSkipped() {
-  // See http://crbug.com/177163 for details.
-#if defined(OS_WIN) && !defined(NDEBUG)
-  LOG(WARNING) << "Workaround for 177163, prematurely returning";
-  return true;
-#else
-  return false;
-#endif
 }
 
 bool ExtensionApiTest::RunExtensionSubtest(const std::string& extension_name,
@@ -279,8 +276,6 @@ bool ExtensionApiTest::RunExtensionSubtestWithArgAndFlags(
     const char* custom_arg,
     int flags) {
   DCHECK(!page_url.empty()) << "Argument page_url is required.";
-  if (ExtensionSubtestsAreSkipped())
-    return true;
   return RunExtensionTestImpl(extension_name, page_url, custom_arg, flags);
 }
 

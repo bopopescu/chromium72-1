@@ -7,8 +7,10 @@
 
 #include <IOKit/IOReturn.h>
 
+#include <map>
 #include <memory>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include "base/containers/hash_tables.h"
@@ -21,7 +23,9 @@
 #include "device/bluetooth/bluetooth_adapter.h"
 #include "device/bluetooth/bluetooth_discovery_manager_mac.h"
 #include "device/bluetooth/bluetooth_export.h"
+#include "device/bluetooth/bluetooth_low_energy_advertisement_manager_mac.h"
 #include "device/bluetooth/bluetooth_low_energy_device_mac.h"
+#include "device/bluetooth/bluetooth_low_energy_device_watcher_mac.h"
 #include "device/bluetooth/bluetooth_low_energy_discovery_manager_mac.h"
 #include "device/bluetooth/bluetooth_uuid.h"
 
@@ -30,7 +34,9 @@
 @class NSArray;
 @class NSDate;
 
+@class BluetoothAdvertisementMac;
 @class BluetoothLowEnergyCentralManagerDelegate;
+@class BluetoothLowEnergyPeripheralManagerDelegate;
 
 namespace device {
 
@@ -117,11 +123,20 @@ class DEVICE_BLUETOOTH_EXPORT BluetoothAdapterMac
   void DidFailToConnectPeripheral(CBPeripheral* peripheral, NSError* error);
   void DidDisconnectPeripheral(CBPeripheral* peripheral, NSError* error);
 
+  bool IsBluetoothLowEnergyDeviceSystemPaired(
+      base::StringPiece device_identifier) const;
+
  protected:
+  using GetDevicePairedStatusCallback =
+      base::RepeatingCallback<bool(const std::string& address)>;
+
   // BluetoothAdapter override:
   bool SetPoweredImpl(bool powered) override;
   void RemovePairingDelegateInternal(
       device::BluetoothDevice::PairingDelegate* pairing_delegate) override;
+
+  void UpdateKnownLowEnergyDevices(
+      std::map<std::string, std::string> updated_low_energy_device_info);
 
  private:
   // Struct bundling information about the state of the HostController.
@@ -151,6 +166,9 @@ class DEVICE_BLUETOOTH_EXPORT BluetoothAdapterMac
   // Returns the CBCentralManager instance.
   CBCentralManager* GetCentralManager();
 
+  // Returns the CBPeripheralManager instance.
+  CBPeripheralManager* GetPeripheralManager();
+
   // Allow the mocking out of getting the HostController state for testing.
   void SetHostControllerStateFunctionForTesting(
       HostControllerStateFunction controller_state_function);
@@ -158,6 +176,14 @@ class DEVICE_BLUETOOTH_EXPORT BluetoothAdapterMac
   // Allow the mocking out of setting the controller power state for testing.
   void SetPowerStateFunctionForTesting(
       SetControllerPowerStateFunction power_state_function);
+
+  // Allow the mocking out of BluetoothLowEnergyDeviceWatcher for testing.
+  void SetLowEnergyDeviceWatcherForTesting(
+      scoped_refptr<BluetoothLowEnergyDeviceWatcherMac> watcher);
+
+  // Allow the mocking of out GetDevicePairedStatusCallback for testing.
+  void SetGetDevicePairedStatusCallbackForTesting(
+      GetDevicePairedStatusCallback callback);
 
   // The length of time that must elapse since the last Inquiry response (on
   // Classic devices) or call to BluetoothLowEnergyDevice::Update() (on Low
@@ -167,6 +193,7 @@ class DEVICE_BLUETOOTH_EXPORT BluetoothAdapterMac
   friend class BluetoothTestMac;
   friend class BluetoothAdapterMacTest;
   friend class BluetoothLowEnergyCentralManagerBridge;
+  friend class BluetoothLowEnergyPeripheralManagerBridge;
 
   BluetoothAdapterMac();
   ~BluetoothAdapterMac() override;
@@ -208,6 +235,10 @@ class DEVICE_BLUETOOTH_EXPORT BluetoothAdapterMac
 
   // Updates |devices_| when there is a change to the CBCentralManager's state.
   void LowEnergyCentralManagerUpdatedState();
+
+  // Updates |advertisements_| when there is a change to the
+  // CBPeripheralManager's state.
+  void LowEnergyPeripheralManagerUpdatedState();
 
   // Updates |devices_| to include the currently paired devices and notifies
   // observers.
@@ -259,10 +290,30 @@ class DEVICE_BLUETOOTH_EXPORT BluetoothAdapterMac
   std::unique_ptr<BluetoothLowEnergyDiscoveryManagerMac>
       low_energy_discovery_manager_;
 
+  // Advertisement manager for Bluetooth Low Energy.
+  std::unique_ptr<BluetoothLowEnergyAdvertisementManagerMac>
+      low_energy_advertisement_manager_;
+
   // Underlying CoreBluetooth CBCentralManager and its delegate.
   base::scoped_nsobject<CBCentralManager> low_energy_central_manager_;
   base::scoped_nsobject<BluetoothLowEnergyCentralManagerDelegate>
       low_energy_central_manager_delegate_;
+
+  // Underlying CoreBluetooth CBPeripheralManager and its delegate.
+  base::scoped_nsobject<CBPeripheralManager> low_energy_peripheral_manager_;
+  base::scoped_nsobject<BluetoothLowEnergyPeripheralManagerDelegate>
+      low_energy_peripheral_manager_delegate_;
+
+  GetDevicePairedStatusCallback device_paired_status_callback_;
+
+  // Watches system file /Library/Preferences/com.apple.Bluetooth.plist to
+  // obtain information about system paired bluetooth devices.
+  scoped_refptr<BluetoothLowEnergyDeviceWatcherMac>
+      bluetooth_low_energy_device_watcher_;
+
+  // Map of UUID formatted device identifiers of paired Bluetooth devices and
+  // corresponding device address.
+  std::map<std::string, std::string> low_energy_devices_info_;
 
   base::WeakPtrFactory<BluetoothAdapterMac> weak_ptr_factory_;
 

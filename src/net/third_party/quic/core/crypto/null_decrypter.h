@@ -15,7 +15,7 @@
 #include "net/third_party/quic/platform/api/quic_string_piece.h"
 #include "net/third_party/quic/platform/api/quic_uint128.h"
 
-namespace net {
+namespace quic {
 
 class QuicDataReader;
 
@@ -25,6 +25,8 @@ class QuicDataReader;
 class QUIC_EXPORT_PRIVATE NullDecrypter : public QuicDecrypter {
  public:
   explicit NullDecrypter(Perspective perspective);
+  NullDecrypter(const NullDecrypter&) = delete;
+  NullDecrypter& operator=(const NullDecrypter&) = delete;
   ~NullDecrypter() override {}
 
   // QuicDecrypter implementation
@@ -54,10 +56,8 @@ class QUIC_EXPORT_PRIVATE NullDecrypter : public QuicDecrypter {
                           QuicStringPiece data2) const;
 
   Perspective perspective_;
-
-  DISALLOW_COPY_AND_ASSIGN(NullDecrypter);
 };
 
-}  // namespace net
+}  // namespace quic
 
 #endif  // NET_THIRD_PARTY_QUIC_CORE_CRYPTO_NULL_DECRYPTER_H_

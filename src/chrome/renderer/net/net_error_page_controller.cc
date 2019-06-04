@@ -35,8 +35,10 @@ void NetErrorPageController::Install(content::RenderFrame* render_frame,
     return;
 
   v8::Local<v8::Object> global = context->Global();
-  global->Set(gin::StringToV8(isolate, "errorPageController"),
-              controller.ToV8());
+  global
+      ->Set(context, gin::StringToV8(isolate, "errorPageController"),
+            controller.ToV8())
+      .ToChecked();
 }
 
 bool NetErrorPageController::ShowSavedCopyButtonClick() {
@@ -59,6 +61,12 @@ bool NetErrorPageController::TrackEasterEgg() {
   return ButtonClick(NetErrorHelperCore::EASTER_EGG);
 }
 
+bool NetErrorPageController::UpdateEasterEggHighScore(int high_score) {
+  if (delegate_)
+    delegate_->UpdateEasterEggHighScore(high_score);
+  return true;
+}
+
 bool NetErrorPageController::DiagnoseErrorsButtonClick() {
   return ButtonClick(NetErrorHelperCore::DIAGNOSE_ERROR);
 }
@@ -71,8 +79,11 @@ bool NetErrorPageController::TrackClick(const gin::Arguments& args) {
   if (args.PeekNext().IsEmpty() || !args.PeekNext()->IsInt32())
     return false;
 
-  if (delegate_)
-    delegate_->TrackClick(args.PeekNext()->Int32Value());
+  if (delegate_) {
+    delegate_->TrackClick(args.PeekNext()
+                              ->Int32Value(args.GetHolderCreationContext())
+                              .FromMaybe(0));
+  }
   return true;
 }
 
@@ -81,6 +92,35 @@ bool NetErrorPageController::ButtonClick(NetErrorHelperCore::Button button) {
     delegate_->ButtonPressed(button);
 
   return true;
+}
+
+void NetErrorPageController::LaunchOfflineItem(gin::Arguments* args) {
+  if (!delegate_)
+    return;
+  std::string id;
+  std::string name_space;
+  if (args->GetNext(&id) && args->GetNext(&name_space))
+    delegate_->LaunchOfflineItem(id, name_space);
+}
+
+void NetErrorPageController::LaunchDownloadsPage() {
+  if (delegate_)
+    delegate_->LaunchDownloadsPage();
+}
+
+void NetErrorPageController::SavePageForLater() {
+  if (delegate_)
+    delegate_->SavePageForLater();
+}
+
+void NetErrorPageController::CancelSavePage() {
+  if (delegate_)
+    delegate_->CancelSavePage();
+}
+
+void NetErrorPageController::ListVisibilityChanged(bool is_visible) {
+  if (delegate_)
+    delegate_->ListVisibilityChanged(is_visible);
 }
 
 NetErrorPageController::NetErrorPageController(base::WeakPtr<Delegate> delegate)
@@ -105,6 +145,16 @@ gin::ObjectTemplateBuilder NetErrorPageController::GetObjectTemplateBuilder(
                  &NetErrorPageController::DiagnoseErrorsButtonClick)
       .SetMethod("trackClick", &NetErrorPageController::TrackClick)
       .SetMethod("trackEasterEgg", &NetErrorPageController::TrackEasterEgg)
+      .SetMethod("updateEasterEggHighScore",
+                 &NetErrorPageController::UpdateEasterEggHighScore)
       .SetMethod("trackCachedCopyButtonClick",
-                 &NetErrorPageController::TrackCachedCopyButtonClick);
+                 &NetErrorPageController::TrackCachedCopyButtonClick)
+      .SetMethod("launchOfflineItem",
+                 &NetErrorPageController::LaunchOfflineItem)
+      .SetMethod("launchDownloadsPage",
+                 &NetErrorPageController::LaunchDownloadsPage)
+      .SetMethod("savePageForLater", &NetErrorPageController::SavePageForLater)
+      .SetMethod("cancelSavePage", &NetErrorPageController::CancelSavePage)
+      .SetMethod("listVisibilityChanged",
+                 &NetErrorPageController::ListVisibilityChanged);
 }

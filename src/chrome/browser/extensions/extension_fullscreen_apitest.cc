@@ -62,10 +62,11 @@ IN_PROC_BROWSER_TEST_F(ExtensionApiTest,
 
 #if defined(OS_MACOSX)
 // Fails on MAC: http://crbug.com/480370
-#define MAYBE_DisplayModeWindowIsInFullscreen DISABLED_DisplayModeWindowIsInFullscreen
+#define MAYBE_DisplayModeWindowIsInFullscreen \
+  DISABLED_DisplayModeWindowIsInFullscreen
 #else
 #define MAYBE_DisplayModeWindowIsInFullscreen DisplayModeWindowIsInFullscreen
-#endif  // defined(OS_MACOSX)
+#endif
 
 IN_PROC_BROWSER_TEST_F(ExtensionApiTest,
                        MAYBE_DisplayModeWindowIsInFullscreen) {

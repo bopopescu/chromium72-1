@@ -13,21 +13,16 @@
 #include "rtc_base/strings/string_builder.h"
 
 namespace webrtc {
-double Timestamp::SecondsAsDouble() const {
-  if (IsInfinite()) {
-    return std::numeric_limits<double>::infinity();
-  } else {
-    return us() * 1e-6;
-  }
-}
-
-std::string ToString(const Timestamp& value) {
+std::string ToString(Timestamp value) {
   char buf[64];
   rtc::SimpleStringBuilder sb(buf);
   if (value.IsInfinite()) {
     sb << "inf ms";
   } else {
-    sb << value.ms() << " ms";
+    if (value.ms() % 1000 == 0)
+      sb << value.seconds() << " s";
+    else
+      sb << value.ms() << " ms";
   }
   return sb.str();
 }

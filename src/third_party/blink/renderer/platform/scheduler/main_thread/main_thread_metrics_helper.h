@@ -8,15 +8,16 @@
 #include "base/macros.h"
 #include "base/optional.h"
 #include "base/time/time.h"
+#include "components/scheduling_metrics/task_duration_metric_reporter.h"
+#include "components/scheduling_metrics/total_duration_metric_reporter.h"
 #include "third_party/blink/public/platform/task_type.h"
 #include "third_party/blink/public/platform/web_thread_type.h"
 #include "third_party/blink/renderer/platform/platform_export.h"
-#include "third_party/blink/renderer/platform/scheduler/child/metrics_helper.h"
+#include "third_party/blink/renderer/platform/scheduler/common/metrics_helper.h"
+#include "third_party/blink/renderer/platform/scheduler/common/thread_load_tracker.h"
 #include "third_party/blink/renderer/platform/scheduler/main_thread/main_thread_task_queue.h"
 #include "third_party/blink/renderer/platform/scheduler/main_thread/use_case.h"
-#include "third_party/blink/renderer/platform/scheduler/renderer/frame_status.h"
-#include "third_party/blink/renderer/platform/scheduler/util/task_duration_metric_reporter.h"
-#include "third_party/blink/renderer/platform/scheduler/util/thread_load_tracker.h"
+#include "third_party/blink/renderer/platform/scheduler/public/frame_status.h"
 
 namespace blink {
 namespace scheduler {
@@ -25,41 +26,29 @@ enum class MainThreadTaskLoadState;
 class MainThreadTaskQueue;
 class MainThreadSchedulerImpl;
 
-// This enum is used for histogram and should not be renumbered.
-// It tracks the following possible transitions:
-// -> kBackgrounded (-> [FROZEN_* -> kResumed])? -> kForegrounded
-enum class BackgroundedRendererTransition {
-  // Renderer is backgrounded
-  kBackgrounded = 0,
-  // Renderer is frozen after being backgrounded for a while
-  kFrozenAfterDelay = 1,
-  // Renderer is frozen due to critical resources, reserved for future use.
-  kFrozenDueToCriticalResources = 2,
-  // Renderer is resumed after being frozen
-  kResumed = 3,
-  // Renderer is foregrounded
-  kForegrounded = 4,
+enum class UkmRecordingStatus {
+  kSuccess = 0,
+  kErrorMissingFrame = 1,
+  kErrorDetachedFrame = 2,
+  kErrorMissingUkmRecorder = 3,
 
-  kCount = 5
+  kCount = 4,
 };
 
 // Helper class to take care of metrics on behalf of MainThreadScheduler.
 // This class should be used only on the main thread.
 class PLATFORM_EXPORT MainThreadMetricsHelper : public MetricsHelper {
  public:
-  static void RecordBackgroundedTransition(
-      BackgroundedRendererTransition transition);
-
   MainThreadMetricsHelper(MainThreadSchedulerImpl* main_thread_scheduler,
+                          bool has_cpu_timing_for_each_task,
                           base::TimeTicks now,
                           bool renderer_backgrounded);
   ~MainThreadMetricsHelper();
 
-  void RecordTaskMetrics(MainThreadTaskQueue* queue,
-                         const base::sequence_manager::TaskQueue::Task& task,
-                         base::TimeTicks start_time,
-                         base::TimeTicks end_time,
-                         base::Optional<base::TimeDelta> thread_time);
+  void RecordTaskMetrics(
+      MainThreadTaskQueue* queue,
+      const base::sequence_manager::Task& task,
+      const base::sequence_manager::TaskQueue::TaskTiming& task_timing);
 
   void OnRendererForegrounded(base::TimeTicks now);
   void OnRendererBackgrounded(base::TimeTicks now);
@@ -72,16 +61,26 @@ class PLATFORM_EXPORT MainThreadMetricsHelper : public MetricsHelper {
   void ResetForTest(base::TimeTicks now);
 
  private:
+  using TaskDurationPerQueueTypeMetricReporter =
+      scheduling_metrics::TaskDurationMetricReporter<
+          MainThreadTaskQueue::QueueType>;
+
+  void ReportLowThreadLoadForPageAlmostIdleSignal(int load_percentage);
+
   MainThreadSchedulerImpl* main_thread_scheduler_;  // NOT OWNED
+
+  // Set to true when OnRendererShutdown is called. Used to ensure that metrics
+  // that need to cross IPC boundaries aren't sent, as they cause additional
+  // useless tasks to be posted.
+  bool renderer_shutting_down_;
+
+  const bool is_page_almost_idle_signal_enabled_;
 
   base::Optional<base::TimeTicks> last_reported_task_;
 
   ThreadLoadTracker main_thread_load_tracker_;
   ThreadLoadTracker background_main_thread_load_tracker_;
   ThreadLoadTracker foreground_main_thread_load_tracker_;
-
-  using TaskDurationPerQueueTypeMetricReporter =
-      TaskDurationMetricReporter<MainThreadTaskQueue::QueueType>;
 
   struct PerQueueTypeDurationReporters {
     PerQueueTypeDurationReporters();
@@ -99,8 +98,11 @@ class PLATFORM_EXPORT MainThreadMetricsHelper : public MetricsHelper {
     TaskDurationPerQueueTypeMetricReporter background_fourth_minute;
     TaskDurationPerQueueTypeMetricReporter background_fifth_minute;
     TaskDurationPerQueueTypeMetricReporter background_after_fifth_minute;
+    TaskDurationPerQueueTypeMetricReporter background_after_tenth_minute;
     TaskDurationPerQueueTypeMetricReporter
         background_keep_active_after_fifth_minute;
+    TaskDurationPerQueueTypeMetricReporter
+        background_keep_active_after_tenth_minute;
     TaskDurationPerQueueTypeMetricReporter hidden;
     TaskDurationPerQueueTypeMetricReporter visible;
     TaskDurationPerQueueTypeMetricReporter hidden_music;
@@ -108,10 +110,11 @@ class PLATFORM_EXPORT MainThreadMetricsHelper : public MetricsHelper {
 
   PerQueueTypeDurationReporters per_queue_type_reporters_;
 
-  TaskDurationMetricReporter<FrameStatus> per_frame_status_duration_reporter_;
+  scheduling_metrics::TaskDurationMetricReporter<FrameStatus>
+      per_frame_status_duration_reporter_;
 
   using TaskDurationPerTaskTypeMetricReporter =
-      TaskDurationMetricReporter<TaskType>;
+      scheduling_metrics::TaskDurationMetricReporter<TaskType>;
 
   TaskDurationPerTaskTypeMetricReporter per_task_type_duration_reporter_;
 
@@ -130,8 +133,15 @@ class PLATFORM_EXPORT MainThreadMetricsHelper : public MetricsHelper {
       foreground_per_task_type_duration_reporter_;
   TaskDurationPerTaskTypeMetricReporter
       background_per_task_type_duration_reporter_;
+  TaskDurationPerTaskTypeMetricReporter
+      background_after_fifth_minute_per_task_type_duration_reporter_;
+  TaskDurationPerTaskTypeMetricReporter
+      background_after_tenth_minute_per_task_type_duration_reporter_;
 
-  TaskDurationMetricReporter<UseCase> per_task_use_case_duration_reporter_;
+  scheduling_metrics::TaskDurationMetricReporter<UseCase>
+      per_task_use_case_duration_reporter_;
+
+  scheduling_metrics::TotalDurationMetricReporter total_task_time_reporter_;
 
   MainThreadTaskLoadState main_thread_task_load_state_;
 

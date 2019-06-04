@@ -6,11 +6,12 @@
 
 #include <set>
 
+#include "ash/public/cpp/notification_utils.h"
 #include "ash/resources/vector_icons/vector_icons.h"
 #include "ash/shell.h"
 #include "ash/strings/grit/ash_strings.h"
+#include "ash/system/model/system_tray_model.h"
 #include "ash/system/power/power_status.h"
-#include "ash/system/tray/system_tray_controller.h"
 #include "base/strings/utf_string_conversions.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/l10n/time_format.h"
@@ -125,20 +126,21 @@ std::unique_ptr<Notification> DualRoleNotification::CreateNotification() {
   auto delegate =
       base::MakeRefCounted<message_center::HandleNotificationClickDelegate>(
           base::BindRepeating([]() {
-            Shell::Get()->system_tray_controller()->ShowPowerSettings();
+            Shell::Get()
+                ->system_tray_model()
+                ->client_ptr()
+                ->ShowPowerSettings();
           }));
 
-  std::unique_ptr<Notification> notification =
-      Notification::CreateSystemNotification(
-          message_center::NOTIFICATION_TYPE_SIMPLE, kDualRoleNotificationId,
-          title,
-          l10n_util::GetStringUTF16(IDS_ASH_STATUS_TRAY_DUAL_ROLE_MESSAGE),
-          gfx::Image(), base::string16(), GURL(),
-          message_center::NotifierId(
-              message_center::NotifierId::SYSTEM_COMPONENT, kNotifierDualRole),
-          message_center::RichNotificationData(), std::move(delegate),
-          kNotificationChargingUsbCIcon,
-          message_center::SystemNotificationWarningLevel::NORMAL);
+  std::unique_ptr<Notification> notification = ash::CreateSystemNotification(
+      message_center::NOTIFICATION_TYPE_SIMPLE, kDualRoleNotificationId, title,
+      l10n_util::GetStringUTF16(IDS_ASH_STATUS_TRAY_DUAL_ROLE_MESSAGE),
+      base::string16(), GURL(),
+      message_center::NotifierId(message_center::NotifierType::SYSTEM_COMPONENT,
+                                 kNotifierDualRole),
+      message_center::RichNotificationData(), std::move(delegate),
+      kNotificationChargingUsbCIcon,
+      message_center::SystemNotificationWarningLevel::NORMAL);
   notification->set_priority(message_center::MIN_PRIORITY);
   return notification;
 }

@@ -9,20 +9,19 @@
 #include "net/third_party/quic/core/congestion_control/rtt_stats.h"
 #include "net/third_party/quic/core/quic_time.h"
 
-namespace net {
+namespace quic {
 namespace test {
 
 class RttStatsPeer {
  public:
+  RttStatsPeer() = delete;
+
   static void SetSmoothedRtt(RttStats* rtt_stats, QuicTime::Delta rtt_ms);
 
   static void SetMinRtt(RttStats* rtt_stats, QuicTime::Delta rtt_ms);
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(RttStatsPeer);
 };
 
 }  // namespace test
-}  // namespace net
+}  // namespace quic
 
 #endif  // NET_THIRD_PARTY_QUIC_TEST_TOOLS_RTT_STATS_PEER_H_

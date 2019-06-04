@@ -39,10 +39,10 @@ class ViewAndroidObserver;
 
 // View-related parameters from frame updates.
 struct FrameInfo {
-  gfx::SizeF viewport_size;  // In CSS pixels.
+  gfx::SizeF viewport_size;  // In dip.
 
   // Content offset from the top. Used to translate snapshots to
-  // the correct part of the view. In CSS pixels.
+  // the correct part of the view. In dip.
   float content_offset;
 };
 
@@ -98,7 +98,7 @@ class UI_ANDROID_EXPORT ViewAndroid {
   virtual ~ViewAndroid();
 
   void UpdateFrameInfo(const FrameInfo& frame_info);
-  // content_offset is in CSS scale.
+  // content_offset is in dip.
   float content_offset() const { return frame_info_.content_offset; }
   gfx::SizeF viewport_size() const { return frame_info_.viewport_size; }
 
@@ -126,6 +126,9 @@ class UI_ANDROID_EXPORT ViewAndroid {
   // Moves the give child ViewAndroid to the front of the list so that it can be
   // the first responder of events.
   void MoveToFront(ViewAndroid* child);
+  // Moves the given child ViewAndroid to the back of the list so that any other
+  // view may respond to events first.
+  void MoveToBack(ViewAndroid* child);
 
   // Detaches this view from its parent.
   void RemoveFromParent();
@@ -178,7 +181,13 @@ class UI_ANDROID_EXPORT ViewAndroid {
 
   ViewAndroid* parent() const { return parent_; }
 
+  bool OnTouchEventForTesting(const MotionEventAndroid& event) {
+    return OnTouchEvent(event);
+  }
+
  protected:
+  void RemoveAllChildren(bool attached_to_window);
+
   ViewAndroid* parent_;
 
  private:
@@ -204,14 +213,12 @@ class UI_ANDROID_EXPORT ViewAndroid {
   bool ScrollTo(float x, float y);
 
   void RemoveChild(ViewAndroid* child);
-  void RemoveAllChildren();
 
   void OnAttachedToWindow();
   void OnDetachedFromWindow();
 
   void SetLayoutForTesting(int x, int y, int width, int height);
 
-  // TODO(jinsukkim): Use OnceCallback, as it is used at most once.
   template <typename E>
   using EventHandlerCallback =
       const base::RepeatingCallback<bool(EventHandlerAndroid*, const E&)>;
@@ -252,7 +259,7 @@ class UI_ANDROID_EXPORT ViewAndroid {
       const;
 
   std::list<ViewAndroid*> children_;
-  base::ObserverList<ViewAndroidObserver> observer_list_;
+  base::ObserverList<ViewAndroidObserver>::Unchecked observer_list_;
   scoped_refptr<cc::Layer> layer_;
   JavaObjectWeakGlobalRef delegate_;
 

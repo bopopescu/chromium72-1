@@ -936,26 +936,29 @@ class InputApiUnittest(PresubmitTestsBase):
         'AffectedSourceFiles',
         'AffectedTestableFiles',
         'AffectedTextFiles',
+        'Command',
+        'CreateTemporaryFile',
         'DEFAULT_BLACK_LIST',
         'DEFAULT_WHITE_LIST',
-        'CreateTemporaryFile',
         'FilterSourceFile',
         'LocalPaths',
-        'Command',
-        'RunTests',
         'PresubmitLocalPath',
         'ReadFile',
         'RightHandSideLines',
+        'RunTests',
         'ast',
         'basename',
-        'cPickle',
-        'cpplint',
-        'cStringIO',
         'canned_checks',
         'change',
+        'cPickle',
+        'cpplint',
         'cpu_count',
+        'cStringIO',
+        'dry_run',
         'environ',
         'fnmatch',
+        'gclient_utils',
+        'gerrit',
         'glob',
         'is_committing',
         'is_windows',
@@ -963,9 +966,9 @@ class InputApiUnittest(PresubmitTestsBase):
         'logging',
         'marshal',
         'os_listdir',
-        'os_walk',
         'os_path',
         'os_stat',
+        'os_walk',
         'owners_db',
         'owners_finder',
         'parallel',
@@ -981,10 +984,8 @@ class InputApiUnittest(PresubmitTestsBase):
         'traceback',
         'unittest',
         'urllib2',
-        'version',
         'verbose',
-        'dry_run',
-        'gerrit',
+        'version',
     ]
     # If this test fails, you should add the relevant test.
     self.compareMembers(
@@ -1494,7 +1495,7 @@ class OutputApiUnittest(PresubmitTestsBase):
     self._testIncludingCQTrybots(
       """A change to GPU-related code.
 
-Cq-Include-Trybots:  master.tryserver.blink:linux_trusty_blink_rel ;luci.chromium.try:win_optional_gpu_tests_rel
+Cq-Include-Trybots:  luci.chromium.try:linux-blink-rel;luci.chromium.try:win_optional_gpu_tests_rel
 """,
       [
         'luci.chromium.try:linux_optional_gpu_tests_rel',
@@ -1502,7 +1503,7 @@ Cq-Include-Trybots:  master.tryserver.blink:linux_trusty_blink_rel ;luci.chromiu
       ],
       """A change to GPU-related code.
 
-Cq-Include-Trybots: luci.chromium.try:linux_optional_gpu_tests_rel;luci.chromium.try:win_optional_gpu_tests_rel;master.tryserver.blink:linux_trusty_blink_rel""")
+Cq-Include-Trybots: luci.chromium.try:linux-blink-rel;luci.chromium.try:linux_optional_gpu_tests_rel;luci.chromium.try:win_optional_gpu_tests_rel""")
 
     # Starting without any CQ_INCLUDE_TRYBOTS line.
     self._testIncludingCQTrybots(
@@ -1776,7 +1777,7 @@ class CannedChecksUnittest(PresubmitTestsBase):
       'GetCodereviewOwnerAndReviewers',
       'GetPythonUnitTests', 'GetPylint',
       'GetUnitTests', 'GetUnitTestsInDirectory', 'GetUnitTestsRecursively',
-      'CheckCIPDManifest', 'CheckCIPDPackages',
+      'CheckCIPDManifest', 'CheckCIPDPackages', 'CheckCIPDClientDigests',
       'CheckChangedLUCIConfigs',
     ]
     # If this test fails, you should add the relevant test.
@@ -1979,7 +1980,7 @@ class CannedChecksUnittest(PresubmitTestsBase):
     input_api = self.MockInputApi(change1, False)
     affected_files = (affected_file1, affected_file2)
 
-    input_api.AffectedFiles = lambda: affected_files
+    input_api.AffectedFiles = lambda **_: affected_files
 
     self.mox.ReplayAll()
 
@@ -2389,7 +2390,7 @@ class CannedChecksUnittest(PresubmitTestsBase):
     affected_file.Action = lambda: 'M'
 
     change = self.mox.CreateMock(presubmit.Change)
-    change.AffectedFiles = lambda: [affected_file]
+    change.AffectedFiles = lambda **_: [affected_file]
 
     input_api = self.MockInputApi(None, False)
     input_api.change = change
@@ -2762,7 +2763,7 @@ class CannedChecksUnittest(PresubmitTestsBase):
         expected_output=re.compile(
             'Missing LGTM from an OWNER for these files:\n'
             '    foo\n'
-            '.*TBR does not apply to changes that affect OWNERS files.',
+            '.*The CL affects an OWNERS file, so TBR will be ignored.',
             re.MULTILINE))
 
   def testCannedCheckOwners_WithoutOwnerLGTM(self):
@@ -2933,6 +2934,18 @@ class CannedChecksUnittest(PresubmitTestsBase):
         'stdout': subprocess.PIPE,
         'stderr': subprocess.STDOUT,
     })
+
+  def testCheckCIPDClientDigests(self):
+    input_api = self.MockInputApi(None, False)
+    input_api.verbose = True
+    self.mox.ReplayAll()
+
+    command = presubmit_canned_checks.CheckCIPDClientDigests(
+        input_api, presubmit.OutputApi, client_version_file='ver')
+    self.assertEquals(command.cmd, [
+      'cipd', 'selfupdate-roll', '-check', '-version-file', 'ver',
+      '-log-level', 'debug',
+    ])
 
   def testCannedCheckVPythonSpec(self):
     change = presubmit.Change('a', 'b', self.fake_root_dir, None, 0, 0, None)

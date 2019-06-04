@@ -19,7 +19,7 @@
 #include "net/third_party/quic/platform/api/quic_export.h"
 #include "net/third_party/quic/platform/api/quic_string.h"
 
-namespace net {
+namespace quic {
 
 class CachedNetworkParameters;
 class CryptoHandshakeMessage;
@@ -161,6 +161,8 @@ class QUIC_EXPORT_PRIVATE QuicCryptoServerStream
                          bool use_stateless_rejects_if_peer_supported,
                          QuicSession* session,
                          Helper* helper);
+  QuicCryptoServerStream(const QuicCryptoServerStream&) = delete;
+  QuicCryptoServerStream& operator=(const QuicCryptoServerStream&) = delete;
 
   ~QuicCryptoServerStream() override;
 
@@ -220,10 +222,8 @@ class QUIC_EXPORT_PRIVATE QuicCryptoServerStream
   const QuicCryptoServerConfig* crypto_config_;
   QuicCompressedCertsCache* compressed_certs_cache_;
   Helper* helper_;
-
-  DISALLOW_COPY_AND_ASSIGN(QuicCryptoServerStream);
 };
 
-}  // namespace net
+}  // namespace quic
 
 #endif  // NET_THIRD_PARTY_QUIC_CORE_QUIC_CRYPTO_SERVER_STREAM_H_

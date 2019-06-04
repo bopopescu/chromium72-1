@@ -49,16 +49,16 @@ class DISPLAY_MANAGER_EXPORT DisplayConfigurator
 
   using ConfigurationCallback = base::Callback<void(bool /* success */)>;
 
-  using SetProtectionCallback = base::Callback<void(bool /* success */)>;
+  using SetProtectionCallback = base::OnceCallback<void(bool /* success */)>;
 
   // link_mask: The type of connected display links, which is a bitmask of
   // DisplayConnectionType values.
   // protection_mask: The desired protection methods, which is a bitmask of the
   // ContentProtectionMethod values.
   using QueryProtectionCallback =
-      base::Callback<void(bool /* success */,
-                          uint32_t /* link_mask */,
-                          uint32_t /* protection_mask */)>;
+      base::OnceCallback<void(bool /* success */,
+                              uint32_t /* link_mask */,
+                              uint32_t /* protection_mask */)>;
   using DisplayControlCallback = base::OnceCallback<void(bool /* success */)>;
 
   using DisplayStateList = std::vector<DisplaySnapshot*>;
@@ -216,6 +216,9 @@ class DISPLAY_MANAGER_EXPORT DisplayConfigurator
   // e.g. via SetDisplayPower().
   void SetInitialDisplayPower(chromeos::DisplayPowerState power_state);
 
+  // Initialize the display power state to DISPLAY_POWER_ALL_ON
+  void InitializeDisplayPowerState();
+
   // Initialization, must be called right after constructor.
   // |is_panel_fitting_enabled| indicates hardware panel fitting support.
   void Init(std::unique_ptr<NativeDisplayDelegate> delegate,
@@ -270,7 +273,7 @@ class DISPLAY_MANAGER_EXPORT DisplayConfigurator
   // to the query.
   void QueryContentProtectionStatus(uint64_t client_id,
                                     int64_t display_id,
-                                    const QueryProtectionCallback& callback);
+                                    QueryProtectionCallback callback);
 
   // Requests the desired protection methods.
   // |protection_mask| is the desired protection methods, which is a bitmask
@@ -279,17 +282,22 @@ class DISPLAY_MANAGER_EXPORT DisplayConfigurator
   void SetContentProtection(uint64_t client_id,
                             int64_t display_id,
                             uint32_t protection_mask,
-                            const SetProtectionCallback& callback);
+                            SetProtectionCallback callback);
 
   // Returns true if there is at least one display on.
   bool IsDisplayOn() const;
 
-  // Sets the gamma, degamma and correction matrix for |display_id| to the
-  // values in |degamma_lut|, |gamma_lut| and |correction_matrix|.
-  bool SetColorCorrection(int64_t display_id,
+  // Sets the given 3x3 |color_matrix| on the display with |display_id|.
+  // This doesn't affect gamma or degamma. It returns true if the color matrix
+  // was sent to the GPU process successfully.
+  bool SetColorMatrix(int64_t display_id,
+                      const std::vector<float>& color_matrix);
+
+  // Sets the given |gamma_lut| and |degamma_lut| on the display with
+  // |display_id|.
+  bool SetGammaCorrection(int64_t display_id,
                           const std::vector<GammaRampRGBEntry>& degamma_lut,
-                          const std::vector<GammaRampRGBEntry>& gamma_lut,
-                          const std::vector<float>& correction_matrix);
+                          const std::vector<GammaRampRGBEntry>& gamma_lut);
 
   // Returns the requested power state if set or the default power state.
   chromeos::DisplayPowerState GetRequestedPowerState() const;
@@ -300,6 +308,11 @@ class DISPLAY_MANAGER_EXPORT DisplayConfigurator
 
   void reset_requested_power_state_for_test() {
     requested_power_state_ = base::nullopt;
+  }
+
+  base::Optional<chromeos::DisplayPowerState>
+  GetRequestedPowerStateForTest() const {
+    return requested_power_state_;
   }
 
  private:
@@ -439,7 +452,7 @@ class DISPLAY_MANAGER_EXPORT DisplayConfigurator
   // configuration changes asynchronously.
   DisplayStateList cached_displays_;
 
-  base::ObserverList<Observer> observers_;
+  base::ObserverList<Observer>::Unchecked observers_;
 
   // The timer to delay configuring displays. This is used to aggregate multiple
   // display configuration events when they are reported in short time spans.

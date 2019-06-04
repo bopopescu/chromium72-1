@@ -20,6 +20,7 @@
 #include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/synchronization/lock.h"
+#include "base/task/post_task.h"
 #include "base/threading/thread_restrictions.h"
 #include "base/values.h"
 #include "build/build_config.h"
@@ -38,13 +39,15 @@
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "components/error_page/common/error_page_switches.h"
-#include "components/google/core/browser/google_util.h"
+#include "components/google/core/common/google_util.h"
 #include "components/policy/core/browser/browser_policy_connector.h"
 #include "components/policy/core/common/mock_configuration_policy_provider.h"
 #include "components/policy/core/common/policy_map.h"
 #include "components/policy/policy_constants.h"
+#include "components/prefs/pref_member.h"
 #include "components/prefs/pref_service.h"
 #include "components/strings/grit/components_strings.h"
+#include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/browsing_data_remover.h"
 #include "content/public/browser/navigation_handle.h"
@@ -58,6 +61,7 @@
 #include "content/public/test/browser_test_utils.h"
 #include "content/public/test/test_navigation_observer.h"
 #include "content/public/test/url_loader_interceptor.h"
+#include "google_apis/gaia/gaia_urls.h"
 #include "mojo/public/cpp/bindings/strong_binding.h"
 #include "net/base/filename_util.h"
 #include "net/base/net_errors.h"
@@ -375,8 +379,8 @@ class DNSErrorPageTest : public ErrorPageTest {
               if (google_util::LinkDoctorBaseURL() == params->url_request.url) {
                 // Send RequestCreated so that anyone blocking on
                 // WaitForRequests can continue.
-                BrowserThread::PostTask(
-                    BrowserThread::UI, FROM_HERE,
+                base::PostTaskWithTraits(
+                    FROM_HERE, {BrowserThread::UI},
                     base::BindOnce(&DNSErrorPageTest::RequestCreated,
                                    base::Unretained(owner)));
                 return chrome_browser_net::WriteFileToURLLoader(
@@ -407,7 +411,7 @@ class DNSErrorPageTest : public ErrorPageTest {
     if (path != request.relative_url)
       return nullptr;
     return std::unique_ptr<net::test_server::HttpResponse>(
-        new net::test_server::RawHttpResponse("HTTP/1.1 500 Server Sad :(",
+        new net::test_server::RawHttpResponse("HTTP/1.1 500 Server Sad :(\n\n",
                                               "\x01"));
   }
 
@@ -1034,6 +1038,9 @@ class ErrorPageAutoReloadTest : public InProcessBrowserTest {
                 return false;
               if (params->url_request.url.path() == "/favicon.ico")
                 return false;
+              if (params->url_request.url.GetOrigin() ==
+                  GaiaUrls::GetInstance()->gaia_url())
+                return false;
               (*requests)++;
               if (*failures < requests_to_fail) {
                 (*failures)++;
@@ -1276,11 +1283,10 @@ class ErrorPageOfflineTest : public ErrorPageTest {
 #if defined(OS_CHROMEOS)
     if (enroll_) {
       // Set up fake install attributes.
-      std::unique_ptr<chromeos::StubInstallAttributes> attributes =
-          std::make_unique<chromeos::StubInstallAttributes>();
-      attributes->SetCloudManaged("example.com", "fake-id");
-      policy::BrowserPolicyConnectorChromeOS::SetInstallAttributesForTesting(
-          attributes.release());
+      test_install_attributes_ =
+          std::make_unique<chromeos::ScopedStubInstallAttributes>(
+              chromeos::StubInstallAttributes::CreateCloudManaged("example.com",
+                                                                  "fake-id"));
     }
 #endif
 
@@ -1315,7 +1321,7 @@ class ErrorPageOfflineTest : public ErrorPageTest {
 
   std::string NavigateToPageAndReadText() {
 #if defined(OS_CHROMEOS)
-      // Check enterprise enrollment
+    // Check enterprise enrollment
     policy::BrowserPolicyConnectorChromeOS* connector =
         g_browser_process->platform_part()
         ->browser_policy_connector_chromeos();
@@ -1349,6 +1355,9 @@ class ErrorPageOfflineTest : public ErrorPageTest {
 #if defined(OS_CHROMEOS)
   // Whether to enroll this CrOS device
   bool enroll_ = true;
+
+  std::unique_ptr<chromeos::ScopedStubInstallAttributes>
+      test_install_attributes_;
 #endif
 
   // Mock policy provider for both user and device policies.
@@ -1422,6 +1431,70 @@ IN_PROC_BROWSER_TEST_F(ErrorPageOfflineTestUnEnrolledChromeOS,
   EXPECT_EQ("", result);
 }
 #endif
+
+IN_PROC_BROWSER_TEST_F(ErrorPageOfflineTestWithAllowDinosaurTrue,
+                       CheckEasterEggHighScoreLoaded) {
+  content::WebContents* web_contents =
+      browser()->tab_strip_model()->GetActiveWebContents();
+  content::BrowserContext* browser_context = web_contents->GetBrowserContext();
+  Profile* profile = Profile::FromBrowserContext(browser_context);
+
+  IntegerPrefMember easter_egg_high_score;
+  easter_egg_high_score.Init(prefs::kNetworkEasterEggHighScore,
+                             profile->GetPrefs());
+
+  // Set a high score in the user's profile.
+  int high_score = 1000;
+  easter_egg_high_score.SetValue(high_score);
+
+  std::string result = NavigateToPageAndReadText();
+  EXPECT_EQ("", result);
+
+  content::EvalJsResult actual_high_score = content::EvalJs(
+      web_contents,
+      "new Promise((resolve) => {"
+      "  window.initializeEasterEggHighScore = function(highscore) { "
+      "    resolve(highscore);"
+      "  };"
+      "  /* Request the initial highscore from the browser. */"
+      "  errorPageController.trackEasterEgg();"
+      "});");
+
+  EXPECT_EQ(high_score, actual_high_score);
+}
+
+IN_PROC_BROWSER_TEST_F(ErrorPageOfflineTestWithAllowDinosaurTrue,
+                       CheckEasterEggHighScoreSaved) {
+  content::WebContents* web_contents =
+      browser()->tab_strip_model()->GetActiveWebContents();
+  content::BrowserContext* browser_context = web_contents->GetBrowserContext();
+  Profile* profile = Profile::FromBrowserContext(browser_context);
+
+  IntegerPrefMember easter_egg_high_score;
+  easter_egg_high_score.Init(prefs::kNetworkEasterEggHighScore,
+                             profile->GetPrefs());
+
+  // The high score should be initialized to 0.
+  EXPECT_EQ(0, easter_egg_high_score.GetValue());
+
+  std::string result = NavigateToPageAndReadText();
+  EXPECT_EQ("", result);
+
+  base::RunLoop run_loop;
+
+  PrefChangeRegistrar change_observer;
+  change_observer.Init(profile->GetPrefs());
+  change_observer.Add(prefs::kNetworkEasterEggHighScore,
+                      run_loop.QuitClosure());
+
+  EXPECT_TRUE(content::ExecJs(
+      web_contents, "errorPageController.updateEasterEggHighScore(2000);"));
+
+  // Wait for preference change.
+  run_loop.Run();
+
+  EXPECT_EQ(2000, easter_egg_high_score.GetValue());
+}
 
 // A test fixture that simulates failing requests for an IDN domain name.
 class ErrorPageForIDNTest : public InProcessBrowserTest {

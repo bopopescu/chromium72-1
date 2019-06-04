@@ -23,7 +23,6 @@
 #include "components/tracing/common/trace_startup_config.h"
 #include "components/tracing/common/tracing_switches.h"
 #include "content/browser/browser_main_loop.h"
-#include "content/browser/browser_process_sub_thread.h"
 #include "content/browser/browser_shutdown_profile_dumper.h"
 #include "content/browser/notification_service_impl.h"
 #include "content/common/content_switches_internal.h"
@@ -55,7 +54,10 @@ BrowserMainRunnerImpl* BrowserMainRunnerImpl::Create() {
 }
 
 BrowserMainRunnerImpl::BrowserMainRunnerImpl()
-    : initialization_started_(false), is_shutdown_(false) {}
+    : initialization_started_(false),
+      is_shutdown_(false),
+      scoped_execution_fence_(
+          std::make_unique<base::TaskScheduler::ScopedExecutionFence>()) {}
 
 BrowserMainRunnerImpl::~BrowserMainRunnerImpl() {
   if (initialization_started_ && !is_shutdown_)
@@ -63,12 +65,6 @@ BrowserMainRunnerImpl::~BrowserMainRunnerImpl() {
 }
 
 int BrowserMainRunnerImpl::Initialize(const MainFunctionParams& parameters) {
-  return Initialize(parameters, nullptr);
-}
-
-int BrowserMainRunnerImpl::Initialize(
-    const MainFunctionParams& parameters,
-    std::unique_ptr<BrowserProcessSubThread> service_manager_thread) {
   SCOPED_UMA_HISTOGRAM_LONG_TIMER(
       "Startup.BrowserMainRunnerImplInitializeLongTime");
   TRACE_EVENT0("startup", "BrowserMainRunnerImpl::Initialize");
@@ -82,10 +78,9 @@ int BrowserMainRunnerImpl::Initialize(
 
     const base::TimeTicks start_time_step1 = base::TimeTicks::Now();
 
-    base::SamplingHeapProfiler::InitTLSSlot();
+    base::SamplingHeapProfiler::Init();
     if (parameters.command_line.HasSwitch(switches::kSamplingHeapProfiler)) {
-      base::SamplingHeapProfiler* profiler =
-          base::SamplingHeapProfiler::GetInstance();
+      base::SamplingHeapProfiler* profiler = base::SamplingHeapProfiler::Get();
       unsigned sampling_interval = 0;
       bool parsed =
           base::StringToUint(parameters.command_line.GetSwitchValueASCII(
@@ -115,9 +110,10 @@ int BrowserMainRunnerImpl::Initialize(
     gfx::win::MaybeInitializeDirectWrite();
 #endif  // OS_WIN
 
-    main_loop_.reset(new BrowserMainLoop(parameters));
+    main_loop_.reset(
+        new BrowserMainLoop(parameters, std::move(scoped_execution_fence_)));
 
-    main_loop_->Init(std::move(service_manager_thread));
+    main_loop_->Init();
 
     if (parameters.created_main_parts_closure) {
       parameters.created_main_parts_closure->Run(main_loop_->parts());
@@ -190,7 +186,7 @@ void BrowserMainRunnerImpl::Shutdown() {
   // startup tracing becomes a version of shutdown tracing).
   // There are two cases:
   // 1. Startup duration is not reached.
-  // 2. Or startup duration is not specified for --trace-config-file flag.
+  // 2. Or if the trace should be saved to file for --trace-config-file flag.
   std::unique_ptr<BrowserShutdownProfileDumper> startup_profiler;
   if (tracing::TraceStartupConfig::GetInstance()
           ->IsTracingStartupForDuration()) {
@@ -200,7 +196,8 @@ void BrowserMainRunnerImpl::Shutdown() {
       startup_profiler.reset(
           new BrowserShutdownProfileDumper(main_loop_->startup_trace_file()));
     }
-  } else if (tracing::TraceStartupConfig::GetInstance()->IsEnabled()) {
+  } else if (tracing::TraceStartupConfig::GetInstance()
+                 ->ShouldTraceToResultFile()) {
     base::FilePath result_file = main_loop_->GetStartupTraceFileName();
     startup_profiler.reset(new BrowserShutdownProfileDumper(result_file));
   }

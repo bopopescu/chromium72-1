@@ -6,6 +6,22 @@
 
 namespace {
 
+net::TLS13Variant MojoTLS13VariantToNetTLS13Variant(
+    network::mojom::TLS13Variant tls13_variant) {
+  switch (tls13_variant) {
+    case network::mojom::TLS13Variant::kDraft23:
+      return net::kTLS13VariantDraft23;
+    case network::mojom::TLS13Variant::kFinal:
+      return net::kTLS13VariantFinal;
+  }
+  NOTREACHED();
+  return net::kTLS13VariantDraft23;
+}
+
+}  // namespace
+
+namespace mojo {
+
 int MojoSSLVersionToNetSSLVersion(network::mojom::SSLVersion mojo_version) {
   switch (mojo_version) {
     case network::mojom::SSLVersion::kTLS1:
@@ -18,24 +34,8 @@ int MojoSSLVersionToNetSSLVersion(network::mojom::SSLVersion mojo_version) {
       return net::SSL_PROTOCOL_VERSION_TLS1_3;
   }
   NOTREACHED();
-  return net::SSL_PROTOCOL_VERSION_TLS1_2;
+  return net::SSL_PROTOCOL_VERSION_TLS1_3;
 }
-
-net::TLS13Variant MojoTLS13VariantToNetTLS13Variant(
-    network::mojom::TLS13Variant tls13_variant) {
-  switch (tls13_variant) {
-    case network::mojom::TLS13Variant::kDraft23:
-      return net::kTLS13VariantDraft23;
-    case network::mojom::TLS13Variant::kDraft28:
-      return net::kTLS13VariantDraft28;
-  }
-  NOTREACHED();
-  return net::kTLS13VariantDraft23;
-}
-
-}  // namespace
-
-namespace mojo {
 
 net::SSLConfig
 TypeConverter<net::SSLConfig, network::mojom::SSLConfigPtr>::Convert(
@@ -43,15 +43,6 @@ TypeConverter<net::SSLConfig, network::mojom::SSLConfigPtr>::Convert(
   DCHECK(mojo_config);
 
   net::SSLConfig net_config;
-
-  net_config.rev_checking_enabled = mojo_config->rev_checking_enabled;
-  net_config.rev_checking_required_local_anchors =
-      mojo_config->rev_checking_required_local_anchors;
-
-  net_config.sha1_local_anchors_enabled =
-      mojo_config->sha1_local_anchors_enabled;
-  net_config.symantec_enforcement_disabled =
-      mojo_config->symantec_enforcement_disabled;
 
   net_config.version_min =
       MojoSSLVersionToNetSSLVersion(mojo_config->version_min);

@@ -29,9 +29,6 @@
 namespace ash {
 namespace {
 
-// Color of the ink drop ripple.
-constexpr SkColor kInkDropRippleColor = SkColorSetARGB(0x0F, 0xFF, 0xFF, 0xFF);
-
 // Color of the ink drop highlight.
 constexpr SkColor kInkDropHighlightColor =
     SkColorSetARGB(0x14, 0xFF, 0xFF, 0xFF);
@@ -154,7 +151,7 @@ class BasePinButton : public views::InkDropHostView {
 
     return std::make_unique<views::FloodFillInkDropRipple>(
         size(), GetLocalBounds().InsetsFrom(bounds),
-        GetInkDropCenterBasedOnLastEvent(), kInkDropRippleColor,
+        GetInkDropCenterBasedOnLastEvent(), GetInkDropBaseColor(),
         1.f /*visible_opacity*/);
   }
   std::unique_ptr<views::InkDropHighlight> CreateInkDropHighlight()
@@ -163,6 +160,9 @@ class BasePinButton : public views::InkDropHostView {
         gfx::PointF(GetLocalBounds().CenterPoint()),
         std::make_unique<views::CircleLayerDelegate>(kInkDropHighlightColor,
                                                      GetInkDropRadius()));
+  }
+  SkColor GetInkDropBaseColor() const override {
+    return SkColorSetA(SK_ColorWHITE, 0x0F);
   }
 
   int GetInkDropRadius() const { return kRippleSizeDp / 2; }
@@ -249,8 +249,8 @@ class LoginPinView::BackspacePinButton : public BasePinButton {
 
   ~BackspacePinButton() override = default;
 
-  void SetTimersForTesting(std::unique_ptr<base::Timer> delay_timer,
-                           std::unique_ptr<base::Timer> repeat_timer) {
+  void SetTimersForTesting(std::unique_ptr<base::OneShotTimer> delay_timer,
+                           std::unique_ptr<base::RepeatingTimer> repeat_timer) {
     delay_timer_ = std::move(delay_timer);
     repeat_timer_ = std::move(repeat_timer);
   }
@@ -341,8 +341,8 @@ class LoginPinView::BackspacePinButton : public BasePinButton {
   }
 
   bool is_held_ = false;
-  std::unique_ptr<base::Timer> delay_timer_;
-  std::unique_ptr<base::Timer> repeat_timer_;
+  std::unique_ptr<base::OneShotTimer> delay_timer_;
+  std::unique_ptr<base::RepeatingTimer> repeat_timer_;
 
   views::ImageView* image_ = nullptr;
 
@@ -362,8 +362,8 @@ views::View* LoginPinView::TestApi::GetBackspaceButton() const {
 }
 
 void LoginPinView::TestApi::SetBackspaceTimers(
-    std::unique_ptr<base::Timer> delay_timer,
-    std::unique_ptr<base::Timer> repeat_timer) {
+    std::unique_ptr<base::OneShotTimer> delay_timer,
+    std::unique_ptr<base::RepeatingTimer> repeat_timer) {
   view_->backspace_->SetTimersForTesting(std::move(delay_timer),
                                          std::move(repeat_timer));
 }

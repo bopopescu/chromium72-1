@@ -5,9 +5,11 @@
 #include "components/viz/service/frame_sinks/video_capture/frame_sink_video_capturer_impl.h"
 
 #include <utility>
+#include <vector>
 
 #include "base/bind.h"
 #include "base/callback.h"
+#include "base/memory/shared_memory_mapping.h"
 #include "base/optional.h"
 #include "base/run_loop.h"
 #include "base/test/test_mock_time_task_runner.h"
@@ -111,7 +113,6 @@ class MockConsumer : public mojom::FrameSinkVideoConsumer {
                void(scoped_refptr<VideoFrame> frame,
                     const gfx::Rect& update_rect,
                     mojom::FrameSinkVideoConsumerFrameCallbacks* callbacks));
-  MOCK_METHOD1(OnTargetLost, void(const FrameSinkId& frame_sink_id));
   MOCK_METHOD0(OnStopped, void());
 
   int num_frames_received() const { return frames_.size(); }
@@ -131,33 +132,38 @@ class MockConsumer : public mojom::FrameSinkVideoConsumer {
 
  private:
   void OnFrameCaptured(
-      mojo::ScopedSharedBufferHandle buffer,
-      uint32_t buffer_size,
+      base::ReadOnlySharedMemoryRegion data,
       media::mojom::VideoFrameInfoPtr info,
       const gfx::Rect& update_rect,
       const gfx::Rect& content_rect,
       mojom::FrameSinkVideoConsumerFrameCallbacksPtr callbacks) final {
-    ASSERT_TRUE(buffer.is_valid());
+    ASSERT_TRUE(data.IsValid());
     const auto required_bytes_to_hold_planes =
         static_cast<uint32_t>(info->coded_size.GetArea() * 3 / 2);
-    ASSERT_LE(required_bytes_to_hold_planes, buffer_size);
+    ASSERT_LE(required_bytes_to_hold_planes, data.GetSize());
     ASSERT_TRUE(info);
     EXPECT_EQ(gfx::Rect(kCaptureSize), update_rect);
     ASSERT_TRUE(callbacks.get());
 
     // Map the shared memory buffer and re-constitute a VideoFrame instance
     // around it for analysis by OnFrameCapturedMock().
-    mojo::ScopedSharedBufferMapping mapping = buffer->Map(buffer_size);
-    ASSERT_TRUE(mapping);
+    base::ReadOnlySharedMemoryMapping mapping = data.Map();
+    ASSERT_TRUE(mapping.IsValid());
+    ASSERT_LE(
+        media::VideoFrame::AllocationSize(info->pixel_format, info->coded_size),
+        mapping.size());
     scoped_refptr<media::VideoFrame> frame =
         media::VideoFrame::WrapExternalData(
             info->pixel_format, info->coded_size, info->visible_rect,
-            info->visible_rect.size(), static_cast<uint8_t*>(mapping.get()),
-            buffer_size, info->timestamp);
+            info->visible_rect.size(),
+            const_cast<uint8_t*>(static_cast<const uint8_t*>(mapping.memory())),
+            mapping.size(), info->timestamp);
     ASSERT_TRUE(frame);
     frame->metadata()->MergeInternalValuesFrom(info->metadata);
+    if (info->color_space.has_value())
+      frame->set_color_space(info->color_space.value());
     frame->AddDestructionObserver(base::BindOnce(
-        [](mojo::ScopedSharedBufferMapping mapping) {}, std::move(mapping)));
+        [](base::ReadOnlySharedMemoryMapping mapping) {}, std::move(mapping)));
     OnFrameCapturedMock(frame, update_rect, callbacks.get());
 
     frames_.push_back(std::move(frame));
@@ -341,9 +347,10 @@ class FrameSinkVideoCapturerTest : public testing::Test {
               capturer_.pixel_format_);
     ASSERT_EQ(FrameSinkVideoCapturerImpl::kDefaultColorSpace,
               capturer_.color_space_);
-    capturer_.SetFormat(media::PIXEL_FORMAT_I420, media::COLOR_SPACE_HD_REC709);
+    capturer_.SetFormat(media::PIXEL_FORMAT_I420,
+                        gfx::ColorSpace::CreateREC709());
     ASSERT_EQ(media::PIXEL_FORMAT_I420, capturer_.pixel_format_);
-    ASSERT_EQ(media::COLOR_SPACE_HD_REC709, capturer_.color_space_);
+    ASSERT_EQ(gfx::ColorSpace::CreateREC709(), capturer_.color_space_);
 
     // Set min capture period as small as possible so that the
     // media::VideoCapturerOracle used by the capturer will want to capture
@@ -442,37 +449,6 @@ TEST_F(FrameSinkVideoCapturerTest, ResolvesTargetLater) {
   EXPECT_EQ(&capturer_, frame_sink_.attached_client());
 }
 
-// Tests that the capturer reports a lost target to the consumer. The consumer
-// may then change targets to capture something else.
-TEST_F(FrameSinkVideoCapturerTest, ReportsTargetLost) {
-  FakeCapturableFrameSink prior_frame_sink;
-  constexpr FrameSinkId kPriorFrameSinkId = FrameSinkId(1, 2);
-  EXPECT_CALL(frame_sink_manager_, FindCapturableFrameSink(kPriorFrameSinkId))
-      .WillOnce(Return(&prior_frame_sink));
-  EXPECT_CALL(frame_sink_manager_, FindCapturableFrameSink(kFrameSinkId))
-      .WillOnce(Return(&frame_sink_));
-
-  NiceMock<MockConsumer> consumer;
-  EXPECT_CALL(consumer, OnTargetLost(kPriorFrameSinkId)).Times(1);
-  StartCapture(&consumer);
-
-  capturer_.ChangeTarget(kPriorFrameSinkId);
-  EXPECT_EQ(kPriorFrameSinkId, capturer_.requested_target());
-  EXPECT_EQ(&capturer_, prior_frame_sink.attached_client());
-  EXPECT_EQ(nullptr, frame_sink_.attached_client());
-
-  NotifyTargetWentAway();
-  EXPECT_EQ(nullptr, prior_frame_sink.attached_client());
-  EXPECT_EQ(nullptr, frame_sink_.attached_client());
-
-  capturer_.ChangeTarget(kFrameSinkId);
-  EXPECT_EQ(kFrameSinkId, capturer_.requested_target());
-  EXPECT_EQ(nullptr, prior_frame_sink.attached_client());
-  EXPECT_EQ(&capturer_, frame_sink_.attached_client());
-
-  StopCapture();
-}
-
 // Tests that no initial frame is sent after Start() is called until after the
 // target has been resolved.
 TEST_F(FrameSinkVideoCapturerTest, PostponesCaptureWithoutATarget) {
@@ -481,7 +457,6 @@ TEST_F(FrameSinkVideoCapturerTest, PostponesCaptureWithoutATarget) {
 
   MockConsumer consumer;
   EXPECT_CALL(consumer, OnFrameCapturedMock(_, _, _)).Times(0);
-  EXPECT_CALL(consumer, OnTargetLost(kFrameSinkId)).Times(0);
   EXPECT_CALL(consumer, OnStopped()).Times(1);
 
   StartCapture(&consumer);
@@ -526,7 +501,6 @@ TEST_F(FrameSinkVideoCapturerTest, CapturesCompositedFrames) {
       3 * FrameSinkVideoCapturerImpl::kDesignLimitMaxFrames;
   EXPECT_CALL(consumer, OnFrameCapturedMock(_, _, _))
       .Times(num_refresh_frames + num_update_frames);
-  EXPECT_CALL(consumer, OnTargetLost(_)).Times(0);
   EXPECT_CALL(consumer, OnStopped()).Times(1);
   StartCapture(&consumer);
 
@@ -589,10 +563,7 @@ TEST_F(FrameSinkVideoCapturerTest, CapturesCompositedFrames) {
     EXPECT_TRUE(metadata->GetTimeTicks(VideoFrameMetadata::CAPTURE_END_TIME,
                                        &capture_end_time));
     EXPECT_EQ(expected_capture_end_time, capture_end_time);
-    int color_space = media::COLOR_SPACE_UNSPECIFIED;
-    EXPECT_TRUE(
-        metadata->GetInteger(VideoFrameMetadata::COLOR_SPACE, &color_space));
-    EXPECT_EQ(media::COLOR_SPACE_HD_REC709, color_space);
+    EXPECT_EQ(gfx::ColorSpace::CreateREC709(), frame->ColorSpace());
     EXPECT_TRUE(metadata->HasKey(VideoFrameMetadata::FRAME_DURATION));
     // FRAME_DURATION is an estimate computed by the VideoCaptureOracle, so it
     // its exact value is not being checked here.
@@ -778,7 +749,6 @@ TEST_F(FrameSinkVideoCapturerTest, CancelsInFlightCapturesOnStop) {
   // Start capturing to the first consumer.
   MockConsumer consumer;
   EXPECT_CALL(consumer, OnFrameCapturedMock(_, _, _)).Times(2);
-  EXPECT_CALL(consumer, OnTargetLost(_)).Times(0);
   EXPECT_CALL(consumer, OnStopped()).Times(1);
   StartCapture(&consumer);
   // With the start, an immediate refresh should have occurred.
@@ -814,7 +784,6 @@ TEST_F(FrameSinkVideoCapturerTest, CancelsInFlightCapturesOnStop) {
   const int num_captures_for_second_consumer = 3;
   EXPECT_CALL(consumer2, OnFrameCapturedMock(_, _, _))
       .Times(num_captures_for_second_consumer);
-  EXPECT_CALL(consumer2, OnTargetLost(_)).Times(0);
   EXPECT_CALL(consumer2, OnStopped()).Times(1);
   StartCapture(&consumer2);
   // With the start, a refresh was attempted, but since the attempt occurred so
@@ -868,7 +837,6 @@ TEST_F(FrameSinkVideoCapturerTest, EventuallySendsARefreshFrame) {
   const int num_update_frames = 3;
   EXPECT_CALL(consumer, OnFrameCapturedMock(_, _, _))
       .Times(num_refresh_frames + num_update_frames);
-  EXPECT_CALL(consumer, OnTargetLost(_)).Times(0);
   EXPECT_CALL(consumer, OnStopped()).Times(1);
   StartCapture(&consumer);
 
@@ -925,7 +893,6 @@ TEST_F(FrameSinkVideoCapturerTest, CompositorFrameMetadataReachesConsumer) {
   const int num_update_frames = 1;
   EXPECT_CALL(consumer, OnFrameCapturedMock(_, _, _))
       .Times(num_refresh_frames + num_update_frames);
-  EXPECT_CALL(consumer, OnTargetLost(_)).Times(0);
   EXPECT_CALL(consumer, OnStopped()).Times(1);
   StartCapture(&consumer);
 

@@ -11,7 +11,7 @@
 #include <set>
 #include <utility>
 
-#include "core/fdrm/crypto/fx_crypt.h"
+#include "core/fdrm/fx_crypt.h"
 #include "core/fpdfapi/cpdf_modulemgr.h"
 #include "core/fpdfapi/font/cpdf_type1font.h"
 #include "core/fpdfapi/page/cpdf_iccprofile.h"
@@ -25,11 +25,12 @@
 #include "core/fpdfapi/parser/cpdf_document.h"
 #include "core/fpdfapi/parser/cpdf_name.h"
 #include "core/fpdfapi/parser/cpdf_stream_acc.h"
+#include "third_party/base/ptr_util.h"
 #include "third_party/base/stl_util.h"
 
 CPDF_DocPageData::CPDF_DocPageData(CPDF_Document* pPDFDoc)
     : m_bForceClear(false), m_pPDFDoc(pPDFDoc) {
-  assert(m_pPDFDoc);
+  ASSERT(m_pPDFDoc);
 }
 
 CPDF_DocPageData::~CPDF_DocPageData() {
@@ -241,7 +242,7 @@ CPDF_ColorSpace* CPDF_DocPageData::GetColorSpaceInternal(
     ByteString name = pCSObj->GetString();
     CPDF_ColorSpace* pCS = CPDF_ColorSpace::ColorspaceFromName(name);
     if (!pCS && pResources) {
-      CPDF_Dictionary* pList = pResources->GetDictFor("ColorSpace");
+      const CPDF_Dictionary* pList = pResources->GetDictFor("ColorSpace");
       if (pList) {
         return GetColorSpaceInternal(pList->GetDirectObjectFor(name), nullptr,
                                      pVisited, pVisitedInternal);
@@ -250,11 +251,11 @@ CPDF_ColorSpace* CPDF_DocPageData::GetColorSpaceInternal(
     if (!pCS || !pResources)
       return pCS;
 
-    CPDF_Dictionary* pColorSpaces = pResources->GetDictFor("ColorSpace");
+    const CPDF_Dictionary* pColorSpaces = pResources->GetDictFor("ColorSpace");
     if (!pColorSpaces)
       return pCS;
 
-    CPDF_Object* pDefaultCS = nullptr;
+    const CPDF_Object* pDefaultCS = nullptr;
     switch (pCS->GetFamily()) {
       case PDFCS_DEVICERGB:
         pDefaultCS = pColorSpaces->GetDirectObjectFor("DefaultRGB");
@@ -277,7 +278,7 @@ CPDF_ColorSpace* CPDF_DocPageData::GetColorSpaceInternal(
   if (!pArray || pArray->IsEmpty())
     return nullptr;
 
-  if (pArray->GetCount() == 1) {
+  if (pArray->size() == 1) {
     return GetColorSpaceInternal(pArray->GetDirectObjectAt(0), pResources,
                                  pVisited, pVisitedInternal);
   }
@@ -442,8 +443,8 @@ RetainPtr<CPDF_IccProfile> CPDF_DocPageData::GetIccProfile(
     if (it_copied_stream != m_IccProfileMap.end())
       return it_copied_stream->second;
   }
-  auto pProfile = pdfium::MakeRetain<CPDF_IccProfile>(
-      pProfileStream, pAccessor->GetData(), pAccessor->GetSize());
+  auto pProfile =
+      pdfium::MakeRetain<CPDF_IccProfile>(pProfileStream, pAccessor->GetSpan());
   m_IccProfileMap[pProfileStream] = pProfile;
   m_HashProfileMap[bsDigest] = pProfileStream;
   return pProfile;
@@ -457,20 +458,20 @@ void CPDF_DocPageData::MaybePurgeIccProfile(const CPDF_Stream* pProfileStream) {
 }
 
 RetainPtr<CPDF_StreamAcc> CPDF_DocPageData::GetFontFileStreamAcc(
-    CPDF_Stream* pFontStream) {
+    const CPDF_Stream* pFontStream) {
   ASSERT(pFontStream);
   auto it = m_FontFileMap.find(pFontStream);
   if (it != m_FontFileMap.end())
     return it->second;
 
-  CPDF_Dictionary* pFontDict = pFontStream->GetDict();
+  const CPDF_Dictionary* pFontDict = pFontStream->GetDict();
   int32_t org_size = pFontDict->GetIntegerFor("Length1") +
                      pFontDict->GetIntegerFor("Length2") +
                      pFontDict->GetIntegerFor("Length3");
   org_size = std::max(org_size, 0);
 
   auto pFontAcc = pdfium::MakeRetain<CPDF_StreamAcc>(pFontStream);
-  pFontAcc->LoadAllData(false, org_size, false);
+  pFontAcc->LoadAllDataFilteredWithEstimatedSize(org_size);
   m_FontFileMap[pFontStream] = pFontAcc;
   return pFontAcc;
 }
@@ -495,7 +496,7 @@ CPDF_CountedColorSpace* CPDF_DocPageData::FindColorSpacePtr(
 }
 
 CPDF_CountedPattern* CPDF_DocPageData::FindPatternPtr(
-    CPDF_Object* pPatternObj) const {
+    const CPDF_Object* pPatternObj) const {
   if (!pPatternObj)
     return nullptr;
 

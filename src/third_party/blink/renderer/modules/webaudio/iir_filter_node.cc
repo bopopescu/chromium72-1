@@ -6,12 +6,11 @@
 
 #include <memory>
 
-#include "third_party/blink/renderer/bindings/core/v8/exception_messages.h"
-#include "third_party/blink/renderer/bindings/core/v8/exception_state.h"
-#include "third_party/blink/renderer/core/dom/exception_code.h"
 #include "third_party/blink/renderer/core/inspector/console_message.h"
 #include "third_party/blink/renderer/modules/webaudio/base_audio_context.h"
 #include "third_party/blink/renderer/modules/webaudio/iir_filter_options.h"
+#include "third_party/blink/renderer/platform/bindings/exception_messages.h"
+#include "third_party/blink/renderer/platform/bindings/exception_state.h"
 #include "third_party/blink/renderer/platform/histogram.h"
 
 namespace blink {
@@ -118,7 +117,7 @@ IIRFilterNode* IIRFilterNode::Create(BaseAudioContext& context,
   if (feedback_coef.size() == 0 ||
       (feedback_coef.size() > IIRFilter::kMaxOrder + 1)) {
     exception_state.ThrowDOMException(
-        kNotSupportedError,
+        DOMExceptionCode::kNotSupportedError,
         ExceptionMessages::IndexOutsideRange<size_t>(
             "number of feedback coefficients", feedback_coef.size(), 1,
             ExceptionMessages::kInclusiveBound, IIRFilter::kMaxOrder + 1,
@@ -129,7 +128,7 @@ IIRFilterNode* IIRFilterNode::Create(BaseAudioContext& context,
   if (feedforward_coef.size() == 0 ||
       (feedforward_coef.size() > IIRFilter::kMaxOrder + 1)) {
     exception_state.ThrowDOMException(
-        kNotSupportedError,
+        DOMExceptionCode::kNotSupportedError,
         ExceptionMessages::IndexOutsideRange<size_t>(
             "number of feedforward coefficients", feedforward_coef.size(), 1,
             ExceptionMessages::kInclusiveBound, IIRFilter::kMaxOrder + 1,
@@ -139,13 +138,14 @@ IIRFilterNode* IIRFilterNode::Create(BaseAudioContext& context,
 
   if (feedback_coef[0] == 0) {
     exception_state.ThrowDOMException(
-        kInvalidStateError, "First feedback coefficient cannot be zero.");
+        DOMExceptionCode::kInvalidStateError,
+        "First feedback coefficient cannot be zero.");
     return nullptr;
   }
 
   bool has_non_zero_coef = false;
 
-  for (size_t k = 0; k < feedforward_coef.size(); ++k) {
+  for (wtf_size_t k = 0; k < feedforward_coef.size(); ++k) {
     if (feedforward_coef[k] != 0) {
       has_non_zero_coef = true;
       break;
@@ -154,7 +154,7 @@ IIRFilterNode* IIRFilterNode::Create(BaseAudioContext& context,
 
   if (!has_non_zero_coef) {
     exception_state.ThrowDOMException(
-        kInvalidStateError,
+        DOMExceptionCode::kInvalidStateError,
         "At least one feedforward coefficient must be non-zero.");
     return nullptr;
   }
@@ -164,7 +164,7 @@ IIRFilterNode* IIRFilterNode::Create(BaseAudioContext& context,
     StringBuilder message;
     message.Append("Unstable IIRFilter with feedback coefficients: [");
     message.AppendNumber(feedback_coef[0]);
-    for (size_t k = 1; k < feedback_coef.size(); ++k) {
+    for (wtf_size_t k = 1; k < feedback_coef.size(); ++k) {
       message.Append(", ");
       message.AppendNumber(feedback_coef[k]);
     }
@@ -174,15 +174,15 @@ IIRFilterNode* IIRFilterNode::Create(BaseAudioContext& context,
         kJSMessageSource, kWarningMessageLevel, message.ToString()));
   }
 
-  return new IIRFilterNode(context, feedforward_coef, feedback_coef,
-                           is_filter_stable);
+  return MakeGarbageCollected<IIRFilterNode>(context, feedforward_coef,
+                                             feedback_coef, is_filter_stable);
 }
 
 IIRFilterNode* IIRFilterNode::Create(BaseAudioContext* context,
-                                     const IIRFilterOptions& options,
+                                     const IIRFilterOptions* options,
                                      ExceptionState& exception_state) {
-  IIRFilterNode* node = Create(*context, options.feedforward(),
-                               options.feedback(), exception_state);
+  IIRFilterNode* node = Create(*context, options->feedforward(),
+                               options->feedback(), exception_state);
 
   if (!node)
     return nullptr;
@@ -212,7 +212,7 @@ void IIRFilterNode::getFrequencyResponse(
   // the arrays have the same length as the |frequency_hz| array.
   if (mag_response.View()->length() != frequency_hz_length) {
     exception_state.ThrowDOMException(
-        kInvalidAccessError,
+        DOMExceptionCode::kInvalidAccessError,
         ExceptionMessages::IndexOutsideRange(
             "magResponse length", mag_response.View()->length(),
             frequency_hz_length, ExceptionMessages::kInclusiveBound,
@@ -222,7 +222,7 @@ void IIRFilterNode::getFrequencyResponse(
 
   if (phase_response.View()->length() != frequency_hz_length) {
     exception_state.ThrowDOMException(
-        kInvalidAccessError,
+        DOMExceptionCode::kInvalidAccessError,
         ExceptionMessages::IndexOutsideRange(
             "phaseResponse length", phase_response.View()->length(),
             frequency_hz_length, ExceptionMessages::kInclusiveBound,

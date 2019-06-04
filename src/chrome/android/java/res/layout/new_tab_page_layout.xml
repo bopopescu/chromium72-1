@@ -4,7 +4,8 @@
      found in the LICENSE file. -->
 <org.chromium.chrome.browser.ntp.NewTabPageLayout
     xmlns:android="http://schemas.android.com/apk/res/android"
-    xmlns:chrome="http://schemas.android.com/apk/res-auto"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:tools="http://schemas.android.com/tools"
     android:id="@+id/ntp_content"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
@@ -36,45 +37,34 @@
         android:layout_marginBottom="1dp"
         android:gravity="center_vertical"
         android:addStatesFromChildren="true"
-        android:background="@drawable/card_single"
+        android:background="@drawable/ntp_search_box"
         android:orientation="horizontal"
-        android:paddingStart="2dp"
-        android:paddingEnd="2dp"
-        android:paddingTop="3dp"
-        android:paddingBottom="3dp" >
+        android:paddingStart="@dimen/location_bar_lateral_padding"
+        android:paddingEnd="@dimen/location_bar_lateral_padding" >
+        <!-- TODO(crbug.com/900912): Fix and remove lint ignore -->
         <EditText
+            tools:ignore="Autofill,LabelFor"
+            style="@style/TextAppearance.NewTabPageSearchBoxText"
             android:id="@+id/search_box_text"
             android:layout_width="0dp"
             android:layout_height="match_parent"
-            android:layout_marginStart="12dp"
             android:layout_marginEnd="12dp"
             android:layout_weight="1"
             android:background="@null"
-            android:drawableStart="@drawable/ic_logo_googleg_24dp"
-            android:drawablePadding="@dimen/ntp_search_box_logo_padding"
             android:ellipsize="end"
             android:focusableInTouchMode="false"
             android:focusable="false"
             android:gravity="center_vertical"
             android:inputType="text"
-            android:singleLine="true"
-            android:textSize="@dimen/location_bar_url_text_size"
-            android:textColorHint="@color/search_box_hint" />
-        <org.chromium.chrome.browser.widget.TintedImageView
+            android:singleLine="true" />
+        <org.chromium.ui.widget.ChromeImageView
             android:id="@+id/voice_search_button"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:layout_marginEnd="12dp"
             android:contentDescription="@string/accessibility_toolbar_btn_mic"
-            android:src="@drawable/btn_mic" />
+            android:src="@drawable/btn_mic"
+            app:tint="@color/dark_mode_tint" />
     </view>
-
-    <ViewStub
-        android:id="@+id/shortcuts_stub"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:inflatedId="@+id/shortcuts"
-        android:layout="@layout/ntp_shortcuts" />
 
     <!-- Middle spacer -->
     <View
@@ -85,6 +75,14 @@
         android:visibility="invisible" />
 
     <!-- Insertion point of the SiteSectionView, see NewTabPageLayout#insertSiteSection() -->
+
+    <ViewStub
+        android:id="@+id/explore_sites_stub"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:inflatedId="@+id/explore_sites"
+        android:layout_marginBottom="16dp"
+        android:layout="@layout/explore_sites_section" />
 
     <!-- Site suggestion tile grid placeholder -->
     <ViewStub

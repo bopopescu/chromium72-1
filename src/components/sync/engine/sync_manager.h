@@ -26,14 +26,12 @@
 #include "components/sync/engine/model_safe_worker.h"
 #include "components/sync/engine/model_type_connector.h"
 #include "components/sync/engine/net/http_post_provider_factory.h"
-#include "components/sync/engine/shutdown_reason.h"
 #include "components/sync/engine/sync_credentials.h"
 #include "components/sync/engine/sync_encryption_handler.h"
 #include "components/sync/engine/sync_status.h"
 #include "components/sync/protocol/sync_protocol_error.h"
 #include "components/sync/syncable/change_record.h"
-
-class GURL;
+#include "url/gurl.h"
 
 namespace base {
 namespace trace_event {
@@ -254,6 +252,11 @@ class SyncManager {
     base::TimeDelta long_poll_interval;
   };
 
+  // The state of sync the feature. If the user turned on sync explicitly, it
+  // will be set to ON. Will be set to INITIALIZING until we know the actual
+  // state.
+  enum class SyncFeatureState { INITIALIZING, ON, OFF };
+
   SyncManager();
   virtual ~SyncManager();
 
@@ -301,13 +304,10 @@ class SyncManager {
   // syncer will remain in CONFIGURATION_MODE until StartSyncingNormally is
   // called.
   // |ready_task| is invoked when the configuration completes.
-  // |retry_task| is invoked if the configuration job could not immediately
-  //              execute. |ready_task| will still be called when it eventually
-  //              does finish.
   virtual void ConfigureSyncer(ConfigureReason reason,
                                ModelTypeSet to_download,
-                               const base::Closure& ready_task,
-                               const base::Closure& retry_task) = 0;
+                               SyncFeatureState sync_feature_state,
+                               const base::Closure& ready_task) = 0;
 
   // Inform the syncer of a change in the invalidator's state.
   virtual void SetInvalidatorEnabled(bool invalidator_enabled) = 0;
@@ -335,7 +335,7 @@ class SyncManager {
   virtual void SaveChanges() = 0;
 
   // Issue a final SaveChanges, and close sqlite handles.
-  virtual void ShutdownOnSyncThread(ShutdownReason reason) = 0;
+  virtual void ShutdownOnSyncThread() = 0;
 
   // May be called from any thread.
   virtual UserShare* GetUserShare() = 0;

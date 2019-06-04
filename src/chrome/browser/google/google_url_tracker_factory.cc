@@ -6,6 +6,7 @@
 
 #include <utility>
 
+#include "base/bind.h"
 #include "base/feature_list.h"
 #include "chrome/browser/google/chrome_google_url_tracker_client.h"
 #include "chrome/browser/profiles/incognito_helpers.h"
@@ -14,6 +15,7 @@
 #include "components/google/core/browser/google_url_tracker.h"
 #include "components/keyed_service/content/browser_context_dependency_manager.h"
 #include "components/prefs/pref_service.h"
+#include "content/public/browser/network_service_instance.h"
 
 // static
 GoogleURLTracker* GoogleURLTrackerFactory::GetForProfile(Profile* profile) {
@@ -41,15 +43,16 @@ std::unique_ptr<KeyedService> BuildGoogleURLTracker(
       std::move(client),
       base::FeatureList::IsEnabled(GoogleURLTracker::kNoSearchDomainCheck)
           ? GoogleURLTracker::ALWAYS_DOT_COM_MODE
-          : GoogleURLTracker::NORMAL_MODE);
+          : GoogleURLTracker::NORMAL_MODE,
+      content::GetNetworkConnectionTracker());
 }
 
 }  // namespace
 
 // static
-BrowserContextKeyedServiceFactory::TestingFactoryFunction
+BrowserContextKeyedServiceFactory::TestingFactory
 GoogleURLTrackerFactory::GetDefaultFactory() {
-  return &BuildGoogleURLTracker;
+  return base::BindRepeating(&BuildGoogleURLTracker);
 }
 
 GoogleURLTrackerFactory::GoogleURLTrackerFactory()

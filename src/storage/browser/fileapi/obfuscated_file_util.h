@@ -83,7 +83,7 @@ class STORAGE_EXPORT ObfuscatedFileUtil : public FileSystemFileUtil {
   };
 
   using GetTypeStringForURLCallback =
-      base::Callback<std::string(const FileSystemURL&)>;
+      base::RepeatingCallback<std::string(const FileSystemURL&)>;
 
   // |get_type_string_for_url| is user-defined callback that should return
   // a type string for the given FileSystemURL.  The type string is used
@@ -99,7 +99,7 @@ class STORAGE_EXPORT ObfuscatedFileUtil : public FileSystemFileUtil {
   ObfuscatedFileUtil(storage::SpecialStoragePolicy* special_storage_policy,
                      const base::FilePath& file_system_directory,
                      leveldb::Env* env_override,
-                     const GetTypeStringForURLCallback& get_type_string_for_url,
+                     GetTypeStringForURLCallback get_type_string_for_url,
                      const std::set<std::string>& known_type_strings,
                      SandboxFileSystemBackendDelegate* sandbox_delegate);
   ~ObfuscatedFileUtil() override;
@@ -282,7 +282,7 @@ class STORAGE_EXPORT ObfuscatedFileUtil : public FileSystemFileUtil {
   std::string GetDirectoryDatabaseKey(const GURL& origin,
                                       const std::string& type_string);
 
-  // This returns NULL if |create| flag is false and a filesystem does not
+  // This returns nullptr if |create| flag is false and a filesystem does not
   // exist for the given |url|.
   // For read operations |create| should be false.
   SandboxDirectoryDatabase* GetDirectoryDatabase(const FileSystemURL& url,

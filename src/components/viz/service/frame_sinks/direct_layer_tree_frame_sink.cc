@@ -7,6 +7,10 @@
 #include <memory>
 
 #include "base/bind.h"
+#include "base/compiler_specific.h"
+#include "base/trace_event/trace_event.h"
+#include "build/build_config.h"
+#include "cc/base/histograms.h"
 #include "cc/trees/layer_tree_frame_sink_client.h"
 #include "components/viz/common/hit_test/hit_test_region_list.h"
 #include "components/viz/common/quads/compositor_frame.h"
@@ -20,6 +24,30 @@
 #include "components/viz/service/surfaces/surface.h"
 
 namespace viz {
+
+DirectLayerTreeFrameSink::PipelineReporting::PipelineReporting(
+    const BeginFrameArgs args,
+    base::TimeTicks now)
+    : trace_id_(args.trace_id), frame_time_(now) {}
+
+DirectLayerTreeFrameSink::PipelineReporting::~PipelineReporting() = default;
+
+void DirectLayerTreeFrameSink::PipelineReporting::Report() {
+  TRACE_EVENT_WITH_FLOW1("viz,benchmark", "Graphics.Pipeline",
+                         TRACE_ID_GLOBAL(trace_id_),
+                         TRACE_EVENT_FLAG_FLOW_IN | TRACE_EVENT_FLAG_FLOW_OUT,
+                         "step", "SubmitCompositorFrame");
+
+  // Note that client_name is constant during the lifetime of the process and
+  // it's either "Browser" or "Renderer".
+  UMA_HISTOGRAM_CUSTOM_MICROSECONDS_TIMES(
+      base::StringPrintf(
+          "GraphicsPipeline.%s.SubmitCompositorFrameAfterBeginFrame",
+          cc::GetClientNameForMetrics()),
+      base::TimeTicks::Now() - frame_time_,
+      base::TimeDelta::FromMicroseconds(1),
+      base::TimeDelta::FromMilliseconds(200), 50);
+}
 
 DirectLayerTreeFrameSink::DirectLayerTreeFrameSink(
     const FrameSinkId& frame_sink_id,
@@ -44,10 +72,6 @@ DirectLayerTreeFrameSink::DirectLayerTreeFrameSink(
       use_viz_hit_test_(use_viz_hit_test),
       weak_factory_(this) {
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
-  capabilities_.must_always_swap = true;
-  // Display and DirectLayerTreeFrameSink share a GL context, so sync
-  // points aren't needed when passing resources between them.
-  capabilities_.delegated_sync_points_required = false;
 }
 
 DirectLayerTreeFrameSink::~DirectLayerTreeFrameSink() {
@@ -61,10 +85,9 @@ bool DirectLayerTreeFrameSink::BindToClient(
   if (!cc::LayerTreeFrameSink::BindToClient(client))
     return false;
 
-  constexpr bool is_root = true;
   support_ = support_manager_->CreateCompositorFrameSinkSupport(
-      this, frame_sink_id_, is_root,
-      capabilities_.delegated_sync_points_required);
+      this, frame_sink_id_, /*is_root=*/true,
+      /*return_sync_tokens_required=*/false);
   begin_frame_source_ = std::make_unique<ExternalBeginFrameSource>(this);
   client_->SetBeginFrameSource(begin_frame_source_.get());
 
@@ -110,15 +133,6 @@ static HitTestRegionList CreateHitTestData(const CompositorFrame& frame) {
         const SurfaceDrawQuad* surface_quad =
             SurfaceDrawQuad::MaterialCast(quad);
 
-        // Skip the quad if the FrameSinkId between fallback and primary is not
-        // the same, because we don't know which FrameSinkId would be used to
-        // draw this quad.
-        if (surface_quad->fallback_surface_id.has_value() &&
-            surface_quad->fallback_surface_id->frame_sink_id() !=
-                surface_quad->primary_surface_id.frame_sink_id()) {
-          continue;
-        }
-
         // Skip the quad if the transform is not invertible (i.e. it will not
         // be able to receive events).
         gfx::Transform target_to_quad_transform;
@@ -130,7 +144,7 @@ static HitTestRegionList CreateHitTestData(const CompositorFrame& frame) {
         hit_test_region_list.regions.emplace_back();
         HitTestRegion* hit_test_region = &hit_test_region_list.regions.back();
         hit_test_region->frame_sink_id =
-            surface_quad->primary_surface_id.frame_sink_id();
+            surface_quad->surface_range.end().frame_sink_id();
         hit_test_region->flags = HitTestRegionFlags::kHitTestMouse |
                                  HitTestRegionFlags::kHitTestTouch |
                                  HitTestRegionFlags::kHitTestChildSurface;
@@ -143,31 +157,58 @@ static HitTestRegionList CreateHitTestData(const CompositorFrame& frame) {
   return hit_test_region_list;
 }
 
-void DirectLayerTreeFrameSink::SubmitCompositorFrame(CompositorFrame frame) {
+void DirectLayerTreeFrameSink::SubmitCompositorFrame(
+    CompositorFrame frame,
+    bool show_hit_test_borders) {
   DCHECK(frame.metadata.begin_frame_ack.has_damage);
   DCHECK_LE(BeginFrameArgs::kStartingFrameNumber,
             frame.metadata.begin_frame_ack.sequence_number);
 
+  // It's possible to request an immediate composite from cc which will bypass
+  // BeginFrame. In that case, we cannot collect full graphics pipeline data.
+  auto it = pipeline_reporting_frame_times_.find(
+      frame.metadata.begin_frame_ack.trace_id);
+  if (it != pipeline_reporting_frame_times_.end()) {
+    it->second.Report();
+    pipeline_reporting_frame_times_.erase(it);
+  }
+
   if (frame.size_in_pixels() != last_swap_frame_size_ ||
-      frame.device_scale_factor() != device_scale_factor_) {
+      frame.device_scale_factor() != device_scale_factor_ ||
+      !parent_local_surface_id_allocator_.HasValidLocalSurfaceIdAllocation()) {
     parent_local_surface_id_allocator_.GenerateId();
     last_swap_frame_size_ = frame.size_in_pixels();
     device_scale_factor_ = frame.device_scale_factor();
     display_->SetLocalSurfaceId(
-        parent_local_surface_id_allocator_.GetCurrentLocalSurfaceId(),
+        parent_local_surface_id_allocator_.GetCurrentLocalSurfaceIdAllocation()
+            .local_surface_id(),
         device_scale_factor_);
   }
 
+  const int64_t trace_id = ~frame.metadata.begin_frame_ack.trace_id;
+  TRACE_EVENT_WITH_FLOW1(TRACE_DISABLED_BY_DEFAULT("viz.hit_testing_flow"),
+                         "Event.Pipeline", TRACE_ID_GLOBAL(trace_id),
+                         TRACE_EVENT_FLAG_FLOW_OUT, "step",
+                         "SubmitHitTestData");
+
   HitTestRegionList hit_test_region_list = CreateHitTestData(frame);
   support_->SubmitCompositorFrame(
-      parent_local_surface_id_allocator_.GetCurrentLocalSurfaceId(),
+      parent_local_surface_id_allocator_.GetCurrentLocalSurfaceIdAllocation()
+          .local_surface_id(),
       std::move(frame), std::move(hit_test_region_list));
 }
 
 void DirectLayerTreeFrameSink::DidNotProduceFrame(const BeginFrameAck& ack) {
   DCHECK(!ack.has_damage);
   DCHECK_LE(BeginFrameArgs::kStartingFrameNumber, ack.sequence_number);
-  support_->DidNotProduceFrame(ack);
+
+  // TODO(yiyix): Remove duplicated calls of DidNotProduceFrame from the same
+  // BeginFrames. https://crbug.com/881949
+  auto it = pipeline_reporting_frame_times_.find(ack.trace_id);
+  if (it != pipeline_reporting_frame_times_.end()) {
+    support_->DidNotProduceFrame(ack);
+    pipeline_reporting_frame_times_.erase(it);
+  }
 }
 
 void DirectLayerTreeFrameSink::DidAllocateSharedBitmap(
@@ -188,9 +229,11 @@ void DirectLayerTreeFrameSink::DisplayOutputSurfaceLost() {
 
 void DirectLayerTreeFrameSink::DisplayWillDrawAndSwap(
     bool will_draw_and_swap,
-    const RenderPassList& render_passes) {
-  if (support_->GetHitTestAggregator())
-    support_->GetHitTestAggregator()->Aggregate(display_->CurrentSurfaceId());
+    RenderPassList* render_passes) {
+  if (support_->GetHitTestAggregator()) {
+    support_->GetHitTestAggregator()->Aggregate(display_->CurrentSurfaceId(),
+                                                render_passes);
+  }
 }
 
 void DirectLayerTreeFrameSink::DisplayDidDrawAndSwap() {
@@ -201,11 +244,21 @@ void DirectLayerTreeFrameSink::DisplayDidDrawAndSwap() {
 
 void DirectLayerTreeFrameSink::DisplayDidReceiveCALayerParams(
     const gfx::CALayerParams& ca_layer_params) {
+#if defined(OS_MACOSX)
   // If |ca_layer_params| should have content only when there exists a client
   // to send it to.
   DCHECK(ca_layer_params.is_empty || display_client_);
   if (display_client_)
     display_client_->OnDisplayReceivedCALayerParams(ca_layer_params);
+#else
+  NOTREACHED();
+  ALLOW_UNUSED_LOCAL(display_client_);
+#endif
+}
+
+void DirectLayerTreeFrameSink::DisplayDidCompleteSwapWithSize(
+    const gfx::Size& pixel_size) {
+  // Not needed in non-OOP-D mode.
 }
 
 void DirectLayerTreeFrameSink::DidSwapAfterSnapshotRequestReceived(
@@ -231,20 +284,33 @@ void DirectLayerTreeFrameSink::DidReceiveCompositorFrameAckInternal(
   client_->DidReceiveCompositorFrameAck();
 }
 
-void DirectLayerTreeFrameSink::DidPresentCompositorFrame(
-    uint32_t presentation_token,
-    base::TimeTicks time,
-    base::TimeDelta refresh,
-    uint32_t flags) {
-  client_->DidPresentCompositorFrame(presentation_token, time, refresh, flags);
-}
+void DirectLayerTreeFrameSink::OnBeginFrame(
+    const BeginFrameArgs& args,
+    const base::flat_map<uint32_t, gfx::PresentationFeedback>& feedbacks) {
+  for (const auto& pair : feedbacks)
+    client_->DidPresentCompositorFrame(pair.first, pair.second);
 
-void DirectLayerTreeFrameSink::DidDiscardCompositorFrame(
-    uint32_t presentation_token) {
-  client_->DidDiscardCompositorFrame(presentation_token);
-}
+  DCHECK_LE(pipeline_reporting_frame_times_.size(), 25u);
+  // Note that client_name is constant during the lifetime of the process and
+  // it's either "Browser" or "Renderer".
+  const char* client_name = cc::GetClientNameForMetrics();
+  if (client_name && args.trace_id != -1) {
+    base::TimeTicks current_time = base::TimeTicks::Now();
+    PipelineReporting report(args, current_time);
+    pipeline_reporting_frame_times_.emplace(args.trace_id, report);
+    // Missed BeginFrames use the frame time of the last received BeginFrame
+    // which is bogus from a reporting perspective if nothing has been updating
+    // on screen for a while.
+    if (args.type != BeginFrameArgs::MISSED) {
+      base::TimeDelta frame_difference = current_time - args.frame_time;
+      UMA_HISTOGRAM_CUSTOM_MICROSECONDS_TIMES(
+          base::StringPrintf("GraphicsPipeline.%s.ReceivedBeginFrame",
+                             client_name),
+          frame_difference, base::TimeDelta::FromMicroseconds(1),
+          base::TimeDelta::FromMilliseconds(100), 50);
+    }
+  }
 
-void DirectLayerTreeFrameSink::OnBeginFrame(const BeginFrameArgs& args) {
   begin_frame_source_->OnBeginFrame(args);
 }
 

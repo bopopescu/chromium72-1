@@ -5,15 +5,20 @@
 #include "chrome/browser/browsing_data/counters/browsing_data_counter_utils.h"
 
 #include "base/strings/utf_string_conversions.h"
+#include "build/build_config.h"
 #include "chrome/browser/browsing_data/counters/cache_counter.h"
 #include "chrome/browser/browsing_data/counters/media_licenses_counter.h"
+#include "chrome/browser/browsing_data/counters/signin_data_counter.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/signin/account_consistency_mode_manager.h"
+#include "chrome/browser/signin/identity_manager_factory.h"
+#include "chrome/browser/signin/signin_manager_factory.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/grit/generated_resources.h"
 #include "components/browsing_data/core/pref_names.h"
 #include "components/prefs/pref_service.h"
 #include "components/strings/grit/components_strings.h"
+#include "services/identity/public/cpp/identity_manager.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/text/bytes_formatting.h"
 
@@ -23,6 +28,14 @@
 #include "chrome/browser/browsing_data/counters/hosted_apps_counter.h"
 #endif
 
+#if BUILDFLAG(ENABLE_DICE_SUPPORT)
+#include "chrome/browser/sync/profile_sync_service_factory.h"
+#include "chrome/browser/sync/sync_ui_util.h"
+#endif
+
+namespace browsing_data_counter_utils {
+
+namespace {
 // A helper function to display the size of cache in units of MB or higher.
 // We need this, as 1 MB is the lowest nonzero cache size displayed by the
 // counter.
@@ -33,6 +46,25 @@ base::string16 FormatBytesMBOrHigher(
 
   return ui::FormatBytesWithUnits(
       bytes, ui::DataUnits::DATA_UNITS_MEBIBYTE, true);
+}
+}  // namespace
+
+bool ShouldShowCookieException(Profile* profile) {
+  if (AccountConsistencyModeManager::IsMirrorEnabledForProfile(profile)) {
+    auto* identity_manager = IdentityManagerFactory::GetForProfile(profile);
+    return identity_manager->HasPrimaryAccount();
+  }
+#if BUILDFLAG(ENABLE_DICE_SUPPORT)
+  if (AccountConsistencyModeManager::IsDiceEnabledForProfile(profile)) {
+    // TODO(http://crbug.com/890796): Migrate this part once sync_ui_util has
+    // been migrated to the IdentityManager.
+    sync_ui_util::MessageType sync_status = sync_ui_util::GetStatus(
+        profile, ProfileSyncServiceFactory::GetForProfile(profile),
+        *SigninManagerFactory::GetForProfile(profile));
+    return sync_status == sync_ui_util::SYNCED;
+  }
+#endif
+  return false;
 }
 
 base::string16 GetChromeCounterTextFromResult(
@@ -74,8 +106,30 @@ base::string16 GetChromeCounterTextFromResult(
                      : IDS_DEL_CACHE_COUNTER_ALMOST_EMPTY);
   }
   if (pref_name == browsing_data::prefs::kDeleteCookiesBasic) {
-    // The basic tab doesn't show cookie counter results.
+#if defined(OS_ANDROID)
+    // On Android the basic tab includes Media Licenses. |result| is the
+    // BrowsingDataCounter returned after counting the number of Media Licenses.
+    // It includes the name of one origin that contains Media Licenses, so if
+    // there are Media Licenses, include that origin as part of the message
+    // displayed to the user. The message is also different depending on
+    // whether the user is signed in or not.
+    const auto* media_license_result =
+        static_cast<const MediaLicensesCounter::MediaLicenseResult*>(result);
+    const bool signed_in = ShouldShowCookieException(profile);
+    if (media_license_result->Value() > 0) {
+      return l10n_util::GetStringFUTF16(
+          signed_in
+              ? IDS_DEL_CLEAR_COOKIES_SUMMARY_BASIC_WITH_EXCEPTION_AND_MEDIA_LICENSES
+              : IDS_DEL_CLEAR_COOKIES_SUMMARY_BASIC_WITH_MEDIA_LICENSES,
+          base::UTF8ToUTF16(media_license_result->GetOneOrigin()));
+    }
+    return l10n_util::GetStringUTF16(
+        signed_in ? IDS_DEL_CLEAR_COOKIES_SUMMARY_BASIC_WITH_EXCEPTION
+                  : IDS_DEL_CLEAR_COOKIES_SUMMARY_BASIC);
+#else
+    // On other platforms, the basic tab doesn't show cookie counter results.
     NOTREACHED();
+#endif
   }
   if (pref_name == browsing_data::prefs::kDeleteCookies) {
     // Site data counter.
@@ -85,16 +139,10 @@ base::string16 GetChromeCounterTextFromResult(
             ->Value();
 
     // Determines whether or not to show the count with exception message.
-    int del_cookie_counter_msg_id = IDS_DEL_COOKIES_COUNTER_ADVANCED;
-
-#if defined(OS_CHROMEOS)
-    if (AccountConsistencyModeManager::IsMirrorEnabledForProfile(profile)) {
-#else  // !defined(OS_CHROMEOS)
-    if (AccountConsistencyModeManager::IsDiceEnabledForProfile(profile)) {
-#endif
-      del_cookie_counter_msg_id =
-          IDS_DEL_COOKIES_COUNTER_ADVANCED_WITH_EXCEPTION;
-    }
+    int del_cookie_counter_msg_id =
+        ShouldShowCookieException(profile)
+            ? IDS_DEL_COOKIES_COUNTER_ADVANCED_WITH_EXCEPTION
+            : IDS_DEL_COOKIES_COUNTER_ADVANCED;
 
     return l10n_util::GetPluralStringFUTF16(del_cookie_counter_msg_id, origins);
   }
@@ -148,5 +196,45 @@ base::string16 GetChromeCounterTextFromResult(
   }
 #endif
 
+  if (pref_name == browsing_data::prefs::kDeletePasswords) {
+    const browsing_data::SigninDataCounter::SigninDataResult*
+        passwords_and_signin_data_result = static_cast<
+            const browsing_data::SigninDataCounter::SigninDataResult*>(result);
+
+    browsing_data::BrowsingDataCounter::ResultInt password_count =
+        passwords_and_signin_data_result->Value();
+    browsing_data::BrowsingDataCounter::ResultInt signin_data_count =
+        passwords_and_signin_data_result->WebAuthnCredentialsValue();
+
+    std::vector<base::string16> counts;
+    if (password_count) {
+      counts.emplace_back(l10n_util::GetPluralStringFUTF16(
+          passwords_and_signin_data_result->is_sync_enabled()
+              ? IDS_DEL_PASSWORDS_COUNTER_SYNCED
+              : IDS_DEL_PASSWORDS_COUNTER,
+          password_count));
+    }
+    if (signin_data_count) {
+      counts.emplace_back(l10n_util::GetPluralStringFUTF16(
+          IDS_DEL_SIGNIN_DATA_COUNTER, signin_data_count));
+    }
+    switch (counts.size()) {
+      case 0:
+        return l10n_util::GetStringUTF16(
+            IDS_DEL_PASSWORDS_AND_SIGNIN_DATA_COUNTER_NONE);
+      case 1:
+        return counts[0];
+      case 2:
+        return l10n_util::GetStringFUTF16(
+            IDS_DEL_PASSWORDS_AND_SIGNIN_DATA_COUNTER_COMBINATION, counts[0],
+            counts[1]);
+      default:
+        NOTREACHED();
+    }
+    NOTREACHED();
+  }
+
   return browsing_data::GetCounterTextFromResult(result);
 }
+
+}  // namespace browsing_data_counter_utils

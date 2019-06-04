@@ -15,8 +15,7 @@
 #include "base/callback_forward.h"
 #include "base/macros.h"
 #include "base/memory/ref_counted.h"
-#include "base/single_thread_task_runner.h"
-#include "base/threading/thread_checker.h"
+#include "base/sequence_checker.h"
 #include "base/timer/timer.h"
 #include "base/trace_event/memory_dump_provider.h"
 #include "components/invalidation/public/invalidation.h"
@@ -104,8 +103,7 @@ class SyncBackendHostCore
   void DoStartSyncing(base::Time last_poll_time);
 
   // Called to set the passphrase for encryption.
-  void DoSetEncryptionPassphrase(const std::string& passphrase,
-                                 bool is_explicit);
+  void DoSetEncryptionPassphrase(const std::string& passphrase);
 
   // Called to decrypt the pending keys.
   void DoSetDecryptionPassphrase(const std::string& passphrase);
@@ -132,7 +130,7 @@ class SyncBackendHostCore
   //    directory and destroy sync manager.
   void ShutdownOnUIThread();
   void DoShutdown(ShutdownReason reason);
-  void DoDestroySyncManager(ShutdownReason reason);
+  void DoDestroySyncManager();
 
   // Configuration methods that must execute on sync loop.
   void DoPurgeDisabledTypes(const ModelTypeSet& to_purge,
@@ -199,7 +197,10 @@ class SyncBackendHostCore
 
   // Non-null only between calls to DoInitialize() and DoShutdown().
   std::unique_ptr<SyncBackendRegistrar> registrar_;
-  std::unique_ptr<SyncEncryptionHandler::Observer> encryption_observer_proxy_;
+
+  // Non-empty only between calls to DoInitialize() and DoShutdown().
+  std::vector<std::unique_ptr<SyncEncryptionHandler::Observer>>
+      encryption_observer_proxies_;
 
   // The timer used to periodically call SaveChanges.
   std::unique_ptr<base::RepeatingTimer> save_changes_timer_;
@@ -237,7 +238,7 @@ class SyncBackendHostCore
   std::map<ModelType, int64_t> last_invalidation_versions_;
 
   // Checks that we are on the sync thread.
-  base::ThreadChecker thread_checker_;
+  SEQUENCE_CHECKER(sequence_checker_);
 
   base::WeakPtrFactory<SyncBackendHostCore> weak_ptr_factory_;
 

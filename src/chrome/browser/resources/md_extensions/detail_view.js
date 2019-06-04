@@ -31,6 +31,9 @@ cr.define('extensions', function() {
 
       /** Whether "allow in incognito" option should be shown. */
       incognitoAvailable: Boolean,
+
+      /** Whether "View Activity Log" link should be shown. */
+      showActivityLog: Boolean,
     },
 
     observers: [
@@ -58,6 +61,12 @@ cr.define('extensions', function() {
       this.delegate.getExtensionSize(this.data.id).then(size => {
         this.size_ = size;
       });
+    },
+
+    /** @private */
+    onActivityLogTap_: function() {
+      extensions.navigation.navigateTo(
+          {page: Page.ACTIVITY_LOG, extensionId: this.data.id});
     },
 
     /**
@@ -161,8 +170,7 @@ cr.define('extensions', function() {
      */
     shouldShowOptionsSection_: function() {
       return this.data.incognitoAccess.isEnabled ||
-          this.data.fileAccess.isEnabled || this.data.runOnAllUrls.isEnabled ||
-          this.data.errorCollection.isEnabled;
+          this.data.fileAccess.isEnabled || this.data.errorCollection.isEnabled;
     },
 
     /**
@@ -227,12 +235,6 @@ cr.define('extensions', function() {
     },
 
     /** @private */
-    onAllowOnAllSitesChange_: function() {
-      this.delegate.setItemAllowedOnAllSites(
-          this.data.id, this.$$('#allow-on-all-sites').checked);
-    },
-
-    /** @private */
     onCollectErrorsChange_: function() {
       this.delegate.setItemCollectsErrors(
           this.data.id, this.$$('#collect-errors').checked);
@@ -282,6 +284,41 @@ cr.define('extensions', function() {
         default:
           return '';
       }
+    },
+
+    /**
+     * @return {boolean}
+     * @private
+     */
+    hasPermissions_: function() {
+      return this.data.permissions.simplePermissions.length > 0 ||
+          this.hasRuntimeHostPermissions_();
+    },
+
+    /**
+     * @return {boolean}
+     * @private
+     */
+    hasRuntimeHostPermissions_: function() {
+      return !!this.data.permissions.runtimeHostPermissions;
+    },
+
+    /**
+     * @return {boolean}
+     * @private
+     */
+    showFreeformRuntimeHostPermissions_: function() {
+      return this.hasRuntimeHostPermissions_() &&
+          this.data.permissions.runtimeHostPermissions.hasAllHosts;
+    },
+
+    /**
+     * @return {boolean}
+     * @private
+     */
+    showHostPermissionsToggleList_: function() {
+      return this.hasRuntimeHostPermissions_() &&
+          !this.data.permissions.runtimeHostPermissions.hasAllHosts;
     },
   });
 

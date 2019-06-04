@@ -144,7 +144,7 @@ class HttpServerPropertiesManagerTest : public testing::TestWithParam<int>,
   MockPrefDelegate* pref_delegate_;  // Owned by HttpServerPropertiesManager.
   std::unique_ptr<HttpServerPropertiesManager> http_server_props_manager_;
   base::Time one_day_from_now_;
-  QuicTransportVersionVector advertised_versions_;
+  quic::QuicTransportVersionVector advertised_versions_;
 
  private:
   DISALLOW_COPY_AND_ASSIGN(HttpServerPropertiesManagerTest);
@@ -258,16 +258,16 @@ TEST_P(HttpServerPropertiesManagerTest,
   std::string quic_server_info3("quic_server_info3");
   quic_server_pref_dict3->SetKey("server_info", base::Value(quic_server_info3));
   // Set the quic_server_info1 for https://www.google.com.
-  QuicServerId google_quic_server_id("www.google.com", 443);
-  quic_servers_dict->SetWithoutPathExpansion(google_quic_server_id.ToString(),
+  quic::QuicServerId google_quic_server_id("www.google.com", 443, false);
+  quic_servers_dict->SetWithoutPathExpansion("https://www.google.com",
                                              std::move(quic_server_pref_dict1));
   // Set the quic_server_info2 for https://mail.google.com.
-  QuicServerId mail_quic_server_id("mail.google.com", 443);
-  quic_servers_dict->SetWithoutPathExpansion(mail_quic_server_id.ToString(),
+  quic::QuicServerId mail_quic_server_id("mail.google.com", 443, false);
+  quic_servers_dict->SetWithoutPathExpansion("https://mail.google.com",
                                              std::move(quic_server_pref_dict2));
   // Set the quic_server_info3 for https://play.google.com.
-  QuicServerId play_quic_server_id("play.google.com", 443);
-  quic_servers_dict->SetWithoutPathExpansion(play_quic_server_id.ToString(),
+  quic::QuicServerId play_quic_server_id("play.google.com", 443, false);
+  quic_servers_dict->SetWithoutPathExpansion("https://play.google.com",
                                              std::move(quic_server_pref_dict3));
   http_server_properties_dict.SetWithoutPathExpansion(
       "quic_servers", std::move(quic_servers_dict));
@@ -296,7 +296,7 @@ TEST_P(HttpServerPropertiesManagerTest,
       http_server_props_manager_->alternative_service_map();
   ASSERT_EQ(2u, map.size());
 
-  AlternativeServiceMap::const_iterator map_it = map.begin();
+  auto map_it = map.begin();
   EXPECT_EQ("www.google.com", map_it->first.host());
   ASSERT_EQ(2u, map_it->second.size());
   EXPECT_EQ(kProtoHTTP2, map_it->second[0].alternative_service().protocol);
@@ -663,6 +663,150 @@ TEST_P(HttpServerPropertiesManagerTest, ConfirmAlternativeService) {
       alternative_service));
 }
 
+TEST_P(HttpServerPropertiesManagerTest,
+       ConfirmBrokenUntilDefaultNetworkChanges) {
+  url::SchemeHostPort spdy_server_mail;
+  AlternativeService alternative_service;
+
+  spdy_server_mail = url::SchemeHostPort("http", "mail.google.com", 80);
+  EXPECT_FALSE(HasAlternativeService(spdy_server_mail));
+  alternative_service = AlternativeService(kProtoHTTP2, "mail.google.com", 443);
+
+  http_server_props_manager_->SetHttp2AlternativeService(
+      spdy_server_mail, alternative_service, one_day_from_now_);
+  EXPECT_FALSE(http_server_props_manager_->IsAlternativeServiceBroken(
+      alternative_service));
+  EXPECT_FALSE(http_server_props_manager_->WasAlternativeServiceRecentlyBroken(
+      alternative_service));
+
+  EXPECT_EQ(1u, GetPendingMainThreadTaskCount());
+
+  http_server_props_manager_
+      ->MarkAlternativeServiceBrokenUntilDefaultNetworkChanges(
+          alternative_service);
+  EXPECT_TRUE(http_server_props_manager_->IsAlternativeServiceBroken(
+      alternative_service));
+  EXPECT_TRUE(http_server_props_manager_->WasAlternativeServiceRecentlyBroken(
+      alternative_service));
+
+  // In addition to the pref update task, there's now a task to mark the
+  // alternative service as no longer broken.
+  EXPECT_EQ(2u, GetPendingMainThreadTaskCount());
+
+  http_server_props_manager_->ConfirmAlternativeService(alternative_service);
+  EXPECT_FALSE(http_server_props_manager_->IsAlternativeServiceBroken(
+      alternative_service));
+  EXPECT_FALSE(http_server_props_manager_->WasAlternativeServiceRecentlyBroken(
+      alternative_service));
+
+  EXPECT_EQ(2u, GetPendingMainThreadTaskCount());
+
+  // Run the task.
+  EXPECT_TRUE(MainThreadHasPendingTask());
+  FastForwardUntilNoTasksRemain();
+  EXPECT_EQ(1, pref_delegate_->GetAndClearNumPrefUpdates());
+
+  EXPECT_FALSE(http_server_props_manager_->IsAlternativeServiceBroken(
+      alternative_service));
+  EXPECT_FALSE(http_server_props_manager_->WasAlternativeServiceRecentlyBroken(
+      alternative_service));
+}
+
+TEST_P(HttpServerPropertiesManagerTest,
+       OnDefaultNetworkChangedWithBrokenUntilDefaultNetworkChanges) {
+  url::SchemeHostPort spdy_server_mail;
+  AlternativeService alternative_service;
+
+  spdy_server_mail = url::SchemeHostPort("http", "mail.google.com", 80);
+  EXPECT_FALSE(HasAlternativeService(spdy_server_mail));
+  alternative_service = AlternativeService(kProtoHTTP2, "mail.google.com", 443);
+
+  http_server_props_manager_->SetHttp2AlternativeService(
+      spdy_server_mail, alternative_service, one_day_from_now_);
+  EXPECT_FALSE(http_server_props_manager_->IsAlternativeServiceBroken(
+      alternative_service));
+  EXPECT_FALSE(http_server_props_manager_->WasAlternativeServiceRecentlyBroken(
+      alternative_service));
+
+  EXPECT_EQ(1u, GetPendingMainThreadTaskCount());
+
+  http_server_props_manager_
+      ->MarkAlternativeServiceBrokenUntilDefaultNetworkChanges(
+          alternative_service);
+  EXPECT_TRUE(http_server_props_manager_->IsAlternativeServiceBroken(
+      alternative_service));
+  EXPECT_TRUE(http_server_props_manager_->WasAlternativeServiceRecentlyBroken(
+      alternative_service));
+
+  // In addition to the pref update task, there's now a task to mark the
+  // alternative service as no longer broken.
+  EXPECT_EQ(2u, GetPendingMainThreadTaskCount());
+
+  http_server_props_manager_->OnDefaultNetworkChanged();
+  EXPECT_FALSE(http_server_props_manager_->IsAlternativeServiceBroken(
+      alternative_service));
+  EXPECT_FALSE(http_server_props_manager_->WasAlternativeServiceRecentlyBroken(
+      alternative_service));
+
+  EXPECT_EQ(2u, GetPendingMainThreadTaskCount());
+
+  // Run the task.
+  EXPECT_TRUE(MainThreadHasPendingTask());
+  FastForwardUntilNoTasksRemain();
+  EXPECT_EQ(1, pref_delegate_->GetAndClearNumPrefUpdates());
+
+  EXPECT_FALSE(http_server_props_manager_->IsAlternativeServiceBroken(
+      alternative_service));
+  EXPECT_FALSE(http_server_props_manager_->WasAlternativeServiceRecentlyBroken(
+      alternative_service));
+}
+
+TEST_P(HttpServerPropertiesManagerTest, OnDefaultNetworkChangedWithBrokenOnly) {
+  url::SchemeHostPort spdy_server_mail;
+  AlternativeService alternative_service;
+
+  spdy_server_mail = url::SchemeHostPort("http", "mail.google.com", 80);
+  EXPECT_FALSE(HasAlternativeService(spdy_server_mail));
+  alternative_service = AlternativeService(kProtoHTTP2, "mail.google.com", 443);
+
+  http_server_props_manager_->SetHttp2AlternativeService(
+      spdy_server_mail, alternative_service, one_day_from_now_);
+  EXPECT_FALSE(http_server_props_manager_->IsAlternativeServiceBroken(
+      alternative_service));
+  EXPECT_FALSE(http_server_props_manager_->WasAlternativeServiceRecentlyBroken(
+      alternative_service));
+
+  EXPECT_EQ(1u, GetPendingMainThreadTaskCount());
+
+  http_server_props_manager_->MarkAlternativeServiceBroken(alternative_service);
+  EXPECT_TRUE(http_server_props_manager_->IsAlternativeServiceBroken(
+      alternative_service));
+  EXPECT_TRUE(http_server_props_manager_->WasAlternativeServiceRecentlyBroken(
+      alternative_service));
+
+  // In addition to the pref update task, there's now a task to mark the
+  // alternative service as no longer broken.
+  EXPECT_EQ(2u, GetPendingMainThreadTaskCount());
+
+  http_server_props_manager_->OnDefaultNetworkChanged();
+  EXPECT_TRUE(http_server_props_manager_->IsAlternativeServiceBroken(
+      alternative_service));
+  EXPECT_TRUE(http_server_props_manager_->WasAlternativeServiceRecentlyBroken(
+      alternative_service));
+
+  EXPECT_EQ(2u, GetPendingMainThreadTaskCount());
+
+  // Run the task.
+  EXPECT_TRUE(MainThreadHasPendingTask());
+  FastForwardUntilNoTasksRemain();
+  EXPECT_EQ(1, pref_delegate_->GetAndClearNumPrefUpdates());
+
+  EXPECT_FALSE(http_server_props_manager_->IsAlternativeServiceBroken(
+      alternative_service));
+  EXPECT_TRUE(http_server_props_manager_->WasAlternativeServiceRecentlyBroken(
+      alternative_service));
+}
+
 TEST_P(HttpServerPropertiesManagerTest, SupportsQuic) {
   IPAddress address;
   EXPECT_FALSE(http_server_props_manager_->GetSupportsQuic(&address));
@@ -726,7 +870,7 @@ TEST_P(HttpServerPropertiesManagerTest, ServerNetworkStats) {
 }
 
 TEST_P(HttpServerPropertiesManagerTest, QuicServerInfo) {
-  QuicServerId mail_quic_server_id("mail.google.com", 80);
+  quic::QuicServerId mail_quic_server_id("mail.google.com", 80, false);
   EXPECT_EQ(nullptr,
             http_server_props_manager_->GetQuicServerInfo(mail_quic_server_id));
   std::string quic_server_info1("quic_server_info1");
@@ -755,7 +899,7 @@ TEST_P(HttpServerPropertiesManagerTest, QuicServerInfo) {
 TEST_P(HttpServerPropertiesManagerTest, Clear) {
   const url::SchemeHostPort spdy_server("https", "mail.google.com", 443);
   const IPAddress actual_address(127, 0, 0, 1);
-  const QuicServerId mail_quic_server_id("mail.google.com", 80);
+  const quic::QuicServerId mail_quic_server_id("mail.google.com", 80, false);
   const std::string quic_server_info1("quic_server_info1");
   const AlternativeService alternative_service(kProtoHTTP2, "mail.google.com",
                                                1234);
@@ -966,7 +1110,7 @@ TEST_P(HttpServerPropertiesManagerTest, UpdatePrefsWithCache) {
   http_server_props_manager_->SetServerNetworkStats(server_mail, stats);
 
   // #5: Set quic_server_info string.
-  QuicServerId mail_quic_server_id("mail.google.com", 80);
+  quic::QuicServerId mail_quic_server_id("mail.google.com", 80, false);
   std::string quic_server_info1("quic_server_info1");
   http_server_props_manager_->SetQuicServerInfo(mail_quic_server_id,
                                                 quic_server_info1);
@@ -1113,7 +1257,7 @@ TEST_P(HttpServerPropertiesManagerTest, AddToAlternativeServiceMap) {
   EXPECT_TRUE(http_server_props_manager_->AddToAlternativeServiceMap(
       server, *server_dict, &alternative_service_map));
 
-  AlternativeServiceMap::iterator it = alternative_service_map.Get(server);
+  auto it = alternative_service_map.Get(server);
   ASSERT_NE(alternative_service_map.end(), it);
   AlternativeServiceInfoVector alternative_service_info_vector = it->second;
   ASSERT_EQ(3u, alternative_service_info_vector.size());
@@ -1162,7 +1306,7 @@ TEST_P(HttpServerPropertiesManagerTest, DoNotLoadAltSvcForInsecureOrigins) {
   EXPECT_FALSE(http_server_props_manager_->AddToAlternativeServiceMap(
       server, *server_dict, &alternative_service_map));
 
-  AlternativeServiceMap::iterator it = alternative_service_map.Get(server);
+  auto it = alternative_service_map.Get(server);
   EXPECT_EQ(alternative_service_map.end(), it);
 }
 
@@ -1215,7 +1359,7 @@ TEST_P(HttpServerPropertiesManagerTest, DoNotPersistExpiredAlternativeService) {
 
   const base::ListValue* servers_list = nullptr;
   ASSERT_TRUE(pref_dict->GetListWithoutPathExpansion("servers", &servers_list));
-  base::ListValue::const_iterator it = servers_list->begin();
+  auto it = servers_list->begin();
   const base::DictionaryValue* server_pref_dict;
   ASSERT_TRUE(it->GetAsDictionary(&server_pref_dict));
 
@@ -1271,7 +1415,7 @@ TEST_P(HttpServerPropertiesManagerTest, DoNotLoadExpiredAlternativeService) {
   ASSERT_TRUE(http_server_props_manager_->AddToAlternativeServiceMap(
       server, server_pref_dict, &alternative_service_map));
 
-  AlternativeServiceMap::iterator it = alternative_service_map.Get(server);
+  auto it = alternative_service_map.Get(server);
   ASSERT_NE(alternative_service_map.end(), it);
   AlternativeServiceInfoVector alternative_service_info_vector = it->second;
   ASSERT_EQ(1u, alternative_service_info_vector.size());
@@ -1303,8 +1447,8 @@ TEST_P(HttpServerPropertiesManagerTest, PersistAdvertisedVersionsToPref) {
   AlternativeService quic_alternative_service1(kProtoQUIC, "", 443);
   base::Time expiration1;
   ASSERT_TRUE(base::Time::FromUTCString("2036-12-01 10:00:00", &expiration1));
-  QuicTransportVersionVector advertised_versions = {QUIC_VERSION_37,
-                                                    QUIC_VERSION_35};
+  quic::QuicTransportVersionVector advertised_versions = {
+      quic::QUIC_VERSION_44, quic::QUIC_VERSION_35};
   alternative_service_info_vector.push_back(
       AlternativeServiceInfo::CreateQuicAlternativeServiceInfo(
           quic_alternative_service1, expiration1, advertised_versions));
@@ -1332,7 +1476,7 @@ TEST_P(HttpServerPropertiesManagerTest, PersistAdvertisedVersionsToPref) {
   http_server_props_manager_->SetServerNetworkStats(server_mail, stats);
 
   // #4: Set quic_server_info string.
-  QuicServerId mail_quic_server_id("mail.google.com", 80);
+  quic::QuicServerId mail_quic_server_id("mail.google.com", 80, false);
   std::string quic_server_info1("quic_server_info1");
   http_server_props_manager_->SetQuicServerInfo(mail_quic_server_id,
                                                 quic_server_info1);
@@ -1352,7 +1496,7 @@ TEST_P(HttpServerPropertiesManagerTest, PersistAdvertisedVersionsToPref) {
       "{\"quic_servers\":{\"https://mail.google.com:80\":{"
       "\"server_info\":\"quic_server_info1\"}},\"servers\":["
       "{\"https://www.google.com:80\":{\"alternative_service\":[{"
-      "\"advertised_versions\":[35,37],\"expiration\":\"13756212000000000\","
+      "\"advertised_versions\":[35,44],\"expiration\":\"13756212000000000\","
       "\"port\":443,\"protocol_str\":\"quic\"},{\"advertised_versions\":[],"
       "\"expiration\":\"13758804000000000\",\"host\":\"www.google.com\","
       "\"port\":1234,\"protocol_str\":\"h2\"}]}},"
@@ -1376,7 +1520,7 @@ TEST_P(HttpServerPropertiesManagerTest, ReadAdvertisedVersionsFromPref) {
       "{\"port\":443,\"protocol_str\":\"quic\"},"
       "{\"port\":123,\"protocol_str\":\"quic\","
       "\"expiration\":\"9223372036854775807\","
-      "\"advertised_versions\":[37,35]}]}");
+      "\"advertised_versions\":[44,35]}]}");
   ASSERT_TRUE(server_value);
   base::DictionaryValue* server_dict;
   ASSERT_TRUE(server_value->GetAsDictionary(&server_dict));
@@ -1386,7 +1530,7 @@ TEST_P(HttpServerPropertiesManagerTest, ReadAdvertisedVersionsFromPref) {
   EXPECT_TRUE(http_server_props_manager_->AddToAlternativeServiceMap(
       server, *server_dict, &alternative_service_map));
 
-  AlternativeServiceMap::iterator it = alternative_service_map.Get(server);
+  auto it = alternative_service_map.Get(server);
   ASSERT_NE(alternative_service_map.end(), it);
   AlternativeServiceInfoVector alternative_service_info_vector = it->second;
   ASSERT_EQ(2u, alternative_service_info_vector.size());
@@ -1410,11 +1554,11 @@ TEST_P(HttpServerPropertiesManagerTest, ReadAdvertisedVersionsFromPref) {
   EXPECT_EQ(123, alternative_service_info_vector[1].alternative_service().port);
   EXPECT_EQ(base::Time::Max(), alternative_service_info_vector[1].expiration());
   // Verify advertised versions.
-  const QuicTransportVersionVector loaded_advertised_versions =
+  const quic::QuicTransportVersionVector loaded_advertised_versions =
       alternative_service_info_vector[1].advertised_versions();
   EXPECT_EQ(2u, loaded_advertised_versions.size());
-  EXPECT_EQ(QUIC_VERSION_35, loaded_advertised_versions[0]);
-  EXPECT_EQ(QUIC_VERSION_37, loaded_advertised_versions[1]);
+  EXPECT_EQ(quic::QUIC_VERSION_35, loaded_advertised_versions[0]);
+  EXPECT_EQ(quic::QUIC_VERSION_44, loaded_advertised_versions[1]);
 }
 
 TEST_P(HttpServerPropertiesManagerTest,
@@ -1423,7 +1567,8 @@ TEST_P(HttpServerPropertiesManagerTest,
 
   // #1: Set alternate protocol.
   AlternativeServiceInfoVector alternative_service_info_vector;
-  // Quic alternative service set with a single QUIC version: QUIC_VERSION_37.
+  // Quic alternative service set with a single QUIC version:
+  // quic::QUIC_VERSION_44.
   AlternativeService quic_alternative_service1(kProtoQUIC, "", 443);
   base::Time expiration1;
   ASSERT_TRUE(base::Time::FromUTCString("2036-12-01 10:00:00", &expiration1));
@@ -1434,7 +1579,7 @@ TEST_P(HttpServerPropertiesManagerTest,
       server_www, alternative_service_info_vector));
 
   // Set quic_server_info string.
-  QuicServerId mail_quic_server_id("mail.google.com", 80);
+  quic::QuicServerId mail_quic_server_id("mail.google.com", 80, false);
   std::string quic_server_info1("quic_server_info1");
   http_server_props_manager_->SetQuicServerInfo(mail_quic_server_id,
                                                 quic_server_info1);
@@ -1470,8 +1615,8 @@ TEST_P(HttpServerPropertiesManagerTest,
   // AlternativeService.
   AlternativeServiceInfoVector alternative_service_info_vector_2;
   // Quic alternative service set with two advertised QUIC versions.
-  QuicTransportVersionVector advertised_versions = {QUIC_VERSION_37,
-                                                    QUIC_VERSION_35};
+  quic::QuicTransportVersionVector advertised_versions = {
+      quic::QUIC_VERSION_44, quic::QUIC_VERSION_35};
   alternative_service_info_vector_2.push_back(
       AlternativeServiceInfo::CreateQuicAlternativeServiceInfo(
           quic_alternative_service1, expiration1, advertised_versions));
@@ -1489,7 +1634,7 @@ TEST_P(HttpServerPropertiesManagerTest,
       "{\"quic_servers\":{\"https://mail.google.com:80\":"
       "{\"server_info\":\"quic_server_info1\"}},\"servers\":["
       "{\"https://www.google.com:80\":"
-      "{\"alternative_service\":[{\"advertised_versions\":[35,37],"
+      "{\"alternative_service\":[{\"advertised_versions\":[35,44],"
       "\"expiration\":\"13756212000000000\",\"port\":443,"
       "\"protocol_str\":\"quic\"}]}}],\"supports_quic\":"
       "{\"address\":\"127.0.0.1\",\"used_quic\":true},\"version\":5}";
@@ -1500,8 +1645,8 @@ TEST_P(HttpServerPropertiesManagerTest,
   // #3: Set AlternativeService with same advertised_versions.
   AlternativeServiceInfoVector alternative_service_info_vector_3;
   // A same set of QUIC versions but listed in a different order.
-  QuicTransportVersionVector advertised_versions_2 = {QUIC_VERSION_35,
-                                                      QUIC_VERSION_37};
+  quic::QuicTransportVersionVector advertised_versions_2 = {
+      quic::QUIC_VERSION_35, quic::QUIC_VERSION_44};
   alternative_service_info_vector_3.push_back(
       AlternativeServiceInfo::CreateQuicAlternativeServiceInfo(
           quic_alternative_service1, expiration1, advertised_versions_2));
@@ -1763,7 +1908,7 @@ TEST_P(HttpServerPropertiesManagerTest, UpdateCacheWithPrefs) {
     //
     const std::string* quic_server_info =
         http_server_props_manager_->GetQuicServerInfo(
-            QuicServerId("mail.google.com", 80));
+            quic::QuicServerId("mail.google.com", 80, false));
     EXPECT_EQ("quic_server_info1", *quic_server_info);
 
     //

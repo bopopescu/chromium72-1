@@ -5,14 +5,11 @@
 package org.chromium.chrome.browser.init;
 
 import android.annotation.TargetApi;
-import android.app.Activity;
 import android.content.Context;
 import android.content.SharedPreferences;
-import android.os.AsyncTask;
 import android.os.Build;
 import android.os.SystemClock;
 import android.support.annotation.WorkerThread;
-import android.view.View;
 import android.view.inputmethod.InputMethodInfo;
 import android.view.inputmethod.InputMethodManager;
 import android.view.inputmethod.InputMethodSubtype;
@@ -28,6 +25,7 @@ import org.chromium.base.SysUtils;
 import org.chromium.base.ThreadUtils;
 import org.chromium.base.TraceEvent;
 import org.chromium.base.metrics.RecordHistogram;
+import org.chromium.base.task.AsyncTask;
 import org.chromium.build.BuildHooksAndroid;
 import org.chromium.chrome.R;
 import org.chromium.chrome.browser.AfterStartupTaskUtils;
@@ -41,6 +39,7 @@ import org.chromium.chrome.browser.DeferredStartupHandler;
 import org.chromium.chrome.browser.DevToolsServer;
 import org.chromium.chrome.browser.banners.AppBannerManager;
 import org.chromium.chrome.browser.bookmarkswidget.BookmarkWidgetProvider;
+import org.chromium.chrome.browser.contacts_picker.ContactsPickerDialog;
 import org.chromium.chrome.browser.crash.LogcatExtractionRunnable;
 import org.chromium.chrome.browser.crash.MinidumpUploadService;
 import org.chromium.chrome.browser.download.DownloadController;
@@ -51,9 +50,9 @@ import org.chromium.chrome.browser.identity.UuidBasedUniqueIdentificationGenerat
 import org.chromium.chrome.browser.invalidation.UniqueIdInvalidationClientNameGenerator;
 import org.chromium.chrome.browser.locale.LocaleManager;
 import org.chromium.chrome.browser.media.MediaCaptureNotificationService;
+import org.chromium.chrome.browser.media.MediaViewerUtils;
 import org.chromium.chrome.browser.metrics.LaunchMetrics;
 import org.chromium.chrome.browser.metrics.PackageMetrics;
-import org.chromium.chrome.browser.multiwindow.MultiWindowUtils;
 import org.chromium.chrome.browser.net.spdyproxy.DataReductionProxySettings;
 import org.chromium.chrome.browser.notifications.channels.ChannelsUpdater;
 import org.chromium.chrome.browser.ntp.NewTabPage;
@@ -68,17 +67,19 @@ import org.chromium.chrome.browser.searchwidget.SearchWidgetProvider;
 import org.chromium.chrome.browser.services.GoogleServicesManager;
 import org.chromium.chrome.browser.share.ShareHelper;
 import org.chromium.chrome.browser.sync.SyncController;
+import org.chromium.chrome.browser.util.ConversionUtils;
 import org.chromium.chrome.browser.webapps.WebApkVersionManager;
 import org.chromium.chrome.browser.webapps.WebappRegistry;
 import org.chromium.components.background_task_scheduler.BackgroundTaskSchedulerFactory;
 import org.chromium.components.minidump_uploader.CrashFileManager;
 import org.chromium.components.signin.AccountManagerFacade;
 import org.chromium.components.signin.AccountsChangeObserver;
-import org.chromium.content.browser.ChildProcessLauncherHelper;
+import org.chromium.content_public.browser.BrowserTaskExecutor;
+import org.chromium.content_public.browser.ChildProcessLauncherHelper;
 import org.chromium.content_public.common.ContentSwitches;
-import org.chromium.device.geolocation.LocationProviderFactory;
 import org.chromium.printing.PrintDocumentAdapterWrapper;
 import org.chromium.printing.PrintingControllerImpl;
+import org.chromium.ui.ContactsPickerListener;
 import org.chromium.ui.PhotoPickerListener;
 import org.chromium.ui.UiUtils;
 import org.chromium.ui.base.SelectFileDialog;
@@ -133,33 +134,22 @@ public class ProcessInitializationHandler {
      * startup.
      */
     public final void initializePreNative() {
-        ThreadUtils.checkUiThread();
-        if (mInitializedPreNative) return;
-        handlePreNativeInitialization();
-        mInitializedPreNative = true;
+        try (TraceEvent e =
+                        TraceEvent.scoped("ProcessInitializationHandler.initializePreNative()")) {
+            ThreadUtils.checkUiThread();
+            if (mInitializedPreNative) return;
+            handlePreNativeInitialization();
+            mInitializedPreNative = true;
+        }
     }
 
     /**
      * Performs the shared class initialization.
      */
     protected void handlePreNativeInitialization() {
+        BrowserTaskExecutor.register();
+
         Context application = ContextUtils.getApplicationContext();
-
-        UiUtils.setKeyboardShowingDelegate(new UiUtils.KeyboardShowingDelegate() {
-            @Override
-            public boolean disableKeyboardCheck(Context context, View view) {
-                Activity activity = null;
-                if (context instanceof Activity) {
-                    activity = (Activity) context;
-                } else if (view != null && view.getContext() instanceof Activity) {
-                    activity = (Activity) view.getContext();
-                }
-
-                // For multiwindow mode we do not track keyboard visibility.
-                return activity != null
-                        && MultiWindowUtils.getInstance().isLegacyMultiWindow(activity);
-            }
-        });
 
         // Initialize the AccountManagerFacade with the correct AccountManagerDelegate. Must be done
         // only once and before AccountMangerHelper.get(...) is called to avoid using the
@@ -182,9 +172,6 @@ public class ProcessInitializationHandler {
         UniqueIdentificationGeneratorFactory.registerGenerator(SyncController.GENERATOR_ID,
                 new UuidBasedUniqueIdentificationGenerator(
                         application, SESSIONS_UUID_PREF_KEY), false);
-
-        // Indicate that we can use the GMS location provider.
-        LocationProviderFactory.useGmsCoreLocationProvider();
     }
 
     /**
@@ -195,6 +182,13 @@ public class ProcessInitializationHandler {
         if (mInitializedPostNative) return;
         handlePostNativeInitialization();
         mInitializedPostNative = true;
+    }
+
+    /**
+     * @return Whether post native initialization has been completed.
+     */
+    public final boolean postNativeInitializationComplete() {
+        return mInitializedPostNative;
     }
 
     /**
@@ -221,12 +215,32 @@ public class ProcessInitializationHandler {
                         boolean allowMultiple, List<String> mimeTypes) {
                     mDialog = new PhotoPickerDialog(context, listener, allowMultiple, mimeTypes);
                     mDialog.getWindow().getAttributes().windowAnimations =
-                            R.style.PhotoPickerDialogAnimation;
+                            R.style.PickerDialogAnimation;
                     mDialog.show();
                 }
 
                 @Override
                 public void onPhotoPickerDismissed() {
+                    mDialog = null;
+                }
+            });
+        }
+
+        if (ChromeFeatureList.isEnabled(ChromeFeatureList.NEW_CONTACTS_PICKER)) {
+            UiUtils.setContactsPickerDelegate(new UiUtils.ContactsPickerDelegate() {
+                private ContactsPickerDialog mDialog;
+
+                @Override
+                public void showContactsPicker(Context context, ContactsPickerListener listener,
+                        boolean allowMultiple, List<String> mimeTypes) {
+                    mDialog = new ContactsPickerDialog(context, listener, allowMultiple, mimeTypes);
+                    mDialog.getWindow().getAttributes().windowAnimations =
+                            R.style.PickerDialogAnimation;
+                    mDialog.show();
+                }
+
+                @Override
+                public void onContactsPickerDismissed() {
                     mDialog = null;
                 }
             });
@@ -317,6 +331,8 @@ public class ProcessInitializationHandler {
                 if (HomepageManager.shouldShowHomepageSetting()) {
                     RecordHistogram.recordBooleanHistogram("Settings.ShowHomeButtonPreferenceState",
                             HomepageManager.isHomepageEnabled());
+                    RecordHistogram.recordBooleanHistogram("Settings.HomePageIsCustomized",
+                            !HomepageManager.getInstance().getPrefHomepageUseDefaultUri());
                 }
             }
         });
@@ -408,12 +424,21 @@ public class ProcessInitializationHandler {
 
         deferredStartupHandler.addDeferredTask(
                 () -> { BuildHooksAndroid.maybeRecordResourceMetrics(); });
+
+        deferredStartupHandler.addDeferredTask(() -> {
+            MediaViewerUtils.updateMediaLauncherActivityEnabled(
+                    ContextUtils.getApplicationContext());
+        });
+
+        deferredStartupHandler.addDeferredTask(
+                ChromeApplication.getComponent().resolveTwaClearDataDialogRecorder()
+                        ::makeDeferredRecordings);
     }
 
     private void initChannelsAsync() {
-        new AsyncTask<Void, Void, Void>() {
+        new AsyncTask<Void>() {
             @Override
-            protected Void doInBackground(Void... params) {
+            protected Void doInBackground() {
                 ChannelsUpdater.getInstance().updateChannels();
                 return null;
             }
@@ -422,7 +447,7 @@ public class ProcessInitializationHandler {
     }
 
     private void initAsyncDiskTask(final Context context) {
-        new AsyncTask<Void, Void, Void>() {
+        new AsyncTask<Void>() {
             /**
              * The threshold after which it's no longer appropriate to try to attach logcat output
              * to a minidump file.
@@ -441,7 +466,7 @@ public class ProcessInitializationHandler {
             private long mAsyncTaskStartTime;
 
             @Override
-            protected Void doInBackground(Void... params) {
+            protected Void doInBackground() {
                 try {
                     TraceEvent.begin("ChromeBrowserInitializer.onDeferredStartup.doInBackground");
                     mAsyncTaskStartTime = SystemClock.uptimeMillis();
@@ -664,7 +689,7 @@ public class ProcessInitializationHandler {
                 ContextUtils.getApplicationContext().createDeviceProtectedStorageContext();
 
         // Must log async, as we're doing a file access.
-        new AsyncTask<Void, Void, Void>() {
+        new AsyncTask<Void>() {
             // Record file sizes between 1-2560KB. Expected range is 1-2048KB, so this gives
             // us a bit of buffer. These values cannot be changed, as doing so will alter
             // histogram bucketing and confuse the dashboard.
@@ -672,7 +697,7 @@ public class ProcessInitializationHandler {
             private static final int MAX_CACHE_FILE_SIZE_KB = 2560;
 
             @Override
-            protected Void doInBackground(Void... unused) {
+            protected Void doInBackground() {
                 File codeCacheDir = cacheContext.getCodeCacheDir();
                 if (codeCacheDir == null) {
                     return null;
@@ -683,7 +708,7 @@ public class ProcessInitializationHandler {
                 if (!cacheFile.exists()) {
                     return null;
                 }
-                long cacheFileSizeKb = cacheFile.length() / 1024;
+                long cacheFileSizeKb = ConversionUtils.bytesToKilobytes(cacheFile.length());
                 // Clamp size to [minFileSizeKb, maxFileSizeKb). This also guarantees that the
                 // int-cast below is safe.
                 if (cacheFileSizeKb < MIN_CACHE_FILE_SIZE_KB) {

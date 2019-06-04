@@ -11,7 +11,6 @@
 #include "ash/shelf/shelf_constants.h"
 #include "ash/shell.h"
 #include "ash/system/status_area_widget.h"
-#include "ash/system/tray/system_tray.h"
 #include "ash/system/tray/tray_constants.h"
 #include "ui/compositor/layer.h"
 #include "ui/compositor/scoped_layer_animation_settings.h"
@@ -26,7 +25,7 @@ using session_manager::SessionState;
 
 constexpr int kAnimationDurationMs = 250;
 
-constexpr int kPaddingFromEdgeOfShelf = 3;
+constexpr int kPaddingBetweenWidgetsNewUi = 8;
 
 class StatusAreaWidgetDelegateAnimationSettings
     : public ui::ScopedLayerAnimationSettings {
@@ -193,20 +192,23 @@ void StatusAreaWidgetDelegate::UpdateWidgetSize() {
 
 void StatusAreaWidgetDelegate::SetBorderOnChild(views::View* child,
                                                 bool extend_border_to_edge) {
-  // Tray views are laid out right-to-left or bottom-to-top.
-  const bool horizontal_alignment = shelf_->IsHorizontalAlignment();
-  const int padding = (kShelfSize - kTrayItemSize) / 2;
+  const int vertical_padding =
+      (ShelfConstants::shelf_size() - kTrayItemSize) / 2;
 
-  const int top_edge = horizontal_alignment ? padding : 0;
-  const int left_edge = horizontal_alignment ? 0 : padding;
-  const int bottom_edge =
-      horizontal_alignment
-          ? padding
-          : (extend_border_to_edge ? kPaddingFromEdgeOfShelf : 0);
-  const int right_edge =
-      horizontal_alignment
-          ? (extend_border_to_edge ? kPaddingFromEdgeOfShelf : 0)
-          : padding;
+  // Edges for horizontal alignment (right-to-left, default).
+  int top_edge = vertical_padding;
+  int left_edge = 0;
+  int bottom_edge = vertical_padding;
+  // Add some extra space so that borders don't overlap. This padding between
+  // items also takes care of padding at the edge of the shelf.
+  int right_edge = kPaddingBetweenWidgetsNewUi;
+
+  // Swap edges if alignment is not horizontal (bottom-to-top).
+  if (!shelf_->IsHorizontalAlignment()) {
+    std::swap(top_edge, left_edge);
+    std::swap(bottom_edge, right_edge);
+  }
+
   child->SetBorder(
       views::CreateEmptyBorder(top_edge, left_edge, bottom_edge, right_edge));
 

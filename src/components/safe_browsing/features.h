@@ -19,9 +19,19 @@ class ListValue;
 
 namespace safe_browsing {
 // Features list
-extern const base::Feature kAdSamplerCollectButDontSendFeature;
 extern const base::Feature kAdSamplerTriggerFeature;
+
+// Controls the billing interstitial UI.
+extern const base::Feature kBillingInterstitial;
+
 extern const base::Feature kCheckByURLLoaderThrottle;
+
+// Forces the chrome://reset-password page to be shown for review or testing
+// purpose.
+extern const base::Feature kForceEnableResetPasswordWebUI;
+
+// Controls the daily quota for the suspicious site trigger.
+extern const base::Feature kSuspiciousSiteTriggerQuotaFeature;
 
 // Specifies which non-resource HTML Elements to collect based on their tag and
 // attributes. It's a single param containing a comma-separated list of pairs.
@@ -30,9 +40,6 @@ extern const base::Feature kCheckByURLLoaderThrottle;
 // "tag2" if they have attribute "foo" set. All tag names and attributes should
 // be lower case.
 extern const base::Feature kThreatDomDetailsTagAndAttributeFeature;
-
-// Controls the daily quota for the suspicious site trigger.
-extern const base::Feature kSuspiciousSiteTriggerQuotaFeature;
 
 // Controls the daily quota for data collection triggers. It's a single param
 // containing a comma-separated list of pairs. The format of the param is
@@ -44,16 +51,8 @@ extern const base::Feature kSuspiciousSiteTriggerQuotaFeature;
 // trials simultaneously.
 extern const base::Feature kTriggerThrottlerDailyQuotaFeature;
 
-// Controls whether .rar files downloaded by the user are inspected for being
-// unsafe.
-extern const base::Feature kInspectDownloadedRarFiles;
-
-// Controls the Password Protection for Enterprise V1 feature;
-extern const base::Feature kEnterprisePasswordProtectionV1;
-
-// Forces the chrome://reset-password page to be shown for review or testing
-// purpose.
-extern const base::Feature kForceEnableResetPasswordWebUI;
+// Controls whether Chrome on Android uses locally cached blacklists.
+extern const base::Feature kUseLocalBlacklistsV2;
 
 base::ListValue GetFeatureStatusList();
 

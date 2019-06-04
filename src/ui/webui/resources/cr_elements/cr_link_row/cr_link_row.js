@@ -16,9 +16,17 @@ Polymer({
   behaviors: [Polymer.PaperRippleBehavior],
 
   properties: {
+    startIcon: {
+      type: String,
+      value: '',
+    },
+
     iconClass: String,
 
-    label: String,
+    label: {
+      type: String,
+      value: '',
+    },
 
     subLabel: {
       type: String,
@@ -39,6 +47,11 @@ Polymer({
     'blur': '_rippleUp',
   },
 
+  focus: function() {
+    // Forward focus to the button wrapper.
+    this.$$('button').focus();
+  },
+
   _rippleDown: function() {
     this.getRipple().uiDownAction();
   },
@@ -49,7 +62,7 @@ Polymer({
 
   _createRipple: function() {
     this._rippleContainer = this.$.icon;
-    var ripple = Polymer.PaperRippleBehavior._createRipple();
+    const ripple = Polymer.PaperRippleBehavior._createRipple();
     ripple.id = 'ink';
     ripple.setAttribute('recenters', '');
     ripple.classList.add('circle');

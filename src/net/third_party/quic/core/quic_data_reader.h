@@ -14,7 +14,7 @@
 #include "net/third_party/quic/platform/api/quic_export.h"
 #include "net/third_party/quic/platform/api/quic_string_piece.h"
 
-namespace net {
+namespace quic {
 
 // Used for reading QUIC data. Though there isn't really anything terribly
 // QUIC-specific here, it's a helper class that's useful when doing QUIC
@@ -34,6 +34,8 @@ class QUIC_EXPORT_PRIVATE QuicDataReader {
  public:
   // Caller must provide an underlying buffer to work on.
   QuicDataReader(const char* data, const size_t len, Endianness endianness);
+  QuicDataReader(const QuicDataReader&) = delete;
+  QuicDataReader& operator=(const QuicDataReader&) = delete;
 
   // Empty destructor.
   ~QuicDataReader() {}
@@ -79,7 +81,6 @@ class QUIC_EXPORT_PRIVATE QuicDataReader {
   // indicating reading in little/big endian.
   bool ReadConnectionId(uint64_t* connection_id);
 
-  // Returns the remaining payload as a QuicStringPiece.
   // Reads tag represented as 32-bit unsigned integer into given output
   // parameter. Tags are in big endian on the wire (e.g., CHLO is
   // 'C','H','L','O') and are read in byte order, so tags in memory are in big
@@ -138,6 +139,8 @@ class QUIC_EXPORT_PRIVATE QuicDataReader {
   // greater than (2^32)-1.
   bool ReadVarIntStreamId(QuicStreamId* result);
 
+  QuicString DebugString() const;
+
  private:
   // Returns true if the underlying buffer has enough room to read the given
   // amount of bytes.
@@ -158,10 +161,8 @@ class QUIC_EXPORT_PRIVATE QuicDataReader {
 
   // The endianness to read integers and floating numbers.
   Endianness endianness_;
-
-  DISALLOW_COPY_AND_ASSIGN(QuicDataReader);
 };
 
-}  // namespace net
+}  // namespace quic
 
 #endif  // NET_THIRD_PARTY_QUIC_CORE_QUIC_DATA_READER_H_

@@ -26,7 +26,7 @@
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/views/chrome_constrained_window_views_client.h"
-#include "chrome/browser/ui/views/harmony/chrome_layout_provider.h"
+#include "chrome/browser/ui/views/chrome_layout_provider.h"
 #include "chrome/common/chrome_content_client.h"
 #include "chrome/test/base/interactive_test_utils.h"
 #include "chrome/test/base/scoped_testing_local_state.h"
@@ -47,8 +47,10 @@
 #include "ui/aura/env_observer.h"
 #include "ui/aura/window.h"
 #include "ui/base/clipboard/clipboard.h"
+#include "ui/base/test/test_clipboard.h"
 #include "ui/base/test/ui_controls.h"
 #include "ui/events/keycodes/keyboard_codes.h"
+#include "ui/views/background.h"
 #include "ui/views/controls/button/menu_button.h"
 #include "ui/views/controls/menu/menu_controller.h"
 #include "ui/views/controls/menu/menu_item_view.h"
@@ -70,17 +72,15 @@ using content::WebContents;
 
 namespace {
 
+#if !defined(OS_MACOSX)
+
 // Waits for a views::Widget dialog to show up.
 class DialogWaiter : public aura::EnvObserver,
                      public views::WidgetObserver {
  public:
-  DialogWaiter()
-      : dialog_created_(false),
-        dialog_(NULL) {
-    aura::Env::GetInstance()->AddObserver(this);
-  }
+  explicit DialogWaiter(aura::Env* env) : env_(env) { env_->AddObserver(this); }
 
-  ~DialogWaiter() override { aura::Env::GetInstance()->RemoveObserver(this); }
+  ~DialogWaiter() override { env_->RemoveObserver(this); }
 
   views::Widget* WaitForDialog() {
     if (dialog_created_)
@@ -104,9 +104,9 @@ class DialogWaiter : public aura::EnvObserver,
   }
 
   // views::WidgetObserver:
-  void OnWidgetVisibilityChanged(views::Widget* widget, bool visible) override {
+  void OnWidgetActivationChanged(views::Widget* widget, bool active) override {
     CHECK_EQ(dialog_, widget);
-    if (visible) {
+    if (active) {
       dialog_created_ = true;
       dialog_->RemoveObserver(this);
       if (!quit_closure_.is_null())
@@ -114,8 +114,9 @@ class DialogWaiter : public aura::EnvObserver,
     }
   }
 
-  bool dialog_created_;
-  views::Widget* dialog_;
+  aura::Env* env_;
+  bool dialog_created_ = false;
+  views::Widget* dialog_ = nullptr;
   base::Closure quit_closure_;
 
   DISALLOW_COPY_AND_ASSIGN(DialogWaiter);
@@ -162,11 +163,11 @@ class TabKeyWaiter : public ui::EventHandler {
   explicit TabKeyWaiter(views::Widget* widget)
       : widget_(widget),
         received_tab_(false) {
-    widget_->GetNativeView()->AddPreTargetHandler(this);
+    widget_->GetNativeWindow()->AddPreTargetHandler(this);
   }
 
   ~TabKeyWaiter() override {
-    widget_->GetNativeView()->RemovePreTargetHandler(this);
+    widget_->GetNativeWindow()->RemovePreTargetHandler(this);
   }
 
   void WaitForTab() {
@@ -197,12 +198,14 @@ class TabKeyWaiter : public ui::EventHandler {
 
 void MoveMouseAndPress(const gfx::Point& screen_pos,
                        ui_controls::MouseButton button,
-                       int state,
+                       int button_state,
                        base::OnceClosure closure) {
   ASSERT_TRUE(ui_controls::SendMouseMove(screen_pos.x(), screen_pos.y()));
-  ASSERT_TRUE(ui_controls::SendMouseEventsNotifyWhenDone(button, state,
+  ASSERT_TRUE(ui_controls::SendMouseEventsNotifyWhenDone(button, button_state,
                                                          std::move(closure)));
 }
+
+#endif  // !defined(OS_MACOSX)
 
 // PageNavigator implementation that records the URL.
 class TestingPageNavigator : public PageNavigator {
@@ -313,6 +316,15 @@ class BookmarkBarViewEventTestBase : public ViewEventTestBase {
     // state calculated in GetPreferredSizeForContents().
     EXPECT_TRUE(GetBookmarkButton(5)->visible());
     EXPECT_FALSE(GetBookmarkButton(6)->visible());
+
+#if defined(OS_LINUX) && !defined(OS_CHROMEOS)
+    // On desktop Linux, the bookmark bar context menu blocks on retrieving the
+    // clipboard selection from the X server (for the 'paste' item), so mock it
+    // out.
+    ui::Clipboard::SetClipboardForCurrentThread(
+        std::make_unique<ui::TestClipboard>());
+    GetWidget()->Activate();
+#endif
   }
 
   void TearDown() override {
@@ -410,6 +422,10 @@ class BookmarkBarViewEventTestBase : public ViewEventTestBase {
   std::unique_ptr<ScopedTestingLocalState> local_state_;
 };
 
+#if !defined(OS_MACOSX)
+// The following tests were not enabled on Mac before. Consider enabling those
+// that are able to run on Mac (https://crbug.com/845342).
+
 // Clicks on first menu, makes sure button is depressed. Moves mouse to first
 // child, clicks it and makes sure a navigation occurs.
 class BookmarkBarViewTest1 : public BookmarkBarViewEventTestBase {
@@ -484,8 +500,6 @@ class BookmarkBarViewTest2 : public BookmarkBarViewEventTestBase {
     // NOTE: this code assume there is a left margin, which is currently
     // true. If that changes, this code will need to find another empty space
     // to press the mouse on.
-    gfx::Point mouse_loc;
-    views::View::ConvertPointToScreen(bb_view_.get(), &mouse_loc);
     ASSERT_TRUE(ui_controls::SendMouseMoveNotifyWhenDone(
         0, 0, CreateEventTask(this, &BookmarkBarViewTest2::Step3)));
   }
@@ -514,9 +528,8 @@ class BookmarkBarViewTest2 : public BookmarkBarViewEventTestBase {
   }
 };
 
-#if defined(OS_LINUX) && !defined(OS_CHROMEOS) || defined(OS_WIN)
-// TODO(erg): linux_aura bringup: http://crbug.com/163931
-// Disable this test on Win10:    http://crbug.com/828063
+#if defined(OS_WIN)
+// Disable this test on Win10: http://crbug.com/828063
 #define MAYBE_HideOnDesktopClick DISABLED_HideOnDesktopClick
 #else
 #define MAYBE_HideOnDesktopClick HideOnDesktopClick
@@ -841,12 +854,12 @@ class BookmarkBarViewTest7 : public BookmarkBarViewEventTestBase {
     // and drop checking state.
     ASSERT_TRUE(ui_controls::SendMouseMoveNotifyWhenDone(
         loc.x() + 10, loc.y(),
-        base::BindOnce(&BookmarkBarViewTest7::Step3A, this)));
+        base::BindOnce(&BookmarkBarViewTest7::Step3A, base::Unretained(this))));
 #else
     // Start a drag.
     ASSERT_TRUE(ui_controls::SendMouseMoveNotifyWhenDone(
         loc.x() + 10, loc.y(),
-        base::BindOnce(&BookmarkBarViewTest7::Step4, this)));
+        base::BindOnce(&BookmarkBarViewTest7::Step4, base::Unretained(this))));
 
     // See comment above this method as to why we do this.
     ScheduleMouseMoveInBackground(loc.x(), loc.y());
@@ -860,7 +873,8 @@ class BookmarkBarViewTest7 : public BookmarkBarViewEventTestBase {
     views::View::ConvertPointToScreen(other_button, &loc);
 
     ASSERT_TRUE(ui_controls::SendMouseMoveNotifyWhenDone(
-        loc.x(), loc.y(), base::BindOnce(&BookmarkBarViewTest7::Step4, this)));
+        loc.x(), loc.y(),
+        base::BindOnce(&BookmarkBarViewTest7::Step4, base::Unretained(this))));
   }
 
   void Step4() {
@@ -948,11 +962,11 @@ class BookmarkBarViewTest8 : public BookmarkBarViewEventTestBase {
     // and drop checking state.
     ASSERT_TRUE(ui_controls::SendMouseMoveNotifyWhenDone(
         loc.x() + 10, loc.y(),
-        base::BindOnce(&BookmarkBarViewTest8::Step3A, this)));
+        base::BindOnce(&BookmarkBarViewTest8::Step3A, base::Unretained(this))));
 #else
     ASSERT_TRUE(ui_controls::SendMouseMoveNotifyWhenDone(
         loc.x() + 10, loc.y(),
-        base::BindOnce(&BookmarkBarViewTest8::Step4, this)));
+        base::BindOnce(&BookmarkBarViewTest8::Step4, base::Unretained(this))));
     // See comment above this method as to why we do this.
     ScheduleMouseMoveInBackground(loc.x(), loc.y());
 #endif
@@ -966,7 +980,7 @@ class BookmarkBarViewTest8 : public BookmarkBarViewEventTestBase {
 
     ASSERT_TRUE(ui_controls::SendMouseMoveNotifyWhenDone(
         loc.x() + 10, loc.y(),
-        base::BindOnce(&BookmarkBarViewTest8::Step4, this)));
+        base::BindOnce(&BookmarkBarViewTest8::Step4, base::Unretained(this))));
   }
 
   void Step4() {
@@ -979,7 +993,8 @@ class BookmarkBarViewTest8 : public BookmarkBarViewEventTestBase {
     gfx::Point loc(button->width() / 2, button->height() / 2);
     views::View::ConvertPointToScreen(button, &loc);
     ASSERT_TRUE(ui_controls::SendMouseMoveNotifyWhenDone(
-        loc.x(), loc.y(), base::BindOnce(&BookmarkBarViewTest8::Step5, this)));
+        loc.x(), loc.y(),
+        base::BindOnce(&BookmarkBarViewTest8::Step5, base::Unretained(this))));
   }
 
   void Step5() {
@@ -1058,7 +1073,8 @@ class BookmarkBarViewTest9 : public BookmarkBarViewEventTestBase {
 
   void Step3() {
     base::ThreadTaskRunnerHandle::Get()->PostDelayedTask(
-        FROM_HERE, base::BindOnce(&BookmarkBarViewTest9::Step4, this),
+        FROM_HERE,
+        base::BindOnce(&BookmarkBarViewTest9::Step4, base::Unretained(this)),
         base::TimeDelta::FromMilliseconds(200));
   }
 
@@ -1074,7 +1090,8 @@ class BookmarkBarViewTest9 : public BookmarkBarViewEventTestBase {
     // which can interfere with Done. We need to run Done in the
     // next execution loop.
     base::ThreadTaskRunnerHandle::Get()->PostTask(
-        FROM_HERE, base::BindOnce(&ViewEventTestBase::Done, this));
+        FROM_HERE,
+        base::BindOnce(&ViewEventTestBase::Done, base::Unretained(this)));
   }
 
   int start_y_;
@@ -1288,6 +1305,8 @@ VIEW_TEST(BookmarkBarViewTest11, CloseMenuAfterClosingContextMenu)
 class BookmarkBarViewTest12 : public BookmarkBarViewEventTestBase {
  protected:
   void DoTestOnMessageLoop() override {
+    base::RunLoop().RunUntilIdle();
+
     // Open up the other folder.
     views::LabelButton* button = bb_view_->other_bookmarks_button();
     ui_test_utils::MoveMouseToCenterAndPress(button, ui_controls::LEFT,
@@ -1320,7 +1339,9 @@ class BookmarkBarViewTest12 : public BookmarkBarViewEventTestBase {
   void Step3() {
     // Make sure the context menu is showing.
     views::MenuItemView* menu = bb_view_->GetContextMenu();
-    ASSERT_TRUE(menu && menu->GetSubmenu() && menu->GetSubmenu()->IsShowing());
+    ASSERT_TRUE(menu);
+    ASSERT_TRUE(menu->GetSubmenu());
+    ASSERT_TRUE(menu->GetSubmenu()->IsShowing());
 
     // Select the first item in the context menu (open all).
     views::MenuItemView* child_menu =
@@ -1328,13 +1349,12 @@ class BookmarkBarViewTest12 : public BookmarkBarViewEventTestBase {
     ASSERT_TRUE(child_menu != NULL);
 
     // Click and wait until the dialog box appears.
-    std::unique_ptr<DialogWaiter> dialog_waiter(new DialogWaiter());
+    auto dialog_waiter =
+        std::make_unique<DialogWaiter>(GetWidget()->GetNativeWindow()->env());
     ui_test_utils::MoveMouseToCenterAndPress(
-        child_menu,
-        ui_controls::LEFT,
-        ui_controls::DOWN | ui_controls::UP,
-        base::Bind(
-            &BookmarkBarViewTest12::Step4, this, base::Passed(&dialog_waiter)));
+        child_menu, ui_controls::LEFT, ui_controls::DOWN | ui_controls::UP,
+        base::Bind(&BookmarkBarViewTest12::Step4, base::Unretained(this),
+                   base::Passed(&dialog_waiter)));
   }
 
   void Step4(std::unique_ptr<DialogWaiter> waiter) {
@@ -1345,13 +1365,13 @@ class BookmarkBarViewTest12 : public BookmarkBarViewEventTestBase {
     // receives the tab key.
     TabKeyWaiter tab_waiter(dialog);
     ASSERT_TRUE(ui_controls::SendKeyPress(
-        window_->GetNativeWindow(), ui::VKEY_TAB, false, false, false, false));
+        dialog->GetNativeWindow(), ui::VKEY_TAB, false, false, false, false));
     tab_waiter.WaitForTab();
 
     // For some reason return isn't processed correctly unless we delay.
     base::ThreadTaskRunnerHandle::Get()->PostDelayedTask(
         FROM_HERE,
-        base::BindOnce(&BookmarkBarViewTest12::Step5, this,
+        base::BindOnce(&BookmarkBarViewTest12::Step5, base::Unretained(this),
                        base::Unretained(dialog)),
         base::TimeDelta::FromSeconds(1));
   }
@@ -1360,21 +1380,14 @@ class BookmarkBarViewTest12 : public BookmarkBarViewEventTestBase {
     DialogCloseWaiter waiter(dialog);
     // And press enter so that the cancel button is selected.
     ASSERT_TRUE(ui_controls::SendKeyPressNotifyWhenDone(
-        window_->GetNativeWindow(), ui::VKEY_RETURN, false, false, false, false,
+        dialog->GetNativeWindow(), ui::VKEY_RETURN, false, false, false, false,
         base::OnceClosure()));
     waiter.WaitForDialogClose();
     Done();
   }
 };
 
-#if defined(OS_LINUX) && !defined(OS_CHROMEOS)
-// TODO(erg): linux_aura bringup: http://crbug.com/163931
-#define MAYBE_CloseWithModalDialog DISABLED_CloseWithModalDialog
-#else
-#define MAYBE_CloseWithModalDialog CloseWithModalDialog
-#endif
-
-VIEW_TEST(BookmarkBarViewTest12, MAYBE_CloseWithModalDialog)
+VIEW_TEST(BookmarkBarViewTest12, CloseWithModalDialog)
 
 // Tests clicking on the separator of a context menu (this is for coverage of
 // bug 17862).
@@ -1875,7 +1888,7 @@ class BookmarkBarViewTest20 : public BookmarkBarViewEventTestBase {
   }
 
   void Step3() {
-#if defined(OS_CHROMEOS)
+#if defined(OS_LINUX)
     ASSERT_EQ(test_view_->press_count(), 1);
 #else
     ASSERT_EQ(test_view_->press_count(), 2);
@@ -1923,14 +1936,7 @@ class BookmarkBarViewTest20 : public BookmarkBarViewEventTestBase {
   TestViewForMenuExit* test_view_;
 };
 
-#if defined(OS_LINUX) && !defined(OS_CHROMEOS)
-// TODO(erg): linux_aura bringup: http://crbug.com/163931
-#define MAYBE_ContextMenuExitTest DISABLED_ContextMenuExitTest
-#else
-#define MAYBE_ContextMenuExitTest ContextMenuExitTest
-#endif
-
-VIEW_TEST(BookmarkBarViewTest20, MAYBE_ContextMenuExitTest)
+VIEW_TEST(BookmarkBarViewTest20, ContextMenuExitTest)
 
 // Tests context menu by way of opening a context menu for a empty folder menu.
 // The opened context menu should behave as it is from the folder button.
@@ -2135,13 +2141,7 @@ class BookmarkBarViewTest23 : public BookmarkBarViewEventTestBase {
   BookmarkContextMenuNotificationObserver observer_;
 };
 
-#if defined(USE_OZONE)
-// ozone bringup - http://crbug.com/401304
-#define MAYBE_ContextMenusKeyboard DISABLED_ContextMenusKeyboard
-#else
-#define MAYBE_ContextMenusKeyboard ContextMenusKeyboard
-#endif
-VIEW_TEST(BookmarkBarViewTest23, MAYBE_ContextMenusKeyboard)
+VIEW_TEST(BookmarkBarViewTest23, ContextMenusKeyboard)
 
 // Test that pressing escape on a menu opened via the keyboard dismisses the
 // context menu but not the parent menu.
@@ -2219,13 +2219,7 @@ class BookmarkBarViewTest24 : public BookmarkBarViewEventTestBase {
   BookmarkContextMenuNotificationObserver observer_;
 };
 
-#if defined(USE_OZONE)
-// ozone bringup - http://crbug.com/401304
-#define MAYBE_ContextMenusKeyboardEscape DISABLED_ContextMenusKeyboardEscape
-#else
-#define MAYBE_ContextMenusKeyboardEscape ContextMenusKeyboardEscape
-#endif
-VIEW_TEST(BookmarkBarViewTest24, MAYBE_ContextMenusKeyboardEscape)
+VIEW_TEST(BookmarkBarViewTest24, ContextMenusKeyboardEscape)
 
 #if defined(OS_WIN)
 // Tests that pressing the key KEYCODE closes the menu.
@@ -2300,7 +2294,8 @@ class BookmarkBarViewTest26 : public BookmarkBarViewEventTestBase {
         WM_CANCELMODE, 0, 0);
 
     base::ThreadTaskRunnerHandle::Get()->PostTask(
-        FROM_HERE, base::Bind(&BookmarkBarViewTest26::Step3, this));
+        FROM_HERE,
+        base::Bind(&BookmarkBarViewTest26::Step3, base::Unretained(this)));
   }
 
   void Step3() {
@@ -2336,3 +2331,33 @@ class BookmarkBarViewTest27 : public BookmarkBarViewEventTestBase {
 };
 
 VIEW_TEST(BookmarkBarViewTest27, MiddleClickOnFolderOpensAllBookmarks);
+
+#endif  // defined(OS_MACOSX)
+
+class BookmarkBarViewTest28 : public BookmarkBarViewEventTestBase {
+ protected:
+#if defined(OS_MACOSX)
+  const ui_controls::AcceleratorState kAccelatorState = ui_controls::kCommand;
+#else
+  const ui_controls::AcceleratorState kAccelatorState = ui_controls::kControl;
+#endif  // defined(OS_MACOSX)
+
+  void DoTestOnMessageLoop() override {
+    views::LabelButton* button = GetBookmarkButton(0);
+    ui_test_utils::MoveMouseToCenterAndPress(
+        button, ui_controls::LEFT, ui_controls::UP | ui_controls::DOWN,
+        CreateEventTask(this, &BookmarkBarViewTest28::Step2), kAccelatorState);
+  }
+
+ private:
+  void Step2() {
+    ASSERT_EQ(2u, navigator_.urls().size());
+    EXPECT_EQ(navigator_.urls()[0],
+              model_->bookmark_bar_node()->GetChild(0)->GetChild(0)->url());
+    EXPECT_EQ(navigator_.urls()[1],
+              model_->bookmark_bar_node()->GetChild(0)->GetChild(2)->url());
+    Done();
+  }
+};
+
+VIEW_TEST(BookmarkBarViewTest28, ClickWithModifierOnFolderOpensAllBookmarks);

@@ -7,7 +7,9 @@
 #include "base/atomic_sequence_num.h"
 #include "base/callback.h"
 #include "base/feature_list.h"
+#include "base/metrics/histogram_macros.h"
 #include "base/optional.h"
+#include "base/trace_event/trace_event.h"
 #include "content/common/service_worker/service_worker_loader_helpers.h"
 #include "content/common/service_worker/service_worker_types.h"
 #include "content/common/service_worker/service_worker_utils.h"
@@ -18,13 +20,18 @@
 #include "content/renderer/service_worker/controller_service_worker_connector.h"
 #include "mojo/public/cpp/bindings/binding.h"
 #include "mojo/public/cpp/bindings/strong_binding.h"
+#include "net/base/net_errors.h"
 #include "net/url_request/redirect_util.h"
 #include "net/url_request/url_request.h"
 #include "services/network/public/cpp/features.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
+#include "third_party/blink/public/common/blob/blob_utils.h"
+#include "third_party/blink/public/common/features.h"
+#include "third_party/blink/public/common/service_worker/service_worker_type_converters.h"
 #include "third_party/blink/public/mojom/blob/blob.mojom.h"
+#include "third_party/blink/public/mojom/service_worker/dispatch_fetch_event_params.mojom.h"
 #include "third_party/blink/public/platform/interface_provider.h"
-#include "third_party/blink/public/platform/modules/serviceworker/web_service_worker_request.h"
+#include "third_party/blink/public/platform/modules/service_worker/web_service_worker_request.h"
 #include "third_party/blink/public/platform/web_http_body.h"
 #include "third_party/blink/public/platform/web_string.h"
 #include "ui/base/page_transition_types.h"
@@ -32,6 +39,9 @@
 namespace content {
 
 namespace {
+
+constexpr char kServiceWorkerSubresourceLoaderScope[] =
+    "ServiceWorkerSubresourceLoader";
 
 network::ResourceResponseHead RewriteServiceWorkerTime(
     base::TimeTicks service_worker_start_time,
@@ -47,8 +57,9 @@ network::ResourceResponseHead RewriteServiceWorkerTime(
 // whenever a response or redirect is received.
 class HeaderRewritingURLLoaderClient : public network::mojom::URLLoaderClient {
  public:
-  using RewriteHeaderCallback = base::Callback<network::ResourceResponseHead(
-      const network::ResourceResponseHead&)>;
+  using RewriteHeaderCallback =
+      base::RepeatingCallback<network::ResourceResponseHead(
+          const network::ResourceResponseHead&)>;
 
   HeaderRewritingURLLoaderClient(
       network::mojom::URLLoaderClientPtr url_loader_client,
@@ -60,12 +71,10 @@ class HeaderRewritingURLLoaderClient : public network::mojom::URLLoaderClient {
  private:
   // network::mojom::URLLoaderClient implementation:
   void OnReceiveResponse(
-      const network::ResourceResponseHead& response_head,
-      network::mojom::DownloadedTempFilePtr downloaded_file) override {
+      const network::ResourceResponseHead& response_head) override {
     DCHECK(url_loader_client_.is_bound());
     url_loader_client_->OnReceiveResponse(
-        rewrite_header_callback_.Run(response_head),
-        std::move(downloaded_file));
+        rewrite_header_callback_.Run(response_head));
   }
 
   void OnReceiveRedirect(
@@ -74,11 +83,6 @@ class HeaderRewritingURLLoaderClient : public network::mojom::URLLoaderClient {
     DCHECK(url_loader_client_.is_bound());
     url_loader_client_->OnReceiveRedirect(
         redirect_info, rewrite_header_callback_.Run(response_head));
-  }
-
-  void OnDataDownloaded(int64_t data_len, int64_t encoded_data_len) override {
-    DCHECK(url_loader_client_.is_bound());
-    url_loader_client_->OnDataDownloaded(data_len, encoded_data_len);
   }
 
   void OnUploadProgress(int64_t current_position,
@@ -152,19 +156,25 @@ ServiceWorkerSubresourceLoader::ServiceWorkerSubresourceLoader(
     network::mojom::URLLoaderClientPtr client,
     const net::MutableNetworkTrafficAnnotationTag& traffic_annotation,
     scoped_refptr<ControllerServiceWorkerConnector> controller_connector,
-    scoped_refptr<network::SharedURLLoaderFactory> fallback_factory)
+    scoped_refptr<network::SharedURLLoaderFactory> fallback_factory,
+    scoped_refptr<base::SequencedTaskRunner> task_runner)
     : redirect_limit_(net::URLRequest::kMaxRedirects),
       url_loader_client_(std::move(client)),
       url_loader_binding_(this, std::move(request)),
       response_callback_binding_(this),
+      body_as_blob_size_(blink::BlobUtils::kUnknownSize),
       controller_connector_(std::move(controller_connector)),
+      controller_connector_observer_(this),
       fetch_request_restarted_(false),
+      blob_reading_complete_(false),
+      side_data_reading_complete_(false),
       routing_id_(routing_id),
       request_id_(request_id),
       options_(options),
       traffic_annotation_(traffic_annotation),
       resource_request_(resource_request),
       fallback_factory_(std::move(fallback_factory)),
+      task_runner_(std::move(task_runner)),
       weak_factory_(this) {
   DCHECK(controller_connector_);
   response_head_.request_start = base::TimeTicks::Now();
@@ -177,9 +187,7 @@ ServiceWorkerSubresourceLoader::ServiceWorkerSubresourceLoader(
   StartRequest(resource_request);
 }
 
-ServiceWorkerSubresourceLoader::~ServiceWorkerSubresourceLoader() {
-  SettleInflightFetchRequestIfNeeded();
-};
+ServiceWorkerSubresourceLoader::~ServiceWorkerSubresourceLoader() = default;
 
 void ServiceWorkerSubresourceLoader::OnConnectionError() {
   delete this;
@@ -187,37 +195,45 @@ void ServiceWorkerSubresourceLoader::OnConnectionError() {
 
 void ServiceWorkerSubresourceLoader::StartRequest(
     const network::ResourceRequest& resource_request) {
-  DCHECK_EQ(Status::kNotStarted, status_);
-  status_ = Status::kStarted;
+  TRACE_EVENT_WITH_FLOW1(
+      "ServiceWorker", "ServiceWorkerSubresourceLoader::StartRequest",
+      TRACE_ID_WITH_SCOPE(kServiceWorkerSubresourceLoaderScope,
+                          TRACE_ID_LOCAL(request_id_)),
+      TRACE_EVENT_FLAG_FLOW_OUT, "url", resource_request.url.spec());
+  TransitionToStatus(Status::kStarted);
 
   DCHECK(!ServiceWorkerUtils::IsMainResourceType(
       static_cast<ResourceType>(resource_request.resource_type)));
 
-  DCHECK(!inflight_fetch_request_);
-  inflight_fetch_request_ =
-      std::make_unique<network::ResourceRequest>(resource_request);
-  controller_connector_->AddObserver(this);
+  DCHECK(!controller_connector_observer_.IsObservingSources());
+  controller_connector_observer_.Add(controller_connector_.get());
   fetch_request_restarted_ = false;
 
+  // |service_worker_start_time| becomes web-exposed
+  // PerformanceResourceTiming#workerStart, which is the time before starting
+  // the worker or just before firing a fetch event. The idea is (fetchStart -
+  // workerStart) is the time taken to start service worker. In our case, we
+  // don't really know if the worker is started or not yet, but here is a good
+  // time to set workerStart, since it will either started soon or the fetch
+  // event will be dispatched soon.
+  // https://w3c.github.io/resource-timing/#dom-performanceresourcetiming-workerstart
   response_head_.service_worker_start_time = base::TimeTicks::Now();
-  // TODO(horo): Reset |service_worker_ready_time| when the the connection to
-  // the service worker is revived.
-  response_head_.service_worker_ready_time = base::TimeTicks::Now();
-  response_head_.load_timing.send_start = base::TimeTicks::Now();
-  response_head_.load_timing.send_end = base::TimeTicks::Now();
   DispatchFetchEvent();
 }
 
 void ServiceWorkerSubresourceLoader::DispatchFetchEvent() {
-  DCHECK(inflight_fetch_request_);
-  mojom::ServiceWorkerFetchResponseCallbackPtr response_callback_ptr;
+  blink::mojom::ServiceWorkerFetchResponseCallbackPtr response_callback_ptr;
   response_callback_binding_.Bind(mojo::MakeRequest(&response_callback_ptr));
   mojom::ControllerServiceWorker* controller =
       controller_connector_->GetControllerServiceWorker(
           mojom::ControllerServiceWorkerPurpose::FETCH_SUB_RESOURCE);
-  // When |controller| is null, the network request will be aborted soon since
-  // the network provider has already been discarded. In that case, We don't
-  // need to return an error as the client must be shutting down.
+
+  response_head_.load_timing.send_start = base::TimeTicks::Now();
+  response_head_.load_timing.send_end = base::TimeTicks::Now();
+
+  TRACE_EVENT1("ServiceWorker",
+               "ServiceWorkerSubresourceLoader::DispatchFetchEvent",
+               "controller", (controller ? "exists" : "does not exist"));
   if (!controller) {
     auto controller_state = controller_connector_->state();
     if (controller_state ==
@@ -231,14 +247,18 @@ void ServiceWorkerSubresourceLoader::DispatchFetchEvent() {
       delete this;
       return;
     }
+
+    // When kNoContainerHost, the network request will be aborted soon since the
+    // network provider has already been discarded. In that case, we don't need
+    // to return an error as the client must be shutting down.
     DCHECK_EQ(ControllerServiceWorkerConnector::State::kNoContainerHost,
               controller_state);
-    SettleInflightFetchRequestIfNeeded();
+    SettleFetchEventDispatch(base::nullopt);
     return;
   }
 
-  auto params = mojom::DispatchFetchEventParams::New();
-  params->request = *inflight_fetch_request_;
+  auto params = blink::mojom::DispatchFetchEventParams::New();
+  params->request = resource_request_;
   params->client_id = controller_connector_->client_id();
 
   // S13nServiceWorker without NetworkService:
@@ -246,9 +266,16 @@ void ServiceWorkerSubresourceLoader::DispatchFetchEvent() {
   // before dispatching the fetch event for keeping the blob alive.
   if (resource_request_.request_body &&
       !base::FeatureList::IsEnabled(network::features::kNetworkService)) {
+    // We need this as GetBlobFromUUID is a sync IPC.
+    // TODO(kinuko): Remove the friend for ScopedAllowBaseSyncPrimitives
+    // in //base as well when we remove this code.
+    base::ScopedAllowBaseSyncPrimitives allow_sync_primitives;
     params->request_body_blob_ptrs =
         GetBlobPtrsForRequestBody(*resource_request_.request_body);
   }
+
+  // TODO(falken): Grant the controller service worker's process access to files
+  // in the body, like ServiceWorkerFetchDispatcher::DispatchFetchEvent() does.
 
   controller->DispatchFetchEvent(
       std::move(params), std::move(response_callback_ptr),
@@ -257,11 +284,18 @@ void ServiceWorkerSubresourceLoader::DispatchFetchEvent() {
 }
 
 void ServiceWorkerSubresourceLoader::OnFetchEventFinished(
-    blink::mojom::ServiceWorkerEventStatus status,
-    base::Time dispatch_event_time) {
+    blink::mojom::ServiceWorkerEventStatus status) {
+  TRACE_EVENT_WITH_FLOW1(
+      "ServiceWorker", "ServiceWorkerSubresourceLoader::OnFetchEventFinished",
+      TRACE_ID_WITH_SCOPE(kServiceWorkerSubresourceLoaderScope,
+                          TRACE_ID_LOCAL(request_id_)),
+      TRACE_EVENT_FLAG_FLOW_IN, "status",
+      ServiceWorkerUtils::MojoEnumToString(status));
+
   // Stop restarting logic here since OnFetchEventFinished() indicates that the
-  // fetch event was successfully dispatched.
-  SettleInflightFetchRequestIfNeeded();
+  // fetch event dispatch reached the renderer.
+  SettleFetchEventDispatch(
+      mojo::ConvertTo<blink::ServiceWorkerStatusCode>(status));
 
   switch (status) {
     case blink::mojom::ServiceWorkerEventStatus::COMPLETED:
@@ -274,15 +308,17 @@ void ServiceWorkerSubresourceLoader::OnFetchEventFinished(
       // promise, and handle this request.
       break;
     case blink::mojom::ServiceWorkerEventStatus::ABORTED:
-      // We have an unexpected error: fetch event dispatch failed. Return
-      // network error.
+      // Fetch event dispatch did not complete, possibly due to timeout of
+      // respondWith() or waitUntil(). Return network error.
+
+      // TODO(falken): This seems racy. respondWith() may have been called
+      // already and we could have an outstanding stream or blob in progress,
+      // and we might hit CommitCompleted() twice once that settles.
       CommitCompleted(net::ERR_FAILED);
   }
 }
 
 void ServiceWorkerSubresourceLoader::OnConnectionClosed() {
-  if (!inflight_fetch_request_)
-    return;
   response_callback_binding_.Close();
 
   // If the connection to the service worker gets disconnected after dispatching
@@ -290,78 +326,98 @@ void ServiceWorkerSubresourceLoader::OnConnectionClosed() {
   // the fetch event again. If it has already been restarted, that means
   // starting worker failed. In that case, abort the request.
   if (fetch_request_restarted_) {
-    SettleInflightFetchRequestIfNeeded();
+    SettleFetchEventDispatch(
+        blink::ServiceWorkerStatusCode::kErrorStartWorkerFailed);
     CommitCompleted(net::ERR_FAILED);
     return;
   }
   fetch_request_restarted_ = true;
-  base::ThreadTaskRunnerHandle::Get()->PostTask(
+  task_runner_->PostTask(
       FROM_HERE,
       base::BindOnce(&ServiceWorkerSubresourceLoader::DispatchFetchEvent,
                      weak_factory_.GetWeakPtr()));
 }
 
-void ServiceWorkerSubresourceLoader::SettleInflightFetchRequestIfNeeded() {
-  if (inflight_fetch_request_) {
-    inflight_fetch_request_.reset();
-    controller_connector_->RemoveObserver(this);
+void ServiceWorkerSubresourceLoader::SettleFetchEventDispatch(
+    base::Optional<blink::ServiceWorkerStatusCode> status) {
+  if (!controller_connector_observer_.IsObservingSources()) {
+    // Already settled.
+    return;
+  }
+  controller_connector_observer_.RemoveAll();
+
+  if (status) {
+    blink::ServiceWorkerStatusCode value = status.value();
+    UMA_HISTOGRAM_ENUMERATION("ServiceWorker.FetchEvent.Subresource.Status",
+                              value);
   }
 }
 
 void ServiceWorkerSubresourceLoader::OnResponse(
-    const ServiceWorkerResponse& response,
-    base::Time dispatch_event_time) {
-  SettleInflightFetchRequestIfNeeded();
-  StartResponse(response, nullptr /* body_as_blob */,
-                nullptr /* body_as_stream */);
-}
-
-void ServiceWorkerSubresourceLoader::OnResponseBlob(
-    const ServiceWorkerResponse& response,
-    blink::mojom::BlobPtr body_as_blob,
-    base::Time dispatch_event_time) {
-  SettleInflightFetchRequestIfNeeded();
-  StartResponse(response, std::move(body_as_blob),
-                nullptr /* body_as_stream */);
-}
-
-void ServiceWorkerSubresourceLoader::OnResponseLegacyBlob(
-    const ServiceWorkerResponse& response,
-    base::Time dispatch_event_time,
-    OnResponseLegacyBlobCallback callback) {
-  NOTREACHED();
+    blink::mojom::FetchAPIResponsePtr response,
+    blink::mojom::ServiceWorkerFetchEventTimingPtr timing) {
+  TRACE_EVENT_WITH_FLOW0(
+      "ServiceWorker", "ServiceWorkerSubresourceLoader::OnResponse",
+      TRACE_ID_WITH_SCOPE(kServiceWorkerSubresourceLoaderScope,
+                          TRACE_ID_LOCAL(request_id_)),
+      TRACE_EVENT_FLAG_FLOW_IN | TRACE_EVENT_FLAG_FLOW_OUT);
+  SettleFetchEventDispatch(blink::ServiceWorkerStatusCode::kOk);
+  UpdateResponseTiming(std::move(timing));
+  StartResponse(std::move(response), nullptr /* body_as_stream */);
 }
 
 void ServiceWorkerSubresourceLoader::OnResponseStream(
-    const ServiceWorkerResponse& response,
+    blink::mojom::FetchAPIResponsePtr response,
     blink::mojom::ServiceWorkerStreamHandlePtr body_as_stream,
-    base::Time dispatch_event_time) {
-  SettleInflightFetchRequestIfNeeded();
-  StartResponse(response, nullptr /* body_as_blob */,
-                std::move(body_as_stream));
+    blink::mojom::ServiceWorkerFetchEventTimingPtr timing) {
+  TRACE_EVENT_WITH_FLOW0(
+      "ServiceWorker", "ServiceWorkerSubresourceLoader::OnResponseStream",
+      TRACE_ID_WITH_SCOPE(kServiceWorkerSubresourceLoaderScope,
+                          TRACE_ID_LOCAL(request_id_)),
+      TRACE_EVENT_FLAG_FLOW_IN | TRACE_EVENT_FLAG_FLOW_OUT);
+  SettleFetchEventDispatch(blink::ServiceWorkerStatusCode::kOk);
+  UpdateResponseTiming(std::move(timing));
+  StartResponse(std::move(response), std::move(body_as_stream));
 }
 
 void ServiceWorkerSubresourceLoader::OnFallback(
-    base::Time dispatch_event_time) {
-  SettleInflightFetchRequestIfNeeded();
+    blink::mojom::ServiceWorkerFetchEventTimingPtr timing) {
+  SettleFetchEventDispatch(blink::ServiceWorkerStatusCode::kOk);
+  UpdateResponseTiming(std::move(timing));
   // When the request mode is CORS or CORS-with-forced-preflight and the origin
   // of the request URL is different from the security origin of the document,
   // we can't simply fallback to the network here. It is because the CORS
   // preflight logic is implemented in Blink. So we return a "fallback required"
   // response to Blink.
+  // TODO(falken): Remove this mechanism after OOB-CORS ships.
   if ((resource_request_.fetch_request_mode ==
-           network::mojom::FetchRequestMode::kCORS ||
+           network::mojom::FetchRequestMode::kCors ||
        resource_request_.fetch_request_mode ==
-           network::mojom::FetchRequestMode::kCORSWithForcedPreflight) &&
+           network::mojom::FetchRequestMode::kCorsWithForcedPreflight) &&
       (!resource_request_.request_initiator.has_value() ||
        !resource_request_.request_initiator->IsSameOriginWith(
            url::Origin::Create(resource_request_.url)))) {
+    TRACE_EVENT_WITH_FLOW0(
+        "ServiceWorker", "ServiceWorkerSubresourceLoader::OnFallback",
+        TRACE_ID_WITH_SCOPE(kServiceWorkerSubresourceLoaderScope,
+                            TRACE_ID_LOCAL(request_id_)),
+        TRACE_EVENT_FLAG_FLOW_IN | TRACE_EVENT_FLAG_FLOW_OUT);
+    //  Add "Service Worker Fallback Required" which DevTools knows means to not
+    //  show the response in the Network tab as it's just an internal
+    //  implementation mechanism.
+    response_head_.headers = base::MakeRefCounted<net::HttpResponseHeaders>(
+        "HTTP/1.1 400 Service Worker Fallback Required");
     response_head_.was_fetched_via_service_worker = true;
     response_head_.was_fallback_required_by_service_worker = true;
     CommitResponseHeaders();
-    CommitCompleted(net::OK);
+    CommitEmptyResponseAndComplete();
     return;
   }
+  TRACE_EVENT_WITH_FLOW0(
+      "ServiceWorker", "ServiceWorkerSubresourceLoader::OnFallback",
+      TRACE_ID_WITH_SCOPE(kServiceWorkerSubresourceLoaderScope,
+                          TRACE_ID_LOCAL(request_id_)),
+      TRACE_EVENT_FLAG_FLOW_IN);
 
   // Hand over to the network loader.
   network::mojom::URLLoaderClientPtr client;
@@ -383,23 +439,33 @@ void ServiceWorkerSubresourceLoader::OnFallback(
   // factory dies, the web context that made the request is dead so the request
   // is moot.
   DCHECK(!fallback_factory_->HasOneRef());
+
+  RecordTimingMetrics(false /* handled */);
   delete this;
 }
 
+void ServiceWorkerSubresourceLoader::UpdateResponseTiming(
+    blink::mojom::ServiceWorkerFetchEventTimingPtr timing) {
+  // |service_worker_ready_time| becomes web-exposed
+  // PerformanceResourceTiming#fetchStart, which is the time just before
+  // dispatching the fetch event, so set it to |dispatch_event_time|.
+  response_head_.service_worker_ready_time = timing->dispatch_event_time;
+  fetch_event_timing_ = std::move(timing);
+}
+
 void ServiceWorkerSubresourceLoader::StartResponse(
-    const ServiceWorkerResponse& response,
-    blink::mojom::BlobPtr body_as_blob,
+    blink::mojom::FetchAPIResponsePtr response,
     blink::mojom::ServiceWorkerStreamHandlePtr body_as_stream) {
   // A response with status code 0 is Blink telling us to respond with network
   // error.
-  if (response.status_code == 0) {
+  if (response->status_code == 0) {
     CommitCompleted(net::ERR_FAILED);
     return;
   }
 
-  ServiceWorkerLoaderHelpers::SaveResponseInfo(response, &response_head_);
+  ServiceWorkerLoaderHelpers::SaveResponseInfo(*response, &response_head_);
   ServiceWorkerLoaderHelpers::SaveResponseHeaders(
-      response.status_code, response.status_text, response.headers,
+      response->status_code, response->status_text, response->headers,
       &response_head_);
   response_head_.response_start = base::TimeTicks::Now();
   response_head_.load_timing.receive_headers_end = base::TimeTicks::Now();
@@ -407,7 +473,7 @@ void ServiceWorkerSubresourceLoader::StartResponse(
   // Handle a redirect response. ComputeRedirectInfo returns non-null redirect
   // info if the given response is a redirect.
   redirect_info_ = ServiceWorkerLoaderHelpers::ComputeRedirectInfo(
-      resource_request_, response_head_, false /* token_binding_negotiated */);
+      resource_request_, response_head_);
   if (redirect_info_) {
     if (redirect_limit_-- == 0) {
       CommitCompleted(net::ERR_TOO_MANY_REDIRECTS);
@@ -415,7 +481,7 @@ void ServiceWorkerSubresourceLoader::StartResponse(
     }
     response_head_.encoded_data_length = 0;
     url_loader_client_->OnReceiveRedirect(*redirect_info_, response_head_);
-    status_ = Status::kCompleted;
+    TransitionToStatus(Status::kSentRedirect);
     return;
   }
 
@@ -424,71 +490,177 @@ void ServiceWorkerSubresourceLoader::StartResponse(
 
   // Handle a stream response body.
   if (!body_as_stream.is_null() && body_as_stream->stream.is_valid()) {
-    DCHECK(!body_as_blob);
+    DCHECK(!response->blob);
     DCHECK(url_loader_client_.is_bound());
     stream_waiter_ = std::make_unique<StreamWaiter>(
         this, std::move(body_as_stream->callback_request));
-    url_loader_client_->OnStartLoadingResponseBody(
-        std::move(body_as_stream->stream));
+    CommitResponseBody(std::move(body_as_stream->stream));
     return;
   }
 
   // Handle a blob response body.
-  if (body_as_blob) {
+  if (response->blob) {
     DCHECK(!body_as_stream);
-    body_as_blob_ = std::move(body_as_blob);
+    DCHECK(response->blob->blob.is_valid());
+
+    body_as_blob_.Bind(std::move(response->blob->blob));
+    body_as_blob_size_ = response->blob->size;
+
+    // If parallel reading is enabled, then start reading the body blob
+    // immediately. This will allow the body to start buffering in the
+    // pipe while the side data is read.
     mojo::ScopedDataPipeConsumerHandle data_pipe;
-    int error = ServiceWorkerLoaderHelpers::ReadBlobResponseBody(
-        &body_as_blob_, resource_request_.headers,
-        base::BindOnce(&ServiceWorkerSubresourceLoader::OnBlobReadingComplete,
-                       weak_factory_.GetWeakPtr()),
-        &data_pipe);
-    if (error != net::OK) {
-      CommitCompleted(error);
-      return;
+    if (base::FeatureList::IsEnabled(
+            blink::features::kServiceWorkerParallelSideDataReading)) {
+      int error = StartBlobReading(&data_pipe);
+      if (error != net::OK) {
+        CommitCompleted(error);
+        return;
+      }
     }
-    url_loader_client_->OnStartLoadingResponseBody(std::move(data_pipe));
-    // We continue in OnBlobReadingComplete().
+
+    body_as_blob_->ReadSideData(base::BindOnce(
+        &ServiceWorkerSubresourceLoader::OnBlobSideDataReadingComplete,
+        weak_factory_.GetWeakPtr(), std::move(data_pipe)));
     return;
   }
 
-  // The response has no body.
-  CommitCompleted(net::OK);
+  CommitEmptyResponseAndComplete();
 }
 
 void ServiceWorkerSubresourceLoader::CommitResponseHeaders() {
-  DCHECK_EQ(Status::kStarted, status_);
+  TransitionToStatus(Status::kSentHeader);
   DCHECK(url_loader_client_.is_bound());
-  status_ = Status::kSentHeader;
   // TODO(kinuko): Fill the ssl_info.
-  url_loader_client_->OnReceiveResponse(response_head_,
-                                        nullptr /* downloaded_file */);
+  url_loader_client_->OnReceiveResponse(response_head_);
+}
+
+void ServiceWorkerSubresourceLoader::CommitResponseBody(
+    mojo::ScopedDataPipeConsumerHandle response_body) {
+  TransitionToStatus(Status::kSentBody);
+  url_loader_client_->OnStartLoadingResponseBody(std::move(response_body));
+}
+
+void ServiceWorkerSubresourceLoader::CommitEmptyResponseAndComplete() {
+  mojo::ScopedDataPipeProducerHandle producer_handle;
+  mojo::ScopedDataPipeConsumerHandle consumer_handle;
+  if (CreateDataPipe(nullptr, &producer_handle, &consumer_handle) !=
+      MOJO_RESULT_OK) {
+    CommitCompleted(net::ERR_INSUFFICIENT_RESOURCES);
+    return;
+  }
+
+  producer_handle.reset();  // The data pipe is empty.
+  CommitResponseBody(std::move(consumer_handle));
+  CommitCompleted(net::OK);
 }
 
 void ServiceWorkerSubresourceLoader::CommitCompleted(int error_code) {
-  DCHECK_LT(status_, Status::kCompleted);
+  TRACE_EVENT_WITH_FLOW1(
+      "ServiceWorker", "ServiceWorkerSubresourceLoader::CommitCompleted",
+      TRACE_ID_WITH_SCOPE(kServiceWorkerSubresourceLoaderScope,
+                          TRACE_ID_LOCAL(request_id_)),
+      TRACE_EVENT_FLAG_FLOW_IN, "error_code", net::ErrorToString(error_code));
+
+  if (error_code == net::OK)
+    RecordTimingMetrics(true /* handled */);
+
+  TransitionToStatus(Status::kCompleted);
   DCHECK(url_loader_client_.is_bound());
+  body_as_blob_.reset();
   stream_waiter_.reset();
-  status_ = Status::kCompleted;
   network::URLLoaderCompletionStatus status;
   status.error_code = error_code;
   status.completion_time = base::TimeTicks::Now();
   url_loader_client_->OnComplete(status);
+
+  // Invalidate weak pointers to prevent callbacks after commit.  This can
+  // occur if an error code is encountered which forces an early commit.
+  weak_factory_.InvalidateWeakPtrs();
+}
+
+void ServiceWorkerSubresourceLoader::RecordTimingMetrics(bool handled) {
+  DCHECK(fetch_event_timing_);
+
+  // |report_raw_headers| is true when DevTools is attached. Don't record
+  // metrics when DevTools is attached to reduce noise.
+  // TODO(bashi): Relying on |report_raw_header| to detect DevTools existence
+  // is brittle. Figure out a better way to check DevTools is attached.
+  if (resource_request_.report_raw_headers)
+    return;
+
+  // |fetch_event_timing_| can be recorded in different process. We can get
+  // reasonable metrics only when TimeTicks are consistent across processes.
+  if (!base::TimeTicks::IsHighResolution() ||
+      !base::TimeTicks::IsConsistentAcrossProcesses())
+    return;
+
+  base::TimeTicks completion_time = base::TimeTicks::Now();
+
+  // Time spent for service worker startup including mojo message delay.
+  UMA_HISTOGRAM_TIMES(
+      "ServiceWorker.LoadTiming.Subresource."
+      "ForwardServiceWorkerToWorkerReady",
+      response_head_.service_worker_ready_time -
+          response_head_.service_worker_start_time);
+
+  // Time spent by fetch handlers.
+  UMA_HISTOGRAM_TIMES(
+      "ServiceWorker.LoadTiming.Subresource."
+      "WorkerReadyToFetchHandlerEnd",
+      fetch_event_timing_->respond_with_settled_time -
+          response_head_.service_worker_ready_time);
+
+  if (handled) {
+    // Mojo message delay. If the controller service worker lives in the same
+    // process this captures service worker thread -> background thread delay.
+    // Otherwise, this captures IPC delay (this renderer process -> other
+    // renderer process).
+    UMA_HISTOGRAM_TIMES(
+        "ServiceWorker.LoadTiming.Subresource."
+        "FetchHandlerEndToResponseReceived",
+        response_head_.load_timing.receive_headers_end -
+            fetch_event_timing_->respond_with_settled_time);
+
+    // Time spent reading response body.
+    UMA_HISTOGRAM_MEDIUM_TIMES(
+        "ServiceWorker.LoadTiming.Subresource."
+        "ResponseReceivedToCompleted2",
+        completion_time - response_head_.load_timing.receive_headers_end);
+  } else {
+    // Mojo message delay (network fallback case). See above for the detail.
+    UMA_HISTOGRAM_TIMES(
+        "ServiceWorker.LoadTiming.Subresource."
+        "FetchHandlerEndToFallbackNetwork",
+        completion_time - fetch_event_timing_->respond_with_settled_time);
+  }
 }
 
 // ServiceWorkerSubresourceLoader: URLLoader implementation -----------------
 
 void ServiceWorkerSubresourceLoader::FollowRedirect(
-    const base::Optional<net::HttpRequestHeaders>& modified_request_headers) {
+    const base::Optional<std::vector<std::string>>&
+        to_be_removed_request_headers,
+    const base::Optional<net::HttpRequestHeaders>& modified_request_headers,
+    const base::Optional<GURL>& new_url) {
+  TRACE_EVENT_WITH_FLOW1(
+      "ServiceWorker", "ServiceWorkerSubresourceLoader::FollowRedirect",
+      TRACE_ID_WITH_SCOPE(kServiceWorkerSubresourceLoaderScope,
+                          TRACE_ID_LOCAL(request_id_)),
+      TRACE_EVENT_FLAG_FLOW_IN | TRACE_EVENT_FLAG_FLOW_OUT, "new_url",
+      redirect_info_->new_url.spec());
   DCHECK(!modified_request_headers.has_value()) << "Redirect with modified "
                                                    "headers was not supported "
                                                    "yet. crbug.com/845683";
+  DCHECK(!new_url.has_value()) << "Redirect with modified URL was not "
+                                  "supported yet. crbug.com/845683";
   DCHECK(redirect_info_);
 
   bool should_clear_upload = false;
   net::RedirectUtil::UpdateHttpRequest(
       resource_request_.url, resource_request_.method, *redirect_info_,
-      &resource_request_.headers, &should_clear_upload);
+      modified_request_headers, &resource_request_.headers,
+      &should_clear_upload);
   if (should_clear_upload)
     resource_request_.request_body = nullptr;
 
@@ -499,7 +671,7 @@ void ServiceWorkerSubresourceLoader::FollowRedirect(
   resource_request_.referrer_policy = redirect_info_->new_referrer_policy;
 
   // Restart the request.
-  status_ = Status::kNotStarted;
+  TransitionToStatus(Status::kNotStarted);
   redirect_info_.reset();
   response_callback_binding_.Close();
   StartRequest(resource_request_);
@@ -518,9 +690,91 @@ void ServiceWorkerSubresourceLoader::PauseReadingBodyFromNet() {}
 
 void ServiceWorkerSubresourceLoader::ResumeReadingBodyFromNet() {}
 
+int ServiceWorkerSubresourceLoader::StartBlobReading(
+    mojo::ScopedDataPipeConsumerHandle* body_pipe) {
+  TRACE_EVENT_WITH_FLOW0(
+      "ServiceWorker", "ServiceWorkerSubresourceLoader::StartBlobReading",
+      TRACE_ID_WITH_SCOPE(kServiceWorkerSubresourceLoaderScope,
+                          TRACE_ID_LOCAL(request_id_)),
+      TRACE_EVENT_FLAG_FLOW_IN | TRACE_EVENT_FLAG_FLOW_OUT);
+  DCHECK(body_pipe);
+  DCHECK(!blob_reading_complete_);
+
+  base::TimeDelta delay =
+      base::TimeTicks::Now() - response_head_.response_start;
+  UMA_HISTOGRAM_TIMES("ServiceWorker.SubresourceStartBlobReadingDelay", delay);
+
+  return ServiceWorkerLoaderHelpers::ReadBlobResponseBody(
+      &body_as_blob_, body_as_blob_size_,
+      base::BindOnce(&ServiceWorkerSubresourceLoader::OnBlobReadingComplete,
+                     weak_factory_.GetWeakPtr()),
+      body_pipe);
+}
+
+void ServiceWorkerSubresourceLoader::OnBlobSideDataReadingComplete(
+    mojo::ScopedDataPipeConsumerHandle data_pipe,
+    const base::Optional<std::vector<uint8_t>>& metadata) {
+  TRACE_EVENT_WITH_FLOW1(
+      "ServiceWorker",
+      "ServiceWorkerSubresourceLoader::OnBlobSideDataReadingComplete",
+      TRACE_ID_WITH_SCOPE(kServiceWorkerSubresourceLoaderScope,
+                          TRACE_ID_LOCAL(request_id_)),
+      TRACE_EVENT_FLAG_FLOW_IN | TRACE_EVENT_FLAG_FLOW_OUT, "metadata size",
+      (metadata ? metadata->size() : 0));
+  DCHECK(url_loader_client_);
+  DCHECK(body_as_blob_);
+  DCHECK(!side_data_reading_complete_);
+  side_data_reading_complete_ = true;
+
+  if (metadata.has_value())
+    url_loader_client_->OnReceiveCachedMetadata(metadata.value());
+
+  // If parallel reading is disabled then we need to start reading the blob.
+  if (!data_pipe.is_valid()) {
+    DCHECK(!base::FeatureList::IsEnabled(
+        blink::features::kServiceWorkerParallelSideDataReading));
+    int error = StartBlobReading(&data_pipe);
+    if (error != net::OK) {
+      CommitCompleted(error);
+      return;
+    }
+  }
+
+  base::TimeDelta delay =
+      base::TimeTicks::Now() - response_head_.response_start;
+  UMA_HISTOGRAM_TIMES(
+      "ServiceWorker.SubresourceNotifyStartLoadingResponseBodyDelay", delay);
+
+  DCHECK(data_pipe.is_valid());
+  CommitResponseBody(std::move(data_pipe));
+
+  // If the blob reading completed before the side data reading, then we
+  // must manually finalize the blob reading now.
+  if (blob_reading_complete_) {
+    // This should only be possible if parallel reading is enabled.
+    DCHECK(base::FeatureList::IsEnabled(
+        blink::features::kServiceWorkerParallelSideDataReading));
+    OnBlobReadingComplete(net::OK);
+  }
+
+  // Otherwise we asyncly continue in OnBlobReadingComplete().
+}
+
 void ServiceWorkerSubresourceLoader::OnBlobReadingComplete(int net_error) {
+  TRACE_EVENT_WITH_FLOW0(
+      "ServiceWorker", "ServiceWorkerSubresourceLoader::OnBlobReadingComplete",
+      TRACE_ID_WITH_SCOPE(kServiceWorkerSubresourceLoaderScope,
+                          TRACE_ID_LOCAL(request_id_)),
+      TRACE_EVENT_FLAG_FLOW_IN | TRACE_EVENT_FLAG_FLOW_OUT);
+  DCHECK(body_as_blob_);
+  blob_reading_complete_ = true;
+  // If the side data has not completed reading yet, then we need to delay
+  // calling CommitCompleted.  This method will be called again from
+  // OnBlobSideDataReadingComplete().  Only delay for successful reads, though.
+  // Abort immediately on error.
+  if (!side_data_reading_complete_ && net_error == net::OK)
+    return;
   CommitCompleted(net_error);
-  body_as_blob_.reset();
 }
 
 // ServiceWorkerSubresourceLoaderFactory ------------------------------------
@@ -529,18 +783,21 @@ void ServiceWorkerSubresourceLoader::OnBlobReadingComplete(int net_error) {
 void ServiceWorkerSubresourceLoaderFactory::Create(
     scoped_refptr<ControllerServiceWorkerConnector> controller_connector,
     scoped_refptr<network::SharedURLLoaderFactory> fallback_factory,
-    network::mojom::URLLoaderFactoryRequest request) {
-  new ServiceWorkerSubresourceLoaderFactory(std::move(controller_connector),
-                                            std::move(fallback_factory),
-                                            std::move(request));
+    network::mojom::URLLoaderFactoryRequest request,
+    scoped_refptr<base::SequencedTaskRunner> task_runner) {
+  new ServiceWorkerSubresourceLoaderFactory(
+      std::move(controller_connector), std::move(fallback_factory),
+      std::move(request), std::move(task_runner));
 }
 
 ServiceWorkerSubresourceLoaderFactory::ServiceWorkerSubresourceLoaderFactory(
     scoped_refptr<ControllerServiceWorkerConnector> controller_connector,
     scoped_refptr<network::SharedURLLoaderFactory> fallback_factory,
-    network::mojom::URLLoaderFactoryRequest request)
+    network::mojom::URLLoaderFactoryRequest request,
+    scoped_refptr<base::SequencedTaskRunner> task_runner)
     : controller_connector_(std::move(controller_connector)),
-      fallback_factory_(std::move(fallback_factory)) {
+      fallback_factory_(std::move(fallback_factory)),
+      task_runner_(std::move(task_runner)) {
   DCHECK(fallback_factory_);
   bindings_.AddBinding(this, std::move(request));
   bindings_.set_connection_error_handler(base::BindRepeating(
@@ -563,10 +820,10 @@ void ServiceWorkerSubresourceLoaderFactory::CreateLoaderAndStart(
   // network loader when fallback happens. When that happens the loader unbinds
   // the request, passes the request to the fallback factory, and
   // destructs itself (while the loader client continues to work).
-  new ServiceWorkerSubresourceLoader(std::move(request), routing_id, request_id,
-                                     options, resource_request,
-                                     std::move(client), traffic_annotation,
-                                     controller_connector_, fallback_factory_);
+  new ServiceWorkerSubresourceLoader(
+      std::move(request), routing_id, request_id, options, resource_request,
+      std::move(client), traffic_annotation, controller_connector_,
+      fallback_factory_, task_runner_);
 }
 
 void ServiceWorkerSubresourceLoaderFactory::Clone(
@@ -578,6 +835,41 @@ void ServiceWorkerSubresourceLoaderFactory::OnConnectionError() {
   if (!bindings_.empty())
     return;
   delete this;
+}
+
+void ServiceWorkerSubresourceLoader::TransitionToStatus(Status new_status) {
+#if DCHECK_IS_ON()
+  switch (new_status) {
+    case Status::kNotStarted:
+      DCHECK_EQ(status_, Status::kSentRedirect);
+      break;
+    case Status::kStarted:
+      DCHECK_EQ(status_, Status::kNotStarted);
+      break;
+    case Status::kSentRedirect:
+      DCHECK_EQ(status_, Status::kStarted);
+      break;
+    case Status::kSentHeader:
+      DCHECK_EQ(status_, Status::kStarted);
+      break;
+    case Status::kSentBody:
+      DCHECK_EQ(status_, Status::kSentHeader);
+      break;
+    case Status::kCompleted:
+      DCHECK(
+          // Network fallback before interception.
+          status_ == Status::kNotStarted ||
+          // Network fallback after interception.
+          status_ == Status::kStarted ||
+          // Pipe creation failure for empty response.
+          status_ == Status::kSentHeader ||
+          // Success case or error while sending the response's body.
+          status_ == Status::kSentBody);
+      break;
+  }
+#endif  // DCHECK_IS_ON()
+
+  status_ = new_status;
 }
 
 }  // namespace content

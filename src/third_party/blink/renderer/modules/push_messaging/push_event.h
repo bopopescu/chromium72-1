@@ -8,7 +8,7 @@
 #include "third_party/blink/renderer/modules/event_modules.h"
 #include "third_party/blink/renderer/modules/modules_export.h"
 #include "third_party/blink/renderer/modules/push_messaging/push_message_data.h"
-#include "third_party/blink/renderer/modules/serviceworkers/extendable_event.h"
+#include "third_party/blink/renderer/modules/service_worker/extendable_event.h"
 #include "third_party/blink/renderer/platform/heap/handle.h"
 #include "third_party/blink/renderer/platform/wtf/text/atomic_string.h"
 #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
@@ -24,13 +24,17 @@ class MODULES_EXPORT PushEvent final : public ExtendableEvent {
   static PushEvent* Create(const AtomicString& type,
                            PushMessageData* data,
                            WaitUntilObserver* observer) {
-    return new PushEvent(type, data, observer);
+    return MakeGarbageCollected<PushEvent>(type, data, observer);
   }
   static PushEvent* Create(const AtomicString& type,
-                           const PushEventInit& initializer) {
-    return new PushEvent(type, initializer);
+                           const PushEventInit* initializer) {
+    return MakeGarbageCollected<PushEvent>(type, initializer);
   }
 
+  PushEvent(const AtomicString& type,
+            PushMessageData* data,
+            WaitUntilObserver* observer);
+  PushEvent(const AtomicString& type, const PushEventInit* initializer);
   ~PushEvent() override;
 
   // ExtendableEvent interface.
@@ -41,11 +45,6 @@ class MODULES_EXPORT PushEvent final : public ExtendableEvent {
   void Trace(blink::Visitor* visitor) override;
 
  private:
-  PushEvent(const AtomicString& type,
-            PushMessageData* data,
-            WaitUntilObserver* observer);
-  PushEvent(const AtomicString& type, const PushEventInit& initializer);
-
   Member<PushMessageData> data_;
 };
 

@@ -31,14 +31,17 @@ class CanvasRenderingContext2DState final
 
  public:
   static CanvasRenderingContext2DState* Create() {
-    return new CanvasRenderingContext2DState;
+    return MakeGarbageCollected<CanvasRenderingContext2DState>();
   }
 
+  enum ClipListCopyMode { kCopyClipList, kDontCopyClipList };
+
+  CanvasRenderingContext2DState();
+  CanvasRenderingContext2DState(const CanvasRenderingContext2DState&,
+                                ClipListCopyMode);
   ~CanvasRenderingContext2DState() override;
 
   void Trace(blink::Visitor*) override;
-
-  enum ClipListCopyMode { kCopyClipList, kDontCopyClipList };
 
   enum PaintType {
     kFillPaintType,
@@ -78,7 +81,9 @@ class CanvasRenderingContext2DState final
   void ClipPath(const SkPath&, AntiAliasingMode);
   bool HasClip() const { return has_clip_; }
   bool HasComplexClip() const { return has_complex_clip_; }
-  void PlaybackClips(PaintCanvas* canvas) const { clip_list_.Playback(canvas); }
+  void PlaybackClips(cc::PaintCanvas* canvas) const {
+    clip_list_.Playback(canvas);
+  }
   const SkPath& GetCurrentClipPath() const {
     return clip_list_.GetCurrentClipPath();
   }
@@ -191,10 +196,6 @@ class CanvasRenderingContext2DState final
   const PaintFlags* GetFlags(PaintType, ShadowMode, ImageType = kNoImage) const;
 
  private:
-  CanvasRenderingContext2DState();
-  CanvasRenderingContext2DState(const CanvasRenderingContext2DState&,
-                                ClipListCopyMode);
-
   void UpdateLineDash() const;
   void UpdateStrokeStyle() const;
   void UpdateFillStyle() const;

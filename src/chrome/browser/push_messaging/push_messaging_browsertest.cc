@@ -15,7 +15,7 @@
 #include "base/macros.h"
 #include "base/run_loop.h"
 #include "base/strings/utf_string_conversions.h"
-#include "base/test/histogram_tester.h"
+#include "base/test/metrics/histogram_tester.h"
 #include "build/build_config.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/browsing_data/browsing_data_helper.h"
@@ -127,7 +127,11 @@ void InstanceIDResultCallback(base::Closure done_callback,
 
 class PushMessagingBrowserTest : public InProcessBrowserTest {
  public:
-  PushMessagingBrowserTest() : gcm_service_(nullptr), gcm_driver_(nullptr) {}
+  PushMessagingBrowserTest()
+      : scoped_testing_factory_installer_(
+            base::BindRepeating(&gcm::FakeGCMProfileService::Build)),
+        gcm_service_(nullptr),
+        gcm_driver_(nullptr) {}
   ~PushMessagingBrowserTest() override {}
 
   // InProcessBrowserTest:
@@ -148,11 +152,13 @@ class PushMessagingBrowserTest : public InProcessBrowserTest {
 
   // InProcessBrowserTest:
   void SetUpOnMainThread() override {
-    gcm_service_ = static_cast<gcm::FakeGCMProfileService*>(
-        gcm::GCMProfileServiceFactory::GetInstance()->SetTestingFactoryAndUse(
-            GetBrowser()->profile(), &gcm::FakeGCMProfileService::Build));
-    gcm_driver_ = static_cast<instance_id::FakeGCMDriverForInstanceID*>(
-        gcm_service_->driver());
+    KeyedService* keyed_service =
+        gcm::GCMProfileServiceFactory::GetForProfile(GetBrowser()->profile());
+    if (keyed_service) {
+      gcm_service_ = static_cast<gcm::FakeGCMProfileService*>(keyed_service);
+      gcm_driver_ = static_cast<instance_id::FakeGCMDriverForInstanceID*>(
+          gcm_service_->driver());
+    }
 
     notification_tester_ = std::make_unique<NotificationDisplayServiceTester>(
         GetBrowser()->profile());
@@ -171,8 +177,8 @@ class PushMessagingBrowserTest : public InProcessBrowserTest {
   // Calls should be wrapped in the ASSERT_NO_FATAL_FAILURE() macro.
   void RestartPushService() {
     Profile* profile = GetBrowser()->profile();
-    PushMessagingServiceFactory::GetInstance()->SetTestingFactory(profile,
-                                                                  nullptr);
+    PushMessagingServiceFactory::GetInstance()->SetTestingFactory(
+        profile, BrowserContextKeyedServiceFactory::TestingFactory());
     ASSERT_EQ(nullptr, PushMessagingServiceFactory::GetForProfile(profile));
     PushMessagingServiceFactory::GetInstance()->RestoreFactoryForTests(profile);
     PushMessagingServiceImpl::InitializeForProfile(profile);
@@ -315,6 +321,9 @@ class PushMessagingBrowserTest : public InProcessBrowserTest {
   }
 
   virtual Browser* GetBrowser() const { return browser(); }
+
+  gcm::GCMProfileServiceFactory::ScopedTestingFactoryInstaller
+      scoped_testing_factory_installer_;
 
   gcm::FakeGCMProfileService* gcm_service_;
   instance_id::FakeGCMDriverForInstanceID* gcm_driver_;
@@ -1643,13 +1652,7 @@ IN_PROC_BROWSER_TEST_F(PushMessagingBrowserTest, PermissionStateSaysDenied) {
   EXPECT_EQ("permission status - denied", script_result);
 }
 
-// TODO(peter): Flaky on Win buildbots. https://crbug.com/838759
-#if defined(OS_WIN)
-#define MAYBE_UnsubscribeSuccess DISABLED_UnsubscribeSuccess
-#else
-#define MAYBE_UnsubscribeSuccess UnsubscribeSucces
-#endif
-IN_PROC_BROWSER_TEST_F(PushMessagingBrowserTest, MAYBE_UnsubscribeSuccess) {
+IN_PROC_BROWSER_TEST_F(PushMessagingBrowserTest, UnsubscribeSuccess) {
   std::string script_result;
 
   std::string token1;

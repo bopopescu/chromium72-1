@@ -37,8 +37,6 @@
 
 namespace blink {
 
-using namespace HTMLNames;
-
 LayoutTableRow::LayoutTableRow(Element* element)
     : LayoutTableBoxComponent(element), row_index_(kUnsetRowIndex) {
   // init LayoutObject attributes
@@ -53,7 +51,7 @@ void LayoutTableRow::WillBeRemovedFromTree() {
 
 void LayoutTableRow::StyleDidChange(StyleDifference diff,
                                     const ComputedStyle* old_style) {
-  DCHECK_EQ(Style()->Display(), EDisplay::kTableRow);
+  DCHECK_EQ(StyleRef().Display(), EDisplay::kTableRow);
 
   LayoutTableBoxComponent::StyleDidChange(diff, old_style);
   PropagateStyleToAnonymousChildren();
@@ -61,7 +59,7 @@ void LayoutTableRow::StyleDidChange(StyleDifference diff,
   if (!old_style)
     return;
 
-  if (Section() && Style()->LogicalHeight() != old_style->LogicalHeight())
+  if (Section() && StyleRef().LogicalHeight() != old_style->LogicalHeight())
     Section()->RowLogicalHeightChanged(this);
 
   if (!Parent())
@@ -100,7 +98,7 @@ void LayoutTableRow::StyleDidChange(StyleDifference diff,
   // When a row gets collapsed or uncollapsed, it's necessary to check all the
   // rows to find any cell that may span the current row.
   if ((old_style->Visibility() == EVisibility::kCollapse) !=
-      (Style()->Visibility() == EVisibility::kCollapse)) {
+      (StyleRef().Visibility() == EVisibility::kCollapse)) {
     for (LayoutTableRow* row = Section()->FirstRow(); row;
          row = row->NextRow()) {
       for (LayoutTableCell* cell = row->FirstCell(); cell;
@@ -171,12 +169,14 @@ void LayoutTableRow::AddChild(LayoutObject* child, LayoutObject* before_child) {
     LayoutTable* enclosing_table = Table();
     if (enclosing_table && enclosing_table->ShouldCollapseBorders()) {
       enclosing_table->InvalidateCollapsedBorders();
-      if (LayoutTableCell* previous_cell = cell->PreviousCell())
+      if (LayoutTableCell* previous_cell = cell->PreviousCell()) {
         previous_cell->SetNeedsLayoutAndPrefWidthsRecalc(
-            LayoutInvalidationReason::kTableChanged);
-      if (LayoutTableCell* next_cell = cell->NextCell())
+            layout_invalidation_reason::kTableChanged);
+      }
+      if (LayoutTableCell* next_cell = cell->NextCell()) {
         next_cell->SetNeedsLayoutAndPrefWidthsRecalc(
-            LayoutInvalidationReason::kTableChanged);
+            layout_invalidation_reason::kTableChanged);
+      }
     }
   }
 
@@ -266,9 +266,8 @@ LayoutBox::PaginationBreakability LayoutTableRow::GetPaginationBreakability()
   return breakability;
 }
 
-void LayoutTableRow::Paint(const PaintInfo& paint_info,
-                           const LayoutPoint& paint_offset) const {
-  TableRowPainter(*this).Paint(paint_info, paint_offset);
+void LayoutTableRow::Paint(const PaintInfo& paint_info) const {
+  TableRowPainter(*this).Paint(paint_info);
 }
 
 LayoutTableRow* LayoutTableRow::CreateAnonymous(Document* document) {
@@ -289,10 +288,13 @@ LayoutTableRow* LayoutTableRow::CreateAnonymousWithParent(
 }
 
 void LayoutTableRow::ComputeOverflow() {
+  const auto& old_visual_rect = SelfVisualOverflowRect();
   ClearAllOverflows();
   AddVisualEffectOverflow();
   for (LayoutTableCell* cell = FirstCell(); cell; cell = cell->NextCell())
     AddOverflowFromCell(cell);
+  if (old_visual_rect != SelfVisualOverflowRect())
+    SetShouldCheckForPaintInvalidation();
 }
 
 void LayoutTableRow::AddOverflowFromCell(const LayoutTableCell* cell) {

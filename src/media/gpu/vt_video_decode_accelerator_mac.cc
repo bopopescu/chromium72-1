@@ -22,14 +22,13 @@
 #include "base/stl_util.h"
 #include "base/strings/stringprintf.h"
 #include "base/sys_byteorder.h"
-#include "base/sys_info.h"
+#include "base/system/sys_info.h"
 #include "base/threading/thread_task_runner_handle.h"
 #include "base/trace_event/memory_allocator_dump.h"
 #include "base/trace_event/memory_dump_manager.h"
 #include "base/trace_event/process_memory_dump.h"
 #include "base/version.h"
 #include "media/base/limits.h"
-#include "media/gpu/shared_memory_region.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/gl/gl_context.h"
 #include "ui/gl/gl_image_io_surface.h"
@@ -191,7 +190,7 @@ bool CreateVideoToolboxSession(const uint8_t* sps,
       &callback,       // output_callback
       session.InitializeInto());
   if (status) {
-    OSSTATUS_DLOG(WARNING, status) << "Failed to create VTDecompressionSession";
+    OSSTATUS_DVLOG(1, status) << "Failed to create VTDecompressionSession";
     return false;
   }
 
@@ -213,7 +212,7 @@ bool InitializeVideoToolboxInternal() {
   const uint8_t pps_normal[] = {0x68, 0xe9, 0x7b, 0xcb};
   if (!CreateVideoToolboxSession(sps_normal, arraysize(sps_normal), pps_normal,
                                  arraysize(pps_normal), true)) {
-    DLOG(WARNING) << "Hardware decoding with VideoToolbox is not supported";
+    DVLOG(1) << "Hardware decoding with VideoToolbox is not supported";
     return false;
   }
 
@@ -445,7 +444,7 @@ VTVideoDecodeAccelerator::VTVideoDecodeAccelerator(
       gpu_task_runner_(base::ThreadTaskRunnerHandle::Get()),
       decoder_thread_("VTDecoderThread"),
       weak_this_factory_(this) {
-  DCHECK(!bind_image_cb_.is_null());
+  DCHECK(bind_image_cb_);
 
   callback_.decompressionOutputCallback = OutputThunk;
   callback_.decompressionOutputRefCon = this;
@@ -1095,8 +1094,9 @@ void VTVideoDecodeAccelerator::Decode(scoped_refptr<DecoderBuffer> buffer,
   Frame* frame = new Frame(bitstream_id);
   pending_frames_[bitstream_id] = make_linked_ptr(frame);
   decoder_thread_.task_runner()->PostTask(
-      FROM_HERE, base::Bind(&VTVideoDecodeAccelerator::DecodeTask,
-                            base::Unretained(this), std::move(buffer), frame));
+      FROM_HERE,
+      base::BindOnce(&VTVideoDecodeAccelerator::DecodeTask,
+                     base::Unretained(this), std::move(buffer), frame));
 }
 
 void VTVideoDecodeAccelerator::AssignPictureBuffers(
@@ -1387,8 +1387,8 @@ void VTVideoDecodeAccelerator::QueueFlush(TaskType type) {
   DCHECK(gpu_task_runner_->BelongsToCurrentThread());
   pending_flush_tasks_.push(type);
   decoder_thread_.task_runner()->PostTask(
-      FROM_HERE, base::Bind(&VTVideoDecodeAccelerator::FlushTask,
-                            base::Unretained(this), type));
+      FROM_HERE, base::BindOnce(&VTVideoDecodeAccelerator::FlushTask,
+                                base::Unretained(this), type));
 
   // If this is a new flush request, see if we can make progress.
   if (pending_flush_tasks_.size() == 1)

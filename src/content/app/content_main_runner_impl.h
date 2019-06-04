@@ -9,10 +9,15 @@
 
 #include "base/callback_forward.h"
 #include "base/memory/scoped_refptr.h"
+#include "base/message_loop/message_loop.h"
+#include "base/metrics/field_trial.h"
 #include "build/build_config.h"
+#include "content/browser/service_manager/service_manager_context.h"
+#include "content/browser/startup_data_impl.h"
 #include "content/public/app/content_main.h"
 #include "content/public/app/content_main_runner.h"
 #include "content/public/common/content_client.h"
+#include "content/public/common/main_function_params.h"
 
 #if defined(OS_WIN)
 #include "sandbox/win/src/sandbox_types.h"
@@ -22,11 +27,9 @@
 
 namespace base {
 class AtExitManager;
-class SingleThreadTaskRunner;
 }  // namespace base
 
 namespace content {
-class BrowserProcessSubThread;
 class ContentMainDelegate;
 struct ContentMainParams;
 
@@ -41,17 +44,24 @@ class ContentMainRunnerImpl : public ContentMainRunner {
 
   // ContentMainRunner:
   int Initialize(const ContentMainParams& params) override;
-  int Run() override;
+  int Run(bool start_service_manager_only) override;
   void Shutdown() override;
 
+ private:
 #if !defined(CHROME_MULTIPLE_DLL_CHILD)
-  // Creates a thread and returns the SingleThreadTaskRunner on which
-  // ServiceManager should run.
-  scoped_refptr<base::SingleThreadTaskRunner>
-  GetServiceManagerTaskRunnerForEmbedderProcess();
+  int RunServiceManager(MainFunctionParams& main_function_params,
+                        bool start_service_manager_only);
+
+  bool is_browser_main_loop_started_ = false;
+
+  std::unique_ptr<base::MessageLoop> main_message_loop_;
+
+  std::unique_ptr<StartupDataImpl> startup_data_;
+  std::unique_ptr<base::FieldTrialList> field_trial_list_;
+  std::unique_ptr<BrowserProcessSubThread> service_manager_thread_;
+  std::unique_ptr<ServiceManagerContext> service_manager_context_;
 #endif  // !defined(CHROME_MULTIPLE_DLL_CHILD)
 
- private:
   // True if the runner has been initialized.
   bool is_initialized_ = false;
 
@@ -74,8 +84,6 @@ class ContentMainRunnerImpl : public ContentMainRunner {
 #elif defined(OS_MACOSX)
   base::mac::ScopedNSAutoreleasePool* autorelease_pool_ = nullptr;
 #endif
-
-  std::unique_ptr<BrowserProcessSubThread> service_manager_thread_;
 
   base::Closure* ui_task_ = nullptr;
 

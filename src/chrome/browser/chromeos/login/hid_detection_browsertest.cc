@@ -17,7 +17,7 @@
 #include "services/device/public/cpp/hid/fake_input_service_linux.h"
 #include "services/device/public/mojom/constants.mojom.h"
 #include "services/device/public/mojom/input_service.mojom.h"
-#include "services/service_manager/public/cpp/service_context.h"
+#include "services/service_manager/public/cpp/service_binding.h"
 #include "testing/gmock/include/gmock/gmock.h"
 
 using content::BrowserThread;
@@ -51,21 +51,26 @@ class HidDetectionTest : public OobeBaseTest {
     fake_input_service_manager_ =
         std::make_unique<device::FakeInputServiceLinux>();
 
-    service_manager::ServiceContext::SetGlobalBinderForTesting(
-        device::mojom::kServiceName, device::mojom::InputDeviceManager::Name_,
+    service_manager::ServiceBinding::OverrideInterfaceBinderForTesting(
+        device::mojom::kServiceName,
         base::Bind(&device::FakeInputServiceLinux::Bind,
                    base::Unretained(fake_input_service_manager_.get())));
   }
 
-  ~HidDetectionTest() override {}
-
-  void SetUpOnMainThread() override { OobeBaseTest::SetUpOnMainThread(); }
+  ~HidDetectionTest() override {
+    service_manager::ServiceBinding::ClearInterfaceBinderOverrideForTesting<
+        device::mojom::InputDeviceManager>(device::mojom::kServiceName);
+  }
 
   void SetUpInProcessBrowserTestFixture() override {
     OobeBaseTest::SetUpInProcessBrowserTestFixture();
 
     mock_adapter_ = new testing::NiceMock<device::MockBluetoothAdapter>();
     SetUpBluetoothMock(mock_adapter_, true);
+
+    // Note: The SecureChannel service, which is never destroyed until the
+    // browser process is killed, utilizes |mock_adapter_|.
+    testing::Mock::AllowLeak(mock_adapter_.get());
   }
 
   void AddUsbMouse(const std::string& mouse_id) {
@@ -110,7 +115,7 @@ IN_PROC_BROWSER_TEST_F(HidDetectionTest, NoDevicesConnected) {
 }
 
 IN_PROC_BROWSER_TEST_F(HidDetectionSkipTest, BothDevicesPreConnected) {
-  OobeScreenWaiter(OobeScreen::SCREEN_OOBE_NETWORK).Wait();
+  OobeScreenWaiter(OobeScreen::SCREEN_OOBE_WELCOME).Wait();
 }
 
 }  // namespace chromeos

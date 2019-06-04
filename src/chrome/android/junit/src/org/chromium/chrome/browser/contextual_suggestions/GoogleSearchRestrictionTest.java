@@ -7,6 +7,7 @@ package org.chromium.chrome.browser.contextual_suggestions;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.Mockito.doReturn;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.spy;
 
 import org.junit.Before;
@@ -15,6 +16,7 @@ import org.junit.runner.RunWith;
 import org.robolectric.annotation.Config;
 
 import org.chromium.base.test.BaseRobolectricTestRunner;
+import org.chromium.chrome.browser.tabmodel.TabModelSelector;
 import org.chromium.content_public.browser.LoadUrlParams;
 import org.chromium.content_public.browser.NavigationController;
 import org.chromium.content_public.browser.NavigationEntry;
@@ -50,10 +52,15 @@ public class GoogleSearchRestrictionTest {
 
     @Before
     public void setUp() {
-        mFetchHelper = spy(new FetchHelper(null, null) {
+        mFetchHelper = spy(new FetchHelper(null, mock(TabModelSelector.class)) {
             @Override
-            public void initialize() {
-                // Intentionally do nothing.
+            boolean requireCurrentPageFromSRP() {
+                return false;
+            }
+
+            @Override
+            boolean requireNavChainFromSRP() {
+                return false;
             }
         });
 
@@ -168,8 +175,8 @@ public class GoogleSearchRestrictionTest {
      * @return A {@link NavigationController} with one entry.
      */
     private NavigationController createOneEntryNavController(int pageTransition) {
-        NavigationEntry entry =
-                new NavigationEntry(1, FOO_URL, FOO_URL, FOO_URL, "Foo", null, pageTransition);
+        NavigationEntry entry = new NavigationEntry(
+                1, FOO_URL, FOO_URL, FOO_URL, "Foo", null, null, pageTransition);
 
         NavigationHistory navHistory = new NavigationHistory();
         navHistory.addEntry(entry);
@@ -189,14 +196,14 @@ public class GoogleSearchRestrictionTest {
         NavigationEntry firstEntry;
         if (fromSRP) {
             firstEntry = new NavigationEntry(0, GOOGLE_SEARCH_URL, GOOGLE_SEARCH_URL,
-                    GOOGLE_SEARCH_URL, "foo - Google Search", null, PageTransition.TYPED);
+                    GOOGLE_SEARCH_URL, "foo - Google Search", null, null, PageTransition.TYPED);
         } else {
             firstEntry = new NavigationEntry(
-                    0, BAR_URL, BAR_URL, BAR_URL, "bar", null, PageTransition.LINK);
+                    0, BAR_URL, BAR_URL, BAR_URL, "bar", null, null, PageTransition.LINK);
         }
 
-        NavigationEntry currentEntry =
-                new NavigationEntry(1, FOO_URL, FOO_URL, FOO_URL, "Foo", null, pageTransition);
+        NavigationEntry currentEntry = new NavigationEntry(
+                1, FOO_URL, FOO_URL, FOO_URL, "Foo", null, null, pageTransition);
 
         NavigationHistory navHistory = new NavigationHistory();
         navHistory.addEntry(firstEntry);
@@ -218,25 +225,25 @@ public class GoogleSearchRestrictionTest {
      */
     private NavigationController createLongNavHistory(
             int previousPageTransition, int currentPageTransition, boolean fromSRP) {
-        NavigationEntry firstEntry =
-                new NavigationEntry(0, BAZ_URL, BAZ_URL, BAZ_URL, "baz", null, PageTransition.LINK);
+        NavigationEntry firstEntry = new NavigationEntry(
+                0, BAZ_URL, BAZ_URL, BAZ_URL, "baz", null, null, PageTransition.LINK);
         NavigationEntry secondEntry;
         if (fromSRP) {
             secondEntry = new NavigationEntry(1, GOOGLE_SEARCH_URL, GOOGLE_SEARCH_URL,
-                    GOOGLE_SEARCH_URL, "foo - Google Search", null, PageTransition.LINK);
+                    GOOGLE_SEARCH_URL, "foo - Google Search", null, null, PageTransition.LINK);
         } else {
             secondEntry = new NavigationEntry(
-                    1, BAR_URL, BAR_URL, BAR_URL, "bar", null, PageTransition.LINK);
+                    1, BAR_URL, BAR_URL, BAR_URL, "bar", null, null, PageTransition.LINK);
         }
 
         NavigationEntry thirdEntry = new NavigationEntry(
-                2, FOO_URL, FOO_URL, FOO_URL, "Foo", null, previousPageTransition);
+                2, FOO_URL, FOO_URL, FOO_URL, "Foo", null, null, previousPageTransition);
 
         NavigationEntry fourthEntry = new NavigationEntry(3, QUX_URL, QUX_URL, QUX_URL, "qux", null,
-                currentPageTransition | PageTransition.FORWARD_BACK);
+                null, currentPageTransition | PageTransition.FORWARD_BACK);
 
         NavigationEntry fifthEntry = new NavigationEntry(
-                4, QUUX_URL, QUUX_URL, QUUX_URL, "quux", null, PageTransition.TYPED);
+                4, QUUX_URL, QUUX_URL, QUUX_URL, "quux", null, null, PageTransition.TYPED);
 
         NavigationHistory navHistory = new NavigationHistory();
         navHistory.addEntry(firstEntry);
@@ -340,11 +347,6 @@ public class GoogleSearchRestrictionTest {
         }
 
         @Override
-        public String getOriginalUrlForVisibleNavigationEntry() {
-            return null;
-        }
-
-        @Override
         public void clearSslPreferences() {}
 
         @Override
@@ -364,22 +366,6 @@ public class GoogleSearchRestrictionTest {
         public boolean removeEntryAtIndex(int index) {
             return false;
         }
-
-        @Override
-        public boolean canCopyStateOver() {
-            return false;
-        }
-
-        @Override
-        public boolean canPruneAllButLastCommitted() {
-            return false;
-        }
-
-        @Override
-        public void copyStateFrom(NavigationController source, boolean needsReload) {}
-
-        @Override
-        public void copyStateFromAndPrune(NavigationController source, boolean replaceEntry) {}
 
         @Override
         public String getEntryExtraData(int index, String key) {

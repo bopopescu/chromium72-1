@@ -80,10 +80,15 @@ class LayerTreeTest : public testing::Test, public TestHooks {
       SingleKeyframeEffectAnimation* animation_to_receive_animation);
   void PostAddOpacityAnimationToMainThreadDelayed(
       SingleKeyframeEffectAnimation* animation_to_receive_animation);
-  void PostSetLocalSurfaceIdToMainThread(
-      const viz::LocalSurfaceId& local_surface_id);
+  void PostSetLocalSurfaceIdAllocationToMainThread(
+      const viz::LocalSurfaceIdAllocation& local_surface_id_allocation);
   void PostRequestNewLocalSurfaceIdToMainThread();
-  void PostSetDeferCommitsToMainThread(bool defer_commits);
+  void PostGetDeferMainFrameUpdateToMainThread(
+      std::unique_ptr<ScopedDeferMainFrameUpdate>*
+          scoped_defer_main_frame_update);
+  void PostReturnDeferMainFrameUpdateToMainThread(
+      std::unique_ptr<ScopedDeferMainFrameUpdate>
+          scoped_defer_main_frame_update);
   void PostSetNeedsCommitToMainThread();
   void PostSetNeedsUpdateLayersToMainThread();
   void PostSetNeedsRedrawToMainThread();
@@ -172,6 +177,7 @@ class LayerTreeTest : public testing::Test, public TestHooks {
   }
 
   bool use_skia_renderer_ = false;
+  bool use_software_renderer_ = false;
 
  private:
   virtual void DispatchAddNoDamageAnimation(
@@ -180,9 +186,15 @@ class LayerTreeTest : public testing::Test, public TestHooks {
   virtual void DispatchAddOpacityAnimation(
       SingleKeyframeEffectAnimation* animation_to_receive_animation,
       double animation_duration);
-  void DispatchSetLocalSurfaceId(const viz::LocalSurfaceId& local_surface_id);
+  void DispatchSetLocalSurfaceIdAllocation(
+      const viz::LocalSurfaceIdAllocation& local_surface_id_allocation);
   void DispatchRequestNewLocalSurfaceId();
-  void DispatchSetDeferCommits(bool defer_commits);
+  void DispatchGetDeferMainFrameUpdate(
+      std::unique_ptr<ScopedDeferMainFrameUpdate>*
+          scoped_defer_main_frame_update);
+  void DispatchReturnDeferMainFrameUpdate(
+      std::unique_ptr<ScopedDeferMainFrameUpdate>
+          scoped_defer_main_frame_update);
   void DispatchSetNeedsCommit();
   void DispatchSetNeedsUpdateLayers();
   void DispatchSetNeedsRedraw();
@@ -211,7 +223,7 @@ class LayerTreeTest : public testing::Test, public TestHooks {
   mutable base::Lock test_ended_lock_;
   bool ended_ = false;
 
-  int timeout_seconds_ = false;
+  int timeout_seconds_ = 0;
 
   viz::BeginFrameSource* begin_frame_source_ = nullptr;  // NOT OWNED.
 

@@ -1,7 +1,7 @@
 // Copyright (c) 2013 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
-//
+
 // Some helpers for quic crypto
 
 #ifndef NET_THIRD_PARTY_QUIC_CORE_CRYPTO_CRYPTO_UTILS_H_
@@ -14,6 +14,7 @@
 #include "net/third_party/quic/core/crypto/crypto_handshake.h"
 #include "net/third_party/quic/core/crypto/crypto_handshake_message.h"
 #include "net/third_party/quic/core/crypto/crypto_protocol.h"
+#include "net/third_party/quic/core/crypto/quic_crypter.h"
 #include "net/third_party/quic/core/quic_packets.h"
 #include "net/third_party/quic/core/quic_time.h"
 #include "net/third_party/quic/platform/api/quic_export.h"
@@ -21,12 +22,14 @@
 #include "net/third_party/quic/platform/api/quic_string_piece.h"
 #include "third_party/boringssl/src/include/openssl/evp.h"
 
-namespace net {
+namespace quic {
 
 class QuicRandom;
 
 class QUIC_EXPORT_PRIVATE CryptoUtils {
  public:
+  CryptoUtils() = delete;
+
   // Diversification is a utility class that's used to act like a union type.
   // Values can be created by calling the functions like |NoDiversification|,
   // below.
@@ -77,26 +80,16 @@ class QUIC_EXPORT_PRIVATE CryptoUtils {
   // |label|, and |out_len|, respectively.
   static std::vector<uint8_t> QhkdfExpand(const EVP_MD* prf,
                                           const std::vector<uint8_t>& secret,
-                                          const std::string& label,
+                                          const QuicString& label,
                                           size_t out_len);
 
   // SetKeyAndIV derives the key and IV from the given packet protection secret
-  // |pp_secret| and sets those fields on the given QuicEncrypter or
-  // QuicDecrypter |*crypter|. This follows the derivation described in section
-  // 5.2.4 of draft-ietf-quic-tls-09.
-  template <class QuicCrypter>
+  // |pp_secret| and sets those fields on the given QuicCrypter |*crypter|.
+  // This follows the derivation described in section 7.3 of RFC 8446, except
+  // using QhkdfExpand in place of HKDF-Expand-Label.
   static void SetKeyAndIV(const EVP_MD* prf,
                           const std::vector<uint8_t>& pp_secret,
-                          QuicCrypter* crypter) {
-    std::vector<uint8_t> key =
-        CryptoUtils::QhkdfExpand(prf, pp_secret, "key", crypter->GetKeySize());
-    std::vector<uint8_t> iv =
-        CryptoUtils::QhkdfExpand(prf, pp_secret, "iv", crypter->GetIVSize());
-    crypter->SetKey(
-        QuicStringPiece(reinterpret_cast<char*>(key.data()), key.size()));
-    crypter->SetIV(
-        QuicStringPiece(reinterpret_cast<char*>(iv.data()), iv.size()));
-  }
+                          QuicCrypter* crypter);
 
   // QUIC encrypts TLS handshake messages with a version-specific key (to
   // prevent network observers that are not aware of that QUIC version from
@@ -218,11 +211,8 @@ class QUIC_EXPORT_PRIVATE CryptoUtils {
   static void HashHandshakeMessage(const CryptoHandshakeMessage& message,
                                    QuicString* output,
                                    Perspective perspective);
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(CryptoUtils);
 };
 
-}  // namespace net
+}  // namespace quic
 
 #endif  // NET_THIRD_PARTY_QUIC_CORE_CRYPTO_CRYPTO_UTILS_H_

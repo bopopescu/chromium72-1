@@ -4,8 +4,8 @@
 
 #include "third_party/blink/renderer/modules/credentialmanager/federated_credential.h"
 
-#include "third_party/blink/renderer/bindings/core/v8/exception_state.h"
 #include "third_party/blink/renderer/modules/credentialmanager/federated_credential_init.h"
+#include "third_party/blink/renderer/platform/bindings/exception_state.h"
 
 namespace blink {
 
@@ -14,21 +14,22 @@ constexpr char kFederatedCredentialType[] = "federated";
 }
 
 FederatedCredential* FederatedCredential::Create(
-    const FederatedCredentialInit& data,
+    const FederatedCredentialInit* data,
     ExceptionState& exception_state) {
-  if (data.id().IsEmpty())
+  if (data->id().IsEmpty())
     exception_state.ThrowTypeError("'id' must not be empty.");
-  if (data.provider().IsEmpty())
+  if (data->provider().IsEmpty())
     exception_state.ThrowTypeError("'provider' must not be empty.");
 
-  KURL icon_url = ParseStringAsURLOrThrow(data.iconURL(), exception_state);
-  KURL provider_url = ParseStringAsURLOrThrow(data.provider(), exception_state);
+  KURL icon_url = ParseStringAsURLOrThrow(data->iconURL(), exception_state);
+  KURL provider_url =
+      ParseStringAsURLOrThrow(data->provider(), exception_state);
 
   if (exception_state.HadException())
     return nullptr;
 
-  return new FederatedCredential(
-      data.id(), SecurityOrigin::Create(provider_url), data.name(), icon_url);
+  return MakeGarbageCollected<FederatedCredential>(
+      data->id(), SecurityOrigin::Create(provider_url), data->name(), icon_url);
 }
 
 FederatedCredential* FederatedCredential::Create(
@@ -36,7 +37,8 @@ FederatedCredential* FederatedCredential::Create(
     scoped_refptr<const SecurityOrigin> provider,
     const String& name,
     const KURL& icon_url) {
-  return new FederatedCredential(id, provider, name, icon_url);
+  return MakeGarbageCollected<FederatedCredential>(id, provider, name,
+                                                   icon_url);
 }
 
 FederatedCredential::FederatedCredential(

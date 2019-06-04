@@ -7,7 +7,7 @@
 #include <memory>
 
 #include "base/macros.h"
-#include "base/test/histogram_tester.h"
+#include "base/test/metrics/histogram_tester.h"
 #include "content/public/test/test_browser_thread_bundle.h"
 #include "content/public/test/test_service_manager_context.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -16,7 +16,9 @@
 #include "ui/gfx/geometry/size.h"
 
 #if defined(USE_OZONE) || defined(USE_X11)
-#include "services/ui/public/cpp/input_devices/input_device_client_test_api.h"
+#include "services/ws/public/cpp/input_devices/input_device_client_test_api.h"
+#include "ui/aura/test/aura_test_utils.h"
+#include "ui/events/devices/input_device_manager.h"
 #endif
 
 namespace {
@@ -33,7 +35,8 @@ class ChromeBrowserMainExtraPartsMetricsTest : public testing::Test {
 
  protected:
 #if defined(USE_OZONE) || defined(USE_X11)
-  ui::InputDeviceClientTestApi input_device_client_test_api_;
+  std::unique_ptr<ui::InputDeviceManager> input_manager_;
+  ws::InputDeviceClientTestApi input_device_client_test_api_;
 #endif
 
  private:
@@ -50,6 +53,9 @@ class ChromeBrowserMainExtraPartsMetricsTest : public testing::Test {
 ChromeBrowserMainExtraPartsMetricsTest::
     ChromeBrowserMainExtraPartsMetricsTest() {
   display::Screen::SetScreenInstance(&test_screen_);
+#if defined(USE_OZONE) || defined(USE_X11)
+  input_manager_ = aura::test::CreateTestInputDeviceManager();
+#endif
 }
 
 ChromeBrowserMainExtraPartsMetricsTest::

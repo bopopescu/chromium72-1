@@ -16,7 +16,7 @@
 #include "base/sequenced_task_runner.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
-#include "base/task_scheduler/post_task.h"
+#include "base/task/post_task.h"
 #include "base/threading/thread_restrictions.h"
 #include "base/time/default_clock.h"
 #include "base/time/time.h"
@@ -31,10 +31,11 @@
 #include "content/browser/indexed_db/indexed_db_tracing.h"
 #include "content/browser/indexed_db/indexed_db_transaction.h"
 #include "content/public/browser/browser_thread.h"
-#include "content/public/browser/indexed_db_info.h"
+#include "content/public/browser/storage_usage_info.h"
 #include "content/public/common/content_switches.h"
 #include "storage/browser/database/database_util.h"
 #include "storage/common/database/database_identifier.h"
+#include "third_party/blink/public/mojom/indexeddb/indexeddb.mojom.h"
 #include "third_party/blink/public/mojom/quota/quota_types.mojom.h"
 #include "ui/base/text/bytes_formatting.h"
 #include "url/origin.h"
@@ -84,28 +85,6 @@ void GetAllOriginsAndPaths(const base::FilePath& indexeddb_path,
 
 }  // namespace
 
-// This will be called after the IndexedDBContext is destroyed.
-void IndexedDBContextImpl::ClearSessionOnlyOrigins(
-    const base::FilePath& indexeddb_path,
-    scoped_refptr<storage::SpecialStoragePolicy> special_storage_policy) {
-  // TODO(jsbell): DCHECK that this is running on an IndexedDB sequence,
-  // if a global handle to it is ever available.
-  std::vector<Origin> origins;
-  std::vector<base::FilePath> file_paths;
-  GetAllOriginsAndPaths(indexeddb_path, &origins, &file_paths);
-  DCHECK_EQ(origins.size(), file_paths.size());
-  auto file_path = file_paths.cbegin();
-  auto origin = origins.cbegin();
-  for (; origin != origins.cend(); ++origin, ++file_path) {
-    const GURL origin_url = GURL(origin->Serialize());
-    if (!special_storage_policy->IsStorageSessionOnly(origin_url))
-      continue;
-    if (special_storage_policy->IsStorageProtected(origin_url))
-      continue;
-    base::DeleteFile(*file_path, true);
-  }
-}
-
 IndexedDBContextImpl::IndexedDBContextImpl(
     const base::FilePath& data_path,
     scoped_refptr<storage::SpecialStoragePolicy> special_storage_policy,
@@ -116,7 +95,8 @@ IndexedDBContextImpl::IndexedDBContextImpl(
       task_runner_(base::CreateSequencedTaskRunnerWithTraits(
           {base::MayBlock(), base::WithBaseSyncPrimitives(),
            base::TaskPriority::USER_VISIBLE,
-           base::TaskShutdownBehavior::SKIP_ON_SHUTDOWN})) {
+           // BLOCK_SHUTDOWN to support clearing session-only storage.
+           base::TaskShutdownBehavior::BLOCK_SHUTDOWN})) {
   IDB_TRACE("init");
   if (!data_path.empty())
     data_path_ = data_path.Append(kIndexedDBDirectory);
@@ -147,15 +127,14 @@ bool IndexedDBContextImpl::HasOrigin(const Origin& origin) {
   return set->find(origin) != set->end();
 }
 
-std::vector<IndexedDBInfo> IndexedDBContextImpl::GetAllOriginsInfo() {
+std::vector<StorageUsageInfo> IndexedDBContextImpl::GetAllOriginsInfo() {
   DCHECK(TaskRunner()->RunsTasksInCurrentSequence());
   std::vector<Origin> origins = GetAllOrigins();
-  std::vector<IndexedDBInfo> result;
+  std::vector<StorageUsageInfo> result;
   for (const auto& origin : origins) {
-    size_t connection_count = GetConnectionCount(origin);
-    result.push_back(IndexedDBInfo(origin.GetURL(), GetOriginDiskUsage(origin),
-                                   GetOriginLastModified(origin),
-                                   connection_count));
+    result.push_back(StorageUsageInfo(origin.GetURL(),
+                                      GetOriginDiskUsage(origin),
+                                      GetOriginLastModified(origin)));
   }
   return result;
 }
@@ -200,9 +179,7 @@ base::ListValue* IndexedDBContextImpl::GetAllOriginsDetails() {
       std::unique_ptr<base::ListValue> database_list(
           std::make_unique<base::ListValue>());
 
-      for (IndexedDBFactory::OriginDBMapIterator it = range.first;
-           it != range.second;
-           ++it) {
+      for (auto it = range.first; it != range.second; ++it) {
         const IndexedDBDatabase* db = it->second;
         std::unique_ptr<base::DictionaryValue> db_info(
             std::make_unique<base::DictionaryValue>());
@@ -220,9 +197,18 @@ base::ListValue* IndexedDBContextImpl::GetAllOriginsDetails() {
           std::unique_ptr<base::DictionaryValue> transaction_info(
               std::make_unique<base::DictionaryValue>());
 
-          const char* const kModes[] =
-              { "readonly", "readwrite", "versionchange" };
-          transaction_info->SetString("mode", kModes[transaction->mode()]);
+          switch (transaction->mode()) {
+            case blink::mojom::IDBTransactionMode::ReadOnly:
+              transaction_info->SetString("mode", "readonly");
+              break;
+            case blink::mojom::IDBTransactionMode::ReadWrite:
+              transaction_info->SetString("mode", "readwrite");
+              break;
+            case blink::mojom::IDBTransactionMode::VersionChange:
+              transaction_info->SetString("mode", "versionchange");
+              break;
+          }
+
           switch (transaction->state()) {
             case IndexedDBTransaction::CREATED:
               transaction_info->SetString("status", "blocked");
@@ -312,8 +298,6 @@ base::Time IndexedDBContextImpl::GetOriginLastModified(const Origin& origin) {
     return factory_->GetLastModified(origin);
   }
 
-  if (data_path_.empty())
-    return base::Time();
   base::FilePath idb_directory = GetLevelDBPath(origin);
   base::File::Info file_info;
   if (!base::GetFileInfo(idb_directory, &file_info))
@@ -329,8 +313,14 @@ void IndexedDBContextImpl::DeleteForOrigin(const GURL& origin_url) {
 void IndexedDBContextImpl::DeleteForOrigin(const Origin& origin) {
   DCHECK(TaskRunner()->RunsTasksInCurrentSequence());
   ForceClose(origin, FORCE_CLOSE_DELETE_ORIGIN);
-  if (data_path_.empty() || !HasOrigin(origin))
+  if (!HasOrigin(origin))
     return;
+
+  if (is_incognito()) {
+    GetOriginSet()->erase(origin);
+    origin_size_map_.erase(origin);
+    return;
+  }
 
   base::FilePath idb_directory = GetLevelDBPath(origin);
   EnsureDiskUsageCacheInitialized(origin);
@@ -348,7 +338,7 @@ void IndexedDBContextImpl::DeleteForOrigin(const Origin& origin) {
   base::DeleteFile(GetBlobStorePath(origin), true /* recursive */);
   QueryDiskAndUpdateQuotaUsage(origin);
   if (s.ok()) {
-    RemoveFromOriginSet(origin);
+    GetOriginSet()->erase(origin);
     origin_size_map_.erase(origin);
   }
 }
@@ -362,7 +352,7 @@ void IndexedDBContextImpl::CopyOriginData(const GURL& origin_url,
 void IndexedDBContextImpl::CopyOriginData(const Origin& origin,
                                           IndexedDBContext* dest_context) {
   DCHECK(TaskRunner()->RunsTasksInCurrentSequence());
-  if (data_path_.empty() || !HasOrigin(origin))
+  if (is_incognito() || !HasOrigin(origin))
     return;
 
   IndexedDBContextImpl* dest_context_impl =
@@ -397,12 +387,38 @@ void IndexedDBContextImpl::ForceClose(const Origin origin,
                             reason,
                             FORCE_CLOSE_REASON_MAX);
 
-  if (data_path_.empty() || !HasOrigin(origin))
+  if (!HasOrigin(origin))
     return;
 
   if (factory_.get())
-    factory_->ForceClose(origin);
+    factory_->ForceClose(origin, reason == FORCE_CLOSE_DELETE_ORIGIN);
   DCHECK_EQ(0UL, GetConnectionCount(origin));
+}
+
+bool IndexedDBContextImpl::ForceSchemaDowngrade(const Origin& origin) {
+  DCHECK(TaskRunner()->RunsTasksInCurrentSequence());
+
+  if (is_incognito() || !HasOrigin(origin))
+    return false;
+
+  if (factory_.get()) {
+    factory_->ForceSchemaDowngrade(origin);
+    return true;
+  }
+  this->ForceClose(origin, FORCE_SCHEMA_DOWNGRADE_INTERNALS_PAGE);
+  return false;
+}
+
+V2SchemaCorruptionStatus IndexedDBContextImpl::HasV2SchemaCorruption(
+    const Origin& origin) {
+  DCHECK(TaskRunner()->RunsTasksInCurrentSequence());
+
+  if (is_incognito() || !HasOrigin(origin))
+    return V2SchemaCorruptionStatus::kUnknown;
+
+  if (factory_.get())
+    return factory_->HasV2SchemaCorruption(origin);
+  return V2SchemaCorruptionStatus::kUnknown;
 }
 
 size_t IndexedDBContextImpl::GetConnectionCount(const Origin& origin) {
@@ -451,7 +467,7 @@ void IndexedDBContextImpl::ConnectionOpened(const Origin& origin,
   quota_manager_proxy()->NotifyStorageAccessed(
       storage::QuotaClient::kIndexedDatabase, origin,
       blink::mojom::StorageType::kTemporary);
-  if (AddToOriginSet(origin)) {
+  if (GetOriginSet()->insert(origin).second) {
     // A newly created db, notify the quota system.
     QueryDiskAndUpdateQuotaUsage(origin);
   } else {
@@ -475,7 +491,7 @@ void IndexedDBContextImpl::TransactionComplete(const Origin& origin) {
 }
 
 void IndexedDBContextImpl::DatabaseDeleted(const Origin& origin) {
-  AddToOriginSet(origin);
+  GetOriginSet()->insert(origin);
   QueryDiskAndUpdateQuotaUsage(origin);
 }
 
@@ -515,24 +531,44 @@ IndexedDBContextImpl::~IndexedDBContextImpl() {
                            base::BindOnce(&IndexedDBFactory::ContextDestroyed,
                                           std::move(factory_)));
   }
+}
 
-  if (data_path_.empty())
+void IndexedDBContextImpl::Shutdown() {
+  if (is_incognito())
     return;
 
   if (force_keep_session_state_)
     return;
 
-  bool has_session_only_databases =
-      special_storage_policy_.get() &&
-      special_storage_policy_->HasSessionOnlyOrigins();
-
-  // Clearing only session-only databases, and there are none.
-  if (!has_session_only_databases)
-    return;
-
-  TaskRunner()->PostTask(FROM_HERE,
-                         base::BindOnce(&ClearSessionOnlyOrigins, data_path_,
-                                        special_storage_policy_));
+  // Clear session-only databases.
+  if (special_storage_policy_ &&
+      special_storage_policy_->HasSessionOnlyOrigins()) {
+    TaskRunner()->PostTask(
+        FROM_HERE,
+        base::BindOnce(
+            [](const base::FilePath& indexeddb_path,
+               scoped_refptr<IndexedDBFactory> factory,
+               scoped_refptr<storage::SpecialStoragePolicy>
+                   special_storage_policy) {
+              std::vector<Origin> origins;
+              std::vector<base::FilePath> file_paths;
+              GetAllOriginsAndPaths(indexeddb_path, &origins, &file_paths);
+              DCHECK_EQ(origins.size(), file_paths.size());
+              auto file_path = file_paths.cbegin();
+              auto origin = origins.cbegin();
+              for (; origin != origins.cend(); ++origin, ++file_path) {
+                const GURL origin_url = GURL(origin->Serialize());
+                if (!special_storage_policy->IsStorageSessionOnly(origin_url))
+                  continue;
+                if (special_storage_policy->IsStorageProtected(origin_url))
+                  continue;
+                if (factory.get())
+                  factory->ForceClose(*origin);
+                base::DeleteFile(*file_path, true);
+              }
+            },
+            data_path_, factory_, special_storage_policy_));
+  }
 }
 
 // static
@@ -556,13 +592,13 @@ base::FilePath IndexedDBContextImpl::GetLevelDBFileName(const Origin& origin) {
 
 base::FilePath IndexedDBContextImpl::GetBlobStorePath(
     const Origin& origin) const {
-  DCHECK(!data_path_.empty());
+  DCHECK(!is_incognito());
   return data_path_.Append(GetBlobStoreFileName(origin));
 }
 
 base::FilePath IndexedDBContextImpl::GetLevelDBPath(
     const Origin& origin) const {
-  DCHECK(!data_path_.empty());
+  DCHECK(!is_incognito());
   return data_path_.Append(GetLevelDBFileName(origin));
 }
 

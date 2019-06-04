@@ -80,6 +80,20 @@ base::SharedMemoryHandle PpapiDispatcher::ShareSharedMemoryHandleWithRemote(
   return base::SharedMemoryHandle();
 }
 
+base::UnsafeSharedMemoryRegion
+PpapiDispatcher::ShareUnsafeSharedMemoryRegionWithRemote(
+    const base::UnsafeSharedMemoryRegion& region,
+    base::ProcessId remote_pid) {
+  return base::UnsafeSharedMemoryRegion();
+}
+
+base::ReadOnlySharedMemoryRegion
+PpapiDispatcher::ShareReadOnlySharedMemoryRegionWithRemote(
+    const base::ReadOnlySharedMemoryRegion& region,
+    base::ProcessId remote_pid) {
+  return base::ReadOnlySharedMemoryRegion();
+}
+
 std::set<PP_Instance>* PpapiDispatcher::GetGloballySeenInstanceIDSet() {
   return &instances_;
 }
@@ -168,6 +182,7 @@ void PpapiDispatcher::OnMsgInitializeNaClDispatcher(
   settings.logging_dest = logging::LOG_TO_SYSTEM_DEBUG_LOG;
   logging::InitLogging(settings);
 
+  base::FeatureList::ClearInstanceForTesting();
   base::FeatureList::InitializeInstance(
       base::CommandLine::ForCurrentProcess()->GetSwitchValueASCII(
           switches::kEnableFeatures),

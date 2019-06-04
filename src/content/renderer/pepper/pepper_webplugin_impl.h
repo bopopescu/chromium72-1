@@ -43,8 +43,9 @@ class PepperWebPluginImpl : public blink::WebPlugin {
   bool Initialize(blink::WebPluginContainer* container) override;
   void Destroy() override;
   v8::Local<v8::Object> V8ScriptableObject(v8::Isolate* isolate) override;
-  void UpdateAllLifecyclePhases() override {}
-  void Paint(blink::WebCanvas* canvas, const blink::WebRect& rect) override;
+  void UpdateAllLifecyclePhases(
+      blink::WebWidget::LifecycleUpdateReason) override {}
+  void Paint(cc::PaintCanvas* canvas, const blink::WebRect& rect) override;
   void UpdateGeometry(const blink::WebRect& window_rect,
                       const blink::WebRect& clip_rect,
                       const blink::WebRect& unobscured_rect,
@@ -55,7 +56,7 @@ class PepperWebPluginImpl : public blink::WebPlugin {
       const blink::WebCoalescedInputEvent& event,
       blink::WebCursorInfo& cursor_info) override;
   void DidReceiveResponse(const blink::WebURLResponse& response) override;
-  void DidReceiveData(const char* data, int data_length) override;
+  void DidReceiveData(const char* data, size_t data_length) override;
   void DidFinishLoading() override;
   void DidFailLoading(const blink::WebURLError&) override;
   bool HasSelection() const override;
@@ -80,7 +81,7 @@ class PepperWebPluginImpl : public blink::WebPlugin {
   bool IsPrintScalingDisabled() override;
 
   int PrintBegin(const blink::WebPrintParams& print_params) override;
-  void PrintPage(int page_number, blink::WebCanvas* canvas) override;
+  void PrintPage(int page_number, cc::PaintCanvas* canvas) override;
   void PrintEnd() override;
 
   bool CanRotateView() override;

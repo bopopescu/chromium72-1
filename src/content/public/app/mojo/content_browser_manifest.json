@@ -1,11 +1,17 @@
 {
   "name": "content_browser",
   "display_name": "Content (browser process)",
+  "options": {
+    "can_connect_to_other_services_as_any_user": true,
+    "can_connect_to_other_services_with_any_instance_name": true,
+    "can_create_other_service_instances": true
+  },
   "interface_provider_specs": {
     "service_manager:connector": {
       "provides": {
         // Interfaces needed by a generic client of content browser.
         "app": [
+          "content.mojom.MemoryCoordinatorHandle",
           "discardable_memory.mojom.DiscardableSharedMemoryManager",
           "memory_instrumentation.mojom.Coordinator"
         ],
@@ -18,55 +24,64 @@
         "font_cache": [
           "content.mojom.FontCacheWin"
         ],
-        "font_loader": [
-          "content.mojom.FontLoaderMac"
-        ],
         "gpu": [
           "discardable_memory.mojom.DiscardableSharedMemoryManager",
           "media.mojom.AndroidOverlayProvider"
         ],
+        "gpu_client": [
+          "ws.mojom.Gpu"
+        ],
         "plugin": [
           "discardable_memory.mojom.DiscardableSharedMemoryManager",
-          "ui.mojom.Gpu"
+          "ws.mojom.Gpu"
         ],
         "renderer": [
           "blink.mojom.BackgroundSyncService",
           "blink.mojom.BlobRegistry",
           "blink.mojom.BroadcastChannelProvider",
           "blink.mojom.ClipboardHost",
+          "blink.mojom.CodeCacheHost",
+          "blink.mojom.FontUniqueNameLookup",
           "blink.mojom.EmbeddedFrameSinkProvider",
           "blink.mojom.FileUtilitiesHost",
-          "blink.mojom.LockManager",
+          "blink.mojom.FileSystemManager",
+          "blink.mojom.IDBFactory",
           "blink.mojom.Hyphenation",
           "blink.mojom.MimeRegistry",
+          "blink.mojom.PluginRegistry",
           "blink.mojom.ReportingServiceProxy",
+          "blink.mojom.StoragePartitionService",
           "blink.mojom.WebDatabaseHost",
           "content.mojom.AppCacheBackend",
           "content.mojom.ClipboardHost",
           "content.mojom.FieldTrialRecorder",
           "content.mojom.FrameSinkProvider",
           "content.mojom.MediaStreamTrackMetricsHost",
-          "content.mojom.MemoryCoordinatorHandle",
           "content.mojom.PeerConnectionTrackerHost",
           "content.mojom.PushMessaging",
           "content.mojom.RendererHost",
           "content.mojom.ReportingServiceProxy",
           "content.mojom.ServiceWorkerDispatcherHost",
-          "content.mojom.StoragePartitionService",
           "content.mojom.WorkerURLLoaderFactoryProvider",
           "device.mojom.BatteryMonitor",
           "device.mojom.GamepadHapticsManager",
-          "device.mojom.GamepadMonitor",
           "discardable_memory.mojom.DiscardableSharedMemoryManager",
           "media.mojom.KeySystemSupport",
+          "media.mojom.InterfaceFactory",
           "media.mojom.VideoCaptureHost",
           "media.mojom.VideoDecodePerfHistory",
           "memory_coordinator.mojom.MemoryCoordinatorHandle",
           "metrics.mojom.SingleSampleMetricsProvider",
+          "midi.mojom.MidiSessionProvider",
+          "network.mojom.P2PSocketManager",
+          "network.mojom.MdnsResponder",
           "network.mojom.URLLoaderFactory",
           "resource_coordinator.mojom.ProcessCoordinationUnit",
-          "ui.mojom.Gpu",
-          "viz.mojom.CompositingModeReporter"
+          "viz.mojom.CompositingModeReporter",
+          "ws.mojom.Gpu"
+        ],
+        "sandbox_support": [
+          "content.mojom.SandboxSupportMac"
         ],
         "service_manager:service_factory": [
           "service_manager.mojom.ServiceFactory"
@@ -78,9 +93,13 @@
           "info",
           "debug_recording",
           "device_notifier",
-          "stream_factory"
+          "log_factory_manager",
+          "stream_factory",
+          "testing_api"
         ],
         "cdm": [ "media:cdm" ],
+        "chromecast": [ "multizone" ],
+        "content": [ "navigation" ],
         "content_gpu": [ "browser" ],
         "content_plugin": [ "browser" ],
         "content_renderer": [ "browser" ],
@@ -88,6 +107,7 @@
         "data_decoder": [ "image_decoder", "json_parser", "xml_parser" ],
         "device": [
           "device:battery_monitor",
+          "device:bluetooth_system",
           "device:generic_sensor",
           "device:geolocation",
           "device:hid",
@@ -95,11 +115,13 @@
           "device:mtp",
           "device:nfc",
           "device:serial",
+          "device:usb",
           "device:vibration",
           "device:wake_lock"
         ],
         "file": [ "file:filesystem", "file:leveldb" ],
         "media": [ "media:media" ],
+        "media_session": [ "media_session:app" ],
         "metrics": [ "url_keyed_metrics" ],
         "network": [
           "network_service",
@@ -114,10 +136,7 @@
           "page_signal"
         ],
         "service_manager": [
-          "service_manager:client_process",
-          "service_manager:instance_name",
-          "service_manager:service_manager",
-          "service_manager:user_id"
+          "service_manager:service_manager"
         ],
         "shape_detection": [
           "barcode_detection",
@@ -127,7 +146,7 @@
         "tracing": [
           "tracing"
         ],
-        "ui": [ "arc_manager", "display_output_protection", "video_detector" ],
+        "ui": [ "arc_manager" ],
         "unzip_service": [ "unzip_file" ],
         "video_capture": [ "capture", "tests" ]
       }
@@ -140,11 +159,17 @@
           // impossible this week. Remove once sky/ken fix this.
           "autofill.mojom.AutofillDriver",
           "autofill.mojom.PasswordManagerDriver",
+          "blink.mojom.AnchorElementMetricsHost",
+          "blink.mojom.AudioContextManager",
+          "blink.mojom.Authenticator",
           "blink.mojom.BackgroundFetchService",
-          "blink.mojom.BudgetService",
           "blink.mojom.CacheStorage",
           "blink.mojom.ColorChooserFactory",
+          "blink.mojom.CredentialManager",
+          "blink.mojom.DisplayCutoutHost",
           "blink.mojom.DedicatedWorkerFactory",
+          "blink.mojom.FileChooser",
+          "blink.mojom.FileSystemManager",
           "blink.mojom.LockManager",
           "blink.mojom.GeolocationService",
           "blink.mojom.InsecureInputService",
@@ -153,12 +178,17 @@
           "blink.mojom.MediaSessionService",
           "blink.mojom.NotificationService",
           "blink.mojom.PermissionService",
+          "blink.mojom.Portal",
           "blink.mojom.PrefetchURLLoaderService",
           "blink.mojom.PresentationService",
           "blink.mojom.QuotaDispatcherHost",
+          "blink.mojom.SpeechRecognizer",
           "blink.mojom.TextSuggestionHost",
           "blink.mojom.UnhandledTapNotifier",
           "blink.mojom.WebBluetoothService",
+          "blink.mojom.WebUsbService",
+          "blink.test.mojom.VirtualAuthenticatorManager",
+
 
           // TODO(beng): figure out how to overlay test interfaces like this.
           "content.mojom.BrowserTarget",
@@ -170,15 +200,12 @@
           "content.mojom.RendererAudioInputStreamFactory",
           "content.mojom.RendererAudioOutputStreamFactory",
           "content.mojom.SharedWorkerConnector",
-          "content.mojom.SpeechRecognizer",
+          "device.mojom.GamepadMonitor",
           "device.mojom.Geolocation",
           "device.mojom.NFC",
           "device.mojom.SensorProvider",
           "device.mojom.UsbChooserService",
-          "device.mojom.UsbDeviceManager",
           "device.mojom.VibrationManager",
-          "device.mojom.UsbDeviceManager",
-          "device.mojom.VRService",
           "device.mojom.VRService",
           "device.mojom.WakeLock",
           "discardable_memory.mojom.DiscardableSharedMemoryManager",
@@ -190,16 +217,13 @@
           "mojom.ProcessInternalsHandler",
           "network.mojom.RestrictedCookieManager",
           "network.mojom.WebSocket",
-          "password_manager.mojom.CredentialManager",
           "payments.mojom.PaymentManager",
           "payments.mojom.PaymentRequest",
           "resource_coordinator.mojom.FrameCoordinationUnit",
-          "shape_detection.mojom.BarcodeDetection",
+          "shape_detection.mojom.BarcodeDetectionProvider",
           "shape_detection.mojom.FaceDetectionProvider",
           "shape_detection.mojom.TextDetection",
-          "ui.mojom.Gpu",
-          "webauth.mojom.Authenticator",
-          "webauth.test.mojom.VirtualAuthenticatorManager"
+          "ws.mojom.Gpu"
         ]
       },
       "requires": {
@@ -209,16 +233,17 @@
     "navigation:dedicated_worker": {
       "provides": {
         "renderer": [
-          "blink.mojom.BudgetService",
           "blink.mojom.CacheStorage",
+          "blink.mojom.DedicatedWorkerFactory",
+          "blink.mojom.FileSystemManager",
           "blink.mojom.LockManager",
           "blink.mojom.NotificationService",
           "blink.mojom.PermissionService",
           "blink.mojom.QuotaDispatcherHost",
-          "device.mojom.UsbDeviceManager",
+          "blink.mojom.WebUsbService",
           "network.mojom.WebSocket",
           "payments.mojom.PaymentManager",
-          "shape_detection.mojom.BarcodeDetection",
+          "shape_detection.mojom.BarcodeDetectionProvider",
           "shape_detection.mojom.FaceDetectionProvider",
           "shape_detection.mojom.TextDetection"
         ]
@@ -228,7 +253,6 @@
       "provides": {
         "renderer": [
           "blink.mojom.BackgroundFetchService",
-          "blink.mojom.BudgetService",
           "blink.mojom.CacheStorage",
           "blink.mojom.CookieStore",
           "blink.mojom.LockManager",
@@ -238,7 +262,7 @@
           "network.mojom.RestrictedCookieManager",
           "network.mojom.WebSocket",
           "payments.mojom.PaymentManager",
-          "shape_detection.mojom.BarcodeDetection",
+          "shape_detection.mojom.BarcodeDetectionProvider",
           "shape_detection.mojom.FaceDetectionProvider",
           "shape_detection.mojom.TextDetection"
         ]
@@ -247,15 +271,15 @@
     "navigation:shared_worker": {
       "provides": {
         "renderer": [
-          "blink.mojom.BudgetService",
           "blink.mojom.CacheStorage",
+          "blink.mojom.FileSystemManager",
           "blink.mojom.LockManager",
           "blink.mojom.NotificationService",
           "blink.mojom.PermissionService",
           "blink.mojom.QuotaDispatcherHost",
           "network.mojom.WebSocket",
           "payments.mojom.PaymentManager",
-          "shape_detection.mojom.BarcodeDetection",
+          "shape_detection.mojom.BarcodeDetectionProvider",
           "shape_detection.mojom.FaceDetectionProvider",
           "shape_detection.mojom.TextDetection"
         ]

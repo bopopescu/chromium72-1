@@ -17,13 +17,13 @@
 #include "base/run_loop.h"
 #include "base/sequenced_task_runner.h"
 #include "base/strings/string_util.h"
+#include "base/test/scoped_feature_list.h"
 #include "base/threading/thread_task_runner_handle.h"
 #include "base/version.h"
 #include "chrome/test/base/testing_browser_process.h"
 #include "components/component_updater/mock_component_updater_service.h"
 #include "components/prefs/testing_pref_service.h"
-#include "components/subresource_filter/content/browser/content_ruleset_service.h"
-#include "components/subresource_filter/core/browser/ruleset_service.h"
+#include "components/subresource_filter/content/browser/ruleset_service.h"
 #include "components/subresource_filter/core/browser/subresource_filter_constants.h"
 #include "components/subresource_filter/core/browser/subresource_filter_features.h"
 #include "components/subresource_filter/core/browser/subresource_filter_features_test_support.h"
@@ -37,14 +37,15 @@ static const char kTestRulesetVersion[] = "1.2.3.4";
 
 class TestRulesetService : public subresource_filter::RulesetService {
  public:
-  TestRulesetService(PrefService* local_state,
-                     scoped_refptr<base::SequencedTaskRunner> task_runner,
-                     subresource_filter::ContentRulesetService* content_service,
-                     const base::FilePath& base_dir)
+  TestRulesetService(
+      PrefService* local_state,
+      scoped_refptr<base::SequencedTaskRunner> task_runner,
+      const base::FilePath& base_dir,
+      scoped_refptr<base::SequencedTaskRunner> blocking_task_runner)
       : subresource_filter::RulesetService(local_state,
                                            task_runner,
-                                           content_service,
-                                           base_dir) {}
+                                           base_dir,
+                                           blocking_task_runner) {}
 
   ~TestRulesetService() override {}
 
@@ -105,17 +106,13 @@ class SubresourceFilterComponentInstallerTest : public PlatformTest {
     subresource_filter::IndexedRulesetVersion::RegisterPrefs(
         pref_service_.registry());
 
-    auto content_service =
-        std::make_unique<subresource_filter::ContentRulesetService>(
-            base::ThreadTaskRunnerHandle::Get());
     auto test_ruleset_service = std::make_unique<TestRulesetService>(
         &pref_service_, base::ThreadTaskRunnerHandle::Get(),
-        content_service.get(), ruleset_service_dir_.GetPath());
+        ruleset_service_dir_.GetPath(), base::ThreadTaskRunnerHandle::Get());
     test_ruleset_service_ = test_ruleset_service.get();
-    content_service->set_ruleset_service(std::move(test_ruleset_service));
 
     TestingBrowserProcess::GetGlobal()->SetRulesetService(
-        std::move(content_service));
+        std::move(test_ruleset_service));
     policy_ = std::make_unique<SubresourceFilterComponentInstallerPolicy>();
   }
 
@@ -187,8 +184,9 @@ class SubresourceFilterComponentInstallerTest : public PlatformTest {
 
 TEST_F(SubresourceFilterComponentInstallerTest,
        TestComponentRegistrationWhenFeatureDisabled) {
-  subresource_filter::testing::ScopedSubresourceFilterFeatureToggle
-      scoped_feature(base::FeatureList::OVERRIDE_DISABLE_FEATURE);
+  base::test::ScopedFeatureList scoped_disable;
+  scoped_disable.InitAndDisableFeature(
+      subresource_filter::kSafeBrowsingSubresourceFilter);
   std::unique_ptr<SubresourceFilterMockComponentUpdateService>
       component_updater(new SubresourceFilterMockComponentUpdateService());
   EXPECT_CALL(*component_updater, RegisterComponent(testing::_)).Times(0);
@@ -198,8 +196,9 @@ TEST_F(SubresourceFilterComponentInstallerTest,
 
 TEST_F(SubresourceFilterComponentInstallerTest,
        TestComponentRegistrationWhenFeatureEnabled) {
-  subresource_filter::testing::ScopedSubresourceFilterFeatureToggle
-      scoped_feature(base::FeatureList::OVERRIDE_ENABLE_FEATURE);
+  base::test::ScopedFeatureList scoped_enable;
+  scoped_enable.InitAndEnableFeature(
+      subresource_filter::kSafeBrowsingSubresourceFilter);
   std::unique_ptr<SubresourceFilterMockComponentUpdateService>
       component_updater(new SubresourceFilterMockComponentUpdateService());
   EXPECT_CALL(*component_updater, RegisterComponent(testing::_))

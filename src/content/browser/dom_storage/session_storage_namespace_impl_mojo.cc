@@ -13,15 +13,21 @@
 
 namespace content {
 
+namespace {
+void SessionStorageResponse(base::OnceClosure callback, bool success) {
+  std::move(callback).Run();
+}
+}  // namespace
+
 SessionStorageNamespaceImplMojo::SessionStorageNamespaceImplMojo(
     std::string namespace_id,
     SessionStorageDataMap::Listener* data_map_listener,
-    RegisterShallowClonedNamespace add_namespace_callback,
-    SessionStorageLevelDBWrapper::RegisterNewAreaMap register_new_map_callback)
+    SessionStorageAreaImpl::RegisterNewAreaMap register_new_map_callback,
+    Delegate* delegate)
     : namespace_id_(std::move(namespace_id)),
       data_map_listener_(data_map_listener),
-      add_namespace_callback_(std::move(add_namespace_callback)),
-      register_new_map_callback_(std::move(register_new_map_callback)) {}
+      register_new_map_callback_(std::move(register_new_map_callback)),
+      delegate_(delegate) {}
 
 SessionStorageNamespaceImplMojo::~SessionStorageNamespaceImplMojo() = default;
 
@@ -32,24 +38,21 @@ bool SessionStorageNamespaceImplMojo::HasAreaForOrigin(
 
 void SessionStorageNamespaceImplMojo::PopulateFromMetadata(
     leveldb::mojom::LevelDBDatabase* database,
-    SessionStorageMetadata::NamespaceEntry namespace_metadata,
-    const std::map<std::vector<uint8_t>, SessionStorageDataMap*>&
-        current_data_maps) {
+    SessionStorageMetadata::NamespaceEntry namespace_metadata) {
   DCHECK(!IsPopulated());
   DCHECK(!waiting_on_clone_population());
   database_ = database;
   populated_ = true;
   namespace_entry_ = namespace_metadata;
   for (const auto& pair : namespace_entry_->second) {
-    scoped_refptr<SessionStorageDataMap> data_map;
-    auto map_it = current_data_maps.find(pair.second->MapNumberAsBytes());
-    if (map_it == current_data_maps.end()) {
+    scoped_refptr<SessionStorageDataMap> data_map =
+        delegate_->MaybeGetExistingDataMapForId(
+            pair.second->MapNumberAsBytes());
+    if (!data_map) {
       data_map = SessionStorageDataMap::Create(data_map_listener_, pair.second,
                                                database_);
-    } else {
-      data_map = base::WrapRefCounted(map_it->second);
     }
-    origin_areas_[pair.first] = std::make_unique<SessionStorageLevelDBWrapper>(
+    origin_areas_[pair.first] = std::make_unique<SessionStorageAreaImpl>(
         namespace_entry_, pair.first, std::move(data_map),
         register_new_map_callback_);
   }
@@ -79,7 +82,6 @@ void SessionStorageNamespaceImplMojo::PopulateAsClone(
 
 void SessionStorageNamespaceImplMojo::Reset() {
   namespace_entry_ = SessionStorageMetadata::NamespaceEntry();
-  process_id_ = ChildProcessHost::kInvalidUniqueID;
   database_ = nullptr;
   waiting_on_clone_population_ = false;
   bind_waiting_on_clone_population_ = false;
@@ -90,7 +92,7 @@ void SessionStorageNamespaceImplMojo::Reset() {
 }
 
 void SessionStorageNamespaceImplMojo::Bind(
-    mojom::SessionStorageNamespaceRequest request,
+    blink::mojom::SessionStorageNamespaceRequest request,
     int process_id) {
   if (waiting_on_clone_population_) {
     bind_waiting_on_clone_population_ = true;
@@ -100,25 +102,27 @@ void SessionStorageNamespaceImplMojo::Bind(
     return;
   }
   DCHECK(IsPopulated());
-  process_id_ = process_id;
-  bindings_.AddBinding(this, std::move(request));
+  bindings_.AddBinding(this, std::move(request), process_id);
   bind_waiting_on_clone_population_ = false;
 }
 
-void SessionStorageNamespaceImplMojo::PurgeUnboundWrappers() {
+void SessionStorageNamespaceImplMojo::PurgeUnboundAreas() {
   auto it = origin_areas_.begin();
   while (it != origin_areas_.end()) {
     if (!it->second->IsBound())
       it = origin_areas_.erase(it);
+    else
+      ++it;
   }
 }
 
 void SessionStorageNamespaceImplMojo::RemoveOriginData(
-    const url::Origin& origin) {
+    const url::Origin& origin,
+    base::OnceClosure callback) {
   if (waiting_on_clone_population_) {
     run_after_clone_population_.push_back(
         base::BindOnce(&SessionStorageNamespaceImplMojo::RemoveOriginData,
-                       base::Unretained(this), origin));
+                       base::Unretained(this), origin, std::move(callback)));
     return;
   }
   DCHECK(IsPopulated());
@@ -127,32 +131,47 @@ void SessionStorageNamespaceImplMojo::RemoveOriginData(
     return;
   // Renderer process expects |source| to always be two newline separated
   // strings.
-  it->second->DeleteAll("\n", base::DoNothing());
-  it->second->data_map()->level_db_wrapper()->ScheduleImmediateCommit();
+  it->second->DeleteAll(
+      "\n", base::BindOnce(&SessionStorageResponse, std::move(callback)));
+  it->second->NotifyObserversAllDeleted();
+  it->second->data_map()->storage_area()->ScheduleImmediateCommit();
 }
 
 void SessionStorageNamespaceImplMojo::OpenArea(
     const url::Origin& origin,
-    mojom::LevelDBWrapperAssociatedRequest database) {
+    blink::mojom::StorageAreaAssociatedRequest database) {
   DCHECK(IsPopulated());
   DCHECK(!bindings_.empty());
-  DCHECK_NE(process_id_, ChildProcessHost::kInvalidUniqueID);
+  int process_id = bindings_.dispatch_context();
   if (!ChildProcessSecurityPolicy::GetInstance()->CanAccessDataForOrigin(
-          process_id_, origin.GetURL())) {
+          process_id, origin.GetURL())) {
     bindings_.ReportBadMessage("Access denied for sessionStorage request");
     return;
   }
   auto it = origin_areas_.find(origin);
   if (it == origin_areas_.end()) {
+    // The area may have been purged due to lack of bindings, so check the
+    // metadata for the map.
+    scoped_refptr<SessionStorageDataMap> data_map;
+    auto map_data_it = namespace_entry_->second.find(origin);
+    if (map_data_it != namespace_entry_->second.end()) {
+      scoped_refptr<SessionStorageMetadata::MapData> map_data =
+          map_data_it->second;
+      data_map =
+          delegate_->MaybeGetExistingDataMapForId(map_data->MapNumberAsBytes());
+      if (!data_map) {
+        data_map = SessionStorageDataMap::Create(data_map_listener_, map_data,
+                                                 database_);
+      }
+    } else {
+      data_map = SessionStorageDataMap::Create(
+          data_map_listener_,
+          register_new_map_callback_.Run(namespace_entry_, origin), database_);
+    }
     it = origin_areas_
              .emplace(std::make_pair(
-                 origin, std::make_unique<SessionStorageLevelDBWrapper>(
-                             namespace_entry_, origin,
-                             SessionStorageDataMap::Create(
-                                 data_map_listener_,
-                                 register_new_map_callback_.Run(
-                                     namespace_entry_, origin),
-                                 database_),
+                 origin, std::make_unique<SessionStorageAreaImpl>(
+                             namespace_entry_, origin, std::move(data_map),
                              register_new_map_callback_)))
              .first;
   }
@@ -161,8 +180,8 @@ void SessionStorageNamespaceImplMojo::OpenArea(
 
 void SessionStorageNamespaceImplMojo::Clone(
     const std::string& clone_to_namespace) {
-  add_namespace_callback_.Run(namespace_entry_, clone_to_namespace,
-                              origin_areas_);
+  delegate_->RegisterShallowClonedNamespace(namespace_entry_,
+                                            clone_to_namespace, origin_areas_);
 }
 
 void SessionStorageNamespaceImplMojo::FlushOriginForTesting(
@@ -172,7 +191,7 @@ void SessionStorageNamespaceImplMojo::FlushOriginForTesting(
   auto it = origin_areas_.find(origin);
   if (it == origin_areas_.end())
     return;
-  it->second->data_map()->level_db_wrapper()->ScheduleImmediateCommit();
+  it->second->data_map()->storage_area()->ScheduleImmediateCommit();
 }
 
 }  // namespace content

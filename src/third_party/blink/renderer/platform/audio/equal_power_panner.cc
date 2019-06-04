@@ -40,7 +40,7 @@ void EqualPowerPanner::Pan(double azimuth,
                            double /*elevation*/,
                            const AudioBus* input_bus,
                            AudioBus* output_bus,
-                           size_t frames_to_process,
+                           uint32_t frames_to_process,
                            AudioBus::ChannelInterpretation) {
   bool is_input_safe = input_bus &&
                        (input_bus->NumberOfChannels() == 1 ||
@@ -101,8 +101,8 @@ void EqualPowerPanner::Pan(double azimuth,
     }
   }
 
-  desired_gain_l = std::cos(piOverTwoDouble * desired_pan_position);
-  desired_gain_r = std::sin(piOverTwoDouble * desired_pan_position);
+  desired_gain_l = std::cos(kPiOverTwoDouble * desired_pan_position);
+  desired_gain_r = std::sin(kPiOverTwoDouble * desired_pan_position);
 
   int n = frames_to_process;
 
@@ -170,8 +170,8 @@ void EqualPowerPanner::CalculateDesiredGain(double& desired_gain_l,
     }
   }
 
-  desired_gain_l = std::cos(piOverTwoDouble * desired_pan_position);
-  desired_gain_r = std::sin(piOverTwoDouble * desired_pan_position);
+  desired_gain_l = std::cos(kPiOverTwoDouble * desired_pan_position);
+  desired_gain_r = std::sin(kPiOverTwoDouble * desired_pan_position);
 }
 
 void EqualPowerPanner::PanWithSampleAccurateValues(
@@ -179,7 +179,7 @@ void EqualPowerPanner::PanWithSampleAccurateValues(
     double* /*elevation*/,
     const AudioBus* input_bus,
     AudioBus* output_bus,
-    size_t frames_to_process,
+    uint32_t frames_to_process,
     AudioBus::ChannelInterpretation) {
   bool is_input_safe = input_bus &&
                        (input_bus->NumberOfChannels() == 1 ||

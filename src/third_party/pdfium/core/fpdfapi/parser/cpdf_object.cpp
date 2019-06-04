@@ -12,10 +12,10 @@
 #include "core/fpdfapi/parser/cpdf_dictionary.h"
 #include "core/fpdfapi/parser/cpdf_indirect_object_holder.h"
 #include "core/fpdfapi/parser/cpdf_parser.h"
-#include "core/fpdfapi/parser/fpdf_parser_decode.h"
+#include "core/fpdfapi/parser/cpdf_reference.h"
 #include "core/fxcrt/fx_string.h"
 #include "third_party/base/logging.h"
-#include "third_party/base/stl_util.h"
+#include "third_party/base/ptr_util.h"
 
 CPDF_Object::~CPDF_Object() {}
 
@@ -169,4 +169,13 @@ CPDF_String* CPDF_Object::AsString() {
 
 const CPDF_String* CPDF_Object::AsString() const {
   return nullptr;
+}
+
+std::unique_ptr<CPDF_Object> CPDF_Object::MakeReference(
+    CPDF_IndirectObjectHolder* holder) const {
+  if (IsInline()) {
+    NOTREACHED();
+    return nullptr;
+  }
+  return pdfium::MakeUnique<CPDF_Reference>(holder, GetObjNum());
 }

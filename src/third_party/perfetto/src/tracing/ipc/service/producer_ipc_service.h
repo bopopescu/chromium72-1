@@ -24,7 +24,7 @@
 #include "perfetto/base/weak_ptr.h"
 #include "perfetto/ipc/basic_types.h"
 #include "perfetto/tracing/core/producer.h"
-#include "perfetto/tracing/core/service.h"
+#include "perfetto/tracing/core/tracing_service.h"
 
 #include "perfetto/ipc/producer_port.ipc.h"
 
@@ -39,8 +39,7 @@ class Host;
 // on the IPC socket, through the methods overriddden from ProducerPort.
 class ProducerIPCService : public protos::ProducerPort {
  public:
-  using Service = ::perfetto::Service;  // To avoid collisions w/ ipc::Service.
-  explicit ProducerIPCService(Service* core_service);
+  explicit ProducerIPCService(TracingService* core_service);
   ~ProducerIPCService() override;
 
   // ProducerPort implementation (from .proto IPC definition).
@@ -52,6 +51,9 @@ class ProducerIPCService : public protos::ProducerPort {
                             DeferredUnregisterDataSourceResponse) override;
   void CommitData(const protos::CommitDataRequest&,
                   DeferredCommitDataResponse) override;
+  void NotifyDataSourceStopped(
+      const protos::NotifyDataSourceStoppedRequest&,
+      DeferredNotifyDataSourceStoppedResponse) override;
   void GetAsyncCommand(const protos::GetAsyncCommandRequest&,
                        DeferredGetAsyncCommandResponse) override;
   void OnClientDisconnected() override;
@@ -69,9 +71,11 @@ class ProducerIPCService : public protos::ProducerPort {
     // no connection here, these methods are posted straight away.
     void OnConnect() override;
     void OnDisconnect() override;
-    void CreateDataSourceInstance(DataSourceInstanceID,
-                                  const DataSourceConfig&) override;
-    void TearDownDataSourceInstance(DataSourceInstanceID) override;
+    void SetupDataSource(DataSourceInstanceID,
+                         const DataSourceConfig&) override;
+    void StartDataSource(DataSourceInstanceID,
+                         const DataSourceConfig&) override;
+    void StopDataSource(DataSourceInstanceID) override;
     void OnTracingSetup() override;
     void Flush(FlushRequestID,
                const DataSourceInstanceID* data_source_ids,
@@ -80,7 +84,7 @@ class ProducerIPCService : public protos::ProducerPort {
     // The interface obtained from the core service business logic through
     // Service::ConnectProducer(this). This allows to invoke methods for a
     // specific Producer on the Service business logic.
-    std::unique_ptr<Service::ProducerEndpoint> service_endpoint;
+    std::unique_ptr<TracingService::ProducerEndpoint> service_endpoint;
 
     // The back-channel (based on a never ending stream request) that allows us
     // to send asynchronous commands to the remote Producer (e.g. start/stop a
@@ -95,7 +99,7 @@ class ProducerIPCService : public protos::ProducerPort {
   // the current IPC request.
   RemoteProducer* GetProducerForCurrentRequest();
 
-  Service* const core_service_;
+  TracingService* const core_service_;
 
   // Maps IPC clients to ProducerEndpoint instances registered on the
   // |core_service_| business logic.

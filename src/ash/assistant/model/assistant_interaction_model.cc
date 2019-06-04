@@ -6,12 +6,13 @@
 
 #include "ash/assistant/model/assistant_interaction_model_observer.h"
 #include "ash/assistant/model/assistant_query.h"
-#include "ash/assistant/model/assistant_ui_element.h"
+#include "ash/assistant/model/assistant_response.h"
 
 namespace ash {
 
 AssistantInteractionModel::AssistantInteractionModel()
-    : query_(std::make_unique<AssistantEmptyQuery>()) {}
+    : committed_query_(std::make_unique<AssistantNullQuery>()),
+      pending_query_(std::make_unique<AssistantNullQuery>()) {}
 
 AssistantInteractionModel::~AssistantInteractionModel() = default;
 
@@ -26,9 +27,21 @@ void AssistantInteractionModel::RemoveObserver(
 }
 
 void AssistantInteractionModel::ClearInteraction() {
-  ClearUiElements();
-  ClearQuery();
-  ClearSuggestions();
+  ClearInteraction(/*retain_committed_query=*/false,
+                   /*retain_pending_response=*/false);
+}
+
+void AssistantInteractionModel::ClearInteraction(bool retain_committed_query,
+                                                 bool retain_pending_response) {
+  if (!retain_committed_query)
+    ClearCommittedQuery();
+
+  ClearPendingQuery();
+
+  if (!retain_pending_response)
+    ClearPendingResponse();
+
+  ClearResponse();
 }
 
 void AssistantInteractionModel::SetInteractionState(
@@ -56,56 +69,61 @@ void AssistantInteractionModel::SetMicState(MicState mic_state) {
   NotifyMicStateChanged();
 }
 
-void AssistantInteractionModel::AddUiElement(
-    std::unique_ptr<AssistantUiElement> ui_element) {
-  AssistantUiElement* ptr = ui_element.get();
-  ui_element_list_.push_back(std::move(ui_element));
-  NotifyUiElementAdded(ptr);
+void AssistantInteractionModel::ClearCommittedQuery() {
+  if (committed_query_->type() == AssistantQueryType::kNull)
+    return;
+
+  committed_query_ = std::make_unique<AssistantNullQuery>();
+  NotifyCommittedQueryCleared();
 }
 
-void AssistantInteractionModel::ClearUiElements() {
-  ui_element_list_.clear();
-  NotifyUiElementsCleared();
+void AssistantInteractionModel::SetPendingQuery(
+    std::unique_ptr<AssistantQuery> pending_query) {
+  DCHECK(pending_query->type() != AssistantQueryType::kNull);
+  pending_query_ = std::move(pending_query);
+  NotifyPendingQueryChanged();
 }
 
-void AssistantInteractionModel::SetQuery(
-    std::unique_ptr<AssistantQuery> query) {
-  DCHECK(query);
-  query_ = std::move(query);
-  NotifyQueryChanged();
+void AssistantInteractionModel::CommitPendingQuery() {
+  DCHECK_NE(pending_query_->type(), AssistantQueryType::kNull);
+
+  committed_query_ = std::move(pending_query_);
+  pending_query_ = std::make_unique<AssistantNullQuery>();
+
+  NotifyCommittedQueryChanged();
+  NotifyPendingQueryCleared();
 }
 
-void AssistantInteractionModel::ClearQuery() {
-  query_.reset(new AssistantEmptyQuery());
-  NotifyQueryCleared();
+void AssistantInteractionModel::ClearPendingQuery() {
+  if (pending_query_->type() == AssistantQueryType::kNull)
+    return;
+
+  pending_query_ = std::make_unique<AssistantNullQuery>();
+  NotifyPendingQueryCleared();
 }
 
-void AssistantInteractionModel::AddSuggestions(
-    std::vector<AssistantSuggestionPtr> suggestions) {
-  std::map<int, AssistantSuggestion*> ptrs;
-
-  // We use vector index to uniquely identify a given suggestion. This means
-  // that suggestion ids will reset with each call to |ClearSuggestions|, but
-  // that is acceptable.
-  for (AssistantSuggestionPtr& suggestion : suggestions) {
-    int id = suggestions_.size();
-    suggestions_.push_back(std::move(suggestion));
-    ptrs[id] = suggestions_.back().get();
-  }
-
-  NotifySuggestionsAdded(ptrs);
+void AssistantInteractionModel::SetPendingResponse(
+    std::unique_ptr<AssistantResponse> pending_response) {
+  pending_response_ = std::move(pending_response);
 }
 
-const AssistantInteractionModel::AssistantSuggestion*
-AssistantInteractionModel::GetSuggestionById(int id) const {
-  return id >= 0 && id < static_cast<int>(suggestions_.size())
-             ? suggestions_.at(id).get()
-             : nullptr;
+void AssistantInteractionModel::FinalizePendingResponse() {
+  DCHECK(pending_response_);
+  response_ = std::move(pending_response_);
+  NotifyResponseChanged();
 }
 
-void AssistantInteractionModel::ClearSuggestions() {
-  suggestions_.clear();
-  NotifySuggestionsCleared();
+void AssistantInteractionModel::ClearPendingResponse() {
+  pending_response_.reset();
+}
+
+void AssistantInteractionModel::ClearResponse() {
+  response_.reset();
+  NotifyResponseCleared();
+}
+
+void AssistantInteractionModel::SetSpeechLevel(float speech_level_db) {
+  NotifySpeechLevelChanged(speech_level_db);
 }
 
 void AssistantInteractionModel::NotifyInteractionStateChanged() {
@@ -123,36 +141,40 @@ void AssistantInteractionModel::NotifyMicStateChanged() {
     observer.OnMicStateChanged(mic_state_);
 }
 
-void AssistantInteractionModel::NotifyUiElementAdded(
-    const AssistantUiElement* ui_element) {
+void AssistantInteractionModel::NotifyCommittedQueryChanged() {
   for (AssistantInteractionModelObserver& observer : observers_)
-    observer.OnUiElementAdded(ui_element);
+    observer.OnCommittedQueryChanged(*committed_query_);
 }
 
-void AssistantInteractionModel::NotifyUiElementsCleared() {
+void AssistantInteractionModel::NotifyCommittedQueryCleared() {
   for (AssistantInteractionModelObserver& observer : observers_)
-    observer.OnUiElementsCleared();
+    observer.OnCommittedQueryCleared();
 }
 
-void AssistantInteractionModel::NotifyQueryChanged() {
+void AssistantInteractionModel::NotifyPendingQueryChanged() {
   for (AssistantInteractionModelObserver& observer : observers_)
-    observer.OnQueryChanged(*query_);
+    observer.OnPendingQueryChanged(*pending_query_);
 }
 
-void AssistantInteractionModel::NotifyQueryCleared() {
+void AssistantInteractionModel::NotifyPendingQueryCleared() {
   for (AssistantInteractionModelObserver& observer : observers_)
-    observer.OnQueryCleared();
+    observer.OnPendingQueryCleared();
 }
 
-void AssistantInteractionModel::NotifySuggestionsAdded(
-    const std::map<int, AssistantSuggestion*>& suggestions) {
+void AssistantInteractionModel::NotifyResponseChanged() {
   for (AssistantInteractionModelObserver& observer : observers_)
-    observer.OnSuggestionsAdded(suggestions);
+    observer.OnResponseChanged(response_);
 }
 
-void AssistantInteractionModel::NotifySuggestionsCleared() {
+void AssistantInteractionModel::NotifyResponseCleared() {
   for (AssistantInteractionModelObserver& observer : observers_)
-    observer.OnSuggestionsCleared();
+    observer.OnResponseCleared();
+}
+
+void AssistantInteractionModel::NotifySpeechLevelChanged(
+    float speech_level_db) {
+  for (AssistantInteractionModelObserver& observer : observers_)
+    observer.OnSpeechLevelChanged(speech_level_db);
 }
 
 }  // namespace ash

@@ -10,10 +10,32 @@
 
 #include "api/units/time_delta.h"
 
+#include <limits>
+
 #include "test/gtest.h"
 
 namespace webrtc {
 namespace test {
+TEST(TimeDeltaTest, ConstExpr) {
+  constexpr int64_t kValue = -12345;
+  constexpr TimeDelta kTimeDeltaZero = TimeDelta::Zero();
+  constexpr TimeDelta kTimeDeltaPlusInf = TimeDelta::PlusInfinity();
+  constexpr TimeDelta kTimeDeltaMinusInf = TimeDelta::MinusInfinity();
+  static_assert(kTimeDeltaZero.IsZero(), "");
+  static_assert(kTimeDeltaPlusInf.IsPlusInfinity(), "");
+  static_assert(kTimeDeltaMinusInf.IsMinusInfinity(), "");
+  static_assert(kTimeDeltaPlusInf.ms_or(-1) == -1, "");
+
+  static_assert(kTimeDeltaPlusInf > kTimeDeltaZero, "");
+
+  constexpr TimeDelta kTimeDeltaSeconds = TimeDelta::Seconds<kValue>();
+  constexpr TimeDelta kTimeDeltaMs = TimeDelta::Millis<kValue>();
+  constexpr TimeDelta kTimeDeltaUs = TimeDelta::Micros<kValue>();
+
+  static_assert(kTimeDeltaSeconds.seconds_or(0) == kValue, "");
+  static_assert(kTimeDeltaMs.ms_or(0) == kValue, "");
+  static_assert(kTimeDeltaUs.us_or(0) == kValue, "");
+}
 
 TEST(TimeDeltaTest, GetBackSameValues) {
   const int64_t kValue = 499;
@@ -54,6 +76,12 @@ TEST(TimeDeltaTest, IdentityChecks) {
   EXPECT_TRUE(TimeDelta::ms(-kValue).IsFinite());
   EXPECT_TRUE(TimeDelta::ms(kValue).IsFinite());
   EXPECT_TRUE(TimeDelta::Zero().IsFinite());
+
+  EXPECT_TRUE(TimeDelta::PlusInfinity().IsPlusInfinity());
+  EXPECT_FALSE(TimeDelta::MinusInfinity().IsPlusInfinity());
+
+  EXPECT_TRUE(TimeDelta::MinusInfinity().IsMinusInfinity());
+  EXPECT_FALSE(TimeDelta::PlusInfinity().IsMinusInfinity());
 }
 
 TEST(TimeDeltaTest, ComparisonOperators) {
@@ -80,6 +108,72 @@ TEST(TimeDeltaTest, ComparisonOperators) {
   EXPECT_LT(TimeDelta::MinusInfinity(), TimeDelta::Zero());
 }
 
+TEST(TimeDeltaTest, Clamping) {
+  const TimeDelta upper = TimeDelta::ms(800);
+  const TimeDelta lower = TimeDelta::ms(100);
+  const TimeDelta under = TimeDelta::ms(100);
+  const TimeDelta inside = TimeDelta::ms(500);
+  const TimeDelta over = TimeDelta::ms(1000);
+  EXPECT_EQ(under.Clamped(lower, upper), lower);
+  EXPECT_EQ(inside.Clamped(lower, upper), inside);
+  EXPECT_EQ(over.Clamped(lower, upper), upper);
+
+  TimeDelta mutable_delta = lower;
+  mutable_delta.Clamp(lower, upper);
+  EXPECT_EQ(mutable_delta, lower);
+  mutable_delta = inside;
+  mutable_delta.Clamp(lower, upper);
+  EXPECT_EQ(mutable_delta, inside);
+  mutable_delta = over;
+  mutable_delta.Clamp(lower, upper);
+  EXPECT_EQ(mutable_delta, upper);
+}
+
+TEST(TimeDeltaTest, CanBeInititializedFromLargeInt) {
+  const int kMaxInt = std::numeric_limits<int>::max();
+  EXPECT_EQ(TimeDelta::seconds(kMaxInt).us(),
+            static_cast<int64_t>(kMaxInt) * 1000000);
+  EXPECT_EQ(TimeDelta::ms(kMaxInt).us(), static_cast<int64_t>(kMaxInt) * 1000);
+}
+
+TEST(TimeDeltaTest, ConvertsToAndFromDouble) {
+  const int64_t kMicros = 17017;
+  const double kNanosDouble = kMicros * 1e3;
+  const double kMicrosDouble = kMicros;
+  const double kMillisDouble = kMicros * 1e-3;
+  const double kSecondsDouble = kMillisDouble * 1e-3;
+
+  EXPECT_EQ(TimeDelta::us(kMicros).seconds<double>(), kSecondsDouble);
+  EXPECT_EQ(TimeDelta::seconds(kSecondsDouble).us(), kMicros);
+
+  EXPECT_EQ(TimeDelta::us(kMicros).ms<double>(), kMillisDouble);
+  EXPECT_EQ(TimeDelta::ms(kMillisDouble).us(), kMicros);
+
+  EXPECT_EQ(TimeDelta::us(kMicros).us<double>(), kMicrosDouble);
+  EXPECT_EQ(TimeDelta::us(kMicrosDouble).us(), kMicros);
+
+  EXPECT_NEAR(TimeDelta::us(kMicros).ns<double>(), kNanosDouble, 1);
+
+  const double kPlusInfinity = std::numeric_limits<double>::infinity();
+  const double kMinusInfinity = -kPlusInfinity;
+
+  EXPECT_EQ(TimeDelta::PlusInfinity().seconds<double>(), kPlusInfinity);
+  EXPECT_EQ(TimeDelta::MinusInfinity().seconds<double>(), kMinusInfinity);
+  EXPECT_EQ(TimeDelta::PlusInfinity().ms<double>(), kPlusInfinity);
+  EXPECT_EQ(TimeDelta::MinusInfinity().ms<double>(), kMinusInfinity);
+  EXPECT_EQ(TimeDelta::PlusInfinity().us<double>(), kPlusInfinity);
+  EXPECT_EQ(TimeDelta::MinusInfinity().us<double>(), kMinusInfinity);
+  EXPECT_EQ(TimeDelta::PlusInfinity().ns<double>(), kPlusInfinity);
+  EXPECT_EQ(TimeDelta::MinusInfinity().ns<double>(), kMinusInfinity);
+
+  EXPECT_TRUE(TimeDelta::seconds(kPlusInfinity).IsPlusInfinity());
+  EXPECT_TRUE(TimeDelta::seconds(kMinusInfinity).IsMinusInfinity());
+  EXPECT_TRUE(TimeDelta::ms(kPlusInfinity).IsPlusInfinity());
+  EXPECT_TRUE(TimeDelta::ms(kMinusInfinity).IsMinusInfinity());
+  EXPECT_TRUE(TimeDelta::us(kPlusInfinity).IsPlusInfinity());
+  EXPECT_TRUE(TimeDelta::us(kMinusInfinity).IsMinusInfinity());
+}
+
 TEST(TimeDeltaTest, MathOperations) {
   const int64_t kValueA = 267;
   const int64_t kValueB = 450;
@@ -94,8 +188,31 @@ TEST(TimeDeltaTest, MathOperations) {
   EXPECT_EQ((TimeDelta::us(kValueA) * kInt32Value).us(), kValueA * kInt32Value);
   EXPECT_EQ((TimeDelta::us(kValueA) * kFloatValue).us(), kValueA * kFloatValue);
 
+  EXPECT_EQ((delta_b / 10).ms(), kValueB / 10);
+  EXPECT_EQ(delta_b / delta_a, static_cast<double>(kValueB) / kValueA);
+
   EXPECT_EQ(TimeDelta::us(-kValueA).Abs().us(), kValueA);
   EXPECT_EQ(TimeDelta::us(kValueA).Abs().us(), kValueA);
+
+  TimeDelta mutable_delta = TimeDelta::ms(kValueA);
+  mutable_delta += TimeDelta::ms(kValueB);
+  EXPECT_EQ(mutable_delta, TimeDelta::ms(kValueA + kValueB));
+  mutable_delta -= TimeDelta::ms(kValueB);
+  EXPECT_EQ(mutable_delta, TimeDelta::ms(kValueA));
+}
+
+TEST(TimeDeltaTest, InfinityOperations) {
+  const int64_t kValue = 267;
+  const TimeDelta finite = TimeDelta::ms(kValue);
+  EXPECT_TRUE((TimeDelta::PlusInfinity() + finite).IsPlusInfinity());
+  EXPECT_TRUE((TimeDelta::PlusInfinity() - finite).IsPlusInfinity());
+  EXPECT_TRUE((finite + TimeDelta::PlusInfinity()).IsPlusInfinity());
+  EXPECT_TRUE((finite - TimeDelta::MinusInfinity()).IsPlusInfinity());
+
+  EXPECT_TRUE((TimeDelta::MinusInfinity() + finite).IsMinusInfinity());
+  EXPECT_TRUE((TimeDelta::MinusInfinity() - finite).IsMinusInfinity());
+  EXPECT_TRUE((finite + TimeDelta::MinusInfinity()).IsMinusInfinity());
+  EXPECT_TRUE((finite - TimeDelta::PlusInfinity()).IsMinusInfinity());
 }
 }  // namespace test
 }  // namespace webrtc

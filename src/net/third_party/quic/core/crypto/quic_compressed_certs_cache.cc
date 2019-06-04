@@ -5,7 +5,7 @@
 #include "net/third_party/quic/core/crypto/quic_compressed_certs_cache.h"
 #include "net/third_party/quic/platform/api/quic_string.h"
 
-namespace net {
+namespace quic {
 
 namespace {
 
@@ -16,6 +16,8 @@ inline void hash_combine(uint64_t* seed, const uint64_t& val) {
 }
 
 }  // namespace
+
+const size_t QuicCompressedCertsCache::kQuicCompressedCertsCacheSize = 225;
 
 QuicCompressedCertsCache::UncompressedCerts::UncompressedCerts()
     : chain(nullptr),
@@ -123,4 +125,4 @@ uint64_t QuicCompressedCertsCache::ComputeUncompressedCertsHash(
   return hash;
 }
 
-}  // namespace net
+}  // namespace quic

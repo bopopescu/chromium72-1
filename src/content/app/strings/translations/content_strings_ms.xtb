@@ -2,7 +2,6 @@
 <!DOCTYPE translationbundle>
 <translationbundle lang="ms">
 <translation id="1018939186200882850">item menu</translation>
-<translation id="1020833440720551630">redamkan runut audio</translation>
 <translation id="10623998915015855">butang togol</translation>
 <translation id="1088086359088493902">Saat</translation>
 <translation id="1171774979989969504">Sila masukkan alamat e-mel.</translation>
@@ -12,6 +11,7 @@
 <translation id="1206693055195146388">peluncur</translation>
 <translation id="1211441953136645838">nota hujung</translation>
 <translation id="1281252709823657822">dialog</translation>
+<translation id="1289247557029249093">Keluar daripada mod gambar dalam gambar</translation>
 <translation id="1335095011850992622">kredit</translation>
 <translation id="1342835525016946179">artikel</translation>
 <translation id="1359897965706325498">sepanduk</translation>
@@ -25,10 +25,12 @@
 <translation id="1821985195704844674">grid pohon</translation>
 <translation id="1822429046913737220">PG / P/M</translation>
 <translation id="1832974991323546415">main pada peranti jauh</translation>
+<translation id="190587075670221089">pemadaman</translation>
 <translation id="1907737156431278478">contoh</translation>
 <translation id="1921819250265091946">dd</translation>
 <translation id="1930711995431081526">status</translation>
 <translation id="1938124657309484470">Nilai mestilah <ph name="MAXIMUM_DATE_OR_TIME" /> atau lebih awal.</translation>
+<translation id="1946271899482435442">Tunjukkan pemilih tarikh</translation>
 <translation id="1993104285338243655">Beralih kepada pencerminan</translation>
 <translation id="2060505056492490888">'<ph name="DOT" />' digunakan pada kedudukan yang salah dalam '<ph name="INVALIDDOMAIN" />'.</translation>
 <translation id="2148716181193084225">Hari ini</translation>
@@ -48,6 +50,7 @@
 <translation id="2653659639078652383">Serah</translation>
 <translation id="2657045182931379222">objek grafik</translation>
 <translation id="2674318244760992338">pembawah</translation>
+<translation id="2706474812903655270">Video ini dimainkan dalam mod gambar dalam gambar</translation>
 <translation id="2709516037105925701">Autoisi</translation>
 <translation id="2723001399770238859">audio</translation>
 <translation id="2746543609216772311">Nilai mestilah <ph name="MINIMUM_DATE_OR_TIME" /> atau kemudian.</translation>
@@ -98,6 +101,7 @@
 <translation id="4664250907885839816">Bahagian selepas '<ph name="ATSIGN" />' tidak boleh mengandungi simbol '<ph name="INVALIDCHARACTER" />'.</translation>
 <translation id="4668956016107839909">lampiran</translation>
 <translation id="4742539557769756338">muka depan</translation>
+<translation id="4748357248530471599">togol skrin penuh potongan paparan</translation>
 <translation id="4757246831282535685">panel tab</translation>
 <translation id="4763480195061959176">video</translation>
 <translation id="479989351350248267">search</translation>
@@ -111,7 +115,6 @@
 <translation id="5117590920725113268">Tunjukkan bulan seterusnya</translation>
 <translation id="512758898067543763">pengepala baris</translation>
 <translation id="5143125788380636750">epilog</translation>
-<translation id="5153163864850940242">Video ini dimainkan dalam Gambar dalam Gambar</translation>
 <translation id="5164977714490026579">Nilai mesti lebih besar daripada atau sama dengan <ph name="MINIMUM" />.</translation>
 <translation id="520299402983819650"><ph name="QUANTITY" /> PB</translation>
 <translation id="5307600278924710095">Sila masukkan bahagian diikuti oleh '<ph name="ATSIGN" />'. '<ph name="INVALIDADDRESS" />' tidak lengkap.</translation>
@@ -125,7 +128,6 @@
 <translation id="561939826962581046">masa</translation>
 <translation id="5630795885300617244">Ketik dua kali ke kiri atau kanan untuk melangkau 10s</translation>
 <translation id="5631759159893697722">abstrak</translation>
-<translation id="5641012560118721995">jeda main balik</translation>
 <translation id="5643186887447432888">butang</translation>
 <translation id="5677946354068040947">lagi pilihan</translation>
 <translation id="576709008726043716">pengenalan</translation>
@@ -136,9 +138,9 @@
 <translation id="5939518447894949180">Tetapkan semula</translation>
 <translation id="5966707198760109579">Minggu</translation>
 <translation id="5987525920412732405">butang putar</translation>
+<translation id="6011459053400940133">peluncur kelantangan</translation>
 <translation id="6015796118275082299">Tahun</translation>
 <translation id="6023896073578205740">kotak senarai</translation>
-<translation id="6101327004457443354">nyahredam runut audio</translation>
 <translation id="6150588977291308318">bibliografi</translation>
 <translation id="6164829606128959761">meter</translation>
 <translation id="6166809985690652833">kata hujungan</translation>
@@ -165,6 +167,7 @@
 <translation id="689129560213475294">kolofon</translation>
 <translation id="6934078000481955284">petikan blok</translation>
 <translation id="6941933287844615239">muat turun media</translation>
+<translation id="6981594929165378967">penyisipan</translation>
 <translation id="6989848892321993519">Sila panjangkan teks ini kepada <ph name="MIN_CHARACTERS" /> aksara atau lebih (anda sedang menggunakan 1 aksara).</translation>
 <translation id="709897737746224366">Sila padankan dengan format yang diminta.</translation>
 <translation id="7139483182332611405">kata penghantar</translation>
@@ -184,8 +187,8 @@
 <translation id="7673697353781729403">Jam</translation>
 <translation id="7681220483256441252">indeks</translation>
 <translation id="7720026100085573005">masa yang tinggal</translation>
-<translation id="7740016676195725605">berhenti memaparkan kapsyen tertutup</translation>
 <translation id="7740050170769002709">Kandungan HTML</translation>
+<translation id="7750228210027921155">Gambar dalam gambar</translation>
 <translation id="7789962463072032349">jeda</translation>
 <translation id="7802800022689234070">segi tiga pendedahan</translation>
 <translation id="7888071071722539607">Sila masukkan '<ph name="ATSIGN" />' dalam alamat e-mel. '<ph name="INVALIDADDRESS" />' tiada '<ph name="ATSIGN" />'.</translation>
@@ -194,9 +197,7 @@
 <translation id="8053789581856978548">medan teks carian</translation>
 <translation id="8057695513531652401">notis</translation>
 <translation id="8105797009065549151">rujukan nota</translation>
-<translation id="8115662671911883373">mula memaparkan kapsyen tertutup</translation>
 <translation id="8117451130807776954">Minggu ini</translation>
-<translation id="819205353528511139">mainkan filem dalam mod skrin penuh</translation>
 <translation id="8199524924445686405">yyyy</translation>
 <translation id="8284326494547611709">Kapsyen</translation>
 <translation id="835897206747267392">Nilai tidak sah.</translation>
@@ -215,9 +216,7 @@
 <translation id="860475260694818407">isi kandungan</translation>
 <translation id="8613126697340063924">kawal main balik jauh</translation>
 <translation id="862370744433916922">sari kata</translation>
-<translation id="8741316211671074806">Gambar dalam Gambar</translation>
 <translation id="8750798805984357768">Sila pilih salah satu pilihan ini.</translation>
-<translation id="8785498733064193001">mulakan main balik</translation>
 <translation id="8808573423886751634">bab</translation>
 <translation id="8845239796550121995">Menghantar ke TV anda sekarang</translation>
 <translation id="8851136666856101339">utama</translation>
@@ -228,11 +227,13 @@
 <translation id="9048119486235211610">navigasi</translation>
 <translation id="9050748414552849310">paparkan kapsyen tertutup</translation>
 <translation id="9062295712474918030">dokumen</translation>
+<translation id="9093215626363556771">keluar daripada gambar dalam gambar</translation>
 <translation id="9108370397979208512">matematik</translation>
 <translation id="9132465097189459683">Lain-lain...</translation>
 <translation id="9138385573473225930">makluman</translation>
 <translation id="9155987714137265666"><ph name="WEEK" />, bermula pada <ph name="WEEK_START_DATE" /></translation>
+<translation id="916607977885256133">Gambar dalam Gambar</translation>
 <translation id="9168329111483466115">nota kaki</translation>
-<translation id="947831847158436616">sel</translation>
+<translation id="954003015749068518">masuk ke gambar dalam gambar</translation>
 <translation id="966787709310836684">menu</translation>
 </translationbundle>

@@ -16,8 +16,6 @@
 #include "GrProcessorSet.h"
 #include "GrStencilSettings.h"
 
-#include "SkTLList.h"
-
 class GrPaint;
 
 class GrDrawPathOpBase : public GrDrawOp {
@@ -31,30 +29,27 @@ protected:
         }
         return FixedFunctionFlags::kUsesStencil;
     }
-    RequiresDstTexture finalize(const GrCaps& caps, const GrAppliedClip* clip,
-                                GrPixelConfigIsClamped dstIsClamped) override {
-        return this->doProcessorAnalysis(caps, clip, dstIsClamped).requiresDstTexture()
+    RequiresDstTexture finalize(const GrCaps& caps, const GrAppliedClip* clip) override {
+        return this->doProcessorAnalysis(caps, clip).requiresDstTexture()
                 ? RequiresDstTexture::kYes : RequiresDstTexture::kNo;
     }
 
-    void visitProxies(const VisitProxyFunc& func) const override {
+    void visitProxies(const VisitProxyFunc& func, VisitorType) const override {
         fProcessorSet.visitProxies(func);
     }
 
 protected:
     const SkMatrix& viewMatrix() const { return fViewMatrix; }
-    GrColor color() const { return fInputColor; }
+    const SkPMColor4f& color() const { return fInputColor; }
     GrPathRendering::FillType fillType() const { return fFillType; }
     const GrProcessorSet& processors() const { return fProcessorSet; }
     GrProcessorSet detachProcessors() { return std::move(fProcessorSet); }
-    uint32_t pipelineSRGBFlags() const { return fPipelineSRGBFlags; }
     inline GrPipeline::InitArgs pipelineInitArgs(const GrOpFlushState&);
     const GrProcessorSet::Analysis& doProcessorAnalysis(const GrCaps& caps,
-                                                        const GrAppliedClip* clip,
-                                                        GrPixelConfigIsClamped dstIsClamped) {
+                                                        const GrAppliedClip* clip) {
         bool isMixedSamples = GrAAType::kMixedSamples == fAAType;
         fAnalysis = fProcessorSet.finalize(fInputColor, GrProcessorAnalysisCoverage::kNone, clip,
-                                           isMixedSamples, caps, dstIsClamped, &fInputColor);
+                                           isMixedSamples, caps, &fInputColor);
         return fAnalysis;
     }
     const GrProcessorSet::Analysis& processorAnalysis() const {
@@ -66,11 +61,10 @@ private:
     void onPrepare(GrOpFlushState*) final {}
 
     SkMatrix fViewMatrix;
-    GrColor fInputColor;
+    SkPMColor4f fInputColor;
     GrProcessorSet::Analysis fAnalysis;
     GrPathRendering::FillType fFillType;
     GrAAType fAAType;
-    uint32_t fPipelineSRGBFlags;
     GrProcessorSet fProcessorSet;
 
     typedef GrDrawOp INHERITED;
@@ -80,26 +74,28 @@ class GrDrawPathOp final : public GrDrawPathOpBase {
 public:
     DEFINE_OP_CLASS_ID
 
-    static std::unique_ptr<GrDrawOp> Make(const SkMatrix& viewMatrix, GrPaint&& paint,
-                                          GrAAType aaType, GrPath* path) {
-        return std::unique_ptr<GrDrawOp>(
-                new GrDrawPathOp(viewMatrix, std::move(paint), aaType, path));
-    }
+    static std::unique_ptr<GrDrawOp> Make(GrContext*,
+                                          const SkMatrix& viewMatrix,
+                                          GrPaint&&,
+                                          GrAAType,
+                                          GrPath*);
 
     const char* name() const override { return "DrawPath"; }
 
+#ifdef SK_DEBUG
     SkString dumpInfo() const override;
+#endif
 
 private:
+    friend class GrOpMemoryPool; // for ctor
+
     GrDrawPathOp(const SkMatrix& viewMatrix, GrPaint&& paint, GrAAType aaType, const GrPath* path)
             : GrDrawPathOpBase(ClassID(), viewMatrix, std::move(paint), path->getFillType(), aaType)
             , fPath(path) {
         this->setTransformedBounds(path->getBounds(), viewMatrix, HasAABloat::kNo, IsZeroArea::kNo);
     }
 
-    bool onCombineIfPossible(GrOp* t, const GrCaps& caps) override { return false; }
-
-    void onExecute(GrOpFlushState* state) override;
+    void onExecute(GrOpFlushState*, const SkRect& chainBounds) override;
 
     GrPendingIOResource<const GrPath, kRead_GrIOType> fPath;
 

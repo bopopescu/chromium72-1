@@ -5,6 +5,7 @@
 #include <stdint.h>
 
 #include "base/macros.h"
+#include "base/test/scoped_feature_list.h"
 #include "chrome/browser/sync/test/integration/profile_sync_service_harness.h"
 #include "chrome/browser/sync/test/integration/sessions_helper.h"
 #include "chrome/browser/sync/test/integration/single_client_status_change_checker.h"
@@ -12,6 +13,7 @@
 #include "chrome/browser/sync/test/integration/sync_integration_test_util.h"
 #include "chrome/browser/sync/test/integration/sync_test.h"
 #include "chrome/browser/sync/user_event_service_factory.h"
+#include "components/sync/driver/sync_driver_switches.h"
 #include "components/sync/model/model_type_sync_bridge.h"
 #include "components/sync/protocol/user_event_specifics.pb.h"
 #include "components/sync/user_events/user_event_service.h"
@@ -29,23 +31,6 @@ UserEventSpecifics CreateTestEvent(int microseconds) {
   specifics.set_event_time_usec(microseconds);
   specifics.set_navigation_id(microseconds);
   specifics.mutable_test_event();
-  return specifics;
-}
-
-std::string GetAccountId() {
-#if defined(OS_CHROMEOS)
-  // TODO(vitaliii): Unify the two, because it takes ages to debug and
-  // impossible to discover otherwise.
-  return "user@gmail.com";
-#else
-  return "gaia-id-user@gmail.com";
-#endif
-}
-
-UserEventSpecifics CreateUserConsent(int microseconds) {
-  UserEventSpecifics specifics;
-  specifics.set_event_time_usec(microseconds);
-  specifics.mutable_user_consent()->set_account_id(GetAccountId());
   return specifics;
 }
 
@@ -103,6 +88,9 @@ class UserEventEqualityChecker : public SingleClientStatusChangeChecker {
       // We don't expect to encounter id matching events with different values,
       // this isn't going to recover so fail the test case now.
       EXPECT_TRUE(expected_specifics_.end() != iter);
+      if (expected_specifics_.end() == iter) {
+        return false;
+      }
       // TODO(skym): This may need to change if we start updating navigation_id
       // based on what sessions data is committed, and end up committing the
       // same event multiple times.
@@ -122,6 +110,8 @@ class UserEventEqualityChecker : public SingleClientStatusChangeChecker {
  private:
   FakeServer* fake_server_;
   std::multimap<int64_t, UserEventSpecifics> expected_specifics_;
+
+  DISALLOW_COPY_AND_ASSIGN(UserEventEqualityChecker);
 };
 
 // A more simplistic version of UserEventEqualityChecker that only checks the
@@ -173,6 +163,8 @@ class UserEventCaseChecker : public SingleClientStatusChangeChecker {
  private:
   FakeServer* fake_server_;
   std::multiset<UserEventSpecifics::EventCase> expected_cases_;
+
+  DISALLOW_COPY_AND_ASSIGN(UserEventCaseChecker);
 };
 
 class SingleClientUserEventsSyncTest : public SyncTest {
@@ -252,47 +244,28 @@ IN_PROC_BROWSER_TEST_F(SingleClientUserEventsSyncTest, RetryParallel) {
 }
 
 IN_PROC_BROWSER_TEST_F(SingleClientUserEventsSyncTest, NoHistory) {
-  const UserEventSpecifics testEvent1 = CreateTestEvent(1);
-  const UserEventSpecifics testEvent2 = CreateTestEvent(2);
-  const UserEventSpecifics testEvent3 = CreateTestEvent(3);
-  const UserEventSpecifics consent1 = CreateUserConsent(4);
-  const UserEventSpecifics consent2 = CreateUserConsent(5);
+  const UserEventSpecifics test_event1 = CreateTestEvent(1);
+  const UserEventSpecifics test_event2 = CreateTestEvent(2);
+  const UserEventSpecifics test_event3 = CreateTestEvent(3);
 
   ASSERT_TRUE(SetupSync());
   syncer::UserEventService* event_service =
       browser_sync::UserEventServiceFactory::GetForProfile(GetProfile(0));
 
-  event_service->RecordUserEvent(testEvent1);
-  event_service->RecordUserEvent(consent1);
+  event_service->RecordUserEvent(test_event1);
 
-  // Wait until the first two events are committed before disabling sync,
+  // Wait until the first events is committed before disabling sync,
   // because disabled TYPED_URLS also disables user event sync, dropping all
-  // uncommitted consents.
-  EXPECT_TRUE(ExpectUserEvents({testEvent1, consent1}));
+  // uncommitted events.
+  EXPECT_TRUE(ExpectUserEvents({test_event1}));
   ASSERT_TRUE(GetClient(0)->DisableSyncForDatatype(syncer::TYPED_URLS));
 
-  event_service->RecordUserEvent(testEvent2);
-  event_service->RecordUserEvent(consent2);
+  event_service->RecordUserEvent(test_event2);
   ASSERT_TRUE(GetClient(0)->EnableSyncForDatatype(syncer::TYPED_URLS));
-  event_service->RecordUserEvent(testEvent3);
+  event_service->RecordUserEvent(test_event3);
 
-  // No |testEvent2| because it was recorded while history was disabled.
-  EXPECT_TRUE(ExpectUserEvents({testEvent1, consent1, consent2, testEvent3}));
-}
-
-// Test that events that are logged before sync is enabled don't get lost.
-IN_PROC_BROWSER_TEST_F(SingleClientUserEventsSyncTest, LoggedBeforeSyncSetup) {
-  const UserEventSpecifics consent1 = CreateUserConsent(1);
-  const UserEventSpecifics consent2 = CreateUserConsent(2);
-  ASSERT_TRUE(SetupClients());
-  syncer::UserEventService* event_service =
-      browser_sync::UserEventServiceFactory::GetForProfile(GetProfile(0));
-  event_service->RecordUserEvent(consent1);
-  EXPECT_TRUE(ExpectUserEvents({}));
-  ASSERT_TRUE(SetupSync());
-  EXPECT_TRUE(ExpectUserEvents({consent1}));
-  event_service->RecordUserEvent(consent2);
-  EXPECT_TRUE(ExpectUserEvents({consent1, consent2}));
+  // No |test_event2| because it was recorded while history was disabled.
+  EXPECT_TRUE(ExpectUserEvents({test_event1, test_event3}));
 }
 
 IN_PROC_BROWSER_TEST_F(SingleClientUserEventsSyncTest, NoSessions) {
@@ -309,29 +282,25 @@ IN_PROC_BROWSER_TEST_F(SingleClientUserEventsSyncTest, NoSessions) {
 }
 
 IN_PROC_BROWSER_TEST_F(SingleClientUserEventsSyncTest, Encryption) {
-  const UserEventSpecifics testEvent1 = CreateTestEvent(1);
-  const UserEventSpecifics testEvent2 = CreateTestEvent(2);
-  const UserEventSpecifics consent1 = CreateUserConsent(3);
-  const UserEventSpecifics consent2 = CreateUserConsent(4);
+  const UserEventSpecifics test_event1 = CreateTestEvent(1);
+  const UserEventSpecifics test_event2 = CreateTestEvent(2);
 
   ASSERT_TRUE(SetupSync());
   syncer::UserEventService* event_service =
       browser_sync::UserEventServiceFactory::GetForProfile(GetProfile(0));
-  event_service->RecordUserEvent(testEvent1);
-  event_service->RecordUserEvent(consent1);
+  event_service->RecordUserEvent(test_event1);
   ASSERT_TRUE(EnableEncryption(0));
-  EXPECT_TRUE(ExpectUserEvents({testEvent1, consent1}));
-  event_service->RecordUserEvent(testEvent2);
-  event_service->RecordUserEvent(consent2);
+  EXPECT_TRUE(ExpectUserEvents({test_event1}));
+  event_service->RecordUserEvent(test_event2);
 
-  // Just checking that we don't see testEvent2 isn't very convincing yet,
-  // because it may simply not have reached the server yet. So lets send
+  // Just checking that we don't see test_event2 isn't very convincing yet,
+  // because it may simply not have reached the server yet. So let's send
   // something else through the system that we can wait on before checking.
   // Tab/SESSIONS data was picked fairly arbitrarily, note that we expect 2
   // entries, one for the window/header and one for the tab.
   sessions_helper::OpenTab(0, GURL("http://www.one.com/"));
   EXPECT_TRUE(ServerCountMatchStatusChecker(syncer::SESSIONS, 2).Wait());
-  EXPECT_TRUE(ExpectUserEvents({testEvent1, consent1, consent2}));
+  EXPECT_TRUE(ExpectUserEvents({test_event1}));
 }
 
 IN_PROC_BROWSER_TEST_F(SingleClientUserEventsSyncTest, FieldTrial) {
@@ -347,25 +316,6 @@ IN_PROC_BROWSER_TEST_F(SingleClientUserEventsSyncTest, FieldTrial) {
   UserEventCaseChecker(GetSyncService(0), GetFakeServer(),
                        {UserEventSpecifics::kFieldTrialEvent})
       .Wait();
-}
-
-// TODO(jkrcal): Reenable the test after more investigation.
-// https://crbug.com/843847
-IN_PROC_BROWSER_TEST_F(SingleClientUserEventsSyncTest,
-                       DISABLED_PreserveConsentsOnDisableSync) {
-  const UserEventSpecifics testEvent1 = CreateTestEvent(1);
-  const UserEventSpecifics consent1 = CreateUserConsent(2);
-
-  ASSERT_TRUE(SetupSync());
-  syncer::UserEventService* event_service =
-      browser_sync::UserEventServiceFactory::GetForProfile(GetProfile(0));
-  event_service->RecordUserEvent(testEvent1);
-  event_service->RecordUserEvent(consent1);
-
-  GetClient(0)->StopSyncService(syncer::SyncService::CLEAR_DATA);
-  ASSERT_TRUE(GetClient(0)->StartSyncService());
-
-  EXPECT_TRUE(ExpectUserEvents({consent1}));
 }
 
 }  // namespace

@@ -4,7 +4,7 @@
 
 #include "ash/system/tracing_notification_controller.h"
 
-#include "ash/public/cpp/ash_features.h"
+#include "ash/public/cpp/notification_utils.h"
 #include "ash/resources/vector_icons/vector_icons.h"
 #include "ash/shell.h"
 #include "ash/strings/grit/ash_strings.h"
@@ -22,6 +22,12 @@ namespace {
 
 const char kNotifierId[] = "ash.tracing";
 
+void HandleNotificationClick() {
+  Shell::Get()->metrics()->RecordUserMetricsAction(
+      UMA_STATUS_AREA_TRACING_DEFAULT_SELECTED);
+  Shell::Get()->system_tray_model()->client_ptr()->ShowChromeSlow();
+}
+
 }  // namespace
 
 // static
@@ -29,7 +35,6 @@ const char TracingNotificationController::kNotificationId[] = "chrome://slow";
 
 TracingNotificationController::TracingNotificationController()
     : model_(Shell::Get()->system_tray_model()->tracing()) {
-  DCHECK(features::IsSystemTrayUnifiedEnabled());
   model_->AddObserver(this);
   OnTracingModeChanged();
 }
@@ -52,18 +57,19 @@ void TracingNotificationController::OnTracingModeChanged() {
 }
 
 void TracingNotificationController::CreateNotification() {
-  // TODO(tetsui): Update resource strings according to UX.
-  std::unique_ptr<Notification> notification =
-      Notification::CreateSystemNotification(
-          message_center::NOTIFICATION_TYPE_SIMPLE, kNotificationId,
-          l10n_util::GetStringUTF16(IDS_ASH_STATUS_TRAY_TRACING),
-          base::string16() /* message */, gfx::Image(),
-          base::string16() /* display_source */, GURL(),
-          message_center::NotifierId(
-              message_center::NotifierId::SYSTEM_COMPONENT, kNotifierId),
-          message_center::RichNotificationData(), nullptr,
-          kSystemMenuTracingIcon,
-          message_center::SystemNotificationWarningLevel::NORMAL);
+  std::unique_ptr<Notification> notification = ash::CreateSystemNotification(
+      message_center::NOTIFICATION_TYPE_SIMPLE, kNotificationId,
+      l10n_util::GetStringUTF16(IDS_ASH_STATUS_TRAY_TRACING_NOTIFICATION_TITLE),
+      l10n_util::GetStringUTF16(
+          IDS_ASH_STATUS_TRAY_TRACING_NOTIFICATION_MESSAGE),
+      base::string16() /* display_source */, GURL(),
+      message_center::NotifierId(message_center::NotifierType::SYSTEM_COMPONENT,
+                                 kNotifierId),
+      message_center::RichNotificationData(),
+      base::MakeRefCounted<message_center::HandleNotificationClickDelegate>(
+          base::BindRepeating(&HandleNotificationClick)),
+      kSystemMenuTracingIcon,
+      message_center::SystemNotificationWarningLevel::NORMAL);
   notification->set_pinned(true);
   MessageCenter::Get()->AddNotification(std::move(notification));
 }

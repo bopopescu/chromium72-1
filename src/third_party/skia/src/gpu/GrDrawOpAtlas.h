@@ -8,7 +8,11 @@
 #ifndef GrDrawOpAtlas_DEFINED
 #define GrDrawOpAtlas_DEFINED
 
+#include <cmath>
+
+#include "SkGlyphRunPainter.h"
 #include "SkIPoint16.h"
+#include "SkSize.h"
 #include "SkTDArray.h"
 #include "SkTInternalLList.h"
 
@@ -17,14 +21,6 @@
 class GrOnFlushResourceProvider;
 class GrRectanizer;
 
-struct GrDrawOpAtlasConfig {
-    int numPlotsX() const { return fWidth / fPlotWidth; }
-    int numPlotsY() const { return fHeight / fPlotWidth; }
-    int fWidth;
-    int fHeight;
-    int fPlotWidth;
-    int fPlotHeight;
-};
 
 /**
  * This class manages one or more atlas textures on behalf of GrDrawOps. The draw ops that use the
@@ -55,9 +51,12 @@ class GrDrawOpAtlas {
 private:
     static constexpr auto kMaxMultitexturePages = 4;
 
+
 public:
     /** Is the atlas allowed to use more than one texture? */
     enum class AllowMultitexturing : bool { kNo, kYes };
+
+    static constexpr int kMaxPlots = 32;
 
     /**
      * An AtlasID is an opaque handle which callers can use to determine if the atlas contains
@@ -91,7 +90,9 @@ public:
      *                          eviction occurs
      *  @return                 An initialized GrDrawOpAtlas, or nullptr if creation fails
      */
-    static std::unique_ptr<GrDrawOpAtlas> Make(GrProxyProvider*, GrPixelConfig,
+    static std::unique_ptr<GrDrawOpAtlas> Make(GrProxyProvider*,
+                                               const GrBackendFormat& format,
+                                               GrPixelConfig,
                                                int width, int height,
                                                int numPlotsX, int numPlotsY,
                                                AllowMultitexturing allowMultitexturing,
@@ -205,7 +206,6 @@ public:
         }
 
         static constexpr int kMinItems = 4;
-        static constexpr int kMaxPlots = 32;
         SkSTArray<kMinItems, PlotData, true> fPlotsToUpdate;
         uint32_t fPlotAlreadyUpdated[kMaxMultitexturePages];
 
@@ -228,11 +228,6 @@ public:
 
     void compact(GrDeferredUploadToken startTokenForNextFlush);
 
-    static constexpr auto kGlyphMaxDim = 256;
-    static bool GlyphTooLargeForAtlas(int width, int height) {
-        return width > kGlyphMaxDim || height > kGlyphMaxDim;
-    }
-
     static uint32_t GetPageIndexFromID(AtlasID id) {
         return id & 0xff;
     }
@@ -247,8 +242,9 @@ public:
     void setMaxPages_TestingOnly(uint32_t maxPages);
 
 private:
-    GrDrawOpAtlas(GrProxyProvider*, GrPixelConfig, int width, int height, int numPlotsX,
-                  int numPlotsY, AllowMultitexturing allowMultitexturing);
+    GrDrawOpAtlas(GrProxyProvider*, const GrBackendFormat& format, GrPixelConfig, int width,
+                  int height, int numPlotsX, int numPlotsY,
+                  AllowMultitexturing allowMultitexturing);
 
     /**
      * The backing GrTexture for a GrDrawOpAtlas is broken into a spatial grid of Plots. The Plots
@@ -384,6 +380,7 @@ private:
         plot->resetRects();
     }
 
+    GrBackendFormat       fFormat;
     GrPixelConfig         fPixelConfig;
     int                   fTextureWidth;
     int                   fTextureHeight;
@@ -414,6 +411,34 @@ private:
     uint32_t fMaxPages;
 
     uint32_t fNumActivePages;
+};
+
+// There are three atlases (A8, 565, ARGB) that are kept in relation with one another. In
+// general, the A8 dimensions are NxN and 565 and ARGB are N/2xN with the constraint that an atlas
+// size will always contain at least one plot. Since the ARGB atlas takes the most space, its
+// dimensions are used to size the other two atlases.
+class GrDrawOpAtlasConfig {
+public:
+    GrDrawOpAtlasConfig(int maxDimension, size_t maxBytes);
+
+    // For testing only - make minimum sized atlases -- 1x1 plots wide.
+    GrDrawOpAtlasConfig();
+
+    SkISize numPlots(GrMaskFormat type) const;
+
+    SkISize atlasDimensions(GrMaskFormat type) const;
+
+    static int PlotsPerLongDimensionForARGB(int maxDimension);
+
+private:
+    // The distance field text implementation limits the largest atlas dimension to 2048.
+    static constexpr int kMaxDistanceFieldDim = 2048;
+
+    // The width and height of a plot.
+    static constexpr int kPlotSize = 256;
+
+    // This is the height (longest dimension) of the ARGB atlas divided by the plot size.
+    const int fPlotsPerLongDimension;
 };
 
 #endif

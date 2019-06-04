@@ -6,12 +6,16 @@
 #define COMPONENTS_VIZ_SERVICE_DISPLAY_EMBEDDER_SKIA_OUTPUT_SURFACE_IMPL_H_
 
 #include "base/macros.h"
+#include "base/observer_list.h"
+#include "base/optional.h"
 #include "base/threading/thread_checker.h"
 #include "components/viz/service/display/skia_output_surface.h"
+#include "components/viz/service/viz_service_export.h"
 #include "gpu/command_buffer/common/sync_token.h"
 #include "gpu/ipc/common/surface_handle.h"
 #include "gpu/ipc/in_process_command_buffer.h"
 #include "third_party/skia/include/core/SkDeferredDisplayListRecorder.h"
+#include "third_party/skia/include/core/SkOverdrawCanvas.h"
 #include "third_party/skia/include/core/SkSurfaceCharacterization.h"
 
 namespace base {
@@ -21,11 +25,8 @@ class WaitableEvent;
 namespace viz {
 
 class GpuServiceImpl;
-class VizProcessContextProvider;
 class SkiaOutputSurfaceImplOnGpu;
 class SyntheticBeginFrameSource;
-
-class YUVResourceMetadata;
 
 // The SkiaOutputSurface implementation. It is the output surface for
 // SkiaRenderer. It lives on the compositor thread, but it will post tasks
@@ -37,13 +38,12 @@ class YUVResourceMetadata;
 // render into. In SwapBuffers, it detaches a SkDeferredDisplayList from the
 // recorder and plays it back on the framebuffer SkSurface on the GPU thread
 // through SkiaOutputSurfaceImpleOnGpu.
-class SkiaOutputSurfaceImpl : public SkiaOutputSurface {
+class VIZ_SERVICE_EXPORT SkiaOutputSurfaceImpl : public SkiaOutputSurface {
  public:
-  SkiaOutputSurfaceImpl(
-      GpuServiceImpl* gpu_service,
-      gpu::SurfaceHandle surface_handle,
-      scoped_refptr<VizProcessContextProvider> context_provider,
-      SyntheticBeginFrameSource* synthetic_begin_frame_source);
+  SkiaOutputSurfaceImpl(GpuServiceImpl* gpu_service,
+                        gpu::SurfaceHandle surface_handle,
+                        SyntheticBeginFrameSource* synthetic_begin_frame_source,
+                        bool show_overdraw_feedback);
   ~SkiaOutputSurfaceImpl() override;
 
   // OutputSurface implementation:
@@ -69,32 +69,46 @@ class SkiaOutputSurfaceImpl : public SkiaOutputSurface {
   gpu::VulkanSurface* GetVulkanSurface() override;
 #endif
   unsigned UpdateGpuFence() override;
+  void SetNeedsSwapSizeNotifications(
+      bool needs_swap_size_notifications) override;
 
   // SkiaOutputSurface implementation:
-  SkCanvas* GetSkCanvasForCurrentFrame() override;
+  SkCanvas* BeginPaintCurrentFrame() override;
   sk_sp<SkImage> MakePromiseSkImage(ResourceMetadata metadata) override;
   sk_sp<SkImage> MakePromiseSkImageFromYUV(
       std::vector<ResourceMetadata> metadatas,
-      SkYUVColorSpace yuv_color_space) override;
-  gpu::SyncToken SkiaSwapBuffers(OutputSurfaceFrame frame) override;
+      SkYUVColorSpace yuv_color_space,
+      bool has_alpha) override;
+  void SkiaSwapBuffers(OutputSurfaceFrame frame) override;
   SkCanvas* BeginPaintRenderPass(const RenderPassId& id,
                                  const gfx::Size& surface_size,
                                  ResourceFormat format,
                                  bool mipmap) override;
-  gpu::SyncToken FinishPaintRenderPass() override;
+  gpu::SyncToken SubmitPaint() override;
   sk_sp<SkImage> MakePromiseSkImageFromRenderPass(const RenderPassId& id,
                                                   const gfx::Size& size,
                                                   ResourceFormat format,
                                                   bool mipmap) override;
   void RemoveRenderPassResource(std::vector<RenderPassId> ids) override;
+  void CopyOutput(RenderPassId id,
+                  const gfx::Rect& copy_rect,
+                  std::unique_ptr<CopyOutputRequest> request) override;
+  void AddContextLostObserver(ContextLostObserver* observer) override;
+  void RemoveContextLostObserver(ContextLostObserver* observer) override;
 
  private:
   template <class T>
   class PromiseTextureHelper;
+  class YUVAPromiseTextureHelper;
   void InitializeOnGpuThread(base::WaitableEvent* event);
-  void RecreateRecorder();
-  void DidSwapBuffersComplete(gpu::SwapBuffersCompleteParams params);
+  SkSurfaceCharacterization CreateSkSurfaceCharacterization(
+      const gfx::Size& surface_size,
+      ResourceFormat format,
+      bool mipmap);
+  void DidSwapBuffersComplete(gpu::SwapBuffersCompleteParams params,
+                              const gfx::Size& pixel_size);
   void BufferPresented(const gfx::PresentationFeedback& feedback);
+  void ContextLost();
 
   uint64_t sync_fence_release_ = 0;
   GpuServiceImpl* const gpu_service_;
@@ -102,31 +116,40 @@ class SkiaOutputSurfaceImpl : public SkiaOutputSurface {
   SyntheticBeginFrameSource* const synthetic_begin_frame_source_;
   OutputSurfaceClient* client_ = nullptr;
 
+  std::unique_ptr<base::WaitableEvent> initialize_waitable_event_;
   SkSurfaceCharacterization characterization_;
-  std::unique_ptr<SkDeferredDisplayListRecorder> recorder_;
+  base::Optional<SkDeferredDisplayListRecorder> recorder_;
 
   // The current render pass id set by BeginPaintRenderPass.
   RenderPassId current_render_pass_id_ = 0;
 
-  // The SkDDL recorder created by BeginPaintRenderPass, and
-  // FinishPaintRenderPass will turn it into a SkDDL and play the SkDDL back on
-  // the GPU thread.
-  std::unique_ptr<SkDeferredDisplayListRecorder> offscreen_surface_recorder_;
+  // The SkDDL recorder is used for overdraw feedback. It is created by
+  // BeginPaintOverdraw, and FinishPaintCurrentFrame will turn it into a SkDDL
+  // and play the SkDDL back on the GPU thread.
+  base::Optional<SkDeferredDisplayListRecorder> overdraw_surface_recorder_;
+
+  // |overdraw_canvas_| is used to record draw counts.
+  base::Optional<SkOverdrawCanvas> overdraw_canvas_;
+
+  // |nway_canvas_| contains |overdraw_canvas_| and root canvas.
+  base::Optional<SkNWayCanvas> nway_canvas_;
 
   // Sync tokens for resources which are used for the current frame.
   std::vector<gpu::SyncToken> resource_sync_tokens_;
 
-  // YUV resource metadatas for the current frame or the current render pass.
-  // They should be preprocessed for playing recorded frame into a surface.
-  // TODO(penghuang): Remove it when Skia supports drawing YUV textures
-  // directly.
-  std::vector<YUVResourceMetadata*> yuv_resource_metadatas_;
-
   // The task runner for running task on the client (compositor) thread.
   scoped_refptr<base::SingleThreadTaskRunner> client_thread_task_runner_;
 
+  // The flag is used for overdraw feedback.
+  const bool show_overdraw_feedback_;
+
   // |impl_on_gpu| is created and destroyed on the GPU thread.
   std::unique_ptr<SkiaOutputSurfaceImplOnGpu> impl_on_gpu_;
+
+  // Whether to send OutputSurfaceClient::DidSwapWithSize notifications.
+  bool needs_swap_size_notifications_ = false;
+
+  base::ObserverList<ContextLostObserver>::Unchecked observers_;
 
   THREAD_CHECKER(thread_checker_);
 

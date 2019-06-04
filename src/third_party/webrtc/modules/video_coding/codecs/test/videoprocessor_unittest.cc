@@ -10,21 +10,21 @@
 
 #include <memory>
 
+#include "absl/memory/memory.h"
+#include "api/test/mock_video_decoder.h"
+#include "api/test/mock_video_encoder.h"
 #include "api/test/videocodec_test_fixture.h"
 #include "api/video/i420_buffer.h"
 #include "common_types.h"  // NOLINT(build/include)
 #include "media/base/mediaconstants.h"
 #include "modules/video_coding/codecs/test/videocodec_test_stats_impl.h"
 #include "modules/video_coding/codecs/test/videoprocessor.h"
-#include "modules/video_coding/include/mock/mock_video_codec_interface.h"
 #include "modules/video_coding/include/video_coding.h"
 #include "rtc_base/event.h"
-#include "rtc_base/ptr_util.h"
 #include "rtc_base/task_queue_for_test.h"
 #include "test/gmock.h"
 #include "test/gtest.h"
 #include "test/testsupport/mock/mock_frame_reader.h"
-#include "typedefs.h"  // NOLINT(build/include)
 
 using ::testing::_;
 using ::testing::Property;
@@ -54,7 +54,7 @@ class VideoProcessorTest : public testing::Test {
     EXPECT_CALL(frame_reader_mock_, FrameLength())
         .WillRepeatedly(Return(kFrameSize));
     q_.SendTask([this] {
-      video_processor_ = rtc::MakeUnique<VideoProcessor>(
+      video_processor_ = absl::make_unique<VideoProcessor>(
           &encoder_mock_, &decoders_, &frame_reader_mock_, config_, &stats_,
           nullptr /* encoded_frame_writer */,
           nullptr /* decoded_frame_writer */);

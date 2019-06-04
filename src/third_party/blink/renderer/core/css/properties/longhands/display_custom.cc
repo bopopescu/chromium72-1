@@ -11,7 +11,7 @@
 #include "third_party/blink/renderer/core/style/computed_style.h"
 
 namespace blink {
-namespace CSSLonghand {
+namespace css_longhand {
 
 const CSSValue* Display::ParseSingleValue(CSSParserTokenRange& range,
                                           const CSSParserContext& context,
@@ -30,9 +30,9 @@ const CSSValue* Display::ParseSingleValue(CSSParserTokenRange& range,
 
   CSSParserTokenRange range_copy = range;
   CSSParserTokenRange args =
-      CSSPropertyParserHelpers::ConsumeFunction(range_copy);
+      css_property_parser_helpers::ConsumeFunction(range_copy);
   CSSCustomIdentValue* name =
-      CSSPropertyParserHelpers::ConsumeCustomIdent(args);
+      css_property_parser_helpers::ConsumeCustomIdent(args, context);
 
   // If we didn't get a custom-ident or didn't exhaust the function arguments
   // return nothing.
@@ -59,5 +59,38 @@ const CSSValue* Display::CSSValueFromComputedStyleInternal(
   return CSSIdentifierValue::Create(style.Display());
 }
 
-}  // namespace CSSLonghand
+void Display::ApplyInitial(StyleResolverState& state) const {
+  state.Style()->SetDisplay(ComputedStyleInitialValues::InitialDisplay());
+  state.Style()->SetDisplayLayoutCustomName(
+      ComputedStyleInitialValues::InitialDisplayLayoutCustomName());
+}
+
+void Display::ApplyInherit(StyleResolverState& state) const {
+  state.Style()->SetDisplay(state.ParentStyle()->Display());
+  state.Style()->SetDisplayLayoutCustomName(
+      state.ParentStyle()->DisplayLayoutCustomName());
+}
+
+void Display::ApplyValue(StyleResolverState& state,
+                         const CSSValue& value) const {
+  if (value.IsIdentifierValue()) {
+    state.Style()->SetDisplay(
+        ToCSSIdentifierValue(value).ConvertTo<EDisplay>());
+    state.Style()->SetDisplayLayoutCustomName(
+        ComputedStyleInitialValues::InitialDisplayLayoutCustomName());
+    return;
+  }
+
+  DCHECK(value.IsLayoutFunctionValue());
+  const cssvalue::CSSLayoutFunctionValue& layout_function_value =
+      cssvalue::ToCSSLayoutFunctionValue(value);
+
+  EDisplay display = layout_function_value.IsInline()
+                         ? EDisplay::kInlineLayoutCustom
+                         : EDisplay::kLayoutCustom;
+  state.Style()->SetDisplay(display);
+  state.Style()->SetDisplayLayoutCustomName(layout_function_value.GetName());
+}
+
+}  // namespace css_longhand
 }  // namespace blink

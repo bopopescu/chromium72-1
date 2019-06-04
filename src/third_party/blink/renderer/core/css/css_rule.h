@@ -53,6 +53,7 @@ class CORE_EXPORT CSSRule : public ScriptWrappable {
     kKeyframeRule = 8,
     kNamespaceRule = 10,
     kSupportsRule = 12,
+    kFontFeatureValuesRule = 14,
     kViewportRule = 15,
   };
 
@@ -67,7 +68,6 @@ class CORE_EXPORT CSSRule : public ScriptWrappable {
   void SetParentRule(CSSRule*);
 
   void Trace(blink::Visitor*) override;
-  void TraceWrappers(ScriptWrappableVisitor*) const override;
 
   CSSStyleSheet* parentStyleSheet() const {
     if (parent_is_rule_)

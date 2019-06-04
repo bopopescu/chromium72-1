@@ -11,11 +11,10 @@
 #include "modules/rtp_rtcp/source/forward_error_correction.h"
 
 #include <string.h>
-
 #include <algorithm>
-#include <iterator>
 #include <utility>
 
+#include "modules/include/module_common_types_public.h"
 #include "modules/rtp_rtcp/include/rtp_rtcp_defines.h"
 #include "modules/rtp_rtcp/source/byte_io.h"
 #include "modules/rtp_rtcp/source/flexfec_header_reader_writer.h"
@@ -52,7 +51,7 @@ int32_t ForwardErrorCorrection::Packet::Release() {
 // the std::unique_ptr's are not covariant w.r.t. the types that
 // they are pointing to.
 template <typename S, typename T>
-bool ForwardErrorCorrection::SortablePacket::LessThan::operator() (
+bool ForwardErrorCorrection::SortablePacket::LessThan::operator()(
     const S& first,
     const T& second) {
   RTC_DCHECK_EQ(first->ssrc, second->ssrc);

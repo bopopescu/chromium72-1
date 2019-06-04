@@ -7,7 +7,7 @@
 #ifndef CORE_FXCRT_CSS_CFX_CSS_H_
 #define CORE_FXCRT_CSS_CFX_CSS_H_
 
-#include "core/fxge/fx_dib.h"
+#include <stdint.h>
 
 enum CFX_CSSVALUETYPE {
   CFX_CSSVALUETYPE_Primitive = 1 << 0,
@@ -186,8 +186,6 @@ class CFX_CSSLength {
  public:
   CFX_CSSLength() {}
 
-  explicit CFX_CSSLength(CFX_CSSLengthUnit eUnit) : m_unit(eUnit) {}
-
   CFX_CSSLength(CFX_CSSLengthUnit eUnit, float fValue)
       : m_unit(eUnit), m_fValue(fValue) {}
 
@@ -237,7 +235,10 @@ class CFX_CSSRect {
     return *this;
   }
 
-  CFX_CSSLength left, top, right, bottom;
+  CFX_CSSLength left;
+  CFX_CSSLength top;
+  CFX_CSSLength right;
+  CFX_CSSLength bottom;
 };
 
 #endif  // CORE_FXCRT_CSS_CFX_CSS_H_

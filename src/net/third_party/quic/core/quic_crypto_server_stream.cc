@@ -23,7 +23,7 @@
 #include "net/third_party/quic/platform/api/quic_string.h"
 #include "net/third_party/quic/platform/api/quic_string_piece.h"
 
-namespace net {
+namespace quic {
 
 QuicCryptoServerStreamBase::QuicCryptoServerStreamBase(QuicSession* session)
     : QuicCryptoStream(session) {}
@@ -65,7 +65,9 @@ QuicCryptoServerStream::QuicCryptoServerStream(
 QuicCryptoServerStream::~QuicCryptoServerStream() {}
 
 void QuicCryptoServerStream::CancelOutstandingCallbacks() {
-  handshaker()->CancelOutstandingCallbacks();
+  if (handshaker()) {
+    handshaker()->CancelOutstandingCallbacks();
+  }
 }
 
 bool QuicCryptoServerStream::GetBase64SHA256ClientChannelID(
@@ -174,4 +176,4 @@ QuicCryptoServerStream::HandshakerDelegate* QuicCryptoServerStream::handshaker()
   return handshaker_.get();
 }
 
-}  // namespace net
+}  // namespace quic

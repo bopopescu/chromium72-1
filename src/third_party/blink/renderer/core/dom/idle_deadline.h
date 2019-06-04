@@ -8,6 +8,7 @@
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/platform/bindings/script_wrappable.h"
 #include "third_party/blink/renderer/platform/heap/handle.h"
+#include "third_party/blink/renderer/platform/wtf/time.h"
 
 namespace blink {
 
@@ -17,10 +18,11 @@ class CORE_EXPORT IdleDeadline : public ScriptWrappable {
  public:
   enum class CallbackType { kCalledWhenIdle, kCalledByTimeout };
 
-  static IdleDeadline* Create(double deadline_seconds,
-                              CallbackType callback_type) {
-    return new IdleDeadline(deadline_seconds, callback_type);
+  static IdleDeadline* Create(TimeTicks deadline, CallbackType callback_type) {
+    return MakeGarbageCollected<IdleDeadline>(deadline, callback_type);
   }
+
+  IdleDeadline(TimeTicks deadline, CallbackType);
 
   double timeRemaining() const;
 
@@ -29,9 +31,7 @@ class CORE_EXPORT IdleDeadline : public ScriptWrappable {
   }
 
  private:
-  IdleDeadline(double deadline_seconds, CallbackType);
-
-  double deadline_seconds_;
+  TimeTicks deadline_;
   CallbackType callback_type_;
 };
 

@@ -32,6 +32,7 @@ class FakeLevelDBDatabase : public leveldb::mojom::LevelDBDatabase {
               DeleteCallback callback) override;
   void DeletePrefixed(const std::vector<uint8_t>& key_prefix,
                       DeletePrefixedCallback callback) override;
+  void RewriteDB(RewriteDBCallback callback) override;
   void Write(std::vector<leveldb::mojom::BatchedOperationPtr> operations,
              WriteCallback callback) override;
   void Get(const std::vector<uint8_t>& key, GetCallback callback) override;
@@ -61,6 +62,8 @@ class FakeLevelDBDatabase : public leveldb::mojom::LevelDBDatabase {
                     IteratorNextCallback callback) override;
   void IteratorPrev(const base::UnguessableToken& iterator,
                     IteratorPrevCallback callback) override;
+
+  void FlushBindingsForTesting();
 
  private:
   std::vector<std::pair<std::vector<uint8_t>, std::vector<uint8_t>>>

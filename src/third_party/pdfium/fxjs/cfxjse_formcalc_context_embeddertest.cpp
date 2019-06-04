@@ -2,8 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "fxjs/cfxjse_engine.h"
+#include "fxjs/cfxjse_value.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "testing/xfa_js_embedder_test.h"
+#include "xfa/fxfa/cxfa_eventparam.h"
 
 class CFXJSE_FormCalcContextEmbedderTest : public XFAJSEmbedderTest {};
 
@@ -87,8 +90,8 @@ TEST_F(CFXJSE_FormCalcContextEmbedderTest, Strings) {
     CFXJSE_Value* value = GetValue();
     EXPECT_TRUE(value->IsString());
     EXPECT_STREQ(tests[i].result, value->ToString().c_str())
-        << "Program: " << tests[i].program << " Result: '"
-        << value->ToString().c_str() << "'";
+        << "Program: " << tests[i].program << " Result: '" << value->ToString()
+        << "'";
   }
 }
 
@@ -383,8 +386,8 @@ TEST_F(CFXJSE_FormCalcContextEmbedderTest, DateFmt) {
     CFXJSE_Value* value = GetValue();
     EXPECT_TRUE(value->IsString());
     EXPECT_STREQ(tests[i].result, value->ToString().c_str())
-        << "Program: " << tests[i].program << " Result: '"
-        << value->ToString().c_str() << "'";
+        << "Program: " << tests[i].program << " Result: '" << value->ToString()
+        << "'";
   }
 }
 
@@ -445,8 +448,8 @@ TEST_F(CFXJSE_FormCalcContextEmbedderTest, LocalDateFmt) {
     CFXJSE_Value* value = GetValue();
     EXPECT_TRUE(value->IsString());
     EXPECT_STREQ(tests[i].result, value->ToString().c_str())
-        << "Program: " << tests[i].program << " Result: '"
-        << value->ToString().c_str() << "'";
+        << "Program: " << tests[i].program << " Result: '" << value->ToString()
+        << "'";
   }
 }
 
@@ -467,8 +470,8 @@ TEST_F(CFXJSE_FormCalcContextEmbedderTest, DISABLED_LocalTimeFmt) {
     CFXJSE_Value* value = GetValue();
     EXPECT_TRUE(value->IsString());
     EXPECT_STREQ(tests[i].result, value->ToString().c_str())
-        << "Program: " << tests[i].program << " Result: '"
-        << value->ToString().c_str() << "'";
+        << "Program: " << tests[i].program << " Result: '" << value->ToString()
+        << "'";
   }
 }
 
@@ -492,8 +495,8 @@ TEST_F(CFXJSE_FormCalcContextEmbedderTest, Num2Date) {
     CFXJSE_Value* value = GetValue();
     EXPECT_TRUE(value->IsString()) << "Program: " << tests[i].program;
     EXPECT_STREQ(tests[i].result, value->ToString().c_str())
-        << "Program: " << tests[i].program << " Result: '"
-        << value->ToString().c_str() << "'";
+        << "Program: " << tests[i].program << " Result: '" << value->ToString()
+        << "'";
   }
 }
 
@@ -516,8 +519,8 @@ TEST_F(CFXJSE_FormCalcContextEmbedderTest, DISABLED_Num2GMTime) {
     CFXJSE_Value* value = GetValue();
     EXPECT_TRUE(value->IsString());
     EXPECT_STREQ(tests[i].result, value->ToString().c_str())
-        << "Program: " << tests[i].program << " Result: '"
-        << value->ToString().c_str() << "'";
+        << "Program: " << tests[i].program << " Result: '" << value->ToString()
+        << "'";
   }
 }
 
@@ -536,8 +539,8 @@ TEST_F(CFXJSE_FormCalcContextEmbedderTest, DISABLED_Num2Time) {
     CFXJSE_Value* value = GetValue();
     EXPECT_TRUE(value->IsString());
     EXPECT_STREQ(tests[i].result, value->ToString().c_str())
-        << "Program: " << tests[i].program << " Result: '"
-        << value->ToString().c_str() << "'";
+        << "Program: " << tests[i].program << " Result: '" << value->ToString()
+        << "'";
   }
 }
 
@@ -594,8 +597,8 @@ TEST_F(CFXJSE_FormCalcContextEmbedderTest, TimeFmt) {
     CFXJSE_Value* value = GetValue();
     EXPECT_TRUE(value->IsString());
     EXPECT_STREQ(tests[i].result, value->ToString().c_str())
-        << "Program: " << tests[i].program << " Result: '"
-        << value->ToString().c_str() << "'";
+        << "Program: " << tests[i].program << " Result: '" << value->ToString()
+        << "'";
   }
 }
 
@@ -817,8 +820,8 @@ TEST_F(CFXJSE_FormCalcContextEmbedderTest, Choose) {
     CFXJSE_Value* value = GetValue();
     EXPECT_TRUE(value->IsString());
     EXPECT_STREQ(tests[i].result, value->ToString().c_str())
-        << "Program: " << tests[i].program << " Result: '"
-        << value->ToString().c_str() << "'";
+        << "Program: " << tests[i].program << " Result: '" << value->ToString()
+        << "'";
   }
 }
 
@@ -927,8 +930,8 @@ TEST_F(CFXJSE_FormCalcContextEmbedderTest, DISABLED_Null) {
     CFXJSE_Value* value = GetValue();
     EXPECT_TRUE(value->IsString());
     EXPECT_STREQ(tests[i].result, value->ToString().c_str())
-        << "Program: " << tests[i].program << " Result: '"
-        << value->ToString().c_str() << "'";
+        << "Program: " << tests[i].program << " Result: '" << value->ToString()
+        << "'";
   }
 
   EXPECT_TRUE(Execute("Null() + 5"));
@@ -952,8 +955,8 @@ TEST_F(CFXJSE_FormCalcContextEmbedderTest, Ref) {
     CFXJSE_Value* value = GetValue();
     EXPECT_TRUE(value->IsString());
     EXPECT_STREQ(tests[i].result, value->ToString().c_str())
-        << "Program: " << tests[i].program << " Result: '"
-        << value->ToString().c_str() << "'";
+        << "Program: " << tests[i].program << " Result: '" << value->ToString()
+        << "'";
   }
 }
 
@@ -976,8 +979,8 @@ TEST_F(CFXJSE_FormCalcContextEmbedderTest, UnitType) {
     CFXJSE_Value* value = GetValue();
     EXPECT_TRUE(value->IsString());
     EXPECT_STREQ(tests[i].result, value->ToString().c_str())
-        << "Program: " << tests[i].program << " Result: '"
-        << value->ToString().c_str() << "'";
+        << "Program: " << tests[i].program << " Result: '" << value->ToString()
+        << "'";
   }
 }
 
@@ -1042,8 +1045,8 @@ TEST_F(CFXJSE_FormCalcContextEmbedderTest, Concat) {
     CFXJSE_Value* value = GetValue();
     EXPECT_TRUE(value->IsString());
     EXPECT_STREQ(tests[i].result, value->ToString().c_str())
-        << "Program: " << tests[i].program << " Result: '"
-        << value->ToString().c_str() << "'";
+        << "Program: " << tests[i].program << " Result: '" << value->ToString()
+        << "'";
   }
 }
 
@@ -1054,21 +1057,37 @@ TEST_F(CFXJSE_FormCalcContextEmbedderTest, Decode) {
     const char* program;
     const char* result;
   } tests[] = {
-      {"Decode(\"&AElig;&Aacute;&Acirc;&Aacute;&Acirc;\", \"html\")", "ÆÁÂÁÂ"},
-      // {"Decode(\"~!@#$%%^&amp;*()_+|`{&quot;}[]&lt;&gt;?,./;&apos;:\", "
-      //  "\"xml\")",
-      //  "~!@#$%%^&*()_+|`{"
-      //  "}[]<>?,./;':"}
+      // HTML
+      {R"(Decode("", "html"))", ""},
+      {R"(Decode("abc&Acirc;xyz", "html"))", "abc\xC3\x82xyz"},
+      {R"(Decode("abc&NoneSuchButVeryLongIndeed;", "html"))", "abc"},
+      {R"(Decode("&#x0041;&AElig;&Aacute;", "html"))", "A\xC3\x86\xC3\x81"},
+      {R"(Decode("xyz&#", "html"))", "xyz"},
+
+      // XML
+      {R"(Decode("", "xml"))", ""},
+      {R"(Decode("~!@#$%%^&amp;*()_+|`", "xml"))", "~!@#$%%^&*()_+|`"},
+      {R"(Decode("abc&nonesuchbutverylongindeed;", "xml"))", "abc"},
+      {R"(Decode("&quot;&#x45;&lt;&gt;[].&apos;", "xml"))", "\"E<>[].'"},
+      {R"(Decode("xyz&#", "xml"))", "xyz"},
+
+      // URL
+      {R"(Decode("", "url"))", ""},
+      {R"(Decode("~%26^&*()_+|`{", "url"))", "~&^&*()_+|`{"},
+      {R"(Decode("~%26^&*()_+|`{", "mbogo"))", "~&^&*()_+|`{"},
+      {R"(Decode("~%26^&*()_+|`{"))", "~&^&*()_+|`{"},
+      {R"(Decode("~%~~"))", ""},
+      {R"(Decode("?%~"))", ""},
+      {R"(Decode("?%"))", "?"},
   };
 
   for (size_t i = 0; i < FX_ArraySize(tests); ++i) {
     EXPECT_TRUE(Execute(tests[i].program));
-
     CFXJSE_Value* value = GetValue();
     EXPECT_TRUE(value->IsString());
     EXPECT_STREQ(tests[i].result, value->ToString().c_str())
-        << "Program: " << tests[i].program << " Result: '"
-        << value->ToString().c_str() << "'";
+        << "Program: " << tests[i].program << " Result: '" << value->ToString()
+        << "'";
   }
 }
 
@@ -1089,8 +1108,8 @@ TEST_F(CFXJSE_FormCalcContextEmbedderTest, DISABLED_Encode) {
     CFXJSE_Value* value = GetValue();
     EXPECT_TRUE(value->IsString());
     EXPECT_STREQ(tests[i].result, value->ToString().c_str())
-        << "Program: " << tests[i].program << " Result: '"
-        << value->ToString().c_str() << "'";
+        << "Program: " << tests[i].program << " Result: '" << value->ToString()
+        << "'";
   }
 }
 
@@ -1109,8 +1128,8 @@ TEST_F(CFXJSE_FormCalcContextEmbedderTest, DISABLED_Format) {
     CFXJSE_Value* value = GetValue();
     EXPECT_TRUE(value->IsString());
     EXPECT_STREQ(tests[i].result, value->ToString().c_str())
-        << "Program: " << tests[i].program << " Result: '"
-        << value->ToString().c_str() << "'";
+        << "Program: " << tests[i].program << " Result: '" << value->ToString()
+        << "'";
   }
 }
 
@@ -1129,8 +1148,8 @@ TEST_F(CFXJSE_FormCalcContextEmbedderTest, Left) {
     CFXJSE_Value* value = GetValue();
     EXPECT_TRUE(value->IsString());
     EXPECT_STREQ(tests[i].result, value->ToString().c_str())
-        << "Program: " << tests[i].program << " Result: '"
-        << value->ToString().c_str() << "'";
+        << "Program: " << tests[i].program << " Result: '" << value->ToString()
+        << "'";
   }
 }
 
@@ -1169,9 +1188,19 @@ TEST_F(CFXJSE_FormCalcContextEmbedderTest, Lower) {
     CFXJSE_Value* value = GetValue();
     EXPECT_TRUE(value->IsString());
     EXPECT_STREQ(tests[i].result, value->ToString().c_str())
-        << "Program: " << tests[i].program << " Result: '"
-        << value->ToString().c_str() << "'";
+        << "Program: " << tests[i].program << " Result: '" << value->ToString()
+        << "'";
   }
+}
+
+// This is testing for an OOB read, so will likely only fail under ASAN.
+TEST_F(CFXJSE_FormCalcContextEmbedderTest, bug_854623) {
+  ASSERT_TRUE(OpenDocument("simple_xfa.pdf"));
+
+  const uint8_t test_string[] = {
+      0x4c, 0x6f, 0x77, 0x65, 0x72, 0x28, 0x22, 0xc3,
+      0x85, 0xc3, 0x85, 0xc3, 0x85, 0x22, 0x29};  // Lower("ÅÅÅ")
+  Execute(ByteString(test_string, sizeof(test_string)).AsStringView());
 }
 
 TEST_F(CFXJSE_FormCalcContextEmbedderTest, Ltrim) {
@@ -1189,8 +1218,8 @@ TEST_F(CFXJSE_FormCalcContextEmbedderTest, Ltrim) {
     CFXJSE_Value* value = GetValue();
     EXPECT_TRUE(value->IsString());
     EXPECT_STREQ(tests[i].result, value->ToString().c_str())
-        << "Program: " << tests[i].program << " Result: '"
-        << value->ToString().c_str() << "'";
+        << "Program: " << tests[i].program << " Result: '" << value->ToString()
+        << "'";
   }
 }
 
@@ -1208,8 +1237,8 @@ TEST_F(CFXJSE_FormCalcContextEmbedderTest, DISABLED_Parse) {
     CFXJSE_Value* value = GetValue();
     EXPECT_TRUE(value->IsString());
     EXPECT_STREQ(tests[i].result, value->ToString().c_str())
-        << "Program: " << tests[i].program << " Result: '"
-        << value->ToString().c_str() << "'";
+        << "Program: " << tests[i].program << " Result: '" << value->ToString()
+        << "'";
   }
 
   EXPECT_TRUE(Execute("Parse(\"$9,999,999.99\", \"$1,234,567.89\")"));
@@ -1234,8 +1263,8 @@ TEST_F(CFXJSE_FormCalcContextEmbedderTest, Replace) {
     CFXJSE_Value* value = GetValue();
     EXPECT_TRUE(value->IsString());
     EXPECT_STREQ(tests[i].result, value->ToString().c_str())
-        << "Program: " << tests[i].program << " Result: '"
-        << value->ToString().c_str() << "'";
+        << "Program: " << tests[i].program << " Result: '" << value->ToString()
+        << "'";
   }
 }
 
@@ -1254,8 +1283,8 @@ TEST_F(CFXJSE_FormCalcContextEmbedderTest, Right) {
     CFXJSE_Value* value = GetValue();
     EXPECT_TRUE(value->IsString());
     EXPECT_STREQ(tests[i].result, value->ToString().c_str())
-        << "Program: " << tests[i].program << " Result: '"
-        << value->ToString().c_str() << "'";
+        << "Program: " << tests[i].program << " Result: '" << value->ToString()
+        << "'";
   }
 }
 
@@ -1274,8 +1303,8 @@ TEST_F(CFXJSE_FormCalcContextEmbedderTest, Rtrim) {
     CFXJSE_Value* value = GetValue();
     EXPECT_TRUE(value->IsString());
     EXPECT_STREQ(tests[i].result, value->ToString().c_str())
-        << "Program: " << tests[i].program << " Result: '"
-        << value->ToString().c_str() << "'";
+        << "Program: " << tests[i].program << " Result: '" << value->ToString()
+        << "'";
   }
 }
 
@@ -1294,8 +1323,8 @@ TEST_F(CFXJSE_FormCalcContextEmbedderTest, Space) {
     CFXJSE_Value* value = GetValue();
     EXPECT_TRUE(value->IsString());
     EXPECT_STREQ(tests[i].result, value->ToString().c_str())
-        << "Program: " << tests[i].program << " Result: '"
-        << value->ToString().c_str() << "'";
+        << "Program: " << tests[i].program << " Result: '" << value->ToString()
+        << "'";
   }
 }
 
@@ -1316,8 +1345,8 @@ TEST_F(CFXJSE_FormCalcContextEmbedderTest, Str) {
     CFXJSE_Value* value = GetValue();
     EXPECT_TRUE(value->IsString());
     EXPECT_STREQ(tests[i].result, value->ToString().c_str())
-        << "Program: " << tests[i].program << " Result: '"
-        << value->ToString().c_str() << "'";
+        << "Program: " << tests[i].program << " Result: '" << value->ToString()
+        << "'";
   }
 }
 
@@ -1338,8 +1367,8 @@ TEST_F(CFXJSE_FormCalcContextEmbedderTest, Stuff) {
     CFXJSE_Value* value = GetValue();
     EXPECT_TRUE(value->IsString());
     EXPECT_STREQ(tests[i].result, value->ToString().c_str())
-        << "Program: " << tests[i].program << " Result: '"
-        << value->ToString().c_str() << "'";
+        << "Program: " << tests[i].program << " Result: '" << value->ToString()
+        << "'";
   }
 }
 
@@ -1360,8 +1389,8 @@ TEST_F(CFXJSE_FormCalcContextEmbedderTest, Substr) {
     CFXJSE_Value* value = GetValue();
     EXPECT_TRUE(value->IsString());
     EXPECT_STREQ(tests[i].result, value->ToString().c_str())
-        << "Program: " << tests[i].program << " Result: '"
-        << value->ToString().c_str() << "'";
+        << "Program: " << tests[i].program << " Result: '" << value->ToString()
+        << "'";
   }
 }
 
@@ -1390,8 +1419,8 @@ TEST_F(CFXJSE_FormCalcContextEmbedderTest, Upper) {
     CFXJSE_Value* value = GetValue();
     EXPECT_TRUE(value->IsString());
     EXPECT_STREQ(tests[i].result, value->ToString().c_str())
-        << "Program: " << tests[i].program << " Result: '"
-        << value->ToString().c_str() << "'";
+        << "Program: " << tests[i].program << " Result: '" << value->ToString()
+        << "'";
   }
 }
 
@@ -1416,8 +1445,8 @@ TEST_F(CFXJSE_FormCalcContextEmbedderTest, WordNum) {
     CFXJSE_Value* value = GetValue();
     EXPECT_TRUE(value->IsString());
     EXPECT_STREQ(tests[i].result, value->ToString().c_str())
-        << "Program: " << tests[i].program << " Result: '"
-        << value->ToString().c_str() << "'";
+        << "Program: " << tests[i].program << " Result: '" << value->ToString()
+        << "'";
   }
 }
 
@@ -1454,4 +1483,166 @@ TEST_F(CFXJSE_FormCalcContextEmbedderTest, MethodCall) {
   CFXJSE_Value* value = GetValue();
   EXPECT_TRUE(value->IsString());
   EXPECT_STREQ("12.7mm", value->ToString().c_str());
+}
+
+TEST_F(CFXJSE_FormCalcContextEmbedderTest, GetXFAEventChange) {
+  ASSERT_TRUE(OpenDocument("simple_xfa.pdf"));
+
+  CXFA_EventParam params;
+  params.m_wsChange = L"changed";
+
+  CFXJSE_Engine* context = GetScriptContext();
+  context->SetEventParam(&params);
+
+  const char test[] = {"xfa.event.change"};
+  EXPECT_TRUE(Execute(test));
+
+  CFXJSE_Value* value = GetValue();
+  EXPECT_TRUE(value->IsString());
+  EXPECT_STREQ("changed", value->ToString().c_str());
+  context->SetEventParam(nullptr);
+}
+
+TEST_F(CFXJSE_FormCalcContextEmbedderTest, SetXFAEventChange) {
+  ASSERT_TRUE(OpenDocument("simple_xfa.pdf"));
+
+  CXFA_EventParam params;
+  CFXJSE_Engine* context = GetScriptContext();
+  context->SetEventParam(&params);
+
+  const char test[] = {"xfa.event.change = \"changed\""};
+  EXPECT_TRUE(Execute(test));
+  EXPECT_EQ(L"changed", params.m_wsChange);
+  context->SetEventParam(nullptr);
+}
+
+TEST_F(CFXJSE_FormCalcContextEmbedderTest, SetXFAEventFullTextFails) {
+  ASSERT_TRUE(OpenDocument("simple_xfa.pdf"));
+
+  CXFA_EventParam params;
+  params.m_wsFullText = L"Original Full Text";
+
+  CFXJSE_Engine* context = GetScriptContext();
+  context->SetEventParam(&params);
+
+  const char test[] = {"xfa.event.fullText = \"Changed Full Text\""};
+  EXPECT_TRUE(Execute(test));
+  EXPECT_EQ(L"Original Full Text", params.m_wsFullText);
+  context->SetEventParam(nullptr);
+}
+
+TEST_F(CFXJSE_FormCalcContextEmbedderTest, EventChangeSelection) {
+  ASSERT_TRUE(OpenDocument("simple_xfa.pdf"));
+
+  CXFA_EventParam params;
+  params.m_wsPrevText = L"1234";
+  params.m_iSelStart = 1;
+  params.m_iSelEnd = 3;
+
+  CFXJSE_Engine* context = GetScriptContext();
+  context->SetEventParam(&params);
+
+  // Moving end to start works fine.
+  EXPECT_TRUE(Execute("xfa.event.selEnd = \"1\""));
+  EXPECT_EQ(1, params.m_iSelStart);
+  EXPECT_EQ(1, params.m_iSelEnd);
+
+  // Moving end before end, forces start to move in response.
+  EXPECT_TRUE(Execute("xfa.event.selEnd = \"0\""));
+  EXPECT_EQ(0, params.m_iSelStart);
+  EXPECT_EQ(0, params.m_iSelEnd);
+
+  // Negatives not allowed
+  EXPECT_TRUE(Execute("xfa.event.selEnd = \"-1\""));
+  EXPECT_EQ(0, params.m_iSelStart);
+  EXPECT_EQ(0, params.m_iSelEnd);
+
+  // Negatives not allowed
+  EXPECT_TRUE(Execute("xfa.event.selStart = \"-1\""));
+  EXPECT_EQ(0, params.m_iSelStart);
+  EXPECT_EQ(0, params.m_iSelEnd);
+
+  params.m_iSelEnd = 1;
+
+  // Moving start to end works fine.
+  EXPECT_TRUE(Execute("xfa.event.selStart = \"1\""));
+  EXPECT_EQ(1, params.m_iSelStart);
+  EXPECT_EQ(1, params.m_iSelEnd);
+
+  // Moving start after end moves end.
+  EXPECT_TRUE(Execute("xfa.event.selStart = \"2\""));
+  EXPECT_EQ(2, params.m_iSelStart);
+  EXPECT_EQ(2, params.m_iSelEnd);
+
+  // Setting End past end of string clamps to string length;
+  EXPECT_TRUE(Execute("xfa.event.selEnd = \"20\""));
+  EXPECT_EQ(2, params.m_iSelStart);
+  EXPECT_EQ(4, params.m_iSelEnd);
+
+  // Setting Start past end of string clamps to string length;
+  EXPECT_TRUE(Execute("xfa.event.selStart = \"20\""));
+  EXPECT_EQ(4, params.m_iSelStart);
+  EXPECT_EQ(4, params.m_iSelEnd);
+
+  context->SetEventParam(nullptr);
+}
+
+TEST_F(CFXJSE_FormCalcContextEmbedderTest, XFAEventCancelAction) {
+  ASSERT_TRUE(OpenDocument("simple_xfa.pdf"));
+
+  CXFA_EventParam params;
+  params.m_bCancelAction = false;
+
+  CFXJSE_Engine* context = GetScriptContext();
+  context->SetEventParam(&params);
+
+  EXPECT_TRUE(Execute("xfa.event.cancelAction"));
+
+  CFXJSE_Value* value = GetValue();
+  EXPECT_TRUE(value->IsBoolean());
+  EXPECT_FALSE(value->ToBoolean());
+
+  EXPECT_TRUE(Execute("xfa.event.cancelAction = \"true\""));
+  EXPECT_TRUE(params.m_bCancelAction);
+
+  context->SetEventParam(nullptr);
+}
+
+TEST_F(CFXJSE_FormCalcContextEmbedderTest, ComplexTextChangeEvent) {
+  ASSERT_TRUE(OpenDocument("simple_xfa.pdf"));
+
+  CXFA_EventParam params;
+  params.m_wsChange = L"g";
+  params.m_wsPrevText = L"abcd";
+  params.m_iSelStart = 1;
+  params.m_iSelEnd = 3;
+
+  CFXJSE_Engine* context = GetScriptContext();
+  context->SetEventParam(&params);
+
+  EXPECT_EQ(L"abcd", params.m_wsPrevText);
+  EXPECT_EQ(L"agd", params.GetNewText());
+  EXPECT_EQ(L"g", params.m_wsChange);
+  EXPECT_EQ(1, params.m_iSelStart);
+  EXPECT_EQ(3, params.m_iSelEnd);
+
+  const char change_event[] = {"xfa.event.change = \"xyz\""};
+  EXPECT_TRUE(Execute(change_event));
+
+  EXPECT_EQ(L"abcd", params.m_wsPrevText);
+  EXPECT_EQ(L"xyz", params.m_wsChange);
+  EXPECT_EQ(L"axyzd", params.GetNewText());
+  EXPECT_EQ(1, params.m_iSelStart);
+  EXPECT_EQ(3, params.m_iSelEnd);
+
+  const char sel_event[] = {"xfa.event.selEnd = \"1\""};
+  EXPECT_TRUE(Execute(sel_event));
+
+  EXPECT_EQ(L"abcd", params.m_wsPrevText);
+  EXPECT_EQ(L"xyz", params.m_wsChange);
+  EXPECT_EQ(L"axyzbcd", params.GetNewText());
+  EXPECT_EQ(1, params.m_iSelStart);
+  EXPECT_EQ(1, params.m_iSelEnd);
+
+  context->SetEventParam(nullptr);
 }

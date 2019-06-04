@@ -15,7 +15,7 @@
 #include "base/bind.h"
 #include "base/single_thread_task_runner.h"
 #include "base/synchronization/waitable_event.h"
-#include "base/sys_info.h"
+#include "base/system/sys_info.h"
 #include "base/threading/thread.h"
 #include "base/time/time.h"
 #include "build/build_config.h"
@@ -98,7 +98,7 @@ BPF_DEATH_TEST_C(ParameterRestrictions,
                  DEATH_SEGV_MESSAGE(sandbox::GetErrorMessageContentForTests()),
                  RestrictClockIdPolicy) {
   struct timespec ts;
-  clock_gettime(CLOCK_MONOTONIC_RAW, &ts);
+  syscall(SYS_clock_gettime, CLOCK_MONOTONIC_RAW, &ts);
 }
 
 #if !defined(OS_ANDROID)

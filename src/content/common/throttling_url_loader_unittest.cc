@@ -6,13 +6,14 @@
 #include "base/logging.h"
 #include "base/macros.h"
 #include "base/run_loop.h"
+#include "base/test/bind_test_util.h"
 #include "base/test/scoped_task_environment.h"
-#include "content/public/common/browser_side_navigation_policy.h"
 #include "content/public/common/url_loader_throttle.h"
 #include "net/traffic_annotation/network_traffic_annotation_test_helper.h"
 #include "services/network/public/cpp/weak_wrapper_shared_url_loader_factory.h"
 #include "services/network/public/mojom/url_loader.mojom.h"
 #include "services/network/public/mojom/url_loader_factory.mojom.h"
+#include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace content {
@@ -46,6 +47,16 @@ class TestURLLoaderFactory : public network::mojom::URLLoaderFactory,
     return create_loader_and_start_called_;
   }
 
+  const base::Optional<std::vector<std::string>>& headers_removed_on_redirect()
+      const {
+    return headers_removed_on_redirect_;
+  }
+
+  const base::Optional<net::HttpRequestHeaders>& headers_modified_on_redirect()
+      const {
+    return headers_modified_on_redirect_;
+  }
+
   size_t pause_reading_body_from_net_called() const {
     return pause_reading_body_from_net_called_;
   }
@@ -55,7 +66,7 @@ class TestURLLoaderFactory : public network::mojom::URLLoaderFactory,
   }
 
   void NotifyClientOnReceiveResponse() {
-    client_ptr_->OnReceiveResponse(network::ResourceResponseHead(), nullptr);
+    client_ptr_->OnReceiveResponse(network::ResourceResponseHead());
   }
 
   void NotifyClientOnReceiveRedirect() {
@@ -72,6 +83,13 @@ class TestURLLoaderFactory : public network::mojom::URLLoaderFactory,
 
   void CloseClientPipe() { client_ptr_.reset(); }
 
+  using OnCreateLoaderAndStartCallback = base::RepeatingCallback<void(
+      const network::ResourceRequest& url_request)>;
+  void set_on_create_loader_and_start(
+      const OnCreateLoaderAndStartCallback& callback) {
+    on_create_loader_and_start_callback_ = callback;
+  }
+
  private:
   // network::mojom::URLLoaderFactory implementation.
   void CreateLoaderAndStart(network::mojom::URLLoaderRequest request,
@@ -84,10 +102,14 @@ class TestURLLoaderFactory : public network::mojom::URLLoaderFactory,
                                 traffic_annotation) override {
     create_loader_and_start_called_++;
 
-    DCHECK(!url_loader_binding_.is_bound())
-        << "TestURLLoaderFactory is not able to handle multiple requests.";
+    if (url_loader_binding_.is_bound())
+      url_loader_binding_.Unbind();
+
     url_loader_binding_.Bind(std::move(request));
     client_ptr_ = std::move(client);
+
+    if (on_create_loader_and_start_callback_)
+      on_create_loader_and_start_callback_.Run(url_request);
   }
 
   void Clone(network::mojom::URLLoaderFactoryRequest request) override {
@@ -95,8 +117,15 @@ class TestURLLoaderFactory : public network::mojom::URLLoaderFactory,
   }
 
   // network::mojom::URLLoader implementation.
-  void FollowRedirect(const base::Optional<net::HttpRequestHeaders>&
-                          modified_request_headers) override {}
+  void FollowRedirect(
+      const base::Optional<std::vector<std::string>>&
+          to_be_removed_request_headers,
+      const base::Optional<net::HttpRequestHeaders>& modified_request_headers,
+      const base::Optional<GURL>& new_url) override {
+    headers_removed_on_redirect_ = to_be_removed_request_headers;
+    headers_modified_on_redirect_ = modified_request_headers;
+  }
+
   void ProceedWithResponse() override {}
 
   void SetPriority(net::RequestPriority priority,
@@ -111,6 +140,8 @@ class TestURLLoaderFactory : public network::mojom::URLLoaderFactory,
   }
 
   size_t create_loader_and_start_called_ = 0;
+  base::Optional<std::vector<std::string>> headers_removed_on_redirect_;
+  base::Optional<net::HttpRequestHeaders> headers_modified_on_redirect_;
   size_t pause_reading_body_from_net_called_ = 0;
   size_t resume_reading_body_from_net_called_ = 0;
 
@@ -119,6 +150,7 @@ class TestURLLoaderFactory : public network::mojom::URLLoaderFactory,
   network::mojom::URLLoaderFactoryPtr factory_ptr_;
   network::mojom::URLLoaderClientPtr client_ptr_;
   scoped_refptr<network::WeakWrapperSharedURLLoaderFactory> shared_factory_;
+  OnCreateLoaderAndStartCallback on_create_loader_and_start_callback_;
   DISALLOW_COPY_AND_ASSIGN(TestURLLoaderFactory);
 };
 
@@ -154,8 +186,7 @@ class TestURLLoaderClient : public network::mojom::URLLoaderClient {
  private:
   // network::mojom::URLLoaderClient implementation:
   void OnReceiveResponse(
-      const network::ResourceResponseHead& response_head,
-      network::mojom::DownloadedTempFilePtr downloaded_file) override {
+      const network::ResourceResponseHead& response_head) override {
     on_received_response_called_++;
     if (on_received_response_callback_)
       on_received_response_callback_.Run();
@@ -167,7 +198,6 @@ class TestURLLoaderClient : public network::mojom::URLLoaderClient {
     if (on_received_redirect_callback_)
       on_received_redirect_callback_.Run();
   }
-  void OnDataDownloaded(int64_t data_len, int64_t encoded_data_len) override {}
   void OnUploadProgress(int64_t current_position,
                         int64_t total_size,
                         OnUploadProgressCallback ack_callback) override {}
@@ -204,7 +234,13 @@ class TestURLLoaderThrottle : public URLLoaderThrottle {
   }
 
   using ThrottleCallback =
-      base::Callback<void(URLLoaderThrottle::Delegate* delegate, bool* defer)>;
+      base::RepeatingCallback<void(URLLoaderThrottle::Delegate* delegate,
+                                   bool* defer)>;
+  using ThrottleRedirectCallback = base::RepeatingCallback<void(
+      URLLoaderThrottle::Delegate* delegate,
+      bool* defer,
+      std::vector<std::string>* to_be_removed_headers,
+      net::HttpRequestHeaders* modified_headers)>;
 
   size_t will_start_request_called() const {
     return will_start_request_called_;
@@ -215,6 +251,9 @@ class TestURLLoaderThrottle : public URLLoaderThrottle {
   size_t will_process_response_called() const {
     return will_process_response_called_;
   }
+  size_t before_will_process_response_called() const {
+    return before_will_process_response_called_;
+  }
 
   GURL observed_response_url() const { return response_url_; }
 
@@ -222,12 +261,22 @@ class TestURLLoaderThrottle : public URLLoaderThrottle {
     will_start_request_callback_ = callback;
   }
 
-  void set_will_redirect_request_callback(const ThrottleCallback& callback) {
+  void set_will_redirect_request_callback(
+      const ThrottleRedirectCallback& callback) {
     will_redirect_request_callback_ = callback;
   }
 
   void set_will_process_response_callback(const ThrottleCallback& callback) {
     will_process_response_callback_ = callback;
+  }
+
+  void set_before_will_process_response_callback(
+      const ThrottleCallback& callback) {
+    before_will_process_response_callback_ = callback;
+  }
+
+  void set_modify_url_in_will_start(const GURL& url) {
+    modify_url_in_will_start_ = url;
   }
 
   Delegate* delegate() const { return delegate_; }
@@ -237,20 +286,29 @@ class TestURLLoaderThrottle : public URLLoaderThrottle {
   void WillStartRequest(network::ResourceRequest* request,
                         bool* defer) override {
     will_start_request_called_++;
+    if (!modify_url_in_will_start_.is_empty())
+      request->url = modify_url_in_will_start_;
+
     if (will_start_request_callback_)
       will_start_request_callback_.Run(delegate_, defer);
   }
 
-  void WillRedirectRequest(const net::RedirectInfo& redirect_info,
-                           const network::ResourceResponseHead& response_head,
-                           bool* defer) override {
+  void WillRedirectRequest(
+      net::RedirectInfo* redirect_info,
+      const network::ResourceResponseHead& response_head,
+      bool* defer,
+      std::vector<std::string>* to_be_removed_request_headers,
+      net::HttpRequestHeaders* modified_request_headers) override {
     will_redirect_request_called_++;
-    if (will_redirect_request_callback_)
-      will_redirect_request_callback_.Run(delegate_, defer);
+    if (will_redirect_request_callback_) {
+      will_redirect_request_callback_.Run(delegate_, defer,
+                                          to_be_removed_request_headers,
+                                          modified_request_headers);
+    }
   }
 
   void WillProcessResponse(const GURL& response_url,
-                           const network::ResourceResponseHead& response_head,
+                           network::ResourceResponseHead* response_head,
                            bool* defer) override {
     will_process_response_called_++;
     if (will_process_response_callback_)
@@ -258,15 +316,28 @@ class TestURLLoaderThrottle : public URLLoaderThrottle {
     response_url_ = response_url;
   }
 
+  void BeforeWillProcessResponse(
+      const GURL& response_url,
+      const network::ResourceResponseHead& response_head,
+      bool* defer) override {
+    before_will_process_response_called_++;
+    if (before_will_process_response_callback_)
+      before_will_process_response_callback_.Run(delegate_, defer);
+  }
+
   size_t will_start_request_called_ = 0;
   size_t will_redirect_request_called_ = 0;
   size_t will_process_response_called_ = 0;
+  size_t before_will_process_response_called_ = 0;
 
   GURL response_url_;
 
   ThrottleCallback will_start_request_callback_;
-  ThrottleCallback will_redirect_request_callback_;
+  ThrottleRedirectCallback will_redirect_request_callback_;
   ThrottleCallback will_process_response_callback_;
+  ThrottleCallback before_will_process_response_callback_;
+
+  GURL modify_url_in_will_start_;
 
   base::Closure destruction_notifier_;
 
@@ -343,6 +414,7 @@ TEST_F(ThrottlingURLLoaderTest, CancelBeforeStart) {
 
   EXPECT_EQ(1u, throttle_->will_start_request_called());
   EXPECT_EQ(0u, throttle_->will_redirect_request_called());
+  EXPECT_EQ(0u, throttle_->before_will_process_response_called());
   EXPECT_EQ(0u, throttle_->will_process_response_called());
 
   EXPECT_EQ(0u, factory_.create_loader_and_start_called());
@@ -370,6 +442,7 @@ TEST_F(ThrottlingURLLoaderTest, DeferBeforeStart) {
 
   EXPECT_EQ(1u, throttle_->will_start_request_called());
   EXPECT_EQ(0u, throttle_->will_redirect_request_called());
+  EXPECT_EQ(0u, throttle_->before_will_process_response_called());
   EXPECT_EQ(0u, throttle_->will_process_response_called());
 
   EXPECT_EQ(0u, factory_.create_loader_and_start_called());
@@ -390,6 +463,7 @@ TEST_F(ThrottlingURLLoaderTest, DeferBeforeStart) {
 
   EXPECT_EQ(1u, throttle_->will_start_request_called());
   EXPECT_EQ(0u, throttle_->will_redirect_request_called());
+  EXPECT_EQ(1u, throttle_->before_will_process_response_called());
   EXPECT_EQ(1u, throttle_->will_process_response_called());
 
   EXPECT_TRUE(
@@ -400,19 +474,29 @@ TEST_F(ThrottlingURLLoaderTest, DeferBeforeStart) {
   EXPECT_EQ(1u, client_.on_complete_called());
 }
 
+TEST_F(ThrottlingURLLoaderTest, ModifyURLBeforeStart) {
+  throttle_->set_modify_url_in_will_start(GURL("http://example.org/foo"));
+
+  CreateLoaderAndStart();
+
+  EXPECT_EQ(1u, throttle_->will_start_request_called());
+  EXPECT_EQ(1u, throttle_->will_redirect_request_called());
+}
+
 TEST_F(ThrottlingURLLoaderTest, CancelBeforeRedirect) {
-  throttle_->set_will_redirect_request_callback(
-      base::Bind([](URLLoaderThrottle::Delegate* delegate, bool* defer) {
+  throttle_->set_will_redirect_request_callback(base::BindRepeating(
+      [](URLLoaderThrottle::Delegate* delegate, bool* /* defer */,
+         std::vector<std::string>* /* to_be_removed_headers */,
+         net::HttpRequestHeaders* /* modified_headers */) {
         delegate->CancelWithError(net::ERR_ACCESS_DENIED);
       }));
 
   base::RunLoop run_loop;
-  client_.set_on_complete_callback(base::Bind(
-      [](const base::Closure& quit_closure, int error) {
+  client_.set_on_complete_callback(
+      base::BindLambdaForTesting([&run_loop](int error) {
         EXPECT_EQ(net::ERR_ACCESS_DENIED, error);
-        quit_closure.Run();
-      },
-      run_loop.QuitClosure()));
+        run_loop.Quit();
+      }));
 
   CreateLoaderAndStart();
 
@@ -422,6 +506,7 @@ TEST_F(ThrottlingURLLoaderTest, CancelBeforeRedirect) {
 
   EXPECT_EQ(1u, throttle_->will_start_request_called());
   EXPECT_EQ(1u, throttle_->will_redirect_request_called());
+  EXPECT_EQ(0u, throttle_->before_will_process_response_called());
   EXPECT_EQ(0u, throttle_->will_process_response_called());
 
   EXPECT_EQ(0u, client_.on_received_response_called());
@@ -433,7 +518,9 @@ TEST_F(ThrottlingURLLoaderTest, DeferBeforeRedirect) {
   base::RunLoop run_loop1;
   throttle_->set_will_redirect_request_callback(base::Bind(
       [](const base::Closure& quit_closure,
-         URLLoaderThrottle::Delegate* delegate, bool* defer) {
+         URLLoaderThrottle::Delegate* delegate, bool* defer,
+         std::vector<std::string>* /* to_be_removed_headers */,
+         net::HttpRequestHeaders* /* modified_headers */) {
         *defer = true;
         quit_closure.Run();
       },
@@ -455,6 +542,7 @@ TEST_F(ThrottlingURLLoaderTest, DeferBeforeRedirect) {
 
   EXPECT_EQ(1u, throttle_->will_start_request_called());
   EXPECT_EQ(1u, throttle_->will_redirect_request_called());
+  EXPECT_EQ(0u, throttle_->before_will_process_response_called());
   EXPECT_EQ(0u, throttle_->will_process_response_called());
 
   factory_.NotifyClientOnComplete(net::ERR_UNEXPECTED);
@@ -471,11 +559,85 @@ TEST_F(ThrottlingURLLoaderTest, DeferBeforeRedirect) {
 
   EXPECT_EQ(1u, throttle_->will_start_request_called());
   EXPECT_EQ(1u, throttle_->will_redirect_request_called());
+  EXPECT_EQ(0u, throttle_->before_will_process_response_called());
   EXPECT_EQ(0u, throttle_->will_process_response_called());
 
   EXPECT_EQ(0u, client_.on_received_response_called());
   EXPECT_EQ(1u, client_.on_received_redirect_called());
   EXPECT_EQ(1u, client_.on_complete_called());
+}
+
+TEST_F(ThrottlingURLLoaderTest, ModifyHeadersBeforeRedirect) {
+  throttle_->set_will_redirect_request_callback(base::BindRepeating(
+      [](URLLoaderThrottle::Delegate* delegate, bool* /* defer */,
+         std::vector<std::string>* to_be_removed_headers,
+         net::HttpRequestHeaders* modified_headers) {
+        to_be_removed_headers->push_back("X-Test-Header-1");
+        modified_headers->SetHeader("X-Test-Header-2", "Foo");
+        modified_headers->SetHeader("X-Test-Header-3", "Throttle Value");
+      }));
+
+  client_.set_on_received_redirect_callback(base::BindLambdaForTesting([&]() {
+    net::HttpRequestHeaders modified_headers;
+    modified_headers.SetHeader("X-Test-Header-3", "Client Value");
+    modified_headers.SetHeader("X-Test-Header-4", "Bar");
+    loader_->FollowRedirect(modified_headers);
+  }));
+
+  CreateLoaderAndStart();
+  factory_.NotifyClientOnReceiveRedirect();
+  base::RunLoop().RunUntilIdle();
+
+  ASSERT_TRUE(factory_.headers_removed_on_redirect().has_value());
+  EXPECT_THAT(*factory_.headers_removed_on_redirect(),
+              testing::ElementsAre("X-Test-Header-1"));
+  ASSERT_TRUE(factory_.headers_modified_on_redirect().has_value());
+  EXPECT_EQ(
+      "X-Test-Header-2: Foo\r\n"
+      "X-Test-Header-3: Client Value\r\n"
+      "X-Test-Header-4: Bar\r\n\r\n",
+      factory_.headers_modified_on_redirect()->ToString());
+}
+
+TEST_F(ThrottlingURLLoaderTest, MultipleThrottlesModifyHeadersBeforeRedirect) {
+  auto* throttle2 = new TestURLLoaderThrottle();
+  throttles_.push_back(base::WrapUnique(throttle2));
+
+  throttle_->set_will_redirect_request_callback(base::BindRepeating(
+      [](URLLoaderThrottle::Delegate* delegate, bool* /* defer */,
+         std::vector<std::string>* to_be_removed_headers,
+         net::HttpRequestHeaders* modified_headers) {
+        to_be_removed_headers->push_back("X-Test-Header-0");
+        to_be_removed_headers->push_back("X-Test-Header-1");
+        modified_headers->SetHeader("X-Test-Header-3", "Foo");
+        modified_headers->SetHeader("X-Test-Header-4", "Throttle1");
+      }));
+
+  throttle2->set_will_redirect_request_callback(base::BindRepeating(
+      [](URLLoaderThrottle::Delegate* delegate, bool* /* defer */,
+         std::vector<std::string>* to_be_removed_headers,
+         net::HttpRequestHeaders* modified_headers) {
+        to_be_removed_headers->push_back("X-Test-Header-1");
+        to_be_removed_headers->push_back("X-Test-Header-2");
+        modified_headers->SetHeader("X-Test-Header-4", "Throttle2");
+      }));
+
+  client_.set_on_received_redirect_callback(base::BindLambdaForTesting(
+      [&]() { loader_->FollowRedirect(base::nullopt); }));
+
+  CreateLoaderAndStart();
+  factory_.NotifyClientOnReceiveRedirect();
+  base::RunLoop().RunUntilIdle();
+
+  ASSERT_TRUE(factory_.headers_removed_on_redirect().has_value());
+  EXPECT_THAT(*factory_.headers_removed_on_redirect(),
+              testing::ElementsAre("X-Test-Header-0", "X-Test-Header-1",
+                                   "X-Test-Header-2"));
+  ASSERT_TRUE(factory_.headers_modified_on_redirect().has_value());
+  EXPECT_EQ(
+      "X-Test-Header-3: Foo\r\n"
+      "X-Test-Header-4: Throttle2\r\n\r\n",
+      factory_.headers_modified_on_redirect()->ToString());
 }
 
 TEST_F(ThrottlingURLLoaderTest, CancelBeforeResponse) {
@@ -500,6 +662,7 @@ TEST_F(ThrottlingURLLoaderTest, CancelBeforeResponse) {
 
   EXPECT_EQ(1u, throttle_->will_start_request_called());
   EXPECT_EQ(0u, throttle_->will_redirect_request_called());
+  EXPECT_EQ(1u, throttle_->before_will_process_response_called());
   EXPECT_EQ(1u, throttle_->will_process_response_called());
 
   EXPECT_TRUE(
@@ -536,6 +699,7 @@ TEST_F(ThrottlingURLLoaderTest, DeferBeforeResponse) {
 
   EXPECT_EQ(1u, throttle_->will_start_request_called());
   EXPECT_EQ(0u, throttle_->will_redirect_request_called());
+  EXPECT_EQ(1u, throttle_->before_will_process_response_called());
   EXPECT_EQ(1u, throttle_->will_process_response_called());
 
   EXPECT_TRUE(
@@ -555,6 +719,7 @@ TEST_F(ThrottlingURLLoaderTest, DeferBeforeResponse) {
 
   EXPECT_EQ(1u, throttle_->will_start_request_called());
   EXPECT_EQ(0u, throttle_->will_redirect_request_called());
+  EXPECT_EQ(1u, throttle_->before_will_process_response_called());
   EXPECT_EQ(1u, throttle_->will_process_response_called());
 
   EXPECT_TRUE(
@@ -565,33 +730,7 @@ TEST_F(ThrottlingURLLoaderTest, DeferBeforeResponse) {
   EXPECT_EQ(1u, client_.on_complete_called());
 }
 
-TEST_F(ThrottlingURLLoaderTest, PipeClosureBeforeSyncResponse) {
-  base::RunLoop run_loop;
-  client_.set_on_complete_callback(base::Bind(
-      [](const base::Closure& quit_closure, int error) {
-        EXPECT_EQ(net::ERR_ABORTED, error);
-        quit_closure.Run();
-      },
-      run_loop.QuitClosure()));
-
-  CreateLoaderAndStart(true);
-
-  factory_.CloseClientPipe();
-
-  run_loop.Run();
-
-  EXPECT_EQ(1u, throttle_->will_start_request_called());
-  EXPECT_EQ(0u, throttle_->will_redirect_request_called());
-  EXPECT_EQ(0u, throttle_->will_process_response_called());
-
-  EXPECT_EQ(0u, client_.on_received_response_called());
-  EXPECT_EQ(0u, client_.on_received_redirect_called());
-  EXPECT_EQ(1u, client_.on_complete_called());
-}
-
-// Once browser-side navigation is the only option these two tests should be
-// merged as the sync and async cases will be identical.
-TEST_F(ThrottlingURLLoaderTest, PipeClosureBeforeAsyncResponse) {
+TEST_F(ThrottlingURLLoaderTest, PipeClosure) {
   base::RunLoop run_loop;
   client_.set_on_complete_callback(base::Bind(
       [](const base::Closure& quit_closure, int error) {
@@ -608,6 +747,7 @@ TEST_F(ThrottlingURLLoaderTest, PipeClosureBeforeAsyncResponse) {
 
   EXPECT_EQ(1u, throttle_->will_start_request_called());
   EXPECT_EQ(0u, throttle_->will_redirect_request_called());
+  EXPECT_EQ(0u, throttle_->before_will_process_response_called());
   EXPECT_EQ(0u, throttle_->will_process_response_called());
 
   EXPECT_EQ(0u, client_.on_received_response_called());
@@ -616,22 +756,27 @@ TEST_F(ThrottlingURLLoaderTest, PipeClosureBeforeAsyncResponse) {
 }
 
 TEST_F(ThrottlingURLLoaderTest, ResumeNoOpIfNotDeferred) {
-  auto resume_callback =
-      base::Bind([](URLLoaderThrottle::Delegate* delegate, bool* defer) {
+  auto resume_callback = base::BindRepeating(
+      [](URLLoaderThrottle::Delegate* delegate, bool* /* defer */) {
         delegate->Resume();
         delegate->Resume();
       });
   throttle_->set_will_start_request_callback(resume_callback);
-  throttle_->set_will_redirect_request_callback(resume_callback);
   throttle_->set_will_process_response_callback(std::move(resume_callback));
+  throttle_->set_will_redirect_request_callback(base::BindRepeating(
+      [](URLLoaderThrottle::Delegate* delegate, bool* /* defer */,
+         std::vector<std::string>* /* to_be_removed_headers */,
+         net::HttpRequestHeaders* /* modified_headers */) {
+        delegate->Resume();
+        delegate->Resume();
+      }));
 
   base::RunLoop run_loop;
-  client_.set_on_complete_callback(base::Bind(
-      [](const base::Closure& quit_closure, int error) {
+  client_.set_on_complete_callback(
+      base::BindLambdaForTesting([&run_loop](int error) {
         EXPECT_EQ(net::OK, error);
-        quit_closure.Run();
-      },
-      run_loop.QuitClosure()));
+        run_loop.Quit();
+      }));
 
   CreateLoaderAndStart();
   factory_.NotifyClientOnReceiveRedirect();
@@ -642,6 +787,7 @@ TEST_F(ThrottlingURLLoaderTest, ResumeNoOpIfNotDeferred) {
 
   EXPECT_EQ(1u, throttle_->will_start_request_called());
   EXPECT_EQ(1u, throttle_->will_redirect_request_called());
+  EXPECT_EQ(1u, throttle_->before_will_process_response_called());
   EXPECT_EQ(1u, throttle_->will_process_response_called());
 
   EXPECT_TRUE(
@@ -673,6 +819,7 @@ TEST_F(ThrottlingURLLoaderTest, CancelNoOpIfAlreadyCanceled) {
 
   EXPECT_EQ(1u, throttle_->will_start_request_called());
   EXPECT_EQ(0u, throttle_->will_redirect_request_called());
+  EXPECT_EQ(0u, throttle_->before_will_process_response_called());
   EXPECT_EQ(0u, throttle_->will_process_response_called());
 
   EXPECT_EQ(0u, factory_.create_loader_and_start_called());
@@ -710,6 +857,7 @@ TEST_F(ThrottlingURLLoaderTest, ResumeNoOpIfAlreadyCanceled) {
 
   EXPECT_EQ(1u, throttle_->will_start_request_called());
   EXPECT_EQ(0u, throttle_->will_redirect_request_called());
+  EXPECT_EQ(1u, throttle_->before_will_process_response_called());
   EXPECT_EQ(1u, throttle_->will_process_response_called());
 
   EXPECT_TRUE(
@@ -754,6 +902,8 @@ TEST_F(ThrottlingURLLoaderTest, BlockWithOneOfMultipleThrottles) {
   EXPECT_EQ(1u, throttle2->will_start_request_called());
   EXPECT_EQ(0u, throttle_->will_redirect_request_called());
   EXPECT_EQ(0u, throttle2->will_redirect_request_called());
+  EXPECT_EQ(0u, throttle_->before_will_process_response_called());
+  EXPECT_EQ(0u, throttle2->before_will_process_response_called());
   EXPECT_EQ(0u, throttle_->will_process_response_called());
   EXPECT_EQ(0u, throttle2->will_process_response_called());
 
@@ -777,6 +927,8 @@ TEST_F(ThrottlingURLLoaderTest, BlockWithOneOfMultipleThrottles) {
   EXPECT_EQ(1u, throttle2->will_start_request_called());
   EXPECT_EQ(0u, throttle_->will_redirect_request_called());
   EXPECT_EQ(0u, throttle2->will_redirect_request_called());
+  EXPECT_EQ(1u, throttle_->before_will_process_response_called());
+  EXPECT_EQ(1u, throttle2->before_will_process_response_called());
   EXPECT_EQ(1u, throttle_->will_process_response_called());
   EXPECT_EQ(1u, throttle2->will_process_response_called());
 
@@ -819,6 +971,8 @@ TEST_F(ThrottlingURLLoaderTest, BlockWithMultipleThrottles) {
   EXPECT_EQ(1u, throttle2->will_start_request_called());
   EXPECT_EQ(0u, throttle_->will_redirect_request_called());
   EXPECT_EQ(0u, throttle2->will_redirect_request_called());
+  EXPECT_EQ(0u, throttle_->before_will_process_response_called());
+  EXPECT_EQ(0u, throttle2->before_will_process_response_called());
   EXPECT_EQ(0u, throttle_->will_process_response_called());
   EXPECT_EQ(0u, throttle2->will_process_response_called());
 
@@ -850,6 +1004,8 @@ TEST_F(ThrottlingURLLoaderTest, BlockWithMultipleThrottles) {
   EXPECT_EQ(1u, throttle2->will_start_request_called());
   EXPECT_EQ(0u, throttle_->will_redirect_request_called());
   EXPECT_EQ(0u, throttle2->will_redirect_request_called());
+  EXPECT_EQ(1u, throttle_->before_will_process_response_called());
+  EXPECT_EQ(1u, throttle2->before_will_process_response_called());
   EXPECT_EQ(1u, throttle_->will_process_response_called());
   EXPECT_EQ(1u, throttle2->will_process_response_called());
 
@@ -948,6 +1104,7 @@ TEST_F(ThrottlingURLLoaderTest,
 
   EXPECT_EQ(1u, throttle_->will_start_request_called());
   EXPECT_EQ(0u, throttle_->will_redirect_request_called());
+  EXPECT_EQ(1u, throttle_->before_will_process_response_called());
   EXPECT_EQ(1u, throttle_->will_process_response_called());
 
   EXPECT_TRUE(
@@ -971,7 +1128,9 @@ TEST_F(ThrottlingURLLoaderTest,
   base::RunLoop run_loop1;
   throttle_->set_will_redirect_request_callback(base::BindRepeating(
       [](const base::RepeatingClosure& quit_closure,
-         URLLoaderThrottle::Delegate* delegate, bool* defer) {
+         URLLoaderThrottle::Delegate* delegate, bool* defer,
+         std::vector<std::string>* /* to_be_removed_headers */,
+         net::HttpRequestHeaders* /* modified_headers */) {
         *defer = true;
         quit_closure.Run();
       },
@@ -1000,6 +1159,7 @@ TEST_F(ThrottlingURLLoaderTest,
 
   EXPECT_EQ(1u, throttle_->will_start_request_called());
   EXPECT_EQ(1u, throttle_->will_redirect_request_called());
+  EXPECT_EQ(0u, throttle_->before_will_process_response_called());
   EXPECT_EQ(0u, throttle_->will_process_response_called());
 
   throttle_->delegate()->Resume();
@@ -1012,6 +1172,503 @@ TEST_F(ThrottlingURLLoaderTest,
 
   scoped_task_environment_.RunUntilIdle();
   EXPECT_EQ(nullptr, throttle_);
+}
+
+// Call RestartWithFlags() from a single throttle while processing
+// BeforeWillProcessResponse().
+TEST_F(ThrottlingURLLoaderTest, RestartWithFlags) {
+  base::RunLoop run_loop1;
+  base::RunLoop run_loop2;
+  base::RunLoop run_loop3;
+
+  // Check that the initial loader uses the default load flags (0).
+  factory_.set_on_create_loader_and_start(base::BindRepeating(
+      [](const base::RepeatingClosure& quit_closure,
+         const network::ResourceRequest& url_request) {
+        EXPECT_EQ(0, url_request.load_flags);
+        quit_closure.Run();
+      },
+      run_loop1.QuitClosure()));
+
+  // Restart the request when processing BeforeWillProcessResponse(), using
+  // different load flags (1).
+  throttle_->set_before_will_process_response_callback(
+      base::BindRepeating([](URLLoaderThrottle::Delegate* delegate,
+                             bool* defer) { delegate->RestartWithFlags(1); }));
+
+  CreateLoaderAndStart();
+
+  run_loop1.Run();
+
+  EXPECT_EQ(1u, factory_.create_loader_and_start_called());
+  EXPECT_EQ(1u, throttle_->will_start_request_called());
+  EXPECT_EQ(0u, throttle_->will_redirect_request_called());
+  EXPECT_EQ(0u, throttle_->before_will_process_response_called());
+  EXPECT_EQ(0u, throttle_->will_process_response_called());
+
+  // The next time we intercept CreateLoaderAndStart() should be for the
+  // restarted request (load flags of 1).
+  factory_.set_on_create_loader_and_start(base::BindRepeating(
+      [](const base::RepeatingClosure& quit_closure,
+         const network::ResourceRequest& url_request) {
+        EXPECT_EQ(1, url_request.load_flags);
+        quit_closure.Run();
+      },
+      run_loop2.QuitClosure()));
+
+  factory_.NotifyClientOnReceiveResponse();
+
+  run_loop2.Run();
+
+  // Now that the restarted request has been made, clear
+  // BeforeWillProcessResponse() so it doesn't restart the request yet again.
+  throttle_->set_before_will_process_response_callback(
+      TestURLLoaderThrottle::ThrottleCallback());
+
+  client_.set_on_complete_callback(base::BindRepeating(
+      [](const base::RepeatingClosure& quit_closure, int error) {
+        EXPECT_EQ(net::OK, error);
+        quit_closure.Run();
+      },
+      run_loop3.QuitClosure()));
+
+  // Complete the response.
+  factory_.NotifyClientOnReceiveResponse();
+  factory_.NotifyClientOnComplete(net::OK);
+
+  run_loop3.Run();
+
+  EXPECT_EQ(2u, factory_.create_loader_and_start_called());
+  EXPECT_EQ(1u, throttle_->will_start_request_called());
+  EXPECT_EQ(0u, throttle_->will_redirect_request_called());
+  EXPECT_EQ(2u, throttle_->before_will_process_response_called());
+  EXPECT_EQ(1u, throttle_->will_process_response_called());
+}
+
+// Call RestartWithFlags() from a single throttle after having deferred
+// BeforeWillProcessResponse().
+TEST_F(ThrottlingURLLoaderTest, DeferThenRestartWithFlags) {
+  base::RunLoop run_loop1;
+  base::RunLoop run_loop2;
+  base::RunLoop run_loop3;
+  base::RunLoop run_loop4;
+
+  // Check that the initial loader uses the default load flags (0).
+  factory_.set_on_create_loader_and_start(base::BindRepeating(
+      [](const base::RepeatingClosure& quit_closure,
+         const network::ResourceRequest& url_request) {
+        EXPECT_EQ(0, url_request.load_flags);
+        quit_closure.Run();
+      },
+      run_loop1.QuitClosure()));
+
+  // Defer BeforeWillProcessResponse().
+  throttle_->set_before_will_process_response_callback(base::BindRepeating(
+      [](const base::RepeatingClosure& quit_closure,
+         URLLoaderThrottle::Delegate* delegate, bool* defer) {
+        *defer = true;
+        quit_closure.Run();
+      },
+      run_loop2.QuitClosure()));
+
+  CreateLoaderAndStart();
+
+  run_loop1.Run();
+
+  EXPECT_EQ(1u, factory_.create_loader_and_start_called());
+  EXPECT_EQ(1u, throttle_->will_start_request_called());
+  EXPECT_EQ(0u, throttle_->will_redirect_request_called());
+  EXPECT_EQ(0u, throttle_->before_will_process_response_called());
+  EXPECT_EQ(0u, throttle_->will_process_response_called());
+
+  factory_.NotifyClientOnReceiveResponse();
+
+  run_loop2.Run();
+
+  EXPECT_EQ(1u, factory_.create_loader_and_start_called());
+  EXPECT_EQ(1u, throttle_->will_start_request_called());
+  EXPECT_EQ(0u, throttle_->will_redirect_request_called());
+  EXPECT_EQ(1u, throttle_->before_will_process_response_called());
+  EXPECT_EQ(0u, throttle_->will_process_response_called());
+
+  // The next time we intercept CreateLoaderAndStart() should be for the
+  // restarted request (load flags of 1).
+  factory_.set_on_create_loader_and_start(base::BindRepeating(
+      [](const base::RepeatingClosure& quit_closure,
+         const network::ResourceRequest& url_request) {
+        EXPECT_EQ(1, url_request.load_flags);
+        quit_closure.Run();
+      },
+      run_loop3.QuitClosure()));
+
+  throttle_->delegate()->RestartWithFlags(1);
+  throttle_->delegate()->Resume();
+
+  run_loop3.Run();
+
+  // Now that the restarted request has been made, clear
+  // BeforeWillProcessResponse().
+  throttle_->set_before_will_process_response_callback(
+      TestURLLoaderThrottle::ThrottleCallback());
+
+  client_.set_on_complete_callback(base::BindRepeating(
+      [](const base::RepeatingClosure& quit_closure, int error) {
+        EXPECT_EQ(net::OK, error);
+        quit_closure.Run();
+      },
+      run_loop4.QuitClosure()));
+
+  // Complete the response.
+  factory_.NotifyClientOnReceiveResponse();
+  factory_.NotifyClientOnComplete(net::OK);
+
+  run_loop4.Run();
+
+  EXPECT_EQ(2u, factory_.create_loader_and_start_called());
+  EXPECT_EQ(1u, throttle_->will_start_request_called());
+  EXPECT_EQ(0u, throttle_->will_redirect_request_called());
+  EXPECT_EQ(2u, throttle_->before_will_process_response_called());
+  EXPECT_EQ(1u, throttle_->will_process_response_called());
+}
+
+// Call RestartWithFlags() from a multiple throttles while processing
+// BeforeWillProcessResponse(). Ensures that the request is restarted exactly
+// once, using the combination of all additional load flags.
+TEST_F(ThrottlingURLLoaderTest, MultipleRestartWithFlags) {
+  // Create two additional TestURLLoaderThrottles for a total of 3, and keep
+  // local unowned pointers to them in |throttles|.
+  std::vector<TestURLLoaderThrottle*> throttles;
+  ASSERT_EQ(1u, throttles_.size());
+  throttles.push_back(throttle_);
+  for (size_t i = 0; i < 2u; ++i) {
+    auto throttle = std::make_unique<TestURLLoaderThrottle>();
+    throttles.push_back(throttle.get());
+    throttles_.push_back(std::move(throttle));
+  }
+  ASSERT_EQ(3u, throttles_.size());
+  ASSERT_EQ(3u, throttles.size());
+
+  base::RunLoop run_loop1;
+  base::RunLoop run_loop2;
+  base::RunLoop run_loop3;
+
+  // Check that the initial loader uses the default load flags (0).
+  factory_.set_on_create_loader_and_start(base::BindRepeating(
+      [](const base::RepeatingClosure& quit_closure,
+         const network::ResourceRequest& url_request) {
+        EXPECT_EQ(0, url_request.load_flags);
+        quit_closure.Run();
+      },
+      run_loop1.QuitClosure()));
+
+  // Have two of the three throttles restart whe processing
+  // BeforeWillProcessResponse(), using
+  // different load flags (2 and 8).
+  throttles[0]->set_before_will_process_response_callback(
+      base::BindRepeating([](URLLoaderThrottle::Delegate* delegate,
+                             bool* defer) { delegate->RestartWithFlags(2); }));
+  throttles[2]->set_before_will_process_response_callback(
+      base::BindRepeating([](URLLoaderThrottle::Delegate* delegate,
+                             bool* defer) { delegate->RestartWithFlags(8); }));
+
+  CreateLoaderAndStart();
+
+  run_loop1.Run();
+
+  EXPECT_EQ(1u, factory_.create_loader_and_start_called());
+  for (auto* throttle : throttles) {
+    EXPECT_EQ(1u, throttle->will_start_request_called());
+    EXPECT_EQ(0u, throttle->will_redirect_request_called());
+    EXPECT_EQ(0u, throttle->before_will_process_response_called());
+    EXPECT_EQ(0u, throttle->will_process_response_called());
+  }
+
+  // The next time we intercept CreateLoaderAndStart() should be for the
+  // restarted request (load flags of 10 = (2 | 8)).
+  factory_.set_on_create_loader_and_start(base::BindRepeating(
+      [](const base::RepeatingClosure& quit_closure,
+         const network::ResourceRequest& url_request) {
+        EXPECT_EQ(10, url_request.load_flags);
+        quit_closure.Run();
+      },
+      run_loop2.QuitClosure()));
+
+  factory_.NotifyClientOnReceiveResponse();
+
+  run_loop2.Run();
+
+  // Now that the restarted request has been made, clear
+  // BeforeWillProcessResponse() so it doesn't restart the request yet again.
+  for (auto* throttle : throttles) {
+    throttle->set_before_will_process_response_callback(
+        TestURLLoaderThrottle::ThrottleCallback());
+  }
+
+  client_.set_on_complete_callback(base::BindRepeating(
+      [](const base::RepeatingClosure& quit_closure, int error) {
+        EXPECT_EQ(net::OK, error);
+        quit_closure.Run();
+      },
+      run_loop3.QuitClosure()));
+
+  // Complete the response.
+  factory_.NotifyClientOnReceiveResponse();
+  factory_.NotifyClientOnComplete(net::OK);
+
+  run_loop3.Run();
+
+  EXPECT_EQ(2u, factory_.create_loader_and_start_called());
+  for (auto* throttle : throttles) {
+    EXPECT_EQ(1u, throttle->will_start_request_called());
+    EXPECT_EQ(0u, throttle->will_redirect_request_called());
+    EXPECT_EQ(2u, throttle->before_will_process_response_called());
+    EXPECT_EQ(1u, throttle->will_process_response_called());
+  }
+}
+
+// Call RestartWithFlags() from multiple throttles after having deferred
+// BeforeWillProcessResponse() in each. Ensures that the request is started
+// exactly once, using the combination of all additional load flags.
+TEST_F(ThrottlingURLLoaderTest, MultipleDeferThenRestartWithFlags) {
+  // Create two additional TestURLLoaderThrottles for a total of 3, and keep
+  // local unowned pointers to them in |throttles|.
+  std::vector<TestURLLoaderThrottle*> throttles;
+  ASSERT_EQ(1u, throttles_.size());
+  throttles.push_back(throttle_);
+  for (size_t i = 0; i < 2u; ++i) {
+    auto throttle = std::make_unique<TestURLLoaderThrottle>();
+    throttles.push_back(throttle.get());
+    throttles_.push_back(std::move(throttle));
+  }
+
+  ASSERT_EQ(3u, throttles_.size());
+  ASSERT_EQ(3u, throttles.size());
+
+  base::RunLoop run_loop1;
+  base::RunLoop run_loop2;
+  base::RunLoop run_loop3;
+  base::RunLoop run_loop4;
+
+  // Check that the initial loader uses the default load flags (0).
+  factory_.set_on_create_loader_and_start(base::BindRepeating(
+      [](const base::RepeatingClosure& quit_closure,
+         const network::ResourceRequest& url_request) {
+        EXPECT_EQ(0, url_request.load_flags);
+        quit_closure.Run();
+      },
+      run_loop1.QuitClosure()));
+
+  // Have all of the throttles defer. Once they have all been deferred, quit
+  // run_loop2.
+  int throttle_counter = 0;
+  for (auto* throttle : throttles) {
+    throttle->set_before_will_process_response_callback(base::BindRepeating(
+        [](const base::RepeatingClosure& quit_closure, int* count,
+           URLLoaderThrottle::Delegate* delegate, bool* defer) {
+          *defer = true;
+          if (++(*count) == 3) {
+            quit_closure.Run();
+          }
+        },
+        run_loop2.QuitClosure(), &throttle_counter));
+  }
+
+  CreateLoaderAndStart();
+
+  run_loop1.Run();
+
+  EXPECT_EQ(1u, factory_.create_loader_and_start_called());
+  for (auto* throttle : throttles) {
+    EXPECT_EQ(1u, throttle->will_start_request_called());
+    EXPECT_EQ(0u, throttle->will_redirect_request_called());
+    EXPECT_EQ(0u, throttle->before_will_process_response_called());
+    EXPECT_EQ(0u, throttle->will_process_response_called());
+  }
+
+  factory_.NotifyClientOnReceiveResponse();
+
+  run_loop2.Run();
+
+  for (auto* throttle : throttles) {
+    EXPECT_EQ(1u, throttle->will_start_request_called());
+    EXPECT_EQ(0u, throttle->will_redirect_request_called());
+    EXPECT_EQ(1u, throttle->before_will_process_response_called());
+    EXPECT_EQ(0u, throttle->will_process_response_called());
+  }
+
+  // The next time we intercept CreateLoaderAndStart() should be for the
+  // restarted request (load flags of 1 | 2 | 4).
+  factory_.set_on_create_loader_and_start(base::BindRepeating(
+      [](const base::RepeatingClosure& quit_closure,
+         const network::ResourceRequest& url_request) {
+        EXPECT_EQ(7, url_request.load_flags);
+        quit_closure.Run();
+      },
+      run_loop3.QuitClosure()));
+
+  int next_load_flag = 1;
+  for (auto* throttle : throttles) {
+    throttle->delegate()->RestartWithFlags(next_load_flag);
+    throttle->delegate()->Resume();
+    next_load_flag <<= 1;
+  }
+
+  run_loop3.Run();
+
+  // Now that the restarted request has been made, clear
+  // BeforeWillProcessResponse().
+  for (auto* throttle : throttles) {
+    throttle->set_before_will_process_response_callback(
+        TestURLLoaderThrottle::ThrottleCallback());
+  }
+
+  client_.set_on_complete_callback(base::BindRepeating(
+      [](const base::RepeatingClosure& quit_closure, int error) {
+        EXPECT_EQ(net::OK, error);
+        quit_closure.Run();
+      },
+      run_loop4.QuitClosure()));
+
+  // Complete the response.
+  factory_.NotifyClientOnReceiveResponse();
+  factory_.NotifyClientOnComplete(net::OK);
+
+  run_loop4.Run();
+
+  EXPECT_EQ(2u, factory_.create_loader_and_start_called());
+  for (auto* throttle : throttles) {
+    EXPECT_EQ(1u, throttle->will_start_request_called());
+    EXPECT_EQ(0u, throttle->will_redirect_request_called());
+    EXPECT_EQ(2u, throttle->before_will_process_response_called());
+    EXPECT_EQ(1u, throttle->will_process_response_called());
+  }
+}
+
+// Call RestartWithFlags() from multiple throttles -- two while deferred, and
+// one while processing BeforeWillProcessResponse(). Ensures that the request is
+// restarted exactly once, using the combination of all additional load flags.
+TEST_F(ThrottlingURLLoaderTest, MultipleRestartWithFlagsDeferAndSync) {
+  // Create two additional TestURLLoaderThrottles for a total of 3, and keep
+  // local unowned pointers to them in |throttles|.
+  std::vector<TestURLLoaderThrottle*> throttles;
+  ASSERT_EQ(1u, throttles_.size());
+  throttles.push_back(throttle_);
+  for (size_t i = 0; i < 2u; ++i) {
+    auto throttle = std::make_unique<TestURLLoaderThrottle>();
+    throttles.push_back(throttle.get());
+    throttles_.push_back(std::move(throttle));
+  }
+
+  ASSERT_EQ(3u, throttles_.size());
+  ASSERT_EQ(3u, throttles.size());
+
+  base::RunLoop run_loop1;
+  base::RunLoop run_loop2;
+  base::RunLoop run_loop3;
+  base::RunLoop run_loop4;
+
+  // Check that the initial loader uses the default load flags (0).
+  factory_.set_on_create_loader_and_start(base::BindRepeating(
+      [](const base::RepeatingClosure& quit_closure,
+         const network::ResourceRequest& url_request) {
+        EXPECT_EQ(0, url_request.load_flags);
+        quit_closure.Run();
+      },
+      run_loop1.QuitClosure()));
+
+  // Have two of the throttles defer, and one call restart
+  // synchronously. Once all are run, quit run_loop2.
+  int throttle_counter = 0;
+  for (size_t i = 0; i < 2u; ++i) {
+    throttles[i]->set_before_will_process_response_callback(base::BindRepeating(
+        [](const base::RepeatingClosure& quit_closure, int* count,
+           URLLoaderThrottle::Delegate* delegate, bool* defer) {
+          *defer = true;
+          if (++(*count) == 3) {
+            quit_closure.Run();
+          }
+        },
+        run_loop2.QuitClosure(), &throttle_counter));
+  }
+  throttles[2]->set_before_will_process_response_callback(base::BindRepeating(
+      [](const base::RepeatingClosure& quit_closure, int* count,
+         URLLoaderThrottle::Delegate* delegate, bool* defer) {
+        delegate->RestartWithFlags(4);
+        if (++(*count) == 3) {
+          quit_closure.Run();
+        }
+      },
+      run_loop2.QuitClosure(), &throttle_counter));
+
+  CreateLoaderAndStart();
+
+  run_loop1.Run();
+
+  EXPECT_EQ(1u, factory_.create_loader_and_start_called());
+  for (auto* throttle : throttles) {
+    EXPECT_EQ(1u, throttle->will_start_request_called());
+    EXPECT_EQ(0u, throttle->will_redirect_request_called());
+    EXPECT_EQ(0u, throttle->before_will_process_response_called());
+    EXPECT_EQ(0u, throttle->will_process_response_called());
+  }
+
+  factory_.NotifyClientOnReceiveResponse();
+
+  run_loop2.Run();
+
+  for (auto* throttle : throttles) {
+    EXPECT_EQ(1u, throttle->will_start_request_called());
+    EXPECT_EQ(0u, throttle->will_redirect_request_called());
+    EXPECT_EQ(1u, throttle->before_will_process_response_called());
+    EXPECT_EQ(0u, throttle->will_process_response_called());
+  }
+
+  // The next time we intercept CreateLoaderAndStart() should be for the
+  // restarted request (load flags of 1 | 2 | 4).
+  factory_.set_on_create_loader_and_start(base::BindRepeating(
+      [](const base::RepeatingClosure& quit_closure,
+         const network::ResourceRequest& url_request) {
+        EXPECT_EQ(7, url_request.load_flags);
+        quit_closure.Run();
+      },
+      run_loop3.QuitClosure()));
+
+  int next_load_flag = 1;
+  for (auto* throttle : throttles) {
+    throttle->delegate()->RestartWithFlags(next_load_flag);
+    throttle->delegate()->Resume();
+    next_load_flag <<= 1;
+  }
+
+  run_loop3.Run();
+
+  // Now that the restarted request has been made, clear
+  // BeforeWillProcessResponse().
+  for (auto* throttle : throttles) {
+    throttle->set_before_will_process_response_callback(
+        TestURLLoaderThrottle::ThrottleCallback());
+  }
+
+  client_.set_on_complete_callback(base::BindRepeating(
+      [](const base::RepeatingClosure& quit_closure, int error) {
+        EXPECT_EQ(net::OK, error);
+        quit_closure.Run();
+      },
+      run_loop4.QuitClosure()));
+
+  // Complete the response.
+  factory_.NotifyClientOnReceiveResponse();
+  factory_.NotifyClientOnComplete(net::OK);
+
+  run_loop4.Run();
+
+  EXPECT_EQ(2u, factory_.create_loader_and_start_called());
+  for (auto* throttle : throttles) {
+    EXPECT_EQ(1u, throttle->will_start_request_called());
+    EXPECT_EQ(0u, throttle->will_redirect_request_called());
+    EXPECT_EQ(2u, throttle->before_will_process_response_called());
+    EXPECT_EQ(1u, throttle->will_process_response_called());
+  }
 }
 
 }  // namespace

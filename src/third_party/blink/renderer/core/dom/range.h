@@ -26,9 +26,9 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_DOM_RANGE_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_DOM_RANGE_H_
 
-#include "third_party/blink/renderer/bindings/core/v8/exception_state.h"
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/dom/range_boundary_point.h"
+#include "third_party/blink/renderer/platform/bindings/exception_state.h"
 #include "third_party/blink/renderer/platform/bindings/script_wrappable.h"
 #include "third_party/blink/renderer/platform/geometry/float_rect.h"
 #include "third_party/blink/renderer/platform/geometry/int_rect.h"
@@ -46,6 +46,7 @@ class ExceptionState;
 class FloatQuad;
 class Node;
 class NodeWithIndex;
+class StringOrTrustedHTML;
 class Text;
 
 class CORE_EXPORT Range final : public ScriptWrappable {
@@ -59,6 +60,13 @@ class CORE_EXPORT Range final : public ScriptWrappable {
                        Node* end_container,
                        unsigned end_offset);
   static Range* Create(Document&, const Position&, const Position&);
+
+  explicit Range(Document&);
+  Range(Document&,
+        Node* start_container,
+        unsigned start_offset,
+        Node* end_container,
+        unsigned end_offset);
 
   void Dispose();
 
@@ -114,7 +122,7 @@ class CORE_EXPORT Range final : public ScriptWrappable {
 
   String GetText() const;
 
-  DocumentFragment* createContextualFragment(const String& html,
+  DocumentFragment* createContextualFragment(const StringOrTrustedHTML& html,
                                              ExceptionState&);
 
   void detach();
@@ -147,6 +155,11 @@ class CORE_EXPORT Range final : public ScriptWrappable {
   void NodeChildrenWillBeRemoved(ContainerNode&);
   void NodeWillBeRemoved(Node&);
 
+  // They are special fixups only for sequential focus navigation
+  // starting point.
+  void FixupRemovedChildrenAcrossShadowBoundary(ContainerNode& container);
+  void FixupRemovedNodeAcrossShadowBoundary(Node& node);
+
   void DidInsertText(const CharacterData&, unsigned offset, unsigned length);
   void DidRemoveText(const CharacterData&, unsigned offset, unsigned length);
   void DidMergeTextNodes(const NodeWithIndex& old_node, unsigned offset);
@@ -166,13 +179,6 @@ class CORE_EXPORT Range final : public ScriptWrappable {
   void Trace(blink::Visitor*) override;
 
  private:
-  explicit Range(Document&);
-  Range(Document&,
-        Node* start_container,
-        unsigned start_offset,
-        Node* end_container,
-        unsigned end_offset);
-
   void SetDocument(Document&);
 
   void CheckNodeBA(Node*, ExceptionState&) const;
@@ -204,6 +210,9 @@ class CORE_EXPORT Range final : public ScriptWrappable {
                                                 ExceptionState&);
   void UpdateSelectionIfAddedToSelection();
   void RemoveFromSelectionIfInDifferentRoot(Document& old_document);
+
+  DocumentFragment* createContextualFragmentFromString(const String& html,
+                                                       ExceptionState&);
 
   Member<Document> owner_document_;  // Cannot be null.
   RangeBoundaryPoint start_;

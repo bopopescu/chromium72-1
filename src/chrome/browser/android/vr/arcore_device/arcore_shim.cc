@@ -6,6 +6,7 @@
 
 #include <dlfcn.h>
 
+#include "base/android/build_info.h"
 #include "base/logging.h"
 
 namespace {
@@ -15,14 +16,24 @@ namespace {
   CALL(ArCamera_getDisplayOrientedPose)  \
   CALL(ArCamera_getProjectionMatrix)     \
   CALL(ArCamera_getTrackingState)        \
+  CALL(ArCamera_getViewMatrix)           \
   CALL(ArConfig_create)                  \
   CALL(ArConfig_destroy)                 \
   CALL(ArFrame_acquireCamera)            \
   CALL(ArFrame_create)                   \
   CALL(ArFrame_destroy)                  \
+  CALL(ArFrame_hitTest)                  \
   CALL(ArFrame_transformDisplayUvCoords) \
+  CALL(ArHitResult_create)               \
+  CALL(ArHitResult_destroy)              \
+  CALL(ArHitResult_getHitPose)           \
+  CALL(ArHitResultList_create)           \
+  CALL(ArHitResultList_destroy)          \
+  CALL(ArHitResultList_getItem)          \
+  CALL(ArHitResultList_getSize)          \
   CALL(ArPose_create)                    \
   CALL(ArPose_destroy)                   \
+  CALL(ArPose_getMatrix)                 \
   CALL(ArPose_getPoseRaw)                \
   CALL(ArSession_checkSupported)         \
   CALL(ArSession_configure)              \
@@ -32,6 +43,10 @@ namespace {
   CALL(ArSession_resume)                 \
   CALL(ArSession_setCameraTextureName)   \
   CALL(ArSession_setDisplayGeometry)     \
+  CALL(ArHitResult_acquireTrackable)     \
+  CALL(ArTrackable_getType)              \
+  CALL(ArTrackable_release)              \
+  CALL(ArPlane_isPoseInPolygon)          \
   CALL(ArSession_update)
 
 #define CALL(fn) decltype(&fn) impl_##fn = nullptr;
@@ -56,14 +71,18 @@ void LoadFunction(void* handle, const char* function_name, Fn* fn_out) {
 
 namespace vr {
 
-bool LoadArCoreSdk() {
+bool LoadArCoreSdk(const std::string& libraryPath) {
   if (arcore_api)
     return true;
 
-  sdk_handle = dlopen("libarcore_sdk_c_minimal.so", RTLD_GLOBAL | RTLD_NOW);
+  sdk_handle = dlopen(libraryPath.c_str(), RTLD_GLOBAL | RTLD_NOW);
   if (!sdk_handle) {
-    DLOG(ERROR) << "could not open libarcore_sdk_c_minimal.so";
+    char* error_string = nullptr;
+    error_string = dlerror();
+    LOG(ERROR) << "Could not open libarcore_sdk_c_minimal.so: " << error_string;
     return false;
+  } else {
+    VLOG(2) << "Opened shim shared library.";
   }
 
   // TODO(vollick): check SDK version.
@@ -74,6 +93,11 @@ bool LoadArCoreSdk() {
 #undef CALL
 
   return true;
+}
+
+bool SupportsArCore() {
+  return base::android::BuildInfo::GetInstance()->sdk_int() >=
+         base::android::SDK_VERSION_OREO;
 }
 
 }  // namespace vr
@@ -101,6 +125,12 @@ void ArCamera_getTrackingState(const ArSession* session,
                                              out_tracking_state);
 }
 
+void ArCamera_getViewMatrix(const ArSession* session,
+                            const ArCamera* camera,
+                            float* out_matrix) {
+  arcore_api->impl_ArCamera_getViewMatrix(session, camera, out_matrix);
+}
+
 void ArConfig_create(const ArSession* session, ArConfig** out_config) {
   arcore_api->impl_ArConfig_create(session, out_config);
 }
@@ -123,6 +153,15 @@ void ArFrame_destroy(ArFrame* frame) {
   arcore_api->impl_ArFrame_destroy(frame);
 }
 
+void ArFrame_hitTest(const ArSession* session,
+                     const ArFrame* frame,
+                     float pixel_x,
+                     float pixel_y,
+                     ArHitResultList* out_hit_results) {
+  arcore_api->impl_ArFrame_hitTest(session, frame, pixel_x, pixel_y,
+                                   out_hit_results);
+}
+
 void ArFrame_transformDisplayUvCoords(const ArSession* session,
                                       const ArFrame* frame,
                                       int32_t num_elements,
@@ -130,6 +169,69 @@ void ArFrame_transformDisplayUvCoords(const ArSession* session,
                                       float* uvs_out) {
   arcore_api->impl_ArFrame_transformDisplayUvCoords(
       session, frame, num_elements, uvs_in, uvs_out);
+}
+
+void ArHitResult_create(const ArSession* session,
+                        ArHitResult** out_hit_result) {
+  arcore_api->impl_ArHitResult_create(session, out_hit_result);
+}
+
+void ArHitResult_destroy(ArHitResult* hit_result) {
+  arcore_api->impl_ArHitResult_destroy(hit_result);
+}
+
+void ArHitResult_getHitPose(const ArSession* session,
+                            const ArHitResult* hit_result,
+                            ArPose* out_pose) {
+  arcore_api->impl_ArHitResult_getHitPose(session, hit_result, out_pose);
+}
+
+void ArHitResult_acquireTrackable(const ArSession* session,
+                                  const ArHitResult* hit_result,
+                                  ArTrackable** out_trackable) {
+  arcore_api->impl_ArHitResult_acquireTrackable(session, hit_result,
+                                                out_trackable);
+}
+
+void ArTrackable_getType(const ArSession* session,
+                         const ArTrackable* trackable,
+                         ArTrackableType* out_trackable_type) {
+  arcore_api->impl_ArTrackable_getType(session, trackable, out_trackable_type);
+}
+
+void ArPlane_isPoseInPolygon(const ArSession* session,
+                             const ArPlane* plane,
+                             const ArPose* pose,
+                             int32_t* out_pose_in_polygon) {
+  arcore_api->impl_ArPlane_isPoseInPolygon(session, plane, pose,
+                                           out_pose_in_polygon);
+}
+
+void ArTrackable_release(ArTrackable* trackable) {
+  arcore_api->impl_ArTrackable_release(trackable);
+}
+
+void ArHitResultList_create(const ArSession* session,
+                            ArHitResultList** out_hit_result_list) {
+  arcore_api->impl_ArHitResultList_create(session, out_hit_result_list);
+}
+
+void ArHitResultList_destroy(ArHitResultList* hit_result_list) {
+  arcore_api->impl_ArHitResultList_destroy(hit_result_list);
+}
+
+void ArHitResultList_getItem(const ArSession* session,
+                             const ArHitResultList* hit_result_list,
+                             int index,
+                             ArHitResult* out_hit_result) {
+  arcore_api->impl_ArHitResultList_getItem(session, hit_result_list, index,
+                                           out_hit_result);
+}
+
+void ArHitResultList_getSize(const ArSession* session,
+                             const ArHitResultList* hit_result_list,
+                             int* out_size) {
+  arcore_api->impl_ArHitResultList_getSize(session, hit_result_list, out_size);
 }
 
 void ArPose_create(const ArSession* session,
@@ -140,6 +242,12 @@ void ArPose_create(const ArSession* session,
 
 void ArPose_destroy(ArPose* pose) {
   arcore_api->impl_ArPose_destroy(pose);
+}
+
+void ArPose_getMatrix(const ArSession* session,
+                      const ArPose* pose,
+                      float* out_matrix) {
+  arcore_api->impl_ArPose_getMatrix(session, pose, out_matrix);
 }
 
 void ArPose_getPoseRaw(const ArSession* session,

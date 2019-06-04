@@ -28,8 +28,9 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include "third_party/blink/renderer/platform/audio/audio_dsp_kernel.h"
 #include "third_party/blink/renderer/platform/audio/audio_dsp_kernel_processor.h"
+#include "third_party/blink/renderer/platform/audio/audio_dsp_kernel.h"
+#include "third_party/blink/renderer/platform/wtf/wtf.h"
 
 namespace blink {
 
@@ -66,7 +67,7 @@ void AudioDSPKernelProcessor::Uninitialize() {
 
 void AudioDSPKernelProcessor::Process(const AudioBus* source,
                                       AudioBus* destination,
-                                      size_t frames_to_process) {
+                                      uint32_t frames_to_process) {
   DCHECK(source);
   DCHECK(destination);
   if (!source || !destination)
@@ -97,7 +98,8 @@ void AudioDSPKernelProcessor::Process(const AudioBus* source,
   }
 }
 
-void AudioDSPKernelProcessor::ProcessOnlyAudioParams(size_t frames_to_process) {
+void AudioDSPKernelProcessor::ProcessOnlyAudioParams(
+    uint32_t frames_to_process) {
   if (!IsInitialized())
     return;
 

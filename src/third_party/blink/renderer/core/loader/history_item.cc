@@ -28,8 +28,10 @@
 #include <memory>
 #include <utility>
 
+#include "third_party/blink/renderer/bindings/core/v8/serialization/serialized_script_value.h"
 #include "third_party/blink/renderer/core/html/forms/form_controller.h"
 #include "third_party/blink/renderer/platform/loader/fetch/resource_request.h"
+#include "third_party/blink/renderer/platform/network/encoded_form_data.h"
 #include "third_party/blink/renderer/platform/weborigin/security_policy.h"
 #include "third_party/blink/renderer/platform/wtf/assertions.h"
 #include "third_party/blink/renderer/platform/wtf/text/cstring.h"
@@ -163,10 +165,12 @@ EncodedFormData* HistoryItem::FormData() {
 ResourceRequest HistoryItem::GenerateResourceRequest(
     mojom::FetchCacheMode cache_mode) {
   ResourceRequest request(url_string_);
+  // TODO(domfarolino): Stop storing ResourceRequest's generated referrer as a
+  // header and instead use a separate member. See https://crbug.com/850813.
   request.SetHTTPReferrer(referrer_);
   request.SetCacheMode(cache_mode);
   if (form_data_) {
-    request.SetHTTPMethod(HTTPNames::POST);
+    request.SetHTTPMethod(http_names::kPOST);
     request.SetHTTPBody(form_data_);
     request.SetHTTPContentType(form_content_type_);
     request.SetHTTPOriginToMatchReferrerIfNeeded();

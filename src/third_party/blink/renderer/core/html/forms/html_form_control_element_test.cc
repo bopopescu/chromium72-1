@@ -75,7 +75,7 @@ TEST_F(HTMLFormControlElementTest, customValidationMessageTextDirection) {
   input->setCustomValidity(
       String::FromUTF8("\xD8\xB9\xD8\xB1\xD8\xA8\xD9\x89"));
   input->setAttribute(
-      HTMLNames::titleAttr,
+      html_names::kTitleAttr,
       AtomicString::FromUTF8("\xD8\xB9\xD8\xB1\xD8\xA8\xD9\x89"));
 
   String message = input->validationMessage().StripWhiteSpace();
@@ -118,7 +118,7 @@ TEST_F(HTMLFormControlElementTest, UpdateValidationMessageSkippedIfPrinting) {
   SetHtmlInnerHTML("<body><input required id=input></body>");
   ValidationMessageClient* validation_message_client =
       new MockFormValidationMessageClient();
-  GetPage().SetValidationMessageClient(validation_message_client);
+  GetPage().SetValidationMessageClientForTesting(validation_message_client);
   Page::OrdinaryPages().insert(&GetPage());
 
   HTMLInputElement* input = ToHTMLInputElement(GetElementById("input"));
@@ -135,9 +135,11 @@ TEST_F(HTMLFormControlElementTest, DoNotUpdateLayoutDuringDOMMutation) {
   GetDocument().documentElement()->SetInnerHTMLFromString("<select></select>");
   HTMLFormControlElement* const select =
       ToHTMLFormControlElement(GetDocument().QuerySelector("select"));
-  auto* const optgroup = GetDocument().CreateRawElement(HTMLNames::optgroupTag);
+  auto* const optgroup =
+      GetDocument().CreateRawElement(html_names::kOptgroupTag);
   auto* validation_client = new MockFormValidationMessageClient();
-  GetDocument().GetPage()->SetValidationMessageClient(validation_client);
+  GetDocument().GetPage()->SetValidationMessageClientForTesting(
+      validation_client);
 
   select->setCustomValidity("foobar");
   select->reportValidity();

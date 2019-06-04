@@ -44,16 +44,17 @@ import org.chromium.chrome.test.ChromeTabbedActivityTestRule;
 import org.chromium.chrome.test.util.FullscreenTestUtils;
 import org.chromium.chrome.test.util.OmniboxTestUtils;
 import org.chromium.chrome.test.util.PrerenderTestHelper;
-import org.chromium.content.browser.test.util.Criteria;
-import org.chromium.content.browser.test.util.CriteriaHelper;
-import org.chromium.content.browser.test.util.JavaScriptUtils;
-import org.chromium.content.browser.test.util.TestTouchUtils;
-import org.chromium.content.browser.test.util.TouchCommon;
-import org.chromium.content.browser.test.util.UiUtils;
+import org.chromium.chrome.test.util.browser.Features;
 import org.chromium.content_public.browser.GestureListenerManager;
 import org.chromium.content_public.browser.GestureStateListener;
 import org.chromium.content_public.browser.SelectionPopupController;
-import org.chromium.content_public.browser.WebContents;
+import org.chromium.content_public.browser.test.util.Criteria;
+import org.chromium.content_public.browser.test.util.CriteriaHelper;
+import org.chromium.content_public.browser.test.util.JavaScriptUtils;
+import org.chromium.content_public.browser.test.util.TestTouchUtils;
+import org.chromium.content_public.browser.test.util.TouchCommon;
+import org.chromium.content_public.browser.test.util.UiUtils;
+import org.chromium.content_public.browser.test.util.WebContentsUtils;
 import org.chromium.net.test.EmbeddedTestServer;
 
 import java.util.concurrent.TimeUnit;
@@ -115,10 +116,10 @@ public class FullscreenManagerTest {
                     + "    var mode = 0;"
                     + "    function toggleFullScreen() {"
                     + "      if (mode == 0) {"
-                    + "        document.body.requestFullscreen({prefersNavigationBar: true});"
+                    + "        document.body.requestFullscreen({navigationUI: \"show\"});"
                     + "        mode++;"
                     + "      } else if (mode == 2) {"
-                    + "        document.body.requestFullscreen({prefersNavigationBar: false});"
+                    + "        document.body.requestFullscreen({navigationUI: \"hide\"});"
                     + "        mode++;"
                     + "      } else if (mode == 1 || mode == 3) {"
                     + "        document.exitFullscreen();"
@@ -230,8 +231,9 @@ public class FullscreenManagerTest {
     }
 
     @Test
-    @LargeTest
-    @Feature({"Fullscreen"})
+    //@LargeTest
+    //@Feature({"Fullscreen"})
+    @DisabledTest(message = "crbug.com/901280")
     public void testManualHidingShowingBrowserControls() throws InterruptedException {
         FullscreenManagerTestUtils.disableBrowserOverrides();
         mActivityTestRule.startMainActivityWithURL(LONG_HTML_TEST_PAGE);
@@ -250,8 +252,9 @@ public class FullscreenManagerTest {
     }
 
     @Test
-    @LargeTest
-    @RetryOnFailure
+    //@LargeTest
+    //@RetryOnFailure
+    @DisabledTest(message = "crbug.com/901280")
     public void testHideBrowserControlsAfterFlingBoosting() throws InterruptedException {
         // Test that fling boosting doesn't break the scroll state management
         // that's used by the FullscreenManager to dispatch URL bar based
@@ -278,9 +281,8 @@ public class FullscreenManagerTest {
         };
 
         Tab tab = mActivityTestRule.getActivity().getActivityTab();
-        WebContents webContents = tab.getWebContents();
         GestureListenerManager gestureListenerManager =
-                GestureListenerManager.fromWebContents(webContents);
+                WebContentsUtils.getGestureListenerManager(tab.getWebContents());
         gestureListenerManager.addListener(scrollListener);
 
         final CallbackHelper viewportCallback = new CallbackHelper();
@@ -349,6 +351,7 @@ public class FullscreenManagerTest {
     @Test
     @LargeTest
     @Feature({"Fullscreen"})
+    @Features.DisableFeatures({ChromeFeatureList.OFFLINE_INDICATOR})
     public void testHidingBrowserControlsRemovesSurfaceFlingerOverlay()
             throws InterruptedException {
         FullscreenManagerTestUtils.disableBrowserOverrides();
@@ -394,7 +397,9 @@ public class FullscreenManagerTest {
                         (ViewGroup) mActivityTestRule.getActivity().getWindow().getDecorView();
                 decorView.getWindowVisibleDisplayFrame(visibleDisplayFrame);
                 decorView.gatherTransparentRegion(transparentRegion);
-                Assert.assertTrue(transparentRegion.quickContains(visibleDisplayFrame));
+                Assert.assertTrue("Transparent region " + transparentRegion.getBounds()
+                                + " should contain " + visibleDisplayFrame,
+                        transparentRegion.quickContains(visibleDisplayFrame));
             }
         });
 

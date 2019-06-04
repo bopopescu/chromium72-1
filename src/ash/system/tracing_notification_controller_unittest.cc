@@ -4,11 +4,9 @@
 
 #include "ash/system/tracing_notification_controller.h"
 
-#include "ash/public/cpp/ash_features.h"
 #include "ash/shell.h"
-#include "ash/system/tray/system_tray_controller.h"
+#include "ash/system/model/system_tray_model.h"
 #include "ash/test/ash_test_base.h"
-#include "base/test/scoped_feature_list.h"
 #include "ui/message_center/message_center.h"
 
 namespace ash {
@@ -18,11 +16,6 @@ class TracingNotificationControllerTest : public AshTestBase {
   TracingNotificationControllerTest() = default;
   ~TracingNotificationControllerTest() override = default;
 
-  void SetUp() override {
-    scoped_feature_list_.InitAndEnableFeature(features::kSystemTrayUnified);
-    AshTestBase::SetUp();
-  }
-
  protected:
   bool HasNotification() {
     return message_center::MessageCenter::Get()->FindVisibleNotificationById(
@@ -30,24 +23,22 @@ class TracingNotificationControllerTest : public AshTestBase {
   }
 
  private:
-  base::test::ScopedFeatureList scoped_feature_list_;
-
   DISALLOW_COPY_AND_ASSIGN(TracingNotificationControllerTest);
 };
 
-// Tests that the notification becomes visible when the tray controller toggles
+// Tests that the notification becomes visible when the tray model toggles
 // it.
 TEST_F(TracingNotificationControllerTest, Visibility) {
   // The system starts with tracing off, so the notification isn't visible.
   EXPECT_FALSE(HasNotification());
 
   // Simulate turning on tracing.
-  SystemTrayController* controller = Shell::Get()->system_tray_controller();
-  controller->SetPerformanceTracingIconVisible(true);
+  SystemTrayModel* model = Shell::Get()->system_tray_model();
+  model->SetPerformanceTracingIconVisible(true);
   EXPECT_TRUE(HasNotification());
 
   // Simulate turning off tracing.
-  controller->SetPerformanceTracingIconVisible(false);
+  model->SetPerformanceTracingIconVisible(false);
   EXPECT_FALSE(HasNotification());
 }
 

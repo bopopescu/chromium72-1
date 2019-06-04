@@ -7,15 +7,17 @@
 #include <utility>
 
 #include "net/third_party/quic/core/quic_connection.h"
+#include "net/third_party/quic/core/quic_utils.h"
 #include "net/third_party/quic/platform/api/quic_flags.h"
 #include "net/third_party/quic/platform/api/quic_logging.h"
 #include "net/third_party/quic/platform/api/quic_ptr_util.h"
 #include "net/third_party/quic/tools/quic_simple_server_stream.h"
 
-namespace net {
+namespace quic {
 
 QuicSimpleServerSession::QuicSimpleServerSession(
     const QuicConfig& config,
+    const ParsedQuicVersionVector& supported_versions,
     QuicConnection* connection,
     QuicSession::Visitor* visitor,
     QuicCryptoServerStream::Helper* helper,
@@ -23,12 +25,14 @@ QuicSimpleServerSession::QuicSimpleServerSession(
     QuicCompressedCertsCache* compressed_certs_cache,
     QuicSimpleServerBackend* quic_simple_server_backend)
     : QuicServerSessionBase(config,
+                            supported_versions,
                             connection,
                             visitor,
                             helper,
                             crypto_config,
                             compressed_certs_cache),
-      highest_promised_stream_id_(0),
+      highest_promised_stream_id_(
+          QuicUtils::GetInvalidStreamId(connection->transport_version())),
       quic_simple_server_backend_(quic_simple_server_backend) {}
 
 QuicSimpleServerSession::~QuicSimpleServerSession() {
@@ -43,13 +47,6 @@ QuicSimpleServerSession::CreateQuicCryptoServerStream(
       crypto_config, compressed_certs_cache,
       GetQuicReloadableFlag(enable_quic_stateless_reject_support), this,
       stream_helper());
-}
-
-void QuicSimpleServerSession::StreamDraining(QuicStreamId id) {
-  QuicSpdySession::StreamDraining(id);
-  if (!IsIncomingStream(id)) {
-    HandlePromisedPushRequests();
-  }
 }
 
 void QuicSimpleServerSession::OnStreamFrame(const QuicStreamFrame& frame) {
@@ -86,33 +83,34 @@ void QuicSimpleServerSession::PromisePushResources(
   HandlePromisedPushRequests();
 }
 
-QuicSpdyStream* QuicSimpleServerSession::CreateIncomingDynamicStream(
-    QuicStreamId id) {
-  if (!ShouldCreateIncomingDynamicStream(id)) {
+QuicSpdyStream* QuicSimpleServerSession::CreateIncomingStream(QuicStreamId id) {
+  if (!ShouldCreateIncomingStream(id)) {
     return nullptr;
   }
 
-  QuicSpdyStream* stream =
-      new QuicSimpleServerStream(id, this, quic_simple_server_backend_);
+  QuicSpdyStream* stream = new QuicSimpleServerStream(
+      id, this, BIDIRECTIONAL, quic_simple_server_backend_);
   ActivateStream(QuicWrapUnique(stream));
   return stream;
 }
 
-QuicSimpleServerStream* QuicSimpleServerSession::CreateOutgoingDynamicStream() {
-  if (!ShouldCreateOutgoingDynamicStream()) {
+QuicSimpleServerStream*
+QuicSimpleServerSession::CreateOutgoingBidirectionalStream() {
+  DCHECK(false);
+  return nullptr;
+}
+
+QuicSimpleServerStream*
+QuicSimpleServerSession::CreateOutgoingUnidirectionalStream() {
+  if (!ShouldCreateOutgoingStream()) {
     return nullptr;
   }
 
   QuicSimpleServerStream* stream = new QuicSimpleServerStream(
-      GetNextOutgoingStreamId(), this, quic_simple_server_backend_);
+      GetNextOutgoingStreamId(), this, WRITE_UNIDIRECTIONAL,
+      quic_simple_server_backend_);
   ActivateStream(QuicWrapUnique(stream));
   return stream;
-}
-
-void QuicSimpleServerSession::CloseStreamInner(QuicStreamId stream_id,
-                                               bool locally_reset) {
-  QuicSpdySession::CloseStreamInner(stream_id, locally_reset);
-  HandlePromisedPushRequests();
 }
 
 void QuicSimpleServerSession::HandleFrameOnNonexistentOutgoingStream(
@@ -121,7 +119,9 @@ void QuicSimpleServerSession::HandleFrameOnNonexistentOutgoingStream(
   // range of next_outgoing_stream_id_ and highes_promised_stream_id_),
   // connection shouldn't be closed.
   // Otherwise behave in the same way as base class.
-  if (stream_id > highest_promised_stream_id_) {
+  if (highest_promised_stream_id_ ==
+          QuicUtils::GetInvalidStreamId(connection()->transport_version()) ||
+      stream_id > highest_promised_stream_id_) {
     QuicSession::HandleFrameOnNonexistentOutgoingStream(stream_id);
   }
 }
@@ -155,7 +155,6 @@ spdy::SpdyHeaderBlock QuicSimpleServerSession::SynthesizePushRequestHeaders(
   // :authority could be different from original request.
   spdy_headers[":authority"] = push_request_url.host();
   spdy_headers[":path"] = push_request_url.path();
-  ;
   // Push request always use GET.
   spdy_headers[":method"] = "GET";
   spdy_headers["referer"] = request_url;
@@ -179,7 +178,7 @@ void QuicSimpleServerSession::SendPushPromise(QuicStreamId original_stream_id,
 }
 
 void QuicSimpleServerSession::HandlePromisedPushRequests() {
-  while (!promised_streams_.empty() && ShouldCreateOutgoingDynamicStream()) {
+  while (!promised_streams_.empty() && ShouldCreateOutgoingStream()) {
     PromisedStreamInfo& promised_info = promised_streams_.front();
     DCHECK_EQ(next_outgoing_stream_id(), promised_info.stream_id);
 
@@ -191,7 +190,8 @@ void QuicSimpleServerSession::HandlePromisedPushRequests() {
     }
 
     QuicSimpleServerStream* promised_stream =
-        static_cast<QuicSimpleServerStream*>(CreateOutgoingDynamicStream());
+        static_cast<QuicSimpleServerStream*>(
+            CreateOutgoingUnidirectionalStream());
     DCHECK_NE(promised_stream, nullptr);
     DCHECK_EQ(promised_info.stream_id, promised_stream->id());
     QUIC_DLOG(INFO) << "created server push stream " << promised_stream->id();
@@ -206,4 +206,7 @@ void QuicSimpleServerSession::HandlePromisedPushRequests() {
   }
 }
 
-}  // namespace net
+void QuicSimpleServerSession::OnCanCreateNewOutgoingStream() {
+  HandlePromisedPushRequests();
+}
+}  // namespace quic

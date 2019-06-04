@@ -6,8 +6,10 @@
 #include "base/files/file_path.h"
 #include "base/location.h"
 #include "base/macros.h"
+#include "base/run_loop.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/test/bind_test_util.h"
 #include "build/build_config.h"
 #include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/profiles/profile.h"
@@ -21,25 +23,23 @@
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/notification_details.h"
 #include "content/public/browser/notification_source.h"
+#include "content/public/browser/storage_partition.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_contents_observer.h"
 #include "content/public/common/content_switches.h"
 #include "content/public/test/browser_test_utils.h"
+#include "content/public/test/url_loader_interceptor.h"
+#include "google_apis/gaia/gaia_urls.h"
 #include "net/base/load_flags.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
 #include "net/test/embedded_test_server/simple_connection_listener.h"
 #include "net/test/spawned_test_server/spawned_test_server.h"
 #include "net/test/test_data_directory.h"
 #include "net/traffic_annotation/network_traffic_annotation_test_helper.h"
-#include "net/url_request/url_fetcher.h"
-#include "net/url_request/url_fetcher_delegate.h"
+#include "services/network/public/cpp/simple_url_loader.h"
 #include "url/gurl.h"
 
 namespace {
-
-// PAC script that sends all requests to an invalid proxy server.
-const base::FilePath::CharType kPACScript[] = FILE_PATH_LITERAL(
-    "bad_server.pac");
 
 // Verify kPACScript is installed as the PAC script.
 void VerifyProxyScript(Browser* browser) {
@@ -94,31 +94,48 @@ class ProxyBrowserTest : public InProcessBrowserTest {
 
   void SetUp() override {
     ASSERT_TRUE(proxy_server_.Start());
+    // Block the GaiaAuthFetcher related requests, they somehow interfere with
+    // the test when the network service is running.
+    url_loader_interceptor_ = std::make_unique<content::URLLoaderInterceptor>(
+        base::BindLambdaForTesting(
+            [&](content::URLLoaderInterceptor::RequestParams* params) -> bool {
+              if (params->url_request.url.host() ==
+                  GaiaUrls::GetInstance()->gaia_url().host()) {
+                return true;
+              }
+              return false;
+            }));
     InProcessBrowserTest::SetUp();
+  }
+
+  void PostRunTestOnMainThread() override {
+    url_loader_interceptor_.reset();
+    InProcessBrowserTest::PostRunTestOnMainThread();
   }
 
   void SetUpCommandLine(base::CommandLine* command_line) override {
     command_line->AppendSwitchASCII(switches::kProxyServer,
                                     proxy_server_.host_port_pair().ToString());
+
+    // TODO(https://crbug.com/901896): Don't rely on proxying localhost (Relied
+    // on by BasicAuthWSConnect)
+    command_line->AppendSwitchASCII(
+        switches::kProxyBypassList,
+        net::ProxyBypassRules::GetRulesToSubtractImplicit());
   }
 
  protected:
   net::SpawnedTestServer proxy_server_;
 
  private:
+  std::unique_ptr<content::URLLoaderInterceptor> url_loader_interceptor_;
   DISALLOW_COPY_AND_ASSIGN(ProxyBrowserTest);
 };
 
-// We bypass manually installed proxy for localhost on chromeos.
-#if defined(OS_CHROMEOS)
-#define MAYBE_BasicAuthWSConnect DISABLED_BasicAuthWSConnect
-#else
-#define MAYBE_BasicAuthWSConnect BasicAuthWSConnect
-#endif
 // Test that the browser can establish a WebSocket connection via a proxy
 // that requires basic authentication. This test also checks the headers
 // arrive at WebSocket server.
-IN_PROC_BROWSER_TEST_F(ProxyBrowserTest, MAYBE_BasicAuthWSConnect) {
+IN_PROC_BROWSER_TEST_F(ProxyBrowserTest, BasicAuthWSConnect) {
   // Launch WebSocket server.
   net::SpawnedTestServer ws_server(net::SpawnedTestServer::TYPE_WS,
                                    net::GetWebSocketTestDataDirectory());
@@ -150,13 +167,15 @@ IN_PROC_BROWSER_TEST_F(ProxyBrowserTest, MAYBE_BasicAuthWSConnect) {
   EXPECT_TRUE(observer.auth_handled());
 }
 
-// Fetch PAC script via an http:// URL.
-class HttpProxyScriptBrowserTest : public InProcessBrowserTest {
+// Fetches a PAC script via an http:// URL, and ensures that requests to
+// http://www.google.com fail with ERR_PROXY_CONNECTION_FAILED (by virtue of
+// PAC file having selected a non-existent PROXY server).
+class BaseHttpProxyScriptBrowserTest : public InProcessBrowserTest {
  public:
-  HttpProxyScriptBrowserTest() {
+  BaseHttpProxyScriptBrowserTest() {
     http_server_.ServeFilesFromSourceDirectory("chrome/test/data");
   }
-  ~HttpProxyScriptBrowserTest() override {}
+  ~BaseHttpProxyScriptBrowserTest() override {}
 
   void SetUp() override {
     ASSERT_TRUE(http_server_.Start());
@@ -164,18 +183,57 @@ class HttpProxyScriptBrowserTest : public InProcessBrowserTest {
   }
 
   void SetUpCommandLine(base::CommandLine* command_line) override {
-    base::FilePath pac_script_path(FILE_PATH_LITERAL("/"));
-    command_line->AppendSwitchASCII(switches::kProxyPacUrl, http_server_.GetURL(
-        pac_script_path.Append(kPACScript).MaybeAsASCII()).spec());
+    command_line->AppendSwitchASCII(
+        switches::kProxyPacUrl,
+        http_server_.GetURL("/" + GetPacFilename()).spec());
   }
+
+ protected:
+  virtual std::string GetPacFilename() = 0;
 
  private:
   net::EmbeddedTestServer http_server_;
+  DISALLOW_COPY_AND_ASSIGN(BaseHttpProxyScriptBrowserTest);
+};
 
+// Tests the use of a PAC script that rejects requests to http://www.google.com/
+class HttpProxyScriptBrowserTest : public BaseHttpProxyScriptBrowserTest {
+ public:
+  HttpProxyScriptBrowserTest() = default;
+  ~HttpProxyScriptBrowserTest() override {}
+
+  std::string GetPacFilename() override {
+    // PAC script that sends all requests to an invalid proxy server.
+    return "bad_server.pac";
+  }
+
+ private:
   DISALLOW_COPY_AND_ASSIGN(HttpProxyScriptBrowserTest);
 };
 
 IN_PROC_BROWSER_TEST_F(HttpProxyScriptBrowserTest, Verify) {
+  VerifyProxyScript(browser());
+}
+
+// Tests the use of a PAC script that rejects requests to http://www.google.com/
+// when myIpAddress() and myIpAddressEx() appear to be working.
+class MyIpAddressProxyScriptBrowserTest
+    : public BaseHttpProxyScriptBrowserTest {
+ public:
+  MyIpAddressProxyScriptBrowserTest() = default;
+  ~MyIpAddressProxyScriptBrowserTest() override {}
+
+  std::string GetPacFilename() override {
+    // PAC script that sends all requests to an invalid proxy server provided
+    // myIpAddress() and myIpAddressEx() are not loopback addresses.
+    return "my_ip_address.pac";
+  }
+
+ private:
+  DISALLOW_COPY_AND_ASSIGN(MyIpAddressProxyScriptBrowserTest);
+};
+
+IN_PROC_BROWSER_TEST_F(MyIpAddressProxyScriptBrowserTest, Verify) {
   VerifyProxyScript(browser());
 }
 
@@ -222,20 +280,6 @@ class HangingPacRequestProxyScriptBrowserTest : public InProcessBrowserTest {
   DISALLOW_COPY_AND_ASSIGN(HangingPacRequestProxyScriptBrowserTest);
 };
 
-// URLFetcherDelegate that expects a request to hang.
-class HangingURLFetcherDelegate : public net::URLFetcherDelegate {
- public:
-  HangingURLFetcherDelegate() {}
-  ~HangingURLFetcherDelegate() override {}
-
-  void OnURLFetchComplete(const net::URLFetcher* source) override {
-    ADD_FAILURE() << "This request should never complete.";
-  }
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(HangingURLFetcherDelegate);
-};
-
 // Check that the URLRequest for a PAC that is still alive during shutdown is
 // safely cleaned up.  This test relies on AssertNoURLRequests being called on
 // the main URLRequestContext.
@@ -243,12 +287,20 @@ IN_PROC_BROWSER_TEST_F(HangingPacRequestProxyScriptBrowserTest, Shutdown) {
   // Request that should hang while trying to request the PAC script.
   // Enough requests are created on startup that this probably isn't needed, but
   // best to be safe.
-  HangingURLFetcherDelegate hanging_request_delegate;
-  std::unique_ptr<net::URLFetcher> hanging_fetcher = net::URLFetcher::Create(
-      GURL("http://blah/"), net::URLFetcher::GET, &hanging_request_delegate,
-      TRAFFIC_ANNOTATION_FOR_TESTS);
-  hanging_fetcher->SetRequestContext(browser()->profile()->GetRequestContext());
-  hanging_fetcher->Start();
+  auto resource_request = std::make_unique<network::ResourceRequest>();
+  resource_request->url = GURL("http://blah/");
+  auto simple_loader = network::SimpleURLLoader::Create(
+      std::move(resource_request), TRAFFIC_ANNOTATION_FOR_TESTS);
+
+  auto* storage_partition =
+      content::BrowserContext::GetDefaultStoragePartition(browser()->profile());
+  auto url_loader_factory =
+      storage_partition->GetURLLoaderFactoryForBrowserProcess();
+  simple_loader->DownloadToStringOfUnboundedSizeUntilCrashAndDie(
+      url_loader_factory.get(),
+      base::BindOnce([](std::unique_ptr<std::string> body) {
+        ADD_FAILURE() << "This request should never complete.";
+      }));
 
   connection_listener_->WaitForConnections();
 }

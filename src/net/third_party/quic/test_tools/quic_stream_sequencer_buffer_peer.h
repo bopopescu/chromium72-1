@@ -7,13 +7,16 @@
 
 #include "net/third_party/quic/core/quic_stream_sequencer_buffer.h"
 
-namespace net {
+namespace quic {
 
 namespace test {
 
 class QuicStreamSequencerBufferPeer {
  public:
   explicit QuicStreamSequencerBufferPeer(QuicStreamSequencerBuffer* buffer);
+  QuicStreamSequencerBufferPeer(const QuicStreamSequencerBufferPeer&) = delete;
+  QuicStreamSequencerBufferPeer& operator=(
+      const QuicStreamSequencerBufferPeer&) = delete;
 
   // Read from this buffer_ into the given destination buffer_ up to the
   // size of the destination. Returns the number of bytes read. Reading from
@@ -52,10 +55,9 @@ class QuicStreamSequencerBufferPeer {
 
  private:
   QuicStreamSequencerBuffer* buffer_;
-  DISALLOW_COPY_AND_ASSIGN(QuicStreamSequencerBufferPeer);
 };
 
 }  // namespace test
-}  // namespace net
+}  // namespace quic
 
 #endif  // NET_THIRD_PARTY_QUIC_TEST_TOOLS_QUIC_STREAM_SEQUENCER_BUFFER_PEER_H_

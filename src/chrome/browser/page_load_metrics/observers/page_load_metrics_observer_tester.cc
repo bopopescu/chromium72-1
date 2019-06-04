@@ -40,7 +40,7 @@ class TestPageLoadMetricsEmbedderInterface
     test_->RegisterObservers(tracker);
   }
 
-  std::unique_ptr<base::Timer> CreateTimer() override {
+  std::unique_ptr<base::OneShotTimer> CreateTimer() override {
     auto timer = std::make_unique<test::WeakMockTimer>();
     test_->SetMockTimer(timer->AsWeakPtr());
     return std::move(timer);
@@ -68,33 +68,55 @@ PageLoadMetricsObserverTester::~PageLoadMetricsObserverTester() {}
 void PageLoadMetricsObserverTester::SimulateTimingUpdate(
     const mojom::PageLoadTiming& timing) {
   SimulatePageLoadTimingUpdate(timing, mojom::PageLoadMetadata(),
-                               mojom::PageLoadFeatures());
+                               mojom::PageLoadFeatures(),
+                               mojom::PageRenderData());
 }
 
 void PageLoadMetricsObserverTester::SimulateTimingAndMetadataUpdate(
     const mojom::PageLoadTiming& timing,
     const mojom::PageLoadMetadata& metadata) {
-  SimulatePageLoadTimingUpdate(timing, metadata, mojom::PageLoadFeatures());
+  SimulatePageLoadTimingUpdate(timing, metadata, mojom::PageLoadFeatures(),
+                               mojom::PageRenderData());
 }
 
 void PageLoadMetricsObserverTester::SimulateFeaturesUpdate(
     const mojom::PageLoadFeatures& new_features) {
   SimulatePageLoadTimingUpdate(mojom::PageLoadTiming(),
-                               mojom::PageLoadMetadata(), new_features);
+                               mojom::PageLoadMetadata(), new_features,
+                               mojom::PageRenderData());
+}
+
+void PageLoadMetricsObserverTester::SimulateRenderDataUpdate(
+    const mojom::PageRenderData& render_data) {
+  SimulatePageLoadTimingUpdate(mojom::PageLoadTiming(),
+                               mojom::PageLoadMetadata(),
+                               mojom::PageLoadFeatures(), render_data);
 }
 
 void PageLoadMetricsObserverTester::SimulatePageLoadTimingUpdate(
     const mojom::PageLoadTiming& timing,
     const mojom::PageLoadMetadata& metadata,
-    const mojom::PageLoadFeatures& new_features) {
-  observer_->OnTimingUpdated(web_contents()->GetMainFrame(), timing, metadata,
-                             new_features);
+    const mojom::PageLoadFeatures& new_features,
+    const mojom::PageRenderData& render_data) {
+  observer_->OnTimingUpdated(web_contents()->GetMainFrame(), timing.Clone(),
+                             metadata.Clone(), new_features.Clone(),
+                             std::vector<mojom::ResourceDataUpdatePtr>(),
+                             render_data.Clone());
   // If sending the timing update caused the PageLoadMetricsUpdateDispatcher to
   // schedule a buffering timer, then fire it now so metrics are dispatched to
   // observers.
-  base::MockTimer* mock_timer = GetMockTimer();
+  base::MockOneShotTimer* mock_timer = GetMockTimer();
   if (mock_timer && mock_timer->IsRunning())
     mock_timer->Fire();
+}
+
+void PageLoadMetricsObserverTester::SimulateResourceDataUseUpdate(
+    const std::vector<mojom::ResourceDataUpdatePtr>& resources) {
+  observer_->OnTimingUpdated(
+      web_contents()->GetMainFrame(), mojom::PageLoadTimingPtr(base::in_place),
+      mojom::PageLoadMetadataPtr(base::in_place),
+      mojom::PageLoadFeaturesPtr(base::in_place), resources,
+      mojom::PageRenderDataPtr(base::in_place));
 }
 
 void PageLoadMetricsObserverTester::SimulateLoadedResource(
@@ -144,8 +166,9 @@ void PageLoadMetricsObserverTester::SimulateMediaPlayed() {
   content::WebContentsObserver::MediaPlayerInfo video_type(
       true /* has_video*/, true /* has_audio */);
   content::RenderFrameHost* render_frame_host = web_contents()->GetMainFrame();
-  observer_->MediaStartedPlaying(video_type,
-                                 std::make_pair(render_frame_host, 0));
+  observer_->MediaStartedPlaying(
+      video_type,
+      content::WebContentsObserver::MediaPlayerId(render_frame_host, 0));
 }
 
 MetricsWebContentsObserver* PageLoadMetricsObserverTester::observer() const {

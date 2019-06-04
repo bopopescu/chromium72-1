@@ -9,12 +9,12 @@
 #include <iterator>
 #include <memory>
 #include <utility>
+
 #include "base/compiler_specific.h"
+#include "base/macros.h"
 #include "third_party/blink/renderer/platform/platform_export.h"
-#include "third_party/blink/renderer/platform/wtf/alignment.h"
 #include "third_party/blink/renderer/platform/wtf/allocator.h"
 #include "third_party/blink/renderer/platform/wtf/compiler.h"
-#include "third_party/blink/renderer/platform/wtf/noncopyable.h"
 #include "third_party/blink/renderer/platform/wtf/type_traits.h"
 #include "third_party/blink/renderer/platform/wtf/vector.h"
 
@@ -40,7 +40,6 @@ namespace blink {
 
 class PLATFORM_EXPORT ContiguousContainerBase {
   DISALLOW_NEW();
-  WTF_MAKE_NONCOPYABLE(ContiguousContainerBase);
 
  protected:
   explicit ContiguousContainerBase(size_t max_object_size);
@@ -76,6 +75,8 @@ class PLATFORM_EXPORT ContiguousContainerBase {
   Vector<std::unique_ptr<Buffer>> buffers_;
   unsigned end_index_;
   size_t max_object_size_;
+
+  DISALLOW_COPY_AND_ASSIGN(ContiguousContainerBase);
 };
 
 // For most cases, no alignment stricter than pointer alignment is required. If
@@ -135,6 +136,8 @@ class ContiguousContainer : public ContiguousContainerBase {
   using const_reverse_iterator =
       IteratorWrapper<Vector<void*>::const_reverse_iterator,
                       const BaseElementType>;
+
+  using value_type = BaseElementType;
 
   explicit ContiguousContainer(size_t max_object_size)
       : ContiguousContainerBase(Align(max_object_size)) {}
@@ -197,7 +200,7 @@ class ContiguousContainer : public ContiguousContainerBase {
   DerivedElementType& AllocateAndConstruct(Args&&... args) {
     static_assert(WTF::IsSubclass<DerivedElementType, BaseElementType>::value,
                   "Must use subclass of BaseElementType.");
-    static_assert(alignment % WTF_ALIGN_OF(DerivedElementType) == 0,
+    static_assert(alignment % alignof(DerivedElementType) == 0,
                   "Derived type requires stronger alignment.");
     return *new (AlignedAllocate(sizeof(DerivedElementType)))
         DerivedElementType(std::forward<Args>(args)...);

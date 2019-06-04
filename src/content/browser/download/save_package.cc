@@ -44,6 +44,7 @@
 #include "content/browser/renderer_host/render_process_host_impl.h"
 #include "content/browser/renderer_host/render_view_host_delegate.h"
 #include "content/browser/renderer_host/render_view_host_impl.h"
+#include "content/browser/web_contents/web_contents_impl.h"
 #include "content/common/frame_messages.h"
 #include "content/common/view_messages.h"
 #include "content/public/browser/browser_context.h"
@@ -257,11 +258,16 @@ void SavePackage::InternalInit() {
 
   download::RecordSavePackageEvent(download::SAVE_PACKAGE_STARTED);
 
-  ukm_source_id_ = ukm::UkmRecorder::GetNewSourceID();
+  ukm_source_id_ = static_cast<WebContentsImpl*>(web_contents())
+                       ->GetUkmSourceIdForLastCommittedSource();
   ukm_download_id_ = download::GetUniqueDownloadId();
   download::DownloadUkmHelper::RecordDownloadStarted(
       ukm_download_id_, ukm_source_id_, download::DownloadContent::TEXT,
-      download::DownloadSource::UNKNOWN);
+      download::DownloadSource::UNKNOWN,
+      download::CheckDownloadConnectionSecurity(
+          web_contents()->GetLastCommittedURL(),
+          std::vector<GURL>{web_contents()->GetLastCommittedURL()}),
+      true /* is_same_host_download */);
 }
 
 bool SavePackage::Init(
@@ -284,9 +290,6 @@ bool SavePackage::Init(
   std::unique_ptr<download::DownloadRequestHandleInterface> request_handle(
       new SavePackageRequestHandle(AsWeakPtr()));
 
-  download::DownloadUkmHelper::UpdateSourceURL(
-      ukm::UkmRecorder::Get(), ukm_source_id_,
-      web_contents()->GetLastCommittedURL());
   RenderFrameHost* frame_host = web_contents()->GetMainFrame();
   download_manager_->CreateSavePackageDownloadItem(
       saved_main_file_path_, page_url_,
@@ -438,7 +441,7 @@ bool SavePackage::GenerateFileName(const std::string& disposition,
   base::FilePath::StringType file_name = base_name + file_name_ext;
 
   // Check whether we already have same name in a case insensitive manner.
-  FileNameSet::const_iterator iter = file_name_set_.find(file_name);
+  auto iter = file_name_set_.find(file_name);
   if (iter == file_name_set_.end()) {
     DCHECK(!file_name.empty());
     file_name_set_.insert(file_name);
@@ -460,7 +463,7 @@ bool SavePackage::GenerateFileName(const std::string& disposition,
 
   // Prepare the new ordinal number.
   uint32_t ordinal_number;
-  FileNameCountMap::iterator it = file_name_count_map_.find(base_file_name);
+  auto it = file_name_count_map_.find(base_file_name);
   if (it == file_name_count_map_.end()) {
     // First base-name-conflict resolving, use 1 as initial ordinal number.
     file_name_count_map_[base_file_name] = 1;

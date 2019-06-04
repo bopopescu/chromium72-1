@@ -1,4 +1,4 @@
-// Copyright (c) 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -29,6 +29,9 @@ String16EmbeddedNulls::String16EmbeddedNulls(const base::string16& str)
 
 String16EmbeddedNulls::String16EmbeddedNulls(base::StringPiece16 str)
     : String16EmbeddedNulls(str.data(), str.size()) {}
+
+String16EmbeddedNulls::String16EmbeddedNulls(std::initializer_list<wchar_t> il)
+    : data_(il) {}
 
 String16EmbeddedNulls::~String16EmbeddedNulls() = default;
 

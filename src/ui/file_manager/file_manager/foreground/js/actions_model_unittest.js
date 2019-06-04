@@ -10,26 +10,6 @@ var ui = null;
 var driveFileSystem = null;
 var providedFileSystem = null;
 
-loadTimeData.data = {
-  DRIVE_DIRECTORY_LABEL: '',
-  DOWNLOADS_DIRECTORY_LABEL: ''
-};
-
-function MockMetadataModel() {
-  this.properties = null;
-}
-
-MockMetadataModel.prototype.get = function() {
-  return Promise.resolve([this.properties]);
-};
-
-MockMetadataModel.prototype.getCache = function() {
-  return [this.properties];
-};
-
-MockMetadataModel.prototype.notifyEntriesChanged = function() {
-};
-
 function MockFolderShortcutsModel() {
   this.has = false;
 }
@@ -44,14 +24,6 @@ MockFolderShortcutsModel.prototype.add = function(entry) {
 
 MockFolderShortcutsModel.prototype.remove = function(entry) {
   this.has = false;
-};
-
-MockDriveSyncHandler = function() {
-  this.syncSuppressed = false;
-};
-
-MockDriveSyncHandler.prototype.isSyncSuppressed = function() {
-  return this.syncSuppressed;
 };
 
 function MockUI() {
@@ -69,6 +41,8 @@ function MockUI() {
 }
 
 function setUp() {
+  window.loadTimeData.getString = id => id;
+  window.loadTimeData.data = {};
   window.chrome = {
     runtime: {
       lastError: null
@@ -93,7 +67,7 @@ function setUp() {
   providedFileSystem = volumeManager.getCurrentProfileVolumeInfo(
       VolumeManagerCommon.VolumeType.PROVIDED).fileSystem;
 
-  metadataModel = new MockMetadataModel();
+  metadataModel = new MockMetadataModel(null);
   shortcutsModel = new MockFolderShortcutsModel();
   driveSyncHandler = new MockDriveSyncHandler();
   ui = new MockUI();
@@ -108,6 +82,9 @@ function testDriveDirectoryEntry(callback) {
 
   var model = new ActionsModel(volumeManager, metadataModel, shortcutsModel,
       driveSyncHandler, ui, [driveFileSystem.entries['/test']]);
+  metadataModel.properties = {
+    canShare: true,
+  };
   var invalidated = 0;
   model.addEventListener('invalidated', function() {
     invalidated++;
@@ -266,6 +243,9 @@ function testTeamDriveRootEntry(callback) {
   var model = new ActionsModel(
       volumeManager, metadataModel, shortcutsModel, driveSyncHandler, ui,
       [driveFileSystem.entries['/team_drives/ABC Team']]);
+  metadataModel.properties = {
+    canShare: true,
+  };
   return reportPromise(
       model.initialize().then(function() {
         var actions = model.getActions();
@@ -296,6 +276,9 @@ function testTeamDriveDirectoryEntry(callback) {
   var model = new ActionsModel(
       volumeManager, metadataModel, shortcutsModel, driveSyncHandler, ui,
       [driveFileSystem.entries['/team_drives/ABC Team/Folder 1']]);
+  metadataModel.properties = {
+    canShare: true,
+  };
   return reportPromise(
       model.initialize().then(function() {
         var actions = model.getActions();

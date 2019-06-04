@@ -9,6 +9,8 @@
 
 #include "base/time/time.h"
 #include "components/sync/base/model_type.h"
+#include "components/sync/base/nigori.h"
+#include "components/sync/base/passphrase_enums.h"
 #include "components/sync/protocol/sync.pb.h"
 
 namespace syncer {
@@ -43,6 +45,9 @@ class SyncEncryptionHandler {
  public:
   class NigoriState;
 
+  static constexpr PassphraseType kInitialPassphraseType =
+      PassphraseType::IMPLICIT_PASSPHRASE;
+
   // All Observer methods are done synchronously from within a transaction and
   // on the sync thread.
   class Observer {
@@ -58,10 +63,13 @@ class SyncEncryptionHandler {
     // - If the passphrase is required because decryption failed, and a new
     //   passphrase is required, |reason| will be REASON_SET_PASSPHRASE_FAILED.
     //
+    // |key_derivation_params| are the parameters that should be used to obtain
+    // the key from the passphrase.
     // |pending_keys| is a copy of the cryptographer's pending keys, that may be
     // cached by the frontend for subsequent use by the UI.
     virtual void OnPassphraseRequired(
         PassphraseRequiredReason reason,
+        const KeyDerivationParams& key_derivation_params,
         const sync_pb::EncryptedData& pending_keys) = 0;
 
     // Called when the passphrase provided by the user has been accepted and is
@@ -144,12 +152,8 @@ class SyncEncryptionHandler {
   // Notifies observers of the result of the operation via OnPassphraseAccepted
   // or OnPassphraseRequired, updates the nigori node, and does re-encryption as
   // appropriate. If an explicit password has been set previously, we drop
-  // subsequent requests to set a passphrase. If the cryptographer has pending
-  // keys, and a new implicit passphrase is provided, we try decrypting the
-  // pending keys with it, and if that fails, we cache the passphrase for
-  // re-encryption once the pending keys are decrypted.
-  virtual void SetEncryptionPassphrase(const std::string& passphrase,
-                                       bool is_explicit) = 0;
+  // subsequent requests to set a passphrase.
+  virtual void SetEncryptionPassphrase(const std::string& passphrase) = 0;
 
   // Provides a passphrase for decrypting the user's existing sync data.
   // Notifies observers of the result of the operation via OnPassphraseAccepted

@@ -8,6 +8,8 @@
 #include <string>
 
 #include "components/policy/policy_export.h"
+#include "components/policy/proto/device_management_backend.pb.h"
+#include "components/version_info/channel.h"
 
 namespace policy {
 
@@ -24,8 +26,13 @@ POLICY_EXPORT std::string GetOSPlatform();
 POLICY_EXPORT std::string GetOSArchitecture();
 
 // Returns the username of the logged in user in the OS. This function is
-// platform specific.
+// platform specific. Note that on Windows, this returns the username including
+// the domain, whereas on POSIX, this just returns the username.
 POLICY_EXPORT std::string GetOSUsername();
+
+// Converts |version_info::Channel| to |enterprise_management::Channel|.
+POLICY_EXPORT enterprise_management::Channel ConvertToProtoChannel(
+    version_info::Channel channel);
 
 }  // namespace policy
 

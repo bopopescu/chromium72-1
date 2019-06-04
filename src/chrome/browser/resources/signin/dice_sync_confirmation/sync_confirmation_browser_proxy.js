@@ -20,7 +20,8 @@ cr.define('sync.confirmation', function() {
      */
     confirm(description, confirmation) {}
 
-    /** Called when the user undoes the Sync confirmation. */
+    /** Called when the user undoes the Sync confirmation.
+     */
     undo() {}
 
     /**
@@ -35,6 +36,11 @@ cr.define('sync.confirmation', function() {
 
     /** @param {!Array<number>} height */
     initializedWithSize(height) {}
+
+    /**
+     * Called when the WebUIListener for "account-image-changed" was added.
+     */
+    requestAccountImage() {}
   }
 
   /** @implements {sync.confirmation.SyncConfirmationBrowserProxy} */
@@ -57,6 +63,11 @@ cr.define('sync.confirmation', function() {
     /** @override */
     initializedWithSize(height) {
       chrome.send('initializedWithSize', height);
+    }
+
+    /** @override */
+    requestAccountImage() {
+      chrome.send('accountImageRequest');
     }
   }
 

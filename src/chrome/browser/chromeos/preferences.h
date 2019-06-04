@@ -127,11 +127,16 @@ class Preferences : public sync_preferences::PrefServiceSyncableObserver,
   BooleanPrefMember mouse_reverse_scroll_;
   FilePathPrefMember download_default_directory_;
 
+  StringListPrefMember allowed_languages_;
+  StringPrefMember preferred_languages_;
+
   // Input method preferences.
   StringPrefMember preload_engines_;
   StringPrefMember current_input_method_;
   StringPrefMember previous_input_method_;
-  StringPrefMember enabled_extension_imes_;
+
+  StringListPrefMember allowed_input_methods_;
+  StringPrefMember enabled_imes_;
   BooleanPrefMember ime_menu_activated_;
 
   BooleanPrefMember xkb_auto_repeat_enabled_;

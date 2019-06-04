@@ -4,8 +4,12 @@
 
 #include "third_party/blink/renderer/core/css/properties/longhands/resize.h"
 
+#include "third_party/blink/renderer/core/frame/settings.h"
+#include "third_party/blink/renderer/core/frame/use_counter.h"
+#include "third_party/blink/renderer/core/frame/web_feature.h"
+
 namespace blink {
-namespace CSSLonghand {
+namespace css_longhand {
 
 const CSSValue* Resize::CSSValueFromComputedStyleInternal(
     const ComputedStyle& style,
@@ -16,5 +20,22 @@ const CSSValue* Resize::CSSValueFromComputedStyleInternal(
   return CSSIdentifierValue::Create(style.Resize());
 }
 
-}  // namespace CSSLonghand
+void Resize::ApplyValue(StyleResolverState& state,
+                        const CSSValue& value) const {
+  const CSSIdentifierValue& identifier_value = ToCSSIdentifierValue(value);
+
+  EResize r = EResize::kNone;
+  if (identifier_value.GetValueID() == CSSValueAuto) {
+    if (Settings* settings = state.GetDocument().GetSettings()) {
+      r = settings->GetTextAreasAreResizable() ? EResize::kBoth
+                                               : EResize::kNone;
+    }
+    UseCounter::Count(state.GetDocument(), WebFeature::kCSSResizeAuto);
+  } else {
+    r = identifier_value.ConvertTo<EResize>();
+  }
+  state.Style()->SetResize(r);
+}
+
+}  // namespace css_longhand
 }  // namespace blink

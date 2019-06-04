@@ -30,13 +30,12 @@
 
 #include "third_party/blink/renderer/modules/filesystem/directory_entry_sync.h"
 
-#include "third_party/blink/renderer/bindings/core/v8/exception_messages.h"
-#include "third_party/blink/renderer/bindings/core/v8/exception_state.h"
 #include "third_party/blink/renderer/modules/filesystem/directory_reader_sync.h"
 #include "third_party/blink/renderer/modules/filesystem/entry.h"
 #include "third_party/blink/renderer/modules/filesystem/file_entry_sync.h"
 #include "third_party/blink/renderer/modules/filesystem/file_system_flags.h"
 #include "third_party/blink/renderer/modules/filesystem/sync_callback_helper.h"
+#include "third_party/blink/renderer/platform/bindings/exception_state.h"
 
 namespace blink {
 
@@ -49,7 +48,7 @@ DirectoryReaderSync* DirectoryEntrySync::createReader() {
 }
 
 FileEntrySync* DirectoryEntrySync::getFile(const String& path,
-                                           const FileSystemFlags& options,
+                                           const FileSystemFlags* options,
                                            ExceptionState& exception_state) {
   EntryCallbacksSyncHelper* sync_helper = EntryCallbacksSyncHelper::Create();
   file_system_->GetFile(this, path, options, sync_helper->GetSuccessCallback(),
@@ -61,7 +60,7 @@ FileEntrySync* DirectoryEntrySync::getFile(const String& path,
 
 DirectoryEntrySync* DirectoryEntrySync::getDirectory(
     const String& path,
-    const FileSystemFlags& options,
+    const FileSystemFlags* options,
     ExceptionState& exception_state) {
   EntryCallbacksSyncHelper* sync_helper = EntryCallbacksSyncHelper::Create();
   file_system_->GetDirectory(

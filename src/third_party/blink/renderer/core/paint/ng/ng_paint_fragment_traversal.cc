@@ -23,14 +23,14 @@ void CollectPaintFragments(const NGPaintFragment& container,
                            NGPhysicalOffset offset_to_container_box,
                            Filter& filter,
                            Vector<NGPaintFragmentWithContainerOffset>* result) {
-  for (const auto& child : container.Children()) {
+  for (NGPaintFragment* child : container.Children()) {
     NGPaintFragmentWithContainerOffset fragment_with_offset{
-        child.get(), child->Offset() + offset_to_container_box};
-    if (filter.IsCollectible(child.get())) {
+        child, child->Offset() + offset_to_container_box};
+    if (filter.IsCollectible(child)) {
       result->push_back(fragment_with_offset);
     }
-    if (filter.IsTraverse(child.get())) {
-      CollectPaintFragments(*child.get(), fragment_with_offset.container_offset,
+    if (filter.IsTraverse(child)) {
+      CollectPaintFragments(*child, fragment_with_offset.container_offset,
                             filter, result);
     }
   }
@@ -56,7 +56,7 @@ class InlineFilter {
   }
   bool IsTraverse(const NGPaintFragment* fragment) {
     return fragment->PhysicalFragment().IsContainer() &&
-           !fragment->PhysicalFragment().IsBlockLayoutRoot();
+           !fragment->PhysicalFragment().IsBlockFormattingContextRoot();
   }
 };
 
@@ -143,7 +143,97 @@ NGPaintFragmentTraversalContext NextSiblingOf(
   return {fragment.parent, fragment.index + 1};
 }
 
+unsigned IndexOf(const Vector<NGPaintFragment*, 16>& fragments,
+                 const NGPaintFragment& fragment) {
+  auto* const* it = std::find_if(
+      fragments.begin(), fragments.end(),
+      [&fragment](const auto& child) { return &fragment == child; });
+  DCHECK(it != fragments.end());
+  return static_cast<unsigned>(std::distance(fragments.begin(), it));
+}
+
 }  // namespace
+
+NGPaintFragmentTraversal::NGPaintFragmentTraversal(const NGPaintFragment& root)
+    : current_(root.FirstChild()), root_(root) {}
+
+NGPaintFragmentTraversal::NGPaintFragmentTraversal(const NGPaintFragment& root,
+                                                   const NGPaintFragment& start)
+    : root_(root) {
+  MoveTo(start);
+}
+
+void NGPaintFragmentTraversal::MoveTo(const NGPaintFragment& fragment) {
+  DCHECK(fragment.IsDescendantOfNotSelf(root_));
+  current_ = &fragment;
+}
+
+void NGPaintFragmentTraversal::MoveToNext() {
+  if (IsAtEnd())
+    return;
+
+  if (const NGPaintFragment* first_child = current_->FirstChild()) {
+    current_ = first_child;
+    if (UNLIKELY(!siblings_.IsEmpty()))
+      siblings_.Shrink(0);
+    return;
+  }
+
+  MoveToNextSiblingOrAncestor();
+}
+
+void NGPaintFragmentTraversal::MoveToNextSiblingOrAncestor() {
+  while (!IsAtEnd()) {
+    // Check if we have a next sibling.
+    if (const NGPaintFragment* next = current_->NextSibling()) {
+      current_ = next;
+      ++current_index_;
+      return;
+    }
+
+    MoveToParent();
+  }
+}
+
+void NGPaintFragmentTraversal::MoveToParent() {
+  if (IsAtEnd())
+    return;
+
+  current_ = current_->Parent();
+  if (current_ == &root_)
+    current_ = nullptr;
+  if (UNLIKELY(!siblings_.IsEmpty()))
+    siblings_.Shrink(0);
+}
+
+void NGPaintFragmentTraversal::MoveToPrevious() {
+  if (IsAtEnd())
+    return;
+
+  if (siblings_.IsEmpty()) {
+    current_->Parent()->Children().ToList(&siblings_);
+    current_index_ = IndexOf(siblings_, *current_);
+  }
+
+  if (!current_index_) {
+    // There is no previous sibling of |current_|. We move to parent.
+    MoveToParent();
+    return;
+  }
+
+  current_ = siblings_[--current_index_];
+  while (current_->FirstChild()) {
+    current_->Children().ToList(&siblings_);
+    DCHECK(!siblings_.IsEmpty());
+    current_index_ = siblings_.size() - 1;
+    current_ = siblings_[current_index_];
+  }
+}
+
+NGPaintFragmentTraversal::AncestorRange
+NGPaintFragmentTraversal::InclusiveAncestorsOf(const NGPaintFragment& start) {
+  return AncestorRange(start);
+}
 
 Vector<NGPaintFragmentWithContainerOffset>
 NGPaintFragmentTraversal::DescendantsOf(const NGPaintFragment& container) {
@@ -177,11 +267,11 @@ NGPaintFragment* NGPaintFragmentTraversal::PreviousLineOf(
   NGPaintFragment* parent = line.Parent();
   DCHECK(parent);
   NGPaintFragment* previous_line = nullptr;
-  for (const auto& sibling : parent->Children()) {
-    if (sibling.get() == &line)
+  for (NGPaintFragment* sibling : parent->Children()) {
+    if (sibling == &line)
       return previous_line;
     if (sibling->PhysicalFragment().IsLineBox())
-      previous_line = sibling.get();
+      previous_line = sibling;
   }
   NOTREACHED();
   return nullptr;
@@ -190,22 +280,32 @@ NGPaintFragment* NGPaintFragmentTraversal::PreviousLineOf(
 const NGPaintFragment* NGPaintFragmentTraversalContext::GetFragment() const {
   if (!parent)
     return nullptr;
-  return parent->Children()[index].get();
+  return siblings[index];
+}
+
+NGPaintFragmentTraversalContext::NGPaintFragmentTraversalContext(
+    const NGPaintFragment* fragment) {
+  if (fragment) {
+    parent = fragment->Parent();
+    parent->Children().ToList(&siblings);
+    index = IndexOf(siblings, *fragment);
+  }
+}
+
+NGPaintFragmentTraversalContext::NGPaintFragmentTraversalContext(
+    const NGPaintFragment* parent,
+    unsigned index)
+    : parent(parent), index(index) {
+  DCHECK(parent);
+  parent->Children().ToList(&siblings);
+  DCHECK(index < siblings.size());
 }
 
 // static
 NGPaintFragmentTraversalContext NGPaintFragmentTraversalContext::Create(
     const NGPaintFragment* fragment) {
-  if (!fragment)
-    return NGPaintFragmentTraversalContext();
-
-  DCHECK(fragment->Parent());
-  const auto& siblings = fragment->Parent()->Children();
-  const auto* self_iter = std::find_if(
-      siblings.begin(), siblings.end(),
-      [&fragment](const auto& sibling) { return fragment == sibling.get(); });
-  DCHECK_NE(self_iter, siblings.end());
-  return {fragment->Parent(), self_iter - siblings.begin()};
+  return fragment ? NGPaintFragmentTraversalContext(fragment)
+                  : NGPaintFragmentTraversalContext();
 }
 
 NGPaintFragmentTraversalContext NGPaintFragmentTraversal::PreviousInlineLeafOf(
@@ -260,6 +360,18 @@ NGPaintFragmentTraversal::NextInlineLeafOfIgnoringLineBreak(
   while (!runner.IsNull() && IsLineBreak(runner))
     runner = NextInlineLeafOf(runner);
   return runner;
+}
+
+// ----
+NGPaintFragment* NGPaintFragmentTraversal::AncestorRange::Iterator::operator->()
+    const {
+  DCHECK(current_);
+  return current_;
+}
+
+void NGPaintFragmentTraversal::AncestorRange::Iterator::operator++() {
+  DCHECK(current_);
+  current_ = current_->Parent();
 }
 
 }  // namespace blink

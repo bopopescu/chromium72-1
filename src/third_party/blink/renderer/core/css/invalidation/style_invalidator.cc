@@ -28,14 +28,30 @@ static const unsigned char* g_style_invalidator_tracing_enabled = nullptr;
   if (UNLIKELY(*g_style_invalidator_tracing_enabled))                    \
     TRACE_STYLE_INVALIDATOR_INVALIDATION(element, reason);
 
-void StyleInvalidator::Invalidate(Document& document) {
+void StyleInvalidator::Invalidate(Document& document, Element* root_element) {
   SiblingData sibling_data;
-  if (UNLIKELY(document.NeedsStyleInvalidation()))
+
+  if (UNLIKELY(document.NeedsStyleInvalidation())) {
+    DCHECK(root_element == document.documentElement());
     PushInvalidationSetsForContainerNode(document, sibling_data);
-  if (Element* document_element = document.documentElement())
-    Invalidate(*document_element, sibling_data);
+    document.ClearNeedsStyleInvalidation();
+    DCHECK(sibling_data.IsEmpty());
+  }
+
+  if (root_element) {
+    Invalidate(*root_element, sibling_data);
+    if (!sibling_data.IsEmpty()) {
+      for (Element* child = ElementTraversal::NextSibling(*root_element); child;
+           child = ElementTraversal::NextSibling(*child)) {
+        Invalidate(*child, sibling_data);
+      }
+    }
+    for (Node* ancestor = root_element; ancestor;
+         ancestor = ancestor->ParentOrShadowHostNode()) {
+      ancestor->ClearChildNeedsStyleInvalidation();
+    }
+  }
   document.ClearChildNeedsStyleInvalidation();
-  document.ClearNeedsStyleInvalidation();
   pending_invalidation_map_.clear();
 }
 
@@ -153,9 +169,9 @@ bool StyleInvalidator::SiblingData::MatchCurrentInvalidationSets(
     if (const DescendantInvalidationSet* descendants =
             invalidation_set.SiblingDescendants()) {
       if (descendants->WholeSubtreeInvalid()) {
-        element.SetNeedsStyleRecalc(kSubtreeStyleChange,
-                                    StyleChangeReasonForTracing::Create(
-                                        StyleChangeReason::kStyleInvalidator));
+        element.SetNeedsStyleRecalc(
+            kSubtreeStyleChange, StyleChangeReasonForTracing::Create(
+                                     style_change_reason::kStyleInvalidator));
         return true;
       }
 
@@ -193,7 +209,7 @@ void StyleInvalidator::PushInvalidationSetsForContainerNode(
           TRACE_DISABLED_BY_DEFAULT("devtools.timeline.invalidationTracking"),
           "StyleInvalidatorInvalidationTracking", TRACE_EVENT_SCOPE_THREAD,
           "data",
-          InspectorStyleInvalidatorInvalidateEvent::InvalidationList(
+          inspector_style_invalidator_invalidate_event::InvalidationList(
               node, pending_invalidations.Descendants()));
     }
   }
@@ -246,29 +262,52 @@ void StyleInvalidator::InvalidateChildren(Element& element) {
 
 void StyleInvalidator::Invalidate(Element& element, SiblingData& sibling_data) {
   sibling_data.Advance();
+  // Preserves the current stack of pending invalidations and other state and
+  // restores it when this method returns.
   RecursionCheckpoint checkpoint(this);
 
+  // If we have already entered a subtree that is going to be entirely
+  // recalculated then there is no need to test against current invalidation
+  // sets or to continue to accumulate new invalidation sets as we descend the
+  // tree.
   if (!WholeSubtreeInvalid()) {
     if (element.GetStyleChangeType() >= kSubtreeStyleChange) {
       SetWholeSubtreeInvalid();
     } else if (CheckInvalidationSetsAgainstElement(element, sibling_data)) {
       element.SetNeedsStyleRecalc(kLocalStyleChange,
                                   StyleChangeReasonForTracing::Create(
-                                      StyleChangeReason::kStyleInvalidator));
+                                      style_change_reason::kStyleInvalidator));
     }
     if (UNLIKELY(element.NeedsStyleInvalidation()))
       PushInvalidationSetsForContainerNode(element, sibling_data);
+
+    // When a slot element is invalidated, the slotted elements are also
+    // invalidated by HTMLSlotElement::DidRecalcStyle. So if WholeSubtreeInvalid
+    // is true, they will be included even though they are not part of the
+    // subtree. It's not necessary to fully recalc style for the slotted
+    // elements in that case as they just need to pick up changed inherited
+    // styles but we do it. If we ever stop doing that then this code and the
+    // PushInvalidationSetsForContainerNode above need to move out of the
+    // if-block.
+    if (InvalidatesSlotted() && IsHTMLSlotElement(element))
+      InvalidateSlotDistributedElements(ToHTMLSlotElement(element));
+
+    if (InsertionPointCrossing() && element.IsV0InsertionPoint()) {
+      element.SetNeedsStyleRecalc(kSubtreeStyleChange,
+                                  StyleChangeReasonForTracing::Create(
+                                      style_change_reason::kStyleInvalidator));
+    }
   }
 
-  if (HasInvalidationSets() || element.ChildNeedsStyleInvalidation())
+  // We need to recurse into children if:
+  // * the whole subtree is not invalid and we have invalidation sets that
+  //   could apply to the descendants.
+  // * there are invalidation sets attached to descendants then we need to
+  //   clear the flags on the nodes, whether we use the sets or not.
+  if ((!WholeSubtreeInvalid() && HasInvalidationSets()) ||
+      element.ChildNeedsStyleInvalidation()) {
     InvalidateChildren(element);
-
-  if (InsertionPointCrossing() && element.IsV0InsertionPoint())
-    element.SetNeedsStyleRecalc(kSubtreeStyleChange,
-                                StyleChangeReasonForTracing::Create(
-                                    StyleChangeReason::kStyleInvalidator));
-  if (InvalidatesSlotted() && IsHTMLSlotElement(element))
-    InvalidateSlotDistributedElements(ToHTMLSlotElement(element));
+  }
 
   element.ClearChildNeedsStyleInvalidation();
   element.ClearNeedsStyleInvalidation();
@@ -281,10 +320,11 @@ void StyleInvalidator::InvalidateSlotDistributedElements(
       continue;
     if (!distributed_node->IsElementNode())
       continue;
-    if (MatchesCurrentInvalidationSetsAsSlotted(ToElement(*distributed_node)))
+    if (MatchesCurrentInvalidationSetsAsSlotted(ToElement(*distributed_node))) {
       distributed_node->SetNeedsStyleRecalc(
           kLocalStyleChange, StyleChangeReasonForTracing::Create(
-                                 StyleChangeReason::kStyleInvalidator));
+                                 style_change_reason::kStyleInvalidator));
+    }
   }
 }
 

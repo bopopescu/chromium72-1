@@ -13,11 +13,12 @@
 #include "base/sha1.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
+#include "base/task/task_traits.h"
 #include "base/task_runner_util.h"
-#include "base/task_scheduler/task_traits.h"
 #include "base/time/default_tick_clock.h"
 #include "chrome/browser/media/router/discovery/discovery_network_list.h"
 #include "chrome/browser/media/router/discovery/discovery_network_monitor_metric_observer.h"
+#include "content/public/browser/network_service_instance.h"
 #include "net/base/network_interfaces.h"
 
 namespace media_router {
@@ -104,17 +105,28 @@ DiscoveryNetworkMonitor::DiscoveryNetworkMonitor(NetworkInfoFunction strategy)
           std::make_unique<DiscoveryNetworkMonitorMetrics>())) {
   DETACH_FROM_SEQUENCE(sequence_checker_);
   AddObserver(metric_observer_.get());
-  net::NetworkChangeNotifier::AddNetworkChangeObserver(this);
-  task_runner_->PostTask(
-      FROM_HERE,
-      base::BindOnce(
-          base::IgnoreResult(&DiscoveryNetworkMonitor::UpdateNetworkInfo),
-          base::Unretained(this)));
+
+  content::GetNetworkConnectionTracker()
+      ->AddLeakyNetworkConnectionObserver(this);
+
+  // If the current connection type is available, call UpdateNetworkInfo,
+  // otherwise let OnConnectionChanged call it when the connection type is
+  // ready.
+  auto connection_type = network::mojom::ConnectionType::CONNECTION_UNKNOWN;
+  if (content::GetNetworkConnectionTracker()->GetConnectionType(
+          &connection_type,
+          base::BindOnce(&DiscoveryNetworkMonitor::OnConnectionChanged,
+                         base::Unretained(this)))) {
+    task_runner_->PostTask(
+        FROM_HERE,
+        base::BindOnce(
+            base::IgnoreResult(&DiscoveryNetworkMonitor::UpdateNetworkInfo),
+            base::Unretained(this)));
+  }
 }
 
 DiscoveryNetworkMonitor::~DiscoveryNetworkMonitor() {
-  net::NetworkChangeNotifier::RemoveNetworkChangeObserver(this);
-  RemoveObserver(metric_observer_.get());
+  // Never gets called.
 }
 
 void DiscoveryNetworkMonitor::SetNetworkInfoFunctionForTest(
@@ -122,8 +134,8 @@ void DiscoveryNetworkMonitor::SetNetworkInfoFunctionForTest(
   network_info_function_ = strategy;
 }
 
-void DiscoveryNetworkMonitor::OnNetworkChanged(
-    net::NetworkChangeNotifier::ConnectionType) {
+void DiscoveryNetworkMonitor::OnConnectionChanged(
+    network::mojom::ConnectionType type) {
   task_runner_->PostTask(
       FROM_HERE,
       base::BindOnce(

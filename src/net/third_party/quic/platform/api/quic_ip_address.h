@@ -9,7 +9,7 @@
 #include "net/third_party/quic/platform/api/quic_string.h"
 #include "net/third_party/quic/platform/impl/quic_ip_address_impl.h"
 
-namespace net {
+namespace quic {
 
 class QUIC_EXPORT_PRIVATE QuicIpAddress {
   // A class representing an IPv4 or IPv6 address in QUIC. The actual
@@ -43,7 +43,7 @@ class QUIC_EXPORT_PRIVATE QuicIpAddress {
   // Returns the address as a sequence of bytes in network-byte-order. IPv4 will
   // be 6 bytes. IPv6 will be 18 bytes.
   QuicString ToPackedString() const;
-  // Returns std::string representation of the address.
+  // Returns string representation of the address.
   QuicString ToString() const;
   // Normalizes the address representation with respect to IPv4 addresses, i.e,
   // mapped IPv4 addresses ("::ffff:X.Y.Z.Q") are converted to pure IPv4
@@ -67,6 +67,6 @@ class QUIC_EXPORT_PRIVATE QuicIpAddress {
   QuicIpAddressImpl impl_;
 };
 
-}  // namespace net
+}  // namespace quic
 
 #endif  // NET_THIRD_PARTY_QUIC_PLATFORM_API_QUIC_IP_ADDRESS_H_

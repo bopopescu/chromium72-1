@@ -20,12 +20,12 @@ import android.view.LayoutInflater;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
+import android.widget.ImageView;
 import android.widget.TextView;
 
 import org.chromium.base.ApiCompatibilityUtils;
 import org.chromium.chrome.R;
 import org.chromium.chrome.browser.widget.ListMenuButton;
-import org.chromium.chrome.browser.widget.TintedImageView;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -39,7 +39,7 @@ public class LanguageListBaseAdapter
     private static final int ANIMATION_DELAY_MS = 100;
 
     /**
-     * Listener used to respond to click event on a langauge item.
+     * Listener used to respond to click event on a language item.
      */
     interface ItemClickListener {
         /**
@@ -52,7 +52,7 @@ public class LanguageListBaseAdapter
         private TextView mTitle;
         private TextView mDescription;
 
-        private TintedImageView mStartIcon;
+        private ImageView mStartIcon;
         private ListMenuButton mMoreButton;
 
         LanguageRowViewHolder(View view) {
@@ -61,7 +61,7 @@ public class LanguageListBaseAdapter
             mTitle = (TextView) view.findViewById(R.id.title);
             mDescription = (TextView) view.findViewById(R.id.description);
 
-            mStartIcon = (TintedImageView) view.findViewById(R.id.icon_view);
+            mStartIcon = view.findViewById(R.id.icon_view);
             mMoreButton = (ListMenuButton) view.findViewById(R.id.more);
         }
 
@@ -104,9 +104,8 @@ public class LanguageListBaseAdapter
             mMoreButton.setVisibility(View.VISIBLE);
             mMoreButton.setDelegate(delegate);
             // Set item row end padding 0 when MenuButton is visible.
-            ApiCompatibilityUtils.setPaddingRelative(itemView,
-                    ApiCompatibilityUtils.getPaddingStart(itemView), itemView.getPaddingTop(), 0,
-                    itemView.getPaddingBottom());
+            ViewCompat.setPaddingRelative(itemView, ViewCompat.getPaddingStart(itemView),
+                    itemView.getPaddingTop(), 0, itemView.getPaddingBottom());
         }
 
         /**

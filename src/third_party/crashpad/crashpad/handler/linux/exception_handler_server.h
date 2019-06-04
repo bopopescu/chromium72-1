@@ -26,6 +26,7 @@
 #include "util/linux/exception_handler_protocol.h"
 #include "util/misc/address_types.h"
 #include "util/misc/initialization_state_dcheck.h"
+#include "util/misc/uuid.h"
 
 namespace crashpad {
 
@@ -71,24 +72,27 @@ class ExceptionHandlerServer {
     //! \brief Called on receipt of a crash dump request from a client.
     //!
     //! \param[in] client_process_id The process ID of the crashing client.
-    //! \param[in] exception_information_address The address in the client's
-    //!     address space of an ExceptionInformation struct.
+    //! \param[in] info Information on the client.
+    //! \param[out] local_report_id The unique identifier for the report created
+    //!     in the local report database. Optional.
     //! \return `true` on success. `false` on failure with a message logged.
     virtual bool HandleException(pid_t client_process_id,
-                                 VMAddress exception_information_address) = 0;
+                                 const ClientInformation& info,
+                                 UUID* local_report_id = nullptr) = 0;
 
     //! \brief Called on the receipt of a crash dump request from a client for a
     //!     crash that should be mediated by a PtraceBroker.
     //!
     //! \param[in] client_process_id The process ID of the crashing client.
-    //! \param[in] exception_information_address The address in the client's
-    //!     address space of an ExceptionInformation struct.
+    //! \param[in] info Information on the client.
     //! \param[in] broker_sock A socket connected to the PtraceBroker.
+    //! \param[out] local_report_id The unique identifier for the report created
+    //!     in the local report database. Optional.
     //! \return `true` on success. `false` on failure with a message logged.
-    virtual bool HandleExceptionWithBroker(
-        pid_t client_process_id,
-        VMAddress exception_information_address,
-        int broker_sock) = 0;
+    virtual bool HandleExceptionWithBroker(pid_t client_process_id,
+                                           const ClientInformation& info,
+                                           int broker_sock,
+                                           UUID* local_report_id = nullptr) = 0;
 
    protected:
     ~Delegate() {}

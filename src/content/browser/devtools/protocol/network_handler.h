@@ -13,6 +13,7 @@
 #include "base/macros.h"
 #include "base/memory/weak_ptr.h"
 #include "base/optional.h"
+#include "base/unguessable_token.h"
 #include "content/browser/devtools/devtools_url_loader_interceptor.h"
 #include "content/browser/devtools/protocol/devtools_domain_handler.h"
 #include "content/browser/devtools/protocol/network.h"
@@ -21,14 +22,11 @@
 #include "net/cookies/canonical_cookie.h"
 #include "services/network/public/mojom/network_service.mojom.h"
 
-namespace base {
-class UnguessableToken;
-};
-
 namespace net {
 class HttpRequestHeaders;
 class URLRequest;
 class SSLInfo;
+class X509Certificate;
 }  // namespace net
 
 namespace network {
@@ -46,10 +44,11 @@ class InterceptionHandle;
 class NavigationHandle;
 class NavigationRequest;
 class NavigationThrottle;
-class SignedExchangeHeader;
+class SignedExchangeEnvelope;
 class StoragePartition;
 struct GlobalRequestID;
 struct InterceptedRequestInfo;
+struct SignedExchangeError;
 
 namespace protocol {
 class BackgroundSyncRestorer;
@@ -57,10 +56,21 @@ class BackgroundSyncRestorer;
 class NetworkHandler : public DevToolsDomainHandler,
                        public Network::Backend {
  public:
-  NetworkHandler(const std::string& host_id, DevToolsIOContext* io_context);
+  NetworkHandler(const std::string& host_id,
+                 const base::UnguessableToken& devtools_token,
+                 DevToolsIOContext* io_context);
   ~NetworkHandler() override;
 
   static std::vector<NetworkHandler*> ForAgentHost(DevToolsAgentHostImpl* host);
+
+  // static helpers used by other agents that depend on types defined
+  // in network domain.
+  static net::Error NetErrorFromString(const std::string& error, bool* ok);
+  static std::string NetErrorToString(int net_error);
+  static const char* ResourceTypeToString(ResourceType resource_type);
+  static bool AddInterceptedResourceType(
+      const std::string& resource_type,
+      base::flat_set<ResourceType>* intercepted_resource_types);
 
   void Wire(UberDispatcher* dispatcher) override;
   void SetRenderer(int render_process_id,
@@ -101,7 +111,6 @@ class NetworkHandler : public DevToolsDomainHandler,
       std::unique_ptr<protocol::Array<Network::CookieParam>> cookies,
       std::unique_ptr<SetCookiesCallback> callback) override;
 
-  Response SetUserAgentOverride(const std::string& user_agent) override;
   Response SetExtraHTTPHeaders(
       std::unique_ptr<Network::Headers> headers) override;
   Response CanEmulateNetworkConditions(bool* result) override;
@@ -119,7 +128,7 @@ class NetworkHandler : public DevToolsDomainHandler,
   void ContinueInterceptedRequest(
       const std::string& request_id,
       Maybe<std::string> error_reason,
-      Maybe<std::string> base64_raw_response,
+      Maybe<protocol::Binary> raw_response,
       Maybe<std::string> url,
       Maybe<std::string> method,
       Maybe<std::string> post_data,
@@ -137,8 +146,8 @@ class NetworkHandler : public DevToolsDomainHandler,
       override;
 
   bool MaybeCreateProxyForInterception(
-      const base::UnguessableToken& frame_token,
-      int process_id,
+      RenderFrameHostImpl* rfh,
+      bool is_navigation,
       bool is_download,
       network::mojom::URLLoaderFactoryRequest* target_factory_request);
 
@@ -166,19 +175,22 @@ class NetworkHandler : public DevToolsDomainHandler,
       base::Optional<const base::UnguessableToken> devtools_navigation_token,
       const GURL& outer_request_url,
       const network::ResourceResponseHead& outer_response,
-      const base::Optional<SignedExchangeHeader>& header,
+      const base::Optional<SignedExchangeEnvelope>& header,
+      const scoped_refptr<net::X509Certificate>& certificate,
       const base::Optional<net::SSLInfo>& ssl_info,
-      const std::vector<std::string>& error_messages);
+      const std::vector<SignedExchangeError>& errors);
 
   bool enabled() const { return enabled_; }
 
   Network::Frontend* frontend() const { return frontend_.get(); }
 
-  static GURL ClearUrlRef(const GURL& url);
+  static std::string ExtractFragment(const GURL& url, std::string* fragment);
   static std::unique_ptr<Network::Request> CreateRequestFromResourceRequest(
-      const network::ResourceRequest& request);
+      const network::ResourceRequest& request,
+      const std::string& cookie_line);
   static std::unique_ptr<Network::Request> CreateRequestFromURLRequest(
-      const net::URLRequest* request);
+      const net::URLRequest* request,
+      const std::string& cookie);
 
   std::unique_ptr<NavigationThrottle> CreateThrottleForNavigation(
       NavigationHandle* navigation_handle);
@@ -197,7 +209,10 @@ class NetworkHandler : public DevToolsDomainHandler,
       mojo::ScopedDataPipeConsumerHandle pipe,
       const std::string& mime_type);
 
+  // TODO(dgozman): Remove this.
   const std::string host_id_;
+
+  const base::UnguessableToken devtools_token_;
   DevToolsIOContext* const io_context_;
 
   std::unique_ptr<Network::Frontend> frontend_;
@@ -205,7 +220,6 @@ class NetworkHandler : public DevToolsDomainHandler,
   StoragePartition* storage_partition_;
   RenderFrameHostImpl* host_;
   bool enabled_;
-  std::string user_agent_;
   std::vector<std::pair<std::string, std::string>> extra_headers_;
   std::unique_ptr<InterceptionHandle> interception_handle_;
   std::unique_ptr<DevToolsURLLoaderInterceptor> url_loader_interceptor_;

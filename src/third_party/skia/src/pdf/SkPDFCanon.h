@@ -10,13 +10,13 @@
 #include <vector>
 
 #include "SkBitmapKey.h"
+#include "SkMacros.h"
 #include "SkPDFGradientShader.h"
 #include "SkPDFGraphicState.h"
 #include "SkPDFShader.h"
-#include "SkTDArray.h"
+#include "SkString.h"
 #include "SkTHash.h"
 #include "SkTypeface.h"
-#include "SkString.h"
 
 class SkPDFFont;
 struct SkAdvancedTypefaceMetrics;
@@ -43,8 +43,9 @@ public:
     SkTHashMap<uint32_t, std::unique_ptr<SkAdvancedTypefaceMetrics>> fTypefaceMetrics;
     SkTHashMap<uint32_t, std::vector<SkString>> fType1GlyphNames;
     SkTHashMap<uint32_t, std::vector<SkUnichar>> fToUnicodeMap;
-    SkTHashMap<uint32_t, sk_sp<SkPDFDict>> fFontDescriptors;
-    SkTHashMap<uint64_t, sk_sp<SkPDFFont>> fFontMap;
+    SkTHashMap<uint32_t, SkPDFIndirectReference> fFontDescriptors;
+    SkTHashMap<uint32_t, SkPDFIndirectReference> fType3FontDescriptors;
+    SkTHashMap<uint64_t, SkPDFFont> fFontMap;
 
     SkTHashMap<SkPDFStrokeGraphicState, sk_sp<SkPDFDict>> fStrokeGSMap;
     SkTHashMap<SkPDFFillGraphicState, sk_sp<SkPDFDict>> fFillGSMap;
@@ -52,25 +53,6 @@ public:
     sk_sp<SkPDFStream> fInvertFunction;
     sk_sp<SkPDFDict> fNoSmaskGraphicState;
     sk_sp<SkPDFArray> fRangeObject;
-
-    SK_BEGIN_REQUIRE_DENSE
-    struct BitmapGlyphKey {
-        SkFontID fFontID;      // uint32_t
-        SkScalar fTextSize;    // float32
-        SkScalar fTextScaleX;  // float32
-        SkScalar fTextSkewX;   // float32
-        SkGlyphID fGlyphID;    // uint16_t
-        uint16_t fPadding;
-    };
-    SK_END_REQUIRE_DENSE
-    struct BitmapGlyph {
-        sk_sp<SkImage> fImage;
-        SkIPoint fOffset;
-    };
-    SkTHashMap<BitmapGlyphKey, BitmapGlyph> fBitmapGlyphImages;
 };
 
-inline bool operator==(const SkPDFCanon::BitmapGlyphKey& u, const SkPDFCanon::BitmapGlyphKey& v) {
-    return memcmp(&u, &v, sizeof(SkPDFCanon::BitmapGlyphKey)) == 0;
-}
 #endif  // SkPDFCanon_DEFINED

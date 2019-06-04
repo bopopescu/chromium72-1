@@ -10,7 +10,7 @@
 #include "net/third_party/quic/core/quic_time.h"
 #include "net/third_party/quic/platform/api/quic_export.h"
 
-namespace net {
+namespace quic {
 
 // Abstract class which represents an alarm which will go off at a
 // scheduled time, and execute the |OnAlarm| method of the delegate.
@@ -28,6 +28,8 @@ class QUIC_EXPORT_PRIVATE QuicAlarm {
   };
 
   explicit QuicAlarm(QuicArenaScopedPtr<Delegate> delegate);
+  QuicAlarm(const QuicAlarm&) = delete;
+  QuicAlarm& operator=(const QuicAlarm&) = delete;
   virtual ~QuicAlarm();
 
   // Sets the alarm to fire at |deadline|.  Must not be called while
@@ -78,10 +80,8 @@ class QUIC_EXPORT_PRIVATE QuicAlarm {
  private:
   QuicArenaScopedPtr<Delegate> delegate_;
   QuicTime deadline_;
-
-  DISALLOW_COPY_AND_ASSIGN(QuicAlarm);
 };
 
-}  // namespace net
+}  // namespace quic
 
 #endif  // NET_THIRD_PARTY_QUIC_CORE_QUIC_ALARM_H_

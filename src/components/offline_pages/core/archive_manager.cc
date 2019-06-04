@@ -14,7 +14,7 @@
 #include "base/metrics/histogram_macros.h"
 #include "base/sequenced_task_runner.h"
 #include "base/strings/utf_string_conversions.h"
-#include "base/sys_info.h"
+#include "base/system/sys_info.h"
 #include "base/threading/thread_task_runner_handle.h"
 #include "build/build_config.h"
 
@@ -110,13 +110,13 @@ void ArchiveManager::EnsureArchivesDirCreated(
   // The callback will only be invoked once both directories are created.
   if (!temporary_archives_dir_.empty()) {
     task_runner_->PostTask(
-        FROM_HERE, base::Bind(EnsureArchivesDirCreatedImpl,
-                              temporary_archives_dir_, true /* is_temp */));
+        FROM_HERE, base::BindOnce(EnsureArchivesDirCreatedImpl,
+                                  temporary_archives_dir_, true /* is_temp */));
   }
   task_runner_->PostTaskAndReply(
       FROM_HERE,
-      base::Bind(EnsureArchivesDirCreatedImpl, private_archives_dir_,
-                 false /* is_temp */),
+      base::BindOnce(EnsureArchivesDirCreatedImpl, private_archives_dir_,
+                     false /* is_temp */),
       std::move(callback));
 }
 

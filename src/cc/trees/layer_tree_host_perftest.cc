@@ -148,7 +148,7 @@ class LayerTreeHostPerfTestJsonReader : public LayerTreeHostPerfTest {
   void BuildTree() override {
     gfx::Size viewport = gfx::Size(720, 1038);
     layer_tree_host()->SetViewportSizeAndScale(viewport, 1.f,
-                                               viz::LocalSurfaceId());
+                                               viz::LocalSurfaceIdAllocation());
     scoped_refptr<Layer> root = ParseTreeFromJson(json_,
                                                   &fake_content_layer_client_);
     ASSERT_TRUE(root.get());
@@ -255,13 +255,12 @@ class ScrollingLayerTreePerfTest : public LayerTreeHostPerfTestJsonReader {
     ASSERT_TRUE(scrollable_.get());
   }
 
-  void UpdateLayerTreeHost(
-      LayerTreeHostClient::VisualStateUpdate requested_update) override {
+  void UpdateLayerTreeHost() override {
     if (TestEnded())
       return;
     static const gfx::Vector2d delta = gfx::Vector2d(0, 10);
     scrollable_->SetScrollOffset(
-        gfx::ScrollOffsetWithDelta(scrollable_->scroll_offset(), delta));
+        gfx::ScrollOffsetWithDelta(scrollable_->CurrentScrollOffset(), delta));
   }
 
  private:

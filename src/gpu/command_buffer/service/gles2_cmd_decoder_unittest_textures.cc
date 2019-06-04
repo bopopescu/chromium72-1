@@ -21,6 +21,7 @@
 #include "gpu/command_buffer/service/mocks.h"
 #include "gpu/command_buffer/service/program_manager.h"
 #include "gpu/command_buffer/service/service_discardable_manager.h"
+#include "gpu/command_buffer/service/shared_image_representation.h"
 #include "gpu/command_buffer/service/test_helper.h"
 #include "gpu/config/gpu_switches.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -2824,63 +2825,6 @@ TEST_P(GLES2DecoderTest, TexSubImage2DDoesNotClearAfterTexImage2DNULLThenData) {
   EXPECT_EQ(error::kNoError, ExecuteCmd(cmd));
 }
 
-TEST_P(GLES2DecoderManualInitTest,
-       TexSubImage2DNotClearAfterTexImage2DNULLThenDataWithTexImage2DIsFaster) {
-  gpu::GpuDriverBugWorkarounds workarounds;
-  workarounds.texsubimage_faster_than_teximage = true;
-  InitState init;
-  init.bind_generates_resource = true;
-  InitDecoderWithWorkarounds(init, workarounds);
-  DoBindTexture(GL_TEXTURE_2D, client_texture_id_, kServiceTextureId);
-  DoTexImage2D(
-      GL_TEXTURE_2D, 0, GL_RGBA, 2, 2, 0, GL_RGBA, GL_UNSIGNED_BYTE, 0, 0);
-
-  {
-    // Uses texSubimage internally because the above workaround is active and
-    // the update is for the full size of the texture.
-    EXPECT_CALL(*gl_,
-                TexSubImage2D(
-                    GL_TEXTURE_2D, 0, 0, 0, 2, 2, GL_RGBA, GL_UNSIGNED_BYTE, _))
-        .Times(1)
-        .RetiresOnSaturation();
-    TexImage2D cmd;
-    cmd.Init(GL_TEXTURE_2D, 0, GL_RGBA, 2, 2, GL_RGBA, GL_UNSIGNED_BYTE,
-             shared_memory_id_, kSharedMemoryOffset);
-    EXPECT_EQ(error::kNoError, ExecuteCmd(cmd));
-  }
-
-  EXPECT_CALL(*gl_,
-              TexSubImage2D(GL_TEXTURE_2D,
-                            0,
-                            1,
-                            1,
-                            1,
-                            1,
-                            GL_RGBA,
-                            GL_UNSIGNED_BYTE,
-                            shared_memory_address_))
-      .Times(1)
-      .RetiresOnSaturation();
-  TexSubImage2D cmd;
-  cmd.Init(GL_TEXTURE_2D, 0, 1, 1, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE,
-           shared_memory_id_, kSharedMemoryOffset, GL_FALSE);
-  EXPECT_EQ(error::kNoError, ExecuteCmd(cmd));
-  // Test if we call it again it does not clear.
-  EXPECT_CALL(*gl_,
-              TexSubImage2D(GL_TEXTURE_2D,
-                            0,
-                            1,
-                            1,
-                            1,
-                            1,
-                            GL_RGBA,
-                            GL_UNSIGNED_BYTE,
-                            shared_memory_address_))
-      .Times(1)
-      .RetiresOnSaturation();
-  EXPECT_EQ(error::kNoError, ExecuteCmd(cmd));
-}
-
 TEST_P(GLES2DecoderTest, TexSubImage2DClearsAfterTexImage2DWithDataThenNULL) {
   DoBindTexture(GL_TEXTURE_2D, client_texture_id_, kServiceTextureId);
   // Put in data (so it should be marked as cleared)
@@ -3098,81 +3042,6 @@ TEST_P(GLES2DecoderTest, TextureUsageAngleExtNotEnabledByDefault) {
   EXPECT_EQ(GL_INVALID_ENUM, GetGLError());
 }
 
-TEST_P(GLES2DecoderTest, ProduceAndConsumeTextureCHROMIUM) {
-  Mailbox mailbox = Mailbox::Generate();
-  GLuint new_texture_id = kNewClientId;
-
-  DoBindTexture(GL_TEXTURE_2D, client_texture_id_, kServiceTextureId);
-  DoTexImage2D(
-      GL_TEXTURE_2D, 0, GL_RGBA, 3, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, 0, 0);
-  DoTexImage2D(
-      GL_TEXTURE_2D, 1, GL_RGBA, 2, 4, 0, GL_RGBA, GL_UNSIGNED_BYTE, 0, 0);
-  TextureRef* texture_ref =
-      group().texture_manager()->GetTexture(client_texture_id_);
-  ASSERT_TRUE(texture_ref != nullptr);
-  Texture* texture = texture_ref->texture();
-  EXPECT_EQ(kServiceTextureId, texture->service_id());
-
-  ProduceTextureDirectCHROMIUMImmediate& produce_cmd =
-      *GetImmediateAs<ProduceTextureDirectCHROMIUMImmediate>();
-  produce_cmd.Init(client_texture_id_, mailbox.name);
-  EXPECT_EQ(error::kNoError,
-            ExecuteImmediateCmd(produce_cmd, sizeof(mailbox.name)));
-  EXPECT_EQ(GL_NO_ERROR, GetGLError());
-
-  // Texture didn't change.
-  GLsizei width;
-  GLsizei height;
-  GLenum type;
-  GLenum internal_format;
-
-  EXPECT_TRUE(
-      texture->GetLevelSize(GL_TEXTURE_2D, 0, &width, &height, nullptr));
-  EXPECT_EQ(3, width);
-  EXPECT_EQ(1, height);
-  EXPECT_TRUE(texture->GetLevelType(GL_TEXTURE_2D, 0, &type, &internal_format));
-  EXPECT_EQ(static_cast<GLenum>(GL_RGBA), internal_format);
-  EXPECT_EQ(static_cast<GLenum>(GL_UNSIGNED_BYTE), type);
-
-  EXPECT_TRUE(
-      texture->GetLevelSize(GL_TEXTURE_2D, 1, &width, &height, nullptr));
-  EXPECT_EQ(2, width);
-  EXPECT_EQ(4, height);
-  EXPECT_TRUE(texture->GetLevelType(GL_TEXTURE_2D, 1, &type, &internal_format));
-  EXPECT_EQ(static_cast<GLenum>(GL_RGBA), internal_format);
-  EXPECT_EQ(static_cast<GLenum>(GL_UNSIGNED_BYTE), type);
-
-  // Service ID has not changed.
-  EXPECT_EQ(kServiceTextureId, texture->service_id());
-
-  CreateAndConsumeTextureINTERNALImmediate& consume_cmd =
-      *GetImmediateAs<CreateAndConsumeTextureINTERNALImmediate>();
-  consume_cmd.Init(new_texture_id, mailbox.name);
-  EXPECT_EQ(error::kNoError,
-            ExecuteImmediateCmd(consume_cmd, sizeof(mailbox.name)));
-  EXPECT_EQ(GL_NO_ERROR, GetGLError());
-
-  // Texture is redefined.
-  EXPECT_TRUE(
-      texture->GetLevelSize(GL_TEXTURE_2D, 0, &width, &height, nullptr));
-  EXPECT_EQ(3, width);
-  EXPECT_EQ(1, height);
-  EXPECT_TRUE(texture->GetLevelType(GL_TEXTURE_2D, 0, &type, &internal_format));
-  EXPECT_EQ(static_cast<GLenum>(GL_RGBA), internal_format);
-  EXPECT_EQ(static_cast<GLenum>(GL_UNSIGNED_BYTE), type);
-
-  EXPECT_TRUE(
-      texture->GetLevelSize(GL_TEXTURE_2D, 1, &width, &height, nullptr));
-  EXPECT_EQ(2, width);
-  EXPECT_EQ(4, height);
-  EXPECT_TRUE(texture->GetLevelType(GL_TEXTURE_2D, 1, &type, &internal_format));
-  EXPECT_EQ(static_cast<GLenum>(GL_RGBA), internal_format);
-  EXPECT_EQ(static_cast<GLenum>(GL_UNSIGNED_BYTE), type);
-
-  // Service ID is restored.
-  EXPECT_EQ(kServiceTextureId, texture->service_id());
-}
-
 TEST_P(GLES2DecoderTest, ProduceAndConsumeDirectTextureCHROMIUM) {
   Mailbox mailbox = Mailbox::Generate();
 
@@ -3314,6 +3183,263 @@ TEST_P(GLES2DecoderTest, CreateAndConsumeTextureCHROMIUMInvalidTexture) {
             ExecuteImmediateCmd(consume_cmd, sizeof(mailbox.name)));
 
   // CreateAndConsumeTexture should fail.
+  EXPECT_EQ(GL_INVALID_OPERATION, GetGLError());
+}
+
+class TestSharedImageBacking : public SharedImageBacking {
+ public:
+  class TestSharedImageRepresentation
+      : public SharedImageRepresentationGLTexture {
+   public:
+    TestSharedImageRepresentation(SharedImageManager* manager,
+                                  SharedImageBacking* backing,
+                                  MemoryTypeTracker* tracker,
+                                  gles2::Texture* texture)
+        : SharedImageRepresentationGLTexture(manager, backing, tracker),
+          texture_(texture) {}
+
+    gles2::Texture* GetTexture() override { return texture_; }
+
+    void set_can_access(bool can_access) { can_access_ = can_access; }
+    bool BeginAccess(GLenum mode) override { return can_access_; }
+
+   private:
+    gles2::Texture* texture_;
+    bool can_access_ = true;
+  };
+
+  TestSharedImageBacking(const Mailbox& mailbox,
+                         viz::ResourceFormat format,
+                         const gfx::Size& size,
+                         const gfx::ColorSpace& color_space,
+                         uint32_t usage,
+                         MemoryTypeTracker* memory_tracker,
+                         GLuint texture_id)
+      : SharedImageBacking(mailbox,
+                           format,
+                           size,
+                           color_space,
+                           usage,
+                           0 /* estimated_size */) {
+    texture_ = new gles2::Texture(texture_id);
+    texture_->SetLightweightRef();
+  }
+
+  bool IsCleared() const override { return false; }
+
+  void SetCleared() override {}
+
+  void Update() override {}
+
+  bool ProduceLegacyMailbox(MailboxManager* mailbox_manager) override {
+    return false;
+  }
+
+  void Destroy() override {
+    texture_->RemoveLightweightRef(have_context());
+    texture_ = nullptr;
+  }
+
+  void OnMemoryDump(const std::string& dump_name,
+                    base::trace_event::MemoryAllocatorDump* dump,
+                    base::trace_event::ProcessMemoryDump* pmd,
+                    uint64_t client_tracing_id) override {}
+
+ protected:
+  std::unique_ptr<SharedImageRepresentationGLTexture> ProduceGLTexture(
+      SharedImageManager* manager,
+      MemoryTypeTracker* tracker) override {
+    return std::make_unique<TestSharedImageRepresentation>(manager, this,
+                                                           tracker, texture_);
+  }
+
+ private:
+  gles2::Texture* texture_;
+};
+
+TEST_P(GLES2DecoderTest, CreateAndTexStorage2DSharedImageCHROMIUM) {
+  MemoryTypeTracker memory_tracker(memory_tracker_.get());
+  Mailbox mailbox = Mailbox::Generate();
+  std::unique_ptr<SharedImageRepresentationFactoryRef> shared_image =
+      GetSharedImageManager()->Register(
+          std::make_unique<TestSharedImageBacking>(
+              mailbox, viz::ResourceFormat::RGBA_8888, gfx::Size(10, 10),
+              gfx::ColorSpace(), 0, &memory_tracker, kNewServiceId),
+          &memory_tracker);
+
+  CreateAndTexStorage2DSharedImageINTERNALImmediate& cmd =
+      *GetImmediateAs<CreateAndTexStorage2DSharedImageINTERNALImmediate>();
+  cmd.Init(kNewClientId, GL_RGBA, mailbox.name);
+  EXPECT_EQ(error::kNoError, ExecuteImmediateCmd(cmd, sizeof(mailbox.name)));
+  EXPECT_EQ(GL_NO_ERROR, GetGLError());
+
+  // Make sure the new client ID is associated with the produced service ID.
+  auto* texture_ref = group().texture_manager()->GetTexture(kNewClientId);
+  ASSERT_NE(texture_ref, nullptr);
+  EXPECT_EQ(kNewServiceId, texture_ref->texture()->service_id());
+
+  // Delete the texture and make sure it is no longer accessible.
+  DoDeleteTexture(kNewClientId, kNewServiceId);
+  texture_ref = group().texture_manager()->GetTexture(kNewClientId);
+  EXPECT_EQ(texture_ref, nullptr);
+
+  shared_image.reset();
+}
+
+TEST_P(GLES2DecoderTest,
+       CreateAndTexStorage2DSharedImageCHROMIUMInvalidMailbox) {
+  MemoryTypeTracker memory_tracker(memory_tracker_.get());
+
+  // Attempt to use an invalid mailbox.
+  Mailbox mailbox;
+  // We will generate a new texture.
+  EXPECT_CALL(*gl_, GenTextures(1, _))
+      .WillOnce(SetArgPointee<1>(kNewServiceId))
+      .RetiresOnSaturation();
+
+  CreateAndTexStorage2DSharedImageINTERNALImmediate& cmd =
+      *GetImmediateAs<CreateAndTexStorage2DSharedImageINTERNALImmediate>();
+  cmd.Init(kNewClientId, GL_RGBA, mailbox.name);
+  EXPECT_EQ(error::kNoError, ExecuteImmediateCmd(cmd, sizeof(mailbox.name)));
+
+  // CreateAndTexStorage2DSharedImage should fail if the mailbox is invalid.
+  EXPECT_EQ(GL_INVALID_OPERATION, GetGLError());
+
+  // Make sure the new client_id is associated with a texture ref even though
+  // CreateAndTexStorage2DSharedImage failed.
+  TextureRef* texture_ref = group().texture_manager()->GetTexture(kNewClientId);
+  ASSERT_TRUE(texture_ref != nullptr);
+  Texture* texture = texture_ref->texture();
+  // New texture should be unbound to a target.
+  EXPECT_TRUE(texture->target() == GL_NONE);
+  // New texture should have a valid service_id.
+  EXPECT_EQ(kNewServiceId, texture->service_id());
+}
+
+TEST_P(GLES2DecoderTest,
+       CreateAndTexStorage2DSharedImageCHROMIUMPreexistingTexture) {
+  // Try to create a mailbox with kNewClientId.
+  MemoryTypeTracker memory_tracker(memory_tracker_.get());
+  Mailbox mailbox = Mailbox::Generate();
+  std::unique_ptr<SharedImageRepresentationFactoryRef> shared_image =
+      GetSharedImageManager()->Register(
+          std::make_unique<TestSharedImageBacking>(
+              mailbox, viz::ResourceFormat::RGBA_8888, gfx::Size(10, 10),
+              gfx::ColorSpace(), 0, &memory_tracker, kNewServiceId),
+          &memory_tracker);
+
+  CreateAndTexStorage2DSharedImageINTERNALImmediate& cmd =
+      *GetImmediateAs<CreateAndTexStorage2DSharedImageINTERNALImmediate>();
+  cmd.Init(client_texture_id_, GL_RGBA, mailbox.name);
+  EXPECT_EQ(error::kNoError, ExecuteImmediateCmd(cmd, sizeof(mailbox.name)));
+
+  // CreateAndTexStorage2DSharedImage should fail.
+  EXPECT_EQ(GL_INVALID_OPERATION, GetGLError());
+
+  // We delete a texture when calling |shared_image| reset().
+  EXPECT_CALL(*gl_, DeleteTextures(1, Pointee(kNewServiceId)));
+  shared_image.reset();
+}
+
+TEST_P(GLES2DecoderTest, BeginEndSharedImageAccessCRHOMIUM) {
+  MemoryTypeTracker memory_tracker(memory_tracker_.get());
+  Mailbox mailbox = Mailbox::Generate();
+  std::unique_ptr<SharedImageRepresentationFactoryRef> shared_image =
+      GetSharedImageManager()->Register(
+          std::make_unique<TestSharedImageBacking>(
+              mailbox, viz::ResourceFormat::RGBA_8888, gfx::Size(10, 10),
+              gfx::ColorSpace(), 0, &memory_tracker, kNewServiceId),
+          &memory_tracker);
+
+  CreateAndTexStorage2DSharedImageINTERNALImmediate& cmd =
+      *GetImmediateAs<CreateAndTexStorage2DSharedImageINTERNALImmediate>();
+  cmd.Init(kNewClientId, GL_RGBA, mailbox.name);
+  EXPECT_EQ(error::kNoError, ExecuteImmediateCmd(cmd, sizeof(mailbox.name)));
+  EXPECT_EQ(GL_NO_ERROR, GetGLError());
+
+  // Begin/end read access for the created image.
+  BeginSharedImageAccessDirectCHROMIUM read_access_cmd;
+  read_access_cmd.Init(kNewClientId, GL_SHARED_IMAGE_ACCESS_MODE_READ_CHROMIUM);
+  EXPECT_EQ(error::kNoError, ExecuteCmd(read_access_cmd));
+  EXPECT_EQ(GL_NO_ERROR, GetGLError());
+  EndSharedImageAccessDirectCHROMIUM read_end_cmd;
+  read_end_cmd.Init(kNewClientId);
+  EXPECT_EQ(error::kNoError, ExecuteCmd(read_end_cmd));
+  EXPECT_EQ(GL_NO_ERROR, GetGLError());
+
+  // Begin/end read/write access for the created image.
+  BeginSharedImageAccessDirectCHROMIUM readwrite_access_cmd;
+  readwrite_access_cmd.Init(kNewClientId,
+                            GL_SHARED_IMAGE_ACCESS_MODE_READWRITE_CHROMIUM);
+  EXPECT_EQ(error::kNoError, ExecuteCmd(readwrite_access_cmd));
+  EXPECT_EQ(GL_NO_ERROR, GetGLError());
+  EndSharedImageAccessDirectCHROMIUM readwrite_end_cmd;
+  readwrite_end_cmd.Init(kNewClientId);
+  EXPECT_EQ(error::kNoError, ExecuteCmd(readwrite_end_cmd));
+  EXPECT_EQ(GL_NO_ERROR, GetGLError());
+
+  // Cleanup
+  DoDeleteTexture(kNewClientId, kNewServiceId);
+  shared_image.reset();
+}
+
+TEST_P(GLES2DecoderTest, BeginSharedImageAccessDirectCHROMIUMInvalidMode) {
+  // Try to begin access with an invalid mode.
+  BeginSharedImageAccessDirectCHROMIUM bad_mode_access_cmd;
+  bad_mode_access_cmd.Init(client_texture_id_, 0);
+  EXPECT_EQ(error::kNoError, ExecuteCmd(bad_mode_access_cmd));
+  EXPECT_EQ(GL_INVALID_ENUM, GetGLError());
+}
+
+TEST_P(GLES2DecoderTest, BeginSharedImageAccessDirectCHROMIUMNotSharedImage) {
+  // Try to begin access with a texture that is not a shared image.
+  BeginSharedImageAccessDirectCHROMIUM not_shared_image_access_cmd;
+  not_shared_image_access_cmd.Init(
+      client_texture_id_, GL_SHARED_IMAGE_ACCESS_MODE_READWRITE_CHROMIUM);
+  EXPECT_EQ(error::kNoError, ExecuteCmd(not_shared_image_access_cmd));
+  EXPECT_EQ(GL_INVALID_OPERATION, GetGLError());
+}
+
+TEST_P(GLES2DecoderTest, BeginSharedImageAccessDirectCHROMIUMCantBeginAccess) {
+  // Create a shared image.
+  MemoryTypeTracker memory_tracker(memory_tracker_.get());
+  Mailbox mailbox = Mailbox::Generate();
+  std::unique_ptr<SharedImageRepresentationFactoryRef> shared_image =
+      GetSharedImageManager()->Register(
+          std::make_unique<TestSharedImageBacking>(
+              mailbox, viz::ResourceFormat::RGBA_8888, gfx::Size(10, 10),
+              gfx::ColorSpace(), 0, &memory_tracker, kNewServiceId),
+          &memory_tracker);
+
+  CreateAndTexStorage2DSharedImageINTERNALImmediate& cmd =
+      *GetImmediateAs<CreateAndTexStorage2DSharedImageINTERNALImmediate>();
+  cmd.Init(kNewClientId, GL_RGBA, mailbox.name);
+  EXPECT_EQ(error::kNoError, ExecuteImmediateCmd(cmd, sizeof(mailbox.name)));
+  EXPECT_EQ(GL_NO_ERROR, GetGLError());
+
+  // Try to begin access with a shared image representation that fails
+  // BeginAccess.
+  auto* texture_ref = group().texture_manager()->GetTexture(kNewClientId);
+  ASSERT_NE(texture_ref, nullptr);
+  ASSERT_NE(texture_ref->shared_image(), nullptr);
+  static_cast<TestSharedImageBacking::TestSharedImageRepresentation*>(
+      texture_ref->shared_image())
+      ->set_can_access(false);
+  BeginSharedImageAccessDirectCHROMIUM read_access_cmd;
+  read_access_cmd.Init(kNewClientId, GL_SHARED_IMAGE_ACCESS_MODE_READ_CHROMIUM);
+  EXPECT_EQ(error::kNoError, ExecuteCmd(read_access_cmd));
+  EXPECT_EQ(GL_INVALID_OPERATION, GetGLError());
+
+  // Cleanup
+  DoDeleteTexture(kNewClientId, kNewServiceId);
+  shared_image.reset();
+}
+
+TEST_P(GLES2DecoderTest, EndSharedImageAccessDirectCHROMIUMNotSharedImage) {
+  // Try to end access with a texture that is not a shared image.
+  EndSharedImageAccessDirectCHROMIUM not_shared_image_end_cmd;
+  not_shared_image_end_cmd.Init(client_texture_id_);
+  EXPECT_EQ(error::kNoError, ExecuteCmd(not_shared_image_end_cmd));
   EXPECT_EQ(GL_INVALID_OPERATION, GetGLError());
 }
 
@@ -3497,9 +3623,6 @@ TEST_P(GLES2DecoderTest, OrphanGLImageWithTexImage2D) {
 TEST_P(GLES2DecoderTest, GLImageAttachedAfterSubTexImage2D) {
   // Specifically tests that TexSubImage2D is not optimized to TexImage2D
   // in the presence of image attachments.
-  ASSERT_FALSE(
-      feature_info()->workarounds().texsubimage_faster_than_teximage);
-
   scoped_refptr<gl::GLImage> image(new gl::GLImageStub);
   GetImageManagerForTest()->AddImage(image.get(), 1);
   DoBindTexture(GL_TEXTURE_2D, client_texture_id_, kServiceTextureId);
@@ -3654,7 +3777,7 @@ class MockGLImage : public gl::GLImage {
                     const gfx::Rect&,
                     const gfx::RectF&,
                     bool,
-                    gfx::GpuFence* gpu_fence));
+                    std::unique_ptr<gfx::GpuFence> gpu_fence));
   MOCK_METHOD1(SetColorSpace, void(const gfx::ColorSpace&));
   MOCK_METHOD0(Flush, void());
   MOCK_METHOD3(OnMemoryDump,
@@ -4810,6 +4933,114 @@ TEST_P(GLES2DecoderTest, CopySubTextureCHROMIUMTwiceClearsUnclearedTexture) {
   ASSERT_TRUE(texture_ref != nullptr);
   Texture* texture = texture_ref->texture();
   EXPECT_TRUE(texture->SafeToRenderFrom());
+}
+
+TEST_P(GLES3DecoderTest, ImmutableTextureBaseLevelMaxLevelClamping) {
+  GLenum kTarget = GL_TEXTURE_3D;
+  GLint kBaseLevel = 1416354905;
+  GLint kMaxLevel = 800;
+  GLsizei kLevels = 4;
+  GLenum kInternalFormat = GL_R8;
+  GLsizei kWidth = 20;
+  GLsizei kHeight = 20;
+  GLsizei kDepth = 20;
+  GLint kClampedBaseLevel = kLevels - 1;
+  GLint kClampedMaxLevel = kLevels - 1;
+
+  DoBindTexture(kTarget, client_texture_id_, kServiceTextureId);
+  TextureRef* texture_ref =
+      group().texture_manager()->GetTexture(client_texture_id_);
+  ASSERT_TRUE(texture_ref != nullptr);
+  Texture* texture = texture_ref->texture();
+
+  // Before TexStorage3D call, base/max levels are not clamped.
+  {
+    EXPECT_CALL(*gl_, TexParameteri(kTarget, GL_TEXTURE_BASE_LEVEL, kBaseLevel))
+        .Times(1)
+        .RetiresOnSaturation();
+    TexParameteri cmd;
+    cmd.Init(kTarget, GL_TEXTURE_BASE_LEVEL, kBaseLevel);
+    EXPECT_EQ(error::kNoError, ExecuteCmd(cmd));
+  }
+  {
+    EXPECT_CALL(*gl_, TexParameteri(kTarget, GL_TEXTURE_MAX_LEVEL, kMaxLevel))
+        .Times(1)
+        .RetiresOnSaturation();
+    TexParameteri cmd;
+    cmd.Init(kTarget, GL_TEXTURE_MAX_LEVEL, kMaxLevel);
+    EXPECT_EQ(error::kNoError, ExecuteCmd(cmd));
+  }
+  EXPECT_EQ(GL_NO_ERROR, GetGLError());
+  EXPECT_EQ(kBaseLevel, texture->base_level());
+  EXPECT_EQ(kMaxLevel, texture->max_level());
+
+  {
+    EXPECT_CALL(*gl_, TexStorage3D(kTarget, kLevels, kInternalFormat, kWidth,
+                                   kHeight, kDepth))
+        .Times(1)
+        .RetiresOnSaturation();
+    TexStorage3D cmd;
+    cmd.Init(kTarget, kLevels, kInternalFormat, kWidth, kHeight, kDepth);
+    EXPECT_EQ(error::kNoError, ExecuteCmd(cmd));
+    EXPECT_EQ(GL_NO_ERROR, GetGLError());
+  }
+  EXPECT_EQ(kClampedBaseLevel, texture->base_level());
+  EXPECT_EQ(kClampedMaxLevel, texture->max_level());
+
+  GLint kNewBaseLevel = 827344;
+  GLint kNewMaxLevel = 17619;
+  // After TexStorage3D call, base/max levels are clamped.
+  {
+    EXPECT_CALL(
+        *gl_, TexParameteri(kTarget, GL_TEXTURE_BASE_LEVEL, kClampedBaseLevel))
+        .Times(1)
+        .RetiresOnSaturation();
+    TexParameteri cmd;
+    cmd.Init(kTarget, GL_TEXTURE_BASE_LEVEL, kNewBaseLevel);
+    EXPECT_EQ(error::kNoError, ExecuteCmd(cmd));
+  }
+  {
+    EXPECT_CALL(*gl_,
+                TexParameteri(kTarget, GL_TEXTURE_MAX_LEVEL, kClampedMaxLevel))
+        .Times(1)
+        .RetiresOnSaturation();
+    TexParameteri cmd;
+    cmd.Init(kTarget, GL_TEXTURE_MAX_LEVEL, kNewMaxLevel);
+    EXPECT_EQ(error::kNoError, ExecuteCmd(cmd));
+  }
+  EXPECT_EQ(GL_NO_ERROR, GetGLError());
+  EXPECT_EQ(kClampedBaseLevel, texture->base_level());
+  EXPECT_EQ(kClampedMaxLevel, texture->max_level());
+
+  // GetTexParameteriv still returns unclamped values.
+  {
+    EXPECT_CALL(*gl_, GetError())
+        .WillOnce(Return(GL_NO_ERROR))
+        .WillOnce(Return(GL_NO_ERROR))
+        .RetiresOnSaturation();
+    typedef GetTexParameteriv::Result Result;
+    Result* result = static_cast<Result*>(shared_memory_address_);
+    result->size = 0;
+    GetTexParameteriv cmd;
+    cmd.Init(kTarget, GL_TEXTURE_BASE_LEVEL, shared_memory_id_,
+             shared_memory_offset_);
+    EXPECT_EQ(error::kNoError, ExecuteCmd(cmd));
+    EXPECT_EQ(kNewBaseLevel, static_cast<GLint>(result->GetData()[0]));
+  }
+  {
+    EXPECT_CALL(*gl_, GetError())
+        .WillOnce(Return(GL_NO_ERROR))
+        .WillOnce(Return(GL_NO_ERROR))
+        .RetiresOnSaturation();
+    typedef GetTexParameteriv::Result Result;
+    Result* result = static_cast<Result*>(shared_memory_address_);
+    result->size = 0;
+    GetTexParameteriv cmd;
+    cmd.Init(kTarget, GL_TEXTURE_MAX_LEVEL, shared_memory_id_,
+             shared_memory_offset_);
+    EXPECT_EQ(error::kNoError, ExecuteCmd(cmd));
+    EXPECT_EQ(kNewMaxLevel, static_cast<GLint>(result->GetData()[0]));
+  }
 }
 
 // TODO(gman): Complete this test.

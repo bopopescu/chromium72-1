@@ -6,9 +6,11 @@
 
 #include "third_party/blink/public/platform/task_type.h"
 #include "third_party/blink/renderer/core/dom/events/event.h"
+#include "third_party/blink/renderer/core/dom/events/event_listener.h"
 #include "third_party/blink/renderer/core/html/media/html_media_element.h"
 #include "third_party/blink/renderer/modules/media_controls/elements/media_control_elements_helper.h"
 #include "third_party/blink/renderer/modules/media_controls/media_controls_impl.h"
+#include "third_party/blink/renderer/platform/wtf/functional.h"
 
 namespace blink {
 
@@ -39,14 +41,15 @@ class MediaControlPanelElement::TransitionEventListener final
     DCHECK(!attached_);
     attached_ = true;
 
-    element_->addEventListener(EventTypeNames::transitionend, this, false);
+    element_->addEventListener(event_type_names::kTransitionend, this, false);
   }
 
   void Detach() {
     DCHECK(attached_);
     attached_ = false;
 
-    element_->removeEventListener(EventTypeNames::transitionend, this, false);
+    element_->removeEventListener(event_type_names::kTransitionend, this,
+                                  false);
   }
 
   bool IsAttached() const { return attached_; }
@@ -61,8 +64,11 @@ class MediaControlPanelElement::TransitionEventListener final
   }
 
  private:
-  void handleEvent(ExecutionContext* context, Event* event) override {
-    if (event->type() == EventTypeNames::transitionend) {
+  void Invoke(ExecutionContext* context, Event* event) override {
+    if (event->target() != element_)
+      return;
+
+    if (event->type() == event_type_names::kTransitionend) {
       callback_.Run();
       return;
     }
@@ -124,13 +130,18 @@ void MediaControlPanelElement::MakeTransparent() {
   opaque_ = false;
 }
 
-void MediaControlPanelElement::RemovedFrom(ContainerNode*) {
+void MediaControlPanelElement::RemovedFrom(ContainerNode& insertion_point) {
+  MediaControlDivElement::RemovedFrom(insertion_point);
   DetachTransitionEventListener();
 }
 
 void MediaControlPanelElement::Trace(blink::Visitor* visitor) {
   MediaControlDivElement::Trace(visitor);
   visitor->Trace(event_listener_);
+}
+
+bool MediaControlPanelElement::KeepDisplayedForAccessibility() {
+  return keep_displayed_for_accessibility_;
 }
 
 void MediaControlPanelElement::SetKeepDisplayedForAccessibility(bool value) {
@@ -144,10 +155,11 @@ bool MediaControlPanelElement::EventListenerIsAttachedForTest() const {
 void MediaControlPanelElement::EnsureTransitionEventListener() {
   // Create the event listener if it doesn't exist.
   if (!event_listener_) {
-    event_listener_ = new MediaControlPanelElement::TransitionEventListener(
-        this,
-        WTF::BindRepeating(&MediaControlPanelElement::HandleTransitionEndEvent,
-                           WrapWeakPersistent(this)));
+    event_listener_ =
+        MakeGarbageCollected<MediaControlPanelElement::TransitionEventListener>(
+            this, WTF::BindRepeating(
+                      &MediaControlPanelElement::HandleTransitionEndEvent,
+                      WrapWeakPersistent(this)));
   }
 
   // Attach the event listener if we are not attached.
@@ -164,18 +176,20 @@ void MediaControlPanelElement::DetachTransitionEventListener() {
     event_listener_->Detach();
 }
 
-void MediaControlPanelElement::DefaultEventHandler(Event* event) {
+void MediaControlPanelElement::DefaultEventHandler(Event& event) {
   // Suppress the media element activation behavior (toggle play/pause) when
   // any part of the control panel is clicked.
-  if (event->type() == EventTypeNames::click) {
-    event->SetDefaultHandled();
+  if (event.type() == event_type_names::kClick &&
+      !MediaControlsImpl::IsModern()) {
+    event.SetDefaultHandled();
     return;
   }
   HTMLDivElement::DefaultEventHandler(event);
 }
 
-bool MediaControlPanelElement::KeepEventInNode(Event* event) {
-  return !MediaControlsImpl::IsModern() &&
+bool MediaControlPanelElement::KeepEventInNode(const Event& event) const {
+  return (!MediaControlsImpl::IsModern() ||
+          GetMediaControls().ShouldShowAudioControls()) &&
          MediaControlElementsHelper::IsUserInteractionEvent(event);
 }
 

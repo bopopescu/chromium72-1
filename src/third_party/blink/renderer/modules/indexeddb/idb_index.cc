@@ -27,18 +27,17 @@
 
 #include <memory>
 #include "third_party/blink/public/platform/modules/indexeddb/web_idb_key_range.h"
-#include "third_party/blink/renderer/bindings/core/v8/exception_state.h"
 #include "third_party/blink/renderer/bindings/core/v8/to_v8_for_core.h"
 #include "third_party/blink/renderer/bindings/modules/v8/idb_object_store_or_idb_index_or_idb_cursor.h"
 #include "third_party/blink/renderer/bindings/modules/v8/to_v8_for_modules.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_binding_for_modules.h"
-#include "third_party/blink/renderer/core/dom/exception_code.h"
 #include "third_party/blink/renderer/core/execution_context/execution_context.h"
 #include "third_party/blink/renderer/modules/indexeddb/idb_database.h"
 #include "third_party/blink/renderer/modules/indexeddb/idb_key.h"
 #include "third_party/blink/renderer/modules/indexeddb/idb_object_store.h"
 #include "third_party/blink/renderer/modules/indexeddb/idb_tracing.h"
 #include "third_party/blink/renderer/modules/indexeddb/idb_transaction.h"
+#include "third_party/blink/renderer/platform/bindings/exception_state.h"
 
 using blink::WebIDBCallbacks;
 using blink::WebIDBCursor;
@@ -70,30 +69,31 @@ void IDBIndex::setName(const String& name, ExceptionState& exception_state) {
   IDB_TRACE("IDBIndex::setName");
   if (!transaction_->IsVersionChange()) {
     exception_state.ThrowDOMException(
-        kInvalidStateError,
+        DOMExceptionCode::kInvalidStateError,
         IDBDatabase::kNotVersionChangeTransactionErrorMessage);
     return;
   }
   if (IsDeleted()) {
-    exception_state.ThrowDOMException(kInvalidStateError,
+    exception_state.ThrowDOMException(DOMExceptionCode::kInvalidStateError,
                                       IDBDatabase::kIndexDeletedErrorMessage);
     return;
   }
   if (!transaction_->IsActive()) {
-    exception_state.ThrowDOMException(kTransactionInactiveError,
-                                      transaction_->InactiveErrorMessage());
+    exception_state.ThrowDOMException(
+        DOMExceptionCode::kTransactionInactiveError,
+        transaction_->InactiveErrorMessage());
     return;
   }
 
   if (this->name() == name)
     return;
   if (object_store_->ContainsIndex(name)) {
-    exception_state.ThrowDOMException(kConstraintError,
+    exception_state.ThrowDOMException(DOMExceptionCode::kConstraintError,
                                       IDBDatabase::kIndexNameTakenErrorMessage);
     return;
   }
   if (!BackendDB()) {
-    exception_state.ThrowDOMException(kInvalidStateError,
+    exception_state.ThrowDOMException(DOMExceptionCode::kInvalidStateError,
                                       IDBDatabase::kDatabaseClosedErrorMessage);
     return;
   }
@@ -121,16 +121,17 @@ IDBRequest* IDBIndex::openCursor(ScriptState* script_state,
              metadata_->name.Utf8());
   IDBRequest::AsyncTraceState metrics("IDBIndex::openCursor");
   if (IsDeleted()) {
-    exception_state.ThrowDOMException(kInvalidStateError,
+    exception_state.ThrowDOMException(DOMExceptionCode::kInvalidStateError,
                                       IDBDatabase::kIndexDeletedErrorMessage);
     return nullptr;
   }
   if (!transaction_->IsActive()) {
-    exception_state.ThrowDOMException(kTransactionInactiveError,
-                                      transaction_->InactiveErrorMessage());
+    exception_state.ThrowDOMException(
+        DOMExceptionCode::kTransactionInactiveError,
+        transaction_->InactiveErrorMessage());
     return nullptr;
   }
-  WebIDBCursorDirection direction =
+  mojom::IDBCursorDirection direction =
       IDBCursor::StringToDirection(direction_string);
   IDBKeyRange* key_range = IDBKeyRange::FromScriptValue(
       ExecutionContext::From(script_state), range, exception_state);
@@ -138,7 +139,7 @@ IDBRequest* IDBIndex::openCursor(ScriptState* script_state,
     return nullptr;
 
   if (!BackendDB()) {
-    exception_state.ThrowDOMException(kInvalidStateError,
+    exception_state.ThrowDOMException(DOMExceptionCode::kInvalidStateError,
                                       IDBDatabase::kDatabaseClosedErrorMessage);
     return nullptr;
   }
@@ -148,13 +149,14 @@ IDBRequest* IDBIndex::openCursor(ScriptState* script_state,
 
 IDBRequest* IDBIndex::openCursor(ScriptState* script_state,
                                  IDBKeyRange* key_range,
-                                 WebIDBCursorDirection direction,
+                                 mojom::IDBCursorDirection direction,
                                  IDBRequest::AsyncTraceState metrics) {
   IDBRequest* request = IDBRequest::Create(
       script_state, this, transaction_.Get(), std::move(metrics));
-  request->SetCursorDetails(IndexedDB::kCursorKeyAndValue, direction);
+  request->SetCursorDetails(indexed_db::kCursorKeyAndValue, direction);
   BackendDB()->OpenCursor(transaction_->Id(), object_store_->Id(), Id(),
-                          key_range, direction, false, kWebIDBTaskTypeNormal,
+                          key_range, direction, false,
+                          mojom::IDBTaskType::Normal,
                           request->CreateWebCallbacks().release());
   return request;
 }
@@ -166,13 +168,14 @@ IDBRequest* IDBIndex::count(ScriptState* script_state,
              metadata_->name.Utf8());
   IDBRequest::AsyncTraceState metrics("IDBIndex::count");
   if (IsDeleted()) {
-    exception_state.ThrowDOMException(kInvalidStateError,
+    exception_state.ThrowDOMException(DOMExceptionCode::kInvalidStateError,
                                       IDBDatabase::kIndexDeletedErrorMessage);
     return nullptr;
   }
   if (!transaction_->IsActive()) {
-    exception_state.ThrowDOMException(kTransactionInactiveError,
-                                      transaction_->InactiveErrorMessage());
+    exception_state.ThrowDOMException(
+        DOMExceptionCode::kTransactionInactiveError,
+        transaction_->InactiveErrorMessage());
     return nullptr;
   }
 
@@ -182,7 +185,7 @@ IDBRequest* IDBIndex::count(ScriptState* script_state,
     return nullptr;
 
   if (!BackendDB()) {
-    exception_state.ThrowDOMException(kInvalidStateError,
+    exception_state.ThrowDOMException(DOMExceptionCode::kInvalidStateError,
                                       IDBDatabase::kDatabaseClosedErrorMessage);
     return nullptr;
   }
@@ -202,33 +205,34 @@ IDBRequest* IDBIndex::openKeyCursor(ScriptState* script_state,
              metadata_->name.Utf8());
   IDBRequest::AsyncTraceState metrics("IDBIndex::openKeyCursor");
   if (IsDeleted()) {
-    exception_state.ThrowDOMException(kInvalidStateError,
+    exception_state.ThrowDOMException(DOMExceptionCode::kInvalidStateError,
                                       IDBDatabase::kIndexDeletedErrorMessage);
     return nullptr;
   }
   if (!transaction_->IsActive()) {
-    exception_state.ThrowDOMException(kTransactionInactiveError,
-                                      transaction_->InactiveErrorMessage());
+    exception_state.ThrowDOMException(
+        DOMExceptionCode::kTransactionInactiveError,
+        transaction_->InactiveErrorMessage());
     return nullptr;
   }
-  WebIDBCursorDirection direction =
+  mojom::IDBCursorDirection direction =
       IDBCursor::StringToDirection(direction_string);
   IDBKeyRange* key_range = IDBKeyRange::FromScriptValue(
       ExecutionContext::From(script_state), range, exception_state);
   if (exception_state.HadException())
     return nullptr;
   if (!BackendDB()) {
-    exception_state.ThrowDOMException(kInvalidStateError,
+    exception_state.ThrowDOMException(DOMExceptionCode::kInvalidStateError,
                                       IDBDatabase::kDatabaseClosedErrorMessage);
     return nullptr;
   }
 
   IDBRequest* request = IDBRequest::Create(
       script_state, this, transaction_.Get(), std::move(metrics));
-  request->SetCursorDetails(IndexedDB::kCursorKeyOnly, direction);
-  BackendDB()->OpenCursor(transaction_->Id(), object_store_->Id(), Id(),
-                          key_range, direction, true, kWebIDBTaskTypeNormal,
-                          request->CreateWebCallbacks().release());
+  request->SetCursorDetails(indexed_db::kCursorKeyOnly, direction);
+  BackendDB()->OpenCursor(
+      transaction_->Id(), object_store_->Id(), Id(), key_range, direction, true,
+      mojom::IDBTaskType::Normal, request->CreateWebCallbacks().release());
   return request;
 }
 
@@ -293,13 +297,14 @@ IDBRequest* IDBIndex::GetInternal(ScriptState* script_state,
                                   bool key_only,
                                   IDBRequest::AsyncTraceState metrics) {
   if (IsDeleted()) {
-    exception_state.ThrowDOMException(kInvalidStateError,
+    exception_state.ThrowDOMException(DOMExceptionCode::kInvalidStateError,
                                       IDBDatabase::kIndexDeletedErrorMessage);
     return nullptr;
   }
   if (!transaction_->IsActive()) {
-    exception_state.ThrowDOMException(kTransactionInactiveError,
-                                      transaction_->InactiveErrorMessage());
+    exception_state.ThrowDOMException(
+        DOMExceptionCode::kTransactionInactiveError,
+        transaction_->InactiveErrorMessage());
     return nullptr;
   }
 
@@ -309,11 +314,12 @@ IDBRequest* IDBIndex::GetInternal(ScriptState* script_state,
     return nullptr;
   if (!key_range) {
     exception_state.ThrowDOMException(
-        kDataError, IDBDatabase::kNoKeyOrKeyRangeErrorMessage);
+        DOMExceptionCode::kDataError,
+        IDBDatabase::kNoKeyOrKeyRangeErrorMessage);
     return nullptr;
   }
   if (!BackendDB()) {
-    exception_state.ThrowDOMException(kInvalidStateError,
+    exception_state.ThrowDOMException(DOMExceptionCode::kInvalidStateError,
                                       IDBDatabase::kDatabaseClosedErrorMessage);
     return nullptr;
   }
@@ -334,13 +340,14 @@ IDBRequest* IDBIndex::GetAllInternal(ScriptState* script_state,
     max_count = std::numeric_limits<uint32_t>::max();
 
   if (IsDeleted()) {
-    exception_state.ThrowDOMException(kInvalidStateError,
+    exception_state.ThrowDOMException(DOMExceptionCode::kInvalidStateError,
                                       IDBDatabase::kIndexDeletedErrorMessage);
     return nullptr;
   }
   if (!transaction_->IsActive()) {
-    exception_state.ThrowDOMException(kTransactionInactiveError,
-                                      transaction_->InactiveErrorMessage());
+    exception_state.ThrowDOMException(
+        DOMExceptionCode::kTransactionInactiveError,
+        transaction_->InactiveErrorMessage());
     return nullptr;
   }
 
@@ -349,7 +356,7 @@ IDBRequest* IDBIndex::GetAllInternal(ScriptState* script_state,
   if (exception_state.HadException())
     return nullptr;
   if (!BackendDB()) {
-    exception_state.ThrowDOMException(kInvalidStateError,
+    exception_state.ThrowDOMException(DOMExceptionCode::kInvalidStateError,
                                       IDBDatabase::kDatabaseClosedErrorMessage);
     return nullptr;
   }

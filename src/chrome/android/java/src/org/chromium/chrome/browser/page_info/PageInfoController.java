@@ -10,9 +10,8 @@ import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.Context;
 import android.content.Intent;
-import android.content.pm.PackageManager;
+import android.graphics.Color;
 import android.net.Uri;
-import android.os.Bundle;
 import android.provider.Settings;
 import android.support.annotation.IntDef;
 import android.text.Spannable;
@@ -20,7 +19,6 @@ import android.text.SpannableString;
 import android.text.SpannableStringBuilder;
 import android.text.TextUtils;
 import android.text.style.ForegroundColorSpan;
-import android.text.style.StyleSpan;
 import android.text.style.TextAppearanceSpan;
 
 import org.chromium.base.ApiCompatibilityUtils;
@@ -30,37 +28,40 @@ import org.chromium.base.annotations.CalledByNative;
 import org.chromium.base.metrics.RecordHistogram;
 import org.chromium.base.metrics.RecordUserAction;
 import org.chromium.chrome.R;
-import org.chromium.chrome.browser.ContentSettingsType;
 import org.chromium.chrome.browser.UrlConstants;
+import org.chromium.chrome.browser.feature_engagement.TrackerFactory;
 import org.chromium.chrome.browser.instantapps.InstantAppsHandler;
+import org.chromium.chrome.browser.modaldialog.DialogDismissalCause;
 import org.chromium.chrome.browser.modaldialog.ModalDialogView;
 import org.chromium.chrome.browser.modaldialog.ModalDialogView.ButtonType;
+import org.chromium.chrome.browser.modelutil.PropertyModel;
 import org.chromium.chrome.browser.offlinepages.OfflinePageItem;
 import org.chromium.chrome.browser.offlinepages.OfflinePageUtils;
 import org.chromium.chrome.browser.omnibox.OmniboxUrlEmphasizer;
 import org.chromium.chrome.browser.page_info.PageInfoView.ConnectionInfoParams;
 import org.chromium.chrome.browser.page_info.PageInfoView.PageInfoViewParams;
-import org.chromium.chrome.browser.page_info.PageInfoView.PermissionParams;
-import org.chromium.chrome.browser.preferences.PrefServiceBridge;
-import org.chromium.chrome.browser.preferences.Preferences;
 import org.chromium.chrome.browser.preferences.PreferencesLauncher;
 import org.chromium.chrome.browser.preferences.website.ContentSetting;
-import org.chromium.chrome.browser.preferences.website.ContentSettingsResources;
 import org.chromium.chrome.browser.preferences.website.SingleWebsitePreferences;
-import org.chromium.chrome.browser.preferences.website.WebsitePreferenceBridge;
+import org.chromium.chrome.browser.previews.PreviewsAndroidBridge;
+import org.chromium.chrome.browser.previews.PreviewsUma;
+import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.ssl.SecurityStateModel;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.util.UrlUtilities;
-import org.chromium.chrome.browser.vr_shell.UiUnsupportedMode;
-import org.chromium.chrome.browser.vr_shell.VrShellDelegate;
-import org.chromium.components.location.LocationUtils;
+import org.chromium.chrome.browser.vr.VrModuleProvider;
+import org.chromium.components.feature_engagement.EventConstants;
+import org.chromium.components.feature_engagement.Tracker;
 import org.chromium.components.security_state.ConnectionSecurityLevel;
 import org.chromium.components.url_formatter.UrlFormatter;
 import org.chromium.content_public.browser.WebContents;
 import org.chromium.content_public.browser.WebContentsObserver;
+import org.chromium.net.GURLUtils;
 import org.chromium.ui.base.DeviceFormFactor;
-import org.chromium.ui.base.PermissionCallback;
 import org.chromium.ui.base.WindowAndroid;
+import org.chromium.ui.text.NoUnderlineClickableSpan;
+import org.chromium.ui.text.SpanApplier;
+import org.chromium.ui.text.SpanApplier.SpanInfo;
 import org.chromium.ui.widget.Toast;
 
 import java.lang.annotation.Retention;
@@ -68,54 +69,43 @@ import java.lang.annotation.RetentionPolicy;
 import java.net.URI;
 import java.net.URISyntaxException;
 import java.text.DateFormat;
-import java.util.ArrayList;
 import java.util.Date;
-import java.util.List;
 
 /**
  * Java side of Android implementation of the page info UI.
  */
-public class PageInfoController implements ModalDialogView.Controller {
+public class PageInfoController
+        implements ModalDialogView.Controller, SystemSettingsActivityRequiredListener {
+    @IntDef({OpenedFromSource.MENU, OpenedFromSource.TOOLBAR, OpenedFromSource.VR})
     @Retention(RetentionPolicy.SOURCE)
-    @IntDef({OPENED_FROM_MENU, OPENED_FROM_TOOLBAR, OPENED_FROM_VR})
-    private @interface OpenedFromSource {}
+    public @interface OpenedFromSource {
+        int MENU = 1;
+        int TOOLBAR = 2;
+        int VR = 3;
+    }
 
-    public static final int OPENED_FROM_MENU = 1;
-    public static final int OPENED_FROM_TOOLBAR = 2;
-    public static final int OPENED_FROM_VR = 3;
-
+    @IntDef({OfflinePageState.NOT_OFFLINE_PAGE, OfflinePageState.TRUSTED_OFFLINE_PAGE,
+            OfflinePageState.UNTRUSTED_OFFLINE_PAGE})
     @Retention(RetentionPolicy.SOURCE)
-    @IntDef({NOT_OFFLINE_PAGE, TRUSTED_OFFLINE_PAGE, UNTRUSTED_OFFLINE_PAGE})
-    private @interface OfflinePageState {}
+    public @interface OfflinePageState {
+        int NOT_OFFLINE_PAGE = 1;
+        int TRUSTED_OFFLINE_PAGE = 2;
+        int UNTRUSTED_OFFLINE_PAGE = 3;
+    }
 
-    public static final int NOT_OFFLINE_PAGE = 1;
-    public static final int TRUSTED_OFFLINE_PAGE = 2;
-    public static final int UNTRUSTED_OFFLINE_PAGE = 3;
-
-    /**
-     * An entry in the settings dropdown for a given permission. There are two options for each
-     * permission: Allow and Block.
-     */
-    private static final class PageInfoPermissionEntry {
-        public final String name;
-        public final int type;
-        public final ContentSetting setting;
-
-        PageInfoPermissionEntry(String name, int type, ContentSetting setting) {
-            this.name = name;
-            this.type = type;
-            this.setting = setting;
-        }
-
-        @Override
-        public String toString() {
-            return name;
-        }
+    @IntDef({PreviewPageState.NOT_PREVIEW, PreviewPageState.SECURE_PAGE_PREVIEW,
+            PreviewPageState.INSECURE_PAGE_PREVIEW})
+    @Retention(RetentionPolicy.SOURCE)
+    public @interface PreviewPageState {
+        int NOT_PREVIEW = 1;
+        int SECURE_PAGE_PREVIEW = 2;
+        int INSECURE_PAGE_PREVIEW = 3;
     }
 
     private final Context mContext;
     private final WindowAndroid mWindowAndroid;
     private final Tab mTab;
+    private final PermissionParamsListBuilder mPermissionParamsListBuilder;
 
     // A pointer to the C++ object for this UI.
     private long mNativePageInfoController;
@@ -130,9 +120,8 @@ public class PageInfoController implements ModalDialogView.Controller {
     // URL'.
     private String mFullUrl;
 
-    // A parsed version of mFullUrl. Is null if the URL is invalid/cannot be
-    // parsed.
-    private URI mParsedUrl;
+    // The scheme of the URL of this page.
+    private String mScheme;
 
     // Whether or not this page is an internal chrome page (e.g. the
     // chrome://settings page).
@@ -141,11 +130,11 @@ public class PageInfoController implements ModalDialogView.Controller {
     // The security level of the page (a valid ConnectionSecurityLevel).
     private int mSecurityLevel;
 
-    // Permissions available to be displayed.
-    private List<PageInfoPermissionEntry> mDisplayedPermissions;
-
     // Creation date of an offline copy, if web contents contains an offline page.
     private String mOfflinePageCreationDate;
+
+    // The state of the preview of the page (not preview, preview on a [in]secure page).
+    private @PreviewPageState int mPreviewPageState;
 
     // The state of offline page in the web contents (not offline page, trusted/untrusted offline
     // page).
@@ -166,20 +155,25 @@ public class PageInfoController implements ModalDialogView.Controller {
      * C++ object and saves a pointer to it.
      * @param activity                 Activity which is used for showing a popup.
      * @param tab                      Tab for which the pop up is shown.
+     * @param securityLevel            The security level of the page being shown.
      * @param offlinePageUrl           URL that the offline page claims to be generated from.
      * @param offlinePageCreationDate  Date when the offline page was created.
      * @param offlinePageState         State of the tab showing offline page.
+     * @param previewPageState         State of the tab showing the preview.
      * @param publisher                The name of the content publisher, if any.
      */
-    protected PageInfoController(Activity activity, Tab tab, String offlinePageUrl,
-            String offlinePageCreationDate, @OfflinePageState int offlinePageState,
+    protected PageInfoController(Activity activity, Tab tab, int securityLevel,
+            String offlinePageUrl, String offlinePageCreationDate,
+            @OfflinePageState int offlinePageState, @PreviewPageState int previewPageState,
             String publisher) {
         mContext = activity;
         mTab = tab;
+        mSecurityLevel = securityLevel;
         mOfflinePageState = offlinePageState;
+        mPreviewPageState = previewPageState;
         PageInfoViewParams viewParams = new PageInfoViewParams();
 
-        if (mOfflinePageState != NOT_OFFLINE_PAGE) {
+        if (mOfflinePageState != OfflinePageState.NOT_OFFLINE_PAGE) {
             mOfflinePageCreationDate = offlinePageCreationDate;
         }
         mWindowAndroid = mTab.getWebContents().getTopLevelNativeWindow();
@@ -198,26 +192,22 @@ public class PageInfoController implements ModalDialogView.Controller {
             Toast.makeText(mContext, R.string.url_copied, Toast.LENGTH_SHORT).show();
         };
 
-        mDisplayedPermissions = new ArrayList<PageInfoPermissionEntry>();
-
         // Work out the URL and connection message and status visibility.
         mFullUrl = isShowingOfflinePage() ? offlinePageUrl : mTab.getOriginalUrl();
 
         // This can happen if an invalid chrome-distiller:// url was entered.
         if (mFullUrl == null) mFullUrl = "";
 
+        mScheme = GURLUtils.getScheme(mFullUrl);
         try {
-            mParsedUrl = new URI(mFullUrl);
-            mIsInternalPage = UrlUtilities.isInternalScheme(mParsedUrl);
+            mIsInternalPage = UrlUtilities.isInternalScheme(new URI(mFullUrl));
         } catch (URISyntaxException e) {
-            mParsedUrl = null;
-            mIsInternalPage = false;
+            // Ignore exception since this is for displaying some specific content on page info.
         }
-        mSecurityLevel = SecurityStateModel.getSecurityLevelForWebContents(mTab.getWebContents());
 
         String displayUrl = UrlFormatter.formatUrlForCopy(mFullUrl);
         if (isShowingOfflinePage()) {
-            displayUrl = OfflinePageUtils.stripSchemeFromOnlineUrl(mFullUrl);
+            displayUrl = UrlUtilities.stripScheme(mFullUrl);
         }
         SpannableStringBuilder displayUrlBuilder = new SpannableStringBuilder(displayUrl);
         OmniboxUrlEmphasizer.emphasizeUrl(displayUrlBuilder, mContext.getResources(),
@@ -236,28 +226,25 @@ public class PageInfoController implements ModalDialogView.Controller {
         viewParams.urlOriginLength = OmniboxUrlEmphasizer.getOriginEndIndex(
                 displayUrlBuilder.toString(), mTab.getProfile());
 
-        if (mParsedUrl == null || mParsedUrl.getScheme() == null || isShowingOfflinePage()
-                || !(mParsedUrl.getScheme().equals(UrlConstants.HTTP_SCHEME)
-                           || mParsedUrl.getScheme().equals(UrlConstants.HTTPS_SCHEME))) {
-            viewParams.siteSettingsButtonShown = false;
-        } else {
+        if (shouldShowSiteSettingsButton()) {
             viewParams.siteSettingsButtonClickCallback = () -> {
                 // Delay while the dialog closes.
                 runAfterDismiss(() -> {
                     recordAction(PageInfoAction.PAGE_INFO_SITE_SETTINGS_OPENED);
-                    Bundle fragmentArguments =
-                            SingleWebsitePreferences.createFragmentArgsForSite(mFullUrl);
                     Intent preferencesIntent = PreferencesLauncher.createIntentForSettingsPage(
-                            mContext, SingleWebsitePreferences.class.getName());
-                    preferencesIntent.putExtra(
-                            Preferences.EXTRA_SHOW_FRAGMENT_ARGUMENTS, fragmentArguments);
+                            mContext, SingleWebsitePreferences.class.getName(),
+                            SingleWebsitePreferences.createFragmentArgsForSite(mFullUrl));
                     // Disabling StrictMode to avoid violations (https://crbug.com/819410).
                     try (StrictModeContext unused = StrictModeContext.allowDiskReads()) {
                         mContext.startActivity(preferencesIntent);
                     }
                 });
             };
+        } else {
+            viewParams.siteSettingsButtonShown = false;
         }
+
+        initPreviewUiParams(viewParams);
 
         if (isShowingOfflinePage()) {
             boolean isConnected = OfflinePageUtils.isConnected();
@@ -283,7 +270,7 @@ public class PageInfoController implements ModalDialogView.Controller {
         }
 
         InstantAppsHandler instantAppsHandler = InstantAppsHandler.getInstance();
-        if (!mIsInternalPage && !isShowingOfflinePage()
+        if (!mIsInternalPage && !isShowingOfflinePage() && !isShowingPreview()
                 && instantAppsHandler.isInstantAppAvailable(mFullUrl, false /* checkHoldback */,
                            false /* includeUserPrefersBrowser */)) {
             final Intent instantAppIntent = instantAppsHandler.getInstantAppIntentForUrl(mFullUrl);
@@ -301,6 +288,9 @@ public class PageInfoController implements ModalDialogView.Controller {
         }
 
         mView = new PageInfoView(mContext, viewParams);
+        if (isSheet()) mView.setBackgroundColor(Color.WHITE);
+        mPermissionParamsListBuilder = new PermissionParamsListBuilder(
+                mContext, mWindowAndroid, mFullUrl, this, mView::setPermissions);
 
         // This needs to come after other member initialization.
         mNativePageInfoController = nativeInit(this, mTab.getWebContents());
@@ -334,38 +324,46 @@ public class PageInfoController implements ModalDialogView.Controller {
     }
 
     /**
-     * Finds the Image resource of the icon to use for the given permission.
+     * Initializes the state in viewParams with respect to showing the previews UI.
      *
-     * @param permission A valid ContentSettingsType that can be displayed in the PageInfo dialog to
-     *                   retrieve the image for.
-     * @return The resource ID of the icon to use for that permission.
+     * @param viewParams The PageInfoViewParams to set state on.
      */
-    private int getImageResourceForPermission(int permission) {
-        int icon = ContentSettingsResources.getIcon(permission);
-        assert icon != 0 : "Icon requested for invalid permission: " + permission;
-        return icon;
+    private void initPreviewUiParams(PageInfoViewParams viewParams) {
+        final PreviewsAndroidBridge bridge = PreviewsAndroidBridge.getInstance();
+        viewParams.separatorShown = mPreviewPageState == PreviewPageState.INSECURE_PAGE_PREVIEW;
+        viewParams.previewUIShown = isShowingPreview();
+        if (isShowingPreview()) {
+            viewParams.urlTitleShown = false;
+            viewParams.connectionMessageShown = false;
+
+            viewParams.previewShowOriginalClickCallback = () -> {
+                runAfterDismiss(() -> {
+                    PreviewsUma.recordOptOut(bridge.getPreviewsType(mTab.getWebContents()));
+                    bridge.loadOriginal(mTab.getWebContents());
+                });
+            };
+            final String previewOriginalHost =
+                    bridge.getOriginalHost(mTab.getWebContents().getVisibleUrl());
+            final String loadOriginalText = mContext.getString(
+                    R.string.page_info_preview_load_original, previewOriginalHost);
+            final SpannableString loadOriginalSpan = SpanApplier.applySpans(loadOriginalText,
+                    new SpanInfo("<link>", "</link>",
+                            // The callback given to NoUnderlineClickableSpan is overridden in
+                            // PageInfoView so use previewShowOriginalClickCallback (above) instead
+                            // because the entire TextView will be clickable.
+                            new NoUnderlineClickableSpan((view) -> {})));
+            viewParams.previewLoadOriginalMessage = loadOriginalSpan;
+
+            viewParams.previewStaleTimestamp =
+                    bridge.getStalePreviewTimestamp(mTab.getWebContents());
+        }
     }
 
     /**
-     * Whether to show a 'Details' link to the connection info popup. The link is only shown for
-     * HTTPS connections.
+     * Whether to show a 'Details' link to the connection info popup.
      */
     private boolean isConnectionDetailsLinkVisible() {
-        return mContentPublisher == null && !isShowingOfflinePage() && mParsedUrl != null
-                && mParsedUrl.getScheme() != null
-                && mParsedUrl.getScheme().equals(UrlConstants.HTTPS_SCHEME);
-    }
-
-    private boolean hasAndroidPermission(int contentSettingType) {
-        String[] androidPermissions =
-                PrefServiceBridge.getAndroidPermissionsForContentSetting(contentSettingType);
-        if (androidPermissions == null) return true;
-        for (int i = 0; i < androidPermissions.length; i++) {
-            if (!mWindowAndroid.hasPermission(androidPermissions[i])) {
-                return false;
-            }
-        }
-        return true;
+        return mContentPublisher == null && !isShowingOfflinePage() && !isShowingPreview();
     }
 
     /**
@@ -377,8 +375,8 @@ public class PageInfoController implements ModalDialogView.Controller {
      */
     @CalledByNative
     private void addPermissionSection(String name, int type, int currentSettingValue) {
-        mDisplayedPermissions.add(new PageInfoPermissionEntry(
-                name, type, ContentSetting.fromInt(currentSettingValue)));
+        mPermissionParamsListBuilder.addPermissionEntry(
+                name, type, ContentSetting.fromInt(currentSettingValue));
     }
 
     /**
@@ -386,123 +384,7 @@ public class PageInfoController implements ModalDialogView.Controller {
      */
     @CalledByNative
     private void updatePermissionDisplay() {
-        List<PermissionParams> permissionParamsList = new ArrayList<>();
-        for (PageInfoPermissionEntry permission : mDisplayedPermissions) {
-            permissionParamsList.add(createPermissionParams(permission));
-        }
-        mView.setPermissions(permissionParamsList);
-    }
-
-    private Runnable createPermissionClickCallback(
-            Intent intentOverride, String[] androidPermissions) {
-        return () -> {
-            if (intentOverride == null && mWindowAndroid != null) {
-                // Try and immediately request missing Android permissions where possible.
-                for (int i = 0; i < androidPermissions.length; i++) {
-                    if (!mWindowAndroid.canRequestPermission(androidPermissions[i])) continue;
-
-                    // If any permissions can be requested, attempt to request them all.
-                    mWindowAndroid.requestPermissions(androidPermissions, new PermissionCallback() {
-                        @Override
-                        public void onRequestPermissionsResult(
-                                String[] permissions, int[] grantResults) {
-                            boolean allGranted = true;
-                            for (int i = 0; i < grantResults.length; i++) {
-                                if (grantResults[i] != PackageManager.PERMISSION_GRANTED) {
-                                    allGranted = false;
-                                    break;
-                                }
-                            }
-                            if (allGranted) updatePermissionDisplay();
-                        }
-                    });
-                    return;
-                }
-            }
-
-            runAfterDismiss(() -> {
-                Intent settingsIntent;
-                if (intentOverride != null) {
-                    settingsIntent = intentOverride;
-                } else {
-                    settingsIntent = new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS);
-                    settingsIntent.setData(Uri.parse("package:" + mContext.getPackageName()));
-                }
-                settingsIntent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-                mContext.startActivity(settingsIntent);
-            });
-        };
-    }
-
-    private PermissionParams createPermissionParams(PageInfoPermissionEntry permission) {
-        PermissionParams permissionParams = new PermissionParams();
-
-        permissionParams.iconResource = getImageResourceForPermission(permission.type);
-        if (permission.setting == ContentSetting.ALLOW) {
-            LocationUtils locationUtils = LocationUtils.getInstance();
-            Intent intentOverride = null;
-            String[] androidPermissions = null;
-            if (permission.type == ContentSettingsType.CONTENT_SETTINGS_TYPE_GEOLOCATION
-                    && !locationUtils.isSystemLocationSettingEnabled()) {
-                permissionParams.warningTextResource = R.string.page_info_android_location_blocked;
-                intentOverride = locationUtils.getSystemLocationSettingsIntent();
-            } else if (!hasAndroidPermission(permission.type)) {
-                permissionParams.warningTextResource =
-                        R.string.page_info_android_permission_blocked;
-                androidPermissions =
-                        PrefServiceBridge.getAndroidPermissionsForContentSetting(permission.type);
-            }
-
-            if (permissionParams.warningTextResource != 0) {
-                permissionParams.iconResource = R.drawable.exclamation_triangle;
-                permissionParams.iconTintColorResource = R.color.google_blue_700;
-                permissionParams.clickCallback =
-                        createPermissionClickCallback(intentOverride, androidPermissions);
-            }
-        }
-
-        // The ads permission requires an additional static subtitle.
-        if (permission.type == ContentSettingsType.CONTENT_SETTINGS_TYPE_ADS) {
-            permissionParams.subtitleTextResource = R.string.page_info_permission_ads_subtitle;
-        }
-
-        SpannableStringBuilder builder = new SpannableStringBuilder();
-        SpannableString nameString = new SpannableString(permission.name);
-        final StyleSpan boldSpan = new StyleSpan(android.graphics.Typeface.BOLD);
-        nameString.setSpan(boldSpan, 0, nameString.length(), Spannable.SPAN_INCLUSIVE_EXCLUSIVE);
-
-        builder.append(nameString);
-        builder.append(" – "); // en-dash.
-        String status_text = "";
-        switch (permission.setting) {
-            case ALLOW:
-                status_text = mContext.getString(R.string.page_info_permission_allowed);
-                break;
-            case BLOCK:
-                status_text = mContext.getString(R.string.page_info_permission_blocked);
-                break;
-            default:
-                assert false : "Invalid setting " + permission.setting + " for permission "
-                               + permission.type;
-        }
-        if (WebsitePreferenceBridge.isPermissionControlledByDSE(permission.type, mFullUrl, false)) {
-            status_text = statusTextForDSEPermission(permission.setting);
-        }
-        builder.append(status_text);
-        permissionParams.status = builder;
-
-        return permissionParams;
-    }
-
-    /**
-     * Returns the permission string for the Default Search Engine.
-     */
-    private String statusTextForDSEPermission(ContentSetting setting) {
-        if (setting == ContentSetting.ALLOW) {
-            return mContext.getString(R.string.page_info_dse_permission_allowed);
-        }
-
-        return mContext.getString(R.string.page_info_dse_permission_blocked);
+        mView.setPermissions(mPermissionParamsListBuilder.build());
     }
 
     /**
@@ -518,11 +400,15 @@ public class PageInfoController implements ModalDialogView.Controller {
         if (mContentPublisher != null) {
             messageBuilder.append(
                     mContext.getString(R.string.page_info_domain_hidden, mContentPublisher));
-        } else if (mOfflinePageState == TRUSTED_OFFLINE_PAGE) {
+        } else if (isShowingPreview()) {
+            if (mPreviewPageState == PreviewPageState.INSECURE_PAGE_PREVIEW) {
+                connectionInfoParams.summary = summary;
+            }
+        } else if (mOfflinePageState == OfflinePageState.TRUSTED_OFFLINE_PAGE) {
             messageBuilder.append(
                     String.format(mContext.getString(R.string.page_info_connection_offline),
                             mOfflinePageCreationDate));
-        } else if (mOfflinePageState == UNTRUSTED_OFFLINE_PAGE) {
+        } else if (mOfflinePageState == OfflinePageState.UNTRUSTED_OFFLINE_PAGE) {
             // For untrusted pages, if there's a creation date, show it in the message.
             if (TextUtils.isEmpty(mOfflinePageCreationDate)) {
                 messageBuilder.append(mContext.getString(
@@ -545,28 +431,43 @@ public class PageInfoController implements ModalDialogView.Controller {
                     new SpannableString(mContext.getString(R.string.details_link));
             final ForegroundColorSpan blueSpan =
                     new ForegroundColorSpan(ApiCompatibilityUtils.getColor(
-                            mContext.getResources(), R.color.google_blue_700));
+                            mContext.getResources(), R.color.default_text_color_link));
             detailsText.setSpan(
                     blueSpan, 0, detailsText.length(), Spannable.SPAN_INCLUSIVE_EXCLUSIVE);
             messageBuilder.append(detailsText);
         }
 
-        connectionInfoParams.message = messageBuilder;
+        // When a preview is being shown for a secure page, the security message is not shown. Thus,
+        // messageBuilder maybe empty.
+        if (messageBuilder.length() > 0) {
+            connectionInfoParams.message = messageBuilder;
+        }
         if (isConnectionDetailsLinkVisible()) {
             connectionInfoParams.clickCallback = () -> {
                 runAfterDismiss(() -> {
-                    // TODO(crbug.com/819883): Port the connection info popup to VR.
-                    if (VrShellDelegate.isInVr()) {
-                        VrShellDelegate.requestToExitVrAndRunOnSuccess(
-                                PageInfoController.this ::showConnectionInfoPopup,
-                                UiUnsupportedMode.UNHANDLED_CONNECTION_INFO);
-                    } else {
-                        showConnectionInfoPopup();
+                    if (!mTab.getWebContents().isDestroyed()) {
+                        recordAction(PageInfoAction.PAGE_INFO_SECURITY_DETAILS_OPENED);
+                        ConnectionInfoPopup.show(mContext, mTab);
                     }
                 });
             };
         }
         mView.setConnectionInfo(connectionInfoParams);
+    }
+
+    @Override
+    public void onSystemSettingsActivityRequired(Intent intentOverride) {
+        runAfterDismiss(() -> {
+            Intent settingsIntent;
+            if (intentOverride != null) {
+                settingsIntent = intentOverride;
+            } else {
+                settingsIntent = new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS);
+                settingsIntent.setData(Uri.parse("package:" + mContext.getPackageName()));
+            }
+            settingsIntent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            mContext.startActivity(settingsIntent);
+        });
     }
 
     /**
@@ -578,21 +479,18 @@ public class PageInfoController implements ModalDialogView.Controller {
     }
 
     @Override
-    public void onClick(@ButtonType int buttonType) {}
+    public void onClick(PropertyModel model, @ButtonType int buttonType) {}
 
     @Override
-    public void onCancel() {}
-
-    @Override
-    public void onDismiss() {
+    public void onDismiss(PropertyModel model, @DialogDismissalCause int dismissalCause) {
         assert mNativePageInfoController != 0;
-        mWebContentsObserver.destroy();
-        nativeDestroy(mNativePageInfoController);
-        mNativePageInfoController = 0;
         if (mPendingRunAfterDismissTask != null) {
             mPendingRunAfterDismissTask.run();
             mPendingRunAfterDismissTask = null;
         }
+        mWebContentsObserver.destroy();
+        nativeDestroy(mNativePageInfoController);
+        mNativePageInfoController = 0;
     }
 
     private void recordAction(int action) {
@@ -602,22 +500,31 @@ public class PageInfoController implements ModalDialogView.Controller {
     }
 
     /**
+     * Whether website dialog is displayed for a preview.
+     */
+    private boolean isShowingPreview() {
+        return mPreviewPageState != PreviewPageState.NOT_PREVIEW;
+    }
+
+    /**
      * Whether website dialog is displayed for an offline page.
      */
     private boolean isShowingOfflinePage() {
-        return mOfflinePageState != NOT_OFFLINE_PAGE;
+        return mOfflinePageState != OfflinePageState.NOT_OFFLINE_PAGE && !isShowingPreview();
+    }
+
+    /**
+     * Whether the site settings button should be displayed for the given URL.
+     */
+    private boolean shouldShowSiteSettingsButton() {
+        return !isShowingOfflinePage() && !isShowingPreview()
+                && (UrlConstants.HTTP_SCHEME.equals(mScheme)
+                           || UrlConstants.HTTPS_SCHEME.equals(mScheme));
     }
 
     private boolean isSheet() {
         return !DeviceFormFactor.isNonMultiDisplayContextOnTablet(mContext)
-                && !VrShellDelegate.isInVr();
-    }
-
-    private void showConnectionInfoPopup() {
-        if (!mTab.getWebContents().isDestroyed()) {
-            recordAction(PageInfoAction.PAGE_INFO_SECURITY_DETAILS_OPENED);
-            ConnectionInfoPopup.show(mContext, mTab.getWebContents());
-        }
+                && !VrModuleProvider.getDelegate().isInVr();
     }
 
     @VisibleForTesting
@@ -637,28 +544,44 @@ public class PageInfoController implements ModalDialogView.Controller {
      */
     public static void show(final Activity activity, final Tab tab, final String contentPublisher,
             @OpenedFromSource int source) {
-        if (source == OPENED_FROM_MENU) {
+        if (source == OpenedFromSource.MENU) {
             RecordUserAction.record("MobileWebsiteSettingsOpenedFromMenu");
-        } else if (source == OPENED_FROM_TOOLBAR) {
+        } else if (source == OpenedFromSource.TOOLBAR) {
             RecordUserAction.record("MobileWebsiteSettingsOpenedFromToolbar");
-        } else if (source == OPENED_FROM_VR) {
+        } else if (source == OpenedFromSource.VR) {
             RecordUserAction.record("MobileWebsiteSettingsOpenedFromVR");
         } else {
             assert false : "Invalid source passed";
         }
 
+        final int securityLevel =
+                SecurityStateModel.getSecurityLevelForWebContents(tab.getWebContents());
+
+        @PreviewPageState
+        int previewPageState = PreviewPageState.NOT_PREVIEW;
+        final PreviewsAndroidBridge bridge = PreviewsAndroidBridge.getInstance();
+        if (bridge.shouldShowPreviewUI(tab.getWebContents())) {
+            previewPageState = securityLevel == ConnectionSecurityLevel.SECURE
+                    ? PreviewPageState.SECURE_PAGE_PREVIEW
+                    : PreviewPageState.INSECURE_PAGE_PREVIEW;
+
+            PreviewsUma.recordPageInfoOpened(bridge.getPreviewsType(tab.getWebContents()));
+            Tracker tracker = TrackerFactory.getTrackerForProfile(Profile.getLastUsedProfile());
+            tracker.notifyEvent(EventConstants.PREVIEWS_VERBOSE_STATUS_OPENED);
+        }
+
         String offlinePageUrl = null;
         String offlinePageCreationDate = null;
         @OfflinePageState
-        int offlinePageState = NOT_OFFLINE_PAGE;
+        int offlinePageState = OfflinePageState.NOT_OFFLINE_PAGE;
 
         OfflinePageItem offlinePage = OfflinePageUtils.getOfflinePage(tab);
         if (offlinePage != null) {
             offlinePageUrl = offlinePage.getUrl();
             if (OfflinePageUtils.isShowingTrustedOfflinePage(tab)) {
-                offlinePageState = TRUSTED_OFFLINE_PAGE;
+                offlinePageState = OfflinePageState.TRUSTED_OFFLINE_PAGE;
             } else {
-                offlinePageState = UNTRUSTED_OFFLINE_PAGE;
+                offlinePageState = OfflinePageState.UNTRUSTED_OFFLINE_PAGE;
             }
             // Get formatted creation date of the offline page. If the page was shared (so the
             // creation date cannot be acquired), make date an empty string and there will be
@@ -671,8 +594,8 @@ public class PageInfoController implements ModalDialogView.Controller {
             }
         }
 
-        new PageInfoController(activity, tab, offlinePageUrl, offlinePageCreationDate,
-                offlinePageState, contentPublisher);
+        new PageInfoController(activity, tab, securityLevel, offlinePageUrl,
+                offlinePageCreationDate, offlinePageState, previewPageState, contentPublisher);
     }
 
     private static native long nativeInit(PageInfoController controller, WebContents webContents);

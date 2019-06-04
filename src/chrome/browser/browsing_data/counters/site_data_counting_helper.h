@@ -20,8 +20,12 @@ class URLRequestContextGetter;
 }
 
 namespace content {
-struct LocalStorageUsageInfo;
 struct SessionStorageUsageInfo;
+struct StorageUsageInfo;
+}
+
+namespace url {
+class Origin;
 }
 
 namespace storage {
@@ -51,8 +55,8 @@ class SiteDataCountingHelper {
   void GetLocalStorageUsageInfoCallback(
       const scoped_refptr<storage::SpecialStoragePolicy>&
           special_storage_policy,
-      const std::vector<content::LocalStorageUsageInfo>& infos);
-  void GetQuotaOriginsCallback(const std::set<GURL>& origin_set,
+      const std::vector<content::StorageUsageInfo>& infos);
+  void GetQuotaOriginsCallback(const std::set<url::Origin>& origin_set,
                                blink::mojom::StorageType type);
   void SitesWithFlashDataCallback(const std::vector<std::string>& sites);
   void GetChannelIDsOnIOThread(

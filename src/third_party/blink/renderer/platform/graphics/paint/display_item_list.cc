@@ -41,21 +41,22 @@ void DisplayItemList::AppendSubsequenceAsJSON(size_t begin_index,
     std::unique_ptr<JSONObject> json = JSONObject::Create();
 
     const auto& item = (*this)[i];
-    if ((flags & kSkipNonDrawings) && !item.IsDrawing())
-      continue;
-
     json->SetInteger("index", i);
 
     if (flags & kShownOnlyDisplayItemTypes) {
       json->SetString("type", DisplayItem::TypeAsDebugString(item.GetType()));
     } else {
-      json->SetString("clientDebugName",
-                      DisplayItemClient::SafeDebugName(
-                          item.Client(), flags & kClientKnownToBeAlive));
+      json->SetString("clientDebugName", item.Client().SafeDebugName(
+                                             flags & kClientKnownToBeAlive));
+      if (flags & kClientKnownToBeAlive) {
+        json->SetString("invalidation",
+                        PaintInvalidationReasonToString(
+                            item.Client().GetPaintInvalidationReason()));
+      }
       item.PropertiesAsJSON(*json);
     }
 
-#ifndef NDEBUG
+#if DCHECK_IS_ON()
     if ((flags & kShowPaintRecords) && item.IsDrawing()) {
       const auto& drawing_item = static_cast<const DrawingDisplayItem&>(item);
       if (const auto* record = drawing_item.GetPaintRecord().get())

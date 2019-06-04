@@ -11,12 +11,6 @@
 #include "ui/gfx/color_space.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/icc_profile.h"
-#if defined(USE_NEVA_MEDIA)
-#include "ui/gfx/geometry/point_f.h"
-#endif
-#if defined(USE_NEVA_APPRUNTIME)
-#include "ui/gfx/geometry/size.h"
-#endif
 
 namespace content {
 
@@ -33,15 +27,6 @@ struct CONTENT_EXPORT ScreenInfo {
 
     // The color space of the output display.
     gfx::ColorSpace color_space = gfx::ColorSpace::CreateSRGB();
-
-#if defined(OS_MACOSX)
-    // The ICC profile from which |color_space| was derived, if any. This is
-    // used only on macOS, to ensure that the color profile set on an IOSurface
-    // exactly match that of the display, when possible (because that has
-    // significant power implications).
-    // https://crbug.com/766736#c1
-    gfx::ICCProfile icc_profile;
-#endif
 
     // The screen depth in bits per pixel
     uint32_t depth = 0;
@@ -67,14 +52,6 @@ struct CONTENT_EXPORT ScreenInfo {
     // This is the orientation angle of the displayed content in degrees.
     // It is the opposite of the physical rotation.
     uint16_t orientation_angle = 0;
-#if defined(USE_NEVA_MEDIA)
-    gfx::PointF additional_contents_scale = gfx::PointF(1.f,1.f);
-#endif
-
-#if defined(USE_NEVA_APPRUNTIME)
-    // hardware resolution
-    gfx::Size hardware_resolution;
-#endif
 
     bool operator==(const ScreenInfo& other) const;
     bool operator!=(const ScreenInfo& other) const;

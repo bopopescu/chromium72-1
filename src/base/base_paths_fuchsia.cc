@@ -13,23 +13,6 @@
 #include "base/process/process.h"
 
 namespace base {
-namespace {
-
-constexpr char kPackageRoot[] = "/pkg";
-
-}  // namespace
-
-base::FilePath GetPackageRoot() {
-  base::FilePath path_obj(kPackageRoot);
-
-  // Fuchsia's appmgr will set argv[0] to a fully qualified executable path
-  // under /pkg for packaged binaries.
-  if (path_obj.IsParent(base::CommandLine::ForCurrentProcess()->GetProgram())) {
-    return path_obj;
-  } else {
-    return base::FilePath();
-  }
-}
 
 bool PathProviderFuchsia(int key, FilePath* result) {
   switch (key) {
@@ -39,21 +22,13 @@ bool PathProviderFuchsia(int key, FilePath* result) {
     case FILE_EXE:
       *result = CommandLine::ForCurrentProcess()->GetProgram();
       return true;
-    case DIR_SOURCE_ROOT:
-      *result = GetPackageRoot();
-      return true;
     case DIR_APP_DATA:
-      // TODO(https://crbug.com/840598): Switch to /data when minfs supports
-      // mmap().
-      DLOG(WARNING) << "Using /tmp as app data dir, changes will NOT be "
-                       "persisted! (crbug.com/840598)";
-      *result = FilePath("/tmp");
-      return true;
     case DIR_CACHE:
-      *result = FilePath("/data");
+      *result = base::FilePath("/data");
       return true;
     case DIR_ASSETS:
-      *result = GetPackageRoot();
+    case DIR_SOURCE_ROOT:
+      *result = base::FilePath("/pkg");
       return true;
   }
   return false;

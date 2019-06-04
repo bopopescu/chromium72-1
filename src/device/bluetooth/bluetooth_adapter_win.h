@@ -36,6 +36,9 @@ class DEVICE_BLUETOOTH_EXPORT BluetoothAdapterWin
   static base::WeakPtr<BluetoothAdapter> CreateAdapter(
       InitCallback init_callback);
 
+  static base::WeakPtr<BluetoothAdapter> CreateClassicAdapter(
+      InitCallback init_callback);
+
   static bool UseNewBLEWinImplementation();
 
   // BluetoothAdapter:
@@ -129,6 +132,8 @@ class DEVICE_BLUETOOTH_EXPORT BluetoothAdapterWin
 
   void Init();
   void InitForTest(
+      std::unique_ptr<win::BluetoothClassicWrapper> classic_wrapper,
+      std::unique_ptr<win::BluetoothLowEnergyWrapper> le_wrapper,
       scoped_refptr<base::SingleThreadTaskRunner> ui_task_runner,
       scoped_refptr<base::SequencedTaskRunner> bluetooth_task_runner);
 

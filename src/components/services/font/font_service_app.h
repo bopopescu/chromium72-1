@@ -13,6 +13,7 @@
 #include "mojo/public/cpp/bindings/binding_set.h"
 #include "services/service_manager/public/cpp/binder_registry.h"
 #include "services/service_manager/public/cpp/service.h"
+#include "services/service_manager/public/cpp/service_binding.h"
 #include "skia/ext/skia_utils_base.h"
 
 namespace font_service {
@@ -20,8 +21,10 @@ namespace font_service {
 class FontServiceApp : public service_manager::Service,
                        public mojom::FontService {
  public:
-  FontServiceApp();
+  explicit FontServiceApp(service_manager::mojom::ServiceRequest request);
   ~FontServiceApp() override;
+
+  void CreateSelf(mojom::FontServiceRequest request);
 
  private:
   // service_manager::Service:
@@ -35,11 +38,29 @@ class FontServiceApp : public service_manager::Service,
                        mojom::TypefaceStylePtr requested_style,
                        MatchFamilyNameCallback callback) override;
   void OpenStream(uint32_t id_number, OpenStreamCallback callback) override;
-
-  void Create(mojom::FontServiceRequest request);
-
+  void FallbackFontForCharacter(
+      uint32_t character,
+      const std::string& locale,
+      FallbackFontForCharacterCallback callback) override;
+  void FontRenderStyleForStrike(
+      const std::string& family,
+      uint32_t size,
+      bool italic,
+      bool bold,
+      float device_scale_factor,
+      FontRenderStyleForStrikeCallback callback) override;
+  void MatchFontByPostscriptNameOrFullFontName(
+      const std::string& family,
+      MatchFontByPostscriptNameOrFullFontNameCallback callback) override;
+  void MatchFontWithFallback(const std::string& family,
+                             bool is_bold,
+                             bool is_italic,
+                             uint32_t charset,
+                             uint32_t fallbackFamilyType,
+                             MatchFontWithFallbackCallback callback) override;
   int FindOrAddPath(const SkString& path);
 
+  service_manager::ServiceBinding service_binding_;
   service_manager::BinderRegistry registry_;
   mojo::BindingSet<mojom::FontService> bindings_;
 

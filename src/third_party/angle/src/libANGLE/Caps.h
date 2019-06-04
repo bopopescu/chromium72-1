@@ -37,8 +37,11 @@ struct TextureCaps
     // Support for linear or anisotropic filtering
     bool filterable;
 
-    // Support for being used as a framebuffer attachment or renderbuffer format
-    bool renderable;
+    // Support for being used as a framebuffer attachment, i.e. glFramebufferTexture2D
+    bool textureAttachment;
+
+    // Support for being used as a renderbuffer format, i.e. glFramebufferRenderbuffer
+    bool renderbuffer;
 
     // Set of supported sample counts, only guaranteed to be valid in ES3.
     SupportedSampleSet sampleCounts;
@@ -68,19 +71,23 @@ class TextureCapsMap final : angle::NonCopyable
     void clear();
 
     // Prefer using angle::Format methods.
-    const TextureCaps &get(angle::Format::ID formatID) const;
-    void set(angle::Format::ID formatID, const TextureCaps &caps);
+    const TextureCaps &get(angle::FormatID formatID) const;
+    void set(angle::FormatID formatID, const TextureCaps &caps);
 
   private:
-    TextureCaps &get(angle::Format::ID formatID);
+    TextureCaps &get(angle::FormatID formatID);
 
-    // Indexed by angle::Format::ID
+    // Indexed by angle::FormatID
     std::array<TextureCaps, angle::kNumANGLEFormats> mFormatData;
 };
 
 void InitMinimumTextureCapsMap(const Version &clientVersion,
                                const Extensions &extensions,
                                TextureCapsMap *capsMap);
+
+// Returns true if all the formats required to support GL_CHROMIUM_compressed_texture_etc are
+// present. Does not determine if they are natively supported without decompression.
+bool DetermineCompressedTextureETCSupport(const TextureCapsMap &textureCaps);
 
 struct Extensions
 {
@@ -106,6 +113,7 @@ struct Extensions
     // GL_ANGLE_depth_texture, GL_OES_depth32
     // GL_EXT_color_buffer_float
     // GL_EXT_texture_norm16
+    // GL_EXT_texture_compression_bptc
     void setTextureExtensionSupport(const TextureCapsMap &textureCaps);
 
     // ES2 Extension support
@@ -179,6 +187,9 @@ struct Extensions
     // GL_KHR_texture_compression_astc_ldr
     bool textureCompressionASTCLDR;
 
+    // GL_EXT_texture_compression_bptc
+    bool textureCompressionBPTC;
+
     // GL_OES_compressed_ETC1_RGB8_texture
     // Implies that TextureCaps for GL_ETC1_RGB8_OES exist
     bool compressedETC1RGB8Texture;
@@ -212,6 +223,13 @@ struct Extensions
 
     // OES_compressed_EAC_RG11_signed_texture
     bool compressedEACRG11SignedTexture;
+
+    // GL_CHROMIUM_compressed_texture_etc
+    // ONLY exposed if ETC texture formats are natively supported without decompression
+    // Backends should enable this extension explicitly. It is not enabled with
+    // setTextureExtensionSupport, use DetermineCompressedTextureETCSupport to check if all of the
+    // individual formats required to support this extension are available.
+    bool compressedTextureETC;
 
     // GL_EXT_sRGB
     // Implies that TextureCaps for GL_SRGB8_ALPHA8 and GL_SRGB8 exist
@@ -344,6 +362,9 @@ struct Extensions
     // GL_CHROMIUM_copy_compressed_texture
     bool copyCompressedTexture;
 
+    // GL_ANGLE_copy_texture_3d
+    bool copyTexture3d;
+
     // GL_ANGLE_webgl_compatibility
     bool webglCompatibility;
 
@@ -355,6 +376,9 @@ struct Extensions
 
     // GL_ANGLE_robust_client_memory
     bool robustClientMemory;
+
+    // GL_OES_texture_border_clamp
+    bool textureBorderClamp;
 
     // GL_EXT_texture_sRGB_decode
     bool textureSRGBDecode;
@@ -410,12 +434,38 @@ struct Extensions
     bool pointSizeArray;
     // GL_OES_texture_cube_map
     bool textureCubeMap;
+    // GL_OES_point_sprite
+    bool pointSprite;
+    // GL_OES_draw_texture
+    bool drawTexture;
 
     // EGL_ANGLE_explicit_context GL subextensions
     // GL_ANGLE_explicit_context_gles1
     bool explicitContextGles1;
     // GL_ANGLE_explicit_context
     bool explicitContext;
+
+    // GL_KHR_parallel_shader_compile
+    bool parallelShaderCompile;
+
+    // GL_OES_texture_storage_multisample_2d_array
+    bool textureStorageMultisample2DArray;
+
+    // GL_ANGLE_multiview_multisample
+    bool multiviewMultisample;
+
+    // GL_EXT_blend_func_extended
+    bool blendFuncExtended;
+    GLuint maxDualSourceDrawBuffers;
+
+    // GL_ANGLE_memory_size
+    bool memorySize;
+
+    // GL_ANGLE_texture_multisample
+    bool textureMultisample;
+
+    // GL_ANGLE_multi_draw
+    bool multiDraw;
 };
 
 struct ExtensionInfo
@@ -456,6 +506,9 @@ struct Limitations
 
     // D3D9 does not support flexible varying register packing.
     bool noFlexibleVaryingPacking;
+
+    // D3D does not support having multiple transform feedback outputs go to the same buffer.
+    bool noDoubleBoundTransformFeedbackBuffers;
 };
 
 struct TypePrecision
@@ -537,26 +590,29 @@ struct Caps
     // ES 3.1 (April 29, 2015) Table 20.45: implementation dependent compute shader limits
     // GL_EXT_geometry_shader (May 31, 2016) Table 20.43gs: Implementation dependent geometry shader
     // limits
+    // GL_EXT_geometry_shader (May 31, 2016) Table 20.46: Implementation dependent aggregate shader
+    // limits
     ShaderMap<GLuint> maxShaderUniformBlocks;
     ShaderMap<GLuint> maxShaderTextureImageUnits;
     ShaderMap<GLuint> maxShaderStorageBlocks;
+    ShaderMap<GLuint> maxShaderUniformComponents;
+    ShaderMap<GLuint> maxShaderAtomicCounterBuffers;
+    ShaderMap<GLuint> maxShaderAtomicCounters;
+    ShaderMap<GLuint> maxShaderImageUniforms;
+    // Note that we can query MAX_COMPUTE_UNIFORM_COMPONENTS and MAX_GEOMETRY_UNIFORM_COMPONENTS_EXT
+    // by GetIntegerv, but we can only use GetInteger64v on MAX_VERTEX_UNIFORM_COMPONENTS and
+    // MAX_FRAGMENT_UNIFORM_COMPONENTS. Currently we use GLuint64 to store all these values so that
+    // we can put them together into one ShaderMap.
+    ShaderMap<GLuint64> maxCombinedShaderUniformComponents;
 
     // ES 3.1 (April 29, 2015) Table 20.43: Implementation dependent Vertex shader limits
     GLuint maxVertexAttributes;
-    GLuint maxVertexUniformComponents;
     GLuint maxVertexUniformVectors;
     GLuint maxVertexOutputComponents;
-    GLuint maxVertexAtomicCounterBuffers;
-    GLuint maxVertexAtomicCounters;
-    GLuint maxVertexImageUniforms;
 
     // ES 3.1 (April 29, 2015) Table 20.44: Implementation dependent Fragment shader limits
-    GLuint maxFragmentUniformComponents;
     GLuint maxFragmentUniformVectors;
     GLuint maxFragmentInputComponents;
-    GLuint maxFragmentAtomicCounterBuffers;
-    GLuint maxFragmentAtomicCounters;
-    GLuint maxFragmentImageUniforms;
     GLint minProgramTextureGatherOffset;
     GLuint maxProgramTextureGatherOffset;
     GLint minProgramTexelOffset;
@@ -567,19 +623,12 @@ struct Caps
     std::array<GLuint, 3> maxComputeWorkGroupSize;
     GLuint maxComputeWorkGroupInvocations;
     GLuint maxComputeSharedMemorySize;
-    GLuint maxComputeUniformComponents;
-    GLuint maxComputeAtomicCounterBuffers;
-    GLuint maxComputeAtomicCounters;
-    GLuint maxComputeImageUniforms;
-    GLuint maxCombinedComputeUniformComponents;
 
     // ES 3.1 (April 29, 2015) Table 20.46: implementation dependent aggregate shader limits
     GLuint maxUniformBufferBindings;
     GLuint64 maxUniformBlockSize;
     GLuint uniformBufferOffsetAlignment;
     GLuint maxCombinedUniformBlocks;
-    GLuint64 maxCombinedVertexUniformComponents;
-    GLuint64 maxCombinedFragmentUniformComponents;
     GLuint maxVaryingComponents;
     GLuint maxVaryingVectors;
     GLuint maxCombinedTextureImageUnits;
@@ -612,19 +661,11 @@ struct Caps
 
     // GL_EXT_geometry_shader (May 31, 2016) Table 20.43gs: Implementation dependent geometry shader
     // limits
-    GLuint maxGeometryUniformComponents;
     GLuint maxGeometryInputComponents;
     GLuint maxGeometryOutputComponents;
     GLuint maxGeometryOutputVertices;
     GLuint maxGeometryTotalOutputComponents;
-    GLuint maxGeometryAtomicCounterBuffers;
-    GLuint maxGeometryAtomicCounters;
     GLuint maxGeometryShaderInvocations;
-
-    // GL_EXT_geometry_shader (May 31, 2016) Table 20.46: Implementation dependent aggregate shader
-    // limits
-    GLuint maxGeometryImageUniforms;
-    GLuint maxCombinedGeometryUniformComponents;
 
     // GLES1 emulation: Caps for ES 1.1. Taken from Table 6.20 / 6.22 in the OpenGL ES 1.1 spec.
     GLuint maxMultitextureUnits;
@@ -634,10 +675,14 @@ struct Caps
     GLuint maxModelviewMatrixStackDepth;
     GLuint maxProjectionMatrixStackDepth;
     GLuint maxTextureMatrixStackDepth;
+    GLfloat minSmoothPointSize;
+    GLfloat maxSmoothPointSize;
+    GLfloat minSmoothLineWidth;
+    GLfloat maxSmoothLineWidth;
 };
 
 Caps GenerateMinimumCaps(const Version &clientVersion, const Extensions &extensions);
-}
+}  // namespace gl
 
 namespace egl
 {
@@ -720,6 +765,9 @@ struct DisplayExtensions
     // EGL_ANGLE_direct_composition
     bool directComposition;
 
+    // EGL_ANGLE_windows_ui_composition
+    bool windowsUIComposition;
+
     // KHR_create_context_no_error
     bool createContextNoError;
 
@@ -744,7 +792,7 @@ struct DisplayExtensions
     // EGL_CHROMIUM_get_sync_values
     bool getSyncValues;
 
-    // EGL_EXT_swap_buffers_with_damage
+    // EGL_KHR_swap_buffers_with_damage
     bool swapBuffersWithDamage;
 
     // EGL_EXT_pixel_format_float
@@ -770,6 +818,18 @@ struct DisplayExtensions
 
     // EGL_ANGLE_create_context_extensions_enabled
     bool createContextExtensionsEnabled;
+
+    // EGL_ANDROID_presentation_time
+    bool presentationTime;
+
+    // EGL_ANDROID_blob_cache
+    bool blobCache;
+
+    // EGL_ANDROID_image_native_buffer
+    bool imageNativeBuffer;
+
+    // EGL_ANDROID_get_frame_timestamps
+    bool getFrameTimestamps;
 };
 
 struct DeviceExtensions
@@ -815,6 +875,9 @@ struct ClientExtensions
     // EGL_ANGLE_platform_angle_vulkan
     bool platformANGLEVulkan;
 
+    // EGL_ANGLE_platform_angle_context_virtualization
+    bool platformANGLEContextVirtualization;
+
     // EGL_ANGLE_device_creation
     bool deviceCreation;
 
@@ -829,6 +892,9 @@ struct ClientExtensions
 
     // EGL_KHR_client_get_all_proc_addresses
     bool clientGetAllProcAddresses;
+
+    // EGL_KHR_debug
+    bool debug;
 
     // EGL_ANGLE_explicit_context
     bool explicitContext;

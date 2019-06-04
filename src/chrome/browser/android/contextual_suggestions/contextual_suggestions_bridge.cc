@@ -4,10 +4,14 @@
 
 #include "chrome/browser/android/contextual_suggestions/contextual_suggestions_bridge.h"
 
+#include <string>
+#include <utility>
+
 #include "base/android/callback_android.h"
 #include "base/android/jni_string.h"
 #include "base/callback.h"
 #include "chrome/browser/android/chrome_feature_list.h"
+#include "chrome/browser/metrics/chrome_metrics_service_accessor.h"
 #include "chrome/browser/ntp_snippets/contextual_content_suggestions_service_factory.h"
 #include "chrome/browser/policy/profile_policy_connector.h"
 #include "chrome/browser/policy/profile_policy_connector_factory.h"
@@ -18,7 +22,10 @@
 #include "components/ntp_snippets/content_suggestions_service.h"
 #include "components/ntp_snippets/contextual/contextual_content_suggestions_service.h"
 #include "components/ntp_snippets/contextual/contextual_suggestions_features.h"
-#include "components/ntp_snippets/contextual/contextual_suggestions_metrics_reporter.h"
+#include "components/ntp_snippets/contextual/reporting/contextual_suggestions_metrics_reporter.h"
+#include "components/policy/core/common/policy_map.h"
+#include "components/policy/core/common/policy_service.h"
+#include "components/policy/policy_constants.h"
 #include "components/ukm/content/source_url_recorder.h"
 #include "content/public/browser/web_contents.h"
 #include "jni/ContextualSuggestionsBridge_jni.h"
@@ -33,6 +40,14 @@ using base::android::ScopedJavaGlobalRef;
 using base::android::ScopedJavaLocalRef;
 
 namespace contextual_suggestions {
+
+// A whitelisted method to inject synthetic field trials to Chrome Metrics.
+void RegisterSyntheticFieldTrials(const ContextualSuggestionsResult& result) {
+  for (const auto& experiment_info : result.experiment_infos) {
+    ChromeMetricsServiceAccessor::RegisterSyntheticFieldTrial(
+        experiment_info.name, experiment_info.group);
+  }
+}
 
 static jlong JNI_ContextualSuggestionsBridge_Init(
     JNIEnv* env,
@@ -50,28 +65,29 @@ static jlong JNI_ContextualSuggestionsBridge_Init(
   return reinterpret_cast<intptr_t>(contextual_suggestions_bridge);
 }
 
-static jboolean JNI_ContextualSuggestionsBridge_IsEnterprisePolicyManaged(
+static jboolean JNI_ContextualSuggestionsBridge_IsDisabledByEnterprisePolicy(
     JNIEnv* env,
     const JavaParamRef<jclass>& clazz) {
-  // Bypass policy check, if corresponding feature is enabled.
-  if (base::FeatureList::IsEnabled(
-          contextual_suggestions::
-              kContextualSuggestionsEnterprisePolicyBypass)) {
-    return false;
-  }
-
-  // TODO(fgorski): This is simply checking whether the profile is managed by
-  // an enterprise policy.
-  // http://crbug.com/829460 covers implementation of policy controller for
-  // contextual content suggestions.
   Profile* profile = ProfileManager::GetLastUsedProfile()->GetOriginalProfile();
   if (!profile)
     return false;
 
+  if (profile->IsSupervised())
+    return true;
+
   policy::ProfilePolicyConnector* policy_connector =
       policy::ProfilePolicyConnectorFactory::GetForBrowserContext(profile);
 
-  return (policy_connector != nullptr) && policy_connector->IsManaged();
+  const policy::PolicyMap& policies =
+      policy_connector->policy_service()->GetPolicies(
+          policy::PolicyNamespace(policy::POLICY_DOMAIN_CHROME, std::string()));
+  const policy::PolicyMap::Entry* entry =
+      policies.Get(policy::key::kContextualSuggestionsEnabled);
+  bool is_enabled;
+  if (entry && entry->value && entry->value->GetAsBoolean(&is_enabled))
+    return !is_enabled;
+
+  return false;
 }
 
 ContextualSuggestionsBridge::ContextualSuggestionsBridge(
@@ -157,7 +173,8 @@ void ContextualSuggestionsBridge::OnSuggestionsAvailable(
       Java_ContextualSuggestionsBridge_createContextualSuggestionsResult(
           env, ConvertUTF8ToJavaString(env, result.peek_text));
   Java_ContextualSuggestionsBridge_setPeekConditionsOnResult(
-      env, j_result, result.peek_conditions.page_scroll_percentage,
+      env, j_result, result.peek_conditions.confidence,
+      result.peek_conditions.page_scroll_percentage,
       result.peek_conditions.minimum_seconds_on_page,
       result.peek_conditions.maximum_number_of_peeks);
   for (auto& cluster : result.clusters) {
@@ -173,7 +190,10 @@ void ContextualSuggestionsBridge::OnSuggestionsAvailable(
           !suggestion.image_id.empty());
     }
   }
-  RunCallbackAndroid(j_callback, j_result);
+
+  RegisterSyntheticFieldTrials(result);
+
+  RunObjectCallbackAndroid(j_callback, j_result);
 }
 
 void ContextualSuggestionsBridge::OnImageFetched(
@@ -183,7 +203,7 @@ void ContextualSuggestionsBridge::OnImageFetched(
   if (!image.IsEmpty())
     j_bitmap = gfx::ConvertToJavaBitmap(image.ToSkBitmap());
 
-  RunCallbackAndroid(j_callback, j_bitmap);
+  RunObjectCallbackAndroid(j_callback, j_bitmap);
 }
 
 }  // namespace contextual_suggestions

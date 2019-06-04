@@ -80,14 +80,16 @@ struct NavigationEventList {
   // referrer of about::blank in Window C since this navigation is more recent.
   // However, it does not prevent us to attribute url1 in Window A as the cause
   // of all these navigations.
-  NavigationEvent* FindNavigationEvent(const GURL& target_url,
+  NavigationEvent* FindNavigationEvent(const base::Time& last_event_timestamp,
+                                       const GURL& target_url,
                                        const GURL& target_main_frame_url,
                                        SessionID target_tab_id);
 
-  // Finds the most recent retargeting NavigationEvent that satisfies
-  // |target_url|, and |target_tab_id|.
-  NavigationEvent* FindRetargetingNavigationEvent(const GURL& target_url,
-                                                  SessionID target_tab_id);
+  // Finds the most recent retargeting NavigationEvent that satisfies the
+  // |target_tab_id|.
+  NavigationEvent* FindRetargetingNavigationEvent(
+      const base::Time& last_event_timestamp,
+      SessionID target_tab_id);
 
   void RecordNavigationEvent(std::unique_ptr<NavigationEvent> nav_event);
 
@@ -165,7 +167,7 @@ class SafeBrowsingNavigationObserverManager
       const GURL& event_url,
       SessionID event_tab_id,  // Invalid if tab id is unknown or not available.
       int user_gesture_count_limit,
-      ReferrerChain* out_referrer_chain);
+      ReferrerChain* out_referrer_chain) override;
 
   // Based on the |web_contents| associated with an event, traces back the
   // observed NavigationEvents in |navigation_event_list_| to identify the
@@ -200,6 +202,7 @@ class SafeBrowsingNavigationObserverManager
                             int source_render_process_id,
                             int source_render_frame_id,
                             GURL target_url,
+                            ui::PageTransition page_transition,
                             content::WebContents* target_web_contents,
                             bool renderer_initiated);
 

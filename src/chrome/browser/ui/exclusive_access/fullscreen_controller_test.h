@@ -60,7 +60,7 @@ class FullscreenControllerTest : public InProcessBrowserTest {
   void SetUpOnMainThread() override;
   void TearDownOnMainThread() override;
 
-  void RequestKeyboardLock(bool esc_key_locked);
+  bool RequestKeyboardLock(bool esc_key_locked);
   void RequestToLockMouse(bool user_gesture,
                           bool last_unlocked_by_target);
   void SetWebContentsGrantedSilentMouseLockPermission();
@@ -75,6 +75,7 @@ class FullscreenControllerTest : public InProcessBrowserTest {
   void Reload();
   void SetPrivilegedFullscreen(bool is_privileged);
   void EnterActiveTabFullscreen();
+  void ToggleBrowserFullscreen();
   void EnterExtensionInitiatedFullscreen();
 
   static const char kFullscreenKeyboardLockHTML[];

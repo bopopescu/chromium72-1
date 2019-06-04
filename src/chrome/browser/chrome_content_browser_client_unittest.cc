@@ -29,6 +29,7 @@
 #include "content/public/browser/browsing_data_remover.h"
 #include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/navigation_entry.h"
+#include "content/public/browser/site_instance.h"
 #include "content/public/browser/storage_partition.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/content_switches.h"
@@ -49,7 +50,7 @@
 #if defined(OS_CHROMEOS)
 #include "ash/public/interfaces/constants.mojom.h"
 #include "content/public/common/service_names.mojom.h"
-#include "services/ui/public/interfaces/constants.mojom.h"
+#include "services/ws/public/mojom/constants.mojom.h"
 #endif
 
 using content::BrowsingDataFilterBuilder;
@@ -103,8 +104,9 @@ TEST_F(ChromeContentBrowserClientWindowTest, OpenURL) {
     // only be ran on platforms where OpenURL is implemented synchronously.
     // See https://crbug.com/457667.
     content::WebContents* web_contents = nullptr;
-    client.OpenURL(browser()->profile(),
-                   params,
+    scoped_refptr<content::SiteInstance> site_instance =
+        content::SiteInstance::Create(browser()->profile());
+    client.OpenURL(site_instance.get(), params,
                    base::Bind(&DidOpenURLForWindowTest, &web_contents));
 
     EXPECT_TRUE(web_contents);
@@ -179,7 +181,6 @@ TEST_F(DisableWebRtcEncryptionFlagTest, StableChannel) {
 class BlinkSettingsFieldTrialTest : public testing::Test {
  public:
   static const char kDisallowFetchFieldTrialName[];
-  static const char kCSSExternalScannerFieldTrialName[];
   static const char kFakeGroupName[];
 
   BlinkSettingsFieldTrialTest()
@@ -235,8 +236,6 @@ class BlinkSettingsFieldTrialTest : public testing::Test {
 
 const char BlinkSettingsFieldTrialTest::kDisallowFetchFieldTrialName[] =
     "DisallowFetchForDocWrittenScriptsInMainFrame";
-const char BlinkSettingsFieldTrialTest::kCSSExternalScannerFieldTrialName[] =
-    "CSSExternalScanner";
 const char BlinkSettingsFieldTrialTest::kFakeGroupName[] = "FakeGroup";
 
 TEST_F(BlinkSettingsFieldTrialTest, NoFieldTrial) {
@@ -269,28 +268,6 @@ TEST_F(BlinkSettingsFieldTrialTest, FieldTrialEnabled) {
             command_line().GetSwitchValueASCII(switches::kBlinkSettings));
 }
 
-TEST_F(BlinkSettingsFieldTrialTest, MultipleFieldTrialsEnabled) {
-  CreateFieldTrialWithParams(kDisallowFetchFieldTrialName, kFakeGroupName,
-                             "key1", "value1", "key2", "value2");
-  CreateFieldTrialWithParams(kCSSExternalScannerFieldTrialName, kFakeGroupName,
-                             "keyA", "valueA", "keyB", "valueB");
-  AppendContentBrowserClientSwitches();
-  EXPECT_TRUE(command_line().HasSwitch(switches::kBlinkSettings));
-  EXPECT_EQ("key1=value1,key2=value2,keyA=valueA,keyB=valueB",
-            command_line().GetSwitchValueASCII(switches::kBlinkSettings));
-}
-
-TEST_F(BlinkSettingsFieldTrialTest, MultipleFieldTrialsDuplicateKeys) {
-  CreateFieldTrialWithParams(kDisallowFetchFieldTrialName, kFakeGroupName,
-                             "key1", "value1", "key2", "value2");
-  CreateFieldTrialWithParams(kCSSExternalScannerFieldTrialName, kFakeGroupName,
-                             "key2", "duplicate", "key3", "value3");
-  AppendContentBrowserClientSwitches();
-  EXPECT_TRUE(command_line().HasSwitch(switches::kBlinkSettings));
-  EXPECT_EQ("key1=value1,key2=value2,key2=duplicate,key3=value3",
-            command_line().GetSwitchValueASCII(switches::kBlinkSettings));
-}
-
 #if !defined(OS_ANDROID)
 namespace content {
 
@@ -304,7 +281,8 @@ class InstantNTPURLRewriteTest : public BrowserWithTestWindowTest {
 
   void InstallTemplateURLWithNewTabPage(GURL new_tab_page_url) {
     TemplateURLServiceFactory::GetInstance()->SetTestingFactoryAndUse(
-        profile(), &TemplateURLServiceFactory::BuildInstanceFor);
+        profile(),
+        base::BindRepeating(&TemplateURLServiceFactory::BuildInstanceFor));
     TemplateURLService* template_url_service =
         TemplateURLServiceFactory::GetForProfile(browser()->profile());
     search_test_utils::WaitForTemplateURLServiceToLoad(template_url_service);
@@ -413,19 +391,20 @@ TEST(ChromeContentBrowserClientTest, ShouldTerminateOnServiceQuit) {
     bool expect_terminate;
   } kTestCases[] = {
       // Don't terminate for invalid service names.
-      {"", false},
+      {"x", false},
       {"unknown-name", false},
       // Don't terminate for some well-known browser services.
       {content::mojom::kBrowserServiceName, false},
       {content::mojom::kGpuServiceName, false},
       {content::mojom::kRendererServiceName, false},
       // Do terminate for some mash-specific cases.
-      {ui::mojom::kServiceName, true},
+      {ws::mojom::kServiceName, true},
       {ash::mojom::kServiceName, true},
   };
   ChromeContentBrowserClient client;
   for (const auto& test : kTestCases) {
-    service_manager::Identity id(test.service_name);
+    service_manager::Identity id(test.service_name, base::Token{1, 2},
+                                 base::Token{}, base::Token{3, 4});
     EXPECT_EQ(test.expect_terminate, client.ShouldTerminateOnServiceQuit(id))
         << "for service name " << test.service_name;
   }

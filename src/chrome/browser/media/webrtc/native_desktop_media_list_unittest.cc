@@ -18,6 +18,7 @@
 #include "base/synchronization/lock.h"
 #include "base/threading/thread_task_runner_handle.h"
 #include "chrome/browser/media/webrtc/desktop_media_list_observer.h"
+#include "chrome/test/views/chrome_views_test_base.h"
 #include "content/public/test/test_browser_thread_bundle.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -25,7 +26,6 @@
 #include "third_party/webrtc/modules/desktop_capture/desktop_frame.h"
 #include "ui/aura/window.h"
 #include "ui/aura/window_tree_host.h"
-#include "ui/views/test/views_test_base.h"
 #include "ui/views/widget/desktop_aura/desktop_native_widget_aura.h"
 #include "ui/views/widget/widget.h"
 
@@ -35,11 +35,9 @@ using testing::DoAll;
 
 namespace {
 
-// Aura window capture unit tests are not stable in linux. crbug.com/602494 and
+// Aura window capture unit tests are not stable. crbug.com/602494 and
 // crbug.com/603823.
-#if defined(OS_WIN)
-#define ENABLE_AURA_WINDOW_TESTS
-#endif
+// #define ENABLE_AURA_WINDOW_TESTS
 
 static const int kDefaultWindowCount = 2;
 #if defined(ENABLE_AURA_WINDOW_TESTS)
@@ -119,8 +117,7 @@ class FakeWindowCapturer : public webrtc::DesktopCapturer {
 
     base::AutoLock lock(frame_values_lock_);
 
-    std::map<SourceId, int8_t>::iterator it =
-        frame_values_.find(selected_window_id_);
+    auto it = frame_values_.find(selected_window_id_);
     int8_t value = (it != frame_values_.end()) ? it->second : 0;
     std::unique_ptr<webrtc::DesktopFrame> frame(
         new webrtc::BasicDesktopFrame(webrtc::DesktopSize(10, 10)));
@@ -166,7 +163,7 @@ ACTION_P2(QuitRunLoop, task_runner, run_loop) {
   task_runner->PostTask(FROM_HERE, run_loop->QuitWhenIdleClosure());
 }
 
-class NativeDesktopMediaListTest : public views::ViewsTestBase {
+class NativeDesktopMediaListTest : public ChromeViewsTestBase {
  public:
   NativeDesktopMediaListTest() = default;
 
@@ -174,7 +171,7 @@ class NativeDesktopMediaListTest : public views::ViewsTestBase {
     for (size_t i = 0; i < desktop_widgets_.size(); i++)
       desktop_widgets_[i].reset();
 
-    ViewsTestBase::TearDown();
+    ChromeViewsTestBase::TearDown();
   }
 
   void AddNativeWindow(int id) {
@@ -522,4 +519,37 @@ TEST_F(NativeDesktopMediaListTest, MoveWindow) {
   window_capturer_->SetWindowList(window_list_);
 
   run_loop.Run();
+}
+
+// This test verifies that webrtc::DesktopCapturer::CaptureFrame() is not
+// called when the thumbnail size is empty.
+TEST_F(NativeDesktopMediaListTest, EmptyThumbnail) {
+  window_capturer_ = new FakeWindowCapturer();
+  model_ = std::make_unique<NativeDesktopMediaList>(
+      DesktopMediaID::TYPE_WINDOW, base::WrapUnique(window_capturer_));
+  model_->SetThumbnailSize(gfx::Size());
+
+  // Set update period to reduce the time it takes to run tests.
+  model_->SetUpdatePeriod(base::TimeDelta::FromMilliseconds(20));
+
+  base::RunLoop run_loop;
+
+  EXPECT_CALL(observer_, OnSourceAdded(model_.get(), 0))
+      .WillOnce(
+          DoAll(CheckListSize(model_.get(), 1),
+                QuitRunLoop(base::ThreadTaskRunnerHandle::Get(), &run_loop)));
+  // Called upon webrtc::DesktopCapturer::CaptureFrame() call.
+  ON_CALL(observer_, OnSourceThumbnailChanged(_, _))
+      .WillByDefault(testing::InvokeWithoutArgs([]() { NOTREACHED(); }));
+
+  model_->StartUpdating(&observer_);
+
+  AddNativeWindow(0);
+  window_capturer_->SetWindowList(window_list_);
+
+  run_loop.Run();
+
+  EXPECT_EQ(model_->GetSource(0).id.type, DesktopMediaID::TYPE_WINDOW);
+  EXPECT_EQ(model_->GetSource(0).id.id, 0);
+  EXPECT_EQ(model_->GetSource(0).thumbnail.size(), gfx::Size());
 }

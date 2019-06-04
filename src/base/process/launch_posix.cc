@@ -40,6 +40,7 @@
 #include "base/strings/stringprintf.h"
 #include "base/synchronization/waitable_event.h"
 #include "base/threading/platform_thread.h"
+#include "base/threading/scoped_blocking_call.h"
 #include "base/threading/thread_restrictions.h"
 #include "base/time/time.h"
 #include "base/trace_event/trace_event.h"
@@ -59,13 +60,10 @@
 #endif
 
 #if defined(OS_MACOSX)
-#include <crt_externs.h>
-#include <sys/event.h>
-
-#include "base/feature_list.h"
-#else
-extern char** environ;
+#error "macOS should use launch_mac.cc"
 #endif
+
+extern char** environ;
 
 namespace base {
 
@@ -80,29 +78,16 @@ class GetAppOutputScopedAllowBaseSyncPrimitives
 
 namespace {
 
-#if defined(OS_MACOSX)
-const Feature kMacLaunchProcessPosixSpawn{"MacLaunchProcessPosixSpawn",
-                                          FEATURE_ENABLED_BY_DEFAULT};
-#endif
-
 // Get the process's "environment" (i.e. the thing that setenv/getenv
 // work with).
 char** GetEnvironment() {
-#if defined(OS_MACOSX)
-  return *_NSGetEnviron();
-#else
   return environ;
-#endif
 }
 
 // Set the process's "environment" (i.e. the thing that setenv/getenv
 // work with).
 void SetEnvironment(char** env) {
-#if defined(OS_MACOSX)
-  *_NSGetEnviron() = env;
-#else
   environ = env;
-#endif
 }
 
 // Set the calling thread's signal mask to new_sigmask and return
@@ -221,8 +206,6 @@ typedef std::unique_ptr<DIR, ScopedDIRClose> ScopedDIR;
 
 #if defined(OS_LINUX) || defined(OS_AIX)
 static const char kFDDir[] = "/proc/self/fd";
-#elif defined(OS_MACOSX)
-static const char kFDDir[] = "/dev/fd";
 #elif defined(OS_SOLARIS)
 static const char kFDDir[] = "/dev/fd";
 #elif defined(OS_FREEBSD)
@@ -301,14 +284,6 @@ Process LaunchProcess(const CommandLine& cmdline,
 Process LaunchProcess(const std::vector<std::string>& argv,
                       const LaunchOptions& options) {
   TRACE_EVENT0("base", "LaunchProcess");
-#if defined(OS_MACOSX)
-  if (FeatureList::IsEnabled(kMacLaunchProcessPosixSpawn)) {
-    // TODO(rsesek): Do this unconditionally. There is one user for each of
-    // these two options. https://crbug.com/179923.
-    if (!options.pre_exec_delegate && options.current_directory.empty())
-      return LaunchProcessPosixSpawn(argv, options);
-  }
-#endif
 
   InjectiveMultimap fd_shuffle1;
   InjectiveMultimap fd_shuffle2;
@@ -376,7 +351,8 @@ Process LaunchProcess(const std::vector<std::string>& argv,
   if (pid < 0) {
     DPLOG(ERROR) << "fork";
     return Process();
-  } else if (pid == 0) {
+  }
+  if (pid == 0) {
     // Child process
 
     // DANGER: no calls to malloc or locks are allowed from now on:
@@ -414,8 +390,7 @@ Process LaunchProcess(const std::vector<std::string>& argv,
 
     if (options.maximize_rlimits) {
       // Some resource limits need to be maximal in this child.
-      for (size_t i = 0; i < options.maximize_rlimits->size(); ++i) {
-        const int resource = (*options.maximize_rlimits)[i];
+      for (auto resource : *options.maximize_rlimits) {
         struct rlimit limit;
         if (getrlimit(resource, &limit) < 0) {
           RAW_LOG(WARNING, "getrlimit failed");
@@ -427,10 +402,6 @@ Process LaunchProcess(const std::vector<std::string>& argv,
         }
       }
     }
-
-#if defined(OS_MACOSX)
-    RestoreDefaultExceptionHandler();
-#endif  // defined(OS_MACOSX)
 
     ResetChildSignalHandlersToDefaults();
     SetSignalMask(orig_sigmask);
@@ -459,9 +430,7 @@ Process LaunchProcess(const std::vector<std::string>& argv,
 #endif  // defined(OS_CHROMEOS)
 
     // Cannot use STL iterators here, since debug iterators use locks.
-    for (size_t i = 0; i < options.fds_to_remap.size(); ++i) {
-      const FileHandleMappingVector::value_type& value =
-          options.fds_to_remap[i];
+    for (const auto& value : options.fds_to_remap) {
       fd_shuffle1.push_back(InjectionArc(value.first, value.second, false));
       fd_shuffle2.push_back(InjectionArc(value.first, value.second, false));
     }
@@ -517,7 +486,7 @@ Process LaunchProcess(const std::vector<std::string>& argv,
     if (options.wait) {
       // While this isn't strictly disk IO, waiting for another process to
       // finish is the sort of thing ThreadRestrictions is trying to prevent.
-      base::AssertBlockingAllowed();
+      ScopedBlockingCall scoped_blocking_call(BlockingType::MAY_BLOCK);
       pid_t ret = HANDLE_EINTR(waitpid(pid, nullptr, 0));
       DPCHECK(ret > 0);
     }
@@ -548,7 +517,7 @@ static bool GetAppOutputInternal(
     std::string* output,
     bool do_search_path,
     int* exit_code) {
-  base::AssertBlockingAllowed();
+  ScopedBlockingCall scoped_blocking_call(BlockingType::MAY_BLOCK);
   // exit_code must be supplied so calling function can determine success.
   DCHECK(exit_code);
   *exit_code = EXIT_FAILURE;
@@ -584,10 +553,6 @@ static bool GetAppOutputInternal(
       // DANGER: no calls to malloc or locks are allowed from now on:
       // http://crbug.com/36678
 
-#if defined(OS_MACOSX)
-      RestoreDefaultExceptionHandler();
-#endif
-
       // Obscure fork() rule: in the child, if you don't end up doing exec*(),
       // you call _exit() instead of exit(). This is because _exit() does not
       // call any previously-registered (in the parent) exit handlers, which
@@ -604,8 +569,8 @@ static bool GetAppOutputInternal(
       // Adding another element here? Remeber to increase the argument to
       // reserve(), above.
 
-      for (size_t i = 0; i < fd_shuffle1.size(); ++i)
-        fd_shuffle2.push_back(fd_shuffle1[i]);
+      for (const auto& i : fd_shuffle1)
+        fd_shuffle2.push_back(i);
 
       if (!ShuffleFileDescriptors(&fd_shuffle1))
         _exit(127);

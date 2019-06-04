@@ -30,6 +30,13 @@ class StabilityMetricsHelper {
   // Clears the gathered stability metrics.
   void ClearSavedStabilityMetrics();
 
+  // Records a utility process launch with name |metrics_name|.
+  void BrowserUtilityProcessLaunched(const std::string& metrics_name);
+
+  // Records a utility process crash with name |metrics_name|.
+  void BrowserUtilityProcessCrashed(const std::string& metrics_name,
+                                    int exit_code);
+
   // Records a browser child process crash.
   void BrowserChildProcessCrashed();
 
@@ -53,6 +60,12 @@ class StabilityMetricsHelper {
 
   // Increments the RendererCrash pref.
   void IncreaseRendererCrashCount();
+
+  // Increments the GpuCrash pref.
+  // Note: This is currently only used on Android. If you want to call this on
+  // another platform, server-side processing code needs to be updated for that
+  // platform to use the new data. Server-side currently assumes Android-only.
+  void IncreaseGpuCrashCount();
 
  private:
   // Increments an Integer pref value specified by |path|.

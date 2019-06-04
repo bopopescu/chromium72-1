@@ -100,7 +100,7 @@ static void attachFunc(
     if( pNew->pBt ) sqlite3BtreeClose(pNew->pBt);
     pNew->pBt = 0;
     pNew->pSchema = 0;
-    rc = sqlite3BtreeOpen(pVfs, "x", db, &pNew->pBt, 0, SQLITE_OPEN_MAIN_DB);
+    rc = sqlite3BtreeOpen(pVfs, "x\0", db, &pNew->pBt, 0, SQLITE_OPEN_MAIN_DB);
   }else{
     /* This is a real ATTACH
     **
@@ -158,7 +158,7 @@ static void attachFunc(
     sqlite3_free( zPath );
     db->nDb++;
   }
-  db->skipBtreeMutex = 0;
+  db->noSharedCache = 0;
   if( rc==SQLITE_CONSTRAINT ){
     rc = SQLITE_ERROR;
     zErrDyn = sqlite3MPrintf(db, "database is already attached");
@@ -230,6 +230,7 @@ static void attachFunc(
   if( rc==SQLITE_OK ){
     sqlite3BtreeEnterAll(db);
     db->init.iDb = 0;
+    db->mDbFlags &= ~(DBFLAG_SchemaKnownOk);
     rc = sqlite3Init(db, &zErrDyn);
     sqlite3BtreeLeaveAll(db);
     assert( zErrDyn==0 || rc!=SQLITE_OK );
@@ -413,6 +414,7 @@ void sqlite3Detach(Parse *pParse, Expr *pDbname){
     0,                /* pNext */
     detachFunc,       /* xSFunc */
     0,                /* xFinalize */
+    0, 0,             /* xValue, xInverse */
     "sqlite_detach",  /* zName */
     {0}
   };
@@ -432,6 +434,7 @@ void sqlite3Attach(Parse *pParse, Expr *p, Expr *pDbname, Expr *pKey){
     0,                /* pNext */
     attachFunc,       /* xSFunc */
     0,                /* xFinalize */
+    0, 0,             /* xValue, xInverse */
     "sqlite_attach",  /* zName */
     {0}
   };
@@ -502,6 +505,9 @@ int sqlite3FixSrcList(
     if( sqlite3FixSelect(pFix, pItem->pSelect) ) return 1;
     if( sqlite3FixExpr(pFix, pItem->pOn) ) return 1;
 #endif
+    if( pItem->fg.isTabFunc && sqlite3FixExprList(pFix, pItem->u1.pFuncArg) ){
+      return 1;
+    }
   }
   return 0;
 }
@@ -601,6 +607,18 @@ int sqlite3FixTriggerStep(
     if( sqlite3FixExprList(pFix, pStep->pExprList) ){
       return 1;
     }
+#ifndef SQLITE_OMIT_UPSERT
+    if( pStep->pUpsert ){
+      Upsert *pUp = pStep->pUpsert;
+      if( sqlite3FixExprList(pFix, pUp->pUpsertTarget)
+       || sqlite3FixExpr(pFix, pUp->pUpsertTargetWhere)
+       || sqlite3FixExprList(pFix, pUp->pUpsertSet)
+       || sqlite3FixExpr(pFix, pUp->pUpsertWhere)
+      ){
+        return 1;
+      }
+    }
+#endif
     pStep = pStep->pNext;
   }
   return 0;

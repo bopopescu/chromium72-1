@@ -17,6 +17,8 @@ enum Event {
   // This signal is sent to a SystemCU when all ProcessCU CPU usage estimates
   // have been updated and are coherent.
   kProcessCPUUsageReady,
+  // This signal is set to the renderer ProcessCU.
+  kRendererIsBloated,
 };
 
 // Defines the Storage property keys that can be get/set on the
@@ -26,7 +28,6 @@ enum PropertyType {
   kAudible,
   kCPUUsage,
   kExpectedTaskQueueingDuration,
-  kLaunchTime,
   kMainThreadTaskLoadIsLow,
   // Network is considered almost idle when there's no more than 2 network
   // connections.

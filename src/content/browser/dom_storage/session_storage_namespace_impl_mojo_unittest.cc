@@ -7,14 +7,15 @@
 #include "base/guid.h"
 #include "base/memory/ptr_util.h"
 #include "base/run_loop.h"
-#include "base/test/scoped_task_environment.h"
 #include "components/services/leveldb/public/cpp/util.h"
 #include "content/browser/child_process_security_policy_impl.h"
 #include "content/browser/dom_storage/session_storage_data_map.h"
 #include "content/browser/dom_storage/session_storage_metadata.h"
+#include "content/browser/dom_storage/test/storage_area_test_util.h"
+#include "content/public/test/test_browser_thread_bundle.h"
 #include "content/test/fake_leveldb_database.h"
-#include "content/test/leveldb_wrapper_test_util.h"
-#include "mojo/edk/embedder/embedder.h"
+#include "content/test/gmock_util.h"
+#include "mojo/core/embedder/embedder.h"
 #include "mojo/public/cpp/bindings/strong_associated_binding.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -41,7 +42,9 @@ class MockListener : public SessionStorageDataMap::Listener {
   MOCK_METHOD1(OnCommitResult, void(leveldb::mojom::DatabaseError error));
 };
 
-class SessionStorageNamespaceImplMojoTest : public testing::Test {
+class SessionStorageNamespaceImplMojoTest
+    : public testing::Test,
+      public SessionStorageNamespaceImplMojo::Delegate {
  public:
   SessionStorageNamespaceImplMojoTest()
       : test_namespace_id1_(base::GenerateGUID()),
@@ -56,8 +59,7 @@ class SessionStorageNamespaceImplMojoTest : public testing::Test {
     // Create a database that already has a namespace saved.
     metadata_.SetupNewDatabase();
     std::vector<leveldb::mojom::BatchedOperationPtr> save_operations;
-    NamespaceEntry entry =
-        metadata_.GetOrCreateNamespaceEntry(test_namespace_id1_);
+    auto entry = metadata_.GetOrCreateNamespaceEntry(test_namespace_id1_);
     auto map_id =
         metadata_.RegisterNewMap(entry, test_origin1_, &save_operations);
     DCHECK(map_id->KeyPrefix() == StdStringToUint8Vector("map-0-"));
@@ -77,7 +79,7 @@ class SessionStorageNamespaceImplMojoTest : public testing::Test {
     security_policy->LockToOrigin(kTestProcessIdOrigin3,
                                   test_origin3_.GetURL());
 
-    mojo::edk::SetDefaultProcessErrorCallback(
+    mojo::core::SetDefaultProcessErrorCallback(
         base::BindRepeating(&SessionStorageNamespaceImplMojoTest::OnBadMessage,
                             base::Unretained(this)));
   }
@@ -90,8 +92,8 @@ class SessionStorageNamespaceImplMojoTest : public testing::Test {
     security_policy->Remove(kTestProcessIdAllOrigins);
     security_policy->Remove(kTestProcessIdOrigin3);
 
-    mojo::edk::SetDefaultProcessErrorCallback(
-        mojo::edk::ProcessErrorCallback());
+    mojo::core::SetDefaultProcessErrorCallback(
+        mojo::core::ProcessErrorCallback());
   }
 
   // Creates a SessionStorageNamespaceImplMojo, saves it in the namespaces_ map,
@@ -99,19 +101,13 @@ class SessionStorageNamespaceImplMojoTest : public testing::Test {
   SessionStorageNamespaceImplMojo* CreateSessionStorageNamespaceImplMojo(
       const std::string& namespace_id) {
     DCHECK(namespaces_.find(namespace_id) == namespaces_.end());
-    SessionStorageNamespaceImplMojo::RegisterShallowClonedNamespace
-        add_namespace_callback =
-            base::BindRepeating(&SessionStorageNamespaceImplMojoTest::
-                                    RegisterShallowClonedNamespace,
-                                base::Unretained(this));
-    SessionStorageLevelDBWrapper::RegisterNewAreaMap map_id_callback =
+    SessionStorageAreaImpl::RegisterNewAreaMap map_id_callback =
         base::BindRepeating(
             &SessionStorageNamespaceImplMojoTest::RegisterNewAreaMap,
             base::Unretained(this));
 
     auto namespace_impl = std::make_unique<SessionStorageNamespaceImplMojo>(
-        namespace_id, &listener_, std::move(add_namespace_callback),
-        std::move(map_id_callback));
+        namespace_id, &listener_, std::move(map_id_callback), this);
     auto* namespace_impl_ptr = namespace_impl.get();
     namespaces_[namespace_id] = std::move(namespace_impl);
     return namespace_impl_ptr;
@@ -130,9 +126,10 @@ class SessionStorageNamespaceImplMojoTest : public testing::Test {
   void RegisterShallowClonedNamespace(
       NamespaceEntry source_namespace,
       const std::string& destination_namespace,
-      const SessionStorageNamespaceImplMojo::OriginAreas& areas_to_clone) {
+      const SessionStorageNamespaceImplMojo::OriginAreas& areas_to_clone)
+      override {
     std::vector<leveldb::mojom::BatchedOperationPtr> save_operations;
-    NamespaceEntry namespace_entry =
+    auto namespace_entry =
         metadata_.GetOrCreateNamespaceEntry(destination_namespace);
     metadata_.RegisterShallowClonedNamespace(source_namespace, namespace_entry,
                                              &save_operations);
@@ -149,8 +146,16 @@ class SessionStorageNamespaceImplMojoTest : public testing::Test {
     it->second->PopulateAsClone(&database_, namespace_entry, areas_to_clone);
   }
 
+  scoped_refptr<SessionStorageDataMap> MaybeGetExistingDataMapForId(
+      const std::vector<uint8_t>& map_number_as_bytes) override {
+    auto it = data_maps_.find(map_number_as_bytes);
+    if (it == data_maps_.end())
+      return nullptr;
+    return it->second;
+  }
+
  protected:
-  base::test::ScopedTaskEnvironment task_environment_;
+  TestBrowserThreadBundle test_browser_thread_bundle_;
   const std::string test_namespace_id1_;
   const std::string test_namespace_id2_;
   const url::Origin test_origin1_;
@@ -161,6 +166,8 @@ class SessionStorageNamespaceImplMojoTest : public testing::Test {
 
   std::map<std::string, std::unique_ptr<SessionStorageNamespaceImplMojo>>
       namespaces_;
+  std::map<std::vector<uint8_t>, scoped_refptr<SessionStorageDataMap>>
+      data_maps_;
 
   testing::StrictMock<MockListener> listener_;
   std::map<std::vector<uint8_t>, std::vector<uint8_t>> mock_data_;
@@ -177,22 +184,20 @@ TEST_F(SessionStorageNamespaceImplMojoTest, MetadataLoad) {
       .Times(1);
 
   namespace_impl->PopulateFromMetadata(
-      &database_, metadata_.GetOrCreateNamespaceEntry(test_namespace_id1_),
-      std::map<std::vector<uint8_t>, SessionStorageDataMap*>());
+      &database_, metadata_.GetOrCreateNamespaceEntry(test_namespace_id1_));
 
-  mojom::SessionStorageNamespacePtr ss_namespace;
+  blink::mojom::SessionStorageNamespacePtr ss_namespace;
   namespace_impl->Bind(mojo::MakeRequest(&ss_namespace), kTestProcessIdOrigin1);
 
-  mojom::LevelDBWrapperAssociatedPtr leveldb_1;
+  blink::mojom::StorageAreaAssociatedPtr leveldb_1;
   ss_namespace->OpenArea(test_origin1_, mojo::MakeRequest(&leveldb_1));
 
-  std::vector<mojom::KeyValuePtr> data;
-  DatabaseError status = test::GetAllSync(leveldb_1.get(), &data);
-  EXPECT_EQ(DatabaseError::OK, status);
+  std::vector<blink::mojom::KeyValuePtr> data;
+  EXPECT_TRUE(test::GetAllSync(leveldb_1.get(), &data));
   EXPECT_EQ(1ul, data.size());
   EXPECT_TRUE(base::ContainsValue(
-      data, mojom::KeyValue::New(StdStringToUint8Vector("key1"),
-                                 StdStringToUint8Vector("data1"))));
+      data, blink::mojom::KeyValue::New(StdStringToUint8Vector("key1"),
+                                        StdStringToUint8Vector("data1"))));
 
   EXPECT_CALL(listener_, OnDataMapDestruction(StdStringToUint8Vector("0")))
       .Times(1);
@@ -210,29 +215,27 @@ TEST_F(SessionStorageNamespaceImplMojoTest, MetadataLoadWithMapOperations) {
       .Times(1);
 
   namespace_impl->PopulateFromMetadata(
-      &database_, metadata_.GetOrCreateNamespaceEntry(test_namespace_id1_),
-      std::map<std::vector<uint8_t>, SessionStorageDataMap*>());
+      &database_, metadata_.GetOrCreateNamespaceEntry(test_namespace_id1_));
 
-  mojom::SessionStorageNamespacePtr ss_namespace;
+  blink::mojom::SessionStorageNamespacePtr ss_namespace;
   namespace_impl->Bind(mojo::MakeRequest(&ss_namespace), kTestProcessIdOrigin1);
 
-  mojom::LevelDBWrapperAssociatedPtr leveldb_1;
+  blink::mojom::StorageAreaAssociatedPtr leveldb_1;
   ss_namespace->OpenArea(test_origin1_, mojo::MakeRequest(&leveldb_1));
 
   EXPECT_CALL(listener_, OnCommitResult(DatabaseError::OK)).Times(1);
   test::PutSync(leveldb_1.get(), StdStringToUint8Vector("key2"),
                 StdStringToUint8Vector("data2"), base::nullopt, "");
 
-  std::vector<mojom::KeyValuePtr> data;
-  DatabaseError status = test::GetAllSync(leveldb_1.get(), &data);
-  EXPECT_EQ(DatabaseError::OK, status);
+  std::vector<blink::mojom::KeyValuePtr> data;
+  EXPECT_TRUE(test::GetAllSync(leveldb_1.get(), &data));
   EXPECT_EQ(2ul, data.size());
   EXPECT_TRUE(base::ContainsValue(
-      data, mojom::KeyValue::New(StdStringToUint8Vector("key1"),
-                                 StdStringToUint8Vector("data1"))));
+      data, blink::mojom::KeyValue::New(StdStringToUint8Vector("key1"),
+                                        StdStringToUint8Vector("data1"))));
   EXPECT_TRUE(base::ContainsValue(
-      data, mojom::KeyValue::New(StdStringToUint8Vector("key2"),
-                                 StdStringToUint8Vector("data2"))));
+      data, blink::mojom::KeyValue::New(StdStringToUint8Vector("key2"),
+                                        StdStringToUint8Vector("data2"))));
 
   EXPECT_CALL(listener_, OnDataMapDestruction(StdStringToUint8Vector("0")))
       .Times(1);
@@ -251,10 +254,9 @@ TEST_F(SessionStorageNamespaceImplMojoTest, CloneBeforeBind) {
       .Times(1);
 
   namespace_impl1->PopulateFromMetadata(
-      &database_, metadata_.GetOrCreateNamespaceEntry(test_namespace_id1_),
-      std::map<std::vector<uint8_t>, SessionStorageDataMap*>());
+      &database_, metadata_.GetOrCreateNamespaceEntry(test_namespace_id1_));
 
-  mojom::SessionStorageNamespacePtr ss_namespace1;
+  blink::mojom::SessionStorageNamespacePtr ss_namespace1;
   namespace_impl1->Bind(mojo::MakeRequest(&ss_namespace1),
                         kTestProcessIdOrigin1);
   ss_namespace1->Clone(test_namespace_id2_);
@@ -262,10 +264,10 @@ TEST_F(SessionStorageNamespaceImplMojoTest, CloneBeforeBind) {
 
   ASSERT_TRUE(namespace_impl2->IsPopulated());
 
-  mojom::SessionStorageNamespacePtr ss_namespace2;
+  blink::mojom::SessionStorageNamespacePtr ss_namespace2;
   namespace_impl2->Bind(mojo::MakeRequest(&ss_namespace2),
                         kTestProcessIdOrigin1);
-  mojom::LevelDBWrapperAssociatedPtr leveldb_2;
+  blink::mojom::StorageAreaAssociatedPtr leveldb_2;
   ss_namespace2->OpenArea(test_origin1_, mojo::MakeRequest(&leveldb_2));
 
   // Do a put in the cloned namespace.
@@ -276,16 +278,15 @@ TEST_F(SessionStorageNamespaceImplMojoTest, CloneBeforeBind) {
   test::PutSync(leveldb_2.get(), StdStringToUint8Vector("key2"),
                 StdStringToUint8Vector("data2"), base::nullopt, "");
 
-  std::vector<mojom::KeyValuePtr> data;
-  DatabaseError status = test::GetAllSync(leveldb_2.get(), &data);
-  EXPECT_EQ(DatabaseError::OK, status);
+  std::vector<blink::mojom::KeyValuePtr> data;
+  EXPECT_TRUE(test::GetAllSync(leveldb_2.get(), &data));
   EXPECT_EQ(2ul, data.size());
   EXPECT_TRUE(base::ContainsValue(
-      data, mojom::KeyValue::New(StdStringToUint8Vector("key1"),
-                                 StdStringToUint8Vector("data1"))));
+      data, blink::mojom::KeyValue::New(StdStringToUint8Vector("key1"),
+                                        StdStringToUint8Vector("data1"))));
   EXPECT_TRUE(base::ContainsValue(
-      data, mojom::KeyValue::New(StdStringToUint8Vector("key2"),
-                                 StdStringToUint8Vector("data2"))));
+      data, blink::mojom::KeyValue::New(StdStringToUint8Vector("key2"),
+                                        StdStringToUint8Vector("data2"))));
 
   EXPECT_CALL(listener_, OnDataMapDestruction(StdStringToUint8Vector("0")))
       .Times(1);
@@ -308,10 +309,9 @@ TEST_F(SessionStorageNamespaceImplMojoTest, CloneAfterBind) {
       .Times(1);
 
   namespace_impl1->PopulateFromMetadata(
-      &database_, metadata_.GetOrCreateNamespaceEntry(test_namespace_id1_),
-      std::map<std::vector<uint8_t>, SessionStorageDataMap*>());
+      &database_, metadata_.GetOrCreateNamespaceEntry(test_namespace_id1_));
 
-  mojom::SessionStorageNamespacePtr ss_namespace1;
+  blink::mojom::SessionStorageNamespacePtr ss_namespace1;
   namespace_impl1->Bind(mojo::MakeRequest(&ss_namespace1),
                         kTestProcessIdOrigin1);
 
@@ -322,11 +322,11 @@ TEST_F(SessionStorageNamespaceImplMojoTest, CloneAfterBind) {
               OnDataMapCreation(StdStringToUint8Vector("1"), testing::_))
       .Times(1);
   // Get a new area.
-  mojom::SessionStorageNamespacePtr ss_namespace2;
+  blink::mojom::SessionStorageNamespacePtr ss_namespace2;
   namespace_impl2->Bind(mojo::MakeRequest(&ss_namespace2),
                         kTestProcessIdAllOrigins);
-  mojom::LevelDBWrapperAssociatedPtr leveldb_n2_o1;
-  mojom::LevelDBWrapperAssociatedPtr leveldb_n2_o2;
+  blink::mojom::StorageAreaAssociatedPtr leveldb_n2_o1;
+  blink::mojom::StorageAreaAssociatedPtr leveldb_n2_o2;
   ss_namespace2->OpenArea(test_origin1_, mojo::MakeRequest(&leveldb_n2_o1));
   ss_namespace2->OpenArea(test_origin2_, mojo::MakeRequest(&leveldb_n2_o2));
 
@@ -341,21 +341,19 @@ TEST_F(SessionStorageNamespaceImplMojoTest, CloneAfterBind) {
   test::PutSync(leveldb_n2_o2.get(), StdStringToUint8Vector("key2"),
                 StdStringToUint8Vector("data2"), base::nullopt, "");
 
-  std::vector<mojom::KeyValuePtr> data;
-  DatabaseError status = test::GetAllSync(leveldb_n2_o1.get(), &data);
-  EXPECT_EQ(DatabaseError::OK, status);
+  std::vector<blink::mojom::KeyValuePtr> data;
+  EXPECT_TRUE(test::GetAllSync(leveldb_n2_o1.get(), &data));
   EXPECT_EQ(1ul, data.size());
   EXPECT_TRUE(base::ContainsValue(
-      data, mojom::KeyValue::New(StdStringToUint8Vector("key1"),
-                                 StdStringToUint8Vector("data1"))));
+      data, blink::mojom::KeyValue::New(StdStringToUint8Vector("key1"),
+                                        StdStringToUint8Vector("data1"))));
 
   data.clear();
-  status = test::GetAllSync(leveldb_n2_o2.get(), &data);
-  EXPECT_EQ(DatabaseError::OK, status);
+  EXPECT_TRUE(test::GetAllSync(leveldb_n2_o2.get(), &data));
   EXPECT_EQ(1ul, data.size());
   EXPECT_TRUE(base::ContainsValue(
-      data, mojom::KeyValue::New(StdStringToUint8Vector("key2"),
-                                 StdStringToUint8Vector("data2"))));
+      data, blink::mojom::KeyValue::New(StdStringToUint8Vector("key2"),
+                                        StdStringToUint8Vector("data2"))));
 
   EXPECT_CALL(listener_, OnDataMapDestruction(StdStringToUint8Vector("0")))
       .Times(1);
@@ -373,23 +371,59 @@ TEST_F(SessionStorageNamespaceImplMojoTest, RemoveOriginData) {
       .Times(1);
 
   namespace_impl->PopulateFromMetadata(
-      &database_, metadata_.GetOrCreateNamespaceEntry(test_namespace_id1_),
-      std::map<std::vector<uint8_t>, SessionStorageDataMap*>());
+      &database_, metadata_.GetOrCreateNamespaceEntry(test_namespace_id1_));
 
-  mojom::SessionStorageNamespacePtr ss_namespace;
+  blink::mojom::SessionStorageNamespacePtr ss_namespace;
   namespace_impl->Bind(mojo::MakeRequest(&ss_namespace), kTestProcessIdOrigin1);
 
-  mojom::LevelDBWrapperAssociatedPtr leveldb_1;
+  blink::mojom::StorageAreaAssociatedPtr leveldb_1;
   ss_namespace->OpenArea(test_origin1_, mojo::MakeRequest(&leveldb_1));
   ss_namespace.FlushForTesting();
 
-  EXPECT_CALL(listener_, OnCommitResult(DatabaseError::OK)).Times(1);
-  namespace_impl->RemoveOriginData(test_origin1_);
+  // Create an observer to make sure the deletion is observed.
+  testing::StrictMock<test::MockLevelDBObserver> mock_observer;
+  mojo::AssociatedBinding<blink::mojom::StorageAreaObserver> observer_binding(
+      &mock_observer);
+  blink::mojom::StorageAreaObserverAssociatedPtrInfo observer_ptr_info;
+  observer_binding.Bind(mojo::MakeRequest(&observer_ptr_info));
+  leveldb_1->AddObserver(std::move(observer_ptr_info));
+  leveldb_1.FlushForTesting();
 
-  std::vector<mojom::KeyValuePtr> data;
-  DatabaseError status = test::GetAllSync(leveldb_1.get(), &data);
-  EXPECT_EQ(DatabaseError::OK, status);
+  base::RunLoop loop;
+  EXPECT_CALL(mock_observer, AllDeleted("\n"))
+      .WillOnce(base::test::RunClosure(loop.QuitClosure()));
+
+  EXPECT_CALL(listener_, OnCommitResult(DatabaseError::OK)).Times(1);
+  namespace_impl->RemoveOriginData(test_origin1_, base::DoNothing());
+
+  std::vector<blink::mojom::KeyValuePtr> data;
+  EXPECT_TRUE(test::GetAllSync(leveldb_1.get(), &data));
   EXPECT_EQ(0ul, data.size());
+
+  // Check that the observer was notified.
+  loop.Run();
+
+  EXPECT_CALL(listener_, OnDataMapDestruction(StdStringToUint8Vector("0")))
+      .Times(1);
+  namespaces_.clear();
+}
+
+TEST_F(SessionStorageNamespaceImplMojoTest, RemoveOriginDataWithoutBinding) {
+  SessionStorageNamespaceImplMojo* namespace_impl =
+      CreateSessionStorageNamespaceImplMojo(test_namespace_id1_);
+
+  EXPECT_CALL(listener_,
+              OnDataMapCreation(StdStringToUint8Vector("0"), testing::_))
+      .Times(1);
+
+  namespace_impl->PopulateFromMetadata(
+      &database_, metadata_.GetOrCreateNamespaceEntry(test_namespace_id1_));
+
+  base::RunLoop loop;
+  EXPECT_CALL(listener_, OnCommitResult(DatabaseError::OK))
+      .WillOnce(base::test::RunClosure(loop.QuitClosure()));
+  namespace_impl->RemoveOriginData(test_origin1_, base::DoNothing());
+  loop.Run();
 
   EXPECT_CALL(listener_, OnDataMapDestruction(StdStringToUint8Vector("0")))
       .Times(1);
@@ -407,12 +441,11 @@ TEST_F(SessionStorageNamespaceImplMojoTest, ProcessLockedToOtherOrigin) {
       .Times(1);
 
   namespace_impl->PopulateFromMetadata(
-      &database_, metadata_.GetOrCreateNamespaceEntry(test_namespace_id1_),
-      std::map<std::vector<uint8_t>, SessionStorageDataMap*>());
+      &database_, metadata_.GetOrCreateNamespaceEntry(test_namespace_id1_));
 
-  mojom::SessionStorageNamespacePtr ss_namespace;
+  blink::mojom::SessionStorageNamespacePtr ss_namespace;
   namespace_impl->Bind(mojo::MakeRequest(&ss_namespace), kTestProcessIdOrigin1);
-  mojom::LevelDBWrapperAssociatedPtr leveldb_1;
+  blink::mojom::StorageAreaAssociatedPtr leveldb_1;
   ss_namespace->OpenArea(test_origin3_, mojo::MakeRequest(&leveldb_1));
   ss_namespace.FlushForTesting();
   EXPECT_TRUE(bad_message_called_);
@@ -423,7 +456,7 @@ TEST_F(SessionStorageNamespaceImplMojoTest, ProcessLockedToOtherOrigin) {
 }
 
 TEST_F(SessionStorageNamespaceImplMojoTest, PurgeUnused) {
-  // Verifies that wrappers are kept alive after the area is unbound, and they
+  // Verifies that areas are kept alive after the area is unbound, and they
   // are removed when PurgeUnboundWrappers() is called.
   SessionStorageNamespaceImplMojo* namespace_impl =
       CreateSessionStorageNamespaceImplMojo(test_namespace_id1_);
@@ -433,13 +466,12 @@ TEST_F(SessionStorageNamespaceImplMojoTest, PurgeUnused) {
       .Times(1);
 
   namespace_impl->PopulateFromMetadata(
-      &database_, metadata_.GetOrCreateNamespaceEntry(test_namespace_id1_),
-      std::map<std::vector<uint8_t>, SessionStorageDataMap*>());
+      &database_, metadata_.GetOrCreateNamespaceEntry(test_namespace_id1_));
 
-  mojom::SessionStorageNamespacePtr ss_namespace;
+  blink::mojom::SessionStorageNamespacePtr ss_namespace;
   namespace_impl->Bind(mojo::MakeRequest(&ss_namespace), kTestProcessIdOrigin1);
 
-  mojom::LevelDBWrapperAssociatedPtr leveldb_1;
+  blink::mojom::StorageAreaAssociatedPtr leveldb_1;
   ss_namespace->OpenArea(test_origin1_, mojo::MakeRequest(&leveldb_1));
   EXPECT_TRUE(namespace_impl->HasAreaForOrigin(test_origin1_));
 
@@ -448,11 +480,90 @@ TEST_F(SessionStorageNamespaceImplMojoTest, PurgeUnused) {
   leveldb_1.reset();
   EXPECT_TRUE(namespace_impl->HasAreaForOrigin(test_origin1_));
 
-  namespace_impl->PurgeUnboundWrappers();
+  namespace_impl->PurgeUnboundAreas();
   EXPECT_FALSE(namespace_impl->HasAreaForOrigin(test_origin1_));
 
   namespaces_.clear();
 }
 
+TEST_F(SessionStorageNamespaceImplMojoTest, NamespaceBindingPerOrigin) {
+  // Tries to open an area with a process that is locked to a different origin
+  // and verifies the bad message callback.
+  SessionStorageNamespaceImplMojo* namespace_impl =
+      CreateSessionStorageNamespaceImplMojo(test_namespace_id1_);
+
+  EXPECT_CALL(listener_,
+              OnDataMapCreation(StdStringToUint8Vector("0"), testing::_))
+      .Times(1);
+
+  namespace_impl->PopulateFromMetadata(
+      &database_, metadata_.GetOrCreateNamespaceEntry(test_namespace_id1_));
+
+  blink::mojom::SessionStorageNamespacePtr ss_namespace_o1;
+  namespace_impl->Bind(mojo::MakeRequest(&ss_namespace_o1),
+                       kTestProcessIdOrigin1);
+  blink::mojom::StorageAreaAssociatedPtr leveldb_1;
+  ss_namespace_o1->OpenArea(test_origin1_, mojo::MakeRequest(&leveldb_1));
+  ss_namespace_o1.FlushForTesting();
+  EXPECT_FALSE(bad_message_called_);
+
+  EXPECT_CALL(listener_,
+              OnDataMapCreation(StdStringToUint8Vector("1"), testing::_))
+      .Times(1);
+
+  blink::mojom::SessionStorageNamespacePtr ss_namespace_o2;
+  namespace_impl->Bind(mojo::MakeRequest(&ss_namespace_o2),
+                       kTestProcessIdOrigin3);
+  blink::mojom::StorageAreaAssociatedPtr leveldb_2;
+  ss_namespace_o2->OpenArea(test_origin3_, mojo::MakeRequest(&leveldb_2));
+  ss_namespace_o2.FlushForTesting();
+  EXPECT_FALSE(bad_message_called_);
+
+  EXPECT_CALL(listener_, OnDataMapDestruction(StdStringToUint8Vector("0")))
+      .Times(1);
+  EXPECT_CALL(listener_, OnDataMapDestruction(StdStringToUint8Vector("1")))
+      .Times(1);
+  namespaces_.clear();
+}
 }  // namespace
+
+TEST_F(SessionStorageNamespaceImplMojoTest, ReopenClonedAreaAfterPurge) {
+  // Verifies that areas are kept alive after the area is unbound, and they
+  // are removed when PurgeUnboundWrappers() is called.
+  SessionStorageNamespaceImplMojo* namespace_impl =
+      CreateSessionStorageNamespaceImplMojo(test_namespace_id1_);
+
+  SessionStorageDataMap* data_map;
+  EXPECT_CALL(listener_,
+              OnDataMapCreation(StdStringToUint8Vector("0"), testing::_))
+      .WillOnce(testing::SaveArg<1>(&data_map));
+
+  namespace_impl->PopulateFromMetadata(
+      &database_, metadata_.GetOrCreateNamespaceEntry(test_namespace_id1_));
+
+  blink::mojom::SessionStorageNamespacePtr ss_namespace;
+  namespace_impl->Bind(mojo::MakeRequest(&ss_namespace), kTestProcessIdOrigin1);
+
+  blink::mojom::StorageAreaAssociatedPtr leveldb_1;
+  ss_namespace->OpenArea(test_origin1_, mojo::MakeRequest(&leveldb_1));
+
+  // Save the data map, as if we did a clone:
+  data_maps_[data_map->map_data()->MapNumberAsBytes()] = data_map;
+
+  leveldb_1.reset();
+  namespace_impl->PurgeUnboundAreas();
+  EXPECT_FALSE(namespace_impl->HasAreaForOrigin(test_origin1_));
+
+  ss_namespace->OpenArea(test_origin1_, mojo::MakeRequest(&leveldb_1));
+  ss_namespace.FlushForTesting();
+
+  EXPECT_EQ(namespace_impl->origin_areas_[test_origin1_]->data_map(), data_map);
+
+  data_maps_.clear();
+
+  EXPECT_CALL(listener_, OnDataMapDestruction(StdStringToUint8Vector("0")))
+      .Times(1);
+
+  namespaces_.clear();
+}
 }  // namespace content

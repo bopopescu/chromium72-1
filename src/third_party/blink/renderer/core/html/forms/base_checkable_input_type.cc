@@ -40,7 +40,7 @@
 
 namespace blink {
 
-using namespace HTMLNames;
+using namespace html_names;
 
 void BaseCheckableInputType::Trace(blink::Visitor* visitor) {
   InputTypeView::Trace(visitor);
@@ -62,12 +62,11 @@ void BaseCheckableInputType::RestoreFormControlState(
 
 void BaseCheckableInputType::AppendToFormData(FormData& form_data) const {
   if (GetElement().checked())
-    form_data.append(GetElement().GetName(), GetElement().value());
+    form_data.AppendFromElement(GetElement().GetName(), GetElement().value());
 }
 
-void BaseCheckableInputType::HandleKeydownEvent(KeyboardEvent* event) {
-  const String& key = event->key();
-  if (key == " ") {
+void BaseCheckableInputType::HandleKeydownEvent(KeyboardEvent& event) {
+  if (event.key() == " ") {
     GetElement().SetActive(true);
     // No setDefaultHandled(), because IE dispatches a keypress in this case
     // and the caller will only dispatch a keypress if we don't call
@@ -75,10 +74,10 @@ void BaseCheckableInputType::HandleKeydownEvent(KeyboardEvent* event) {
   }
 }
 
-void BaseCheckableInputType::HandleKeypressEvent(KeyboardEvent* event) {
-  if (event->charCode() == ' ') {
+void BaseCheckableInputType::HandleKeypressEvent(KeyboardEvent& event) {
+  if (event.charCode() == ' ') {
     // Prevent scrolling down the page.
-    event->SetDefaultHandled();
+    event.SetDefaultHandled();
   }
 }
 
@@ -96,7 +95,7 @@ void BaseCheckableInputType::AccessKeyAction(bool send_mouse_events) {
 }
 
 bool BaseCheckableInputType::MatchesDefaultPseudoClass() {
-  return GetElement().FastHasAttribute(checkedAttr);
+  return GetElement().FastHasAttribute(kCheckedAttr);
 }
 
 InputType::ValueMode BaseCheckableInputType::GetValueMode() const {
@@ -107,7 +106,7 @@ void BaseCheckableInputType::SetValue(const String& sanitized_value,
                                       bool,
                                       TextFieldEventBehavior,
                                       TextControlSetValueSelection) {
-  GetElement().setAttribute(valueAttr, AtomicString(sanitized_value));
+  GetElement().setAttribute(kValueAttr, AtomicString(sanitized_value));
 }
 
 void BaseCheckableInputType::ReadingChecked() const {

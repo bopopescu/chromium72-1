@@ -54,12 +54,17 @@ class FakePageTimingSender : public PageTimingSender {
     // should be passed via UpdateExpectedPageLoadCSSProperties.
     void UpdateExpectPageLoadCssProperties(int css_property_id);
 
+    void UpdateExpectPageRenderData(const mojom::PageRenderData& render_data) {
+      expected_render_data_ = render_data;
+    }
+
     // Forces verification that actual features sent through SendTiming match
     // expected features provided via ExpectPageLoadFeatures.
     void VerifyExpectedFeatures() const;
     // Forces verification that actual CSS properties sent through SendTiming
     // match expected CSS properties provided via ExpectPageLoadCSSProperties.
     void VerifyExpectedCssProperties() const;
+    void VerifyExpectedRenderData() const;
 
     const std::vector<mojom::PageLoadTimingPtr>& expected_timings() const {
       return expected_timings_;
@@ -68,9 +73,12 @@ class FakePageTimingSender : public PageTimingSender {
       return actual_timings_;
     }
 
-    void UpdateTiming(const mojom::PageLoadTimingPtr& timing,
-                      const mojom::PageLoadMetadataPtr& metadata,
-                      const mojom::PageLoadFeaturesPtr& new_features);
+    void UpdateTiming(
+        const mojom::PageLoadTimingPtr& timing,
+        const mojom::PageLoadMetadataPtr& metadata,
+        const mojom::PageLoadFeaturesPtr& new_features,
+        const std::vector<mojom::ResourceDataUpdatePtr>& resources,
+        const mojom::PageRenderData& render_data);
 
    private:
     std::vector<mojom::PageLoadTimingPtr> expected_timings_;
@@ -79,6 +87,8 @@ class FakePageTimingSender : public PageTimingSender {
     std::set<blink::mojom::WebFeature> actual_features_;
     std::set<int> expected_css_properties_;
     std::set<int> actual_css_properties_;
+    mojom::PageRenderData expected_render_data_;
+    mojom::PageRenderData actual_render_data_;
     DISALLOW_COPY_AND_ASSIGN(PageTimingValidator);
   };
 
@@ -86,7 +96,9 @@ class FakePageTimingSender : public PageTimingSender {
   ~FakePageTimingSender() override;
   void SendTiming(const mojom::PageLoadTimingPtr& timing,
                   const mojom::PageLoadMetadataPtr& metadata,
-                  mojom::PageLoadFeaturesPtr new_features) override;
+                  mojom::PageLoadFeaturesPtr new_features,
+                  std::vector<mojom::ResourceDataUpdatePtr> resources,
+                  const mojom::PageRenderData& render_data) override;
 
  private:
   PageTimingValidator* const validator_;

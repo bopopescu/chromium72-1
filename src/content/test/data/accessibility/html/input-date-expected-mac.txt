@@ -1,3 +1,0 @@
-AXWebArea AXRoleDescription='HTML content'
-++AXGroup AXRoleDescription='group'
-++++AXDateField AXRoleDescription='date field' AXValue='2008-09-01' AXDescription='@NO_CHILDREN_DUMP'

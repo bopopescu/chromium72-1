@@ -9,12 +9,13 @@
 #define SkBlitter_DEFINED
 
 #include "SkAutoMalloc.h"
-#include "SkBitmapProcShader.h"
 #include "SkColor.h"
 #include "SkCoverageDelta.h"
+#include "SkImagePriv.h"
 #include "SkRect.h"
 #include "SkRegion.h"
 #include "SkShaderBase.h"
+#include "SkTo.h"
 
 class SkArenaAlloc;
 class SkMatrix;
@@ -157,8 +158,6 @@ public:
                                    int left, int top,
                                    SkArenaAlloc*);
     ///@}
-
-    static SkShaderBase::ContextRec::DstType PreferredShaderDest(const SkImageInfo&);
 
     static bool UseRasterPipelineBlitter(const SkPixmap&, const SkPaint&, const SkMatrix&);
 

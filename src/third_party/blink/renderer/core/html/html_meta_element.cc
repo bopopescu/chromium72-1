@@ -27,6 +27,7 @@
 #include "third_party/blink/renderer/core/frame/local_frame.h"
 #include "third_party/blink/renderer/core/frame/local_frame_client.h"
 #include "third_party/blink/renderer/core/frame/settings.h"
+#include "third_party/blink/renderer/core/frame/viewport_data.h"
 #include "third_party/blink/renderer/core/html/html_head_element.h"
 #include "third_party/blink/renderer/core/html/parser/html_parser_idioms.h"
 #include "third_party/blink/renderer/core/html_names.h"
@@ -38,10 +39,10 @@
 
 namespace blink {
 
-using namespace HTMLNames;
+using namespace html_names;
 
 inline HTMLMetaElement::HTMLMetaElement(Document& document)
-    : HTMLElement(metaTag, document) {}
+    : HTMLElement(kMetaTag, document) {}
 
 DEFINE_NODE_FACTORY(HTMLMetaElement)
 
@@ -57,7 +58,7 @@ static bool IsSeparator(UChar c) {
 
 void HTMLMetaElement::ParseContentAttribute(
     const String& content,
-    void* data,
+    ViewportDescription& viewport_description,
     Document* document,
     bool viewport_meta_zero_values_quirk) {
   bool has_invalid_separator = false;
@@ -120,7 +121,7 @@ void HTMLMetaElement::ParseContentAttribute(
         buffer.Substring(value_begin, value_end - value_begin);
     ProcessViewportKeyValuePair(document, !has_invalid_separator, key_string,
                                 value_string, viewport_meta_zero_values_quirk,
-                                data);
+                                viewport_description);
   }
   if (has_invalid_separator && document) {
     String message =
@@ -304,18 +305,18 @@ float HTMLMetaElement::ParseViewportValueAsDPI(Document* document,
   return value;
 }
 
-ViewportDescription::ViewportFit HTMLMetaElement::ParseViewportFitValueAsEnum(
+blink::mojom::ViewportFit HTMLMetaElement::ParseViewportFitValueAsEnum(
     bool& unknown_value,
     const String& value_string) {
   if (DeprecatedEqualIgnoringCase(value_string, "auto"))
-    return ViewportDescription::ViewportFit::kAuto;
+    return mojom::ViewportFit::kAuto;
   if (DeprecatedEqualIgnoringCase(value_string, "contain"))
-    return ViewportDescription::ViewportFit::kContain;
+    return mojom::ViewportFit::kContain;
   if (DeprecatedEqualIgnoringCase(value_string, "cover"))
-    return ViewportDescription::ViewportFit::kCover;
+    return mojom::ViewportFit::kCover;
 
   unknown_value = true;
-  return ViewportDescription::ViewportFit::kAuto;
+  return mojom::ViewportFit::kAuto;
 }
 
 void HTMLMetaElement::ProcessViewportKeyValuePair(
@@ -324,41 +325,39 @@ void HTMLMetaElement::ProcessViewportKeyValuePair(
     const String& key_string,
     const String& value_string,
     bool viewport_meta_zero_values_quirk,
-    void* data) {
-  ViewportDescription* description = static_cast<ViewportDescription*>(data);
-
+    ViewportDescription& description) {
   if (key_string == "width") {
     const Length& width = ParseViewportValueAsLength(document, report_warnings,
                                                      key_string, value_string);
     if (!width.IsAuto()) {
-      description->min_width = Length(kExtendToZoom);
-      description->max_width = width;
+      description.min_width = Length(kExtendToZoom);
+      description.max_width = width;
     }
   } else if (key_string == "height") {
     const Length& height = ParseViewportValueAsLength(document, report_warnings,
                                                       key_string, value_string);
     if (!height.IsAuto()) {
-      description->min_height = Length(kExtendToZoom);
-      description->max_height = height;
+      description.min_height = Length(kExtendToZoom);
+      description.max_height = height;
     }
   } else if (key_string == "initial-scale") {
-    description->zoom = ParseViewportValueAsZoom(
+    description.zoom = ParseViewportValueAsZoom(
         document, report_warnings, key_string, value_string,
-        description->zoom_is_explicit, viewport_meta_zero_values_quirk);
+        description.zoom_is_explicit, viewport_meta_zero_values_quirk);
   } else if (key_string == "minimum-scale") {
-    description->min_zoom = ParseViewportValueAsZoom(
+    description.min_zoom = ParseViewportValueAsZoom(
         document, report_warnings, key_string, value_string,
-        description->min_zoom_is_explicit, viewport_meta_zero_values_quirk);
+        description.min_zoom_is_explicit, viewport_meta_zero_values_quirk);
   } else if (key_string == "maximum-scale") {
-    description->max_zoom = ParseViewportValueAsZoom(
+    description.max_zoom = ParseViewportValueAsZoom(
         document, report_warnings, key_string, value_string,
-        description->max_zoom_is_explicit, viewport_meta_zero_values_quirk);
+        description.max_zoom_is_explicit, viewport_meta_zero_values_quirk);
   } else if (key_string == "user-scalable") {
-    description->user_zoom = ParseViewportValueAsUserZoom(
+    description.user_zoom = ParseViewportValueAsUserZoom(
         document, report_warnings, key_string, value_string,
-        description->user_zoom_is_explicit);
+        description.user_zoom_is_explicit);
   } else if (key_string == "target-densitydpi") {
-    description->deprecated_target_density_dpi = ParseViewportValueAsDPI(
+    description.deprecated_target_density_dpi = ParseViewportValueAsDPI(
         document, report_warnings, key_string, value_string);
     if (report_warnings)
       ReportViewportWarning(document, kTargetDensityDpiUnsupported, String(),
@@ -366,9 +365,9 @@ void HTMLMetaElement::ProcessViewportKeyValuePair(
   } else if (key_string == "minimal-ui") {
     // Ignore vendor-specific argument.
   } else if (key_string == "viewport-fit") {
-    if (RuntimeEnabledFeatures::DisplayCutoutViewportFitEnabled()) {
+    if (RuntimeEnabledFeatures::DisplayCutoutAPIEnabled()) {
       bool unknown_value = false;
-      description->SetViewportFit(
+      description.SetViewportFit(
           ParseViewportFitValueAsEnum(unknown_value, value_string));
 
       // If we got an unknown value then report a warning.
@@ -440,7 +439,7 @@ void HTMLMetaElement::GetViewportDescriptionFromContentAttribute(
     ViewportDescription& description,
     Document* document,
     bool viewport_meta_zero_values_quirk) {
-  ParseContentAttribute(content, (void*)&description, document,
+  ParseContentAttribute(content, description, document,
                         viewport_meta_zero_values_quirk);
 
   if (description.min_zoom == ViewportDescription::kValueAuto)
@@ -457,34 +456,35 @@ void HTMLMetaElement::ProcessViewportContentAttribute(
     ViewportDescription::Type origin) {
   DCHECK(!content.IsNull());
 
-  if (!GetDocument().ShouldOverrideLegacyDescription(origin))
+  ViewportData& viewport_data = GetDocument().GetViewportData();
+  if (!viewport_data.ShouldOverrideLegacyDescription(origin))
     return;
 
   ViewportDescription description_from_legacy_tag(origin);
-  if (GetDocument().ShouldMergeWithLegacyDescription(origin))
-    description_from_legacy_tag = GetDocument().GetViewportDescription();
+  if (viewport_data.ShouldMergeWithLegacyDescription(origin))
+    description_from_legacy_tag = viewport_data.GetViewportDescription();
 
   GetViewportDescriptionFromContentAttribute(
       content, description_from_legacy_tag, &GetDocument(),
       GetDocument().GetSettings() &&
           GetDocument().GetSettings()->GetViewportMetaZeroValuesQuirk());
 
-  GetDocument().SetViewportDescription(description_from_legacy_tag);
+  viewport_data.SetViewportDescription(description_from_legacy_tag);
 }
 
 void HTMLMetaElement::ParseAttribute(
     const AttributeModificationParams& params) {
-  if (params.name == http_equivAttr || params.name == contentAttr) {
+  if (params.name == kHttpEquivAttr || params.name == kContentAttr) {
     Process();
     return;
   }
 
-  if (params.name != nameAttr)
+  if (params.name != kNameAttr)
     HTMLElement::ParseAttribute(params);
 }
 
 Node::InsertionNotificationRequest HTMLMetaElement::InsertedInto(
-    ContainerNode* insertion_point) {
+    ContainerNode& insertion_point) {
   HTMLElement::InsertedInto(insertion_point);
   return kInsertionShouldCallDidNotifySubtreeInsertions;
 }
@@ -506,11 +506,11 @@ void HTMLMetaElement::Process() {
 
   // All below situations require a content attribute (which can be the empty
   // string).
-  const AtomicString& content_value = FastGetAttribute(contentAttr);
+  const AtomicString& content_value = FastGetAttribute(kContentAttr);
   if (content_value.IsNull())
     return;
 
-  const AtomicString& name_value = FastGetAttribute(nameAttr);
+  const AtomicString& name_value = FastGetAttribute(kNameAttr);
   if (!name_value.IsEmpty()) {
     if (DeprecatedEqualIgnoringCase(name_value, "viewport"))
       ProcessViewportContentAttribute(content_value,
@@ -535,7 +535,7 @@ void HTMLMetaElement::Process() {
   // tree (changing a meta tag while it's not in the tree shouldn't have any
   // effect on the document).
 
-  const AtomicString& http_equiv_value = FastGetAttribute(http_equivAttr);
+  const AtomicString& http_equiv_value = FastGetAttribute(kHttpEquivAttr);
   if (http_equiv_value.IsEmpty())
     return;
 
@@ -552,11 +552,11 @@ WTF::TextEncoding HTMLMetaElement::ComputeEncoding() const {
 }
 
 const AtomicString& HTMLMetaElement::Content() const {
-  return getAttribute(contentAttr);
+  return getAttribute(kContentAttr);
 }
 
 const AtomicString& HTMLMetaElement::HttpEquiv() const {
-  return getAttribute(http_equivAttr);
+  return getAttribute(kHttpEquivAttr);
 }
 
 const AtomicString& HTMLMetaElement::GetName() const {

@@ -30,9 +30,6 @@ class DiagnosticsReporter {
   void BaseRequiresTracing(RecordInfo* derived,
                            clang::CXXMethodDecl* trace,
                            clang::CXXRecordDecl* base);
-  void BaseRequiresWrapperTracing(RecordInfo* derived,
-                                  clang::CXXMethodDecl* trace,
-                                  clang::CXXRecordDecl* base);
   void FieldsImproperlyTraced(RecordInfo* info,
                               clang::CXXMethodDecl* trace);
   void ClassContainsInvalidFields(
@@ -89,6 +86,10 @@ class DiagnosticsReporter {
   void OptionalUsedWithGC(const clang::Expr* expr,
                           const clang::CXXRecordDecl* optional,
                           const clang::CXXRecordDecl* gc_type);
+  void MissingMixinMarker(const clang::CXXRecordDecl* bad_class,
+                          const clang::CXXRecordDecl* mixin_class,
+                          const clang::CXXBaseSpecifier* first_base);
+  void MissingMixinMarkerNote(const clang::CXXBaseSpecifier* base);
 
  private:
   clang::DiagnosticBuilder ReportDiagnostic(
@@ -106,7 +107,6 @@ class DiagnosticsReporter {
   unsigned diag_class_must_left_mostly_derive_gc_;
   unsigned diag_class_requires_trace_method_;
   unsigned diag_base_requires_tracing_;
-  unsigned diag_base_requires_wrapper_tracing_;
   unsigned diag_fields_require_tracing_;
   unsigned diag_fields_improperly_traced_;
   unsigned diag_class_contains_invalid_fields_;
@@ -154,6 +154,8 @@ class DiagnosticsReporter {
 
   unsigned diag_unique_ptr_used_with_gc_;
   unsigned diag_optional_used_with_gc_;
+  unsigned diag_missing_mixin_marker_;
+  unsigned diag_missing_mixin_marker_note_;
 };
 
 #endif // TOOLS_BLINK_GC_PLUGIN_DIAGNOSTICS_REPORTER_H_

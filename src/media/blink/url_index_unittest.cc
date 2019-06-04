@@ -8,7 +8,11 @@
 #include <string>
 
 #include "base/logging.h"
+#include "base/run_loop.h"
+#include "base/strings/string_number_conversions.h"
 #include "base/strings/stringprintf.h"
+#include "base/test/scoped_feature_list.h"
+#include "media/base/media_switches.h"
 #include "media/blink/url_index.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -19,11 +23,20 @@ class UrlIndexTest : public testing::Test {
   UrlIndexTest() : url_index_(nullptr) {}
 
   scoped_refptr<UrlData> GetByUrl(const GURL& gurl,
-                                  UrlData::CORSMode cors_mode) {
+                                  UrlData::CorsMode cors_mode) {
     scoped_refptr<UrlData> ret = url_index_.GetByUrl(gurl, cors_mode);
     EXPECT_EQ(ret->url(), gurl);
     EXPECT_EQ(ret->cors_mode(), cors_mode);
     return ret;
+  }
+
+  void AddToLoadQueue(UrlData* url_data, base::OnceClosure cb) {
+    url_data->waiting_load_callbacks_.emplace_back(std::move(cb));
+    url_index_.loading_queue_.push_back(url_data);
+  }
+
+  void AddToLoading(UrlData* url_data) {
+    url_index_.loading_.insert(url_data);
   }
 
   UrlIndex url_index_;
@@ -151,6 +164,32 @@ TEST_F(UrlIndexTest, TryInsert) {
   // B is still valid, so it should be preferred over C.
   EXPECT_EQ(b, url_index_.TryInsert(c));
   EXPECT_EQ(b, GetByUrl(url, UrlData::CORS_UNSPECIFIED));
+}
+
+namespace {
+void SetBoolWhenCalled(bool* b) {
+  *b = true;
+}
+};  // namespace
+
+TEST_F(UrlIndexTest, SetLoadingState) {
+  bool called = false;
+  GURL url_a("http://foo.bar.com");
+  scoped_refptr<UrlData> a = GetByUrl(url_a, UrlData::CORS_UNSPECIFIED);
+  AddToLoadQueue(a.get(), base::BindOnce(&SetBoolWhenCalled, &called));
+  UrlData::UrlDataWithLoadingState url_data_with_loading_state;
+  url_data_with_loading_state.SetUrlData(a);
+  base::RunLoop().RunUntilIdle();
+  EXPECT_FALSE(called);
+  url_data_with_loading_state.SetLoadingState(
+      UrlData::UrlDataWithLoadingState::LoadingState::kPreload);
+  AddToLoading(a.get());
+  base::RunLoop().RunUntilIdle();
+  EXPECT_FALSE(called);
+  url_data_with_loading_state.SetLoadingState(
+      UrlData::UrlDataWithLoadingState::LoadingState::kHasPlayed);
+  base::RunLoop().RunUntilIdle();
+  EXPECT_TRUE(called);
 }
 
 }  // namespace media

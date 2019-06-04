@@ -9,6 +9,8 @@
 #
 # To run this test suite, use ./tracing/bin/run_symbolizer_tests
 
+from __future__ import print_function
+
 import json
 import os
 import shutil
@@ -30,12 +32,11 @@ _PY_UTILS_PATH = os.path.abspath(os.path.join(
     'common',
     'py_utils'))
 sys.path.append(_PY_UTILS_PATH)
-# pylint: disable=import-error
-import py_utils.cloud_storage as cloud_storage
+import py_utils.cloud_storage as cloud_storage  # pylint: disable=wrong-import-position
 
 
 def _DownloadFromCloudStorage(path):
-  print 'Downloading %s from gcs.' % (path)
+  print('Downloading %s from gcs.' % (path))
   cloud_storage.GetIfChanged(path, cloud_storage.PARTNER_BUCKET)
 
 

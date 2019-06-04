@@ -9,7 +9,6 @@
 #include <string.h>
 #include <threads.h>
 #include <unwind.h>
-#include <zircon/crashlogger.h>
 #include <zircon/process.h>
 #include <zircon/syscalls.h>
 #include <zircon/syscalls/definitions.h>
@@ -17,6 +16,7 @@
 #include <zircon/types.h>
 
 #include <algorithm>
+#include <array>
 #include <iomanip>
 #include <iostream>
 
@@ -70,7 +70,7 @@ class SymbolMap {
   void Populate();
 
   // Sorted in descending order by address, for lookup purposes.
-  Entry entries_[kMaxMapEntries];
+  std::array<Entry, kMaxMapEntries> entries_;
 
   size_t count_ = 0;
   bool valid_ = false;
@@ -136,7 +136,7 @@ void SymbolMap::Populate() {
 
   // Copy the contents of the link map linked list to |entries_|.
   while (lmap != nullptr) {
-    if (count_ >= arraysize(entries_)) {
+    if (count_ >= entries_.size()) {
       break;
     }
     SymbolMap::Entry* next_entry = &entries_[count_];
@@ -149,8 +149,8 @@ void SymbolMap::Populate() {
   }
 
   std::sort(
-      &entries_[0], &entries_[count_ - 1],
-      [](const Entry& a, const Entry& b) -> bool { return a.addr >= b.addr; });
+      entries_.begin(), entries_.begin() + count_,
+      [](const Entry& a, const Entry& b) -> bool { return a.addr > b.addr; });
 
   valid_ = true;
 }
@@ -173,8 +173,8 @@ StackTrace::StackTrace(size_t count) : count_(0) {
   _Unwind_Backtrace(&UnwindStore, &data);
 }
 
-void StackTrace::Print() const {
-  OutputToStream(&std::cerr);
+void StackTrace::PrintWithPrefix(const char* prefix_string) const {
+  OutputToStreamWithPrefix(&std::cerr, prefix_string);
 }
 
 // Sample stack trace output is designed to be similar to Fuchsia's crashlogger:
@@ -185,12 +185,15 @@ void StackTrace::Print() const {
 // bt#21: pc 0x1527a05b51b4 (app:/system/base_unittests,0x18e81b4)
 // bt#22: pc 0x54fdbf3593de (libc.so,0x1c3de)
 // bt#23: end
-void StackTrace::OutputToStream(std::ostream* os) const {
+void StackTrace::OutputToStreamWithPrefix(std::ostream* os,
+                                          const char* prefix_string) const {
   SymbolMap map;
 
   size_t i = 0;
   for (; (i < count_) && os->good(); ++i) {
     SymbolMap::Entry* entry = map.GetForAddress(trace_[i]);
+    if (prefix_string)
+      *os << prefix_string;
     if (entry) {
       size_t offset = reinterpret_cast<uintptr_t>(trace_[i]) -
                       reinterpret_cast<uintptr_t>(entry->addr);

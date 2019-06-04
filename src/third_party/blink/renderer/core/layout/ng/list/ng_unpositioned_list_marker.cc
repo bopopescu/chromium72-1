@@ -8,8 +8,8 @@
 #include "third_party/blink/renderer/core/layout/ng/inline/ng_physical_line_box_fragment.h"
 #include "third_party/blink/renderer/core/layout/ng/list/layout_ng_list_marker.h"
 #include "third_party/blink/renderer/core/layout/ng/ng_box_fragment.h"
+#include "third_party/blink/renderer/core/layout/ng/ng_box_fragment_builder.h"
 #include "third_party/blink/renderer/core/layout/ng/ng_constraint_space.h"
-#include "third_party/blink/renderer/core/layout/ng/ng_fragment_builder.h"
 #include "third_party/blink/renderer/core/layout/ng/ng_layout_result.h"
 
 namespace blink {
@@ -18,7 +18,7 @@ NGUnpositionedListMarker::NGUnpositionedListMarker(LayoutNGListMarker* marker)
     : marker_layout_object_(marker) {}
 
 NGUnpositionedListMarker::NGUnpositionedListMarker(const NGBlockNode& node)
-    : NGUnpositionedListMarker(ToLayoutNGListMarker(node.GetLayoutObject())) {}
+    : NGUnpositionedListMarker(ToLayoutNGListMarker(node.GetLayoutBox())) {}
 
 // Returns true if this is an image marker.
 bool NGUnpositionedListMarker::IsImage() const {
@@ -39,13 +39,14 @@ LayoutUnit NGUnpositionedListMarker::InlineOffset(
 }
 
 scoped_refptr<NGLayoutResult> NGUnpositionedListMarker::Layout(
-    const NGConstraintSpace& space,
+    const NGConstraintSpace& parent_space,
+    const ComputedStyle& parent_style,
     FontBaseline baseline_type) const {
   DCHECK(marker_layout_object_);
   NGBlockNode marker_node(marker_layout_object_);
   scoped_refptr<NGLayoutResult> marker_layout_result =
-      marker_node.LayoutAtomicInline(space, baseline_type,
-                                     space.UseFirstLineStyle());
+      marker_node.LayoutAtomicInline(parent_space, parent_style, baseline_type,
+                                     parent_space.UseFirstLineStyle());
   DCHECK(marker_layout_result && marker_layout_result->PhysicalFragment());
   return marker_layout_result;
 }
@@ -55,7 +56,8 @@ bool NGUnpositionedListMarker::AddToBox(
     FontBaseline baseline_type,
     const NGPhysicalFragment& content,
     NGLogicalOffset* content_offset,
-    NGFragmentBuilder* container_builder) const {
+    NGBoxFragmentBuilder* container_builder,
+    const NGBoxStrut& border_scrollbar_padding) const {
   // Baselines from two different writing-mode cannot be aligned.
   if (UNLIKELY(space.GetWritingMode() != content.Style().GetWritingMode()))
     return false;
@@ -63,9 +65,18 @@ bool NGUnpositionedListMarker::AddToBox(
   // Compute the baseline of the child content.
   NGLineHeightMetrics content_metrics;
   if (content.IsLineBox()) {
-    content_metrics = ToNGPhysicalLineBoxFragment(content).Metrics();
+    const NGPhysicalLineBoxFragment& line_box =
+        ToNGPhysicalLineBoxFragment(content);
+
+    // If this child is an empty line-box, the list marker should be aligned
+    // with the next non-empty line box produced. (This can occur with floats
+    // producing empty line-boxes).
+    if (line_box.IsEmptyLineBox() && !line_box.BreakToken()->IsFinished())
+      return false;
+
+    content_metrics = line_box.Metrics();
   } else {
-    NGBoxFragment content_fragment(space.GetWritingMode(),
+    NGBoxFragment content_fragment(space.GetWritingMode(), space.Direction(),
                                    ToNGPhysicalBoxFragment(content));
     content_metrics = content_fragment.BaselineMetricsWithoutSynthesize(
         {NGBaselineAlgorithmType::kFirstLine, baseline_type});
@@ -79,17 +90,17 @@ bool NGUnpositionedListMarker::AddToBox(
 
   // Layout the list marker.
   scoped_refptr<NGLayoutResult> marker_layout_result =
-      Layout(space, baseline_type);
+      Layout(space, container_builder->Style(), baseline_type);
   DCHECK(marker_layout_result && marker_layout_result->PhysicalFragment());
   const NGPhysicalBoxFragment& marker_physical_fragment =
       ToNGPhysicalBoxFragment(*marker_layout_result->PhysicalFragment());
 
   // Compute the inline offset of the marker.
-  NGBoxFragment marker_fragment(space.GetWritingMode(),
+  NGBoxFragment marker_fragment(space.GetWritingMode(), space.Direction(),
                                 marker_physical_fragment);
-  NGLogicalSize maker_size = marker_fragment.Size();
-  NGLogicalOffset marker_offset(InlineOffset(maker_size.inline_size),
-                                content_offset->block_offset);
+  NGLogicalOffset marker_offset(
+      InlineOffset(marker_fragment.Size().inline_size),
+      content_offset->block_offset);
 
   // Adjust the block offset to align baselines of the marker and the content.
   NGLineHeightMetrics marker_metrics = marker_fragment.BaselineMetrics(
@@ -102,9 +113,12 @@ bool NGUnpositionedListMarker::AddToBox(
     // push the content down.
     content_offset->block_offset -= baseline_adjust;
   }
+  marker_offset.inline_offset += ComputeIntrudedFloatOffset(
+      space, container_builder, border_scrollbar_padding,
+      marker_offset.block_offset);
 
   DCHECK(container_builder);
-  container_builder->AddChild(std::move(marker_layout_result), marker_offset);
+  container_builder->AddChild(*marker_layout_result, marker_offset);
 
   return true;
 }
@@ -112,10 +126,10 @@ bool NGUnpositionedListMarker::AddToBox(
 LayoutUnit NGUnpositionedListMarker::AddToBoxWithoutLineBoxes(
     const NGConstraintSpace& space,
     FontBaseline baseline_type,
-    NGFragmentBuilder* container_builder) const {
+    NGBoxFragmentBuilder* container_builder) const {
   // Layout the list marker.
   scoped_refptr<NGLayoutResult> marker_layout_result =
-      Layout(space, baseline_type);
+      Layout(space, container_builder->Style(), baseline_type);
   DCHECK(marker_layout_result && marker_layout_result->PhysicalFragment());
   const NGPhysicalBoxFragment& marker_physical_fragment =
       ToNGPhysicalBoxFragment(*marker_layout_result->PhysicalFragment());
@@ -127,9 +141,45 @@ LayoutUnit NGUnpositionedListMarker::AddToBoxWithoutLineBoxes(
   NGLogicalOffset offset(InlineOffset(marker_size.inline_size), LayoutUnit());
 
   DCHECK(container_builder);
-  container_builder->AddChild(std::move(marker_layout_result), offset);
+  container_builder->AddChild(*marker_layout_result, offset);
 
   return marker_size.block_size;
+}
+
+// Find the opportunity for marker, and compare it to ListItem, then compute the
+// diff as intruded offset.
+LayoutUnit NGUnpositionedListMarker::ComputeIntrudedFloatOffset(
+    const NGConstraintSpace& space,
+    const NGBoxFragmentBuilder* container_builder,
+    const NGBoxStrut& border_scrollbar_padding,
+    LayoutUnit marker_block_offset) const {
+  DCHECK(container_builder);
+  // Because opportunity.rect is in the content area of LI, so origin_offset
+  // should plus border_scrollbar_padding.inline_start, and available_size
+  // should minus border_scrollbar_padding.
+  NGBfcOffset origin_offset = {
+      container_builder->BfcLineOffset() +
+          border_scrollbar_padding.inline_start,
+      container_builder->BfcBlockOffset().value() + marker_block_offset};
+  LayoutUnit available_size = container_builder->InlineSize() -
+                              border_scrollbar_padding.inline_start -
+                              border_scrollbar_padding.inline_end;
+  NGLayoutOpportunity opportunity =
+      space.ExclusionSpace().FindLayoutOpportunity(
+          origin_offset, available_size, NGLogicalSize());
+  DCHECK(marker_layout_object_);
+  const TextDirection direction = marker_layout_object_->StyleRef().Direction();
+  if (direction == TextDirection::kLtr) {
+    // If Ltr, compare the left side.
+    if (opportunity.rect.LineStartOffset() > origin_offset.line_offset)
+      return opportunity.rect.LineStartOffset() - origin_offset.line_offset;
+  } else if (opportunity.rect.LineEndOffset() <
+             origin_offset.line_offset + available_size) {
+    // If Rtl, Compare the right side.
+    return origin_offset.line_offset + available_size -
+           opportunity.rect.LineEndOffset();
+  }
+  return LayoutUnit(0);
 }
 
 }  // namespace blink

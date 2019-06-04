@@ -114,6 +114,19 @@ class Executive(object):
         # According to http://docs.python.org/library/os.html
         # os.kill isn't available on Windows.
         if sys.platform == 'win32':
+            # Workaround for race condition that occurs when the browser is
+            # killed as it's launching a process. This sometimes leaves a child
+            # process that is in a suspended state.
+            # Follow the Win32 API naming style. pylint: disable=invalid-name
+            OpenProcess = ctypes.windll.kernel32.OpenProcess
+            CloseHandle = ctypes.windll.kernel32.CloseHandle
+            NtSuspendProcess = ctypes.windll.ntdll.NtSuspendProcess
+            PROCESS_ALL_ACCESS = 0x1F0FFF
+            process_handle = OpenProcess(PROCESS_ALL_ACCESS, False, pid)
+            if process_handle != 0:
+                NtSuspendProcess(process_handle)
+                CloseHandle(process_handle)
+
             command = ['taskkill.exe', '/f', '/t', '/pid', pid]
             # taskkill will exit 128 if the process is not found. We should log.
             self.run_command(command, error_handler=self.ignore_error)
@@ -356,7 +369,12 @@ class Executive(object):
         if sys.platform == 'win32' and sys.version < '3':
             return True
 
-        return False
+        # On other (POSIX) platforms, we need to encode arguments if the system
+        # does not use UTF-8 encoding. Otherwise, subprocess.Popen will raise
+        # TypeError. Note that macOS always uses UTF-8, while on UNIX it
+        # depends on user locale (LC_CTYPE) and sys.getfilesystemencoding() may
+        # fail and return None.
+        return (sys.getfilesystemencoding() or '').lower() != 'utf-8'
 
     def _encode_argument_if_needed(self, argument):
         if not self._should_encode_child_process_arguments():

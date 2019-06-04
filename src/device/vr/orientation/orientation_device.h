@@ -42,11 +42,14 @@ class DEVICE_VR_EXPORT VROrientationDevice : public VRDeviceBase,
                       base::OnceClosure ready_callback);
   ~VROrientationDevice() override;
 
-  // VRDeviceBase
-  void OnMagicWindowPoseRequest(
-      mojom::VRMagicWindowProvider::GetPoseCallback callback) override;
+  // VRDevice
+  void RequestSession(
+      mojom::XRRuntimeSessionOptionsPtr options,
+      mojom::XRRuntime::RequestSessionCallback callback) override;
 
-  bool IsFallbackDevice() override;
+  // VRDeviceBase
+  void OnGetInlineFrameData(
+      mojom::XRFrameDataProvider::GetFrameDataCallback callback) override;
 
   // Indicates whether the device was able to connect to orientation events.
   bool IsAvailable() const { return available_; }

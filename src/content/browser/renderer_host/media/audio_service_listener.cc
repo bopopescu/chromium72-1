@@ -6,12 +6,14 @@
 
 #include <utility>
 
+#include "base/feature_list.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/time/default_tick_clock.h"
-#include "content/public/browser/child_process_data.h"
-#include "content/public/browser/child_process_termination_info.h"
+#include "content/browser/media/audio_log_factory.h"
+#include "content/public/common/content_features.h"
 #include "mojo/public/cpp/bindings/strong_binding.h"
 #include "services/audio/public/mojom/constants.mojom.h"
+#include "services/audio/public/mojom/log_factory_manager.mojom.h"
 
 namespace content {
 
@@ -20,10 +22,12 @@ AudioServiceListener::Metrics::Metrics(const base::TickClock* clock)
 
 AudioServiceListener::Metrics::~Metrics() = default;
 
-void AudioServiceListener::Metrics::ServiceAlreadyRunning() {
+void AudioServiceListener::Metrics::ServiceAlreadyRunning(
+    service_manager::mojom::InstanceState state) {
   LogServiceStartStatus(ServiceStartStatus::kAlreadyStarted);
-  started_ = clock_->NowTicks();
   initial_downtime_start_ = base::TimeTicks();
+  if (state == service_manager::mojom::InstanceState::kStarted)
+    started_ = clock_->NowTicks();
 }
 
 void AudioServiceListener::Metrics::ServiceCreated() {
@@ -71,13 +75,9 @@ void AudioServiceListener::Metrics::ServiceStopped() {
   UMA_HISTOGRAM_CUSTOM_TIMES("Media.AudioService.ObservedUptime",
                              stopped_ - started_, base::TimeDelta(),
                              base::TimeDelta::FromDays(7), 50);
-  started_ = base::TimeTicks();
-}
 
-void AudioServiceListener::Metrics::ServiceProcessTerminated(
-    Metrics::ServiceProcessTerminationStatus status) {
-  UMA_HISTOGRAM_ENUMERATION(
-      "Media.AudioService.ObservedProcessTerminationStatus", status);
+  created_ = base::TimeTicks();
+  started_ = base::TimeTicks();
 }
 
 void AudioServiceListener::Metrics::LogServiceStartStatus(
@@ -88,25 +88,24 @@ void AudioServiceListener::Metrics::LogServiceStartStatus(
 AudioServiceListener::AudioServiceListener(
     std::unique_ptr<service_manager::Connector> connector)
     : binding_(this),
+      connector_(std::move(connector)),
       metrics_(base::DefaultTickClock::GetInstance()) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(owning_sequence_);
-  if (!connector)
+  if (!connector_)
     return;  // Happens in unittests.
 
   service_manager::mojom::ServiceManagerPtr service_manager;
-  connector->BindInterface(service_manager::mojom::kServiceName,
-                           &service_manager);
+  connector_->BindInterface(service_manager::mojom::kServiceName,
+                            &service_manager);
   service_manager::mojom::ServiceManagerListenerPtr listener;
   service_manager::mojom::ServiceManagerListenerRequest request(
       mojo::MakeRequest(&listener));
   service_manager->AddListener(std::move(listener));
   binding_.Bind(std::move(request));
-  BrowserChildProcessObserver::Add(this);
 }
 
 AudioServiceListener::~AudioServiceListener() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(owning_sequence_);
-  BrowserChildProcessObserver::Remove(this);
 }
 
 base::ProcessId AudioServiceListener::GetProcessId() const {
@@ -120,9 +119,17 @@ void AudioServiceListener::OnInit(
   DCHECK_CALLED_ON_VALID_SEQUENCE(owning_sequence_);
   for (const service_manager::mojom::RunningServiceInfoPtr& instance :
        running_services) {
-    if (instance->identity.name() == audio::mojom::kServiceName) {
+    if (instance->identity.name() == audio::mojom::kServiceName &&
+        instance->state !=
+            service_manager::mojom::InstanceState::kUnreachable) {
+      current_instance_identity_ = instance->identity;
+      current_instance_state_ = instance->state;
+      metrics_.ServiceAlreadyRunning(instance->state);
+      MaybeSetLogFactory();
+
+      // NOTE: This may not actually be a valid PID yet. If not, we will
+      // receive OnServicePIDReceived soon.
       process_id_ = instance->pid;
-      metrics_.ServiceAlreadyRunning();
       break;
     }
   }
@@ -133,7 +140,26 @@ void AudioServiceListener::OnServiceCreated(
   DCHECK_CALLED_ON_VALID_SEQUENCE(owning_sequence_);
   if (service->identity.name() != audio::mojom::kServiceName)
     return;
+
+  if (current_instance_identity_) {
+    // If we were already tracking an instance of the service, it must be dying
+    // soon. We'll start tracking the new instance instead now, so simulate
+    // stoppage of the old one.
+    DCHECK(service->identity != current_instance_identity_);
+    if (current_instance_state_ ==
+        service_manager::mojom::InstanceState::kCreated) {
+      OnServiceFailedToStart(*current_instance_identity_);
+    } else {
+      DCHECK_EQ(service_manager::mojom::InstanceState::kStarted,
+                *current_instance_state_);
+      OnServiceStopped(*current_instance_identity_);
+    }
+  }
+
+  current_instance_identity_ = service->identity;
+  current_instance_state_ = service_manager::mojom::InstanceState::kCreated;
   metrics_.ServiceCreated();
+  MaybeSetLogFactory();
 }
 
 void AudioServiceListener::OnServiceStarted(
@@ -142,7 +168,11 @@ void AudioServiceListener::OnServiceStarted(
   DCHECK_CALLED_ON_VALID_SEQUENCE(owning_sequence_);
   if (identity.name() != audio::mojom::kServiceName)
     return;
-  process_id_ = pid;
+
+  DCHECK(identity == current_instance_identity_);
+  DCHECK(current_instance_state_ ==
+         service_manager::mojom::InstanceState::kCreated);
+  current_instance_state_ = service_manager::mojom::InstanceState::kStarted;
   metrics_.ServiceStarted();
 }
 
@@ -150,57 +180,53 @@ void AudioServiceListener::OnServicePIDReceived(
     const ::service_manager::Identity& identity,
     uint32_t pid) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(owning_sequence_);
-  if (identity.name() != audio::mojom::kServiceName)
+  if (identity != current_instance_identity_)
     return;
+
   process_id_ = pid;
 }
 
 void AudioServiceListener::OnServiceFailedToStart(
     const ::service_manager::Identity& identity) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(owning_sequence_);
-  if (identity.name() != audio::mojom::kServiceName)
+  if (identity != current_instance_identity_)
     return;
+
   metrics_.ServiceFailedToStart();
+  current_instance_identity_.reset();
+  current_instance_state_.reset();
+  process_id_ = base::kNullProcessId;
+  log_factory_is_set_ = false;
 }
 
 void AudioServiceListener::OnServiceStopped(
     const ::service_manager::Identity& identity) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(owning_sequence_);
-  if (identity.name() != audio::mojom::kServiceName)
+  if (identity != current_instance_identity_)
     return;
+
   metrics_.ServiceStopped();
+  current_instance_identity_.reset();
+  current_instance_state_.reset();
+  process_id_ = base::kNullProcessId;
+  log_factory_is_set_ = false;
 }
 
-void AudioServiceListener::BrowserChildProcessHostDisconnected(
-    const ChildProcessData& data) {
+void AudioServiceListener::MaybeSetLogFactory() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(owning_sequence_);
-  if (base::GetProcId(data.handle) != process_id_)
+  DCHECK(current_instance_identity_);
+  if (!base::FeatureList::IsEnabled(features::kAudioServiceOutOfProcess) ||
+      !connector_ || log_factory_is_set_)
     return;
-  process_id_ = base::kNullProcessId;
-  metrics_.ServiceProcessTerminated(
-      Metrics::ServiceProcessTerminationStatus::kDisconnect);
-}
 
-void AudioServiceListener::BrowserChildProcessCrashed(
-    const ChildProcessData& data,
-    const ChildProcessTerminationInfo& info) {
-  DCHECK_CALLED_ON_VALID_SEQUENCE(owning_sequence_);
-  if (base::GetProcId(data.handle) != process_id_)
-    return;
-  process_id_ = base::kNullProcessId;
-  metrics_.ServiceProcessTerminated(
-      Metrics::ServiceProcessTerminationStatus::kCrash);
-}
-
-void AudioServiceListener::BrowserChildProcessKilled(
-    const ChildProcessData& data,
-    const ChildProcessTerminationInfo& info) {
-  DCHECK_CALLED_ON_VALID_SEQUENCE(owning_sequence_);
-  if (base::GetProcId(data.handle) != process_id_)
-    return;
-  process_id_ = base::kNullProcessId;
-  metrics_.ServiceProcessTerminated(
-      Metrics::ServiceProcessTerminationStatus::kKill);
+  media::mojom::AudioLogFactoryPtr audio_log_factory_ptr;
+  mojo::MakeStrongBinding(std::make_unique<AudioLogFactory>(),
+                          mojo::MakeRequest(&audio_log_factory_ptr));
+  audio::mojom::LogFactoryManagerPtr log_factory_manager_ptr;
+  connector_->BindInterface(*current_instance_identity_,
+                            mojo::MakeRequest(&log_factory_manager_ptr));
+  log_factory_manager_ptr->SetLogFactory(std::move(audio_log_factory_ptr));
+  log_factory_is_set_ = true;
 }
 
 }  // namespace content

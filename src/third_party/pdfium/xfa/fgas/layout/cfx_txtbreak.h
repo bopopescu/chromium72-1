@@ -8,16 +8,15 @@
 #define XFA_FGAS_LAYOUT_CFX_TXTBREAK_H_
 
 #include <deque>
-#include <memory>
 #include <vector>
 
 #include "core/fxcrt/cfx_char.h"
-#include "core/fxge/cfx_renderdevice.h"
-#include "third_party/base/stl_util.h"
+#include "core/fxcrt/fx_coordinates.h"
 #include "xfa/fgas/layout/cfx_break.h"
 
 class CFDE_TextEditEngine;
 class CFGAS_GEFont;
+class FXTEXT_CHARPOS;
 struct FDE_TEXTEDITPIECE;
 
 #define FX_TXTCHARSTYLE_ArabicShadda 0x0020
@@ -54,7 +53,7 @@ struct FX_TXTRUN {
   bool bSkipSpace;
 };
 
-class CFX_TxtBreak : public CFX_Break {
+class CFX_TxtBreak final : public CFX_Break {
  public:
   CFX_TxtBreak();
   ~CFX_TxtBreak() override;

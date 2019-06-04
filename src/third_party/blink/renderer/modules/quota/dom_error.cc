@@ -27,6 +27,17 @@
 
 namespace blink {
 
+// static
+DOMError* DOMError::Create(mojom::QuotaStatusCode status_code) {
+  ExceptionCode exception_code = static_cast<ExceptionCode>(status_code);
+  if (IsDOMExceptionCode(exception_code)) {
+    DOMExceptionCode code = static_cast<DOMExceptionCode>(exception_code);
+    return MakeGarbageCollected<DOMError>(DOMException::GetErrorName(code),
+                                          DOMException::GetErrorMessage(code));
+  }
+  return MakeGarbageCollected<DOMError>("UnknownError", "Unknown error.");
+}
+
 DOMError::~DOMError() = default;
 
 DOMError::DOMError(const String& name) : name_(name) {}

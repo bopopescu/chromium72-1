@@ -68,6 +68,21 @@ TEST_F(EntryTest, Instance) {
   EXPECT_EQ("", entry->sandbox_type());
 }
 
+TEST_F(EntryTest, Options) {
+  std::unique_ptr<Entry> entry = ReadEntry("options", nullptr);
+  EXPECT_EQ("foo", entry->name());
+  EXPECT_EQ("Foo", entry->display_name());
+
+  EXPECT_EQ(ServiceOptions::InstanceSharingType::SINGLETON,
+            entry->options().instance_sharing);
+  EXPECT_TRUE(entry->options().can_connect_to_instances_in_any_group);
+  EXPECT_TRUE(
+      entry->options().can_connect_to_other_services_with_any_instance_name);
+  EXPECT_TRUE(entry->options().can_create_other_service_instances);
+
+  EXPECT_EQ("", entry->sandbox_type());
+}
+
 TEST_F(EntryTest, ConnectionSpec) {
   std::unique_ptr<Entry> entry = ReadEntry("connection_spec", nullptr);
 

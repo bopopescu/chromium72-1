@@ -31,12 +31,12 @@
 #include "third_party/blink/renderer/platform/graphics/logging_canvas.h"
 
 #include <unicode/unistr.h>
+#include "base/sys_byteorder.h"
 #include "build/build_config.h"
 #include "third_party/blink/renderer/platform/geometry/int_size.h"
 #include "third_party/blink/renderer/platform/graphics/skia/image_pixel_locker.h"
 #include "third_party/blink/renderer/platform/graphics/skia/skia_utils.h"
 #include "third_party/blink/renderer/platform/image-encoders/image_encoder.h"
-#include "third_party/blink/renderer/platform/wtf/byte_swap.h"
 #include "third_party/blink/renderer/platform/wtf/hex_number.h"
 #include "third_party/blink/renderer/platform/wtf/text/base64.h"
 #include "third_party/blink/renderer/platform/wtf/text/text_encoding.h"
@@ -53,6 +53,8 @@ namespace {
 
 struct VerbParams {
   STACK_ALLOCATED();
+
+ public:
   String name;
   unsigned point_count;
   unsigned point_offset;
@@ -273,7 +275,6 @@ std::unique_ptr<JSONObject> ObjectForBitmapData(const SkBitmap& bitmap) {
   SkPngEncoder::Options options;
   options.fFilterFlags = SkPngEncoder::FilterFlag::kSub;
   options.fZLibLevel = 3;
-  options.fUnpremulBehavior = SkTransferFunctionBehavior::kIgnore;
   if (!ImageEncoder::Encode(&output, src, options)) {
     return nullptr;
   }
@@ -348,12 +349,10 @@ String StringForSkPaintFlags(const SkPaint& paint) {
   AppendFlagToString(&flags_string, paint.isFakeBoldText(), "FakeBoldText");
   AppendFlagToString(&flags_string, paint.isLinearText(), "LinearText");
   AppendFlagToString(&flags_string, paint.isSubpixelText(), "SubpixelText");
-  AppendFlagToString(&flags_string, paint.isDevKernText(), "DevKernText");
   AppendFlagToString(&flags_string, paint.isLCDRenderText(), "LCDRenderText");
   AppendFlagToString(&flags_string, paint.isEmbeddedBitmapText(),
                      "EmbeddedBitmapText");
   AppendFlagToString(&flags_string, paint.isAutohinted(), "Autohinted");
-  AppendFlagToString(&flags_string, paint.isVerticalText(), "VerticalText");
   return flags_string;
 }
 
@@ -367,20 +366,6 @@ String FilterQualityName(SkFilterQuality filter_quality) {
       return "Medium";
     case kHigh_SkFilterQuality:
       return "High";
-    default:
-      NOTREACHED();
-      return "?";
-  };
-}
-
-String TextAlignName(SkPaint::Align align) {
-  switch (align) {
-    case SkPaint::kLeft_Align:
-      return "Left";
-    case SkPaint::kCenter_Align:
-      return "Center";
-    case SkPaint::kRight_Align:
-      return "Right";
     default:
       NOTREACHED();
       return "?";
@@ -445,15 +430,15 @@ String TextEncodingName(SkPaint::TextEncoding encoding) {
   };
 }
 
-String HintingName(SkPaint::Hinting hinting) {
+String HintingName(SkFontHinting hinting) {
   switch (hinting) {
-    case SkPaint::kNo_Hinting:
+    case SkFontHinting::kNone:
       return "None";
-    case SkPaint::kSlight_Hinting:
+    case SkFontHinting::kSlight:
       return "Slight";
-    case SkPaint::kNormal_Hinting:
+    case SkFontHinting::kNormal:
       return "Normal";
-    case SkPaint::kFull_Hinting:
+    case SkFontHinting::kFull:
       return "Full";
     default:
       NOTREACHED();
@@ -474,7 +459,6 @@ std::unique_ptr<JSONObject> ObjectForSkPaint(const SkPaint& paint) {
   paint_item->SetString("flags", StringForSkPaintFlags(paint));
   paint_item->SetString("filterLevel",
                         FilterQualityName(paint.getFilterQuality()));
-  paint_item->SetString("textAlign", TextAlignName(paint.getTextAlign()));
   paint_item->SetString("strokeCap", StrokeCapName(paint.getStrokeCap()));
   paint_item->SetString("strokeJoin", StrokeJoinName(paint.getStrokeJoin()));
   paint_item->SetString("styleName", StyleName(paint.getStyle()));
@@ -520,8 +504,9 @@ String StringForUTF32LEText(const void* text, size_t byte_length) {
   // Swap LE to BE
   size_t char_length = length / sizeof(UChar32);
   WTF::Vector<UChar32> utf32be(char_length);
+  const UChar32* utf32le = static_cast<const UChar32*>(text);
   for (size_t i = 0; i < char_length; ++i)
-    utf32be[i] = WTF::Bswap32(static_cast<UChar32*>(text)[i]);
+    utf32be[i] = base::ByteSwap(utf32le[i]);
   utf16 = icu::UnicodeString::fromUTF32(utf32be.data(),
                                         static_cast<int32_t>(byte_length));
 #else
@@ -592,7 +577,7 @@ JSONObject* AutoLogger::LogItemWithParams(const String& name) {
 }
 
 LoggingCanvas::LoggingCanvas()
-    : InterceptingCanvasBase(0, 0), log_(JSONArray::Create()) {}
+    : InterceptingCanvasBase(999999, 999999), log_(JSONArray::Create()) {}
 
 void LoggingCanvas::onDrawPaint(const SkPaint& paint) {
   AutoLogger logger(this);
@@ -780,21 +765,6 @@ void LoggingCanvas::onDrawPosTextH(const void* text,
   params->SetDouble("constY", const_y);
   params->SetObject("paint", ObjectForSkPaint(paint));
   this->SkCanvas::onDrawPosTextH(text, byte_length, xpos, const_y, paint);
-}
-
-void LoggingCanvas::onDrawTextOnPath(const void* text,
-                                     size_t byte_length,
-                                     const SkPath& path,
-                                     const SkMatrix* matrix,
-                                     const SkPaint& paint) {
-  AutoLogger logger(this);
-  JSONObject* params = logger.LogItemWithParams("drawTextOnPath");
-  params->SetString("text", StringForText(text, byte_length, paint));
-  params->SetObject("path", ObjectForSkPath(path));
-  if (matrix)
-    params->SetArray("matrix", ArrayForSkMatrix(*matrix));
-  params->SetObject("paint", ObjectForSkPaint(paint));
-  this->SkCanvas::onDrawTextOnPath(text, byte_length, path, matrix, paint);
 }
 
 void LoggingCanvas::onDrawTextBlob(const SkTextBlob* blob,

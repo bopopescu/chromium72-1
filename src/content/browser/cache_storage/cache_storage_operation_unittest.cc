@@ -8,7 +8,7 @@
 #include "base/callback.h"
 #include "base/memory/ref_counted.h"
 #include "base/run_loop.h"
-#include "base/test/histogram_tester.h"
+#include "base/test/metrics/histogram_tester.h"
 #include "base/test/test_mock_time_task_runner.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -39,7 +39,8 @@ class CacheStorageOperationTest : public testing::Test {
       : mock_task_runner_(new base::TestMockTimeTaskRunner()) {
     operation_ = std::make_unique<CacheStorageOperation>(
         base::BindOnce(&TestTask::Run, base::Unretained(&task_)),
-        CacheStorageSchedulerClient::CLIENT_STORAGE, mock_task_runner_);
+        CacheStorageSchedulerClient::kStorage, CacheStorageSchedulerOp::kTest,
+        mock_task_runner_);
   }
 
   base::HistogramTester histogram_tester_;

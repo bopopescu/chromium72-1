@@ -51,7 +51,7 @@
 
 namespace blink {
 
-using namespace HTMLNames;
+using namespace html_names;
 
 static int64_t GenerateFormDataIdentifier() {
   // Initialize to the current time to reduce the likelihood of generating
@@ -155,8 +155,18 @@ inline FormSubmission::FormSubmission(SubmitMethod method,
       content_type_(content_type),
       form_(form),
       form_data_(std::move(data)),
-      boundary_(boundary),
-      event_(event) {}
+      boundary_(boundary) {
+  if (event) {
+    triggering_event_info_ = event->isTrusted()
+                                 ? WebTriggeringEventInfo::kFromTrustedEvent
+                                 : WebTriggeringEventInfo::kFromUntrustedEvent;
+    if (event->UnderlyingEvent())
+      event = event->UnderlyingEvent();
+  } else {
+    triggering_event_info_ = WebTriggeringEventInfo::kNotFromEvent;
+  }
+  navigation_policy_ = NavigationPolicyFromEvent(event);
+}
 
 inline FormSubmission::FormSubmission(const String& result)
     : method_(kDialogMethod), result_(result) {}
@@ -171,24 +181,26 @@ FormSubmission* FormSubmission::Create(HTMLFormElement* form,
   copied_attributes.CopyFrom(attributes);
   if (submit_button) {
     AtomicString attribute_value;
-    if (!(attribute_value = submit_button->FastGetAttribute(formactionAttr))
+    if (!(attribute_value = submit_button->FastGetAttribute(kFormactionAttr))
              .IsNull())
       copied_attributes.ParseAction(attribute_value);
-    if (!(attribute_value = submit_button->FastGetAttribute(formenctypeAttr))
+    if (!(attribute_value = submit_button->FastGetAttribute(kFormenctypeAttr))
              .IsNull())
       copied_attributes.UpdateEncodingType(attribute_value);
-    if (!(attribute_value = submit_button->FastGetAttribute(formmethodAttr))
+    if (!(attribute_value = submit_button->FastGetAttribute(kFormmethodAttr))
              .IsNull())
       copied_attributes.UpdateMethodType(attribute_value);
-    if (!(attribute_value = submit_button->FastGetAttribute(formtargetAttr))
+    if (!(attribute_value = submit_button->FastGetAttribute(kFormtargetAttr))
              .IsNull())
       copied_attributes.SetTarget(attribute_value);
   }
 
   if (copied_attributes.Method() == kDialogMethod) {
-    if (submit_button)
-      return new FormSubmission(submit_button->ResultForDialogSubmit());
-    return new FormSubmission("");
+    if (submit_button) {
+      return MakeGarbageCollected<FormSubmission>(
+          submit_button->ResultForDialogSubmit());
+    }
+    return MakeGarbageCollected<FormSubmission>("");
   }
 
   Document& document = form->GetDocument();
@@ -197,7 +209,8 @@ FormSubmission* FormSubmission::Create(HTMLFormElement* form,
                                              : copied_attributes.Action());
 
   if (document.GetInsecureRequestPolicy() & kUpgradeInsecureRequests &&
-      action_url.ProtocolIs("http")) {
+      action_url.ProtocolIs("http") &&
+      !SecurityOrigin::Create(action_url)->IsPotentiallyTrustworthy()) {
     UseCounter::Count(document,
                       WebFeature::kUpgradeInsecureRequestsUpgradedRequest);
     action_url.SetProtocol("https");
@@ -223,7 +236,9 @@ FormSubmission* FormSubmission::Create(HTMLFormElement* form,
                 copied_attributes.AcceptCharset(), document.Encoding());
   FormData* dom_form_data =
       FormData::Create(data_encoding.EncodingForFormSubmission());
-  form->ConstructFormDataSet(submit_button, *dom_form_data);
+  bool entry_list_result =
+      form->ConstructEntryList(submit_button, *dom_form_data);
+  DCHECK(entry_list_result);
 
   scoped_refptr<EncodedFormData> form_data;
   String boundary;
@@ -248,14 +263,13 @@ FormSubmission* FormSubmission::Create(HTMLFormElement* form,
   AtomicString target_or_base_target = copied_attributes.Target().IsEmpty()
                                            ? document.BaseTarget()
                                            : copied_attributes.Target();
-  return new FormSubmission(copied_attributes.Method(), action_url,
-                            target_or_base_target, encoding_type, form,
-                            std::move(form_data), boundary, event);
+  return MakeGarbageCollected<FormSubmission>(
+      copied_attributes.Method(), action_url, target_or_base_target,
+      encoding_type, form, std::move(form_data), boundary, event);
 }
 
 void FormSubmission::Trace(blink::Visitor* visitor) {
   visitor->Trace(form_);
-  visitor->Trace(event_);
 }
 
 KURL FormSubmission::RequestURL() const {
@@ -275,7 +289,7 @@ FrameLoadRequest FormSubmission::CreateFrameLoadRequest(
     frame_request.SetFrameName(target_);
 
   if (method_ == FormSubmission::kPostMethod) {
-    frame_request.GetResourceRequest().SetHTTPMethod(HTTPNames::POST);
+    frame_request.GetResourceRequest().SetHTTPMethod(http_names::kPOST);
     frame_request.GetResourceRequest().SetHTTPBody(form_data_);
 
     // construct some user headers if necessary
@@ -289,8 +303,9 @@ FrameLoadRequest FormSubmission::CreateFrameLoadRequest(
 
   frame_request.GetResourceRequest().SetURL(RequestURL());
 
-  frame_request.SetTriggeringEvent(event_);
   frame_request.SetForm(form_);
+
+  frame_request.SetTriggeringEventInfo(triggering_event_info_);
 
   return frame_request;
 }

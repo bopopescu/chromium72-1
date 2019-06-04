@@ -11,6 +11,7 @@
 #include <tuple>
 
 #include "api/peerconnectionproxy.h"
+#include "api/test/fake_media_transport.h"
 #include "media/base/fakemediaengine.h"
 #include "pc/mediasession.h"
 #include "pc/peerconnection.h"
@@ -20,9 +21,9 @@
 #ifdef WEBRTC_ANDROID
 #include "pc/test/androidtestinitializer.h"
 #endif
+#include "absl/memory/memory.h"
 #include "pc/test/fakesctptransport.h"
 #include "rtc_base/gunit.h"
-#include "rtc_base/ptr_util.h"
 #include "rtc_base/virtualsocketserver.h"
 
 namespace webrtc {
@@ -31,21 +32,43 @@ using RTCConfiguration = PeerConnectionInterface::RTCConfiguration;
 using RTCOfferAnswerOptions = PeerConnectionInterface::RTCOfferAnswerOptions;
 using ::testing::Values;
 
+namespace {
+
+PeerConnectionFactoryDependencies CreatePeerConnectionFactoryDependencies(
+    rtc::Thread* network_thread,
+    rtc::Thread* worker_thread,
+    rtc::Thread* signaling_thread,
+    std::unique_ptr<cricket::MediaEngineInterface> media_engine,
+    std::unique_ptr<CallFactoryInterface> call_factory,
+    std::unique_ptr<MediaTransportFactory> media_transport_factory) {
+  PeerConnectionFactoryDependencies deps;
+  deps.network_thread = network_thread;
+  deps.worker_thread = worker_thread;
+  deps.signaling_thread = signaling_thread;
+  deps.media_engine = std::move(media_engine);
+  deps.call_factory = std::move(call_factory);
+  deps.media_transport_factory = std::move(media_transport_factory);
+  return deps;
+}
+
+}  // namespace
+
 class PeerConnectionFactoryForDataChannelTest
     : public rtc::RefCountedObject<PeerConnectionFactory> {
  public:
   PeerConnectionFactoryForDataChannelTest()
       : rtc::RefCountedObject<PeerConnectionFactory>(
-            rtc::Thread::Current(),
-            rtc::Thread::Current(),
-            rtc::Thread::Current(),
-            rtc::MakeUnique<cricket::FakeMediaEngine>(),
-            CreateCallFactory(),
-            nullptr) {}
+            CreatePeerConnectionFactoryDependencies(
+                rtc::Thread::Current(),
+                rtc::Thread::Current(),
+                rtc::Thread::Current(),
+                absl::make_unique<cricket::FakeMediaEngine>(),
+                CreateCallFactory(),
+                absl::make_unique<FakeMediaTransportFactory>())) {}
 
   std::unique_ptr<cricket::SctpTransportInternalFactory>
   CreateSctpTransportInternalFactory() {
-    auto factory = rtc::MakeUnique<FakeSctpTransportFactory>();
+    auto factory = absl::make_unique<FakeSctpTransportFactory>();
     last_fake_sctp_transport_factory_ = factory.get();
     return factory;
   }
@@ -66,11 +89,11 @@ class PeerConnectionWrapperForDataChannelTest : public PeerConnectionWrapper {
     sctp_transport_factory_ = sctp_transport_factory;
   }
 
-  rtc::Optional<std::string> sctp_content_name() {
+  absl::optional<std::string> sctp_content_name() {
     return GetInternalPeerConnection()->sctp_content_name();
   }
 
-  rtc::Optional<std::string> sctp_transport_name() {
+  absl::optional<std::string> sctp_transport_name() {
     return GetInternalPeerConnection()->sctp_transport_name();
   }
 
@@ -114,7 +137,7 @@ class PeerConnectionDataChannelBaseTest : public ::testing::Test {
         new PeerConnectionFactoryForDataChannelTest());
     pc_factory->SetOptions(factory_options);
     RTC_CHECK(pc_factory->Initialize());
-    auto observer = rtc::MakeUnique<MockPeerConnectionObserver>();
+    auto observer = absl::make_unique<MockPeerConnectionObserver>();
     RTCConfiguration modified_config = config;
     modified_config.sdp_semantics = sdp_semantics_;
     auto pc = pc_factory->CreatePeerConnection(modified_config, nullptr,
@@ -123,7 +146,8 @@ class PeerConnectionDataChannelBaseTest : public ::testing::Test {
       return nullptr;
     }
 
-    auto wrapper = rtc::MakeUnique<PeerConnectionWrapperForDataChannelTest>(
+    observer->SetPeerConnectionInterface(pc.get());
+    auto wrapper = absl::make_unique<PeerConnectionWrapperForDataChannelTest>(
         pc_factory, pc, std::move(observer));
     RTC_DCHECK(pc_factory->last_fake_sctp_transport_factory_);
     wrapper->set_sctp_transport_factory(
@@ -321,6 +345,52 @@ TEST_P(PeerConnectionDataChannelTest, SctpPortPropagatedFromSdpToTransport) {
   ASSERT_TRUE(callee_transport);
   EXPECT_EQ(kNewSendPort, callee_transport->remote_port());
   EXPECT_EQ(kNewRecvPort, callee_transport->local_port());
+}
+
+TEST_P(PeerConnectionDataChannelTest,
+       NoSctpTransportCreatedIfMediaTransportDataChannelsEnabled) {
+  RTCConfiguration config;
+  config.use_media_transport_for_data_channels = true;
+  config.enable_dtls_srtp = false;  // SDES is required to use media transport.
+  auto caller = CreatePeerConnectionWithDataChannel(config);
+
+  ASSERT_TRUE(caller->SetLocalDescription(caller->CreateOffer()));
+  EXPECT_FALSE(caller->sctp_transport_factory()->last_fake_sctp_transport());
+}
+
+TEST_P(PeerConnectionDataChannelTest,
+       MediaTransportDataChannelCreatedEvenIfSctpAvailable) {
+  RTCConfiguration config;
+  config.use_media_transport_for_data_channels = true;
+  config.enable_dtls_srtp = false;  // SDES is required to use media transport.
+  PeerConnectionFactoryInterface::Options options;
+  options.disable_sctp_data_channels = false;
+  auto caller = CreatePeerConnectionWithDataChannel(config, options);
+
+  ASSERT_TRUE(caller->SetLocalDescription(caller->CreateOffer()));
+  EXPECT_FALSE(caller->sctp_transport_factory()->last_fake_sctp_transport());
+}
+
+TEST_P(PeerConnectionDataChannelTest,
+       CannotEnableBothMediaTransportAndRtpDataChannels) {
+  RTCConfiguration config;
+  config.enable_rtp_data_channel = true;
+  config.use_media_transport_for_data_channels = true;
+  config.enable_dtls_srtp = false;  // SDES is required to use media transport.
+  EXPECT_EQ(CreatePeerConnection(config), nullptr);
+}
+
+TEST_P(PeerConnectionDataChannelTest,
+       MediaTransportDataChannelFailsWithoutSdes) {
+  RTCConfiguration config;
+  config.use_media_transport_for_data_channels = true;
+  config.enable_dtls_srtp = true;  // Disables SDES for data sections.
+  auto caller = CreatePeerConnectionWithDataChannel(config);
+
+  std::string error;
+  ASSERT_FALSE(caller->SetLocalDescription(caller->CreateOffer(), &error));
+  EXPECT_EQ(error,
+            "Failed to set local offer sdp: Failed to create data channel.");
 }
 
 INSTANTIATE_TEST_CASE_P(PeerConnectionDataChannelTest,

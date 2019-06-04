@@ -130,8 +130,10 @@ function AutomationEditableText(node) {
     throw Error('Node must have editable state set to true.');
   var start = node.textSelStart;
   var end = node.textSelEnd;
+  var value = this.getProcessedValue_(node) || '';
   cvox.ChromeVoxEditableTextBase.call(
-      this, node.value || '', Math.min(start, end), Math.max(start, end),
+      this, value, Math.min(start, end, value.length),
+      Math.min(Math.max(start, end), value.length),
       node.state[StateType.PROTECTED] /**password*/, cvox.ChromeVox.tts);
   /** @override */
   this.multiline = node.state[StateType.MULTILINE] || false;
@@ -147,10 +149,11 @@ AutomationEditableText.prototype = {
    * @param {string|undefined} eventFrom
    */
   onUpdate: function(eventFrom) {
-    var newValue = this.node_.value || '';
+    var newValue = this.getProcessedValue_(this.node_) || '';
 
     var textChangeEvent = new cvox.TextChangeEvent(
-        newValue, this.node_.textSelStart || 0, this.node_.textSelEnd || 0,
+        newValue, Math.min(this.node_.textSelStart || 0, newValue.length),
+        Math.min(this.node_.textSelEnd || 0, newValue.length),
         true /* triggered by user */);
     this.changed(textChangeEvent);
     this.outputBraille_();
@@ -192,6 +195,16 @@ AutomationEditableText.prototype = {
     range = Range.fromNode(this.node_);
     output.withBraille(range, null, Output.EventType.NAVIGATE);
     output.go();
+  },
+
+  /**
+   * @param {!AutomationNode} node
+   * @return {string|undefined}
+   * @private
+   */
+  getProcessedValue_: function(node) {
+    var value = node.value;
+    return (value && node.inputType == 'tel') ? value['trimEnd']() : value;
   }
 };
 
@@ -296,7 +309,10 @@ AutomationRichEditableText.prototype = {
     // During continuous read, skip speech (which gets handled in
     // CommandHandler). We use the speech end callback to trigger additional
     // speech.
-    if (ChromeVoxState.isReadingContinuously) {
+    // Also, skip speech based on the predicate.
+    if (ChromeVoxState.isReadingContinuously ||
+        AutomationPredicate.shouldOnlyOutputSelectionChangeInBraille(
+            this.node_)) {
       this.brailleCurrentRichLine_();
       this.updateIntraLineState_(cur);
       return;
@@ -310,8 +326,11 @@ AutomationRichEditableText.prototype = {
         anchorLine.isSameLine(prevAnchorLine) &&
         focusLine.isSameLine(prevFocusLine)) {
       // Intra-line changes.
-      this.changed(new cvox.TextChangeEvent(
-          cur.text || '', cur.startOffset, cur.endOffset, true));
+      var text = cur.text;
+      if (text == '\n')
+        text = '';
+      this.changed(
+          new cvox.TextChangeEvent(text, cur.startOffset, cur.endOffset, true));
       this.brailleCurrentRichLine_();
 
       // Finally, queue up any text markers/styles at bounds.
@@ -362,7 +381,31 @@ AutomationRichEditableText.prototype = {
     // ax gets fixed.
     var curBase = baseLineOnStart ? focusLine : anchorLine;
 
-    if (cur.text == '') {
+    if ((cur.startContainer_.role == RoleType.TEXT_FIELD ||
+         (cur.startContainer_ == prev.startContainer_ &&
+          cur.endContainer_ == prev.endContainer_)) &&
+        cur.startContainerValue_ != prev.startContainerValue_) {
+      // This block catches text changes between |prev| and | cur|. Note that we
+      // can end up here if |prevAnchorLine| or |prevFocusLine| were invalid
+      // above for intra-line changes. This block therefore catches all text
+      // changes including those that occur within a single line and up to those
+      // that occur within a static text. It also catches text changes that
+      // result in an empty text field, so we handle the case where the
+      // container is the text field itself.
+
+      // Take the difference of the text at the paragraph level (i.e. the value
+      // of the container) and speak that.
+      this.describeTextChanged(
+          new cvox.TextChangeEvent(
+              prev.startContainerValue_, prev.localContainerStartOffset_,
+              prev.localContainerEndOffset_, true),
+          new cvox.TextChangeEvent(
+              cur.startContainerValue_, cur.localContainerStartOffset_,
+              cur.localContainerEndOffset_, true));
+
+      // Braille here simply displays the current line.
+      this.brailleCurrentRichLine_();
+    } else if (cur.text == '') {
       // This line has no text content. Describe the DOM selection.
       new Output()
           .withRichSpeechAndBraille(
@@ -537,7 +580,9 @@ AutomationRichEditableText.prototype = {
    * @private
    */
   speakCurrentRichLine_: function(prevLine) {
-    var prev = prevLine ? prevLine.startContainer_ : this.node_;
+    var prev = (prevLine && prevLine.startContainer_.role) ?
+        prevLine.startContainer_ :
+        null;
     var lineNodes =
         /** @type {Array<!AutomationNode>} */ (
             this.line_.value_.getSpansInstanceOf(
@@ -549,7 +594,8 @@ AutomationRichEditableText.prototype = {
 
       var o = new Output()
                   .withRichSpeech(
-                      Range.fromNode(cur), prev ? Range.fromNode(prev) : null,
+                      Range.fromNode(cur),
+                      prev ? Range.fromNode(prev) : Range.fromNode(cur),
                       Output.EventType.NAVIGATE)
                   .withQueueMode(queueMode);
 
@@ -588,7 +634,9 @@ AutomationRichEditableText.prototype = {
         return;
       var start = value.getSpanStart(span);
       var end = value.getSpanEnd(span);
-      value.setSpan(new cvox.BrailleTextStyleSpan(formType), start, end);
+      value.setSpan(new cvox.BrailleTextStyleSpan(
+          /** @type {cvox.LibLouis.FormType<number>} */(formType)),
+                    start, end);
     });
 
     // Provide context for the current selection.
@@ -745,6 +793,8 @@ editing.EditableLine = function(
   this.lineEnd_;
   /** @private {AutomationNode|undefined} */
   this.startContainer_;
+  /** @private {string} */
+  this.startContainerValue_ = '';
   /** @private {AutomationNode|undefined} */
   this.lineStartContainer_;
   /** @private {number} */
@@ -780,6 +830,10 @@ editing.EditableLine.prototype = {
     this.startContainer_ = this.start_.node;
     if (this.startContainer_.role == RoleType.INLINE_TEXT_BOX)
       this.startContainer_ = this.startContainer_.parent;
+    this.startContainerValue_ =
+        this.startContainer_.role == RoleType.TEXT_FIELD ?
+        this.startContainer_.value || '' :
+        this.startContainer_.name || '';
     this.endContainer_ = this.end_.node;
     if (this.endContainer_.role == RoleType.INLINE_TEXT_BOX)
       this.endContainer_ = this.endContainer_.parent;

@@ -16,7 +16,9 @@
 #include "GrPathUtils.h"
 #include "GrProcessor.h"
 #include "GrResourceProvider.h"
+#include "GrShape.h"
 #include "GrSimpleMeshDrawOpHelper.h"
+#include "GrStyle.h"
 #include "SkGeometry.h"
 #include "SkMatrixPriv.h"
 #include "SkPoint3.h"
@@ -138,7 +140,7 @@ static int get_float_exp(float x) {
 // and dst[1] are the two new conics.
 static int split_conic(const SkPoint src[3], SkConic dst[2], const SkScalar weight) {
     SkScalar t = SkFindQuadMaxCurvature(src);
-    if (t == 0) {
+    if (t == 0 || t == 1) {
         if (dst) {
             dst[0].set(src, weight);
         }
@@ -316,7 +318,7 @@ static int gather_lines_and_quads(const SkPath& path,
                 if (convertConicsToQuads) {
                     SkScalar weight = iter.conicWeight();
                     SkAutoConicToQuads converter;
-                    const SkPoint* quadPts = converter.computeQuads(pathPts, weight, 0.5f);
+                    const SkPoint* quadPts = converter.computeQuads(pathPts, weight, 0.25f);
                     for (int i = 0; i < converter.countQuads(); ++i) {
                         addSrcChoppedQuad(quadPts + 2 * i, !verbsInContour && 0 == i);
                     }
@@ -496,12 +498,17 @@ static void intersect_lines(const SkPoint& ptA, const SkVector& normA,
 
     SkScalar wInv = normA.fX * normB.fY - normA.fY * normB.fX;
     wInv = SkScalarInvert(wInv);
+    if (!SkScalarIsFinite(wInv)) {
+        // lines are parallel, pick the point in between
+        *result = (ptA + ptB)*SK_ScalarHalf;
+        *result += normA;
+    } else {
+        result->fX = normA.fY * lineBW - lineAW * normB.fY;
+        result->fX *= wInv;
 
-    result->fX = normA.fY * lineBW - lineAW * normB.fY;
-    result->fX *= wInv;
-
-    result->fY = lineAW * normB.fX - normA.fX * lineBW;
-    result->fY *= wInv;
+        result->fY = lineAW * normB.fX - normA.fX * lineBW;
+        result->fY *= wInv;
+    }
 }
 
 static void set_uv_quad(const SkPoint qpts[3], BezierVertex verts[kQuadNumVertices]) {
@@ -548,19 +555,25 @@ static void bloat_quad(const SkPoint qpts[3], const SkMatrix* toDevice,
     SkVector cb = b;
     cb -= c;
 
+    // After the transform we might have a line, try to do something reasonable
+    if (toDevice && SkPointPriv::LengthSqd(ab) <= SK_ScalarNearlyZero*SK_ScalarNearlyZero) {
+        ab = cb;
+    }
+    if (toDevice && SkPointPriv::LengthSqd(cb) <= SK_ScalarNearlyZero*SK_ScalarNearlyZero) {
+        cb = ab;
+    }
+
     // We should have already handled degenerates
-    SkASSERT(ab.length() > 0 && cb.length() > 0);
+    SkASSERT(toDevice || (ab.length() > 0 && cb.length() > 0));
 
     ab.normalize();
-    SkVector abN;
-    SkPointPriv::SetOrthog(&abN, ab, SkPointPriv::kLeft_Side);
+    SkVector abN = SkPointPriv::MakeOrthog(ab, SkPointPriv::kLeft_Side);
     if (abN.dot(ac) > 0) {
         abN.negate();
     }
 
     cb.normalize();
-    SkVector cbN;
-    SkPointPriv::SetOrthog(&cbN, cb, SkPointPriv::kLeft_Side);
+    SkVector cbN = SkPointPriv::MakeOrthog(cb, SkPointPriv::kLeft_Side);
     if (cbN.dot(ac) < 0) {
         cbN.negate();
     }
@@ -570,6 +583,9 @@ static void bloat_quad(const SkPoint qpts[3], const SkMatrix* toDevice,
     a1.fPos = a;
     a1.fPos -= abN;
 
+    if (toDevice && SkPointPriv::LengthSqd(ac) <= SK_ScalarNearlyZero*SK_ScalarNearlyZero) {
+        c = b;
+    }
     c0.fPos = c;
     c0.fPos += cbN;
     c1.fPos = c;
@@ -765,7 +781,8 @@ private:
 public:
     DEFINE_OP_CLASS_ID
 
-    static std::unique_ptr<GrDrawOp> Make(GrPaint&& paint,
+    static std::unique_ptr<GrDrawOp> Make(GrContext* context,
+                                          GrPaint&& paint,
                                           const SkMatrix& viewMatrix,
                                           const SkPath& path,
                                           const GrStyle& style,
@@ -780,12 +797,13 @@ public:
         const SkStrokeRec& stroke = style.strokeRec();
         SkScalar capLength = SkPaint::kButt_Cap != stroke.getCap() ? hairlineCoverage * 0.5f : 0.0f;
 
-        return Helper::FactoryHelper<AAHairlineOp>(std::move(paint), newCoverage, viewMatrix, path,
+        return Helper::FactoryHelper<AAHairlineOp>(context, std::move(paint), newCoverage,
+                                                   viewMatrix, path,
                                                    devClipBounds, capLength, stencilSettings);
     }
 
     AAHairlineOp(const Helper::MakeArgs& helperArgs,
-                 GrColor color,
+                 const SkPMColor4f& color,
                  uint8_t coverage,
                  const SkMatrix& viewMatrix,
                  const SkPath& path,
@@ -804,25 +822,26 @@ public:
 
     const char* name() const override { return "AAHairlineOp"; }
 
-    void visitProxies(const VisitProxyFunc& func) const override {
+    void visitProxies(const VisitProxyFunc& func, VisitorType) const override {
         fHelper.visitProxies(func);
     }
 
+#ifdef SK_DEBUG
     SkString dumpInfo() const override {
         SkString string;
-        string.appendf("Color: 0x%08x Coverage: 0x%02x, Count: %d\n", fColor, fCoverage,
-                       fPaths.count());
+        string.appendf("Color: 0x%08x Coverage: 0x%02x, Count: %d\n", fColor.toBytes_RGBA(),
+                       fCoverage, fPaths.count());
         string += INHERITED::dumpInfo();
         string += fHelper.dumpInfo();
         return string;
     }
+#endif
 
     FixedFunctionFlags fixedFunctionFlags() const override { return fHelper.fixedFunctionFlags(); }
 
-    RequiresDstTexture finalize(const GrCaps& caps, const GrAppliedClip* clip,
-                                GrPixelConfigIsClamped dstIsClamped) override {
-        return fHelper.xpRequiresDstTexture(caps, clip, dstIsClamped,
-                                            GrProcessorAnalysisCoverage::kSingleChannel, &fColor);
+    RequiresDstTexture finalize(const GrCaps& caps, const GrAppliedClip* clip) override {
+        return fHelper.xpRequiresDstTexture(caps, clip, GrProcessorAnalysisCoverage::kSingleChannel,
+                                            &fColor);
     }
 
 private:
@@ -832,44 +851,43 @@ private:
     typedef SkTArray<int, true> IntArray;
     typedef SkTArray<float, true> FloatArray;
 
-    bool onCombineIfPossible(GrOp* t, const GrCaps& caps) override {
+    CombineResult onCombineIfPossible(GrOp* t, const GrCaps& caps) override {
         AAHairlineOp* that = t->cast<AAHairlineOp>();
 
         if (!fHelper.isCompatible(that->fHelper, caps, this->bounds(), that->bounds())) {
-            return false;
+            return CombineResult::kCannotCombine;
         }
 
         if (this->viewMatrix().hasPerspective() != that->viewMatrix().hasPerspective()) {
-            return false;
+            return CombineResult::kCannotCombine;
         }
 
         // We go to identity if we don't have perspective
         if (this->viewMatrix().hasPerspective() &&
             !this->viewMatrix().cheapEqualTo(that->viewMatrix())) {
-            return false;
+            return CombineResult::kCannotCombine;
         }
 
         // TODO we can actually combine hairlines if they are the same color in a kind of bulk
         // method but we haven't implemented this yet
         // TODO investigate going to vertex color and coverage?
         if (this->coverage() != that->coverage()) {
-            return false;
+            return CombineResult::kCannotCombine;
         }
 
         if (this->color() != that->color()) {
-            return false;
+            return CombineResult::kCannotCombine;
         }
 
         if (fHelper.usesLocalCoords() && !this->viewMatrix().cheapEqualTo(that->viewMatrix())) {
-            return false;
+            return CombineResult::kCannotCombine;
         }
 
         fPaths.push_back_n(that->fPaths.count(), that->fPaths.begin());
-        this->joinBounds(*that);
-        return true;
+        return CombineResult::kMerged;
     }
 
-    GrColor color() const { return fColor; }
+    const SkPMColor4f& color() const { return fColor; }
     uint8_t coverage() const { return fCoverage; }
     const SkMatrix& viewMatrix() const { return fPaths[0].fViewMatrix; }
 
@@ -882,7 +900,7 @@ private:
 
     SkSTArray<1, PathData, true> fPaths;
     Helper fHelper;
-    GrColor fColor;
+    SkPMColor4f fColor;
     uint8_t fCoverage;
 
     typedef GrMeshDrawOp INHERITED;
@@ -937,7 +955,7 @@ void AAHairlineOp::onPrepareDraws(Target* target) {
         return;
     }
 
-    const GrPipeline* pipeline = fHelper.makePipeline(target);
+    auto pipe = fHelper.makePipeline(target);
     // do lines first
     if (lineCount) {
         sk_sp<GrGeometryProcessor> lineGP;
@@ -948,7 +966,8 @@ void AAHairlineOp::onPrepareDraws(Target* target) {
             LocalCoords localCoords(fHelper.usesLocalCoords() ? LocalCoords::kUsePosition_Type
                                                               : LocalCoords::kUnused_Type);
             localCoords.fMatrix = geometryProcessorLocalM;
-            lineGP = GrDefaultGeoProcFactory::Make(color, Coverage::kAttribute_Type, localCoords,
+            lineGP = GrDefaultGeoProcFactory::Make(target->caps().shaderCaps(),
+                                                   color, Coverage::kAttribute_Type, localCoords,
                                                    *geometryProcessorViewM);
         }
 
@@ -957,27 +976,25 @@ void AAHairlineOp::onPrepareDraws(Target* target) {
         const GrBuffer* vertexBuffer;
         int firstVertex;
 
-        size_t vertexStride = lineGP->getVertexStride();
+        SkASSERT(sizeof(LineVertex) == lineGP->vertexStride());
         int vertexCount = kLineSegNumVertices * lineCount;
-        LineVertex* verts = reinterpret_cast<LineVertex*>(
-            target->makeVertexSpace(vertexStride, vertexCount, &vertexBuffer, &firstVertex));
+        LineVertex* verts = reinterpret_cast<LineVertex*>(target->makeVertexSpace(
+                sizeof(LineVertex), vertexCount, &vertexBuffer, &firstVertex));
 
         if (!verts|| !linesIndexBuffer) {
             SkDebugf("Could not allocate vertices\n");
             return;
         }
 
-        SkASSERT(lineGP->getVertexStride() == sizeof(LineVertex));
-
         for (int i = 0; i < lineCount; ++i) {
             add_line(&lines[2*i], toSrc, this->coverage(), &verts);
         }
 
-        GrMesh mesh(GrPrimitiveType::kTriangles);
-        mesh.setIndexedPatterned(linesIndexBuffer.get(), kIdxsPerLineSeg, kLineSegNumVertices,
-                                 lineCount, kLineSegsNumInIdxBuffer);
-        mesh.setVertexData(vertexBuffer, firstVertex);
-        target->draw(lineGP.get(), pipeline, mesh);
+        GrMesh* mesh = target->allocMesh(GrPrimitiveType::kTriangles);
+        mesh->setIndexedPatterned(linesIndexBuffer.get(), kIdxsPerLineSeg, kLineSegNumVertices,
+                                  lineCount, kLineSegsNumInIdxBuffer);
+        mesh->setVertexData(vertexBuffer, firstVertex);
+        target->draw(std::move(lineGP), pipe.fPipeline, pipe.fFixedDynamicState, mesh);
     }
 
     if (quadCount || conicCount) {
@@ -1002,10 +1019,11 @@ void AAHairlineOp::onPrepareDraws(Target* target) {
 
         sk_sp<const GrBuffer> quadsIndexBuffer = get_quads_index_buffer(target->resourceProvider());
 
-        size_t vertexStride = sizeof(BezierVertex);
+        SkASSERT(sizeof(BezierVertex) == quadGP->vertexStride());
+        SkASSERT(sizeof(BezierVertex) == conicGP->vertexStride());
         int vertexCount = kQuadNumVertices * quadAndConicCount;
-        void *vertices = target->makeVertexSpace(vertexStride, vertexCount,
-                                                 &vertexBuffer, &firstVertex);
+        void* vertices = target->makeVertexSpace(sizeof(BezierVertex), vertexCount, &vertexBuffer,
+                                                 &firstVertex);
 
         if (!vertices || !quadsIndexBuffer) {
             SkDebugf("Could not allocate vertices\n");
@@ -1027,20 +1045,20 @@ void AAHairlineOp::onPrepareDraws(Target* target) {
         }
 
         if (quadCount > 0) {
-            GrMesh mesh(GrPrimitiveType::kTriangles);
-            mesh.setIndexedPatterned(quadsIndexBuffer.get(), kIdxsPerQuad, kQuadNumVertices,
-                                     quadCount, kQuadsNumInIdxBuffer);
-            mesh.setVertexData(vertexBuffer, firstVertex);
-            target->draw(quadGP.get(), pipeline, mesh);
+            GrMesh* mesh = target->allocMesh(GrPrimitiveType::kTriangles);
+            mesh->setIndexedPatterned(quadsIndexBuffer.get(), kIdxsPerQuad, kQuadNumVertices,
+                                      quadCount, kQuadsNumInIdxBuffer);
+            mesh->setVertexData(vertexBuffer, firstVertex);
+            target->draw(std::move(quadGP), pipe.fPipeline, pipe.fFixedDynamicState, mesh);
             firstVertex += quadCount * kQuadNumVertices;
         }
 
         if (conicCount > 0) {
-            GrMesh mesh(GrPrimitiveType::kTriangles);
-            mesh.setIndexedPatterned(quadsIndexBuffer.get(), kIdxsPerQuad, kQuadNumVertices,
-                                     conicCount, kQuadsNumInIdxBuffer);
-            mesh.setVertexData(vertexBuffer, firstVertex);
-            target->draw(conicGP.get(), pipeline, mesh);
+            GrMesh* mesh = target->allocMesh(GrPrimitiveType::kTriangles);
+            mesh->setIndexedPatterned(quadsIndexBuffer.get(), kIdxsPerQuad, kQuadNumVertices,
+                                      conicCount, kQuadsNumInIdxBuffer);
+            mesh->setVertexData(vertexBuffer, firstVertex);
+            target->draw(std::move(conicGP), pipe.fPipeline, pipe.fFixedDynamicState, mesh);
         }
     }
 }
@@ -1057,7 +1075,7 @@ bool GrAAHairLinePathRenderer::onDrawPath(const DrawPathArgs& args) {
     SkPath path;
     args.fShape->asPath(&path);
     std::unique_ptr<GrDrawOp> op =
-            AAHairlineOp::Make(std::move(args.fPaint), *args.fViewMatrix, path,
+            AAHairlineOp::Make(args.fContext, std::move(args.fPaint), *args.fViewMatrix, path,
                                args.fShape->style(), devClipBounds, args.fUserStencilSettings);
     args.fRenderTargetContext->addDrawOp(*args.fClip, std::move(op));
     return true;
@@ -1072,8 +1090,9 @@ GR_DRAW_OP_TEST_DEFINE(AAHairlineOp) {
     SkPath path = GrTest::TestPath(random);
     SkIRect devClipBounds;
     devClipBounds.setEmpty();
-    return AAHairlineOp::Make(std::move(paint), viewMatrix, path, GrStyle::SimpleHairline(),
-                              devClipBounds, GrGetRandomStencil(random, context));
+    return AAHairlineOp::Make(context, std::move(paint), viewMatrix, path,
+                              GrStyle::SimpleHairline(), devClipBounds,
+                              GrGetRandomStencil(random, context));
 }
 
 #endif

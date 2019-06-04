@@ -4,12 +4,16 @@
 
 #include "third_party/blink/renderer/bindings/core/v8/script_module.h"
 
-#include "third_party/blink/renderer/bindings/core/v8/exception_state.h"
+#include "third_party/blink/renderer/bindings/core/v8/referrer_script_info.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_binding_for_core.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_script_runner.h"
 #include "third_party/blink/renderer/core/probe/core_probes.h"
 #include "third_party/blink/renderer/core/script/modulator.h"
 #include "third_party/blink/renderer/core/script/script_module_resolver.h"
+#include "third_party/blink/renderer/platform/bindings/exception_state.h"
+#include "third_party/blink/renderer/platform/bindings/script_state.h"
+#include "third_party/blink/renderer/platform/loader/fetch/script_fetch_options.h"
+#include "third_party/blink/renderer/platform/weborigin/kurl.h"
 
 namespace blink {
 
@@ -31,14 +35,12 @@ ScriptModule ScriptModule::Compile(v8::Isolate* isolate,
                                    const KURL& source_url,
                                    const KURL& base_url,
                                    const ScriptFetchOptions& options,
-                                   AccessControlStatus access_control_status,
                                    const TextPosition& text_position,
                                    ExceptionState& exception_state) {
   v8::TryCatch try_catch(isolate);
   v8::Local<v8::Module> module;
 
-  if (!V8ScriptRunner::CompileModule(isolate, source, source_url,
-                                     access_control_status, text_position,
+  if (!V8ScriptRunner::CompileModule(isolate, source, source_url, text_position,
                                      ReferrerScriptInfo(base_url, options))
            .ToLocal(&module)) {
     DCHECK(try_catch.HasCaught());

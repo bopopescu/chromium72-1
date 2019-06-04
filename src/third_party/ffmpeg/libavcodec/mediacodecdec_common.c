@@ -312,7 +312,7 @@ FF_ENABLE_DEPRECATION_WARNINGS
 
     av_log(avctx, AV_LOG_TRACE,
             "Frame: width=%d stride=%d height=%d slice-height=%d "
-            "crop-top=%d crop-bottom=%d crop-left=%d crop-right=%d encoder=%s\n"
+            "crop-top=%d crop-bottom=%d crop-left=%d crop-right=%d encoder=%s "
             "destination linesizes=%d,%d,%d\n" ,
             avctx->width, s->stride, avctx->height, s->slice_height,
             s->crop_top, s->crop_bottom, s->crop_left, s->crop_right, s->codec_name,
@@ -389,13 +389,14 @@ static int mediacodec_dec_parse_format(AVCodecContext *avctx, MediaCodecDecConte
     s->stride = s->stride > 0 ? s->stride : s->width;
 
     AMEDIAFORMAT_GET_INT32(s->slice_height, "slice-height", 0);
-    s->slice_height = s->slice_height > 0 ? s->slice_height : s->height;
 
-    if (strstr(s->codec_name, "OMX.Nvidia.")) {
+    if (strstr(s->codec_name, "OMX.Nvidia.") && s->slice_height == 0) {
         s->slice_height = FFALIGN(s->height, 16);
     } else if (strstr(s->codec_name, "OMX.SEC.avc.dec")) {
         s->slice_height = avctx->height;
         s->stride = avctx->width;
+    } else if (s->slice_height == 0) {
+        s->slice_height = s->height;
     }
 
     AMEDIAFORMAT_GET_INT32(s->color_format, "color-format", 1);
@@ -450,6 +451,7 @@ static int mediacodec_dec_flush_codec(AVCodecContext *avctx, MediaCodecDecContex
     s->eos = 0;
     atomic_fetch_add(&s->serial, 1);
     atomic_init(&s->hw_buffer_count, 0);
+    s->current_input_buffer = -1;
 
     status = ff_AMediaCodec_flush(codec);
     if (status < 0) {
@@ -477,6 +479,7 @@ int ff_mediacodec_dec_init(AVCodecContext *avctx, MediaCodecDecContext *s,
     atomic_init(&s->refcount, 1);
     atomic_init(&s->hw_buffer_count, 0);
     atomic_init(&s->serial, 1);
+    s->current_input_buffer = -1;
 
     pix_fmt = ff_get_format(avctx, pix_fmts);
     if (pix_fmt == AV_PIX_FMT_MEDIACODEC) {
@@ -561,16 +564,16 @@ fail:
 }
 
 int ff_mediacodec_dec_send(AVCodecContext *avctx, MediaCodecDecContext *s,
-                           AVPacket *pkt)
+                           AVPacket *pkt, bool wait)
 {
     int offset = 0;
     int need_draining = 0;
     uint8_t *data;
-    ssize_t index;
+    ssize_t index = s->current_input_buffer;
     size_t size;
     FFAMediaCodec *codec = s->codec;
     int status;
-    int64_t input_dequeue_timeout_us = INPUT_DEQUEUE_TIMEOUT_US;
+    int64_t input_dequeue_timeout_us = wait ? INPUT_DEQUEUE_TIMEOUT_US : 0;
     int64_t pts;
 
     if (s->flushing) {
@@ -588,17 +591,19 @@ int ff_mediacodec_dec_send(AVCodecContext *avctx, MediaCodecDecContext *s,
     }
 
     while (offset < pkt->size || (need_draining && !s->draining)) {
-
-        index = ff_AMediaCodec_dequeueInputBuffer(codec, input_dequeue_timeout_us);
-        if (ff_AMediaCodec_infoTryAgainLater(codec, index)) {
-            av_log(avctx, AV_LOG_TRACE, "No input buffer available, try again later\n");
-            break;
-        }
-
         if (index < 0) {
-            av_log(avctx, AV_LOG_ERROR, "Failed to dequeue input buffer (status=%zd)\n", index);
-            return AVERROR_EXTERNAL;
+            index = ff_AMediaCodec_dequeueInputBuffer(codec, input_dequeue_timeout_us);
+            if (ff_AMediaCodec_infoTryAgainLater(codec, index)) {
+                av_log(avctx, AV_LOG_TRACE, "No input buffer available, try again later\n");
+                break;
+            }
+
+            if (index < 0) {
+                av_log(avctx, AV_LOG_ERROR, "Failed to dequeue input buffer (status=%zd)\n", index);
+                return AVERROR_EXTERNAL;
+            }
         }
+        s->current_input_buffer = -1;
 
         data = ff_AMediaCodec_getInputBuffer(codec, index, &size);
         if (!data) {

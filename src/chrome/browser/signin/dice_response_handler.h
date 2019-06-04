@@ -13,6 +13,7 @@
 #include "base/files/file_path.h"
 #include "base/macros.h"
 #include "components/keyed_service/core/keyed_service.h"
+#include "components/signin/core/browser/account_consistency_method.h"
 #include "components/signin/core/browser/account_reconcilor.h"
 #include "components/signin/core/browser/signin_header_helper.h"
 #include "google_apis/gaia/gaia_auth_consumer.h"
@@ -22,9 +23,12 @@ class AccountTrackerService;
 class GaiaAuthFetcher;
 class GoogleServiceAuthError;
 class SigninClient;
-class SigninManager;
 class ProfileOAuth2TokenService;
 class Profile;
+
+namespace identity {
+class IdentityManager;
+}
 
 // Exposed for testing.
 extern const int kDiceTokenFetchTimeoutSeconds;
@@ -53,11 +57,12 @@ class DiceResponseHandler : public KeyedService {
   static DiceResponseHandler* GetForProfile(Profile* profile);
 
   DiceResponseHandler(SigninClient* signin_client,
-                      SigninManager* signin_manager,
                       ProfileOAuth2TokenService* profile_oauth2_token_service,
+                      identity::IdentityManager* identity_manager,
                       AccountTrackerService* account_tracker_service,
                       AccountReconcilor* account_reconcilor,
                       AboutSigninInternals* about_signin_internals,
+                      signin::AccountConsistencyMethod account_consistency,
                       const base::FilePath& profile_path_);
   ~DiceResponseHandler() override;
 
@@ -145,16 +150,18 @@ class DiceResponseHandler : public KeyedService {
   // Called after exchanging an OAuth 2.0 authorization code for a refresh token
   // after DiceAction::SIGNIN.
   void OnTokenExchangeSuccess(DiceTokenFetcher* token_fetcher,
-                              const std::string& refresh_token);
+                              const std::string& refresh_token,
+                              bool is_under_advanced_protection);
   void OnTokenExchangeFailure(DiceTokenFetcher* token_fetcher,
                               const GoogleServiceAuthError& error);
 
-  SigninManager* signin_manager_;
   SigninClient* signin_client_;
   ProfileOAuth2TokenService* token_service_;
+  identity::IdentityManager* identity_manager_;
   AccountTrackerService* account_tracker_service_;
   AccountReconcilor* account_reconcilor_;
   AboutSigninInternals* about_signin_internals_;
+  signin::AccountConsistencyMethod account_consistency_;
   base::FilePath profile_path_;
   std::vector<std::unique_ptr<DiceTokenFetcher>> token_fetchers_;
 

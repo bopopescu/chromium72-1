@@ -4,6 +4,9 @@
 
 #include "components/offline_pages/core/offline_page_test_archiver.h"
 
+#include <string>
+#include <utility>
+
 #include "base/bind.h"
 #include "base/files/file_util.h"
 #include "base/location.h"
@@ -22,26 +25,29 @@ OfflinePageTestArchiver::OfflinePageTestArchiver(
     const scoped_refptr<base::SingleThreadTaskRunner>& task_runner)
     : observer_(observer),
       url_(url),
+      create_archive_params_(std::string()),
       result_(result),
       size_to_report_(size_to_report),
       create_archive_called_(false),
       publish_archive_called_(false),
+      archive_attempt_failure_(false),
       delayed_(false),
       result_title_(result_title),
       digest_to_report_(digest_to_report),
       task_runner_(task_runner) {}
 
 OfflinePageTestArchiver::~OfflinePageTestArchiver() {
-  EXPECT_TRUE(create_archive_called_ || publish_archive_called_);
+  EXPECT_TRUE(create_archive_called_ || publish_archive_called_ ||
+              archive_attempt_failure_);
 }
 
 void OfflinePageTestArchiver::CreateArchive(
     const base::FilePath& archives_dir,
     const CreateArchiveParams& create_archive_params,
     content::WebContents* web_contents,
-    const CreateArchiveCallback& callback) {
+    CreateArchiveCallback callback) {
   create_archive_called_ = true;
-  callback_ = callback;
+  callback_ = std::move(callback);
   archives_dir_ = archives_dir;
   create_archive_params_ = create_archive_params;
   if (!delayed_)
@@ -55,10 +61,23 @@ void OfflinePageTestArchiver::PublishArchive(
     SystemDownloadManager* download_manager,
     PublishArchiveDoneCallback publish_done_callback) {
   publish_archive_called_ = true;
-  publish_archive_result_.move_result = SavePageResult::SUCCESS;
-  publish_archive_result_.new_file_path = offline_page.file_path;
-  publish_archive_result_.download_id = 0;
-  std::move(publish_done_callback).Run(offline_page, &publish_archive_result_);
+  PublishArchiveResult publish_archive_result;
+
+  if (archive_attempt_failure_) {
+    publish_archive_result.move_result = SavePageResult::FILE_MOVE_FAILED;
+  } else {
+    publish_archive_result.move_result = SavePageResult::SUCCESS;
+    publish_archive_result.new_file_path =
+        new_file_path.Append(offline_page.file_path.BaseName());
+    publish_archive_result.download_id = 0;
+  }
+
+  // Note: once the |publish_done_callback| is invoked it is very likely that
+  // this instance will be destroyed. So all parameters sent to it must not be
+  // bound to the lifetime on this.
+  background_task_runner->PostTask(
+      FROM_HERE, base::BindOnce(std::move(publish_done_callback), offline_page,
+                                std::move(publish_archive_result)));
 }
 
 void OfflinePageTestArchiver::CompleteCreateArchive() {
@@ -71,10 +90,12 @@ void OfflinePageTestArchiver::CompleteCreateArchive() {
     // This step ensures the file is created and closed immediately.
     base::File file(archive_path, base::File::FLAG_OPEN_ALWAYS);
   }
-  observer_->SetLastPathCreatedByArchiver(archive_path);
+  if (observer_)
+    observer_->SetLastPathCreatedByArchiver(archive_path);
   task_runner_->PostTask(
-      FROM_HERE, base::Bind(callback_, this, result_, url_, archive_path,
-                            result_title_, size_to_report_, digest_to_report_));
+      FROM_HERE,
+      base::BindOnce(std::move(callback_), result_, url_, archive_path,
+                     result_title_, size_to_report_, digest_to_report_));
 }
 
 }  // namespace offline_pages

@@ -35,6 +35,10 @@
 #
 #   cmake -E chdir build cmake -G Xcode -D IOS_PLATFORM=SIMULATOR ..
 #
+# or
+#
+#   cmake -E chdir build cmake -G Xcode -D IOS_PLATFORM=SIMULATOR64 ..
+#
 # Finally, build the project with:
 #
 #   cmake --build build
@@ -96,9 +100,10 @@ include(CheckIncludeFile)
 if (APPLE)
   if (DEFINED IOS_PLATFORM)
     if (NOT "${IOS_PLATFORM}" STREQUAL "OS"
-        AND NOT "${IOS_PLATFORM}" STREQUAL "SIMULATOR")
+        AND NOT "${IOS_PLATFORM}" STREQUAL "SIMULATOR"
+        AND NOT "${IOS_PLATFORM}" STREQUAL "SIMULATOR64")
       message(FATAL_ERROR
-        "IOS_PLATFORM must be set to either OS or SIMULATOR")
+        "IOS_PLATFORM must be set to either OS, SIMULATOR, or SIMULATOR64")
     endif ()
     if (NOT "${CMAKE_GENERATOR}" STREQUAL "Xcode")
       message(AUTHOR_WARNING
@@ -348,6 +353,10 @@ target_compile_definitions(
 if (WIN32)
   target_compile_definitions(
     freetype PRIVATE _CRT_SECURE_NO_WARNINGS _CRT_NONSTDC_NO_WARNINGS)
+  if (BUILD_SHARED_LIBS)
+    target_compile_definitions(
+      freetype PRIVATE DLL_EXPORT)
+  endif ()
 endif ()
 
 if (BUILD_SHARED_LIBS)
@@ -363,7 +372,7 @@ target_include_directories(
       $<INSTALL_INTERFACE:include/freetype2>
       $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}/include>
       $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-    PRIVATE 
+    PRIVATE
       ${CMAKE_CURRENT_BINARY_DIR}/include
       ${CMAKE_CURRENT_SOURCE_DIR}/include)
 
@@ -460,6 +469,7 @@ if (NOT SKIP_INSTALL_LIBRARIES AND NOT SKIP_INSTALL_ALL)
       EXPORT freetype-targets
       LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
       ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+      RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
       FRAMEWORK DESTINATION Library/Frameworks
       COMPONENT libraries)
   install(

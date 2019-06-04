@@ -11,7 +11,7 @@
 #include "net/third_party/quic/test_tools/simulator/actor.h"
 #include "net/third_party/quic/test_tools/simulator/port.h"
 
-namespace net {
+namespace quic {
 namespace simulator {
 
 // A reliable simplex link between two endpoints with constrained bandwidth.  A
@@ -20,10 +20,12 @@ namespace simulator {
 class OneWayLink : public Actor, public ConstrainedPortInterface {
  public:
   OneWayLink(Simulator* simulator,
-             std::string name,
+             QuicString name,
              UnconstrainedPortInterface* sink,
              QuicBandwidth bandwidth,
              QuicTime::Delta propagation_delay);
+  OneWayLink(const OneWayLink&) = delete;
+  OneWayLink& operator=(const OneWayLink&) = delete;
   ~OneWayLink() override;
 
   void AcceptPacket(std::unique_ptr<Packet> packet) override;
@@ -57,8 +59,6 @@ class OneWayLink : public Actor, public ConstrainedPortInterface {
   const QuicTime::Delta propagation_delay_;
 
   QuicTime next_write_at_;
-
-  DISALLOW_COPY_AND_ASSIGN(OneWayLink);
 };
 
 // A full-duplex link between two endpoints, functionally equivalent to two
@@ -66,7 +66,7 @@ class OneWayLink : public Actor, public ConstrainedPortInterface {
 class SymmetricLink {
  public:
   SymmetricLink(Simulator* simulator,
-                std::string name,
+                QuicString name,
                 UnconstrainedPortInterface* sink_a,
                 UnconstrainedPortInterface* sink_b,
                 QuicBandwidth bandwidth,
@@ -75,17 +75,17 @@ class SymmetricLink {
                 Endpoint* endpoint_b,
                 QuicBandwidth bandwidth,
                 QuicTime::Delta propagation_delay);
+  SymmetricLink(const SymmetricLink&) = delete;
+  SymmetricLink& operator=(const SymmetricLink&) = delete;
 
   inline QuicBandwidth bandwidth() { return a_to_b_link_.bandwidth(); }
 
  private:
   OneWayLink a_to_b_link_;
   OneWayLink b_to_a_link_;
-
-  DISALLOW_COPY_AND_ASSIGN(SymmetricLink);
 };
 
 }  // namespace simulator
-}  // namespace net
+}  // namespace quic
 
 #endif  // NET_THIRD_PARTY_QUIC_TEST_TOOLS_SIMULATOR_LINK_H_

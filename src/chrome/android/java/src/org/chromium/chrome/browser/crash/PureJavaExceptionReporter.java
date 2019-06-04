@@ -4,6 +4,7 @@
 
 package org.chromium.chrome.browser.crash;
 
+import android.annotation.SuppressLint;
 import android.app.ActivityManager;
 import android.app.ActivityManager.RunningAppProcessInfo;
 import android.content.Context;
@@ -14,16 +15,19 @@ import org.chromium.base.ApiCompatibilityUtils;
 import org.chromium.base.BuildConfig;
 import org.chromium.base.BuildInfo;
 import org.chromium.base.ContextUtils;
+import org.chromium.base.PiiElider;
 import org.chromium.base.StrictModeContext;
 import org.chromium.base.VisibleForTesting;
 import org.chromium.base.annotations.MainDex;
 import org.chromium.chrome.browser.ChromeVersionInfo;
+import org.chromium.components.crash.CrashKeys;
 
 import java.io.File;
 import java.io.FileNotFoundException;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicReferenceArray;
 
 /**
  * Creates a crash report and uploads it to crash server if there is a Java exception.
@@ -58,8 +62,8 @@ public class PureJavaExceptionReporter {
     private static final String RN = "\r\n";
     private static final String FORM_DATA_MESSAGE = "Content-Disposition: form-data; name=\"";
 
-    protected File mMinidumpFile = null;
-    private FileOutputStream mMinidumpFileStream = null;
+    protected File mMinidumpFile;
+    private FileOutputStream mMinidumpFileStream;
     private final String mLocalId = UUID.randomUUID().toString().replace("-", "").substring(0, 16);
     private final String mBoundary = "------------" + UUID.randomUUID() + RN;
 
@@ -103,6 +107,7 @@ public class PureJavaExceptionReporter {
         }
     }
 
+    @SuppressLint("WrongConstant")
     private void createReport(Throwable javaException) {
         try {
             String minidumpFileName = FILE_PREFIX + mLocalId + FILE_SUFFIX;
@@ -134,13 +139,20 @@ public class PureJavaExceptionReporter {
         addPairedString(GMS_CORE_VERSION, buildInfo.gmsVersionCode);
         addPairedString(INSTALLER_PACKAGE_NAME, buildInfo.installerPackageName);
         addPairedString(ABI_NAME, buildInfo.abiString);
-        addPairedString(EXCEPTION_INFO, Log.getStackTraceString(javaException));
+        addPairedString(EXCEPTION_INFO,
+                PiiElider.sanitizeStacktrace(Log.getStackTraceString(javaException)));
         addPairedString(EARLY_JAVA_EXCEPTION, "true");
         addPairedString(PACKAGE,
                 String.format("%s v%s (%s)", BuildConfig.FIREBASE_APP_ID, buildInfo.versionCode,
                         buildInfo.versionName));
         addPairedString(CUSTOM_THEMES, buildInfo.customThemes);
         addPairedString(RESOURCES_VERSION, buildInfo.resourcesVersion);
+
+        AtomicReferenceArray<String> values = CrashKeys.getInstance().getValues();
+        for (int i = 0; i < values.length(); i++) {
+            String value = values.get(i);
+            if (value != null) addPairedString(CrashKeys.getKey(i), value);
+        }
 
         addString(mBoundary);
     }

@@ -12,10 +12,8 @@
 #include "SkSurface.h"
 #include "SkBlendModePriv.h"
 #include "SkColorPriv.h"
-
-#if SK_SUPPORT_GPU
+#include "SkTextUtils.h"
 #include "GrContext.h"
-#endif
 
 namespace skiagm {
 

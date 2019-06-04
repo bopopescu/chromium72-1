@@ -15,6 +15,7 @@
 #include "base/location.h"
 #include "base/single_thread_task_runner.h"
 #include "base/strings/string_number_conversions.h"
+#include "base/trace_event/trace_event.h"
 #include "media/base/audio_decoder_config.h"
 #include "media/base/audio_renderer.h"
 #include "media/base/bind_to_current_loop.h"
@@ -26,10 +27,6 @@
 #include "media/base/video_decoder_config.h"
 #include "media/base/video_renderer.h"
 #include "media/base/wall_clock_time_source.h"
-
-#if defined(USE_NEVA_MEDIA)
-#include "media/base/neva/media_platform_api.h"
-#endif
 
 namespace media {
 
@@ -137,11 +134,10 @@ RendererImpl::~RendererImpl() {
   video_renderer_.reset();
   audio_renderer_.reset();
 
-  if (!init_cb_.is_null()) {
+  if (init_cb_)
     FinishInitialization(PIPELINE_ERROR_ABORT);
-  } else if (!flush_cb_.is_null()) {
-    base::ResetAndReturn(&flush_cb_).Run();
-  }
+  else if (flush_cb_)
+    FinishFlush();
 }
 
 void RendererImpl::Initialize(MediaResource* media_resource,
@@ -150,8 +146,9 @@ void RendererImpl::Initialize(MediaResource* media_resource,
   DVLOG(1) << __func__;
   DCHECK(task_runner_->BelongsToCurrentThread());
   DCHECK_EQ(state_, STATE_UNINITIALIZED);
-  DCHECK(!init_cb.is_null());
+  DCHECK(init_cb);
   DCHECK(client);
+  TRACE_EVENT_ASYNC_BEGIN0("media", "RendererImpl::Initialize", this);
 
   client_ = client;
   media_resource_ = media_resource;
@@ -172,6 +169,7 @@ void RendererImpl::SetCdm(CdmContext* cdm_context,
   DVLOG(1) << __func__;
   DCHECK(task_runner_->BelongsToCurrentThread());
   DCHECK(cdm_context);
+  TRACE_EVENT0("media", "RendererImpl::SetCdm");
 
   if (cdm_context_) {
     DVLOG(1) << "Switching CDM not supported.";
@@ -185,7 +183,7 @@ void RendererImpl::SetCdm(CdmContext* cdm_context,
   if (state_ != STATE_INIT_PENDING_CDM)
     return;
 
-  DCHECK(!init_cb_.is_null());
+  DCHECK(init_cb_);
   state_ = STATE_INITIALIZING;
   InitializeAudioRenderer();
 }
@@ -193,11 +191,13 @@ void RendererImpl::SetCdm(CdmContext* cdm_context,
 void RendererImpl::Flush(const base::Closure& flush_cb) {
   DVLOG(1) << __func__;
   DCHECK(task_runner_->BelongsToCurrentThread());
-  DCHECK(flush_cb_.is_null());
+  DCHECK(!flush_cb_);
   DCHECK(!(pending_audio_track_change_ || pending_video_track_change_));
+  TRACE_EVENT_ASYNC_BEGIN0("media", "RendererImpl::Flush", this);
 
   if (state_ == STATE_FLUSHED) {
-    task_runner_->PostTask(FROM_HERE, flush_cb);
+    flush_cb_ = BindToCurrentLoop(flush_cb);
+    FinishFlush();
     return;
   }
 
@@ -217,6 +217,8 @@ void RendererImpl::Flush(const base::Closure& flush_cb) {
 void RendererImpl::StartPlayingFrom(base::TimeDelta time) {
   DVLOG(1) << __func__;
   DCHECK(task_runner_->BelongsToCurrentThread());
+  TRACE_EVENT1("media", "RendererImpl::StartPlayingFrom", "time_us",
+               time.InMicroseconds());
 
   if (state_ != STATE_FLUSHED) {
     DCHECK_EQ(state_, STATE_ERROR);
@@ -239,6 +241,7 @@ void RendererImpl::StartPlayingFrom(base::TimeDelta time) {
 void RendererImpl::SetPlaybackRate(double playback_rate) {
   DVLOG(1) << __func__ << "(" << playback_rate << ")";
   DCHECK(task_runner_->BelongsToCurrentThread());
+  TRACE_EVENT1("media", "RendererImpl::SetPlaybackRate", "rate", playback_rate);
 
   // Playback rate changes are only carried out while playing.
   if (state_ != STATE_PLAYING && state_ != STATE_FLUSHED)
@@ -275,6 +278,7 @@ base::TimeDelta RendererImpl::GetMediaTime() {
       return restarting_audio_time_;
     }
   }
+
   return time_source_->CurrentMediaTime();
 }
 
@@ -295,13 +299,6 @@ void RendererImpl::EnableClocklessVideoPlaybackForTesting() {
 
   clockless_video_playback_enabled_for_testing_ = true;
 }
-
-#if defined(USE_NEVA_MEDIA)
-void RendererImpl::SetMediaPlatformAPI(
-    scoped_refptr<MediaPlatformAPI>& media_platform_api) {
-  media_platform_api_ = media_platform_api;
-}
-#endif
 
 bool RendererImpl::GetWallClockTimes(
     const std::vector<base::TimeDelta>& media_timestamps,
@@ -344,15 +341,23 @@ bool RendererImpl::HasEncryptedStream() {
 }
 
 void RendererImpl::FinishInitialization(PipelineStatus status) {
-  DCHECK(!init_cb_.is_null());
-  base::ResetAndReturn(&init_cb_).Run(status);
+  DCHECK(init_cb_);
+  TRACE_EVENT_ASYNC_END1("media", "RendererImpl::Initialize", this, "status",
+                         MediaLog::PipelineStatusToString(status));
+  std::move(init_cb_).Run(status);
+}
+
+void RendererImpl::FinishFlush() {
+  DCHECK(flush_cb_);
+  TRACE_EVENT_ASYNC_END0("media", "RendererImpl::Flush", this);
+  std::move(flush_cb_).Run();
 }
 
 void RendererImpl::InitializeAudioRenderer() {
   DVLOG(1) << __func__;
   DCHECK(task_runner_->BelongsToCurrentThread());
   DCHECK_EQ(state_, STATE_INITIALIZING);
-  DCHECK(!init_cb_.is_null());
+  DCHECK(init_cb_);
 
   PipelineStatusCB done_cb =
       base::Bind(&RendererImpl::OnAudioRendererInitializeDone, weak_this_);
@@ -364,7 +369,7 @@ void RendererImpl::InitializeAudioRenderer() {
 
   if (!audio_stream) {
     audio_renderer_.reset();
-    task_runner_->PostTask(FROM_HERE, base::Bind(done_cb, PIPELINE_OK));
+    task_runner_->PostTask(FROM_HERE, base::BindOnce(done_cb, PIPELINE_OK));
     return;
   }
 
@@ -385,7 +390,7 @@ void RendererImpl::OnAudioRendererInitializeDone(PipelineStatus status) {
   // OnError() may be fired at any time by the renderers, even if they thought
   // they initialized successfully (due to delayed output device setup).
   if (state_ != STATE_INITIALIZING) {
-    DCHECK(init_cb_.is_null());
+    DCHECK(!init_cb_);
     audio_renderer_.reset();
     return;
   }
@@ -395,7 +400,7 @@ void RendererImpl::OnAudioRendererInitializeDone(PipelineStatus status) {
     return;
   }
 
-  DCHECK(!init_cb_.is_null());
+  DCHECK(init_cb_);
   InitializeVideoRenderer();
 }
 
@@ -403,7 +408,7 @@ void RendererImpl::InitializeVideoRenderer() {
   DVLOG(1) << __func__;
   DCHECK(task_runner_->BelongsToCurrentThread());
   DCHECK_EQ(state_, STATE_INITIALIZING);
-  DCHECK(!init_cb_.is_null());
+  DCHECK(init_cb_);
 
   PipelineStatusCB done_cb =
       base::Bind(&RendererImpl::OnVideoRendererInitializeDone, weak_this_);
@@ -415,7 +420,7 @@ void RendererImpl::InitializeVideoRenderer() {
 
   if (!video_stream) {
     video_renderer_.reset();
-    task_runner_->PostTask(FROM_HERE, base::Bind(done_cb, PIPELINE_OK));
+    task_runner_->PostTask(FROM_HERE, base::BindOnce(done_cb, PIPELINE_OK));
     return;
   }
 
@@ -436,13 +441,13 @@ void RendererImpl::OnVideoRendererInitializeDone(PipelineStatus status) {
   // OnError() may be fired at any time by the renderers, even if they thought
   // they initialized successfully (due to delayed output device setup).
   if (state_ != STATE_INITIALIZING) {
-    DCHECK(init_cb_.is_null());
+    DCHECK(!init_cb_);
     audio_renderer_.reset();
     video_renderer_.reset();
     return;
   }
 
-  DCHECK(!init_cb_.is_null());
+  DCHECK(init_cb_);
 
   if (status != PIPELINE_OK) {
     FinishInitialization(status);
@@ -467,7 +472,7 @@ void RendererImpl::FlushInternal() {
   DVLOG(1) << __func__;
   DCHECK(task_runner_->BelongsToCurrentThread());
   DCHECK_EQ(state_, STATE_FLUSHING);
-  DCHECK(!flush_cb_.is_null());
+  DCHECK(flush_cb_);
 
   if (time_ticking_)
     PausePlayback();
@@ -480,7 +485,7 @@ void RendererImpl::FlushAudioRenderer() {
   DVLOG(1) << __func__;
   DCHECK(task_runner_->BelongsToCurrentThread());
   DCHECK_EQ(state_, STATE_FLUSHING);
-  DCHECK(!flush_cb_.is_null());
+  DCHECK(flush_cb_);
 
   if (!audio_renderer_ || !audio_playing_) {
     OnAudioRendererFlushDone();
@@ -495,12 +500,12 @@ void RendererImpl::OnAudioRendererFlushDone() {
   DCHECK(task_runner_->BelongsToCurrentThread());
 
   if (state_ == STATE_ERROR) {
-    DCHECK(flush_cb_.is_null());
+    DCHECK(!flush_cb_);
     return;
   }
 
   DCHECK_EQ(state_, STATE_FLUSHING);
-  DCHECK(!flush_cb_.is_null());
+  DCHECK(flush_cb_);
 
   // If we had a deferred video renderer underflow prior to the flush, it should
   // have been cleared by the audio renderer changing to BUFFERING_HAVE_NOTHING.
@@ -516,7 +521,7 @@ void RendererImpl::FlushVideoRenderer() {
   DVLOG(1) << __func__;
   DCHECK(task_runner_->BelongsToCurrentThread());
   DCHECK_EQ(state_, STATE_FLUSHING);
-  DCHECK(!flush_cb_.is_null());
+  DCHECK(flush_cb_);
 
   if (!video_renderer_ || !video_playing_) {
     OnVideoRendererFlushDone();
@@ -531,18 +536,18 @@ void RendererImpl::OnVideoRendererFlushDone() {
   DCHECK(task_runner_->BelongsToCurrentThread());
 
   if (state_ == STATE_ERROR) {
-    DCHECK(flush_cb_.is_null());
+    DCHECK(!flush_cb_);
     return;
   }
 
   DCHECK_EQ(state_, STATE_FLUSHING);
-  DCHECK(!flush_cb_.is_null());
+  DCHECK(flush_cb_);
 
   DCHECK_EQ(video_buffering_state_, BUFFERING_HAVE_NOTHING);
   video_ended_ = false;
   video_playing_ = false;
   state_ = STATE_FLUSHED;
-  base::ResetAndReturn(&flush_cb_).Run();
+  FinishFlush();
 }
 
 void RendererImpl::ReinitializeAudioRenderer(
@@ -630,12 +635,12 @@ void RendererImpl::RestartAudioRenderer(
     return;
   }
 
-  audio_renderer_->StartPlaying();
   {
     base::AutoLock lock(restarting_audio_lock_);
     audio_playing_ = true;
     pending_audio_track_change_ = false;
   }
+  audio_renderer_->StartPlaying();
   std::move(restart_completed_cb).Run();
 }
 
@@ -657,9 +662,9 @@ void RendererImpl::RestartVideoRenderer(
     return;
   }
 
-  video_renderer_->StartPlayingFrom(time);
   video_playing_ = true;
   pending_video_track_change_ = false;
+  video_renderer_->StartPlayingFrom(time);
   std::move(restart_completed_cb).Run();
 }
 
@@ -675,10 +680,14 @@ void RendererImpl::OnBufferingStateChange(DemuxerStream::Type type,
                                         ? &audio_buffering_state_
                                         : &video_buffering_state_;
 
-  DVLOG(1) << __func__ << (type == DemuxerStream::AUDIO ? " audio " : " video ")
+  const auto* type_string = DemuxerStream::GetTypeName(type);
+  DVLOG(1) << __func__ << " " << type_string << " "
            << MediaLog::BufferingStateToString(*buffering_state) << " -> "
            << MediaLog::BufferingStateToString(new_buffering_state);
   DCHECK(task_runner_->BelongsToCurrentThread());
+  TRACE_EVENT2("media", "RendererImpl::OnBufferingStateChange", "type",
+               type_string, "state",
+               MediaLog::BufferingStateToString(new_buffering_state));
 
   bool was_waiting_for_enough_data = WaitingForEnoughData();
 
@@ -767,6 +776,8 @@ bool RendererImpl::WaitingForEnoughData() const {
 void RendererImpl::PausePlayback() {
   DVLOG(1) << __func__;
   DCHECK(task_runner_->BelongsToCurrentThread());
+  TRACE_EVENT0("media", "RendererImpl::PausePlayback");
+
   switch (state_) {
     case STATE_PLAYING:
       DCHECK(PlaybackHasEnded() || WaitingForEnoughData() ||
@@ -798,11 +809,6 @@ void RendererImpl::PausePlayback() {
 
   if (playback_rate_ > 0 && video_renderer_)
     video_renderer_->OnTimeStopped();
-
-#if defined(USE_NEVA_MEDIA)
-  if (media_platform_api_)
-    media_platform_api_->SetPlaybackRate(0.0f);
-#endif
 }
 
 void RendererImpl::StartPlayback() {
@@ -810,6 +816,7 @@ void RendererImpl::StartPlayback() {
   DCHECK(task_runner_->BelongsToCurrentThread());
   DCHECK_EQ(state_, STATE_PLAYING);
   DCHECK(!WaitingForEnoughData());
+  TRACE_EVENT0("media", "RendererImpl::StartPlayback");
 
   if (!time_ticking_) {
     time_ticking_ = true;
@@ -820,27 +827,28 @@ void RendererImpl::StartPlayback() {
     video_playing_ = true;
     video_renderer_->OnTimeProgressing();
   }
-
-#if defined(USE_NEVA_MEDIA)
-  if (media_platform_api_)
-    media_platform_api_->SetPlaybackRate(playback_rate_);
-#endif
 }
 
 void RendererImpl::OnRendererEnded(DemuxerStream::Type type) {
-  DVLOG(1) << __func__ << (type == DemuxerStream::AUDIO ? " audio" : " video");
+  const auto* type_string = DemuxerStream::GetTypeName(type);
+  DVLOG(1) << __func__ << ": " << type_string;
   DCHECK(task_runner_->BelongsToCurrentThread());
   DCHECK((type == DemuxerStream::AUDIO) || (type == DemuxerStream::VIDEO));
+  TRACE_EVENT1("media", "RendererImpl::OnRendererEnded", "type", type_string);
 
   if (state_ != STATE_PLAYING)
     return;
 
   if (type == DemuxerStream::AUDIO) {
-    DCHECK(!audio_ended_);
+    // If all streams are ended, do not propagate a redundant ended event.
+    if (audio_ended_ && PlaybackHasEnded())
+      return;
     audio_ended_ = true;
   } else {
-    DCHECK(!video_ended_);
     DCHECK(video_renderer_);
+    // If all streams are ended, do not propagate a redundant ended event.
+    if (audio_ended_ && PlaybackHasEnded())
+      return;
     video_ended_ = true;
     video_renderer_->OnTimeStopped();
   }
@@ -877,6 +885,8 @@ void RendererImpl::OnError(PipelineStatus error) {
   DVLOG(1) << __func__ << "(" << error << ")";
   DCHECK(task_runner_->BelongsToCurrentThread());
   DCHECK_NE(PIPELINE_OK, error) << "PIPELINE_OK isn't an error!";
+  TRACE_EVENT1("media", "RendererImpl::OnError", "error",
+               MediaLog::PipelineStatusToString(error));
 
   // An error has already been delivered.
   if (state_ == STATE_ERROR)
@@ -885,7 +895,7 @@ void RendererImpl::OnError(PipelineStatus error) {
   const State old_state = state_;
   state_ = STATE_ERROR;
 
-  if (!init_cb_.is_null()) {
+  if (init_cb_) {
     DCHECK(old_state == STATE_INITIALIZING ||
            old_state == STATE_INIT_PENDING_CDM);
     FinishInitialization(error);
@@ -895,8 +905,8 @@ void RendererImpl::OnError(PipelineStatus error) {
   // After OnError() returns, the pipeline may destroy |this|.
   client_->OnError(error);
 
-  if (!flush_cb_.is_null())
-    base::ResetAndReturn(&flush_cb_).Run();
+  if (flush_cb_)
+    FinishFlush();
 }
 
 void RendererImpl::OnWaitingForDecryptionKey() {
@@ -925,15 +935,13 @@ void RendererImpl::OnVideoOpacityChange(bool opaque) {
 }
 
 void RendererImpl::CleanUpTrackChange(base::RepeatingClosure on_finished,
-                                      bool* pending_change,
                                       bool* ended,
                                       bool* playing) {
-  {
-    // This lock is required for setting pending_audio_track_change_, and has
-    // no effect when setting pending_video_track_change_.
-    base::AutoLock lock(restarting_audio_lock_);
-    *pending_change = *ended = *playing = false;
-  }
+  *playing = false;
+  // If either stream is alive (i.e. hasn't reached ended state), ended can be
+  // set to false. If both streams are dead, keep ended=true.
+  if ((audio_renderer_ && !audio_ended_) || (video_renderer_ && !video_ended_))
+    *ended = false;
   std::move(on_finished).Run();
 }
 
@@ -941,6 +949,7 @@ void RendererImpl::OnSelectedVideoTracksChanged(
     const std::vector<DemuxerStream*>& enabled_tracks,
     base::OnceClosure change_completed_cb) {
   DCHECK(task_runner_->BelongsToCurrentThread());
+  TRACE_EVENT0("media", "RendererImpl::OnSelectedVideoTracksChanged");
 
   DCHECK_LT(enabled_tracks.size(), 2u);
   DemuxerStream* stream = enabled_tracks.empty() ? nullptr : enabled_tracks[0];
@@ -966,14 +975,14 @@ void RendererImpl::OnSelectedVideoTracksChanged(
   pending_video_track_change_ = true;
   video_renderer_->Flush(base::BindRepeating(
       &RendererImpl::CleanUpTrackChange, weak_this_,
-      base::Passed(&fix_stream_cb), &pending_video_track_change_, &video_ended_,
-      &video_playing_));
+      base::Passed(&fix_stream_cb), &video_ended_, &video_playing_));
 }
 
 void RendererImpl::OnEnabledAudioTracksChanged(
     const std::vector<DemuxerStream*>& enabled_tracks,
     base::OnceClosure change_completed_cb) {
   DCHECK(task_runner_->BelongsToCurrentThread());
+  TRACE_EVENT0("media", "RendererImpl::OnEnabledAudioTracksChanged");
 
   DCHECK_LT(enabled_tracks.size(), 2u);
   DemuxerStream* stream = enabled_tracks.empty() ? nullptr : enabled_tracks[0];
@@ -1008,8 +1017,7 @@ void RendererImpl::OnEnabledAudioTracksChanged(
 
   audio_renderer_->Flush(base::BindRepeating(
       &RendererImpl::CleanUpTrackChange, weak_this_,
-      base::Passed(&fix_stream_cb), &pending_audio_track_change_, &audio_ended_,
-      &audio_playing_));
+      base::Passed(&fix_stream_cb), &audio_ended_, &audio_playing_));
 }
 
 }  // namespace media

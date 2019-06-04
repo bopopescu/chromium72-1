@@ -8,7 +8,7 @@
 //
 
 #if defined(_MSC_VER)
-#pragma warning(disable : 4718)
+#    pragma warning(disable : 4718)
 #endif
 
 #include "compiler/translator/SymbolTable.h"
@@ -24,7 +24,7 @@ namespace sh
 class TSymbolTable::TSymbolTableLevel
 {
   public:
-    TSymbolTableLevel() {}
+    TSymbolTableLevel() = default;
 
     bool insert(TSymbol *symbol);
 
@@ -69,8 +69,7 @@ TSymbolTable::TSymbolTable()
       mUniqueIdCounter(0),
       mShaderType(GL_FRAGMENT_SHADER),
       mGlInVariableWithArraySize(nullptr)
-{
-}
+{}
 
 TSymbolTable::~TSymbolTable() = default;
 
@@ -86,8 +85,8 @@ bool TSymbolTable::atGlobalLevel() const
 
 void TSymbolTable::push()
 {
-    mTable.push_back(std::unique_ptr<TSymbolTableLevel>(new TSymbolTableLevel));
-    mPrecisionStack.push_back(std::unique_ptr<PrecisionStackLevel>(new PrecisionStackLevel));
+    mTable.emplace_back(new TSymbolTableLevel);
+    mPrecisionStack.emplace_back(new PrecisionStackLevel);
 }
 
 void TSymbolTable::pop()
@@ -98,7 +97,7 @@ void TSymbolTable::pop()
 
 const TFunction *TSymbolTable::markFunctionHasPrototypeDeclaration(
     const ImmutableString &mangledName,
-    bool *hadPrototypeDeclarationOut)
+    bool *hadPrototypeDeclarationOut) const
 {
     TFunction *function         = findUserDefinedFunction(mangledName);
     *hadPrototypeDeclarationOut = function->hasPrototypeDeclaration();
@@ -107,7 +106,7 @@ const TFunction *TSymbolTable::markFunctionHasPrototypeDeclaration(
 }
 
 const TFunction *TSymbolTable::setFunctionParameterNamesFromDefinition(const TFunction *function,
-                                                                       bool *wasDefinedOut)
+                                                                       bool *wasDefinedOut) const
 {
     TFunction *firstDeclaration = findUserDefinedFunction(function->getMangledName());
     ASSERT(firstDeclaration);
@@ -156,8 +155,9 @@ const TVariable *TSymbolTable::gl_SecondaryFragDataEXT() const
     return mVar_gl_SecondaryFragDataEXT;
 }
 
-TSymbolTable::VariableMetadata *TSymbolTable::getOrCreateVariableMetadata(const TVariable &variable) {
-    int id = variable.uniqueId().get();
+TSymbolTable::VariableMetadata *TSymbolTable::getOrCreateVariableMetadata(const TVariable &variable)
+{
+    int id    = variable.uniqueId().get();
     auto iter = mVariableMetadata.find(id);
     if (iter == mVariableMetadata.end())
     {
@@ -168,13 +168,13 @@ TSymbolTable::VariableMetadata *TSymbolTable::getOrCreateVariableMetadata(const 
 
 void TSymbolTable::markStaticWrite(const TVariable &variable)
 {
-    auto metadata = getOrCreateVariableMetadata(variable);
+    auto metadata         = getOrCreateVariableMetadata(variable);
     metadata->staticWrite = true;
 }
 
 void TSymbolTable::markStaticRead(const TVariable &variable)
 {
-    auto metadata = getOrCreateVariableMetadata(variable);
+    auto metadata        = getOrCreateVariableMetadata(variable);
     metadata->staticRead = true;
 }
 
@@ -189,7 +189,7 @@ bool TSymbolTable::isStaticallyUsed(const TVariable &variable) const
 void TSymbolTable::addInvariantVarying(const TVariable &variable)
 {
     ASSERT(atGlobalLevel());
-    auto metadata = getOrCreateVariableMetadata(variable);
+    auto metadata       = getOrCreateVariableMetadata(variable);
     metadata->invariant = true;
 }
 
@@ -200,7 +200,7 @@ bool TSymbolTable::isVaryingInvariant(const TVariable &variable) const
     {
         return true;
     }
-    int id = variable.uniqueId().get();
+    int id    = variable.uniqueId().get();
     auto iter = mVariableMetadata.find(id);
     return iter != mVariableMetadata.end() && iter->second.invariant;
 }
@@ -213,6 +213,17 @@ void TSymbolTable::setGlobalInvariant(bool invariant)
 
 const TSymbol *TSymbolTable::find(const ImmutableString &name, int shaderVersion) const
 {
+    const TSymbol *userSymbol = findUserDefined(name);
+    if (userSymbol)
+    {
+        return userSymbol;
+    }
+
+    return findBuiltIn(name, shaderVersion);
+}
+
+const TSymbol *TSymbolTable::findUserDefined(const ImmutableString &name) const
+{
     int userDefinedLevel = static_cast<int>(mTable.size()) - 1;
     while (userDefinedLevel >= 0)
     {
@@ -224,7 +235,7 @@ const TSymbol *TSymbolTable::find(const ImmutableString &name, int shaderVersion
         userDefinedLevel--;
     }
 
-    return findBuiltIn(name, shaderVersion);
+    return nullptr;
 }
 
 TFunction *TSymbolTable::findUserDefinedFunction(const ImmutableString &name) const
@@ -244,6 +255,14 @@ bool TSymbolTable::declare(TSymbol *symbol)
 {
     ASSERT(!mTable.empty());
     ASSERT(symbol->symbolType() == SymbolType::UserDefined);
+    ASSERT(!symbol->isFunction());
+    return mTable.back()->insert(symbol);
+}
+
+bool TSymbolTable::declareInternal(TSymbol *symbol)
+{
+    ASSERT(!mTable.empty());
+    ASSERT(symbol->symbolType() == SymbolType::AngleInternal);
     ASSERT(!symbol->isFunction());
     return mTable.back()->insert(symbol);
 }
@@ -299,7 +318,7 @@ void TSymbolTable::clearCompilationResults()
     mGlInVariableWithArraySize = nullptr;
 
     // User-defined scopes should have already been cleared when the compilation finished.
-    ASSERT(mTable.size() == 0u);
+    ASSERT(mTable.empty());
 }
 
 int TSymbolTable::nextUniqueIdValue()
@@ -316,7 +335,7 @@ void TSymbolTable::initializeBuiltIns(sh::GLenum type,
     mResources  = resources;
 
     // We need just one precision stack level for predefined precisions.
-    mPrecisionStack.push_back(std::unique_ptr<PrecisionStackLevel>(new PrecisionStackLevel));
+    mPrecisionStack.emplace_back(new PrecisionStackLevel);
 
     switch (type)
     {
@@ -356,8 +375,7 @@ void TSymbolTable::initSamplerDefaultPrecision(TBasicType samplerType)
     setDefaultPrecision(samplerType, EbpLow);
 }
 
-TSymbolTable::VariableMetadata::VariableMetadata() : staticRead(false), staticWrite(false), invariant(false)
-{
-}
-
+TSymbolTable::VariableMetadata::VariableMetadata()
+    : staticRead(false), staticWrite(false), invariant(false)
+{}
 }  // namespace sh

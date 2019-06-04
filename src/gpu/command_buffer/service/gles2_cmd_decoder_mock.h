@@ -142,6 +142,16 @@ class MockGLES2Decoder : public GLES2Decoder {
                     int height,
                     int depth));
   MOCK_METHOD0(GetErrorState, ErrorState *());
+  MOCK_METHOD8(CreateAbstractTexture,
+               std::unique_ptr<gpu::gles2::AbstractTexture>(
+                   unsigned /* GLenum */ target,
+                   unsigned /* GLenum */ internal_format,
+                   int /* GLsizei */ width,
+                   int /* GLsizei */ height,
+                   int /* GLsizei */ depth,
+                   int /* GLint */ border,
+                   unsigned /* GLenum */ format,
+                   unsigned /* GLenum */ type));
 
   MOCK_METHOD0(GetLogger, Logger*());
 
@@ -163,6 +173,9 @@ class MockGLES2Decoder : public GLES2Decoder {
   MOCK_METHOD1(
       SetCopyTextureResourceManagerForTest,
       void(CopyTextureCHROMIUMResourceManager* copy_texture_resource_manager));
+  MOCK_METHOD1(
+      SetCopyTexImageBlitterForTest,
+      void(CopyTexImageResourceManager* copy_texture_resource_manager));
 
  private:
   base::WeakPtrFactory<MockGLES2Decoder> weak_ptr_factory_;

@@ -15,8 +15,8 @@
 #include "chrome/browser/ui/app_list/arc/arc_app_list_prefs.h"
 #include "chrome/browser/ui/app_list/arc/arc_app_utils.h"
 #include "chrome/browser/ui/ash/launcher/arc_app_window_launcher_controller.h"
+#include "chrome/browser/ui/ash/tablet_mode_client.h"
 #include "chrome/grit/generated_resources.h"
-#include "ui/base/ui_base_features.h"
 
 ArcAppContextMenu::ArcAppContextMenu(app_list::AppContextMenuDelegate* delegate,
                                      Profile* profile,
@@ -29,10 +29,6 @@ ArcAppContextMenu::~ArcAppContextMenu() = default;
 void ArcAppContextMenu::GetMenuModel(GetMenuModelCallback callback) {
   auto menu_model = std::make_unique<ui::SimpleMenuModel>(this);
   BuildMenu(menu_model.get());
-  if (!features::IsTouchableAppContextMenuEnabled()) {
-    std::move(callback).Run(std::move(menu_model));
-    return;
-  }
   BuildAppShortcutsMenu(std::move(menu_model), std::move(callback));
 }
 
@@ -46,24 +42,23 @@ void ArcAppContextMenu::BuildMenu(ui::SimpleMenuModel* menu_model) {
     return;
   }
 
-  if (!controller()->IsAppOpen(app_id())) {
-    AddContextMenuOption(menu_model, LAUNCH_NEW,
+  if (!controller()->IsAppOpen(app_id()) && !app_info->suspended) {
+    AddContextMenuOption(menu_model, ash::LAUNCH_NEW,
                          IDS_APP_CONTEXT_MENU_ACTIVATE_ARC);
-    if (!features::IsTouchableAppContextMenuEnabled())
-      menu_model->AddSeparator(ui::NORMAL_SEPARATOR);
   }
   // Create default items.
   app_list::AppContextMenu::BuildMenu(menu_model);
 
-  if (!features::IsTouchableAppContextMenuEnabled())
-    menu_model->AddSeparator(ui::NORMAL_SEPARATOR);
-  if (arc_prefs->IsShortcut(app_id()))
-    AddContextMenuOption(menu_model, UNINSTALL, IDS_APP_LIST_REMOVE_SHORTCUT);
-  else if (!app_info->sticky)
-    AddContextMenuOption(menu_model, UNINSTALL, IDS_APP_LIST_UNINSTALL_ITEM);
+  if (arc_prefs->IsShortcut(app_id())) {
+    AddContextMenuOption(menu_model, ash::UNINSTALL,
+                         IDS_APP_LIST_REMOVE_SHORTCUT);
+  } else if (!app_info->sticky) {
+    AddContextMenuOption(menu_model, ash::UNINSTALL,
+                         IDS_APP_LIST_UNINSTALL_ITEM);
+  }
 
   // App Info item.
-  AddContextMenuOption(menu_model, SHOW_APP_INFO,
+  AddContextMenuOption(menu_model, ash::SHOW_APP_INFO,
                        IDS_APP_CONTEXT_MENU_SHOW_INFO);
 }
 
@@ -74,11 +69,10 @@ bool ArcAppContextMenu::IsCommandIdEnabled(int command_id) const {
       arc_prefs->GetApp(app_id());
 
   switch (command_id) {
-    case UNINSTALL:
-      return app_info &&
-          !app_info->sticky &&
-          (app_info->ready || app_info->shortcut);
-    case SHOW_APP_INFO:
+    case ash::UNINSTALL:
+      return app_info && !app_info->sticky &&
+             (app_info->ready || app_info->shortcut);
+    case ash::SHOW_APP_INFO:
       return app_info && app_info->ready;
     default:
       return app_list::AppContextMenu::IsCommandIdEnabled(command_id);
@@ -88,14 +82,14 @@ bool ArcAppContextMenu::IsCommandIdEnabled(int command_id) const {
 }
 
 void ArcAppContextMenu::ExecuteCommand(int command_id, int event_flags) {
-  if (command_id == LAUNCH_NEW) {
+  if (command_id == ash::LAUNCH_NEW) {
     delegate()->ExecuteLaunchCommand(event_flags);
-  } else if (command_id == UNINSTALL) {
-    arc::ShowArcAppUninstallDialog(profile(), controller(), app_id());
-  } else if (command_id == SHOW_APP_INFO) {
+  } else if (command_id == ash::UNINSTALL) {
+    arc::ShowArcAppUninstallDialog(profile(), app_id());
+  } else if (command_id == ash::SHOW_APP_INFO) {
     ShowPackageInfo();
-  } else if (command_id >= LAUNCH_APP_SHORTCUT_FIRST &&
-             command_id <= LAUNCH_APP_SHORTCUT_LAST) {
+  } else if (command_id >= ash::LAUNCH_APP_SHORTCUT_FIRST &&
+             command_id <= ash::LAUNCH_APP_SHORTCUT_LAST) {
     DCHECK(app_shortcuts_menu_builder_);
     app_shortcuts_menu_builder_->ExecuteCommand(command_id);
   } else {
@@ -120,7 +114,7 @@ void ArcAppContextMenu::BuildAppShortcutsMenu(
   app_shortcuts_menu_builder_ =
       std::make_unique<arc::ArcAppShortcutsMenuBuilder>(
           profile(), app_id(), controller()->GetAppListDisplayId(),
-          LAUNCH_APP_SHORTCUT_FIRST, LAUNCH_APP_SHORTCUT_LAST);
+          ash::LAUNCH_APP_SHORTCUT_FIRST, ash::LAUNCH_APP_SHORTCUT_LAST);
   app_shortcuts_menu_builder_->BuildMenu(
       app_info->package_name, std::move(menu_model), std::move(callback));
 }
@@ -138,7 +132,8 @@ void ArcAppContextMenu::ShowPackageInfo() {
   if (arc::ShowPackageInfo(app_info->package_name,
                            arc::mojom::ShowPackageInfoPage::MAIN,
                            controller()->GetAppListDisplayId()) &&
-      !controller()->IsHomeLauncherEnabledInTabletMode()) {
+      !(TabletModeClient::Get() &&
+        TabletModeClient::Get()->tablet_mode_enabled())) {
     controller()->DismissView();
   }
 }

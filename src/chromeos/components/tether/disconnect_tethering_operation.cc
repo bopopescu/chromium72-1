@@ -25,12 +25,13 @@ DisconnectTetheringOperation::Factory*
 std::unique_ptr<DisconnectTetheringOperation>
 DisconnectTetheringOperation::Factory::NewInstance(
     cryptauth::RemoteDeviceRef device_to_connect,
-    BleConnectionManager* connection_manager) {
+    device_sync::DeviceSyncClient* device_sync_client,
+    secure_channel::SecureChannelClient* secure_channel_client) {
   if (!factory_instance_) {
     factory_instance_ = new Factory();
   }
-  return factory_instance_->BuildInstance(device_to_connect,
-                                          connection_manager);
+  return factory_instance_->BuildInstance(device_to_connect, device_sync_client,
+                                          secure_channel_client);
 }
 
 // static
@@ -42,17 +43,21 @@ void DisconnectTetheringOperation::Factory::SetInstanceForTesting(
 std::unique_ptr<DisconnectTetheringOperation>
 DisconnectTetheringOperation::Factory::BuildInstance(
     cryptauth::RemoteDeviceRef device_to_connect,
-    BleConnectionManager* connection_manager) {
-  return base::WrapUnique(
-      new DisconnectTetheringOperation(device_to_connect, connection_manager));
+    device_sync::DeviceSyncClient* device_sync_client,
+    secure_channel::SecureChannelClient* secure_channel_client) {
+  return base::WrapUnique(new DisconnectTetheringOperation(
+      device_to_connect, device_sync_client, secure_channel_client));
 }
 
 DisconnectTetheringOperation::DisconnectTetheringOperation(
     cryptauth::RemoteDeviceRef device_to_connect,
-    BleConnectionManager* connection_manager)
+    device_sync::DeviceSyncClient* device_sync_client,
+    secure_channel::SecureChannelClient* secure_channel_client)
     : MessageTransferOperation(
           cryptauth::RemoteDeviceRefList{device_to_connect},
-          connection_manager),
+          secure_channel::ConnectionPriority::kHigh,
+          device_sync_client,
+          secure_channel_client),
       remote_device_(device_to_connect),
       has_sent_message_(false),
       clock_(base::DefaultClock::GetInstance()) {}

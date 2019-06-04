@@ -4,15 +4,14 @@
 
 #include "third_party/blink/renderer/modules/mediasource/track_default_list.h"
 
-#include "third_party/blink/renderer/bindings/core/v8/exception_state.h"
-#include "third_party/blink/renderer/core/dom/exception_code.h"
+#include "third_party/blink/renderer/platform/bindings/exception_state.h"
 #include "third_party/blink/renderer/platform/wtf/text/atomic_string_hash.h"
 #include "third_party/blink/renderer/platform/wtf/text/string_hash.h"
 
 namespace blink {
 
 TrackDefaultList* TrackDefaultList::Create() {
-  return new TrackDefaultList();
+  return MakeGarbageCollected<TrackDefaultList>();
 }
 
 TrackDefaultList* TrackDefaultList::Create(
@@ -38,9 +37,9 @@ TrackDefaultList* TrackDefaultList::Create(
     if (!type_and_id_to_track_default_map.insert(key, track_default)
              .is_new_entry) {
       exception_state.ThrowDOMException(
-          kInvalidAccessError, "Duplicate TrackDefault type (" + key.first +
-                                   ") and byteStreamTrackID (" + key.second +
-                                   ")");
+          DOMExceptionCode::kInvalidAccessError,
+          "Duplicate TrackDefault type (" + key.first +
+              ") and byteStreamTrackID (" + key.second + ")");
       return nullptr;
     }
   }
@@ -48,7 +47,7 @@ TrackDefaultList* TrackDefaultList::Create(
   // 2. Store a shallow copy of |trackDefaults| in this new object so the values
   //    can be returned by the accessor methods.
   // This step is done in constructor initializer.
-  return new TrackDefaultList(track_defaults);
+  return MakeGarbageCollected<TrackDefaultList>(track_defaults);
 }
 
 TrackDefault* TrackDefaultList::item(unsigned index) const {

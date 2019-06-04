@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <cctype>
 #include <string>
+#include <utility>
 
 #include "core/fxcrt/cfx_utf8decoder.h"
 #include "core/fxcrt/fx_codepage.h"
@@ -52,44 +53,6 @@ const char* FX_strstr(const char* haystack,
     haystack++;
   }
   return nullptr;
-}
-
-#ifndef NDEBUG
-bool IsValidCodePage(uint16_t codepage) {
-  switch (codepage) {
-    case FX_CODEPAGE_DefANSI:
-    case FX_CODEPAGE_ShiftJIS:
-    case FX_CODEPAGE_ChineseSimplified:
-    case FX_CODEPAGE_Hangul:
-    case FX_CODEPAGE_ChineseTraditional:
-      return true;
-    default:
-      return false;
-  }
-}
-#endif
-
-ByteString GetByteString(uint16_t codepage, const WideStringView& wstr) {
-#ifndef NDEBUG
-  ASSERT(IsValidCodePage(codepage));
-#endif
-
-  int src_len = wstr.GetLength();
-  int dest_len =
-      FXSYS_WideCharToMultiByte(codepage, 0, wstr.unterminated_c_str(), src_len,
-                                nullptr, 0, nullptr, nullptr);
-  if (!dest_len)
-    return ByteString();
-
-  ByteString bstr;
-  {
-    // Span's lifetime must end before ReleaseBuffer() below.
-    pdfium::span<char> dest_buf = bstr.GetBuffer(dest_len);
-    FXSYS_WideCharToMultiByte(codepage, 0, wstr.unterminated_c_str(), src_len,
-                              dest_buf.data(), dest_len, nullptr, nullptr);
-  }
-  bstr.ReleaseBuffer(dest_len);
-  return bstr;
 }
 
 }  // namespace
@@ -244,9 +207,16 @@ const ByteString& ByteString::operator=(const ByteStringView& stringSrc) {
   return *this;
 }
 
-const ByteString& ByteString::operator=(const ByteString& stringSrc) {
-  if (m_pData != stringSrc.m_pData)
-    m_pData = stringSrc.m_pData;
+const ByteString& ByteString::operator=(const ByteString& that) {
+  if (m_pData != that.m_pData)
+    m_pData = that.m_pData;
+
+  return *this;
+}
+
+const ByteString& ByteString::operator=(ByteString&& that) {
+  if (m_pData != that.m_pData)
+    m_pData = std::move(that.m_pData);
 
   return *this;
 }
@@ -493,6 +463,10 @@ void ByteString::Concat(const char* pSrcData, size_t nSrcLen) {
   m_pData.Swap(pNewData);
 }
 
+intptr_t ByteString::ReferenceCountForTesting() const {
+  return m_pData ? m_pData->m_nRefs : 0;
+}
+
 ByteString ByteString::Mid(size_t first, size_t count) const {
   if (!m_pData)
     return ByteString();
@@ -692,19 +666,6 @@ size_t ByteString::Replace(const ByteStringView& pOld,
   memcpy(pDest, pStart, pEnd - pStart);
   m_pData.Swap(pNewData);
   return nCount;
-}
-
-WideString ByteString::UTF8Decode() const {
-  CFX_UTF8Decoder decoder;
-  for (size_t i = 0; i < GetLength(); i++) {
-    decoder.Input(static_cast<uint8_t>(m_pData->m_String[i]));
-  }
-  return WideString(decoder.GetResult());
-}
-
-// static
-ByteString ByteString::FromUnicode(const WideString& str) {
-  return GetByteString(0, str.AsStringView());
 }
 
 int ByteString::Compare(const ByteStringView& str) const {

@@ -41,6 +41,9 @@ constants.FILE_SELECTION_METADATA_PREFETCH_PROPERTY_NAMES = [
 /**
  * Metadata property names used by FileTable and FileGrid.
  * These metadata is expected to be cached.
+ * TODO(sashab): Store capabilities as a set of flags to save memory. See
+ * https://crbug.com/849997
+ *
  * @const {!Array<string>}
  */
 constants.LIST_CONTAINER_METADATA_PREFETCH_PROPERTY_NAMES = [
@@ -52,6 +55,14 @@ constants.LIST_CONTAINER_METADATA_PREFETCH_PROPERTY_NAMES = [
   'modificationByMeTime',
   'shared',
   'size',
+  'canCopy',
+  'canDelete',
+  'canRename',
+  'canAddChildren',
+  'canShare',
+  'isMachineRoot',
+  'isExternalMedia',
+  'isArbitrarySyncFolder',
 ];
 
 /**
@@ -59,3 +70,9 @@ constants.LIST_CONTAINER_METADATA_PREFETCH_PROPERTY_NAMES = [
  * @type {string}
  */
 constants.FILES_QUICK_VIEW_HTML = 'foreground/elements/files_quick_view.html';
+
+/**
+ * Path for drive_welcome.css file.  Allow override for testing.
+ * @type {string}
+ */
+constants.DRIVE_WELCOME_CSS = 'foreground/css/drive_welcome.css';

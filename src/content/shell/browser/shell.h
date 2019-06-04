@@ -7,13 +7,15 @@
 #include <stdint.h>
 
 #include <memory>
+#include <string>
 #include <vector>
 
 #include "base/callback_forward.h"
 #include "base/memory/ref_counted.h"
 #include "base/strings/string_piece.h"
 #include "build/build_config.h"
-#include "content/public/browser/web_contents_delegate_neva.h"
+#include "content/public/browser/session_storage_namespace.h"
+#include "content/public/browser/web_contents_delegate.h"
 #include "content/public/browser/web_contents_observer.h"
 #include "ipc/ipc_channel.h"
 #include "ui/gfx/geometry/size.h"
@@ -56,7 +58,7 @@ class WebContents;
 
 // This represents one window of the Content Shell, i.e. all the UI including
 // buttons and url bar, as well as the web content area.
-class Shell : public neva::WebContentsDelegate,
+class Shell : public WebContentsDelegate,
               public WebContentsObserver {
  public:
   ~Shell() override;
@@ -98,14 +100,31 @@ class Shell : public neva::WebContentsDelegate,
       const scoped_refptr<SiteInstance>& site_instance,
       const gfx::Size& initial_size);
 
+  static Shell* CreateNewWindowWithSessionStorageNamespace(
+      BrowserContext* browser_context,
+      const GURL& url,
+      const scoped_refptr<SiteInstance>& site_instance,
+      const gfx::Size& initial_size,
+      scoped_refptr<SessionStorageNamespace> session_storage_namespace);
+
   // Returns the Shell object corresponding to the given RenderViewHost.
   static Shell* FromRenderViewHost(RenderViewHost* rvh);
 
   // Returns the currently open windows.
   static std::vector<Shell*>& windows() { return windows_; }
 
-  // Closes all windows and returns. This runs a message loop.
+  // Closes all windows, pumps teardown tasks, then returns. The main message
+  // loop will be signalled to quit, before the call returns.
   static void CloseAllWindows();
+
+  // Stores the supplied |quit_closure|, to be run when the last Shell instance
+  // is destroyed.
+  static void SetMainMessageLoopQuitClosure(base::OnceClosure quit_closure);
+
+  // Used by the BlinkTestController to stop the message loop before closing all
+  // windows, for specific tests. Fails if called after the message loop has
+  // already been signalled to quit.
+  static void QuitMainMessageLoopForTesting();
 
   // Used for content_browsertests. Called once.
   static void SetShellCreatedCallback(
@@ -133,8 +152,6 @@ class Shell : public neva::WebContentsDelegate,
                            bool to_different_document) override;
 #if defined(OS_ANDROID)
   void LoadProgressChanged(WebContents* source, double progress) override;
-  base::android::ScopedJavaLocalRef<jobject>
-      GetContentVideoViewEmbedder() override;
   void SetOverlayMode(bool use_overlay_mode) override;
 #endif
   void EnterFullscreenModeForTab(
@@ -158,7 +175,7 @@ class Shell : public neva::WebContentsDelegate,
       RenderFrameHost* frame,
       const BluetoothChooser::EventHandler& event_handler) override;
 #if defined(OS_MACOSX)
-  void HandleKeyboardEvent(WebContents* source,
+  bool HandleKeyboardEvent(WebContents* source,
                            const NativeWebKeyboardEvent& event) override;
 #endif
   bool DidAddMessageToConsole(WebContents* source,
@@ -166,17 +183,29 @@ class Shell : public neva::WebContentsDelegate,
                               const base::string16& message,
                               int32_t line_no,
                               const base::string16& source_id) override;
-  void RendererUnresponsive(WebContents* source,
-                            RenderWidgetHost* render_widget_host) override;
+  void RendererUnresponsive(
+      WebContents* source,
+      RenderWidgetHost* render_widget_host,
+      base::RepeatingClosure hang_monitor_restarter) override;
   void ActivateContents(WebContents* contents) override;
+  std::unique_ptr<content::WebContents> SwapWebContents(
+      content::WebContents* old_contents,
+      std::unique_ptr<content::WebContents> new_contents,
+      bool did_start_load,
+      bool did_finish_load) override;
   bool ShouldAllowRunningInsecureContent(content::WebContents* web_contents,
                                          bool allowed_per_prefs,
                                          const url::Origin& origin,
                                          const GURL& resource_url) override;
   gfx::Size EnterPictureInPicture(const viz::SurfaceId&,
                                   const gfx::Size& natural_size) override;
+  bool ShouldResumeRequestsForCreatedWindow() override;
 
   static gfx::Size GetShellDefaultSize();
+
+  void set_delay_popup_contents_delegate_for_testing(bool delay) {
+    delay_popup_contents_delegate_for_testing_ = delay;
+  }
 
  private:
   enum UIControl {
@@ -187,11 +216,12 @@ class Shell : public neva::WebContentsDelegate,
 
   class DevToolsWebContentsObserver;
 
-  explicit Shell(std::unique_ptr<WebContents> web_contents);
+  Shell(std::unique_ptr<WebContents> web_contents, bool should_set_delegate);
 
   // Helper to create a new Shell given a newly created WebContents.
   static Shell* CreateShell(std::unique_ptr<WebContents> web_contents,
-                            const gfx::Size& initial_size);
+                            const gfx::Size& initial_size,
+                            bool should_set_delegate);
 
   // Helper for one time initialization of application
   static void PlatformInitialize(const gfx::Size& default_window_size);
@@ -277,16 +307,13 @@ class Shell : public neva::WebContentsDelegate,
 
   bool headless_;
   bool hide_toolbar_;
+  bool delay_popup_contents_delegate_for_testing_ = false;
 
   // A container of all the open windows. We use a vector so we can keep track
   // of ordering.
   static std::vector<Shell*> windows_;
 
   static base::Callback<void(Shell*)> shell_created_callback_;
-
-  // True if the destructur of Shell should post a quit closure on the current
-  // message loop if the destructed Shell object was the last one.
-  static bool quit_message_loop_;
 };
 
 }  // namespace content

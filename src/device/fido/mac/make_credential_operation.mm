@@ -11,11 +11,16 @@
 #include "base/mac/foundation_util.h"
 #include "base/mac/mac_logging.h"
 #include "base/mac/scoped_cftyperef.h"
-#include "device/fido/fido_attestation_statement.h"
+#include "base/strings/utf_string_conversions.h"
+#include "device/fido/attestation_statement_formats.h"
 #include "device/fido/fido_constants.h"
 #include "device/fido/fido_parsing_utils.h"
+#include "device/fido/fido_transport_protocol.h"
+#include "device/fido/mac/credential_metadata.h"
 #include "device/fido/mac/keychain.h"
 #include "device/fido/mac/util.h"
+#include "device/fido/strings/grit/fido_strings.h"
+#include "ui/base/l10n/l10n_util.h"
 
 namespace device {
 namespace fido {
@@ -25,13 +30,13 @@ using base::ScopedCFTypeRef;
 
 MakeCredentialOperation::MakeCredentialOperation(
     CtapMakeCredentialRequest request,
-    std::string profile_id,
+    std::string metadata_secret,
     std::string keychain_access_group,
     Callback callback)
     : OperationBase<CtapMakeCredentialRequest,
                     AuthenticatorMakeCredentialResponse>(
           std::move(request),
-          std::move(profile_id),
+          std::move(metadata_secret),
           std::move(keychain_access_group),
           std::move(callback)) {}
 MakeCredentialOperation::~MakeCredentialOperation() = default;
@@ -41,6 +46,12 @@ const std::string& MakeCredentialOperation::RpId() const {
 }
 
 void MakeCredentialOperation::Run() {
+  if (!Init()) {
+    std::move(callback())
+        .Run(CtapDeviceResponseCode::kCtap2ErrOther, base::nullopt);
+    return;
+  }
+
   // Verify pubKeyCredParams contains ES-256, which is the only algorithm we
   // support.
   auto is_es256 =
@@ -58,16 +69,13 @@ void MakeCredentialOperation::Run() {
     return;
   }
 
-  // Prompt the user for consent.
-  // TODO(martinkr): Localize reason strings.
-  PromptTouchId("register with " + RpId());
+  // Display the macOS Touch ID prompt.
+  PromptTouchId(l10n_util::GetStringFUTF16(IDS_WEBAUTHN_TOUCH_ID_PROMPT_REASON,
+                                           base::UTF8ToUTF16(RpId())));
 }
 
-void MakeCredentialOperation::PromptTouchIdDone(bool success, NSError* err) {
+void MakeCredentialOperation::PromptTouchIdDone(bool success) {
   if (!success) {
-    // err is autoreleased.
-    CHECK(err != nil);
-    DVLOG(1) << "Touch ID prompt failed: " << base::mac::NSToCFCast(err);
     std::move(callback())
         .Run(CtapDeviceResponseCode::kCtap2ErrOperationDenied, base::nullopt);
     return;
@@ -102,13 +110,19 @@ void MakeCredentialOperation::PromptTouchIdDone(bool success, NSError* err) {
   }
 
   // Delete the key pair for this RP + user handle if one already exists.
-  const std::vector<uint8_t> keychain_item_id =
-      KeychainItemIdentifier(RpId(), request().user().user_id());
+  base::Optional<std::string> encoded_rp_id_user_id =
+      CredentialMetadata::EncodeRpIdAndUserId(metadata_secret(), RpId(),
+                                              request().user().user_id());
+  if (!encoded_rp_id_user_id) {
+    // Internal error.
+    std::move(callback())
+        .Run(CtapDeviceResponseCode::kCtap2ErrOther, base::nullopt);
+    return;
+  }
   {
     ScopedCFTypeRef<CFMutableDictionaryRef> query = DefaultKeychainQuery();
-    CFDictionarySetValue(query, kSecAttrApplicationLabel,
-                         [NSData dataWithBytes:keychain_item_id.data()
-                                        length:keychain_item_id.size()]);
+    CFDictionarySetValue(query, kSecAttrApplicationTag,
+                         base::SysUTF8ToNSString(*encoded_rp_id_user_id));
     OSStatus status = Keychain::GetInstance().ItemDelete(query);
     if (status != errSecSuccess && status != errSecItemNotFound) {
       // Internal keychain error.
@@ -120,6 +134,15 @@ void MakeCredentialOperation::PromptTouchIdDone(bool success, NSError* err) {
   }
 
   // Generate the new key pair.
+  base::Optional<std::vector<uint8_t>> credential_id =
+      GenerateCredentialIdForRequest();
+  if (!credential_id) {
+    DLOG(ERROR) << "GenerateCredentialIdForRequest failed";
+    std::move(callback())
+        .Run(CtapDeviceResponseCode::kCtap2ErrOther, base::nullopt);
+    return;
+  }
+
   ScopedCFTypeRef<CFMutableDictionaryRef> params(
       CFDictionaryCreateMutable(kCFAllocatorDefault, 0, nullptr, nullptr));
   CFDictionarySetValue(params, kSecAttrKeyType,
@@ -136,9 +159,11 @@ void MakeCredentialOperation::PromptTouchIdDone(bool success, NSError* err) {
                        access_control());
   CFDictionarySetValue(private_key_params, kSecUseAuthenticationContext,
                        authentication_context());
+  CFDictionarySetValue(private_key_params, kSecAttrApplicationTag,
+                       base::SysUTF8ToNSString(*encoded_rp_id_user_id));
   CFDictionarySetValue(private_key_params, kSecAttrApplicationLabel,
-                       [NSData dataWithBytes:keychain_item_id.data()
-                                      length:keychain_item_id.size()]);
+                       [NSData dataWithBytes:credential_id->data()
+                                      length:credential_id->size()]);
 
   ScopedCFTypeRef<CFErrorRef> cferr;
   ScopedCFTypeRef<SecKeyRef> private_key(
@@ -161,8 +186,8 @@ void MakeCredentialOperation::PromptTouchIdDone(bool success, NSError* err) {
 
   // Create attestation object. There is no separate attestation key pair, so
   // we perform self-attestation.
-  base::Optional<AuthenticatorData> authenticator_data =
-      MakeAuthenticatorData(RpId(), keychain_item_id, public_key);
+  base::Optional<AuthenticatorData> authenticator_data = MakeAuthenticatorData(
+      RpId(), *credential_id, SecKeyRefToECPublicKey(public_key));
   if (!authenticator_data) {
     DLOG(ERROR) << "MakeAuthenticatorData failed";
     std::move(callback())
@@ -178,13 +203,23 @@ void MakeCredentialOperation::PromptTouchIdDone(bool success, NSError* err) {
     return;
   }
   std::vector<std::vector<uint8_t>> no_certificates;
-  AuthenticatorMakeCredentialResponse response(AttestationObject(
-      std::move(*authenticator_data),
-      // TODO(martinkr): Add a PackedAttestationStatement for self-attestation.
-      std::make_unique<FidoAttestationStatement>(std::move(*signature),
-                                                 std::move(no_certificates))));
+  AuthenticatorMakeCredentialResponse response(
+      FidoTransportProtocol::kInternal,
+      AttestationObject(
+          std::move(*authenticator_data),
+          std::make_unique<PackedAttestationStatement>(
+              CoseAlgorithmIdentifier::kCoseEs256, std::move(*signature),
+              std::move(no_certificates))));
   std::move(callback())
       .Run(CtapDeviceResponseCode::kSuccess, std::move(response));
+}
+
+base::Optional<std::vector<uint8_t>>
+MakeCredentialOperation::GenerateCredentialIdForRequest() const {
+  return CredentialMetadata::SealCredentialId(
+      metadata_secret(), RpId(),
+      CredentialMetadata::UserEntity::FromPublicKeyCredentialUserEntity(
+          request().user()));
 }
 
 }  // namespace mac

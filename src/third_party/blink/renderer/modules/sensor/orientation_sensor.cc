@@ -4,8 +4,8 @@
 
 #include "third_party/blink/renderer/modules/sensor/orientation_sensor.h"
 
-#include "third_party/blink/renderer/bindings/core/v8/exception_state.h"
 #include "third_party/blink/renderer/core/geometry/dom_matrix.h"
+#include "third_party/blink/renderer/platform/bindings/exception_state.h"
 
 using device::mojom::blink::SensorType;
 
@@ -87,7 +87,7 @@ void OrientationSensor::PopulateMatrixInternal(
     return;
   }
   if (!hasReading()) {
-    exception_state.ThrowDOMException(kNotReadableError,
+    exception_state.ThrowDOMException(DOMExceptionCode::kNotReadableError,
                                       "Sensor data is not available.");
     return;
   }
@@ -116,7 +116,7 @@ bool OrientationSensor::isReadingDirty() const {
 
 OrientationSensor::OrientationSensor(
     ExecutionContext* execution_context,
-    const SpatialSensorOptions& options,
+    const SpatialSensorOptions* options,
     ExceptionState& exception_state,
     device::mojom::blink::SensorType type,
     const Vector<mojom::FeaturePolicyFeature>& features)

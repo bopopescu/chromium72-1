@@ -15,14 +15,18 @@
 
 namespace video_capture {
 
+class DeviceFactoryMediaToMojoAdapter;
+
 // Decorator that adds support for virtual devices to a given
 // mojom::DeviceFactory.
 class VirtualDeviceEnabledDeviceFactory : public mojom::DeviceFactory {
  public:
-  VirtualDeviceEnabledDeviceFactory(
-      std::unique_ptr<service_manager::ServiceContextRef> service_ref,
-      std::unique_ptr<mojom::DeviceFactory> factory);
+  explicit VirtualDeviceEnabledDeviceFactory(
+      std::unique_ptr<DeviceFactoryMediaToMojoAdapter> factory);
   ~VirtualDeviceEnabledDeviceFactory() override;
+
+  void SetServiceRef(
+      std::unique_ptr<service_manager::ServiceContextRef> service_ref);
 
   // mojom::DeviceFactory implementation.
   void GetDeviceInfos(GetDeviceInfosCallback callback) override;
@@ -32,10 +36,13 @@ class VirtualDeviceEnabledDeviceFactory : public mojom::DeviceFactory {
   void AddSharedMemoryVirtualDevice(
       const media::VideoCaptureDeviceInfo& device_info,
       mojom::ProducerPtr producer,
+      bool send_buffer_handles_to_producer_as_raw_file_descriptors,
       mojom::SharedMemoryVirtualDeviceRequest virtual_device) override;
   void AddTextureVirtualDevice(
       const media::VideoCaptureDeviceInfo& device_info,
       mojom::TextureVirtualDeviceRequest virtual_device) override;
+  void RegisterVirtualDevicesChangedObserver(
+      mojom::DevicesChangedObserverPtr observer) override;
 
  private:
   class VirtualDeviceEntry;
@@ -48,10 +55,14 @@ class VirtualDeviceEnabledDeviceFactory : public mojom::DeviceFactory {
       const std::string& device_id);
   void OnVirtualDeviceConsumerConnectionErrorOrClose(
       const std::string& device_id);
+  void EmitDevicesChangedEvent();
+  void OnDevicesChangedObserverDisconnected(
+      mojom::DevicesChangedObserverPtr* observer);
 
   std::map<std::string, VirtualDeviceEntry> virtual_devices_by_id_;
-  const std::unique_ptr<service_manager::ServiceContextRef> service_ref_;
-  const std::unique_ptr<mojom::DeviceFactory> device_factory_;
+  const std::unique_ptr<DeviceFactoryMediaToMojoAdapter> device_factory_;
+  std::unique_ptr<service_manager::ServiceContextRef> service_ref_;
+  std::vector<mojom::DevicesChangedObserverPtr> devices_changed_observers_;
 
   base::WeakPtrFactory<VirtualDeviceEnabledDeviceFactory> weak_factory_;
   DISALLOW_COPY_AND_ASSIGN(VirtualDeviceEnabledDeviceFactory);

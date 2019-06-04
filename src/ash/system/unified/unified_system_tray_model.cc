@@ -4,6 +4,7 @@
 
 #include "ash/system/unified/unified_system_tray_model.h"
 
+#include "ash/accessibility/accessibility_controller.h"
 #include "ash/shell.h"
 #include "ash/system/brightness_control_delegate.h"
 #include "chromeos/dbus/dbus_thread_manager.h"
@@ -22,6 +23,8 @@ class UnifiedSystemTrayModel::DBusObserver
 
   // chromeos::PowerManagerClient::Observer:
   void ScreenBrightnessChanged(
+      const power_manager::BacklightBrightnessChange& change) override;
+  void KeyboardBrightnessChanged(
       const power_manager::BacklightBrightnessChange& change) override;
 
   UnifiedSystemTrayModel* const owner_;
@@ -49,14 +52,26 @@ UnifiedSystemTrayModel::DBusObserver::~DBusObserver() {
 void UnifiedSystemTrayModel::DBusObserver::HandleInitialBrightness(
     base::Optional<double> percent) {
   if (percent.has_value())
-    owner_->BrightnessChanged(percent.value() / 100.);
+    owner_->DisplayBrightnessChanged(percent.value() / 100.,
+                                     false /* by_user */);
 }
 
 void UnifiedSystemTrayModel::DBusObserver::ScreenBrightnessChanged(
     const power_manager::BacklightBrightnessChange& change) {
   Shell::Get()->metrics()->RecordUserMetricsAction(
       UMA_STATUS_AREA_BRIGHTNESS_CHANGED);
-  owner_->BrightnessChanged(change.percent() / 100.);
+  owner_->DisplayBrightnessChanged(
+      change.percent() / 100.,
+      change.cause() ==
+          power_manager::BacklightBrightnessChange_Cause_USER_REQUEST);
+}
+
+void UnifiedSystemTrayModel::DBusObserver::KeyboardBrightnessChanged(
+    const power_manager::BacklightBrightnessChange& change) {
+  owner_->KeyboardBrightnessChanged(
+      change.percent() / 100.,
+      change.cause() ==
+          power_manager::BacklightBrightnessChange_Cause_USER_REQUEST);
 }
 
 UnifiedSystemTrayModel::UnifiedSystemTrayModel()
@@ -72,10 +87,45 @@ void UnifiedSystemTrayModel::RemoveObserver(Observer* observer) {
   observers_.RemoveObserver(observer);
 }
 
-void UnifiedSystemTrayModel::BrightnessChanged(float brightness) {
-  brightness_ = brightness;
+bool UnifiedSystemTrayModel::IsExpandedOnOpen() const {
+  return expanded_on_open_ ||
+         Shell::Get()->accessibility_controller()->IsSpokenFeedbackEnabled();
+}
+
+base::Optional<bool> UnifiedSystemTrayModel::GetNotificationExpanded(
+    const std::string& notification_id) const {
+  auto it = notification_changes_.find(notification_id);
+  return it == notification_changes_.end() ? base::Optional<bool>()
+                                           : base::Optional<bool>(it->second);
+}
+
+void UnifiedSystemTrayModel::SetNotificationExpanded(
+    const std::string& notification_id,
+    bool expanded) {
+  notification_changes_[notification_id] = expanded;
+}
+
+void UnifiedSystemTrayModel::RemoveNotificationExpanded(
+    const std::string& notification_id) {
+  notification_changes_.erase(notification_id);
+}
+
+void UnifiedSystemTrayModel::ClearNotificationChanges() {
+  notification_changes_.clear();
+}
+
+void UnifiedSystemTrayModel::DisplayBrightnessChanged(float brightness,
+                                                      bool by_user) {
+  display_brightness_ = brightness;
   for (auto& observer : observers_)
-    observer.OnBrightnessChanged();
+    observer.OnDisplayBrightnessChanged(by_user);
+}
+
+void UnifiedSystemTrayModel::KeyboardBrightnessChanged(float brightness,
+                                                       bool by_user) {
+  keyboard_brightness_ = brightness;
+  for (auto& observer : observers_)
+    observer.OnKeyboardBrightnessChanged(by_user);
 }
 
 }  // namespace ash

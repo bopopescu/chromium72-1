@@ -5,6 +5,8 @@
 #include "third_party/blink/renderer/modules/media_controls/elements/media_control_text_track_list_element.h"
 
 #include "third_party/blink/renderer/core/dom/events/event.h"
+#include "third_party/blink/renderer/core/dom/events/event_dispatch_forbidden_scope.h"
+#include "third_party/blink/renderer/core/dom/text.h"
 #include "third_party/blink/renderer/core/html/forms/html_input_element.h"
 #include "third_party/blink/renderer/core/html/forms/html_label_element.h"
 #include "third_party/blink/renderer/core/html/html_span_element.h"
@@ -14,7 +16,6 @@
 #include "third_party/blink/renderer/core/input_type_names.h"
 #include "third_party/blink/renderer/modules/media_controls/elements/media_control_toggle_closed_captions_button_element.h"
 #include "third_party/blink/renderer/modules/media_controls/media_controls_impl.h"
-#include "third_party/blink/renderer/platform/event_dispatch_forbidden_scope.h"
 #include "third_party/blink/renderer/platform/text/platform_locale.h"
 
 namespace blink {
@@ -62,6 +63,9 @@ void MediaControlTextTrackListElement::SetIsWanted(bool wanted) {
   if (wanted)
     RefreshTextTrackListMenu();
 
+  if (!wanted && !GetMediaControls().OverflowMenuIsWanted())
+    GetMediaControls().CloseOverflowMenu();
+
   MediaControlPopupMenuElement::SetIsWanted(wanted);
 }
 
@@ -69,15 +73,15 @@ Element* MediaControlTextTrackListElement::PopupAnchor() const {
   return &GetMediaControls().ToggleClosedCaptions();
 }
 
-void MediaControlTextTrackListElement::DefaultEventHandler(Event* event) {
-  if (event->type() == EventTypeNames::click) {
+void MediaControlTextTrackListElement::DefaultEventHandler(Event& event) {
+  if (event.type() == event_type_names::kClick) {
     // This handles the back button click. Clicking on a menu item triggers the
     // change event instead.
     GetMediaControls().ToggleOverflowMenu();
-    event->SetDefaultHandled();
-  } else if (event->type() == EventTypeNames::change) {
+    event.SetDefaultHandled();
+  } else if (event.type() == event_type_names::kChange) {
     // Identify which input element was selected and set track to showing
-    Node* target = event->target()->ToNode();
+    Node* target = event.target()->ToNode();
     if (!target || !target->IsElementNode())
       return;
 
@@ -90,7 +94,7 @@ void MediaControlTextTrackListElement::DefaultEventHandler(Event* event) {
       MediaElement().DisableAutomaticTextTrackSelection();
     }
 
-    event->SetDefaultHandled();
+    event.SetDefaultHandled();
   }
   MediaControlPopupMenuElement::DefaultEventHandler(event);
 }
@@ -107,7 +111,7 @@ Element* MediaControlTextTrackListElement::CreateTextTrackListItem(
       HTMLInputElement::Create(GetDocument(), CreateElementFlags());
   track_item_input->SetShadowPseudoId(
       AtomicString("-internal-media-controls-text-track-list-item-input"));
-  track_item_input->setType(InputTypeNames::checkbox);
+  track_item_input->setType(input_type_names::kCheckbox);
   track_item_input->SetIntegralAttribute(TrackIndexAttrName(), track_index);
   if (!MediaElement().TextTracksVisible()) {
     if (!track)

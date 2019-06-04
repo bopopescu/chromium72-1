@@ -13,9 +13,13 @@
 #include "base/bind.h"
 #include "base/bind_helpers.h"
 #include "base/location.h"
+#include "base/sequenced_task_runner.h"
+#include "base/threading/sequenced_task_runner_handle.h"
 #include "base/time/time.h"
 #include "components/sync/base/hash_util.h"
 #include "components/sync/base/time.h"
+#include "components/sync/device_info/device_info.h"
+#include "components/sync/model/data_type_activation_request.h"
 #include "components/sync/model/entity_change.h"
 #include "components/sync/model/metadata_batch.h"
 #include "components/sync/model/mutable_data_batch.h"
@@ -94,49 +98,27 @@ class LocalSessionWriteBatch : public LocalSessionEventHandlerImpl::WriteBatch {
   syncer::ModelTypeChangeProcessor* const processor_;
 };
 
-bool IsSessionRestoreInProgress(SyncSessionsClient* sessions_client) {
-  DCHECK(sessions_client);
-  SyncedWindowDelegatesGetter* synced_window_getter =
-      sessions_client->GetSyncedWindowDelegatesGetter();
-  SyncedWindowDelegatesGetter::SyncedWindowDelegateMap windows =
-      synced_window_getter->GetSyncedWindowDelegates();
-  for (const auto& window_iter_pair : windows) {
-    if (window_iter_pair.second->IsSessionRestoreInProgress()) {
-      return true;
-    }
-  }
-  return false;
-}
-
 }  // namespace
 
 SessionSyncBridge::SessionSyncBridge(
+    const base::RepeatingClosure& notify_foreign_session_updated_cb,
     SyncSessionsClient* sessions_client,
-    syncer::SessionSyncPrefs* sync_prefs,
-    syncer::LocalDeviceInfoProvider* local_device_info_provider,
-    const syncer::RepeatingModelTypeStoreFactory& store_factory,
-    const base::RepeatingClosure& foreign_sessions_updated_callback,
     std::unique_ptr<syncer::ModelTypeChangeProcessor> change_processor)
     : ModelTypeSyncBridge(std::move(change_processor)),
+      notify_foreign_session_updated_cb_(notify_foreign_session_updated_cb),
       sessions_client_(sessions_client),
       local_session_event_router_(
           sessions_client->GetLocalSessionEventRouter()),
-      foreign_sessions_updated_callback_(foreign_sessions_updated_callback),
       favicon_cache_(sessions_client->GetFaviconService(),
                      sessions_client->GetHistoryService(),
                      kMaxSyncFavicons),
       session_store_factory_(SessionStore::CreateFactory(
           sessions_client,
-          sync_prefs,
-          local_device_info_provider,
-          store_factory,
           base::BindRepeating(&FaviconCache::UpdateMappingsFromForeignTab,
                               base::Unretained(&favicon_cache_)))),
-      is_session_restore_in_progress_(
-          IsSessionRestoreInProgress(sessions_client)) {
+      weak_ptr_factory_(this) {
   DCHECK(sessions_client_);
   DCHECK(local_session_event_router_);
-  DCHECK(foreign_sessions_updated_callback_);
 }
 
 SessionSyncBridge::~SessionSyncBridge() {
@@ -149,9 +131,9 @@ void SessionSyncBridge::ScheduleGarbageCollection() {
   if (!syncing_) {
     return;
   }
-  base::ThreadTaskRunnerHandle::Get()->PostTask(
+  base::SequencedTaskRunnerHandle::Get()->PostTask(
       FROM_HERE, base::BindOnce(&SessionSyncBridge::DoGarbageCollection,
-                                base::AsWeakPtr(this)));
+                                weak_ptr_factory_.GetWeakPtr()));
 }
 
 FaviconCache* SessionSyncBridge::GetFaviconCache() {
@@ -169,22 +151,6 @@ OpenTabsUIDelegate* SessionSyncBridge::GetOpenTabsUIDelegate() {
   return syncing_->open_tabs_ui_delegate.get();
 }
 
-void SessionSyncBridge::OnSessionRestoreComplete() {
-  is_session_restore_in_progress_ = false;
-
-  if (syncing_) {
-    StartLocalSessionEventHandler();
-  }
-}
-
-syncer::SyncableService* SessionSyncBridge::GetSyncableService() {
-  return nullptr;
-}
-
-syncer::ModelTypeSyncBridge* SessionSyncBridge::GetModelTypeSyncBridge() {
-  return this;
-}
-
 std::unique_ptr<MetadataChangeList>
 SessionSyncBridge::CreateMetadataChangeList() {
   return std::make_unique<syncer::InMemoryMetadataChangeList>();
@@ -196,9 +162,7 @@ base::Optional<syncer::ModelError> SessionSyncBridge::MergeSyncData(
   DCHECK(syncing_);
   DCHECK(change_processor()->IsTrackingMetadata());
 
-  if (!is_session_restore_in_progress_) {
-    StartLocalSessionEventHandler();
-  }
+  StartLocalSessionEventHandler();
 
   return ApplySyncChanges(std::move(metadata_change_list),
                           std::move(entity_data));
@@ -209,19 +173,11 @@ void SessionSyncBridge::StartLocalSessionEventHandler() {
   DCHECK(syncing_);
   DCHECK(!syncing_->local_session_event_handler);
   DCHECK(change_processor()->IsTrackingMetadata());
-  DCHECK(!is_session_restore_in_progress_);
 
-  // TODO(crbug.com/681921): Remove injecting |local_session_write_batch| and
-  // let the impl create one via the delegate once the directory-based
-  // implementation is removed.
-  std::unique_ptr<LocalSessionEventHandlerImpl::WriteBatch>
-      local_session_write_batch = CreateLocalSessionWriteBatch();
   syncing_->local_session_event_handler =
       std::make_unique<LocalSessionEventHandlerImpl>(
           /*delegate=*/this, sessions_client_,
-          syncing_->store->mutable_tracker(), local_session_write_batch.get());
-
-  local_session_write_batch->Commit();
+          syncing_->store->mutable_tracker());
 
   // Start processing local changes, which will be propagated to the store as
   // well as the processor.
@@ -272,12 +228,14 @@ base::Optional<syncer::ModelError> SessionSyncBridge::ApplySyncChanges(
           continue;
         }
 
-        if (!SessionStore::AreValidSpecifics(specifics) ||
-            change.data().client_tag_hash !=
-                GenerateSyncableHash(syncer::SESSIONS,
-                                     SessionStore::GetClientTag(specifics))) {
+        if (!SessionStore::AreValidSpecifics(specifics)) {
           continue;
         }
+
+        // Guaranteed by the processor.
+        DCHECK_EQ(change.data().client_tag_hash,
+                  GenerateSyncableHash(syncer::SESSIONS,
+                                       SessionStore::GetClientTag(specifics)));
 
         batch->PutAndUpdateTracker(specifics, change.data().modification_time);
         // If a favicon or favicon urls are present, load the URLs and visit
@@ -295,9 +253,10 @@ base::Optional<syncer::ModelError> SessionSyncBridge::ApplySyncChanges(
       ->TransferChangesTo(batch->GetMetadataChangeList());
   SessionStore::WriteBatch::Commit(std::move(batch));
 
-  // This might overtrigger because we don't check if the batch is empty, but
-  // observers should handle these events well so we don't bother detecting.
-  foreign_sessions_updated_callback_.Run();
+  if (!entity_changes.empty()) {
+    notify_foreign_session_updated_cb_.Run();
+  }
+
   return base::nullopt;
 }
 
@@ -307,13 +266,16 @@ void SessionSyncBridge::GetData(StorageKeyList storage_keys,
   std::move(callback).Run(syncing_->store->GetSessionDataForKeys(storage_keys));
 }
 
-void SessionSyncBridge::GetAllData(DataCallback callback) {
+void SessionSyncBridge::GetAllDataForDebugging(DataCallback callback) {
   DCHECK(syncing_);
   std::move(callback).Run(syncing_->store->GetAllSessionData());
 }
 
 std::string SessionSyncBridge::GetClientTag(
     const syncer::EntityData& entity_data) {
+  if (!SessionStore::AreValidSpecifics(entity_data.specifics.session())) {
+    return std::string();
+  }
   return SessionStore::GetClientTag(entity_data.specifics.session());
 }
 
@@ -325,15 +287,14 @@ std::string SessionSyncBridge::GetStorageKey(
   return SessionStore::GetStorageKey(entity_data.specifics.session());
 }
 
-ModelTypeSyncBridge::DisableSyncResponse
-SessionSyncBridge::ApplyDisableSyncChanges(
+ModelTypeSyncBridge::StopSyncResponse SessionSyncBridge::ApplyStopSyncChanges(
     std::unique_ptr<MetadataChangeList> delete_metadata_change_list) {
   local_session_event_router_->Stop();
-  if (syncing_) {
+  if (syncing_ && delete_metadata_change_list) {
     syncing_->store->DeleteAllDataAndMetadata();
   }
   syncing_.reset();
-  return DisableSyncResponse::kModelNoLongerReadyToSync;
+  return StopSyncResponse::kModelNoLongerReadyToSync;
 }
 
 std::unique_ptr<LocalSessionEventHandlerImpl::WriteBatch>
@@ -347,14 +308,20 @@ SessionSyncBridge::CreateLocalSessionWriteBatch() {
     syncing_->local_data_out_of_sync = false;
     // We use PostTask() to avoid interferring with the ongoing handling of
     // local changes that triggered this function.
-    base::ThreadTaskRunnerHandle::Get()->PostTask(
+    base::SequencedTaskRunnerHandle::Get()->PostTask(
         FROM_HERE, base::BindOnce(&SessionSyncBridge::ResubmitLocalSession,
-                                  base::AsWeakPtr(this)));
+                                  weak_ptr_factory_.GetWeakPtr()));
   }
 
   return std::make_unique<LocalSessionWriteBatch>(
       syncing_->store->local_session_info(), CreateSessionStoreWriteBatch(),
       change_processor());
+}
+
+bool SessionSyncBridge::IsTabNodeUnsynced(int tab_node_id) {
+  const std::string storage_key = SessionStore::GetTabStorageKey(
+      syncing_->store->local_session_info().session_tag, tab_node_id);
+  return change_processor()->IsEntityUnsynced(storage_key);
 }
 
 void SessionSyncBridge::TrackLocalNavigationId(base::Time timestamp,
@@ -371,11 +338,21 @@ void SessionSyncBridge::OnFaviconVisited(const GURL& page_url,
   favicon_cache_.OnFaviconVisited(page_url, favicon_url);
 }
 
-void SessionSyncBridge::OnSyncStarting() {
+void SessionSyncBridge::OnSyncStarting(
+    const syncer::DataTypeActivationRequest& request) {
   DCHECK(!syncing_);
 
-  session_store_factory_.Run(base::BindOnce(
-      &SessionSyncBridge::OnStoreInitialized, base::AsWeakPtr(this)));
+  const syncer::DeviceInfo* device_info =
+      sessions_client_->GetLocalDeviceInfo();
+
+  // DeviceInfo must be available by the time sync starts, because there's no
+  // task posting involved in the sessions controller.
+  DCHECK(device_info);
+  DCHECK_EQ(device_info->guid(), request.cache_guid);
+
+  session_store_factory_.Run(
+      *device_info, base::BindOnce(&SessionSyncBridge::OnStoreInitialized,
+                                   weak_ptr_factory_.GetWeakPtr()));
 }
 
 void SessionSyncBridge::OnStoreInitialized(
@@ -403,8 +380,7 @@ void SessionSyncBridge::OnStoreInitialized(
 
   // If initial sync was already done, MergeSyncData() will never be called so
   // we need to start syncing local changes.
-  if (change_processor()->IsTrackingMetadata() &&
-      !is_session_restore_in_progress_) {
+  if (change_processor()->IsTrackingMetadata()) {
     StartLocalSessionEventHandler();
   }
 }
@@ -474,15 +450,15 @@ void SessionSyncBridge::DeleteForeignSessionWithBatch(
   change_processor()->Delete(header_storage_key,
                              batch->GetMetadataChangeList());
 
-  foreign_sessions_updated_callback_.Run();
+  notify_foreign_session_updated_cb_.Run();
 }
 
 std::unique_ptr<SessionStore::WriteBatch>
 SessionSyncBridge::CreateSessionStoreWriteBatch() {
   DCHECK(syncing_);
 
-  return syncing_->store->CreateWriteBatch(
-      base::BindOnce(&SessionSyncBridge::ReportError, base::AsWeakPtr(this)));
+  return syncing_->store->CreateWriteBatch(base::BindOnce(
+      &SessionSyncBridge::ReportError, weak_ptr_factory_.GetWeakPtr()));
 }
 
 void SessionSyncBridge::ResubmitLocalSession() {

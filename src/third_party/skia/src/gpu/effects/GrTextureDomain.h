@@ -162,6 +162,7 @@ public:
         return std::unique_ptr<GrFragmentProcessor>(new GrTextureDomainEffect(*this));
     }
 
+#ifdef SK_DEBUG
     SkString dumpInfo() const override {
         SkString str;
         str.appendf("Domain: [L: %.2f, T: %.2f, R: %.2f, B: %.2f]",
@@ -170,6 +171,7 @@ public:
         str.append(INHERITED::dumpInfo());
         return str;
     }
+#endif
 
 private:
     GrCoordTransform fCoordTransform;
@@ -192,6 +194,8 @@ private:
 
     bool onIsEqual(const GrFragmentProcessor&) const override;
 
+    const TextureSampler& onTextureSampler(int) const override { return fTextureSampler; }
+
     GR_DECLARE_FRAGMENT_PROCESSOR_TEST
 
     typedef GrFragmentProcessor INHERITED;
@@ -205,6 +209,7 @@ public:
 
     const char* name() const override { return "GrDeviceSpaceTextureDecalFragmentProcessor"; }
 
+#ifdef SK_DEBUG
     SkString dumpInfo() const override {
         SkString str;
         str.appendf("Domain: [L: %.2f, T: %.2f, R: %.2f, B: %.2f] Offset: [%d %d]",
@@ -214,6 +219,7 @@ public:
         str.append(INHERITED::dumpInfo());
         return str;
     }
+#endif
 
     std::unique_ptr<GrFragmentProcessor> clone() const override;
 
@@ -232,6 +238,8 @@ private:
     void onGetGLSLProcessorKey(const GrShaderCaps&, GrProcessorKeyBuilder*) const override {}
 
     bool onIsEqual(const GrFragmentProcessor& fp) const override;
+
+    const TextureSampler& onTextureSampler(int) const override { return fTextureSampler; }
 
     GR_DECLARE_FRAGMENT_PROCESSOR_TEST
 

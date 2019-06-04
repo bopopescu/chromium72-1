@@ -194,35 +194,7 @@ crazy_status_t crazy_library_open(crazy_library_t** library,
   ScopedDelayedCallbackPoster poster(context, globals->rdebug());
 
   LibraryView* wrap = globals->libraries()->LoadLibrary(
-      lib_name, RTLD_NOW, context->load_address, 0, &context->search_paths,
-      false, &context->error);
-
-  if (!wrap)
-    return CRAZY_STATUS_FAILURE;
-
-  if (context->java_vm != NULL && wrap->IsCrazy()) {
-    crazy::SharedLibrary* lib = wrap->GetCrazy();
-    if (!lib->SetJavaVM(
-             context->java_vm, context->minimum_jni_version, &context->error)) {
-      globals->libraries()->UnloadLibrary(wrap);
-      return CRAZY_STATUS_FAILURE;
-    }
-  }
-
-  *library = reinterpret_cast<crazy_library_t*>(wrap);
-  return CRAZY_STATUS_SUCCESS;
-}
-
-crazy_status_t crazy_library_open_in_zip_file(crazy_library_t** library,
-                                              const char* zipfile_name,
-                                              const char* lib_name,
-                                              crazy_context_t* context) {
-  ScopedLockedGlobals globals;
-  ScopedDelayedCallbackPoster poster(context, globals->rdebug());
-
-  LibraryView* wrap = globals->libraries()->LoadLibraryInZipFile(
-      zipfile_name, lib_name, RTLD_NOW, context->load_address,
-      &context->search_paths, false, &context->error);
+      lib_name, context->load_address, &context->search_paths, &context->error);
 
   if (!wrap)
     return CRAZY_STATUS_FAILURE;
@@ -320,9 +292,9 @@ crazy_status_t crazy_library_find_symbol(crazy_library_t* library,
   LibraryView* wrap = reinterpret_cast<LibraryView*>(library);
 
   // TODO(digit): Handle NULL symbols properly.
-  *symbol_address = wrap->LookupSymbol(symbol_name);
-  return (*symbol_address == NULL) ? CRAZY_STATUS_FAILURE
-                                   : CRAZY_STATUS_SUCCESS;
+  LibraryView::SearchResult sym = wrap->LookupSymbol(symbol_name);
+  *symbol_address = sym.address;
+  return sym.IsValid() ? CRAZY_STATUS_SUCCESS : CRAZY_STATUS_FAILURE;
 }
 
 crazy_status_t crazy_linker_find_symbol(const char* symbol_name,

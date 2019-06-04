@@ -11,6 +11,7 @@
 #include "base/gtest_prod_util.h"
 #include "base/macros.h"
 #include "base/memory/ref_counted.h"
+#include "base/task/task_scheduler/task_scheduler.h"
 #include "base/timer/timer.h"
 #include "build/build_config.h"
 #include "content/browser/browser_process_sub_thread.h"
@@ -32,7 +33,6 @@ class Env;
 
 namespace base {
 class CommandLine;
-class DeferredSequencedTaskRunner;
 class FilePath;
 class HighResolutionTimerManager;
 class MemoryPressureMonitor;
@@ -72,25 +72,20 @@ class MidiService;
 }  // namespace midi
 
 namespace mojo {
-namespace edk {
+namespace core {
 class ScopedIPCSupport;
-}  // namespace edk
+}  // namespace core
 }  // namespace mojo
 
 namespace net {
 class NetworkChangeNotifier;
 }  // namespace net
 
-#if BUILDFLAG(ENABLE_MUS)
-namespace ui {
-class ImageCursorsSet;
-}
-#endif
-
 namespace viz {
 class CompositingModeReporterImpl;
 class FrameSinkManagerImpl;
 class HostFrameSinkManager;
+class ServerSharedBitmapManager;
 }
 
 namespace content {
@@ -101,12 +96,17 @@ class LoaderDelegateImpl;
 class MediaStreamManager;
 class ResourceDispatcherHostImpl;
 class SaveFileManager;
+class ScreenlockMonitor;
 class ServiceManagerContext;
 class SpeechRecognitionManagerImpl;
 class StartupTaskRunner;
 class SwapMetricsDriver;
 class TracingControllerImpl;
 struct MainFunctionParams;
+
+namespace responsiveness {
+class Watcher;
+}  // namespace responsiveness
 
 #if defined(OS_ANDROID)
 class ScreenOrientationDelegate;
@@ -126,13 +126,16 @@ class CONTENT_EXPORT BrowserMainLoop {
   // that return objects which are owned by this class.
   static BrowserMainLoop* GetInstance();
 
-  explicit BrowserMainLoop(const MainFunctionParams& parameters);
+  static media::AudioManager* GetAudioManager();
+
+  // The TaskScheduler instance must exist but not to be started when building
+  // BrowserMainLoop.
+  explicit BrowserMainLoop(
+      const MainFunctionParams& parameters,
+      std::unique_ptr<base::TaskScheduler::ScopedExecutionFence> fence);
   virtual ~BrowserMainLoop();
 
-  // |service_manager_thread| is optional. If set, it will be registered as
-  // BrowserThread::IO in CreateThreads() instead of creating a brand new
-  // thread.
-  void Init(std::unique_ptr<BrowserProcessSubThread> service_manager_thread);
+  void Init();
 
   // Return value is exit status. Anything other than RESULT_CODE_NORMAL_EXIT
   // is considered an error.
@@ -163,7 +166,6 @@ class CONTENT_EXPORT BrowserMainLoop {
   int GetResultCode() const { return result_code_; }
 
   media::AudioManager* audio_manager() const;
-  base::SequencedTaskRunner* audio_service_runner();
   bool AudioServiceOutOfProcess() const;
   media::AudioSystem* audio_system() const { return audio_system_.get(); }
   MediaStreamManager* media_stream_manager() const {
@@ -171,6 +173,9 @@ class CONTENT_EXPORT BrowserMainLoop {
   }
   media::UserInputMonitor* user_input_monitor() const {
     return user_input_monitor_.get();
+  }
+  net::NetworkChangeNotifier* network_change_notifier() const {
+    return network_change_notifier_.get();
   }
 
 #if defined(OS_CHROMEOS)
@@ -190,10 +195,6 @@ class CONTENT_EXPORT BrowserMainLoop {
   const base::FilePath& startup_trace_file() const {
     return startup_trace_file_;
   }
-
-#if BUILDFLAG(ENABLE_MUS)
-  ui::ImageCursorsSet* image_cursors_set() { return image_cursors_set_.get(); }
-#endif
 
   // Returns the task runner for tasks that that are critical to producing a new
   // CompositorFrame on resize. On Mac this will be the task runner provided by
@@ -217,6 +218,9 @@ class CONTENT_EXPORT BrowserMainLoop {
   // TODO(crbug.com/657959): This will be removed once there are no users, as
   // SurfaceManager is being moved out of process.
   viz::FrameSinkManagerImpl* GetFrameSinkManager() const;
+
+  // This returns null when the display compositor is out of process.
+  viz::ServerSharedBitmapManager* GetServerSharedBitmapManager() const;
 #endif
 
   // Fulfills a mojo pointer to the singleton CompositingModeReporter.
@@ -287,6 +291,15 @@ class CONTENT_EXPORT BrowserMainLoop {
   const base::CommandLine& parsed_command_line_;
   int result_code_;
   bool created_threads_;  // True if the non-UI threads were created.
+  // //content must be initialized single-threaded until
+  // BrowserMainLoop::CreateThreads() as things initialized before it require an
+  // initialize-once happens-before relationship with all eventual content tasks
+  // running on other threads. This ScopedExecutionFence ensures that no tasks
+  // posted to TaskScheduler gets to run before CreateThreads(); satisfying this
+  // requirement even though the TaskScheduler is created and started before
+  // content is entered.
+  std::unique_ptr<base::TaskScheduler::ScopedExecutionFence>
+      scoped_execution_fence_;
 
   // Members initialized in |MainMessageLoopStart()| ---------------------------
   std::unique_ptr<base::MessageLoop> main_message_loop_;
@@ -297,6 +310,7 @@ class CONTENT_EXPORT BrowserMainLoop {
   std::unique_ptr<base::PowerMonitor> power_monitor_;
   std::unique_ptr<base::HighResolutionTimerManager> hi_res_timer_manager_;
   std::unique_ptr<net::NetworkChangeNotifier> network_change_notifier_;
+  std::unique_ptr<ScreenlockMonitor> screenlock_monitor_;
 
   // Per-process listener for online state changes.
   std::unique_ptr<BrowserOnlineStateObserver> online_state_observer_;
@@ -306,9 +320,6 @@ class CONTENT_EXPORT BrowserMainLoop {
 
 #if defined(USE_AURA)
   std::unique_ptr<aura::Env> env_;
-#endif
-#if BUILDFLAG(ENABLE_MUS)
-  std::unique_ptr<ui::ImageCursorsSet> image_cursors_set_;
 #endif
 
 #if defined(OS_ANDROID)
@@ -343,9 +354,11 @@ class CONTENT_EXPORT BrowserMainLoop {
       gpu_data_manager_visual_proxy_;
 #endif
 
+  ServiceManagerContext* service_manager_context_ = nullptr;
+  std::unique_ptr<ServiceManagerContext> owned_service_manager_context_;
+
   // Members initialized in |BrowserThreadsStarted()| --------------------------
-  std::unique_ptr<ServiceManagerContext> service_manager_context_;
-  std::unique_ptr<mojo::edk::ScopedIPCSupport> mojo_ipc_support_;
+  std::unique_ptr<mojo::core::ScopedIPCSupport> mojo_ipc_support_;
 
   // |user_input_monitor_| has to outlive |audio_manager_|, so declared first.
   std::unique_ptr<media::UserInputMonitor> user_input_monitor_;
@@ -353,9 +366,6 @@ class CONTENT_EXPORT BrowserMainLoop {
   // |audio_manager_| is not instantiated when the audio service runs out of
   // process.
   std::unique_ptr<media::AudioManager> audio_manager_;
-
-  // Task runner for the audio service when it runs in the browser process.
-  scoped_refptr<base::DeferredSequencedTaskRunner> audio_service_runner_;
 
   std::unique_ptr<media::AudioSystem> audio_system_;
 
@@ -383,7 +393,13 @@ class CONTENT_EXPORT BrowserMainLoop {
       discardable_shared_memory_manager_;
   scoped_refptr<SaveFileManager> save_file_manager_;
   std::unique_ptr<content::TracingControllerImpl> tracing_controller_;
+  scoped_refptr<responsiveness::Watcher> responsiveness_watcher_;
 #if !defined(OS_ANDROID)
+  // A SharedBitmapManager used to sharing and mapping IDs to shared memory
+  // between processes for software compositing. When the display compositor is
+  // in the browser process, then |server_shared_bitmap_manager_| is set, and
+  // when it is in the viz process, then it is null.
+  std::unique_ptr<viz::ServerSharedBitmapManager> server_shared_bitmap_manager_;
   std::unique_ptr<viz::HostFrameSinkManager> host_frame_sink_manager_;
   // This is owned here so that SurfaceManager will be accessible in process
   // when display is in the same process. Other than using SurfaceManager,

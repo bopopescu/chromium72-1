@@ -62,7 +62,8 @@ metricsBase.call_ = function(methodName, args) {
   } catch (e) {
     console.error(e.stack);
   }
-  if (metrics.log)
+  // Support writing metrics.log in manual testing to log method calls.
+  if (/** @type{{ log: (boolean|undefined) }} */ (metrics).log)
     console.log('chrome.metricsPrivate.' + methodName, args);
 };
 
@@ -91,6 +92,15 @@ metricsBase.recordSmallCount = function(name, value) {
  */
 metricsBase.recordTime = function(name, time) {
   metrics.call_('recordTime', [metrics.convertName_(name), time]);
+};
+
+/**
+ * Records a boolean value to the given metric.
+ * @param {string} name Short metric name.
+ * @param {boolean} value The value to be recorded.
+ */
+metricsBase.recordBoolean = function(name, value) {
+  metrics.call_('recordBoolean', [metrics.convertName_(name), value]);
 };
 
 /**
@@ -141,7 +151,7 @@ metricsBase.recordEnum = function(name, value, opt_validValues) {
   var validValues = opt_validValues;
   if (metrics.validEnumValues_ && name in metrics.validEnumValues_) {
     console.assert(validValues === undefined);
-    validValues = metrics.validEnumValues_[name]
+    validValues = metrics.validEnumValues_[name];
   }
   console.assert(validValues !== undefined);
 

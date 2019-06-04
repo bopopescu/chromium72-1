@@ -94,7 +94,7 @@ ObjectUI.JavaScriptAutocomplete = class {
 
     // Check if this is a bound function.
     if (description === 'function () { [native code] }') {
-      const properties = await functionObject.getOwnPropertiesPromise(false);
+      const properties = await functionObject.getOwnProperties(false);
       const internalProperties = properties.internalProperties || [];
       const targetProperty = internalProperties.find(property => property.name === '[[TargetFunction]]');
       const argsProperty = internalProperties.find(property => property.name === '[[BoundArgs]]');
@@ -150,7 +150,7 @@ ObjectUI.JavaScriptAutocomplete = class {
     } else if (receiverObj.type === 'undefined' || receiverObj.subtype === 'null') {
       protoNames = [];
     } else {
-      protoNames = await receiverObj.callFunctionJSONPromise(function() {
+      protoNames = await receiverObj.callFunctionJSON(function() {
         const result = [];
         for (let object = this; object; object = Object.getPrototypeOf(object)) {
           if (typeof object === 'object' && object.constructor && object.constructor.name)
@@ -196,12 +196,12 @@ ObjectUI.JavaScriptAutocomplete = class {
         /* userGesture */ false, /* awaitPromise */ false);
     if (result.error || !!result.exceptionDetails || result.object.subtype !== 'map')
       return [];
-    const properties = await result.object.getOwnPropertiesPromise(false);
+    const properties = await result.object.getOwnProperties(false);
     const internalProperties = properties.internalProperties || [];
     const entriesProperty = internalProperties.find(property => property.name === '[[Entries]]');
     if (!entriesProperty)
       return [];
-    const keysObj = await entriesProperty.value.callFunctionJSONPromise(getEntries);
+    const keysObj = await entriesProperty.value.callFunctionJSON(getEntries);
     executionContext.runtimeModel.releaseObjectGroup('mapCompletion');
     return gotKeys(Object.keys(keysObj));
 
@@ -337,7 +337,7 @@ ObjectUI.JavaScriptAutocomplete = class {
 
       let object = result.object;
       while (object && object.type === 'object' && object.subtype === 'proxy') {
-        const properties = await object.getOwnPropertiesPromise(false /* generatePreview */);
+        const properties = await object.getOwnProperties(false /* generatePreview */);
         const internalProperties = properties.internalProperties || [];
         const target = internalProperties.find(property => property.name === '[[Target]]');
         object = target ? target.value : null;
@@ -347,8 +347,7 @@ ObjectUI.JavaScriptAutocomplete = class {
       let completions = [];
       if (object.type === 'object' || object.type === 'function') {
         completions =
-            await object.callFunctionJSONPromise(getCompletions, [SDK.RemoteObject.toCallArgument(object.subtype)]) ||
-            [];
+            await object.callFunctionJSON(getCompletions, [SDK.RemoteObject.toCallArgument(object.subtype)]) || [];
       } else if (
           object.type === 'string' || object.type === 'number' || object.type === 'boolean' ||
           object.type === 'bigint') {
@@ -445,7 +444,7 @@ ObjectUI.JavaScriptAutocomplete = class {
       const groupPromises = [];
       for (const scope of scopeChain) {
         groupPromises.push(scope.object()
-                               .getAllPropertiesPromise(false /* accessorPropertiesOnly */, false /* generatePreview */)
+                               .getAllProperties(false /* accessorPropertiesOnly */, false /* generatePreview */)
                                .then(result => ({properties: result.properties, name: scope.name()})));
       }
       const fullScopes = await Promise.all(groupPromises);
@@ -559,7 +558,7 @@ ObjectUI.JavaScriptAutocomplete = class {
 
         allProperties.add(property);
         if (property.startsWith(query))
-          caseSensitivePrefix.push({text: property, priority: 4});
+          caseSensitivePrefix.push({text: property, priority: property === query ? 5 : 4});
         else if (lowerCaseProperty.startsWith(lowerCaseQuery))
           caseInsensitivePrefix.push({text: property, priority: 3});
         else if (property.indexOf(query) !== -1)
@@ -596,9 +595,123 @@ ObjectUI.JavaScriptAutocomplete = class {
       return -1;
     return String.naturalOrderComparator(a, b);
   }
+
+  /**
+   * @param {string} expression
+   * @return {!Promise<boolean>}
+   */
+  static async isExpressionComplete(expression) {
+    const currentExecutionContext = UI.context.flavor(SDK.ExecutionContext);
+    if (!currentExecutionContext)
+      return true;
+    const result =
+        await currentExecutionContext.runtimeModel.compileScript(expression, '', false, currentExecutionContext.id);
+    if (!result.exceptionDetails)
+      return true;
+    const description = result.exceptionDetails.exception.description;
+    return !description.startsWith('SyntaxError: Unexpected end of input') &&
+        !description.startsWith('SyntaxError: Unterminated template literal');
+  }
 };
 
 /** @typedef {{title:(string|undefined), items:Array<string>}} */
 ObjectUI.JavaScriptAutocomplete.CompletionGroup;
 
 ObjectUI.javaScriptAutocomplete = new ObjectUI.JavaScriptAutocomplete();
+
+ObjectUI.JavaScriptAutocompleteConfig = class {
+  /**
+   * @param {!UI.TextEditor} editor
+   */
+  constructor(editor) {
+    this._editor = editor;
+  }
+
+  /**
+   * @param {!UI.TextEditor} editor
+   * @return {!UI.AutocompleteConfig}
+   */
+  static createConfigForEditor(editor) {
+    const autocomplete = new ObjectUI.JavaScriptAutocompleteConfig(editor);
+    return {
+      substituteRangeCallback: autocomplete._substituteRange.bind(autocomplete),
+      suggestionsCallback: autocomplete._suggestionsCallback.bind(autocomplete),
+      tooltipCallback: autocomplete._tooltipCallback.bind(autocomplete),
+    };
+  }
+
+  /**
+   * @param {number} lineNumber
+   * @param {number} columnNumber
+   * @return {?TextUtils.TextRange}
+   */
+  _substituteRange(lineNumber, columnNumber) {
+    const token = this._editor.tokenAtTextPosition(lineNumber, columnNumber);
+    if (token && token.type === 'js-string')
+      return new TextUtils.TextRange(lineNumber, token.startColumn, lineNumber, columnNumber);
+
+    const lineText = this._editor.line(lineNumber);
+    let index;
+    for (index = columnNumber - 1; index >= 0; index--) {
+      if (' =:[({;,!+-*/&|^<>.\t\r\n'.indexOf(lineText.charAt(index)) !== -1)
+        break;
+    }
+    return new TextUtils.TextRange(lineNumber, index + 1, lineNumber, columnNumber);
+  }
+
+  /**
+   * @param {!TextUtils.TextRange} queryRange
+   * @param {!TextUtils.TextRange} substituteRange
+   * @param {boolean=} force
+   * @return {!Promise<!UI.SuggestBox.Suggestions>}
+   */
+  async _suggestionsCallback(queryRange, substituteRange, force) {
+    const query = this._editor.text(queryRange);
+    const before = this._editor.text(new TextUtils.TextRange(0, 0, queryRange.startLine, queryRange.startColumn));
+    const token = this._editor.tokenAtTextPosition(substituteRange.startLine, substituteRange.startColumn);
+    if (token) {
+      const excludedTokens = new Set(['js-comment', 'js-string-2', 'js-def']);
+      const trimmedBefore = before.trim();
+      if (!trimmedBefore.endsWith('[') && !trimmedBefore.match(/\.\s*(get|set|delete)\s*\(\s*$/))
+        excludedTokens.add('js-string');
+      if (!trimmedBefore.endsWith('.'))
+        excludedTokens.add('js-property');
+      if (excludedTokens.has(token.type))
+        return [];
+    }
+    const queryAndAfter = this._editor.line(queryRange.startLine).substring(queryRange.startColumn);
+
+    const words = await ObjectUI.javaScriptAutocomplete.completionsForTextInCurrentContext(before, query, force);
+    if (!force && queryAndAfter && queryAndAfter !== query &&
+        words.some(word => queryAndAfter.startsWith(word.text) && query.length !== word.text.length))
+      return [];
+    return words;
+  }
+
+  /**
+   * @param {number} lineNumber
+   * @param {number} columnNumber
+   * @return {!Promise<?Element>}
+   */
+  async _tooltipCallback(lineNumber, columnNumber) {
+    const before = this._editor.text(new TextUtils.TextRange(0, 0, lineNumber, columnNumber));
+    const result = await ObjectUI.javaScriptAutocomplete.argumentsHint(before);
+    if (!result)
+      return null;
+    const argumentIndex = result.argumentIndex;
+    const tooltip = createElement('div');
+    for (const args of result.args) {
+      const argumentsElement = createElement('span');
+      for (let i = 0; i < args.length; i++) {
+        if (i === argumentIndex || (i < argumentIndex && args[i].startsWith('...')))
+          argumentsElement.appendChild(UI.html`<b>${args[i]}</b>`);
+        else
+          argumentsElement.createTextChild(args[i]);
+        if (i < args.length - 1)
+          argumentsElement.createTextChild(', ');
+      }
+      tooltip.appendChild(UI.html`<div class='source-code'>\u0192(${argumentsElement})</div>`);
+    }
+    return tooltip;
+  }
+};

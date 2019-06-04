@@ -36,11 +36,13 @@
 #include "third_party/blink/renderer/core/messaging/message_port.h"
 #include "third_party/blink/renderer/core/workers/worker_global_scope.h"
 #include "third_party/blink/renderer/platform/heap/visitor.h"
+#include "third_party/blink/renderer/platform/wtf/casting.h"
 
 namespace blink {
 
 class DedicatedWorkerObjectProxy;
 class DedicatedWorkerThread;
+class PostMessageOptions;
 class ScriptState;
 struct GlobalScopeCreationParams;
 
@@ -48,9 +50,10 @@ class CORE_EXPORT DedicatedWorkerGlobalScope final : public WorkerGlobalScope {
   DEFINE_WRAPPERTYPEINFO();
 
  public:
-  DedicatedWorkerGlobalScope(std::unique_ptr<GlobalScopeCreationParams>,
+  DedicatedWorkerGlobalScope(const String& name,
+                             std::unique_ptr<GlobalScopeCreationParams>,
                              DedicatedWorkerThread*,
-                             double time_origin);
+                             base::TimeTicks time_origin);
   ~DedicatedWorkerGlobalScope() override;
 
   bool IsDedicatedWorkerGlobalScope() const override { return true; }
@@ -59,29 +62,40 @@ class CORE_EXPORT DedicatedWorkerGlobalScope final : public WorkerGlobalScope {
   const AtomicString& InterfaceName() const override;
 
   // WorkerGlobalScope
-  void ImportModuleScript(const KURL& module_url_record,
-                          network::mojom::FetchCredentialsMode) override;
+  bool IsNestedWorker() const override;
+  void ImportModuleScript(
+      const KURL& module_url_record,
+      FetchClientSettingsObjectSnapshot* outside_settings_object,
+      network::mojom::FetchCredentialsMode) override;
+
+  const String name() const;
 
   void postMessage(ScriptState*,
-                   scoped_refptr<SerializedScriptValue>,
-                   const MessagePortArray&,
+                   const ScriptValue& message,
+                   Vector<ScriptValue>& transfer,
+                   ExceptionState&);
+  void postMessage(ScriptState*,
+                   const ScriptValue& message,
+                   const PostMessageOptions*,
                    ExceptionState&);
 
-  static bool CanTransferArrayBuffersAndImageBitmaps() { return true; }
-
-  DEFINE_ATTRIBUTE_EVENT_LISTENER(message);
-  DEFINE_ATTRIBUTE_EVENT_LISTENER(messageerror);
+  DEFINE_ATTRIBUTE_EVENT_LISTENER(message, kMessage);
+  DEFINE_ATTRIBUTE_EVENT_LISTENER(messageerror, kMessageerror);
 
   void Trace(blink::Visitor*) override;
 
   DedicatedWorkerObjectProxy& WorkerObjectProxy() const;
+
+ private:
+  const String name_;
 };
 
-DEFINE_TYPE_CASTS(DedicatedWorkerGlobalScope,
-                  ExecutionContext,
-                  context,
-                  context->IsDedicatedWorkerGlobalScope(),
-                  context.IsDedicatedWorkerGlobalScope());
+template <>
+struct DowncastTraits<DedicatedWorkerGlobalScope> {
+  static bool AllowFrom(const ExecutionContext& context) {
+    return context.IsDedicatedWorkerGlobalScope();
+  }
+};
 
 }  // namespace blink
 

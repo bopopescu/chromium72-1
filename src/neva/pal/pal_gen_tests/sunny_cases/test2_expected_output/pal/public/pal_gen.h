@@ -1,1 +1,0 @@
-virtual IntentAgentInterface* GetIntentAgentInterface();

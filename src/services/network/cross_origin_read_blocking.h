@@ -65,13 +65,17 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) CrossOriginReadBlocking {
     // the response body and SniffResponseBody decided to allow the response
     // (e.g. because none of sniffers found blockable content).  false
     // otherwise.
-    bool should_allow() const;
+    bool ShouldAllow() const;
 
     // true if either 1) ShouldBlockBasedOnHeaders decided to block the response
     // based on headers alone or 2) ShouldBlockBasedOnHeaders decided to sniff
     // the response body and SniffResponseBody confirmed that the response
     // contains blockable content.  false otherwise.
-    bool should_block() const;
+    bool ShouldBlock() const;
+
+    // true if the analyzed response should report Cross-Origin Read Blocking in
+    // a warning message written to the DevTools console.
+    bool ShouldReportBlockedResponse() const;
 
     // Whether ShouldBlockBasedOnHeaders asked to sniff the body.
     bool needs_sniffing() const {
@@ -86,6 +90,10 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) CrossOriginReadBlocking {
     // Value of the content-length response header if available. -1 if not
     // available.
     int64_t content_length() const { return content_length_; }
+
+    // The HTTP response code (e.g. 200 or 404) received in response to this
+    // resource request.
+    int http_response_code() const { return http_response_code_; }
 
     // Allows ResponseAnalyzer to sniff the response body.
     void SniffResponseBody(base::StringPiece data, size_t new_data_offset);
@@ -132,6 +140,10 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) CrossOriginReadBlocking {
     // Content length if available. -1 if not available.
     int64_t content_length_ = -1;
 
+    // The HTTP response code (e.g. 200 or 404) received in response to this
+    // resource request.
+    int http_response_code_ = 0;
+
     // The sniffers to be used.
     std::vector<std::unique_ptr<ConfirmationSniffer>> sniffers_;
 
@@ -146,14 +158,6 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) CrossOriginReadBlocking {
   // Used to strip response headers if a decision to block has been made.
   static void SanitizeBlockedResponse(
       const scoped_refptr<network::ResourceResponse>& response);
-
-  // Returns explicitly named headers from
-  // https://fetch.spec.whatwg.org/#cors-safelisted-response-header-name.
-  //
-  // Note that CORB doesn't block responses allowed through CORS - this means
-  // that the list of allowed headers below doesn't have to consider header
-  // names listed in the Access-Control-Expose-Headers header.
-  static std::vector<std::string> GetCorsSafelistedHeadersForTesting();
 
   // This enum backs a histogram, so do not change the order of entries or
   // remove entries. When adding new entries update |kMaxValue| and enums.xml
@@ -191,6 +195,23 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) CrossOriginReadBlocking {
     kYes,
   };
 
+  // Notifies CORB that |process_id| is proxying requests on behalf of a
+  // universal-access plugin and therefore CORB should stop blocking requests
+  // marked as RESOURCE_TYPE_PLUGIN_RESOURCE.
+  //
+  // TODO(lukasza, laforge): https://crbug.com/702995: Remove the static
+  // ...ForPlugin methods once Flash support is removed from Chromium (probably
+  // around 2020 - see https://www.chromium.org/flash-roadmap).
+  static void AddExceptionForPlugin(int process_id);
+
+  // Returns true if CORB should ignore a request initiated by a universal
+  // access plugin - i.e. if |process_id| has been previously passed to
+  // AddExceptionForPlugin.
+  static bool ShouldAllowForPlugin(int process_id);
+
+  // Reverts AddExceptionForPlugin.
+  static void RemoveExceptionForPlugin(int process_id);
+
  private:
   CrossOriginReadBlocking();  // Not instantiable.
 
@@ -213,6 +234,8 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) CrossOriginReadBlocking {
   // not allowed by actual CORS rules by ignoring 1) credentials and 2)
   // methods. Preflight requests don't matter here since they are not used to
   // decide whether to block a response or not on the client side.
+  // TODO(crbug.com/736308) Remove this check once the kOutOfBlinkCors feature
+  // is shipped.
   static bool IsValidCorsHeaderSet(const url::Origin& frame_origin,
                                    const std::string& access_control_origin);
   FRIEND_TEST_ALL_PREFIXES(CrossOriginReadBlockingTest, IsValidCorsHeaderSet);

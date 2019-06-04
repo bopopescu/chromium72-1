@@ -13,6 +13,10 @@ enable different analyses.  They're complementary.
 
 ## Coding (Emitting to User Actions)
 
+Generally you'll want to call `base::RecordAction()`, which is defined in
+[user_metrics.h](https://cs.chromium.org/chromium/src/base/metrics/user_metrics.h).
+
+
 ### Emit at a High-Level, not Deep in the Implementation
 
 Prefer to emit at the highest level reasonable, closest to the code that handles
@@ -94,7 +98,7 @@ actions (see [advice above](#Do-Not-Emit-Redundantly)) and not emitted
 excessively (see [advice above](#Do-Not-Emit-Excessively)).
 
 In addition to testing interactively, you can have unit tests check the number
-of times a user action was emitted.  See [user_action_tester.h](https://cs.chromium.org/chromium/src/base/test/user_action_tester.h)
+of times a user action was emitted.  See [user_action_tester.h](https://cs.chromium.org/chromium/src/base/test/metrics/user_action_tester.h)
 for details.
 
 ## Interpreting the Resulting Data
@@ -115,6 +119,12 @@ a new user action with a new name.  Otherwise the dashboard will be mixing two
 different interpretations of the data and make no sense.
 
 ## Documenting User Actions
+
+Document user actions in [actions.xml](./actions.xml).  There is also a
+[google-internal version of the file](http://go/chrome-user-actions-internal)
+for the rare case when the user action is confidential (added only to Chrome
+code, not Chromium code; or, an accurate description about how to interpret the
+user action would reveal information about Google's plans).
 
 ### Add User Actions and Documentation in the Same Changelist
 
@@ -155,12 +165,15 @@ actions.xml allows you to annotate an action as `not_user_triggered="true"`.  Th
 feature should be used rarely.  If you think you want to annotate your action
 thusly, please re-review the best practices above.
 
-### Deleting User Action Entries
+## Deleting User Action Entries
 
 Do not delete actions from actions.xml.  Instead, mark unused user actions as
 obsolete, annotating them with the associated date or milestone in the obsolete
 tag entry.  If your user action is being replaced by a new version, we suggest
 noting that in the previous user action's description.
+
+A changelist that marks a user action as obsolete should be reviewed by all
+current owners.
 
 Deleting user action entries would be bad if someone accidentally reused your
 old user action name and which therefore corrupts new data with whatever old

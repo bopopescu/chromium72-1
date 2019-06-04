@@ -40,6 +40,7 @@ def GetFromBrowserOptions(browser_options):
   args.append('--metrics-recording-only')
   args.append('--no-default-browser-check')
   args.append('--no-first-run')
+  args.append('--ignore-background-tasks')
 
   # Turn on GPU benchmarking extension for all runs. The only side effect of
   # the extension being on is that render stats are tracked. This is believed
@@ -94,8 +95,12 @@ def GetReplayArgs(network_backend, supports_spki_list=True):
   if not network_backend.is_open:
     return args
 
+  # Send all browser traffic (including requests to 127.0.0.1 and localhost) to
+  # ts_proxy_server.
   proxy_port = network_backend.forwarder.remote_port
   args.append('--proxy-server=socks://localhost:%s' % proxy_port)
+  args.append('--proxy-bypass-list=<-loopback>')
+
   if not network_backend.use_live_traffic:
     if supports_spki_list:
       # Ignore certificate errors for certs that are signed with Wpr's root.

@@ -53,11 +53,13 @@ void GetPlatformCrashpadAnnotations(
 #endif
 }
 
-base::FilePath PlatformCrashpadInitialization(bool initial_client,
-                                              bool browser_process,
-                                              bool embedded_handler,
-                                              const std::string& user_data_dir,
-                                              const base::FilePath& exe_path) {
+base::FilePath PlatformCrashpadInitialization(
+    bool initial_client,
+    bool browser_process,
+    bool embedded_handler,
+    const std::string& user_data_dir,
+    const base::FilePath& exe_path,
+    const std::vector<std::string>& initial_arguments) {
   base::FilePath database_path;  // Only valid in the browser process.
   base::FilePath metrics_path;  // Only valid in the browser process.
 
@@ -109,7 +111,7 @@ base::FilePath PlatformCrashpadInitialization(bool initial_client,
     // If the handler is embedded in the binary (e.g. chrome, setup), we
     // reinvoke it with --type=crashpad-handler. Otherwise, we use the
     // standalone crashpad_handler.exe (for tests, etc.).
-    std::vector<std::string> start_arguments;
+    std::vector<std::string> start_arguments(initial_arguments);
     if (embedded_handler) {
       start_arguments.push_back(std::string("--type=") +
                                 switches::kCrashpadHandler);
@@ -163,19 +165,11 @@ base::FilePath PlatformCrashpadInitialization(bool initial_client,
 
 // We need to prevent ICF from folding DumpProcessForHungInputThread(),
 // together, since that makes them indistinguishable in crash dumps.
-// We do this by making the function body unique, and prevent optimization
-// from shuffling things around.
-MSVC_DISABLE_OPTIMIZE()
-MSVC_PUSH_DISABLE_WARNING(4748)
-
-DWORD WINAPI DumpProcessForHungInputThread(void* param) {
+// We do this by making the function body unique, and turning off inlining.
+NOINLINE DWORD WINAPI DumpProcessForHungInputThread(void* param) {
   DumpWithoutCrashing();
   return 0;
 }
-
-MSVC_POP_WARNING()
-MSVC_ENABLE_OPTIMIZE()
-
 
 #if defined(ARCH_CPU_X86_64)
 

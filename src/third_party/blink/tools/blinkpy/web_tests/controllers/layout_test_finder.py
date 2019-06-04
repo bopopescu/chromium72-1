@@ -45,7 +45,7 @@ class LayoutTestFinder(object):
         self._port = port
         self._options = options
         self._filesystem = self._port.host.filesystem
-        self.LAYOUT_TESTS_DIRECTORIES = ('src', 'third_party', 'WebKit', 'LayoutTests')
+        self.LAYOUT_TESTS_DIRECTORIES = ('src', 'third_party', 'blink', 'web_tests')
 
     def find_tests(self, args, test_list=None, fastest_percentile=None):
         paths = self._strip_test_dir_prefixes(args)
@@ -116,10 +116,10 @@ class LayoutTestFinder(object):
         return [self._strip_test_dir_prefix(path) for path in paths if path]
 
     def _strip_test_dir_prefix(self, path):
-        # Remove src/third_party/WebKit/LayoutTests/ from the front of the test path,
+        # Remove src/third_party/blink/web_tests/ from the front of the test path,
         # or any subset of these.
         for i in range(len(self.LAYOUT_TESTS_DIRECTORIES)):
-            # Handle both "LayoutTests/foo/bar.html" and "LayoutTests\foo\bar.html" if
+            # Handle both "web_tests/foo/bar.html" and "web_tests\foo\bar.html" if
             # the filesystem uses '\\' as a directory separator
             for separator in (self._port.TEST_PATH_SEPARATOR, self._filesystem.sep):
                 directory_prefix = separator.join(self.LAYOUT_TESTS_DIRECTORIES[i:]) + separator
@@ -196,14 +196,20 @@ class LayoutTestFinder(object):
 
     @staticmethod
     def _split_into_chunks(test_names, index, count):
-        chunk_size = int(math.ceil(len(test_names) * 1.0 / count))
+        tests_and_indices = [
+            (test_name, hash(test_name) % count)
+            for test_name in test_names]
 
-        chunk_start = index * chunk_size
-        chunk_end = (index + 1) * chunk_size
+        tests_to_run = [
+            test_name
+            for test_name, test_index in tests_and_indices
+            if test_index == index]
+        other_tests = [
+            test_name
+            for test_name, test_index in tests_and_indices
+            if test_index != index]
 
-        tests_to_run = test_names[chunk_start:chunk_end]
-        other_tests = test_names[:chunk_start] + test_names[chunk_end:]
-
-        _log.debug('chunk slice [%d:%d] of %d is %d tests', chunk_start, chunk_end, len(test_names), len(tests_to_run))
+        _log.debug('chunk %d of %d contains %d tests of %d',
+                   index, count, len(tests_to_run), len(test_names))
 
         return tests_to_run, other_tests

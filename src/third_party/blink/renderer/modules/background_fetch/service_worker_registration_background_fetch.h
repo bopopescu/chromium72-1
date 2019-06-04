@@ -5,7 +5,7 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_MODULES_BACKGROUND_FETCH_SERVICE_WORKER_REGISTRATION_BACKGROUND_FETCH_H_
 #define THIRD_PARTY_BLINK_RENDERER_MODULES_BACKGROUND_FETCH_SERVICE_WORKER_REGISTRATION_BACKGROUND_FETCH_H_
 
-#include "third_party/blink/renderer/modules/serviceworkers/service_worker_registration.h"
+#include "third_party/blink/renderer/modules/service_worker/service_worker_registration.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/heap/handle.h"
 #include "third_party/blink/renderer/platform/supplementable.h"
@@ -24,6 +24,8 @@ class ServiceWorkerRegistrationBackgroundFetch final
  public:
   static const char kSupplementName[];
 
+  explicit ServiceWorkerRegistrationBackgroundFetch(
+      ServiceWorkerRegistration* registration);
   virtual ~ServiceWorkerRegistrationBackgroundFetch();
 
   static ServiceWorkerRegistrationBackgroundFetch& From(
@@ -36,9 +38,6 @@ class ServiceWorkerRegistrationBackgroundFetch final
   void Trace(blink::Visitor* visitor) override;
 
  private:
-  explicit ServiceWorkerRegistrationBackgroundFetch(
-      ServiceWorkerRegistration* registration);
-
   Member<ServiceWorkerRegistration> registration_;
   Member<BackgroundFetchManager> background_fetch_manager_;
 };

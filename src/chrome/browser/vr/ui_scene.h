@@ -14,6 +14,7 @@
 #include "chrome/browser/vr/elements/ui_element_name.h"
 #include "chrome/browser/vr/keyboard_delegate.h"
 #include "chrome/browser/vr/sequence.h"
+#include "chrome/browser/vr/vr_ui_export.h"
 #include "third_party/skia/include/core/SkColor.h"
 
 namespace base {
@@ -28,7 +29,7 @@ namespace vr {
 
 class UiElement;
 
-class UiScene {
+class VR_UI_EXPORT UiScene {
  public:
   typedef base::RepeatingCallback<void()> PerFrameCallback;
 
@@ -36,7 +37,6 @@ class UiScene {
   ~UiScene();
 
   void AddUiElement(UiElementName parent, std::unique_ptr<UiElement> element);
-  void AddUiElement(UiElement* parent, std::unique_ptr<UiElement> element);
   void AddParentUiElement(UiElementName child,
                           std::unique_ptr<UiElement> element);
 
@@ -49,8 +49,10 @@ class UiScene {
   bool OnBeginFrame(const base::TimeTicks& current_time,
                     const gfx::Transform& head_pose);
 
-  // Returns true if any textures were redrawn.
-  bool UpdateTextures();
+  // Returns true if any visible textures need to be redrawn.
+  bool HasDirtyTextures() const;
+
+  void UpdateTextures();
 
   UiElement& root_element();
 
@@ -63,6 +65,7 @@ class UiScene {
   std::vector<UiElement*>& GetAllElements();
   Elements GetElementsToHitTest();
   Elements GetElementsToDraw();
+  bool HasWebXrOverlayElementsToDraw();
   Elements GetWebVrOverlayElementsToDraw();
 
   float background_distance() const { return background_distance_; }

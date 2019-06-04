@@ -27,8 +27,6 @@ void StubPasswordManagerDriver::GeneratedPasswordAccepted(
     const base::string16& password) {
 }
 
-void StubPasswordManagerDriver::UserSelectedManualGenerationOption() {}
-
 void StubPasswordManagerDriver::FillSuggestion(const base::string16& username,
                                                const base::string16& password) {
 }
@@ -66,6 +64,8 @@ bool StubPasswordManagerDriver::IsMainFrame() const {
   return true;
 }
 
-void StubPasswordManagerDriver::MatchingBlacklistedFormFound() {}
+GURL StubPasswordManagerDriver::GetLastCommittedURL() const {
+  return GURL();
+}
 
 }  // namespace password_manager

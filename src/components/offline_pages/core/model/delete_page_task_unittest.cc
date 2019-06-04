@@ -10,8 +10,9 @@
 #include "base/bind.h"
 #include "base/files/file_util.h"
 #include "base/memory/weak_ptr.h"
+#include "base/optional.h"
 #include "base/strings/utf_string_conversions.h"
-#include "base/test/histogram_tester.h"
+#include "base/test/metrics/histogram_tester.h"
 #include "components/offline_pages/core/client_namespace_constants.h"
 #include "components/offline_pages/core/model/model_task_test_base.h"
 #include "components/offline_pages/core/model/offline_page_model_utils.h"
@@ -49,7 +50,7 @@ class DeletePageTaskTest : public ModelTaskTestBase {
   DeletePageTask::DeletePageTaskCallback delete_page_callback();
 
   base::HistogramTester* histogram_tester() { return histogram_tester_.get(); }
-  DeletePageResult last_delete_page_result() {
+  const base::Optional<DeletePageResult>& last_delete_page_result() {
     return last_delete_page_result_;
   }
   const std::vector<DeletedPageInfo>& last_deleted_page_infos() {
@@ -59,12 +60,11 @@ class DeletePageTaskTest : public ModelTaskTestBase {
  private:
   std::unique_ptr<base::HistogramTester> histogram_tester_;
 
-  DeletePageResult last_delete_page_result_;
+  base::Optional<DeletePageResult> last_delete_page_result_;
   std::vector<DeletedPageInfo> last_deleted_page_infos_;
 };
 
-DeletePageTaskTest::DeletePageTaskTest()
-    : last_delete_page_result_(DeletePageResult::RESULT_COUNT) {}
+DeletePageTaskTest::DeletePageTaskTest() {}
 
 DeletePageTaskTest::~DeletePageTaskTest() {}
 
@@ -344,7 +344,7 @@ TEST_F(DeletePageTaskTest, DeletePageByUrlPredicate) {
   EXPECT_TRUE(base::PathExists(page3.file_path));
 
   // Delete all pages with url contains example.com, which are with kTestUrl1.
-  UrlPredicate predicate = base::Bind([](const GURL& url) -> bool {
+  UrlPredicate predicate = base::BindRepeating([](const GURL& url) -> bool {
     return url.spec().find("example.com") != std::string::npos;
   });
 
@@ -395,7 +395,7 @@ TEST_F(DeletePageTaskTest, DeletePageByUrlPredicateNotFound) {
 
   // Return false for all pages so that no pages will be deleted.
   UrlPredicate predicate =
-      base::Bind([](const GURL& url) -> bool { return false; });
+      base::BindRepeating([](const GURL& url) -> bool { return false; });
 
   auto task = DeletePageTask::CreateTaskMatchingUrlPredicateForCachedPages(
       store(), delete_page_callback(), policy_controller(), predicate);

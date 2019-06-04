@@ -18,13 +18,13 @@
 #include "base/trace_event/memory_dump_request_args.h"
 #include "base/trace_event/process_memory_dump.h"
 #include "base/trace_event/trace_config.h"
-#include "base/trace_event/trace_event_argument.h"
+#include "base/trace_event/traced_value.h"
 #include "net/base/load_timing_info.h"
 #include "net/cert/mock_cert_verifier.h"
 #include "net/dns/mapped_host_resolver.h"
 #include "net/dns/mock_host_resolver.h"
 #include "net/http/http_status_code.h"
-#include "net/quic/chromium/crypto/proof_source_chromium.h"
+#include "net/quic/crypto/proof_source_chromium.h"
 #include "net/test/cert_test_util.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
 #include "net/test/embedded_test_server/http_response.h"
@@ -142,13 +142,13 @@ class URLRequestQuicPerfTest : public ::testing::Test {
 
  private:
   void StartQuicServer() {
-    net::QuicConfig config;
+    quic::QuicConfig config;
     memory_cache_backend_.AddSimpleResponse(kOriginHost, kHelloPath,
                                             kHelloStatus, kHelloAltSvcResponse);
     quic_server_.reset(new QuicSimpleServer(
-        test::crypto_test_utils::ProofSourceForTesting(), config,
-        net::QuicCryptoServerConfig::ConfigOptions(), AllSupportedVersions(),
-        &memory_cache_backend_));
+        quic::test::crypto_test_utils::ProofSourceForTesting(), config,
+        quic::QuicCryptoServerConfig::ConfigOptions(),
+        quic::AllSupportedVersions(), &memory_cache_backend_));
     int rv = quic_server_->Listen(
         net::IPEndPoint(net::IPAddress::IPv4AllZeros(), kAltSvcPort));
     ASSERT_GE(rv, 0) << "Quic server fails to start";
@@ -178,7 +178,7 @@ class URLRequestQuicPerfTest : public ::testing::Test {
   std::unique_ptr<QuicSimpleServer> quic_server_;
   std::unique_ptr<base::MessageLoop> message_loop_;
   std::unique_ptr<TestURLRequestContext> context_;
-  QuicMemoryCacheBackend memory_cache_backend_;
+  quic::QuicMemoryCacheBackend memory_cache_backend_;
   MockCertVerifier cert_verifier_;
 };
 

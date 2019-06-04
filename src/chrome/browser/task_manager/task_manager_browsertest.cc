@@ -30,7 +30,7 @@
 #include "chrome/browser/ui/browser_dialogs.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
-#include "chrome/browser/web_applications/web_app.h"
+#include "chrome/browser/web_applications/extensions/web_app_extension_shortcut.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/grit/generated_resources.h"
 #include "chrome/test/base/in_process_browser_test.h"
@@ -178,20 +178,6 @@ class TaskManagerUtilityProcessBrowserTest : public TaskManagerBrowserTest {
 
  private:
   DISALLOW_COPY_AND_ASSIGN(TaskManagerUtilityProcessBrowserTest);
-};
-
-class TaskManagerMemoryCoordinatorBrowserTest : public TaskManagerBrowserTest {
- public:
-  TaskManagerMemoryCoordinatorBrowserTest() {
-    scoped_feature_list_.InitAndEnableFeature(features::kMemoryCoordinator);
-  }
-
-  ~TaskManagerMemoryCoordinatorBrowserTest() override {}
-
- private:
-  base::test::ScopedFeatureList scoped_feature_list_;
-
-  DISALLOW_COPY_AND_ASSIGN(TaskManagerMemoryCoordinatorBrowserTest);
 };
 
 // Parameterized variant of TaskManagerBrowserTest which runs with/without
@@ -406,8 +392,9 @@ IN_PROC_BROWSER_TEST_F(TaskManagerBrowserTest, NoticeAppTabChanges) {
   ShowTaskManager();
 
   ASSERT_TRUE(LoadExtension(test_data_dir_.AppendASCII("packaged_app")));
-  ExtensionService* service = extensions::ExtensionSystem::Get(
-                                  browser()->profile())->extension_service();
+  extensions::ExtensionService* service =
+      extensions::ExtensionSystem::Get(browser()->profile())
+          ->extension_service();
   const extensions::Extension* extension =
       service->GetExtensionById(last_loaded_extension_id(), false);
 
@@ -448,8 +435,9 @@ IN_PROC_BROWSER_TEST_F(TaskManagerBrowserTest, NoticeAppTabChanges) {
 IN_PROC_BROWSER_TEST_F(TaskManagerBrowserTest, NoticeAppTab) {
   ASSERT_TRUE(LoadExtension(
       test_data_dir_.AppendASCII("packaged_app")));
-  ExtensionService* service = extensions::ExtensionSystem::Get(
-      browser()->profile())->extension_service();
+  extensions::ExtensionService* service =
+      extensions::ExtensionSystem::Get(browser()->profile())
+          ->extension_service();
   const extensions::Extension* extension =
       service->GetExtensionById(last_loaded_extension_id(), false);
 
@@ -675,7 +663,13 @@ IN_PROC_BROWSER_TEST_F(TaskManagerBrowserTest, JSHeapMemory) {
   ASSERT_NO_FATAL_FAILURE(WaitForTaskManagerRows(1, MatchTab("title1.html")));
 }
 
-IN_PROC_BROWSER_TEST_F(TaskManagerBrowserTest, SentDataObserved) {
+#if defined(MEMORY_SANITIZER)
+// This tests times out when MSan is enabled. See https://crbug.com/890313.
+#define MAYBE_SentDataObserved DISABLED_SentDataObserved
+#else
+#define MAYBE_SentDataObserved SentDataObserved
+#endif
+IN_PROC_BROWSER_TEST_F(TaskManagerBrowserTest, MAYBE_SentDataObserved) {
   ShowTaskManager();
   GURL test_gurl = embedded_test_server()->GetURL("/title1.html");
 
@@ -707,7 +701,13 @@ IN_PROC_BROWSER_TEST_F(TaskManagerBrowserTest, SentDataObserved) {
             model()->GetColumnValue(ColumnSpecifier::TOTAL_NETWORK_USE, 0));
 }
 
-IN_PROC_BROWSER_TEST_F(TaskManagerBrowserTest, TotalSentDataObserved) {
+#if defined(MEMORY_SANITIZER)
+// This tests times out when MSan is enabled. See https://crbug.com/890313.
+#define MAYBE_TotalSentDataObserved DISABLED_TotalSentDataObserved
+#else
+#define MAYBE_TotalSentDataObserved TotalSentDataObserved
+#endif
+IN_PROC_BROWSER_TEST_F(TaskManagerBrowserTest, MAYBE_TotalSentDataObserved) {
   ShowTaskManager();
   GURL test_gurl = embedded_test_server()->GetURL("/title1.html");
 
@@ -808,32 +808,6 @@ IN_PROC_BROWSER_TEST_F(TaskManagerUtilityProcessBrowserTest,
       minimal_heap_size));
   ASSERT_NO_FATAL_FAILURE(
       WaitForTaskManagerRows(1, MatchUtility(proxy_resolver_name)));
-}
-
-// Memory coordinator is not available on macos. crbug.com/617492
-#if defined(OS_MACOSX)
-#define MAYBE_MemoryState DISABLED_MemoryState
-#else
-#define MAYBE_MemoryState MemoryState
-#endif  // defined(OS_MACOSX)
-IN_PROC_BROWSER_TEST_F(TaskManagerMemoryCoordinatorBrowserTest,
-                       MAYBE_MemoryState) {
-  ShowTaskManager();
-  model()->ToggleColumnVisibility(ColumnSpecifier::MEMORY_STATE);
-  model()->ToggleColumnVisibility(ColumnSpecifier::V8_MEMORY_USED);
-
-  ui_test_utils::NavigateToURL(browser(), GetTestURL());
-  ASSERT_NO_FATAL_FAILURE(WaitForTaskManagerRows(1, MatchTab("title1.html")));
-
-  // Wait until the tab consumes some memory so that memory state is refreshed.
-  size_t minimal_heap_size = 1024;
-  ASSERT_NO_FATAL_FAILURE(WaitForTaskManagerStatToExceed(
-      MatchTab("title1.html"), ColumnSpecifier::V8_MEMORY_USED,
-      minimal_heap_size));
-
-  int row = FindResourceIndex(MatchTab("title1.html"));
-  ASSERT_NE(-1, row);
-  ASSERT_NE(base::MemoryState::UNKNOWN, model()->GetMemoryState(row));
 }
 
 IN_PROC_BROWSER_TEST_F(TaskManagerBrowserTest, DevToolsNewDockedWindow) {
@@ -980,8 +954,7 @@ IN_PROC_BROWSER_TEST_P(TaskManagerOOPIFBrowserTest, SubframeHistoryNavigation) {
       MatchSubframe("http://e.com/"), ColumnSpecifier::MEMORY_FOOTPRINT, 1000));
 }
 
-// Flaky, see https://crbug.com/797860.
-IN_PROC_BROWSER_TEST_P(TaskManagerOOPIFBrowserTest, DISABLED_KillSubframe) {
+IN_PROC_BROWSER_TEST_P(TaskManagerOOPIFBrowserTest, KillSubframe) {
   ShowTaskManager();
 
   content::TestNavigationObserver navigation_observer(

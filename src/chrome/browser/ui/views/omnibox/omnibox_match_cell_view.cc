@@ -11,28 +11,28 @@
 #include "base/metrics/field_trial_params.h"
 #include "chrome/browser/ui/layout_constants.h"
 #include "chrome/browser/ui/omnibox/omnibox_theme.h"
-#include "chrome/browser/ui/views/location_bar/location_bar_view.h"
 #include "chrome/browser/ui/views/omnibox/omnibox_popup_contents_view.h"
 #include "chrome/browser/ui/views/omnibox/omnibox_text_view.h"
-#include "chrome/browser/ui/views/omnibox/rounded_omnibox_results_frame.h"
 #include "chrome/grit/generated_resources.h"
+#include "chrome/grit/theme_resources.h"
 #include "components/omnibox/browser/omnibox_field_trial.h"
+#include "components/omnibox/browser/vector_icons.h"
 #include "extensions/common/image_util.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/material_design/material_design_controller.h"
+#include "ui/base/resource/resource_bundle.h"
+#include "ui/gfx/canvas.h"
+#include "ui/gfx/color_palette.h"
 #include "ui/gfx/image/canvas_image_source.h"
+#include "ui/gfx/paint_vector_icon.h"
+#include "ui/gfx/render_text.h"
+#include "ui/views/border.h"
 #include "ui/views/controls/image_view.h"
 
 namespace {
 
-// The minimum vertical margin that should be used above and below each
-// suggestion.
-static constexpr int kMinVerticalMargin = 1;
-
-// The vertical padding to provide each RenderText in addition to the height of
-// the font. Where possible, RenderText uses this additional space to vertically
-// center the cap height of the font instead of centering the entire font.
-static constexpr int kVerticalPadding = 4;
+// The left-hand margin used for rows.
+static constexpr int kMarginLeft = 4;
 
 // TODO(dschuyler): Perhaps this should be based on the font size
 // instead of hardcoded to 2 dp (e.g. by adding a space in an
@@ -40,63 +40,47 @@ static constexpr int kVerticalPadding = 4;
 // the additional padding here to zero).
 static constexpr int kAnswerIconToTextPadding = 2;
 
-// The edge length of the rich suggestions images.
-static constexpr int kRichImageSize = 32;
-static constexpr int kRichImageCornerRadius = 4;
+// The edge length of the layout image area.
+static constexpr int kImageBoxSize = 40;
 
-// Returns the horizontal offset that ensures icons align vertically with the
-// Omnibox icon.
-int GetIconAlignmentOffset() {
-  // The horizontal bounds of a result is the width of the selection highlight
-  // (i.e. the views::Background). The traditional popup is designed with its
-  // selection shape mimicking the internal shape of the omnibox border. Inset
-  // to be consistent with the border drawn in BackgroundWith1PxBorder.
-  int offset = LocationBarView::GetBorderThicknessDip();
+// The diameter of the new answer layout images.
+static constexpr int kNewAnswerImageSize = 24;
 
-  // The touch-optimized popup selection always fills the results frame. So to
-  // align icons, inset additionally by the frame alignment inset on the left.
-  if (ui::MaterialDesignController::IsTouchOptimizedUiEnabled())
-    offset += RoundedOmniboxResultsFrame::kLocationBarAlignmentInsets.left();
-  return offset;
-}
+// The edge length of the entity suggestions images.
+static constexpr int kEntityImageSize = 32;
+static constexpr int kEntityImageCornerRadius = 4;
 
-// Returns the margins that should appear at the top and bottom of the result.
-// |is_old_style_answer| indicates whether the vertical margin is for a omnibox
-// result displaying an answer to the query.
-gfx::Insets GetVerticalInsets(int text_height, bool is_old_style_answer) {
-  // Regardless of the text size, we ensure a minimum size for the content line
-  // here. This minimum is larger for hybrid mouse/touch devices to ensure an
-  // adequately sized touch target.
-  const int min_height_for_icon =
-      GetLayoutConstant(LOCATION_BAR_ICON_SIZE) +
-      (OmniboxFieldTrial::GetSuggestionVerticalMargin() * 2);
-  const int min_height_for_text = text_height + 2 * kMinVerticalMargin;
-  int min_height = std::max(min_height_for_icon, min_height_for_text);
+// The margin height of a one-line suggestion row.
+static constexpr int kOneLineRowMarginHeight = 8;
 
-  // Make sure the minimum height of an omnibox result matches the height of the
-  // location bar view / non-results section of the omnibox popup in touch.
-  if (ui::MaterialDesignController::IsTouchOptimizedUiEnabled()) {
-    min_height = std::max(
-        min_height, RoundedOmniboxResultsFrame::GetNonResultSectionHeight());
-    if (is_old_style_answer) {
-      // Answer matches apply the normal margin at the top and the minimum
-      // allowable margin at the bottom.
-      const int top_margin = gfx::ToCeiledInt((min_height - text_height) / 2.f);
-      return gfx::Insets(top_margin, 0, kMinVerticalMargin, 0);
-    }
-  }
-
-  const int total_margin = min_height - text_height;
-  // Ceiling the top margin to account for |total_margin| being an odd number.
-  const int top_margin = gfx::ToCeiledInt(total_margin / 2.f);
-  const int bottom_margin = total_margin - top_margin;
-  return gfx::Insets(top_margin, 0, bottom_margin, 0);
-}
+// The margin height of a two-line suggestion row.
+static constexpr int kTwoLineRowMarginHeight = 4;
 
 // Returns the padding width between elements.
 int HorizontalPadding() {
   return GetLayoutConstant(LOCATION_BAR_ELEMENT_PADDING) +
-         GetLayoutConstant(LOCATION_BAR_ICON_INTERIOR_PADDING);
+         GetLayoutInsets(LOCATION_BAR_ICON_INTERIOR_PADDING).width() / 2;
+}
+
+// Returns the margins that should appear around the result.
+// |is_two_line| indicates whether the vertical margin is for a omnibox
+// result displaying an answer to the query.
+gfx::Insets GetMarginInsets(int text_height, bool is_two_line) {
+  int vertical_margin =
+      is_two_line ? kTwoLineRowMarginHeight : kOneLineRowMarginHeight;
+
+  if (base::FeatureList::IsEnabled(omnibox::kUIExperimentVerticalMargin)) {
+    // If the vertical margin experiment is on, we purposely set both the
+    // one-line and two-line suggestions to have the same vertical margin.
+    //
+    // There is no vertical margin value we could set to make the new answer
+    // style look anything similar to the pre-Refresh style, but setting them to
+    // be the same looks reasonable, and is a sane place to start experimenting.
+    vertical_margin = OmniboxFieldTrial::GetSuggestionVerticalMargin();
+  }
+
+  return gfx::Insets(vertical_margin, kMarginLeft, vertical_margin,
+                     OmniboxMatchCellView::kMarginRight);
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -107,7 +91,7 @@ class PlaceholderImageSource : public gfx::CanvasImageSource {
   PlaceholderImageSource(const gfx::Size& canvas_size, SkColor color);
   ~PlaceholderImageSource() override;
 
-  // CanvasImageSource override:
+  // gfx::CanvasImageSource:
   void Draw(gfx::Canvas* canvas) override;
 
  private:
@@ -131,16 +115,58 @@ void PlaceholderImageSource::Draw(gfx::Canvas* canvas) {
   flags.setStyle(cc::PaintFlags::kStrokeAndFill_Style);
   flags.setColor(color_);
   canvas->sk_canvas()->drawRoundRect(gfx::RectToSkRect(gfx::Rect(size_)),
-                                     kRichImageCornerRadius,
-                                     kRichImageCornerRadius, flags);
+                                     kEntityImageCornerRadius,
+                                     kEntityImageCornerRadius, flags);
 }
 
 ////////////////////////////////////////////////////////////////////////////////
-// OmniboxImageView:
+// EncircledImageSource:
 
-class OmniboxImageView : public views::ImageView {
+class EncircledImageSource : public gfx::CanvasImageSource {
  public:
-  OmniboxImageView() = default;
+  EncircledImageSource(const int radius,
+                       const SkColor color,
+                       const gfx::ImageSkia& image);
+  ~EncircledImageSource() override;
+
+  // gfx::CanvasImageSource:
+  void Draw(gfx::Canvas* canvas) override;
+
+ private:
+  const int radius_;
+  const SkColor color_;
+  const gfx::ImageSkia image_;
+
+  DISALLOW_COPY_AND_ASSIGN(EncircledImageSource);
+};
+
+EncircledImageSource::EncircledImageSource(const int radius,
+                                           const SkColor color,
+                                           const gfx::ImageSkia& image)
+    : gfx::CanvasImageSource(gfx::Size(radius * 2, radius * 2), false),
+      radius_(radius),
+      color_(color),
+      image_(image) {}
+
+EncircledImageSource::~EncircledImageSource() = default;
+
+void EncircledImageSource::Draw(gfx::Canvas* canvas) {
+  cc::PaintFlags flags;
+  flags.setAntiAlias(true);
+  flags.setStyle(cc::PaintFlags::kStrokeAndFill_Style);
+  flags.setColor(color_);
+  canvas->DrawCircle(gfx::Point(radius_, radius_), radius_, flags);
+  const int x = radius_ - image_.width() / 2;
+  const int y = radius_ - image_.height() / 2;
+  canvas->DrawImageInt(image_, x, y);
+}
+
+////////////////////////////////////////////////////////////////////////////////
+// RoundedCornerImageView:
+
+class RoundedCornerImageView : public views::ImageView {
+ public:
+  RoundedCornerImageView() = default;
 
   bool CanProcessEventsWithinSubtree() const override { return false; }
 
@@ -148,13 +174,13 @@ class OmniboxImageView : public views::ImageView {
   // views::ImageView:
   void OnPaint(gfx::Canvas* canvas) override;
 
-  DISALLOW_COPY_AND_ASSIGN(OmniboxImageView);
+  DISALLOW_COPY_AND_ASSIGN(RoundedCornerImageView);
 };
 
-void OmniboxImageView::OnPaint(gfx::Canvas* canvas) {
+void RoundedCornerImageView::OnPaint(gfx::Canvas* canvas) {
   gfx::Path mask;
-  mask.addRoundRect(gfx::RectToSkRect(GetImageBounds()), kRichImageCornerRadius,
-                    kRichImageCornerRadius);
+  mask.addRoundRect(gfx::RectToSkRect(GetImageBounds()),
+                    kEntityImageCornerRadius, kEntityImageCornerRadius);
   canvas->ClipPath(mask, true);
   ImageView::OnPaint(canvas);
 }
@@ -164,15 +190,17 @@ void OmniboxImageView::OnPaint(gfx::Canvas* canvas) {
 ////////////////////////////////////////////////////////////////////////////////
 // OmniboxMatchCellView:
 
-OmniboxMatchCellView::OmniboxMatchCellView(OmniboxResultView* result_view)
-    : is_old_style_answer_(false),
-      is_rich_suggestion_(false),
-      is_search_type_(false) {
-  AddChildView(icon_view_ = new OmniboxImageView());
-  AddChildView(image_view_ = new OmniboxImageView());
+OmniboxMatchCellView::OmniboxMatchCellView(OmniboxResultView* result_view) {
+  AddChildView(icon_view_ = new views::ImageView());
+  AddChildView(answer_image_view_ = new RoundedCornerImageView());
   AddChildView(content_view_ = new OmniboxTextView(result_view));
   AddChildView(description_view_ = new OmniboxTextView(result_view));
   AddChildView(separator_view_ = new OmniboxTextView(result_view));
+
+  icon_view_->SetHorizontalAlignment(views::ImageView::CENTER);
+  icon_view_->SetVerticalAlignment(views::ImageView::CENTER);
+  answer_image_view_->SetHorizontalAlignment(views::ImageView::CENTER);
+  answer_image_view_->SetVerticalAlignment(views::ImageView::CENTER);
 
   const base::string16& separator =
       l10n_util::GetStringUTF16(IDS_AUTOCOMPLETE_MATCH_DESCRIPTION_SEPARATOR);
@@ -182,12 +210,33 @@ OmniboxMatchCellView::OmniboxMatchCellView(OmniboxResultView* result_view)
 OmniboxMatchCellView::~OmniboxMatchCellView() = default;
 
 gfx::Size OmniboxMatchCellView::CalculatePreferredSize() const {
-  const int text_height = content_view_->GetLineHeight() + kVerticalPadding;
-  int height = text_height +
-               GetVerticalInsets(text_height, is_old_style_answer_).height();
-  if (is_rich_suggestion_ || is_old_style_answer_) {
-    height += GetDescriptionHeight();
+  int height = 0;
+  switch (layout_style_) {
+    case LayoutStyle::OLD_ANSWER: {
+      int icon_width = icon_view_->width();
+      int answer_image_size =
+          answer_image_view_->GetImage().isNull()
+              ? 0
+              : answer_image_view_->height() + kAnswerIconToTextPadding;
+      int deduction =
+          icon_width + (HorizontalPadding() * 3) + answer_image_size;
+      int description_width = std::max(width() - deduction, 0);
+      height = content_view_->GetLineHeight() +
+               description_view_->GetHeightForWidth(description_width);
+      break;
+    }
+    case LayoutStyle::ONE_LINE_SUGGESTION: {
+      height = content_view_->GetLineHeight();
+      break;
+    }
+    case LayoutStyle::TWO_LINE_SUGGESTION: {
+      height = content_view_->GetLineHeight() +
+               description_view_->GetHeightForWidth(width() - GetTextIndent());
+      break;
+    }
   }
+  height += GetInsets().height();
+  // Width is not calculated because it's not needed by current callers.
   return gfx::Size(0, height);
 }
 
@@ -195,26 +244,33 @@ bool OmniboxMatchCellView::CanProcessEventsWithinSubtree() const {
   return false;
 }
 
-int OmniboxMatchCellView::GetDescriptionHeight() const {
-  int icon_width = icon_view_->width();
-  int answer_icon_size = image_view_->GetImage().isNull()
-                             ? 0
-                             : image_view_->height() + kAnswerIconToTextPadding;
-  int deduction = GetIconAlignmentOffset() + icon_width +
-                  (HorizontalPadding() * 3) + answer_icon_size;
-  int description_width = std::max(width() - deduction, 0);
-  return description_view_->GetHeightForWidth(description_width) +
-         kVerticalPadding;
+// static
+int OmniboxMatchCellView::GetTextIndent() {
+  return ui::MaterialDesignController::touch_ui() ? 51 : 47;
 }
 
 void OmniboxMatchCellView::OnMatchUpdate(const OmniboxResultView* result_view,
                                          const AutocompleteMatch& match) {
-  is_old_style_answer_ = !!match.answer;
   is_rich_suggestion_ =
-      (OmniboxFieldTrial::IsNewAnswerLayoutEnabled() && !!match.answer) ||
-      (base::FeatureList::IsEnabled(omnibox::kOmniboxRichEntitySuggestions) &&
+      (OmniboxFieldTrial::IsNewAnswerLayoutEnabled() &&
+       (!!match.answer || match.type == AutocompleteMatchType::CALCULATOR)) ||
+      (OmniboxFieldTrial::IsRichEntitySuggestionsEnabled() &&
        !match.image_url.empty());
   is_search_type_ = AutocompleteMatch::IsSearchType(match.type);
+
+  // Decide layout style once before Layout, while match data is available.
+  if (is_rich_suggestion_ || match.ShouldShowTabMatch() || match.pedal) {
+    layout_style_ = LayoutStyle::TWO_LINE_SUGGESTION;
+  } else if (!!match.answer) {
+    layout_style_ = LayoutStyle::OLD_ANSWER;
+  } else {
+    layout_style_ = LayoutStyle::ONE_LINE_SUGGESTION;
+  }
+
+  // Set up the separator.
+  separator_view_->SetSize(layout_style_ == LayoutStyle::ONE_LINE_SUGGESTION
+                               ? separator_view_->GetPreferredSize()
+                               : gfx::Size());
 
   // Set up the small icon.
   if (is_rich_suggestion_) {
@@ -223,30 +279,80 @@ void OmniboxMatchCellView::OnMatchUpdate(const OmniboxResultView* result_view,
     icon_view_->SetSize(icon_view_->CalculatePreferredSize());
   }
 
-  // Set up the separator.
-  if (is_old_style_answer_ || is_rich_suggestion_) {
-    separator_view_->SetSize(gfx::Size());
+  if (OmniboxFieldTrial::IsNewAnswerLayoutEnabled() &&
+      match.type == AutocompleteMatchType::CALCULATOR) {
+    answer_image_view_->SetImage(
+        ui::ResourceBundle::GetSharedInstance().GetImageSkiaNamed(
+            IDR_OMNIBOX_CALCULATOR_ROUND));
+    answer_image_view_->SetImageSize(
+        gfx::Size(kNewAnswerImageSize, kNewAnswerImageSize));
+  } else if (!is_rich_suggestion_) {
+    // An old style answer entry may use the answer_image_view_. But
+    // it's set when the image arrives (later).
+    answer_image_view_->SetImage(gfx::ImageSkia());
+    answer_image_view_->SetSize(gfx::Size());
   } else {
-    separator_view_->SetSize(separator_view_->CalculatePreferredSize());
+    // Determine if we have a local icon (or else it will be downloaded).
+    const gfx::VectorIcon* vector_icon = nullptr;
+    int idr_image = 0;
+    if (match.answer) {
+      switch (match.answer->type()) {
+        case SuggestionAnswer::ANSWER_TYPE_CURRENCY:
+          vector_icon = &omnibox::kAnswerCurrencyIcon;
+          break;
+        case SuggestionAnswer::ANSWER_TYPE_DICTIONARY:
+          vector_icon = &omnibox::kAnswerDictionaryIcon;
+          break;
+        case SuggestionAnswer::ANSWER_TYPE_FINANCE:
+          vector_icon = &omnibox::kAnswerFinanceIcon;
+          break;
+        case SuggestionAnswer::ANSWER_TYPE_SUNRISE:
+          vector_icon = &omnibox::kAnswerSunriseIcon;
+          break;
+        case SuggestionAnswer::ANSWER_TYPE_TRANSLATION:
+          idr_image = IDR_OMNIBOX_TRANSLATION_ROUND;
+          break;
+        case SuggestionAnswer::ANSWER_TYPE_WEATHER:
+          // Weather icons are downloaded. Do nothing.
+          break;
+        case SuggestionAnswer::ANSWER_TYPE_WHEN_IS:
+          vector_icon = &omnibox::kAnswerWhenIsIcon;
+          break;
+        default:
+          vector_icon = &omnibox::kAnswerDefaultIcon;
+          break;
+      }
+      if (vector_icon) {
+        const auto& icon = gfx::CreateVectorIcon(*vector_icon, SK_ColorWHITE);
+        answer_image_view_->SetImage(
+            gfx::CanvasImageSource::MakeImageSkia<EncircledImageSource>(
+                kNewAnswerImageSize / 2, gfx::kGoogleBlue600, icon));
+      } else if (idr_image) {
+        answer_image_view_->SetImage(
+            ui::ResourceBundle::GetSharedInstance().GetImageSkiaNamed(
+                idr_image));
+      }
+      // Always set the image size so that downloaded images get the correct
+      // size (such as Weather answers).
+      answer_image_view_->SetImageSize(
+          gfx::Size(kNewAnswerImageSize, kNewAnswerImageSize));
+    } else {
+      SkColor color = result_view->GetColor(OmniboxPart::RESULTS_BACKGROUND);
+      extensions::image_util::ParseHexColorString(match.image_dominant_color,
+                                                  &color);
+      color = SkColorSetA(color, 0x40);  // 25% transparency (arbitrary).
+      const gfx::Size size = gfx::Size(kEntityImageSize, kEntityImageSize);
+      answer_image_view_->SetImageSize(size);
+      answer_image_view_->SetImage(
+          gfx::CanvasImageSource::MakeImageSkia<PlaceholderImageSource>(size,
+                                                                        color));
+    }
   }
-
-  // Set up the larger image.
-  if (!is_rich_suggestion_) {
-    // An entry with |is_old_style_answer_| may use the image_view_. But it's
-    // set when the image arrives (later).
-    image_view_->SetImage(gfx::ImageSkia());
-    image_view_->SetSize(gfx::Size());
-  } else {
-    SkColor color = result_view->GetColor(OmniboxPart::RESULTS_BACKGROUND);
-    extensions::image_util::ParseHexColorString(match.image_dominant_color,
-                                                &color);
-    color = SkColorSetA(color, 0x40);  // 25% transparency (arbitrary).
-    const gfx::Size size = gfx::Size(kRichImageSize, kRichImageSize);
-    image_view_->SetImage(
-        gfx::CanvasImageSource::MakeImageSkia<PlaceholderImageSource>(size,
-                                                                      color));
-    image_view_->SetSize(size);
-  }
+  if (match.type == AutocompleteMatchType::SEARCH_SUGGEST_TAIL)
+    // Used for indent calculation.
+    SetTailSuggestCommonPrefixWidth(match.tail_suggest_common_prefix);
+  else
+    SetTailSuggestCommonPrefixWidth(base::string16());
 }
 
 const char* OmniboxMatchCellView::GetClassName() const {
@@ -254,82 +360,130 @@ const char* OmniboxMatchCellView::GetClassName() const {
 }
 
 void OmniboxMatchCellView::Layout() {
+  // Update the margins.
+  gfx::Insets insets =
+      GetMarginInsets(content()->GetLineHeight(),
+                      layout_style_ != LayoutStyle::ONE_LINE_SUGGESTION);
+  SetBorder(views::CreateEmptyBorder(insets.top(), insets.left(),
+                                     insets.bottom(), insets.right()));
+  // Layout children *after* updating the margins.
   views::View::Layout();
+
+  const int icon_view_width = kImageBoxSize;
+  const int text_indent = GetTextIndent();
+  switch (layout_style_) {
+    case LayoutStyle::OLD_ANSWER:
+      LayoutOldStyleAnswer(icon_view_width, text_indent);
+      break;
+    case LayoutStyle::ONE_LINE_SUGGESTION:
+      LayoutOneLineSuggestion(icon_view_width,
+                              text_indent + tail_suggest_common_prefix_width_);
+      break;
+    case LayoutStyle::TWO_LINE_SUGGESTION:
+      LayoutNewStyleTwoLineSuggestion();
+      break;
+  }
+}
+
+void OmniboxMatchCellView::LayoutOldStyleAnswer(int icon_view_width,
+                                                int text_indent) {
+  // TODO(dschuyler): Remove this layout once rich layouts are enabled by
+  // default.
+  gfx::Rect child_area = GetContentsBounds();
+  const int text_height = content_view_->GetLineHeight();
+  int x = child_area.x();
+  int y = child_area.y();
+  icon_view_->SetBounds(x, y, icon_view_width, text_height);
+  x += text_indent;
+  content_view_->SetBounds(x, y, width() - x, text_height);
+  y += text_height;
+  if (!answer_image_view_->GetImage().isNull()) {
+    constexpr int kImageEdgeLength = 24;
+    constexpr int kImagePadding = 2;
+    answer_image_view_->SetBounds(x, y + kImagePadding, kImageEdgeLength,
+                                  kImageEdgeLength);
+    answer_image_view_->SetImageSize(
+        gfx::Size(kImageEdgeLength, kImageEdgeLength));
+    x += answer_image_view_->width() + kAnswerIconToTextPadding;
+  }
+  int description_width = width() - x;
+  description_view_->SetBounds(
+      x, y, description_width,
+      description_view_->GetHeightForWidth(description_width));
+}
+
+void OmniboxMatchCellView::LayoutNewStyleTwoLineSuggestion() {
+  gfx::Rect child_area = GetContentsBounds();
+  int x = child_area.x();
+  int y = child_area.y();
+  views::ImageView* image_view;
   if (is_rich_suggestion_) {
-    LayoutRichSuggestion();
-  } else if (is_old_style_answer_) {
-    LayoutOldStyleAnswer();
+    image_view = answer_image_view_;
   } else {
-    LayoutSplit();
+    image_view = icon_view_;
+  }
+  image_view->SetBounds(x, y, kImageBoxSize, child_area.height());
+  const int text_width = child_area.width() - GetTextIndent();
+  if (description_view_->text().empty()) {
+    // This vertically centers content in the rare case that no description is
+    // provided.
+    content_view_->SetBounds(
+        x + GetTextIndent() + tail_suggest_common_prefix_width_, y, text_width,
+        child_area.height());
+    description_view_->SetSize(gfx::Size());
+  } else {
+    const int text_height = content_view_->GetLineHeight();
+    content_view_->SetBounds(x + GetTextIndent(), y, text_width, text_height);
+    description_view_->SetBounds(
+        x + GetTextIndent(), y + text_height, text_width,
+        description_view_->GetHeightForWidth(text_width));
   }
 }
 
-void OmniboxMatchCellView::LayoutOldStyleAnswer() {
-  const int text_height = content_view_->GetLineHeight() + kVerticalPadding;
-  int x = GetIconAlignmentOffset() + HorizontalPadding();
-  int y = GetVerticalInsets(text_height, /*is_old_style_answer=*/true).top();
-  icon_view_->SetPosition(
-      gfx::Point(x, y + (text_height - icon_view_->height()) / 2));
-  x += icon_view_->width() + HorizontalPadding();
-  content_view_->SetBounds(x, y, width() - x, text_height);
-  y += text_height;
-  if (!image_view_->GetImage().isNull()) {
-    // The description may be multi-line. Using the view height results in
-    // an image that's too large, so we use the line height here instead.
-    int image_edge_length = description_view_->GetLineHeight();
-    image_view_->SetBounds(x, y + (kVerticalPadding / 2), image_edge_length,
-                           image_edge_length);
-    image_view_->SetImageSize(gfx::Size(image_edge_length, image_edge_length));
-    x += image_view_->width() + kAnswerIconToTextPadding;
-  }
-  int description_width = width() - x;
-  description_view_->SetBounds(
-      x, y, description_width,
-      description_view_->GetHeightForWidth(description_width) +
-          kVerticalPadding);
-}
-
-void OmniboxMatchCellView::LayoutRichSuggestion() {
-  const int text_height = content_view_->GetLineHeight() + kVerticalPadding;
-  int x = GetIconAlignmentOffset() + HorizontalPadding();
-  int y = GetVerticalInsets(text_height, /*is_old_style_answer=*/false).top();
-  image_view_->SetImageSize(gfx::Size(kRichImageSize, kRichImageSize));
-  image_view_->SetBounds(x, y + (text_height * 2 - kRichImageSize) / 2,
-                         kRichImageSize, kRichImageSize);
-  x += kRichImageSize + HorizontalPadding();
-  content_view_->SetBounds(x, y, width() - x, text_height);
-  y += text_height;
-  int description_width = width() - x;
-  description_view_->SetBounds(
-      x, y, description_width,
-      description_view_->GetHeightForWidth(description_width) +
-          kVerticalPadding);
-}
-
-void OmniboxMatchCellView::LayoutSplit() {
-  const int text_height = content_view_->GetLineHeight() + kVerticalPadding;
-  int x = GetIconAlignmentOffset() + HorizontalPadding();
-  icon_view_->SetSize(icon_view_->CalculatePreferredSize());
-  int y = GetVerticalInsets(text_height, /*is_old_style_answer=*/false).top();
-  icon_view_->SetPosition(
-      gfx::Point(x, y + (text_height - icon_view_->height()) / 2));
-  x += icon_view_->width() + HorizontalPadding();
-  int content_width = content_view_->CalculatePreferredSize().width();
-  int description_width = description_view_->CalculatePreferredSize().width();
-  gfx::Size separator_size = separator_view_->CalculatePreferredSize();
+void OmniboxMatchCellView::LayoutOneLineSuggestion(int icon_view_width,
+                                                   int text_indent) {
+  gfx::Rect child_area = GetContentsBounds();
+  int row_height = child_area.height();
+  int y = child_area.y();
+  icon_view_->SetBounds(child_area.x(), y, icon_view_width, row_height);
+  int content_width = content_view_->GetPreferredSize().width();
+  int description_width = description_view_->GetPreferredSize().width();
+  gfx::Size separator_size = separator_view_->GetPreferredSize();
   OmniboxPopupModel::ComputeMatchMaxWidths(
-      content_width, separator_size.width(), description_width, width() - x,
+      content_width, separator_size.width(), description_width,
+      child_area.width() - text_indent,
       /*description_on_separate_line=*/false, !is_search_type_, &content_width,
       &description_width);
-  content_view_->SetBounds(x, y, content_width, text_height);
+  int x = child_area.x() + text_indent;
+  content_view_->SetBounds(x, y, content_width, row_height);
   if (description_width != 0) {
     x += content_view_->width();
     separator_view_->SetSize(separator_size);
-    separator_view_->SetBounds(x, y, separator_view_->width(), text_height);
+    separator_view_->SetBounds(x, y, separator_view_->width(), row_height);
     x += separator_view_->width();
-    description_view_->SetBounds(x, y, description_width, text_height);
+    description_view_->SetBounds(x, y, description_width, row_height);
   } else {
     description_view_->SetSize(gfx::Size());
     separator_view_->SetSize(gfx::Size());
   }
+}
+
+void OmniboxMatchCellView::SetTailSuggestCommonPrefixWidth(
+    const base::string16& common_prefix) {
+  if (common_prefix.empty()) {
+    tail_suggest_common_prefix_width_ = 0;
+    return;
+  }
+  std::unique_ptr<gfx::RenderText> render_text =
+      content_view_->CreateRenderText(common_prefix);
+  auto size = render_text->GetStringSize();
+  tail_suggest_common_prefix_width_ = size.width();
+  // Only calculate fixed string width once.
+  if (!ellipsis_width_) {
+    render_text->SetText(base::ASCIIToUTF16(AutocompleteMatch::kEllipsis));
+    size = render_text->GetStringSize();
+    ellipsis_width_ = size.width();
+  }
+  // Indent text by prefix, but come back by width of ellipsis.
+  tail_suggest_common_prefix_width_ -= ellipsis_width_;
 }

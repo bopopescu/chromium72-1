@@ -32,6 +32,10 @@
 #include "testing/gtest/include/gtest/gtest.h"
 
 using base::ASCIIToUTF16;
+using blink::IndexedDBDatabaseMetadata;
+using blink::IndexedDBIndexKeys;
+using blink::IndexedDBKey;
+using blink::IndexedDBKeyPath;
 
 namespace {
 const int kFakeChildProcessId = 0;
@@ -127,7 +131,7 @@ TEST_F(IndexedDBDatabaseTest, ForcedClose) {
   const int64_t transaction_id = 123;
   const std::vector<int64_t> scope;
   db_->CreateTransaction(transaction_id, request->connection(), scope,
-                         blink::kWebIDBTransactionModeReadOnly);
+                         blink::mojom::IDBTransactionMode::ReadOnly);
 
   request->connection()->ForceClose();
 
@@ -336,7 +340,7 @@ class IndexedDBDatabaseOperationTest : public testing::Test {
                                                         db_, callbacks_);
     transaction_ = connection_->CreateTransaction(
         transaction_id, std::set<int64_t>() /*scope*/,
-        blink::kWebIDBTransactionModeVersionChange,
+        blink::mojom::IDBTransactionMode::VersionChange,
         new IndexedDBFakeBackingStore::FakeTransaction(commit_success_));
     db_->TransactionCreated(transaction_);
 
@@ -451,13 +455,12 @@ TEST_F(IndexedDBDatabaseOperationTest, CreatePutDelete) {
 
   // Put is asynchronous
   IndexedDBValue value("value1", std::vector<IndexedDBBlobInfo>());
-  std::vector<std::unique_ptr<storage::BlobDataHandle>> handles;
   std::unique_ptr<IndexedDBKey> key(std::make_unique<IndexedDBKey>("key"));
   std::vector<IndexedDBIndexKeys> index_keys;
   scoped_refptr<MockIndexedDBCallbacks> request(
       new MockIndexedDBCallbacks(false));
-  db_->Put(transaction_, store_id, &value, &handles, std::move(key),
-           blink::kWebIDBPutModeAddOnly, request, index_keys);
+  db_->Put(transaction_, store_id, &value, std::move(key),
+           blink::mojom::IDBPutMode::AddOnly, request, index_keys);
 
   // Deletion is asynchronous.
   db_->DeleteObjectStore(transaction_, store_id);

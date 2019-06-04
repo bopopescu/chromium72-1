@@ -49,7 +49,7 @@ void SyntheticGestureTargetBase::DispatchInputEventToPlatform(
                "type", WebInputEvent::GetName(event.GetType()));
 
   ui::LatencyInfo latency_info;
-  latency_info.AddLatencyNumber(ui::INPUT_EVENT_LATENCY_UI_COMPONENT, 0);
+  latency_info.AddLatencyNumber(ui::INPUT_EVENT_LATENCY_UI_COMPONENT);
 
   if (WebInputEvent::IsTouchEventType(event.GetType())) {
     const WebTouchEvent& web_touch =
@@ -99,6 +99,19 @@ void SyntheticGestureTargetBase::DispatchInputEventToPlatform(
       return;
     }
     DispatchWebGestureEventToPlatform(web_pinch, latency_info);
+  } else if (WebInputEvent::IsFlingGestureEventType(event.GetType())) {
+    const WebGestureEvent& web_fling =
+        static_cast<const WebGestureEvent&>(event);
+    // Touchscreen swipe should be injected as touch events.
+    DCHECK_EQ(blink::kWebGestureDeviceTouchpad, web_fling.SourceDevice());
+    if (event.GetType() == WebInputEvent::kGestureFlingStart &&
+        !PointIsWithinContents(web_fling.PositionInWidget().x,
+                               web_fling.PositionInWidget().y)) {
+      LOG(WARNING)
+          << "Fling coordinates are not within content bounds on FlingStart.";
+      return;
+    }
+    DispatchWebGestureEventToPlatform(web_fling, latency_info);
   } else {
     NOTREACHED();
   }

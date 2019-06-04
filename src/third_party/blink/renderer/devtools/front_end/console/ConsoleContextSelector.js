@@ -14,6 +14,7 @@ Console.ConsoleContextSelector = class {
     this._dropDown.setRowHeight(36);
     this._toolbarItem = new UI.ToolbarItem(this._dropDown.element);
     this._toolbarItem.setEnabled(false);
+    this._toolbarItem.setTitle(ls`JavaScript contexts`);
     this._items.addEventListener(
         UI.ListModel.Events.ItemsReplaced, () => this._toolbarItem.setEnabled(!!this._items.length));
 
@@ -96,20 +97,22 @@ Console.ConsoleContextSelector = class {
     if (executionContext.frameId) {
       const resourceTreeModel = target.model(SDK.ResourceTreeModel);
       let frame = resourceTreeModel && resourceTreeModel.frameForId(executionContext.frameId);
-      while (frame && frame.parentFrame) {
-        depth++;
-        frame = frame.parentFrame;
+      while (frame) {
+        frame = frame.parentFrame || frame.crossTargetParentFrame();
+        if (frame) {
+          depth++;
+          target = frame.resourceTreeModel().target();
+        }
       }
     }
     let targetDepth = 0;
     while (target.parentTarget()) {
-      if (target.parentTarget().hasJSCapability()) {
-        targetDepth++;
-      } else {
+      if (target.parentTarget().type() === SDK.Target.Type.ServiceWorker) {
         // Special casing service workers to be top-level.
         targetDepth = 0;
         break;
       }
+      targetDepth++;
       target = target.parentTarget();
     }
     depth += targetDepth;
@@ -149,7 +152,7 @@ Console.ConsoleContextSelector = class {
   _executionContextCreated(executionContext) {
     // FIXME(413886): We never want to show execution context for the main thread of shadow page in service/shared worker frontend.
     // This check could be removed once we do not send this context to frontend.
-    if (!executionContext.target().hasJSCapability())
+    if (executionContext.target().type() === SDK.Target.Type.ServiceWorker)
       return;
 
     this._items.insertWithComparator(executionContext, executionContext.runtimeModel.executionContextComparator());

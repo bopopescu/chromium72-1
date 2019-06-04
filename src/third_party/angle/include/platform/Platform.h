@@ -12,6 +12,8 @@
 #include <stdint.h>
 #include <array>
 
+#define EGL_PLATFORM_ANGLE_PLATFORM_METHODS_ANGLEX 0x3482
+
 #if defined(_WIN32)
 #   if !defined(LIBANGLE_IMPLEMENTATION)
 #       define ANGLE_PLATFORM_EXPORT __declspec(dllimport)
@@ -34,6 +36,7 @@
 namespace angle
 {
 struct WorkaroundsD3D;
+struct FeaturesVk;
 using TraceEventHandle = uint64_t;
 using EGLDisplayType   = void *;
 struct PlatformMethods;
@@ -120,7 +123,7 @@ inline const unsigned char *DefaultGetTraceCategoryEnabledFlag(PlatformMethods *
 // - name is the name of the event. Also used to match BEGIN/END and
 //   START/FINISH pairs.
 // - id optionally allows events of the same name to be distinguished from
-//   each other. For example, to trace the consutruction and destruction of
+//   each other. For example, to trace the construction and destruction of
 //   objects, specify the pointer as the id parameter.
 // - timestamp should be a time value returned from monotonicallyIncreasingTime.
 // - numArgs specifies the number of elements in argNames, argTypes, and
@@ -231,6 +234,13 @@ inline void DefaultOverrideWorkaroundsD3D(PlatformMethods *platform,
 {
 }
 
+using OverrideFeaturesVkFunc = void (*)(PlatformMethods *platform,
+                                        angle::FeaturesVk *workaroundsVulkan);
+inline void DefaultOverrideFeaturesVk(PlatformMethods *platform,
+                                      angle::FeaturesVk *workaroundsVulkan)
+{
+}
+
 // Callback on a successful program link with the program binary. Can be used to store
 // shaders to disk. Keys are a 160-bit SHA-1 hash.
 using ProgramKeyType   = std::array<uint8_t, 20>;
@@ -260,13 +270,14 @@ inline void DefaultCacheProgram(PlatformMethods *platform,
     OP(histogramSparse, HistogramSparse)                         \
     OP(histogramBoolean, HistogramBoolean)                       \
     OP(overrideWorkaroundsD3D, OverrideWorkaroundsD3D)           \
+    OP(overrideFeaturesVk, OverrideFeaturesVk)                   \
     OP(cacheProgram, CacheProgram)
 
 #define ANGLE_PLATFORM_METHOD_DEF(Name, CapsName) CapsName##Func Name = Default##CapsName;
 
 struct ANGLE_PLATFORM_EXPORT PlatformMethods
 {
-    PlatformMethods();
+    PlatformMethods() {}
 
     // User data pointer for any implementation specific members. Put it at the start of the
     // platform structure so it doesn't become overwritten if one version of the platform

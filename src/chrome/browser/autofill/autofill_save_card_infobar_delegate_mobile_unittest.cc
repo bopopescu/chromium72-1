@@ -8,7 +8,7 @@
 
 #include "base/json/json_reader.h"
 #include "base/macros.h"
-#include "base/test/histogram_tester.h"
+#include "base/test/metrics/histogram_tester.h"
 #include "chrome/browser/autofill/personal_data_manager_factory.h"
 #include "chrome/browser/ui/autofill/chrome_autofill_client.h"
 #include "chrome/test/base/chrome_render_view_host_test_harness.h"
@@ -16,7 +16,7 @@
 #include "components/autofill/core/browser/autofill_test_utils.h"
 #include "components/autofill/core/browser/personal_data_manager.h"
 #include "components/autofill/core/browser/test_personal_data_manager.h"
-#include "components/autofill/core/common/autofill_pref_names.h"
+#include "components/autofill/core/common/autofill_prefs.h"
 #include "components/infobars/core/confirm_infobar_delegate.h"
 #include "components/prefs/pref_service.h"
 #include "testing/gmock/include/gmock/gmock.h"
@@ -50,6 +50,13 @@ class AutofillSaveCardInfoBarDelegateMobileTest
   std::unique_ptr<TestPersonalDataManager> personal_data_;
 
  private:
+  void UploadSaveCardCallback(const AutofillClient::UserProvidedCardDetails&
+                                  user_provided_card_details) {
+    personal_data_.get()->SaveImportedCreditCard(credit_card_to_save_);
+  }
+
+  CreditCard credit_card_to_save_;
+
   DISALLOW_COPY_AND_ASSIGN(AutofillSaveCardInfoBarDelegateMobileTest);
 };
 
@@ -62,14 +69,10 @@ AutofillSaveCardInfoBarDelegateMobileTest::
 void AutofillSaveCardInfoBarDelegateMobileTest::SetUp() {
   ChromeRenderViewHostTestHarness::SetUp();
 
-  PersonalDataManagerFactory::GetInstance()->SetTestingFactory(profile(), NULL);
-
-  ChromeAutofillClient::CreateForWebContents(web_contents());
-  ChromeAutofillClient* autofill_client =
-      ChromeAutofillClient::FromWebContents(web_contents());
+  PersonalDataManagerFactory::GetInstance()->SetTestingFactory(
+      profile(), BrowserContextKeyedServiceFactory::TestingFactory());
 
   personal_data_.reset(new TestPersonalDataManager());
-  personal_data_->set_database(autofill_client->GetDatabase());
   personal_data_->SetPrefService(profile()->GetPrefs());
 
   profile()->GetPrefs()->SetInteger(
@@ -110,9 +113,31 @@ AutofillSaveCardInfoBarDelegateMobileTest::CreateDelegateWithLegalMessage(
   profile()->GetPrefs()->SetInteger(
       prefs::kAutofillAcceptSaveCreditCardPromptState,
       previous_save_credit_card_prompt_user_decision);
+  if (is_uploading) {
+    // Upload save infobar delegate:
+    credit_card_to_save_ = credit_card;
+    std::unique_ptr<ConfirmInfoBarDelegate> delegate(
+        new AutofillSaveCardInfoBarDelegateMobile(
+            is_uploading, /*should_request_name_from_user=*/false, credit_card,
+            std::move(legal_message),
+            /*strike_database=*/nullptr,
+            /*upload_save_card_callback=*/
+            base::BindOnce(&AutofillSaveCardInfoBarDelegateMobileTest::
+                               UploadSaveCardCallback,
+                           base::Unretained(this)),
+            /*local_save_card_callback=*/base::Closure(),
+            profile()->GetPrefs()));
+    return delegate;
+  }
+  // Local save infobar delegate:
   std::unique_ptr<ConfirmInfoBarDelegate> delegate(
       new AutofillSaveCardInfoBarDelegateMobile(
-          is_uploading, credit_card, std::move(legal_message),
+          is_uploading, /*should_request_name_from_user=*/false, credit_card,
+          std::move(legal_message),
+          /*strike_database=*/nullptr,
+          /*upload_save_card_callback=*/
+          AutofillClient::UserAcceptedUploadCallback(),
+          /*local_save_card_callback=*/
           base::Bind(base::IgnoreResult(
                          &TestPersonalDataManager::SaveImportedCreditCard),
                      base::Unretained(personal_data_.get()), credit_card),

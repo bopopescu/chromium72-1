@@ -18,6 +18,7 @@
 #include "components/arc/connection_observer.h"
 #include "components/keyed_service/core/keyed_service.h"
 #include "ui/accessibility/ax_host_delegate.h"
+#include "ui/aura/window_tracker.h"
 #include "ui/wm/public/activation_change_observer.h"
 
 class Profile;
@@ -25,6 +26,10 @@ class Profile;
 namespace content {
 class BrowserContext;
 }  // namespace content
+
+namespace gfx {
+class Rect;
+}  // namespace gfx
 
 namespace arc {
 
@@ -56,7 +61,10 @@ class ArcAccessibilityHelperBridge
   void SetNativeChromeVoxArcSupport(bool enabled);
 
   // Receives the result of setting native ChromeVox Arc support.
-  void OnSetNativeChromeVoxArcSupportProcessed(bool enabled, bool processed);
+  void OnSetNativeChromeVoxArcSupportProcessed(
+      std::unique_ptr<aura::WindowTracker> window_tracker,
+      bool enabled,
+      bool processed);
 
   // KeyedService overrides.
   void Shutdown() override;
@@ -97,6 +105,8 @@ class ArcAccessibilityHelperBridge
     return notification_key_to_tree_;
   }
 
+  void set_filter_type_all_for_test() { use_filter_type_all_for_test_ = true; }
+
  protected:
   virtual aura::Window* GetActiveWindow();
 
@@ -107,19 +117,25 @@ class ArcAccessibilityHelperBridge
                          aura::Window* lost_active) override;
 
   void OnActionResult(const ui::AXActionData& data, bool result) const;
+  void OnGetTextLocationDataResult(
+      const ui::AXActionData& data,
+      const base::Optional<gfx::Rect>& result_rect) const;
 
   void OnAccessibilityStatusChanged(
       const chromeos::AccessibilityStatusEventDetails& event_details);
+  arc::mojom::AccessibilityFilterType GetFilterTypeForProfile(Profile* profile);
   void UpdateFilterType();
-  void UpdateTouchExplorationPassThrough(aura::Window* window);
+  void UpdateWindowProperties(aura::Window* window);
+  void SetExploreByTouchEnabled(bool enabled);
   void UpdateTreeIdOfNotificationSurface(const std::string& notification_key,
-                                         uint32_t tree_id);
+                                         ui::AXTreeID tree_id);
 
-  AXTreeSourceArc* GetOrCreateFromTaskId(int32_t task_id);
+  AXTreeSourceArc* GetFromTaskId(int32_t task_id);
+  AXTreeSourceArc* CreateFromTaskId(int32_t task_id);
   AXTreeSourceArc* GetFromNotificationKey(const std::string& notification_key);
   AXTreeSourceArc* CreateFromNotificationKey(
       const std::string& notification_key);
-  AXTreeSourceArc* GetFromTreeId(int32_t tree_id) const;
+  AXTreeSourceArc* GetFromTreeId(ui::AXTreeID tree_id) const;
 
   bool activation_observer_added_ = false;
   Profile* const profile_;
@@ -129,6 +145,7 @@ class ArcAccessibilityHelperBridge
       notification_key_to_tree_;
   std::unique_ptr<chromeos::AccessibilityStatusSubscription>
       accessibility_status_subscription_;
+  bool use_filter_type_all_for_test_ = false;
 
   DISALLOW_COPY_AND_ASSIGN(ArcAccessibilityHelperBridge);
 };

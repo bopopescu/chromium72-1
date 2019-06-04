@@ -38,7 +38,7 @@
 #include "third_party/blink/public/mojom/blob/blob.mojom-blink.h"
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/fileapi/file_error.h"
-#include "third_party/blink/renderer/platform/heap/handle.h"
+#include "third_party/blink/renderer/platform/heap/persistent.h"
 #include "third_party/blink/renderer/platform/weborigin/kurl.h"
 #include "third_party/blink/renderer/platform/wtf/forward.h"
 #include "third_party/blink/renderer/platform/wtf/text/text_encoding.h"
@@ -97,7 +97,7 @@ class CORE_EXPORT FileReaderLoader : public mojom::blink::BlobReaderClient {
   // After OnCalculatedSize() is called: Returns the size of the resource.
   base::Optional<uint64_t> TotalBytes() const { return total_bytes_; }
 
-  FileError::ErrorCode GetErrorCode() const { return error_code_; }
+  FileErrorCode GetErrorCode() const { return error_code_; }
 
   int32_t GetNetError() const { return net_error_; }
 
@@ -107,8 +107,28 @@ class CORE_EXPORT FileReaderLoader : public mojom::blink::BlobReaderClient {
   bool HasFinishedLoading() const { return finished_loading_; }
 
  private:
+  // These values are persisted to logs. Entries should not be renumbered and
+  // numeric values should never be reused.
+  enum class FailureType {
+    kMojoPipeCreation = 0,
+    kSyncDataNotAllLoaded = 1,
+    kSyncOnCompleteNotReceived = 2,
+    kTotalBytesTooLarge = 3,
+    kArrayBufferBuilderCreation = 4,
+    kArrayBufferBuilderAppend = 5,
+    kBackendReadError = 6,
+    kReadSizesIncorrect = 7,
+    kDataPipeNotReadableWithBytesLeft = 8,
+    kMojoPipeClosedEarly = 9,
+    // Any MojoResult error we aren't expecting during data pipe reading falls
+    // into this bucket. If there are a large number of errors reported here,
+    // then there can be a new enumeration reported for mojo pipe errors.
+    kMojoPipeUnexpectedReadError = 10,
+    kCount
+  };
+
   void Cleanup();
-  void Failed(FileError::ErrorCode);
+  void Failed(FileErrorCode, FailureType type);
 
   void OnStartLoading(uint64_t total_bytes);
   void OnReceivedData(const char* data, unsigned data_length);
@@ -152,7 +172,7 @@ class CORE_EXPORT FileReaderLoader : public mojom::blink::BlobReaderClient {
   int64_t memory_usage_reported_to_v8_ = 0;
 
   int32_t net_error_ = 0;  // net::OK
-  FileError::ErrorCode error_code_ = FileError::kOK;
+  FileErrorCode error_code_ = FileErrorCode::kOK;
 
   mojo::ScopedDataPipeConsumerHandle consumer_handle_;
   mojo::SimpleWatcher handle_watcher_;

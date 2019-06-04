@@ -8,6 +8,7 @@
 #include <memory>
 
 #include "base/memory/scoped_refptr.h"
+#include "base/single_thread_task_runner.h"
 #include "base/task/cancelable_task_tracker.h"
 #include "base/time/clock.h"
 #include "base/time/default_clock.h"
@@ -54,7 +55,7 @@ class GoogleSearchDomainMixingMetricsEmitter : public KeyedService {
   void SetClockForTesting(std::unique_ptr<base::Clock> clock);
 
   // Overrides the default timer for testing purposes.
-  void SetTimerForTesting(std::unique_ptr<base::Timer> timer);
+  void SetTimerForTesting(std::unique_ptr<base::RepeatingTimer> timer);
 
   // Overrides the UI thread task runner for testing purposes.
   void SetUIThreadTaskRunnerForTesting(
@@ -73,7 +74,7 @@ class GoogleSearchDomainMixingMetricsEmitter : public KeyedService {
   std::unique_ptr<base::Clock> clock_ = std::make_unique<base::DefaultClock>();
   // Timer used to compute domain mixing metrics daily if the emitter is
   // long-lived.
-  std::unique_ptr<base::Timer> timer_ =
+  std::unique_ptr<base::RepeatingTimer> timer_ =
       std::make_unique<base::RepeatingTimer>();
   base::CancelableTaskTracker task_tracker_;
   scoped_refptr<base::SingleThreadTaskRunner> ui_thread_task_runner_;

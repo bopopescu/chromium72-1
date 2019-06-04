@@ -21,7 +21,7 @@
 #include "ui/base/ime/text_input_client.h"
 #include "ui/base/ime/text_input_type.h"
 #include "ui/base/models/simple_menu_model.h"
-#include "ui/base/touch/touch_editing_controller.h"
+#include "ui/base/pointer/touch_editing_controller.h"
 #include "ui/events/keycodes/keyboard_codes.h"
 #include "ui/gfx/font_list.h"
 #include "ui/gfx/range/range.h"
@@ -197,7 +197,7 @@ class VIEWS_EXPORT Textfield : public View,
   void SetHorizontalAlignment(gfx::HorizontalAlignment alignment);
 
   // Displays a virtual keyboard or alternate input view if enabled.
-  void ShowImeIfNeeded();
+  void ShowVirtualKeyboardIfEnabled();
 
   // Returns whether or not an IME is composing text.
   bool IsIMEComposing() const;
@@ -243,6 +243,8 @@ class VIEWS_EXPORT Textfield : public View,
 
   // Set extra spacing placed between glyphs; used for obscured text styling.
   void SetGlyphSpacing(int spacing);
+
+  int GetPasswordCharRevealIndex() const { return password_char_reveal_index_; }
 
   // View overrides:
   int GetBaseline() const override;
@@ -359,7 +361,7 @@ class VIEWS_EXPORT Textfield : public View,
   void EnsureCaretNotInRect(const gfx::Rect& rect) override;
   bool IsTextEditCommandEnabled(ui::TextEditCommand command) const override;
   void SetTextEditCommandForNextKeyEvent(ui::TextEditCommand command) override;
-  const std::string& GetClientSourceInfo() const override;
+  ukm::SourceId GetClientSourceForMetrics() const override;
   bool ShouldDoLearning() override;
 
  protected:
@@ -382,6 +384,15 @@ class VIEWS_EXPORT Textfield : public View,
   // case where the text changes on the second mousedown of a double-click.
   // This is harmless if there is not a currently double-clicked word.
   void OffsetDoubleClickWord(int offset);
+
+  // Returns true if the drop cursor is for insertion at a target text location,
+  // the standard behavior/style. Returns false when drop will do something
+  // else (like replace the text entirely).
+  virtual bool IsDropCursorForInsertion() const;
+
+  // Returns true if the placeholder text should be shown. Subclasses may
+  // override this to customize when the placeholder text is shown.
+  virtual bool ShouldShowPlaceholderText() const;
 
  private:
   friend class TextfieldTestApi;
@@ -461,7 +472,8 @@ class VIEWS_EXPORT Textfield : public View,
 
   // Reveals the password character at |index| for a set duration.
   // If |index| is -1, the existing revealed character will be reset.
-  void RevealPasswordChar(int index);
+  // |duration| is the time to remain the password char to be visible.
+  void RevealPasswordChar(int index, base::TimeDelta duration);
 
   void CreateTouchSelectionControllerAndNotifyIt();
 
@@ -618,6 +630,9 @@ class VIEWS_EXPORT Textfield : public View,
 
   // The focus ring for this TextField.
   std::unique_ptr<FocusRing> focus_ring_;
+
+  // The password char reveal index, for testing only.
+  int password_char_reveal_index_ = -1;
 
   // Used to bind callback functions to this object.
   base::WeakPtrFactory<Textfield> weak_ptr_factory_;

@@ -8,9 +8,9 @@
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/logging.h"
+#include "base/task/post_task.h"
+#include "base/task/task_traits.h"
 #include "base/task_runner_util.h"
-#include "base/task_scheduler/post_task.h"
-#include "base/task_scheduler/task_traits.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/storage_partition.h"
@@ -31,10 +31,10 @@ FileDownloader::FileDownloader(
     const base::FilePath& path,
     bool overwrite,
     scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
-    const DownloadFinishedCallback& callback,
+    DownloadFinishedCallback callback,
     const net::NetworkTrafficAnnotationTag& traffic_annotation)
     : url_loader_factory_(url_loader_factory),
-      callback_(callback),
+      callback_(std::move(callback)),
       local_path_(path),
       weak_ptr_factory_(this) {
   auto resource_request = std::make_unique<network::ResourceRequest>();
@@ -54,7 +54,7 @@ FileDownloader::FileDownloader(
   } else {
     base::PostTaskAndReplyWithResult(
         base::CreateTaskRunnerWithTraits(
-            {base::MayBlock(), base::TaskPriority::BACKGROUND,
+            {base::MayBlock(), base::TaskPriority::BEST_EFFORT,
              base::TaskShutdownBehavior::CONTINUE_ON_SHUTDOWN})
             .get(),
         FROM_HERE, base::Bind(&base::PathExists, local_path_),
@@ -75,13 +75,13 @@ void FileDownloader::OnSimpleDownloadComplete(base::FilePath response_path) {
                     << " while trying to download "
                     << simple_url_loader_->GetFinalURL().spec();
     }
-    callback_.Run(FAILED);
+    std::move(callback_).Run(FAILED);
     return;
   }
 
   base::PostTaskAndReplyWithResult(
       base::CreateTaskRunnerWithTraits(
-          {base::MayBlock(), base::TaskPriority::BACKGROUND,
+          {base::MayBlock(), base::TaskPriority::BEST_EFFORT,
            base::TaskShutdownBehavior::CONTINUE_ON_SHUTDOWN})
           .get(),
       FROM_HERE, base::Bind(&base::Move, response_path, local_path_),
@@ -91,7 +91,7 @@ void FileDownloader::OnSimpleDownloadComplete(base::FilePath response_path) {
 
 void FileDownloader::OnFileExistsCheckDone(bool exists) {
   if (exists) {
-    callback_.Run(EXISTS);
+    std::move(callback_).Run(EXISTS);
   } else {
     simple_url_loader_->DownloadToTempFile(
         url_loader_factory_.get(),
@@ -106,5 +106,5 @@ void FileDownloader::OnFileMoveDone(bool success) {
                   << local_path_.LossyDisplayName();
   }
 
-  callback_.Run(success ? DOWNLOADED : FAILED);
+  std::move(callback_).Run(success ? DOWNLOADED : FAILED);
 }

@@ -2,8 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "components/drive/chromeos/drive_file_util.h"
-
+#include <memory>
 #include <string>
 
 #include "base/files/scoped_temp_dir.h"
@@ -17,7 +16,6 @@
 #include "components/drive/drive.pb.h"
 #include "components/drive/file_system_core_util.h"
 #include "content/public/test/test_browser_thread_bundle.h"
-#include "google_apis/drive/drive_switches.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace drive {
@@ -63,15 +61,13 @@ void AddTeamDriveRootEntry(ResourceMetadata* resource_metadata,
 class DriveFileUtilTest : public testing::Test {
  protected:
   void SetUp() override {
-    base::CommandLine::ForCurrentProcess()->AppendSwitch(
-        google_apis::kEnableTeamDrives);
     ASSERT_TRUE(temp_dir_.CreateUniqueTempDir());
 
     metadata_storage_.reset(new ResourceMetadataStorage(
         temp_dir_.GetPath(), base::ThreadTaskRunnerHandle::Get().get()));
     ASSERT_TRUE(metadata_storage_->Initialize());
 
-    fake_free_disk_space_getter_.reset(new FakeFreeDiskSpaceGetter);
+    fake_free_disk_space_getter_ = std::make_unique<FakeFreeDiskSpaceGetter>();
     cache_.reset(new FileCache(metadata_storage_.get(), temp_dir_.GetPath(),
                                base::ThreadTaskRunnerHandle::Get().get(),
                                fake_free_disk_space_getter_.get()));

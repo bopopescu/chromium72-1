@@ -66,6 +66,7 @@ class WEBVIEW_EXPORT WebDialogView : public views::ClientView,
   bool CanResize() const override;
   ui::ModalType GetModalType() const override;
   base::string16 GetWindowTitle() const override;
+  base::string16 GetAccessibleWindowTitle() const override;
   std::string GetWindowName() const override;
   void WindowClosing() override;
   views::View* GetContentsView() override;
@@ -94,9 +95,9 @@ class WEBVIEW_EXPORT WebDialogView : public views::ClientView,
   bool HandleContextMenu(const content::ContextMenuParams& params) override;
 
   // Overridden from content::WebContentsDelegate:
-  void MoveContents(content::WebContents* source,
-                    const gfx::Rect& pos) override;
-  void HandleKeyboardEvent(
+  void SetContentsBounds(content::WebContents* source,
+                         const gfx::Rect& bounds) override;
+  bool HandleKeyboardEvent(
       content::WebContents* source,
       const content::NativeWebKeyboardEvent& event) override;
   void CloseContents(content::WebContents* source) override;

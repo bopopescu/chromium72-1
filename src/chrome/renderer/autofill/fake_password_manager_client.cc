@@ -6,7 +6,7 @@
 
 FakePasswordManagerClient::FakePasswordManagerClient() : binding_(this) {}
 
-FakePasswordManagerClient::~FakePasswordManagerClient() {}
+FakePasswordManagerClient::~FakePasswordManagerClient() = default;
 
 void FakePasswordManagerClient::BindRequest(
     autofill::mojom::PasswordManagerClientAssociatedRequest request) {
@@ -19,24 +19,25 @@ void FakePasswordManagerClient::Flush() {
 }
 
 // autofill::mojom::PasswordManagerClient:
-void FakePasswordManagerClient::ShowPasswordGenerationPopup(
-    const gfx::RectF& bounds,
-    int max_length,
-    const base::string16& generation_element,
-    bool is_manually_triggered,
-    const autofill::PasswordForm& form) {
-  called_show_pw_generation_popup_ = true;
+void FakePasswordManagerClient::AutomaticGenerationStatusChanged(
+    bool available,
+    const base::Optional<
+        autofill::password_generation::PasswordGenerationUIData>& ui_data) {
+  if (available) {
+    called_automatic_generation_status_changed_true_ = true;
+  }
 }
 
-void FakePasswordManagerClient::ShowPasswordEditingPopup(
-    const gfx::RectF& bounds,
-    const autofill::PasswordForm& form) {}
+void FakePasswordManagerClient::ShowManualPasswordGenerationPopup(
+    const autofill::password_generation::PasswordGenerationUIData& ui_data) {
+  called_show_manual_pw_generation_popup_ = true;
+}
 
 void FakePasswordManagerClient::GenerationAvailableForForm(
     const autofill::PasswordForm& form) {
   called_generation_available_for_form_ = true;
 }
 
-void FakePasswordManagerClient::HidePasswordGenerationPopup() {
-  called_hide_pw_generation_popup_ = true;
+void FakePasswordManagerClient::PasswordGenerationRejectedByTyping() {
+  called_password_generation_rejected_by_typing_ = true;
 }

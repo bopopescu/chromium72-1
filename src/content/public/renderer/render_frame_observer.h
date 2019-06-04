@@ -11,15 +11,20 @@
 #include "base/macros.h"
 #include "base/strings/string16.h"
 #include "content/common/content_export.h"
+#include "content/public/common/resource_type.h"
 #include "ipc/ipc_listener.h"
 #include "ipc/ipc_sender.h"
+#include "mojo/public/cpp/bindings/scoped_interface_endpoint_handle.h"
 #include "mojo/public/cpp/system/message_pipe.h"
 #include "third_party/blink/public/platform/web_client_hints_types.mojom.h"
 #include "third_party/blink/public/platform/web_feature.mojom.h"
 #include "third_party/blink/public/platform/web_loading_behavior_flag.h"
 #include "third_party/blink/public/platform/web_vector.h"
 #include "third_party/blink/public/web/web_meaningful_layout.h"
+#include "ui/base/page_transition_types.h"
 #include "v8/include/v8.h"
+
+class GURL;
 
 namespace blink {
 class WebDocumentLoader;
@@ -29,6 +34,11 @@ class WebString;
 struct WebURLError;
 class WebWorkerFetchContext;
 }
+
+namespace network {
+struct ResourceResponseHead;
+struct URLLoaderCompletionStatus;
+}  // namespace network
 
 namespace content {
 
@@ -65,13 +75,15 @@ class CONTENT_EXPORT RenderFrameObserver : public IPC::Listener,
   // Called when a provisional load is about to commit in a frame. This is
   // dispatched just before the Javascript unload event.
   virtual void WillCommitProvisionalLoad() {}
-  virtual void DidCommitProvisionalLoad(bool is_new_navigation,
-                                        bool is_same_document_navigation) {}
+  virtual void DidCommitProvisionalLoad(bool is_same_document_navigation,
+                                        ui::PageTransition transition) {}
   virtual void DidStartProvisionalLoad(
-      blink::WebDocumentLoader* document_loader) {}
+      blink::WebDocumentLoader* document_loader,
+      bool is_content_initiated) {}
   virtual void DidFailProvisionalLoad(const blink::WebURLError& error) {}
   virtual void DidFinishLoad() {}
   virtual void DidFinishDocumentLoad() {}
+  virtual void DidHandleOnloadEvents() {}
   virtual void DidCreateScriptContext(v8::Local<v8::Context> context,
                                       int world_id) {}
   virtual void WillReleaseScriptContext(v8::Local<v8::Context> context,
@@ -112,12 +124,6 @@ class CONTENT_EXPORT RenderFrameObserver : public IPC::Listener,
   // Notifications when |PerformanceTiming| data becomes available
   virtual void DidChangePerformanceTiming() {}
 
-#if defined(USE_NEVA_APPRUNTIME)
-  // Called when First Meaningful Paint is not detected until resource loaded.
-  virtual void DidNonFirstMeaningPaintAfterLoad() {}
-  virtual void DidResetStateToMarkNextPaintForContainer() {}
-#endif
-
   // Notification when the renderer uses a particular code path during a page
   // load. This is used for metrics collection.
   virtual void DidObserveLoadingBehavior(
@@ -128,6 +134,32 @@ class CONTENT_EXPORT RenderFrameObserver : public IPC::Listener,
   virtual void DidObserveNewFeatureUsage(blink::mojom::WebFeature feature) {}
   virtual void DidObserveNewCssPropertyUsage(int css_property,
                                              bool is_animated) {}
+
+  // Reports that visible elements in the frame shifted (bit.ly/lsm-explainer).
+  // This is called once for each janking animation frame, with the jank
+  // fraction for that frame.  The cumulative jank score can be inferred by
+  // summing the jank fractions.
+  virtual void DidObserveLayoutJank(double jank_fraction) {}
+
+  // Notification when the renderer a response started, completed or canceled.
+  // Complete or Cancel is guaranteed to be called for a response that started.
+  // |request_id| uniquely identifies the request within this render frame.
+  virtual void DidStartResponse(
+      const GURL& response_url,
+      int request_id,
+      const network::ResourceResponseHead& response_head,
+      content::ResourceType resource_type) {}
+  virtual void DidCompleteResponse(
+      int request_id,
+      const network::URLLoaderCompletionStatus& status) {}
+  virtual void DidCancelResponse(int request_id) {}
+
+  // Notification when the renderer observes data used during the page load.
+  // This is used for page load metrics. |received_data_length| is the received
+  // network bytes. |resource_id| uniquely identifies the resource within this
+  // render frame.
+  virtual void DidReceiveTransferSizeUpdate(int resource_id,
+                                            int received_data_length) {}
 
   // Called when the focused node has changed to |node|.
   virtual void FocusedNodeChanged(const blink::WebNode& node) {}
@@ -150,11 +182,13 @@ class CONTENT_EXPORT RenderFrameObserver : public IPC::Listener,
       const std::string& interface_name,
       mojo::ScopedMessagePipeHandle* interface_pipe) {}
 
-#if defined(USE_NEVA_MEDIA)
-  // Called when a compositor frame has committed.
-  virtual void DidCommitCompositorFrame() {}
-  virtual void OnSuppressedMediaPlay(bool suppressed) {}
-#endif
+  // Similar to above but for handling Channel-associated interface requests.
+  // Returns |true| if the request is handled by the implementation (taking
+  // ownership of |*handle|) and |false| otherwise (leaving |*handle|
+  // unmodified).
+  virtual bool OnAssociatedInterfaceRequestForFrame(
+      const std::string& interface_name,
+      mojo::ScopedInterfaceEndpointHandle* handle);
 
   // IPC::Listener implementation.
   bool OnMessageReceived(const IPC::Message& message) override;

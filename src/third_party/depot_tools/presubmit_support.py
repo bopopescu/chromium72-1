@@ -13,10 +13,10 @@ __version__ = '1.8.0'
 # change). We should add it as our presubmit scripts start feeling slow.
 
 import ast  # Exposed through the API.
-import cpplint
-import cPickle  # Exposed through the API.
-import cStringIO  # Exposed through the API.
 import contextlib
+import cPickle  # Exposed through the API.
+import cpplint
+import cStringIO  # Exposed through the API.
 import fnmatch  # Exposed through the API.
 import glob
 import inspect
@@ -44,7 +44,7 @@ from warnings import warn
 
 # Local imports.
 import fix_encoding
-import gclient_utils
+import gclient_utils  # Exposed through the API
 import git_footers
 import gerrit_util
 import owners
@@ -549,15 +549,16 @@ class InputApi(object):
     self.cpplint = cpplint
     self.cStringIO = cStringIO
     self.fnmatch = fnmatch
+    self.gclient_utils = gclient_utils
     self.glob = glob.glob
     self.json = json
     self.logging = logging.getLogger('PRESUBMIT')
+    self.marshal = marshal
     self.os_listdir = os.listdir
-    self.os_walk = os.walk
     self.os_path = os.path
     self.os_stat = os.stat
+    self.os_walk = os.walk
     self.pickle = pickle
-    self.marshal = marshal
     self.re = re
     self.subprocess = subprocess
     self.tempfile = tempfile
@@ -761,6 +762,7 @@ class InputApi(object):
     # will run all tests once all PRESUBMIT files are processed.
     tests = []
     msgs = []
+    parallel = parallel and self.parallel
     for t in tests_mix:
       if isinstance(t, OutputApi.PresubmitResult) and t:
         msgs.append(t)
@@ -772,7 +774,7 @@ class InputApi(object):
         if not t.kwargs.get('cwd'):
           t.kwargs['cwd'] = self.PresubmitLocalPath()
     self.thread_pool.AddTests(tests, parallel)
-    if not self.parallel:
+    if not parallel:
       msgs.extend(self.thread_pool.RunAsync())
     return msgs
 
@@ -1529,8 +1531,8 @@ def DoPresubmitChecks(change,
       output.write("Warning, no PRESUBMIT.py found.\n")
     results = []
     thread_pool = ThreadPool()
-    executer = PresubmitExecuter(change, committing, verbose,
-                                 gerrit_obj, dry_run, thread_pool)
+    executer = PresubmitExecuter(change, committing, verbose, gerrit_obj,
+                                 dry_run, thread_pool, parallel)
     if default_presubmit:
       if verbose:
         output.write("Running default presubmit script.\n")

@@ -4,9 +4,12 @@
 
 #include "chrome/notification_helper/notification_activator.h"
 
+#include <windows.h>
+
 #include <shellapi.h>
 
 #include "base/command_line.h"
+#include "base/metrics/histogram_macros.h"
 #include "base/process/process.h"
 #include "base/strings/string16.h"
 #include "base/win/windows_types.h"
@@ -18,6 +21,40 @@ namespace {
 
 // The response entered by the user while interacting with the toast.
 const wchar_t kUserResponse[] = L"userResponse";
+
+// These values are persisted to logs. Entries should not be renumbered and
+// numeric values should never be reused.
+enum class NotificationActivatorPrimaryStatus {
+  kSuccess = 0,
+  kChromeExeMissing = 1,
+  kShellExecuteFailed = 2,
+  kMaxValue = kShellExecuteFailed,
+};
+
+// These values are persisted to logs. Entries should not be renumbered and
+// numeric values should never be reused.
+enum class NotificationActivatorSecondaryStatus {
+  kSuccess = 0,
+  kLaunchIdEmpty = 1 << 0,
+  kAllowSetForegroundWindowFailed = 1 << 1,
+  kProcessHandleMissing = 1 << 2,
+  kScenarioCount = 1 << 3,
+  kMaxValue = kScenarioCount,
+};
+
+void LogNotificationActivatorPrimaryStatus(
+    NotificationActivatorPrimaryStatus status) {
+  UMA_HISTOGRAM_ENUMERATION(
+      "Notifications.NotificationHelper.NotificationActivatorPrimaryStatus",
+      status);
+}
+
+void LogNotificationActivatorSecondaryStatus(
+    NotificationActivatorSecondaryStatus status) {
+  UMA_HISTOGRAM_ENUMERATION(
+      "Notifications.NotificationHelper.NotificationActivatorSecondaryStatus",
+      status);
+}
 
 }  // namespace
 
@@ -53,13 +90,26 @@ HRESULT NotificationActivator::Activate(
   base::FilePath chrome_exe_path = GetChromeExePath();
   if (chrome_exe_path.empty()) {
     Trace(L"Failed to get chrome exe path\n");
+    LogNotificationActivatorPrimaryStatus(
+        NotificationActivatorPrimaryStatus::kChromeExeMissing);
     return HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND);
   }
 
+  int secondary_status =
+      static_cast<int>(NotificationActivatorSecondaryStatus::kSuccess);
+
   // |invoked_args| contains the launch ID string encoded by Chrome. Chrome adds
-  // it to the launch argument of the toast and gets it back via |invoked_args|
-  // here. Chrome needs the data to be able to look up the notification on its
-  // end.
+  // it to the launch argument of the toast and gets it back via |invoked_args|.
+  // Chrome needs the data to be able to look up the notification on its end.
+  //
+  // When the user clicks the Chrome app title rather than the notifications in
+  // the Action Center, an empty launch id string is generated. It is preferable
+  // to launch Chrome with this empty launch id in this scenario, which results
+  // in displaying a NTP.
+  if (invoked_args == nullptr || invoked_args[0] == 0) {
+    secondary_status |=
+        static_cast<int>(NotificationActivatorSecondaryStatus::kLaunchIdEmpty);
+  }
   base::CommandLine command_line(base::CommandLine::NO_PROGRAM);
   command_line.AppendSwitchNative(switches::kNotificationLaunchId,
                                   invoked_args);
@@ -87,12 +137,29 @@ HRESULT NotificationActivator::Activate(
   if (!::ShellExecuteEx(&info)) {
     DWORD error_code = ::GetLastError();
     Trace(L"Unable to launch Chrome.exe; error: 0x%08X\n", error_code);
+    LogNotificationActivatorPrimaryStatus(
+        NotificationActivatorPrimaryStatus::kShellExecuteFailed);
     return HRESULT_FROM_WIN32(error_code);
   }
 
   if (info.hProcess != nullptr) {
     base::Process process(info.hProcess);
     DWORD pid = ::GetProcessId(process.Handle());
+
+    // Despite the fact that the Windows notification center grants the helper
+    // permission to set the foreground window, the helper fails to pass the
+    // baton to Chrome at an alarming rate; see https://crbug.com/837796.
+    // Sending generic down/up key events seems to fix it.
+    INPUT keyboard_inputs[2] = {};
+
+    keyboard_inputs[0].type = INPUT_KEYBOARD;
+    keyboard_inputs[0].ki.dwFlags = 0;  // Key press.
+
+    keyboard_inputs[1] = keyboard_inputs[0];
+    keyboard_inputs[1].ki.dwFlags |= KEYEVENTF_KEYUP;  // key release.
+
+    ::SendInput(2, keyboard_inputs, sizeof(keyboard_inputs[0]));
+
     if (!::AllowSetForegroundWindow(pid)) {
 #if !defined(NDEBUG)
       DWORD error_code = ::GetLastError();
@@ -102,8 +169,20 @@ HRESULT NotificationActivator::Activate(
       // The lack of ability to set the window to foreground is not reason
       // enough to fail the activation call. The user will see the Chrome icon
       // flash in the task bar if this happens, which is a graceful failure.
+      secondary_status |=
+          static_cast<int>(NotificationActivatorSecondaryStatus::
+                               kAllowSetForegroundWindowFailed);
     }
+  } else {
+    secondary_status |= static_cast<int>(
+        NotificationActivatorSecondaryStatus::kProcessHandleMissing);
   }
+
+  LogNotificationActivatorPrimaryStatus(
+      NotificationActivatorPrimaryStatus::kSuccess);
+
+  LogNotificationActivatorSecondaryStatus(
+      static_cast<NotificationActivatorSecondaryStatus>(secondary_status));
 
   return S_OK;
 }

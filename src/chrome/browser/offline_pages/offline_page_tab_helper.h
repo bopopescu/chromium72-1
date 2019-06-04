@@ -5,6 +5,10 @@
 #ifndef CHROME_BROWSER_OFFLINE_PAGES_OFFLINE_PAGE_TAB_HELPER_H_
 #define CHROME_BROWSER_OFFLINE_PAGES_OFFLINE_PAGE_TAB_HELPER_H_
 
+#include <memory>
+#include <string>
+#include <vector>
+
 #include "base/macros.h"
 #include "base/memory/weak_ptr.h"
 #include "base/time/time.h"
@@ -200,7 +204,7 @@ class OfflinePageTabHelper
 
   bool reloading_url_on_net_error_ = false;
 
-  // Service, overlives this object.
+  // Service, outlives this object.
   PrefetchService* prefetch_service_ = nullptr;
 
   // Table of OfflinePages policies.

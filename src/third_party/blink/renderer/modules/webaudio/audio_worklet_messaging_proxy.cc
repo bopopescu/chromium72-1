@@ -4,6 +4,8 @@
 
 #include "third_party/blink/renderer/modules/webaudio/audio_worklet_messaging_proxy.h"
 
+#include <utility>
+
 #include "third_party/blink/public/platform/task_type.h"
 #include "third_party/blink/renderer/bindings/core/v8/serialization/serialized_script_value.h"
 #include "third_party/blink/renderer/core/messaging/message_port.h"
@@ -23,7 +25,7 @@ AudioWorkletMessagingProxy::AudioWorkletMessagingProxy(
     : ThreadedWorkletMessagingProxy(execution_context), worklet_(worklet) {}
 
 void AudioWorkletMessagingProxy::CreateProcessor(
-    AudioWorkletHandler* handler,
+    scoped_refptr<AudioWorkletHandler> handler,
     MessagePortChannel message_port_channel,
     scoped_refptr<SerializedScriptValue> node_options) {
   DCHECK(IsMainThread());
@@ -33,7 +35,7 @@ void AudioWorkletMessagingProxy::CreateProcessor(
           &AudioWorkletMessagingProxy::CreateProcessorOnRenderingThread,
           WrapCrossThreadPersistent(this),
           CrossThreadUnretained(GetWorkerThread()),
-          CrossThreadUnretained(handler),
+          handler,
           handler->Name(),
           std::move(message_port_channel),
           std::move(node_options)));
@@ -41,15 +43,15 @@ void AudioWorkletMessagingProxy::CreateProcessor(
 
 void AudioWorkletMessagingProxy::CreateProcessorOnRenderingThread(
     WorkerThread* worker_thread,
-    AudioWorkletHandler* handler,
+    scoped_refptr<AudioWorkletHandler> handler,
     const String& name,
     MessagePortChannel message_port_channel,
     scoped_refptr<SerializedScriptValue> node_options) {
   DCHECK(worker_thread->IsCurrentThread());
   AudioWorkletGlobalScope* global_scope =
-      ToAudioWorkletGlobalScope(worker_thread->GlobalScope());
-  AudioWorkletProcessor* processor =
-      global_scope->CreateProcessor(name, message_port_channel, node_options);
+      To<AudioWorkletGlobalScope>(worker_thread->GlobalScope());
+  AudioWorkletProcessor* processor = global_scope->CreateProcessor(
+      name, message_port_channel, std::move(node_options));
   handler->SetProcessorOnRenderThread(processor);
 }
 
@@ -93,8 +95,7 @@ AudioWorkletMessagingProxy::CreateObjectProxy(
 }
 
 std::unique_ptr<WorkerThread> AudioWorkletMessagingProxy::CreateWorkerThread() {
-  return AudioWorkletThread::Create(CreateThreadableLoadingContext(),
-                                    WorkletObjectProxy());
+  return AudioWorkletThread::Create(WorkletObjectProxy());
 }
 
 void AudioWorkletMessagingProxy::Trace(Visitor* visitor) {

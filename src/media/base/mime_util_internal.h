@@ -45,9 +45,6 @@ class MEDIA_EXPORT MimeUtil {
     THEORA,
     DOLBY_VISION,
     AV1,
-#if defined(USE_NEVA_MEDIA)
-    VALID_CODEC,
-#endif
     MPEG_H_AUDIO,
     LAST_CODEC = MPEG_H_AUDIO
   };
@@ -72,9 +69,9 @@ class MEDIA_EXPORT MimeUtil {
 
   // See mime_util.h for more information on these methods.
   bool IsSupportedMediaMimeType(const std::string& mime_type) const;
-  void SplitCodecsToVector(const std::string& codecs,
-                           std::vector<std::string>* codecs_out,
-                           bool strip);
+  void SplitCodecs(const std::string& codecs,
+                   std::vector<std::string>* codecs_out);
+  void StripCodecs(std::vector<std::string>* codecs);
   bool ParseVideoCodecString(const std::string& mime_type,
                              const std::string& codec_id,
                              bool* out_is_ambiguous,
@@ -101,10 +98,6 @@ class MEDIA_EXPORT MimeUtil {
                                         const PlatformInfo& platform_info);
 
  private:
-#if defined(USE_NEVA_MEDIA)
-  friend class NevaMimeUtil;
-#endif
-
   typedef base::flat_set<int> CodecSet;
   typedef base::flat_map<std::string, CodecSet> MediaFormatMappings;
 

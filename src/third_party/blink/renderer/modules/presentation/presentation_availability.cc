@@ -23,8 +23,8 @@ PresentationAvailability* PresentationAvailability::Take(
     const WTF::Vector<KURL>& urls,
     bool value) {
   PresentationAvailability* presentation_availability =
-      new PresentationAvailability(resolver->GetExecutionContext(), urls,
-                                   value);
+      MakeGarbageCollected<PresentationAvailability>(
+          resolver->GetExecutionContext(), urls, value);
   presentation_availability->PauseIfNeeded();
   presentation_availability->UpdateListening();
   return presentation_availability;
@@ -35,7 +35,7 @@ PresentationAvailability::PresentationAvailability(
     const WTF::Vector<KURL>& urls,
     bool value)
     : PausableObject(execution_context),
-      PageVisibilityObserver(ToDocument(execution_context)->GetPage()),
+      PageVisibilityObserver(To<Document>(execution_context)->GetPage()),
       urls_(urls),
       value_(value),
       state_(State::kActive) {
@@ -45,7 +45,7 @@ PresentationAvailability::PresentationAvailability(
 PresentationAvailability::~PresentationAvailability() = default;
 
 const AtomicString& PresentationAvailability::InterfaceName() const {
-  return EventTargetNames::PresentationAvailability;
+  return event_target_names::kPresentationAvailability;
 }
 
 ExecutionContext* PresentationAvailability::GetExecutionContext() const {
@@ -57,7 +57,7 @@ void PresentationAvailability::AddedEventListener(
     RegisteredEventListener& registered_listener) {
   EventTargetWithInlineData::AddedEventListener(event_type,
                                                 registered_listener);
-  if (event_type == EventTypeNames::change) {
+  if (event_type == event_type_names::kChange) {
     UseCounter::Count(GetExecutionContext(),
                       WebFeature::kPresentationAvailabilityChangeEventListener);
   }
@@ -70,7 +70,7 @@ void PresentationAvailability::AvailabilityChanged(
     return;
 
   value_ = value;
-  DispatchEvent(Event::Create(EventTypeNames::change));
+  DispatchEvent(*Event::Create(event_type_names::kChange));
 }
 
 bool PresentationAvailability::HasPendingActivity() const {
@@ -107,7 +107,7 @@ void PresentationAvailability::UpdateListening() {
     return;
 
   if (state_ == State::kActive &&
-      (ToDocument(GetExecutionContext())->GetPageVisibilityState() ==
+      (To<Document>(GetExecutionContext())->GetPageVisibilityState() ==
        mojom::PageVisibilityState::kVisible))
     controller->GetAvailabilityState()->AddObserver(this);
   else

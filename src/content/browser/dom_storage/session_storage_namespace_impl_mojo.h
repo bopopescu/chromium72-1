@@ -4,26 +4,26 @@
 #ifndef CONTENT_BROWSER_DOM_STORAGE_SESSION_STORAGE_NAMESPACE_IMPL_MOJO_H_
 #define CONTENT_BROWSER_DOM_STORAGE_SESSION_STORAGE_NAMESPACE_IMPL_MOJO_H_
 
+#include <map>
 #include <memory>
 
 #include "base/callback.h"
 #include "base/containers/flat_map.h"
+#include "base/gtest_prod_util.h"
 #include "base/memory/ref_counted.h"
+#include "content/browser/dom_storage/session_storage_area_impl.h"
 #include "content/browser/dom_storage/session_storage_data_map.h"
-#include "content/browser/dom_storage/session_storage_leveldb_wrapper.h"
 #include "content/browser/dom_storage/session_storage_metadata.h"
-#include "content/common/leveldb_wrapper.mojom.h"
-#include "content/common/storage_partition_service.mojom.h"
-#include "content/public/common/child_process_host.h"
 #include "mojo/public/cpp/bindings/binding.h"
 #include "mojo/public/cpp/bindings/binding_set.h"
 #include "mojo/public/cpp/bindings/interface_ptr_set.h"
+#include "third_party/blink/public/mojom/dom_storage/session_storage_namespace.mojom.h"
 #include "url/origin.h"
 
 namespace content {
 
 // Implements the mojo interface SessionStorageNamespace. Stores data maps per
-// origin, which are accessible using the LevelDBWrapper interface with the
+// origin, which are accessible using the StorageArea interface with the
 // |OpenArea| call. Supports cloning (shallow cloning with copy-on-write
 // behavior) from another SessionStorageNamespaceImplMojo.
 //
@@ -46,28 +46,42 @@ namespace content {
 // create the cloned namespace and expect to manage it's lifetime that way, and
 // this can happen before the first case, as they are on different task runners.
 class CONTENT_EXPORT SessionStorageNamespaceImplMojo final
-    : public mojom::SessionStorageNamespace {
+    : public blink::mojom::SessionStorageNamespace {
  public:
   using OriginAreas =
-      std::map<url::Origin, std::unique_ptr<SessionStorageLevelDBWrapper>>;
-  using RegisterShallowClonedNamespace = base::RepeatingCallback<void(
-      SessionStorageMetadata::NamespaceEntry source_namespace,
-      const std::string& destination_namespace,
-      const OriginAreas& areas_to_clone)>;
+      std::map<url::Origin, std::unique_ptr<SessionStorageAreaImpl>>;
+
+  class Delegate {
+   public:
+    virtual ~Delegate() = default;
+
+    // This is called when the |Clone()| method is called by mojo.
+    virtual void RegisterShallowClonedNamespace(
+        SessionStorageMetadata::NamespaceEntry source_namespace,
+        const std::string& destination_namespace,
+        const OriginAreas& areas_to_clone) = 0;
+
+    // This is called when |OpenArea()| is called. The map could have been
+    // purged in a call to |PurgeUnboundAreas| but the map could still be alive
+    // as a clone, used by another namespace.
+    // Returns nullptr if a data map was not found.
+    virtual scoped_refptr<SessionStorageDataMap> MaybeGetExistingDataMapForId(
+        const std::vector<uint8_t>& map_number_as_bytes) = 0;
+  };
 
   // Constructs a namespace with the given |namespace_id|, expecting to be
   // populated and bound later (see class comment).  The |database| and
   // |data_map_listener| are given to any data maps constructed for this
-  // namespace. The |add_namespace_callback| is called when the |Clone| method
-  // is called by mojo. The |register_new_map_callback| is given to the the
-  // SessionStorageLevelDBWrapper's, used per-origin, that are bound to in
-  // OpenArea.
+  // namespace. The |delegate| is called when the |Clone| method
+  // is called by mojo, as well as when the |OpenArea| method is called and the
+  // map id for that origin is found in our metadata. The
+  // |register_new_map_callback| is given to the the SessionStorageAreaImpl's,
+  // used per-origin, that are bound to in OpenArea.
   SessionStorageNamespaceImplMojo(
       std::string namespace_id,
       SessionStorageDataMap::Listener* data_map_listener,
-      RegisterShallowClonedNamespace add_namespace_callback,
-      SessionStorageLevelDBWrapper::RegisterNewAreaMap
-          register_new_map_callback);
+      SessionStorageAreaImpl::RegisterNewAreaMap register_new_map_callback,
+      Delegate* delegate);
 
   ~SessionStorageNamespaceImplMojo() override;
 
@@ -82,9 +96,7 @@ class CONTENT_EXPORT SessionStorageNamespaceImplMojo final
   // disk. Should be called before |Bind|.
   void PopulateFromMetadata(
       leveldb::mojom::LevelDBDatabase* database,
-      SessionStorageMetadata::NamespaceEntry namespace_metadata,
-      const std::map<std::vector<uint8_t>, SessionStorageDataMap*>&
-          current_data_maps);
+      SessionStorageMetadata::NamespaceEntry namespace_metadata);
 
   // Can either be called before |Bind|, or if the source namespace isn't
   // available yet, |SetWaitingForClonePopulation| can be called. Then |Bind|
@@ -108,25 +120,27 @@ class CONTENT_EXPORT SessionStorageNamespaceImplMojo final
   // |SetWaitingForClonePopulation|. For the later case, |PopulateAsClone| must
   // eventually be called before the SessionStorageNamespaceRequest can be
   // bound.
-  void Bind(mojom::SessionStorageNamespaceRequest request, int process_id);
+  void Bind(blink::mojom::SessionStorageNamespaceRequest request,
+            int process_id);
 
   bool IsBound() const {
     return !bindings_.empty() || bind_waiting_on_clone_population_;
   }
 
-  // Removes any LevelDBWrappers bound in |OpenArea| that are no longer bound.
-  void PurgeUnboundWrappers();
+  // Removes any StorageAreas bound in |OpenArea| that are no longer bound.
+  void PurgeUnboundAreas();
 
   // Removes data for the given origin from this namespace. If there is no data
-  // map for that given origin, this does nothing.
-  void RemoveOriginData(const url::Origin& origin);
+  // map for that given origin, this does nothing. Expects that this namespace
+  // is either populated or waiting for clone population.
+  void RemoveOriginData(const url::Origin& origin, base::OnceClosure callback);
 
   // SessionStorageNamespace:
   // Connects the given database mojo request to the data map for the given
   // origin. Before connection, it checks to make sure the |process_id| given to
   // the |Bind| method can access the given origin.
   void OpenArea(const url::Origin& origin,
-                mojom::LevelDBWrapperAssociatedRequest database) override;
+                blink::mojom::StorageAreaAssociatedRequest database) override;
 
   // Simply calls the |add_namespace_callback_| callback with this namespace's
   // data.
@@ -135,14 +149,18 @@ class CONTENT_EXPORT SessionStorageNamespaceImplMojo final
   void FlushOriginForTesting(const url::Origin& origin);
 
  private:
+  FRIEND_TEST_ALL_PREFIXES(SessionStorageContextMojoTest,
+                           PurgeMemoryDoesNotCrashOrHang);
+  FRIEND_TEST_ALL_PREFIXES(SessionStorageNamespaceImplMojoTest,
+                           ReopenClonedAreaAfterPurge);
+
   const std::string namespace_id_;
   SessionStorageMetadata::NamespaceEntry namespace_entry_;
-  int process_id_ = ChildProcessHost::kInvalidUniqueID;
-  leveldb::mojom::LevelDBDatabase* database_;
+  leveldb::mojom::LevelDBDatabase* database_ = nullptr;
 
   SessionStorageDataMap::Listener* data_map_listener_;
-  RegisterShallowClonedNamespace add_namespace_callback_;
-  SessionStorageLevelDBWrapper::RegisterNewAreaMap register_new_map_callback_;
+  SessionStorageAreaImpl::RegisterNewAreaMap register_new_map_callback_;
+  Delegate* delegate_;
 
   bool waiting_on_clone_population_ = false;
   bool bind_waiting_on_clone_population_ = false;
@@ -150,7 +168,8 @@ class CONTENT_EXPORT SessionStorageNamespaceImplMojo final
 
   bool populated_ = false;
   OriginAreas origin_areas_;
-  mojo::BindingSet<mojom::SessionStorageNamespace> bindings_;
+  // The context is the process id.
+  mojo::BindingSet<blink::mojom::SessionStorageNamespace, int> bindings_;
 };
 
 }  // namespace content

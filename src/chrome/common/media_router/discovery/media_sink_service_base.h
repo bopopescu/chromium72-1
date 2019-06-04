@@ -63,11 +63,12 @@ class MediaSinkServiceBase {
   // Also invokes |StartTimer()|.
   void AddOrUpdateSink(const MediaSinkInternal& sink);
   void RemoveSink(const MediaSinkInternal& sink);
+  void RemoveSinkById(const MediaSink::Id& sink_id);
 
   const base::flat_map<MediaSink::Id, MediaSinkInternal>& GetSinks() const;
   const MediaSinkInternal* GetSinkById(const MediaSink::Id& sink_id) const;
 
-  void SetTimerForTest(std::unique_ptr<base::Timer> timer);
+  void SetTimerForTest(std::unique_ptr<base::OneShotTimer> timer);
 
  protected:
   // Called when |discovery_timer_| expires. Informs subclass to report device
@@ -94,13 +95,13 @@ class MediaSinkServiceBase {
   base::flat_map<MediaSink::Id, MediaSinkInternal> sinks_;
 
   // Observers to notify when a sink is added, updated, or removed.
-  base::ObserverList<Observer> observers_;
+  base::ObserverList<Observer>::Unchecked observers_;
 
   // Timer for recording device counts after a sink list has changed. To ensure
   // the metrics are recorded accurately, a small delay is introduced after a
   // sink list change in order for the discovery process to reach a steady
   // state before the metrics are recorded.
-  std::unique_ptr<base::Timer> discovery_timer_;
+  std::unique_ptr<base::OneShotTimer> discovery_timer_;
 
   // The following fields exist temporarily for sending back discovered sinks to
   // the Media Router extension.

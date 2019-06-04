@@ -25,16 +25,15 @@
 
 #include "third_party/blink/renderer/core/loader/appcache/application_cache.h"
 
-#include "third_party/blink/renderer/bindings/core/v8/exception_state.h"
 #include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/dom/events/event_listener.h"
-#include "third_party/blink/renderer/core/dom/exception_code.h"
 #include "third_party/blink/renderer/core/frame/deprecation.h"
 #include "third_party/blink/renderer/core/frame/hosts_using_features.h"
 #include "third_party/blink/renderer/core/frame/local_frame.h"
 #include "third_party/blink/renderer/core/frame/use_counter.h"
 #include "third_party/blink/renderer/core/loader/document_loader.h"
 #include "third_party/blink/renderer/core/loader/frame_loader.h"
+#include "third_party/blink/renderer/platform/bindings/exception_state.h"
 
 namespace blink {
 
@@ -68,7 +67,8 @@ void ApplicationCache::update(ExceptionState& exception_state) {
   ApplicationCacheHost* cache_host = GetApplicationCacheHost();
   if (!cache_host || !cache_host->Update()) {
     exception_state.ThrowDOMException(
-        kInvalidStateError, "there is no application cache to update.");
+        DOMExceptionCode::kInvalidStateError,
+        "there is no application cache to update.");
   }
 }
 
@@ -77,7 +77,8 @@ void ApplicationCache::swapCache(ExceptionState& exception_state) {
   ApplicationCacheHost* cache_host = GetApplicationCacheHost();
   if (!cache_host || !cache_host->SwapCache()) {
     exception_state.ThrowDOMException(
-        kInvalidStateError, "there is no newer application cache to swap to.");
+        DOMExceptionCode::kInvalidStateError,
+        "there is no newer application cache to swap to.");
   }
 }
 
@@ -88,7 +89,7 @@ void ApplicationCache::abort() {
 }
 
 const AtomicString& ApplicationCache::InterfaceName() const {
-  return EventTargetNames::ApplicationCache;
+  return event_target_names::kApplicationCache;
 }
 
 ExecutionContext* ApplicationCache::GetExecutionContext() const {
@@ -99,24 +100,24 @@ const AtomicString& ApplicationCache::ToEventType(
     ApplicationCacheHost::EventID id) {
   switch (id) {
     case ApplicationCacheHost::kCheckingEvent:
-      return EventTypeNames::checking;
+      return event_type_names::kChecking;
     case ApplicationCacheHost::kErrorEvent:
-      return EventTypeNames::error;
+      return event_type_names::kError;
     case ApplicationCacheHost::kNoupdateEvent:
-      return EventTypeNames::noupdate;
+      return event_type_names::kNoupdate;
     case ApplicationCacheHost::kDownloadingEvent:
-      return EventTypeNames::downloading;
+      return event_type_names::kDownloading;
     case ApplicationCacheHost::kProgressEvent:
-      return EventTypeNames::progress;
+      return event_type_names::kProgress;
     case ApplicationCacheHost::kUpdatereadyEvent:
-      return EventTypeNames::updateready;
+      return event_type_names::kUpdateready;
     case ApplicationCacheHost::kCachedEvent:
-      return EventTypeNames::cached;
+      return event_type_names::kCached;
     case ApplicationCacheHost::kObsoleteEvent:
-      return EventTypeNames::obsolete;
+      return event_type_names::kObsolete;
   }
   NOTREACHED();
-  return EventTypeNames::error;
+  return event_type_names::kError;
 }
 
 void ApplicationCache::RecordAPIUseType() const {

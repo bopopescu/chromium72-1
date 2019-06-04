@@ -4,13 +4,13 @@
 
 #include "third_party/blink/renderer/core/css/cssom/css_skew_y.h"
 
-#include "third_party/blink/renderer/bindings/core/v8/exception_state.h"
 #include "third_party/blink/renderer/core/css/css_function_value.h"
 #include "third_party/blink/renderer/core/css/css_primitive_value.h"
 #include "third_party/blink/renderer/core/css/cssom/css_numeric_value.h"
 #include "third_party/blink/renderer/core/css/cssom/css_style_value.h"
 #include "third_party/blink/renderer/core/css/cssom/css_unit_value.h"
 #include "third_party/blink/renderer/core/geometry/dom_matrix.h"
+#include "third_party/blink/renderer/platform/bindings/exception_state.h"
 
 namespace blink {
 
@@ -29,7 +29,7 @@ CSSSkewY* CSSSkewY::Create(CSSNumericValue* ay,
     exception_state.ThrowTypeError("CSSSkewY does not support non-angles");
     return nullptr;
   }
-  return new CSSSkewY(ay);
+  return MakeGarbageCollected<CSSSkewY>(ay);
 }
 
 void CSSSkewY::setAy(CSSNumericValue* value, ExceptionState& exception_state) {

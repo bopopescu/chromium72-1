@@ -7,7 +7,7 @@
 
 #include <memory>
 
-#include "ui/base/ime/ui_base_ime_export.h"
+#include "ui/base/ime/linux/ui_base_ime_linux_export.h"
 
 namespace ui {
 
@@ -17,7 +17,7 @@ class LinuxInputMethodContextDelegate;
 // An interface that lets different Linux platforms override the
 // CreateInputMethodContext function declared here to return native input method
 // contexts.
-class UI_BASE_IME_EXPORT LinuxInputMethodContextFactory {
+class UI_BASE_IME_LINUX_EXPORT LinuxInputMethodContextFactory {
  public:
   // Returns the current active factory or NULL.
   static const LinuxInputMethodContextFactory* instance();
@@ -33,12 +33,6 @@ class UI_BASE_IME_EXPORT LinuxInputMethodContextFactory {
   virtual std::unique_ptr<LinuxInputMethodContext> CreateInputMethodContext(
       LinuxInputMethodContextDelegate* delegate,
       bool is_simple) const = 0;
-
-  // Added for Neva native input method context.
-  virtual std::unique_ptr<LinuxInputMethodContext> CreateInputMethodContext(
-      LinuxInputMethodContextDelegate* delegate,
-      unsigned handle,
-      bool is_simple) const;
 };
 
 }  // namespace ui

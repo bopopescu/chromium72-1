@@ -24,10 +24,6 @@ namespace ui {
 class PaintContext;
 }
 
-namespace viz {
-class SurfaceInfo;
-}
-
 namespace aura {
 
 // Delegate interface for aura::Window.
@@ -90,11 +86,12 @@ class AURA_EXPORT WindowDelegate : public ui::EventHandler {
   // Window::TargetVisibility() for details.
   virtual void OnWindowTargetVisibilityChanged(bool visible) = 0;
 
-  // Called when the occlusion state of the Window changes while tracked (see
-  // WindowOcclusionTracker::Track). |occlusion_state| is the new occlusion
-  // state of the Window.
-  virtual void OnWindowOcclusionChanged(
-      Window::OcclusionState occlusion_state) {}
+  // Called when the occlusion state or occluded region of the Window changes
+  // while tracked (see WindowOcclusionTracker::Track). |occlusion_state| is
+  // the new occlusion state of the Window. |occluded_region| is the new
+  // occluded region of the Window.
+  virtual void OnWindowOcclusionChanged(Window::OcclusionState occlusion_state,
+                                        const SkRegion& occluded_region) {}
 
   // Called from Window::HitTest to check if the window has a custom hit test
   // mask. It works similar to the views counterparts. That is, if the function
@@ -106,9 +103,9 @@ class AURA_EXPORT WindowDelegate : public ui::EventHandler {
   // above returns true.
   virtual void GetHitTestMask(gfx::Path* mask) const = 0;
 
-  // Called when a child submits a CompositorFrame to a surface with the given
-  // |surface_info| for the first time.
-  virtual void OnFirstSurfaceActivation(const viz::SurfaceInfo& surface_info) {}
+  // Returns whether the window wants to receive and handle double tap gesture
+  // events. Defaults to false.
+  virtual bool RequiresDoubleTapGestureEvents() const;
 
  protected:
   ~WindowDelegate() override {}

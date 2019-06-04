@@ -12,10 +12,10 @@
 #include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
-#include "base/sys_info.h"
+#include "base/system/sys_info.h"
 #include "base/values.h"
 #include "build/build_config.h"
-#include "gpu/config/gpu_info.h"
+#include "gpu/config/gpu_util.h"
 #include "third_party/re2/src/re2/re2.h"
 
 namespace gpu {
@@ -235,15 +235,16 @@ void GpuControlList::Entry::LogControlListMatch(
 }
 
 bool GpuControlList::DriverInfo::Contains(const GPUInfo& gpu_info) const {
-  if (StringMismatch(gpu_info.driver_vendor, driver_vendor)) {
+  const GPUInfo::GPUDevice& active_gpu = gpu_info.active_gpu();
+  if (StringMismatch(active_gpu.driver_vendor, driver_vendor)) {
     return false;
   }
-  if (driver_version.IsSpecified() && !gpu_info.driver_version.empty() &&
-      !driver_version.Contains(gpu_info.driver_version)) {
+  if (driver_version.IsSpecified() && !active_gpu.driver_version.empty() &&
+      !driver_version.Contains(active_gpu.driver_version)) {
     return false;
   }
-  if (driver_date.IsSpecified() && !gpu_info.driver_date.empty() &&
-      !driver_date.Contains(gpu_info.driver_date, '-')) {
+  if (driver_date.IsSpecified() && !active_gpu.driver_date.empty() &&
+      !driver_date.Contains(active_gpu.driver_date, '-')) {
     return false;
   }
   return true;
@@ -448,9 +449,11 @@ bool GpuControlList::Entry::Contains(OsType target_os_type,
 
 bool GpuControlList::Entry::AppliesToTestGroup(
     uint32_t target_test_group) const {
-  if (conditions.more)
+  // If an entry specifies non-zero test group, then the entry only applies
+  // if that test group is enabled (as specified in |target_test_group|).
+  if (conditions.more && conditions.more->test_group)
     return conditions.more->test_group == target_test_group;
-  return target_test_group == 0u;
+  return true;
 }
 
 bool GpuControlList::Conditions::NeedsMoreInfo(const GPUInfo& gpu_info) const {
@@ -458,12 +461,13 @@ bool GpuControlList::Conditions::NeedsMoreInfo(const GPUInfo& gpu_info) const {
   // If certain info is missing due to some error, say, we fail to collect
   // vendor_id/device_id, then even if we launch GPU process and create a gl
   // context, we won't gather such missing info, so we still return false.
+  const GPUInfo::GPUDevice& active_gpu = gpu_info.active_gpu();
   if (driver_info) {
-    if (driver_info->driver_vendor && gpu_info.driver_vendor.empty()) {
+    if (driver_info->driver_vendor && active_gpu.driver_vendor.empty()) {
       return true;
     }
     if (driver_info->driver_version.IsSpecified() &&
-        gpu_info.driver_version.empty()) {
+        active_gpu.driver_version.empty()) {
       return true;
     }
   }
@@ -702,60 +706,6 @@ bool GpuControlList::AreEntryIndicesValid(
       return false;
   }
   return true;
-}
-
-// static
-GpuControlList::GpuSeriesType GpuControlList::GetGpuSeriesType(
-    uint32_t vendor_id,
-    uint32_t device_id) {
-  if (vendor_id == 0x8086) {  // Intel
-    // https://en.wikipedia.org/wiki/List_of_Intel_graphics_processing_units
-    // We only identify Intel 6th gen or newer.
-    uint32_t masked_device_id = device_id & 0xFF00;
-    switch (masked_device_id) {
-      case 0x0100:
-        switch (device_id & 0xFFF0) {
-          case 0x0100:
-          case 0x0110:
-          case 0x0120:
-            return GpuSeriesType::kIntelSandyBridge;
-          case 0x0150:
-            if (device_id == 0x0155 || device_id == 0x0157)
-              return GpuSeriesType::kIntelValleyView;
-            if (device_id == 0x0152 || device_id == 0x015A)
-              return GpuSeriesType::kIntelIvyBridge;
-            break;
-          case 0x0160:
-            return GpuSeriesType::kIntelIvyBridge;
-          default:
-            break;
-        }
-        break;
-      case 0x0F00:
-        return GpuSeriesType::kIntelValleyView;
-      case 0x0400:
-      case 0x0A00:
-      case 0x0D00:
-        return GpuSeriesType::kIntelHaswell;
-      case 0x2200:
-        return GpuSeriesType::kIntelCherryView;
-      case 0x1600:
-        return GpuSeriesType::kIntelBroadwell;
-      case 0x5A00:
-        return GpuSeriesType::kIntelApolloLake;
-      case 0x1900:
-        return GpuSeriesType::kIntelSkyLake;
-      case 0x3100:
-        return GpuSeriesType::kIntelGeminiLake;
-      case 0x5900:
-        return GpuSeriesType::kIntelKabyLake;
-      case 0x3E00:
-        return GpuSeriesType::kIntelCoffeeLake;
-      default:
-        break;
-    }
-  }
-  return GpuSeriesType::kUnknown;
 }
 
 }  // namespace gpu

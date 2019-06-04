@@ -14,28 +14,43 @@ import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 
+import org.chromium.base.ContextUtils;
 import org.chromium.base.ThreadUtils;
-import org.chromium.base.test.BaseJUnit4ClassRunner;
+import org.chromium.base.test.util.CallbackHelper;
+import org.chromium.base.test.util.CommandLineFlags;
+import org.chromium.chrome.browser.ChromeActivity;
+import org.chromium.chrome.browser.ChromeSwitches;
 import org.chromium.chrome.browser.ChromeVersionInfo;
 import org.chromium.chrome.browser.browserservices.OriginVerifier.OriginVerificationListener;
-import org.chromium.content.browser.test.NativeLibraryTestRule;
+import org.chromium.chrome.browser.browsing_data.BrowsingDataType;
+import org.chromium.chrome.browser.browsing_data.TimePeriod;
+import org.chromium.chrome.browser.preferences.ChromePreferenceManager;
+import org.chromium.chrome.browser.preferences.privacy.BrowsingDataBridge;
+import org.chromium.chrome.test.ChromeActivityTestRule;
+import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
 
+import java.util.HashSet;
+import java.util.Set;
 import java.util.concurrent.Callable;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 /** Tests for OriginVerifier. */
-@RunWith(BaseJUnit4ClassRunner.class)
+@RunWith(ChromeJUnit4ClassRunner.class)
+@CommandLineFlags.Add({ChromeSwitches.DISABLE_FIRST_RUN_EXPERIENCE})
 public class OriginVerifierTest {
     @Rule
-    public NativeLibraryTestRule mNativeLibraryTestRule = new NativeLibraryTestRule();
+    public ChromeActivityTestRule<ChromeActivity> mActivityTestRule =
+            new ChromeActivityTestRule<>(ChromeActivity.class);
 
     private static final long TIMEOUT_MS = 1000;
     private static final byte[] BYTE_ARRAY = new byte[] {(byte) 0xaa, (byte) 0xbb, (byte) 0xcc,
             (byte) 0x10, (byte) 0x20, (byte) 0x30, (byte) 0x01, (byte) 0x02};
     private static final String STRING_ARRAY = "AA:BB:CC:10:20:30:01:02";
 
-    private static final String PACKAGE_NAME = "org.chromium.chrome";
+    private static final String PACKAGE_NAME =
+            ContextUtils.getApplicationContext().getPackageName();
     private static final String SHA_256_FINGERPRINT_PUBLIC =
             "32:A2:FC:74:D7:31:10:58:59:E5:A8:5D:F1:6D:95:F1:02:D8:5B"
             + ":22:09:9B:80:64:C5:D8:91:5C:61:DA:D1:E0";
@@ -69,7 +84,7 @@ public class OriginVerifierTest {
 
     @Before
     public void setUp() throws Exception {
-        mNativeLibraryTestRule.loadNativeLibraryNoBrowserProcess();
+        mActivityTestRule.startMainActivityOnBlankPage();
 
         mHttpsOrigin = new Origin("https://www.example.com");
         mHttpOrigin = new Origin("http://www.android.com");
@@ -130,5 +145,28 @@ public class OriginVerifierTest {
         }));
         Assert.assertEquals(mLastPackageName, PACKAGE_NAME);
         Assert.assertEquals(mLastOrigin, mHttpsOrigin);
+    }
+
+    @Test
+    @SmallTest
+    public void testWipedWithBrowsingData() throws InterruptedException, TimeoutException {
+        CallbackHelper callbackHelper = new CallbackHelper();
+
+        String relationship = "relationship1";
+        Set<String> savedLinks = new HashSet<>();
+        savedLinks.add(relationship);
+
+        ChromePreferenceManager preferences = ChromePreferenceManager.getInstance();
+
+        preferences.setVerifiedDigitalAssetLinks(savedLinks);
+        Assert.assertTrue(preferences.getVerifiedDigitalAssetLinks().contains(relationship));
+
+        ThreadUtils.runOnUiThreadBlocking(() -> {
+            BrowsingDataBridge.getInstance().clearBrowsingData(callbackHelper::notifyCalled,
+                    new int[] {BrowsingDataType.HISTORY}, TimePeriod.ALL_TIME);
+        });
+
+        callbackHelper.waitForCallback(0);
+        Assert.assertTrue(preferences.getVerifiedDigitalAssetLinks().isEmpty());
     }
 }

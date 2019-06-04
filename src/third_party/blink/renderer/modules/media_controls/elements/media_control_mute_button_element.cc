@@ -15,7 +15,7 @@ namespace blink {
 MediaControlMuteButtonElement::MediaControlMuteButtonElement(
     MediaControlsImpl& media_controls)
     : MediaControlInputElement(media_controls, kMediaMuteButton) {
-  setType(InputTypeNames::button);
+  setType(input_type_names::kButton);
   SetShadowPseudoId(AtomicString("-webkit-media-controls-mute-button"));
 }
 
@@ -50,8 +50,8 @@ const char* MediaControlMuteButtonElement::GetNameForHistograms() const {
   return IsOverflowElement() ? "MuteOverflowButton" : "MuteButton";
 }
 
-void MediaControlMuteButtonElement::DefaultEventHandler(Event* event) {
-  if (event->type() == EventTypeNames::click) {
+void MediaControlMuteButtonElement::DefaultEventHandler(Event& event) {
+  if (event.type() == event_type_names::kClick) {
     if (MediaElement().muted()) {
       Platform::Current()->RecordAction(
           UserMetricsAction("Media.Controls.Unmute"));
@@ -61,7 +61,19 @@ void MediaControlMuteButtonElement::DefaultEventHandler(Event* event) {
     }
 
     MediaElement().setMuted(!MediaElement().muted());
-    event->SetDefaultHandled();
+    event.SetDefaultHandled();
+  }
+
+  if (!IsOverflowElement()) {
+    if (event.type() == event_type_names::kMouseover ||
+        event.type() == event_type_names::kFocus) {
+      GetMediaControls().OpenVolumeSliderIfNecessary();
+    }
+
+    if (event.type() == event_type_names::kMouseout ||
+        event.type() == event_type_names::kBlur) {
+      GetMediaControls().CloseVolumeSliderIfNecessary();
+    }
   }
 
   MediaControlInputElement::DefaultEventHandler(event);

@@ -132,7 +132,8 @@ IN_PROC_BROWSER_TEST_F(AutomationApiTest, Location2) {
       << message_;
 }
 
-IN_PROC_BROWSER_TEST_F(AutomationApiTest, BoundsForRange) {
+// TODO(https://crbug.com/908509): sarakato to investigate cause of flakiness.
+IN_PROC_BROWSER_TEST_F(AutomationApiTest, DISABLED_BoundsForRange) {
   StartEmbeddedTestServer();
   ASSERT_TRUE(RunExtensionSubtest("automation/tests/tabs",
                                   "bounds_for_range.html"))
@@ -149,6 +150,13 @@ IN_PROC_BROWSER_TEST_F(AutomationApiTest, LineStartOffsets) {
 IN_PROC_BROWSER_TEST_F(AutomationApiTest, ImageData) {
   StartEmbeddedTestServer();
   ASSERT_TRUE(RunExtensionSubtest("automation/tests/tabs", "image_data.html"))
+      << message_;
+}
+
+IN_PROC_BROWSER_TEST_F(AutomationApiTest, TableProperties) {
+  StartEmbeddedTestServer();
+  ASSERT_TRUE(
+      RunExtensionSubtest("automation/tests/tabs", "table_properties.html"))
       << message_;
 }
 
@@ -210,14 +218,22 @@ IN_PROC_BROWSER_TEST_F(AutomationApiTest, DISABLED_DesktopHitTestIframe) {
       << message_;
 }
 
-IN_PROC_BROWSER_TEST_F(AutomationApiTest, DesktopFocusViews) {
-  AutomationManagerAura::GetInstance()->Enable(browser()->profile());
+// TODO(https://crbug.com/892960): flaky.
+IN_PROC_BROWSER_TEST_F(AutomationApiTest, DISABLED_DesktopFocusViews) {
+  AutomationManagerAura::GetInstance()->Enable();
   // Trigger the shelf subtree to be computed.
   ash::Shell::Get()->accelerator_controller()->PerformActionIfEnabled(
       ash::FOCUS_SHELF);
 
   ASSERT_TRUE(
       RunExtensionSubtest("automation/tests/desktop", "focus_views.html"))
+      << message_;
+}
+
+IN_PROC_BROWSER_TEST_F(AutomationApiTest, DesktopGetNextTextMatch) {
+  StartEmbeddedTestServer();
+  ASSERT_TRUE(RunExtensionSubtest("automation/tests/desktop",
+                                  "get_next_text_match.html"))
       << message_;
 }
 
@@ -233,8 +249,9 @@ IN_PROC_BROWSER_TEST_F(AutomationApiTest, DesktopNotRequested) {
 }
 
 #if defined(OS_CHROMEOS)
-IN_PROC_BROWSER_TEST_F(AutomationApiTest, DesktopActions) {
-  AutomationManagerAura::GetInstance()->Enable(browser()->profile());
+// TODO(https://crbug.com/894016): flaky.
+IN_PROC_BROWSER_TEST_F(AutomationApiTest, DISABLED_DesktopActions) {
+  AutomationManagerAura::GetInstance()->Enable();
   // Trigger the shelf subtree to be computed.
   ash::Shell::Get()->accelerator_controller()->PerformActionIfEnabled(
       ash::FOCUS_SHELF);

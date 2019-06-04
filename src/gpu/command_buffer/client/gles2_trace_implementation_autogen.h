@@ -596,6 +596,19 @@ void GenVertexArraysOES(GLsizei n, GLuint* arrays) override;
 void DeleteVertexArraysOES(GLsizei n, const GLuint* arrays) override;
 GLboolean IsVertexArrayOES(GLuint array) override;
 void BindVertexArrayOES(GLuint array) override;
+void FramebufferParameteri(GLenum target, GLenum pname, GLint param) override;
+void BindImageTexture(GLuint unit,
+                      GLuint texture,
+                      GLint level,
+                      GLboolean layered,
+                      GLint layer,
+                      GLenum access,
+                      GLenum format) override;
+void DispatchCompute(GLuint num_groups_x,
+                     GLuint num_groups_y,
+                     GLuint num_groups_z) override;
+void MemoryBarrierEXT(GLbitfield barriers) override;
+void MemoryBarrierByRegion(GLbitfield barriers) override;
 void SwapBuffers(GLuint64 swap_id, GLbitfield flags) override;
 GLuint GetMaxValueInBufferCHROMIUM(GLuint buffer_id,
                                    GLsizei count,
@@ -690,7 +703,6 @@ void CopySubTextureCHROMIUM(GLuint source_id,
                             GLboolean unpack_flip_y,
                             GLboolean unpack_premultiply_alpha,
                             GLboolean unpack_unmultiply_alpha) override;
-void CompressedCopyTextureCHROMIUM(GLuint source_id, GLuint dest_id) override;
 void DrawArraysInstancedANGLE(GLenum mode,
                               GLint first,
                               GLsizei count,
@@ -701,9 +713,7 @@ void DrawElementsInstancedANGLE(GLenum mode,
                                 const void* indices,
                                 GLsizei primcount) override;
 void VertexAttribDivisorANGLE(GLuint index, GLuint divisor) override;
-void GenMailboxCHROMIUM(GLbyte* mailbox) override;
-void ProduceTextureDirectCHROMIUM(GLuint texture,
-                                  const GLbyte* mailbox) override;
+void ProduceTextureDirectCHROMIUM(GLuint texture, GLbyte* mailbox) override;
 GLuint CreateAndConsumeTextureCHROMIUM(const GLbyte* mailbox) override;
 void BindUniformLocationCHROMIUM(GLuint program,
                                  GLint location,
@@ -773,7 +783,8 @@ void ScheduleDCLayerCHROMIUM(GLsizei num_textures,
                              GLuint edge_aa_mask,
                              const GLfloat* bounds_rect,
                              GLuint filter,
-                             bool is_protected_video) override;
+                             GLuint protected_video_type) override;
+void SetActiveURLCHROMIUM(const char* url) override;
 void MatrixLoadfCHROMIUM(GLenum matrixMode, const GLfloat* m) override;
 void MatrixLoadIdentityCHROMIUM(GLenum matrixMode) override;
 GLuint GenPathsCHROMIUM(GLsizei range) override;
@@ -909,4 +920,16 @@ GLuint CreateGpuFenceCHROMIUM() override;
 GLuint CreateClientGpuFenceCHROMIUM(ClientGpuFence source) override;
 void WaitGpuFenceCHROMIUM(GLuint gpu_fence_id) override;
 void DestroyGpuFenceCHROMIUM(GLuint gpu_fence_id) override;
+void InvalidateReadbackBufferShadowDataCHROMIUM(GLuint buffer_id) override;
+void FramebufferTextureMultiviewLayeredANGLE(GLenum target,
+                                             GLenum attachment,
+                                             GLuint texture,
+                                             GLint level,
+                                             GLint baseViewIndex,
+                                             GLsizei numViews) override;
+void MaxShaderCompilerThreadsKHR(GLuint count) override;
+GLuint CreateAndTexStorage2DSharedImageCHROMIUM(GLenum internalFormat,
+                                                const GLbyte* mailbox) override;
+void BeginSharedImageAccessDirectCHROMIUM(GLuint texture, GLenum mode) override;
+void EndSharedImageAccessDirectCHROMIUM(GLuint texture) override;
 #endif  // GPU_COMMAND_BUFFER_CLIENT_GLES2_TRACE_IMPLEMENTATION_AUTOGEN_H_

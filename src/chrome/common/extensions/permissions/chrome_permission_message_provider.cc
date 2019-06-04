@@ -10,7 +10,6 @@
 #include "base/stl_util.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
-#include "chrome/common/extensions/permissions/chrome_permission_message_rules.h"
 #include "extensions/common/extensions_client.h"
 #include "extensions/common/permissions/permission_message_util.h"
 #include "extensions/common/permissions/permission_set.h"
@@ -57,30 +56,10 @@ ChromePermissionMessageProvider::~ChromePermissionMessageProvider() {
 
 PermissionMessages ChromePermissionMessageProvider::GetPermissionMessages(
     const PermissionIDSet& permissions) const {
-  std::vector<ChromePermissionMessageRule> rules =
+  const std::vector<ChromePermissionMessageRule> rules =
       ChromePermissionMessageRule::GetAllRules();
 
-  // Apply each of the rules, in order, to generate the messages for the given
-  // permissions. Once a permission is used in a rule, remove it from the set
-  // of available permissions so it cannot be applied to subsequent rules.
-  PermissionIDSet remaining_permissions = permissions;
-  PermissionMessages messages;
-  for (const auto& rule : rules) {
-    // Only apply the rule if we have all the required permission IDs.
-    if (remaining_permissions.ContainsAllIDs(rule.required_permissions())) {
-      // We can apply the rule. Add all the required permissions, and as many
-      // optional permissions as we can, to the new message.
-      PermissionIDSet used_permissions =
-          remaining_permissions.GetAllPermissionsWithIDs(
-              rule.all_permissions());
-      messages.push_back(rule.GetPermissionMessage(used_permissions));
-
-      remaining_permissions =
-          PermissionIDSet::Difference(remaining_permissions, used_permissions);
-    }
-  }
-
-  return messages;
+  return GetPermissionMessagesHelper(permissions, rules);
 }
 
 bool ChromePermissionMessageProvider::IsPrivilegeIncrease(
@@ -106,6 +85,22 @@ PermissionIDSet ChromePermissionMessageProvider::GetAllPermissionIDs(
   AddManifestPermissions(permissions, &permission_ids);
   AddHostPermissions(permissions, &permission_ids, extension_type);
   return permission_ids;
+}
+
+PermissionMessages
+ChromePermissionMessageProvider::GetPowerfulPermissionMessages(
+    const PermissionIDSet& permissions) const {
+  std::vector<ChromePermissionMessageRule> all_rules =
+      ChromePermissionMessageRule::GetAllRules();
+
+  // TODO(crbug.com/888981): Find a better way to get wanted rules. Maybe add a
+  // bool to each one telling if we should consider it here or not.
+  constexpr size_t rules_considered = 15;
+  const std::vector<extensions::ChromePermissionMessageRule> rules(
+      all_rules.begin(),
+      all_rules.begin() + std::min(rules_considered, all_rules.size()));
+
+  return GetPermissionMessagesHelper(permissions, rules);
 }
 
 void ChromePermissionMessageProvider::AddAPIPermissions(
@@ -229,9 +224,6 @@ bool ChromePermissionMessageProvider::IsHostPrivilegeIncrease(
   const URLPatternSet& granted_list = granted_permissions.effective_hosts();
   const URLPatternSet& requested_list = requested_permissions.effective_hosts();
 
-  // TODO(jstritar): This is overly conservative with respect to subdomains.
-  // For example, going from *.google.com to www.google.com will be
-  // considered an elevation, even though it is not (http://crbug.com/65337).
   std::set<std::string> requested_hosts_set(
       permission_message_util::GetDistinctHosts(requested_list, false, false));
   std::set<std::string> granted_hosts_set(
@@ -240,7 +232,60 @@ bool ChromePermissionMessageProvider::IsHostPrivilegeIncrease(
       base::STLSetDifference<std::set<std::string>>(requested_hosts_set,
                                                     granted_hosts_set);
 
-  return !requested_hosts_only.empty();
+  // Try to match any domain permissions against existing domain permissions
+  // that overlap, so that migrating from *.example.com -> foo.example.com
+  // does not constitute a permissions increase, even though the strings are
+  // not exactly the same.
+  for (const auto& requested : requested_hosts_only) {
+    bool host_matched = false;
+    const base::StringPiece unmatched(requested);
+    for (const auto& granted : granted_hosts_set) {
+      if (granted.size() > 2 && granted[0] == '*' && granted[1] == '.') {
+        const base::StringPiece stripped_granted(granted.data() + 1,
+                                                 granted.length() - 1);
+        // If the unmatched host ends with the the granted host,
+        // after removing the '*', then it's a match. In addition,
+        // because we consider having access to "*.domain.com" as
+        // granting access to "domain.com" then compare the string
+        // with both the "*" and the "." removed.
+        if (unmatched.ends_with(stripped_granted) ||
+            unmatched == stripped_granted.substr(1)) {
+          host_matched = true;
+          break;
+        }
+      }
+    }
+    if (!host_matched) {
+      return true;
+    }
+  }
+  return false;
+}
+
+PermissionMessages ChromePermissionMessageProvider::GetPermissionMessagesHelper(
+    const PermissionIDSet& permissions,
+    const std::vector<ChromePermissionMessageRule>& rules) const {
+  // Apply each of the rules, in order, to generate the messages for the given
+  // permissions. Once a permission is used in a rule, remove it from the set
+  // of available permissions so it cannot be applied to subsequent rules.
+  PermissionIDSet remaining_permissions = permissions;
+  PermissionMessages messages;
+  for (const auto& rule : rules) {
+    // Only apply the rule if we have all the required permission IDs.
+    if (remaining_permissions.ContainsAllIDs(rule.required_permissions())) {
+      // We can apply the rule. Add all the required permissions, and as many
+      // optional permissions as we can, to the new message.
+      PermissionIDSet used_permissions =
+          remaining_permissions.GetAllPermissionsWithIDs(
+              rule.all_permissions());
+      messages.push_back(rule.GetPermissionMessage(used_permissions));
+
+      remaining_permissions =
+          PermissionIDSet::Difference(remaining_permissions, used_permissions);
+    }
+  }
+
+  return messages;
 }
 
 }  // namespace extensions

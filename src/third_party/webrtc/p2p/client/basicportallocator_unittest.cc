@@ -34,10 +34,10 @@
 #include "rtc_base/ssladapter.h"
 #include "rtc_base/thread.h"
 #include "rtc_base/virtualsocketserver.h"
+#include "system_wrappers/include/metrics.h"
 
 using rtc::IPAddress;
 using rtc::SocketAddress;
-using rtc::Thread;
 
 #define MAYBE_SKIP_IPV4                        \
   if (!rtc::HasIPv4Enabled()) {                \
@@ -146,15 +146,15 @@ class BasicPortAllocatorTestBase : public testing::Test,
         // must be called.
         nat_factory_(vss_.get(), kNatUdpAddr, kNatTcpAddr),
         nat_socket_factory_(new rtc::BasicPacketSocketFactory(&nat_factory_)),
-        stun_server_(TestStunServer::Create(Thread::Current(), kStunAddr)),
-        relay_server_(Thread::Current(),
+        stun_server_(TestStunServer::Create(rtc::Thread::Current(), kStunAddr)),
+        relay_server_(rtc::Thread::Current(),
                       kRelayUdpIntAddr,
                       kRelayUdpExtAddr,
                       kRelayTcpIntAddr,
                       kRelayTcpExtAddr,
                       kRelaySslTcpIntAddr,
                       kRelaySslTcpExtAddr),
-        turn_server_(Thread::Current(), kTurnUdpIntAddr, kTurnUdpExtAddr),
+        turn_server_(rtc::Thread::Current(), kTurnUdpIntAddr, kTurnUdpExtAddr),
         candidate_allocation_done_(false) {
     ServerAddresses stun_servers;
     stun_servers.insert(kStunAddr);
@@ -168,6 +168,7 @@ class BasicPortAllocatorTestBase : public testing::Test,
                                             kRelaySslTcpIntAddr));
     allocator_->Initialize();
     allocator_->set_step_delay(kMinimumStepDelay);
+    webrtc::metrics::Reset();
   }
 
   void AddInterface(const SocketAddress& addr) {
@@ -1339,9 +1340,8 @@ TEST_F(BasicPortAllocatorTest,
 // a NAT, there is no local candidate. However, this specified default route
 // (kClientAddr) which was discovered when sending STUN requests, will become
 // the srflx addresses.
-TEST_F(
-    BasicPortAllocatorTest,
-    TestDisableAdapterEnumerationWithoutNatLocalhostCandDisabledDiffRoute) {
+TEST_F(BasicPortAllocatorTest,
+       TestDisableAdapterEnumerationWithoutNatLocalhostCandDisabledDiffRoute) {
   ResetWithStunServerNoNat(kStunAddr);
   AddInterfaceAsDefaultRoute(kClientAddr);
   ASSERT_TRUE(CreateSession(ICE_CANDIDATE_COMPONENT_RTP));
@@ -2226,6 +2226,72 @@ TEST_F(BasicPortAllocatorTest,
                              kDefaultAllocationTimeout, fake_clock);
   CheckStunKeepaliveIntervalOfAllReadyPorts(session_.get(),
                                             expected_stun_keepalive_interval);
+}
+
+TEST_F(BasicPortAllocatorTest, IceRegatheringMetricsLoggedWhenNetworkChanges) {
+  // Only test local ports to simplify test.
+  ResetWithNoServersOrNat();
+  AddInterface(kClientAddr, "test_net0");
+  ASSERT_TRUE(CreateSession(ICE_CANDIDATE_COMPONENT_RTP));
+  session_->StartGettingPorts();
+  EXPECT_TRUE_SIMULATED_WAIT(candidate_allocation_done_,
+                             kDefaultAllocationTimeout, fake_clock);
+  candidate_allocation_done_ = false;
+  AddInterface(kClientAddr2, "test_net1");
+  EXPECT_TRUE_SIMULATED_WAIT(candidate_allocation_done_,
+                             kDefaultAllocationTimeout, fake_clock);
+  EXPECT_EQ(1, webrtc::metrics::NumEvents(
+                   "WebRTC.PeerConnection.IceRegatheringReason",
+                   static_cast<int>(IceRegatheringReason::NETWORK_CHANGE)));
+}
+
+// Test that when an mDNS responder is present, the local address of a host
+// candidate is masked by an mDNS hostname and the related address of any other
+// type of candidates is set to 0.0.0.0 or ::0.
+TEST_F(BasicPortAllocatorTest, HostCandidateAddressIsReplacedByHostname) {
+  // Default config uses GTURN and no NAT, so replace that with the
+  // desired setup (NAT, STUN server, TURN server, UDP/TCP).
+  ResetWithStunServerAndNat(kStunAddr);
+  turn_server_.AddInternalSocket(kTurnTcpIntAddr, PROTO_TCP);
+  AddTurnServers(kTurnUdpIntAddr, kTurnTcpIntAddr);
+  AddTurnServers(kTurnUdpIntIPv6Addr, kTurnTcpIntIPv6Addr);
+
+  ASSERT_EQ(&network_manager_, allocator().network_manager());
+  network_manager_.CreateMdnsResponder(rtc::Thread::Current());
+  AddInterface(kClientAddr);
+  ASSERT_TRUE(CreateSession(ICE_CANDIDATE_COMPONENT_RTP));
+  session_->StartGettingPorts();
+  ASSERT_TRUE_SIMULATED_WAIT(candidate_allocation_done_,
+                             kDefaultAllocationTimeout, fake_clock);
+  EXPECT_EQ(5u, candidates_.size());
+  int num_host_udp_candidates = 0;
+  int num_host_tcp_candidates = 0;
+  int num_srflx_candidates = 0;
+  int num_relay_candidates = 0;
+  for (const auto& candidate : candidates_) {
+    if (candidate.type() == LOCAL_PORT_TYPE) {
+      EXPECT_TRUE(candidate.address().IsUnresolvedIP());
+      if (candidate.protocol() == UDP_PROTOCOL_NAME) {
+        ++num_host_udp_candidates;
+      } else {
+        ++num_host_tcp_candidates;
+      }
+    } else {
+      EXPECT_NE(PRFLX_PORT_TYPE, candidate.type());
+      // The related address should be set to 0.0.0.0 or ::0 for srflx and
+      // relay candidates.
+      EXPECT_EQ(rtc::SocketAddress(), candidate.related_address());
+      if (candidate.type() == STUN_PORT_TYPE) {
+        ++num_srflx_candidates;
+      } else {
+        ++num_relay_candidates;
+      }
+    }
+  }
+  EXPECT_EQ(1, num_host_udp_candidates);
+  EXPECT_EQ(1, num_host_tcp_candidates);
+  EXPECT_EQ(1, num_srflx_candidates);
+  EXPECT_EQ(2, num_relay_candidates);
 }
 
 }  // namespace cricket

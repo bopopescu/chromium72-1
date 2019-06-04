@@ -36,10 +36,6 @@
 #include "third_party/blink/public/platform/web_media_player.h"
 #include "ui/gfx/color_space.h"
 
-#if defined(USE_NEVA_MEDIA)
-#include "third_party/blink/public/platform/neva/web_media_player_client.h"
-#endif
-
 namespace cc {
 class Layer;
 }
@@ -52,11 +48,7 @@ class WebRemotePlaybackClient;
 
 enum class WebRemotePlaybackAvailability;
 
-#if defined(USE_NEVA_MEDIA)
-class BLINK_PLATFORM_EXPORT WebMediaPlayerClient : public neva::WebMediaPlayerClient {
-#else
 class BLINK_PLATFORM_EXPORT WebMediaPlayerClient {
-#endif
  public:
   enum VideoTrackKind {
     kVideoTrackKindNone,
@@ -84,7 +76,6 @@ class BLINK_PLATFORM_EXPORT WebMediaPlayerClient {
   virtual void Repaint() = 0;
   virtual void DurationChanged() = 0;
   virtual void SizeChanged() = 0;
-  virtual void PlaybackStateChanged() = 0;
   virtual void SetCcLayer(cc::Layer*) = 0;
   virtual WebMediaPlayer::TrackId AddAudioTrack(const WebString& id,
                                                 AudioTrackKind,
@@ -120,8 +111,9 @@ class BLINK_PLATFORM_EXPORT WebMediaPlayerClient {
   // calling WebMediaPlayer::BecameDominantVisibleContent(bool).
   virtual void ActivateViewportIntersectionMonitoring(bool) = 0;
 
-  // Returns whether the media element is in an autoplay muted state.
-  virtual bool IsAutoplayingMuted() = 0;
+  // Returns whether the media element has always been muted. This is used to
+  // avoid take audio focus for elements that the user is not aware is playing.
+  virtual bool WasAlwaysMuted() = 0;
 
   // Returns if there's a selected video track.
   virtual bool HasSelectedVideoTrack() = 0;
@@ -142,6 +134,11 @@ class BLINK_PLATFORM_EXPORT WebMediaPlayerClient {
 
   // Informs that Picture-in-Picture mode has stopped for the media element.
   virtual void PictureInPictureStopped() = 0;
+
+  // Informs that a custom Picture-in-Picture control was clicked for the media
+  // element. |control_id| is the identifier for its custom control. This is
+  // defined by the site that calls the web API.
+  virtual void PictureInPictureControlClicked(const WebString& control_id) = 0;
 
   // Returns whether the media element has native controls. It does not mean
   // that the controls are currently visible.
@@ -175,6 +172,12 @@ class BLINK_PLATFORM_EXPORT WebMediaPlayerClient {
   // Returns whether the playback is in auto-pip mode which does not have th
   // behavior as regular Picture-in-Picture.
   virtual bool IsInAutoPIP() const = 0;
+
+  // Requests the player to start playback.
+  virtual void RequestPlay() = 0;
+
+  // Request the player to pause playback.
+  virtual void RequestPause() = 0;
 
  protected:
   ~WebMediaPlayerClient() = default;

@@ -18,13 +18,15 @@
 #include "chrome/common/chrome_content_client.h"
 #include "chrome/common/pref_names.h"
 #include "components/policy/core/common/cloud/device_management_service.h"
+#include "components/policy/core/common/cloud/dm_auth.h"
 #include "components/policy/proto/device_management_backend.pb.h"
 #include "components/prefs/pref_registry_simple.h"
 #include "components/prefs/pref_service.h"
 #include "components/prefs/scoped_user_pref_update.h"
 #include "content/public/browser/browser_thread.h"
+#include "content/public/browser/network_service_instance.h"
 #include "crypto/sha2.h"
-#include "net/url_request/url_request_context_getter.h"
+#include "services/network/public/cpp/shared_url_loader_factory.h"
 #include "url/gurl.h"
 
 using content::BrowserThread;
@@ -96,10 +98,7 @@ std::string ConvertRestoreMode(
 }
 
 // Converts an initial enrollment mode enum value from the DM protocol for
-// initial enrollment into the corresponding prefs string constant. Note that we
-// use the |kDeviceStateRestoreMode*| constants on the client for simplicity,
-// because every initial enrollment mode has a matching restore mode (but not
-// vice versa).
+// initial enrollment into the corresponding prefs string constant.
 std::string ConvertInitialEnrollmentMode(
     em::DeviceInitialEnrollmentStateResponse::InitialEnrollmentMode
         initial_enrollment_mode) {
@@ -108,7 +107,10 @@ std::string ConvertInitialEnrollmentMode(
       return std::string();
     case em::DeviceInitialEnrollmentStateResponse::
         INITIAL_ENROLLMENT_MODE_ENROLLMENT_ENFORCED:
-      return kDeviceStateRestoreModeReEnrollmentEnforced;
+      return kDeviceStateInitialModeEnrollmentEnforced;
+    case em::DeviceInitialEnrollmentStateResponse::
+        INITIAL_ENROLLMENT_MODE_ZERO_TOUCH_ENFORCED:
+      return kDeviceStateInitialModeEnrollmentZeroTouch;
   }
 }
 
@@ -338,13 +340,13 @@ AutoEnrollmentClientImpl::FactoryImpl::CreateForFRE(
     const ProgressCallback& progress_callback,
     DeviceManagementService* device_management_service,
     PrefService* local_state,
-    scoped_refptr<net::URLRequestContextGetter> system_request_context,
+    scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
     const std::string& server_backed_state_key,
     int power_initial,
     int power_limit) {
   return base::WrapUnique(new AutoEnrollmentClientImpl(
       progress_callback, device_management_service, local_state,
-      system_request_context,
+      url_loader_factory,
       std::make_unique<DeviceIdentifierProviderFRE>(server_backed_state_key),
       std::make_unique<StateDownloadMessageProcessorFRE>(
           server_backed_state_key),
@@ -356,7 +358,7 @@ AutoEnrollmentClientImpl::FactoryImpl::CreateForInitialEnrollment(
     const ProgressCallback& progress_callback,
     DeviceManagementService* device_management_service,
     PrefService* local_state,
-    scoped_refptr<net::URLRequestContextGetter> system_request_context,
+    scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
     const std::string& device_serial_number,
     const std::string& device_brand_code,
     int power_initial,
@@ -364,7 +366,7 @@ AutoEnrollmentClientImpl::FactoryImpl::CreateForInitialEnrollment(
     int power_outdated_server_detect) {
   return base::WrapUnique(new AutoEnrollmentClientImpl(
       progress_callback, device_management_service, local_state,
-      system_request_context,
+      url_loader_factory,
       std::make_unique<DeviceIdentifierProviderInitialEnrollment>(
           device_serial_number, device_brand_code),
       std::make_unique<StateDownloadMessageProcessorInitialEnrollment>(
@@ -375,7 +377,7 @@ AutoEnrollmentClientImpl::FactoryImpl::CreateForInitialEnrollment(
 }
 
 AutoEnrollmentClientImpl::~AutoEnrollmentClientImpl() {
-  net::NetworkChangeNotifier::RemoveNetworkChangeObserver(this);
+  content::GetNetworkConnectionTracker()->RemoveNetworkConnectionObserver(this);
 }
 
 // static
@@ -386,8 +388,8 @@ void AutoEnrollmentClientImpl::RegisterPrefs(PrefRegistrySimple* registry) {
 
 void AutoEnrollmentClientImpl::Start() {
   // (Re-)register the network change observer.
-  net::NetworkChangeNotifier::RemoveNetworkChangeObserver(this);
-  net::NetworkChangeNotifier::AddNetworkChangeObserver(this);
+  content::GetNetworkConnectionTracker()->RemoveNetworkConnectionObserver(this);
+  content::GetNetworkConnectionTracker()->AddNetworkConnectionObserver(this);
 
   // Drop the previous job and reset state.
   request_job_.reset();
@@ -425,9 +427,9 @@ AutoEnrollmentState AutoEnrollmentClientImpl::state() const {
   return state_;
 }
 
-void AutoEnrollmentClientImpl::OnNetworkChanged(
-    net::NetworkChangeNotifier::ConnectionType type) {
-  if (type != net::NetworkChangeNotifier::CONNECTION_NONE &&
+void AutoEnrollmentClientImpl::OnConnectionChanged(
+    network::mojom::ConnectionType type) {
+  if (type != network::mojom::ConnectionType::CONNECTION_NONE &&
       !progress_callback_.is_null()) {
     RetryStep();
   }
@@ -437,7 +439,7 @@ AutoEnrollmentClientImpl::AutoEnrollmentClientImpl(
     const ProgressCallback& callback,
     DeviceManagementService* service,
     PrefService* local_state,
-    scoped_refptr<net::URLRequestContextGetter> system_request_context,
+    scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
     std::unique_ptr<DeviceIdentifierProvider> device_identifier_provider,
     std::unique_ptr<StateDownloadMessageProcessor>
         state_download_message_processor,
@@ -456,7 +458,7 @@ AutoEnrollmentClientImpl::AutoEnrollmentClientImpl(
       modulus_updates_received_(0),
       device_management_service_(service),
       local_state_(local_state),
-      request_context_(system_request_context),
+      url_loader_factory_(url_loader_factory),
       device_identifier_provider_(std::move(device_identifier_provider)),
       state_download_message_processor_(
           std::move(state_download_message_processor)),
@@ -523,17 +525,19 @@ void AutoEnrollmentClientImpl::NextStep() {
     return;
 
   // Protocol finished successfully, report result.
-  const RestoreMode restore_mode = GetRestoreMode();
-  switch (restore_mode) {
+  const DeviceStateMode device_state_mode = GetDeviceStateMode();
+  switch (device_state_mode) {
     case RESTORE_MODE_NONE:
     case RESTORE_MODE_DISABLED:
       ReportProgress(AUTO_ENROLLMENT_STATE_NO_ENROLLMENT);
       break;
     case RESTORE_MODE_REENROLLMENT_REQUESTED:
     case RESTORE_MODE_REENROLLMENT_ENFORCED:
+    case INITIAL_MODE_ENROLLMENT_ENFORCED:
       ReportProgress(AUTO_ENROLLMENT_STATE_TRIGGER_ENROLLMENT);
       break;
     case RESTORE_MODE_REENROLLMENT_ZERO_TOUCH:
+    case INITIAL_MODE_ENROLLMENT_ZERO_TOUCH:
       ReportProgress(AUTO_ENROLLMENT_STATE_TRIGGER_ZERO_TOUCH);
       break;
   }
@@ -563,8 +567,8 @@ void AutoEnrollmentClientImpl::SendBucketDownloadRequest() {
 
   VLOG(1) << "Request bucket #" << remainder;
   request_job_.reset(device_management_service_->CreateJob(
-      DeviceManagementRequestJob::TYPE_AUTO_ENROLLMENT,
-      request_context_.get()));
+      DeviceManagementRequestJob::TYPE_AUTO_ENROLLMENT, url_loader_factory_));
+  request_job_->SetAuthData(DMAuth::NoAuth());
   request_job_->SetClientID(device_id_);
   em::DeviceAutoEnrollmentRequest* request =
       request_job_->GetRequest()->mutable_auto_enrollment_request();
@@ -582,7 +586,8 @@ void AutoEnrollmentClientImpl::SendDeviceStateRequest() {
   ReportProgress(AUTO_ENROLLMENT_STATE_PENDING);
 
   request_job_.reset(device_management_service_->CreateJob(
-      state_download_message_processor_->GetJobType(), request_context_.get()));
+      state_download_message_processor_->GetJobType(), url_loader_factory_));
+  request_job_->SetAuthData(DMAuth::NoAuth());
   request_job_->SetClientID(device_id_);
   state_download_message_processor_->FillRequest(request_job_->GetRequest());
   request_job_->Start(base::BindRepeating(
@@ -698,12 +703,12 @@ bool AutoEnrollmentClientImpl::OnDeviceStateRequestCompletion(
     DeviceManagementStatus status,
     int net_error,
     const em::DeviceManagementResponse& response) {
-  std::string restore_mode;
+  std::string device_state_mode;
   base::Optional<std::string> management_domain;
   base::Optional<std::string> disabled_message;
 
   bool progress = state_download_message_processor_->ParseResponse(
-      response, &restore_mode, &management_domain, &disabled_message);
+      response, &device_state_mode, &management_domain, &disabled_message);
   if (!progress)
     return false;
 
@@ -714,8 +719,8 @@ bool AutoEnrollmentClientImpl::OnDeviceStateRequestCompletion(
                std::make_unique<base::Value>(
                    management_domain.value_or(std::string())));
 
-    UpdateDict(dict.Get(), kDeviceStateRestoreMode, !restore_mode.empty(),
-               std::make_unique<base::Value>(restore_mode));
+    UpdateDict(dict.Get(), kDeviceStateMode, !device_state_mode.empty(),
+               std::make_unique<base::Value>(device_state_mode));
 
     UpdateDict(dict.Get(), kDeviceStateDisabledMessage,
                disabled_message.has_value(),

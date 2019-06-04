@@ -20,7 +20,7 @@
 #include "base/threading/thread_restrictions.h"
 #include "chrome/app/chrome_command_ids.h"
 #import "chrome/browser/app_controller_mac.h"
-#include "chrome/browser/apps/app_browsertest_util.h"
+#include "chrome/browser/apps/platform_apps/app_browsertest_util.h"
 #include "chrome/browser/bookmarks/bookmark_model_factory.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/history/history_service_factory.h"
@@ -40,7 +40,6 @@
 #include "chrome/browser/ui/search/local_ntp_test_utils.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/user_manager.h"
-#include "chrome/browser/ui/views_mode_controller.h"
 #include "chrome/common/chrome_constants.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/pref_names.h"
@@ -224,8 +223,10 @@ IN_PROC_BROWSER_TEST_F(AppControllerPlatformAppBrowserTest,
   NSWindow* app_window = extensions::AppWindowRegistry::Get(profile())
                              ->GetAppWindowsForApp(app->id())
                              .front()
-                             ->GetNativeWindow();
-  NSWindow* browser_window = browser()->window()->GetNativeWindow();
+                             ->GetNativeWindow()
+                             .GetNativeNSWindow();
+  NSWindow* browser_window =
+      browser()->window()->GetNativeWindow().GetNativeNSWindow();
 
   chrome::testing::NSRunLoopRunAllPending();
   EXPECT_LE([[NSApp orderedWindows] indexOfObject:app_window],
@@ -293,7 +294,6 @@ void CreateAndWaitForSystemProfile() {
       ProfileManager::GetSystemProfilePath(),
       create_callback,
       base::string16(),
-      std::string(),
       std::string());
   base::RunLoop().Run();
 }
@@ -624,12 +624,16 @@ IN_PROC_BROWSER_TEST_F(AppControllerMainMenuBrowserTest,
       base::Bind(&RunClosureWhenProfileInitialized,
                  run_loop.QuitClosure()),
       base::string16(),
-      std::string(),
       std::string());
   run_loop.Run();
   Profile* profile2 = profile_manager->GetProfileByPath(profile2_path);
   ASSERT_TRUE(profile2);
 
+  // Load profile1's History Service backend so it will be assigned to the
+  // HistoryMenuBridge when windowChangedToProfile is called, or else this test
+  // will fail flaky.
+  ui_test_utils::WaitForHistoryToLoad(HistoryServiceFactory::GetForProfile(
+      profile1, ServiceAccessType::EXPLICIT_ACCESS));
   // Switch the controller to profile1.
   [ac windowChangedToProfile:profile1];
   base::RunLoop().RunUntilIdle();
@@ -679,7 +683,7 @@ IN_PROC_BROWSER_TEST_F(AppControllerMainMenuBrowserTest,
       [[NSApplication sharedApplication] delegate]);
   ASSERT_TRUE(ac);
 
-  [ac awakeFromNib];
+  [ac mainMenuCreated];
 
   // Constants for bookmarks that we will create later.
   const base::string16 title1(base::ASCIIToUTF16("Dinosaur Comics"));

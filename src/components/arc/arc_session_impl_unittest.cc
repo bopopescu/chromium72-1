@@ -11,7 +11,6 @@
 
 #include "base/command_line.h"
 #include "base/location.h"
-#include "base/posix/eintr_wrapper.h"
 #include "base/run_loop.h"
 #include "base/test/scoped_task_environment.h"
 #include "base/threading/thread_task_runner_handle.h"
@@ -23,6 +22,7 @@
 #include "components/arc/test/fake_arc_bridge_host.h"
 #include "components/user_manager/fake_user_manager.h"
 #include "components/user_manager/scoped_user_manager.h"
+#include "mojo/public/cpp/bindings/binding.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace arc {
@@ -30,10 +30,18 @@ namespace {
 
 constexpr char kFakeGmail[] = "user@gmail.com";
 constexpr char kFakeGmailGaiaId[] = "1234567890";
+constexpr char kDefaultLocale[] = "en-US";
+
+ArcSession::UpgradeParams DefaultUpgradeParams() {
+  ArcSession::UpgradeParams params;
+  params.locale = kDefaultLocale;
+  return params;
+}
 
 class FakeDelegate : public ArcSessionImpl::Delegate {
  public:
-  FakeDelegate() = default;
+  explicit FakeDelegate(int32_t lcd_density = 160)
+      : lcd_density_(lcd_density) {}
 
   // Emulates to fail Mojo connection establishing. |callback| passed to
   // ConnectMojo will be called with nullptr.
@@ -52,7 +60,15 @@ class FakeDelegate : public ArcSessionImpl::Delegate {
     PostCallback(std::move(pending_callback_));
   }
 
-  // ArcSessionImpl::Delegate override:
+  // ArcSessionImpl::Delegate overrides:
+  void CreateSocket(CreateSocketCallback callback) override {
+    // Open /dev/null as a dummy FD.
+    base::ThreadTaskRunnerHandle::Get()->PostTask(
+        FROM_HERE, base::BindOnce(std::move(callback),
+                                  base::ScopedFD(open("/dev/null",
+                                                      O_RDONLY | O_CLOEXEC))));
+  }
+
   base::ScopedFD ConnectMojo(base::ScopedFD socket_fd,
                              ConnectMojoCallback callback) override {
     if (suspend_) {
@@ -63,7 +79,20 @@ class FakeDelegate : public ArcSessionImpl::Delegate {
     }
 
     // Open /dev/null as a dummy FD.
-    return base::ScopedFD(HANDLE_EINTR(open("/dev/null", O_RDONLY)));
+    return base::ScopedFD(open("/dev/null", O_RDONLY | O_CLOEXEC));
+  }
+
+  void GetLcdDensity(GetLcdDensityCallback callback) override {
+    if (lcd_density_ > 0)
+      std::move(callback).Run(lcd_density_);
+    else
+      lcd_density_callback_ = std::move(callback);
+  }
+
+  void SetLcdDensity(int32_t lcd_density) {
+    lcd_density_ = lcd_density;
+    ASSERT_TRUE(!lcd_density_callback_.is_null());
+    std::move(lcd_density_callback_).Run(lcd_density_);
   }
 
  private:
@@ -75,9 +104,11 @@ class FakeDelegate : public ArcSessionImpl::Delegate {
             success_ ? std::make_unique<FakeArcBridgeHost>() : nullptr));
   }
 
+  int32_t lcd_density_ = 0;
   bool success_ = true;
   bool suspend_ = false;
   ConnectMojoCallback pending_callback_;
+  GetLcdDensityCallback lcd_density_callback_;
 
   DISALLOW_COPY_AND_ASSIGN(FakeDelegate);
 };
@@ -170,9 +201,10 @@ class ArcSessionImplTest : public testing::Test {
   }
 
   std::unique_ptr<ArcSessionImpl, ArcSessionDeleter> CreateArcSession(
-      std::unique_ptr<ArcSessionImpl::Delegate> delegate = nullptr) {
+      std::unique_ptr<ArcSessionImpl::Delegate> delegate = nullptr,
+      int32_t lcd_density = 160) {
     if (!delegate)
-      delegate = std::make_unique<FakeDelegate>();
+      delegate = std::make_unique<FakeDelegate>(lcd_density);
     return std::unique_ptr<ArcSessionImpl, ArcSessionDeleter>(
         new ArcSessionImpl(std::move(delegate)));
   }
@@ -236,7 +268,7 @@ TEST_F(ArcSessionImplTest, Upgrade_LowDisk) {
   TestArcSessionObserver observer(arc_session.get(), &run_loop);
   ASSERT_NO_FATAL_FAILURE(SetupMiniContainer(arc_session.get(), &observer));
 
-  arc_session->RequestUpgrade();
+  arc_session->RequestUpgrade(DefaultUpgradeParams());
   run_loop.Run();
 
   EXPECT_EQ(ArcSessionImpl::State::STOPPED, arc_session->GetStateForTesting());
@@ -255,7 +287,7 @@ TEST_F(ArcSessionImplTest, Upgrade_Success) {
   ASSERT_NO_FATAL_FAILURE(SetupMiniContainer(arc_session.get(), &observer));
 
   // Then, upgrade to a full instance.
-  arc_session->RequestUpgrade();
+  arc_session->RequestUpgrade(DefaultUpgradeParams());
   base::RunLoop().RunUntilIdle();
 
   EXPECT_EQ(ArcSessionImpl::State::RUNNING_FULL_INSTANCE,
@@ -275,7 +307,7 @@ TEST_F(ArcSessionImplTest, Upgrade_DBusFail) {
   EmulateDBusFailure();
 
   // Then upgrade, which should fail.
-  arc_session->RequestUpgrade();
+  arc_session->RequestUpgrade(DefaultUpgradeParams());
   base::RunLoop().RunUntilIdle();
 
   EXPECT_EQ(ArcSessionImpl::State::STOPPED, arc_session->GetStateForTesting());
@@ -300,7 +332,7 @@ TEST_F(ArcSessionImplTest, Upgrade_MojoConnectionFail) {
   ASSERT_NO_FATAL_FAILURE(SetupMiniContainer(arc_session.get(), &observer));
 
   // Upgrade should fail, due to Mojo connection fail set above.
-  arc_session->RequestUpgrade();
+  arc_session->RequestUpgrade(DefaultUpgradeParams());
   base::RunLoop().RunUntilIdle();
 
   EXPECT_EQ(ArcSessionImpl::State::STOPPED, arc_session->GetStateForTesting());
@@ -321,7 +353,7 @@ TEST_F(ArcSessionImplTest, Upgrade_StartingMiniInstance) {
             arc_session->GetStateForTesting());
 
   // Before moving forward to RUNNING_MINI_INSTANCE, start upgrading it.
-  arc_session->RequestUpgrade();
+  arc_session->RequestUpgrade(DefaultUpgradeParams());
 
   // The state should not immediately switch to STARTING_FULL_INSTANCE, yet.
   EXPECT_EQ(ArcSessionImpl::State::STARTING_MINI_INSTANCE,
@@ -382,7 +414,7 @@ TEST_F(ArcSessionImplTest, Stop_StartingFullInstanceForUpgrade) {
   ASSERT_NO_FATAL_FAILURE(SetupMiniContainer(arc_session.get(), &observer));
 
   // Then upgrade.
-  arc_session->RequestUpgrade();
+  arc_session->RequestUpgrade(DefaultUpgradeParams());
   ASSERT_EQ(ArcSessionImpl::State::STARTING_FULL_INSTANCE,
             arc_session->GetStateForTesting());
 
@@ -410,7 +442,7 @@ TEST_F(ArcSessionImplTest, Stop_ConnectingMojoForUpgrade) {
   ASSERT_NO_FATAL_FAILURE(SetupMiniContainer(arc_session.get(), &observer));
 
   // Then upgrade. This should suspend at Mojo connection.
-  arc_session->RequestUpgrade();
+  arc_session->RequestUpgrade(DefaultUpgradeParams());
   base::RunLoop().RunUntilIdle();
   ASSERT_EQ(ArcSessionImpl::State::CONNECTING_MOJO,
             arc_session->GetStateForTesting());
@@ -436,7 +468,7 @@ TEST_F(ArcSessionImplTest, Stop_RunningFullInstanceForUpgrade) {
   ASSERT_NO_FATAL_FAILURE(SetupMiniContainer(arc_session.get(), &observer));
 
   // And upgrade successfully.
-  arc_session->RequestUpgrade();
+  arc_session->RequestUpgrade(DefaultUpgradeParams());
   base::RunLoop().RunUntilIdle();
   ASSERT_EQ(ArcSessionImpl::State::RUNNING_FULL_INSTANCE,
             arc_session->GetStateForTesting());
@@ -463,7 +495,7 @@ TEST_F(ArcSessionImplTest,
             arc_session->GetStateForTesting());
 
   // Request to upgrade during starting mini container.
-  arc_session->RequestUpgrade();
+  arc_session->RequestUpgrade(DefaultUpgradeParams());
   // Then, the state should stay at STARTING_MINI_INSTANCE.
   ASSERT_EQ(ArcSessionImpl::State::STARTING_MINI_INSTANCE,
             arc_session->GetStateForTesting());
@@ -512,7 +544,7 @@ TEST_F(ArcSessionImplTest, ArcStopInstance) {
   auto arc_session = CreateArcSession();
   TestArcSessionObserver observer(arc_session.get());
   arc_session->StartMiniInstance();
-  arc_session->RequestUpgrade();
+  arc_session->RequestUpgrade(DefaultUpgradeParams());
   base::RunLoop().RunUntilIdle();
   ASSERT_EQ(ArcSessionImpl::State::RUNNING_FULL_INSTANCE,
             arc_session->GetStateForTesting());
@@ -536,7 +568,7 @@ TEST_F(ArcSessionImplTest, ArcStopInstance) {
 TEST_F(ArcSessionImplTest, ArcStopInstance_WrongContainerInstanceId) {
   auto arc_session = CreateArcSession();
   arc_session->StartMiniInstance();
-  arc_session->RequestUpgrade();
+  arc_session->RequestUpgrade(DefaultUpgradeParams());
   base::RunLoop().RunUntilIdle();
   ASSERT_EQ(ArcSessionImpl::State::RUNNING_FULL_INSTANCE,
             arc_session->GetStateForTesting());
@@ -592,7 +624,7 @@ TEST_P(ArcSessionImplPackagesCacheModeTest, PackagesCacheModes) {
 
   arc_session->StartMiniInstance();
   if (state.full_container)
-    arc_session->RequestUpgrade();
+    arc_session->RequestUpgrade(DefaultUpgradeParams());
   base::RunLoop().RunUntilIdle();
   EXPECT_EQ(state.expected_packages_cache_mode, GetSessionManagerClient()
                                                     ->last_upgrade_arc_request()
@@ -602,6 +634,113 @@ TEST_P(ArcSessionImplPackagesCacheModeTest, PackagesCacheModes) {
 INSTANTIATE_TEST_CASE_P(,
                         ArcSessionImplPackagesCacheModeTest,
                         ::testing::ValuesIn(kPackagesCacheModeStates));
+
+TEST_F(ArcSessionImplTest, DemoSession) {
+  auto arc_session = CreateArcSession();
+  arc_session->StartMiniInstance();
+
+  const std::string demo_apps_path =
+      "/run/imageloader/demo_mode_resources/android_apps.squash";
+  ArcSession::UpgradeParams params;
+  params.is_demo_session = true;
+  params.demo_session_apps_path = base::FilePath(demo_apps_path);
+  params.locale = kDefaultLocale;
+  arc_session->RequestUpgrade(std::move(params));
+
+  base::RunLoop().RunUntilIdle();
+  EXPECT_TRUE(
+      GetSessionManagerClient()->last_upgrade_arc_request().is_demo_session());
+  EXPECT_EQ(demo_apps_path, GetSessionManagerClient()
+                                ->last_upgrade_arc_request()
+                                .demo_session_apps_path());
+}
+
+TEST_F(ArcSessionImplTest, DemoSessionWithoutOfflineDemoApps) {
+  auto arc_session = CreateArcSession();
+  arc_session->StartMiniInstance();
+
+  ArcSession::UpgradeParams params;
+  params.is_demo_session = true;
+  params.locale = kDefaultLocale;
+  arc_session->RequestUpgrade(std::move(params));
+
+  base::RunLoop().RunUntilIdle();
+  EXPECT_TRUE(
+      GetSessionManagerClient()->last_upgrade_arc_request().is_demo_session());
+  EXPECT_EQ(std::string(), GetSessionManagerClient()
+                               ->last_upgrade_arc_request()
+                               .demo_session_apps_path());
+}
+
+TEST_F(ArcSessionImplTest, SupervisionTransitionShouldGraduate) {
+  auto arc_session = CreateArcSession();
+  arc_session->StartMiniInstance();
+
+  ArcSession::UpgradeParams params;
+  params.supervision_transition = ArcSupervisionTransition::CHILD_TO_REGULAR;
+  params.locale = kDefaultLocale;
+  arc_session->RequestUpgrade(std::move(params));
+
+  base::RunLoop().RunUntilIdle();
+  EXPECT_EQ(
+      login_manager::
+          UpgradeArcContainerRequest_SupervisionTransition_CHILD_TO_REGULAR,
+      GetSessionManagerClient()
+          ->last_upgrade_arc_request()
+          .supervision_transition());
+  EXPECT_EQ(160, GetSessionManagerClient()
+                     ->last_start_arc_mini_container_request()
+                     .lcd_density());
+}
+
+TEST_F(ArcSessionImplTest, StartArcMiniContainerWithDensity) {
+  auto arc_session = CreateArcSession(nullptr, 240);
+  arc_session->StartMiniInstance();
+  base::RunLoop().RunUntilIdle();
+
+  EXPECT_EQ(ArcSessionImpl::State::RUNNING_MINI_INSTANCE,
+            arc_session->GetStateForTesting());
+  EXPECT_EQ(240, GetSessionManagerClient()
+                     ->last_start_arc_mini_container_request()
+                     .lcd_density());
+}
+
+TEST_F(ArcSessionImplTest, StartArcMiniContainerWithDensityAsync) {
+  auto delegate = std::make_unique<FakeDelegate>(0);
+  auto* delegate_ptr = delegate.get();
+  auto arc_session = CreateArcSession(std::move(delegate));
+  arc_session->StartMiniInstance();
+  EXPECT_EQ(ArcSessionImpl::State::WAITING_FOR_LCD_DENSITY,
+            arc_session->GetStateForTesting());
+  delegate_ptr->SetLcdDensity(240);
+  EXPECT_EQ(ArcSessionImpl::State::STARTING_MINI_INSTANCE,
+            arc_session->GetStateForTesting());
+  base::RunLoop().RunUntilIdle();
+
+  EXPECT_EQ(240, GetSessionManagerClient()
+                     ->last_start_arc_mini_container_request()
+                     .lcd_density());
+}
+
+TEST_F(ArcSessionImplTest, StopWhileWaitingForLcdDensity) {
+  auto delegate = std::make_unique<FakeDelegate>(0);
+  auto arc_session = CreateArcSession(std::move(delegate));
+  arc_session->StartMiniInstance();
+  EXPECT_EQ(ArcSessionImpl::State::WAITING_FOR_LCD_DENSITY,
+            arc_session->GetStateForTesting());
+  arc_session->Stop();
+  EXPECT_EQ(ArcSessionImpl::State::STOPPED, arc_session->GetStateForTesting());
+}
+
+TEST_F(ArcSessionImplTest, ShutdownWhileWaitingForLcdDensity) {
+  auto delegate = std::make_unique<FakeDelegate>(0);
+  auto arc_session = CreateArcSession(std::move(delegate));
+  arc_session->StartMiniInstance();
+  EXPECT_EQ(ArcSessionImpl::State::WAITING_FOR_LCD_DENSITY,
+            arc_session->GetStateForTesting());
+  arc_session->OnShutdown();
+  EXPECT_EQ(ArcSessionImpl::State::STOPPED, arc_session->GetStateForTesting());
+}
 
 }  // namespace
 }  // namespace arc

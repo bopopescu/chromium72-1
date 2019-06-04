@@ -10,14 +10,6 @@
 
 namespace ash {
 
-class TestAccessibilityEventDelegate {
- public:
-  TestAccessibilityEventDelegate() {}
-  virtual ~TestAccessibilityEventDelegate() {}
-  virtual void NotifyAccessibilityEvent(views::View* view,
-                                        ax::mojom::Event event_type) = 0;
-};
-
 // Ash specific ViewsDelegate. In addition to creating a TestWebContents this
 // parents widget with no parent/context to the shell. This is created by
 // default AshTestHelper.
@@ -26,18 +18,16 @@ class AshTestViewsDelegate : public views::TestViewsDelegate {
   AshTestViewsDelegate();
   ~AshTestViewsDelegate() override;
 
-  // Not owned.
-  void set_test_accessibility_event_delegate(
-      TestAccessibilityEventDelegate* test_accessibility_event_delegate) {
-    test_accessibility_event_delegate_ = test_accessibility_event_delegate;
-  }
+  // Call this only if this code is being run outside of ash, for example, in
+  // browser tests that use AshTestBase. This disables CHECKs that are
+  // applicable only when used inside ash.
+  // TODO: remove this and ban usage of AshTestHelper outside of ash.
+  void set_running_outside_ash() { running_outside_ash_ = true; }
 
   // Overriden from TestViewsDelegate.
   void OnBeforeWidgetInit(
       views::Widget::InitParams* params,
       views::internal::NativeWidgetDelegate* delegate) override;
-  void NotifyAccessibilityEvent(views::View* view,
-                                ax::mojom::Event event_type) override;
   views::TestViewsDelegate::ProcessMenuAcceleratorResult
   ProcessAcceleratorWhileMenuShowing(
       const ui::Accelerator& accelerator) override;
@@ -51,8 +41,7 @@ class AshTestViewsDelegate : public views::TestViewsDelegate {
   // matches with this.
   ui::Accelerator close_menu_accelerator_;
 
-  // Not owned.
-  TestAccessibilityEventDelegate* test_accessibility_event_delegate_ = nullptr;
+  bool running_outside_ash_ = false;
 
   DISALLOW_COPY_AND_ASSIGN(AshTestViewsDelegate);
 };

@@ -44,11 +44,11 @@
 #include "third_party/blink/renderer/core/typed_arrays/dom_typed_array.h"
 #include "third_party/blink/renderer/platform/geometry/float_rounded_rect.h"
 #include "third_party/blink/renderer/platform/geometry/float_size.h"
+#include "third_party/blink/renderer/platform/geometry/length_functions.h"
 #include "third_party/blink/renderer/platform/graphics/graphics_types.h"
 #include "third_party/blink/renderer/platform/graphics/paint/paint_canvas.h"
 #include "third_party/blink/renderer/platform/graphics/paint/paint_flags.h"
 #include "third_party/blink/renderer/platform/graphics/static_bitmap_image.h"
-#include "third_party/blink/renderer/platform/length_functions.h"
 #include "third_party/blink/renderer/platform/wtf/math_extras.h"
 #include "third_party/blink/renderer/platform/wtf/typed_arrays/array_buffer_contents.h"
 #include "third_party/skia/include/core/SkSurface.h"
@@ -80,9 +80,8 @@ static std::unique_ptr<Shape> CreateEllipseShape(const FloatPoint& center,
       radii);
 }
 
-static std::unique_ptr<Shape> CreatePolygonShape(
-    std::unique_ptr<Vector<FloatPoint>> vertices,
-    WindRule fill_rule) {
+static std::unique_ptr<Shape> CreatePolygonShape(Vector<FloatPoint> vertices,
+                                                 WindRule fill_rule) {
   return std::make_unique<PolygonShape>(std::move(vertices), fill_rule);
 }
 
@@ -163,14 +162,13 @@ std::unique_ptr<Shape> Shape::CreateShape(const BasicShape* basic_shape,
     case BasicShape::kBasicShapePolygonType: {
       const BasicShapePolygon* polygon = ToBasicShapePolygon(basic_shape);
       const Vector<Length>& values = polygon->Values();
-      size_t values_size = values.size();
+      wtf_size_t values_size = values.size();
       DCHECK(!(values_size % 2));
-      std::unique_ptr<Vector<FloatPoint>> vertices =
-          std::make_unique<Vector<FloatPoint>>(values_size / 2);
-      for (unsigned i = 0; i < values_size; i += 2) {
+      Vector<FloatPoint> vertices(values_size / 2);
+      for (wtf_size_t i = 0; i < values_size; i += 2) {
         FloatPoint vertex(FloatValueForLength(values.at(i), box_width),
                           FloatValueForLength(values.at(i + 1), box_height));
-        (*vertices)[i / 2] = PhysicalPointToLogical(
+        vertices[i / 2] = PhysicalPointToLogical(
             vertex, logical_box_size.Height().ToFloat(), writing_mode);
       }
       shape = CreatePolygonShape(std::move(vertices), polygon->GetWindRule());
@@ -255,16 +253,16 @@ static bool ExtractImageData(Image* image,
   // for layout, which is not allowed. See https://crbug.com/429346
   ImageObserverDisabler disabler(image);
   PaintFlags flags;
-  IntRect image_source_rect(IntPoint(), image->Size());
+  FloatRect image_source_rect(FloatPoint(), FloatSize(image->Size()));
   IntRect image_dest_rect(IntPoint(), image_size);
   // TODO(ccameron): No color conversion is required here.
-  std::unique_ptr<PaintCanvas> canvas =
+  std::unique_ptr<cc::PaintCanvas> canvas =
       color_params.WrapCanvas(surface->getCanvas());
   canvas->save();
   canvas->clear(SK_ColorTRANSPARENT);
 
-  image->Draw(canvas.get(), flags, image_dest_rect, image_source_rect,
-              kDoNotRespectImageOrientation,
+  image->Draw(canvas.get(), flags, FloatRect(image_dest_rect),
+              image_source_rect, kDoNotRespectImageOrientation,
               Image::kDoNotClampImageToSourceRect, Image::kSyncDecode);
 
   return StaticBitmapImage::ConvertToArrayBufferContents(

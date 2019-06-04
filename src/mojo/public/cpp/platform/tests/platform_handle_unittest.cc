@@ -105,7 +105,8 @@ class PlatformHandleTest : public testing::Test,
     base::File test_file(temp_dir_.GetPath().AppendASCII("test"),
                          base::File::FLAG_CREATE | base::File::FLAG_WRITE |
                              base::File::FLAG_READ);
-    test_file.WriteAtCurrentPos(kTestData.data(), kTestData.size());
+    test_file.WriteAtCurrentPos(kTestData.data(),
+                                static_cast<int>(kTestData.size()));
 
 #if defined(OS_WIN)
     return PlatformHandle(
@@ -127,7 +128,7 @@ class PlatformHandleTest : public testing::Test,
     base::File file(handle.GetFD().get());
 #endif
     std::vector<char> buffer(kTestData.size());
-    file.Read(0, buffer.data(), buffer.size());
+    file.Read(0, buffer.data(), static_cast<int>(buffer.size()));
     std::string contents(buffer.begin(), buffer.end());
 
 // Let |handle| retain ownership.
@@ -237,9 +238,9 @@ TEST_P(PlatformHandleTest, CStructConversion) {
   EXPECT_EQ(kTestData, GetObjectContents(test_handle()));
 
   MojoPlatformHandle c_handle;
-  PlatformHandleToMojoPlatformHandle(std::move(test_handle()), &c_handle);
+  PlatformHandle::ToMojoPlatformHandle(std::move(test_handle()), &c_handle);
 
-  PlatformHandle handle = MojoPlatformHandleToPlatformHandle(&c_handle);
+  PlatformHandle handle = PlatformHandle::FromMojoPlatformHandle(&c_handle);
   EXPECT_EQ(kTestData, GetObjectContents(handle));
 }
 

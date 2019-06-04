@@ -19,6 +19,7 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/profiles/profile_window.h"
+#include "chrome/browser/signin/signin_util.h"
 #include "chrome/browser/ui/browser_list.h"
 #include "chrome/browser/ui/user_manager.h"
 #include "chrome/common/chrome_paths.h"
@@ -62,7 +63,7 @@ void CreateAndSwitchToProfile(const std::string& basepath) {
   base::RunLoop run_loop;
   profile_manager->CreateProfileAsync(
       path, base::Bind(&UnblockOnProfileInitialized, run_loop.QuitClosure()),
-      base::string16(), std::string(), std::string());
+      base::string16(), std::string());
   // Run the message loop to allow profile creation to take place; the loop is
   // terminated by UnblockOnProfileCreation when the profile is created.
   run_loop.Run();
@@ -358,6 +359,7 @@ IN_PROC_BROWSER_TEST_F(StartupBrowserCreatorCorruptProfileTest,
                        PRE_DoNotStartLockedProfile) {
   // Lock the default profile. The user manager is shown after the profile is
   // locked.
+  signin_util::SetForceSigninForTesting(true);
   profiles::LockProfile(browser()->profile());
   ExpectUserManagerToShow();
 }
@@ -365,6 +367,7 @@ IN_PROC_BROWSER_TEST_F(StartupBrowserCreatorCorruptProfileTest,
 bool StartupBrowserCreatorCorruptProfileTest::
     SetUpUserDataDirectoryForDoNotStartLockedProfile() {
   SetExpectTestBodyToRun(false);
+  signin_util::SetForceSigninForTesting(true);
   return RemoveCreateDirectoryPermissionForUserDataDirectory();
 }
 

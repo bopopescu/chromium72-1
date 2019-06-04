@@ -31,7 +31,7 @@ namespace content {
 
 class MediaStreamVideoTrack;
 class VideoTrackAdapter;
-struct VideoTrackAdapterSettings;
+class VideoTrackAdapterSettings;
 
 // MediaStreamVideoSource is an interface used for sending video frames to a
 // MediaStreamVideoTrack.
@@ -151,6 +151,8 @@ class CONTENT_EXPORT MediaStreamVideoSource : public MediaStreamSource {
   }
 
  protected:
+  // MediaStreamSource implementation.
+  void DoChangeSource(const MediaStreamDevice& new_device) override;
   void DoStopSource() override;
 
   // Sets ready state and notifies the ready state to all registered tracks.
@@ -226,6 +228,9 @@ class CONTENT_EXPORT MediaStreamVideoSource : public MediaStreamSource {
   // has become secure or insecure.
   virtual void OnCapturingLinkSecured(bool is_secure) {}
 
+  // Optionally overridden by subclasses to implement changing source.
+  virtual void ChangeSourceImpl(const MediaStreamDevice& new_device) {}
+
   enum State {
     NEW,
     STARTING,
@@ -256,7 +261,7 @@ class CONTENT_EXPORT MediaStreamVideoSource : public MediaStreamSource {
   void StartFrameMonitoring();
   void UpdateTrackSettings(MediaStreamVideoTrack* track,
                            const VideoTrackAdapterSettings& adapter_settings);
-  void DidRemoveLastTrack(base::OnceClosure callback, RestartResult result);
+  void DidStopSource(base::OnceClosure callback, RestartResult result);
 
   State state_;
 

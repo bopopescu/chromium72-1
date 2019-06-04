@@ -100,9 +100,9 @@
     ],
     "env": {
       "CHROME_HEADLESS": "1",
-      "GOPATH": "[START_DIR]/gopath",
+      "GOPATH": "[START_DIR]/go_deps",
       "GOROOT": "[START_DIR]/go/go",
-      "PATH": "[START_DIR]/go/go/bin:[START_DIR]/gopath:<PATH>:RECIPE_PACKAGE_REPO[depot_tools]"
+      "PATH": "[START_DIR]/go/go/bin:[START_DIR]/go_deps:<PATH>:RECIPE_PACKAGE_REPO[depot_tools]"
     },
     "name": "go version"
   },
@@ -113,9 +113,9 @@
     ],
     "env": {
       "CHROME_HEADLESS": "1",
-      "GOPATH": "[START_DIR]/gopath",
+      "GOPATH": "[START_DIR]/go_deps",
       "GOROOT": "[START_DIR]/go/go",
-      "PATH": "[START_DIR]/go/go/bin:[START_DIR]/gopath:<PATH>:RECIPE_PACKAGE_REPO[depot_tools]"
+      "PATH": "[START_DIR]/go/go/bin:[START_DIR]/go_deps:<PATH>:RECIPE_PACKAGE_REPO[depot_tools]"
     },
     "name": "env go version"
   },
@@ -123,21 +123,19 @@
     "cmd": [
       "[START_DIR]/go/go/bin/go",
       "get",
-      "-u",
-      "-t",
-      "go.skia.org/infra/fiddle/go/fiddlecli"
+      "go.skia.org/infra/fiddlek/go/fiddlecli"
     ],
     "env": {
       "CHROME_HEADLESS": "1",
-      "GOPATH": "[START_DIR]/gopath",
+      "GOPATH": "[START_DIR]/go_deps",
       "GOROOT": "[START_DIR]/go/go",
-      "PATH": "[START_DIR]/go/go/bin:[START_DIR]/gopath:<PATH>:RECIPE_PACKAGE_REPO[depot_tools]"
+      "PATH": "[START_DIR]/go/go/bin:[START_DIR]/go_deps:<PATH>:RECIPE_PACKAGE_REPO[depot_tools]"
     },
     "name": "go get fiddlecli"
   },
   {
     "cmd": [
-      "[START_DIR]/build/out/Release/bookmaker",
+      "[START_DIR]/build/bookmaker",
       "-a",
       "docs/status.json",
       "-e",
@@ -146,28 +144,44 @@
     "cwd": "[START_DIR]/cache/work/skia",
     "env": {
       "CHROME_HEADLESS": "1",
-      "GOPATH": "[START_DIR]/gopath",
+      "GOPATH": "[START_DIR]/go_deps",
       "GOROOT": "[START_DIR]/go/go",
-      "PATH": "[START_DIR]/go/go/bin:[START_DIR]/gopath:<PATH>:RECIPE_PACKAGE_REPO[depot_tools]"
+      "PATH": "[START_DIR]/go/go/bin:[START_DIR]/go_deps:<PATH>:RECIPE_PACKAGE_REPO[depot_tools]"
     },
     "name": "Extract all fiddles out of md files"
   },
   {
     "cmd": [
-      "[START_DIR]/gopath/bin/fiddlecli",
+      "cat",
+      "[START_DIR]/fiddle.json"
+    ],
+    "cwd": "[START_DIR]/cache/work/skia",
+    "env": {
+      "CHROME_HEADLESS": "1",
+      "GOPATH": "[START_DIR]/go_deps",
+      "GOROOT": "[START_DIR]/go/go",
+      "PATH": "[START_DIR]/go/go/bin:[START_DIR]/go_deps:<PATH>:RECIPE_PACKAGE_REPO[depot_tools]"
+    },
+    "name": "Output fiddle.json"
+  },
+  {
+    "cmd": [
+      "[START_DIR]/go_deps/bin/fiddlecli",
       "--input",
       "[START_DIR]/fiddle.json",
       "--output",
       "[START_DIR]/fiddleout.json",
+      "--procs",
+      "10",
       "--logtostderr",
       "--force"
     ],
     "cwd": "[START_DIR]/cache/work/skia",
     "env": {
       "CHROME_HEADLESS": "1",
-      "GOPATH": "[START_DIR]/gopath",
+      "GOPATH": "[START_DIR]/go_deps",
       "GOROOT": "[START_DIR]/go/go",
-      "PATH": "[START_DIR]/go/go/bin:[START_DIR]/gopath:<PATH>:RECIPE_PACKAGE_REPO[depot_tools]"
+      "PATH": "[START_DIR]/go/go/bin:[START_DIR]/go_deps:<PATH>:RECIPE_PACKAGE_REPO[depot_tools]"
     },
     "name": "Force fiddle to compile all examples"
   },
@@ -184,9 +198,9 @@
     ],
     "cwd": "[START_DIR]/cache/work/skia",
     "env": {
-      "GOPATH": "[START_DIR]/gopath",
+      "GOPATH": "[START_DIR]/go_deps",
       "GOROOT": "[START_DIR]/go/go",
-      "PATH": "[START_DIR]/go/go/bin:[START_DIR]/gopath:<PATH>"
+      "PATH": "[START_DIR]/go/go/bin:[START_DIR]/go_deps:<PATH>"
     },
     "infra_step": true,
     "name": "Read fiddleout.json"
@@ -199,9 +213,9 @@
     "cwd": "[START_DIR]/cache/work/skia",
     "env": {
       "CHROME_HEADLESS": "1",
-      "GOPATH": "[START_DIR]/gopath",
+      "GOPATH": "[START_DIR]/go_deps",
       "GOROOT": "[START_DIR]/go/go",
-      "PATH": "[START_DIR]/go/go/bin:[START_DIR]/gopath:<PATH>:RECIPE_PACKAGE_REPO[depot_tools]"
+      "PATH": "[START_DIR]/go/go/bin:[START_DIR]/go_deps:<PATH>:RECIPE_PACKAGE_REPO[depot_tools]"
     },
     "name": "Output fiddleout.json"
   },
@@ -210,22 +224,21 @@
       "python",
       "[START_DIR]/cache/work/skia/infra/bots/upload_md.py",
       "--bookmaker_binary",
-      "[START_DIR]/build/out/Release/bookmaker",
+      "[START_DIR]/build/bookmaker",
       "--fiddlecli_output",
       "[START_DIR]/fiddleout.json"
     ],
     "cwd": "[START_DIR]/cache/work/skia",
     "env": {
       "CHROME_HEADLESS": "1",
-      "GOPATH": "[START_DIR]/gopath",
+      "GOPATH": "[START_DIR]/go_deps",
       "GOROOT": "[START_DIR]/go/go",
-      "PATH": "[START_DIR]/go/go/bin:[START_DIR]/gopath:<PATH>:RECIPE_PACKAGE_REPO[depot_tools]"
+      "PATH": "[START_DIR]/go/go/bin:[START_DIR]/go_deps:<PATH>:RECIPE_PACKAGE_REPO[depot_tools]"
     },
     "name": "Generate and Upload Markdown files"
   },
   {
-    "name": "$result",
-    "recipe_result": null,
-    "status_code": 0
+    "jsonResult": null,
+    "name": "$result"
   }
 ]

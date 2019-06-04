@@ -4,7 +4,7 @@
 
 #include "third_party/blink/renderer/modules/navigatorcontentutils/navigator_content_utils_client.h"
 
-#include "third_party/blink/public/web/web_frame_client.h"
+#include "third_party/blink/public/web/web_local_frame_client.h"
 #include "third_party/blink/renderer/core/frame/web_local_frame_impl.h"
 #include "third_party/blink/renderer/platform/weborigin/kurl.h"
 
@@ -12,7 +12,7 @@ namespace blink {
 
 NavigatorContentUtilsClient* NavigatorContentUtilsClient::Create(
     WebLocalFrameImpl* web_frame) {
-  return new NavigatorContentUtilsClient(web_frame);
+  return MakeGarbageCollected<NavigatorContentUtilsClient>(web_frame);
 }
 
 NavigatorContentUtilsClient::NavigatorContentUtilsClient(

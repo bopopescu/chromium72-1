@@ -10,9 +10,6 @@ import sys
 
 from google.appengine.ext import ndb
 
-# TODO(eakuefner): Move these helpers so we don't have to import add_point or
-# add_point_queue directly.
-from dashboard import add_histograms
 from dashboard import add_point
 from dashboard import add_point_queue
 from dashboard import find_anomalies
@@ -20,7 +17,6 @@ from dashboard import graph_revisions
 from dashboard.common import datastore_hooks
 from dashboard.common import histogram_helpers
 from dashboard.common import request_handler
-from dashboard.common import stored_object
 from dashboard.common import utils
 from dashboard.models import anomaly
 from dashboard.models import graph_data
@@ -36,15 +32,15 @@ DIAGNOSTIC_NAMES_TO_ANNOTATION_NAMES = {
     reserved_infos.V8_COMMIT_POSITIONS.name: 'r_v8_commit_pos',
     reserved_infos.CHROMIUM_REVISIONS.name: 'r_chromium',
     reserved_infos.V8_REVISIONS.name: 'r_v8_rev',
-    # TODO(eakuefner): Add r_catapult_git to Dashboard revision_info map (see
-    # https://github.com/catapult-project/catapult/issues/3545).
+    # TODO(#3545): Add r_catapult_git to Dashboard revision_info map.
     reserved_infos.CATAPULT_REVISIONS.name: 'r_catapult_git',
     reserved_infos.ANGLE_REVISIONS.name: 'r_angle_git',
     reserved_infos.WEBRTC_REVISIONS.name: 'r_webrtc_git',
     reserved_infos.FUCHSIA_GARNET_REVISIONS.name: 'r_fuchsia_garnet_git',
     reserved_infos.FUCHSIA_PERIDOT_REVISIONS.name: 'r_fuchsia_peridot_git',
     reserved_infos.FUCHSIA_TOPAZ_REVISIONS.name: 'r_fuchsia_topaz_git',
-    reserved_infos.FUCHSIA_ZIRCON_REVISIONS.name: 'r_fuchsia_zircon_git'
+    reserved_infos.FUCHSIA_ZIRCON_REVISIONS.name: 'r_fuchsia_zircon_git',
+    reserved_infos.REVISION_TIMESTAMPS.name: 'r_revision_timestamp',
 }
 
 
@@ -86,14 +82,9 @@ class AddHistogramsQueueHandler(request_handler.RequestHandler):
     """
     datastore_hooks.SetPrivilegedRequest()
 
-    bot_whitelist_future = stored_object.GetAsync(
-        add_point_queue.BOT_WHITELIST_KEY)
-
     params = json.loads(self.request.body)
 
     _PrewarmGets(params)
-
-    bot_whitelist = bot_whitelist_future.get_result()
 
     # Roughly, the processing of histograms and the processing of rows can be
     # done in parallel since there are no dependencies.
@@ -101,7 +92,7 @@ class AddHistogramsQueueHandler(request_handler.RequestHandler):
     futures = []
 
     for p in params:
-      futures.extend(_ProcessRowAndHistogram(p, bot_whitelist))
+      futures.extend(_ProcessRowAndHistogram(p))
 
     ndb.Future.wait_all(futures)
 
@@ -139,7 +130,7 @@ def _PrewarmGets(params):
   ndb.get_multi_async(list(keys))
 
 
-def _ProcessRowAndHistogram(params, bot_whitelist):
+def _ProcessRowAndHistogram(params):
   revision = int(params['revision'])
   test_path = params['test_path']
   benchmark_description = params['benchmark_description']
@@ -162,14 +153,11 @@ def _ProcessRowAndHistogram(params, bot_whitelist):
   else:
     rest = None
   full_test_name = '/'.join(test_path_parts[2:])
-  internal_only = add_point_queue.BotInternalOnly(bot, bot_whitelist)
+  internal_only = graph_data.Bot.GetInternalOnlySync(master, bot)
   extra_args = GetUnitArgs(hist.unit)
 
   unescaped_story_name = _GetStoryFromDiagnosticsDict(params.get('diagnostics'))
 
-  # TDOO(eakuefner): Populate benchmark_description once it appears in
-  # diagnostics.
-  # https://github.com/catapult-project/catapult/issues/4096
   parent_test = add_point_queue.GetOrCreateAncestors(
       master, bot, full_test_name, internal_only=internal_only,
       unescaped_story_name=unescaped_story_name,
@@ -244,10 +232,8 @@ def _AddHistogramFromData(params, revision, test_key, internal_only):
   new_guids_to_existing_diagnostics = yield ProcessDiagnostics(
       diagnostics, revision, test_key, internal_only)
 
-  # TODO(eakuefner): Move per-histogram monkeypatching logic to Histogram.
   hs = histogram_set.HistogramSet()
   hs.ImportDicts([data_dict])
-  # TODO(eakuefner): Share code for replacement logic with add_histograms
   for new_guid, existing_diagnostic in (
       new_guids_to_existing_diagnostics.iteritems()):
     hs.ReplaceSharedDiagnostic(
@@ -268,15 +254,19 @@ def ProcessDiagnostics(diagnostic_data, revision, test_key, internal_only):
 
   diagnostic_entities = []
   for name, diagnostic_datum in diagnostic_data.iteritems():
-    # TODO(eakuefner): Pass map of guid to dict to avoid overhead
     guid = diagnostic_datum['guid']
     diagnostic_entities.append(histogram.SparseDiagnostic(
         id=guid, name=name, data=diagnostic_datum, test=test_key,
         start_revision=revision, end_revision=sys.maxint,
         internal_only=internal_only))
+
+  suite_key = utils.TestKey('/'.join(test_key.id().split('/')[:3]))
+  last_added = yield histogram.HistogramRevisionRecord.GetLatest(suite_key)
+  assert last_added
+
   new_guids_to_existing_diagnostics = yield (
-      add_histograms.DeduplicateAndPutAsync(
-          diagnostic_entities, test_key, revision))
+      histogram.SparseDiagnostic.FindOrInsertDiagnostics(
+          diagnostic_entities, test_key, revision, last_added.revision))
 
   raise ndb.Return(new_guids_to_existing_diagnostics)
 
@@ -285,7 +275,6 @@ def GetUnitArgs(unit):
   unit_args = {
       'units': unit
   }
-  # TODO(eakuefner): Port unit system to Python and use that here
   histogram_improvement_direction = unit.split('_')[-1]
   if histogram_improvement_direction == 'biggerIsBetter':
     unit_args['improvement_direction'] = anomaly.UP
@@ -299,9 +288,8 @@ def GetUnitArgs(unit):
 def CreateRowEntities(
     histogram_dict, test_metadata_key, stat_names_to_test_keys, revision):
   h = histogram_module.Histogram.FromDict(histogram_dict)
-  # TODO(eakuefner): Move this check into _PopulateNumericalFields once we
-  # know that it's okay to put rows that don't have a value/error (see
-  # https://github.com/catapult-project/catapult/issues/3564).
+  # TODO(#3564): Move this check into _PopulateNumericalFields once we
+  # know that it's okay to put rows that don't have a value/error.
   if h.num_values == 0:
     return None
 
@@ -342,12 +330,12 @@ def _MakeRowDict(revision, test_path, tracing_histogram, stat_name=None):
 
   for diag_name, annotation in DIAGNOSTIC_NAMES_TO_ANNOTATION_NAMES.iteritems():
     revision_info = tracing_histogram.diagnostics.get(diag_name)
-    value = list(revision_info) if revision_info else None
-    # TODO(eakuefner): Formalize unique-per-upload diagnostics to make this
-    # check an earlier error. RevisionInfo's fields have to be lists, but there
-    # should be only one revision of each type per upload.
-    if not value:
+    if not revision_info:
       continue
+    if diag_name == reserved_infos.REVISION_TIMESTAMPS.name:
+      value = [revision_info.min_timestamp]
+    else:
+      value = list(revision_info)
     _CheckRequest(
         len(value) == 1,
         'RevisionInfo fields must contain at most one revision')
@@ -367,6 +355,14 @@ def _MakeRowDict(revision, test_path, tracing_histogram, stat_name=None):
 
 
 def _AddStdioUris(tracing_histogram, row_dict):
+  build_urls_diagnostic = tracing_histogram.diagnostics.get(
+      reserved_infos.BUILD_URLS.name)
+  if build_urls_diagnostic:
+    build_tuple = build_urls_diagnostic.GetOnlyElement()
+    if isinstance(build_tuple, list):
+      link = '[%s](%s)' % tuple(build_tuple)
+      row_dict['supplemental_columns']['a_build_uri'] = link
+
   log_urls = tracing_histogram.diagnostics.get(reserved_infos.LOG_URLS.name)
   if not log_urls:
     return
@@ -380,7 +376,7 @@ def _AddStdioUri(name, link_list, row_dict):
   if isinstance(link_list, list):
     row_dict['supplemental_columns'][name] = '[%s](%s)' % tuple(link_list)
   # Support busted format until infra changes roll
-  elif isinstance(link_list, str):
+  elif isinstance(link_list, basestring):
     row_dict['supplemental_columns'][name] = link_list
 
 

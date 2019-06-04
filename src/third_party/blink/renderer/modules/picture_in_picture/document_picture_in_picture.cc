@@ -10,6 +10,7 @@
 #include "third_party/blink/renderer/core/dom/events/event.h"
 #include "third_party/blink/renderer/core/html/media/html_video_element.h"
 #include "third_party/blink/renderer/modules/picture_in_picture/picture_in_picture_controller_impl.h"
+#include "third_party/blink/renderer/platform/wtf/functional.h"
 
 namespace blink {
 
@@ -32,19 +33,18 @@ ScriptPromise DocumentPictureInPicture::exitPictureInPicture(
     Document& document) {
   PictureInPictureControllerImpl& controller =
       PictureInPictureControllerImpl::From(document);
-  Element* picture_in_picture_element =
-      controller.PictureInPictureElement(ToTreeScope(document));
+  Element* picture_in_picture_element = controller.PictureInPictureElement();
 
   if (!picture_in_picture_element) {
     return ScriptPromise::RejectWithDOMException(
-        script_state,
-        DOMException::Create(kInvalidStateError, kNoPictureInPictureElement));
+        script_state, DOMException::Create(DOMExceptionCode::kInvalidStateError,
+                                           kNoPictureInPictureElement));
   }
 
   ScriptPromiseResolver* resolver = ScriptPromiseResolver::Create(script_state);
   ScriptPromise promise = resolver->Promise();
 
-  // TODO(crbug.com/806249): Check element is a video element.
+  DCHECK(IsHTMLVideoElement(picture_in_picture_element));
   document.GetTaskRunner(TaskType::kMediaElementEvent)
       ->PostTask(
           FROM_HERE,

@@ -11,10 +11,12 @@
  *   ACCESSIBILITY: (undefined|!settings.Route),
  *   ACCOUNTS: (undefined|!settings.Route),
  *   ADVANCED: (undefined|!settings.Route),
- *   CROSTINI: (undefined|!settings.Route),
- *   CROSTINI_DETAILS: (undefined|!settings.Route),
+ *   ADDRESSES: (undefined|!settings.Route),
  *   ANDROID_APPS: (undefined|!settings.Route),
  *   ANDROID_APPS_DETAILS: (undefined|!settings.Route),
+ *   CROSTINI: (undefined|!settings.Route),
+ *   CROSTINI_DETAILS: (undefined|!settings.Route),
+ *   CROSTINI_SHARED_PATHS: (undefined|!settings.Route),
  *   APPEARANCE: (undefined|!settings.Route),
  *   AUTOFILL: (undefined|!settings.Route),
  *   BASIC: (undefined|!settings.Route),
@@ -47,13 +49,14 @@
  *   LANGUAGES: (undefined|!settings.Route),
  *   LOCK_SCREEN: (undefined|!settings.Route),
  *   MANAGE_ACCESSIBILITY: (undefined|!settings.Route),
- *   MANAGE_PASSWORDS: (undefined|!settings.Route),
  *   MANAGE_PROFILE: (undefined|!settings.Route),
  *   MANAGE_TTS_SETTINGS: (undefined|!settings.Route),
  *   MULTIDEVICE: (undefined|!settings.Route),
+ *   MULTIDEVICE_FEATURES: (undefined|!settings.Route),
  *   NETWORK_DETAIL: (undefined|!settings.Route),
  *   ON_STARTUP: (undefined|!settings.Route),
  *   PASSWORDS: (undefined|!settings.Route),
+ *   PAYMENTS: (undefined|!settings.Route),
  *   PEOPLE: (undefined|!settings.Route),
  *   POINTERS: (undefined|!settings.Route),
  *   POWER: (undefined|!settings.Route),
@@ -92,10 +95,12 @@
  *   SITE_SETTINGS_UNSANDBOXED_PLUGINS: (undefined|!settings.Route),
  *   SITE_SETTINGS_USB_DEVICES: (undefined|!settings.Route),
  *   SITE_SETTINGS_ZOOM_LEVELS: (undefined|!settings.Route),
+ *   SMART_LOCK: (undefined|!settings.Route),
  *   SMB_SHARES: (undefined|!settings.Route),
  *   STORAGE: (undefined|!settings.Route),
  *   STYLUS: (undefined|!settings.Route),
  *   SYNC: (undefined|!settings.Route),
+ *   SYNC_ADVANCED: (undefined|!settings.Route),
  *   SYSTEM: (undefined|!settings.Route),
  *   TRIGGERED_RESET_DIALOG: (undefined|!settings.Route),
  * }}
@@ -229,11 +234,23 @@ cr.define('settings', function() {
     r.KNOWN_NETWORKS = r.INTERNET.createChild('/knownNetworks');
     r.BLUETOOTH = r.BASIC.createSection('/bluetooth', 'bluetooth');
     r.BLUETOOTH_DEVICES = r.BLUETOOTH.createChild('/bluetoothDevices');
+
+    r.MULTIDEVICE = r.BASIC.createSection('/multidevice', 'multidevice');
+    r.MULTIDEVICE_FEATURES = r.MULTIDEVICE.createChild('/multidevice/features');
+    r.SMART_LOCK =
+        r.MULTIDEVICE_FEATURES.createChild('/multidevice/features/smartLock');
     // </if>
 
     if (pageVisibility.appearance !== false) {
       r.APPEARANCE = r.BASIC.createSection('/appearance', 'appearance');
       r.FONTS = r.APPEARANCE.createChild('/fonts');
+    }
+
+    if (pageVisibility.autofill !== false) {
+      r.AUTOFILL = r.BASIC.createSection('/autofill', 'autofill');
+      r.PASSWORDS = r.AUTOFILL.createChild('/passwords');
+      r.PAYMENTS = r.AUTOFILL.createChild('/payments');
+      r.ADDRESSES = r.AUTOFILL.createChild('/addresses');
     }
 
     if (pageVisibility.defaultBrowser !== false) {
@@ -246,14 +263,15 @@ cr.define('settings', function() {
     // <if expr="chromeos">
     r.GOOGLE_ASSISTANT = r.SEARCH.createChild('/googleAssistant');
 
+    r.ANDROID_APPS = r.BASIC.createSection('/androidApps', 'androidApps');
+    r.ANDROID_APPS_DETAILS = r.ANDROID_APPS.createChild('/androidApps/details');
+
     if (loadTimeData.valueExists('showCrostini') &&
         loadTimeData.getBoolean('showCrostini')) {
       r.CROSTINI = r.BASIC.createSection('/crostini', 'crostini');
       r.CROSTINI_DETAILS = r.CROSTINI.createChild('/crostini/details');
+      r.CROSTINI_SHARED_PATHS = r.CROSTINI.createChild('/crostini/sharedPaths');
     }
-
-    r.ANDROID_APPS = r.BASIC.createSection('/androidApps', 'androidApps');
-    r.ANDROID_APPS_DETAILS = r.ANDROID_APPS.createChild('/androidApps/details');
     // </if>
 
     if (pageVisibility.onStartup !== false) {
@@ -264,6 +282,7 @@ cr.define('settings', function() {
     if (pageVisibility.people !== false) {
       r.PEOPLE = r.BASIC.createSection('/people', 'people');
       r.SYNC = r.PEOPLE.createChild('/syncSetup');
+      r.SYNC_ADVANCED = r.SYNC.createChild('/syncSetup/advanced');
       // <if expr="not chromeos">
       r.MANAGE_PROFILE = r.PEOPLE.createChild('/manageProfile');
       // </if>
@@ -358,13 +377,6 @@ cr.define('settings', function() {
       }
       // </if>
 
-      if (pageVisibility.passwordsAndForms !== false) {
-        r.PASSWORDS =
-            r.ADVANCED.createSection('/passwordsAndForms', 'passwordsAndForms');
-        r.AUTOFILL = r.PASSWORDS.createChild('/autofill');
-        r.MANAGE_PASSWORDS = r.PASSWORDS.createChild('/passwords');
-      }
-
       r.LANGUAGES = r.ADVANCED.createSection('/languages', 'languages');
       // <if expr="chromeos">
       r.INPUT_METHODS = r.LANGUAGES.createChild('/inputMethods');
@@ -384,8 +396,6 @@ cr.define('settings', function() {
       r.CLOUD_PRINTERS = r.PRINTING.createChild('/cloudPrinters');
       // <if expr="chromeos">
       r.CUPS_PRINTERS = r.PRINTING.createChild('/cupsPrinters');
-
-      r.MULTIDEVICE = r.ADVANCED.createSection('/multidevice', 'multidevice');
       // </if>
 
       r.ACCESSIBILITY = r.ADVANCED.createSection('/accessibility', 'a11y');

@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "base/gtest_prod_util.h"
+#include "build/build_config.h"
 #include "chrome/browser/first_run/first_run.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/startup/startup_browser_creator.h"
@@ -86,7 +87,7 @@ class StartupTabProviderImpl : public StartupTabProvider {
   // system state relating to making those policy decisions. Exposed for
   // testing.
 
-  // Returns true if showing the standard welcome page is permissable.
+  // Returns true if showing the standard welcome page is permissible.
   static bool CanShowWelcome(bool is_signin_allowed,
                              bool is_supervised_user,
                              bool is_force_signin_enabled);
@@ -103,7 +104,7 @@ class StartupTabProviderImpl : public StartupTabProvider {
       const StandardOnboardingTabsParams& params);
 
 #if defined(OS_WIN)
-  // returns true if showing the Windows 10 welcome page is permissable.
+  // returns true if showing the Windows 10 welcome page is permissible.
   static bool CanShowWin10Welcome(bool set_default_browser_allowed,
                                   bool is_supervised_user);
 
@@ -117,7 +118,7 @@ class StartupTabProviderImpl : public StartupTabProvider {
   static StartupTabs GetWin10OnboardingTabsForState(
       const StandardOnboardingTabsParams& standard_params,
       const Win10OnboardingTabsParams& win10_params);
-#endif
+#endif  // defined(OS_WIN)
 
   // Processes first run URLs specified in Master Preferences file, replacing
   // any "magic word" URL hosts with appropriate URLs.

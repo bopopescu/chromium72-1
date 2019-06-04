@@ -193,12 +193,16 @@ SPECIAL_CASES = {
         "URL": "http://code.google.com/p/v8-i18n/",
         "License": "Apache 2.0",
     },
-    os.path.join('third_party', 'WebKit'): {
+    os.path.join('third_party', 'blink'): {
+        # about:credits doesn't show "Blink" but "WebKit".
+        # Blink is a fork of WebKit, and Chromium project has maintained it
+        # since the fork.  about:credits needs to mention the code before
+        # the fork.
         "Name": "WebKit",
         "URL": "http://webkit.org/",
         "License": "BSD and LGPL v2 and LGPL v2.1",
         # Absolute path here is resolved as relative to the source root.
-        "License File": "/third_party/WebKit/LICENSE_FOR_ABOUT_CREDITS",
+        "License File": "/third_party/blink/LICENSE_FOR_ABOUT_CREDITS",
     },
     os.path.join('third_party', 'webpagereplay'): {
         "Name": "webpagereplay",
@@ -274,7 +278,6 @@ KNOWN_NON_IOS_LIBRARIES = set([
     os.path.join('chrome', 'test', 'data', 'third_party', 'spaceport'),
     os.path.join('chrome', 'third_party', 'mock4js'),
     os.path.join('chrome', 'third_party', 'mozilla_security_manager'),
-    os.path.join('third_party', 'WebKit'),
     os.path.join('third_party', 'angle'),
     os.path.join('third_party', 'apple_apsl'),
     os.path.join('third_party', 'apple_sample_code'),
@@ -299,7 +302,6 @@ KNOWN_NON_IOS_LIBRARIES = set([
     os.path.join('third_party', 'lss'),
     os.path.join('third_party', 'lzma_sdk'),
     os.path.join('third_party', 'mesa'),
-    os.path.join('third_party', 'molokocacao'),
     os.path.join('third_party', 'motemplate'),
     os.path.join('third_party', 'mozc'),
     os.path.join('third_party', 'mozilla'),

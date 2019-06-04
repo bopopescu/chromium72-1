@@ -12,8 +12,9 @@
 #include "ash/session/test_session_controller_client.h"
 #include "ash/shell.h"
 #include "ash/system/status_area_widget.h"
-#include "ash/system/tray/system_tray.h"
+#include "ash/system/unified/unified_system_tray.h"
 #include "ash/test/ash_test_base.h"
+#include "ash/wallpaper/wallpaper_controller.h"
 #include "base/run_loop.h"
 #include "base/test/bind_test_util.h"
 #include "components/prefs/pref_service.h"
@@ -33,9 +34,9 @@ enum WindowType { kPrimary = 0, kSecondary = 1 };
 
 bool IsSystemTrayForWindowVisible(WindowType index) {
   aura::Window::Windows root_windows = Shell::GetAllRootWindows();
-  return RootWindowController::ForWindow(root_windows[index])
-      ->GetSystemTray()
-      ->visible();
+  RootWindowController* controller =
+      RootWindowController::ForWindow(root_windows[index]);
+  return controller->GetStatusAreaWidget()->unified_system_tray()->visible();
 }
 
 TEST_F(LoginScreenControllerTest, RequestAuthentication) {
@@ -47,10 +48,11 @@ TEST_F(LoginScreenControllerTest, RequestAuthentication) {
   std::string password = "password";
   // Verify AuthenticateUser mojo call is run with the same account id, a
   // (hashed) password, and the correct PIN state.
-  EXPECT_CALL(*client, AuthenticateUser_(id, password, false, _));
+  EXPECT_CALL(*client,
+              AuthenticateUserWithPasswordOrPin_(id, password, false, _));
   base::Optional<bool> callback_result;
   base::RunLoop run_loop1;
-  controller->AuthenticateUser(
+  controller->AuthenticateUserWithPasswordOrPin(
       id, password, false,
       base::BindLambdaForTesting([&](base::Optional<bool> did_auth) {
         callback_result = did_auth;
@@ -67,9 +69,9 @@ TEST_F(LoginScreenControllerTest, RequestAuthentication) {
   EXPECT_TRUE(prefs->FindPreference(prefs::kQuickUnlockPinSalt));
 
   std::string pin = "123456";
-  EXPECT_CALL(*client, AuthenticateUser_(id, pin, true, _));
+  EXPECT_CALL(*client, AuthenticateUserWithPasswordOrPin_(id, pin, true, _));
   base::RunLoop run_loop2;
-  controller->AuthenticateUser(
+  controller->AuthenticateUserWithPasswordOrPin(
       id, pin, true,
       base::BindLambdaForTesting([&](base::Optional<bool> did_auth) {
         callback_result = did_auth;
@@ -88,18 +90,13 @@ TEST_F(LoginScreenControllerTest, RequestEasyUnlock) {
   AccountId id = AccountId::FromUserEmail("user1@test.com");
 
   // Verify AttemptUnlock mojo call is run with the same account id.
-  EXPECT_CALL(*client, AttemptUnlock(id));
-  controller->AttemptUnlock(id);
+  EXPECT_CALL(*client, AuthenticateUserWithEasyUnlock(id));
+  controller->AuthenticateUserWithEasyUnlock(id);
   base::RunLoop().RunUntilIdle();
 
   // Verify HardlockPod mojo call is run with the same account id.
   EXPECT_CALL(*client, HardlockPod(id));
   controller->HardlockPod(id);
-  base::RunLoop().RunUntilIdle();
-
-  // Verify RecordClickOnLockIcon mojo call is run with the same account id.
-  EXPECT_CALL(*client, RecordClickOnLockIcon(id));
-  controller->RecordClickOnLockIcon(id);
   base::RunLoop().RunUntilIdle();
 }
 
@@ -123,7 +120,7 @@ TEST_F(LoginScreenControllerTest, RequestUserPodFocus) {
 TEST_F(LoginScreenControllerTest,
        ShowLoginScreenRequiresLoginPrimarySessionState) {
   auto show_login = [&](session_manager::SessionState state) {
-    EXPECT_FALSE(ash::LockScreen::IsShown());
+    EXPECT_FALSE(ash::LockScreen::HasInstance());
 
     LoginScreenController* controller = Shell::Get()->login_screen_controller();
 
@@ -142,7 +139,7 @@ TEST_F(LoginScreenControllerTest,
     EXPECT_TRUE(result.has_value());
 
     // Verify result matches actual ash::LockScreen state.
-    EXPECT_EQ(*result, ash::LockScreen::IsShown());
+    EXPECT_EQ(*result, ash::LockScreen::HasInstance());
 
     // Destroy login if we created it.
     if (*result)
@@ -166,7 +163,7 @@ TEST_F(LoginScreenControllerNoSessionTest, ShowSystemTrayOnPrimaryLoginScreen) {
   aura::Window::Windows root_windows = Shell::GetAllRootWindows();
   ASSERT_EQ(2u, root_windows.size());
 
-  EXPECT_FALSE(ash::LockScreen::IsShown());
+  EXPECT_FALSE(ash::LockScreen::HasInstance());
   EXPECT_FALSE(IsSystemTrayForWindowVisible(WindowType::kPrimary));
   EXPECT_FALSE(IsSystemTrayForWindowVisible(WindowType::kSecondary));
 
@@ -183,7 +180,7 @@ TEST_F(LoginScreenControllerNoSessionTest, ShowSystemTrayOnPrimaryLoginScreen) {
   run_loop.Run();
   EXPECT_TRUE(result.has_value());
 
-  EXPECT_TRUE(ash::LockScreen::IsShown());
+  EXPECT_TRUE(ash::LockScreen::HasInstance());
   EXPECT_TRUE(IsSystemTrayForWindowVisible(WindowType::kPrimary));
   EXPECT_FALSE(IsSystemTrayForWindowVisible(WindowType::kSecondary));
 
@@ -198,7 +195,7 @@ TEST_F(LoginScreenControllerTest, ShowSystemTrayOnPrimaryLockScreen) {
   ASSERT_EQ(2u, root_windows.size());
 
   GetSessionControllerClient()->SetSessionState(SessionState::ACTIVE);
-  EXPECT_FALSE(ash::LockScreen::IsShown());
+  EXPECT_FALSE(ash::LockScreen::HasInstance());
   EXPECT_TRUE(IsSystemTrayForWindowVisible(WindowType::kPrimary));
   EXPECT_TRUE(IsSystemTrayForWindowVisible(WindowType::kSecondary));
 
@@ -215,12 +212,35 @@ TEST_F(LoginScreenControllerTest, ShowSystemTrayOnPrimaryLockScreen) {
   run_loop.Run();
   EXPECT_TRUE(result.has_value());
 
-  EXPECT_TRUE(ash::LockScreen::IsShown());
+  EXPECT_TRUE(ash::LockScreen::HasInstance());
   EXPECT_TRUE(IsSystemTrayForWindowVisible(WindowType::kPrimary));
   EXPECT_FALSE(IsSystemTrayForWindowVisible(WindowType::kSecondary));
 
   if (*result)
     ash::LockScreen::Get()->Destroy();
+}
+
+TEST_F(LoginScreenControllerTest, ShowLoginScreenRequiresWallpaper) {
+  // Show login screen.
+  EXPECT_FALSE(ash::LockScreen::HasInstance());
+  GetSessionControllerClient()->SetSessionState(SessionState::LOGIN_PRIMARY);
+  base::RunLoop run_loop;
+  Shell::Get()->login_screen_controller()->ShowLoginScreen(base::BindOnce(
+      [](base::RunLoop* run_loop, bool did_show) { run_loop->Quit(); },
+      &run_loop));
+  run_loop.Run();
+
+  // Verify the instance has been created, but the login screen is not actually
+  // shown yet because there's no wallpaper.
+  EXPECT_TRUE(ash::LockScreen::HasInstance());
+  EXPECT_FALSE(ash::LockScreen::Get()->is_shown());
+
+  // Set the wallpaper. Verify the login screen is shown.
+  Shell::Get()->wallpaper_controller()->ShowDefaultWallpaperForTesting();
+  base::RunLoop().RunUntilIdle();
+  EXPECT_TRUE(ash::LockScreen::Get()->is_shown());
+
+  ash::LockScreen::Get()->Destroy();
 }
 
 }  // namespace

@@ -12,6 +12,7 @@
 #include "base/logging.h"
 #include "base/macros.h"
 #include "base/metrics/user_metrics.h"
+#include "base/no_destructor.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/stringprintf.h"
 #include "build/build_config.h"
@@ -45,12 +46,7 @@
 #include "net/base/url_util.h"
 #include "ui/base/window_open_disposition.h"
 
-#if defined(OS_WIN)
-#include "chrome/browser/win/enumerate_modules_model.h"
-#endif
-
 #if defined(OS_CHROMEOS)
-#include "chrome/browser/chromeos/genius_app/app_id.h"
 #include "chrome/browser/ui/settings_window_manager_chromeos.h"
 #include "extensions/browser/extension_registry.h"
 #endif
@@ -91,7 +87,7 @@ void ShowHelpImpl(Browser* browser, Profile* profile, HelpSource source) {
 #if defined(OS_CHROMEOS) && defined(GOOGLE_CHROME_BUILD)
   const extensions::Extension* extension =
       extensions::ExtensionRegistry::Get(profile)->GetExtensionById(
-          genius_app::kGeniusAppId,
+          extension_misc::kGeniusAppId,
           extensions::ExtensionRegistry::EVERYTHING);
   if (!extension) {
     DCHECK(base::CommandLine::ForCurrentProcess()->HasSwitch(
@@ -151,20 +147,19 @@ std::string GenerateContentSettingsExceptionsSubPage(ContentSettingsType type) {
   // TODO(crbug.com/728353): Update the group names defined in
   // site_settings_helper once Options is removed from Chrome. Then this list
   // will no longer be needed.
-  typedef std::map<ContentSettingsType, std::string> ContentSettingPathMap;
-  CR_DEFINE_STATIC_LOCAL(
-      ContentSettingPathMap, kSettingsPathOverrides,
-      ({{CONTENT_SETTINGS_TYPE_AUTOMATIC_DOWNLOADS, "automaticDownloads"},
-        {CONTENT_SETTINGS_TYPE_BACKGROUND_SYNC, "backgroundSync"},
-        {CONTENT_SETTINGS_TYPE_MEDIASTREAM_MIC, "microphone"},
-        {CONTENT_SETTINGS_TYPE_MEDIASTREAM_CAMERA, "camera"},
-        {CONTENT_SETTINGS_TYPE_MIDI_SYSEX, "midiDevices"},
-        {CONTENT_SETTINGS_TYPE_PLUGINS, "flash"},
-        {CONTENT_SETTINGS_TYPE_ADS, "ads"},
-        {CONTENT_SETTINGS_TYPE_PPAPI_BROKER, "unsandboxedPlugins"}}));
-  const auto it = kSettingsPathOverrides.find(type);
+  static base::NoDestructor<std::map<ContentSettingsType, std::string>>
+      kSettingsPathOverrides(
+          {{CONTENT_SETTINGS_TYPE_AUTOMATIC_DOWNLOADS, "automaticDownloads"},
+           {CONTENT_SETTINGS_TYPE_BACKGROUND_SYNC, "backgroundSync"},
+           {CONTENT_SETTINGS_TYPE_MEDIASTREAM_MIC, "microphone"},
+           {CONTENT_SETTINGS_TYPE_MEDIASTREAM_CAMERA, "camera"},
+           {CONTENT_SETTINGS_TYPE_MIDI_SYSEX, "midiDevices"},
+           {CONTENT_SETTINGS_TYPE_PLUGINS, "flash"},
+           {CONTENT_SETTINGS_TYPE_ADS, "ads"},
+           {CONTENT_SETTINGS_TYPE_PPAPI_BROKER, "unsandboxedPlugins"}});
+  const auto it = kSettingsPathOverrides->find(type);
   const std::string content_type_path =
-      (it == kSettingsPathOverrides.end())
+      (it == kSettingsPathOverrides->end())
           ? site_settings::ContentSettingsTypeToGroupName(type)
           : it->second;
 
@@ -178,7 +173,7 @@ void ShowSiteSettingsImpl(Browser* browser, Profile* profile, const GURL& url) {
   std::string link_destination(chrome::kChromeUIContentSettingsURL);
   // TODO(https://crbug.com/444047): Site Details should work with file:// urls
   // when this bug is fixed, so add it to the whitelist when that happens.
-  if (!site_origin.unique() && (url.SchemeIsHTTPOrHTTPS() ||
+  if (!site_origin.opaque() && (url.SchemeIsHTTPOrHTTPS() ||
                                 url.SchemeIs(extensions::kExtensionScheme))) {
     std::string origin_string = site_origin.Serialize();
     url::RawCanonOutputT<char> percent_encoded_origin;
@@ -244,14 +239,6 @@ void ShowExtensions(Browser* browser,
   ShowSingletonTabOverwritingNTP(browser, std::move(params));
 }
 
-void ShowConflicts(Browser* browser) {
-#if defined(OS_WIN)
-  EnumerateModulesModel::GetInstance()->AcknowledgeConflictNotification();
-#endif
-
-  ShowSingletonTab(browser, GURL(kChromeUIConflictsURL));
-}
-
 void ShowHelp(Browser* browser, HelpSource source) {
   ShowHelpImpl(browser, browser->profile(), source);
 }
@@ -284,7 +271,7 @@ bool IsTrustedPopupWindowWithScheme(const Browser* browser,
     return false;
   if (scheme.empty())  // Any trusted popup window
     return true;
-  const content::WebContents* web_contents =
+  content::WebContents* web_contents =
       browser->tab_strip_model()->GetWebContentsAt(0);
   if (!web_contents)
     return false;
@@ -426,7 +413,7 @@ void ShowBrowserSignin(Browser* browser,
       !signin::DiceMethodGreaterOrEqual(
           AccountConsistencyModeManager::GetMethodForProfile(
               browser->profile()),
-          signin::AccountConsistencyMethod::kDicePrepareMigration) &&
+          signin::AccountConsistencyMethod::kDiceMigration) &&
       browser->tab_strip_model()->empty();
 #endif  // defined(OS_CHROMEOS)
   if (show_full_tab_chrome_signin_page) {
@@ -440,8 +427,11 @@ void ShowBrowserSignin(Browser* browser,
 #if defined(OS_CHROMEOS)
     NOTREACHED();
 #else
-    browser->signin_view_controller()->ShowSignin(
-        profiles::BUBBLE_VIEW_MODE_GAIA_SIGNIN, browser, access_point);
+    profiles::BubbleViewMode bubble_view_mode =
+        manager->IsAuthenticated() ? profiles::BUBBLE_VIEW_MODE_GAIA_REAUTH
+                                   : profiles::BUBBLE_VIEW_MODE_GAIA_SIGNIN;
+    browser->signin_view_controller()->ShowSignin(bubble_view_mode, browser,
+                                                  access_point);
 #endif
   }
 }

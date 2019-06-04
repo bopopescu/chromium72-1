@@ -13,6 +13,9 @@
 #include "SkSafe_math.h"
 #include <float.h>
 #include <math.h>
+#include <cstring>
+#include <limits>
+
 
 #if SK_CPU_SSE_LEVEL >= SK_CPU_SSE_LEVEL_SSE1
     #include <xmmintrin.h>
@@ -137,10 +140,9 @@ static inline float sk_double_to_float(double x) {
     return static_cast<float>(x);
 }
 
-static const uint32_t kIEEENotANumber = 0x7fffffff;
-#define SK_FloatNaN                 (*SkTCast<const float*>(&kIEEENotANumber))
-#define SK_FloatInfinity            (+(float)INFINITY)
-#define SK_FloatNegativeInfinity    (-(float)INFINITY)
+#define SK_FloatNaN                 std::numeric_limits<float>::quiet_NaN()
+#define SK_FloatInfinity            (+std::numeric_limits<float>::infinity())
+#define SK_FloatNegativeInfinity    (-std::numeric_limits<float>::infinity())
 
 static inline float sk_float_rsqrt_portable(float x) {
     // Get initial estimate.
@@ -206,6 +208,14 @@ __attribute__((no_sanitize("float-divide-by-zero")))
 #endif
 static inline double sk_ieee_double_divide(double numer, double denom) {
     return numer / denom;
+}
+
+// While we clean up divide by zero, we'll replace places that do divide by zero with this TODO.
+static inline float sk_ieee_float_divide_TODO_IS_DIVIDE_BY_ZERO_SAFE_HERE(float n, float d) {
+    return sk_ieee_float_divide(n,d);
+}
+static inline float sk_ieee_double_divide_TODO_IS_DIVIDE_BY_ZERO_SAFE_HERE(double n, double d) {
+    return sk_ieee_double_divide(n,d);
 }
 
 #endif

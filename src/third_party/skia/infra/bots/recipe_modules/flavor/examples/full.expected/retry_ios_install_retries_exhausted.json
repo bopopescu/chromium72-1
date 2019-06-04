@@ -79,7 +79,7 @@
     "cmd": [
       "ideviceinstaller",
       "-i",
-      "[START_DIR]/build/out/Release/dm.app"
+      "[START_DIR]/build/dm.app"
     ],
     "env": {
       "CHROME_HEADLESS": "1",
@@ -109,7 +109,7 @@
     "cmd": [
       "ideviceinstaller",
       "-i",
-      "[START_DIR]/build/out/Release/dm.app"
+      "[START_DIR]/build/dm.app"
     ],
     "env": {
       "CHROME_HEADLESS": "1",
@@ -123,9 +123,12 @@
     ]
   },
   {
-    "name": "$result",
-    "reason": "Infra Failure: Step('install_dm (attempt 2)') returned 1",
-    "recipe_result": null,
-    "status_code": 1
+    "failure": {
+      "failure": {
+        "step": "install_dm (attempt 2)"
+      },
+      "humanReason": "Infra Failure: Step('install_dm (attempt 2)') returned 1"
+    },
+    "name": "$result"
   }
 ]

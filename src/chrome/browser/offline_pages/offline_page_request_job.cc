@@ -10,7 +10,6 @@
 #include "base/time/time.h"
 #include "chrome/browser/offline_pages/offline_page_utils.h"
 #include "chrome/browser/renderer_host/chrome_navigation_ui_data.h"
-#include "components/previews/core/previews_decider.h"
 #include "content/public/browser/resource_request_info.h"
 #include "content/public/common/resource_type.h"
 #include "net/url_request/url_request.h"
@@ -27,7 +26,8 @@ class OfflinePageRequestInfo : public base::SupportsUserData::Data {
   OfflinePageRequestInfo() : use_default_(false) {}
   ~OfflinePageRequestInfo() override {}
 
-  static OfflinePageRequestInfo* GetFromRequest(net::URLRequest* request) {
+  static OfflinePageRequestInfo* GetFromRequest(
+      const net::URLRequest* request) {
     return static_cast<OfflinePageRequestInfo*>(
         request->GetUserData(&kUserDataKey));
   }
@@ -43,17 +43,12 @@ class OfflinePageRequestInfo : public base::SupportsUserData::Data {
   DISALLOW_COPY_AND_ASSIGN(OfflinePageRequestInfo);
 };
 
-bool GetTabId(content::WebContents* web_contents, int* tab_id) {
-  return OfflinePageUtils::GetTabId(web_contents, tab_id);
-}
-
 }  // namespace
 
 // static
 OfflinePageRequestJob* OfflinePageRequestJob::Create(
     net::URLRequest* request,
-    net::NetworkDelegate* network_delegate,
-    previews::PreviewsDecider* previews_decider) {
+    net::NetworkDelegate* network_delegate) {
   const content::ResourceRequestInfo* resource_request_info =
       content::ResourceRequestInfo::ForRequest(request);
   if (!resource_request_info)
@@ -85,15 +80,13 @@ OfflinePageRequestJob* OfflinePageRequestJob::Create(
                          std::make_unique<OfflinePageRequestInfo>());
   }
 
-  return new OfflinePageRequestJob(request, network_delegate, previews_decider);
+  return new OfflinePageRequestJob(request, network_delegate);
 }
 
 OfflinePageRequestJob::OfflinePageRequestJob(
     net::URLRequest* request,
-    net::NetworkDelegate* network_delegate,
-    previews::PreviewsDecider* previews_decider)
-    : net::URLRequestJob(request, network_delegate),
-      previews_decider_(previews_decider) {}
+    net::NetworkDelegate* network_delegate)
+    : net::URLRequestJob(request, network_delegate) {}
 
 OfflinePageRequestJob::~OfflinePageRequestJob() {}
 
@@ -150,7 +143,8 @@ bool OfflinePageRequestJob::CopyFragmentOnRedirect(const GURL& location) const {
 }
 
 bool OfflinePageRequestJob::GetMimeType(std::string* mime_type) const {
-  if (request_handler_->IsServingOfflinePage()) {
+  if (request_handler_->IsServingOfflinePage() &&
+      request()->status().is_success()) {
     *mime_type = "multipart/related";
     return true;
   }
@@ -186,6 +180,9 @@ void OfflinePageRequestJob::NotifyReadRawDataComplete(int bytes_read) {
 
 void OfflinePageRequestJob::SetOfflinePageNavigationUIData(
     bool is_offline_page) {
+  // This method should be called before the response data is received.
+  DCHECK(!has_response_started());
+
   const content::ResourceRequestInfo* info =
       content::ResourceRequestInfo::ForRequest(request());
   ChromeNavigationUIData* navigation_data =
@@ -199,9 +196,12 @@ void OfflinePageRequestJob::SetOfflinePageNavigationUIData(
 }
 
 bool OfflinePageRequestJob::ShouldAllowPreview() const {
-  return previews_decider_ &&
-         previews_decider_->ShouldAllowPreview(*(request()),
-                                               previews::PreviewsType::OFFLINE);
+  const content::ResourceRequestInfo* info =
+      content::ResourceRequestInfo::ForRequest(request());
+
+  bool preview_allowed =
+      info && (info->GetPreviewsState() & content::OFFLINE_PAGE_ON);
+  return preview_allowed;
 }
 
 int OfflinePageRequestJob::GetPageTransition() const {
@@ -224,7 +224,7 @@ OfflinePageRequestHandler::Delegate::TabIdGetter
 OfflinePageRequestJob::GetTabIdGetter() const {
   if (!tab_id_getter_.is_null())
     return tab_id_getter_;
-  return base::Bind(&GetTabId);
+  return base::Bind(&OfflinePageUtils::GetTabId);
 }
 
 }  // namespace offline_pages

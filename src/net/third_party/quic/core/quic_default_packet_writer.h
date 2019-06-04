@@ -5,14 +5,14 @@
 #ifndef NET_THIRD_PARTY_QUIC_CORE_QUIC_DEFAULT_PACKET_WRITER_H_
 #define NET_THIRD_PARTY_QUIC_CORE_QUIC_DEFAULT_PACKET_WRITER_H_
 
-#include <stddef.h>
+#include <cstddef>
 
 #include "base/macros.h"
 #include "net/third_party/quic/core/quic_packet_writer.h"
 #include "net/third_party/quic/platform/api/quic_export.h"
 #include "net/third_party/quic/platform/api/quic_socket_address.h"
 
-namespace net {
+namespace quic {
 
 struct WriteResult;
 
@@ -20,6 +20,8 @@ struct WriteResult;
 class QUIC_EXPORT_PRIVATE QuicDefaultPacketWriter : public QuicPacketWriter {
  public:
   explicit QuicDefaultPacketWriter(int fd);
+  QuicDefaultPacketWriter(const QuicDefaultPacketWriter&) = delete;
+  QuicDefaultPacketWriter& operator=(const QuicDefaultPacketWriter&) = delete;
   ~QuicDefaultPacketWriter() override;
 
   // QuicPacketWriter
@@ -33,6 +35,11 @@ class QUIC_EXPORT_PRIVATE QuicDefaultPacketWriter : public QuicPacketWriter {
   void SetWritable() override;
   QuicByteCount GetMaxPacketSize(
       const QuicSocketAddress& peer_address) const override;
+  bool SupportsReleaseTime() const override;
+  bool IsBatchMode() const override;
+  char* GetNextWriteLocation(const QuicIpAddress& self_address,
+                             const QuicSocketAddress& peer_address) override;
+  WriteResult Flush() override;
 
   void set_fd(int fd) { fd_ = fd; }
 
@@ -43,10 +50,8 @@ class QUIC_EXPORT_PRIVATE QuicDefaultPacketWriter : public QuicPacketWriter {
  private:
   int fd_;
   bool write_blocked_;
-
-  DISALLOW_COPY_AND_ASSIGN(QuicDefaultPacketWriter);
 };
 
-}  // namespace net
+}  // namespace quic
 
 #endif  // NET_THIRD_PARTY_QUIC_CORE_QUIC_DEFAULT_PACKET_WRITER_H_

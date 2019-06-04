@@ -65,8 +65,6 @@ source_set("vaapi") {
     "vaapi_h264_accelerator.h",
     "vaapi_jpeg_decode_accelerator.cc",
     "vaapi_jpeg_decode_accelerator.h",
-    "vaapi_jpeg_decoder.cc",
-    "vaapi_jpeg_decoder.h",
     "vaapi_jpeg_encode_accelerator.cc",
     "vaapi_jpeg_encode_accelerator.h",
     "vaapi_jpeg_encoder.cc",
@@ -75,6 +73,8 @@ source_set("vaapi") {
     "vaapi_picture.h",
     "vaapi_picture_factory.cc",
     "vaapi_picture_factory.h",
+    "vaapi_utils.cc",
+    "vaapi_utils.h",
     "vaapi_video_decode_accelerator.cc",
     "vaapi_video_decode_accelerator.h",
     "vaapi_video_encode_accelerator.cc",
@@ -140,9 +140,27 @@ source_set("unit_test") {
     "//base/test:test_support",
     "//gpu:test_support",
     "//media/gpu:common",
+    "//mojo/core/embedder",
     "//testing/gmock",
     "//testing/gtest",
     "//ui/gfx:test_support",
     "//ui/gfx/geometry",
+  ]
+}
+
+source_set("jpeg_decode_accelerator_unit_test") {
+  testonly = true
+  sources = [
+    "vaapi_jpeg_decode_accelerator_unittest.cc",
+  ]
+  deps = [
+    ":vaapi",
+    "//base/test:test_support",
+    "//gpu:test_support",
+    "//media:test_support",
+    "//media/gpu:common",
+    "//testing/gmock",
+    "//testing/gtest",
+    "//ui/gfx:test_support",
   ]
 }

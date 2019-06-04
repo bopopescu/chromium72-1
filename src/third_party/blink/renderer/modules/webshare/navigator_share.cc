@@ -8,7 +8,6 @@
 #include "third_party/blink/public/platform/platform.h"
 #include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/dom/dom_exception.h"
-#include "third_party/blink/renderer/core/dom/exception_code.h"
 #include "third_party/blink/renderer/core/execution_context/execution_context.h"
 #include "third_party/blink/renderer/core/frame/local_frame.h"
 #include "third_party/blink/renderer/core/frame/navigator.h"
@@ -69,13 +68,14 @@ void NavigatorShare::ShareClientImpl::Callback(mojom::blink::ShareError error) {
   if (error == mojom::blink::ShareError::OK) {
     resolver_->Resolve();
   } else {
-    resolver_->Reject(DOMException::Create(kAbortError, ErrorToString(error)));
+    resolver_->Reject(DOMException::Create(DOMExceptionCode::kAbortError,
+                                           ErrorToString(error)));
   }
 }
 
 void NavigatorShare::ShareClientImpl::OnConnectionError() {
   resolver_->Reject(DOMException::Create(
-      kAbortError,
+      DOMExceptionCode::kAbortError,
       "Internal error: could not connect to Web Share interface."));
 }
 
@@ -85,7 +85,7 @@ NavigatorShare& NavigatorShare::From(Navigator& navigator) {
   NavigatorShare* supplement =
       Supplement<Navigator>::From<NavigatorShare>(navigator);
   if (!supplement) {
-    supplement = new NavigatorShare();
+    supplement = MakeGarbageCollected<NavigatorShare>();
     ProvideTo(navigator, supplement);
   }
   return *supplement;
@@ -101,11 +101,11 @@ NavigatorShare::NavigatorShare() = default;
 const char NavigatorShare::kSupplementName[] = "NavigatorShare";
 
 ScriptPromise NavigatorShare::share(ScriptState* script_state,
-                                    const ShareData& share_data) {
-  Document* doc = ToDocument(ExecutionContext::From(script_state));
-  DCHECK(doc);
+                                    const ShareData* share_data) {
+  Document* doc = To<Document>(ExecutionContext::From(script_state));
 
-  if (!share_data.hasTitle() && !share_data.hasText() && !share_data.hasURL()) {
+  if (!share_data->hasTitle() && !share_data->hasText() &&
+      !share_data->hasURL()) {
     v8::Local<v8::Value> error = V8ThrowException::CreateTypeError(
         script_state->GetIsolate(),
         "No known share data fields supplied. If using only new fields (other "
@@ -113,16 +113,16 @@ ScriptPromise NavigatorShare::share(ScriptState* script_state,
     return ScriptPromise::Reject(script_state, error);
   }
 
-  KURL full_url = doc->CompleteURL(share_data.url());
+  KURL full_url = doc->CompleteURL(share_data->url());
   if (!full_url.IsNull() && !full_url.IsValid()) {
     v8::Local<v8::Value> error = V8ThrowException::CreateTypeError(
         script_state->GetIsolate(), "Invalid URL");
     return ScriptPromise::Reject(script_state, error);
   }
 
-  if (!Frame::HasTransientUserActivation(doc ? doc->GetFrame() : nullptr)) {
+  if (!LocalFrame::HasTransientUserActivation(doc->GetFrame())) {
     DOMException* error = DOMException::Create(
-        kNotAllowedError,
+        DOMExceptionCode::kNotAllowedError,
         "Must be handling a user gesture to perform a share request.");
     return ScriptPromise::RejectWithDOMException(script_state, error);
   }
@@ -131,7 +131,7 @@ ScriptPromise NavigatorShare::share(ScriptState* script_state,
     LocalFrame* frame = doc->GetFrame();
     if (!frame) {
       DOMException* error =
-          DOMException::Create(kAbortError,
+          DOMException::Create(DOMExceptionCode::kAbortError,
                                "Internal error: document frame is missing (the "
                                "navigator may be detached).");
       return ScriptPromise::RejectWithDOMException(script_state, error);
@@ -144,13 +144,14 @@ ScriptPromise NavigatorShare::share(ScriptState* script_state,
   }
 
   ScriptPromiseResolver* resolver = ScriptPromiseResolver::Create(script_state);
-  ShareClientImpl* client = new ShareClientImpl(this, resolver);
+  ShareClientImpl* client =
+      MakeGarbageCollected<ShareClientImpl>(this, resolver);
   clients_.insert(client);
   ScriptPromise promise = resolver->Promise();
 
   service_->Share(
-      share_data.hasTitle() ? share_data.title() : g_empty_string,
-      share_data.hasText() ? share_data.text() : g_empty_string, full_url,
+      share_data->hasTitle() ? share_data->title() : g_empty_string,
+      share_data->hasText() ? share_data->text() : g_empty_string, full_url,
       WTF::Bind(&ShareClientImpl::Callback, WrapPersistent(client)));
 
   return promise;
@@ -158,7 +159,7 @@ ScriptPromise NavigatorShare::share(ScriptState* script_state,
 
 ScriptPromise NavigatorShare::share(ScriptState* script_state,
                                     Navigator& navigator,
-                                    const ShareData& share_data) {
+                                    const ShareData* share_data) {
   return From(navigator).share(script_state, share_data);
 }
 

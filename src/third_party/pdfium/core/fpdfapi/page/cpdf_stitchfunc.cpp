@@ -43,14 +43,14 @@ bool CPDF_StitchFunc::v_Init(const CPDF_Object* pObj,
   if (!pEncodeArray)
     return false;
 
-  const uint32_t nSubs = pFunctionsArray->GetCount();
+  const uint32_t nSubs = pFunctionsArray->size();
   if (nSubs == 0)
     return false;
 
   // Check array sizes. The checks are slightly relaxed to allow the "Bounds"
   // and "Encode" arrays to have more than the required number of elements.
   {
-    if (pBoundsArray->GetCount() < nSubs - 1)
+    if (pBoundsArray->size() < nSubs - 1)
       return false;
 
     FX_SAFE_UINT32 nExpectedEncodeSize = nSubs;
@@ -58,7 +58,7 @@ bool CPDF_StitchFunc::v_Init(const CPDF_Object* pObj,
     if (!nExpectedEncodeSize.IsValid())
       return false;
 
-    if (pEncodeArray->GetCount() < nExpectedEncodeSize.ValueOrDie())
+    if (pEncodeArray->size() < nExpectedEncodeSize.ValueOrDie())
       return false;
   }
 
@@ -96,10 +96,10 @@ bool CPDF_StitchFunc::v_Init(const CPDF_Object* pObj,
   }
 
   m_bounds.reserve(nSubs + 1);
-  m_bounds.push_back(m_pDomains[0]);
+  m_bounds.push_back(m_Domains[0]);
   for (uint32_t i = 0; i < nSubs - 1; i++)
     m_bounds.push_back(pBoundsArray->GetFloatAt(i));
-  m_bounds.push_back(m_pDomains[1]);
+  m_bounds.push_back(m_Domains[1]);
 
   m_encode.reserve(nSubs * 2);
   for (uint32_t i = 0; i < nSubs * 2; i++)

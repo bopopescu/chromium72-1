@@ -16,10 +16,10 @@
 #include "net/http/http_auth_handler_factory.h"
 #include "net/http/http_server_properties_impl.h"
 #include "net/http/transport_security_state.h"
-#include "net/quic/chromium/mock_crypto_client_stream_factory.h"
-#include "net/quic/chromium/mock_quic_data.h"
-#include "net/quic/chromium/quic_http_utils.h"
-#include "net/quic/chromium/quic_test_packet_maker.h"
+#include "net/quic/mock_crypto_client_stream_factory.h"
+#include "net/quic/mock_quic_data.h"
+#include "net/quic/quic_http_utils.h"
+#include "net/quic/quic_test_packet_maker.h"
 #include "net/socket/socket_tag.h"
 #include "net/socket/socket_test_util.h"
 #include "net/ssl/channel_id_service.h"
@@ -28,6 +28,7 @@
 #include "net/test/gtest_util.h"
 #include "net/test/test_data_directory.h"
 #include "net/test/test_with_scoped_task_environment.h"
+#include "net/third_party/quic/core/quic_utils.h"
 #include "net/third_party/quic/core/quic_versions.h"
 #include "net/third_party/quic/test_tools/mock_clock.h"
 #include "net/third_party/quic/test_tools/mock_random.h"
@@ -44,17 +45,19 @@ const char kOriginHost[] = "www.google.org";
 const int kOriginPort = 443;
 const char kUserAgent[] = "Mozilla/1.0";
 
-const QuicStreamId kClientDataStreamId1 = kHeadersStreamId + 2;
-
 class MockSSLConfigService : public SSLConfigService {
  public:
   MockSSLConfigService() = default;
+  ~MockSSLConfigService() override = default;
 
   void GetSSLConfig(SSLConfig* config) override { *config = config_; }
 
- private:
-  ~MockSSLConfigService() override = default;
+  bool CanShareConnectionWithClientCerts(
+      const std::string& hostname) const override {
+    return false;
+  }
 
+ private:
   SSLConfig config_;
 };
 
@@ -63,7 +66,8 @@ class MockSSLConfigService : public SSLConfigService {
 namespace test {
 
 class HttpProxyClientSocketWrapperTest
-    : public ::testing::TestWithParam<std::tuple<QuicTransportVersion, bool>>,
+    : public ::testing::TestWithParam<
+          std::tuple<quic::QuicTransportVersion, bool>>,
       public WithScopedTaskEnvironment {
  protected:
   static const bool kFin = true;
@@ -80,28 +84,26 @@ class HttpProxyClientSocketWrapperTest
         cert_transparency_verifier_(new DoNothingCTVerifier()),
         random_generator_(0),
         quic_version_(std::get<0>(GetParam())),
+        client_data_stream_id1_(
+            quic::QuicUtils::GetHeadersStreamId(quic_version_) + 2),
         client_headers_include_h2_stream_dependency_(std::get<1>(GetParam())),
         client_maker_(quic_version_,
                       0,
                       &clock_,
                       kProxyHost,
-                      Perspective::IS_CLIENT,
+                      quic::Perspective::IS_CLIENT,
                       client_headers_include_h2_stream_dependency_),
         server_maker_(quic_version_,
                       0,
                       &clock_,
                       kProxyHost,
-                      Perspective::IS_SERVER,
+                      quic::Perspective::IS_SERVER,
                       false),
         header_stream_offset_(0),
         response_offset_(0),
         store_server_configs_in_properties_(false),
         idle_connection_timeout_seconds_(kIdleConnectionTimeoutSeconds),
-        reduced_ping_timeout_seconds_(kPingTimeoutSecs),
-        migrate_sessions_on_network_change_(false),
-        migrate_sessions_early_(false),
-        migrate_sessions_on_network_change_v2_(false),
-        migrate_sessions_early_v2_(false),
+        reduced_ping_timeout_seconds_(quic::kPingTimeoutSecs),
         allow_server_migration_(false),
         race_cert_verification_(false),
         estimate_initial_rtt_(false),
@@ -110,7 +112,8 @@ class HttpProxyClientSocketWrapperTest
         http_auth_handler_factory_(
             HttpAuthHandlerFactory::CreateDefault(&host_resolver_)),
         client_socket_wrapper_(nullptr) {
-    clock_.AdvanceTime(QuicTime::Delta::FromSeconds(1));  // why is this here???
+    clock_.AdvanceTime(
+        quic::QuicTime::Delta::FromSeconds(1));  // why is this here???
   }
 
   void Initialize() {
@@ -118,27 +121,31 @@ class HttpProxyClientSocketWrapperTest
     quic_stream_factory_.reset(new QuicStreamFactory(
         net_log_.net_log(), &host_resolver_, ssl_config_service_.get(),
         &socket_factory_, &http_server_properties_, cert_verifier_.get(),
-        &ct_policy_enforcer_, channel_id_service_.get(),
-        &transport_security_state_, cert_transparency_verifier_.get(),
+        &ct_policy_enforcer_, &transport_security_state_,
+        cert_transparency_verifier_.get(),
         /*SocketPerformanceWatcherFactory=*/nullptr,
         &crypto_client_stream_factory_, &random_generator_, &clock_,
-        kDefaultMaxPacketSize, /*user_agent_id=*/kUserAgent,
+        quic::kDefaultMaxPacketSize, /*user_agent_id=*/kUserAgent,
         store_server_configs_in_properties_,
         /*close_sessions_on_ip_change=*/true,
+        /*goaway_sessions_on_ip_change=*/false,
         /*mark_quic_broken_when_network_blackholes=*/false,
         idle_connection_timeout_seconds_, reduced_ping_timeout_seconds_,
         /*max_time_before_crypto_handshake_seconds=*/
-        kMaxTimeForCryptoHandshakeSecs,
+        quic::kMaxTimeForCryptoHandshakeSecs,
         /*max_idle_time_before_crypto_handshake_seconds=*/
-        kInitialIdleTimeoutSecs,
-        migrate_sessions_on_network_change_, migrate_sessions_early_,
-        migrate_sessions_on_network_change_v2_, migrate_sessions_early_v2_,
+        quic::kInitialIdleTimeoutSecs,
+        /*migrate_sessions_on_network_change_v2=*/false,
+        /*migrate_sessions_early_v2=*/false,
+        /*retry_on_alternate_network_before_handshake=*/false,
+        /*race_stale_dns_on_connection=*/false,
+        /*go_away_on_path_degrading=*/false,
         base::TimeDelta::FromSeconds(kMaxTimeOnNonDefaultNetworkSecs),
+        kMaxMigrationsToNonDefaultNetworkOnWriteError,
         kMaxMigrationsToNonDefaultNetworkOnPathDegrading,
         allow_server_migration_, race_cert_verification_, estimate_initial_rtt_,
         client_headers_include_h2_stream_dependency_, connection_options_,
-        client_connection_options_, /*enable_token_binding=*/false,
-        /*enable_channel_id=*/false,
+        client_connection_options_,
         /*enable_socket_recv_optimization=*/false));
   }
 
@@ -148,41 +155,42 @@ class HttpProxyClientSocketWrapperTest
     (*block)["user-agent"] = kUserAgent;
   }
 
-  std::unique_ptr<QuicReceivedPacket> ConstructSettingsPacket(
-      QuicPacketNumber packet_number) {
+  std::unique_ptr<quic::QuicReceivedPacket> ConstructSettingsPacket(
+      quic::QuicPacketNumber packet_number) {
     return client_maker_.MakeInitialSettingsPacket(packet_number,
                                                    &header_stream_offset_);
   }
 
-  std::unique_ptr<QuicReceivedPacket> ConstructConnectRequestPacket(
-      QuicPacketNumber packet_number) {
+  std::unique_ptr<quic::QuicReceivedPacket> ConstructConnectRequestPacket(
+      quic::QuicPacketNumber packet_number,
+      RequestPriority priority) {
     spdy::SpdyHeaderBlock block;
     PopulateConnectRequestIR(&block);
     return client_maker_.MakeRequestHeadersPacket(
-        packet_number, kClientDataStreamId1, kIncludeVersion, !kFin,
-        ConvertRequestPriorityToQuicPriority(DEFAULT_PRIORITY),
-        std::move(block), 0, nullptr, &header_stream_offset_);
+        packet_number, client_data_stream_id1_, kIncludeVersion, !kFin,
+        ConvertRequestPriorityToQuicPriority(priority), std::move(block), 0,
+        nullptr, &header_stream_offset_);
   }
 
-  std::unique_ptr<QuicReceivedPacket> ConstructServerConnectReplyPacket(
-      QuicPacketNumber packet_number,
+  std::unique_ptr<quic::QuicReceivedPacket> ConstructServerConnectReplyPacket(
+      quic::QuicPacketNumber packet_number,
       bool fin) {
     spdy::SpdyHeaderBlock block;
     block[":status"] = "200";
 
     return server_maker_.MakeResponseHeadersPacket(
-        packet_number, kClientDataStreamId1, !kIncludeVersion, fin,
+        packet_number, client_data_stream_id1_, !kIncludeVersion, fin,
         std::move(block), nullptr, &response_offset_);
   }
 
-  std::unique_ptr<QuicReceivedPacket> ConstructAckAndRstPacket(
-      QuicPacketNumber packet_number,
-      QuicRstStreamErrorCode error_code,
-      QuicPacketNumber largest_received,
-      QuicPacketNumber smallest_received,
-      QuicPacketNumber least_unacked) {
+  std::unique_ptr<quic::QuicReceivedPacket> ConstructAckAndRstPacket(
+      quic::QuicPacketNumber packet_number,
+      quic::QuicRstStreamErrorCode error_code,
+      quic::QuicPacketNumber largest_received,
+      quic::QuicPacketNumber smallest_received,
+      quic::QuicPacketNumber least_unacked) {
     return client_maker_.MakeAckAndRstPacket(
-        packet_number, !kIncludeVersion, kClientDataStreamId1, error_code,
+        packet_number, !kIncludeVersion, client_data_stream_id1_, error_code,
         largest_received, smallest_received, least_unacked, kSendFeedback);
   }
 
@@ -200,13 +208,13 @@ class HttpProxyClientSocketWrapperTest
   HostPortPair proxy_host_port_;
   HostPortPair endpoint_host_port_;
 
-  MockClock clock_;
+  quic::MockClock clock_;
   MockQuicData mock_quic_data_;
 
   // QuicStreamFactory environment
   NetLogWithSource net_log_;
   MockHostResolver host_resolver_;
-  scoped_refptr<SSLConfigService> ssl_config_service_;
+  std::unique_ptr<SSLConfigService> ssl_config_service_;
   MockTaggingClientSocketFactory socket_factory_;
   HttpServerPropertiesImpl http_server_properties_;
   std::unique_ptr<MockCertVerifier> cert_verifier_;
@@ -215,28 +223,25 @@ class HttpProxyClientSocketWrapperTest
   TransportSecurityState transport_security_state_;
   std::unique_ptr<DoNothingCTVerifier> cert_transparency_verifier_;
   MockCryptoClientStreamFactory crypto_client_stream_factory_;
-  MockRandom random_generator_;
+  quic::test::MockRandom random_generator_;
 
-  const QuicTransportVersion quic_version_;
+  const quic::QuicTransportVersion quic_version_;
+  const quic::QuicStreamId client_data_stream_id1_;
   const bool client_headers_include_h2_stream_dependency_;
   QuicTestPacketMaker client_maker_;
   QuicTestPacketMaker server_maker_;
-  QuicStreamOffset header_stream_offset_;
-  QuicStreamOffset response_offset_;
+  quic::QuicStreamOffset header_stream_offset_;
+  quic::QuicStreamOffset response_offset_;
 
   // Variables to configure QuicStreamFactory.
   bool store_server_configs_in_properties_;
   int idle_connection_timeout_seconds_;
   int reduced_ping_timeout_seconds_;
-  bool migrate_sessions_on_network_change_;
-  bool migrate_sessions_early_;
-  bool migrate_sessions_on_network_change_v2_;
-  bool migrate_sessions_early_v2_;
   bool allow_server_migration_;
   bool race_cert_verification_;
   bool estimate_initial_rtt_;
-  QuicTagVector connection_options_;
-  QuicTagVector client_connection_options_;
+  quic::QuicTagVector connection_options_;
+  quic::QuicTagVector client_connection_options_;
 
   std::unique_ptr<QuicStreamFactory> quic_stream_factory_;
 
@@ -254,11 +259,17 @@ TEST_P(HttpProxyClientSocketWrapperTest, QuicProxy) {
   crypto_client_stream_factory_.AddProofVerifyDetails(&verify_details);
 
   mock_quic_data_.AddWrite(SYNCHRONOUS, ConstructSettingsPacket(1));
-  mock_quic_data_.AddWrite(SYNCHRONOUS, ConstructConnectRequestPacket(2));
+  mock_quic_data_.AddWrite(SYNCHRONOUS,
+                           ConstructConnectRequestPacket(2, HIGHEST));
   mock_quic_data_.AddRead(ASYNC, ConstructServerConnectReplyPacket(1, !kFin));
   mock_quic_data_.AddRead(SYNCHRONOUS, ERR_IO_PENDING);
   mock_quic_data_.AddWrite(
-      SYNCHRONOUS, ConstructAckAndRstPacket(3, QUIC_STREAM_CANCELLED, 1, 1, 1));
+      SYNCHRONOUS,
+      ConstructAckAndRstPacket(3, quic::QUIC_STREAM_CANCELLED, 1, 1, 1));
+  mock_quic_data_.AddWrite(
+      SYNCHRONOUS, client_maker_.MakeAckAndConnectionClosePacket(
+                       4, false, quic::QuicTime::Delta::FromMilliseconds(0), 1,
+                       1, 1, quic::QUIC_CONNECTION_CANCELLED, "net error"));
   mock_quic_data_.AddSocketDataToFactory(&socket_factory_);
 
   scoped_refptr<TransportSocketParams> transport_params =
@@ -266,15 +277,15 @@ TEST_P(HttpProxyClientSocketWrapperTest, QuicProxy) {
           proxy_host_port_, false, OnHostResolutionCallback(),
           TransportSocketParams::COMBINE_CONNECT_AND_WRITE_DEFAULT);
 
-  scoped_refptr<SSLSocketParams> ssl_params =
-      new SSLSocketParams(transport_params, nullptr, nullptr, proxy_host_port_,
-                          SSLConfig(), privacy_mode_, 0);
+  scoped_refptr<SSLSocketParams> ssl_params = new SSLSocketParams(
+      transport_params, nullptr, nullptr, proxy_host_port_, SSLConfig(),
+      privacy_mode_, false /* ignore_certificate_errors */);
   transport_params = nullptr;
 
   client_socket_wrapper_.reset(new HttpProxyClientSocketWrapper(
       /*group_name=*/std::string(), /*requiest_priority=*/DEFAULT_PRIORITY,
       /*socket_tag=*/SocketTag(),
-      /*respect_limits=*/ClientSocketPool::RespectLimits::DISABLED,
+      /*respect_limits=*/ClientSocketPool::RespectLimits::ENABLED,
       /*connect_timeout_duration=*/base::TimeDelta::FromHours(1),
       /*proxy_negotiation_timeout_duration=*/base::TimeDelta::FromHours(1),
       /*transport_pool=*/nullptr, /*ssl_pool=*/nullptr,
@@ -286,12 +297,15 @@ TEST_P(HttpProxyClientSocketWrapperTest, QuicProxy) {
 
   TestCompletionCallback callback;
   client_socket_wrapper_->Connect(callback.callback());
+  EXPECT_EQ(DEFAULT_PRIORITY, host_resolver_.request_priority(1));
 
+  client_socket_wrapper_->SetPriority(HIGHEST);
+
+  // Expect connect request packet with HIGHEST priority, not DEFAULT_PRIORITY.
   EXPECT_THAT(callback.WaitForResult(), IsOk());
 
   client_socket_wrapper_.reset();
   EXPECT_TRUE(mock_quic_data_.AllReadDataConsumed());
-  EXPECT_TRUE(mock_quic_data_.AllWriteDataConsumed());
 }
 
 // Test that the SocketTag is appropriately applied to the underlying socket
@@ -303,11 +317,17 @@ TEST_P(HttpProxyClientSocketWrapperTest, QuicProxySocketTag) {
   crypto_client_stream_factory_.AddProofVerifyDetails(&verify_details);
 
   mock_quic_data_.AddWrite(SYNCHRONOUS, ConstructSettingsPacket(1));
-  mock_quic_data_.AddWrite(SYNCHRONOUS, ConstructConnectRequestPacket(2));
+  mock_quic_data_.AddWrite(SYNCHRONOUS,
+                           ConstructConnectRequestPacket(2, DEFAULT_PRIORITY));
   mock_quic_data_.AddRead(ASYNC, ConstructServerConnectReplyPacket(1, !kFin));
   mock_quic_data_.AddRead(SYNCHRONOUS, ERR_IO_PENDING);
   mock_quic_data_.AddWrite(
-      SYNCHRONOUS, ConstructAckAndRstPacket(3, QUIC_STREAM_CANCELLED, 1, 1, 1));
+      SYNCHRONOUS,
+      ConstructAckAndRstPacket(3, quic::QUIC_STREAM_CANCELLED, 1, 1, 1));
+  mock_quic_data_.AddWrite(
+      SYNCHRONOUS, client_maker_.MakeAckAndConnectionClosePacket(
+                       4, false, quic::QuicTime::Delta::FromMilliseconds(0), 1,
+                       1, 1, quic::QUIC_CONNECTION_CANCELLED, "net error"));
   mock_quic_data_.AddSocketDataToFactory(&socket_factory_);
 
   scoped_refptr<TransportSocketParams> transport_params =
@@ -315,16 +335,16 @@ TEST_P(HttpProxyClientSocketWrapperTest, QuicProxySocketTag) {
           proxy_host_port_, false, OnHostResolutionCallback(),
           TransportSocketParams::COMBINE_CONNECT_AND_WRITE_DEFAULT);
 
-  scoped_refptr<SSLSocketParams> ssl_params =
-      new SSLSocketParams(transport_params, nullptr, nullptr, proxy_host_port_,
-                          SSLConfig(), privacy_mode_, 0);
+  scoped_refptr<SSLSocketParams> ssl_params = new SSLSocketParams(
+      transport_params, nullptr, nullptr, proxy_host_port_, SSLConfig(),
+      privacy_mode_, false /* ignore_certificate_errors */);
   transport_params = nullptr;
   SocketTag tag(getuid(), 0x87654321);
 
   client_socket_wrapper_.reset(new HttpProxyClientSocketWrapper(
       /*group_name=*/std::string(), /*requiest_priority=*/DEFAULT_PRIORITY,
       /*socket_tag=*/tag,
-      /*respect_limits=*/ClientSocketPool::RespectLimits::DISABLED,
+      /*respect_limits=*/ClientSocketPool::RespectLimits::ENABLED,
       /*connect_timeout_duration=*/base::TimeDelta::FromHours(1),
       /*proxy_negotiation_timeout_duration=*/base::TimeDelta::FromHours(1),
       /*transport_pool=*/nullptr, /*ssl_pool=*/nullptr,
@@ -345,15 +365,15 @@ TEST_P(HttpProxyClientSocketWrapperTest, QuicProxySocketTag) {
 
   client_socket_wrapper_.reset();
   EXPECT_TRUE(mock_quic_data_.AllReadDataConsumed());
-  EXPECT_TRUE(mock_quic_data_.AllWriteDataConsumed());
 }
 #endif
 
 INSTANTIATE_TEST_CASE_P(
     VersionIncludeStreamDependencySequence,
     HttpProxyClientSocketWrapperTest,
-    ::testing::Combine(::testing::ValuesIn(AllSupportedTransportVersions()),
-                       ::testing::Bool()));
+    ::testing::Combine(
+        ::testing::ValuesIn(quic::AllSupportedTransportVersions()),
+        ::testing::Bool()));
 
 };  // namespace test
 };  // namespace net

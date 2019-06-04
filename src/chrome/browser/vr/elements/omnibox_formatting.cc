@@ -44,18 +44,9 @@ TextFormatting ConvertClassification(
     if (classifications[i].style & ACMatchClassification::URL) {
       formatting.push_back(
           TextFormattingAttribute(color_scheme.hyperlink, current_range));
-    } else if (classifications[i].style & ACMatchClassification::INVISIBLE) {
-      formatting.push_back(
-          TextFormattingAttribute(SK_ColorTRANSPARENT, current_range));
     }
   }
   return formatting;
-}
-
-url_formatter::FormatUrlTypes GetVrFormatUrlTypes() {
-  return url_formatter::kFormatUrlOmitDefaults |
-         url_formatter::kFormatUrlOmitHTTPS |
-         url_formatter::kFormatUrlOmitTrivialSubdomains;
 }
 
 ElisionParameters GetElisionParameters(const GURL& gurl,

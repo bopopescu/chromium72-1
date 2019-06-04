@@ -14,6 +14,7 @@
 #include "base/observer_list.h"
 #include "base/time/clock.h"
 #include "base/time/time.h"
+#include "chromeos/chromeos_switches.h"
 #include "chromeos/components/tether/host_scanner.h"
 #include "chromeos/components/tether/host_scanner_operation.h"
 #include "chromeos/components/tether/notification_presenter.h"
@@ -27,9 +28,16 @@ class SessionManager;
 
 namespace chromeos {
 
+namespace device_sync {
+class DeviceSyncClient;
+}  // namespace device_sync
+
+namespace secure_channel {
+class SecureChannelClient;
+}  // namespace secure_channel
+
 namespace tether {
 
-class BleConnectionManager;
 class ConnectionPreserver;
 class DeviceIdTetherNetworkGuidMap;
 class GmsCoreNotificationsStateTrackerImpl;
@@ -53,10 +61,11 @@ class HostScannerImpl : public HostScanner,
   };
 
   HostScannerImpl(
+      device_sync::DeviceSyncClient* device_sync_client,
+      secure_channel::SecureChannelClient* secure_channel_client,
       NetworkStateHandler* network_state_handler,
       session_manager::SessionManager* session_manager,
       TetherHostFetcher* tether_host_fetcher,
-      BleConnectionManager* connection_manager,
       HostScanDevicePrioritizer* host_scan_device_prioritizer,
       TetherHostResponseRecorder* tether_host_response_recorder,
       GmsCoreNotificationsStateTrackerImpl*
@@ -107,10 +116,11 @@ class HostScannerImpl : public HostScanner,
   bool IsPotentialHotspotNotificationShowing();
   bool CanAvailableHostNotificationBeShown();
 
+  device_sync::DeviceSyncClient* device_sync_client_;
+  secure_channel::SecureChannelClient* secure_channel_client_;
   NetworkStateHandler* network_state_handler_;
   session_manager::SessionManager* session_manager_;
   TetherHostFetcher* tether_host_fetcher_;
-  BleConnectionManager* connection_manager_;
   HostScanDevicePrioritizer* host_scan_device_prioritizer_;
   TetherHostResponseRecorder* tether_host_response_recorder_;
   GmsCoreNotificationsStateTrackerImpl* gms_core_notifications_state_tracker_;
@@ -127,7 +137,7 @@ class HostScannerImpl : public HostScanner,
   std::unique_ptr<HostScannerOperation> host_scanner_operation_;
   std::unordered_set<std::string> tether_guids_in_cache_before_scan_;
 
-  base::ObserverList<Observer> observer_list_;
+  base::ObserverList<Observer>::Unchecked observer_list_;
   base::WeakPtrFactory<HostScannerImpl> weak_ptr_factory_;
 
   DISALLOW_COPY_AND_ASSIGN(HostScannerImpl);

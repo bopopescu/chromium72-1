@@ -9,6 +9,11 @@
 
 namespace content {
 
+const char kMediaStreamSourceTab[] = "tab";
+const char kMediaStreamSourceScreen[] = "screen";
+const char kMediaStreamSourceDesktop[] = "desktop";
+const char kMediaStreamSourceSystem[] = "system";
+
 const char MediaStreamSource::kSourceId[] = "sourceId";
 
 MediaStreamSource::MediaStreamSource() {
@@ -57,6 +62,11 @@ void MediaStreamSource::ResetSourceStoppedCallback() {
   DCHECK(thread_checker_.CalledOnValidThread());
   DCHECK(!stop_callback_.is_null());
   stop_callback_.Reset();
+}
+
+void MediaStreamSource::ChangeSource(const MediaStreamDevice& new_device) {
+  DCHECK(thread_checker_.CalledOnValidThread());
+  DoChangeSource(new_device);
 }
 
 }  // namespace content

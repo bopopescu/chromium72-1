@@ -10,10 +10,12 @@
 #include "base/macros.h"
 #include "third_party/blink/public/platform/web_input_event_result.h"
 #include "third_party/blink/renderer/core/core_export.h"
+#include "third_party/blink/renderer/core/dom/dom_node_ids.h"
 #include "third_party/blink/renderer/core/page/event_with_hit_test_results.h"
 #include "third_party/blink/renderer/platform/geometry/layout_size.h"
 #include "third_party/blink/renderer/platform/heap/handle.h"
 #include "third_party/blink/renderer/platform/heap/visitor.h"
+#include "third_party/blink/renderer/platform/scroll/scroll_snap_data.h"
 #include "third_party/blink/renderer/platform/scroll/scroll_types.h"
 #include "third_party/blink/renderer/platform/wtf/allocator.h"
 
@@ -34,9 +36,11 @@ class WebGestureEvent;
 // user action that causes scrolling or resizing is determined in other *Manager
 // classes and they call into this class for doing the work.
 class CORE_EXPORT ScrollManager
-    : public GarbageCollectedFinalized<ScrollManager> {
+    : public GarbageCollectedFinalized<ScrollManager>,
+      public SnapFlingClient {
  public:
   explicit ScrollManager(LocalFrame&);
+  virtual ~ScrollManager() = default;
   void Trace(blink::Visitor*);
 
   void Clear();
@@ -90,6 +94,16 @@ class CORE_EXPORT ScrollManager
   void ClearResizeScrollableArea(bool should_not_be_null);
   void SetResizeScrollableArea(PaintLayer*, IntPoint);
 
+  // SnapFlingClient implementation.
+  bool GetSnapFlingInfo(const gfx::Vector2dF& natural_displacement,
+                        gfx::Vector2dF* out_initial_position,
+                        gfx::Vector2dF* out_target_position) const override;
+  gfx::Vector2dF ScrollByForSnapFling(const gfx::Vector2dF& delta) override;
+  void ScrollEndForSnapFling() override;
+  void RequestAnimationForSnapFling() override;
+
+  void AnimateSnapFling(base::TimeTicks monotonic_time);
+
  private:
   WebInputEventResult HandleGestureScrollUpdate(const WebGestureEvent&);
   WebInputEventResult HandleGestureScrollBegin(const WebGestureEvent&);
@@ -103,14 +117,12 @@ class CORE_EXPORT ScrollManager
 
   Page* GetPage() const;
 
-  bool IsViewportScrollingElement(const Element&) const;
-
   bool HandleScrollGestureOnResizer(Node*, const WebGestureEvent&);
 
   void RecomputeScrollChain(const Node& start_node,
                             const ScrollState&,
-                            std::deque<int>& scroll_chain);
-  bool CanScroll(const ScrollState&, const Element& current_element);
+                            std::deque<DOMNodeId>& scroll_chain);
+  bool CanScroll(const ScrollState&, const Node& current_node);
 
   // scroller_size is set only when scrolling non root scroller.
   void ComputeScrollRelatedMetrics(
@@ -125,23 +137,25 @@ class CORE_EXPORT ScrollManager
   void NotifyScrollPhaseBeginForCustomizedScroll(const ScrollState&);
   void NotifyScrollPhaseEndForCustomizedScroll();
 
+  LayoutBox* LayoutBoxForSnapping() const;
+
   // NOTE: If adding a new field to this class please ensure that it is
   // cleared in |ScrollManager::clear()|.
 
   const Member<LocalFrame> frame_;
 
   // Only used with the ScrollCustomization runtime enabled feature.
-  std::deque<int> current_scroll_chain_;
+  std::deque<DOMNodeId> current_scroll_chain_;
 
   Member<Node> scroll_gesture_handling_node_;
 
   bool last_gesture_scroll_over_embedded_content_view_;
 
-  // The most recent element to scroll natively during this scroll
+  // The most recent Node to scroll natively during this scroll
   // sequence. Null if no native element has scrolled this scroll
   // sequence, or if the most recent element to scroll used scroll
   // customization.
-  Member<Element> previous_gesture_scrolled_element_;
+  Member<Node> previous_gesture_scrolled_node_;
 
   // True iff some of the delta has been consumed for the current
   // scroll sequence in this frame, or any child frames. Only used
@@ -158,6 +172,8 @@ class CORE_EXPORT ScrollManager
   Member<Scrollbar> scrollbar_handling_scroll_gesture_;
 
   Member<PaintLayerScrollableArea> resize_scrollable_area_;
+
+  std::unique_ptr<SnapFlingController> snap_fling_controller_;
 
   LayoutSize
       offset_from_resize_corner_;  // In the coords of m_resizeScrollableArea.

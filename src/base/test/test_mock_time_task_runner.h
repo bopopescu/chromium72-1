@@ -17,6 +17,7 @@
 #include "base/macros.h"
 #include "base/run_loop.h"
 #include "base/single_thread_task_runner.h"
+#include "base/synchronization/condition_variable.h"
 #include "base/synchronization/lock.h"
 #include "base/test/test_pending_task.h"
 #include "base/threading/thread_checker_impl.h"
@@ -205,6 +206,8 @@ class TestMockTimeTaskRunner : public SingleThreadTaskRunner,
   virtual void OnAfterTaskRun();
 
  private:
+  class NonOwningProxyTaskRunner;
+
   // MockClock implements TickClock and Clock. Always returns the then-current
   // mock time of |task_runner| as the current time or time ticks.
   class MockClock : public TickClock, public Clock {
@@ -277,6 +280,8 @@ class TestMockTimeTaskRunner : public SingleThreadTaskRunner,
 
   mutable Lock tasks_lock_;
   ConditionVariable tasks_lock_cv_;
+
+  const scoped_refptr<NonOwningProxyTaskRunner> proxy_task_runner_;
   std::unique_ptr<ThreadTaskRunnerHandle> thread_task_runner_handle_;
 
   // Set to true in RunLoop::Delegate::Quit() to signal the topmost

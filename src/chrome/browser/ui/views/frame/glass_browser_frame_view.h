@@ -8,7 +8,6 @@
 #include "base/compiler_specific.h"
 #include "base/macros.h"
 #include "base/win/scoped_gdi_object.h"
-#include "chrome/browser/ui/views/frame/avatar_button_manager.h"
 #include "chrome/browser/ui/views/frame/browser_non_client_frame_view.h"
 #include "chrome/browser/ui/views/frame/windows_10_caption_button.h"
 #include "chrome/browser/ui/views/tab_icon_view.h"
@@ -26,6 +25,10 @@ class GlassBrowserFrameView : public BrowserNonClientFrameView,
   // buttons) when the window is inactive. They are opaque when active.
   static constexpr SkAlpha kInactiveTitlebarFeatureAlpha = 0x65;
 
+  static constexpr char kClassName[] = "GlassBrowserFrameView";
+
+  static SkColor GetReadableFeatureColor(SkColor background_color);
+
   // Constructs a non-client view for an BrowserFrame.
   GlassBrowserFrameView(BrowserFrame* frame, BrowserView* browser_view);
   ~GlassBrowserFrameView() override;
@@ -35,11 +38,11 @@ class GlassBrowserFrameView : public BrowserNonClientFrameView,
   gfx::Rect GetBoundsForTabStrip(views::View* tabstrip) const override;
   int GetTopInset(bool restored) const override;
   int GetThemeBackgroundXInset() const override;
+  bool HasVisibleBackgroundTabShapes(ActiveState active_state) const override;
+  bool CanDrawStrokes() const override;
   void UpdateThrobber(bool running) override;
   gfx::Size GetMinimumSize() const override;
-  int GetTabStripLeftInset() const override;
-  void OnTabRemoved(int index) override;
-  void OnTabsMaxXChanged() override;
+  bool IsSingleTabModeAvailable() const override;
 
   // views::NonClientFrameView:
   gfx::Rect GetBoundsForClientView() const override;
@@ -67,25 +70,15 @@ class GlassBrowserFrameView : public BrowserNonClientFrameView,
 
   SkColor GetTitlebarColor() const;
 
+  views::Label* window_title_for_testing() { return window_title_; }
+
  protected:
   // views::View:
+  const char* GetClassName() const override;
   void OnPaint(gfx::Canvas* canvas) override;
   void Layout() override;
 
-  // BrowserNonClientFrameView:
-  AvatarButtonStyle GetAvatarButtonStyle() const override;
-
  private:
-  // views::NonClientFrameView:
-  bool DoesIntersectRect(const views::View* target,
-                         const gfx::Rect& rect) const override;
-
-  // Returns the thickness of the border around the client area (web content,
-  // toolbar, and tabs) that separates it from the frame border. If |restored|
-  // is true, this is calculated as if the window was restored, regardless of
-  // its current state.
-  int ClientBorderThickness(bool restored) const;
-
   // Returns the thickness of the window border for the left, right, and bottom
   // edges of the frame. On Windows 10 this is a mostly-transparent handle that
   // allows you to resize the window.
@@ -118,10 +111,6 @@ class GlassBrowserFrameView : public BrowserNonClientFrameView,
   // edge of the caption buttons.
   int MinimizeButtonX() const;
 
-  // Returns the spacing between the trailing edge of the tabstrip and the start
-  // of the caption buttons.
-  int TabStripCaptionSpacing() const;
-
   // Returns whether the toolbar is currently visible.
   bool IsToolbarVisible() const;
 
@@ -132,20 +121,13 @@ class GlassBrowserFrameView : public BrowserNonClientFrameView,
   Windows10CaptionButton* CreateCaptionButton(ViewID button_type,
                                               int accessible_name_resource_id);
 
+  SkColor GetTitlebarFeatureColor(ActiveState active_state) const;
+
   // Paint various sub-components of this view.
   void PaintTitlebar(gfx::Canvas* canvas) const;
-  void PaintClientEdge(gfx::Canvas* canvas) const;
-  void FillClientEdgeRects(int x,
-                           int y,
-                           int right,
-                           int bottom,
-                           SkColor color,
-                           gfx::Canvas* canvas) const;
 
   // Layout various sub-components of this view.
-  void LayoutIncognitoIcon();
   void LayoutTitleBar();
-  void LayoutProfileSwitcher();
   void LayoutCaptionButtons();
   void LayoutCaptionButton(Windows10CaptionButton* button,
                            int previous_button_x);
@@ -155,18 +137,12 @@ class GlassBrowserFrameView : public BrowserNonClientFrameView,
   // calculated as if the window was restored, regardless of its current state.
   gfx::Insets GetClientAreaInsets(bool restored) const;
 
-  // Returns the bounds of the client area for the specified view size.
-  gfx::Rect CalculateClientAreaBounds() const;
-
   // Starts/Stops the window throbber running.
   void StartThrobber();
   void StopThrobber();
 
   // Displays the next throbber frame.
   void DisplayNextThrobberFrame();
-
-  // The layout rect of the incognito icon, if visible.
-  gfx::Rect incognito_bounds_;
 
   // The bounds of the ClientView.
   gfx::Rect client_view_bounds_;

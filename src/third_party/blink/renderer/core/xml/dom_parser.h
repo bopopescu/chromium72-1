@@ -27,21 +27,28 @@
 namespace blink {
 
 class Document;
+class StringOrTrustedHTML;
+class ExceptionState;
 
 class DOMParser final : public ScriptWrappable {
   DEFINE_WRAPPERTYPEINFO();
 
  public:
   static DOMParser* Create(Document& document) {
-    return new DOMParser(document);
+    return MakeGarbageCollected<DOMParser>(document);
   }
 
-  Document* parseFromString(const String&, const String& type);
+  explicit DOMParser(Document&);
+
+  Document* parseFromString(const StringOrTrustedHTML&,
+                            const String& type,
+                            ExceptionState& exception_state);
+  Document* parseFromString(const StringOrTrustedHTML&, const String& type);
 
   void Trace(blink::Visitor*) override;
 
  private:
-  explicit DOMParser(Document&);
+  Document* parseFromStringInternal(const String&, const String& type);
 
   WeakMember<Document> context_document_;
 };

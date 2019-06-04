@@ -93,20 +93,14 @@ class DownloadHistory : public download::AllDownloadItemNotifier::Observer {
   void AddObserver(Observer* observer);
   void RemoveObserver(Observer* observer);
 
-  // Returns true if the download was restored from history. Safe to call from
-  // within a DownloadManager::Observer::OnDownloadCreated handler and can be
-  // used to distinguish between downloads that were created due to new requests
-  // vs. downloads that were created due to being restored from history. Note
-  // that the return value is only reliable for downloads that were restored by
-  // this specific DownloadHistory instance.
-  bool WasRestoredFromHistory(const download::DownloadItem* item) const;
-
  private:
-  typedef std::set<download::DownloadItem*> ItemSet;
-
   // Callback from |history_| containing all entries in the downloads database
   // table.
   void QueryCallback(std::unique_ptr<std::vector<history::DownloadRow>> infos);
+
+  // Called to create all history downloads.
+  void LoadHistoryDownloads(
+      std::unique_ptr<std::vector<history::DownloadRow>> infos);
 
   // May add |item| to |history_|.
   void MaybeAddToHistory(download::DownloadItem* item);
@@ -133,6 +127,12 @@ class DownloadHistory : public download::AllDownloadItemNotifier::Observer {
   // Removes all |removing_ids_| from |history_|.
   void RemoveDownloadsBatch();
 
+  // Called when a download was restored from history.
+  void OnDownloadRestoredFromHistory(download::DownloadItem* item);
+
+  // Check whether an download item needs be updated or added to history DB.
+  bool NeedToUpdateDownloadHistory(download::DownloadItem* item);
+
   download::AllDownloadItemNotifier notifier_;
 
   std::unique_ptr<HistoryAdapter> history_;
@@ -157,7 +157,7 @@ class DownloadHistory : public download::AllDownloadItemNotifier::Observer {
 
   bool initial_history_query_complete_;
 
-  base::ObserverList<Observer> observers_;
+  base::ObserverList<Observer>::Unchecked observers_;
 
   base::WeakPtrFactory<DownloadHistory> weak_ptr_factory_;
 

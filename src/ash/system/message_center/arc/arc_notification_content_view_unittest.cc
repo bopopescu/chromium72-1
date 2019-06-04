@@ -8,8 +8,8 @@
 #include <string>
 #include <utility>
 
-#include "ash/message_center/message_center_view.h"
 #include "ash/shell.h"
+#include "ash/system/message_center/arc/arc_notification_constants.h"
 #include "ash/system/message_center/arc/arc_notification_content_view.h"
 #include "ash/system/message_center/arc/arc_notification_delegate.h"
 #include "ash/system/message_center/arc/arc_notification_item.h"
@@ -18,9 +18,9 @@
 #include "ash/system/message_center/arc/arc_notification_surface_manager_impl.h"
 #include "ash/system/message_center/arc/arc_notification_view.h"
 #include "ash/system/message_center/arc/mock_arc_notification_item.h"
-#include "ash/system/message_center/notification_tray.h"
 #include "ash/system/status_area_widget.h"
 #include "ash/system/status_area_widget_test_helper.h"
+#include "ash/system/unified/unified_system_tray.h"
 #include "ash/test/ash_test_base.h"
 #include "base/run_loop.h"
 #include "base/strings/utf_string_conversions.h"
@@ -33,7 +33,9 @@
 #include "components/exo/surface.h"
 #include "components/exo/test/exo_test_helper.h"
 #include "components/exo/wm_helper.h"
+#include "components/exo/wm_helper_chromeos.h"
 #include "testing/gmock/include/gmock/gmock.h"
+#include "ui/aura/env.h"
 #include "ui/aura/test/test_window_delegate.h"
 #include "ui/aura/window.h"
 #include "ui/events/keycodes/dom/dom_code.h"
@@ -61,7 +63,8 @@ class MockKeyboardDelegate : public exo::KeyboardDelegate {
   MOCK_METHOD1(OnKeyboardDestroying, void(exo::Keyboard*));
   MOCK_CONST_METHOD1(CanAcceptKeyboardEventsForSurface, bool(exo::Surface*));
   MOCK_METHOD2(OnKeyboardEnter,
-               void(exo::Surface*, const base::flat_set<ui::DomCode>&));
+               void(exo::Surface*,
+                    const base::flat_map<ui::DomCode, ui::DomCode>&));
   MOCK_METHOD1(OnKeyboardLeave, void(exo::Surface*));
   MOCK_METHOD3(OnKeyboardKey, uint32_t(base::TimeTicks, ui::DomCode, bool));
   MOCK_METHOD1(OnKeyboardModifiers, void(int));
@@ -110,14 +113,16 @@ class ArcNotificationContentViewTest : public AshTestBase {
 
   void SetUp() override {
     AshTestBase::SetUp();
-
-    MessageCenterView::disable_animation_for_testing = true;
-
-    wm_helper_ = std::make_unique<exo::WMHelper>();
+    wm_helper_ =
+        std::make_unique<exo::WMHelperChromeOS>(ash::Shell::Get()->aura_env());
     exo::WMHelper::SetInstance(wm_helper_.get());
     DCHECK(exo::WMHelper::HasInstance());
 
     surface_manager_ = std::make_unique<ArcNotificationSurfaceManagerImpl>();
+
+    message_center::MessageViewFactory::
+        ClearCustomNotificationViewFactoryForTest(
+            kArcNotificationCustomViewType);
     ArcNotificationManager::SetCustomNotificationViewFactory();
   }
 
@@ -165,7 +170,7 @@ class ArcNotificationContentViewTest : public AshTestBase {
   CreateNotificationView(const Notification& notification) {
     std::unique_ptr<ArcNotificationView> notification_view(
         static_cast<ArcNotificationView*>(
-            message_center::MessageViewFactory::Create(notification, true)));
+            message_center::MessageViewFactory::Create(notification)));
     notification_view->set_owned_by_client();
 
     views::Widget::InitParams params(views::Widget::InitParams::TYPE_POPUP);
@@ -205,15 +210,17 @@ class ArcNotificationContentViewTest : public AshTestBase {
     message_center::RichNotificationData optional_fields;
     optional_fields.settings_button_handler =
         message_center::SettingsButtonHandler::DELEGATE;
-    return Notification(
+    Notification notification(
         message_center::NOTIFICATION_TYPE_CUSTOM,
         notification_item->GetNotificationId(), base::UTF8ToUTF16("title"),
         base::UTF8ToUTF16("message"), gfx::Image(), base::UTF8ToUTF16("arc"),
         GURL(),
-        message_center::NotifierId(message_center::NotifierId::ARC_APPLICATION,
-                                   "ARC_NOTIFICATION"),
+        message_center::NotifierId(
+            message_center::NotifierType::ARC_APPLICATION, "ARC_NOTIFICATION"),
         optional_fields,
         new ArcNotificationDelegate(notification_item->GetWeakPtr()));
+    notification.set_custom_view_type(kArcNotificationCustomViewType);
+    return notification;
   }
 
   ArcNotificationSurfaceManagerImpl* surface_manager() {
@@ -236,8 +243,9 @@ class ArcNotificationContentViewTest : public AshTestBase {
   ArcNotificationContentView* GetArcNotificationContentView() const {
     return notification_view_->content_view_;
   }
+
   void ActivateArcNotification() {
-    GetArcNotificationContentView()->Activate();
+    GetArcNotificationContentView()->ActivateWidget(true);
   }
 
  private:
@@ -306,7 +314,7 @@ TEST_F(ArcNotificationContentViewTest, CloseButton) {
       notification_item->GetNotificationId(), base::UTF8ToUTF16("title"),
       base::UTF8ToUTF16("message"), gfx::Image(), base::UTF8ToUTF16("arc"),
       GURL(),
-      message_center::NotifierId(message_center::NotifierId::ARC_APPLICATION,
+      message_center::NotifierId(message_center::NotifierType::ARC_APPLICATION,
                                  "ARC_NOTIFICATION"),
       message_center::RichNotificationData(), nullptr);
   MessageCenter::Get()->AddNotification(std::move(mc_notification));
@@ -324,10 +332,14 @@ TEST_F(ArcNotificationContentViewTest, CloseButton) {
 TEST_F(ArcNotificationContentViewTest, CloseButtonInMessageCenterView) {
   std::string notification_key("notification id");
 
+  message_center::MessageViewFactory::ClearCustomNotificationViewFactoryForTest(
+      kArcNotificationCustomViewType);
+
   // Override MessageView factory to capture the created notification view in
   // |notification_view|.
   ArcNotificationView* notification_view = nullptr;
   message_center::MessageViewFactory::SetCustomNotificationViewFactory(
+      kArcNotificationCustomViewType,
       base::BindLambdaForTesting(
           [&notification_view](const message_center::Notification& notification)
               -> std::unique_ptr<message_center::MessageView> {
@@ -341,14 +353,10 @@ TEST_F(ArcNotificationContentViewTest, CloseButtonInMessageCenterView) {
           }));
 
   // Show MessageCenterView and activate its widget.
-  auto* notification_tray =
-      StatusAreaWidgetTestHelper::GetStatusAreaWidget()->notification_tray();
-  notification_tray->ShowBubble(false /* show_by_click */);
-  notification_tray->GetBubbleView()
-      ->GetWidget()
-      ->widget_delegate()
-      ->set_can_activate(true);
-  notification_tray->GetBubbleView()->GetWidget()->Activate();
+  auto* unified_system_tray =
+      StatusAreaWidgetTestHelper::GetStatusAreaWidget()->unified_system_tray();
+  unified_system_tray->ShowBubble(false /* show_by_click */);
+  unified_system_tray->ActivateBubble();
 
   auto notification_item =
       std::make_unique<MockArcNotificationItem>(notification_key);
@@ -464,7 +472,7 @@ TEST_F(ArcNotificationContentViewTest, Activate) {
   CloseNotificationView();
 }
 
-TEST_F(ArcNotificationContentViewTest, ActivateOnClick) {
+TEST_F(ArcNotificationContentViewTest, NotActivateOnClick) {
   std::string key("notification id");
   auto notification_item = std::make_unique<MockArcNotificationItem>(key);
   auto notification = CreateNotification(notification_item.get());
@@ -476,7 +484,24 @@ TEST_F(ArcNotificationContentViewTest, ActivateOnClick) {
   ui::test::EventGenerator generator(Shell::GetPrimaryRootWindow(),
                                      kNotificationSurfaceBounds.CenterPoint());
   generator.PressLeftButton();
+  EXPECT_EQ(nullptr, GetFocusedWindow());
+
+  CloseNotificationView();
+}
+
+TEST_F(ArcNotificationContentViewTest, ActivateWhenRemoteInputOpens) {
+  std::string key("notification id");
+  auto notification_item = std::make_unique<MockArcNotificationItem>(key);
+  auto notification = CreateNotification(notification_item.get());
+
+  PrepareSurface(key);
+  CreateAndShowNotificationView(notification);
+
+  EXPECT_EQ(nullptr, GetFocusedWindow());
+  GetArcNotificationContentView()->OnRemoteInputActivationChanged(true);
   EXPECT_EQ(surface()->window(), GetFocusedWindow());
+  GetArcNotificationContentView()->OnRemoteInputActivationChanged(false);
+  EXPECT_NE(surface()->window(), GetFocusedWindow());
 
   CloseNotificationView();
 }
@@ -501,6 +526,8 @@ TEST_F(ArcNotificationContentViewTest, AcceptInputTextWithActivate) {
 
   ui::test::EventGenerator generator(Shell::GetPrimaryRootWindow());
   EXPECT_CALL(delegate, OnKeyboardKey(testing::_, ui::DomCode::US_A, true));
+  seat.set_physical_code_for_currently_processing_event_for_testing(
+      ui::DomCode::US_A);
   generator.PressKey(ui::VKEY_A, 0);
 
   keyboard.reset();
@@ -525,6 +552,8 @@ TEST_F(ArcNotificationContentViewTest, NotAcceptInputTextWithoutActivate) {
   ui::test::EventGenerator generator(Shell::GetPrimaryRootWindow());
   EXPECT_CALL(delegate, OnKeyboardKey(testing::_, testing::_, testing::_))
       .Times(0);
+  seat.set_physical_code_for_currently_processing_event_for_testing(
+      ui::DomCode::US_A);
   generator.PressKey(ui::VKEY_A, 0);
 
   keyboard.reset();

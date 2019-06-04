@@ -6,7 +6,7 @@
 
 #include "base/run_loop.h"
 #include "base/test/scoped_task_environment.h"
-#include "services/video_capture/test/mock_receiver.h"
+#include "services/video_capture/public/cpp/mock_receiver.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -79,9 +79,19 @@ TEST_F(TextureVirtualDeviceMojoAdapterTest,
   ProducerSharesBufferHandle(kArbitraryBufferId2);
 
   base::RunLoop wait_loop;
-  EXPECT_CALL(*mock_receiver_1_, DoOnNewBuffer(kArbitraryBufferId1, _));
+  int buffer_received_count = 0;
+  EXPECT_CALL(*mock_receiver_1_, DoOnNewBuffer(kArbitraryBufferId1, _))
+      .WillOnce(InvokeWithoutArgs([&wait_loop, &buffer_received_count]() {
+        buffer_received_count++;
+        if (buffer_received_count == 2)
+          wait_loop.Quit();
+      }));
   EXPECT_CALL(*mock_receiver_1_, DoOnNewBuffer(kArbitraryBufferId2, _))
-      .WillOnce(InvokeWithoutArgs([&wait_loop]() { wait_loop.Quit(); }));
+      .WillOnce(InvokeWithoutArgs([&wait_loop, &buffer_received_count]() {
+        buffer_received_count++;
+        if (buffer_received_count == 2)
+          wait_loop.Quit();
+      }));
   Receiver1Connects();
   wait_loop.Run();
 }

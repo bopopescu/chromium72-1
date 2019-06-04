@@ -5,6 +5,7 @@
 Console.ConsolePrompt = class extends UI.Widget {
   constructor() {
     super();
+    this.registerRequiredCSS('console/consolePrompt.css');
     this._addCompletionsFromHistory = true;
     this._history = new Console.ConsoleHistoryManager();
 
@@ -19,6 +20,10 @@ Console.ConsolePrompt = class extends UI.Widget {
     this._innerPreviewElement = this._eagerPreviewElement.createChild('div', 'console-eager-inner-preview');
     this._eagerPreviewElement.appendChild(UI.Icon.create('smallicon-command-result', 'preview-result-icon'));
 
+    const editorContainerElement = this.element.createChild('div', 'console-prompt-editor-container');
+    if (this._isBelowPromptEnabled)
+      this.element.appendChild(this._eagerPreviewElement);
+
     this._eagerEvalSetting = Common.settings.moduleSetting('consoleEagerEval');
     this._eagerEvalSetting.addChangeListener(this._eagerSettingChanged.bind(this));
     this._eagerPreviewElement.classList.toggle('hidden', !this._eagerEvalSetting.get());
@@ -26,6 +31,11 @@ Console.ConsolePrompt = class extends UI.Widget {
     this.element.tabIndex = 0;
     /** @type {?Promise} */
     this._previewRequestForTest = null;
+
+    /** @type {?UI.AutocompleteConfig} */
+    this._defaultAutocompleteConfig = null;
+
+    this._highlightingNode = false;
 
     self.runtime.extension(UI.TextEditorFactory).instance().then(gotFactory.bind(this));
 
@@ -37,19 +47,16 @@ Console.ConsolePrompt = class extends UI.Widget {
       this._editor =
           factory.createEditor({lineNumbers: false, lineWrapping: true, mimeType: 'javascript', autoHeight: true});
 
-      this._editor.configureAutocomplete({
-        substituteRangeCallback: this._substituteRange.bind(this),
+      this._defaultAutocompleteConfig = ObjectUI.JavaScriptAutocompleteConfig.createConfigForEditor(this._editor);
+      this._editor.configureAutocomplete(Object.assign({}, this._defaultAutocompleteConfig, {
         suggestionsCallback: this._wordsWithQuery.bind(this),
-        tooltipCallback: (lineNumber, columnNumber) => this._tooltipCallback(lineNumber, columnNumber),
         anchorBehavior: this._isBelowPromptEnabled ? UI.GlassPane.AnchorBehavior.PreferTop :
                                                      UI.GlassPane.AnchorBehavior.PreferBottom
-      });
+      }));
       this._editor.widget().element.addEventListener('keydown', this._editorKeyDown.bind(this), true);
-      this._editor.widget().show(this.element);
+      this._editor.widget().show(editorContainerElement);
       this._editor.addEventListener(UI.TextEditor.Events.TextChanged, this._onTextChanged, this);
       this._editor.addEventListener(UI.TextEditor.Events.SuggestionChanged, this._onTextChanged, this);
-      if (this._isBelowPromptEnabled)
-        this.element.appendChild(this._eagerPreviewElement);
 
       this.setText(this._initialText);
       delete this._initialText;
@@ -92,39 +99,30 @@ Console.ConsolePrompt = class extends UI.Widget {
   async _requestPreview() {
     const text = this._editor.textWithCurrentSuggestion().trim();
     const executionContext = UI.context.flavor(SDK.ExecutionContext);
-    if (!executionContext || !text || text.length > Console.ConsolePrompt._MaxLengthForEvaluation) {
-      this._innerPreviewElement.removeChildren();
-      return;
-    }
-
-    const options = {
-      expression: SDK.RuntimeModel.wrapObjectLiteralExpressionIfNeeded(text),
-      includeCommandLineAPI: true,
-      generatePreview: true,
-      throwOnSideEffect: true,
-      timeout: 500
-    };
-    const result = await executionContext.evaluate(options, true /* userGesture */, false /* awaitPromise */);
+    const {preview, result} =
+        await ObjectUI.JavaScriptREPL.evaluateAndBuildPreview(text, true /* throwOnSideEffect */, 500);
     this._innerPreviewElement.removeChildren();
-    if (result.error)
-      return;
-
-    if (result.exceptionDetails) {
-      const exception = result.exceptionDetails.exception.description;
-      if (exception.startsWith('TypeError: '))
-        this._innerPreviewElement.textContent = exception;
-      return;
+    if (preview.deepTextContent() !== this._editor.textWithCurrentSuggestion().trim())
+      this._innerPreviewElement.appendChild(preview);
+    if (result && result.object && result.object.subtype === 'node') {
+      this._highlightingNode = true;
+      SDK.OverlayModel.highlightObjectAsDOMNode(result.object);
+    } else if (this._highlightingNode) {
+      this._highlightingNode = false;
+      SDK.OverlayModel.hideDOMNodeHighlight();
     }
+    if (result)
+      executionContext.runtimeModel.releaseEvaluationResult(result);
+  }
 
-    const {preview, type, subtype, description} = result.object;
-    if (preview && type === 'object' && subtype !== 'node') {
-      this._formatter.appendObjectPreview(this._innerPreviewElement, preview, false /* isEntry */);
-    } else {
-      const nonObjectPreview = this._formatter.renderPropertyPreview(type, subtype, description.trimEnd(400));
-      this._innerPreviewElement.appendChild(nonObjectPreview);
+  /**
+   * @override
+   */
+  willHide() {
+    if (this._highlightingNode) {
+      this._highlightingNode = false;
+      SDK.OverlayModel.hideDOMNodeHighlight();
     }
-    if (this._innerPreviewElement.deepTextContent() === this._editor.textWithCurrentSuggestion().trim())
-      this._innerPreviewElement.removeChildren();
   }
 
   /**
@@ -243,29 +241,23 @@ Console.ConsolePrompt = class extends UI.Widget {
 
     event.consume(true);
 
+    // Since we prevent default, manually emulate the native "scroll on key input" behavior.
+    this.element.scrollIntoView();
     this.clearAutocomplete();
 
     const str = this.text();
     if (!str.length)
       return;
 
-    const currentExecutionContext = UI.context.flavor(SDK.ExecutionContext);
-    if (!this._isCaretAtEndOfPrompt() || !currentExecutionContext) {
-      this._appendCommand(str, true);
+    if (!this._isCaretAtEndOfPrompt()) {
+      await this._appendCommand(str, true);
       return;
     }
-    const result = await currentExecutionContext.runtimeModel.compileScript(str, '', false, currentExecutionContext.id);
-    if (str !== this.text())
-      return;
-    const exceptionDetails = result.exceptionDetails;
-    if (exceptionDetails &&
-        (exceptionDetails.exception.description.startsWith('SyntaxError: Unexpected end of input') ||
-         exceptionDetails.exception.description.startsWith('SyntaxError: Unterminated template literal'))) {
+
+    if (await ObjectUI.JavaScriptAutocomplete.isExpressionComplete(str))
+      await this._appendCommand(str, true);
+    else
       this._editor.newlineAndIndent();
-      this._enterProcessedForTest();
-      return;
-    }
-    await this._appendCommand(str, true);
     this._enterProcessedForTest();
   }
 
@@ -279,15 +271,10 @@ Console.ConsolePrompt = class extends UI.Widget {
     if (currentExecutionContext) {
       const executionContext = currentExecutionContext;
       const message = SDK.consoleModel.addCommandMessage(executionContext, text);
-      text = SDK.RuntimeModel.wrapObjectLiteralExpressionIfNeeded(text);
-      let preprocessed = false;
-      if (text.indexOf('await') !== -1) {
-        const preprocessedText = await Formatter.formatterWorkerPool().preprocessTopLevelAwaitExpressions(text);
-        preprocessed = !!preprocessedText;
-        text = preprocessedText || text;
-      }
+      const wrappedResult = await ObjectUI.JavaScriptREPL.preprocessExpression(text);
       SDK.consoleModel.evaluateCommandInConsole(
-          executionContext, message, text, useCommandLineAPI, /* awaitPromise */ preprocessed);
+          executionContext, message, wrappedResult.text, useCommandLineAPI,
+          /* awaitPromise */ wrappedResult.preprocessed);
       if (Console.ConsolePanel.instance().isShowing())
         Host.userMetrics.actionTaken(Host.UserMetrics.Action.CommandEvaluatedInConsolePanel);
     }
@@ -332,25 +319,6 @@ Console.ConsolePrompt = class extends UI.Widget {
   }
 
   /**
-   * @param {number} lineNumber
-   * @param {number} columnNumber
-   * @return {?TextUtils.TextRange}
-   */
-  _substituteRange(lineNumber, columnNumber) {
-    const token = this._editor.tokenAtTextPosition(lineNumber, columnNumber);
-    if (token && token.type === 'js-string')
-      return new TextUtils.TextRange(lineNumber, token.startColumn, lineNumber, columnNumber);
-
-    const lineText = this._editor.line(lineNumber);
-    let index;
-    for (index = columnNumber - 1; index >= 0; index--) {
-      if (' =:[({;,!+-*/&|^<>.\t\r\n'.indexOf(lineText.charAt(index)) !== -1)
-        break;
-    }
-    return new TextUtils.TextRange(lineNumber, index + 1, lineNumber, columnNumber);
-  }
-
-  /**
    * @param {!TextUtils.TextRange} queryRange
    * @param {!TextUtils.TextRange} substituteRange
    * @param {boolean=} force
@@ -358,64 +326,14 @@ Console.ConsolePrompt = class extends UI.Widget {
    */
   async _wordsWithQuery(queryRange, substituteRange, force) {
     const query = this._editor.text(queryRange);
-    const before = this._editor.text(new TextUtils.TextRange(0, 0, queryRange.startLine, queryRange.startColumn));
+    const words = await this._defaultAutocompleteConfig.suggestionsCallback(queryRange, substituteRange, force);
     const historyWords = this._historyCompletions(query, force);
-    const token = this._editor.tokenAtTextPosition(substituteRange.startLine, substituteRange.startColumn);
-    if (token) {
-      const excludedTokens = new Set(['js-comment', 'js-string-2', 'js-def']);
-      const trimmedBefore = before.trim();
-      if (!trimmedBefore.endsWith('[') && !trimmedBefore.match(/\.\s*(get|set|delete)\s*\(\s*$/))
-        excludedTokens.add('js-string');
-      if (!trimmedBefore.endsWith('.'))
-        excludedTokens.add('js-property');
-      if (excludedTokens.has(token.type))
-        return historyWords;
-    }
-    const words = await ObjectUI.javaScriptAutocomplete.completionsForTextInCurrentContext(before, query, force);
-    if (!force && !this._isCaretAtEndOfPrompt()) {
-      const queryAndAfter = this._editor.line(queryRange.startLine).substring(queryRange.startColumn);
-      if (queryAndAfter && words.some(word => queryAndAfter.startsWith(word.text) && query.length !== word.text.length))
-        return [];
-    }
     return words.concat(historyWords);
-  }
-
-  /**
-   * @param {number} lineNumber
-   * @param {number} columnNumber
-   * @return {!Promise<?Element>}
-   */
-  async _tooltipCallback(lineNumber, columnNumber) {
-    const before = this._editor.text(new TextUtils.TextRange(0, 0, lineNumber, columnNumber));
-    const result = await ObjectUI.javaScriptAutocomplete.argumentsHint(before);
-    if (!result)
-      return null;
-    const {argumentIndex} = result;
-    const tooltip = createElement('div');
-    for (const args of result.args) {
-      const argumentsElement = createElement('span');
-      for (let i = 0; i < args.length; i++) {
-        if (i === argumentIndex || (i < argumentIndex && args[i].startsWith('...')))
-          argumentsElement.appendChild(UI.html`<b>${args[i]}</b>`);
-        else
-          argumentsElement.createTextChild(args[i]);
-        if (i < args.length - 1)
-          argumentsElement.createTextChild(', ');
-      }
-      tooltip.appendChild(UI.html`<div class='source-code'>\u0192(${argumentsElement})</div>`);
-    }
-    return tooltip;
   }
 
   _editorSetForTest() {
   }
 };
-
-/**
- * @const
- * @type {number}
- */
-Console.ConsolePrompt._MaxLengthForEvaluation = 2000;
 
 /**
  * @unrestricted

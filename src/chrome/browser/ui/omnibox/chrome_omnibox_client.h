@@ -43,15 +43,18 @@ class ChromeOmniboxClient : public OmniboxClient {
   bool IsPasteAndGoEnabled() const override;
   bool IsNewTabPage(const GURL& url) const override;
   bool IsHomePage(const GURL& url) const override;
+  bool IsDefaultSearchProviderEnabled() const override;
   const SessionID& GetSessionID() const override;
   bookmarks::BookmarkModel* GetBookmarkModel() override;
   TemplateURLService* GetTemplateURLService() override;
   const AutocompleteSchemeClassifier& GetSchemeClassifier() const override;
   AutocompleteClassifier* GetAutocompleteClassifier() override;
+  QueryInOmnibox* GetQueryInOmnibox() override;
   gfx::Image GetIconIfExtensionMatch(
       const AutocompleteMatch& match) const override;
   gfx::Image GetSizedIcon(const gfx::VectorIcon& vector_icon_type,
                           SkColor vector_icon_color) const override;
+  gfx::Image GetSizedIcon(const gfx::Image& icon) const override;
   bool ProcessExtensionKeyword(const TemplateURL* template_url,
                                const AutocompleteMatch& match,
                                WindowOpenDisposition disposition,
@@ -77,6 +80,9 @@ class ChromeOmniboxClient : public OmniboxClient {
   void OnURLOpenedFromOmnibox(OmniboxLog* log) override;
   void OnBookmarkLaunched() override;
   void DiscardNonCommittedNavigations() override;
+  void NewIncognitoWindow() override;
+  void PromptPageTranslation() override;
+  void OpenUpdateChromeDialog() override;
 
  private:
   // Performs prerendering for |match|.

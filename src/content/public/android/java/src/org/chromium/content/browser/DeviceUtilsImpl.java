@@ -4,9 +4,8 @@
 
 package org.chromium.content.browser;
 
-import android.content.Context;
-
 import org.chromium.base.CommandLine;
+import org.chromium.base.StrictModeContext;
 import org.chromium.content_public.common.ContentSwitches;
 import org.chromium.ui.base.DeviceFormFactor;
 
@@ -16,9 +15,11 @@ import org.chromium.ui.base.DeviceFormFactor;
 public class DeviceUtilsImpl {
     private DeviceUtilsImpl() {}
 
-    public static void addDeviceSpecificUserAgentSwitch(Context context) {
-        if (!DeviceFormFactor.isTablet()) {
-            CommandLine.getInstance().appendSwitch(ContentSwitches.USE_MOBILE_UA);
+    public static void addDeviceSpecificUserAgentSwitch() {
+        try (StrictModeContext unused = StrictModeContext.allowDiskReads()) {
+            if (!DeviceFormFactor.isTablet()) {
+                CommandLine.getInstance().appendSwitch(ContentSwitches.USE_MOBILE_UA);
+            }
         }
     }
 }

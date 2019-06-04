@@ -11,8 +11,8 @@
 #include <map>
 #include <memory>
 
-#include "net/spdy/server_push_delegate.h"
 #include "net/test/gtest_util.h"
+#include "net/third_party/http2/platform/api/http2_test_helpers.h"
 #include "net/third_party/spdy/core/spdy_bug_tracker.h"
 #include "net/third_party/spdy/core/spdy_header_block.h"
 #include "net/third_party/spdy/core/spdy_headers_handler_interface.h"
@@ -51,6 +51,8 @@ void SetFrameLength(SpdySerializedFrame* frame, size_t length);
 class TestHeadersHandler : public SpdyHeadersHandlerInterface {
  public:
   TestHeadersHandler() {}
+  TestHeadersHandler(const TestHeadersHandler&) = delete;
+  TestHeadersHandler& operator=(const TestHeadersHandler&) = delete;
 
   void OnHeaderBlockStart() override;
 
@@ -69,8 +71,6 @@ class TestHeadersHandler : public SpdyHeadersHandlerInterface {
   SpdyHeaderBlock block_;
   size_t header_bytes_parsed_ = 0;
   size_t compressed_header_bytes_parsed_ = 0;
-
-  DISALLOW_COPY_AND_ASSIGN(TestHeadersHandler);
 };
 
 }  // namespace test

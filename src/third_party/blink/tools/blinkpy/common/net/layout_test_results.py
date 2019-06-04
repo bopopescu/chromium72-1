@@ -68,12 +68,14 @@ class LayoutTestResult(object):
     def expected_results(self):
         return self._result_dict['expected']
 
+    def last_retry_result(self):
+        return self.actual_results().split()[-1]
+
     def has_mismatch_result(self):
-        last_retry_result = self.actual_results().split()[-1]
-        return last_retry_result in ('TEXT', 'IMAGE', 'IMAGE+TEXT', 'AUDIO')
+        return self.last_retry_result() in ('TEXT', 'IMAGE', 'IMAGE+TEXT', 'AUDIO')
 
     def is_missing_baseline(self):
-        return self._result_dict['actual'] == 'MISSING'
+        return self.last_retry_result() == 'MISSING'
 
 
 # FIXME: This should be unified with ResultsSummary or other NRWT layout tests code
@@ -158,5 +160,4 @@ class LayoutTestResults(object):
         return sorted(results, key=lambda r: r.test_name())
 
     def didnt_run_as_expected_results(self):
-        # TODO(qyearsley): Rename this method.
         return self._filter_tests(lambda r: not r.did_run_as_expected())

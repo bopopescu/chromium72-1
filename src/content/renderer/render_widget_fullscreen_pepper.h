@@ -32,10 +32,10 @@ class RenderWidgetFullscreenPepper : public RenderWidget,
  public:
   static RenderWidgetFullscreenPepper* Create(
       int32_t routing_id,
-      const RenderWidget::ShowCallback& show_callback,
+      RenderWidget::ShowCallback show_callback,
       CompositorDependencies* compositor_deps,
       PepperPluginInstanceImpl* plugin,
-      const GURL& active_url,
+      const blink::WebURL& local_main_frame_url,
       const ScreenInfo& screen_info,
       mojom::WidgetRequest widget_request);
 
@@ -61,7 +61,6 @@ class RenderWidgetFullscreenPepper : public RenderWidget,
   RenderWidgetFullscreenPepper(int32_t routing_id,
                                CompositorDependencies* compositor_deps,
                                PepperPluginInstanceImpl* plugin,
-                               const GURL& active_url,
                                const ScreenInfo& screen_info,
                                mojom::WidgetRequest widget_request);
   ~RenderWidgetFullscreenPepper() override;
@@ -72,14 +71,8 @@ class RenderWidgetFullscreenPepper : public RenderWidget,
   void OnSynchronizeVisualProperties(
       const VisualProperties& visual_properties) override;
 
-  // RenderWidget overrides.
-  GURL GetURLForGraphicsContext3D() override;
-
  private:
   void UpdateLayerBounds();
-
-  // URL that is responsible for this widget, passed to ggl::CreateViewContext.
-  GURL active_url_;
 
   // The plugin instance this widget wraps.
   PepperPluginInstanceImpl* plugin_;

@@ -4,8 +4,6 @@
 
 #include "ui/base/ime/linux/linux_input_method_context_factory.h"
 
-#include "ui/base/ime/linux/linux_input_method_context.h"
-
 namespace {
 
 const ui::LinuxInputMethodContextFactory* g_linux_input_method_context_factory =
@@ -25,13 +23,6 @@ LinuxInputMethodContextFactory::instance() {
 void LinuxInputMethodContextFactory::SetInstance(
     const LinuxInputMethodContextFactory* instance) {
   g_linux_input_method_context_factory = instance;
-}
-
-std::unique_ptr<LinuxInputMethodContext> LinuxInputMethodContextFactory::CreateInputMethodContext(
-    LinuxInputMethodContextDelegate* delegate,
-    unsigned handle,
-    bool is_simple) const {
-  return std::unique_ptr<LinuxInputMethodContext>();
 }
 
 }  // namespace ui

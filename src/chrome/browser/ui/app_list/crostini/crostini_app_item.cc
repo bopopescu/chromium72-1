@@ -6,7 +6,7 @@
 
 #include <utility>
 
-#include "ash/public/cpp/app_list/app_list_constants.h"
+#include "ash/public/cpp/app_list/app_list_config.h"
 #include "base/bind.h"
 #include "chrome/browser/chromeos/crostini/crostini_util.h"
 #include "chrome/browser/ui/app_list/app_list_controller_delegate.h"
@@ -25,15 +25,20 @@ CrostiniAppItem::CrostiniAppItem(
     const std::string& name)
     : ChromeAppListItem(profile, id) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-  crostini_app_icon_.reset(
-      new CrostiniAppIcon(profile, id, app_list::kTileIconSize, this));
+  crostini_app_icon_ = std::make_unique<CrostiniAppIcon>(
+      profile, id, app_list::AppListConfig::instance().grid_icon_dimension(),
+      this);
 
   SetName(name);
   UpdateIcon();
   if (sync_item && sync_item->item_ordinal.IsValid()) {
     UpdateFromSync(sync_item);
   } else {
-    SetDefaultPositionIfApplicable();
+    SetDefaultPositionIfApplicable(model_updater);
+
+    // Crostini app is created from scratch. Move it to default folder.
+    DCHECK(folder_id().empty());
+    SetChromeFolderId(crostini::kCrostiniFolderId);
   }
 
   // Set model updater last to avoid being called during construction.
@@ -48,15 +53,8 @@ const char* CrostiniAppItem::GetItemType() const {
 
 void CrostiniAppItem::Activate(int event_flags) {
   ChromeLauncherController::instance()->ActivateApp(
-      id(), ash::LAUNCH_FROM_APP_LIST, event_flags);
-
-  // TODO(timloh): Launching Crostini apps can take a few seconds if the
-  // container is not currently running. Hiding the launcher at least provides
-  // the user some feedback that they actually clicked an icon. We should make
-  // this better, e.g. by showing some sort of spinner. We also need to handle
-  // failures to start the container or app, as those are currently ignored.
-  if (!GetController()->IsHomeLauncherEnabledInTabletMode())
-    GetController()->DismissView();
+      id(), ash::LAUNCH_FROM_APP_LIST, event_flags,
+      GetController()->GetAppListDisplayId());
 }
 
 void CrostiniAppItem::GetContextMenuModel(GetMenuModelCallback callback) {

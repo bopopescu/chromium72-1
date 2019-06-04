@@ -5,6 +5,7 @@
 #include "chromeos/services/device_sync/public/mojom/device_sync_mojom_traits.h"
 
 #include "base/logging.h"
+#include "components/cryptauth/remote_device_ref.h"
 #include "mojo/public/cpp/base/time_mojom_traits.h"
 
 namespace mojo {
@@ -46,13 +47,13 @@ bool StructTraits<chromeos::device_sync::mojom::BeaconSeedDataView,
   out->set_end_time_millis(end_time.ToJavaTime());
 
   return true;
-};
+}
 
-const std::string&
+std::string
 StructTraits<chromeos::device_sync::mojom::RemoteDeviceDataView,
-             cryptauth::RemoteDevice>::public_key(const cryptauth::RemoteDevice&
-                                                      remote_device) {
-  return remote_device.public_key;
+             cryptauth::RemoteDevice>::device_id(const cryptauth::RemoteDevice&
+                                                     remote_device) {
+  return remote_device.GetDeviceId();
 }
 
 const std::string&
@@ -74,18 +75,6 @@ StructTraits<chromeos::device_sync::mojom::RemoteDeviceDataView,
              cryptauth::RemoteDevice>::
     persistent_symmetric_key(const cryptauth::RemoteDevice& remote_device) {
   return remote_device.persistent_symmetric_key;
-}
-
-bool StructTraits<chromeos::device_sync::mojom::RemoteDeviceDataView,
-                  cryptauth::RemoteDevice>::
-    unlock_key(const cryptauth::RemoteDevice& remote_device) {
-  return remote_device.unlock_key;
-}
-
-bool StructTraits<chromeos::device_sync::mojom::RemoteDeviceDataView,
-                  cryptauth::RemoteDevice>::
-    supports_mobile_hotspot(const cryptauth::RemoteDevice& remote_device) {
-  return remote_device.supports_mobile_hotspot;
 }
 
 base::Time StructTraits<chromeos::device_sync::mojom::RemoteDeviceDataView,
@@ -112,22 +101,20 @@ bool StructTraits<chromeos::device_sync::mojom::RemoteDeviceDataView,
                   cryptauth::RemoteDevice>::
     Read(chromeos::device_sync::mojom::RemoteDeviceDataView in,
          cryptauth::RemoteDevice* out) {
+  std::string device_id;
   base::Time last_update_time;
-  std::vector<cryptauth::BeaconSeed> beacon_seeds;
 
   if (!in.ReadUserId(&out->user_id) || !in.ReadDeviceName(&out->name) ||
-      !in.ReadPublicKey(&out->public_key) ||
+      !in.ReadDeviceId(&device_id) ||
       !in.ReadPersistentSymmetricKey(&out->persistent_symmetric_key) ||
       !in.ReadLastUpdateTime(&last_update_time) ||
       !in.ReadSoftwareFeatures(&out->software_features) ||
-      !in.ReadBeaconSeeds(&beacon_seeds)) {
+      !in.ReadBeaconSeeds(&out->beacon_seeds)) {
     return false;
   }
 
-  out->unlock_key = in.unlock_key();
-  out->supports_mobile_hotspot = in.supports_mobile_hotspot();
+  out->public_key = cryptauth::RemoteDeviceRef::DerivePublicKey(device_id);
   out->last_update_time_millis = last_update_time.ToJavaTime();
-  out->LoadBeaconSeeds(beacon_seeds);
 
   return true;
 }

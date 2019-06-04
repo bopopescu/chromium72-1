@@ -26,22 +26,26 @@
 namespace blink {
 
 inline SVGEllipseElement::SVGEllipseElement(Document& document)
-    : SVGGeometryElement(SVGNames::ellipseTag, document),
+    : SVGGeometryElement(svg_names::kEllipseTag, document),
       cx_(SVGAnimatedLength::Create(this,
-                                    SVGNames::cxAttr,
-                                    SVGLength::Create(SVGLengthMode::kWidth),
+                                    svg_names::kCxAttr,
+                                    SVGLengthMode::kWidth,
+                                    SVGLength::Initial::kUnitlessZero,
                                     CSSPropertyCx)),
       cy_(SVGAnimatedLength::Create(this,
-                                    SVGNames::cyAttr,
-                                    SVGLength::Create(SVGLengthMode::kHeight),
+                                    svg_names::kCyAttr,
+                                    SVGLengthMode::kHeight,
+                                    SVGLength::Initial::kUnitlessZero,
                                     CSSPropertyCy)),
       rx_(SVGAnimatedLength::Create(this,
-                                    SVGNames::rxAttr,
-                                    SVGLength::Create(SVGLengthMode::kWidth),
+                                    svg_names::kRxAttr,
+                                    SVGLengthMode::kWidth,
+                                    SVGLength::Initial::kUnitlessZero,
                                     CSSPropertyRx)),
       ry_(SVGAnimatedLength::Create(this,
-                                    SVGNames::ryAttr,
-                                    SVGLength::Create(SVGLengthMode::kHeight),
+                                    svg_names::kRyAttr,
+                                    SVGLengthMode::kHeight,
+                                    SVGLength::Initial::kUnitlessZero,
                                     CSSPropertyRy)) {
   AddToPropertyMap(cx_);
   AddToPropertyMap(cy_);
@@ -69,6 +73,10 @@ Path SVGEllipseElement::AsPath() const {
 
   FloatSize radii(ToFloatSize(
       length_context.ResolveLengthPair(svg_style.Rx(), svg_style.Ry(), style)));
+  if (svg_style.Rx().IsAuto())
+    radii.SetWidth(radii.Height());
+  else if (svg_style.Ry().IsAuto())
+    radii.SetHeight(radii.Width());
   if (radii.Width() < 0 || radii.Height() < 0 ||
       (!radii.Width() && !radii.Height()))
     return path;
@@ -103,8 +111,8 @@ void SVGEllipseElement::CollectStyleForPresentationAttribute(
 }
 
 void SVGEllipseElement::SvgAttributeChanged(const QualifiedName& attr_name) {
-  if (attr_name == SVGNames::cxAttr || attr_name == SVGNames::cyAttr ||
-      attr_name == SVGNames::rxAttr || attr_name == SVGNames::ryAttr) {
+  if (attr_name == svg_names::kCxAttr || attr_name == svg_names::kCyAttr ||
+      attr_name == svg_names::kRxAttr || attr_name == svg_names::kRyAttr) {
     UpdateRelativeLengthsInformation();
     GeometryPresentationAttributeChanged(attr_name);
     return;

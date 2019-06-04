@@ -110,15 +110,16 @@ TEST_F(SelectionControllerTest, setCaretAtHitTestResult) {
   const char* body_content = "<div id='sample' contenteditable>sample</div>";
   SetBodyContent(body_content);
   GetDocument().GetSettings()->SetScriptEnabled(true);
-  Element* script = GetDocument().CreateRawElement(HTMLNames::scriptTag);
+  Element* script = GetDocument().CreateRawElement(html_names::kScriptTag);
   script->SetInnerHTMLFromString(
       "var sample = document.getElementById('sample');"
       "sample.addEventListener('onselectstart', "
       "  event => elem.parentNode.removeChild(elem));");
   GetDocument().body()->AppendChild(script);
-  GetDocument().View()->UpdateAllLifecyclePhases();
+  UpdateAllLifecyclePhasesForTest();
+  HitTestLocation location((IntPoint(8, 8)));
   GetFrame().GetEventHandler().GetSelectionController().HandleGestureLongPress(
-      GetFrame().GetEventHandler().HitTestResultAtPoint(IntPoint(8, 8)));
+      GetFrame().GetEventHandler().HitTestResultAtLocation(location));
 }
 
 // For http://crbug.com/704827
@@ -129,11 +130,12 @@ TEST_F(SelectionControllerTest, setCaretAtHitTestResultWithNullPosition) {
       "#sample { user-select: none; }"
       "</style>"
       "<div id=sample></div>");
-  GetDocument().View()->UpdateAllLifecyclePhases();
+  UpdateAllLifecyclePhasesForTest();
 
   // Hit "&nbsp;" in before pseudo element of "sample".
+  HitTestLocation location((IntPoint(10, 10)));
   SetCaretAtHitTestResult(
-      GetFrame().GetEventHandler().HitTestResultAtPoint(IntPoint(10, 10)));
+      GetFrame().GetEventHandler().HitTestResultAtLocation(location));
 
   EXPECT_TRUE(Selection().GetSelectionInDOMTree().IsNone());
 }
@@ -142,7 +144,7 @@ TEST_F(SelectionControllerTest, setCaretAtHitTestResultWithNullPosition) {
 TEST_F(SelectionControllerTest,
        SetCaretAtHitTestResultWithDisconnectedPosition) {
   GetDocument().GetSettings()->SetScriptEnabled(true);
-  Element* script = GetDocument().CreateRawElement(HTMLNames::scriptTag);
+  Element* script = GetDocument().CreateRawElement(html_names::kScriptTag);
   script->SetInnerHTMLFromString(
       "document.designMode = 'on';"
       "const selection = window.getSelection();"
@@ -157,7 +159,7 @@ TEST_F(SelectionControllerTest,
       "}"
       "document.addEventListener('selectstart', selectstart);");
   GetDocument().body()->AppendChild(script);
-  GetDocument().View()->UpdateAllLifecyclePhases();
+  UpdateAllLifecyclePhasesForTest();
 
   // Simulate a tap somewhere in the document
   blink::WebMouseEvent mouse_event(
@@ -166,10 +168,11 @@ TEST_F(SelectionControllerTest,
       blink::WebInputEvent::GetStaticTimeStampForTests());
   // Frame scale defaults to 0, which would cause a divide-by-zero problem.
   mouse_event.SetFrameScale(1);
+  HitTestLocation location((IntPoint(0, 0)));
   GetFrame().GetEventHandler().GetSelectionController().HandleMousePressEvent(
       MouseEventWithHitTestResults(
-          mouse_event,
-          GetFrame().GetEventHandler().HitTestResultAtPoint(IntPoint(0, 0))));
+          mouse_event, location,
+          GetFrame().GetEventHandler().HitTestResultAtLocation(location)));
 
   // The original bug was that this test would cause
   // TextSuggestionController::HandlePotentialMisspelledWordTap() to crash. So

@@ -77,6 +77,7 @@
 #include <time.h>
 #include <algorithm>
 #include <limits>
+#include <memory>
 #include "build/build_config.h"
 #include "third_party/blink/renderer/platform/wtf/ascii_ctype.h"
 #include "third_party/blink/renderer/platform/wtf/assertions.h"
@@ -85,6 +86,9 @@
 #include "third_party/blink/renderer/platform/wtf/string_extras.h"
 #include "third_party/blink/renderer/platform/wtf/text/string_builder.h"
 #include "third_party/blink/renderer/platform/wtf/time.h"
+
+#include <unicode/basictz.h>
+#include <unicode/timezone.h>
 
 #if defined(OS_WIN)
 #include <windows.h>
@@ -97,9 +101,7 @@ namespace WTF {
 /* Constants */
 
 static const double kHoursPerDay = 24.0;
-static const double kSecondsPerDay = 24.0 * 60.0 * 60.0;
 
-static const double kMaxUnixTime = 2145859200.0;  // 12/31/2037
 static const double kMinimumECMADateInMs = -8640000000000000.0;
 static const double kMaximumECMADateInMs = 8640000000000000.0;
 
@@ -108,14 +110,6 @@ static const double kMaximumECMADateInMs = 8640000000000000.0;
 static const int kFirstDayOfMonth[2][12] = {
     {0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334},
     {0, 31, 60, 91, 121, 152, 182, 213, 244, 274, 305, 335}};
-
-static inline void GetLocalTime(const time_t* local_time, struct tm* local_tm) {
-#if defined(COMPILER_MSVC)
-  localtime_s(local_tm, local_time);
-#else
-  localtime_r(local_time, local_tm);
-#endif
-}
 
 bool IsLeapYear(int year) {
   if (year % 4 != 0)
@@ -183,13 +177,6 @@ int MsToYear(double ms) {
 
 int DayInYear(double ms, int year) {
   return static_cast<int>(MsToDays(ms) - DaysFrom1970ToYear(year));
-}
-
-static inline double MsToMilliseconds(double ms) {
-  double result = fmod(ms, kMsPerDay);
-  if (result < 0)
-    result += kMsPerDay;
-  return result;
 }
 
 int MonthFromDayInYear(int day_in_year, bool leap_year) {
@@ -281,129 +268,6 @@ double DateToDaysFrom1970(int year, int month, int day) {
   return yearday + DayInYear(year, month, day);
 }
 
-// There is a hard limit at 2038 that we currently do not have a workaround
-// for (rdar://problem/5052975).
-static inline int MaximumYearForDST() {
-  return 2037;
-}
-
-static inline double JsCurrentTime() {
-  // JavaScript doesn't recognize fractions of a millisecond.
-  return floor(WTF::CurrentTimeMS());
-}
-
-static inline int MinimumYearForDST() {
-  // Because of the 2038 issue (see maximumYearForDST) if the current year is
-  // greater than the max year minus 27 (2010), we want to use the max year
-  // minus 27 instead, to ensure there is a range of 28 years that all years
-  // can map to.
-  return std::min(MsToYear(JsCurrentTime()), MaximumYearForDST() - 27);
-}
-
-// Find an equivalent year for the one given, where equivalence is deterined by
-// the two years having the same leapness and the first day of the year, falling
-// on the same day of the week.
-//
-// This function returns a year between this current year and 2037, however this
-// function will potentially return incorrect results if the current year is
-// after 2010, (rdar://problem/5052975), if the year passed in is before 1900
-// or after 2100, (rdar://problem/5055038).
-static int EquivalentYearForDST(int year) {
-  // It is ok if the cached year is not the current year as long as the rules
-  // for DST did not change between the two years; if they did the app would
-  // need to be restarted.
-  static int min_year = MinimumYearForDST();
-  int max_year = MaximumYearForDST();
-
-  int difference;
-  if (year > max_year)
-    difference = min_year - year;
-  else if (year < min_year)
-    difference = max_year - year;
-  else
-    return year;
-
-  int quotient = difference / 28;
-  int product = (quotient)*28;
-
-  year += product;
-  DCHECK((year >= min_year && year <= max_year) ||
-         (product - year ==
-          static_cast<int>(std::numeric_limits<double>::quiet_NaN())));
-  return year;
-}
-
-static double CalculateUTCOffset() {
-#if defined(OS_WIN)
-  TIME_ZONE_INFORMATION time_zone_information;
-  GetTimeZoneInformation(&time_zone_information);
-  int32_t bias =
-      time_zone_information.Bias + time_zone_information.StandardBias;
-  return -bias * 60 * 1000;
-#else
-  time_t local_time = time(nullptr);
-  tm localt;
-  GetLocalTime(&local_time, &localt);
-
-  // tm_gmtoff includes any daylight savings offset, so subtract it.
-  return static_cast<double>(localt.tm_gmtoff * kMsPerSecond -
-                             (localt.tm_isdst > 0 ? kMsPerHour : 0));
-#endif
-}
-
-/*
- * Get the DST offset for the time passed in.
- */
-static double CalculateDSTOffsetSimple(double local_time_seconds,
-                                       double utc_offset) {
-  if (local_time_seconds > kMaxUnixTime)
-    local_time_seconds = kMaxUnixTime;
-  else if (local_time_seconds <
-           0)  // Go ahead a day to make localtime work (does not work with 0)
-    local_time_seconds += kSecondsPerDay;
-
-  // FIXME: time_t has a potential problem in 2038
-  time_t local_time = static_cast<time_t>(local_time_seconds);
-
-  tm local_tm;
-  GetLocalTime(&local_time, &local_tm);
-
-  return local_tm.tm_isdst > 0 ? kMsPerHour : 0;
-}
-
-// Get the DST offset, given a time in UTC
-static double CalculateDSTOffset(double ms, double utc_offset) {
-  // On macOS, the call to localtime (see calculateDSTOffsetSimple) will return
-  // historically accurate DST information (e.g. New Zealand did not have DST
-  // from 1946 to 1974) however the JavaScript standard explicitly dictates
-  // that historical information should not be considered when determining DST.
-  // For this reason we shift away from years that localtime can handle but
-  // would return historically accurate information.
-  int year = MsToYear(ms);
-  int equivalent_year = EquivalentYearForDST(year);
-  if (year != equivalent_year) {
-    bool leap_year = IsLeapYear(year);
-    int day_in_year_local = DayInYear(ms, year);
-    int day_in_month = DayInMonthFromDayInYear(day_in_year_local, leap_year);
-    int month = MonthFromDayInYear(day_in_year_local, leap_year);
-    double day = DateToDaysFrom1970(equivalent_year, month, day_in_month);
-    ms = (day * kMsPerDay) + MsToMilliseconds(ms);
-  }
-
-  return CalculateDSTOffsetSimple(ms / kMsPerSecond, utc_offset);
-}
-
-void InitializeDates() {
-#if DCHECK_IS_ON()
-  static bool already_initialized;
-  DCHECK(!already_initialized);
-  already_initialized = true;
-#endif
-
-  EquivalentYearForDST(
-      2000);  // Need to call once to initialize a static used in this function.
-}
-
 static inline double YmdhmsToSeconds(int year,
                                      long mon,
                                      long day,
@@ -493,7 +357,7 @@ static bool ParseLong(const char* string,
   return true;
 }
 
-// Odd case where 'exec' is allowed to be 0, to accomodate a caller in WebCore.
+// Odd case where 'exec' is allowed to be 0, to accommodate a caller in WebCore.
 static double ParseDateFromNullTerminatedCharacters(const char* date_string,
                                                     bool& have_tz,
                                                     int& offset) {
@@ -646,7 +510,7 @@ static double ParseDateFromNullTerminatedCharacters(const char* date_string,
 
     ParseLong(date_string, &new_pos_str, 10, &hour);
     // Do not check for errno here since we want to continue
-    // even if errno was set becasue we are still looking
+    // even if errno was set because we are still looking
     // for the timezone!
 
     // Read a number? If not, this might be a timezone name.
@@ -796,9 +660,19 @@ double ParseDateFromNullTerminatedCharacters(const char* date_string) {
 
   // fall back to local timezone
   if (!have_tz) {
-    double utc_offset = CalculateUTCOffset();
-    double dst_offset = CalculateDSTOffset(ms, utc_offset);
-    offset = static_cast<int>((utc_offset + dst_offset) / kMsPerMinute);
+    std::unique_ptr<icu::TimeZone> timezone(icu::TimeZone::createDefault());
+    int32_t raw_offset, dst_offset;
+    UErrorCode status = U_ZERO_ERROR;
+    // Handle the conversion of localtime to UTC the same way as the
+    // latest ECMA 262 spec for Javascript (v8 does that, too).
+    // TODO(jshin): Once http://bugs.icu-project.org/trac/ticket/13705
+    // is fixed, no casting would be necessary.
+    static_cast<const icu::BasicTimeZone*>(timezone.get())
+        ->getOffsetFromLocal(ms, icu::BasicTimeZone::kFormer,
+                             icu::BasicTimeZone::kFormer, raw_offset,
+                             dst_offset, status);
+    DCHECK(U_SUCCESS(status));
+    offset = static_cast<int>((raw_offset + dst_offset) / kMsPerMinute);
   }
   return ms - (offset * kMsPerMinute);
 }
@@ -835,9 +709,12 @@ String MakeRFC2822DateString(const Time date, int utc_offset) {
 }
 
 double ConvertToLocalTime(double ms) {
-  double utc_offset = CalculateUTCOffset();
-  double dst_offset = CalculateDSTOffset(ms, utc_offset);
-  return (ms + utc_offset + dst_offset);
+  std::unique_ptr<icu::TimeZone> timezone(icu::TimeZone::createDefault());
+  int32_t raw_offset, dst_offset;
+  UErrorCode status = U_ZERO_ERROR;
+  timezone->getOffset(ms, false, raw_offset, dst_offset, status);
+  DCHECK(U_SUCCESS(status));
+  return (ms + static_cast<double>(raw_offset + dst_offset));
 }
 
 }  // namespace WTF

@@ -12,11 +12,12 @@
 #include "base/metrics/histogram_macros.h"
 #include "base/stl_util.h"
 #include "base/trace_event/trace_event.h"
-#include "base/trace_event/trace_event_argument.h"
+#include "base/trace_event/traced_value.h"
 #include "components/subresource_filter/content/browser/activation_state_computing_navigation_throttle.h"
 #include "components/subresource_filter/content/browser/async_document_subresource_filter.h"
 #include "components/subresource_filter/content/browser/navigation_console_logger.h"
 #include "components/subresource_filter/content/browser/page_load_statistics.h"
+#include "components/subresource_filter/content/browser/subresource_filter_client.h"
 #include "components/subresource_filter/content/browser/subresource_filter_observer_manager.h"
 #include "components/subresource_filter/content/common/subresource_filter_messages.h"
 #include "components/subresource_filter/content/common/subresource_filter_utils.h"
@@ -28,18 +29,20 @@
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/console_message_level.h"
 #include "net/base/net_errors.h"
+#include "third_party/blink/public/common/associated_interfaces/associated_interface_provider.h"
 
 namespace subresource_filter {
 
 ContentSubresourceFilterThrottleManager::
     ContentSubresourceFilterThrottleManager(
-        Delegate* delegate,
+        SubresourceFilterClient* client,
         VerifiedRulesetDealer::Handle* dealer_handle,
         content::WebContents* web_contents)
     : content::WebContentsObserver(web_contents),
+      binding_(web_contents, this),
       scoped_observer_(this),
       dealer_handle_(dealer_handle),
-      delegate_(delegate),
+      client_(client),
       weak_ptr_factory_(this) {
   SubresourceFilterObserverManager::CreateForWebContents(web_contents);
   scoped_observer_.Add(
@@ -62,9 +65,9 @@ void ContentSubresourceFilterThrottleManager::RenderFrameDeleted(
   DestroyRulesetHandleIfNoLongerUsed();
 }
 
-// Pull the AsyncDocumentSubresourceFilter and its associated ActivationState
-// out of the activation state computing throttle. Store it for later filtering
-// of subframe navigations.
+// Pull the AsyncDocumentSubresourceFilter and its associated
+// mojom::ActivationState out of the activation state computing throttle. Store
+// it for later filtering of subframe navigations.
 void ContentSubresourceFilterThrottleManager::ReadyToCommitNavigation(
     content::NavigationHandle* navigation_handle) {
   // Since the frame hasn't yet committed, GetCurrentRenderFrameHost() points
@@ -101,14 +104,15 @@ void ContentSubresourceFilterThrottleManager::ReadyToCommitNavigation(
     return;
 
   // A filter with DISABLED activation indicates a corrupted ruleset.
-  ActivationLevel level = filter->activation_state().activation_level;
-  if (level == ActivationLevel::DISABLED)
+  mojom::ActivationLevel level = filter->activation_state().activation_level;
+  if (level == mojom::ActivationLevel::kDisabled)
     return;
 
   TRACE_EVENT1(
       TRACE_DISABLED_BY_DEFAULT("loading"),
       "ContentSubresourceFilterThrottleManager::ReadyToCommitNavigation",
-      "activation_state", filter->activation_state().ToTracedValue());
+      "activation_state",
+      static_cast<int>(filter->activation_state().activation_level));
 
   throttle->WillSendActivationToRenderer();
 
@@ -119,8 +123,10 @@ void ContentSubresourceFilterThrottleManager::ReadyToCommitNavigation(
       transferred_ad_frame || base::ContainsKey(ad_frames_, frame_host);
   DCHECK(!is_ad_subframe || !navigation_handle->IsInMainFrame());
 
-  frame_host->Send(new SubresourceFilterMsg_ActivateForNextCommittedLoad(
-      frame_host->GetRoutingID(), filter->activation_state(), is_ad_subframe));
+  mojom::SubresourceFilterAgentAssociatedPtr agent;
+  frame_host->GetRemoteAssociatedInterfaces()->GetInterface(&agent);
+  agent->ActivateForNextCommittedLoad(filter->activation_state().Clone(),
+                                      is_ad_subframe);
 }
 
 void ContentSubresourceFilterThrottleManager::DidFinishNavigation(
@@ -152,23 +158,24 @@ void ContentSubresourceFilterThrottleManager::DidFinishNavigation(
           std::make_unique<PageLoadStatistics>(filter->activation_state());
       if (filter->activation_state().enable_logging) {
         DCHECK(filter->activation_state().activation_level !=
-               ActivationLevel::DISABLED);
+               mojom::ActivationLevel::kDisabled);
         NavigationConsoleLogger::LogMessageOnCommit(
             navigation_handle, content::CONSOLE_MESSAGE_LEVEL_WARNING,
             kActivationConsoleMessage);
       }
     }
-    ActivationLevel level = filter ? filter->activation_state().activation_level
-                                   : ActivationLevel::DISABLED;
+    mojom::ActivationLevel level =
+        filter ? filter->activation_state().activation_level
+               : mojom::ActivationLevel::kDisabled;
     UMA_HISTOGRAM_ENUMERATION("SubresourceFilter.PageLoad.ActivationState",
-                              level, ActivationLevel::LAST);
+                              level);
   }
 
   // Make sure |activated_frame_hosts_| is updated or cleaned up depending on
   // this navigation's activation state.
   if (filter) {
     base::OnceClosure disallowed_callback(base::BindOnce(
-        &ContentSubresourceFilterThrottleManager::MaybeCallFirstDisallowedLoad,
+        &ContentSubresourceFilterThrottleManager::MaybeShowNotification,
         weak_ptr_factory_.GetWeakPtr()));
     filter->set_first_disallowed_load_callback(std::move(disallowed_callback));
     activated_frame_hosts_[frame_host] = std::move(filter);
@@ -192,42 +199,17 @@ void ContentSubresourceFilterThrottleManager::DidFinishLoad(
   statistics_->OnDidFinishLoad();
 }
 
-bool ContentSubresourceFilterThrottleManager::OnMessageReceived(
-    const IPC::Message& message,
-    content::RenderFrameHost* render_frame_host) {
-  bool handled = true;
-
-  IPC_BEGIN_MESSAGE_MAP_WITH_PARAM(ContentSubresourceFilterThrottleManager,
-                                   message, render_frame_host)
-    IPC_MESSAGE_HANDLER(SubresourceFilterHostMsg_FrameIsAdSubframe,
-                        OnFrameIsAdSubframe)
-    IPC_MESSAGE_UNHANDLED(handled = false)
-  IPC_END_MESSAGE_MAP()
-  if (handled)
-    return true;
-
-  IPC_BEGIN_MESSAGE_MAP(ContentSubresourceFilterThrottleManager, message)
-    IPC_MESSAGE_HANDLER(SubresourceFilterHostMsg_DidDisallowFirstSubresource,
-                        MaybeCallFirstDisallowedLoad)
-    IPC_MESSAGE_HANDLER(SubresourceFilterHostMsg_DocumentLoadStatistics,
-                        OnDocumentLoadStatistics)
-    IPC_MESSAGE_UNHANDLED(handled = false)
-  IPC_END_MESSAGE_MAP()
-  return handled;
-}
-
 // Sets the desired page-level |activation_state| for the currently ongoing
 // page load, identified by its main-frame |navigation_handle|. If this method
 // is not called for a main-frame navigation, the default behavior is no
 // activation for that page load.
 void ContentSubresourceFilterThrottleManager::OnPageActivationComputed(
     content::NavigationHandle* navigation_handle,
-    ActivationDecision activation_decision,
-    const ActivationState& activation_state) {
+    const mojom::ActivationState& activation_state) {
   DCHECK(navigation_handle->IsInMainFrame());
   DCHECK(!navigation_handle->HasCommitted());
   // Do not notify the throttle if activation is disabled.
-  if (activation_state.activation_level == ActivationLevel::DISABLED)
+  if (activation_state.activation_level == mojom::ActivationLevel::kDisabled)
     return;
 
   auto it = ongoing_activation_throttles_.find(navigation_handle);
@@ -242,20 +224,16 @@ void ContentSubresourceFilterThrottleManager::OnSubframeNavigationEvaluated(
     LoadPolicy load_policy,
     bool is_ad_subframe) {
   DCHECK(!navigation_handle->IsInMainFrame());
-
-  auto it = ongoing_activation_throttles_.find(navigation_handle);
-  if (it == ongoing_activation_throttles_.end())
+  if (!is_ad_subframe)
     return;
 
-  if (is_ad_subframe) {
-    // TODO(crbug.com/843646): Use an API that NavigationHandle supports rather
-    // than trying to infer what the NavigationHandle is doing.
-    content::RenderFrameHost* starting_rfh =
-        navigation_handle->GetWebContents()->UnsafeFindFrameByFrameTreeNodeId(
-            navigation_handle->GetFrameTreeNodeId());
-    DCHECK(starting_rfh);
-    ad_frames_.insert(starting_rfh);
-  }
+  // TODO(crbug.com/843646): Use an API that NavigationHandle supports rather
+  // than trying to infer what the NavigationHandle is doing.
+  content::RenderFrameHost* starting_rfh =
+      navigation_handle->GetWebContents()->UnsafeFindFrameByFrameTreeNodeId(
+          navigation_handle->GetFrameTreeNodeId());
+  DCHECK(starting_rfh);
+  ad_frames_.insert(starting_rfh);
 }
 
 void ContentSubresourceFilterThrottleManager::MaybeAppendNavigationThrottles(
@@ -318,8 +296,10 @@ ContentSubresourceFilterThrottleManager::
         ActivationStateComputingNavigationThrottle::CreateForMainFrame(
             navigation_handle);
     if (base::FeatureList::IsEnabled(kAdTagging)) {
-      throttle->NotifyPageActivationWithRuleset(
-          EnsureRulesetHandle(), ActivationState(ActivationLevel::DRYRUN));
+      mojom::ActivationState ad_tagging_state;
+      ad_tagging_state.activation_level = mojom::ActivationLevel::kDryRun;
+      throttle->NotifyPageActivationWithRuleset(EnsureRulesetHandle(),
+                                                ad_tagging_state);
     }
     return throttle;
   }
@@ -362,7 +342,7 @@ ContentSubresourceFilterThrottleManager::GetParentFrameFilter(
   return nullptr;
 }
 
-void ContentSubresourceFilterThrottleManager::MaybeCallFirstDisallowedLoad() {
+void ContentSubresourceFilterThrottleManager::MaybeShowNotification() {
   if (current_committed_load_has_notified_disallowed_load_)
     return;
 
@@ -371,10 +351,10 @@ void ContentSubresourceFilterThrottleManager::MaybeCallFirstDisallowedLoad() {
   auto it = activated_frame_hosts_.find(web_contents()->GetMainFrame());
   if (it == activated_frame_hosts_.end() ||
       it->second->activation_state().activation_level !=
-          ActivationLevel::ENABLED) {
+          mojom::ActivationLevel::kEnabled) {
     return;
   }
-  delegate_->OnFirstSubresourceLoadDisallowed();
+  client_->ShowNotification();
   current_committed_load_has_notified_disallowed_load_ = true;
 }
 
@@ -393,17 +373,27 @@ void ContentSubresourceFilterThrottleManager::
   }
 }
 
-void ContentSubresourceFilterThrottleManager::OnDocumentLoadStatistics(
-    const DocumentLoadStatistics& statistics) {
-  if (statistics_)
-    statistics_->OnDocumentLoadStatistics(statistics);
-}
-
 void ContentSubresourceFilterThrottleManager::OnFrameIsAdSubframe(
     content::RenderFrameHost* render_frame_host) {
   DCHECK(render_frame_host);
 
   ad_frames_.insert(render_frame_host);
+  SubresourceFilterObserverManager::FromWebContents(web_contents())
+      ->NotifyAdSubframeDetected(render_frame_host);
+}
+
+void ContentSubresourceFilterThrottleManager::DidDisallowFirstSubresource() {
+  MaybeShowNotification();
+}
+
+void ContentSubresourceFilterThrottleManager::FrameIsAdSubframe() {
+  OnFrameIsAdSubframe(binding_.GetCurrentTargetFrame());
+}
+
+void ContentSubresourceFilterThrottleManager::SetDocumentLoadStatistics(
+    mojom::DocumentLoadStatisticsPtr statistics) {
+  if (statistics_)
+    statistics_->OnDocumentLoadStatistics(*statistics);
 }
 
 void ContentSubresourceFilterThrottleManager::MaybeActivateSubframeSpecialUrls(

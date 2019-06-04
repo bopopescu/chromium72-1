@@ -6,24 +6,18 @@
 
 #include <utility>
 
-#include "base/task_scheduler/post_task.h"
+#include "base/no_destructor.h"
+#include "base/task/post_task.h"
 #include "services/service_manager/public/cpp/bind_source_info.h"
 #include "services/tracing/perfetto/producer_host.h"
 #include "services/tracing/public/cpp/perfetto/shared_memory.h"
-
-#include "third_party/perfetto/include/perfetto/tracing/core/service.h"
+#include "third_party/perfetto/include/perfetto/tracing/core/tracing_service.h"
 
 namespace tracing {
 
 namespace {
 
 const char kPerfettoProducerName[] = "org.chromium.perfetto_producer";
-
-PerfettoService* g_perfetto_service;
-
-// Just used to destroy disconnected clients.
-template <typename T>
-void OnClientDisconnect(std::unique_ptr<T>) {}
 
 }  // namespace
 
@@ -46,17 +40,23 @@ The above should be resolved before we move the Perfetto usage out from the
 flag so we can run this on non-thread-bound sequence.
 */
 
+// static
+PerfettoService* PerfettoService::GetInstance() {
+  static base::NoDestructor<PerfettoService> perfetto_service;
+  return perfetto_service.get();
+}
+
 PerfettoService::PerfettoService(
     scoped_refptr<base::SequencedTaskRunner> task_runner_for_testing)
     : perfetto_task_runner_(
           task_runner_for_testing
               ? task_runner_for_testing
               : base::CreateSingleThreadTaskRunnerWithTraits(
-                    {base::MayBlock(), base::WithBaseSyncPrimitives(),
-                     base::TaskPriority::BACKGROUND},
+                    {base::MayBlock(),
+                     base::TaskShutdownBehavior::CONTINUE_ON_SHUTDOWN,
+                     base::WithBaseSyncPrimitives(),
+                     base::TaskPriority::BEST_EFFORT},
                     base::SingleThreadTaskRunnerThreadMode::DEDICATED)) {
-  DCHECK(!g_perfetto_service);
-  g_perfetto_service = this;
   DETACH_FROM_SEQUENCE(sequence_checker_);
   perfetto_task_runner_.task_runner()->PostTask(
       FROM_HERE, base::BindOnce(&PerfettoService::CreateServiceOnSequence,
@@ -64,30 +64,17 @@ PerfettoService::PerfettoService(
 }
 
 PerfettoService::~PerfettoService() {
-  DCHECK_EQ(g_perfetto_service, this);
-  g_perfetto_service = nullptr;
-}
-
-// static
-PerfettoService* PerfettoService::GetInstance() {
-  return g_perfetto_service;
-}
-
-// static
-void PerfettoService::DestroyOnSequence(
-    std::unique_ptr<PerfettoService> service) {
-  PerfettoService::GetInstance()->task_runner()->DeleteSoon(FROM_HERE,
-                                                            std::move(service));
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 }
 
 void PerfettoService::CreateServiceOnSequence() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  service_ = perfetto::Service::CreateInstance(
+  service_ = perfetto::TracingService::CreateInstance(
       std::make_unique<MojoSharedMemory::Factory>(), &perfetto_task_runner_);
   DCHECK(service_);
 }
 
-perfetto::Service* PerfettoService::GetService() const {
+perfetto::TracingService* PerfettoService::GetService() const {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   return service_.get();
 }
@@ -110,13 +97,13 @@ void PerfettoService::BindOnSequence(
 
 void PerfettoService::ConnectToProducerHost(
     mojom::ProducerClientPtr producer_client,
-    mojom::ProducerHostRequest producer_host) {
+    mojom::ProducerHostRequest producer_host_request) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   auto new_producer = std::make_unique<ProducerHost>();
-  new_producer->Initialize(std::move(producer_client), std::move(producer_host),
-                           service_.get(), kPerfettoProducerName);
-  new_producer->set_connection_error_handler(base::BindOnce(
-      &OnClientDisconnect<ProducerHost>, std::move(new_producer)));
+  new_producer->Initialize(std::move(producer_client), service_.get(),
+                           kPerfettoProducerName);
+  producer_bindings_.AddBinding(std::move(new_producer),
+                                std::move(producer_host_request));
 }
 
 }  // namespace tracing

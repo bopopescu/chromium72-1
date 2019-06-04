@@ -21,7 +21,12 @@ class GrContext;
 
 namespace gpu {
 class GLInProcessContext;
+class GpuProcessActivityFlags;
 class RasterInProcessContext;
+
+namespace raster {
+class GrShaderCache;
+}
 }
 
 namespace skia_bindings {
@@ -37,7 +42,11 @@ class TestInProcessContextProvider
       public viz::ContextProvider,
       public viz::RasterContextProvider {
  public:
-  explicit TestInProcessContextProvider(bool enable_oop_rasterization);
+  explicit TestInProcessContextProvider(
+      bool enable_oop_rasterization,
+      bool support_locking,
+      gpu::raster::GrShaderCache* gr_shader_cache = nullptr,
+      gpu::GpuProcessActivityFlags* activity_flags = nullptr);
 
   // viz::ContextProvider / viz::RasterContextProvider implementation.
   void AddRef() const override;
@@ -47,6 +56,7 @@ class TestInProcessContextProvider
   gpu::raster::RasterInterface* RasterInterface() override;
   gpu::ContextSupport* ContextSupport() override;
   class GrContext* GrContext() override;
+  gpu::SharedImageInterface* SharedImageInterface() override;
   viz::ContextCacheController* CacheController() override;
   base::Lock* GetLock() override;
   const gpu::Capabilities& ContextCapabilities() const override;
@@ -54,11 +64,17 @@ class TestInProcessContextProvider
   void AddObserver(viz::ContextLostObserver* obs) override {}
   void RemoveObserver(viz::ContextLostObserver* obs) override {}
 
+  void ExecuteOnGpuThread(base::OnceClosure task);
+
  protected:
   friend class base::RefCountedThreadSafe<TestInProcessContextProvider>;
   ~TestInProcessContextProvider() override;
 
  private:
+  bool enable_oop_rasterization_ = false;
+  gpu::raster::GrShaderCache* gr_shader_cache_ = nullptr;
+  gpu::GpuProcessActivityFlags* activity_flags_ = nullptr;
+
   viz::TestGpuMemoryBufferManager gpu_memory_buffer_manager_;
   TestImageFactory image_factory_;
 
@@ -71,7 +87,7 @@ class TestInProcessContextProvider
   std::unique_ptr<gpu::RasterInProcessContext> raster_context_;
 
   std::unique_ptr<viz::ContextCacheController> cache_controller_;
-  base::Lock context_lock_;
+  base::Optional<base::Lock> context_lock_;
   gpu::GpuFeatureInfo gpu_feature_info_;
 };
 

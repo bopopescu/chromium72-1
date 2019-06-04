@@ -23,7 +23,7 @@
 #include "base/threading/thread_task_runner_handle.h"
 #include "base/values.h"
 #include "content/child/child_process.h"
-#include "content/renderer/media/mock_audio_device_factory.h"
+#include "content/renderer/media/audio/mock_audio_device_factory.h"
 #include "content/renderer/media/stream/media_stream_audio_source.h"
 #include "content/renderer/media/stream/media_stream_audio_track.h"
 #include "content/renderer/media/stream/media_stream_source.h"
@@ -44,7 +44,6 @@
 #include "third_party/blink/public/platform/web_media_stream.h"
 #include "third_party/blink/public/platform/web_media_stream_source.h"
 #include "third_party/blink/public/platform/web_media_stream_track.h"
-#include "third_party/blink/public/platform/web_rtc_configuration.h"
 #include "third_party/blink/public/platform/web_rtc_data_channel_handler.h"
 #include "third_party/blink/public/platform/web_rtc_data_channel_init.h"
 #include "third_party/blink/public/platform/web_rtc_dtmf_sender_handler.h"
@@ -53,6 +52,7 @@
 #include "third_party/blink/public/platform/web_rtc_rtp_receiver.h"
 #include "third_party/blink/public/platform/web_rtc_session_description.h"
 #include "third_party/blink/public/platform/web_rtc_session_description_request.h"
+#include "third_party/blink/public/platform/web_rtc_stats.h"
 #include "third_party/blink/public/platform/web_rtc_stats_request.h"
 #include "third_party/blink/public/platform/web_rtc_void_request.h"
 #include "third_party/blink/public/platform/web_url.h"
@@ -149,6 +149,10 @@ class MockRTCStatsRequest : public LocalRTCStatsRequest {
 
 class MockPeerConnectionTracker : public PeerConnectionTracker {
  public:
+  MockPeerConnectionTracker()
+      : PeerConnectionTracker(
+            blink::scheduler::GetSingleThreadTaskRunnerForTesting()) {}
+
   MOCK_METHOD1(UnregisterPeerConnection,
                void(RTCPeerConnectionHandler* pc_handler));
   // TODO(jiayl): add coverage for the following methods
@@ -171,14 +175,21 @@ class MockPeerConnectionTracker : public PeerConnectionTracker {
                     scoped_refptr<blink::WebRTCICECandidate> candidate,
                     Source source,
                     bool succeeded));
-  MOCK_METHOD3(TrackAddStream,
+  MOCK_METHOD4(TrackAddTransceiver,
                void(RTCPeerConnectionHandler* pc_handler,
-                    const blink::WebMediaStream& stream,
-                    Source source));
-  MOCK_METHOD3(TrackRemoveStream,
+                    TransceiverUpdatedReason reason,
+                    const blink::WebRTCRtpTransceiver& transceiver,
+                    size_t transceiver_index));
+  MOCK_METHOD4(TrackModifyTransceiver,
                void(RTCPeerConnectionHandler* pc_handler,
-                    const blink::WebMediaStream& stream,
-                    Source source));
+                    TransceiverUpdatedReason reason,
+                    const blink::WebRTCRtpTransceiver& transceiver,
+                    size_t transceiver_index));
+  MOCK_METHOD4(TrackRemoveTransceiver,
+               void(RTCPeerConnectionHandler* pc_handler,
+                    TransceiverUpdatedReason reason,
+                    const blink::WebRTCRtpTransceiver& transceiver,
+                    size_t transceiver_index));
   MOCK_METHOD1(TrackOnIceComplete,
                void(RTCPeerConnectionHandler* pc_handler));
   MOCK_METHOD3(TrackCreateDataChannel,
@@ -188,15 +199,13 @@ class MockPeerConnectionTracker : public PeerConnectionTracker {
   MOCK_METHOD1(TrackStop, void(RTCPeerConnectionHandler* pc_handler));
   MOCK_METHOD2(TrackSignalingStateChange,
                void(RTCPeerConnectionHandler* pc_handler,
-                    WebRTCPeerConnectionHandlerClient::SignalingState state));
-  MOCK_METHOD2(
-      TrackIceConnectionStateChange,
-      void(RTCPeerConnectionHandler* pc_handler,
-           WebRTCPeerConnectionHandlerClient::ICEConnectionState state));
-  MOCK_METHOD2(
-      TrackIceGatheringStateChange,
-      void(RTCPeerConnectionHandler* pc_handler,
-           WebRTCPeerConnectionHandlerClient::ICEGatheringState state));
+                    webrtc::PeerConnectionInterface::SignalingState state));
+  MOCK_METHOD2(TrackIceConnectionStateChange,
+               void(RTCPeerConnectionHandler* pc_handler,
+                    webrtc::PeerConnectionInterface::IceConnectionState state));
+  MOCK_METHOD2(TrackIceGatheringStateChange,
+               void(RTCPeerConnectionHandler* pc_handler,
+                    webrtc::PeerConnectionInterface::IceGatheringState state));
   MOCK_METHOD4(TrackSessionDescriptionCallback,
                void(RTCPeerConnectionHandler* pc_handler,
                     Action action,
@@ -272,7 +281,8 @@ class RTCPeerConnectionHandlerTest : public ::testing::Test {
     mock_dependency_factory_.reset(new MockPeerConnectionDependencyFactory());
     pc_handler_ = CreateRTCPeerConnectionHandlerUnderTest();
     mock_tracker_.reset(new NiceMock<MockPeerConnectionTracker>());
-    blink::WebRTCConfiguration config;
+    webrtc::PeerConnectionInterface::RTCConfiguration config;
+    config.sdp_semantics = webrtc::SdpSemantics::kPlanB;
     blink::WebMediaConstraints constraints;
     EXPECT_TRUE(pc_handler_->InitializeForTest(
         config, constraints, mock_tracker_.get()->AsWeakPtr()));
@@ -373,14 +383,9 @@ class RTCPeerConnectionHandlerTest : public ::testing::Test {
   }
 
   void StopAllTracks(const blink::WebMediaStream& stream) {
-    blink::WebVector<blink::WebMediaStreamTrack> audio_tracks;
-    stream.AudioTracks(audio_tracks);
-    for (const auto& track : audio_tracks)
+    for (const auto& track : stream.AudioTracks())
       MediaStreamAudioTrack::From(track)->Stop();
-
-    blink::WebVector<blink::WebMediaStreamTrack> video_tracks;
-    stream.VideoTracks(video_tracks);
-    for (const auto& track : video_tracks)
+    for (const auto& track : stream.VideoTracks())
       MediaStreamVideoTrack::GetVideoTrack(track)->Stop();
   }
 
@@ -390,22 +395,26 @@ class RTCPeerConnectionHandlerTest : public ::testing::Test {
 
   bool AddStream(const blink::WebMediaStream& web_stream) {
     size_t senders_size_before_add = senders_.size();
-    blink::WebVector<blink::WebMediaStreamTrack> web_audio_tracks;
-    web_stream.AudioTracks(web_audio_tracks);
-    for (const auto& web_audio_track : web_audio_tracks) {
-      auto sender = pc_handler_->AddTrack(
+    for (const auto& web_audio_track : web_stream.AudioTracks()) {
+      auto error_or_transceiver = pc_handler_->AddTrack(
           web_audio_track, std::vector<blink::WebMediaStream>({web_stream}));
-      if (sender) {
+      if (error_or_transceiver.ok()) {
+        DCHECK_EQ(
+            error_or_transceiver.value()->ImplementationType(),
+            blink::WebRTCRtpTransceiverImplementationType::kPlanBSenderOnly);
+        auto sender = error_or_transceiver.value()->Sender();
         senders_.push_back(std::unique_ptr<RTCRtpSender>(
             static_cast<RTCRtpSender*>(sender.release())));
       }
     }
-    blink::WebVector<blink::WebMediaStreamTrack> web_video_tracks;
-    web_stream.VideoTracks(web_video_tracks);
-    for (const auto& web_video_track : web_video_tracks) {
-      auto sender = pc_handler_->AddTrack(
+    for (const auto& web_video_track : web_stream.VideoTracks()) {
+      auto error_or_transceiver = pc_handler_->AddTrack(
           web_video_track, std::vector<blink::WebMediaStream>({web_stream}));
-      if (sender) {
+      if (error_or_transceiver.ok()) {
+        DCHECK_EQ(
+            error_or_transceiver.value()->ImplementationType(),
+            blink::WebRTCRtpTransceiverImplementationType::kPlanBSenderOnly);
+        auto sender = error_or_transceiver.value()->Sender();
         senders_.push_back(std::unique_ptr<RTCRtpSender>(
             static_cast<RTCRtpSender*>(sender.release())));
       }
@@ -424,20 +433,16 @@ class RTCPeerConnectionHandlerTest : public ::testing::Test {
 
   bool RemoveStream(const blink::WebMediaStream& web_stream) {
     size_t senders_size_before_remove = senders_.size();
-    blink::WebVector<blink::WebMediaStreamTrack> web_audio_tracks;
-    web_stream.AudioTracks(web_audio_tracks);
     // TODO(hbos): With Unified Plan senders are not removed.
     // https://crbug.com/799030
-    for (const auto& web_audio_track : web_audio_tracks) {
+    for (const auto& web_audio_track : web_stream.AudioTracks()) {
       auto it = FindSenderForTrack(web_audio_track);
-      if (it != senders_.end() && pc_handler_->RemoveTrack((*it).get()))
+      if (it != senders_.end() && pc_handler_->RemoveTrack((*it).get()).ok())
         senders_.erase(it);
     }
-    blink::WebVector<blink::WebMediaStreamTrack> web_video_tracks;
-    web_stream.VideoTracks(web_video_tracks);
-    for (const auto& web_video_track : web_video_tracks) {
+    for (const auto& web_video_track : web_stream.VideoTracks()) {
       auto it = FindSenderForTrack(web_video_track);
-      if (it != senders_.end() && pc_handler_->RemoveTrack((*it).get()))
+      if (it != senders_.end() && pc_handler_->RemoveTrack((*it).get()).ok())
         senders_.erase(it);
     }
     return senders_size_before_remove > senders_.size();
@@ -599,20 +604,20 @@ TEST_F(RTCPeerConnectionHandlerTest, NoCallbacksToClientAfterStop) {
   pc_handler_->observer()->OnSignalingChange(
       webrtc::PeerConnectionInterface::kHaveRemoteOffer);
 
-  EXPECT_CALL(*mock_client_.get(), DidChangeICEGatheringState(_)).Times(0);
+  EXPECT_CALL(*mock_client_.get(), DidChangeIceGatheringState(_)).Times(0);
   pc_handler_->observer()->OnIceGatheringChange(
       webrtc::PeerConnectionInterface::kIceGatheringNew);
 
-  EXPECT_CALL(*mock_client_.get(), DidChangeICEConnectionState(_)).Times(0);
+  EXPECT_CALL(*mock_client_.get(), DidChangeIceConnectionState(_)).Times(0);
   pc_handler_->observer()->OnIceConnectionChange(
       webrtc::PeerConnectionInterface::kIceConnectionDisconnected);
 
-  EXPECT_CALL(*mock_client_.get(), DidAddRemoteTrackForMock(_)).Times(0);
+  EXPECT_CALL(*mock_client_.get(), DidAddReceiverPlanBForMock(_)).Times(0);
   rtc::scoped_refptr<webrtc::MediaStreamInterface> remote_stream(
       AddRemoteMockMediaStream("remote_stream", "video", "audio"));
   InvokeOnAddStream(remote_stream);
 
-  EXPECT_CALL(*mock_client_.get(), DidRemoveRemoteTrackForMock(_)).Times(0);
+  EXPECT_CALL(*mock_client_.get(), DidRemoveReceiverPlanBForMock(_)).Times(0);
   InvokeOnRemoveStream(remote_stream);
 
   EXPECT_CALL(*mock_client_.get(), DidAddRemoteDataChannel(_)).Times(0);
@@ -701,7 +706,7 @@ TEST_F(RTCPeerConnectionHandlerTest, setLocalDescriptionParseError) {
   pc_handler_->SetLocalDescription(request, description);
   RunMessageLoopsUntilIdle();
   // A description that failed to be applied shouldn't be stored.
-  EXPECT_TRUE(pc_handler_->LocalDescription().Sdp().IsEmpty());
+  EXPECT_TRUE(pc_handler_->LocalDescription().IsNull());
 }
 
 TEST_F(RTCPeerConnectionHandlerTest, setRemoteDescription) {
@@ -757,24 +762,23 @@ TEST_F(RTCPeerConnectionHandlerTest, setRemoteDescriptionParseError) {
   pc_handler_->SetRemoteDescription(request, description);
   RunMessageLoopsUntilIdle();
   // A description that failed to be applied shouldn't be stored.
-  EXPECT_TRUE(pc_handler_->RemoteDescription().Sdp().IsEmpty());
+  EXPECT_TRUE(pc_handler_->RemoteDescription().IsNull());
 }
 
 TEST_F(RTCPeerConnectionHandlerTest, setConfiguration) {
-  blink::WebRTCConfiguration config;
+  webrtc::PeerConnectionInterface::RTCConfiguration config;
+  config.sdp_semantics = webrtc::SdpSemantics::kPlanB;
 
   EXPECT_CALL(*mock_tracker_.get(),
               TrackSetConfiguration(pc_handler_.get(), _));
-  // TODO(perkj): Test that the parameters in |config| can be translated when a
-  // WebRTCConfiguration can be constructed. It's WebKit class and can't be
-  // initialized from a test.
   EXPECT_EQ(webrtc::RTCErrorType::NONE, pc_handler_->SetConfiguration(config));
 }
 
 // Test that when an error occurs in SetConfiguration, it's converted to a
 // blink error and false is returned.
 TEST_F(RTCPeerConnectionHandlerTest, setConfigurationError) {
-  blink::WebRTCConfiguration config;
+  webrtc::PeerConnectionInterface::RTCConfiguration config;
+  config.sdp_semantics = webrtc::SdpSemantics::kPlanB;
 
   mock_peer_connection_->set_setconfiguration_error_type(
       webrtc::RTCErrorType::INVALID_MODIFICATION);
@@ -802,22 +806,25 @@ TEST_F(RTCPeerConnectionHandlerTest, addAndRemoveStream) {
   blink::WebMediaStream local_stream(
       CreateLocalMediaStream(stream_label));
 
-  EXPECT_CALL(*mock_tracker_.get(),
-              TrackAddStream(pc_handler_.get(), _,
-                             PeerConnectionTracker::SOURCE_LOCAL));
-  EXPECT_CALL(*mock_tracker_.get(),
-              TrackRemoveStream(pc_handler_.get(), _,
-                                PeerConnectionTracker::SOURCE_LOCAL));
+  EXPECT_CALL(
+      *mock_tracker_.get(),
+      TrackAddTransceiver(
+          pc_handler_.get(),
+          PeerConnectionTracker::TransceiverUpdatedReason::kAddTrack, _, _))
+      .Times(2);
+  EXPECT_CALL(
+      *mock_tracker_.get(),
+      TrackRemoveTransceiver(
+          pc_handler_.get(),
+          PeerConnectionTracker::TransceiverUpdatedReason::kRemoveTrack, _, _))
+      .Times(2);
   EXPECT_TRUE(AddStream(local_stream));
   EXPECT_EQ(stream_label, mock_peer_connection_->stream_label());
-  EXPECT_EQ(1u,
-      mock_peer_connection_->local_streams()->at(0)->GetAudioTracks().size());
-  EXPECT_EQ(1u,
-      mock_peer_connection_->local_streams()->at(0)->GetVideoTracks().size());
+  EXPECT_EQ(2u, mock_peer_connection_->GetSenders().size());
 
   EXPECT_FALSE(AddStream(local_stream));
   EXPECT_TRUE(RemoveStream(local_stream));
-  EXPECT_EQ(0u, mock_peer_connection_->local_streams()->count());
+  EXPECT_EQ(0u, mock_peer_connection_->GetSenders().size());
 
   StopAllTracks(local_stream);
 }
@@ -827,14 +834,14 @@ TEST_F(RTCPeerConnectionHandlerTest, addStreamWithStoppedAudioAndVideoTrack) {
   blink::WebMediaStream local_stream(
       CreateLocalMediaStream(stream_label));
 
-  blink::WebVector<blink::WebMediaStreamTrack> audio_tracks;
-  local_stream.AudioTracks(audio_tracks);
+  blink::WebVector<blink::WebMediaStreamTrack> audio_tracks =
+      local_stream.AudioTracks();
   MediaStreamAudioSource* native_audio_source =
       MediaStreamAudioSource::From(audio_tracks[0].Source());
   native_audio_source->StopSource();
 
-  blink::WebVector<blink::WebMediaStreamTrack> video_tracks;
-  local_stream.VideoTracks(video_tracks);
+  blink::WebVector<blink::WebMediaStreamTrack> video_tracks =
+      local_stream.VideoTracks();
   MediaStreamVideoSource* native_video_source =
       static_cast<MediaStreamVideoSource*>(
           video_tracks[0].Source().GetExtraData());
@@ -842,12 +849,7 @@ TEST_F(RTCPeerConnectionHandlerTest, addStreamWithStoppedAudioAndVideoTrack) {
 
   EXPECT_TRUE(AddStream(local_stream));
   EXPECT_EQ(stream_label, mock_peer_connection_->stream_label());
-  EXPECT_EQ(
-      1u,
-      mock_peer_connection_->local_streams()->at(0)->GetAudioTracks().size());
-  EXPECT_EQ(
-      1u,
-      mock_peer_connection_->local_streams()->at(0)->GetVideoTracks().size());
+  EXPECT_EQ(2u, mock_peer_connection_->GetSenders().size());
 
   StopAllTracks(local_stream);
 }
@@ -876,8 +878,8 @@ TEST_F(RTCPeerConnectionHandlerTest, GetStatsWithLocalSelector) {
   blink::WebMediaStream local_stream(
       CreateLocalMediaStream("local_stream"));
   EXPECT_TRUE(AddStream(local_stream));
-  blink::WebVector<blink::WebMediaStreamTrack> tracks;
-  local_stream.AudioTracks(tracks);
+  blink::WebVector<blink::WebMediaStreamTrack> tracks =
+      local_stream.AudioTracks();
   ASSERT_LE(1ul, tracks.size());
 
   scoped_refptr<MockRTCStatsRequest> request(
@@ -890,45 +892,13 @@ TEST_F(RTCPeerConnectionHandlerTest, GetStatsWithLocalSelector) {
   StopAllTracks(local_stream);
 }
 
-// TODO(hbos): Enable when not mocking or remove test. https://crbug.com/788659
-TEST_F(RTCPeerConnectionHandlerTest, DISABLED_GetStatsWithRemoteSelector) {
-  rtc::scoped_refptr<webrtc::MediaStreamInterface> remote_stream(
-      AddRemoteMockMediaStream("remote_stream", "video", "audio"));
-  std::vector<std::unique_ptr<blink::WebRTCRtpReceiver>> receivers;
-  // Grab the added receivers and media stream when it's been successfully added
-  // to the PC.
-  blink::WebMediaStream webkit_stream;
-  EXPECT_CALL(*mock_client_.get(), DidAddRemoteTrackForMock(_))
-      .WillRepeatedly(
-          Invoke([&webkit_stream, &receivers](
-                     std::unique_ptr<blink::WebRTCRtpReceiver>* receiver) {
-            webkit_stream = (*receiver)->Streams()[0];
-            receivers.push_back(std::move(*receiver));
-          }));
-  InvokeOnAddStream(remote_stream);
-  RunMessageLoopsUntilIdle();
-  EXPECT_TRUE(HasReceiverForEveryTrack(remote_stream, receivers));
-
-  blink::WebVector<blink::WebMediaStreamTrack> tracks;
-  webkit_stream.AudioTracks(tracks);
-  ASSERT_LE(1ul, tracks.size());
-
-  scoped_refptr<MockRTCStatsRequest> request(
-      new rtc::RefCountedObject<MockRTCStatsRequest>());
-  request->setSelector(tracks[0]);
-  pc_handler_->getStats(request.get());
-  RunMessageLoopsUntilIdle();
-  EXPECT_EQ(1, request->result()->report_count());
-}
-
 TEST_F(RTCPeerConnectionHandlerTest, GetStatsWithBadSelector) {
   // The setup is the same as GetStatsWithLocalSelector, but the stream is not
   // added to the PeerConnection.
   blink::WebMediaStream local_stream(
       CreateLocalMediaStream("local_stream_2"));
-  blink::WebVector<blink::WebMediaStreamTrack> tracks;
-
-  local_stream.AudioTracks(tracks);
+  blink::WebVector<blink::WebMediaStreamTrack> tracks =
+      local_stream.AudioTracks();
   blink::WebMediaStreamTrack component = tracks[0];
   mock_peer_connection_->SetGetStatsResult(false);
 
@@ -973,7 +943,8 @@ TEST_F(RTCPeerConnectionHandlerTest, GetRTCStats) {
   pc_handler_->native_peer_connection()->SetGetStatsReport(report);
   std::unique_ptr<blink::WebRTCStatsReport> result;
   pc_handler_->GetStats(std::unique_ptr<blink::WebRTCStatsReportCallback>(
-      new MockRTCStatsReportCallback(&result)));
+                            new MockRTCStatsReportCallback(&result)),
+                        blink::RTCStatsFilter::kIncludeNonStandardMembers);
   RunMessageLoopsUntilIdle();
   EXPECT_TRUE(result);
 
@@ -1063,153 +1034,78 @@ TEST_F(RTCPeerConnectionHandlerTest, GetRTCStats) {
   EXPECT_EQ(defined_stats_count, 1);
 }
 
-TEST_F(RTCPeerConnectionHandlerTest, OnSignalingChange) {
-  testing::InSequence sequence;
-
-  webrtc::PeerConnectionInterface::SignalingState new_state =
-      webrtc::PeerConnectionInterface::kHaveRemoteOffer;
-  EXPECT_CALL(
-      *mock_tracker_.get(),
-      TrackSignalingStateChange(
-          pc_handler_.get(),
-          WebRTCPeerConnectionHandlerClient::kSignalingStateHaveRemoteOffer));
-  EXPECT_CALL(
-      *mock_client_.get(),
-      DidChangeSignalingState(
-          WebRTCPeerConnectionHandlerClient::kSignalingStateHaveRemoteOffer));
-  pc_handler_->observer()->OnSignalingChange(new_state);
-
-  new_state = webrtc::PeerConnectionInterface::kHaveLocalPrAnswer;
-  EXPECT_CALL(
-      *mock_tracker_.get(),
-      TrackSignalingStateChange(
-          pc_handler_.get(),
-          WebRTCPeerConnectionHandlerClient::kSignalingStateHaveLocalPrAnswer));
-  EXPECT_CALL(
-      *mock_client_.get(),
-      DidChangeSignalingState(
-          WebRTCPeerConnectionHandlerClient::kSignalingStateHaveLocalPrAnswer));
-  pc_handler_->observer()->OnSignalingChange(new_state);
-
-  new_state = webrtc::PeerConnectionInterface::kHaveLocalOffer;
-  EXPECT_CALL(
-      *mock_tracker_.get(),
-      TrackSignalingStateChange(
-          pc_handler_.get(),
-          WebRTCPeerConnectionHandlerClient::kSignalingStateHaveLocalOffer));
-  EXPECT_CALL(
-      *mock_client_.get(),
-      DidChangeSignalingState(
-          WebRTCPeerConnectionHandlerClient::kSignalingStateHaveLocalOffer));
-  pc_handler_->observer()->OnSignalingChange(new_state);
-
-  new_state = webrtc::PeerConnectionInterface::kHaveRemotePrAnswer;
-  EXPECT_CALL(*mock_tracker_.get(),
-              TrackSignalingStateChange(pc_handler_.get(),
-                                        WebRTCPeerConnectionHandlerClient::
-                                            kSignalingStateHaveRemotePrAnswer));
-  EXPECT_CALL(*mock_client_.get(),
-              DidChangeSignalingState(WebRTCPeerConnectionHandlerClient::
-                                          kSignalingStateHaveRemotePrAnswer));
-  pc_handler_->observer()->OnSignalingChange(new_state);
-
-  new_state = webrtc::PeerConnectionInterface::kClosed;
-  EXPECT_CALL(*mock_tracker_.get(),
-              TrackSignalingStateChange(
-                  pc_handler_.get(),
-                  WebRTCPeerConnectionHandlerClient::kSignalingStateClosed));
-  EXPECT_CALL(*mock_client_.get(),
-              DidChangeSignalingState(
-                  WebRTCPeerConnectionHandlerClient::kSignalingStateClosed));
-  pc_handler_->observer()->OnSignalingChange(new_state);
-}
-
 TEST_F(RTCPeerConnectionHandlerTest, OnIceConnectionChange) {
   testing::InSequence sequence;
 
   webrtc::PeerConnectionInterface::IceConnectionState new_state =
       webrtc::PeerConnectionInterface::kIceConnectionNew;
-  EXPECT_CALL(
-      *mock_tracker_.get(),
-      TrackIceConnectionStateChange(
-          pc_handler_.get(),
-          WebRTCPeerConnectionHandlerClient::kICEConnectionStateStarting));
-  EXPECT_CALL(
-      *mock_client_.get(),
-      DidChangeICEConnectionState(
-          WebRTCPeerConnectionHandlerClient::kICEConnectionStateStarting));
+  EXPECT_CALL(*mock_tracker_.get(),
+              TrackIceConnectionStateChange(
+                  pc_handler_.get(),
+                  webrtc::PeerConnectionInterface::kIceConnectionNew));
+  EXPECT_CALL(*mock_client_.get(),
+              DidChangeIceConnectionState(
+                  webrtc::PeerConnectionInterface::kIceConnectionNew));
   pc_handler_->observer()->OnIceConnectionChange(new_state);
 
   new_state = webrtc::PeerConnectionInterface::kIceConnectionChecking;
-  EXPECT_CALL(
-      *mock_tracker_.get(),
-      TrackIceConnectionStateChange(
-          pc_handler_.get(),
-          WebRTCPeerConnectionHandlerClient::kICEConnectionStateChecking));
-  EXPECT_CALL(
-      *mock_client_.get(),
-      DidChangeICEConnectionState(
-          WebRTCPeerConnectionHandlerClient::kICEConnectionStateChecking));
+  EXPECT_CALL(*mock_tracker_.get(),
+              TrackIceConnectionStateChange(
+                  pc_handler_.get(),
+                  webrtc::PeerConnectionInterface::kIceConnectionChecking));
+  EXPECT_CALL(*mock_client_.get(),
+              DidChangeIceConnectionState(
+                  webrtc::PeerConnectionInterface::kIceConnectionChecking));
   pc_handler_->observer()->OnIceConnectionChange(new_state);
 
   new_state = webrtc::PeerConnectionInterface::kIceConnectionConnected;
-  EXPECT_CALL(
-      *mock_tracker_.get(),
-      TrackIceConnectionStateChange(
-          pc_handler_.get(),
-          WebRTCPeerConnectionHandlerClient::kICEConnectionStateConnected));
-  EXPECT_CALL(
-      *mock_client_.get(),
-      DidChangeICEConnectionState(
-          WebRTCPeerConnectionHandlerClient::kICEConnectionStateConnected));
+  EXPECT_CALL(*mock_tracker_.get(),
+              TrackIceConnectionStateChange(
+                  pc_handler_.get(),
+                  webrtc::PeerConnectionInterface::kIceConnectionConnected));
+  EXPECT_CALL(*mock_client_.get(),
+              DidChangeIceConnectionState(
+                  webrtc::PeerConnectionInterface::kIceConnectionConnected));
   pc_handler_->observer()->OnIceConnectionChange(new_state);
 
   new_state = webrtc::PeerConnectionInterface::kIceConnectionCompleted;
-  EXPECT_CALL(
-      *mock_tracker_.get(),
-      TrackIceConnectionStateChange(
-          pc_handler_.get(),
-          WebRTCPeerConnectionHandlerClient::kICEConnectionStateCompleted));
-  EXPECT_CALL(
-      *mock_client_.get(),
-      DidChangeICEConnectionState(
-          WebRTCPeerConnectionHandlerClient::kICEConnectionStateCompleted));
+  EXPECT_CALL(*mock_tracker_.get(),
+              TrackIceConnectionStateChange(
+                  pc_handler_.get(),
+                  webrtc::PeerConnectionInterface::kIceConnectionCompleted));
+  EXPECT_CALL(*mock_client_.get(),
+              DidChangeIceConnectionState(
+                  webrtc::PeerConnectionInterface::kIceConnectionCompleted));
   pc_handler_->observer()->OnIceConnectionChange(new_state);
 
   new_state = webrtc::PeerConnectionInterface::kIceConnectionFailed;
-  EXPECT_CALL(
-      *mock_tracker_.get(),
-      TrackIceConnectionStateChange(
-          pc_handler_.get(),
-          WebRTCPeerConnectionHandlerClient::kICEConnectionStateFailed));
-  EXPECT_CALL(
-      *mock_client_.get(),
-      DidChangeICEConnectionState(
-          WebRTCPeerConnectionHandlerClient::kICEConnectionStateFailed));
+  EXPECT_CALL(*mock_tracker_.get(),
+              TrackIceConnectionStateChange(
+                  pc_handler_.get(),
+                  webrtc::PeerConnectionInterface::kIceConnectionFailed));
+  EXPECT_CALL(*mock_client_.get(),
+              DidChangeIceConnectionState(
+                  webrtc::PeerConnectionInterface::kIceConnectionFailed));
   pc_handler_->observer()->OnIceConnectionChange(new_state);
 
   new_state = webrtc::PeerConnectionInterface::kIceConnectionDisconnected;
-  EXPECT_CALL(
-      *mock_tracker_.get(),
-      TrackIceConnectionStateChange(
-          pc_handler_.get(),
-          WebRTCPeerConnectionHandlerClient::kICEConnectionStateDisconnected));
-  EXPECT_CALL(
-      *mock_client_.get(),
-      DidChangeICEConnectionState(
-          WebRTCPeerConnectionHandlerClient::kICEConnectionStateDisconnected));
+  EXPECT_CALL(*mock_tracker_.get(),
+              TrackIceConnectionStateChange(
+                  pc_handler_.get(),
+                  webrtc::PeerConnectionInterface::kIceConnectionDisconnected));
+  EXPECT_CALL(*mock_client_.get(),
+              DidChangeIceConnectionState(
+                  webrtc::PeerConnectionInterface::kIceConnectionDisconnected));
   pc_handler_->observer()->OnIceConnectionChange(new_state);
 
   new_state = webrtc::PeerConnectionInterface::kIceConnectionClosed;
-  EXPECT_CALL(
-      *mock_tracker_.get(),
-      TrackIceConnectionStateChange(
-          pc_handler_.get(),
-          WebRTCPeerConnectionHandlerClient::kICEConnectionStateClosed));
-  EXPECT_CALL(
-      *mock_client_.get(),
-      DidChangeICEConnectionState(
-          WebRTCPeerConnectionHandlerClient::kICEConnectionStateClosed));
+  EXPECT_CALL(*mock_tracker_.get(),
+              TrackIceConnectionStateChange(
+                  pc_handler_.get(),
+                  webrtc::PeerConnectionInterface::kIceConnectionClosed));
+  EXPECT_CALL(*mock_client_.get(),
+              DidChangeIceConnectionState(
+                  webrtc::PeerConnectionInterface::kIceConnectionClosed));
   pc_handler_->observer()->OnIceConnectionChange(new_state);
 }
 
@@ -1218,28 +1114,24 @@ TEST_F(RTCPeerConnectionHandlerTest, OnIceGatheringChange) {
   EXPECT_CALL(*mock_tracker_.get(),
               TrackIceGatheringStateChange(
                   pc_handler_.get(),
-                  WebRTCPeerConnectionHandlerClient::kICEGatheringStateNew));
+                  webrtc::PeerConnectionInterface::kIceGatheringNew));
   EXPECT_CALL(*mock_client_.get(),
-              DidChangeICEGatheringState(
-                  WebRTCPeerConnectionHandlerClient::kICEGatheringStateNew));
-  EXPECT_CALL(
-      *mock_tracker_.get(),
-      TrackIceGatheringStateChange(
-          pc_handler_.get(),
-          WebRTCPeerConnectionHandlerClient::kICEGatheringStateGathering));
-  EXPECT_CALL(
-      *mock_client_.get(),
-      DidChangeICEGatheringState(
-          WebRTCPeerConnectionHandlerClient::kICEGatheringStateGathering));
-  EXPECT_CALL(
-      *mock_tracker_.get(),
-      TrackIceGatheringStateChange(
-          pc_handler_.get(),
-          WebRTCPeerConnectionHandlerClient::kICEGatheringStateComplete));
-  EXPECT_CALL(
-      *mock_client_.get(),
-      DidChangeICEGatheringState(
-          WebRTCPeerConnectionHandlerClient::kICEGatheringStateComplete));
+              DidChangeIceGatheringState(
+                  webrtc::PeerConnectionInterface::kIceGatheringNew));
+  EXPECT_CALL(*mock_tracker_.get(),
+              TrackIceGatheringStateChange(
+                  pc_handler_.get(),
+                  webrtc::PeerConnectionInterface::kIceGatheringGathering));
+  EXPECT_CALL(*mock_client_.get(),
+              DidChangeIceGatheringState(
+                  webrtc::PeerConnectionInterface::kIceGatheringGathering));
+  EXPECT_CALL(*mock_tracker_.get(),
+              TrackIceGatheringStateChange(
+                  pc_handler_.get(),
+                  webrtc::PeerConnectionInterface::kIceGatheringComplete));
+  EXPECT_CALL(*mock_client_.get(),
+              DidChangeIceGatheringState(
+                  webrtc::PeerConnectionInterface::kIceGatheringComplete));
 
   webrtc::PeerConnectionInterface::IceGatheringState new_state =
         webrtc::PeerConnectionInterface::kIceGatheringNew;
@@ -1263,28 +1155,27 @@ TEST_F(RTCPeerConnectionHandlerTest, DISABLED_OnAddAndOnRemoveStream) {
       AddRemoteMockMediaStream("remote_stream", "video", "audio"));
   // Grab the added receivers when it's been successfully added to the PC.
   std::vector<std::unique_ptr<blink::WebRTCRtpReceiver>> receivers_added;
-  EXPECT_CALL(*mock_client_.get(), DidAddRemoteTrackForMock(_))
+  EXPECT_CALL(*mock_client_.get(), DidAddReceiverPlanBForMock(_))
       .WillRepeatedly(
           Invoke([&receivers_added](
                      std::unique_ptr<blink::WebRTCRtpReceiver>* receiver) {
             receivers_added.push_back(std::move(*receiver));
           }));
-  EXPECT_CALL(*mock_tracker_.get(),
-              TrackAddStream(pc_handler_.get(),
-                             testing::Property(
-                                 &blink::WebMediaStream::Id,
-                                 blink::WebString::FromASCII("remote_stream")),
-                             PeerConnectionTracker::SOURCE_REMOTE));
+  EXPECT_CALL(
+      *mock_tracker_.get(),
+      TrackAddTransceiver(
+          pc_handler_.get(),
+          PeerConnectionTracker::TransceiverUpdatedReason::kAddTrack, _, _))
+      .Times(2);
   // Grab the removed receivers when it's been successfully added to the PC.
   std::vector<std::unique_ptr<blink::WebRTCRtpReceiver>> receivers_removed;
   EXPECT_CALL(
       *mock_tracker_.get(),
-      TrackRemoveStream(
+      TrackRemoveTransceiver(
           pc_handler_.get(),
-          testing::Property(&blink::WebMediaStream::Id,
-                            blink::WebString::FromASCII("remote_stream")),
-          PeerConnectionTracker::SOURCE_REMOTE));
-  EXPECT_CALL(*mock_client_.get(), DidRemoveRemoteTrackForMock(_))
+          PeerConnectionTracker::TransceiverUpdatedReason::kRemoveTrack, _, _))
+      .Times(2);
+  EXPECT_CALL(*mock_client_.get(), DidRemoveReceiverPlanBForMock(_))
       .WillRepeatedly(
           Invoke([&receivers_removed](
                      std::unique_ptr<blink::WebRTCRtpReceiver>* receiver) {
@@ -1301,211 +1192,6 @@ TEST_F(RTCPeerConnectionHandlerTest, DISABLED_OnAddAndOnRemoveStream) {
   EXPECT_EQ(receivers_added.size(), receivers_removed.size());
   EXPECT_EQ(receivers_added[0]->Id(), receivers_removed[0]->Id());
   EXPECT_EQ(receivers_added[1]->Id(), receivers_removed[1]->Id());
-}
-
-// This test that WebKit is notified about remote track state changes.
-// TODO(hbos): Enable when not mocking or remove test. https://crbug.com/788659
-TEST_F(RTCPeerConnectionHandlerTest, DISABLED_RemoteTrackState) {
-  rtc::scoped_refptr<webrtc::MediaStreamInterface> remote_stream(
-      AddRemoteMockMediaStream("remote_stream", "video", "audio"));
-  std::vector<std::unique_ptr<blink::WebRTCRtpReceiver>> receivers;
-  // Grab the added receivers and media stream when it's been successfully added
-  // to the PC.
-  blink::WebMediaStream webkit_stream;
-  EXPECT_CALL(*mock_client_.get(), DidAddRemoteTrackForMock(_))
-      .WillRepeatedly(
-          Invoke([&webkit_stream, &receivers](
-                     std::unique_ptr<blink::WebRTCRtpReceiver>* receiver) {
-            webkit_stream = (*receiver)->Streams()[0];
-            receivers.push_back(std::move(*receiver));
-          }));
-  InvokeOnAddStream(remote_stream);
-  RunMessageLoopsUntilIdle();
-  EXPECT_TRUE(HasReceiverForEveryTrack(remote_stream, receivers));
-
-  blink::WebVector<blink::WebMediaStreamTrack> audio_tracks;
-  webkit_stream.AudioTracks(audio_tracks);
-  EXPECT_EQ(blink::WebMediaStreamSource::kReadyStateLive,
-            audio_tracks[0].Source().GetReadyState());
-
-  blink::WebVector<blink::WebMediaStreamTrack> video_tracks;
-  webkit_stream.VideoTracks(video_tracks);
-  EXPECT_EQ(blink::WebMediaStreamSource::kReadyStateLive,
-            video_tracks[0].Source().GetReadyState());
-
-  InvokeOnSignalingThread(
-      base::Bind(&MockWebRtcAudioTrack::SetEnded,
-                 base::Unretained(static_cast<MockWebRtcAudioTrack*>(
-                     remote_stream->GetAudioTracks()[0].get()))));
-  EXPECT_EQ(blink::WebMediaStreamSource::kReadyStateEnded,
-            audio_tracks[0].Source().GetReadyState());
-
-  InvokeOnSignalingThread(
-      base::Bind(&MockWebRtcVideoTrack::SetEnded,
-                 base::Unretained(static_cast<MockWebRtcVideoTrack*>(
-                     remote_stream->GetVideoTracks()[0].get()))));
-  EXPECT_EQ(blink::WebMediaStreamSource::kReadyStateEnded,
-            video_tracks[0].Source().GetReadyState());
-}
-
-// TODO(hbos): Enable when not mocking or remove test. https://crbug.com/788659
-TEST_F(RTCPeerConnectionHandlerTest,
-       DISABLED_RemoveAndAddAudioTrackFromRemoteStream) {
-  rtc::scoped_refptr<webrtc::MediaStreamInterface> remote_stream(
-      AddRemoteMockMediaStream("remote_stream", "video", "audio"));
-  std::vector<std::unique_ptr<blink::WebRTCRtpReceiver>> receivers;
-  // Grab the added receivers and media stream when it's been successfully added
-  // to the PC.
-  blink::WebMediaStream webkit_stream;
-  EXPECT_CALL(*mock_client_.get(), DidAddRemoteTrackForMock(_))
-      .WillRepeatedly(
-          Invoke([&webkit_stream, &receivers](
-                     std::unique_ptr<blink::WebRTCRtpReceiver>* receiver) {
-            webkit_stream = (*receiver)->Streams()[0];
-            receivers.push_back(std::move(*receiver));
-          }));
-  InvokeOnAddStream(remote_stream);
-  RunMessageLoopsUntilIdle();
-  EXPECT_TRUE(HasReceiverForEveryTrack(remote_stream, receivers));
-
-  {
-    // Test in a small scope so that  |audio_tracks| don't hold on to destroyed
-    // source later.
-    blink::WebVector<blink::WebMediaStreamTrack> audio_tracks;
-    webkit_stream.AudioTracks(audio_tracks);
-    EXPECT_EQ(1u, audio_tracks.size());
-  }
-
-  // Remove the Webrtc audio track from the Webrtc MediaStream.
-  scoped_refptr<webrtc::AudioTrackInterface> webrtc_track =
-      remote_stream->GetAudioTracks()[0].get();
-  InvokeRemoveTrack(remote_stream, webrtc_track.get());
-
-  {
-    blink::WebVector<blink::WebMediaStreamTrack> modified_audio_tracks1;
-    webkit_stream.AudioTracks(modified_audio_tracks1);
-    EXPECT_EQ(0u, modified_audio_tracks1.size());
-  }
-
-  blink::WebHeap::CollectGarbageForTesting();
-
-  // Add the WebRtc audio track again.
-  InvokeAddTrack(remote_stream, webrtc_track.get());
-  blink::WebVector<blink::WebMediaStreamTrack> modified_audio_tracks2;
-  webkit_stream.AudioTracks(modified_audio_tracks2);
-  EXPECT_EQ(1u, modified_audio_tracks2.size());
-}
-
-// TODO(hbos): Enable when not mocking or remove test. https://crbug.com/788659
-TEST_F(RTCPeerConnectionHandlerTest,
-       DISABLED_RemoveAndAddVideoTrackFromRemoteStream) {
-  rtc::scoped_refptr<webrtc::MediaStreamInterface> remote_stream(
-      AddRemoteMockMediaStream("remote_stream", "video", "audio"));
-  std::vector<std::unique_ptr<blink::WebRTCRtpReceiver>> receivers;
-  // Grab the added receivers and media stream when it's been successfully added
-  // to the PC.
-  blink::WebMediaStream webkit_stream;
-  EXPECT_CALL(*mock_client_.get(), DidAddRemoteTrackForMock(_))
-      .WillRepeatedly(
-          Invoke([&webkit_stream, &receivers](
-                     std::unique_ptr<blink::WebRTCRtpReceiver>* receiver) {
-            webkit_stream = (*receiver)->Streams()[0];
-            receivers.push_back(std::move(*receiver));
-          }));
-  InvokeOnAddStream(remote_stream);
-  RunMessageLoopsUntilIdle();
-  EXPECT_TRUE(HasReceiverForEveryTrack(remote_stream, receivers));
-
-  {
-    // Test in a small scope so that  |video_tracks| don't hold on to destroyed
-    // source later.
-    blink::WebVector<blink::WebMediaStreamTrack> video_tracks;
-    webkit_stream.VideoTracks(video_tracks);
-    EXPECT_EQ(1u, video_tracks.size());
-  }
-
-  // Remove the Webrtc video track from the Webrtc MediaStream.
-  scoped_refptr<webrtc::VideoTrackInterface> webrtc_track =
-      remote_stream->GetVideoTracks()[0].get();
-  InvokeRemoveTrack(remote_stream, webrtc_track.get());
-  RunMessageLoopsUntilIdle();
-  {
-    blink::WebVector<blink::WebMediaStreamTrack> modified_video_tracks1;
-    webkit_stream.VideoTracks(modified_video_tracks1);
-    EXPECT_EQ(0u, modified_video_tracks1.size());
-  }
-
-  blink::WebHeap::CollectGarbageForTesting();
-
-  // Add the WebRtc video track again.
-  InvokeAddTrack(remote_stream, webrtc_track.get());
-  RunMessageLoopsUntilIdle();
-  blink::WebVector<blink::WebMediaStreamTrack> modified_video_tracks2;
-  webkit_stream.VideoTracks(modified_video_tracks2);
-  EXPECT_EQ(1u, modified_video_tracks2.size());
-}
-
-// TODO(hbos): Enable when not mocking or remove test. https://crbug.com/788659
-TEST_F(RTCPeerConnectionHandlerTest,
-       DISABLED_RemoveAndAddTracksFromRemoteStream) {
-  rtc::scoped_refptr<webrtc::MediaStreamInterface> remote_stream(
-      AddRemoteMockMediaStream("remote_stream", "video", "audio"));
-  std::vector<std::unique_ptr<blink::WebRTCRtpReceiver>> receivers;
-  // Grab the added receivers and media stream when it's been successfully added
-  // to the PC.
-  blink::WebMediaStream webkit_stream;
-  EXPECT_CALL(*mock_client_.get(), DidAddRemoteTrackForMock(_))
-      .WillRepeatedly(
-          Invoke([&webkit_stream, &receivers](
-                     std::unique_ptr<blink::WebRTCRtpReceiver>* receiver) {
-            webkit_stream = (*receiver)->Streams()[0];
-            receivers.push_back(std::move(*receiver));
-          }));
-  InvokeOnAddStream(remote_stream);
-  RunMessageLoopsUntilIdle();
-  EXPECT_TRUE(HasReceiverForEveryTrack(remote_stream, receivers));
-
-  {
-    // Test in a small scope so that  |audio_tracks| don't hold on to destroyed
-    // source later.
-    blink::WebVector<blink::WebMediaStreamTrack> audio_tracks;
-    webkit_stream.AudioTracks(audio_tracks);
-    EXPECT_EQ(1u, audio_tracks.size());
-    blink::WebVector<blink::WebMediaStreamTrack> video_tracks;
-    webkit_stream.VideoTracks(video_tracks);
-    EXPECT_EQ(1u, video_tracks.size());
-  }
-
-  // Remove the Webrtc tracks from the MediaStream.
-  auto audio_track = remote_stream->GetAudioTracks()[0];
-  InvokeRemoveTrack(remote_stream, audio_track.get());
-  auto video_track = remote_stream->GetVideoTracks()[0];
-  InvokeRemoveTrack(remote_stream, video_track.get());
-  RunMessageLoopsUntilIdle();
-
-  {
-    blink::WebVector<blink::WebMediaStreamTrack> modified_audio_tracks;
-    webkit_stream.AudioTracks(modified_audio_tracks);
-    EXPECT_EQ(0u, modified_audio_tracks.size());
-    blink::WebVector<blink::WebMediaStreamTrack> modified_video_tracks;
-    webkit_stream.VideoTracks(modified_video_tracks);
-    EXPECT_EQ(0u, modified_video_tracks.size());
-  }
-
-  blink::WebHeap::CollectGarbageForTesting();
-
-  // Add the tracks again.
-  InvokeAddTrack(remote_stream, audio_track.get());
-  InvokeAddTrack(remote_stream, video_track.get());
-
-  blink::WebHeap::CollectGarbageForTesting();
-
-  blink::WebVector<blink::WebMediaStreamTrack> audio_tracks;
-  webkit_stream.AudioTracks(audio_tracks);
-  EXPECT_EQ(1u, audio_tracks.size());
-  blink::WebVector<blink::WebMediaStreamTrack> video_tracks;
-  webkit_stream.VideoTracks(video_tracks);
-  EXPECT_EQ(1u, video_tracks.size());
 }
 
 TEST_F(RTCPeerConnectionHandlerTest, OnIceCandidate) {

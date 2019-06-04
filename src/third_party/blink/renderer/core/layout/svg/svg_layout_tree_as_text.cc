@@ -49,12 +49,15 @@
 #include "third_party/blink/renderer/core/layout/svg/svg_resources.h"
 #include "third_party/blink/renderer/core/layout/svg/svg_resources_cache.h"
 #include "third_party/blink/renderer/core/paint/paint_layer.h"
+#include "third_party/blink/renderer/core/style/reference_clip_path_operation.h"
+#include "third_party/blink/renderer/core/style/style_svg_resource.h"
 #include "third_party/blink/renderer/core/svg/graphics/filters/svg_filter_builder.h"
 #include "third_party/blink/renderer/core/svg/linear_gradient_attributes.h"
 #include "third_party/blink/renderer/core/svg/pattern_attributes.h"
 #include "third_party/blink/renderer/core/svg/radial_gradient_attributes.h"
 #include "third_party/blink/renderer/core/svg/svg_circle_element.h"
 #include "third_party/blink/renderer/core/svg/svg_ellipse_element.h"
+#include "third_party/blink/renderer/core/svg/svg_enumeration_map.h"
 #include "third_party/blink/renderer/core/svg/svg_filter_element.h"
 #include "third_party/blink/renderer/core/svg/svg_line_element.h"
 #include "third_party/blink/renderer/core/svg/svg_linear_gradient_element.h"
@@ -170,40 +173,21 @@ static WTF::TextStream& operator<<(WTF::TextStream& ts, const WindRule rule) {
   return ts;
 }
 
-namespace {
-
-template <typename Enum>
-String SVGEnumerationToString(Enum value) {
-  const SVGEnumerationStringEntries& entries = GetStaticStringEntries<Enum>();
-
-  SVGEnumerationStringEntries::const_iterator it = entries.begin();
-  SVGEnumerationStringEntries::const_iterator it_end = entries.end();
-  for (; it != it_end; ++it) {
-    if (value == it->first)
-      return it->second;
-  }
-
-  NOTREACHED();
-  return String();
-}
-
-}  // namespace
-
 static WTF::TextStream& operator<<(WTF::TextStream& ts,
                                    const SVGUnitTypes::SVGUnitType& unit_type) {
-  ts << SVGEnumerationToString<SVGUnitTypes::SVGUnitType>(unit_type);
+  ts << GetEnumerationMap<SVGUnitTypes::SVGUnitType>().NameFromValue(unit_type);
   return ts;
 }
 
 static WTF::TextStream& operator<<(WTF::TextStream& ts,
                                    const SVGMarkerUnitsType& marker_unit) {
-  ts << SVGEnumerationToString<SVGMarkerUnitsType>(marker_unit);
+  ts << GetEnumerationMap<SVGMarkerUnitsType>().NameFromValue(marker_unit);
   return ts;
 }
 
 static WTF::TextStream& operator<<(WTF::TextStream& ts,
                                    const SVGMarkerOrientType& orient_type) {
-  ts << SVGEnumerationToString<SVGMarkerOrientType>(orient_type);
+  ts << GetEnumerationMap<SVGMarkerOrientType>().NameFromValue(orient_type);
   return ts;
 }
 
@@ -241,7 +225,8 @@ static WTF::TextStream& operator<<(WTF::TextStream& ts, LineJoin style) {
 
 static WTF::TextStream& operator<<(WTF::TextStream& ts,
                                    const SVGSpreadMethodType& type) {
-  ts << SVGEnumerationToString<SVGSpreadMethodType>(type).UpperASCII();
+  auto* name = GetEnumerationMap<SVGSpreadMethodType>().NameFromValue(type);
+  ts << String(name).UpperASCII();
   return ts;
 }
 
@@ -410,8 +395,9 @@ static WTF::TextStream& operator<<(WTF::TextStream& ts,
   } else if (IsSVGPathElement(*svg_element)) {
     const StylePath& path =
         svg_style.D() ? *svg_style.D() : *StylePath::EmptyPath();
-    WriteNameAndQuotedValue(ts, "data",
-                            BuildStringFromByteStream(path.ByteStream()));
+    WriteNameAndQuotedValue(
+        ts, "data",
+        BuildStringFromByteStream(path.ByteStream(), kNoTransformation));
   } else {
     NOTREACHED();
   }
@@ -453,7 +439,7 @@ static inline void WriteSVGInlineTextBox(WTF::TextStream& ts,
   LineLayoutSVGInlineText text_line_layout =
       LineLayoutSVGInlineText(text_box->GetLineLayoutItem());
 
-  const SVGComputedStyle& svg_style = text_line_layout.Style()->SvgStyle();
+  const SVGComputedStyle& svg_style = text_line_layout.StyleRef().SvgStyle();
   String text = text_box->GetLineLayoutItem().GetText();
 
   unsigned fragments_size = fragments.size();
@@ -469,7 +455,7 @@ static inline void WriteSVGInlineTextBox(WTF::TextStream& ts,
     ts << "chunk 1 ";
     ETextAnchor anchor = svg_style.TextAnchor();
     bool is_vertical_text =
-        !text_line_layout.Style()->IsHorizontalWritingMode();
+        !text_line_layout.StyleRef().IsHorizontalWritingMode();
     if (anchor == TA_MIDDLE) {
       ts << "(middle anchor";
       if (is_vertical_text)
@@ -732,6 +718,7 @@ void WriteResources(WTF::TextStream& ts,
       SVGResourcesCache::CachedResourcesForLayoutObject(object);
   if (!resources)
     return;
+  const FloatRect reference_box = object.ObjectBoundingBox();
   const ComputedStyle& style = object.StyleRef();
   TreeScope& tree_scope = object.GetDocument();
   if (LayoutSVGResourceMasker* masker = resources->Masker()) {
@@ -741,7 +728,7 @@ void WriteResources(WTF::TextStream& ts,
                            tree_scope);
     ts << " ";
     WriteStandardPrefix(ts, *masker, 0);
-    ts << " " << masker->ResourceBoundingBox(&object) << "\n";
+    ts << " " << masker->ResourceBoundingBox(reference_box) << "\n";
   }
   if (LayoutSVGResourceClipper* clipper = resources->Clipper()) {
     DCHECK(style.ClipPath());
@@ -755,8 +742,7 @@ void WriteResources(WTF::TextStream& ts,
     WriteNameAndQuotedValue(ts, "clipPath", id);
     ts << " ";
     WriteStandardPrefix(ts, *clipper, 0);
-    ts << " " << clipper->ResourceBoundingBox(object.ObjectBoundingBox())
-       << "\n";
+    ts << " " << clipper->ResourceBoundingBox(reference_box) << "\n";
   }
   if (LayoutSVGResourceFilter* filter = resources->Filter()) {
     DCHECK(style.HasFilter());
@@ -772,7 +758,7 @@ void WriteResources(WTF::TextStream& ts,
     WriteNameAndQuotedValue(ts, "filter", id);
     ts << " ";
     WriteStandardPrefix(ts, *filter, 0);
-    ts << " " << filter->ResourceBoundingBox(&object) << "\n";
+    ts << " " << filter->ResourceBoundingBox(reference_box) << "\n";
   }
 }
 

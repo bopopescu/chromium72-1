@@ -14,7 +14,9 @@
 #include "base/macros.h"
 #include "base/memory/ref_counted.h"
 #include "base/time/time.h"
+#include "build/buildflag.h"
 #include "crypto/ec_private_key.h"
+#include "net/base/completion_once_callback.h"
 #include "net/base/completion_repeating_callback.h"
 #include "net/base/net_error_details.h"
 #include "net/base/net_export.h"
@@ -26,15 +28,12 @@
 #include "net/http/http_stream_request.h"
 #include "net/http/http_transaction.h"
 #include "net/log/net_log_with_source.h"
+#include "net/net_buildflags.h"
 #include "net/proxy_resolution/proxy_resolution_service.h"
 #include "net/socket/connection_attempts.h"
 #include "net/ssl/channel_id_service.h"
 #include "net/ssl/ssl_config_service.h"
 #include "net/websockets/websocket_handshake_stream_base.h"
-
-namespace crypto {
-class ECPrivateKey;
-}
 
 namespace net {
 
@@ -58,19 +57,19 @@ class NET_EXPORT_PRIVATE HttpNetworkTransaction
 
   // HttpTransaction methods:
   int Start(const HttpRequestInfo* request_info,
-            const CompletionCallback& callback,
+            CompletionOnceCallback callback,
             const NetLogWithSource& net_log) override;
-  int RestartIgnoringLastError(const CompletionCallback& callback) override;
+  int RestartIgnoringLastError(CompletionOnceCallback callback) override;
   int RestartWithCertificate(scoped_refptr<X509Certificate> client_cert,
                              scoped_refptr<SSLPrivateKey> client_private_key,
-                             const CompletionCallback& callback) override;
+                             CompletionOnceCallback callback) override;
   int RestartWithAuth(const AuthCredentials& credentials,
-                      const CompletionCallback& callback) override;
+                      CompletionOnceCallback callback) override;
   bool IsReadyToRestartForAuth() override;
 
   int Read(IOBuffer* buf,
            int buf_len,
-           const CompletionCallback& callback) override;
+           CompletionOnceCallback callback) override;
   void StopCaching() override;
   bool GetFullRequestHeaders(HttpRequestHeaders* headers) const override;
   int64_t GetTotalReceivedBytes() const override;
@@ -150,10 +149,6 @@ class NET_EXPORT_PRIVATE HttpNetworkTransaction
     STATE_GENERATE_PROXY_AUTH_TOKEN_COMPLETE,
     STATE_GENERATE_SERVER_AUTH_TOKEN,
     STATE_GENERATE_SERVER_AUTH_TOKEN_COMPLETE,
-    STATE_GET_PROVIDED_TOKEN_BINDING_KEY,
-    STATE_GET_PROVIDED_TOKEN_BINDING_KEY_COMPLETE,
-    STATE_GET_REFERRED_TOKEN_BINDING_KEY,
-    STATE_GET_REFERRED_TOKEN_BINDING_KEY_COMPLETE,
     STATE_INIT_REQUEST_BODY,
     STATE_INIT_REQUEST_BODY_COMPLETE,
     STATE_BUILD_REQUEST,
@@ -170,8 +165,6 @@ class NET_EXPORT_PRIVATE HttpNetworkTransaction
   };
 
   bool IsSecureRequest() const;
-  bool IsTokenBindingEnabled() const;
-  void RecordTokenBindingSupport() const;
 
   // Returns true if the request is using an HTTP(S) proxy without being
   // tunneled via the CONNECT method.
@@ -196,10 +189,6 @@ class NET_EXPORT_PRIVATE HttpNetworkTransaction
   int DoGenerateProxyAuthTokenComplete(int result);
   int DoGenerateServerAuthToken();
   int DoGenerateServerAuthTokenComplete(int result);
-  int DoGetProvidedTokenBindingKey();
-  int DoGetProvidedTokenBindingKeyComplete(int result);
-  int DoGetReferredTokenBindingKey();
-  int DoGetReferredTokenBindingKeyComplete(int result);
   int DoInitRequestBody();
   int DoInitRequestBodyComplete(int result);
   int DoBuildRequest();
@@ -214,7 +203,22 @@ class NET_EXPORT_PRIVATE HttpNetworkTransaction
   int DoDrainBodyForAuthRestartComplete(int result);
 
   int BuildRequestHeaders(bool using_http_proxy_without_tunnel);
-  int BuildTokenBindingHeader(std::string* out);
+
+#if BUILDFLAG(ENABLE_REPORTING)
+  // Processes the Report-To header, if one exists. This header configures where
+  // the Reporting API (in //net/reporting) will send reports for the origin.
+  void ProcessReportToHeader();
+
+  // Processes the NEL header, if one exists. This header configures whether
+  // network errors will be reported to a specified group of endpoints using the
+  // Reporting API.
+  void ProcessNetworkErrorLoggingHeader();
+
+  // Generates a NEL report about this request.  The NetworkErrorLoggingService
+  // will discard the report if there is no NEL policy registered for this
+  // origin.
+  void GenerateNetworkErrorLoggingReport(int rv);
+#endif
 
   // Writes a log message to help debugging in the field when we block a proxy
   // response to a CONNECT request.
@@ -310,7 +314,7 @@ class NET_EXPORT_PRIVATE HttpNetworkTransaction
   HttpAuth::Target pending_auth_target_;
 
   CompletionRepeatingCallback io_callback_;
-  CompletionCallback callback_;
+  CompletionOnceCallback callback_;
 
   HttpNetworkSession* session_;
 
@@ -350,14 +354,16 @@ class NET_EXPORT_PRIVATE HttpNetworkTransaction
   SSLConfig server_ssl_config_;
   SSLConfig proxy_ssl_config_;
 
-  // Keys to use for signing message in Token Binding header.
-  std::unique_ptr<crypto::ECPrivateKey> provided_token_binding_key_;
-  std::unique_ptr<crypto::ECPrivateKey> referred_token_binding_key_;
-  // Object to manage lookup of |provided_token_binding_key_| and
-  // |referred_token_binding_key_|.
-  ChannelIDService::Request token_binding_request_;
-
   HttpRequestHeaders request_headers_;
+#if BUILDFLAG(ENABLE_REPORTING)
+  // Cache some fields from |request_| that we'll need to construct a NEL
+  // report about the request.  (NEL report construction happens after we've
+  // cleared the |request_| pointer.)
+  std::string request_method_;
+  std::string request_referrer_;
+  std::string request_user_agent_;
+  int request_reporting_upload_depth_;
+#endif
 
   // The size in bytes of the buffer we use to drain the response body that
   // we want to throw away.  The response body is typically a small error

@@ -4,6 +4,9 @@
 
 #include "ash/screen_util.h"
 
+#include "ash/root_window_controller.h"
+#include "ash/shelf/shelf.h"
+#include "ash/shelf/shelf_constants.h"
 #include "ash/shell.h"
 #include "ash/test/ash_test_base.h"
 #include "ash/wm/window_util.h"
@@ -29,13 +32,15 @@ TEST_F(ScreenUtilTest, Bounds) {
       NULL, CurrentContext(), gfx::Rect(610, 10, 100, 100));
   secondary->Show();
 
-  // Maximized bounds. By default the shelf is 47px tall (ash::kShelfSize).
+  // Maximized bounds.
+  const int bottom_inset_first = 600 - ShelfConstants::shelf_size();
+  const int bottom_inset_second = 500 - ShelfConstants::shelf_size();
   EXPECT_EQ(
-      gfx::Rect(0, 0, 600, 552).ToString(),
+      gfx::Rect(0, 0, 600, bottom_inset_first).ToString(),
       screen_util::GetMaximizedWindowBoundsInParent(primary->GetNativeView())
           .ToString());
   EXPECT_EQ(
-      gfx::Rect(0, 0, 500, 452).ToString(),
+      gfx::Rect(0, 0, 500, bottom_inset_second).ToString(),
       screen_util::GetMaximizedWindowBoundsInParent(secondary->GetNativeView())
           .ToString());
 
@@ -49,11 +54,11 @@ TEST_F(ScreenUtilTest, Bounds) {
 
   // Work area bounds
   EXPECT_EQ(
-      gfx::Rect(0, 0, 600, 552).ToString(),
+      gfx::Rect(0, 0, 600, bottom_inset_first).ToString(),
       screen_util::GetDisplayWorkAreaBoundsInParent(primary->GetNativeView())
           .ToString());
   EXPECT_EQ(
-      gfx::Rect(0, 0, 500, 452).ToString(),
+      gfx::Rect(0, 0, 500, bottom_inset_second).ToString(),
       screen_util::GetDisplayWorkAreaBoundsInParent(secondary->GetNativeView())
           .ToString());
 }
@@ -155,15 +160,64 @@ TEST_F(ScreenUtilTest, ShelfDisplayBoundsInUnifiedDesktopGrid) {
   display::Screen* screen = display::Screen::GetScreen();
   EXPECT_EQ(gfx::Size(766, 1254), screen->GetPrimaryDisplay().size());
 
-  // Regardless of where the window is, the shelf is always in the top left
-  // display in the matrix.
-  EXPECT_EQ(gfx::Rect(0, 0, 499, 400),
+  Shelf* shelf = Shell::GetPrimaryRootWindowController()->shelf();
+  EXPECT_EQ(shelf->alignment(), SHELF_ALIGNMENT_BOTTOM);
+
+  // Regardless of where the window is, the shelf with a bottom alignment is
+  // always in the bottom left display in the matrix.
+  EXPECT_EQ(gfx::Rect(0, 1057, 593, 198),
             screen_util::GetDisplayBoundsWithShelf(window));
 
   // Move to the bottom right display.
   widget->SetBounds(gfx::Rect(620, 940, 100, 100));
+  EXPECT_EQ(gfx::Rect(0, 1057, 593, 198),
+            screen_util::GetDisplayBoundsWithShelf(window));
+
+  // Change the shelf alignment to left, and expect that it now resides in the
+  // top left display in the matrix.
+  shelf->SetAlignment(SHELF_ALIGNMENT_LEFT);
   EXPECT_EQ(gfx::Rect(0, 0, 499, 400),
             screen_util::GetDisplayBoundsWithShelf(window));
+
+  // Change the shelf alignment to right, and expect that it now resides in the
+  // top right display in the matrix.
+  shelf->SetAlignment(SHELF_ALIGNMENT_RIGHT);
+  EXPECT_EQ(gfx::Rect(499, 0, 267, 400),
+            screen_util::GetDisplayBoundsWithShelf(window));
+
+  // Change alignment back to bottom and change the unified display zoom factor.
+  // Expect that the display with shelf bounds will take into account the zoom
+  // factor.
+  shelf->SetAlignment(SHELF_ALIGNMENT_BOTTOM);
+  display_manager()->UpdateZoomFactor(display::kUnifiedDisplayId, 3.f);
+  const display::Display unified_display =
+      display_manager()->GetDisplayForId(display::kUnifiedDisplayId);
+  EXPECT_FLOAT_EQ(unified_display.device_scale_factor(), 3.f);
+  EXPECT_EQ(gfx::Rect(0, 352, 198, 67),
+            screen_util::GetDisplayBoundsWithShelf(window));
+}
+
+TEST_F(ScreenUtilTest, SnapBoundsToDisplayEdge) {
+  UpdateDisplay("2400x1600*1.5");
+
+  gfx::Rect bounds(1555, 0, 45, 1066);
+  views::Widget* widget = views::Widget::CreateWindowWithContextAndBounds(
+      NULL, CurrentContext(), bounds);
+  aura::Window* window = widget->GetNativeWindow();
+
+  gfx::Rect snapped_bounds =
+      screen_util::SnapBoundsToDisplayEdge(bounds, window);
+
+  EXPECT_EQ(snapped_bounds, gfx::Rect(1555, 0, 45, 1067));
+
+  bounds = gfx::Rect(5, 1000, 1595, 66);
+  snapped_bounds = screen_util::SnapBoundsToDisplayEdge(bounds, window);
+  EXPECT_EQ(snapped_bounds, gfx::Rect(5, 1000, 1595, 67));
+
+  UpdateDisplay("800x600");
+  bounds = gfx::Rect(0, 552, 800, 48);
+  snapped_bounds = screen_util::SnapBoundsToDisplayEdge(bounds, window);
+  EXPECT_EQ(snapped_bounds, gfx::Rect(0, 552, 800, 48));
 }
 
 }  // namespace ash

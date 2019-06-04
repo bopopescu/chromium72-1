@@ -24,8 +24,10 @@
 #include "base/threading/thread_checker.h"
 #include "base/time/time.h"
 #include "base/timer/timer.h"
+#include "build/build_config.h"
 #include "net/base/cache_type.h"
-#include "net/base/completion_callback.h"
+#include "net/base/completion_once_callback.h"
+#include "net/base/net_errors.h"
 #include "net/base/net_export.h"
 
 #if defined(OS_ANDROID)
@@ -149,7 +151,9 @@ class NET_EXPORT_PRIVATE SimpleIndex
 
   using EntrySet = std::unordered_map<uint64_t, EntryMetadata>;
 
-  static void InsertInEntrySet(uint64_t entry_hash,
+  // Insert an entry in the given set if there is not already entry present.
+  // Returns true if the set was modified.
+  static bool InsertInEntrySet(uint64_t entry_hash,
                                const EntryMetadata& entry_metadata,
                                EntrySet* entry_set);
 
@@ -159,12 +163,16 @@ class NET_EXPORT_PRIVATE SimpleIndex
                              const EntryMetadata& entry_metadata);
 
   // Executes the |callback| when the index is ready. Allows multiple callbacks.
-  int ExecuteWhenReady(const net::CompletionCallback& callback);
+  net::Error ExecuteWhenReady(net::CompletionOnceCallback callback);
 
   // Returns entries from the index that have last accessed time matching the
   // range between |initial_time| and |end_time| where open intervals are
   // possible according to the definition given in |DoomEntriesBetween()| in the
   // disk cache backend interface.
+  //
+  // Access times are not updated in net::APP_CACHE mode.  GetEntriesBetween()
+  // should only be called with null times indicating the full range when in
+  // this mode.
   std::unique_ptr<HashList> GetEntriesBetween(const base::Time initial_time,
                                               const base::Time end_time);
 
@@ -194,19 +202,33 @@ class NET_EXPORT_PRIVATE SimpleIndex
 
   void SetLastUsedTimeForTest(uint64_t entry_hash, const base::Time last_used);
 
+#if defined(OS_ANDROID)
+  void set_app_status_listener(
+      base::android::ApplicationStatusListener* app_status_listener) {
+    app_status_listener_ = app_status_listener;
+  }
+#endif
+
+  // Return true if a pending disk write has been scheduled from
+  // PostponeWritingToDisk().
+  bool HasPendingWrite() const;
+
  private:
   friend class SimpleIndexTest;
   FRIEND_TEST_ALL_PREFIXES(SimpleIndexTest, IndexSizeCorrectOnMerge);
   FRIEND_TEST_ALL_PREFIXES(SimpleIndexTest, DiskWriteQueued);
   FRIEND_TEST_ALL_PREFIXES(SimpleIndexTest, DiskWriteExecuted);
   FRIEND_TEST_ALL_PREFIXES(SimpleIndexTest, DiskWritePostponed);
+  FRIEND_TEST_ALL_PREFIXES(SimpleIndexAppCacheTest, DiskWriteQueued);
 
   void StartEvictionIfNeeded();
   void EvictionDone(int result);
 
   void PostponeWritingToDisk();
 
-  void UpdateEntryIteratorSize(EntrySet::iterator* it,
+  // Update the size of the entry pointed to by the given iterator.  Return
+  // true if the new size actually results in a change.
+  bool UpdateEntryIteratorSize(EntrySet::iterator* it,
                                base::StrictNumeric<uint32_t> entry_size);
 
   // Must run on IO Thread.
@@ -216,7 +238,8 @@ class NET_EXPORT_PRIVATE SimpleIndex
   void OnApplicationStateChange(base::android::ApplicationState state);
 
   std::unique_ptr<base::android::ApplicationStatusListener>
-      app_status_listener_;
+      owned_app_status_listener_;
+  base::android::ApplicationStatusListener* app_status_listener_ = nullptr;
 #endif
 
   scoped_refptr<BackendCleanupTracker> cleanup_tracker_;
@@ -256,7 +279,7 @@ class NET_EXPORT_PRIVATE SimpleIndex
   base::OneShotTimer write_to_disk_timer_;
   base::Closure write_to_disk_cb_;
 
-  typedef std::list<net::CompletionCallback> CallbackList;
+  typedef std::list<net::CompletionOnceCallback> CallbackList;
   CallbackList to_run_when_initialized_;
 
   // Set to true when the app is on the background. When the app is in the

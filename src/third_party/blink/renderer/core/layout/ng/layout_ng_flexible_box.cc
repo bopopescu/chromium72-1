@@ -19,18 +19,21 @@ LayoutNGFlexibleBox::LayoutNGFlexibleBox(Element* element)
 void LayoutNGFlexibleBox::UpdateBlockLayout(bool relayout_children) {
   LayoutAnalyzer::BlockScope analyzer(*this);
 
-  scoped_refptr<NGConstraintSpace> constraint_space =
+  // TODO(dgrogan): Reuse logic from LayoutNGBlockFlow's
+  // UpdateOutOfFlowBlockLayout when this flexbox is out of flow.
+
+  NGConstraintSpace constraint_space =
       NGConstraintSpace::CreateFromLayoutObject(*this);
 
   scoped_refptr<NGLayoutResult> result =
-      NGBlockNode(this).Layout(*constraint_space);
+      NGBlockNode(this).Layout(constraint_space);
 
   for (NGOutOfFlowPositionedDescendant descendant :
        result->OutOfFlowPositionedDescendants())
     descendant.node.UseOldOutOfFlowPositioning();
 
-  NGPhysicalBoxFragment* fragment =
-      ToNGPhysicalBoxFragment(result->PhysicalFragment().get());
+  const NGPhysicalBoxFragment* fragment =
+      ToNGPhysicalBoxFragment(result->PhysicalFragment());
 
   // Pasted from layout_ng_block_flow. TODO(dgrogan): Factor a utility method.
   const LayoutBlock* containing_block = ContainingBlock();
@@ -40,10 +43,10 @@ void LayoutNGFlexibleBox::UpdateBlockLayout(bool relayout_children) {
                                          containing_block->Size().Height());
     NGLogicalOffset logical_offset(LogicalLeft(), LogicalTop());
     physical_offset = logical_offset.ConvertToPhysical(
-        constraint_space->GetWritingMode(), constraint_space->Direction(),
+        constraint_space.GetWritingMode(), constraint_space.Direction(),
         containing_block_size, fragment->Size());
   }
-  fragment->SetOffset(physical_offset);
+  result->SetOffset(physical_offset);
 }
 
 }  // namespace blink

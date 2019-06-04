@@ -5,7 +5,6 @@
 #include "content/public/test/content_browser_test.h"
 
 #include "base/command_line.h"
-#include "base/files/file_path.h"
 #include "base/logging.h"
 #include "base/message_loop/message_loop.h"
 #include "base/path_service.h"
@@ -19,11 +18,15 @@
 #include "content/shell/browser/shell_browser_context.h"
 #include "content/shell/browser/shell_content_browser_client.h"
 #include "content/shell/common/shell_switches.h"
-#include "content/shell/renderer/layout_test/layout_test_content_renderer_client.h"
+#include "content/shell/renderer/web_test/web_test_content_renderer_client.h"
 #include "content/test/test_content_client.h"
 
 #if defined(OS_ANDROID)
 #include "content/shell/app/shell_main_delegate.h"
+#endif
+
+#if defined(OS_MACOSX)
+#include "base/mac/foundation_util.h"
 #endif
 
 #if !defined(OS_CHROMEOS) && defined(OS_LINUX)
@@ -38,6 +41,8 @@ namespace content {
 
 ContentBrowserTest::ContentBrowserTest() {
 #if defined(OS_MACOSX)
+  base::mac::SetOverrideAmIBundled(true);
+
   // See comment in InProcessBrowserTest::InProcessBrowserTest().
   base::FilePath content_shell_path;
   CHECK(base::PathService::Get(base::FILE_EXE, &content_shell_path));
@@ -46,8 +51,7 @@ ContentBrowserTest::ContentBrowserTest() {
       FILE_PATH_LITERAL("Content Shell.app/Contents/MacOS/Content Shell"));
   CHECK(base::PathService::Override(base::FILE_EXE, content_shell_path));
 #endif
-  base::FilePath content_test_data(FILE_PATH_LITERAL("content/test/data"));
-  CreateTestServer(content_test_data);
+  CreateTestServer(GetTestDataFilePath());
 }
 
 ContentBrowserTest::~ContentBrowserTest() {
@@ -55,8 +59,6 @@ ContentBrowserTest::~ContentBrowserTest() {
 
 void ContentBrowserTest::SetUp() {
   base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
-  command_line->AppendSwitch(switches::kContentBrowserTest);
-
   SetUpCommandLine(command_line);
 
 #if defined(OS_ANDROID)
@@ -68,7 +70,7 @@ void ContentBrowserTest::SetUp() {
     // destroyed.
     ContentRendererClient* old_client =
         switches::IsRunWebTestsSwitchPresent()
-            ? SetRendererClientForTesting(new LayoutTestContentRendererClient)
+            ? SetRendererClientForTesting(new WebTestContentRendererClient)
             : SetRendererClientForTesting(new ShellContentRendererClient);
     // No-one should have set this value before we did.
     DCHECK(!old_client);
@@ -132,7 +134,7 @@ void ContentBrowserTest::PreRunTestOnMainThread() {
 #endif
 
   // Pump startup related events.
-  DCHECK(base::MessageLoopForUI::IsCurrent());
+  DCHECK(base::MessageLoopCurrentForUI::IsSet());
   base::RunLoop().RunUntilIdle();
 
 #if defined(OS_MACOSX)
@@ -163,6 +165,10 @@ Shell* ContentBrowserTest::CreateOffTheRecordBrowser() {
   return Shell::CreateNewWindow(
       ShellContentBrowserClient::Get()->off_the_record_browser_context(),
       GURL(url::kAboutBlankURL), nullptr, gfx::Size());
+}
+
+base::FilePath ContentBrowserTest::GetTestDataFilePath() {
+  return base::FilePath(FILE_PATH_LITERAL("content/test/data"));
 }
 
 }  // namespace content

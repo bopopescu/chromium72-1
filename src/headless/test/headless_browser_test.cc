@@ -12,6 +12,7 @@
 #include "base/message_loop/message_loop_current.h"
 #include "base/path_service.h"
 #include "base/run_loop.h"
+#include "build/build_config.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/render_process_host.h"
 #include "content/public/common/url_constants.h"
@@ -20,6 +21,7 @@
 #include "headless/lib/browser/headless_browser_impl.h"
 #include "headless/lib/browser/headless_web_contents_impl.h"
 #include "headless/lib/headless_content_main_delegate.h"
+#include "headless/public/devtools/domains/emulation.h"
 #include "headless/public/devtools/domains/runtime.h"
 #include "headless/public/headless_devtools_client.h"
 #include "headless/public/headless_devtools_target.h"
@@ -158,7 +160,6 @@ HeadlessBrowserTest::~HeadlessBrowserTest() = default;
 
 void HeadlessBrowserTest::PreRunTestOnMainThread() {
   DCHECK(content::BrowserThread::CurrentlyOn(content::BrowserThread::UI));
-
   // Pump startup related events.
   base::RunLoop().RunUntilIdle();
 }
@@ -228,8 +229,6 @@ void HeadlessBrowserTest::FinishAsynchronousTest() {
 HeadlessAsyncDevTooledBrowserTest::HeadlessAsyncDevTooledBrowserTest()
     : browser_context_(nullptr),
       web_contents_(nullptr),
-      devtools_client_(HeadlessDevToolsClient::Create()),
-      browser_devtools_client_(HeadlessDevToolsClient::Create()),
       render_process_exited_(false) {}
 
 HeadlessAsyncDevTooledBrowserTest::~HeadlessAsyncDevTooledBrowserTest() =
@@ -238,7 +237,22 @@ HeadlessAsyncDevTooledBrowserTest::~HeadlessAsyncDevTooledBrowserTest() =
 void HeadlessAsyncDevTooledBrowserTest::DevToolsTargetReady() {
   EXPECT_TRUE(web_contents_->GetDevToolsTarget());
   web_contents_->GetDevToolsTarget()->AttachClient(devtools_client_.get());
+#if defined(OS_MACOSX)
+  devtools_client_->GetEmulation()->SetDeviceMetricsOverride(
+      emulation::SetDeviceMetricsOverrideParams::Builder()
+          .SetWidth(0)
+          .SetHeight(0)
+          .SetDeviceScaleFactor(1)
+          .SetMobile(false)
+          .Build(),
+      base::BindOnce(
+          [](HeadlessAsyncDevTooledBrowserTest* self) {
+            self->RunDevTooledTest();
+          },
+          base::Unretained(this)));
+#else
   RunDevTooledTest();
+#endif
 }
 
 void HeadlessAsyncDevTooledBrowserTest::RenderProcessExited(
@@ -253,9 +267,11 @@ void HeadlessAsyncDevTooledBrowserTest::RenderProcessExited(
 }
 
 void HeadlessAsyncDevTooledBrowserTest::RunTest() {
+  devtools_client_ = HeadlessDevToolsClient::Create();
+  browser_devtools_client_ = HeadlessDevToolsClient::Create();
+  interceptor_ = std::make_unique<TestNetworkInterceptor>();
   HeadlessBrowserContext::Builder builder =
       browser()->CreateBrowserContextBuilder();
-  builder.SetProtocolHandlers(GetProtocolHandlers());
   CustomizeHeadlessBrowserContext(builder);
   browser_context_ = builder.Build();
 
@@ -271,7 +287,7 @@ void HeadlessAsyncDevTooledBrowserTest::RunTest() {
   web_contents_->AddObserver(this);
 
   RunAsynchronousTest();
-
+  interceptor_.reset();
   if (!render_process_exited_)
     web_contents_->GetDevToolsTarget()->DetachClient(devtools_client_.get());
   web_contents_->RemoveObserver(this);
@@ -280,10 +296,6 @@ void HeadlessAsyncDevTooledBrowserTest::RunTest() {
   browser()->GetDevToolsTarget()->DetachClient(browser_devtools_client_.get());
   browser_context_->Close();
   browser_context_ = nullptr;
-}
-
-ProtocolHandlerMap HeadlessAsyncDevTooledBrowserTest::GetProtocolHandlers() {
-  return ProtocolHandlerMap();
 }
 
 bool HeadlessAsyncDevTooledBrowserTest::GetEnableBeginFrameControl() {

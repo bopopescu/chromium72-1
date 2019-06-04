@@ -39,8 +39,9 @@ class SystemNetworkContextManager;
 class WatchDogThread;
 class WebRtcLogUploader;
 
-namespace content {
-class NetworkConnectionTracker;
+namespace network {
+class NetworkQualityTracker;
+class SharedURLLoaderFactory;
 }
 
 namespace safe_browsing {
@@ -48,7 +49,7 @@ class SafeBrowsingService;
 }
 
 namespace subresource_filter {
-class ContentRulesetService;
+class RulesetService;
 }
 
 namespace variations {
@@ -112,6 +113,7 @@ class RapporServiceImpl;
 }
 
 namespace resource_coordinator {
+class ResourceCoordinatorParts;
 class TabManager;
 }
 
@@ -150,6 +152,8 @@ class BrowserProcess {
   virtual ProfileManager* profile_manager() = 0;
   virtual PrefService* local_state() = 0;
   virtual net::URLRequestContextGetter* system_request_context() = 0;
+  virtual scoped_refptr<network::SharedURLLoaderFactory>
+  shared_url_loader_factory() = 0;
   virtual variations::VariationsService* variations_service() = 0;
 
   virtual BrowserProcessPlatformPart* platform_part() = 0;
@@ -169,8 +173,8 @@ class BrowserProcess {
   //
   // Can be NULL close to startup and shutdown.
   //
-  // NOTE: If you want to post a task to the IO thread, use
-  // BrowserThread::PostTask (or other variants).
+  // NOTE: If you want to post a task to the IO thread, see
+  // browser_task_traits.h.
   virtual IOThread* io_thread() = 0;
 
   // Replacement for IOThread (And ChromeNetLog). It owns and manages the
@@ -179,9 +183,9 @@ class BrowserProcess {
   // backed by the IOThread's URLRequestContext.
   virtual SystemNetworkContextManager* system_network_context_manager() = 0;
 
-  // Returns a NetworkConnectionTracker that can be used to subscribe for
-  // network change events.
-  virtual content::NetworkConnectionTracker* network_connection_tracker() = 0;
+  // Returns a NetworkQualityTracker that can be used to subscribe for
+  // network quality change events.
+  virtual network::NetworkQualityTracker* network_quality_tracker() = 0;
 
   // Returns the thread that is used for health check of all browser threads.
   virtual WatchDogThread* watchdog_thread() = 0;
@@ -216,7 +220,7 @@ class BrowserProcess {
   // distinguishing information to the language tag (e.g. both "en-US" and "fr"
   // are correct here).
   virtual const std::string& GetApplicationLocale() = 0;
-  virtual void SetApplicationLocale(const std::string& locale) = 0;
+  virtual void SetApplicationLocale(const std::string& actual_locale) = 0;
 
   virtual DownloadStatusUpdater* download_status_updater() = 0;
   virtual DownloadRequestLimiter* download_request_limiter() = 0;
@@ -241,7 +245,7 @@ class BrowserProcess {
 
   // Returns the service providing versioned storage for rules used by the Safe
   // Browsing subresource filter.
-  virtual subresource_filter::ContentRulesetService*
+  virtual subresource_filter::RulesetService*
   subresource_filter_ruleset_service() = 0;
 
   // Returns the service used to provide hints for what optimizations can be
@@ -276,7 +280,12 @@ class BrowserProcess {
   virtual gcm::GCMDriver* gcm_driver() = 0;
 
   // Returns the tab manager. On non-supported platforms, this returns null.
+  // TODO(sebmarchand): Update callers to
+  // resource_coordinator_parts()->tab_manager() and remove this.
   virtual resource_coordinator::TabManager* GetTabManager() = 0;
+
+  virtual resource_coordinator::ResourceCoordinatorParts*
+  resource_coordinator_parts() = 0;
 
   // Returns the default web client state of Chrome (i.e., was it the user's
   // default browser) at the time a previous check was made sometime between

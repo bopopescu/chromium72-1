@@ -9,6 +9,7 @@ import android.content.res.Resources;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.os.SystemClock;
+import android.support.v4.view.ViewCompat;
 import android.view.ContextMenu;
 import android.view.ContextMenu.ContextMenuInfo;
 import android.view.LayoutInflater;
@@ -17,16 +18,14 @@ import android.view.ViewGroup;
 import android.widget.ExpandableListView;
 
 import org.chromium.base.ActivityState;
-import org.chromium.base.ApiCompatibilityUtils;
 import org.chromium.base.ApplicationStatus;
 import org.chromium.base.metrics.RecordHistogram;
 import org.chromium.chrome.R;
 import org.chromium.chrome.browser.ChromeActivity;
-import org.chromium.chrome.browser.NativePage;
 import org.chromium.chrome.browser.UrlConstants;
 import org.chromium.chrome.browser.compositor.layouts.content.InvalidationAwareThumbnailProvider;
+import org.chromium.chrome.browser.native_page.NativePage;
 import org.chromium.chrome.browser.util.ColorUtils;
-import org.chromium.chrome.browser.util.FeatureUtilities;
 import org.chromium.chrome.browser.util.ViewUtils;
 
 import java.util.concurrent.TimeUnit;
@@ -103,9 +102,10 @@ public class RecentTabsPage
 
         View recentTabsRoot = mView.findViewById(R.id.recent_tabs_root);
         if (activity.getFullscreenManager().getBottomControlsHeight() != 0) {
-            ApiCompatibilityUtils.setPaddingRelative(recentTabsRoot,
-                    ApiCompatibilityUtils.getPaddingStart(recentTabsRoot), 0,
-                    ApiCompatibilityUtils.getPaddingEnd(recentTabsRoot),
+            ViewCompat.setPaddingRelative(recentTabsRoot,
+                    ViewCompat.getPaddingStart(recentTabsRoot),
+                    activity.getFullscreenManager().getTopControlsHeight(),
+                    ViewCompat.getPaddingEnd(recentTabsRoot),
                     activity.getFullscreenManager().getBottomControlsHeight());
         }
 
@@ -153,8 +153,7 @@ public class RecentTabsPage
 
     @Override
     public int getThemeColor() {
-        return ColorUtils.getDefaultThemeColor(
-                mActivity.getResources(), FeatureUtilities.isChromeModernDesignEnabled(), false);
+        return ColorUtils.getDefaultThemeColor(mActivity.getResources(), false);
     }
 
     @Override

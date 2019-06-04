@@ -49,9 +49,12 @@
 #include "base/numerics/safe_conversions.h"
 #include "base/posix/eintr_wrapper.h"
 #include "base/strings/string_number_conversions.h"
+#include "base/strings/string_util.h"
 #include "build/build_config.h"
 
 #if defined(USE_SYMBOLIZE)
+#include "base/no_destructor.h"
+#include "base/synchronization/lock.h"
 #include "base/third_party/symbolize/symbolize.h"
 #endif
 
@@ -155,14 +158,18 @@ void OutputFrameId(intptr_t frame_id, BacktraceOutputHandler* handler) {
 }
 #endif  // defined(USE_SYMBOLIZE)
 
-void ProcessBacktrace(void *const *trace,
+void ProcessBacktrace(void* const* trace,
                       size_t size,
+                      const char* prefix_string,
                       BacktraceOutputHandler* handler) {
-  // NOTE: This code MUST be async-signal safe (it's used by in-process
-  // stack dumping signal handler). NO malloc or stdio is allowed here.
+// NOTE: This code MUST be async-signal safe (it's used by in-process
+// stack dumping signal handler). NO malloc or stdio is allowed here.
 
 #if defined(USE_SYMBOLIZE)
   for (size_t i = 0; i < size; ++i) {
+    if (prefix_string)
+      handler->HandleOutput(prefix_string);
+
     OutputFrameId(i, handler);
     handler->HandleOutput(" ");
     OutputPointer(trace[i], handler);
@@ -173,7 +180,18 @@ void ProcessBacktrace(void *const *trace,
     // Subtract by one as return address of function may be in the next
     // function when a function is annotated as noreturn.
     void* address = static_cast<char*>(trace[i]) - 1;
-    if (google::Symbolize(address, buf, sizeof(buf)))
+    bool symbolize_result;
+    {
+      // Chromium version of google::Symbolize() uses SandboxSymbolizeHelper::
+      // GetFileDescriptor(), and unlike the original version, it reuses fds for
+      // multiple symbolize requests. As google::Symbolize() calls lseek() on
+      // the shared fd before reading it and changes the state of the
+      // descriptor, parallel symbolize requests are racy.
+      static base::NoDestructor<base::Lock> lock;
+      base::AutoLock auto_lock(*lock);
+      symbolize_result = google::Symbolize(address, buf, sizeof(buf));
+    }
+    if (symbolize_result)
       handler->HandleOutput(buf);
     else
       handler->HandleOutput("<unknown>");
@@ -192,6 +210,8 @@ void ProcessBacktrace(void *const *trace,
       for (size_t i = 0; i < size; ++i) {
         std::string trace_symbol = trace_symbols.get()[i];
         DemangleSymbols(&trace_symbol);
+        if (prefix_string)
+          handler->HandleOutput(prefix_string);
         handler->HandleOutput(trace_symbol.c_str());
         handler->HandleOutput("\n");
       }
@@ -690,6 +710,11 @@ class SandboxSymbolizeHelper {
           // Skip pseudo-paths, like [stack], [vdso], [heap], etc ...
           continue;
         }
+        if (base::EndsWith(region.path, " (deleted)",
+                           base::CompareCase::SENSITIVE)) {
+          // Skip deleted files.
+          continue;
+        }
         // Avoid duplicates.
         if (modules_.find(region.path) == modules_.end()) {
           int fd = open(region.path.c_str(), O_RDONLY | O_CLOEXEC);
@@ -811,20 +836,21 @@ StackTrace::StackTrace(size_t count) {
 #endif
 }
 
-void StackTrace::Print() const {
-  // NOTE: This code MUST be async-signal safe (it's used by in-process
-  // stack dumping signal handler). NO malloc or stdio is allowed here.
+void StackTrace::PrintWithPrefix(const char* prefix_string) const {
+// NOTE: This code MUST be async-signal safe (it's used by in-process
+// stack dumping signal handler). NO malloc or stdio is allowed here.
 
 #if !defined(__UCLIBC__) && !defined(_AIX)
   PrintBacktraceOutputHandler handler;
-  ProcessBacktrace(trace_, count_, &handler);
+  ProcessBacktrace(trace_, count_, prefix_string, &handler);
 #endif
 }
 
 #if !defined(__UCLIBC__) && !defined(_AIX)
-void StackTrace::OutputToStream(std::ostream* os) const {
+void StackTrace::OutputToStreamWithPrefix(std::ostream* os,
+                                          const char* prefix_string) const {
   StreamBacktraceOutputHandler handler(os);
-  ProcessBacktrace(trace_, count_, &handler);
+  ProcessBacktrace(trace_, count_, prefix_string, &handler);
 }
 #endif
 

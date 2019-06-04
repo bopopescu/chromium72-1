@@ -45,11 +45,10 @@ public class WebappTabDelegate extends TabDelegate {
     }
 
     @Override
-    public void createNewTab(AsyncTabCreationParams asyncParams, TabLaunchType type, int parentId) {
+    public void createNewTab(
+            AsyncTabCreationParams asyncParams, @TabLaunchType int type, int parentId) {
         String url = asyncParams.getLoadUrlParams().getUrl();
-        if (maybeStartExternalActivity(url)) {
-            return;
-        }
+        if (maybeStartExternalActivity(url)) return;
 
         int assignedTabId = TabIdManager.getInstance().generateValidId(Tab.INVALID_TAB_ID);
         AsyncTabParamsManager.add(assignedTabId, asyncParams);
@@ -58,6 +57,7 @@ public class WebappTabDelegate extends TabDelegate {
         intent.setData(Uri.parse(url));
         intent.putExtra(CustomTabIntentDataProvider.EXTRA_SEND_TO_EXTERNAL_DEFAULT_HANDLER, true);
         intent.putExtra(CustomTabIntentDataProvider.EXTRA_IS_OPENED_BY_CHROME, true);
+        intent.putExtra(CustomTabIntentDataProvider.EXTRA_IS_OPENED_BY_WEBAPK, true);
         intent.putExtra(CustomTabIntentDataProvider.EXTRA_BROWSER_LAUNCH_SOURCE, mActivityType);
         intent.putExtra(Browser.EXTRA_APPLICATION_ID, mApkPackageName);
         addAsyncTabExtras(asyncParams, parentId, false /* isChromeUI */, assignedTabId, intent);
@@ -84,10 +84,10 @@ public class WebappTabDelegate extends TabDelegate {
             boolean foundSpecializedHandler = false;
 
             for (String result : ExternalNavigationDelegateImpl.getSpecializedHandlersWithFilter(
-                         handlers, null)) {
+                         handlers, null, null)) {
                 if (result.equals(mApkPackageName)) {
-                    // Current webapk matches, don't intercept so that we can launch a cct. See
-                    // http://crbug.com/831806 for more context.
+                    // Current WebAPK matches and this is a HTTP(s) link. Don't intercept so that we
+                    // can launch a CCT. See http://crbug.com/831806 for more context.
                     return false;
                 } else {
                     foundSpecializedHandler = true;

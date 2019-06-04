@@ -8,9 +8,15 @@
 #include <vulkan/vulkan.h>
 #include <memory>
 
+#include "base/files/scoped_file.h"
 #include "base/macros.h"
+#include "build/build_config.h"
 #include "gpu/vulkan/vulkan_export.h"
 #include "ui/gfx/native_widget_types.h"
+
+namespace gfx {
+class GpuFence;
+}
 
 namespace gpu {
 
@@ -36,6 +42,34 @@ class VULKAN_EXPORT VulkanImplementation {
       VkPhysicalDevice device,
       const std::vector<VkQueueFamilyProperties>& queue_family_properties,
       uint32_t queue_family_index) = 0;
+
+  virtual std::vector<const char*> GetRequiredDeviceExtensions() = 0;
+
+  // Creates a VkFence that is exportable to a gfx::GpuFence.
+  virtual VkFence CreateVkFenceForGpuFence(VkDevice vk_device) = 0;
+
+  // Exports a VkFence to a gfx::GpuFence.
+  //
+  // The fence should have been created via CreateVkFenceForGpuFence().
+  virtual std::unique_ptr<gfx::GpuFence> ExportVkFenceToGpuFence(
+      VkDevice vk_device,
+      VkFence vk_fence) = 0;
+
+#if defined(OS_ANDROID)
+  // Import a VkSemaphore from a POSIX sync file descriptor. Importing a
+  // semaphore payload from a file descriptor transfers ownership of the file
+  // descriptor from the application to the Vulkan implementation. The
+  // application must not perform any operations on the file descriptor after a
+  // successful import.
+  virtual bool ImportSemaphoreFdKHR(VkDevice vk_device,
+                                    base::ScopedFD sync_fd,
+                                    VkSemaphore* vk_semaphore) = 0;
+
+  // Export a sync fd representing the payload of a semaphore.
+  virtual bool GetSemaphoreFdKHR(VkDevice vk_device,
+                                 VkSemaphore vk_semaphore,
+                                 base::ScopedFD* sync_fd) = 0;
+#endif
 
  private:
   DISALLOW_COPY_AND_ASSIGN(VulkanImplementation);

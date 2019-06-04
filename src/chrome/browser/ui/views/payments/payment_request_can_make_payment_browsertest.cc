@@ -12,6 +12,7 @@
 #include "chrome/browser/ui/views/payments/payment_request_browsertest_base.h"
 #include "components/autofill/core/browser/autofill_test_utils.h"
 #include "components/autofill/core/browser/credit_card.h"
+#include "components/payments/core/features.h"
 #include "content/public/common/content_features.h"
 #include "content/public/test/browser_test_utils.h"
 
@@ -65,6 +66,48 @@ IN_PROC_BROWSER_TEST_F(PaymentRequestCanMakePaymentQueryTest,
   CallCanMakePayment();
 
   ExpectBodyContains({"false"});
+}
+
+// Visa is required, and user has a masked visa instrument, and Google Pay cards
+// in basic-card is disabled.
+IN_PROC_BROWSER_TEST_F(PaymentRequestCanMakePaymentQueryTest,
+                       CanMakePayment_Supported_GooglePayCardsDisabled) {
+  base::test::ScopedFeatureList scoped_feature_list_;
+  scoped_feature_list_.InitAndDisableFeature(
+      payments::features::kReturnGooglePayInBasicCard);
+  NavigateTo("/payment_request_can_make_payment_query_test.html");
+  autofill::CreditCard card = autofill::test::GetMaskedServerCard();
+  card.SetNumber(base::ASCIIToUTF16("4111111111111111"));  // We need a visa.
+  card.SetNetworkForMaskedCard(autofill::kVisaCard);
+  autofill::AutofillProfile billing_address = autofill::test::GetFullProfile();
+  AddAutofillProfile(billing_address);
+  card.set_billing_address_id(billing_address.guid());
+  AddCreditCard(card);
+
+  CallCanMakePayment();
+
+  ExpectBodyContains({"false"});
+}
+
+// Visa is required, and user has a masked visa instrument, and Google Pay cards
+// in basic-card is enabled.
+IN_PROC_BROWSER_TEST_F(PaymentRequestCanMakePaymentQueryTest,
+                       CanMakePayment_Supported_GooglePayCardsEnabled) {
+  base::test::ScopedFeatureList scoped_feature_list_;
+  scoped_feature_list_.InitAndEnableFeature(
+      payments::features::kReturnGooglePayInBasicCard);
+  NavigateTo("/payment_request_can_make_payment_query_test.html");
+  autofill::CreditCard card = autofill::test::GetMaskedServerCard();
+  card.SetNumber(base::ASCIIToUTF16("4111111111111111"));  // We need a visa.
+  card.SetNetworkForMaskedCard(autofill::kVisaCard);
+  autofill::AutofillProfile billing_address = autofill::test::GetFullProfile();
+  AddAutofillProfile(billing_address);
+  card.set_billing_address_id(billing_address.guid());
+  AddCreditCard(card);
+
+  CallCanMakePayment();
+
+  ExpectBodyContains({"true"});
 }
 
 // Pages without a valid SSL certificate always get "false" from
@@ -312,6 +355,9 @@ IN_PROC_BROWSER_TEST_F(PaymentRequestCanMakePaymentQueryPMITest,
 // should return false for them.
 IN_PROC_BROWSER_TEST_F(PaymentRequestCanMakePaymentQueryPMITest,
                        QueryQuotaForPaymentApps) {
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitAndEnableFeature(
+      features::kWebPaymentsPerMethodCanMakePaymentQuota);
   NavigateTo("/payment_request_payment_method_identifier_test.html");
   CallCanMakePayment(CheckFor::ALICE_PAY);
 
@@ -319,7 +365,7 @@ IN_PROC_BROWSER_TEST_F(PaymentRequestCanMakePaymentQueryPMITest,
 
   CallCanMakePayment(CheckFor::BOB_PAY);
 
-  ExpectBodyContains({"NotAllowedError"});
+  ExpectBodyContains({"false"});
 
   CallCanMakePayment(CheckFor::ALICE_PAY);
 
@@ -368,7 +414,10 @@ IN_PROC_BROWSER_TEST_F(PaymentRequestCanMakePaymentQueryPMITest,
                        QueryQuotaForPaymentAppsInIncognitoMode) {
   NavigateTo("/payment_request_payment_method_identifier_test.html");
   base::test::ScopedFeatureList scoped_feature_list;
-  scoped_feature_list.InitAndEnableFeature(features::kServiceWorkerPaymentApps);
+  scoped_feature_list.InitWithFeatures(
+      /*enable_features=*/{::features::kServiceWorkerPaymentApps,
+                           features::kWebPaymentsPerMethodCanMakePaymentQuota},
+      /*disable_features=*/{});
 
   SetIncognito();
 
@@ -378,7 +427,7 @@ IN_PROC_BROWSER_TEST_F(PaymentRequestCanMakePaymentQueryPMITest,
 
   CallCanMakePayment(CheckFor::BOB_PAY);
 
-  ExpectBodyContains({"NotAllowedError"});
+  ExpectBodyContains({"false"});
 
   CallCanMakePayment(CheckFor::ALICE_PAY);
 
@@ -386,7 +435,7 @@ IN_PROC_BROWSER_TEST_F(PaymentRequestCanMakePaymentQueryPMITest,
 
   CallCanMakePayment(CheckFor::BOB_PAY);
 
-  ExpectBodyContains({"NotAllowedError"});
+  ExpectBodyContains({"false"});
 }
 
 // Querying for both payment apps and autofill cards in incognito returns result
@@ -395,6 +444,9 @@ IN_PROC_BROWSER_TEST_F(PaymentRequestCanMakePaymentQueryPMITest,
 // NotSupportedError to avoid user fingerprinting.
 IN_PROC_BROWSER_TEST_F(PaymentRequestCanMakePaymentQueryPMITest,
                        NoQueryQuotaForPaymentAppsAndCardsInIncognito) {
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitAndEnableFeature(
+      features::kWebPaymentsPerMethodCanMakePaymentQuota);
   NavigateTo("/payment_request_payment_method_identifier_test.html");
   SetIncognito();
 
@@ -422,9 +474,13 @@ IN_PROC_BROWSER_TEST_F(PaymentRequestCanMakePaymentQueryPMITest,
 
   ExpectBodyContains({"true"});
 
-  CallCanMakePayment(CheckFor::BOB_PAY_AND_BASIC_CARD);
+  CallCanMakePayment(CheckFor::BOB_PAY);
 
-  ExpectBodyContains({"NotAllowedError"});
+  ExpectBodyContains({"false"});
+
+  CallCanMakePayment(CheckFor::BASIC_VISA);
+
+  ExpectBodyContains({"true"});
 }
 
 }  // namespace payments

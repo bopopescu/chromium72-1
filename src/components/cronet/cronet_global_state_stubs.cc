@@ -6,8 +6,8 @@
 
 #include "base/at_exit.h"
 #include "base/feature_list.h"
-#include "base/task_scheduler/post_task.h"
-#include "base/task_scheduler/task_scheduler.h"
+#include "base/task/post_task.h"
+#include "base/task/task_scheduler/task_scheduler.h"
 #include "net/proxy_resolution/proxy_config_service.h"
 #include "net/proxy_resolution/proxy_resolution_service.h"
 #include "url/url_util.h"
@@ -21,12 +21,9 @@ namespace cronet {
 namespace {
 
 scoped_refptr<base::SingleThreadTaskRunner> InitializeAndCreateTaskRunner() {
-// TODO(https://crbug.com/816705): Component builds result in //base and other
-// process-global state being shared between the library and the test suite.
-// Since we only expect Cronet native library component build to be used to run
-// cronet_tests, we can assume that suite will define some things, for now.
-#if !defined(COMPONENT_BUILD)
-  // TODO(wez): Remove this once AtExitManager dependencies are gone.
+// Cronet tests sets AtExitManager as part of TestSuite, so statically linked
+// library is not allowed to set its own.
+#if !defined(CRONET_TESTS_IMPLEMENTATION)
   ignore_result(new base::AtExitManager);
 #endif
 
@@ -79,6 +76,10 @@ std::unique_ptr<net::ProxyResolutionService> CreateProxyResolutionService(
 
 std::string CreateDefaultUserAgent(const std::string& partial_user_agent) {
   return partial_user_agent;
+}
+
+void SetNetworkThreadPriorityOnNetworkThread(double priority) {
+  NOTIMPLEMENTED();
 }
 
 }  // namespace cronet

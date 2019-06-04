@@ -8,13 +8,16 @@
 #include <string>
 #include <utility>
 
+#include "base/command_line.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/timer/elapsed_timer.h"
 #include "build/build_config.h"
 #include "chrome/browser/browser_process.h"
+#include "chrome/browser/extensions/chrome_extension_browser_constants.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/webui/metrics_handler.h"
+#include "chrome/common/chrome_switches.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/common/url_constants.h"
 #include "chrome/grit/browser_resources.h"
@@ -23,7 +26,7 @@
 #include "chrome/grit/extensions_resources_map.h"
 #include "chrome/grit/generated_resources.h"
 #include "chrome/grit/theme_resources.h"
-#include "components/google/core/browser/google_util.h"
+#include "components/google/core/common/google_util.h"
 #include "components/pref_registry/pref_registry_syncable.h"
 #include "components/prefs/pref_service.h"
 #include "components/strings/grit/components_strings.h"
@@ -32,6 +35,7 @@
 #include "content/public/browser/web_contents_observer.h"
 #include "content/public/browser/web_ui.h"
 #include "content/public/browser/web_ui_data_source.h"
+#include "content/public/common/content_features.h"
 #include "extensions/common/extension_urls.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/resource/resource_bundle.h"
@@ -46,6 +50,7 @@ namespace extensions {
 namespace {
 
 constexpr char kInDevModeKey[] = "inDevMode";
+constexpr char kShowActivityLogKey[] = "showActivityLog";
 constexpr char kLoadTimeClassesKey[] = "loadTimeClasses";
 
 struct LocalizedString {
@@ -114,9 +119,6 @@ std::string GetLoadTimeClasses(bool in_dev_mode) {
 content::WebUIDataSource* CreateMdExtensionsSource(bool in_dev_mode) {
   content::WebUIDataSource* source =
       content::WebUIDataSource::Create(chrome::kChromeUIExtensionsHost);
-  source->OverrideContentSecurityPolicyScriptSrc(
-      "script-src chrome://resources 'self';");
-
   source->SetJsonPath("strings.js");
 
   constexpr LocalizedString localized_strings[] = {
@@ -131,7 +133,12 @@ content::WebUIDataSource* CreateMdExtensionsSource(bool in_dev_mode) {
     {"learnMore", IDS_LEARN_MORE},
     {"noSearchResults", IDS_SEARCH_NO_RESULTS},
     {"ok", IDS_OK},
-    {"searchResults", IDS_SEARCH_RESULTS},
+    {"save", IDS_SAVE},
+    {"searchResultsPlural", IDS_SEARCH_RESULTS_PLURAL},
+    {"searchResultsSingular", IDS_SEARCH_RESULTS_SINGULAR},
+
+    // Multi-use strings defined in md_extensions_strings.grdp.
+    {"remove", IDS_MD_EXTENSIONS_REMOVE},
 
     // Add extension-specific strings.
     {"title", IDS_MANAGE_EXTENSIONS_SETTING_WINDOWS_TITLE},
@@ -161,6 +168,13 @@ content::WebUIDataSource* CreateMdExtensionsSource(bool in_dev_mode) {
     {"openChromeWebStore", IDS_MD_EXTENSIONS_SIDEBAR_OPEN_CHROME_WEB_STORE},
     {"keyboardShortcuts", IDS_MD_EXTENSIONS_SIDEBAR_KEYBOARD_SHORTCUTS},
     {"incognitoInfoWarning", IDS_EXTENSIONS_INCOGNITO_WARNING},
+    {"hostPermissionsEdit", IDS_MD_EXTENSIONS_HOST_PERMISSIONS_EDIT},
+    {"hostPermissionsHeading", IDS_MD_EXTENSIONS_ITEM_HOST_PERMISSIONS_HEADING},
+    {"hostAccessOnClick", IDS_MD_EXTENSIONS_HOST_ACCESS_ON_CLICK},
+    {"hostAccessOnSpecificSites",
+     IDS_MD_EXTENSIONS_HOST_ACCESS_ON_SPECIFIC_SITES},
+    {"hostAccessOnAllSites", IDS_MD_EXTENSIONS_HOST_ACCESS_ON_ALL_SITES},
+    {"hostAllowedHosts", IDS_EXTENSIONS_ITEM_ALLOWED_HOSTS},
     {"itemId", IDS_MD_EXTENSIONS_ITEM_ID},
     {"itemInspectViews", IDS_MD_EXTENSIONS_ITEM_INSPECT_VIEWS},
     // NOTE: This text reads "<n> more". It's possible that it should be using
@@ -178,6 +192,7 @@ content::WebUIDataSource* CreateMdExtensionsSource(bool in_dev_mode) {
     {"accessibilityErrorLine", IDS_MD_EXTENSIONS_ACCESSIBILITY_ERROR_LINE},
     {"accessibilityErrorMultiLine",
      IDS_MD_EXTENSIONS_ACCESSIBILITY_ERROR_MULTI_LINE},
+    {"activityLogPageHeading", IDS_MD_EXTENSIONS_ACTIVITY_LOG_PAGE_HEADING},
     {"appIcon", IDS_MD_EXTENSIONS_APP_ICON},
     {"extensionIcon", IDS_MD_EXTENSIONS_EXTENSION_ICON},
     {"extensionA11yAssociation", IDS_MD_EXTENSIONS_EXTENSION_A11Y_ASSOCIATION},
@@ -191,7 +206,6 @@ content::WebUIDataSource* CreateMdExtensionsSource(bool in_dev_mode) {
     {"itemOptions", IDS_MD_EXTENSIONS_ITEM_OPTIONS},
     {"itemPermissions", IDS_MD_EXTENSIONS_ITEM_PERMISSIONS},
     {"itemPermissionsEmpty", IDS_MD_EXTENSIONS_ITEM_PERMISSIONS_EMPTY},
-    {"itemRemove", IDS_MD_EXTENSIONS_ITEM_REMOVE},
     {"itemRemoveExtension", IDS_MD_EXTENSIONS_ITEM_REMOVE_EXTENSION},
     {"itemSource", IDS_MD_EXTENSIONS_ITEM_SOURCE},
     {"itemSourcePolicy", IDS_MD_EXTENSIONS_ITEM_SOURCE_POLICY},
@@ -213,7 +227,14 @@ content::WebUIDataSource* CreateMdExtensionsSource(bool in_dev_mode) {
     {"loadErrorFileLabel", IDS_MD_EXTENSIONS_LOAD_ERROR_FILE_LABEL},
     {"loadErrorErrorLabel", IDS_MD_EXTENSIONS_LOAD_ERROR_ERROR_LABEL},
     {"loadErrorRetry", IDS_MD_EXTENSIONS_LOAD_ERROR_RETRY},
+    {"loadingActivities", IDS_MD_EXTENSIONS_LOADING_ACTIVITIES},
+    {"noActivities", IDS_MD_EXTENSIONS_NO_ACTIVITIES},
     {"noErrorsToShow", IDS_EXTENSIONS_ERROR_NO_ERRORS_CODE_MESSAGE},
+    {"runtimeHostsDialogInputError",
+     IDS_MD_EXTENSIONS_RUNTIME_HOSTS_DIALOG_INPUT_ERROR},
+    {"runtimeHostsDialogInputLabel",
+     IDS_MD_EXTENSIONS_RUNTIME_HOSTS_DIALOG_INPUT_LABEL},
+    {"runtimeHostsDialogTitle", IDS_MD_EXTENSIONS_RUNTIME_HOSTS_DIALOG_TITLE},
     {"packDialogTitle", IDS_MD_EXTENSIONS_PACK_DIALOG_TITLE},
     {"packDialogWarningTitle", IDS_MD_EXTENSIONS_PACK_DIALOG_WARNING_TITLE},
     {"packDialogErrorTitle", IDS_MD_EXTENSIONS_PACK_DIALOG_ERROR_TITLE},
@@ -241,6 +262,7 @@ content::WebUIDataSource* CreateMdExtensionsSource(bool in_dev_mode) {
     {"toolbarUpdatingToast", IDS_MD_EXTENSIONS_TOOLBAR_UPDATING_TOAST},
     {"updateRequiredByPolicy",
      IDS_MD_EXTENSIONS_DISABLED_UPDATE_REQUIRED_BY_POLICY},
+    {"viewActivityLog", IDS_EXTENSIONS_VIEW_ACTIVITY_LOG},
     {"viewBackgroundPage", IDS_EXTENSIONS_BACKGROUND_PAGE},
     {"viewIncognito", IDS_EXTENSIONS_VIEW_INCOGNITO},
     {"viewInactive", IDS_EXTENSIONS_VIEW_INACTIVE},
@@ -294,13 +316,24 @@ content::WebUIDataSource* CreateMdExtensionsSource(bool in_dev_mode) {
               GURL(extension_urls::GetWebstoreExtensionsCategoryURL()),
               g_browser_process->GetApplicationLocale())
               .spec()));
-
+  source->AddString(
+      "hostPermissionsLearnMoreLink",
+      l10n_util::GetStringFUTF16(
+          IDS_MD_EXTENSIONS_HOST_PERMISSIONS_LEARN_MORE,
+          base::ASCIIToUTF16(
+              chrome_extension_constants::kRuntimeHostPermissionsHelpURL)));
   source->AddBoolean(kInDevModeKey, in_dev_mode);
+  source->AddBoolean(kShowActivityLogKey,
+                     base::CommandLine::ForCurrentProcess()->HasSwitch(
+                         ::switches::kEnableExtensionActivityLogging));
   source->AddString(kLoadTimeClassesKey, GetLoadTimeClasses(in_dev_mode));
 
 #if BUILDFLAG(OPTIMIZE_WEBUI)
   source->AddResourcePath("crisper.js", IDR_MD_EXTENSIONS_CRISPER_JS);
-  source->SetDefaultResource(IDR_MD_EXTENSIONS_VULCANIZED_HTML);
+  source->SetDefaultResource(
+      base::FeatureList::IsEnabled(features::kWebUIPolymer2) ?
+          IDR_MD_EXTENSIONS_VULCANIZED_P2_HTML :
+          IDR_MD_EXTENSIONS_VULCANIZED_HTML);
   source->UseGzip();
 #else
   // Add all MD Extensions resources.

@@ -25,9 +25,15 @@
 #ifndef HB_OT_COLOR_SBIX_TABLE_HH
 #define HB_OT_COLOR_SBIX_TABLE_HH
 
-#include "hb-open-type-private.hh"
+#include "hb-open-type.hh"
 
-#define HB_OT_TAG_SBIX HB_TAG('s','b','i','x')
+/*
+ * sbix -- Standard Bitmap Graphics
+ * https://docs.microsoft.com/en-us/typography/opentype/spec/sbix
+ * https://developer.apple.com/fonts/TrueType-Reference-Manual/RM06/Chap6sbix.html
+ */
+#define HB_OT_TAG_sbix HB_TAG('s','b','i','x')
+
 
 namespace OT {
 
@@ -45,7 +51,8 @@ struct SBIXGlyph
   Tag		graphicType;	/* Indicates the format of the embedded graphic
 				 * data: one of 'jpg ', 'png ' or 'tiff', or the
 				 * special format 'dupe'. */
-  HBUINT8	data[VAR];	/* The actual embedded graphic data. The total
+  UnsizedArrayOf<HBUINT8>
+		data;		/* The actual embedded graphic data. The total
 				 * length is inferred from sequential entries in
 				 * the glyphDataOffsets array and the fixed size
 				 * (8 bytes) of the preceding fields. */
@@ -59,73 +66,227 @@ struct SBIXStrike
   {
     TRACE_SANITIZE (this);
     return_trace (c->check_struct (this) &&
-		  c->check_array (imageOffsetsZ,
-				  sizeof (HBUINT32),
-				  1 + c->num_glyphs));
+		  imageOffsetsZ.sanitize_shallow (c, c->get_num_glyphs () + 1));
   }
 
-  HBUINT16		ppem;		/* The PPEM size for which this strike was designed. */
-  HBUINT16		resolution;	/* The device pixel density (in PPI) for which this
-					 * strike was designed. (E.g., 96 PPI, 192 PPI.) */
+  inline hb_blob_t *get_glyph_blob (unsigned int  glyph_id,
+				    hb_blob_t    *sbix_blob,
+				    hb_tag_t      file_type,
+				    int          *x_offset,
+				    int          *y_offset,
+				    unsigned int  num_glyphs,
+				    unsigned int *strike_ppem) const
+  {
+    if (unlikely (!ppem)) return hb_blob_get_empty (); /* To get Null() object out of the way. */
+
+    unsigned int retry_count = 8;
+    unsigned int sbix_len = sbix_blob->length;
+    unsigned int strike_offset = (const char *) this - (const char *) sbix_blob->data;
+    assert (strike_offset < sbix_len);
+
+  retry:
+    if (unlikely (glyph_id >= num_glyphs ||
+		  imageOffsetsZ[glyph_id + 1] <= imageOffsetsZ[glyph_id] ||
+		  imageOffsetsZ[glyph_id + 1] - imageOffsetsZ[glyph_id] <= SBIXGlyph::min_size ||
+		  (unsigned int) imageOffsetsZ[glyph_id + 1] > sbix_len - strike_offset))
+      return hb_blob_get_empty ();
+
+    unsigned int glyph_offset = strike_offset + (unsigned int) imageOffsetsZ[glyph_id] + SBIXGlyph::min_size;
+    unsigned int glyph_length = imageOffsetsZ[glyph_id + 1] - imageOffsetsZ[glyph_id] - SBIXGlyph::min_size;
+
+    const SBIXGlyph *glyph = &(this+imageOffsetsZ[glyph_id]);
+
+    if (glyph->graphicType == HB_TAG ('d','u','p','e'))
+    {
+      if (glyph_length >= 2)
+      {
+	glyph_id = *((HBUINT16 *) &glyph->data);
+	if (retry_count--)
+	  goto retry;
+      }
+      return hb_blob_get_empty ();
+    }
+
+    if (unlikely (file_type != glyph->graphicType))
+      return hb_blob_get_empty ();
+
+    if (strike_ppem) *strike_ppem = ppem;
+    if (x_offset) *x_offset = glyph->xOffset;
+    if (y_offset) *y_offset = glyph->yOffset;
+    return hb_blob_create_sub_blob (sbix_blob, glyph_offset, glyph_length);
+  }
+
+  public:
+  HBUINT16	ppem;		/* The PPEM size for which this strike was designed. */
+  HBUINT16	resolution;	/* The device pixel density (in PPI) for which this
+				 * strike was designed. (E.g., 96 PPI, 192 PPI.) */
   protected:
-  LOffsetTo<SBIXGlyph>	imageOffsetsZ[VAR]; // VAR=maxp.numGlyphs + 1
-					/* Offset from the beginning of the strike data header
-					 * to bitmap data for an individual glyph ID. */
+  UnsizedArrayOf<LOffsetTo<SBIXGlyph> >
+		imageOffsetsZ;	/* Offset from the beginning of the strike data header
+				 * to bitmap data for an individual glyph ID. */
   public:
   DEFINE_SIZE_STATIC (8);
 };
 
-/*
- * sbix -- Standard Bitmap Graphics Table
- */
-// It should be called with something like this so it can have
-// access to num_glyph while sanitizing.
-//
-//   static inline const OT::sbix*
-//   _get_sbix (hb_face_t *face)
-//   {
-//     OT::Sanitizer<OT::sbix> sanitizer;
-//     sanitizer.set_num_glyphs (face->get_num_glyphs ());
-//     hb_blob_t *sbix_blob = sanitizer.sanitize (face->reference_table (HB_OT_TAG_SBIX));
-//     return OT::Sanitizer<OT::sbix>::lock_instance (sbix_blob);
-//   }
-//
 struct sbix
 {
-  static const hb_tag_t tableTag = HB_OT_TAG_SBIX;
+  static const hb_tag_t tableTag = HB_OT_TAG_sbix;
+
+  inline bool has_data (void) const { return version; }
+
+  inline const SBIXStrike &get_strike (unsigned int i) const { return this+strikes[i]; }
+
+  struct accelerator_t
+  {
+    inline void init (hb_face_t *face)
+    {
+      table = hb_sanitize_context_t().reference_table<sbix> (face);
+      num_glyphs = face->get_num_glyphs ();
+    }
+
+    inline void fini (void)
+    {
+      table.destroy ();
+    }
+
+    inline bool has_data () const
+    {
+      return table->has_data ();
+    }
+
+    inline bool get_extents (hb_font_t          *font,
+			     hb_codepoint_t      glyph,
+			     hb_glyph_extents_t *extents) const
+    {
+      /* We only support PNG right now, and following function checks type. */
+      return get_png_extents (font, glyph, extents);
+    }
+
+    inline hb_blob_t *reference_png (hb_font_t      *font,
+				     hb_codepoint_t  glyph_id,
+				     int            *x_offset,
+				     int            *y_offset,
+				     unsigned int   *available_ppem) const
+    {
+      return choose_strike (font).get_glyph_blob (glyph_id, table.get_blob (),
+						  HB_TAG ('p','n','g',' '),
+						  x_offset, y_offset,
+						  num_glyphs, available_ppem);
+    }
+
+    private:
+
+    inline const SBIXStrike &choose_strike (hb_font_t *font) const
+    {
+      unsigned count = table->strikes.len;
+      if (unlikely (!count))
+        return Null(SBIXStrike);
+
+      unsigned int requested_ppem = MAX (font->x_ppem, font->y_ppem);
+      if (!requested_ppem)
+        requested_ppem = 1<<30; /* Choose largest strike. */
+      /* TODO Add DPI sensitivity as well? */
+      unsigned int best_i = 0;
+      unsigned int best_ppem = table->get_strike (0).ppem;
+
+      for (unsigned int i = 1; i < count; i++)
+      {
+	unsigned int ppem = (table->get_strike (i)).ppem;
+	if ((requested_ppem <= ppem && ppem < best_ppem) ||
+	    (requested_ppem > best_ppem && ppem > best_ppem))
+	{
+	  best_i = i;
+	  best_ppem = ppem;
+	}
+      }
+
+      return table->get_strike (best_i);
+    }
+
+    struct PNGHeader
+    {
+      HBUINT8	signature[8];
+      struct
+      {
+        struct
+	{
+	  HBUINT32	length;
+	  Tag		type;
+	}		header;
+	HBUINT32	width;
+	HBUINT32	height;
+	HBUINT8		bitDepth;
+	HBUINT8		colorType;
+	HBUINT8		compressionMethod;
+	HBUINT8		filterMethod;
+	HBUINT8		interlaceMethod;
+      } IHDR;
+
+      public:
+      DEFINE_SIZE_STATIC (29);
+    };
+
+    inline bool get_png_extents (hb_font_t          *font,
+				 hb_codepoint_t      glyph,
+				 hb_glyph_extents_t *extents) const
+    {
+      /* Following code is safe to call even without data.
+       * But faster to short-circuit. */
+      if (!has_data ())
+        return false;
+
+      int x_offset = 0, y_offset = 0;
+      unsigned int strike_ppem = 0;
+      hb_blob_t *blob = reference_png (font, glyph, &x_offset, &y_offset, &strike_ppem);
+
+      const PNGHeader &png = *blob->as<PNGHeader>();
+
+      extents->x_bearing = x_offset;
+      extents->y_bearing = y_offset;
+      extents->width     = png.IHDR.width;
+      extents->height    = png.IHDR.height;
+
+      /* Convert to font units. */
+      if (strike_ppem)
+      {
+	double scale = font->face->get_upem () / (double) strike_ppem;
+	extents->x_bearing = round (extents->x_bearing * scale);
+	extents->y_bearing = round (extents->y_bearing * scale);
+	extents->width = round (extents->width * scale);
+	extents->height = round (extents->height * scale);
+      }
+
+      hb_blob_destroy (blob);
+
+      return strike_ppem;
+    }
+
+    private:
+    hb_blob_ptr_t<sbix> table;
+
+    unsigned int num_glyphs;
+  };
 
   inline bool sanitize (hb_sanitize_context_t *c) const
   {
     TRACE_SANITIZE (this);
-    return_trace (c->check_struct (this) && strikes.sanitize (c, this));
+    return_trace (likely (c->check_struct (this) &&
+			  version >= 1 &&
+			  strikes.sanitize (c, this)));
   }
-
-  // inline void dump (unsigned int num_glyphs, unsigned int group) const
-  // {
-  //   const SBIXStrike &strike = strikes[group](this);
-  //   for (unsigned int i = 0; i < num_glyphs; ++i)
-  //     if (strike.imageOffsetsZ[i + 1] - strike.imageOffsetsZ[i] > 0)
-  //     {
-  //       const SBIXGlyph &sbixGlyph = strike.imageOffsetsZ[i]((const void *) &strike);
-  //       char outName[255];
-  //       sprintf (outName, "out/%d-%d.png", group, i);
-  //       FILE *f = fopen (outName, "wb");
-  //       fwrite (sbixGlyph.data, 1,
-  //         strike.imageOffsetsZ[i + 1] - strike.imageOffsetsZ[i] - 8, f);
-  //       fclose (f);
-  //     }
-  // }
 
   protected:
   HBUINT16	version;	/* Table version number — set to 1 */
   HBUINT16	flags;		/* Bit 0: Set to 1. Bit 1: Draw outlines.
 				 * Bits 2 to 15: reserved (set to 0). */
-  ArrayOf<LOffsetTo<SBIXStrike>, HBUINT32>
+  LOffsetLArrayOf<SBIXStrike>
 		strikes;	/* Offsets from the beginning of the 'sbix'
 				 * table to data for each individual bitmap strike. */
   public:
   DEFINE_SIZE_ARRAY (8, strikes);
 };
+
+struct sbix_accelerator_t : sbix::accelerator_t {};
 
 } /* namespace OT */
 

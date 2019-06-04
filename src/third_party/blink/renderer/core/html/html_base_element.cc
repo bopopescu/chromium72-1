@@ -22,46 +22,57 @@
 
 #include "third_party/blink/renderer/core/html/html_base_element.h"
 
+#include "third_party/blink/renderer/bindings/core/v8/usv_string_or_trusted_url.h"
 #include "third_party/blink/renderer/core/dom/attribute.h"
 #include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/html/parser/html_parser_idioms.h"
 #include "third_party/blink/renderer/core/html/parser/text_resource_decoder.h"
 #include "third_party/blink/renderer/core/html_names.h"
+#include "third_party/blink/renderer/core/trustedtypes/trusted_url.h"
 
 namespace blink {
 
-using namespace HTMLNames;
+using namespace html_names;
 
 inline HTMLBaseElement::HTMLBaseElement(Document& document)
-    : HTMLElement(baseTag, document) {}
+    : HTMLElement(kBaseTag, document) {}
 
 DEFINE_NODE_FACTORY(HTMLBaseElement)
 
+const HashSet<AtomicString>& HTMLBaseElement::GetCheckedAttributeNames() const {
+  DEFINE_STATIC_LOCAL(HashSet<AtomicString>, attribute_set, ({"href"}));
+  return attribute_set;
+}
+
 void HTMLBaseElement::ParseAttribute(
     const AttributeModificationParams& params) {
-  if (params.name == hrefAttr || params.name == targetAttr)
+  if (params.name == kHrefAttr || params.name == kTargetAttr)
     GetDocument().ProcessBaseElement();
   else
     HTMLElement::ParseAttribute(params);
 }
 
 Node::InsertionNotificationRequest HTMLBaseElement::InsertedInto(
-    ContainerNode* insertion_point) {
+    ContainerNode& insertion_point) {
   HTMLElement::InsertedInto(insertion_point);
-  if (insertion_point->isConnected())
+  if (insertion_point.isConnected())
     GetDocument().ProcessBaseElement();
   return kInsertionDone;
 }
 
-void HTMLBaseElement::RemovedFrom(ContainerNode* insertion_point) {
+void HTMLBaseElement::RemovedFrom(ContainerNode& insertion_point) {
   HTMLElement::RemovedFrom(insertion_point);
-  if (insertion_point->isConnected())
+  if (insertion_point.isConnected())
     GetDocument().ProcessBaseElement();
 }
 
 bool HTMLBaseElement::IsURLAttribute(const Attribute& attribute) const {
-  return attribute.GetName().LocalName() == hrefAttr ||
+  return attribute.GetName().LocalName() == kHrefAttr ||
          HTMLElement::IsURLAttribute(attribute);
+}
+
+void HTMLBaseElement::href(USVStringOrTrustedURL& result) const {
+  result.SetUSVString(href());
 }
 
 KURL HTMLBaseElement::href() const {
@@ -71,7 +82,7 @@ KURL HTMLBaseElement::href() const {
   // document's fallback base URL and ignore the base URL.
   // https://html.spec.whatwg.org/multipage/semantics.html#dom-base-href
 
-  const AtomicString& attribute_value = FastGetAttribute(hrefAttr);
+  const AtomicString& attribute_value = FastGetAttribute(kHrefAttr);
   if (attribute_value.IsNull())
     return GetDocument().Url();
 
@@ -88,8 +99,9 @@ KURL HTMLBaseElement::href() const {
   return url;
 }
 
-void HTMLBaseElement::setHref(const AtomicString& value) {
-  setAttribute(hrefAttr, value);
+void HTMLBaseElement::setHref(const USVStringOrTrustedURL& stringOrUrl,
+                              ExceptionState& exception_state) {
+  setAttribute(kHrefAttr, stringOrUrl, exception_state);
 }
 
 }  // namespace blink

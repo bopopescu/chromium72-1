@@ -11,11 +11,11 @@
 #include "base/command_line.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
-#include "base/lazy_instance.h"
 #include "base/macros.h"
 #include "base/memory/weak_ptr.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/metrics/user_metrics.h"
+#include "base/no_destructor.h"
 #include "base/path_service.h"
 #include "base/run_loop.h"
 #include "base/strings/utf_string_conversions.h"
@@ -35,7 +35,6 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profiles_state.h"
 #include "chrome/browser/shell_integration.h"
-#include "chrome/browser/signin/signin_manager_factory.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_finder.h"
 #include "chrome/browser/ui/chrome_pages.h"
@@ -51,7 +50,6 @@
 #include "chrome/installer/util/master_preferences_constants.h"
 #include "components/pref_registry/pref_registry_syncable.h"
 #include "components/prefs/pref_service.h"
-#include "components/signin/core/browser/signin_manager.h"
 #include "content/public/browser/notification_observer.h"
 #include "content/public/browser/notification_registrar.h"
 #include "content/public/browser/notification_service.h"
@@ -162,7 +160,7 @@ class FirstRunDelayedTasks : public content::NotificationObserver {
 
   void OnExtensionSystemReady(content::BrowserContext* context) {
     // Process the notification and delete this.
-    ExtensionService* service =
+    extensions::ExtensionService* service =
         extensions::ExtensionSystem::Get(context)->extension_service();
     if (service) {
       // Trigger an extension update check. If the extension specified in the
@@ -267,29 +265,9 @@ void ConvertStringVectorToGURLVector(
   std::transform(src.begin(), src.end(), ret->begin(), &UrlFromString);
 }
 
-static base::LazyInstance<base::FilePath>::DestructorAtExit
-    master_prefs_path_for_testing = LAZY_INSTANCE_INITIALIZER;
-
-// Loads master preferences from the master preference file into the installer
-// master preferences. Returns the pointer to installer::MasterPreferences
-// object if successful; otherwise, returns NULL.
-installer::MasterPreferences* LoadMasterPrefs() {
-  base::FilePath master_prefs_path;
-  if (!master_prefs_path_for_testing.Get().empty()) {
-    master_prefs_path = master_prefs_path_for_testing.Get();
-  } else {
-    master_prefs_path = base::FilePath(first_run::internal::MasterPrefsPath());
-  }
-  if (master_prefs_path.empty())
-    return NULL;
-  installer::MasterPreferences* install_prefs =
-      new installer::MasterPreferences(master_prefs_path);
-  if (!install_prefs->read_from_file()) {
-    delete install_prefs;
-    return NULL;
-  }
-
-  return install_prefs;
+base::FilePath& GetMasterPrefsPathForTesting() {
+  static base::NoDestructor<base::FilePath> s;
+  return *s;
 }
 
 // Makes chrome the user's default browser according to policy or
@@ -352,11 +330,6 @@ void SetupMasterPrefsFromInstallPrefs(
   install_prefs.GetString(
       installer::master_preferences::kDistroImportBookmarksFromFilePref,
       &out_prefs->import_bookmarks_path);
-
-  out_prefs->compressed_variations_seed =
-      install_prefs.GetCompressedVariationsSeed();
-  out_prefs->variations_seed_signature =
-      install_prefs.GetVariationsSeedSignature();
 
   install_prefs.GetString(
       installer::master_preferences::kDistroSuppressDefaultBrowserPromptPref,
@@ -491,16 +464,30 @@ bool ShouldDoPersonalDataManagerFirstRun() {
 }
 
 void SetMasterPrefsPathForTesting(const base::FilePath& master_prefs) {
-  master_prefs_path_for_testing.Get() = master_prefs;
+  GetMasterPrefsPathForTesting() = master_prefs;
+}
+
+std::unique_ptr<installer::MasterPreferences> LoadMasterPrefs() {
+  base::FilePath master_prefs_path;
+  if (!GetMasterPrefsPathForTesting().empty())
+    master_prefs_path = GetMasterPrefsPathForTesting();
+  else
+    master_prefs_path = base::FilePath(first_run::internal::MasterPrefsPath());
+
+  if (master_prefs_path.empty())
+    return nullptr;
+  auto install_prefs =
+      std::make_unique<installer::MasterPreferences>(master_prefs_path);
+  if (!install_prefs->read_from_file())
+    return nullptr;
+  return install_prefs;
 }
 
 ProcessMasterPreferencesResult ProcessMasterPreferences(
     const base::FilePath& user_data_dir,
+    std::unique_ptr<installer::MasterPreferences> install_prefs,
     MasterPrefs* out_prefs) {
   DCHECK(!user_data_dir.empty());
-
-  std::unique_ptr<installer::MasterPreferences> install_prefs(
-      LoadMasterPrefs());
 
   if (install_prefs.get()) {
     if (!internal::ShowPostInstallEULAIfNeeded(install_prefs.get()))

@@ -13,6 +13,7 @@ import android.os.Looper;
 import android.os.Message;
 import android.os.Messenger;
 import android.os.RemoteException;
+import android.support.customtabs.trusted.TrustedWebActivityServiceConnectionManager;
 import android.support.test.InstrumentationRegistry;
 import android.support.test.filters.SmallTest;
 import android.support.test.rule.ServiceTestRule;
@@ -23,11 +24,13 @@ import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 
+import org.chromium.base.ContextUtils;
 import org.chromium.base.ThreadUtils;
+import org.chromium.base.metrics.RecordHistogram;
 import org.chromium.base.test.BaseJUnit4ClassRunner;
 import org.chromium.base.test.util.CallbackHelper;
 import org.chromium.chrome.R;
-import org.chromium.chrome.browser.notifications.NotificationBuilderBase;
+import org.chromium.chrome.browser.notifications.NotificationUmaTracker;
 import org.chromium.chrome.browser.notifications.StandardNotificationBuilder;
 
 import java.util.concurrent.TimeoutException;
@@ -63,10 +66,12 @@ public class TrustedWebActivityClientTest {
             "org.chromium.chrome.browser.browserservices.MessengerService";
 
     @Rule public final ServiceTestRule mServiceTestRule = new ServiceTestRule();
+
     private ResponseHandler mResponseHandler;
 
     private TrustedWebActivityClient mClient;
     private Context mTargetContext;
+    private StandardNotificationBuilder mBuilder;
 
     /**
      * A Handler that MessengerService will send messages to, reporting actions on
@@ -115,8 +120,12 @@ public class TrustedWebActivityClientTest {
 
     @Before
     public void setUp() throws TimeoutException, RemoteException, InterruptedException {
+        RecordHistogram.setDisabledForTests(true);
         mTargetContext = InstrumentationRegistry.getTargetContext();
-        mClient = new TrustedWebActivityClient(mTargetContext);
+        mBuilder = new StandardNotificationBuilder(mTargetContext);
+        mClient = new TrustedWebActivityClient(new TrustedWebActivityServiceConnectionManager(
+                ContextUtils.getApplicationContext()), new TrustedWebActivityUmaRecorder(),
+                NotificationUmaTracker.getInstance());
 
         // TestTrustedWebActivityService is in the test support apk.
         TrustedWebActivityClient.registerClient(mTargetContext, ORIGIN, TEST_SUPPORT_PACKAGE);
@@ -149,23 +158,28 @@ public class TrustedWebActivityClientTest {
      */
     @Test
     @SmallTest
-    public void testNotifyNotification() throws TimeoutException, InterruptedException {
-        Assert.assertEquals(0, mResponseHandler.mGetSmallIconId.getCallCount());
-        Assert.assertEquals(0, mResponseHandler.mNotifyNotification.getCallCount());
+    public void clientCommunicatesWithServiceCorrectly()
+            throws TimeoutException, InterruptedException {
+        postNotification();
 
-        ThreadUtils.runOnUiThread(() -> {
-            NotificationBuilderBase builder = new StandardNotificationBuilder(mTargetContext);
-            mClient.notifyNotification(SCOPE, NOTIFICATION_TAG, NOTIFICATION_ID, builder);
-        });
-
-        mResponseHandler.mGetSmallIconId.waitForCallback(0);
-        mResponseHandler.mNotifyNotification.waitForCallback(0);
+        Assert.assertTrue(mResponseHandler.mGetSmallIconId.getCallCount() >= 1);
+        // getIconId() can be called directly and also indirectly via getIconBitmap().
 
         Assert.assertEquals(mResponseHandler.mNotificationTag, NOTIFICATION_TAG);
         Assert.assertEquals(mResponseHandler.mNotificationId, NOTIFICATION_ID);
         Assert.assertEquals(mResponseHandler.mNotificationChannel,
                 mTargetContext.getResources().getString(
                         R.string.notification_category_group_general));
+    }
+
+
+    private void postNotification()
+            throws TimeoutException, InterruptedException {
+        ThreadUtils.runOnUiThread(() -> {
+            mClient.notifyNotification(SCOPE, NOTIFICATION_TAG, NOTIFICATION_ID, mBuilder);
+        });
+
+        mResponseHandler.mNotifyNotification.waitForCallback();
     }
 
     /**
@@ -175,14 +189,13 @@ public class TrustedWebActivityClientTest {
     @Test
     @SmallTest
     public void testCancelNotification() throws TimeoutException, InterruptedException {
-        Assert.assertEquals(0, mResponseHandler.mCancelNotification.getCallCount());
-
         ThreadUtils.runOnUiThread(() ->
             mClient.cancelNotification(SCOPE, NOTIFICATION_TAG, NOTIFICATION_ID));
 
-        mResponseHandler.mCancelNotification.waitForCallback(0);
+        mResponseHandler.mCancelNotification.waitForCallback();
 
         Assert.assertEquals(mResponseHandler.mNotificationTag, NOTIFICATION_TAG);
         Assert.assertEquals(mResponseHandler.mNotificationId, NOTIFICATION_ID);
     }
+
 }

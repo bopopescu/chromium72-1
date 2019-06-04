@@ -42,8 +42,8 @@ void VideoCaptureDevice::SetPhotoOptions(mojom::PhotoSettingsPtr settings,
 
 void VideoCaptureDevice::TakePhoto(TakePhotoCallback callback) {}
 
-PowerLineFrequency VideoCaptureDevice::GetPowerLineFrequencyForLocation()
-    const {
+// static
+PowerLineFrequency VideoCaptureDevice::GetPowerLineFrequencyForLocation() {
   const std::string current_country = base::CountryCodeForCurrentTimezone();
   if (current_country.empty())
     return PowerLineFrequency::FREQUENCY_DEFAULT;
@@ -63,14 +63,27 @@ PowerLineFrequency VideoCaptureDevice::GetPowerLineFrequencyForLocation()
   return PowerLineFrequency::FREQUENCY_60HZ;
 }
 
+// static
 PowerLineFrequency VideoCaptureDevice::GetPowerLineFrequency(
-    const VideoCaptureParams& params) const {
+    const VideoCaptureParams& params) {
   switch (params.power_line_frequency) {
     case PowerLineFrequency::FREQUENCY_50HZ:  // fall through
     case PowerLineFrequency::FREQUENCY_60HZ:
       return params.power_line_frequency;
     default:
       return GetPowerLineFrequencyForLocation();
+  }
+}
+
+VideoCaptureFrameDropReason ConvertReservationFailureToFrameDropReason(
+    VideoCaptureDevice::Client::ReserveResult reserve_result) {
+  switch (reserve_result) {
+    case VideoCaptureDevice::Client::ReserveResult::kSucceeded:
+      return VideoCaptureFrameDropReason::kNone;
+    case VideoCaptureDevice::Client::ReserveResult::kMaxBufferCountExceeded:
+      return VideoCaptureFrameDropReason::kBufferPoolMaxBufferCountExceeded;
+    case VideoCaptureDevice::Client::ReserveResult::kAllocationFailed:
+      return VideoCaptureFrameDropReason::kBufferPoolBufferAllocationFailed;
   }
 }
 

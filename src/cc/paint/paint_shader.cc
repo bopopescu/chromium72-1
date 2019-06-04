@@ -20,7 +20,9 @@ sk_sp<SkPicture> ToSkPicture(sk_sp<PaintRecord> record,
                              const gfx::SizeF* raster_scale,
                              ImageProvider* image_provider) {
   SkPictureRecorder recorder;
-  SkCanvas* canvas = recorder.beginRecording(bounds);
+  SkCanvas* canvas =
+      recorder.beginRecording(SkRect::MakeWH(bounds.width(), bounds.height()));
+  canvas->translate(-bounds.fLeft, -bounds.fTop);
   if (raster_scale)
     canvas->scale(raster_scale->width(), raster_scale->height());
   record->Playback(canvas, PlaybackParams(image_provider));
@@ -36,17 +38,26 @@ bool CompareMatrices(const SkMatrix& a,
   SkSize scale;
   SkMatrix a_without_scale;
   SkMatrix b_without_scale;
-  if (a.decomposeScale(&scale, &a_without_scale) !=
-      b.decomposeScale(&scale, &b_without_scale)) {
-    return false;
-  }
 
+  const bool decomposes = a.decomposeScale(&scale, &a_without_scale);
+  if (decomposes != b.decomposeScale(&scale, &b_without_scale))
+    return false;
+
+  if (!decomposes)
+    return true;
   return PaintOp::AreSkMatricesEqual(a_without_scale, b_without_scale);
 }
 
 }  // namespace
 
 const PaintShader::RecordShaderId PaintShader::kInvalidRecordShaderId = -1;
+
+sk_sp<PaintShader> PaintShader::MakeEmpty() {
+  sk_sp<PaintShader> shader(new PaintShader(Type::kEmpty));
+
+  shader->CreateSkShader();
+  return shader;
+}
 
 sk_sp<PaintShader> PaintShader::MakeColor(SkColor color) {
   sk_sp<PaintShader> shader(new PaintShader(Type::kColor));
@@ -210,7 +221,7 @@ PaintShader::PaintShader(Type type) : shader_type_(type) {}
 PaintShader::~PaintShader() = default;
 
 bool PaintShader::has_discardable_images() const {
-  return (image_ && image_.IsLazyGenerated()) ||
+  return (image_ && !image_.IsTextureBacked()) ||
          (record_ && record_->HasDiscardableImages());
 }
 
@@ -237,25 +248,26 @@ bool PaintShader::GetRasterizationTileRect(const SkMatrix& ctm,
               SkScalarSqrt(matrix.getScaleY() * matrix.getScaleY() +
                            matrix.getSkewY() * matrix.getSkewY()));
   }
-  SkSize scaled_size =
-      SkSize::Make(SkScalarAbs(scale.width() * tile_.width()),
-                   SkScalarAbs(scale.height() * tile_.height()));
+
+  SkScalar tile_area =
+      tile_.width() * tile_.height() * scale.width() * scale.height();
 
   // Clamp the tile size to about 4M pixels.
   // TODO(khushalsagar): We need to consider the max texture size as well.
   static const SkScalar kMaxTileArea = 2048 * 2048;
-  SkScalar tile_area = scaled_size.width() * scaled_size.height();
   if (tile_area > kMaxTileArea) {
     SkScalar clamp_scale = SkScalarSqrt(kMaxTileArea / tile_area);
-    scaled_size.set(scaled_size.width() * clamp_scale,
-                    scaled_size.height() * clamp_scale);
+    scale.set(clamp_scale, clamp_scale);
   }
 
-  scaled_size = scaled_size.toCeil();
-  if (scaled_size.isEmpty())
+  *tile_rect = SkRect::MakeXYWH(
+      tile_.fLeft * scale.width(), tile_.fTop * scale.height(),
+      SkScalarCeilToInt(SkScalarAbs(scale.width() * tile_.width())),
+      SkScalarCeilToInt(SkScalarAbs(scale.height() * tile_.height())));
+
+  if (tile_rect->isEmpty())
     return false;
 
-  *tile_rect = SkRect::MakeWH(scaled_size.width(), scaled_size.height());
   return true;
 }
 
@@ -263,6 +275,12 @@ sk_sp<PaintShader> PaintShader::CreateScaledPaintRecord(
     const SkMatrix& ctm,
     gfx::SizeF* raster_scale) const {
   DCHECK_EQ(shader_type_, Type::kPaintRecord);
+
+  // If this is already fixed scale, then this is already good to go.
+  if (scaling_behavior_ == ScalingBehavior::kFixedScale) {
+    *raster_scale = gfx::SizeF(1.f, 1.f);
+    return sk_ref_sp<PaintShader>(this);
+  }
 
   // For creating a decoded PaintRecord shader, we need to do the following:
   // 1) Figure out the scale at which the record should be rasterization given
@@ -305,7 +323,8 @@ sk_sp<PaintShader> PaintShader::CreateDecodedImage(
     SkFilterQuality quality,
     ImageProvider* image_provider,
     uint32_t* transfer_cache_entry_id,
-    SkFilterQuality* raster_quality) const {
+    SkFilterQuality* raster_quality,
+    bool* needs_mips) const {
   DCHECK_EQ(shader_type_, Type::kImage);
   if (!image_)
     return nullptr;
@@ -348,6 +367,7 @@ sk_sp<PaintShader> PaintShader::CreateDecodedImage(
   // want to do is cap the filter quality used, but Gpu and Sw cache have
   // different behaviour. D:
   *raster_quality = decoded_image.filter_quality();
+  *needs_mips = decoded_image.transfer_cache_entry_needs_mips();
   return PaintShader::MakeImage(decoded_paint_image, tx_, ty_, &final_matrix);
 }
 
@@ -360,6 +380,9 @@ void PaintShader::CreateSkShader(const gfx::SizeF* raster_scale,
   DCHECK(!cached_shader_);
 
   switch (shader_type_) {
+    case Type::kEmpty:
+      cached_shader_ = SkShader::MakeEmptyShader();
+      break;
     case Type::kColor:
       // This will be handled by the fallback check below.
       break;
@@ -474,6 +497,7 @@ bool PaintShader::IsValid() const {
     return true;
 
   switch (shader_type_) {
+    case Type::kEmpty:
     case Type::kColor:
       return true;
     case Type::kSweepGradient:
@@ -532,6 +556,7 @@ bool PaintShader::operator==(const PaintShader& other) const {
 
   // Variables that only some shaders use.
   switch (shader_type_) {
+    case Type::kEmpty:
     case Type::kColor:
       break;
     case Type::kSweepGradient:

@@ -4,11 +4,15 @@
 
 #include "third_party/blink/renderer/core/layout/ng/ng_absolute_utils.h"
 
+#include "third_party/blink/renderer/core/frame/local_frame_view.h"
+#include "third_party/blink/renderer/core/html/html_dialog_element.h"
+#include "third_party/blink/renderer/core/layout/layout_object.h"
 #include "third_party/blink/renderer/core/layout/ng/geometry/ng_static_position.h"
 #include "third_party/blink/renderer/core/layout/ng/ng_constraint_space.h"
 #include "third_party/blink/renderer/core/layout/ng/ng_length_utils.h"
+#include "third_party/blink/renderer/core/paint/paint_layer_scrollable_area.h"
 #include "third_party/blink/renderer/core/style/computed_style.h"
-#include "third_party/blink/renderer/platform/length_functions.h"
+#include "third_party/blink/renderer/platform/geometry/length_functions.h"
 
 namespace blink {
 
@@ -16,13 +20,15 @@ namespace {
 
 bool AbsoluteHorizontalNeedsEstimate(const ComputedStyle& style) {
   Length width = style.Width();
-  return width.IsIntrinsic() ||
+  return width.IsIntrinsic() || style.MinWidth().IsIntrinsic() ||
+         style.MaxWidth().IsIntrinsic() ||
          (width.IsAuto() && (style.Left().IsAuto() || style.Right().IsAuto()));
 }
 
 bool AbsoluteVerticalNeedsEstimate(const ComputedStyle& style) {
   Length height = style.Height();
-  return height.IsIntrinsic() ||
+  return height.IsIntrinsic() || style.MinHeight().IsIntrinsic() ||
+         style.MaxHeight().IsIntrinsic() ||
          (height.IsAuto() && (style.Top().IsAuto() || style.Bottom().IsAuto()));
 }
 
@@ -128,18 +134,16 @@ LayoutUnit ComputeAvailableHeight(
 
 LayoutUnit HorizontalBorderPadding(const NGConstraintSpace& space,
                                    const ComputedStyle& style) {
-  NGLogicalSize percentage_logical = space.PercentageResolutionSize();
-  return ValueForLength(style.PaddingLeft(), percentage_logical.inline_size) +
-         ValueForLength(style.PaddingRight(), percentage_logical.inline_size) +
+  return ResolveMarginPaddingLength(space, style.PaddingLeft()) +
+         ResolveMarginPaddingLength(space, style.PaddingRight()) +
          LayoutUnit(style.BorderLeftWidth()) +
          LayoutUnit(style.BorderRightWidth());
 }
 
 LayoutUnit VerticalBorderPadding(const NGConstraintSpace& space,
                                  const ComputedStyle& style) {
-  NGLogicalSize percentage_logical = space.PercentageResolutionSize();
-  return ValueForLength(style.PaddingTop(), percentage_logical.inline_size) +
-         ValueForLength(style.PaddingBottom(), percentage_logical.inline_size) +
+  return ResolveMarginPaddingLength(space, style.PaddingTop()) +
+         ResolveMarginPaddingLength(space, style.PaddingBottom()) +
          LayoutUnit(style.BorderTopWidth()) +
          LayoutUnit(style.BorderBottomWidth());
 }
@@ -154,26 +158,26 @@ void ComputeAbsoluteHorizontal(const NGConstraintSpace& space,
                                const WritingMode container_writing_mode,
                                const TextDirection container_direction,
                                NGAbsolutePhysicalPosition* position) {
-  NGLogicalSize percentage_logical = space.PercentageResolutionSize();
-  NGPhysicalSize percentage_physical =
-      percentage_logical.ConvertToPhysical(space.GetWritingMode());
+  LayoutUnit percentage_width =
+      LIKELY(space.GetWritingMode() == WritingMode::kHorizontalTb)
+          ? space.PercentageResolutionInlineSize()
+          : space.PercentageResolutionBlockSize();
+
   base::Optional<LayoutUnit> margin_left;
   if (!style.MarginLeft().IsAuto())
-    margin_left =
-        ValueForLength(style.MarginLeft(), percentage_logical.inline_size);
+    margin_left = ResolveMarginPaddingLength(space, style.MarginLeft());
   base::Optional<LayoutUnit> margin_right;
   if (!style.MarginRight().IsAuto())
-    margin_right =
-        ValueForLength(style.MarginRight(), percentage_logical.inline_size);
+    margin_right = ResolveMarginPaddingLength(space, style.MarginRight());
   base::Optional<LayoutUnit> left;
   if (!style.Left().IsAuto())
-    left = ValueForLength(style.Left(), percentage_physical.width);
+    left = ValueForLength(style.Left(), percentage_width);
   base::Optional<LayoutUnit> right;
   if (!style.Right().IsAuto())
-    right = ValueForLength(style.Right(), percentage_physical.width);
+    right = ValueForLength(style.Right(), percentage_width);
   base::Optional<LayoutUnit> width = incoming_width;
   NGPhysicalSize container_size =
-      space.AvailableSize().ConvertToPhysical(space.GetWritingMode());
+      ToNGPhysicalSize(space.AvailableSize(), space.GetWritingMode());
   DCHECK_NE(container_size.width, NGSizeIndefinite);
 
   // Solving the equation:
@@ -204,7 +208,7 @@ void ComputeAbsoluteHorizontal(const NGConstraintSpace& space,
     if (!margin_left && !margin_right) {
       if (margin_space > 0) {
         margin_left = margin_space / 2;
-        margin_right = margin_space / 2;
+        margin_right = margin_space - *margin_left;
       } else {
         // Margins are negative.
         if (IsLeftDominant(container_writing_mode, container_direction)) {
@@ -304,6 +308,8 @@ void ComputeAbsoluteHorizontal(const NGConstraintSpace& space,
 
   position->inset.left = *left + *margin_left;
   position->inset.right = *right + *margin_right;
+  position->margins.left = *margin_left;
+  position->margins.right = *margin_right;
   position->size.width = *width;
 }
 
@@ -317,29 +323,28 @@ void ComputeAbsoluteVertical(const NGConstraintSpace& space,
                              const WritingMode container_writing_mode,
                              const TextDirection container_direction,
                              NGAbsolutePhysicalPosition* position) {
-  NGLogicalSize percentage_logical = space.PercentageResolutionSize();
-  NGPhysicalSize percentage_physical =
-      percentage_logical.ConvertToPhysical(space.GetWritingMode());
+  LayoutUnit percentage_height =
+      LIKELY(space.GetWritingMode() == WritingMode::kHorizontalTb)
+          ? space.PercentageResolutionBlockSize()
+          : space.PercentageResolutionInlineSize();
 
   base::Optional<LayoutUnit> margin_top;
   if (!style.MarginTop().IsAuto())
-    margin_top =
-        ValueForLength(style.MarginTop(), percentage_logical.inline_size);
+    margin_top = ResolveMarginPaddingLength(space, style.MarginTop());
   base::Optional<LayoutUnit> margin_bottom;
   if (!style.MarginBottom().IsAuto())
-    margin_bottom =
-        ValueForLength(style.MarginBottom(), percentage_logical.inline_size);
+    margin_bottom = ResolveMarginPaddingLength(space, style.MarginBottom());
   base::Optional<LayoutUnit> top;
   if (!style.Top().IsAuto())
-    top = ValueForLength(style.Top(), percentage_physical.height);
+    top = ValueForLength(style.Top(), percentage_height);
   base::Optional<LayoutUnit> bottom;
   if (!style.Bottom().IsAuto())
-    bottom = ValueForLength(style.Bottom(), percentage_physical.height);
+    bottom = ValueForLength(style.Bottom(), percentage_height);
   LayoutUnit border_padding = VerticalBorderPadding(space, style);
   base::Optional<LayoutUnit> height = incoming_height;
 
   NGPhysicalSize container_size =
-      space.AvailableSize().ConvertToPhysical(space.GetWritingMode());
+      ToNGPhysicalSize(space.AvailableSize(), space.GetWritingMode());
   DCHECK_NE(container_size.height, NGSizeIndefinite);
 
   // Solving the equation:
@@ -366,26 +371,18 @@ void ComputeAbsoluteVertical(const NGConstraintSpace& space,
     // Standard: "If top, bottom, and height are not auto:"
     // Compute margins.
     LayoutUnit margin_space = container_size.height - *top - *bottom - *height;
-    // When both margins are auto.
     if (!margin_top && !margin_bottom) {
-      if (margin_space > 0) {
-        margin_top = margin_space / 2;
-        margin_bottom = margin_space / 2;
-      } else {
-        // Margin space is over-constrained.
-        if (IsTopDominant(container_writing_mode, container_direction)) {
-          margin_top = LayoutUnit();
-          margin_bottom = margin_space;
-        } else {
-          margin_top = margin_space;
-          margin_bottom = LayoutUnit();
-        }
-      }
+      // When both margins are auto.
+      margin_top = margin_space / 2;
+      margin_bottom = margin_space - *margin_top;
     } else if (!margin_top) {
       margin_top = margin_space - *margin_bottom;
     } else if (!margin_bottom) {
       margin_bottom = margin_space - *margin_top;
     } else {
+      // Since none of the margins are auto (and we have non-auto top, bottom
+      // and height), we are over-constrained. Keep the dominant inset and
+      // override the other.
       LayoutUnit margin_extra = margin_space - *margin_top - *margin_bottom;
       if (margin_extra) {
         if (IsTopDominant(container_writing_mode, container_direction))
@@ -467,6 +464,8 @@ void ComputeAbsoluteVertical(const NGConstraintSpace& space,
 
   position->inset.top = *top + *margin_top;
   position->inset.bottom = *bottom + *margin_bottom;
+  position->margins.top = *margin_top;
+  position->margins.bottom = *margin_bottom;
   position->size.height = *height;
 }
 
@@ -491,6 +490,50 @@ bool AbsoluteNeedsChildInlineSize(const ComputedStyle& style) {
     return AbsoluteHorizontalNeedsEstimate(style);
   else
     return AbsoluteVerticalNeedsEstimate(style);
+}
+
+base::Optional<LayoutUnit> ComputeAbsoluteDialogYPosition(
+    const LayoutObject& dialog,
+    LayoutUnit height) {
+  if (!IsHTMLDialogElement(dialog.GetNode()))
+    return base::nullopt;
+
+  // This code implements <dialog> static position spec.
+  // //
+  // https://html.spec.whatwg.org/multipage/interactive-elements.html#the-dialog-element
+  HTMLDialogElement* dialog_node = ToHTMLDialogElement(dialog.GetNode());
+  if (dialog_node->GetCenteringMode() == HTMLDialogElement::kNotCentered)
+    return base::nullopt;
+
+  bool can_center_dialog =
+      (dialog.Style()->GetPosition() == EPosition::kAbsolute ||
+       dialog.Style()->GetPosition() == EPosition::kFixed) &&
+      dialog.Style()->HasAutoTopAndBottom();
+
+  if (dialog_node->GetCenteringMode() == HTMLDialogElement::kCentered) {
+    if (can_center_dialog)
+      return dialog_node->CenteredPosition();
+    return base::nullopt;
+  }
+
+  DCHECK_EQ(dialog_node->GetCenteringMode(),
+            HTMLDialogElement::kNeedsCentering);
+  if (!can_center_dialog) {
+    dialog_node->SetNotCentered();
+    return base::nullopt;
+  }
+
+  auto* scrollable_area = dialog.GetDocument().View()->LayoutViewport();
+  LayoutUnit top =
+      LayoutUnit((dialog.Style()->GetPosition() == EPosition::kFixed)
+                     ? 0
+                     : scrollable_area->ScrollOffsetInt().Height());
+
+  int visible_height = dialog.GetDocument().View()->Height();
+  if (height < visible_height)
+    top += (visible_height - height) / 2;
+  dialog_node->SetCentered(top);
+  return top;
 }
 
 NGAbsolutePhysicalPosition ComputePartialAbsoluteWithChildInlineSize(

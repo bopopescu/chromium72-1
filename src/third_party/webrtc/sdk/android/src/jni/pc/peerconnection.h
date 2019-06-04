@@ -40,7 +40,7 @@ rtc::KeyType GetRtcConfigKeyType(JNIEnv* env,
 class PeerConnectionObserverJni : public PeerConnectionObserver {
  public:
   PeerConnectionObserverJni(JNIEnv* jni, const JavaRef<jobject>& j_observer);
-  virtual ~PeerConnectionObserverJni();
+  ~PeerConnectionObserverJni() override;
 
   // Implementation of PeerConnectionObserver interface, which propagates
   // the callbacks to the Java observer.
@@ -51,6 +51,8 @@ class PeerConnectionObserverJni : public PeerConnectionObserver {
       PeerConnectionInterface::SignalingState new_state) override;
   void OnIceConnectionChange(
       PeerConnectionInterface::IceConnectionState new_state) override;
+  void OnConnectionChange(
+      PeerConnectionInterface::PeerConnectionState new_state) override;
   void OnIceConnectionReceivingChange(bool receiving) override;
   void OnIceGatheringChange(
       PeerConnectionInterface::IceGatheringState new_state) override;
@@ -101,10 +103,7 @@ class OwnedPeerConnection {
  public:
   OwnedPeerConnection(
       rtc::scoped_refptr<PeerConnectionInterface> peer_connection,
-      std::unique_ptr<PeerConnectionObserver> observer)
-      : OwnedPeerConnection(peer_connection,
-                            std::move(observer),
-                            nullptr /* constraints */) {}
+      std::unique_ptr<PeerConnectionObserver> observer);
   // Deprecated. PC constraints are deprecated.
   OwnedPeerConnection(
       rtc::scoped_refptr<PeerConnectionInterface> peer_connection,

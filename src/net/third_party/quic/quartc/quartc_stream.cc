@@ -6,26 +6,33 @@
 
 #include "net/third_party/quic/platform/api/quic_string_piece.h"
 
-namespace net {
+namespace quic {
 
 QuartcStream::QuartcStream(QuicStreamId id, QuicSession* session)
-    : QuicStream(id, session, /*is_static=*/false) {}
+    : QuicStream(id, session, /*is_static=*/false, BIDIRECTIONAL) {
+  sequencer()->set_level_triggered(true);
+}
+
 QuartcStream::~QuartcStream() {}
 
 void QuartcStream::OnDataAvailable() {
-  struct iovec iov;
-  while (sequencer()->GetReadableRegion(&iov)) {
-    DCHECK(delegate_);
-    delegate_->OnReceived(this, reinterpret_cast<const char*>(iov.iov_base),
-                          iov.iov_len);
-    sequencer()->MarkConsumed(iov.iov_len);
-  }
-  // All the data has been received if the sequencer is closed.
-  // Notify the delegate by calling the callback function one more time with
-  // iov_len = 0.
+  bool fin = sequencer()->ReadableBytes() + sequencer()->NumBytesConsumed() ==
+             sequencer()->close_offset();
+
+  // Upper bound on number of readable regions.  Each complete block's worth of
+  // data crosses at most one region boundary.  The remainder may cross one more
+  // boundary.  Number of regions is one more than the number of region
+  // boundaries crossed.
+  size_t iov_length = sequencer()->ReadableBytes() /
+                          QuicStreamSequencerBuffer::kBlockSizeBytes +
+                      2;
+  std::unique_ptr<iovec[]> iovecs = QuicMakeUnique<iovec[]>(iov_length);
+  iov_length = sequencer()->GetReadableRegions(iovecs.get(), iov_length);
+
+  sequencer()->MarkConsumed(
+      delegate_->OnReceived(this, iovecs.get(), iov_length, fin));
   if (sequencer()->IsClosed()) {
     OnFinRead();
-    delegate_->OnReceived(this, reinterpret_cast<const char*>(iov.iov_base), 0);
   }
 }
 
@@ -50,39 +57,73 @@ void QuartcStream::OnDataBuffered(
   delegate_->OnBufferChanged(this);
 }
 
-uint32_t QuartcStream::stream_id() {
-  return id();
+void QuartcStream::OnStreamFrameRetransmitted(QuicStreamOffset offset,
+                                              QuicByteCount data_length,
+                                              bool fin_retransmitted) {
+  QuicStream::OnStreamFrameRetransmitted(offset, data_length,
+                                         fin_retransmitted);
+
+  DCHECK(delegate_);
+  delegate_->OnBufferChanged(this);
 }
 
-uint64_t QuartcStream::bytes_buffered() {
-  return BufferedDataBytes();
+void QuartcStream::OnStreamFrameLost(QuicStreamOffset offset,
+                                     QuicByteCount data_length,
+                                     bool fin_lost) {
+  QuicStream::OnStreamFrameLost(offset, data_length, fin_lost);
+
+  ++total_frames_lost_;
+
+  DCHECK(delegate_);
+  delegate_->OnBufferChanged(this);
 }
 
-bool QuartcStream::fin_sent() {
-  return QuicStream::fin_sent();
+void QuartcStream::OnCanWrite() {
+  if (total_frames_lost_ > max_frame_retransmission_count_ &&
+      HasPendingRetransmission()) {
+    Reset(QUIC_STREAM_CANCELLED);
+    return;
+  }
+  QuicStream::OnCanWrite();
 }
 
-int QuartcStream::stream_error() {
-  return QuicStream::stream_error();
+bool QuartcStream::cancel_on_loss() {
+  return max_frame_retransmission_count_ == 0;
 }
 
-void QuartcStream::Write(QuicMemSliceSpan data, const WriteParameters& param) {
-  WriteMemSlices(data, param.fin);
+void QuartcStream::set_cancel_on_loss(bool cancel_on_loss) {
+  if (cancel_on_loss) {
+    max_frame_retransmission_count_ = 0;
+  } else {
+    max_frame_retransmission_count_ = std::numeric_limits<int>::max();
+  }
+}
+
+int QuartcStream::max_frame_retransmission_count() const {
+  return max_frame_retransmission_count_;
+}
+
+void QuartcStream::set_max_frame_retransmission_count(
+    int max_frame_retransmission_count) {
+  max_frame_retransmission_count_ = max_frame_retransmission_count;
+}
+
+QuicByteCount QuartcStream::BytesPendingRetransmission() {
+  if (total_frames_lost_ > max_frame_retransmission_count_) {
+    return 0;  // Lost bytes will never be retransmitted.
+  }
+  QuicByteCount bytes = 0;
+  for (const auto& interval : send_buffer().pending_retransmissions()) {
+    bytes += interval.Length();
+  }
+  return bytes;
 }
 
 void QuartcStream::FinishWriting() {
   WriteOrBufferData(QuicStringPiece(nullptr, 0), true, nullptr);
 }
 
-void QuartcStream::FinishReading() {
-  QuicStream::StopReading();
-}
-
-void QuartcStream::Close() {
-  QuicStream::session()->CloseStream(id());
-}
-
-void QuartcStream::SetDelegate(QuartcStreamInterface::Delegate* delegate) {
+void QuartcStream::SetDelegate(Delegate* delegate) {
   if (delegate_) {
     LOG(WARNING) << "The delegate for Stream " << id()
                  << " has already been set.";
@@ -91,4 +132,4 @@ void QuartcStream::SetDelegate(QuartcStreamInterface::Delegate* delegate) {
   DCHECK(delegate_);
 }
 
-}  // namespace net
+}  // namespace quic

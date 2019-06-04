@@ -22,6 +22,7 @@ print_preview.PreviewSettings;
  *   printerDescription: (string | undefined),
  *   cupsEnterprisePrinter: (boolean | undefined),
  *   printerOptions: (Object | undefined),
+ *   policies: (print_preview.Policies | undefined),
  * }}
  */
 print_preview.LocalDestinationInfo;
@@ -38,6 +39,8 @@ print_preview.LocalDestinationInfo;
  *   documentHasSelection: boolean,
  *   shouldPrintSelectionOnly: boolean,
  *   printerName: string,
+ *   headerFooter: ?boolean,
+ *   isHeaderFooterManaged: boolean,
  *   serializedAppStateStr: ?string,
  *   serializedDefaultDestinationSelectionRulesStr: ?string,
  * }}
@@ -72,6 +75,7 @@ print_preview.CapabilitiesResponse;
  *   printerId: string,
  *   success: boolean,
  *   capabilities: !print_preview.Cdd,
+ *   policies: (print_preview.Policies | undefined),
  * }}
  */
 print_preview.PrinterSetupResponse;
@@ -97,6 +101,7 @@ print_preview.PrinterType = {
   EXTENSION_PRINTER: 1,
   PDF_PRINTER: 2,
   LOCAL_PRINTER: 3,
+  CLOUD_PRINTER: 4
 };
 
 cr.define('print_preview', function() {
@@ -267,12 +272,16 @@ cr.define('print_preview', function() {
     /**
      * Navigates the user to the Chrome printing setting page to manage local
      * printers and Google cloud printers.
+     * TODO (rbpotter): Delete this when the old Print Preview page is removed.
      */
     managePrinters() {
       chrome.send('managePrinters');
     }
 
-    /** Forces browser to open a new tab with the given URL address. */
+    /**
+     * Forces browser to open a new tab with the given URL address.
+     * TODO (rbpotter): Delete this when the old Print Preview page is removed.
+     */
     forceOpenNewTab(url) {
       chrome.send('forceOpenNewTab', [url]);
     }

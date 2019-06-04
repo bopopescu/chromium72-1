@@ -4,8 +4,10 @@
 
 #include "chrome/browser/media/router/discovery/dial/dial_url_fetcher.h"
 
+#include "base/task/post_task.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/net/system_network_context_manager.h"
+#include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
 #include "net/base/load_flags.h"
 #include "net/http/http_response_headers.h"
@@ -111,12 +113,8 @@ void DialURLFetcher::Start(const GURL& url,
   // net::LOAD_BYPASS_PROXY: Proxies almost certainly hurt more cases than they
   //     help.
   // net::LOAD_DISABLE_CACHE: The request should not touch the cache.
-  // net::LOAD_DO_NOT_{SAVE,SEND}_COOKIES: The request should not touch cookies.
-  // net::LOAD_DO_NOT_SEND_AUTH_DATA: The request should not send auth data.
-  request->load_flags = net::LOAD_BYPASS_PROXY | net::LOAD_DISABLE_CACHE |
-                        net::LOAD_DO_NOT_SAVE_COOKIES |
-                        net::LOAD_DO_NOT_SEND_COOKIES |
-                        net::LOAD_DO_NOT_SEND_AUTH_DATA;
+  request->load_flags = net::LOAD_BYPASS_PROXY | net::LOAD_DISABLE_CACHE;
+  request->allow_credentials = false;
 
   loader_ = network::SimpleURLLoader::Create(std::move(request),
                                              kDialUrlFetcherTrafficAnnotation);
@@ -148,7 +146,8 @@ void DialURLFetcher::ReportError(int response_code,
 
 void DialURLFetcher::ReportRedirectError(
     const net::RedirectInfo& redirect_info,
-    const network::ResourceResponseHead& response_head) {
+    const network::ResourceResponseHead& response_head,
+    std::vector<std::string>* to_be_removed_headers) {
   // Cancel the request.
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   loader_.reset();
@@ -167,8 +166,8 @@ void DialURLFetcher::StartDownload() {
   // this conditional.
   auto mojo_request = mojo::MakeRequest(&loader_factory);
   if (content::BrowserThread::IsThreadInitialized(content::BrowserThread::UI)) {
-    content::BrowserThread::PostTask(
-        content::BrowserThread::UI, FROM_HERE,
+    base::PostTaskWithTraits(
+        FROM_HERE, {content::BrowserThread::UI},
         base::BindOnce(&BindURLLoaderFactoryRequestOnUIThread,
                        std::move(mojo_request)));
   }

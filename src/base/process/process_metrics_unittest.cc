@@ -19,7 +19,7 @@
 #include "base/macros.h"
 #include "base/memory/shared_memory.h"
 #include "base/strings/string_number_conversions.h"
-#include "base/sys_info.h"
+#include "base/system/sys_info.h"
 #include "base/test/multiprocess_test.h"
 #include "base/threading/thread.h"
 #include "build/build_config.h"
@@ -628,6 +628,29 @@ TEST(ProcessMetricsTestLinux, GetPageFaultCounts) {
   ASSERT_GE(counts_after.major, counts.major);
 }
 #endif  // defined(OS_ANDROID) || defined(OS_LINUX)
+
+#if defined(OS_WIN)
+TEST(ProcessMetricsTest, GetDiskUsageBytesPerSecond) {
+  ScopedTempDir temp_dir;
+  ASSERT_TRUE(temp_dir.CreateUniqueTempDir());
+  const FilePath temp_path = temp_dir.GetPath().AppendASCII("dummy");
+
+  ProcessHandle handle = GetCurrentProcessHandle();
+  std::unique_ptr<ProcessMetrics> metrics(
+      ProcessMetrics::CreateProcessMetrics(handle));
+
+  // First access is returning zero bytes.
+  EXPECT_EQ(metrics->GetDiskUsageBytesPerSecond(), 0U);
+
+  // Write a megabyte on disk.
+  const int kMegabyte = 1024 * 1014;
+  std::string data(kMegabyte, 'x');
+  ASSERT_EQ(kMegabyte, base::WriteFile(temp_path, data.c_str(), data.size()));
+
+  // Validate that the counters move up.
+  EXPECT_GT(metrics->GetDiskUsageBytesPerSecond(), 0U);
+}
+#endif  // defined(OS_WIN)
 
 }  // namespace debug
 }  // namespace base

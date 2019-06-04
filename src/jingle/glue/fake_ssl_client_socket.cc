@@ -64,8 +64,9 @@ static const uint8_t kSslServerHello[] = {
     0x00                                             // null compression
 };
 
-net::DrainableIOBuffer* NewDrainableIOBufferWithSize(int size) {
-  return new net::DrainableIOBuffer(new net::IOBuffer(size), size);
+scoped_refptr<net::DrainableIOBuffer> NewDrainableIOBufferWithSize(int size) {
+  return base::MakeRefCounted<net::DrainableIOBuffer>(
+      base::MakeRefCounted<net::IOBuffer>(size), size);
 }
 
 }  // namespace
@@ -99,6 +100,20 @@ int FakeSSLClientSocket::Read(net::IOBuffer* buf,
   DCHECK_EQ(next_handshake_state_, STATE_NONE);
   DCHECK(handshake_completed_);
   return transport_socket_->Read(buf, buf_len, std::move(callback));
+}
+
+int FakeSSLClientSocket::ReadIfReady(net::IOBuffer* buf,
+                                     int buf_len,
+                                     net::CompletionOnceCallback callback) {
+  DCHECK_EQ(next_handshake_state_, STATE_NONE);
+  DCHECK(handshake_completed_);
+  return transport_socket_->ReadIfReady(buf, buf_len, std::move(callback));
+}
+
+int FakeSSLClientSocket::CancelReadIfReady() {
+  DCHECK_EQ(next_handshake_state_, STATE_NONE);
+  DCHECK(handshake_completed_);
+  return transport_socket_->CancelReadIfReady();
 }
 
 int FakeSSLClientSocket::Write(

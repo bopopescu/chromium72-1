@@ -4,11 +4,14 @@
 
 #include "third_party/blink/renderer/core/layout/ng/ng_layout_input_node.h"
 
+#include "third_party/blink/renderer/core/layout/intrinsic_sizing_info.h"
 #include "third_party/blink/renderer/core/layout/layout_replaced.h"
+#include "third_party/blink/renderer/core/layout/layout_table_cell.h"
 #include "third_party/blink/renderer/core/layout/layout_view.h"
 #include "third_party/blink/renderer/core/layout/min_max_size.h"
 #include "third_party/blink/renderer/core/layout/ng/geometry/ng_logical_size.h"
 #include "third_party/blink/renderer/core/layout/ng/inline/ng_inline_node.h"
+#include "third_party/blink/renderer/core/layout/ng/list/layout_ng_list_marker.h"
 #include "third_party/blink/renderer/core/layout/ng/ng_block_node.h"
 #include "third_party/blink/renderer/core/layout/ng/ng_layout_result.h"
 #include "third_party/blink/renderer/platform/wtf/text/string_builder.h"
@@ -59,75 +62,11 @@ void AppendNodeToString(NGLayoutInputNode node,
 
 }  // namespace
 
-bool NGLayoutInputNode::IsInline() const {
-  return type_ == kInline;
-}
-
-bool NGLayoutInputNode::IsBlock() const {
-  return type_ == kBlock;
-}
-
-bool NGLayoutInputNode::IsColumnSpanAll() const {
-  return IsBlock() && box_->IsColumnSpanAll();
-}
-
-bool NGLayoutInputNode::IsFloating() const {
-  return IsBlock() && Style().IsFloating();
-}
-
-bool NGLayoutInputNode::IsOutOfFlowPositioned() const {
-  return IsBlock() && Style().HasOutOfFlowPosition();
-}
-
-bool NGLayoutInputNode::IsReplaced() const {
-  return box_->IsLayoutReplaced();
-}
-
-bool NGLayoutInputNode::ShouldBeConsideredAsReplaced() const {
-  return box_->ShouldBeConsideredAsReplaced();
-}
-
-bool NGLayoutInputNode::IsListItem() const {
-  return IsBlock() && box_->IsLayoutNGListItem();
-}
-
-bool NGLayoutInputNode::IsListMarker() const {
-  return IsBlock() && box_->IsLayoutNGListMarker();
-}
-
-bool NGLayoutInputNode::IsAnonymous() const {
-  return box_->IsAnonymous();
-}
-
-bool NGLayoutInputNode::IsQuirkyContainer() const {
-  return box_->GetDocument().InQuirksMode() &&
-         (box_->IsBody() || box_->IsTableCell());
-}
-
-bool NGLayoutInputNode::IsAbsoluteContainer() const {
-  return box_->CanContainAbsolutePositionObjects();
-}
-
-bool NGLayoutInputNode::IsFixedContainer() const {
-  return box_->CanContainFixedPositionObjects();
-}
-
-bool NGLayoutInputNode::IsBody() const {
-  return IsBlock() && box_->IsBody();
-}
-
-bool NGLayoutInputNode::IsDocumentElement() const {
-  return box_->IsDocumentElement();
-}
-
-bool NGLayoutInputNode::CreatesNewFormattingContext() const {
-  return IsBlock() && box_->AvoidsFloats();
-}
-
 scoped_refptr<NGLayoutResult> NGLayoutInputNode::Layout(
     const NGConstraintSpace& space,
-    NGBreakToken* break_token) {
-  return IsInline() ? ToNGInlineNode(*this).Layout(space, break_token)
+    const NGBreakToken* break_token,
+    NGInlineChildLayoutContext* context) {
+  return IsInline() ? ToNGInlineNode(*this).Layout(space, break_token, context)
                     : ToNGBlockNode(*this).Layout(space, break_token);
 }
 
@@ -135,9 +74,9 @@ MinMaxSize NGLayoutInputNode::ComputeMinMaxSize(
     WritingMode writing_mode,
     const MinMaxSizeInput& input,
     const NGConstraintSpace* space) {
-  return IsInline() ? ToNGInlineNode(*this).ComputeMinMaxSize(input)
-                    : ToNGBlockNode(*this).ComputeMinMaxSize(writing_mode,
-                                                             input, space);
+  if (IsInline())
+    return ToNGInlineNode(*this).ComputeMinMaxSize(writing_mode, input, space);
+  return ToNGBlockNode(*this).ComputeMinMaxSize(writing_mode, input, space);
 }
 
 void NGLayoutInputNode::IntrinsicSize(
@@ -166,13 +105,19 @@ void NGLayoutInputNode::IntrinsicSize(
                     LayoutUnit(legacy_sizing_info.aspect_ratio.Height()));
 }
 
+LayoutUnit NGLayoutInputNode::IntrinsicPaddingBlockStart() const {
+  DCHECK(IsTableCell());
+  return LayoutUnit(ToLayoutTableCell(box_)->IntrinsicPaddingBefore());
+}
+
+LayoutUnit NGLayoutInputNode::IntrinsicPaddingBlockEnd() const {
+  DCHECK(IsTableCell());
+  return LayoutUnit(ToLayoutTableCell(box_)->IntrinsicPaddingAfter());
+}
+
 NGLayoutInputNode NGLayoutInputNode::NextSibling() {
   return IsInline() ? ToNGInlineNode(*this).NextSibling()
                     : ToNGBlockNode(*this).NextSibling();
-}
-
-Document& NGLayoutInputNode::GetDocument() const {
-  return box_->GetDocument();
 }
 
 NGPhysicalSize NGLayoutInputNode::InitialContainingBlockSize() const {
@@ -182,12 +127,10 @@ NGPhysicalSize NGLayoutInputNode::InitialContainingBlockSize() const {
                         LayoutUnit(icb_size.Height())};
 }
 
-LayoutObject* NGLayoutInputNode::GetLayoutObject() const {
-  return box_;
-}
-
-const ComputedStyle& NGLayoutInputNode::Style() const {
-  return box_->StyleRef();
+const NGPaintFragment* NGLayoutInputNode::PaintFragment() const {
+  if (LayoutBlockFlow* block_flow = ToLayoutBlockFlowOrNull(GetLayoutBox()))
+    return block_flow->PaintFragment();
+  return nullptr;
 }
 
 String NGLayoutInputNode::ToString() const {

@@ -33,6 +33,7 @@
 #include "gpu/command_buffer/client/logging.h"
 #include "gpu/command_buffer/client/mapped_memory.h"
 #include "gpu/command_buffer/client/query_tracker.h"
+#include "gpu/command_buffer/client/readback_buffer_shadow_tracker.h"
 #include "gpu/command_buffer/client/ref_counted.h"
 #include "gpu/command_buffer/client/share_group.h"
 #include "gpu/command_buffer/client/transfer_buffer.h"
@@ -48,6 +49,7 @@ namespace gles2 {
 
 class GLES2CmdHelper;
 class VertexArrayObjectManager;
+class ReadbackBufferShadowTracker;
 
 // This class emulates GLES2 over command buffers. It can be used by a client
 // program so that the program does not need deal with shared memory and command
@@ -128,7 +130,6 @@ class GLES2_IMPL_EXPORT GLES2Implementation : public GLES2Interface,
   uint64_t ShareGroupTracingGUID() const override;
   void SetErrorMessageCallback(
       base::RepeatingCallback<void(const char*, int32_t)> callback) override;
-  void SetSnapshotRequested() override;
   bool ThreadSafeShallowLockDiscardableTexture(uint32_t texture_id) override;
   void CompleteLockDiscardableTexureOnContextThread(
       uint32_t texture_id) override;
@@ -310,21 +311,42 @@ class GLES2_IMPL_EXPORT GLES2Implementation : public GLES2Interface,
   };
 
   struct TextureUnit {
-    TextureUnit()
-        : bound_texture_2d(0),
-          bound_texture_cube_map(0),
-          bound_texture_external_oes(0) {}
+    TextureUnit() {}
 
     // texture currently bound to this unit's GL_TEXTURE_2D with glBindTexture
-    GLuint bound_texture_2d;
+    GLuint bound_texture_2d = 0;
 
     // texture currently bound to this unit's GL_TEXTURE_CUBE_MAP with
     // glBindTexture
-    GLuint bound_texture_cube_map;
+    GLuint bound_texture_cube_map = 0;
 
     // texture currently bound to this unit's GL_TEXTURE_EXTERNAL_OES with
     // glBindTexture
-    GLuint bound_texture_external_oes;
+    GLuint bound_texture_external_oes = 0;
+
+    // texture currently bound to this unit's GL_TEXTURE_RECTANGLE_ARB with
+    // glBindTexture
+    GLuint bound_texture_rectangle_arb = 0;
+  };
+
+  // Prevents problematic reentrancy during error callbacks.
+  class DeferErrorCallbacks {
+   public:
+    explicit DeferErrorCallbacks(GLES2Implementation* gles2_implementation);
+    ~DeferErrorCallbacks();
+
+   private:
+    GLES2Implementation* gles2_implementation_;
+  };
+
+  struct DeferredErrorCallback {
+    // This takes std::string by value and uses std::move in the
+    // implementation, allowing the compiler to achieve zero copies
+    // when passing in a temporary.
+    DeferredErrorCallback(std::string message, int32_t id);
+
+    std::string message;
+    int32_t id = 0;
   };
 
   // Checks for single threaded access.
@@ -349,6 +371,9 @@ class GLES2_IMPL_EXPORT GLES2Implementation : public GLES2Interface,
   void OnSwapBufferPresented(uint64_t swap_id,
                              const gfx::PresentationFeedback& feedback) final;
 
+  void SendErrorMessage(std::string message, int32_t id);
+  void CallDeferredErrorCallbacks();
+
   bool IsChromiumFramebufferMultisampleAvailable();
 
   bool IsExtensionAvailableHelper(
@@ -365,6 +390,11 @@ class GLES2_IMPL_EXPORT GLES2Implementation : public GLES2Interface,
   const std::string& GetLastError() {
     return last_error_;
   }
+
+  void AllocateShadowCopiesForReadback();
+  static void BufferShadowWrittenCallback(
+      const ReadbackBufferShadowTracker::BufferList& buffers,
+      uint64_t serial);
 
   // Returns true if id is reserved.
   bool IsBufferReservedId(GLuint id);
@@ -554,6 +584,8 @@ class GLES2_IMPL_EXPORT GLES2Implementation : public GLES2Interface,
       GLuint buffer_id,
       const char* function_name, GLuint offset, GLsizei size);
 
+  void OnBufferWrite(GLenum target);
+
   // Pack 2D arrays of char into a bucket.
   // Helper function for ShaderSource(), TransformFeedbackVaryings(), etc.
   bool PackStringsToBucket(GLsizei count,
@@ -661,10 +693,12 @@ class GLES2_IMPL_EXPORT GLES2Implementation : public GLES2Interface,
   GLuint current_program_;
 
   GLuint bound_array_buffer_;
+  GLuint bound_atomic_counter_buffer_;
   GLuint bound_copy_read_buffer_;
   GLuint bound_copy_write_buffer_;
   GLuint bound_pixel_pack_buffer_;
   GLuint bound_pixel_unpack_buffer_;
+  GLuint bound_shader_storage_buffer_;
   GLuint bound_transform_feedback_buffer_;
   GLuint bound_uniform_buffer_;
   // We don't cache the currently bound transform feedback buffer, because
@@ -732,11 +766,14 @@ class GLES2_IMPL_EXPORT GLES2Implementation : public GLES2Interface,
       id_allocators_[static_cast<int>(IdNamespaces::kNumIdNamespaces)];
 
   std::unique_ptr<BufferTracker> buffer_tracker_;
+  std::unique_ptr<ReadbackBufferShadowTracker> readback_buffer_shadow_tracker_;
 
   base::Optional<ScopedMappedMemoryPtr> font_mapped_buffer_;
   base::Optional<ScopedTransferBufferPtr> raster_mapped_buffer_;
 
   base::Callback<void(const char*, int32_t)> error_message_callback_;
+  bool deferring_error_callbacks_ = false;
+  std::deque<DeferredErrorCallback> deferred_error_callbacks_;
 
   int current_trace_stack_;
 
@@ -760,6 +797,8 @@ class GLES2_IMPL_EXPORT GLES2Implementation : public GLES2Interface,
   base::flat_map<uint64_t, SwapCompletedCallback> pending_swap_callbacks_;
   base::flat_map<uint64_t, PresentationCallback>
       pending_presentation_callbacks_;
+
+  std::string last_active_url_;
 
   base::WeakPtrFactory<GLES2Implementation> weak_ptr_factory_;
 

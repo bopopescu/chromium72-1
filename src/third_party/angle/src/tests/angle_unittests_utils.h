@@ -119,13 +119,20 @@ class MockEGLFactory : public EGLImplFactory
                  SurfaceImpl *(const egl::SurfaceState &,
                                NativePixmapType,
                                const egl::AttributeMap &));
-    MOCK_METHOD3(createImage,
-                 ImageImpl *(const egl::ImageState &, EGLenum, const egl::AttributeMap &));
-    MOCK_METHOD1(createContext, ContextImpl *(const gl::ContextState &));
+    MOCK_METHOD4(createImage,
+                 ImageImpl *(const egl::ImageState &,
+                             const gl::Context *,
+                             EGLenum,
+                             const egl::AttributeMap &));
+    MOCK_METHOD4(createContext,
+                 ContextImpl *(const gl::ContextState &,
+                               const egl::Config *,
+                               const gl::Context *,
+                               const egl::AttributeMap &));
     MOCK_METHOD2(createStreamProducerD3DTexture,
                  StreamProducerImpl *(egl::Stream::ConsumerType, const egl::AttributeMap &));
 };
 
 }  // namespace rx
 
-#endif // TESTS_ANGLE_UNITTESTS_UTILS_H_
+#endif  // TESTS_ANGLE_UNITTESTS_UTILS_H_

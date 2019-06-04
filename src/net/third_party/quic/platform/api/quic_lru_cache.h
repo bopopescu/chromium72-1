@@ -9,16 +9,18 @@
 
 #include "net/third_party/quic/platform/impl/quic_lru_cache_impl.h"
 
-namespace net {
+namespace quic {
 
 // A LRU cache that maps from type Key to Value* in QUIC.
 // This cache CANNOT be shared by multiple threads (even with locks) because
 // Value* returned by Lookup() can be invalid if the entry is evicted by other
 // threads.
 template <class K, class V>
-class QuicLRUCache {
+class QuicLRUCacheOld {
  public:
-  explicit QuicLRUCache(int64_t total_units) : impl_(total_units) {}
+  explicit QuicLRUCacheOld(int64_t total_units) : impl_(total_units) {}
+  QuicLRUCacheOld(const QuicLRUCacheOld&) = delete;
+  QuicLRUCacheOld& operator=(const QuicLRUCacheOld&) = delete;
 
   // Inserts one unit of |key|, |value| pair to the cache. Cache takes ownership
   // of inserted |value|.
@@ -43,10 +45,8 @@ class QuicLRUCache {
 
  private:
   QuicLRUCacheImpl<K, V> impl_;
-
-  DISALLOW_COPY_AND_ASSIGN(QuicLRUCache);
 };
 
-}  // namespace net
+}  // namespace quic
 
 #endif  // NET_THIRD_PARTY_QUIC_PLATFORM_API_QUIC_LRU_CACHE_H_

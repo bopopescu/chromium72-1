@@ -32,9 +32,9 @@
 
 #include <algorithm>
 
-#include "third_party/blink/renderer/bindings/core/v8/exception_state.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_binding_for_core.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_mutation_callback.h"
+#include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/dom/mutation_observer_init.h"
 #include "third_party/blink/renderer/core/dom/mutation_observer_registration.h"
 #include "third_party/blink/renderer/core/dom/mutation_record.h"
@@ -42,6 +42,7 @@
 #include "third_party/blink/renderer/core/execution_context/execution_context.h"
 #include "third_party/blink/renderer/core/html/html_slot_element.h"
 #include "third_party/blink/renderer/core/probe/core_probes.h"
+#include "third_party/blink/renderer/platform/bindings/exception_state.h"
 #include "third_party/blink/renderer/platform/bindings/microtask.h"
 
 namespace blink {
@@ -54,8 +55,12 @@ class MutationObserver::V8DelegateImpl final
  public:
   static V8DelegateImpl* Create(V8MutationCallback* callback,
                                 ExecutionContext* execution_context) {
-    return new V8DelegateImpl(callback, execution_context);
+    return MakeGarbageCollected<V8DelegateImpl>(callback, execution_context);
   }
+
+  V8DelegateImpl(V8MutationCallback* callback,
+                 ExecutionContext* execution_context)
+      : ContextClient(execution_context), callback_(callback) {}
 
   ExecutionContext* GetExecutionContext() const override {
     return ContextClient::GetExecutionContext();
@@ -74,16 +79,7 @@ class MutationObserver::V8DelegateImpl final
     ContextClient::Trace(visitor);
   }
 
-  void TraceWrappers(ScriptWrappableVisitor* visitor) const override {
-    visitor->TraceWrappers(callback_);
-    MutationObserver::Delegate::TraceWrappers(visitor);
-  }
-
  private:
-  V8DelegateImpl(V8MutationCallback* callback,
-                 ExecutionContext* execution_context)
-      : ContextClient(execution_context), callback_(callback) {}
-
   TraceWrapperMember<V8MutationCallback> callback_;
 };
 
@@ -98,14 +94,15 @@ struct MutationObserver::ObserverLessThan {
 
 MutationObserver* MutationObserver::Create(Delegate* delegate) {
   DCHECK(IsMainThread());
-  return new MutationObserver(delegate->GetExecutionContext(), delegate);
+  return MakeGarbageCollected<MutationObserver>(delegate->GetExecutionContext(),
+                                                delegate);
 }
 
 MutationObserver* MutationObserver::Create(ScriptState* script_state,
                                            V8MutationCallback* callback) {
   DCHECK(IsMainThread());
   ExecutionContext* execution_context = ExecutionContext::From(script_state);
-  return new MutationObserver(
+  return MakeGarbageCollected<MutationObserver>(
       execution_context, V8DelegateImpl::Create(callback, execution_context));
 }
 
@@ -120,45 +117,47 @@ MutationObserver::~MutationObserver() {
 }
 
 void MutationObserver::observe(Node* node,
-                               const MutationObserverInit& observer_init,
+                               const MutationObserverInit* observer_init,
                                ExceptionState& exception_state) {
   DCHECK(node);
 
   MutationObserverOptions options = 0;
 
-  if (observer_init.hasAttributeOldValue() && observer_init.attributeOldValue())
+  if (observer_init->hasAttributeOldValue() &&
+      observer_init->attributeOldValue())
     options |= kAttributeOldValue;
 
   HashSet<AtomicString> attribute_filter;
-  if (observer_init.hasAttributeFilter()) {
-    for (const auto& name : observer_init.attributeFilter())
+  if (observer_init->hasAttributeFilter()) {
+    for (const auto& name : observer_init->attributeFilter())
       attribute_filter.insert(AtomicString(name));
     options |= kAttributeFilter;
   }
 
-  bool attributes = observer_init.hasAttributes() && observer_init.attributes();
-  if (attributes || (!observer_init.hasAttributes() &&
-                     (observer_init.hasAttributeOldValue() ||
-                      observer_init.hasAttributeFilter())))
-    options |= kAttributes;
+  bool attributes =
+      observer_init->hasAttributes() && observer_init->attributes();
+  if (attributes || (!observer_init->hasAttributes() &&
+                     (observer_init->hasAttributeOldValue() ||
+                      observer_init->hasAttributeFilter())))
+    options |= kMutationTypeAttributes;
 
-  if (observer_init.hasCharacterDataOldValue() &&
-      observer_init.characterDataOldValue())
+  if (observer_init->hasCharacterDataOldValue() &&
+      observer_init->characterDataOldValue())
     options |= kCharacterDataOldValue;
 
   bool character_data =
-      observer_init.hasCharacterData() && observer_init.characterData();
-  if (character_data || (!observer_init.hasCharacterData() &&
-                         observer_init.hasCharacterDataOldValue()))
-    options |= kCharacterData;
+      observer_init->hasCharacterData() && observer_init->characterData();
+  if (character_data || (!observer_init->hasCharacterData() &&
+                         observer_init->hasCharacterDataOldValue()))
+    options |= kMutationTypeCharacterData;
 
-  if (observer_init.childList())
-    options |= kChildList;
+  if (observer_init->childList())
+    options |= kMutationTypeChildList;
 
-  if (observer_init.subtree())
+  if (observer_init->subtree())
     options |= kSubtree;
 
-  if (!(options & kAttributes)) {
+  if (!(options & kMutationTypeAttributes)) {
     if (options & kAttributeOldValue) {
       exception_state.ThrowTypeError(
           "The options object may only set 'attributeOldValue' to true when "
@@ -172,14 +171,15 @@ void MutationObserver::observe(Node* node,
       return;
     }
   }
-  if (!((options & kCharacterData) || !(options & kCharacterDataOldValue))) {
+  if (!((options & kMutationTypeCharacterData) ||
+        !(options & kCharacterDataOldValue))) {
     exception_state.ThrowTypeError(
         "The options object may only set 'characterDataOldValue' to true when "
         "'characterData' is true or not present.");
     return;
   }
 
-  if (!(options & (kAttributes | kCharacterData | kChildList))) {
+  if (!(options & kMutationTypeAll)) {
     exception_state.ThrowTypeError(
         "The options object must set at least one of 'attributes', "
         "'characterData', or 'childList' to true.");
@@ -222,9 +222,9 @@ void MutationObserver::ObservationEnded(
 }
 
 static MutationObserverSet& ActiveMutationObservers() {
-  DEFINE_STATIC_LOCAL(MutationObserverSet, active_observers,
-                      (new MutationObserverSet));
-  return active_observers;
+  DEFINE_STATIC_LOCAL(Persistent<MutationObserverSet>, active_observers,
+                      (MakeGarbageCollected<MutationObserverSet>()));
+  return *active_observers;
 }
 
 using SlotChangeList = HeapVector<Member<HTMLSlotElement>>;
@@ -233,14 +233,15 @@ using SlotChangeList = HeapVector<Member<HTMLSlotElement>>;
 // similar-origin browsing context.
 // https://html.spec.whatwg.org/multipage/browsers.html#unit-of-related-similar-origin-browsing-contexts
 static SlotChangeList& ActiveSlotChangeList() {
-  DEFINE_STATIC_LOCAL(SlotChangeList, slot_change_list, (new SlotChangeList));
-  return slot_change_list;
+  DEFINE_STATIC_LOCAL(Persistent<SlotChangeList>, slot_change_list,
+                      (MakeGarbageCollected<SlotChangeList>()));
+  return *slot_change_list;
 }
 
 static MutationObserverSet& SuspendedMutationObservers() {
-  DEFINE_STATIC_LOCAL(MutationObserverSet, suspended_observers,
-                      (new MutationObserverSet));
-  return suspended_observers;
+  DEFINE_STATIC_LOCAL(Persistent<MutationObserverSet>, suspended_observers,
+                      (MakeGarbageCollected<MutationObserverSet>()));
+  return *suspended_observers;
 }
 
 static void EnsureEnqueueMicrotask() {
@@ -302,7 +303,7 @@ void MutationObserver::CancelInspectorAsyncTasks() {
 void MutationObserver::Deliver() {
   DCHECK(!ShouldBeSuspended());
 
-  // Calling clearTransientRegistrations() can modify m_registrations, so it's
+  // Calling ClearTransientRegistrations() can modify registrations_, so it's
   // necessary to make a copy of the transient registrations before operating on
   // them.
   HeapVector<Member<MutationObserverRegistration>, 1> transient_registrations;
@@ -377,13 +378,6 @@ void MutationObserver::Trace(blink::Visitor* visitor) {
   visitor->Trace(registrations_);
   ScriptWrappable::Trace(visitor);
   ContextClient::Trace(visitor);
-}
-
-void MutationObserver::TraceWrappers(ScriptWrappableVisitor* visitor) const {
-  visitor->TraceWrappers(delegate_);
-  for (auto record : records_)
-    visitor->TraceWrappers(record);
-  ScriptWrappable::TraceWrappers(visitor);
 }
 
 }  // namespace blink

@@ -4,6 +4,7 @@
 
 #include "gpu/ipc/service/gpu_memory_buffer_factory_native_pixmap.h"
 
+#include "gpu/command_buffer/common/gpu_memory_buffer_support.h"
 #include "ui/gfx/buffer_format_util.h"
 #include "ui/gfx/client_native_pixmap.h"
 #include "ui/gfx/linux/native_pixmap_dmabuf.h"
@@ -79,13 +80,13 @@ ImageFactory* GpuMemoryBufferFactoryNativePixmap::AsImageFactory() {
 
 scoped_refptr<gl::GLImage>
 GpuMemoryBufferFactoryNativePixmap::CreateImageForGpuMemoryBuffer(
-    const gfx::GpuMemoryBufferHandle& handle,
+    gfx::GpuMemoryBufferHandle handle,
     const gfx::Size& size,
     gfx::BufferFormat format,
-    unsigned internalformat,
     int client_id,
     SurfaceHandle surface_handle) {
-  DCHECK_EQ(handle.type, gfx::NATIVE_PIXMAP);
+  if (handle.type != gfx::NATIVE_PIXMAP)
+    return nullptr;
 
   scoped_refptr<gfx::NativePixmap> pixmap;
 
@@ -123,6 +124,7 @@ GpuMemoryBufferFactoryNativePixmap::CreateImageForGpuMemoryBuffer(
     }
   }
 
+  unsigned internalformat = gpu::InternalFormatForGpuMemoryBufferFormat(format);
   scoped_refptr<gl::GLImageNativePixmap> image(
       new gl::GLImageNativePixmap(size, internalformat));
   if (!image->Initialize(pixmap.get(), format)) {
@@ -134,12 +136,19 @@ GpuMemoryBufferFactoryNativePixmap::CreateImageForGpuMemoryBuffer(
   return image;
 }
 
+bool GpuMemoryBufferFactoryNativePixmap::SupportsCreateAnonymousImage() const {
+#if defined(USE_OZONE)
+  return true;
+#else
+  return false;
+#endif
+}
+
 scoped_refptr<gl::GLImage>
 GpuMemoryBufferFactoryNativePixmap::CreateAnonymousImage(
     const gfx::Size& size,
     gfx::BufferFormat format,
     gfx::BufferUsage usage,
-    unsigned internalformat,
     bool* is_cleared) {
   scoped_refptr<gfx::NativePixmap> pixmap;
 #if defined(USE_OZONE)
@@ -155,6 +164,7 @@ GpuMemoryBufferFactoryNativePixmap::CreateAnonymousImage(
                << gfx::BufferFormatToString(format);
     return nullptr;
   }
+  unsigned internalformat = gpu::InternalFormatForGpuMemoryBufferFormat(format);
   scoped_refptr<gl::GLImageNativePixmap> image(
       new gl::GLImageNativePixmap(size, internalformat));
   if (!image->Initialize(pixmap.get(), format)) {

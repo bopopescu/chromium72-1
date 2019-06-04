@@ -18,6 +18,10 @@ class AudioPlayerBrowserTestBase : public FileManagerBrowserTestBase {
     return test_case_name_.c_str();
   }
 
+  std::string GetFullTestCaseName() const override {
+    return test_case_name_;
+  }
+
   const char* GetTestExtensionManifestName() const override {
     return "audio_player_test_manifest.json";
   }
@@ -72,6 +76,11 @@ IN_PROC_BROWSER_TEST_F(AudioPlayerBrowserTest, ChangeTracksPlayList) {
 
 IN_PROC_BROWSER_TEST_F(AudioPlayerBrowserTest, ChangeTracksPlayListIcon) {
   set_test_case_name("changeTracksPlayListIcon");
+  StartTest();
+}
+
+IN_PROC_BROWSER_TEST_F(AudioPlayerBrowserTest, NativeMediaKey) {
+  set_test_case_name("mediaKeyNative");
   StartTest();
 }
 

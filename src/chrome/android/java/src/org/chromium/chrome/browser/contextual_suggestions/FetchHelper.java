@@ -7,12 +7,15 @@ package org.chromium.chrome.browser.contextual_suggestions;
 import android.os.SystemClock;
 import android.support.annotation.NonNull;
 import android.support.annotation.Nullable;
+import android.text.TextUtils;
 import android.webkit.URLUtil;
 
+import org.chromium.base.Callback;
 import org.chromium.base.ThreadUtils;
 import org.chromium.base.VisibleForTesting;
 import org.chromium.chrome.browser.ChromeFeatureList;
 import org.chromium.chrome.browser.tab.EmptyTabObserver;
+import org.chromium.chrome.browser.tab.SadTab;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.tab.TabObserver;
 import org.chromium.chrome.browser.tabmodel.TabModel.TabLaunchType;
@@ -27,6 +30,7 @@ import org.chromium.ui.base.PageTransition;
 
 import java.util.HashMap;
 import java.util.Map;
+import java.util.concurrent.TimeUnit;
 
 /**
  * A helper class responsible for determining when to trigger requests for suggestions and when to
@@ -56,7 +60,7 @@ class FetchHelper {
     class TabFetchReadinessState {
         private long mFetchTimeBaselineMillis;
         private String mUrl;
-        private boolean mSuggestionsDismissed;
+        private String mCanonicalUrl;
 
         TabFetchReadinessState(String url) {
             updateUrl(url);
@@ -69,8 +73,8 @@ class FetchHelper {
          */
         void updateUrl(String url) {
             mUrl = URLUtil.isNetworkUrl(url) ? url : null;
+            mCanonicalUrl = "";
             mFetchTimeBaselineMillis = 0;
-            setSuggestionsDismissed(false);
         }
 
         /** @return The current URL tracked by this tab state. */
@@ -78,12 +82,18 @@ class FetchHelper {
             return mUrl;
         }
 
+        /** Set the canonical url, which can differ from the actual URL. If the canonical url is
+         * set, the readiness state is considered to be tracking both urls. */
+        void setCanonicalUrl(String canonicalUrl) {
+            mCanonicalUrl = canonicalUrl;
+        }
+
         /**
          * @return Whether the tab state is tracking a tab with valid page loaded and valid status
          *         for fetching.
          */
         boolean isTrackingPage() {
-            return mUrl != null && !mSuggestionsDismissed;
+            return mUrl != null;
         }
 
         /**
@@ -109,11 +119,6 @@ class FetchHelper {
             return mFetchTimeBaselineMillis != 0;
         }
 
-        /** @param dismissed Whether the suggestions have been dismissed by the user. */
-        void setSuggestionsDismissed(boolean dismissed) {
-            mSuggestionsDismissed = dismissed;
-        }
-
         /**
          * Checks whether the provided url is the same (ignoring fragments) as the one tracked by
          * tab state.
@@ -121,12 +126,14 @@ class FetchHelper {
          * @return Whether the URLs can be considered the same.
          */
         boolean isContextTheSame(String url) {
-            return UrlUtilities.urlsMatchIgnoringFragments(url, mUrl);
+            return UrlUtilities.urlsMatchIgnoringFragments(url, mUrl)
+                    || UrlUtilities.urlsMatchIgnoringFragments(url, mCanonicalUrl);
         }
     }
 
-    // TODO(fgorski): flip this to finch controlled setting.
-    private final static long MINIMUM_FETCH_DELAY_MILLIS = 2 * 1000; // 2 seconds.
+    @VisibleForTesting
+    final static int MINIMUM_FETCH_DELAY_SECONDS = 2; // 2 seconds.
+    private final static String FETCH_TRIGGERING_DELAY_SECONDS = "fetch_triggering_delay_seconds";
     private final static String REQUIRE_CURRENT_PAGE_FROM_SRP = "require_current_page_from_SRP";
     private final static String REQUIRE_NAV_CHAIN_FROM_SRP = "require_nav_chain_from_SRP";
     private static boolean sDisableDelayForTesting;
@@ -139,7 +146,6 @@ class FetchHelper {
     private TabModelSelectorTabModelObserver mTabModelObserver;
     private TabObserver mTabObserver;
     private boolean mFetchRequestedForCurrentTab;
-    private boolean mIsInitialized;
 
     private boolean mRequireCurrentPageFromSRP;
     private boolean mRequireNavChainFromSRP;
@@ -155,18 +161,10 @@ class FetchHelper {
     FetchHelper(Delegate delegate, TabModelSelector tabModelSelector) {
         mDelegate = delegate;
         mTabModelSelector = tabModelSelector;
-    }
-
-    /**
-     * Initializes the FetchHelper to listen for notifications.
-     */
-    protected void initialize() {
-        assert !mIsInitialized;
-        mIsInitialized = true;
 
         mTabObserver = new EmptyTabObserver() {
             @Override
-            public void onUpdateUrl(Tab tab, String url) {
+            public void onPageLoadStarted(Tab tab, String url) {
                 assert !tab.isIncognito();
                 if (tab == mCurrentTab) {
                     clearState();
@@ -175,12 +173,24 @@ class FetchHelper {
             }
 
             @Override
+            public void onUrlUpdated(Tab tab) {
+                assert !tab.isIncognito();
+                // This address cases, where pages are implemented as a single page app and
+                // switching between articles updates URL, but does not cause a page reload.
+                if (tab == mCurrentTab
+                        && !getTabFetchReadinessState(tab).isContextTheSame(tab.getUrl())) {
+                    clearState();
+                    getTabFetchReadinessState(tab).updateUrl(tab.getUrl());
+                }
+            }
+
+            @Override
             public void didFirstVisuallyNonEmptyPaint(Tab tab) {
                 setTimeBaselineAndMaybeFetch(tab);
             }
 
             @Override
-            public void onPageLoadFinished(Tab tab) {
+            public void onPageLoadFinished(Tab tab, String url) {
                 setTimeBaselineAndMaybeFetch(tab);
             }
 
@@ -200,7 +210,7 @@ class FetchHelper {
 
         mTabModelObserver = new TabModelSelectorTabModelObserver(mTabModelSelector) {
             @Override
-            public void didAddTab(Tab tab, TabLaunchType type) {
+            public void didAddTab(Tab tab, @TabLaunchType int type) {
                 startObservingTab(tab);
                 if (maybeSetFetchReadinessBaseline(tab)) {
                     maybeStartFetch(tab);
@@ -208,7 +218,7 @@ class FetchHelper {
             }
 
             @Override
-            public void didSelectTab(Tab tab, TabSelectionType type, int lastId) {
+            public void didSelectTab(Tab tab, @TabSelectionType int type, int lastId) {
                 if (tab == null) {
                     if (mCurrentTab != null) clearState();
                     mCurrentTab = null;
@@ -280,7 +290,7 @@ class FetchHelper {
         return false;
     }
 
-    private void maybeStartFetch(Tab tab) {
+    private void maybeStartFetch(final Tab tab) {
         if (tab == null || tab != mCurrentTab) return;
 
         assert !tab.isIncognito();
@@ -306,43 +316,54 @@ class FetchHelper {
             return;
         }
 
-        String url = tabFetchReadinessState.getUrl();
-        long remainingFetchDelayMillis =
+        long currentDelayMillis =
                 SystemClock.uptimeMillis() - tabFetchReadinessState.getFetchTimeBaselineMillis();
-        if (!sDisableDelayForTesting && remainingFetchDelayMillis < MINIMUM_FETCH_DELAY_MILLIS) {
-            postDelayedFetch(
-                    url, mCurrentTab, MINIMUM_FETCH_DELAY_MILLIS - remainingFetchDelayMillis);
-            return;
-        }
+        long delayMillis = Math.max(0, getMinimumFetchDelayMillis() - currentDelayMillis);
+        final String url = tabFetchReadinessState.getUrl();
 
-        mFetchRequestedForCurrentTab = true;
-        mDelegate.requestSuggestions(url);
-    }
-
-    private void postDelayedFetch(final String url, final Tab tab, long delayMillis) {
-        if (tab == null) {
-            assert false;
+        if (sDisableDelayForTesting || delayMillis == 0) {
+            getCanonicalUrlThenFetch(tab, url);
             return;
         }
 
         mDelegate.reportFetchDelayed(tab.getWebContents());
-        ThreadUtils.postOnUiThreadDelayed(new Runnable() {
+        ThreadUtils.postOnUiThreadDelayed(() -> getCanonicalUrlThenFetch(tab, url), delayMillis);
+    }
+
+    private void getCanonicalUrlThenFetch(final Tab tab, final String url) {
+        if (!shouldFetchCanonicalUrl(tab)) {
+            fetchSuggestions(tab, url);
+            return;
+        }
+
+        tab.getWebContents().getMainFrame().getCanonicalUrlForSharing(new Callback<String>() {
             @Override
-            public void run() {
-                // Make sure that the tab is currently selected.
+            public void onResult(String result) {
                 if (tab != mCurrentTab) return;
 
-                if (mFetchRequestedForCurrentTab) return;
-
-                if (!isObservingTab(tab)) return;
-
-                // URL in tab changed since the task was originally posted.
-                if (!getTabFetchReadinessState(tab).isContextTheSame(url)) return;
-
-                mFetchRequestedForCurrentTab = true;
-                mDelegate.requestSuggestions(url);
+                TabFetchReadinessState tabFetchReadinessState = getTabFetchReadinessState(tab);
+                if (tabFetchReadinessState != null && tabFetchReadinessState.isTrackingPage()
+                        && tabFetchReadinessState.isContextTheSame(url)) {
+                    tabFetchReadinessState.setCanonicalUrl(result);
+                    fetchSuggestions(tab, getUrlToFetchFor(tab.getUrl(), result));
+                }
             }
-        }, delayMillis);
+        });
+    }
+
+    private void fetchSuggestions(final Tab tab, final String url) {
+        // Make sure that the tab is currently selected.
+        if (tab != mCurrentTab) return;
+
+        if (mFetchRequestedForCurrentTab) return;
+
+        if (!isObservingTab(tab)) return;
+
+        // URL in tab changed since the task was originally posted.
+        if (!getTabFetchReadinessState(tab).isContextTheSame(url)) return;
+
+        mFetchRequestedForCurrentTab = true;
+        mDelegate.requestSuggestions(url);
     }
 
     private void clearState() {
@@ -405,14 +426,6 @@ class FetchHelper {
                 : mObservedTabs.get(tab.getId()).getFetchTimeBaselineMillis();
     }
 
-    /**
-     * Called when suggestions were dismissed.
-     * @param tab The tab on which suggestions were dismissed.
-     */
-    void onSuggestionsDismissed(@NonNull Tab tab) {
-        mObservedTabs.get(tab.getId()).setSuggestionsDismissed(true);
-    }
-
     private boolean isFromGoogleSearchRequired() {
         return mRequireCurrentPageFromSRP || mRequireNavChainFromSRP;
     }
@@ -420,15 +433,14 @@ class FetchHelper {
     @VisibleForTesting
     boolean requireCurrentPageFromSRP() {
         return ChromeFeatureList.getFieldTrialParamByFeatureAsBoolean(
-                ChromeFeatureList.CONTEXTUAL_SUGGESTIONS_BOTTOM_SHEET,
-                REQUIRE_CURRENT_PAGE_FROM_SRP, false);
+                ChromeFeatureList.CONTEXTUAL_SUGGESTIONS_BUTTON, REQUIRE_CURRENT_PAGE_FROM_SRP,
+                false);
     }
 
     @VisibleForTesting
     boolean requireNavChainFromSRP() {
         return ChromeFeatureList.getFieldTrialParamByFeatureAsBoolean(
-                ChromeFeatureList.CONTEXTUAL_SUGGESTIONS_BOTTOM_SHEET, REQUIRE_NAV_CHAIN_FROM_SRP,
-                false);
+                ChromeFeatureList.CONTEXTUAL_SUGGESTIONS_BUTTON, REQUIRE_NAV_CHAIN_FROM_SRP, false);
     }
 
     @VisibleForTesting
@@ -473,6 +485,30 @@ class FetchHelper {
         }
 
         return false;
+    }
+
+    static boolean shouldFetchCanonicalUrl(final Tab currentTab) {
+        WebContents webContents = currentTab.getWebContents();
+        if (webContents == null) return false;
+        if (webContents.getMainFrame() == null) return false;
+        String url = currentTab.getUrl();
+        if (TextUtils.isEmpty(url)) return false;
+        if (currentTab.isShowingErrorPage() || currentTab.isShowingInterstitialPage()
+                || SadTab.isShowing(currentTab)) {
+            return false;
+        }
+        return true;
+    }
+
+    static String getUrlToFetchFor(String visibleUrl, String canonicalUrl) {
+        return TextUtils.isEmpty(canonicalUrl) ? visibleUrl : canonicalUrl;
+    }
+
+    @VisibleForTesting
+    static long getMinimumFetchDelayMillis() {
+        return TimeUnit.SECONDS.toMillis(ChromeFeatureList.getFieldTrialParamByFeatureAsInt(
+                ChromeFeatureList.CONTEXTUAL_SUGGESTIONS_BUTTON, FETCH_TRIGGERING_DELAY_SECONDS,
+                MINIMUM_FETCH_DELAY_SECONDS));
     }
 
     @VisibleForTesting

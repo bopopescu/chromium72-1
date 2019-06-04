@@ -55,8 +55,23 @@ class WebRtcLoggingHandlerHost : public content::BrowserMessageFilter {
       LogsDirectoryCallback;
   typedef base::Callback<void(const std::string&)> LogsDirectoryErrorCallback;
 
+  // Argument #1: Indicate success/failure.
+  // Argument #2: If success, the log's ID. Otherwise, empty.
+  // Argument #3: If failure, the error message. Otherwise, empty.
+  typedef base::RepeatingCallback<
+      void(bool, const std::string&, const std::string&)>
+      StartEventLoggingCallback;
+
   // Key used to attach the handler to the RenderProcessHost.
   static const char kWebRtcLoggingHandlerHostKey[];
+
+  // Upload failure reasons used for UMA stats. A failure reason can be one of
+  // those listed here or a response code for the upload HTTP request. The
+  // values in this list must be less than 100 and cannot be changed.
+  enum UploadFailureReason {
+    kInvalidState = 0,
+    kStoredLogNotFound = 1,
+  };
 
   WebRtcLoggingHandlerHost(int render_process_id,
                            content::BrowserContext* browser_context,
@@ -124,15 +139,19 @@ class WebRtcLoggingHandlerHost : public content::BrowserMessageFilter {
                    size_t packet_length,
                    bool incoming);
 
-  // Start remote-bound event logging for a specific peer connection,
-  // indicated by its ID, for which remote-bound event logging was not active.
+  // Start remote-bound event logging for a specific peer connection
+  // (indicated by its peer connection ID), for which remote-bound event
+  // logging was not active.
   // The callback will be posted back, indicating |true| if and only if an
-  // event log was successfully started.
+  // event log was successfully started, in which case the first of the string
+  // arguments will be set to the log-ID. Otherwise, the second of the string
+  // arguments will contain the error message.
   // This function must be called on the UI thread.
   void StartEventLogging(const std::string& peer_connection_id,
                          size_t max_log_size_bytes,
-                         const std::string& metadata,
-                         const GenericDoneCallback& callback);
+                         int output_period_ms,
+                         size_t web_app_id,
+                         const StartEventLoggingCallback& callback);
 
 #if defined(OS_LINUX) || defined(OS_CHROMEOS)
   // Ensures that the WebRTC Logs directory exists and then grants render
@@ -177,6 +196,7 @@ class WebRtcLoggingHandlerHost : public content::BrowserMessageFilter {
                            const base::FilePath& directory);
 
   void UploadStoredLogOnFileThread(const std::string& log_id,
+                                   int web_app_id,
                                    const UploadDoneCallback& callback);
 
   // A helper for TriggerUpload to do the real work.
@@ -239,6 +259,11 @@ class WebRtcLoggingHandlerHost : public content::BrowserMessageFilter {
   // A pointer to the log uploader that's shared for all browser contexts.
   // Ownership lies with the browser process.
   WebRtcLogUploader* const log_uploader_;
+
+  // Web app id used for statistics. Created as the hash of the value of a
+  // "client" meta data key, if exists. 0 means undefined, and is the hash of
+  // the empty string. Must only be accessed on the IO thread.
+  int web_app_id_ = 0;
 
   DISALLOW_COPY_AND_ASSIGN(WebRtcLoggingHandlerHost);
 };

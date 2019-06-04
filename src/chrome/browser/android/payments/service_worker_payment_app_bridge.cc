@@ -21,7 +21,7 @@
 #include "content/public/browser/payment_app_provider.h"
 #include "content/public/browser/web_contents.h"
 #include "jni/ServiceWorkerPaymentAppBridge_jni.h"
-#include "third_party/blink/public/platform/modules/payments/payment_app.mojom.h"
+#include "third_party/blink/public/mojom/payments/payment_app.mojom.h"
 #include "ui/gfx/android/java_bitmap.h"
 #include "url/origin.h"
 
@@ -91,9 +91,7 @@ void OnGotAllPaymentApps(
         app_info.second->name.empty()
             ? nullptr
             : ConvertUTF8ToJavaString(env, app_info.second->name),
-        nullptr,
-        ConvertUTF8ToJavaString(
-            env, url::Origin::Create(app_info.second->scope).host()),
+        nullptr, ConvertUTF8ToJavaString(env, app_info.second->scope.host()),
         app_info.second->icon == nullptr
             ? nullptr
             : gfx::ConvertToJavaBitmap(app_info.second->icon.get()),
@@ -139,7 +137,7 @@ void OnGetServiceWorkerPaymentAppsInfo(
   for (const auto& app_info : apps) {
     Java_ServiceWorkerPaymentAppBridge_addPaymentAppInfo(
         env, jappsInfo,
-        ConvertUTF8ToJavaString(env, app_info.second->scope.spec()),
+        ConvertUTF8ToJavaString(env, app_info.second->scope.host()),
         ConvertUTF8ToJavaString(env, app_info.second->name),
         app_info.second->icon == nullptr
             ? nullptr
@@ -195,19 +193,16 @@ std::vector<PaymentMethodDataPtr> ConvertPaymentMethodDataFromJavaToNative(
     ScopedJavaLocalRef<jobject> element(
         env, env->GetObjectArrayElement(jmethod_data, i));
     PaymentMethodDataPtr method_data_item = PaymentMethodData::New();
-    base::android::AppendJavaStringArrayToStringVector(
+    method_data_item->supported_method = ConvertJavaStringToUTF8(
         env,
-        Java_ServiceWorkerPaymentAppBridge_getSupportedMethodsFromMethodData(
-            env, element)
-            .obj(),
-        &method_data_item->supported_methods);
+        Java_ServiceWorkerPaymentAppBridge_getSupportedMethodFromMethodData(
+            env, element));
 
     std::vector<int> supported_network_ints;
     base::android::JavaIntArrayToIntVector(
         env,
         Java_ServiceWorkerPaymentAppBridge_getSupportedNetworksFromMethodData(
-            env, element)
-            .obj(),
+            env, element),
         &supported_network_ints);
     ConvertIntsToEnums<BasicCardNetwork>(supported_network_ints,
                                          &method_data_item->supported_networks);
@@ -216,8 +211,7 @@ std::vector<PaymentMethodDataPtr> ConvertPaymentMethodDataFromJavaToNative(
     base::android::JavaIntArrayToIntVector(
         env,
         Java_ServiceWorkerPaymentAppBridge_getSupportedTypesFromMethodData(
-            env, element)
-            .obj(),
+            env, element),
         &supported_type_ints);
     ConvertIntsToEnums<BasicCardType>(supported_type_ints,
                                       &method_data_item->supported_types);
@@ -280,12 +274,10 @@ PaymentRequestEventDataPtr ConvertPaymentRequestEventDataFromJavaToNative(
         Java_ServiceWorkerPaymentAppBridge_getMethodDataFromModifier(env,
                                                                      jmodifier);
     modifier->method_data = PaymentMethodData::New();
-    base::android::AppendJavaStringArrayToStringVector(
+    modifier->method_data->supported_method = ConvertJavaStringToUTF8(
         env,
-        Java_ServiceWorkerPaymentAppBridge_getSupportedMethodsFromMethodData(
-            env, jmodifier_method_data)
-            .obj(),
-        &modifier->method_data->supported_methods);
+        Java_ServiceWorkerPaymentAppBridge_getSupportedMethodFromMethodData(
+            env, jmodifier_method_data));
     modifier->method_data->stringified_data = ConvertJavaStringToUTF8(
         env,
         Java_ServiceWorkerPaymentAppBridge_getStringifiedDataFromMethodData(
@@ -393,12 +385,10 @@ static void JNI_ServiceWorkerPaymentAppBridge_CanMakePayment(
         Java_ServiceWorkerPaymentAppBridge_getMethodDataFromModifier(env,
                                                                      jmodifier);
     modifier->method_data = PaymentMethodData::New();
-    base::android::AppendJavaStringArrayToStringVector(
+    modifier->method_data->supported_method = ConvertJavaStringToUTF8(
         env,
-        Java_ServiceWorkerPaymentAppBridge_getSupportedMethodsFromMethodData(
-            env, jmodifier_method_data)
-            .obj(),
-        &modifier->method_data->supported_methods);
+        Java_ServiceWorkerPaymentAppBridge_getSupportedMethodFromMethodData(
+            env, jmodifier_method_data));
     modifier->method_data->stringified_data = ConvertJavaStringToUTF8(
         env,
         Java_ServiceWorkerPaymentAppBridge_getStringifiedDataFromMethodData(

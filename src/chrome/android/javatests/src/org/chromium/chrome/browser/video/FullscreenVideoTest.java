@@ -17,7 +17,6 @@ import org.junit.runner.RunWith;
 
 import org.chromium.base.test.util.CommandLineFlags;
 import org.chromium.base.test.util.FlakyTest;
-import org.chromium.base.test.util.MinAndroidSdkLevel;
 import org.chromium.chrome.browser.ChromeActivity;
 import org.chromium.chrome.browser.ChromeSwitches;
 import org.chromium.chrome.browser.fullscreen.FullscreenOptions;
@@ -25,12 +24,12 @@ import org.chromium.chrome.browser.tab.EmptyTabObserver;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.test.ChromeActivityTestRule;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
-import org.chromium.content.browser.test.util.Criteria;
-import org.chromium.content.browser.test.util.CriteriaHelper;
-import org.chromium.content.browser.test.util.DOMUtils;
-import org.chromium.content.browser.test.util.KeyUtils;
-import org.chromium.content.browser.test.util.TestTouchUtils;
 import org.chromium.content_public.browser.WebContents;
+import org.chromium.content_public.browser.test.util.Criteria;
+import org.chromium.content_public.browser.test.util.CriteriaHelper;
+import org.chromium.content_public.browser.test.util.DOMUtils;
+import org.chromium.content_public.browser.test.util.KeyUtils;
+import org.chromium.content_public.browser.test.util.TestTouchUtils;
 import org.chromium.media.MediaSwitches;
 import org.chromium.net.test.EmbeddedTestServerRule;
 
@@ -50,7 +49,7 @@ public class FullscreenVideoTest {
     public EmbeddedTestServerRule mTestServerRule = new EmbeddedTestServerRule();
 
     private static final int TEST_TIMEOUT = 3000;
-    private boolean mIsTabFullscreen = false;
+    private boolean mIsTabFullscreen;
     private ChromeActivity mActivity;
 
     private class FullscreenTabObserver extends EmptyTabObserver {
@@ -99,13 +98,11 @@ public class FullscreenVideoTest {
     }
 
     /**
-     * Tests that the dimensions of the fullscreen video are propagated correctly. Tracking the
-     * dimensions of fullscreen video is only enabled on Android O devices at time of writing
-     * (see {@link org.chromium.chrome.browser.AppHooks#shouldDetectVideoFullscreen()}).
+     * Tests that the dimensions of the fullscreen video are propagated correctly.
      */
     @Test
     @MediumTest
-    @MinAndroidSdkLevel(26)
+    @FlakyTest(message = "crbug.com/906840")
     public void testFullscreenDimensions() throws InterruptedException, TimeoutException {
         String url =
                 mTestServerRule.getServer().getURL("/content/test/data/media/video-player.html");

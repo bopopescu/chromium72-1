@@ -9,6 +9,8 @@
 #include "third_party/blink/renderer/core/frame/local_dom_window.h"
 #include "third_party/blink/renderer/core/frame/local_frame.h"
 #include "third_party/blink/renderer/core/html/html_frame_owner_element.h"
+#include "third_party/blink/renderer/core/layout/layout_object.h"
+#include "third_party/blink/renderer/core/layout/layout_view.h"
 #include "third_party/blink/renderer/core/page/chrome_client.h"
 #include "third_party/blink/renderer/core/page/scrolling/scrolling_coordinator.h"
 
@@ -16,15 +18,15 @@ namespace blink {
 
 namespace {
 
-WebEventListenerProperties GetWebEventListenerProperties(bool has_blocking,
-                                                         bool has_passive) {
+cc::EventListenerProperties GetEventListenerProperties(bool has_blocking,
+                                                       bool has_passive) {
   if (has_blocking && has_passive)
-    return WebEventListenerProperties::kBlockingAndPassive;
+    return cc::EventListenerProperties::kBlockingAndPassive;
   if (has_blocking)
-    return WebEventListenerProperties::kBlocking;
+    return cc::EventListenerProperties::kBlocking;
   if (has_passive)
-    return WebEventListenerProperties::kPassive;
-  return WebEventListenerProperties::kNothing;
+    return cc::EventListenerProperties::kPassive;
+  return cc::EventListenerProperties::kNone;
 }
 
 LocalFrame* GetLocalFrameForTarget(EventTarget* target) {
@@ -44,7 +46,7 @@ LocalFrame* GetLocalFrameForTarget(EventTarget* target) {
 EventHandlerRegistry::EventHandlerRegistry(LocalFrame& frame) : frame_(frame) {}
 
 EventHandlerRegistry::~EventHandlerRegistry() {
-  for (size_t i = 0; i < kEventHandlerClassCount; ++i) {
+  for (int i = 0; i < kEventHandlerClassCount; ++i) {
     EventHandlerClass handler_class = static_cast<EventHandlerClass>(i);
     CheckConsistency(handler_class);
   }
@@ -52,29 +54,34 @@ EventHandlerRegistry::~EventHandlerRegistry() {
 
 bool EventHandlerRegistry::EventTypeToClass(
     const AtomicString& event_type,
-    const AddEventListenerOptions& options,
+    const AddEventListenerOptions* options,
     EventHandlerClass* result) {
-  if (event_type == EventTypeNames::scroll) {
+  if (event_type == event_type_names::kScroll) {
     *result = kScrollEvent;
-  } else if (event_type == EventTypeNames::wheel ||
-             event_type == EventTypeNames::mousewheel) {
-    *result = options.passive() ? kWheelEventPassive : kWheelEventBlocking;
-  } else if (event_type == EventTypeNames::touchend ||
-             event_type == EventTypeNames::touchcancel) {
-    *result = options.passive() ? kTouchEndOrCancelEventPassive
-                                : kTouchEndOrCancelEventBlocking;
-  } else if (event_type == EventTypeNames::touchstart ||
-             event_type == EventTypeNames::touchmove) {
-    *result = options.passive() ? kTouchStartOrMoveEventPassive
-                                : kTouchStartOrMoveEventBlocking;
-  } else if (EventUtil::IsPointerEventType(event_type)) {
+  } else if (event_type == event_type_names::kWheel ||
+             event_type == event_type_names::kMousewheel) {
+    *result = options->passive() ? kWheelEventPassive : kWheelEventBlocking;
+  } else if (event_type == event_type_names::kTouchend ||
+             event_type == event_type_names::kTouchcancel) {
+    *result = options->passive() ? kTouchEndOrCancelEventPassive
+                                 : kTouchEndOrCancelEventBlocking;
+  } else if (event_type == event_type_names::kTouchstart ||
+             event_type == event_type_names::kTouchmove) {
+    *result = options->passive() ? kTouchStartOrMoveEventPassive
+                                 : kTouchStartOrMoveEventBlocking;
+  } else if (event_type == event_type_names::kPointerrawmove) {
+    // This will be used to avoid waking up the main thread to
+    // process pointerrawmove events and hit-test them when
+    // there is no listener on the page.
+    *result = kPointerRawMoveEvent;
+  } else if (event_util::IsPointerEventType(event_type)) {
     // The pointer events never block scrolling and the compositor
     // only needs to know about the touch listeners.
     *result = kPointerEvent;
 #if DCHECK_IS_ON()
-  } else if (event_type == EventTypeNames::load ||
-             event_type == EventTypeNames::mousemove ||
-             event_type == EventTypeNames::touchstart) {
+  } else if (event_type == event_type_names::kLoad ||
+             event_type == event_type_names::kMousemove ||
+             event_type == event_type_names::kTouchstart) {
     *result = kEventsForTesting;
 #endif
   } else {
@@ -149,7 +156,7 @@ bool EventHandlerRegistry::UpdateEventHandlerInternal(
 void EventHandlerRegistry::UpdateEventHandlerOfType(
     ChangeOperation op,
     const AtomicString& event_type,
-    const AddEventListenerOptions& options,
+    const AddEventListenerOptions* options,
     EventTarget* target) {
   EventHandlerClass handler_class;
   if (!EventTypeToClass(event_type, options, &handler_class))
@@ -160,14 +167,14 @@ void EventHandlerRegistry::UpdateEventHandlerOfType(
 void EventHandlerRegistry::DidAddEventHandler(
     EventTarget& target,
     const AtomicString& event_type,
-    const AddEventListenerOptions& options) {
+    const AddEventListenerOptions* options) {
   UpdateEventHandlerOfType(kAdd, event_type, options, &target);
 }
 
 void EventHandlerRegistry::DidRemoveEventHandler(
     EventTarget& target,
     const AtomicString& event_type,
-    const AddEventListenerOptions& options) {
+    const AddEventListenerOptions* options) {
   UpdateEventHandlerOfType(kRemove, event_type, options, &target);
 }
 
@@ -188,11 +195,11 @@ void EventHandlerRegistry::DidMoveIntoPage(EventTarget& target) {
 
   // This code is not efficient at all.
   Vector<AtomicString> event_types = target.EventTypes();
-  for (size_t i = 0; i < event_types.size(); ++i) {
+  for (wtf_size_t i = 0; i < event_types.size(); ++i) {
     EventListenerVector* listeners = target.GetEventListeners(event_types[i]);
     if (!listeners)
       continue;
-    for (unsigned count = listeners->size(); count > 0; --count) {
+    for (wtf_size_t count = listeners->size(); count > 0; --count) {
       EventHandlerClass handler_class;
       if (!EventTypeToClass(event_types[i], (*listeners)[count - 1].Options(),
                             &handler_class))
@@ -211,7 +218,7 @@ void EventHandlerRegistry::DidRemoveAllEventHandlers(EventTarget& target) {
   bool handlers_changed[kEventHandlerClassCount];
   bool target_set_changed[kEventHandlerClassCount];
 
-  for (size_t i = 0; i < kEventHandlerClassCount; ++i) {
+  for (int i = 0; i < kEventHandlerClassCount; ++i) {
     EventHandlerClass handler_class = static_cast<EventHandlerClass>(i);
 
     EventTargetSet* targets = &targets_[handler_class];
@@ -221,7 +228,7 @@ void EventHandlerRegistry::DidRemoveAllEventHandlers(EventTarget& target) {
         UpdateEventHandlerInternal(kRemoveAll, handler_class, &target);
   }
 
-  for (size_t i = 0; i < kEventHandlerClassCount; ++i) {
+  for (int i = 0; i < kEventHandlerClassCount; ++i) {
     EventHandlerClass handler_class = static_cast<EventHandlerClass>(i);
     if (handlers_changed[i]) {
       bool has_handlers = targets_[handler_class].Contains(&target);
@@ -248,9 +255,9 @@ void EventHandlerRegistry::NotifyHasHandlersChanged(
     case kWheelEventBlocking:
     case kWheelEventPassive:
       GetPage()->GetChromeClient().SetEventListenerProperties(
-          frame, WebEventListenerClass::kMouseWheel,
-          GetWebEventListenerProperties(HasEventHandlers(kWheelEventBlocking),
-                                        HasEventHandlers(kWheelEventPassive)));
+          frame, cc::EventListenerClass::kMouseWheel,
+          GetEventListenerProperties(HasEventHandlers(kWheelEventBlocking),
+                                     HasEventHandlers(kWheelEventPassive)));
       break;
     case kTouchStartOrMoveEventBlockingLowLatency:
       GetPage()->GetChromeClient().SetNeedsLowLatencyInput(frame,
@@ -261,19 +268,25 @@ void EventHandlerRegistry::NotifyHasHandlersChanged(
     case kTouchStartOrMoveEventPassive:
     case kPointerEvent:
       GetPage()->GetChromeClient().SetEventListenerProperties(
-          frame, WebEventListenerClass::kTouchStartOrMove,
-          GetWebEventListenerProperties(
+          frame, cc::EventListenerClass::kTouchStartOrMove,
+          GetEventListenerProperties(
               HasEventHandlers(kTouchAction) ||
                   HasEventHandlers(kTouchStartOrMoveEventBlocking) ||
                   HasEventHandlers(kTouchStartOrMoveEventBlockingLowLatency),
               HasEventHandlers(kTouchStartOrMoveEventPassive) ||
                   HasEventHandlers(kPointerEvent)));
       break;
+    case kPointerRawMoveEvent:
+      GetPage()->GetChromeClient().SetEventListenerProperties(
+          frame, cc::EventListenerClass::kPointerRawMove,
+          GetEventListenerProperties(false,
+                                     HasEventHandlers(kPointerRawMoveEvent)));
+      break;
     case kTouchEndOrCancelEventBlocking:
     case kTouchEndOrCancelEventPassive:
       GetPage()->GetChromeClient().SetEventListenerProperties(
-          frame, WebEventListenerClass::kTouchEndOrCancel,
-          GetWebEventListenerProperties(
+          frame, cc::EventListenerClass::kTouchEndOrCancel,
+          GetEventListenerProperties(
               HasEventHandlers(kTouchEndOrCancelEventBlocking),
               HasEventHandlers(kTouchEndOrCancelEventPassive)));
       break;
@@ -284,6 +297,28 @@ void EventHandlerRegistry::NotifyHasHandlersChanged(
     default:
       NOTREACHED();
       break;
+  }
+
+  if (RuntimeEnabledFeatures::PaintTouchActionRectsEnabled()) {
+    if (handler_class == kTouchStartOrMoveEventBlocking ||
+        handler_class == kTouchStartOrMoveEventBlockingLowLatency) {
+      if (auto* node = target->ToNode()) {
+        if (auto* layout_object = node->GetLayoutObject()) {
+          layout_object->MarkEffectiveWhitelistedTouchActionChanged();
+          auto* continuation = layout_object->VirtualContinuation();
+          while (continuation) {
+            continuation->MarkEffectiveWhitelistedTouchActionChanged();
+            continuation = continuation->VirtualContinuation();
+          }
+        }
+      } else if (auto* dom_window = target->ToLocalDOMWindow()) {
+        // This event handler is on a window. Ensure the layout view is
+        // invalidated because the layout view tracks the window's blocking
+        // touch event rects.
+        if (auto* layout_view = dom_window->GetFrame()->ContentLayoutObject())
+          layout_view->MarkEffectiveWhitelistedTouchActionChanged();
+      }
+    }
   }
 }
 
@@ -309,7 +344,7 @@ void EventHandlerRegistry::Trace(blink::Visitor* visitor) {
 
 void EventHandlerRegistry::ClearWeakMembers(Visitor* visitor) {
   Vector<UntracedMember<EventTarget>> dead_targets;
-  for (size_t i = 0; i < kEventHandlerClassCount; ++i) {
+  for (int i = 0; i < kEventHandlerClassCount; ++i) {
     EventHandlerClass handler_class = static_cast<EventHandlerClass>(i);
     const EventTargetSet* targets = &targets_[handler_class];
     for (const auto& event_target : *targets) {
@@ -322,13 +357,13 @@ void EventHandlerRegistry::ClearWeakMembers(Visitor* visitor) {
       }
     }
   }
-  for (size_t i = 0; i < dead_targets.size(); ++i)
+  for (wtf_size_t i = 0; i < dead_targets.size(); ++i)
     DidRemoveAllEventHandlers(*dead_targets[i]);
 }
 
 void EventHandlerRegistry::DocumentDetached(Document& document) {
   // Remove all event targets under the detached document.
-  for (size_t handler_class_index = 0;
+  for (int handler_class_index = 0;
        handler_class_index < kEventHandlerClassCount; ++handler_class_index) {
     EventHandlerClass handler_class =
         static_cast<EventHandlerClass>(handler_class_index);
@@ -351,7 +386,7 @@ void EventHandlerRegistry::DocumentDetached(Document& document) {
         NOTREACHED();
       }
     }
-    for (size_t i = 0; i < targets_to_remove.size(); ++i)
+    for (wtf_size_t i = 0; i < targets_to_remove.size(); ++i)
       UpdateEventHandlerInternal(kRemoveAll, handler_class,
                                  targets_to_remove[i]);
   }

@@ -10,25 +10,25 @@
 
 #include "rtc_base/openssladapter.h"
 
-#if defined(WEBRTC_POSIX)
-#include <unistd.h>
-#endif
+#include <errno.h>
 
 #include <openssl/bio.h>
-#include <openssl/crypto.h>
 #include <openssl/err.h>
-#include <openssl/opensslv.h>
 #include <openssl/rand.h>
 #include <openssl/x509.h>
-#include <openssl/x509v3.h>
 #include "rtc_base/openssl.h"
 
+#include <string.h>
+#include <time.h>
+
+#include "absl/memory/memory.h"
 #include "rtc_base/checks.h"
+#include "rtc_base/location.h"
 #include "rtc_base/logging.h"
 #include "rtc_base/numerics/safe_conversions.h"
+#include "rtc_base/opensslcertificate.h"
 #include "rtc_base/opensslutility.h"
 #include "rtc_base/stringencode.h"
-#include "rtc_base/stringutils.h"
 #include "rtc_base/thread.h"
 
 #ifndef OPENSSL_IS_BORINGSSL
@@ -36,21 +36,21 @@
 // TODO(benwright): Use a nicer abstraction for mutex.
 
 #if defined(WEBRTC_WIN)
-  #define MUTEX_TYPE HANDLE
+#define MUTEX_TYPE HANDLE
 #define MUTEX_SETUP(x) (x) = CreateMutex(nullptr, FALSE, nullptr)
 #define MUTEX_CLEANUP(x) CloseHandle(x)
 #define MUTEX_LOCK(x) WaitForSingleObject((x), INFINITE)
 #define MUTEX_UNLOCK(x) ReleaseMutex(x)
 #define THREAD_ID GetCurrentThreadId()
 #elif defined(WEBRTC_POSIX)
-  #define MUTEX_TYPE pthread_mutex_t
-  #define MUTEX_SETUP(x) pthread_mutex_init(&(x), nullptr)
-  #define MUTEX_CLEANUP(x) pthread_mutex_destroy(&(x))
-  #define MUTEX_LOCK(x) pthread_mutex_lock(&(x))
-  #define MUTEX_UNLOCK(x) pthread_mutex_unlock(&(x))
-  #define THREAD_ID pthread_self()
+#define MUTEX_TYPE pthread_mutex_t
+#define MUTEX_SETUP(x) pthread_mutex_init(&(x), nullptr)
+#define MUTEX_CLEANUP(x) pthread_mutex_destroy(&(x))
+#define MUTEX_LOCK(x) pthread_mutex_lock(&(x))
+#define MUTEX_UNLOCK(x) pthread_mutex_unlock(&(x))
+#define THREAD_ID pthread_self()
 #else
-  #error You must define mutex operations appropriate for your platform!
+#error You must define mutex operations appropriate for your platform!
 #endif
 
 struct CRYPTO_dynlock_value {
@@ -140,20 +140,20 @@ static int socket_puts(BIO* b, const char* str) {
 
 static long socket_ctrl(BIO* b, int cmd, long num, void* ptr) {  // NOLINT
   switch (cmd) {
-  case BIO_CTRL_RESET:
-    return 0;
-  case BIO_CTRL_EOF: {
-    rtc::AsyncSocket* socket = static_cast<rtc::AsyncSocket*>(ptr);
-    // 1 means socket closed.
-    return (socket->GetState() == rtc::AsyncSocket::CS_CLOSED) ? 1 : 0;
-  }
-  case BIO_CTRL_WPENDING:
-  case BIO_CTRL_PENDING:
-    return 0;
-  case BIO_CTRL_FLUSH:
-    return 1;
-  default:
-    return 0;
+    case BIO_CTRL_RESET:
+      return 0;
+    case BIO_CTRL_EOF: {
+      rtc::AsyncSocket* socket = static_cast<rtc::AsyncSocket*>(ptr);
+      // 1 means socket closed.
+      return (socket->GetState() == rtc::AsyncSocket::CS_CLOSED) ? 1 : 0;
+    }
+    case BIO_CTRL_WPENDING:
+    case BIO_CTRL_PENDING:
+      return 0;
+    case BIO_CTRL_FLUSH:
+      return 1;
+    default:
+      return 0;
   }
 }
 
@@ -344,7 +344,7 @@ int OpenSSLAdapter::BeginSSL() {
   // appear Send handles partial writes properly, though maybe we never notice
   // since we never send more than 16KB at once..
   SSL_set_mode(ssl_, SSL_MODE_ENABLE_PARTIAL_WRITE |
-                     SSL_MODE_ACCEPT_MOVING_WRITE_BUFFER);
+                         SSL_MODE_ACCEPT_MOVING_WRITE_BUFFER);
 
   // Enable SNI, if a hostname is supplied.
   if (!ssl_host_name_.empty()) {
@@ -392,15 +392,17 @@ int OpenSSLAdapter::BeginSSL() {
 
   // Do the connect.
   err = ContinueSSL();
-  if (err != 0)
+  if (err != 0) {
     goto ssl_error;
+  }
 
   return err;
 
 ssl_error:
   Cleanup();
-  if (bio)
+  if (bio) {
     BIO_free(bio);
+  }
 
   return err;
 }
@@ -413,45 +415,44 @@ int OpenSSLAdapter::ContinueSSL() {
 
   int code = (role_ == SSL_CLIENT) ? SSL_connect(ssl_) : SSL_accept(ssl_);
   switch (SSL_get_error(ssl_, code)) {
-  case SSL_ERROR_NONE:
-    if (!SSLPostConnectionCheck(ssl_, ssl_host_name_)) {
-      RTC_LOG(LS_ERROR) << "TLS post connection check failed";
-      // make sure we close the socket
-      Cleanup();
-      // The connect failed so return -1 to shut down the socket
-      return -1;
-    }
+    case SSL_ERROR_NONE:
+      if (!SSLPostConnectionCheck(ssl_, ssl_host_name_)) {
+        RTC_LOG(LS_ERROR) << "TLS post connection check failed";
+        // make sure we close the socket
+        Cleanup();
+        // The connect failed so return -1 to shut down the socket
+        return -1;
+      }
 
-    state_ = SSL_CONNECTED;
-    AsyncSocketAdapter::OnConnectEvent(this);
-#if 0  // TODO(benwright): worry about this
-    // Don't let ourselves go away during the callbacks
-    PRefPtr<OpenSSLAdapter> lock(this);
-    RTC_LOG(LS_INFO) << " -- onStreamReadable";
-    AsyncSocketAdapter::OnReadEvent(this);
-    RTC_LOG(LS_INFO) << " -- onStreamWriteable";
-    AsyncSocketAdapter::OnWriteEvent(this);
-#endif
-    break;
+      state_ = SSL_CONNECTED;
+      AsyncSocketAdapter::OnConnectEvent(this);
+      // TODO(benwright): Refactor this code path.
+      // Don't let ourselves go away during the callbacks
+      // PRefPtr<OpenSSLAdapter> lock(this);
+      // RTC_LOG(LS_INFO) << " -- onStreamReadable";
+      // AsyncSocketAdapter::OnReadEvent(this);
+      // RTC_LOG(LS_INFO) << " -- onStreamWriteable";
+      // AsyncSocketAdapter::OnWriteEvent(this);
+      break;
 
-  case SSL_ERROR_WANT_READ:
-    RTC_LOG(LS_VERBOSE) << " -- error want read";
-    struct timeval timeout;
-    if (DTLSv1_get_timeout(ssl_, &timeout)) {
-      int delay = timeout.tv_sec * 1000 + timeout.tv_usec/1000;
+    case SSL_ERROR_WANT_READ:
+      RTC_LOG(LS_VERBOSE) << " -- error want read";
+      struct timeval timeout;
+      if (DTLSv1_get_timeout(ssl_, &timeout)) {
+        int delay = timeout.tv_sec * 1000 + timeout.tv_usec / 1000;
 
-      Thread::Current()->PostDelayed(RTC_FROM_HERE, delay, this, MSG_TIMEOUT,
-                                     0);
-    }
-    break;
+        Thread::Current()->PostDelayed(RTC_FROM_HERE, delay, this, MSG_TIMEOUT,
+                                       0);
+      }
+      break;
 
-  case SSL_ERROR_WANT_WRITE:
-    break;
+    case SSL_ERROR_WANT_WRITE:
+      break;
 
-  case SSL_ERROR_ZERO_RETURN:
-  default:
-    RTC_LOG(LS_WARNING) << "ContinueSSL -- error " << code;
-    return (code != 0) ? code : -1;
+    case SSL_ERROR_ZERO_RETURN:
+    default:
+      RTC_LOG(LS_WARNING) << "ContinueSSL -- error " << code;
+      return (code != 0) ? code : -1;
   }
 
   return 0;
@@ -462,8 +463,9 @@ void OpenSSLAdapter::Error(const char* context, int err, bool signal) {
                       << ")";
   state_ = SSL_ERROR;
   SetError(err);
-  if (signal)
+  if (signal) {
     AsyncSocketAdapter::OnCloseEvent(this, err);
+  }
 }
 
 void OpenSSLAdapter::Cleanup() {
@@ -528,26 +530,23 @@ int OpenSSLAdapter::DoSslWrite(const void* pv, size_t cb, int* error) {
   return SOCKET_ERROR;
 }
 
-//
+///////////////////////////////////////////////////////////////////////////////
 // AsyncSocket Implementation
-//
+///////////////////////////////////////////////////////////////////////////////
 
 int OpenSSLAdapter::Send(const void* pv, size_t cb) {
   switch (state_) {
-  case SSL_NONE:
-    return AsyncSocketAdapter::Send(pv, cb);
-
-  case SSL_WAIT:
-  case SSL_CONNECTING:
-    SetError(ENOTCONN);
-    return SOCKET_ERROR;
-
-  case SSL_CONNECTED:
-    break;
-
-  case SSL_ERROR:
-  default:
-    return SOCKET_ERROR;
+    case SSL_NONE:
+      return AsyncSocketAdapter::Send(pv, cb);
+    case SSL_WAIT:
+    case SSL_CONNECTING:
+      SetError(ENOTCONN);
+      return SOCKET_ERROR;
+    case SSL_CONNECTED:
+      break;
+    case SSL_ERROR:
+    default:
+      return SOCKET_ERROR;
   }
 
   int ret;
@@ -567,8 +566,9 @@ int OpenSSLAdapter::Send(const void* pv, size_t cb) {
   }
 
   // OpenSSL will return an error if we try to write zero bytes
-  if (cb == 0)
+  if (cb == 0) {
     return 0;
+  }
 
   ret = DoSslWrite(pv, cb, &error);
 
@@ -595,7 +595,6 @@ int OpenSSLAdapter::Send(const void* pv, size_t cb) {
     // size. The user of this class can consider it sent.
     return rtc::dchecked_cast<int>(cb);
   }
-
   return ret;
 }
 
@@ -608,36 +607,33 @@ int OpenSSLAdapter::SendTo(const void* pv,
   }
 
   SetError(ENOTCONN);
-
   return SOCKET_ERROR;
 }
 
 int OpenSSLAdapter::Recv(void* pv, size_t cb, int64_t* timestamp) {
   switch (state_) {
-  case SSL_NONE:
-    return AsyncSocketAdapter::Recv(pv, cb, timestamp);
-
-  case SSL_WAIT:
-  case SSL_CONNECTING:
-    SetError(ENOTCONN);
-    return SOCKET_ERROR;
-
-  case SSL_CONNECTED:
-    break;
-
-  case SSL_ERROR:
-  default:
-    return SOCKET_ERROR;
+    case SSL_NONE:
+      return AsyncSocketAdapter::Recv(pv, cb, timestamp);
+    case SSL_WAIT:
+    case SSL_CONNECTING:
+      SetError(ENOTCONN);
+      return SOCKET_ERROR;
+    case SSL_CONNECTED:
+      break;
+    case SSL_ERROR:
+    default:
+      return SOCKET_ERROR;
   }
 
   // Don't trust OpenSSL with zero byte reads
-  if (cb == 0)
+  if (cb == 0) {
     return 0;
+  }
 
   ssl_read_needs_write_ = false;
-
   int code = SSL_read(ssl_, pv, checked_cast<int>(cb));
   int error = SSL_get_error(ssl_, code);
+
   switch (error) {
     case SSL_ERROR_NONE:
       return code;
@@ -660,7 +656,6 @@ int OpenSSLAdapter::Recv(void* pv, size_t cb, int64_t* timestamp) {
       Error("SSL_read", (code ? code : -1), false);
       break;
   }
-
   return SOCKET_ERROR;
 }
 
@@ -670,14 +665,11 @@ int OpenSSLAdapter::RecvFrom(void* pv,
                              int64_t* timestamp) {
   if (socket_->GetState() == Socket::CS_CONNECTED) {
     int ret = Recv(pv, cb, timestamp);
-
     *paddr = GetRemoteAddress();
-
     return ret;
   }
 
   SetError(ENOTCONN);
-
   return SOCKET_ERROR;
 }
 
@@ -688,12 +680,11 @@ int OpenSSLAdapter::Close() {
 }
 
 Socket::ConnState OpenSSLAdapter::GetState() const {
-  // if (signal_close_)
-  //  return CS_CONNECTED;
   ConnState state = socket_->GetState();
-  if ((state == CS_CONNECTED)
-      && ((state_ == SSL_WAIT) || (state_ == SSL_CONNECTING)))
+  if ((state == CS_CONNECTED) &&
+      ((state_ == SSL_WAIT) || (state_ == SSL_CONNECTING))) {
     state = CS_CONNECTING;
+  }
   return state;
 }
 
@@ -736,12 +727,13 @@ void OpenSSLAdapter::OnReadEvent(AsyncSocket* socket) {
     return;
   }
 
-  if (state_ != SSL_CONNECTED)
+  if (state_ != SSL_CONNECTED) {
     return;
+  }
 
   // Don't let ourselves go away during the callbacks
   // PRefPtr<OpenSSLAdapter> lock(this); // TODO(benwright): fix this
-  if (ssl_write_needs_read_)  {
+  if (ssl_write_needs_read_) {
     AsyncSocketAdapter::OnWriteEvent(socket);
   }
 
@@ -761,13 +753,14 @@ void OpenSSLAdapter::OnWriteEvent(AsyncSocket* socket) {
     return;
   }
 
-  if (state_ != SSL_CONNECTED)
+  if (state_ != SSL_CONNECTED) {
     return;
+  }
 
   // Don't let ourselves go away during the callbacks
   // PRefPtr<OpenSSLAdapter> lock(this); // TODO(benwright): fix this
 
-  if (ssl_read_needs_write_)  {
+  if (ssl_read_needs_write_) {
     AsyncSocketAdapter::OnReadEvent(socket);
   }
 
@@ -852,11 +845,10 @@ int OpenSSLAdapter::SSLVerifyCallback(int ok, X509_STORE_CTX* store) {
 #endif
   // Get our stream pointer from the store
   SSL* ssl = reinterpret_cast<SSL*>(
-                X509_STORE_CTX_get_ex_data(store,
-                  SSL_get_ex_data_X509_STORE_CTX_idx()));
+      X509_STORE_CTX_get_ex_data(store, SSL_get_ex_data_X509_STORE_CTX_idx()));
 
   OpenSSLAdapter* stream =
-    reinterpret_cast<OpenSSLAdapter*>(SSL_get_app_data(ssl));
+      reinterpret_cast<OpenSSLAdapter*>(SSL_get_app_data(ssl));
 
   if (!ok && stream->ssl_cert_verifier_ != nullptr) {
     RTC_LOG(LS_INFO) << "Invoking SSL Verify Callback.";
@@ -908,14 +900,14 @@ SSL_CTX* OpenSSLAdapter::CreateContext(SSLMode mode, bool enable_cache) {
     return nullptr;
   }
 
-#ifndef WEBRTC_DISABLE_BUILT_IN_SSL_ROOT_CERTIFICATES
+#ifndef WEBRTC_EXCLUDE_BUILT_IN_SSL_ROOT_CERTS
   if (!openssl::LoadBuiltinSSLRootCertificates(ctx)) {
     RTC_LOG(LS_ERROR) << "SSL_CTX creation failed: Failed to load any trusted "
                          "ssl root certificates.";
     SSL_CTX_free(ctx);
     return nullptr;
   }
-#endif  // WEBRTC_DISABLE_BUILT_IN_SSL_ROOT_CERTIFICATES
+#endif  // WEBRTC_EXCLUDE_BUILT_IN_SSL_ROOT_CERTS
 
 #if !defined(NDEBUG)
   SSL_CTX_set_info_callback(ctx, SSLInfoCallback);
@@ -989,7 +981,8 @@ OpenSSLAdapter* OpenSSLAdapterFactory::CreateAdapter(AsyncSocket* socket) {
       return nullptr;
     }
     // The OpenSSLSessionCache will upref the ssl_ctx.
-    ssl_session_cache_ = MakeUnique<OpenSSLSessionCache>(ssl_mode_, ssl_ctx);
+    ssl_session_cache_ =
+        absl::make_unique<OpenSSLSessionCache>(ssl_mode_, ssl_ctx);
     SSL_CTX_free(ssl_ctx);
   }
   return new OpenSSLAdapter(socket, ssl_session_cache_.get(),

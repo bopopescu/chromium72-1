@@ -2,13 +2,13 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifndef NET_PROXY_DHCP_PAC_FILE_FETCHER_H_
-#define NET_PROXY_DHCP_PAC_FILE_FETCHER_H_
+#ifndef NET_PROXY_RESOLUTION_DHCP_PAC_FILE_FETCHER_H_
+#define NET_PROXY_RESOLUTION_DHCP_PAC_FILE_FETCHER_H_
 
 #include "base/compiler_specific.h"
 #include "base/macros.h"
 #include "base/strings/string16.h"
-#include "net/base/completion_callback.h"
+#include "net/base/completion_once_callback.h"
 #include "net/base/net_export.h"
 #include "net/proxy_resolution/pac_file_fetcher.h"
 #include "net/traffic_annotation/network_traffic_annotation.h"
@@ -60,7 +60,7 @@ class NET_EXPORT_PRIVATE DhcpPacFileFetcher {
   //
   // Only one fetch is allowed to be outstanding at a time.
   virtual int Fetch(base::string16* utf16_text,
-                    const CompletionCallback& callback,
+                    CompletionOnceCallback callback,
                     const NetLogWithSource& net_log,
                     const NetworkTrafficAnnotationTag traffic_annotation) = 0;
 
@@ -96,7 +96,7 @@ class NET_EXPORT_PRIVATE DoNothingDhcpPacFileFetcher
   ~DoNothingDhcpPacFileFetcher() override;
 
   int Fetch(base::string16* utf16_text,
-            const CompletionCallback& callback,
+            CompletionOnceCallback callback,
             const NetLogWithSource& net_log,
             const NetworkTrafficAnnotationTag traffic_annotation) override;
   void Cancel() override;
@@ -111,4 +111,4 @@ class NET_EXPORT_PRIVATE DoNothingDhcpPacFileFetcher
 
 }  // namespace net
 
-#endif  // NET_PROXY_DHCP_PAC_FILE_FETCHER_H_
+#endif  // NET_PROXY_RESOLUTION_DHCP_PAC_FILE_FETCHER_H_

@@ -4,6 +4,7 @@
 
 #include "ui/views/widget/desktop_aura/desktop_screen_ozone.h"
 
+#include "ui/aura/screen_ozone.h"
 #include "ui/display/display.h"
 #include "ui/display/types/display_constants.h"
 #include "ui/display/types/display_snapshot.h"
@@ -11,14 +12,6 @@
 #include "ui/gfx/geometry/dip_util.h"
 #include "ui/ozone/public/ozone_platform.h"
 #include "ui/views/widget/desktop_aura/desktop_screen.h"
-
-#if defined(USE_OZONE) && defined(OZONE_PLATFORM_WAYLAND_EXTERNAL)
-#include "base/command_line.h"
-#include "ui/gfx/switches.h"
-#include "ui/views/widget/desktop_aura/desktop_screen_headless.h"
-#include "ui/views/widget/desktop_aura/desktop_screen.h"
-#include "ui/views/widget/desktop_aura/desktop_factory_ozone.h"
-#endif
 
 namespace views {
 
@@ -62,18 +55,17 @@ void DesktopScreenOzone::OnDisplaySnapshotsInvalidated() {}
 
 //////////////////////////////////////////////////////////////////////////////
 
-#if defined(USE_OZONE) && defined(OZONE_PLATFORM_WAYLAND_EXTERNAL)
 display::Screen* CreateDesktopScreen() {
-  base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
-  if (command_line->HasSwitch(switches::kHeadless))
-    return new views::DesktopScreenHeadless;
-
-  return DesktopFactoryOzone::GetInstance()->CreateDesktopScreen();
+  auto platform_screen = ui::OzonePlatform::GetInstance()->CreateScreen();
+  if (!platform_screen) {
+    // TODO: At the moment, only the Ozone/Headless uses this patch. Fix it:
+    // https://crbug.com/891613
+    LOG(ERROR) << "PlatformScreen is not implemented for this ozone platform. "
+                  "Falling back to old DesktopScreenOzone implementation. See "
+                  "https://crbug.com/872339 for details";
+    return new DesktopScreenOzone;
+  }
+  return new aura::ScreenOzone(std::move(platform_screen));
 }
-#else
-display::Screen* CreateDesktopScreen() {
-  return new DesktopScreenOzone;
-}
-#endif
 
 }  // namespace views

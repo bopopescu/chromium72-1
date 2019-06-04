@@ -5,16 +5,17 @@
 #ifndef NET_THIRD_PARTY_QUIC_TOOLS_QUIC_SIMPLE_CLIENT_STREAM_H_
 #define NET_THIRD_PARTY_QUIC_TOOLS_QUIC_SIMPLE_CLIENT_STREAM_H_
 
-#include "net/third_party/quic/core/quic_spdy_client_stream.h"
+#include "net/third_party/quic/core/http/quic_spdy_client_stream.h"
 
-namespace net {
+namespace quic {
 
 class QuicSimpleClientStream : public QuicSpdyClientStream {
  public:
   QuicSimpleClientStream(QuicStreamId id,
                          QuicSpdyClientSession* session,
+                         StreamType type,
                          bool drop_response_body)
-      : QuicSpdyClientStream(id, session),
+      : QuicSpdyClientStream(id, session, type),
         drop_response_body_(drop_response_body) {}
 
   void OnDataAvailable() override;
@@ -23,6 +24,6 @@ class QuicSimpleClientStream : public QuicSpdyClientStream {
   const bool drop_response_body_;
 };
 
-}  // namespace net
+}  // namespace quic
 
 #endif  // NET_THIRD_PARTY_QUIC_TOOLS_QUIC_SIMPLE_CLIENT_STREAM_H_

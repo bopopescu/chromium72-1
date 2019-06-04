@@ -9,10 +9,8 @@
 #include "base/command_line.h"
 #include "base/time/time.h"
 #include "build/build_config.h"
-#include "chrome/browser/ui/exclusive_access/exclusive_access_context.h"
-#include "chrome/browser/ui/exclusive_access/exclusive_access_manager.h"
 #include "chrome/browser/ui/views/exclusive_access_bubble_views.h"
-#include "chrome/browser/ui/views/exclusive_access_bubble_views_context.h"
+#include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/fullscreen_control/fullscreen_control_view.h"
 #include "chrome/common/channel_info.h"
 #include "chrome/common/chrome_features.h"
@@ -23,6 +21,7 @@
 #include "ui/events/event_constants.h"
 #include "ui/events/keycodes/keyboard_codes.h"
 #include "ui/gfx/geometry/rect.h"
+#include "ui/views/event_monitor.h"
 #include "ui/views/view.h"
 
 namespace {
@@ -57,7 +56,8 @@ constexpr float kExitHeightScaleFactor = 1.5f;
 constexpr float kShowFullscreenExitControlHeight = 3.f;
 
 // Time to wait to hide the popup after it is triggered.
-constexpr base::TimeDelta kPopupTimeout = base::TimeDelta::FromSeconds(3);
+constexpr base::TimeDelta kMousePopupTimeout = base::TimeDelta::FromSeconds(3);
+constexpr base::TimeDelta kTouchPopupTimeout = base::TimeDelta::FromSeconds(10);
 
 // Time to wait before showing the popup when the escape key is held.
 constexpr base::TimeDelta kKeyPressPopupDelay = base::TimeDelta::FromSeconds(1);
@@ -77,11 +77,15 @@ bool IsExitUiEnabled() {
 
 }  // namespace
 
-FullscreenControlHost::FullscreenControlHost(
-    ExclusiveAccessContext* exclusive_access_context,
-    ExclusiveAccessBubbleViewsContext* bubble_views_context)
-    : exclusive_access_context_(exclusive_access_context),
-      bubble_views_context_(bubble_views_context) {}
+FullscreenControlHost::FullscreenControlHost(BrowserView* browser_view)
+    : browser_view_(browser_view) {
+  if (IsFullscreenExitUIEnabled()) {
+    event_monitor_ = views::EventMonitor::CreateWindowMonitor(
+        this, browser_view->GetNativeWindow(),
+        {ui::ET_MOUSE_MOVED, ui::ET_KEY_PRESSED, ui::ET_KEY_RELEASED,
+         ui::ET_TOUCH_PRESSED, ui::ET_GESTURE_LONG_PRESS});
+  }
+}
 
 FullscreenControlHost::~FullscreenControlHost() = default;
 
@@ -96,15 +100,26 @@ bool FullscreenControlHost::IsFullscreenExitUIEnabled() {
          IsExitUiEnabled();
 }
 
-void FullscreenControlHost::OnKeyEvent(ui::KeyEvent* event) {
-  if (event->key_code() != ui::VKEY_ESCAPE ||
+void FullscreenControlHost::OnEvent(const ui::Event& event) {
+  if (event.IsKeyEvent())
+    OnKeyEvent(*event.AsKeyEvent());
+  else if (event.IsMouseEvent())
+    OnMouseEvent(*event.AsMouseEvent());
+  else if (event.IsTouchEvent())
+    OnTouchEvent(*event.AsTouchEvent());
+  else if (event.IsGestureEvent())
+    OnGestureEvent(*event.AsGestureEvent());
+}
+
+void FullscreenControlHost::OnKeyEvent(const ui::KeyEvent& event) {
+  if (event.key_code() != ui::VKEY_ESCAPE ||
       (input_entry_method_ != InputEntryMethod::NOT_ACTIVE &&
        input_entry_method_ != InputEntryMethod::KEYBOARD)) {
     return;
   }
 
   ExclusiveAccessManager* const exclusive_access_manager =
-      bubble_views_context_->GetExclusiveAccessManager();
+      browser_view_->browser()->exclusive_access_manager();
 
   // FullscreenControlHost UI is not needed for the keyboard input method in any
   // fullscreen mode except for tab-initiated fullscreen (and only when the user
@@ -131,7 +146,7 @@ void FullscreenControlHost::OnKeyEvent(ui::KeyEvent* event) {
   // Note: This logic handles the UI feedback element used when holding down the
   // esc key, however the logic for exiting fullscreen is handled by the
   // KeyboardLockController class.
-  if (event->type() == ui::ET_KEY_PRESSED &&
+  if (event.type() == ui::ET_KEY_PRESSED &&
       !key_press_delay_timer_.IsRunning() &&
       exclusive_access_manager->keyboard_lock_controller()
           ->RequiresPressAndHoldEscToExit()) {
@@ -139,18 +154,18 @@ void FullscreenControlHost::OnKeyEvent(ui::KeyEvent* event) {
         FROM_HERE, kKeyPressPopupDelay,
         base::Bind(&FullscreenControlHost::ShowForInputEntryMethod,
                    base::Unretained(this), InputEntryMethod::KEYBOARD));
-  } else if (event->type() == ui::ET_KEY_RELEASED) {
+  } else if (event.type() == ui::ET_KEY_RELEASED) {
     key_press_delay_timer_.Stop();
     if (IsVisible() && input_entry_method_ == InputEntryMethod::KEYBOARD)
       Hide(true);
   }
 }
 
-void FullscreenControlHost::OnMouseEvent(ui::MouseEvent* event) {
+void FullscreenControlHost::OnMouseEvent(const ui::MouseEvent& event) {
   if (!IsExitUiEnabled())
     return;
 
-  if (event->type() != ui::ET_MOUSE_MOVED || IsAnimating() ||
+  if (event.type() != ui::ET_MOUSE_MOVED || IsAnimating() ||
       (input_entry_method_ != InputEntryMethod::NOT_ACTIVE &&
        input_entry_method_ != InputEntryMethod::MOUSE)) {
     return;
@@ -158,16 +173,15 @@ void FullscreenControlHost::OnMouseEvent(ui::MouseEvent* event) {
 
   if (IsExitUiNeeded()) {
     if (IsVisible()) {
-      if (event->y() >= CalculateCursorBufferHeight()) {
+      if (event.y() >= CalculateCursorBufferHeight())
         Hide(true);
-      }
     } else {
       DCHECK_EQ(InputEntryMethod::NOT_ACTIVE, input_entry_method_);
       if (!in_mouse_cooldown_mode_ &&
-          event->y() <= kShowFullscreenExitControlHeight) {
+          event.y() <= kShowFullscreenExitControlHeight) {
         ShowForInputEntryMethod(InputEntryMethod::MOUSE);
       } else if (in_mouse_cooldown_mode_ &&
-                 event->y() >= CalculateCursorBufferHeight()) {
+                 event.y() >= CalculateCursorBufferHeight()) {
         in_mouse_cooldown_mode_ = false;
       }
     }
@@ -176,33 +190,30 @@ void FullscreenControlHost::OnMouseEvent(ui::MouseEvent* event) {
   }
 }
 
-void FullscreenControlHost::OnTouchEvent(ui::TouchEvent* event) {
+void FullscreenControlHost::OnTouchEvent(const ui::TouchEvent& event) {
   if (input_entry_method_ != InputEntryMethod::TOUCH)
     return;
 
   DCHECK(IsVisible());
 
-  // Hide the popup if the popup is showing and the user touches outside of the
-  // popup.
-  if (event->type() == ui::ET_TOUCH_PRESSED && !IsAnimating()) {
+  // Hide the popup if it is showing and the user touches outside of the popup.
+  if (event.type() == ui::ET_TOUCH_PRESSED && !IsAnimating())
     Hide(true);
-  }
 }
 
-void FullscreenControlHost::OnGestureEvent(ui::GestureEvent* event) {
+void FullscreenControlHost::OnGestureEvent(const ui::GestureEvent& event) {
   if (!IsExitUiEnabled())
     return;
 
-  if (event->type() == ui::ET_GESTURE_LONG_PRESS && IsExitUiNeeded() &&
+  if (event.type() == ui::ET_GESTURE_LONG_PRESS && IsExitUiNeeded() &&
       !IsVisible()) {
     ShowForInputEntryMethod(InputEntryMethod::TOUCH);
   }
 }
 
 void FullscreenControlHost::Hide(bool animate) {
-  if (IsPopupCreated()) {
+  if (IsPopupCreated())
     GetPopup()->Hide(animate);
-  }
 }
 
 bool FullscreenControlHost::IsVisible() const {
@@ -212,9 +223,9 @@ bool FullscreenControlHost::IsVisible() const {
 FullscreenControlPopup* FullscreenControlHost::GetPopup() {
   if (!IsPopupCreated()) {
     fullscreen_control_popup_ = std::make_unique<FullscreenControlPopup>(
-        bubble_views_context_->GetBubbleParentView(),
-        base::BindRepeating(&ExclusiveAccessContext::ExitFullscreen,
-                            base::Unretained(exclusive_access_context_)),
+        browser_view_->GetBubbleParentView(),
+        base::BindRepeating(&BrowserView::ExitFullscreen,
+                            base::Unretained(browser_view_)),
         base::BindRepeating(&FullscreenControlHost::OnVisibilityChanged,
                             base::Unretained(this)));
   }
@@ -232,10 +243,10 @@ bool FullscreenControlHost::IsAnimating() const {
 void FullscreenControlHost::ShowForInputEntryMethod(
     InputEntryMethod input_entry_method) {
   input_entry_method_ = input_entry_method;
-  auto* bubble = exclusive_access_context_->GetExclusiveAccessBubble();
+  auto* bubble = browser_view_->exclusive_access_bubble();
   if (bubble)
     bubble->HideImmediately();
-  GetPopup()->Show(bubble_views_context_->GetClientAreaBoundsInScreen());
+  GetPopup()->Show(browser_view_->GetClientAreaBoundsInScreen());
 
   // Exit cooldown mode in case the exit UI is triggered by a different method.
   in_mouse_cooldown_mode_ = false;
@@ -246,7 +257,9 @@ void FullscreenControlHost::OnVisibilityChanged() {
     input_entry_method_ = InputEntryMethod::NOT_ACTIVE;
     key_press_delay_timer_.Stop();
   } else if (input_entry_method_ == InputEntryMethod::MOUSE) {
-    StartPopupTimeout(InputEntryMethod::MOUSE);
+    StartPopupTimeout(InputEntryMethod::MOUSE, kMousePopupTimeout);
+  } else if (input_entry_method_ == InputEntryMethod::TOUCH) {
+    StartPopupTimeout(InputEntryMethod::TOUCH, kTouchPopupTimeout);
   }
 
   if (on_popup_visibility_changed_)
@@ -254,9 +267,10 @@ void FullscreenControlHost::OnVisibilityChanged() {
 }
 
 void FullscreenControlHost::StartPopupTimeout(
-    InputEntryMethod expected_input_method) {
+    InputEntryMethod expected_input_method,
+    base::TimeDelta timeout) {
   popup_timeout_timer_.Start(
-      FROM_HERE, kPopupTimeout,
+      FROM_HERE, timeout,
       base::BindRepeating(&FullscreenControlHost::OnPopupTimeout,
                           base::Unretained(this), expected_input_method));
 }
@@ -272,14 +286,14 @@ void FullscreenControlHost::OnPopupTimeout(
 }
 
 bool FullscreenControlHost::IsExitUiNeeded() {
-  return exclusive_access_context_->IsFullscreen() &&
-         exclusive_access_context_->ShouldHideUIForFullscreen();
+  return browser_view_->IsFullscreen() &&
+         browser_view_->CanUserExitFullscreen() &&
+         browser_view_->ShouldHideUIForFullscreen();
 }
 
 float FullscreenControlHost::CalculateCursorBufferHeight() const {
-  float control_bottom =
-      FullscreenControlPopup::GetButtonBottomOffset() +
-      bubble_views_context_->GetClientAreaBoundsInScreen().y();
+  float control_bottom = FullscreenControlPopup::GetButtonBottomOffset() +
+                         browser_view_->GetClientAreaBoundsInScreen().y();
   DCHECK_GT(control_bottom, 0);
   return control_bottom * kExitHeightScaleFactor;
 }

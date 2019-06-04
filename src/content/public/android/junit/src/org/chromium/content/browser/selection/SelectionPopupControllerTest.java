@@ -15,6 +15,7 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isA;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.when;
 
 import android.content.ContentResolver;
@@ -24,6 +25,7 @@ import android.provider.Settings;
 import android.view.ActionMode;
 import android.view.ViewGroup;
 
+import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
@@ -36,6 +38,8 @@ import org.robolectric.shadows.ShadowLog;
 
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.base.test.util.Feature;
+import org.chromium.content.browser.ContentClassFactory;
+import org.chromium.content.browser.GestureListenerManagerImpl;
 import org.chromium.content.browser.PopupController;
 import org.chromium.content.browser.RenderCoordinatesImpl;
 import org.chromium.content.browser.webcontents.WebContentsImpl;
@@ -65,6 +69,8 @@ public class SelectionPopupControllerTest {
     private RenderCoordinatesImpl mRenderCoordinates;
     private ContentResolver mContentResolver;
     private PopupController mPopupController;
+    private ContentClassFactory mOriginalContentClassFactory;
+    private GestureListenerManagerImpl mGestureStateListenerManager;
 
     private static final String MOUNTAIN_FULL = "585 Franklin Street, Mountain View, CA 94041";
     private static final String MOUNTAIN = "Mountain";
@@ -134,6 +140,14 @@ public class SelectionPopupControllerTest {
         mRenderCoordinates = Mockito.mock(RenderCoordinatesImpl.class);
         mLogger = Mockito.mock(SmartSelectionMetricsLogger.class);
         mPopupController = Mockito.mock(PopupController.class);
+        mGestureStateListenerManager = Mockito.mock(GestureListenerManagerImpl.class);
+
+        mOriginalContentClassFactory = ContentClassFactory.get();
+        ContentClassFactory mockContentClassFactory = Mockito.mock(ContentClassFactory.class);
+        when(mockContentClassFactory.createHandleObserver(
+                     Mockito.any(SelectionPopupControllerImpl.ReadbackViewCallback.class)))
+                .thenReturn(null);
+        ContentClassFactory.set(mockContentClassFactory);
 
         mContentResolver = RuntimeEnvironment.application.getContentResolver();
         // To let isDeviceProvisioned() call in showSelectionMenu() return true.
@@ -144,8 +158,17 @@ public class SelectionPopupControllerTest {
         when(mWebContents.getRenderCoordinates()).thenReturn(mRenderCoordinates);
         when(mRenderCoordinates.getDeviceScaleFactor()).thenReturn(1.f);
         when(mWebContents.getViewAndroidDelegate()).thenReturn(mViewAndroidDelegate);
-        mController = SelectionPopupControllerImpl.createForTesting(
-                mContext, mWindowAndroid, mWebContents, mPopupController);
+        when(mWebContents.getContext()).thenReturn(mContext);
+        when(mWebContents.getTopLevelNativeWindow()).thenReturn(mWindowAndroid);
+        when(mGestureStateListenerManager.isScrollInProgress()).thenReturn(false);
+
+        mController = SelectionPopupControllerImpl.createForTesting(mWebContents, mPopupController);
+        when(mController.getGestureListenerManager()).thenReturn(mGestureStateListenerManager);
+    }
+
+    @After
+    public void tearDown() throws Exception {
+        ContentClassFactory.set(mOriginalContentClassFactory);
     }
 
     @Test
@@ -505,6 +528,56 @@ public class SelectionPopupControllerTest {
         // Insertion handle drag stopped.
         mController.onSelectionEvent(SelectionEventType.INSERTION_HANDLE_DRAG_STOPPED, 0, 0, 0, 0);
         order.verify(handleObserver).handleDragStopped();
+    }
+
+    @Test
+    @Feature({"TextInput", "HandleHapticFeedback"})
+    public void testInsertionHandleHapticFeedback() {
+        SelectionPopupControllerImpl spyController = Mockito.spy(mController);
+        spyController.onSelectionEvent(SelectionEventType.INSERTION_HANDLE_MOVED, 0, 0, 0, 0);
+        // Any INSERTION_HANDLE_MOVED before INSERTION_HANDLE_DRAG_STARTED should not trigger haptic
+        // feedback.
+        Mockito.verify(spyController, never()).performHapticFeedback();
+
+        spyController.onSelectionEvent(
+                SelectionEventType.INSERTION_HANDLE_DRAG_STARTED, 0, 0, 0, 0);
+        spyController.onSelectionEvent(SelectionEventType.INSERTION_HANDLE_MOVED, 0, 0, 0, 0);
+        spyController.onSelectionEvent(SelectionEventType.INSERTION_HANDLE_MOVED, 0, 0, 0, 0);
+        spyController.onSelectionEvent(
+                SelectionEventType.INSERTION_HANDLE_DRAG_STOPPED, 0, 0, 0, 0);
+
+        // We called twice.
+        Mockito.verify(spyController, times(2)).performHapticFeedback();
+
+        spyController.onSelectionEvent(SelectionEventType.INSERTION_HANDLE_MOVED, 0, 0, 0, 0);
+        // Any INSERTION_HANDLE_MOVED after INSERTION_HANDLE_DRAG_STOPPED should not trigger more
+        // haptic feedback.
+        Mockito.verify(spyController, times(2)).performHapticFeedback();
+    }
+
+    @Test
+    @Feature({"TextInput", "HandleHapticFeedback"})
+    public void testSelectionHandleHapticFeedback() {
+        SelectionPopupControllerImpl spyController = Mockito.spy(mController);
+        spyController.onSelectionEvent(SelectionEventType.SELECTION_HANDLES_MOVED, 0, 0, 0, 0);
+        // Any SELECTION_HANDLES_MOVED before SELECTION_HANDLE_DRAG_STARTED should not trigger
+        // haptic feedback.
+        Mockito.verify(spyController, never()).performHapticFeedback();
+
+        spyController.onSelectionEvent(
+                SelectionEventType.SELECTION_HANDLE_DRAG_STARTED, 0, 0, 0, 0);
+        spyController.onSelectionEvent(SelectionEventType.SELECTION_HANDLES_MOVED, 0, 0, 0, 0);
+        spyController.onSelectionEvent(SelectionEventType.SELECTION_HANDLES_MOVED, 0, 0, 0, 0);
+        spyController.onSelectionEvent(
+                SelectionEventType.SELECTION_HANDLE_DRAG_STOPPED, 0, 0, 0, 0);
+
+        // We called twice.
+        Mockito.verify(spyController, times(2)).performHapticFeedback();
+
+        spyController.onSelectionEvent(SelectionEventType.SELECTION_HANDLES_MOVED, 0, 0, 0, 0);
+        // Any SELECTION_HANDLES_MOVED after SELECTION_HANDLE_DRAG_STOPPED should not trigger more
+        // haptic feedback.
+        Mockito.verify(spyController, times(2)).performHapticFeedback();
     }
 
     // Result generated by long press "Amphitheatre" in "1600 Amphitheatre Parkway".

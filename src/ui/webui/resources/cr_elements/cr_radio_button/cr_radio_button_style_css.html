@@ -1,4 +1,4 @@
-<link rel="import" href="chrome://resources/html/polymer.html">
+<link rel="import" href="../../html/polymer.html">
 
 <link rel="import" href="chrome://resources/polymer/v1_0/paper-styles/color.html">
 <link rel="import" href="../shared_vars_css.html">
@@ -10,6 +10,7 @@
       :host {
         --cr-radio-button-ink-size: 40px;
         --cr-radio-button-size: 16px;
+        --cr-radio-button-unchecked-color: var(--google-grey-refresh-700);
         --cr-radio-button-checked-color: var(--google-blue-600);
 
         --ink-to-circle: calc((var(--cr-radio-button-ink-size) -
@@ -32,8 +33,8 @@
       }
 
       #labelWrapper {
-        -webkit-margin-start: var(--cr-radio-button-label-spacing, 20px);
         flex: 1;
+        margin-inline-start: var(--cr-radio-button-label-spacing, 20px);
 
         @apply --cr-radio-button-label;
       }
@@ -53,6 +54,8 @@
         height: var(--cr-radio-button-size);
         position: relative;
         width: var(--cr-radio-button-size);
+
+        @apply --cr-radio-button-disc;
       }
 
       .disc-border,
@@ -63,7 +66,7 @@
       }
 
       .disc-border {
-        border: 2px solid var(--google-grey-700);
+        border: 2px solid var(--cr-radio-button-unchecked-color);
       }
 
       :host([checked]) .disc-border {
@@ -84,8 +87,8 @@
       }
 
       paper-ripple {
-        --paper-ripple-opacity: 0.1;
-        color: var(--google-grey-900);
+        --paper-ripple-opacity: 0.15;
+        color: var(--google-grey-600);
         height: var(--cr-radio-button-ink-size);
         left: calc(-1 * var(--ink-to-circle));
         pointer-events: none;
@@ -101,6 +104,7 @@
       }
 
       :host([checked]) paper-ripple {
+        --paper-ripple-opacity: 0.2;
         color: var(--google-blue-600);
       }
     </style>

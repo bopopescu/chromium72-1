@@ -24,6 +24,7 @@
 #include "third_party/blink/renderer/platform/histogram.h"
 #include "third_party/blink/renderer/platform/instrumentation/tracing/trace_event.h"
 #include "third_party/blink/renderer/platform/scheduler/public/frame_scheduler.h"
+#include "third_party/blink/renderer/platform/wtf/wtf.h"
 
 namespace blink {
 
@@ -46,7 +47,7 @@ const char PaintTiming::kSupplementName[] = "PaintTiming";
 PaintTiming& PaintTiming::From(Document& document) {
   PaintTiming* timing = Supplement<Document>::From<PaintTiming>(document);
   if (!timing) {
-    timing = new PaintTiming(document);
+    timing = MakeGarbageCollected<PaintTiming>(document);
     ProvideTo(document, timing);
   }
   return *timing;
@@ -156,7 +157,7 @@ void PaintTiming::Trace(blink::Visitor* visitor) {
 
 PaintTiming::PaintTiming(Document& document)
     : Supplement<Document>(document),
-      fmp_detector_(new FirstMeaningfulPaintDetector(this, document)) {}
+      fmp_detector_(MakeGarbageCollected<FirstMeaningfulPaintDetector>(this)) {}
 
 LocalFrame* PaintTiming::GetFrame() const {
   return GetSupplementable()->GetFrame();
@@ -204,6 +205,7 @@ void PaintTiming::RegisterNotifySwapTime(PaintEvent event,
 void PaintTiming::ReportSwapTime(PaintEvent event,
                                  WebLayerTreeView::SwapResult result,
                                  base::TimeTicks timestamp) {
+  DCHECK(IsMainThread());
   // If the swap fails for any reason, we use the timestamp when the SwapPromise
   // was broken. |result| == WebLayerTreeView::SwapResult::kDidNotSwapSwapFails
   // usually means the compositor decided not swap because there was no actual

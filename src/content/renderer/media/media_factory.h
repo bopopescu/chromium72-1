@@ -12,6 +12,7 @@
 #include "media/base/renderer_factory_selector.h"
 #include "media/base/routing_token_callback.h"
 #include "media/blink/url_index.h"
+#include "media/blink/webmediaplayer_params.h"
 #include "media/media_buildflags.h"
 #include "media/mojo/buildflags.h"
 #include "media/mojo/interfaces/remoting.mojom.h"
@@ -45,7 +46,6 @@ class MediaLog;
 class MediaObserver;
 class RemotePlaybackClientWrapper;
 class RendererWebMediaPlayerDelegate;
-class SurfaceManager;
 class WebEncryptedMediaClientImpl;
 #if defined(OS_ANDROID)
 class RendererMediaPlayerManager;
@@ -72,6 +72,13 @@ class RendererMediaPlayerManager;
 // Assist to RenderFrameImpl in creating various media clients.
 class MediaFactory {
  public:
+  // Helper function returning whether VideoSurfaceLayer should be enabled.
+  static blink::WebMediaPlayer::SurfaceLayerMode GetVideoSurfaceLayerMode();
+
+  // Helper function returning whether VideoSurfaceLayer should be enabled for
+  // MediaStreams.
+  static bool VideoSurfaceLayerEnabledForMS();
+
   // Create a MediaFactory to assist the |render_frame| with media tasks.
   // |request_routing_token_cb| bound to |render_frame| IPC functions for
   // obtaining overlay tokens.
@@ -83,6 +90,13 @@ class MediaFactory {
   // factory duties. This should be called by RenderFrameImpl as soon as its own
   // interface provider is bound.
   void SetupMojo();
+
+  // Creates the VideoFrameSubmitter and its task_runner based on the current
+  // SurfaceLayerMode;
+  std::unique_ptr<blink::WebVideoFrameSubmitter> CreateSubmitter(
+      scoped_refptr<base::SingleThreadTaskRunner>*
+          video_frame_compositor_task_runner,
+      const cc::LayerTreeSettings& settings);
 
   // Creates a new WebMediaPlayer for the given |source| (either a stream or
   // URL). All pointers other than |initial_cdm| are required to be non-null.
@@ -120,7 +134,9 @@ class MediaFactory {
       blink::WebMediaPlayerClient* client,
       const blink::WebString& sink_id,
       const blink::WebSecurityOrigin& security_origin,
-      blink::WebLocalFrame* frame);
+      blink::WebLocalFrame* frame,
+      blink::WebLayerTreeView* layer_tree_view,
+      const cc::LayerTreeSettings& settings);
 
   // Returns the media delegate for WebMediaPlayer usage.  If
   // |media_player_delegate_| is NULL, one is created.
@@ -171,10 +187,6 @@ class MediaFactory {
   // (browser side).
   RendererMediaPlayerManager* media_player_manager_ = nullptr;
 #endif
-
-  // Handles requests for SurfaceViews for MediaPlayers.
-  // Lifetime is tied to the RenderFrame via the RenderFrameObserver interface.
-  media::SurfaceManager* media_surface_manager_ = nullptr;
 
   // Manages play, pause notifications for WebMediaPlayer implementations; its
   // lifetime is tied to the RenderFrame via the RenderFrameObserver interface.

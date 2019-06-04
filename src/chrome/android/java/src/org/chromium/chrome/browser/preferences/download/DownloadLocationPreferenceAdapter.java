@@ -14,10 +14,11 @@ import android.view.ViewGroup;
 import android.widget.RadioButton;
 import android.widget.TextView;
 
-import org.chromium.chrome.R;
+import org.chromium.base.metrics.RecordHistogram;
 import org.chromium.chrome.browser.download.DirectoryOption;
 import org.chromium.chrome.browser.download.DownloadUtils;
 import org.chromium.chrome.browser.preferences.PrefServiceBridge;
+import org.chromium.chrome.download.R;
 
 /**
  * Class used to provide data shown in the download location preference in download settings page.
@@ -100,7 +101,8 @@ public class DownloadLocationPreferenceAdapter
         // Update the preference after selected position is updated.
         if (mDelegate != null) mDelegate.onDirectorySelectionChanged();
 
-        option.recordDirectoryOptionType();
+        RecordHistogram.recordEnumeratedHistogram("MobileDownload.Location.Setting.DirectoryType",
+                option.type, DirectoryOption.DownloadLocationDirectoryType.NUM_ENTRIES);
 
         // Refresh the list of download directories UI.
         notifyDataSetChanged();

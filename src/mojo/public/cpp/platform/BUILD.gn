@@ -2,11 +2,12 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
+import("//build/config/nacl/config.gni")
+
 component("platform") {
   output_name = "mojo_cpp_platform"
 
   public = [
-    "named_platform_channel.h",
     "platform_channel.h",
     "platform_channel_endpoint.h",
     "platform_channel_server_endpoint.h",
@@ -14,7 +15,6 @@ component("platform") {
   ]
 
   sources = [
-    "named_platform_channel.cc",
     "named_platform_channel_win.cc",
     "platform_channel.cc",
     "platform_channel_endpoint.cc",
@@ -22,17 +22,30 @@ component("platform") {
     "platform_handle.cc",
   ]
 
+  if (is_posix && (!is_nacl || is_nacl_nonsfi)) {
+    public += [ "socket_utils_posix.h" ]
+    sources += [ "socket_utils_posix.cc" ]
+  }
+
   public_deps = [
     "//base",
+    "//mojo/public/c/system:headers",
   ]
 
-  if (is_posix && (!is_nacl && !is_fuchsia)) {
+  if (is_posix && !is_nacl) {
     sources += [ "named_platform_channel_posix.cc" ]
   }
 
   if (is_fuchsia) {
-    sources += [ "named_platform_channel_fuchsia.cc" ]
-    public_deps += [ "//third_party/fuchsia-sdk:fdio" ]
+    public_deps += [
+      "//third_party/fuchsia-sdk/sdk:fdio",
+      "//third_party/fuchsia-sdk/sdk:zx",
+    ]
+  }
+
+  if (!is_fuchsia) {
+    sources += [ "named_platform_channel.cc" ]
+    public += [ "named_platform_channel.h" ]
   }
 
   defines = [ "IS_MOJO_CPP_PLATFORM_IMPL" ]

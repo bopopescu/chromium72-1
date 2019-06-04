@@ -6,15 +6,15 @@ package org.chromium.chrome.browser.download;
 
 import static android.app.DownloadManager.ACTION_NOTIFICATION_CLICKED;
 
-import static org.chromium.chrome.browser.download.DownloadNotificationService2.ACTION_DOWNLOAD_CANCEL;
-import static org.chromium.chrome.browser.download.DownloadNotificationService2.ACTION_DOWNLOAD_OPEN;
-import static org.chromium.chrome.browser.download.DownloadNotificationService2.ACTION_DOWNLOAD_PAUSE;
-import static org.chromium.chrome.browser.download.DownloadNotificationService2.ACTION_DOWNLOAD_RESUME;
-import static org.chromium.chrome.browser.download.DownloadNotificationService2.EXTRA_DOWNLOAD_CONTENTID_ID;
-import static org.chromium.chrome.browser.download.DownloadNotificationService2.EXTRA_DOWNLOAD_CONTENTID_NAMESPACE;
-import static org.chromium.chrome.browser.download.DownloadNotificationService2.EXTRA_DOWNLOAD_STATE_AT_CANCEL;
-import static org.chromium.chrome.browser.download.DownloadNotificationService2.EXTRA_IS_OFF_THE_RECORD;
-import static org.chromium.chrome.browser.download.DownloadNotificationService2.clearResumptionAttemptLeft;
+import static org.chromium.chrome.browser.download.DownloadNotificationService.ACTION_DOWNLOAD_CANCEL;
+import static org.chromium.chrome.browser.download.DownloadNotificationService.ACTION_DOWNLOAD_OPEN;
+import static org.chromium.chrome.browser.download.DownloadNotificationService.ACTION_DOWNLOAD_PAUSE;
+import static org.chromium.chrome.browser.download.DownloadNotificationService.ACTION_DOWNLOAD_RESUME;
+import static org.chromium.chrome.browser.download.DownloadNotificationService.EXTRA_DOWNLOAD_CONTENTID_ID;
+import static org.chromium.chrome.browser.download.DownloadNotificationService.EXTRA_DOWNLOAD_CONTENTID_NAMESPACE;
+import static org.chromium.chrome.browser.download.DownloadNotificationService.EXTRA_DOWNLOAD_STATE_AT_CANCEL;
+import static org.chromium.chrome.browser.download.DownloadNotificationService.EXTRA_IS_OFF_THE_RECORD;
+import static org.chromium.chrome.browser.download.DownloadNotificationService.clearResumptionAttemptLeft;
 
 import android.app.DownloadManager;
 import android.app.Service;
@@ -31,16 +31,24 @@ import com.google.ipc.invalidation.util.Preconditions;
 import org.chromium.base.ContextUtils;
 import org.chromium.base.Log;
 import org.chromium.base.VisibleForTesting;
+import org.chromium.base.library_loader.LibraryProcessType;
 import org.chromium.base.library_loader.ProcessInitException;
 import org.chromium.chrome.browser.ChromeApplication;
+import org.chromium.chrome.browser.ChromeFeatureList;
+import org.chromium.chrome.browser.download.DownloadNotificationUmaHelper.UmaDownloadResumption;
 import org.chromium.chrome.browser.download.items.OfflineContentAggregatorNotificationBridgeUiFactory;
 import org.chromium.chrome.browser.init.BrowserParts;
 import org.chromium.chrome.browser.init.ChromeBrowserInitializer;
 import org.chromium.chrome.browser.init.EmptyBrowserParts;
+import org.chromium.chrome.browser.init.ServiceManagerStartupUtils;
 import org.chromium.chrome.browser.util.IntentUtils;
 import org.chromium.components.offline_items_collection.ContentId;
 import org.chromium.components.offline_items_collection.LegacyHelpers;
 import org.chromium.components.offline_items_collection.PendingState;
+import org.chromium.content_public.browser.BrowserStartupController;
+
+import java.util.HashSet;
+import java.util.Set;
 
 /**
  * Class that spins up native when an interaction with a notification happens and passes the
@@ -53,8 +61,7 @@ public class DownloadBroadcastManager extends Service {
     private final DownloadSharedPreferenceHelper mDownloadSharedPreferenceHelper =
             DownloadSharedPreferenceHelper.getInstance();
 
-    private final Context mApplicationContext;
-    private final DownloadNotificationService2 mDownloadNotificationService;
+    private final DownloadNotificationService mDownloadNotificationService;
     private final Handler mHandler = new Handler();
     private final Runnable mStopSelfRunnable = new Runnable() {
         @Override
@@ -64,8 +71,7 @@ public class DownloadBroadcastManager extends Service {
     };
 
     public DownloadBroadcastManager() {
-        mApplicationContext = ContextUtils.getApplicationContext();
-        mDownloadNotificationService = DownloadNotificationService2.getInstance();
+        mDownloadNotificationService = DownloadNotificationService.getInstance();
     }
 
     // The service is only explicitly started in the resume case.
@@ -109,9 +115,7 @@ public class DownloadBroadcastManager extends Service {
      * Cancel any download resumption tasks and reset the number of resumption attempts available.
      */
     void cancelQueuedResumptions() {
-        DownloadResumptionScheduler
-                .getDownloadResumptionScheduler(ContextUtils.getApplicationContext())
-                .cancel();
+        DownloadResumptionScheduler.getDownloadResumptionScheduler().cancel();
         // Reset number of attempts left if the action is triggered by user.
         clearResumptionAttemptLeft();
     }
@@ -130,8 +134,8 @@ public class DownloadBroadcastManager extends Service {
         switch (action) {
             case ACTION_DOWNLOAD_PAUSE:
                 mDownloadNotificationService.notifyDownloadPaused(entry.id, entry.fileName, true,
-                        false, entry.isOffTheRecord, entry.isTransient, null, true, false,
-                        PendingState.NOT_PENDING);
+                        false, entry.isOffTheRecord, entry.isTransient, null, null, false, true,
+                        false, PendingState.NOT_PENDING);
                 break;
 
             case ACTION_DOWNLOAD_CANCEL:
@@ -142,7 +146,8 @@ public class DownloadBroadcastManager extends Service {
                 // If user manually resumes a download, update the network type if it
                 // is not metered previously.
                 boolean canDownloadWhileMetered = entry.canDownloadWhileMetered
-                        || DownloadManagerService.isActiveNetworkMetered(mApplicationContext);
+                        || DownloadManagerService.isActiveNetworkMetered(
+                                   ContextUtils.getApplicationContext());
                 // Update the SharedPreference entry.
                 mDownloadSharedPreferenceHelper.addOrReplaceSharedPreferenceEntry(
                         new DownloadSharedPreferenceEntry(entry.id, entry.notificationId,
@@ -151,7 +156,7 @@ public class DownloadBroadcastManager extends Service {
 
                 mDownloadNotificationService.notifyDownloadPending(entry.id, entry.fileName,
                         entry.isOffTheRecord, entry.canDownloadWhileMetered, entry.isTransient,
-                        null, true, PendingState.PENDING_NETWORK);
+                        null, null, false, true, PendingState.PENDING_NETWORK);
                 break;
 
             default:
@@ -171,22 +176,36 @@ public class DownloadBroadcastManager extends Service {
      */
     @VisibleForTesting
     void loadNativeAndPropagateInteraction(final Intent intent) {
+        final boolean browserStarted =
+                BrowserStartupController.get(LibraryProcessType.PROCESS_BROWSER)
+                        .isStartupSuccessfullyCompleted();
         final BrowserParts parts = new EmptyBrowserParts() {
             @Override
             public void finishNativeInitialization() {
                 // Delay the stop of the service by WAIT_TIME_MS after native library is loaded.
                 mHandler.postDelayed(mStopSelfRunnable, WAIT_TIME_MS);
 
-                // Make sure the OfflineContentAggregator bridge is initialized.
-                OfflineContentAggregatorNotificationBridgeUiFactory.instance();
+                if (ACTION_DOWNLOAD_RESUME.equals(intent.getAction())) {
+                    DownloadNotificationUmaHelper.recordDownloadResumptionHistogram(browserStarted
+                                    ? UmaDownloadResumption.BROWSER_RUNNING
+                                    : UmaDownloadResumption.BROWSER_NOT_RUNNING);
+                }
                 propagateInteraction(intent);
+            }
+
+            @Override
+            public boolean startServiceManagerOnly() {
+                Set<String> features = new HashSet<String>();
+                features.add(ChromeFeatureList.SERVICE_MANAGER_FOR_DOWNLOAD);
+                features.add(ChromeFeatureList.NETWORK_SERVICE);
+                return ServiceManagerStartupUtils.canStartServiceManager(features)
+                        && !ACTION_DOWNLOAD_OPEN.equals(intent.getAction());
             }
         };
 
         try {
-            ChromeBrowserInitializer.getInstance(mApplicationContext).handlePreNativeStartup(parts);
-            ChromeBrowserInitializer.getInstance(mApplicationContext)
-                    .handlePostNativeStartup(true, parts);
+            ChromeBrowserInitializer.getInstance().handlePreNativeStartup(parts);
+            ChromeBrowserInitializer.getInstance().handlePostNativeStartup(true, parts);
         } catch (ProcessInitException e) {
             Log.e(TAG, "Unable to load native library.", e);
             ChromeApplication.reportStartupErrorAndExit(e);
@@ -202,7 +221,7 @@ public class DownloadBroadcastManager extends Service {
         // Handle actions that do not require a specific entry or service delegate.
         switch (action) {
             case ACTION_NOTIFICATION_CLICKED:
-                openDownload(mApplicationContext, intent, id);
+                openDownload(ContextUtils.getApplicationContext(), intent, id);
                 return;
 
             case ACTION_DOWNLOAD_OPEN:
@@ -322,16 +341,16 @@ public class DownloadBroadcastManager extends Service {
         }
 
         String downloadFilename = IntentUtils.safeGetStringExtra(
-                intent, DownloadNotificationService2.EXTRA_DOWNLOAD_FILE_PATH);
+                intent, DownloadNotificationService.EXTRA_DOWNLOAD_FILE_PATH);
         boolean isSupportedMimeType = IntentUtils.safeGetBooleanExtra(
-                intent, DownloadNotificationService2.EXTRA_IS_SUPPORTED_MIME_TYPE, false);
+                intent, DownloadNotificationService.EXTRA_IS_SUPPORTED_MIME_TYPE, false);
         boolean isOffTheRecord = IntentUtils.safeGetBooleanExtra(
-                intent, DownloadNotificationService2.EXTRA_IS_OFF_THE_RECORD, false);
+                intent, DownloadNotificationService.EXTRA_IS_OFF_THE_RECORD, false);
         String originalUrl = IntentUtils.safeGetStringExtra(intent, Intent.EXTRA_ORIGINATING_URI);
         String referrer = IntentUtils.safeGetStringExtra(intent, Intent.EXTRA_REFERRER);
         DownloadManagerService.openDownloadedContent(context, downloadFilename, isSupportedMimeType,
                 isOffTheRecord, contentId.id, id, originalUrl, referrer,
-                DownloadMetrics.NOTIFICATION);
+                DownloadMetrics.DownloadOpenSource.NOTIFICATION);
     }
 
     @Nullable

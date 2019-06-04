@@ -6,6 +6,7 @@ package org.chromium.chrome.browser.offlinepages;
 
 import android.app.Activity;
 import android.net.Uri;
+import android.os.Build;
 import android.os.Environment;
 import android.support.test.InstrumentationRegistry;
 import android.support.test.filters.MediumTest;
@@ -19,8 +20,10 @@ import org.junit.Test;
 import org.junit.runner.RunWith;
 
 import org.chromium.base.Callback;
+import org.chromium.base.ContextUtils;
 import org.chromium.base.ThreadUtils;
 import org.chromium.base.test.util.CommandLineFlags;
+import org.chromium.base.test.util.DisableIf;
 import org.chromium.base.test.util.DisabledTest;
 import org.chromium.base.test.util.UrlUtils;
 import org.chromium.chrome.browser.ChromeActivity;
@@ -34,8 +37,8 @@ import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.test.ChromeActivityTestRule;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
 import org.chromium.components.offlinepages.SavePageResult;
-import org.chromium.content.browser.test.util.Criteria;
-import org.chromium.content.browser.test.util.CriteriaHelper;
+import org.chromium.content_public.browser.test.util.Criteria;
+import org.chromium.content_public.browser.test.util.CriteriaHelper;
 import org.chromium.net.ConnectionType;
 import org.chromium.net.NetworkChangeNotifier;
 import org.chromium.net.test.EmbeddedTestServer;
@@ -60,8 +63,13 @@ public class OfflinePageUtilsTest {
             new ClientId(OfflinePageBridge.BOOKMARK_NAMESPACE, "1234");
     private static final ClientId ASYNC_ID =
             new ClientId(OfflinePageBridge.ASYNC_NAMESPACE, "5678");
+    private static final ClientId SUGGESTED_ARTICLES_ID =
+            new ClientId(OfflinePageBridge.SUGGESTED_ARTICLES_NAMESPACE, "90");
     private static final String SHARED_URI = "http://127.0.0.1/chrome/test/data/android/about.html";
     private static final String CONTENT_URI = "content://chromium/some-content-id";
+    private static final String CONTENT_URI_PREFIX = "content://"
+            + ContextUtils.getApplicationContext().getPackageName()
+            + ".FileProvider/offline-cache/";
     private static final String FILE_URI = "file://some-dir/some-file.mhtml";
     private static final String INVALID_URI = "This is not a uri.";
     private static final String EMPTY_URI = "";
@@ -77,7 +85,7 @@ public class OfflinePageUtilsTest {
     private OfflinePageBridge mOfflinePageBridge;
     private EmbeddedTestServer mTestServer;
     private String mTestPage;
-    private boolean mServerTurnedOn = false;
+    private boolean mServerTurnedOn;
 
     @Before
     public void setUp() throws Exception {
@@ -282,6 +290,8 @@ public class OfflinePageUtilsTest {
     @Test
     @MediumTest
     @CommandLineFlags.Add({"enable-features=OfflinePagesSharing"})
+    @DisableIf.Build(
+            message = "https://crbug.com/853255", sdk_is_less_than = Build.VERSION_CODES.LOLLIPOP)
     public void testSharePublicOfflinePage() throws Exception {
         loadOfflinePage(ASYNC_ID);
         final Semaphore semaphore = new Semaphore(0);
@@ -312,7 +322,7 @@ public class OfflinePageUtilsTest {
     @MediumTest
     @CommandLineFlags.Add({"enable-features=OfflinePagesSharing"})
     public void testShareTemporaryOfflinePage() throws Exception {
-        loadOfflinePage(BOOKMARK_ID);
+        loadOfflinePage(SUGGESTED_ARTICLES_ID);
         final Semaphore semaphore = new Semaphore(0);
         final TestShareCallback shareCallback = new TestShareCallback(semaphore);
 
@@ -330,9 +340,7 @@ public class OfflinePageUtilsTest {
         Assert.assertTrue(semaphore.tryAcquire(TIMEOUT_MS, TimeUnit.MILLISECONDS));
         // Assert that URI is what we expected.
         String foundUri = shareCallback.getSharedUri();
-        Uri uri = Uri.parse(foundUri);
-        String uriPath = uri.getPath();
-        Assert.assertEquals(TEST_PAGE, uriPath);
+        Assert.assertTrue(foundUri.startsWith(CONTENT_URI_PREFIX));
     }
 
     // Checks on the UI thread if an offline path corresponds to a sharable file.
@@ -412,6 +420,29 @@ public class OfflinePageUtilsTest {
 
         Assert.assertEquals("http://www.example.com/", offlinePageItem.get().getUrl());
         Assert.assertEquals(1321901946000L, offlinePageItem.get().getCreationTimeMs());
+    }
+
+    @Test
+    @SmallTest
+    public void testInvalidMhtmlMainResourceMimeType() throws Exception {
+        // This gets a file:// URL for an MHTML file with a bad content type.  The MHTML should not
+        // render in the tab.
+        String testUrl = UrlUtils.getTestFileUrl("offline_pages/invalid_main_resource.mhtml");
+        mActivityTestRule.loadUrl(testUrl);
+
+        final AtomicReference<OfflinePageItem> offlinePageItem = new AtomicReference<>();
+        ThreadUtils.runOnUiThreadBlocking(() -> {
+            offlinePageItem.set(OfflinePageUtils.getOfflinePage(
+                    mActivityTestRule.getActivity().getActivityTab()));
+        });
+
+        // The Offline Page Item will be empty because no data can be extracted from the renderer.
+        // Also should not crash.
+        //
+        // Default URL equals the navigated-to URL, should not be |example.com|
+        Assert.assertEquals(testUrl, offlinePageItem.get().getUrl());
+        // Default creation time is 0
+        Assert.assertEquals(0, offlinePageItem.get().getCreationTimeMs());
     }
 
     private void loadPageAndSave(ClientId clientId) throws Exception {

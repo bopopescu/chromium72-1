@@ -22,7 +22,6 @@
 
 #include "third_party/blink/renderer/core/css/css_property_value_set.h"
 #include "third_party/blink/renderer/core/css/css_style_sheet.h"
-#include "third_party/blink/renderer/core/css/css_timing.h"
 #include "third_party/blink/renderer/core/css/parser/css_parser.h"
 #include "third_party/blink/renderer/core/css/style_engine.h"
 #include "third_party/blink/renderer/core/css/style_rule.h"
@@ -109,7 +108,7 @@ StyleSheetContents::StyleSheetContents(const StyleSheetContents& o)
         static_cast<StyleRuleNamespace*>(o.namespace_rules_[i]->Copy());
   }
 
-  // LazyParseCSS: Copying child rules is a strict point for lazy parsing, so
+  // Copying child rules is a strict point for deferred property parsing, so
   // there is no need to copy lazy parsing state here.
   for (unsigned i = 0; i < child_rules_.size(); ++i)
     child_rules_[i] = o.child_rules_[i]->Copy();
@@ -333,9 +332,10 @@ const AtomicString& StyleSheetContents::NamespaceURIFromPrefix(
 void StyleSheetContents::ParseAuthorStyleSheet(
     const CSSStyleSheetResource* cached_style_sheet,
     const SecurityOrigin* security_origin) {
-  TRACE_EVENT1("blink,devtools.timeline", "ParseAuthorStyleSheet", "data",
-               InspectorParseAuthorStyleSheetEvent::Data(cached_style_sheet));
-  double start_time = CurrentTimeTicksInSeconds();
+  TRACE_EVENT1(
+      "blink,devtools.timeline", "ParseAuthorStyleSheet", "data",
+      inspector_parse_author_style_sheet_event::Data(cached_style_sheet));
+  TimeTicks start_time = CurrentTimeTicks();
 
   bool is_same_origin_request =
       security_origin && security_origin->CanRequest(BaseURL());
@@ -361,37 +361,38 @@ void StyleSheetContents::ParseAuthorStyleSheet(
       cached_style_sheet->SheetText(parser_context_, mime_type_check);
 
   const ResourceResponse& response = cached_style_sheet->GetResponse();
-  source_map_url_ = response.HttpHeaderField(HTTPNames::SourceMap);
+  source_map_url_ = response.HttpHeaderField(http_names::kSourceMap);
   if (source_map_url_.IsEmpty()) {
     // Try to get deprecated header.
-    source_map_url_ = response.HttpHeaderField(HTTPNames::X_SourceMap);
+    source_map_url_ = response.HttpHeaderField(http_names::kXSourceMap);
   }
 
   const CSSParserContext* context =
       CSSParserContext::CreateWithStyleSheetContents(ParserContext(), this);
   CSSParser::ParseSheet(context, this, sheet_text,
-                        RuntimeEnabledFeatures::LazyParseCSSEnabled());
+                        CSSDeferPropertyParsing::kYes);
 
   DEFINE_STATIC_LOCAL(CustomCountHistogram, parse_histogram,
                       ("Style.AuthorStyleSheet.ParseTime", 0, 10000000, 50));
-  double parse_duration_seconds = (CurrentTimeTicksInSeconds() - start_time);
-  parse_histogram.Count(parse_duration_seconds * 1000 * 1000);
-  if (Document* document = SingleOwnerDocument()) {
-    CSSTiming::From(*document).RecordAuthorStyleSheetParseTime(
-        parse_duration_seconds);
-  }
+  TimeDelta parse_duration = (CurrentTimeTicks() - start_time);
+  parse_histogram.CountMicroseconds(parse_duration);
 }
 
-void StyleSheetContents::ParseString(const String& sheet_text) {
-  ParseStringAtPosition(sheet_text, TextPosition::MinimumPosition());
+ParseSheetResult StyleSheetContents::ParseString(const String& sheet_text,
+                                                 bool allow_import_rules) {
+  return ParseStringAtPosition(sheet_text, TextPosition::MinimumPosition(),
+                               allow_import_rules);
 }
 
-void StyleSheetContents::ParseStringAtPosition(
+ParseSheetResult StyleSheetContents::ParseStringAtPosition(
     const String& sheet_text,
-    const TextPosition& start_position) {
+    const TextPosition& start_position,
+    bool allow_import_rules) {
   const CSSParserContext* context =
       CSSParserContext::CreateWithStyleSheetContents(ParserContext(), this);
-  CSSParser::ParseSheet(context, this, sheet_text);
+  return CSSParser::ParseSheet(context, this, sheet_text,
+                               CSSDeferPropertyParsing::kNo,
+                               allow_import_rules);
 }
 
 bool StyleSheetContents::IsLoading() const {
@@ -535,6 +536,7 @@ static bool ChildRulesHaveFailedOrCanceledSubresources(
       case StyleRuleBase::kKeyframe:
       case StyleRuleBase::kSupports:
       case StyleRuleBase::kViewport:
+      case StyleRuleBase::kFontFeatureValues:
         break;
     }
   }

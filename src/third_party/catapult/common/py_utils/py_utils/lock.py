@@ -14,19 +14,23 @@ class LockException(Exception):
   pass
 
 
+# pylint: disable=import-error
+# pylint: disable=wrong-import-position
 if os.name == 'nt':
-  import win32con    # pylint: disable=import-error
-  import win32file   # pylint: disable=import-error
-  import pywintypes  # pylint: disable=import-error
+  import win32con
+  import win32file
+  import pywintypes
   LOCK_EX = win32con.LOCKFILE_EXCLUSIVE_LOCK
   LOCK_SH = 0  # the default
   LOCK_NB = win32con.LOCKFILE_FAIL_IMMEDIATELY
   _OVERLAPPED = pywintypes.OVERLAPPED()
 elif os.name == 'posix':
-  import fcntl       # pylint: disable=import-error
+  import fcntl
   LOCK_EX = fcntl.LOCK_EX
   LOCK_SH = fcntl.LOCK_SH
   LOCK_NB = fcntl.LOCK_NB
+# pylint: enable=import-error
+# pylint: enable=wrong-import-position
 
 
 @contextlib.contextmanager
@@ -80,7 +84,7 @@ def _LockImplWin(target_file, flags):
   hfile = win32file._get_osfhandle(target_file.fileno())
   try:
     win32file.LockFileEx(hfile, flags, 0, -0x10000, _OVERLAPPED)
-  except pywintypes.error, exc_value:
+  except pywintypes.error as exc_value:
     if exc_value[0] == 33:
       raise LockException('Error trying acquiring lock of %s: %s' %
                           (target_file.name, exc_value[2]))
@@ -92,7 +96,7 @@ def _UnlockImplWin(target_file):
   hfile = win32file._get_osfhandle(target_file.fileno())
   try:
     win32file.UnlockFileEx(hfile, 0, -0x10000, _OVERLAPPED)
-  except pywintypes.error, exc_value:
+  except pywintypes.error as exc_value:
     if exc_value[0] == 158:
       # error: (158, 'UnlockFileEx', 'The segment is already unlocked.')
       # To match the 'posix' implementation, silently ignore this error
@@ -105,7 +109,7 @@ def _UnlockImplWin(target_file):
 def _LockImplPosix(target_file, flags):
   try:
     fcntl.flock(target_file.fileno(), flags)
-  except IOError, exc_value:
+  except IOError as exc_value:
     if exc_value[0] == 11 or exc_value[0] == 35:
       raise LockException('Error trying acquiring lock of %s: %s' %
                           (target_file.name, exc_value[1]))

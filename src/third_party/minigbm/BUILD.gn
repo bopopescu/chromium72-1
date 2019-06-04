@@ -87,20 +87,19 @@ if (!use_system_minigbm) {
       "src/udl.c",
       "src/vc4.c",
       "src/vgem.c",
-      "src/virtio_dumb.c",
-      "src/virtio_virgl.c",
+      "src/virtio_gpu.c",
     ]
 
     configs -= [ "//build/config/compiler:chromium_code" ]
     configs += [ "//build/config/compiler:no_chromium_code" ]
 
     deps = [
-      "//third_party/libdrm",
+      "//build/config/linux/libdrm",
     ]
     public_configs = [ ":minigbm_config" ]
 
     if (use_exynos_minigbm) {
-      configs += [ "//third_party/libdrm:libdrm_exynos_include_config" ]
+      configs += [ "//build/config/linux/libdrm:libdrm_exynos_include_config" ]
     }
 
     # Clients need this to pick up the shared library correctly.

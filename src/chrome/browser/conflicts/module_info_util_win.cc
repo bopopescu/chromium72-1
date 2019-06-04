@@ -20,8 +20,8 @@
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/win/scoped_handle.h"
+#include "base/win/wincrypt_shim.h"
 #include "chrome/common/safe_browsing/pe_image_reader_win.h"
-#include "crypto/wincrypt_shim.h"
 
 // This must be after wincrypt and wintrust.
 #include <mscat.h>
@@ -250,6 +250,11 @@ void GetCertificateInfo(const base::FilePath& filename,
   certificate_info->type = CertificateType::CERTIFICATE_IN_FILE;
   certificate_info->path = filename;
   certificate_info->subject = subject;
+}
+
+bool IsMicrosoftModule(base::StringPiece16 subject) {
+  static constexpr wchar_t kMicrosoft[] = L"Microsoft ";
+  return subject.starts_with(kMicrosoft);
 }
 
 StringMapping GetEnvironmentVariablesMapping(

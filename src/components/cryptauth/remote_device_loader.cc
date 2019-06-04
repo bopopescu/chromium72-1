@@ -11,9 +11,12 @@
 #include "base/bind.h"
 #include "base/memory/ptr_util.h"
 #include "chromeos/components/proximity_auth/logging/logging.h"
+#include "components/cryptauth/proto/enum_util.h"
 #include "components/cryptauth/remote_device.h"
 #include "components/cryptauth/remote_device_ref.h"
 #include "components/cryptauth/secure_message_delegate.h"
+
+namespace cryptauth {
 
 namespace {
 
@@ -23,12 +26,14 @@ GetSoftwareFeatureToStateMap(const cryptauth::ExternalDeviceInfo& device) {
       software_feature_to_state_map;
 
   for (int i = 0; i < device.supported_software_features_size(); ++i) {
-    software_feature_to_state_map[device.supported_software_features(i)] =
+    software_feature_to_state_map[SoftwareFeatureStringToEnum(
+        device.supported_software_features(i))] =
         cryptauth::SoftwareFeatureState::kSupported;
   }
 
   for (int i = 0; i < device.enabled_software_features_size(); ++i) {
-    software_feature_to_state_map[device.enabled_software_features(i)] =
+    software_feature_to_state_map[SoftwareFeatureStringToEnum(
+        device.enabled_software_features(i))] =
         cryptauth::SoftwareFeatureState::kEnabled;
   }
 
@@ -36,8 +41,6 @@ GetSoftwareFeatureToStateMap(const cryptauth::ExternalDeviceInfo& device) {
 }
 
 }  // namespace
-
-namespace cryptauth {
 
 // static
 RemoteDeviceLoader::Factory* RemoteDeviceLoader::Factory::factory_instance_ =
@@ -80,8 +83,7 @@ RemoteDeviceLoader::RemoteDeviceLoader(
     const std::string& user_id,
     const std::string& user_private_key,
     std::unique_ptr<cryptauth::SecureMessageDelegate> secure_message_delegate)
-    : should_load_beacon_seeds_(false),
-      remaining_devices_(device_info_list),
+    : remaining_devices_(device_info_list),
       user_id_(user_id),
       user_private_key_(user_private_key),
       secure_message_delegate_(std::move(secure_message_delegate)),
@@ -89,13 +91,11 @@ RemoteDeviceLoader::RemoteDeviceLoader(
 
 RemoteDeviceLoader::~RemoteDeviceLoader() {}
 
-void RemoteDeviceLoader::Load(bool should_load_beacon_seeds,
-                              const RemoteDeviceCallback& callback) {
+void RemoteDeviceLoader::Load(const RemoteDeviceCallback& callback) {
   DCHECK(callback_.is_null());
-  should_load_beacon_seeds_ = should_load_beacon_seeds;
   callback_ = callback;
-  PA_LOG(INFO) << "Loading " << remaining_devices_.size()
-               << " remote devices";
+  PA_LOG(VERBOSE) << "Loading " << remaining_devices_.size()
+                  << " remote devices";
 
   if (remaining_devices_.empty()) {
     callback_.Run(remote_devices_);
@@ -126,24 +126,20 @@ void RemoteDeviceLoader::OnPSKDerived(
   DCHECK(iterator != remaining_devices_.end());
   remaining_devices_.erase(iterator);
 
+  std::vector<BeaconSeed> beacon_seeds;
+  for (const BeaconSeed& beacon_seed : device.beacon_seeds())
+    beacon_seeds.push_back(beacon_seed);
+
   RemoteDevice remote_device(
       user_id_, device.friendly_device_name(), device.public_key(), psk,
-      device.unlock_key(), device.mobile_hotspot_supported(),
-      device.last_update_time_millis(), GetSoftwareFeatureToStateMap(device));
-
-  if (should_load_beacon_seeds_) {
-    std::vector<BeaconSeed> beacon_seeds;
-    for (const BeaconSeed& beacon_seed : device.beacon_seeds()) {
-      beacon_seeds.push_back(beacon_seed);
-    }
-    remote_device.LoadBeaconSeeds(beacon_seeds);
-  }
+      device.last_update_time_millis(), GetSoftwareFeatureToStateMap(device),
+      beacon_seeds);
 
   remote_devices_.push_back(remote_device);
 
   if (remaining_devices_.empty()) {
-    PA_LOG(INFO) << "Derived keys for " << remote_devices_.size()
-                 << " devices.";
+    PA_LOG(VERBOSE) << "Derived keys for " << remote_devices_.size()
+                    << " devices.";
     callback_.Run(remote_devices_);
   }
 }

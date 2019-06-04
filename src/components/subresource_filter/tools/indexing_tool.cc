@@ -9,6 +9,7 @@
 #include "base/files/file.h"
 #include "base/files/file_util.h"
 #include "base/numerics/safe_conversions.h"
+#include "base/strings/stringprintf.h"
 #include "components/subresource_filter/core/browser/copying_file_stream.h"
 #include "components/subresource_filter/core/common/indexed_ruleset.h"
 #include "components/subresource_filter/core/common/unindexed_ruleset.h"
@@ -17,22 +18,22 @@
 namespace subresource_filter {
 
 bool IndexAndWriteRuleset(const base::FilePath& unindexed_path,
-                          const base::FilePath& indexed_path) {
+                          const base::FilePath& indexed_path,
+                          int* out_checksum) {
   if (!base::PathExists(unindexed_path) ||
       !base::DirectoryExists(indexed_path.DirName())) {
     return false;
   }
 
-  base::File unindexed_file(unindexed_path,
+  base::File unindexed_file(base::MakeAbsoluteFilePath(unindexed_path),
                             base::File::FLAG_OPEN | base::File::FLAG_READ);
 
   subresource_filter::RulesetIndexer indexer;
 
-  url_pattern_index::CopyingFileInputStream copying_stream(
-      std::move(unindexed_file));
+  CopyingFileInputStream copying_stream(std::move(unindexed_file));
   google::protobuf::io::CopyingInputStreamAdaptor zero_copy_stream_adaptor(
       &copying_stream, 4096 /* buffer_size */);
-  url_pattern_index::UnindexedRulesetReader reader(&zero_copy_stream_adaptor);
+  UnindexedRulesetReader reader(&zero_copy_stream_adaptor);
 
   url_pattern_index::proto::FilteringRules ruleset_chunk;
 
@@ -47,7 +48,28 @@ bool IndexAndWriteRuleset(const base::FilePath& unindexed_path,
   base::WriteFile(indexed_path, reinterpret_cast<const char*>(indexer.data()),
                   base::checked_cast<int>(indexer.size()));
 
+  if (out_checksum)
+    *out_checksum = indexer.GetChecksum();
+
   return true;
+}
+
+void WriteVersionMetadata(const base::FilePath& path,
+                          const std::string& content_version,
+                          int checksum) {
+  const char* version_format = R"({
+  "subresource_filter": {
+    "ruleset_version": {
+      "content": "%s",
+      "format": %d,
+      "checksum": %d
+    }
+  }
+})";
+  std::string version = base::StringPrintf(
+      version_format, content_version.c_str(),
+      subresource_filter::RulesetIndexer::kIndexedFormatVersion, checksum);
+  base::WriteFile(path, version.data(), version.size());
 }
 
 }  // namespace subresource_filter

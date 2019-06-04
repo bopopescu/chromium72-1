@@ -47,6 +47,13 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) TCPServerSocket
   TCPServerSocket(Delegate* delegate,
                   net::NetLog* net_log,
                   const net::NetworkTrafficAnnotationTag& traffic_annotation);
+
+  // As above, but takes an already listening socket.
+  TCPServerSocket(std::unique_ptr<net::ServerSocket> server_socket,
+                  int backlog,
+                  Delegate* delegate,
+                  const net::NetworkTrafficAnnotationTag& traffic_annotation);
+
   ~TCPServerSocket() override;
 
   int Listen(const net::IPEndPoint& local_addr,
@@ -56,7 +63,6 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) TCPServerSocket
   // TCPServerSocket implementation.
   void Accept(mojom::SocketObserverPtr observer,
               AcceptCallback callback) override;
-  void GetLocalAddress(GetLocalAddressCallback callback) override;
 
   // Replaces the underlying socket implementation with |socket| in tests.
   void SetSocketForTest(std::unique_ptr<net::ServerSocket> socket);

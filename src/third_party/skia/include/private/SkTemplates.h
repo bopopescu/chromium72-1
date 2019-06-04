@@ -66,22 +66,6 @@ public:
     operator T*() const { return this->get(); }
 };
 
-/** \class SkAutoTCallIProc
-
-Call a function when this goes out of scope. The template uses two
-parameters, the object, and a function that is to be called in the destructor.
-If release() is called, the object reference is set to null. If the object
-reference is null when the destructor is called, we do not call the
-function.
-*/
-template <typename T, int (*P)(T*)> class SkAutoTCallIProc
-    : public std::unique_ptr<T, SkFunctionWrapper<int, T, P>> {
-public:
-    SkAutoTCallIProc(T* obj): std::unique_ptr<T, SkFunctionWrapper<int, T, P>>(obj) {}
-
-    operator T*() const { return this->get(); }
-};
-
 /** Allocate an array of T elements, and free the array in the destructor
  */
 template <typename T> class SkAutoTArray  {
@@ -130,8 +114,13 @@ private:
 
 /** Wraps SkAutoTArray, with room for kCountRequested elements preallocated.
  */
-template <int kCountRequested, typename T> class SkAutoSTArray : SkNoncopyable {
+template <int kCountRequested, typename T> class SkAutoSTArray {
 public:
+    SkAutoSTArray(SkAutoSTArray&&) = delete;
+    SkAutoSTArray(const SkAutoSTArray&) = delete;
+    SkAutoSTArray& operator=(SkAutoSTArray&&) = delete;
+    SkAutoSTArray& operator=(const SkAutoSTArray&) = delete;
+
     /** Initialize with no objects */
     SkAutoSTArray() {
         fArray = nullptr;
@@ -272,7 +261,7 @@ private:
     std::unique_ptr<T, SkFunctionWrapper<void, void, sk_free>> fPtr;
 };
 
-template <size_t kCountRequested, typename T> class SkAutoSTMalloc : SkNoncopyable {
+template <size_t kCountRequested, typename T> class SkAutoSTMalloc {
 public:
     SkAutoSTMalloc() : fPtr(fTStorage) {}
 
@@ -285,6 +274,11 @@ public:
             fPtr = nullptr;
         }
     }
+
+    SkAutoSTMalloc(SkAutoSTMalloc&&) = delete;
+    SkAutoSTMalloc(const SkAutoSTMalloc&) = delete;
+    SkAutoSTMalloc& operator=(SkAutoSTMalloc&&) = delete;
+    SkAutoSTMalloc& operator=(const SkAutoSTMalloc&) = delete;
 
     ~SkAutoSTMalloc() {
         if (fPtr != fTStorage) {
@@ -395,8 +389,14 @@ T* SkInPlaceNewCheck(void* storage, size_t size, Args&&... args) {
  * Reserves memory that is aligned on double and pointer boundaries.
  * Hopefully this is sufficient for all practical purposes.
  */
-template <size_t N> class SkAlignedSStorage : SkNoncopyable {
+template <size_t N> class SkAlignedSStorage {
 public:
+    SkAlignedSStorage() {}
+    SkAlignedSStorage(SkAlignedSStorage&&) = delete;
+    SkAlignedSStorage(const SkAlignedSStorage&) = delete;
+    SkAlignedSStorage& operator=(SkAlignedSStorage&&) = delete;
+    SkAlignedSStorage& operator=(const SkAlignedSStorage&) = delete;
+
     size_t size() const { return N; }
     void* get() { return fData; }
     const void* get() const { return fData; }
@@ -415,8 +415,14 @@ private:
  * we have to do some arcane trickery to determine alignment of non-POD
  * types. Lifetime of the memory is the lifetime of the object.
  */
-template <int N, typename T> class SkAlignedSTStorage : SkNoncopyable {
+template <int N, typename T> class SkAlignedSTStorage {
 public:
+    SkAlignedSTStorage() {}
+    SkAlignedSTStorage(SkAlignedSTStorage&&) = delete;
+    SkAlignedSTStorage(const SkAlignedSTStorage&) = delete;
+    SkAlignedSTStorage& operator=(SkAlignedSTStorage&&) = delete;
+    SkAlignedSTStorage& operator=(const SkAlignedSTStorage&) = delete;
+
     /**
      * Returns void* because this object does not initialize the
      * memory. Use placement new for types that require a cons.

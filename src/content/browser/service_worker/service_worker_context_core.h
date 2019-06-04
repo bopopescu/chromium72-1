@@ -43,7 +43,6 @@ namespace content {
 class EmbeddedWorkerRegistry;
 class ServiceWorkerContextCoreObserver;
 class ServiceWorkerContextWrapper;
-class ServiceWorkerDispatcherHost;
 class ServiceWorkerJobCoordinator;
 class ServiceWorkerProviderHost;
 class ServiceWorkerRegistration;
@@ -56,21 +55,22 @@ class URLLoaderFactoryGetter;
 // is the root of the containment hierarchy for service worker data
 // associated with a particular partition.
 class CONTENT_EXPORT ServiceWorkerContextCore
-    : public ServiceWorkerVersion::Listener {
+    : public ServiceWorkerVersion::Observer {
  public:
   using BoolCallback = base::OnceCallback<void(bool)>;
   using StatusCallback =
-      base::OnceCallback<void(ServiceWorkerStatusCode status)>;
+      base::OnceCallback<void(blink::ServiceWorkerStatusCode status)>;
   using RegistrationCallback =
-      base::OnceCallback<void(ServiceWorkerStatusCode status,
+      base::OnceCallback<void(blink::ServiceWorkerStatusCode status,
                               const std::string& status_message,
                               int64_t registration_id)>;
   using UpdateCallback =
-      base::OnceCallback<void(ServiceWorkerStatusCode status,
+      base::OnceCallback<void(blink::ServiceWorkerStatusCode status,
                               const std::string& status_message,
                               int64_t registration_id)>;
   using UnregistrationCallback =
-      base::OnceCallback<void(ServiceWorkerStatusCode status)>;
+      base::OnceCallback<void(blink::ServiceWorkerStatusCode status)>;
+  // TODO(falken): Change these to just use std::map.
   using ProviderMap = base::IDMap<std::unique_ptr<ServiceWorkerProviderHost>>;
   using ProcessToProviderMap = base::IDMap<std::unique_ptr<ProviderMap>>;
 
@@ -81,6 +81,8 @@ class CONTENT_EXPORT ServiceWorkerContextCore
   static const base::FilePath::CharType kServiceWorkerDirectory[];
 
   // Iterates over ServiceWorkerProviderHost objects in a ProcessToProviderMap.
+  // TODO(falken): This can just iterate over the simple map
+  // |providers_by_uuid_| for simplicity.
   class CONTENT_EXPORT ProviderHostIterator {
    public:
     ~ProviderHostIterator();
@@ -91,9 +93,9 @@ class CONTENT_EXPORT ServiceWorkerContextCore
    private:
     friend class ServiceWorkerContextCore;
     using ProviderHostPredicate =
-        base::Callback<bool(ServiceWorkerProviderHost*)>;
+        base::RepeatingCallback<bool(ServiceWorkerProviderHost*)>;
     ProviderHostIterator(ProcessToProviderMap* map,
-                         const ProviderHostPredicate& predicate);
+                         ProviderHostPredicate predicate);
     void Initialize();
     bool ForwardUntilMatchingProviderHost();
 
@@ -129,7 +131,7 @@ class CONTENT_EXPORT ServiceWorkerContextCore
 
   void OnStorageWiped();
 
-  // ServiceWorkerVersion::Listener overrides.
+  // ServiceWorkerVersion::Observer overrides.
   void OnRunningStateChanged(ServiceWorkerVersion* version) override;
   void OnVersionStateChanged(ServiceWorkerVersion* version) override;
   void OnDevToolsRoutingIdChanged(ServiceWorkerVersion* version) override;
@@ -150,6 +152,7 @@ class CONTENT_EXPORT ServiceWorkerContextCore
                          const ServiceWorkerClientInfo& client_info) override;
   void OnControlleeRemoved(ServiceWorkerVersion* version,
                            const std::string& client_uuid) override;
+  void OnNoControllees(ServiceWorkerVersion* version) override;
 
   ServiceWorkerContextWrapper* wrapper() const { return wrapper_; }
   ServiceWorkerStorage* storage() { return storage_.get(); }
@@ -161,20 +164,13 @@ class CONTENT_EXPORT ServiceWorkerContextCore
     return job_coordinator_.get();
   }
 
-  // Maintains DispatcherHosts to exchange service worker related messages
-  // through them. The DispatcherHosts are not owned by this class.
-  void AddDispatcherHost(int process_id,
-                         ServiceWorkerDispatcherHost* dispatcher_host);
-  ServiceWorkerDispatcherHost* GetDispatcherHost(int process_id);
-  void RemoveDispatcherHost(int process_id);
-
   // The context class owns the set of ProviderHosts.
+  //
+  // For browser-assigned provider ids, the |process_id| parameter is ignored,
+  // since they have unique ids.
   void AddProviderHost(
       std::unique_ptr<ServiceWorkerProviderHost> provider_host);
   ServiceWorkerProviderHost* GetProviderHost(int process_id, int provider_id);
-  std::unique_ptr<ServiceWorkerProviderHost> ReleaseProviderHost(
-      int process_id,
-      int provider_id);
   void RemoveProviderHost(int process_id, int provider_id);
   void RemoveAllProviderHostsForProcess(int process_id);
 
@@ -207,18 +203,20 @@ class CONTENT_EXPORT ServiceWorkerContextCore
       const GURL& script_url,
       const blink::mojom::ServiceWorkerRegistrationOptions& options,
       RegistrationCallback callback);
-  void UnregisterServiceWorker(const GURL& pattern,
+  void UnregisterServiceWorker(const GURL& scope,
                                UnregistrationCallback callback);
 
   // Callback is called after all deletions occured. The status code is
-  // SERVICE_WORKER_OK if all succeed, or SERVICE_WORKER_FAILED
-  // if any did not succeed.
+  // blink::ServiceWorkerStatusCode::kOk if all succeed, or
+  // SERVICE_WORKER_FAILED if any did not succeed.
   void DeleteForOrigin(const GURL& origin, StatusCallback callback);
 
   // Updates the service worker. If |force_bypass_cache| is true or 24 hours
   // have passed since the last update, bypasses the browser cache.
   void UpdateServiceWorker(ServiceWorkerRegistration* registration,
                            bool force_bypass_cache);
+  // |callback| is called when the promise for
+  // ServiceWorkerRegistration.update() would be resolved.
   void UpdateServiceWorker(ServiceWorkerRegistration* registration,
                            bool force_bypass_cache,
                            bool skip_script_comparison,
@@ -275,13 +273,13 @@ class CONTENT_EXPORT ServiceWorkerContextCore
       const ServiceWorkerContext::CheckHasServiceWorkerCallback callback);
 
   void UpdateVersionFailureCount(int64_t version_id,
-                                 ServiceWorkerStatusCode status);
+                                 blink::ServiceWorkerStatusCode status);
   // Returns the count of consecutive start worker failures for the given
   // version. The count resets to zero when the worker successfully starts.
   int GetVersionFailureCount(int64_t version_id);
 
   // Called by ServiceWorkerStorage when StoreRegistration() succeeds.
-  void NotifyRegistrationStored(int64_t registration_id, const GURL& pattern);
+  void NotifyRegistrationStored(int64_t registration_id, const GURL& scope);
 
   URLLoaderFactoryGetter* loader_factory_getter() {
     return loader_factory_getter_.get();
@@ -300,37 +298,41 @@ class CONTENT_EXPORT ServiceWorkerContextCore
 
   struct FailureInfo {
     int count;
-    ServiceWorkerStatusCode last_failure;
+    blink::ServiceWorkerStatusCode last_failure;
   };
 
   ProviderMap* GetProviderMapForProcess(int process_id);
 
-  void RegistrationComplete(const GURL& pattern,
+  void RegistrationComplete(const GURL& scope,
                             RegistrationCallback callback,
-                            ServiceWorkerStatusCode status,
+                            blink::ServiceWorkerStatusCode status,
                             const std::string& status_message,
                             ServiceWorkerRegistration* registration);
 
   void UpdateComplete(UpdateCallback callback,
-                      ServiceWorkerStatusCode status,
+                      blink::ServiceWorkerStatusCode status,
                       const std::string& status_message,
                       ServiceWorkerRegistration* registration);
 
-  void UnregistrationComplete(const GURL& pattern,
+  void UnregistrationComplete(const GURL& scope,
                               UnregistrationCallback callback,
                               int64_t registration_id,
-                              ServiceWorkerStatusCode status);
+                              blink::ServiceWorkerStatusCode status);
+
+  bool IsValidRegisterRequest(const GURL& script_url,
+                              const GURL& scope_url,
+                              std::string* out_error) const;
 
   void DidGetRegistrationsForDeleteForOrigin(
-      base::OnceCallback<void(ServiceWorkerStatusCode)> callback,
-      ServiceWorkerStatusCode status,
+      base::OnceCallback<void(blink::ServiceWorkerStatusCode)> callback,
+      blink::ServiceWorkerStatusCode status,
       const std::vector<scoped_refptr<ServiceWorkerRegistration>>&
           registrations);
 
   void DidFindRegistrationForCheckHasServiceWorker(
       const GURL& other_url,
       ServiceWorkerContext::CheckHasServiceWorkerCallback callback,
-      ServiceWorkerStatusCode status,
+      blink::ServiceWorkerStatusCode status,
       scoped_refptr<ServiceWorkerRegistration> registration);
   void OnRegistrationFinishedForCheckHasServiceWorker(
       ServiceWorkerContext::CheckHasServiceWorkerCallback callback,
@@ -340,10 +342,13 @@ class CONTENT_EXPORT ServiceWorkerContextCore
   // because the Wrapper::Shutdown call that hops threads to destroy |this| uses
   // Bind() to hold a reference to |wrapper_| until |this| is fully destroyed.
   ServiceWorkerContextWrapper* wrapper_;
-  std::map<int /* process_id */, ServiceWorkerDispatcherHost*>
-      dispatcher_hosts_;
+
+  // |providers_| owns the provider hosts. Hosts with browser-assigned provider
+  // ids (unique over all processes), are kept in the map for process id -1.
   std::unique_ptr<ProcessToProviderMap> providers_;
+  // |provider_by_uuid_| contains raw pointers to hosts owned by |providers_|.
   std::unique_ptr<ProviderByClientUUIDMap> provider_by_uuid_;
+
   std::unique_ptr<ServiceWorkerStorage> storage_;
   scoped_refptr<EmbeddedWorkerRegistry> embedded_worker_registry_;
   std::unique_ptr<ServiceWorkerJobCoordinator> job_coordinator_;

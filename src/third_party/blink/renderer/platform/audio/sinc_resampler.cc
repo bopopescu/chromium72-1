@@ -117,14 +117,14 @@ void SincResampler::InitializeKernel() {
     for (int i = 0; i < n; ++i) {
       // Compute the sinc() with offset.
       double s =
-          sinc_scale_factor * piDouble * (i - half_size - subsample_offset);
+          sinc_scale_factor * kPiDouble * (i - half_size - subsample_offset);
       double sinc = !s ? 1.0 : std::sin(s) / s;
       sinc *= sinc_scale_factor;
 
       // Compute Blackman window, matching the offset of the sinc().
       double x = (i - subsample_offset) / n;
-      double window = a0 - a1 * std::cos(twoPiDouble * x) +
-                      a2 * std::cos(twoPiDouble * 2.0 * x);
+      double window = a0 - a1 * std::cos(kTwoPiDouble * x) +
+                      a2 * std::cos(kTwoPiDouble * 2.0 * x);
 
       // Window the sinc() function and store at the correct offset.
       kernel_storage_[i + offset_index * kernel_size_] = sinc * window;
@@ -154,11 +154,11 @@ namespace {
 
 class BufferSourceProvider final : public AudioSourceProvider {
  public:
-  BufferSourceProvider(const float* source, size_t number_of_source_frames)
+  BufferSourceProvider(const float* source, uint32_t number_of_source_frames)
       : source_(source), source_frames_available_(number_of_source_frames) {}
 
   // Consumes samples from the in-memory buffer.
-  void ProvideInput(AudioBus* bus, size_t frames_to_process) override {
+  void ProvideInput(AudioBus* bus, uint32_t frames_to_process) override {
     DCHECK(source_);
     DCHECK(bus);
     if (!source_ || !bus)
@@ -167,7 +167,7 @@ class BufferSourceProvider final : public AudioSourceProvider {
     float* buffer = bus->Channel(0)->MutableData();
 
     // Clamp to number of frames available and zero-pad.
-    size_t frames_to_copy =
+    uint32_t frames_to_copy =
         std::min(source_frames_available_, frames_to_process);
     memcpy(buffer, source_, sizeof(float) * frames_to_copy);
 
@@ -182,7 +182,7 @@ class BufferSourceProvider final : public AudioSourceProvider {
 
  private:
   const float* source_;
-  size_t source_frames_available_;
+  uint32_t source_frames_available_;
 };
 
 }  // namespace
@@ -208,7 +208,7 @@ void SincResampler::Process(const float* source,
 
 void SincResampler::Process(AudioSourceProvider* source_provider,
                             float* destination,
-                            size_t frames_to_process) {
+                            uint32_t frames_to_process) {
   bool is_good = source_provider && block_size_ > kernel_size_ &&
                  input_buffer_.size() >= block_size_ + kernel_size_ &&
                  !(kernel_size_ % 2);

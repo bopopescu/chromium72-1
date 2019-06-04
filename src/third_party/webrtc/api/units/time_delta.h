@@ -11,19 +11,17 @@
 #ifndef API_UNITS_TIME_DELTA_H_
 #define API_UNITS_TIME_DELTA_H_
 
-#include <stdint.h>
-#include <cmath>
-#include <limits>
-#include <string>
+#ifdef UNIT_TEST
+#include <ostream>  // no-presubmit-check TODO(webrtc:8982)
+#endif              // UNIT_TEST
 
-#include "rtc_base/checks.h"
+#include <cstdlib>
+#include <string>
+#include <type_traits>
+
+#include "rtc_base/units/unit_base.h"
 
 namespace webrtc {
-namespace timedelta_impl {
-constexpr int64_t kPlusInfinityVal = std::numeric_limits<int64_t>::max();
-constexpr int64_t kMinusInfinityVal = std::numeric_limits<int64_t>::min();
-}  // namespace timedelta_impl
-
 // TimeDelta represents the difference between two timestamps. Commonly this can
 // be a duration. However since two Timestamps are not guaranteed to have the
 // same epoch (they might come from different computers, making exact
@@ -31,120 +29,78 @@ constexpr int64_t kMinusInfinityVal = std::numeric_limits<int64_t>::min();
 // undefined. To simplify usage, it can be constructed and converted to
 // different units, specifically seconds (s), milliseconds (ms) and
 // microseconds (us).
-class TimeDelta {
+class TimeDelta final : public rtc_units_impl::RelativeUnit<TimeDelta> {
  public:
   TimeDelta() = delete;
-  static TimeDelta Zero() { return TimeDelta(0); }
-  static TimeDelta PlusInfinity() {
-    return TimeDelta(timedelta_impl::kPlusInfinityVal);
+  template <int64_t seconds>
+  static constexpr TimeDelta Seconds() {
+    return FromStaticFraction<seconds, 1000000>();
   }
-  static TimeDelta MinusInfinity() {
-    return TimeDelta(timedelta_impl::kMinusInfinityVal);
+  template <int64_t ms>
+  static constexpr TimeDelta Millis() {
+    return FromStaticFraction<ms, 1000>();
   }
-  static TimeDelta seconds(int64_t seconds) {
-    return TimeDelta::us(seconds * 1000000);
+  template <int64_t us>
+  static constexpr TimeDelta Micros() {
+    return FromStaticValue<us>();
   }
-  static TimeDelta ms(int64_t milliseconds) {
-    return TimeDelta::us(milliseconds * 1000);
+  template <typename T>
+  static TimeDelta seconds(T seconds) {
+    return FromFraction<1000000>(seconds);
   }
-  static TimeDelta us(int64_t microseconds) {
-    // Infinities only allowed via use of explicit constants.
-    RTC_DCHECK(microseconds > std::numeric_limits<int64_t>::min());
-    RTC_DCHECK(microseconds < std::numeric_limits<int64_t>::max());
-    return TimeDelta(microseconds);
+  template <typename T>
+  static TimeDelta ms(T milliseconds) {
+    return FromFraction<1000>(milliseconds);
   }
-  int64_t seconds() const {
-    return (us() + (us() >= 0 ? 500000 : -500000)) / 1000000;
+  template <typename T>
+  static TimeDelta us(T microseconds) {
+    return FromValue(microseconds);
   }
-  int64_t ms() const { return (us() + (us() >= 0 ? 500 : -500)) / 1000; }
-  int64_t us() const {
-    RTC_DCHECK(IsFinite());
-    return microseconds_;
+  template <typename T = int64_t>
+  T seconds() const {
+    return ToFraction<1000000, T>();
   }
-  int64_t ns() const {
-    RTC_DCHECK(us() > std::numeric_limits<int64_t>::min() / 1000);
-    RTC_DCHECK(us() < std::numeric_limits<int64_t>::max() / 1000);
-    return us() * 1000;
+  template <typename T = int64_t>
+  T ms() const {
+    return ToFraction<1000, T>();
+  }
+  template <typename T = int64_t>
+  T us() const {
+    return ToValue<T>();
+  }
+  template <typename T = int64_t>
+  T ns() const {
+    return ToMultiple<1000, T>();
   }
 
-  double SecondsAsDouble() const;
+  constexpr int64_t seconds_or(int64_t fallback_value) const {
+    return ToFractionOr<1000000>(fallback_value);
+  }
+  constexpr int64_t ms_or(int64_t fallback_value) const {
+    return ToFractionOr<1000>(fallback_value);
+  }
+  constexpr int64_t us_or(int64_t fallback_value) const {
+    return ToValueOr(fallback_value);
+  }
 
   TimeDelta Abs() const { return TimeDelta::us(std::abs(us())); }
-  bool IsZero() const { return microseconds_ == 0; }
-  bool IsFinite() const { return !IsInfinite(); }
-  bool IsInfinite() const {
-    return microseconds_ == timedelta_impl::kPlusInfinityVal ||
-           microseconds_ == timedelta_impl::kMinusInfinityVal;
-  }
-  bool IsPlusInfinity() const {
-    return microseconds_ == timedelta_impl::kPlusInfinityVal;
-  }
-  bool IsMinusInfinity() const {
-    return microseconds_ == timedelta_impl::kMinusInfinityVal;
-  }
-  TimeDelta operator+(const TimeDelta& other) const {
-    return TimeDelta::us(us() + other.us());
-  }
-  TimeDelta operator-(const TimeDelta& other) const {
-    return TimeDelta::us(us() - other.us());
-  }
-  TimeDelta& operator-=(const TimeDelta& other) {
-    microseconds_ -= other.us();
-    return *this;
-  }
-  TimeDelta& operator+=(const TimeDelta& other) {
-    microseconds_ += other.us();
-    return *this;
-  }
-
-  bool operator==(const TimeDelta& other) const {
-    return microseconds_ == other.microseconds_;
-  }
-  bool operator!=(const TimeDelta& other) const {
-    return microseconds_ != other.microseconds_;
-  }
-  bool operator<=(const TimeDelta& other) const {
-    return microseconds_ <= other.microseconds_;
-  }
-  bool operator>=(const TimeDelta& other) const {
-    return microseconds_ >= other.microseconds_;
-  }
-  bool operator>(const TimeDelta& other) const {
-    return microseconds_ > other.microseconds_;
-  }
-  bool operator<(const TimeDelta& other) const {
-    return microseconds_ < other.microseconds_;
-  }
 
  private:
-  explicit TimeDelta(int64_t us) : microseconds_(us) {}
-  int64_t microseconds_;
+  friend class rtc_units_impl::UnitBase<TimeDelta>;
+  using RelativeUnit::RelativeUnit;
+  static constexpr bool one_sided = false;
 };
 
-inline TimeDelta operator*(const TimeDelta& delta, const double& scalar) {
-  return TimeDelta::us(std::round(delta.us() * scalar));
-}
-inline TimeDelta operator*(const double& scalar, const TimeDelta& delta) {
-  return delta * scalar;
-}
-inline TimeDelta operator*(const TimeDelta& delta, const int64_t& scalar) {
-  return TimeDelta::us(delta.us() * scalar);
-}
-inline TimeDelta operator*(const int64_t& scalar, const TimeDelta& delta) {
-  return delta * scalar;
-}
-inline TimeDelta operator*(const TimeDelta& delta, const int32_t& scalar) {
-  return TimeDelta::us(delta.us() * scalar);
-}
-inline TimeDelta operator*(const int32_t& scalar, const TimeDelta& delta) {
-  return delta * scalar;
-}
+std::string ToString(TimeDelta value);
 
-inline TimeDelta operator/(const TimeDelta& delta, const int64_t& scalar) {
-  return TimeDelta::us(delta.us() / scalar);
+#ifdef UNIT_TEST
+inline std::ostream& operator<<(  // no-presubmit-check TODO(webrtc:8982)
+    std::ostream& stream,         // no-presubmit-check TODO(webrtc:8982)
+    TimeDelta value) {
+  return stream << ToString(value);
 }
+#endif  // UNIT_TEST
 
-std::string ToString(const TimeDelta& value);
 }  // namespace webrtc
 
 #endif  // API_UNITS_TIME_DELTA_H_

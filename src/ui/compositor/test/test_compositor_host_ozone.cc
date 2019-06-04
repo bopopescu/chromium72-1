@@ -12,12 +12,14 @@
 #include "base/macros.h"
 #include "base/memory/weak_ptr.h"
 #include "base/threading/thread_task_runner_handle.h"
+#include "base/time/time.h"
 #include "ui/compositor/compositor.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/native_widget_types.h"
 #include "ui/ozone/public/ozone_platform.h"
 #include "ui/platform_window/platform_window.h"
 #include "ui/platform_window/platform_window_delegate.h"
+#include "ui/platform_window/platform_window_init_properties.h"
 
 namespace ui {
 
@@ -40,11 +42,9 @@ class StubPlatformWindowDelegate : public PlatformWindowDelegate {
   void OnClosed() override {}
   void OnWindowStateChanged(PlatformWindowState new_state) override {}
   void OnLostCapture() override {}
-  void OnAcceleratedWidgetAvailable(gfx::AcceleratedWidget widget,
-                                    float device_pixel_ratio) override {
+  void OnAcceleratedWidgetAvailable(gfx::AcceleratedWidget widget) override {
     widget_ = widget;
   }
-  void OnAcceleratedWidgetDestroying() override {}
   void OnAcceleratedWidgetDestroyed() override {
     widget_ = gfx::kNullAcceleratedWidget;
   }
@@ -88,17 +88,24 @@ TestCompositorHostOzone::TestCompositorHostOzone(
                   false /* enable_surface_synchronization */,
                   false /* enable_pixel_canvas */) {}
 
-TestCompositorHostOzone::~TestCompositorHostOzone() {}
+TestCompositorHostOzone::~TestCompositorHostOzone() {
+  // |window_| should be destroyed earlier than |window_delegate_| as it refers
+  // to its delegate on destroying.
+  window_.reset();
+}
 
 void TestCompositorHostOzone::Show() {
+  ui::PlatformWindowInitProperties properties;
+  properties.bounds = bounds_;
   // Create a PlatformWindow to get the AcceleratedWidget backing it.
   window_ = ui::OzonePlatform::GetInstance()->CreatePlatformWindow(
-      &window_delegate_, bounds_);
+      &window_delegate_, std::move(properties));
   window_->Show();
   DCHECK_NE(window_delegate_.widget(), gfx::kNullAcceleratedWidget);
 
   compositor_.SetAcceleratedWidget(window_delegate_.widget());
-  compositor_.SetScaleAndSize(1.0f, bounds_.size(), viz::LocalSurfaceId());
+  compositor_.SetScaleAndSize(1.0f, bounds_.size(),
+                              viz::LocalSurfaceIdAllocation());
   compositor_.SetVisible(true);
 }
 

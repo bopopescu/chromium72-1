@@ -20,23 +20,25 @@ std::string PrefetchEnumToString(PrefetchBackgroundTaskRescheduleType value) {
     case PrefetchBackgroundTaskRescheduleType::SUSPEND:
       return "SUSPEND";
   }
-  CHECK(false) << static_cast<int>(value) << " not valid enum value";
+  DCHECK(false) << static_cast<int>(value) << " not valid enum value";
 }
 
 std::string PrefetchEnumToString(PrefetchRequestStatus value) {
   switch (value) {
-    case PrefetchRequestStatus::SUCCESS:
+    case PrefetchRequestStatus::kSuccess:
       return "SUCCESS";
-    case PrefetchRequestStatus::SHOULD_RETRY_WITHOUT_BACKOFF:
+    case PrefetchRequestStatus::kShouldRetryWithoutBackoff:
       return "SHOULD_RETRY_WITHOUT_BACKOFF";
-    case PrefetchRequestStatus::SHOULD_RETRY_WITH_BACKOFF:
+    case PrefetchRequestStatus::kShouldRetryWithBackoff:
       return "SHOULD_RETRY_WITH_BACKOFF";
-    case PrefetchRequestStatus::SHOULD_SUSPEND:
-      return "SHOULD_SUSPEND";
-    case PrefetchRequestStatus::COUNT:
-      return "COUNT";
+    case PrefetchRequestStatus::kShouldSuspendNotImplemented:
+      return "SHOULD_SUSPEND_NOT_IMPLEMENTED";
+    case PrefetchRequestStatus::kShouldSuspendForbidden:
+      return "SHOULD_SUSPEND_FORBIDDEN";
+    case PrefetchRequestStatus::kShouldSuspendBlockedByAdministrator:
+      return "SHOULD_SUSPEND_BLOCKED_BY_ADMINISTRATOR";
   }
-  CHECK(false) << static_cast<int>(value) << " not valid enum value";
+  DCHECK(false) << static_cast<int>(value) << " not valid enum value";
 }
 
 std::string PrefetchEnumToString(RenderStatus value) {
@@ -50,7 +52,7 @@ std::string PrefetchEnumToString(RenderStatus value) {
     case RenderStatus::EXCEEDED_LIMIT:
       return "EXCEEDED_LIMIT";
   }
-  CHECK(false) << static_cast<int>(value) << " not valid enum value";
+  DCHECK(false) << static_cast<int>(value) << " not valid enum value";
 }
 
 std::string PrefetchEnumToString(PrefetchItemState value) {
@@ -78,7 +80,7 @@ std::string PrefetchEnumToString(PrefetchItemState value) {
     case PrefetchItemState::ZOMBIE:
       return "ZOMBIE";
   }
-  CHECK(false) << static_cast<int>(value) << " not valid enum value";
+  DCHECK(false) << static_cast<int>(value) << " not valid enum value";
 }
 
 std::string PrefetchEnumToString(PrefetchItemErrorCode value) {
@@ -109,6 +111,8 @@ std::string PrefetchEnumToString(PrefetchItemErrorCode value) {
       return "STALE_AT_IMPORTING";
     case PrefetchItemErrorCode::STALE_AT_UNKNOWN:
       return "STALE_AT_UNKNOWN";
+    case PrefetchItemErrorCode::STUCK:
+      return "STUCK";
     case PrefetchItemErrorCode::GET_OPERATION_MAX_ATTEMPTS_REACHED:
       return "GET_OPERATION_MAX_ATTEMPTS_REACHED";
     case PrefetchItemErrorCode::
@@ -123,13 +127,22 @@ std::string PrefetchEnumToString(PrefetchItemErrorCode value) {
     case PrefetchItemErrorCode::SUGGESTION_INVALIDATED:
       return "SUGGESTION_INVALIDATED";
   }
-  CHECK(false) << static_cast<int>(value) << " not valid enum value";
+  DCHECK(false) << static_cast<int>(value) << " not valid enum value";
 }
 }  // namespace
 
 RenderPageInfo::RenderPageInfo() = default;
 
 RenderPageInfo::RenderPageInfo(const RenderPageInfo& other) = default;
+
+PrefetchURL::PrefetchURL(const std::string& id,
+                         const GURL& url,
+                         const base::string16& title)
+    : id(id), url(url), title(title) {}
+
+PrefetchURL::~PrefetchURL() = default;
+
+PrefetchURL::PrefetchURL(const PrefetchURL& other) = default;
 
 PrefetchDownloadResult::PrefetchDownloadResult() = default;
 

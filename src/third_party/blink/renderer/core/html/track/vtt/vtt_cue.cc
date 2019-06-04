@@ -30,9 +30,7 @@
 #include "third_party/blink/renderer/core/html/track/vtt/vtt_cue.h"
 
 #include "third_party/blink/renderer/bindings/core/v8/double_or_auto_keyword.h"
-#include "third_party/blink/renderer/bindings/core/v8/exception_messages.h"
-#include "third_party/blink/renderer/bindings/core/v8/exception_state.h"
-#include "third_party/blink/renderer/core/css_property_names.h"
+#include "third_party/blink/renderer/core/css/css_property_names.h"
 #include "third_party/blink/renderer/core/css_value_keywords.h"
 #include "third_party/blink/renderer/core/dom/document_fragment.h"
 #include "third_party/blink/renderer/core/dom/events/event.h"
@@ -47,6 +45,8 @@
 #include "third_party/blink/renderer/core/html/track/vtt/vtt_region.h"
 #include "third_party/blink/renderer/core/html/track/vtt/vtt_scanner.h"
 #include "third_party/blink/renderer/core/layout/layout_vtt_cue.h"
+#include "third_party/blink/renderer/platform/bindings/exception_messages.h"
+#include "third_party/blink/renderer/platform/bindings/exception_state.h"
 #include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 #include "third_party/blink/renderer/platform/text/bidi_resolver.h"
 #include "third_party/blink/renderer/platform/text/text_run_iterator.h"
@@ -120,7 +120,7 @@ static bool IsInvalidPercentage(double value) {
 static bool IsInvalidPercentage(double value, ExceptionState& exception_state) {
   if (IsInvalidPercentage(value)) {
     exception_state.ThrowDOMException(
-        kIndexSizeError,
+        DOMExceptionCode::kIndexSizeError,
         ExceptionMessages::IndexOutsideRange<double>(
             "value", value, 0, ExceptionMessages::kInclusiveBound, 100,
             ExceptionMessages::kInclusiveBound));
@@ -530,12 +530,12 @@ class VTTTextRunIterator : public TextRunIterator {
     // Within a cue, paragraph boundaries are only denoted by Type B characters,
     // such as U+000A LINE FEED (LF), U+0085 NEXT LINE (NEL),
     // and U+2029 PARAGRAPH SEPARATOR.
-    return WTF::Unicode::Category(Current()) &
-           WTF::Unicode::kSeparator_Paragraph;
+    return WTF::unicode::Category(Current()) &
+           WTF::unicode::kSeparator_Paragraph;
   }
 };
 
-// Almost the same as determineDirectionality in core/html/HTMLElement.cpp, but
+// Almost the same as determineDirectionality in core/html/html_element.cc, but
 // that one uses a "plain" TextRunIterator (which only checks for '\n').
 static TextDirection DetermineDirectionality(const String& value,
                                              bool& has_strong_directionality) {
@@ -692,7 +692,7 @@ VTTDisplayParameters VTTCue::CalculateDisplayParameters() const {
         NOTREACHED();
     }
   } else {
-    // Cases for m_writingDirection being VerticalGrowing{Left|Right}
+    // Cases for writing_direction_ being kVerticalGrowing{Left|Right}
     switch (computed_cue_alignment) {
       case kStart:
         display_parameters.position.SetY(computed_text_position);

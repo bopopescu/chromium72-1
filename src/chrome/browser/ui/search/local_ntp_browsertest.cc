@@ -13,7 +13,7 @@
 #include "base/metrics/statistics_recorder.h"
 #include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
-#include "base/test/histogram_tester.h"
+#include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/threading/thread_restrictions.h"
 #include "base/threading/thread_task_runner_handle.h"
@@ -21,6 +21,7 @@
 #include "chrome/browser/search/instant_service.h"
 #include "chrome/browser/search/instant_service_factory.h"
 #include "chrome/browser/search/instant_service_observer.h"
+#include "chrome/browser/search/ntp_features.h"
 #include "chrome/browser/search/search.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
@@ -33,6 +34,7 @@
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "components/keyed_service/content/browser_context_dependency_manager.h"
+#include "components/ntp_tiles/constants.h"
 #include "components/prefs/pref_service.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/interstitial_page.h"
@@ -55,6 +57,10 @@ namespace {
 // In a non-signed-in, fresh profile with no history, there should be one
 // default TopSites tile (see history::PrepopulatedPage).
 const int kDefaultMostVisitedItemCount = 1;
+
+// This is the default maximum custom links we can have. The number comes from
+// ntp_tiles::CustomLinksManager.
+const int kDefaultCustomLinkMaxCount = 10;
 
 class TestMostVisitedObserver : public InstantServiceObserver {
  public:
@@ -82,8 +88,8 @@ class TestMostVisitedObserver : public InstantServiceObserver {
  private:
   void ThemeInfoChanged(const ThemeBackgroundInfo&) override {}
 
-  void MostVisitedItemsChanged(
-      const std::vector<InstantMostVisitedItem>& items) override {
+  void MostVisitedItemsChanged(const std::vector<InstantMostVisitedItem>& items,
+                               bool is_custom_links) override {
     items_ = items;
 
     if (quit_closure_ && items_.size() == expected_count_) {
@@ -102,13 +108,14 @@ class TestMostVisitedObserver : public InstantServiceObserver {
 
 class LocalNTPTest : public InProcessBrowserTest {
  public:
-  LocalNTPTest() {
-    feature_list_.InitAndEnableFeature(features::kUseGoogleLocalNtp);
+  LocalNTPTest(const std::vector<base::Feature>& enabled_features,
+               const std::vector<base::Feature>& disabled_features) {
+    feature_list_.InitWithFeatures(enabled_features, disabled_features);
   }
 
-  LocalNTPTest(const std::vector<base::Feature>& enabled_features) {
-    feature_list_.InitWithFeatures(enabled_features, {});
-  }
+  LocalNTPTest()
+      : LocalNTPTest(/*enabled_features=*/{features::kUseGoogleLocalNtp},
+                     /*disabled_features=*/{}) {}
 
  private:
   void SetUpOnMainThread() override {
@@ -418,7 +425,8 @@ IN_PROC_BROWSER_TEST_F(LocalNTPTest, GoogleNTPLoadsWithoutError) {
   histograms.ExpectTotalCount("NewTabPage.SuggestionsImpression", 1);
   histograms.ExpectBucketCount("NewTabPage.SuggestionsImpression", 0, 1);
   histograms.ExpectTotalCount("NewTabPage.SuggestionsImpression.client", 1);
-  histograms.ExpectTotalCount("NewTabPage.SuggestionsImpression.Thumbnail", 1);
+  // The material design NTP shouldn't have any thumbnails.
+  histograms.ExpectTotalCount("NewTabPage.SuggestionsImpression.Thumbnail", 0);
   histograms.ExpectTotalCount("NewTabPage.TileTitle", 1);
   histograms.ExpectTotalCount("NewTabPage.TileTitle.client", 1);
   histograms.ExpectTotalCount("NewTabPage.TileType", 1);
@@ -469,7 +477,8 @@ IN_PROC_BROWSER_TEST_F(LocalNTPTest, NonGoogleNTPLoadsWithoutError) {
   histograms.ExpectTotalCount("NewTabPage.SuggestionsImpression", 1);
   histograms.ExpectBucketCount("NewTabPage.SuggestionsImpression", 0, 1);
   histograms.ExpectTotalCount("NewTabPage.SuggestionsImpression.client", 1);
-  histograms.ExpectTotalCount("NewTabPage.SuggestionsImpression.Thumbnail", 1);
+  // The material design NTP shouldn't have any thumbnails.
+  histograms.ExpectTotalCount("NewTabPage.SuggestionsImpression.Thumbnail", 0);
   histograms.ExpectTotalCount("NewTabPage.TileTitle", 1);
   histograms.ExpectTotalCount("NewTabPage.TileTitle.client", 1);
   histograms.ExpectTotalCount("NewTabPage.TileType", 1);
@@ -497,53 +506,6 @@ IN_PROC_BROWSER_TEST_F(LocalNTPTest, FrenchGoogleNTPLoadsWithoutError) {
 
   // We shouldn't have gotten any console error messages.
   EXPECT_TRUE(console_observer.message().empty()) << console_observer.message();
-}
-
-// Tests that blink::UseCounter do not track feature usage for NTP activities.
-// TODO(lunalu): remove this test when blink side use counter is removed
-// (crbug.com/811948).
-IN_PROC_BROWSER_TEST_F(LocalNTPTest, ShouldNotTrackBlinkUseCounterForNTP) {
-  base::HistogramTester histogram_tester;
-  const char kFeaturesHistogramName[] = "Blink.UseCounter.Features_Legacy";
-
-  // Set up a test server, so we have some arbitrary non-NTP URL to navigate to.
-  net::EmbeddedTestServer test_server(net::EmbeddedTestServer::TYPE_HTTPS);
-  test_server.ServeFilesFromSourceDirectory("chrome/test/data");
-  ASSERT_TRUE(test_server.Start());
-  const GURL other_url = test_server.GetURL("/simple.html");
-
-  // Open an NTP.
-  content::WebContents* active_tab = local_ntp_test_utils::OpenNewTab(
-      browser(), GURL(chrome::kChromeUINewTabURL));
-  ASSERT_TRUE(search::IsInstantNTP(active_tab));
-  // Expect no PageVisits count.
-  EXPECT_EQ(nullptr,
-            base::StatisticsRecorder::FindHistogram(kFeaturesHistogramName));
-  // Navigate somewhere else in the same tab.
-  ui_test_utils::NavigateToURL(browser(), other_url);
-  ASSERT_FALSE(search::IsInstantNTP(active_tab));
-  // Navigate back to NTP.
-  content::TestNavigationObserver back_observer(active_tab);
-  chrome::GoBack(browser(), WindowOpenDisposition::CURRENT_TAB);
-  back_observer.Wait();
-  ASSERT_TRUE(search::IsInstantNTP(active_tab));
-  // There should be exactly 1 count of PageVisits.
-  histogram_tester.ExpectBucketCount(
-      kFeaturesHistogramName,
-      static_cast<int32_t>(blink::mojom::WebFeature::kPageVisits), 1);
-
-  // Navigate forward to the non-NTP page.
-  content::TestNavigationObserver fwd_observer(active_tab);
-  chrome::GoForward(browser(), WindowOpenDisposition::CURRENT_TAB);
-  fwd_observer.Wait();
-  ASSERT_FALSE(search::IsInstantNTP(active_tab));
-  // Navigate to a new NTP instance.
-  ui_test_utils::NavigateToURL(browser(), GURL(chrome::kChromeUINewTabURL));
-  ASSERT_TRUE(search::IsInstantNTP(active_tab));
-  // There should be 2 counts of PageVisits.
-  histogram_tester.ExpectBucketCount(
-      kFeaturesHistogramName,
-      static_cast<int32_t>(blink::mojom::WebFeature::kPageVisits), 2);
 }
 
 class LocalNTPRTLTest : public LocalNTPTest {
@@ -580,46 +542,13 @@ content::RenderFrameHost* GetMostVisitedIframe(content::WebContents* tab) {
   return nullptr;
 }
 
-IN_PROC_BROWSER_TEST_F(LocalNTPTest, LoadsIframe) {
-  content::WebContents* active_tab =
-      local_ntp_test_utils::OpenNewTab(browser(), GURL("about:blank"));
-  local_ntp_test_utils::NavigateToNTPAndWaitUntilLoaded(browser());
-
-  // Get the iframe and check that the tiles loaded correctly.
-  content::RenderFrameHost* iframe = GetMostVisitedIframe(active_tab);
-
-  // Get the total number of (non-empty) tiles from the iframe.
-  int total_thumbs = 0;
-  ASSERT_TRUE(instant_test_utils::GetIntFromJS(
-      iframe, "document.querySelectorAll('.mv-thumb').length", &total_thumbs));
-  // Also get how many of the tiles succeeded and failed in loading their
-  // thumbnail images.
-  int succeeded_imgs = 0;
-  ASSERT_TRUE(instant_test_utils::GetIntFromJS(
-      iframe, "document.querySelectorAll('.mv-thumb img').length",
-      &succeeded_imgs));
-  int failed_imgs = 0;
-  ASSERT_TRUE(instant_test_utils::GetIntFromJS(
-      iframe, "document.querySelectorAll('.mv-thumb.failed-img').length",
-      &failed_imgs));
-
-  // First, sanity check that the numbers line up (none of the css classes was
-  // renamed, etc).
-  EXPECT_EQ(total_thumbs, succeeded_imgs + failed_imgs);
-
-  // Since we're in a non-signed-in, fresh profile with no history, there should
-  // be the default TopSites tiles (see history::PrepopulatedPage).
-  // Check that there is at least one tile, and that all of them loaded their
-  // images successfully.
-  EXPECT_GT(total_thumbs, 0);
-  EXPECT_EQ(total_thumbs, succeeded_imgs);
-  EXPECT_EQ(0, failed_imgs);
-}
-
 class LocalNTPMDTest : public LocalNTPTest {
  public:
   LocalNTPMDTest()
-      : LocalNTPTest({features::kUseGoogleLocalNtp, features::kNtpUIMd}) {}
+      : LocalNTPTest(
+            /*enabled_features=*/{features::kUseGoogleLocalNtp,
+                                  features::kNtpIcons},
+            /*disabled_features=*/{ntp_tiles::kNtpCustomLinks}) {}
 
  private:
   base::test::ScopedFeatureList feature_list_;
@@ -633,12 +562,8 @@ IN_PROC_BROWSER_TEST_F(LocalNTPMDTest, LoadsMDIframe) {
   // Get the iframe and check that the tiles loaded correctly.
   content::RenderFrameHost* iframe = GetMostVisitedIframe(active_tab);
 
-  // Get the total number of (non-empty) tiles from the iframe and tiles with
-  // thumbnails. There should be no thumbnails in Material Design.
-  int total_thumbs = 0;
+  // Get the total number of (non-empty) tiles from the iframe.
   int total_favicons = 0;
-  ASSERT_TRUE(instant_test_utils::GetIntFromJS(
-      iframe, "document.querySelectorAll('.mv-thumb').length", &total_thumbs));
   ASSERT_TRUE(instant_test_utils::GetIntFromJS(
       iframe, "document.querySelectorAll('.md-favicon').length",
       &total_favicons));
@@ -660,10 +585,147 @@ IN_PROC_BROWSER_TEST_F(LocalNTPMDTest, LoadsMDIframe) {
   // Since we're in a non-signed-in, fresh profile with no history, there should
   // be the default TopSites tiles (see history::PrepopulatedPage).
   // Check that there is at least one tile, and that all of them loaded their
-  // images successfully. Also check that no thumbnails have loaded.
-  EXPECT_EQ(total_thumbs, 0);
+  // images successfully.
   EXPECT_EQ(total_favicons, succeeded_favicons);
   EXPECT_EQ(0, failed_favicons);
+}
+
+class LocalNTPCustomLinksTest : public LocalNTPTest {
+ public:
+  LocalNTPCustomLinksTest()
+      : LocalNTPTest(
+            /*enabled_features=*/{features::kUseGoogleLocalNtp,
+                                  features::kNtpUIMd, features::kNtpIcons,
+                                  ntp_tiles::kNtpCustomLinks},
+            /*disabled_features=*/{}) {}
+
+ private:
+  base::test::ScopedFeatureList feature_list_;
+};
+
+IN_PROC_BROWSER_TEST_F(LocalNTPCustomLinksTest, ShowsAddCustomLinkButton) {
+  content::WebContents* active_tab =
+      local_ntp_test_utils::OpenNewTab(browser(), GURL("about:blank"));
+  local_ntp_test_utils::NavigateToNTPAndWaitUntilLoaded(browser());
+
+  // Get the iframe and check that the tiles loaded correctly.
+  content::RenderFrameHost* iframe = GetMostVisitedIframe(active_tab);
+
+  // Check if only one add button exists in the iframe.
+  bool has_add_button = false;
+  ASSERT_TRUE(instant_test_utils::GetBoolFromJS(
+      iframe, "document.querySelectorAll('.md-add-icon').length == 1",
+      &has_add_button));
+  EXPECT_TRUE(has_add_button);
+}
+
+IN_PROC_BROWSER_TEST_F(LocalNTPCustomLinksTest,
+                       DontShowAddCustomLinkButtonWhenMaxLinks) {
+  content::WebContents* active_tab =
+      local_ntp_test_utils::OpenNewTab(browser(), GURL("about:blank"));
+
+  TestMostVisitedObserver observer(
+      InstantServiceFactory::GetForProfile(browser()->profile()));
+
+  local_ntp_test_utils::NavigateToNTPAndWaitUntilLoaded(browser());
+  observer.WaitForNumberOfItems(kDefaultMostVisitedItemCount);
+
+  // Get the iframe and add to maximum number of tiles.
+  content::RenderFrameHost* iframe = GetMostVisitedIframe(active_tab);
+  for (int i = kDefaultMostVisitedItemCount; i < kDefaultCustomLinkMaxCount;
+       ++i) {
+    std::string rid = std::to_string(i + 100);
+    std::string url = "https://" + rid + ".com";
+    std::string title = "url for " + rid;
+    // Add most visited tiles via the EmbeddedSearch API. rid = -1 means add new
+    // most visited tile.
+    local_ntp_test_utils::ExecuteScriptOnNTPAndWaitUntilLoaded(
+        iframe,
+        "window.chrome.embeddedSearch.newTabPage.updateCustomLink(-1, '" + url +
+            "', '" + title + "')");
+  }
+  // Confirm that there are max number of custom link tiles.
+  observer.WaitForNumberOfItems(kDefaultCustomLinkMaxCount);
+
+  // Check there is no add button in the iframe. Make sure not to select from
+  // old tiles that are in the process of being deleted.
+  bool no_add_button = false;
+  ASSERT_TRUE(instant_test_utils::GetBoolFromJS(
+      iframe,
+      "document.querySelectorAll('#mv-tiles .md-add-icon').length === 0",
+      &no_add_button));
+  EXPECT_TRUE(no_add_button);
+}
+
+IN_PROC_BROWSER_TEST_F(LocalNTPCustomLinksTest, Reorder) {
+  content::WebContents* active_tab =
+      local_ntp_test_utils::OpenNewTab(browser(), GURL("about:blank"));
+
+  TestMostVisitedObserver observer(
+      InstantServiceFactory::GetForProfile(browser()->profile()));
+
+  local_ntp_test_utils::NavigateToNTPAndWaitUntilLoaded(browser());
+  observer.WaitForNumberOfItems(kDefaultMostVisitedItemCount);
+
+  // Fill tiles up to the maximum count.
+  content::RenderFrameHost* iframe = GetMostVisitedIframe(active_tab);
+  for (int i = kDefaultMostVisitedItemCount; i < kDefaultCustomLinkMaxCount;
+       ++i) {
+    std::string rid = std::to_string(i + 100);
+    std::string url = "https://" + rid + ".com";
+    std::string title = "url for " + rid;
+    local_ntp_test_utils::ExecuteScriptOnNTPAndWaitUntilLoaded(
+        iframe,
+        "window.chrome.embeddedSearch.newTabPage.updateCustomLink(-1, '" + url +
+            "', '" + title + "')");
+  }
+  // Confirm that there are max number of custom link tiles.
+  observer.WaitForNumberOfItems(kDefaultCustomLinkMaxCount);
+
+  // Get the title of the tile at index 1. Make sure not to select from old
+  // tiles that are in the process of being deleted.
+  std::string title;
+  ASSERT_TRUE(instant_test_utils::GetStringFromJS(
+      iframe, "document.querySelectorAll('#mv-tiles .md-title')[1].innerText",
+      &title));
+
+  // Move the tile to the front.
+  std::string tid;
+  ASSERT_TRUE(instant_test_utils::GetStringFromJS(
+      iframe,
+      "document.querySelectorAll('#mv-tiles "
+      ".md-tile')[1].getAttribute('data-tid')",
+      &tid));
+  local_ntp_test_utils::ExecuteScriptOnNTPAndWaitUntilLoaded(
+      iframe, "window.chrome.embeddedSearch.newTabPage.reorderCustomLink(" +
+                  tid + ", 0)");
+
+  // Check that the first tile is the tile that was moved.
+  std::string new_title;
+  ASSERT_TRUE(instant_test_utils::GetStringFromJS(
+      iframe, "document.querySelectorAll('#mv-tiles .md-title')[0].innerText",
+      &new_title));
+  EXPECT_EQ(new_title, title);
+
+  // Move the tile again to the end.
+  std::string end_index = std::to_string(kDefaultCustomLinkMaxCount - 1);
+  ASSERT_TRUE(instant_test_utils::GetStringFromJS(
+      iframe,
+      "document.querySelectorAll('#mv-tiles "
+      ".md-tile')[0].getAttribute('data-tid')",
+      &tid));
+  local_ntp_test_utils::ExecuteScriptOnNTPAndWaitUntilLoaded(
+      iframe, "window.chrome.embeddedSearch.newTabPage.reorderCustomLink(" +
+                  tid + ", " + end_index + ")");
+
+  // Check that the last tile is the tile that was moved.
+  new_title = std::string();
+  ASSERT_TRUE(instant_test_utils::GetStringFromJS(
+      iframe,
+      "document.querySelectorAll('#mv-tiles .md-title')[" + end_index +
+          "].innerText",
+      &new_title));
+  EXPECT_EQ(new_title, title);
 }
 
 // A minimal implementation of an interstitial page.

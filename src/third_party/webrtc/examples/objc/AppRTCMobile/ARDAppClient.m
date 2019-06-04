@@ -10,24 +10,26 @@
 
 #import "ARDAppClient+Internal.h"
 
-#import "WebRTC/RTCAudioTrack.h"
-#import "WebRTC/RTCCameraVideoCapturer.h"
-#import "WebRTC/RTCConfiguration.h"
-#import "WebRTC/RTCFileLogger.h"
-#import "WebRTC/RTCFileVideoCapturer.h"
-#import "WebRTC/RTCIceServer.h"
-#import "WebRTC/RTCLogging.h"
-#import "WebRTC/RTCMediaConstraints.h"
-#import "WebRTC/RTCMediaStream.h"
-#import "WebRTC/RTCPeerConnectionFactory.h"
-#import "WebRTC/RTCRtpSender.h"
-#import "WebRTC/RTCRtpTransceiver.h"
-#import "WebRTC/RTCTracing.h"
-#import "WebRTC/RTCVideoCodecFactory.h"
-#import "WebRTC/RTCVideoSource.h"
-#import "WebRTC/RTCVideoTrack.h"
+#import <WebRTC/RTCAudioTrack.h>
+#import <WebRTC/RTCCameraVideoCapturer.h>
+#import <WebRTC/RTCConfiguration.h>
+#import <WebRTC/RTCDefaultVideoDecoderFactory.h>
+#import <WebRTC/RTCDefaultVideoEncoderFactory.h>
+#import <WebRTC/RTCFileLogger.h>
+#import <WebRTC/RTCFileVideoCapturer.h>
+#import <WebRTC/RTCIceServer.h>
+#import <WebRTC/RTCLogging.h>
+#import <WebRTC/RTCMediaConstraints.h>
+#import <WebRTC/RTCMediaStream.h>
+#import <WebRTC/RTCPeerConnectionFactory.h>
+#import <WebRTC/RTCRtpSender.h>
+#import <WebRTC/RTCRtpTransceiver.h>
+#import <WebRTC/RTCTracing.h>
+#import <WebRTC/RTCVideoSource.h>
+#import <WebRTC/RTCVideoTrack.h>
 
 #import "ARDAppEngineClient.h"
+#import "ARDExternalSampleCapturer.h"
 #import "ARDJoinResponse.h"
 #import "ARDMessageResponse.h"
 #import "ARDSettingsModel.h"
@@ -53,10 +55,12 @@ static NSString * const kARDVideoTrackId = @"ARDAMSv0";
 static NSString * const kARDVideoTrackKind = @"video";
 
 // TODO(tkchin): Add these as UI options.
+#if defined(WEBRTC_IOS)
 static BOOL const kARDAppClientEnableTracing = NO;
 static BOOL const kARDAppClientEnableRtcEventLog = YES;
 static int64_t const kARDAppClientAecDumpMaxSizeInBytes = 5e6;  // 5 MB.
 static int64_t const kARDAppClientRtcEventLogMaxSizeInBytes = 5e6;  // 5 MB.
+#endif
 static int const kKbpsMultiplier = 1000;
 
 // We need a proxy to NSTimer because it causes a strong retain cycle. When
@@ -128,6 +132,7 @@ static int const kKbpsMultiplier = 1000;
 @synthesize defaultPeerConnectionConstraints =
     _defaultPeerConnectionConstraints;
 @synthesize isLoopback = _isLoopback;
+@synthesize broadcast = _broadcast;
 
 - (instancetype)init {
   return [self initWithDelegate:nil];
@@ -237,8 +242,7 @@ static int const kKbpsMultiplier = 1000;
   [_turnClient requestServersWithCompletionHandler:^(NSArray *turnServers,
                                                      NSError *error) {
     if (error) {
-      RTCLogError("Error retrieving TURN servers: %@",
-                  error.localizedDescription);
+      RTCLogError(@"Error retrieving TURN servers: %@", error.localizedDescription);
     }
     ARDAppClient *strongSelf = weakSelf;
     [strongSelf.iceServers addObjectsFromArray:turnServers];
@@ -396,8 +400,13 @@ static int const kKbpsMultiplier = 1000;
     didChangeIceConnectionState:(RTCIceConnectionState)newState {
   RTCLog(@"ICE state changed: %ld", (long)newState);
   dispatch_async(dispatch_get_main_queue(), ^{
-    [_delegate appClient:self didChangeConnectionState:newState];
+    [self.delegate appClient:self didChangeConnectionState:newState];
   });
+}
+
+- (void)peerConnection:(RTCPeerConnection *)peerConnection
+    didChangeConnectionState:(RTCPeerConnectionState)newState {
+  RTCLog(@"ICE+DTLS state changed: %ld", (long)newState);
 }
 
 - (void)peerConnection:(RTCPeerConnection *)peerConnection
@@ -446,16 +455,16 @@ static int const kKbpsMultiplier = 1000;
           [[NSError alloc] initWithDomain:kARDAppClientErrorDomain
                                      code:kARDAppClientErrorCreateSDP
                                  userInfo:userInfo];
-      [_delegate appClient:self didError:sdpError];
+      [self.delegate appClient:self didError:sdpError];
       return;
     }
     __weak ARDAppClient *weakSelf = self;
-    [_peerConnection setLocalDescription:sdp
-                       completionHandler:^(NSError *error) {
-                         ARDAppClient *strongSelf = weakSelf;
-                         [strongSelf peerConnection:strongSelf.peerConnection
-                             didSetSessionDescriptionWithError:error];
-                       }];
+    [self.peerConnection setLocalDescription:sdp
+                           completionHandler:^(NSError *error) {
+                             ARDAppClient *strongSelf = weakSelf;
+                             [strongSelf peerConnection:strongSelf.peerConnection
+                                 didSetSessionDescriptionWithError:error];
+                           }];
     ARDSessionDescriptionMessage *message =
         [[ARDSessionDescriptionMessage alloc] initWithDescription:sdp];
     [self sendSignalingMessage:message];
@@ -476,22 +485,21 @@ static int const kKbpsMultiplier = 1000;
           [[NSError alloc] initWithDomain:kARDAppClientErrorDomain
                                      code:kARDAppClientErrorSetSDP
                                  userInfo:userInfo];
-      [_delegate appClient:self didError:sdpError];
+      [self.delegate appClient:self didError:sdpError];
       return;
     }
     // If we're answering and we've just set the remote offer we need to create
     // an answer and set the local description.
-    if (!_isInitiator && !_peerConnection.localDescription) {
+    if (!self.isInitiator && !self.peerConnection.localDescription) {
       RTCMediaConstraints *constraints = [self defaultAnswerConstraints];
       __weak ARDAppClient *weakSelf = self;
-      [_peerConnection answerForConstraints:constraints
-                          completionHandler:^(RTCSessionDescription *sdp,
-                                              NSError *error) {
-        ARDAppClient *strongSelf = weakSelf;
-        [strongSelf peerConnection:strongSelf.peerConnection
-            didCreateSessionDescription:sdp
-                                  error:error];
-      }];
+      [self.peerConnection answerForConstraints:constraints
+                              completionHandler:^(RTCSessionDescription *sdp, NSError *error) {
+                                ARDAppClient *strongSelf = weakSelf;
+                                [strongSelf peerConnection:strongSelf.peerConnection
+                                    didCreateSessionDescription:sdp
+                                                          error:error];
+                              }];
     }
   });
 }
@@ -530,8 +538,14 @@ static int const kKbpsMultiplier = 1000;
   // Create peer connection.
   RTCMediaConstraints *constraints = [self defaultPeerConnectionConstraints];
   RTCConfiguration *config = [[RTCConfiguration alloc] init];
+  RTCCertificate *pcert = [RTCCertificate generateCertificateWithParams:@{
+    @"expires" : @100000,
+    @"name" : @"RSASSA-PKCS1-v1_5"
+  }];
   config.iceServers = _iceServers;
   config.sdpSemantics = RTCSdpSemanticsUnifiedPlan;
+  config.certificate = pcert;
+
   _peerConnection = [_factory peerConnectionWithConfiguration:config
                                                   constraints:constraints
                                                      delegate:self];
@@ -696,6 +710,7 @@ static int const kKbpsMultiplier = 1000;
   _localVideoTrack = [self createLocalVideoTrack];
   if (_localVideoTrack) {
     [_peerConnection addTrack:_localVideoTrack streamIds:@[ kARDMediaStreamId ]];
+    [_delegate appClient:self didReceiveLocalVideoTrack:_localVideoTrack];
     // We can set up rendering for the remote track right away since the transceiver already has an
     // RTCRtpReceiver with a track. The track will automatically get unmuted and produce frames
     // once RTP is received.
@@ -712,9 +727,14 @@ static int const kKbpsMultiplier = 1000;
   RTCVideoSource *source = [_factory videoSource];
 
 #if !TARGET_IPHONE_SIMULATOR
-  RTCCameraVideoCapturer *capturer = [[RTCCameraVideoCapturer alloc] initWithDelegate:source];
-  [_delegate appClient:self didCreateLocalCapturer:capturer];
-
+  if (self.isBroadcast) {
+    ARDExternalSampleCapturer *capturer =
+        [[ARDExternalSampleCapturer alloc] initWithDelegate:source];
+    [_delegate appClient:self didCreateLocalExternalSampleCapturer:capturer];
+  } else {
+    RTCCameraVideoCapturer *capturer = [[RTCCameraVideoCapturer alloc] initWithDelegate:source];
+    [_delegate appClient:self didCreateLocalCapturer:capturer];
+  }
 #else
 #if defined(__IPHONE_11_0) && (__IPHONE_OS_VERSION_MAX_ALLOWED >= __IPHONE_11_0)
   if (@available(iOS 10, *)) {

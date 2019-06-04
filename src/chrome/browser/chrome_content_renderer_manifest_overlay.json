@@ -16,7 +16,10 @@
           "autofill.mojom.AutofillAgent",
           "autofill.mojom.PasswordAutofillAgent",
           "autofill.mojom.PasswordGenerationAgent",
+	  "blink.mojom.DisplayCutoutClient",
           "blink.mojom.document_metadata.CopylessPaste",
+          "blink.mojom.PauseSubresourceLoadingHandle",
+          "blink.mojom.PreviewsResourceLoadingHintsReceiver",
           "chrome.mojom.ChromeRenderFrame",
           "chrome.mojom.ContentSettingsRenderer",
           "chrome.mojom.PrerenderDispatcher",
@@ -25,7 +28,8 @@
           "extensions.mojom.AppWindow",
           "safe_browsing.mojom.ThreatReporter",
           "safe_browsing.mojom.PhishingDetector",
-          "spellcheck.mojom.SpellCheckPanel"
+          "spellcheck.mojom.SpellCheckPanel",
+          "subresource_filter.mojom.SubresourceFilterAgent"
         ]
       },
       "requires": {

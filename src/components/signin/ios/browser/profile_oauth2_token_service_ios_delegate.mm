@@ -138,7 +138,8 @@ void SSOAccessTokenFetcher::OnAccessTokenResponse(NSString* token,
   if (auth_error.state() == GoogleServiceAuthError::NONE) {
     base::Time expiration_date =
         base::Time::FromDoubleT([expiration timeIntervalSince1970]);
-    FireOnGetTokenSuccess(base::SysNSStringToUTF8(token), expiration_date);
+    FireOnGetTokenSuccess(OAuth2AccessTokenConsumer::TokenResponse(
+        base::SysNSStringToUTF8(token), expiration_date, std::string()));
   } else {
     FireOnGetTokenFailure(auth_error);
   }
@@ -205,17 +206,23 @@ void ProfileOAuth2TokenServiceIOSDelegate::LoadCredentials(
     const std::string& primary_account_id) {
   DCHECK(thread_checker_.CalledOnValidThread());
 
+  DCHECK_EQ(LOAD_CREDENTIALS_NOT_STARTED, load_credentials_state());
+  set_load_credentials_state(LOAD_CREDENTIALS_IN_PROGRESS);
+
   // Clean-up stale data from prefs.
   ClearExcludedSecondaryAccounts();
 
   if (primary_account_id.empty()) {
     // On startup, always fire refresh token loaded even if there is nothing
     // to load (not authenticated).
+    set_load_credentials_state(LOAD_CREDENTIALS_FINISHED_WITH_SUCCESS);
     FireRefreshTokensLoaded();
     return;
   }
 
   ReloadCredentials(primary_account_id);
+
+  set_load_credentials_state(LOAD_CREDENTIALS_FINISHED_WITH_SUCCESS);
   FireRefreshTokensLoaded();
 }
 
@@ -300,7 +307,7 @@ void ProfileOAuth2TokenServiceIOSDelegate::RevokeAllCredentials() {
 OAuth2AccessTokenFetcher*
 ProfileOAuth2TokenServiceIOSDelegate::CreateAccessTokenFetcher(
     const std::string& account_id,
-    net::URLRequestContextGetter* getter,
+    scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
     OAuth2AccessTokenConsumer* consumer) {
   AccountInfo account_info =
       account_tracker_service_->GetAccountInfo(account_id);

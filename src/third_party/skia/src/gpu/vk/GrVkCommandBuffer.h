@@ -8,11 +8,12 @@
 #ifndef GrVkCommandBuffer_DEFINED
 #define GrVkCommandBuffer_DEFINED
 
+#include "GrVkVulkan.h"
+
 #include "GrVkGpu.h"
 #include "GrVkResource.h"
 #include "GrVkSemaphore.h"
 #include "GrVkUtil.h"
-#include "vk/GrVkDefines.h"
 
 class GrVkBuffer;
 class GrVkFramebuffer;
@@ -53,7 +54,7 @@ public:
 
     void bindDescriptorSets(const GrVkGpu* gpu,
                             GrVkPipelineState*,
-                            VkPipelineLayout layout,
+                            GrVkPipelineLayout* layout,
                             uint32_t firstSet,
                             uint32_t setCount,
                             const VkDescriptorSet* descriptorSets,
@@ -63,7 +64,7 @@ public:
     void bindDescriptorSets(const GrVkGpu* gpu,
                             const SkTArray<const GrVkRecycledResource*>&,
                             const SkTArray<const GrVkResource*>&,
-                            VkPipelineLayout layout,
+                            GrVkPipelineLayout* layout,
                             uint32_t firstSet,
                             uint32_t setCount,
                             const VkDescriptorSet* descriptorSets,
@@ -102,8 +103,8 @@ public:
               uint32_t firstVertex,
               uint32_t firstInstance) const;
 
-    // Add ref-counted resource that will be tracked and released when this
-    // command buffer finishes execution
+    // Add ref-counted resource that will be tracked and released when this command buffer finishes
+    // execution
     void addResource(const GrVkResource* resource) {
         resource->ref();
         fTrackedResources.append(1, &resource);
@@ -116,6 +117,13 @@ public:
         fTrackedRecycledResources.append(1, &resource);
     }
 
+    // Add ref-counted resource that will be tracked and released when this command buffer finishes
+    // recording.
+    void addRecordingResource(const GrVkResource* resource) {
+        resource->ref();
+        fTrackedRecordingResources.append(1, &resource);
+    }
+
     void reset(GrVkGpu* gpu);
 
 protected:
@@ -126,11 +134,13 @@ protected:
             , fNumResets(0) {
             fTrackedResources.setReserve(kInitialTrackedResourcesCount);
             fTrackedRecycledResources.setReserve(kInitialTrackedResourcesCount);
+            fTrackedRecordingResources.setReserve(kInitialTrackedResourcesCount);
             this->invalidateState();
         }
 
         SkTDArray<const GrVkResource*>          fTrackedResources;
         SkTDArray<const GrVkRecycledResource*>  fTrackedRecycledResources;
+        SkTDArray<const GrVkResource*>          fTrackedRecordingResources;
 
         // Tracks whether we are in the middle of a command buffer begin/end calls and thus can add
         // new commands to the buffer;
@@ -301,6 +311,8 @@ public:
     void begin(const GrVkGpu* gpu, const GrVkFramebuffer* framebuffer,
                const GrVkRenderPass* compatibleRenderPass);
     void end(const GrVkGpu* gpu);
+
+    VkCommandBuffer vkCommandBuffer() { return fCmdBuffer; }
 
 #ifdef SK_TRACE_VK_RESOURCES
     void dumpInfo() const override {

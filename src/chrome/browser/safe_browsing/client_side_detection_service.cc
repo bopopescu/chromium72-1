@@ -231,6 +231,8 @@ void ClientSideDetectionService::Observe(
 
 void ClientSideDetectionService::SendModelToProcess(
     content::RenderProcessHost* process) {
+  DCHECK(process->IsInitializedAndNotDead());
+
   // The ClientSideDetectionService is enabled if _any_ active profile has
   // SafeBrowsing turned on.  Here we check the profile for each renderer
   // process and only send the model to those that have SafeBrowsing enabled,
@@ -257,9 +259,10 @@ void ClientSideDetectionService::SendModelToProcess(
     return;
   }
   ChromeService::GetInstance()->connector()->BindInterface(
-      service_manager::Identity(chrome::mojom::kRendererServiceName,
-                                process->GetChildIdentity().user_id(),
-                                process->GetChildIdentity().instance()),
+      service_manager::ServiceFilter::ByNameWithIdInGroup(
+          chrome::mojom::kRendererServiceName,
+          process->GetChildIdentity().instance_id(),
+          process->GetChildIdentity().instance_group()),
       &phishing);
   phishing->SetPhishingModel(model);
 }
@@ -268,7 +271,9 @@ void ClientSideDetectionService::SendModelToRenderers() {
   for (content::RenderProcessHost::iterator i(
            content::RenderProcessHost::AllHostsIterator());
        !i.IsAtEnd(); i.Advance()) {
-    SendModelToProcess(i.GetCurrentValue());
+    content::RenderProcessHost* process = i.GetCurrentValue();
+    if (process->IsInitializedAndNotDead())
+      SendModelToProcess(process);
   }
 }
 
@@ -303,7 +308,7 @@ void ClientSideDetectionService::StartClientReportPhishingRequest(
 
   std::string request_data;
   if (!request->SerializeToString(&request_data)) {
-    UMA_HISTOGRAM_COUNTS("SBClientPhishing.RequestNotSerialized", 1);
+    UMA_HISTOGRAM_COUNTS_1M("SBClientPhishing.RequestNotSerialized", 1);
     DVLOG(1) << "Unable to serialize the CSD request. Proto file changed?";
     if (!callback.is_null())
       callback.Run(GURL(request->url()), false);
@@ -445,8 +450,8 @@ void ClientSideDetectionService::StartClientReportMalwareRequest(
   UMA_HISTOGRAM_ENUMERATION("SBClientMalware.SentReports", REPORT_SENT,
                             REPORT_RESULT_MAX);
 
-  UMA_HISTOGRAM_COUNTS("SBClientMalware.IPBlacklistRequestPayloadSize",
-                       request_data.size());
+  UMA_HISTOGRAM_COUNTS_1M("SBClientMalware.IPBlacklistRequestPayloadSize",
+                          request_data.size());
 
   // Record that we made a malware request
   malware_report_times_.push(base::Time::Now());

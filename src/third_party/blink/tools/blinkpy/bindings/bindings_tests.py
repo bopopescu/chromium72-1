@@ -57,13 +57,13 @@ from utilities import to_snake_case
 PASS_MESSAGE = 'All tests PASS!'
 FAIL_MESSAGE = """Some tests FAIL!
 To update the reference files, execute:
-    run_bindings_tests.py --reset-results
+    third_party/blink/tools/run_bindings_tests.py --reset-results
 
 If the failures are not due to your changes, test results may be out of sync;
 please rebaseline them in a separate CL, after checking that tests fail in ToT.
 In CL, please set:
 NOTRY=true
-TBR=(someone in Source/bindings/OWNERS or WATCHLISTS:bindings)
+TBR=someone in third_party/blink/renderer/bindings/OWNERS or WATCHLISTS:bindings
 """
 
 SOURCE_PATH = path_finder.get_source_dir()
@@ -197,6 +197,9 @@ def bindings_tests(output_directory, verbose, suppress_diff):
     executive = Executive()
 
     def list_files(directory):
+        if not os.path.isdir(directory):
+            return []
+
         files = []
         for component in os.listdir(directory):
             if component not in COMPONENT_DIRECTORY:

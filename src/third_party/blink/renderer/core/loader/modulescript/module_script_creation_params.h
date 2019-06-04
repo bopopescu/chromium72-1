@@ -7,8 +7,8 @@
 
 #include "base/optional.h"
 #include "third_party/blink/public/platform/web_url_request.h"
+#include "third_party/blink/renderer/platform/bindings/parkable_string.h"
 #include "third_party/blink/renderer/platform/cross_thread_copier.h"
-#include "third_party/blink/renderer/platform/loader/fetch/access_control_status.h"
 #include "third_party/blink/renderer/platform/weborigin/kurl.h"
 #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
 
@@ -19,29 +19,63 @@ class ModuleScriptCreationParams {
  public:
   ModuleScriptCreationParams(
       const KURL& response_url,
-      const String& source_text,
-      network::mojom::FetchCredentialsMode fetch_credentials_mode,
-      AccessControlStatus access_control_status)
+      const ParkableString& source_text,
+      network::mojom::FetchCredentialsMode fetch_credentials_mode)
       : response_url_(response_url),
+        is_isolated_(false),
         source_text_(source_text),
-        fetch_credentials_mode_(fetch_credentials_mode),
-        access_control_status_(access_control_status) {}
+        isolated_source_text_(),
+        fetch_credentials_mode_(fetch_credentials_mode) {}
+
   ~ModuleScriptCreationParams() = default;
 
-  const KURL& GetResponseUrl() const { return response_url_; };
-  const String& GetSourceText() const { return source_text_; }
+  ModuleScriptCreationParams IsolatedCopy() const {
+    String isolated_source_text =
+        isolated_source_text_ ? isolated_source_text_.IsolatedCopy()
+                              : GetSourceText().ToString().IsolatedCopy();
+    return ModuleScriptCreationParams(GetResponseUrl().Copy(),
+                                      isolated_source_text,
+                                      GetFetchCredentialsMode());
+  }
+
+  const KURL& GetResponseUrl() const { return response_url_; }
+  const ParkableString& GetSourceText() const {
+    if (is_isolated_) {
+      source_text_ = ParkableString(isolated_source_text_.ReleaseImpl());
+      isolated_source_text_ = String();
+      is_isolated_ = false;
+    }
+    return source_text_;
+  }
   network::mojom::FetchCredentialsMode GetFetchCredentialsMode() const {
     return fetch_credentials_mode_;
   }
-  AccessControlStatus GetAccessControlStatus() const {
-    return access_control_status_;
+
+  bool IsSafeToSendToAnotherThread() const {
+    return response_url_.IsSafeToSendToAnotherThread() && is_isolated_;
   }
 
  private:
+  // Creates an isolated copy.
+  ModuleScriptCreationParams(
+      const KURL& response_url,
+      const String& isolated_source_text,
+      network::mojom::FetchCredentialsMode fetch_credentials_mode)
+      : response_url_(response_url),
+        is_isolated_(true),
+        source_text_(),
+        isolated_source_text_(isolated_source_text),
+        fetch_credentials_mode_(fetch_credentials_mode) {}
+
   const KURL response_url_;
-  const String source_text_;
+
+  // Mutable because an isolated copy can become bound to a thread when
+  // calling GetSourceText().
+  mutable bool is_isolated_;
+  mutable ParkableString source_text_;
+  mutable String isolated_source_text_;
+
   const network::mojom::FetchCredentialsMode fetch_credentials_mode_;
-  const AccessControlStatus access_control_status_;
 };
 
 // Creates a deep copy because |response_url_| and |source_text_| are not
@@ -50,9 +84,7 @@ template <>
 struct CrossThreadCopier<ModuleScriptCreationParams> {
   static ModuleScriptCreationParams Copy(
       const ModuleScriptCreationParams& params) {
-    return ModuleScriptCreationParams(
-        params.GetResponseUrl().Copy(), params.GetSourceText().IsolatedCopy(),
-        params.GetFetchCredentialsMode(), params.GetAccessControlStatus());
+    return params.IsolatedCopy();
   }
 };
 

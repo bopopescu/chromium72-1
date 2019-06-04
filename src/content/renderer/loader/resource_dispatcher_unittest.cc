@@ -15,10 +15,10 @@
 
 #include "base/macros.h"
 #include "base/memory/shared_memory.h"
-#include "base/message_loop/message_loop.h"
 #include "base/process/process_handle.h"
 #include "base/run_loop.h"
 #include "base/test/scoped_feature_list.h"
+#include "base/test/scoped_task_environment.h"
 #include "content/common/appcache_interfaces.h"
 #include "content/public/common/content_features.h"
 #include "content/public/renderer/fixed_received_data.h"
@@ -38,7 +38,6 @@
 #include "services/network/public/mojom/request_context_frame_type.mojom.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/public/platform/scheduler/test/renderer_scheduler_test_support.h"
-#include "third_party/blink/public/platform/web_referrer_policy.h"
 #include "url/gurl.h"
 
 namespace content {
@@ -85,7 +84,7 @@ class ResourceDispatcherTest : public testing::Test,
     head.headers = new net::HttpResponseHeaders(raw_headers);
     head.mime_type = kTestPageMimeType;
     head.charset = kTestPageCharset;
-    client->OnReceiveResponse(head, {});
+    client->OnReceiveResponse(head);
   }
 
   std::unique_ptr<network::ResourceRequest> CreateResourceRequest() {
@@ -98,7 +97,7 @@ class ResourceDispatcherTest : public testing::Test,
     request->referrer_policy = Referrer::GetDefaultReferrerPolicy();
     request->resource_type = RESOURCE_TYPE_SUB_RESOURCE;
     request->priority = net::LOW;
-    request->fetch_request_mode = network::mojom::FetchRequestMode::kNoCORS;
+    request->fetch_request_mode = network::mojom::FetchRequestMode::kNoCors;
     request->fetch_frame_type = network::mojom::RequestContextFrameType::kNone;
 
     const RequestExtraData extra_data;
@@ -130,7 +129,7 @@ class ResourceDispatcherTest : public testing::Test,
   std::vector<std::pair<network::mojom::URLLoaderRequest,
                         network::mojom::URLLoaderClientPtr>>
       loader_and_clients_;
-  base::MessageLoop message_loop_;
+  base::test::ScopedTaskEnvironment task_environment_;
   std::unique_ptr<ResourceDispatcher> dispatcher_;
 };
 
@@ -184,8 +183,6 @@ class TestResourceDispatcherDelegate : public ResourceDispatcherDelegate {
     void OnStartLoadingResponseBody(
         mojo::ScopedDataPipeConsumerHandle body) override {}
 
-    void OnDownloadedData(int len, int encoded_data_length) override {}
-
     void OnReceivedData(std::unique_ptr<ReceivedData> data) override {
       data_.append(data->payload(), data->length());
     }
@@ -199,6 +196,9 @@ class TestResourceDispatcherDelegate : public ResourceDispatcherDelegate {
             std::make_unique<FixedReceivedData>(data_.data(), data_.size()));
       }
       original_peer_->OnCompletedRequest(status);
+    }
+    scoped_refptr<base::TaskRunner> GetTaskRunner() const override {
+      return blink::scheduler::GetSingleThreadTaskRunnerForTesting();
     }
 
    private:
@@ -325,7 +325,7 @@ class TimeConversionTest : public ResourceDispatcherTest {
     ASSERT_EQ(1u, loader_and_clients_.size());
     auto client = std::move(loader_and_clients_[0].second);
     loader_and_clients_.clear();
-    client->OnReceiveResponse(response_head, {});
+    client->OnReceiveResponse(response_head);
   }
 
   const network::ResourceResponseInfo& response_info() const {
@@ -396,7 +396,11 @@ class CompletionTimeConversionTest : public ResourceDispatcherTest {
     // copied.
     response_head.load_timing.request_start_time =
         base::Time() + base::TimeDelta::FromSeconds(99);
-    client->OnReceiveResponse(response_head, {});
+    client->OnReceiveResponse(response_head);
+
+    mojo::DataPipe pipe;
+    client->OnStartLoadingResponseBody(std::move(pipe.consumer_handle));
+    pipe.producer_handle.reset();  // The response is empty.
 
     network::URLLoaderCompletionStatus status;
     status.completion_time = completion_time;

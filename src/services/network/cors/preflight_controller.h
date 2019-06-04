@@ -17,6 +17,7 @@
 #include "services/network/public/cpp/cors/cors_error_status.h"
 #include "services/network/public/cpp/cors/preflight_cache.h"
 #include "services/network/public/cpp/cors/preflight_result.h"
+#include "services/network/public/cpp/cors/preflight_timing_info.h"
 #include "services/network/public/cpp/resource_request.h"
 #include "services/network/public/mojom/fetch_api.mojom.h"
 #include "services/network/public/mojom/url_loader_factory.mojom.h"
@@ -32,16 +33,16 @@ namespace cors {
 // See also https://crbug.com/803766 to check a design doc.
 class COMPONENT_EXPORT(NETWORK_SERVICE) PreflightController final {
  public:
+  // PreflightTimingInfo is provided only when a preflight request was made.
   using CompletionCallback =
-      base::OnceCallback<void(base::Optional<CORSErrorStatus>)>;
+      base::OnceCallback<void(int net_error,
+                              base::Optional<CorsErrorStatus>,
+                              base::Optional<PreflightTimingInfo>)>;
   // Creates a CORS-preflight ResourceRequest for a specified |request| for a
   // URL that is originally requested.
   static std::unique_ptr<ResourceRequest> CreatePreflightRequestForTesting(
-      const ResourceRequest& request);
-
-  // Obtains the shared default controller instance.
-  // TODO(toyoshim): Find a right owner rather than a single design.
-  static PreflightController* GetDefaultController();
+      const ResourceRequest& request,
+      bool tainted = false);
 
   PreflightController();
   ~PreflightController();
@@ -61,6 +62,7 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) PreflightController final {
       CompletionCallback callback,
       int32_t request_id,
       const ResourceRequest& resource_request,
+      bool tainted,
       const net::NetworkTrafficAnnotationTag& traffic_annotation,
       mojom::URLLoaderFactory* loader_factory,
       base::OnceCallback<void()> preflight_finalizer);

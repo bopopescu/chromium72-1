@@ -23,6 +23,7 @@
 #include "third_party/blink/renderer/bindings/core/v8/html_script_element_or_svg_script_element.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_event_listener.h"
 #include "third_party/blink/renderer/core/dom/attribute.h"
+#include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/dom/events/event.h"
 #include "third_party/blink/renderer/core/frame/csp/content_security_policy.h"
 #include "third_party/blink/renderer/core/html_names.h"
@@ -34,23 +35,24 @@ namespace blink {
 
 inline SVGScriptElement::SVGScriptElement(Document& document,
                                           const CreateElementFlags flags)
-    : SVGElement(SVGNames::scriptTag, document),
+    : SVGElement(svg_names::kScriptTag, document),
       SVGURIReference(this),
       loader_(InitializeScriptLoader(flags.IsCreatedByParser(),
                                      flags.WasAlreadyStarted())) {}
 
 SVGScriptElement* SVGScriptElement::Create(Document& document,
                                            const CreateElementFlags flags) {
-  return new SVGScriptElement(document, flags);
+  return MakeGarbageCollected<SVGScriptElement>(document, flags);
 }
 
 void SVGScriptElement::ParseAttribute(
     const AttributeModificationParams& params) {
-  if (params.name == HTMLNames::onerrorAttr) {
+  if (params.name == html_names::kOnerrorAttr) {
     SetAttributeEventListener(
-        EventTypeNames::error,
-        CreateAttributeEventListener(this, params.name, params.new_value,
-                                     EventParameterName()));
+        event_type_names::kError,
+        CreateAttributeEventListener(
+            this, params.name, params.new_value,
+            JSEventHandler::HandlerType::kOnErrorEventHandler));
   } else {
     SVGElement::ParseAttribute(params);
   }
@@ -67,7 +69,7 @@ void SVGScriptElement::SvgAttributeChanged(const QualifiedName& attr_name) {
 }
 
 Node::InsertionNotificationRequest SVGScriptElement::InsertedInto(
-    ContainerNode* root_parent) {
+    ContainerNode& root_parent) {
   SVGElement::InsertedInto(root_parent);
   return kInsertionShouldCallDidNotifySubtreeInsertions;
 }
@@ -107,7 +109,7 @@ String SVGScriptElement::SourceAttributeValue() const {
 }
 
 String SVGScriptElement::TypeAttributeValue() const {
-  return getAttribute(SVGNames::typeAttr).GetString();
+  return getAttribute(svg_names::kTypeAttr).GetString();
 }
 
 String SVGScriptElement::TextFromChildren() {
@@ -154,12 +156,12 @@ Element* SVGScriptElement::CloneWithoutAttributesAndChildren(
 }
 
 void SVGScriptElement::DispatchLoadEvent() {
-  DispatchEvent(Event::Create(EventTypeNames::load));
+  DispatchEvent(*Event::Create(event_type_names::kLoad));
   have_fired_load_ = true;
 }
 
 void SVGScriptElement::DispatchErrorEvent() {
-  DispatchEvent(Event::Create(EventTypeNames::error));
+  DispatchEvent(*Event::Create(event_type_names::kError));
 }
 
 void SVGScriptElement::SetScriptElementForBinding(
@@ -170,8 +172,8 @@ void SVGScriptElement::SetScriptElementForBinding(
 
 #if DCHECK_IS_ON()
 bool SVGScriptElement::IsAnimatableAttribute(const QualifiedName& name) const {
-  if (name == SVGNames::typeAttr || name == SVGNames::hrefAttr ||
-      name == XLinkNames::hrefAttr)
+  if (name == svg_names::kTypeAttr || name == svg_names::kHrefAttr ||
+      name == xlink_names::kHrefAttr)
     return false;
   return SVGElement::IsAnimatableAttribute(name);
 }
@@ -182,11 +184,6 @@ void SVGScriptElement::Trace(blink::Visitor* visitor) {
   SVGElement::Trace(visitor);
   SVGURIReference::Trace(visitor);
   ScriptElementBase::Trace(visitor);
-}
-
-void SVGScriptElement::TraceWrappers(ScriptWrappableVisitor* visitor) const {
-  visitor->TraceWrappers(loader_);
-  SVGElement::TraceWrappers(visitor);
 }
 
 }  // namespace blink

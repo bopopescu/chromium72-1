@@ -450,6 +450,11 @@
         "glCompressedCopyTextureCHROMIUM"
     ],
 
+    "GL_ANGLE_copy_texture_3D":[
+        "glCopyTexture3DANGLE",
+        "glCopySubTexture3DANGLE"
+    ],
+
     "GL_ANGLE_request_extension": [
         "glRequestExtensionANGLE"
     ],
@@ -524,6 +529,25 @@
     "GL_ANGLE_multiview": [
         "glFramebufferTextureMultiviewLayeredANGLE",
         "glFramebufferTextureMultiviewSideBySideANGLE"
+    ],
+
+    "GL_KHR_parallel_shader_compile": [
+        "glMaxShaderCompilerThreadsKHR"
+    ],
+
+    "GL_OES_texture_storage_multisample_2d_array": [
+        "glTexStorage3DMultisampleOES"
+    ],
+
+    "GL_OES_texture_border_clamp": [
+        "glTexParameterIivOES",
+        "glTexParameterIuivOES",
+        "glGetTexParameterIivOES",
+        "glGetTexParameterIuivOES",
+        "glSamplerParameterIivOES",
+        "glSamplerParameterIuivOES",
+        "glGetSamplerParameterIivOES",
+        "glGetSamplerParameterIuivOES"
     ],
 
     "GLES3 core": [
@@ -704,6 +728,18 @@
         "glVertexBindingDivisor"
     ],
 
+    "GL_EXT_geometry_shader": [
+        "glFramebufferTextureEXT"
+    ],
+
+    "GL_ANGLE_texture_multisample": [
+      "glTexStorage2DMultisampleANGLE",
+      "glGetTexLevelParameterfvANGLE",
+      "glGetTexLevelParameterivANGLE",
+      "glGetMultisamplefvANGLE",
+      "glSampleMaskiANGLE"
+    ],
+
     "EGL 1.0": [
         "eglChooseConfig",
         "eglCopyBuffers",
@@ -772,7 +808,9 @@
     ],
 
     "EGL_EXT_platform_base": [
-        "eglGetPlatformDisplayEXT"
+        "eglGetPlatformDisplayEXT",
+        "eglCreatePlatformWindowSurfaceEXT",
+        "eglCreatePlatformPixmapSurfaceEXT"
     ],
 
     "EGL_EXT_device_query": [
@@ -818,8 +856,16 @@
         "eglGetSyncValuesCHROMIUM"
     ],
 
-    "EGL_EXT_swap_buffers_with_damage": [
-        "eglSwapBuffersWithDamageEXT"
+    "EGL_KHR_swap_buffers_with_damage": [
+        "eglSwapBuffersWithDamageKHR"
+    ],
+
+    "EGL_ANDROID_presentation_time": [
+        "eglPresentationTimeANDROID"
+    ],
+
+    "EGL_ANDROID_blob_cache": [
+        "eglSetBlobCacheFuncsANDROID"
     ],
 
     "EGL_ANGLE_program_cache_control": [
@@ -827,6 +873,20 @@
         "eglProgramCacheQueryANGLE",
         "eglProgramCachePopulateANGLE",
         "eglProgramCacheResizeANGLE"
+    ],
+
+    "EGL_KHR_debug": [
+        "eglDebugMessageControlKHR",
+        "eglQueryDebugKHR",
+        "eglLabelObjectKHR"
+    ],
+
+    "EGL_ANDROID_get_frame_timestamps": [
+        "eglGetCompositorTimingSupportedANDROID",
+        "eglGetCompositorTimingANDROID",
+        "eglGetNextFrameIdANDROID",
+        "eglGetFrameTimestampSupportedANDROID",
+        "eglGetFrameTimestampsANDROID"
     ],
 
     "angle::Platform related entry points": [

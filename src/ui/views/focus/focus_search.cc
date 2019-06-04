@@ -5,7 +5,7 @@
 #include "ui/views/focus/focus_search.h"
 
 #include "base/logging.h"
-#include "ui/views/bubble/bubble_dialog_delegate.h"
+#include "ui/views/bubble/bubble_dialog_delegate_view.h"
 #include "ui/views/focus/focus_manager.h"
 #include "ui/views/view.h"
 #include "ui/views/view_properties.h"
@@ -183,15 +183,14 @@ View* FocusSearch::FindNextFocusableViewImpl(
           focus_traversable_view);
       if (v || *focus_traversable)
         return v;
-    } else {
-      // Check to see if we should navigate into a dialog anchored at this view.
-      BubbleDialogDelegateView* bubble =
-          starting_view->GetProperty(kAnchoredDialogKey);
-      if (bubble) {
-        *focus_traversable = bubble->GetWidget()->GetFocusTraversable();
-        *focus_traversable_view = starting_view;
-        return nullptr;
-      }
+    }
+    // Check to see if we should navigate into a dialog anchored at this view.
+    BubbleDialogDelegateView* bubble =
+        starting_view->GetProperty(kAnchoredDialogKey);
+    if (bubble) {
+      *focus_traversable = bubble->GetWidget()->GetFocusTraversable();
+      *focus_traversable_view = starting_view;
+      return nullptr;
     }
   }
 

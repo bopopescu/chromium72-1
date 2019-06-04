@@ -19,6 +19,7 @@ import org.chromium.chrome.browser.SynchronousInitializationActivity;
 // TODO(https://crbug.com/820491): extend AsyncInitializationActivity.
 public class SigninActivity extends SynchronousInitializationActivity {
     private static final String TAG = "SigninActivity";
+    private static final String ARGUMENT_FRAGMENT_ARGS = "SigninActivity.FragmentArgs";
 
     /**
      * Creates an {@link Intent} which can be used to start sign-in flow.
@@ -63,9 +64,9 @@ public class SigninActivity extends SynchronousInitializationActivity {
                 context, SigninFragment.createArgumentsForPromoAddAccountFlow(accessPoint));
     }
 
-    private static Intent createIntentInternal(Context context, Bundle fragmentArguments) {
+    private static Intent createIntentInternal(Context context, Bundle fragmentArgs) {
         Intent intent = new Intent(context, SigninActivity.class);
-        intent.putExtras(fragmentArguments);
+        intent.putExtra(ARGUMENT_FRAGMENT_ARGS, fragmentArgs);
         return intent;
     }
 
@@ -77,8 +78,8 @@ public class SigninActivity extends SynchronousInitializationActivity {
         FragmentManager fragmentManager = getSupportFragmentManager();
         Fragment fragment = fragmentManager.findFragmentById(R.id.fragment_container);
         if (fragment == null) {
-            fragment = new SigninFragment();
-            fragment.setArguments(getIntent().getExtras());
+            Bundle fragmentArgs = getIntent().getBundleExtra(ARGUMENT_FRAGMENT_ARGS);
+            fragment = Fragment.instantiate(this, SigninFragment.class.getName(), fragmentArgs);
             fragmentManager.beginTransaction().add(R.id.fragment_container, fragment).commit();
         }
     }

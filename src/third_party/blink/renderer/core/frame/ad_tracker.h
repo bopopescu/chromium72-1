@@ -7,8 +7,9 @@
 
 #include "base/macros.h"
 #include "third_party/blink/renderer/core/frame/local_frame.h"
-#include "third_party/blink/renderer/platform/loader/fetch/resource.h"
+#include "third_party/blink/renderer/platform/heap/member.h"
 #include "third_party/blink/renderer/platform/weborigin/kurl.h"
+#include "third_party/blink/renderer/platform/wtf/hash_map.h"
 #include "third_party/blink/renderer/platform/wtf/hash_set.h"
 #include "third_party/blink/renderer/platform/wtf/vector.h"
 #include "v8/include/v8.h"
@@ -18,6 +19,7 @@ class ExecutionContext;
 class DocumentLoader;
 class ResourceRequest;
 class ResourceResponse;
+enum class ResourceType : uint8_t;
 struct FetchInitiatorInfo;
 
 namespace probe {
@@ -43,17 +45,18 @@ class CORE_EXPORT AdTracker : public GarbageCollectedFinalized<AdTracker> {
   // - Mark a resource request as an ad if any executing scripts contain an ad.
   // - If the marked resource is a script, also save it to keep track of all
   // those script resources that have been identified as ads.
-  void WillSendRequest(ExecutionContext*,
-                       unsigned long identifier,
-                       DocumentLoader*,
-                       ResourceRequest&,
-                       const ResourceResponse& redirect_response,
-                       const FetchInitiatorInfo&,
-                       Resource::Type);
+  // Virtual for testing.
+  virtual void WillSendRequest(ExecutionContext*,
+                               unsigned long identifier,
+                               DocumentLoader*,
+                               ResourceRequest&,
+                               const ResourceResponse& redirect_response,
+                               const FetchInitiatorInfo&,
+                               ResourceType);
 
-  // Returns true if any script in the pseudo call stack have previously been
+  // Returns true if any script in the pseudo call stack has previously been
   // identified as an ad resource.
-  bool IsAdScriptInStack(ExecutionContext*);
+  bool IsAdScriptInStack();
 
   virtual void Trace(blink::Visitor*);
 
@@ -64,28 +67,28 @@ class CORE_EXPORT AdTracker : public GarbageCollectedFinalized<AdTracker> {
  protected:
   // Protected for testing.
   virtual String ScriptAtTopOfStack(ExecutionContext*);
+  virtual ExecutionContext* GetCurrentExecutionContext();
 
  private:
   friend class FrameFetchContextSubresourceFilterTest;
+  friend class AdTrackerSimTest;
   friend class AdTrackerTest;
 
-  void WillExecuteScript(const String& script_name);
+  void WillExecuteScript(ExecutionContext*, const String& script_name);
   void DidExecuteScript();
-  void AppendToKnownAdScripts(const KURL&);
+  bool IsKnownAdScript(ExecutionContext* execution_context, const String& url);
+  void AppendToKnownAdScripts(ExecutionContext&, const String& url);
 
   Member<LocalFrame> local_root_;
 
-  // Since the script URLs should be external strings in v8 (allocated in Blink)
-  // getting it as String should end up with the same StringImpl. Thus storing a
-  // vector of Strings here should not be expensive.
-  struct ExecutingScript {
-    String url;
-    bool is_ad;
-    ExecutingScript(String script_url, bool is_ad_script)
-        : url(script_url), is_ad(is_ad_script){};
-  };
-  Vector<ExecutingScript> executing_scripts_;
-  HashSet<String> known_ad_scripts_;
+  // Each time v8 is started to run a script or function, this records if it was
+  // an ad script. Each time the script or function finishes, it pops the stack.
+  Vector<bool> stack_frame_is_ad_;
+
+  uint32_t num_ads_in_stack_ = 0;
+
+  // The set of ad scripts detected outside of ad-frame contexts.
+  HeapHashMap<WeakMember<ExecutionContext>, HashSet<String>> known_ad_scripts_;
 
   DISALLOW_COPY_AND_ASSIGN(AdTracker);
 };

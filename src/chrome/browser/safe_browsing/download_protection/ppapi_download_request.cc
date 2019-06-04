@@ -6,6 +6,7 @@
 
 #include "base/metrics/histogram_functions.h"
 #include "base/metrics/histogram_macros.h"
+#include "base/task/post_task.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/policy/chrome_browser_policy_connector.h"
 #include "chrome/browser/profiles/profile_manager.h"
@@ -16,6 +17,7 @@
 #include "components/data_use_measurement/core/data_use_user_data.h"
 #include "components/safe_browsing/common/utils.h"
 #include "components/safe_browsing/db/database_manager.h"
+#include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/web_contents.h"
 #include "google_apis/google_api_keys.h"
@@ -104,15 +106,15 @@ void PPAPIDownloadRequest::Start() {
   // verdict. The weak pointer used for the timeout will be invalidated (and
   // hence would prevent the timeout) if the check completes on time and
   // execution reaches Finish().
-  BrowserThread::PostDelayedTask(
-      BrowserThread::UI, FROM_HERE,
+  base::PostDelayedTaskWithTraits(
+      FROM_HERE, {BrowserThread::UI},
       base::BindOnce(&PPAPIDownloadRequest::OnRequestTimedOut,
                      weakptr_factory_.GetWeakPtr()),
       base::TimeDelta::FromMilliseconds(
           service_->download_request_timeout_ms()));
 
-  BrowserThread::PostTask(
-      BrowserThread::IO, FROM_HERE,
+  base::PostTaskWithTraits(
+      FROM_HERE, {BrowserThread::IO},
       base::BindOnce(&PPAPIDownloadRequest::CheckWhitelistsOnIOThread,
                      requestor_url_, database_manager_,
                      weakptr_factory_.GetWeakPtr()));
@@ -139,8 +141,8 @@ void PPAPIDownloadRequest::CheckWhitelistsOnIOThread(
   bool url_was_whitelisted =
       requestor_url.is_valid() && database_manager &&
       database_manager->MatchDownloadWhitelistUrl(requestor_url);
-  BrowserThread::PostTask(
-      BrowserThread::UI, FROM_HERE,
+  base::PostTaskWithTraits(
+      FROM_HERE, {BrowserThread::UI},
       base::BindOnce(&PPAPIDownloadRequest::WhitelistCheckComplete,
                      download_request, url_was_whitelisted));
 }
@@ -291,13 +293,6 @@ void PPAPIDownloadRequest::Finish(RequestOutcome reason,
                                   DownloadCheckResult response) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
   DVLOG(2) << __func__ << " response: " << static_cast<int>(response);
-  base::UmaHistogramSparse(
-      "SBClientDownload.PPAPIDownloadRequest.RequestOutcome",
-      static_cast<int>(reason));
-  base::UmaHistogramSparse("SBClientDownload.PPAPIDownloadRequest.Result",
-                           static_cast<int>(response));
-  UMA_HISTOGRAM_TIMES("SBClientDownload.PPAPIDownloadRequest.RequestDuration",
-                      base::TimeTicks::Now() - start_time_);
   if (!callback_.is_null())
     base::ResetAndReturn(&callback_).Run(response);
   loader_.reset();

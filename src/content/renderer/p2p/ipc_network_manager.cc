@@ -43,10 +43,11 @@ rtc::AdapterType ConvertConnectionTypeToAdapterType(
 
 }  // namespace
 
-IpcNetworkManager::IpcNetworkManager(NetworkListManager* network_list_manager)
+IpcNetworkManager::IpcNetworkManager(
+    NetworkListManager* network_list_manager,
+    std::unique_ptr<MdnsResponderAdapter> mdns_responder)
     : network_list_manager_(network_list_manager),
-      start_count_(0),
-      network_list_received_(false),
+      mdns_responder_(std::move(mdns_responder)),
       weak_factory_(this) {
   network_list_manager_->AddNetworkListObserver(this);
 }
@@ -93,8 +94,7 @@ void IpcNetworkManager::OnNetworkListChanged(
   // rtc::Network uses these prefix_length to compare network
   // interfaces discovered.
   std::vector<rtc::Network*> networks;
-  for (net::NetworkInterfaceList::const_iterator it = list.begin();
-       it != list.end(); it++) {
+  for (auto it = list.begin(); it != list.end(); it++) {
     rtc::IPAddress ip_address =
         jingle_glue::NetIPAddressToRtcIPAddress(it->address);
     DCHECK(!ip_address.IsNil());
@@ -183,6 +183,10 @@ void IpcNetworkManager::OnNetworkListChanged(
                            stats.ipv4_network_count);
   UMA_HISTOGRAM_COUNTS_100("WebRTC.PeerConnection.IPv6Interfaces",
                            stats.ipv6_network_count);
+}
+
+webrtc::MdnsResponderInterface* IpcNetworkManager::GetMdnsResponder() const {
+  return mdns_responder_.get();
 }
 
 void IpcNetworkManager::SendNetworksChangedSignal() {

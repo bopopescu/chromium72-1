@@ -34,6 +34,10 @@ static uint64_t calc_plane_error16(uint16_t *orig, int orig_stride,
   unsigned int row, col;
   uint64_t total_sse = 0;
   int diff;
+  if (orig == NULL || recon == NULL) {
+    assert(0);
+    return 0;
+  }
 
   for (row = 0; row < rows; row++) {
     for (col = 0; col < cols; col++) {
@@ -53,6 +57,10 @@ static uint64_t calc_plane_error(uint8_t *orig, int orig_stride, uint8_t *recon,
   unsigned int row, col;
   uint64_t total_sse = 0;
   int diff;
+  if (orig == NULL || recon == NULL) {
+    assert(0);
+    return 0;
+  }
 
   for (row = 0; row < rows; row++) {
     for (col = 0; col < cols; col++) {
@@ -91,6 +99,7 @@ typedef struct input_file {
   int w;
   int h;
   int bit_depth;
+  int frame_size;
 } input_file_t;
 
 // Open a file and determine if its y4m or raw.  If y4m get the header.
@@ -98,6 +107,9 @@ static int open_input_file(const char *file_name, input_file_t *input, int w,
                            int h, int bit_depth) {
   char y4m_buf[4];
   size_t r1;
+  input->w = w;
+  input->h = h;
+  input->bit_depth = bit_depth;
   input->type = RAW_YUV;
   input->buf = NULL;
   input->file = strcmp(file_name, "-") ? fopen(file_name, "rb") : stdin;
@@ -119,10 +131,12 @@ static int open_input_file(const char *file_name, input_file_t *input, int w,
         fseek(input->file, 0, SEEK_SET);
         input->w = w;
         input->h = h;
-        if (bit_depth < 9)
-          input->buf = malloc(w * h * 3 / 2);
-        else
-          input->buf = malloc(w * h * 3);
+        // handle odd frame sizes
+        input->frame_size = w * h + ((w + 1) / 2) * ((h + 1) / 2) * 2;
+        if (bit_depth > 8) {
+          input->frame_size *= 2;
+        }
+        input->buf = malloc(input->frame_size);
         break;
     }
   }
@@ -150,15 +164,15 @@ static size_t read_input_file(input_file_t *in, unsigned char **y,
       break;
     case RAW_YUV:
       if (bd < 9) {
-        r1 = fread(in->buf, in->w * in->h * 3 / 2, 1, in->file);
+        r1 = fread(in->buf, in->frame_size, 1, in->file);
         *y = in->buf;
         *u = in->buf + in->w * in->h;
-        *v = in->buf + 5 * in->w * in->h / 4;
+        *v = *u + ((1 + in->w) / 2) * ((1 + in->h) / 2);
       } else {
-        r1 = fread(in->buf, in->w * in->h * 3, 1, in->file);
+        r1 = fread(in->buf, in->frame_size, 1, in->file);
         *y = in->buf;
-        *u = in->buf + in->w * in->h / 2;
-        *v = *u + in->w * in->h / 2;
+        *u = in->buf + (in->w * in->h) * 2;
+        *v = *u + 2 * ((1 + in->w) / 2) * ((1 + in->h) / 2);
       }
       break;
   }
@@ -184,6 +198,11 @@ void ssim_parms_8x8(const uint8_t *s, int sp, const uint8_t *r, int rp,
                     uint32_t *sum_s, uint32_t *sum_r, uint32_t *sum_sq_s,
                     uint32_t *sum_sq_r, uint32_t *sum_sxr) {
   int i, j;
+  if (s == NULL || r == NULL || sum_s == NULL || sum_r == NULL ||
+      sum_sq_s == NULL || sum_sq_r == NULL || sum_sxr == NULL) {
+    assert(0);
+    return;
+  }
   for (i = 0; i < 8; i++, s += sp, r += rp) {
     for (j = 0; j < 8; j++) {
       *sum_s += s[j];
@@ -199,6 +218,11 @@ void highbd_ssim_parms_8x8(const uint16_t *s, int sp, const uint16_t *r, int rp,
                            uint32_t *sum_s, uint32_t *sum_r, uint32_t *sum_sq_s,
                            uint32_t *sum_sq_r, uint32_t *sum_sxr) {
   int i, j;
+  if (s == NULL || r == NULL || sum_s == NULL || sum_r == NULL ||
+      sum_sq_s == NULL || sum_sq_r == NULL || sum_sxr == NULL) {
+    assert(0);
+    return;
+  }
   for (i = 0; i < 8; i++, s += sp, r += rp) {
     for (j = 0; j < 8; j++) {
       *sum_s += s[j];
@@ -325,7 +349,8 @@ static double highbd_ssim2(const uint8_t *img1, const uint8_t *img2,
 //    (n*sum(xi*xi)-sum(xi)*sum(xi)+n*sum(yi*yi)-sum(yi)*sum(yi)+n*n*c2))
 //
 // Replace c1 with n*n * c1 for the final step that leads to this code:
-// The final step scales by 12 bits so we don't lose precision in the constants.
+// The final step scales by 12 bits so we don't lose precision in the
+// constants.
 
 static double ssimv_similarity(const Ssimv *sv, int64_t n) {
   // Scale the constants by number of pixels.
@@ -601,7 +626,7 @@ int main(int argc, char *argv[]) {
   }
 
   if (open_input_file(argv[1], &in[0], w, h, bit_depth) < 0) {
-    fprintf(stderr, "File %s can't be opened or parsed!\n", argv[2]);
+    fprintf(stderr, "File %s can't be opened or parsed!\n", argv[1]);
     goto clean_up;
   }
 
@@ -613,7 +638,7 @@ int main(int argc, char *argv[]) {
   }
   if (bit_depth == 10) peak = 1023.0;
 
-  if (bit_depth == 12) peak = 4095;
+  if (bit_depth == 12) peak = 4095.0;
 
   if (open_input_file(argv[2], &in[1], w, h, bit_depth) < 0) {
     fprintf(stderr, "File %s can't be opened or parsed!\n", argv[2]);
@@ -628,9 +653,10 @@ int main(int argc, char *argv[]) {
     goto clean_up;
   }
 
-  // Number of frames to skip from file1.yuv for every frame used. Normal values
-  // 0, 1 and 3 correspond to TL2, TL1 and TL0 respectively for a 3TL encoding
-  // in mode 10. 7 would be reasonable for comparing TL0 of a 4-layer encoding.
+  // Number of frames to skip from file1.yuv for every frame used. Normal
+  // values 0, 1 and 3 correspond to TL2, TL1 and TL0 respectively for a 3TL
+  // encoding in mode 10. 7 would be reasonable for comparing TL0 of a 4-layer
+  // encoding.
   if (argc > 4) {
     sscanf(argv[4], "%d", &tl_skip);
     if (argc > 5) {
@@ -642,12 +668,6 @@ int main(int argc, char *argv[]) {
         goto clean_up;
       }
     }
-  }
-
-  if (w & 1 || h & 1) {
-    fprintf(stderr, "Invalid size %dx%d\n", w, h);
-    return_value = 1;
-    goto clean_up;
   }
 
   while (1) {
@@ -703,8 +723,10 @@ int main(int argc, char *argv[]) {
       psnrv = realloc(psnrv, allocated_frames * sizeof(*psnrv));
     }
     psnr_and_ssim(ssimy[n_frames], psnry[n_frames], y[0], y[1], w, h);
-    psnr_and_ssim(ssimu[n_frames], psnru[n_frames], u[0], u[1], w / 2, h / 2);
-    psnr_and_ssim(ssimv[n_frames], psnrv[n_frames], v[0], v[1], w / 2, h / 2);
+    psnr_and_ssim(ssimu[n_frames], psnru[n_frames], u[0], u[1], (w + 1) / 2,
+                  (h + 1) / 2);
+    psnr_and_ssim(ssimv[n_frames], psnrv[n_frames], v[0], v[1], (w + 1) / 2,
+                  (h + 1) / 2);
 
     n_frames++;
   }

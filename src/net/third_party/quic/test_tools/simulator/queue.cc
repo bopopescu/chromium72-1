@@ -7,14 +7,12 @@
 #include "net/third_party/quic/platform/api/quic_logging.h"
 #include "net/third_party/quic/test_tools/simulator/simulator.h"
 
-using std::string;
-
-namespace net {
+namespace quic {
 namespace simulator {
 
 Queue::ListenerInterface::~ListenerInterface() {}
 
-Queue::Queue(Simulator* simulator, string name, QuicByteCount capacity)
+Queue::Queue(Simulator* simulator, QuicString name, QuicByteCount capacity)
     : Actor(simulator, name),
       capacity_(capacity),
       bytes_queued_(0),
@@ -122,4 +120,4 @@ void Queue::ScheduleNextPacketDequeue() {
 }
 
 }  // namespace simulator
-}  // namespace net
+}  // namespace quic

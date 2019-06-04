@@ -37,7 +37,7 @@
     </div>
 
     <iron-list items="[[historyData_]]" as="item" id="infinite-list"
-        hidden$="[[!hasResults_(historyData_.length)]]">
+        hidden$="[[!hasResults_(historyData_.length)]]" preserve-focus>
       <template>
         <history-item tabindex$="[[tabIndex]]"
             item="[[item]]"
@@ -49,7 +49,8 @@
             number-of-items="[[historyData_.length]]"
             index="[[index]]"
             iron-list-tab-index="[[tabIndex]]"
-            last-focused="{{lastFocused_}}">
+            last-focused="{{lastFocused_}}"
+            list-blurred="{{listBlurred_}}">
         </history-item>
       </template>
     </iron-list>
@@ -60,7 +61,7 @@
 
     <cr-lazy-render id="dialog">
       <template>
-        <cr-dialog>
+        <cr-dialog consume-keydown-event>
           <div slot="title">$i18n{removeSelected}</div>
           <div slot="body">$i18n{deleteWarning}</div>
           <div slot="button-container">
@@ -77,7 +78,7 @@
 
     <cr-lazy-render id="sharedMenu">
       <template>
-        <cr-action-menu>
+        <cr-action-menu aria-label="$i18n{actionMenuDescription}">
           <button id="menuMoreButton" slot="item" class="dropdown-item"
               hidden="[[!canSearchMoreFromSite_(
                   searchedTerm, actionMenuModel_.item.domain)]]"

@@ -9,8 +9,8 @@
 #ifndef LIBANGLE_IMAGE_INDEX_H_
 #define LIBANGLE_IMAGE_INDEX_H_
 
+#include "common/PackedEnums.h"
 #include "common/mathutil.h"
-#include "libANGLE/PackedEnums.h"
 
 #include "angle_gl.h"
 
@@ -36,12 +36,17 @@ class ImageIndex
     bool usesTex3D() const;
     GLint cubeMapFaceIndex() const;
     bool valid() const;
+    // Note that you cannot use this function when the ImageIndex represents an entire level of cube
+    // map.
     TextureTarget getTarget() const;
+
+    bool isLayered() const;
+    bool isEntireLevelCubeMap() const;
 
     static ImageIndex Make2D(GLint levelIndex);
     static ImageIndex MakeRectangle(GLint levelIndex);
-    static ImageIndex MakeCube(TextureTarget target, GLint levelIndex);
-    static ImageIndex Make2DArray(GLint levelIndex, GLint layerIndex);
+    static ImageIndex MakeCubeMapFace(TextureTarget target, GLint levelIndex);
+    static ImageIndex Make2DArray(GLint levelIndex, GLint layerIndex = kEntireLevel);
     static ImageIndex Make2DArrayRange(GLint levelIndex, GLint layerIndex, GLint layerCount);
     static ImageIndex Make3D(GLint levelIndex, GLint layerIndex = kEntireLevel);
     static ImageIndex MakeFromTarget(TextureTarget target, GLint levelIndex);
@@ -50,6 +55,8 @@ class ImageIndex
                                    GLint layerIndex = kEntireLevel,
                                    GLint layerCount = 1);
     static ImageIndex Make2DMultisample();
+    static ImageIndex Make2DMultisampleArray(GLint layerIndex = kEntireLevel);
+    static ImageIndex Make2DMultisampleArrayRange(GLint layerIndex, GLint layerCount);
 
     static constexpr GLint kEntireLevel = static_cast<GLint>(-1);
 
@@ -89,6 +96,7 @@ class ImageIndexIterator
     static ImageIndexIterator Make3D(GLint minMip, GLint maxMip, GLint minLayer, GLint maxLayer);
     static ImageIndexIterator Make2DArray(GLint minMip, GLint maxMip, const GLsizei *layerCounts);
     static ImageIndexIterator Make2DMultisample();
+    static ImageIndexIterator Make2DMultisampleArray(const GLsizei *layerCounts);
     static ImageIndexIterator MakeGeneric(TextureType type,
                                           GLint minMip,
                                           GLint maxMip,
@@ -115,4 +123,4 @@ class ImageIndexIterator
 };
 }  // namespace gl
 
-#endif // LIBANGLE_IMAGE_INDEX_H_
+#endif  // LIBANGLE_IMAGE_INDEX_H_

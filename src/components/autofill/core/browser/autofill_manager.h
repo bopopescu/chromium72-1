@@ -28,14 +28,13 @@
 #include "components/autofill/core/browser/autofill_metrics.h"
 #include "components/autofill/core/browser/card_unmask_delegate.h"
 #include "components/autofill/core/browser/field_filler.h"
-#include "components/autofill/core/browser/form_data_importer.h"
-#include "components/autofill/core/browser/form_structure.h"
 #include "components/autofill/core/browser/form_types.h"
 #include "components/autofill/core/browser/payments/full_card_request.h"
-#include "components/autofill/core/browser/payments/payments_client.h"
 #include "components/autofill/core/browser/personal_data_manager.h"
 #include "components/autofill/core/browser/popup_types.h"
+#include "components/autofill/core/browser/sync_utils.h"
 #include "components/autofill/core/common/form_data.h"
+#include "components/autofill/core/common/signatures_util.h"
 
 #if defined(OS_ANDROID) || defined(OS_IOS)
 #include "components/autofill/core/browser/autofill_assistant.h"
@@ -43,10 +42,6 @@
 
 namespace gfx {
 class RectF;
-}
-
-namespace user_prefs {
-class PrefRegistrySyncable;
 }
 
 namespace autofill {
@@ -72,13 +67,9 @@ extern const int kCreditCardSigninPromoImpressionLimit;
 // forms. One per frame; owned by the AutofillDriver.
 class AutofillManager : public AutofillHandler,
                         public AutofillDownloadManager::Observer,
-                        public payments::PaymentsClientUnmaskDelegate,
                         public payments::FullCardRequest::ResultDelegate,
                         public payments::FullCardRequest::UIDelegate {
  public:
-  // Registers our Enable/Disable Autofill pref.
-  static void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry);
-
   AutofillManager(AutofillDriver* driver,
                   AutofillClient* client,
                   const std::string& app_locale,
@@ -88,7 +79,7 @@ class AutofillManager : public AutofillHandler,
   // Sets an external delegate.
   void SetExternalDelegate(AutofillExternalDelegate* delegate);
 
-  void ShowAutofillSettings();
+  void ShowAutofillSettings(bool show_credit_card_settings);
 
   // Whether the |field| should show an entry to scan a credit card.
   virtual bool ShouldShowScanCreditCard(const FormData& form,
@@ -103,6 +94,17 @@ class AutofillManager : public AutofillHandler,
   virtual bool ShouldShowCreditCardSigninPromo(const FormData& form,
                                                const FormFieldData& field);
 
+  // Handlers for the "Set Cards From Account" row. This row should be shown to
+  // users who have cards in their account and can use Sync Transport. Clicking
+  // the row records the user's consent to see these cards on this device, and
+  // refreshes the popup.
+  virtual bool ShouldShowCardsFromAccountOption(const FormData& form,
+                                                const FormFieldData& field);
+  virtual void OnUserAcceptedCardsFromAccountOption();
+  virtual void RefetchCardsAndUpdatePopup(int query_id,
+                                          const FormData& form,
+                                          const FormFieldData& field_data);
+
   // Called from our external delegate so they cannot be private.
   virtual void FillOrPreviewForm(AutofillDriver::RendererFormDataAction action,
                                  int query_id,
@@ -114,9 +116,14 @@ class AutofillManager : public AutofillHandler,
                                   const FormFieldData& field,
                                   const CreditCard& credit_card,
                                   const base::string16& cvc);
-  void DidShowSuggestions(bool is_new_popup,
+  void DidShowSuggestions(bool has_autofill_suggestions,
                           const FormData& form,
                           const FormFieldData& field);
+
+  // Called from autofill assistant.
+  virtual void FillProfileForm(const autofill::AutofillProfile& profile,
+                               const FormData& form,
+                               const FormFieldData& field);
 
   // Returns true if the value/identifier is deletable. Fills out
   // |title| and |body| with relevant user-facing text.
@@ -135,9 +142,6 @@ class AutofillManager : public AutofillHandler,
 
   // Returns true when the Payments card unmask prompt is being displayed.
   bool IsShowingUnmaskPrompt();
-
-  // Returns the present form structures seen by Autofill manager.
-  const std::vector<std::unique_ptr<FormStructure>>& GetFormStructures();
 
   AutofillClient* client() { return client_; }
 
@@ -176,13 +180,18 @@ class AutofillManager : public AutofillHandler,
   // Upload the current pending form.
   void ProcessPendingFormForUpload();
 
+  // Invoked when the popup view can't be created. Main usage is to collect
+  // metrics.
+  void DidSuppressPopup(const FormData& form, const FormFieldData& field);
+
   // AutofillHandler:
   void OnFocusNoLongerOnForm() override;
+  void OnFocusOnFormFieldImpl(const FormData& form,
+                              const FormFieldData& field,
+                              const gfx::RectF& bounding_box) override;
   void OnDidFillAutofillFormData(const FormData& form,
                                  const base::TimeTicks timestamp) override;
   void OnDidPreviewAutofillFormData() override;
-  void OnFormsSeen(const std::vector<FormData>& forms,
-                   const base::TimeTicks timestamp) override;
   void OnDidEndTextFieldEditing() override;
   void OnHidePopup() override;
   void OnSetDataList(const std::vector<base::string16>& values,
@@ -190,21 +199,25 @@ class AutofillManager : public AutofillHandler,
   void SelectFieldOptionsDidChange(const FormData& form) override;
   void Reset() override;
 
-  // Returns true if the value of the AutofillEnabled pref is true and the
-  // client supports Autofill.
+  // Returns the value of AutofillEnabled pref.
   virtual bool IsAutofillEnabled() const;
+
+  // Returns true if the value of the AutofillProfileEnabled pref is true and
+  // the client supports Autofill.
+  virtual bool IsProfileAutofillEnabled() const;
 
   // Returns true if the value of the AutofillCreditCardEnabled pref is true and
   // the client supports Autofill.
-  virtual bool IsCreditCardAutofillEnabled();
+  virtual bool IsCreditCardAutofillEnabled() const;
 
   // Shared code to determine if |form| should be uploaded to the Autofill
   // server. It verifies that uploading is allowed and |form| meets conditions
   // to be uploadable. Exposed for testing.
   bool ShouldUploadForm(const FormStructure& form);
 
-  // Returns the number of forms this Autofill Manager is aware of.
-  size_t NumFormsDetected() const { return form_structures_.size(); }
+  // Rich queries are enabled by feature flag iff this chrome instance is
+  // neither on the STABLE nor BETA release channel.
+  static bool IsRichQueryEnabled(version_info::Channel channel);
 
  protected:
   // Test code should prefer to use this constructor.
@@ -225,7 +238,6 @@ class AutofillManager : public AutofillHandler,
   // indicates whether the upload is a result of an observed submission event.
   virtual void UploadFormDataAsyncCallback(
       const FormStructure* submitted_form,
-      const base::TimeTicks& load_time,
       const base::TimeTicks& interaction_time,
       const base::TimeTicks& submission_time,
       bool observed_submission);
@@ -259,17 +271,15 @@ class AutofillManager : public AutofillHandler,
   void OnQueryFormFieldAutofillImpl(int query_id,
                                     const FormData& form,
                                     const FormFieldData& field,
-                                    const gfx::RectF& transformed_box) override;
-  void OnFocusOnFormFieldImpl(const FormData& form,
-                              const FormFieldData& field,
-                              const gfx::RectF& bounding_box) override;
+                                    const gfx::RectF& transformed_box,
+                                    bool autoselect_first_suggestion) override;
   void OnSelectControlDidChangeImpl(const FormData& form,
                                     const FormFieldData& field,
                                     const gfx::RectF& bounding_box) override;
-
-  std::vector<std::unique_ptr<FormStructure>>* form_structures() {
-    return &form_structures_;
-  }
+  bool ShouldParseForms(const std::vector<FormData>& forms,
+                        const base::TimeTicks timestamp) override;
+  void OnFormsParsed(const std::vector<FormStructure*>& form_structures,
+                     const base::TimeTicks timestamp) override;
 
   AutofillMetrics::FormInteractionsUkmLogger* form_interactions_ukm_logger() {
     return form_interactions_ukm_logger_.get();
@@ -284,14 +294,7 @@ class AutofillManager : public AutofillHandler,
   }
 
   // Exposed for testing.
-  void set_payments_client(payments::PaymentsClient* payments_client) {
-    payments_client_.reset(payments_client);
-  }
-
-  // Exposed for testing.
-  void set_form_data_importer(FormDataImporter* form_data_importer) {
-    form_data_importer_.reset(form_data_importer);
-  }
+  bool is_rich_query_enabled() const { return is_rich_query_enabled_; }
 
  private:
   // Keeps track of the filling context for a form, used to make refill attemps.
@@ -313,14 +316,38 @@ class AutofillManager : public AutofillHandler,
     std::set<FieldTypeGroup> type_groups_originally_filled;
   };
 
+  // Indicates the reason why autofill suggestions are suppressed.
+  enum class SuppressReason {
+    kNotSuppressed,
+    // Credit card suggestions are not shown because an ablation experiment is
+    // enabled.
+    kCreditCardsAblation,
+    // Address suggestions are not shown because the field is annotated with
+    // autocomplete=off and the directive is being observed by the browser.
+    kAutocompleteOff,
+  };
+
+  // The context for the list of suggestions available for a given field to be
+  // returned by GetAvailableSuggestions().
+  struct SuggestionsContext {
+    FormStructure* form_structure = nullptr;
+    AutofillField* focused_field = nullptr;
+    bool is_autofill_available = false;
+    bool is_context_secure = false;
+    bool is_filling_credit_card = false;
+    // Flag to indicate whether all suggestions come from Google Payments.
+    bool is_all_server_suggestions = false;
+    SuppressReason suppress_reason = SuppressReason::kNotSuppressed;
+  };
+
   // AutofillDownloadManager::Observer:
   void OnLoadedServerPredictions(
       std::string response,
       const std::vector<std::string>& form_signatures) override;
-
-  // payments::PaymentsClientUnmaskDelegate:
+  // Returns the real PAN retrieved from Payments. |real_pan| will be empty on
+  // failure.
   void OnDidGetRealPan(AutofillClient::PaymentsRpcResult result,
-                       const std::string& real_pan) override;
+                       const std::string& real_pan);
 
   // payments::FullCardRequest::ResultDelegate:
   void OnFullCardRequestSucceeded(
@@ -387,20 +414,6 @@ class AutofillManager : public AutofillHandler,
   // or personal data.
   std::unique_ptr<FormStructure> ValidateSubmittedForm(const FormData& form);
 
-  // Fills |form_structure| cached element corresponding to |form|.
-  // Returns false if the cached element was not found.
-  bool FindCachedForm(const FormData& form,
-                      FormStructure** form_structure) const WARN_UNUSED_RESULT;
-
-  // Fills |form_structure| and |autofill_field| with the cached elements
-  // corresponding to |form| and |field|.  This might have the side-effect of
-  // updating the cache.  Returns false if the |form| is not autofillable, or if
-  // it is not already present in the cache and the cache is full.
-  bool GetCachedFormAndField(const FormData& form,
-                             const FormFieldData& field,
-                             FormStructure** form_structure,
-                             AutofillField** autofill_field) WARN_UNUSED_RESULT;
-
   // Returns the field corresponding to |form| and |field| that can be
   // autofilled. Returns NULL if the field cannot be autofilled.
   AutofillField* GetAutofillField(const FormData& form,
@@ -410,14 +423,6 @@ class AutofillManager : public AutofillHandler,
   // Returns true if any form in the field corresponds to an address
   // |FieldTypeGroup|.
   bool FormHasAddressField(const FormData& form) WARN_UNUSED_RESULT;
-
-  // Re-parses |live_form| and adds the result to |form_structures_|.
-  // |cached_form| should be a pointer to the existing version of the form, or
-  // NULL if no cached version exists.  The updated form is then written into
-  // |updated_form|.  Returns false if the cache could not be updated.
-  bool UpdateCachedForm(const FormData& live_form,
-                        const FormStructure* cached_form,
-                        FormStructure** updated_form) WARN_UNUSED_RESULT;
 
   // Returns a list of values from the stored profiles that match |type| and the
   // value of |field| and returns the labels of the matching profiles. |labels|
@@ -438,14 +443,6 @@ class AutofillManager : public AutofillHandler,
 
   // Parses the forms using heuristic matching and querying the Autofill server.
   void ParseForms(const std::vector<FormData>& forms);
-
-  // Parses the |form| with the server data retrieved from the |cached_form|
-  // (if any), and writes it to the |parse_form_structure|. Adds the
-  // |parse_form_structure| to the |form_structures_|. Returns true if the form
-  // is parsed.
-  bool ParseForm(const FormData& form,
-                 const FormStructure* cached_form,
-                 FormStructure** parsed_form_structure);
 
   // If |initial_interaction_timestamp_| is unset or is set to a later time than
   // |interaction_timestamp|, updates the cached timestamp.  The latter check is
@@ -505,12 +502,18 @@ class AutofillManager : public AutofillHandler,
 
   // Attempts to refill the form that was changed dynamically. Should only be
   // called if ShouldTriggerRefill returns true.
-  void TriggerRefill(const FormData& form, FormStructure* form_structure);
+  void TriggerRefill(const FormData& form);
+
+  // Replaces the contents of |suggestions| with available suggestions for
+  // |field|. |context| will contain additional information about the
+  // suggestions, such as if they correspond to credit card suggestions and
+  // if the context is secure.
+  void GetAvailableSuggestions(const FormData& form,
+                               const FormFieldData& field,
+                               std::vector<Suggestion>* suggestions,
+                               SuggestionsContext* context);
 
   AutofillClient* const client_;
-
-  // Handles Payments service requests.
-  std::unique_ptr<payments::PaymentsClient> payments_client_;
 
   std::string app_locale_;
 
@@ -519,10 +522,6 @@ class AutofillManager : public AutofillHandler,
   // Weak reference.
   // May be NULL.  NULL indicates OTR.
   PersonalDataManager* personal_data_;
-
-  // Handles importing of address and credit card data from forms.
-  // Must be initialized (and thus listed) after payments_client_.
-  std::unique_ptr<FormDataImporter> form_data_importer_;
 
   // Used to help fill data into fields.
   FieldFiller field_filler_;
@@ -559,14 +558,9 @@ class AutofillManager : public AutofillHandler,
   // Has the user edited a field that was previously autofilled?
   bool user_did_edit_autofilled_field_ = false;
 
-  // When the form finished loading.
-  std::map<FormData, base::TimeTicks> forms_loaded_timestamps_;
   // When the user first interacted with a potentially fillable form on this
   // page.
   base::TimeTicks initial_interaction_timestamp_;
-
-  // Our copy of the form data.
-  std::vector<std::unique_ptr<FormStructure>> form_structures_;
 
   // A copy of the currently interacted form data.
   std::unique_ptr<FormData> pending_form_data_;
@@ -608,12 +602,18 @@ class AutofillManager : public AutofillHandler,
   std::map<base::string16, std::unique_ptr<FillingContext>>
       filling_contexts_map_;
 
+  // Tracks whether or not rich query encoding is enabled for this client.
+  const bool is_rich_query_enabled_ = false;
+
+  // Used to record metrics. This shoulb be set at the beginning of the
+  // interaction and re-used throughout the context of this manager.
+  AutofillSyncSigninState sync_state_ = AutofillSyncSigninState::kNumSyncStates;
+
   base::WeakPtrFactory<AutofillManager> weak_ptr_factory_;
 
   friend class AutofillManagerTest;
   friend class FormStructureBrowserTest;
   friend class GetMatchingTypesTest;
-  friend class SaveCardBubbleViewsBrowserTestBase;
   FRIEND_TEST_ALL_PREFIXES(ProfileMatchingTypesTest,
                            DeterminePossibleFieldTypesForUpload);
   FRIEND_TEST_ALL_PREFIXES(AutofillManagerTest,
@@ -625,19 +625,32 @@ class AutofillManager : public AutofillHandler,
                            DisabledAutofillDispatchesError);
   FRIEND_TEST_ALL_PREFIXES(AutofillManagerTest,
                            DetermineHeuristicsWithOverallPrediction);
+  FRIEND_TEST_ALL_PREFIXES(AutofillManagerTest,
+                           DeterminePossibleFieldTypesWithMultipleValidities);
   FRIEND_TEST_ALL_PREFIXES(AutofillMetricsTest, AddressFilledFormEvents);
   FRIEND_TEST_ALL_PREFIXES(AutofillMetricsTest, AddressSubmittedFormEvents);
   FRIEND_TEST_ALL_PREFIXES(AutofillMetricsTest, AddressWillSubmitFormEvents);
   FRIEND_TEST_ALL_PREFIXES(AutofillMetricsTest, AddressSuggestionsCount);
   FRIEND_TEST_ALL_PREFIXES(AutofillMetricsTest, AutofillFormSubmittedState);
   FRIEND_TEST_ALL_PREFIXES(AutofillMetricsTest, AutofillIsEnabledAtPageLoad);
-  FRIEND_TEST_ALL_PREFIXES(AutofillMetricsTest, CreditCardSelectedFormEvents);
-  FRIEND_TEST_ALL_PREFIXES(AutofillMetricsTest, CreditCardFilledFormEvents);
+  FRIEND_TEST_ALL_PREFIXES(AutofillMetricsIFrameTest,
+                           CreditCardSelectedFormEvents);
+  FRIEND_TEST_ALL_PREFIXES(AutofillMetricsIFrameTest,
+                           CreditCardFilledFormEvents);
   FRIEND_TEST_ALL_PREFIXES(AutofillMetricsTest, CreditCardGetRealPanDuration);
-  FRIEND_TEST_ALL_PREFIXES(AutofillMetricsTest, CreditCardWillSubmitFormEvents);
-  FRIEND_TEST_ALL_PREFIXES(AutofillMetricsTest, CreditCardSubmittedFormEvents);
+  FRIEND_TEST_ALL_PREFIXES(AutofillMetricsIFrameTest,
+                           CreditCardWillSubmitFormEvents);
+  FRIEND_TEST_ALL_PREFIXES(AutofillMetricsIFrameTest,
+                           CreditCardSubmittedFormEvents);
   FRIEND_TEST_ALL_PREFIXES(AutofillMetricsTest,
                            CreditCardCheckoutFlowUserActions);
+  FRIEND_TEST_ALL_PREFIXES(AutofillMetricsTest,
+                           LogHiddenRepresentationalFieldSkipDecision);
+  FRIEND_TEST_ALL_PREFIXES(AutofillMetricsTest,
+                           LogRepeatedAddressTypeRationalized);
+  FRIEND_TEST_ALL_PREFIXES(AutofillMetricsTest,
+                           LogRepeatedStateCountryTypeRationalized);
+
   FRIEND_TEST_ALL_PREFIXES(
       AutofillMetricsTest,
       CreditCardSubmittedWithoutSelectingSuggestionsNoCard);
@@ -648,7 +661,7 @@ class AutofillManager : public AutofillHandler,
       AutofillMetricsTest,
       CreditCardSubmittedWithoutSelectingSuggestionsKnownCard);
   FRIEND_TEST_ALL_PREFIXES(
-      AutofillMetricsTest,
+      AutofillMetricsIFrameTest,
       ShouldNotLogSubmitWithoutSelectingSuggestionsIfSuggestionFilled);
   FRIEND_TEST_ALL_PREFIXES(AutofillMetricsTest, ProfileCheckoutFlowUserActions);
   FRIEND_TEST_ALL_PREFIXES(AutofillMetricsTest, DeveloperEngagement);
@@ -681,6 +694,8 @@ class AutofillManager : public AutofillHandler,
   FRIEND_TEST_ALL_PREFIXES(AutofillMetricsTest,
                            UserHappinessFormInteraction_CreditCardForm);
   FRIEND_TEST_ALL_PREFIXES(AutofillManagerTest, OnLoadedServerPredictions);
+  FRIEND_TEST_ALL_PREFIXES(AutofillManagerTest,
+                           OnLoadedServerPredictionsFromApi);
   FRIEND_TEST_ALL_PREFIXES(AutofillManagerTest,
                            OnLoadedServerPredictions_ResetManager);
   FRIEND_TEST_ALL_PREFIXES(AutofillManagerTest, DontOfferToSavePaymentsCard);

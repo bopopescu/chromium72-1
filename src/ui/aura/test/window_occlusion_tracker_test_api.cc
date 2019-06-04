@@ -4,25 +4,39 @@
 
 #include "ui/aura/test/window_occlusion_tracker_test_api.h"
 
+#include "base/memory/ptr_util.h"
 #include "ui/aura/window_occlusion_tracker.h"
 
 namespace aura {
 namespace test {
 
-WindowOcclusionTrackerTestApi::WindowOcclusionTrackerTestApi() = default;
+WindowOcclusionTrackerTestApi::WindowOcclusionTrackerTestApi(
+    WindowOcclusionTracker* tracker)
+    : tracker_(tracker) {}
+
 WindowOcclusionTrackerTestApi::~WindowOcclusionTrackerTestApi() = default;
 
-int WindowOcclusionTrackerTestApi::GetNumTimesOcclusionRecomputed() const {
-  return WindowOcclusionTracker::GetInstance()->num_times_occlusion_recomputed_;
+// static
+std::unique_ptr<WindowOcclusionTracker>
+WindowOcclusionTrackerTestApi::Create() {
+  // Use base::WrapUnique + new because of the constructor is private.
+  return base::WrapUnique(new WindowOcclusionTracker());
 }
 
-bool WindowOcclusionTrackerTestApi::WasOcclusionRecomputedTooManyTimes() {
-  const bool local_was_occlusion_recomputed_too_many_times =
-      WindowOcclusionTracker::GetInstance()
-          ->was_occlusion_recomputed_too_many_times_;
-  WindowOcclusionTracker::GetInstance()
-      ->was_occlusion_recomputed_too_many_times_ = false;
-  return local_was_occlusion_recomputed_too_many_times;
+int WindowOcclusionTrackerTestApi::GetNumTimesOcclusionRecomputed() const {
+  return tracker_->num_times_occlusion_recomputed_;
+}
+
+void WindowOcclusionTrackerTestApi::Pause() {
+  tracker_->Pause();
+}
+
+void WindowOcclusionTrackerTestApi::Unpause() {
+  tracker_->Unpause();
+}
+
+bool WindowOcclusionTrackerTestApi::IsPaused() const {
+  return tracker_->num_pause_occlusion_tracking_;
 }
 
 }  // namespace test

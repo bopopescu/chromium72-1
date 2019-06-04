@@ -14,7 +14,6 @@
     #include "gl/angle/GLTestContext_angle.h"
 #endif
 #include "gl/command_buffer/GLTestContext_command_buffer.h"
-#include "gl/debug/DebugGLTestContext.h"
 #ifdef SK_VULKAN
 #include "vk/VkTestContext.h"
 #endif
@@ -149,9 +148,9 @@ ContextInfo GrContextFactory::getContextInfoInternal(ContextType type, ContextOv
     }
 
     std::unique_ptr<TestContext> testCtx;
-    GrBackend backend = ContextTypeBackend(type);
+    GrBackendApi backend = ContextTypeBackend(type);
     switch (backend) {
-        case kOpenGL_GrBackend: {
+        case GrBackendApi::kOpenGL: {
             GLTestContext* glShareContext = masterContext
                     ? static_cast<GLTestContext*>(masterContext->fTestContext) : nullptr;
             GLTestContext* glCtx;
@@ -193,9 +192,6 @@ ContextInfo GrContextFactory::getContextInfoInternal(ContextType type, ContextOv
                     glCtx = CreateNullGLTestContext(
                             ContextOverrides::kRequireNVPRSupport & overrides, glShareContext);
                     break;
-                case kDebugGL_ContextType:
-                    glCtx = CreateDebugGLTestContext(glShareContext);
-                    break;
                 default:
                     return ContextInfo();
             }
@@ -206,7 +202,7 @@ ContextInfo GrContextFactory::getContextInfoInternal(ContextType type, ContextOv
             break;
         }
 #ifdef SK_VULKAN
-        case kVulkan_GrBackend: {
+        case GrBackendApi::kVulkan: {
             VkTestContext* vkSharedContext = masterContext
                     ? static_cast<VkTestContext*>(masterContext->fTestContext) : nullptr;
             SkASSERT(kVulkan_ContextType == type);
@@ -231,7 +227,7 @@ ContextInfo GrContextFactory::getContextInfoInternal(ContextType type, ContextOv
         }
 #endif
 #ifdef SK_METAL
-        case kMetal_GrBackend: {
+        case GrBackendApi::kMetal: {
             SkASSERT(!masterContext);
             testCtx.reset(CreatePlatformMtlTestContext(nullptr));
             if (!testCtx) {
@@ -240,7 +236,7 @@ ContextInfo GrContextFactory::getContextInfoInternal(ContextType type, ContextOv
             break;
         }
 #endif
-        case kMock_GrBackend: {
+        case GrBackendApi::kMock: {
             TestContext* sharedContext = masterContext ? masterContext->fTestContext : nullptr;
             SkASSERT(kMock_ContextType == type);
             if (ContextOverrides::kRequireNVPRSupport & overrides) {
@@ -261,9 +257,6 @@ ContextInfo GrContextFactory::getContextInfoInternal(ContextType type, ContextOv
     if (ContextOverrides::kDisableNVPR & overrides) {
         grOptions.fSuppressPathRendering = true;
     }
-    if (ContextOverrides::kAllowSRGBWithoutDecodeControl & overrides) {
-        grOptions.fRequireDecodeDisableForSRGB = false;
-    }
     if (ContextOverrides::kAvoidStencilBuffers & overrides) {
         grOptions.fAvoidStencilBuffers = true;
     }
@@ -277,11 +270,6 @@ ContextInfo GrContextFactory::getContextInfoInternal(ContextType type, ContextOv
     }
     if (ContextOverrides::kRequireNVPRSupport & overrides) {
         if (!grCtx->contextPriv().caps()->shaderCaps()->pathRenderingSupport()) {
-            return ContextInfo();
-        }
-    }
-    if (ContextOverrides::kRequireSRGBSupport & overrides) {
-        if (!grCtx->contextPriv().caps()->srgbSupport()) {
             return ContextInfo();
         }
     }

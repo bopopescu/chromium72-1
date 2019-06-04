@@ -7,21 +7,22 @@
 namespace network {
 namespace features {
 
+// Enables Expect CT reporting, which sends reports for opted-in sites
+// that don't serve sufficient Certificate Transparency information.
+const base::Feature kExpectCTReporting{"ExpectCTReporting",
+                                       base::FEATURE_ENABLED_BY_DEFAULT};
+
 const base::Feature kNetworkErrorLogging{"NetworkErrorLogging",
-                                         base::FEATURE_DISABLED_BY_DEFAULT};
+                                         base::FEATURE_ENABLED_BY_DEFAULT};
 // Enables the network service.
 const base::Feature kNetworkService{"NetworkService",
                                     base::FEATURE_DISABLED_BY_DEFAULT};
 
 // Out of Blink CORS
-const base::Feature kOutOfBlinkCORS{"OutOfBlinkCORS",
+const base::Feature kOutOfBlinkCors{"OutOfBlinkCors",
                                     base::FEATURE_DISABLED_BY_DEFAULT};
 
-// Port some content::ResourceScheduler functionalities to renderer.
-const base::Feature kRendererSideResourceScheduler{
-    "RendererSideResourceScheduler", base::FEATURE_DISABLED_BY_DEFAULT};
-
-const base::Feature kReporting{"Reporting", base::FEATURE_DISABLED_BY_DEFAULT};
+const base::Feature kReporting{"Reporting", base::FEATURE_ENABLED_BY_DEFAULT};
 
 // Based on the field trial parameters, this feature will override the value of
 // the maximum number of delayable requests allowed in flight. The number of
@@ -39,7 +40,15 @@ const base::Feature kThrottleDelayable{"ThrottleDelayable",
 // ResourceScheduler just as HTTP/1.1 resources are. However, requests from such
 // servers are not subject to kMaxNumDelayableRequestsPerHostPerClient limit.
 const base::Feature kDelayRequestsOnMultiplexedConnections{
-    "DelayRequestsOnMultiplexedConnections", base::FEATURE_DISABLED_BY_DEFAULT};
+    "DelayRequestsOnMultiplexedConnections", base::FEATURE_ENABLED_BY_DEFAULT};
+
+// When kUnthrottleRequestsAfterLongQueuingDelay is enabled, an upper bound
+// is placed on how long the resource scheduler can queue any given request.
+// Once a request is queued for more than the specified duration, the request
+// is dispatched to the network.
+const base::Feature kUnthrottleRequestsAfterLongQueuingDelay{
+    "UnthrottleRequestsAfterLongQueuingDelay",
+    base::FEATURE_DISABLED_BY_DEFAULT};
 
 }  // namespace features
 }  // namespace network

@@ -8,11 +8,14 @@
 
 #include <utility>
 
+#include "base/bind.h"
 #include "base/command_line.h"
 #include "base/macros.h"
+#include "base/task/post_task.h"
 #include "components/guest_view/browser/guest_view_message_filter.h"
 #include "components/nacl/common/buildflags.h"
 #include "content/public/browser/browser_main_runner.h"
+#include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/render_process_host.h"
@@ -35,6 +38,7 @@
 #include "extensions/browser/info_map.h"
 #include "extensions/browser/io_thread_extension_message_filter.h"
 #include "extensions/browser/process_map.h"
+#include "extensions/browser/url_loader_factory_manager.h"
 #include "extensions/common/constants.h"
 #include "extensions/common/extension.h"
 #include "extensions/common/switches.h"
@@ -168,13 +172,11 @@ void ShellContentBrowserClient::SiteInstanceGotProcess(
                site_instance->GetProcess()->GetID(),
                site_instance->GetId());
 
-  BrowserThread::PostTask(
-      BrowserThread::IO,
-      FROM_HERE,
+  base::PostTaskWithTraits(
+      FROM_HERE, {BrowserThread::IO},
       base::Bind(&InfoMap::RegisterExtensionProcess,
                  browser_main_parts_->extension_system()->info_map(),
-                 extension->id(),
-                 site_instance->GetProcess()->GetID(),
+                 extension->id(), site_instance->GetProcess()->GetID(),
                  site_instance->GetId()));
 }
 
@@ -194,13 +196,11 @@ void ShellContentBrowserClient::SiteInstanceDeleting(
                site_instance->GetProcess()->GetID(),
                site_instance->GetId());
 
-  BrowserThread::PostTask(
-      BrowserThread::IO,
-      FROM_HERE,
+  base::PostTaskWithTraits(
+      FROM_HERE, {BrowserThread::IO},
       base::Bind(&InfoMap::UnregisterExtensionProcess,
                  browser_main_parts_->extension_system()->info_map(),
-                 extension->id(),
-                 site_instance->GetProcess()->GetID(),
+                 extension->id(), site_instance->GetProcess()->GetID(),
                  site_instance->GetId()));
 }
 
@@ -286,14 +286,23 @@ void ShellContentBrowserClient::RegisterNonNetworkSubresourceURLLoaderFactories(
 }
 
 bool ShellContentBrowserClient::WillCreateURLLoaderFactory(
+    content::BrowserContext* browser_context,
     content::RenderFrameHost* frame,
+    int render_process_id,
     bool is_navigation,
-    network::mojom::URLLoaderFactoryRequest* factory_request) {
+    const url::Origin& request_initiator,
+    network::mojom::URLLoaderFactoryRequest* factory_request,
+    network::mojom::TrustedURLLoaderHeaderClientPtrInfo* header_client,
+    bool* bypass_redirect_checks) {
   auto* web_request_api =
       extensions::BrowserContextKeyedAPIFactory<extensions::WebRequestAPI>::Get(
-          frame->GetProcess()->GetBrowserContext());
-  return web_request_api->MaybeProxyURLLoaderFactory(frame, is_navigation,
-                                                     factory_request);
+          browser_context);
+  bool use_proxy = web_request_api->MaybeProxyURLLoaderFactory(
+      browser_context, frame, render_process_id, is_navigation, factory_request,
+      header_client);
+  if (bypass_redirect_checks)
+    *bypass_redirect_checks = use_proxy;
+  return use_proxy;
 }
 
 bool ShellContentBrowserClient::HandleExternalProtocol(
@@ -303,8 +312,20 @@ bool ShellContentBrowserClient::HandleExternalProtocol(
     content::NavigationUIData* navigation_data,
     bool is_main_frame,
     ui::PageTransition page_transition,
-    bool has_user_gesture) {
+    bool has_user_gesture,
+    const std::string& method,
+    const net::HttpRequestHeaders& headers) {
   return false;
+}
+
+network::mojom::URLLoaderFactoryPtrInfo
+ShellContentBrowserClient::CreateURLLoaderFactoryForNetworkRequests(
+    content::RenderProcessHost* process,
+    network::mojom::NetworkContext* network_context,
+    network::mojom::TrustedURLLoaderHeaderClientPtrInfo* header_client,
+    const url::Origin& request_initiator) {
+  return URLLoaderFactoryManager::CreateFactory(
+      process, network_context, header_client, request_initiator);
 }
 
 ShellBrowserMainParts* ShellContentBrowserClient::CreateShellBrowserMainParts(

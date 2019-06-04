@@ -41,7 +41,7 @@
 namespace blink {
 
 class DOMException;
-class MediaElementEventQueue;
+class EventQueue;
 class MediaKeys;
 
 // References are held by JS only. However, even if all JS references are
@@ -75,14 +75,15 @@ class MediaKeySession final
                                  MediaKeys*,
                                  WebEncryptedMediaSessionType);
 
+  MediaKeySession(ScriptState*, MediaKeys*, WebEncryptedMediaSessionType);
   ~MediaKeySession() override;
 
   String sessionId() const;
   double expiration() const { return expiration_; }
   ScriptPromise closed(ScriptState*);
   MediaKeyStatusMap* keyStatuses();
-  DEFINE_ATTRIBUTE_EVENT_LISTENER(keystatuseschange);
-  DEFINE_ATTRIBUTE_EVENT_LISTENER(message);
+  DEFINE_ATTRIBUTE_EVENT_LISTENER(keystatuseschange, kKeystatuseschange);
+  DEFINE_ATTRIBUTE_EVENT_LISTENER(message, kMessage);
 
   ScriptPromise generateRequest(ScriptState*,
                                 const String& init_data_type,
@@ -109,7 +110,6 @@ class MediaKeySession final
   friend class NewSessionResultPromise;
   friend class LoadSessionResultPromise;
 
-  MediaKeySession(ScriptState*, MediaKeys*, WebEncryptedMediaSessionType);
   void Dispose();
 
   void ActionTimerFired(TimerBase*);
@@ -135,7 +135,7 @@ class MediaKeySession final
   void KeysStatusesChange(const WebVector<WebEncryptedMediaKeyInformation>&,
                           bool has_additional_usable_key) override;
 
-  Member<MediaElementEventQueue> async_event_queue_;
+  Member<EventQueue> async_event_queue_;
   std::unique_ptr<WebContentDecryptionModuleSession> session_;
 
   // Used to determine if MediaKeys is still active.
@@ -149,7 +149,7 @@ class MediaKeySession final
   // Session states.
   bool is_uninitialized_;
   bool is_callable_;
-  bool is_closed_;  // Is the CDM finished with this session?
+  bool is_closing_or_closed_;
 
   // Keep track of the closed promise.
   typedef ScriptPromiseProperty<Member<MediaKeySession>,

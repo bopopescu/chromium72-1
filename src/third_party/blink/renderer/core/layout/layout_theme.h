@@ -26,8 +26,8 @@
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/css_value_keywords.h"
 #include "third_party/blink/renderer/platform/fonts/font_selection_types.h"
+#include "third_party/blink/renderer/platform/geometry/layout_unit.h"
 #include "third_party/blink/renderer/platform/graphics/color.h"
-#include "third_party/blink/renderer/platform/layout_unit.h"
 #include "third_party/blink/renderer/platform/scroll/scroll_types.h"
 #include "third_party/blink/renderer/platform/theme_types.h"
 #include "third_party/blink/renderer/platform/wtf/forward.h"
@@ -36,7 +36,6 @@
 
 namespace blink {
 
-class ChromeClient;
 class ComputedStyle;
 class Element;
 class FileList;
@@ -46,6 +45,7 @@ class HTMLInputElement;
 class LengthSize;
 class Locale;
 class Node;
+class ChromeClient;
 class Theme;
 class ThemePainter;
 
@@ -206,9 +206,9 @@ class CORE_EXPORT LayoutTheme : public RefCounted<LayoutTheme> {
   virtual void AdjustProgressBarBounds(ComputedStyle& style) const {}
 
   // Returns the repeat interval of the animation for the progress bar.
-  virtual double AnimationRepeatIntervalForProgressBar() const;
+  virtual TimeDelta AnimationRepeatIntervalForProgressBar() const;
   // Returns the duration of the animation for the progress bar.
-  virtual double AnimationDurationForProgressBar() const;
+  virtual TimeDelta AnimationDurationForProgressBar() const;
 
   // Returns size of one slider tick mark for a horizontal track.
   // For vertical tracks we rotate it and use it. i.e. Width is always length

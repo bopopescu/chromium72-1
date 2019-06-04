@@ -32,6 +32,7 @@
 #include "third_party/blink/renderer/core/layout/layout_image.h"
 #include "third_party/blink/renderer/core/page/page.h"
 #include "third_party/blink/renderer/core/svg/graphics/svg_image_for_container.h"
+#include "third_party/blink/renderer/platform/graphics/placeholder_image.h"
 
 namespace blink {
 
@@ -113,6 +114,12 @@ FloatSize LayoutImageResource::ImageSize(float multiplier) const {
   return size;
 }
 
+FloatSize LayoutImageResource::ImageSizeWithDefaultSize(
+    float multiplier,
+    const LayoutSize&) const {
+  return ImageSize(multiplier);
+}
+
 float LayoutImageResource::DeviceScaleFactor() const {
   return DeviceScaleFactorDeprecated(layout_object_->GetFrame());
 }
@@ -148,6 +155,11 @@ scoped_refptr<Image> LayoutImageResource::GetImage(
     return Image::NullImage();
 
   Image* image = cached_image_->GetImage();
+  if (image->IsPlaceholderImage()) {
+    static_cast<PlaceholderImage*>(image)->SetIconAndTextScaleFactor(
+        layout_object_->StyleRef().EffectiveZoom());
+  }
+
   if (!image->IsSVGImage())
     return image;
 

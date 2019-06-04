@@ -39,10 +39,10 @@
 
 namespace blink {
 
-using namespace HTMLNames;
+using namespace html_names;
 
 InputType* HiddenInputType::Create(HTMLInputElement& element) {
-  return new HiddenInputType(element);
+  return MakeGarbageCollected<HiddenInputType>(element);
 }
 
 void HiddenInputType::Trace(blink::Visitor* visitor) {
@@ -55,7 +55,7 @@ InputTypeView* HiddenInputType::CreateView() {
 }
 
 const AtomicString& HiddenInputType::FormControlType() const {
-  return InputTypeNames::hidden;
+  return input_type_names::kHidden;
 }
 
 bool HiddenInputType::ShouldSaveAndRestoreFormControlState() const {
@@ -85,13 +85,13 @@ void HiddenInputType::SetValue(const String& sanitized_value,
                                bool,
                                TextFieldEventBehavior,
                                TextControlSetValueSelection) {
-  GetElement().setAttribute(valueAttr, AtomicString(sanitized_value));
+  GetElement().setAttribute(kValueAttr, AtomicString(sanitized_value));
 }
 
 void HiddenInputType::AppendToFormData(FormData& form_data) const {
   if (DeprecatedEqualIgnoringCase(GetElement().GetName(), "_charset_")) {
-    form_data.append(GetElement().GetName(),
-                     String(form_data.Encoding().GetName()));
+    form_data.AppendFromElement(GetElement().GetName(),
+                                String(form_data.Encoding().GetName()));
     return;
   }
   InputType::AppendToFormData(form_data);

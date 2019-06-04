@@ -257,13 +257,26 @@ The bots use a packaged 2017 toolchain, which Googlers can download like this:
 
 You can then pass the VC and SDK paths to GN by setting your GN args:
 
-    win_vc = "C:\toolchain\depot_tools\win_toolchain\vs_files\a9e1098bba66d2acccc377d5ee81265910f29272\VC"
-    win_sdk = "C:\toolchain\depot_tools\win_toolchain\vs_files\a9e1098bba66d2acccc377d5ee81265910f29272\win_sdk"
+    win_vc = "C:\toolchain\depot_tools\win_toolchain\vs_files\5454e45bf3764c03d3fc1024b3bf5bc41e3ab62c\VC"
+    win_sdk = "C:\toolchain\depot_tools\win_toolchain\vs_files\5454e45bf3764c03d3fc1024b3bf5bc41e3ab62c\win_sdk"
 
 This toolchain is the only way we support 32-bit builds, by also setting `target_cpu="x86"`.
 There is also a corresponding 2015 toolchain, downloaded via `infra/bots/assets/win_toolchain_2015`.
 
 The Skia build assumes that the PATHEXT environment variable contains ".EXE".
+
+### **Highly Recommended**: Build with clang-cl
+
+Skia uses generated code that is only optimized when Skia is built with clang. Other compilers get generic
+unoptimized code.
+
+Setting the `cc` and `cxx` gn args is _not_ sufficient to build with clang-cl. These variables
+are ignored on Windows. Instead set the variable `clang_win` to your LLVM installation directory.
+If you installed the prebuilt LLVM downloaded from [here](https://releases.llvm.org/download.html "LLVM Download") in the default location that would be:
+
+    clang_win = "C:\Program Files\LLVM"
+
+Follow the standard Windows path specification and not MinGW convention (e.g. `C:\Program Files\LLVM` not ~~`/c/Program Files/LLVM`~~).
 
 ### Visual Studio Solutions
 

@@ -25,7 +25,7 @@ namespace angle
 {
 using base::CheckedNumeric;
 using base::IsValueInRangeForNumericType;
-}
+}  // namespace angle
 
 namespace gl
 {
@@ -152,7 +152,7 @@ inline bool supportsSSE2()
         return supports;
     }
 
-#if defined(ANGLE_PLATFORM_WINDOWS) && !defined(_M_ARM)
+#    if defined(ANGLE_PLATFORM_WINDOWS) && !defined(_M_ARM) && !defined(_M_ARM64)
     {
         int info[4];
         __cpuid(info, 0);
@@ -164,7 +164,7 @@ inline bool supportsSSE2()
             supports = (info[3] >> 26) & 1;
         }
     }
-#endif  // defined(ANGLE_PLATFORM_WINDOWS) && !defined(_M_ARM)
+#    endif  // defined(ANGLE_PLATFORM_WINDOWS) && !defined(_M_ARM) && !defined(_M_ARM64)
     checked = true;
     return supports;
 #else  // defined(ANGLE_USE_SSE)
@@ -472,8 +472,17 @@ inline float normalizedToFloat(T input)
 {
     static_assert(std::numeric_limits<T>::is_integer, "T must be an integer.");
 
-    const float inverseMax = 1.0f / std::numeric_limits<T>::max();
-    return input * inverseMax;
+    if (sizeof(T) > 2)
+    {
+        // float has only a 23 bit mantissa, so we need to do the calculation in double precision
+        constexpr double inverseMax = 1.0 / std::numeric_limits<T>::max();
+        return static_cast<float>(input * inverseMax);
+    }
+    else
+    {
+        constexpr float inverseMax = 1.0f / std::numeric_limits<T>::max();
+        return input * inverseMax;
+    }
 }
 
 template <unsigned int inputBitCount, typename T>
@@ -482,21 +491,47 @@ inline float normalizedToFloat(T input)
     static_assert(std::numeric_limits<T>::is_integer, "T must be an integer.");
     static_assert(inputBitCount < (sizeof(T) * 8), "T must have more bits than inputBitCount.");
 
-    const float inverseMax = 1.0f / ((1 << inputBitCount) - 1);
-    return input * inverseMax;
+    if (inputBitCount > 23)
+    {
+        // float has only a 23 bit mantissa, so we need to do the calculation in double precision
+        constexpr double inverseMax = 1.0 / ((1 << inputBitCount) - 1);
+        return static_cast<float>(input * inverseMax);
+    }
+    else
+    {
+        constexpr float inverseMax = 1.0f / ((1 << inputBitCount) - 1);
+        return input * inverseMax;
+    }
 }
 
 template <typename T>
 inline T floatToNormalized(float input)
 {
-    return static_cast<T>(std::numeric_limits<T>::max() * input + 0.5f);
+    if (sizeof(T) > 2)
+    {
+        // float has only a 23 bit mantissa, so we need to do the calculation in double precision
+        return static_cast<T>(std::numeric_limits<T>::max() * static_cast<double>(input) + 0.5);
+    }
+    else
+    {
+        return static_cast<T>(std::numeric_limits<T>::max() * input + 0.5f);
+    }
 }
 
 template <unsigned int outputBitCount, typename T>
 inline T floatToNormalized(float input)
 {
     static_assert(outputBitCount < (sizeof(T) * 8), "T must have more bits than outputBitCount.");
-    return static_cast<T>(((1 << outputBitCount) - 1) * input + 0.5f);
+
+    if (outputBitCount > 23)
+    {
+        // float has only a 23 bit mantissa, so we need to do the calculation in double precision
+        return static_cast<T>(((1 << outputBitCount) - 1) * static_cast<double>(input) + 0.5);
+    }
+    else
+    {
+        return static_cast<T>(((1 << outputBitCount) - 1) * input + 0.5f);
+    }
 }
 
 template <unsigned int inputBitCount, unsigned int inputBitStart, typename T>
@@ -929,32 +964,64 @@ inline uint32_t BitfieldReverse(uint32_t value)
 }
 
 // Count the 1 bits.
-#if defined(ANGLE_PLATFORM_WINDOWS)
+#if defined(_M_IX86) || defined(_M_X64)
+#    define ANGLE_HAS_BITCOUNT_32
 inline int BitCount(uint32_t bits)
 {
     return static_cast<int>(__popcnt(bits));
 }
-#if defined(ANGLE_IS_64_BIT_CPU)
+#    if defined(_M_X64)
+#        define ANGLE_HAS_BITCOUNT_64
 inline int BitCount(uint64_t bits)
 {
     return static_cast<int>(__popcnt64(bits));
 }
-#endif  // defined(ANGLE_IS_64_BIT_CPU)
-#endif  // defined(ANGLE_PLATFORM_WINDOWS)
+#    endif  // defined(_M_X64)
+#endif      // defined(_M_IX86) || defined(_M_X64)
 
 #if defined(ANGLE_PLATFORM_POSIX)
+#    define ANGLE_HAS_BITCOUNT_32
 inline int BitCount(uint32_t bits)
 {
     return __builtin_popcount(bits);
 }
 
-#if defined(ANGLE_IS_64_BIT_CPU)
+#    if defined(ANGLE_IS_64_BIT_CPU)
+#        define ANGLE_HAS_BITCOUNT_64
 inline int BitCount(uint64_t bits)
 {
     return __builtin_popcountll(bits);
 }
-#endif  // defined(ANGLE_IS_64_BIT_CPU)
-#endif  // defined(ANGLE_PLATFORM_POSIX)
+#    endif  // defined(ANGLE_IS_64_BIT_CPU)
+#endif      // defined(ANGLE_PLATFORM_POSIX)
+
+int BitCountPolyfill(uint32_t bits);
+
+#if !defined(ANGLE_HAS_BITCOUNT_32)
+inline int BitCount(const uint32_t bits)
+{
+    return BitCountPolyfill(bits);
+}
+#endif  // !defined(ANGLE_HAS_BITCOUNT_32)
+
+#if !defined(ANGLE_HAS_BITCOUNT_64)
+inline int BitCount(const uint64_t bits)
+{
+    return BitCount(static_cast<uint32_t>(bits >> 32)) + BitCount(static_cast<uint32_t>(bits));
+}
+#endif  // !defined(ANGLE_HAS_BITCOUNT_64)
+#undef ANGLE_HAS_BITCOUNT_32
+#undef ANGLE_HAS_BITCOUNT_64
+
+inline int BitCount(uint8_t bits)
+{
+    return BitCount(static_cast<uint32_t>(bits));
+}
+
+inline int BitCount(uint16_t bits)
+{
+    return BitCount(static_cast<uint32_t>(bits));
+}
 
 #if defined(ANGLE_PLATFORM_WINDOWS)
 // Return the index of the least significant bit set. Indexing is such that bit 0 is the least
@@ -968,7 +1035,7 @@ inline unsigned long ScanForward(uint32_t bits)
     return firstBitIndex;
 }
 
-#if defined(ANGLE_IS_64_BIT_CPU)
+#    if defined(ANGLE_IS_64_BIT_CPU)
 inline unsigned long ScanForward(uint64_t bits)
 {
     ASSERT(bits != 0u);
@@ -977,8 +1044,8 @@ inline unsigned long ScanForward(uint64_t bits)
     ASSERT(ret != 0u);
     return firstBitIndex;
 }
-#endif  // defined(ANGLE_IS_64_BIT_CPU)
-#endif  // defined(ANGLE_PLATFORM_WINDOWS)
+#    endif  // defined(ANGLE_IS_64_BIT_CPU)
+#endif      // defined(ANGLE_PLATFORM_WINDOWS)
 
 #if defined(ANGLE_PLATFORM_POSIX)
 inline unsigned long ScanForward(uint32_t bits)
@@ -987,14 +1054,24 @@ inline unsigned long ScanForward(uint32_t bits)
     return static_cast<unsigned long>(__builtin_ctz(bits));
 }
 
-#if defined(ANGLE_IS_64_BIT_CPU)
+#    if defined(ANGLE_IS_64_BIT_CPU)
 inline unsigned long ScanForward(uint64_t bits)
 {
     ASSERT(bits != 0u);
     return static_cast<unsigned long>(__builtin_ctzll(bits));
 }
-#endif  // defined(ANGLE_IS_64_BIT_CPU)
-#endif  // defined(ANGLE_PLATFORM_POSIX)
+#    endif  // defined(ANGLE_IS_64_BIT_CPU)
+#endif      // defined(ANGLE_PLATFORM_POSIX)
+
+inline unsigned long ScanForward(uint8_t bits)
+{
+    return ScanForward(static_cast<uint32_t>(bits));
+}
+
+inline unsigned long ScanForward(uint16_t bits)
+{
+    return ScanForward(static_cast<uint32_t>(bits));
+}
 
 // Return the index of the most significant bit set. Indexing is such that bit 0 is the least
 // significant bit.
@@ -1009,7 +1086,7 @@ inline unsigned long ScanReverse(unsigned long bits)
 #elif defined(ANGLE_PLATFORM_POSIX)
     return static_cast<unsigned long>(sizeof(unsigned long) * CHAR_BIT - 1 - __builtin_clzl(bits));
 #else
-#error Please implement bit-scan-reverse for your platform!
+#    error Please implement bit-scan-reverse for your platform!
 #endif
 }
 
@@ -1133,6 +1210,17 @@ inline int32_t WrappingMul(int32_t lhs, int32_t rhs)
     return static_cast<int32_t>(resultWide);
 }
 
+inline float scaleScreenDimensionToNdc(float dimensionScreen, float viewportDimension)
+{
+    return 2.0f * dimensionScreen / viewportDimension;
+}
+
+inline float scaleScreenCoordinateToNdc(float coordinateScreen, float viewportDimension)
+{
+    float halfShifted = coordinateScreen / viewportDimension;
+    return 2.0f * (halfShifted - 0.5f);
+}
+
 }  // namespace gl
 
 namespace rx
@@ -1161,8 +1249,8 @@ inline unsigned int UnsignedCeilDivide(unsigned int value, unsigned int divisor)
 
 #if defined(_MSC_VER)
 
-#define ANGLE_ROTL(x, y) _rotl(x, y)
-#define ANGLE_ROTR16(x, y) _rotr16(x, y)
+#    define ANGLE_ROTL(x, y) _rotl(x, y)
+#    define ANGLE_ROTR16(x, y) _rotr16(x, y)
 
 #else
 
@@ -1176,10 +1264,10 @@ inline uint16_t RotR16(uint16_t x, int8_t r)
     return (x >> r) | (x << (16 - r));
 }
 
-#define ANGLE_ROTL(x, y) ::rx::RotL(x, y)
-#define ANGLE_ROTR16(x, y) ::rx::RotR16(x, y)
+#    define ANGLE_ROTL(x, y) ::rx::RotL(x, y)
+#    define ANGLE_ROTR16(x, y) ::rx::RotR16(x, y)
 
 #endif  // namespace rx
-}
+}  // namespace rx
 
 #endif  // COMMON_MATHUTIL_H_

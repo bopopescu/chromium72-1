@@ -330,7 +330,7 @@ LayoutUnit LayoutMultiColumnFlowThread::MaxColumnLogicalHeight() const {
     return column_height_available_;
   }
   const LayoutBlockFlow* multicol_block = MultiColumnBlockFlow();
-  Length logical_max_height = multicol_block->Style()->LogicalMaxHeight();
+  Length logical_max_height = multicol_block->StyleRef().LogicalMaxHeight();
   if (!logical_max_height.IsMaxSizeNone()) {
     LayoutUnit resolved_logical_max_height =
         multicol_block->ComputeContentLogicalHeight(
@@ -604,7 +604,7 @@ bool LayoutMultiColumnFlowThread::RemoveSpannerPlaceholderIfNoLongerValid(
   // it for relayout.
   spanner_object_in_flow_thread->ContainingBlock()
       ->SetNeedsLayoutAndPrefWidthsRecalc(
-          LayoutInvalidationReason::kColumnsChanged);
+          layout_invalidation_reason::kColumnsChanged);
 
   // Now generate a column set for this ex-spanner, if needed and none is there
   // for us already.
@@ -889,7 +889,7 @@ bool LayoutMultiColumnFlowThread::DescendantIsValidColumnSpanner(
 
   // The spec says that column-span only applies to in-flow block-level
   // elements.
-  if (descendant->Style()->GetColumnSpan() != EColumnSpan::kAll ||
+  if (descendant->StyleRef().GetColumnSpan() != EColumnSpan::kAll ||
       !descendant->IsBox() || descendant->IsInline() ||
       descendant->IsFloatingOrOutOfFlowPositioned())
     return false;

@@ -4,31 +4,34 @@
 <link rel="import" href="chrome://resources/cr_elements/cr_icons_css.html">
 <link rel="import" href="chrome://resources/cr_elements/cr_link_row/cr_link_row.html">
 <link rel="import" href="chrome://resources/cr_elements/cr_toggle/cr_toggle.html">
+<link rel="import" href="chrome://resources/cr_elements/icons.html">
 <link rel="import" href="chrome://resources/cr_elements/paper_button_style_css.html">
 <link rel="import" href="chrome://resources/cr_elements/policy/cr_tooltip_icon.html">
 <link rel="import" href="chrome://resources/cr_elements/shared_style_css.html">
+<link rel="import" href="chrome://resources/cr_elements/shared_vars_css.html">
 <link rel="import" href="chrome://resources/html/action_link.html">
 <link rel="import" href="chrome://resources/html/action_link_css.html">
 <link rel="import" href="chrome://resources/html/cr.html">
 <link rel="import" href="chrome://resources/html/cr/ui/focus_without_ink.html">
 <link rel="import" href="chrome://resources/polymer/v1_0/iron-flex-layout/iron-flex-layout-classes.html">
 <link rel="import" href="chrome://resources/polymer/v1_0/iron-icon/iron-icon.html">
-<link rel="import" href="chrome://resources/polymer/v1_0/iron-icons/iron-icons.html">
 <link rel="import" href="chrome://resources/polymer/v1_0/paper-icon-button/paper-icon-button-light.html">
 <link rel="import" href="chrome://resources/polymer/v1_0/paper-spinner/paper-spinner-lite.html">
 <link rel="import" href="chrome://resources/polymer/v1_0/paper-styles/color.html">
-<link rel="import" href="chrome://resources/polymer/v1_0/paper-styles/shadow.html">
 <link rel="import" href="item_behavior.html">
 <link rel="import" href="item_util.html">
+<link rel="import" href="host_permissions_toggle_list.html">
 <link rel="import" href="navigation_helper.html">
+<link rel="import" href="runtime_host_permissions.html">
+<link rel="import" href="shared_style.html">
 <link rel="import" href="strings.html">
 <link rel="import" href="toggle_row.html">
 
 <dom-module id="extensions-detail-view">
   <template>
-    <style include="iron-flex cr-shared-style cr-icons action-link paper-button-style">
+    <style include="iron-flex cr-shared-style cr-icons action-link paper-button-style shared-style">
       :host {
-        --iron-icon-fill-color: var(--paper-grey-600);
+        --iron-icon-fill-color: var(--google-grey-refresh-700);
         display: block;
         height: 100%;
       }
@@ -38,11 +41,11 @@
       }
 
       #enable-section cr-tooltip-icon {
-        -webkit-margin-end: 20px;
+        margin-inline-end: 20px;
       }
 
       #enable-section span {
-        color: var(--paper-grey-600);
+        color: var(--cr-secondary-text-color);
         font-weight: 500;
       }
 
@@ -50,32 +53,10 @@
         color: var(--google-blue-500);
       }
 
-      #container {
-        height: 100%;
-        overflow: overlay;
-      }
-
-      #main {
-        @apply --shadow-elevation-2dp;
-        background-color: white;
-        margin: auto;
-        min-height: 100%;
-        padding-bottom: 64px;
-        width: var(--cr-toolbar-field-width);
-      }
-
-      #top-bar {
-        align-items: center;
-        display: flex;
-        height: 40px;
-        margin-bottom: 12px;
-        padding: 8px 12px 0;
-      }
-
       #icon {
-        -webkit-margin-end: 12px;
-        -webkit-margin-start: 16px;
         height: 24px;
+        margin-inline-end: 12px;
+        margin-inline-start: 16px;
         width: 24px;
       }
 
@@ -120,7 +101,7 @@
       }
 
       .section-content {
-        color: var(--paper-grey-600);
+        color: var(--cr-secondary-text-color);
       }
 
       .actionable {
@@ -149,19 +130,26 @@
 
       .warning-icon {
         --iron-icon-fill-color: var(--google-red-700);
-        -webkit-margin-end: 8px;
         flex-shrink: 0;
         height: 18px;
+        margin-inline-end: 8px;
         width: 18px;
       }
 
       ul {
-        -webkit-padding-start: 20px;
         margin: 0;
+        padding-inline-start: 20px;
       }
 
       #options-section .control-line:first-child {
         border-top: var(--cr-separator-line);
+      }
+
+      extensions-toggle-row {
+        @apply --cr-section;
+        padding-inline-end: 0;
+        padding-inline-start: 0;
+        --toggle-row-label-padding: var(--cr-section-padding);
       }
 
       #load-path {
@@ -181,9 +169,9 @@
         @apply --cr-icon-height-width;
       }
     </style>
-    <div id="container">
-      <div id="main">
-        <div id="top-bar">
+    <div class="page-container" id="container">
+      <div class="page-content">
+        <div class="page-header">
           <paper-icon-button-light class="icon-arrow-back no-overlap">
             <button id="closeButton" aria-label="$i18n{back}"
                 on-click="onCloseButtonTap_"></button>
@@ -222,7 +210,7 @@
           <div id="runtime-warnings" aria-describedby="a11yAssociation"
               hidden$="[[!data.runtimeWarnings.length]]"
               class="section continuation warning control-line">
-            <iron-icon class="warning-icon" icon="error"></iron-icon>
+            <iron-icon class="warning-icon" icon="cr:error"></iron-icon>
             <span>
               <template is="dom-repeat" items="[[data.runtimeWarnings]]">
                 [[item]]
@@ -310,11 +298,13 @@
         <div class="section block">
           <div class="section-title">$i18n{itemPermissions}</div>
           <div class="section-content">
-            <span id="no-permissions" hidden="[[data.permissions.length]]">
+            <span id="no-permissions" hidden$="[[hasPermissions_(data.*)]]">
               $i18n{itemPermissionsEmpty}
             </span>
-            <ul id="permissions-list" hidden="[[!data.permissions.length]]">
-              <template is="dom-repeat" items="[[data.permissions]]">
+            <ul id="permissions-list"
+                hidden$="[[!data.permissions.simplePermissions.length]]">
+              <template is="dom-repeat"
+                  items="[[data.permissions.simplePermissions]]">
                 <li>
                   [[item.message]]
                   <ul hidden="[[!item.submessages.length]]">
@@ -325,6 +315,22 @@
                 </li>
               </template>
             </ul>
+            <template is="dom-if"
+                if="[[showFreeformRuntimeHostPermissions_(data.*)]]">
+              <extensions-runtime-host-permissions
+                  permissions="[[data.permissions.runtimeHostPermissions]]"
+                  delegate="[[delegate]]"
+                  item-id="[[data.id]]">
+              </extensions-runtime-host-permissions>
+            </template>
+            <template is="dom-if"
+                if="[[showHostPermissionsToggleList_(data.*)]]">
+              <extensions-host-permissions-toggle-list
+                  permissions="[[data.permissions.runtimeHostPermissions]]"
+                  delegate="[[delegate]]"
+                  item-id="[[data.id]]">
+              </extensions-host-permissions-toggle-list>
+            </template>
           </div>
         </div>
         <template is="dom-if"
@@ -361,13 +367,6 @@
                 <span>$i18n{itemAllowOnFileUrls}</span>
               </extensions-toggle-row>
             </template>
-            <template is="dom-if" if="[[data.runOnAllUrls.isEnabled]]">
-              <extensions-toggle-row id="allow-on-all-sites"
-                  checked="[[data.runOnAllUrls.isActive]]"
-                  on-change="onAllowOnAllSitesChange_">
-                <span>$i18n{itemAllowOnAllSites}</span>
-              </extensions-toggle-row>
-            </template>
             <template is="dom-if" if="[[data.errorCollection.isEnabled]]">
               <extensions-toggle-row id="collect-errors"
                 checked="[[data.errorCollection.isActive]]"
@@ -377,11 +376,15 @@
             </template>
           </div>
         </template>
-        <cr-link-row class="hr" is="" id="extensions-options"
+        <cr-link-row class="hr" id="extensions-options"
             disabled="[[!isEnabled_(data.state)]]"
             hidden="[[!shouldShowOptionsLink_(data.*)]]"
             icon-class="icon-external" label="$i18n{itemOptions}"
             on-click="onExtensionOptionsTap_">
+        </cr-link-row>
+        <cr-link-row class="hr" icon-class="subpage-arrow"
+            id="extensions-activity-log-link" hidden$="[[!showActivityLog]]"
+            label="$i18n{viewActivityLog}" on-click="onActivityLogTap_">
         </cr-link-row>
         <cr-link-row class="hr" hidden="[[!data.manifestHomePageUrl.length]]"
             icon-class="icon-external" id="extensionWebsite"

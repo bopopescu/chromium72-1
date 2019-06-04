@@ -35,9 +35,6 @@ public:
     bool asACompose(ComposeRec* rec) const override;
 #endif
 
-    void toString(SkString* str) const override;
-    SK_DECLARE_PUBLIC_FLATTENABLE_DESERIALIZATION_PROCS(SkComposeShader)
-
 protected:
     SkComposeShader(SkReadBuffer&);
     void flatten(SkWriteBuffer&) const override;
@@ -45,6 +42,8 @@ protected:
     bool onAppendStages(const StageRec&) const override;
 
 private:
+    SK_FLATTENABLE_HOOKS(SkComposeShader)
+
     sk_sp<SkShader>     fDst;
     sk_sp<SkShader>     fSrc;
     const float         fLerpT;

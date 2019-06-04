@@ -5,11 +5,14 @@
 #ifndef COMPONENTS_DOWNLOAD_PUBLIC_COMMON_DOWNLOAD_UTILS_H_
 #define COMPONENTS_DOWNLOAD_PUBLIC_COMMON_DOWNLOAD_UTILS_H_
 
-#include "components/download/downloader/in_progress/download_entry.h"
+#include "components/download/database/download_db_entry.h"
+#include "components/download/database/in_progress/download_entry.h"
 #include "components/download/public/common/download_export.h"
 #include "components/download/public/common/download_interrupt_reasons.h"
 #include "components/download/public/common/download_item.h"
+#include "components/download/public/common/download_item_impl.h"
 #include "components/download/public/common/download_source.h"
+#include "components/download/public/common/resume_mode.h"
 #include "net/base/net_errors.h"
 #include "net/cert/cert_status_flags.h"
 #include "net/http/http_response_headers.h"
@@ -26,6 +29,11 @@ namespace download {
 struct DownloadCreateInfo;
 struct DownloadSaveInfo;
 class DownloadUrlParameters;
+
+// Used to check if the URL is safe. For most cases, this is
+// ChildProcessSecurityPolicy::CanRequestURL.
+using URLSecurityPolicy =
+    base::RepeatingCallback<bool(int /* render_process_id */, const GURL& url)>;
 
 // Handle the url request completion status and return the interrupt reasons.
 // |cert_status| is ignored if error_code is not net::ERR_ABORTED.
@@ -60,16 +68,34 @@ COMPONENTS_DOWNLOAD_EXPORT int GetLoadFlags(DownloadUrlParameters* params,
 COMPONENTS_DOWNLOAD_EXPORT std::unique_ptr<net::HttpRequestHeaders>
 GetAdditionalRequestHeaders(DownloadUrlParameters* params);
 
-// Helper functions for DownloadItem -> DownloadEntry for InProgressCache.
-COMPONENTS_DOWNLOAD_EXPORT DownloadEntry CreateDownloadEntryFromItem(
-    const DownloadItem& item,
-    const std::string& request_origin,
-    DownloadSource download_source,
-    bool fetch_error_body,
-    const DownloadUrlParameters::RequestHeadersType& request_headers);
+// Helper functions for DownloadItem -> DownloadDBEntry for DownloadDB.
+COMPONENTS_DOWNLOAD_EXPORT DownloadDBEntry
+CreateDownloadDBEntryFromItem(const DownloadItemImpl& item);
+
+// Helper function to convert DownloadDBEntry to DownloadEntry.
+// TODO(qinmin): remove this function after DownloadEntry is deprecated.
+COMPONENTS_DOWNLOAD_EXPORT base::Optional<DownloadEntry>
+CreateDownloadEntryFromDownloadDBEntry(base::Optional<DownloadDBEntry> entry);
 
 COMPONENTS_DOWNLOAD_EXPORT uint64_t GetUniqueDownloadId();
 
+// Given the interrupt reason, and whether restart and user action are required,
+// determine the final ResomeMode.
+COMPONENTS_DOWNLOAD_EXPORT ResumeMode
+GetDownloadResumeMode(const GURL& url,
+                      DownloadInterruptReason reason,
+                      bool restart_required,
+                      bool user_action_required);
+
+// Check if a download is in terminal state given its url, state and interrupt
+// reason.
+COMPONENTS_DOWNLOAD_EXPORT bool IsDownloadDone(
+    const GURL& url,
+    DownloadItem::DownloadState state,
+    DownloadInterruptReason reason);
+
+COMPONENTS_DOWNLOAD_EXPORT bool DeleteDownloadedFile(
+    const base::FilePath& path);
 }  // namespace download
 
 #endif  // COMPONENTS_DOWNLOAD_PUBLIC_COMMON_DOWNLOAD_UTILS_H_

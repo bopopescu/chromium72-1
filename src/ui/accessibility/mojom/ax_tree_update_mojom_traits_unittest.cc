@@ -6,6 +6,7 @@
 #include "mojo/public/cpp/test_support/test_utils.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/accessibility/ax_tree_update.h"
+#include "ui/accessibility/mojom/ax_relative_bounds_mojom_traits.h"
 #include "ui/accessibility/mojom/ax_tree_update.mojom.h"
 
 using mojo::test::SerializeAndDeserialize;
@@ -19,6 +20,7 @@ TEST(AXTreeUpdateMojomTraitsTest, TestSerializeAndDeserializeAXTreeUpdate) {
   input.nodes.resize(2);
   input.nodes[0].role = ax::mojom::Role::kButton;
   input.nodes[1].id = 4;
+  input.event_from = ax::mojom::EventFrom::kUser;
   EXPECT_TRUE(
       SerializeAndDeserialize<ax::mojom::AXTreeUpdate>(&input, &output));
   EXPECT_EQ(true, output.has_tree_data);
@@ -28,4 +30,5 @@ TEST(AXTreeUpdateMojomTraitsTest, TestSerializeAndDeserializeAXTreeUpdate) {
   ASSERT_EQ(2U, output.nodes.size());
   EXPECT_EQ(ax::mojom::Role::kButton, output.nodes[0].role);
   EXPECT_EQ(4, output.nodes[1].id);
+  EXPECT_EQ(ax::mojom::EventFrom::kUser, output.event_from);
 }

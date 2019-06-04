@@ -14,7 +14,7 @@
 #include "content/public/browser/render_process_host.h"
 #include "content/public/browser/ssl_status.h"
 #include "content/public/browser/web_contents.h"
-#include "content/public/common/browser_side_navigation_policy.h"
+#include "content/public/common/navigation_policy.h"
 #include "net/url_request/redirect_info.h"
 #include "services/network/public/cpp/resource_response.h"
 #include "services/network/public/mojom/url_loader_factory.mojom.h"
@@ -31,7 +31,10 @@ TestNavigationURLLoader::TestNavigationURLLoader(
   DCHECK(IsBrowserSideNavigationEnabled());
 }
 
-void TestNavigationURLLoader::FollowRedirect() {
+void TestNavigationURLLoader::FollowRedirect(
+    const base::Optional<std::vector<std::string>>&
+        to_be_removed_request_headers,
+    const base::Optional<net::HttpRequestHeaders>& modified_request_headers) {
   redirect_count_++;
 }
 

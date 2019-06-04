@@ -10,12 +10,13 @@
 #include <utility>
 
 #include "base/callback.h"
-#include "components/ntp_snippets/contextual/contextual_suggestions_metrics_reporter.h"
 #include "components/ntp_snippets/contextual/contextual_suggestions_result.h"
-#include "net/http/http_request_headers.h"
+#include "components/ntp_snippets/contextual/reporting/contextual_suggestions_metrics_reporter.h"
+#include "net/base/load_flags.h"
 #include "url/gurl.h"
 
 namespace network {
+struct ResourceRequest;
 class SimpleURLLoader;
 class SharedURLLoaderFactory;
 }  // namespace network
@@ -27,7 +28,9 @@ namespace contextual_suggestions {
 // body protos and parsing the response body protos.
 class ContextualSuggestionsFetch {
  public:
-  ContextualSuggestionsFetch(const GURL& url, const std::string& bcp_language);
+  ContextualSuggestionsFetch(const GURL& url,
+                             const std::string& bcp_language,
+                             bool include_cookies);
   ~ContextualSuggestionsFetch();
 
   // Get the url used to fetch suggestions.
@@ -40,14 +43,17 @@ class ContextualSuggestionsFetch {
       ReportFetchMetricsCallback metrics_callback,
       const scoped_refptr<network::SharedURLLoaderFactory>& loader_factory);
 
+  // Methods for testing.
+  std::unique_ptr<network::ResourceRequest> MakeResourceRequestForTesting()
+      const;
+
  private:
   std::unique_ptr<network::SimpleURLLoader> MakeURLLoader() const;
-  net::HttpRequestHeaders MakeHeaders() const;
+  std::unique_ptr<network::ResourceRequest> MakeResourceRequest() const;
+  void AppendHeaders(network::ResourceRequest*) const;
   void OnURLLoaderComplete(ReportFetchMetricsCallback metrics_callback,
                            std::unique_ptr<std::string> result);
-  void ReportFetchMetrics(int32_t error_code,
-                          int32_t response_code,
-                          size_t clusters_size,
+  void ReportFetchMetrics(size_t clusters_size,
                           ReportFetchMetricsCallback metrics_callback);
 
   // The url for which we're fetching suggestions.
@@ -55,6 +61,8 @@ class ContextualSuggestionsFetch {
 
   // Identifier for the spoken language in BCP47 format.
   const std::string bcp_language_code_;
+
+  bool include_cookies_ = false;
 
   // The loader for downloading the suggestions. Only non-null if a fetch is
   // currently ongoing.

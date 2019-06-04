@@ -5,8 +5,11 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <map>
+#include <memory>
+#include <queue>
 #include <string>
 
+#include "re2/prefilter.h"
 #include "re2/re2.h"
 
 using re2::StringPiece;
@@ -21,17 +24,45 @@ void Test(StringPiece pattern, const RE2::Options& options, StringPiece text) {
     return;
 
   // Don't waste time fuzzing high-size programs.
-  // (They can cause bug reports due to fuzzer timeouts.)
+  // They can cause bug reports due to fuzzer timeouts.
   int size = re.ProgramSize();
   if (size > 9999)
     return;
+  int rsize = re.ReverseProgramSize();
+  if (rsize > 9999)
+    return;
 
   // Don't waste time fuzzing high-fanout programs.
-  // (They can also cause bug reports due to fuzzer timeouts.)
+  // They can cause bug reports due to fuzzer timeouts.
   std::map<int, int> histogram;
   int fanout = re.ProgramFanout(&histogram);
   if (fanout > 9)
     return;
+  int rfanout = re.ReverseProgramFanout(&histogram);
+  if (rfanout > 9)
+    return;
+
+  // Don't waste time fuzzing programs with large substrings.
+  // They can cause bug reports due to fuzzer timeouts when they
+  // are repetitions (e.g. hundreds of NUL bytes) and matching is
+  // unanchored. And they aren't interesting for fuzzing purposes.
+  std::unique_ptr<re2::Prefilter> prefilter(re2::Prefilter::FromRE2(&re));
+  if (prefilter == nullptr)
+    return;
+  std::queue<re2::Prefilter*> nodes;
+  nodes.push(prefilter.get());
+  while (!nodes.empty()) {
+    re2::Prefilter* node = nodes.front();
+    nodes.pop();
+    if (node->op() == re2::Prefilter::ATOM) {
+      if (node->atom().size() > 9)
+        return;
+    } else if (node->op() == re2::Prefilter::AND ||
+               node->op() == re2::Prefilter::OR) {
+      for (re2::Prefilter* sub : *node->subs())
+        nodes.push(sub);
+    }
+  }
 
   StringPiece sp1, sp2, sp3, sp4;
   string s1, s2, s3, s4;
@@ -45,7 +76,7 @@ void Test(StringPiece pattern, const RE2::Options& options, StringPiece text) {
   RE2::Consume(&sp1, re, &i1, &i2, &i3, &i4);
   RE2::FindAndConsume(&sp2, re, &d1, &d2, &d3, &d4);
 
-  s3 = s4 = text.ToString();
+  s3 = s4 = string(text);
   RE2::Replace(&s3, re, "");
   RE2::GlobalReplace(&s4, re, "");
 
@@ -56,21 +87,31 @@ void Test(StringPiece pattern, const RE2::Options& options, StringPiece text) {
 
 // Entry point for libFuzzer.
 extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
-  if (size == 0 || size > 512)
+  if (size == 0 || size > 999)
     return 0;
 
-  // Crudely limit the use of \p and \P.
+  // Crudely limit the use of ., \p and \P.
   // Otherwise, we will waste time on inputs that have long runs of Unicode
   // character classes. The fuzzer has shown itself to be easily capable of
   // generating such patterns that fall within the other limits, but result
   // in timeouts nonetheless. The marginal cost is high - even more so when
   // counted repetition is involved - whereas the marginal benefit is zero.
+  int dot = 0;
   int backslash_p = 0;
   for (size_t i = 0; i < size; i++) {
-    if (data[i] == '\\' && i+1 < size && (data[i+1] == 'p' || data[i+1] == 'P'))
+    if (data[i] == '.')
+      dot++;
+    if (data[i] != '\\')
+      continue;
+    i++;
+    if (i >= size)
+      break;
+    if (data[i] == 'p' || data[i] == 'P')
       backslash_p++;
   }
-  if (backslash_p > 10)
+  if (dot > 99)
+    return 0;
+  if (backslash_p > 1)
     return 0;
 
   // The one-at-a-time hash by Bob Jenkins.

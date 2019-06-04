@@ -13,9 +13,9 @@
 #include "base/command_line.h"
 #include "base/macros.h"
 #include "base/memory/weak_ptr.h"
-#include "base/message_loop/message_loop.h"
 #include "base/run_loop.h"
 #include "base/single_thread_task_runner.h"
+#include "base/test/scoped_task_environment.h"
 #include "base/time/default_tick_clock.h"
 #include "base/time/time.h"
 #include "content/public/common/content_switches.h"
@@ -39,6 +39,7 @@
 #include "services/network/public/mojom/request_context_frame_type.mojom.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/public/platform/scheduler/test/renderer_scheduler_test_support.h"
+#include "third_party/blink/public/platform/web_data.h"
 #include "third_party/blink/public/platform/web_string.h"
 #include "third_party/blink/public/platform/web_url_error.h"
 #include "third_party/blink/public/platform/web_url_loader_client.h"
@@ -77,7 +78,7 @@ class TestResourceDispatcher : public ResourceDispatcher {
       SyncLoadResponse* response,
       scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
       std::vector<std::unique_ptr<URLLoaderThrottle>> throttles,
-      double timeout,
+      base::TimeDelta timeout,
       blink::mojom::BlobRegistryPtrInfo download_to_blob_registry,
       std::unique_ptr<RequestPeer> peer) override {
     *response = std::move(sync_load_response_);
@@ -175,7 +176,9 @@ class TestWebURLLoaderClient : public blink::WebURLLoaderClient {
   TestWebURLLoaderClient(ResourceDispatcher* dispatcher)
       : loader_(new WebURLLoaderImpl(
             dispatcher,
-            blink::scheduler::GetSingleThreadTaskRunnerForTesting(),
+            blink::scheduler::WebResourceLoadingTaskRunnerHandle::
+                CreateUnprioritized(
+                    blink::scheduler::GetSingleThreadTaskRunnerForTesting()),
             base::MakeRefCounted<network::WeakWrapperSharedURLLoaderFactory>(
                 &fake_url_loader_factory_))),
         delete_on_receive_redirect_(false),
@@ -193,7 +196,7 @@ class TestWebURLLoaderClient : public blink::WebURLLoaderClient {
   bool WillFollowRedirect(const blink::WebURL& new_url,
                           const blink::WebURL& new_site_for_cookies,
                           const blink::WebString& new_referrer,
-                          blink::WebReferrerPolicy new_referrer_policy,
+                          network::mojom::ReferrerPolicy new_referrer_policy,
                           const blink::WebString& new_method,
                           const blink::WebURLResponse& passed_redirect_response,
                           bool& report_raw_headers) override {
@@ -224,10 +227,6 @@ class TestWebURLLoaderClient : public blink::WebURLLoaderClient {
       loader_.reset();
   }
 
-  void DidDownloadData(int dataLength, int encodedDataLength) override {
-    EXPECT_TRUE(loader_);
-  }
-
   void DidReceiveData(const char* data, int dataLength) override {
     EXPECT_TRUE(loader_);
     // The response should have started, but must not have finished, or failed.
@@ -241,11 +240,13 @@ class TestWebURLLoaderClient : public blink::WebURLLoaderClient {
       loader_.reset();
   }
 
-  void DidFinishLoading(base::TimeTicks finishTime,
-                        int64_t totalEncodedDataLength,
-                        int64_t totalEncodedBodyLength,
-                        int64_t totalDecodedBodyLength,
-                        bool blocked_cross_site_document) override {
+  void DidFinishLoading(
+      base::TimeTicks finishTime,
+      int64_t totalEncodedDataLength,
+      int64_t totalEncodedBodyLength,
+      int64_t totalDecodedBodyLength,
+      bool should_report_corb_blocking,
+      const std::vector<network::cors::PreflightTimingInfo>&) override {
     EXPECT_TRUE(loader_);
     EXPECT_TRUE(did_receive_response_);
     EXPECT_FALSE(did_finish_);
@@ -315,7 +316,7 @@ class WebURLLoaderImplTest : public testing::Test {
 
   void DoStartAsyncRequest() {
     blink::WebURLRequest request{GURL(kTestURL)};
-    request.SetRequestContext(blink::WebURLRequest::kRequestContextInternal);
+    request.SetRequestContext(blink::mojom::RequestContextType::INTERNAL);
     client()->loader()->LoadAsynchronously(request, client());
     ASSERT_TRUE(peer());
   }
@@ -323,7 +324,7 @@ class WebURLLoaderImplTest : public testing::Test {
   void DoStartAsyncRequestWithPriority(
       blink::WebURLRequest::Priority priority) {
     blink::WebURLRequest request{GURL(kTestURL)};
-    request.SetRequestContext(blink::WebURLRequest::kRequestContextInternal);
+    request.SetRequestContext(blink::mojom::RequestContextType::INTERNAL);
     request.SetPriority(priority);
     client()->loader()->LoadAsynchronously(request, client());
     ASSERT_TRUE(peer());
@@ -409,10 +410,9 @@ class WebURLLoaderImplTest : public testing::Test {
   TestWebURLLoaderClient* client() { return client_.get(); }
   TestResourceDispatcher* dispatcher() { return &dispatcher_; }
   RequestPeer* peer() { return dispatcher()->peer(); }
-  base::MessageLoop* message_loop() { return &message_loop_; }
 
  private:
-  base::MessageLoop message_loop_;
+  base::test::ScopedTaskEnvironment task_environment_;
   TestResourceDispatcher dispatcher_;
   std::unique_ptr<TestWebURLLoaderClient> client_;
 };
@@ -641,7 +641,7 @@ TEST_F(WebURLLoaderImplTest, BrowserSideNavigationCommit) {
   const std::string kMimeType = "text/html";
   blink::WebURLRequest request(kNavigationURL);
   request.SetFrameType(network::mojom::RequestContextFrameType::kTopLevel);
-  request.SetRequestContext(blink::WebURLRequest::kRequestContextFrame);
+  request.SetRequestContext(blink::mojom::RequestContextType::FRAME);
   std::unique_ptr<NavigationResponseOverrideParameters> response_override(
       new NavigationResponseOverrideParameters());
   response_override->response.mime_type = kMimeType;
@@ -692,7 +692,7 @@ TEST_F(WebURLLoaderImplTest, ResponseIPAddress) {
     network::ResourceResponseInfo info;
     info.socket_address = net::HostPortPair(test.ip, 443);
     blink::WebURLResponse response;
-    WebURLLoaderImpl::PopulateURLResponse(url, info, &response, true);
+    WebURLLoaderImpl::PopulateURLResponse(url, info, &response, true, -1);
     EXPECT_EQ(test.expected, response.RemoteIPAddress().Utf8());
   };
 }
@@ -719,7 +719,7 @@ TEST_F(WebURLLoaderImplTest, ResponseCert) {
   network::ResourceResponseInfo info;
   info.ssl_info = ssl_info;
   blink::WebURLResponse web_url_response;
-  WebURLLoaderImpl::PopulateURLResponse(url, info, &web_url_response, true);
+  WebURLLoaderImpl::PopulateURLResponse(url, info, &web_url_response, true, -1);
 
   blink::WebURLResponse::WebSecurityDetails security_details =
       web_url_response.SecurityDetailsForTesting();
@@ -756,7 +756,7 @@ TEST_F(WebURLLoaderImplTest, ResponseCertWithNoSANs) {
   network::ResourceResponseInfo info;
   info.ssl_info = ssl_info;
   blink::WebURLResponse web_url_response;
-  WebURLLoaderImpl::PopulateURLResponse(url, info, &web_url_response, true);
+  WebURLLoaderImpl::PopulateURLResponse(url, info, &web_url_response, true, -1);
 
   blink::WebURLResponse::WebSecurityDetails security_details =
       web_url_response.SecurityDetailsForTesting();
@@ -779,7 +779,7 @@ TEST_F(WebURLLoaderImplTest, SyncLengths) {
   const int kEncodedDataLength = 130;
   const GURL url(kTestURL);
   blink::WebURLRequest request(url);
-  request.SetRequestContext(blink::WebURLRequest::kRequestContextInternal);
+  request.SetRequestContext(blink::mojom::RequestContextType::INTERNAL);
 
   // Prepare a mock response
   SyncLoadResponse sync_load_response;
@@ -796,15 +796,13 @@ TEST_F(WebURLLoaderImplTest, SyncLengths) {
   blink::WebData data;
   int64_t encoded_data_length = 0;
   int64_t encoded_body_length = 0;
-  base::Optional<int64_t> downloaded_file_length;
   blink::WebBlobInfo downloaded_blob;
-  client()->loader()->LoadSynchronously(
-      request, nullptr, response, error, data, encoded_data_length,
-      encoded_body_length, downloaded_file_length, downloaded_blob);
+  client()->loader()->LoadSynchronously(request, nullptr, response, error, data,
+                                        encoded_data_length,
+                                        encoded_body_length, downloaded_blob);
 
   EXPECT_EQ(kEncodedBodyLength, encoded_body_length);
   EXPECT_EQ(kEncodedDataLength, encoded_data_length);
-  EXPECT_FALSE(downloaded_file_length);
   EXPECT_TRUE(downloaded_blob.Uuid().IsNull());
 }
 

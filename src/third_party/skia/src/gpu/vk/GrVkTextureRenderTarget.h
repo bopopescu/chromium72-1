@@ -9,6 +9,8 @@
 #ifndef GrVkTextureRenderTarget_DEFINED
 #define GrVkTextureRenderTarget_DEFINED
 
+#include "GrVkVulkan.h"
+
 #include "GrVkTexture.h"
 #include "GrVkRenderTarget.h"
 
@@ -25,10 +27,10 @@ struct GrVkImageInfo;
 
 class GrVkTextureRenderTarget: public GrVkTexture, public GrVkRenderTarget {
 public:
-    static sk_sp<GrVkTextureRenderTarget> CreateNewTextureRenderTarget(GrVkGpu*, SkBudgeted,
-                                                                       const GrSurfaceDesc&,
-                                                                       const GrVkImage::ImageDesc&,
-                                                                       GrMipMapsStatus);
+    static sk_sp<GrVkTextureRenderTarget> MakeNewTextureRenderTarget(GrVkGpu*, SkBudgeted,
+                                                                     const GrSurfaceDesc&,
+                                                                     const GrVkImage::ImageDesc&,
+                                                                     GrMipMapsStatus);
 
     static sk_sp<GrVkTextureRenderTarget> MakeWrappedTextureRenderTarget(GrVkGpu*,
                                                                          const GrSurfaceDesc&,
@@ -37,6 +39,8 @@ public:
                                                                          sk_sp<GrVkImageLayout>);
 
     bool updateForMipmap(GrVkGpu* gpu, const GrVkImageInfo& newInfo);
+
+    GrBackendFormat backendFormat() const override { return this->getBackendFormat(); }
 
 protected:
     void onAbandon() override {

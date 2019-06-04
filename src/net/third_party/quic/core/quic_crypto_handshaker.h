@@ -8,12 +8,14 @@
 #include "net/third_party/quic/core/quic_crypto_stream.h"
 #include "net/third_party/quic/platform/api/quic_export.h"
 
-namespace net {
+namespace quic {
 
 class QUIC_EXPORT_PRIVATE QuicCryptoHandshaker
     : public CryptoFramerVisitorInterface {
  public:
   QuicCryptoHandshaker(QuicCryptoStream* stream, QuicSession* session);
+  QuicCryptoHandshaker(const QuicCryptoHandshaker&) = delete;
+  QuicCryptoHandshaker& operator=(const QuicCryptoHandshaker&) = delete;
 
   ~QuicCryptoHandshaker() override;
 
@@ -41,10 +43,8 @@ class QUIC_EXPORT_PRIVATE QuicCryptoHandshaker
 
   // Records last sent crypto handshake message tag.
   QuicTag last_sent_handshake_message_tag_;
-
-  DISALLOW_COPY_AND_ASSIGN(QuicCryptoHandshaker);
 };
 
-}  // namespace net
+}  // namespace quic
 
 #endif  // NET_THIRD_PARTY_QUIC_CORE_QUIC_CRYPTO_HANDSHAKER_H_

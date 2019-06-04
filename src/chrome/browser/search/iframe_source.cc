@@ -29,6 +29,8 @@ std::string IframeSource::GetMimeType(
     return "text/css";
   if (base::EndsWith(path, ".html", base::CompareCase::INSENSITIVE_ASCII))
     return "text/html";
+  if (base::EndsWith(path, ".svg", base::CompareCase::INSENSITIVE_ASCII))
+    return "image/svg+xml";
   return std::string();
 }
 
@@ -55,7 +57,7 @@ bool IframeSource::GetOrigin(
     std::string* origin) const {
   if (wc_getter.is_null())
     return false;
-  const content::WebContents* contents = wc_getter.Run();
+  content::WebContents* contents = wc_getter.Run();
   if (!contents)
     return false;
   const content::NavigationEntry* entry =

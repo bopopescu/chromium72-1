@@ -29,10 +29,7 @@
 
 #include "third_party/blink/renderer/core/editing/dom_selection.h"
 
-#include "third_party/blink/renderer/bindings/core/v8/exception_messages.h"
-#include "third_party/blink/renderer/bindings/core/v8/exception_state.h"
 #include "third_party/blink/renderer/core/dom/document.h"
-#include "third_party/blink/renderer/core/dom/exception_code.h"
 #include "third_party/blink/renderer/core/dom/node.h"
 #include "third_party/blink/renderer/core/dom/range.h"
 #include "third_party/blink/renderer/core/dom/tree_scope.h"
@@ -49,6 +46,7 @@
 #include "third_party/blink/renderer/core/frame/local_frame.h"
 #include "third_party/blink/renderer/core/frame/use_counter.h"
 #include "third_party/blink/renderer/core/inspector/console_message.h"
+#include "third_party/blink/renderer/platform/bindings/exception_state.h"
 #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
 
 namespace blink {
@@ -283,7 +281,7 @@ void DOMSelection::collapseToEnd(ExceptionState& exception_state) {
   // The method must throw InvalidStateError exception if the context object is
   // empty.
   if (rangeCount() == 0) {
-    exception_state.ThrowDOMException(kInvalidStateError,
+    exception_state.ThrowDOMException(DOMExceptionCode::kInvalidStateError,
                                       "there is no selection.");
     return;
   }
@@ -316,7 +314,7 @@ void DOMSelection::collapseToStart(ExceptionState& exception_state) {
   // The method must throw InvalidStateError ([DOM4]) exception if the context
   // object is empty.
   if (rangeCount() == 0) {
-    exception_state.ThrowDOMException(kInvalidStateError,
+    exception_state.ThrowDOMException(DOMExceptionCode::kInvalidStateError,
                                       "there is no selection.");
     return;
   }
@@ -478,7 +476,8 @@ void DOMSelection::extend(Node* node,
   // abort these steps.
   if (rangeCount() == 0) {
     exception_state.ThrowDOMException(
-        kInvalidStateError, "This Selection object doesn't have any Ranges.");
+        DOMExceptionCode::kInvalidStateError,
+        "This Selection object doesn't have any Ranges.");
     return;
   }
 
@@ -537,7 +536,8 @@ Range* DOMSelection::getRangeAt(unsigned index,
 
   if (index >= rangeCount()) {
     exception_state.ThrowDOMException(
-        kIndexSizeError, String::Number(index) + " is not a valid index.");
+        DOMExceptionCode::kIndexSizeError,
+        String::Number(index) + " is not a valid index.");
     return nullptr;
   }
 
@@ -624,7 +624,7 @@ void DOMSelection::addRange(Range* new_range) {
     return;
 
   if (!new_range->IsConnected()) {
-    AddConsoleError("The given range isn't in document.");
+    AddConsoleWarning("addRange(): The given range isn't in document.");
     return;
   }
 
@@ -832,10 +832,11 @@ bool DOMSelection::IsValidForPosition(Node* node) const {
          node->isConnected();
 }
 
-void DOMSelection::AddConsoleError(const String& message) {
-  if (tree_scope_)
-    tree_scope_->GetDocument().AddConsoleMessage(
-        ConsoleMessage::Create(kJSMessageSource, kErrorMessageLevel, message));
+void DOMSelection::AddConsoleWarning(const String& message) {
+  if (tree_scope_) {
+    tree_scope_->GetDocument().AddConsoleMessage(ConsoleMessage::Create(
+        kJSMessageSource, kWarningMessageLevel, message));
+  }
 }
 
 void DOMSelection::Trace(blink::Visitor* visitor) {

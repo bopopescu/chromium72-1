@@ -19,12 +19,25 @@
 #include "chrome/common/media_router/media_source_helper.h"
 #include "components/cast_channel/cast_socket_service.h"
 #include "content/public/browser/browser_thread.h"
+#include "content/public/common/service_manager_connection.h"
 #include "extensions/common/extension.h"
+#include "services/service_manager/public/cpp/connector.h"
 #if defined(OS_WIN)
 #include "chrome/browser/media/router/mojo/media_route_provider_util_win.h"
 #endif
 
 namespace media_router {
+
+namespace {
+
+// Returns the Connector object for the current process. It is the caller's
+// responsibility to clone the returned object to be used in another thread.
+service_manager::Connector* GetConnector() {
+  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  return content::ServiceManagerConnection::GetForProcess()->GetConnector();
+}
+
+}  // namespace
 
 MediaRouterDesktop::~MediaRouterDesktop() = default;
 
@@ -73,7 +86,6 @@ MediaRouterDesktop::GetProviderIdForPresentation(
 
 MediaRouterDesktop::MediaRouterDesktop(content::BrowserContext* context)
     : MediaRouterDesktop(context, DualMediaSinkService::GetInstance()) {
-  InitializeMediaRouteProviders();
 #if defined(OS_WIN)
   CanFirewallUseLocalPorts(
       base::BindOnce(&MediaRouterDesktop::OnFirewallCheckComplete,
@@ -100,11 +112,11 @@ void MediaRouterDesktop::RegisterMediaRouteProvider(
   // discovery / sink query. We are migrating discovery from the external Media
   // Route Provider to the Media Router (https://crbug.com/687383), so we need
   // to disable it in the provider.
-  config->enable_cast_discovery = !media_router::CastDiscoveryEnabled();
-  config->enable_dial_sink_query =
-      !media_router::DialMediaRouteProviderEnabled();
-  config->enable_cast_sink_query =
-      !media_router::CastMediaRouteProviderEnabled();
+  config->enable_cast_discovery = !CastDiscoveryEnabled();
+  config->enable_dial_sink_query = !DialMediaRouteProviderEnabled();
+  config->enable_cast_sink_query = !CastMediaRouteProviderEnabled();
+  config->use_views_dialog = ShouldUseViewsDialog();
+  config->use_mirroring_service = ShouldUseMirroringService();
   std::move(callback).Run(instance_id(), std::move(config));
 
   SyncStateToMediaRouteProvider(provider_id);
@@ -213,12 +225,31 @@ void MediaRouterDesktop::InitializeMediaRouteProviders() {
 }
 
 void MediaRouterDesktop::InitializeExtensionMediaRouteProviderProxy() {
+  if (!extension_provider_proxy_) {
+    extension_provider_proxy_ =
+        std::make_unique<ExtensionMediaRouteProviderProxy>(context());
+  }
   mojom::MediaRouteProviderPtr extension_provider_proxy_ptr;
-  extension_provider_proxy_ =
-      std::make_unique<ExtensionMediaRouteProviderProxy>(
-          context(), mojo::MakeRequest(&extension_provider_proxy_ptr));
+  extension_provider_proxy_->Bind(
+      mojo::MakeRequest(&extension_provider_proxy_ptr));
+  extension_provider_proxy_ptr.set_connection_error_handler(base::BindOnce(
+      &MediaRouterDesktop::OnExtensionProviderError, base::Unretained(this)));
   media_route_providers_[MediaRouteProviderId::EXTENSION] =
       std::move(extension_provider_proxy_ptr);
+}
+
+void MediaRouterDesktop::OnExtensionProviderError() {
+  // The message pipe for |extension_provider_proxy_| might error out due to
+  // Media Router extension causing dropped callbacks. Detect this case and
+  // recover by re-creating the pipe.
+  DVLOG(2) << "Extension MRP encountered error.";
+  if (extension_provider_error_count_ >= kMaxMediaRouteProviderErrorCount)
+    return;
+
+  ++extension_provider_error_count_;
+  DVLOG(2) << "Reconnecting to extension MRP: "
+           << extension_provider_error_count_;
+  InitializeExtensionMediaRouteProviderProxy();
 }
 
 void MediaRouterDesktop::InitializeWiredDisplayMediaRouteProvider() {
@@ -231,6 +262,11 @@ void MediaRouterDesktop::InitializeWiredDisplayMediaRouteProvider() {
   RegisterMediaRouteProvider(MediaRouteProviderId::WIRED_DISPLAY,
                              std::move(wired_display_provider_ptr),
                              base::DoNothing());
+}
+
+std::string MediaRouterDesktop::GetHashToken() {
+  return GetReceiverIdHashToken(
+      Profile::FromBrowserContext(context())->GetPrefs());
 }
 
 void MediaRouterDesktop::InitializeCastMediaRouteProvider() {
@@ -246,7 +282,8 @@ void MediaRouterDesktop::InitializeCastMediaRouteProvider() {
               media_router_ptr.PassInterface(),
               media_sink_service_->GetCastMediaSinkServiceImpl(),
               media_sink_service_->cast_app_discovery_service(),
-              GetCastMessageHandler(), task_runner),
+              GetCastMessageHandler(), GetConnector(), GetHashToken(),
+              task_runner),
           base::OnTaskRunnerDeleter(task_runner));
   RegisterMediaRouteProvider(MediaRouteProviderId::CAST,
                              std::move(cast_provider_ptr), base::DoNothing());
@@ -260,11 +297,13 @@ void MediaRouterDesktop::InitializeDialMediaRouteProvider() {
   auto* dial_media_sink_service =
       media_sink_service_->GetDialMediaSinkServiceImpl();
   auto task_runner = dial_media_sink_service->task_runner();
+
   dial_provider_ =
       std::unique_ptr<DialMediaRouteProvider, base::OnTaskRunnerDeleter>(
           new DialMediaRouteProvider(mojo::MakeRequest(&dial_provider_ptr),
                                      media_router_ptr.PassInterface(),
-                                     dial_media_sink_service, task_runner),
+                                     dial_media_sink_service, GetConnector(),
+                                     GetHashToken(), task_runner),
           base::OnTaskRunnerDeleter(task_runner));
   RegisterMediaRouteProvider(MediaRouteProviderId::DIAL,
                              std::move(dial_provider_ptr), base::DoNothing());
@@ -272,7 +311,7 @@ void MediaRouterDesktop::InitializeDialMediaRouteProvider() {
 
 #if defined(OS_WIN)
 void MediaRouterDesktop::EnsureMdnsDiscoveryEnabled() {
-  if (media_router::CastDiscoveryEnabled()) {
+  if (CastDiscoveryEnabled()) {
     media_sink_service_->StartMdnsDiscovery();
   } else {
     media_route_providers_[MediaRouteProviderId::EXTENSION]

@@ -43,7 +43,7 @@ class AppMenuButton : public views::MenuButton {
   // Removes a menu listener.
   void RemoveMenuListener(views::MenuListener* listener);
 
-  AppMenu* app_menu_for_testing() { return menu_.get(); }
+  AppMenu* app_menu() { return menu_.get(); }
 
  protected:
   // Create (but don't show) the menu. |menu_model| should be a newly created
@@ -65,7 +65,7 @@ class AppMenuButton : public views::MenuButton {
   std::unique_ptr<AppMenu> menu_;
 
   // Listeners to call when the menu opens.
-  base::ObserverList<views::MenuListener> menu_listeners_;
+  base::ObserverList<views::MenuListener>::Unchecked menu_listeners_;
 
   DISALLOW_COPY_AND_ASSIGN(AppMenuButton);
 };

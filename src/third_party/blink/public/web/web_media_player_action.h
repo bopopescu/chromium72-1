@@ -34,12 +34,21 @@
 namespace blink {
 
 struct WebMediaPlayerAction {
-  enum Type { kUnknown, kPlay, kMute, kLoop, kControls, kTypeLast = kControls };
+  enum class Type {
+    kPlay,
+    kMute,
+    kLoop,
+    kControls,
+    kPictureInPicture,
+    kMaxValue = kPictureInPicture
+  };
 
-  Type type;
-  bool enable;
+  Type type = Type::kMaxValue;
+  bool enable = false;
 
-  WebMediaPlayerAction() : type(kUnknown), enable(false) {}
+  // The default constructor is needed for IPC. If this is moved to mojo, we may
+  // be able to delete it and enforce that parameters are used.
+  WebMediaPlayerAction() = default;
   WebMediaPlayerAction(Type type, bool enable) : type(type), enable(enable) {}
 };
 

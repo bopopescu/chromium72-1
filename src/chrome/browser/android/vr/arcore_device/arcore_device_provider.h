@@ -12,20 +12,24 @@
 
 namespace device {
 
-class ARCoreDeviceProvider : public VRDeviceProvider {
+class ArCoreDevice;
+
+class ArCoreDeviceProvider : public VRDeviceProvider {
  public:
-  ARCoreDeviceProvider();
-  ~ARCoreDeviceProvider() override;
+  ArCoreDeviceProvider();
+  ~ArCoreDeviceProvider() override;
   void Initialize(
-      base::RepeatingCallback<void(VRDevice*)> add_device_callback,
-      base::RepeatingCallback<void(VRDevice*)> remove_device_callback,
+      base::RepeatingCallback<void(mojom::XRDeviceId,
+                                   mojom::VRDisplayInfoPtr,
+                                   mojom::XRRuntimePtr)> add_device_callback,
+      base::RepeatingCallback<void(mojom::XRDeviceId)> remove_device_callback,
       base::OnceClosure initialization_complete) override;
   bool Initialized() override;
 
  private:
-  std::unique_ptr<VRDevice> arcore_device_;
+  std::unique_ptr<ArCoreDevice> arcore_device_;
   bool initialized_ = false;
-  DISALLOW_COPY_AND_ASSIGN(ARCoreDeviceProvider);
+  DISALLOW_COPY_AND_ASSIGN(ArCoreDeviceProvider);
 };
 
 }  // namespace device

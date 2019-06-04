@@ -33,10 +33,6 @@ class PDFiumPage {
   void Unload();
   // Gets the FPDF_PAGE for this page, loading and parsing it if necessary.
   FPDF_PAGE GetPage();
-  // Get the FPDF_PAGE for printing.
-  FPDF_PAGE GetPrintPage();
-  // Close the printing page.
-  void ClosePrintPage();
 
   // Returns FPDF_TEXTPAGE for the page, loading and parsing it if necessary.
   FPDF_TEXTPAGE GetTextPage();
@@ -146,10 +142,10 @@ class PDFiumPage {
   // NONSELECTABLE_AREA if detection failed.
   Area GetURITarget(FPDF_ACTION uri_action, LinkTarget* target) const;
 
-  class ScopedLoadCounter {
+  class ScopedUnloadPreventer {
    public:
-    explicit ScopedLoadCounter(PDFiumPage* page);
-    ~ScopedLoadCounter();
+    explicit ScopedUnloadPreventer(PDFiumPage* page);
+    ~ScopedUnloadPreventer();
 
    private:
     PDFiumPage* const page_;
@@ -169,7 +165,7 @@ class PDFiumPage {
   ScopedFPDFPage page_;
   ScopedFPDFTextPage text_page_;
   int index_;
-  int loading_count_ = 0;
+  int preventing_unload_count_ = 0;
   pp::Rect rect_;
   bool calculated_links_ = false;
   std::vector<Link> links_;

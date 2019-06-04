@@ -14,8 +14,6 @@ namespace device {
 
 namespace {
 
-constexpr int64_t kFingerprintSessionTimeoutMs = 150;
-
 chromeos::BiodClient* GetBiodClient() {
   return chromeos::DBusThreadManager::Get()->GetBiodClient();
 }
@@ -75,13 +73,7 @@ void FingerprintChromeOS::OnCloseAuthSessionForEnroll(
   if (!result)
     return;
 
-  // TODO(xiaoyinh@): Timeout should be removed after we resolve
-  // crbug.com/715302.
-  base::ThreadTaskRunnerHandle::Get()->PostDelayedTask(
-      FROM_HERE,
-      base::Bind(&FingerprintChromeOS::ScheduleStartEnroll,
-                 weak_ptr_factory_.GetWeakPtr(), user_id, label),
-      base::TimeDelta::FromMilliseconds(kFingerprintSessionTimeoutMs));
+  ScheduleStartEnroll(user_id, label);
 }
 
 void FingerprintChromeOS::ScheduleStartEnroll(const std::string& user_id,
@@ -127,22 +119,20 @@ void FingerprintChromeOS::StartAuthSession() {
   if (opened_session_ == FingerprintSession::AUTH)
     return;
 
-  GetBiodClient()->CancelEnrollSession(
-      base::Bind(&FingerprintChromeOS::OnCloseEnrollSessionForAuth,
-                 weak_ptr_factory_.GetWeakPtr()));
+  if (opened_session_ == FingerprintSession::ENROLL) {
+    GetBiodClient()->CancelEnrollSession(
+        base::BindRepeating(&FingerprintChromeOS::OnCloseEnrollSessionForAuth,
+                            weak_ptr_factory_.GetWeakPtr()));
+  } else {
+    ScheduleStartAuth();
+  }
 }
 
 void FingerprintChromeOS::OnCloseEnrollSessionForAuth(bool result) {
   if (!result)
     return;
 
-  // TODO(xiaoyinh@): Timeout should be removed after we resolve
-  // crbug.com/715302.
-  base::ThreadTaskRunnerHandle::Get()->PostDelayedTask(
-      FROM_HERE,
-      base::Bind(&FingerprintChromeOS::ScheduleStartAuth,
-                 weak_ptr_factory_.GetWeakPtr()),
-      base::TimeDelta::FromMilliseconds(kFingerprintSessionTimeoutMs));
+  ScheduleStartAuth();
 }
 
 void FingerprintChromeOS::ScheduleStartAuth() {

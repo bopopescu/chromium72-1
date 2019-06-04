@@ -16,7 +16,6 @@
 
 namespace ash {
 
-class BluetoothObserver;
 class IMEObserver;
 class NetworkObserver;
 class ScreenCaptureObserver;
@@ -33,12 +32,6 @@ class ASH_EXPORT SystemTrayNotifier {
  public:
   SystemTrayNotifier();
   ~SystemTrayNotifier();
-
-  // Bluetooth.
-  void AddBluetoothObserver(BluetoothObserver* observer);
-  void RemoveBluetoothObserver(BluetoothObserver* observer);
-  void NotifyRefreshBluetooth();
-  void NotifyBluetoothDiscoveringChanged();
 
   // Input methods.
   void AddIMEObserver(IMEObserver* observer);
@@ -76,13 +69,15 @@ class ASH_EXPORT SystemTrayNotifier {
   void NotifyVirtualKeyboardSuppressionChanged(bool suppressed);
 
  private:
-  base::ObserverList<BluetoothObserver> bluetooth_observers_;
-  base::ObserverList<IMEObserver> ime_observers_;
-  base::ObserverList<NetworkObserver> network_observers_;
-  base::ObserverList<ScreenCaptureObserver> screen_capture_observers_;
-  base::ObserverList<ScreenShareObserver> screen_share_observers_;
-  base::ObserverList<SystemTrayFocusObserver> system_tray_focus_observers_;
-  base::ObserverList<VirtualKeyboardObserver> virtual_keyboard_observers_;
+  base::ObserverList<IMEObserver>::Unchecked ime_observers_;
+  base::ObserverList<NetworkObserver>::Unchecked network_observers_;
+  base::ObserverList<ScreenCaptureObserver>::Unchecked
+      screen_capture_observers_;
+  base::ObserverList<ScreenShareObserver>::Unchecked screen_share_observers_;
+  base::ObserverList<SystemTrayFocusObserver>::Unchecked
+      system_tray_focus_observers_;
+  base::ObserverList<VirtualKeyboardObserver>::Unchecked
+      virtual_keyboard_observers_;
 
   DISALLOW_COPY_AND_ASSIGN(SystemTrayNotifier);
 };

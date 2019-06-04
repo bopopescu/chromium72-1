@@ -7,6 +7,7 @@
 
 #include <stdint.h>
 
+#include <set>
 #include <string>
 
 #include "base/strings/string16.h"
@@ -17,6 +18,10 @@
 namespace net {
 
 // Escaping --------------------------------------------------------------------
+
+// Escapes all characters except unreserved characters. Unreserved characters,
+// as defined in RFC 3986, include alphanumerics and -._~
+NET_EXPORT std::string EscapeAllExceptUnreserved(base::StringPiece text);
 
 // Escapes characters in text suitable for use as a query parameter value.
 // We %XX everything except alphanumerics and -_.!~*'()
@@ -101,9 +106,6 @@ class UnescapeRule {
 
     // URL queries use "+" for space. This flag controls that replacement.
     REPLACE_PLUS_WITH_SPACE = 1 << 4,
-
-    // Unescapes space characters that appears as plain blank in visual agents.
-    NONASCII_SPACES = 1 << 5,
   };
 };
 
@@ -142,13 +144,29 @@ NET_EXPORT base::string16 UnescapeAndDecodeUTF8URLComponentWithAdjustments(
 // be used when displaying the decoded data to the user.
 //
 // Only the NORMAL and REPLACE_PLUS_WITH_SPACE rules are allowed.
-NET_EXPORT std::string UnescapeBinaryURLComponent(
-    base::StringPiece escaped_text,
-    UnescapeRule::Type rules = UnescapeRule::NORMAL);
+// |escaped_text| and |unescaped_text| can be the same string.
+NET_EXPORT void UnescapeBinaryURLComponent(const std::string& escaped_text,
+                                           UnescapeRule::Type rules,
+                                           std::string* unescaped_text);
+NET_EXPORT inline void UnescapeBinaryURLComponent(
+    const std::string& escaped_text,
+    std::string* unescaped_text) {
+  UnescapeBinaryURLComponent(escaped_text, UnescapeRule::NORMAL,
+                             unescaped_text);
+}
 
 // Unescapes the following ampersand character codes from |text|:
 // &lt; &gt; &amp; &quot; &#39;
 NET_EXPORT base::string16 UnescapeForHTML(base::StringPiece16 text);
+
+// Returns true if |escaped_text| contains any element of |bytes| in
+// percent-encoded form.
+//
+// For example, if |bytes| is {'%', '/'}, returns true if |escaped_text|
+// contains "%25" or "%2F", but not if it just contains bare '%' or '/'
+// characters.
+NET_EXPORT bool ContainsEncodedBytes(base::StringPiece escaped_text,
+                                     const std::set<unsigned char>& bytes);
 
 }  // namespace net
 

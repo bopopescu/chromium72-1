@@ -15,10 +15,11 @@
 #include "third_party/blink/renderer/core/layout/layout_inline.h"
 #include "third_party/blink/renderer/core/layout/layout_object.h"
 #include "third_party/blink/renderer/core/layout/shapes/shape_outside_info.h"
+#include "third_party/blink/renderer/core/page/chrome_client.h"
 #include "third_party/blink/renderer/core/page/page.h"
 #include "third_party/blink/renderer/core/style/computed_style_constants.h"
 #include "third_party/blink/renderer/platform/graphics/path.h"
-#include "third_party/blink/renderer/platform/platform_chrome_client.h"
+#include "third_party/blink/renderer/platform/web_test_support.h"
 
 namespace blink {
 
@@ -117,8 +118,8 @@ class ShapePathBuilder : public PathBuilder {
   FloatPoint TranslatePoint(const FloatPoint& point) override {
     FloatPoint layout_object_point =
         shape_outside_info_.ShapeToLayoutObjectPoint(point);
-    return view_->ContentsToViewport(
-        RoundedIntPoint(layout_object_.LocalToAbsolute(layout_object_point)));
+    return FloatPoint(view_->FrameToViewport(
+        RoundedIntPoint(layout_object_.LocalToAbsolute(layout_object_point))));
   }
 
  private:
@@ -152,21 +153,18 @@ Path QuadToPath(const FloatQuad& quad) {
   return quad_path;
 }
 
-FloatPoint ContentsPointToViewport(const LocalFrameView* view,
-                                   FloatPoint point_in_contents) {
-  LayoutPoint point_in_frame =
-      view->ContentsToFrame(LayoutPoint(point_in_contents));
-  FloatPoint point_in_root_frame =
-      FloatPoint(view->ConvertToRootFrame(point_in_frame));
-  return FloatPoint(view->GetPage()->GetVisualViewport().RootFrameToViewport(
-      point_in_root_frame));
+FloatPoint FramePointToViewport(const LocalFrameView* view,
+                                FloatPoint point_in_frame) {
+  FloatPoint point_in_root_frame = view->ConvertToRootFrame(point_in_frame);
+  return view->GetPage()->GetVisualViewport().RootFrameToViewport(
+      point_in_root_frame);
 }
 
-void ContentsQuadToViewport(const LocalFrameView* view, FloatQuad& quad) {
-  quad.SetP1(ContentsPointToViewport(view, quad.P1()));
-  quad.SetP2(ContentsPointToViewport(view, quad.P2()));
-  quad.SetP3(ContentsPointToViewport(view, quad.P3()));
-  quad.SetP4(ContentsPointToViewport(view, quad.P4()));
+void FrameQuadToViewport(const LocalFrameView* view, FloatQuad& quad) {
+  quad.SetP1(FramePointToViewport(view, quad.P1()));
+  quad.SetP2(FramePointToViewport(view, quad.P2()));
+  quad.SetP3(FramePointToViewport(view, quad.P3()));
+  quad.SetP4(FramePointToViewport(view, quad.P4()));
 }
 
 const ShapeOutsideInfo* ShapeOutsideInfoForNode(Node* node,
@@ -187,7 +185,7 @@ const ShapeOutsideInfo* ShapeOutsideInfoForNode(Node* node,
   LayoutRect shape_bounds =
       shape_outside_info->ComputedShapePhysicalBoundingBox();
   *bounds = layout_box->LocalToAbsoluteQuad(FloatRect(shape_bounds));
-  ContentsQuadToViewport(containing_view, *bounds);
+  FrameQuadToViewport(containing_view, *bounds);
 
   return shape_outside_info;
 }
@@ -210,8 +208,8 @@ std::unique_ptr<protocol::DictionaryValue> BuildElementInfo(Element* element) {
   if (real_element->HasClass() && real_element->IsStyledElement()) {
     HashSet<AtomicString> used_class_names;
     const SpaceSplitString& class_names_string = real_element->ClassNames();
-    size_t class_name_count = class_names_string.size();
-    for (size_t i = 0; i < class_name_count; ++i) {
+    wtf_size_t class_name_count = class_names_string.size();
+    for (wtf_size_t i = 0; i < class_name_count; ++i) {
       const AtomicString& class_name = class_names_string[i];
       if (!used_class_names.insert(class_name).is_new_entry)
         continue;
@@ -240,6 +238,20 @@ std::unique_ptr<protocol::DictionaryValue> BuildElementInfo(Element* element) {
   element_info->setString("nodeHeight", String::Number(bounding_box->height()));
 
   return element_info;
+}
+
+std::unique_ptr<protocol::DictionaryValue> BuildTextNodeInfo(Text* text_node) {
+  std::unique_ptr<protocol::DictionaryValue> text_info =
+      protocol::DictionaryValue::create();
+  LayoutObject* layout_object = text_node->GetLayoutObject();
+  if (!layout_object || !layout_object->IsText())
+    return text_info;
+  LayoutRect bounding_box = ToLayoutText(layout_object)->VisualOverflowRect();
+  text_info->setString("nodeWidth", bounding_box.Width().ToString());
+  text_info->setString("nodeHeight", bounding_box.Height().ToString());
+  text_info->setString("tagName", "#text");
+
+  return text_info;
 }
 
 std::unique_ptr<protocol::Value> BuildGapAndPositions(
@@ -287,6 +299,36 @@ std::unique_ptr<protocol::DictionaryValue> BuildGridInfo(
   return grid_info;
 }
 
+void CollectQuadsRecursive(Node* node, Vector<FloatQuad>& out_quads) {
+  LayoutObject* layout_object = node->GetLayoutObject();
+  if (!layout_object)
+    return;
+
+  // For inline elements, absoluteQuads will return a line box based on the
+  // line-height and font metrics, which is technically incorrect as replaced
+  // elements like images should use their intristic height and expand the
+  // linebox  as needed. To get an appropriate quads we descend
+  // into the children and have them add their boxes.
+  if (layout_object->IsLayoutInline()) {
+    for (Node* child = LayoutTreeBuilderTraversal::FirstChild(*node); child;
+         child = LayoutTreeBuilderTraversal::NextSibling(*child))
+      CollectQuadsRecursive(child, out_quads);
+  } else {
+    layout_object->AbsoluteQuads(out_quads);
+  }
+}
+
+void CollectQuads(Node* node, Vector<FloatQuad>& out_quads) {
+  CollectQuadsRecursive(node, out_quads);
+  LocalFrameView* containing_view =
+      node->GetLayoutObject() ? node->GetLayoutObject()->GetFrameView()
+                              : nullptr;
+  if (containing_view) {
+    for (FloatQuad& quad : out_quads)
+      FrameQuadToViewport(containing_view, quad);
+  }
+}
+
 }  // namespace
 
 InspectorHighlight::InspectorHighlight(float scale)
@@ -318,6 +360,8 @@ InspectorHighlight::InspectorHighlight(
   AppendNodeHighlight(node, highlight_config);
   if (append_element_info && node->IsElementNode())
     element_info_ = BuildElementInfo(ToElement(node));
+  else if (append_element_info && node->IsTextNode())
+    element_info_ = BuildTextNodeInfo(ToText(node));
 }
 
 InspectorHighlight::~InspectorHighlight() = default;
@@ -391,18 +435,17 @@ void InspectorHighlight::AppendNodeHighlight(
   if (!layout_object)
     return;
 
-  // LayoutSVGRoot should be highlighted through the isBox() code path, all
-  // other SVG elements should just dump their absoluteQuads().
-  if (layout_object->GetNode() && layout_object->GetNode()->IsSVGElement() &&
-      !layout_object->IsSVGRoot()) {
-    Vector<FloatQuad> quads;
-    layout_object->AbsoluteQuads(quads);
-    LocalFrameView* containing_view = layout_object->GetFrameView();
-    for (size_t i = 0; i < quads.size(); ++i) {
-      if (containing_view)
-        ContentsQuadToViewport(containing_view, quads[i]);
-      AppendQuad(quads[i], highlight_config.content,
-                 highlight_config.content_outline);
+  // Just for testing, invert the content color for nodes rendered by LayoutNG.
+  // TODO(layout-dev): Stop munging the color before NG ships. crbug.com/869866
+  Color content_color =
+      layout_object->IsLayoutNGObject() && !WebTestSupport::IsRunningWebTest()
+          ? Color(highlight_config.content.Rgb() ^ 0x00ffffff)
+          : highlight_config.content;
+
+  Vector<FloatQuad> svg_quads;
+  if (BuildSVGQuads(node, svg_quads)) {
+    for (wtf_size_t i = 0; i < svg_quads.size(); ++i) {
+      AppendQuad(svg_quads[i], content_color, highlight_config.content_outline);
     }
     return;
   }
@@ -410,8 +453,8 @@ void InspectorHighlight::AppendNodeHighlight(
   FloatQuad content, padding, border, margin;
   if (!BuildNodeQuads(node, &content, &padding, &border, &margin))
     return;
-  AppendQuad(content, highlight_config.content,
-             highlight_config.content_outline, "content");
+  AppendQuad(content, content_color, highlight_config.content_outline,
+             "content");
   AppendQuad(padding, highlight_config.padding, Color::kTransparent, "padding");
   AppendQuad(border, highlight_config.border, Color::kTransparent, "border");
   AppendQuad(margin, highlight_config.margin, Color::kTransparent, "margin");
@@ -460,8 +503,17 @@ bool InspectorHighlight::GetBoxModel(
     return false;
 
   FloatQuad content, padding, border, margin;
-  if (!BuildNodeQuads(node, &content, &padding, &border, &margin))
+  Vector<FloatQuad> svg_quads;
+  if (BuildSVGQuads(node, svg_quads)) {
+    if (!svg_quads.size())
+      return false;
+    content = svg_quads[0];
+    padding = svg_quads[0];
+    border = svg_quads[0];
+    margin = svg_quads[0];
+  } else if (!BuildNodeQuads(node, &content, &padding, &border, &margin)) {
     return false;
+  }
 
   AdjustForAbsoluteZoom::AdjustFloatQuad(content, *layout_object);
   AdjustForAbsoluteZoom::AdjustFloatQuad(padding, *layout_object);
@@ -475,7 +527,7 @@ bool InspectorHighlight::GetBoxModel(
   margin.Scale(scale, scale);
 
   IntRect bounding_box =
-      view->ContentsToRootFrame(layout_object->AbsoluteBoundingBoxRect());
+      view->ConvertToRootFrame(layout_object->AbsoluteBoundingBoxRect());
   LayoutBoxModelObject* model_object =
       layout_object->IsBoxModelObject() ? ToLayoutBoxModelObject(layout_object)
                                         : nullptr;
@@ -524,6 +576,40 @@ bool InspectorHighlight::GetBoxModel(
   return true;
 }
 
+// static
+bool InspectorHighlight::BuildSVGQuads(Node* node, Vector<FloatQuad>& quads) {
+  LayoutObject* layout_object = node->GetLayoutObject();
+  if (!layout_object)
+    return false;
+  if (!layout_object->GetNode() || !layout_object->GetNode()->IsSVGElement() ||
+      layout_object->IsSVGRoot())
+    return false;
+  CollectQuads(node, quads);
+  return true;
+}
+
+// static
+bool InspectorHighlight::GetContentQuads(
+    Node* node,
+    std::unique_ptr<protocol::Array<protocol::Array<double>>>* result) {
+  LayoutObject* layout_object = node->GetLayoutObject();
+  LocalFrameView* view = node->GetDocument().View();
+  if (!layout_object || !view)
+    return false;
+  Vector<FloatQuad> quads;
+  CollectQuads(node, quads);
+  float scale = 1 / view->GetPage()->GetVisualViewport().Scale();
+  for (FloatQuad& quad : quads) {
+    AdjustForAbsoluteZoom::AdjustFloatQuad(quad, *layout_object);
+    quad.Scale(scale, scale);
+  }
+
+  result->reset(new protocol::Array<protocol::Array<double>>());
+  for (FloatQuad& quad : quads)
+    (*result)->addItem(BuildArrayForQuad(quad));
+  return true;
+}
+
 bool InspectorHighlight::BuildNodeQuads(Node* node,
                                         FloatQuad* content,
                                         FloatQuad* padding,
@@ -536,7 +622,8 @@ bool InspectorHighlight::BuildNodeQuads(Node* node,
   LocalFrameView* containing_view = layout_object->GetFrameView();
   if (!containing_view)
     return false;
-  if (!layout_object->IsBox() && !layout_object->IsLayoutInline())
+  if (!layout_object->IsBox() && !layout_object->IsLayoutInline() &&
+      !layout_object->IsText())
     return false;
 
   LayoutRect content_box;
@@ -544,7 +631,14 @@ bool InspectorHighlight::BuildNodeQuads(Node* node,
   LayoutRect border_box;
   LayoutRect margin_box;
 
-  if (layout_object->IsBox()) {
+  if (layout_object->IsText()) {
+    LayoutText* layout_text = ToLayoutText(layout_object);
+    LayoutRect text_rect = layout_text->VisualOverflowRect();
+    content_box = text_rect;
+    padding_box = text_rect;
+    border_box = text_rect;
+    margin_box = text_rect;
+  } else if (layout_object->IsBox()) {
     LayoutBox* layout_box = ToLayoutBox(layout_object);
 
     // LayoutBox returns the "pure" content area box, exclusive of the
@@ -553,11 +647,11 @@ bool InspectorHighlight::BuildNodeQuads(Node* node,
     const int vertical_scrollbar_width = layout_box->VerticalScrollbarWidth();
     const int horizontal_scrollbar_height =
         layout_box->HorizontalScrollbarHeight();
-    content_box = layout_box->ContentBoxRect();
+    content_box = layout_box->PhysicalContentBoxRect();
     content_box.SetWidth(content_box.Width() + vertical_scrollbar_width);
     content_box.SetHeight(content_box.Height() + horizontal_scrollbar_height);
 
-    padding_box = layout_box->PaddingBoxRect();
+    padding_box = layout_box->PhysicalPaddingBoxRect();
     padding_box.SetWidth(padding_box.Width() + vertical_scrollbar_width);
     padding_box.SetHeight(padding_box.Height() + horizontal_scrollbar_height);
 
@@ -597,10 +691,10 @@ bool InspectorHighlight::BuildNodeQuads(Node* node,
   *border = layout_object->LocalToAbsoluteQuad(FloatRect(border_box));
   *margin = layout_object->LocalToAbsoluteQuad(FloatRect(margin_box));
 
-  ContentsQuadToViewport(containing_view, *content);
-  ContentsQuadToViewport(containing_view, *padding);
-  ContentsQuadToViewport(containing_view, *border);
-  ContentsQuadToViewport(containing_view, *margin);
+  FrameQuadToViewport(containing_view, *content);
+  FrameQuadToViewport(containing_view, *padding);
+  FrameQuadToViewport(containing_view, *border);
+  FrameQuadToViewport(containing_view, *margin);
 
   return true;
 }

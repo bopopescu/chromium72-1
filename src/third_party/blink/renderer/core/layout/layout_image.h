@@ -48,10 +48,6 @@ class SVGImage;
 // See LayoutImageResource that holds this image.
 class CORE_EXPORT LayoutImage : public LayoutReplaced {
  public:
-  // These are the paddings to use when displaying either alt text or an image.
-  static const unsigned short kPaddingWidth = 4;
-  static const unsigned short kPaddingHeight = 4;
-
   LayoutImage(Element*);
   ~LayoutImage() override;
 
@@ -82,6 +78,9 @@ class CORE_EXPORT LayoutImage : public LayoutReplaced {
   float ImageDevicePixelRatio() const { return image_device_pixel_ratio_; }
 
   void IntrinsicSizeChanged() override {
+    // The replaced content transform depends on the intrinsic size (see:
+    // FragmentPaintPropertyTreeBuilder::UpdateReplacedContentTransform).
+    SetNeedsPaintPropertyUpdate();
     if (image_resource_)
       ImageChanged(image_resource_->ImagePtr(), CanDeferInvalidation::kNo);
   }
@@ -89,11 +88,9 @@ class CORE_EXPORT LayoutImage : public LayoutReplaced {
   const char* GetName() const override { return "LayoutImage"; }
 
   // When an image element violates feature policy optimized image policies, it
-  // should be rendered with inverted color.
-  // https://github.com/WICG/feature-policy/blob/gh-pages/policies/optimized-images.md
-  bool ShouldInvertColor() const;
-  void UpdateShouldInvertColor();
-  void UpdateShouldInvertColorForTest(bool);
+  // should be rendered with a placeholder image.
+  // https://github.com/WICG/feature-policy/blob/master/policies/optimized-images.md
+  bool IsImagePolicyViolated() const;
 
   void UpdateAfterLayout() override;
 
@@ -102,11 +99,9 @@ class CORE_EXPORT LayoutImage : public LayoutReplaced {
   SVGImage* EmbeddedSVGImage() const;
   void ComputeIntrinsicSizingInfo(IntrinsicSizingInfo&) const override;
 
-  void ImageChanged(WrappedImagePtr,
-                    CanDeferInvalidation,
-                    const IntRect* = nullptr) override;
+  void ImageChanged(WrappedImagePtr, CanDeferInvalidation) override;
 
-  void Paint(const PaintInfo&, const LayoutPoint&) const final;
+  void Paint(const PaintInfo&) const final;
 
   bool IsOfType(LayoutObjectType type) const override {
     return type == kLayoutObjectLayoutImage || LayoutReplaced::IsOfType(type);
@@ -121,7 +116,8 @@ class CORE_EXPORT LayoutImage : public LayoutReplaced {
  private:
   bool IsImage() const override { return true; }
 
-  void PaintReplaced(const PaintInfo&, const LayoutPoint&) const override;
+  void PaintReplaced(const PaintInfo&,
+                     const LayoutPoint& paint_offset) const override;
 
   bool ForegroundIsKnownToBeOpaqueInRect(
       const LayoutRect& local_rect,
@@ -140,6 +136,13 @@ class CORE_EXPORT LayoutImage : public LayoutReplaced {
 
   void InvalidatePaintAndMarkForLayoutIfNeeded(CanDeferInvalidation);
   void UpdateIntrinsicSizeIfNeeded(const LayoutSize&);
+  // Override intrinsic sizing info by HTMLImageElement "intrinsicsize"
+  // attribute if enabled and exists.
+  bool OverrideIntrinsicSizingInfo(IntrinsicSizingInfo&) const;
+  FloatSize ImageSizeOverriddenByIntrinsicSize(float multiplier) const;
+  IntSize GetOverriddenIntrinsicSize() const;
+
+  void ValidateImagePolicies();
 
   // This member wraps the associated decoded image.
   //
@@ -158,10 +161,10 @@ class CORE_EXPORT LayoutImage : public LayoutReplaced {
   float image_device_pixel_ratio_;
 
   // These flags indicate if the image violates one or more optimized image
-  // policies. When any policy is violated, the image should be rendered with
-  // inverted color.
-  bool is_legacy_format_or_compressed_image_;
-  bool is_downscaled_image_;
+  // policies. When any policy is violated, the image should be rendered as a
+  // placeholder image.
+  bool is_legacy_format_or_unoptimized_image_;
+  bool is_oversized_image_;
 };
 
 DEFINE_LAYOUT_OBJECT_TYPE_CASTS(LayoutImage, IsLayoutImage());

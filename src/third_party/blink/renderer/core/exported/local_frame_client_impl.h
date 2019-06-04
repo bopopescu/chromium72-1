@@ -37,7 +37,6 @@
 #include "base/memory/scoped_refptr.h"
 
 #include "third_party/blink/public/platform/web_insecure_request_policy.h"
-#include "third_party/blink/public/platform/web_scoped_virtual_time_pauser.h"
 #include "third_party/blink/renderer/core/frame/local_frame_client.h"
 #include "third_party/blink/renderer/core/frame/web_local_frame_impl.h"
 #include "third_party/blink/renderer/platform/heap/handle.h"
@@ -54,6 +53,7 @@ class LocalFrameClientImpl final : public LocalFrameClient {
  public:
   static LocalFrameClientImpl* Create(WebLocalFrameImpl*);
 
+  explicit LocalFrameClientImpl(WebLocalFrameImpl*);
   ~LocalFrameClientImpl() override;
 
   void Trace(blink::Visitor*) override;
@@ -93,44 +93,47 @@ class LocalFrameClientImpl final : public LocalFrameClient {
   void DispatchDidLoadResourceFromMemoryCache(const ResourceRequest&,
                                               const ResourceResponse&) override;
   void DispatchDidHandleOnloadEvents() override;
-  void DispatchDidReceiveServerRedirectForProvisionalLoad() override;
   void DidFinishSameDocumentNavigation(HistoryItem*,
-                                       HistoryCommitType,
+                                       WebHistoryCommitType,
                                        bool content_initiated) override;
   void DispatchWillCommitProvisionalLoad() override;
   void DispatchDidStartProvisionalLoad(DocumentLoader*,
-                                       ResourceRequest&) override;
+                                       const ResourceRequest&) override;
   void DispatchDidReceiveTitle(const String&) override;
   void DispatchDidChangeIcons(IconType) override;
   void DispatchDidCommitLoad(HistoryItem*,
-                             HistoryCommitType,
+                             WebHistoryCommitType,
                              WebGlobalObjectReusePolicy) override;
   void DispatchDidFailProvisionalLoad(const ResourceError&,
-                                      HistoryCommitType) override;
-  void DispatchDidFailLoad(const ResourceError&, HistoryCommitType) override;
+                                      WebHistoryCommitType) override;
+  void DispatchDidFailLoad(const ResourceError&, WebHistoryCommitType) override;
   void DispatchDidFinishDocumentLoad() override;
   void DispatchDidFinishLoad() override;
 
   void DispatchDidChangeThemeColor() override;
-  NavigationPolicy DecidePolicyForNavigation(
+  void BeginNavigation(
       const ResourceRequest&,
       Document* origin_document,
       DocumentLoader*,
-      NavigationType,
+      WebNavigationType,
       NavigationPolicy,
-      bool should_replace_current_entry,
+      bool has_transient_activation,
+      WebFrameLoadType,
       bool is_client_redirect,
       WebTriggeringEventInfo,
       HTMLFormElement*,
       ContentSecurityPolicyDisposition should_bypass_main_world_csp,
-      mojom::blink::BlobURLTokenPtr) override;
+      mojom::blink::BlobURLTokenPtr,
+      base::TimeTicks input_start_time,
+      const String& href_translate,
+      mojom::blink::NavigationInitiatorPtr) override;
   void DispatchWillSendSubmitEvent(HTMLFormElement*) override;
-  void DispatchWillSubmitForm(HTMLFormElement*) override;
-  void DidStartLoading(LoadStartType) override;
+  void DidStartLoading() override;
   void DidStopLoading() override;
   void ProgressEstimateChanged(double progress_estimate) override;
   void ForwardResourceTimingToParent(const WebResourceTimingInfo&) override;
-  void DownloadURL(const ResourceRequest&) override;
+  void DownloadURL(const ResourceRequest&,
+                   DownloadCrossOriginRedirects) override;
   void LoadErrorPage(int reason) override;
   bool NavigateBackForward(int offset) const override;
   void DidAccessInitialDocument() override;
@@ -138,20 +141,16 @@ class LocalFrameClientImpl final : public LocalFrameClient {
   void DidContainInsecureFormAction() override;
   void DidRunInsecureContent(const SecurityOrigin*,
                              const KURL& insecure_url) override;
-  void DidDetectXSS(const KURL&, bool did_block_entire_page) override;
   void DidDispatchPingLoader(const KURL&) override;
   void DidDisplayContentWithCertificateErrors() override;
   void DidRunContentWithCertificateErrors() override;
   void ReportLegacySymantecCert(const KURL&, bool) override;
+  void ReportLegacyTLSVersion(const KURL&) override;
   void DidChangePerformanceTiming() override;
-#if defined(USE_NEVA_APPRUNTIME)
-  // Will be called when first-Meaningful-paint is not detected until resource loaded.
-  void DidNonFirstMeaningPaintAfterLoad() override;
-  bool DecidePolicyForResponse(const ResourceResponse&) override;
-#endif
   void DidObserveLoadingBehavior(WebLoadingBehaviorFlag) override;
   void DidObserveNewFeatureUsage(mojom::WebFeature) override;
   void DidObserveNewCssPropertyUsage(int, bool) override;
+  void DidObserveLayoutJank(double jank_fraction) override;
   bool ShouldTrackUseCounter(const KURL&) override;
   void SelectorMatchChanged(const Vector<String>& added_selectors,
                             const Vector<String>& removed_selectors) override;
@@ -165,7 +164,17 @@ class LocalFrameClientImpl final : public LocalFrameClient {
       const ResourceRequest&,
       const SubstituteData&,
       ClientRedirectPolicy,
-      const base::UnguessableToken& devtools_navigation_token) override;
+      const base::UnguessableToken& devtools_navigation_token,
+      WebFrameLoadType,
+      WebNavigationType,
+      std::unique_ptr<WebNavigationParams> navigation_params,
+      std::unique_ptr<WebDocumentLoader::ExtraData> extra_data) override;
+
+  // Updates the underlying |WebDocumentLoaderImpl| of |DocumentLoader| with
+  // extra_data.
+  void UpdateDocumentLoader(
+      DocumentLoader* document_loader,
+      std::unique_ptr<WebDocumentLoader::ExtraData> extra_data) override;
   WTF::String UserAgent() override;
   WTF::String DoNotTrackValue() override;
   void TransitionToCommittedForNewPage() override;
@@ -209,11 +218,9 @@ class LocalFrameClientImpl final : public LocalFrameClient {
 
   bool ShouldBlockWebGL() override;
 
-  void DispatchWillInsertBody() override;
-
   std::unique_ptr<WebServiceWorkerProvider> CreateServiceWorkerProvider()
       override;
-  ContentSettingsClient& GetContentSettingsClient() override;
+  WebContentSettingsClient* GetContentSettingsClient() override;
 
   SharedWorkerRepositoryClient* GetSharedWorkerRepositoryClient() override;
 
@@ -238,7 +245,8 @@ class LocalFrameClientImpl final : public LocalFrameClient {
 
   KURL OverrideFlashEmbedWithHTML(const KURL&) override;
 
-  void SetHasReceivedUserGesture() override;
+  void NotifyUserActivation() override;
+  void ConsumeUserActivation() override;
 
   void SetHasReceivedUserGestureBeforeNavigation(bool value) override;
 
@@ -267,8 +275,6 @@ class LocalFrameClientImpl final : public LocalFrameClient {
   void BubbleLogicalScrollInParentFrame(ScrollDirection direction,
                                         ScrollGranularity granularity) override;
 
-  void SetVirtualTimePauser(WebScopedVirtualTimePauser) override;
-
   String evaluateInInspectorOverlayForTesting(const String& script) override;
 
   bool HandleCurrentKeyboardEvent() override;
@@ -281,11 +287,19 @@ class LocalFrameClientImpl final : public LocalFrameClient {
 
   void FrameRectsChanged(const IntRect&) override;
 
+  bool IsPluginHandledExternally(HTMLPlugInElement&,
+                                 const KURL&,
+                                 const String&) override;
+
+  scoped_refptr<WebWorkerFetchContext> CreateWorkerFetchContext() override;
+  std::unique_ptr<WebContentSettingsClient> CreateWorkerContentSettingsClient()
+      override;
+
   void SetMouseCapture(bool capture) override;
 
- private:
-  explicit LocalFrameClientImpl(WebLocalFrameImpl*);
+  bool UsePrintingLayout() const override;
 
+ private:
   bool IsLocalFrameClientImpl() const override { return true; }
   WebDevToolsAgentImpl* DevToolsAgent();
 
@@ -294,8 +308,6 @@ class LocalFrameClientImpl final : public LocalFrameClient {
   Member<WebLocalFrameImpl> web_frame_;
 
   String user_agent_;
-
-  mutable WebScopedVirtualTimePauser virtual_time_pauser_;
 };
 
 DEFINE_TYPE_CASTS(LocalFrameClientImpl,

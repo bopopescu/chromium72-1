@@ -10,6 +10,7 @@
 #include "third_party/blink/public/platform/task_type.h"
 #include "third_party/blink/public/platform/web_vector.h"
 #include "third_party/blink/public/web/web_script_execution_callback.h"
+#include "third_party/blink/renderer/bindings/core/v8/sanitize_script_errors.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_controller.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_source_code.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_binding_for_core.h"
@@ -53,17 +54,21 @@ Vector<v8::Local<v8::Value>> WebScriptExecutor::Execute(LocalFrame* frame) {
   std::unique_ptr<UserGestureIndicator> indicator;
   if (user_gesture_) {
     indicator =
-        Frame::NotifyUserActivation(frame, UserGestureToken::kNewGesture);
+        LocalFrame::NotifyUserActivation(frame, UserGestureToken::kNewGesture);
   }
 
   Vector<v8::Local<v8::Value>> results;
-  if (world_id_) {
-    frame->GetScriptController().ExecuteScriptInIsolatedWorld(
-        world_id_, sources_, &results);
-  } else {
+  for (const auto& source : sources_) {
+    // Note: An error event in an isolated world will never be dispatched to
+    // a foreign world.
     v8::Local<v8::Value> script_value =
-        frame->GetScriptController().ExecuteScriptInMainWorldAndReturnValue(
-            sources_.front());
+        world_id_
+            ? frame->GetScriptController().ExecuteScriptInIsolatedWorld(
+                  world_id_, source, KURL(),
+                  SanitizeScriptErrors::kDoNotSanitize)
+            : frame->GetScriptController()
+                  .ExecuteScriptInMainWorldAndReturnValue(
+                      source, KURL(), SanitizeScriptErrors::kDoNotSanitize);
     results.push_back(script_value);
   }
 
@@ -106,8 +111,9 @@ Vector<v8::Local<v8::Value>> V8FunctionExecutor::Execute(LocalFrame* frame) {
   Vector<v8::Local<v8::Value>> results;
   v8::Local<v8::Value> single_result;
   Vector<v8::Local<v8::Value>> args;
-  args.ReserveCapacity(args_.Size());
-  for (size_t i = 0; i < args_.Size(); ++i)
+  wtf_size_t args_size = SafeCast<wtf_size_t>(args_.Size());
+  args.ReserveCapacity(args_size);
+  for (wtf_size_t i = 0; i < args_size; ++i)
     args.push_back(args_.Get(i));
   {
     std::unique_ptr<UserGestureIndicator> gesture_indicator;
@@ -134,7 +140,7 @@ PausableScriptExecutor* PausableScriptExecutor::Create(
     bool user_gesture,
     WebScriptExecutionCallback* callback) {
   ScriptState* script_state = ToScriptState(frame, *world);
-  return new PausableScriptExecutor(
+  return MakeGarbageCollected<PausableScriptExecutor>(
       frame, script_state, callback,
       new WebScriptExecutor(sources, world->GetWorldId(), user_gesture));
 }
@@ -154,9 +160,10 @@ void PausableScriptExecutor::CreateAndRun(
       callback->Completed(Vector<v8::Local<v8::Value>>());
     return;
   }
-  PausableScriptExecutor* executor = new PausableScriptExecutor(
-      frame, script_state, callback,
-      new V8FunctionExecutor(isolate, function, receiver, argc, argv));
+  PausableScriptExecutor* executor =
+      MakeGarbageCollected<PausableScriptExecutor>(
+          frame, script_state, callback,
+          new V8FunctionExecutor(isolate, function, receiver, argc, argv));
   executor->Run();
 }
 
@@ -169,7 +176,7 @@ void PausableScriptExecutor::ContextDestroyed(
     // with a vector of v8::Local<>s, which implies that creating v8::Locals
     // is permitted. Ensure a valid scope is present for the callback.
     // See https://crbug.com/840719.
-    ScriptState::Scope script_scope(script_state_.get());
+    ScriptState::Scope script_scope(script_state_);
     callback_->Completed(Vector<v8::Local<v8::Value>>());
   }
   Dispose();
@@ -213,7 +220,7 @@ void PausableScriptExecutor::RunAsync(BlockingOption blocking) {
   DCHECK(context);
   blocking_option_ = blocking;
   if (blocking_option_ == kOnloadBlocking)
-    ToDocument(GetExecutionContext())->IncrementLoadEventDelayCount();
+    To<Document>(GetExecutionContext())->IncrementLoadEventDelayCount();
 
   StartOneShot(TimeDelta(), FROM_HERE);
   PauseIfNeeded();
@@ -225,9 +232,9 @@ void PausableScriptExecutor::ExecuteAndDestroySelf() {
   if (callback_)
     callback_->WillExecute();
 
-  ScriptState::Scope script_scope(script_state_.get());
+  ScriptState::Scope script_scope(script_state_);
   Vector<v8::Local<v8::Value>> results =
-      executor_->Execute(ToDocument(GetExecutionContext())->GetFrame());
+      executor_->Execute(To<Document>(GetExecutionContext())->GetFrame());
 
   // The script may have removed the frame, in which case contextDestroyed()
   // will have handled the disposal/callback.
@@ -235,7 +242,7 @@ void PausableScriptExecutor::ExecuteAndDestroySelf() {
     return;
 
   if (blocking_option_ == kOnloadBlocking)
-    ToDocument(GetExecutionContext())->DecrementLoadEventDelayCount();
+    To<Document>(GetExecutionContext())->DecrementLoadEventDelayCount();
 
   if (callback_)
     callback_->Completed(results);
@@ -251,6 +258,7 @@ void PausableScriptExecutor::Dispose() {
 }
 
 void PausableScriptExecutor::Trace(blink::Visitor* visitor) {
+  visitor->Trace(script_state_);
   visitor->Trace(executor_);
   PausableTimer::Trace(visitor);
 }

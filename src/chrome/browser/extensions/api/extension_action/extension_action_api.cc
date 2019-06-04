@@ -11,6 +11,7 @@
 #include "base/lazy_instance.h"
 #include "base/location.h"
 #include "base/macros.h"
+#include "base/metrics/histogram_macros.h"
 #include "base/single_thread_task_runner.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/threading/thread_task_runner_handle.h"
@@ -18,6 +19,7 @@
 #include "chrome/browser/extensions/extension_action_manager.h"
 #include "chrome/browser/extensions/extension_action_runner.h"
 #include "chrome/browser/extensions/extension_tab_util.h"
+#include "chrome/browser/extensions/extension_ui_util.h"
 #include "chrome/browser/extensions/tab_helper.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/sessions/session_tab_helper.h"
@@ -58,6 +60,8 @@ const char kOpenPopupError[] =
     "error occurred.";
 const char kInvalidColorError[] =
     "The color specification could not be parsed.";
+
+bool g_report_error_for_invisible_icon = false;
 
 }  // namespace
 
@@ -336,8 +340,8 @@ ExtensionFunction::ResponseAction ExtensionActionFunction::Run() {
   // Find the WebContents that contains this tab id if one is required.
   if (tab_id_ != ExtensionAction::kDefaultTabId) {
     ExtensionTabUtil::GetTabById(tab_id_, browser_context(),
-                                 include_incognito(), nullptr, nullptr,
-                                 &contents_, nullptr);
+                                 include_incognito_information(), nullptr,
+                                 nullptr, &contents_, nullptr);
     if (!contents_)
       return RespondNow(Error(kNoTabError, base::IntToString(tab_id_)));
   } else {
@@ -421,6 +425,12 @@ ExtensionActionHideFunction::RunExtensionAction() {
   return RespondNow(NoArguments());
 }
 
+// static
+void ExtensionActionSetIconFunction::SetReportErrorForInvisibleIconForTesting(
+    bool value) {
+  g_report_error_for_invisible_icon = value;
+}
+
 ExtensionFunction::ResponseAction
 ExtensionActionSetIconFunction::RunExtensionAction() {
   EXTENSION_FUNCTION_VALIDATE(details_);
@@ -438,7 +448,22 @@ ExtensionActionSetIconFunction::RunExtensionAction() {
     if (icon.isNull())
       return RespondNow(Error("Icon invalid."));
 
-    extension_action_->SetIcon(tab_id_, gfx::Image(icon));
+    gfx::Image icon_image(icon);
+    const SkBitmap bitmap = icon_image.AsBitmap();
+    const bool is_visible = image_util::IsIconSufficientlyVisible(bitmap);
+    UMA_HISTOGRAM_BOOLEAN("Extensions.DynamicExtensionActionIconWasVisible",
+                          is_visible);
+    const bool is_visible_rendered =
+        extensions::ui_util::IsRenderedIconSufficientlyVisibleForBrowserContext(
+            bitmap, browser_context());
+    UMA_HISTOGRAM_BOOLEAN(
+        "Extensions.DynamicExtensionActionIconWasVisibleRendered",
+        is_visible_rendered);
+
+    if (!is_visible && g_report_error_for_invisible_icon)
+      return RespondNow(Error("Icon not sufficiently visible."));
+
+    extension_action_->SetIcon(tab_id_, icon_image);
   } else if (details_->GetInteger("iconIndex", &icon_index)) {
     // Obsolete argument: ignore it.
     return RespondNow(NoArguments());

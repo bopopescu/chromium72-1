@@ -12,7 +12,6 @@
 #include "base/time/tick_clock.h"
 #include "chrome/browser/ash_service_registry.h"
 #include "chrome/browser/browser_process.h"
-#include "chrome/browser/chromeos/ash_config.h"
 #include "chrome/browser/chromeos/chrome_service_name.h"
 #include "chrome/browser/chromeos/login/session/chrome_session_manager.h"
 #include "chrome/browser/chromeos/login/users/chrome_user_manager_impl.h"
@@ -38,14 +37,16 @@
 #include "components/session_manager/core/session_manager.h"
 #include "components/user_manager/user_manager.h"
 #include "content/public/common/service_manager_connection.h"
+#include "services/network/public/cpp/shared_url_loader_factory.h"
 #include "services/preferences/public/mojom/preferences.mojom.h"
 #include "services/service_manager/public/cpp/binder_registry.h"
 #include "services/service_manager/public/cpp/interface_provider.h"
 #include "services/service_manager/public/cpp/service.h"
 #include "services/service_manager/runner/common/client_util.h"
-#include "services/ui/public/cpp/input_devices/input_device_controller.h"
-#include "services/ui/public/cpp/input_devices/input_device_controller_client.h"
-#include "services/ui/public/interfaces/constants.mojom.h"
+#include "services/ws/public/cpp/input_devices/input_device_controller.h"
+#include "services/ws/public/cpp/input_devices/input_device_controller_client.h"
+#include "services/ws/public/mojom/constants.mojom.h"
+#include "ui/base/ui_base_features.h"
 
 BrowserProcessPlatformPart::BrowserProcessPlatformPart()
     : created_profile_helper_(false),
@@ -106,17 +107,24 @@ void BrowserProcessPlatformPart::ShutdownSessionManager() {
 }
 
 void BrowserProcessPlatformPart::InitializeCrosComponentManager() {
+  if (using_testing_cros_component_manager_)
+    return;
+
   DCHECK(!cros_component_manager_);
   cros_component_manager_ =
-      std::make_unique<component_updater::CrOSComponentManager>(
+      std::make_unique<component_updater::CrOSComponentInstaller>(
           component_updater::MetadataTable::Create(
-              g_browser_process->local_state()));
+              g_browser_process->local_state()),
+          g_browser_process->component_updater());
 
   // Register all installed components for regular update.
   cros_component_manager_->RegisterInstalled();
 }
 
 void BrowserProcessPlatformPart::ShutdownCrosComponentManager() {
+  if (using_testing_cros_component_manager_)
+    return;
+
   cros_component_manager_.reset();
 }
 
@@ -157,7 +165,7 @@ chromeos::TimeZoneResolver* BrowserProcessPlatformPart::GetTimezoneResolver() {
   if (!timezone_resolver_.get()) {
     timezone_resolver_.reset(new chromeos::TimeZoneResolver(
         GetTimezoneResolverManager(),
-        g_browser_process->system_request_context(),
+        g_browser_process->shared_url_loader_factory(),
         chromeos::SimpleGeolocationProvider::DefaultGeolocationProviderURL(),
         base::Bind(&chromeos::system::ApplyTimeZone),
         base::Bind(&chromeos::DelayNetworkCall,
@@ -197,15 +205,14 @@ void BrowserProcessPlatformPart::DestroySystemClock() {
   system_clock_.reset();
 }
 
-ui::InputDeviceControllerClient*
+ws::InputDeviceControllerClient*
 BrowserProcessPlatformPart::GetInputDeviceControllerClient() {
   if (!input_device_controller_client_) {
-    const std::string service_name =
-        chromeos::GetAshConfig() == ash::Config::CLASSIC
-            ? chromeos::kChromeServiceName
-            : ui::mojom::kServiceName;
+    const std::string service_name = !features::IsMultiProcessMash()
+                                         ? chromeos::kChromeServiceName
+                                         : ws::mojom::kServiceName;
     input_device_controller_client_ =
-        std::make_unique<ui::InputDeviceControllerClient>(
+        std::make_unique<ws::InputDeviceControllerClient>(
             content::ServiceManagerConnection::GetForProcess()->GetConnector(),
             service_name);
   }

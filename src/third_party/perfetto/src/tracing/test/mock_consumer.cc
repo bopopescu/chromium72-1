@@ -38,7 +38,7 @@ MockConsumer::~MockConsumer() {
   task_runner_->RunUntilCheckpoint(checkpoint_name);
 }
 
-void MockConsumer::Connect(Service* svc) {
+void MockConsumer::Connect(TracingService* svc) {
   service_endpoint_ = svc->ConnectConsumer(this);
   static int i = 0;
   auto checkpoint_name = "on_consumer_connect_" + std::to_string(i++);
@@ -52,6 +52,10 @@ void MockConsumer::EnableTracing(const TraceConfig& trace_config,
   service_endpoint_->EnableTracing(trace_config, std::move(write_into_file));
 }
 
+void MockConsumer::StartTracing() {
+  service_endpoint_->StartTracing();
+}
+
 void MockConsumer::DisableTracing() {
   service_endpoint_->DisableTracing();
 }
@@ -60,12 +64,12 @@ void MockConsumer::FreeBuffers() {
   service_endpoint_->FreeBuffers();
 }
 
-void MockConsumer::WaitForTracingDisabled() {
+void MockConsumer::WaitForTracingDisabled(uint32_t timeout_ms) {
   static int i = 0;
   auto checkpoint_name = "on_tracing_disabled_consumer_" + std::to_string(i++);
   auto on_tracing_disabled = task_runner_->CreateCheckpoint(checkpoint_name);
   EXPECT_CALL(*this, OnTracingDisabled()).WillOnce(Invoke(on_tracing_disabled));
-  task_runner_->RunUntilCheckpoint(checkpoint_name);
+  task_runner_->RunUntilCheckpoint(checkpoint_name, timeout_ms);
 }
 
 MockConsumer::FlushRequest MockConsumer::Flush(uint32_t timeout_ms) {

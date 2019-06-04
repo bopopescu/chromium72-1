@@ -16,6 +16,7 @@
 #include "base/rand_util.h"
 #include "base/synchronization/waitable_event.h"
 #include "base/threading/thread.h"
+#include "base/threading/thread_restrictions.h"
 #include "base/threading/thread_task_runner_handle.h"
 #include "base/time/default_tick_clock.h"
 #include "net/base/io_buffer.h"
@@ -693,6 +694,7 @@ class UDPProxyImpl : public UDPProxy {
         from_dest_pipe_(std::move(from_dest_pipe)),
         blocked_(false),
         weak_factory_(this) {
+    base::ScopedAllowBlockingForTesting allow_blocking;
     proxy_thread_.StartWithOptions(
         base::Thread::Options(base::MessageLoop::TYPE_IO, 0));
     base::WaitableEvent start_event(
@@ -708,6 +710,7 @@ class UDPProxyImpl : public UDPProxy {
   }
 
   ~UDPProxyImpl() final {
+    base::ScopedAllowBlockingForTesting allow_blocking;
     base::WaitableEvent stop_event(
         base::WaitableEvent::ResetPolicy::AUTOMATIC,
         base::WaitableEvent::InitialState::NOT_SIGNALED);
@@ -730,8 +733,8 @@ class UDPProxyImpl : public UDPProxy {
     VLOG(1) << "Sending packet, len = " << packet->size();
     // We ignore all problems, callbacks and errors.
     // If it didn't work we just drop the packet at and call it a day.
-    scoped_refptr<net::IOBuffer> buf =
-        new net::WrappedIOBuffer(reinterpret_cast<char*>(&packet->front()));
+    auto buf = base::MakeRefCounted<net::WrappedIOBuffer>(
+        reinterpret_cast<char*>(&packet->front()));
     size_t buf_size = packet->size();
     int result;
     if (destination.address().empty()) {
@@ -814,8 +817,8 @@ class UDPProxyImpl : public UDPProxy {
   void PollRead() {
     while (true) {
       packet_.reset(new Packet(kMaxPacketSize));
-      scoped_refptr<net::IOBuffer> recv_buf =
-          new net::WrappedIOBuffer(reinterpret_cast<char*>(&packet_->front()));
+      auto recv_buf = base::MakeRefCounted<net::WrappedIOBuffer>(
+          reinterpret_cast<char*>(&packet_->front()));
       int len = socket_->RecvFrom(
           recv_buf.get(),
           kMaxPacketSize,

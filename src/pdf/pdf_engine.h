@@ -7,20 +7,16 @@
 
 #include <stdint.h>
 
-#include "build/build_config.h"
-
-#if defined(OS_WIN)
-#include <windows.h>
-#endif
-
 #include <memory>
 #include <set>
 #include <string>
 #include <vector>
 
+#include "base/containers/span.h"
 #include "base/optional.h"
 #include "base/strings/string16.h"
 #include "base/time/time.h"
+#include "build/build_config.h"
 #include "ppapi/c/dev/pp_cursor_type_dev.h"
 #include "ppapi/c/dev/ppp_printing_dev.h"
 #include "ppapi/c/ppb_input_event.h"
@@ -34,12 +30,21 @@
 #include "ui/gfx/geometry/point_f.h"
 
 #if defined(OS_WIN)
+#include <windows.h>
+#endif
+
+#if defined(OS_WIN)
 typedef void (*PDFEnsureTypefaceCharactersAccessible)(const LOGFONT* font,
                                                       const wchar_t* text,
                                                       size_t text_length);
 #endif
 
 struct PP_PdfPrintSettings_Dev;
+
+namespace gfx {
+class Rect;
+class Size;
+}
 
 namespace pp {
 class InputEvent;
@@ -219,12 +224,6 @@ class PDFEngine {
     // Creates and returns new URL loader for partial document requests.
     virtual pp::URLLoader CreateURLLoader() = 0;
 
-    // Calls the client's OnCallback() function in |delay| with the given |id|.
-    virtual void ScheduleCallback(int id, base::TimeDelta delay) {}
-    // Calls the client's OnTouchTimerCallback() function in |delay| with the
-    // given |id|.
-    virtual void ScheduleTouchTimerCallback(int id, base::TimeDelta delay) {}
-
     // Searches the given string for "term" and returns the results.  Unicode-
     // aware.
     struct SearchStringResult {
@@ -344,9 +343,6 @@ class PDFEngine {
   // Gets the named destination by name.
   virtual base::Optional<PDFEngine::NamedDestination> GetNamedDestination(
       const std::string& destination) = 0;
-  // Transforms an (x, y) point in page coordinates to screen coordinates.
-  virtual gfx::PointF TransformPagePoint(int page_index,
-                                         const gfx::PointF& page_xy) = 0;
   // Gets the index of the most visible page, or -1 if none are visible.
   virtual int GetMostVisiblePage() = 0;
   // Gets the rectangle of the page including shadow.
@@ -363,10 +359,6 @@ class PDFEngine {
   virtual int GetVerticalScrollbarYPosition() = 0;
   // Set color / grayscale rendering modes.
   virtual void SetGrayscale(bool grayscale) = 0;
-  // Callback for timer that's set with ScheduleCallback().
-  virtual void OnCallback(int id) = 0;
-  // Callback for timer that's set with ScheduleTouchTimerCallback().
-  virtual void OnTouchTimerCallback(int id) = 0;
   // Get the number of characters on a given page.
   virtual int GetCharCount(int page_index) = 0;
   // Get the bounds in page pixels of a character on a given page.
@@ -406,14 +398,8 @@ class PDFEngine {
   // document at page |index|.
   virtual void AppendPage(PDFEngine* engine, int index) = 0;
 
-#if defined(PDF_ENABLE_XFA)
-  // Allow client to set scroll positions in document coordinates. Note that
-  // this is meant for cases where the device scale factor changes, and not for
-  // general scrolling - the engine will not repaint due to this.
-  virtual void SetScrollPosition(const pp::Point& position) = 0;
-#endif
-
   virtual std::string GetMetadata(const std::string& key) = 0;
+  virtual std::vector<uint8_t> GetSaveData() = 0;
 
   virtual void SetCaretPosition(const pp::Point& position) = 0;
   virtual void MoveRangeSelectionExtent(const pp::Point& extent) = 0;
@@ -461,8 +447,7 @@ class PDFEngineExports {
 
 #if defined(OS_WIN)
   // See the definition of RenderPDFPageToDC in pdf.cc for details.
-  virtual bool RenderPDFPageToDC(const void* pdf_buffer,
-                                 int buffer_size,
+  virtual bool RenderPDFPageToDC(base::span<const uint8_t> pdf_buffer,
                                  int page_number,
                                  const RenderingSettings& settings,
                                  HDC dc) = 0;
@@ -475,20 +460,31 @@ class PDFEngineExports {
 #endif  // defined(OS_WIN)
 
   // See the definition of RenderPDFPageToBitmap in pdf.cc for details.
-  virtual bool RenderPDFPageToBitmap(const void* pdf_buffer,
-                                     int pdf_buffer_size,
+  virtual bool RenderPDFPageToBitmap(base::span<const uint8_t> pdf_buffer,
                                      int page_number,
                                      const RenderingSettings& settings,
                                      void* bitmap_buffer) = 0;
 
-  virtual bool GetPDFDocInfo(const void* pdf_buffer,
-                             int buffer_size,
+  // See the definition of ConvertPdfPagesToNupPdf in pdf.cc for details.
+  virtual std::vector<uint8_t> ConvertPdfPagesToNupPdf(
+      std::vector<base::span<const uint8_t>> input_buffers,
+      size_t pages_per_sheet,
+      const gfx::Size& page_size,
+      const gfx::Rect& printable_area) = 0;
+
+  // See the definition of ConvertPdfDocumentToNupPdf in pdf.cc for details.
+  virtual std::vector<uint8_t> ConvertPdfDocumentToNupPdf(
+      base::span<const uint8_t> input_buffer,
+      size_t pages_per_sheet,
+      const gfx::Size& page_size,
+      const gfx::Rect& printable_area) = 0;
+
+  virtual bool GetPDFDocInfo(base::span<const uint8_t> pdf_buffer,
                              int* page_count,
                              double* max_page_width) = 0;
 
   // See the definition of GetPDFPageSizeByIndex in pdf.cc for details.
-  virtual bool GetPDFPageSizeByIndex(const void* pdf_buffer,
-                                     int pdf_buffer_size,
+  virtual bool GetPDFPageSizeByIndex(base::span<const uint8_t> pdf_buffer,
                                      int page_number,
                                      double* width,
                                      double* height) = 0;

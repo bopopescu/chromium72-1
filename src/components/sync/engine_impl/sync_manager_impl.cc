@@ -13,12 +13,13 @@
 #include "base/compiler_specific.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/observer_list.h"
-#include "base/threading/thread_task_runner_handle.h"
+#include "base/threading/sequenced_task_runner_handle.h"
 #include "base/values.h"
 #include "components/sync/base/cancelation_signal.h"
 #include "components/sync/base/experiments.h"
 #include "components/sync/base/invalidation_interface.h"
 #include "components/sync/base/model_type.h"
+#include "components/sync/base/nigori.h"
 #include "components/sync/engine/configure_reason.h"
 #include "components/sync/engine/engine_components_factory.h"
 #include "components/sync/engine/engine_util.h"
@@ -72,8 +73,11 @@ sync_pb::SyncEnums::GetUpdatesOrigin GetOriginFromReason(
 
 }  // namespace
 
-SyncManagerImpl::SyncManagerImpl(const std::string& name)
+SyncManagerImpl::SyncManagerImpl(
+    const std::string& name,
+    network::NetworkConnectionTracker* network_connection_tracker)
     : name_(name),
+      network_connection_tracker_(network_connection_tracker),
       change_delegate_(nullptr),
       initialized_(false),
       observing_network_connectivity_changes_(false),
@@ -86,7 +90,7 @@ SyncManagerImpl::SyncManagerImpl(const std::string& name)
 }
 
 SyncManagerImpl::~SyncManagerImpl() {
-  DCHECK(thread_checker_.CalledOnValidThread());
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   DCHECK(!initialized_);
 }
 
@@ -152,22 +156,21 @@ ModelTypeSet SyncManagerImpl::InitialSyncEndedTypes() {
 ModelTypeSet SyncManagerImpl::GetTypesWithEmptyProgressMarkerToken(
     ModelTypeSet types) {
   ModelTypeSet result;
-  for (ModelTypeSet::Iterator i = types.First(); i.Good(); i.Inc()) {
+  for (ModelType type : types) {
     sync_pb::DataTypeProgressMarker marker;
-    directory()->GetDownloadProgress(i.Get(), &marker);
+    directory()->GetDownloadProgress(type, &marker);
 
     if (marker.token().empty())
-      result.Put(i.Get());
+      result.Put(type);
   }
   return result;
 }
 
-void SyncManagerImpl::ConfigureSyncer(
-    ConfigureReason reason,
-    ModelTypeSet to_download,
-    const base::Closure& ready_task,
-    const base::Closure& retry_task) {
-  DCHECK(thread_checker_.CalledOnValidThread());
+void SyncManagerImpl::ConfigureSyncer(ConfigureReason reason,
+                                      ModelTypeSet to_download,
+                                      SyncFeatureState sync_feature_state,
+                                      const base::Closure& ready_task) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   DCHECK(!ready_task.is_null());
   DCHECK(initialized_);
 
@@ -179,21 +182,24 @@ void SyncManagerImpl::ConfigureSyncer(
            << "\n\t"
            << "types to download: " << ModelTypeSetToString(to_download);
   ConfigurationParams params(GetOriginFromReason(reason), to_download,
-                             ready_task, retry_task);
+                             ready_task);
 
   scheduler_->Start(SyncScheduler::CONFIGURATION_MODE, base::Time());
   scheduler_->ScheduleConfiguration(params);
+  if (sync_feature_state != SyncFeatureState::INITIALIZING) {
+    cycle_context_->set_is_sync_feature_enabled(sync_feature_state ==
+                                                SyncFeatureState::ON);
+  }
 }
 
 void SyncManagerImpl::Init(InitArgs* args) {
   DCHECK(!initialized_);
-  DCHECK(thread_checker_.CalledOnValidThread());
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   DCHECK(args->post_factory);
   DCHECK(!args->short_poll_interval.is_zero());
   DCHECK(!args->long_poll_interval.is_zero());
   if (!args->enable_local_sync_backend) {
     DCHECK(!args->credentials.account_id.empty());
-    DCHECK(!args->credentials.scope_set.empty());
   }
   DCHECK(args->cancelation_signal);
   DVLOG(1) << "SyncManager starting Init...";
@@ -216,7 +222,8 @@ void SyncManagerImpl::Init(InitArgs* args) {
       !args->restored_keystore_key_for_bootstrapping.empty());
   sync_encryption_handler_ = std::make_unique<SyncEncryptionHandlerImpl>(
       &share_, args->encryptor, args->restored_key_for_bootstrapping,
-      args->restored_keystore_key_for_bootstrapping);
+      args->restored_keystore_key_for_bootstrapping,
+      base::BindRepeating(&Nigori::GenerateScryptSalt));
   sync_encryption_handler_->AddObserver(this);
   sync_encryption_handler_->AddObserver(&debug_info_event_listener_);
   sync_encryption_handler_->AddObserver(&js_sync_encryption_handler_observer_);
@@ -302,7 +309,7 @@ void SyncManagerImpl::Init(InitArgs* args) {
   initialized_ = true;
 
   if (!args->enable_local_sync_backend) {
-    net::NetworkChangeNotifier::AddNetworkChangeObserver(this);
+    network_connection_tracker_->AddNetworkConnectionObserver(this);
     observing_network_connectivity_changes_ = true;
 
     UpdateCredentials(args->credentials);
@@ -333,6 +340,7 @@ void SyncManagerImpl::NotifyInitializationFailure() {
 
 void SyncManagerImpl::OnPassphraseRequired(
     PassphraseRequiredReason reason,
+    const KeyDerivationParams& key_derivation_params,
     const sync_pb::EncryptedData& pending_keys) {
   // Does nothing.
 }
@@ -379,12 +387,12 @@ void SyncManagerImpl::OnLocalSetPassphraseEncryption(
 void SyncManagerImpl::StartSyncingNormally(
     base::Time last_poll_time) {
   // Start the sync scheduler.
-  DCHECK(thread_checker_.CalledOnValidThread());
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   scheduler_->Start(SyncScheduler::NORMAL_MODE, last_poll_time);
 }
 
 void SyncManagerImpl::StartConfiguration() {
-  DCHECK(thread_checker_.CalledOnValidThread());
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   scheduler_->Start(SyncScheduler::CONFIGURATION_MODE, base::Time());
 }
 
@@ -438,8 +446,8 @@ void SyncManagerImpl::PurgePartiallySyncedTypes() {
 
   DVLOG(1) << "Purging partially synced types "
            << ModelTypeSetToString(partially_synced_types);
-  UMA_HISTOGRAM_COUNTS("Sync.PartiallySyncedTypes",
-                       partially_synced_types.Size());
+  UMA_HISTOGRAM_COUNTS_1M("Sync.PartiallySyncedTypes",
+                          partially_synced_types.Size());
   directory()->PurgeEntriesWithTypeIn(partially_synced_types, ModelTypeSet(),
                                       ModelTypeSet());
 }
@@ -447,7 +455,7 @@ void SyncManagerImpl::PurgePartiallySyncedTypes() {
 void SyncManagerImpl::PurgeDisabledTypes(ModelTypeSet to_purge,
                                          ModelTypeSet to_journal,
                                          ModelTypeSet to_unapply) {
-  DCHECK(thread_checker_.CalledOnValidThread());
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   DCHECK(initialized_);
   DVLOG(1) << "Purging disabled types:\n\t"
            << "types to purge: " << ModelTypeSetToString(to_purge) << "\n\t"
@@ -459,10 +467,9 @@ void SyncManagerImpl::PurgeDisabledTypes(ModelTypeSet to_purge,
 }
 
 void SyncManagerImpl::UpdateCredentials(const SyncCredentials& credentials) {
-  DCHECK(thread_checker_.CalledOnValidThread());
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   DCHECK(initialized_);
   DCHECK(!credentials.account_id.empty());
-  DCHECK(!credentials.scope_set.empty());
   cycle_context_->set_account_name(credentials.email);
 
   observing_network_connectivity_changes_ = true;
@@ -475,22 +482,22 @@ void SyncManagerImpl::UpdateCredentials(const SyncCredentials& credentials) {
 }
 
 void SyncManagerImpl::InvalidateCredentials() {
-  DCHECK(thread_checker_.CalledOnValidThread());
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   connection_manager_->SetAuthToken(std::string());
 }
 
 void SyncManagerImpl::AddObserver(SyncManager::Observer* observer) {
-  DCHECK(thread_checker_.CalledOnValidThread());
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   observers_.AddObserver(observer);
 }
 
 void SyncManagerImpl::RemoveObserver(SyncManager::Observer* observer) {
-  DCHECK(thread_checker_.CalledOnValidThread());
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   observers_.RemoveObserver(observer);
 }
 
-void SyncManagerImpl::ShutdownOnSyncThread(ShutdownReason reason) {
-  DCHECK(thread_checker_.CalledOnValidThread());
+void SyncManagerImpl::ShutdownOnSyncThread() {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
   // Prevent any in-flight method calls from running.  Also
   // invalidates |weak_handle_this_| and |change_observer_|.
@@ -523,7 +530,7 @@ void SyncManagerImpl::ShutdownOnSyncThread(ShutdownReason reason) {
     connection_manager_->RemoveListener(this);
   connection_manager_.reset();
 
-  net::NetworkChangeNotifier::RemoveNetworkChangeObserver(this);
+  network_connection_tracker_->RemoveNetworkConnectionObserver(this);
   observing_network_connectivity_changes_ = false;
 
   if (initialized_ && directory()) {
@@ -542,9 +549,8 @@ void SyncManagerImpl::ShutdownOnSyncThread(ShutdownReason reason) {
   weak_handle_this_.Reset();
 }
 
-void SyncManagerImpl::OnNetworkChanged(
-    net::NetworkChangeNotifier::ConnectionType type) {
-  DCHECK(thread_checker_.CalledOnValidThread());
+void SyncManagerImpl::OnConnectionChanged(network::mojom::ConnectionType type) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   if (!observing_network_connectivity_changes_) {
     DVLOG(1) << "Network change dropped.";
     return;
@@ -555,7 +561,7 @@ void SyncManagerImpl::OnNetworkChanged(
 
 void SyncManagerImpl::OnServerConnectionEvent(
     const ServerConnectionEvent& event) {
-  DCHECK(thread_checker_.CalledOnValidThread());
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   if (event.connection_code == HttpResponse::SERVER_CONNECTION_OK) {
     for (auto& observer : observers_) {
       observer.OnConnectionStatusChange(CONNECTION_OK);
@@ -585,11 +591,10 @@ void SyncManagerImpl::HandleTransactionCompleteChangeEvent(
     return;
 
   // Call commit.
-  for (ModelTypeSet::Iterator it = models_with_changes.First(); it.Good();
-       it.Inc()) {
-    change_delegate_->OnChangesComplete(it.Get());
+  for (ModelType type : models_with_changes) {
+    change_delegate_->OnChangesComplete(type);
     change_observer_.Call(
-        FROM_HERE, &SyncManager::ChangeObserver::OnChangesComplete, it.Get());
+        FROM_HERE, &SyncManager::ChangeObserver::OnChangesComplete, type);
   }
 }
 
@@ -638,9 +643,7 @@ void SyncManagerImpl::HandleCalculateChangesChangeEventFromSyncApi(
 
   const syncable::ImmutableEntryKernelMutationMap& mutations =
       write_transaction_info.Get().mutations;
-  for (syncable::EntryKernelMutationMap::const_iterator it =
-           mutations.Get().begin();
-       it != mutations.Get().end(); ++it) {
+  for (auto it = mutations.Get().begin(); it != mutations.Get().end(); ++it) {
     if (!it->second.mutated.ref(syncable::IS_UNSYNCED)) {
       continue;
     }
@@ -719,9 +722,7 @@ void SyncManagerImpl::HandleCalculateChangesChangeEventFromSyncer(
   Cryptographer* crypto = directory()->GetCryptographer(trans);
   const syncable::ImmutableEntryKernelMutationMap& mutations =
       write_transaction_info.Get().mutations;
-  for (syncable::EntryKernelMutationMap::const_iterator it =
-           mutations.Get().begin();
-       it != mutations.Get().end(); ++it) {
+  for (auto it = mutations.Get().begin(); it != mutations.Get().end(); ++it) {
     bool existed_before = !it->second.original.ref(syncable::IS_DEL);
     bool exists_now = !it->second.mutated.ref(syncable::IS_DEL);
 
@@ -761,28 +762,28 @@ void SyncManagerImpl::HandleCalculateChangesChangeEventFromSyncer(
 void SyncManagerImpl::RequestNudgeForDataTypes(
     const base::Location& nudge_location,
     ModelTypeSet types) {
-  debug_info_event_listener_.OnNudgeFromDatatype(types.First().Get());
+  debug_info_event_listener_.OnNudgeFromDatatype(*(types.begin()));
 
   scheduler_->ScheduleLocalNudge(types, nudge_location);
 }
 
 void SyncManagerImpl::NudgeForInitialDownload(ModelType type) {
-  DCHECK(thread_checker_.CalledOnValidThread());
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   scheduler_->ScheduleInitialSyncNudge(type);
 }
 
 void SyncManagerImpl::NudgeForCommit(ModelType type) {
-  DCHECK(thread_checker_.CalledOnValidThread());
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   RequestNudgeForDataTypes(FROM_HERE, ModelTypeSet(type));
 }
 
 void SyncManagerImpl::NudgeForRefresh(ModelType type) {
-  DCHECK(thread_checker_.CalledOnValidThread());
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   RefreshTypes(ModelTypeSet(type));
 }
 
 void SyncManagerImpl::OnSyncCycleEvent(const SyncCycleEvent& event) {
-  DCHECK(thread_checker_.CalledOnValidThread());
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   // Only send an event if this is due to a cycle ending and this cycle
   // concludes a canonical "sync" process; that is, based on what is known
   // locally we are "all happy" and up to date.  There may be new changes on
@@ -837,7 +838,7 @@ void SyncManagerImpl::SetJsEventHandler(
 }
 
 void SyncManagerImpl::SetInvalidatorEnabled(bool invalidator_enabled) {
-  DCHECK(thread_checker_.CalledOnValidThread());
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
   DVLOG(1) << "Invalidator enabled state is now: " << invalidator_enabled;
   allstatus_.SetNotificationsEnabled(invalidator_enabled);
@@ -847,7 +848,7 @@ void SyncManagerImpl::SetInvalidatorEnabled(bool invalidator_enabled) {
 void SyncManagerImpl::OnIncomingInvalidation(
     ModelType type,
     std::unique_ptr<InvalidationInterface> invalidation) {
-  DCHECK(thread_checker_.CalledOnValidThread());
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
   allstatus_.IncrementNotificationsReceived();
   scheduler_->ScheduleInvalidationNudge(type, std::move(invalidation),
@@ -855,7 +856,7 @@ void SyncManagerImpl::OnIncomingInvalidation(
 }
 
 void SyncManagerImpl::RefreshTypes(ModelTypeSet types) {
-  DCHECK(thread_checker_.CalledOnValidThread());
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   if (types.Empty()) {
     LOG(WARNING) << "Sync received refresh request with no types specified.";
   } else {
@@ -877,7 +878,7 @@ UserShare* SyncManagerImpl::GetUserShare() {
 }
 
 ModelTypeConnector* SyncManagerImpl::GetModelTypeConnector() {
-  DCHECK(thread_checker_.CalledOnValidThread());
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   return model_type_registry_.get();
 }
 
@@ -885,7 +886,8 @@ std::unique_ptr<ModelTypeConnector>
 SyncManagerImpl::GetModelTypeConnectorProxy() {
   DCHECK(initialized_);
   return std::make_unique<ModelTypeConnectorProxy>(
-      base::ThreadTaskRunnerHandle::Get(), model_type_registry_->AsWeakPtr());
+      base::SequencedTaskRunnerHandle::Get(),
+      model_type_registry_->AsWeakPtr());
 }
 
 const std::string SyncManagerImpl::cache_guid() {
@@ -921,17 +923,6 @@ bool SyncManagerImpl::ReceivedExperiment(Experiments* experiments) {
             .enabled());
     // We don't bother setting found_experiment.  The frontend doesn't need to
     // know about this.
-  }
-
-  ReadNode gcm_invalidations_node(&trans);
-  if (gcm_invalidations_node.InitByClientTagLookup(
-          EXPERIMENTS, kGCMInvalidationsTag) == BaseNode::INIT_OK) {
-    const sync_pb::GcmInvalidationsFlags& gcm_invalidations =
-        gcm_invalidations_node.GetExperimentsSpecifics().gcm_invalidations();
-    if (gcm_invalidations.has_enabled()) {
-      experiments->gcm_invalidations_enabled = gcm_invalidations.enabled();
-      found_experiment = true;
-    }
   }
 
   return found_experiment;
@@ -970,7 +961,7 @@ void SyncManagerImpl::RequestEmitDebugInfo() {
 }
 
 void SyncManagerImpl::ClearServerData(const base::Closure& callback) {
-  DCHECK(thread_checker_.CalledOnValidThread());
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   scheduler_->Start(SyncScheduler::CLEAR_SERVER_DATA_MODE, base::Time());
   ClearParams params(callback);
   scheduler_->ScheduleClearServerData(params);
@@ -978,7 +969,7 @@ void SyncManagerImpl::ClearServerData(const base::Closure& callback) {
 
 void SyncManagerImpl::OnCookieJarChanged(bool account_mismatch,
                                          bool empty_jar) {
-  DCHECK(thread_checker_.CalledOnValidThread());
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   cycle_context_->set_cookie_jar_mismatch(account_mismatch);
   cycle_context_->set_cookie_jar_empty(empty_jar);
 }

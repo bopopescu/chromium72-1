@@ -2,10 +2,16 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "third_party/blink/public/platform/web_media_player.h"
-
 #ifndef THIRD_PARTY_BLINK_RENDERER_PLATFORM_TESTING_EMPTY_WEB_MEDIA_PLAYER_H_
 #define THIRD_PARTY_BLINK_RENDERER_PLATFORM_TESTING_EMPTY_WEB_MEDIA_PLAYER_H_
+
+#include "base/callback.h"
+#include "third_party/blink/public/platform/web_media_player.h"
+
+namespace cc {
+class PaintCanvas;
+class PaintFlags;
+}  // namespace cc
 
 namespace blink {
 
@@ -16,7 +22,7 @@ class EmptyWebMediaPlayer : public WebMediaPlayer {
  public:
   ~EmptyWebMediaPlayer() override = default;
 
-  void Load(LoadType, const WebMediaPlayerSource&, CORSMode) override {}
+  LoadTiming Load(LoadType, const WebMediaPlayerSource&, CorsMode) override;
   void Play() override {}
   void Pause() override {}
   void Seek(double seconds) override {}
@@ -24,12 +30,17 @@ class EmptyWebMediaPlayer : public WebMediaPlayer {
   void SetVolume(double) override {}
   void EnterPictureInPicture(PipWindowOpenedCallback) override {}
   void ExitPictureInPicture(PipWindowClosedCallback) override {}
+  void SetPictureInPictureCustomControls(
+      const std::vector<PictureInPictureControlInfo>&) override {}
   void RegisterPictureInPictureWindowResizeCallback(
       PipWindowResizedCallback) override {}
+  SurfaceLayerMode GetVideoSurfaceLayerMode() const override {
+    return SurfaceLayerMode::kNever;
+  }
   WebTimeRanges Buffered() const override;
   WebTimeRanges Seekable() const override;
   void SetSinkId(const WebString& sink_id,
-                 WebSetSinkIdCallbacks*) override {}
+                 std::unique_ptr<WebSetSinkIdCallbacks>) override {}
   bool HasVideo() const override { return false; }
   bool HasAudio() const override { return false; }
   WebSize NaturalSize() const override;
@@ -42,17 +53,15 @@ class EmptyWebMediaPlayer : public WebMediaPlayer {
   ReadyState GetReadyState() const override { return kReadyStateHaveNothing; }
   WebString GetErrorMessage() const override;
   bool DidLoadingProgress() override { return false; }
-  bool DidGetOpaqueResponseFromServiceWorker() const override { return false; }
-  bool HasSingleSecurityOrigin() const override { return true; }
-  bool DidPassCORSAccessCheck() const override { return true; }
+  bool WouldTaintOrigin() const override { return false; }
   double MediaTimeForTimeValue(double time_value) const override {
     return time_value;
   };
   unsigned DecodedFrameCount() const override { return 0; }
   unsigned DroppedFrameCount() const override { return 0; }
-  size_t AudioDecodedByteCount() const override { return 0; }
-  size_t VideoDecodedByteCount() const override { return 0; }
-  void Paint(WebCanvas*,
+  uint64_t AudioDecodedByteCount() const override { return 0; }
+  uint64_t VideoDecodedByteCount() const override { return 0; }
+  void Paint(cc::PaintCanvas*,
              const WebRect&,
              cc::PaintFlags&,
              int already_uploaded_id,

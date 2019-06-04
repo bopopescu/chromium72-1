@@ -18,7 +18,6 @@
 #include "ui/accessibility/ax_tree_serializer.h"
 #include "ui/accessibility/ax_tree_update.h"
 #include "ui/aura/window.h"
-#include "ui/base/material_design/material_design_controller.h"
 #include "ui/views/accessibility/ax_aura_obj_cache.h"
 #include "ui/views/accessibility/ax_aura_obj_wrapper.h"
 #include "ui/views/controls/textfield/textfield.h"
@@ -55,8 +54,12 @@ class AXTreeSourceAuraTest : public ash::AshTestBase {
   void SetUp() override {
     AshTestBase::SetUp();
 
+    // This code is running outside of Ash.
+    SetRunningOutsideAsh();
+
     widget_ = new Widget();
     Widget::InitParams init_params(Widget::InitParams::TYPE_WINDOW_FRAMELESS);
+    init_params.context = CurrentContext();
     widget_->Init(init_params);
 
     content_ = new View();
@@ -85,7 +88,7 @@ TEST_F(AXTreeSourceAuraTest, Accessors) {
   ASSERT_TRUE(ax_tree.GetRoot());
 
   // ID's should be > 0.
-  ASSERT_GE(ax_tree.GetRoot()->GetUniqueId().Get(), 1);
+  ASSERT_GE(ax_tree.GetRoot()->GetUniqueId(), 1);
 
   // Grab the content view directly from cache to avoid walking down the tree.
   AXAuraObjWrapper* content =
@@ -102,8 +105,7 @@ TEST_F(AXTreeSourceAuraTest, Accessors) {
   std::vector<AXAuraObjWrapper*> textfield_children;
   ax_tree.GetChildren(textfield, &textfield_children);
   // The textfield has an extra child in Harmony, the focus ring.
-  const size_t expected_children =
-      ui::MaterialDesignController::IsSecondaryUiMaterial() ? 2 : 1;
+  const size_t expected_children = 2;
   ASSERT_EQ(expected_children, textfield_children.size());
 
   ASSERT_EQ(content, textfield->GetParent());
@@ -129,7 +131,7 @@ TEST_F(AXTreeSourceAuraTest, DoDefault) {
   ASSERT_FALSE(textfield_->HasFocus());
   ui::AXActionData action_data;
   action_data.action = ax::mojom::Action::kDoDefault;
-  action_data.target_node_id = textfield_wrapper->GetUniqueId().Get();
+  action_data.target_node_id = textfield_wrapper->GetUniqueId();
   textfield_wrapper->HandleAccessibleAction(action_data);
   ASSERT_TRUE(textfield_->HasFocus());
 }
@@ -145,7 +147,7 @@ TEST_F(AXTreeSourceAuraTest, Focus) {
   ASSERT_FALSE(textfield_->HasFocus());
   ui::AXActionData action_data;
   action_data.action = ax::mojom::Action::kFocus;
-  action_data.target_node_id = textfield_wrapper->GetUniqueId().Get();
+  action_data.target_node_id = textfield_wrapper->GetUniqueId();
   textfield_wrapper->HandleAccessibleAction(action_data);
   ASSERT_TRUE(textfield_->HasFocus());
 }
@@ -182,11 +184,25 @@ TEST_F(AXTreeSourceAuraTest, Serialize) {
 
   int text_field_update_index = -1;
   for (size_t i = 0; i < node_count; ++i) {
-    if (textfield_wrapper->GetUniqueId().Get() == out_update2.nodes[i].id)
+    if (textfield_wrapper->GetUniqueId() == out_update2.nodes[i].id)
       text_field_update_index = i;
   }
 
   ASSERT_NE(-1, text_field_update_index);
   ASSERT_EQ(ax::mojom::Role::kTextField,
             out_update2.nodes[text_field_update_index].role);
+}
+
+TEST_F(AXTreeSourceAuraTest, SerializeWindowSetsClipsChildren) {
+  AXTreeSourceAura ax_tree;
+  AuraAXTreeSerializer ax_serializer(&ax_tree);
+  AXAuraObjWrapper* widget_wrapper =
+      AXAuraObjCache::GetInstance()->GetOrCreate(widget_);
+  ui::AXNodeData node_data;
+  ax_tree.SerializeNode(widget_wrapper, &node_data);
+  EXPECT_EQ(ax::mojom::Role::kWindow, node_data.role);
+  bool clips_children = false;
+  EXPECT_TRUE(node_data.GetBoolAttribute(
+      ax::mojom::BoolAttribute::kClipsChildren, &clips_children));
+  EXPECT_TRUE(clips_children);
 }

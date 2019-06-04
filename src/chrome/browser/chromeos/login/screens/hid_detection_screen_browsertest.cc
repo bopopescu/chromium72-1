@@ -4,35 +4,46 @@
 
 #include "base/macros.h"
 #include "base/run_loop.h"
+#include "chrome/browser/chromeos/login/login_wizard.h"
 #include "chrome/browser/chromeos/login/screens/base_screen.h"
 #include "chrome/browser/chromeos/login/screens/hid_detection_screen.h"
 #include "chrome/browser/chromeos/login/test/oobe_screen_waiter.h"
-#include "chrome/browser/chromeos/login/test/wizard_in_process_browser_test.h"
 #include "chrome/browser/chromeos/login/wizard_controller.h"
+#include "chrome/test/base/in_process_browser_test.h"
+#include "chromeos/chromeos_switches.h"
 #include "services/device/public/cpp/hid/fake_input_service_linux.h"
 #include "services/device/public/mojom/constants.mojom.h"
 #include "services/device/public/mojom/input_service.mojom.h"
-#include "services/service_manager/public/cpp/service_context.h"
+#include "services/service_manager/public/cpp/service_binding.h"
 
 namespace chromeos {
 
-class HIDDetectionScreenTest : public WizardInProcessBrowserTest {
+class HIDDetectionScreenTest : public InProcessBrowserTest {
  public:
-  HIDDetectionScreenTest()
-      : WizardInProcessBrowserTest(OobeScreen::SCREEN_OOBE_HID_DETECTION) {}
-
- protected:
-  void SetUpOnMainThread() override {
-    WizardInProcessBrowserTest::SetUpOnMainThread();
-    ASSERT_TRUE(WizardController::default_controller());
-
+  HIDDetectionScreenTest() {
     fake_input_service_manager_ =
         std::make_unique<device::FakeInputServiceLinux>();
 
-    service_manager::ServiceContext::SetGlobalBinderForTesting(
-        device::mojom::kServiceName, device::mojom::InputDeviceManager::Name_,
+    service_manager::ServiceBinding::OverrideInterfaceBinderForTesting(
+        device::mojom::kServiceName,
         base::Bind(&device::FakeInputServiceLinux::Bind,
                    base::Unretained(fake_input_service_manager_.get())));
+  }
+
+  ~HIDDetectionScreenTest() override {
+    service_manager::ServiceBinding::ClearInterfaceBinderOverrideForTesting<
+        device::mojom::InputDeviceManager>(device::mojom::kServiceName);
+  }
+
+  // InProcessBrowserTest:
+  void SetUpCommandLine(base::CommandLine* command_line) override {
+    InProcessBrowserTest::SetUpCommandLine(command_line);
+    command_line->AppendArg(switches::kLoginManager);
+  }
+
+  void SetUpOnMainThread() override {
+    ShowLoginWizard(OobeScreen::SCREEN_OOBE_HID_DETECTION);
+    ASSERT_TRUE(WizardController::default_controller());
 
     hid_detection_screen_ = static_cast<HIDDetectionScreen*>(
         WizardController::default_controller()->GetScreen(
@@ -43,10 +54,6 @@ class HIDDetectionScreenTest : public WizardInProcessBrowserTest {
     ASSERT_TRUE(hid_detection_screen_->view_);
 
     hid_detection_screen()->SetAdapterInitialPoweredForTesting(false);
-  }
-
-  void TearDownOnMainThread() override {
-    WizardInProcessBrowserTest::TearDownOnMainThread();
   }
 
   HIDDetectionScreen* hid_detection_screen() { return hid_detection_screen_; }
@@ -156,7 +163,7 @@ IN_PROC_BROWSER_TEST_F(HIDDetectionScreenTest, BluetoothDeviceConnected) {
 
   // Simulate the user's click on "Continue" button.
   hid_detection_screen()->OnContinueButtonClicked();
-  OobeScreenWaiter(OobeScreen::SCREEN_OOBE_NETWORK).Wait();
+  OobeScreenWaiter(OobeScreen::SCREEN_OOBE_WELCOME).Wait();
 
   // The adapter should not be powered off at this moment.
   EXPECT_TRUE(adapter()->IsPowered());
@@ -173,7 +180,7 @@ IN_PROC_BROWSER_TEST_F(HIDDetectionScreenTest, NoBluetoothDeviceConnected) {
 
   // Simulate the user's click on "Continue" button.
   hid_detection_screen()->OnContinueButtonClicked();
-  OobeScreenWaiter(OobeScreen::SCREEN_OOBE_NETWORK).Wait();
+  OobeScreenWaiter(OobeScreen::SCREEN_OOBE_WELCOME).Wait();
 
   // The adapter should be powered off at this moment.
   EXPECT_FALSE(adapter()->IsPowered());

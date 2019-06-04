@@ -158,8 +158,7 @@ class FindStructByName final : public TIntermTraverser
   public:
     FindStructByName(const ImmutableString &structName)
         : TIntermTraverser(true, false, false), mStructName(structName), mStructure(nullptr)
-    {
-    }
+    {}
 
     void visitSymbol(TIntermSymbol *symbol) override
     {
@@ -302,7 +301,7 @@ TEST_F(InitOutputVariablesWebGL2VertexShaderTest, OutputStruct)
     mASTRoot->traverse(&findStruct);
     ASSERT(findStruct.isStructureFound());
 
-    TType type(findStruct.getStructure());
+    TType type(findStruct.getStructure(), false);
     type.setQualifier(EvqVertexOut);
 
     TIntermTyped *expectedLValue = CreateLValueNode(ImmutableString("out1"), type);

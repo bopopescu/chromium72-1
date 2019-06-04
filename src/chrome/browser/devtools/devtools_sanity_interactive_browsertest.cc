@@ -65,10 +65,10 @@ class CheckWaiter {
 
 class DevToolsManagerDelegateTest : public InProcessBrowserTest {
  public:
-  void SendCommand(std::string state) {
+  void SendCommand(const std::string& state) {
     auto window_bounds =
         protocol::Browser::Bounds::Create().SetWindowState(state).Build();
-    BrowserHandler handler(nullptr);
+    BrowserHandler handler(nullptr, "");
     handler.SetWindowBounds(browser()->session_id().id(),
                             std::move(window_bounds));
   }
@@ -79,7 +79,7 @@ class DevToolsManagerDelegateTest : public InProcessBrowserTest {
                              .SetLeft(200)
                              .SetHeight(400)
                              .Build();
-    BrowserHandler handler(nullptr);
+    BrowserHandler handler(nullptr, "");
     handler.SetWindowBounds(browser()->session_id().id(),
                             std::move(window_bounds));
   }
@@ -122,10 +122,10 @@ class DevToolsManagerDelegateTest : public InProcessBrowserTest {
 };
 
 IN_PROC_BROWSER_TEST_F(DevToolsManagerDelegateTest, NormalWindowChangeBounds) {
-  browser()->window()->SetBounds(gfx::Rect(100, 100, 500, 600));
-  CheckWindowBounds(gfx::Rect(100, 100, 500, 600));
+  browser()->window()->SetBounds(gfx::Rect(100, 100, 600, 600));
+  CheckWindowBounds(gfx::Rect(100, 100, 600, 600));
   UpdateBounds();
-  CheckWindowBounds(gfx::Rect(200, 100, 500, 400));
+  CheckWindowBounds(gfx::Rect(200, 100, 600, 400));
 }
 
 #if defined(OS_MACOSX)

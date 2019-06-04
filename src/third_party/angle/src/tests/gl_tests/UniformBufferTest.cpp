@@ -195,10 +195,9 @@ TEST_P(UniformBufferTest, UniformBufferBindings)
     EXPECT_PIXEL_EQ(px, py, 10, 20, 30, 40);
 }
 
-// Test that ANGLE handles used but unbound UBO.
-// TODO: A test case shouldn't depend on the error code of an undefined behaviour. Move this to unit
-// tests of the validation layer.
-TEST_P(UniformBufferTest, UnboundUniformBuffer)
+// Test that ANGLE handles used but unbound UBO. Assumes we are running on ANGLE and produce
+// optional but not mandatory errors.
+TEST_P(UniformBufferTest, ANGLEUnboundUniformBuffer)
 {
     glUniformBlockBinding(mProgram, mUniformBufferIndex, 0);
     glBindBufferBase(GL_UNIFORM_BUFFER, 0, 0);
@@ -594,7 +593,7 @@ TEST_P(UniformBufferTest, VeryLargeReadback)
     glBufferData(GL_UNIFORM_BUFFER, bigSize, expectedData.data(), GL_STATIC_DRAW);
 
     // Do a small update.
-    GLsizei smallSize = sizeof(float) * 4;
+    GLsizei smallSize              = sizeof(float) * 4;
     std::array<float, 4> floatData = {{0.5f, 0.75f, 0.25f, 1.0f}};
     memcpy(expectedData.data(), floatData.data(), smallSize);
 
@@ -1519,7 +1518,8 @@ TEST_P(UniformBufferTest, DependentBufferChange)
     EXPECT_PIXEL_COLOR_EQ(0, 0, GLColor::green);
 }
 
-// Use this to select which configurations (e.g. which renderer, which GLES major version) these tests should be run against.
+// Use this to select which configurations (e.g. which renderer, which GLES major version) these
+// tests should be run against.
 ANGLE_INSTANTIATE_TEST(UniformBufferTest,
                        ES3_D3D11(),
                        ES3_D3D11_FL11_1(),
@@ -1528,4 +1528,4 @@ ANGLE_INSTANTIATE_TEST(UniformBufferTest,
                        ES3_OPENGLES());
 ANGLE_INSTANTIATE_TEST(UniformBufferTest31, ES31_D3D11(), ES31_OPENGL(), ES31_OPENGLES());
 
-} // namespace
+}  // namespace

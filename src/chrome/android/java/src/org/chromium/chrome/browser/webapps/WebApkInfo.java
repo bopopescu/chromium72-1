@@ -7,12 +7,16 @@ package org.chromium.chrome.browser.webapps;
 import android.content.Intent;
 import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageManager;
+import android.content.pm.ResolveInfo;
 import android.content.res.Resources;
 import android.graphics.Bitmap;
-import android.graphics.BitmapFactory;
+import android.graphics.drawable.BitmapDrawable;
+import android.net.Uri;
 import android.os.Bundle;
+import android.support.annotation.IntDef;
 import android.text.TextUtils;
 
+import org.chromium.base.ApiCompatibilityUtils;
 import org.chromium.base.ContextUtils;
 import org.chromium.base.Log;
 import org.chromium.blink_public.platform.WebDisplayMode;
@@ -23,26 +27,105 @@ import org.chromium.chrome.browser.util.IntentUtils;
 import org.chromium.content_public.common.ScreenOrientationValues;
 import org.chromium.webapk.lib.common.WebApkConstants;
 import org.chromium.webapk.lib.common.WebApkMetaDataKeys;
+import org.chromium.webapk.lib.common.WebApkMetaDataUtils;
 
+import java.lang.annotation.Retention;
+import java.lang.annotation.RetentionPolicy;
+import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 /**
  * Stores info for WebAPK.
  */
 public class WebApkInfo extends WebappInfo {
+    // A class that stores share information from share intent.
+    protected static class ShareData {
+        public String subject;
+        public String text;
+        public ArrayList<Uri> files;
+        public String shareActivityClassName;
+    }
+
+    /**
+     * Stores information about the WebAPK's share intent handlers.
+     * TODO(crbug.com/912954): add share target V2 parameters once the server supports them.
+     */
+    public static class ShareTarget {
+        private static final int ACTION_INDEX = 0;
+        private static final int PARAM_TITLE_INDEX = 1;
+        private static final int PARAM_TEXT_INDEX = 2;
+        private static final int PARAM_URL_INDEX = 3;
+        private String[] mData;
+
+        public ShareTarget() {
+            this(null, null, null, null);
+        }
+
+        public ShareTarget(String action, String paramTitle, String paramText, String paramUrl) {
+            mData = new String[4];
+            mData[ACTION_INDEX] = replaceNullWithEmpty(action);
+            mData[PARAM_TITLE_INDEX] = replaceNullWithEmpty(paramTitle);
+            mData[PARAM_TEXT_INDEX] = replaceNullWithEmpty(paramText);
+            mData[PARAM_URL_INDEX] = replaceNullWithEmpty(paramUrl);
+        }
+
+        @Override
+        public boolean equals(Object o) {
+            if (!(o instanceof ShareTarget)) return false;
+            return Arrays.equals(mData, ((ShareTarget) o).mData);
+        }
+
+        @Override
+        public int hashCode() {
+            return Arrays.hashCode(mData);
+        }
+
+        public String getAction() {
+            return mData[ACTION_INDEX];
+        }
+
+        public String getParamTitle() {
+            return mData[PARAM_TITLE_INDEX];
+        }
+
+        public String getParamText() {
+            return mData[PARAM_TEXT_INDEX];
+        }
+
+        public String getParamUrl() {
+            return mData[PARAM_URL_INDEX];
+        }
+    }
+
     public static final String RESOURCE_NAME = "name";
     public static final String RESOURCE_SHORT_NAME = "short_name";
     public static final String RESOURCE_STRING_TYPE = "string";
 
+    @IntDef({WebApkDistributor.BROWSER, WebApkDistributor.DEVICE_POLICY, WebApkDistributor.OTHER})
+    @Retention(RetentionPolicy.SOURCE)
+    public @interface WebApkDistributor {
+        int BROWSER = 0;
+        int DEVICE_POLICY = 1;
+        int OTHER = 2;
+    }
+
     private static final String TAG = "WebApkInfo";
 
     private Icon mBadgeIcon;
+    private Icon mSplashIcon;
     private String mApkPackageName;
     private int mShellApkVersion;
     private String mManifestUrl;
     private String mManifestStartUrl;
+    private @WebApkDistributor int mDistributor;
+    private ShareTarget mShareTarget;
     private Map<String, String> mIconUrlToMurmur2HashMap;
+    private boolean mUseTransparentSplash;
+
+    private ShareData mShareData;
 
     public static WebApkInfo createEmpty() {
         return new WebApkInfo();
@@ -56,6 +139,7 @@ public class WebApkInfo extends WebappInfo {
     public static WebApkInfo create(Intent intent) {
         String webApkPackageName =
                 IntentUtils.safeGetStringExtra(intent, WebApkConstants.EXTRA_WEBAPK_PACKAGE_NAME);
+
         if (TextUtils.isEmpty(webApkPackageName)) {
             return null;
         }
@@ -76,7 +160,48 @@ public class WebApkInfo extends WebappInfo {
         boolean forceNavigation = IntentUtils.safeGetBooleanExtra(
                 intent, ShortcutHelper.EXTRA_FORCE_NAVIGATION, true);
 
-        return create(webApkPackageName, url, source, forceNavigation);
+        ShareData shareData = null;
+
+        String shareActivityClassName = IntentUtils.safeGetStringExtra(
+                intent, WebApkConstants.EXTRA_WEBAPK_SELECTED_SHARE_TARGET_ACTIVITY_CLASS_NAME);
+
+        // Share Target when shareActivityClassName is present.
+        if (!TextUtils.isEmpty(shareActivityClassName)) {
+            shareData = new ShareData();
+            shareData.shareActivityClassName = shareActivityClassName;
+            shareData.subject = IntentUtils.safeGetStringExtra(intent, Intent.EXTRA_SUBJECT);
+            shareData.text = IntentUtils.safeGetStringExtra(intent, Intent.EXTRA_TEXT);
+            shareData.files = IntentUtils.getParcelableArrayListExtra(intent, Intent.EXTRA_STREAM);
+            if (shareData.files == null) {
+                Uri file = IntentUtils.safeGetParcelableExtra(intent, Intent.EXTRA_STREAM);
+                if (file != null) {
+                    shareData.files = new ArrayList<>();
+                    shareData.files.add(file);
+                }
+            }
+        }
+        boolean useTransparentSplash = !IntentUtils.isIntentForNewTaskOrNewDocument(intent)
+                && IntentUtils.safeGetBooleanExtra(
+                           intent, WebApkConstants.EXTRA_USE_TRANSPARENT_SPLASH, false);
+
+        return create(
+                webApkPackageName, url, source, forceNavigation, useTransparentSplash, shareData);
+    }
+
+    private static @WebApkDistributor int getDistributor(Bundle bundle, String packageName) {
+        String distributor = IntentUtils.safeGetString(bundle, WebApkMetaDataKeys.DISTRIBUTOR);
+        if (!TextUtils.isEmpty(distributor)) {
+            if (TextUtils.equals(distributor, "browser")) {
+                return WebApkDistributor.BROWSER;
+            }
+            if (TextUtils.equals(distributor, "device_policy")) {
+                return WebApkDistributor.DEVICE_POLICY;
+            }
+            return WebApkDistributor.OTHER;
+        }
+        return packageName.startsWith(WebApkConstants.WEBAPK_PACKAGE_PREFIX)
+                ? WebApkDistributor.BROWSER
+                : WebApkDistributor.OTHER;
     }
 
     /**
@@ -87,10 +212,13 @@ public class WebApkInfo extends WebappInfo {
      * @param url Url that the WebAPK should navigate to when launched.
      * @param source Source that the WebAPK was launched from.
      * @param forceNavigation Whether the WebAPK should navigate to {@link url} if it is already
-     *     running.
+     *                        running.
+     * @param useTransparentSplash Whether the WebApkActivity should be fully transparent while the
+     *                             page is loading.
+     * @param shareData Shared information from the share intent.
      */
-    public static WebApkInfo create(
-            String webApkPackageName, String url, int source, boolean forceNavigation) {
+    public static WebApkInfo create(String webApkPackageName, String url, int source,
+            boolean forceNavigation, boolean useTransparentSplash, ShareData shareData) {
         // Unlike non-WebAPK web apps, WebAPK ids are predictable. A malicious actor may send an
         // intent with a valid start URL and arbitrary other data. Only use the start URL, the
         // package name and the ShortcutSource from the launch intent and extract the remaining data
@@ -126,10 +254,11 @@ public class WebApkInfo extends WebappInfo {
                 IntentUtils.safeGetString(bundle, WebApkMetaDataKeys.DISPLAY_MODE));
         int orientation = orientationFromString(
                 IntentUtils.safeGetString(bundle, WebApkMetaDataKeys.ORIENTATION));
-        long themeColor = getLongFromMetaData(bundle, WebApkMetaDataKeys.THEME_COLOR,
-                ShortcutHelper.MANIFEST_COLOR_INVALID_OR_MISSING);
-        long backgroundColor = getLongFromMetaData(bundle, WebApkMetaDataKeys.BACKGROUND_COLOR,
-                ShortcutHelper.MANIFEST_COLOR_INVALID_OR_MISSING);
+        long themeColor = WebApkMetaDataUtils.getLongFromMetaData(bundle,
+                WebApkMetaDataKeys.THEME_COLOR, ShortcutHelper.MANIFEST_COLOR_INVALID_OR_MISSING);
+        long backgroundColor =
+                WebApkMetaDataUtils.getLongFromMetaData(bundle, WebApkMetaDataKeys.BACKGROUND_COLOR,
+                        ShortcutHelper.MANIFEST_COLOR_INVALID_OR_MISSING);
 
         int shellApkVersion =
                 IntentUtils.safeGetInt(bundle, WebApkMetaDataKeys.SHELL_APK_VERSION, 0);
@@ -138,17 +267,25 @@ public class WebApkInfo extends WebappInfo {
         String manifestStartUrl = IntentUtils.safeGetString(bundle, WebApkMetaDataKeys.START_URL);
         Map<String, String> iconUrlToMurmur2HashMap = getIconUrlAndIconMurmur2HashMap(bundle);
 
+        @WebApkDistributor
+        int distributor = getDistributor(bundle, webApkPackageName);
+
         int primaryIconId = IntentUtils.safeGetInt(bundle, WebApkMetaDataKeys.ICON_ID, 0);
-        Bitmap primaryIcon = decodeImageResource(res, primaryIconId);
+        Bitmap primaryIcon = decodeBitmapFromDrawable(res, primaryIconId);
 
         int badgeIconId = IntentUtils.safeGetInt(bundle, WebApkMetaDataKeys.BADGE_ICON_ID, 0);
-        Bitmap badgeIcon = decodeImageResource(res, badgeIconId);
+        Bitmap badgeIcon = decodeBitmapFromDrawable(res, badgeIconId);
+
+        int splashIconId = IntentUtils.safeGetInt(bundle, WebApkMetaDataKeys.SPLASH_ID, 0);
+        Bitmap splashIcon = decodeBitmapFromDrawable(res, splashIconId);
+        ShareTarget shareTarget = extractAndMergeShareTargets(webApkPackageName);
 
         return create(WebApkConstants.WEBAPK_ID_PREFIX + webApkPackageName, url, scope,
-                new Icon(primaryIcon), new Icon(badgeIcon), name, shortName, displayMode,
-                orientation, source, themeColor, backgroundColor, webApkPackageName,
-                shellApkVersion, manifestUrl, manifestStartUrl, iconUrlToMurmur2HashMap,
-                forceNavigation);
+                new Icon(primaryIcon), new Icon(badgeIcon), new Icon(splashIcon), name, shortName,
+                displayMode, orientation, source, themeColor, backgroundColor, webApkPackageName,
+                shellApkVersion, manifestUrl, manifestStartUrl, distributor,
+                iconUrlToMurmur2HashMap, shareTarget, forceNavigation, useTransparentSplash,
+                shareData);
     }
 
     /**
@@ -159,6 +296,7 @@ public class WebApkInfo extends WebappInfo {
      * @param scope                   Scope for the WebAPK.
      * @param primaryIcon             Primary icon to show for the WebAPK.
      * @param badgeIcon               Badge icon to use for notifications.
+     * @param splashIcon              Splash icon to use for the splash screen.
      * @param name                    Name of the WebAPK.
      * @param shortName               The short name of the WebAPK.
      * @param displayMode             Display mode of the WebAPK.
@@ -172,17 +310,23 @@ public class WebApkInfo extends WebappInfo {
      * @param manifestStartUrl        URL that the WebAPK should navigate to when launched from the
      *                                homescreen. Different from the {@link url} parameter if the
      *                                WebAPK is launched from a deep link.
+     * @param distributor             The source from where the WebAPK is installed.
      * @param iconUrlToMurmur2HashMap Map of the WebAPK's icon URLs to Murmur2 hashes of the
      *                                icon untransformed bytes.
+     * @param shareTarget             Data about WebAPK's share intent handlers.
      * @param forceNavigation         Whether the WebAPK should navigate to {@link url} if the
      *                                WebAPK is already open.
+     * @param useTransparentSplash    Whether the WebApkActivity should be fully transparent while
+     *                                the page is loading.
+     * @param shareData               Shared information from the share intent.
      */
     public static WebApkInfo create(String id, String url, String scope, Icon primaryIcon,
-            Icon badgeIcon, String name, String shortName, @WebDisplayMode int displayMode,
-            int orientation, int source, long themeColor, long backgroundColor,
-            String webApkPackageName, int shellApkVersion, String manifestUrl,
-            String manifestStartUrl, Map<String, String> iconUrlToMurmur2HashMap,
-            boolean forceNavigation) {
+            Icon badgeIcon, Icon splashIcon, String name, String shortName,
+            @WebDisplayMode int displayMode, int orientation, int source, long themeColor,
+            long backgroundColor, String webApkPackageName, int shellApkVersion, String manifestUrl,
+            String manifestStartUrl, @WebApkDistributor int distributor,
+            Map<String, String> iconUrlToMurmur2HashMap, ShareTarget shareTarget,
+            boolean forceNavigation, boolean useTransparentSplash, ShareData shareData) {
         if (id == null || url == null || manifestStartUrl == null || webApkPackageName == null) {
             Log.e(TAG,
                     "Incomplete data provided: " + id + ", " + url + ", " + manifestStartUrl + ", "
@@ -197,26 +341,38 @@ public class WebApkInfo extends WebappInfo {
             scope = ShortcutHelper.getScopeFromUrl(manifestStartUrl);
         }
 
-        return new WebApkInfo(id, url, scope, primaryIcon, badgeIcon, name, shortName, displayMode,
-                orientation, source, themeColor, backgroundColor, webApkPackageName,
-                shellApkVersion, manifestUrl, manifestStartUrl, iconUrlToMurmur2HashMap,
-                forceNavigation);
+        return new WebApkInfo(id, url, scope, primaryIcon, badgeIcon, splashIcon, name, shortName,
+                displayMode, orientation, source, themeColor, backgroundColor, webApkPackageName,
+                shellApkVersion, manifestUrl, manifestStartUrl, distributor,
+                iconUrlToMurmur2HashMap, shareTarget, forceNavigation, useTransparentSplash,
+                shareData);
     }
 
     protected WebApkInfo(String id, String url, String scope, Icon primaryIcon, Icon badgeIcon,
-            String name, String shortName, @WebDisplayMode int displayMode, int orientation,
-            int source, long themeColor, long backgroundColor, String webApkPackageName,
-            int shellApkVersion, String manifestUrl, String manifestStartUrl,
-            Map<String, String> iconUrlToMurmur2HashMap, boolean forceNavigation) {
+            Icon splashIcon, String name, String shortName, @WebDisplayMode int displayMode,
+            int orientation, int source, long themeColor, long backgroundColor,
+            String webApkPackageName, int shellApkVersion, String manifestUrl,
+            String manifestStartUrl, @WebApkDistributor int distributor,
+            Map<String, String> iconUrlToMurmur2HashMap, ShareTarget shareTarget,
+            boolean forceNavigation, boolean useTransparentSplash, ShareData shareData) {
         super(id, url, scope, primaryIcon, name, shortName, displayMode, orientation, source,
                 themeColor, backgroundColor, null /* splash_screen_url */,
-                false /* isIconGenerated */, forceNavigation);
+                false /* isIconGenerated */, false /* isIconAdaptive */, forceNavigation);
         mBadgeIcon = badgeIcon;
+        mSplashIcon = splashIcon;
         mApkPackageName = webApkPackageName;
         mShellApkVersion = shellApkVersion;
         mManifestUrl = manifestUrl;
         mManifestStartUrl = manifestStartUrl;
+        mDistributor = distributor;
         mIconUrlToMurmur2HashMap = iconUrlToMurmur2HashMap;
+        mUseTransparentSplash = useTransparentSplash;
+        mShareData = shareData;
+
+        mShareTarget = shareTarget;
+        if (mShareTarget == null) {
+            mShareTarget = new ShareTarget();
+        }
     }
 
     protected WebApkInfo() {}
@@ -228,9 +384,31 @@ public class WebApkInfo extends WebappInfo {
         return (mBadgeIcon == null) ? null : mBadgeIcon.decoded();
     }
 
+    /**
+     * Returns the splash icon in Bitmap form.
+     */
+    public Bitmap splashIcon() {
+        return (mSplashIcon == null) ? null : mSplashIcon.decoded();
+    }
+
+    /** Returns data about the WebAPK's share intent handlers. */
+    public ShareTarget shareTarget() {
+        return mShareTarget;
+    }
+
     @Override
-    public String apkPackageName() {
+    public boolean isForWebApk() {
+        return true;
+    }
+
+    @Override
+    public String webApkPackageName() {
         return mApkPackageName;
+    }
+
+    @Override
+    public boolean useTransparentSplash() {
+        return mUseTransparentSplash;
     }
 
     public int shellApkVersion() {
@@ -245,8 +423,16 @@ public class WebApkInfo extends WebappInfo {
         return mManifestStartUrl;
     }
 
+    public @WebApkDistributor int distributor() {
+        return mDistributor;
+    }
+
     public Map<String, String> iconUrlToMurmur2HashMap() {
         return mIconUrlToMurmur2HashMap;
+    }
+
+    public ShareData shareData() {
+        return mShareData;
     }
 
     @Override
@@ -255,7 +441,7 @@ public class WebApkInfo extends WebappInfo {
         intent.putExtra(ShortcutHelper.EXTRA_ID, id());
         intent.putExtra(ShortcutHelper.EXTRA_URL, uri().toString());
         intent.putExtra(ShortcutHelper.EXTRA_SOURCE, source());
-        intent.putExtra(WebApkConstants.EXTRA_WEBAPK_PACKAGE_NAME, apkPackageName());
+        intent.putExtra(WebApkConstants.EXTRA_WEBAPK_PACKAGE_NAME, webApkPackageName());
         intent.putExtra(ShortcutHelper.EXTRA_FORCE_NAVIGATION, shouldForceNavigation());
     }
 
@@ -276,35 +462,19 @@ public class WebApkInfo extends WebappInfo {
     }
 
     /**
-     * Decodes bitmap from WebAPK's resources.
+     * Decodes bitmap drawable from WebAPK's resources. This should also be used for XML aliases.
      */
-    private static Bitmap decodeImageResource(Resources webApkResources, int resourceId) {
-        return BitmapFactory.decodeResource(webApkResources, resourceId);
-    }
-
-    /**
-     * Extracts long value from the WebAPK's meta data.
-     * @param metaData WebAPK meta data to extract the long from.
-     * @param name Name of the <meta-data> tag to extract the value from.
-     * @param defaultValue Value to return if long value could not be extracted.
-     * @return long value.
-     */
-    private static long getLongFromMetaData(Bundle metaData, String name, long defaultValue) {
-        String value = metaData.getString(name);
-
-        // The value should be terminated with 'L' to force the value to be a string. According to
-        // https://developer.android.com/guide/topics/manifest/meta-data-element.html numeric
-        // meta data values can only be retrieved via {@link Bundle#getInt()} and
-        // {@link Bundle#getFloat()}. We cannot use {@link Bundle#getFloat()} due to loss of
-        // precision.
-        if (value == null || !value.endsWith("L")) {
-            return defaultValue;
+    private static Bitmap decodeBitmapFromDrawable(Resources webApkResources, int resourceId) {
+        if (resourceId == 0) {
+            return null;
         }
         try {
-            return Long.parseLong(value.substring(0, value.length() - 1));
-        } catch (NumberFormatException e) {
+            BitmapDrawable bitmapDrawable =
+                    (BitmapDrawable) ApiCompatibilityUtils.getDrawable(webApkResources, resourceId);
+            return bitmapDrawable != null ? bitmapDrawable.getBitmap() : null;
+        } catch (Resources.NotFoundException e) {
+            return null;
         }
-        return defaultValue;
     }
 
     /**
@@ -387,5 +557,40 @@ public class WebApkInfo extends WebappInfo {
         } else {
             return ScreenOrientationValues.DEFAULT;
         }
+    }
+
+    /** Returns data about the share intent handlers for the given WebAPK. */
+    private static ShareTarget extractAndMergeShareTargets(String webApkPackageName) {
+        Intent shareIntent = new Intent();
+        shareIntent.setAction(Intent.ACTION_SEND);
+        shareIntent.setPackage(webApkPackageName);
+        shareIntent.setType("text/plain");
+        List<ResolveInfo> resolveInfos =
+                ContextUtils.getApplicationContext().getPackageManager().queryIntentActivities(
+                        shareIntent, PackageManager.GET_META_DATA);
+
+        for (ResolveInfo resolveInfo : resolveInfos) {
+            Bundle shareTargetMetaData = resolveInfo.activityInfo.metaData;
+            if (shareTargetMetaData == null
+                    || WebApkShareTargetUtil.methodFromShareTargetMetaDataIsPost(
+                            shareTargetMetaData)) {
+                continue;
+            }
+
+            return new ShareTarget(
+                    IntentUtils.safeGetString(shareTargetMetaData, WebApkMetaDataKeys.SHARE_ACTION),
+                    IntentUtils.safeGetString(
+                            shareTargetMetaData, WebApkMetaDataKeys.SHARE_PARAM_TITLE),
+                    IntentUtils.safeGetString(
+                            shareTargetMetaData, WebApkMetaDataKeys.SHARE_PARAM_TEXT),
+                    IntentUtils.safeGetString(
+                            shareTargetMetaData, WebApkMetaDataKeys.SHARE_PARAM_URL));
+        }
+        return null;
+    }
+
+    /** Returns the value if it is non-null. Returns an empty string otherwise. */
+    private static String replaceNullWithEmpty(String value) {
+        return (value == null) ? "" : value;
     }
 }

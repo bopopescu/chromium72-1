@@ -9,15 +9,16 @@
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/path_service.h"
-#include "base/task_scheduler/post_task.h"
+#include "base/task/post_task.h"
 #include "base/version.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/common/pref_names.h"
 #include "components/component_updater/component_updater_paths.h"
+#include "components/data_reduction_proxy/core/common/data_reduction_proxy_switches.h"
 #include "components/optimization_guide/optimization_guide_constants.h"
 #include "components/optimization_guide/optimization_guide_service.h"
 #include "components/prefs/pref_service.h"
-#include "components/previews/core/previews_features.h"
+#include "components/previews/core/previews_experiments.h"
 
 using component_updater::ComponentUpdateService;
 
@@ -89,10 +90,10 @@ void OptimizationHintsComponentInstallerPolicy::ComponentReady(
   optimization_guide::OptimizationGuideService* optimization_guide_service =
       g_browser_process->optimization_guide_service();
   if (optimization_guide_service) {
-    optimization_guide::ComponentInfo component_info(
+    optimization_guide::HintsComponentInfo info(
         version,
         install_dir.Append(optimization_guide::kUnindexedHintsFileName));
-    optimization_guide_service->ProcessHints(component_info);
+    optimization_guide_service->MaybeUpdateHintsComponent(info);
   }
 }
 
@@ -133,12 +134,16 @@ OptimizationHintsComponentInstallerPolicy::GetMimeTypes() const {
 
 void RegisterOptimizationHintsComponent(ComponentUpdateService* cus,
                                         PrefService* profile_prefs) {
-  if (!base::FeatureList::IsEnabled(previews::features::kOptimizationHints)) {
+  if (!previews::params::IsOptimizationHintsEnabled()) {
     return;
   }
-  if (!profile_prefs || !profile_prefs->GetBoolean(prefs::kDataSaverEnabled)) {
+
+  bool data_saver_enabled =
+      base::CommandLine::ForCurrentProcess()->HasSwitch(
+          data_reduction_proxy::switches::kEnableDataReductionProxy) ||
+      (profile_prefs && profile_prefs->GetBoolean(prefs::kDataSaverEnabled));
+  if (!data_saver_enabled)
     return;
-  }
   auto installer = base::MakeRefCounted<ComponentInstaller>(
       std::make_unique<OptimizationHintsComponentInstallerPolicy>());
   installer->Register(cus, base::OnceClosure());

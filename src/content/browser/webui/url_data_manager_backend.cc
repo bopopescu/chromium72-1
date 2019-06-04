@@ -8,20 +8,17 @@
 #include <utility>
 
 #include "base/bind.h"
-#include "base/command_line.h"
-#include "base/compiler_specific.h"
-#include "base/debug/alias.h"
-#include "base/lazy_instance.h"
 #include "base/location.h"
 #include "base/macros.h"
+#include "base/memory/ptr_util.h"
 #include "base/memory/ref_counted.h"
 #include "base/memory/ref_counted_memory.h"
-#include "base/memory/weak_ptr.h"
 #include "base/single_thread_task_runner.h"
+#include "base/stl_util.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
-#include "base/task_scheduler/post_task.h"
+#include "base/task/post_task.h"
 #include "base/threading/thread_task_runner_handle.h"
 #include "base/trace_event/trace_event.h"
 #include "content/browser/blob_storage/chrome_blob_storage_context.h"
@@ -31,6 +28,7 @@
 #include "content/browser/webui/url_data_source_impl.h"
 #include "content/browser/webui/web_ui_data_source_impl.h"
 #include "content/public/browser/browser_context.h"
+#include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/content_browser_client.h"
 #include "content/public/browser/render_process_host.h"
@@ -63,7 +61,7 @@ const char kNetworkErrorKey[] = "netError";
 
 bool SchemeIsInSchemes(const std::string& scheme,
                        const std::vector<std::string>& schemes) {
-  return std::find(schemes.begin(), schemes.end(), scheme) != schemes.end();
+  return base::ContainsValue(schemes, scheme);
 }
 
 // Returns a value of 'Origin:' header for the |request| if the header is set.
@@ -119,9 +117,7 @@ class URLRequestChromeJob : public net::URLRequestJob {
     is_gzipped_ = is_gzipped;
   }
 
-  void SetReplacements(const ui::TemplateReplacements* replacements) {
-    replacements_ = replacements;
-  }
+  void SetSource(scoped_refptr<URLDataSourceImpl> source) { source_ = source; }
 
  private:
   ~URLRequestChromeJob() override;
@@ -162,8 +158,10 @@ class URLRequestChromeJob : public net::URLRequestJob {
   // resources in resources.pak use compress="gzip".
   bool is_gzipped_;
 
-  // Replacement dictionary for i18n.
-  const ui::TemplateReplacements* replacements_;
+  // The URLDataSourceImpl that is servicing this request. This is a shared
+  // pointer so that the request can continue to be served even if the source is
+  // detached from the backend that initially owned it.
+  scoped_refptr<URLDataSourceImpl> source_;
 
   // The backend is owned by net::URLRequestContext and always outlives us.
   URLDataManagerBackend* const backend_;
@@ -181,7 +179,6 @@ URLRequestChromeJob::URLRequestChromeJob(net::URLRequest* request,
       data_available_status_(net::OK),
       pending_buf_size_(0),
       is_gzipped_(false),
-      replacements_(nullptr),
       backend_(backend),
       weak_factory_(this) {
   DCHECK(backend);
@@ -199,8 +196,8 @@ void URLRequestChromeJob::Start() {
   // TODO(caseq): Fix the race condition and remove this thread hop in
   // https://crbug.com/616641.
   if (url.SchemeIs(kChromeDevToolsScheme)) {
-    BrowserThread::PostTask(
-        BrowserThread::UI, FROM_HERE,
+    base::PostTaskWithTraits(
+        FROM_HERE, {BrowserThread::UI},
         base::BindOnce(&URLRequestChromeJob::DelayStartForDevTools,
                        weak_factory_.GetWeakPtr()));
     return;
@@ -247,9 +244,20 @@ std::unique_ptr<net::SourceStream> URLRequestChromeJob::SetUpSourceStream() {
                                                   net::SourceStream::TYPE_GZIP);
   }
 
-  if (replacements_) {
+  // The URLRequestJob and the SourceStreams we are creating are owned by the
+  // same parent URLRequest, thus it is safe to pass the replacements via a raw
+  // pointer.
+  const ui::TemplateReplacements* replacements = nullptr;
+  if (source_)
+    replacements = source_->GetReplacements();
+  if (replacements) {
+    // It is safe to pass the raw replacements directly to the source stream, as
+    // both this URLRequestChromeJob and the I18nSourceStream are owned by the
+    // same root URLRequest. The replacements are owned by the URLDataSourceImpl
+    // which we keep alive via |source_|, ensuring its lifetime is also bound
+    // to the safe URLRequest.
     source_stream = ui::I18nSourceStream::Create(
-        std::move(source_stream), net::SourceStream::TYPE_NONE, replacements_);
+        std::move(source_stream), net::SourceStream::TYPE_NONE, replacements);
   }
 
   return source_stream;
@@ -257,12 +265,23 @@ std::unique_ptr<net::SourceStream> URLRequestChromeJob::SetUpSourceStream() {
 
 void URLRequestChromeJob::MimeTypeAvailable(const std::string& mime_type) {
   mime_type_ = mime_type;
-  NotifyHeadersComplete();
 }
 
 void URLRequestChromeJob::DataAvailable(base::RefCountedMemory* bytes) {
   TRACE_EVENT_ASYNC_END0("browser", "DataManager:Request", this);
   DCHECK(!data_);
+
+  if (bytes)
+    set_expected_content_size(bytes->size());
+
+  // We notify headers are complete unusually late for these jobs, because we
+  // need to have |bytes| first to report an accurate expected content size.
+  // Otherwise, we cannot support <video> streaming.
+  NotifyHeadersComplete();
+
+  // The job can be cancelled after sending the headers.
+  if (is_done())
+    return;
 
   // All further requests will be satisfied from the passed-in data.
   data_ = bytes;
@@ -320,8 +339,8 @@ int URLRequestChromeJob::PostReadTask(scoped_refptr<net::IOBuffer> buf,
 
 void URLRequestChromeJob::DelayStartForDevTools(
     const base::WeakPtr<URLRequestChromeJob>& job) {
-  BrowserThread::PostTask(
-      BrowserThread::IO, FROM_HERE,
+  base::PostTaskWithTraits(
+      FROM_HERE, {BrowserThread::IO},
       base::BindOnce(&URLRequestChromeJob::StartAsync, job));
 }
 
@@ -404,18 +423,13 @@ class ChromeProtocolHandler
 }  // namespace
 
 URLDataManagerBackend::URLDataManagerBackend()
-    : next_request_id_(0) {
+    : next_request_id_(0), weak_factory_(this) {
   URLDataSource* shared_source = new SharedResourcesDataSource();
-  URLDataSourceImpl* source_impl =
-      new URLDataSourceImpl(shared_source->GetSource(), shared_source);
-  AddDataSource(source_impl);
+  AddDataSource(new URLDataSourceImpl(shared_source->GetSource(),
+                                      base::WrapUnique(shared_source)));
 }
 
-URLDataManagerBackend::~URLDataManagerBackend() {
-  for (const auto& i : data_sources_)
-    i.second->backend_ = nullptr;
-  data_sources_.clear();
-}
+URLDataManagerBackend::~URLDataManagerBackend() = default;
 
 // static
 std::unique_ptr<net::URLRequestJobFactory::ProtocolHandler>
@@ -430,20 +444,19 @@ URLDataManagerBackend::CreateProtocolHandler(
 void URLDataManagerBackend::AddDataSource(
     URLDataSourceImpl* source) {
   DCHECK_CURRENTLY_ON(BrowserThread::IO);
-  DataSourceMap::iterator i = data_sources_.find(source->source_name());
-  if (i != data_sources_.end()) {
-    if (!source->source()->ShouldReplaceExistingSource())
+  if (!source->source()->ShouldReplaceExistingSource()) {
+    auto i = data_sources_.find(source->source_name());
+    if (i != data_sources_.end())
       return;
-    i->second->backend_ = nullptr;
   }
   data_sources_[source->source_name()] = source;
-  source->backend_ = this;
+  source->backend_ = weak_factory_.GetWeakPtr();
 }
 
 void URLDataManagerBackend::UpdateWebUIDataSource(
     const std::string& source_name,
     const base::DictionaryValue& update) {
-  DataSourceMap::iterator it = data_sources_.find(source_name);
+  auto it = data_sources_.find(source_name);
   if (it == data_sources_.end() || !it->second->IsWebUIDataSourceImpl()) {
     NOTREACHED();
     return;
@@ -454,8 +467,7 @@ void URLDataManagerBackend::UpdateWebUIDataSource(
 
 bool URLDataManagerBackend::HasPendingJob(
     URLRequestChromeJob* job) const {
-  for (PendingRequestMap::const_iterator i = pending_requests_.begin();
-       i != pending_requests_.end(); ++i) {
+  for (auto i = pending_requests_.begin(); i != pending_requests_.end(); ++i) {
     if (i->second == job)
       return true;
   }
@@ -493,9 +505,8 @@ bool URLDataManagerBackend::StartRequest(const net::URLRequest* request,
   // replacements upon.
   std::string mime_type = source->source()->GetMimeType(path);
   if (mime_type == "text/html")
-    job->SetReplacements(source->GetReplacements());
+    job->SetSource(source);
 
-  // Also notifies that the headers are complete.
   job->MimeTypeAvailable(mime_type);
 
   // Look up additional request info to pass down.
@@ -528,7 +539,7 @@ URLDataSourceImpl* URLDataManagerBackend::GetDataSourceFromURL(
     const GURL& url) {
   // The input usually looks like: chrome://source_name/extra_bits?foo
   // so do a lookup using the host of the URL.
-  DataSourceMap::iterator i = data_sources_.find(url.host());
+  auto i = data_sources_.find(url.host());
   if (i != data_sources_.end())
     return i->second.get();
 
@@ -557,8 +568,7 @@ void URLDataManagerBackend::RemoveRequest(URLRequestChromeJob* job) {
   // Remove the request from our list of pending requests.
   // If/when the source sends the data that was requested, the data will just
   // be thrown away.
-  for (PendingRequestMap::iterator i = pending_requests_.begin();
-       i != pending_requests_.end(); ++i) {
+  for (auto i = pending_requests_.begin(); i != pending_requests_.end(); ++i) {
     if (i->second == job) {
       pending_requests_.erase(i);
       return;
@@ -569,7 +579,7 @@ void URLDataManagerBackend::RemoveRequest(URLRequestChromeJob* job) {
 void URLDataManagerBackend::DataAvailable(RequestID request_id,
                                           base::RefCountedMemory* bytes) {
   // Forward this data on to the pending net::URLRequest, if it exists.
-  PendingRequestMap::iterator i = pending_requests_.find(request_id);
+  auto i = pending_requests_.find(request_id);
   if (i != pending_requests_.end()) {
     URLRequestChromeJob* job = i->second;
     pending_requests_.erase(i);
@@ -584,8 +594,8 @@ scoped_refptr<net::HttpResponseHeaders> URLDataManagerBackend::GetHeaders(
   // Set the headers so that requests serviced by ChromeURLDataManager return a
   // status code of 200. Without this they return a 0, which makes the status
   // indistiguishable from other error types. Instant relies on getting a 200.
-  scoped_refptr<net::HttpResponseHeaders> headers(
-      new net::HttpResponseHeaders("HTTP/1.1 200 OK"));
+  auto headers =
+      base::MakeRefCounted<net::HttpResponseHeaders>("HTTP/1.1 200 OK");
   if (!source_impl)
     return headers;
 

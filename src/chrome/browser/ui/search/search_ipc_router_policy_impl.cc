@@ -9,9 +9,8 @@
 #include "content/public/browser/web_contents.h"
 
 SearchIPCRouterPolicyImpl::SearchIPCRouterPolicyImpl(
-    const content::WebContents* web_contents)
-    : web_contents_(web_contents),
-      is_incognito_(true) {
+    content::WebContents* web_contents)
+    : web_contents_(web_contents), is_incognito_(true) {
   DCHECK(web_contents);
 
   Profile* profile =
@@ -35,6 +34,30 @@ bool SearchIPCRouterPolicyImpl::ShouldProcessUndoMostVisitedDeletion() {
 }
 
 bool SearchIPCRouterPolicyImpl::ShouldProcessUndoAllMostVisitedDeletions() {
+  return !is_incognito_ && search::IsInstantNTP(web_contents_);
+}
+
+bool SearchIPCRouterPolicyImpl::ShouldProcessAddCustomLink() {
+  return !is_incognito_ && search::IsInstantNTP(web_contents_);
+}
+
+bool SearchIPCRouterPolicyImpl::ShouldProcessUpdateCustomLink() {
+  return !is_incognito_ && search::IsInstantNTP(web_contents_);
+}
+
+bool SearchIPCRouterPolicyImpl::ShouldProcessReorderCustomLink() {
+  return !is_incognito_ && search::IsInstantNTP(web_contents_);
+}
+
+bool SearchIPCRouterPolicyImpl::ShouldProcessDeleteCustomLink() {
+  return !is_incognito_ && search::IsInstantNTP(web_contents_);
+}
+
+bool SearchIPCRouterPolicyImpl::ShouldProcessUndoCustomLinkAction() {
+  return !is_incognito_ && search::IsInstantNTP(web_contents_);
+}
+
+bool SearchIPCRouterPolicyImpl::ShouldProcessResetCustomLinks() {
   return !is_incognito_ && search::IsInstantNTP(web_contents_);
 }
 
@@ -72,6 +95,15 @@ bool SearchIPCRouterPolicyImpl::ShouldSendThemeBackgroundInfo() {
   return !is_incognito_ && search::IsInstantNTP(web_contents_);
 }
 
+bool SearchIPCRouterPolicyImpl::ShouldProcessSelectLocalBackgroundImage() {
+  return !is_incognito_ && search::IsInstantNTP(web_contents_);
+}
+
 bool SearchIPCRouterPolicyImpl::ShouldProcessSetCustomBackgroundURL() {
+  return !is_incognito_ && search::IsInstantNTP(web_contents_);
+}
+
+bool SearchIPCRouterPolicyImpl::
+    ShouldProcessSetCustomBackgroundURLWithAttributions() {
   return !is_incognito_ && search::IsInstantNTP(web_contents_);
 }

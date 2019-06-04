@@ -8,13 +8,15 @@
 #include "net/third_party/quic/core/quic_session.h"
 #include "net/third_party/quic/core/quic_stream.h"
 #include "net/third_party/quic/platform/api/quic_export.h"
-#include "net/third_party/quic/quartc/quartc_stream_interface.h"
+#include "net/third_party/quic/platform/api/quic_mem_slice_span.h"
 
-namespace net {
+namespace quic {
 
-// Implements a QuartcStreamInterface using a QuicStream.
-class QUIC_EXPORT_PRIVATE QuartcStream : public QuicStream,
-                                         public QuartcStreamInterface {
+// Sends and receives data with a particular QUIC stream ID, reliably and
+// in-order. To send/receive data out of order, use separate streams. To
+// send/receive unreliably, close a stream after reliability is no longer
+// needed.
+class QUIC_EXPORT_PRIVATE QuartcStream : public QuicStream {
  public:
   QuartcStream(QuicStreamId id, QuicSession* session);
 
@@ -33,29 +35,86 @@ class QUIC_EXPORT_PRIVATE QuartcStream : public QuicStream,
       const QuicReferenceCountedPointer<QuicAckListenerInterface>& ack_listener)
       override;
 
-  // QuartcStreamInterface overrides.
-  uint32_t stream_id() override;
+  void OnStreamFrameRetransmitted(QuicStreamOffset offset,
+                                  QuicByteCount data_length,
+                                  bool fin_retransmitted) override;
 
-  uint64_t bytes_buffered() override;
+  void OnStreamFrameLost(QuicStreamOffset offset,
+                         QuicByteCount data_length,
+                         bool fin_lost) override;
 
-  bool fin_sent() override;
+  void OnCanWrite() override;
 
-  int stream_error() override;
+  // QuartcStream interface methods.
 
-  void Write(QuicMemSliceSpan data, const WriteParameters& param) override;
+  // Whether the stream should be cancelled instead of retransmitted on loss.
+  // If set to true, the stream will reset itself instead of retransmitting lost
+  // stream frames.  Defaults to false.  Setting it to true is equivalent to
+  // setting |max_frame_retransmission_count| to zero.
+  bool cancel_on_loss();
+  void set_cancel_on_loss(bool cancel_on_loss);
 
-  void FinishWriting() override;
+  // Maximum number of stream frames which may be retransmitted.  Up to this
+  // number of stream frames may be retransmitted.  If any stream frames in
+  // excess of this amount would be retransmitted, the stream will reset itself.
+  // Setting it to zero disables retransmissions.
+  //
+  // Ideally, the stream would support a maximum retransmission count per frame,
+  // allowing each frame to be retransmitted up to N times.  However, this
+  // requires complex bookkeeping (tracking retransmission count on a per-frame
+  // basis).  This feature provides a simple way to limit retransmissions on
+  // streams that are expected to fit within one frame (eg. small messages).
+  int max_frame_retransmission_count() const;
+  void set_max_frame_retransmission_count(int max_frame_retransmission_count);
 
-  void FinishReading() override;
+  QuicByteCount BytesPendingRetransmission();
 
-  void Close() override;
+  // Marks this stream as finished writing.  Asynchronously sends a FIN and
+  // closes the write-side.  It is not necessary to call FinishWriting() if the
+  // last call to Write() sends a FIN.
+  void FinishWriting();
 
-  void SetDelegate(QuartcStreamInterface::Delegate* delegate) override;
+  // Implemented by the user of the QuartcStream to receive incoming
+  // data and be notified of state changes.
+  class Delegate {
+   public:
+    virtual ~Delegate() {}
+
+    // Called when the stream receives data. |iov| is a pointer to the first of
+    // |iov_length| readable regions. |iov| points to readable data within
+    // |stream|'s sequencer buffer. QUIC may modify or delete this data after
+    // the application consumes it. |fin| indicates the end of stream data.
+    // Returns the number of bytes consumed. May return 0 if the delegate is
+    // unable to consume any bytes at this time.
+    virtual size_t OnReceived(QuartcStream* stream,
+                              iovec* iov,
+                              size_t iov_length,
+                              bool fin) = 0;
+
+    // Called when the stream is closed, either locally or by the remote
+    // endpoint.  Streams close when (a) fin bits are both sent and received,
+    // (b) Close() is called, or (c) the stream is reset.
+    // TODO(zhihuang) Creates a map from the integer error_code to WebRTC native
+    // error code.
+    virtual void OnClose(QuartcStream* stream) = 0;
+
+    // Called when the contents of the stream's buffer changes.
+    virtual void OnBufferChanged(QuartcStream* stream) = 0;
+  };
+
+  // The |delegate| is not owned by QuartcStream.
+  void SetDelegate(Delegate* delegate);
 
  private:
-  QuartcStreamInterface::Delegate* delegate_ = nullptr;
+  Delegate* delegate_ = nullptr;
+
+  // Maximum number of frames which may be retransmitted on this stream.
+  int max_frame_retransmission_count_ = std::numeric_limits<int>::max();
+
+  // Total number of stream frames detected as lost.
+  int total_frames_lost_ = 0;
 };
 
-}  // namespace net
+}  // namespace quic
 
 #endif  // NET_THIRD_PARTY_QUIC_QUARTC_QUARTC_STREAM_H_

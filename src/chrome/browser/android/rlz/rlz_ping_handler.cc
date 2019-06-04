@@ -4,6 +4,8 @@
 
 #include "chrome/browser/android/rlz/rlz_ping_handler.h"
 
+#include <utility>
+
 #include "base/android/callback_android.h"
 #include "base/android/jni_android.h"
 #include "base/android/jni_string.h"
@@ -55,7 +57,7 @@ void RlzPingHandler::Ping(
     const base::android::JavaParamRef<jstring>& j_id,
     const base::android::JavaParamRef<jobject>& j_callback) {
   if (!j_brand || !j_language || !j_events || !j_id || !j_callback) {
-    base::android::RunCallbackAndroid(j_callback, false);
+    base::android::RunBooleanCallbackAndroid(j_callback, false);
     delete this;
     return;
   }
@@ -111,9 +113,8 @@ void RlzPingHandler::Ping(
 
   auto resource_request = std::make_unique<network::ResourceRequest>();
   resource_request->url = request_url;
-  resource_request->load_flags =
-      net::LOAD_DISABLE_CACHE | net::LOAD_DO_NOT_SEND_AUTH_DATA |
-      net::LOAD_DO_NOT_SEND_COOKIES | net::LOAD_DO_NOT_SAVE_COOKIES;
+  resource_request->load_flags = net::LOAD_DISABLE_CACHE;
+  resource_request->allow_credentials = false;
 
   simple_url_loader_ = network::SimpleURLLoader::Create(
       std::move(resource_request), traffic_annotation);
@@ -146,7 +147,7 @@ void RlzPingHandler::OnSimpleLoaderComplete(
 
   // TODO(yusufo) : Investigate what else can be checked for validity that is
   // specific to the ping
-  base::android::RunCallbackAndroid(j_callback_, valid);
+  base::android::RunBooleanCallbackAndroid(j_callback_, valid);
   delete this;
 }
 

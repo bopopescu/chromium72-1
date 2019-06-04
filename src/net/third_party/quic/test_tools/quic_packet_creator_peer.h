@@ -8,7 +8,7 @@
 #include "base/macros.h"
 #include "net/third_party/quic/core/quic_packets.h"
 
-namespace net {
+namespace quic {
 class QuicFramer;
 class QuicPacketCreator;
 
@@ -16,6 +16,8 @@ namespace test {
 
 class QuicPacketCreatorPeer {
  public:
+  QuicPacketCreatorPeer() = delete;
+
   static bool SendVersionInPacket(QuicPacketCreator* creator);
 
   static void SetSendVersionInPacket(QuicPacketCreator* creator,
@@ -41,15 +43,16 @@ class QuicPacketCreatorPeer {
                                              size_t buffer_len);
   static OwningSerializedPacketPointer SerializeConnectivityProbingPacket(
       QuicPacketCreator* creator);
+  static OwningSerializedPacketPointer
+  SerializePathChallengeConnectivityProbingPacket(QuicPacketCreator* creator,
+                                                  QuicPathFrameBuffer* payload);
+
   static EncryptionLevel GetEncryptionLevel(QuicPacketCreator* creator);
   static QuicFramer* framer(QuicPacketCreator* creator);
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(QuicPacketCreatorPeer);
 };
 
 }  // namespace test
 
-}  // namespace net
+}  // namespace quic
 
 #endif  // NET_THIRD_PARTY_QUIC_TEST_TOOLS_QUIC_PACKET_CREATOR_PEER_H_

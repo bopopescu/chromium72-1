@@ -14,7 +14,6 @@
 #include "content/shell/test_runner/accessibility_controller.h"
 #include "content/shell/test_runner/event_sender.h"
 #include "content/shell/test_runner/mock_screen_orientation_client.h"
-#include "content/shell/test_runner/mock_web_speech_recognizer.h"
 #include "content/shell/test_runner/test_common.h"
 #include "content/shell/test_runner/test_interfaces.h"
 #include "content/shell/test_runner/test_plugin.h"
@@ -37,36 +36,13 @@
 #include "third_party/blink/public/web/web_plugin_params.h"
 #include "third_party/blink/public/web/web_user_gesture_indicator.h"
 #include "third_party/blink/public/web/web_view.h"
+#include "ui/accessibility/ax_enums.mojom.h"
 #include "url/gurl.h"
 #include "url/url_constants.h"
 
 namespace test_runner {
 
 namespace {
-
-void PrintFrameDescription(WebTestDelegate* delegate,
-                           blink::WebLocalFrame* frame) {
-  std::string name = content::GetFrameNameForLayoutTests(frame);
-  if (frame == frame->View()->MainFrame()) {
-    DCHECK(name.empty());
-    delegate->PrintMessage("main frame");
-    return;
-  }
-  if (name.empty()) {
-    delegate->PrintMessage("frame (anonymous)");
-    return;
-  }
-  delegate->PrintMessage(std::string("frame \"") + name + "\"");
-}
-
-void PrintFrameuserGestureStatus(WebTestDelegate* delegate,
-                                 blink::WebLocalFrame* frame,
-                                 const char* msg) {
-  bool is_user_gesture =
-      blink::WebUserGestureIndicator::IsProcessingUserGesture(frame);
-  delegate->PrintMessage(std::string("Frame with user gesture \"") +
-                         (is_user_gesture ? "true" : "false") + "\"" + msg);
-}
 
 // Used to write a platform neutral file:/// URL by taking the
 // filename and its directory. (e.g., converts
@@ -143,7 +119,6 @@ const char* kBackForwardString = "back/forward";
 const char* kReloadString = "reload";
 const char* kFormResubmittedString = "form resubmitted";
 const char* kOtherString = "other";
-const char* kIllegalString = "illegal value";
 
 // Get a debugging string from a WebNavigationType.
 const char* WebNavigationTypeToString(blink::WebNavigationType type) {
@@ -180,6 +155,22 @@ WebFrameTestClient::WebFrameTestClient(
 
 WebFrameTestClient::~WebFrameTestClient() {}
 
+// static
+void WebFrameTestClient::PrintFrameDescription(WebTestDelegate* delegate,
+                                               blink::WebLocalFrame* frame) {
+  std::string name = content::GetFrameNameForLayoutTests(frame);
+  if (frame == frame->View()->MainFrame()) {
+    DCHECK(name.empty());
+    delegate->PrintMessage("main frame");
+    return;
+  }
+  if (name.empty()) {
+    delegate->PrintMessage("frame (anonymous)");
+    return;
+  }
+  delegate->PrintMessage(std::string("frame \"") + name + "\"");
+}
+
 void WebFrameTestClient::RunModalAlertDialog(const blink::WebString& message) {
   if (!test_runner()->ShouldDumpJavaScriptDialogs())
     return;
@@ -215,8 +206,107 @@ bool WebFrameTestClient::RunModalBeforeUnloadDialog(bool is_reload) {
 }
 
 void WebFrameTestClient::PostAccessibilityEvent(const blink::WebAXObject& obj,
-                                                blink::WebAXEvent event) {
-  // Only hook the accessibility events occured during the test run.
+                                                ax::mojom::Event event) {
+  const char* event_name = nullptr;
+  switch (event) {
+    case ax::mojom::Event::kActiveDescendantChanged:
+      event_name = "ActiveDescendantChanged";
+      break;
+    case ax::mojom::Event::kAriaAttributeChanged:
+      event_name = "AriaAttributeChanged";
+      break;
+    case ax::mojom::Event::kAutocorrectionOccured:
+      event_name = "AutocorrectionOccured";
+      break;
+    case ax::mojom::Event::kBlur:
+      event_name = "Blur";
+      break;
+    case ax::mojom::Event::kCheckedStateChanged:
+      event_name = "CheckedStateChanged";
+      break;
+    case ax::mojom::Event::kChildrenChanged:
+      event_name = "ChildrenChanged";
+      break;
+    case ax::mojom::Event::kClicked:
+      event_name = "Clicked";
+      break;
+    case ax::mojom::Event::kDocumentSelectionChanged:
+      event_name = "DocumentSelectionChanged";
+      break;
+    case ax::mojom::Event::kDocumentTitleChanged:
+      event_name = "DocumentTitleChanged";
+      break;
+    case ax::mojom::Event::kFocus:
+      event_name = "Focus";
+      break;
+    case ax::mojom::Event::kHover:
+      event_name = "Hover";
+      break;
+    case ax::mojom::Event::kInvalidStatusChanged:
+      event_name = "InvalidStatusChanged";
+      break;
+    case ax::mojom::Event::kLayoutComplete:
+      event_name = "LayoutComplete";
+      break;
+    case ax::mojom::Event::kLiveRegionChanged:
+      event_name = "LiveRegionChanged";
+      break;
+    case ax::mojom::Event::kLoadComplete:
+      event_name = "LoadComplete";
+      break;
+    case ax::mojom::Event::kLocationChanged:
+      event_name = "LocationChanged";
+      break;
+    case ax::mojom::Event::kMenuListItemSelected:
+      event_name = "MenuListItemSelected";
+      break;
+    case ax::mojom::Event::kMenuListValueChanged:
+      event_name = "MenuListValueChanged";
+      break;
+    case ax::mojom::Event::kRowCollapsed:
+      event_name = "RowCollapsed";
+      break;
+    case ax::mojom::Event::kRowCountChanged:
+      event_name = "RowCountChanged";
+      break;
+    case ax::mojom::Event::kRowExpanded:
+      event_name = "RowExpanded";
+      break;
+    case ax::mojom::Event::kScrollPositionChanged:
+      event_name = "ScrollPositionChanged";
+      break;
+    case ax::mojom::Event::kScrolledToAnchor:
+      event_name = "ScrolledToAnchor";
+      break;
+    case ax::mojom::Event::kSelectedChildrenChanged:
+      event_name = "SelectedChildrenChanged";
+      break;
+    case ax::mojom::Event::kTextSelectionChanged:
+      event_name = "SelectedTextChanged";
+      break;
+    case ax::mojom::Event::kTextChanged:
+      event_name = "TextChanged";
+      break;
+    case ax::mojom::Event::kValueChanged:
+      event_name = "ValueChanged";
+      break;
+    default:
+      event_name = "Unknown";
+      break;
+  }
+
+  HandleWebAccessibilityEvent(obj, event_name);
+}
+
+void WebFrameTestClient::MarkWebAXObjectDirty(const blink::WebAXObject& obj,
+                                              bool subtree) {
+  HandleWebAccessibilityEvent(obj, "MarkDirty");
+}
+
+void WebFrameTestClient::HandleWebAccessibilityEvent(
+    const blink::WebAXObject& obj,
+    const char* event_name) {
+  // Only hook the accessibility events that occurred during the test run.
   // This check prevents false positives in BlinkLeakDetector.
   // The pending tasks in browser/renderer message queue may trigger
   // accessibility events,
@@ -224,100 +314,6 @@ void WebFrameTestClient::PostAccessibilityEvent(const blink::WebAXObject& obj,
   // ignore them here.
   if (!test_runner()->TestIsRunning())
     return;
-
-  const char* event_name = nullptr;
-  switch (event) {
-    case blink::kWebAXEventActiveDescendantChanged:
-      event_name = "ActiveDescendantChanged";
-      break;
-    case blink::kWebAXEventAriaAttributeChanged:
-      event_name = "AriaAttributeChanged";
-      break;
-    case blink::kWebAXEventAutocorrectionOccured:
-      event_name = "AutocorrectionOccured";
-      break;
-    case blink::kWebAXEventBlur:
-      event_name = "Blur";
-      break;
-    case blink::kWebAXEventCheckedStateChanged:
-      event_name = "CheckedStateChanged";
-      break;
-    case blink::kWebAXEventChildrenChanged:
-      event_name = "ChildrenChanged";
-      break;
-    case blink::kWebAXEventClicked:
-      event_name = "Clicked";
-      break;
-    case blink::kWebAXEventDocumentSelectionChanged:
-      event_name = "DocumentSelectionChanged";
-      break;
-    case blink::kWebAXEventFocus:
-      event_name = "Focus";
-      break;
-    case blink::kWebAXEventHide:
-      event_name = "Hide";
-      break;
-    case blink::kWebAXEventHover:
-      event_name = "Hover";
-      break;
-    case blink::kWebAXEventInvalidStatusChanged:
-      event_name = "InvalidStatusChanged";
-      break;
-    case blink::kWebAXEventLayoutComplete:
-      event_name = "LayoutComplete";
-      break;
-    case blink::kWebAXEventLiveRegionChanged:
-      event_name = "LiveRegionChanged";
-      break;
-    case blink::kWebAXEventLoadComplete:
-      event_name = "LoadComplete";
-      break;
-    case blink::kWebAXEventLocationChanged:
-      event_name = "LocationChanged";
-      break;
-    case blink::kWebAXEventMenuListItemSelected:
-      event_name = "MenuListItemSelected";
-      break;
-    case blink::kWebAXEventMenuListItemUnselected:
-      event_name = "MenuListItemUnselected";
-      break;
-    case blink::kWebAXEventMenuListValueChanged:
-      event_name = "MenuListValueChanged";
-      break;
-    case blink::kWebAXEventRowCollapsed:
-      event_name = "RowCollapsed";
-      break;
-    case blink::kWebAXEventRowCountChanged:
-      event_name = "RowCountChanged";
-      break;
-    case blink::kWebAXEventRowExpanded:
-      event_name = "RowExpanded";
-      break;
-    case blink::kWebAXEventScrollPositionChanged:
-      event_name = "ScrollPositionChanged";
-      break;
-    case blink::kWebAXEventScrolledToAnchor:
-      event_name = "ScrolledToAnchor";
-      break;
-    case blink::kWebAXEventSelectedChildrenChanged:
-      event_name = "SelectedChildrenChanged";
-      break;
-    case blink::kWebAXEventSelectedTextChanged:
-      event_name = "SelectedTextChanged";
-      break;
-    case blink::kWebAXEventShow:
-      event_name = "Show";
-      break;
-    case blink::kWebAXEventTextChanged:
-      event_name = "TextChanged";
-      break;
-    case blink::kWebAXEventValueChanged:
-      event_name = "ValueChanged";
-      break;
-    default:
-      event_name = "Unknown";
-      break;
-  }
 
   AccessibilityController* accessibility_controller =
       web_view_test_proxy_base_->accessibility_controller();
@@ -369,78 +365,12 @@ void WebFrameTestClient::ShowContextMenu(
 
 void WebFrameTestClient::DownloadURL(
     const blink::WebURLRequest& request,
+    blink::WebLocalFrameClient::CrossOriginRedirects
+        cross_origin_redirect_behavior,
     mojo::ScopedMessagePipeHandle blob_url_token) {
   if (test_runner()->shouldWaitUntilExternalURLLoad()) {
     delegate_->PrintMessage(std::string("Download started\n"));
     delegate_->TestFinished();
-  }
-}
-
-void WebFrameTestClient::LoadErrorPage(int reason) {
-  if (test_runner()->shouldDumpFrameLoadCallbacks()) {
-    delegate_->PrintMessage(base::StringPrintf(
-        "- loadErrorPage: %s\n", net::ErrorToString(reason).c_str()));
-  }
-}
-
-void WebFrameTestClient::DidStartProvisionalLoad(
-    blink::WebDocumentLoader* document_loader,
-    blink::WebURLRequest& request) {
-  // PlzNavigate
-  // A provisional load notification is received when a frame navigation is
-  // sent to the browser. We don't want to log it again during commit.
-  if (delegate_->IsNavigationInitiatedByRenderer(request))
-    return;
-
-  test_runner()->tryToSetTopLoadingFrame(
-      web_frame_test_proxy_base_->web_frame());
-
-  if (test_runner()->shouldDumpFrameLoadCallbacks()) {
-    PrintFrameDescription(delegate_, web_frame_test_proxy_base_->web_frame());
-    delegate_->PrintMessage(" - didStartProvisionalLoadForFrame\n");
-  }
-
-  if (test_runner()->shouldDumpUserGestureInFrameLoadCallbacks()) {
-    PrintFrameuserGestureStatus(delegate_,
-                                web_frame_test_proxy_base_->web_frame(),
-                                " - in didStartProvisionalLoadForFrame\n");
-  }
-}
-
-void WebFrameTestClient::DidReceiveServerRedirectForProvisionalLoad() {
-  if (test_runner()->shouldDumpFrameLoadCallbacks()) {
-    PrintFrameDescription(delegate_, web_frame_test_proxy_base_->web_frame());
-    delegate_->PrintMessage(
-        " - didReceiveServerRedirectForProvisionalLoadForFrame\n");
-  }
-}
-
-void WebFrameTestClient::DidFailProvisionalLoad(
-    const blink::WebURLError& error,
-    blink::WebHistoryCommitType commit_type) {
-  if (test_runner()->shouldDumpFrameLoadCallbacks()) {
-    PrintFrameDescription(delegate_, web_frame_test_proxy_base_->web_frame());
-    delegate_->PrintMessage(" - didFailProvisionalLoadWithError\n");
-  }
-}
-
-void WebFrameTestClient::DidCommitProvisionalLoad(
-    const blink::WebHistoryItem& history_item,
-    blink::WebHistoryCommitType history_type,
-    blink::WebGlobalObjectReusePolicy) {
-  if (test_runner()->shouldDumpFrameLoadCallbacks()) {
-    PrintFrameDescription(delegate_, web_frame_test_proxy_base_->web_frame());
-    delegate_->PrintMessage(" - didCommitLoadForFrame\n");
-  }
-}
-
-void WebFrameTestClient::DidFinishSameDocumentNavigation(
-    const blink::WebHistoryItem& history_item,
-    blink::WebHistoryCommitType history_type,
-    bool content_initiated) {
-  if (test_runner()->shouldDumpFrameLoadCallbacks()) {
-    PrintFrameDescription(delegate_, web_frame_test_proxy_base_->web_frame());
-    delegate_->PrintMessage(" - didCommitLoadForFrame\n");
   }
 }
 
@@ -465,20 +395,6 @@ void WebFrameTestClient::DidChangeIcon(blink::WebIconURL::Type icon_type) {
   }
 }
 
-void WebFrameTestClient::DidFinishDocumentLoad() {
-  if (test_runner()->shouldDumpFrameLoadCallbacks()) {
-    PrintFrameDescription(delegate_, web_frame_test_proxy_base_->web_frame());
-    delegate_->PrintMessage(" - didFinishDocumentLoadForFrame\n");
-  }
-}
-
-void WebFrameTestClient::DidHandleOnloadEvents() {
-  if (test_runner()->shouldDumpFrameLoadCallbacks()) {
-    PrintFrameDescription(delegate_, web_frame_test_proxy_base_->web_frame());
-    delegate_->PrintMessage(" - didHandleOnloadEventsForFrame\n");
-  }
-}
-
 void WebFrameTestClient::DidFailLoad(const blink::WebURLError& error,
                                      blink::WebHistoryCommitType commit_type) {
   if (test_runner()->shouldDumpFrameLoadCallbacks()) {
@@ -487,22 +403,14 @@ void WebFrameTestClient::DidFailLoad(const blink::WebURLError& error,
   }
 }
 
-void WebFrameTestClient::DidFinishLoad() {
-  if (test_runner()->shouldDumpFrameLoadCallbacks()) {
-    PrintFrameDescription(delegate_, web_frame_test_proxy_base_->web_frame());
-    delegate_->PrintMessage(" - didFinishLoadForFrame\n");
-  }
+void WebFrameTestClient::DidStartLoading() {
+  test_runner()->tryToSetTopLoadingFrame(
+      web_frame_test_proxy_base_->web_frame());
 }
 
 void WebFrameTestClient::DidStopLoading() {
   test_runner()->tryToClearTopLoadingFrame(
       web_frame_test_proxy_base_->web_frame());
-}
-
-void WebFrameTestClient::DidDetectXSS(const blink::WebURL& insecure_url,
-                                      bool did_block_entire_page) {
-  if (test_runner()->shouldDumpFrameLoadCallbacks())
-    delegate_->PrintMessage("didDetectXSS\n");
 }
 
 void WebFrameTestClient::DidDispatchPingLoader(const blink::WebURL& url) {
@@ -610,7 +518,10 @@ void WebFrameTestClient::DidAddMessageToConsole(
       level = "MESSAGE";
   }
   std::string console_message(std::string("CONSOLE ") + level + ": ");
-  if (source_line) {
+  // Do not print line numbers if there is no associated source file name.
+  // TODO(crbug.com/896194): Figure out why the source line is flaky for empty
+  // source names.
+  if (!source_name.IsEmpty() && source_line) {
     console_message += base::StringPrintf("line %d: ", source_line);
   }
   // Console messages shouldn't be included in the expected output for
@@ -637,58 +548,43 @@ void WebFrameTestClient::DidAddMessageToConsole(
   }
 }
 
-blink::WebNavigationPolicy WebFrameTestClient::DecidePolicyForNavigation(
-    const blink::WebFrameClient::NavigationPolicyInfo& info) {
-  // PlzNavigate
-  // Navigation requests initiated by the renderer have checked navigation
-  // policy when the navigation was sent to the browser. Some layout tests
-  // expect that navigation policy is only checked once.
-  if (delegate_->IsNavigationInitiatedByRenderer(info.url_request))
-    return info.default_policy;
+bool WebFrameTestClient::ShouldContinueNavigation(
+    const blink::WebNavigationInfo& info) {
+  DCHECK(!delegate_->IsNavigationInitiatedByRenderer(info.url_request));
 
   if (test_runner()->shouldDumpNavigationPolicy()) {
-    delegate_->PrintMessage("Default policy for navigation to '" +
-                            URLDescription(info.url_request.Url()) + "' is '" +
-                            WebNavigationPolicyToString(info.default_policy) +
-                            "'\n");
+    delegate_->PrintMessage(
+        "Default policy for navigation to '" +
+        URLDescription(info.url_request.Url()) + "' is '" +
+        WebNavigationPolicyToString(info.navigation_policy) + "'\n");
   }
 
-  blink::WebNavigationPolicy result;
   if (!test_runner()->policyDelegateEnabled())
-    return info.default_policy;
+    return true;
 
   delegate_->PrintMessage(
       std::string("Policy delegate: attempt to load ") +
       URLDescription(info.url_request.Url()) + " with navigation type '" +
       WebNavigationTypeToString(info.navigation_type) + "'\n");
-  if (test_runner()->policyDelegateIsPermissive())
-    result = blink::kWebNavigationPolicyCurrentTab;
-  else
-    result = blink::kWebNavigationPolicyIgnore;
 
+  bool should_continue = test_runner()->policyDelegateIsPermissive();
   if (test_runner()->policyDelegateShouldNotifyDone()) {
     test_runner()->policyDelegateDone();
-    result = blink::kWebNavigationPolicyIgnore;
+    should_continue = false;
   }
-
-  return result;
+  return should_continue;
 }
 
 void WebFrameTestClient::CheckIfAudioSinkExistsAndIsAuthorized(
     const blink::WebString& sink_id,
-    blink::WebSetSinkIdCallbacks* web_callbacks) {
-  std::unique_ptr<blink::WebSetSinkIdCallbacks> callback(web_callbacks);
+    std::unique_ptr<blink::WebSetSinkIdCallbacks> web_callbacks) {
   std::string device_id = sink_id.Utf8();
   if (device_id == "valid" || device_id.empty())
-    callback->OnSuccess();
+    web_callbacks->OnSuccess();
   else if (device_id == "unauthorized")
-    callback->OnError(blink::WebSetSinkIdError::kNotAuthorized);
+    web_callbacks->OnError(blink::WebSetSinkIdError::kNotAuthorized);
   else
-    callback->OnError(blink::WebSetSinkIdError::kNotFound);
-}
-
-blink::WebSpeechRecognizer* WebFrameTestClient::SpeechRecognizer() {
-  return test_runner()->getMockWebSpeechRecognizer();
+    web_callbacks->OnError(blink::WebSetSinkIdError::kNotFound);
 }
 
 void WebFrameTestClient::DidClearWindowObject() {
@@ -696,14 +592,6 @@ void WebFrameTestClient::DidClearWindowObject() {
   web_view_test_proxy_base_->test_interfaces()->BindTo(frame);
   web_view_test_proxy_base_->BindTo(frame);
   delegate_->GetWebWidgetTestProxyBase(frame)->BindTo(frame);
-}
-
-bool WebFrameTestClient::RunFileChooser(
-    const blink::WebFileChooserParams& params,
-    blink::WebFileChooserCompletion* completion) {
-  delegate_->PrintMessage("Mock: Opening a file chooser.\n");
-  // FIXME: Add ability to set file names to a file upload control.
-  return false;
 }
 
 blink::WebEffectiveConnectionType

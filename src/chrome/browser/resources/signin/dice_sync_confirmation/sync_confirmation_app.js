@@ -5,21 +5,11 @@
 Polymer({
   is: 'sync-confirmation-app',
 
+  behaviors: [
+    WebUIListenerBehavior,
+  ],
+
   properties: {
-    /** @private */
-    isConsentBump_: {
-      type: Boolean,
-      value: function() {
-        return window.location.search.includes('consent-bump');
-      },
-    },
-
-    /** @private */
-    showMoreOptions_: {
-      type: Boolean,
-      value: false,
-    },
-
     /** @private */
     accountImageSrc_: {
       type: String,
@@ -44,6 +34,9 @@ Polymer({
     // window opens initially, the focus level is only on document, so the key
     // event is not captured by "this".
     document.addEventListener('keydown', this.boundKeyDownHandler_);
+    this.addWebUIListener(
+        'account-image-changed', this.handleAccountImageChanged_.bind(this));
+    this.syncConfirmationBrowserProxy_.requestAccountImage();
   },
 
   /** @override */
@@ -84,8 +77,10 @@ Polymer({
    */
   getConsentConfirmation_: function(path) {
     for (var element of path) {
-      if (element.hasAttribute('consent-confirmation'))
+      if (element.nodeType !== Node.DOCUMENT_FRAGMENT_NODE &&
+          element.hasAttribute('consent-confirmation')) {
         return element.innerHTML.trim();
+      }
     }
     assertNotReached('No consent confirmation element found.');
     return '';
@@ -101,30 +96,13 @@ Polymer({
     return consentDescription;
   },
 
-  /** @private */
-  onOK_: function(e) {
-    switch (this.$$('paper-radio-group').selected) {
-      case 'reviewSettings':
-        this.onGoToSettings_(e);
-        break;
-      case 'noChanges':
-        this.onUndo_();
-        break;
-      case 'defaultSettings':
-        this.onConfirm_(e);
-        break;
-    }
-    assertNotReached();
-  },
-
-  /** @private */
-  onMoreOptions_: function() {
-    this.showMoreOptions_ = true;
-  },
-
-  /** @private */
-  onBack_: function() {
-    this.showMoreOptions_ = false;
+  /**
+   * Called when the account image changes.
+   * @param {string} imageSrc
+   * @private
+   */
+  handleAccountImageChanged_: function(imageSrc) {
+    this.accountImageSrc_ = imageSrc;
   },
 
 });

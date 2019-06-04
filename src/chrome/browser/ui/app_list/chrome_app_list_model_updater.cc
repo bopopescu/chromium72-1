@@ -7,11 +7,12 @@
 #include <unordered_map>
 #include <utility>
 
+#include "ash/public/cpp/app_list/app_list_config.h"
 #include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/ui/app_list/app_list_client_impl.h"
+#include "chrome/browser/ui/app_list/app_list_controller_delegate.h"
 #include "chrome/browser/ui/app_list/chrome_app_list_item.h"
 #include "chrome/browser/ui/app_list/search/chrome_search_result.h"
-#include "chrome/browser/ui/ash/ash_util.h"
 #include "extensions/common/constants.h"
 #include "ui/base/models/menu_model.h"
 
@@ -151,7 +152,7 @@ void ChromeAppListModelUpdater::ActivateChromeItem(const std::string& id,
   if (!item)
     return;
   DCHECK(!item->is_folder());
-  item->Activate(event_flags);
+  item->PerformActivate(event_flags);
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -372,6 +373,21 @@ void ChromeAppListModelUpdater::ContextMenuItemSelected(const std::string& id,
     chrome_item->ContextMenuItemSelected(command_id, event_flags);
 }
 
+syncer::StringOrdinal ChromeAppListModelUpdater::GetFirstAvailablePosition()
+    const {
+  std::vector<ChromeAppListItem*> top_level_items;
+  for (auto& entry : items_) {
+    ChromeAppListItem* item = entry.second.get();
+    DCHECK(item->position().IsValid())
+        << "Item with invalid position: id=" << item->id()
+        << ", name=" << item->name() << ", is_folder=" << item->is_folder()
+        << ", is_page_break=" << item->is_page_break();
+    if (item->folder_id().empty() && item->position().IsValid())
+      top_level_items.emplace_back(item);
+  }
+  return GetFirstAvailablePositionInternal(top_level_items);
+}
+
 ////////////////////////////////////////////////////////////////////////////////
 // Methods for AppListSyncableService
 
@@ -505,8 +521,50 @@ void ChromeAppListModelUpdater::OnFolderDeleted(
 void ChromeAppListModelUpdater::OnItemUpdated(
     ash::mojom::AppListItemMetadataPtr item) {
   ChromeAppListItem* chrome_item = FindItem(item->id);
-  DCHECK(chrome_item);
+
+  // Ignore the item if it does not exist. This happens when a race occurs
+  // between the browser and ash. e.g. An item is removed on browser side while
+  // there is an in-flight OnItemUpdated() call from ash.
+  if (!chrome_item)
+    return;
+
+  // Preserve icon once it cannot be modified at ash.
+  item->icon = chrome_item->icon();
+
   chrome_item->SetMetadata(std::move(item));
   if (delegate_)
     delegate_->OnAppListItemUpdated(chrome_item);
+}
+
+void ChromeAppListModelUpdater::OnPageBreakItemAdded(
+    const std::string& id,
+    const syncer::StringOrdinal& position) {
+  ChromeAppListItem* chrome_item = FindItem(id);
+
+  // If the item already exists, we should have set its information properly.
+  if (chrome_item)
+    return;
+
+  // Otherwise, create a new "page break" item.
+  auto new_item = std::make_unique<ChromeAppListItem>(profile_, id, this);
+  new_item->SetPosition(position);
+  new_item->SetIsPageBreak(true);
+  chrome_item = AddChromeItem(std::move(new_item));
+
+  if (delegate_)
+    delegate_->OnAppListItemAdded(chrome_item);
+}
+
+void ChromeAppListModelUpdater::OnPageBreakItemDeleted(const std::string& id) {
+  ChromeAppListItem* chrome_item = FindItem(id);
+
+  if (!chrome_item) {
+    LOG(ERROR) << "OnPageBreakItemDeleted: " << id << " does not exist.";
+    return;
+  }
+
+  DCHECK(chrome_item->is_page_break());
+  if (delegate_)
+    delegate_->OnAppListItemWillBeDeleted(chrome_item);
+  items_.erase(id);
 }

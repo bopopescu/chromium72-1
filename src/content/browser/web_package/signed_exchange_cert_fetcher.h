@@ -14,6 +14,7 @@
 #include "base/optional.h"
 #include "base/unguessable_token.h"
 #include "content/browser/web_package/signed_exchange_certificate_chain.h"
+#include "content/browser/web_package/signed_exchange_error.h"
 #include "content/common/content_export.h"
 #include "services/network/public/mojom/url_loader.mojom.h"
 #include "url/origin.h"
@@ -36,7 +37,8 @@ class CONTENT_EXPORT SignedExchangeCertFetcher
     : public network::mojom::URLLoaderClient {
  public:
   using CertificateCallback =
-      base::OnceCallback<void(std::unique_ptr<SignedExchangeCertificateChain>)>;
+      base::OnceCallback<void(SignedExchangeLoadResult,
+                              std::unique_ptr<SignedExchangeCertificateChain>)>;
 
   // Starts fetching the certificate using a ThrottlingURLLoader created with
   // the |shared_url_loader_factory| and the |throttles|. The |callback| will
@@ -54,7 +56,8 @@ class CONTENT_EXPORT SignedExchangeCertFetcher
       bool force_fetch,
       SignedExchangeVersion version,
       CertificateCallback callback,
-      SignedExchangeDevToolsProxy* devtools_proxy);
+      SignedExchangeDevToolsProxy* devtools_proxy,
+      const base::Optional<base::UnguessableToken>& throttling_profile_id);
 
   ~SignedExchangeCertFetcher() override;
 
@@ -76,19 +79,17 @@ class CONTENT_EXPORT SignedExchangeCertFetcher
       bool force_fetch,
       SignedExchangeVersion version,
       CertificateCallback callback,
-      SignedExchangeDevToolsProxy* devtools_proxy);
+      SignedExchangeDevToolsProxy* devtools_proxy,
+      const base::Optional<base::UnguessableToken>& throttling_profile_id);
   void Start();
   void Abort();
   void OnHandleReady(MojoResult result);
   void OnDataComplete();
 
   // network::mojom::URLLoaderClient
-  void OnReceiveResponse(
-      const network::ResourceResponseHead& head,
-      network::mojom::DownloadedTempFilePtr downloaded_file) override;
+  void OnReceiveResponse(const network::ResourceResponseHead& head) override;
   void OnReceiveRedirect(const net::RedirectInfo& redirect_info,
                          const network::ResourceResponseHead& head) override;
-  void OnDataDownloaded(int64_t data_length, int64_t encoded_length) override;
   void OnUploadProgress(int64_t current_position,
                         int64_t total_size,
                         OnUploadProgressCallback callback) override;

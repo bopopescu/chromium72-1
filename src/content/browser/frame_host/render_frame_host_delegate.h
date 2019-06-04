@@ -27,6 +27,7 @@
 #include "net/http/http_response_headers.h"
 #include "services/device/public/mojom/geolocation_context.mojom.h"
 #include "services/device/public/mojom/wake_lock.mojom.h"
+#include "services/metrics/public/cpp/ukm_source_id.h"
 #include "ui/base/window_open_disposition.h"
 
 #if defined(OS_WIN)
@@ -55,9 +56,13 @@ class Origin;
 
 namespace blink {
 struct WebFullscreenOptions;
+namespace mojom {
+class FileChooserParams;
+}
 }
 
 namespace content {
+class FileSelectListener;
 class FrameTreeNode;
 class InterstitialPage;
 class PageState;
@@ -68,7 +73,7 @@ class WebContents;
 struct AXEventNotificationDetails;
 struct AXLocationChangeNotificationDetails;
 struct ContextMenuParams;
-struct FileChooserParams;
+struct GlobalRequestID;
 
 namespace mojom {
 class CreateNewWindowParams;
@@ -102,7 +107,7 @@ class CONTENT_EXPORT RenderFrameHostDelegate {
 
   // Gets the last committed URL. See WebContents::GetLastCommittedURL for a
   // description of the semantics.
-  virtual const GURL& GetMainFrameLastCommittedURL() const;
+  virtual const GURL& GetMainFrameLastCommittedURL();
 
   // A message was added to to the console.
   virtual bool DidAddMessageToConsole(int32_t level,
@@ -110,10 +115,14 @@ class CONTENT_EXPORT RenderFrameHostDelegate {
                                       int32_t line_no,
                                       const base::string16& source_id);
 
-  // Informs the delegate whenever a RenderFrameHost is created.
+  // Called when a RenderFrame for |render_frame_host| is created in the
+  // renderer process. Use |RenderFrameDeleted| to listen for when this
+  // RenderFrame goes away.
   virtual void RenderFrameCreated(RenderFrameHost* render_frame_host) {}
 
-  // Informs the delegate whenever a RenderFrameHost is deleted.
+  // Called when a RenderFrame for |render_frame_host| is deleted or the
+  // renderer process in which it runs it has died. Use |RenderFrameCreated| to
+  // listen for when RenderFrame objects are created.
   virtual void RenderFrameDeleted(RenderFrameHost* render_frame_host) {}
 
   // A context menu should be shown, to be built using the context information
@@ -133,8 +142,21 @@ class CONTENT_EXPORT RenderFrameHostDelegate {
                                       IPC::Message* reply_msg) {}
 
   // Called when a file selection is to be done.
-  virtual void RunFileChooser(RenderFrameHost* render_frame_host,
-                              const FileChooserParams& params) {}
+  // Overrides of this function must call either listener->FileSelected() or
+  // listener->FileSelectionCanceled().
+  virtual void RunFileChooser(
+      RenderFrameHost* render_frame_host,
+      std::unique_ptr<content::FileSelectListener> listener,
+      const blink::mojom::FileChooserParams& params);
+
+  // Request to enumerate a directory.  This is equivalent to running the file
+  // chooser in directory-enumeration mode and having the user select the given
+  // directory.
+  // Overrides of this function must call either listener->FileSelected() or
+  // listener->FileSelectionCanceled().
+  virtual void EnumerateDirectory(RenderFrameHost* render_frame_host,
+                                  std::unique_ptr<FileSelectListener> listener,
+                                  const base::FilePath& directory_path);
 
   // The pending page load was canceled, so the address bar should be updated.
   virtual void DidCancelLoading() {}
@@ -177,9 +199,8 @@ class CONTENT_EXPORT RenderFrameHostDelegate {
   // The render frame has requested access to media devices listed in
   // |request|, and the client should grant or deny that permission by
   // calling |callback|.
-  virtual void RequestMediaAccessPermission(
-      const MediaStreamRequest& request,
-      const MediaResponseCallback& callback);
+  virtual void RequestMediaAccessPermission(const MediaStreamRequest& request,
+                                            MediaResponseCallback callback);
 
   // Checks if we have permission to access the microphone or camera. Note that
   // this does not query the user. |type| must be MEDIA_DEVICE_AUDIO_CAPTURE
@@ -194,13 +215,13 @@ class CONTENT_EXPORT RenderFrameHostDelegate {
   virtual std::string GetDefaultMediaDeviceID(MediaStreamType type);
 
   // Get the accessibility mode for the WebContents that owns this frame.
-  virtual ui::AXMode GetAccessibilityMode() const;
+  virtual ui::AXMode GetAccessibilityMode();
 
   // Called when accessibility events or location changes are received
   // from a render frame, when the accessibility mode has the
   // ui::AXMode::kWebContents flag set.
   virtual void AccessibilityEventReceived(
-      const std::vector<AXEventNotificationDetails>& details) {}
+      const AXEventNotificationDetails& details) {}
   virtual void AccessibilityLocationChangesReceived(
       const std::vector<AXLocationChangeNotificationDetails>& details) {}
 
@@ -232,6 +253,18 @@ class CONTENT_EXPORT RenderFrameHostDelegate {
   // view resize. e.g. This will be false when going from tab fullscreen to
   // browser fullscreen.
   virtual void ExitFullscreenMode(bool will_cause_resize) {}
+
+  // Notification that this frame has changed fullscreen state.
+  virtual void FullscreenStateChanged(RenderFrameHost* rfh,
+                                      bool is_fullscreen) {}
+
+#if defined(OS_ANDROID)
+  // Updates information to determine whether a user gesture should carryover to
+  // future navigations. This is needed so navigations within a certain
+  // timeframe of a request initiated by a gesture will be treated as if they
+  // were initiated by a gesture too, otherwise the navigation may be blocked.
+  virtual void UpdateUserGestureCarryoverInfo() {}
+#endif
 
   // Let the delegate decide whether postMessage should be delivered to
   // |target_rfh| from a source frame in the given SiteInstance.  This defaults
@@ -276,15 +309,6 @@ class CONTENT_EXPORT RenderFrameHostDelegate {
   // applies, returns null.
   virtual std::unique_ptr<WebUIImpl> CreateWebUIForRenderFrameHost(
       const GURL& url);
-
-#if defined(USE_NEVA_APPRUNTIME)
-  // Check the it has policy for response, if it has a policy, Blink won't do
-  // nothing
-  virtual bool DecidePolicyForResponse(bool isMainFrame,
-                                       int statusCode,
-                                       const GURL& url,
-                                       const base::string16& statusText);
-#endif
 
   // Called by |frame| to notify that it has received an update on focused
   // element. |bounds_in_root_view| is the rectangle containing the element that
@@ -359,7 +383,7 @@ class CONTENT_EXPORT RenderFrameHostDelegate {
 
   // Whether the delegate is being destroyed, in which case the RenderFrameHost
   // should not be asked to create a RenderFrame.
-  virtual bool IsBeingDestroyed() const;
+  virtual bool IsBeingDestroyed();
 
   // Notifies that the render frame started loading a subresource.
   virtual void SubresourceResponseStarted(const GURL& url,
@@ -369,6 +393,7 @@ class CONTENT_EXPORT RenderFrameHostDelegate {
   // associated with |render_frame_host|.
   virtual void ResourceLoadComplete(
       RenderFrameHost* render_frame_host,
+      const GlobalRequestID& request_id,
       mojom::ResourceLoadInfoPtr resource_load_info) {}
 
   // Request to print a frame that is in a different process than its parent.
@@ -382,7 +407,19 @@ class CONTENT_EXPORT RenderFrameHostDelegate {
                                                const gfx::Size& natural_size) {}
 
   // Returns the visibility of the delegate.
-  virtual Visibility GetVisibility() const;
+  virtual Visibility GetVisibility();
+
+  // Get the UKM source ID for current content. This is used for providing
+  // data about the content to the URL-keyed metrics service.
+  // Note: This is also exposed by the RenderWidgetHostDelegate.
+  virtual ukm::SourceId GetUkmSourceIdForLastCommittedSource() const;
+
+  // Notify observers if WebAudio AudioContext has started (or stopped) playing
+  // audible sounds.
+  virtual void AudioContextPlaybackStarted(RenderFrameHost* host,
+                                           int context_id){};
+  virtual void AudioContextPlaybackStopped(RenderFrameHost* host,
+                                           int context_id){};
 
  protected:
   virtual ~RenderFrameHostDelegate() {}

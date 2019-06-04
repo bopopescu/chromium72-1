@@ -17,6 +17,8 @@
 #include "content/browser/indexed_db/indexed_db_value.h"
 #include "third_party/blink/public/platform/modules/indexeddb/web_idb_database_exception.h"
 
+using blink::IndexedDBKey;
+
 namespace content {
 namespace {
 // This should never be script visible: the cursor should either be closed when
@@ -58,7 +60,7 @@ IndexedDBTransaction::Operation BindWeakOperation(
 IndexedDBCursor::IndexedDBCursor(
     std::unique_ptr<IndexedDBBackingStore::Cursor> cursor,
     indexed_db::CursorType cursor_type,
-    blink::WebIDBTaskType task_type,
+    blink::mojom::IDBTaskType task_type,
     IndexedDBTransaction* transaction)
     : task_type_(task_type),
       cursor_type_(cursor_type),

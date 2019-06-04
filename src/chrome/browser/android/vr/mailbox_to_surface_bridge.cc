@@ -8,11 +8,12 @@
 #include <string>
 
 #include "base/logging.h"
-#include "base/sys_info.h"
-#include "base/task_scheduler/post_task.h"
+#include "base/system/sys_info.h"
+#include "base/task/post_task.h"
 #include "base/threading/sequenced_task_runner_handle.h"
 #include "components/viz/common/gpu/context_provider.h"
 #include "content/public/browser/android/compositor.h"
+#include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
 #include "gpu/GLES2/gl2extchromium.h"
 #include "gpu/command_buffer/client/context_support.h"
@@ -22,7 +23,7 @@
 #include "gpu/ipc/client/gpu_channel_host.h"
 #include "gpu/ipc/common/gpu_memory_buffer_impl_android_hardware_buffer.h"
 #include "gpu/ipc/common/gpu_surface_tracker.h"
-#include "services/ui/public/cpp/gpu/context_provider_command_buffer.h"
+#include "services/ws/public/cpp/gpu/context_provider_command_buffer.h"
 #include "ui/gl/android/surface_texture.h"
 
 #include <android/native_window_jni.h>
@@ -251,8 +252,8 @@ void MailboxToSurfaceBridge::CreateContextProviderInternal() {
       base::BindRepeating(&MailboxToSurfaceBridge::OnContextAvailableOnUiThread,
                           weak_ptr_factory_.GetWeakPtr());
 
-  content::BrowserThread::PostTask(
-      content::BrowserThread::UI, FROM_HERE,
+  base::PostTaskWithTraits(
+      FROM_HERE, {content::BrowserThread::UI},
       base::BindOnce(
           [](int surface_handle,
              const content::Compositor::ContextProviderCallback& callback) {
@@ -353,36 +354,16 @@ void MailboxToSurfaceBridge::CreateGpuFence(
   gl_->DestroyGpuFenceCHROMIUM(id);
 }
 
-void MailboxToSurfaceBridge::GenerateMailbox(gpu::Mailbox& out_mailbox) {
-  TRACE_EVENT0("gpu", __FUNCTION__);
-  DCHECK(IsConnected());
-  gl_->GenMailboxCHROMIUM(out_mailbox.name);
-}
-
-uint32_t MailboxToSurfaceBridge::CreateMailboxTexture(
-    const gpu::Mailbox& mailbox) {
+uint32_t MailboxToSurfaceBridge::CreateMailboxTexture(gpu::Mailbox* mailbox) {
   TRACE_EVENT0("gpu", __FUNCTION__);
   DCHECK(IsConnected());
 
   GLuint tex = 0;
   gl_->GenTextures(1, &tex);
   gl_->BindTexture(GL_TEXTURE_2D, tex);
-
-  gl_->ProduceTextureDirectCHROMIUM(tex, mailbox.name);
+  gl_->ProduceTextureDirectCHROMIUM(tex, mailbox->name);
 
   return tex;
-}
-
-void MailboxToSurfaceBridge::DestroyMailboxTexture(const gpu::Mailbox& mailbox,
-                                                   uint32_t texture_id) {
-  TRACE_EVENT0("gpu", __FUNCTION__);
-  DCHECK(IsConnected());
-
-  // Associating with texture ID 0 unbinds the previous binding without
-  // creating a new one.
-  gl_->ProduceTextureDirectCHROMIUM(0, mailbox.name);
-  GLuint tex = texture_id;
-  gl_->DeleteTextures(1, &tex);
 }
 
 uint32_t MailboxToSurfaceBridge::BindSharedBufferImage(

@@ -2,16 +2,16 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "third_party/blink/renderer/bindings/core/v8/exception_messages.h"
-#include "third_party/blink/renderer/bindings/core/v8/exception_state.h"
-#include "third_party/blink/renderer/core/dom/exception_code.h"
+#include "third_party/blink/renderer/modules/webaudio/stereo_panner_node.h"
+
 #include "third_party/blink/renderer/core/execution_context/execution_context.h"
 #include "third_party/blink/renderer/modules/webaudio/audio_node_input.h"
 #include "third_party/blink/renderer/modules/webaudio/audio_node_output.h"
 #include "third_party/blink/renderer/modules/webaudio/base_audio_context.h"
-#include "third_party/blink/renderer/modules/webaudio/stereo_panner_node.h"
 #include "third_party/blink/renderer/modules/webaudio/stereo_panner_options.h"
 #include "third_party/blink/renderer/platform/audio/stereo_panner.h"
+#include "third_party/blink/renderer/platform/bindings/exception_messages.h"
+#include "third_party/blink/renderer/platform/bindings/exception_state.h"
 #include "third_party/blink/renderer/platform/wtf/math_extras.h"
 
 namespace blink {
@@ -21,7 +21,7 @@ StereoPannerHandler::StereoPannerHandler(AudioNode& node,
                                          AudioParamHandler& pan)
     : AudioHandler(kNodeTypeStereoPanner, node, sample_rate),
       pan_(&pan),
-      sample_accurate_pan_values_(AudioUtilities::kRenderQuantumFrames) {
+      sample_accurate_pan_values_(audio_utilities::kRenderQuantumFrames) {
   AddInput();
   AddOutput(2);
 
@@ -45,7 +45,7 @@ StereoPannerHandler::~StereoPannerHandler() {
   Uninitialize();
 }
 
-void StereoPannerHandler::Process(size_t frames_to_process) {
+void StereoPannerHandler::Process(uint32_t frames_to_process) {
   AudioBus* output_bus = Output(0).Bus();
 
   if (!IsInitialized() || !Input(0).IsConnected() || !stereo_panner_.get()) {
@@ -74,9 +74,9 @@ void StereoPannerHandler::Process(size_t frames_to_process) {
   }
 }
 
-void StereoPannerHandler::ProcessOnlyAudioParams(size_t frames_to_process) {
-  float values[AudioUtilities::kRenderQuantumFrames];
-  DCHECK_LE(frames_to_process, AudioUtilities::kRenderQuantumFrames);
+void StereoPannerHandler::ProcessOnlyAudioParams(uint32_t frames_to_process) {
+  float values[audio_utilities::kRenderQuantumFrames];
+  DCHECK_LE(frames_to_process, audio_utilities::kRenderQuantumFrames);
 
   pan_->CalculateSampleAccurateValues(values, frames_to_process);
 }
@@ -90,7 +90,7 @@ void StereoPannerHandler::Initialize() {
   AudioHandler::Initialize();
 }
 
-void StereoPannerHandler::SetChannelCount(unsigned long channel_count,
+void StereoPannerHandler::SetChannelCount(unsigned channel_count,
                                           ExceptionState& exception_state) {
   DCHECK(IsMainThread());
   BaseAudioContext::GraphAutoLocker locker(Context());
@@ -104,10 +104,11 @@ void StereoPannerHandler::SetChannelCount(unsigned long channel_count,
     }
   } else {
     exception_state.ThrowDOMException(
-        kNotSupportedError, ExceptionMessages::IndexOutsideRange<unsigned long>(
-                                "channelCount", channel_count, 1,
-                                ExceptionMessages::kInclusiveBound, 2,
-                                ExceptionMessages::kInclusiveBound));
+        DOMExceptionCode::kNotSupportedError,
+        ExceptionMessages::IndexOutsideRange<unsigned long>(
+            "channelCount", channel_count, 1,
+            ExceptionMessages::kInclusiveBound, 2,
+            ExceptionMessages::kInclusiveBound));
   }
 }
 
@@ -125,7 +126,7 @@ void StereoPannerHandler::SetChannelCountMode(const String& mode,
   } else if (mode == "max") {
     // This is not supported for a StereoPannerNode, which can only handle
     // 1 or 2 channels.
-    exception_state.ThrowDOMException(kNotSupportedError,
+    exception_state.ThrowDOMException(DOMExceptionCode::kNotSupportedError,
                                       "StereoPanner: 'max' is not allowed");
     new_channel_count_mode_ = old_mode;
   } else {
@@ -161,11 +162,11 @@ StereoPannerNode* StereoPannerNode::Create(BaseAudioContext& context,
     return nullptr;
   }
 
-  return new StereoPannerNode(context);
+  return MakeGarbageCollected<StereoPannerNode>(context);
 }
 
 StereoPannerNode* StereoPannerNode::Create(BaseAudioContext* context,
-                                           const StereoPannerOptions& options,
+                                           const StereoPannerOptions* options,
                                            ExceptionState& exception_state) {
   StereoPannerNode* node = Create(*context, exception_state);
 
@@ -174,7 +175,7 @@ StereoPannerNode* StereoPannerNode::Create(BaseAudioContext* context,
 
   node->HandleChannelOptions(options, exception_state);
 
-  node->pan()->setValue(options.pan());
+  node->pan()->setValue(options->pan());
 
   return node;
 }

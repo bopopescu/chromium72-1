@@ -56,7 +56,7 @@ class TryFlagTest(unittest.TestCase):
         self.assertEqual(git_cl.calls, [
             ['git', 'cl', 'upload', '--bypass-hooks', '-f',
              '-m', 'Flag try job for --foo.'],
-            ['git', 'cl', 'try', '-B', 'master.tryserver.chromium.linux',
+            ['git', 'cl', 'try', '-B', 'luci.chromium.try',
              '-b', 'linux_chromium_rel_ng'],
             ['git', 'cl', 'try', '-B', 'master.tryserver.chromium.mac',
              '-b', 'mac_chromium_rel_ng'],
@@ -134,10 +134,11 @@ class TryFlagTest(unittest.TestCase):
         TryFlag(cmd, host, MockGitCL(host, self.mock_try_results)).run()
 
         def results_url(build):
-            return '%s/%s/%s/layout-test-results/results.html' % (
+            return '%s/%s/%s/%s/layout-test-results/results.html' % (
                 'https://test-results.appspot.com/data/layout_results',
                 build.builder_name,
-                build.build_number
+                build.build_number,
+                'webkit_layout_tests%20%28with%20patch%29'
             )
         self.assertEqual(host.stdout.getvalue(), '\n'.join([
             'Fetching results...',

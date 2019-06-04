@@ -17,7 +17,7 @@
   {
     "cmd": [
       "catchsegv",
-      "[START_DIR]/build/out/devrel/run_testlab",
+      "[START_DIR]/build/run_testlab",
       "--logtostderr",
       "--devices",
       "[START_DIR]/whitelist_devices.json",
@@ -32,8 +32,7 @@
     "name": "run firebase testlab"
   },
   {
-    "name": "$result",
-    "recipe_result": null,
-    "status_code": 0
+    "jsonResult": null,
+    "name": "$result"
   }
 ]

@@ -12,16 +12,14 @@
 #include <stdint.h>
 
 #include <memory>
+#include <string>
 #include <vector>
 
 #include "base/optional.h"
 #include "base/strings/string16.h"
 #include "base/time/time.h"
-#include "chrome/installer/util/browser_distribution.h"
 #include "chrome/installer/util/lzma_util.h"
 #include "chrome/installer/util/util_constants.h"
-
-class AppRegistrationData;
 
 namespace base {
 class CommandLine;
@@ -105,9 +103,7 @@ bool ContainsUnsupportedSwitch(const base::CommandLine& cmd_line);
 bool IsProcessorSupported();
 
 // Returns the "...\\Commands\\|name|" registry key for a product's |reg_data|.
-base::string16 GetRegistrationDataCommandKey(
-    const AppRegistrationData& reg_data,
-    const wchar_t* name);
+base::string16 GetCommandKey(const wchar_t* name);
 
 // Deletes all values and subkeys of the key |path| under |root|, preserving
 // the keys named in |keys_to_preserve| (each of which must be an ASCII string).
@@ -119,9 +115,6 @@ void DeleteRegistryKeyPartial(
 
 // Returns true if downgrade is allowed by installer data.
 bool IsDowngradeAllowed(const MasterPreferences& prefs);
-
-// Returns true if Chrome has been run within the last 28 days.
-bool IsChromeActivelyUsed(const InstallerState& installer_state);
 
 // Returns the age (in days) of the installation based on the creation time of
 // its installation directory, or -1 in case of error.
@@ -139,10 +132,6 @@ void RegisterEventLogProvider(const base::FilePath& install_directory,
 // De-register Chrome's EventLog message provider dll.
 void DeRegisterEventLogProvider();
 
-// Returns a registration data instance for the now-deprecated multi-install
-// binaries.
-std::unique_ptr<AppRegistrationData> MakeBinariesRegistrationData();
-
 // Returns true if the now-deprecated multi-install binaries are registered as
 // an installed product with Google Update.
 bool AreBinariesInstalled(const InstallerState& installer_state);
@@ -154,10 +143,6 @@ void DoLegacyCleanups(const InstallerState& installer_state,
 // Returns the time of the start of the console user's Windows logon session, or
 // a null time in case of error.
 base::Time GetConsoleSessionStartTime();
-
-// Returns true if the current OS vesion suppors drawing dark text on Start Menu
-// tiles.
-bool OsSupportsDarkTextTiles();
 
 // Returns a DM token decoded from the base-64 |encoded_token|, or null in case
 // of a decoding error.  The returned DM token is an opaque binary blob and
@@ -172,6 +157,20 @@ bool StoreDMToken(const std::string& token);
 // Returns the file path to notification_helper.exe (in |version| directory).
 base::FilePath GetNotificationHelperPath(const base::FilePath& target_path,
                                          const base::Version& version);
+
+// Returns the file path to elevation_service.exe (in |version| directory).
+base::FilePath GetElevationServicePath(const base::FilePath& target_path,
+                                       const base::Version& version);
+
+// Returns the Elevation Service GUID prefixed with |prefix|.
+base::string16 GetElevationServiceGuid(base::StringPiece16 prefix);
+
+// Return the elevation service registry paths.
+base::string16 GetElevationServiceClsidRegistryPath();
+base::string16 GetElevationServiceAppidRegistryPath();
+base::string16 GetElevationServiceIid(base::StringPiece16 prefix);
+base::string16 GetElevationServiceIidRegistryPath();
+base::string16 GetElevationServiceTypeLibRegistryPath();
 
 }  // namespace installer
 

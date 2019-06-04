@@ -20,10 +20,12 @@
 #include "base/strings/utf_string_conversions.h"
 #include "base/time/time.h"
 #include "build/build_config.h"
+#include "components/autofill/core/browser/autofill_metadata.h"
 #include "components/autofill/core/browser/autofill_profile.h"
 #include "components/autofill/core/browser/autofill_test_utils.h"
 #include "components/autofill/core/browser/autofill_type.h"
 #include "components/autofill/core/browser/credit_card.h"
+#include "components/autofill/core/browser/payments/payments_customer_data.h"
 #include "components/autofill/core/browser/webdata/autofill_change.h"
 #include "components/autofill/core/browser/webdata/autofill_entry.h"
 #include "components/autofill/core/common/autofill_constants.h"
@@ -101,8 +103,7 @@ void CompareAutofillEntrySets(const AutofillEntrySet& actual,
                               const AutofillEntrySet& expected) {
   ASSERT_EQ(expected.size(), actual.size());
   size_t count = 0;
-  for (AutofillEntrySet::const_iterator it = actual.begin();
-       it != actual.end(); ++it) {
+  for (auto it = actual.begin(); it != actual.end(); ++it) {
     count += expected.count(*it);
   }
   EXPECT_EQ(actual.size(), count);
@@ -792,7 +793,8 @@ TEST_F(AutofillTableTest, AutofillProfile) {
   home_profile.SetRawInfo(ADDRESS_HOME_COUNTRY, ASCIIToUTF16("US"));
   home_profile.SetRawInfo(PHONE_HOME_WHOLE_NUMBER, ASCIIToUTF16("18181234567"));
   home_profile.set_language_code("en");
-  home_profile.SetValidityFromBitfieldValue(6);
+  home_profile.SetClientValidityFromBitfieldValue(6);
+  home_profile.set_is_client_validity_states_updated(true);
 
   Time pre_creation_time = Time::Now();
   EXPECT_TRUE(table_->AddAutofillProfile(home_profile));
@@ -876,7 +878,9 @@ TEST_F(AutofillTableTest, AutofillProfile) {
   billing_profile.SetRawInfo(ADDRESS_HOME_COUNTRY, ASCIIToUTF16("US"));
   billing_profile.SetRawInfo(PHONE_HOME_WHOLE_NUMBER,
                              ASCIIToUTF16("18181230000"));
-  billing_profile.SetValidityFromBitfieldValue(54);
+  billing_profile.SetClientValidityFromBitfieldValue(54);
+  billing_profile.set_is_client_validity_states_updated(true);
+
   Time pre_modification_time_2 = Time::Now();
   EXPECT_TRUE(table_->UpdateAutofillProfile(billing_profile));
   Time post_modification_time_2 = Time::Now();
@@ -1827,7 +1831,7 @@ TEST_F(AutofillTableTest, AutofillProfileValidityBitfield) {
   profile.set_origin(std::string());
   profile.SetRawInfo(NAME_FIRST, ASCIIToUTF16("John"));
   profile.SetRawInfo(NAME_LAST, ASCIIToUTF16("Smith"));
-  profile.SetValidityFromBitfieldValue(kValidityBitfieldValue);
+  profile.SetClientValidityFromBitfieldValue(kValidityBitfieldValue);
 
   // Add the profile to the table.
   EXPECT_TRUE(table_->AddAutofillProfile(profile));
@@ -1836,11 +1840,12 @@ TEST_F(AutofillTableTest, AutofillProfileValidityBitfield) {
   std::unique_ptr<AutofillProfile> db_profile =
       table_->GetAutofillProfile(profile.guid());
   ASSERT_TRUE(db_profile);
-  EXPECT_EQ(kValidityBitfieldValue, db_profile->GetValidityBitfieldValue());
+  EXPECT_EQ(kValidityBitfieldValue,
+            db_profile->GetClientValidityBitfieldValue());
 
   // Modify the validity of the profile.
   const int kOtherValidityBitfieldValue = 1999;
-  profile.SetValidityFromBitfieldValue(kOtherValidityBitfieldValue);
+  profile.SetClientValidityFromBitfieldValue(kOtherValidityBitfieldValue);
 
   // Update the profile in the table.
   EXPECT_TRUE(table_->UpdateAutofillProfile(profile));
@@ -1849,7 +1854,41 @@ TEST_F(AutofillTableTest, AutofillProfileValidityBitfield) {
   db_profile = table_->GetAutofillProfile(profile.guid());
   ASSERT_TRUE(db_profile);
   EXPECT_EQ(kOtherValidityBitfieldValue,
-            db_profile->GetValidityBitfieldValue());
+            db_profile->GetClientValidityBitfieldValue());
+}
+
+TEST_F(AutofillTableTest, AutofillProfileIsClientValidityStatesUpdatedFlag) {
+  AutofillProfile profile;
+  profile.set_origin(std::string());
+  profile.SetRawInfo(NAME_FIRST, ASCIIToUTF16("John"));
+  profile.SetRawInfo(NAME_LAST, ASCIIToUTF16("Smith"));
+  profile.set_is_client_validity_states_updated(true);
+
+  // Add the profile to the table.
+  EXPECT_TRUE(table_->AddAutofillProfile(profile));
+  // Get the profile from the table and make sure the validity was set.
+  std::unique_ptr<AutofillProfile> db_profile =
+      table_->GetAutofillProfile(profile.guid());
+  ASSERT_TRUE(db_profile);
+  EXPECT_TRUE(db_profile->is_client_validity_states_updated());
+
+  // Test if turning off the validity updated flag works.
+  profile.set_is_client_validity_states_updated(false);
+  // Update the profile in the table.
+  EXPECT_TRUE(table_->UpdateAutofillProfile(profile));
+  // Get the profile from the table and make sure the validity was updated.
+  db_profile = table_->GetAutofillProfile(profile.guid());
+  ASSERT_TRUE(db_profile);
+  EXPECT_FALSE(db_profile->is_client_validity_states_updated());
+
+  // Test if turning on the validity updated flag works.
+  profile.set_is_client_validity_states_updated(true);
+  // Update the profile in the table.
+  EXPECT_TRUE(table_->UpdateAutofillProfile(profile));
+  // Get the profile from the table and make sure the validity was updated.
+  db_profile = table_->GetAutofillProfile(profile.guid());
+  ASSERT_TRUE(db_profile);
+  EXPECT_TRUE(db_profile->is_client_validity_states_updated());
 }
 
 TEST_F(AutofillTableTest, SetGetServerCards) {
@@ -1892,6 +1931,223 @@ TEST_F(AutofillTableTest, SetGetServerCards) {
 
   EXPECT_EQ(CreditCard::OK, outputs[0]->GetServerStatus());
   EXPECT_EQ(CreditCard::EXPIRED, outputs[1]->GetServerStatus());
+}
+
+TEST_F(AutofillTableTest, SetGetRemoveServerCardMetadata) {
+  // Create and set the metadata.
+  AutofillMetadata input;
+  input.id = "server id";
+  input.use_count = 50;
+  input.use_date = Time::Now();
+  input.billing_address_id = "billing id";
+  EXPECT_TRUE(table_->AddServerCardMetadata(input));
+
+  // Make sure it was added correctly.
+  std::map<std::string, AutofillMetadata> outputs;
+  ASSERT_TRUE(table_->GetServerCardsMetadata(&outputs));
+  ASSERT_EQ(1U, outputs.size());
+  EXPECT_EQ(input, outputs[input.id]);
+
+  // Remove the metadata from the table.
+  EXPECT_TRUE(table_->RemoveServerCardMetadata(input.id));
+
+  // Make sure it was removed correctly.
+  ASSERT_TRUE(table_->GetServerCardsMetadata(&outputs));
+  EXPECT_EQ(0U, outputs.size());
+}
+
+TEST_F(AutofillTableTest, SetGetRemoveServerAddressMetadata) {
+  // Create and set the metadata.
+  AutofillMetadata input;
+  input.id = "server id";
+  input.use_count = 50;
+  input.use_date = Time::Now();
+  input.has_converted = true;
+  table_->AddServerAddressMetadata(input);
+
+  // Make sure it was added correctly.
+  std::map<std::string, AutofillMetadata> outputs;
+  ASSERT_TRUE(table_->GetServerAddressesMetadata(&outputs));
+  ASSERT_EQ(1U, outputs.size());
+  EXPECT_EQ(input, outputs[input.id]);
+
+  // Remove the metadata from the table.
+  EXPECT_TRUE(table_->RemoveServerAddressMetadata(input.id));
+
+  // Make sure it was removed correctly.
+  ASSERT_TRUE(table_->GetServerAddressesMetadata(&outputs));
+  EXPECT_EQ(0U, outputs.size());
+}
+
+TEST_F(AutofillTableTest, RemoveWrongServerCardMetadata) {
+  // Crete and set some metadata.
+  AutofillMetadata input;
+  input.id = "server id";
+  input.use_count = 50;
+  input.use_date = Time::Now();
+  input.billing_address_id = "billing id";
+  table_->AddServerCardMetadata(input);
+
+  // Make sure it was added correctly.
+  std::map<std::string, AutofillMetadata> outputs;
+  ASSERT_TRUE(table_->GetServerCardsMetadata(&outputs));
+  ASSERT_EQ(1U, outputs.size());
+  EXPECT_EQ(input, outputs[input.id]);
+
+  // Try removing some non-existent metadata.
+  EXPECT_FALSE(table_->RemoveServerCardMetadata("a_wrong_id"));
+
+  // Make sure the metadata was not removed.
+  ASSERT_TRUE(table_->GetServerCardsMetadata(&outputs));
+  ASSERT_EQ(1U, outputs.size());
+}
+
+TEST_F(AutofillTableTest, SetServerCardsData) {
+  // Set a card data.
+  std::vector<CreditCard> inputs;
+  inputs.push_back(CreditCard(CreditCard::MASKED_SERVER_CARD, "card1"));
+  inputs[0].SetRawInfo(CREDIT_CARD_NAME_FULL, ASCIIToUTF16("Rick Roman"));
+  inputs[0].SetRawInfo(CREDIT_CARD_EXP_MONTH, ASCIIToUTF16("12"));
+  inputs[0].SetRawInfo(CREDIT_CARD_EXP_4_DIGIT_YEAR, ASCIIToUTF16("1997"));
+  inputs[0].SetRawInfo(CREDIT_CARD_NUMBER, ASCIIToUTF16("1111"));
+  inputs[0].SetNetworkForMaskedCard(kVisaCard);
+  inputs[0].SetServerStatus(CreditCard::EXPIRED);
+  table_->SetServerCardsData(inputs);
+
+  // Make sure the card was added correctly.
+  std::vector<std::unique_ptr<CreditCard>> outputs;
+  ASSERT_TRUE(table_->GetServerCreditCards(&outputs));
+  ASSERT_EQ(inputs.size(), outputs.size());
+
+  // GUIDs for server cards are dynamically generated so will be different
+  // after reading from the DB. Check they're valid, but otherwise don't count
+  // them in the comparison.
+  inputs[0].set_guid(std::string());
+  outputs[0]->set_guid(std::string());
+
+  EXPECT_EQ(inputs[0], *outputs[0]);
+  EXPECT_EQ(CreditCard::EXPIRED, outputs[0]->GetServerStatus());
+
+  // Make sure no metadata was added.
+  std::map<std::string, AutofillMetadata> metadata_map;
+  ASSERT_TRUE(table_->GetServerCardsMetadata(&metadata_map));
+  ASSERT_EQ(0U, metadata_map.size());
+
+  // Set a different card.
+  inputs[0] = CreditCard(CreditCard::MASKED_SERVER_CARD, "card2");
+  table_->SetServerCardsData(inputs);
+
+  // The original one should have been replaced.
+  ASSERT_TRUE(table_->GetServerCreditCards(&outputs));
+  ASSERT_EQ(1U, outputs.size());
+  EXPECT_EQ("card2", outputs[0]->server_id());
+
+  // Make sure no metadata was added.
+  ASSERT_TRUE(table_->GetServerCardsMetadata(&metadata_map));
+  ASSERT_EQ(0U, metadata_map.size());
+}
+
+// Tests that adding server cards data does not delete the existing metadata.
+TEST_F(AutofillTableTest, SetServerCardsData_ExistingMetadata) {
+  // Create and set some metadata.
+  AutofillMetadata input;
+  input.id = "server id";
+  input.use_count = 50;
+  input.use_date = Time::Now();
+  input.billing_address_id = "billing id";
+  table_->AddServerCardMetadata(input);
+
+  // Set a card data.
+  std::vector<CreditCard> inputs;
+  inputs.push_back(CreditCard(CreditCard::MASKED_SERVER_CARD, "server id"));
+  table_->SetServerCardsData(inputs);
+
+  // Make sure the metadata is still intact.
+  std::map<std::string, AutofillMetadata> outputs;
+  ASSERT_TRUE(table_->GetServerCardsMetadata(&outputs));
+  ASSERT_EQ(1U, outputs.size());
+  EXPECT_EQ(input, outputs[input.id]);
+}
+
+TEST_F(AutofillTableTest, SetServerAddressesData) {
+  AutofillProfile one(AutofillProfile::SERVER_PROFILE, "a123");
+  std::vector<AutofillProfile> inputs;
+  inputs.push_back(one);
+  table_->SetServerAddressesData(inputs);
+
+  // Make sure the address was added correctly.
+  std::vector<std::unique_ptr<AutofillProfile>> outputs;
+  table_->GetServerProfiles(&outputs);
+  ASSERT_EQ(1u, outputs.size());
+  EXPECT_EQ(one.server_id(), outputs[0]->server_id());
+
+  outputs.clear();
+
+  // Make sure no metadata was added.
+  std::map<std::string, AutofillMetadata> metadata_map;
+  ASSERT_TRUE(table_->GetServerAddressesMetadata(&metadata_map));
+  ASSERT_EQ(0U, metadata_map.size());
+
+  // Set a different profile.
+  AutofillProfile two(AutofillProfile::SERVER_PROFILE, "b456");
+  inputs[0] = two;
+  table_->SetServerAddressesData(inputs);
+
+  // The original one should have been replaced.
+  table_->GetServerProfiles(&outputs);
+  ASSERT_EQ(1u, outputs.size());
+  EXPECT_EQ(two.server_id(), outputs[0]->server_id());
+
+  // Make sure no metadata was added.
+  ASSERT_TRUE(table_->GetServerAddressesMetadata(&metadata_map));
+  ASSERT_EQ(0U, metadata_map.size());
+}
+
+// Tests that adding server addresses data does not delete the existing
+// metadata.
+TEST_F(AutofillTableTest, SetServerAddressesData_ExistingMetadata) {
+  // Create and set some metadata.
+  AutofillMetadata input;
+  input.id = "server id";
+  input.use_count = 50;
+  input.use_date = Time::Now();
+  input.has_converted = true;
+  table_->AddServerAddressMetadata(input);
+
+  // Set an address data.
+  std::vector<AutofillProfile> inputs;
+  inputs.push_back(
+      AutofillProfile(AutofillProfile::SERVER_PROFILE, "server id"));
+  table_->SetServerAddressesData(inputs);
+
+  // Make sure the metadata is still intact.
+  std::map<std::string, AutofillMetadata> outputs;
+  ASSERT_TRUE(table_->GetServerAddressesMetadata(&outputs));
+  ASSERT_EQ(1U, outputs.size());
+  EXPECT_EQ(input, outputs[input.id]);
+}
+
+TEST_F(AutofillTableTest, RemoveWrongServerAddressMetadata) {
+  // Crete and set some metadata.
+  AutofillMetadata input;
+  input.id = "server id";
+  input.use_count = 50;
+  input.use_date = Time::Now();
+  input.has_converted = true;
+  table_->AddServerAddressMetadata(input);
+
+  // Make sure it was added correctly.
+  std::map<std::string, AutofillMetadata> outputs;
+  ASSERT_TRUE(table_->GetServerAddressesMetadata(&outputs));
+  ASSERT_EQ(1U, outputs.size());
+  EXPECT_EQ(input, outputs[input.id]);
+
+  // Try removing some non-existent metadata.
+  EXPECT_FALSE(table_->RemoveServerAddressMetadata("a_wrong_id"));
+
+  // Make sure the metadata was not removed.
+  ASSERT_TRUE(table_->GetServerAddressesMetadata(&outputs));
+  ASSERT_EQ(1U, outputs.size());
 }
 
 TEST_F(AutofillTableTest, MaskUnmaskServerCards) {
@@ -2234,6 +2490,39 @@ TEST_F(AutofillTableTest, DeleteUnmaskedCard) {
   outputs.clear();
 }
 
+// Test that we can get what we set.
+TEST_F(AutofillTableTest, SetGetPaymentsCustomerData) {
+  PaymentsCustomerData input{/*customer_id=*/"deadbeef"};
+  table_->SetPaymentsCustomerData(&input);
+
+  std::unique_ptr<PaymentsCustomerData> output;
+  ASSERT_TRUE(table_->GetPaymentsCustomerData(&output));
+  EXPECT_EQ(input, *output);
+}
+
+// We don't set anything in the table. Test that we don't crash.
+TEST_F(AutofillTableTest, GetPaymentsCustomerData_NoData) {
+  std::unique_ptr<PaymentsCustomerData> output;
+  ASSERT_TRUE(table_->GetPaymentsCustomerData(&output));
+  EXPECT_FALSE(output);
+}
+
+// The latest PaymentsCustomerData that was set is returned.
+TEST_F(AutofillTableTest, SetGetPaymentsCustomerData_MultipleSet) {
+  PaymentsCustomerData input{/*customer_id=*/"deadbeef"};
+  table_->SetPaymentsCustomerData(&input);
+
+  PaymentsCustomerData input2{/*customer_id=*/"wallet"};
+  table_->SetPaymentsCustomerData(&input2);
+
+  PaymentsCustomerData input3{/*customer_id=*/"latest"};
+  table_->SetPaymentsCustomerData(&input3);
+
+  std::unique_ptr<PaymentsCustomerData> output;
+  ASSERT_TRUE(table_->GetPaymentsCustomerData(&output));
+  EXPECT_EQ(input3, *output);
+}
+
 const size_t kMaxCount = 2;
 struct GetFormValuesTestCase {
   const char* const field_suggestion[kMaxCount];
@@ -2340,34 +2629,45 @@ INSTANTIATE_TEST_CASE_P(
                                           0,
                                           {nullptr, nullptr}}));
 
-TEST_F(AutofillTableTest, AutofillNoMetadata) {
+class AutofillTableTestPerModelType
+    : public AutofillTableTest,
+      public testing::WithParamInterface<syncer::ModelType> {
+ public:
+  AutofillTableTestPerModelType() {}
+  ~AutofillTableTestPerModelType() override {}
+
+ private:
+  DISALLOW_COPY_AND_ASSIGN(AutofillTableTestPerModelType);
+};
+
+TEST_P(AutofillTableTestPerModelType, AutofillNoMetadata) {
+  syncer::ModelType model_type = GetParam();
   MetadataBatch metadata_batch;
-  EXPECT_TRUE(table_->GetAllSyncMetadata(syncer::AUTOFILL, &metadata_batch));
+  EXPECT_TRUE(table_->GetAllSyncMetadata(model_type, &metadata_batch));
   EXPECT_EQ(0u, metadata_batch.TakeAllMetadata().size());
   EXPECT_EQ(ModelTypeState().SerializeAsString(),
             metadata_batch.GetModelTypeState().SerializeAsString());
 }
 
-TEST_F(AutofillTableTest, AutofillGetAllSyncMetadata) {
+TEST_P(AutofillTableTestPerModelType, AutofillGetAllSyncMetadata) {
+  syncer::ModelType model_type = GetParam();
   EntityMetadata metadata;
   std::string storage_key = "storage_key";
   std::string storage_key2 = "storage_key2";
   metadata.set_sequence_number(1);
 
-  EXPECT_TRUE(
-      table_->UpdateSyncMetadata(syncer::AUTOFILL, storage_key, metadata));
+  EXPECT_TRUE(table_->UpdateSyncMetadata(model_type, storage_key, metadata));
 
   ModelTypeState model_type_state;
   model_type_state.set_initial_sync_done(true);
 
-  EXPECT_TRUE(table_->UpdateModelTypeState(syncer::AUTOFILL, model_type_state));
+  EXPECT_TRUE(table_->UpdateModelTypeState(model_type, model_type_state));
 
   metadata.set_sequence_number(2);
-  EXPECT_TRUE(
-      table_->UpdateSyncMetadata(syncer::AUTOFILL, storage_key2, metadata));
+  EXPECT_TRUE(table_->UpdateSyncMetadata(model_type, storage_key2, metadata));
 
   MetadataBatch metadata_batch;
-  EXPECT_TRUE(table_->GetAllSyncMetadata(syncer::AUTOFILL, &metadata_batch));
+  EXPECT_TRUE(table_->GetAllSyncMetadata(model_type, &metadata_batch));
 
   EXPECT_TRUE(metadata_batch.GetModelTypeState().initial_sync_done());
 
@@ -2379,13 +2679,14 @@ TEST_F(AutofillTableTest, AutofillGetAllSyncMetadata) {
 
   // Now check that a model type state update replaces the old value
   model_type_state.set_initial_sync_done(false);
-  EXPECT_TRUE(table_->UpdateModelTypeState(syncer::AUTOFILL, model_type_state));
+  EXPECT_TRUE(table_->UpdateModelTypeState(model_type, model_type_state));
 
-  EXPECT_TRUE(table_->GetAllSyncMetadata(syncer::AUTOFILL, &metadata_batch));
+  EXPECT_TRUE(table_->GetAllSyncMetadata(model_type, &metadata_batch));
   EXPECT_FALSE(metadata_batch.GetModelTypeState().initial_sync_done());
 }
 
-TEST_F(AutofillTableTest, AutofillWriteThenDeleteSyncMetadata) {
+TEST_P(AutofillTableTestPerModelType, AutofillWriteThenDeleteSyncMetadata) {
+  syncer::ModelType model_type = GetParam();
   EntityMetadata metadata;
   MetadataBatch metadata_batch;
   std::string storage_key = "storage_key";
@@ -2396,46 +2697,54 @@ TEST_F(AutofillTableTest, AutofillWriteThenDeleteSyncMetadata) {
   metadata.set_client_tag_hash("client_hash");
 
   // Write the data into the store.
-  EXPECT_TRUE(
-      table_->UpdateSyncMetadata(syncer::AUTOFILL, storage_key, metadata));
-  EXPECT_TRUE(table_->UpdateModelTypeState(syncer::AUTOFILL, model_type_state));
+  EXPECT_TRUE(table_->UpdateSyncMetadata(model_type, storage_key, metadata));
+  EXPECT_TRUE(table_->UpdateModelTypeState(model_type, model_type_state));
   // Delete the data we just wrote.
-  EXPECT_TRUE(table_->ClearSyncMetadata(syncer::AUTOFILL, storage_key));
+  EXPECT_TRUE(table_->ClearSyncMetadata(model_type, storage_key));
   // It shouldn't be there any more.
-  EXPECT_TRUE(table_->GetAllSyncMetadata(syncer::AUTOFILL, &metadata_batch));
+  EXPECT_TRUE(table_->GetAllSyncMetadata(model_type, &metadata_batch));
 
   EntityMetadataMap metadata_records = metadata_batch.TakeAllMetadata();
   EXPECT_EQ(metadata_records.size(), 0u);
 
   // Now delete the model type state.
-  EXPECT_TRUE(table_->ClearModelTypeState(syncer::AUTOFILL));
-  EXPECT_TRUE(table_->GetAllSyncMetadata(syncer::AUTOFILL, &metadata_batch));
+  EXPECT_TRUE(table_->ClearModelTypeState(model_type));
+  EXPECT_TRUE(table_->GetAllSyncMetadata(model_type, &metadata_batch));
   EXPECT_EQ(ModelTypeState().SerializeAsString(),
             metadata_batch.GetModelTypeState().SerializeAsString());
 }
 
-TEST_F(AutofillTableTest, AutofillCorruptSyncMetadata) {
+TEST_P(AutofillTableTestPerModelType, AutofillCorruptSyncMetadata) {
+  syncer::ModelType model_type = GetParam();
   MetadataBatch metadata_batch;
   sql::Statement s(db_->GetSQLConnection()->GetUniqueStatement(
       "INSERT OR REPLACE INTO autofill_sync_metadata "
-      "(storage_key, value) VALUES(?, ?)"));
-  s.BindString(0, "storage_key");
-  s.BindString(1, "unparseable");
+      "(model_type, storage_key, value) VALUES(?, ?, ?)"));
+  s.BindInt(0, syncer::ModelTypeToStableIdentifier(model_type));
+  s.BindString(1, "storage_key");
+  s.BindString(2, "unparseable");
   EXPECT_TRUE(s.Run());
 
-  EXPECT_FALSE(table_->GetAllSyncMetadata(syncer::AUTOFILL, &metadata_batch));
+  EXPECT_FALSE(table_->GetAllSyncMetadata(model_type, &metadata_batch));
 }
 
-TEST_F(AutofillTableTest, AutofillCorruptModelTypeState) {
+TEST_P(AutofillTableTestPerModelType, AutofillCorruptModelTypeState) {
+  syncer::ModelType model_type = GetParam();
   MetadataBatch metadata_batch;
   sql::Statement s(db_->GetSQLConnection()->GetUniqueStatement(
       "INSERT OR REPLACE INTO autofill_model_type_state "
-      "(rowid, value) VALUES(1, ?)"));
-  s.BindString(0, "unparseable");
+      "(model_type, value) VALUES(?, ?)"));
+  s.BindInt(0, syncer::ModelTypeToStableIdentifier(model_type));
+  s.BindString(1, "unparseable");
   EXPECT_TRUE(s.Run());
 
-  EXPECT_FALSE(table_->GetAllSyncMetadata(syncer::AUTOFILL, &metadata_batch));
+  EXPECT_FALSE(table_->GetAllSyncMetadata(model_type, &metadata_batch));
 }
+
+INSTANTIATE_TEST_CASE_P(AutofillTableTest,
+                        AutofillTableTestPerModelType,
+                        testing::Values(syncer::AUTOFILL,
+                                        syncer::AUTOFILL_PROFILE));
 
 TEST_F(AutofillTableTest, RemoveOrphanAutofillTableRows) {
   // Populate the different tables.

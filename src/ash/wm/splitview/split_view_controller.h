@@ -5,6 +5,7 @@
 #ifndef ASH_WM_SPLITSVIEW_SPLIT_VIEW_CONTROLLER_H_
 #define ASH_WM_SPLITSVIEW_SPLIT_VIEW_CONTROLLER_H_
 
+#include "ash/accessibility/accessibility_observer.h"
 #include "ash/ash_export.h"
 #include "ash/display/screen_orientation_controller.h"
 #include "ash/public/interfaces/split_view.mojom.h"
@@ -32,7 +33,6 @@ namespace ash {
 class SplitViewControllerTest;
 class SplitViewDivider;
 class SplitViewWindowSelectorTest;
-class OverviewWindowAnimationObserver;
 
 // The controller for the split view. It snaps a window to left/right side of
 // the screen. It also observes the two snapped windows and decides when to exit
@@ -44,7 +44,8 @@ class ASH_EXPORT SplitViewController : public mojom::SplitViewController,
                                        public ::wm::ActivationChangeObserver,
                                        public ShellObserver,
                                        public display::DisplayObserver,
-                                       public TabletModeObserver {
+                                       public TabletModeObserver,
+                                       public AccessibilityObserver {
  public:
   enum State { NO_SNAP, LEFT_SNAPPED, RIGHT_SNAPPED, BOTH_SNAPPED };
 
@@ -55,6 +56,15 @@ class ASH_EXPORT SplitViewController : public mojom::SplitViewController,
   // "portait primary", snapping a window to LEFT means snapping it to the
   // top of the screen.
   enum SnapPosition { NONE, LEFT, RIGHT };
+
+  // Why splitview was ended. For now, all reasons will be kNormal except when
+  // the home launcher button is pressed or an unsnappable window just got
+  // activated.
+  enum class EndReason {
+    kNormal = 0,
+    kHomeLauncherPressed,
+    kUnsnappableWindowActivated,
+  };
 
   class Observer {
    public:
@@ -137,9 +147,10 @@ class ASH_EXPORT SplitViewController : public mojom::SplitViewController,
   void ShowAppCannotSnapToast();
 
   // Ends the split view mode.
-  void EndSplitView();
+  void EndSplitView(EndReason end_reason = EndReason::kNormal);
 
-  // Called when a window's tab(s) start/end being dragging around.
+  // Called when a window (either it's browser window or an app window) start/
+  // end being dragged.
   void OnWindowDragStarted(aura::Window* dragged_window);
   void OnWindowDragEnded(aura::Window* dragged_window,
                          SnapPosition desired_snap_position,
@@ -148,11 +159,13 @@ class ASH_EXPORT SplitViewController : public mojom::SplitViewController,
   void AddObserver(Observer* observer);
   void RemoveObserver(Observer* observer);
 
+  void FlushForTesting();
+
   // mojom::SplitViewObserver:
   void AddObserver(mojom::SplitViewObserverPtr observer) override;
 
   // aura::WindowObserver:
-  void OnWindowDestroying(aura::Window* window) override;
+  void OnWindowDestroyed(aura::Window* window) override;
   void OnWindowPropertyChanged(aura::Window* window,
                                const void* key,
                                intptr_t old) override;
@@ -178,6 +191,9 @@ class ASH_EXPORT SplitViewController : public mojom::SplitViewController,
   // TabletModeObserver:
   void OnTabletModeEnding() override;
 
+  // AccessibilityObserver:
+  void OnAccessibilityStatusChanged() override;
+
   aura::Window* left_window() { return left_window_; }
   aura::Window* right_window() { return right_window_; }
   int divider_position() const { return divider_position_; }
@@ -185,10 +201,7 @@ class ASH_EXPORT SplitViewController : public mojom::SplitViewController,
   SnapPosition default_snap_position() const { return default_snap_position_; }
   SplitViewDivider* split_view_divider() { return split_view_divider_.get(); }
   bool is_resizing() const { return is_resizing_; }
-  base::WeakPtr<OverviewWindowAnimationObserver>
-  snapped_window_animation_observer() {
-    return snapped_window_animation_observer_;
-  }
+  EndReason end_reason() const { return end_reason_; }
 
  private:
   friend class SplitViewControllerTest;
@@ -251,8 +264,9 @@ class ASH_EXPORT SplitViewController : public mojom::SplitViewController,
   // needs to be activated. Returns nullptr if there is no such window.
   aura::Window* GetActiveWindowAfterResizingUponExit();
 
-  // Returns the maximum value of the |divider_position_|. It should always be
-  // the length of the longer side of the current display's work area bounds.
+  // Returns the maximum value of the |divider_position_|. It is the width of
+  // the current display's work area bounds in landscape orientation, or height
+  // of the current display's work area bounds in portrait orientation.
   int GetDividerEndPosition();
 
   // Called after a to-be-snapped window |window| got snapped. It updates the
@@ -308,16 +322,22 @@ class ASH_EXPORT SplitViewController : public mojom::SplitViewController,
   // Restore the snapped windows transform to identity transform after resizing.
   void RestoreWindowsTransformAfterResizing();
 
-  // Set |transform| for |window| and its transient descendants.
-  void SetTransform(aura::Window* window, const gfx::Transform& transform);
+  // Animates to |target_transform| for |window| and its transient descendants.
+  // |window| will be applied |start_transform| first and then animate to
+  // |target_transform|. Note |start_transform| and |end_transform| are for
+  // |window| and need to be adjusted for its transient child windows.
+  void SetTransformWithAnimation(aura::Window* window,
+                                 const gfx::Transform& start_transform,
+                                 const gfx::Transform& target_transform);
 
   // Removes the window item that contains |window| from the overview window
   // grid if |window| is currently showing in overview window grid. It should be
   // called before trying to snap the window.
   void RemoveWindowFromOverviewIfApplicable(aura::Window* window);
 
-  // Returns the window that is currently snapped at |snap_position|.
-  aura::Window* GetSnappedWindowAt(SnapPosition snap_position);
+  // Updates the |snapping_window_transformed_bounds_map_| on |window|. It
+  // should be called before trying to snap the window.
+  void UpdateSnappingWindowTransformedBounds(aura::Window* window);
 
   // Inserts |window| into overview window grid if overview mode is active. Do
   // nothing if overview mode is inactive at the moment.
@@ -327,8 +347,24 @@ class ASH_EXPORT SplitViewController : public mojom::SplitViewController,
   void StartOverview();
   void EndOverview();
 
-  // Finalizes and cleans up after a drag or resize is finished for a window.
-  void FinishWindowDrag(aura::Window* window);
+  // Finalizes and cleans up after stopping dragging the divider bar to resize
+  // snapped windows.
+  void FinishWindowResizing(aura::Window* window);
+
+  // Called by OnWindowDragEnded to do the actual work of finishing the window
+  // dragging. If |is_being_destroyed| equals true, the dragged window is to be
+  // destroyed, and SplitViewController should not try to put it in splitview.
+  void EndWindowDragImpl(aura::Window* window,
+                         bool is_being_destroyed,
+                         SnapPosition desired_snap_position,
+                         const gfx::Point& last_location_in_screen);
+
+  // Gets the snap position of |window| according to last mouse/gesture event
+  // location on |window|. Used when |desired_snap_position_| was NONE but
+  // SplitViewController needs to snap the |window| after dragging.
+  SplitViewController::SnapPosition GetSnapPosition(
+      aura::Window* window,
+      const gfx::Point& last_location_in_screen);
 
   // Bindings for the SplitViewController interface.
   mojo::BindingSet<mojom::SplitViewController> bindings_;
@@ -351,8 +387,8 @@ class ASH_EXPORT SplitViewController : public mojom::SplitViewController,
   // The window observer that obseves the tab-dragged window.
   std::unique_ptr<TabDraggedWindowObserver> dragged_window_observer_;
 
-  // The distance between the origin of the divider and the origin of the screen
-  // in screen coordinates.
+  // The distance between the origin of the divider and the origin of the
+  // current display's work area in screen coordinates.
   //     |<---     divider_position_    --->|
   //     ----------------------------------------------------------
   //     |                                  | |                    |
@@ -360,6 +396,12 @@ class ASH_EXPORT SplitViewController : public mojom::SplitViewController,
   //     |                                  | |                    |
   //     ----------------------------------------------------------
   int divider_position_ = -1;
+
+  // The closest position ratio of divider among kFixedPositionRatios,
+  // kOneThirdPositionRatio and kTwoThirdPositionRatio based on current
+  // |divider_position_|. Used to update |divider_position_| on work area
+  // changes.
+  float divider_closest_ratio_ = 0.f;
 
   // The location of the previous mouse/gesture event in screen coordinates.
   gfx::Point previous_event_location_;
@@ -379,19 +421,17 @@ class ASH_EXPORT SplitViewController : public mojom::SplitViewController,
   // If the divider is currently being dragging.
   bool is_resizing_ = false;
 
+  // Stores the reason which cause splitview to end.
+  EndReason end_reason_ = EndReason::kNormal;
+
   // The time when splitview starts. Used for metric collection purpose.
   base::Time splitview_start_time_;
 
-  // The map from a to-be-snapped window to its overview item's bounds if the
-  // window comes from the overview.
-  base::flat_map<aura::Window*, gfx::Rect> overview_window_item_bounds_map_;
+  // The map from a to-be-snapped window to its transformed bounds.
+  base::flat_map<aura::Window*, gfx::Rect>
+      snapping_window_transformed_bounds_map_;
 
-  // Weak ptr to the observer that observes the snapped window's transform
-  // animaiton if it comes from the overview.
-  base::WeakPtr<OverviewWindowAnimationObserver>
-      snapped_window_animation_observer_ = nullptr;
-
-  base::ObserverList<Observer> observers_;
+  base::ObserverList<Observer>::Unchecked observers_;
   mojo::InterfacePtrSet<mojom::SplitViewObserver> mojo_observers_;
 
   DISALLOW_COPY_AND_ASSIGN(SplitViewController);

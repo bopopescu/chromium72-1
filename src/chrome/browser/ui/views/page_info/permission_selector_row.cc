@@ -10,22 +10,19 @@
 #include "chrome/browser/ui/page_info/page_info_ui.h"
 #include "chrome/browser/ui/page_info/permission_menu_model.h"
 #include "chrome/browser/ui/views/accessibility/non_accessible_image_view.h"
-#include "chrome/browser/ui/views/harmony/chrome_layout_provider.h"
-#include "chrome/browser/ui/views/harmony/chrome_typography.h"
+#include "chrome/browser/ui/views/chrome_layout_provider.h"
+#include "chrome/browser/ui/views/chrome_typography.h"
 #include "chrome/browser/ui/views/page_info/page_info_bubble_view.h"
 #include "components/strings/grit/components_strings.h"
 #include "ui/accessibility/ax_node_data.h"
 #include "ui/base/l10n/l10n_util.h"
-#include "ui/base/material_design/material_design_controller.h"
 #include "ui/base/models/combobox_model.h"
 #include "ui/gfx/color_utils.h"
 #include "ui/gfx/image/image.h"
-#include "ui/views/controls/button/menu_button.h"
 #include "ui/views/controls/combobox/combobox.h"
 #include "ui/views/controls/combobox/combobox_listener.h"
 #include "ui/views/controls/image_view.h"
 #include "ui/views/controls/label.h"
-#include "ui/views/controls/menu/menu_runner.h"
 #include "ui/views/layout/grid_layout.h"
 #include "ui/views/view.h"
 #include "ui/views/widget/widget.h"
@@ -42,7 +39,7 @@ int CalculatePaddingBeneathPermissionRow(bool has_reason) {
   const int list_item_padding = ChromeLayoutProvider::Get()->GetDistanceMetric(
                                     DISTANCE_CONTROL_LIST_VERTICAL) /
                                 2;
-  if (!ui::MaterialDesignController::IsSecondaryUiMaterial() || !has_reason)
+  if (!has_reason)
     return list_item_padding;
 
   const int combobox_height =
@@ -60,97 +57,6 @@ int CalculatePaddingBeneathPermissionRow(bool has_reason) {
 }  // namespace
 
 namespace internal {
-
-// The |PermissionMenuButton| provides a menu for selecting a setting a
-// permissions type.
-class PermissionMenuButton : public views::MenuButton,
-                             public views::MenuButtonListener {
- public:
-  // Creates a new |PermissionMenuButton| with the passed |text|. The ownership
-  // of the |model| remains with the caller and is not transfered to the
-  // |PermissionMenuButton|. If the |show_menu_marker| flag is true, then a
-  // small icon is be displayed next to the button |text|, indicating that the
-  // button opens a drop down menu.
-  PermissionMenuButton(const base::string16& text,
-                       PermissionMenuModel* model,
-                       bool show_menu_marker);
-  ~PermissionMenuButton() override;
-
-  // Overridden from views::View.
-  void GetAccessibleNodeData(ui::AXNodeData* node_data) override;
-  void OnNativeThemeChanged(const ui::NativeTheme* theme) override;
-
- private:
-  // Overridden from views::MenuButtonListener.
-  void OnMenuButtonClicked(views::MenuButton* source,
-                           const gfx::Point& point,
-                           const ui::Event* event) override;
-
-  PermissionMenuModel* menu_model_;  // Owned by |PermissionSelectorRow|.
-  std::unique_ptr<views::MenuRunner> menu_runner_;
-
-  bool is_rtl_display_;
-
-  DISALLOW_COPY_AND_ASSIGN(PermissionMenuButton);
-};
-
-///////////////////////////////////////////////////////////////////////////////
-// PermissionMenuButton
-///////////////////////////////////////////////////////////////////////////////
-
-PermissionMenuButton::PermissionMenuButton(const base::string16& text,
-                                           PermissionMenuModel* model,
-                                           bool show_menu_marker)
-    : MenuButton(text, this, show_menu_marker), menu_model_(model) {
-  // Since PermissionMenuButtons are added to a GridLayout, they are not always
-  // sized to their preferred size. Disclosure arrows are always right-aligned,
-  // so if the text is not right-aligned, awkward space appears between the text
-  // and the arrow.
-  SetHorizontalAlignment(gfx::ALIGN_RIGHT);
-
-  // Update the themed border before the NativeTheme is applied. Usually this
-  // happens in a call to LabelButton::OnNativeThemeChanged(). However, if
-  // PermissionMenuButton called that from its override, the NativeTheme would
-  // be available, and the button would get native GTK styling on Linux.
-  UpdateThemedBorder();
-
-  SetFocusForPlatform();
-  set_request_focus_on_press(true);
-  is_rtl_display_ =
-      base::i18n::RIGHT_TO_LEFT == base::i18n::GetStringDirection(text);
-}
-
-PermissionMenuButton::~PermissionMenuButton() {}
-
-void PermissionMenuButton::GetAccessibleNodeData(ui::AXNodeData* node_data) {
-  MenuButton::GetAccessibleNodeData(node_data);
-  node_data->SetValue(GetText());
-}
-
-void PermissionMenuButton::OnNativeThemeChanged(const ui::NativeTheme* theme) {
-  SetTextColor(
-      views::Button::STATE_NORMAL,
-      theme->GetSystemColor(ui::NativeTheme::kColorId_LabelEnabledColor));
-  SetTextColor(
-      views::Button::STATE_HOVERED,
-      theme->GetSystemColor(ui::NativeTheme::kColorId_LabelEnabledColor));
-  SetTextColor(
-      views::Button::STATE_DISABLED,
-      theme->GetSystemColor(ui::NativeTheme::kColorId_LabelDisabledColor));
-}
-
-void PermissionMenuButton::OnMenuButtonClicked(views::MenuButton* source,
-                                               const gfx::Point& point,
-                                               const ui::Event* event) {
-  menu_runner_.reset(
-      new views::MenuRunner(menu_model_, views::MenuRunner::HAS_MNEMONICS));
-
-  gfx::Point p(point);
-  p.Offset(is_rtl_display_ ? source->width() : -source->width(), 0);
-  menu_runner_->RunMenuAt(source->GetWidget()->GetTopLevelWidget(), this,
-                          gfx::Rect(p, gfx::Size()), views::MENU_ANCHOR_TOPLEFT,
-                          ui::MENU_SOURCE_NONE);
-}
 
 // This class adapts a |PermissionMenuModel| into a |ui::ComboboxModel| so that
 // |PermissionCombobox| can use it.
@@ -205,8 +111,6 @@ base::string16 ComboboxModelAdapter::GetItemAt(int index) {
 }
 
 // The |PermissionCombobox| provides a combobox for selecting a permission type.
-// This is only used on platforms where the permission dialog uses a combobox
-// instead of a MenuButton (currently, Mac).
 class PermissionCombobox : public views::Combobox,
                            public views::ComboboxListener {
  public:
@@ -241,10 +145,8 @@ PermissionCombobox::PermissionCombobox(ComboboxModelAdapter* model,
   set_listener(this);
   SetEnabled(enabled);
   UpdateSelectedIndex(use_default);
-  if (ui::MaterialDesignController::IsSecondaryUiMaterial()) {
-    set_size_to_largest_label(false);
-    ModelChanged();
-  }
+  set_size_to_largest_label(false);
+  ModelChanged();
 }
 
 PermissionCombobox::~PermissionCombobox() {}
@@ -278,15 +180,12 @@ PermissionSelectorRow::PermissionSelectorRow(
     const GURL& url,
     const PageInfoUI::PermissionInfo& permission,
     views::GridLayout* layout)
-    : profile_(profile),
-      icon_(nullptr),
-      menu_button_(nullptr),
-      combobox_(nullptr) {
+    : profile_(profile), icon_(nullptr), combobox_(nullptr) {
   const int list_item_padding = ChromeLayoutProvider::Get()->GetDistanceMetric(
                                     DISTANCE_CONTROL_LIST_VERTICAL) /
                                 2;
-  layout->StartRowWithPadding(1, PageInfoBubbleView::kPermissionColumnSetId, 0,
-                              list_item_padding);
+  layout->StartRowWithPadding(1.0, PageInfoBubbleView::kPermissionColumnSetId,
+                              views::GridLayout::kFixedSize, list_item_padding);
 
   // Create the permission icon and label.
   icon_ = new NonAccessibleImageView();
@@ -304,24 +203,14 @@ PermissionSelectorRow::PermissionSelectorRow(
       base::Bind(&PermissionSelectorRow::PermissionChanged,
                  base::Unretained(this))));
 
-// Create the permission menu button.
-#if defined(OS_MACOSX)
-  bool use_real_combobox = true;
-#else
-  bool use_real_combobox =
-      ui::MaterialDesignController::IsSecondaryUiMaterial();
-#endif
-  if (use_real_combobox) {
-    InitializeComboboxView(layout, permission);
-  } else {
-    InitializeMenuButtonView(layout, permission);
-  }
+  // Create the permission combobox.
+  InitializeComboboxView(layout, permission);
 
   // Show the permission decision reason, if it was not the user.
   base::string16 reason =
       PageInfoUI::PermissionDecisionReasonToUIString(profile, permission, url);
   if (!reason.empty()) {
-    layout->StartRow(1, PageInfoBubbleView::kPermissionColumnSetId);
+    layout->StartRow(1.0, PageInfoBubbleView::kPermissionColumnSetId);
     layout->SkipColumns(1);
     views::Label* secondary_label = new views::Label(reason);
     secondary_label->SetHorizontalAlignment(gfx::ALIGN_LEFT);
@@ -337,24 +226,22 @@ PermissionSelectorRow::PermissionSelectorRow(
     DCHECK(column_set);
     // Secondary labels in Harmony may not overlap into space shared with the
     // combobox column.
-    const int column_span =
-        ui::MaterialDesignController::IsSecondaryUiMaterial() ? 1 : 3;
+    const int column_span = 1;
 
-    // In Harmony, long labels that cannot fit in the existing space under the
-    // permission label should be allowed to use up to |kMaxSecondaryLabelWidth|
-    // for display.
+    // Long labels that cannot fit in the existing space under the permission
+    // label should be allowed to use up to |kMaxSecondaryLabelWidth| for
+    // display.
     constexpr int kMaxSecondaryLabelWidth = 140;
-    if (ui::MaterialDesignController::IsSecondaryUiMaterial() &&
-        preferred_width > kMaxSecondaryLabelWidth) {
-      layout->AddView(secondary_label, column_span, 1,
+    if (preferred_width > kMaxSecondaryLabelWidth) {
+      layout->AddView(secondary_label, column_span, 1.0,
                       views::GridLayout::LEADING, views::GridLayout::CENTER,
                       kMaxSecondaryLabelWidth, 0);
     } else {
-      layout->AddView(secondary_label, column_span, 1, views::GridLayout::FILL,
-                      views::GridLayout::CENTER);
+      layout->AddView(secondary_label, column_span, 1.0,
+                      views::GridLayout::FILL, views::GridLayout::CENTER);
     }
   }
-  layout->AddPaddingRow(0,
+  layout->AddPaddingRow(views::GridLayout::kFixedSize,
                         CalculatePaddingBeneathPermissionRow(!reason.empty()));
 }
 
@@ -366,9 +253,6 @@ PermissionSelectorRow::~PermissionSelectorRow() {
   // causes an explosion when the Combobox attempts to stop observing the
   // ComboboxModel. This hack ensures the Combobox is deleted before its
   // ComboboxModel.
-  //
-  // Technically, the MenuButton has the same problem, but MenuButton doesn't
-  // use its model in its destructor.
   delete combobox_;
 }
 
@@ -382,23 +266,6 @@ int PermissionSelectorRow::MinHeightForPermissionRow() {
 void PermissionSelectorRow::AddObserver(
     PermissionSelectorRowObserver* observer) {
   observer_list_.AddObserver(observer);
-}
-
-void PermissionSelectorRow::InitializeMenuButtonView(
-    views::GridLayout* layout,
-    const PageInfoUI::PermissionInfo& permission) {
-  bool button_enabled =
-      permission.source == content_settings::SETTING_SOURCE_USER;
-  menu_button_ = new internal::PermissionMenuButton(
-      PageInfoUI::PermissionActionToUIString(
-          profile_, permission.type, permission.setting,
-          permission.default_setting, permission.source),
-      menu_model_.get(), button_enabled);
-  menu_button_->SetEnabled(button_enabled);
-  menu_button_->SetTooltipText(l10n_util::GetStringFUTF16(
-      IDS_PAGE_INFO_SELECTOR_TOOLTIP,
-      PageInfoUI::PermissionTypeToUIString(permission.type)));
-  layout->AddView(menu_button_);
 }
 
 void PermissionSelectorRow::InitializeComboboxView(
@@ -423,18 +290,9 @@ void PermissionSelectorRow::PermissionChanged(
   icon_->SetImage(
       PageInfoUI::GetPermissionIcon(permission, label_->enabled_color()));
 
-  // Update the menu button text to reflect the new setting.
-  if (menu_button_) {
-    // Re-layout will be done at the |PageInfoBubbleView| level, since
-    // that view may need to resize itself to accomodate the new sizes of its
-    // contents.
-    menu_button_->SetText(PageInfoUI::PermissionActionToUIString(
-        profile_, permission.type, permission.setting,
-        permission.default_setting, content_settings::SETTING_SOURCE_USER));
-  } else if (combobox_) {
-    bool use_default = permission.setting == CONTENT_SETTING_DEFAULT;
-    combobox_->UpdateSelectedIndex(use_default);
-  }
+  bool use_default = permission.setting == CONTENT_SETTING_DEFAULT;
+  auto* combobox = static_cast<internal::PermissionCombobox*>(combobox_);
+  combobox->UpdateSelectedIndex(use_default);
 
   for (PermissionSelectorRowObserver& observer : observer_list_) {
     observer.OnPermissionChanged(permission);
@@ -442,19 +300,10 @@ void PermissionSelectorRow::PermissionChanged(
 }
 
 int PermissionSelectorRow::GetComboboxWidth() const {
-  DCHECK(combobox_);
   return combobox_->Combobox::GetPreferredSize().width();
 }
 
 void PermissionSelectorRow::SetMinComboboxWidth(int width) {
-  DCHECK(combobox_);
-  combobox_->set_min_width(width);
-}
-
-views::View* PermissionSelectorRow::button() {
-  // These casts are required because the two arms of a ?: cannot have different
-  // types T1 and T2, even if the resulting value of the ?: is about to be a T
-  // and T1 and T2 are both subtypes of T.
-  return menu_button_ ? static_cast<views::View*>(menu_button_)
-                      : static_cast<views::View*>(combobox_);
+  auto* combobox = static_cast<internal::PermissionCombobox*>(combobox_);
+  combobox->set_min_width(width);
 }

@@ -7,7 +7,10 @@
 #include <stddef.h>
 
 #include <memory>
+#include <utility>
+#include <vector>
 
+#include "base/bind.h"
 #include "base/macros.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/test/simple_test_tick_clock.h"
@@ -19,20 +22,20 @@
 #include "chrome/browser/search_engines/template_url_service_factory_test_util.h"
 #include "chrome/browser/ui/omnibox/chrome_omnibox_client.h"
 #include "chrome/browser/ui/omnibox/chrome_omnibox_edit_controller.h"
+#include "chrome/browser/ui/omnibox/query_in_omnibox_factory.h"
 #include "chrome/test/base/testing_profile.h"
 #include "chrome/test/views/chrome_views_test_base.h"
-#include "chrome/test/views/scoped_macviews_browser_mode.h"
 #include "components/omnibox/browser/omnibox_edit_model.h"
 #include "components/omnibox/browser/omnibox_field_trial.h"
-#include "components/toolbar/test_toolbar_model.h"
+#include "components/omnibox/browser/test_location_bar_model.h"
 #include "content/public/test/test_browser_thread_bundle.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "third_party/metrics_proto/omnibox_event.pb.h"
 #include "ui/base/ime/input_method.h"
 #include "ui/base/ime/text_edit_commands.h"
 #include "ui/events/event_utils.h"
 #include "ui/events/keycodes/dom/dom_code.h"
 #include "ui/gfx/geometry/rect.h"
-#include "ui/gfx/geometry/vector2d.h"
 #include "ui/gfx/render_text.h"
 #include "ui/gfx/render_text_test_api.h"
 #include "ui/views/controls/textfield/textfield_test_api.h"
@@ -43,6 +46,7 @@
 #endif
 
 using gfx::Range;
+using metrics::OmniboxEventProto;
 
 namespace {
 
@@ -70,6 +74,8 @@ class TestingOmniboxView : public OmniboxViewViews {
   void CheckUpdatePopupCallInfo(size_t call_count,
                                 const base::string16& text,
                                 const Range& selection_range);
+
+  void CheckUpdatePopupNotCalled();
 
   Range scheme_range() const { return scheme_range_; }
   Range emphasis_range() const { return emphasis_range_; }
@@ -128,6 +134,10 @@ void TestingOmniboxView::CheckUpdatePopupCallInfo(
   EXPECT_EQ(selection_range, update_popup_selection_range_);
 }
 
+void TestingOmniboxView::CheckUpdatePopupNotCalled() {
+  EXPECT_EQ(update_popup_call_count_, 0U);
+}
+
 void TestingOmniboxView::EmphasizeURLComponents() {
   UpdateTextStyle(text(), model()->CurrentTextIsURL(),
                   model()->client()->GetSchemeClassifier());
@@ -158,18 +168,20 @@ void TestingOmniboxView::UpdateSchemeStyle(const Range& range) {
 class TestingOmniboxEditController : public ChromeOmniboxEditController {
  public:
   TestingOmniboxEditController(CommandUpdater* command_updater,
-                               ToolbarModel* toolbar_model)
+                               LocationBarModel* location_bar_model)
       : ChromeOmniboxEditController(command_updater),
-        toolbar_model_(toolbar_model) {}
+        location_bar_model_(location_bar_model) {}
 
  private:
   // ChromeOmniboxEditController:
-  ToolbarModel* GetToolbarModel() override { return toolbar_model_; }
-  const ToolbarModel* GetToolbarModel() const override {
-    return toolbar_model_;
+  LocationBarModel* GetLocationBarModel() override {
+    return location_bar_model_;
+  }
+  const LocationBarModel* GetLocationBarModel() const override {
+    return location_bar_model_;
   }
 
-  ToolbarModel* toolbar_model_;
+  LocationBarModel* location_bar_model_;
 
   DISALLOW_COPY_AND_ASSIGN(TestingOmniboxEditController);
 };
@@ -178,11 +190,26 @@ class TestingOmniboxEditController : public ChromeOmniboxEditController {
 
 // OmniboxViewViewsTest -------------------------------------------------------
 
-class OmniboxViewViewsTest : public ChromeViewsTestBase {
+// Base class that ensures ScopedFeatureList is initialized first.
+class OmniboxViewViewsTestBase : public ChromeViewsTestBase {
  public:
-  OmniboxViewViewsTest();
+  explicit OmniboxViewViewsTestBase(
+      const std::vector<base::Feature>& enabled_features) {
+    scoped_feature_list_.InitWithFeatures(enabled_features, {});
+  }
 
-  TestToolbarModel* toolbar_model() { return &toolbar_model_; }
+ protected:
+  base::test::ScopedFeatureList scoped_feature_list_;
+};
+
+class OmniboxViewViewsTest : public OmniboxViewViewsTestBase {
+ public:
+  explicit OmniboxViewViewsTest(
+      const std::vector<base::Feature>& enabled_features);
+
+  OmniboxViewViewsTest() : OmniboxViewViewsTest(std::vector<base::Feature>()) {}
+
+  TestLocationBarModel* location_bar_model() { return &location_bar_model_; }
   TestingOmniboxView* omnibox_view() const { return omnibox_view_; }
   views::Textfield* omnibox_textfield() const { return omnibox_view(); }
   ui::TextEditCommand scheduled_text_edit_command() const {
@@ -203,12 +230,17 @@ class OmniboxViewViewsTest : public ChromeViewsTestBase {
   void SetUp() override;
   void TearDown() override;
 
+  ui::MouseEvent CreateEvent(ui::EventType type, int flags) {
+    return ui::MouseEvent(type, gfx::Point(0, 0), gfx::Point(),
+                          ui::EventTimeForNow(), flags, 0);
+  }
+
  private:
   content::TestBrowserThreadBundle thread_bundle_;
   TestingProfile profile_;
   TemplateURLServiceFactoryTestUtil util_;
   CommandUpdaterImpl command_updater_;
-  TestToolbarModel toolbar_model_;
+  TestLocationBarModel location_bar_model_;
   TestingOmniboxEditController omnibox_edit_controller_;
 
   std::unique_ptr<views::Widget> widget_;
@@ -221,10 +253,12 @@ class OmniboxViewViewsTest : public ChromeViewsTestBase {
   DISALLOW_COPY_AND_ASSIGN(OmniboxViewViewsTest);
 };
 
-OmniboxViewViewsTest::OmniboxViewViewsTest()
-    : util_(&profile_),
+OmniboxViewViewsTest::OmniboxViewViewsTest(
+    const std::vector<base::Feature>& enabled_features)
+    : OmniboxViewViewsTestBase(enabled_features),
+      util_(&profile_),
       command_updater_(nullptr),
-      omnibox_edit_controller_(&command_updater_, &toolbar_model_) {}
+      omnibox_edit_controller_(&command_updater_, &location_bar_model_) {}
 
 void OmniboxViewViewsTest::SetAndEmphasizeText(const std::string& new_text,
                                                bool accept_input) {
@@ -256,7 +290,10 @@ void OmniboxViewViewsTest::SetUp() {
       new chromeos::input_method::MockInputMethodManagerImpl);
 #endif
   AutocompleteClassifierFactory::GetInstance()->SetTestingFactoryAndUse(
-      &profile_, &AutocompleteClassifierFactory::BuildInstanceFor);
+      &profile_,
+      base::BindRepeating(&AutocompleteClassifierFactory::BuildInstanceFor));
+  QueryInOmniboxFactory::GetInstance()->SetTestingFactoryAndUse(
+      &profile_, base::BindRepeating(&QueryInOmniboxFactory::BuildInstanceFor));
   omnibox_view_ = new TestingOmniboxView(
       &omnibox_edit_controller_, std::make_unique<ChromeOmniboxClient>(
                                      &omnibox_edit_controller_, &profile_));
@@ -327,6 +364,37 @@ TEST_F(OmniboxViewViewsTest, ScheduledTextEditCommand) {
   omnibox_textfield()->OnKeyEvent(&up_pressed);
   EXPECT_EQ(ui::TextEditCommand::INVALID_COMMAND,
             scheduled_text_edit_command());
+}
+
+// Test that Shift+Up and Shift+Down are not captured and let selection mode
+// take over. Test for crbug.com/863543 and crbug.com/892216.
+TEST_F(OmniboxViewViewsTest, SelectWithShift_863543) {
+  const base::string16 text =
+      base::ASCIIToUTF16("http://www.example.com/?query=1");
+  static_cast<OmniboxView*>(omnibox_view())
+      ->SetWindowTextAndCaretPos(text, 23U, false, false);
+
+  ui::KeyEvent shift_up_pressed(ui::ET_KEY_PRESSED, ui::VKEY_UP,
+                                ui::EF_SHIFT_DOWN);
+  omnibox_textfield()->OnKeyEvent(&shift_up_pressed);
+
+  size_t start, end;
+  omnibox_view()->GetSelectionBounds(&start, &end);
+  EXPECT_EQ(23U, start);
+  EXPECT_EQ(0U, end);
+  omnibox_view()->CheckUpdatePopupNotCalled();
+
+  static_cast<OmniboxView*>(omnibox_view())
+      ->SetWindowTextAndCaretPos(text, 18U, false, false);
+
+  ui::KeyEvent shift_down_pressed(ui::ET_KEY_PRESSED, ui::VKEY_DOWN,
+                                  ui::EF_SHIFT_DOWN);
+  omnibox_textfield()->OnKeyEvent(&shift_down_pressed);
+
+  omnibox_view()->GetSelectionBounds(&start, &end);
+  EXPECT_EQ(18U, start);
+  EXPECT_EQ(31U, end);
+  omnibox_view()->CheckUpdatePopupNotCalled();
 }
 
 TEST_F(OmniboxViewViewsTest, OnBlur) {
@@ -414,11 +482,12 @@ TEST_F(OmniboxViewViewsTest, Emphasis) {
 }
 
 TEST_F(OmniboxViewViewsTest, RevertOnBlur) {
-  toolbar_model()->set_formatted_full_url(base::ASCIIToUTF16("permanent text"));
-  omnibox_view()->model()->ResetDisplayUrls();
+  location_bar_model()->set_url(GURL("https://permanent-text.com/"));
+  omnibox_view()->model()->ResetDisplayTexts();
   omnibox_view()->RevertAll();
 
-  EXPECT_EQ(base::ASCIIToUTF16("permanent text"), omnibox_view()->text());
+  EXPECT_EQ(base::ASCIIToUTF16("https://permanent-text.com/"),
+            omnibox_view()->text());
   EXPECT_FALSE(omnibox_view()->model()->user_input_in_progress());
 
   omnibox_view()->SetUserText(base::ASCIIToUTF16("user text"));
@@ -431,38 +500,70 @@ TEST_F(OmniboxViewViewsTest, RevertOnBlur) {
   EXPECT_EQ(base::ASCIIToUTF16("user text"), omnibox_view()->text());
   EXPECT_TRUE(omnibox_view()->model()->user_input_in_progress());
 
-  // Expect that on blur, if the text is the same as the permanent text, exit
-  // user input mode.
-  omnibox_view()->SetUserText(base::ASCIIToUTF16("permanent text"));
+  // Expect that on blur, if the text is the same as the
+  // https://permanent-text.com, exit user input mode.
+  omnibox_view()->SetUserText(
+      base::ASCIIToUTF16("https://permanent-text.com/"));
   EXPECT_TRUE(omnibox_view()->model()->user_input_in_progress());
   omnibox_textfield()->OnBlur();
-  EXPECT_EQ(base::ASCIIToUTF16("permanent text"), omnibox_view()->text());
+  EXPECT_EQ(base::ASCIIToUTF16("https://permanent-text.com/"),
+            omnibox_view()->text());
   EXPECT_FALSE(omnibox_view()->model()->user_input_in_progress());
 }
 
+TEST_F(OmniboxViewViewsTest, BackspaceExitsKeywordMode) {
+  omnibox_view()->SetUserText(base::UTF8ToUTF16("user text"));
+  omnibox_view()->model()->EnterKeywordModeForDefaultSearchProvider(
+      OmniboxEventProto::KEYBOARD_SHORTCUT);
+
+  ASSERT_EQ(base::UTF8ToUTF16("user text"), omnibox_view()->GetText());
+  ASSERT_TRUE(omnibox_view()->IsSelectAll());
+  ASSERT_FALSE(omnibox_view()->model()->keyword().empty());
+
+  // First backspace should clear the user text but not exit keyword mode.
+  ui::KeyEvent backspace(ui::ET_KEY_PRESSED, ui::VKEY_BACK, 0);
+  omnibox_textfield()->OnKeyEvent(&backspace);
+  EXPECT_TRUE(omnibox_view()->GetText().empty());
+  EXPECT_FALSE(omnibox_view()->model()->keyword().empty());
+
+  // Second backspace should exit keyword mode.
+  omnibox_textfield()->OnKeyEvent(&backspace);
+  EXPECT_TRUE(omnibox_view()->GetText().empty());
+  EXPECT_TRUE(omnibox_view()->model()->keyword().empty());
+}
+
 class OmniboxViewViewsSteadyStateElisionsTest : public OmniboxViewViewsTest {
+ public:
+  OmniboxViewViewsSteadyStateElisionsTest()
+      : OmniboxViewViewsTest({
+            omnibox::kHideSteadyStateUrlScheme,
+            omnibox::kHideSteadyStateUrlTrivialSubdomains,
+        }) {}
+
  protected:
+  explicit OmniboxViewViewsSteadyStateElisionsTest(
+      const std::vector<base::Feature>& enabled_features)
+      : OmniboxViewViewsTest(enabled_features) {}
+
   const int kCharacterWidth = 10;
-  const base::string16 kFullUrl = base::ASCIIToUTF16("https://www.example.com");
+  const GURL kFullUrl = GURL("https://www.example.com/");
 
   void SetUp() override {
-    scoped_feature_list_.InitAndEnableFeature(
-        omnibox::kUIExperimentHideSteadyStateUrlSchemeAndSubdomains);
-
     OmniboxViewViewsTest::SetUp();
 
     // Advance 5 seconds from epoch so the time is not considered null.
     clock_.Advance(base::TimeDelta::FromSeconds(5));
     ui::SetEventTickClockForTesting(&clock_);
 
-    toolbar_model()->set_formatted_full_url(kFullUrl);
-    toolbar_model()->set_url_for_display(base::ASCIIToUTF16("example.com"));
+    location_bar_model()->set_url(kFullUrl);
+    location_bar_model()->set_url_for_display(
+        base::ASCIIToUTF16("example.com"));
 
     gfx::test::RenderTextTestApi render_text_test_api(
         omnibox_view()->GetRenderText());
     render_text_test_api.SetGlyphWidth(kCharacterWidth);
 
-    omnibox_view()->model()->ResetDisplayUrls();
+    omnibox_view()->model()->ResetDisplayTexts();
     omnibox_view()->RevertAll();
   }
 
@@ -478,13 +579,14 @@ class OmniboxViewViewsSteadyStateElisionsTest : public OmniboxViewViewsTest {
   }
 
   void ExpectFullUrlDisplayed() {
-    EXPECT_EQ(kFullUrl, omnibox_view()->text());
+    EXPECT_EQ(base::UTF8ToUTF16(kFullUrl.spec()), omnibox_view()->text());
     EXPECT_TRUE(omnibox_view()->model()->user_input_in_progress());
 
     // We test the user text stored in the model has been updated as well. The
     // model user text is used to populate the text in the Omnibox after some
     // state transitions, such as the ZeroSuggest popup opening.
-    EXPECT_EQ(kFullUrl, omnibox_view()->model()->GetUserTextForTesting());
+    EXPECT_EQ(base::UTF8ToUTF16(kFullUrl.spec()),
+              omnibox_view()->model()->GetUserTextForTesting());
   }
 
   bool IsElidedUrlDisplayed() {
@@ -518,8 +620,6 @@ class OmniboxViewViewsSteadyStateElisionsTest : public OmniboxViewViewsTest {
   base::SimpleTestTickClock* clock() { return &clock_; }
 
  private:
-  test::ScopedMacViewsBrowserMode views_mode_{true};
-  base::test::ScopedFeatureList scoped_feature_list_;
   base::SimpleTestTickClock clock_;
 };
 
@@ -668,7 +768,7 @@ TEST_F(OmniboxViewViewsSteadyStateElisionsTest, MouseTripleClick) {
   size_t start, end;
   omnibox_view()->GetSelectionBounds(&start, &end);
   EXPECT_EQ(0U, start);
-  EXPECT_EQ(23U, end);
+  EXPECT_EQ(24U, end);
 }
 
 TEST_F(OmniboxViewViewsSteadyStateElisionsTest, MouseClickDrag) {
@@ -792,12 +892,12 @@ TEST_F(OmniboxViewViewsSteadyStateElisionsTest, DontReelideOnBlurIfEdited) {
                           ui::DomKey::FromCharacter('a'),
                           ui::EventTimeForNow());
   omnibox_textfield()->InsertChar(char_event);
-  EXPECT_EQ(base::ASCIIToUTF16("https://www.a.com"), omnibox_view()->text());
+  EXPECT_EQ(base::ASCIIToUTF16("https://www.a.com/"), omnibox_view()->text());
   EXPECT_TRUE(omnibox_view()->model()->user_input_in_progress());
 
   // Now that we've edited the text, blurring should not re-elide the URL.
   BlurOmnibox();
-  EXPECT_EQ(base::ASCIIToUTF16("https://www.a.com"), omnibox_view()->text());
+  EXPECT_EQ(base::ASCIIToUTF16("https://www.a.com/"), omnibox_view()->text());
   EXPECT_TRUE(omnibox_view()->model()->user_input_in_progress());
 }
 
@@ -833,4 +933,87 @@ TEST_F(OmniboxViewViewsSteadyStateElisionsTest, SaveSelectAllOnBlurAndRefocus) {
   EXPECT_TRUE(omnibox_view()->HasFocus());
   EXPECT_TRUE(IsElidedUrlDisplayed());
   EXPECT_TRUE(omnibox_view()->IsSelectAll());
+}
+
+TEST_F(OmniboxViewViewsSteadyStateElisionsTest, UnelideFromModel) {
+  EXPECT_TRUE(IsElidedUrlDisplayed());
+
+  omnibox_view()->model()->Unelide(false /* exit_query_in_omnibox */);
+  EXPECT_TRUE(omnibox_view()->IsSelectAll());
+  size_t start, end;
+  omnibox_view()->GetSelectionBounds(&start, &end);
+  EXPECT_EQ(24U, start);
+  EXPECT_EQ(0U, end);
+  ExpectFullUrlDisplayed();
+}
+
+class OmniboxViewViewsSteadyStateElisionsAndQueryInOmniboxTest
+    : public OmniboxViewViewsSteadyStateElisionsTest {
+ public:
+  OmniboxViewViewsSteadyStateElisionsAndQueryInOmniboxTest()
+      : OmniboxViewViewsSteadyStateElisionsTest({
+            omnibox::kHideSteadyStateUrlScheme,
+            omnibox::kHideSteadyStateUrlTrivialSubdomains,
+            omnibox::kQueryInOmnibox,
+        }) {}
+
+ protected:
+  const GURL kValidSearchResultsPage =
+      GURL("https://www.google.com/search?q=foo+query");
+
+  void SetUp() override {
+    OmniboxViewViewsSteadyStateElisionsTest::SetUp();
+
+    location_bar_model()->set_url(kValidSearchResultsPage);
+    location_bar_model()->set_security_level(
+        security_state::SecurityLevel::SECURE);
+
+    omnibox_view()->model()->ResetDisplayTexts();
+    omnibox_view()->RevertAll();
+
+    // Sanity check that Query in Omnibox is working with Steady State Elisions.
+    EXPECT_EQ(base::ASCIIToUTF16("foo query"), omnibox_view()->text());
+
+    // Focus the Omnibox.
+    SendMouseClick(0);
+  }
+};
+
+TEST_F(OmniboxViewViewsSteadyStateElisionsAndQueryInOmniboxTest,
+       DontUnelideQueryInOmniboxSearchTerms) {
+  // Right key should NOT unelide, and should correctly place the cursor at the
+  // end of the search query.
+  omnibox_textfield_view()->OnKeyPressed(
+      ui::KeyEvent(ui::ET_KEY_PRESSED, ui::VKEY_RIGHT, 0));
+  EXPECT_EQ(base::ASCIIToUTF16("foo query"), omnibox_view()->text());
+  EXPECT_FALSE(omnibox_view()->model()->user_input_in_progress());
+
+  size_t start, end;
+  omnibox_view()->GetSelectionBounds(&start, &end);
+  EXPECT_EQ(9U, start);
+  EXPECT_EQ(9U, end);
+}
+
+TEST_F(OmniboxViewViewsSteadyStateElisionsAndQueryInOmniboxTest,
+       UnelideFromModel) {
+  // Uneliding without exiting Query in Omnibox should do nothing.
+  omnibox_view()->model()->Unelide(false /* exit_query_in_omnibox */);
+  EXPECT_EQ(base::ASCIIToUTF16("foo query"), omnibox_view()->text());
+  {
+    size_t start, end;
+    omnibox_view()->GetSelectionBounds(&start, &end);
+    EXPECT_EQ(9U, start);
+    EXPECT_EQ(0U, end);
+  }
+
+  // Uneliding and exiting Query in Omnibox should reveal the full URL.
+  omnibox_view()->model()->Unelide(true /* exit_query_in_omnibox */);
+  EXPECT_EQ(base::ASCIIToUTF16(kValidSearchResultsPage.spec()),
+            omnibox_view()->text());
+  {
+    size_t start, end;
+    omnibox_view()->GetSelectionBounds(&start, &end);
+    EXPECT_EQ(41U, start);
+    EXPECT_EQ(0U, end);
+  }
 }

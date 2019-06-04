@@ -23,86 +23,73 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include "third_party/blink/public/web/web_speech_recognizer_client.h"
 #include "third_party/blink/renderer/modules/speech/speech_recognition_error.h"
+
+#include "third_party/blink/renderer/core/event_type_names.h"
 #include "third_party/blink/renderer/platform/wtf/assertions.h"
 
 namespace blink {
 
-static String ErrorCodeToString(SpeechRecognitionError::ErrorCode code) {
+static String ErrorCodeToString(mojom::blink::SpeechRecognitionErrorCode code) {
   switch (code) {
-    case SpeechRecognitionError::kErrorCodeOther:
+    case mojom::blink::SpeechRecognitionErrorCode::kNone:
       return "other";
-    case SpeechRecognitionError::kErrorCodeNoSpeech:
+    case mojom::blink::SpeechRecognitionErrorCode::kNoSpeech:
       return "no-speech";
-    case SpeechRecognitionError::kErrorCodeAborted:
+    case mojom::blink::SpeechRecognitionErrorCode::kAborted:
       return "aborted";
-    case SpeechRecognitionError::kErrorCodeAudioCapture:
+    case mojom::blink::SpeechRecognitionErrorCode::kAudioCapture:
       return "audio-capture";
-    case SpeechRecognitionError::kErrorCodeNetwork:
+    case mojom::blink::SpeechRecognitionErrorCode::kNetwork:
       return "network";
-    case SpeechRecognitionError::kErrorCodeNotAllowed:
+    case mojom::blink::SpeechRecognitionErrorCode::kNotAllowed:
       return "not-allowed";
-    case SpeechRecognitionError::kErrorCodeServiceNotAllowed:
+    case mojom::blink::SpeechRecognitionErrorCode::kServiceNotAllowed:
       return "service-not-allowed";
-    case SpeechRecognitionError::kErrorCodeBadGrammar:
+    case mojom::blink::SpeechRecognitionErrorCode::kBadGrammar:
       return "bad-grammar";
-    case SpeechRecognitionError::kErrorCodeLanguageNotSupported:
+    case mojom::blink::SpeechRecognitionErrorCode::kLanguageNotSupported:
       return "language-not-supported";
+    case mojom::blink::SpeechRecognitionErrorCode::kNoMatch:
+      NOTREACHED();
+      break;
   }
 
   NOTREACHED();
   return String();
 }
 
-SpeechRecognitionError* SpeechRecognitionError::Create(ErrorCode code,
-                                                       const String& message) {
-  return new SpeechRecognitionError(ErrorCodeToString(code), message);
+SpeechRecognitionError* SpeechRecognitionError::Create(
+    mojom::blink::SpeechRecognitionErrorCode code,
+    const String& message) {
+  return MakeGarbageCollected<SpeechRecognitionError>(ErrorCodeToString(code),
+                                                      message);
 }
 
 SpeechRecognitionError* SpeechRecognitionError::Create(
     const AtomicString& event_name,
-    const SpeechRecognitionErrorInit& initializer) {
-  return new SpeechRecognitionError(event_name, initializer);
+    const SpeechRecognitionErrorInit* initializer) {
+  return MakeGarbageCollected<SpeechRecognitionError>(event_name, initializer);
 }
 
 SpeechRecognitionError::SpeechRecognitionError(const String& error,
                                                const String& message)
-    : Event(EventTypeNames::error, Bubbles::kNo, Cancelable::kNo),
+    : Event(event_type_names::kError, Bubbles::kNo, Cancelable::kNo),
       error_(error),
       message_(message) {}
 
 SpeechRecognitionError::SpeechRecognitionError(
     const AtomicString& event_name,
-    const SpeechRecognitionErrorInit& initializer)
+    const SpeechRecognitionErrorInit* initializer)
     : Event(event_name, initializer) {
-  if (initializer.hasError())
-    error_ = initializer.error();
-  if (initializer.hasMessage())
-    message_ = initializer.message();
+  if (initializer->hasError())
+    error_ = initializer->error();
+  if (initializer->hasMessage())
+    message_ = initializer->message();
 }
 
 const AtomicString& SpeechRecognitionError::InterfaceName() const {
-  return EventNames::SpeechRecognitionError;
+  return event_interface_names::kSpeechRecognitionError;
 }
-
-STATIC_ASSERT_ENUM(WebSpeechRecognizerClient::kOtherError,
-                   SpeechRecognitionError::kErrorCodeOther);
-STATIC_ASSERT_ENUM(WebSpeechRecognizerClient::kNoSpeechError,
-                   SpeechRecognitionError::kErrorCodeNoSpeech);
-STATIC_ASSERT_ENUM(WebSpeechRecognizerClient::kAbortedError,
-                   SpeechRecognitionError::kErrorCodeAborted);
-STATIC_ASSERT_ENUM(WebSpeechRecognizerClient::kAudioCaptureError,
-                   SpeechRecognitionError::kErrorCodeAudioCapture);
-STATIC_ASSERT_ENUM(WebSpeechRecognizerClient::kNetworkError,
-                   SpeechRecognitionError::kErrorCodeNetwork);
-STATIC_ASSERT_ENUM(WebSpeechRecognizerClient::kNotAllowedError,
-                   SpeechRecognitionError::kErrorCodeNotAllowed);
-STATIC_ASSERT_ENUM(WebSpeechRecognizerClient::kServiceNotAllowedError,
-                   SpeechRecognitionError::kErrorCodeServiceNotAllowed);
-STATIC_ASSERT_ENUM(WebSpeechRecognizerClient::kBadGrammarError,
-                   SpeechRecognitionError::kErrorCodeBadGrammar);
-STATIC_ASSERT_ENUM(WebSpeechRecognizerClient::kLanguageNotSupportedError,
-                   SpeechRecognitionError::kErrorCodeLanguageNotSupported);
 
 }  // namespace blink

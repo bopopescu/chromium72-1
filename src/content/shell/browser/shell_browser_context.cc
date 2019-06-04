@@ -12,10 +12,12 @@
 #include "base/files/file_util.h"
 #include "base/logging.h"
 #include "base/path_service.h"
+#include "base/task/post_task.h"
 #include "base/threading/thread.h"
 #include "build/build_config.h"
 #include "components/keyed_service/content/browser_context_dependency_manager.h"
 #include "components/network_session_configurator/common/network_switches.h"
+#include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/storage_partition.h"
 #include "content/public/common/content_switches.h"
@@ -36,22 +38,9 @@
 
 namespace content {
 
-ShellBrowserContext::ShellResourceContext::ShellResourceContext()
-    : getter_(nullptr) {}
+ShellBrowserContext::ShellResourceContext::ShellResourceContext() {}
 
 ShellBrowserContext::ShellResourceContext::~ShellResourceContext() {
-}
-
-net::HostResolver*
-ShellBrowserContext::ShellResourceContext::GetHostResolver() {
-  CHECK(getter_);
-  return getter_->host_resolver();
-}
-
-net::URLRequestContext*
-ShellBrowserContext::ShellResourceContext::GetRequestContext() {
-  CHECK(getter_);
-  return getter_->GetURLRequestContext();
 }
 
 ShellBrowserContext::ShellBrowserContext(bool off_the_record,
@@ -84,8 +73,8 @@ ShellBrowserContext::~ShellBrowserContext() {
   }
   ShutdownStoragePartitions();
   if (url_request_getter_) {
-    BrowserThread::PostTask(
-        BrowserThread::IO, FROM_HERE,
+    base::PostTaskWithTraits(
+        FROM_HERE, {BrowserThread::IO},
         base::BindOnce(&ShellURLRequestContextGetter::NotifyContextShuttingDown,
                        url_request_getter_));
   }
@@ -170,7 +159,7 @@ ShellBrowserContext::CreateURLRequestContextGetter(
     URLRequestInterceptorScopedVector request_interceptors) {
   return new ShellURLRequestContextGetter(
       ignore_certificate_errors_, off_the_record_, GetPath(),
-      BrowserThread::GetTaskRunnerForThread(BrowserThread::IO),
+      base::CreateSingleThreadTaskRunnerWithTraits({BrowserThread::IO}),
       protocol_handlers, std::move(request_interceptors), net_log_);
 }
 
@@ -180,7 +169,6 @@ net::URLRequestContextGetter* ShellBrowserContext::CreateRequestContext(
   DCHECK(!url_request_getter_.get());
   url_request_getter_ = CreateURLRequestContextGetter(
       protocol_handlers, std::move(request_interceptors));
-  resource_context_->set_url_request_context_getter(url_request_getter_.get());
   return url_request_getter_.get();
 }
 
@@ -232,7 +220,8 @@ SSLHostStateDelegate* ShellBrowserContext::GetSSLHostStateDelegate() {
   return nullptr;
 }
 
-PermissionManager* ShellBrowserContext::GetPermissionManager() {
+PermissionControllerDelegate*
+ShellBrowserContext::GetPermissionControllerDelegate() {
   if (!permission_manager_.get())
     permission_manager_.reset(new ShellPermissionManager());
   return permission_manager_.get();

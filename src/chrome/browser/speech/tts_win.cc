@@ -5,7 +5,6 @@
 #include <math.h>
 #include <objbase.h>
 #include <sapi.h>
-#include <sphelper.h>
 #include <stdint.h>
 #include <wrl/client.h>
 
@@ -16,30 +15,30 @@
 #include "base/strings/utf_string_conversions.h"
 #include "base/values.h"
 #include "base/win/scoped_co_mem.h"
-#include "chrome/browser/speech/tts_controller.h"
-#include "chrome/browser/speech/tts_platform.h"
+#include "base/win/sphelper.h"
+#include "chrome/browser/speech/tts_platform_impl.h"
+#include "content/public/browser/tts_controller.h"
 
 namespace {
 
 // ISpObjectToken key and value names.
 const wchar_t kAttributesKey[] = L"Attributes";
-const wchar_t kGenderValue[] = L"Gender";
 const wchar_t kLanguageValue[] = L"Language";
 
 }  // anonymous namespace.
 
+// TODO(katie): Move to content/browser/speech.
 class TtsPlatformImplWin : public TtsPlatformImpl {
  public:
   bool PlatformImplAvailable() override {
     return true;
   }
 
-  bool Speak(
-      int utterance_id,
-      const std::string& utterance,
-      const std::string& lang,
-      const VoiceData& voice,
-      const UtteranceContinuousParameters& params) override;
+  bool Speak(int utterance_id,
+             const std::string& utterance,
+             const std::string& lang,
+             const content::VoiceData& voice,
+             const content::UtteranceContinuousParameters& params) override;
 
   bool StopSpeaking() override;
 
@@ -49,7 +48,7 @@ class TtsPlatformImplWin : public TtsPlatformImpl {
 
   bool IsSpeaking() override;
 
-  void GetVoices(std::vector<VoiceData>* out_voices) override;
+  void GetVoices(std::vector<content::VoiceData>* out_voices) override;
 
   // Get the single instance of this class.
   static TtsPlatformImplWin* GetInstance();
@@ -81,7 +80,7 @@ class TtsPlatformImplWin : public TtsPlatformImpl {
 };
 
 // static
-TtsPlatformImpl* TtsPlatformImpl::GetInstance() {
+TtsPlatform* TtsPlatform::GetInstance() {
   return TtsPlatformImplWin::GetInstance();
 }
 
@@ -89,8 +88,8 @@ bool TtsPlatformImplWin::Speak(
     int utterance_id,
     const std::string& src_utterance,
     const std::string& lang,
-    const VoiceData& voice,
-    const UtteranceContinuousParameters& params) {
+    const content::VoiceData& voice,
+    const content::UtteranceContinuousParameters& params) {
   std::wstring prefix;
   std::wstring suffix;
 
@@ -160,8 +159,8 @@ void TtsPlatformImplWin::Pause() {
   if (speech_synthesizer_.Get() && utterance_id_ && !paused_) {
     speech_synthesizer_->Pause();
     paused_ = true;
-    TtsController::GetInstance()->OnTtsEvent(
-        utterance_id_, TTS_EVENT_PAUSE, char_position_, "");
+    content::TtsController::GetInstance()->OnTtsEvent(
+        utterance_id_, content::TTS_EVENT_PAUSE, char_position_, "");
   }
 }
 
@@ -169,8 +168,8 @@ void TtsPlatformImplWin::Resume() {
   if (speech_synthesizer_.Get() && utterance_id_ && paused_) {
     speech_synthesizer_->Resume();
     paused_ = false;
-    TtsController::GetInstance()->OnTtsEvent(
-        utterance_id_, TTS_EVENT_RESUME, char_position_, "");
+    content::TtsController::GetInstance()->OnTtsEvent(
+        utterance_id_, content::TTS_EVENT_RESUME, char_position_, "");
   }
 }
 
@@ -189,7 +188,7 @@ bool TtsPlatformImplWin::IsSpeaking() {
 }
 
 void TtsPlatformImplWin::GetVoices(
-    std::vector<VoiceData>* out_voices) {
+    std::vector<content::VoiceData>* out_voices) {
   Microsoft::WRL::ComPtr<IEnumSpObjectTokens> voice_tokens;
   unsigned long voice_count;
   if (S_OK !=
@@ -199,7 +198,7 @@ void TtsPlatformImplWin::GetVoices(
     return;
 
   for (unsigned i = 0; i < voice_count; i++) {
-    VoiceData voice;
+    content::VoiceData voice;
 
     Microsoft::WRL::ComPtr<ISpObjectToken> voice_token;
     if (S_OK != voice_tokens->Next(1, voice_token.GetAddressOf(), NULL))
@@ -214,14 +213,6 @@ void TtsPlatformImplWin::GetVoices(
     if (S_OK != voice_token->OpenKey(kAttributesKey, attributes.GetAddressOf()))
       continue;
 
-    base::win::ScopedCoMem<WCHAR> gender;
-    if (S_OK == attributes->GetStringValue(kGenderValue, &gender)) {
-      if (0 == _wcsicmp(gender.get(), L"male"))
-        voice.gender = TTS_GENDER_MALE;
-      else if (0 == _wcsicmp(gender.get(), L"female"))
-        voice.gender = TTS_GENDER_FEMALE;
-    }
-
     base::win::ScopedCoMem<WCHAR> language;
     if (S_OK == attributes->GetStringValue(kLanguageValue, &language)) {
       int lcid_value;
@@ -233,19 +224,19 @@ void TtsPlatformImplWin::GetVoices(
     }
 
     voice.native = true;
-    voice.events.insert(TTS_EVENT_START);
-    voice.events.insert(TTS_EVENT_END);
-    voice.events.insert(TTS_EVENT_MARKER);
-    voice.events.insert(TTS_EVENT_WORD);
-    voice.events.insert(TTS_EVENT_SENTENCE);
-    voice.events.insert(TTS_EVENT_PAUSE);
-    voice.events.insert(TTS_EVENT_RESUME);
+    voice.events.insert(content::TTS_EVENT_START);
+    voice.events.insert(content::TTS_EVENT_END);
+    voice.events.insert(content::TTS_EVENT_MARKER);
+    voice.events.insert(content::TTS_EVENT_WORD);
+    voice.events.insert(content::TTS_EVENT_SENTENCE);
+    voice.events.insert(content::TTS_EVENT_PAUSE);
+    voice.events.insert(content::TTS_EVENT_RESUME);
     out_voices->push_back(voice);
   }
 }
 
 void TtsPlatformImplWin::OnSpeechEvent() {
-  TtsController* controller = TtsController::GetInstance();
+  content::TtsController* controller = content::TtsController::GetInstance();
   SPEVENT event;
   while (S_OK == speech_synthesizer_->GetEvents(1, &event, NULL)) {
     if (event.ulStreamNum != stream_number_)
@@ -253,29 +244,27 @@ void TtsPlatformImplWin::OnSpeechEvent() {
 
     switch (event.eEventId) {
     case SPEI_START_INPUT_STREAM:
-      controller->OnTtsEvent(
-          utterance_id_, TTS_EVENT_START, 0, std::string());
+      controller->OnTtsEvent(utterance_id_, content::TTS_EVENT_START, 0,
+                             std::string());
       break;
     case SPEI_END_INPUT_STREAM:
       char_position_ = utterance_.size();
-      controller->OnTtsEvent(
-          utterance_id_, TTS_EVENT_END, char_position_, std::string());
+      controller->OnTtsEvent(utterance_id_, content::TTS_EVENT_END,
+                             char_position_, std::string());
       break;
     case SPEI_TTS_BOOKMARK:
-      controller->OnTtsEvent(
-          utterance_id_, TTS_EVENT_MARKER, char_position_, std::string());
+      controller->OnTtsEvent(utterance_id_, content::TTS_EVENT_MARKER,
+                             char_position_, std::string());
       break;
     case SPEI_WORD_BOUNDARY:
       char_position_ = static_cast<ULONG>(event.lParam) - prefix_len_;
-      controller->OnTtsEvent(
-          utterance_id_, TTS_EVENT_WORD, char_position_,
-          std::string());
+      controller->OnTtsEvent(utterance_id_, content::TTS_EVENT_WORD,
+                             char_position_, std::string());
       break;
     case SPEI_SENTENCE_BOUNDARY:
       char_position_ = static_cast<ULONG>(event.lParam) - prefix_len_;
-      controller->OnTtsEvent(
-          utterance_id_, TTS_EVENT_SENTENCE, char_position_,
-          std::string());
+      controller->OnTtsEvent(utterance_id_, content::TTS_EVENT_SENTENCE,
+                             char_position_, std::string());
       break;
     default:
       break;

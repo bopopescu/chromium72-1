@@ -10,11 +10,11 @@
 #import "base/mac/foundation_util.h"
 #include "base/macros.h"
 #include "base/strings/sys_string_conversions.h"
-#include "components/google/core/browser/google_util.h"
-#include "components/pref_registry/pref_registry_syncable.h"
+#include "components/google/core/common/google_util.h"
+#include "components/prefs/pref_registry_simple.h"
 #include "components/prefs/scoped_user_pref_update.h"
+#include "components/signin/core/browser/account_consistency_method.h"
 #include "components/signin/core/browser/account_reconcilor.h"
-#include "components/signin/core/browser/profile_management_switches.h"
 #include "components/signin/core/browser/signin_client.h"
 #include "components/signin/core/browser/signin_header_helper.h"
 #include "ios/web/public/browser_state.h"
@@ -246,8 +246,7 @@ AccountConsistencyService::~AccountConsistencyService() {
 }
 
 // static
-void AccountConsistencyService::RegisterPrefs(
-    user_prefs::PrefRegistrySyncable* registry) {
+void AccountConsistencyService::RegisterPrefs(PrefRegistrySimple* registry) {
   registry->RegisterDictionaryPref(
       AccountConsistencyService::kDomainsWithCookiePref);
 }
@@ -492,13 +491,12 @@ void AccountConsistencyService::OnGaiaAccountsInCookieUpdated(
 }
 
 void AccountConsistencyService::GoogleSigninSucceeded(
-    const std::string& account_id,
-    const std::string& username) {
+    const AccountInfo& account_info) {
   AddChromeConnectedCookies();
 }
 
-void AccountConsistencyService::GoogleSignedOut(const std::string& account_id,
-                                                const std::string& username) {
+void AccountConsistencyService::GoogleSignedOut(
+    const AccountInfo& account_info) {
   // There is not need to remove CHROME_CONNECTED cookies on |GoogleSignedOut|
   // events as these cookies will be removed by the GaiaCookieManagerServer
   // right before fetching the Gaia logout request.

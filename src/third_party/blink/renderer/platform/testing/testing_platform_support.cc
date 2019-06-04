@@ -43,14 +43,11 @@
 #include "third_party/blink/public/platform/web_runtime_features.h"
 #include "third_party/blink/renderer/platform/font_family_names.h"
 #include "third_party/blink/renderer/platform/heap/heap.h"
-#include "third_party/blink/renderer/platform/instrumentation/resource_coordinator/blink_resource_coordinator_base.h"
 #include "third_party/blink/renderer/platform/instrumentation/resource_coordinator/renderer_resource_coordinator.h"
 #include "third_party/blink/renderer/platform/language.h"
 #include "third_party/blink/renderer/platform/loader/fetch/fetch_initiator_type_names.h"
 #include "third_party/blink/renderer/platform/network/http_names.h"
 #include "third_party/blink/renderer/platform/network/mime/mock_mime_registry.h"
-#include "third_party/blink/renderer/platform/scheduler/base/real_time_domain.h"
-#include "third_party/blink/renderer/platform/scheduler/base/task_queue_manager.h"
 #include "third_party/blink/renderer/platform/scheduler/main_thread/main_thread_scheduler_impl.h"
 #include "third_party/blink/renderer/platform/wtf/allocator/partitions.h"
 #include "third_party/blink/renderer/platform/wtf/wtf.h"
@@ -65,6 +62,11 @@ class TestingPlatformSupport::TestingInterfaceProvider
 
   void GetInterface(const char* name,
                     mojo::ScopedMessagePipeHandle handle) override {
+    auto& override_callback = GetOverrideCallback();
+    if (!override_callback.is_null()) {
+      override_callback.Run(name, std::move(handle));
+      return;
+    }
     if (std::string(name) == mojom::blink::MimeRegistry::Name_) {
       mojo::MakeStrongBinding(
           std::make_unique<MockMimeRegistry>(),
@@ -72,22 +74,28 @@ class TestingPlatformSupport::TestingInterfaceProvider
       return;
     }
   }
+
+  static ScopedOverrideMojoInterface::GetInterfaceCallback&
+  GetOverrideCallback() {
+    DEFINE_THREAD_SAFE_STATIC_LOCAL(
+        ScopedOverrideMojoInterface::GetInterfaceCallback, callback, ());
+    return callback;
+  }
 };
 
-namespace {
+TestingPlatformSupport::ScopedOverrideMojoInterface::
+    ScopedOverrideMojoInterface(GetInterfaceCallback callback)
+    : auto_reset_(&TestingInterfaceProvider::GetOverrideCallback(),
+                  std::move(callback)) {}
 
-class DummyThread final : public blink::WebThread {
- public:
-  bool IsCurrentThread() const override { return true; }
-  blink::ThreadScheduler* Scheduler() const override { return nullptr; }
-};
-
-}  // namespace
+TestingPlatformSupport::ScopedOverrideMojoInterface::
+    ~ScopedOverrideMojoInterface() = default;
 
 TestingPlatformSupport::TestingPlatformSupport()
     : old_platform_(Platform::Current()),
       interface_provider_(new TestingInterfaceProvider) {
   DCHECK(old_platform_);
+  DCHECK(WTF::IsMainThread());
 }
 
 TestingPlatformSupport::~TestingPlatformSupport() {
@@ -98,16 +106,8 @@ WebString TestingPlatformSupport::DefaultLocale() {
   return WebString::FromUTF8("en-US");
 }
 
-WebThread* TestingPlatformSupport::CurrentThread() {
-  return old_platform_ ? old_platform_->CurrentThread() : nullptr;
-}
-
 WebBlobRegistry* TestingPlatformSupport::GetBlobRegistry() {
   return old_platform_ ? old_platform_->GetBlobRegistry() : nullptr;
-}
-
-WebIDBFactory* TestingPlatformSupport::IdbFactory() {
-  return old_platform_ ? old_platform_->IdbFactory() : nullptr;
 }
 
 WebURLLoaderMockFactory* TestingPlatformSupport::GetURLLoaderMockFactory() {
@@ -132,16 +132,13 @@ void TestingPlatformSupport::RunUntilIdle() {
   base::RunLoop().RunUntilIdle();
 }
 
-class ScopedUnittestsEnvironmentSetup::DummyPlatform final
-    : public blink::Platform {
- public:
-  DummyPlatform() = default;
+bool TestingPlatformSupport::IsThreadedAnimationEnabled() {
+  return is_threaded_animation_enabled_;
+}
 
-  blink::WebThread* CurrentThread() override {
-    static DummyThread dummy_thread;
-    return &dummy_thread;
-  };
-};
+void TestingPlatformSupport::SetThreadedAnimationEnabled(bool enabled) {
+  is_threaded_animation_enabled_ = enabled;
+}
 
 class ScopedUnittestsEnvironmentSetup::DummyRendererResourceCoordinator final
     : public blink::RendererResourceCoordinator {};
@@ -157,32 +154,39 @@ ScopedUnittestsEnvironmentSetup::ScopedUnittestsEnvironmentSetup(int argc,
   base::DiscardableMemoryAllocator::SetInstance(
       discardable_memory_allocator_.get());
 
-  dummy_platform_ = std::make_unique<DummyPlatform>();
+  // TODO(yutak): The initialization steps below are essentially a subset of
+  // Platform::Initialize() steps with a few modifications for tests.
+  // We really shouldn't have those initialization steps in two places,
+  // because they are a very fragile piece of code (the initialization order
+  // is so sensitive) and we want it to be consistent between tests and
+  // production. Fix this someday.
+  dummy_platform_ = std::make_unique<Platform>();
   Platform::SetCurrentPlatformForTesting(dummy_platform_.get());
 
   WTF::Partitions::Initialize(nullptr);
   WTF::Initialize(nullptr);
 
+  // This must be called after WTF::Initialize(), because ThreadSpecific<>
+  // used in this function depends on WTF::IsMainThread().
+  Platform::CreateMainThreadForTesting();
+
   testing_platform_support_ = std::make_unique<TestingPlatformSupport>();
   Platform::SetCurrentPlatformForTesting(testing_platform_support_.get());
 
-  if (BlinkResourceCoordinatorBase::IsEnabled()) {
-    dummy_renderer_resource_coordinator_ =
-        std::make_unique<DummyRendererResourceCoordinator>();
-    RendererResourceCoordinator::
-        SetCurrentRendererResourceCoordinatorForTesting(
-            dummy_renderer_resource_coordinator_.get());
-  }
+  dummy_renderer_resource_coordinator_ =
+      std::make_unique<DummyRendererResourceCoordinator>();
+  RendererResourceCoordinator::SetCurrentRendererResourceCoordinatorForTesting(
+      dummy_renderer_resource_coordinator_.get());
 
   ProcessHeap::Init();
   ThreadState::AttachMainThread();
   ThreadState::Current()->RegisterTraceDOMWrappers(nullptr, nullptr, nullptr,
                                                    nullptr);
-  HTTPNames::init();
-  FetchInitiatorTypeNames::init();
+  http_names::Init();
+  fetch_initiator_type_names::Init();
 
   InitializePlatformLanguage();
-  FontFamilyNames::init();
+  font_family_names::Init();
   WebRuntimeFeatures::EnableExperimentalFeatures(true);
   WebRuntimeFeatures::EnableTestOnlyFeatures(true);
 }

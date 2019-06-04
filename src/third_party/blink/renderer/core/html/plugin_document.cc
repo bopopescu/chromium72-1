@@ -24,10 +24,13 @@
 
 #include "third_party/blink/renderer/core/html/plugin_document.h"
 
-#include "third_party/blink/renderer/bindings/core/v8/exception_state.h"
 #include "third_party/blink/renderer/core/css/css_color_value.h"
+#include "third_party/blink/renderer/core/dom/events/event.h"
+#include "third_party/blink/renderer/core/dom/events/event_listener.h"
 #include "third_party/blink/renderer/core/dom/raw_data_document_parser.h"
+#include "third_party/blink/renderer/core/events/before_unload_event.h"
 #include "third_party/blink/renderer/core/exported/web_plugin_container_impl.h"
+#include "third_party/blink/renderer/core/frame/local_dom_window.h"
 #include "third_party/blink/renderer/core/frame/local_frame.h"
 #include "third_party/blink/renderer/core/frame/local_frame_client.h"
 #include "third_party/blink/renderer/core/frame/local_frame_view.h"
@@ -40,18 +43,58 @@
 #include "third_party/blink/renderer/core/layout/layout_embedded_object.h"
 #include "third_party/blink/renderer/core/loader/document_loader.h"
 #include "third_party/blink/renderer/core/loader/frame_loader.h"
+#include "third_party/blink/renderer/platform/bindings/exception_state.h"
 
 namespace blink {
 
-using namespace HTMLNames;
+using namespace html_names;
+
+class PluginDocument::BeforeUnloadEventListener : public EventListener {
+ public:
+  static BeforeUnloadEventListener* Create(PluginDocument* document) {
+    return MakeGarbageCollected<BeforeUnloadEventListener>(document);
+  }
+
+  explicit BeforeUnloadEventListener(PluginDocument* document)
+      : EventListener(kCPPEventListenerType), doc_(document) {}
+
+  bool operator==(const EventListener& listener) const override {
+    return this == &listener;
+  }
+
+  void SetShowBeforeUnloadDialog(bool show_dialog) {
+    show_dialog_ = show_dialog;
+  }
+
+  void Trace(blink::Visitor* visitor) override {
+    visitor->Trace(doc_);
+    EventListener::Trace(visitor);
+  }
+
+ private:
+  void Invoke(ExecutionContext*, Event* event) override {
+    DCHECK_EQ(event->type(), event_type_names::kBeforeunload);
+    if (show_dialog_)
+      ToBeforeUnloadEvent(event)->setReturnValue(g_empty_string);
+  }
+
+  Member<PluginDocument> doc_;
+  bool show_dialog_;
+};
 
 // FIXME: Share more code with MediaDocumentParser.
 class PluginDocumentParser : public RawDataDocumentParser {
  public:
   static PluginDocumentParser* Create(PluginDocument* document,
                                       Color background_color) {
-    return new PluginDocumentParser(document, background_color);
+    return MakeGarbageCollected<PluginDocumentParser>(document,
+                                                      background_color);
   }
+
+  PluginDocumentParser(Document* document, Color background_color)
+      : RawDataDocumentParser(document),
+        embed_element_(nullptr),
+        background_color_(background_color) {}
 
   void Trace(blink::Visitor* visitor) override {
     visitor->Trace(embed_element_);
@@ -59,11 +102,6 @@ class PluginDocumentParser : public RawDataDocumentParser {
   }
 
  private:
-  PluginDocumentParser(Document* document, Color background_color)
-      : RawDataDocumentParser(document),
-        embed_element_(nullptr),
-        background_color_(background_color) {}
-
   void AppendBytes(const char*, size_t) override;
 
   void Finish() override;
@@ -99,7 +137,7 @@ void PluginDocumentParser::CreateDocumentStructure() {
     return;  // runScriptsAtDocumentElementAvailable can detach the frame.
 
   HTMLBodyElement* body = HTMLBodyElement::Create(*GetDocument());
-  body->setAttribute(styleAttr,
+  body->setAttribute(kStyleAttr,
                      "height: 100%; width: 100%; overflow: hidden; margin: 0");
   body->SetInlineStyleProperty(
       CSSPropertyBackgroundColor,
@@ -112,13 +150,13 @@ void PluginDocumentParser::CreateDocumentStructure() {
   }
 
   embed_element_ = HTMLEmbedElement::Create(*GetDocument());
-  embed_element_->setAttribute(widthAttr, "100%");
-  embed_element_->setAttribute(heightAttr, "100%");
-  embed_element_->setAttribute(nameAttr, "plugin");
-  embed_element_->setAttribute(idAttr, "plugin");
-  embed_element_->setAttribute(srcAttr,
+  embed_element_->setAttribute(kWidthAttr, "100%");
+  embed_element_->setAttribute(kHeightAttr, "100%");
+  embed_element_->setAttribute(kNameAttr, "plugin");
+  embed_element_->setAttribute(kIdAttr, "plugin");
+  embed_element_->setAttribute(kSrcAttr,
                                AtomicString(GetDocument()->Url().GetString()));
-  embed_element_->setAttribute(typeAttr, GetDocument()->Loader()->MimeType());
+  embed_element_->setAttribute(kTypeAttr, GetDocument()->Loader()->MimeType());
   body->AppendChild(embed_element_);
   if (IsStopped()) {
     // Possibly detached by a mutation event listener installed in
@@ -186,14 +224,28 @@ WebPluginContainerImpl* PluginDocument::GetPluginView() {
   return plugin_node_ ? plugin_node_->OwnedPlugin() : nullptr;
 }
 
+void PluginDocument::SetShowBeforeUnloadDialog(bool show_dialog) {
+  if (!before_unload_event_listener_) {
+    if (!show_dialog)
+      return;
+
+    before_unload_event_listener_ = BeforeUnloadEventListener::Create(this);
+    domWindow()->addEventListener(event_type_names::kBeforeunload,
+                                  before_unload_event_listener_, false);
+  }
+  before_unload_event_listener_->SetShowBeforeUnloadDialog(show_dialog);
+}
+
 void PluginDocument::Shutdown() {
   // Release the plugin node so that we don't have a circular reference.
   plugin_node_ = nullptr;
+  before_unload_event_listener_ = nullptr;
   HTMLDocument::Shutdown();
 }
 
 void PluginDocument::Trace(blink::Visitor* visitor) {
   visitor->Trace(plugin_node_);
+  visitor->Trace(before_unload_event_listener_);
   HTMLDocument::Trace(visitor);
 }
 

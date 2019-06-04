@@ -11,12 +11,16 @@
 #include <memory>
 #include <vector>
 
+#include <linux/videodev2.h>
+
 #include "base/containers/queue.h"
 #include "base/macros.h"
 #include "base/memory/ref_counted.h"
 #include "base/memory/weak_ptr.h"
 #include "base/threading/thread.h"
 #include "media/base/video_frame.h"
+#include "media/base/video_frame_layout.h"
+#include "media/gpu/image_processor.h"
 #include "media/gpu/media_gpu_export.h"
 #include "media/gpu/v4l2/v4l2_device.h"
 
@@ -25,34 +29,21 @@ namespace media {
 // Handles image processing accelerators that expose a V4L2 memory-to-memory
 // interface. The threading model of this class is the same as for other V4L2
 // hardware accelerators (see V4L2VideoDecodeAccelerator) for more details.
-class MEDIA_GPU_EXPORT V4L2ImageProcessor {
+class MEDIA_GPU_EXPORT V4L2ImageProcessor : public ImageProcessor {
  public:
-  explicit V4L2ImageProcessor(const scoped_refptr<V4L2Device>& device);
-  virtual ~V4L2ImageProcessor();
+  // ImageProcessor implementation.
+  ~V4L2ImageProcessor() override;
+  gfx::Size input_allocated_size() const override;
+  gfx::Size output_allocated_size() const override;
+  VideoFrame::StorageType input_storage_type() const override;
+  VideoFrame::StorageType output_storage_type() const override;
+  OutputMode output_mode() const override;
+  bool Process(scoped_refptr<VideoFrame> frame,
+               int output_buffer_index,
+               std::vector<base::ScopedFD> output_dmabuf_fds,
+               FrameReadyCB cb) override;
+  bool Reset() override;
 
-  // Initializes the processor to convert from |input_format| to |output_format|
-  // and/or scale from |input_visible_size| to |output_visible_size|.
-  // Request the input buffers to be of at least |input_allocated_size| and the
-  // output buffers to be of at least |output_allocated_size|. The number of
-  // input buffers and output buffers will be |num_buffers|. Provided |error_cb|
-  // will be called if an error occurs. Return true if the requested
-  // configuration is supported.
-  bool Initialize(VideoPixelFormat input_format,
-                  VideoPixelFormat output_format,
-                  v4l2_memory input_memory_type,
-                  v4l2_memory output_memory_type,
-                  gfx::Size input_visible_size,
-                  gfx::Size input_allocated_size,
-                  gfx::Size output_visible_size,
-                  gfx::Size output_allocated_size,
-                  int num_buffers,
-                  const base::Closure& error_cb);
-
-  // Returns a vector of dmabuf file descriptors, exported for V4L2 output
-  // buffer with |index|. The size of vector will be the number of planes of the
-  // buffer. Return an empty vector on failure.
-  std::vector<base::ScopedFD> GetDmabufsForOutputBuffer(
-      int output_buffer_index);
 
   // Returns true if image processing is supported on this platform.
   static bool IsSupported();
@@ -72,37 +63,24 @@ class MEDIA_GPU_EXPORT V4L2ImageProcessor {
                               gfx::Size* size,
                               size_t* num_planes);
 
-  // Returns input allocated size required by the processor to be fed with.
-  gfx::Size input_allocated_size() const { return input_allocated_size_; }
-
-  // Returns output allocated size required by the processor.
-  gfx::Size output_allocated_size() const { return output_allocated_size_; }
-
-  // Callback to be used to return the index of a processed image to the
-  // client. After the client is done with the frame, call Process with the
-  // index to return the output buffer to the image processor.
-  typedef base::Callback<void(int output_buffer_index)> FrameReadyCB;
-
-  // Called by client to process |frame|. The resulting processed frame will be
-  // stored in |output_buffer_index| output buffer and notified via |cb|. The
-  // processor will drop all its references to |frame| after it finishes
-  // accessing it. If |output_memory_type_| is V4L2_MEMORY_DMABUF, the caller
-  // should pass non-empty |output_dmabuf_fds| and the processed frame will be
-  // stored in those buffers. If the number of |output_dmabuf_fds| is not
-  // expected, this function will return false.
-  bool Process(const scoped_refptr<VideoFrame>& frame,
-               int output_buffer_index,
-               std::vector<base::ScopedFD> output_dmabuf_fds,
-               const FrameReadyCB& cb);
-
-  // Reset all processing frames. After this method returns, no more callbacks
-  // will be invoked. V4L2ImageProcessor is ready to process more frames.
-  bool Reset();
-
-  // Stop all processing and clean up. After this method returns no more
-  // callbacks will be invoked.  Deletes |this| unconditionally, so make sure
-  // to drop all pointers to it!
-  void Destroy();
+  // Factory method to create V4L2ImageProcessor to convert from
+  // input_format to output_format. Caller shall provide input and output
+  // storage type as well as output mode. The number of input buffers and output
+  // buffers will be |num_buffers|. Provided |error_cb| will be posted to the
+  // child thread if an error occurs after initialization. Returns nullptr if
+  // V4L2ImageProcessor fails to create.
+  // Note: output_mode will be removed once all its clients use import mode.
+  static std::unique_ptr<V4L2ImageProcessor> Create(
+      scoped_refptr<V4L2Device> device,
+      VideoFrame::StorageType input_storage_type,
+      VideoFrame::StorageType output_storage_type,
+      OutputMode output_mode,
+      const VideoFrameLayout& input_layout,
+      const VideoFrameLayout& output_layout,
+      gfx::Size input_visible_size,
+      gfx::Size output_visible_size,
+      size_t num_buffers,
+      const base::Closure& error_cb);
 
  private:
   // Record for input buffers.
@@ -120,8 +98,8 @@ class MEDIA_GPU_EXPORT V4L2ImageProcessor {
     OutputRecord(OutputRecord&&);
     ~OutputRecord();
     bool at_device;
-    // The processed frame will be stored in these buffers if
-    // |output_memory_type_| is V4L2_MEMORY_DMABUF
+    // The exported FDs of the frame will be stored here if
+    // |output_memory_type_| is V4L2_MEMORY_MMAP
     std::vector<base::ScopedFD> dmabuf_fds;
   };
 
@@ -134,17 +112,32 @@ class MEDIA_GPU_EXPORT V4L2ImageProcessor {
   struct JobRecord {
     JobRecord();
     ~JobRecord();
-    scoped_refptr<VideoFrame> frame;
+    scoped_refptr<VideoFrame> input_frame;
     int output_buffer_index;
+    scoped_refptr<VideoFrame> output_frame;
     std::vector<base::ScopedFD> output_dmabuf_fds;
     FrameReadyCB ready_cb;
   };
 
+  V4L2ImageProcessor(scoped_refptr<V4L2Device> device,
+                     VideoFrame::StorageType input_storage_type,
+                     VideoFrame::StorageType output_storage_type,
+                     v4l2_memory input_memory_type,
+                     v4l2_memory output_memory_type,
+                     OutputMode output_mode,
+                     const VideoFrameLayout& input_layout,
+                     const VideoFrameLayout& output_layout,
+                     gfx::Size input_visible_size,
+                     gfx::Size output_visible_size,
+                     size_t num_buffers,
+                     const base::Closure& error_cb);
+
+  bool Initialize();
   void EnqueueInput();
-  void EnqueueOutput(int index);
+  void EnqueueOutput(const JobRecord* job_record);
   void Dequeue();
   bool EnqueueInputRecord();
-  bool EnqueueOutputRecord(int index);
+  bool EnqueueOutputRecord(const JobRecord* job_record);
   bool CreateInputBuffers();
   bool CreateOutputBuffers();
   void DestroyInputBuffers();
@@ -164,26 +157,24 @@ class MEDIA_GPU_EXPORT V4L2ImageProcessor {
   void DevicePollTask(bool poll_device);
 
   // A processed frame is ready.
-  void FrameReady(const FrameReadyCB& cb, int output_buffer_index);
+  void FrameReady(FrameReadyCB cb, scoped_refptr<VideoFrame> frame);
 
-  // Size and format-related members remain constant after initialization.
-  // The visible/allocated sizes of the input frame.
-  gfx::Size input_visible_size_;
-  gfx::Size input_allocated_size_;
+  // Stop all processing and clean up. After this method returns no more
+  // callbacks will be invoked.
+  void Destroy();
 
-  // The visible/allocated sizes of the destination frame.
-  gfx::Size output_visible_size_;
-  gfx::Size output_allocated_size_;
+  // Stores input frame's format, coded_size, buffer and plane layout.
+  const VideoFrameLayout input_layout_;
+  const gfx::Size input_visible_size_;
+  const v4l2_memory input_memory_type_;
+  const VideoFrame::StorageType input_storage_type_;
 
-  VideoPixelFormat input_format_;
-  VideoPixelFormat output_format_;
-  v4l2_memory input_memory_type_;
-  v4l2_memory output_memory_type_;
-  uint32_t input_format_fourcc_;
-  uint32_t output_format_fourcc_;
-
-  size_t input_planes_count_;
-  size_t output_planes_count_;
+  // Stores input frame's format, coded_size, buffer and plane layout.
+  const VideoFrameLayout output_layout_;
+  const gfx::Size output_visible_size_;
+  const v4l2_memory output_memory_type_;
+  const VideoFrame::StorageType output_storage_type_;
+  const OutputMode output_mode_;
 
   // Our original calling task runner for the child thread.
   const scoped_refptr<base::SingleThreadTaskRunner> child_task_runner_;
@@ -217,7 +208,7 @@ class MEDIA_GPU_EXPORT V4L2ImageProcessor {
   // Mapping of int index to an output buffer record.
   std::vector<OutputRecord> output_buffer_map_;
   // The number of input or output buffers.
-  int num_buffers_;
+  const size_t num_buffers_;
 
   // Error callback to the client.
   base::Closure error_cb_;

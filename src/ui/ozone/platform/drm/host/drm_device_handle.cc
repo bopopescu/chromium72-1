@@ -39,7 +39,7 @@ DrmDeviceHandle::DrmDeviceHandle() {
 
 DrmDeviceHandle::~DrmDeviceHandle() {
   if (file_.is_valid())
-    base::AssertBlockingAllowed();
+    base::AssertBlockingAllowedDeprecated();
 }
 
 bool DrmDeviceHandle::Initialize(const base::FilePath& dev_path,
@@ -48,7 +48,7 @@ bool DrmDeviceHandle::Initialize(const base::FilePath& dev_path,
   // expected path, so use a CHECK instead of a DCHECK. The sys_path is only
   // used a label and is otherwise unvalidated.
   CHECK(dev_path.DirName() == base::FilePath("/dev/dri"));
-  base::AssertBlockingAllowed();
+  base::AssertBlockingAllowedDeprecated();
 
   int num_auth_attempts = 0;
   bool logged_warning = false;
@@ -69,6 +69,9 @@ bool DrmDeviceHandle::Initialize(const base::FilePath& dev_path,
       struct drm_set_client_cap cap = {DRM_CLIENT_CAP_ATOMIC, 1};
       has_atomic_capabilities_ =
           !drmIoctl(file_.get(), DRM_IOCTL_SET_CLIENT_CAP, &cap);
+
+      cap = {DRM_CLIENT_CAP_UNIVERSAL_PLANES, 1};
+      drmIoctl(file_.get(), DRM_IOCTL_SET_CLIENT_CAP, &cap);
       break;
     }
 

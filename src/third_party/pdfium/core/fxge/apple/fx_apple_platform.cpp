@@ -5,13 +5,9 @@
 // Original code copyright 2014 Foxit Software Inc. http://www.foxitsoftware.com
 
 #include <memory>
+#include <vector>
 
-#include "core/fxcrt/cfx_fixedbufgrow.h"
 #include "core/fxcrt/fx_system.h"
-
-#ifndef _SKIA_SUPPORT_
-#include "core/fxge/agg/fx_agg_driver.h"
-#endif
 
 #include "core/fxge/apple/apple_int.h"
 #include "core/fxge/cfx_cliprgn.h"
@@ -19,7 +15,13 @@
 #include "core/fxge/cfx_font.h"
 #include "core/fxge/cfx_gemodule.h"
 #include "core/fxge/cfx_renderdevice.h"
+#include "core/fxge/dib/cfx_dibitmap.h"
 #include "core/fxge/fx_freetype.h"
+#include "third_party/base/span.h"
+
+#ifndef _SKIA_SUPPORT_
+#include "core/fxge/agg/fx_agg_driver.h"
+#endif
 
 #ifndef _SKIA_SUPPORT_
 
@@ -52,13 +54,13 @@ bool CGDrawGlyphRun(CGContextRef pContext,
     if (pFont->GetPsName() == "DFHeiStd-W5")
       return false;
 
-    pFont->SetPlatformFont(
-        quartz2d.CreateFont(pFont->GetFontData(), pFont->GetSize()));
+    pdfium::span<const uint8_t> span = pFont->GetFontSpan();
+    pFont->SetPlatformFont(quartz2d.CreateFont(span.data(), span.size()));
     if (!pFont->GetPlatformFont())
       return false;
   }
-  CFX_FixedBufGrow<uint16_t, 32> glyph_indices(nChars);
-  CFX_FixedBufGrow<CGPoint, 32> glyph_positions(nChars);
+  std::vector<uint16_t> glyph_indices(nChars);
+  std::vector<CGPoint> glyph_positions(nChars);
   for (int i = 0; i < nChars; i++) {
     glyph_indices[i] =
         pCharPos[i].m_ExtGID ? pCharPos[i].m_ExtGID : pCharPos[i].m_GlyphIndex;
@@ -77,8 +79,8 @@ bool CGDrawGlyphRun(CGContextRef pContext,
   }
   quartz2d.setGraphicsTextMatrix(pContext, &new_matrix);
   return quartz2d.drawGraphicsString(pContext, pFont->GetPlatformFont(),
-                                     font_size, glyph_indices, glyph_positions,
-                                     nChars, argb, nullptr);
+                                     font_size, glyph_indices.data(),
+                                     glyph_positions.data(), nChars, argb);
 }
 
 }  // namespace
@@ -168,7 +170,7 @@ void CFX_FaceCache::DestroyPlatform() {}
 std::unique_ptr<CFX_GlyphBitmap> CFX_FaceCache::RenderGlyph_Nativetext(
     const CFX_Font* pFont,
     uint32_t glyph_index,
-    const CFX_Matrix* pMatrix,
+    const CFX_Matrix& matrix,
     uint32_t dest_width,
     int anti_alias) {
   return nullptr;

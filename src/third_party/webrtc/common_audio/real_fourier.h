@@ -11,6 +11,7 @@
 #ifndef COMMON_AUDIO_REAL_FOURIER_H_
 #define COMMON_AUDIO_REAL_FOURIER_H_
 
+#include <stddef.h>
 #include <complex>
 #include <memory>
 
@@ -72,4 +73,3 @@ class RealFourier {
 }  // namespace webrtc
 
 #endif  // COMMON_AUDIO_REAL_FOURIER_H_
-

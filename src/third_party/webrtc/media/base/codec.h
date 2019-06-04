@@ -18,8 +18,8 @@
 
 #include "api/rtpparameters.h"
 #include "api/video_codecs/sdp_video_format.h"
-#include "common_types.h"  // NOLINT(build/include)
 #include "media/base/mediaconstants.h"
+#include "rtc_base/system/rtc_export.h"
 
 namespace cricket {
 
@@ -29,13 +29,9 @@ class FeedbackParam {
  public:
   FeedbackParam() = default;
   FeedbackParam(const std::string& id, const std::string& param)
-      : id_(id),
-        param_(param) {
-  }
+      : id_(id), param_(param) {}
   explicit FeedbackParam(const std::string& id)
-      : id_(id),
-        param_(kParamValueEmpty) {
-  }
+      : id_(id), param_(kParamValueEmpty) {}
 
   bool operator==(const FeedbackParam& other) const;
 
@@ -43,7 +39,7 @@ class FeedbackParam {
   const std::string& param() const { return param_; }
 
  private:
-  std::string id_;  // e.g. "nack", "ccm"
+  std::string id_;     // e.g. "nack", "ccm"
   std::string param_;  // e.g. "", "rpsi", "fir"
 };
 
@@ -59,13 +55,14 @@ class FeedbackParams {
   void Intersect(const FeedbackParams& from);
 
   const std::vector<FeedbackParam>& params() const { return params_; }
+
  private:
   bool HasDuplicateEntries() const;
 
   std::vector<FeedbackParam> params_;
 };
 
-struct Codec {
+struct RTC_EXPORT Codec {
   int id;
   std::string name;
   int clockrate;
@@ -102,9 +99,7 @@ struct Codec {
 
   bool operator==(const Codec& c) const;
 
-  bool operator!=(const Codec& c) const {
-    return !(*this == c);
-  }
+  bool operator!=(const Codec& c) const { return !(*this == c); }
 
  protected:
   // A Codec can't be created without a subclass.
@@ -144,12 +139,10 @@ struct AudioCodec : public Codec {
 
   bool operator==(const AudioCodec& c) const;
 
-  bool operator!=(const AudioCodec& c) const {
-    return !(*this == c);
-  }
+  bool operator!=(const AudioCodec& c) const { return !(*this == c); }
 };
 
-struct VideoCodec : public Codec {
+struct RTC_EXPORT VideoCodec : public Codec {
   // Creates a codec with the given parameters.
   VideoCodec(int id, const std::string& name);
   // Creates a codec with the given name and empty id.
@@ -175,9 +168,7 @@ struct VideoCodec : public Codec {
 
   bool operator==(const VideoCodec& c) const;
 
-  bool operator!=(const VideoCodec& c) const {
-    return !(*this == c);
-  }
+  bool operator!=(const VideoCodec& c) const { return !(*this == c); }
 
   static VideoCodec CreateRtxCodec(int rtx_payload_type,
                                    int associated_payload_type);
@@ -224,8 +215,6 @@ const Codec* FindCodecById(const std::vector<Codec>& codecs, int payload_type) {
   return nullptr;
 }
 
-bool CodecNamesEq(const std::string& name1, const std::string& name2);
-bool CodecNamesEq(const char* name1, const char* name2);
 bool HasNack(const Codec& codec);
 bool HasRemb(const Codec& codec);
 bool HasRrtr(const Codec& codec);

@@ -4,8 +4,8 @@
 
 #include "chrome/browser/ui/webui/site_settings_helper.h"
 
+#include <algorithm>
 #include <functional>
-#include <string>
 
 #include "base/feature_list.h"
 #include "base/values.h"
@@ -98,6 +98,8 @@ const ContentSettingsTypeNameEntry kContentSettingsTypeGroupNames[] = {
     {CONTENT_SETTINGS_TYPE_ACCESSIBILITY_EVENTS, nullptr},
     {CONTENT_SETTINGS_TYPE_CLIPBOARD_WRITE, nullptr},
     {CONTENT_SETTINGS_TYPE_PLUGINS_DATA, nullptr},
+    {CONTENT_SETTINGS_TYPE_BACKGROUND_FETCH, nullptr},
+    {CONTENT_SETTINGS_TYPE_INTENT_PICKER_DISPLAY, nullptr},
 };
 static_assert(arraysize(kContentSettingsTypeGroupNames) ==
                   // ContentSettingsType starts at -1, so add 1 here.
@@ -161,7 +163,7 @@ SiteSettingSource CalculateSiteSettingSource(
 
   if (content_type == CONTENT_SETTINGS_TYPE_ADS &&
       base::FeatureList::IsEnabled(
-          subresource_filter::kSafeBrowsingSubresourceFilterExperimentalUI)) {
+          subresource_filter::kSafeBrowsingSubresourceFilter)) {
     HostContentSettingsMap* map =
         HostContentSettingsMapFactory::GetForProfile(profile);
     if (map->GetWebsiteSetting(origin, GURL(), CONTENT_SETTINGS_TYPE_ADS_DATA,
@@ -318,7 +320,7 @@ std::string GetDisplayNameForGURL(
     const GURL& url,
     const extensions::ExtensionRegistry* extension_registry) {
   const url::Origin origin = url::Origin::Create(url);
-  if (origin.unique())
+  if (origin.opaque())
     return url.spec();
 
   std::string display_name =
@@ -356,8 +358,7 @@ void GetExceptionsFromHostContentSettingsMap(
   map->GetSettingsForOneType(type, std::string(), &entries);
   // Group settings by primary_pattern.
   AllPatternsSettings all_patterns_settings;
-  for (ContentSettingsForOneType::iterator i = entries.begin();
-       i != entries.end(); ++i) {
+  for (auto i = entries.begin(); i != entries.end(); ++i) {
     // Don't add default settings.
     if (i->primary_pattern == ContentSettingsPattern::Wildcard() &&
         i->secondary_pattern == ContentSettingsPattern::Wildcard() &&
@@ -388,7 +389,7 @@ void GetExceptionsFromHostContentSettingsMap(
   // the highest (see operator< in ContentSettingsPattern), so traverse it in
   // reverse to show the patterns with the highest precedence (the more specific
   // ones) on the top.
-  for (AllPatternsSettings::reverse_iterator i = all_patterns_settings.rbegin();
+  for (auto i = all_patterns_settings.rbegin();
        i != all_patterns_settings.rend(); ++i) {
     const ContentSettingsPattern& primary_pattern = i->first.first;
     const OnePatternSettings& one_settings = i->second;
@@ -398,8 +399,7 @@ void GetExceptionsFromHostContentSettingsMap(
     // The "parent" entry either has an identical primary and secondary pattern,
     // or has a wildcard secondary. The two cases are indistinguishable in the
     // UI.
-    OnePatternSettings::const_iterator parent =
-        one_settings.find(primary_pattern);
+    auto parent = one_settings.find(primary_pattern);
     if (parent == one_settings.end())
       parent = one_settings.find(ContentSettingsPattern::Wildcard());
 
@@ -417,8 +417,7 @@ void GetExceptionsFromHostContentSettingsMap(
                             parent_setting, source, incognito));
 
     // Add the "children" for any embedded settings.
-    for (OnePatternSettings::const_iterator j = one_settings.begin();
-         j != one_settings.end(); ++j) {
+    for (auto j = one_settings.begin(); j != one_settings.end(); ++j) {
       // Skip the non-embedded setting which we already added above.
       if (j == parent)
         continue;
@@ -592,6 +591,12 @@ void GetChooserExceptionsFromProfile(Profile* profile,
       chooser_context->GetAllGrantedObjects();
   AllOriginObjects all_origin_objects;
   for (const auto& object : objects) {
+    // Skip policy controlled objects until they are ready to be displayed.
+    // TODO(https://crbug.com/854329): Include policy controlled objects
+    // when the UI is capable of displaying them properly as policy controlled
+    // objects.
+    if (object->source == SiteSettingSourceToString(SiteSettingSource::kPolicy))
+      continue;
     std::string name = chooser_context->GetObjectName(object->object);
     // It is safe for this structure to hold references into |objects| because
     // they are both destroyed at the end of this function.

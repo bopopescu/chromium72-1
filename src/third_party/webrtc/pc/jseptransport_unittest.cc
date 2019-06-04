@@ -44,7 +44,7 @@ class JsepTransport2Test : public testing::Test, public sigslot::has_slots<> {
   std::unique_ptr<webrtc::SrtpTransport> CreateSdesTransport(
       rtc::PacketTransportInternal* rtp_packet_transport,
       rtc::PacketTransportInternal* rtcp_packet_transport) {
-    auto srtp_transport = rtc::MakeUnique<webrtc::SrtpTransport>(
+    auto srtp_transport = absl::make_unique<webrtc::SrtpTransport>(
         rtcp_packet_transport == nullptr);
 
     srtp_transport->SetRtpPacketTransport(rtp_packet_transport);
@@ -57,7 +57,7 @@ class JsepTransport2Test : public testing::Test, public sigslot::has_slots<> {
   std::unique_ptr<webrtc::DtlsSrtpTransport> CreateDtlsSrtpTransport(
       cricket::DtlsTransportInternal* rtp_dtls_transport,
       cricket::DtlsTransportInternal* rtcp_dtls_transport) {
-    auto dtls_srtp_transport = rtc::MakeUnique<webrtc::DtlsSrtpTransport>(
+    auto dtls_srtp_transport = absl::make_unique<webrtc::DtlsSrtpTransport>(
         rtcp_dtls_transport == nullptr);
     dtls_srtp_transport->SetDtlsTransports(rtp_dtls_transport,
                                            rtcp_dtls_transport);
@@ -68,16 +68,17 @@ class JsepTransport2Test : public testing::Test, public sigslot::has_slots<> {
   // FakeIceTransport.
   std::unique_ptr<JsepTransport> CreateJsepTransport2(bool rtcp_mux_enabled,
                                                       SrtpMode srtp_mode) {
-    auto ice = rtc::MakeUnique<FakeIceTransport>(kTransportName,
-                                                 ICE_CANDIDATE_COMPONENT_RTP);
+    auto ice = absl::make_unique<FakeIceTransport>(kTransportName,
+                                                   ICE_CANDIDATE_COMPONENT_RTP);
     auto rtp_dtls_transport =
-        rtc::MakeUnique<FakeDtlsTransport>(std::move(ice));
+        absl::make_unique<FakeDtlsTransport>(std::move(ice));
 
     std::unique_ptr<FakeDtlsTransport> rtcp_dtls_transport;
     if (!rtcp_mux_enabled) {
-      ice = rtc::MakeUnique<FakeIceTransport>(kTransportName,
-                                              ICE_CANDIDATE_COMPONENT_RTCP);
-      rtcp_dtls_transport = rtc::MakeUnique<FakeDtlsTransport>(std::move(ice));
+      ice = absl::make_unique<FakeIceTransport>(kTransportName,
+                                                ICE_CANDIDATE_COMPONENT_RTCP);
+      rtcp_dtls_transport =
+          absl::make_unique<FakeDtlsTransport>(std::move(ice));
     }
 
     std::unique_ptr<webrtc::RtpTransport> unencrypted_rtp_transport;
@@ -97,11 +98,16 @@ class JsepTransport2Test : public testing::Test, public sigslot::has_slots<> {
         RTC_NOTREACHED();
     }
 
-    auto jsep_transport = rtc::MakeUnique<JsepTransport>(
+    // TODO(sukhanov): Currently there is no media_transport specific
+    // logic in jseptransport, so jseptransport unittests are created with
+    // media_transport = nullptr. In the future we will probably add
+    // more logic that require unit tests. Note that creation of media_transport
+    // is covered in jseptransportcontroller_unittest.
+    auto jsep_transport = absl::make_unique<JsepTransport>(
         kTransportName, /*local_certificate=*/nullptr,
         std::move(unencrypted_rtp_transport), std::move(sdes_transport),
         std::move(dtls_srtp_transport), std::move(rtp_dtls_transport),
-        std::move(rtcp_dtls_transport));
+        std::move(rtcp_dtls_transport), /*media_transport=*/nullptr);
 
     signal_rtcp_mux_active_received_ = false;
     jsep_transport->SignalRtcpMuxActive.connect(
@@ -120,7 +126,7 @@ class JsepTransport2Test : public testing::Test, public sigslot::has_slots<> {
 
     std::unique_ptr<rtc::SSLFingerprint> fingerprint;
     if (cert) {
-      fingerprint.reset(rtc::SSLFingerprint::CreateFromCertificate(cert));
+      fingerprint = rtc::SSLFingerprint::CreateFromCertificate(*cert);
     }
     jsep_description.transport_desc =
         TransportDescription(std::vector<std::string>(), ufrag, pwd,
@@ -377,11 +383,12 @@ TEST_P(JsepTransport2WithRtcpMux, VerifyCertificateFingerprint) {
     ASSERT_NE(nullptr, certificate);
 
     std::string digest_algorithm;
-    ASSERT_TRUE(certificate->ssl_certificate().GetSignatureDigestAlgorithm(
+    ASSERT_TRUE(certificate->GetSSLCertificate().GetSignatureDigestAlgorithm(
         &digest_algorithm));
     ASSERT_FALSE(digest_algorithm.empty());
-    std::unique_ptr<rtc::SSLFingerprint> good_fingerprint(
-        rtc::SSLFingerprint::Create(digest_algorithm, certificate->identity()));
+    std::unique_ptr<rtc::SSLFingerprint> good_fingerprint =
+        rtc::SSLFingerprint::CreateUnique(digest_algorithm,
+                                          *certificate->identity());
     ASSERT_NE(nullptr, good_fingerprint);
 
     EXPECT_TRUE(jsep_transport_
@@ -759,7 +766,7 @@ TEST_F(JsepTransport2Test, RemoteOfferWithCurrentNegotiatedDtlsRole) {
           .ok());
 
   // Sanity check that role was actually negotiated.
-  rtc::Optional<rtc::SSLRole> role = jsep_transport_->GetDtlsRole();
+  absl::optional<rtc::SSLRole> role = jsep_transport_->GetDtlsRole();
   ASSERT_TRUE(role);
   EXPECT_EQ(rtc::SSL_CLIENT, *role);
 
@@ -804,7 +811,7 @@ TEST_F(JsepTransport2Test, RemoteOfferThatChangesNegotiatedDtlsRole) {
           .ok());
 
   // Sanity check that role was actually negotiated.
-  rtc::Optional<rtc::SSLRole> role = jsep_transport_->GetDtlsRole();
+  absl::optional<rtc::SSLRole> role = jsep_transport_->GetDtlsRole();
   ASSERT_TRUE(role);
   EXPECT_EQ(rtc::SSL_CLIENT, *role);
 
@@ -849,7 +856,7 @@ TEST_F(JsepTransport2Test, DtlsSetupWithLegacyAsAnswerer) {
           ->SetRemoteJsepTransportDescription(remote_desc, SdpType::kAnswer)
           .ok());
 
-  rtc::Optional<rtc::SSLRole> role = jsep_transport_->GetDtlsRole();
+  absl::optional<rtc::SSLRole> role = jsep_transport_->GetDtlsRole();
   ASSERT_TRUE(role);
   // Since legacy answer ommitted setup atribute, and we offered actpass, we
   // should act as passive (server).
@@ -1044,7 +1051,7 @@ class JsepTransport2HeaderExtensionTest
   void OnReadPacket1(rtc::PacketTransportInternal* transport,
                      const char* data,
                      size_t size,
-                     const rtc::PacketTime& time,
+                     const int64_t& /* packet_time_us */,
                      int flags) {
     RTC_LOG(LS_INFO) << "JsepTransport 1 Received a packet.";
     CompareHeaderExtensions(
@@ -1057,7 +1064,7 @@ class JsepTransport2HeaderExtensionTest
   void OnReadPacket2(rtc::PacketTransportInternal* transport,
                      const char* data,
                      size_t size,
-                     const rtc::PacketTime& time,
+                     const int64_t& /* packet_time_us */,
                      int flags) {
     RTC_LOG(LS_INFO) << "JsepTransport 2 Received a packet.";
     CompareHeaderExtensions(

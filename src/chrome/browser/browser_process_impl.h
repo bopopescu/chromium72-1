@@ -24,22 +24,26 @@
 #include "chrome/browser/browser_process.h"
 #include "chrome/common/buildflags.h"
 #include "components/keep_alive_registry/keep_alive_state_observer.h"
+#include "components/metrics_services_manager/metrics_services_manager.h"
 #include "components/nacl/common/buildflags.h"
+#include "components/prefs/persistent_pref_store.h"
 #include "components/prefs/pref_change_registrar.h"
 #include "extensions/buildflags/buildflags.h"
 #include "media/media_buildflags.h"
 #include "ppapi/buildflags/buildflags.h"
 #include "printing/buildflags/buildflags.h"
+#include "services/network/public/cpp/network_quality_tracker.h"
 #include "services/network/public/mojom/network_service.mojom.h"
 
 class ChromeChildProcessWatcher;
 class ChromeDeviceClient;
+class ChromeFeatureListCreator;
 class ChromeMetricsServicesManagerClient;
 class ChromeResourceDispatcherHostDelegate;
 class DevToolsAutoOpener;
 class RemoteDebuggingServer;
 class PrefRegistrySimple;
-class WebRtcEventLogManager;
+class SystemNotificationHelper;
 
 #if BUILDFLAG(ENABLE_PLUGINS)
 class PluginsResourceService;
@@ -47,7 +51,6 @@ class PluginsResourceService;
 
 namespace base {
 class CommandLine;
-class SequencedTaskRunner;
 }
 
 namespace extensions {
@@ -67,21 +70,40 @@ class ChromeBrowserPolicyConnector;
 class PolicyService;
 }  // namespace policy
 
-namespace resource_coordinator {
-class TabLifecycleUnitSource;
-}
+namespace webrtc_event_logging {
+class WebRtcEventLogManager;
+}  // namespace webrtc_event_logging
 
 // Real implementation of BrowserProcess that creates and returns the services.
 class BrowserProcessImpl : public BrowserProcess,
                            public KeepAliveStateObserver {
  public:
-  // |local_state_task_runner| must be a shutdown-blocking task runner.
+  // |chrome_feature_list_creator| should not be null. The BrowserProcessImpl
+  // will take the PrefService owned by the creator as the Local State instead
+  // of loading the JSON file from disk.
   explicit BrowserProcessImpl(
-      base::SequencedTaskRunner* local_state_task_runner);
+      ChromeFeatureListCreator* chrome_feature_list_creator);
   ~BrowserProcessImpl() override;
 
   // Called to complete initialization.
   void Init();
+
+#if !defined(OS_ANDROID)
+  // Sets a closure to be run to break out of a run loop on browser shutdown
+  // (when the KeepAlive count reaches zero).
+  // TODO(https://crbug.com/845966): This is also used on macOS for the Cocoa
+  // first run dialog so that shutdown can be initiated via a signal while the
+  // first run dialog is showing.
+  void SetQuitClosure(base::OnceClosure quit_closure);
+#endif
+
+#if defined(OS_MACOSX)
+  // Clears the quit closure. Shutdown will not be initiated should the
+  // KeepAlive count reach zero. This function may be called more than once.
+  // TODO(https://crbug.com/845966): Remove this once the Cocoa first run
+  // dialog no longer needs it.
+  void ClearQuitClosure();
+#endif
 
   // Called before the browser threads are created.
   void PreCreateThreads(const base::CommandLine& command_line);
@@ -100,6 +122,12 @@ class BrowserProcessImpl : public BrowserProcess,
   void PostDestroyThreads();
 #endif
 
+  // Sets |metrics_services_manager_| and |metrics_services_manager_client_|
+  // which is owned by it.
+  void SetMetricsServices(
+      std::unique_ptr<metrics_services_manager::MetricsServicesManager> manager,
+      metrics_services_manager::MetricsServicesManagerClient* client);
+
   // BrowserProcess implementation.
   void ResourceDispatcherHostCreated() override;
   void EndSession() override;
@@ -109,8 +137,12 @@ class BrowserProcessImpl : public BrowserProcess,
   metrics::MetricsService* metrics_service() override;
   rappor::RapporServiceImpl* rappor_service() override;
   IOThread* io_thread() override;
+  // TODO(qinmin): Remove this method as callers can retrieve the global
+  // instance from SystemNetworkContextManager directly.
   SystemNetworkContextManager* system_network_context_manager() override;
-  content::NetworkConnectionTracker* network_connection_tracker() override;
+  scoped_refptr<network::SharedURLLoaderFactory> shared_url_loader_factory()
+      override;
+  network::NetworkQualityTracker* network_quality_tracker() override;
   WatchDogThread* watchdog_thread() override;
   ProfileManager* profile_manager() override;
   PrefService* local_state() override;
@@ -133,7 +165,7 @@ class BrowserProcessImpl : public BrowserProcess,
   printing::BackgroundPrintingManager* background_printing_manager() override;
   IntranetRedirectDetector* intranet_redirect_detector() override;
   const std::string& GetApplicationLocale() override;
-  void SetApplicationLocale(const std::string& locale) override;
+  void SetApplicationLocale(const std::string& actual_locale) override;
   DownloadStatusUpdater* download_status_updater() override;
   DownloadRequestLimiter* download_request_limiter() override;
   BackgroundModeManager* background_mode_manager() override;
@@ -143,8 +175,8 @@ class BrowserProcessImpl : public BrowserProcess,
   safe_browsing::SafeBrowsingService* safe_browsing_service() override;
   safe_browsing::ClientSideDetectionService* safe_browsing_detection_service()
       override;
-  subresource_filter::ContentRulesetService*
-  subresource_filter_ruleset_service() override;
+  subresource_filter::RulesetService* subresource_filter_ruleset_service()
+      override;
   optimization_guide::OptimizationGuideService* optimization_guide_service()
       override;
 
@@ -161,16 +193,27 @@ class BrowserProcessImpl : public BrowserProcess,
   network_time::NetworkTimeTracker* network_time_tracker() override;
   gcm::GCMDriver* gcm_driver() override;
   resource_coordinator::TabManager* GetTabManager() override;
+  resource_coordinator::ResourceCoordinatorParts* resource_coordinator_parts()
+      override;
   shell_integration::DefaultWebClientState CachedDefaultWebClientState()
       override;
   prefs::InProcessPrefServiceFactory* pref_service_factory() const override;
 
   static void RegisterPrefs(PrefRegistrySimple* registry);
 
+  // The locale used by the application.
+  std::string actual_locale();
+
  private:
+  using WebRtcEventLogManager = webrtc_event_logging::WebRtcEventLogManager;
+
   // KeepAliveStateObserver implementation
   void OnKeepAliveStateChanged(bool is_keeping_alive) override;
   void OnKeepAliveRestartStateChanged(bool can_restart) override;
+
+  // Create network quality observer so that it can propagate network quality
+  // changes to the render process.
+  void CreateNetworkQualityObserver();
 
   void CreateWatchdogThread();
   void CreateProfileManager();
@@ -224,10 +267,13 @@ class BrowserProcessImpl : public BrowserProcess,
 
   std::unique_ptr<PrefService> local_state_;
 
-  std::unique_ptr<SystemNetworkContextManager> system_network_context_manager_;
+  std::unique_ptr<network::NetworkQualityTracker> network_quality_tracker_;
 
-  std::unique_ptr<content::NetworkConnectionTracker>
-      network_connection_tracker_;
+  // Listens to NetworkQualityTracker and sends network quality updates to the
+  // renderer.
+  std::unique_ptr<
+      network::NetworkQualityTracker::RTTAndThroughputEstimatesObserver>
+      network_quality_observer_;
 
   bool created_icon_manager_ = false;
   std::unique_ptr<IconManager> icon_manager_;
@@ -257,7 +303,7 @@ class BrowserProcessImpl : public BrowserProcess,
       background_printing_manager_;
 #endif
 
-#if !defined(OS_ANDROID)
+#if !defined(OS_ANDROID) && !defined(OS_CHROMEOS)
   // Manager for desktop notification UI.
   bool created_notification_ui_manager_ = false;
   std::unique_ptr<NotificationUIManager> notification_ui_manager_;
@@ -273,6 +319,9 @@ class BrowserProcessImpl : public BrowserProcess,
 
   std::unique_ptr<NotificationPlatformBridge> notification_bridge_;
 
+  // Use SystemNotificationHelper::GetInstance to get this instance.
+  std::unique_ptr<SystemNotificationHelper> system_notification_helper_;
+
 #if BUILDFLAG(ENABLE_BACKGROUND_MODE)
   std::unique_ptr<BackgroundModeManager> background_mode_manager_;
 #endif
@@ -281,7 +330,7 @@ class BrowserProcessImpl : public BrowserProcess,
   scoped_refptr<safe_browsing::SafeBrowsingService> safe_browsing_service_;
 
   bool created_subresource_filter_ruleset_service_ = false;
-  std::unique_ptr<subresource_filter::ContentRulesetService>
+  std::unique_ptr<subresource_filter::RulesetService>
       subresource_filter_ruleset_service_;
 
   bool created_optimization_guide_service_ = false;
@@ -304,8 +353,9 @@ class BrowserProcessImpl : public BrowserProcess,
 
   scoped_refptr<DownloadRequestLimiter> download_request_limiter_;
 
-  // Sequenced task runner for local state related I/O tasks.
-  const scoped_refptr<base::SequencedTaskRunner> local_state_task_runner_;
+  // If non-null, this object holds a pref store that will be taken by
+  // BrowserProcessImpl to create the |local_state_|.
+  ChromeFeatureListCreator* chrome_feature_list_creator_;
 
   // Ensures that the observers of plugin/print disable/enable state
   // notifications are properly added and removed.
@@ -363,18 +413,17 @@ class BrowserProcessImpl : public BrowserProcess,
 
   std::unique_ptr<ChromeDeviceClient> device_client_;
 
-#if defined(OS_WIN) || defined(OS_MACOSX) || defined(OS_LINUX)
-  // Any change to this #ifdef must be reflected as well in
-  // chrome/browser/resource_coordinator/tab_manager_browsertest.cc
-  std::unique_ptr<resource_coordinator::TabManager> tab_manager_;
-  std::unique_ptr<resource_coordinator::TabLifecycleUnitSource>
-      tab_lifecycle_unit_source_;
-#endif
-
   shell_integration::DefaultWebClientState cached_default_web_client_state_ =
       shell_integration::UNKNOWN_DEFAULT;
 
+  std::unique_ptr<resource_coordinator::ResourceCoordinatorParts>
+      resource_coordinator_parts_;
   std::unique_ptr<prefs::InProcessPrefServiceFactory> pref_service_factory_;
+
+#if !defined(OS_ANDROID)
+  // Called to signal the process' main message loop to exit.
+  base::OnceClosure quit_closure_;
+#endif
 
   SEQUENCE_CHECKER(sequence_checker_);
 

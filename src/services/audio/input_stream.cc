@@ -8,14 +8,15 @@
 #include <utility>
 
 #include "base/bind_helpers.h"
+#include "base/strings/strcat.h"
 #include "base/trace_event/trace_event.h"
-#include "media/audio/audio_input_sync_writer.h"
 #include "media/audio/audio_manager.h"
 #include "media/base/audio_parameters.h"
 #include "media/base/user_input_monitor.h"
 #include "mojo/public/cpp/system/buffer.h"
 #include "mojo/public/cpp/system/handle.h"
 #include "mojo/public/cpp/system/platform_handle.h"
+#include "services/audio/input_sync_writer.h"
 #include "services/audio/user_input_monitor.h"
 
 namespace audio {
@@ -35,7 +36,9 @@ InputStream::InputStream(CreatedCallback created_callback,
                          const std::string& device_id,
                          const media::AudioParameters& params,
                          uint32_t shared_memory_count,
-                         bool enable_agc)
+                         bool enable_agc,
+                         StreamMonitorCoordinator* stream_monitor_coordinator,
+                         mojom::AudioProcessingConfigPtr processing_config)
     : id_(base::UnguessableToken::Create()),
       binding_(this, std::move(request)),
       client_(std::move(client)),
@@ -45,7 +48,7 @@ InputStream::InputStream(CreatedCallback created_callback,
       created_callback_(std::move(created_callback)),
       delete_callback_(std::move(delete_callback)),
       foreign_socket_(),
-      writer_(media::AudioInputSyncWriter::Create(
+      writer_(InputSyncWriter::Create(
           log_ ? base::BindRepeating(&media::mojom::AudioLog::OnLogMessage,
                                      base::Unretained(log_->get()))
                : base::DoNothing(),
@@ -59,6 +62,7 @@ InputStream::InputStream(CreatedCallback created_callback,
   DCHECK(client_.is_bound());
   DCHECK(created_callback_);
   DCHECK(delete_callback_);
+  DCHECK(params.IsValid());
   TRACE_EVENT_NESTABLE_ASYNC_BEGIN0("audio", "audio::InputStream", this);
   TRACE_EVENT_NESTABLE_ASYNC_BEGIN2("audio", "InputStream", this, "device id",
                                     device_id, "params",
@@ -73,12 +77,17 @@ InputStream::InputStream(CreatedCallback created_callback,
   if (observer_)
     observer_.set_connection_error_handler(std::move(error_handler));
 
-  if (log_)
+  if (log_) {
     log_->get()->OnCreated(params, device_id);
+    if (processing_config) {
+      log_->get()->OnProcessingStateChanged(
+          processing_config->settings.ToString());
+    }
+  }
 
   // Only MONO, STEREO and STEREO_AND_KEYBOARD_MIC channel layouts are expected,
   // see AudioManagerBase::MakeAudioInputStream().
-  if (!params.IsValid() || (params.channels() > kMaxInputChannels)) {
+  if (params.channels() > kMaxInputChannels) {
     OnStreamError(true);
     return;
   }
@@ -88,9 +97,10 @@ InputStream::InputStream(CreatedCallback created_callback,
     return;
   }
 
-  controller_ = media::AudioInputController::Create(
+  controller_ = InputController::Create(
       audio_manager, this, writer_.get(), user_input_monitor_.get(), params,
-      device_id, enable_agc);
+      device_id, enable_agc, stream_monitor_coordinator,
+      std::move(processing_config));
 }
 
 InputStream::~InputStream() {
@@ -116,9 +126,9 @@ InputStream::~InputStream() {
     return;
   }
 
-  // TODO(https://crbug.com/803102): remove AudioInputController::Close() after
+  // TODO(https://crbug.com/803102): remove InputController::Close() after
   // content/ streams are removed, destructor should suffice.
-  controller_->Close(base::OnceClosure());
+  controller_->Close();
 
   TRACE_EVENT_NESTABLE_ASYNC_END0("audio", "InputStream", this);
   TRACE_EVENT_NESTABLE_ASYNC_END0("audio", "audio::InputStream", this);
@@ -129,7 +139,8 @@ void InputStream::SetOutputDeviceForAec(const std::string& output_device_id) {
   DCHECK(controller_);
   controller_->SetOutputDeviceForAec(output_device_id);
   if (log_)
-    log_->get()->OnLogMessage("SetOutputDeviceForAec");
+    log_->get()->OnLogMessage(
+        base::StrCat({"SetOutputDeviceForAec: ", output_device_id}));
 }
 
 void InputStream::Record() {
@@ -162,7 +173,8 @@ void InputStream::SetVolume(double volume) {
 }
 
 void InputStream::OnCreated(bool initially_muted) {
-  TRACE_EVENT_NESTABLE_ASYNC_INSTANT0("audio", "Created", this);
+  TRACE_EVENT_NESTABLE_ASYNC_INSTANT1("audio", "Created", this,
+                                      "initially muted", initially_muted);
   DCHECK_CALLED_ON_VALID_SEQUENCE(owning_sequence_);
 
   base::ReadOnlySharedMemoryRegion shared_memory_region =
@@ -172,21 +184,17 @@ void InputStream::OnCreated(bool initially_muted) {
     return;
   }
 
-  mojo::ScopedSharedBufferHandle buffer_handle =
-      mojo::WrapReadOnlySharedMemoryRegion(std::move(shared_memory_region));
-
   mojo::ScopedHandle socket_handle =
       mojo::WrapPlatformFile(foreign_socket_.Release());
-
-  DCHECK(buffer_handle.is_valid());
   DCHECK(socket_handle.is_valid());
 
   std::move(created_callback_)
-      .Run({base::in_place, std::move(buffer_handle), std::move(socket_handle)},
+      .Run({base::in_place, std::move(shared_memory_region),
+            std::move(socket_handle)},
            initially_muted, id_);
 }
 
-void InputStream::OnError(media::AudioInputController::ErrorCode error_code) {
+void InputStream::OnError(InputController::ErrorCode error_code) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(owning_sequence_);
   TRACE_EVENT_NESTABLE_ASYNC_INSTANT0("audio", "Error", this);
 

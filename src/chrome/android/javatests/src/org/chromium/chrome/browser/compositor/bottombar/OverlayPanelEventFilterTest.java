@@ -22,8 +22,6 @@ import org.junit.runner.RunWith;
 import org.chromium.base.test.util.Feature;
 import org.chromium.chrome.browser.compositor.layouts.eventfilter.OverlayPanelEventFilter;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
-import org.chromium.content.browser.test.util.TestContentViewCore;
-import org.chromium.content_public.browser.ContentViewCore;
 
 /**
  * Class responsible for testing the OverlayPanelEventFilter.
@@ -79,9 +77,9 @@ public class OverlayPanelEventFilterTest {
         }
 
         @Override
-        protected void propagateEventToContentViewCore(MotionEvent e) {
+        protected void propagateEventToContent(MotionEvent e) {
             mEventPropagatedToContent = MotionEvent.obtain(e);
-            super.propagateEventToContentViewCore(e);
+            super.propagateEventToContent(e);
             mEventPropagatedToContent.recycle();
         }
 
@@ -105,16 +103,14 @@ public class OverlayPanelEventFilterTest {
     // --------------------------------------------------------------------------------------------
 
     /**
-     * Mocks an OverlayPanel, so it doesn't create ContentViewCore or animations.
+     * Mocks an OverlayPanel, so it doesn't create WebContents or animations.
      */
     private final class MockOverlayPanel extends OverlayPanel {
-        private boolean mWasTapDetectedOnPanel = false;
-        private boolean mWasScrollDetectedOnPanel = false;
-        private ContentViewCore mContentViewCore;
+        private boolean mWasTapDetectedOnPanel;
+        private boolean mWasScrollDetectedOnPanel;
 
         public MockOverlayPanel(Context context, OverlayPanelManager panelManager) {
             super(context, null, panelManager);
-            mContentViewCore = new TestContentViewCore(context, "");
         }
 
         @Override
@@ -123,7 +119,7 @@ public class OverlayPanelEventFilterTest {
         }
 
         /**
-         * Override creation and destruction of the ContentViewCore as they rely on native methods.
+         * Override creation and destruction of the WebContents as they rely on native methods.
          */
         private class MockOverlayPanelContent extends OverlayPanelContent {
             public MockOverlayPanelContent() {
@@ -162,7 +158,7 @@ public class OverlayPanelEventFilterTest {
         }
 
         @Override
-        protected void resizePanelContentViewCore(float width, float height) {}
+        protected void resizePanelContentView() {}
 
         @Override
         protected void animatePanelTo(float height, long duration) {

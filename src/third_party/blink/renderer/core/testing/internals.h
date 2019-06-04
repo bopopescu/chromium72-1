@@ -27,11 +27,11 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_TESTING_INTERNALS_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_TESTING_INTERNALS_H_
 
-#include "third_party/blink/renderer/bindings/core/v8/exception_state.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_promise.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_value.h"
 #include "third_party/blink/renderer/core/css/css_computed_style_declaration.h"
 #include "third_party/blink/renderer/core/page/scrolling/scrolling_coordinator.h"
+#include "third_party/blink/renderer/platform/bindings/exception_state.h"
 #include "third_party/blink/renderer/platform/bindings/script_state.h"
 #include "third_party/blink/renderer/platform/bindings/script_wrappable.h"
 #include "third_party/blink/renderer/platform/heap/handle.h"
@@ -43,13 +43,12 @@ namespace blink {
 class Animation;
 class CallbackFunctionTest;
 class CanvasRenderingContext;
+class DOMArrayBuffer;
+class DOMPoint;
 class DOMRect;
 class DOMRectList;
 class DOMRectReadOnly;
-class DOMArrayBuffer;
-class DOMPoint;
 class DOMWindow;
-class Dictionary;
 class DictionaryTest;
 class Document;
 class DocumentMarker;
@@ -61,9 +60,11 @@ class HTMLInputElement;
 class HTMLMediaElement;
 class HTMLSelectElement;
 class HTMLVideoElement;
+class HitTestLayerRectList;
+class HitTestLocation;
+class HitTestResult;
 class InternalRuntimeFlags;
 class InternalSettings;
-class LayerRectList;
 class LocalDOMWindow;
 class LocalFrame;
 class Location;
@@ -72,15 +73,16 @@ class OriginTrialsTest;
 class Page;
 class Range;
 class RecordTest;
+class ScrollState;
 class SequenceTest;
 class SerializedScriptValue;
 class ShadowRoot;
+template <typename NodeType>
+class StaticNodeTypeList;
 class StaticSelection;
 class TypeConversions;
 class UnionTypesTest;
-class ScrollState;
-template <typename NodeType>
-class StaticNodeTypeList;
+
 using StaticNodeList = StaticNodeTypeList<Node>;
 
 class Internals final : public ScriptWrappable {
@@ -88,10 +90,12 @@ class Internals final : public ScriptWrappable {
 
  public:
   static Internals* Create(ExecutionContext* context) {
-    return new Internals(context);
+    return MakeGarbageCollected<Internals>(context);
   }
 
   static void ResetToConsistentState(Page*);
+
+  explicit Internals(ExecutionContext*);
 
   String elementLayoutTreeAsText(Element*, ExceptionState&);
 
@@ -119,7 +123,7 @@ class Internals final : public ScriptWrappable {
   String shadowRootType(const Node*, ExceptionState&) const;
   bool hasShadowInsertionPoint(const Node*, ExceptionState&) const;
   bool hasContentElement(const Node*, ExceptionState&) const;
-  size_t countElementShadow(const Node*, ExceptionState&) const;
+  uint32_t countElementShadow(const Node*, ExceptionState&) const;
   const AtomicString& shadowPseudoId(Element*);
 
   // Animation testing.
@@ -219,7 +223,6 @@ class Internals final : public ScriptWrappable {
                                  bool);
   void setMarkedTextMatchesAreHighlighted(Document*, bool);
 
-  void setFrameViewPosition(Document*, long x, long y, ExceptionState&);
   String viewportAsText(Document*,
                         float device_pixel_ratio,
                         int available_width,
@@ -240,28 +243,28 @@ class Internals final : public ScriptWrappable {
   unsigned lengthFromRange(Element* scope, const Range*);
   String rangeAsText(const Range*);
 
-  DOMPoint* touchPositionAdjustedToBestClickableNode(long x,
-                                                     long y,
-                                                     long width,
-                                                     long height,
+  DOMPoint* touchPositionAdjustedToBestClickableNode(int x,
+                                                     int y,
+                                                     int width,
+                                                     int height,
                                                      Document*,
                                                      ExceptionState&);
-  Node* touchNodeAdjustedToBestClickableNode(long x,
-                                             long y,
-                                             long width,
-                                             long height,
+  Node* touchNodeAdjustedToBestClickableNode(int x,
+                                             int y,
+                                             int width,
+                                             int height,
                                              Document*,
                                              ExceptionState&);
-  DOMPoint* touchPositionAdjustedToBestContextMenuNode(long x,
-                                                       long y,
-                                                       long width,
-                                                       long height,
+  DOMPoint* touchPositionAdjustedToBestContextMenuNode(int x,
+                                                       int y,
+                                                       int width,
+                                                       int height,
                                                        Document*,
                                                        ExceptionState&);
-  Node* touchNodeAdjustedToBestContextMenuNode(long x,
-                                               long y,
-                                               long width,
-                                               long height,
+  Node* touchNodeAdjustedToBestContextMenuNode(int x,
+                                               int y,
+                                               int width,
+                                               int height,
                                                Document*,
                                                ExceptionState&);
 
@@ -283,7 +286,7 @@ class Internals final : public ScriptWrappable {
   unsigned touchEndOrCancelEventHandlerCount(Document*) const;
   unsigned pointerEventHandlerCount(Document*) const;
 
-  LayerRectList* touchEventTargetLayerRects(Document*, ExceptionState&);
+  HitTestLayerRectList* touchEventTargetLayerRects(Document*, ExceptionState&);
 
   bool executeCommand(Document*,
                       const String& name,
@@ -300,10 +303,8 @@ class Internals final : public ScriptWrappable {
   StaticNodeList* nodesFromRect(Document*,
                                 int x,
                                 int y,
-                                unsigned top_padding,
-                                unsigned right_padding,
-                                unsigned bottom_padding,
-                                unsigned left_padding,
+                                int width,
+                                int height,
                                 bool ignore_clipping,
                                 bool allow_child_frame_content,
                                 ExceptionState&) const;
@@ -470,12 +471,12 @@ class Internals final : public ScriptWrappable {
   ScriptPromise promiseCheck(ScriptState*,
                              long,
                              bool,
-                             const Dictionary&,
+                             const ScriptValue&,
                              const String&,
                              const Vector<String>&,
                              ExceptionState&);
   ScriptPromise promiseCheckWithoutExceptionState(ScriptState*,
-                                                  const Dictionary&,
+                                                  const ScriptValue&,
                                                   const String&,
                                                   const Vector<String>&);
   ScriptPromise promiseCheckRange(ScriptState*, long);
@@ -513,7 +514,7 @@ class Internals final : public ScriptWrappable {
 
   // Schedule a forced Blink GC run (Oilpan) at the end of event loop.
   // Note: This is designed to be only used from PerformanceTests/BlinkGC to
-  //       explicitly measure only Blink GC time.  Normal LayoutTests should use
+  //       explicitly measure only Blink GC time.  Normal web tests should use
   //       gc() instead as it would trigger both Blink GC and V8 GC.
   void forceBlinkGCWithoutV8GC();
 
@@ -521,17 +522,13 @@ class Internals final : public ScriptWrappable {
   String selectedTextForClipboard();
 
   void setVisualViewportOffset(int x, int y);
-  int visualViewportHeight();
-  int visualViewportWidth();
-  // The scroll position of the visual viewport relative to the document origin.
-  float visualViewportScrollX();
-  float visualViewportScrollY();
 
   // Return true if the given use counter exists for the given document.
   // |feature| must be one of the values from the WebFeature enum.
   bool isUseCounted(Document*, uint32_t feature);
   bool isCSSPropertyUseCounted(Document*, const String&);
   bool isAnimatedCSSPropertyUseCounted(Document*, const String&);
+  void clearUseCounter(Document*, uint32_t feature);
 
   Vector<String> getCSSPropertyLonghands() const;
   Vector<String> getCSSPropertyShorthands() const;
@@ -593,12 +590,26 @@ class Internals final : public ScriptWrappable {
 
   void BypassLongCompileThresholdOnce(ExceptionState&);
 
+  // The number of calls to update the blink lifecycle (see:
+  // LocalFrameView::UpdateLifecyclePhasesInternal).
+  unsigned LifecycleUpdateCount() const;
+
+  void DisableIntersectionObserverThrottleDelay() const;
+
+  void addEmbedderCustomElementName(const AtomicString& name, ExceptionState&);
+
  private:
-  explicit Internals(ExecutionContext*);
   Document* ContextDocument() const;
   LocalFrame* GetFrame() const;
   Vector<String> IconURLs(Document*, int icon_types_mask) const;
   DOMRectList* AnnotatedRegions(Document*, bool draggable, ExceptionState&);
+  void HitTestRect(HitTestLocation&,
+                   HitTestResult&,
+                   int x,
+                   int y,
+                   int width,
+                   int height,
+                   Document*);
 
   DocumentMarker* MarkerAt(Node*,
                            const String& marker_type,

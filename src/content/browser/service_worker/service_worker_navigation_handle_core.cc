@@ -7,12 +7,14 @@
 #include <utility>
 
 #include "base/bind.h"
+#include "base/task/post_task.h"
 #include "content/browser/service_worker/service_worker_context_core.h"
 #include "content/browser/service_worker/service_worker_context_wrapper.h"
 #include "content/browser/service_worker/service_worker_navigation_handle.h"
 #include "content/browser/service_worker/service_worker_provider_host.h"
 #include "content/common/service_worker/service_worker_types.h"
 #include "content/common/service_worker/service_worker_utils.h"
+#include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/common/child_process_host.h"
 
@@ -31,13 +33,21 @@ ServiceWorkerNavigationHandleCore::~ServiceWorkerNavigationHandleCore() {
   DCHECK_CURRENTLY_ON(BrowserThread::IO);
   if (provider_id_ == kInvalidServiceWorkerProviderId)
     return;
-  // Remove the provider host if it was never completed (navigation failed).
   ServiceWorkerContextCore* context = context_wrapper_->context();
-  if (!context || !context->GetProviderHost(ChildProcessHost::kInvalidUniqueID,
-                                            provider_id_)) {
+  if (!context)
     return;
-  }
-  context->RemoveProviderHost(ChildProcessHost::kInvalidUniqueID, provider_id_);
+  ServiceWorkerProviderHost* host = context->GetProviderHost(
+      ChildProcessHost::kInvalidUniqueID, provider_id_);
+  if (!host)
+    return;
+  // Remove the provider host if it was never completed (navigation failed).
+  // TODO(falken): ServiceWorkerNavigationHandleCore should just own a Mojo
+  // pointer tied to the lifetime of ServiceWorkerProviderHost, and send the
+  // Mojo pointer to the renderer on navigation commit. If the handle core dies
+  // before that, the provider host would be destroyed by Mojo connection error.
+  if (!host->is_execution_ready())
+    context->RemoveProviderHost(ChildProcessHost::kInvalidUniqueID,
+                                provider_id_);
 }
 
 void ServiceWorkerNavigationHandleCore::DidPreCreateProviderHost(
@@ -46,8 +56,8 @@ void ServiceWorkerNavigationHandleCore::DidPreCreateProviderHost(
   DCHECK(ServiceWorkerUtils::IsBrowserAssignedProviderId(provider_id));
 
   provider_id_ = provider_id;
-  BrowserThread::PostTask(
-      BrowserThread::UI, FROM_HERE,
+  base::PostTaskWithTraits(
+      FROM_HERE, {BrowserThread::UI},
       base::BindOnce(
           &ServiceWorkerNavigationHandle::DidCreateServiceWorkerProviderHost,
           ui_handle_, provider_id_));

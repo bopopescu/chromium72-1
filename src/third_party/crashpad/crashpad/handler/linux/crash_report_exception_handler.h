@@ -23,8 +23,10 @@
 #include "handler/crash_report_upload_thread.h"
 #include "handler/linux/exception_handler_server.h"
 #include "handler/user_stream_data_source.h"
+#include "util/linux/exception_handler_protocol.h"
 #include "util/linux/ptrace_connection.h"
 #include "util/misc/address_types.h"
+#include "util/misc/uuid.h"
 
 namespace crashpad {
 
@@ -63,15 +65,18 @@ class CrashReportExceptionHandler : public ExceptionHandlerServer::Delegate {
   // ExceptionHandlerServer::Delegate:
 
   bool HandleException(pid_t client_process_id,
-                       VMAddress exception_info_address) override;
+                       const ClientInformation& info,
+                       UUID* local_report_id = nullptr) override;
 
   bool HandleExceptionWithBroker(pid_t client_process_id,
-                                 VMAddress exception_info_address,
-                                 int broker_sock) override;
+                                 const ClientInformation& info,
+                                 int broker_sock,
+                                 UUID* local_report_id = nullptr) override;
 
  private:
   bool HandleExceptionWithConnection(PtraceConnection* connection,
-                                     VMAddress exception_info_address);
+                                     const ClientInformation& info,
+                                     UUID* local_report_id = nullptr);
 
   CrashReportDatabase* database_;  // weak
   CrashReportUploadThread* upload_thread_;  // weak

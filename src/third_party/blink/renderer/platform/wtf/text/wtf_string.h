@@ -27,13 +27,13 @@
 // on systems without case-sensitive file systems.
 
 #include <iosfwd>
+#include "build/build_config.h"
 #include "third_party/blink/renderer/platform/wtf/allocator.h"
 #include "third_party/blink/renderer/platform/wtf/compiler.h"
-#include "third_party/blink/renderer/platform/wtf/hash_table_deleted_value_type.h"
-#include "third_party/blink/renderer/platform/wtf/text/ascii_fast_path.h"
 #include "third_party/blink/renderer/platform/wtf/text/string_impl.h"
 #include "third_party/blink/renderer/platform/wtf/text/string_view.h"
 #include "third_party/blink/renderer/platform/wtf/wtf_export.h"
+#include "third_party/blink/renderer/platform/wtf/wtf_size_t.h"
 
 #ifdef __OBJC__
 #include <objc/objc.h>
@@ -76,7 +76,7 @@ class WTF_EXPORT String {
   // which will sometimes return a null string when vector.data() is null
   // which can only occur for vectors without inline capacity.
   // See: https://bugs.webkit.org/show_bug.cgi?id=109792
-  template <size_t inlineCapacity>
+  template <wtf_size_t inlineCapacity>
   explicit String(const Vector<UChar, inlineCapacity>&);
 
   // Construct a string with UTF-16 data, from a null-terminated source.
@@ -87,6 +87,12 @@ class WTF_EXPORT String {
   // Construct a string with latin1 data.
   String(const LChar* characters, unsigned length);
   String(const char* characters, unsigned length);
+
+#if defined(ARCH_CPU_64_BITS)
+  // Only define a size_t constructor if size_t is 64 bit otherwise
+  // we'd have a duplicate define.
+  String(const char* characters, size_t length);
+#endif  // defined(ARCH_CPU_64_BITS)
 
   // Construct a string with latin1 data, from a null-terminated source.
   String(const LChar* characters)
@@ -170,24 +176,25 @@ class WTF_EXPORT String {
   static String NumberToStringFixedWidth(double, unsigned decimal_places);
 
   // Find characters.
-  size_t find(UChar c, unsigned start = 0) const {
+  wtf_size_t find(UChar c, unsigned start = 0) const {
     return impl_ ? impl_->Find(c, start) : kNotFound;
   }
-  size_t find(LChar c, unsigned start = 0) const {
+  wtf_size_t find(LChar c, unsigned start = 0) const {
     return impl_ ? impl_->Find(c, start) : kNotFound;
   }
-  size_t find(char c, unsigned start = 0) const {
+  wtf_size_t find(char c, unsigned start = 0) const {
     return find(static_cast<LChar>(c), start);
   }
-  size_t Find(CharacterMatchFunctionPtr match_function,
-              unsigned start = 0) const {
+  wtf_size_t Find(CharacterMatchFunctionPtr match_function,
+                  unsigned start = 0) const {
     return impl_ ? impl_->Find(match_function, start) : kNotFound;
   }
 
   // Find substrings.
-  size_t Find(const StringView& value,
-              unsigned start = 0,
-              TextCaseSensitivity case_sensitivity = kTextCaseSensitive) const {
+  wtf_size_t Find(
+      const StringView& value,
+      unsigned start = 0,
+      TextCaseSensitivity case_sensitivity = kTextCaseSensitive) const {
     return impl_
                ? DISPATCH_CASE_OP(case_sensitivity, impl_->Find, (value, start))
                : kNotFound;
@@ -196,13 +203,14 @@ class WTF_EXPORT String {
   // Unicode aware case insensitive string matching. Non-ASCII characters might
   // match to ASCII characters. This function is rarely used to implement web
   // platform features.
-  size_t FindIgnoringCase(const StringView& value, unsigned start = 0) const {
+  wtf_size_t FindIgnoringCase(const StringView& value,
+                              unsigned start = 0) const {
     return impl_ ? impl_->FindIgnoringCase(value, start) : kNotFound;
   }
 
   // ASCII case insensitive string matching.
-  size_t FindIgnoringASCIICase(const StringView& value,
-                               unsigned start = 0) const {
+  wtf_size_t FindIgnoringASCIICase(const StringView& value,
+                                   unsigned start = 0) const {
     return impl_ ? impl_->FindIgnoringASCIICase(value, start) : kNotFound;
   }
 
@@ -214,10 +222,11 @@ class WTF_EXPORT String {
   }
 
   // Find the last instance of a single character or string.
-  size_t ReverseFind(UChar c, unsigned start = UINT_MAX) const {
+  wtf_size_t ReverseFind(UChar c, unsigned start = UINT_MAX) const {
     return impl_ ? impl_->ReverseFind(c, start) : kNotFound;
   }
-  size_t ReverseFind(const StringView& value, unsigned start = UINT_MAX) const {
+  wtf_size_t ReverseFind(const StringView& value,
+                         unsigned start = UINT_MAX) const {
     return impl_ ? impl_->ReverseFind(value, start) : kNotFound;
   }
 
@@ -342,7 +351,7 @@ class WTF_EXPORT String {
   PRINTF_FORMAT(1, 2) static String Format(const char* format, ...);
 
   // Returns a version suitable for gtest and base/logging.*.  It prepends and
-  // appends double-quotes, and escapes chracters other than ASCII printables.
+  // appends double-quotes, and escapes characters other than ASCII printables.
   String EncodeForDebugging() const;
 
   // Returns an uninitialized string. The characters needs to be written
@@ -464,14 +473,14 @@ class WTF_EXPORT String {
   }
 #endif
 
-  static String Make8BitFrom16BitSource(const UChar*, size_t);
-  template <size_t inlineCapacity>
+  static String Make8BitFrom16BitSource(const UChar*, wtf_size_t);
+  template <wtf_size_t inlineCapacity>
   static String Make8BitFrom16BitSource(
       const Vector<UChar, inlineCapacity>& buffer) {
     return Make8BitFrom16BitSource(buffer.data(), buffer.size());
   }
 
-  static String Make16BitFrom8BitSource(const LChar*, size_t);
+  static String Make16BitFrom8BitSource(const LChar*, wtf_size_t);
 
   // String::fromUTF8 will return a null string if
   // the input data contains invalid UTF-8 sequences.
@@ -493,12 +502,12 @@ class WTF_EXPORT String {
                                       length);
   }
 
-  bool ContainsOnlyASCII() const {
-    return !impl_ || impl_->ContainsOnlyASCII();
+  bool ContainsOnlyASCIIOrEmpty() const {
+    return !impl_ || impl_->ContainsOnlyASCIIOrEmpty();
   }
-  bool ContainsOnlyLatin1() const;
-  bool ContainsOnlyWhitespace() const {
-    return !impl_ || impl_->ContainsOnlyWhitespace();
+  bool ContainsOnlyLatin1OrEmpty() const;
+  bool ContainsOnlyWhitespaceOrEmpty() const {
+    return !impl_ || impl_->ContainsOnlyWhitespaceOrEmpty();
   }
 
   size_t CharactersSizeInBytes() const {
@@ -547,7 +556,7 @@ inline bool EqualIgnoringNullity(const String& a, const String& b) {
   return EqualIgnoringNullity(a.Impl(), b.Impl());
 }
 
-template <size_t inlineCapacity>
+template <wtf_size_t inlineCapacity>
 inline bool EqualIgnoringNullity(const Vector<UChar, inlineCapacity>& a,
                                  const String& b) {
   return EqualIgnoringNullity(a, b.Impl());
@@ -559,7 +568,7 @@ inline void swap(String& a, String& b) {
 
 // Definitions of string operations
 
-template <size_t inlineCapacity>
+template <wtf_size_t inlineCapacity>
 String::String(const Vector<UChar, inlineCapacity>& vector)
     : impl_(vector.size() ? StringImpl::Create(vector.data(), vector.size())
                           : StringImpl::empty_) {}
@@ -576,7 +585,7 @@ inline const UChar* String::GetCharacters<UChar>() const {
   return Characters16();
 }
 
-inline bool String::ContainsOnlyLatin1() const {
+inline bool String::ContainsOnlyLatin1OrEmpty() const {
   if (IsEmpty())
     return true;
 
@@ -585,7 +594,7 @@ inline bool String::ContainsOnlyLatin1() const {
 
   const UChar* characters = Characters16();
   UChar ored = 0;
-  for (size_t i = 0; i < impl_->length(); ++i)
+  for (wtf_size_t i = 0; i < impl_->length(); ++i)
     ored |= characters[i];
   return !(ored & 0xFF00);
 }
@@ -644,7 +653,7 @@ WTF_EXPORT extern const String& g_empty_string16_bit;
 WTF_EXPORT extern const String& g_xmlns_with_colon;
 
 // Pretty printer for gtest and base/logging.*.  It prepends and appends
-// double-quotes, and escapes chracters other than ASCII printables.
+// double-quotes, and escapes characters other than ASCII printables.
 WTF_EXPORT std::ostream& operator<<(std::ostream&, const String&);
 
 inline StringView::StringView(const String& string,
@@ -666,7 +675,6 @@ using WTF::kStrictUTF8ConversionReplacingUnpairedSurrogatesWithFFFD;
 using WTF::String;
 using WTF::g_empty_string;
 using WTF::g_empty_string16_bit;
-using WTF::CharactersAreAllASCII;
 using WTF::Equal;
 using WTF::Find;
 using WTF::IsSpaceOrNewline;

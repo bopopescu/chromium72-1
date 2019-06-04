@@ -9,10 +9,12 @@
 #include "base/command_line.h"
 #include "build/build_config.h"
 #include "chrome/browser/ui/views/chrome_constrained_window_views_client.h"
+#include "chrome/browser/ui/views/chrome_layout_provider.h"
 #include "chrome/browser/ui/views/chrome_views_delegate.h"
-#include "chrome/browser/ui/views/harmony/chrome_layout_provider.h"
+#include "chrome/browser/ui/views/relaunch_notification/relaunch_notification_controller.h"
 #include "components/constrained_window/constrained_window_views.h"
 #include "services/service_manager/sandbox/switches.h"
+#include "ui/base/material_design/material_design_controller.h"
 
 #if defined(USE_AURA)
 #include "base/run_loop.h"
@@ -28,8 +30,8 @@
 #include "content/public/common/service_manager_connection.h"
 #include "services/service_manager/public/cpp/connector.h"
 #include "services/service_manager/runner/common/client_util.h"
-#include "services/ui/public/cpp/gpu/gpu.h"  // nogncheck
-#include "services/ui/public/interfaces/constants.mojom.h"
+#include "services/ws/public/cpp/gpu/gpu.h"  // nogncheck
+#include "services/ws/public/mojom/constants.mojom.h"
 #include "ui/aura/env.h"
 #include "ui/display/screen.h"
 #include "ui/views/mus/mus_client.h"
@@ -50,12 +52,8 @@
 #endif  // defined(OS_LINUX) && !defined(OS_CHROMEOS)
 
 #if defined(OS_CHROMEOS)
-#include "ash/public/interfaces/constants.mojom.h"
-#include "chrome/browser/chromeos/ash_config.h"
-#include "content/public/common/content_switches.h"
-#else  // defined(OS_CHROMEOS)
-#include "chrome/browser/ui/views/relaunch_notification/relaunch_notification_controller.h"
-#endif  // defined(OS_CHROMEOS)
+#include "ui/base/ui_base_features.h"
+#endif
 
 ChromeBrowserMainExtraPartsViews::ChromeBrowserMainExtraPartsViews() {
 }
@@ -72,34 +70,46 @@ void ChromeBrowserMainExtraPartsViews::ToolkitInitialized() {
 
   SetConstrainedWindowViewsClient(CreateChromeConstrainedWindowViewsClient());
 
+  // The MaterialDesignController needs to look at command line flags, which
+  // are not available until this point. Now that they are, proceed with
+  // initializing the MaterialDesignController.
+  ui::MaterialDesignController::Initialize();
+
 #if defined(USE_AURA)
   wm_state_.reset(new wm::WMState);
 #endif
+
+  // TODO(pkasting): Try to move ViewsDelegate creation here as well;
+  // see https://crbug.com/691894#c1
+  if (!views::LayoutProvider::Get())
+    layout_provider_ = ChromeLayoutProvider::CreateLayoutProvider();
 }
 
 void ChromeBrowserMainExtraPartsViews::PreCreateThreads() {
 #if defined(USE_AURA)
   views::InstallDesktopScreenIfNecessary();
 #endif
-
-  // TODO(pkasting): Try to move ViewsDelegate creation here as well;
-  // see https://crbug.com/691894#c1
-  // The layout_provider_ must be intialized here instead of in
-  // ToolkitInitialized() because it relies on
-  // ui::MaterialDesignController::Intialize() having already been called.
-  if (!views::LayoutProvider::Get())
-    layout_provider_ = ChromeLayoutProvider::CreateLayoutProvider();
 }
 
 void ChromeBrowserMainExtraPartsViews::PreProfileInit() {
 #if defined(USE_AURA)
   // Start devtools server
+  constexpr int kUiDevToolsDefaultPort = 9223;
   network::mojom::NetworkContext* network_context =
       g_browser_process->system_network_context_manager()->GetContext();
-  devtools_server_ = ui_devtools::UiDevToolsServer::Create(
-      network_context, switches::kEnableUiDevTools, 9223);
+  devtools_server_ = ui_devtools::UiDevToolsServer::CreateForViews(
+      network_context, switches::kEnableUiDevTools, kUiDevToolsDefaultPort);
   if (devtools_server_) {
     auto dom_backend = std::make_unique<ui_devtools::DOMAgentAura>();
+#if defined(OS_CHROMEOS)
+    // OverlayAgentAura intends to handle input events targeting any UI surface,
+    // and so installs itself as a local aura::Env pre-target ui::EventHandler.
+    // In multi-process Mash, Chrome's local aura::Env can only handle events
+    // target Chrome's own aura::Windows, not those targeting Ash or mojo apps.
+    // TODO(crbug.com/896977): Init the devtools server in Ash on Chrome OS.
+    LOG_IF(WARNING, features::IsMultiProcessMash())
+        << "Chrome cannot handle Ash system ui and mojo app events in Mash.";
+#endif
     auto overlay_backend =
         std::make_unique<ui_devtools::OverlayAgentAura>(dom_backend.get());
     auto css_backend =
@@ -147,51 +157,15 @@ void ChromeBrowserMainExtraPartsViews::PreProfileInit() {
 #endif  // defined(OS_LINUX) && !defined(OS_CHROMEOS)
 }
 
-void ChromeBrowserMainExtraPartsViews::ServiceManagerConnectionStarted(
-    content::ServiceManagerConnection* connection) {
-  DCHECK(connection);
-#if defined(USE_AURA)
-  if (aura::Env::GetInstance()->mode() == aura::Env::Mode::LOCAL)
-    return;
-
-#if defined(OS_CHROMEOS)
-  // Start up the window service and the ash system UI service.
-  if (chromeos::GetAshConfig() == ash::Config::MASH) {
-    connection->GetConnector()->StartService(
-        service_manager::Identity(ui::mojom::kServiceName));
-    connection->GetConnector()->StartService(
-        service_manager::Identity(ash::mojom::kServiceName));
-  }
-#endif
-
-#if defined(OS_CHROMEOS)
-  if (chromeos::GetAshConfig() != ash::Config::MASH)
-    return;
-#endif
-
-  views::MusClient::InitParams params;
-  params.connector = connection->GetConnector();
-  params.io_task_runner = content::BrowserThread::GetTaskRunnerForThread(
-      content::BrowserThread::IO);
-  // WMState is owned as a member, so don't have MusClient create it.
-  params.create_wm_state = false;
-  mus_client_ = std::make_unique<views::MusClient>(params);
-#endif  // defined(USE_AURA)
-}
-
 void ChromeBrowserMainExtraPartsViews::PostBrowserStart() {
-#if !defined(OS_CHROMEOS)
   relaunch_notification_controller_ =
       std::make_unique<RelaunchNotificationController>(
           UpgradeDetector::GetInstance());
-#endif
 }
 
 void ChromeBrowserMainExtraPartsViews::PostMainMessageLoopRun() {
-#if !defined(OS_CHROMEOS)
   // The relaunch notification controller acts on timer-based events. Tear it
   // down explicitly here to avoid a case where such an event arrives during
   // shutdown.
   relaunch_notification_controller_.reset();
-#endif
 }

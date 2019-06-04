@@ -24,8 +24,7 @@ static WebPaymentCurrencyAmount CreateWebPaymentCurrencyAmountForTest() {
 
 static WebPaymentMethodData CreateWebPaymentMethodDataForTest() {
   WebPaymentMethodData web_method_data;
-  WebString method = WebString::FromUTF8("foo");
-  web_method_data.supported_methods = WebVector<WebString>(&method, 1);
+  web_method_data.supported_method = "foo";
   web_method_data.stringified_data = "{\"merchantId\":\"12345\"}";
   return web_method_data;
 }
@@ -57,35 +56,26 @@ TEST(PaymentEventDataConversionTest, ToCanMakePaymentEventData) {
   V8TestingScope scope;
   WebCanMakePaymentEventData web_data =
       CreateWebCanMakePaymentEventDataForTest();
-  CanMakePaymentEventInit data =
+  CanMakePaymentEventInit* data =
       PaymentEventDataConversion::ToCanMakePaymentEventInit(
           scope.GetScriptState(), web_data);
 
-  ASSERT_TRUE(data.hasTopOrigin());
-  EXPECT_EQ("https://example.com", data.topOrigin());
+  ASSERT_TRUE(data->hasTopOrigin());
+  EXPECT_EQ("https://example.com", data->topOrigin());
 
-  ASSERT_TRUE(data.hasPaymentRequestOrigin());
-  EXPECT_EQ("https://example.com", data.paymentRequestOrigin());
+  ASSERT_TRUE(data->hasPaymentRequestOrigin());
+  EXPECT_EQ("https://example.com", data->paymentRequestOrigin());
 
-  ASSERT_TRUE(data.hasMethodData());
-  ASSERT_EQ(1UL, data.methodData().size());
-  ASSERT_TRUE(data.methodData().front().hasSupportedMethods());
-  ASSERT_EQ(1UL, data.methodData()
-                     .front()
-                     .supportedMethods()
-                     .GetAsStringSequence()
-                     .size());
-  ASSERT_EQ("foo", data.methodData()
-                       .front()
-                       .supportedMethods()
-                       .GetAsStringSequence()
-                       .front());
-  ASSERT_TRUE(data.methodData().front().hasData());
-  ASSERT_TRUE(data.methodData().front().data().IsObject());
-  String stringified_data = V8StringToWebCoreString<String>(
+  ASSERT_TRUE(data->hasMethodData());
+  ASSERT_EQ(1UL, data->methodData().size());
+  ASSERT_TRUE(data->methodData().front()->hasSupportedMethod());
+  ASSERT_EQ("foo", data->methodData().front()->supportedMethod());
+  ASSERT_TRUE(data->methodData().front()->hasData());
+  ASSERT_TRUE(data->methodData().front()->data().IsObject());
+  String stringified_data = ToBlinkString<String>(
       v8::JSON::Stringify(
           scope.GetContext(),
-          data.methodData().front().data().V8Value().As<v8::Object>())
+          data->methodData().front()->data().V8Value().As<v8::Object>())
           .ToLocalChecked(),
       kDoNotExternalize);
   EXPECT_EQ("{\"merchantId\":\"12345\"}", stringified_data);
@@ -95,50 +85,41 @@ TEST(PaymentEventDataConversionTest, ToPaymentRequestEventData) {
   V8TestingScope scope;
   WebPaymentRequestEventData web_data =
       CreateWebPaymentRequestEventDataForTest();
-  PaymentRequestEventInit data =
+  PaymentRequestEventInit* data =
       PaymentEventDataConversion::ToPaymentRequestEventInit(
           scope.GetScriptState(), web_data);
 
-  ASSERT_TRUE(data.hasTopOrigin());
-  EXPECT_EQ("https://example.com", data.topOrigin());
+  ASSERT_TRUE(data->hasTopOrigin());
+  EXPECT_EQ("https://example.com", data->topOrigin());
 
-  ASSERT_TRUE(data.hasPaymentRequestOrigin());
-  EXPECT_EQ("https://example.com", data.paymentRequestOrigin());
+  ASSERT_TRUE(data->hasPaymentRequestOrigin());
+  EXPECT_EQ("https://example.com", data->paymentRequestOrigin());
 
-  ASSERT_TRUE(data.hasPaymentRequestId());
-  EXPECT_EQ("payment-request-id", data.paymentRequestId());
+  ASSERT_TRUE(data->hasPaymentRequestId());
+  EXPECT_EQ("payment-request-id", data->paymentRequestId());
 
-  ASSERT_TRUE(data.hasMethodData());
-  ASSERT_EQ(1UL, data.methodData().size());
-  ASSERT_TRUE(data.methodData().front().hasSupportedMethods());
-  ASSERT_EQ(1UL, data.methodData()
-                     .front()
-                     .supportedMethods()
-                     .GetAsStringSequence()
-                     .size());
-  ASSERT_EQ("foo", data.methodData()
-                       .front()
-                       .supportedMethods()
-                       .GetAsStringSequence()
-                       .front());
-  ASSERT_TRUE(data.methodData().front().hasData());
-  ASSERT_TRUE(data.methodData().front().data().IsObject());
-  String stringified_data = V8StringToWebCoreString<String>(
+  ASSERT_TRUE(data->hasMethodData());
+  ASSERT_EQ(1UL, data->methodData().size());
+  ASSERT_TRUE(data->methodData().front()->hasSupportedMethod());
+  ASSERT_EQ("foo", data->methodData().front()->supportedMethod());
+  ASSERT_TRUE(data->methodData().front()->hasData());
+  ASSERT_TRUE(data->methodData().front()->data().IsObject());
+  String stringified_data = ToBlinkString<String>(
       v8::JSON::Stringify(
           scope.GetContext(),
-          data.methodData().front().data().V8Value().As<v8::Object>())
+          data->methodData().front()->data().V8Value().As<v8::Object>())
           .ToLocalChecked(),
       kDoNotExternalize);
   EXPECT_EQ("{\"merchantId\":\"12345\"}", stringified_data);
 
-  ASSERT_TRUE(data.hasTotal());
-  ASSERT_TRUE(data.total().hasCurrency());
-  EXPECT_EQ("USD", data.total().currency());
-  ASSERT_TRUE(data.total().hasValue());
-  EXPECT_EQ("9.99", data.total().value());
+  ASSERT_TRUE(data->hasTotal());
+  ASSERT_TRUE(data->total()->hasCurrency());
+  EXPECT_EQ("USD", data->total()->currency());
+  ASSERT_TRUE(data->total()->hasValue());
+  EXPECT_EQ("9.99", data->total()->value());
 
-  ASSERT_TRUE(data.hasInstrumentKey());
-  EXPECT_EQ("payment-instrument-key", data.instrumentKey());
+  ASSERT_TRUE(data->hasInstrumentKey());
+  EXPECT_EQ("payment-instrument-key", data->instrumentKey());
 }
 
 }  // namespace

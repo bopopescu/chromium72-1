@@ -58,7 +58,8 @@ class UI_BASE_IME_EXPORT MockInputMethodManager
     bool ReplaceEnabledInputMethods(
         const std::vector<std::string>& new_active_input_method_ids) override;
     bool SetAllowedInputMethods(
-        const std::vector<std::string>& new_allowed_input_method_ids) override;
+        const std::vector<std::string>& new_allowed_input_method_ids,
+        bool enable_allowed_input_methods) override;
     const std::vector<std::string>& GetAllowedInputMethods() override;
     void EnableInputView() override;
     void DisableInputView() override;
@@ -118,6 +119,10 @@ class UI_BASE_IME_EXPORT MockInputMethodManager
   void NotifyObserversImeExtraInputStateChange() override;
   ui::InputMethodKeyboardController* GetInputMethodKeyboardController()
       override;
+  void NotifyInputMethodExtensionAdded(
+      const std::string& extension_id) override;
+  void NotifyInputMethodExtensionRemoved(
+      const std::string& extension_id) override;
 
   // ui::InputMethodKeyboardController overrides.
   bool DisplayVirtualKeyboard() override;

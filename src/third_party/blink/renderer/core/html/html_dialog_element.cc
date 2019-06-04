@@ -25,20 +25,20 @@
 
 #include "third_party/blink/renderer/core/html/html_dialog_element.h"
 
-#include "third_party/blink/renderer/bindings/core/v8/exception_state.h"
-#include "third_party/blink/renderer/core/dom/ax_object_cache.h"
+#include "third_party/blink/renderer/core/accessibility/ax_object_cache.h"
 #include "third_party/blink/renderer/core/dom/events/event.h"
-#include "third_party/blink/renderer/core/dom/exception_code.h"
 #include "third_party/blink/renderer/core/dom/flat_tree_traversal.h"
+#include "third_party/blink/renderer/core/frame/local_frame.h"
 #include "third_party/blink/renderer/core/frame/local_frame_view.h"
 #include "third_party/blink/renderer/core/frame/use_counter.h"
 #include "third_party/blink/renderer/core/fullscreen/fullscreen.h"
 #include "third_party/blink/renderer/core/html/forms/html_form_control_element.h"
 #include "third_party/blink/renderer/core/html/html_frame_owner_element.h"
+#include "third_party/blink/renderer/platform/bindings/exception_state.h"
 
 namespace blink {
 
-using namespace HTMLNames;
+using namespace html_names;
 
 // This function chooses the focused element when show() or showModal() is
 // invoked, as described in their spec.
@@ -82,9 +82,8 @@ static void SetFocusForDialog(HTMLDialogElement* dialog) {
 }
 
 static void InertSubtreesChanged(Document& document) {
+  // SetIsInert recurses through subframes to propagate the inert bit.
   if (document.GetFrame()) {
-    // SetIsInert recurses through subframes to propagate the inert bit as
-    // needed.
     document.GetFrame()->SetIsInert(document.LocalOwner() &&
                                     document.LocalOwner()->IsInert());
   }
@@ -97,7 +96,7 @@ static void InertSubtreesChanged(Document& document) {
 }
 
 inline HTMLDialogElement::HTMLDialogElement(Document& document)
-    : HTMLElement(dialogTag, document),
+    : HTMLElement(kDialogTag, document),
       centering_mode_(kNotCentered),
       centered_position_(0),
       return_value_("") {
@@ -109,9 +108,9 @@ DEFINE_NODE_FACTORY(HTMLDialogElement)
 void HTMLDialogElement::close(const String& return_value) {
   // https://html.spec.whatwg.org/#close-the-dialog
 
-  if (!FastHasAttribute(openAttr))
+  if (!FastHasAttribute(kOpenAttr))
     return;
-  SetBooleanAttribute(openAttr, false);
+  SetBooleanAttribute(kOpenAttr, false);
 
   HTMLDialogElement* active_modal_dialog = GetDocument().ActiveModalDialog();
   GetDocument().RemoveFromTopLayer(this);
@@ -132,15 +131,15 @@ void HTMLDialogElement::ForceLayoutForCentering() {
 }
 
 void HTMLDialogElement::ScheduleCloseEvent() {
-  Event* event = Event::Create(EventTypeNames::close);
+  Event* event = Event::Create(event_type_names::kClose);
   event->SetTarget(this);
   GetDocument().EnqueueAnimationFrameEvent(event);
 }
 
 void HTMLDialogElement::show() {
-  if (FastHasAttribute(openAttr))
+  if (FastHasAttribute(kOpenAttr))
     return;
-  SetBooleanAttribute(openAttr, true);
+  SetBooleanAttribute(kOpenAttr, true);
 
   // The layout must be updated here because setFocusForDialog calls
   // Element::isFocusable, which requires an up-to-date layout.
@@ -150,15 +149,15 @@ void HTMLDialogElement::show() {
 }
 
 void HTMLDialogElement::showModal(ExceptionState& exception_state) {
-  if (FastHasAttribute(openAttr)) {
-    exception_state.ThrowDOMException(kInvalidStateError,
+  if (FastHasAttribute(kOpenAttr)) {
+    exception_state.ThrowDOMException(DOMExceptionCode::kInvalidStateError,
                                       "The element already has an 'open' "
                                       "attribute, and therefore cannot be "
                                       "opened modally.");
     return;
   }
   if (!isConnected()) {
-    exception_state.ThrowDOMException(kInvalidStateError,
+    exception_state.ThrowDOMException(DOMExceptionCode::kInvalidStateError,
                                       "The element is not in a Document.");
     return;
   }
@@ -170,18 +169,19 @@ void HTMLDialogElement::showModal(ExceptionState& exception_state) {
   }
 
   GetDocument().AddToTopLayer(this);
-  SetBooleanAttribute(openAttr, true);
+  SetBooleanAttribute(kOpenAttr, true);
+
+  ForceLayoutForCentering();
 
   // Throw away the AX cache first, so the subsequent steps don't have a chance
   // of queuing up AX events on objects that would be invalidated when the cache
   // is thrown away.
   InertSubtreesChanged(GetDocument());
 
-  ForceLayoutForCentering();
   SetFocusForDialog(this);
 }
 
-void HTMLDialogElement::RemovedFrom(ContainerNode* insertion_point) {
+void HTMLDialogElement::RemovedFrom(ContainerNode& insertion_point) {
   HTMLElement::RemovedFrom(insertion_point);
   SetNotCentered();
   InertSubtreesChanged(GetDocument());
@@ -202,16 +202,16 @@ bool HTMLDialogElement::IsPresentationAttribute(
   // FIXME: Workaround for <https://bugs.webkit.org/show_bug.cgi?id=91058>:
   // modifying an attribute for which there is an attribute selector in html.css
   // sometimes does not trigger a style recalc.
-  if (name == openAttr)
+  if (name == kOpenAttr)
     return true;
 
   return HTMLElement::IsPresentationAttribute(name);
 }
 
-void HTMLDialogElement::DefaultEventHandler(Event* event) {
-  if (event->type() == EventTypeNames::cancel) {
+void HTMLDialogElement::DefaultEventHandler(Event& event) {
+  if (event.type() == event_type_names::kCancel) {
     close();
-    event->SetDefaultHandled();
+    event.SetDefaultHandled();
     return;
   }
   HTMLElement::DefaultEventHandler(event);

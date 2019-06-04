@@ -224,6 +224,7 @@ _NAMED_TYPE_INFO = {
       'GL_STENCIL_BITS',
       'GL_TEXTURE_BINDING_2D',
       'GL_TEXTURE_BINDING_CUBE_MAP',
+      'GL_TEXTURE_FILTERING_HINT_CHROMIUM',
       'GL_UNPACK_ALIGNMENT',
       'GL_BIND_GENERATES_RESOURCE_CHROMIUM',
       # we can add this because we emulate it if the driver does not support it.
@@ -662,7 +663,7 @@ _NAMED_TYPE_INFO = {
       'GL_PIXEL_PACK_BUFFER',
     ],
   },
-  'FramebufferParameter': {
+  'FramebufferAttachmentParameter': {
     'type': 'GLenum',
     'valid': [
       'GL_FRAMEBUFFER_ATTACHMENT_OBJECT_TYPE',
@@ -682,6 +683,10 @@ _NAMED_TYPE_INFO = {
       'GL_FRAMEBUFFER_ATTACHMENT_TEXTURE_LAYER',
     ],
   },
+  'FramebufferParameter' : {
+    'type': 'GLenum',
+    'valid' : [],
+  },
   'MatrixMode': {
     'type': 'GLenum',
     'is_complete': True,
@@ -692,7 +697,6 @@ _NAMED_TYPE_INFO = {
   },
   'ProgramParameter': {
     'type': 'GLenum',
-    'is_complete': True,
     'valid': [
       'GL_DELETE_STATUS',
       'GL_LINK_STATUS',
@@ -721,6 +725,7 @@ _NAMED_TYPE_INFO = {
     'valid': [
       'GL_QUERY_RESULT_EXT',
       'GL_QUERY_RESULT_AVAILABLE_EXT',
+      'GL_QUERY_RESULT_AVAILABLE_NO_FLUSH_CHROMIUM_EXT',
     ],
   },
   'QueryParameter': {
@@ -741,6 +746,7 @@ _NAMED_TYPE_INFO = {
       'GL_LATENCY_QUERY_CHROMIUM',
       'GL_ASYNC_PIXEL_PACK_COMPLETED_CHROMIUM',
       'GL_COMMANDS_COMPLETED_CHROMIUM',
+      'GL_READBACK_SHADOW_COPIES_UPDATED_CHROMIUM',
     ],
   },
   'RenderBufferParameter': {
@@ -788,7 +794,6 @@ _NAMED_TYPE_INFO = {
   },
   'ShaderParameter': {
     'type': 'GLenum',
-    'is_complete': True,
     'valid': [
       'GL_SHADER_TYPE',
       'GL_DELETE_STATUS',
@@ -958,6 +963,7 @@ _NAMED_TYPE_INFO = {
     'type': 'GLenum',
     'valid': [
       'GL_GENERATE_MIPMAP_HINT',
+      'GL_TEXTURE_FILTERING_HINT_CHROMIUM',
     ],
     'valid_es3': [
       'GL_FRAGMENT_SHADER_DERIVATIVE_HINT',
@@ -1684,6 +1690,14 @@ _NAMED_TYPE_INFO = {
       'gpu::SwapBuffersFlags::kVSyncParams',
     ],
   },
+  'SharedImageAccessMode': {
+    'type': 'GLenum',
+    'is_complete': True,
+    'valid': [
+      'GL_SHARED_IMAGE_ACCESS_MODE_READWRITE_CHROMIUM',
+      'GL_SHARED_IMAGE_ACCESS_MODE_READ_CHROMIUM',
+    ],
+  },
 }
 
 # A function info object specifies the type and other special data for the
@@ -1746,6 +1760,8 @@ _NAMED_TYPE_INFO = {
 #               'extension': True.
 # not_shared:   For GENn types, True if objects can't be shared between contexts
 # es3:          ES3 API. True if the function requires an ES3 or WebGL2 context.
+# es31:         ES31 API. True if the function requires an WebGL2Compute
+#               context.
 
 _FUNCTION_INFO = {
   'ActiveTexture': {
@@ -1797,6 +1813,13 @@ _FUNCTION_INFO = {
     'gen_func': 'GenFramebuffersEXT',
     'trace_level': 1,
   },
+  'BindImageTexture':{
+    'cmd_args': 'GLuint unit, GLuint texture, GLint level, GLboolean layered, '
+                'GLint layer, GLenum access, GLenum format',
+    'unit_test': False,
+    'trace_level': 2,
+    'es31': True,
+  },
   'BindRenderbuffer': {
     'type': 'Bind',
     'decoder_func': 'DoBindRenderbuffer',
@@ -1838,6 +1861,8 @@ _FUNCTION_INFO = {
     'type': 'Custom',
     'impl_func': False,
     'data_transfer_methods': ['shm'],
+    'size_args': {
+      'data': 'size', },
     'client_test': False,
     'trace_level': 2,
   },
@@ -1846,6 +1871,8 @@ _FUNCTION_INFO = {
     'client_test': False,
     'decoder_func': 'DoBufferSubData',
     'data_transfer_methods': ['shm'],
+    'size_args': {
+      'data': 'size', },
     'trace_level': 2,
   },
   'CheckFramebufferStatus': {
@@ -1874,6 +1901,7 @@ _FUNCTION_INFO = {
   },
   'ClearBufferuiv': {
     'type': 'PUT',
+    'use_count_func': True,
     'count': 4,
     'decoder_func': 'DoClearBufferuiv',
     'unit_test': False,
@@ -1946,6 +1974,7 @@ _FUNCTION_INFO = {
     'internal': True,
     'type': 'PUT',
     'count': 16,  # GL_MAILBOX_SIZE_CHROMIUM
+    'impl_func': False,
     'unit_test': False,
     'trace_level': 2,
   },
@@ -2172,6 +2201,12 @@ _FUNCTION_INFO = {
     'impl_func': False,
     'unit_test': False,
   },
+  'DispatchCompute': {
+    'cmd_args': 'GLuint num_groups_x, GLuint num_groups_y, GLuint num_groups_z',
+    'trace_level': 2,
+    'es31': True,
+    'unit_test': False,
+  },
   'DrawArrays': {
     'type': 'Custom',
     'impl_func': False,
@@ -2262,10 +2297,6 @@ _FUNCTION_INFO = {
     'gl_test_func': 'glGenBuffersARB',
     'resource_type': 'Buffer',
     'resource_types': 'Buffers',
-  },
-  'GenMailboxCHROMIUM': {
-    'type': 'NoCommand',
-    'extension': "CHROMIUM_texture_mailbox",
   },
   'GenFramebuffers': {
     'type': 'GENn',
@@ -2812,6 +2843,20 @@ _FUNCTION_INFO = {
     'result': ['uint32_t'],
     'trace_level': 1,
   },
+  # MemoryBarrierEXT is in order to avoid the conflicting MemoryBarrier macro
+  # in windows.
+  'MemoryBarrierEXT': {
+    'cmd_args': 'GLbitfield barriers',
+    'unit_test': False,
+    'trace_level': 2,
+    'es31': True
+  },
+  'MemoryBarrierByRegion': {
+    'cmd_args': 'GLbitfield barriers',
+    'unit_test': False,
+    'trace_level': 2,
+    'es31': True
+  },
   'OverlayPromotionHintCHROMIUM': {
     'decoder_func': 'DoOverlayPromotionHintCHROMIUM',
     'extension': "CHROMIUM_uniform_stream_texture_matrix",
@@ -2974,6 +3019,7 @@ _FUNCTION_INFO = {
     'expectation': False,
     'extension': True,
     'trace_level': 1,
+    'trace_queueing_flow': True,
   },
   'SwapBuffersWithBoundsCHROMIUM': {
     'type': 'PUTn',
@@ -3372,11 +3418,6 @@ _FUNCTION_INFO = {
     'extension': "CHROMIUM_copy_texture",
     'trace_level': 2,
   },
-  'CompressedCopyTextureCHROMIUM': {
-    'decoder_func': 'DoCompressedCopyTextureCHROMIUM',
-    'unit_test': False,
-    'extension': 'CHROMIUM_copy_compressed_texture',
-  },
   'TexStorage2DEXT': {
     'unit_test': False,
     'extension': 'EXT_texture_storage',
@@ -3645,6 +3686,14 @@ _FUNCTION_INFO = {
     'unit_test': False,
     'extension': 'CHROMIUM_trace_marker',
   },
+  'SetActiveURLCHROMIUM': {
+    'type': 'Custom',
+    'impl_func': False,
+    'client_test': False,
+    'cmd_args': 'GLuint url_bucket_id',
+    'extension': True,
+    'chromium': True,
+  },
   'DiscardFramebufferEXT': {
     'type': 'PUTn',
     'count': 1,
@@ -3738,7 +3787,8 @@ _FUNCTION_INFO = {
     'client_test': False,
     'cmd_args': 'GLsizei num_textures, GLuint background_color, '
                 'GLuint edge_aa_mask, GLuint filter, GLuint shm_id, '
-                'GLuint shm_offset, bool is_protected_video',
+                'GLuint shm_offset, GLuint protected_video_type',
+
     'extension': 'CHROMIUM_schedule_ca_layer',
   },
   'CommitOverlayPlanesCHROMIUM': {
@@ -4044,6 +4094,67 @@ _FUNCTION_INFO = {
     'impl_func': True,
     'extension': 'CHROMIUM_unpremultiply_and_dither_copy',
     'extension_flag': 'unpremultiply_and_dither_copy',
+  },
+  'InvalidateReadbackBufferShadowDataCHROMIUM': {
+    'type': 'NoCommand',
+    'impl_func': False,
+    'es3': True,
+    'extension': 'CHROMIUM_nonblocking_readback',
+  },
+  'SetReadbackBufferShadowAllocationINTERNAL': {
+    'decoder_func': 'DoSetReadbackBufferShadowAllocationINTERNAL',
+    'client_test': False,
+    'unit_test': False,
+    'impl_func': True,
+    'internal': True,
+    'es3': True,
+  },
+  'FramebufferParameteri': {
+    'decoder_func': 'DoFramebufferParameteri',
+    'unit_test': False,
+    'extension': 'MESA_framebuffer_flip_y',
+    'extension_flag': 'mesa_framebuffer_flip_y',
+  },
+  'FramebufferTextureMultiviewLayeredANGLE': {
+    'decoder_func': 'DoFramebufferTextureMultiviewLayeredANGLE',
+    'unit_test': False,
+    'extension': 'ANGLE_multiview',
+    'extension_flag': 'angle_multiview',
+    'trace_level': 1,
+    'es3': True
+  },
+  'MaxShaderCompilerThreadsKHR': {
+    'cmd_args': 'GLuint count',
+    'unit_test': False,
+    'client_test': False,
+    'extension': 'KHRParallelShaderCompile',
+    'extension_flag': 'khr_parallel_shader_compile',
+  },
+  'CreateAndTexStorage2DSharedImageCHROMIUM': {
+    'type': 'NoCommand',
+    'extension': "CHROMIUM_shared_image",
+    'trace_level': 2,
+  },
+  'CreateAndTexStorage2DSharedImageINTERNAL': {
+    'decoder_func': 'DoCreateAndTexStorage2DSharedImageINTERNAL',
+    'internal': True,
+    'type': 'PUT',
+    'count': 16,  # GL_MAILBOX_SIZE_CHROMIUM
+    'impl_func': False,
+    'unit_test': False,
+    'trace_level': 2,
+  },
+  'BeginSharedImageAccessDirectCHROMIUM': {
+    'decoder_func': 'DoBeginSharedImageAccessDirectCHROMIUM',
+    'extension': 'CHROMIUM_shared_image',
+    'unit_test': False,
+    'client_test': False,
+    'cmd_args': 'GLuint texture, GLenumSharedImageAccessMode mode',
+  },
+  'EndSharedImageAccessDirectCHROMIUM': {
+    'decoder_func': 'DoEndSharedImageAccessDirectCHROMIUM',
+    'extension': 'CHROMIUM_shared_image',
+    'unit_test': False,
   }
 }
 

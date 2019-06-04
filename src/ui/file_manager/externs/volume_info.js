@@ -32,6 +32,13 @@ VolumeInfo.prototype.displayRoot;
 VolumeInfo.prototype.teamDriveDisplayRoot;
 
 /**
+ * The display root path of Computers directory. It is null before finishing
+ * to resolve the entry. Valid only for Drive volume.
+ * @type {DirectoryEntry}
+ */
+VolumeInfo.prototype.computersDisplayRoot;
+
+/**
  * The volume's fake entries such as Recent, Offline, Shared with me, etc...
  * in Google Drive.
  * @type {Object<!FakeEntry>}}
@@ -81,7 +88,7 @@ VolumeInfo.prototype.providerId;
 
 /**
  * Set of icons for this volume.
- * @type {!IconSet}
+ * @type {!chrome.fileManagerPrivate.IconSet}
  */
 VolumeInfo.prototype.iconSet;
 
@@ -109,6 +116,13 @@ VolumeInfo.prototype.source;
 
 /**  @type {VolumeManagerCommon.FileSystemType} */
 VolumeInfo.prototype.diskFileSystemType;
+
+/**
+ * @type {FilesAppEntry} an entry to be used as prefix of this volume on
+ *     breadcrumbs, e.g. "My Files > Downloads", "My Files" is a prefixEntry on
+ *     "Downloads" VolumeInfo.
+ */
+VolumeInfo.prototype.prefixEntry;
 
 /**
  * Starts resolving the display root and obtains it.  It may take long time for

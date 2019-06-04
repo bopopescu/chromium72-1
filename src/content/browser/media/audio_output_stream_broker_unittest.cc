@@ -53,7 +53,7 @@ class MockAudioOutputStreamProviderClient
   ~MockAudioOutputStreamProviderClient() override {}
 
   void Created(media::mojom::AudioOutputStreamPtr,
-               media::mojom::AudioDataPipePtr) override {
+               media::mojom::ReadWriteAudioDataPipePtr) override {
     OnCreated();
   }
 
@@ -115,6 +115,7 @@ class MockStreamFactory : public audio::FakeStreamFactory {
       const std::string& output_device_id,
       const media::AudioParameters& params,
       const base::UnguessableToken& group_id,
+      const base::Optional<base::UnguessableToken>& processing_id,
       CreateOutputStreamCallback created_callback) final {
     // No way to cleanly exit the test here in case of failure, so use CHECK.
     CHECK(stream_request_data_);
@@ -143,6 +144,7 @@ struct TestEnvironment {
             kDeviceId,
             TestParams(),
             group,
+            base::nullopt,
             deleter.Get(),
             provider_client.MakePtr())) {}
 
@@ -164,10 +166,10 @@ TEST(AudioOutputStreamBrokerTest, StoresProcessAndFrameId) {
   MockDeleterCallback deleter;
   StrictMock<MockAudioOutputStreamProviderClient> provider_client;
 
-  AudioOutputStreamBroker broker(kRenderProcessId, kRenderFrameId, kStreamId,
-                                 kDeviceId, TestParams(),
-                                 base::UnguessableToken::Create(),
-                                 deleter.Get(), provider_client.MakePtr());
+  AudioOutputStreamBroker broker(
+      kRenderProcessId, kRenderFrameId, kStreamId, kDeviceId, TestParams(),
+      base::UnguessableToken::Create(), base::nullopt, deleter.Get(),
+      provider_client.MakePtr());
 
   EXPECT_EQ(kRenderProcessId, broker.render_process_id());
   EXPECT_EQ(kRenderFrameId, broker.render_frame_id());
@@ -197,7 +199,7 @@ TEST(AudioOutputStreamBrokerTest, StreamCreationSuccess_Propagates) {
   base::SyncSocket socket1, socket2;
   base::SyncSocket::CreatePair(&socket1, &socket2);
   std::move(stream_request_data.created_callback)
-      .Run({base::in_place, mojo::SharedBufferHandle::Create(kShMemSize),
+      .Run({base::in_place, base::UnsafeSharedMemoryRegion::Create(kShMemSize),
             mojo::WrapPlatformFile(socket1.Release())});
 
   EXPECT_CALL(env.provider_client, OnCreated());

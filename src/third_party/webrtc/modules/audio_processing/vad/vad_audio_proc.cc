@@ -14,7 +14,7 @@
 #include <stdio.h>
 #include <string.h>
 
-#include "common_audio/fft4g.h"
+#include "common_audio/third_party/fft4g/fft4g.h"
 #include "modules/audio_processing/vad/pitch_internal.h"
 #include "modules/audio_processing/vad/pole_zero_filter.h"
 #include "modules/audio_processing/vad/vad_audio_proc_internal.h"
@@ -67,8 +67,7 @@ VadAudioProc::VadAudioProc()
   WebRtcIsac_InitPitchAnalysis(pitch_analysis_handle_.get());
 }
 
-VadAudioProc::~VadAudioProc() {
-}
+VadAudioProc::~VadAudioProc() {}
 
 void VadAudioProc::ResetBuffer() {
   memcpy(audio_buffer_, &audio_buffer_[kNumSamplesToProcess],

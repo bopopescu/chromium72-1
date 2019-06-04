@@ -12,7 +12,10 @@
 
 #include <math.h>
 #include <algorithm>
+#include <utility>
+#include <vector>
 
+#include "api/array_view.h"
 #include "rtc_base/checks.h"
 
 namespace webrtc {
@@ -23,7 +26,7 @@ constexpr size_t kCounterThreshold = 5;
 // Identifies local bands with narrow characteristics.
 void IdentifySmallNarrowBandRegions(
     const RenderBuffer& render_buffer,
-    const rtc::Optional<size_t>& delay_partitions,
+    const absl::optional<size_t>& delay_partitions,
     std::array<size_t, kFftLengthBy2 - 1>* narrow_band_counters) {
   if (!delay_partitions) {
     narrow_band_counters->fill(0);
@@ -43,7 +46,7 @@ void IdentifySmallNarrowBandRegions(
 // Identifies whether the signal has a single strong narrow-band component.
 void IdentifyStrongNarrowBandComponent(const RenderBuffer& render_buffer,
                                        int strong_peak_freeze_duration,
-                                       rtc::Optional<int>* narrow_peak_band,
+                                       absl::optional<int>* narrow_peak_band,
                                        size_t* narrow_peak_counter) {
   const auto X2_latest = render_buffer.Spectrum(0);
 
@@ -83,7 +86,7 @@ void IdentifyStrongNarrowBandComponent(const RenderBuffer& render_buffer,
     if (*narrow_peak_band &&
         ++(*narrow_peak_counter) >
             static_cast<size_t>(strong_peak_freeze_duration)) {
-      *narrow_peak_band = rtc::nullopt;
+      *narrow_peak_band = absl::nullopt;
     }
   }
 }
@@ -98,7 +101,7 @@ RenderSignalAnalyzer::~RenderSignalAnalyzer() = default;
 
 void RenderSignalAnalyzer::Update(
     const RenderBuffer& render_buffer,
-    const rtc::Optional<size_t>& delay_partitions) {
+    const absl::optional<size_t>& delay_partitions) {
   // Identify bands of narrow nature.
   IdentifySmallNarrowBandRegions(render_buffer, delay_partitions,
                                  &narrow_band_counters_);

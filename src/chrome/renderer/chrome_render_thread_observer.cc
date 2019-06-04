@@ -20,6 +20,7 @@
 #include "base/memory/weak_ptr.h"
 #include "base/metrics/histogram.h"
 #include "base/metrics/statistics_recorder.h"
+#include "base/no_destructor.h"
 #include "base/path_service.h"
 #include "base/single_thread_task_runner.h"
 #include "base/strings/utf_string_conversions.h"
@@ -132,6 +133,11 @@ class RendererResourceDelegate : public content::ResourceDispatcherDelegate {
   DISALLOW_COPY_AND_ASSIGN(RendererResourceDelegate);
 };
 
+chrome::mojom::DynamicParams* GetDynamicConfigParams() {
+  static base::NoDestructor<chrome::mojom::DynamicParams> dynamic_params;
+  return dynamic_params.get();
+}
+
 }  // namespace
 
 bool ChromeRenderThreadObserver::is_incognito_process_ = false;
@@ -173,6 +179,12 @@ ChromeRenderThreadObserver::ChromeRenderThreadObserver()
 
 ChromeRenderThreadObserver::~ChromeRenderThreadObserver() {}
 
+// static
+const chrome::mojom::DynamicParams&
+ChromeRenderThreadObserver::GetDynamicParams() {
+  return *GetDynamicConfigParams();
+}
+
 void ChromeRenderThreadObserver::RegisterMojoInterfaces(
     blink::AssociatedInterfaceRegistry* associated_interfaces) {
   associated_interfaces->AddInterface(base::Bind(
@@ -189,6 +201,11 @@ void ChromeRenderThreadObserver::UnregisterMojoInterfaces(
 void ChromeRenderThreadObserver::SetInitialConfiguration(
     bool is_incognito_process) {
   is_incognito_process_ = is_incognito_process;
+}
+
+void ChromeRenderThreadObserver::SetConfiguration(
+    chrome::mojom::DynamicParamsPtr params) {
+  *GetDynamicConfigParams() = std::move(*params);
 }
 
 void ChromeRenderThreadObserver::SetContentSettingRules(

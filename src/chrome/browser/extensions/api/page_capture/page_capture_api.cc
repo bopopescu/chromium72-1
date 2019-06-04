@@ -10,12 +10,12 @@
 #include "base/bind.h"
 #include "base/bind_helpers.h"
 #include "base/files/file_util.h"
-#include "base/task_scheduler/post_task.h"
-#include "base/threading/thread_restrictions.h"
+#include "base/task/post_task.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/extensions/extension_tab_util.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profiles_state.h"
+#include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/child_process_security_policy.h"
 #include "content/public/browser/notification_details.h"
@@ -72,8 +72,8 @@ PageCaptureSaveAsMHTMLFunction::PageCaptureSaveAsMHTMLFunction() {
 
 PageCaptureSaveAsMHTMLFunction::~PageCaptureSaveAsMHTMLFunction() {
   if (mhtml_file_.get()) {
-    BrowserThread::PostTask(
-        BrowserThread::IO, FROM_HERE,
+    base::PostTaskWithTraits(
+        FROM_HERE, {BrowserThread::IO},
         base::BindOnce(&ClearFileReferenceOnIOThread, std::move(mhtml_file_)));
   }
 }
@@ -95,7 +95,7 @@ bool PageCaptureSaveAsMHTMLFunction::RunAsync() {
   // time, we show the user a dialog where they can choose whether to allow the
   // extension access to the API.
 #if defined(OS_CHROMEOS)
-  if (profiles::IsPublicSession()) {
+  if (profiles::ArePublicSessionRestrictionsEnabled()) {
     WebContents* web_contents = GetWebContents();
     if (!web_contents) {
       ReturnFailure(kTabClosedError);
@@ -157,10 +157,9 @@ void PageCaptureSaveAsMHTMLFunction::ResolvePermissionRequest(
 #endif
 
 void PageCaptureSaveAsMHTMLFunction::CreateTemporaryFile() {
-  base::AssertBlockingAllowed();
   bool success = base::CreateTemporaryFile(&mhtml_path_);
-  BrowserThread::PostTask(
-      BrowserThread::IO, FROM_HERE,
+  base::PostTaskWithTraits(
+      FROM_HERE, {BrowserThread::IO},
       base::BindOnce(&PageCaptureSaveAsMHTMLFunction::TemporaryFileCreatedOnIO,
                      this, success));
 }
@@ -185,8 +184,8 @@ void PageCaptureSaveAsMHTMLFunction::TemporaryFileCreatedOnIO(bool success) {
              base::TaskShutdownBehavior::BLOCK_SHUTDOWN})
             .get());
   }
-  BrowserThread::PostTask(
-      BrowserThread::UI, FROM_HERE,
+  base::PostTaskWithTraits(
+      FROM_HERE, {BrowserThread::UI},
       base::BindOnce(&PageCaptureSaveAsMHTMLFunction::TemporaryFileCreatedOnUI,
                      this, success));
 }
@@ -265,13 +264,9 @@ WebContents* PageCaptureSaveAsMHTMLFunction::GetWebContents() {
   Browser* browser = NULL;
   content::WebContents* web_contents = NULL;
 
-  if (!ExtensionTabUtil::GetTabById(params_->details.tab_id,
-                                    GetProfile(),
-                                    include_incognito(),
-                                    &browser,
-                                    NULL,
-                                    &web_contents,
-                                    NULL)) {
+  if (!ExtensionTabUtil::GetTabById(params_->details.tab_id, GetProfile(),
+                                    include_incognito_information(), &browser,
+                                    NULL, &web_contents, NULL)) {
     return NULL;
   }
   return web_contents;

@@ -15,6 +15,7 @@
 #include "base/no_destructor.h"
 #include "base/numerics/safe_conversions.h"
 #include "base/rand_util.h"
+#include "base/sampling_heap_profiler/poisson_allocation_sampler.h"
 #include "base/synchronization/lock.h"
 #include "base/threading/thread_id_name_manager.h"
 #include "base/threading/thread_local.h"
@@ -27,6 +28,11 @@
 
 #if defined(OS_POSIX)
 #include <limits.h>
+#include <pthread.h>
+#endif
+
+#if defined(OS_WIN)
+#include <windows.h>
 #endif
 
 #if defined(OS_LINUX) || defined(OS_ANDROID)
@@ -44,7 +50,57 @@ using CaptureMode = base::trace_event::AllocationContextTracker::CaptureMode;
 
 namespace heap_profiling {
 
-// A ScopedAllowLogging instance must be instantiated in the scope of all hooks.
+namespace {
+
+// The base implementation of TLS will leak memory if accessed during late
+// stages of thread destruction. We roll our own implementation of TLS to
+// prevent reentrancy. Since this only requires storing a single bit of
+// information, we don't need to deal with hooking thread destruction to free
+// memory, and thus avoid leaks and other issues.
+#if defined(OS_WIN)
+using TLSKey = DWORD;
+#else
+using TLSKey = pthread_key_t;
+#endif
+
+// Holds a key to a TLS value. The TLS value (0 or 1) indicates whether the
+// allocator shim is already being used on the current thread.
+TLSKey g_prevent_reentrancy_key = 0;
+
+void InitializeReentrancyKey() {
+#if defined(OS_WIN)
+  g_prevent_reentrancy_key = TlsAlloc();
+  DCHECK_NE(TLS_OUT_OF_INDEXES, g_prevent_reentrancy_key);
+#else
+  // Returns |0| on success.
+  int result = pthread_key_create(&g_prevent_reentrancy_key, nullptr);
+  DCHECK(!result);
+#endif
+}
+
+bool CanEnterAllocatorShim() {
+#if defined(OS_WIN)
+  return !TlsGetValue(g_prevent_reentrancy_key);
+#else
+  return !pthread_getspecific(g_prevent_reentrancy_key);
+#endif
+}
+
+void SetEnteringAllocatorShim(bool entering) {
+  void* value = entering ? reinterpret_cast<void*>(1) : nullptr;
+#if defined(OS_WIN)
+  BOOL ret = TlsSetValue(g_prevent_reentrancy_key, value);
+  DPCHECK(ret);
+#else
+  int ret = pthread_setspecific(g_prevent_reentrancy_key, value);
+  DCHECK_EQ(ret, 0);
+#endif
+}
+
+}  // namespace
+
+// A ScopedAllow{Free,Alloc} instance must be instantiated in the scope of all
+// hooks.
 // AllocatorShimLogAlloc/AllocatorShimLogFree must only be called if it
 // evaluates to true.
 //
@@ -62,28 +118,67 @@ namespace heap_profiling {
 // The implementation of libmalloc will sometimes call malloc [from
 // one zone to another] - without this guard, the allocation would get two
 // chances of being sampled.
-class ScopedAllowLogging {
+class ScopedAllowFree {
  public:
-  ScopedAllowLogging()
-      : allowed_(LIKELY(!base::ThreadLocalStorage::HasBeenDestroyed()) &&
-                 LIKELY(!prevent_reentrancy_.Pointer()->Get())) {
+  ScopedAllowFree() : allowed_(LIKELY(CanEnterAllocatorShim())) {
     if (allowed_)
-      prevent_reentrancy_.Pointer()->Set(true);
+      SetEnteringAllocatorShim(true);
   }
-  ~ScopedAllowLogging() {
+  ~ScopedAllowFree() {
     if (allowed_)
-      prevent_reentrancy_.Pointer()->Set(false);
+      SetEnteringAllocatorShim(false);
   }
   explicit operator bool() const { return allowed_; }
 
  private:
   const bool allowed_;
-  static base::LazyInstance<base::ThreadLocalBoolean>::Leaky
-      prevent_reentrancy_;
 };
 
-base::LazyInstance<base::ThreadLocalBoolean>::Leaky
-    ScopedAllowLogging::prevent_reentrancy_;
+// Allocation logging also requires use of base TLS, so we must also check that
+// that is available. This means that allocations that occur after base TLS has
+// been torn down will not be logged.
+class ScopedAllowAlloc {
+ public:
+  ScopedAllowAlloc()
+      : allowed_(LIKELY(CanEnterAllocatorShim()) && !HasTLSBeenDestroyed()) {
+    if (allowed_)
+      SetEnteringAllocatorShim(true);
+  }
+  ~ScopedAllowAlloc() {
+    if (allowed_)
+      SetEnteringAllocatorShim(false);
+  }
+  explicit operator bool() const { return allowed_; }
+
+  static inline bool HasTLSBeenDestroyed() {
+    return UNLIKELY(base::ThreadLocalStorage::HasBeenDestroyed());
+  }
+
+ private:
+  const bool allowed_;
+};
+
+// Realloc triggers both a free and an alloc.
+class ScopedAllowRealloc {
+ public:
+  ScopedAllowRealloc()
+      : allow_free_(LIKELY(CanEnterAllocatorShim())),
+        allow_alloc_(LIKELY(allow_free_ &&
+                            (!base::ThreadLocalStorage::HasBeenDestroyed()))) {
+    if (allow_free_)
+      SetEnteringAllocatorShim(true);
+  }
+  ~ScopedAllowRealloc() {
+    if (allow_free_)
+      SetEnteringAllocatorShim(false);
+  }
+  bool allow_free() { return allow_free_; }
+  bool allow_alloc() { return allow_alloc_; }
+
+ private:
+  const bool allow_free_;
+  const bool allow_alloc_;
+};
 
 namespace {
 
@@ -162,14 +257,14 @@ void DestructShimState(void* shim_state) {
 
 // Technically, this code could be called after Thread destruction and we would
 // need to guard this with ThreadLocalStorage::HasBeenDestroyed(), but all calls
-// to this are guarded behind ScopedAllowLogging, which already makes the check.
+// to this are guarded behind ScopedAllowAlloc, which already makes the check.
 base::ThreadLocalStorage::Slot& ShimStateTLS() {
   static base::NoDestructor<base::ThreadLocalStorage::Slot> shim_state_tls(
       &DestructShimState);
   return *shim_state_tls;
 }
 
-// We don't need to worry about re-entrancy because ScopedAllowLogging
+// We don't need to worry about re-entrancy because ScopedAllowAlloc.
 // already guards against that.
 ShimState* GetShimState() {
   ShimState* state = static_cast<ShimState*>(ShimStateTLS().Get());
@@ -321,7 +416,7 @@ void DoSend(const void* address,
 
 #if BUILDFLAG(USE_ALLOCATOR_SHIM)
 void* HookAlloc(const AllocatorDispatch* self, size_t size, void* context) {
-  ScopedAllowLogging allow_logging;
+  ScopedAllowAlloc allow_logging;
 
   const AllocatorDispatch* const next = self->next;
   void* ptr = next->alloc_function(next, size, context);
@@ -337,7 +432,7 @@ void* HookZeroInitAlloc(const AllocatorDispatch* self,
                         size_t n,
                         size_t size,
                         void* context) {
-  ScopedAllowLogging allow_logging;
+  ScopedAllowAlloc allow_logging;
 
   const AllocatorDispatch* const next = self->next;
   void* ptr = next->alloc_zero_initialized_function(next, n, size, context);
@@ -352,7 +447,7 @@ void* HookAllocAligned(const AllocatorDispatch* self,
                        size_t alignment,
                        size_t size,
                        void* context) {
-  ScopedAllowLogging allow_logging;
+  ScopedAllowAlloc allow_logging;
 
   const AllocatorDispatch* const next = self->next;
   void* ptr = next->alloc_aligned_function(next, alignment, size, context);
@@ -367,14 +462,16 @@ void* HookRealloc(const AllocatorDispatch* self,
                   void* address,
                   size_t size,
                   void* context) {
-  ScopedAllowLogging allow_logging;
+  ScopedAllowRealloc allow_logging;
 
   const AllocatorDispatch* const next = self->next;
   void* ptr = next->realloc_function(next, address, size, context);
 
-  if (LIKELY(allow_logging)) {
+  if (LIKELY(allow_logging.allow_free())) {
     AllocatorShimLogFree(address);
-    if (size > 0)  // realloc(size == 0) means free()
+
+    // realloc(size == 0) means free()
+    if (size > 0 && LIKELY(allow_logging.allow_alloc()))
       AllocatorShimLogAlloc(AllocatorType::kMalloc, ptr, size, nullptr);
   }
 
@@ -382,7 +479,7 @@ void* HookRealloc(const AllocatorDispatch* self,
 }
 
 void HookFree(const AllocatorDispatch* self, void* address, void* context) {
-  ScopedAllowLogging allow_logging;
+  ScopedAllowFree allow_logging;
 
   const AllocatorDispatch* const next = self->next;
   next->free_function(next, address, context);
@@ -404,7 +501,7 @@ unsigned HookBatchMalloc(const AllocatorDispatch* self,
                          void** results,
                          unsigned num_requested,
                          void* context) {
-  ScopedAllowLogging allow_logging;
+  ScopedAllowAlloc allow_logging;
 
   const AllocatorDispatch* const next = self->next;
   unsigned count =
@@ -421,7 +518,7 @@ void HookBatchFree(const AllocatorDispatch* self,
                    void** to_be_freed,
                    unsigned num_to_be_freed,
                    void* context) {
-  ScopedAllowLogging allow_logging;
+  ScopedAllowFree allow_logging;
 
   const AllocatorDispatch* const next = self->next;
   next->batch_free_function(next, to_be_freed, num_to_be_freed, context);
@@ -436,7 +533,7 @@ void HookFreeDefiniteSize(const AllocatorDispatch* self,
                           void* ptr,
                           size_t size,
                           void* context) {
-  ScopedAllowLogging allow_logging;
+  ScopedAllowFree allow_logging;
 
   const AllocatorDispatch* const next = self->next;
   next->free_definite_size_function(next, ptr, size, context);
@@ -461,28 +558,28 @@ AllocatorDispatch g_hooks = {
 #endif  // BUILDFLAG(USE_ALLOCATOR_SHIM)
 
 void HookPartitionAlloc(void* address, size_t size, const char* type) {
-  ScopedAllowLogging allow_logging;
+  ScopedAllowAlloc allow_logging;
   if (LIKELY(allow_logging)) {
     AllocatorShimLogAlloc(AllocatorType::kPartitionAlloc, address, size, type);
   }
 }
 
 void HookPartitionFree(void* address) {
-  ScopedAllowLogging allow_logging;
+  ScopedAllowFree allow_logging;
   if (LIKELY(allow_logging)) {
     AllocatorShimLogFree(address);
   }
 }
 
 void HookGCAlloc(uint8_t* address, size_t size, const char* type) {
-  ScopedAllowLogging allow_logging;
+  ScopedAllowAlloc allow_logging;
   if (LIKELY(allow_logging)) {
     AllocatorShimLogAlloc(AllocatorType::kOilpan, address, size, type);
   }
 }
 
 void HookGCFree(uint8_t* address) {
-  ScopedAllowLogging allow_logging;
+  ScopedAllowFree allow_logging;
   if (LIKELY(allow_logging)) {
     AllocatorShimLogFree(address);
   }
@@ -589,7 +686,8 @@ class FrameSerializer {
 }  // namespace
 
 void InitTLSSlot() {
-  { ScopedAllowLogging allow_logging; }
+  base::PoissonAllocationSampler::Init();
+  InitializeReentrancyKey();
   ignore_result(ShimStateTLS());
 }
 
@@ -615,8 +713,8 @@ void EnableTraceEventFiltering() {
       filtering_trace_config, base::trace_event::TraceLog::FILTERING_MODE);
 }
 
-void InitAllocatorShim(SenderPipe* sender_pipe,
-                       mojom::ProfilingParamsPtr params) {
+void InitAllocationRecorder(SenderPipe* sender_pipe,
+                            mojom::ProfilingParamsPtr params) {
   // Must be done before hooking any functions that make stack traces.
   base::debug::EnableInProcessStackDumping();
 
@@ -640,13 +738,16 @@ void InitAllocatorShim(SenderPipe* sender_pipe,
       break;
     case mojom::StackMode::NATIVE_WITH_THREAD_NAMES:
     case mojom::StackMode::NATIVE_WITHOUT_THREAD_NAMES:
-      AllocationContextTracker::SetCaptureMode(CaptureMode::DISABLED);
+      // This would track task contexts only.
+      AllocationContextTracker::SetCaptureMode(CaptureMode::NATIVE_STACK);
       break;
   }
 
   g_send_buffers.Write(new SendBuffer[kNumSendBuffers]);
   g_sender_pipe = sender_pipe;
+}
 
+void InitAllocatorShim() {
 #if BUILDFLAG(USE_ALLOCATOR_SHIM)
   // Normal malloc allocator shim.
   base::allocator::InsertAllocatorDispatch(&g_hooks);
@@ -660,16 +761,6 @@ void InitAllocatorShim(SenderPipe* sender_pipe,
   if (g_hook_gc_alloc && g_hook_gc_free) {
     g_hook_gc_alloc(&HookGCAlloc);
     g_hook_gc_free(&HookGCFree);
-  }
-
-  {
-    base::AutoLock lock(*g_on_init_allocator_shim_lock_.Pointer());
-    g_initialized_ = true;
-    if (*g_on_init_allocator_shim_callback_.Pointer()) {
-      (*g_on_init_allocator_shim_task_runner_.Pointer())
-          ->PostTask(FROM_HERE,
-                     std::move(*g_on_init_allocator_shim_callback_.Pointer()));
-    }
   }
 }
 
@@ -691,6 +782,9 @@ void StopAllocatorShimDangerous() {
 
 void SerializeFramesFromAllocationContext(FrameSerializer* serializer,
                                           const char** context) {
+  // Allocation context is tracked in TLS. Return nothing if TLS was destroyed.
+  if (ScopedAllowAlloc::HasTLSBeenDestroyed())
+    return;
   auto* tracker = AllocationContextTracker::GetInstanceForCurrentThread();
   if (!tracker)
     return;
@@ -704,7 +798,13 @@ void SerializeFramesFromAllocationContext(FrameSerializer* serializer,
     *context = allocation_context.type_name;
 }
 
-void SerializeFramesFromBacktrace(FrameSerializer* serializer) {
+void SerializeFramesFromBacktrace(FrameSerializer* serializer,
+                                  const char** context) {
+  // Skip 3 top frames related to the profiler itself, e.g.:
+  //   base::debug::StackTrace::StackTrace
+  //   heap_profiling::RecordAndSendAlloc
+  //   heap_profiling::`anonymous namespace'::HookAlloc
+  size_t skip_frames = 3;
 #if defined(OS_ANDROID) && BUILDFLAG(CAN_UNWIND_WITH_CFI_TABLE) && \
     defined(OFFICIAL_BUILD)
   const void* frames[kMaxStackEntries - 1];
@@ -714,8 +814,8 @@ void SerializeFramesFromBacktrace(FrameSerializer* serializer) {
 #elif BUILDFLAG(CAN_UNWIND_WITH_FRAME_POINTERS)
   const void* frames[kMaxStackEntries - 1];
   size_t frame_count = base::debug::TraceStackFramePointers(
-      frames, kMaxStackEntries - 1,
-      1);  // exclude this function from the trace.
+      frames, kMaxStackEntries - 1, skip_frames);
+  skip_frames = 0;
 #else
   // Fall-back to capturing the stack with base::debug::StackTrace,
   // which is likely slower, but more reliable.
@@ -724,11 +824,20 @@ void SerializeFramesFromBacktrace(FrameSerializer* serializer) {
   const void* const* frames = stack_trace.Addresses(&frame_count);
 #endif
 
-  serializer->AddAllInstructionPointers(frame_count, frames);
+  skip_frames = std::min(skip_frames, frame_count);
+  serializer->AddAllInstructionPointers(frame_count - skip_frames,
+                                        frames + skip_frames);
 
   if (g_include_thread_names) {
     const char* thread_name = GetOrSetThreadName();
     serializer->AddCString(thread_name);
+  }
+
+  if (!*context && !ScopedAllowAlloc::HasTLSBeenDestroyed()) {
+    const auto* tracker =
+        AllocationContextTracker::GetInstanceForCurrentThread();
+    if (tracker)
+      *context = tracker->TaskContext();
   }
 }
 
@@ -736,8 +845,7 @@ void AllocatorShimLogAlloc(AllocatorType type,
                            void* address,
                            size_t sz,
                            const char* context) {
-  SendBuffer* send_buffers = g_send_buffers.Read();
-  if (!send_buffers)
+  if (!g_send_buffers.Read())
     return;
 
   // When sampling, we divide allocations into two buckets. For allocations
@@ -770,62 +878,77 @@ void AllocatorShimLogAlloc(AllocatorType type,
     sz *= sz_multiplier;
   }
 
-  if (address) {
-    constexpr size_t max_message_size = sizeof(AllocPacket) +
-                                        kMaxStackEntries * sizeof(uint64_t) +
-                                        kMaxContextLen;
-    static_assert(max_message_size < SenderPipe::kPipeSize,
-                  "We can't have a message size that exceeds the pipe write "
-                  "buffer size.");
-    char message[max_message_size];
-    // TODO(ajwong) check that this is technically valid.
-    AllocPacket* alloc_packet = reinterpret_cast<AllocPacket*>(message);
-
-    uint64_t* stack =
-        reinterpret_cast<uint64_t*>(&message[sizeof(AllocPacket)]);
-
-    FrameSerializer serializer(
-        stack, address, max_message_size - sizeof(AllocPacket), send_buffers);
-
-    CaptureMode capture_mode = AllocationContextTracker::capture_mode();
-    if (capture_mode == CaptureMode::PSEUDO_STACK ||
-        capture_mode == CaptureMode::MIXED_STACK) {
-      SerializeFramesFromAllocationContext(&serializer, &context);
-    } else {
-      SerializeFramesFromBacktrace(&serializer);
-    }
-
-    size_t context_len = context ? strnlen(context, kMaxContextLen) : 0;
-
-    alloc_packet->op = kAllocPacketType;
-    alloc_packet->allocator = type;
-    alloc_packet->address = (uint64_t)address;
-    alloc_packet->size = sz;
-    alloc_packet->stack_len = static_cast<uint32_t>(serializer.count());
-    alloc_packet->context_byte_len = static_cast<uint32_t>(context_len);
-
-    char* message_end = message + sizeof(AllocPacket) +
-                        alloc_packet->stack_len * sizeof(uint64_t);
-    if (context_len > 0) {
-      memcpy(message_end, context, context_len);
-      message_end += context_len;
-    }
-    DoSend(address, message, message_end - message, send_buffers);
-  }
+  if (address)
+    RecordAndSendAlloc(type, address, sz, context);
 }
 
-void AllocatorShimLogFree(void* address) {
+void RecordAndSendAlloc(AllocatorType type,
+                        void* address,
+                        size_t sz,
+                        const char* context) {
   SendBuffer* send_buffers = g_send_buffers.Read();
   if (!send_buffers)
     return;
 
-  if (address) {
-    FreePacket free_packet;
-    free_packet.op = kFreePacketType;
-    free_packet.address = (uint64_t)address;
+  constexpr size_t max_message_size = sizeof(AllocPacket) +
+                                      kMaxStackEntries * sizeof(uint64_t) +
+                                      kMaxContextLen;
+  static_assert(max_message_size < SenderPipe::kPipeSize,
+                "We can't have a message size that exceeds the pipe write "
+                "buffer size.");
+  char message[max_message_size];
+  // TODO(ajwong) check that this is technically valid.
+  AllocPacket* alloc_packet = reinterpret_cast<AllocPacket*>(message);
 
-    DoSend(address, &free_packet, sizeof(FreePacket), send_buffers);
+  uint64_t* stack = reinterpret_cast<uint64_t*>(&message[sizeof(AllocPacket)]);
+
+  FrameSerializer serializer(
+      stack, address, max_message_size - sizeof(AllocPacket), send_buffers);
+
+  CaptureMode capture_mode = AllocationContextTracker::capture_mode();
+  if (capture_mode == CaptureMode::PSEUDO_STACK ||
+      capture_mode == CaptureMode::MIXED_STACK) {
+    SerializeFramesFromAllocationContext(&serializer, &context);
+  } else {
+    SerializeFramesFromBacktrace(&serializer, &context);
   }
+
+  size_t context_len = context ? strnlen(context, kMaxContextLen) : 0;
+
+  alloc_packet->op = kAllocPacketType;
+  alloc_packet->allocator = type;
+  alloc_packet->address = (uint64_t)address;
+  alloc_packet->size = sz;
+  alloc_packet->stack_len = static_cast<uint32_t>(serializer.count());
+  alloc_packet->context_byte_len = static_cast<uint32_t>(context_len);
+
+  char* message_end = message + sizeof(AllocPacket) +
+                      alloc_packet->stack_len * sizeof(uint64_t);
+  if (context_len > 0) {
+    memcpy(message_end, context, context_len);
+    message_end += context_len;
+  }
+  DoSend(address, message, message_end - message, send_buffers);
+}
+
+// This function may be called post Chrome TLS destruction, so it must not use
+// Chrome TLS. It currently uses 3 classes from Chrome: base::Lock,
+// base::TimeTicks and base::ScopedPlatformFile, all of which are safe.
+void AllocatorShimLogFree(void* address) {
+  if (address)
+    RecordAndSendFree(address);
+}
+
+void RecordAndSendFree(void* address) {
+  SendBuffer* send_buffers = g_send_buffers.Read();
+  if (!send_buffers)
+    return;
+
+  FreePacket free_packet;
+  free_packet.op = kFreePacketType;
+  free_packet.address = (uint64_t)address;
+
+  DoSend(address, &free_packet, sizeof(FreePacket), send_buffers);
 }
 
 void AllocatorShimFlushPipe(uint32_t barrier_id) {
@@ -861,12 +984,21 @@ void SetGCHeapAllocationHookFunctions(SetGCAllocHookFunction hook_alloc,
 bool SetOnInitAllocatorShimCallbackForTesting(
     base::OnceClosure callback,
     scoped_refptr<base::TaskRunner> task_runner) {
-  base::AutoLock lock(*g_on_init_allocator_shim_lock_.Pointer());
+  base::AutoLock lock(g_on_init_allocator_shim_lock_.Get());
   if (g_initialized_)
     return true;
-  *g_on_init_allocator_shim_callback_.Pointer() = std::move(callback);
-  *g_on_init_allocator_shim_task_runner_.Pointer() = task_runner;
+  g_on_init_allocator_shim_callback_.Get() = std::move(callback);
+  g_on_init_allocator_shim_task_runner_.Get() = task_runner;
   return false;
+}
+
+void AllocatorHooksHaveBeenInitialized() {
+  base::AutoLock lock(g_on_init_allocator_shim_lock_.Get());
+  g_initialized_ = true;
+  if (!g_on_init_allocator_shim_callback_.Get())
+    return;
+  g_on_init_allocator_shim_task_runner_.Get()->PostTask(
+      FROM_HERE, std::move(*g_on_init_allocator_shim_callback_.Pointer()));
 }
 
 }  // namespace heap_profiling

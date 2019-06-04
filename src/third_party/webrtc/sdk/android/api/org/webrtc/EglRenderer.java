@@ -17,21 +17,21 @@ import android.opengl.GLES20;
 import android.os.Handler;
 import android.os.HandlerThread;
 import android.os.Looper;
+import android.os.Message;
 import android.view.Surface;
 import java.nio.ByteBuffer;
+import java.text.DecimalFormat;
 import java.util.ArrayList;
 import java.util.Iterator;
-import java.util.Locale;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import javax.annotation.Nullable;
 
 /**
- * Implements org.webrtc.VideoRenderer.Callbacks by displaying the video stream on an EGL Surface.
- * This class is intended to be used as a helper class for rendering on SurfaceViews and
- * TextureViews.
+ * Implements VideoSink by displaying the video stream on an EGL Surface. This class is intended to
+ * be used as a helper class for rendering on SurfaceViews and TextureViews.
  */
-public class EglRenderer implements VideoRenderer.Callbacks, VideoSink {
+public class EglRenderer implements VideoSink {
   private static final String TAG = "EglRenderer";
   private static final long LOG_INTERVAL_SEC = 4;
 
@@ -80,6 +80,29 @@ public class EglRenderer implements VideoRenderer.Callbacks, VideoSink {
     }
   }
 
+  /**
+   * Handler that triggers a callback when an uncaught exception happens when handling a message.
+   */
+  private static class HandlerWithExceptionCallback extends Handler {
+    private final Runnable exceptionCallback;
+
+    public HandlerWithExceptionCallback(Looper looper, Runnable exceptionCallback) {
+      super(looper);
+      this.exceptionCallback = exceptionCallback;
+    }
+
+    @Override
+    public void dispatchMessage(Message msg) {
+      try {
+        super.dispatchMessage(msg);
+      } catch (Exception e) {
+        Logging.e(TAG, "Exception on EglRenderer thread", e);
+        exceptionCallback.run();
+        throw e;
+      }
+    }
+  }
+
   protected final String name;
 
   // |renderThreadHandler| is a handler for communicating with |renderThread|, and is synchronized
@@ -102,6 +125,7 @@ public class EglRenderer implements VideoRenderer.Callbacks, VideoSink {
   @Nullable private EglBase eglBase;
   private final VideoFrameDrawer frameDrawer = new VideoFrameDrawer();
   @Nullable private RendererCommon.GlDrawer drawer;
+  private boolean usePresentationTimeStamp;
   private final Matrix drawMatrix = new Matrix();
 
   // Pending frame to render. Serves as a queue with size 1. Synchronized on |frameLock|.
@@ -162,20 +186,31 @@ public class EglRenderer implements VideoRenderer.Callbacks, VideoSink {
    * Initialize this class, sharing resources with |sharedContext|. The custom |drawer| will be used
    * for drawing frames on the EGLSurface. This class is responsible for calling release() on
    * |drawer|. It is allowed to call init() to reinitialize the renderer after a previous
-   * init()/release() cycle.
+   * init()/release() cycle. If usePresentationTimeStamp is true, eglPresentationTimeANDROID will be
+   * set with the frame timestamps, which specifies desired presentation time and might be useful
+   * for e.g. syncing audio and video.
    */
   public void init(@Nullable final EglBase.Context sharedContext, final int[] configAttributes,
-      RendererCommon.GlDrawer drawer) {
+      RendererCommon.GlDrawer drawer, boolean usePresentationTimeStamp) {
     synchronized (handlerLock) {
       if (renderThreadHandler != null) {
         throw new IllegalStateException(name + "Already initialized");
       }
       logD("Initializing EglRenderer");
       this.drawer = drawer;
+      this.usePresentationTimeStamp = usePresentationTimeStamp;
 
       final HandlerThread renderThread = new HandlerThread(name + "EglRenderer");
       renderThread.start();
-      renderThreadHandler = new Handler(renderThread.getLooper());
+      renderThreadHandler =
+          new HandlerWithExceptionCallback(renderThread.getLooper(), new Runnable() {
+            @Override
+            public void run() {
+              synchronized (handlerLock) {
+                renderThreadHandler = null;
+              }
+            }
+          });
       // Create EGL context on the newly created render thread. It should be possibly to create the
       // context on this thread and make it current on the render thread, but this causes failure on
       // some Marvel based JB devices. https://bugs.chromium.org/p/webrtc/issues/detail?id=6350.
@@ -197,6 +232,16 @@ public class EglRenderer implements VideoRenderer.Callbacks, VideoSink {
       renderThreadHandler.postDelayed(
           logStatisticsRunnable, TimeUnit.SECONDS.toMillis(LOG_INTERVAL_SEC));
     }
+  }
+
+  /**
+   * Same as above with usePresentationTimeStamp set to false.
+   *
+   * @see #init(EglBase.Context, int[], RendererCommon.GlDrawer, boolean)
+   */
+  public void init(@Nullable final EglBase.Context sharedContext, final int[] configAttributes,
+      RendererCommon.GlDrawer drawer) {
+    init(sharedContext, configAttributes, drawer, /* usePresentationTimeStamp= */ false);
   }
 
   public void createEglSurface(Surface surface) {
@@ -421,14 +466,6 @@ public class EglRenderer implements VideoRenderer.Callbacks, VideoSink {
     ThreadUtils.awaitUninterruptibly(latch);
   }
 
-  // VideoRenderer.Callbacks interface.
-  @Override
-  public void renderFrame(VideoRenderer.I420Frame frame) {
-    VideoFrame videoFrame = frame.toVideoFrame();
-    onFrame(videoFrame);
-    videoFrame.release();
-  }
-
   // VideoSink interface.
   @Override
   public void onFrame(VideoFrame frame) {
@@ -594,7 +631,11 @@ public class EglRenderer implements VideoRenderer.Callbacks, VideoSink {
           eglBase.surfaceWidth(), eglBase.surfaceHeight());
 
       final long swapBuffersStartTimeNs = System.nanoTime();
-      eglBase.swapBuffers();
+      if (usePresentationTimeStamp) {
+        eglBase.swapBuffers(frame.getTimestampNs());
+      } else {
+        eglBase.swapBuffers();
+      }
 
       final long currentTimeNs = System.nanoTime();
       synchronized (statisticsLock) {
@@ -661,10 +702,11 @@ public class EglRenderer implements VideoRenderer.Callbacks, VideoSink {
   }
 
   private String averageTimeAsString(long sumTimeNs, int count) {
-    return (count <= 0) ? "NA" : TimeUnit.NANOSECONDS.toMicros(sumTimeNs / count) + " μs";
+    return (count <= 0) ? "NA" : TimeUnit.NANOSECONDS.toMicros(sumTimeNs / count) + " us";
   }
 
   private void logStatistics() {
+    final DecimalFormat fpsFormat = new DecimalFormat("#.0");
     final long currentTimeNs = System.nanoTime();
     synchronized (statisticsLock) {
       final long elapsedTimeNs = currentTimeNs - statisticsStartTimeNs;
@@ -676,7 +718,7 @@ public class EglRenderer implements VideoRenderer.Callbacks, VideoSink {
           + " Frames received: " + framesReceived + "."
           + " Dropped: " + framesDropped + "."
           + " Rendered: " + framesRendered + "."
-          + " Render fps: " + String.format(Locale.US, "%.1f", renderFps) + "."
+          + " Render fps: " + fpsFormat.format(renderFps) + "."
           + " Average render time: " + averageTimeAsString(renderTimeNs, framesRendered) + "."
           + " Average swapBuffer time: "
           + averageTimeAsString(renderSwapBufferTimeNs, framesRendered) + ".");

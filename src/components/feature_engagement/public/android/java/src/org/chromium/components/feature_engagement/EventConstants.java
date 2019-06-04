@@ -34,6 +34,10 @@ public final class EventConstants {
      */
     public static final String PULL_TO_REFRESH = "pull_to_refresh";
 
+    /** The contextual suggestions button was shown to the user. */
+    public static final String CONTEXTUAL_SUGGESTIONS_BUTTON_SHOWN =
+            "contextual_suggestions_button_shown";
+
     /**
      * The contextual suggestions bottom sheet was explicitly dismissed via a tap on its close
      * button.
@@ -47,9 +51,9 @@ public final class EventConstants {
     public static final String CONTEXTUAL_SUGGESTIONS_OPENED = "contextual_suggestions_opened";
 
     /**
-     * The contextual suggestions bottom sheet was shown in its peeking state.
+     * A contextual suggestion was clicked, opened in a new tab or downloaded.
      */
-    public static final String CONTEXTUAL_SUGGESTIONS_PEEKED = "contextual_suggestions_peeked";
+    public static final String CONTEXTUAL_SUGGESTION_TAKEN = "contextual_suggestion_taken";
 
     /**
      * Screenshot is taken with Chrome in the foreground.
@@ -77,6 +81,16 @@ public final class EventConstants {
      * The data saver footer was used (tapped).
      */
     public static final String DATA_SAVER_DETAIL_OPENED = "data_saver_overview_opened";
+
+    /**
+     * The previews verbose status view was opened.
+     */
+    public static final String PREVIEWS_VERBOSE_STATUS_OPENED = "previews_verbose_status_opened";
+
+    /**
+     * A page load used a preview.
+     */
+    public static final String PREVIEWS_PAGE_LOADED = "preview_page_load";
 
     /**
      * The download button for a media element was displayed.
@@ -133,6 +147,21 @@ public final class EventConstants {
      */
     public static final String PARTNER_HOME_PAGE_BUTTON_PRESSED =
             "partner_home_page_button_pressed";
+
+    /** The user used a button in the bottom toolbar. */
+    public static final String CHROME_DUET_USED_BOTTOM_TOOLBAR = "chrome_duet_used_bottom_toolbar";
+
+    /** The homepage button in the toolbar was clicked. */
+    public static final String HOMEPAGE_BUTTON_CLICKED = "homepage_button_clicked";
+
+    /** The clear tab button in the toolbar was clicked. */
+    public static final String CLEAR_TAB_BUTTON_CLICKED = "clear_tab_button_clicked";
+
+    /** The pinned homepage tile in MV tiles was clicked. */
+    public static final String HOMEPAGE_TILE_CLICKED = "homepage_tile_clicked";
+
+    /** The `Translate` app menu button was clicked. */
+    public static final String TRANSLATE_MENU_BUTTON_CLICKED = "translate_menu_button_clicked";
 
     /**
      * Do not instantiate.

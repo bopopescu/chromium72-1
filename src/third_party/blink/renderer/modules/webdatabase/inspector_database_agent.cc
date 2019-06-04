@@ -28,7 +28,6 @@
 
 #include "third_party/blink/renderer/modules/webdatabase/inspector_database_agent.h"
 
-#include "third_party/blink/renderer/bindings/core/v8/exception_state.h"
 #include "third_party/blink/renderer/core/frame/local_frame.h"
 #include "third_party/blink/renderer/core/loader/document_loader.h"
 #include "third_party/blink/renderer/core/page/page.h"
@@ -41,6 +40,7 @@
 #include "third_party/blink/renderer/modules/webdatabase/sql_result_set_row_list.h"
 #include "third_party/blink/renderer/modules/webdatabase/sql_transaction.h"
 #include "third_party/blink/renderer/modules/webdatabase/sqlite/sql_value.h"
+#include "third_party/blink/renderer/platform/bindings/exception_state.h"
 #include "third_party/blink/renderer/platform/wtf/ref_counted.h"
 #include "third_party/blink/renderer/platform/wtf/vector.h"
 
@@ -48,13 +48,8 @@ typedef blink::protocol::Database::Backend::ExecuteSQLCallback
     ExecuteSQLCallback;
 
 namespace blink {
-
 using protocol::Maybe;
 using protocol::Response;
-
-namespace DatabaseAgentState {
-static const char kDatabaseAgentEnabled[] = "databaseAgentEnabled";
-};
 
 namespace {
 
@@ -100,13 +95,13 @@ class StatementCallback final : public SQLStatement::OnSuccessCallback {
     std::unique_ptr<protocol::Array<String>> column_names =
         protocol::Array<String>::create();
     const Vector<String>& columns = row_list->ColumnNames();
-    for (size_t i = 0; i < columns.size(); ++i)
+    for (wtf_size_t i = 0; i < columns.size(); ++i)
       column_names->addItem(columns[i]);
 
     std::unique_ptr<protocol::Array<protocol::Value>> values =
         protocol::Array<protocol::Value>::create();
     const Vector<SQLValue>& data = row_list->Values();
-    for (size_t i = 0; i < data.size(); ++i) {
+    for (wtf_size_t i = 0; i < data.size(); ++i) {
       const SQLValue& value = row_list->Values()[i];
       switch (value.GetType()) {
         case SQLValue::kStringValue:
@@ -230,7 +225,7 @@ void InspectorDatabaseAgent::DidOpenDatabase(blink::Database* database,
       InspectorDatabaseResource::Create(database, domain, name, version);
   resources_.Set(resource->Id(), resource);
   // Resources are only bound while visible.
-  DCHECK(enabled_);
+  DCHECK(enabled_.Get());
   DCHECK(GetFrontend());
   resource->Bind(GetFrontend());
 }
@@ -244,29 +239,31 @@ void InspectorDatabaseAgent::DidCommitLoadForLocalFrame(LocalFrame* frame) {
 }
 
 InspectorDatabaseAgent::InspectorDatabaseAgent(Page* page)
-    : page_(page), enabled_(false) {}
+    : page_(page), enabled_(&agent_state_, /*default_value=*/false) {}
 
 InspectorDatabaseAgent::~InspectorDatabaseAgent() = default;
 
-Response InspectorDatabaseAgent::enable() {
-  if (enabled_)
-    return Response::OK();
-  enabled_ = true;
-  state_->setBoolean(DatabaseAgentState::kDatabaseAgentEnabled, enabled_);
+void InspectorDatabaseAgent::InnerEnable() {
   if (DatabaseClient* client = DatabaseClient::FromPage(page_))
     client->SetInspectorAgent(this);
   DatabaseTracker::Tracker().ForEachOpenDatabaseInPage(
       page_,
       WTF::BindRepeating(&InspectorDatabaseAgent::RegisterDatabaseOnCreation,
                          WrapPersistent(this)));
+}
+
+Response InspectorDatabaseAgent::enable() {
+  if (enabled_.Get())
+    return Response::OK();
+  enabled_.Set(true);
+  InnerEnable();
   return Response::OK();
 }
 
 Response InspectorDatabaseAgent::disable() {
-  if (!enabled_)
+  if (!enabled_.Get())
     return Response::OK();
-  enabled_ = false;
-  state_->setBoolean(DatabaseAgentState::kDatabaseAgentEnabled, enabled_);
+  enabled_.Set(false);
   if (DatabaseClient* client = DatabaseClient::FromPage(page_))
     client->SetInspectorAgent(nullptr);
   resources_.clear();
@@ -274,16 +271,14 @@ Response InspectorDatabaseAgent::disable() {
 }
 
 void InspectorDatabaseAgent::Restore() {
-  if (state_->booleanProperty(DatabaseAgentState::kDatabaseAgentEnabled,
-                              false)) {
-    enable();
-  }
+  if (enabled_.Get())
+    InnerEnable();
 }
 
 Response InspectorDatabaseAgent::getDatabaseTableNames(
     const String& database_id,
     std::unique_ptr<protocol::Array<String>>* names) {
-  if (!enabled_)
+  if (!enabled_.Get())
     return Response::Error("Database agent is not enabled");
 
   *names = protocol::Array<String>::create();
@@ -305,7 +300,7 @@ void InspectorDatabaseAgent::executeSQL(
   std::unique_ptr<ExecuteSQLCallback> request_callback =
       std::move(prp_request_callback);
 
-  if (!enabled_) {
+  if (!enabled_.Get()) {
     request_callback->sendFailure(
         Response::Error("Database agent is not enabled"));
     return;

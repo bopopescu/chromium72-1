@@ -66,11 +66,11 @@ bool WebMVideoClient::InitializeConfig(
     profile = GetVP9CodecProfile(codec_private);
 #if BUILDFLAG(ENABLE_AV1_DECODER)
   } else if (codec_id == "V_AV1") {
-    // TODO(dalecurtis): AV1 profiles are not finalized, this needs updating
-    // to read the actual profile and configuration before enabling for
+    // TODO(dalecurtis): AV1 profiles in WebM are not finalized, this needs
+    // updating to read the actual profile and configuration before enabling for
     // release. http://crbug.com/784993
     video_codec = kCodecAV1;
-    profile = AV1PROFILE_PROFILE0;
+    profile = AV1PROFILE_PROFILE_MAIN;
 #endif
   } else {
     MEDIA_LOG(ERROR, media_log_) << "Unsupported video codec_id " << codec_id;
@@ -121,14 +121,15 @@ bool WebMVideoClient::InitializeConfig(
   }
   gfx::Size natural_size = gfx::Size(display_width_, display_height_);
 
-  config->Initialize(video_codec, profile, format, COLOR_SPACE_HD_REC709,
-                     VIDEO_ROTATION_0, coded_size, visible_rect, natural_size,
-                     codec_private, encryption_scheme);
+  VideoColorSpace color_space = VideoColorSpace::REC709();
   if (colour_parsed_) {
     WebMColorMetadata color_metadata = colour_parser_.GetWebMColorMetadata();
-    config->set_color_space_info(color_metadata.color_space);
+    color_space = color_metadata.color_space;
     config->set_hdr_metadata(color_metadata.hdr_metadata);
   }
+  config->Initialize(video_codec, profile, format, color_space,
+                     VIDEO_ROTATION_0, coded_size, visible_rect, natural_size,
+                     codec_private, encryption_scheme);
   return config->IsValidConfig();
 }
 

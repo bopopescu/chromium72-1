@@ -24,14 +24,18 @@ namespace content {
 
 namespace {
 // This constant should be in sync with
-// the constant at devtools_ui_bindings.cc.
-const size_t kMaxMessageChunkSize = IPC::Channel::kMaximumMessageSize / 4;
+// the constant
+// kMaxMessageChunkSize in chrome/browser/devtools/devtools_ui_bindings.cc.
+constexpr size_t kLayoutTestMaxMessageChunkSize =
+    IPC::Channel::kMaximumMessageSize / 4;
 }  // namespace
 
 DevToolsProtocolTestBindings::DevToolsProtocolTestBindings(
     WebContents* devtools)
     : WebContentsObserver(devtools),
-      agent_host_(DevToolsAgentHost::CreateForDiscovery()) {
+      agent_host_(DevToolsAgentHost::CreateForBrowser(
+          nullptr,
+          DevToolsAgentHost::CreateServerSocketCallback())) {
   agent_host_->AttachClient(this);
 }
 
@@ -109,7 +113,7 @@ void DevToolsProtocolTestBindings::HandleMessageFromTest(
 void DevToolsProtocolTestBindings::DispatchProtocolMessage(
     DevToolsAgentHost* agent_host,
     const std::string& message) {
-  if (message.length() < kMaxMessageChunkSize) {
+  if (message.length() < kLayoutTestMaxMessageChunkSize) {
     std::string param;
     base::EscapeJSONString(message, true, &param);
     std::string code = "DevToolsAPI.dispatchMessage(" + param + ");";
@@ -119,10 +123,11 @@ void DevToolsProtocolTestBindings::DispatchProtocolMessage(
   }
 
   size_t total_size = message.length();
-  for (size_t pos = 0; pos < message.length(); pos += kMaxMessageChunkSize) {
+  for (size_t pos = 0; pos < message.length();
+       pos += kLayoutTestMaxMessageChunkSize) {
     std::string param;
-    base::EscapeJSONString(message.substr(pos, kMaxMessageChunkSize), true,
-                           &param);
+    base::EscapeJSONString(message.substr(pos, kLayoutTestMaxMessageChunkSize),
+                           true, &param);
     std::string code = "DevToolsAPI.dispatchMessageChunk(" + param + "," +
                        std::to_string(pos ? 0 : total_size) + ");";
     base::string16 javascript = base::UTF8ToUTF16(code);

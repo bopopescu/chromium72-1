@@ -35,18 +35,12 @@ config("runtime_library") {
   libs = []
 
   if (use_custom_libcxx) {
-    if (libcpp_is_static) {
+    if (!is_component_build) {
       # Don't leak any symbols on a static build.
-      defines += [
-        "_LIBCPP_DISABLE_VISIBILITY_ANNOTATIONS",
-        "_LIBCXXABI_DISABLE_VISIBILITY_ANNOTATIONS",
-      ]
-    }
-    if (!is_clang) {
-      # Gcc has a built-in abs() definition with default visibility.
-      # If it was not disabled, it would conflict with libc++'s abs()
-      # with hidden visibility.
-      cflags += [ "-fno-builtin-abs" ]
+      defines += [ "_LIBCPP_DISABLE_VISIBILITY_ANNOTATIONS" ]
+      if (!export_libcxxabi_from_executables) {
+        defines += [ "_LIBCXXABI_DISABLE_VISIBILITY_ANNOTATIONS" ]
+      }
     }
     cflags_cc += [
       "-nostdinc++",
@@ -56,6 +50,7 @@ config("runtime_library") {
     defines += [
       "CR_LIBCXX_REVISION=$libcxx_svn_revision",
       "CR_LIBCXXABI_REVISION=$libcxxabi_svn_revision",
+      "_LIBCPP_ENABLE_NODISCARD",
     ]
 
     # Make sure we don't link against libc++ or libstdc++.
@@ -67,6 +62,11 @@ config("runtime_library") {
         ldflags += [ "-nostdlib++" ]
       }
     } else {
+      # Gcc has a built-in abs() definition with default visibility.
+      # If it was not disabled, it would conflict with libc++'s abs()
+      # with hidden visibility.
+      cflags += [ "-fno-builtin-abs" ]
+
       ldflags += [ "-nodefaultlibs" ]
 
       # Unfortunately, there's no way to disable linking against just libc++

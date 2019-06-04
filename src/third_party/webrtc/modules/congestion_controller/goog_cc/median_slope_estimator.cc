@@ -10,15 +10,12 @@
 
 #include "modules/congestion_controller/goog_cc/median_slope_estimator.h"
 
-#include <algorithm>
 #include <vector>
 
-#include "modules/remote_bitrate_estimator/include/bwe_defines.h"
 #include "modules/remote_bitrate_estimator/test/bwe_test_logging.h"
-#include "rtc_base/logging.h"
+#include "rtc_base/checks.h"
 
 namespace webrtc {
-namespace webrtc_cc {
 
 constexpr unsigned int kDeltaCounterMax = 1000;
 
@@ -91,5 +88,4 @@ void MedianSlopeEstimator::Update(double recv_delta_ms,
   BWE_TEST_LOGGING_PLOT(1, "trendline_slope", arrival_time_ms, trendline_);
 }
 
-}  // namespace webrtc_cc
 }  // namespace webrtc

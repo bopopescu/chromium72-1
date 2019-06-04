@@ -67,7 +67,7 @@
 // with the expected frames, which it would pop-off the list as its expectations
 // are met.
 
-#include <stdint.h>
+#include <cstdint>
 
 #include <memory>
 #include <type_traits>
@@ -176,9 +176,8 @@ class SpdyTestDeframer : public SpdyFramerVisitorInterface {
 
  protected:
   SpdyTestDeframer() {}
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(SpdyTestDeframer);
+  SpdyTestDeframer(const SpdyTestDeframer&) = delete;
+  SpdyTestDeframer& operator=(const SpdyTestDeframer&) = delete;
 };
 
 // CollectedFrame holds the result of one call to SpdyDeframerVisitorInterface,

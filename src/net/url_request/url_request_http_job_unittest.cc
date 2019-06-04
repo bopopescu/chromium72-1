@@ -18,7 +18,7 @@
 #include "base/run_loop.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_split.h"
-#include "base/test/histogram_tester.h"
+#include "base/test/metrics/histogram_tester.h"
 #include "net/base/auth.h"
 #include "net/base/request_priority.h"
 #include "net/cert/ct_policy_status.h"
@@ -66,7 +66,7 @@ const char kSimpleGetMockWrite[] =
     "GET / HTTP/1.1\r\n"
     "Host: www.example.com\r\n"
     "Connection: keep-alive\r\n"
-    "User-Agent:\r\n"
+    "User-Agent: \r\n"
     "Accept-Encoding: gzip, deflate\r\n"
     "Accept-Language: en-us,fr\r\n\r\n";
 
@@ -74,7 +74,7 @@ const char kSimpleHeadMockWrite[] =
     "HEAD / HTTP/1.1\r\n"
     "Host: www.example.com\r\n"
     "Connection: keep-alive\r\n"
-    "User-Agent:\r\n"
+    "User-Agent: \r\n"
     "Accept-Encoding: gzip, deflate\r\n"
     "Accept-Language: en-us,fr\r\n\r\n";
 
@@ -159,7 +159,7 @@ TEST_F(URLRequestHttpJobSetUpSourceTest, SetUpSourceFails) {
   test_job_interceptor_->set_main_intercept_job(std::move(job));
   request->Start();
 
-  base::RunLoop().Run();
+  delegate_.RunUntilComplete();
   EXPECT_EQ(ERR_CONTENT_DECODING_INIT_FAILED, delegate_.request_status());
 }
 
@@ -182,7 +182,7 @@ TEST_F(URLRequestHttpJobSetUpSourceTest, UnknownEncoding) {
   test_job_interceptor_->set_main_intercept_job(std::move(job));
   request->Start();
 
-  base::RunLoop().Run();
+  delegate_.RunUntilComplete();
   EXPECT_EQ(OK, delegate_.request_status());
   EXPECT_EQ("Test Content", delegate_.data_received());
 }
@@ -227,7 +227,7 @@ TEST(URLRequestHttpJobWithProxy, TestFailureWithoutProxy) {
 
   request->Start();
   ASSERT_TRUE(request->is_pending());
-  base::RunLoop().Run();
+  delegate.RunUntilComplete();
 
   EXPECT_THAT(delegate.request_status(), IsError(ERR_CONNECTION_RESET));
   EXPECT_EQ(ProxyServer::Direct(), request->proxy_server());
@@ -249,7 +249,7 @@ TEST(URLRequestHttpJobWithProxy, TestSuccessfulWithOneProxy) {
       "GET http://www.example.com/ HTTP/1.1\r\n"
       "Host: www.example.com\r\n"
       "Proxy-Connection: keep-alive\r\n"
-      "User-Agent:\r\n"
+      "User-Agent: \r\n"
       "Accept-Encoding: gzip, deflate\r\n"
       "Accept-Language: en-us,fr\r\n\r\n";
 
@@ -277,7 +277,7 @@ TEST(URLRequestHttpJobWithProxy, TestSuccessfulWithOneProxy) {
 
   request->Start();
   ASSERT_TRUE(request->is_pending());
-  base::RunLoop().Run();
+  delegate.RunUntilComplete();
 
   EXPECT_THAT(delegate.request_status(), IsError(ERR_CONNECTION_RESET));
   // When request fails due to proxy connection errors, the proxy server should
@@ -409,7 +409,7 @@ TEST_F(URLRequestHttpJobWithMockSocketsTest,
 
   request->Start();
   ASSERT_TRUE(request->is_pending());
-  base::RunLoop().Run();
+  delegate.RunUntilComplete();
 
   EXPECT_THAT(delegate.request_status(), IsOk());
   EXPECT_EQ(12, request->received_response_content_length());
@@ -439,7 +439,7 @@ TEST_F(URLRequestHttpJobWithMockSocketsTest, TestSuccessfulHead) {
   request->set_method("HEAD");
   request->Start();
   ASSERT_TRUE(request->is_pending());
-  base::RunLoop().Run();
+  delegate.RunUntilComplete();
 
   EXPECT_THAT(delegate.request_status(), IsOk());
   EXPECT_EQ(0, request->received_response_content_length());
@@ -470,7 +470,7 @@ TEST_F(URLRequestHttpJobWithMockSocketsTest, TestSuccessfulHeadWithContent) {
   request->set_method("HEAD");
   request->Start();
   ASSERT_TRUE(request->is_pending());
-  base::RunLoop().Run();
+  delegate.RunUntilComplete();
 
   EXPECT_THAT(delegate.request_status(), IsOk());
   EXPECT_EQ(0, request->received_response_content_length());
@@ -500,7 +500,7 @@ TEST_F(URLRequestHttpJobWithMockSocketsTest, TestSuccessfulCachedHeadRequest) {
 
     request->Start();
     ASSERT_TRUE(request->is_pending());
-    base::RunLoop().Run();
+    delegate.RunUntilComplete();
 
     EXPECT_THAT(delegate.request_status(), IsOk());
     EXPECT_EQ(12, request->received_response_content_length());
@@ -532,7 +532,7 @@ TEST_F(URLRequestHttpJobWithMockSocketsTest, TestSuccessfulCachedHeadRequest) {
     request->set_method("HEAD");
     request->Start();
     ASSERT_TRUE(request->is_pending());
-    base::RunLoop().Run();
+    delegate.RunUntilComplete();
 
     EXPECT_THAT(delegate.request_status(), IsOk());
     EXPECT_EQ(0, request->received_response_content_length());
@@ -557,7 +557,7 @@ TEST_F(URLRequestHttpJobWithMockSocketsTest,
 
   request->Start();
   ASSERT_TRUE(request->is_pending());
-  base::RunLoop().Run();
+  delegate.RunUntilComplete();
 
   EXPECT_THAT(delegate.request_status(), IsOk());
   EXPECT_EQ(12, request->received_response_content_length());
@@ -586,7 +586,7 @@ TEST_F(URLRequestHttpJobWithMockSocketsTest, TestContentLengthFailedRequest) {
 
   request->Start();
   ASSERT_TRUE(request->is_pending());
-  base::RunLoop().Run();
+  delegate.RunUntilComplete();
 
   EXPECT_THAT(delegate.request_status(), IsError(ERR_FAILED));
   EXPECT_EQ(12, request->received_response_content_length());
@@ -651,7 +651,7 @@ TEST_F(URLRequestHttpJobWithMockSocketsTest,
 
   request->Start();
   ASSERT_TRUE(request->is_pending());
-  base::RunLoop().Run();
+  delegate.RunUntilComplete();
 
   EXPECT_EQ(net::OK, request->status().error());
   EXPECT_EQ(static_cast<int>(content_data.size()),
@@ -685,7 +685,7 @@ TEST_F(URLRequestHttpJobWithMockSocketsTest,
 
   request->Start();
   ASSERT_TRUE(request->is_pending());
-  base::RunLoop().Run();
+  delegate.RunUntilComplete();
 
   EXPECT_EQ(net::OK, request->status().error());
   EXPECT_EQ(static_cast<int>(content_data.size()),
@@ -740,7 +740,7 @@ TEST_F(URLRequestHttpJobWithMockSocketsTest,
                               &delegate, TRAFFIC_ANNOTATION_FOR_TESTS);
 
   request->Start();
-  base::RunLoop().Run();
+  delegate.RunUntilComplete();
 
   EXPECT_EQ(net::OK, request->status().error());
   EXPECT_EQ(static_cast<int>(content_data.size()),
@@ -755,7 +755,7 @@ TEST_F(URLRequestHttpJobWithMockSocketsTest,
       MockWrite("GET / HTTP/1.1\r\n"
                 "Host: www.redirect.com\r\n"
                 "Connection: keep-alive\r\n"
-                "User-Agent:\r\n"
+                "User-Agent: \r\n"
                 "Accept-Encoding: gzip, deflate\r\n"
                 "Accept-Language: en-us,fr\r\n\r\n")};
 
@@ -859,7 +859,7 @@ TEST_F(URLRequestHttpJobWithMockSocketsTest, TestHttpTimeToFirstByte) {
   histograms.ExpectTotalCount("Net.HttpTimeToFirstByte", 0);
 
   request->Start();
-  base::RunLoop().Run();
+  delegate.RunUntilComplete();
 
   EXPECT_THAT(delegate.request_status(), IsOk());
   histograms.ExpectTotalCount("Net.HttpTimeToFirstByte", 1);
@@ -883,7 +883,7 @@ TEST_F(URLRequestHttpJobWithMockSocketsTest,
 
   request->Start();
   request->Cancel();
-  base::RunLoop().Run();
+  delegate.RunUntilComplete();
 
   EXPECT_THAT(delegate.request_status(), IsError(ERR_ABORTED));
   histograms.ExpectTotalCount("Net.HttpTimeToFirstByte", 0);
@@ -910,7 +910,7 @@ TEST_F(URLRequestHttpJobWithMockSocketsTest,
                                   &delegate, TRAFFIC_ANNOTATION_FOR_TESTS);
 
       request->Start();
-      base::RunLoop().Run();
+      delegate.RunUntilComplete();
       EXPECT_THAT(delegate.request_status(), IsOk());
     }
   }
@@ -962,7 +962,7 @@ TEST_F(URLRequestHttpJobWithMockSocketsTest,
       GURL("https://www.example.com/"), DEFAULT_PRIORITY, &delegate,
       TRAFFIC_ANNOTATION_FOR_TESTS);
   request->Start();
-  base::RunLoop().Run();
+  delegate.RunUntilComplete();
   EXPECT_THAT(delegate.request_status(), IsOk());
 
   histograms.ExpectTotalCount(kTrustAnchorRequestHistogram, 1);
@@ -996,7 +996,7 @@ TEST_F(URLRequestHttpJobWithMockSocketsTest,
       GURL("https://www.example.com/"), DEFAULT_PRIORITY, &delegate,
       TRAFFIC_ANNOTATION_FOR_TESTS);
   request->Start();
-  base::RunLoop().Run();
+  delegate.RunUntilComplete();
   EXPECT_THAT(delegate.request_status(), IsOk());
 
   histograms.ExpectTotalCount(kTrustAnchorRequestHistogram, 0);
@@ -1049,7 +1049,7 @@ TEST_F(URLRequestHttpJobWithMockSocketsTest,
       GURL("https://www.example.com/"), DEFAULT_PRIORITY, &delegate,
       TRAFFIC_ANNOTATION_FOR_TESTS);
   request->Start();
-  base::RunLoop().Run();
+  delegate.RunUntilComplete();
   EXPECT_THAT(delegate.request_status(), IsOk());
 
   histograms.ExpectTotalCount(kTrustAnchorRequestHistogram, 1);
@@ -1085,7 +1085,7 @@ TEST_F(URLRequestHttpJobWithMockSocketsTest,
       GURL("https://www.example.com/"), DEFAULT_PRIORITY, &delegate,
       TRAFFIC_ANNOTATION_FOR_TESTS);
   request->Start();
-  base::RunLoop().Run();
+  delegate.RunUntilComplete();
   EXPECT_THAT(delegate.request_status(), IsOk());
 
   histograms.ExpectUniqueSample(
@@ -1125,7 +1125,7 @@ TEST_F(URLRequestHttpJobWithMockSocketsTest,
       GURL("https://www.example.com/"), DEFAULT_PRIORITY, &delegate,
       TRAFFIC_ANNOTATION_FOR_TESTS);
   request->Start();
-  base::RunLoop().Run();
+  delegate.RunUntilComplete();
   EXPECT_THAT(delegate.request_status(), IsOk());
 
   histograms.ExpectTotalCount(kCTComplianceHistogramName, 0);
@@ -1160,7 +1160,7 @@ TEST_F(URLRequestHttpJobWithMockSocketsTest,
       GURL("https://www.example.com/"), DEFAULT_PRIORITY, &delegate,
       TRAFFIC_ANNOTATION_FOR_TESTS);
   request->Start();
-  base::RunLoop().Run();
+  delegate.RunUntilComplete();
   EXPECT_THAT(delegate.request_status(), IsOk());
 
   histograms.ExpectUniqueSample(
@@ -1202,7 +1202,7 @@ TEST_F(URLRequestHttpJobWithMockSocketsTest,
       GURL("https://www.example.com/"), DEFAULT_PRIORITY, &delegate,
       TRAFFIC_ANNOTATION_FOR_TESTS);
   request->Start();
-  base::RunLoop().Run();
+  delegate.RunUntilComplete();
   EXPECT_THAT(delegate.request_status(), IsOk());
 
   histograms.ExpectTotalCount(kCTComplianceHistogramName, 0);
@@ -1222,7 +1222,7 @@ TEST_F(URLRequestHttpJobTest, TestCancelWhileReadingCookies) {
 
   request->Start();
   request->Cancel();
-  base::RunLoop().Run();
+  delegate.RunUntilComplete();
 
   EXPECT_THAT(delegate.request_status(), IsError(ERR_ABORTED));
 }
@@ -1305,7 +1305,7 @@ TEST_F(URLRequestHttpJobTest, HSTSInternalRedirectTest) {
 
     net_log_.Clear();
     r->Start();
-    base::RunLoop().Run();
+    d.RunUntilComplete();
 
     if (test.upgrade_expected) {
       net::TestNetLogEntry::List entries;
@@ -1379,7 +1379,7 @@ TEST_F(URLRequestHttpJobWithBrotliSupportTest, BrotliAdvertisement) {
       MockWrite("GET / HTTP/1.1\r\n"
                 "Host: www.example.com\r\n"
                 "Connection: keep-alive\r\n"
-                "User-Agent:\r\n"
+                "User-Agent: \r\n"
                 "Accept-Encoding: gzip, deflate, br\r\n"
                 "Accept-Language: en-us,fr\r\n\r\n")};
   MockRead reads[] = {MockRead("HTTP/1.1 200 OK\r\n"
@@ -1437,7 +1437,7 @@ TEST_F(URLRequestHttpJobTest, AndroidCleartextPermittedTest) {
         context_.CreateRequest(GURL(test.url), DEFAULT_PRIORITY, &delegate,
                                TRAFFIC_ANNOTATION_FOR_TESTS);
     request->Start();
-    base::RunLoop().Run();
+    delegate.RunUntilComplete();
 
     if (test.should_block) {
       EXPECT_THAT(delegate.request_status(),
@@ -1500,7 +1500,7 @@ TEST_F(URLRequestHttpJobWebSocketTest, CreateHelperPassedThrough) {
                 "Upgrade: websocket\r\n"
                 "Origin: http://www.example.org\r\n"
                 "Sec-WebSocket-Version: 13\r\n"
-                "User-Agent:\r\n"
+                "User-Agent: \r\n"
                 "Accept-Encoding: gzip, deflate\r\n"
                 "Accept-Language: en-us,fr\r\n"
                 "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"

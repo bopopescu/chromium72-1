@@ -35,7 +35,9 @@ class DrawQuad;
 class RenderPassDrawQuad;
 class SharedQuadState;
 
-// A list of DrawQuad objects, sorted internally in front-to-back order.
+// A list of DrawQuad objects, sorted internally in front-to-back order. To
+// add a new quad drawn behind another quad, it must be placed after the other
+// quad.
 class VIZ_COMMON_EXPORT QuadList : public cc::ListContainer<DrawQuad> {
  public:
   QuadList();
@@ -88,7 +90,7 @@ class VIZ_COMMON_EXPORT RenderPass {
               const gfx::Rect& damage_rect,
               const gfx::Transform& transform_to_root_target,
               const cc::FilterOperations& filters,
-              const cc::FilterOperations& background_filters,
+              const cc::FilterOperations& backdrop_filters,
               const gfx::ColorSpace& color_space,
               bool has_transparent_background,
               bool cache_render_pass,
@@ -124,8 +126,8 @@ class VIZ_COMMON_EXPORT RenderPass {
   cc::FilterOperations filters;
 
   // Post-processing filters, applied to the pixels showing through the
-  // background of the render pass, from behind it.
-  cc::FilterOperations background_filters;
+  // backdrop of the render pass, from behind it.
+  cc::FilterOperations backdrop_filters;
 
   // The color space into which content will be rendered for this render pass.
   gfx::ColorSpace color_space = gfx::ColorSpace::CreateSRGB();

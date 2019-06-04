@@ -180,6 +180,12 @@ Polymer({
     const inAbout = settings.routes.ABOUT.contains(settings.getCurrentRoute());
     this.showPages_ = {about: inAbout, settings: !inAbout};
 
+    document.title = inAbout ?
+        loadTimeData.getStringF(
+            'settingsAltPageTitle', loadTimeData.getString('aboutPageTitle')) :
+        loadTimeData.getString('settings');
+
+
     // Calculate and set the overflow padding.
     this.updateOverscrollForPage_();
 
@@ -288,5 +294,11 @@ Polymer({
         });
       }, 0);
     });
+  },
+
+  focusSection: function() {
+    this.$$(this.showPages_.settings ? 'settings-basic-page' :
+                                       'settings-about-page')
+        .focusSection();
   },
 });

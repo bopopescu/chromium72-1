@@ -18,6 +18,7 @@
 
 namespace base {
 class SingleThreadTaskRunner;
+class Token;
 }  // namespace base
 
 namespace gfx {
@@ -54,6 +55,9 @@ class MEDIA_MOJO_EXPORT MojoMediaClient {
   virtual std::unique_ptr<AudioDecoder> CreateAudioDecoder(
       scoped_refptr<base::SingleThreadTaskRunner> task_runner);
 
+  virtual std::vector<mojom::SupportedVideoDecoderConfigPtr>
+  GetSupportedVideoDecoderConfigs();
+
   virtual std::unique_ptr<VideoDecoder> CreateVideoDecoder(
       scoped_refptr<base::SingleThreadTaskRunner> task_runner,
       MediaLog* media_log,
@@ -64,6 +68,7 @@ class MEDIA_MOJO_EXPORT MojoMediaClient {
   // Returns the Renderer to be used by MojoRendererService.
   // TODO(hubbe): Find out whether we should pass in |target_color_space| here.
   virtual std::unique_ptr<Renderer> CreateRenderer(
+      service_manager::mojom::InterfaceProvider* host_interfaces,
       scoped_refptr<base::SingleThreadTaskRunner> task_runner,
       MediaLog* media_log,
       const std::string& audio_device_id);
@@ -77,7 +82,7 @@ class MEDIA_MOJO_EXPORT MojoMediaClient {
 #if BUILDFLAG(ENABLE_LIBRARY_CDMS)
   // Creates a CdmProxy that proxies part of CDM functionalities to a different
   // entity, e.g. hardware CDM modules.
-  virtual std::unique_ptr<CdmProxy> CreateCdmProxy(const std::string& cdm_guid);
+  virtual std::unique_ptr<CdmProxy> CreateCdmProxy(const base::Token& cdm_guid);
 #endif  // BUILDFLAG(ENABLE_LIBRARY_CDMS)
 
  protected:

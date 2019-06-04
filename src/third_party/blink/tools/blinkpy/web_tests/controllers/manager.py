@@ -111,15 +111,13 @@ class Manager(object):
             # This is raised if --test-list doesn't exist
             return test_run_results.RunDetails(exit_code=exit_codes.NO_TESTS_EXIT_STATUS)
 
-        # Create a sorted list of test files so the subset chunk,
-        # if used, contains alphabetically consecutive tests.
-        if self._options.order == 'natural':
-            all_test_names.sort(key=self._port.test_key)
-        elif self._options.order == 'random':
-            all_test_names.sort()
-            random.Random(self._options.seed).shuffle(all_test_names)
-
         test_names, tests_in_other_chunks = self._finder.split_into_chunks(all_test_names)
+
+        if self._options.order == 'natural':
+            test_names.sort(key=self._port.test_key)
+        elif self._options.order == 'random':
+            test_names.sort()
+            random.Random(self._options.seed).shuffle(test_names)
 
         self._printer.write_update('Parsing expectations ...')
         self._expectations = test_expectations.TestExpectations(self._port, test_names)
@@ -137,24 +135,26 @@ class Manager(object):
             msg = 'No tests to run.'
             if self._options.zero_tests_executed_ok:
                 _log.info(msg)
-                code = exit_codes.OK_EXIT_STATUS
+                # Keep executing to produce valid (but empty) results.
             else:
                 _log.critical(msg)
                 code = exit_codes.NO_TESTS_EXIT_STATUS
-            return test_run_results.RunDetails(exit_code=code)
+                return test_run_results.RunDetails(exit_code=code)
 
         exit_code = self._set_up_run(tests_to_run)
         if exit_code:
             return test_run_results.RunDetails(exit_code=exit_code)
 
         if self._options.num_retries is None:
-            # Don't retry failures if an explicit list of tests was passed in.
-            should_retry_failures = len(paths) < len(test_names)
-            # Retry failures 3 times by default.
-            if should_retry_failures:
+            # If --test-list is passed, or if no test narrowing is specified,
+            # default to 3 retries. Otherwise [e.g. if tests are being passed by
+            # name], default to 0 retries.
+            if self._options.test_list or len(paths) < len(test_names):
                 self._options.num_retries = 3
-        else:
-            should_retry_failures = self._options.num_retries > 0
+            else:
+                self._options.num_retries = 0
+
+        should_retry_failures = self._options.num_retries > 0
 
         try:
             self._start_servers(tests_to_run)
@@ -162,7 +162,7 @@ class Manager(object):
                 run_results = self._run_test_loop(tests_to_run, tests_to_skip)
             else:
                 run_results = self._run_test_once(tests_to_run, tests_to_skip, should_retry_failures)
-            initial_results, all_retry_results, enabled_pixel_tests_in_retry = run_results
+            initial_results, all_retry_results = run_results
         finally:
             self._stop_servers()
             self._clean_up_run()
@@ -176,11 +176,10 @@ class Manager(object):
 
         self._printer.write_update('Summarizing results ...')
         summarized_full_results = test_run_results.summarize_results(
-            self._port, self._expectations, initial_results, all_retry_results,
-            enabled_pixel_tests_in_retry)
+            self._port, self._expectations, initial_results, all_retry_results)
         summarized_failing_results = test_run_results.summarize_results(
             self._port, self._expectations, initial_results, all_retry_results,
-            enabled_pixel_tests_in_retry, only_include_failing=True)
+            only_include_failing=True)
 
         exit_code = summarized_failing_results['num_regressions']
         if exit_code > exit_codes.MAX_FAILURES_EXIT_STATUS:
@@ -207,7 +206,7 @@ class Manager(object):
 
         return test_run_results.RunDetails(
             exit_code, summarized_full_results, summarized_failing_results,
-            initial_results, all_retry_results, enabled_pixel_tests_in_retry)
+            initial_results, all_retry_results)
 
     def _run_test_loop(self, tests_to_run, tests_to_skip):
         # Don't show results in a new browser window because we're already
@@ -215,7 +214,7 @@ class Manager(object):
         self._options.show_results = False
 
         while True:
-            initial_results, all_retry_results, enabled_pixel_tests_in_retry = self._run_test_once(
+            initial_results, all_retry_results = self._run_test_once(
                 tests_to_run, tests_to_skip, should_retry_failures=False)
             for name in initial_results.failures_by_name:
                 failure = initial_results.failures_by_name[name][0]
@@ -231,11 +230,9 @@ class Manager(object):
                 'Interactive watch mode: (q)uit (r)etry\n').lower()
 
             if user_input == 'q' or user_input == 'quit':
-                return (initial_results, all_retry_results, enabled_pixel_tests_in_retry)
+                return (initial_results, all_retry_results)
 
     def _run_test_once(self, tests_to_run, tests_to_skip, should_retry_failures):
-        enabled_pixel_tests_in_retry = False
-
         num_workers = self._port.num_workers(int(self._options.child_processes))
 
         initial_results = self._run_tests(
@@ -249,8 +246,6 @@ class Manager(object):
         tests_to_retry = self._tests_to_retry(initial_results)
         all_retry_results = []
         if should_retry_failures and tests_to_retry:
-            enabled_pixel_tests_in_retry = self._force_pixel_tests_if_needed()
-
             for retry_attempt in xrange(1, self._options.num_retries + 1):
                 if not tests_to_retry:
                     break
@@ -269,10 +264,7 @@ class Manager(object):
                 all_retry_results.append(retry_results)
 
                 tests_to_retry = self._tests_to_retry(retry_results)
-
-            if enabled_pixel_tests_in_retry:
-                self._options.pixel_tests = False
-        return (initial_results, all_retry_results, enabled_pixel_tests_in_retry)
+        return (initial_results, all_retry_results)
 
     def _collect_tests(self, args):
         return self._finder.find_tests(args, test_list=self._options.test_list,
@@ -384,7 +376,7 @@ class Manager(object):
         # Check that the system dependencies (themes, fonts, ...) are correct.
         if not self._options.nocheck_sys_deps:
             self._printer.write_update('Checking system dependencies ...')
-            exit_code = self._port.check_sys_deps(self._needs_servers(test_names))
+            exit_code = self._port.check_sys_deps()
             if exit_code:
                 return exit_code
 
@@ -395,10 +387,6 @@ class Manager(object):
 
         test_inputs = []
         for _ in xrange(iterations):
-            # TODO(crbug.com/650747): We may want to switch the two loops below
-            # to make the behavior consistent with gtest runner (--gtest_repeat
-            # is an alias for --repeat-each now), which looks like "ABCABCABC".
-            # And remember to update the help text when we do so.
             for test in tests_to_run:
                 for _ in xrange(repeat_each):
                     test_inputs.append(self._test_input_for_file(test))
@@ -442,12 +430,6 @@ class Manager(object):
         sys.stderr.flush()
         _log.debug('Cleaning up port')
         self._port.clean_up_test_run()
-
-    def _force_pixel_tests_if_needed(self):
-        if self._options.pixel_tests:
-            return False
-        self._options.pixel_tests = True
-        return True
 
     def _look_for_new_crash_logs(self, run_results, start_time):
         """Looks for and writes new crash logs, at the end of the test run.

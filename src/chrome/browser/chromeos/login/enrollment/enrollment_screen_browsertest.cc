@@ -8,15 +8,16 @@
 #include "base/run_loop.h"
 #include "chrome/browser/chromeos/login/enrollment/enrollment_screen.h"
 #include "chrome/browser/chromeos/login/enrollment/mock_enrollment_screen.h"
+#include "chrome/browser/chromeos/login/login_wizard.h"
 #include "chrome/browser/chromeos/login/oobe_screen.h"
 #include "chrome/browser/chromeos/login/screens/mock_base_screen_delegate.h"
 #include "chrome/browser/chromeos/login/startup_utils.h"
 #include "chrome/browser/chromeos/login/test/js_checker.h"
 #include "chrome/browser/chromeos/login/test/oobe_screen_waiter.h"
-#include "chrome/browser/chromeos/login/test/wizard_in_process_browser_test.h"
 #include "chrome/browser/chromeos/login/ui/login_display_host.h"
 #include "chrome/browser/chromeos/login/ui/webui_login_view.h"
 #include "chrome/browser/chromeos/login/wizard_controller.h"
+#include "chrome/test/base/in_process_browser_test.h"
 #include "chromeos/chromeos_switches.h"
 #include "chromeos/chromeos_test_utils.h"
 #include "content/public/test/test_utils.h"
@@ -29,10 +30,20 @@ using testing::_;
 
 namespace chromeos {
 
-class EnrollmentScreenTest : public WizardInProcessBrowserTest {
+class EnrollmentScreenTest : public InProcessBrowserTest {
  public:
-  EnrollmentScreenTest()
-      : WizardInProcessBrowserTest(OobeScreen::SCREEN_OOBE_ENROLLMENT) {}
+  EnrollmentScreenTest() = default;
+  ~EnrollmentScreenTest() override = default;
+
+  // InProcessBrowserTest:
+  void SetUpCommandLine(base::CommandLine* command_line) override {
+    InProcessBrowserTest::SetUpCommandLine(command_line);
+    command_line->AppendArg(switches::kLoginManager);
+  }
+  void SetUpOnMainThread() override {
+    InProcessBrowserTest::SetUpOnMainThread();
+    ShowLoginWizard(OobeScreen::SCREEN_OOBE_ENROLLMENT);
+  }
 
  private:
   DISALLOW_COPY_AND_ASSIGN(EnrollmentScreenTest);
@@ -54,7 +65,7 @@ IN_PROC_BROWSER_TEST_F(EnrollmentScreenTest, TestCancel) {
             enrollment_screen);
 
   EXPECT_CALL(mock_base_screen_delegate,
-              OnExit(_, ScreenExitCode::ENTERPRISE_ENROLLMENT_COMPLETED, _))
+              OnExit(ScreenExitCode::ENTERPRISE_ENROLLMENT_COMPLETED))
       .WillOnce(InvokeWithoutArgs(&run_loop, &base::RunLoop::Quit));
   enrollment_screen->OnCancel();
   content::RunThisRunLoop(&run_loop);
@@ -119,7 +130,7 @@ IN_PROC_BROWSER_TEST_F(AttestationAuthEnrollmentScreenTest, TestCancel) {
             enrollment_screen);
 
   EXPECT_CALL(mock_base_screen_delegate,
-              OnExit(_, ScreenExitCode::ENTERPRISE_ENROLLMENT_COMPLETED, _))
+              OnExit(ScreenExitCode::ENTERPRISE_ENROLLMENT_COMPLETED))
       .WillOnce(InvokeWithoutArgs(&run_loop, &base::RunLoop::Quit));
   ASSERT_FALSE(enrollment_screen->AdvanceToNextAuth());
   enrollment_screen->OnCancel();
@@ -142,7 +153,7 @@ IN_PROC_BROWSER_TEST_F(EnrollmentScreenTest, EnrollmentSpinner) {
   ASSERT_TRUE(view);
 
   test::JSChecker checker(
-      LoginDisplayHost::default_host()->GetWebUILoginView()->GetWebContents());
+      LoginDisplayHost::default_host()->GetOobeWebContents());
 
   // Run through the flow
   view->Show();
@@ -158,7 +169,7 @@ IN_PROC_BROWSER_TEST_F(EnrollmentScreenTest, EnrollmentSpinner) {
 
   view->ShowAttestationBasedEnrollmentSuccessScreen("fake domain");
   checker.ExpectTrue(
-      "window.getComputedStyle(document.getElementById('oauth-enroll-step-abe-"
+      "window.getComputedStyle(document.getElementById('oauth-enroll-step-"
       "success')).display !== 'none'");
 }
 
@@ -193,7 +204,7 @@ IN_PROC_BROWSER_TEST_F(ForcedAttestationAuthEnrollmentScreenTest, TestCancel) {
             enrollment_screen);
 
   EXPECT_CALL(mock_base_screen_delegate,
-              OnExit(_, ScreenExitCode::ENTERPRISE_ENROLLMENT_BACK, _))
+              OnExit(ScreenExitCode::ENTERPRISE_ENROLLMENT_BACK))
       .WillOnce(InvokeWithoutArgs(&run_loop, &base::RunLoop::Quit));
   ASSERT_FALSE(enrollment_screen->AdvanceToNextAuth());
   enrollment_screen->OnCancel();
@@ -241,7 +252,7 @@ IN_PROC_BROWSER_TEST_F(MultiAuthEnrollmentScreenTest, TestCancel) {
             enrollment_screen);
 
   EXPECT_CALL(mock_base_screen_delegate,
-              OnExit(_, ScreenExitCode::ENTERPRISE_ENROLLMENT_BACK, _))
+              OnExit(ScreenExitCode::ENTERPRISE_ENROLLMENT_BACK))
       .WillOnce(InvokeWithoutArgs(&run_loop, &base::RunLoop::Quit));
   ASSERT_TRUE(enrollment_screen->AdvanceToNextAuth());
   enrollment_screen->OnCancel();
@@ -287,7 +298,7 @@ IN_PROC_BROWSER_TEST_F(ProvisionedEnrollmentScreenTest, TestBackButton) {
             enrollment_screen);
 
   EXPECT_CALL(mock_base_screen_delegate,
-              OnExit(_, ScreenExitCode::ENTERPRISE_ENROLLMENT_BACK, _))
+              OnExit(ScreenExitCode::ENTERPRISE_ENROLLMENT_BACK))
       .WillOnce(InvokeWithoutArgs(&run_loop, &base::RunLoop::Quit));
   enrollment_screen->OnCancel();
   content::RunThisRunLoop(&run_loop);

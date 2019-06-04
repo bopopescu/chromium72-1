@@ -15,8 +15,10 @@
 #include "base/compiler_specific.h"
 #include "base/files/file_path_watcher.h"
 #include "base/macros.h"
+#include "chrome/browser/chromeos/crostini/crostini_share_path.h"
 #include "chrome/browser/chromeos/drive/drive_integration_service.h"
 #include "chrome/browser/chromeos/extensions/file_manager/device_event_router.h"
+#include "chrome/browser/chromeos/extensions/file_manager/drivefs_event_router.h"
 #include "chrome/browser/chromeos/extensions/file_manager/job_event_router.h"
 #include "chrome/browser/chromeos/file_manager/file_watcher.h"
 #include "chrome/browser/chromeos/file_manager/fileapi_util.h"
@@ -57,7 +59,9 @@ class EventRouter : public KeyedService,
                     public drive::FileSystemObserver,
                     public drive::DriveServiceObserver,
                     public VolumeManagerObserver,
-                    public arc::ArcIntentHelperObserver {
+                    public arc::ArcIntentHelperObserver,
+                    public drive::DriveIntegrationServiceObserver,
+                    public crostini::CrostiniSharePath::Observer {
  public:
   typedef base::Callback<void(const base::FilePath& virtual_path,
                               const drive::FileChange* list,
@@ -131,10 +135,8 @@ class EventRouter : public KeyedService,
                         const base::FilePath& drive_path) override;
 
   // VolumeManagerObserver overrides.
-  void OnDiskAdded(const chromeos::disks::DiskMountManager::Disk& disk,
-                   bool mounting) override;
-  void OnDiskRemoved(
-      const chromeos::disks::DiskMountManager::Disk& disk) override;
+  void OnDiskAdded(const chromeos::disks::Disk& disk, bool mounting) override;
+  void OnDiskRemoved(const chromeos::disks::Disk& disk) override;
   void OnDeviceAdded(const std::string& device_path) override;
   void OnDeviceRemoved(const std::string& device_path) override;
   void OnVolumeMounted(chromeos::MountError error_code,
@@ -149,10 +151,19 @@ class EventRouter : public KeyedService,
   void SetDispatchDirectoryChangeEventImplForTesting(
       const DispatchDirectoryChangeEventImplCallback& callback);
 
+  // DriveIntegrationServiceObserver override.
+  void OnFileSystemMountFailed() override;
+
+  // crostini::CrostiniSharePath::Observer overrides
+  void OnUnshare(const base::FilePath& path) override;
+
   // Returns a weak pointer for the event router.
   base::WeakPtr<EventRouter> GetWeakPtr();
 
  private:
+  FRIEND_TEST_ALL_PREFIXES(EventRouterTest,
+                           PopulateCrostiniSharedPathsChangedEvent);
+
   // Starts observing file system change events.
   void ObserveEvents();
 
@@ -181,7 +192,7 @@ class EventRouter : public KeyedService,
   // Sends directory change event, after converting the file definition to entry
   // definition.
   void DispatchDirectoryChangeEventWithEntryDefinition(
-      const linked_ptr<drive::FileChange> list,
+      std::unique_ptr<drive::FileChange> list,
       const std::string* extension_id,
       bool watcher_error,
       const EntryDefinition& entry_definition);
@@ -192,26 +203,13 @@ class EventRouter : public KeyedService,
       chromeos::MountError error,
       const Volume& volume);
 
-  // If needed, opens a file manager window for the removable device mounted at
-  // |mount_path|. Disk.mount_path() is empty, since it is being filled out
-  // after calling notifying observers by DiskMountManager.
-  void ShowRemovableDeviceInFileManager(VolumeType type,
-                                        const base::FilePath& mount_path);
-
-  // Sends onFileTransferUpdate event right now if |immediate| is set. Otherwise
-  // it refrains from sending for a short while, and after that it sends the
-  // most recently scheduled event once.
-  // The delay is for waiting subsequent 'added' events to come after the first
-  // one when multiple tasks are added. This way, we can avoid frequent UI
-  // update caused by differences between singular and plural cases.
-  void ScheduleDriveFileTransferEvent(const drive::JobInfo& job_info,
-                                      const std::string& status,
-                                      bool immediate);
-
-  // Sends the most recently scheduled onFileTransferUpdated event to
-  // extensions.
-  // This is used for implementing ScheduledDriveFileTransferEvent().
-  void SendDriveFileTransferEvent();
+  // Populate the paths changed event.
+  static void PopulateCrostiniSharedPathsChangedEvent(
+      extensions::api::file_manager_private::CrostiniSharedPathsChangedEvent&
+          event,
+      const std::string& extension_id,
+      const std::string& mount_name,
+      const std::string& full_path);
 
   base::Time last_copy_progress_event_;
 
@@ -221,6 +219,7 @@ class EventRouter : public KeyedService,
 
   std::unique_ptr<DeviceEventRouter> device_event_router_;
   std::unique_ptr<JobEventRouter> job_event_router_;
+  std::unique_ptr<DriveFsEventRouter> drivefs_event_router_;
 
   DispatchDirectoryChangeEventImplCallback
       dispatch_directory_change_event_impl_;

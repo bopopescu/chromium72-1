@@ -13,7 +13,7 @@
 #include "base/bind.h"
 #include "base/optional.h"
 #include "base/stl_util.h"
-#include "base/task_scheduler/post_task.h"
+#include "base/task/post_task.h"
 #include "chrome/browser/chromeos/printing/specifics_translation.h"
 #include "components/sync/base/report_unrecoverable_error.h"
 #include "components/sync/model/model_type_change_processor.h"
@@ -258,7 +258,7 @@ void PrintersSyncBridge::GetData(StorageKeyList storage_keys,
   std::move(callback).Run(std::move(batch));
 }
 
-void PrintersSyncBridge::GetAllData(DataCallback callback) {
+void PrintersSyncBridge::GetAllDataForDebugging(DataCallback callback) {
   auto batch = std::make_unique<syncer::MutableDataBatch>();
   {
     base::AutoLock lock(data_lock_);

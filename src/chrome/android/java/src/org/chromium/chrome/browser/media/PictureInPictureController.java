@@ -19,9 +19,9 @@ import org.chromium.base.Callback;
 import org.chromium.base.Log;
 import org.chromium.base.library_loader.LibraryLoader;
 import org.chromium.base.metrics.RecordHistogram;
-import org.chromium.chrome.browser.AppHooks;
 import org.chromium.chrome.browser.ChromeActivity;
 import org.chromium.chrome.browser.ChromeFeatureList;
+import org.chromium.chrome.browser.infobar.InfoBarContainer;
 import org.chromium.chrome.browser.rappor.RapporServiceBridge;
 import org.chromium.chrome.browser.tab.EmptyTabObserver;
 import org.chromium.chrome.browser.tab.Tab;
@@ -99,12 +99,11 @@ public class PictureInPictureController {
         if (webContents == null) return false;
 
         // Non-null WebContents implies the native library has been loaded.
-        assert LibraryLoader.isInitialized();
+        assert LibraryLoader.getInstance().isInitialized();
         if (!ChromeFeatureList.isEnabled(ChromeFeatureList.VIDEO_PERSISTENCE)) return false;
 
         // Only auto-PiP if there is a playing fullscreen video that allows PiP.
-        if (!AppHooks.get().shouldDetectVideoFullscreen()
-                || !webContents.hasActiveEffectivelyFullscreenVideo()
+        if (!webContents.hasActiveEffectivelyFullscreenVideo()
                 || !webContents.isPictureInPictureAllowedForFullscreenVideo()) {
             recordAttemptResult(METRICS_ATTEMPT_RESULT_NO_VIDEO);
             return false;
@@ -193,13 +192,13 @@ public class PictureInPictureController {
         webContents.setHasPersistentVideo(true);
 
         // We don't want InfoBars displaying while in PiP, they cover too much content.
-        activity.getActivityTab().getInfoBarContainer().setHidden(true);
+        InfoBarContainer.get(activity.getActivityTab()).setHidden(true);
 
         mOnLeavePipCallbacks.add(new Callback<ChromeActivity>() {
             @Override
             public void onResult(ChromeActivity activity2) {
                 webContents.setHasPersistentVideo(false);
-                activity.getActivityTab().getInfoBarContainer().setHidden(false);
+                InfoBarContainer.get(activity.getActivityTab()).setHidden(false);
             }
         });
 
@@ -332,7 +331,7 @@ public class PictureInPictureController {
         }
 
         @Override
-        public void onCrash(Tab tab, boolean sadTabShown) {
+        public void onCrash(Tab tab) {
             dismissActivity(mActivity, METRICS_END_REASON_CRASH);
         }
 

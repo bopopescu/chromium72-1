@@ -12,10 +12,39 @@
 #import "base/mac/scoped_nsobject.h"
 #include "base/macros.h"
 #import "testing/gtest_mac.h"
+#import "ui/base/cocoa/views_hostable.h"
 #include "ui/views/controls/native/native_view_host.h"
 #include "ui/views/controls/native/native_view_host_test_base.h"
 #include "ui/views/view.h"
 #include "ui/views/widget/widget.h"
+
+class TestViewsHostable : public ui::ViewsHostableView {
+ public:
+  id parent_accessibility_element() const {
+    return parent_accessibility_element_;
+  }
+
+ private:
+  // ui::ViewsHostableView:
+  void OnViewsHostableAttached(ui::ViewsHostableView::Host* host) override {
+    parent_accessibility_element_ = host->GetAccessibilityElement();
+  }
+  void OnViewsHostableDetached() override {
+    parent_accessibility_element_ = nil;
+  }
+  void OnViewsHostableShow(const gfx::Rect& bounds_in_window) override {}
+  void OnViewsHostableHide() override {}
+  void OnViewsHostableMakeFirstResponder() override {}
+
+  id parent_accessibility_element_ = nil;
+};
+
+@interface TestViewsHostableView : NSView<ViewsHostable>
+@property(nonatomic, assign) ui::ViewsHostableView* viewsHostableView;
+@end
+@implementation TestViewsHostableView
+@synthesize viewsHostableView = viewsHostableView_;
+@end
 
 namespace views {
 
@@ -47,7 +76,7 @@ class NativeViewHostMacTest : public test::NativeViewHostTestBase {
     toplevel()->GetRootView()->AddChildView(host());
     EXPECT_TRUE(native_host());
 
-    host()->Attach(native_view_);
+    host()->Attach(native_view_.get());
   }
 
  protected:
@@ -89,7 +118,7 @@ TEST_F(NativeViewHostMacTest, Attach) {
   EXPECT_FALSE([native_view_ window]);
   EXPECT_NSEQ(NSZeroRect, [native_view_ frame]);
 
-  host()->Attach(native_view_);
+  host()->Attach(native_view_.get());
   EXPECT_TRUE([native_view_ superview]);
   EXPECT_TRUE([native_view_ window]);
 
@@ -98,6 +127,27 @@ TEST_F(NativeViewHostMacTest, Attach) {
   EXPECT_NSEQ(NSMakeRect(10, bottom, 80, 60), [native_view_ frame]);
 
   DestroyHost();
+}
+
+// Ensure the native view is integrated into the views accessibility
+// hierarchy if the native view conforms to the AccessibilityParent
+// protocol.
+TEST_F(NativeViewHostMacTest, AccessibilityParent) {
+  CreateHost();
+  host()->Detach();
+
+  base::scoped_nsobject<TestViewsHostableView> view(
+      [[TestViewsHostableView alloc] init]);
+  TestViewsHostable views_hostable;
+  [view setViewsHostableView:&views_hostable];
+
+  host()->Attach(view.get());
+  EXPECT_NSEQ(views_hostable.parent_accessibility_element(),
+              toplevel()->GetRootView()->GetNativeViewAccessible());
+
+  host()->Detach();
+  DestroyHost();
+  EXPECT_FALSE(views_hostable.parent_accessibility_element());
 }
 
 // Test that the content windows' bounds are set to the correct values while the
@@ -136,14 +186,14 @@ TEST_F(NativeViewHostMacTest, NativeViewHidden) {
 
   host()->SetVisible(false);
   EXPECT_FALSE([native_view_ isHidden]);  // Stays visible.
-  host()->Attach(native_view_);
+  host()->Attach(native_view_.get());
   EXPECT_TRUE([native_view_ isHidden]);  // Hidden when attached.
 
   host()->Detach();
   [native_view_ setHidden:YES];
   host()->SetVisible(true);
   EXPECT_TRUE([native_view_ isHidden]);  // Stays hidden.
-  host()->Attach(native_view_);
+  host()->Attach(native_view_.get());
   EXPECT_FALSE([native_view_ isHidden]);  // Made visible when attached.
 
   EXPECT_TRUE([native_view_ superview]);

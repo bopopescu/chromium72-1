@@ -11,11 +11,11 @@
 #include "net/third_party/quic/core/crypto/cert_compressor.h"
 #include "net/third_party/quic/core/crypto/common_cert_set.h"
 #include "net/third_party/quic/core/crypto/crypto_handshake.h"
-#include "net/third_party/quic/core/crypto/crypto_server_config_protobuf.h"
 #include "net/third_party/quic/core/crypto/crypto_utils.h"
 #include "net/third_party/quic/core/crypto/proof_source.h"
 #include "net/third_party/quic/core/crypto/quic_crypto_server_config.h"
 #include "net/third_party/quic/core/crypto/quic_random.h"
+#include "net/third_party/quic/core/proto/crypto_server_config.pb.h"
 #include "net/third_party/quic/core/quic_socket_address_coder.h"
 #include "net/third_party/quic/core/quic_utils.h"
 #include "net/third_party/quic/core/tls_server_handshaker.h"
@@ -35,9 +35,7 @@
 #include "net/third_party/quic/test_tools/quic_test_utils.h"
 #include "third_party/boringssl/src/include/openssl/sha.h"
 
-using std::string;
-
-namespace net {
+namespace quic {
 namespace test {
 
 namespace {
@@ -113,6 +111,7 @@ class CryptoServerTest : public QuicTestWithParam<TestParams> {
         config_(QuicCryptoServerConfig::TESTING,
                 rand_,
                 crypto_test_utils::ProofSourceForTesting(),
+                KeyExchangeSource::Default(),
                 TlsServerHandshaker::CreateSslCtx()),
         peer_(&config_),
         compressed_certs_cache_(
@@ -178,7 +177,7 @@ class CryptoServerTest : public QuicTestWithParam<TestParams> {
 
     QuicStringPiece scfg;
     ASSERT_TRUE(out_.GetStringPiece(kSCFG, &scfg));
-    server_config_ = CryptoFramer::ParseMessage(scfg, Perspective::IS_CLIENT);
+    server_config_ = CryptoFramer::ParseMessage(scfg);
 
     QuicStringPiece scid;
     ASSERT_TRUE(server_config_->GetStringPiece(kSCID, &scid));
@@ -287,11 +286,10 @@ class CryptoServerTest : public QuicTestWithParam<TestParams> {
       if (should_succeed_) {
         ASSERT_EQ(error, QUIC_NO_ERROR)
             << "Message failed with error " << error_details << ": "
-            << result_->client_hello.DebugString(Perspective::IS_SERVER);
+            << result_->client_hello.DebugString();
       } else {
         ASSERT_NE(error, QUIC_NO_ERROR)
-            << "Message didn't fail: "
-            << result_->client_hello.DebugString(Perspective::IS_SERVER);
+            << "Message didn't fail: " << result_->client_hello.DebugString();
 
         EXPECT_TRUE(error_details.find(error_substr_) != QuicString::npos)
             << error_substr_ << " not in " << error_details;
@@ -822,7 +820,7 @@ TEST_P(CryptoServerTest, ProofForSuppliedServerConfig) {
   EXPECT_TRUE(out_.GetStringPiece(kPROF, &proof));
   EXPECT_TRUE(out_.GetStringPiece(kSCFG, &scfg_str));
   std::unique_ptr<CryptoHandshakeMessage> scfg(
-      CryptoFramer::ParseMessage(scfg_str, Perspective::IS_CLIENT));
+      CryptoFramer::ParseMessage(scfg_str));
   QuicStringPiece scid;
   EXPECT_TRUE(scfg->GetStringPiece(kSCID, &scid));
   EXPECT_NE(scid, kOldConfigId);
@@ -846,11 +844,12 @@ TEST_P(CryptoServerTest, ProofForSuppliedServerConfig) {
       new DummyProofVerifierCallback());
   QuicString chlo_hash;
   CryptoUtils::HashHandshakeMessage(msg, &chlo_hash, Perspective::IS_SERVER);
-  EXPECT_EQ(QUIC_SUCCESS, proof_verifier->VerifyProof(
-                              "test.example.com", 443, (string(scfg_str)),
-                              client_version_.transport_version, chlo_hash,
-                              certs, "", (string(proof)), verify_context.get(),
-                              &error_details, &details, std::move(callback)));
+  EXPECT_EQ(QUIC_SUCCESS,
+            proof_verifier->VerifyProof(
+                "test.example.com", 443, (QuicString(scfg_str)),
+                client_version_.transport_version, chlo_hash, certs, "",
+                (QuicString(proof)), verify_context.get(), &error_details,
+                &details, std::move(callback)));
 }
 
 TEST_P(CryptoServerTest, RejectInvalidXlct) {
@@ -1007,17 +1006,18 @@ TEST_F(CryptoServerConfigGenerationTest, Determinism) {
 
   QuicCryptoServerConfig a(QuicCryptoServerConfig::TESTING, &rand_a,
                            crypto_test_utils::ProofSourceForTesting(),
+                           KeyExchangeSource::Default(),
                            TlsServerHandshaker::CreateSslCtx());
   QuicCryptoServerConfig b(QuicCryptoServerConfig::TESTING, &rand_b,
                            crypto_test_utils::ProofSourceForTesting(),
+                           KeyExchangeSource::Default(),
                            TlsServerHandshaker::CreateSslCtx());
   std::unique_ptr<CryptoHandshakeMessage> scfg_a(
       a.AddDefaultConfig(&rand_a, &clock, options));
   std::unique_ptr<CryptoHandshakeMessage> scfg_b(
       b.AddDefaultConfig(&rand_b, &clock, options));
 
-  ASSERT_EQ(scfg_a->DebugString(Perspective::IS_SERVER),
-            scfg_b->DebugString(Perspective::IS_SERVER));
+  ASSERT_EQ(scfg_a->DebugString(), scfg_b->DebugString());
 }
 
 TEST_F(CryptoServerConfigGenerationTest, SCIDVaries) {
@@ -1030,10 +1030,12 @@ TEST_F(CryptoServerConfigGenerationTest, SCIDVaries) {
 
   QuicCryptoServerConfig a(QuicCryptoServerConfig::TESTING, &rand_a,
                            crypto_test_utils::ProofSourceForTesting(),
+                           KeyExchangeSource::Default(),
                            TlsServerHandshaker::CreateSslCtx());
   rand_b.ChangeValue();
   QuicCryptoServerConfig b(QuicCryptoServerConfig::TESTING, &rand_b,
                            crypto_test_utils::ProofSourceForTesting(),
+                           KeyExchangeSource::Default(),
                            TlsServerHandshaker::CreateSslCtx());
   std::unique_ptr<CryptoHandshakeMessage> scfg_a(
       a.AddDefaultConfig(&rand_a, &clock, options));
@@ -1054,6 +1056,7 @@ TEST_F(CryptoServerConfigGenerationTest, SCIDIsHashOfServerConfig) {
 
   QuicCryptoServerConfig a(QuicCryptoServerConfig::TESTING, &rand_a,
                            crypto_test_utils::ProofSourceForTesting(),
+                           KeyExchangeSource::Default(),
                            TlsServerHandshaker::CreateSslCtx());
   std::unique_ptr<CryptoHandshakeMessage> scfg(
       a.AddDefaultConfig(&rand_a, &clock, options));
@@ -1065,7 +1068,7 @@ TEST_F(CryptoServerConfigGenerationTest, SCIDIsHashOfServerConfig) {
 
   scfg->Erase(kSCID);
   scfg->MarkDirty();
-  const QuicData& serialized(scfg->GetSerialized(Perspective::IS_SERVER));
+  const QuicData& serialized(scfg->GetSerialized());
 
   uint8_t digest[SHA256_DIGEST_LENGTH];
   SHA256(reinterpret_cast<const uint8_t*>(serialized.data()),
@@ -1148,4 +1151,4 @@ TEST_P(CryptoServerTestOldVersion, XlctNotRequired) {
 }
 
 }  // namespace test
-}  // namespace net
+}  // namespace quic

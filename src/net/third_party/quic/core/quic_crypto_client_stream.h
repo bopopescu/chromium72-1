@@ -16,10 +16,11 @@
 #include "net/third_party/quic/core/quic_crypto_handshaker.h"
 #include "net/third_party/quic/core/quic_crypto_stream.h"
 #include "net/third_party/quic/core/quic_server_id.h"
+#include "net/third_party/quic/core/quic_session.h"
 #include "net/third_party/quic/platform/api/quic_export.h"
 #include "net/third_party/quic/platform/api/quic_string.h"
 
-namespace net {
+namespace quic {
 
 class QUIC_EXPORT_PRIVATE QuicCryptoClientStreamBase : public QuicCryptoStream {
  public:
@@ -131,9 +132,11 @@ class QUIC_EXPORT_PRIVATE QuicCryptoClientStream
 
   QuicCryptoClientStream(const QuicServerId& server_id,
                          QuicSession* session,
-                         ProofVerifyContext* verify_context,
+                         std::unique_ptr<ProofVerifyContext> verify_context,
                          QuicCryptoClientConfig* crypto_config,
                          ProofHandler* proof_handler);
+  QuicCryptoClientStream(const QuicCryptoClientStream&) = delete;
+  QuicCryptoClientStream& operator=(const QuicCryptoClientStream&) = delete;
 
   ~QuicCryptoClientStream() override;
 
@@ -160,12 +163,15 @@ class QUIC_EXPORT_PRIVATE QuicCryptoClientStream
 
   QuicString chlo_hash() const;
 
+ protected:
+  void set_handshaker(std::unique_ptr<HandshakerDelegate> handshaker) {
+    handshaker_ = std::move(handshaker);
+  }
+
  private:
   std::unique_ptr<HandshakerDelegate> handshaker_;
-
-  DISALLOW_COPY_AND_ASSIGN(QuicCryptoClientStream);
 };
 
-}  // namespace net
+}  // namespace quic
 
 #endif  // NET_THIRD_PARTY_QUIC_CORE_QUIC_CRYPTO_CLIENT_STREAM_H_

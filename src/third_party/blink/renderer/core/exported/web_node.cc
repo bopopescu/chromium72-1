@@ -36,8 +36,7 @@
 #include "third_party/blink/public/web/web_dom_event.h"
 #include "third_party/blink/public/web/web_element.h"
 #include "third_party/blink/public/web/web_element_collection.h"
-#include "third_party/blink/renderer/bindings/core/v8/exception_state.h"
-#include "third_party/blink/renderer/core/dom/ax_object_cache.h"
+#include "third_party/blink/renderer/core/accessibility/ax_object_cache.h"
 #include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/dom/element.h"
 #include "third_party/blink/renderer/core/dom/events/event.h"
@@ -52,6 +51,7 @@
 #include "third_party/blink/renderer/core/html/html_element.h"
 #include "third_party/blink/renderer/core/layout/layout_embedded_content.h"
 #include "third_party/blink/renderer/core/layout/layout_object.h"
+#include "third_party/blink/renderer/platform/bindings/exception_state.h"
 
 namespace blink {
 
@@ -133,6 +133,8 @@ bool WebNode::IsCommentNode() const {
 bool WebNode::IsFocusable() const {
   if (!private_->IsElementNode())
     return false;
+  if (!private_->GetDocument().IsRenderingReady())
+    return false;
   private_->GetDocument().UpdateStyleAndLayoutTreeForNode(private_.Get());
   return ToElement(private_.Get())->IsFocusable();
 }
@@ -174,7 +176,7 @@ WebElementCollection WebNode::GetElementsByHTMLTagName(
   if (private_->IsContainerNode()) {
     return WebElementCollection(
         ToContainerNode(private_.Get())
-            ->getElementsByTagNameNS(HTMLNames::xhtmlNamespaceURI, tag));
+            ->getElementsByTagNameNS(html_names::xhtmlNamespaceURI, tag));
   }
   return WebElementCollection();
 }

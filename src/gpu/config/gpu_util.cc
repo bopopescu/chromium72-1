@@ -5,6 +5,8 @@
 #include "gpu/config/gpu_util.h"
 
 #include <memory>
+#include <set>
+#include <string>
 #include <vector>
 
 #include "base/command_line.h"
@@ -18,21 +20,43 @@
 #include "gpu/config/gpu_driver_bug_workaround_type.h"
 #include "gpu/config/gpu_feature_type.h"
 #include "gpu/config/gpu_finch_features.h"
+#include "gpu/config/gpu_info.h"
 #include "gpu/config/gpu_info_collector.h"
+#include "gpu/config/gpu_preferences.h"
 #include "gpu/config/gpu_switches.h"
-#include "ui/gl/extension_set.h"
+#include "ui/gfx/extension_set.h"
 #include "ui/gl/gl_features.h"
 #include "ui/gl/gl_switches.h"
 
 #if defined(OS_ANDROID)
 #include "base/no_destructor.h"
 #include "base/synchronization/lock.h"
+#include "ui/gl/android/android_surface_control_compat.h"
 #include "ui/gl/init/gl_factory.h"
 #endif  // OS_ANDROID
 
 namespace gpu {
 
 namespace {
+
+GpuFeatureStatus GetAndroidSurfaceControlFeatureStatus(
+    const std::set<int>& blacklisted_features,
+    const GpuPreferences& gpu_preferences) {
+#if !defined(OS_ANDROID)
+  return kGpuFeatureStatusDisabled;
+#else
+  if (blacklisted_features.count(GPU_FEATURE_TYPE_ANDROID_SURFACE_CONTROL))
+    return kGpuFeatureStatusBlacklisted;
+
+  if (!gpu_preferences.enable_android_surface_control)
+    return kGpuFeatureStatusDisabled;
+
+  if (!gl::SurfaceControl::IsSupported())
+    return kGpuFeatureStatusDisabled;
+
+  return kGpuFeatureStatusEnabled;
+#endif
+}
 
 GpuFeatureStatus GetGpuRasterizationFeatureStatus(
     const std::set<int>& blacklisted_features,
@@ -48,6 +72,42 @@ GpuFeatureStatus GetGpuRasterizationFeatureStatus(
   // Gpu Rasterization on platforms that are not fully enabled is controlled by
   // a finch experiment.
   if (!base::FeatureList::IsEnabled(features::kDefaultEnableGpuRasterization))
+    return kGpuFeatureStatusDisabled;
+
+  return kGpuFeatureStatusEnabled;
+}
+
+GpuFeatureStatus GetOopRasterizationFeatureStatus(
+    const std::set<int>& blacklisted_features,
+    const base::CommandLine& command_line,
+    const GpuPreferences& gpu_preferences,
+    const GPUInfo& gpu_info) {
+  // OOP rasterization requires GPU rasterization, so if blacklisted or
+  // disabled, report the same.
+  auto status =
+      GetGpuRasterizationFeatureStatus(blacklisted_features, command_line);
+  if (status != kGpuFeatureStatusEnabled)
+    return status;
+
+  // If we can't create a GrContext for whatever reason, don't enable oop
+  // rasterization.
+  if (!gpu_info.oop_rasterization_supported)
+    return kGpuFeatureStatusDisabled;
+
+  if (gpu_preferences.disable_oop_rasterization)
+    return kGpuFeatureStatusDisabled;
+  else if (gpu_preferences.enable_oop_rasterization)
+    return kGpuFeatureStatusEnabled;
+
+  // TODO(enne): Eventually oop rasterization will replace gpu rasterization,
+  // and so we will need to address the underlying bugs or turn of GPU
+  // rasterization for these cases.
+  if (blacklisted_features.count(GPU_FEATURE_TYPE_OOP_RASTERIZATION))
+    return kGpuFeatureStatusBlacklisted;
+
+  // OOP Rasterization on platforms that are not fully enabled is controlled by
+  // a finch experiment.
+  if (!base::FeatureList::IsEnabled(features::kDefaultEnableOopRasterization))
     return kGpuFeatureStatusDisabled;
 
   return kGpuFeatureStatusEnabled;
@@ -180,12 +240,17 @@ void AdjustGpuFeatureStatusToWorkarounds(GpuFeatureInfo* gpu_feature_info) {
     gpu_feature_info->status_values[GPU_FEATURE_TYPE_ACCELERATED_WEBGL2] =
         kGpuFeatureStatusBlacklisted;
   }
+
+  if (gpu_feature_info->IsWorkaroundEnabled(DISABLE_AIMAGEREADER)) {
+    gpu_feature_info->status_values[GPU_FEATURE_TYPE_ANDROID_SURFACE_CONTROL] =
+        kGpuFeatureStatusBlacklisted;
+  }
 }
 
 GPUInfo* g_gpu_info_cache = nullptr;
 GpuFeatureInfo* g_gpu_feature_info_cache = nullptr;
 
-}  // namespace anonymous
+}  // namespace
 
 GpuFeatureInfo ComputeGpuFeatureInfoWithHardwareAccelerationDisabled() {
   GpuFeatureInfo gpu_feature_info;
@@ -208,6 +273,10 @@ GpuFeatureInfo ComputeGpuFeatureInfoWithHardwareAccelerationDisabled() {
   gpu_feature_info.status_values[GPU_FEATURE_TYPE_ACCELERATED_WEBGL2] =
       kGpuFeatureStatusSoftware;
   gpu_feature_info.status_values[GPU_FEATURE_TYPE_PROTECTED_VIDEO_DECODE] =
+      kGpuFeatureStatusDisabled;
+  gpu_feature_info.status_values[GPU_FEATURE_TYPE_OOP_RASTERIZATION] =
+      kGpuFeatureStatusDisabled;
+  gpu_feature_info.status_values[GPU_FEATURE_TYPE_ANDROID_SURFACE_CONTROL] =
       kGpuFeatureStatusDisabled;
 #if DCHECK_IS_ON()
   for (int ii = 0; ii < NUMBER_OF_GPU_FEATURE_TYPES; ++ii) {
@@ -239,6 +308,10 @@ GpuFeatureInfo ComputeGpuFeatureInfoWithNoGpu() {
       kGpuFeatureStatusDisabled;
   gpu_feature_info.status_values[GPU_FEATURE_TYPE_PROTECTED_VIDEO_DECODE] =
       kGpuFeatureStatusDisabled;
+  gpu_feature_info.status_values[GPU_FEATURE_TYPE_OOP_RASTERIZATION] =
+      kGpuFeatureStatusDisabled;
+  gpu_feature_info.status_values[GPU_FEATURE_TYPE_ANDROID_SURFACE_CONTROL] =
+      kGpuFeatureStatusDisabled;
 #if DCHECK_IS_ON()
   for (int ii = 0; ii < NUMBER_OF_GPU_FEATURE_TYPES; ++ii) {
     DCHECK_NE(kGpuFeatureStatusUndefined, gpu_feature_info.status_values[ii]);
@@ -269,6 +342,10 @@ GpuFeatureInfo ComputeGpuFeatureInfoForSwiftShader() {
       kGpuFeatureStatusSoftware;
   gpu_feature_info.status_values[GPU_FEATURE_TYPE_PROTECTED_VIDEO_DECODE] =
       kGpuFeatureStatusDisabled;
+  gpu_feature_info.status_values[GPU_FEATURE_TYPE_OOP_RASTERIZATION] =
+      kGpuFeatureStatusDisabled;
+  gpu_feature_info.status_values[GPU_FEATURE_TYPE_ANDROID_SURFACE_CONTROL] =
+      kGpuFeatureStatusDisabled;
 #if DCHECK_IS_ON()
   for (int ii = 0; ii < NUMBER_OF_GPU_FEATURE_TYPES; ++ii) {
     DCHECK_NE(kGpuFeatureStatusUndefined, gpu_feature_info.status_values[ii]);
@@ -278,30 +355,27 @@ GpuFeatureInfo ComputeGpuFeatureInfoForSwiftShader() {
 }
 
 GpuFeatureInfo ComputeGpuFeatureInfo(const GPUInfo& gpu_info,
-                                     bool ignore_gpu_blacklist,
-                                     bool disable_gpu_driver_bug_workarounds,
-                                     bool log_gpu_control_list_decisions,
+                                     const GpuPreferences& gpu_preferences,
                                      base::CommandLine* command_line,
                                      bool* needs_more_info) {
   DCHECK(!needs_more_info || !(*needs_more_info));
   bool use_swift_shader = false;
-  bool use_swift_shader_for_webgl = false;
   if (command_line->HasSwitch(switches::kUseGL)) {
     std::string use_gl = command_line->GetSwitchValueASCII(switches::kUseGL);
     if (use_gl == gl::kGLImplementationSwiftShaderName)
       use_swift_shader = true;
     else if (use_gl == gl::kGLImplementationSwiftShaderForWebGLName)
-      use_swift_shader_for_webgl = true;
+      return ComputeGpuFeatureInfoForSwiftShader();
+    else if (use_gl == gl::kGLImplementationDisabledName)
+      return ComputeGpuFeatureInfoWithNoGpu();
   }
-  if (use_swift_shader_for_webgl)
-    return ComputeGpuFeatureInfoForSwiftShader();
 
   GpuFeatureInfo gpu_feature_info;
   std::set<int> blacklisted_features;
-  if (!ignore_gpu_blacklist &&
+  if (!gpu_preferences.ignore_gpu_blacklist &&
       !command_line->HasSwitch(switches::kUseGpuInTests)) {
     std::unique_ptr<GpuBlacklist> list(GpuBlacklist::Create());
-    if (log_gpu_control_list_decisions)
+    if (gpu_preferences.log_gpu_control_list_decisions)
       list->EnableControlListLogging("gpu_blacklist");
     unsigned target_test_group = 0u;
     if (command_line->HasSwitch(switches::kGpuBlacklistTestGroup)) {
@@ -341,13 +415,19 @@ GpuFeatureInfo ComputeGpuFeatureInfo(const GPUInfo& gpu_info,
   gpu_feature_info.status_values[GPU_FEATURE_TYPE_PROTECTED_VIDEO_DECODE] =
       GetProtectedVideoDecodeFeatureStatus(blacklisted_features, gpu_info,
                                            use_swift_shader);
+  gpu_feature_info.status_values[GPU_FEATURE_TYPE_OOP_RASTERIZATION] =
+      GetOopRasterizationFeatureStatus(blacklisted_features, *command_line,
+                                       gpu_preferences, gpu_info);
+  gpu_feature_info.status_values[GPU_FEATURE_TYPE_ANDROID_SURFACE_CONTROL] =
+      GetAndroidSurfaceControlFeatureStatus(blacklisted_features,
+                                            gpu_preferences);
 #if DCHECK_IS_ON()
   for (int ii = 0; ii < NUMBER_OF_GPU_FEATURE_TYPES; ++ii) {
     DCHECK_NE(kGpuFeatureStatusUndefined, gpu_feature_info.status_values[ii]);
   }
 #endif
 
-  gl::ExtensionSet all_disabled_extensions;
+  gfx::ExtensionSet all_disabled_extensions;
   std::string disabled_gl_extensions_value =
       command_line->GetSwitchValueASCII(switches::kDisableGLExtensions);
   if (!disabled_gl_extensions_value.empty()) {
@@ -361,7 +441,7 @@ GpuFeatureInfo ComputeGpuFeatureInfo(const GPUInfo& gpu_info,
 
   std::set<int> enabled_driver_bug_workarounds;
   std::vector<std::string> driver_bug_disabled_extensions;
-  if (!disable_gpu_driver_bug_workarounds) {
+  if (!gpu_preferences.disable_gpu_driver_bug_workarounds) {
     std::unique_ptr<gpu::GpuDriverBugList> list(GpuDriverBugList::Create());
     unsigned target_test_group = 0u;
     if (command_line->HasSwitch(switches::kGpuDriverBugListTestGroup)) {
@@ -381,13 +461,13 @@ GpuFeatureInfo ComputeGpuFeatureInfo(const GPUInfo& gpu_info,
 
     // Disabling WebGL extensions only occurs via the blacklist, so
     // the logic is simpler.
-    gl::ExtensionSet disabled_webgl_extensions;
+    gfx::ExtensionSet disabled_webgl_extensions;
     std::vector<std::string> disabled_webgl_extension_list =
         list->GetDisabledWebGLExtensions();
     disabled_webgl_extensions.insert(disabled_webgl_extension_list.begin(),
                                      disabled_webgl_extension_list.end());
     gpu_feature_info.disabled_webgl_extensions =
-        gl::MakeExtensionString(disabled_webgl_extensions);
+        gfx::MakeExtensionString(disabled_webgl_extensions);
   }
   gpu::GpuDriverBugList::AppendWorkaroundsFromCommandLine(
       &enabled_driver_bug_workarounds, *command_line);
@@ -399,7 +479,7 @@ GpuFeatureInfo ComputeGpuFeatureInfo(const GPUInfo& gpu_info,
 
   if (all_disabled_extensions.size()) {
     gpu_feature_info.disabled_extensions =
-        gl::MakeExtensionString(all_disabled_extensions);
+        gfx::MakeExtensionString(all_disabled_extensions);
   }
 
   AdjustGpuFeatureStatusToWorkarounds(&gpu_feature_info);
@@ -408,17 +488,69 @@ GpuFeatureInfo ComputeGpuFeatureInfo(const GPUInfo& gpu_info,
   // initialization than commandline switches.
   AppendWorkaroundsToCommandLine(gpu_feature_info, command_line);
 
+  if (gpu_feature_info.IsWorkaroundEnabled(MAX_MSAA_SAMPLE_COUNT_4)) {
+    gpu_feature_info.webgl_preferences.msaa_sample_count = 4;
+  }
+
+  if (command_line->HasSwitch(switches::kWebglMSAASampleCount)) {
+    std::string sample_count =
+        command_line->GetSwitchValueASCII(switches::kWebglMSAASampleCount);
+    uint32_t count;
+    if (base::StringToUint(sample_count, &count)) {
+      gpu_feature_info.webgl_preferences.msaa_sample_count = count;
+    }
+  }
+
+  if (command_line->HasSwitch(switches::kWebglAntialiasingMode)) {
+    std::string mode =
+        command_line->GetSwitchValueASCII(switches::kWebglAntialiasingMode);
+    if (mode == "none") {
+      gpu_feature_info.webgl_preferences.anti_aliasing_mode =
+          kAntialiasingModeNone;
+    } else if (mode == "explicit") {
+      gpu_feature_info.webgl_preferences.anti_aliasing_mode =
+          kAntialiasingModeMSAAExplicitResolve;
+    } else if (mode == "implicit") {
+      gpu_feature_info.webgl_preferences.anti_aliasing_mode =
+          kAntialiasingModeMSAAImplicitResolve;
+    } else if (mode == "screenspace") {
+      gpu_feature_info.webgl_preferences.anti_aliasing_mode =
+          kAntialiasingModeScreenSpaceAntialiasing;
+    } else {
+      gpu_feature_info.webgl_preferences.anti_aliasing_mode =
+          kAntialiasingModeUnspecified;
+    }
+  }
+
+// Set default context limits for WebGL.
+#if defined(OS_ANDROID)
+  gpu_feature_info.webgl_preferences.max_active_webgl_contexts = 8u;
+#else
+  gpu_feature_info.webgl_preferences.max_active_webgl_contexts = 16u;
+#endif
+  gpu_feature_info.webgl_preferences.max_active_webgl_contexts_on_worker = 4u;
+
+  uint32_t override_val = gpu_preferences.max_active_webgl_contexts;
+  if (override_val) {
+    // It shouldn't be common for users to override this. If they do,
+    // just override both values.
+    gpu_feature_info.webgl_preferences.max_active_webgl_contexts = override_val;
+    gpu_feature_info.webgl_preferences.max_active_webgl_contexts_on_worker =
+        override_val;
+  }
+
   return gpu_feature_info;
 }
 
 void SetKeysForCrashLogging(const GPUInfo& gpu_info) {
+  const GPUInfo::GPUDevice& active_gpu = gpu_info.active_gpu();
 #if !defined(OS_ANDROID)
   crash_keys::gpu_vendor_id.Set(
-      base::StringPrintf("0x%04x", gpu_info.gpu.vendor_id));
+      base::StringPrintf("0x%04x", active_gpu.vendor_id));
   crash_keys::gpu_device_id.Set(
-      base::StringPrintf("0x%04x", gpu_info.gpu.device_id));
+      base::StringPrintf("0x%04x", active_gpu.device_id));
 #endif
-  crash_keys::gpu_driver_version.Set(gpu_info.driver_version);
+  crash_keys::gpu_driver_version.Set(active_gpu.driver_version);
   crash_keys::gpu_pixel_shader_version.Set(gpu_info.pixel_shader_version);
   crash_keys::gpu_vertex_shader_version.Set(gpu_info.vertex_shader_version);
 #if defined(OS_MACOSX)
@@ -461,9 +593,7 @@ bool PopGpuFeatureInfoCache(GpuFeatureInfo* gpu_feature_info) {
 
 #if defined(OS_ANDROID)
 bool InitializeGLThreadSafe(base::CommandLine* command_line,
-                            bool ignore_gpu_blacklist,
-                            bool disable_gpu_driver_bug_workarounds,
-                            bool log_gpu_control_list_decisions,
+                            const GpuPreferences& gpu_preferences,
                             GPUInfo* out_gpu_info,
                             GpuFeatureInfo* out_gpu_feature_info) {
   static base::NoDestructor<base::Lock> gl_bindings_initialization_lock;
@@ -485,10 +615,9 @@ bool InitializeGLThreadSafe(base::CommandLine* command_line,
       return false;
     }
   }
-  CollectContextGraphicsInfo(out_gpu_info);
-  *out_gpu_feature_info = ComputeGpuFeatureInfo(
-      *out_gpu_info, ignore_gpu_blacklist, disable_gpu_driver_bug_workarounds,
-      log_gpu_control_list_decisions, command_line, nullptr);
+  CollectContextGraphicsInfo(out_gpu_info, gpu_preferences);
+  *out_gpu_feature_info = ComputeGpuFeatureInfo(*out_gpu_info, gpu_preferences,
+                                                command_line, nullptr);
   if (!out_gpu_feature_info->disabled_extensions.empty()) {
     gl::init::SetDisabledExtensionsPlatform(
         out_gpu_feature_info->disabled_extensions);
@@ -503,10 +632,10 @@ bool InitializeGLThreadSafe(base::CommandLine* command_line,
 }
 #endif  // OS_ANDROID
 
-bool ShouldEnableSwiftShader(base::CommandLine* command_line,
-                             const GpuFeatureInfo& gpu_feature_info,
-                             bool disable_software_rasterizer,
-                             bool blacklist_needs_more_info) {
+bool EnableSwiftShaderIfNeeded(base::CommandLine* command_line,
+                               const GpuFeatureInfo& gpu_feature_info,
+                               bool disable_software_rasterizer,
+                               bool blacklist_needs_more_info) {
 #if BUILDFLAG(ENABLE_SWIFTSHADER)
   if (disable_software_rasterizer)
     return false;
@@ -524,6 +653,61 @@ bool ShouldEnableSwiftShader(base::CommandLine* command_line,
 #else
   return false;
 #endif
+}
+
+GpuSeriesType GetGpuSeriesType(uint32_t vendor_id, uint32_t device_id) {
+  // Note that this function's output should only depend on vendor_id and
+  // device_id of a GPU. This is because we record a histogram on the output
+  // and we don't want to expose an extra bit other than the already recorded
+  // vendor_id and device_id.
+  if (vendor_id == 0x8086) {  // Intel
+    // https://en.wikipedia.org/wiki/List_of_Intel_graphics_processing_units
+    // We only identify Intel 6th gen or newer.
+    uint32_t masked_device_id = device_id & 0xFF00;
+    switch (masked_device_id) {
+      case 0x0100:
+        switch (device_id & 0xFFF0) {
+          case 0x0100:
+          case 0x0110:
+          case 0x0120:
+            return GpuSeriesType::kIntelSandyBridge;
+          case 0x0150:
+            if (device_id == 0x0155 || device_id == 0x0157)
+              return GpuSeriesType::kIntelValleyView;
+            if (device_id == 0x0152 || device_id == 0x015A)
+              return GpuSeriesType::kIntelIvyBridge;
+            break;
+          case 0x0160:
+            return GpuSeriesType::kIntelIvyBridge;
+          default:
+            break;
+        }
+        break;
+      case 0x0F00:
+        return GpuSeriesType::kIntelValleyView;
+      case 0x0400:
+      case 0x0A00:
+      case 0x0D00:
+        return GpuSeriesType::kIntelHaswell;
+      case 0x2200:
+        return GpuSeriesType::kIntelCherryView;
+      case 0x1600:
+        return GpuSeriesType::kIntelBroadwell;
+      case 0x5A00:
+        return GpuSeriesType::kIntelApolloLake;
+      case 0x1900:
+        return GpuSeriesType::kIntelSkyLake;
+      case 0x3100:
+        return GpuSeriesType::kIntelGeminiLake;
+      case 0x5900:
+        return GpuSeriesType::kIntelKabyLake;
+      case 0x3E00:
+        return GpuSeriesType::kIntelCoffeeLake;
+      default:
+        break;
+    }
+  }
+  return GpuSeriesType::kUnknown;
 }
 
 }  // namespace gpu

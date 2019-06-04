@@ -57,6 +57,10 @@ bool OmniboxClient::IsHomePage(const GURL& url) const {
   return false;
 }
 
+bool OmniboxClient::IsDefaultSearchProviderEnabled() const {
+  return true;
+}
+
 bookmarks::BookmarkModel* OmniboxClient::GetBookmarkModel() {
   return nullptr;
 }
@@ -69,6 +73,10 @@ AutocompleteClassifier* OmniboxClient::GetAutocompleteClassifier() {
   return nullptr;
 }
 
+QueryInOmnibox* OmniboxClient::GetQueryInOmnibox() {
+  return nullptr;
+}
+
 gfx::Image OmniboxClient::GetIconIfExtensionMatch(
     const AutocompleteMatch& match) const {
   return gfx::Image();
@@ -76,6 +84,10 @@ gfx::Image OmniboxClient::GetIconIfExtensionMatch(
 
 gfx::Image OmniboxClient::GetSizedIcon(const gfx::VectorIcon& vector_icon_type,
                                        SkColor vector_icon_color) const {
+  return gfx::Image();
+}
+
+gfx::Image OmniboxClient::GetSizedIcon(const gfx::Image& icon) const {
   return gfx::Image();
 }
 

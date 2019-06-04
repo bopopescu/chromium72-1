@@ -8,6 +8,7 @@ from tracing.value import histogram as histogram_module
 from tracing.value.diagnostics import all_diagnostics
 from tracing.value.diagnostics import diagnostic
 from tracing.value.diagnostics import diagnostic_ref
+from tracing.value.diagnostics import generic_set
 
 class HistogramSet(object):
   def __init__(self, histograms=()):
@@ -18,12 +19,12 @@ class HistogramSet(object):
 
   @property
   def shared_diagnostics(self):
-    return self._shared_diagnostics_by_guid.itervalues()
+    return self._shared_diagnostics_by_guid.values()
 
   def RemoveOrphanedDiagnostics(self):
     orphans = set(self._shared_diagnostics_by_guid.keys())
-    for h in self._histograms_by_guid.itervalues():
-      for d in h.diagnostics.itervalues():
+    for h in self._histograms_by_guid.values():
+      for d in h.diagnostics.values():
         if d.guid in orphans:
           orphans.remove(d.guid)
     for guid in orphans:
@@ -32,7 +33,7 @@ class HistogramSet(object):
   def FilterHistograms(self, discard):
     self._histograms_by_guid = dict(
         (guid, hist)
-        for guid, hist in self._histograms_by_guid.iteritems()
+        for guid, hist in self._histograms_by_guid.items()
         if not discard(hist))
 
   def AddHistogram(self, hist, diagnostics=None):
@@ -40,19 +41,22 @@ class HistogramSet(object):
       raise ValueError('Cannot add same Histogram twice')
 
     if diagnostics:
-      for name, diag in diagnostics.iteritems():
+      for name, diag in diagnostics.items():
         hist.diagnostics[name] = diag
 
     self._histograms_by_guid[hist.guid] = hist
 
-  def AddSharedDiagnostic(self, name, diag):
+  def AddSharedDiagnostic(self, diag):
+    self._shared_diagnostics_by_guid[diag.guid] = diag
+
+  def AddSharedDiagnosticToAllHistograms(self, name, diag):
     self._shared_diagnostics_by_guid[diag.guid] = diag
 
     for hist in self:
       hist.diagnostics[name] = diag
 
   def GetFirstHistogram(self):
-    for histogram in self._histograms_by_guid.itervalues():
+    for histogram in self._histograms_by_guid.values():
       return histogram
 
   def GetHistogramsNamed(self, name):
@@ -70,7 +74,7 @@ class HistogramSet(object):
   def ResolveRelatedHistograms(self):
     histograms = self
     def HandleDiagnosticMap(dm):
-      for diag in dm.itervalues():
+      for diag in dm.values():
         if isinstance(diag, histogram_module.RelatedHistogramMap):
           diag.Resolve(histograms)
 
@@ -86,7 +90,7 @@ class HistogramSet(object):
     return len(self._histograms_by_guid)
 
   def __iter__(self):
-    for hist in self._histograms_by_guid.itervalues():
+    for hist in self._histograms_by_guid.values():
       yield hist
 
   def ImportDicts(self, dicts):
@@ -101,7 +105,7 @@ class HistogramSet(object):
 
   def AsDicts(self):
     dcts = []
-    for d in self._shared_diagnostics_by_guid.itervalues():
+    for d in self._shared_diagnostics_by_guid.values():
       dcts.append(d.AsDict())
     for h in self:
       dcts.append(h.AsDict())
@@ -111,8 +115,22 @@ class HistogramSet(object):
     if not isinstance(new_diagnostic, diagnostic_ref.DiagnosticRef):
       self._shared_diagnostics_by_guid[new_diagnostic.guid] = new_diagnostic
 
+    old_diagnostic = self._shared_diagnostics_by_guid.get(old_guid)
+
+    # Fast path, if they're both generic_sets, we overwrite the contents of the
+    # old diagnostic.
+    if isinstance(new_diagnostic, generic_set.GenericSet) and (
+        isinstance(old_diagnostic, generic_set.GenericSet)):
+      old_diagnostic.SetValues(list(new_diagnostic))
+      old_diagnostic.ResetGuid(new_diagnostic.guid)
+
+      self._shared_diagnostics_by_guid[new_diagnostic.guid] = old_diagnostic
+      del self._shared_diagnostics_by_guid[old_guid]
+
+      return
+
     for hist in self:
-      for name, diag in hist.diagnostics.iteritems():
+      for name, diag in hist.diagnostics.items():
         if diag.has_guid and diag.guid == old_guid:
           hist.diagnostics[name] = new_diagnostic
 
@@ -121,14 +139,14 @@ class HistogramSet(object):
     diagnostics_to_histograms = collections.defaultdict(list)
 
     for hist in self:
-      for name, candidate in hist.diagnostics.iteritems():
+      for name, candidate in hist.diagnostics.items():
         diagnostics_to_histograms[candidate].append(hist)
 
         if name not in names_to_candidates:
           names_to_candidates[name] = set()
         names_to_candidates[name].add(candidate)
 
-    for name, candidates in names_to_candidates.iteritems():
+    for name, candidates in names_to_candidates.items():
       deduplicated_diagnostics = set()
 
       for candidate in candidates:

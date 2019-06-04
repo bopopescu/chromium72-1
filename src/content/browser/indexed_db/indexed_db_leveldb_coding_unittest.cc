@@ -8,18 +8,19 @@
 #include <stdint.h>
 
 #include <limits>
+#include <utility>
 #include <vector>
 
 #include "base/macros.h"
 #include "base/strings/string16.h"
 #include "base/strings/string_piece.h"
 #include "base/strings/utf_string_conversions.h"
-#include "content/common/indexed_db/indexed_db_key.h"
-#include "content/common/indexed_db/indexed_db_key_path.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 using base::ASCIIToUTF16;
 using base::StringPiece;
+using blink::IndexedDBKey;
+using blink::IndexedDBKeyPath;
 using blink::kWebIDBKeyTypeDate;
 using blink::kWebIDBKeyTypeNumber;
 
@@ -34,7 +35,7 @@ static IndexedDBKey CreateArrayIDBKey() {
 static IndexedDBKey CreateArrayIDBKey(const IndexedDBKey& key1) {
   IndexedDBKey::KeyArray array;
   array.push_back(key1);
-  return IndexedDBKey(array);
+  return IndexedDBKey(std::move(array));
 }
 
 static IndexedDBKey CreateArrayIDBKey(const IndexedDBKey& key1,
@@ -42,7 +43,7 @@ static IndexedDBKey CreateArrayIDBKey(const IndexedDBKey& key1,
   IndexedDBKey::KeyArray array;
   array.push_back(key1);
   array.push_back(key2);
-  return IndexedDBKey(array);
+  return IndexedDBKey(std::move(array));
 }
 
 static std::string WrappedEncodeByte(char value) {
@@ -591,7 +592,7 @@ TEST(IndexedDBLevelDBCodingTest, EncodeDecodeIDBKey) {
   array.push_back(IndexedDBKey(ASCIIToUTF16("Hello World!")));
   array.push_back(IndexedDBKey(std::string("\x01\x02")));
   array.push_back(IndexedDBKey(IndexedDBKey::KeyArray()));
-  test_cases.push_back(IndexedDBKey(array));
+  test_cases.push_back(IndexedDBKey(std::move(array)));
 
   for (size_t i = 0; i < test_cases.size(); ++i) {
     expected_key = test_cases[i];

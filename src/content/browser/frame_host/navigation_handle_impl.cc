@@ -6,12 +6,16 @@
 
 #include <iterator>
 
+#include "base/bind.h"
+#include "base/debug/dump_without_crashing.h"
 #include "base/logging.h"
 #include "base/metrics/histogram_macros.h"
+#include "base/optional.h"
+#include "base/time/time.h"
 #include "content/browser/appcache/appcache_navigation_handle.h"
 #include "content/browser/appcache/appcache_service_impl.h"
 #include "content/browser/child_process_security_policy_impl.h"
-#include "content/browser/devtools/render_frame_devtools_agent_host.h"
+#include "content/browser/devtools/devtools_instrumentation.h"
 #include "content/browser/frame_host/ancestor_throttle.h"
 #include "content/browser/frame_host/blocked_scheme_navigation_throttle.h"
 #include "content/browser/frame_host/debug_urls.h"
@@ -22,16 +26,18 @@
 #include "content/browser/frame_host/navigation_entry_impl.h"
 #include "content/browser/frame_host/navigator.h"
 #include "content/browser/frame_host/navigator_delegate.h"
+#include "content/browser/frame_host/origin_policy_throttle.h"
 #include "content/browser/frame_host/webui_navigation_throttle.h"
 #include "content/browser/loader/resource_dispatcher_host_impl.h"
+#include "content/browser/renderer_host/render_widget_host_impl.h"
 #include "content/browser/service_worker/service_worker_context_wrapper.h"
 #include "content/browser/service_worker/service_worker_navigation_handle.h"
 #include "content/common/child_process_host_impl.h"
 #include "content/common/frame_messages.h"
 #include "content/public/browser/content_browser_client.h"
 #include "content/public/browser/navigation_ui_data.h"
+#include "content/public/browser/render_process_host.h"
 #include "content/public/browser/site_instance.h"
-#include "content/public/common/browser_side_navigation_policy.h"
 #include "content/public/common/content_client.h"
 #include "content/public/common/url_constants.h"
 #include "content/public/common/url_utils.h"
@@ -44,6 +50,16 @@
 namespace content {
 
 namespace {
+
+// Default timeout for the READY_TO_COMMIT -> COMMIT transition.  Chosen
+// initially based on the Navigation.ReadyToCommitUntilCommit UMA, and then
+// refined based on feedback based on CrashExitCodes.Renderer/RESULT_CODE_HUNG.
+constexpr base::TimeDelta kDefaultCommitTimeout =
+    base::TimeDelta::FromSeconds(30);
+
+// Timeout for the READY_TO_COMMIT -> COMMIT transition.
+// Overrideable via SetCommitTimeoutForTesting.
+base::TimeDelta g_commit_timeout = kDefaultCommitTimeout;
 
 // Use this to get a new unique ID for a NavigationHandle during construction.
 // The returned ID is guaranteed to be nonzero (zero is the "no ID" indicator).
@@ -58,29 +74,49 @@ void UpdateThrottleCheckResult(
   *to_update = result;
 }
 
+// LOG_NAVIGATION_TIMING_HISTOGRAM logs |value| for "Navigation.<histogram>" UMA
+// as well as supplementary UMAs (depending on |transition| and |is_background|)
+// for BackForward/Reload/NewNavigation variants.
+//
+// kMaxTime and kBuckets constants are consistent with
+// UMA_HISTOGRAM_MEDIUM_TIMES, but a custom kMinTime is used for high fidelity
+// near the low end of measured values.
+//
 // TODO(csharrison,nasko): This macro is incorrect for subframe navigations,
 // which will only have subframe-specific transition types. This means that all
 // subframes currently are tagged as NewNavigations.
-#define LOG_NAVIGATION_TIMING_HISTOGRAM(histogram, transition, value,      \
-                                        max_time)                          \
-  do {                                                                     \
-    const base::TimeDelta kMinTime = base::TimeDelta::FromMilliseconds(1); \
-    const int kBuckets = 50;                                               \
-    UMA_HISTOGRAM_CUSTOM_TIMES("Navigation." histogram, value, kMinTime,   \
-                               max_time, kBuckets);                        \
-    if (transition & ui::PAGE_TRANSITION_FORWARD_BACK) {                   \
-      UMA_HISTOGRAM_CUSTOM_TIMES("Navigation." histogram ".BackForward",   \
-                                 value, kMinTime, max_time, kBuckets);     \
-    } else if (ui::PageTransitionCoreTypeIs(transition,                    \
-                                            ui::PAGE_TRANSITION_RELOAD)) { \
-      UMA_HISTOGRAM_CUSTOM_TIMES("Navigation." histogram ".Reload", value, \
-                                 kMinTime, max_time, kBuckets);            \
-    } else if (ui::PageTransitionIsNewNavigation(transition)) {            \
-      UMA_HISTOGRAM_CUSTOM_TIMES("Navigation." histogram ".NewNavigation", \
-                                 value, kMinTime, max_time, kBuckets);     \
-    } else {                                                               \
-      NOTREACHED() << "Invalid page transition: " << transition;           \
-    }                                                                      \
+#define LOG_NAVIGATION_TIMING_HISTOGRAM(histogram, transition, is_background, \
+                                        duration)                             \
+  do {                                                                        \
+    const base::TimeDelta kMinTime = base::TimeDelta::FromMilliseconds(1);    \
+    const base::TimeDelta kMaxTime = base::TimeDelta::FromMinutes(3);         \
+    const int kBuckets = 50;                                                  \
+    UMA_HISTOGRAM_CUSTOM_TIMES("Navigation." histogram, duration, kMinTime,   \
+                               kMaxTime, kBuckets);                           \
+    if (transition & ui::PAGE_TRANSITION_FORWARD_BACK) {                      \
+      UMA_HISTOGRAM_CUSTOM_TIMES("Navigation." histogram ".BackForward",      \
+                                 duration, kMinTime, kMaxTime, kBuckets);     \
+    } else if (ui::PageTransitionCoreTypeIs(transition,                       \
+                                            ui::PAGE_TRANSITION_RELOAD)) {    \
+      UMA_HISTOGRAM_CUSTOM_TIMES("Navigation." histogram ".Reload", duration, \
+                                 kMinTime, kMaxTime, kBuckets);               \
+    } else if (ui::PageTransitionIsNewNavigation(transition)) {               \
+      UMA_HISTOGRAM_CUSTOM_TIMES("Navigation." histogram ".NewNavigation",    \
+                                 duration, kMinTime, kMaxTime, kBuckets);     \
+    } else {                                                                  \
+      NOTREACHED() << "Invalid page transition: " << transition;              \
+    }                                                                         \
+    if (is_background.has_value()) {                                          \
+      if (is_background.value()) {                                            \
+        UMA_HISTOGRAM_CUSTOM_TIMES("Navigation." histogram                    \
+                                   ".BackgroundProcessPriority",              \
+                                   duration, kMinTime, kMaxTime, kBuckets);   \
+      } else {                                                                \
+        UMA_HISTOGRAM_CUSTOM_TIMES("Navigation." histogram                    \
+                                   ".ForegroundProcessPriority",              \
+                                   duration, kMinTime, kMaxTime, kBuckets);   \
+      }                                                                       \
+    }                                                                         \
   } while (0)
 
 void LogIsSameProcess(ui::PageTransition transition, bool is_same_process) {
@@ -113,7 +149,7 @@ std::unique_ptr<NavigationHandleImpl> NavigationHandleImpl::Create(
     FrameTreeNode* frame_tree_node,
     bool is_renderer_initiated,
     bool is_same_document,
-    const base::TimeTicks& navigation_start,
+    base::TimeTicks navigation_start,
     int pending_nav_entry_id,
     bool started_from_context_menu,
     CSPDisposition should_check_main_world_csp,
@@ -126,8 +162,10 @@ std::unique_ptr<NavigationHandleImpl> NavigationHandleImpl::Create(
     bool has_user_gesture,
     ui::PageTransition transition,
     bool is_external_protocol,
-    RequestContextType request_context_type,
-    blink::WebMixedContentContextType mixed_content_context_type) {
+    blink::mojom::RequestContextType request_context_type,
+    blink::WebMixedContentContextType mixed_content_context_type,
+    const std::string& href_translate,
+    base::TimeTicks input_start) {
   return std::unique_ptr<NavigationHandleImpl>(new NavigationHandleImpl(
       url, redirect_chain, frame_tree_node, is_renderer_initiated,
       is_same_document, navigation_start, pending_nav_entry_id,
@@ -135,7 +173,7 @@ std::unique_ptr<NavigationHandleImpl> NavigationHandleImpl::Create(
       is_form_submission, std::move(navigation_ui_data), method,
       std::move(request_headers), resource_request_body, sanitized_referrer,
       has_user_gesture, transition, is_external_protocol, request_context_type,
-      mixed_content_context_type));
+      mixed_content_context_type, href_translate, input_start));
 }
 
 NavigationHandleImpl::NavigationHandleImpl(
@@ -144,7 +182,7 @@ NavigationHandleImpl::NavigationHandleImpl(
     FrameTreeNode* frame_tree_node,
     bool is_renderer_initiated,
     bool is_same_document,
-    const base::TimeTicks& navigation_start,
+    base::TimeTicks navigation_start,
     int pending_nav_entry_id,
     bool started_from_context_menu,
     CSPDisposition should_check_main_world_csp,
@@ -157,8 +195,10 @@ NavigationHandleImpl::NavigationHandleImpl(
     bool has_user_gesture,
     ui::PageTransition transition,
     bool is_external_protocol,
-    RequestContextType request_context_type,
-    blink::WebMixedContentContextType mixed_content_context_type)
+    blink::mojom::RequestContextType request_context_type,
+    blink::WebMixedContentContextType mixed_content_context_type,
+    const std::string& href_translate,
+    base::TimeTicks input_start)
     : url_(url),
       has_user_gesture_(has_user_gesture),
       transition_(transition),
@@ -172,6 +212,7 @@ NavigationHandleImpl::NavigationHandleImpl(
       should_update_history_(false),
       subframe_entry_committed_(false),
       connection_info_(net::HttpResponseInfo::CONNECTION_INFO_UNKNOWN),
+      href_translate_(href_translate),
       original_url_(url),
       method_(method),
       request_headers_(std::move(request_headers)),
@@ -179,6 +220,7 @@ NavigationHandleImpl::NavigationHandleImpl(
       frame_tree_node_(frame_tree_node),
       next_index_(0),
       navigation_start_(navigation_start),
+      input_start_(input_start),
       pending_nav_entry_id_(pending_nav_entry_id),
       request_context_type_(request_context_type),
       mixed_content_context_type_(mixed_content_context_type),
@@ -190,11 +232,12 @@ NavigationHandleImpl::NavigationHandleImpl(
       navigation_type_(NAVIGATION_TYPE_UNKNOWN),
       should_check_main_world_csp_(should_check_main_world_csp),
       expected_render_process_host_id_(ChildProcessHost::kInvalidUniqueID),
-      is_transferring_(false),
       is_form_submission_(is_form_submission),
       should_replace_current_entry_(false),
       is_download_(false),
       is_stream_(false),
+      is_signed_exchange_inner_response_(false),
+      was_cached_(false),
       started_from_context_menu_(started_from_context_menu),
       is_same_process_(true),
       weak_factory_(this) {
@@ -342,8 +385,12 @@ RenderFrameHostImpl* NavigationHandleImpl::GetParentFrame() {
   return frame_tree_node_->parent()->current_frame_host();
 }
 
-const base::TimeTicks& NavigationHandleImpl::NavigationStart() {
+base::TimeTicks NavigationHandleImpl::NavigationStart() {
   return navigation_start_;
+}
+
+base::TimeTicks NavigationHandleImpl::NavigationInputStart() {
+  return input_start_;
 }
 
 bool NavigationHandleImpl::IsPost() {
@@ -383,13 +430,9 @@ RenderFrameHostImpl* NavigationHandleImpl::GetRenderFrameHost() {
   // Only allow the RenderFrameHost to be retrieved once it has been set for
   // this navigation.  This will happens either at WillProcessResponse time for
   // regular navigations or at WillFailRequest time for error pages.
-  // FIXME: This check fails for neva app_runtime
-  // http://clm.lge.com/issue/browse/NEVA-2821
-#if !defined(USE_NEVA_APPRUNTIME)
   CHECK_GE(state_, WILL_FAIL_REQUEST)
       << "This accessor should only be called after a RenderFrameHost has been "
          "picked for this navigation.";
-#endif
   static_assert(WILL_FAIL_REQUEST < WILL_PROCESS_RESPONSE,
                 "WillFailRequest state should come before WillProcessResponse");
   return render_frame_host_;
@@ -513,14 +556,20 @@ NavigationHandleImpl::CallWillFailRequestForTesting(
 NavigationThrottle::ThrottleCheckResult
 NavigationHandleImpl::CallWillProcessResponseForTesting(
     RenderFrameHost* render_frame_host,
-    const std::string& raw_response_headers) {
+    const std::string& raw_response_headers,
+    bool was_cached,
+    const net::ProxyServer& proxy_server) {
   scoped_refptr<net::HttpResponseHeaders> headers =
       new net::HttpResponseHeaders(raw_response_headers);
   NavigationThrottle::ThrottleCheckResult result = NavigationThrottle::DEFER;
+  set_proxy_server(proxy_server);
   WillProcessResponse(static_cast<RenderFrameHostImpl*>(render_frame_host),
                       headers, net::HttpResponseInfo::CONNECTION_INFO_UNKNOWN,
                       net::HostPortPair(), net::SSLInfo(), GlobalRequestID(),
-                      false, false, false,
+                      /* should_replace_current_entry=*/false,
+                      /* is_download=*/false,
+                      /* is_stream=*/false,
+                      /* is_signed_exchange_inner_response=*/false, was_cached,
                       base::Bind(&UpdateThrottleCheckResult, &result));
 
   // Reset the callback to ensure it will not be called later.
@@ -537,8 +586,6 @@ void NavigationHandleImpl::CallDidCommitNavigationForTesting(const GURL& url) {
   params.transition = ui::PAGE_TRANSITION_TYPED;
   params.redirects = std::vector<GURL>();
   params.should_update_history = false;
-  params.searchable_form_url = GURL();
-  params.searchable_form_encoding = std::string();
   params.did_create_new_entry = false;
   params.gesture = NavigationGestureUser;
   params.method = "GET";
@@ -551,6 +598,11 @@ void NavigationHandleImpl::CallDidCommitNavigationForTesting(const GURL& url) {
 
 void NavigationHandleImpl::CallResumeForTesting() {
   ResumeInternal();
+}
+
+bool NavigationHandleImpl::IsDeferredForTesting() {
+  return state_ == DEFERRING_START || state_ == DEFERRING_REDIRECT ||
+         state_ == DEFERRING_FAILURE || state_ == DEFERRING_RESPONSE;
 }
 
 bool NavigationHandleImpl::WasStartedFromContextMenu() const {
@@ -605,6 +657,22 @@ bool NavigationHandleImpl::IsDownload() {
 
 bool NavigationHandleImpl::IsFormSubmission() {
   return is_form_submission_;
+}
+
+const std::string& NavigationHandleImpl::GetHrefTranslate() {
+  return href_translate_;
+}
+
+bool NavigationHandleImpl::IsSignedExchangeInnerResponse() {
+  return is_signed_exchange_inner_response_;
+}
+
+bool NavigationHandleImpl::WasResponseCached() {
+  return was_cached_;
+}
+
+const net::ProxyServer& NavigationHandleImpl::GetProxyServer() {
+  return proxy_server_;
 }
 
 void NavigationHandleImpl::InitServiceWorkerHandle(
@@ -768,6 +836,8 @@ void NavigationHandleImpl::WillProcessResponse(
     bool should_replace_current_entry,
     bool is_download,
     bool is_stream,
+    bool is_signed_exchange_inner_response,
+    bool was_cached,
     const ThrottleChecksFinishedCallback& callback) {
   TRACE_EVENT_ASYNC_STEP_INTO0("navigation", "NavigationHandle", this,
                                "WillProcessResponse");
@@ -780,6 +850,8 @@ void NavigationHandleImpl::WillProcessResponse(
   should_replace_current_entry_ = should_replace_current_entry;
   is_download_ = is_download;
   is_stream_ = is_stream;
+  is_signed_exchange_inner_response_ = is_signed_exchange_inner_response;
+  was_cached_ = was_cached;
   state_ = WILL_PROCESS_RESPONSE;
   ssl_info_ = ssl_info;
   socket_address_ = socket_address;
@@ -796,8 +868,13 @@ void NavigationHandleImpl::WillProcessResponse(
   // If the navigation is done processing the response, then it's ready to
   // commit. Inform observers that the navigation is now ready to commit, unless
   // it is not set to commit (204/205s/downloads).
-  if (result.action() == NavigationThrottle::PROCEED && render_frame_host_)
+  if (result.action() == NavigationThrottle::PROCEED && render_frame_host_) {
+    base::WeakPtr<NavigationHandleImpl> weak_ptr = weak_factory_.GetWeakPtr();
     ReadyToCommitNavigation(render_frame_host_, false);
+    // TODO(https://crbug.com/880741): Remove this once the bug is fixed.
+    if (!weak_ptr)
+      base::debug::DumpWithoutCrashing();
+  }
 
   TRACE_EVENT_ASYNC_STEP_INTO1("navigation", "NavigationHandle", this,
                                "ProcessResponse", "result", result.action());
@@ -825,6 +902,7 @@ void NavigationHandleImpl::ReadyToCommitNavigation(
   render_frame_host_ = render_frame_host;
   state_ = READY_TO_COMMIT;
   ready_to_commit_time_ = base::TimeTicks::Now();
+  RestartCommitTimeout();
 
   // Record metrics for the time it takes to get to this state from the
   // beginning of the navigation.
@@ -834,30 +912,28 @@ void NavigationHandleImpl::ReadyToCommitNavigation(
         frame_tree_node_->current_frame_host()->GetProcess()->GetID();
     LogIsSameProcess(transition_, is_same_process_);
 
-    // TODO(csharrison,nasko): Increase the max value to 3 minutes in M68 or
-    // M69.
+    // Don't log process-priority-specific UMAs for TimeToReadyToCommit metric
+    // (which shouldn't be influenced by renderer priority).
+    constexpr base::Optional<bool> kIsBackground = base::nullopt;
+
     base::TimeDelta delta = ready_to_commit_time_ - navigation_start_;
-    LOG_NAVIGATION_TIMING_HISTOGRAM("TimeToReadyToCommit", transition_, delta,
-                                    base::TimeDelta::FromSeconds(10));
+    LOG_NAVIGATION_TIMING_HISTOGRAM("TimeToReadyToCommit", transition_,
+                                    kIsBackground, delta);
 
     if (IsInMainFrame()) {
       LOG_NAVIGATION_TIMING_HISTOGRAM("TimeToReadyToCommit.MainFrame",
-                                      transition_, delta,
-                                      base::TimeDelta::FromSeconds(10));
+                                      transition_, kIsBackground, delta);
     } else {
       LOG_NAVIGATION_TIMING_HISTOGRAM("TimeToReadyToCommit.Subframe",
-                                      transition_, delta,
-                                      base::TimeDelta::FromSeconds(10));
+                                      transition_, kIsBackground, delta);
     }
 
     if (is_same_process_) {
       LOG_NAVIGATION_TIMING_HISTOGRAM("TimeToReadyToCommit.SameProcess",
-                                      transition_, delta,
-                                      base::TimeDelta::FromSeconds(10));
+                                      transition_, kIsBackground, delta);
     } else {
       LOG_NAVIGATION_TIMING_HISTOGRAM("TimeToReadyToCommit.CrossProcess",
-                                      transition_, delta,
-                                      base::TimeDelta::FromSeconds(10));
+                                      transition_, kIsBackground, delta);
     }
   }
 
@@ -901,50 +977,51 @@ void NavigationHandleImpl::DidCommitNavigation(
     state_ = DID_COMMIT;
   }
 
+  StopCommitTimeout();
+
   // Record metrics for the time it took to commit the navigation if it was to
   // another document without error.
   if (!IsSameDocument() && !IsErrorPage()) {
     base::TimeTicks now = base::TimeTicks::Now();
     base::TimeDelta delta = now - navigation_start_;
     ui::PageTransition transition = GetPageTransition();
-    // 3 minutes aligns with UMA_HISTOGRAM_MEDIUM_TIMES.
-    const base::TimeDelta kMaxTime = base::TimeDelta::FromMinutes(3);
-    LOG_NAVIGATION_TIMING_HISTOGRAM("StartToCommit", transition, delta,
-                                    kMaxTime);
+    base::Optional<bool> is_background =
+        render_frame_host->GetProcess()->IsProcessBackgrounded();
+    LOG_NAVIGATION_TIMING_HISTOGRAM("StartToCommit", transition, is_background,
+                                    delta);
     if (IsInMainFrame()) {
       LOG_NAVIGATION_TIMING_HISTOGRAM("StartToCommit.MainFrame", transition,
-                                      delta, kMaxTime);
+                                      is_background, delta);
     } else {
       LOG_NAVIGATION_TIMING_HISTOGRAM("StartToCommit.Subframe", transition,
-                                      delta, kMaxTime);
+                                      is_background, delta);
     }
     if (is_same_process_) {
       LOG_NAVIGATION_TIMING_HISTOGRAM("StartToCommit.SameProcess", transition,
-                                      delta, kMaxTime);
+                                      is_background, delta);
       if (IsInMainFrame()) {
         LOG_NAVIGATION_TIMING_HISTOGRAM("StartToCommit.SameProcess.MainFrame",
-                                        transition, delta, kMaxTime);
+                                        transition, is_background, delta);
       } else {
         LOG_NAVIGATION_TIMING_HISTOGRAM("StartToCommit.SameProcess.Subframe",
-                                        transition, delta, kMaxTime);
+                                        transition, is_background, delta);
       }
     } else {
       LOG_NAVIGATION_TIMING_HISTOGRAM("StartToCommit.CrossProcess", transition,
-                                      delta, kMaxTime);
+                                      is_background, delta);
       if (IsInMainFrame()) {
         LOG_NAVIGATION_TIMING_HISTOGRAM("StartToCommit.CrossProcess.MainFrame",
-                                        transition, delta, kMaxTime);
+                                        transition, is_background, delta);
       } else {
         LOG_NAVIGATION_TIMING_HISTOGRAM("StartToCommit.CrossProcess.Subframe",
-                                        transition, delta, kMaxTime);
+                                        transition, is_background, delta);
       }
     }
 
-    // 10 seconds aligns with UMA_HISTOGRAM_TIMES.
     if (!ready_to_commit_time_.is_null()) {
       LOG_NAVIGATION_TIMING_HISTOGRAM("ReadyToCommitUntilCommit", transition_,
-                                      now - ready_to_commit_time_,
-                                      base::TimeDelta::FromSeconds(10));
+                                      is_background,
+                                      now - ready_to_commit_time_);
     }
   }
 
@@ -954,8 +1031,7 @@ void NavigationHandleImpl::DidCommitNavigation(
   subframe_entry_committed_ = navigation_entry_committed;
 
   // For successful navigations, ensure the frame owner element is no longer
-  // collapsed as a result of a prior navigation having been blocked with
-  // BLOCK_REQUEST_AND_COLLAPSE.
+  // collapsed as a result of a prior navigation.
   if (!IsErrorPage() && !frame_tree_node()->IsMainFrame()) {
     // The last committed load in collapsed frames will be an error page with
     // |kUnreachableWebDataURL|. Same-document navigation should not be
@@ -1026,8 +1102,6 @@ NavigationHandleImpl::CheckWillStartRequest() {
         continue;
 
       case NavigationThrottle::BLOCK_REQUEST_AND_COLLAPSE:
-        frame_tree_node_->SetCollapsed(true);
-        FALLTHROUGH;
       case NavigationThrottle::BLOCK_REQUEST:
       case NavigationThrottle::CANCEL:
       case NavigationThrottle::CANCEL_AND_IGNORE:
@@ -1074,8 +1148,6 @@ NavigationHandleImpl::CheckWillRedirectRequest() {
         continue;
 
       case NavigationThrottle::BLOCK_REQUEST_AND_COLLAPSE:
-        frame_tree_node_->SetCollapsed(true);
-        FALLTHROUGH;
       case NavigationThrottle::BLOCK_REQUEST:
       case NavigationThrottle::CANCEL:
       case NavigationThrottle::CANCEL_AND_IGNORE:
@@ -1254,9 +1326,6 @@ void NavigationHandleImpl::CancelDeferredNavigationInternal(
   DCHECK(result.action() != NavigationThrottle::BLOCK_REQUEST_AND_COLLAPSE ||
          state_ == DEFERRING_START || state_ == DEFERRING_REDIRECT);
 
-  if (result.action() == NavigationThrottle::BLOCK_REQUEST_AND_COLLAPSE)
-    frame_tree_node_->SetCollapsed(true);
-
   TRACE_EVENT_ASYNC_STEP_INTO0("navigation", "NavigationHandle", this,
                                "CancelDeferredNavigation");
   state_ = CANCELING;
@@ -1313,8 +1382,11 @@ void NavigationHandleImpl::RegisterNavigationThrottles() {
   AddThrottle(
       MixedContentNavigationThrottle::CreateThrottleForNavigation(this));
 
+  // Handle Origin Policy (if enabled)
+  AddThrottle(OriginPolicyThrottle::MaybeCreateThrottleFor(this));
+
   for (auto& throttle :
-       RenderFrameDevToolsAgentHost::CreateNavigationThrottles(this)) {
+       devtools_instrumentation::CreateNavigationThrottles(this)) {
     AddThrottle(std::move(throttle));
   }
 
@@ -1387,6 +1459,54 @@ NavigationThrottle* NavigationHandleImpl::GetDeferringThrottle() const {
   if (next_index_ == 0)
     return nullptr;
   return throttles_[next_index_ - 1].get();
+}
+
+void NavigationHandleImpl::RenderProcessBlockedStateChanged(bool blocked) {
+  if (blocked)
+    StopCommitTimeout();
+  else
+    RestartCommitTimeout();
+}
+
+void NavigationHandleImpl::StopCommitTimeout() {
+  commit_timeout_timer_.Stop();
+  render_process_blocked_state_changed_subscription_.reset();
+  GetRenderFrameHost()->GetRenderWidgetHost()->RendererIsResponsive();
+}
+
+void NavigationHandleImpl::RestartCommitTimeout() {
+  commit_timeout_timer_.Stop();
+  if (state_ >= DID_COMMIT)
+    return;
+
+  RenderProcessHost* renderer_host =
+      GetRenderFrameHost()->GetRenderWidgetHost()->GetProcess();
+  render_process_blocked_state_changed_subscription_ =
+      renderer_host->RegisterBlockStateChangedCallback(base::BindRepeating(
+          &NavigationHandleImpl::RenderProcessBlockedStateChanged,
+          base::Unretained(this)));
+  if (!renderer_host->IsBlocked())
+    commit_timeout_timer_.Start(
+        FROM_HERE, g_commit_timeout,
+        base::BindRepeating(&NavigationHandleImpl::OnCommitTimeout,
+                            weak_factory_.GetWeakPtr()));
+}
+
+void NavigationHandleImpl::OnCommitTimeout() {
+  DCHECK_EQ(READY_TO_COMMIT, state_);
+  render_process_blocked_state_changed_subscription_.reset();
+  GetRenderFrameHost()->GetRenderWidgetHost()->RendererIsUnresponsive(
+      base::BindRepeating(&NavigationHandleImpl::RestartCommitTimeout,
+                          weak_factory_.GetWeakPtr()));
+}
+
+// static
+void NavigationHandleImpl::SetCommitTimeoutForTesting(
+    const base::TimeDelta& timeout) {
+  if (timeout.is_zero())
+    g_commit_timeout = kDefaultCommitTimeout;
+  else
+    g_commit_timeout = timeout;
 }
 
 }  // namespace content

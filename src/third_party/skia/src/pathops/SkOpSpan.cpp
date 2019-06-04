@@ -159,23 +159,32 @@ void SkOpSpanBase::addOpp(SkOpSpanBase* opp) {
     this->checkForCollapsedCoincidence();
 }
 
-bool SkOpSpanBase::collapsed(double s, double e) const {
+SkOpSpanBase::Collapsed SkOpSpanBase::collapsed(double s, double e) const {
     const SkOpPtT* start = &fPtT;
+    const SkOpPtT* startNext = nullptr;
     const SkOpPtT* walk = start;
     double min = walk->fT;
     double max = min;
     const SkOpSegment* segment = this->segment();
+    int safetyNet = 100000;
     while ((walk = walk->next()) != start) {
+        if (!--safetyNet) {
+            return Collapsed::kError;
+        }
+        if (walk == startNext) {
+            return Collapsed::kError;
+        }
         if (walk->segment() != segment) {
             continue;
         }
         min = SkTMin(min, walk->fT);
         max = SkTMax(max, walk->fT);
         if (between(min, s, max) && between(min, e, max)) {
-            return true;
+            return Collapsed::kYes;
         }
+        startNext = start->next();
     }
-    return false;
+    return Collapsed::kNo;
 }
 
 bool SkOpSpanBase::contains(const SkOpSpanBase* span) const {

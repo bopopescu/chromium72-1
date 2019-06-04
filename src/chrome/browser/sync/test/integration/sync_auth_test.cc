@@ -21,32 +21,32 @@
 
 using bookmarks_helper::AddURL;
 
-const char kShortLivedOAuth2Token[] =
-    "{"
-    "  \"refresh_token\": \"short_lived_refresh_token\","
-    "  \"access_token\": \"short_lived_access_token\","
-    "  \"expires_in\": 5,"  // 5 seconds.
-    "  \"token_type\": \"Bearer\""
-    "}";
+constexpr char kShortLivedOAuth2Token[] = R"(
+    {
+      "refresh_token": "short_lived_refresh_token",
+      "access_token": "short_lived_access_token",
+      "expires_in": 5,  // 5 seconds.
+      "token_type": "Bearer"
+    })";
 
-const char kValidOAuth2Token[] = "{"
-                                 "  \"refresh_token\": \"new_refresh_token\","
-                                 "  \"access_token\": \"new_access_token\","
-                                 "  \"expires_in\": 3600,"  // 1 hour.
-                                 "  \"token_type\": \"Bearer\""
-                                 "}";
+constexpr char kValidOAuth2Token[] = R"({
+                                   "refresh_token": "new_refresh_token",
+                                   "access_token": "new_access_token",
+                                   "expires_in": 3600,  // 1 hour.
+                                   "token_type": "Bearer"
+                                 })";
 
-const char kInvalidGrantOAuth2Token[] = "{"
-                                        "  \"error\": \"invalid_grant\""
-                                        "}";
+constexpr char kInvalidGrantOAuth2Token[] = R"({
+                                           "error": "invalid_grant"
+                                        })";
 
-const char kInvalidClientOAuth2Token[] = "{"
-                                         "  \"error\": \"invalid_client\""
-                                         "}";
+constexpr char kInvalidClientOAuth2Token[] = R"({
+                                           "error": "invalid_client"
+                                         })";
 
-const char kEmptyOAuth2Token[] = "";
+constexpr char kEmptyOAuth2Token[] = "";
 
-const char kMalformedOAuth2Token[] = "{ \"foo\": ";
+constexpr char kMalformedOAuth2Token[] = R"({ "foo": )";
 
 // Waits until local changes are committed or an auth error is encountered.
 class TestForAuthError : public UpdatedProgressMarkerChecker {
@@ -106,7 +106,6 @@ class SyncAuthTest : public SyncTest {
         set_max_authorization_token_fetch_retries_for_testing(0);
   }
 
-
  private:
   int GetNextBookmarkIndex() {
     return bookmark_index_++;
@@ -120,7 +119,7 @@ class SyncAuthTest : public SyncTest {
 // Verify that sync works with a valid OAuth2 token.
 IN_PROC_BROWSER_TEST_F(SyncAuthTest, Sanity) {
   ASSERT_TRUE(SetupSync());
-  GetFakeServer()->SetAuthenticated();
+  GetFakeServer()->ClearHttpError();
   DisableTokenFetchRetries();
   SetOAuth2TokenResponse(kValidOAuth2Token,
                          net::HTTP_OK,
@@ -134,7 +133,7 @@ IN_PROC_BROWSER_TEST_F(SyncAuthTest, Sanity) {
 IN_PROC_BROWSER_TEST_F(SyncAuthTest, RetryOnInternalServerError500) {
   ASSERT_TRUE(SetupSync());
   ASSERT_FALSE(AttemptToTriggerAuthError());
-  GetFakeServer()->SetUnauthenticated();
+  GetFakeServer()->SetHttpError(net::HTTP_UNAUTHORIZED);
   DisableTokenFetchRetries();
   SetOAuth2TokenResponse(kValidOAuth2Token,
                          net::HTTP_INTERNAL_SERVER_ERROR,
@@ -149,7 +148,7 @@ IN_PROC_BROWSER_TEST_F(SyncAuthTest, RetryOnInternalServerError500) {
 IN_PROC_BROWSER_TEST_F(SyncAuthTest, RetryOnHttpForbidden403) {
   ASSERT_TRUE(SetupSync());
   ASSERT_FALSE(AttemptToTriggerAuthError());
-  GetFakeServer()->SetUnauthenticated();
+  GetFakeServer()->SetHttpError(net::HTTP_UNAUTHORIZED);
   DisableTokenFetchRetries();
   SetOAuth2TokenResponse(kEmptyOAuth2Token,
                          net::HTTP_FORBIDDEN,
@@ -163,7 +162,7 @@ IN_PROC_BROWSER_TEST_F(SyncAuthTest, RetryOnHttpForbidden403) {
 IN_PROC_BROWSER_TEST_F(SyncAuthTest, RetryOnRequestFailed) {
   ASSERT_TRUE(SetupSync());
   ASSERT_FALSE(AttemptToTriggerAuthError());
-  GetFakeServer()->SetUnauthenticated();
+  GetFakeServer()->SetHttpError(net::HTTP_UNAUTHORIZED);
   DisableTokenFetchRetries();
   SetOAuth2TokenResponse(kEmptyOAuth2Token,
                          net::HTTP_INTERNAL_SERVER_ERROR,
@@ -177,7 +176,7 @@ IN_PROC_BROWSER_TEST_F(SyncAuthTest, RetryOnRequestFailed) {
 IN_PROC_BROWSER_TEST_F(SyncAuthTest, RetryOnMalformedToken) {
   ASSERT_TRUE(SetupSync());
   ASSERT_FALSE(AttemptToTriggerAuthError());
-  GetFakeServer()->SetUnauthenticated();
+  GetFakeServer()->SetHttpError(net::HTTP_UNAUTHORIZED);
   DisableTokenFetchRetries();
   SetOAuth2TokenResponse(kMalformedOAuth2Token,
                          net::HTTP_OK,
@@ -192,7 +191,7 @@ IN_PROC_BROWSER_TEST_F(SyncAuthTest, RetryOnMalformedToken) {
 IN_PROC_BROWSER_TEST_F(SyncAuthTest, InvalidGrant) {
   ASSERT_TRUE(SetupSync());
   ASSERT_FALSE(AttemptToTriggerAuthError());
-  GetFakeServer()->SetUnauthenticated();
+  GetFakeServer()->SetHttpError(net::HTTP_UNAUTHORIZED);
   DisableTokenFetchRetries();
   SetOAuth2TokenResponse(kInvalidGrantOAuth2Token,
                          net::HTTP_BAD_REQUEST,
@@ -208,7 +207,7 @@ IN_PROC_BROWSER_TEST_F(SyncAuthTest, InvalidGrant) {
 IN_PROC_BROWSER_TEST_F(SyncAuthTest, RetryInvalidClient) {
   ASSERT_TRUE(SetupSync());
   ASSERT_FALSE(AttemptToTriggerAuthError());
-  GetFakeServer()->SetUnauthenticated();
+  GetFakeServer()->SetHttpError(net::HTTP_UNAUTHORIZED);
   DisableTokenFetchRetries();
   SetOAuth2TokenResponse(kInvalidClientOAuth2Token,
                          net::HTTP_BAD_REQUEST,
@@ -222,7 +221,7 @@ IN_PROC_BROWSER_TEST_F(SyncAuthTest, RetryInvalidClient) {
 IN_PROC_BROWSER_TEST_F(SyncAuthTest, RetryRequestCanceled) {
   ASSERT_TRUE(SetupSync());
   ASSERT_FALSE(AttemptToTriggerAuthError());
-  GetFakeServer()->SetUnauthenticated();
+  GetFakeServer()->SetHttpError(net::HTTP_UNAUTHORIZED);
   DisableTokenFetchRetries();
   SetOAuth2TokenResponse(kEmptyOAuth2Token,
                          net::HTTP_INTERNAL_SERVER_ERROR,
@@ -237,13 +236,13 @@ IN_PROC_BROWSER_TEST_F(SyncAuthTest, RetryRequestCanceled) {
 // HTTP_BAD_REQUEST (400) response code.
 IN_PROC_BROWSER_TEST_F(SyncAuthTest, FailInitialSetupWithPersistentError) {
   ASSERT_TRUE(SetupClients());
-  GetFakeServer()->SetUnauthenticated();
+  GetFakeServer()->SetHttpError(net::HTTP_UNAUTHORIZED);
   DisableTokenFetchRetries();
   SetOAuth2TokenResponse(kInvalidGrantOAuth2Token,
                          net::HTTP_BAD_REQUEST,
                          net::URLRequestStatus::SUCCESS);
   ASSERT_FALSE(GetClient(0)->SetupSync());
-  ASSERT_FALSE(GetSyncService(0)->IsSyncActive());
+  ASSERT_FALSE(GetSyncService(0)->IsSyncFeatureActive());
   ASSERT_EQ(GoogleServiceAuthError::INVALID_GAIA_CREDENTIALS,
             GetSyncService(0)->GetAuthError().state());
 }
@@ -254,21 +253,22 @@ IN_PROC_BROWSER_TEST_F(SyncAuthTest, FailInitialSetupWithPersistentError) {
 // code.
 IN_PROC_BROWSER_TEST_F(SyncAuthTest, RetryInitialSetupWithTransientError) {
   ASSERT_TRUE(SetupClients());
-  GetFakeServer()->SetUnauthenticated();
+  GetFakeServer()->SetHttpError(net::HTTP_UNAUTHORIZED);
   DisableTokenFetchRetries();
   SetOAuth2TokenResponse(kEmptyOAuth2Token,
                          net::HTTP_INTERNAL_SERVER_ERROR,
                          net::URLRequestStatus::SUCCESS);
   ASSERT_FALSE(GetClient(0)->SetupSync());
-  ASSERT_FALSE(GetSyncService(0)->IsSyncActive());
+  ASSERT_FALSE(GetSyncService(0)->IsSyncFeatureActive());
   ASSERT_TRUE(GetSyncService(0)->IsRetryingAccessTokenFetchForTest());
 }
 
 // Verify that ProfileSyncService fetches a new token when an old token expires.
-IN_PROC_BROWSER_TEST_F(SyncAuthTest, TokenExpiry) {
+// Disabled due to flakiness: https://crbug.com/860200
+IN_PROC_BROWSER_TEST_F(SyncAuthTest, DISABLED_TokenExpiry) {
   // Initial sync succeeds with a short lived OAuth2 Token.
   ASSERT_TRUE(SetupClients());
-  GetFakeServer()->SetAuthenticated();
+  GetFakeServer()->ClearHttpError();
   DisableTokenFetchRetries();
   SetOAuth2TokenResponse(kShortLivedOAuth2Token,
                          net::HTTP_OK,
@@ -281,7 +281,7 @@ IN_PROC_BROWSER_TEST_F(SyncAuthTest, TokenExpiry) {
 
   // Trigger an auth error on the server so PSS requests OA2TS for a new token
   // during the next sync cycle.
-  GetFakeServer()->SetUnauthenticated();
+  GetFakeServer()->SetHttpError(net::HTTP_UNAUTHORIZED);
   SetOAuth2TokenResponse(kEmptyOAuth2Token,
                          net::HTTP_INTERNAL_SERVER_ERROR,
                          net::URLRequestStatus::SUCCESS);
@@ -289,7 +289,7 @@ IN_PROC_BROWSER_TEST_F(SyncAuthTest, TokenExpiry) {
   ASSERT_TRUE(GetSyncService(0)->IsRetryingAccessTokenFetchForTest());
 
   // Trigger an auth success state and set up a new valid OAuth2 token.
-  GetFakeServer()->SetAuthenticated();
+  GetFakeServer()->ClearHttpError();
   SetOAuth2TokenResponse(kValidOAuth2Token,
                          net::HTTP_OK,
                          net::URLRequestStatus::SUCCESS);

@@ -30,14 +30,20 @@
 
 namespace blink {
 
-using namespace HTMLNames;
+using namespace html_names;
 
 inline HTMLFrameElement::HTMLFrameElement(Document& document)
-    : HTMLFrameElementBase(frameTag, document),
+    : HTMLFrameElementBase(kFrameTag, document),
       frame_border_(true),
       frame_border_set_(false) {}
 
 DEFINE_NODE_FACTORY(HTMLFrameElement)
+
+const HashSet<AtomicString>& HTMLFrameElement::GetCheckedAttributeNames()
+    const {
+  DEFINE_STATIC_LOCAL(HashSet<AtomicString>, attribute_set, ({"src"}));
+  return attribute_set;
+}
 
 bool HTMLFrameElement::LayoutObjectIsNeeded(const ComputedStyle&) const {
   // For compatibility, frames render even when display: none is set.
@@ -49,7 +55,7 @@ LayoutObject* HTMLFrameElement::CreateLayoutObject(const ComputedStyle&) {
 }
 
 bool HTMLFrameElement::NoResize() const {
-  return hasAttribute(noresizeAttr);
+  return hasAttribute(kNoresizeAttr);
 }
 
 void HTMLFrameElement::AttachLayoutTree(AttachContext& context) {
@@ -64,11 +70,11 @@ void HTMLFrameElement::AttachLayoutTree(AttachContext& context) {
 
 void HTMLFrameElement::ParseAttribute(
     const AttributeModificationParams& params) {
-  if (params.name == frameborderAttr) {
+  if (params.name == kFrameborderAttr) {
     frame_border_ = params.new_value.ToInt();
     frame_border_set_ = !params.new_value.IsNull();
     // FIXME: If we are already attached, this has no effect.
-  } else if (params.name == noresizeAttr) {
+  } else if (params.name == kNoresizeAttr) {
     if (GetLayoutObject())
       GetLayoutObject()->UpdateFromElement();
   } else {
@@ -79,14 +85,15 @@ void HTMLFrameElement::ParseAttribute(
 ParsedFeaturePolicy HTMLFrameElement::ConstructContainerPolicy(
     Vector<String>*) const {
   // Frame elements are not allowed to enable the fullscreen feature. Add an
-  // empty whitelist for the fullscreen feature so that the framed content is
+  // empty allowlist for the fullscreen feature so that the framed content is
   // unable to use the API, regardless of origin.
   // https://fullscreen.spec.whatwg.org/#model
   ParsedFeaturePolicy container_policy;
-  ParsedFeaturePolicyDeclaration whitelist;
-  whitelist.feature = mojom::FeaturePolicyFeature::kFullscreen;
-  whitelist.matches_all_origins = false;
-  container_policy.push_back(whitelist);
+  ParsedFeaturePolicyDeclaration allowlist;
+  allowlist.feature = mojom::FeaturePolicyFeature::kFullscreen;
+  allowlist.matches_all_origins = false;
+  allowlist.disposition = mojom::FeaturePolicyDisposition::kEnforce;
+  container_policy.push_back(allowlist);
   return container_policy;
 }
 

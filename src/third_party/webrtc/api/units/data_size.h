@@ -11,94 +11,56 @@
 #ifndef API_UNITS_DATA_SIZE_H_
 #define API_UNITS_DATA_SIZE_H_
 
-#include <stdint.h>
-#include <cmath>
-#include <limits>
-#include <string>
+#ifdef UNIT_TEST
+#include <ostream>  // no-presubmit-check TODO(webrtc:8982)
+#endif              // UNIT_TEST
 
-#include "rtc_base/checks.h"
+#include <string>
+#include <type_traits>
+
+#include "rtc_base/units/unit_base.h"
 
 namespace webrtc {
-namespace data_size_impl {
-constexpr int64_t kPlusInfinityVal = std::numeric_limits<int64_t>::max();
-}  // namespace data_size_impl
-
 // DataSize is a class represeting a count of bytes.
-class DataSize {
+class DataSize final : public rtc_units_impl::RelativeUnit<DataSize> {
  public:
   DataSize() = delete;
-  static DataSize Zero() { return DataSize(0); }
-  static DataSize Infinity() {
-    return DataSize(data_size_impl::kPlusInfinityVal);
+  static constexpr DataSize Infinity() { return PlusInfinity(); }
+  template <int64_t bytes>
+  static constexpr DataSize Bytes() {
+    return FromStaticValue<bytes>();
   }
-  static DataSize bytes(int64_t bytes) {
-    RTC_DCHECK_GE(bytes, 0);
-    return DataSize(bytes);
+
+  template <
+      typename T,
+      typename std::enable_if<std::is_arithmetic<T>::value>::type* = nullptr>
+  static DataSize bytes(T bytes) {
+    return FromValue(bytes);
   }
-  int64_t bytes() const {
-    RTC_DCHECK(IsFinite());
-    return bytes_;
+  template <typename T = int64_t>
+  typename std::enable_if<std::is_arithmetic<T>::value, T>::type bytes() const {
+    return ToValue<T>();
   }
-  int64_t kilobytes() const { return (bytes() + 500) / 1000; }
-  bool IsZero() const { return bytes_ == 0; }
-  bool IsInfinite() const { return bytes_ == data_size_impl::kPlusInfinityVal; }
-  bool IsFinite() const { return !IsInfinite(); }
-  DataSize operator-(const DataSize& other) const {
-    return DataSize::bytes(bytes() - other.bytes());
+
+  constexpr int64_t bytes_or(int64_t fallback_value) const {
+    return ToValueOr(fallback_value);
   }
-  DataSize operator+(const DataSize& other) const {
-    return DataSize::bytes(bytes() + other.bytes());
-  }
-  DataSize& operator-=(const DataSize& other) {
-    bytes_ -= other.bytes();
-    return *this;
-  }
-  DataSize& operator+=(const DataSize& other) {
-    bytes_ += other.bytes();
-    return *this;
-  }
-  bool operator==(const DataSize& other) const {
-    return bytes_ == other.bytes_;
-  }
-  bool operator!=(const DataSize& other) const {
-    return bytes_ != other.bytes_;
-  }
-  bool operator<=(const DataSize& other) const {
-    return bytes_ <= other.bytes_;
-  }
-  bool operator>=(const DataSize& other) const {
-    return bytes_ >= other.bytes_;
-  }
-  bool operator>(const DataSize& other) const { return bytes_ > other.bytes_; }
-  bool operator<(const DataSize& other) const { return bytes_ < other.bytes_; }
 
  private:
-  explicit DataSize(int64_t bytes) : bytes_(bytes) {}
-  int64_t bytes_;
+  friend class rtc_units_impl::UnitBase<DataSize>;
+  using RelativeUnit::RelativeUnit;
+  static constexpr bool one_sided = true;
 };
-inline DataSize operator*(const DataSize& size, const double& scalar) {
-  return DataSize::bytes(std::round(size.bytes() * scalar));
-}
-inline DataSize operator*(const double& scalar, const DataSize& size) {
-  return size * scalar;
-}
-inline DataSize operator*(const DataSize& size, const int64_t& scalar) {
-  return DataSize::bytes(size.bytes() * scalar);
-}
-inline DataSize operator*(const int64_t& scalar, const DataSize& size) {
-  return size * scalar;
-}
-inline DataSize operator*(const DataSize& size, const int32_t& scalar) {
-  return DataSize::bytes(size.bytes() * scalar);
-}
-inline DataSize operator*(const int32_t& scalar, const DataSize& size) {
-  return size * scalar;
-}
-inline DataSize operator/(const DataSize& size, const int64_t& scalar) {
-  return DataSize::bytes(size.bytes() / scalar);
-}
 
-std::string ToString(const DataSize& value);
+std::string ToString(DataSize value);
+
+#ifdef UNIT_TEST
+inline std::ostream& operator<<(  // no-presubmit-check TODO(webrtc:8982)
+    std::ostream& stream,         // no-presubmit-check TODO(webrtc:8982)
+    DataSize value) {
+  return stream << ToString(value);
+}
+#endif  // UNIT_TEST
 
 }  // namespace webrtc
 

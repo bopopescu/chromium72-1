@@ -79,6 +79,7 @@
         'misc/paths_test.cc',
         'misc/scoped_forbid_return_test.cc',
         'misc/random_string_test.cc',
+        'misc/range_set_test.cc',
         'misc/reinterpret_bytes_test.cc',
         'misc/time_test.cc',
         'misc/uuid_test.cc',
@@ -191,6 +192,15 @@
           },
           'cflags!': [
             '-Wexit-time-destructors',
+          ],
+          'conditions': [
+            ['OS=="win"', {
+              'link_settings': {
+                'libraries': [
+                  '-lws2_32.lib',
+                ],
+              },
+            }],
           ],
         },
       ],

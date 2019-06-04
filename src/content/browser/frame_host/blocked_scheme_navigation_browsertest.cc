@@ -19,7 +19,6 @@
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/navigation_entry.h"
 #include "content/public/browser/web_contents.h"
-#include "content/public/common/browser_side_navigation_policy.h"
 #include "content/public/common/content_features.h"
 #include "content/public/common/content_paths.h"
 #include "content/public/common/content_switches.h"
@@ -450,11 +449,11 @@ class BlockedSchemeNavigationBrowserTest
     DownloadManager* download_manager = BrowserContext::GetDownloadManager(
         shell()->web_contents()->GetBrowserContext());
 
-    EXPECT_TRUE(ExecuteScript(rfh, javascript));
-    Shell* new_shell = new_shell_observer.GetShell();
-
     DownloadTestObserverTerminal download_observer(
         download_manager, 1, DownloadTestObserver::ON_DANGEROUS_DOWNLOAD_FAIL);
+
+    EXPECT_TRUE(ExecuteScript(rfh, javascript));
+    Shell* new_shell = new_shell_observer.GetShell();
 
     WaitForLoadStop(new_shell->web_contents());
     // If no download happens, this will timeout.

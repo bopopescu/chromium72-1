@@ -6,13 +6,14 @@
 
 #include "base/feature_list.h"
 #include "base/metrics/histogram_macros.h"
-#include "base/task_scheduler/post_task.h"
-#include "base/task_scheduler/task_traits.h"
+#include "base/task/post_task.h"
+#include "base/task/task_traits.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/thumbnails/thumbnail_service.h"
 #include "chrome/browser/thumbnails/thumbnail_service_factory.h"
 #include "chrome/browser/thumbnails/thumbnail_utils.h"
 #include "chrome/common/chrome_features.h"
+#include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/render_view_host.h"
@@ -46,8 +47,6 @@ void ComputeThumbnailScore(const SkBitmap& thumbnail,
 }
 
 }  // namespace
-
-DEFINE_WEB_CONTENTS_USER_DATA_KEY(ThumbnailTabHelper);
 
 // Overview
 // --------
@@ -303,7 +302,7 @@ void ThumbnailTabHelper::ProcessCapturedBitmap(TriggerReason trigger,
     LogThumbnailingOutcome(trigger, Outcome::SUCCESS);
     base::PostTaskWithTraitsAndReply(
         FROM_HERE,
-        {base::TaskPriority::BACKGROUND,
+        {base::TaskPriority::BEST_EFFORT,
          base::TaskShutdownBehavior::SKIP_ON_SHUTDOWN},
         base::Bind(&ComputeThumbnailScore, bitmap, thumbnailing_context_),
         base::Bind(&ThumbnailTabHelper::StoreThumbnail,
@@ -315,9 +314,8 @@ void ThumbnailTabHelper::ProcessCapturedBitmap(TriggerReason trigger,
     // that cleanup happens on that thread.
     // TODO(treib): Figure out whether it actually happen that we get called
     // back on something other than the UI thread.
-    content::BrowserThread::PostTask(
-        content::BrowserThread::UI,
-        FROM_HERE,
+    base::PostTaskWithTraits(
+        FROM_HERE, {content::BrowserThread::UI},
         base::Bind(&ThumbnailTabHelper::CleanUpFromThumbnailGeneration,
                    weak_factory_.GetWeakPtr()));
   }

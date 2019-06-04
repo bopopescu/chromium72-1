@@ -5,7 +5,9 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_PLATFORM_LOADER_FETCH_SCRIPT_FETCH_OPTIONS_H_
 #define THIRD_PARTY_BLINK_RENDERER_PLATFORM_LOADER_FETCH_SCRIPT_FETCH_OPTIONS_H_
 
+#include "services/network/public/mojom/referrer_policy.mojom-shared.h"
 #include "third_party/blink/public/platform/web_url_request.h"
+#include "third_party/blink/renderer/platform/cross_origin_attribute_value.h"
 #include "third_party/blink/renderer/platform/loader/fetch/fetch_parameters.h"
 #include "third_party/blink/renderer/platform/loader/fetch/integrity_metadata.h"
 #include "third_party/blink/renderer/platform/loader/fetch/resource_loader_options.h"
@@ -27,20 +29,26 @@ class PLATFORM_EXPORT ScriptFetchOptions final {
   // cryptographic nonce is the empty string, integrity metadata is the empty
   // string, parser metadata is "not-parser-inserted", and credentials mode
   // is "omit"." [spec text]
+  // TODO(domfarolino): Update this to use probably "include" or "same-origin"
+  // credentials mode, once spec decision is made at
+  // https://github.com/whatwg/html/pull/3656.
   ScriptFetchOptions()
       : parser_state_(ParserDisposition::kNotParserInserted),
-        credentials_mode_(network::mojom::FetchCredentialsMode::kOmit) {}
+        credentials_mode_(network::mojom::FetchCredentialsMode::kOmit),
+        referrer_policy_(network::mojom::ReferrerPolicy::kDefault) {}
 
   ScriptFetchOptions(const String& nonce,
                      const IntegrityMetadataSet& integrity_metadata,
                      const String& integrity_attribute,
                      ParserDisposition parser_state,
-                     network::mojom::FetchCredentialsMode credentials_mode)
+                     network::mojom::FetchCredentialsMode credentials_mode,
+                     network::mojom::ReferrerPolicy referrer_policy)
       : nonce_(nonce),
         integrity_metadata_(integrity_metadata),
         integrity_attribute_(integrity_attribute),
         parser_state_(parser_state),
-        credentials_mode_(credentials_mode) {}
+        credentials_mode_(credentials_mode),
+        referrer_policy_(referrer_policy) {}
   ~ScriptFetchOptions() = default;
 
   const String& Nonce() const { return nonce_; }
@@ -54,11 +62,15 @@ class PLATFORM_EXPORT ScriptFetchOptions final {
   network::mojom::FetchCredentialsMode CredentialsMode() const {
     return credentials_mode_;
   }
+  network::mojom::ReferrerPolicy GetReferrerPolicy() const {
+    return referrer_policy_;
+  }
 
   // https://html.spec.whatwg.org/multipage/webappapis.html#fetch-a-classic-script
   // Steps 1 and 3.
   FetchParameters CreateFetchParameters(const KURL&,
                                         const SecurityOrigin*,
+                                        CrossOriginAttributeValue,
                                         const WTF::TextEncoding&,
                                         FetchParameters::DeferOption) const;
 
@@ -75,6 +87,9 @@ class PLATFORM_EXPORT ScriptFetchOptions final {
 
   // https://html.spec.whatwg.org/multipage/webappapis.html#concept-script-fetch-options-credentials
   const network::mojom::FetchCredentialsMode credentials_mode_;
+
+  // https://html.spec.whatwg.org/multipage/webappapis.html#concept-script-fetch-options-referrer-policy
+  const network::mojom::ReferrerPolicy referrer_policy_;
 };
 
 }  // namespace blink

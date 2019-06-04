@@ -11,13 +11,13 @@ namespace blink {
 
 class CSSParserLocalContext;
 
-namespace CSSLonghand {
+namespace css_longhand {
 
 const CSSValue* ListStyleImage::ParseSingleValue(
     CSSParserTokenRange& range,
     const CSSParserContext& context,
     const CSSParserLocalContext&) const {
-  return CSSPropertyParserHelpers::ConsumeImageOrNone(range, &context);
+  return css_property_parser_helpers::ConsumeImageOrNone(range, &context);
 }
 
 const CSSValue* ListStyleImage::CSSValueFromComputedStyleInternal(
@@ -31,5 +31,11 @@ const CSSValue* ListStyleImage::CSSValueFromComputedStyleInternal(
   return CSSIdentifierValue::Create(CSSValueNone);
 }
 
-}  // namespace CSSLonghand
+void ListStyleImage::ApplyValue(StyleResolverState& state,
+                                const CSSValue& value) const {
+  state.Style()->SetListStyleImage(
+      state.GetStyleImage(CSSPropertyListStyleImage, value));
+}
+
+}  // namespace css_longhand
 }  // namespace blink

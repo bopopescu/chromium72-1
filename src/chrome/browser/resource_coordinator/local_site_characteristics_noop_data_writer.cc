@@ -15,6 +15,9 @@ void LocalSiteCharacteristicsNoopDataWriter::NotifySiteLoaded() {}
 
 void LocalSiteCharacteristicsNoopDataWriter::NotifySiteUnloaded() {}
 
+void LocalSiteCharacteristicsNoopDataWriter::NotifySiteVisibilityChanged(
+    TabVisibility visibility) {}
+
 void LocalSiteCharacteristicsNoopDataWriter::
     NotifyUpdatesFaviconInBackground() {}
 
@@ -24,5 +27,11 @@ void LocalSiteCharacteristicsNoopDataWriter::NotifyUsesAudioInBackground() {}
 
 void LocalSiteCharacteristicsNoopDataWriter::
     NotifyUsesNotificationsInBackground() {}
+
+void LocalSiteCharacteristicsNoopDataWriter::
+    NotifyLoadTimePerformanceMeasurement(
+        base::TimeDelta load_duration,
+        base::TimeDelta cpu_usage_estimate,
+        uint64_t private_footprint_kb_estimate) {}
 
 }  // namespace resource_coordinator

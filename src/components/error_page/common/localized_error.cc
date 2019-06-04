@@ -22,7 +22,6 @@
 #include "base/values.h"
 #include "build/build_config.h"
 #include "components/error_page/common/error.h"
-#include "components/error_page/common/error_page_features.h"
 #include "components/error_page/common/error_page_params.h"
 #include "components/error_page/common/error_page_switches.h"
 #include "components/error_page/common/net_error_info.h"
@@ -37,10 +36,6 @@
 
 #if defined(OS_WIN)
 #include "base/win/windows_version.h"
-#endif
-
-#if defined(OS_ANDROID)
-#include "components/offline_pages/core/offline_page_feature.h"
 #endif
 
 namespace error_page {
@@ -84,7 +79,7 @@ struct LocalizedErrorMap {
   // mouse over when the error is in a frame.
   unsigned int summary_resource_id;
   int suggestions;  // Bitmap of SUGGEST_* values.
-  int buttons; // Which buttons if any to show.
+  int buttons;      // Bitmap of which buttons if any to show.
 };
 
 // clang-format off
@@ -258,6 +253,12 @@ const LocalizedErrorMap net_error_options[] = {
    SHOW_NO_BUTTONS,
   },
   {net::ERR_SSL_VERSION_INTERFERENCE,
+   IDS_ERRORPAGES_HEADING_NOT_AVAILABLE,
+   IDS_ERRORPAGES_SUMMARY_CONNECTION_FAILED,
+   SUGGEST_CHECK_CONNECTION | SUGGEST_FIREWALL_CONFIG | SUGGEST_PROXY_CONFIG,
+   SHOW_BUTTON_RELOAD,
+  },
+  {net::ERR_TLS13_DOWNGRADE_DETECTED,
    IDS_ERRORPAGES_HEADING_NOT_AVAILABLE,
    IDS_ERRORPAGES_SUMMARY_CONNECTION_FAILED,
    SUGGEST_CHECK_CONNECTION | SUGGEST_FIREWALL_CONFIG | SUGGEST_PROXY_CONFIG,
@@ -492,16 +493,19 @@ base::DictionaryValue* GetStandardMenuItemsText() {
   return standard_menu_items_text;
 }
 
+// Returns true if the error is due to a disconnected network.
+bool IsOfflineError(const std::string& error_domain, int error_code) {
+  return ((error_code == net::ERR_INTERNET_DISCONNECTED &&
+           error_domain == Error::kNetErrorDomain) ||
+          (error_code == error_page::DNS_PROBE_FINISHED_NO_INTERNET &&
+           error_domain == Error::kDnsProbeErrorDomain));
+}
+
 // Gets the icon class for a given |error_domain| and |error_code|.
 const char* GetIconClassForError(const std::string& error_domain,
                                  int error_code) {
-  if ((error_code == net::ERR_INTERNET_DISCONNECTED &&
-       error_domain == Error::kNetErrorDomain) ||
-      (error_code == error_page::DNS_PROBE_FINISHED_NO_INTERNET &&
-       error_domain == Error::kDnsProbeErrorDomain))
-    return "icon-offline";
-
-  return "icon-generic";
+  return IsOfflineError(error_domain, error_code) ? "icon-offline"
+                                                  : "icon-generic";
 }
 
 // If the first suggestion is for a Google cache copy link. Promote the
@@ -660,7 +664,7 @@ void GetSuggestionsSummaryList(int error_code,
     DCHECK(suggestions_summary_list->empty());
     DCHECK(!(suggestions & ~SUGGEST_NAVIGATE_TO_ORIGIN));
     url::Origin failed_origin = url::Origin::Create(failed_url);
-    if (failed_origin.unique())
+    if (failed_origin.opaque())
       return;
 
     auto suggestion = std::make_unique<base::DictionaryValue>();
@@ -869,6 +873,8 @@ void LocalizedError::GetStrings(
     bool stale_copy_in_cache,
     bool can_show_network_diagnostics_dialog,
     bool is_incognito,
+    OfflineContentOnNetErrorFeatureState offline_content_feature_state,
+    bool auto_fetch_feature_enabled,
     const std::string& locale,
     std::unique_ptr<error_page::ErrorPageParams> params,
     base::DictionaryValue* error_strings) {
@@ -939,12 +945,6 @@ void LocalizedError::GetStrings(
         l10n_util::GetStringUTF16(IDS_ERRORPAGE_FUN_DISABLED));
   }
 
-  if (command_line->HasSwitch(error_page::switches::kEnableEasterEggBdayMode) ||
-      base::FeatureList::IsEnabled(
-          error_page::features::kDinoEasterEggBdayMode)) {
-    error_strings->SetBoolean("bdayMode", true);
-  }
-
   summary->SetString("failedUrl", failed_url_string);
   summary->SetString("hostName", host_name);
 
@@ -972,7 +972,7 @@ void LocalizedError::GetStrings(
   // If no parameters were provided, use the defaults.
   if (!params) {
     params.reset(new error_page::ErrorPageParams());
-    params->suggest_reload = !!(options.buttons && SHOW_BUTTON_RELOAD);
+    params->suggest_reload = !!(options.buttons & SHOW_BUTTON_RELOAD);
   }
 
   base::ListValue* suggestions_details = nullptr;
@@ -1070,21 +1070,62 @@ void LocalizedError::GetStrings(
   if (!is_post && !reload_visible && !show_saved_copy_visible &&
       !is_incognito && failed_url.is_valid() &&
       failed_url.SchemeIsHTTPOrHTTPS() &&
-      IsSuggested(options.suggestions, SUGGEST_OFFLINE_CHECKS)) {
-    error_strings->SetPath(
-        {"downloadButton", "msg"},
-        base::Value(l10n_util::GetStringUTF16(IDS_ERRORPAGES_BUTTON_DOWNLOAD)));
-    error_strings->SetPath({"downloadButton", "disabledMsg"},
-                           base::Value(l10n_util::GetStringUTF16(
-                               IDS_ERRORPAGES_BUTTON_DOWNLOADING)));
+      IsOfflineError(error_domain, error_code)) {
+    if (!auto_fetch_feature_enabled) {
+      error_strings->SetPath({"downloadButton", "msg"},
+                             base::Value(l10n_util::GetStringUTF16(
+                                 IDS_ERRORPAGES_BUTTON_DOWNLOAD)));
+      error_strings->SetPath({"downloadButton", "disabledMsg"},
+                             base::Value(l10n_util::GetStringUTF16(
+                                 IDS_ERRORPAGES_BUTTON_DOWNLOADING)));
+    } else {
+      error_strings->SetString("attemptAutoFetch", "true");
+      error_strings->SetPath({"savePageLater", "savePageMsg"},
+                             base::Value(l10n_util::GetStringUTF16(
+                                 IDS_ERRORPAGES_SAVE_PAGE_BUTTON)));
+      error_strings->SetPath({"savePageLater", "cancelMsg"},
+                             base::Value(l10n_util::GetStringUTF16(
+                                 IDS_ERRORPAGES_CANCEL_SAVE_PAGE_BUTTON)));
+    }
+  }
 
-    if (offline_pages::ShouldShowAlternateDinoPage()) {
-      // Under the experiment, we will show a disabled reload button
-      // in addition to an enabled download button.
-      error_strings->SetPath(
-          {"reloadButton", "msg"},
-          base::Value(l10n_util::GetStringUTF16(IDS_ERRORPAGES_BUTTON_RELOAD)));
-      error_strings->SetKey("alternateDownloadButtonStyle", base::Value(true));
+  error_strings->SetString(
+      "closeDescriptionPopup",
+      l10n_util::GetStringUTF16(IDS_ERRORPAGES_SUGGESTION_CLOSE_POPUP_BUTTON));
+
+  if (IsOfflineError(error_domain, error_code) && !is_incognito) {
+    switch (offline_content_feature_state) {
+      case OfflineContentOnNetErrorFeatureState::kDisabled:
+        break;
+      case OfflineContentOnNetErrorFeatureState::kEnabledList:
+        error_strings->SetString("suggestedOfflineContentPresentationMode",
+                                 "list");
+        error_strings->SetPath({"offlineContentList", "title"},
+                               base::Value(l10n_util::GetStringUTF16(
+                                   IDS_ERRORPAGES_OFFLINE_CONTENT_LIST_TITLE)));
+        error_strings->SetPath(
+            {"offlineContentList", "actionText"},
+            base::Value(l10n_util::GetStringUTF16(
+                IDS_ERRORPAGES_OFFLINE_CONTENT_LIST_OPEN_ALL_BUTTON)));
+        error_strings->SetPath(
+            {"offlineContentList", "showText"},
+            base::Value(l10n_util::GetStringUTF16(IDS_SHOW)));
+        error_strings->SetPath(
+            {"offlineContentList", "hideText"},
+            base::Value(l10n_util::GetStringUTF16(IDS_HIDE)));
+        break;
+      case OfflineContentOnNetErrorFeatureState::kEnabledSummary:
+        error_strings->SetString("suggestedOfflineContentPresentationMode",
+                                 "summary");
+        error_strings->SetPath(
+            {"offlineContentSummary", "description"},
+            base::Value(l10n_util::GetStringUTF16(
+                IDS_ERRORPAGES_OFFLINE_CONTENT_SUMMARY_DESCRIPTION)));
+        error_strings->SetPath(
+            {"offlineContentSummary", "actionText"},
+            base::Value(l10n_util::GetStringUTF16(
+                IDS_ERRORPAGES_OFFLINE_CONTENT_SUMMARY_BUTTON)));
+        break;
     }
   }
 #endif  // defined(OS_ANDROID)

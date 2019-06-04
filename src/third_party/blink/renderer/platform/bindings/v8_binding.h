@@ -39,10 +39,9 @@
 #include "third_party/blink/renderer/platform/bindings/v8_binding_macros.h"
 #include "third_party/blink/renderer/platform/bindings/v8_per_isolate_data.h"
 #include "third_party/blink/renderer/platform/bindings/v8_value_cache.h"
-#include "third_party/blink/renderer/platform/heap/handle.h"
 #include "third_party/blink/renderer/platform/platform_export.h"
+#include "third_party/blink/renderer/platform/wtf/forward.h"
 #include "third_party/blink/renderer/platform/wtf/text/atomic_string.h"
-#include "third_party/blink/renderer/platform/wtf/text/string_view.h"
 #include "v8/include/v8.h"
 
 namespace blink {
@@ -217,7 +216,7 @@ inline void V8SetReturnValueFast(const CallbackInfo& callback_info,
 // an external string then it is transformed into an external string at this
 // point to avoid repeated conversions.
 inline String ToCoreString(v8::Local<v8::String> value) {
-  return V8StringToWebCoreString<String>(value, kExternalize);
+  return ToBlinkString<String>(value, kExternalize);
 }
 
 inline String ToCoreStringWithNullCheck(v8::Local<v8::String> value) {
@@ -234,7 +233,7 @@ inline String ToCoreStringWithUndefinedOrNullCheck(
 }
 
 inline AtomicString ToCoreAtomicString(v8::Local<v8::String> value) {
-  return V8StringToWebCoreString<AtomicString>(value, kExternalize);
+  return ToBlinkString<AtomicString>(value, kExternalize);
 }
 
 // This method will return a null String if the v8::Value does not contain a
@@ -291,6 +290,14 @@ inline v8::Local<v8::Value> V8StringOrNull(v8::Isolate* isolate,
       isolate, string.Impl());
 }
 
+inline v8::Local<v8::String> V8String(v8::Isolate* isolate,
+                                      const ParkableString& string) {
+  if (string.IsNull())
+    return v8::String::Empty(isolate);
+  return V8PerIsolateData::From(isolate)->GetStringCache()->V8ExternalString(
+      isolate, string);
+}
+
 inline v8::Local<v8::String> V8AtomicString(v8::Isolate* isolate,
                                             const StringView& string) {
   DCHECK(isolate);
@@ -321,25 +328,6 @@ inline v8::Local<v8::String> V8AtomicString(v8::Isolate* isolate,
       .ToLocalChecked();
 }
 
-inline v8::Local<v8::String> V8StringFromUtf8(v8::Isolate* isolate,
-                                              const char* bytes,
-                                              int length) {
-  DCHECK(isolate);
-  return v8::String::NewFromUtf8(isolate, bytes, v8::NewStringType::kNormal,
-                                 length)
-      .ToLocalChecked();
-}
-
-inline v8::Local<v8::Value> V8Undefined() {
-  return v8::Local<v8::Value>();
-}
-
-inline v8::MaybeLocal<v8::Value> V8DateOrNaN(v8::Isolate* isolate,
-                                             double value) {
-  DCHECK(isolate);
-  return v8::Date::New(isolate->GetCurrentContext(), value);
-}
-
 inline bool IsUndefinedOrNull(v8::Local<v8::Value> value) {
   return value.IsEmpty() || value->IsNullOrUndefined();
 }
@@ -357,8 +345,10 @@ static void IndexedPropertyEnumerator(
   v8::Local<v8::Context> context = info.GetIsolate()->GetCurrentContext();
   for (int i = 0; i < length; ++i) {
     v8::Local<v8::Integer> integer = v8::Integer::New(info.GetIsolate(), i);
-    if (!V8CallBoolean(properties->CreateDataProperty(context, i, integer)))
+    bool created;
+    if (!properties->CreateDataProperty(context, i, integer).To(&created))
       return;
+    DCHECK(created);
   }
   V8SetReturnValue(info, properties);
 }

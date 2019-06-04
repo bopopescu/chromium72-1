@@ -14,10 +14,10 @@
 #include "ui/aura/client/cursor_client.h"
 #include "ui/aura/client/focus_client.h"
 #include "ui/aura/client/window_parenting_client.h"
+#include "ui/aura/env.h"
 #include "ui/aura/test/test_window_delegate.h"
 #include "ui/aura/test/window_occlusion_tracker_test_api.h"
 #include "ui/aura/window.h"
-#include "ui/aura/window_occlusion_tracker.h"
 #include "ui/aura/window_tree_host.h"
 #include "ui/display/screen.h"
 #include "ui/events/event_processor.h"
@@ -33,6 +33,8 @@
 #include "ui/views/window/dialog_delegate.h"
 
 #if defined(OS_WIN)
+#include <windows.h>
+
 #include "ui/base/view_prop.h"
 #include "ui/base/win/window_event_target.h"
 #include "ui/views/win/hwnd_util.h"
@@ -122,6 +124,7 @@ TEST_F(DesktopNativeWidgetAuraTest, NativeViewNoActivate) {
                          ->GetFocusedWindow());
 }
 
+#if defined(OS_WIN)
 // Verifies that if the DesktopWindowTreeHost is already shown, the native view
 // still reports not visible as we haven't shown the content window.
 TEST_F(DesktopNativeWidgetAuraTest, WidgetNotVisibleOnlyWindowTreeHostShown) {
@@ -131,11 +134,11 @@ TEST_F(DesktopNativeWidgetAuraTest, WidgetNotVisibleOnlyWindowTreeHostShown) {
   init_params.ownership = Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET;
   init_params.native_widget = new DesktopNativeWidgetAura(&widget);
   widget.Init(init_params);
-  DesktopNativeWidgetAura* desktop_native_widget_aura =
-      static_cast<DesktopNativeWidgetAura*>(widget.native_widget());
-  desktop_native_widget_aura->host()->Show();
+  ShowWindow(widget.GetNativeView()->GetHost()->GetAcceleratedWidget(),
+             SW_SHOWNORMAL);
   EXPECT_FALSE(widget.IsVisible());
 }
+#endif
 
 TEST_F(DesktopNativeWidgetAuraTest, DesktopAuraWindowShowFrameless) {
   Widget widget;
@@ -309,7 +312,7 @@ TEST_F(DesktopNativeWidgetAuraTest, ReorderDoesntRecomputeOcclusion) {
   parent.Show();
 
   aura::Window* parent_window = parent.GetNativeWindow();
-  aura::WindowOcclusionTracker::Track(parent_window);
+  parent_window->TrackOcclusionState();
 
   View* contents_view = parent.GetContentsView();
 
@@ -332,7 +335,8 @@ TEST_F(DesktopNativeWidgetAuraTest, ReorderDoesntRecomputeOcclusion) {
   contents_view->AddChildView(host_view3);
 
   // Reorder child views. Expect occlusion to only be recomputed once.
-  aura::test::WindowOcclusionTrackerTestApi window_occlusion_tracker_test_api;
+  aura::test::WindowOcclusionTrackerTestApi window_occlusion_tracker_test_api(
+      parent_window->env()->GetWindowOcclusionTracker());
   const int num_times_occlusion_recomputed =
       window_occlusion_tracker_test_api.GetNumTimesOcclusionRecomputed();
   contents_view->ReorderChildView(host_view3, 0);
@@ -722,8 +726,7 @@ TEST_F(WidgetTest, WindowMouseModalityTest) {
 #if defined(OS_WIN)
 // Tests whether we can activate the top level widget when a modal dialog is
 // active.
-// Flaky: crbug.com/613428
-TEST_F(WidgetTest, DISABLED_WindowModalityActivationTest) {
+TEST_F(WidgetTest, WindowModalityActivationTest) {
   TestDesktopWidgetDelegate widget_delegate;
   widget_delegate.InitWidget(CreateParams(Widget::InitParams::TYPE_WINDOW));
 

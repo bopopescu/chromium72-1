@@ -13,12 +13,12 @@
 
 namespace blink {
 
+class CullRect;
 class ClipRect;
 class ComputedStyle;
 class DisplayItemClient;
 class PaintLayer;
 class GraphicsContext;
-class LayoutBoxModelObject;
 class LayoutPoint;
 
 // This class is responsible for painting self-painting PaintLayer.
@@ -31,11 +31,11 @@ class CORE_EXPORT PaintLayerPainter {
  public:
   PaintLayerPainter(PaintLayer& paint_layer) : paint_layer_(paint_layer) {}
 
-  // The Paint() method paints the layers that intersect the damage rect from
+  // The Paint() method paints the layers that intersect the cull rect from
   // back to front.  paint() assumes that the caller will clip to the bounds of
   // damageRect if necessary.
   void Paint(GraphicsContext&,
-             const LayoutRect& damage_rect,
+             const CullRect&,
              const GlobalPaintFlags = kGlobalPaintNormalPhase,
              PaintLayerFlags = 0);
   // Paint() assumes that the caller will clip to the bounds of the painting
@@ -44,15 +44,13 @@ class CORE_EXPORT PaintLayerPainter {
                     const PaintLayerPaintingInfo&,
                     PaintLayerFlags);
   // PaintLayerContents() assumes that the caller will clip to the bounds of the
-  // painting dirty rect if necessary. If PaintLayerFragment is not nullptr,
-  // only the specified fragment will be painted.
+  // painting dirty rect if necessary.
   PaintResult PaintLayerContents(GraphicsContext&,
                                  const PaintLayerPaintingInfo&,
-                                 PaintLayerFlags,
-                                 const PaintLayerFragment* = nullptr);
+                                 PaintLayerFlags);
 
   void PaintOverlayScrollbars(GraphicsContext&,
-                              const LayoutRect& damage_rect,
+                              const CullRect&,
                               const GlobalPaintFlags);
 
   // Returns true if the painted output of this PaintLayer and its children is
@@ -62,39 +60,6 @@ class CORE_EXPORT PaintLayerPainter {
 
  private:
   friend class PaintLayerPainterTest;
-
-  enum ClipState { kHasNotClipped, kHasClipped };
-
-  bool ShouldAdjustPaintingRoot(const PaintLayerPaintingInfo& painting_info,
-                                PaintLayerFlags paint_flags);
-
-  // "For paged media, boxes with fixed positions are repeated on every page."
-  // https://www.w3.org/TR/2011/REC-CSS2-20110607/visuren.html#fixed-positioning
-  // Repeats singleFragmentIgnoredPagination of the fixed-position object in
-  // each page, with paginationOffset and layerBounds adjusted for each page.
-  // TODO(wangxianzhu): Fold this into PaintLayer::collectFragments().
-  void RepeatFixedPositionObjectInPages(
-      const PaintLayerFragment& single_fragment_ignored_pagination,
-      const PaintLayerPaintingInfo&,
-      PaintLayerFragments&);
-
-  PaintResult PaintLayerContentsCompositingAllPhases(
-      GraphicsContext&,
-      const PaintLayerPaintingInfo&,
-      PaintLayerFlags,
-      const PaintLayerFragment* = nullptr);
-  PaintResult PaintLayerWithAdjustedRoot(GraphicsContext&,
-                                         const PaintLayerPaintingInfo&,
-                                         PaintLayerFlags);
-  PaintResult PaintFragmentByApplyingTransform(GraphicsContext&,
-                                               const PaintLayerPaintingInfo&,
-                                               PaintLayerFlags,
-                                               const PaintLayerFragment&);
-  PaintResult PaintSingleFragment(GraphicsContext&,
-                                  const PaintLayerPaintingInfo&,
-                                  PaintLayerFlags,
-                                  const PaintLayerFragment&,
-                                  const LayoutSize& subpixel_accumulation);
 
   PaintResult PaintChildren(unsigned children_to_visit,
                             GraphicsContext&,
@@ -110,8 +75,7 @@ class CORE_EXPORT PaintLayerPainter {
                               GraphicsContext&,
                               const ClipRect&,
                               const PaintLayerPaintingInfo&,
-                              PaintLayerFlags,
-                              ClipState);
+                              PaintLayerFlags);
   void PaintBackgroundForFragments(
       const PaintLayerFragments&,
       GraphicsContext&,
@@ -127,8 +91,7 @@ class CORE_EXPORT PaintLayerPainter {
                                             const PaintLayerFragments&,
                                             GraphicsContext&,
                                             const PaintLayerPaintingInfo&,
-                                            PaintLayerFlags,
-                                            ClipState);
+                                            PaintLayerFlags);
   void PaintSelfOutlineForFragments(const PaintLayerFragments&,
                                     GraphicsContext&,
                                     const PaintLayerPaintingInfo&,
@@ -156,12 +119,9 @@ class CORE_EXPORT PaintLayerPainter {
 
   void PaintEmptyContentForFilters(GraphicsContext&);
 
-  static bool NeedsToClip(const PaintLayerPaintingInfo& local_painting_info,
-                          const ClipRect&,
-                          const PaintLayerFlags&,
-                          const LayoutBoxModelObject&);
-
-  void AdjustForPaintProperties(PaintLayerPaintingInfo&, PaintLayerFlags&);
+  void AdjustForPaintProperties(const GraphicsContext&,
+                                PaintLayerPaintingInfo&,
+                                PaintLayerFlags&);
 
   PaintLayer& paint_layer_;
 };

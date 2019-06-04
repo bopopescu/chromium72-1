@@ -65,7 +65,7 @@
 #include "internal.h"
 
 
-namespace bssl {
+BSSL_NAMESPACE_BEGIN
 
 static void ssl3_on_handshake_complete(SSL *ssl) {
   // The handshake should have released its final message.
@@ -95,6 +95,10 @@ static bool ssl3_set_read_state(SSL *ssl, UniquePtr<SSLAEADContext> aead_ctx) {
 }
 
 static bool ssl3_set_write_state(SSL *ssl, UniquePtr<SSLAEADContext> aead_ctx) {
+  if (!tls_flush_pending_hs_data(ssl)) {
+    return false;
+  }
+
   OPENSSL_memset(ssl->s3->write_sequence, 0, sizeof(ssl->s3->write_sequence));
   ssl->s3->aead_write_ctx = std::move(aead_ctx);
   return true;
@@ -115,7 +119,6 @@ static const SSL_PROTOCOL_METHOD kTLSProtocolMethod = {
     ssl3_finish_message,
     ssl3_add_message,
     ssl3_add_change_cipher_spec,
-    ssl3_add_alert,
     ssl3_flush_flight,
     ssl3_on_handshake_complete,
     ssl3_set_read_state,
@@ -178,7 +181,7 @@ const SSL_X509_METHOD ssl_noop_x509_method = {
   ssl_noop_x509_ssl_ctx_flush_cached_client_CA,
 };
 
-}  // namespace bssl
+BSSL_NAMESPACE_END
 
 using namespace bssl;
 

@@ -285,7 +285,9 @@ base::Optional<VideoCodecProfile> ToMediaVideoCodecProfile(
     CASE_RETURN_OTHER(DOLBYVISION_PROFILE5);
     CASE_RETURN_OTHER(DOLBYVISION_PROFILE7);
     CASE_RETURN_OTHER(THEORAPROFILE_ANY);
-    CASE_RETURN_OTHER(AV1PROFILE_PROFILE0);
+    CASE_RETURN_OTHER(AV1PROFILE_PROFILE_MAIN);
+    CASE_RETURN_OTHER(AV1PROFILE_PROFILE_HIGH);
+    CASE_RETURN_OTHER(AV1PROFILE_PROFILE_PRO);
   }
   return base::nullopt;  // Not a 'default' to ensure compile-time checks.
 }
@@ -320,7 +322,9 @@ ToProtoVideoDecoderConfigProfile(VideoCodecProfile value) {
     CASE_RETURN_OTHER(DOLBYVISION_PROFILE5);
     CASE_RETURN_OTHER(DOLBYVISION_PROFILE7);
     CASE_RETURN_OTHER(THEORAPROFILE_ANY);
-    CASE_RETURN_OTHER(AV1PROFILE_PROFILE0);
+    CASE_RETURN_OTHER(AV1PROFILE_PROFILE_MAIN);
+    CASE_RETURN_OTHER(AV1PROFILE_PROFILE_HIGH);
+    CASE_RETURN_OTHER(AV1PROFILE_PROFILE_PRO);
   }
   return base::nullopt;  // Not a 'default' to ensure compile-time checks.
 }
@@ -358,7 +362,9 @@ base::Optional<VideoPixelFormat> ToMediaVideoPixelFormat(
     // PIXEL_FORMAT_Y8 is deprecated .
     case pb::VideoDecoderConfig_Format_PIXEL_FORMAT_Y8:
       return base::nullopt;
-   CASE_RETURN_OTHER(PIXEL_FORMAT_Y16);
+      CASE_RETURN_OTHER(PIXEL_FORMAT_Y16);
+      CASE_RETURN_OTHER(PIXEL_FORMAT_ABGR);
+      CASE_RETURN_OTHER(PIXEL_FORMAT_XBGR);
   }
   return base::nullopt;  // Not a 'default' to ensure compile-time checks.
 }
@@ -394,32 +400,8 @@ base::Optional<pb::VideoDecoderConfig::Format> ToProtoVideoDecoderConfigFormat(
     CASE_RETURN_OTHER(PIXEL_FORMAT_YUV422P12);
     CASE_RETURN_OTHER(PIXEL_FORMAT_YUV444P12);
     CASE_RETURN_OTHER(PIXEL_FORMAT_Y16);
-  }
-  return base::nullopt;  // Not a 'default' to ensure compile-time checks.
-}
-
-base::Optional<ColorSpace> ToMediaColorSpace(
-    pb::VideoDecoderConfig::ColorSpace value) {
-  using OriginType = pb::VideoDecoderConfig;
-  using OtherType = ColorSpace;
-  switch (value) {
-    CASE_RETURN_OTHER(COLOR_SPACE_UNSPECIFIED);
-    CASE_RETURN_OTHER(COLOR_SPACE_JPEG);
-    CASE_RETURN_OTHER(COLOR_SPACE_HD_REC709);
-    CASE_RETURN_OTHER(COLOR_SPACE_SD_REC601);
-  }
-  return base::nullopt;  // Not a 'default' to ensure compile-time checks.
-}
-
-base::Optional<pb::VideoDecoderConfig::ColorSpace>
-ToProtoVideoDecoderConfigColorSpace(ColorSpace value) {
-  using OriginType = ColorSpace;
-  using OtherType = pb::VideoDecoderConfig;
-  switch (value) {
-    CASE_RETURN_OTHER(COLOR_SPACE_UNSPECIFIED);
-    CASE_RETURN_OTHER(COLOR_SPACE_JPEG);
-    CASE_RETURN_OTHER(COLOR_SPACE_HD_REC709);
-    CASE_RETURN_OTHER(COLOR_SPACE_SD_REC601);
+    CASE_RETURN_OTHER(PIXEL_FORMAT_ABGR);
+    CASE_RETURN_OTHER(PIXEL_FORMAT_XBGR);
   }
   return base::nullopt;  // Not a 'default' to ensure compile-time checks.
 }
@@ -540,9 +522,9 @@ base::Optional<CdmSessionType> ToCdmSessionType(pb::CdmSessionType value) {
   using OriginType = pb::CdmSessionType;
   using OtherType = CdmSessionType;
   switch (value) {
-    CASE_RETURN_OTHER(TEMPORARY_SESSION);
-    CASE_RETURN_OTHER(PERSISTENT_LICENSE_SESSION);
-    CASE_RETURN_OTHER(PERSISTENT_RELEASE_MESSAGE_SESSION);
+    CASE_RETURN_OTHER(kTemporary);
+    CASE_RETURN_OTHER(kPersistentLicense);
+    CASE_RETURN_OTHER(kPersistentUsageRecord);
   }
   return base::nullopt;  // Not a 'default' to ensure compile-time checks.
 }
@@ -551,9 +533,9 @@ base::Optional<pb::CdmSessionType> ToProtoCdmSessionType(CdmSessionType value) {
   using OriginType = CdmSessionType;
   using OtherType = pb::CdmSessionType;
   switch (value) {
-    CASE_RETURN_OTHER(TEMPORARY_SESSION);
-    CASE_RETURN_OTHER(PERSISTENT_LICENSE_SESSION);
-    CASE_RETURN_OTHER(PERSISTENT_RELEASE_MESSAGE_SESSION);
+    CASE_RETURN_OTHER(kTemporary);
+    CASE_RETURN_OTHER(kPersistentLicense);
+    CASE_RETURN_OTHER(kPersistentUsageRecord);
   }
   return base::nullopt;  // Not a 'default' to ensure compile-time checks.
 }

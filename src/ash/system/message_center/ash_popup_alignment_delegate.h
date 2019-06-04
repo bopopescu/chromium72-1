@@ -53,7 +53,7 @@ class ASH_EXPORT AshPopupAlignmentDelegate
   gfx::Rect GetWorkArea() const override;
   bool IsTopDown() const override;
   bool IsFromLeft() const override;
-  void RecomputeAlignment(const display::Display& display) override;
+  bool RecomputeAlignment(const display::Display& display) override;
   void ConfigureWidgetInitParamsForContainer(
       views::Widget* widget,
       views::Widget::InitParams* init_params) override;
@@ -77,8 +77,6 @@ class ASH_EXPORT AshPopupAlignmentDelegate
   void OnAutoHideStateChanged(ShelfAutoHideState new_state) override;
 
   // Overridden from display::DisplayObserver:
-  void OnDisplayAdded(const display::Display& new_display) override;
-  void OnDisplayRemoved(const display::Display& old_display) override;
   void OnDisplayMetricsChanged(const display::Display& display,
                                uint32_t metrics) override;
 

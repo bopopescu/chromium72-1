@@ -39,10 +39,6 @@ class TimeSource;
 class VideoRenderer;
 class WallClockTimeSource;
 
-#if defined(USE_NEVA_MEDIA)
-class MediaPlatformAPI;
-#endif
-
 class MEDIA_EXPORT RendererImpl : public Renderer {
  public:
   // Renders audio/video streams using |audio_renderer| and |video_renderer|
@@ -83,11 +79,6 @@ class MEDIA_EXPORT RendererImpl : public Renderer {
     video_underflow_threshold_ = threshold;
   }
 
-#if defined(USE_NEVA_MEDIA)
-  void SetMediaPlatformAPI(
-      scoped_refptr<MediaPlatformAPI>& media_platform_api);
-#endif
-
  private:
   class RendererClientInternal;
 
@@ -107,6 +98,7 @@ class MEDIA_EXPORT RendererImpl : public Renderer {
   bool HasEncryptedStream();
 
   void FinishInitialization(PipelineStatus status);
+  void FinishFlush();
 
   // Helper functions and callbacks for Initialize().
   void InitializeAudioRenderer();
@@ -157,7 +149,6 @@ class MEDIA_EXPORT RendererImpl : public Renderer {
 
   // Fix state booleans after the stream switching is finished.
   void CleanUpTrackChange(base::RepeatingClosure on_finished,
-                          bool* pending_change,
                           bool* ended,
                           bool* playing);
 
@@ -225,10 +216,6 @@ class MEDIA_EXPORT RendererImpl : public Renderer {
 
   DemuxerStream* current_audio_stream_;
   DemuxerStream* current_video_stream_;
-
-#if defined(USE_NEVA_MEDIA)
-  scoped_refptr<MediaPlatformAPI> media_platform_api_;
-#endif
 
   // Renderer-provided time source used to control playback.
   TimeSource* time_source_;

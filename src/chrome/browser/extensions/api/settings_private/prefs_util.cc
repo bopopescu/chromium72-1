@@ -4,6 +4,7 @@
 
 #include "chrome/browser/extensions/api/settings_private/prefs_util.h"
 
+#include "base/feature_list.h"
 #include "build/build_config.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/extensions/api/settings_private/generated_prefs.h"
@@ -14,12 +15,14 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/common/pref_names.h"
 #include "chromeos/components/proximity_auth/proximity_auth_pref_names.h"
-#include "components/autofill/core/common/autofill_pref_names.h"
+#include "components/autofill/core/common/autofill_prefs.h"
 #include "components/bookmarks/common/bookmark_pref_names.h"
 #include "components/browsing_data/core/pref_names.h"
 #include "components/component_updater/pref_names.h"
 #include "components/content_settings/core/common/pref_names.h"
 #include "components/drive/drive_pref_names.h"
+#include "components/language/core/browser/pref_names.h"
+#include "components/omnibox/browser/omnibox_pref_names.h"
 #include "components/password_manager/core/common/password_manager_pref_names.h"
 #include "components/payments/core/payment_prefs.h"
 #include "components/prefs/pref_service.h"
@@ -29,6 +32,7 @@
 #include "components/spellcheck/browser/pref_names.h"
 #include "components/translate/core/browser/translate_pref_names.h"
 #include "components/translate/core/browser/translate_prefs.h"
+#include "components/unified_consent/pref_names.h"
 #include "components/url_formatter/url_fixer.h"
 #include "extensions/browser/extension_pref_value_map.h"
 #include "extensions/browser/extension_pref_value_map_factory.h"
@@ -48,6 +52,7 @@
 #include "chrome/browser/chromeos/system/timezone_util.h"
 #include "chrome/browser/extensions/api/settings_private/chromeos_resolve_time_zone_by_geolocation_method_short.h"
 #include "chrome/browser/extensions/api/settings_private/chromeos_resolve_time_zone_by_geolocation_on_off.h"
+#include "chromeos/chromeos_features.h"
 #include "chromeos/settings/cros_settings_names.h"
 #include "components/arc/arc_prefs.h"
 #include "ui/chromeos/events/pref_names.h"
@@ -114,7 +119,7 @@ const PrefsUtil::TypedPrefMap& PrefsUtil::GetWhitelistedKeys() {
   // Miscellaneous
   (*s_whitelist)[::prefs::kAlternateErrorPagesEnabled] =
       settings_api::PrefType::PREF_TYPE_BOOLEAN;
-  (*s_whitelist)[autofill::prefs::kAutofillEnabled] =
+  (*s_whitelist)[autofill::prefs::kAutofillProfileEnabled] =
       settings_api::PrefType::PREF_TYPE_BOOLEAN;
   (*s_whitelist)[autofill::prefs::kAutofillCreditCardEnabled] =
       settings_api::PrefType::PREF_TYPE_BOOLEAN;
@@ -158,6 +163,8 @@ const PrefsUtil::TypedPrefMap& PrefsUtil::GetWhitelistedKeys() {
 #if defined(OS_MACOSX)
   (*s_whitelist)[::prefs::kWebkitTabsToLinks] =
       settings_api::PrefType::PREF_TYPE_BOOLEAN;
+  (*s_whitelist)[::prefs::kConfirmToQuitEnabled] =
+      settings_api::PrefType::PREF_TYPE_BOOLEAN;
 #endif
 
   // On startup.
@@ -173,6 +180,12 @@ const PrefsUtil::TypedPrefMap& PrefsUtil::GetWhitelistedKeys() {
       settings_api::PrefType::PREF_TYPE_BOOLEAN;
   (*s_whitelist)[drive::prefs::kDisableDrive] =
       settings_api::PrefType::PREF_TYPE_BOOLEAN;
+#if defined(OS_CHROMEOS)
+  (*s_whitelist)[::prefs::kNetworkFileSharesAllowed] =
+      settings_api::PrefType::PREF_TYPE_BOOLEAN;
+  (*s_whitelist)[::prefs::kMostRecentlyUsedNetworkFileShareURL] =
+      settings_api::PrefType::PREF_TYPE_STRING;
+#endif
 
   // Printing settings.
   (*s_whitelist)[::prefs::kLocalDiscoveryNotificationsEnabled] =
@@ -183,7 +196,7 @@ const PrefsUtil::TypedPrefMap& PrefsUtil::GetWhitelistedKeys() {
       settings_api::PrefType::PREF_TYPE_BOOLEAN;
   (*s_whitelist)[::prefs::kEnableEncryptedMedia] =
       settings_api::PrefType::PREF_TYPE_BOOLEAN;
-  (*s_whitelist)[::prefs::kApplicationLocale] =
+  (*s_whitelist)[::language::prefs::kApplicationLocale] =
       settings_api::PrefType::PREF_TYPE_STRING;
   (*s_whitelist)[::prefs::kNetworkPredictionOptions] =
       settings_api::PrefType::PREF_TYPE_NUMBER;
@@ -191,11 +204,22 @@ const PrefsUtil::TypedPrefMap& PrefsUtil::GetWhitelistedKeys() {
       settings_api::PrefType::PREF_TYPE_BOOLEAN;
   (*s_whitelist)[password_manager::prefs::kCredentialsEnableAutosignin] =
       settings_api::PrefType::PREF_TYPE_BOOLEAN;
+
+  // Privacy page
+  (*s_whitelist)[::prefs::kSigninAllowedOnNextStartup] =
+      settings_api::PrefType::PREF_TYPE_BOOLEAN;
+
+  // Sync and personalization page.
   (*s_whitelist)[::prefs::kSafeBrowsingEnabled] =
       settings_api::PrefType::PREF_TYPE_BOOLEAN;
-  (*s_whitelist)[::prefs::kSafeBrowsingExtendedReportingEnabled] =
+  (*s_whitelist)[::prefs::kSafeBrowsingScoutReportingEnabled] =
       settings_api::PrefType::PREF_TYPE_BOOLEAN;
   (*s_whitelist)[::prefs::kSearchSuggestEnabled] =
+      settings_api::PrefType::PREF_TYPE_BOOLEAN;
+  (*s_whitelist)
+      [::unified_consent::prefs::kUrlKeyedAnonymizedDataCollectionEnabled] =
+          settings_api::PrefType::PREF_TYPE_BOOLEAN;
+  (*s_whitelist)[::omnibox::kDocumentSuggestEnabled] =
       settings_api::PrefType::PREF_TYPE_BOOLEAN;
 
   // Languages page
@@ -214,8 +238,6 @@ const PrefsUtil::TypedPrefMap& PrefsUtil::GetWhitelistedKeys() {
 #if defined(OS_CHROMEOS)
   (*s_whitelist)[::prefs::kLanguageImeMenuActivated] =
       settings_api::PrefType::PREF_TYPE_BOOLEAN;
-  (*s_whitelist)[::prefs::kAllowedLocales] =
-      settings_api::PrefType::PREF_TYPE_LIST;
 #endif
 
   // Search page.
@@ -277,10 +299,13 @@ const PrefsUtil::TypedPrefMap& PrefsUtil::GetWhitelistedKeys() {
   // kEnableAutoScreenLock is read-only.
   (*s_whitelist)[ash::prefs::kEnableAutoScreenLock] =
       settings_api::PrefType::PREF_TYPE_BOOLEAN;
-  (*s_whitelist)[::prefs::kEnableQuickUnlockFingerprint] =
-      settings_api::PrefType::PREF_TYPE_BOOLEAN;
-  (*s_whitelist)[proximity_auth::prefs::kEasyUnlockProximityThreshold] =
-      settings_api::PrefType::PREF_TYPE_NUMBER;
+  (*s_whitelist)[ash::prefs::kMessageCenterLockScreenMode] =
+      settings_api::PrefType::PREF_TYPE_STRING;
+
+  // TODO(crbug.com/894585): After M71, only whitelist the Smart Lock 'sign-in
+  // enabled' pref in the pre-Multidevice case, i.e., when
+  // kEnableUnifiedMultiDeviceSettings is false. In the Multidevice case, JS
+  // access to this pref is restricted.
   (*s_whitelist)[proximity_auth::prefs::kProximityAuthIsChromeOSLoginEnabled] =
       settings_api::PrefType::PREF_TYPE_BOOLEAN;
 
@@ -291,6 +316,12 @@ const PrefsUtil::TypedPrefMap& PrefsUtil::GetWhitelistedKeys() {
       settings_api::PrefType::PREF_TYPE_BOOLEAN;
   (*s_whitelist)[ash::prefs::kAccessibilityAutoclickDelayMs] =
       settings_api::PrefType::PREF_TYPE_BOOLEAN;
+  (*s_whitelist)[ash::prefs::kAccessibilityAutoclickEventType] =
+      settings_api::PrefType::PREF_TYPE_NUMBER;
+  (*s_whitelist)[ash::prefs::kAccessibilityAutoclickRevertToLeftClick] =
+      settings_api::PrefType::PREF_TYPE_BOOLEAN;
+  (*s_whitelist)[ash::prefs::kAccessibilityAutoclickMovementThreshold] =
+      settings_api::PrefType::PREF_TYPE_NUMBER;
   (*s_whitelist)[ash::prefs::kAccessibilityCaretHighlightEnabled] =
       settings_api::PrefType::PREF_TYPE_BOOLEAN;
   (*s_whitelist)[ash::prefs::kAccessibilityCursorHighlightEnabled] =
@@ -335,17 +366,27 @@ const PrefsUtil::TypedPrefMap& PrefsUtil::GetWhitelistedKeys() {
   // Crostini
   (*s_whitelist)[crostini::prefs::kCrostiniEnabled] =
       settings_api::PrefType::PREF_TYPE_BOOLEAN;
+  (*s_whitelist)[crostini::prefs::kCrostiniSharedPaths] =
+      settings_api::PrefType::PREF_TYPE_LIST;
 
   // Android Apps.
   (*s_whitelist)[arc::prefs::kArcEnabled] =
       settings_api::PrefType::PREF_TYPE_BOOLEAN;
 
   // Google Assistant.
+  (*s_whitelist)[arc::prefs::kVoiceInteractionActivityControlAccepted] =
+      settings_api::PrefType::PREF_TYPE_BOOLEAN;
   (*s_whitelist)[arc::prefs::kArcVoiceInteractionValuePropAccepted] =
       settings_api::PrefType::PREF_TYPE_BOOLEAN;
   (*s_whitelist)[arc::prefs::kVoiceInteractionEnabled] =
       settings_api::PrefType::PREF_TYPE_BOOLEAN;
   (*s_whitelist)[arc::prefs::kVoiceInteractionContextEnabled] =
+      settings_api::PrefType::PREF_TYPE_BOOLEAN;
+  (*s_whitelist)[arc::prefs::kVoiceInteractionHotwordEnabled] =
+      settings_api::PrefType::PREF_TYPE_BOOLEAN;
+  (*s_whitelist)[arc::prefs::kVoiceInteractionNotificationEnabled] =
+      settings_api::PrefType::PREF_TYPE_BOOLEAN;
+  (*s_whitelist)[arc::prefs::kVoiceInteractionLaunchWithMicOpen] =
       settings_api::PrefType::PREF_TYPE_BOOLEAN;
 
   // Misc.
@@ -372,6 +413,12 @@ const PrefsUtil::TypedPrefMap& PrefsUtil::GetWhitelistedKeys() {
   (*s_whitelist)[::chromeos::kSignedDataRoamingEnabled] =
       settings_api::PrefType::PREF_TYPE_BOOLEAN;
   (*s_whitelist)[::ash::prefs::kUserBluetoothAdapterEnabled] =
+      settings_api::PrefType::PREF_TYPE_BOOLEAN;
+  (*s_whitelist)[::prefs::kVpnConfigAllowed] =
+      settings_api::PrefType::PREF_TYPE_BOOLEAN;
+  (*s_whitelist)[arc::prefs::kAlwaysOnVpnPackage] =
+      settings_api::PrefType::PREF_TYPE_STRING;
+  (*s_whitelist)[arc::prefs::kAlwaysOnVpnLockdown] =
       settings_api::PrefType::PREF_TYPE_BOOLEAN;
 
   // Timezone settings.
@@ -413,8 +460,10 @@ const PrefsUtil::TypedPrefMap& PrefsUtil::GetWhitelistedKeys() {
   // Input method settings.
   (*s_whitelist)[::prefs::kLanguagePreloadEngines] =
       settings_api::PrefType::PREF_TYPE_STRING;
-  (*s_whitelist)[::prefs::kLanguageEnabledExtensionImes] =
+  (*s_whitelist)[::prefs::kLanguageEnabledImes] =
       settings_api::PrefType::PREF_TYPE_STRING;
+  (*s_whitelist)[::prefs::kLanguageAllowedInputMethods] =
+      settings_api::PrefType::PREF_TYPE_LIST;
 
   // Device settings.
   (*s_whitelist)[::prefs::kTapToClickEnabled] =
@@ -443,6 +492,10 @@ const PrefsUtil::TypedPrefMap& PrefsUtil::GetWhitelistedKeys() {
       settings_api::PrefType::PREF_TYPE_NUMBER;
   (*s_whitelist)[::prefs::kLanguageRemapDiamondKeyTo] =
       settings_api::PrefType::PREF_TYPE_NUMBER;
+  (*s_whitelist)[::prefs::kLanguageRemapExternalCommandKeyTo] =
+      settings_api::PrefType::PREF_TYPE_NUMBER;
+  (*s_whitelist)[::prefs::kLanguageRemapExternalMetaKeyTo] =
+      settings_api::PrefType::PREF_TYPE_NUMBER;
   (*s_whitelist)[::prefs::kLanguageSendFunctionKeys] =
       settings_api::PrefType::PREF_TYPE_BOOLEAN;
   (*s_whitelist)[::prefs::kLanguageXkbAutoRepeatEnabled] =
@@ -451,10 +504,10 @@ const PrefsUtil::TypedPrefMap& PrefsUtil::GetWhitelistedKeys() {
       settings_api::PrefType::PREF_TYPE_NUMBER;
   (*s_whitelist)[::prefs::kLanguageXkbAutoRepeatInterval] =
       settings_api::PrefType::PREF_TYPE_NUMBER;
-
-  // Multidevice settings.
-  (*s_whitelist)[arc::prefs::kSmsConnectEnabled] =
-      settings_api::PrefType::PREF_TYPE_BOOLEAN;
+  (*s_whitelist)[chromeos::kDeviceDisplayResolution] =
+      settings_api::PrefType::PREF_TYPE_DICTIONARY;
+  (*s_whitelist)[chromeos::kDisplayRotationDefault] =
+      settings_api::PrefType::PREF_TYPE_DICTIONARY;
 
   // Native Printing settings.
   (*s_whitelist)[::prefs::kUserNativePrintersAllowed] =
@@ -651,8 +704,9 @@ std::unique_ptr<settings_api::PrefObject> PrefsUtil::GetPref(
     pref_object->enforcement = settings_api::Enforcement::ENFORCEMENT_ENFORCED;
     pref_object->extension_id.reset(new std::string(extension->id()));
     pref_object->controlled_by_name.reset(new std::string(extension->name()));
-    bool can_be_disabled = !ExtensionSystem::Get(profile_)->management_policy()
-        ->MustRemainEnabled(extension, nullptr);
+    bool can_be_disabled =
+        !ExtensionSystem::Get(profile_)->management_policy()->MustRemainEnabled(
+            extension, nullptr);
     pref_object->extension_can_be_disabled.reset(new bool(can_be_disabled));
     return pref_object;
   }
@@ -735,19 +789,27 @@ settings_private::SetPrefResult PrefsUtil::SetCrosSettingsPref(
     const std::string& pref_name,
     const base::Value* value) {
 #if defined(OS_CHROMEOS)
-  chromeos::OwnerSettingsServiceChromeOS* service =
-      chromeos::OwnerSettingsServiceChromeOSFactory::GetForBrowserContext(
-          profile_);
-
-  // Check if setting requires owner.
-  if (service && service->HandlesSetting(pref_name)) {
-    if (service->Set(pref_name, *value))
+  if (pref_name == chromeos::kSystemTimezone) {
+    std::string string_value;
+    if (!value->GetAsString(&string_value))
+      return settings_private::SetPrefResult::PREF_TYPE_MISMATCH;
+    const user_manager::User* user =
+        chromeos::ProfileHelper::Get()->GetUserByProfile(profile_);
+    if (user && chromeos::system::SetSystemTimezone(user, string_value))
       return settings_private::SetPrefResult::SUCCESS;
     return settings_private::SetPrefResult::PREF_NOT_MODIFIABLE;
   }
 
-  CrosSettings::Get()->Set(pref_name, *value);
-  return settings_private::SetPrefResult::SUCCESS;
+  chromeos::OwnerSettingsServiceChromeOS* service =
+      chromeos::OwnerSettingsServiceChromeOSFactory::GetForBrowserContext(
+          profile_);
+
+  if (service && service->HandlesSetting(pref_name) &&
+      service->Set(pref_name, *value)) {
+    return settings_private::SetPrefResult::SUCCESS;
+  }
+  return settings_private::SetPrefResult::PREF_NOT_MODIFIABLE;
+
 #else
   return settings_private::SetPrefResult::PREF_NOT_FOUND;
 #endif
@@ -760,13 +822,9 @@ bool PrefsUtil::AppendToListCrosSetting(const std::string& pref_name,
       chromeos::OwnerSettingsServiceChromeOSFactory::GetForBrowserContext(
           profile_);
 
-  // Returns false if not the owner, for settings requiring owner.
-  if (service && service->HandlesSetting(pref_name)) {
-    return service->AppendToList(pref_name, value);
-  }
+  return service && service->HandlesSetting(pref_name) &&
+         service->AppendToList(pref_name, value);
 
-  CrosSettings::Get()->AppendToList(pref_name, &value);
-  return true;
 #else
   return false;
 #endif
@@ -779,13 +837,9 @@ bool PrefsUtil::RemoveFromListCrosSetting(const std::string& pref_name,
       chromeos::OwnerSettingsServiceChromeOSFactory::GetForBrowserContext(
           profile_);
 
-  // Returns false if not the owner, for settings requiring owner.
-  if (service && service->HandlesSetting(pref_name)) {
-    return service->RemoveFromList(pref_name, value);
-  }
+  return service && service->HandlesSetting(pref_name) &&
+         service->RemoveFromList(pref_name, value);
 
-  CrosSettings::Get()->RemoveFromList(pref_name, &value);
-  return true;
 #else
   return false;
 #endif

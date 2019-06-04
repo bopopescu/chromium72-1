@@ -5,17 +5,18 @@
 #include "third_party/blink/renderer/core/html/media/media_remoting_interstitial.h"
 
 #include "third_party/blink/public/platform/web_localized_string.h"
-#include "third_party/blink/renderer/bindings/core/v8/exception_state.h"
 #include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/html/html_image_element.h"
 #include "third_party/blink/renderer/core/html/media/html_video_element.h"
+#include "third_party/blink/renderer/platform/bindings/exception_state.h"
 #include "third_party/blink/renderer/platform/text/platform_locale.h"
 
 namespace {
 
-constexpr double kStyleChangeTransSeconds = 0.2;
-constexpr double kHiddenAnimationSeconds = 0.3;
-constexpr double kShowToastSeconds = 5;
+constexpr TimeDelta kStyleChangeTransitionDuration =
+    TimeDelta::FromMilliseconds(200);
+constexpr TimeDelta kHiddenAnimationDuration = TimeDelta::FromMilliseconds(300);
+constexpr TimeDelta kShowToastDuration = TimeDelta::FromSeconds(5);
 
 }  // namespace
 
@@ -33,7 +34,7 @@ MediaRemotingInterstitial::MediaRemotingInterstitial(
   background_image_ = HTMLImageElement::Create(GetDocument());
   background_image_->SetShadowPseudoId(
       AtomicString("-internal-media-interstitial-background-image"));
-  background_image_->SetSrc(videoElement.getAttribute(HTMLNames::posterAttr));
+  background_image_->SetSrc(videoElement.getAttribute(html_names::kPosterAttr));
   AppendChild(background_image_);
 
   cast_icon_ = HTMLDivElement::Create(GetDocument());
@@ -74,7 +75,8 @@ void MediaRemotingInterstitial::Show(
   RemoveInlineStyleProperty(CSSPropertyDisplay);
   SetInlineStyleProperty(CSSPropertyOpacity, 0,
                          CSSPrimitiveValue::UnitType::kNumber);
-  toggle_interstitial_timer_.StartOneShot(kStyleChangeTransSeconds, FROM_HERE);
+  toggle_interstitial_timer_.StartOneShot(kStyleChangeTransitionDuration,
+                                          FROM_HERE);
 }
 
 void MediaRemotingInterstitial::Hide(WebLocalizedString::Name error_msg) {
@@ -96,7 +98,7 @@ void MediaRemotingInterstitial::Hide(WebLocalizedString::Name error_msg) {
   }
   SetInlineStyleProperty(CSSPropertyOpacity, 0,
                          CSSPrimitiveValue::UnitType::kNumber);
-  toggle_interstitial_timer_.StartOneShot(kHiddenAnimationSeconds, FROM_HERE);
+  toggle_interstitial_timer_.StartOneShot(kHiddenAnimationDuration, FROM_HERE);
 }
 
 void MediaRemotingInterstitial::ToggleInterstitialTimerFired(TimerBase*) {
@@ -126,7 +128,7 @@ void MediaRemotingInterstitial::ToggleInterstitialTimerFired(TimerBase*) {
     toast_message_->SetInlineStyleProperty(
         CSSPropertyOpacity, 1, CSSPrimitiveValue::UnitType::kNumber);
     state_ = HIDDEN;
-    toggle_interstitial_timer_.StartOneShot(kShowToastSeconds, FROM_HERE);
+    toggle_interstitial_timer_.StartOneShot(kShowToastDuration, FROM_HERE);
   }
 }
 
@@ -139,7 +141,7 @@ void MediaRemotingInterstitial::DidMoveToNewDocument(Document& old_document) {
 
 void MediaRemotingInterstitial::OnPosterImageChanged() {
   background_image_->SetSrc(
-      GetVideoElement().getAttribute(HTMLNames::posterAttr));
+      GetVideoElement().getAttribute(html_names::kPosterAttr));
 }
 
 void MediaRemotingInterstitial::Trace(blink::Visitor* visitor) {

@@ -17,7 +17,7 @@
 #include "net/third_party/quic/platform/api/quic_string.h"
 #include "net/third_party/quic/platform/api/quic_string_piece.h"
 
-namespace net {
+namespace quic {
 
 class QuicSession;
 
@@ -34,6 +34,8 @@ class QuicSession;
 class QUIC_EXPORT_PRIVATE QuicCryptoStream : public QuicStream {
  public:
   explicit QuicCryptoStream(QuicSession* session);
+  QuicCryptoStream(const QuicCryptoStream&) = delete;
+  QuicCryptoStream& operator=(const QuicCryptoStream&) = delete;
 
   ~QuicCryptoStream() override;
 
@@ -108,10 +110,8 @@ class QUIC_EXPORT_PRIVATE QuicCryptoStream : public QuicStream {
   // TODO(fayang): This is not needed once switching from QUIC crypto to
   // TLS 1.3, which never encrypts crypto data.
   QuicIntervalSet<QuicStreamOffset> bytes_consumed_[NUM_ENCRYPTION_LEVELS];
-
-  DISALLOW_COPY_AND_ASSIGN(QuicCryptoStream);
 };
 
-}  // namespace net
+}  // namespace quic
 
 #endif  // NET_THIRD_PARTY_QUIC_CORE_QUIC_CRYPTO_STREAM_H_

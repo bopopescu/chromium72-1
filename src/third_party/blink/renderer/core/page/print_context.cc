@@ -25,6 +25,7 @@
 #include "third_party/blink/renderer/core/frame/local_frame.h"
 #include "third_party/blink/renderer/core/frame/local_frame_view.h"
 #include "third_party/blink/renderer/core/layout/layout_view.h"
+#include "third_party/blink/renderer/core/paint/paint_layer_scrollable_area.h"
 #include "third_party/blink/renderer/platform/graphics/graphics_context.h"
 
 namespace blink {
@@ -127,7 +128,7 @@ void PrintContext::ComputePageRectsWithPageSizeInternal(
                                 ? inline_direction_start
                                 : inline_direction_start - page_logical_width;
 
-    auto* scrollable_area = GetFrame()->View()->LayoutViewportScrollableArea();
+    auto* scrollable_area = GetFrame()->View()->LayoutViewport();
     IntSize frame_scroll = scrollable_area->ScrollOffsetInt();
     page_logical_left -= frame_scroll.Width();
     page_logical_top -= frame_scroll.Height();
@@ -146,11 +147,6 @@ void PrintContext::BeginPrintMode(float width, float height) {
   // This function can be called multiple times to adjust printing parameters
   // without going back to screen mode.
   is_printing_ = true;
-
-  if (!use_printing_layout_) {
-    frame_->StartPrintingWithoutPrintingLayout();
-    return;
-  }
 
   FloatSize original_page_size = FloatSize(width, height);
   FloatSize min_layout_size = frame_->ResizePageRectsKeepingRatio(
@@ -190,16 +186,16 @@ int PrintContext::PageNumberForElement(Element* element,
 
   FloatSize scaled_page_size = page_size_in_pixels;
   scaled_page_size.Scale(
-      frame->View()->LayoutViewportScrollableArea()->ContentsSize().Width() /
+      frame->View()->LayoutViewport()->ContentsSize().Width() /
       page_rect.Width());
   print_context->ComputePageRectsWithPageSize(scaled_page_size);
 
   int top = box->PixelSnappedOffsetTop(box->OffsetParent());
   int left = box->PixelSnappedOffsetLeft(box->OffsetParent());
-  for (size_t page_number = 0; page_number < print_context->PageCount();
+  for (wtf_size_t page_number = 0; page_number < print_context->PageCount();
        ++page_number) {
     if (IsCoordinateInPage(top, left, print_context->PageRect(page_number)))
-      return page_number;
+      return static_cast<int>(page_number);
   }
   return -1;
 }
@@ -210,7 +206,8 @@ void PrintContext::CollectLinkedDestinations(Node* node) {
 
   if (!node->IsLink() || !node->IsElementNode())
     return;
-  const AtomicString& href = ToElement(node)->getAttribute(HTMLNames::hrefAttr);
+  const AtomicString& href =
+      ToElement(node)->getAttribute(html_names::kHrefAttr);
   if (href.IsNull())
     return;
   KURL url = node->GetDocument().CompleteURL(href);
@@ -309,7 +306,7 @@ int PrintContext::NumberOfPages(LocalFrame* frame,
   // Account for shrink-to-fit.
   FloatSize scaled_page_size = page_size_in_pixels;
   scaled_page_size.Scale(
-      frame->View()->LayoutViewportScrollableArea()->ContentsSize().Width() /
+      frame->View()->LayoutViewport()->ContentsSize().Width() /
       page_rect.Width());
   print_context->ComputePageRectsWithPageSize(scaled_page_size);
   return print_context->PageCount();
@@ -325,8 +322,14 @@ void PrintContext::Trace(blink::Visitor* visitor) {
   visitor->Trace(linked_destinations_);
 }
 
+bool PrintContext::use_printing_layout() const {
+  return use_printing_layout_;
+}
+
 ScopedPrintContext::ScopedPrintContext(LocalFrame* frame)
-    : context_(new PrintContext(frame, /*use_printing_layout=*/true)) {}
+    : context_(
+          MakeGarbageCollected<PrintContext>(frame,
+                                             /*use_printing_layout=*/true)) {}
 
 ScopedPrintContext::~ScopedPrintContext() {
   context_->EndPrintMode();

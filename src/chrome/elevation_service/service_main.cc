@@ -18,6 +18,7 @@
 #include "base/command_line.h"
 #include "base/stl_util.h"
 #include "base/win/scoped_com_initializer.h"
+#include "chrome/elevation_service/elevated_recovery_impl.h"
 #include "chrome/elevation_service/elevator.h"
 #include "chrome/install_static/install_util.h"
 
@@ -57,8 +58,8 @@ int ServiceMain::Start() {
 }
 
 // When _ServiceMain gets called, it initializes COM, and then calls Run().
-// Run initializes security, then registers the COM objects.
-HRESULT ServiceMain::RegisterClassObjects() {
+// Run() initializes security, then calls RegisterClassObject().
+HRESULT ServiceMain::RegisterClassObject() {
   // Create an out-of-proc COM module with caching disabled.
   auto& module = Microsoft::WRL::Module<Microsoft::WRL::OutOfProc>::Create(
       this, &ServiceMain::SignalExit);
@@ -96,19 +97,19 @@ HRESULT ServiceMain::RegisterClassObjects() {
   hr = module.RegisterCOMObject(nullptr, class_ids, class_factories, cookies_,
                                 base::size(cookies_));
   if (FAILED(hr)) {
-    LOG(ERROR) << "NotificationActivator registration failed; hr: " << hr;
+    LOG(ERROR) << "RegisterCOMObject failed; hr: " << hr;
     return hr;
   }
 
   return hr;
 }
 
-void ServiceMain::UnregisterClassObjects() {
+void ServiceMain::UnregisterClassObject() {
   auto& module = Microsoft::WRL::Module<Microsoft::WRL::OutOfProc>::GetModule();
   const HRESULT hr =
       module.UnregisterCOMObject(nullptr, cookies_, base::size(cookies_));
   if (FAILED(hr))
-    LOG(ERROR) << "NotificationActivator unregistration failed; hr: " << hr;
+    LOG(ERROR) << "UnregisterCOMObject failed; hr: " << hr;
 }
 
 bool ServiceMain::IsExitSignaled() {
@@ -203,14 +204,16 @@ void ServiceMain::SetServiceStatus(DWORD state) {
 }
 
 HRESULT ServiceMain::Run() {
+  LOG_IF(WARNING, FAILED(CleanupChromeRecoveryDirectory()));
+
   HRESULT hr = InitializeComSecurity();
   if (FAILED(hr))
     return hr;
 
-  hr = RegisterClassObjects();
+  hr = RegisterClassObject();
   if (SUCCEEDED(hr)) {
     WaitForExitSignal();
-    UnregisterClassObjects();
+    UnregisterClassObject();
   }
 
   return hr;

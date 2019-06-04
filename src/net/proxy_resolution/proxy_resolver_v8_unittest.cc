@@ -9,7 +9,6 @@
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
-#include "net/base/completion_callback.h"
 #include "net/base/net_errors.h"
 #include "net/proxy_resolution/pac_file_data.h"
 #include "net/proxy_resolution/proxy_info.h"
@@ -251,7 +250,7 @@ TEST_F(ProxyResolverV8Test, ParseError) {
 
   EXPECT_EQ("Uncaught SyntaxError: Unexpected end of input",
             bindings()->errors[0]);
-  EXPECT_EQ(5, bindings()->errors_line_number[0]);
+  EXPECT_EQ(7, bindings()->errors_line_number[0]);
 }
 
 // Run a PAC script several times, which has side-effects.

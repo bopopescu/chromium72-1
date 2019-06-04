@@ -43,6 +43,7 @@ class MockLinkLoaderClient final
   }
 
   bool ShouldLoadLink() override { return should_load_; }
+  bool IsLinkCreatedByParser() override { return true; }
 
   void LinkLoaded() override {}
   void LinkLoadingErrored() override {}
@@ -52,7 +53,7 @@ class MockLinkLoaderClient final
   void DidSendDOMContentLoadedForLinkPrerender() override {}
 
   scoped_refptr<base::SingleThreadTaskRunner> GetLoadingTaskRunner() override {
-    return Platform::Current()->CurrentThread()->GetTaskRunner();
+    return Thread::Current()->GetTaskRunner();
   }
 
  private:
@@ -93,10 +94,10 @@ class LinkLoaderPreloadTestBase : public testing::Test {
  public:
   struct Expectations {
     ResourceLoadPriority priority;
-    WebURLRequest::RequestContext context;
+    mojom::RequestContextType context;
     bool link_loader_should_load_value;
     KURL load_url;
-    ReferrerPolicy referrer_policy;
+    network::mojom::ReferrerPolicy referrer_policy;
   };
 
   LinkLoaderPreloadTestBase() {
@@ -118,7 +119,7 @@ class LinkLoaderPreloadTestBase : public testing::Test {
     Persistent<MockLinkLoaderClient> loader_client =
         MockLinkLoaderClient::Create(expected.link_loader_should_load_value);
     LinkLoader* loader = LinkLoader::Create(loader_client.Get());
-    URLTestHelpers::RegisterMockedErrorURLLoad(params.href);
+    url_test_helpers::RegisterMockedErrorURLLoad(params.href);
     loader->LoadLink(params, dummy_page_holder_->GetDocument(),
                      NetworkHintsMock());
     if (!expected.load_url.IsNull() &&
@@ -131,7 +132,8 @@ class LinkLoaderPreloadTestBase : public testing::Test {
       EXPECT_EQ(expected.priority, resource->GetResourceRequest().Priority());
       EXPECT_EQ(expected.context,
                 resource->GetResourceRequest().GetRequestContext());
-      if (expected.referrer_policy != kReferrerPolicyDefault) {
+      if (expected.referrer_policy !=
+          network::mojom::ReferrerPolicy::kDefault) {
         EXPECT_EQ(expected.referrer_policy,
                   resource->GetResourceRequest().GetReferrerPolicy());
       }
@@ -146,37 +148,37 @@ struct PreloadTestParams {
   const char* href;
   const char* as;
   const ResourceLoadPriority priority;
-  const WebURLRequest::RequestContext context;
+  const mojom::RequestContextType context;
   const bool expecting_load;
 };
 
 constexpr PreloadTestParams kPreloadTestParams[] = {
     {"http://example.test/cat.jpg", "image", ResourceLoadPriority::kLow,
-     WebURLRequest::kRequestContextImage, true},
+     mojom::RequestContextType::IMAGE, true},
     {"http://example.test/cat.js", "script", ResourceLoadPriority::kHigh,
-     WebURLRequest::kRequestContextScript, true},
+     mojom::RequestContextType::SCRIPT, true},
     {"http://example.test/cat.css", "style", ResourceLoadPriority::kVeryHigh,
-     WebURLRequest::kRequestContextStyle, true},
+     mojom::RequestContextType::STYLE, true},
     // TODO(yoav): It doesn't seem like the audio context is ever used. That
     // should probably be fixed (or we can consolidate audio and video).
     {"http://example.test/cat.wav", "audio", ResourceLoadPriority::kLow,
-     WebURLRequest::kRequestContextAudio, true},
+     mojom::RequestContextType::AUDIO, true},
     {"http://example.test/cat.mp4", "video", ResourceLoadPriority::kLow,
-     WebURLRequest::kRequestContextVideo, true},
+     mojom::RequestContextType::VIDEO, true},
     {"http://example.test/cat.vtt", "track", ResourceLoadPriority::kLow,
-     WebURLRequest::kRequestContextTrack, true},
+     mojom::RequestContextType::TRACK, true},
     {"http://example.test/cat.woff", "font", ResourceLoadPriority::kHigh,
-     WebURLRequest::kRequestContextFont, true},
+     mojom::RequestContextType::FONT, true},
     // TODO(yoav): subresource should be *very* low priority (rather than
     // low).
     {"http://example.test/cat.empty", "fetch", ResourceLoadPriority::kHigh,
-     WebURLRequest::kRequestContextSubresource, true},
+     mojom::RequestContextType::SUBRESOURCE, true},
     {"http://example.test/cat.blob", "blabla", ResourceLoadPriority::kLow,
-     WebURLRequest::kRequestContextSubresource, false},
+     mojom::RequestContextType::SUBRESOURCE, false},
     {"http://example.test/cat.blob", "", ResourceLoadPriority::kLow,
-     WebURLRequest::kRequestContextSubresource, false},
+     mojom::RequestContextType::SUBRESOURCE, false},
     {"bla://example.test/cat.gif", "image", ResourceLoadPriority::kUnresolved,
-     WebURLRequest::kRequestContextImage, false}};
+     mojom::RequestContextType::IMAGE, false}};
 
 class LinkLoaderPreloadTest
     : public LinkLoaderPreloadTestBase,
@@ -186,12 +188,13 @@ TEST_P(LinkLoaderPreloadTest, Preload) {
   const auto& test_case = GetParam();
   LinkLoadParameters params(
       LinkRelAttribute("preload"), kCrossOriginAttributeNotSet, String(),
-      test_case.as, String(), String(), String(), kReferrerPolicyDefault,
-      KURL(NullURL(), test_case.href), String(), String());
+      test_case.as, String(), String(), String(), String(),
+      network::mojom::ReferrerPolicy::kDefault, KURL(NullURL(), test_case.href),
+      String(), String());
   Expectations expectations = {
       test_case.priority, test_case.context, test_case.expecting_load,
       test_case.expecting_load ? params.href : NullURL(),
-      kReferrerPolicyDefault};
+      network::mojom::ReferrerPolicy::kDefault};
   TestPreload(params, expectations);
 }
 
@@ -204,57 +207,53 @@ struct PreloadMimeTypeTestParams {
   const char* as;
   const char* type;
   const ResourceLoadPriority priority;
-  const WebURLRequest::RequestContext context;
+  const mojom::RequestContextType context;
   const bool expecting_load;
 };
 
 constexpr PreloadMimeTypeTestParams kPreloadMimeTypeTestParams[] = {
     {"http://example.test/cat.webp", "image", "image/webp",
-     ResourceLoadPriority::kLow, WebURLRequest::kRequestContextImage, true},
+     ResourceLoadPriority::kLow, mojom::RequestContextType::IMAGE, true},
     {"http://example.test/cat.svg", "image", "image/svg+xml",
-     ResourceLoadPriority::kLow, WebURLRequest::kRequestContextImage, true},
+     ResourceLoadPriority::kLow, mojom::RequestContextType::IMAGE, true},
     {"http://example.test/cat.jxr", "image", "image/jxr",
-     ResourceLoadPriority::kUnresolved, WebURLRequest::kRequestContextImage,
+     ResourceLoadPriority::kUnresolved, mojom::RequestContextType::IMAGE,
      false},
     {"http://example.test/cat.js", "script", "text/javascript",
-     ResourceLoadPriority::kHigh, WebURLRequest::kRequestContextScript, true},
+     ResourceLoadPriority::kHigh, mojom::RequestContextType::SCRIPT, true},
     {"http://example.test/cat.js", "script", "text/coffeescript",
-     ResourceLoadPriority::kUnresolved, WebURLRequest::kRequestContextScript,
+     ResourceLoadPriority::kUnresolved, mojom::RequestContextType::SCRIPT,
      false},
     {"http://example.test/cat.css", "style", "text/css",
-     ResourceLoadPriority::kVeryHigh, WebURLRequest::kRequestContextStyle,
-     true},
+     ResourceLoadPriority::kVeryHigh, mojom::RequestContextType::STYLE, true},
     {"http://example.test/cat.css", "style", "text/sass",
-     ResourceLoadPriority::kUnresolved, WebURLRequest::kRequestContextStyle,
+     ResourceLoadPriority::kUnresolved, mojom::RequestContextType::STYLE,
      false},
     {"http://example.test/cat.wav", "audio", "audio/wav",
-     ResourceLoadPriority::kLow, WebURLRequest::kRequestContextAudio, true},
+     ResourceLoadPriority::kLow, mojom::RequestContextType::AUDIO, true},
     {"http://example.test/cat.wav", "audio", "audio/mp57",
-     ResourceLoadPriority::kUnresolved, WebURLRequest::kRequestContextAudio,
+     ResourceLoadPriority::kUnresolved, mojom::RequestContextType::AUDIO,
      false},
     {"http://example.test/cat.webm", "video", "video/webm",
-     ResourceLoadPriority::kLow, WebURLRequest::kRequestContextVideo, true},
+     ResourceLoadPriority::kLow, mojom::RequestContextType::VIDEO, true},
     {"http://example.test/cat.mp199", "video", "video/mp199",
-     ResourceLoadPriority::kUnresolved, WebURLRequest::kRequestContextVideo,
+     ResourceLoadPriority::kUnresolved, mojom::RequestContextType::VIDEO,
      false},
     {"http://example.test/cat.vtt", "track", "text/vtt",
-     ResourceLoadPriority::kLow, WebURLRequest::kRequestContextTrack, true},
+     ResourceLoadPriority::kLow, mojom::RequestContextType::TRACK, true},
     {"http://example.test/cat.vtt", "track", "text/subtitlething",
-     ResourceLoadPriority::kUnresolved, WebURLRequest::kRequestContextTrack,
+     ResourceLoadPriority::kUnresolved, mojom::RequestContextType::TRACK,
      false},
     {"http://example.test/cat.woff", "font", "font/woff2",
-     ResourceLoadPriority::kHigh, WebURLRequest::kRequestContextFont, true},
+     ResourceLoadPriority::kHigh, mojom::RequestContextType::FONT, true},
     {"http://example.test/cat.woff", "font", "font/woff84",
-     ResourceLoadPriority::kUnresolved, WebURLRequest::kRequestContextFont,
-     false},
+     ResourceLoadPriority::kUnresolved, mojom::RequestContextType::FONT, false},
     {"http://example.test/cat.empty", "fetch", "foo/bar",
-     ResourceLoadPriority::kHigh, WebURLRequest::kRequestContextSubresource,
-     true},
+     ResourceLoadPriority::kHigh, mojom::RequestContextType::SUBRESOURCE, true},
     {"http://example.test/cat.blob", "blabla", "foo/bar",
-     ResourceLoadPriority::kLow, WebURLRequest::kRequestContextSubresource,
-     false},
+     ResourceLoadPriority::kLow, mojom::RequestContextType::SUBRESOURCE, false},
     {"http://example.test/cat.blob", "", "foo/bar", ResourceLoadPriority::kLow,
-     WebURLRequest::kRequestContextSubresource, false}};
+     mojom::RequestContextType::SUBRESOURCE, false}};
 
 class LinkLoaderPreloadMimeTypeTest
     : public LinkLoaderPreloadTestBase,
@@ -264,12 +263,13 @@ TEST_P(LinkLoaderPreloadMimeTypeTest, Preload) {
   const auto& test_case = GetParam();
   LinkLoadParameters params(
       LinkRelAttribute("preload"), kCrossOriginAttributeNotSet, test_case.type,
-      test_case.as, String(), String(), String(), kReferrerPolicyDefault,
-      KURL(NullURL(), test_case.href), String(), String());
+      test_case.as, String(), String(), String(), String(),
+      network::mojom::ReferrerPolicy::kDefault, KURL(NullURL(), test_case.href),
+      String(), String());
   Expectations expectations = {
       test_case.priority, test_case.context, test_case.expecting_load,
       test_case.expecting_load ? params.href : NullURL(),
-      kReferrerPolicyDefault};
+      network::mojom::ReferrerPolicy::kDefault};
   TestPreload(params, expectations);
 }
 
@@ -297,13 +297,14 @@ TEST_P(LinkLoaderPreloadMediaTest, Preload) {
   const auto& test_case = GetParam();
   LinkLoadParameters params(
       LinkRelAttribute("preload"), kCrossOriginAttributeNotSet, "image/gif",
-      "image", test_case.media, String(), String(), kReferrerPolicyDefault,
+      "image", test_case.media, String(), String(), String(),
+      network::mojom::ReferrerPolicy::kDefault,
       KURL(NullURL(), "http://example.test/cat.gif"), String(), String());
   Expectations expectations = {
-      test_case.priority, WebURLRequest::kRequestContextImage,
+      test_case.priority, mojom::RequestContextType::IMAGE,
       test_case.link_loader_should_load_value,
       test_case.expecting_load ? params.href : NullURL(),
-      kReferrerPolicyDefault};
+      network::mojom::ReferrerPolicy::kDefault};
   TestPreload(params, expectations);
 }
 
@@ -311,26 +312,27 @@ INSTANTIATE_TEST_CASE_P(LinkLoaderPreloadMediaTest,
                         LinkLoaderPreloadMediaTest,
                         testing::ValuesIn(kPreloadMediaTestParams));
 
-constexpr ReferrerPolicy kPreloadReferrerPolicyTestParams[] = {
-    kReferrerPolicyOrigin,
-    kReferrerPolicyOriginWhenCrossOrigin,
-    kReferrerPolicySameOrigin,
-    kReferrerPolicyStrictOrigin,
-    kReferrerPolicyStrictOriginWhenCrossOrigin,
-    kReferrerPolicyNever};
+constexpr network::mojom::ReferrerPolicy kPreloadReferrerPolicyTestParams[] = {
+    network::mojom::ReferrerPolicy::kOrigin,
+    network::mojom::ReferrerPolicy::kOriginWhenCrossOrigin,
+    network::mojom::ReferrerPolicy::kSameOrigin,
+    network::mojom::ReferrerPolicy::kStrictOrigin,
+    network::mojom::ReferrerPolicy::
+        kNoReferrerWhenDowngradeOriginWhenCrossOrigin,
+    network::mojom::ReferrerPolicy::kNever};
 
 class LinkLoaderPreloadReferrerPolicyTest
     : public LinkLoaderPreloadTestBase,
-      public testing::WithParamInterface<ReferrerPolicy> {};
+      public testing::WithParamInterface<network::mojom::ReferrerPolicy> {};
 
 TEST_P(LinkLoaderPreloadReferrerPolicyTest, Preload) {
-  const ReferrerPolicy referrer_policy = GetParam();
+  const network::mojom::ReferrerPolicy referrer_policy = GetParam();
   LinkLoadParameters params(
       LinkRelAttribute("preload"), kCrossOriginAttributeNotSet, "image/gif",
-      "image", String(), String(), String(), referrer_policy,
+      "image", String(), String(), String(), String(), referrer_policy,
       KURL(NullURL(), "http://example.test/cat.gif"), String(), String());
   Expectations expectations = {ResourceLoadPriority::kLow,
-                               WebURLRequest::kRequestContextImage, true,
+                               mojom::RequestContextType::IMAGE, true,
                                params.href, referrer_policy};
   TestPreload(params, expectations);
 }
@@ -364,13 +366,14 @@ TEST_P(LinkLoaderPreloadNonceTest, Preload) {
                          kContentSecurityPolicyHeaderSourceHTTP);
   LinkLoadParameters params(
       LinkRelAttribute("preload"), kCrossOriginAttributeNotSet, String(),
-      "script", String(), test_case.nonce, String(), kReferrerPolicyDefault,
+      "script", String(), test_case.nonce, String(), String(),
+      network::mojom::ReferrerPolicy::kDefault,
       KURL(NullURL(), "http://example.test/cat.js"), String(), String());
   Expectations expectations = {
-      ResourceLoadPriority::kHigh, WebURLRequest::kRequestContextScript,
+      ResourceLoadPriority::kHigh, mojom::RequestContextType::SCRIPT,
       test_case.expecting_load,
       test_case.expecting_load ? params.href : NullURL(),
-      kReferrerPolicyDefault};
+      network::mojom::ReferrerPolicy::kDefault};
   TestPreload(params, expectations);
 }
 
@@ -378,15 +381,15 @@ INSTANTIATE_TEST_CASE_P(LinkLoaderPreloadNonceTest,
                         LinkLoaderPreloadNonceTest,
                         testing::ValuesIn(kPreloadNonceTestParams));
 
-struct PreloadSrcsetTestParams {
+struct PreloadImageSrcsetTestParams {
   const char* href;
-  const char* srcset;
-  const char* sizes;
+  const char* image_srcset;
+  const char* image_sizes;
   float scale_factor;
   const char* expected_url;
 };
 
-constexpr PreloadSrcsetTestParams kPreloadSrcsetTestParams[] = {
+constexpr PreloadImageSrcsetTestParams kPreloadImageSrcsetTestParams[] = {
     {"http://example.test/cat.gif",
      "http://example.test/cat1x.gif 1x, http://example.test/cat2x.gif 2x",
      nullptr, 1.0, "http://example.test/cat1x.gif"},
@@ -404,11 +407,11 @@ constexpr PreloadSrcsetTestParams kPreloadSrcsetTestParams[] = {
      "http://example.test/cat200.gif"},
 };
 
-class LinkLoaderPreloadSrcsetTest
+class LinkLoaderPreloadImageSrcsetTest
     : public LinkLoaderPreloadTestBase,
-      public testing::WithParamInterface<PreloadSrcsetTestParams> {};
+      public testing::WithParamInterface<PreloadImageSrcsetTestParams> {};
 
-TEST_P(LinkLoaderPreloadSrcsetTest, Preload) {
+TEST_P(LinkLoaderPreloadImageSrcsetTest, Preload) {
   const auto& test_case = GetParam();
   dummy_page_holder_->GetDocument().SetBaseURLOverride(
       KURL("http://example.test/"));
@@ -416,43 +419,46 @@ TEST_P(LinkLoaderPreloadSrcsetTest, Preload) {
       test_case.scale_factor);
   LinkLoadParameters params(
       LinkRelAttribute("preload"), kCrossOriginAttributeNotSet, "image/gif",
-      "image", String(), String(), String(), kReferrerPolicyDefault,
-      KURL(NullURL(), test_case.href), test_case.srcset, test_case.sizes);
-  Expectations expectations = {
-      ResourceLoadPriority::kLow, WebURLRequest::kRequestContextImage, true,
-      KURL(NullURL(), test_case.expected_url), kReferrerPolicyDefault};
+      "image", String(), String(), String(), String(),
+      network::mojom::ReferrerPolicy::kDefault, KURL(NullURL(), test_case.href),
+      test_case.image_srcset, test_case.image_sizes);
+  Expectations expectations = {ResourceLoadPriority::kLow,
+                               mojom::RequestContextType::IMAGE, true,
+                               KURL(NullURL(), test_case.expected_url),
+                               network::mojom::ReferrerPolicy::kDefault};
   TestPreload(params, expectations);
 }
 
-INSTANTIATE_TEST_CASE_P(LinkLoaderPreloadSrcsetTest,
-                        LinkLoaderPreloadSrcsetTest,
-                        testing::ValuesIn(kPreloadSrcsetTestParams));
+INSTANTIATE_TEST_CASE_P(LinkLoaderPreloadImageSrcsetTest,
+                        LinkLoaderPreloadImageSrcsetTest,
+                        testing::ValuesIn(kPreloadImageSrcsetTestParams));
 
 struct ModulePreloadTestParams {
   const char* href;
   const char* nonce;
   const char* integrity;
   CrossOriginAttributeValue cross_origin;
-  ReferrerPolicy referrer_policy;
+  network::mojom::ReferrerPolicy referrer_policy;
   bool expecting_load;
   network::mojom::FetchCredentialsMode expected_credentials_mode;
 };
 
 constexpr ModulePreloadTestParams kModulePreloadTestParams[] = {
-    {"", nullptr, nullptr, kCrossOriginAttributeNotSet, kReferrerPolicyDefault,
-     false, network::mojom::FetchCredentialsMode::kOmit},
-    {"http://example.test/cat.js", nullptr, nullptr,
-     kCrossOriginAttributeNotSet, kReferrerPolicyDefault, true,
-     network::mojom::FetchCredentialsMode::kOmit},
-    {"http://example.test/cat.js", nullptr, nullptr,
-     kCrossOriginAttributeAnonymous, kReferrerPolicyDefault, true,
+    {"", nullptr, nullptr, kCrossOriginAttributeNotSet,
+     network::mojom::ReferrerPolicy::kDefault, false,
      network::mojom::FetchCredentialsMode::kSameOrigin},
+    {"http://example.test/cat.js", nullptr, nullptr,
+     kCrossOriginAttributeNotSet, network::mojom::ReferrerPolicy::kDefault,
+     true, network::mojom::FetchCredentialsMode::kSameOrigin},
+    {"http://example.test/cat.js", nullptr, nullptr,
+     kCrossOriginAttributeAnonymous, network::mojom::ReferrerPolicy::kDefault,
+     true, network::mojom::FetchCredentialsMode::kSameOrigin},
     {"http://example.test/cat.js", "nonce", nullptr,
-     kCrossOriginAttributeNotSet, kReferrerPolicyNever, true,
-     network::mojom::FetchCredentialsMode::kOmit},
+     kCrossOriginAttributeNotSet, network::mojom::ReferrerPolicy::kNever, true,
+     network::mojom::FetchCredentialsMode::kSameOrigin},
     {"http://example.test/cat.js", nullptr, "sha384-abc",
-     kCrossOriginAttributeNotSet, kReferrerPolicyDefault, true,
-     network::mojom::FetchCredentialsMode::kOmit}};
+     kCrossOriginAttributeNotSet, network::mojom::ReferrerPolicy::kDefault,
+     true, network::mojom::FetchCredentialsMode::kSameOrigin}};
 
 class LinkLoaderModulePreloadTest
     : public testing::TestWithParam<ModulePreloadTestParams> {};
@@ -462,9 +468,12 @@ class ModulePreloadTestModulator final : public DummyModulator {
   ModulePreloadTestModulator(const ModulePreloadTestParams* params)
       : params_(params), fetched_(false) {}
 
-  void FetchSingle(const ModuleScriptFetchRequest& request,
-                   ModuleGraphLevel,
-                   SingleModuleClient*) override {
+  void FetchSingle(
+      const ModuleScriptFetchRequest& request,
+      FetchClientSettingsObjectSnapshot* fetch_client_settings_object,
+      ModuleGraphLevel,
+      ModuleScriptCustomFetchType custom_fetch_type,
+      SingleModuleClient*) override {
     fetched_ = true;
 
     EXPECT_EQ(KURL(NullURL(), params_->href), request.Url());
@@ -472,10 +481,11 @@ class ModulePreloadTestModulator final : public DummyModulator {
     EXPECT_EQ(kNotParserInserted, request.Options().ParserState());
     EXPECT_EQ(params_->expected_credentials_mode,
               request.Options().CredentialsMode());
-    EXPECT_EQ(AtomicString(), request.GetReferrer());
-    EXPECT_EQ(params_->referrer_policy, request.GetReferrerPolicy());
+    EXPECT_EQ(Referrer::NoReferrer(), request.ReferrerString());
+    EXPECT_EQ(params_->referrer_policy, request.Options().GetReferrerPolicy());
     EXPECT_EQ(params_->integrity,
               request.Options().GetIntegrityAttributeValue());
+    EXPECT_EQ(ModuleScriptCustomFetchType::kNone, custom_fetch_type);
   }
 
   bool fetched() const { return fetched_; }
@@ -501,8 +511,8 @@ TEST_P(LinkLoaderModulePreloadTest, ModulePreload) {
   LinkLoadParameters params(
       LinkRelAttribute("modulepreload"), test_case.cross_origin,
       String() /* type */, String() /* as */, String() /* media */,
-      test_case.nonce, test_case.integrity, test_case.referrer_policy, href_url,
-      String() /* srcset */, String() /* sizes */);
+      test_case.nonce, test_case.integrity, String(), test_case.referrer_policy,
+      href_url, String() /* image_srcset */, String() /* image_sizes */);
   loader->LoadLink(params, dummy_page_holder->GetDocument(),
                    NetworkHintsMock());
   ASSERT_EQ(test_case.expecting_load, modulator->fetched());
@@ -518,19 +528,21 @@ TEST(LinkLoaderTest, Prefetch) {
     // TODO(yoav): Add support for type and media crbug.com/662687
     const char* type;
     const char* media;
-    const ReferrerPolicy referrer_policy;
+    const network::mojom::ReferrerPolicy referrer_policy;
     const bool link_loader_should_load_value;
     const bool expecting_load;
-    const ReferrerPolicy expected_referrer_policy;
+    const network::mojom::ReferrerPolicy expected_referrer_policy;
   } cases[] = {
       // Referrer Policy
-      {"http://example.test/cat.jpg", "image/jpg", "", kReferrerPolicyOrigin,
-       true, true, kReferrerPolicyOrigin},
       {"http://example.test/cat.jpg", "image/jpg", "",
-       kReferrerPolicyOriginWhenCrossOrigin, true, true,
-       kReferrerPolicyOriginWhenCrossOrigin},
-      {"http://example.test/cat.jpg", "image/jpg", "", kReferrerPolicyNever,
-       true, true, kReferrerPolicyNever},
+       network::mojom::ReferrerPolicy::kOrigin, true, true,
+       network::mojom::ReferrerPolicy::kOrigin},
+      {"http://example.test/cat.jpg", "image/jpg", "",
+       network::mojom::ReferrerPolicy::kOriginWhenCrossOrigin, true, true,
+       network::mojom::ReferrerPolicy::kOriginWhenCrossOrigin},
+      {"http://example.test/cat.jpg", "image/jpg", "",
+       network::mojom::ReferrerPolicy::kNever, true, true,
+       network::mojom::ReferrerPolicy::kNever},
   };
 
   // Test the cases with a single header
@@ -542,11 +554,12 @@ TEST(LinkLoaderTest, Prefetch) {
         MockLinkLoaderClient::Create(test_case.link_loader_should_load_value);
     LinkLoader* loader = LinkLoader::Create(loader_client.Get());
     KURL href_url = KURL(NullURL(), test_case.href);
-    URLTestHelpers::RegisterMockedErrorURLLoad(href_url);
+    url_test_helpers::RegisterMockedErrorURLLoad(href_url);
     LinkLoadParameters params(
         LinkRelAttribute("prefetch"), kCrossOriginAttributeNotSet,
-        test_case.type, "", test_case.media, "", "", test_case.referrer_policy,
-        href_url, String() /* srcset */, String() /* sizes */);
+        test_case.type, "", test_case.media, "", "", String(),
+        test_case.referrer_policy, href_url, String() /* image_srcset */,
+        String() /* image_sizes */);
     loader->LoadLink(params, dummy_page_holder->GetDocument(),
                      NetworkHintsMock());
     ASSERT_TRUE(dummy_page_holder->GetDocument().Fetcher());
@@ -557,7 +570,8 @@ TEST(LinkLoaderTest, Prefetch) {
       EXPECT_FALSE(resource);
     }
     if (resource) {
-      if (test_case.expected_referrer_policy != kReferrerPolicyDefault) {
+      if (test_case.expected_referrer_policy !=
+          network::mojom::ReferrerPolicy::kDefault) {
         EXPECT_EQ(test_case.expected_referrer_policy,
                   resource->GetResourceRequest().GetReferrerPolicy());
       }
@@ -592,8 +606,9 @@ TEST(LinkLoaderTest, DNSPrefetch) {
     NetworkHintsMock network_hints;
     LinkLoadParameters params(
         LinkRelAttribute("dns-prefetch"), kCrossOriginAttributeNotSet, String(),
-        String(), String(), String(), String(), kReferrerPolicyDefault,
-        href_url, String() /* srcset */, String() /* sizes */);
+        String(), String(), String(), String(), String(),
+        network::mojom::ReferrerPolicy::kDefault, href_url,
+        String() /* image_srcset */, String() /* image_sizes */);
     loader->LoadLink(params, dummy_page_holder->GetDocument(), network_hints);
     EXPECT_FALSE(network_hints.DidPreconnect());
     EXPECT_EQ(test_case.should_load, network_hints.DidDnsPrefetch());
@@ -627,8 +642,9 @@ TEST(LinkLoaderTest, Preconnect) {
     NetworkHintsMock network_hints;
     LinkLoadParameters params(
         LinkRelAttribute("preconnect"), test_case.cross_origin, String(),
-        String(), String(), String(), String(), kReferrerPolicyDefault,
-        href_url, String() /* srcset */, String() /* sizes */);
+        String(), String(), String(), String(), String(),
+        network::mojom::ReferrerPolicy::kDefault, href_url,
+        String() /* image_srcset */, String() /* image_sizes */);
     loader->LoadLink(params, dummy_page_holder->GetDocument(), network_hints);
     EXPECT_EQ(test_case.should_load, network_hints.DidPreconnect());
     EXPECT_EQ(test_case.is_https, network_hints.IsHTTPS());
@@ -646,11 +662,12 @@ TEST(LinkLoaderTest, PreloadAndPrefetch) {
       MockLinkLoaderClient::Create(true);
   LinkLoader* loader = LinkLoader::Create(loader_client.Get());
   KURL href_url = KURL(KURL(), "https://www.example.com/");
-  URLTestHelpers::RegisterMockedErrorURLLoad(href_url);
+  url_test_helpers::RegisterMockedErrorURLLoad(href_url);
   LinkLoadParameters params(
       LinkRelAttribute("preload prefetch"), kCrossOriginAttributeNotSet,
-      "application/javascript", "script", "", "", "", kReferrerPolicyDefault,
-      href_url, String() /* srcset */, String() /* sizes */);
+      "application/javascript", "script", "", "", "", String(),
+      network::mojom::ReferrerPolicy::kDefault, href_url,
+      String() /* image_srcset */, String() /* image_sizes */);
   loader->LoadLink(params, dummy_page_holder->GetDocument(),
                    NetworkHintsMock());
   ASSERT_EQ(1, fetcher->CountPreloads());

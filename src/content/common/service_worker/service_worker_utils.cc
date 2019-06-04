@@ -4,21 +4,20 @@
 
 #include "content/common/service_worker/service_worker_utils.h"
 
-#include <sstream>
-#include <string>
-
 #include "base/command_line.h"
 #include "base/feature_list.h"
 #include "base/logging.h"
 #include "base/numerics/safe_math.h"
 #include "base/strings/string_util.h"
-#include "content/public/common/browser_side_navigation_policy.h"
+#include "content/common/service_worker/service_worker_types.pb.h"
 #include "content/public/common/content_features.h"
 #include "content/public/common/content_switches.h"
 #include "content/public/common/origin_util.h"
+#include "net/base/load_flags.h"
 #include "net/http/http_byte_range.h"
 #include "net/http/http_util.h"
 #include "services/network/public/cpp/features.h"
+#include "third_party/blink/public/platform/modules/fetch/fetch_api_request.mojom.h"
 
 namespace content {
 
@@ -56,6 +55,27 @@ bool ServiceWorkerUtils::IsPathRestrictionSatisfied(
     const GURL& script_url,
     const std::string* service_worker_allowed_header_value,
     std::string* error_message) {
+  return IsPathRestrictionSatisfiedInternal(scope, script_url, true,
+                                            service_worker_allowed_header_value,
+                                            error_message);
+}
+
+// static
+bool ServiceWorkerUtils::IsPathRestrictionSatisfiedWithoutHeader(
+    const GURL& scope,
+    const GURL& script_url,
+    std::string* error_message) {
+  return IsPathRestrictionSatisfiedInternal(scope, script_url, false, nullptr,
+                                            error_message);
+}
+
+// static
+bool ServiceWorkerUtils::IsPathRestrictionSatisfiedInternal(
+    const GURL& scope,
+    const GURL& script_url,
+    bool service_worker_allowed_header_supported,
+    const std::string* service_worker_allowed_header_value,
+    std::string* error_message) {
   DCHECK(scope.is_valid());
   DCHECK(!scope.has_ref());
   DCHECK(script_url.is_valid());
@@ -66,7 +86,8 @@ bool ServiceWorkerUtils::IsPathRestrictionSatisfied(
     return false;
 
   std::string max_scope_string;
-  if (service_worker_allowed_header_value) {
+  if (service_worker_allowed_header_value &&
+      service_worker_allowed_header_supported) {
     GURL max_scope = script_url.Resolve(*service_worker_allowed_header_value);
     if (!max_scope.is_valid()) {
       *error_message = "An invalid Service-Worker-Allowed header value ('";
@@ -85,13 +106,19 @@ bool ServiceWorkerUtils::IsPathRestrictionSatisfied(
     *error_message = "The path of the provided scope ('";
     error_message->append(scope_string);
     error_message->append("') is not under the max scope allowed (");
-    if (service_worker_allowed_header_value)
+    if (service_worker_allowed_header_value &&
+        service_worker_allowed_header_supported)
       error_message->append("set by Service-Worker-Allowed: ");
     error_message->append("'");
     error_message->append(max_scope_string);
-    error_message->append(
-        "'). Adjust the scope, move the Service Worker script, or use the "
-        "Service-Worker-Allowed HTTP header to allow the scope.");
+    if (service_worker_allowed_header_supported) {
+      error_message->append(
+          "'). Adjust the scope, move the Service Worker script, or use the "
+          "Service-Worker-Allowed HTTP header to allow the scope.");
+    } else {
+      error_message->append(
+          "'). Adjust the scope or move the Service Worker script.");
+    }
     return false;
   }
   return true;
@@ -141,77 +168,6 @@ bool ServiceWorkerUtils::AllOriginsMatchAndCanAccessServiceWorkers(
   return true;
 }
 
-// static
-bool ServiceWorkerUtils::IsServicificationEnabled() {
-  return base::FeatureList::IsEnabled(network::features::kNetworkService) ||
-         base::FeatureList::IsEnabled(features::kServiceWorkerServicification);
-}
-
-// static
-std::string ServiceWorkerUtils::ErrorTypeToString(
-    blink::mojom::ServiceWorkerErrorType error) {
-  std::ostringstream oss;
-  oss << error;
-  return oss.str();
-}
-
-// static
-std::string ServiceWorkerUtils::ClientTypeToString(
-    blink::mojom::ServiceWorkerClientType type) {
-  std::ostringstream oss;
-  oss << type;
-  return oss.str();
-}
-
-bool ServiceWorkerUtils::ExtractSinglePartHttpRange(
-    const net::HttpRequestHeaders& headers,
-    bool* has_range_out,
-    uint64_t* offset_out,
-    uint64_t* length_out) {
-  std::string range_header;
-  *has_range_out = false;
-  if (!headers.GetHeader(net::HttpRequestHeaders::kRange, &range_header))
-    return true;
-
-  std::vector<net::HttpByteRange> ranges;
-  if (!net::HttpUtil::ParseRangeHeader(range_header, &ranges))
-    return true;
-
-  // Multi-part (or invalid) ranges are not supported.
-  if (ranges.size() != 1)
-    return false;
-
-  // Safely parse the single range to our more-sane output format.
-  *has_range_out = true;
-  const net::HttpByteRange& byte_range = ranges[0];
-  if (byte_range.first_byte_position() < 0)
-    return false;
-  // Allow the range [0, -1] to be valid and specify the entire range.
-  if (byte_range.first_byte_position() == 0 &&
-      byte_range.last_byte_position() == -1) {
-    *has_range_out = false;
-    return true;
-  }
-  if (byte_range.last_byte_position() < 0)
-    return false;
-
-  uint64_t first_byte_position =
-      static_cast<uint64_t>(byte_range.first_byte_position());
-  uint64_t last_byte_position =
-      static_cast<uint64_t>(byte_range.last_byte_position());
-
-  base::CheckedNumeric<uint64_t> length = last_byte_position;
-  length -= first_byte_position;
-  length += 1;
-
-  if (!length.IsValid())
-    return false;
-
-  *offset_out = static_cast<uint64_t>(byte_range.first_byte_position());
-  *length_out = length.ValueOrDie();
-  return true;
-}
-
 bool ServiceWorkerUtils::ShouldBypassCacheDueToUpdateViaCache(
     bool is_main_script,
     blink::mojom::ServiceWorkerUpdateViaCache cache_mode) {
@@ -225,6 +181,115 @@ bool ServiceWorkerUtils::ShouldBypassCacheDueToUpdateViaCache(
   }
   NOTREACHED() << static_cast<int>(cache_mode);
   return false;
+}
+
+// static
+blink::mojom::FetchCacheMode ServiceWorkerUtils::GetCacheModeFromLoadFlags(
+    int load_flags) {
+  if (load_flags & net::LOAD_DISABLE_CACHE)
+    return blink::mojom::FetchCacheMode::kNoStore;
+
+  if (load_flags & net::LOAD_VALIDATE_CACHE)
+    return blink::mojom::FetchCacheMode::kValidateCache;
+
+  if (load_flags & net::LOAD_BYPASS_CACHE) {
+    if (load_flags & net::LOAD_ONLY_FROM_CACHE)
+      return blink::mojom::FetchCacheMode::kUnspecifiedForceCacheMiss;
+    return blink::mojom::FetchCacheMode::kBypassCache;
+  }
+
+  if (load_flags & net::LOAD_SKIP_CACHE_VALIDATION) {
+    if (load_flags & net::LOAD_ONLY_FROM_CACHE)
+      return blink::mojom::FetchCacheMode::kOnlyIfCached;
+    return blink::mojom::FetchCacheMode::kForceCache;
+  }
+
+  if (load_flags & net::LOAD_ONLY_FROM_CACHE) {
+    DCHECK(!(load_flags & net::LOAD_SKIP_CACHE_VALIDATION));
+    DCHECK(!(load_flags & net::LOAD_BYPASS_CACHE));
+    return blink::mojom::FetchCacheMode::kUnspecifiedOnlyIfCachedStrict;
+  }
+  return blink::mojom::FetchCacheMode::kDefault;
+}
+
+// static
+std::string ServiceWorkerUtils::SerializeFetchRequestToString(
+    const blink::mojom::FetchAPIRequest& request) {
+  proto::internal::ServiceWorkerFetchRequest request_proto;
+
+  request_proto.set_url(request.url.spec());
+  request_proto.set_method(request.method);
+  request_proto.mutable_headers()->insert(request.headers.begin(),
+                                          request.headers.end());
+  request_proto.mutable_referrer()->set_url(request.referrer->url.spec());
+  request_proto.mutable_referrer()->set_policy(
+      static_cast<int>(request.referrer->policy));
+  request_proto.set_is_reload(request.is_reload);
+  request_proto.set_mode(static_cast<int>(request.mode));
+  request_proto.set_is_main_resource_load(request.is_main_resource_load);
+  request_proto.set_request_context_type(
+      static_cast<int>(request.request_context_type));
+  request_proto.set_credentials_mode(
+      static_cast<int>(request.credentials_mode));
+  request_proto.set_cache_mode(static_cast<int>(request.cache_mode));
+  request_proto.set_redirect_mode(static_cast<int>(request.redirect_mode));
+  if (request.integrity)
+    request_proto.set_integrity(request.integrity.value());
+  request_proto.set_keepalive(request.keepalive);
+  request_proto.set_is_history_navigation(request.is_history_navigation);
+  if (request.client_id)
+    request_proto.set_client_id(request.client_id.value());
+  return request_proto.SerializeAsString();
+}
+
+// static
+blink::mojom::FetchAPIRequestPtr
+ServiceWorkerUtils::DeserializeFetchRequestFromString(
+    const std::string& serialized) {
+  proto::internal::ServiceWorkerFetchRequest request_proto;
+  if (!request_proto.ParseFromString(serialized)) {
+    return blink::mojom::FetchAPIRequest::New();
+  }
+
+  auto request_ptr = blink::mojom::FetchAPIRequest::New();
+  request_ptr->mode =
+      static_cast<network::mojom::FetchRequestMode>(request_proto.mode());
+  request_ptr->is_main_resource_load = request_proto.is_main_resource_load();
+  request_ptr->request_context_type =
+      static_cast<blink::mojom::RequestContextType>(
+          request_proto.request_context_type());
+  request_ptr->frame_type = network::mojom::RequestContextFrameType::kNone;
+  request_ptr->url = GURL(request_proto.url());
+  request_ptr->method = request_proto.method();
+  request_ptr->headers = {request_proto.headers().begin(),
+                          request_proto.headers().end()};
+  request_ptr->referrer =
+      blink::mojom::Referrer::New(GURL(request_proto.referrer().url()),
+                                  static_cast<network::mojom::ReferrerPolicy>(
+                                      request_proto.referrer().policy()));
+  request_ptr->is_reload = request_proto.is_reload();
+  request_ptr->credentials_mode =
+      static_cast<network::mojom::FetchCredentialsMode>(
+          request_proto.credentials_mode());
+  request_ptr->cache_mode =
+      static_cast<blink::mojom::FetchCacheMode>(request_proto.cache_mode());
+  request_ptr->redirect_mode = static_cast<network::mojom::FetchRedirectMode>(
+      request_proto.redirect_mode());
+  if (request_proto.has_integrity())
+    request_ptr->integrity = request_proto.integrity();
+  request_ptr->keepalive = request_proto.keepalive();
+  request_ptr->is_history_navigation = request_proto.is_history_navigation();
+  if (request_proto.has_client_id())
+    request_ptr->client_id = request_proto.client_id();
+  return request_ptr;
+}
+
+// static
+ServiceWorkerHeaderMap ServiceWorkerUtils::ToServiceWorkerHeaderMap(
+    const RequestHeaderMap& header_) {
+  content::ServiceWorkerHeaderMap header;
+  header.insert(header_.begin(), header_.end());
+  return header;
 }
 
 bool LongestScopeMatcher::MatchLongest(const GURL& scope) {

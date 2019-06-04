@@ -26,29 +26,31 @@ VertexArray11::VertexArray11(const gl::VertexArrayState &data)
       mAppliedNumViewsToDivisor(1),
       mCurrentElementArrayStorage(IndexStorageType::Invalid),
       mCachedDestinationIndexType(GL_NONE)
-{
-}
+{}
 
-VertexArray11::~VertexArray11()
-{
-}
+VertexArray11::~VertexArray11() {}
 
-void VertexArray11::destroy(const gl::Context *context)
-{
-}
+void VertexArray11::destroy(const gl::Context *context) {}
 
-#define ANGLE_VERTEX_DIRTY_ATTRIB_FUNC(INDEX)                          \
-    case gl::VertexArray::DIRTY_BIT_ATTRIB_0 + INDEX:                  \
-        ASSERT(INDEX == mState.getBindingIndexFromAttribIndex(INDEX)); \
-        updateVertexAttribStorage(stateManager, dirtyBit, INDEX);      \
-        invalidateVertexBuffer = true;                                 \
+// As VertexAttribPointer can modify both attribute and binding, we should also set other attributes
+// that are also using this binding dirty.
+#define ANGLE_VERTEX_DIRTY_ATTRIB_FUNC(INDEX)                                             \
+    case gl::VertexArray::DIRTY_BIT_ATTRIB_0 + INDEX:                                     \
+        if (attribBits[INDEX][gl::VertexArray::DirtyAttribBitType::DIRTY_ATTRIB_POINTER]) \
+        {                                                                                 \
+            attributesToUpdate |= mState.getBindingToAttributesMask(INDEX);               \
+        }                                                                                 \
+        else                                                                              \
+        {                                                                                 \
+            attributesToUpdate.set(INDEX);                                                \
+        }                                                                                 \
+        invalidateVertexBuffer = true;                                                    \
         break;
 
-#define ANGLE_VERTEX_DIRTY_BINDING_FUNC(INDEX)                         \
-    case gl::VertexArray::DIRTY_BIT_BINDING_0 + INDEX:                 \
-        ASSERT(INDEX == mState.getBindingIndexFromAttribIndex(INDEX)); \
-        updateVertexAttribStorage(stateManager, dirtyBit, INDEX);      \
-        invalidateVertexBuffer = true;                                 \
+#define ANGLE_VERTEX_DIRTY_BINDING_FUNC(INDEX)                          \
+    case gl::VertexArray::DIRTY_BIT_BINDING_0 + INDEX:                  \
+        attributesToUpdate |= mState.getBindingToAttributesMask(INDEX); \
+        invalidateVertexBuffer = true;                                  \
         break;
 
 #define ANGLE_VERTEX_DIRTY_BUFFER_DATA_FUNC(INDEX)                      \
@@ -60,10 +62,10 @@ void VertexArray11::destroy(const gl::Context *context)
         }                                                               \
         break;
 
-gl::Error VertexArray11::syncState(const gl::Context *context,
-                                   const gl::VertexArray::DirtyBits &dirtyBits,
-                                   const gl::VertexArray::DirtyAttribBitsArray &attribBits,
-                                   const gl::VertexArray::DirtyBindingBitsArray &bindingBits)
+angle::Result VertexArray11::syncState(const gl::Context *context,
+                                       const gl::VertexArray::DirtyBits &dirtyBits,
+                                       const gl::VertexArray::DirtyAttribBitsArray &attribBits,
+                                       const gl::VertexArray::DirtyBindingBitsArray &bindingBits)
 {
     ASSERT(dirtyBits.any());
 
@@ -75,6 +77,8 @@ gl::Error VertexArray11::syncState(const gl::Context *context,
     mCurrentStateSerial = renderer->generateSerial();
 
     bool invalidateVertexBuffer = false;
+
+    gl::AttributesMask attributesToUpdate;
 
     // Make sure we trigger re-translation for static index or vertex data.
     for (size_t dirtyBit : dirtyBits)
@@ -101,17 +105,27 @@ gl::Error VertexArray11::syncState(const gl::Context *context,
         }
     }
 
+    for (size_t attribIndex : attributesToUpdate)
+    {
+        updateVertexAttribStorage(context, stateManager, attribIndex);
+    }
+
     if (invalidateVertexBuffer)
     {
         // TODO(jmadill): Individual attribute invalidation.
         stateManager->invalidateVertexBuffer();
     }
 
-    return gl::NoError();
+    return angle::Result::Continue();
 }
 
-gl::Error VertexArray11::syncStateForDraw(const gl::Context *context,
-                                          const gl::DrawCallParams &drawCallParams)
+angle::Result VertexArray11::syncStateForDraw(const gl::Context *context,
+                                              GLint firstVertex,
+                                              GLsizei vertexOrIndexCount,
+                                              GLenum indexTypeOrNone,
+                                              const void *indices,
+                                              GLsizei instances,
+                                              GLint baseVertex)
 {
     Renderer11 *renderer         = GetImplAs<Context11>(context)->getRenderer();
     StateManager11 *stateManager = renderer->getStateManager();
@@ -142,24 +156,25 @@ gl::Error VertexArray11::syncStateForDraw(const gl::Context *context,
         if (activeDynamicAttribs.any())
         {
             ANGLE_TRY(updateDynamicAttribs(context, stateManager->getVertexDataManager(),
-                                           drawCallParams, activeDynamicAttribs));
+                                           firstVertex, vertexOrIndexCount, indexTypeOrNone,
+                                           indices, instances, baseVertex, activeDynamicAttribs));
             stateManager->invalidateInputLayout();
         }
     }
 
-    if (drawCallParams.isDrawElements())
+    if (indexTypeOrNone != GL_NONE)
     {
         bool restartEnabled = context->getGLState().isPrimitiveRestartEnabled();
-        if (!mLastDrawElementsType.valid() ||
-            mLastDrawElementsType.value() != drawCallParams.type() ||
-            mLastDrawElementsIndices.value() != drawCallParams.indices() ||
+        if (!mLastDrawElementsType.valid() || mLastDrawElementsType.value() != indexTypeOrNone ||
+            mLastDrawElementsIndices.value() != indices ||
             mLastPrimitiveRestartEnabled.value() != restartEnabled)
         {
-            mLastDrawElementsType        = drawCallParams.type();
-            mLastDrawElementsIndices     = drawCallParams.indices();
+            mLastDrawElementsType        = indexTypeOrNone;
+            mLastDrawElementsIndices     = indices;
             mLastPrimitiveRestartEnabled = restartEnabled;
 
-            ANGLE_TRY(updateElementArrayStorage(context, drawCallParams, restartEnabled));
+            ANGLE_TRY(updateElementArrayStorage(context, vertexOrIndexCount, indexTypeOrNone,
+                                                indices, restartEnabled));
             stateManager->invalidateIndexBuffer();
         }
         else if (mCurrentElementArrayStorage == IndexStorageType::Dynamic)
@@ -168,41 +183,38 @@ gl::Error VertexArray11::syncStateForDraw(const gl::Context *context,
         }
     }
 
-    return gl::NoError();
+    return angle::Result::Continue();
 }
 
-gl::Error VertexArray11::updateElementArrayStorage(const gl::Context *context,
-                                                   const gl::DrawCallParams &drawCallParams,
-                                                   bool restartEnabled)
+angle::Result VertexArray11::updateElementArrayStorage(const gl::Context *context,
+                                                       GLsizei indexCount,
+                                                       GLenum indexType,
+                                                       const void *indices,
+                                                       bool restartEnabled)
 {
-    bool usePrimitiveRestartWorkaround =
-        UsePrimitiveRestartWorkaround(restartEnabled, drawCallParams.type());
+    bool usePrimitiveRestartWorkaround = UsePrimitiveRestartWorkaround(restartEnabled, indexType);
 
-    ANGLE_TRY(GetIndexTranslationDestType(context, drawCallParams, usePrimitiveRestartWorkaround,
+    ANGLE_TRY(GetIndexTranslationDestType(context, indexCount, indexType, indices,
+                                          usePrimitiveRestartWorkaround,
                                           &mCachedDestinationIndexType));
 
-    unsigned int offset =
-        static_cast<unsigned int>(reinterpret_cast<uintptr_t>(drawCallParams.indices()));
+    unsigned int offset = static_cast<unsigned int>(reinterpret_cast<uintptr_t>(indices));
 
     mCurrentElementArrayStorage =
-        ClassifyIndexStorage(context->getGLState(), mState.getElementArrayBuffer().get(),
-                             drawCallParams.type(), mCachedDestinationIndexType, offset);
+        ClassifyIndexStorage(context->getGLState(), mState.getElementArrayBuffer(), indexType,
+                             mCachedDestinationIndexType, offset);
 
-    // Mark non-static buffers as irrelevant.
-    bool isStatic = (mCurrentElementArrayStorage == IndexStorageType::Static);
-    mRelevantDirtyBitsMask.set(gl::VertexArray::DIRTY_BIT_ELEMENT_ARRAY_BUFFER_DATA, isStatic);
-
-    return gl::NoError();
+    return angle::Result::Continue();
 }
 
-void VertexArray11::updateVertexAttribStorage(StateManager11 *stateManager,
-                                              size_t dirtyBit,
+void VertexArray11::updateVertexAttribStorage(const gl::Context *context,
+                                              StateManager11 *stateManager,
                                               size_t attribIndex)
 {
     const gl::VertexAttribute &attrib = mState.getVertexAttribute(attribIndex);
     const gl::VertexBinding &binding  = mState.getBindingFromAttribIndex(attribIndex);
 
-    VertexStorageType newStorageType = ClassifyAttributeStorage(attrib, binding);
+    VertexStorageType newStorageType = ClassifyAttributeStorage(context, attrib, binding);
 
     // Note: having an unchanged storage type doesn't mean the attribute is clean.
     mAttribsToTranslate.set(attribIndex, newStorageType != VertexStorageType::DYNAMIC);
@@ -212,10 +224,6 @@ void VertexArray11::updateVertexAttribStorage(StateManager11 *stateManager,
 
     mAttributeStorageTypes[attribIndex] = newStorageType;
     mDynamicAttribsMask.set(attribIndex, newStorageType == VertexStorageType::DYNAMIC);
-
-    // Mark non-static buffers as irrelevant.
-    size_t bufferDataDirtyBit = (gl::VertexArray::DIRTY_BIT_BUFFER_DATA_0 + attribIndex);
-    mRelevantDirtyBitsMask.set(bufferDataDirtyBit, newStorageType == VertexStorageType::STATIC);
 
     if (newStorageType == VertexStorageType::CURRENT_VALUE)
     {
@@ -231,8 +239,8 @@ bool VertexArray11::hasActiveDynamicAttrib(const gl::Context *context)
     return activeDynamicAttribs.any();
 }
 
-gl::Error VertexArray11::updateDirtyAttribs(const gl::Context *context,
-                                            const gl::AttributesMask &activeDirtyAttribs)
+angle::Result VertexArray11::updateDirtyAttribs(const gl::Context *context,
+                                                const gl::AttributesMask &activeDirtyAttribs)
 {
     const auto &glState  = context->getGLState();
     const auto &attribs  = mState.getVertexAttributes();
@@ -255,7 +263,7 @@ gl::Error VertexArray11::updateDirtyAttribs(const gl::Context *context,
         switch (mAttributeStorageTypes[dirtyAttribIndex])
         {
             case VertexStorageType::DIRECT:
-                VertexDataManager::StoreDirectAttrib(translatedAttrib);
+                VertexDataManager::StoreDirectAttrib(context, translatedAttrib);
                 break;
             case VertexStorageType::STATIC:
             {
@@ -271,19 +279,27 @@ gl::Error VertexArray11::updateDirtyAttribs(const gl::Context *context,
         }
     }
 
-    return gl::NoError();
+    return angle::Result::Continue();
 }
 
-gl::Error VertexArray11::updateDynamicAttribs(const gl::Context *context,
-                                              VertexDataManager *vertexDataManager,
-                                              const gl::DrawCallParams &drawCallParams,
-                                              const gl::AttributesMask &activeDynamicAttribs)
+angle::Result VertexArray11::updateDynamicAttribs(const gl::Context *context,
+                                                  VertexDataManager *vertexDataManager,
+                                                  GLint firstVertex,
+                                                  GLsizei vertexOrIndexCount,
+                                                  GLenum indexTypeOrNone,
+                                                  const void *indices,
+                                                  GLsizei instances,
+                                                  GLint baseVertex,
+                                                  const gl::AttributesMask &activeDynamicAttribs)
 {
     const auto &glState  = context->getGLState();
     const auto &attribs  = mState.getVertexAttributes();
     const auto &bindings = mState.getVertexBindings();
 
-    ANGLE_TRY(drawCallParams.ensureIndexRangeResolved(context));
+    GLint startVertex;
+    size_t vertexCount;
+    ANGLE_TRY(GetVertexRangeInfo(context, firstVertex, vertexOrIndexCount, indexTypeOrNone, indices,
+                                 baseVertex, &startVertex, &vertexCount));
 
     for (size_t dynamicAttribIndex : activeDynamicAttribs)
     {
@@ -298,13 +314,12 @@ gl::Error VertexArray11::updateDynamicAttribs(const gl::Context *context,
     }
 
     ANGLE_TRY(vertexDataManager->storeDynamicAttribs(
-        context, &mTranslatedAttribs, activeDynamicAttribs, drawCallParams.firstVertex(),
-        drawCallParams.vertexCount(), drawCallParams.instances()));
+        context, &mTranslatedAttribs, activeDynamicAttribs, startVertex, vertexCount, instances));
 
     VertexDataManager::PromoteDynamicAttribs(context, mTranslatedAttribs, activeDynamicAttribs,
-                                             drawCallParams.vertexCount());
+                                             vertexCount);
 
-    return gl::NoError();
+    return angle::Result::Continue();
 }
 
 const std::vector<TranslatedAttribute> &VertexArray11::getTranslatedAttribs() const

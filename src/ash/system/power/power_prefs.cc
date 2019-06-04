@@ -49,13 +49,21 @@ chromeos::PowerPolicyController::Action GetPowerPolicyAction(
   return pref_action;
 }
 
-PrefService* GetActivePrefService() {
-  return Shell::Get()->session_controller()->GetActivePrefService();
+// Returns the PrefService that should be used for determining power-related
+// behavior. When one or more users are logged in, the primary user's prefs are
+// used: if more-restrictive power-related prefs are set by policy, it's most
+// likely to be on this profile.
+PrefService* GetPrefService() {
+  ash::SessionController* controller = Shell::Get()->session_controller();
+  PrefService* prefs = controller->GetPrimaryUserPrefService();
+  return prefs ? prefs : controller->GetActivePrefService();
 }
 
 // Registers power prefs whose default values are the same in user prefs and
 // signin prefs.
 void RegisterProfilePrefs(PrefRegistrySimple* registry, bool for_test) {
+  registry->RegisterIntegerPref(prefs::kPowerAcScreenBrightnessPercent, -1,
+                                PrefRegistry::PUBLIC);
   registry->RegisterIntegerPref(prefs::kPowerAcScreenDimDelayMs, 420000,
                                 PrefRegistry::PUBLIC);
   registry->RegisterIntegerPref(prefs::kPowerAcScreenOffDelayMs, 450000,
@@ -64,7 +72,9 @@ void RegisterProfilePrefs(PrefRegistrySimple* registry, bool for_test) {
                                 PrefRegistry::PUBLIC);
   registry->RegisterIntegerPref(prefs::kPowerAcIdleWarningDelayMs, 0,
                                 PrefRegistry::PUBLIC);
-  registry->RegisterIntegerPref(prefs::kPowerAcIdleDelayMs, 1800000,
+  registry->RegisterIntegerPref(prefs::kPowerAcIdleDelayMs, 510000,
+                                PrefRegistry::PUBLIC);
+  registry->RegisterIntegerPref(prefs::kPowerBatteryScreenBrightnessPercent, -1,
                                 PrefRegistry::PUBLIC);
   registry->RegisterIntegerPref(prefs::kPowerBatteryScreenDimDelayMs, 300000,
                                 PrefRegistry::PUBLIC);
@@ -87,6 +97,8 @@ void RegisterProfilePrefs(PrefRegistrySimple* registry, bool for_test) {
                                 PrefRegistry::PUBLIC);
   registry->RegisterBooleanPref(prefs::kPowerUseVideoActivity, true,
                                 PrefRegistry::PUBLIC);
+  registry->RegisterBooleanPref(prefs::kPowerAllowWakeLocks, true,
+                                PrefRegistry::PUBLIC);
   registry->RegisterBooleanPref(prefs::kPowerAllowScreenWakeLocks, true,
                                 PrefRegistry::PUBLIC);
   registry->RegisterDoublePref(prefs::kPowerPresentationScreenDimDelayFactor,
@@ -98,6 +110,8 @@ void RegisterProfilePrefs(PrefRegistrySimple* registry, bool for_test) {
   registry->RegisterBooleanPref(
       prefs::kPowerForceNonzeroBrightnessForUserActivity, true,
       PrefRegistry::PUBLIC);
+  registry->RegisterBooleanPref(prefs::kPowerSmartDimEnabled, true,
+                                PrefRegistry::PUBLIC);
 
   if (for_test) {
     registry->RegisterBooleanPref(prefs::kAllowScreenLock, true,
@@ -178,7 +192,7 @@ void PowerPrefs::OnLockStateChanged(bool locked) {
 
   screen_lock_time_ = locked ? tick_clock_->NowTicks() : base::TimeTicks();
   // OnLockStateChanged could be called before ash connects user prefs in tests.
-  if (GetActivePrefService())
+  if (GetPrefService())
     UpdatePowerPolicyFromPrefs();
 }
 
@@ -191,7 +205,7 @@ void PowerPrefs::OnActiveUserPrefServiceChanged(PrefService* prefs) {
 }
 
 void PowerPrefs::UpdatePowerPolicyFromPrefs() {
-  PrefService* prefs = GetActivePrefService();
+  PrefService* prefs = GetPrefService();
   DCHECK(prefs);
 
   // It's possible to end up in a situation where a shortened lock-screen idle
@@ -205,6 +219,8 @@ void PowerPrefs::UpdatePowerPolicyFromPrefs() {
                           screen_idle_off_time_ > screen_lock_time_);
 
   chromeos::PowerPolicyController::PrefValues values;
+  values.ac_brightness_percent =
+      prefs->GetInteger(prefs::kPowerAcScreenBrightnessPercent);
   values.ac_screen_dim_delay_ms =
       prefs->GetInteger(use_lock_delays ? prefs::kPowerLockScreenDimDelayMs
                                         : prefs::kPowerAcScreenDimDelayMs);
@@ -216,6 +232,8 @@ void PowerPrefs::UpdatePowerPolicyFromPrefs() {
   values.ac_idle_warning_delay_ms =
       prefs->GetInteger(prefs::kPowerAcIdleWarningDelayMs);
   values.ac_idle_delay_ms = prefs->GetInteger(prefs::kPowerAcIdleDelayMs);
+  values.battery_brightness_percent =
+      prefs->GetInteger(prefs::kPowerBatteryScreenBrightnessPercent);
   values.battery_screen_dim_delay_ms =
       prefs->GetInteger(use_lock_delays ? prefs::kPowerLockScreenDimDelayMs
                                         : prefs::kPowerBatteryScreenDimDelayMs);
@@ -236,6 +254,7 @@ void PowerPrefs::UpdatePowerPolicyFromPrefs() {
       GetPowerPolicyAction(prefs, prefs::kPowerLidClosedAction);
   values.use_audio_activity = prefs->GetBoolean(prefs::kPowerUseAudioActivity);
   values.use_video_activity = prefs->GetBoolean(prefs::kPowerUseVideoActivity);
+  values.allow_wake_locks = prefs->GetBoolean(prefs::kPowerAllowWakeLocks);
   values.allow_screen_wake_locks =
       prefs->GetBoolean(prefs::kPowerAllowScreenWakeLocks);
   values.enable_auto_screen_lock =
@@ -248,6 +267,7 @@ void PowerPrefs::UpdatePowerPolicyFromPrefs() {
       prefs->GetBoolean(prefs::kPowerWaitForInitialUserActivity);
   values.force_nonzero_brightness_for_user_activity =
       prefs->GetBoolean(prefs::kPowerForceNonzeroBrightnessForUserActivity);
+  values.smart_dim_enabled = prefs->GetBoolean(prefs::kPowerSmartDimEnabled);
 
   power_policy_controller_->ApplyPrefs(values);
 }
@@ -259,6 +279,8 @@ void PowerPrefs::ObservePrefs(PrefService* prefs) {
 
   pref_change_registrar_ = std::make_unique<PrefChangeRegistrar>();
   pref_change_registrar_->Init(prefs);
+  pref_change_registrar_->Add(prefs::kPowerAcScreenBrightnessPercent,
+                              update_callback);
   pref_change_registrar_->Add(prefs::kPowerAcScreenDimDelayMs, update_callback);
   pref_change_registrar_->Add(prefs::kPowerAcScreenOffDelayMs, update_callback);
   pref_change_registrar_->Add(prefs::kPowerAcScreenLockDelayMs,
@@ -266,6 +288,8 @@ void PowerPrefs::ObservePrefs(PrefService* prefs) {
   pref_change_registrar_->Add(prefs::kPowerAcIdleWarningDelayMs,
                               update_callback);
   pref_change_registrar_->Add(prefs::kPowerAcIdleDelayMs, update_callback);
+  pref_change_registrar_->Add(prefs::kPowerBatteryScreenBrightnessPercent,
+                              update_callback);
   pref_change_registrar_->Add(prefs::kPowerBatteryScreenDimDelayMs,
                               update_callback);
   pref_change_registrar_->Add(prefs::kPowerBatteryScreenOffDelayMs,
@@ -284,6 +308,7 @@ void PowerPrefs::ObservePrefs(PrefService* prefs) {
   pref_change_registrar_->Add(prefs::kPowerLidClosedAction, update_callback);
   pref_change_registrar_->Add(prefs::kPowerUseAudioActivity, update_callback);
   pref_change_registrar_->Add(prefs::kPowerUseVideoActivity, update_callback);
+  pref_change_registrar_->Add(prefs::kPowerAllowWakeLocks, update_callback);
   pref_change_registrar_->Add(prefs::kPowerAllowScreenWakeLocks,
                               update_callback);
   pref_change_registrar_->Add(prefs::kEnableAutoScreenLock, update_callback);
@@ -296,6 +321,7 @@ void PowerPrefs::ObservePrefs(PrefService* prefs) {
   pref_change_registrar_->Add(
       prefs::kPowerForceNonzeroBrightnessForUserActivity, update_callback);
   pref_change_registrar_->Add(prefs::kAllowScreenLock, update_callback);
+  pref_change_registrar_->Add(prefs::kPowerSmartDimEnabled, update_callback);
 
   UpdatePowerPolicyFromPrefs();
 }

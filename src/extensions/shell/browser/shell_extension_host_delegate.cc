@@ -48,11 +48,11 @@ void ShellExtensionHostDelegate::CreateTab(
 void ShellExtensionHostDelegate::ProcessMediaAccessRequest(
     content::WebContents* web_contents,
     const content::MediaStreamRequest& request,
-    const content::MediaResponseCallback& callback,
+    content::MediaResponseCallback callback,
     const Extension* extension) {
   // Allow access to the microphone and/or camera.
-  media_capture_util::GrantMediaStreamRequest(
-      web_contents, request, callback, extension);
+  media_capture_util::GrantMediaStreamRequest(web_contents, request,
+                                              std::move(callback), extension);
 }
 
 bool ShellExtensionHostDelegate::CheckMediaAccessPermission(
@@ -69,6 +69,18 @@ static base::LazyInstance<SerialExtensionHostQueue>::DestructorAtExit g_queue =
 
 ExtensionHostQueue* ShellExtensionHostDelegate::GetExtensionHostQueue() const {
   return g_queue.Pointer();
+}
+
+gfx::Size ShellExtensionHostDelegate::EnterPictureInPicture(
+    content::WebContents* web_contents,
+    const viz::SurfaceId& surface_id,
+    const gfx::Size& natural_size) {
+  NOTREACHED();
+  return gfx::Size();
+}
+
+void ShellExtensionHostDelegate::ExitPictureInPicture() {
+  NOTREACHED();
 }
 
 }  // namespace extensions

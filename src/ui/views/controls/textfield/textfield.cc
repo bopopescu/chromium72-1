@@ -19,9 +19,9 @@
 #include "ui/base/cursor/cursor.h"
 #include "ui/base/default_style.h"
 #include "ui/base/dragdrop/drag_drop_types.h"
+#include "ui/base/ime/constants.h"
 #include "ui/base/ime/input_method.h"
 #include "ui/base/ime/text_edit_commands.h"
-#include "ui/base/material_design/material_design_controller.h"
 #include "ui/base/resource/resource_bundle.h"
 #include "ui/base/ui_base_switches.h"
 #include "ui/base/ui_base_switches_util.h"
@@ -74,6 +74,7 @@
 #endif
 
 #if defined(OS_MACOSX)
+#include "ui/base/cocoa/defaults_utils.h"
 #include "ui/base/cocoa/secure_password_input.h"
 #endif
 
@@ -92,9 +93,6 @@ const gfx::SelectionBehavior kWordSelectionBehavior = gfx::SELECTION_RETAIN;
 const gfx::SelectionBehavior kMoveParagraphSelectionBehavior =
     gfx::SELECTION_RETAIN;
 #endif
-
-// Default placeholder text color.
-const SkColor kDefaultPlaceholderTextColor = SK_ColorLTGRAY;
 
 // Get the default command for a given key |event|.
 ui::TextEditCommand GetCommandForKeyEvent(const ui::KeyEvent& event) {
@@ -153,6 +151,14 @@ ui::TextEditCommand GetCommandForKeyEvent(const ui::KeyEvent& event) {
       return shift
                  ? ui::TextEditCommand::MOVE_TO_END_OF_LINE_AND_MODIFY_SELECTION
                  : ui::TextEditCommand::MOVE_TO_END_OF_LINE;
+    case ui::VKEY_UP:
+      return shift ? ui::TextEditCommand::
+                         MOVE_TO_BEGINNING_OF_LINE_AND_MODIFY_SELECTION
+                   : ui::TextEditCommand::INVALID_COMMAND;
+    case ui::VKEY_DOWN:
+      return shift
+                 ? ui::TextEditCommand::MOVE_TO_END_OF_LINE_AND_MODIFY_SELECTION
+                 : ui::TextEditCommand::INVALID_COMMAND;
     case ui::VKEY_BACK:
       if (!control)
         return ui::TextEditCommand::DELETE_BACKWARD;
@@ -207,11 +213,14 @@ ui::TextEditCommand GetTextEditCommandFromMenuCommand(int command_id,
   return ui::TextEditCommand::INVALID_COMMAND;
 }
 
-base::TimeDelta GetPasswordRevealDuration() {
-  return ViewsDelegate::GetInstance()
-             ? ViewsDelegate::GetInstance()
-                   ->GetTextfieldPasswordRevealDuration()
-             : base::TimeDelta();
+base::TimeDelta GetPasswordRevealDuration(const ui::KeyEvent& event) {
+  // The key event may carries the property that indicates it was from the
+  // virtual keyboard.
+  // In that case, reveals the password characters for 1 second.
+  auto* properties = event.properties();
+  bool from_vk =
+      properties && properties->find(ui::kPropertyFromVK) != properties->end();
+  return from_vk ? base::TimeDelta::FromSeconds(1) : base::TimeDelta();
 }
 
 bool IsControlKeyModifier(int flags) {
@@ -233,8 +242,6 @@ const char Textfield::kViewClassName[] = "Textfield";
 
 // static
 base::TimeDelta Textfield::GetCaretBlinkInterval() {
-  static constexpr base::TimeDelta default_value =
-      base::TimeDelta::FromMilliseconds(500);
 #if defined(OS_WIN)
   static const size_t system_value = ::GetCaretBlinkTime();
   if (system_value != 0) {
@@ -242,8 +249,12 @@ base::TimeDelta Textfield::GetCaretBlinkInterval() {
                ? base::TimeDelta()
                : base::TimeDelta::FromMilliseconds(system_value);
   }
+#elif defined(OS_MACOSX)
+  base::TimeDelta system_value;
+  if (ui::TextInsertionCaretBlinkPeriod(&system_value))
+    return system_value;
 #endif
-  return default_value;
+  return base::TimeDelta::FromMilliseconds(500);
 }
 
 // static
@@ -279,7 +290,7 @@ Textfield::Textfield()
       selection_controller_(this),
       drag_start_display_offset_(0),
       touch_handles_hidden_due_to_scroll_(false),
-      use_focus_ring_(ui::MaterialDesignController::IsSecondaryUiMaterial()),
+      use_focus_ring_(true),
       weak_ptr_factory_(this) {
   set_context_menu_controller(this);
   set_drag_controller(this);
@@ -325,7 +336,7 @@ void Textfield::SetAssociatedLabel(View* labelling_view) {
   ui::AXNodeData node_data;
   labelling_view->GetAccessibleNodeData(&node_data);
   // TODO(aleventhal) automatically handle setting the name from the related
-  // label in view_accessibility and have it update the name if the text of the
+  // label in ViewAccessibility and have it update the name if the text of the
   // associated label changes.
   SetAccessibleName(
       node_data.GetString16Attribute(ax::mojom::StringAttribute::kName));
@@ -531,10 +542,10 @@ void Textfield::SetHorizontalAlignment(gfx::HorizontalAlignment alignment) {
   GetRenderText()->SetHorizontalAlignment(alignment);
 }
 
-void Textfield::ShowImeIfNeeded() {
+void Textfield::ShowVirtualKeyboardIfEnabled() {
   // GetInputMethod() may return nullptr in tests.
   if (enabled() && !read_only() && GetInputMethod())
-    GetInputMethod()->ShowImeIfNeeded();
+    GetInputMethod()->ShowVirtualKeyboardIfEnabled();
 }
 
 bool Textfield::IsIMEComposing() const {
@@ -666,7 +677,9 @@ bool Textfield::OnMousePressed(const ui::MouseEvent& event) {
       (event.IsOnlyLeftMouseButton() || event.IsOnlyRightMouseButton())) {
     if (!had_focus)
       RequestFocusWithPointer(ui::EventPointerType::POINTER_TYPE_MOUSE);
-    ShowImeIfNeeded();
+#if !defined(OS_WIN)
+    ShowVirtualKeyboardIfEnabled();
+#endif
   }
 
 #if defined(OS_LINUX) && !defined(OS_CHROMEOS)
@@ -743,10 +756,16 @@ bool Textfield::OnKeyReleased(const ui::KeyEvent& event) {
 }
 
 void Textfield::OnGestureEvent(ui::GestureEvent* event) {
+  bool show_virtual_keyboard = true;
+#if defined(OS_WIN)
+  show_virtual_keyboard = event->details().primary_pointer_type() ==
+                          ui::EventPointerType::POINTER_TYPE_TOUCH;
+#endif
   switch (event->type()) {
     case ui::ET_GESTURE_TAP_DOWN:
       RequestFocusWithPointer(event->details().primary_pointer_type());
-      ShowImeIfNeeded();
+      if (show_virtual_keyboard)
+        ShowVirtualKeyboardIfEnabled();
       event->SetHandled();
       break;
     case ui::ET_GESTURE_TAP:
@@ -1035,11 +1054,11 @@ bool Textfield::HandleAccessibleAction(const ui::AXActionData& action_data) {
     return View::HandleAccessibleAction(action_data);
 
   if (action_data.action == ax::mojom::Action::kSetValue) {
-    SetText(action_data.value);
+    SetText(base::UTF8ToUTF16(action_data.value));
     ClearSelection();
     return true;
   } else if (action_data.action == ax::mojom::Action::kReplaceSelectedText) {
-    InsertOrReplaceText(action_data.value);
+    InsertOrReplaceText(base::UTF8ToUTF16(action_data.value));
     ClearSelection();
     return true;
   }
@@ -1168,6 +1187,15 @@ void Textfield::OnCompositionTextConfirmedOrCleared() {
 void Textfield::ShowContextMenuForView(View* source,
                                        const gfx::Point& point,
                                        ui::MenuSourceType source_type) {
+#if defined(OS_MACOSX)
+  // On Mac, the context menu contains a look up item which displays the
+  // selected text. As such, the menu needs to be updated if the selection has
+  // changed. Be careful to reset the MenuRunner first so it doesn't reference
+  // the old model.
+  context_menu_runner_.reset();
+  context_menu_contents_.reset();
+#endif
+
   UpdateContextMenu();
   context_menu_runner_->RunMenuAt(GetWidget(), NULL,
                                   gfx::Rect(point, gfx::Size()),
@@ -1385,17 +1413,9 @@ bool Textfield::GetAcceleratorForCommandId(int command_id,
       *accelerator = ui::Accelerator(ui::VKEY_A, ui::EF_PLATFORM_ACCELERATOR);
       return true;
 
-    case IDS_CONTENT_CONTEXT_EMOJI:
-#if defined(OS_MACOSX)
-      *accelerator = ui::Accelerator(ui::VKEY_SPACE,
-                                     ui::EF_COMMAND_DOWN | ui::EF_CONTROL_DOWN);
-      return true;
-#else
-      return false;
-#endif
-
     default:
-      return false;
+      return text_services_context_menu_->GetAcceleratorForCommandId(
+          command_id, accelerator);
   }
 }
 
@@ -1482,11 +1502,14 @@ void Textfield::InsertChar(const ui::KeyEvent& event) {
 
   DoInsertChar(ch);
 
-  if (text_input_type_ == ui::TEXT_INPUT_TYPE_PASSWORD &&
-      !GetPasswordRevealDuration().is_zero()) {
-    const size_t change_offset = model_->GetCursorPosition();
-    DCHECK_GT(change_offset, 0u);
-    RevealPasswordChar(change_offset - 1);
+  if (text_input_type_ == ui::TEXT_INPUT_TYPE_PASSWORD) {
+    password_char_reveal_index_ = -1;
+    base::TimeDelta duration = GetPasswordRevealDuration(event);
+    if (!duration.is_zero()) {
+      const size_t change_offset = model_->GetCursorPosition();
+      DCHECK_GT(change_offset, 0u);
+      RevealPasswordChar(change_offset - 1, duration);
+    }
   }
 }
 
@@ -1743,10 +1766,10 @@ void Textfield::SetTextEditCommandForNextKeyEvent(ui::TextEditCommand command) {
   scheduled_text_edit_command_ = command;
 }
 
-const std::string& Textfield::GetClientSourceInfo() const {
-  // TODO(yhanada): Implement this method.
+ukm::SourceId Textfield::GetClientSourceForMetrics() const {
+  // TODO(shend): Implement this method.
   NOTIMPLEMENTED_LOG_ONCE();
-  return base::EmptyString();
+  return ukm::SourceId();
 }
 
 bool Textfield::ShouldDoLearning() {
@@ -1984,6 +2007,14 @@ void Textfield::OffsetDoubleClickWord(int offset) {
   selection_controller_.OffsetDoubleClickWord(offset);
 }
 
+bool Textfield::IsDropCursorForInsertion() const {
+  return true;
+}
+
+bool Textfield::ShouldShowPlaceholderText() const {
+  return text().empty() && !GetPlaceholderText().empty();
+}
+
 ////////////////////////////////////////////////////////////////////////////////
 // Textfield, private:
 
@@ -2066,13 +2097,9 @@ void Textfield::UpdateSelectionClipboard() {
 
 void Textfield::UpdateBackgroundColor() {
   const SkColor color = GetBackgroundColor();
-  if (ui::MaterialDesignController::IsSecondaryUiMaterial()) {
     SetBackground(
         CreateBackgroundFromPainter(Painter::CreateSolidRoundRectPainter(
             color, FocusableBorder::kCornerRadiusDp)));
-  } else {
-    SetBackground(CreateSolidBackground(color));
-  }
   // Disable subpixel rendering when the background color is not opaque because
   // it draws incorrect colors around the glyphs in that case.
   // See crbug.com/115198
@@ -2136,7 +2163,7 @@ void Textfield::PaintTextAndCursor(gfx::Canvas* canvas) {
 
   // Draw placeholder text if needed.
   gfx::RenderText* render_text = GetRenderText();
-  if (text().empty() && !GetPlaceholderText().empty()) {
+  if (ShouldShowPlaceholderText()) {
     // Disable subpixel rendering when the background color is not opaque
     // because it draws incorrect colors around the glyphs in that case.
     // See crbug.com/786343
@@ -2148,17 +2175,30 @@ void Textfield::PaintTextAndCursor(gfx::Canvas* canvas) {
         GetPlaceholderText(),
         placeholder_font_list_.has_value() ? placeholder_font_list_.value()
                                            : GetFontList(),
-        placeholder_text_color_.value_or(
-            ui::MaterialDesignController::IsSecondaryUiMaterial()
-                ? SkColorSetA(GetTextColor(), 0x83)
-                : kDefaultPlaceholderTextColor),
+        placeholder_text_color_.value_or(SkColorSetA(GetTextColor(), 0x83)),
         render_text->display_rect(), placeholder_text_draw_flags);
   }
 
-  render_text->Draw(canvas);
+  if (drop_cursor_visible_ && !IsDropCursorForInsertion()) {
+    // Draw as selected to mark the entire text that will be replaced by drop.
+    // TODO(http://crbug.com/853678): Replace this state push/pop with a clean
+    // call to a finer grained rendering API when one becomes available.  These
+    // changes are only applied because RenderText is so stateful and subtle
+    // (e.g. focus is required for the selection to be rendered as selected).
+    const gfx::SelectionModel sm = render_text->selection_model();
+    const bool focused = render_text->focused();
+    render_text->SelectAll(true);
+    render_text->set_focused(true);
+    render_text->Draw(canvas);
+    render_text->set_focused(focused);
+    render_text->SetSelection(sm);
+  } else {
+    // Draw text as normal
+    render_text->Draw(canvas);
+  }
 
-  // Draw the detached drop cursor that marks where the text will be dropped.
-  if (drop_cursor_visible_) {
+  if (drop_cursor_visible_ && IsDropCursorForInsertion()) {
+    // Draw a drop cursor that marks where the text will be dropped/inserted.
     canvas->FillRect(render_text->GetCursorBounds(drop_cursor_position_, true),
                      GetTextColor());
   }
@@ -2176,15 +2216,6 @@ void Textfield::OnCaretBoundsChanged() {
     GetInputMethod()->OnCaretBoundsChanged(this);
   if (touch_selection_controller_)
     touch_selection_controller_->SelectionChanged();
-
-#if defined(OS_MACOSX)
-  // On Mac, the context menu contains a look up item which displays the
-  // selected text. As such, the menu needs to be updated if the selection has
-  // changed. Be careful to reset the MenuRunner first so it doesn't reference
-  // the old model.
-  context_menu_runner_.reset();
-  context_menu_contents_.reset();
-#endif
 
   // Screen reader users don't expect notifications about unfocused textfields.
   if (HasFocus())
@@ -2266,15 +2297,16 @@ bool Textfield::ImeEditingAllowed() const {
   return (t != ui::TEXT_INPUT_TYPE_NONE && t != ui::TEXT_INPUT_TYPE_PASSWORD);
 }
 
-void Textfield::RevealPasswordChar(int index) {
+void Textfield::RevealPasswordChar(int index, base::TimeDelta duration) {
   GetRenderText()->SetObscuredRevealIndex(index);
   SchedulePaint();
+  password_char_reveal_index_ = index;
 
   if (index != -1) {
     password_reveal_timer_.Start(
-        FROM_HERE, GetPasswordRevealDuration(),
+        FROM_HERE, duration,
         base::Bind(&Textfield::RevealPasswordChar,
-                   weak_ptr_factory_.GetWeakPtr(), -1));
+                   weak_ptr_factory_.GetWeakPtr(), -1, duration));
   }
 }
 

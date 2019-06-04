@@ -25,7 +25,7 @@ namespace {
 // current connection (like playing a cassette tape) and do not send new range
 // request (like rewind a cassette tape, and continue playing after).
 // Experimentally chosen value.
-const int kChunkCloseDistance = 10;
+constexpr int kChunkCloseDistance = 10;
 
 // Return true if the HTTP response of |loader| is a successful one and loading
 // should continue. 4xx error indicate subsequent requests will fail too.
@@ -204,8 +204,16 @@ void DocumentLoaderImpl::SetPartialLoadingEnabled(bool enabled) {
 bool DocumentLoaderImpl::ShouldCancelLoading() const {
   if (!loader_)
     return true;
-  if (!partial_loading_enabled_ || pending_requests_.IsEmpty())
+
+  if (!partial_loading_enabled_)
     return false;
+
+  if (pending_requests_.IsEmpty()) {
+    // Cancel loading if this is unepected data from server.
+    return !chunk_stream_.IsValidChunkIndex(chunk_.chunk_index) ||
+           chunk_stream_.IsChunkAvailable(chunk_.chunk_index);
+  }
+
   const gfx::Range current_range(chunk_.chunk_index,
                                  chunk_.chunk_index + kChunkCloseDistance);
   return !pending_requests_.Intersects(current_range);
@@ -328,11 +336,6 @@ void DocumentLoaderImpl::DidRead(int32_t result) {
 
 bool DocumentLoaderImpl::SaveBuffer(char* input, uint32_t input_size) {
   const uint32_t document_size = GetDocumentSize();
-  if (document_size != 0) {
-    // If the HTTP server sends more data than expected, then truncate
-    // |input_size| to the expected size.
-    input_size = std::min(document_size - bytes_received_, input_size);
-  }
   bytes_received_ += input_size;
   bool chunk_saved = false;
   bool loading_pending_request = pending_requests_.Contains(chunk_.chunk_index);
@@ -346,7 +349,7 @@ bool DocumentLoaderImpl::SaveBuffer(char* input, uint32_t input_size) {
            new_chunk_data_len);
     chunk_.data_size += new_chunk_data_len;
     if (chunk_.data_size == DataStream::kChunkSize ||
-        document_size == EndOfCurrentChunk()) {
+        (document_size > 0 && document_size <= EndOfCurrentChunk())) {
       pending_requests_.Subtract(
           gfx::Range(chunk_.chunk_index, chunk_.chunk_index + 1));
       SaveChunkData();

@@ -12,6 +12,7 @@
 #include "base/sequence_checker.h"
 #include "base/sequenced_task_runner.h"
 #include "mojo/public/cpp/bindings/binding_set.h"
+#include "mojo/public/cpp/bindings/strong_binding_set.h"
 #include "services/service_manager/public/cpp/identity.h"
 #include "services/tracing/public/cpp/perfetto/task_runner.h"
 #include "services/tracing/public/mojom/perfetto_service.mojom.h"
@@ -21,13 +22,13 @@ struct BindSourceInfo;
 }  // namespace service_manager
 
 namespace perfetto {
-class Service;
+class TracingService;
 }  // namespace perfetto
 
 namespace tracing {
 
 // This class serves two purposes: It wraps the use of the system-wide
-// perfetto::Service instance, and serves as the main Mojo interface for
+// perfetto::TracingService instance, and serves as the main Mojo interface for
 // connecting per-process ProducerClient with corresponding service-side
 // ProducerHost.
 class PerfettoService : public mojom::PerfettoService {
@@ -37,7 +38,6 @@ class PerfettoService : public mojom::PerfettoService {
   ~PerfettoService() override;
 
   static PerfettoService* GetInstance();
-  static void DestroyOnSequence(std::unique_ptr<PerfettoService>);
 
   void BindRequest(mojom::PerfettoServiceRequest request,
                    const service_manager::BindSourceInfo& source_info);
@@ -46,7 +46,7 @@ class PerfettoService : public mojom::PerfettoService {
   void ConnectToProducerHost(mojom::ProducerClientPtr producer_client,
                              mojom::ProducerHostRequest producer_host) override;
 
-  perfetto::Service* GetService() const;
+  perfetto::TracingService* GetService() const;
   scoped_refptr<base::SequencedTaskRunner> task_runner() {
     return perfetto_task_runner_.task_runner();
   }
@@ -57,8 +57,9 @@ class PerfettoService : public mojom::PerfettoService {
   void CreateServiceOnSequence();
 
   PerfettoTaskRunner perfetto_task_runner_;
-  std::unique_ptr<perfetto::Service> service_;
+  std::unique_ptr<perfetto::TracingService> service_;
   mojo::BindingSet<mojom::PerfettoService, service_manager::Identity> bindings_;
+  mojo::StrongBindingSet<mojom::ProducerHost> producer_bindings_;
   SEQUENCE_CHECKER(sequence_checker_);
 
   DISALLOW_COPY_AND_ASSIGN(PerfettoService);

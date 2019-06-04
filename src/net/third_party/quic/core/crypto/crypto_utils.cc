@@ -6,13 +6,13 @@
 
 #include <memory>
 
-#include "crypto/hkdf.h"
 #include "net/third_party/quic/core/crypto/aes_128_gcm_decrypter.h"
 #include "net/third_party/quic/core/crypto/aes_128_gcm_encrypter.h"
 #include "net/third_party/quic/core/crypto/crypto_handshake.h"
 #include "net/third_party/quic/core/crypto/crypto_protocol.h"
 #include "net/third_party/quic/core/crypto/quic_decrypter.h"
 #include "net/third_party/quic/core/crypto/quic_encrypter.h"
+#include "net/third_party/quic/core/crypto/quic_hkdf.h"
 #include "net/third_party/quic/core/crypto/quic_random.h"
 #include "net/third_party/quic/core/quic_data_writer.h"
 #include "net/third_party/quic/core/quic_time.h"
@@ -27,9 +27,7 @@
 #include "third_party/boringssl/src/include/openssl/hkdf.h"
 #include "third_party/boringssl/src/include/openssl/sha.h"
 
-using std::string;
-
-namespace net {
+namespace quic {
 
 // static
 std::vector<uint8_t> CryptoUtils::QhkdfExpand(
@@ -68,12 +66,18 @@ std::vector<uint8_t> CryptoUtils::QhkdfExpand(
   return out;
 }
 
-template void CryptoUtils::SetKeyAndIV(const EVP_MD* prf,
-                                       const std::vector<uint8_t>& pp_secret,
-                                       QuicEncrypter*);
-template void CryptoUtils::SetKeyAndIV(const EVP_MD* prf,
-                                       const std::vector<uint8_t>& pp_secret,
-                                       QuicDecrypter*);
+void CryptoUtils::SetKeyAndIV(const EVP_MD* prf,
+                              const std::vector<uint8_t>& pp_secret,
+                              QuicCrypter* crypter) {
+  std::vector<uint8_t> key =
+      CryptoUtils::QhkdfExpand(prf, pp_secret, "key", crypter->GetKeySize());
+  std::vector<uint8_t> iv =
+      CryptoUtils::QhkdfExpand(prf, pp_secret, "iv", crypter->GetIVSize());
+  crypter->SetKey(
+      QuicStringPiece(reinterpret_cast<char*>(key.data()), key.size()));
+  crypter->SetIV(
+      QuicStringPiece(reinterpret_cast<char*>(iv.data()), iv.size()));
+}
 
 namespace {
 
@@ -107,9 +111,9 @@ void CryptoUtils::CreateTlsInitialCrypters(Perspective perspective,
   }
   handshake_secret.resize(handshake_secret_len);
 
-  const string client_label = "client hs";
-  const string server_label = "server hs";
-  string encryption_label, decryption_label;
+  const QuicString client_label = "client hs";
+  const QuicString server_label = "server hs";
+  QuicString encryption_label, decryption_label;
   if (perspective == Perspective::IS_CLIENT) {
     encryption_label = client_label;
     decryption_label = server_label;
@@ -201,12 +205,12 @@ bool CryptoUtils::DeriveKeys(QuicStringPiece premaster_secret,
   QuicStringPiece nonce = client_nonce;
   QuicString nonce_storage;
   if (!server_nonce.empty()) {
-    nonce_storage = string(client_nonce) + string(server_nonce);
+    nonce_storage = QuicString(client_nonce) + QuicString(server_nonce);
     nonce = nonce_storage;
   }
 
-  crypto::HKDF hkdf(premaster_secret, nonce, hkdf_input, key_bytes,
-                    nonce_prefix_bytes, subkey_secret_bytes);
+  QuicHKDF hkdf(premaster_secret, nonce, hkdf_input, key_bytes,
+                nonce_prefix_bytes, subkey_secret_bytes);
 
   // Key derivation depends on the key diversification method being employed.
   // both the client and the server support never doing key diversification.
@@ -293,13 +297,13 @@ bool CryptoUtils::ExportKeyingMaterial(QuicStringPiece subkey_secret,
     return false;
   }
   uint32_t context_length = static_cast<uint32_t>(context.length());
-  QuicString info = string(label);
+  QuicString info = QuicString(label);
   info.push_back('\0');
   info.append(reinterpret_cast<char*>(&context_length), sizeof(context_length));
   info.append(context.data(), context.length());
 
-  crypto::HKDF hkdf(subkey_secret, QuicStringPiece() /* no salt */, info,
-                    result_len, 0 /* no fixed IV */, 0 /* no subkey secret */);
+  QuicHKDF hkdf(subkey_secret, QuicStringPiece() /* no salt */, info,
+                result_len, 0 /* no fixed IV */, 0 /* no subkey secret */);
   *result = QuicString(hkdf.client_write_key());
   return true;
 }
@@ -450,11 +454,12 @@ const char* CryptoUtils::HandshakeFailureReasonToString(
 void CryptoUtils::HashHandshakeMessage(const CryptoHandshakeMessage& message,
                                        QuicString* output,
                                        Perspective perspective) {
-  const QuicData& serialized = message.GetSerialized(perspective);
+  const QuicData& serialized = message.GetSerialized();
   uint8_t digest[SHA256_DIGEST_LENGTH];
   SHA256(reinterpret_cast<const uint8_t*>(serialized.data()),
          serialized.length(), digest);
   output->assign(reinterpret_cast<const char*>(digest), sizeof(digest));
 }
 
-}  // namespace net
+#undef RETURN_STRING_LITERAL  // undef for jumbo builds
+}  // namespace quic

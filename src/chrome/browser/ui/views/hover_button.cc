@@ -7,19 +7,17 @@
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "chrome/app/vector_icons/vector_icons.h"
-#include "chrome/browser/ui/views/harmony/chrome_layout_provider.h"
-#include "chrome/browser/ui/views/harmony/chrome_typography.h"
-#include "ui/base/material_design/material_design_controller.h"
+#include "chrome/browser/ui/views/chrome_layout_provider.h"
+#include "chrome/browser/ui/views/chrome_typography.h"
 #include "ui/gfx/color_palette.h"
 #include "ui/gfx/paint_vector_icon.h"
-#include "ui/views/animation/ink_drop_highlight.h"
 #include "ui/views/animation/ink_drop_impl.h"
-#include "ui/views/animation/ink_drop_ripple.h"
 #include "ui/views/background.h"
 #include "ui/views/border.h"
 #include "ui/views/controls/styled_label.h"
 #include "ui/views/focus/focus_manager.h"
 #include "ui/views/layout/grid_layout.h"
+#include "ui/views/view_properties.h"
 
 namespace {
 
@@ -67,10 +65,13 @@ void SetTooltipAndAccessibleName(views::Button* parent,
 
 HoverButton::HoverButton(views::ButtonListener* button_listener,
                          const base::string16& text)
-    : views::MenuButton(text, this, false),
+    : views::MenuButton(text, this),
       title_(nullptr),
       subtitle_(nullptr),
+      icon_view_(nullptr),
+      secondary_icon_view_(nullptr),
       listener_(button_listener) {
+  SetInstallFocusRingOnFocus(false);
   SetFocusBehavior(FocusBehavior::ALWAYS);
   SetFocusPainter(nullptr);
 
@@ -78,10 +79,7 @@ HoverButton::HoverButton(views::ButtonListener* button_listener,
       DISTANCE_CONTROL_LIST_VERTICAL);
   SetBorder(CreateBorderWithVerticalSpacing(vert_spacing));
 
-  SetInkDropMode(views::InkDropHostView::InkDropMode::ON);
-  // Don't show the ripple on non-MD.
-  if (!ui::MaterialDesignController::IsSecondaryUiMaterial())
-    set_ink_drop_visible_opacity(0);
+  SetInkDropMode(InkDropMode::ON);
 }
 
 HoverButton::HoverButton(views::ButtonListener* button_listener,
@@ -133,19 +131,19 @@ HoverButton::HoverButton(views::ButtonListener* button_listener,
                                      views::DISTANCE_RELATED_LABEL_HORIZONTAL) -
                                  badge_spacing;
 
-  constexpr float kFixed = 0.f;
-  constexpr float kStretchy = 1.f;
   constexpr int kColumnSetId = 0;
   views::ColumnSet* columns = grid_layout->AddColumnSet(kColumnSetId);
   columns->AddColumn(views::GridLayout::CENTER, views::GridLayout::CENTER,
-                     kFixed, views::GridLayout::USE_PREF, 0, 0);
-  columns->AddPaddingColumn(kFixed, icon_label_spacing);
-  columns->AddColumn(views::GridLayout::FILL, views::GridLayout::FILL,
-                     kStretchy, views::GridLayout::USE_PREF, 0, 0);
+                     views::GridLayout::kFixedSize, views::GridLayout::USE_PREF,
+                     0, 0);
+  columns->AddPaddingColumn(views::GridLayout::kFixedSize, icon_label_spacing);
+  columns->AddColumn(views::GridLayout::FILL, views::GridLayout::FILL, 1.0,
+                     views::GridLayout::USE_PREF, 0, 0);
 
   taken_width_ = GetInsets().width() + icon_view->GetPreferredSize().width() +
                  icon_label_spacing;
 
+  icon_view_ = icon_view.get();
   // Make sure hovering over the icon also hovers the |HoverButton|.
   icon_view->set_can_process_events_within_subtree(false);
   // Don't cover |icon_view| when the ink drops are being painted. |MenuButton|
@@ -155,7 +153,8 @@ HoverButton::HoverButton(views::ButtonListener* button_listener,
   // Split the two rows evenly between the total height minus the padding.
   const int row_height =
       (total_height - remaining_vert_spacing * 2) / num_labels;
-  grid_layout->StartRow(0, kColumnSetId, row_height);
+  grid_layout->StartRow(views::GridLayout::kFixedSize, kColumnSetId,
+                        row_height);
   grid_layout->AddView(icon_view.release(), 1, num_labels);
 
   title_ = new views::StyledLabel(title, nullptr);
@@ -174,9 +173,11 @@ HoverButton::HoverButton(views::ButtonListener* button_listener,
   title_wrapper->set_can_process_events_within_subtree(false);
   grid_layout->AddView(title_wrapper);
 
+  secondary_icon_view_ = secondary_icon_view.get();
   if (secondary_icon_view) {
     columns->AddColumn(views::GridLayout::CENTER, views::GridLayout::CENTER,
-                       kFixed, views::GridLayout::USE_PREF, 0, 0);
+                       views::GridLayout::kFixedSize,
+                       views::GridLayout::USE_PREF, 0, 0);
     // Make sure hovering over |secondary_icon_view| also hovers the
     // |HoverButton|.
     secondary_icon_view->set_can_process_events_within_subtree(false);
@@ -188,7 +189,8 @@ HoverButton::HoverButton(views::ButtonListener* button_listener,
   }
 
   if (!subtitle.empty()) {
-    grid_layout->StartRow(0, kColumnSetId, row_height);
+    grid_layout->StartRow(views::GridLayout::kFixedSize, kColumnSetId,
+                          row_height);
     subtitle_ = new views::Label(subtitle, views::style::CONTEXT_BUTTON,
                                  STYLE_SECONDARY);
     subtitle_->SetHorizontalAlignment(gfx::ALIGN_LEFT);
@@ -270,10 +272,6 @@ views::Button::KeyClickAction HoverButton::GetKeyClickActionForEvent(
   return MenuButton::GetKeyClickActionForEvent(event);
 }
 
-void HoverButton::SetHighlightingView(views::View* highlighting_view) {
-  highlighting_view_ = highlighting_view;
-}
-
 void HoverButton::StateChanged(ButtonState old_state) {
   MenuButton::StateChanged(old_state);
 
@@ -286,38 +284,19 @@ void HoverButton::StateChanged(ButtonState old_state) {
   }
 }
 
-bool HoverButton::ShouldUseFloodFillInkDrop() const {
-  return views::MenuButton::ShouldUseFloodFillInkDrop() || title_ != nullptr;
-}
-
 SkColor HoverButton::GetInkDropBaseColor() const {
   return views::style::GetColor(*this, views::style::CONTEXT_BUTTON,
                                 STYLE_SECONDARY);
 }
 
 std::unique_ptr<views::InkDrop> HoverButton::CreateInkDrop() {
-  std::unique_ptr<views::InkDrop> ink_drop = LabelButton::CreateInkDrop();
+  std::unique_ptr<views::InkDrop> ink_drop =
+      CreateDefaultFloodFillInkDropImpl();
   // Turn on highlighting when the button is focused only - hovering the button
   // will request focus.
-  // Note that the setup done in Button::CreateInkDrop() needs to be repeated
-  // here to configure flood-fill ink drops from LabelButton.
   ink_drop->SetShowHighlightOnFocus(true);
   ink_drop->SetShowHighlightOnHover(false);
   return ink_drop;
-}
-
-std::unique_ptr<views::InkDropHighlight> HoverButton::CreateInkDropHighlight()
-    const {
-  // HoverButtons are supposed to encompass the full width of their parent, so
-  // remove the rounded corners.
-  std::unique_ptr<views::InkDropHighlight> highlight(
-      new views::InkDropHighlight(
-          highlighting_view_->size(), 0,
-          gfx::RectF(GetMirroredRect(highlighting_view_->GetContentsBounds()))
-              .CenterPoint(),
-          GetInkDropBaseColor()));
-  highlight->set_explode_size(gfx::SizeF(CalculateLargeInkDropSize(size())));
-  return highlight;
 }
 
 void HoverButton::Layout() {
@@ -335,6 +314,17 @@ views::View* HoverButton::GetTooltipHandlerForPoint(const gfx::Point& point) {
   if (!HitTestPoint(point))
     return nullptr;
 
+  // Let the secondary icon handle it if it has a tooltip.
+  if (secondary_icon_view_) {
+    gfx::Point point_in_icon_coords(point);
+    ConvertPointToTarget(this, secondary_icon_view_, &point_in_icon_coords);
+    base::string16 tooltip;
+    if (secondary_icon_view_->HitTestPoint(point_in_icon_coords) &&
+        secondary_icon_view_->GetTooltipText(point_in_icon_coords, &tooltip)) {
+      return secondary_icon_view_;
+    }
+  }
+
   // If possible, take advantage of the |views::Label| tooltip behavior, which
   // only sets the tooltip when the text is too long.
   if (title_)
@@ -343,6 +333,12 @@ views::View* HoverButton::GetTooltipHandlerForPoint(const gfx::Point& point) {
 }
 
 void HoverButton::OnBoundsChanged(const gfx::Rect& previous_bounds) {
+  // HoverButtons use a rectangular highlight to encompass the full width of
+  // their parent.
+  auto path = std::make_unique<SkPath>();
+  path->addRect(RectToSkRect(GetLocalBounds()));
+  SetProperty(views::kHighlightPathKey, path.release());
+
   if (title_) {
     SetTooltipAndAccessibleName(this, title_, subtitle_, GetLocalBounds(),
                                 taken_width_, auto_compute_tooltip_);

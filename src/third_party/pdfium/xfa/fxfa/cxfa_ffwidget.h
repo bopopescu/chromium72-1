@@ -84,16 +84,20 @@ enum class XFA_FFWidgetType {
 
 class CXFA_FFWidget : public CXFA_ContentLayoutItem {
  public:
+  enum FocusOption { kDoNotDrawFocus = 0, kDrawFocus };
+
   explicit CXFA_FFWidget(CXFA_Node* pNode);
   ~CXFA_FFWidget() override;
 
-  virtual CFX_RectF GetBBox(uint32_t dwStatus, bool bDrawFocus = false);
+  // CXFA_ContentLayoutItem:
+  CXFA_FFWidget* AsFFWidget() override;
+
+  virtual CFX_RectF GetBBox(uint32_t dwStatus, FocusOption focus);
   virtual void RenderWidget(CXFA_Graphics* pGS,
                             const CFX_Matrix& matrix,
                             uint32_t dwStatus);
   virtual bool IsLoaded();
   virtual bool LoadWidget();
-  virtual void UnloadWidget();
   virtual bool PerformLayout();
   virtual bool UpdateFWLData();
   virtual void UpdateWidgetProperty();
@@ -141,17 +145,18 @@ class CXFA_FFWidget : public CXFA_ContentLayoutItem {
 
   virtual FormFieldType GetFormFieldType();
 
-  CXFA_FFPageView* GetPageView() const { return m_pPageView; }
+  CXFA_FFPageView* GetPageView() const { return m_pPageView.Get(); }
   void SetPageView(CXFA_FFPageView* pPageView) { m_pPageView = pPageView; }
+  CXFA_FFDocView* GetDocView() const { return m_pDocView.Get(); }
+  void SetDocView(CXFA_FFDocView* pDocView) { m_pDocView = pDocView; }
+
   const CFX_RectF& GetWidgetRect() const;
   const CFX_RectF& RecacheWidgetRect() const;
   uint32_t GetStatus();
   void ModifyStatus(uint32_t dwAdded, uint32_t dwRemoved);
 
-  CXFA_Node* GetNode() { return m_pNode.Get(); }
+  CXFA_Node* GetNode() const { return m_pNode.Get(); }
 
-  CXFA_FFDocView* GetDocView();
-  void SetDocView(CXFA_FFDocView* pDocView);
   CXFA_FFDoc* GetDoc();
   CXFA_FFApp* GetApp();
   IXFA_AppProvider* GetAppProvider();
@@ -160,7 +165,7 @@ class CXFA_FFWidget : public CXFA_ContentLayoutItem {
   CFX_PointF Rotate2Normal(const CFX_PointF& point);
   CFX_Matrix GetRotateMatrix();
   bool IsLayoutRectEmpty();
-  CXFA_FFWidget* GetParent();
+  CXFA_LayoutItem* GetParent();
   bool IsAncestorOf(CXFA_FFWidget* pWidget);
   const CFWL_App* GetFWLApp();
 
@@ -183,8 +188,8 @@ class CXFA_FFWidget : public CXFA_ContentLayoutItem {
   bool IsButtonDown();
   void SetButtonDown(bool bSet);
 
-  CXFA_FFDocView* m_pDocView = nullptr;
-  CXFA_FFPageView* m_pPageView = nullptr;
+  UnownedPtr<CXFA_FFDocView> m_pDocView;
+  UnownedPtr<CXFA_FFPageView> m_pPageView;
   UnownedPtr<CXFA_Node> const m_pNode;
   mutable CFX_RectF m_rtWidget;
 };

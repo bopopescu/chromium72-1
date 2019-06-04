@@ -6,22 +6,32 @@
 
 #include "third_party/blink/renderer/bindings/core/v8/script_promise_resolver.h"
 #include "third_party/blink/renderer/core/dom/dom_exception.h"
-#include "third_party/blink/renderer/core/dom/exception_code.h"
 #include "third_party/blink/renderer/modules/peerconnection/rtc_error_util.h"
 #include "third_party/blink/renderer/modules/peerconnection/rtc_peer_connection.h"
 
 namespace blink {
 
 RTCVoidRequestPromiseImpl* RTCVoidRequestPromiseImpl::Create(
+    base::Optional<RTCSetSessionDescriptionOperation> operation,
     RTCPeerConnection* requester,
-    ScriptPromiseResolver* resolver) {
-  return new RTCVoidRequestPromiseImpl(requester, resolver);
+    ScriptPromiseResolver* resolver,
+    const char* interface_name,
+    const char* property_name) {
+  return MakeGarbageCollected<RTCVoidRequestPromiseImpl>(
+      std::move(operation), requester, resolver, interface_name, property_name);
 }
 
 RTCVoidRequestPromiseImpl::RTCVoidRequestPromiseImpl(
+    base::Optional<RTCSetSessionDescriptionOperation> operation,
     RTCPeerConnection* requester,
-    ScriptPromiseResolver* resolver)
-    : requester_(requester), resolver_(resolver) {
+    ScriptPromiseResolver* resolver,
+    const char* interface_name,
+    const char* property_name)
+    : operation_(std::move(operation)),
+      requester_(requester),
+      resolver_(resolver),
+      interface_name_(interface_name),
+      property_name_(property_name) {
   DCHECK(requester_);
   DCHECK(resolver_);
 }
@@ -30,6 +40,8 @@ RTCVoidRequestPromiseImpl::~RTCVoidRequestPromiseImpl() = default;
 
 void RTCVoidRequestPromiseImpl::RequestSucceeded() {
   if (requester_ && requester_->ShouldFireDefaultCallbacks()) {
+    if (operation_)
+      requester_->NoteVoidRequestCompleted(*operation_, true);
     resolver_->Resolve();
   } else {
     // This is needed to have the resolver release its internal resources
@@ -42,7 +54,14 @@ void RTCVoidRequestPromiseImpl::RequestSucceeded() {
 
 void RTCVoidRequestPromiseImpl::RequestFailed(const webrtc::RTCError& error) {
   if (requester_ && requester_->ShouldFireDefaultCallbacks()) {
-    resolver_->Reject(CreateDOMExceptionFromRTCError(error));
+    if (operation_)
+      requester_->NoteVoidRequestCompleted(*operation_, false);
+    ScriptState::Scope scope(resolver_->GetScriptState());
+    ExceptionState exception_state(resolver_->GetScriptState()->GetIsolate(),
+                                   ExceptionState::kExecutionContext,
+                                   interface_name_, property_name_);
+    ThrowExceptionFromRTCError(error, exception_state);
+    resolver_->Reject(exception_state);
   } else {
     // This is needed to have the resolver release its internal resources
     // while leaving the associated promise pending as specified.

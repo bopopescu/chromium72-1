@@ -7,7 +7,6 @@
 #include <utility>
 
 #include "base/threading/sequenced_task_runner_handle.h"
-#include "base/threading/thread_task_runner_handle.h"
 #include "components/sync/base/data_type_histogram.h"
 #include "components/sync/driver/generic_change_processor.h"
 #include "components/sync/driver/generic_change_processor_factory.h"
@@ -23,7 +22,7 @@ namespace syncer {
 SharedChangeProcessor::SharedChangeProcessor(ModelType type)
     : disconnected_(false),
       type_(type),
-      frontend_task_runner_(base::ThreadTaskRunnerHandle::Get()),
+      frontend_task_runner_(base::SequencedTaskRunnerHandle::Get()),
       generic_change_processor_(nullptr) {
   DCHECK_NE(type_, UNSPECIFIED);
 }
@@ -37,7 +36,7 @@ SharedChangeProcessor::~SharedChangeProcessor() {
     if (backend_task_runner_->RunsTasksInCurrentSequence()) {
       delete generic_change_processor_;
     } else {
-      DCHECK(frontend_task_runner_->BelongsToCurrentThread());
+      DCHECK(frontend_task_runner_->RunsTasksInCurrentSequence());
       if (!backend_task_runner_->DeleteSoon(FROM_HERE,
                                             generic_change_processor_)) {
         NOTREACHED();
@@ -106,12 +105,6 @@ void SharedChangeProcessor::StartAssociation(
       start_done.Run(DataTypeController::ASSOCIATION_FAILED, local_merge_result,
                      syncer_merge_result);
       return;
-    }
-
-    std::string datatype_context;
-    if (GetDataTypeContext(&datatype_context)) {
-      local_service_->UpdateDataTypeContext(
-          type_, SyncChangeProcessor::NO_REFRESH, datatype_context);
     }
 
     syncer_merge_result.set_num_items_before_association(

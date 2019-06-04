@@ -4,36 +4,29 @@
 
 #include "third_party/blink/renderer/core/editing/caret_display_item_client.h"
 
+#include "testing/gmock/include/gmock/gmock-matchers.h"
+#include "testing/gmock/include/gmock/gmock.h"
 #include "third_party/blink/renderer/core/editing/frame_selection.h"
 #include "third_party/blink/renderer/core/editing/selection_template.h"
+#include "third_party/blink/renderer/core/editing/testing/editing_test_base.h"
 #include "third_party/blink/renderer/core/frame/local_frame_view.h"
 #include "third_party/blink/renderer/core/html_names.h"
 #include "third_party/blink/renderer/core/layout/layout_view.h"
 #include "third_party/blink/renderer/core/page/focus_controller.h"
+#include "third_party/blink/renderer/core/paint/paint_and_raster_invalidation_test.h"
 #include "third_party/blink/renderer/core/paint/paint_layer.h"
-#include "third_party/blink/renderer/core/testing/core_unit_test_helper.h"
-#include "third_party/blink/renderer/platform/graphics/graphics_layer.h"
-#include "third_party/blink/renderer/platform/graphics/paint/raster_invalidation_tracking.h"
-#include "third_party/blink/renderer/platform/testing/paint_test_configurations.h"
 
 namespace blink {
 
-class CaretDisplayItemClientTest : public PaintTestConfigurations,
-                                   public RenderingTest {
+using PaintInvalidation = LocalFrameView::ObjectPaintInvalidation;
+using ::testing::ElementsAre;
+using ::testing::UnorderedElementsAre;
+
+class CaretDisplayItemClientTest : public PaintAndRasterInvalidationTest {
  protected:
   void SetUp() override {
-    RenderingTest::SetUp();
-    EnableCompositing();
+    PaintAndRasterInvalidationTest::SetUp();
     Selection().SetCaretBlinkingSuspended(true);
-  }
-
-  const RasterInvalidationTracking* GetRasterInvalidationTracking() const {
-    // TODO(wangxianzhu): Test SPv2.
-    DCHECK(!RuntimeEnabledFeatures::SlimmingPaintV2Enabled());
-    return GetLayoutView()
-        .Layer()
-        ->GraphicsLayerBacking()
-        ->GetRasterInvalidationTracking();
   }
 
   FrameSelection& Selection() const {
@@ -63,17 +56,17 @@ class CaretDisplayItemClientTest : public PaintTestConfigurations,
   }
 
   Element* AppendBlock(const String& data) {
-    Element* block = GetDocument().CreateRawElement(HTMLNames::divTag);
+    Element* block = GetDocument().CreateRawElement(html_names::kDivTag);
     Text* text = GetDocument().createTextNode(data);
     block->AppendChild(text);
     GetDocument().body()->AppendChild(block);
     return block;
   }
 
-  void UpdateAllLifecyclePhases() {
+  void UpdateAllLifecyclePhasesForCaretTest() {
     // Partial lifecycle updates should not affect caret paint invalidation.
     GetDocument().View()->UpdateLifecycleToLayoutClean();
-    GetDocument().View()->UpdateAllLifecyclePhases();
+    UpdateAllLifecyclePhasesForTest();
     // Partial lifecycle updates should not affect caret paint invalidation.
     GetDocument().View()->UpdateLifecycleToLayoutClean();
   }
@@ -87,43 +80,27 @@ TEST_P(CaretDisplayItemClientTest, CaretPaintInvalidation) {
   GetDocument().GetPage()->GetFocusController().SetFocused(true);
 
   Text* text = AppendTextNode("Hello, World!");
-  UpdateAllLifecyclePhases();
+  UpdateAllLifecyclePhasesForCaretTest();
   const auto* block = ToLayoutBlock(GetDocument().body()->GetLayoutObject());
 
   // Focus the body. Should invalidate the new caret.
   GetDocument().View()->SetTracksPaintInvalidations(true);
   GetDocument().body()->focus();
-  UpdateAllLifecyclePhases();
+  UpdateAllLifecyclePhasesForCaretTest();
   EXPECT_TRUE(block->ShouldPaintCursorCaret());
 
   LayoutRect caret_visual_rect = GetCaretDisplayItemClient().VisualRect();
   EXPECT_EQ(1, caret_visual_rect.Width());
   EXPECT_EQ(block->Location(), caret_visual_rect.Location());
 
-  const Vector<RasterInvalidationInfo>* raster_invalidations;
-  if (!RuntimeEnabledFeatures::SlimmingPaintV2Enabled()) {
-    raster_invalidations = &GetRasterInvalidationTracking()->Invalidations();
-    ASSERT_EQ(1u, raster_invalidations->size());
-    EXPECT_EQ(EnclosingIntRect(caret_visual_rect),
-              (*raster_invalidations)[0].rect);
-    if (RuntimeEnabledFeatures::SlimmingPaintV175Enabled()) {
-      EXPECT_EQ(&GetCaretDisplayItemClient(),
-                (*raster_invalidations)[0].client);
-      EXPECT_EQ(PaintInvalidationReason::kAppeared,
-                (*raster_invalidations)[0].reason);
-    } else {
-      EXPECT_EQ(block, (*raster_invalidations)[0].client);
-      EXPECT_EQ(PaintInvalidationReason::kCaret,
-                (*raster_invalidations)[0].reason);
-    }
-  }
-
-  std::unique_ptr<JSONArray> object_invalidations =
-      GetDocument().View()->TrackedObjectPaintInvalidationsAsJSON();
-  ASSERT_EQ(1u, object_invalidations->size());
-  String s;
-  JSONObject::Cast(object_invalidations->at(0))->Get("object")->AsString(&s);
-  EXPECT_EQ("Caret", s);
+  EXPECT_THAT(GetRasterInvalidationTracking()->Invalidations(),
+              UnorderedElementsAre(
+                  RasterInvalidationInfo{&GetCaretDisplayItemClient(), "Caret",
+                                         EnclosingIntRect(caret_visual_rect),
+                                         PaintInvalidationReason::kAppeared}));
+  EXPECT_THAT(
+      *GetDocument().View()->TrackedObjectPaintInvalidations(),
+      ElementsAre(PaintInvalidation{"Caret", PaintInvalidationReason::kCaret}));
   GetDocument().View()->SetTracksPaintInvalidations(false);
 
   // Move the caret to the end of the text. Should invalidate both the old and
@@ -131,7 +108,7 @@ TEST_P(CaretDisplayItemClientTest, CaretPaintInvalidation) {
   GetDocument().View()->SetTracksPaintInvalidations(true);
   Selection().SetSelectionAndEndTyping(
       SelectionInDOMTree::Builder().Collapse(Position(text, 5)).Build());
-  UpdateAllLifecyclePhases();
+  UpdateAllLifecyclePhasesForTest();
   EXPECT_TRUE(block->ShouldPaintCursorCaret());
 
   LayoutRect new_caret_visual_rect = GetCaretDisplayItemClient().VisualRect();
@@ -139,64 +116,36 @@ TEST_P(CaretDisplayItemClientTest, CaretPaintInvalidation) {
   EXPECT_EQ(caret_visual_rect.Y(), new_caret_visual_rect.Y());
   EXPECT_LT(caret_visual_rect.X(), new_caret_visual_rect.X());
 
-  if (!RuntimeEnabledFeatures::SlimmingPaintV2Enabled()) {
-    raster_invalidations = &GetRasterInvalidationTracking()->Invalidations();
-    ASSERT_EQ(2u, raster_invalidations->size());
-    EXPECT_EQ(EnclosingIntRect(caret_visual_rect),
-              (*raster_invalidations)[0].rect);
-    if (RuntimeEnabledFeatures::SlimmingPaintV175Enabled()) {
-      EXPECT_EQ(&GetCaretDisplayItemClient(),
-                (*raster_invalidations)[0].client);
-    } else {
-      EXPECT_EQ(block, (*raster_invalidations)[0].client);
-    }
-    EXPECT_EQ(PaintInvalidationReason::kCaret,
-              (*raster_invalidations)[0].reason);
-    EXPECT_EQ(EnclosingIntRect(new_caret_visual_rect),
-              (*raster_invalidations)[1].rect);
-    if (RuntimeEnabledFeatures::SlimmingPaintV175Enabled()) {
-      EXPECT_EQ(&GetCaretDisplayItemClient(),
-                (*raster_invalidations)[1].client);
-    } else {
-      EXPECT_EQ(block, (*raster_invalidations)[1].client);
-    }
-    EXPECT_EQ(PaintInvalidationReason::kCaret,
-              (*raster_invalidations)[1].reason);
-  }
-
-  object_invalidations =
-      GetDocument().View()->TrackedObjectPaintInvalidationsAsJSON();
-  ASSERT_EQ(1u, object_invalidations->size());
-  JSONObject::Cast(object_invalidations->at(0))->Get("object")->AsString(&s);
-  EXPECT_EQ("Caret", s);
+  EXPECT_THAT(
+      GetRasterInvalidationTracking()->Invalidations(),
+      UnorderedElementsAre(
+          RasterInvalidationInfo{&GetCaretDisplayItemClient(), "Caret",
+                                 EnclosingIntRect(caret_visual_rect),
+                                 PaintInvalidationReason::kCaret},
+          RasterInvalidationInfo{&GetCaretDisplayItemClient(), "Caret",
+                                 EnclosingIntRect(new_caret_visual_rect),
+                                 PaintInvalidationReason::kCaret}));
+  EXPECT_THAT(
+      *GetDocument().View()->TrackedObjectPaintInvalidations(),
+      ElementsAre(PaintInvalidation{"Caret", PaintInvalidationReason::kCaret}));
   GetDocument().View()->SetTracksPaintInvalidations(false);
 
   // Remove selection. Should invalidate the old caret.
   LayoutRect old_caret_visual_rect = new_caret_visual_rect;
   GetDocument().View()->SetTracksPaintInvalidations(true);
   Selection().SetSelectionAndEndTyping(SelectionInDOMTree());
-  UpdateAllLifecyclePhases();
+  UpdateAllLifecyclePhasesForCaretTest();
   EXPECT_FALSE(block->ShouldPaintCursorCaret());
   EXPECT_EQ(LayoutRect(), GetCaretDisplayItemClient().VisualRect());
 
-  if (!RuntimeEnabledFeatures::SlimmingPaintV2Enabled()) {
-    raster_invalidations = &GetRasterInvalidationTracking()->Invalidations();
-    ASSERT_EQ(1u, raster_invalidations->size());
-    EXPECT_EQ(EnclosingIntRect(old_caret_visual_rect),
-              (*raster_invalidations)[0].rect);
-    if (RuntimeEnabledFeatures::SlimmingPaintV175Enabled()) {
-      EXPECT_EQ(&GetCaretDisplayItemClient(),
-                (*raster_invalidations)[0].client);
-    } else {
-      EXPECT_EQ(block, (*raster_invalidations)[0].client);
-    }
-  }
-
-  object_invalidations =
-      GetDocument().View()->TrackedObjectPaintInvalidationsAsJSON();
-  ASSERT_EQ(1u, object_invalidations->size());
-  JSONObject::Cast(object_invalidations->at(0))->Get("object")->AsString(&s);
-  EXPECT_EQ("Caret", s);
+  EXPECT_THAT(GetRasterInvalidationTracking()->Invalidations(),
+              UnorderedElementsAre(RasterInvalidationInfo{
+                  &GetCaretDisplayItemClient(), "Caret",
+                  EnclosingIntRect(old_caret_visual_rect),
+                  PaintInvalidationReason::kDisappeared}));
+  EXPECT_THAT(
+      *GetDocument().View()->TrackedObjectPaintInvalidations(),
+      ElementsAre(PaintInvalidation{"Caret", PaintInvalidationReason::kCaret}));
   GetDocument().View()->SetTracksPaintInvalidations(false);
 }
 
@@ -206,13 +155,13 @@ TEST_P(CaretDisplayItemClientTest, CaretMovesBetweenBlocks) {
   GetDocument().GetPage()->GetFocusController().SetFocused(true);
   auto* block_element1 = AppendBlock("Block1");
   auto* block_element2 = AppendBlock("Block2");
-  UpdateAllLifecyclePhases();
-  auto* block1 = ToLayoutBlock(block_element1->GetLayoutObject());
-  auto* block2 = ToLayoutBlock(block_element2->GetLayoutObject());
+  UpdateAllLifecyclePhasesForTest();
+  auto* block1 = ToLayoutBlockFlow(block_element1->GetLayoutObject());
+  auto* block2 = ToLayoutBlockFlow(block_element2->GetLayoutObject());
 
   // Focus the body.
   GetDocument().body()->focus();
-  UpdateAllLifecyclePhases();
+  UpdateAllLifecyclePhasesForCaretTest();
   LayoutRect caret_visual_rect1 = GetCaretDisplayItemClient().VisualRect();
   EXPECT_EQ(1, caret_visual_rect1.Width());
   EXPECT_EQ(block1->FirstFragment().VisualRect().Location(),
@@ -226,7 +175,7 @@ TEST_P(CaretDisplayItemClientTest, CaretMovesBetweenBlocks) {
       SelectionInDOMTree::Builder()
           .Collapse(Position(block_element2, 0))
           .Build());
-  UpdateAllLifecyclePhases();
+  UpdateAllLifecyclePhasesForTest();
 
   LayoutRect caret_visual_rect2 = GetCaretDisplayItemClient().VisualRect();
   EXPECT_EQ(1, caret_visual_rect2.Width());
@@ -235,40 +184,18 @@ TEST_P(CaretDisplayItemClientTest, CaretMovesBetweenBlocks) {
   EXPECT_FALSE(block1->ShouldPaintCursorCaret());
   EXPECT_TRUE(block2->ShouldPaintCursorCaret());
 
-  const Vector<RasterInvalidationInfo>* raster_invalidations;
-  if (!RuntimeEnabledFeatures::SlimmingPaintV2Enabled()) {
-    raster_invalidations = &GetRasterInvalidationTracking()->Invalidations();
-    ASSERT_EQ(2u, raster_invalidations->size());
-    if (RuntimeEnabledFeatures::SlimmingPaintV175Enabled()) {
-      EXPECT_EQ(EnclosingIntRect(caret_visual_rect1),
-                (*raster_invalidations)[0].rect);
-      EXPECT_EQ(&GetCaretDisplayItemClient(),
-                (*raster_invalidations)[0].client);
-      EXPECT_EQ(PaintInvalidationReason::kCaret,
-                (*raster_invalidations)[0].reason);
-      EXPECT_EQ(EnclosingIntRect(caret_visual_rect2),
-                (*raster_invalidations)[1].rect);
-      EXPECT_EQ(&GetCaretDisplayItemClient(),
-                (*raster_invalidations)[1].client);
-      EXPECT_EQ(PaintInvalidationReason::kCaret,
-                (*raster_invalidations)[1].reason);
-    } else {
-      EXPECT_EQ(EnclosingIntRect(caret_visual_rect1),
-                (*raster_invalidations)[0].rect);
-      EXPECT_EQ(block1, (*raster_invalidations)[0].client);
-      EXPECT_EQ(PaintInvalidationReason::kCaret,
-                (*raster_invalidations)[0].reason);
-      EXPECT_EQ(EnclosingIntRect(caret_visual_rect2),
-                (*raster_invalidations)[1].rect);
-      EXPECT_EQ(block2, (*raster_invalidations)[1].client);
-      EXPECT_EQ(PaintInvalidationReason::kCaret,
-                (*raster_invalidations)[1].reason);
-    }
-  }
-
-  std::unique_ptr<JSONArray> object_invalidations =
-      GetDocument().View()->TrackedObjectPaintInvalidationsAsJSON();
-  ASSERT_EQ(2u, object_invalidations->size());
+  EXPECT_THAT(GetRasterInvalidationTracking()->Invalidations(),
+              UnorderedElementsAre(
+                  RasterInvalidationInfo{&GetCaretDisplayItemClient(), "Caret",
+                                         EnclosingIntRect(caret_visual_rect1),
+                                         PaintInvalidationReason::kCaret},
+                  RasterInvalidationInfo{&GetCaretDisplayItemClient(), "Caret",
+                                         EnclosingIntRect(caret_visual_rect2),
+                                         PaintInvalidationReason::kCaret}));
+  EXPECT_THAT(
+      *GetDocument().View()->TrackedObjectPaintInvalidations(),
+      ElementsAre(PaintInvalidation{"Caret", PaintInvalidationReason::kCaret},
+                  PaintInvalidation{"Caret", PaintInvalidationReason::kCaret}));
   GetDocument().View()->SetTracksPaintInvalidations(false);
 
   // Move the caret back into block1.
@@ -277,45 +204,24 @@ TEST_P(CaretDisplayItemClientTest, CaretMovesBetweenBlocks) {
       SelectionInDOMTree::Builder()
           .Collapse(Position(block_element1, 0))
           .Build());
-  UpdateAllLifecyclePhases();
+  UpdateAllLifecyclePhasesForCaretTest();
 
   EXPECT_EQ(caret_visual_rect1, GetCaretDisplayItemClient().VisualRect());
   EXPECT_TRUE(block1->ShouldPaintCursorCaret());
   EXPECT_FALSE(block2->ShouldPaintCursorCaret());
 
-  if (!RuntimeEnabledFeatures::SlimmingPaintV2Enabled()) {
-    raster_invalidations = &GetRasterInvalidationTracking()->Invalidations();
-    ASSERT_EQ(2u, raster_invalidations->size());
-    if (RuntimeEnabledFeatures::SlimmingPaintV175Enabled()) {
-      EXPECT_EQ(EnclosingIntRect(caret_visual_rect2),
-                (*raster_invalidations)[0].rect);
-      EXPECT_EQ(&GetCaretDisplayItemClient(),
-                (*raster_invalidations)[0].client);
-      EXPECT_EQ(PaintInvalidationReason::kCaret,
-                (*raster_invalidations)[0].reason);
-      EXPECT_EQ(EnclosingIntRect(caret_visual_rect1),
-                (*raster_invalidations)[1].rect);
-      EXPECT_EQ(&GetCaretDisplayItemClient(),
-                (*raster_invalidations)[1].client);
-      EXPECT_EQ(PaintInvalidationReason::kCaret,
-                (*raster_invalidations)[1].reason);
-    } else {
-      EXPECT_EQ(EnclosingIntRect(caret_visual_rect1),
-                (*raster_invalidations)[0].rect);
-      EXPECT_EQ(block1, (*raster_invalidations)[0].client);
-      EXPECT_EQ(PaintInvalidationReason::kCaret,
-                (*raster_invalidations)[0].reason);
-      EXPECT_EQ(EnclosingIntRect(caret_visual_rect2),
-                (*raster_invalidations)[1].rect);
-      EXPECT_EQ(block2, (*raster_invalidations)[1].client);
-      EXPECT_EQ(PaintInvalidationReason::kCaret,
-                (*raster_invalidations)[1].reason);
-    }
-  }
-
-  object_invalidations =
-      GetDocument().View()->TrackedObjectPaintInvalidationsAsJSON();
-  ASSERT_EQ(2u, object_invalidations->size());
+  EXPECT_THAT(GetRasterInvalidationTracking()->Invalidations(),
+              UnorderedElementsAre(
+                  RasterInvalidationInfo{&GetCaretDisplayItemClient(), "Caret",
+                                         EnclosingIntRect(caret_visual_rect1),
+                                         PaintInvalidationReason::kCaret},
+                  RasterInvalidationInfo{&GetCaretDisplayItemClient(), "Caret",
+                                         EnclosingIntRect(caret_visual_rect2),
+                                         PaintInvalidationReason::kCaret}));
+  EXPECT_THAT(
+      *GetDocument().View()->TrackedObjectPaintInvalidations(),
+      ElementsAre(PaintInvalidation{"Caret", PaintInvalidationReason::kCaret},
+                  PaintInvalidation{"Caret", PaintInvalidationReason::kCaret}));
   GetDocument().View()->SetTracksPaintInvalidations(false);
 }
 
@@ -325,7 +231,7 @@ TEST_P(CaretDisplayItemClientTest, UpdatePreviousLayoutBlock) {
   GetDocument().GetPage()->GetFocusController().SetFocused(true);
   auto* block_element1 = AppendBlock("Block1");
   auto* block_element2 = AppendBlock("Block2");
-  UpdateAllLifecyclePhases();
+  UpdateAllLifecyclePhasesForCaretTest();
   auto* block1 = ToLayoutBlock(block_element1->GetLayoutObject());
   auto* block2 = ToLayoutBlock(block_element2->GetLayoutObject());
 
@@ -374,7 +280,7 @@ TEST_P(CaretDisplayItemClientTest, UpdatePreviousLayoutBlock) {
       SelectionInDOMTree::Builder()
           .Collapse(Position(block_element1, 0))
           .Build());
-  UpdateAllLifecyclePhases();
+  UpdateAllLifecyclePhasesForCaretTest();
   // Remove selection.
   Selection().SetSelectionAndEndTyping(SelectionInDOMTree());
   GetDocument().View()->UpdateLifecycleToLayoutClean();
@@ -388,7 +294,7 @@ TEST_P(CaretDisplayItemClientTest, CaretHideMoveAndShow) {
 
   Text* text = AppendTextNode("Hello, World!");
   GetDocument().body()->focus();
-  UpdateAllLifecyclePhases();
+  UpdateAllLifecyclePhasesForCaretTest();
   const auto* block = ToLayoutBlock(GetDocument().body()->GetLayoutObject());
 
   LayoutRect caret_visual_rect = GetCaretDisplayItemClient().VisualRect();
@@ -403,47 +309,29 @@ TEST_P(CaretDisplayItemClientTest, CaretHideMoveAndShow) {
       SelectionInDOMTree::Builder().Collapse(Position(text, 5)).Build());
   // Simulate that the cursor blinking is restarted.
   Selection().SetCaretVisible(true);
-  UpdateAllLifecyclePhases();
+  UpdateAllLifecyclePhasesForCaretTest();
 
   LayoutRect new_caret_visual_rect = GetCaretDisplayItemClient().VisualRect();
   EXPECT_EQ(caret_visual_rect.Size(), new_caret_visual_rect.Size());
   EXPECT_EQ(caret_visual_rect.Y(), new_caret_visual_rect.Y());
   EXPECT_LT(caret_visual_rect.X(), new_caret_visual_rect.X());
 
-  if (!RuntimeEnabledFeatures::SlimmingPaintV2Enabled()) {
-    const auto& raster_invalidations =
-        GetRasterInvalidationTracking()->Invalidations();
-    ASSERT_EQ(2u, raster_invalidations.size());
-    EXPECT_EQ(EnclosingIntRect(caret_visual_rect),
-              raster_invalidations[0].rect);
-    if (RuntimeEnabledFeatures::SlimmingPaintV175Enabled())
-      EXPECT_EQ(&GetCaretDisplayItemClient(), raster_invalidations[0].client);
-    else
-      EXPECT_EQ(block, raster_invalidations[0].client);
-    EXPECT_EQ(PaintInvalidationReason::kCaret, raster_invalidations[0].reason);
-    EXPECT_EQ(EnclosingIntRect(new_caret_visual_rect),
-              raster_invalidations[1].rect);
-    if (RuntimeEnabledFeatures::SlimmingPaintV175Enabled())
-      EXPECT_EQ(&GetCaretDisplayItemClient(), raster_invalidations[1].client);
-    else
-      EXPECT_EQ(block, raster_invalidations[1].client);
-    EXPECT_EQ(PaintInvalidationReason::kCaret, raster_invalidations[1].reason);
-  }
-
-  auto object_invalidations =
-      GetDocument().View()->TrackedObjectPaintInvalidationsAsJSON();
-  ASSERT_EQ(1u, object_invalidations->size());
-  String s;
-  JSONObject::Cast(object_invalidations->at(0))->Get("object")->AsString(&s);
-  EXPECT_EQ("Caret", s);
+  EXPECT_THAT(
+      GetRasterInvalidationTracking()->Invalidations(),
+      UnorderedElementsAre(
+          RasterInvalidationInfo{&GetCaretDisplayItemClient(), "Caret",
+                                 EnclosingIntRect(caret_visual_rect),
+                                 PaintInvalidationReason::kCaret},
+          RasterInvalidationInfo{&GetCaretDisplayItemClient(), "Caret",
+                                 EnclosingIntRect(new_caret_visual_rect),
+                                 PaintInvalidationReason::kCaret}));
+  EXPECT_THAT(
+      *GetDocument().View()->TrackedObjectPaintInvalidations(),
+      ElementsAre(PaintInvalidation{"Caret", PaintInvalidationReason::kCaret}));
   GetDocument().View()->SetTracksPaintInvalidations(false);
 }
 
 TEST_P(CaretDisplayItemClientTest, CompositingChange) {
-  if (RuntimeEnabledFeatures::SlimmingPaintV2Enabled())
-    return;
-
-  EnableCompositing();
   SetBodyInnerHTML(
       "<style>"
       "  body { margin: 0 }"
@@ -460,7 +348,7 @@ TEST_P(CaretDisplayItemClientTest, CompositingChange) {
   auto* editor_block = ToLayoutBlock(editor->GetLayoutObject());
   Selection().SetSelectionAndEndTyping(
       SelectionInDOMTree::Builder().Collapse(Position(editor, 0)).Build());
-  UpdateAllLifecyclePhases();
+  UpdateAllLifecyclePhasesForCaretTest();
 
   EXPECT_TRUE(editor_block->ShouldPaintCursorCaret());
   EXPECT_EQ(editor_block, CaretLayoutBlock());
@@ -468,15 +356,42 @@ TEST_P(CaretDisplayItemClientTest, CompositingChange) {
             GetCaretDisplayItemClient().VisualRect());
 
   // Composite container.
-  container->setAttribute(HTMLNames::styleAttr, "will-change: transform");
-  UpdateAllLifecyclePhases();
-  EXPECT_EQ(LayoutRect(50, 50, 1, 1), GetCaretDisplayItemClient().VisualRect());
+  container->setAttribute(html_names::kStyleAttr, "will-change: transform");
+  UpdateAllLifecyclePhasesForCaretTest();
+  // TODO(wangxianzhu): Why will-change:transform doens't trigger compositing
+  // in SPv2?
+  if (!RuntimeEnabledFeatures::SlimmingPaintV2Enabled()) {
+    EXPECT_EQ(LayoutRect(50, 50, 1, 1),
+              GetCaretDisplayItemClient().VisualRect());
+  }
 
   // Uncomposite container.
-  container->setAttribute(HTMLNames::styleAttr, "");
-  UpdateAllLifecyclePhases();
+  container->setAttribute(html_names::kStyleAttr, "");
+  UpdateAllLifecyclePhasesForCaretTest();
   EXPECT_EQ(LayoutRect(116, 105, 1, 1),
             GetCaretDisplayItemClient().VisualRect());
+}
+
+class ParameterizedComputeCaretRectTest
+    : public EditingTestBase,
+      private ScopedLayoutNGForTest,
+      public testing::WithParamInterface<bool> {
+ public:
+  ParameterizedComputeCaretRectTest() : ScopedLayoutNGForTest(GetParam()) {}
+};
+
+INSTANTIATE_TEST_CASE_P(All,
+                        ParameterizedComputeCaretRectTest,
+                        testing::Bool());
+
+TEST_P(ParameterizedComputeCaretRectTest, CaretRectAfterEllipsisNoCrash) {
+  SetBodyInnerHTML(
+      "<style>pre{width:30px; overflow:hidden; text-overflow:ellipsis}</style>"
+      "<pre id=target>long long long long long long text</pre>");
+  const Node* text = GetElementById("target")->firstChild();
+  const Position position = Position::LastPositionInNode(*text);
+  // Shouldn't crash inside. The actual result doesn't matter and may change.
+  CaretDisplayItemClient::ComputeCaretRect(PositionWithAffinity(position));
 }
 
 }  // namespace blink

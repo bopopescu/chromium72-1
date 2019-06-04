@@ -5,8 +5,10 @@
 #include "chrome/browser/signin/profile_oauth2_token_service_factory.h"
 
 #include <memory>
+#include <string>
 #include <utility>
 
+#include "base/logging.h"
 #include "build/build_config.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/signin/account_consistency_mode_manager.h"
@@ -15,6 +17,8 @@
 #include "chrome/browser/signin/signin_error_controller_factory.h"
 #include "chrome/browser/web_data_service_factory.h"
 #include "components/keyed_service/content/browser_context_dependency_manager.h"
+#include "components/pref_registry/pref_registry_syncable.h"
+#include "components/signin/core/browser/device_id_helper.h"
 #include "components/signin/core/browser/profile_oauth2_token_service.h"
 
 #if defined(OS_ANDROID)
@@ -28,12 +32,12 @@
 #endif
 
 #if defined(OS_CHROMEOS)
-#include "base/logging.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/chromeos/oauth2_token_service_delegate.h"
 #include "chrome/browser/chromeos/profiles/profile_helper.h"
 #include "chromeos/account_manager/account_manager_factory.h"
 #include "chromeos/chromeos_switches.h"
+#include "components/user_manager/user_manager.h"
 #endif  // defined(OS_CHROMEOS)
 
 namespace {
@@ -42,11 +46,12 @@ namespace {
 bool ShouldCreateCrOsOAuthDelegate(Profile* profile) {
   // Chrome OS Account Manager should only be instantiated in "regular"
   // profiles. Do not try to create |ChromeOSOAuth2TokenServiceDelegate| (which
-  // uses CrOS Account Manager as the source of truth) for Signin Profile and
-  // Lock Screen Profile.
+  // uses CrOS Account Manager as the source of truth) for Signin Profile,
+  // Lock Screen Profile and Guest Sessions.
   return chromeos::switches::IsAccountManagerEnabled() &&
          !chromeos::ProfileHelper::IsSigninProfile(profile) &&
-         !chromeos::ProfileHelper::IsLockScreenAppProfile(profile);
+         !chromeos::ProfileHelper::IsLockScreenAppProfile(profile) &&
+         !profile->IsGuestSession();
 }
 
 std::unique_ptr<chromeos::ChromeOSOAuth2TokenServiceDelegate>
@@ -60,11 +65,30 @@ CreateCrOsOAuthDelegate(Profile* profile) {
 
   return std::make_unique<chromeos::ChromeOSOAuth2TokenServiceDelegate>(
       AccountTrackerServiceFactory::GetInstance()->GetForProfile(profile),
-      account_manager);
+      account_manager,
+      SigninErrorControllerFactory::GetInstance()->GetForProfile(profile));
 }
 #endif  // defined(OS_CHROMEOS)
 
 #if !defined(OS_ANDROID)
+
+// Supervised users cannot revoke credentials.
+bool CanRevokeCredentials(Profile* profile) {
+#if defined(OS_CHROMEOS)
+  // UserManager may not exist in unit_tests.
+  if (user_manager::UserManager::IsInitialized() &&
+      user_manager::UserManager::Get()->IsLoggedInAsSupervisedUser()) {
+    // Don't allow revoking credentials for Chrome OS supervised users.
+    // See http://crbug.com/332032
+    LOG(ERROR) << "Attempt to revoke supervised user refresh "
+               << "token detected, ignoring.";
+    return false;
+  }
+#endif
+
+  return true;
+}
+
 std::unique_ptr<MutableProfileOAuth2TokenServiceDelegate>
 CreateMutableProfileOAuthDelegate(Profile* profile) {
   signin::AccountConsistencyMethod account_consistency =
@@ -80,7 +104,10 @@ CreateMutableProfileOAuthDelegate(Profile* profile) {
       ChromeSigninClientFactory::GetInstance()->GetForProfile(profile),
       SigninErrorControllerFactory::GetInstance()->GetForProfile(profile),
       AccountTrackerServiceFactory::GetInstance()->GetForProfile(profile),
-      account_consistency, revoke_all_tokens_on_load);
+      WebDataServiceFactory::GetTokenWebDataForProfile(
+          profile, ServiceAccessType::EXPLICIT_ACCESS),
+      account_consistency, revoke_all_tokens_on_load,
+      CanRevokeCredentials(profile));
 }
 #endif  // !defined(OS_ANDROID)
 
@@ -120,6 +147,7 @@ ProfileOAuth2TokenServiceFactory::ProfileOAuth2TokenServiceFactory()
   DependsOn(ChromeSigninClientFactory::GetInstance());
   DependsOn(SigninErrorControllerFactory::GetInstance());
   DependsOn(AccountTrackerServiceFactory::GetInstance());
+  DependsOn(WebDataServiceFactory::GetInstance());
 }
 
 ProfileOAuth2TokenServiceFactory::~ProfileOAuth2TokenServiceFactory() {
@@ -149,6 +177,15 @@ KeyedService* ProfileOAuth2TokenServiceFactory::BuildServiceInstanceFor(
     content::BrowserContext* context) const {
   Profile* profile = static_cast<Profile*>(context);
 
+// On ChromeOS the device ID is not managed by the token service.
+#if !defined(OS_CHROMEOS)
+  // Ensure the device ID is not empty. This is important for Dice, because the
+  // device ID is needed on the network thread, but can only be generated on the
+  // main thread.
+  std::string device_id = signin::GetSigninScopedDeviceId(profile->GetPrefs());
+  DCHECK(!device_id.empty());
+#endif
+
   return new ProfileOAuth2TokenService(
-      CreateOAuth2TokenServiceDelegate(profile));
+      profile->GetPrefs(), CreateOAuth2TokenServiceDelegate(profile));
 }

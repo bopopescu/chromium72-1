@@ -59,16 +59,15 @@ class CONTENT_EXPORT HostZoomMapImpl : public HostZoomMap {
 
   // Returns the current zoom level for the specified WebContents. This may
   // be a temporary zoom level, depending on UsesTemporaryZoomLevel().
-  double GetZoomLevelForWebContents(
-      const WebContentsImpl& web_contents_impl) const;
+  double GetZoomLevelForWebContents(WebContentsImpl* web_contents_impl) const;
 
   bool PageScaleFactorIsOneForWebContents(
-      const WebContentsImpl& web_contents_impl) const;
+      WebContentsImpl* web_contents_impl) const;
 
   // Sets the zoom level for this WebContents. If this WebContents is using
   // a temporary zoom level, then level is only applied to this WebContents.
   // Otherwise, the level will be applied on a host level.
-  void SetZoomLevelForWebContents(const WebContentsImpl& web_contents_impl,
+  void SetZoomLevelForWebContents(WebContentsImpl* web_contents_impl,
                                   double level);
 
   // Sets the zoom level for the specified view. The level may be set for only
@@ -129,10 +128,10 @@ class CONTENT_EXPORT HostZoomMapImpl : public HostZoomMap {
 
   // Notifies the renderers from this browser context to change the zoom level
   // for the specified host and scheme.
+  // |zoom level| will be extracted from |host_zoom_levels_| when needed, so no
+  // need to pass them in.
   // TODO(wjmaclean) Should we use a GURL here? crbug.com/384486
-  void SendZoomLevelChange(const std::string& scheme,
-                           const std::string& host,
-                           double level);
+  void SendZoomLevelChange(const std::string& scheme, const std::string& host);
 
   // Callbacks called when zoom level changes.
   base::CallbackList<void(const ZoomLevelChange&)>

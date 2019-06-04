@@ -35,7 +35,6 @@
 namespace blink {
 
 class ExceptionState;
-class MediaStreamTrack;
 class WebRTCDTMFSenderHandler;
 
 class RTCDTMFSender final : public EventTargetWithInlineData,
@@ -48,14 +47,12 @@ class RTCDTMFSender final : public EventTargetWithInlineData,
  public:
   static RTCDTMFSender* Create(ExecutionContext*,
                                std::unique_ptr<WebRTCDTMFSenderHandler>);
+
+  RTCDTMFSender(ExecutionContext*, std::unique_ptr<WebRTCDTMFSenderHandler>);
   ~RTCDTMFSender() override;
 
   bool canInsertDTMF() const;
-  MediaStreamTrack* track() const;
-  void SetTrack(MediaStreamTrack*);
   String toneBuffer() const;
-  int duration() const { return duration_; }
-  int interToneGap() const { return inter_tone_gap_; }
 
   void insertDTMF(const String& tones, ExceptionState&);
   void insertDTMF(const String& tones, int duration, ExceptionState&);
@@ -64,7 +61,7 @@ class RTCDTMFSender final : public EventTargetWithInlineData,
                   int inter_tone_gap,
                   ExceptionState&);
 
-  DEFINE_ATTRIBUTE_EVENT_LISTENER(tonechange);
+  DEFINE_ATTRIBUTE_EVENT_LISTENER(tonechange, kTonechange);
 
   // EventTarget
   const AtomicString& InterfaceName() const override;
@@ -76,26 +73,19 @@ class RTCDTMFSender final : public EventTargetWithInlineData,
   void Trace(blink::Visitor*) override;
 
  private:
-  RTCDTMFSender(ExecutionContext*,
-                std::unique_ptr<WebRTCDTMFSenderHandler>);
   void Dispose();
 
-  void ScheduleDispatchEvent(Event*);
-  void ScheduledEventTimerFired(TimerBase*);
-
   // WebRTCDTMFSenderHandlerClient
+  void PlayoutTask();
   void DidPlayTone(const WebString&) override;
-
-  Member<MediaStreamTrack> track_;
-  int duration_;
-  int inter_tone_gap_;
 
   std::unique_ptr<WebRTCDTMFSenderHandler> handler_;
 
   bool stopped_;
-
-  TaskRunnerTimer<RTCDTMFSender> scheduled_event_timer_;
-  HeapVector<Member<Event>> scheduled_events_;
+  String tone_buffer_;
+  int duration_;
+  int inter_tone_gap_;
+  bool playout_task_is_scheduled_ = false;
 };
 
 }  // namespace blink

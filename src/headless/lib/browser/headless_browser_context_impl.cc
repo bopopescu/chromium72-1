@@ -11,111 +11,50 @@
 
 #include "base/guid.h"
 #include "base/path_service.h"
+#include "base/task/post_task.h"
+#include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
-#include "content/public/browser/resource_context.h"
 #include "content/public/browser/storage_partition.h"
 #include "headless/grit/headless_lib_resources.h"
 #include "headless/lib/browser/headless_browser_context_options.h"
 #include "headless/lib/browser/headless_browser_impl.h"
 #include "headless/lib/browser/headless_browser_main_parts.h"
-#include "headless/lib/browser/headless_net_log.h"
 #include "headless/lib/browser/headless_permission_manager.h"
-#include "headless/lib/browser/headless_url_request_context_getter.h"
-#include "headless/public/util/black_hole_protocol_handler.h"
-#include "headless/public/util/in_memory_protocol_handler.h"
+#include "headless/lib/browser/headless_web_contents_impl.h"
 #include "net/url_request/url_request_context.h"
 #include "ui/base/resource/resource_bundle.h"
 
 namespace headless {
-
-// Contains net::URLRequestContextGetter required for resource loading.
-// Must be destructed on the IO thread as per content::ResourceContext
-// requirements.
-class HeadlessResourceContext : public content::ResourceContext {
- public:
-  HeadlessResourceContext();
-  ~HeadlessResourceContext() override;
-
-  // ResourceContext implementation:
-  net::HostResolver* GetHostResolver() override;
-  net::URLRequestContext* GetRequestContext() override;
-
-  // Configure the URL request context getter to be used for resource fetching.
-  // Must be called before any of the other methods of this class are used. Must
-  // be called on the browser UI thread.
-  void set_url_request_context_getter(
-      scoped_refptr<net::URLRequestContextGetter> url_request_context_getter) {
-    DCHECK(content::BrowserThread::CurrentlyOn(content::BrowserThread::UI));
-    url_request_context_getter_ = std::move(url_request_context_getter);
-  }
-
-  net::URLRequestContextGetter* url_request_context_getter() {
-    return url_request_context_getter_.get();
-  }
-
- private:
-  scoped_refptr<net::URLRequestContextGetter> url_request_context_getter_;
-
-  DISALLOW_COPY_AND_ASSIGN(HeadlessResourceContext);
-};
-
-HeadlessResourceContext::HeadlessResourceContext() {
-  DCHECK(content::BrowserThread::CurrentlyOn(content::BrowserThread::UI));
-}
-
-HeadlessResourceContext::~HeadlessResourceContext() {
-  DCHECK(content::BrowserThread::CurrentlyOn(content::BrowserThread::IO));
-}
-
-net::HostResolver* HeadlessResourceContext::GetHostResolver() {
-  CHECK(url_request_context_getter_);
-  return url_request_context_getter_->GetURLRequestContext()->host_resolver();
-}
-
-net::URLRequestContext* HeadlessResourceContext::GetRequestContext() {
-  CHECK(url_request_context_getter_);
-  return url_request_context_getter_->GetURLRequestContext();
-}
 
 HeadlessBrowserContextImpl::HeadlessBrowserContextImpl(
     HeadlessBrowserImpl* browser,
     std::unique_ptr<HeadlessBrowserContextOptions> context_options)
     : browser_(browser),
       context_options_(std::move(context_options)),
-      resource_context_(std::make_unique<HeadlessResourceContext>()),
-      should_remove_headers_(true),
-      permission_manager_(std::make_unique<HeadlessPermissionManager>(this)) {
+      permission_controller_delegate_(
+          std::make_unique<HeadlessPermissionManager>(this)) {
   InitWhileIOAllowed();
+  base::FilePath user_data_path =
+      IsOffTheRecord() || context_options_->user_data_dir().empty()
+          ? base::FilePath()
+          : path_;
+  request_context_manager_ = std::make_unique<HeadlessRequestContextManager>(
+      context_options_.get(), user_data_path);
 }
 
 HeadlessBrowserContextImpl::~HeadlessBrowserContextImpl() {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
   NotifyWillBeDestroyed(this);
 
-  // Inform observers that we're going away.
-  {
-    base::AutoLock lock(observers_lock_);
-    for (auto& observer : observers_)
-      observer.OnHeadlessBrowserContextDestruct();
-  }
-
   // Destroy all web contents before shutting down storage partitions.
   web_contents_map_.clear();
 
-  if (resource_context_) {
+  if (request_context_manager_) {
     content::BrowserThread::DeleteSoon(content::BrowserThread::IO, FROM_HERE,
-                                       resource_context_.release());
+                                       request_context_manager_.release());
   }
 
   ShutdownStoragePartitions();
-
-  if (url_request_getter_) {
-    content::BrowserThread::PostTask(
-        content::BrowserThread::IO, FROM_HERE,
-        base::BindOnce(
-            &HeadlessURLRequestContextGetter::NotifyContextShuttingDown,
-            url_request_getter_));
-  }
 }
 
 // static
@@ -163,7 +102,7 @@ void HeadlessBrowserContextImpl::SetDevToolsFrameToken(
     const base::UnguessableToken& devtools_frame_token,
     int frame_tree_node_id) {
   base::AutoLock lock(devtools_frame_token_map_lock_);
-  devtools_frame_token_map_[std::make_pair(
+  devtools_frame_token_map_[content::GlobalFrameRoutingId(
       render_process_id, render_frame_routing_id)] = devtools_frame_token;
   frame_tree_node_id_to_devtools_frame_token_map_[frame_tree_node_id] =
       devtools_frame_token;
@@ -174,8 +113,8 @@ void HeadlessBrowserContextImpl::RemoveDevToolsFrameToken(
     int render_frame_routing_id,
     int frame_tree_node_id) {
   base::AutoLock lock(devtools_frame_token_map_lock_);
-  devtools_frame_token_map_.erase(
-      std::make_pair(render_process_id, render_frame_routing_id));
+  devtools_frame_token_map_.erase(content::GlobalFrameRoutingId(
+      render_process_id, render_frame_routing_id));
   frame_tree_node_id_to_devtools_frame_token_map_.erase(frame_tree_node_id);
 }
 
@@ -184,7 +123,7 @@ const base::UnguessableToken* HeadlessBrowserContextImpl::GetDevToolsFrameToken(
     int render_frame_id) const {
   base::AutoLock lock(devtools_frame_token_map_lock_);
   const auto& find_it = devtools_frame_token_map_.find(
-      std::make_pair(render_process_id, render_frame_id));
+      content::GlobalFrameRoutingId(render_process_id, render_frame_id));
   if (find_it == devtools_frame_token_map_.end())
     return nullptr;
   return &find_it->second;
@@ -230,7 +169,7 @@ bool HeadlessBrowserContextImpl::IsOffTheRecord() const {
 }
 
 content::ResourceContext* HeadlessBrowserContextImpl::GetResourceContext() {
-  return resource_context_.get();
+  return request_context_manager_->GetResourceContext();
 }
 
 content::DownloadManagerDelegate*
@@ -259,8 +198,9 @@ HeadlessBrowserContextImpl::GetSSLHostStateDelegate() {
   return nullptr;
 }
 
-content::PermissionManager* HeadlessBrowserContextImpl::GetPermissionManager() {
-  return permission_manager_.get();
+content::PermissionControllerDelegate*
+HeadlessBrowserContextImpl::GetPermissionControllerDelegate() {
+  return permission_controller_delegate_.get();
 }
 
 content::BackgroundFetchDelegate*
@@ -281,14 +221,8 @@ HeadlessBrowserContextImpl::GetBrowsingDataRemoverDelegate() {
 net::URLRequestContextGetter* HeadlessBrowserContextImpl::CreateRequestContext(
     content::ProtocolHandlerMap* protocol_handlers,
     content::URLRequestInterceptorScopedVector request_interceptors) {
-  url_request_getter_ = base::MakeRefCounted<HeadlessURLRequestContextGetter>(
-      content::BrowserThread::GetTaskRunnerForThread(
-          content::BrowserThread::IO),
-      protocol_handlers, context_options_->TakeProtocolHandlers(),
-      std::move(request_interceptors), context_options_.get(),
-      browser_->net_log(), this);
-  resource_context_->set_url_request_context_getter(url_request_getter_);
-  return url_request_getter_.get();
+  return request_context_manager_->CreateRequestContext(
+      protocol_handlers, std::move(request_interceptors));
 }
 
 net::URLRequestContextGetter*
@@ -302,7 +236,7 @@ HeadlessBrowserContextImpl::CreateRequestContextForStoragePartition(
 
 net::URLRequestContextGetter*
 HeadlessBrowserContextImpl::CreateMediaRequestContext() {
-  return resource_context_->url_request_context_getter();
+  return request_context_manager_->url_request_context_getter();
 }
 
 net::URLRequestContextGetter*
@@ -362,66 +296,21 @@ const HeadlessBrowserContextOptions* HeadlessBrowserContextImpl::options()
   return context_options_.get();
 }
 
-void HeadlessBrowserContextImpl::SetRemoveHeaders(bool should_remove_headers) {
-  should_remove_headers_ = should_remove_headers;
-}
-
-bool HeadlessBrowserContextImpl::ShouldRemoveHeaders() const {
-  return should_remove_headers_;
-}
-
 const std::string& HeadlessBrowserContextImpl::Id() const {
   return UniqueId();
 }
 
-void HeadlessBrowserContextImpl::AddObserver(Observer* obs) {
-  base::AutoLock lock(observers_lock_);
-  observers_.AddObserver(obs);
-}
-
-void HeadlessBrowserContextImpl::RemoveObserver(Observer* obs) {
-  base::AutoLock lock(observers_lock_);
-  observers_.RemoveObserver(obs);
-}
-
-void HeadlessBrowserContextImpl::NotifyChildContentsCreated(
-    HeadlessWebContentsImpl* parent,
-    HeadlessWebContentsImpl* child) {
-  base::AutoLock lock(observers_lock_);
-  for (auto& observer : observers_)
-    observer.OnChildContentsCreated(parent, child);
-}
-
-void HeadlessBrowserContextImpl::NotifyUrlRequestFailed(
-    net::URLRequest* request,
-    int net_error,
-    DevToolsStatus devtools_status) {
-  base::AutoLock lock(observers_lock_);
-  for (auto& observer : observers_)
-    observer.UrlRequestFailed(request, net_error, devtools_status);
-}
-
-void HeadlessBrowserContextImpl::NotifyMetadataForResource(const GURL& url,
-                                                           net::IOBuffer* buf,
-                                                           int buf_len) {
-  base::AutoLock lock(observers_lock_);
-  for (auto& observer : observers_)
-    observer.OnMetadataForResource(url, buf, buf_len);
-}
-
-void HeadlessBrowserContextImpl::SetNetworkConditions(
-    HeadlessNetworkConditions conditions) {
-  network_conditions_ = conditions;
-}
-
-HeadlessNetworkConditions HeadlessBrowserContextImpl::GetNetworkConditions() {
-  return network_conditions_;
+::network::mojom::NetworkContextPtr
+HeadlessBrowserContextImpl::CreateNetworkContext(
+    bool in_memory,
+    const base::FilePath& relative_partition_path) {
+  return request_context_manager_->CreateNetworkContext(
+      in_memory, relative_partition_path);
 }
 
 HeadlessBrowserContext::Builder::Builder(HeadlessBrowserImpl* browser)
     : browser_(browser),
-      options_(new HeadlessBrowserContextOptions(browser->options())),
-      enable_http_and_https_if_mojo_used_(false) {}
+      options_(new HeadlessBrowserContextOptions(browser->options())) {}
 
 HeadlessBrowserContext::Builder::~Builder() = default;
 
@@ -461,13 +350,6 @@ HeadlessBrowserContext::Builder::SetProxyConfig(
   return *this;
 }
 
-HeadlessBrowserContext::Builder&
-HeadlessBrowserContext::Builder::SetHostResolverRules(
-    const std::string& host_resolver_rules) {
-  options_->host_resolver_rules_ = host_resolver_rules;
-  return *this;
-}
-
 HeadlessBrowserContext::Builder& HeadlessBrowserContext::Builder::SetWindowSize(
     const gfx::Size& window_size) {
   options_->window_size_ = window_size;
@@ -488,28 +370,9 @@ HeadlessBrowserContext::Builder::SetIncognitoMode(bool incognito_mode) {
 }
 
 HeadlessBrowserContext::Builder&
-HeadlessBrowserContext::Builder::SetSitePerProcess(bool site_per_process) {
-  options_->site_per_process_ = site_per_process;
-  return *this;
-}
-
-HeadlessBrowserContext::Builder&
 HeadlessBrowserContext::Builder::SetBlockNewWebContents(
     bool block_new_web_contents) {
   options_->block_new_web_contents_ = block_new_web_contents;
-  return *this;
-}
-
-HeadlessBrowserContext::Builder&
-HeadlessBrowserContext::Builder::SetAllowCookies(bool allow_cookies) {
-  options_->allow_cookies_ = allow_cookies;
-  return *this;
-}
-
-HeadlessBrowserContext::Builder&
-HeadlessBrowserContext::Builder::EnableUnsafeNetworkAccessWithMojoBindings(
-    bool enable_http_and_https_if_mojo_used) {
-  enable_http_and_https_if_mojo_used_ = enable_http_and_https_if_mojo_used;
   return *this;
 }
 
@@ -520,25 +383,7 @@ HeadlessBrowserContext::Builder::SetOverrideWebPreferencesCallback(
   return *this;
 }
 
-HeadlessBrowserContext::Builder&
-HeadlessBrowserContext::Builder::SetCaptureResourceMetadata(
-    bool capture_resource_metadata) {
-  options_->capture_resource_metadata_ = capture_resource_metadata;
-  return *this;
-}
-
 HeadlessBrowserContext* HeadlessBrowserContext::Builder::Build() {
-  if (!mojo_bindings_.empty()) {
-    // Unless you know what you're doing it's unsafe to allow http/https for a
-    // context with mojo bindings.
-    if (!enable_http_and_https_if_mojo_used_) {
-      options_->protocol_handlers_[url::kHttpScheme] =
-          std::make_unique<BlackHoleProtocolHandler>();
-      options_->protocol_handlers_[url::kHttpsScheme] =
-          std::make_unique<BlackHoleProtocolHandler>();
-    }
-  }
-
   return browser_->CreateBrowserContext(this);
 }
 

@@ -91,10 +91,6 @@ void SecurityFilterPeer::OnStartLoadingResponseBody(
   NOTREACHED();
 }
 
-void SecurityFilterPeer::OnDownloadedData(int len, int encoded_data_length) {
-  NOTREACHED();
-}
-
 void SecurityFilterPeer::OnReceivedData(std::unique_ptr<ReceivedData> data) {
   NOTREACHED();
 }
@@ -117,6 +113,10 @@ void SecurityFilterPeer::OnCompletedRequest(
   network::URLLoaderCompletionStatus ok_status(status);
   ok_status.error_code = net::OK;
   original_peer_->OnCompletedRequest(ok_status);
+}
+
+scoped_refptr<base::TaskRunner> SecurityFilterPeer::GetTaskRunner() const {
+  return original_peer_->GetTaskRunner();
 }
 
 scoped_refptr<net::HttpResponseHeaders> SecurityFilterPeer::CreateHeaders(

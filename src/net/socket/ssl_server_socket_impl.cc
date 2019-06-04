@@ -13,6 +13,7 @@
 #include "base/strings/string_util.h"
 #include "crypto/openssl_util.h"
 #include "crypto/rsa_private_key.h"
+#include "net/base/completion_once_callback.h"
 #include "net/base/net_errors.h"
 #include "net/cert/cert_verify_result.h"
 #include "net/cert/client_cert_verifier.h"
@@ -36,7 +37,7 @@ namespace {
 
 // This constant can be any non-negative/non-zero value (eg: it does not
 // overlap with any value of the net::Error range, including net::OK).
-const int kNoPendingResult = 1;
+const int kSSLServerSocketNoPendingResult = 1;
 
 class SocketDataIndex {
  public:
@@ -68,7 +69,7 @@ class SSLServerContextImpl::SocketImpl : public SSLServerSocket,
   ~SocketImpl() override;
 
   // SSLServerSocket interface.
-  int Handshake(const CompletionCallback& callback) override;
+  int Handshake(CompletionOnceCallback callback) override;
 
   // SSLSocket interface.
   int ExportKeyingMaterial(const base::StringPiece& label,
@@ -186,6 +187,9 @@ class SSLServerContextImpl::SocketImpl : public SSLServerSocket,
   // OpenSSL stuff
   bssl::UniquePtr<SSL> ssl_;
 
+  // Whether we received any data in early data.
+  bool early_data_received_;
+
   // StreamSocket for sending and receiving data.
   std::unique_ptr<StreamSocket> transport_socket_;
   std::unique_ptr<SocketBIOAdapter> transport_adapter_;
@@ -205,9 +209,10 @@ SSLServerContextImpl::SocketImpl::SocketImpl(
     SSLServerContextImpl* context,
     std::unique_ptr<StreamSocket> transport_socket)
     : context_(context),
-      signature_result_(kNoPendingResult),
+      signature_result_(kSSLServerSocketNoPendingResult),
       user_read_buf_len_(0),
       user_write_buf_len_(0),
+      early_data_received_(false),
       transport_socket_(std::move(transport_socket)),
       next_handshake_state_(STATE_NONE),
       completed_handshake_(false),
@@ -329,7 +334,7 @@ void SSLServerContextImpl::SocketImpl::OnPrivateKeyComplete(
 }
 
 int SSLServerContextImpl::SocketImpl::Handshake(
-    const CompletionCallback& callback) {
+    CompletionOnceCallback callback) {
   net_log_.BeginEvent(NetLogEventType::SSL_SERVER_HANDSHAKE);
 
   // Set up new ssl object.
@@ -347,7 +352,7 @@ int SSLServerContextImpl::SocketImpl::Handshake(
   GotoState(STATE_HANDSHAKE);
   rv = DoHandshakeLoop(OK);
   if (rv == ERR_IO_PENDING) {
-    user_handshake_callback_ = callback;
+    user_handshake_callback_ = std::move(callback);
   } else {
     net_log_.EndEventWithNetErrorCode(NetLogEventType::SSL_SERVER_HANDSHAKE,
                                       rv);
@@ -497,7 +502,6 @@ bool SSLServerContextImpl::SocketImpl::GetSSLInfo(SSLInfo* ssl_info) {
 
   const SSL_CIPHER* cipher = SSL_get_current_cipher(ssl_.get());
   CHECK(cipher);
-  ssl_info->security_bits = SSL_CIPHER_get_bits(cipher, NULL);
 
   SSLConnectionStatusSetCipherSuite(
       static_cast<uint16_t>(SSL_CIPHER_get_id(cipher)),
@@ -505,6 +509,7 @@ bool SSLServerContextImpl::SocketImpl::GetSSLInfo(SSLInfo* ssl_info) {
   SSLConnectionStatusSetVersion(GetNetSSLVersion(ssl_.get()),
                                 &ssl_info->connection_status);
 
+  ssl_info->early_data_received = early_data_received_;
   ssl_info->handshake_type = SSL_session_reused(ssl_.get())
                                  ? SSLInfo::HANDSHAKE_RESUME
                                  : SSLInfo::HANDSHAKE_FULL;
@@ -577,8 +582,11 @@ int SSLServerContextImpl::SocketImpl::DoPayloadRead() {
 
   crypto::OpenSSLErrStackTracer err_tracer(FROM_HERE);
   int rv = SSL_read(ssl_.get(), user_read_buf_->data(), user_read_buf_len_);
-  if (rv >= 0)
+  if (rv >= 0) {
+    if (SSL_in_early_data(ssl_.get()))
+      early_data_received_ = true;
     return rv;
+  }
   int ssl_error = SSL_get_error(ssl_.get(), rv);
   OpenSSLErrorInfo error_info;
   int net_error =
@@ -776,8 +784,8 @@ ssl_verify_result_t SSLServerContextImpl::SocketImpl::CertVerifyCallbackImpl(
 
   // TODO(davidben): Support asynchronous verifiers. http://crbug.com/347402
   std::unique_ptr<ClientCertVerifier::Request> ignore_async;
-  int res =
-      verifier->Verify(client_cert.get(), CompletionCallback(), &ignore_async);
+  int res = verifier->Verify(client_cert.get(), CompletionOnceCallback(),
+                             &ignore_async);
   DCHECK_NE(res, ERR_IO_PENDING);
 
   if (res != OK) {
@@ -849,6 +857,8 @@ void SSLServerContextImpl::Init() {
       break;
   }
 
+  SSL_CTX_set_early_data_enabled(ssl_ctx_.get(),
+                                 ssl_server_config_.early_data_enabled);
   DCHECK_LT(SSL3_VERSION, ssl_server_config_.version_min);
   DCHECK_LT(SSL3_VERSION, ssl_server_config_.version_max);
   CHECK(SSL_CTX_set_min_proto_version(ssl_ctx_.get(),

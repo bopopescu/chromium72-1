@@ -31,14 +31,13 @@ enum SdkVersion {
   SDK_VERSION_NOUGAT = 24,
   SDK_VERSION_NOUGAT_MR1 = 25,
   SDK_VERSION_OREO = 26,
+  SDK_VERSION_O_MR1 = 27,
+  SDK_VERSION_P = 28,
 };
 
 // BuildInfo is a singleton class that stores android build and device
 // information. It will be called from Android specific code and gets used
 // primarily in crash reporting.
-
-// It is also used to store the last java exception seen during JNI.
-// TODO(nileshagrawal): Find a better place to store this info.
 class BASE_EXPORT BuildInfo {
  public:
 
@@ -123,16 +122,6 @@ class BASE_EXPORT BuildInfo {
     return sdk_int_;
   }
 
-  const char* java_exception_info() const {
-    return java_exception_info_;
-  }
-
-  bool is_at_least_p() const { return is_at_least_p_; }
-
-  void SetJavaExceptionInfo(const std::string& info);
-
-  void ClearJavaExceptionInfo();
-
  private:
   friend struct BuildInfoSingletonTraits;
 
@@ -165,9 +154,6 @@ class BASE_EXPORT BuildInfo {
   const char* const resources_version_;
   // Not needed by breakpad.
   const std::string extracted_file_suffix_;
-  const int is_at_least_p_;
-  // This is set via set_java_exception_info, not at constructor time.
-  const char* java_exception_info_;
 
   DISALLOW_COPY_AND_ASSIGN(BuildInfo);
 };

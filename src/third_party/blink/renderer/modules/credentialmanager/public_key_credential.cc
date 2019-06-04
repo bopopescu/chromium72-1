@@ -7,29 +7,38 @@
 #include "third_party/blink/renderer/bindings/core/v8/script_promise.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_promise_resolver.h"
 #include "third_party/blink/renderer/core/dom/dom_exception.h"
-#include "third_party/blink/renderer/core/dom/exception_code.h"
+#include "third_party/blink/renderer/modules/credentialmanager/credential_manager_proxy.h"
+#include "third_party/blink/renderer/modules/credentialmanager/scoped_promise_resolver.h"
 #include "third_party/blink/renderer/platform/bindings/script_state.h"
+#include "third_party/blink/renderer/platform/wtf/functional.h"
 
 namespace blink {
 
 namespace {
 // https://www.w3.org/TR/webauthn/#dom-publickeycredential-type-slot:
 constexpr char kPublicKeyCredentialType[] = "public-key";
+
+void OnIsUserVerifyingComplete(
+    std::unique_ptr<ScopedPromiseResolver> scoped_resolver,
+    bool available) {
+  scoped_resolver->Release()->Resolve(available);
+}
 }  // namespace
 
 PublicKeyCredential* PublicKeyCredential::Create(
     const String& id,
     DOMArrayBuffer* raw_id,
     AuthenticatorResponse* response,
-    const AuthenticationExtensionsClientOutputs& extension_outputs) {
-  return new PublicKeyCredential(id, raw_id, response, extension_outputs);
+    const AuthenticationExtensionsClientOutputs* extension_outputs) {
+  return MakeGarbageCollected<PublicKeyCredential>(id, raw_id, response,
+                                                   extension_outputs);
 }
 
 PublicKeyCredential::PublicKeyCredential(
     const String& id,
     DOMArrayBuffer* raw_id,
     AuthenticatorResponse* response,
-    const AuthenticationExtensionsClientOutputs& extension_outputs)
+    const AuthenticationExtensionsClientOutputs* extension_outputs)
     : Credential(id, kPublicKeyCredentialType),
       raw_id_(raw_id),
       response_(response),
@@ -38,19 +47,35 @@ PublicKeyCredential::PublicKeyCredential(
 ScriptPromise
 PublicKeyCredential::isUserVerifyingPlatformAuthenticatorAvailable(
     ScriptState* script_state) {
-  return ScriptPromise::RejectWithDOMException(
-      script_state,
-      DOMException::Create(kNotSupportedError, "Operation not implemented."));
+  ScriptPromiseResolver* resolver = ScriptPromiseResolver::Create(script_state);
+  ScriptPromise promise = resolver->Promise();
+
+  // Ignore calls if the current realm execution context is no longer valid,
+  // e.g., because the responsible document was detached.
+  DCHECK(resolver->GetExecutionContext());
+  if (resolver->GetExecutionContext()->IsContextDestroyed()) {
+    resolver->Reject();
+    return promise;
+  }
+
+  auto* authenticator =
+      CredentialManagerProxy::From(script_state)->Authenticator();
+  authenticator->IsUserVerifyingPlatformAuthenticatorAvailable(WTF::Bind(
+      &OnIsUserVerifyingComplete,
+      WTF::Passed(std::make_unique<ScopedPromiseResolver>(resolver))));
+  return promise;
 }
 
-void PublicKeyCredential::getClientExtensionResults(
-    AuthenticationExtensionsClientOutputs& result) const {
-  result = extension_outputs_;
+AuthenticationExtensionsClientOutputs*
+PublicKeyCredential::getClientExtensionResults() const {
+  return const_cast<AuthenticationExtensionsClientOutputs*>(
+      extension_outputs_.Get());
 }
 
 void PublicKeyCredential::Trace(blink::Visitor* visitor) {
   visitor->Trace(raw_id_);
   visitor->Trace(response_);
+  visitor->Trace(extension_outputs_);
   Credential::Trace(visitor);
 }
 

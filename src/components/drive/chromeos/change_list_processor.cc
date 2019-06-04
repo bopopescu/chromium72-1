@@ -13,6 +13,7 @@
 #include "base/metrics/histogram_macros.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/synchronization/cancellation_flag.h"
+#include "components/drive/chromeos/drive_file_util.h"
 #include "components/drive/chromeos/resource_metadata.h"
 #include "components/drive/drive.pb.h"
 #include "components/drive/drive_api_util.h"
@@ -37,9 +38,29 @@ bool ShouldApplyChange(const ResourceEntry& local_entry,
 
 }  // namespace
 
+DirectoryFetchInfo::DirectoryFetchInfo() = default;
+
+DirectoryFetchInfo::~DirectoryFetchInfo() = default;
+
+DirectoryFetchInfo::DirectoryFetchInfo(const std::string& local_id,
+                                       const std::string& resource_id,
+                                       const std::string& start_page_token,
+                                       const base::FilePath& root_entry_path,
+                                       const base::FilePath& directory_path)
+    : local_id_(local_id),
+      resource_id_(resource_id),
+      start_page_token_(start_page_token),
+      root_entry_path_(root_entry_path),
+      directory_path_(directory_path) {}
+
+DirectoryFetchInfo::DirectoryFetchInfo(const DirectoryFetchInfo& other) =
+    default;
+
 std::string DirectoryFetchInfo::ToString() const {
   return ("local_id: " + local_id_ + ", resource_id: " + resource_id_ +
-          ", start_page_token: " + start_page_token_);
+          ", start_page_token: " + start_page_token_ +
+          ", root_entry_path: " + root_entry_path_.value() +
+          ", directory_path: " + directory_path_.value());
 }
 
 ChangeList::ChangeList() = default;
@@ -61,16 +82,10 @@ ChangeList::ChangeList(const google_apis::ChangeList& change_list)
       change_list.items();
   entries_.resize(items.size());
   parent_resource_ids_.resize(items.size());
-  size_t entries_index = 0;
   for (size_t i = 0; i < items.size(); ++i) {
-    if (ConvertChangeResourceToResourceEntry(
-            *items[i], &entries_[entries_index],
-            &parent_resource_ids_[entries_index])) {
-      ++entries_index;
-    }
+    ConvertChangeResourceToResourceEntry(*items[i], &entries_[i],
+                                         &parent_resource_ids_[i]);
   }
-  entries_.resize(entries_index);
-  parent_resource_ids_.resize(entries_index);
 }
 
 ChangeList::ChangeList(const google_apis::FileList& file_list)
@@ -79,17 +94,10 @@ ChangeList::ChangeList(const google_apis::FileList& file_list)
       file_list.items();
   entries_.resize(items.size());
   parent_resource_ids_.resize(items.size());
-  size_t entries_index = 0;
   for (size_t i = 0; i < items.size(); ++i) {
-    if (ConvertFileResourceToResourceEntry(
-            *items[i],
-            &entries_[entries_index],
-            &parent_resource_ids_[entries_index])) {
-      ++entries_index;
-    }
+    ConvertFileResourceToResourceEntry(*items[i], &entries_[i],
+                                       &parent_resource_ids_[i]);
   }
-  entries_.resize(entries_index);
-  parent_resource_ids_.resize(entries_index);
 }
 
 ChangeList::~ChangeList() = default;
@@ -107,10 +115,10 @@ class ChangeListProcessor::ChangeListToEntryMapUMAStats {
   // Updates UMA histograms with file counts.
   void UpdateFileCountUmaHistograms() {
     const int num_total_files = num_hosted_documents_ + num_regular_files_;
-    UMA_HISTOGRAM_COUNTS("Drive.NumberOfRegularFiles", num_regular_files_);
-    UMA_HISTOGRAM_COUNTS("Drive.NumberOfHostedDocuments",
-                         num_hosted_documents_);
-    UMA_HISTOGRAM_COUNTS("Drive.NumberOfTotalFiles", num_total_files);
+    UMA_HISTOGRAM_COUNTS_1M("Drive.NumberOfRegularFiles", num_regular_files_);
+    UMA_HISTOGRAM_COUNTS_1M("Drive.NumberOfHostedDocuments",
+                            num_hosted_documents_);
+    UMA_HISTOGRAM_COUNTS_1M("Drive.NumberOfTotalFiles", num_total_files);
   }
 
  private:
@@ -118,11 +126,16 @@ class ChangeListProcessor::ChangeListToEntryMapUMAStats {
   int num_hosted_documents_;
 };
 
-ChangeListProcessor::ChangeListProcessor(ResourceMetadata* resource_metadata,
+ChangeListProcessor::ChangeListProcessor(const std::string& team_drive_id,
+                                         const base::FilePath& root_entry_path,
+                                         ResourceMetadata* resource_metadata,
                                          base::CancellationFlag* in_shutdown)
     : resource_metadata_(resource_metadata),
       in_shutdown_(in_shutdown),
-      changed_files_(new FileChange) {}
+      changed_files_(new FileChange),
+      changed_team_drives_(new FileChange),
+      team_drive_id_(team_drive_id),
+      root_entry_path_(root_entry_path) {}
 
 ChangeListProcessor::~ChangeListProcessor() = default;
 
@@ -141,19 +154,42 @@ FileError ChangeListProcessor::ApplyUserChangeList(
     }
   }
 
+  // Update the resource ID of the entry, if required.
+
+  // Multiple team drives can have the same root_entry_path_, so try looking up
+  // via the team_drive_id first.
   ResourceEntry root;
-  // Update the resource ID of the entry for "My Drive" directory.
-  FileError error = resource_metadata_->GetResourceEntryByPath(
-      util::GetDriveMyDriveRootPath(), &root);
-  if (error != FILE_ERROR_OK) {
-    LOG(ERROR) << "Failed to get root entry: " << FileErrorToString(error);
-    return error;
+  FileError error = FILE_ERROR_OK;
+  if (!team_drive_id_.empty()) {
+    std::string local_id;
+    error = resource_metadata_->GetIdByResourceId(team_drive_id_, &local_id);
+    if (error != FILE_ERROR_OK) {
+      LOG(ERROR) << "Failed to get team drive local id: "
+                 << FileErrorToString(error);
+      return error;
+    }
+    error = resource_metadata_->GetResourceEntryById(local_id, &root);
+    if (error != FILE_ERROR_OK) {
+      LOG(ERROR) << "Failed to get team drive root entry: "
+                 << FileErrorToString(error);
+      return error;
+    }
+  } else {
+    error = resource_metadata_->GetResourceEntryByPath(root_entry_path_, &root);
+    if (error != FILE_ERROR_OK) {
+      LOG(ERROR) << "Failed to get root entry: " << FileErrorToString(error);
+      return error;
+    }
   }
-  root.set_resource_id(root_resource_id);
-  error = resource_metadata_->RefreshEntry(root);
-  if (error != FILE_ERROR_OK) {
-    LOG(ERROR) << "Failed to update root entry: " << FileErrorToString(error);
-    return error;
+  // Only update if the root resource id has changed. This will happen for the
+  // default corpus on the first load, as we obtain the resource id lazily.
+  if (root_resource_id != root.resource_id()) {
+    root.set_resource_id(root_resource_id);
+    error = resource_metadata_->RefreshEntry(root);
+    if (error != FILE_ERROR_OK) {
+      LOG(ERROR) << "Failed to update root entry: " << FileErrorToString(error);
+      return error;
+    }
   }
 
   ChangeListToEntryMapUMAStats uma_stats;
@@ -163,7 +199,8 @@ FileError ChangeListProcessor::ApplyUserChangeList(
     return error;
 
   // Update start_page_token in the metadata header.
-  error = resource_metadata_->SetStartPageToken(new_start_page_token);
+  error = SetStartPageToken(resource_metadata_, team_drive_id_,
+                            new_start_page_token);
   if (error != FILE_ERROR_OK) {
     DLOG(ERROR) << "SetStartPageToken failed: " << FileErrorToString(error);
     return error;
@@ -513,6 +550,10 @@ void ChangeListProcessor::UpdateChangedDirs(const ResourceEntry& entry) {
                                       ? FileChange::CHANGE_TYPE_DELETE
                                       : FileChange::CHANGE_TYPE_ADD_OR_UPDATE;
     changed_files_->Update(file_path, entry, type);
+
+    if (entry.file_info().is_team_drive_root()) {
+      changed_team_drives_->Update(file_path, entry, type);
+    }
   }
 }
 

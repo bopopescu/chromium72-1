@@ -45,7 +45,7 @@
 #include "third_party/blink/renderer/modules/crypto/crypto_key.h"
 #include "third_party/blink/renderer/modules/crypto/normalize_algorithm.h"
 #include "third_party/blink/renderer/platform/bindings/script_state.h"
-#include "third_party/blink/renderer/platform/wtf/atomics.h"
+#include "third_party/blink/renderer/platform/bindings/v8_throw_exception.h"
 
 namespace blink {
 
@@ -58,7 +58,7 @@ static void RejectWithTypeError(const String& error_details,
 
   ScriptState::Scope scope(resolver->GetScriptState());
   v8::Isolate* isolate = resolver->GetScriptState()->GetIsolate();
-  resolver->Reject(v8::Exception::TypeError(V8String(isolate, error_details)));
+  resolver->Reject(V8ThrowException::CreateTypeError(isolate, error_details));
 }
 
 class CryptoResultImpl::Resolver final : public ScriptPromiseResolver {
@@ -102,17 +102,17 @@ void CryptoResultImpl::ResultCancel::Cancel() {
 ExceptionCode WebCryptoErrorToExceptionCode(WebCryptoErrorType error_type) {
   switch (error_type) {
     case kWebCryptoErrorTypeNotSupported:
-      return kNotSupportedError;
+      return ToExceptionCode(DOMExceptionCode::kNotSupportedError);
     case kWebCryptoErrorTypeSyntax:
-      return kSyntaxError;
+      return ToExceptionCode(DOMExceptionCode::kSyntaxError);
     case kWebCryptoErrorTypeInvalidAccess:
-      return kInvalidAccessError;
+      return ToExceptionCode(DOMExceptionCode::kInvalidAccessError);
     case kWebCryptoErrorTypeData:
-      return kDataError;
+      return ToExceptionCode(DOMExceptionCode::kDataError);
     case kWebCryptoErrorTypeOperation:
-      return kOperationError;
+      return ToExceptionCode(DOMExceptionCode::kOperationError);
     case kWebCryptoErrorTypeType:
-      return kV8TypeError;
+      return ToExceptionCode(ESErrorType::kTypeError);
   }
 
   NOTREACHED();
@@ -149,14 +149,20 @@ void CryptoResultImpl::CompleteWithError(WebCryptoErrorType error_type,
   if (!resolver_)
     return;
 
-  ExceptionCode ec = WebCryptoErrorToExceptionCode(error_type);
+  ExceptionCode exception_code = WebCryptoErrorToExceptionCode(error_type);
 
   // Handle TypeError separately, as it cannot be created using
   // DOMException.
-  if (ec == kV8TypeError)
+  if (exception_code == ToExceptionCode(ESErrorType::kTypeError)) {
     RejectWithTypeError(error_details, resolver_);
-  else
-    resolver_->Reject(DOMException::Create(ec, error_details));
+  } else if (IsDOMExceptionCode(exception_code)) {
+    resolver_->Reject(DOMException::Create(
+        static_cast<DOMExceptionCode>(exception_code), error_details));
+  } else {
+    NOTREACHED();
+    resolver_->Reject(
+        DOMException::Create(DOMExceptionCode::kUnknownError, error_details));
+  }
   ClearResolver();
 }
 
@@ -175,12 +181,16 @@ void CryptoResultImpl::CompleteWithJson(const char* utf8_data,
     return;
 
   ScriptState* script_state = resolver_->GetScriptState();
+  v8::Isolate* isolate = script_state->GetIsolate();
   ScriptState::Scope scope(script_state);
 
+  // Crashes if longer than v8::String::kMaxLength.
   v8::Local<v8::String> json_string =
-      V8StringFromUtf8(script_state->GetIsolate(), utf8_data, length);
+      v8::String::NewFromUtf8(isolate, utf8_data, v8::NewStringType::kNormal,
+                              length)
+          .ToLocalChecked();
 
-  v8::TryCatch exception_catcher(script_state->GetIsolate());
+  v8::TryCatch exception_catcher(isolate);
   v8::Local<v8::Value> json_dictionary;
   if (v8::JSON::Parse(script_state->GetContext(), json_string)
           .ToLocal(&json_dictionary))

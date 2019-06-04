@@ -72,6 +72,56 @@ TEST_F(HttpResponseInfoTest, PKPBypassPersistFalse) {
   EXPECT_FALSE(restored_response_info.ssl_info.pkp_bypassed);
 }
 
+TEST_F(HttpResponseInfoTest, AsyncRevalidationRequestedDefault) {
+  EXPECT_FALSE(response_info_.async_revalidation_requested);
+}
+
+TEST_F(HttpResponseInfoTest, AsyncRevalidationRequestedCopy) {
+  response_info_.async_revalidation_requested = true;
+  net::HttpResponseInfo response_info_clone(response_info_);
+  EXPECT_TRUE(response_info_clone.async_revalidation_requested);
+}
+
+TEST_F(HttpResponseInfoTest, AsyncRevalidationRequestedAssign) {
+  response_info_.async_revalidation_requested = true;
+  net::HttpResponseInfo response_info_clone;
+  response_info_clone = response_info_;
+  EXPECT_TRUE(response_info_clone.async_revalidation_requested);
+}
+
+TEST_F(HttpResponseInfoTest, AsyncRevalidationRequestedNotPersisted) {
+  response_info_.async_revalidation_requested = true;
+  net::HttpResponseInfo restored_response_info;
+  PickleAndRestore(response_info_, &restored_response_info);
+  EXPECT_FALSE(restored_response_info.async_revalidation_requested);
+}
+
+TEST_F(HttpResponseInfoTest, StaleRevalidationTimeoutDefault) {
+  EXPECT_TRUE(response_info_.stale_revalidate_timeout.is_null());
+}
+
+TEST_F(HttpResponseInfoTest, StaleRevalidationTimeoutCopy) {
+  base::Time test_time = base::Time::FromDoubleT(1000);
+  response_info_.stale_revalidate_timeout = test_time;
+  HttpResponseInfo response_info_clone(response_info_);
+  EXPECT_EQ(test_time, response_info_clone.stale_revalidate_timeout);
+}
+
+TEST_F(HttpResponseInfoTest, StaleRevalidationTimeoutRestoreValue) {
+  base::Time test_time = base::Time::FromDoubleT(1000);
+  response_info_.stale_revalidate_timeout = test_time;
+  HttpResponseInfo restored_response_info;
+  PickleAndRestore(response_info_, &restored_response_info);
+  EXPECT_EQ(test_time, restored_response_info.stale_revalidate_timeout);
+}
+
+TEST_F(HttpResponseInfoTest, StaleRevalidationTimeoutRestoreNoValue) {
+  EXPECT_TRUE(response_info_.stale_revalidate_timeout.is_null());
+  HttpResponseInfo restored_response_info;
+  PickleAndRestore(response_info_, &restored_response_info);
+  EXPECT_TRUE(restored_response_info.stale_revalidate_timeout.is_null());
+}
+
 // Test that key_exchange_group is preserved for ECDHE ciphers.
 TEST_F(HttpResponseInfoTest, KeyExchangeGroupECDHE) {
   response_info_.ssl_info.cert =
@@ -132,6 +182,17 @@ TEST_F(HttpResponseInfoTest, LegacyKeyExchangeInfoUnknown) {
   net::HttpResponseInfo restored_response_info;
   PickleAndRestore(response_info_, &restored_response_info);
   EXPECT_EQ(0, restored_response_info.ssl_info.key_exchange_group);
+}
+
+// Test that peer_signature_algorithm is preserved.
+TEST_F(HttpResponseInfoTest, PeerSignatureAlgorithm) {
+  response_info_.ssl_info.cert =
+      ImportCertFromFile(GetTestCertsDirectory(), "ok_cert.pem");
+  response_info_.ssl_info.peer_signature_algorithm =
+      0x0804;  // rsa_pss_rsae_sha256
+  net::HttpResponseInfo restored_response_info;
+  PickleAndRestore(response_info_, &restored_response_info);
+  EXPECT_EQ(0x0804, restored_response_info.ssl_info.peer_signature_algorithm);
 }
 
 // Tests that cache entries loaded over SSLv3 (no longer supported) are dropped.

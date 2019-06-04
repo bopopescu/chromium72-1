@@ -36,6 +36,8 @@ namespace blink {
 
 class CORE_EXPORT SpinButtonElement final : public HTMLDivElement,
                                             public PopupOpeningObserver {
+  USING_GARBAGE_COLLECTED_MIXIN(SpinButtonElement);
+
  public:
   enum UpDownState {
     kIndeterminate,  // Hovered, but the event is not handled.
@@ -61,6 +63,9 @@ class CORE_EXPORT SpinButtonElement final : public HTMLDivElement,
   // because SpinButtonElement can be outlive SpinButtonOwner
   // implementation, e.g. during event handling.
   static SpinButtonElement* Create(Document&, SpinButtonOwner&);
+
+  SpinButtonElement(Document&, SpinButtonOwner&);
+
   UpDownState GetUpDownState() const { return up_down_state_; }
   void ReleaseCapture(EventDispatch = kEventDispatchAllowed);
   void RemoveSpinButtonOwner() { spin_button_owner_ = nullptr; }
@@ -70,13 +75,11 @@ class CORE_EXPORT SpinButtonElement final : public HTMLDivElement,
   bool WillRespondToMouseMoveEvents() override;
   bool WillRespondToMouseClickEvents() override;
 
-  void ForwardEvent(Event*);
+  void ForwardEvent(Event&);
 
   void Trace(blink::Visitor*) override;
 
  private:
-  SpinButtonElement(Document&, SpinButtonOwner&);
-
   void DetachLayoutTree(const AttachContext&) override;
   bool IsSpinButtonElement() const override { return true; }
   bool IsDisabledFormControl() const override {
@@ -84,7 +87,7 @@ class CORE_EXPORT SpinButtonElement final : public HTMLDivElement,
   }
   bool MatchesReadOnlyPseudoClass() const override;
   bool MatchesReadWritePseudoClass() const override;
-  void DefaultEventHandler(Event*) override;
+  void DefaultEventHandler(Event&) override;
   void WillOpenPopup() override;
   void DoStepAction(int);
   void StartRepeatingTimer();

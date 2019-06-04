@@ -7,11 +7,12 @@
 #include <utility>
 
 #include "base/macros.h"
-#include "base/run_loop.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/values.h"
 #include "chrome/browser/chrome_notification_types.h"
-#include "chrome/browser/chromeos/login/ui/login_display_webui.h"
+#include "chrome/browser/chromeos/child_accounts/child_account_test_utils.h"
+#include "chrome/browser/chromeos/login/screens/gaia_view.h"
+#include "chrome/browser/chromeos/login/ui/login_display_host.h"
 #include "chrome/browser/chromeos/login/users/chrome_user_manager.h"
 #include "chrome/browser/chromeos/policy/login_policy_test_base.h"
 #include "chrome/browser/chromeos/policy/user_policy_test_helper.h"
@@ -21,6 +22,7 @@
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_list.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
+#include "chrome/browser/ui/webui/chromeos/login/oobe_ui.h"
 #include "components/arc/arc_features.h"
 #include "components/arc/arc_prefs.h"
 #include "components/policy/core/browser/browser_policy_connector.h"
@@ -37,15 +39,6 @@
 namespace {
 // The Gaia ID supplied by FakeGaia for our mocked-out signin.
 const char kTestGaiaId[] = "12345";
-
-const char kIdTokenChildAccount[] =
-    "dummy-header."
-    // base64 encoded: { "services": ["uca"] }
-    "eyAic2VydmljZXMiOiBbInVjYSJdIH0="
-    ".dummy-signature";
-
-// Services list for the child user. (This must be a correct JSON array.)
-const char kChildServices[] = "[\"uca\"]";
 
 // Helper class that counts the number of notifications of the specified
 // type that have been received.
@@ -147,9 +140,11 @@ IN_PROC_BROWSER_TEST_F(UserCloudPolicyManagerTest, ErrorLoadingPolicy) {
   CountNotificationObserver observer(
       chrome::NOTIFICATION_SESSION_STARTED,
       content::NotificationService::AllSources());
-  GetLoginDisplay()->ShowSigninScreenForTest(kAccountId, kAccountPassword,
-                                             kEmptyServices);
-  base::RunLoop().Run();
+  chromeos::LoginDisplayHost::default_host()
+      ->GetOobeUI()
+      ->GetGaiaScreenView()
+      ->ShowSigninScreenForTest(kAccountId, kAccountPassword, kEmptyServices);
+  RunUntilBrowserProcessQuits();
   // Should not receive a SESSION_STARTED notification.
   ASSERT_EQ(0, observer.notification_count());
 
@@ -290,7 +285,9 @@ class UserCloudPolicyManagerChildTest
   ~UserCloudPolicyManagerChildTest() override = default;
 
   // LoginPolicyTestBase:
-  std::string GetIdToken() const override { return kIdTokenChildAccount; }
+  std::string GetIdToken() const override {
+    return chromeos::test::GetChildAccountOAuthIdToken();
+  }
 
   // UserCloudPolicyManagerNonEnterpriseTest:
   void SetUp() override {
@@ -316,7 +313,8 @@ IN_PROC_BROWSER_TEST_F(UserCloudPolicyManagerChildTest, PolicyForChildUser) {
             user_manager::known_user::GetProfileRequiresPolicy(account_id));
 
   SkipToLoginScreen();
-  LogIn(GetAccount(), kAccountPassword, kChildServices);
+  LogIn(GetAccount(), kAccountPassword,
+        chromeos::test::kChildAccountServiceFlags);
 
   // User should be marked as having a valid OAuth token.
   const user_manager::UserManager* const user_manager =

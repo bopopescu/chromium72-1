@@ -25,6 +25,7 @@
 #include "base/strings/string16.h"
 #include "build/build_config.h"
 #include "net/base/address_list.h"
+#include "net/base/completion_once_callback.h"
 #include "net/base/io_buffer.h"
 #include "net/base/net_errors.h"
 #include "net/base/test_completion_callback.h"
@@ -224,6 +225,59 @@ class SocketDataProvider {
 
   virtual void OnEnableTCPFastOpenIfSupported();
 
+  // Returns the last set receive buffer size, or -1 if never set.
+  int receive_buffer_size() const { return receive_buffer_size_; }
+  void set_receive_buffer_size(int receive_buffer_size) {
+    receive_buffer_size_ = receive_buffer_size;
+  }
+
+  // Returns the last set send buffer size, or -1 if never set.
+  int send_buffer_size() const { return send_buffer_size_; }
+  void set_send_buffer_size(int send_buffer_size) {
+    send_buffer_size_ = send_buffer_size;
+  }
+
+  // Returns the last set value of TCP no delay, or false if never set.
+  bool no_delay() const { return no_delay_; }
+  void set_no_delay(bool no_delay) { no_delay_ = no_delay; }
+
+  // Returns whether TCP keepalives were enabled or not. Returns 0 by default,
+  // which may not match the default behavior on all platforms.
+  bool keep_alive_enabled() const { return keep_alive_enabled_; }
+  // Last set TCP keepalive delay.
+  int keep_alive_delay() const { return keep_alive_delay_; }
+  void set_keep_alive(bool enable, int delay) {
+    keep_alive_enabled_ = enable;
+    keep_alive_delay_ = delay;
+  }
+
+  // Setters / getters for the return values of the corresponding Set*()
+  // methods. By default, they all succeed, if the socket is connected.
+
+  void set_set_receive_buffer_size_result(int receive_buffer_size_result) {
+    set_receive_buffer_size_result_ = receive_buffer_size_result;
+  }
+  int set_receive_buffer_size_result() const {
+    return set_receive_buffer_size_result_;
+  }
+
+  void set_set_send_buffer_size_result(int set_send_buffer_size_result) {
+    set_send_buffer_size_result_ = set_send_buffer_size_result;
+  }
+  int set_send_buffer_size_result() const {
+    return set_send_buffer_size_result_;
+  }
+
+  void set_set_no_delay_result(bool set_no_delay_result) {
+    set_no_delay_result_ = set_no_delay_result;
+  }
+  bool set_no_delay_result() const { return set_no_delay_result_; }
+
+  void set_set_keep_alive_result(bool set_keep_alive_result) {
+    set_keep_alive_result_ = set_keep_alive_result;
+  }
+  bool set_keep_alive_result() const { return set_keep_alive_result_; }
+
   // Returns true if the request should be considered idle, for the purposes of
   // IsConnectedAndIdle.
   virtual bool IsIdle() const;
@@ -248,7 +302,20 @@ class SocketDataProvider {
   virtual void Reset() = 0;
 
   MockConnect connect_;
-  AsyncSocket* socket_;
+  AsyncSocket* socket_ = nullptr;
+
+  int receive_buffer_size_ = -1;
+  int send_buffer_size_ = -1;
+  // This reflects the default state of TCPClientSockets.
+  bool no_delay_ = true;
+  // Default varies by platform. Just pretend it's disabled.
+  bool keep_alive_enabled_ = false;
+  int keep_alive_delay_ = 0;
+
+  int set_receive_buffer_size_result_ = net::OK;
+  int set_send_buffer_size_result_ = net::OK;
+  bool set_no_delay_result_ = true;
+  bool set_keep_alive_result_ = true;
 
   DISALLOW_COPY_AND_ASSIGN(SocketDataProvider);
 };
@@ -331,6 +398,10 @@ class StaticSocketDataProvider : public SocketDataProvider {
                            base::span<const MockWrite> writes);
   ~StaticSocketDataProvider() override;
 
+  // Pause/resume reads from this provider.
+  void Pause();
+  void Resume();
+
   // From SocketDataProvider:
   MockRead OnRead() override;
   MockWriteResult OnWrite(const std::string& data) override;
@@ -347,6 +418,7 @@ class StaticSocketDataProvider : public SocketDataProvider {
   void Reset() override;
 
   StaticSocketDataHelper helper_;
+  bool paused_ = false;
 
   DISALLOW_COPY_AND_ASSIGN(StaticSocketDataProvider);
 };
@@ -386,6 +458,9 @@ struct SSLSocketDataProvider {
 
   ChannelIDService* channel_id_service;
   base::Optional<NextProtoVector> next_protos_expected_in_ssl_config;
+
+  uint16_t expected_ssl_version_min;
+  uint16_t expected_ssl_version_max;
 
   bool is_connect_data_consumed = false;
 };
@@ -608,6 +683,9 @@ class MockClientSocket : public TransportClientSocket {
 
   // TransportClientSocket implementation.
   int Bind(const net::IPEndPoint& local_addr) override;
+  bool SetNoDelay(bool no_delay) override;
+  bool SetKeepAlive(bool enable, int delay) override;
+
   // StreamSocket implementation.
   int Connect(CompletionOnceCallback callback) override = 0;
   void Disconnect() override;
@@ -623,6 +701,7 @@ class MockClientSocket : public TransportClientSocket {
   void AddConnectionAttempts(const ConnectionAttempts& attempts) override {}
   int64_t GetTotalReceivedBytes() const override;
   void ApplySocketTag(const SocketTag& tag) override {}
+
  protected:
   ~MockClientSocket() override;
   void RunCallbackAsync(CompletionOnceCallback callback, int result);
@@ -663,8 +742,16 @@ class MockTCPClientSocket : public MockClientSocket, public AsyncSocket {
             int buf_len,
             CompletionOnceCallback callback,
             const NetworkTrafficAnnotationTag& traffic_annotation) override;
+  int SetReceiveBufferSize(int32_t size) override;
+  int SetSendBufferSize(int32_t size) override;
+
+  // TransportClientSocket implementation.
+  bool SetNoDelay(bool no_delay) override;
+  bool SetKeepAlive(bool enable, int delay) override;
 
   // StreamSocket implementation.
+  void SetBeforeConnectCallback(
+      const BeforeConnectCallback& before_connect_callback) override;
   int Connect(CompletionOnceCallback callback) override;
   void Disconnect() override;
   bool IsConnected() const override;
@@ -692,6 +779,10 @@ class MockTCPClientSocket : public MockClientSocket, public AsyncSocket {
   int ReadIfReadyImpl(IOBuffer* buf,
                       int buf_len,
                       CompletionOnceCallback callback);
+
+  // Helper method to run |pending_read_if_ready_callback_| if it is not null.
+  void RunReadIfReadyCallback(int result);
+
   AddressList addresses_;
 
   SocketDataProvider* data_;
@@ -719,6 +810,8 @@ class MockTCPClientSocket : public MockClientSocket, public AsyncSocket {
   // If true, ReadIfReady() is enabled; otherwise ReadIfReady() returns
   // ERR_READ_IF_READY_NOT_IMPLEMENTED.
   bool enable_read_if_ready_;
+
+  BeforeConnectCallback before_connect_callback_;
 
   ConnectionAttempts connection_attempts_;
 
@@ -810,6 +903,7 @@ class MockSSLClientSocket : public AsyncSocket, public SSLClientSocket {
             int buf_len,
             CompletionOnceCallback callback,
             const NetworkTrafficAnnotationTag& traffic_annotation) override;
+  int CancelReadIfReady() override;
 
   // StreamSocket implementation.
   int Connect(CompletionOnceCallback callback) override;
@@ -824,9 +918,6 @@ class MockSSLClientSocket : public AsyncSocket, public SSLClientSocket {
   bool GetSSLInfo(SSLInfo* ssl_info) override;
   void GetSSLCertRequestInfo(
       SSLCertRequestInfo* cert_request_info) const override;
-  Error GetTokenBindingSignature(crypto::ECPrivateKey* key,
-                                 TokenBindingType tb_type,
-                                 std::vector<uint8_t>* out) override;
   ChannelIDService* GetChannelIDService() const override;
   crypto::ECPrivateKey* GetChannelIDKey() const override;
   void ApplySocketTag(const SocketTag& tag) override;
@@ -988,7 +1079,10 @@ class TestSocketRequest : public TestCompletionCallbackBase {
 
   ClientSocketHandle* handle() { return &handle_; }
 
-  CompletionOnceCallback callback() const { return callback_; }
+  CompletionOnceCallback callback() {
+    return base::BindOnce(&TestSocketRequest::OnComplete,
+                          base::Unretained(this));
+  }
 
  private:
   void OnComplete(int result);
@@ -996,7 +1090,6 @@ class TestSocketRequest : public TestCompletionCallbackBase {
   ClientSocketHandle handle_;
   std::vector<TestSocketRequest*>* request_order_;
   size_t* completion_count_;
-  CompletionCallback callback_;
 
   DISALLOW_COPY_AND_ASSIGN(TestSocketRequest);
 };
@@ -1084,11 +1177,17 @@ class MockTransportClientSocketPool : public TransportClientSocketPool {
     MockConnectJob(std::unique_ptr<StreamSocket> socket,
                    ClientSocketHandle* handle,
                    const SocketTag& socket_tag,
-                   CompletionOnceCallback callback);
+                   CompletionOnceCallback callback,
+                   RequestPriority priority);
     ~MockConnectJob();
 
     int Connect();
     bool CancelHandle(const ClientSocketHandle* handle);
+
+    ClientSocketHandle* handle() const { return handle_; }
+
+    RequestPriority priority() const { return priority_; }
+    void set_priority(RequestPriority priority) { priority_ = priority; }
 
    private:
     void OnConnect(int rv);
@@ -1097,6 +1196,7 @@ class MockTransportClientSocketPool : public TransportClientSocketPool {
     ClientSocketHandle* handle_;
     const SocketTag socket_tag_;
     CompletionOnceCallback user_callback_;
+    RequestPriority priority_;
 
     DISALLOW_COPY_AND_ASSIGN(MockConnectJob);
   };
@@ -1110,6 +1210,11 @@ class MockTransportClientSocketPool : public TransportClientSocketPool {
   RequestPriority last_request_priority() const {
     return last_request_priority_;
   }
+
+  const std::vector<std::unique_ptr<MockConnectJob>>& requests() const {
+    return job_list_;
+  }
+
   int release_count() const { return release_count_; }
   int cancel_count() const { return cancel_count_; }
 
@@ -1120,7 +1225,7 @@ class MockTransportClientSocketPool : public TransportClientSocketPool {
                     const SocketTag& socket_tag,
                     RespectLimits respect_limits,
                     ClientSocketHandle* handle,
-                    const CompletionCallback& callback,
+                    CompletionOnceCallback callback,
                     const NetLogWithSource& net_log) override;
   void SetPriority(const std::string& group_name,
                    ClientSocketHandle* handle,
@@ -1156,7 +1261,7 @@ class MockSOCKSClientSocketPool : public SOCKSClientSocketPool {
                     const SocketTag& socket_tag,
                     RespectLimits respect_limits,
                     ClientSocketHandle* handle,
-                    const CompletionCallback& callback,
+                    CompletionOnceCallback callback,
                     const NetLogWithSource& net_log) override;
   void SetPriority(const std::string& group_name,
                    ClientSocketHandle* handle,

@@ -42,8 +42,8 @@ class WebURL;
 class WebURLResponse;
 
 // This interface is used by webkit to call out to the embedder. Webkit uses
-// the WebFrameClient::CreateApplicationCacheHost method to create instances,
-// and calls delete when the instance is no longer needed.
+// the WebLocalFrameClient::CreateApplicationCacheHost method to create
+// instances, and calls delete when the instance is no longer needed.
 class WebApplicationCacheHost {
  public:
   // These values must match blink::ApplicationCacheHost::Status values
@@ -100,7 +100,7 @@ class WebApplicationCacheHost {
 
   // Called as the main resource is retrieved.
   virtual void DidReceiveResponseForMainResource(const WebURLResponse&) {}
-  virtual void DidReceiveDataForMainResource(const char* data, unsigned len) {}
+  virtual void DidReceiveDataForMainResource(const char* data, size_t len) {}
   virtual void DidFinishLoadingMainResource(bool success) {}
 
   // Called on behalf of the scriptable interface.

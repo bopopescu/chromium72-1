@@ -31,7 +31,6 @@
 #include "third_party/blink/renderer/core/css/font_face.h"
 
 #include "third_party/blink/public/platform/task_type.h"
-#include "third_party/blink/renderer/bindings/core/v8/exception_state.h"
 #include "third_party/blink/renderer/bindings/core/v8/string_or_array_buffer_or_array_buffer_view.h"
 #include "third_party/blink/renderer/core/css/binary_data_font_face_source.h"
 #include "third_party/blink/renderer/core/css/css_font_face.h"
@@ -54,7 +53,6 @@
 #include "third_party/blink/renderer/core/css_value_keywords.h"
 #include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/dom/dom_exception.h"
-#include "third_party/blink/renderer/core/dom/exception_code.h"
 #include "third_party/blink/renderer/core/execution_context/execution_context.h"
 #include "third_party/blink/renderer/core/frame/local_frame.h"
 #include "third_party/blink/renderer/core/frame/settings.h"
@@ -62,6 +60,7 @@
 #include "third_party/blink/renderer/core/typed_arrays/dom_array_buffer.h"
 #include "third_party/blink/renderer/core/typed_arrays/dom_array_buffer_view.h"
 #include "third_party/blink/renderer/core/workers/worker_global_scope.h"
+#include "third_party/blink/renderer/platform/bindings/exception_state.h"
 #include "third_party/blink/renderer/platform/bindings/script_state.h"
 #include "third_party/blink/renderer/platform/font_family_names.h"
 #include "third_party/blink/renderer/platform/histogram.h"
@@ -76,30 +75,10 @@ const CSSValue* ParseCSSValue(const ExecutionContext* context,
                               const String& value,
                               AtRuleDescriptorID descriptor_id) {
   CSSParserContext* parser_context =
-      context->IsDocument() ? CSSParserContext::Create(*ToDocument(context))
-                            : CSSParserContext::Create(*context);
+      IsA<Document>(context) ? CSSParserContext::Create(*To<Document>(context))
+                             : CSSParserContext::Create(*context);
   return AtRuleDescriptorParser::ParseFontFaceDescriptor(descriptor_id, value,
                                                          *parser_context);
-}
-
-FontDisplay CSSValueToFontDisplay(const CSSValue* value) {
-  if (value && value->IsIdentifierValue()) {
-    switch (ToCSSIdentifierValue(value)->GetValueID()) {
-      case CSSValueAuto:
-        return kFontDisplayAuto;
-      case CSSValueBlock:
-        return kFontDisplayBlock;
-      case CSSValueSwap:
-        return kFontDisplaySwap;
-      case CSSValueFallback:
-        return kFontDisplayFallback;
-      case CSSValueOptional:
-        return kFontDisplayOptional;
-      default:
-        break;
-    }
-  }
-  return kFontDisplayAuto;
 }
 
 CSSFontFace* CreateCSSFontFace(FontFace* font_face,
@@ -114,7 +93,7 @@ CSSFontFace* CreateCSSFontFace(FontFace* font_face,
     }
   }
 
-  return new CSSFontFace(font_face, ranges);
+  return MakeGarbageCollected<CSSFontFace>(font_face, ranges);
 }
 
 }  // namespace
@@ -122,7 +101,7 @@ CSSFontFace* CreateCSSFontFace(FontFace* font_face,
 FontFace* FontFace::Create(ExecutionContext* context,
                            const AtomicString& family,
                            StringOrArrayBufferOrArrayBufferView& source,
-                           const FontFaceDescriptors& descriptors) {
+                           const FontFaceDescriptors* descriptors) {
   if (source.IsString())
     return Create(context, family, source.GetAsString(), descriptors);
   if (source.IsArrayBuffer())
@@ -138,14 +117,17 @@ FontFace* FontFace::Create(ExecutionContext* context,
 FontFace* FontFace::Create(ExecutionContext* context,
                            const AtomicString& family,
                            const String& source,
-                           const FontFaceDescriptors& descriptors) {
-  FontFace* font_face = new FontFace(context, family, descriptors);
+                           const FontFaceDescriptors* descriptors) {
+  FontFace* font_face =
+      MakeGarbageCollected<FontFace>(context, family, descriptors);
 
   const CSSValue* src = ParseCSSValue(context, source, AtRuleDescriptorID::Src);
-  if (!src || !src->IsValueList())
-    font_face->SetError(DOMException::Create(
-        kSyntaxError, "The source provided ('" + source +
-                          "') could not be parsed as a value list."));
+  if (!src || !src->IsValueList()) {
+    font_face->SetError(
+        DOMException::Create(DOMExceptionCode::kSyntaxError,
+                             "The source provided ('" + source +
+                                 "') could not be parsed as a value list."));
+  }
 
   font_face->InitCSSFontFace(context, *src);
   return font_face;
@@ -154,8 +136,9 @@ FontFace* FontFace::Create(ExecutionContext* context,
 FontFace* FontFace::Create(ExecutionContext* context,
                            const AtomicString& family,
                            DOMArrayBuffer* source,
-                           const FontFaceDescriptors& descriptors) {
-  FontFace* font_face = new FontFace(context, family, descriptors);
+                           const FontFaceDescriptors* descriptors) {
+  FontFace* font_face =
+      MakeGarbageCollected<FontFace>(context, family, descriptors);
   font_face->InitCSSFontFace(static_cast<const unsigned char*>(source->Data()),
                              source->ByteLength());
   return font_face;
@@ -164,8 +147,9 @@ FontFace* FontFace::Create(ExecutionContext* context,
 FontFace* FontFace::Create(ExecutionContext* context,
                            const AtomicString& family,
                            DOMArrayBufferView* source,
-                           const FontFaceDescriptors& descriptors) {
-  FontFace* font_face = new FontFace(context, family, descriptors);
+                           const FontFaceDescriptors* descriptors) {
+  FontFace* font_face =
+      MakeGarbageCollected<FontFace>(context, family, descriptors);
   font_face->InitCSSFontFace(
       static_cast<const unsigned char*>(source->BaseAddress()),
       source->byteLength());
@@ -185,7 +169,7 @@ FontFace* FontFace::Create(Document* document,
   if (!src || !src->IsValueList())
     return nullptr;
 
-  FontFace* font_face = new FontFace(document);
+  FontFace* font_face = MakeGarbageCollected<FontFace>(document);
 
   if (font_face->SetFamilyValue(*family) &&
       font_face->SetPropertyFromStyle(properties,
@@ -215,21 +199,21 @@ FontFace::FontFace(ExecutionContext* context)
 
 FontFace::FontFace(ExecutionContext* context,
                    const AtomicString& family,
-                   const FontFaceDescriptors& descriptors)
+                   const FontFaceDescriptors* descriptors)
     : ContextClient(context), family_(family), status_(kUnloaded) {
-  SetPropertyFromString(context, descriptors.style(),
+  SetPropertyFromString(context, descriptors->style(),
                         AtRuleDescriptorID::FontStyle);
-  SetPropertyFromString(context, descriptors.weight(),
+  SetPropertyFromString(context, descriptors->weight(),
                         AtRuleDescriptorID::FontWeight);
-  SetPropertyFromString(context, descriptors.stretch(),
+  SetPropertyFromString(context, descriptors->stretch(),
                         AtRuleDescriptorID::FontStretch);
-  SetPropertyFromString(context, descriptors.unicodeRange(),
+  SetPropertyFromString(context, descriptors->unicodeRange(),
                         AtRuleDescriptorID::UnicodeRange);
-  SetPropertyFromString(context, descriptors.variant(),
+  SetPropertyFromString(context, descriptors->variant(),
                         AtRuleDescriptorID::FontVariant);
-  SetPropertyFromString(context, descriptors.featureSettings(),
+  SetPropertyFromString(context, descriptors->featureSettings(),
                         AtRuleDescriptorID::FontFeatureSettings);
-  SetPropertyFromString(context, descriptors.display(),
+  SetPropertyFromString(context, descriptors->display(),
                         AtRuleDescriptorID::FontDisplay);
 }
 
@@ -322,9 +306,9 @@ void FontFace::SetPropertyFromString(const ExecutionContext* context,
 
   String message = "Failed to set '" + s + "' as a property value.";
   if (exception_state)
-    exception_state->ThrowDOMException(kSyntaxError, message);
+    exception_state->ThrowDOMException(DOMExceptionCode::kSyntaxError, message);
   else
-    SetError(DOMException::Create(kSyntaxError, message));
+    SetError(DOMException::Create(DOMExceptionCode::kSyntaxError, message));
 }
 
 bool FontFace::SetPropertyFromStyle(const CSSPropertyValueSet& properties,
@@ -378,22 +362,22 @@ bool FontFace::SetFamilyValue(const CSSValue& family_value) {
     // types.
     switch (ToCSSIdentifierValue(family_value).GetValueID()) {
       case CSSValueSerif:
-        family = FontFamilyNames::webkit_serif;
+        family = font_family_names::kWebkitSerif;
         break;
       case CSSValueSansSerif:
-        family = FontFamilyNames::webkit_sans_serif;
+        family = font_family_names::kWebkitSansSerif;
         break;
       case CSSValueCursive:
-        family = FontFamilyNames::webkit_cursive;
+        family = font_family_names::kWebkitCursive;
         break;
       case CSSValueFantasy:
-        family = FontFamilyNames::webkit_fantasy;
+        family = font_family_names::kWebkitFantasy;
         break;
       case CSSValueMonospace:
-        family = FontFamilyNames::webkit_monospace;
+        family = font_family_names::kWebkitMonospace;
         break;
       case CSSValueWebkitPictograph:
-        family = FontFamilyNames::webkit_pictograph;
+        family = font_family_names::kWebkitPictograph;
         break;
       default:
         return false;
@@ -454,7 +438,7 @@ void FontFace::SetLoadStatus(LoadStatusType status) {
 void FontFace::RunCallbacks() {
   HeapVector<Member<LoadFontCallback>> callbacks;
   callbacks_.swap(callbacks);
-  for (size_t i = 0; i < callbacks.size(); ++i) {
+  for (wtf_size_t i = 0; i < callbacks.size(); ++i) {
     if (status_ == kLoaded)
       callbacks[i]->NotifyLoaded(this);
     else
@@ -463,8 +447,10 @@ void FontFace::RunCallbacks() {
 }
 
 void FontFace::SetError(DOMException* error) {
-  if (!error_)
-    error_ = error ? error : DOMException::Create(kNetworkError);
+  if (!error_) {
+    error_ =
+        error ? error : DOMException::Create(DOMExceptionCode::kNetworkError);
+  }
   SetLoadStatus(kError);
 }
 
@@ -692,8 +678,7 @@ bool ContextAllowsDownload(ExecutionContext* context) {
   if (!context) {
     return false;
   }
-  if (context->IsDocument()) {
-    const Document* document = ToDocument(context);
+  if (const Document* document = DynamicTo<Document>(context)) {
     const Settings* settings = document->GetSettings();
     return settings && settings->GetDownloadableBinaryFontsEnabled();
   }
@@ -721,22 +706,23 @@ void FontFace::InitCSSFontFace(ExecutionContext* context, const CSSValue& src) {
     if (!item.IsLocal()) {
       if (ContextAllowsDownload(context) && item.IsSupportedFormat()) {
         FontSelector* font_selector = nullptr;
-        if (context->IsDocument()) {
-          font_selector =
-              ToDocument(context)->GetStyleEngine().GetFontSelector();
-        } else if (context->IsWorkerGlobalScope()) {
-          font_selector = ToWorkerGlobalScope(context)->GetFontSelector();
+        if (auto* document = DynamicTo<Document>(context)) {
+          font_selector = document->GetStyleEngine().GetFontSelector();
+        } else if (auto* scope = DynamicTo<WorkerGlobalScope>(context)) {
+          font_selector = scope->GetFontSelector();
         } else {
           NOTREACHED();
         }
         RemoteFontFaceSource* source =
-            new RemoteFontFaceSource(css_font_face_, font_selector,
-                                     CSSValueToFontDisplay(display_.Get()));
+            MakeGarbageCollected<RemoteFontFaceSource>(
+                css_font_face_, font_selector,
+                CSSValueToFontDisplay(display_.Get()));
         item.Fetch(context, source);
         css_font_face_->AddSource(source);
       }
     } else {
-      css_font_face_->AddSource(new LocalFontFaceSource(item.GetResource()));
+      css_font_face_->AddSource(
+          MakeGarbageCollected<LocalFontFaceSource>(item.GetResource()));
     }
   }
 
@@ -759,7 +745,7 @@ void FontFace::InitCSSFontFace(const unsigned char* data, size_t size) {
   if (source->IsValid())
     SetLoadStatus(kLoaded);
   else
-    SetError(DOMException::Create(kSyntaxError,
+    SetError(DOMException::Create(DOMExceptionCode::kSyntaxError,
                                   "Invalid font data in ArrayBuffer."));
   css_font_face_->AddSource(source);
 }
@@ -786,6 +772,15 @@ bool FontFace::HadBlankText() const {
 
 bool FontFace::HasPendingActivity() const {
   return status_ == kLoading && GetExecutionContext();
+}
+
+FontDisplay FontFace::GetFontDisplayWithFallback() const {
+  if (display_)
+    return CSSValueToFontDisplay(display_.Get());
+  ExecutionContext* context = GetExecutionContext();
+  if (!context || !context->IsDocument())
+    return kFontDisplayAuto;
+  return To<Document>(context)->GetStyleEngine().GetDefaultFontDisplay(family_);
 }
 
 }  // namespace blink

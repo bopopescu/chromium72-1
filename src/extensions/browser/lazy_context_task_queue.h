@@ -30,14 +30,17 @@ class LazyContextTaskQueue {
   struct ContextInfo {
     const ExtensionId extension_id;
     content::RenderProcessHost* const render_process_host;
+    const int64_t service_worker_version_id;
     const int worker_thread_id;
     const GURL url;
     ContextInfo(const ExtensionId& extension_id,
                 content::RenderProcessHost* render_process_host,
+                int64_t service_worker_version_id,
                 int worker_thread_id,
                 const GURL& url)
         : extension_id(extension_id),
           render_process_host(render_process_host),
+          service_worker_version_id(service_worker_version_id),
           worker_thread_id(worker_thread_id),
           url(url) {}
   };
@@ -63,7 +66,7 @@ class LazyContextTaskQueue {
   //    is heavily used thoughout the codebase.
   // 2. LazyBackgroundTaskQueue::AddPendingTask is tied to ExtensionHost. This
   //    class should be ExtensionHost agnostic.
-  virtual void AddPendingTaskToDispatchEvent(LazyContextId* context_id,
+  virtual void AddPendingTaskToDispatchEvent(const LazyContextId* context_id,
                                              PendingTask task) = 0;
 };
 

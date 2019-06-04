@@ -10,6 +10,7 @@
 #include "base/optional.h"
 #include "base/time/time.h"
 #include "content/browser/loader/navigation_url_loader.h"
+#include "content/common/navigation_params.h"
 #include "content/public/browser/content_browser_client.h"
 #include "content/public/browser/ssl_status.h"
 #include "services/network/public/mojom/url_loader.mojom.h"
@@ -22,9 +23,9 @@ struct RedirectInfo;
 namespace content {
 
 class NavigationData;
+class NavigationLoaderInterceptor;
 class ResourceContext;
 class StoragePartition;
-class NavigationLoaderInterceptor;
 struct GlobalRequestID;
 
 class CONTENT_EXPORT NavigationURLLoaderImpl : public NavigationURLLoader {
@@ -44,7 +45,10 @@ class CONTENT_EXPORT NavigationURLLoaderImpl : public NavigationURLLoader {
   ~NavigationURLLoaderImpl() override;
 
   // NavigationURLLoader implementation:
-  void FollowRedirect() override;
+  void FollowRedirect(const base::Optional<std::vector<std::string>>&
+                          to_be_removed_request_headers,
+                      const base::Optional<net::HttpRequestHeaders>&
+                          modified_request_headers) override;
   void ProceedWithResponse() override;
 
   void OnReceiveResponse(
@@ -53,8 +57,7 @@ class CONTENT_EXPORT NavigationURLLoaderImpl : public NavigationURLLoader {
       std::unique_ptr<NavigationData> navigation_data,
       const GlobalRequestID& global_request_id,
       bool is_download,
-      bool is_stream,
-      network::mojom::DownloadedTempFilePtr downloaded_file);
+      bool is_stream);
   void OnReceiveRedirect(const net::RedirectInfo& redirect_info,
                          scoped_refptr<network::ResourceResponse> response);
   void OnComplete(const network::URLLoaderCompletionStatus& status);
@@ -76,6 +79,14 @@ class CONTENT_EXPORT NavigationURLLoaderImpl : public NavigationURLLoader {
   static void SetBeginNavigationInterceptorForTesting(
       const BeginNavigationInterceptor& interceptor);
 
+  // Intercepts loading of frame requests when network service is enabled and a
+  // network::mojom::TrustedURLLoaderHeaderClient is being used. This must be
+  // called on the UI thread or before threads start.
+  using URLLoaderFactoryInterceptor = base::RepeatingCallback<void(
+      network::mojom::URLLoaderFactoryRequest* request)>;
+  static void SetURLLoaderFactoryInterceptorForTesting(
+      const URLLoaderFactoryInterceptor& interceptor);
+
  private:
   class URLLoaderRequestController;
   void OnRequestStarted(base::TimeTicks timestamp);
@@ -90,7 +101,7 @@ class CONTENT_EXPORT NavigationURLLoaderImpl : public NavigationURLLoader {
   // Lives on the IO thread.
   std::unique_ptr<URLLoaderRequestController> request_controller_;
 
-  bool allow_download_;
+  NavigationDownloadPolicy download_policy_;
 
   // Factories to handle navigation requests for non-network resources.
   ContentBrowserClient::NonNetworkURLLoaderFactoryMap

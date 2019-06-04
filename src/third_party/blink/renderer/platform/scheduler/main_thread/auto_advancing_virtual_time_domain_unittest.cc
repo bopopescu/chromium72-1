@@ -6,14 +6,13 @@
 
 #include <memory>
 #include "base/run_loop.h"
+#include "base/task/sequence_manager/sequence_manager.h"
+#include "base/task/sequence_manager/test/sequence_manager_for_test.h"
+#include "base/task/sequence_manager/test/test_task_queue.h"
+#include "base/task/sequence_manager/test/test_task_time_observer.h"
 #include "base/test/test_mock_time_task_runner.h"
-#include "base/threading/thread_task_runner_handle.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/blink/renderer/platform/scheduler/base/task_queue_manager.h"
-#include "third_party/blink/renderer/platform/scheduler/base/test/task_queue_manager_for_test.h"
-#include "third_party/blink/renderer/platform/scheduler/base/test/test_task_queue.h"
-#include "third_party/blink/renderer/platform/scheduler/base/test/test_task_time_observer.h"
 #include "third_party/blink/renderer/platform/scheduler/worker/non_main_thread_scheduler_helper.h"
 
 namespace blink {
@@ -33,13 +32,12 @@ class AutoAdvancingVirtualTimeDomainTest : public testing::Test {
     test_task_runner_->AdvanceMockTickClock(
         base::TimeDelta::FromMilliseconds(5));
     scheduler_helper_.reset(new NonMainThreadSchedulerHelper(
-        base::sequence_manager::TaskQueueManagerForTest::Create(
-            nullptr, base::ThreadTaskRunnerHandle::Get(),
-            test_task_runner_->GetMockTickClock()),
+        base::sequence_manager::SequenceManagerForTest::Create(
+            nullptr, test_task_runner_, test_task_runner_->GetMockTickClock()),
         nullptr, TaskType::kInternalTest));
 
     scheduler_helper_->AddTaskTimeObserver(&test_task_time_observer_);
-    task_queue_ = scheduler_helper_->DefaultWorkerTaskQueue();
+    task_queue_ = scheduler_helper_->DefaultNonMainThreadTaskQueue();
     initial_time_ = base::Time::FromJsTime(100000.0);
     initial_time_ticks_ = test_task_runner_->NowTicks();
     auto_advancing_time_domain_.reset(new AutoAdvancingVirtualTimeDomain(
@@ -81,8 +79,8 @@ TEST_F(AutoAdvancingVirtualTimeDomainTest, VirtualTimeAdvances) {
 
   base::TimeDelta delay = base::TimeDelta::FromMilliseconds(10);
   bool task_run = false;
-  task_queue_->PostDelayedTask(FROM_HERE, base::BindOnce(NopTask, &task_run),
-                               delay);
+  task_queue_->task_runner()->PostDelayedTask(
+      FROM_HERE, base::BindOnce(NopTask, &task_run), delay);
 
   EXPECT_CALL(mock_observer, OnVirtualTimeAdvanced());
   base::RunLoop().RunUntilIdle();
@@ -101,8 +99,8 @@ TEST_F(AutoAdvancingVirtualTimeDomainTest, VirtualTimeDoesNotAdvance) {
 
   base::TimeDelta delay = base::TimeDelta::FromMilliseconds(10);
   bool task_run = false;
-  task_queue_->PostDelayedTask(FROM_HERE, base::BindOnce(NopTask, &task_run),
-                               delay);
+  task_queue_->task_runner()->PostDelayedTask(
+      FROM_HERE, base::BindOnce(NopTask, &task_run), delay);
 
   auto_advancing_time_domain_->SetCanAdvanceVirtualTime(false);
 
@@ -124,7 +122,7 @@ void RepostingTask(scoped_refptr<base::sequence_manager::TaskQueue> task_queue,
   if (++(*count) >= max_count)
     return;
 
-  task_queue->PostTask(
+  task_queue->task_runner()->PostTask(
       FROM_HERE, base::BindOnce(&RepostingTask, task_queue, max_count, count));
 }
 
@@ -142,7 +140,7 @@ TEST_F(AutoAdvancingVirtualTimeDomainTest,
   int count = 0;
   int delayed_task_run_at_count = 0;
   RepostingTask(task_queue_, 1000, &count);
-  task_queue_->PostDelayedTask(
+  task_queue_->task_runner()->PostDelayedTask(
       FROM_HERE,
       base::BindOnce(DelayedTask, &count, &delayed_task_run_at_count),
       base::TimeDelta::FromMilliseconds(10));
@@ -161,7 +159,7 @@ TEST_F(AutoAdvancingVirtualTimeDomainTest,
   int count = 0;
   int delayed_task_run_at_count = 0;
   RepostingTask(task_queue_, 1000, &count);
-  task_queue_->PostDelayedTask(
+  task_queue_->task_runner()->PostDelayedTask(
       FROM_HERE,
       base::BindOnce(DelayedTask, &count, &delayed_task_run_at_count),
       base::TimeDelta::FromMilliseconds(10));
@@ -206,8 +204,8 @@ TEST_F(AutoAdvancingVirtualTimeDomainTest, BaseTimeOverriden) {
   // Make time advance.
   base::TimeDelta delay = base::TimeDelta::FromMilliseconds(10);
   bool task_run = false;
-  task_queue_->PostDelayedTask(FROM_HERE, base::BindOnce(NopTask, &task_run),
-                               delay);
+  task_queue_->task_runner()->PostDelayedTask(
+      FROM_HERE, base::BindOnce(NopTask, &task_run), delay);
   base::RunLoop().RunUntilIdle();
 
   EXPECT_EQ(base::Time::Now(), initial_time + delay);
@@ -220,8 +218,8 @@ TEST_F(AutoAdvancingVirtualTimeDomainTest, BaseTimeTicksOverriden) {
   // Make time advance.
   base::TimeDelta delay = base::TimeDelta::FromMilliseconds(20);
   bool task_run = false;
-  task_queue_->PostDelayedTask(FROM_HERE, base::BindOnce(NopTask, &task_run),
-                               delay);
+  task_queue_->task_runner()->PostDelayedTask(
+      FROM_HERE, base::BindOnce(NopTask, &task_run), delay);
   base::RunLoop().RunUntilIdle();
 
   EXPECT_EQ(base::TimeTicks::Now(), initial_time + delay);
@@ -233,8 +231,9 @@ TEST_F(AutoAdvancingVirtualTimeDomainTest,
 
   // Post a task for t+10ms.
   bool task_run = false;
-  task_queue_->PostDelayedTask(FROM_HERE, base::BindOnce(NopTask, &task_run),
-                               base::TimeDelta::FromMilliseconds(10));
+  task_queue_->task_runner()->PostDelayedTask(
+      FROM_HERE, base::BindOnce(NopTask, &task_run),
+      base::TimeDelta::FromMilliseconds(10));
 
   // Advance virtual time past task time to t+100ms.
   auto_advancing_time_domain_->MaybeAdvanceVirtualTime(

@@ -511,11 +511,6 @@ TimeTicks QPCNow() {
   return TimeTicks() + QPCValueToTimeDelta(QPCNowRaw());
 }
 
-bool IsBuggyAthlon(const CPU& cpu) {
-  // On Athlon X2 CPUs (e.g. model 15) QueryPerformanceCounter is unreliable.
-  return cpu.vendor_name() == "AuthenticAMD" && cpu.family() == 15;
-}
-
 void InitializeNowFunctionPointer() {
   LARGE_INTEGER ticks_per_sec = {};
   if (!QueryPerformanceFrequency(&ticks_per_sec))
@@ -527,15 +522,13 @@ void InitializeNowFunctionPointer() {
   // If the QPC implementation is expensive and/or unreliable, TimeTicks::Now()
   // will still use the low-resolution clock. A CPU lacking a non-stop time
   // counter will cause Windows to provide an alternate QPC implementation that
-  // works, but is expensive to use. Certain Athlon CPUs are known to make the
-  // QPC implementation unreliable.
+  // works, but is expensive to use.
   //
   // Otherwise, Now uses the high-resolution QPC clock. As of 21 August 2015,
   // ~72% of users fall within this category.
   TimeTicksNowFunction now_function;
   CPU cpu;
-  if (ticks_per_sec.QuadPart <= 0 ||
-      !cpu.has_non_stop_time_stamp_counter() || IsBuggyAthlon(cpu)) {
+  if (ticks_per_sec.QuadPart <= 0 || !cpu.has_non_stop_time_stamp_counter()) {
     now_function = &RolloverProtectedNow;
   } else {
     now_function = &QPCNow;
@@ -647,8 +640,7 @@ ThreadTicks ThreadTicks::GetForThread(
 
 // static
 bool ThreadTicks::IsSupportedWin() {
-  static bool is_supported =
-      CPU().has_non_stop_time_stamp_counter() && !IsBuggyAthlon(CPU());
+  static bool is_supported = CPU().has_non_stop_time_stamp_counter();
   return is_supported;
 }
 
@@ -657,6 +649,12 @@ void ThreadTicks::WaitUntilInitializedWin() {
   while (TSCTicksPerSecond() == 0)
     ::Sleep(10);
 }
+
+#if defined(_M_ARM64) && defined(__clang__)
+#define ReadCycleCounter() _ReadStatusReg(ARM64_PMCCNTR_EL0)
+#else
+#define ReadCycleCounter() __rdtsc()
+#endif
 
 double ThreadTicks::TSCTicksPerSecond() {
   DCHECK(IsSupported());
@@ -678,12 +676,13 @@ double ThreadTicks::TSCTicksPerSecond() {
 
   // The first time that this function is called, make an initial reading of the
   // TSC and the performance counter.
-  static const uint64_t tsc_initial = __rdtsc();
+
+  static const uint64_t tsc_initial = ReadCycleCounter();
   static const uint64_t perf_counter_initial = QPCNowRaw();
 
   // Make a another reading of the TSC and the performance counter every time
   // that this function is called.
-  uint64_t tsc_now = __rdtsc();
+  uint64_t tsc_now = ReadCycleCounter();
   uint64_t perf_counter_now = QPCNowRaw();
 
   // Reset the thread priority.
@@ -717,6 +716,7 @@ double ThreadTicks::TSCTicksPerSecond() {
   return tsc_ticks_per_second;
 }
 
+#undef ReadCycleCounter
 // static
 TimeTicks TimeTicks::FromQPCValue(LONGLONG qpc_value) {
   return TimeTicks() + QPCValueToTimeDelta(qpc_value);

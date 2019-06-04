@@ -37,8 +37,7 @@ namespace WTF {
 
 class WTF_EXPORT StringBuilder {
  public:
-  StringBuilder() : buffer_(nullptr), length_(0), is8_bit_(true) {}
-
+  StringBuilder() : no_buffer_() {}
   ~StringBuilder() { Clear(); }
 
   void Append(const UChar*, unsigned length);
@@ -55,7 +54,7 @@ class WTF_EXPORT StringBuilder {
     if (!length_ && !HasBuffer() && !other.string_.IsNull()) {
       string_ = other.string_;
       length_ = other.string_.length();
-      is8_bit_ = other.string_.Is8Bit();
+      is_8bit_ = other.string_.Is8Bit();
       return;
     }
 
@@ -95,7 +94,7 @@ class WTF_EXPORT StringBuilder {
     if (!length_ && !HasBuffer() && impl) {
       string_ = impl;
       length_ = impl->length();
-      is8_bit_ = impl->Is8Bit();
+      is_8bit_ = impl->Is8Bit();
       return;
     }
 
@@ -106,22 +105,22 @@ class WTF_EXPORT StringBuilder {
   }
 
   void Append(UChar c) {
-    if (is8_bit_ && c <= 0xFF) {
+    if (is_8bit_ && c <= 0xFF) {
       Append(static_cast<LChar>(c));
       return;
     }
     EnsureBuffer16(1);
-    buffer16_->push_back(c);
+    buffer16_.push_back(c);
     ++length_;
   }
 
   void Append(LChar c) {
-    if (!is8_bit_) {
+    if (!is_8bit_) {
       Append(static_cast<UChar>(c));
       return;
     }
     EnsureBuffer8(1);
-    buffer8_->push_back(c);
+    buffer8_.push_back(c);
     ++length_;
   }
 
@@ -161,32 +160,32 @@ class WTF_EXPORT StringBuilder {
 
   UChar operator[](unsigned i) const {
     SECURITY_DCHECK(i < length_);
-    if (is8_bit_)
+    if (is_8bit_)
       return Characters8()[i];
     return Characters16()[i];
   }
 
   const LChar* Characters8() const {
-    DCHECK(is8_bit_);
+    DCHECK(is_8bit_);
     if (!length())
       return nullptr;
     if (!string_.IsNull())
       return string_.Characters8();
-    DCHECK(buffer8_);
-    return buffer8_->data();
+    DCHECK(has_buffer_);
+    return buffer8_.data();
   }
 
   const UChar* Characters16() const {
-    DCHECK(!is8_bit_);
+    DCHECK(!is_8bit_);
     if (!length())
       return nullptr;
     if (!string_.IsNull())
       return string_.Characters16();
-    DCHECK(buffer16_);
-    return buffer16_->data();
+    DCHECK(has_buffer_);
+    return buffer16_.data();
   }
 
-  bool Is8Bit() const { return is8_bit_; }
+  bool Is8Bit() const { return is_8bit_; }
 
   void Clear();
   void Swap(StringBuilder&);
@@ -195,33 +194,34 @@ class WTF_EXPORT StringBuilder {
   static const unsigned kInlineBufferSize = 16;
   static unsigned InitialBufferSize() { return kInlineBufferSize; }
 
-  typedef Vector<LChar, kInlineBufferSize> Buffer8;
-  typedef Vector<UChar, kInlineBufferSize> Buffer16;
+  typedef Vector<LChar, kInlineBufferSize / sizeof(LChar)> Buffer8;
+  typedef Vector<UChar, kInlineBufferSize / sizeof(UChar)> Buffer16;
 
   void EnsureBuffer8(unsigned added_size) {
-    DCHECK(is8_bit_);
+    DCHECK(is_8bit_);
     if (!HasBuffer())
       CreateBuffer8(added_size);
   }
 
   void EnsureBuffer16(unsigned added_size) {
-    if (is8_bit_ || !HasBuffer())
+    if (is_8bit_ || !HasBuffer())
       CreateBuffer16(added_size);
   }
 
   void CreateBuffer8(unsigned added_size);
   void CreateBuffer16(unsigned added_size);
   void ClearBuffer();
-  bool HasBuffer() const { return buffer_; }
+  bool HasBuffer() const { return has_buffer_; }
 
   String string_;
   union {
-    Buffer8* buffer8_;
-    Buffer16* buffer16_;
-    void* buffer_;
+    char no_buffer_;
+    Buffer8 buffer8_;
+    Buffer16 buffer16_;
   };
-  unsigned length_;
-  bool is8_bit_;
+  unsigned length_ = 0;
+  bool is_8bit_ = true;
+  bool has_buffer_ = false;
 
   DISALLOW_COPY_AND_ASSIGN(StringBuilder);
 };
@@ -258,7 +258,7 @@ bool DeprecatedEqualIgnoringCase(const StringBuilder& s,
 inline bool DeprecatedEqualIgnoringCase(const StringBuilder& s,
                                         const char* string) {
   return DeprecatedEqualIgnoringCase(s, reinterpret_cast<const LChar*>(string),
-                                     strlen(string));
+                                     SafeCast<wtf_size_t>(strlen(string)));
 }
 
 template <typename StringType>

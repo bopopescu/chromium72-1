@@ -31,6 +31,11 @@ Polymer({
     /** @type {!print_preview_new.State} */
     state: Number,
 
+    noDestinationsFound: {
+      type: Boolean,
+      value: false,
+    },
+
     /** @private {boolean} */
     showCloudPrintPromo_: {
       type: Boolean,
@@ -58,15 +63,22 @@ Polymer({
    * @private
    */
   shouldDisableButton_: function() {
-    return !this.destinationStore ||
+    return !this.destinationStore || this.noDestinationsFound ||
         (this.disabled &&
          this.state != print_preview_new.State.INVALID_PRINTER);
   },
 
   /** @private */
   onDestinationSet_: function() {
-    if (this.destination && this.destination.id)
-      this.loadingDestination_ = false;
+    this.loadingDestination_ = !this.destination || !this.destination.id;
+  },
+
+  /**
+   * @return {boolean} Whether to show the spinner.
+   * @private
+   */
+  shouldShowSpinner_: function() {
+    return this.loadingDestination_ && !this.noDestinationsFound;
   },
 
   /**
@@ -74,6 +86,10 @@ Polymer({
    * @private
    */
   getStatusText_: function() {
+    // |destination| can be either undefined, or null here.
+    if (!this.destination)
+      return '';
+
     return this.destination.shouldShowInvalidCertificateError ?
         this.i18n('noLongerSupportedFragment') :
         this.destination.connectionStatusText;
@@ -84,11 +100,7 @@ Polymer({
     this.destinationStore.startLoadAllDestinations();
     this.invitationStore.startLoadingInvitations();
     const dialog = this.$.destinationDialog.get();
-    // This async() call is a workaround to prevent a DCHECK - see
-    // https://crbug.com/804047.
-    this.async(() => {
-      dialog.show();
-    }, 1);
+    dialog.show();
   },
 
   showCloudPrintPromo: function() {
@@ -110,5 +122,10 @@ Polymer({
     return !!this.destination &&
         (this.destination.isOffline ||
          this.destination.shouldShowInvalidCertificateError);
+  },
+
+  /** @private */
+  onDialogClose_: function() {
+    this.$$('paper-button').focus();
   },
 });

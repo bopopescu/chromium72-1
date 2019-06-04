@@ -9,6 +9,7 @@
 
 #include "base/command_line.h"
 #include "base/stl_util.h"
+#include "base/strings/string_number_conversions.h"
 #include "base/strings/string_split.h"
 #include "base/strings/sys_string_conversions.h"
 #include "build/build_config.h"
@@ -37,6 +38,10 @@ const char kSwitchUrlSource[] = "url-source";
 // Disables differential updates.
 const char kSwitchDisableDeltaUpdates[] = "disable-delta-updates";
 
+// Configures the initial delay before the first component update check. The
+// value is in seconds.
+const char kInitialDelay[] = "initial-delay";
+
 #if defined(OS_WIN)
 // Disables background downloads.
 const char kSwitchDisableBackgroundDownloads[] = "disable-background-downloads";
@@ -50,8 +55,7 @@ std::string GetSwitchArgument(const std::vector<std::string>& vec,
                               const char* test) {
   if (vec.empty())
     return std::string();
-  for (std::vector<std::string>::const_iterator it = vec.begin();
-       it != vec.end(); ++it) {
+  for (auto it = vec.begin(); it != vec.end(); ++it) {
     const std::size_t found = it->find("=");
     if (found != std::string::npos) {
       if (it->substr(0, found) == test) {
@@ -91,6 +95,12 @@ ComponentUpdaterCommandLineConfigPolicy::
     url_source_override_ = GURL(switch_url_source);
     DCHECK(url_source_override_.is_valid());
   }
+
+  const std::string initial_delay =
+      GetSwitchArgument(switch_values, kInitialDelay);
+  int initial_delay_seconds = 0;
+  if (base::StringToInt(initial_delay, &initial_delay_seconds))
+    initial_delay_ = initial_delay_seconds;
 }
 
 bool ComponentUpdaterCommandLineConfigPolicy::BackgroundDownloadsEnabled()
@@ -116,6 +126,10 @@ bool ComponentUpdaterCommandLineConfigPolicy::TestRequest() const {
 
 GURL ComponentUpdaterCommandLineConfigPolicy::UrlSourceOverride() const {
   return url_source_override_;
+}
+
+int ComponentUpdaterCommandLineConfigPolicy::InitialDelay() const {
+  return initial_delay_;
 }
 
 }  // namespace component_updater

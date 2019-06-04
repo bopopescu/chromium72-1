@@ -42,15 +42,19 @@ struct NET_EXPORT HttpRequestInfo {
   // tracked by the server (e.g. without channel id).
   PrivacyMode privacy_mode;
 
-  // If present, the host of the referrer whose TokenBindingID should be
-  // included in a referred TokenBinding.
-  std::string token_binding_referrer;
-
   // Tag applied to all sockets used to service request.
   SocketTag socket_tag;
 
   // Network traffic annotation received from URL request.
   net::MutableNetworkTrafficAnnotationTag traffic_annotation;
+
+  // Reporting upload nesting depth of this request.
+  //
+  // If the request is not a Reporting upload, the depth is 0.
+  //
+  // If the request is a Reporting upload, the depth is the max of the depth
+  // of the requests reported within it plus 1.
+  int reporting_upload_depth;
 };
 
 }  // namespace net

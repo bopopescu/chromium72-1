@@ -4,7 +4,7 @@
 
 #include "net/third_party/quic/test_tools/packet_reordering_writer.h"
 
-namespace net {
+namespace quic {
 namespace test {
 
 PacketReorderingWriter::PacketReorderingWriter() = default;
@@ -33,11 +33,11 @@ WriteResult PacketReorderingWriter::WritePacket(
   }
   // Still have packet to wait.
   DCHECK_LT(0u, num_packets_to_wait_) << "Only allow one packet to be delayed";
-  delayed_data_ = std::string(buffer, buf_len);
+  delayed_data_ = QuicString(buffer, buf_len);
   delayed_self_address_ = self_address;
   delayed_peer_address_ = peer_address;
   if (options != nullptr) {
-    delayed_options_.reset(options->Clone());
+    delayed_options_ = options->Clone();
   }
   delay_next_ = false;
   return WriteResult(WRITE_STATUS_OK, buf_len);
@@ -50,4 +50,4 @@ void PacketReorderingWriter::SetDelay(size_t num_packets_to_wait) {
 }
 
 }  // namespace test
-}  // namespace net
+}  // namespace quic

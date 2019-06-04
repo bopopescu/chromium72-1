@@ -22,7 +22,7 @@
 #include "base/macros.h"
 #include "base/posix/eintr_wrapper.h"
 #include "base/strings/string_util.h"
-#include "base/task_scheduler/post_task.h"
+#include "base/task/post_task.h"
 #include "base/threading/thread_task_runner_handle.h"
 #include "chromeos/dbus/pipe_reader.h"
 #include "dbus/bus.h"
@@ -734,12 +734,9 @@ class DebugDaemonClientImpl : public DebugDaemonClient {
   }
 
   void OnStopConcierge(ConciergeCallback callback, dbus::Response* response) {
-    bool result = false;
-    dbus::MessageReader reader(response);
-    if (response) {
-      reader.PopBool(&result);
-    }
-    std::move(callback).Run(result);
+    // Debugd just sends back an empty response, so we just check if
+    // the response exists
+    std::move(callback).Run(response != nullptr);
   }
 
   void OnSetRlzPingSent(SetRlzPingSentCallback callback,

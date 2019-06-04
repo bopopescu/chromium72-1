@@ -4,16 +4,11 @@
 
 #include "extensions/shell/browser/shell_app_delegate.h"
 
+#include "content/public/browser/file_select_listener.h"
 #include "content/public/browser/web_contents.h"
 #include "extensions/browser/media_capture_util.h"
 #include "extensions/common/constants.h"
 #include "extensions/shell/browser/shell_extension_web_contents_observer.h"
-
-#if defined(ENABLE_MEMORYMANAGER_WEBAPI)
-#include "content/public/browser/render_view_host.h"
-#include "neva/neva_chromium/content/common/injection_messages.h"
-#include "pal/public/pal.h"
-#endif
 
 namespace extensions {
 
@@ -24,9 +19,6 @@ ShellAppDelegate::~ShellAppDelegate() {
 }
 
 void ShellAppDelegate::InitWebContents(content::WebContents* web_contents) {
-#if defined(USE_NEVA_APPRUNTIME)
-  web_contents->EnableInspectable();
-#endif
   ShellExtensionWebContentsObserver::CreateForWebContents(web_contents);
 }
 
@@ -35,14 +27,6 @@ void ShellAppDelegate::RenderViewCreated(
   // The views implementation of AppWindow takes focus via SetInitialFocus()
   // and views::WebView but app_shell is aura-only and must do it manually.
   content::WebContents::FromRenderViewHost(render_view_host)->Focus();
-
-#if defined(ENABLE_MEMORYMANAGER_WEBAPI)
-  if (pal::Pal::GetPlatformInstance()->GetMemoryManagerInterface()) {
-    render_view_host->Send(
-        new InjectionMsg_LoadExtension(
-            render_view_host->GetRoutingID(), std::string("v8/memorymanager")));
-  }
-#endif
 }
 
 void ShellAppDelegate::ResizeWebContents(content::WebContents* web_contents,
@@ -76,17 +60,19 @@ content::ColorChooser* ShellAppDelegate::ShowColorChooser(
 
 void ShellAppDelegate::RunFileChooser(
     content::RenderFrameHost* render_frame_host,
-    const content::FileChooserParams& params) {
+    std::unique_ptr<content::FileSelectListener> listener,
+    const blink::mojom::FileChooserParams& params) {
   NOTIMPLEMENTED();
+  listener->FileSelectionCanceled();
 }
 
 void ShellAppDelegate::RequestMediaAccessPermission(
     content::WebContents* web_contents,
     const content::MediaStreamRequest& request,
-    const content::MediaResponseCallback& callback,
+    content::MediaResponseCallback callback,
     const extensions::Extension* extension) {
-  media_capture_util::GrantMediaStreamRequest(
-      web_contents, request, callback, extension);
+  media_capture_util::GrantMediaStreamRequest(web_contents, request,
+                                              std::move(callback), extension);
 }
 
 bool ShellAppDelegate::CheckMediaAccessPermission(
@@ -94,18 +80,6 @@ bool ShellAppDelegate::CheckMediaAccessPermission(
     const GURL& security_origin,
     content::MediaStreamType type,
     const Extension* extension) {
-  if (type == content::MEDIA_DEVICE_AUDIO_CAPTURE ||
-      type == content::MEDIA_DEVICE_VIDEO_CAPTURE) {
-    // VerifyMediaAccessPermission() will crash if there is
-    // no permission for audio capture / video capture.
-    // Let's make an error log and return false instead.
-    // TODO(alexander.trofimov@lge.com): Remove this patch
-    // right after corresponding features are supported
-    // and crash removed from VerifyMediaAccessPermission().
-    LOG(ERROR) << "Audio capture/video capture request but "
-               << "this feature is not supported yet.";
-    return false;
-  }
   media_capture_util::VerifyMediaAccessPermission(type, extension);
   return true;
 }
@@ -133,6 +107,18 @@ void ShellAppDelegate::SetTerminatingCallback(const base::Closure& callback) {
 bool ShellAppDelegate::TakeFocus(content::WebContents* web_contents,
                                  bool reverse) {
   return false;
+}
+
+gfx::Size ShellAppDelegate::EnterPictureInPicture(
+    content::WebContents* web_contents,
+    const viz::SurfaceId& surface_id,
+    const gfx::Size& natural_size) {
+  NOTREACHED();
+  return gfx::Size();
+}
+
+void ShellAppDelegate::ExitPictureInPicture() {
+  NOTREACHED();
 }
 
 }  // namespace extensions

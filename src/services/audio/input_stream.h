@@ -11,15 +11,16 @@
 #include "base/memory/scoped_refptr.h"
 #include "base/sync_socket.h"
 #include "base/unguessable_token.h"
-#include "media/audio/audio_input_controller.h"
 #include "media/mojo/interfaces/audio_data_pipe.mojom.h"
 #include "media/mojo/interfaces/audio_input_stream.mojom.h"
 #include "media/mojo/interfaces/audio_logging.mojom.h"
 #include "mojo/public/cpp/bindings/binding.h"
+#include "services/audio/input_controller.h"
+#include "services/audio/public/mojom/audio_processing.mojom.h"
+#include "services/audio/stream_monitor_coordinator.h"
 
 namespace media {
 
-class AudioInputSyncWriter;
 class AudioManager;
 class AudioParameters;
 
@@ -27,13 +28,14 @@ class AudioParameters;
 
 namespace audio {
 
+class InputSyncWriter;
 class UserInputMonitor;
 
 class InputStream final : public media::mojom::AudioInputStream,
-                          public media::AudioInputController::EventHandler {
+                          public InputController::EventHandler {
  public:
   using CreatedCallback =
-      base::OnceCallback<void(media::mojom::AudioDataPipePtr,
+      base::OnceCallback<void(media::mojom::ReadOnlyAudioDataPipePtr,
                               bool,
                               const base::Optional<base::UnguessableToken>&)>;
   using DeleteCallback = base::OnceCallback<void(InputStream*)>;
@@ -49,7 +51,9 @@ class InputStream final : public media::mojom::AudioInputStream,
               const std::string& device_id,
               const media::AudioParameters& params,
               uint32_t shared_memory_count,
-              bool enable_agc);
+              bool enable_agc,
+              StreamMonitorCoordinator* stream_monitor_coordinator,
+              mojom::AudioProcessingConfigPtr processing_config);
   ~InputStream() override;
 
   const base::UnguessableToken& id() const { return id_; }
@@ -59,9 +63,9 @@ class InputStream final : public media::mojom::AudioInputStream,
   void Record() override;
   void SetVolume(double volume) override;
 
-  // media::AudioInputController::EventHandler implementation.
+  // InputController::EventHandler implementation.
   void OnCreated(bool initially_muted) override;
-  void OnError(media::AudioInputController::ErrorCode error_code) override;
+  void OnError(InputController::ErrorCode error_code) override;
   void OnLog(base::StringPiece) override;
   void OnMuted(bool is_muted) override;
 
@@ -83,8 +87,8 @@ class InputStream final : public media::mojom::AudioInputStream,
   DeleteCallback delete_callback_;
 
   base::CancelableSyncSocket foreign_socket_;
-  const std::unique_ptr<media::AudioInputSyncWriter> writer_;
-  scoped_refptr<media::AudioInputController> controller_;
+  const std::unique_ptr<InputSyncWriter> writer_;
+  std::unique_ptr<InputController> controller_;
   const std::unique_ptr<UserInputMonitor> user_input_monitor_;
 
   SEQUENCE_CHECKER(owning_sequence_);

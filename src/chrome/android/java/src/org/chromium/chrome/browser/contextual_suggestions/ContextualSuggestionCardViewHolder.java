@@ -5,7 +5,7 @@
 package org.chromium.chrome.browser.contextual_suggestions;
 
 import org.chromium.chrome.R;
-import org.chromium.chrome.browser.ntp.ContextMenuManager;
+import org.chromium.chrome.browser.native_page.ContextMenuManager;
 import org.chromium.chrome.browser.ntp.snippets.SnippetArticleViewHolder;
 import org.chromium.chrome.browser.offlinepages.OfflinePageBridge;
 import org.chromium.chrome.browser.suggestions.SuggestionsBinder;
@@ -24,7 +24,8 @@ public class ContextualSuggestionCardViewHolder extends SnippetArticleViewHolder
 
     @Override
     public boolean isItemSupported(@ContextMenuManager.ContextMenuItemId int menuItemId) {
-        return menuItemId != ContextMenuManager.ID_LEARN_MORE && super.isItemSupported(menuItemId);
+        return menuItemId != ContextMenuManager.ContextMenuItemId.LEARN_MORE
+                && super.isItemSupported(menuItemId);
     }
 
     @Override

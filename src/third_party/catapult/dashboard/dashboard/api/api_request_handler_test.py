@@ -15,8 +15,12 @@ from dashboard.common import testing_common
 
 
 class TestApiRequestHandler(api_request_handler.ApiRequestHandler):
-  def AuthorizedPost(self, *_):
-    return {'foo': 'bar'}
+
+  def _CheckUser(self):
+    return self._CheckIsInternalUser()
+
+  def Post(self):
+    return {'foo': 'response'}
 
 
 class ApiRequestHandlerTest(testing_common.TestCase):
@@ -28,22 +32,22 @@ class ApiRequestHandlerTest(testing_common.TestCase):
         [(r'/api/test', TestApiRequestHandler)])
     self.testapp = webtest.TestApp(app)
 
-  @mock.patch.object(api_auth, 'Authorize')
-  def testPost_Authorized_AuthorizedPostCalled(self, mock_authorize):
-    response = self.testapp.post('/api/test')
+  def testPost_Authorized_PostCalled(self):
+    self.SetCurrentUserOAuth(testing_common.INTERNAL_USER)
+    self.SetCurrentClientIdOAuth(api_auth.OAUTH_CLIENT_ID_WHITELIST[0])
+    response = self.Post('/api/test')
     self.assertEqual(
-        {'foo': 'bar'},
+        {'foo': 'response'},
         json.loads(response.body))
-    self.assertTrue(mock_authorize.called)
 
   @mock.patch.object(
       api_auth,
       'Authorize',
       mock.MagicMock(side_effect=api_auth.OAuthError))
   @mock.patch.object(
-      TestApiRequestHandler, 'AuthorizedPost')
-  def testPost_Unauthorized_AuthorizedPostNotCalled(self, mock_post):
-    response = self.testapp.post('/api/test', status=403)
+      TestApiRequestHandler, 'Post')
+  def testPost_Unauthorized_PostNotCalled(self, mock_post):
+    response = self.Post('/api/test', status=403)
     self.assertEqual(
         {'error': 'User authentication error'},
         json.loads(response.body))
@@ -51,10 +55,12 @@ class ApiRequestHandlerTest(testing_common.TestCase):
 
   @mock.patch.object(api_auth, 'Authorize')
   @mock.patch.object(
-      TestApiRequestHandler, 'AuthorizedPost',
+      TestApiRequestHandler, 'Post',
       mock.MagicMock(side_effect=api_request_handler.BadRequestError('foo')))
   def testPost_BadRequest_400(self, _):
-    response = self.testapp.post('/api/test', status=400)
+    self.SetCurrentUserOAuth(testing_common.INTERNAL_USER)
+    self.SetCurrentClientIdOAuth(api_auth.OAUTH_CLIENT_ID_WHITELIST[0])
+    response = self.Post('/api/test', status=400)
     self.assertEqual(
         {'error': 'foo'},
         json.loads(response.body))
@@ -63,7 +69,7 @@ class ApiRequestHandlerTest(testing_common.TestCase):
       api_auth, 'Authorize',
       mock.MagicMock(side_effect=api_auth.OAuthError))
   def testPost_OAuthError_403(self):
-    response = self.testapp.post('/api/test', status=403)
+    response = self.Post('/api/test', status=403)
     self.assertEqual(
         {'error': 'User authentication error'},
         json.loads(response.body))
@@ -72,72 +78,67 @@ class ApiRequestHandlerTest(testing_common.TestCase):
       api_auth, 'Authorize',
       mock.MagicMock(side_effect=api_auth.NotLoggedInError))
   def testPost_NotLoggedInError_401(self):
-    response = self.testapp.post('/api/test', status=401)
+    response = self.Post('/api/test', status=401)
     self.assertEqual(
         {'error': 'User not authenticated'},
         json.loads(response.body))
 
-  @mock.patch.object(api_auth, 'Authorize')
-  def testOptions_NoOrigin_HeadersNotSet(self, _):
+  def testOptions_NoOrigin_HeadersNotSet(self):
     response = self.testapp.options('/api/test')
     self.assertListEqual(
-        [('Content-Type', 'text/html; charset=utf-8'),
-         ('Content-Length', '0'),
-         ('Cache-Control', 'no-cache')],
+        [('Content-Length', '0'),
+         ('Cache-Control', 'no-cache'),
+         ('Content-Type', 'application/json; charset=utf-8')],
         response.headerlist)
 
-  @mock.patch.object(api_auth, 'Authorize')
-  def testOptions_InvalidOrigin_HeadersNotSet(self, _):
+  def testOptions_InvalidOrigin_HeadersNotSet(self):
     api_request_handler._ALLOWED_ORIGINS = ['foo.appspot.com']
     response = self.testapp.options(
         '/api/test', headers={'origin': 'https://bar.appspot.com'})
     self.assertListEqual(
-        [('Content-Type', 'text/html; charset=utf-8'),
-         ('Content-Length', '0'),
-         ('Cache-Control', 'no-cache')],
+        [('Content-Length', '0'),
+         ('Cache-Control', 'no-cache'),
+         ('Content-Type', 'application/json; charset=utf-8')],
         response.headerlist)
 
-  @mock.patch.object(api_auth, 'Authorize')
-  def testPost_ValidProdOrigin_HeadersSet(self, _):
+  def testPost_ValidProdOrigin_HeadersSet(self):
     api_request_handler._ALLOWED_ORIGINS = ['foo.appspot.com']
-    response = self.testapp.post(
+    response = self.testapp.options(
         '/api/test', headers={'origin': 'https://foo.appspot.com'})
     self.assertListEqual(
-        [('Content-Type', 'text/html; charset=utf-8'),
+        [('Content-Length', '0'),
          ('Cache-Control', 'no-cache'),
+         ('Content-Type', 'application/json; charset=utf-8'),
          ('Access-Control-Allow-Origin', 'https://foo.appspot.com'),
          ('Access-Control-Allow-Credentials', 'true'),
          ('Access-Control-Allow-Methods', 'GET,OPTIONS,POST'),
          ('Access-Control-Allow-Headers', 'Accept,Authorization,Content-Type'),
-         ('Access-Control-Max-Age', '3600'),
-         ('Content-Length', '14')],
+         ('Access-Control-Max-Age', '3600')],
         response.headerlist)
 
-  @mock.patch.object(api_auth, 'Authorize')
-  def testPost_ValidDevOrigin_HeadersSet(self, _):
+  def testPost_ValidDevOrigin_HeadersSet(self):
     api_request_handler._ALLOWED_ORIGINS = ['foo.appspot.com']
-    response = self.testapp.post(
+    response = self.testapp.options(
         '/api/test',
         headers={'origin': 'https://123jkjasdf-dot-foo.appspot.com'})
     self.assertListEqual(
-        [('Content-Type', 'text/html; charset=utf-8'),
+        [('Content-Length', '0'),
          ('Cache-Control', 'no-cache'),
+         ('Content-Type', 'application/json; charset=utf-8'),
          ('Access-Control-Allow-Origin',
           'https://123jkjasdf-dot-foo.appspot.com'),
          ('Access-Control-Allow-Credentials', 'true'),
          ('Access-Control-Allow-Methods', 'GET,OPTIONS,POST'),
          ('Access-Control-Allow-Headers', 'Accept,Authorization,Content-Type'),
-         ('Access-Control-Max-Age', '3600'),
-         ('Content-Length', '14')],
+         ('Access-Control-Max-Age', '3600')],
         response.headerlist)
 
-  @mock.patch.object(api_auth, 'Authorize')
-  def testPost_InvalidOrigin_HeadersNotSet(self, _):
-    response = self.testapp.post('/api/test')
+  def testPost_InvalidOrigin_HeadersNotSet(self):
+    response = self.testapp.options('/api/test')
     self.assertListEqual(
-        [('Content-Type', 'text/html; charset=utf-8'),
+        [('Content-Length', '0'),
          ('Cache-Control', 'no-cache'),
-         ('Content-Length', '14')],
+         ('Content-Type', 'application/json; charset=utf-8')],
         response.headerlist)
 
 

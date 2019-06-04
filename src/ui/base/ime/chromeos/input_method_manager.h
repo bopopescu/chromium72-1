@@ -88,7 +88,12 @@ class UI_BASE_IME_EXPORT InputMethodManager {
         bool is_extra_input_options_enabled,
         bool is_emoji_enabled,
         bool is_handwriting_enabled,
-        bool is_voice_enabled){};
+        bool is_voice_enabled) {}
+
+    // Called when an input method extension is added or removed.
+    virtual void OnInputMethodExtensionAdded(const std::string& extension_id) {}
+    virtual void OnInputMethodExtensionRemoved(
+        const std::string& extension_id) {}
   };
 
   // CandidateWindowObserver is notified of events related to the candidate
@@ -223,10 +228,12 @@ class UI_BASE_IME_EXPORT InputMethodManager {
 
     // Sets the currently allowed input methods (e.g. due to policy). Invalid
     // input method ids are ignored. Passing an empty vector means that all
-    // input methods are allowed, which is the default.  When allowed input
-    // methods are set, these are also automatically enabled.
+    // input methods are allowed, which is the default.  When
+    // |enable_allowed_input_menthods| is true, the allowed input methods are
+    // also automatically enabled.
     virtual bool SetAllowedInputMethods(
-        const std::vector<std::string>& allowed_input_method_ids) = 0;
+        const std::vector<std::string>& allowed_input_method_ids,
+        bool enable_allowed_input_methods) = 0;
 
     // Returns the currently allowed input methods, as set by
     // SetAllowedInputMethodIds. An empty vector means that all input methods
@@ -347,6 +354,12 @@ class UI_BASE_IME_EXPORT InputMethodManager {
   // Gets the implementation of the keyboard controller.
   virtual ui::InputMethodKeyboardController*
   GetInputMethodKeyboardController() = 0;
+
+  // Notifies an input method extension is added or removed.
+  virtual void NotifyInputMethodExtensionAdded(
+      const std::string& extension_id) = 0;
+  virtual void NotifyInputMethodExtensionRemoved(
+      const std::string& extension_id) = 0;
 };
 
 }  // namespace input_method

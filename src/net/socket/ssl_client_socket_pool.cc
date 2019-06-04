@@ -43,14 +43,14 @@ SSLSocketParams::SSLSocketParams(
     const HostPortPair& host_and_port,
     const SSLConfig& ssl_config,
     PrivacyMode privacy_mode,
-    int load_flags)
+    bool ignore_certificate_errors)
     : direct_params_(direct_params),
       socks_proxy_params_(socks_proxy_params),
       http_proxy_params_(http_proxy_params),
       host_and_port_(host_and_port),
       ssl_config_(ssl_config),
       privacy_mode_(privacy_mode),
-      load_flags_(load_flags) {
+      ignore_certificate_errors_(ignore_certificate_errors) {
   // Only one set of lower level pool params should be non-NULL.
   DCHECK((direct_params_ && !socks_proxy_params_ && !http_proxy_params_) ||
          (!direct_params_ && socks_proxy_params_ && !http_proxy_params_) ||
@@ -132,8 +132,8 @@ SSLConnectJob::SSLConnectJob(const std::string& group_name,
                     : (params->privacy_mode() == PRIVACY_MODE_ENABLED
                            ? "pm/" + context.ssl_session_cache_shard
                            : context.ssl_session_cache_shard))),
-      callback_(
-          base::Bind(&SSLConnectJob::OnIOComplete, base::Unretained(this))) {}
+      callback_(base::BindRepeating(&SSLConnectJob::OnIOComplete,
+                                    base::Unretained(this))) {}
 
 SSLConnectJob::~SSLConnectJob() = default;
 
@@ -179,7 +179,7 @@ void SSLConnectJob::OnIOComplete(int result) {
 }
 
 int SSLConnectJob::DoLoop(int result) {
-  TRACE_EVENT0(kNetTracingCategory, "SSLConnectJob::DoLoop");
+  TRACE_EVENT0(NetTracingCategory(), "SSLConnectJob::DoLoop");
   DCHECK_NE(next_state_, STATE_NONE);
 
   int rv = result;
@@ -300,7 +300,7 @@ int SSLConnectJob::DoTunnelConnectComplete(int result) {
 }
 
 int SSLConnectJob::DoSSLConnect() {
-  TRACE_EVENT0(kNetTracingCategory, "SSLConnectJob::DoSSLConnect");
+  TRACE_EVENT0(NetTracingCategory(), "SSLConnectJob::DoSSLConnect");
   next_state_ = STATE_SSL_CONNECT_COMPLETE;
 
   // Reset the timeout to just the time allowed for the SSL handshake.
@@ -340,7 +340,7 @@ int SSLConnectJob::DoSSLConnectComplete(int result) {
   bool tls13_supported = IsTLS13ExperimentHost(host);
 
   if (result == OK ||
-      ssl_socket_->IgnoreCertError(result, params_->load_flags())) {
+      (params_->ignore_certificate_errors() && IsCertificateError(result))) {
     DCHECK(!connect_timing_.ssl_start.is_null());
     base::TimeDelta connect_duration =
         connect_timing_.ssl_end - connect_timing_.ssl_start;
@@ -387,13 +387,6 @@ int SSLConnectJob::DoSSLConnectComplete(int result) {
                                  base::TimeDelta::FromMilliseconds(1),
                                  base::TimeDelta::FromMinutes(1), 100);
     }
-
-    if (ssl_info.dummy_pq_padding_received) {
-      UMA_HISTOGRAM_CUSTOM_TIMES("Net.SSL_Connection_Latency_PQPadding",
-                                 connect_duration,
-                                 base::TimeDelta::FromMilliseconds(1),
-                                 base::TimeDelta::FromMinutes(1), 100);
-    }
   }
 
   // Don't double-count the version interference probes.
@@ -434,6 +427,11 @@ SSLConnectJob::State SSLConnectJob::GetInitialState(
 int SSLConnectJob::ConnectInternal() {
   next_state_ = GetInitialState(params_->GetConnectionType());
   return DoLoop(OK);
+}
+
+void SSLConnectJob::ChangePriorityInternal(RequestPriority priority) {
+  if (transport_socket_handle_)
+    transport_socket_handle_->SetPriority(priority);
 }
 
 SSLClientSocketPool::SSLConnectJobFactory::SSLConnectJobFactory(
@@ -505,7 +503,7 @@ SSLClientSocketPool::SSLClientSocketPool(
                                        ssl_session_cache_shard),
                 net_log)),
       ssl_config_service_(ssl_config_service) {
-  if (ssl_config_service_.get())
+  if (ssl_config_service_)
     ssl_config_service_->AddObserver(this);
   if (transport_pool_)
     base_.AddLowerLayeredPool(transport_pool_);
@@ -516,7 +514,7 @@ SSLClientSocketPool::SSLClientSocketPool(
 }
 
 SSLClientSocketPool::~SSLClientSocketPool() {
-  if (ssl_config_service_.get())
+  if (ssl_config_service_)
     ssl_config_service_->RemoveObserver(this);
 }
 
@@ -543,14 +541,14 @@ int SSLClientSocketPool::RequestSocket(const std::string& group_name,
                                        const SocketTag& socket_tag,
                                        RespectLimits respect_limits,
                                        ClientSocketHandle* handle,
-                                       const CompletionCallback& callback,
+                                       CompletionOnceCallback callback,
                                        const NetLogWithSource& net_log) {
   const scoped_refptr<SSLSocketParams>* casted_socket_params =
       static_cast<const scoped_refptr<SSLSocketParams>*>(socket_params);
 
   return base_.RequestSocket(group_name, *casted_socket_params, priority,
-                             socket_tag, respect_limits, handle, callback,
-                             net_log);
+                             socket_tag, respect_limits, handle,
+                             std::move(callback), net_log);
 }
 
 void SSLClientSocketPool::RequestSockets(const std::string& group_name,

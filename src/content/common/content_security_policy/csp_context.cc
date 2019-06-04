@@ -3,6 +3,7 @@
 // found in the LICENSE file.
 
 #include "content/common/content_security_policy/csp_context.h"
+#include "content/public/common/origin_util.h"
 
 namespace content {
 
@@ -31,7 +32,7 @@ CSPContext::~CSPContext() {}
 
 bool CSPContext::IsAllowedByCsp(CSPDirective::Name directive_name,
                                 const GURL& url,
-                                bool is_redirect,
+                                bool has_followed_redirect,
                                 bool is_response_check,
                                 const SourceLocation& source_location,
                                 CheckCSPDisposition check_csp_disposition,
@@ -43,8 +44,8 @@ bool CSPContext::IsAllowedByCsp(CSPDirective::Name directive_name,
   for (const auto& policy : policies_) {
     if (ShouldCheckPolicy(policy, check_csp_disposition)) {
       allow &= ContentSecurityPolicy::Allow(
-          policy, directive_name, url, is_redirect, is_response_check, this,
-          source_location, is_form_submission);
+          policy, directive_name, url, has_followed_redirect, is_response_check,
+          this, source_location, is_form_submission);
     }
   }
 
@@ -65,11 +66,11 @@ bool CSPContext::ShouldModifyRequestUrlForCsp(
 }
 
 void CSPContext::ModifyRequestUrlForCsp(GURL* url) {
-  if (url->scheme() == "http") {
+  if (url->SchemeIs(url::kHttpScheme) && !IsOriginSecure(*url)) {
+    // Updating the URL's scheme also implicitly updates the URL's port from 80
+    // to 443 if needed.
     GURL::Replacements replacements;
-    replacements.SetSchemeStr("https");
-    if (url->port() == "80")
-      replacements.SetPortStr("443");
+    replacements.SetSchemeStr(url::kHttpsScheme);
     *url = url->ReplaceComponents(replacements);
   }
 }
@@ -79,7 +80,7 @@ void CSPContext::SetSelf(const url::Origin origin) {
 
   // When the origin is unique, no URL should match with 'self'. That's why
   // |self_source_| stays undefined here.
-  if (origin.unique())
+  if (origin.opaque())
     return;
 
   if (origin.scheme() == url::kFileScheme) {
@@ -104,7 +105,7 @@ bool CSPContext::SchemeShouldBypassCSP(const base::StringPiece& scheme) {
 }
 
 void CSPContext::SanitizeDataForUseInCspViolation(
-    bool is_redirect,
+    bool has_followed_redirect,
     CSPDirective::Name directive,
     GURL* blocked_url,
     SourceLocation* source_location) const {

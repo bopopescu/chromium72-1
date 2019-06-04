@@ -8,9 +8,9 @@
 #include "base/test/mock_callback.h"
 #include "media/capture/video/video_capture_device_info.h"
 #include "services/service_manager/public/cpp/service_context_ref.h"
+#include "services/video_capture/public/cpp/mock_producer.h"
+#include "services/video_capture/public/cpp/mock_receiver.h"
 #include "services/video_capture/shared_memory_virtual_device_mojo_adapter.h"
-#include "services/video_capture/test/mock_producer.h"
-#include "services/video_capture/test/mock_receiver.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 using testing::_;
@@ -56,12 +56,12 @@ class VirtualDeviceTest : public ::testing::Test {
 
   void VerifyAndGetMaxFrameBuffers() {
     base::RunLoop wait_loop;
-    EXPECT_CALL(*producer_, DoOnNewBufferHandle(_, _, _))
+    EXPECT_CALL(*producer_, DoOnNewBuffer(_, _, _))
         .Times(SharedMemoryVirtualDeviceMojoAdapter::
                    max_buffer_pool_buffer_count())
-        .WillRepeatedly(
-            Invoke([](int32_t buffer_id, mojo::ScopedSharedBufferHandle* handle,
-                      mojom::Producer::OnNewBufferHandleCallback& callback) {
+        .WillRepeatedly(Invoke(
+            [](int32_t buffer_id, media::mojom::VideoBufferHandlePtr* handle,
+               mojom::Producer::OnNewBufferCallback& callback) {
               std::move(callback).Run();
             }));
     // Should receive valid buffer for up to the maximum buffer count.
@@ -70,14 +70,14 @@ class VirtualDeviceTest : public ::testing::Test {
          SharedMemoryVirtualDeviceMojoAdapter::max_buffer_pool_buffer_count();
          i++) {
       device_adapter_->RequestFrameBuffer(
-          kTestFrameSize, kTestPixelFormat,
+          kTestFrameSize, kTestPixelFormat, nullptr,
           base::Bind(&VirtualDeviceTest::OnFrameBufferReceived,
                      base::Unretained(this), true /* valid_buffer_expected */));
     }
 
     // No more buffer available. Invalid buffer id should be returned.
     device_adapter_->RequestFrameBuffer(
-        kTestFrameSize, kTestPixelFormat,
+        kTestFrameSize, kTestPixelFormat, nullptr,
         base::Bind(&VirtualDeviceTest::OnFrameBufferReceived,
                    base::Unretained(this), false /* valid_buffer_expected */));
 
@@ -113,9 +113,9 @@ TEST_F(VirtualDeviceTest, OnFrameReadyInBufferWithoutReceiver) {
 
   // Verify there is a buffer available now, without creating a new
   // buffer.
-  EXPECT_CALL(*producer_, DoOnNewBufferHandle(_, _, _)).Times(0);
+  EXPECT_CALL(*producer_, DoOnNewBuffer(_, _, _)).Times(0);
   device_adapter_->RequestFrameBuffer(
-      kTestFrameSize, kTestPixelFormat,
+      kTestFrameSize, kTestPixelFormat, nullptr,
       base::Bind(&VirtualDeviceTest::OnFrameBufferReceived,
                  base::Unretained(this), true /* valid_buffer_expected */));
 
@@ -151,7 +151,7 @@ TEST_F(VirtualDeviceTest, OnFrameReadyInBufferWithReceiver) {
   // Verify that requesting a buffer doesn't create a new one, will reuse
   // the available buffer in the pool.
   base::RunLoop wait_loop2;
-  EXPECT_CALL(*producer_, DoOnNewBufferHandle(_, _, _)).Times(0);
+  EXPECT_CALL(*producer_, DoOnNewBuffer(_, _, _)).Times(0);
   base::MockCallback<
       mojom::SharedMemoryVirtualDevice::RequestFrameBufferCallback>
       request_frame_buffer_callback;
@@ -161,7 +161,7 @@ TEST_F(VirtualDeviceTest, OnFrameReadyInBufferWithReceiver) {
         // Verify that the returned |buffer_id| is a known buffer ID.
         EXPECT_TRUE(base::ContainsValue(received_buffer_ids_, buffer_id));
       }));
-  device_adapter_->RequestFrameBuffer(kTestFrameSize, kTestPixelFormat,
+  device_adapter_->RequestFrameBuffer(kTestFrameSize, kTestPixelFormat, nullptr,
                                       request_frame_buffer_callback.Get());
   wait_loop2.RunUntilIdle();
 }

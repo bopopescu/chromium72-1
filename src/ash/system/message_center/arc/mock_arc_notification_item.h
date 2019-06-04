@@ -40,11 +40,14 @@ class MockArcNotificationItem : public ArcNotificationItem {
   void Click() override {}
   void ToggleExpansion() override {}
   void OpenSettings() override {}
+  void OpenSnooze() override {}
   void IncrementWindowRefCount() override {}
   void DecrementWindowRefCount() override {}
+  void OnRemoteInputActivationChanged(bool activate) override {}
+  void CancelPress() override {}
+
   arc::mojom::ArcNotificationType GetNotificationType() const override;
   arc::mojom::ArcNotificationExpandState GetExpandState() const override;
-  arc::mojom::ArcNotificationShownContents GetShownContents() const override;
   gfx::Rect GetSwipeInputRect() const override;
 
   void OnUpdatedFromAndroid(arc::mojom::ArcNotificationDataPtr data,
@@ -57,7 +60,7 @@ class MockArcNotificationItem : public ArcNotificationItem {
   gfx::ImageSkia snapshot_;
   size_t count_close_ = 0;
 
-  base::ObserverList<Observer> observers_;
+  base::ObserverList<Observer>::Unchecked observers_;
   base::OnceClosure close_callback_;
 
   base::WeakPtrFactory<MockArcNotificationItem> weak_factory_;

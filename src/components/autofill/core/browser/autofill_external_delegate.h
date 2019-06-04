@@ -41,6 +41,7 @@ class AutofillExternalDelegate : public AutofillPopupDelegate {
   // AutofillPopupDelegate implementation.
   void OnPopupShown() override;
   void OnPopupHidden() override;
+  void OnPopupSuppressed() override;
   void DidSelectSuggestion(const base::string16& value,
                            int identifier) override;
   void DidAcceptSuggestion(const base::string16& value,
@@ -72,7 +73,15 @@ class AutofillExternalDelegate : public AutofillPopupDelegate {
   // to be displayed.  Called when an Autofill query result is available.
   virtual void OnSuggestionsReturned(int query_id,
                                      const std::vector<Suggestion>& suggestions,
+                                     bool autoselect_first_suggestion,
                                      bool is_all_server_suggestions = false);
+
+  // Returns true if there is a screen reader installed on the machine.
+  virtual bool HasActiveScreenReader() const;
+
+  // Indicates on focus changed if autofill is available or unavailable, so
+  // state can be announced by screen readers.
+  virtual void OnAutofillAvailabilityEvent(bool has_suggestions);
 
   // Set the data list value associated with the current field.
   void SetCurrentDataListValues(
@@ -135,7 +144,7 @@ class AutofillExternalDelegate : public AutofillPopupDelegate {
 
   // The ID of the last request sent for form field Autofill.  Used to ignore
   // out of date responses.
-  int query_id_;
+  int query_id_ = 0;
 
   // The current form and field selected by Autofill.
   FormData query_form_;
@@ -145,17 +154,15 @@ class AutofillExternalDelegate : public AutofillPopupDelegate {
   gfx::RectF element_bounds_;
 
   // Does the popup include any Autofill profile or credit card suggestions?
-  bool has_autofill_suggestions_;
+  bool has_autofill_suggestions_ = false;
 
-  // Have we already shown Autofill suggestions for the field the user is
-  // currently editing?  Used to keep track of state for metrics logging.
-  bool has_shown_popup_for_current_edit_;
-
-  bool should_show_scan_credit_card_;
-  PopupType popup_type_;
+  bool should_show_scan_credit_card_ = false;
+  PopupType popup_type_ = PopupType::kUnspecified;
 
   // Whether the credit card signin promo should be shown to the user.
-  bool should_show_cc_signin_promo_;
+  bool should_show_cc_signin_promo_ = false;
+
+  bool should_show_cards_from_account_option_ = false;
 
   // The current data list values.
   std::vector<base::string16> data_list_values_;
@@ -164,7 +171,7 @@ class AutofillExternalDelegate : public AutofillPopupDelegate {
   // If not null then it will be called in destructor.
   base::OnceClosure deletion_callback_;
 
-  base::WeakPtrFactory<AutofillExternalDelegate> weak_ptr_factory_;
+  base::WeakPtrFactory<AutofillExternalDelegate> weak_ptr_factory_{this};
 
   DISALLOW_COPY_AND_ASSIGN(AutofillExternalDelegate);
 };

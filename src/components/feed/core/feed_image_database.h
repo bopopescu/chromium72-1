@@ -5,8 +5,17 @@
 #ifndef COMPONENTS_FEED_CORE_FEED_IMAGE_DATABASE_H_
 #define COMPONENTS_FEED_CORE_FEED_IMAGE_DATABASE_H_
 
+#include <memory>
+#include <string>
+#include <utility>
+#include <vector>
+
 #include "base/memory/weak_ptr.h"
 #include "components/leveldb_proto/proto_database.h"
+
+namespace base {
+class Clock;
+}  // namespace base
 
 namespace feed {
 
@@ -25,7 +34,8 @@ class FeedImageDatabase {
   };
 
   // Returns the resulting raw image data as std::string of a |LoadImage| call.
-  using FeedImageDatabaseCallback = base::OnceCallback<void(std::string)>;
+  using FeedImageDatabaseCallback =
+      base::OnceCallback<void(const std::string&)>;
 
   using FeedImageDatabaseOperationCallback = base::OnceCallback<void(bool)>;
 
@@ -36,7 +46,8 @@ class FeedImageDatabase {
   FeedImageDatabase(
       const base::FilePath& database_dir,
       std::unique_ptr<leveldb_proto::ProtoDatabase<CachedImageProto>>
-          image_database);
+          image_database,
+      base::Clock* clock);
   ~FeedImageDatabase();
 
   // Returns true if initialization has finished successfully, else false.
@@ -77,7 +88,7 @@ class FeedImageDatabase {
   void ProcessPendingImageLoads();
 
   // Saving
-  void SaveImageImpl(const std::string& url, CachedImageProto image_proto);
+  void SaveImageImpl(std::string url, const CachedImageProto& image_proto);
   void OnImageUpdated(bool success);
 
   // Loading
@@ -105,9 +116,14 @@ class FeedImageDatabase {
 
   std::unique_ptr<leveldb_proto::ProtoDatabase<CachedImageProto>>
       image_database_;
+
+  // Used to access current time, injected for testing.
+  base::Clock* clock_;
+
   std::vector<std::pair<std::string, FeedImageDatabaseCallback>>
       pending_image_callbacks_;
 
+  // Used to check that functions are called on the correct sequence.
   SEQUENCE_CHECKER(sequence_checker_);
 
   base::WeakPtrFactory<FeedImageDatabase> weak_ptr_factory_;

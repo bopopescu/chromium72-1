@@ -45,51 +45,6 @@ inline int FudgeFactor() {
 CORE_EXPORT bool IsSpatialNavigationEnabled(const LocalFrame*);
 bool SpatialNavigationIgnoresEventHandlers(const LocalFrame*);
 
-// Spatially speaking, two given elements in a web page can be:
-// 1) Fully aligned: There is a full intersection between the rects, either
-//    vertically or horizontally.
-//
-// * Horizontally       * Vertically
-//    _
-//   |_|                   _ _ _ _ _ _
-//   |_|...... _          |_|_|_|_|_|_|
-//   |_|      |_|         .       .
-//   |_|......|_|   OR    .       .
-//   |_|      |_|         .       .
-//   |_|......|_|          _ _ _ _
-//   |_|                  |_|_|_|_|
-//
-//
-// 2) Partially aligned: There is a partial intersection between the rects,
-//    either vertically or horizontally.
-//
-// * Horizontally       * Vertically
-//    _                   _ _ _ _ _
-//   |_|                 |_|_|_|_|_|
-//   |_|.... _      OR           . .
-//   |_|    |_|                  . .
-//   |_|....|_|                  ._._ _
-//          |_|                  |_|_|_|
-//          |_|
-//
-// 3) Or, otherwise, not aligned at all.
-//
-// * Horizontally       * Vertically
-//         _              _ _ _ _
-//        |_|            |_|_|_|_|
-//        |_|                    .
-//        |_|                     .
-//       .          OR             .
-//    _ .                           ._ _ _ _ _
-//   |_|                            |_|_|_|_|_|
-//   |_|
-//   |_|
-//
-// "Totally Aligned" elements are preferable candidates to move
-// focus to over "Partially Aligned" ones, that on its turns are
-// more preferable than "Not Aligned".
-enum RectsAlignment { kNone = 0, kPartial, kFull };
-
 struct FocusCandidate {
   STACK_ALLOCATED();
 
@@ -128,10 +83,13 @@ struct FocusCandidate {
   bool is_offscreen_after_scrolling;
 };
 
-bool HasOffscreenRect(const Node*, WebFocusType = kWebFocusTypeNone);
+CORE_EXPORT bool HasRemoteFrame(const Node*);
+CORE_EXPORT bool IsOffscreen(const Node*);
+CORE_EXPORT bool IsOffscreenAfterFrameScroll(const Node*, WebFocusType);
 bool ScrollInDirection(LocalFrame*, WebFocusType);
 bool ScrollInDirection(Node* container, WebFocusType);
 bool IsNavigableContainer(const Node*, WebFocusType);
+CORE_EXPORT bool IsScrollableNode(const Node* node);
 CORE_EXPORT bool IsScrollableAreaOrDocument(const Node*);
 CORE_EXPORT Node* ScrollableAreaOrDocumentOf(Node*);
 bool CanScrollInDirection(const Node* container, WebFocusType);
@@ -142,14 +100,17 @@ bool AreElementsOnSameLine(const FocusCandidate& first_candidate,
 void DistanceDataForNode(WebFocusType,
                          const FocusCandidate& current,
                          FocusCandidate&);
-LayoutRect NodeRectInRootFrame(const Node*, bool ignore_border = false);
-LayoutRect VirtualRectForDirection(WebFocusType,
-                                   const LayoutRect& starting_rect,
-                                   LayoutUnit width = LayoutUnit());
-LayoutRect VirtualRectForAreaElementAndDirection(const HTMLAreaElement&,
-                                                 WebFocusType);
+CORE_EXPORT LayoutRect NodeRectInRootFrame(const Node*,
+                                           bool ignore_border = false);
+CORE_EXPORT LayoutRect OppositeEdge(WebFocusType side,
+                                    const LayoutRect& box,
+                                    LayoutUnit thickness = LayoutUnit());
+CORE_EXPORT LayoutRect RootViewport(const LocalFrame*);
+LayoutRect StartEdgeForAreaElement(const HTMLAreaElement&, WebFocusType);
 HTMLFrameOwnerElement* FrameOwnerElement(FocusCandidate&);
-LayoutRect FindSearchStartPoint(const LocalFrame*, WebFocusType);
+CORE_EXPORT LayoutRect SearchOrigin(const LayoutRect,
+                                    Node*,
+                                    const WebFocusType);
 
 }  // namespace blink
 

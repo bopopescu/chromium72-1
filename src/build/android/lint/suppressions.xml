@@ -33,8 +33,6 @@ Still reading?
     <ignore regexp="chrome/android/javatests"/>
   </issue>
   <issue id="BadHostnameVerifier" severity="Error">
-    <!-- Safe, used in test only. -->
-    <ignore regexp="net/test/android/javatests/src/org/chromium/net/test/util/TestWebServer.java"/>
   </issue>
   <issue id="ButtonOrder" severity="Error">
     <ignore regexp="chrome/android/java/res/layout/homepage_editor.xml"/>
@@ -121,6 +119,8 @@ Still reading?
     <ignore regexp="content/public/android/java/res/drawable-xxxhdpi"/>
     <ignore regexp="ui/android/java/res/drawable-xxhdpi"/>
     <ignore regexp="ui/android/java/res/drawable-xxxhdpi"/>
+    <!-- This is intentional to reduce APK size. See: http://crrev/c/1352161 -->
+    <ignore regexp="chrome/android/java/res_autofill_assistant/drawable-*"/>
   </issue>
   <issue id="IconDipSize">
     <ignore regexp="chromecast/internal"/>
@@ -159,7 +159,7 @@ Still reading?
     <ignore regexp="tools/android/push_apps_to_background/res"/>
     <ignore regexp="ui/android/java/res"/>
     <!-- crbug.com/457918 is tracking missing assets -->
-    <ignore regexp="components/web_contents_delegate_android/java/res"/>
+    <ignore regexp="components/embedder_support/android/java/res"/>
   </issue>
   <issue id="ImpliedQuantity" severity="Error">
     <ignore regexp="chrome/android/chrome_strings_grd"/>
@@ -183,10 +183,19 @@ Still reading?
   </issue>
   <!-- TODO(crbug.com/804453): Remove this after fixing. -->
   <issue id="KeyboardInaccessibleWidget" severity="ignore"/>
-  <issue id="LintError" severity="Error"/>
+  <issue id="LintError">
+    <!-- We no longer supply class files to lint. -->
+    <ignore regexp="No `.class` files were found in project"/>
+  </issue>
   <issue id="LogConditional" severity="ignore"/>
   <issue id="LongLogTag" severity="ignore"/>
   <issue id="MissingApplicationIcon" severity="ignore"/>
+  <issue id="MissingDefaultResource">
+    <!-- Only used by ToolbarControlContainer guarded by tablet form-factor. -->
+    <ignore regexp="toolbar_background.9.png"/>
+    <!-- Only used by FirstRunFlowSequencer guarded by tablet form-factor. -->
+    <ignore regexp="window_background.xml"/>
+  </issue>
   <issue id="MissingPermission" severity="ignore"/>
   <!-- TODO(yolandyan) remove this once all tests are converted to junit4 -->
   <issue id="MissingPrefix" severity="ignore"/>
@@ -256,6 +265,8 @@ Still reading?
     <ignore regexp="chrome/android/chrome_strings_grd.resources.zip/values/android_chrome_strings.xml"/>
   </issue>
   <issue id="PrivateApi" severity="ignore"/>
+  <!-- Chrome is a system app. -->
+  <issue id="ProtectedPermissions" severity="ignore"/>
   <issue id="Recycle" severity="ignore"/>
   <issue id="Registered" severity="ignore"/>
   <issue id="ResourceAsColor" severity="ignore"/>
@@ -335,10 +346,6 @@ Still reading?
     <!-- 2 resource sets used by clank widgets for each channel -->
     <ignore regexp="The resource `R.string.bookmark_widget_title.*` appears to be unused"/>
     <ignore regexp="The resource `R.string.search_widget_title.*` appears to be unused"/>
-    <!-- 3 Download location strings checked in before M68 deadline -->
-    <!-- TODO(xingliu): Remove these. see crbug.com/840464. -->
-    <ignore regexp="The resource `R.string.download_location_not_enough_space_sd_card_full` appears to be unused"/>
-    <ignore regexp="The resource `R.string.download_location_notification_retry*` appears to be unused"/>
     <!-- Endnote: Please specify number of suppressions when adding more -->
   </issue>
   <issue id="UseCompoundDrawables">

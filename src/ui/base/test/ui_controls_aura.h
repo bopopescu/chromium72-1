@@ -41,15 +41,25 @@ class UIControlsAura {
   // Sends a mouse down and/or up message. The click will be sent to wherever
   // the cursor currently is, so be sure to move the cursor before calling this
   // (and be sure the cursor has arrived!).
-  virtual bool SendMouseEvents(MouseButton type, int state) =0;
+  virtual bool SendMouseEvents(MouseButton type,
+                               int button_state,
+                               int accelerator_state) = 0;
   virtual bool SendMouseEventsNotifyWhenDone(MouseButton type,
-                                             int state,
-                                             base::OnceClosure task) = 0;
+                                             int button_state,
+                                             base::OnceClosure task,
+                                             int accelerator_state) = 0;
   // Same as SendMouseEvents with BUTTON_UP | BUTTON_DOWN.
   virtual bool SendMouseClick(MouseButton type) = 0;
 
 #if defined(OS_WIN)
   virtual bool SendTouchEvents(int action, int num, int x, int y) = 0;
+#elif defined(OS_CHROMEOS)
+  virtual bool SendTouchEvents(int action, int id, int x, int y) = 0;
+  virtual bool SendTouchEventsNotifyWhenDone(int action,
+                                             int id,
+                                             int x,
+                                             int y,
+                                             base::OnceClosure task) = 0;
 #endif
 };
 

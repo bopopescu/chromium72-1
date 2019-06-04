@@ -109,6 +109,7 @@ struct ShaderVariable
                               std::string* originalFullName) const;
 
     bool isBuiltIn() const;
+    bool isEmulatedBuiltIn() const;
 
     GLenum type;
     GLenum precision;
@@ -203,6 +204,9 @@ struct OutputVariable : public VariableWithLocation
     OutputVariable &operator=(const OutputVariable &other);
     bool operator==(const OutputVariable &other) const;
     bool operator!=(const OutputVariable &other) const { return !operator==(other); }
+
+    // From EXT_blend_func_extended.
+    int index;
 };
 
 struct InterfaceBlockField : public ShaderVariable

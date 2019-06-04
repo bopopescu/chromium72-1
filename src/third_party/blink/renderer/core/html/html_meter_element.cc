@@ -20,8 +20,6 @@
 
 #include "third_party/blink/renderer/core/html/html_meter_element.h"
 
-#include "third_party/blink/renderer/bindings/core/v8/exception_messages.h"
-#include "third_party/blink/renderer/bindings/core/v8/exception_state.h"
 #include "third_party/blink/renderer/core/dom/node_computed_style.h"
 #include "third_party/blink/renderer/core/dom/shadow_root.h"
 #include "third_party/blink/renderer/core/frame/use_counter.h"
@@ -30,20 +28,21 @@
 #include "third_party/blink/renderer/core/html/parser/html_parser_idioms.h"
 #include "third_party/blink/renderer/core/html_names.h"
 #include "third_party/blink/renderer/core/style/computed_style.h"
+#include "third_party/blink/renderer/platform/bindings/exception_state.h"
 
 namespace blink {
 
-using namespace HTMLNames;
+using namespace html_names;
 
 HTMLMeterElement::HTMLMeterElement(Document& document)
-    : LabelableElement(meterTag, document) {
+    : LabelableElement(kMeterTag, document) {
   UseCounter::Count(document, WebFeature::kMeterElement);
 }
 
 HTMLMeterElement::~HTMLMeterElement() = default;
 
 HTMLMeterElement* HTMLMeterElement::Create(Document& document) {
-  HTMLMeterElement* meter = new HTMLMeterElement(document);
+  HTMLMeterElement* meter = MakeGarbageCollected<HTMLMeterElement>(document);
   meter->EnsureUserAgentShadowRoot();
   return meter;
 }
@@ -67,64 +66,64 @@ LayoutObject* HTMLMeterElement::CreateLayoutObject(const ComputedStyle& style) {
 void HTMLMeterElement::ParseAttribute(
     const AttributeModificationParams& params) {
   const QualifiedName& name = params.name;
-  if (name == valueAttr || name == minAttr || name == maxAttr ||
-      name == lowAttr || name == highAttr || name == optimumAttr)
+  if (name == kValueAttr || name == kMinAttr || name == kMaxAttr ||
+      name == kLowAttr || name == kHighAttr || name == kOptimumAttr)
     DidElementStateChange();
   else
     LabelableElement::ParseAttribute(params);
 }
 
 double HTMLMeterElement::value() const {
-  double value = GetFloatingPointAttribute(valueAttr, 0);
+  double value = GetFloatingPointAttribute(kValueAttr, 0);
   return std::min(std::max(value, min()), max());
 }
 
 void HTMLMeterElement::setValue(double value) {
-  SetFloatingPointAttribute(valueAttr, value);
+  SetFloatingPointAttribute(kValueAttr, value);
 }
 
 double HTMLMeterElement::min() const {
-  return GetFloatingPointAttribute(minAttr, 0);
+  return GetFloatingPointAttribute(kMinAttr, 0);
 }
 
 void HTMLMeterElement::setMin(double min) {
-  SetFloatingPointAttribute(minAttr, min);
+  SetFloatingPointAttribute(kMinAttr, min);
 }
 
 double HTMLMeterElement::max() const {
-  return std::max(GetFloatingPointAttribute(maxAttr, std::max(1.0, min())),
+  return std::max(GetFloatingPointAttribute(kMaxAttr, std::max(1.0, min())),
                   min());
 }
 
 void HTMLMeterElement::setMax(double max) {
-  SetFloatingPointAttribute(maxAttr, max);
+  SetFloatingPointAttribute(kMaxAttr, max);
 }
 
 double HTMLMeterElement::low() const {
-  double low = GetFloatingPointAttribute(lowAttr, min());
+  double low = GetFloatingPointAttribute(kLowAttr, min());
   return std::min(std::max(low, min()), max());
 }
 
 void HTMLMeterElement::setLow(double low) {
-  SetFloatingPointAttribute(lowAttr, low);
+  SetFloatingPointAttribute(kLowAttr, low);
 }
 
 double HTMLMeterElement::high() const {
-  double high = GetFloatingPointAttribute(highAttr, max());
+  double high = GetFloatingPointAttribute(kHighAttr, max());
   return std::min(std::max(high, low()), max());
 }
 
 void HTMLMeterElement::setHigh(double high) {
-  SetFloatingPointAttribute(highAttr, high);
+  SetFloatingPointAttribute(kHighAttr, high);
 }
 
 double HTMLMeterElement::optimum() const {
-  double optimum = GetFloatingPointAttribute(optimumAttr, (max() + min()) / 2);
+  double optimum = GetFloatingPointAttribute(kOptimumAttr, (max() + min()) / 2);
   return std::min(std::max(optimum, min()), max());
 }
 
 void HTMLMeterElement::setOptimum(double optimum) {
-  SetFloatingPointAttribute(optimumAttr, optimum);
+  SetFloatingPointAttribute(kOptimumAttr, optimum);
 }
 
 HTMLMeterElement::GaugeRegion HTMLMeterElement::GetGaugeRegion() const {

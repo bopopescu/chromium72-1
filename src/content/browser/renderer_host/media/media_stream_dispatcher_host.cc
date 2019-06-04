@@ -4,13 +4,18 @@
 
 #include "content/browser/renderer_host/media/media_stream_dispatcher_host.h"
 
+#include <memory>
+
 #include "base/bind.h"
 #include "base/bind_helpers.h"
 #include "base/logging.h"
+#include "base/task/post_task.h"
 #include "base/task_runner_util.h"
 #include "content/browser/renderer_host/media/media_stream_manager.h"
+#include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/render_frame_host.h"
+#include "mojo/public/cpp/bindings/strong_binding.h"
 #include "services/service_manager/public/cpp/interface_provider.h"
 #include "url/origin.h"
 
@@ -32,35 +37,37 @@ void BindMediaStreamDeviceObserverRequest(
 
 }  // namespace
 
+int MediaStreamDispatcherHost::next_requester_id_ = 0;
+
 MediaStreamDispatcherHost::MediaStreamDispatcherHost(
     int render_process_id,
     int render_frame_id,
     MediaStreamManager* media_stream_manager)
     : render_process_id_(render_process_id),
       render_frame_id_(render_frame_id),
+      requester_id_(next_requester_id_++),
       media_stream_manager_(media_stream_manager),
       salt_and_origin_callback_(
           base::BindRepeating(&GetMediaDeviceSaltAndOrigin)),
       weak_factory_(this) {
   DCHECK_CURRENTLY_ON(BrowserThread::IO);
-
-  bindings_.set_connection_error_handler(
-      base::Bind(&MediaStreamDispatcherHost::CancelAllRequests,
-                 weak_factory_.GetWeakPtr()));
 }
 
 MediaStreamDispatcherHost::~MediaStreamDispatcherHost() {
   DCHECK_CURRENTLY_ON(BrowserThread::IO);
-
-  bindings_.CloseAllBindings();
   CancelAllRequests();
 }
 
-void MediaStreamDispatcherHost::BindRequest(
+void MediaStreamDispatcherHost::Create(
+    int render_process_id,
+    int render_frame_id,
+    MediaStreamManager* media_stream_manager,
     mojom::MediaStreamDispatcherHostRequest request) {
   DCHECK_CURRENTLY_ON(BrowserThread::IO);
-
-  bindings_.AddBinding(this, std::move(request));
+  mojo::MakeStrongBinding(
+      std::make_unique<MediaStreamDispatcherHost>(
+          render_process_id, render_frame_id, media_stream_manager),
+      std::move(request));
 }
 
 void MediaStreamDispatcherHost::OnDeviceStopped(
@@ -83,8 +90,8 @@ MediaStreamDispatcherHost::GetMediaStreamDeviceObserver() {
   observer.set_connection_error_handler(base::BindOnce(
       &MediaStreamDispatcherHost::OnMediaStreamDeviceObserverConnectionError,
       weak_factory_.GetWeakPtr()));
-  BrowserThread::PostTask(
-      BrowserThread::UI, FROM_HERE,
+  base::PostTaskWithTraits(
+      FROM_HERE, {BrowserThread::UI},
       base::BindOnce(&BindMediaStreamDeviceObserverRequest, render_process_id_,
                      render_frame_id_, std::move(dispatcher_request)));
   media_stream_device_observer_ = std::move(observer);
@@ -98,11 +105,8 @@ void MediaStreamDispatcherHost::OnMediaStreamDeviceObserverConnectionError() {
 }
 
 void MediaStreamDispatcherHost::CancelAllRequests() {
-  if (!bindings_.empty())
-    return;
-
-  media_stream_manager_->CancelAllRequests(render_process_id_,
-                                           render_frame_id_);
+  media_stream_manager_->CancelAllRequests(render_process_id_, render_frame_id_,
+                                           requester_id_);
 }
 
 void MediaStreamDispatcherHost::GenerateStream(
@@ -113,7 +117,8 @@ void MediaStreamDispatcherHost::GenerateStream(
   DCHECK_CURRENTLY_ON(BrowserThread::IO);
 
   base::PostTaskAndReplyWithResult(
-      BrowserThread::GetTaskRunnerForThread(BrowserThread::UI).get(), FROM_HERE,
+      base::CreateSingleThreadTaskRunnerWithTraits({BrowserThread::UI}).get(),
+      FROM_HERE,
       base::BindOnce(salt_and_origin_callback_, render_process_id_,
                      render_frame_id_),
       base::BindOnce(&MediaStreamDispatcherHost::DoGenerateStream,
@@ -136,8 +141,8 @@ void MediaStreamDispatcherHost::DoGenerateStream(
   }
 
   media_stream_manager_->GenerateStream(
-      render_process_id_, render_frame_id_, page_request_id, controls,
-      std::move(salt_and_origin), user_gesture, std::move(callback),
+      render_process_id_, render_frame_id_, requester_id_, page_request_id,
+      controls, std::move(salt_and_origin), user_gesture, std::move(callback),
       base::BindRepeating(&MediaStreamDispatcherHost::OnDeviceStopped,
                           weak_factory_.GetWeakPtr()));
 }
@@ -146,7 +151,7 @@ void MediaStreamDispatcherHost::CancelRequest(int page_request_id) {
   DCHECK_CURRENTLY_ON(BrowserThread::IO);
 
   media_stream_manager_->CancelRequest(render_process_id_, render_frame_id_,
-                                       page_request_id);
+                                       requester_id_, page_request_id);
 }
 
 void MediaStreamDispatcherHost::StopStreamDevice(const std::string& device_id,
@@ -154,7 +159,7 @@ void MediaStreamDispatcherHost::StopStreamDevice(const std::string& device_id,
   DCHECK_CURRENTLY_ON(BrowserThread::IO);
 
   media_stream_manager_->StopStreamDevice(render_process_id_, render_frame_id_,
-                                          device_id, session_id);
+                                          requester_id_, device_id, session_id);
 }
 
 void MediaStreamDispatcherHost::OpenDevice(int32_t page_request_id,
@@ -164,7 +169,8 @@ void MediaStreamDispatcherHost::OpenDevice(int32_t page_request_id,
   DCHECK_CURRENTLY_ON(BrowserThread::IO);
 
   base::PostTaskAndReplyWithResult(
-      BrowserThread::GetTaskRunnerForThread(BrowserThread::UI).get(), FROM_HERE,
+      base::CreateSingleThreadTaskRunnerWithTraits({BrowserThread::UI}).get(),
+      FROM_HERE,
       base::BindOnce(salt_and_origin_callback_, render_process_id_,
                      render_frame_id_),
       base::BindOnce(&MediaStreamDispatcherHost::DoOpenDevice,
@@ -187,8 +193,8 @@ void MediaStreamDispatcherHost::DoOpenDevice(
   }
 
   media_stream_manager_->OpenDevice(
-      render_process_id_, render_frame_id_, page_request_id, device_id, type,
-      std::move(salt_and_origin), std::move(callback),
+      render_process_id_, render_frame_id_, page_request_id, requester_id_,
+      device_id, type, std::move(salt_and_origin), std::move(callback),
       base::BindRepeating(&MediaStreamDispatcherHost::OnDeviceStopped,
                           weak_factory_.GetWeakPtr()));
 }

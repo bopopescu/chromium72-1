@@ -4,13 +4,17 @@
 <link rel="import" href="../i18n_setup.html">
 <link rel="import" href="../icons.html">
 <link rel="import" href="../lifetime_browser_proxy.html">
+<link rel="import" href="../prefs/prefs.html">
 <link rel="import" href="../route.html">
 <link rel="import" href="../settings_page/main_page_behavior.html">
 <link rel="import" href="../settings_page/settings_animated_pages.html">
 <link rel="import" href="../settings_page/settings_section.html">
 <link rel="import" href="../settings_page_css.html">
 <link rel="import" href="../settings_shared_css.html">
+<link rel="import" href="../settings_vars_css.html">
+<link rel="import" href="chrome://resources/cr_elements/cr_link_row/cr_link_row.html">
 <link rel="import" href="chrome://resources/cr_elements/icons.html">
+<link rel="import" href="chrome://resources/cr_elements/shared_vars_css.html">
 <link rel="import" href="chrome://resources/html/assert.html">
 <link rel="import" href="chrome://resources/html/i18n_behavior.html">
 <link rel="import" href="chrome://resources/html/web_ui_listener_behavior.html">
@@ -36,6 +40,25 @@
         --about-page-image-space: 10px;
       }
 
+      settings-section[section='about'] {
+        --settings-section-header: {
+          display: none;
+        };
+      }
+
+      h1 {
+        color: var(--cr-primary-text-color);
+        font-size: 108%;
+        font-weight: 400;
+        letter-spacing: .25px;
+        margin-bottom: 12px;
+        margin-inline-end: 3px;
+        margin-inline-start: 3px;
+        margin-top: var(--settings-page-vertical-margin);
+        padding-bottom: 4px;
+        padding-top: 8px;
+      }
+
       .info-section {
         margin-bottom: 12px;
       }
@@ -52,11 +75,11 @@
       }
 
       img {
-        -webkit-margin-end: var(--about-page-image-space);
+        margin-inline-end: var(--about-page-image-space);
       }
 
       iron-icon {
-        -webkit-margin-end: var(--about-page-image-space);
+        margin-inline-end: var(--about-page-image-space);
         min-width: 32px;  /* The width of the product-logo img. */
       }
 
@@ -64,7 +87,7 @@
         fill: var(--google-blue-500);
       }
 
-      iron-icon[icon='settings:error'] {
+      iron-icon[icon='cr:error'] {
         fill: var(--google-red-700);
       }
 
@@ -86,6 +109,7 @@
       }
 </if>
     </style>
+    <h1>$i18n{aboutPageTitle}</h1>
     <div>
       <settings-section page-title="$i18n{aboutPageTitle}" section="about">
         <settings-animated-pages id="pages" section="about"
@@ -216,32 +240,19 @@
               </div>
             </template>
 </if>
-            <div id="help" class="settings-box" on-click="onHelpTap_"
-                actionable>
-              <div class="start">$i18n{aboutGetHelpUsingChrome}</div>
-              <paper-icon-button-light class="icon-external">
-                <button aria-labelledby="help"></button>
-              </paper-icon-button-light>
-            </div>
+            <cr-link-row class="hr" icon-class="icon-external" id="help"
+                on-click="onHelpTap_" label="$i18n{aboutGetHelpUsingChrome}">
+            </cr-link-row>
 <if expr="_google_chrome">
-            <div id="reportIssue" class="settings-box" actionable
-                on-click="onReportIssueTap_">
-              <div class="start">$i18n{aboutReportAnIssue}</div>
-              <paper-icon-button-light class="subpage-arrow">
-                <button aria-labelledby="reportIssue"></button>
-              </paper-icon-button-light>
-            </div>
+            <cr-link-row class="hr" icon-class="subpage-arrow" id="reportIssue"
+                on-click="onReportIssueTap_" label="$i18n{aboutReportAnIssue}">
+            </cr-link-row>
 </if>
 <if expr="chromeos">
-            <div class="settings-box" on-click="onDetailedBuildInfoTap_"
-                actionable>
-              <div class="start">$i18n{aboutDetailedBuildInfo}</div>
-              <paper-icon-button-light class="subpage-arrow">
-                <button id="detailed-build-info-trigger"
-                    aria-label="$i18n{aboutDetailedBuildInfo}">
-                </button>
-              </paper-icon-button-light>
-            </div>
+            <cr-link-row class="hr" icon-class="subpage-arrow"
+                id="detailed-build-info-trigger"
+                on-click="onDetailedBuildInfoTap_"
+                label="$i18n{aboutDetailedBuildInfo}"></cr-link-row>
 </if>
           </neon-animatable>
 <if expr="chromeos">
@@ -264,7 +275,10 @@
           <div class="info-section">
             <div class="secondary">$i18nRaw{aboutProductLicense}</div>
 <if expr="chromeos">
-            <div class="secondary">$i18nRaw{aboutProductOsLicense}</div>
+            <div class="secondary"
+                inner-h-t-m-l="[[getAboutProductOsLicense_(
+                    showCrostiniLicense_)]]">
+            </div>
 </if>
           </div>
 <if expr="_google_chrome">
@@ -273,8 +287,17 @@
         </div>
 <if expr="chromeos">
         <div class="settings-box padded block" id="regulatoryInfo"
-            hidden$="[[!shouldShowRegulatoryInfo_(regulatoryInfo_)]]">
-          <img src="[[regulatoryInfo_.url]]" alt="[[regulatoryInfo_.text]]">
+            hidden$="[[!shouldShowRegulatoryOrSafetyInfo_(regulatoryInfo_)]]">
+<if expr="_google_chrome">
+          <div class="secondary" hidden$="[[!shouldShowSafetyInfo_()]]">
+            <a target="_blank" href="$i18n{aboutProductSafetyURL}">
+              $i18nRaw{aboutProductSafety}
+            </a>
+          </div>
+</if>
+          <img src="[[regulatoryInfo_.url]]" alt="[[regulatoryInfo_.text]]"
+              hidden$="[[!shouldShowRegulatoryInfo_(regulatoryInfo_)]]"
+              role="presentation">
         </div>
 </if>
       </settings-section>

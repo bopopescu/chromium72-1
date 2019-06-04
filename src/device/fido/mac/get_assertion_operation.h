@@ -10,6 +10,7 @@
 #include "base/macros.h"
 #include "device/fido/authenticator_get_assertion_response.h"
 #include "device/fido/ctap_get_assertion_request.h"
+#include "device/fido/mac/keychain.h"
 #include "device/fido/mac/operation_base.h"
 
 namespace device {
@@ -31,7 +32,7 @@ class API_AVAILABLE(macosx(10.12.2))
                            AuthenticatorGetAssertionResponse> {
  public:
   GetAssertionOperation(CtapGetAssertionRequest request,
-                        std::string profile_id,
+                        std::string metadata_secret,
                         std::string keychain_access_group,
                         Callback callback);
   ~GetAssertionOperation() override;
@@ -40,7 +41,7 @@ class API_AVAILABLE(macosx(10.12.2))
 
  private:
   const std::string& RpId() const override;
-  void PromptTouchIdDone(bool success, NSError* err) override;
+  void PromptTouchIdDone(bool success) override;
 
   DISALLOW_COPY_AND_ASSIGN(GetAssertionOperation);
 };

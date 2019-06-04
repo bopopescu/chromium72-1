@@ -15,10 +15,11 @@
 #include "base/cancelable_callback.h"
 #include "base/macros.h"
 #include "chrome/browser/android/vr/vr_core_info.h"
-#include "chrome/browser/vr/content_input_delegate.h"
 #include "chrome/browser/vr/metrics/session_metrics_helper.h"
+#include "chrome/browser/vr/service/xr_runtime_manager_observer.h"
 #include "device/vr/android/gvr/gvr_delegate_provider.h"
 #include "device/vr/public/mojom/vr_service.mojom.h"
+#include "device/vr/vr_device.h"
 #include "third_party/gvr-android-sdk/src/libraries/headers/vr/gvr/capi/include/gvr_types.h"
 
 namespace device {
@@ -27,16 +28,18 @@ class GvrDevice;
 
 namespace vr {
 
-// GENERATED_JAVA_ENUM_PACKAGE: org.chromium.chrome.browser.vr_shell
+// GENERATED_JAVA_ENUM_PACKAGE: org.chromium.chrome.browser.vr
 enum class VrSupportLevel : int {
-  kVrNotAvailable = 0,
-  kVrCardboard = 1,
-  kVrDaydream = 2,  // Supports both Cardboard and Daydream viewer.
+  kVrDisabled = 0,
+  kVrNeedsUpdate = 1,  // VR Support is available, but needs update.
+  kVrCardboard = 2,
+  kVrDaydream = 3,  // Supports both Cardboard and Daydream viewer.
 };
 
 class VrShell;
 
-class VrShellDelegate : public device::GvrDelegateProvider {
+class VrShellDelegate : public device::GvrDelegateProvider,
+                        XRRuntimeManagerObserver {
  public:
   VrShellDelegate(JNIEnv* env, jobject obj);
   ~VrShellDelegate() override;
@@ -64,11 +67,9 @@ class VrShellDelegate : public device::GvrDelegateProvider {
                               const base::android::JavaParamRef<jobject>& obj);
   void Destroy(JNIEnv* env, const base::android::JavaParamRef<jobject>& obj);
 
-  device::GvrDevice* GetDevice();
+  device::GvrDevice* GetGvrDevice();
 
-  void SendRequestPresentReply(
-      bool success,
-      device::mojom::VRDisplayFrameTransportOptionsPtr);
+  void SendRequestPresentReply(device::mojom::XRSessionPtr session);
 
   // device::GvrDelegateProvider implementation.
   void ExitWebVRPresent() override;
@@ -76,29 +77,33 @@ class VrShellDelegate : public device::GvrDelegateProvider {
  private:
   // device::GvrDelegateProvider implementation.
   bool ShouldDisableGvrDevice() override;
-  void SetDeviceId(unsigned int device_id) override;
-  void RequestWebVRPresent(
-      device::mojom::VRSubmitFrameClientPtr submit_client,
-      device::mojom::VRPresentationProviderRequest request,
+  void StartWebXRPresentation(
       device::mojom::VRDisplayInfoPtr display_info,
-      device::mojom::VRRequestPresentOptionsPtr present_options,
-      device::mojom::VRDisplayHost::RequestPresentCallback callback) override;
+      device::mojom::XRRuntimeSessionOptionsPtr options,
+      base::OnceCallback<void(device::mojom::XRSessionPtr)> callback) override;
   void OnListeningForActivateChanged(bool listening) override;
+
+  // vr::XRRuntimeManagerObserver implementation.
+  // VrShellDelegate implements XRRuntimeManagerObserver to turn off poses (by
+  // calling SetInlinePosesEnabled) on a runtime that gets initialized and added
+  // to XRRuntimeManager, while the VrShell is active (user has headset on).
+  // As for the runtimes that got added to the XRRuntimeManager before the
+  // VrShell got created, their poses will be turned off too on its
+  // creation.
+  void OnRuntimeAdded(vr::BrowserXRRuntime* runtime) override;
 
   void OnActivateDisplayHandled(bool will_not_present);
   void SetListeningForActivate(bool listening);
   void OnPresentResult(
-      device::mojom::VRSubmitFrameClientPtr submit_client,
-      device::mojom::VRPresentationProviderRequest request,
       device::mojom::VRDisplayInfoPtr display_info,
-      device::mojom::VRRequestPresentOptionsPtr present_options,
-      device::mojom::VRDisplayHost::RequestPresentCallback callback,
+      device::mojom::XRRuntimeSessionOptionsPtr options,
+      base::OnceCallback<void(device::mojom::XRSessionPtr)> callback,
       bool success);
+  void SetInlineVrEnabled(bool enable);
 
   std::unique_ptr<VrCoreInfo> MakeVrCoreInfo(JNIEnv* env);
 
   base::android::ScopedJavaGlobalRef<jobject> j_vr_shell_delegate_;
-  unsigned int device_id_ = 0;
   VrShell* vr_shell_ = nullptr;
 
   // Deferred callback stored for later use in cases where vr_shell
@@ -108,7 +113,7 @@ class VrShellDelegate : public device::GvrDelegateProvider {
   // Mojo callback waiting for request present response. This is temporarily
   // stored here from OnPresentResult's outgoing ConnectPresentingService call
   // until the reply arguments are received by SendRequestPresentReply.
-  device::mojom::VRDisplayHost::RequestPresentCallback
+  base::OnceCallback<void(device::mojom::XRSessionPtr)>
       request_present_response_callback_;
 
   bool pending_successful_present_request_ = false;

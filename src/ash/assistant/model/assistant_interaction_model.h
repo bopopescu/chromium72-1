@@ -9,15 +9,15 @@
 #include <string>
 #include <vector>
 
+#include "ash/assistant/model/assistant_query_history.h"
 #include "base/macros.h"
 #include "base/observer_list.h"
-#include "chromeos/services/assistant/public/mojom/assistant.mojom.h"
 
 namespace ash {
 
 class AssistantInteractionModelObserver;
 class AssistantQuery;
-class AssistantUiElement;
+class AssistantResponse;
 
 // Enumeration of interaction input modalities.
 enum class InputModality {
@@ -42,13 +42,9 @@ enum class MicState {
 };
 
 // Models the Assistant interaction. This includes query state, state of speech
-// recognition, as well as renderable AssistantUiElements and suggestions.
+// recognition, as well as a renderable AssistantResponse.
 class AssistantInteractionModel {
  public:
-  using AssistantSuggestion = chromeos::assistant::mojom::AssistantSuggestion;
-  using AssistantSuggestionPtr =
-      chromeos::assistant::mojom::AssistantSuggestionPtr;
-
   AssistantInteractionModel();
   ~AssistantInteractionModel();
 
@@ -58,6 +54,14 @@ class AssistantInteractionModel {
 
   // Resets the interaction to its initial state.
   void ClearInteraction();
+
+  // Resets the interaction to its initial state. There are instances in which
+  // we wish to clear the interaction but retain the committed query. Similarly,
+  // there are instances in which we wish to retain the pending response that is
+  // currently cached. For such instances, use |retain_committed_query| and
+  // |retain_pending_response| respectively.
+  void ClearInteraction(bool retain_committed_query,
+                        bool retain_pending_response);
 
   // Sets the interaction state.
   void SetInteractionState(InteractionState interaction_state);
@@ -77,51 +81,71 @@ class AssistantInteractionModel {
   // Returns the mic state for the interaction.
   MicState mic_state() const { return mic_state_; }
 
-  // Adds the specified |ui_element| that should be rendered for the
-  // interaction.
-  void AddUiElement(std::unique_ptr<AssistantUiElement> ui_element);
+  // Returns the committed query for the interaction.
+  const AssistantQuery& committed_query() const { return *committed_query_; }
 
-  // Clears all UI elements for the interaction.
-  void ClearUiElements();
+  // Clears the committed query for the interaction.
+  void ClearCommittedQuery();
 
-  // Updates the query for the interaction.
-  void SetQuery(std::unique_ptr<AssistantQuery> query);
+  // Updates the pending query for the interaction.
+  void SetPendingQuery(std::unique_ptr<AssistantQuery> pending_query);
 
-  // Returns the query for the interaction.
-  const AssistantQuery& query() const { return *query_; }
+  // Returns the pending query for the interaction.
+  const AssistantQuery& pending_query() const { return *pending_query_; }
 
-  // Clears the query for the interaction.
-  void ClearQuery();
+  // Commits the pending query for the interaction.
+  void CommitPendingQuery();
 
-  // Adds the specified |suggestions| that should be rendered for the
-  // interaction.
-  void AddSuggestions(std::vector<AssistantSuggestionPtr> suggestions);
+  // Clears the pending query for the interaction.
+  void ClearPendingQuery();
 
-  // Returns the suggestion uniquely identified by the specified |id|, or
-  // |nullptr| if no matching suggestion is found.
-  const AssistantSuggestion* GetSuggestionById(int id) const;
+  // Sets the pending response for the interaction.
+  void SetPendingResponse(std::unique_ptr<AssistantResponse> response);
 
-  // Clears all suggestions for the interaction.
-  void ClearSuggestions();
+  // Returns the pending response for the interaction.
+  AssistantResponse* pending_response() { return pending_response_.get(); }
+
+  // Finalizes the pending response for the interaction.
+  void FinalizePendingResponse();
+
+  // Clears the pending response for the interaction.
+  void ClearPendingResponse();
+
+  // Returns the finalized response for the interaction.
+  const AssistantResponse* response() const { return response_.get(); }
+
+  // Clears the finalized response for the interaction.
+  void ClearResponse();
+
+  // Updates the speech level in dB.
+  void SetSpeechLevel(float speech_level_db);
+
+  // Returns the reference to query history.
+  AssistantQueryHistory& query_history() { return query_history_; }
+
+  // Returns the const reference to query history.
+  const AssistantQueryHistory& query_history() const { return query_history_; }
 
  private:
   void NotifyInteractionStateChanged();
   void NotifyInputModalityChanged();
   void NotifyMicStateChanged();
-  void NotifyUiElementAdded(const AssistantUiElement* ui_element);
-  void NotifyUiElementsCleared();
-  void NotifyQueryChanged();
-  void NotifyQueryCleared();
-  void NotifySuggestionsAdded(
-      const std::map<int, AssistantSuggestion*>& suggestions);
-  void NotifySuggestionsCleared();
+  void NotifyCommittedQueryChanged();
+  void NotifyCommittedQueryCleared();
+  void NotifyPendingQueryChanged();
+  void NotifyPendingQueryCleared();
+  void NotifyResponseChanged();
+  void NotifyResponseCleared();
+  void NotifySpeechLevelChanged(float speech_level_db);
 
   InteractionState interaction_state_ = InteractionState::kInactive;
-  InputModality input_modality_ = InputModality::kVoice;
+  InputModality input_modality_ = InputModality::kKeyboard;
   MicState mic_state_ = MicState::kClosed;
-  std::unique_ptr<AssistantQuery> query_;
-  std::vector<AssistantSuggestionPtr> suggestions_;
-  std::vector<std::unique_ptr<AssistantUiElement>> ui_element_list_;
+  AssistantQueryHistory query_history_;
+  std::unique_ptr<AssistantQuery> committed_query_;
+  std::unique_ptr<AssistantQuery> pending_query_;
+  std::unique_ptr<AssistantResponse> pending_response_;
+  std::shared_ptr<AssistantResponse> response_;
 
   base::ObserverList<AssistantInteractionModelObserver> observers_;
 

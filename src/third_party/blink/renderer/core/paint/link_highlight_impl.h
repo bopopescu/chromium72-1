@@ -36,8 +36,9 @@
 #include "third_party/blink/renderer/platform/graphics/compositor_element_id.h"
 #include "third_party/blink/renderer/platform/graphics/link_highlight.h"
 #include "third_party/blink/renderer/platform/graphics/path.h"
-#include "third_party/blink/renderer/platform/heap/handle.h"
+#include "third_party/blink/renderer/platform/heap/persistent.h"
 #include "third_party/blink/renderer/platform/wtf/forward.h"
+#include "third_party/blink/renderer/platform/wtf/time.h"
 
 namespace cc {
 class Layer;
@@ -49,19 +50,21 @@ namespace blink {
 class GraphicsLayer;
 class LayoutBoxModelObject;
 class Node;
-class WebViewImpl;
 
 class CORE_EXPORT LinkHighlightImpl final : public LinkHighlight,
                                             public cc::ContentLayerClient,
                                             public CompositorAnimationDelegate,
                                             public CompositorAnimationClient {
  public:
-  static std::unique_ptr<LinkHighlightImpl> Create(Node*, WebViewImpl*);
+  static std::unique_ptr<LinkHighlightImpl> Create(Node*);
   ~LinkHighlightImpl() override;
 
-  cc::PictureLayer* ContentLayer();
-  cc::Layer* ClipLayer();
   void StartHighlightAnimationIfNeeded();
+
+  // Recalculates |path_| based on |node_|'s geometry and updates the link
+  // highlight layer. To avoid re-computing |path_|, a dirty bit is used
+  // (see |geometry_needs_update_| and |Invalidate()|) which is based on raster
+  // invalidation of the owning graphics layer.
   void UpdateGeometry();
 
   // cc::ContentLayerClient implementation.
@@ -88,8 +91,14 @@ class CORE_EXPORT LinkHighlightImpl final : public LinkHighlight,
     return current_graphics_layer_;
   }
 
+  Node* GetNode() const { return node_; }
+
+  CompositorElementId element_id();
+
+  const EffectPaintPropertyNode* effect() override;
+
  private:
-  LinkHighlightImpl(Node*, WebViewImpl*);
+  LinkHighlightImpl(Node*);
 
   void ReleaseResources();
   void ComputeQuads(const Node&, Vector<FloatQuad>&) const;
@@ -102,18 +111,16 @@ class CORE_EXPORT LinkHighlightImpl final : public LinkHighlight,
   bool ComputeHighlightLayerPathAndPosition(const LayoutBoxModelObject&);
 
   scoped_refptr<cc::PictureLayer> content_layer_;
-  scoped_refptr<cc::Layer> clip_layer_;
   Path path_;
 
   Persistent<Node> node_;
-  WebViewImpl* owning_web_view_;
   GraphicsLayer* current_graphics_layer_;
   bool is_scrolling_graphics_layer_;
   std::unique_ptr<CompositorAnimation> compositor_animation_;
 
   bool geometry_needs_update_;
   bool is_animating_;
-  double start_time_;
+  TimeTicks start_time_;
   UniqueObjectId unique_id_;
 };
 

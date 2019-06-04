@@ -16,7 +16,8 @@
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
-#include "base/test/histogram_tester.h"
+#include "base/test/metrics/histogram_tester.h"
+#include "base/test/scoped_feature_list.h"
 #include "base/test/scoped_task_environment.h"
 #include "base/time/time.h"
 #include "build/build_config.h"
@@ -25,7 +26,11 @@
 #include "components/os_crypt/os_crypt_mocker.h"
 #include "components/password_manager/core/browser/password_manager_test_utils.h"
 #include "components/password_manager/core/browser/psl_matching_helper.h"
-#include "sql/connection.h"
+#include "components/password_manager/core/common/password_manager_features.h"
+#include "components/password_manager/core/common/password_manager_pref_names.h"
+#include "components/prefs/pref_registry_simple.h"
+#include "components/prefs/testing_pref_service.h"
+#include "sql/database.h"
 #include "sql/statement.h"
 #include "sql/test/test_helpers.h"
 #include "testing/gmock/include/gmock/gmock.h"
@@ -100,7 +105,7 @@ template<> std::string GetFirstColumn(const sql::Statement& s) {
 template <class T>
 std::vector<T> GetColumnValuesFromDatabase(const base::FilePath& database_path,
                                            const std::string& column_name) {
-  sql::Connection db;
+  sql::Database db;
   std::vector<T> results;
   CHECK(db.Open(database_path));
 
@@ -1484,6 +1489,28 @@ TEST_F(LoginDatabaseTest, ReportMetricsTest) {
   password_form.username_value = ASCIIToUTF16("JaneDoe");
   EXPECT_EQ(AddChangeForForm(password_form), db().AddLogin(password_form));
 
+  password_form.origin = GURL("http://rsolomakhin.github.io/autofill/");
+  password_form.signon_realm = "http://rsolomakhin.github.io/";
+  password_form.blacklisted_by_user = true;
+  EXPECT_EQ(AddChangeForForm(password_form), db().AddLogin(password_form));
+
+  password_form.origin = GURL("https://rsolomakhin.github.io/autofill/");
+  password_form.signon_realm = "https://rsolomakhin.github.io/";
+  password_form.blacklisted_by_user = true;
+  EXPECT_EQ(AddChangeForForm(password_form), db().AddLogin(password_form));
+
+  password_form.origin = GURL("http://rsolomakhin.github.io/autofill/123");
+  password_form.signon_realm = "http://rsolomakhin.github.io/";
+  password_form.blacklisted_by_user = true;
+  EXPECT_EQ(AddChangeForForm(password_form),
+            db().AddBlacklistedLoginForTesting(password_form));
+
+  password_form.origin = GURL("https://rsolomakhin.github.io/autofill/1234");
+  password_form.signon_realm = "https://rsolomakhin.github.io/";
+  password_form.blacklisted_by_user = true;
+  EXPECT_EQ(AddChangeForForm(password_form),
+            db().AddBlacklistedLoginForTesting(password_form));
+
   base::HistogramTester histogram_tester;
   db().ReportMetrics("", false);
 
@@ -1544,6 +1571,60 @@ TEST_F(LoginDatabaseTest, ReportMetricsTest) {
       1);
   histogram_tester.ExpectUniqueSample("PasswordManager.InaccessiblePasswords",
                                       0, 1);
+  histogram_tester.ExpectUniqueSample("PasswordManager.BlacklistedDuplicates",
+                                      2, 1);
+}
+
+// This test will check that adding a blacklist entry is prevented due to an
+// already existing entry.
+TEST_F(LoginDatabaseTest, AddBlacklistedDuplicates) {
+  PasswordForm password_form;
+  password_form.origin = GURL("http://rsolomakhin.github.io/autofill/");
+  password_form.signon_realm = "http://rsolomakhin.github.io/";
+  password_form.blacklisted_by_user = true;
+  EXPECT_EQ(AddChangeForForm(password_form), db().AddLogin(password_form));
+
+  PasswordForm password_form_duplicated;
+  password_form_duplicated.origin =
+      GURL("http://rsolomakhin.github.io/autofill/123");
+  password_form_duplicated.signon_realm = "http://rsolomakhin.github.io/";
+  password_form_duplicated.blacklisted_by_user = true;
+  EXPECT_EQ(PasswordStoreChangeList(), db().AddLogin(password_form_duplicated));
+
+  PasswordForm password_form_example;
+  password_form_example.origin = GURL("http://example.com/");
+  password_form_example.signon_realm = "http://example.com/";
+  password_form_example.blacklisted_by_user = false;
+  EXPECT_EQ(AddChangeForForm(password_form_example),
+            db().AddLogin(password_form_example));
+
+  PasswordForm password_form_example_blacklisted;
+  password_form_example_blacklisted.origin = GURL("http://example.com/1");
+  password_form_example_blacklisted.signon_realm = "http://example.com/";
+  password_form_example_blacklisted.blacklisted_by_user = true;
+  EXPECT_EQ(AddChangeForForm(password_form_example_blacklisted),
+            db().AddLogin(password_form_example_blacklisted));
+
+  PasswordForm password_form_example_blacklisted_duplicated;
+  password_form_example_blacklisted_duplicated.origin =
+      GURL("http://example.com/123");
+  password_form_example_blacklisted_duplicated.signon_realm =
+      "http://example.com/";
+  password_form_example_blacklisted_duplicated.blacklisted_by_user = true;
+  EXPECT_EQ(PasswordStoreChangeList(),
+            db().AddLogin(password_form_example_blacklisted_duplicated));
+
+  std::vector<std::unique_ptr<PasswordForm>> forms;
+  ASSERT_TRUE(db().GetAutofillableLogins(&forms));
+  EXPECT_THAT(forms,
+              UnorderedElementsAre(::testing::Pointee(password_form_example)));
+
+  std::vector<std::unique_ptr<PasswordForm>> blacklisted_forms;
+  ASSERT_TRUE(db().GetBlacklistLogins(&blacklisted_forms));
+  EXPECT_THAT(blacklisted_forms,
+              UnorderedElementsAre(
+                  ::testing::Pointee(password_form),
+                  ::testing::Pointee(password_form_example_blacklisted)));
 }
 
 TEST_F(LoginDatabaseTest, PasswordReuseMetrics) {
@@ -1709,7 +1790,7 @@ TEST_F(LoginDatabaseTest, PasswordReuseMetrics) {
 // Only the current user has permission to read the database.
 //
 // Only POSIX because GetPosixFilePermissions() only exists on POSIX.
-// This tests that sql::Connection::set_restrict_to_user() was called,
+// This tests that sql::Database::set_restrict_to_user() was called,
 // and that function is a noop on non-POSIX platforms in any case.
 TEST_F(LoginDatabaseTest, FilePermissions) {
   int mode = base::FILE_PERMISSION_MASK;
@@ -1768,7 +1849,7 @@ TEST(LoginDatabaseFailureTest, Init_NoCrashOnFailedRollback) {
   // current version (in reality, this could happen if, e.g., someone opened a
   // Canary-created profile with Chrome Stable.
   {
-    sql::Connection connection;
+    sql::Database connection;
     sql::MetaTable meta_table;
     ASSERT_TRUE(connection.Open(database_path));
     ASSERT_TRUE(meta_table.Init(&connection, kCurrentVersionNumber + 1,
@@ -1808,7 +1889,7 @@ class LoginDatabaseMigrationTest : public testing::TestWithParam<int> {
 
   void DestroyDatabase() {
     if (!database_path_.empty())
-      sql::Connection::Delete(database_path_);
+      sql::Database::Delete(database_path_);
   }
 
   // Returns the database version for the test.
@@ -1908,7 +1989,7 @@ void LoginDatabaseMigrationTest::MigrationToVCurrent(
   {
     // On versions < 15 |kCompatibleVersionNumber| was set to 1, but
     // the migration should bring it to the correct value.
-    sql::Connection db;
+    sql::Database db;
     sql::MetaTable meta_table;
     ASSERT_TRUE(db.Open(database_path_));
     ASSERT_TRUE(
@@ -1951,5 +2032,265 @@ INSTANTIATE_TEST_CASE_P(MigrationToVCurrent,
 INSTANTIATE_TEST_CASE_P(MigrationToVCurrent,
                         LoginDatabaseMigrationTestBroken,
                         testing::Range(1, 4));
+
+class LoginDatabaseUndecryptableLoginsTest : public testing::Test {
+ protected:
+  LoginDatabaseUndecryptableLoginsTest() {}
+
+  void SetUp() override {
+    ASSERT_TRUE(temp_dir_.CreateUniqueTempDir());
+    database_path_ = temp_dir_.GetPath().AppendASCII("test.db");
+    OSCryptMocker::SetUp();
+  }
+
+  void TearDown() override { OSCryptMocker::TearDown(); }
+
+  // Generates login depending on |unique_string| and |origin| parameters and
+  // adds it to the database. Changes encrypted password in the database if the
+  // |should_be_corrupted| flag is active.
+  PasswordForm AddDummyLogin(const std::string& unique_string,
+                             const GURL& origin,
+                             bool should_be_corrupted);
+
+  base::FilePath database_path() const { return database_path_; }
+
+  TestingPrefServiceSimple& testing_local_state() {
+    return testing_local_state_;
+  }
+
+  void RunUntilIdle() { scoped_task_environment_.RunUntilIdle(); }
+
+ private:
+  base::FilePath database_path_;
+  base::ScopedTempDir temp_dir_;
+  base::test::ScopedTaskEnvironment scoped_task_environment_;
+  TestingPrefServiceSimple testing_local_state_;
+
+  DISALLOW_COPY_AND_ASSIGN(LoginDatabaseUndecryptableLoginsTest);
+};
+
+PasswordForm LoginDatabaseUndecryptableLoginsTest::AddDummyLogin(
+    const std::string& unique_string,
+    const GURL& origin,
+    bool should_be_corrupted) {
+  // Create a dummy password form.
+  const base::string16 unique_string16 = ASCIIToUTF16(unique_string);
+  PasswordForm form;
+  form.origin = origin;
+  form.username_element = unique_string16;
+  form.username_value = unique_string16;
+  form.password_element = unique_string16;
+  form.password_value = unique_string16;
+  form.signon_realm = origin.GetOrigin().spec();
+
+  {
+    LoginDatabase db(database_path());
+    EXPECT_TRUE(db.Init());
+    EXPECT_EQ(db.AddLogin(form), AddChangeForForm(form));
+  }
+
+  if (should_be_corrupted) {
+    sql::Database db;
+    EXPECT_TRUE(db.Open(database_path()));
+
+    // Change encrypted password in the database if the login should be
+    // corrupted.
+    std::string statement =
+        "UPDATE logins SET password_value = password_value || 'trash' "
+        "WHERE signon_realm = ? AND username_value = ?";
+    sql::Statement s(db.GetCachedStatement(SQL_FROM_HERE, statement.c_str()));
+    s.BindString(0, form.signon_realm);
+    s.BindString(1, base::UTF16ToUTF8(form.username_value));
+
+    EXPECT_TRUE(s.is_valid());
+    EXPECT_TRUE(s.Run());
+    EXPECT_EQ(db.GetLastChangeCount(), 1);
+  }
+
+  return form;
+}
+
+TEST_F(LoginDatabaseUndecryptableLoginsTest, DeleteUndecryptableLoginsTest) {
+  // Disable feature for deleting corrupted passwords, so GetAutofillableLogins
+  // doesn't remove any passwords.
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitAndDisableFeature(
+      features::kDeleteCorruptedPasswords);
+
+  auto form1 = AddDummyLogin("foo1", GURL("https://foo1.com/"), false);
+  auto form2 = AddDummyLogin("foo2", GURL("https://foo2.com/"), true);
+  auto form3 = AddDummyLogin("foo3", GURL("https://foo3.com/"), false);
+
+  LoginDatabase db(database_path());
+  base::HistogramTester histogram_tester;
+  ASSERT_TRUE(db.Init());
+
+#if defined(OS_MACOSX) && !defined(OS_IOS)
+  testing_local_state().registry()->RegisterTimePref(prefs::kPasswordRecovery,
+                                                     base::Time());
+  db.InitPasswordRecoveryUtil(std::make_unique<PasswordRecoveryUtilMac>(
+      &testing_local_state(), base::ThreadTaskRunnerHandle::Get()));
+
+  // Make sure that we can't get any logins when database is corrupted.
+  std::vector<std::unique_ptr<PasswordForm>> result;
+  EXPECT_FALSE(db.GetAutofillableLogins(&result));
+  EXPECT_TRUE(result.empty());
+
+  // Delete undecryptable logins and make sure we can get valid logins.
+  EXPECT_EQ(DatabaseCleanupResult::kSuccess, db.DeleteUndecryptableLogins());
+  EXPECT_TRUE(db.GetAutofillableLogins(&result));
+  EXPECT_THAT(result, UnorderedElementsAre(Pointee(form1), Pointee(form3)));
+
+  RunUntilIdle();
+
+  // Make sure that password recovery pref is set.
+  ASSERT_TRUE(testing_local_state().HasPrefPath(prefs::kPasswordRecovery));
+#else
+  EXPECT_EQ(DatabaseCleanupResult::kSuccess, db.DeleteUndecryptableLogins());
+#endif
+
+// Check histograms.
+#if defined(OS_MACOSX) && !defined(OS_IOS)
+  histogram_tester.ExpectUniqueSample("PasswordManager.CleanedUpPasswords", 1,
+                                      1);
+  histogram_tester.ExpectUniqueSample(
+      "PasswordManager.DeleteUndecryptableLoginsReturnValue",
+      metrics_util::DeleteCorruptedPasswordsResult::kSuccessPasswordsDeleted,
+      1);
+#else
+  EXPECT_TRUE(
+      histogram_tester.GetAllSamples("PasswordManager.CleanedUpPasswords")
+          .empty());
+#endif
+}
+
+#if defined(OS_MACOSX) && !defined(OS_IOS)
+TEST_F(LoginDatabaseUndecryptableLoginsTest, PasswordRecoveryEnabledGetLogins) {
+  base::HistogramTester histogram_tester;
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitAndEnableFeature(features::kDeleteCorruptedPasswords);
+
+  auto form1 = AddDummyLogin("foo1", GURL("https://foo1.com/"), false);
+  auto form2 = AddDummyLogin("foo2", GURL("https://foo2.com/"), true);
+  auto form3 = AddDummyLogin("foo3", GURL("https://foo3.com/"), false);
+
+  LoginDatabase db(database_path());
+  ASSERT_TRUE(db.Init());
+
+  testing_local_state().registry()->RegisterTimePref(prefs::kPasswordRecovery,
+                                                     base::Time());
+  db.InitPasswordRecoveryUtil(std::make_unique<PasswordRecoveryUtilMac>(
+      &testing_local_state(), base::ThreadTaskRunnerHandle::Get()));
+
+  std::vector<std::unique_ptr<PasswordForm>> result;
+  EXPECT_TRUE(db.GetAutofillableLogins(&result));
+  EXPECT_THAT(result, UnorderedElementsAre(Pointee(form1), Pointee(form3)));
+
+  RunUntilIdle();
+  EXPECT_TRUE(testing_local_state().HasPrefPath(prefs::kPasswordRecovery));
+
+  histogram_tester.ExpectUniqueSample(
+      "PasswordManager.RemovedCorruptedPasswords", 1, 1);
+  histogram_tester.ExpectUniqueSample(
+      "PasswordManager.DeleteCorruptedPasswordsResult",
+      metrics_util::DeleteCorruptedPasswordsResult::kSuccessPasswordsDeleted,
+      1);
+}
+
+TEST_F(LoginDatabaseUndecryptableLoginsTest,
+       PasswordRecoveryDisabledGetLogins) {
+  base::HistogramTester histogram_tester;
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitAndDisableFeature(
+      features::kDeleteCorruptedPasswords);
+
+  AddDummyLogin("foo1", GURL("https://foo1.com/"), false);
+  AddDummyLogin("foo2", GURL("https://foo2.com/"), true);
+
+  LoginDatabase db(database_path());
+  ASSERT_TRUE(db.Init());
+
+  testing_local_state().registry()->RegisterTimePref(prefs::kPasswordRecovery,
+                                                     base::Time());
+  db.InitPasswordRecoveryUtil(std::make_unique<PasswordRecoveryUtilMac>(
+      &testing_local_state(), base::ThreadTaskRunnerHandle::Get()));
+
+  std::vector<std::unique_ptr<PasswordForm>> result;
+  EXPECT_FALSE(db.GetAutofillableLogins(&result));
+  EXPECT_TRUE(result.empty());
+
+  RunUntilIdle();
+  EXPECT_FALSE(testing_local_state().HasPrefPath(prefs::kPasswordRecovery));
+
+  EXPECT_TRUE(histogram_tester
+                  .GetAllSamples("PasswordManager.RemovedCorruptedPasswords")
+                  .empty());
+  EXPECT_TRUE(
+      histogram_tester
+          .GetAllSamples("PasswordManager.DeleteCorruptedPasswordsResult")
+          .empty());
+}
+
+TEST_F(LoginDatabaseUndecryptableLoginsTest,
+       PasswordRecoveryEnabledKeychainLocked) {
+  base::HistogramTester histogram_tester;
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitAndEnableFeature(features::kDeleteCorruptedPasswords);
+
+  // This is a valid entry.
+  auto form = AddDummyLogin("foo", GURL("https://foo.com/"), false);
+
+  OSCryptMocker::SetBackendLocked(true);
+
+  LoginDatabase db(database_path());
+  ASSERT_TRUE(db.Init());
+
+  testing_local_state().registry()->RegisterTimePref(prefs::kPasswordRecovery,
+                                                     base::Time());
+  db.InitPasswordRecoveryUtil(std::make_unique<PasswordRecoveryUtilMac>(
+      &testing_local_state(), base::ThreadTaskRunnerHandle::Get()));
+
+  std::vector<std::unique_ptr<PasswordForm>> result;
+  EXPECT_FALSE(db.GetAutofillableLogins(&result));
+  EXPECT_TRUE(result.empty());
+
+  RunUntilIdle();
+  EXPECT_FALSE(testing_local_state().HasPrefPath(prefs::kPasswordRecovery));
+
+  EXPECT_TRUE(histogram_tester
+                  .GetAllSamples("PasswordManager.RemovedCorruptedPasswords")
+                  .empty());
+  EXPECT_TRUE(
+      histogram_tester
+          .GetAllSamples("PasswordManager.DeleteCorruptedPasswordsResult")
+          .empty());
+
+  // Note: it's not possible that encryption suddenly becomes available. This is
+  // only used to check that the form is not removed from the database.
+  OSCryptMocker::SetBackendLocked(false);
+
+  EXPECT_TRUE(db.GetAutofillableLogins(&result));
+  EXPECT_THAT(result, UnorderedElementsAre(Pointee(form)));
+}
+
+TEST_F(LoginDatabaseUndecryptableLoginsTest, KeychainLockedTest) {
+  AddDummyLogin("foo1", GURL("https://foo1.com/"), false);
+  AddDummyLogin("foo2", GURL("https://foo2.com/"), true);
+
+  OSCryptMocker::SetBackendLocked(true);
+  LoginDatabase db(database_path());
+  base::HistogramTester histogram_tester;
+  ASSERT_TRUE(db.Init());
+  EXPECT_EQ(DatabaseCleanupResult::kEncryptionUnavailable,
+            db.DeleteUndecryptableLogins());
+
+  EXPECT_TRUE(
+      histogram_tester.GetAllSamples("PasswordManager.CleanedUpPasswords")
+          .empty());
+  histogram_tester.ExpectUniqueSample(
+      "PasswordManager.DeleteUndecryptableLoginsReturnValue",
+      metrics_util::DeleteCorruptedPasswordsResult::kEncryptionUnavailable, 1);
+}
+#endif  // defined(OS_MACOSX) && !defined(OS_IOS)
 
 }  // namespace password_manager

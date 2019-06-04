@@ -6,6 +6,7 @@
 
 #include <sstream>
 
+#include "base/bind.h"
 #include "base/command_line.h"
 #include "base/macros.h"
 #include "base/memory/ptr_util.h"
@@ -33,24 +34,24 @@ static const size_t kNumMocks = 3;
 static const int kNumCharactersInPassword = 10;
 static const char kPlaintextPassword[] = "plaintext";
 
-api::passwords_private::PasswordUiEntry CreateEntry(size_t num) {
+api::passwords_private::PasswordUiEntry CreateEntry(int id) {
   api::passwords_private::PasswordUiEntry entry;
-  entry.login_pair.urls.shown = "test" + std::to_string(num) + ".com";
+  entry.login_pair.urls.shown = "test" + std::to_string(id) + ".com";
   entry.login_pair.urls.origin =
       "http://" + entry.login_pair.urls.shown + "/login";
   entry.login_pair.urls.link = entry.login_pair.urls.origin;
-  entry.login_pair.username = "testName" + std::to_string(num);
+  entry.login_pair.username = "testName" + std::to_string(id);
   entry.num_characters_in_password = kNumCharactersInPassword;
-  entry.index = num;
+  entry.id = id;
   return entry;
 }
 
-api::passwords_private::ExceptionEntry CreateException(size_t num) {
+api::passwords_private::ExceptionEntry CreateException(int id) {
   api::passwords_private::ExceptionEntry exception;
-  exception.urls.shown = "exception" + std::to_string(num) + ".com";
+  exception.urls.shown = "exception" + std::to_string(id) + ".com";
   exception.urls.origin = "http://" + exception.urls.shown + "/login";
   exception.urls.link = exception.urls.origin;
-  exception.index = num;
+  exception.id = id;
   return exception;
 }
 
@@ -92,7 +93,7 @@ class TestDelegate : public PasswordsPrivateDelegate {
     callback.Run(current_exceptions_);
   }
 
-  void RemoveSavedPassword(size_t index) override {
+  void RemoveSavedPassword(int id) override {
     if (current_entries_.empty())
       return;
 
@@ -103,10 +104,7 @@ class TestDelegate : public PasswordsPrivateDelegate {
     SendSavedPasswordsList();
   }
 
-  void RemovePasswordException(size_t index) override {
-    if (index >= current_exceptions_.size())
-      return;
-
+  void RemovePasswordException(int id) override {
     // Since this is just mock data, remove the first entry regardless of
     // the data contained.
     last_deleted_exception_ = std::move(current_exceptions_.front());
@@ -129,16 +127,14 @@ class TestDelegate : public PasswordsPrivateDelegate {
     }
   }
 
-  void RequestShowPassword(size_t index,
+  void RequestShowPassword(int id,
                            content::WebContents* web_contents) override {
     // Return a mocked password value.
     std::string plaintext_password(kPlaintextPassword);
     PasswordsPrivateEventRouter* router =
         PasswordsPrivateEventRouterFactory::GetForProfile(profile_);
     if (router) {
-      if (index >= current_entries_.size())
-        return;
-      router->OnPlaintextPasswordFetched(index, plaintext_password);
+      router->OnPlaintextPasswordFetched(id, plaintext_password);
     }
   }
 
@@ -215,7 +211,8 @@ class PasswordsPrivateApiTest : public ExtensionApiTest {
   void SetUpOnMainThread() override {
     ExtensionApiTest::SetUpOnMainThread();
     PasswordsPrivateDelegateFactory::GetInstance()->SetTestingFactory(
-        profile(), &PasswordsPrivateApiTest::GetPasswordsPrivateDelegate);
+        profile(), base::BindRepeating(
+                       &PasswordsPrivateApiTest::GetPasswordsPrivateDelegate));
     s_test_delegate_->SetProfile(profile());
     content::RunAllPendingInMessageLoop();
   }
@@ -277,36 +274,19 @@ IN_PROC_BROWSER_TEST_F(PasswordsPrivateApiTest, GetPasswordExceptionList) {
 IN_PROC_BROWSER_TEST_F(PasswordsPrivateApiTest, ImportPasswords) {
   EXPECT_FALSE(importPasswordsWasTriggered());
   EXPECT_TRUE(RunPasswordsSubtest("importPasswords")) << message_;
-
-  // TODO(crbug.com/177163): Extension subtests are currently skipped on
-  // Windows, which leads to the import passwords function never being
-  // triggered, causing the test to fail, so the check is currently skipped in
-  // this case.
-  if (!ExtensionApiTest::ExtensionSubtestsAreSkipped()) {
-    EXPECT_TRUE(importPasswordsWasTriggered());
-  }
+  EXPECT_TRUE(importPasswordsWasTriggered());
 }
 
 IN_PROC_BROWSER_TEST_F(PasswordsPrivateApiTest, ExportPasswords) {
   EXPECT_FALSE(exportPasswordsWasTriggered());
   EXPECT_TRUE(RunPasswordsSubtest("exportPasswords")) << message_;
-
-  // TODO(crbug.com/177163): Extension subtests are currently skipped on
-  // Windows, which leads to the import passwords function never being
-  // triggered, causing the test to fail, so the check is currently skipped in
-  // this case.
-  if (!ExtensionApiTest::ExtensionSubtestsAreSkipped()) {
-    EXPECT_TRUE(exportPasswordsWasTriggered());
-  }
+  EXPECT_TRUE(exportPasswordsWasTriggered());
 }
 
 IN_PROC_BROWSER_TEST_F(PasswordsPrivateApiTest, CancelExportPasswords) {
   EXPECT_FALSE(cancelExportPasswordsWasTriggered());
   EXPECT_TRUE(RunPasswordsSubtest("cancelExportPasswords")) << message_;
-
-  if (!ExtensionApiTest::ExtensionSubtestsAreSkipped()) {
-    EXPECT_TRUE(cancelExportPasswordsWasTriggered());
-  }
+  EXPECT_TRUE(cancelExportPasswordsWasTriggered());
 }
 
 IN_PROC_BROWSER_TEST_F(PasswordsPrivateApiTest, RequestExportProgressStatus) {

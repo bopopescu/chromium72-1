@@ -8,7 +8,7 @@
 
 #include "base/memory/ptr_util.h"
 #include "base/run_loop.h"
-#include "base/test/histogram_tester.h"
+#include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_task_environment.h"
 #include "base/test/simple_test_clock.h"
 #include "base/test/test_simple_task_runner.h"
@@ -58,11 +58,6 @@ class HostScanSchedulerImplTest : public NetworkStateTest {
 
     histogram_tester_ = std::make_unique<base::HistogramTester>();
 
-    ethernet_service_path_ = ConfigureService(CreateConfigurationJsonString(
-        kEthernetServiceGuid, shill::kTypeEthernet));
-    test_manager_client()->SetManagerProperty(
-        shill::kDefaultServiceProperty, base::Value(ethernet_service_path_));
-
     network_state_handler()->SetTetherTechnologyState(
         NetworkStateHandler::TECHNOLOGY_ENABLED);
 
@@ -73,18 +68,14 @@ class HostScanSchedulerImplTest : public NetworkStateTest {
         network_state_handler(), fake_host_scanner_.get(),
         session_manager_.get());
 
-    mock_host_scan_batch_timer_ = new base::MockTimer(
-        true /* retain_user_task */, false /* is_repeating */);
-    mock_delay_scan_after_unlock_timer_ = new base::MockTimer(
-        true /* retain_user_task */, false /* is_repeating */);
+    mock_host_scan_batch_timer_ = new base::MockOneShotTimer();
 
     // Advance the clock by an arbitrary value to ensure that when Now() is
     // called, the Unix epoch will not be returned.
     test_clock_.Advance(base::TimeDelta::FromSeconds(10));
     test_task_runner_ = base::MakeRefCounted<base::TestSimpleTaskRunner>();
     host_scan_scheduler_->SetTestDoubles(
-        base::WrapUnique(mock_host_scan_batch_timer_),
-        base::WrapUnique(mock_delay_scan_after_unlock_timer_), &test_clock_,
+        base::WrapUnique(mock_host_scan_batch_timer_), &test_clock_,
         test_task_runner_);
   }
 
@@ -96,7 +87,16 @@ class HostScanSchedulerImplTest : public NetworkStateTest {
     DBusThreadManager::Shutdown();
   }
 
-  void RequestScan() { host_scan_scheduler_->ScanRequested(); }
+  void RequestScan(const NetworkTypePattern& type) {
+    host_scan_scheduler_->ScanRequested(type);
+  }
+
+  void InitializeEthernet() {
+    ethernet_service_path_ = ConfigureService(CreateConfigurationJsonString(
+        kEthernetServiceGuid, shill::kTypeEthernet));
+    test_manager_client()->SetManagerProperty(
+        shill::kDefaultServiceProperty, base::Value(ethernet_service_path_));
+  }
 
   // Disconnects the Ethernet network and manually sets the default network to
   // |new_default_service_path|. If |new_default_service_path| is empty then no
@@ -164,8 +164,7 @@ class HostScanSchedulerImplTest : public NetworkStateTest {
   std::unique_ptr<FakeHostScanner> fake_host_scanner_;
   std::unique_ptr<session_manager::SessionManager> session_manager_;
 
-  base::MockTimer* mock_host_scan_batch_timer_;
-  base::MockTimer* mock_delay_scan_after_unlock_timer_;
+  base::MockOneShotTimer* mock_host_scan_batch_timer_;
   base::SimpleTestClock test_clock_;
   scoped_refptr<base::TestSimpleTaskRunner> test_task_runner_;
 
@@ -174,8 +173,8 @@ class HostScanSchedulerImplTest : public NetworkStateTest {
   std::unique_ptr<HostScanSchedulerImpl> host_scan_scheduler_;
 };
 
-TEST_F(HostScanSchedulerImplTest, ScheduleScan) {
-  host_scan_scheduler_->ScheduleScan();
+TEST_F(HostScanSchedulerImplTest, AttemptScanIfOffline) {
+  host_scan_scheduler_->AttemptScanIfOffline();
   EXPECT_EQ(1u, fake_host_scanner_->num_scans_started());
   EXPECT_TRUE(
       network_state_handler()->GetScanningByType(NetworkTypePattern::Tether()));
@@ -191,38 +190,50 @@ TEST_F(HostScanSchedulerImplTest, ScheduleScan) {
   VerifyScanDuration(5u /* expected_num_sections */);
 }
 
-TEST_F(HostScanSchedulerImplTest, TestDeviceLockAndUnlock) {
-  // Lock the screen. This should not trigger a scan.
+TEST_F(HostScanSchedulerImplTest, TestDeviceLockAndUnlock_Offline) {
+  // Lock the screen. This should never trigger a scan.
   SetScreenLockedState(true /* is_locked */);
   EXPECT_EQ(0u, fake_host_scanner_->num_scans_started());
-  EXPECT_FALSE(mock_delay_scan_after_unlock_timer_->IsRunning());
 
-  // Try to start a scan. Because the screen is locked, this should not actually
+  // Try to start a scan. Because the screen is locked, this should not
   // cause a scan to be started.
-  host_scan_scheduler_->ScheduleScan();
+  host_scan_scheduler_->AttemptScanIfOffline();
   EXPECT_EQ(0u, fake_host_scanner_->num_scans_started());
-  EXPECT_FALSE(mock_delay_scan_after_unlock_timer_->IsRunning());
 
-  // Unlock the screen. A scan should not yet have been started, but the timer
-  // should have.
+  // Unlock the screen. Because the device is offline, a new scan should have
+  // started.
+  SetScreenLockedState(false /* is_locked */);
+  EXPECT_EQ(1u, fake_host_scanner_->num_scans_started());
+}
+
+TEST_F(HostScanSchedulerImplTest, TestDeviceLockAndUnlock_Online) {
+  // Simulate the device being online.
+  InitializeEthernet();
+
+  // Lock the screen. This should never trigger a scan.
+  SetScreenLockedState(true /* is_locked */);
+  EXPECT_EQ(0u, fake_host_scanner_->num_scans_started());
+
+  // Try to start a scan. Because the screen is locked, this should not
+  // cause a scan to be started.
+  host_scan_scheduler_->AttemptScanIfOffline();
+  EXPECT_EQ(0u, fake_host_scanner_->num_scans_started());
+
+  // Unlock the screen. Because the device is online, a new scan should not have
+  // started.
   SetScreenLockedState(false /* is_locked */);
   EXPECT_EQ(0u, fake_host_scanner_->num_scans_started());
-  ASSERT_TRUE(mock_delay_scan_after_unlock_timer_->IsRunning());
-
-  // Fire the timer; this should start the scan.
-  mock_delay_scan_after_unlock_timer_->Fire();
-  EXPECT_EQ(1u, fake_host_scanner_->num_scans_started());
 }
 
 TEST_F(HostScanSchedulerImplTest, ScanRequested) {
   // Begin scanning.
-  RequestScan();
+  RequestScan(NetworkTypePattern::Tether());
   EXPECT_EQ(1u, fake_host_scanner_->num_scans_started());
   EXPECT_TRUE(
       network_state_handler()->GetScanningByType(NetworkTypePattern::Tether()));
 
   // Should not begin a new scan while a scan is active.
-  RequestScan();
+  RequestScan(NetworkTypePattern::Tether());
   EXPECT_EQ(1u, fake_host_scanner_->num_scans_started());
   EXPECT_TRUE(
       network_state_handler()->GetScanningByType(NetworkTypePattern::Tether()));
@@ -236,14 +247,21 @@ TEST_F(HostScanSchedulerImplTest, ScanRequested) {
   VerifyScanDuration(5u /* expected_num_sections */);
 
   // A new scan should be allowed once a scan is not active.
-  RequestScan();
+  RequestScan(NetworkTypePattern::Tether());
   EXPECT_EQ(2u, fake_host_scanner_->num_scans_started());
   EXPECT_TRUE(
       network_state_handler()->GetScanningByType(NetworkTypePattern::Tether()));
 }
 
+TEST_F(HostScanSchedulerImplTest, ScanRequested_NonMatchingNetworkTypePattern) {
+  RequestScan(NetworkTypePattern::WiFi());
+  EXPECT_EQ(0u, fake_host_scanner_->num_scans_started());
+  EXPECT_FALSE(
+      network_state_handler()->GetScanningByType(NetworkTypePattern::Tether()));
+}
+
 TEST_F(HostScanSchedulerImplTest, HostScanSchedulerDestroyed) {
-  host_scan_scheduler_->ScheduleScan();
+  host_scan_scheduler_->AttemptScanIfOffline();
   EXPECT_TRUE(
       network_state_handler()->GetScanningByType(NetworkTypePattern::Tether()));
 
@@ -259,7 +277,7 @@ TEST_F(HostScanSchedulerImplTest, HostScanSchedulerDestroyed) {
 TEST_F(HostScanSchedulerImplTest, HostScanBatchMetric) {
   // The first scan takes 5 seconds. After stopping, the timer should be
   // running.
-  host_scan_scheduler_->ScheduleScan();
+  host_scan_scheduler_->AttemptScanIfOffline();
   test_clock_.Advance(base::TimeDelta::FromSeconds(5));
   fake_host_scanner_->StopScan();
   EXPECT_TRUE(mock_host_scan_batch_timer_->IsRunning());
@@ -269,7 +287,7 @@ TEST_F(HostScanSchedulerImplTest, HostScanBatchMetric) {
   test_clock_.Advance(base::TimeDelta::FromSeconds(1));
   EXPECT_LT(base::TimeDelta::FromSeconds(1),
             mock_host_scan_batch_timer_->GetCurrentDelay());
-  host_scan_scheduler_->ScheduleScan();
+  host_scan_scheduler_->AttemptScanIfOffline();
   EXPECT_FALSE(mock_host_scan_batch_timer_->IsRunning());
 
   // Stop the scan; the duration should not have been recorded, and the timer
@@ -283,7 +301,7 @@ TEST_F(HostScanSchedulerImplTest, HostScanBatchMetric) {
   test_clock_.Advance(base::TimeDelta::FromSeconds(59));
   EXPECT_LT(base::TimeDelta::FromSeconds(59),
             mock_host_scan_batch_timer_->GetCurrentDelay());
-  host_scan_scheduler_->ScheduleScan();
+  host_scan_scheduler_->AttemptScanIfOffline();
   EXPECT_FALSE(mock_host_scan_batch_timer_->IsRunning());
 
   // Stop the scan; the duration should not have been recorded, and the timer
@@ -305,7 +323,7 @@ TEST_F(HostScanSchedulerImplTest, HostScanBatchMetric) {
 
   // Now, start a new 5-second scan, then wait for the timer to fire. A new
   // batch duration should have been logged to metrics.
-  host_scan_scheduler_->ScheduleScan();
+  host_scan_scheduler_->AttemptScanIfOffline();
   test_clock_.Advance(base::TimeDelta::FromSeconds(5));
   fake_host_scanner_->StopScan();
   EXPECT_TRUE(mock_host_scan_batch_timer_->IsRunning());
@@ -317,6 +335,8 @@ TEST_F(HostScanSchedulerImplTest, HostScanBatchMetric) {
 }
 
 TEST_F(HostScanSchedulerImplTest, DefaultNetworkChanged) {
+  InitializeEthernet();
+
   // When no Tether network is present, a scan should start when the default
   // network is disconnected.
   SetEthernetNetworkConnecting();

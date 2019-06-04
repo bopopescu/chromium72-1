@@ -45,7 +45,7 @@ class ActiveDirectoryPolicyManager
   void OnStoreLoaded(CloudPolicyStore* cloud_policy_store) override;
   void OnStoreError(CloudPolicyStore* cloud_policy_store) override;
 
-  // ComponentActiveDirectoryPolicyService::Delegate
+  // ComponentActiveDirectoryPolicyService::Delegate:
   void OnComponentActiveDirectoryPolicyUpdated() override;
 
   CloudPolicyStore* store() const { return store_.get(); }
@@ -88,6 +88,9 @@ class ActiveDirectoryPolicyManager
   // requirements to continue have not been met.
   virtual void CancelWaitForInitialPolicy() {}
 
+  // Called by PublishPolicy() before the policy is sent off to UpdatePolicy().
+  virtual void OnPublishPolicy() {}
+
   // Whether policy fetch has ever been reported as completed by authpolicyd
   // during lifetime of the object (after Chrome was started).
   bool fetch_ever_completed_ = false;
@@ -98,7 +101,7 @@ class ActiveDirectoryPolicyManager
   // the policy, the store needs to be reloaded from session manager.)
   void OnPolicyFetched(bool success);
 
-  // Called right before policy is published. Expands e.g. ${machine_name} for
+  // Called right before policy is published. Expands e.g. ${MACHINE_NAME} for
   // a selected set of policies.
   void ExpandVariables(PolicyMap* policy_map);
 
@@ -154,8 +157,15 @@ class UserActiveDirectoryPolicyManager : public ActiveDirectoryPolicyManager {
 
  protected:
   // ActiveDirectoryPolicyManager:
+
+  // Calls AuthPolicyClient to fetch user policy.
   void DoPolicyFetch(PolicyScheduler::TaskCallback callback) override;
+
+  // Cancels the initial wait timeout for policy fetches during sign-in.
   void CancelWaitForInitialPolicy() override;
+
+  // Updates user affiliation IDs.
+  void OnPublishPolicy() override;
 
  private:
   // Called when |initial_policy_timeout_| times out, to cancel the blocking
@@ -175,8 +185,7 @@ class UserActiveDirectoryPolicyManager : public ActiveDirectoryPolicyManager {
 
   // A timer that puts a hard limit on the maximum time to wait for the initial
   // policy fetch/load.
-  base::Timer initial_policy_timeout_{false /* retain_user_task */,
-                                      false /* is_repeating */};
+  base::OneShotTimer initial_policy_timeout_;
 
   // Callback to exit the session.
   base::OnceClosure exit_session_;
@@ -205,6 +214,8 @@ class DeviceActiveDirectoryPolicyManager : public ActiveDirectoryPolicyManager {
 
  protected:
   // ActiveDirectoryPolicyManager:
+
+  // Calls AuthPolicyClient to fetch device policy.
   void DoPolicyFetch(PolicyScheduler::TaskCallback callback) override;
 
  private:

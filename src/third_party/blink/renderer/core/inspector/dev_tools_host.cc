@@ -57,6 +57,7 @@
 #include "third_party/blink/renderer/platform/loader/fetch/resource_request.h"
 #include "third_party/blink/renderer/platform/loader/fetch/resource_response.h"
 #include "third_party/blink/renderer/platform/shared_buffer.h"
+#include "third_party/blink/renderer/platform/wtf/text/string_builder.h"
 
 namespace blink {
 
@@ -64,9 +65,13 @@ class FrontendMenuProvider final : public ContextMenuProvider {
  public:
   static FrontendMenuProvider* Create(DevToolsHost* devtools_host,
                                       WebVector<WebMenuItemInfo> items) {
-    return new FrontendMenuProvider(devtools_host, std::move(items));
+    return MakeGarbageCollected<FrontendMenuProvider>(devtools_host,
+                                                      std::move(items));
   }
 
+  FrontendMenuProvider(DevToolsHost* devtools_host,
+                       WebVector<WebMenuItemInfo> items)
+      : devtools_host_(devtools_host), items_(std::move(items)) {}
   ~FrontendMenuProvider() override {
     // Verify that this menu provider has been detached.
     DCHECK(!devtools_host_);
@@ -100,10 +105,6 @@ class FrontendMenuProvider final : public ContextMenuProvider {
   }
 
  private:
-  FrontendMenuProvider(DevToolsHost* devtools_host,
-                       WebVector<WebMenuItemInfo> items)
-      : devtools_host_(devtools_host), items_(std::move(items)) {}
-
   Member<DevToolsHost> devtools_host_;
   WebVector<WebMenuItemInfo> items_;
 };
@@ -133,7 +134,7 @@ void DevToolsHost::EvaluateScript(const String& expression) {
     return;
   ScriptState::Scope scope(script_state);
   std::unique_ptr<UserGestureIndicator> gesture_indicator =
-      Frame::NotifyUserActivation(frontend_frame_);
+      LocalFrame::NotifyUserActivation(frontend_frame_);
   v8::MicrotasksScope microtasks(script_state->GetIsolate(),
                                  v8::MicrotasksScope::kRunMicrotasks);
   ScriptSourceCode source_code(expression, ScriptSourceLocationType::kInternal,
@@ -157,7 +158,8 @@ float DevToolsHost::zoomFactor() {
   float zoom_factor = frontend_frame_->PageZoomFactor();
   // Cancel the device scale factor applied to the zoom factor in
   // use-zoom-for-dsf mode.
-  const ChromeClient* client = frontend_frame_->View()->GetChromeClient();
+  const ChromeClient* client =
+      frontend_frame_->View()->GetChromeClient();
   float window_to_viewport_ratio = client->WindowToViewportScalar(1.0f);
   return zoom_factor / window_to_viewport_ratio;
 }

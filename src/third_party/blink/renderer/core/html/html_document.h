@@ -33,12 +33,12 @@ class CORE_EXPORT HTMLDocument : public Document {
   DEFINE_WRAPPERTYPEINFO();
 
  public:
-  static HTMLDocument* Create(const DocumentInit& initializer) {
-    return new HTMLDocument(initializer);
-  }
-  static HTMLDocument* CreateForTest() {
-    return new HTMLDocument(DocumentInit::Create());
-  }
+  static HTMLDocument* Create(const DocumentInit& initializer);
+  static HTMLDocument* CreateForTest();
+
+  HTMLDocument(
+      const DocumentInit&,
+      DocumentClassFlags extended_document_classes = kDefaultDocumentClass);
   ~HTMLDocument() override;
 
   void AddNamedItem(const AtomicString& name);
@@ -48,11 +48,6 @@ class CORE_EXPORT HTMLDocument : public Document {
   static bool IsCaseSensitiveAttribute(const QualifiedName&);
 
   Document* CloneDocumentWithoutChildren() const final;
-
- protected:
-  HTMLDocument(
-      const DocumentInit&,
-      DocumentClassFlags extended_document_classes = kDefaultDocumentClass);
 
  private:
   HashCountedSet<AtomicString> named_item_counts_;

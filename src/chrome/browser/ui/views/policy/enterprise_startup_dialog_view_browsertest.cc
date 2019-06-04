@@ -6,6 +6,7 @@
 
 #include "base/bind.h"
 #include "base/strings/utf_string_conversions.h"
+#include "build/build_config.h"
 #include "chrome/browser/ui/test/test_browser_dialog.h"
 
 namespace policy {
@@ -30,16 +31,24 @@ class EnterpriseStartupDialogViewBrowserTest : public DialogBrowserTest {
           base::ASCIIToUTF16(kMessage));
     } else if (name == "Error") {
       dialog->DisplayErrorMessage(base::ASCIIToUTF16(kMessage),
-                                  base::ASCIIToUTF16(kButton),
                                   base::ASCIIToUTF16(kButton));
     } else if (name == "Switch") {
       dialog->DisplayLaunchingInformationWithThrobber(
           base::ASCIIToUTF16(kMessage));
       dialog->DisplayErrorMessage(base::ASCIIToUTF16(kMessage),
-                                  base::ASCIIToUTF16(kButton),
                                   base::ASCIIToUTF16(kButton));
     }
   }
+
+#if defined(OS_MACOSX)
+  // On mac, we need to wait until the dialog launched modally before closing
+  // it.
+  void DismissUi() override {
+    base::ThreadTaskRunnerHandle::Get()->PostTask(
+        FROM_HERE, base::BindOnce(&EnterpriseStartupDialogView::CloseDialog,
+                                  base::Unretained(dialog)));
+  }
+#endif
 
  private:
   EnterpriseStartupDialogView* dialog;

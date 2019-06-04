@@ -21,9 +21,9 @@
 
 namespace fxcrt {
 
+class ByteString_Assign_Test;
 class ByteString_Concat_Test;
 class StringPool_ByteString_Test;
-class WideString;
 
 // A mutable string with shared buffers using copy-on-write semantics that
 // avoids the cost of std::string's iterator stability guarantees.
@@ -64,8 +64,6 @@ class ByteString {
   ~ByteString();
 
   void clear() { m_pData.Reset(); }
-
-  static ByteString FromUnicode(const WideString& str) WARN_UNUSED_RESULT;
 
   // Explicit conversion to C-style string.
   // Note: Any subsequent modification of |this| will invalidate the result.
@@ -133,7 +131,8 @@ class ByteString {
 
   const ByteString& operator=(const char* str);
   const ByteString& operator=(const ByteStringView& bstrc);
-  const ByteString& operator=(const ByteString& stringSrc);
+  const ByteString& operator=(const ByteString& that);
+  const ByteString& operator=(ByteString&& that);
 
   const ByteString& operator+=(char ch);
   const ByteString& operator+=(const char* str);
@@ -194,10 +193,7 @@ class ByteString {
   void TrimRight(const ByteStringView& targets);
 
   size_t Replace(const ByteStringView& lpszOld, const ByteStringView& lpszNew);
-
   size_t Remove(char ch);
-
-  WideString UTF8Decode() const;
 
   uint32_t GetID() const { return AsStringView().GetID(); }
 
@@ -209,9 +205,11 @@ class ByteString {
   void AllocCopy(ByteString& dest, size_t nCopyLen, size_t nCopyIndex) const;
   void AssignCopy(const char* pSrcData, size_t nSrcLen);
   void Concat(const char* lpszSrcData, size_t nSrcLen);
+  intptr_t ReferenceCountForTesting() const;
 
   RetainPtr<StringData> m_pData;
 
+  friend ByteString_Assign_Test;
   friend ByteString_Concat_Test;
   friend class StringPool_ByteString_Test;
 };

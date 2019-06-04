@@ -12,6 +12,7 @@
 
 #include "rtc_base/checks.h"
 #include "rtc_base/constructormagic.h"
+#include "rtc_base/event.h"
 #include "rtc_base/platform_thread.h"
 #include "rtc_base/task_queue.h"
 #include "rtc_base/thread_checker.h"
@@ -26,13 +27,10 @@ namespace {
 // attributes that are checked at compile-time.
 class CompileTimeTestForGuardedBy {
  public:
-  int CalledOnSequence() RTC_RUN_ON(sequence_checker_) {
-    return guarded_;
-  }
+  int CalledOnSequence() RTC_RUN_ON(sequence_checker_) { return guarded_; }
 
   void CallMeFromSequence() {
-    RTC_DCHECK_RUN_ON(&sequence_checker_)
-        << "Should be called on sequence";
+    RTC_DCHECK_RUN_ON(&sequence_checker_) << "Should be called on sequence";
   }
 
  private:
@@ -40,14 +38,12 @@ class CompileTimeTestForGuardedBy {
   rtc::SequencedTaskChecker sequence_checker_;
 };
 
-
 // Calls SequencedTaskChecker::CalledSequentially on another thread.
 class CallCalledSequentiallyOnThread {
  public:
   CallCalledSequentiallyOnThread(bool expect_true,
                                  SequencedTaskChecker* sequenced_task_checker)
       : expect_true_(expect_true),
-        thread_has_run_event_(false, false),
         thread_(&Run, this, "call_do_stuff_on_thread"),
         sequenced_task_checker_(sequenced_task_checker) {
     thread_.Start();
@@ -81,7 +77,6 @@ class DeleteSequencedCheckerOnThread {
   explicit DeleteSequencedCheckerOnThread(
       std::unique_ptr<SequencedTaskChecker> sequenced_task_checker)
       : thread_(&Run, this, "delete_sequenced_task_checker_on_thread"),
-        thread_has_run_event_(false, false),
         sequenced_task_checker_(std::move(sequenced_task_checker)) {
     thread_.Start();
   }
@@ -122,7 +117,7 @@ void RunMethodOnDifferentTaskQueue(bool expect_true) {
 
   static const char kQueueName[] = "MethodNotAllowedOnDifferentTq";
   TaskQueue queue(kQueueName);
-  Event done_event(false, false);
+  Event done_event;
   queue.PostTask([&sequenced_task_checker, &done_event, expect_true] {
     if (expect_true)
       EXPECT_TRUE(sequenced_task_checker->CalledSequentially());
@@ -139,7 +134,7 @@ void DetachThenCallFromDifferentTaskQueue(bool expect_true) {
 
   sequenced_task_checker->Detach();
 
-  Event done_event(false, false);
+  Event done_event;
   TaskQueue queue1("DetachThenCallFromDifferentTaskQueueImpl1");
   queue1.PostTask([&sequenced_task_checker, &done_event] {
     EXPECT_TRUE(sequenced_task_checker->CalledSequentially());
@@ -197,7 +192,7 @@ TEST(SequencedTaskCheckerTest, DetachFromThreadAndUseOnTaskQueue) {
   sequenced_task_checker->Detach();
   static const char kQueueName[] = "DetachFromThreadAndUseOnTaskQueue";
   TaskQueue queue(kQueueName);
-  Event done_event(false, false);
+  Event done_event;
   queue.PostTask([&sequenced_task_checker, &done_event] {
     EXPECT_TRUE(sequenced_task_checker->CalledSequentially());
     done_event.Set();
@@ -207,7 +202,7 @@ TEST(SequencedTaskCheckerTest, DetachFromThreadAndUseOnTaskQueue) {
 
 TEST(SequencedTaskCheckerTest, DetachFromTaskQueueAndUseOnThread) {
   TaskQueue queue("DetachFromTaskQueueAndUseOnThread");
-  Event done_event(false, false);
+  Event done_event;
   queue.PostTask([&done_event] {
     std::unique_ptr<SequencedTaskChecker> sequenced_task_checker(
         new SequencedTaskChecker());
@@ -275,7 +270,7 @@ void TestAnnotationsOnWrongQueue() {
   TestAnnotations annotations;
   static const char kQueueName[] = "TestAnnotationsOnWrongQueueDebug";
   TaskQueue queue(kQueueName);
-  Event done_event(false, false);
+  Event done_event;
   queue.PostTask([&annotations, &done_event] {
     annotations.ModifyTestVar();
     done_event.Set();

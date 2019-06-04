@@ -21,7 +21,7 @@
 
 namespace blink {
 
-using namespace HTMLNames;
+using namespace html_names;
 
 namespace {
 
@@ -124,19 +124,19 @@ void CollectFeatures(Element& root,
 
     features.element_count++;
     Element& element = ToElement(node);
-    if (element.HasTagName(aTag)) {
+    if (element.HasTagName(kATag)) {
       features.anchor_count++;
-    } else if (element.HasTagName(formTag)) {
+    } else if (element.HasTagName(kFormTag)) {
       features.form_count++;
-    } else if (element.HasTagName(inputTag)) {
+    } else if (element.HasTagName(kInputTag)) {
       const HTMLInputElement& input = ToHTMLInputElement(element);
-      if (input.type() == InputTypeNames::text) {
+      if (input.type() == input_type_names::kText) {
         features.text_input_count++;
-      } else if (input.type() == InputTypeNames::password) {
+      } else if (input.type() == input_type_names::kPassword) {
         features.password_input_count++;
       }
-    } else if (element.HasTagName(pTag) || element.HasTagName(preTag)) {
-      if (element.HasTagName(pTag)) {
+    } else if (element.HasTagName(kPTag) || element.HasTagName(kPreTag)) {
+      if (element.HasTagName(kPTag)) {
         features.p_count++;
       } else {
         features.pre_count++;
@@ -156,7 +156,7 @@ void CollectFeatures(Element& root,
         features.moz_score_all_linear = std::min(features.moz_score_all_linear,
                                                  kMozScoreAllLinearSaturation);
       }
-    } else if (element.HasTagName(liTag)) {
+    } else if (element.HasTagName(kLiTag)) {
       is_list_item = true;
     }
     CollectFeatures(element, features, under_list_item || is_list_item);
@@ -209,7 +209,7 @@ WebDistillabilityFeatures DocumentStatisticsCollector::CollectStatistics(
 
   features.is_mobile_friendly = IsMobileFriendly(document);
 
-  double start_time = CurrentTimeTicksInSeconds();
+  TimeTicks start_time = CurrentTimeTicks();
 
   // This should be cheap since collectStatistics is only called right after
   // layout.
@@ -219,11 +219,11 @@ WebDistillabilityFeatures DocumentStatisticsCollector::CollectStatistics(
   CollectFeatures(*body, features);
   features.open_graph = HasOpenGraphArticle(*head);
 
-  double elapsed_time = CurrentTimeTicksInSeconds() - start_time;
+  TimeDelta elapsed_time = CurrentTimeTicks() - start_time;
 
   DEFINE_STATIC_LOCAL(CustomCountHistogram, distillability_histogram,
                       ("WebCore.DistillabilityUs", 1, 1000000, 50));
-  distillability_histogram.Count(static_cast<int>(1e6 * elapsed_time));
+  distillability_histogram.CountMicroseconds(elapsed_time);
 
   return features;
 }

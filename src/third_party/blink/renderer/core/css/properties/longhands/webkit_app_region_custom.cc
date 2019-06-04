@@ -8,7 +8,7 @@
 #include "third_party/blink/renderer/core/style/computed_style.h"
 
 namespace blink {
-namespace CSSLonghand {
+namespace css_longhand {
 
 const CSSValue* WebkitAppRegion::CSSValueFromComputedStyleInternal(
     const ComputedStyle& style,
@@ -24,5 +24,19 @@ const CSSValue* WebkitAppRegion::CSSValueFromComputedStyleInternal(
                                         : CSSValueNoDrag);
 }
 
-}  // namespace CSSLonghand
+void WebkitAppRegion::ApplyInitial(StyleResolverState& state) const {}
+
+void WebkitAppRegion::ApplyInherit(StyleResolverState& state) const {}
+
+void WebkitAppRegion::ApplyValue(StyleResolverState& state,
+                                 const CSSValue& value) const {
+  const CSSIdentifierValue& identifier_value = ToCSSIdentifierValue(value);
+  state.Style()->SetDraggableRegionMode(identifier_value.GetValueID() ==
+                                                CSSValueDrag
+                                            ? EDraggableRegionMode::kDrag
+                                            : EDraggableRegionMode::kNoDrag);
+  state.GetDocument().SetHasAnnotatedRegions(true);
+}
+
+}  // namespace css_longhand
 }  // namespace blink

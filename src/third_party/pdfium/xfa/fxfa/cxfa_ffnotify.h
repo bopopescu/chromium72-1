@@ -7,6 +7,8 @@
 #ifndef XFA_FXFA_CXFA_FFNOTIFY_H_
 #define XFA_FXFA_CXFA_FFNOTIFY_H_
 
+#include <memory>
+
 #include "xfa/fxfa/cxfa_eventparam.h"
 #include "xfa/fxfa/parser/cxfa_document.h"
 
@@ -39,8 +41,10 @@ class CXFA_FFNotify {
   void OnChildAdded(CXFA_Node* pSender);
   void OnChildRemoved();
 
-  CXFA_ContainerLayoutItem* OnCreateContainerLayoutItem(CXFA_Node* pNode);
-  CXFA_ContentLayoutItem* OnCreateContentLayoutItem(CXFA_Node* pNode);
+  std::unique_ptr<CXFA_ContainerLayoutItem> OnCreateContainerLayoutItem(
+      CXFA_Node* pNode);
+  std::unique_ptr<CXFA_ContentLayoutItem> OnCreateContentLayoutItem(
+      CXFA_Node* pNode);
 
   void OnLayoutItemAdded(CXFA_LayoutProcessor* pLayout,
                          CXFA_LayoutItem* pSender,
@@ -58,7 +62,7 @@ class CXFA_FFNotify {
                                bool bIsFormReady,
                                bool bRecursive);
   void AddCalcValidate(CXFA_Node* pNode);
-  CXFA_FFDoc* GetHDOC() { return m_pDoc.Get(); }
+  CXFA_FFDoc* GetHDOC() const { return m_pDoc.Get(); }
   IXFA_AppProvider* GetAppProvider();
   CXFA_FFWidgetHandler* GetWidgetHandler();
   void OpenDropDownList(CXFA_FFWidget* hWidget);

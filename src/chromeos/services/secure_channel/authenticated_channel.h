@@ -31,7 +31,8 @@ class AuthenticatedChannel {
 
   virtual ~AuthenticatedChannel();
 
-  virtual const mojom::ConnectionMetadata& GetConnectionMetadata() const = 0;
+  virtual void GetConnectionMetadata(
+      base::OnceCallback<void(mojom::ConnectionMetadataPtr)> callback) = 0;
 
   // Sends a message with the specified |feature| and |payload|. Once the
   // message has been sent, |on_sent_callback| will be invoked. Returns whether
@@ -71,7 +72,7 @@ class AuthenticatedChannel {
                              const std::string& payload);
 
  private:
-  base::ObserverList<Observer> observer_list_;
+  base::ObserverList<Observer>::Unchecked observer_list_;
   bool is_disconnected_ = false;
 
   DISALLOW_COPY_AND_ASSIGN(AuthenticatedChannel);

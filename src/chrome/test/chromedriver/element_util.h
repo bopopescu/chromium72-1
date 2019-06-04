@@ -19,6 +19,8 @@ struct Session;
 class Status;
 class WebView;
 
+std::string GetElementKey();
+
 std::unique_ptr<base::DictionaryValue> CreateElement(
     const std::string& element_id);
 
@@ -42,6 +44,11 @@ Status IsElementFocused(
     WebView* web_view,
     const std::string& element_id,
     bool* is_focused);
+
+Status IsDocumentTypeXml(
+    Session* session,
+    WebView* web_view,
+    bool* is_xml_document);
 
 Status GetElementAttribute(Session* session,
                            WebView* web_view,

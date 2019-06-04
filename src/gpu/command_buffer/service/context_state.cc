@@ -25,8 +25,7 @@ namespace gles2 {
 namespace {
 
 GLuint Get2dServiceId(const TextureUnit& unit) {
-  return unit.bound_texture_2d.get()
-      ? unit.bound_texture_2d->service_id() : 0;
+  return unit.bound_texture_2d.get() ? unit.bound_texture_2d->service_id() : 0;
 }
 
 GLuint Get2dArrayServiceId(const TextureUnit& unit) {
@@ -41,17 +40,20 @@ GLuint Get3dServiceId(const TextureUnit& unit) {
 
 GLuint GetCubeServiceId(const TextureUnit& unit) {
   return unit.bound_texture_cube_map.get()
-      ? unit.bound_texture_cube_map->service_id() : 0;
+             ? unit.bound_texture_cube_map->service_id()
+             : 0;
 }
 
 GLuint GetOesServiceId(const TextureUnit& unit) {
   return unit.bound_texture_external_oes.get()
-      ? unit.bound_texture_external_oes->service_id() : 0;
+             ? unit.bound_texture_external_oes->service_id()
+             : 0;
 }
 
 GLuint GetArbServiceId(const TextureUnit& unit) {
   return unit.bound_texture_rectangle_arb.get()
-      ? unit.bound_texture_rectangle_arb->service_id() : 0;
+             ? unit.bound_texture_rectangle_arb->service_id()
+             : 0;
 }
 
 GLuint GetServiceId(const TextureUnit& unit, GLuint target) {
@@ -95,9 +97,7 @@ GLuint GetBufferId(const Buffer* buffer) {
 
 }  // anonymous namespace.
 
-TextureUnit::TextureUnit()
-    : bind_target(GL_TEXTURE_2D) {
-}
+TextureUnit::TextureUnit() : bind_target(GL_TEXTURE_2D) {}
 
 TextureUnit::TextureUnit(const TextureUnit& other) = default;
 
@@ -176,7 +176,7 @@ void Vec4::GetValues<GLint>(GLint* values) const {
   }
 }
 
-template<>
+template <>
 void Vec4::GetValues<GLuint>(GLuint* values) const {
   DCHECK(values);
   switch (type_) {
@@ -224,12 +224,9 @@ void Vec4::SetValues<GLuint>(const GLuint* values) {
 
 ContextState::ContextState(FeatureInfo* feature_info,
                            ErrorStateClient* error_state_client,
-                           Logger* logger)
-    : active_texture_unit(0),
-      bound_renderbuffer_valid(false),
-      pack_reverse_row_order(false),
-      ignore_cached_state(false),
-      fbo_binding_for_scissor_workaround_dirty(false),
+                           Logger* logger,
+                           bool track_texture_and_sampler_units)
+    : track_texture_and_sampler_units(track_texture_and_sampler_units),
       feature_info_(feature_info),
       error_state_(ErrorState::Create(error_state_client, logger)) {
   Initialize();
@@ -243,15 +240,27 @@ void ContextState::SetLineWidthBounds(GLfloat min, GLfloat max) {
 }
 
 void ContextState::RestoreTextureUnitBindings(
-    GLuint unit, const ContextState* prev_state) const {
-  DCHECK_LT(unit, texture_units.size());
-  const TextureUnit& texture_unit = texture_units[unit];
-  GLuint service_id_2d = Get2dServiceId(texture_unit);
-  GLuint service_id_2d_array = Get2dArrayServiceId(texture_unit);
-  GLuint service_id_3d = Get3dServiceId(texture_unit);
-  GLuint service_id_cube = GetCubeServiceId(texture_unit);
-  GLuint service_id_oes = GetOesServiceId(texture_unit);
-  GLuint service_id_arb = GetArbServiceId(texture_unit);
+    GLuint unit,
+    const ContextState* prev_state) const {
+  DCHECK(unit < texture_units.size() ||
+         (unit == 0 && !track_texture_and_sampler_units));
+
+  GLuint service_id_2d = 0u;
+  GLuint service_id_2d_array = 0u;
+  GLuint service_id_3d = 0u;
+  GLuint service_id_cube = 0u;
+  GLuint service_id_oes = 0u;
+  GLuint service_id_arb = 0u;
+
+  if (track_texture_and_sampler_units) {
+    const TextureUnit& texture_unit = texture_units[unit];
+    service_id_2d = Get2dServiceId(texture_unit);
+    service_id_2d_array = Get2dArrayServiceId(texture_unit);
+    service_id_3d = Get3dServiceId(texture_unit);
+    service_id_cube = GetCubeServiceId(texture_unit);
+    service_id_oes = GetOesServiceId(texture_unit);
+    service_id_arb = GetArbServiceId(texture_unit);
+  }
 
   bool bind_texture_2d = true;
   bool bind_texture_cube = true;
@@ -270,16 +279,30 @@ void ContextState::RestoreTextureUnitBindings(
   }
 
   if (prev_state) {
-    const TextureUnit& prev_unit = prev_state->texture_units[unit];
-    bind_texture_2d = service_id_2d != Get2dServiceId(prev_unit);
-    bind_texture_2d_array =
-        service_id_2d_array != Get2dArrayServiceId(prev_unit);
-    bind_texture_3d = service_id_3d != Get3dServiceId(prev_unit);
-    bind_texture_cube = service_id_cube != GetCubeServiceId(prev_unit);
-    bind_texture_oes =
-        bind_texture_oes && service_id_oes != GetOesServiceId(prev_unit);
-    bind_texture_arb =
-        bind_texture_arb && service_id_arb != GetArbServiceId(prev_unit);
+    if (prev_state->track_texture_and_sampler_units) {
+      const TextureUnit& prev_unit = prev_state->texture_units[unit];
+      bind_texture_2d = service_id_2d != Get2dServiceId(prev_unit);
+      bind_texture_2d_array =
+          bind_texture_2d_array &&
+          service_id_2d_array != Get2dArrayServiceId(prev_unit);
+      bind_texture_3d =
+          bind_texture_3d && service_id_3d != Get3dServiceId(prev_unit);
+      bind_texture_cube = service_id_cube != GetCubeServiceId(prev_unit);
+      bind_texture_oes =
+          bind_texture_oes && service_id_oes != GetOesServiceId(prev_unit);
+      bind_texture_arb =
+          bind_texture_arb && service_id_arb != GetArbServiceId(prev_unit);
+    } else if (prev_state->texture_units_in_ground_state) {
+      bind_texture_2d = service_id_2d;
+      bind_texture_2d_array = bind_texture_2d_array && service_id_2d_array;
+      bind_texture_3d = bind_texture_3d && service_id_3d;
+      bind_texture_cube = service_id_cube;
+      bind_texture_oes = bind_texture_oes && service_id_oes;
+      bind_texture_arb = bind_texture_arb && service_id_arb;
+    } else {
+      // We need bind all restore target binding, if texture units is not in
+      // ground state.
+    }
   }
 
   // Early-out if nothing has changed from the previous state.
@@ -307,7 +330,7 @@ void ContextState::RestoreTextureUnitBindings(
   if (bind_texture_3d) {
     api()->glBindTextureFn(GL_TEXTURE_3D, service_id_3d);
   }
-}
+}  // namespace gles2
 
 void ContextState::RestoreSamplerBinding(GLuint unit,
                                          const ContextState* prev_state) const {
@@ -316,12 +339,13 @@ void ContextState::RestoreSamplerBinding(GLuint unit,
   const scoped_refptr<Sampler>& cur_sampler = sampler_units[unit];
   GLuint cur_id = cur_sampler ? cur_sampler->service_id() : 0;
   GLuint prev_id = 0;
-  if (prev_state) {
+  if (prev_state && prev_state->track_texture_and_sampler_units) {
     const scoped_refptr<Sampler>& prev_sampler =
         prev_state->sampler_units[unit];
     prev_id = prev_sampler ? prev_sampler->service_id() : 0;
   }
-  if (!prev_state || cur_id != prev_id) {
+  if (!prev_state || !prev_state->sampler_units_in_ground_state ||
+      cur_id != prev_id) {
     api()->glBindSamplerFn(unit, cur_id);
   }
 }
@@ -388,8 +412,8 @@ void ContextState::RestoreRenderbufferBindings() {
 void ContextState::RestoreProgramSettings(
     const ContextState* prev_state,
     bool restore_transform_feedback_bindings) const {
-  bool flag = (restore_transform_feedback_bindings &&
-               feature_info_->IsES3Capable());
+  bool flag =
+      (restore_transform_feedback_bindings && feature_info_->IsES3Capable());
   if (flag && prev_state) {
     if (prev_state->bound_transform_feedback.get() &&
         prev_state->bound_transform_feedback->active() &&
@@ -424,46 +448,81 @@ void ContextState::RestoreActiveTexture() const {
 
 void ContextState::RestoreAllTextureUnitAndSamplerBindings(
     const ContextState* prev_state) const {
-  // Restore Texture state.
-  for (size_t ii = 0; ii < texture_units.size(); ++ii) {
-    RestoreTextureUnitBindings(ii, prev_state);
-    RestoreSamplerBinding(ii, prev_state);
+  if (!track_texture_and_sampler_units) {
+    if (prev_state) {
+      if (!prev_state->track_texture_and_sampler_units) {
+        texture_units_in_ground_state =
+            prev_state->texture_units_in_ground_state;
+        sampler_units_in_ground_state =
+            prev_state->sampler_units_in_ground_state;
+        return;
+      }
+
+      texture_units_in_ground_state = true;
+      for (size_t i = 1; i < prev_state->texture_units.size(); ++i) {
+        if (prev_state->texture_units[i].AnyTargetBound()) {
+          texture_units_in_ground_state = false;
+          break;
+        }
+      }
+
+      // If the current gl texture units are not in ground state, then we do
+      // need reset texture unit 0.
+      if (texture_units_in_ground_state)
+        RestoreTextureUnitBindings(0, prev_state);
+
+      sampler_units_in_ground_state = true;
+      for (auto& sampler : prev_state->sampler_units) {
+        if (sampler) {
+          sampler_units_in_ground_state = false;
+          break;
+        }
+      }
+    } else {
+      texture_units_in_ground_state = false;
+      sampler_units_in_ground_state = false;
+    }
+  } else {
+    // Restore Texture state.
+    for (size_t i = 0; i < texture_units.size(); ++i) {
+      RestoreTextureUnitBindings(i, prev_state);
+      RestoreSamplerBinding(i, prev_state);
+    }
+    RestoreActiveTexture();
   }
-  RestoreActiveTexture();
 }
 
 void ContextState::RestoreActiveTextureUnitBinding(unsigned int target) const {
-  DCHECK_LT(active_texture_unit, texture_units.size());
-  const TextureUnit& texture_unit = texture_units[active_texture_unit];
+  DCHECK(active_texture_unit < texture_units.size() ||
+         (active_texture_unit == 0 && !track_texture_and_sampler_units));
+  GLuint service_id = 0;
+  if (track_texture_and_sampler_units) {
+    const TextureUnit& texture_unit = texture_units[active_texture_unit];
+    service_id = GetServiceId(texture_unit, target);
+  }
   if (TargetIsSupported(feature_info_, target))
-    api()->glBindTextureFn(target, GetServiceId(texture_unit, target));
+    api()->glBindTextureFn(target, service_id);
 }
 
 void ContextState::RestoreVertexAttribValues() const {
   for (size_t attrib = 0; attrib < vertex_attrib_manager->num_attribs();
        ++attrib) {
     switch (attrib_values[attrib].type()) {
-      case SHADER_VARIABLE_FLOAT:
-        {
-          GLfloat v[4];
-          attrib_values[attrib].GetValues(v);
-          api()->glVertexAttrib4fvFn(attrib, v);
-        }
-        break;
-      case SHADER_VARIABLE_INT:
-        {
-          GLint v[4];
-          attrib_values[attrib].GetValues(v);
-          api()->glVertexAttribI4ivFn(attrib, v);
-        }
-        break;
-      case SHADER_VARIABLE_UINT:
-        {
-          GLuint v[4];
-          attrib_values[attrib].GetValues(v);
-          api()->glVertexAttribI4uivFn(attrib, v);
-        }
-        break;
+      case SHADER_VARIABLE_FLOAT: {
+        GLfloat v[4];
+        attrib_values[attrib].GetValues(v);
+        api()->glVertexAttrib4fvFn(attrib, v);
+      } break;
+      case SHADER_VARIABLE_INT: {
+        GLint v[4];
+        attrib_values[attrib].GetValues(v);
+        api()->glVertexAttribI4ivFn(attrib, v);
+      } break;
+      case SHADER_VARIABLE_UINT: {
+        GLuint v[4];
+        attrib_values[attrib].GetValues(v);
+        api()->glVertexAttribI4uivFn(attrib, v);
+      } break;
       default:
         NOTREACHED();
         break;
@@ -515,8 +574,7 @@ void ContextState::RestoreVertexAttribs(const ContextState* prev_state) const {
   if (feature_info_->feature_flags().native_vertex_array_object) {
     // If default VAO is still using shared id 0 instead of unique ids
     // per-context, default VAO state must be restored.
-    GLuint default_vao_service_id =
-        default_vertex_attrib_manager->service_id();
+    GLuint default_vao_service_id = default_vertex_attrib_manager->service_id();
     if (default_vao_service_id == 0)
       RestoreVertexAttribArrays(default_vertex_attrib_manager);
 
@@ -550,12 +608,18 @@ void ContextState::RestoreGlobalState(const ContextState* prev_state) const {
 
 void ContextState::RestoreState(const ContextState* prev_state) {
   RestoreAllTextureUnitAndSamplerBindings(prev_state);
-  RestoreVertexAttribs(prev_state);
+  // For RasterDecoder, |vertex_attrib_manager| will be nullptr, and we don't
+  // need restore vertex attribs for them.
+  if (vertex_attrib_manager)
+    RestoreVertexAttribs(prev_state);
   // RestoreIndexedUniformBufferBindings must be called before
   // RestoreBufferBindings. This is because setting the indexed uniform buffer
   // bindings via glBindBuffer{Base,Range} also sets the general uniform buffer
   // bindings (glBindBuffer), but not vice versa.
-  RestoreIndexedUniformBufferBindings(prev_state);
+  // For RasterDecoder, |indexed_uniform_buffer_bindings| will be nullptr, and
+  // we don't need restore indexed uniform buffer for them.
+  if (indexed_uniform_buffer_bindings)
+    RestoreIndexedUniformBufferBindings(prev_state);
   RestoreBufferBindings();
   RestoreRenderbufferBindings();
   RestoreProgramSettings(prev_state, true);
@@ -659,57 +723,57 @@ void ContextState::SetBoundBuffer(GLenum target, Buffer* buffer) {
   switch (target) {
     case GL_ARRAY_BUFFER:
       if (do_refcounting && bound_array_buffer)
-        bound_array_buffer->OnUnbind(target);
+        bound_array_buffer->OnUnbind(target, false);
       bound_array_buffer = buffer;
       if (do_refcounting && buffer)
-        buffer->OnBind(target);
+        buffer->OnBind(target, false);
       break;
     case GL_ELEMENT_ARRAY_BUFFER:
       vertex_attrib_manager->SetElementArrayBuffer(buffer);
       break;
     case GL_COPY_READ_BUFFER:
       if (do_refcounting && bound_copy_read_buffer)
-        bound_copy_read_buffer->OnUnbind(target);
+        bound_copy_read_buffer->OnUnbind(target, false);
       bound_copy_read_buffer = buffer;
       if (do_refcounting && buffer)
-        buffer->OnBind(target);
+        buffer->OnBind(target, false);
       break;
     case GL_COPY_WRITE_BUFFER:
       if (do_refcounting && bound_copy_write_buffer)
-        bound_copy_write_buffer->OnUnbind(target);
+        bound_copy_write_buffer->OnUnbind(target, false);
       bound_copy_write_buffer = buffer;
       if (do_refcounting && buffer)
-        buffer->OnBind(target);
+        buffer->OnBind(target, false);
       break;
     case GL_PIXEL_PACK_BUFFER:
       if (do_refcounting && bound_pixel_pack_buffer)
-        bound_pixel_pack_buffer->OnUnbind(target);
+        bound_pixel_pack_buffer->OnUnbind(target, false);
       bound_pixel_pack_buffer = buffer;
       if (do_refcounting && buffer)
-        buffer->OnBind(target);
+        buffer->OnBind(target, false);
       UpdatePackParameters();
       break;
     case GL_PIXEL_UNPACK_BUFFER:
       if (do_refcounting && bound_pixel_unpack_buffer)
-        bound_pixel_unpack_buffer->OnUnbind(target);
+        bound_pixel_unpack_buffer->OnUnbind(target, false);
       bound_pixel_unpack_buffer = buffer;
       if (do_refcounting && buffer)
-        buffer->OnBind(target);
+        buffer->OnBind(target, false);
       UpdateUnpackParameters();
       break;
     case GL_TRANSFORM_FEEDBACK_BUFFER:
       if (do_refcounting && bound_transform_feedback_buffer)
-        bound_transform_feedback_buffer->OnUnbind(target);
+        bound_transform_feedback_buffer->OnUnbind(target, false);
       bound_transform_feedback_buffer = buffer;
       if (do_refcounting && buffer)
-        buffer->OnBind(target);
+        buffer->OnBind(target, false);
       break;
     case GL_UNIFORM_BUFFER:
       if (do_refcounting && bound_uniform_buffer)
-        bound_uniform_buffer->OnUnbind(target);
+        bound_uniform_buffer->OnUnbind(target, false);
       bound_uniform_buffer = buffer;
       if (do_refcounting && buffer)
-        buffer->OnBind(target);
+        buffer->OnBind(target, false);
       break;
     default:
       NOTREACHED();
@@ -723,7 +787,7 @@ void ContextState::RemoveBoundBuffer(Buffer* buffer) {
   if (bound_array_buffer.get() == buffer) {
     bound_array_buffer = nullptr;
     if (do_refcounting)
-      buffer->OnUnbind(GL_ARRAY_BUFFER);
+      buffer->OnUnbind(GL_ARRAY_BUFFER, false);
     if (!context_lost_)
       api()->glBindBufferFn(GL_ARRAY_BUFFER, 0);
   }
@@ -732,21 +796,21 @@ void ContextState::RemoveBoundBuffer(Buffer* buffer) {
   if (bound_copy_read_buffer.get() == buffer) {
     bound_copy_read_buffer = nullptr;
     if (do_refcounting)
-      buffer->OnUnbind(GL_COPY_READ_BUFFER);
+      buffer->OnUnbind(GL_COPY_READ_BUFFER, false);
     if (!context_lost_)
       api()->glBindBufferFn(GL_COPY_READ_BUFFER, 0);
   }
   if (bound_copy_write_buffer.get() == buffer) {
     bound_copy_write_buffer = nullptr;
     if (do_refcounting)
-      buffer->OnUnbind(GL_COPY_WRITE_BUFFER);
+      buffer->OnUnbind(GL_COPY_WRITE_BUFFER, false);
     if (!context_lost_)
       api()->glBindBufferFn(GL_COPY_WRITE_BUFFER, 0);
   }
   if (bound_pixel_pack_buffer.get() == buffer) {
     bound_pixel_pack_buffer = nullptr;
     if (do_refcounting)
-      buffer->OnUnbind(GL_PIXEL_PACK_BUFFER);
+      buffer->OnUnbind(GL_PIXEL_PACK_BUFFER, false);
     if (!context_lost_)
       api()->glBindBufferFn(GL_PIXEL_PACK_BUFFER, 0);
     UpdatePackParameters();
@@ -754,7 +818,7 @@ void ContextState::RemoveBoundBuffer(Buffer* buffer) {
   if (bound_pixel_unpack_buffer.get() == buffer) {
     bound_pixel_unpack_buffer = nullptr;
     if (do_refcounting)
-      buffer->OnUnbind(GL_PIXEL_UNPACK_BUFFER);
+      buffer->OnUnbind(GL_PIXEL_UNPACK_BUFFER, false);
     if (!context_lost_)
       api()->glBindBufferFn(GL_PIXEL_UNPACK_BUFFER, 0);
     UpdateUnpackParameters();
@@ -762,7 +826,7 @@ void ContextState::RemoveBoundBuffer(Buffer* buffer) {
   if (bound_transform_feedback_buffer.get() == buffer) {
     bound_transform_feedback_buffer = nullptr;
     if (do_refcounting)
-      buffer->OnUnbind(GL_TRANSFORM_FEEDBACK_BUFFER);
+      buffer->OnUnbind(GL_TRANSFORM_FEEDBACK_BUFFER, false);
     if (!context_lost_)
       api()->glBindBufferFn(GL_TRANSFORM_FEEDBACK_BUFFER, 0);
   }
@@ -775,7 +839,7 @@ void ContextState::RemoveBoundBuffer(Buffer* buffer) {
   if (bound_uniform_buffer.get() == buffer) {
     bound_uniform_buffer = nullptr;
     if (do_refcounting)
-      buffer->OnUnbind(GL_UNIFORM_BUFFER);
+      buffer->OnUnbind(GL_UNIFORM_BUFFER, false);
     if (!context_lost_)
       api()->glBindBufferFn(GL_UNIFORM_BUFFER, 0);
   }
@@ -791,42 +855,42 @@ void ContextState::UnbindTexture(TextureRef* texture) {
   for (size_t jj = 0; jj < texture_units.size(); ++jj) {
     TextureUnit& unit = texture_units[jj];
     if (unit.bound_texture_2d.get() == texture) {
-      unit.bound_texture_2d = NULL;
+      unit.bound_texture_2d = nullptr;
       if (active_unit != jj) {
         api()->glActiveTextureFn(GL_TEXTURE0 + jj);
         active_unit = jj;
       }
       api()->glBindTextureFn(GL_TEXTURE_2D, 0);
     } else if (unit.bound_texture_cube_map.get() == texture) {
-      unit.bound_texture_cube_map = NULL;
+      unit.bound_texture_cube_map = nullptr;
       if (active_unit != jj) {
         api()->glActiveTextureFn(GL_TEXTURE0 + jj);
         active_unit = jj;
       }
       api()->glBindTextureFn(GL_TEXTURE_CUBE_MAP, 0);
     } else if (unit.bound_texture_external_oes.get() == texture) {
-      unit.bound_texture_external_oes = NULL;
+      unit.bound_texture_external_oes = nullptr;
       if (active_unit != jj) {
         api()->glActiveTextureFn(GL_TEXTURE0 + jj);
         active_unit = jj;
       }
       api()->glBindTextureFn(GL_TEXTURE_EXTERNAL_OES, 0);
     } else if (unit.bound_texture_rectangle_arb.get() == texture) {
-      unit.bound_texture_rectangle_arb = NULL;
+      unit.bound_texture_rectangle_arb = nullptr;
       if (active_unit != jj) {
         api()->glActiveTextureFn(GL_TEXTURE0 + jj);
         active_unit = jj;
       }
       api()->glBindTextureFn(GL_TEXTURE_RECTANGLE_ARB, 0);
     } else if (unit.bound_texture_3d.get() == texture) {
-      unit.bound_texture_3d = NULL;
+      unit.bound_texture_3d = nullptr;
       if (active_unit != jj) {
         api()->glActiveTextureFn(GL_TEXTURE0 + jj);
         active_unit = jj;
       }
       api()->glBindTextureFn(GL_TEXTURE_3D, 0);
     } else if (unit.bound_texture_2d_array.get() == texture) {
-      unit.bound_texture_2d_array = NULL;
+      unit.bound_texture_2d_array = nullptr;
       if (active_unit != jj) {
         api()->glActiveTextureFn(GL_TEXTURE0 + jj);
         active_unit = jj;

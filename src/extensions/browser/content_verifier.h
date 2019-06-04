@@ -19,6 +19,7 @@
 #include "extensions/browser/content_verifier_io_data.h"
 #include "extensions/browser/content_verify_job.h"
 #include "extensions/browser/extension_registry_observer.h"
+#include "services/network/public/cpp/shared_url_loader_factory.h"
 
 namespace base {
 class FilePath;
@@ -26,10 +27,6 @@ class FilePath;
 
 namespace content {
 class BrowserContext;
-}
-
-namespace net {
-class URLRequestContextGetter;
 }
 
 namespace extensions {
@@ -80,7 +77,7 @@ class ContentVerifier : public base::RefCountedThreadSafe<ContentVerifier>,
                            UnloadedExtensionReason reason) override;
 
   using ContentHashCallback =
-      base::OnceCallback<void(const scoped_refptr<const ContentHash>&)>;
+      base::OnceCallback<void(scoped_refptr<const ContentHash>)>;
 
   // Retrieves ContentHash for an extension through |callback|.
   // Must be called on IO thread.
@@ -113,12 +110,21 @@ class ContentVerifier : public base::RefCountedThreadSafe<ContentVerifier>,
 
   void ShutdownOnIO();
 
+  struct CacheKey;
   class HashHelper;
 
   void OnFetchComplete(const scoped_refptr<const ContentHash>& content_hash);
   ContentHash::FetchParams GetFetchParams(
       const ExtensionId& extension_id,
       const base::Version& extension_version);
+
+  void DidGetContentHash(const CacheKey& cache_key,
+                         ContentHashCallback orig_callback,
+                         scoped_refptr<const ContentHash> content_hash);
+
+  // Binds an URLLoaderFactoryRequest on the UI thread.
+  void BindURLLoaderFactoryRequestOnUIThread(
+      network::mojom::URLLoaderFactoryRequest url_loader_factory_request);
 
   // Performs IO thread operations after extension load.
   void OnExtensionLoadedOnIO(
@@ -161,10 +167,9 @@ class ContentVerifier : public base::RefCountedThreadSafe<ContentVerifier>,
   std::unique_ptr<HashHelper, content::BrowserThread::DeleteOnIOThread>
       hash_helper_;
 
-  std::unique_ptr<ContentVerifierDelegate> delegate_;
+  std::map<CacheKey, scoped_refptr<const ContentHash>> cache_;
 
-  // Used by ContentHashFetcher.
-  net::URLRequestContextGetter* request_context_getter_;
+  std::unique_ptr<ContentVerifierDelegate> delegate_;
 
   // For observing the ExtensionRegistry.
   ScopedObserver<ExtensionRegistry, ExtensionRegistryObserver> observer_;

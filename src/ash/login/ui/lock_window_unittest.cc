@@ -9,6 +9,7 @@
 #include "ash/login/ui/login_big_user_view.h"
 #include "ash/login/ui/login_keyboard_test_base.h"
 #include "ash/login/ui/login_test_utils.h"
+#include "ui/wm/core/capture_controller.h"
 
 namespace ash {
 
@@ -20,7 +21,7 @@ TEST_F(LockWindowVirtualKeyboardTest, VirtualKeyboardDoesNotCoverAuthView) {
       LockScreen::TestApi(LockScreen::Get()).contents_view();
   ASSERT_NE(nullptr, lock_contents);
 
-  LoadUsers(1);
+  SetUserCount(1);
 
   LoginBigUserView* auth_view =
       MakeLockContentsViewTestApi(lock_contents).primary_big_view();
@@ -29,6 +30,15 @@ TEST_F(LockWindowVirtualKeyboardTest, VirtualKeyboardDoesNotCoverAuthView) {
   ASSERT_NO_FATAL_FAILURE(ShowKeyboard());
   EXPECT_FALSE(
       auth_view->GetBoundsInScreen().Intersects(GetKeyboardBoundsInScreen()));
+}
+
+TEST_F(LockWindowVirtualKeyboardTest, ReleaseCapture) {
+  std::unique_ptr<aura::Window> window0(CreateTestWindowInShellWithId(0));
+  ::wm::CaptureController::Get()->SetCapture(window0.get());
+  ASSERT_EQ(window0.get(), ::wm::CaptureController::Get()->GetCaptureWindow());
+
+  ASSERT_NO_FATAL_FAILURE(ShowLockScreen());
+  EXPECT_FALSE(::wm::CaptureController::Get()->GetCaptureWindow());
 }
 
 }  // namespace ash

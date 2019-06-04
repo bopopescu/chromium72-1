@@ -1,6 +1,7 @@
 specific_include_rules = {
-  ".*test\.cc": [
-    "+cc/test",
-    "+components/viz/test",
-  ],
+ "scheduler_helper.cc": [
+  "+base/task/sequence_manager/sequence_manager_impl.h",
+ ],
 }
+
+

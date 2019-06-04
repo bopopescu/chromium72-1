@@ -9,31 +9,26 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_CSS_PROPERTIES_LONGHANDS_VARIABLE_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_CSS_PROPERTIES_LONGHANDS_VARIABLE_H_
 
-#include "third_party/blink/renderer/core/css/properties/css_property.h"
+#include "third_party/blink/renderer/core/css/properties/longhand.h"
 
 namespace blink {
 
-class Variable final : public CSSProperty {
+// TODO(andruud): Remove this class when the static Variable instance
+// (as returned by GetCSSPropertyVariable()) has been removed.
+class CORE_EXPORT Variable : public Longhand {
  public:
-  constexpr Variable() : CSSProperty() {}
+  constexpr Variable() : Longhand() {}
 
   bool IsInherited() const override { return true; }
   bool IsAffectedByAll() const override { return false; }
   CSSPropertyID PropertyID() const override { return CSSPropertyVariable; }
-  const char* GetPropertyName() const override { return "variable\0"; }
+  const char* GetPropertyName() const override { return "variable"; }
   const WTF::AtomicString& GetPropertyNameAtomicString() const override {
-    static const WTF::AtomicString& name = WTF::AtomicString("variable\0");
+    DEFINE_STATIC_LOCAL(const AtomicString, name, ("variable"));
     return name;
   }
-  const CSSValue* CSSValueFromComputedStyleInternal(
-      const ComputedStyle&,
-      const SVGComputedStyle&,
-      const LayoutObject*,
-      Node*,
-      bool allow_visited_style) const override {
-    NOTREACHED();
-    return nullptr;
-  }
+
+  static bool IsStaticInstance(const CSSProperty&);
 };
 
 }  // namespace blink

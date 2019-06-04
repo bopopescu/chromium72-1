@@ -15,11 +15,12 @@
 #include "chrome/browser/ui/browser.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "content/public/browser/storage_partition.h"
+#include "content/public/browser/storage_usage_info.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace {
-typedef BrowsingDataHelperCallback<content::CacheStorageUsageInfo>
-    TestCompletionCallback;
+using TestCompletionCallback =
+    BrowsingDataHelperCallback<content::StorageUsageInfo>;
 
 class BrowsingDataCacheStorageHelperTest : public InProcessBrowserTest {
  public:
@@ -44,10 +45,10 @@ IN_PROC_BROWSER_TEST_F(BrowsingDataCacheStorageHelperTest,
   helper->StartFetching(base::Bind(&TestCompletionCallback::callback,
                                    base::Unretained(&callback)));
 
-  std::list<content::CacheStorageUsageInfo> result = callback.result();
+  std::list<content::StorageUsageInfo> result = callback.result();
 
   ASSERT_EQ(2U, result.size());
-  std::list<content::CacheStorageUsageInfo>::iterator info = result.begin();
+  auto info = result.begin();
   EXPECT_EQ(origin1, info->origin);
   info++;
   EXPECT_EQ(origin2, info->origin);
@@ -65,7 +66,7 @@ IN_PROC_BROWSER_TEST_F(BrowsingDataCacheStorageHelperTest, CannedUnique) {
   helper->StartFetching(base::Bind(&TestCompletionCallback::callback,
                                    base::Unretained(&callback)));
 
-  std::list<content::CacheStorageUsageInfo> result = callback.result();
+  std::list<content::StorageUsageInfo> result = callback.result();
 
   ASSERT_EQ(1U, result.size());
   EXPECT_EQ(origin, result.begin()->origin);

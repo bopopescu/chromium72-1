@@ -25,9 +25,10 @@
 
 #include "third_party/blink/renderer/core/xml/document_xpath_evaluator.h"
 
-#include "third_party/blink/renderer/bindings/core/v8/exception_state.h"
+#include "third_party/blink/renderer/bindings/core/v8/script_value.h"
 #include "third_party/blink/renderer/core/xml/xpath_expression.h"
 #include "third_party/blink/renderer/core/xml/xpath_result.h"
+#include "third_party/blink/renderer/platform/bindings/exception_state.h"
 
 namespace blink {
 
@@ -41,7 +42,7 @@ DocumentXPathEvaluator& DocumentXPathEvaluator::From(Document& document) {
   DocumentXPathEvaluator* cache =
       Supplement<Document>::From<DocumentXPathEvaluator>(document);
   if (!cache) {
-    cache = new DocumentXPathEvaluator(document);
+    cache = MakeGarbageCollected<DocumentXPathEvaluator>(document);
     Supplement<Document>::ProvideTo(document, cache);
   }
   return *cache;

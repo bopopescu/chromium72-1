@@ -21,8 +21,8 @@
 #include "base/metrics/histogram_functions.h"
 #include "base/posix/eintr_wrapper.h"
 #include "base/rand_util.h"
+#include "base/task/post_task.h"
 #include "base/task_runner_util.h"
-#include "base/task_scheduler/post_task.h"
 #include "base/trace_event/trace_event.h"
 #include "build/build_config.h"
 #include "net/base/io_buffer.h"
@@ -56,10 +56,6 @@
 #include <pthread.h>
 #endif  // defined(OS_MACOSX) && !defined(OS_IOS)
 
-#if defined(OS_FUCHSIA)
-#include <netstack/netconfig.h>
-#endif  // defined(OS_FUCHSIA)
-
 namespace net {
 
 namespace {
@@ -72,10 +68,9 @@ const int kActivityMonitorMinimumSamplesForThroughputEstimate = 2;
 const base::TimeDelta kActivityMonitorMsThreshold =
     base::TimeDelta::FromMilliseconds(100);
 
-#if defined(OS_MACOSX) || defined(OS_FUCHSIA)
-
-// When enabling multicast using setsockopt(IP_MULTICAST_IF) MacOS and Fuchsia
-// require passing IPv4 address instead of interface index. This function
+#if defined(OS_MACOSX)
+// When enabling multicast using setsockopt(IP_MULTICAST_IF) MacOS
+// requires passing IPv4 address instead of interface index. This function
 // resolves IPv4 address by interface index. The |address| is returned in
 // network order.
 int GetIPv4AddressFromIndex(int socket, uint32_t index, uint32_t* address) {
@@ -86,7 +81,6 @@ int GetIPv4AddressFromIndex(int socket, uint32_t index, uint32_t* address) {
 
   sockaddr_in* result = nullptr;
 
-#if defined(OS_MACOSX)
   ifreq ifr;
   ifr.ifr_addr.sa_family = AF_INET;
   if (!if_indextoname(index, ifr.ifr_name))
@@ -95,24 +89,6 @@ int GetIPv4AddressFromIndex(int socket, uint32_t index, uint32_t* address) {
   if (rv == -1)
     return MapSystemError(errno);
   result = reinterpret_cast<sockaddr_in*>(&ifr.ifr_addr);
-#elif defined(OS_FUCHSIA)
-  uint32_t num_ifs = 0;
-  if (ioctl_netc_get_num_ifs(socket, &num_ifs) < 0) {
-    PLOG(ERROR) << "ioctl_netc_get_num_ifs";
-    return MapSystemError(errno);
-  }
-  for (uint32_t i = 0; i < num_ifs; ++i) {
-    netc_if_info_t interface;
-    if (ioctl_netc_get_if_info_at(socket, &i, &interface) < 0) {
-      PLOG(WARNING) << "ioctl_netc_get_if_info_at";
-      continue;
-    }
-    if (interface.index == index && interface.addr.ss_family == AF_INET) {
-      result = reinterpret_cast<sockaddr_in*>(&(interface.addr));
-      break;
-    }
-  }
-#endif
 
   if (!result)
     return ERR_ADDRESS_INVALID;
@@ -121,7 +97,7 @@ int GetIPv4AddressFromIndex(int socket, uint32_t index, uint32_t* address) {
   return OK;
 }
 
-#endif  // OS_MACOSX || OS_FUCHSIA
+#endif  // OS_MACOSX
 
 #if defined(OS_MACOSX) && !defined(OS_IOS)
 
@@ -191,6 +167,10 @@ const guardid_t kSocketFdGuard = 0xD712BC0BC9A4EAD4;
 
 #endif  // defined(OS_MACOSX) && !defined(OS_IOS)
 
+int GetSocketFDHash(int fd) {
+  return fd ^ 1595649551;
+}
+
 }  // namespace
 
 UDPSocketPosix::UDPSocketPosix(DatagramSocket::BindType bind_type,
@@ -199,6 +179,7 @@ UDPSocketPosix::UDPSocketPosix(DatagramSocket::BindType bind_type,
     : write_async_watcher_(std::make_unique<WriteAsyncWatcher>(this)),
       sender_(new UDPSocketPosixSender()),
       socket_(kInvalidSocket),
+      socket_hash_(0),
       addr_family_(0),
       is_connected_(false),
       socket_options_(SOCKET_OPTION_MULTICAST_LOOP),
@@ -242,6 +223,7 @@ int UDPSocketPosix::Open(AddressFamily address_family) {
   PCHECK(change_fdguard_np(socket_, NULL, 0, &kSocketFdGuard,
                            GUARD_CLOSE | GUARD_DUP, NULL) == 0);
 #endif  // defined(OS_MACOSX) && !defined(OS_IOS)
+  socket_hash_ = GetSocketFDHash(socket_);
   if (!base::SetNonBlocking(socket_)) {
     const int err = MapSystemError(errno);
     Close();
@@ -328,6 +310,9 @@ void UDPSocketPosix::Close() {
   ok = write_socket_watcher_.StopWatchingFileDescriptor();
   DCHECK(ok);
 
+  // Verify that |socket_| hasn't been corrupted. Needed to debug
+  // crbug.com/906005.
+  CHECK_EQ(socket_hash_, GetSocketFDHash(socket_));
 #if defined(OS_MACOSX) && !defined(OS_IOS)
   PCHECK(IGNORE_EINTR(guarded_close_np(socket_, &kSocketFdGuard)) == 0);
 #else
@@ -693,8 +678,32 @@ int UDPSocketPosix::SetBroadcast(bool broadcast) {
   return rv == 0 ? OK : MapSystemError(errno);
 }
 
+int UDPSocketPosix::AllowAddressSharingForMulticast() {
+  DCHECK_NE(socket_, kInvalidSocket);
+  DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
+  DCHECK(!is_connected());
+
+  int rv = AllowAddressReuse();
+  if (rv != OK)
+    return rv;
+
+#ifdef SO_REUSEPORT
+  // Attempt to set SO_REUSEPORT if available. On some platforms, this is
+  // necessary to allow the address to be fully shared between separate sockets.
+  // On platforms where the option does not exist, SO_REUSEADDR should be
+  // sufficient to share multicast packets if such sharing is at all possible.
+  int value = 1;
+  rv = setsockopt(socket_, SOL_SOCKET, SO_REUSEPORT, &value, sizeof(value));
+  // Ignore errors that the option does not exist.
+  if (rv != 0 && errno != ENOPROTOOPT)
+    return MapSystemError(errno);
+#endif  // SO_REUSEPORT
+
+  return OK;
+}
+
 void UDPSocketPosix::ReadWatcher::OnFileCanReadWithoutBlocking(int) {
-  TRACE_EVENT0(kNetTracingCategory,
+  TRACE_EVENT0(NetTracingCategory(),
                "UDPSocketPosix::ReadWatcher::OnFileCanReadWithoutBlocking");
   if (!socket_->read_callback_.is_null())
     socket_->DidCompleteRead();
@@ -925,17 +934,17 @@ int UDPSocketPosix::SetMulticastOptions() {
   if (multicast_interface_ != 0) {
     switch (addr_family_) {
       case AF_INET: {
-#if defined(OS_MACOSX) || defined(OS_FUCHSIA)
-        ip_mreq mreq;
+#if defined(OS_MACOSX)
+        ip_mreq mreq = {};
         int error = GetIPv4AddressFromIndex(socket_, multicast_interface_,
                                             &mreq.imr_interface.s_addr);
         if (error != OK)
           return error;
-#else   //  defined(OS_MACOSX) || defined(OS_FUCHSIA)
-        ip_mreqn mreq;
+#else   //  defined(OS_MACOSX)
+        ip_mreqn mreq = {};
         mreq.imr_ifindex = multicast_interface_;
         mreq.imr_address.s_addr = htonl(INADDR_ANY);
-#endif  //  !defined(OS_MACOSX) && !defined(OS_FUCHSIA)
+#endif  //  !defined(OS_MACOSX)
         int rv = setsockopt(socket_, IPPROTO_IP, IP_MULTICAST_IF,
                             reinterpret_cast<const char*>(&mreq), sizeof(mreq));
         if (rv)
@@ -999,14 +1008,14 @@ int UDPSocketPosix::JoinGroup(const IPAddress& group_address) const {
       if (addr_family_ != AF_INET)
         return ERR_ADDRESS_INVALID;
 
-#if defined(OS_MACOSX) || defined(OS_FUCHSIA)
-      ip_mreq mreq;
+#if defined(OS_MACOSX)
+      ip_mreq mreq = {};
       int error = GetIPv4AddressFromIndex(socket_, multicast_interface_,
                                           &mreq.imr_interface.s_addr);
       if (error != OK)
         return error;
 #else
-      ip_mreqn mreq;
+      ip_mreqn mreq = {};
       mreq.imr_ifindex = multicast_interface_;
       mreq.imr_address.s_addr = htonl(INADDR_ANY);
 #endif
@@ -1047,16 +1056,9 @@ int UDPSocketPosix::LeaveGroup(const IPAddress& group_address) const {
     case IPAddress::kIPv4AddressSize: {
       if (addr_family_ != AF_INET)
         return ERR_ADDRESS_INVALID;
-      ip_mreq mreq;
-#if defined(OS_FUCHSIA)
-      // Fuchsia currently doesn't support INADDR_ANY in ip_mreq.imr_interface.
-      int error = GetIPv4AddressFromIndex(socket_, multicast_interface_,
-                                          &mreq.imr_interface.s_addr);
-      if (error != OK)
-        return error;
-#else   // defined(OS_FUCHSIA)
-      mreq.imr_interface.s_addr = INADDR_ANY;
-#endif  // !defined(OS_FUCHSIA)
+      ip_mreqn mreq = {};
+      mreq.imr_ifindex = multicast_interface_;
+      mreq.imr_address.s_addr = INADDR_ANY;
       memcpy(&mreq.imr_multiaddr, group_address.bytes().data(),
              IPAddress::kIPv4AddressSize);
       int rv = setsockopt(socket_, IPPROTO_IP, IP_DROP_MEMBERSHIP,

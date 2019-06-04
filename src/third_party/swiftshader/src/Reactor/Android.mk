@@ -112,13 +112,14 @@ LOCAL_CFLAGS += \
 	-DLOG_TAG=\"libsubzero\" \
 	-Wall \
 	-Werror \
-	-Wno-error=undefined-var-template \
-	-Wno-error=unused-lambda-capture \
+	-Wno-undefined-var-template \
+	-Wno-unused-lambda-capture \
 	-Wno-unused-parameter \
 	-Wno-implicit-exception-spec-mismatch \
 	-Wno-overloaded-virtual \
 	-Wno-non-virtual-dtor \
-	-Wno-unknown-warning-option
+	-Wno-unknown-warning-option \
+	-Wno-enum-compare-switch
 
 ifneq (16,${PLATFORM_SDK_VERSION})
 LOCAL_CFLAGS += -Xclang -fuse-init-array

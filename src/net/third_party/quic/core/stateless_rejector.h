@@ -10,7 +10,7 @@
 #include "net/third_party/quic/core/quic_packets.h"
 #include "net/third_party/quic/platform/api/quic_string.h"
 
-namespace net {
+namespace quic {
 
 // The StatelessRejector receives CHLO messages and generates an SREJ
 // message in response, if the CHLO can be statelessly rejected.
@@ -33,6 +33,8 @@ class StatelessRejector {
                     QuicByteCount chlo_packet_size,
                     const QuicSocketAddress& client_address,
                     const QuicSocketAddress& server_address);
+  StatelessRejector(const StatelessRejector&) = delete;
+  StatelessRejector& operator=(const StatelessRejector&) = delete;
 
   ~StatelessRejector();
 
@@ -53,6 +55,9 @@ class StatelessRejector {
   // made.
   static void Process(std::unique_ptr<StatelessRejector> rejector,
                       std::unique_ptr<ProcessDoneCallback> done_cb);
+
+  // Return the version of the CHLO.
+  ParsedQuicVersion version() const { return version_; }
 
   // Returns the state of the rejector after OnChlo() has been called.
   State state() const { return state_; }
@@ -110,10 +115,8 @@ class StatelessRejector {
   CryptoFramer crypto_framer_;
   QuicReferenceCountedPointer<QuicSignedServerConfig> signed_config_;
   QuicReferenceCountedPointer<QuicCryptoNegotiatedParameters> params_;
-
-  DISALLOW_COPY_AND_ASSIGN(StatelessRejector);
 };
 
-}  // namespace net
+}  // namespace quic
 
 #endif  // NET_THIRD_PARTY_QUIC_CORE_STATELESS_REJECTOR_H_

@@ -29,8 +29,9 @@
 #include "base/memory/weak_ptr.h"
 #include "base/values.h"
 #include "build/build_config.h"
-#include "components/viz/common/surfaces/local_surface_id.h"
+#include "components/viz/common/surfaces/local_surface_id_allocation.h"
 #include "components/viz/common/surfaces/scoped_surface_id_allocator.h"
+#include "content/browser/renderer_host/input_event_shim.h"
 #include "content/common/edit_command.h"
 #include "content/public/browser/browser_plugin_guest_delegate.h"
 #include "content/public/browser/guest_host.h"
@@ -62,8 +63,7 @@ class RenderFrameMetadata;
 }  // namespace cc
 
 namespace viz {
-class LocalSurfaceId;
-class SurfaceInfo;
+class LocalSurfaceIdAllocation;
 }  // namespace viz
 
 namespace content {
@@ -105,8 +105,11 @@ class CONTENT_EXPORT BrowserPluginGuest : public GuestHost,
   // type of WebContentsView to construct on initialization. The content
   // embedder needs to be aware of |guest_site_instance| on the guest's
   // construction and so we pass it in here.
-  static BrowserPluginGuest* Create(WebContentsImpl* web_contents,
-                                    BrowserPluginGuestDelegate* delegate);
+  //
+  // After this, a new BrowserPluginGuest is created with ownership transferred
+  // into the |web_contents|.
+  static void CreateInWebContents(WebContentsImpl* web_contents,
+                                  BrowserPluginGuestDelegate* delegate);
 
   // Returns whether the given WebContents is a BrowserPlugin guest.
   static bool IsGuest(WebContentsImpl* web_contents);
@@ -121,6 +124,10 @@ class CONTENT_EXPORT BrowserPluginGuest : public GuestHost,
   // view hierachy and sets up the appropriate RendererPreferences so that this
   // guest can navigate and resize offscreen.
   void Init();
+
+  // Returns an InputEventShim if this BrowserPluginGuest needs to intercept
+  // input events normally handled by a RenderWidgetHost.
+  InputEventShim* GetInputEventShim();
 
   // Returns a WeakPtr to this BrowserPluginGuest.
   base::WeakPtr<BrowserPluginGuest> AsWeakPtr();
@@ -172,10 +179,10 @@ class CONTENT_EXPORT BrowserPluginGuest : public GuestHost,
   bool focused() const { return focused_; }
   bool visible() const { return guest_visible_; }
 
-  // Returns the viz::LocalSurfaceId propagated from the parent to be used by
-  // this guest.
-  const viz::LocalSurfaceId& local_surface_id() const {
-    return local_surface_id_;
+  // Returns the viz::LocalSurfaceIdAllocation propagated from the parent to be
+  // used by this guest.
+  const viz::LocalSurfaceIdAllocation& local_surface_id_allocation() const {
+    return local_surface_id_allocation_;
   }
 
   bool is_in_destruction() { return is_in_destruction_; }
@@ -187,6 +194,12 @@ class CONTENT_EXPORT BrowserPluginGuest : public GuestHost,
   void EnableAutoResize(const gfx::Size& min_size, const gfx::Size& max_size);
   void DisableAutoResize();
   void DidUpdateVisualProperties(const cc::RenderFrameMetadata& metadata);
+
+  // Methods to handle events from InputEventShim.
+  void DidSetHasTouchEventHandlers(bool accept);
+  void DidTextInputStateChange(const TextInputState& params);
+  void DidLockMouse(bool user_gesture, bool privileged);
+  void DidUnlockMouse();
 
   // WebContentsObserver implementation.
   void DidFinishNavigation(NavigationHandle* navigation_handle) override;
@@ -214,12 +227,6 @@ class CONTENT_EXPORT BrowserPluginGuest : public GuestHost,
 
   // Returns whether the guest is attached to an embedder.
   bool attached() const { return attached_; }
-
-  // Returns true when an attachment has taken place since the last time the
-  // compositor surface was set.
-  bool has_attached_since_surface_set() const {
-    return has_attached_since_surface_set_;
-  }
 
   // Attaches this BrowserPluginGuest to the provided |embedder_web_contents|
   // and initializes the guest with the provided |params|. Attaching a guest
@@ -249,9 +256,6 @@ class CONTENT_EXPORT BrowserPluginGuest : public GuestHost,
 
   void PointerLockPermissionResponse(bool allow);
 
-  // The next function is virtual for test purposes.
-  virtual void SetChildFrameSurface(const viz::SurfaceInfo& surface_info);
-
   void ResendEventToEmbedder(const blink::WebInputEvent& event);
 
   // TODO(ekaramad): Remove this once https://crbug.com/642826 is resolved.
@@ -271,17 +275,27 @@ class CONTENT_EXPORT BrowserPluginGuest : public GuestHost,
                      WebContentsImpl* web_contents,
                      BrowserPluginGuestDelegate* delegate);
 
-  // Protected for testing.
-  void set_has_attached_since_surface_set_for_test(bool has_attached) {
-    has_attached_since_surface_set_ = has_attached;
-  }
-
   void set_attached_for_test(bool attached) {
     attached_ = attached;
   }
 
  private:
   class EmbedderVisibilityObserver;
+
+  // InputEventShim implementation.
+  class InputEventShimImpl : public InputEventShim {
+   public:
+    explicit InputEventShimImpl(BrowserPluginGuest* browser_plugin_guest);
+    ~InputEventShimImpl() override;
+
+    void DidSetHasTouchEventHandlers(bool accept) override;
+    void DidTextInputStateChange(const TextInputState& params) override;
+    void DidLockMouse(bool user_gesture, bool privileged) override;
+    void DidUnlockMouse() override;
+
+   private:
+    BrowserPluginGuest* browser_plugin_guest_;
+  };
 
   // The RenderWidgetHostImpl corresponding to the owner frame of BrowserPlugin.
   RenderWidgetHostImpl* GetOwnerRenderWidgetHost() const;
@@ -305,8 +319,6 @@ class CONTENT_EXPORT BrowserPluginGuest : public GuestHost,
   void OnExecuteEditCommand(int instance_id,
                             const std::string& command);
 
-  void OnLockMouse(bool user_gesture,
-                   bool privileged);
   void OnLockMouseAck(int instance_id, bool succeeded);
   // Resizes the guest's web contents.
   void OnSetFocus(int instance_id,
@@ -336,14 +348,11 @@ class CONTENT_EXPORT BrowserPluginGuest : public GuestHost,
   // collection. See RenderThreadImpl::IdleHandler (executed when hidden) and
   // RenderThreadImpl::IdleHandlerInForegroundTab (executed when visible).
   void OnSetVisibility(int instance_id, bool visible);
-  void OnUnlockMouse();
   void OnUnlockMouseAck(int instance_id);
   void OnSynchronizeVisualProperties(
       int instance_id,
-      const viz::LocalSurfaceId& local_surface_id,
       const FrameVisualProperties& visual_properties);
 
-  void OnTextInputStateChanged(const TextInputState& params);
   void OnImeSetComposition(
       int instance_id,
       const BrowserPluginHostMsg_SetComposition_Params& params);
@@ -359,14 +368,13 @@ class CONTENT_EXPORT BrowserPluginGuest : public GuestHost,
   void OnHandleInputEventAck(
       blink::WebInputEvent::Type event_type,
       InputEventAckState ack_result);
-  void OnHasTouchEventHandlers(bool accept);
 #if defined(OS_MACOSX)
   // On MacOS X popups are painted by the browser process. We handle them here
   // so that they are positioned correctly.
   void OnShowPopup(RenderFrameHost* render_frame_host,
                    const FrameHostMsg_ShowPopup_Params& params);
 #endif
-  void OnShowWidget(int route_id, const gfx::Rect& initial_rect);
+  void OnShowWidget(int widget_route_id, const gfx::Rect& initial_rect);
   void OnTakeFocus(bool reverse);
   void OnUpdateFrameName(int frame_id,
                          bool is_top_level,
@@ -391,15 +399,13 @@ class CONTENT_EXPORT BrowserPluginGuest : public GuestHost,
   // The last tooltip that was set with SetTooltipText().
   base::string16 current_tooltip_text_;
 
+  InputEventShimImpl input_event_shim_impl_;
+
   std::unique_ptr<EmbedderVisibilityObserver> embedder_visibility_observer_;
   WebContentsImpl* owner_web_contents_;
 
   // Indicates whether this guest has been attached to a container.
   bool attached_;
-
-  // Used to signal if a browser plugin has been attached since the last time
-  // the compositing surface was set.
-  bool has_attached_since_surface_set_;
 
   // An identifier that uniquely identifies a browser plugin within an embedder.
   int browser_plugin_instance_id_;
@@ -453,8 +459,9 @@ class CONTENT_EXPORT BrowserPluginGuest : public GuestHost,
   // WebContents associated with this BrowserPluginGuest has OOPIF structure.
   bool can_use_cross_process_frames_;
 
-  viz::LocalSurfaceId local_surface_id_;
+  viz::LocalSurfaceIdAllocation local_surface_id_allocation_;
   ScreenInfo screen_info_;
+  double zoom_level_ = 0.0;
   uint32_t capture_sequence_number_ = 0u;
 
   // Weak pointer used to ask GeolocationPermissionContext about geolocation

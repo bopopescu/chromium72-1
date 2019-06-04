@@ -16,6 +16,7 @@
 #include "base/test/scoped_feature_list.h"
 #include "crypto/openssl_util.h"
 #include "net/base/address_list.h"
+#include "net/base/completion_once_callback.h"
 #include "net/base/net_errors.h"
 #include "net/log/net_log_source.h"
 #include "net/socket/socket_test_util.h"
@@ -56,7 +57,7 @@ class SocketBIOAdapterTest : public testing::TestWithParam<ReadIfReadySupport>,
     factory_.AddSocketDataProvider(data);
     std::unique_ptr<StreamSocket> socket = factory_.CreateTransportClientSocket(
         AddressList(), nullptr, nullptr, NetLogSource());
-    CHECK_EQ(OK, socket->Connect(net::CompletionCallback()));
+    CHECK_EQ(OK, socket->Connect(CompletionOnceCallback()));
     return socket;
   }
 
@@ -642,8 +643,7 @@ TEST_P(SocketBIOAdapterTest, Detached) {
       std::make_unique<SocketBIOAdapter>(socket.get(), 100, 100, this);
 
   // Retain an additional reference to the BIO.
-  bssl::UniquePtr<BIO> bio(adapter->bio());
-  BIO_up_ref(bio.get());
+  bssl::UniquePtr<BIO> bio = bssl::UpRef(adapter->bio());
 
   // Release the adapter.
   adapter.reset();

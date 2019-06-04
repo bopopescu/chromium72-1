@@ -6,12 +6,13 @@
 
 #include <vector>
 
+#include "base/bind.h"
+#include "base/sha1.h"
 #include "chrome/browser/chromeos/arc/extensions/fake_arc_support.h"
 #include "chrome/browser/chromeos/login/users/fake_chrome_user_manager.h"
 #include "chrome/browser/consent_auditor/consent_auditor_factory.h"
 #include "chrome/browser/consent_auditor/consent_auditor_test_utils.h"
 #include "chrome/browser/signin/identity_manager_factory.h"
-#include "chrome/browser/signin/signin_manager_factory.h"
 #include "chrome/test/base/browser_with_test_window_test.h"
 #include "chrome/test/base/testing_profile.h"
 #include "components/consent_auditor/fake_consent_auditor.h"
@@ -129,7 +130,8 @@ class ArcSupportHostTest : public BrowserWithTestWindowTest {
 
   // BrowserWithTestWindowTest:
   TestingProfile::TestingFactories GetTestingFactories() override {
-    return {{ConsentAuditorFactory::GetInstance(), BuildFakeConsentAuditor}};
+    return {{ConsentAuditorFactory::GetInstance(),
+             base::BindRepeating(&BuildFakeConsentAuditor)}};
   }
 
  private:
@@ -183,6 +185,11 @@ TEST_F(ArcSupportHostTest, AuthRetryOnError) {
 }
 
 TEST_F(ArcSupportHostTest, TermsOfServiceAccept) {
+  consent_auditor::FakeConsentAuditor* ca = consent_auditor();
+  EXPECT_CALL(*ca, RecordArcPlayConsent(_, _));
+  EXPECT_CALL(*ca, RecordArcBackupAndRestoreConsent(_, _));
+  EXPECT_CALL(*ca, RecordArcGoogleLocationServiceConsent(_, _));
+
   MockTermsOfServiceDelegate tos_delegate;
   support_host()->SetTermsOfServiceDelegate(&tos_delegate);
 

@@ -9,8 +9,7 @@ namespace task_manager {
 TestTaskManager::TestTaskManager()
     : handle_(base::kNullProcessHandle),
       pid_(base::kNullProcessId) {
-  set_timer_for_testing(
-      std::unique_ptr<base::Timer>(new base::MockTimer(true, true)));
+  set_timer_for_testing(std::make_unique<base::MockRepeatingTimer>());
 }
 
 TestTaskManager::~TestTaskManager() {
@@ -49,10 +48,6 @@ int64_t TestTaskManager::GetSwappedMemoryUsage(TaskId task_id) const {
 int64_t TestTaskManager::GetGpuMemoryUsage(TaskId task_id,
                                            bool* has_duplicates) const {
   return -1;
-}
-
-base::MemoryState TestTaskManager::GetMemoryState(TaskId task_id) const {
-  return base::MemoryState::UNKNOWN;
 }
 
 int TestTaskManager::GetIdleWakeupsPerSecond(TaskId task_id) const {

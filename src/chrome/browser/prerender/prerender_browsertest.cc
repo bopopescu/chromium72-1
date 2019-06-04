@@ -23,6 +23,7 @@
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/task/post_task.h"
 #include "base/test/bind_test_util.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/test/simple_test_tick_clock.h"
@@ -56,7 +57,7 @@
 #include "chrome/browser/prerender/prerender_test_utils.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_io_data.h"
-#include "chrome/browser/speech/tts_controller.h"
+#include "chrome/browser/speech/tts_controller_delegate_impl.h"
 #include "chrome/browser/speech/tts_platform.h"
 #include "chrome/browser/task_manager/mock_web_contents_task_manager.h"
 #include "chrome/browser/task_manager/providers/web_contents/web_contents_tags_manager.h"
@@ -88,6 +89,7 @@
 #include "components/variations/entropy_provider.h"
 #include "components/variations/variations_associated_data.h"
 #include "content/public/browser/browser_message_filter.h"
+#include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/browsing_data_remover.h"
 #include "content/public/browser/devtools_agent_host.h"
@@ -98,9 +100,9 @@
 #include "content/public/browser/render_process_host.h"
 #include "content/public/browser/render_view_host.h"
 #include "content/public/browser/site_instance.h"
+#include "content/public/browser/tts_controller.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_contents_observer.h"
-#include "content/public/common/browser_side_navigation_policy.h"
 #include "content/public/common/content_switches.h"
 #include "content/public/common/url_constants.h"
 #include "content/public/test/browser_test_utils.h"
@@ -320,8 +322,8 @@ class ChannelDestructionWatcher {
 
    private:
     ~DestructionMessageFilter() override {
-      content::BrowserThread::PostTask(
-          content::BrowserThread::UI, FROM_HERE,
+      base::PostTaskWithTraits(
+          FROM_HERE, {content::BrowserThread::UI},
           base::BindOnce(&ChannelDestructionWatcher::OnChannelDestroyed,
                          base::Unretained(watcher_)));
     }
@@ -428,21 +430,27 @@ class NavigationOrSwapObserver : public WebContentsObserver,
   }
 
   // TabStripModelObserver implementation:
-  void TabReplacedAt(TabStripModel* tab_strip_model,
-                     WebContents* old_contents,
-                     WebContents* new_contents,
-                     int index) override {
-    if (old_contents != web_contents())
+  void OnTabStripModelChanged(
+      TabStripModel* tab_strip_model,
+      const TabStripModelChange& change,
+      const TabStripSelectionChange& selection) override {
+    if (change.type() != TabStripModelChange::kReplaced)
       return;
-    // Switch to observing the new WebContents.
-    Observe(new_contents);
-    if (new_contents->IsLoading()) {
-      // If the new WebContents is still loading, wait for it to complete. Only
-      // one load post-swap is supported.
-      did_start_loading_ = true;
-      number_of_loads_ = 1;
-    } else {
-      loop_.Quit();
+
+    for (const auto& delta : change.deltas()) {
+      if (delta.replace.old_contents != web_contents())
+        continue;
+
+      // Switch to observing the new WebContents.
+      Observe(delta.replace.new_contents);
+      if (delta.replace.new_contents->IsLoading()) {
+        // If the new WebContents is still loading, wait for it to complete.
+        // Only one load post-swap is supported.
+        did_start_loading_ = true;
+        number_of_loads_ = 1;
+      } else {
+        loop_.Quit();
+      }
     }
   }
 
@@ -583,8 +591,6 @@ class PrerenderBrowserTest : public test_utils::PrerenderInProcessBrowserTest {
     test_utils::PrerenderInProcessBrowserTest::SetUpOnMainThread();
     prerender::PrerenderManager::SetMode(
         prerender::PrerenderManager::PRERENDER_MODE_ENABLED);
-    prerender::PrerenderManager::SetOmniboxMode(
-        prerender::PrerenderManager::PRERENDER_MODE_ENABLED);
     const testing::TestInfo* const test_info =
         testing::UnitTest::GetInstance()->current_test_info();
     // This one test fails with the host resolver redirecting all hosts.
@@ -704,24 +710,6 @@ class PrerenderBrowserTest : public test_utils::PrerenderInProcessBrowserTest {
         "window.domAutomationController.send(IsOriginalPrerenderPage())",
         &original_prerender_page));
     EXPECT_TRUE(original_prerender_page);
-  }
-
-  // Goes back to the page that was active before the prerender was swapped
-  // in. This must be called when the prerendered page is the current page
-  // in the active tab.
-  void GoBackToPageBeforePrerender() {
-    WebContents* tab = GetActiveWebContents();
-    ASSERT_TRUE(tab);
-    EXPECT_FALSE(tab->IsLoading());
-    TestNavigationObserver back_nav_observer(tab);
-    chrome::GoBack(current_browser(), WindowOpenDisposition::CURRENT_TAB);
-    back_nav_observer.Wait();
-    bool js_result;
-    ASSERT_TRUE(content::ExecuteScriptAndExtractBool(
-        tab,
-        "window.domAutomationController.send(DidBackToOriginalPagePass())",
-        &js_result));
-    EXPECT_TRUE(js_result);
   }
 
   void DisableJavascriptCalls() {
@@ -882,10 +870,11 @@ class PrerenderBrowserTest : public test_utils::PrerenderInProcessBrowserTest {
         base::ASCIIToUTF16(javascript));
   }
 
-  void OverridePrerenderManagerTimeTicks(base::SimpleTestTickClock* clock) {
+  base::SimpleTestTickClock* OverridePrerenderManagerTimeTicks() {
     // The default zero time causes the prerender manager to do strange things.
-    clock->Advance(base::TimeDelta::FromSeconds(1));
-    GetPrerenderManager()->SetTickClockForTesting(clock);
+    clock_.Advance(base::TimeDelta::FromSeconds(1));
+    GetPrerenderManager()->SetTickClockForTesting(&clock_);
+    return &clock_;
   }
 
   void SetMidLoadClockAdvance(base::SimpleTestTickClock* clock,
@@ -1037,6 +1026,9 @@ class PrerenderBrowserTest : public test_utils::PrerenderInProcessBrowserTest {
       observer.Wait();
     }
   }
+
+  // Test TickClock that is set by OverridePrerenderManagerTimeTicks().
+  base::SimpleTestTickClock clock_;
 
   GURL dest_url_;
   bool call_javascript_;
@@ -1446,8 +1438,9 @@ IN_PROC_BROWSER_TEST_F(PrerenderBrowserTest, PrerenderNaClPluginDisabled) {
 // http://crbug.com/100514
 #define MAYBE_PrerenderIframeDelayLoadPlugin \
         DISABLED_PrerenderIframeDelayLoadPlugin
-#elif defined(OS_WIN) && defined(ARCH_CPU_X86_64)
-// TODO(jschuh): Failing plugin tests. crbug.com/244653
+#elif defined(OS_WIN)
+// TODO(jschuh): Failing plugin tests. https://crbug.com/244653,
+// https://crbug.com/876872
 #define MAYBE_PrerenderIframeDelayLoadPlugin \
         DISABLED_PrerenderIframeDelayLoadPlugin
 #else
@@ -1697,83 +1690,6 @@ IN_PROC_BROWSER_TEST_F(PrerenderBrowserTest, PrerenderQuickQuit) {
   DisableLoadEventCheck();
   PrerenderTestURL("/prerender/prerender_page.html",
                    FINAL_STATUS_APP_TERMINATING, 0);
-}
-
-// Checks that we don't prerender in an infinite loop.
-IN_PROC_BROWSER_TEST_F(PrerenderBrowserTest, PrerenderInfiniteLoop) {
-  const char* const kHtmlFileA = "/prerender/prerender_infinite_a.html";
-  const char* const kHtmlFileB = "/prerender/prerender_infinite_b.html";
-
-  std::vector<FinalStatus> expected_final_status_queue;
-  expected_final_status_queue.push_back(FINAL_STATUS_USED);
-  expected_final_status_queue.push_back(FINAL_STATUS_APP_TERMINATING);
-
-  std::vector<std::unique_ptr<TestPrerender>> prerenders =
-      PrerenderTestURL(kHtmlFileA, expected_final_status_queue, 1);
-  ASSERT_TRUE(prerenders[0]->contents());
-  // Assert that the pending prerender is in there already. This relies on the
-  // fact that the renderer sends out the AddLinkRelPrerender IPC before sending
-  // the page load one.
-  EXPECT_EQ(2U, GetLinkPrerenderCount());
-  EXPECT_EQ(1U, GetRunningLinkPrerenderCount());
-
-  // Next url should be in pending list but not an active entry.
-  EXPECT_FALSE(UrlIsInPrerenderManager(kHtmlFileB));
-
-  NavigateToDestURL();
-
-  // Make sure the PrerenderContents for the next url is now in the manager and
-  // not pending. This relies on pending prerenders being resolved in the same
-  // event loop iteration as OnPrerenderStop.
-  EXPECT_TRUE(UrlIsInPrerenderManager(kHtmlFileB));
-  EXPECT_EQ(1U, GetLinkPrerenderCount());
-  EXPECT_EQ(1U, GetRunningLinkPrerenderCount());
-}
-
-// Checks that we don't prerender in an infinite loop and multiple links are
-// handled correctly.
-IN_PROC_BROWSER_TEST_F(PrerenderBrowserTest,
-                       DISABLED_PrerenderInfiniteLoopMultiple) {
-  const char* const kHtmlFileA =
-      "/prerender/prerender_infinite_a_multiple.html";
-  const char* const kHtmlFileB =
-      "/prerender/prerender_infinite_b_multiple.html";
-  const char* const kHtmlFileC =
-      "/prerender/prerender_infinite_c_multiple.html";
-
-  // This test is conceptually simplest if concurrency is at two, since we
-  // don't have to worry about which of kHtmlFileB or kHtmlFileC gets evicted.
-  GetPrerenderManager()->mutable_config().max_link_concurrency = 2;
-  GetPrerenderManager()->mutable_config().max_link_concurrency_per_launcher = 2;
-
-  std::vector<FinalStatus> expected_final_status_queue;
-  expected_final_status_queue.push_back(FINAL_STATUS_USED);
-  expected_final_status_queue.push_back(FINAL_STATUS_APP_TERMINATING);
-  expected_final_status_queue.push_back(FINAL_STATUS_APP_TERMINATING);
-
-  std::vector<std::unique_ptr<TestPrerender>> prerenders =
-      PrerenderTestURL(kHtmlFileA, expected_final_status_queue, 1);
-  ASSERT_TRUE(prerenders[0]->contents());
-
-  // Next url should be in pending list but not an active entry. This relies on
-  // the fact that the renderer sends out the AddLinkRelPrerender IPC before
-  // sending the page load one.
-  EXPECT_EQ(3U, GetLinkPrerenderCount());
-  EXPECT_EQ(1U, GetRunningLinkPrerenderCount());
-  EXPECT_FALSE(UrlIsInPrerenderManager(kHtmlFileB));
-  EXPECT_FALSE(UrlIsInPrerenderManager(kHtmlFileC));
-
-  NavigateToDestURL();
-
-  // Make sure the PrerenderContents for the next urls are now in the manager
-  // and not pending. One and only one of the URLs (the last seen) should be the
-  // active entry. This relies on pending prerenders being resolved in the same
-  // event loop iteration as OnPrerenderStop.
-  bool url_b_is_active_prerender = UrlIsInPrerenderManager(kHtmlFileB);
-  bool url_c_is_active_prerender = UrlIsInPrerenderManager(kHtmlFileC);
-  EXPECT_TRUE(url_b_is_active_prerender && url_c_is_active_prerender);
-  EXPECT_EQ(2U, GetLinkPrerenderCount());
-  EXPECT_EQ(2U, GetRunningLinkPrerenderCount());
 }
 
 // Checks that pending prerenders are aborted (and never launched) when launched
@@ -2426,7 +2342,13 @@ IN_PROC_BROWSER_TEST_F(PrerenderBrowserTest, PrerenderUnload) {
 // Checks that a beforeunload handler is executed on the referring page when a
 // prerendered page is swapped in. Also checks that the WebContents of the
 // referring page is destroyed.
-IN_PROC_BROWSER_TEST_F(PrerenderBrowserTest, PrerenderBeforeUnload) {
+// Disabled on Windows. See https://crbug.com/875404.
+#if defined(OS_WIN)
+#define MAYBE_PrerenderBeforeUnload DISABLED_PrerenderBeforeUnload
+#else
+#define MAYBE_PrerenderBeforeUnload PrerenderBeforeUnload
+#endif
+IN_PROC_BROWSER_TEST_F(PrerenderBrowserTest, MAYBE_PrerenderBeforeUnload) {
   set_loader_path("/prerender/prerender_loader_with_beforeunload.html");
   PrerenderTestURL("/prerender/prerender_page.html", FINAL_STATUS_USED, 1);
   WebContentsDestructionObserver destruction_observer(GetActiveWebContents());
@@ -2575,16 +2497,6 @@ IN_PROC_BROWSER_TEST_F(PrerenderBrowserTest,
   agent->DetachClient(&client);
 }
 
-// Validate that the sessionStorage namespace remains the same when swapping
-// in a prerendered page.
-IN_PROC_BROWSER_TEST_F(PrerenderBrowserTest, PrerenderSessionStorage) {
-  set_loader_path("/prerender/prerender_loader_with_session_storage.html");
-  PrerenderTestURL(GetCrossDomainTestUrl("prerender/prerender_page.html"),
-                   FINAL_STATUS_USED, 1);
-  NavigateToDestURL();
-  GoBackToPageBeforePrerender();
-}
-
 // Checks that the referrer policy is used when prerendering.
 IN_PROC_BROWSER_TEST_F(PrerenderBrowserTest, PrerenderReferrerPolicy) {
   set_loader_path("/prerender/prerender_loader_with_referrer_policy.html");
@@ -2710,36 +2622,6 @@ IN_PROC_BROWSER_TEST_F(PrerenderBrowserTestWithExtensions, TabsApi) {
 
   ASSERT_TRUE(IsEmptyPrerenderLinkManager());
   ASSERT_TRUE(catcher.GetNextResult()) << catcher.message();
-}
-
-// Test that prerenders abort when navigating to a stream.
-// See chrome/browser/extensions/api/streams_private/streams_private_apitest.cc
-IN_PROC_BROWSER_TEST_F(PrerenderBrowserTestWithExtensions, StreamsTest) {
-  if (base::FeatureList::IsEnabled(network::features::kNetworkService))
-    return;  // Streams not used with network service.
-
-  ASSERT_TRUE(StartEmbeddedTestServer());
-
-  const extensions::Extension* extension = LoadExtension(
-      test_data_dir_.AppendASCII("streams_private/handle_mime_type"));
-  ASSERT_TRUE(extension);
-  EXPECT_EQ(std::string(extension_misc::kMimeHandlerPrivateTestExtensionId),
-            extension->id());
-  MimeTypesHandler* handler = MimeTypesHandler::GetHandler(extension);
-  ASSERT_TRUE(handler);
-  EXPECT_TRUE(handler->CanHandleMIMEType("application/msword"));
-
-  PrerenderTestURL("/prerender/document.doc", FINAL_STATUS_DOWNLOAD, 0);
-
-  // Sanity-check that the extension would have picked up the stream in a normal
-  // navigation had prerender not intercepted it.
-  // The extension streams_private/handle_mime_type reports success if it has
-  // handled the application/msword type.
-  // Note: NavigateToDestURL() cannot be used because of the assertion shecking
-  //     for non-null PrerenderContents.
-  extensions::ResultCatcher catcher;
-  ui_test_utils::NavigateToURL(current_browser(), dest_url());
-  EXPECT_TRUE(catcher.GetNextResult());
 }
 
 // Checks that non-http/https/chrome-extension subresource cancels the
@@ -2872,8 +2754,8 @@ IN_PROC_BROWSER_TEST_F(PrerenderBrowserTest,
 
   // Mock out requests to the Web Store.
   base::FilePath file(GetTestPath("prerender_page.html"));
-  BrowserThread::PostTask(
-      BrowserThread::IO, FROM_HERE,
+  base::PostTaskWithTraits(
+      FROM_HERE, {BrowserThread::IO},
       base::BindOnce(&CreateMockInterceptorOnIO, webstore_url, file));
 
   PrerenderTestURL(CreateClientRedirect(webstore_url.spec()),
@@ -3104,8 +2986,9 @@ IN_PROC_BROWSER_TEST_F(PrerenderBrowserTest, AutosigninInPrerenderer) {
     base::ScopedAllowBlockingForTesting allow_blocking;
     PasswordStoreFactory::GetInstance()->SetTestingFactory(
         current_browser()->profile(),
-        password_manager::BuildPasswordStore<
-            content::BrowserContext, password_manager::TestPasswordStore>);
+        base::BindRepeating(
+            &password_manager::BuildPasswordStore<
+                content::BrowserContext, password_manager::TestPasswordStore>));
   }
   scoped_refptr<password_manager::TestPasswordStore> password_store =
       static_cast<password_manager::TestPasswordStore*>(
@@ -3129,8 +3012,8 @@ IN_PROC_BROWSER_TEST_F(PrerenderBrowserTest, AutosigninInPrerenderer) {
   base::FilePath empty_file = ui_test_utils::GetTestFilePath(
       base::FilePath(), base::FilePath(FILE_PATH_LITERAL("empty.html")));
   RequestCounter done_counter;
-  BrowserThread::PostTask(
-      BrowserThread::IO, FROM_HERE,
+  base::PostTaskWithTraits(
+      FROM_HERE, {BrowserThread::IO},
       base::BindOnce(&CreateCountingInterceptorOnIO, done_url, empty_file,
                      done_counter.AsWeakPtr()));
   // Loading may finish or be interrupted. The final result is important only.
@@ -3192,8 +3075,11 @@ class HangingURLLoader : public network::mojom::URLLoader {
       : client_(std::move(client)) {}
   ~HangingURLLoader() override {}
   // mojom::URLLoader implementation:
-  void FollowRedirect(const base::Optional<net::HttpRequestHeaders>&
-                          modified_request_headers) override {}
+  void FollowRedirect(
+      const base::Optional<std::vector<std::string>>&
+          to_be_removed_request_headers,
+      const base::Optional<net::HttpRequestHeaders>& modified_request_headers,
+      const base::Optional<GURL>& new_url) override {}
   void ProceedWithResponse() override {}
   void SetPriority(net::RequestPriority priority,
                    int32_t intra_priority_value) override {
@@ -3276,12 +3162,11 @@ IN_PROC_BROWSER_TEST_F(PrerenderBrowserTest, ResourcePriorityOverlappingSwap) {
 IN_PROC_BROWSER_TEST_F(PrerenderBrowserTest,
                        DISABLED_FirstContentfulPaintTimingSimple) {
   GetPrerenderManager()->DisablePageLoadMetricsObserverForTesting();
-  base::SimpleTestTickClock clock;
-  OverridePrerenderManagerTimeTicks(&clock);
+  base::SimpleTestTickClock* clock = OverridePrerenderManagerTimeTicks();
   PrerenderTestURL("/prerender/prerender_page.html", FINAL_STATUS_USED, 1);
 
-  base::TimeTicks load_start = clock.NowTicks();
-  clock.Advance(base::TimeDelta::FromSeconds(1));
+  base::TimeTicks load_start = clock->NowTicks();
+  clock->Advance(base::TimeDelta::FromSeconds(1));
   NavigateToDestURL();
 
   PrerenderPageLoadMetricsObserver observer(GetPrerenderManager(),
@@ -3305,8 +3190,7 @@ IN_PROC_BROWSER_TEST_F(PrerenderBrowserTest,
 
 IN_PROC_BROWSER_TEST_F(PrerenderBrowserTest, FirstContentfulPaintTimingReuse) {
   GetPrerenderManager()->DisablePageLoadMetricsObserverForTesting();
-  base::SimpleTestTickClock clock;
-  OverridePrerenderManagerTimeTicks(&clock);
+  base::SimpleTestTickClock* clock = OverridePrerenderManagerTimeTicks();
 
   GURL url = embedded_test_server()->GetURL("/prerender/prerender_page.html");
   base::RunLoop hanging_request_waiter;
@@ -3319,11 +3203,11 @@ IN_PROC_BROWSER_TEST_F(PrerenderBrowserTest, FirstContentfulPaintTimingReuse) {
   hanging_request_waiter.Run();
 
   // This prerender cancels and reuses the first.
-  clock.Advance(base::TimeDelta::FromSeconds(1));
-  base::TimeTicks load_start = clock.NowTicks();
+  clock->Advance(base::TimeDelta::FromSeconds(1));
+  base::TimeTicks load_start = clock->NowTicks();
   EnableJavascriptCalls();
   PrerenderTestURL(url, FINAL_STATUS_USED, 1);
-  clock.Advance(base::TimeDelta::FromSeconds(1));
+  clock->Advance(base::TimeDelta::FromSeconds(1));
 
   NavigateToDestURL();
   PrerenderPageLoadMetricsObserver observer(GetPrerenderManager(),
@@ -3350,23 +3234,22 @@ IN_PROC_BROWSER_TEST_F(PrerenderBrowserTest, FirstContentfulPaintTimingReuse) {
 IN_PROC_BROWSER_TEST_F(PrerenderBrowserTest,
                        FirstContentfulPaintTimingTimeout) {
   GetPrerenderManager()->DisablePageLoadMetricsObserverForTesting();
-  base::SimpleTestTickClock clock;
-  OverridePrerenderManagerTimeTicks(&clock);
+  base::SimpleTestTickClock* clock = OverridePrerenderManagerTimeTicks();
 
   // Make the first prerender time out.
   base::TimeDelta time_out_delta =
       GetPrerenderManager()->config().time_to_live +
       base::TimeDelta::FromSeconds(10);
-  SetMidLoadClockAdvance(&clock, time_out_delta);
+  SetMidLoadClockAdvance(clock, time_out_delta);
 
   GURL url = embedded_test_server()->GetURL("/prerender/prerender_page.html");
   PrerenderTestURL(url, FINAL_STATUS_TIMED_OUT, 1);
 
   ClearMidLoadClock();
-  base::TimeTicks load_start = clock.NowTicks();
+  base::TimeTicks load_start = clock->NowTicks();
   PrerenderTestURL(url, FINAL_STATUS_USED, 1);
 
-  clock.Advance(base::TimeDelta::FromSeconds(1));
+  clock->Advance(base::TimeDelta::FromSeconds(1));
   NavigateToDestURL();
 
   PrerenderPageLoadMetricsObserver observer(GetPrerenderManager(),
@@ -3393,8 +3276,7 @@ IN_PROC_BROWSER_TEST_F(PrerenderBrowserTest,
 IN_PROC_BROWSER_TEST_F(PrerenderBrowserTest,
                        FirstContentfulPaintTimingNoCommit) {
   GetPrerenderManager()->DisablePageLoadMetricsObserverForTesting();
-  base::SimpleTestTickClock clock;
-  OverridePrerenderManagerTimeTicks(&clock);
+  base::SimpleTestTickClock* clock = OverridePrerenderManagerTimeTicks();
 
   GURL url = embedded_test_server()->GetURL("/prerender/prerender_page.html");
   base::FilePath url_file = ui_test_utils::GetTestFilePath(
@@ -3410,12 +3292,12 @@ IN_PROC_BROWSER_TEST_F(PrerenderBrowserTest,
   PrerenderTestURL(url, FINAL_STATUS_NAVIGATION_UNCOMMITTED, 0);
   prerender_start_loop.Run();
 
-  clock.Advance(base::TimeDelta::FromSeconds(1));
+  clock->Advance(base::TimeDelta::FromSeconds(1));
   NavigateToDestURLWithDisposition(WindowOpenDisposition::CURRENT_TAB, false);
 
   PrerenderPageLoadMetricsObserver observer(GetPrerenderManager(),
                                             GetActiveWebContents());
-  observer.SetNavigationStartTicksForTesting(clock.NowTicks());
+  observer.SetNavigationStartTicksForTesting(clock->NowTicks());
 
   page_load_metrics::mojom::PageLoadTiming timing;
   page_load_metrics::InitPageLoadTimingForTest(&timing);
@@ -3455,8 +3337,7 @@ IN_PROC_BROWSER_TEST_F(PrerenderBrowserTest,
 IN_PROC_BROWSER_TEST_F(PrerenderBrowserTest,
                        MAYBE_FirstContentfulPaintTimingTwoPages) {
   GetPrerenderManager()->DisablePageLoadMetricsObserverForTesting();
-  base::SimpleTestTickClock clock;
-  OverridePrerenderManagerTimeTicks(&clock);
+  base::SimpleTestTickClock* clock = OverridePrerenderManagerTimeTicks();
 
   // As this load will be canceled, it is not waited for, and hence no
   // javascript is executed.
@@ -3464,12 +3345,12 @@ IN_PROC_BROWSER_TEST_F(PrerenderBrowserTest,
   // First prerender a different page from the usual target.
   PrerenderTestURL("/prerender/prefetch_page.html", FINAL_STATUS_CANCELLED, 0);
 
-  clock.Advance(base::TimeDelta::FromSeconds(1));
-  base::TimeTicks load_start = clock.NowTicks();
+  clock->Advance(base::TimeDelta::FromSeconds(1));
+  base::TimeTicks load_start = clock->NowTicks();
   EnableJavascriptCalls();
   PrerenderTestURL("/prerender/prerender_page.html", FINAL_STATUS_USED, 1);
 
-  clock.Advance(base::TimeDelta::FromSeconds(1));
+  clock->Advance(base::TimeDelta::FromSeconds(1));
   NavigateToDestURL();
 
   PrerenderPageLoadMetricsObserver observer(GetPrerenderManager(),
@@ -3494,12 +3375,12 @@ IN_PROC_BROWSER_TEST_F(PrerenderBrowserTest,
 
 IN_PROC_BROWSER_TEST_F(PrerenderBrowserTest, FirstContentfulPaintHidden) {
   GetPrerenderManager()->DisablePageLoadMetricsObserverForTesting();
-  base::SimpleTestTickClock clock;
-  OverridePrerenderManagerTimeTicks(&clock);
-  base::TimeTicks load_start = clock.NowTicks();
+  base::SimpleTestTickClock* clock = OverridePrerenderManagerTimeTicks();
+
+  base::TimeTicks load_start = clock->NowTicks();
   PrerenderTestURL("/prerender/prerender_page.html", FINAL_STATUS_USED, 1);
 
-  clock.Advance(base::TimeDelta::FromSeconds(1));
+  clock->Advance(base::TimeDelta::FromSeconds(1));
   NavigateToDestURL();
 
   PrerenderPageLoadMetricsObserver observer(GetPrerenderManager(),
@@ -3529,8 +3410,7 @@ IN_PROC_BROWSER_TEST_F(PrerenderBrowserTest, FirstContentfulPaintHidden) {
 IN_PROC_BROWSER_TEST_F(PrerenderBrowserTest,
                        DISABLED_FirstContentfulPaintHiddenNoCommit) {
   GetPrerenderManager()->DisablePageLoadMetricsObserverForTesting();
-  base::SimpleTestTickClock clock;
-  OverridePrerenderManagerTimeTicks(&clock);
+  base::SimpleTestTickClock* clock = OverridePrerenderManagerTimeTicks();
 
   GURL url = embedded_test_server()->GetURL("/prerender/prerender_page.html");
   base::FilePath url_file = ui_test_utils::GetTestFilePath(
@@ -3547,12 +3427,12 @@ IN_PROC_BROWSER_TEST_F(PrerenderBrowserTest,
   PrerenderTestURL(url, FINAL_STATUS_NAVIGATION_UNCOMMITTED, 0);
   prerender_start_loop.Run();
 
-  clock.Advance(base::TimeDelta::FromSeconds(1));
+  clock->Advance(base::TimeDelta::FromSeconds(1));
   NavigateToDestURLWithDisposition(WindowOpenDisposition::CURRENT_TAB, false);
 
   PrerenderPageLoadMetricsObserver observer(GetPrerenderManager(),
                                             GetActiveWebContents());
-  observer.SetNavigationStartTicksForTesting(clock.NowTicks());
+  observer.SetNavigationStartTicksForTesting(clock->NowTicks());
 
   EXPECT_EQ(page_load_metrics::PageLoadMetricsObserver::CONTINUE_OBSERVING,
             observer.OnHidden(page_load_metrics::mojom::PageLoadTiming(),
@@ -3586,33 +3466,33 @@ IN_PROC_BROWSER_TEST_F(PrerenderBrowserTest,
 
 // When instantiated, mocks out the global text-to-speech engine with something
 // that emulates speaking any phrase for the duration of 0ms.
-class TtsPlatformMock : public TtsPlatformImpl {
+class TtsPlatformMock : public TtsPlatform {
  public:
   TtsPlatformMock() : speaking_requested_(false) {
-    TtsController::GetInstance()->SetPlatformImpl(this);
+    TtsControllerDelegateImpl::GetInstance()->SetTtsPlatform(this);
   }
 
-  ~TtsPlatformMock() override {
-    TtsController::GetInstance()->SetPlatformImpl(
-        TtsPlatformImpl::GetInstance());
+  virtual ~TtsPlatformMock() {
+    TtsControllerDelegateImpl::GetInstance()->SetTtsPlatform(
+        TtsPlatform::GetInstance());
   }
 
   bool speaking_requested() { return speaking_requested_; }
 
-  // TtsPlatformImpl:
+  // TtsPlatform:
 
   bool PlatformImplAvailable() override { return true; }
 
   bool Speak(int utterance_id,
              const std::string& utterance,
              const std::string& lang,
-             const VoiceData& voice,
-             const UtteranceContinuousParameters& params) override {
+             const content::VoiceData& voice,
+             const content::UtteranceContinuousParameters& params) override {
     speaking_requested_ = true;
     // Dispatch the end of speaking back to the page.
-    TtsController::GetInstance()->OnTtsEvent(utterance_id, TTS_EVENT_END,
-                                             static_cast<int>(utterance.size()),
-                                             std::string());
+    content::TtsController::GetInstance()->OnTtsEvent(
+        utterance_id, content::TTS_EVENT_END,
+        static_cast<int>(utterance.size()), std::string());
     return true;
   }
 
@@ -3620,17 +3500,32 @@ class TtsPlatformMock : public TtsPlatformImpl {
 
   bool IsSpeaking() override { return false; }
 
-  void GetVoices(std::vector<VoiceData>* out_voices) override {
-    out_voices->push_back(VoiceData());
-    VoiceData& voice = out_voices->back();
+  void GetVoices(std::vector<content::VoiceData>* out_voices) override {
+    out_voices->push_back(content::VoiceData());
+    content::VoiceData& voice = out_voices->back();
     voice.native = true;
     voice.name = "TtsPlatformMock";
-    voice.events.insert(TTS_EVENT_END);
+    voice.events.insert(content::TTS_EVENT_END);
   }
 
   void Pause() override {}
 
   void Resume() override {}
+
+  bool LoadBuiltInTtsExtension(
+      content::BrowserContext* browser_context) override {
+    return false;
+  }
+
+  void WillSpeakUtteranceWithVoice(
+      const content::Utterance* utterance,
+      const content::VoiceData& voice_data) override {}
+
+  void SetError(const std::string& error) override {}
+
+  std::string GetError() override { return std::string(); }
+
+  void ClearError() override {}
 
  private:
   bool speaking_requested_;

@@ -16,24 +16,25 @@
 #include "SkFontDescriptor.h"
 #include "SkGlyph.h"
 #include "SkHRESULT.h"
+#include "SkMacros.h"
 #include "SkMakeUnique.h"
 #include "SkMaskGamma.h"
 #include "SkMatrix22.h"
-#include "SkOnce.h"
 #include "SkOTTable_OS_2.h"
 #include "SkOTTable_maxp.h"
 #include "SkOTTable_name.h"
 #include "SkOTUtils.h"
+#include "SkOnce.h"
 #include "SkPath.h"
 #include "SkSFNTHeader.h"
 #include "SkStream.h"
 #include "SkString.h"
 #include "SkTemplates.h"
-#include "SkTypeface_win.h"
+#include "SkTo.h"
 #include "SkTypefaceCache.h"
+#include "SkTypeface_win.h"
 #include "SkUtils.h"
 
-#include "SkTypes.h"
 #include <tchar.h>
 #include <usp10.h>
 #include <objbase.h>
@@ -86,7 +87,7 @@ static bool needToRenderWithSkia(const SkScalerContextRec& rec) {
         return true;
     }
 #endif
-    return rec.getHinting() == SkPaint::kNo_Hinting || rec.getHinting() == SkPaint::kSlight_Hinting;
+    return rec.getHinting() == kNo_SkFontHinting || rec.getHinting() == kSlight_SkFontHinting;
 }
 
 static void tchar_to_skstring(const TCHAR t[], SkString* s) {
@@ -168,7 +169,7 @@ static unsigned calculateGlyphCount(HDC hdc, const LOGFONT& lf) {
 
     // Binary search for glyph count.
     static const MAT2 mat2 = {{0, 1}, {0, 0}, {0, 0}, {0, 1}};
-    int32_t max = SK_MaxU16 + 1;
+    int32_t max = UINT16_MAX + 1;
     int32_t min = 0;
     GLYPHMETRICS gm;
     while (min < max) {
@@ -258,6 +259,7 @@ public:
 
 protected:
     SkStreamAsset* onOpenStream(int* ttcIndex) const override;
+    sk_sp<SkTypeface> onMakeClone(const SkFontArguments& args) const override;
     SkScalerContext* onCreateScalerContext(const SkScalerContextEffects&,
                                            const SkDescriptor*) const override;
     void onFilterRec(SkScalerContextRec*) const override;
@@ -272,6 +274,11 @@ protected:
     SkTypeface::LocalizedStrings* onCreateFamilyNameIterator() const override;
     int onGetVariationDesignPosition(SkFontArguments::VariationPosition::Coordinate coordinates[],
                                      int coordinateCount) const override
+    {
+        return -1;
+    }
+    int onGetVariationDesignParameters(SkFontParameters::Variation::Axis parameters[],
+                                       int parameterCount) const override
     {
         return -1;
     }
@@ -547,11 +554,11 @@ public:
 protected:
     unsigned generateGlyphCount() override;
     uint16_t generateCharToGlyph(SkUnichar uni) override;
-    void generateAdvance(SkGlyph* glyph) override;
+    bool generateAdvance(SkGlyph* glyph) override;
     void generateMetrics(SkGlyph* glyph) override;
     void generateImage(const SkGlyph& glyph) override;
     bool generatePath(SkGlyphID glyph, SkPath* path) override;
-    void generateFontMetrics(SkPaint::FontMetrics*) override;
+    void generateFontMetrics(SkFontMetrics*) override;
 
 private:
     DWORD getGDIGlyphPath(SkGlyphID glyph, UINT flags,
@@ -629,7 +636,7 @@ SkScalerContext_GDI::SkScalerContext_GDI(sk_sp<LogFontTypeface> rawTypeface,
     // When GDI hinting, remove the entire Y scale from sA and GsA. (Prevents 'linear' metrics.)
     // When not hinting, remove only the integer Y scale from sA and GsA. (Applied by GDI.)
     SkScalerContextRec::PreMatrixScale scaleConstraints =
-        (fRec.getHinting() == SkPaint::kNo_Hinting || fRec.getHinting() == SkPaint::kSlight_Hinting)
+        (fRec.getHinting() == kNo_SkFontHinting || fRec.getHinting() == kSlight_SkFontHinting)
                    ? SkScalerContextRec::kVerticalInteger_PreMatrixScale
                    : SkScalerContextRec::kVertical_PreMatrixScale;
     SkVector scale;
@@ -788,7 +795,7 @@ uint16_t SkScalerContext_GDI::generateCharToGlyph(SkUnichar utf32) {
     uint16_t index = 0;
     WCHAR utf16[2];
     // TODO(ctguil): Support characters that generate more than one glyph.
-    if (SkUTF16_FromUnichar(utf32, (uint16_t*)utf16) == 1) {
+    if (SkUTF::ToUTF16(utf32, (uint16_t*)utf16) == 1) {
         // Type1 fonts fail with uniscribe API. Use GetGlyphIndices for plane 0.
 
         /** Real documentation for GetGlyphIndiciesW:
@@ -852,12 +859,14 @@ uint16_t SkScalerContext_GDI::generateCharToGlyph(SkUnichar utf32) {
     return index;
 }
 
-void SkScalerContext_GDI::generateAdvance(SkGlyph* glyph) {
-    this->generateMetrics(glyph);
+bool SkScalerContext_GDI::generateAdvance(SkGlyph* glyph) {
+    return false;
 }
 
 void SkScalerContext_GDI::generateMetrics(SkGlyph* glyph) {
     SkASSERT(fDDC);
+
+    glyph->fMaskFormat = fRec.fMaskFormat;
 
     if (fType == SkScalerContext_GDI::kBitmap_Type || fType == SkScalerContext_GDI::kLine_Type) {
         SIZE size;
@@ -964,7 +973,7 @@ void SkScalerContext_GDI::generateMetrics(SkGlyph* glyph) {
 }
 
 static const MAT2 gMat2Identity = {{0, 1}, {0, 0}, {0, 0}, {0, 1}};
-void SkScalerContext_GDI::generateFontMetrics(SkPaint::FontMetrics* metrics) {
+void SkScalerContext_GDI::generateFontMetrics(SkFontMetrics* metrics) {
     if (nullptr == metrics) {
         return;
     }
@@ -1015,8 +1024,8 @@ void SkScalerContext_GDI::generateFontMetrics(SkPaint::FontMetrics* metrics) {
     metrics->fUnderlineThickness = SkIntToScalar(otm.otmsUnderscoreSize);
     metrics->fUnderlinePosition = -SkIntToScalar(otm.otmsUnderscorePosition);
 
-    metrics->fFlags |= SkPaint::FontMetrics::kUnderlineThicknessIsValid_Flag;
-    metrics->fFlags |= SkPaint::FontMetrics::kUnderlinePositionIsValid_Flag;
+    metrics->fFlags |= SkFontMetrics::kUnderlineThicknessIsValid_Flag;
+    metrics->fFlags |= SkFontMetrics::kUnderlinePositionIsValid_Flag;
 
     metrics->fXHeight = SkIntToScalar(otm.otmsXHeight);
     GLYPHMETRICS gm;
@@ -1627,7 +1636,7 @@ bool SkScalerContext_GDI::generatePath(SkGlyphID glyph, SkPath* path) {
 
     //GDI only uses hinted outlines when axis aligned.
     UINT format = GGO_NATIVE | GGO_GLYPH_INDEX;
-    if (fRec.getHinting() == SkPaint::kNo_Hinting || fRec.getHinting() == SkPaint::kSlight_Hinting){
+    if (fRec.getHinting() == kNo_SkFontHinting || fRec.getHinting() == kSlight_SkFontHinting){
         format |= GGO_UNHINTED;
     }
     SkAutoSTMalloc<BUFFERSIZE, uint8_t> glyphbuf(BUFFERSIZE);
@@ -1636,7 +1645,7 @@ bool SkScalerContext_GDI::generatePath(SkGlyphID glyph, SkPath* path) {
         return false;
     }
 
-    if (fRec.getHinting() != SkPaint::kSlight_Hinting) {
+    if (fRec.getHinting() != kSlight_SkFontHinting) {
         sk_path_from_gdi_path(path, glyphbuf, total_size);
     } else {
         //GDI only uses hinted outlines when axis aligned.
@@ -1965,6 +1974,10 @@ SkStreamAsset* LogFontTypeface::onOpenStream(int* ttcIndex) const {
     return stream;
 }
 
+sk_sp<SkTypeface> LogFontTypeface::onMakeClone(const SkFontArguments& args) const {
+    return sk_ref_sp(this);
+}
+
 static void bmpCharsToGlyphs(HDC hdc, const WCHAR* bmpChars, int count, uint16_t* glyphs,
                              bool Ox1FHack)
 {
@@ -2092,7 +2105,7 @@ int LogFontTypeface::onCharsToGlyphs(const void* chars, Encoding encoding,
 
             // Try a run of non-bmp.
             while (glyphIndex < glyphCount && currentChar > 0xFFFF) {
-                SkUTF16_FromUnichar(currentChar, reinterpret_cast<uint16_t*>(scratch));
+                SkUTF::ToUTF16(currentChar, reinterpret_cast<uint16_t*>(scratch));
                 glyphs[glyphIndex] = nonBmpCharToGlyph(hdc, &sc, scratch);
                 ++glyphIndex;
                 if (glyphIndex < glyphCount) {
@@ -2109,7 +2122,7 @@ int LogFontTypeface::onCharsToGlyphs(const void* chars, Encoding encoding,
             // Try a run of bmp.
             int glyphsLeft = glyphCount - glyphIndex;
             int runLength = 0;
-            while (runLength < glyphsLeft && !SkUTF16_IsHighSurrogate(currentUtf16[runLength])) {
+            while (runLength < glyphsLeft && !SkUTF16_IsLeadingSurrogate(currentUtf16[runLength])) {
                 ++runLength;
             }
             if (runLength) {
@@ -2119,7 +2132,7 @@ int LogFontTypeface::onCharsToGlyphs(const void* chars, Encoding encoding,
             }
 
             // Try a run of non-bmp.
-            while (glyphIndex < glyphCount && SkUTF16_IsHighSurrogate(*currentUtf16)) {
+            while (glyphIndex < glyphCount && SkUTF16_IsLeadingSurrogate(*currentUtf16)) {
                 glyphs[glyphIndex] = nonBmpCharToGlyph(hdc, &sc, currentUtf16);
                 ++glyphIndex;
                 currentUtf16 += 2;
@@ -2147,7 +2160,7 @@ int LogFontTypeface::onCharsToGlyphs(const void* chars, Encoding encoding,
 
             // Try a run of non-bmp.
             while (glyphIndex < glyphCount && utf32[glyphIndex] > 0xFFFF) {
-                SkUTF16_FromUnichar(utf32[glyphIndex], reinterpret_cast<uint16_t*>(scratch));
+                SkUTF::ToUTF16(utf32[glyphIndex], reinterpret_cast<uint16_t*>(scratch));
                 glyphs[glyphIndex] = nonBmpCharToGlyph(hdc, &sc, scratch);
                 ++glyphIndex;
             }
@@ -2199,15 +2212,15 @@ int LogFontTypeface::onGetUPEM() const {
 }
 
 SkTypeface::LocalizedStrings* LogFontTypeface::onCreateFamilyNameIterator() const {
-    SkTypeface::LocalizedStrings* nameIter =
-        SkOTUtils::LocalizedStrings_NameTable::CreateForFamilyNames(*this);
-    if (nullptr == nameIter) {
+    sk_sp<SkTypeface::LocalizedStrings> nameIter =
+        SkOTUtils::LocalizedStrings_NameTable::MakeForFamilyNames(*this);
+    if (!nameIter) {
         SkString familyName;
         this->getFamilyName(&familyName);
         SkString language("und"); //undetermined
-        nameIter = new SkOTUtils::LocalizedStrings_SingleName(familyName, language);
+        nameIter = sk_make_sp<SkOTUtils::LocalizedStrings_SingleName>(familyName, language);
     }
-    return nameIter;
+    return nameIter.release();
 }
 
 int LogFontTypeface::onGetTableTags(SkFontTableTag tags[]) const {
@@ -2276,31 +2289,30 @@ void LogFontTypeface::onFilterRec(SkScalerContextRec* rec) const {
         rec->fFlags |= SkScalerContext::kGenA8FromLCD_Flag;
     }
 
-    unsigned flagsWeDontSupport = SkScalerContext::kVertical_Flag |
-                                  SkScalerContext::kForceAutohinting_Flag |
+    unsigned flagsWeDontSupport = SkScalerContext::kForceAutohinting_Flag |
                                   SkScalerContext::kEmbeddedBitmapText_Flag |
                                   SkScalerContext::kEmbolden_Flag |
                                   SkScalerContext::kLCD_BGROrder_Flag |
                                   SkScalerContext::kLCD_Vertical_Flag;
     rec->fFlags &= ~flagsWeDontSupport;
 
-    SkPaint::Hinting h = rec->getHinting();
+    SkFontHinting h = rec->getHinting();
     switch (h) {
-        case SkPaint::kNo_Hinting:
+        case kNo_SkFontHinting:
             break;
-        case SkPaint::kSlight_Hinting:
+        case kSlight_SkFontHinting:
             // Only do slight hinting when axis aligned.
             // TODO: re-enable slight hinting when FontHostTest can pass.
             //if (!isAxisAligned(*rec)) {
-                h = SkPaint::kNo_Hinting;
+                h = kNo_SkFontHinting;
             //}
             break;
-        case SkPaint::kNormal_Hinting:
-        case SkPaint::kFull_Hinting:
+        case kNormal_SkFontHinting:
+        case kFull_SkFontHinting:
             // TODO: need to be able to distinguish subpixel positioned glyphs
             // and linear metrics.
             //rec->fFlags &= ~SkScalerContext::kSubpixelPositioning_Flag;
-            h = SkPaint::kNormal_Hinting;
+            h = kNormal_SkFontHinting;
             break;
         default:
             SkDEBUGFAIL("unknown hinting");

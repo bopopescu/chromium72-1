@@ -8,7 +8,7 @@
 #include "third_party/blink/renderer/modules/cookie_store/cookie_list_item.h"
 #include "third_party/blink/renderer/modules/cookie_store/extendable_cookie_change_event_init.h"
 #include "third_party/blink/renderer/modules/event_modules.h"
-#include "third_party/blink/renderer/modules/serviceworkers/extendable_event_init.h"
+#include "third_party/blink/renderer/modules/service_worker/extendable_event_init.h"
 #include "third_party/blink/renderer/platform/heap/handle.h"
 #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
 
@@ -17,7 +17,7 @@ namespace blink {
 ExtendableCookieChangeEvent::~ExtendableCookieChangeEvent() = default;
 
 const AtomicString& ExtendableCookieChangeEvent::InterfaceName() const {
-  return EventNames::ExtendableCookieChangeEvent;
+  return event_interface_names::kExtendableCookieChangeEvent;
 }
 
 void ExtendableCookieChangeEvent::Trace(blink::Visitor* visitor) {
@@ -28,38 +28,21 @@ void ExtendableCookieChangeEvent::Trace(blink::Visitor* visitor) {
 
 ExtendableCookieChangeEvent::ExtendableCookieChangeEvent(
     const AtomicString& type,
-    HeapVector<CookieListItem> changed,
-    HeapVector<CookieListItem> deleted,
+    HeapVector<Member<CookieListItem>> changed,
+    HeapVector<Member<CookieListItem>> deleted,
     WaitUntilObserver* wait_until_observer)
-    : ExtendableEvent(type, ExtendableEventInit(), wait_until_observer),
+    : ExtendableEvent(type, ExtendableEventInit::Create(), wait_until_observer),
       changed_(std::move(changed)),
       deleted_(std::move(deleted)) {}
 
 ExtendableCookieChangeEvent::ExtendableCookieChangeEvent(
     const AtomicString& type,
-    const ExtendableCookieChangeEventInit& initializer)
+    const ExtendableCookieChangeEventInit* initializer)
     : ExtendableEvent(type, initializer) {
-  if (initializer.hasChanged())
-    changed_ = initializer.changed();
-  if (initializer.hasDeleted())
-    deleted_ = initializer.deleted();
-}
-
-// static
-void ExtendableCookieChangeEvent::ToCookieChangeListItem(
-    const WebString& cookie_name,
-    const WebString& cookie_value,
-    bool is_cookie_delete,
-    HeapVector<CookieListItem>& changed,
-    HeapVector<CookieListItem>& deleted) {
-  if (is_cookie_delete) {
-    CookieListItem& cookie = deleted.emplace_back();
-    cookie.setName(cookie_name);
-  } else {
-    CookieListItem& cookie = changed.emplace_back();
-    cookie.setName(cookie_name);
-    cookie.setValue(cookie_value);
-  }
+  if (initializer->hasChanged())
+    changed_ = initializer->changed();
+  if (initializer->hasDeleted())
+    deleted_ = initializer->deleted();
 }
 
 }  // namespace blink

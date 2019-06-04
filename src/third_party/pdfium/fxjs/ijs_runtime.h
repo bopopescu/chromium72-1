@@ -11,12 +11,10 @@
 
 #include "core/fxcrt/fx_string.h"
 #include "core/fxcrt/fx_system.h"
+#include "core/fxcrt/unowned_ptr.h"
 #include "third_party/base/optional.h"
 
-#ifdef PDF_ENABLE_XFA
-#include "fxjs/fxjse.h"
-#endif  // PDF_ENABLE_XFA
-
+class CFXJSE_Value;
 class CJS_Runtime;
 class CPDFSDK_FormFillEnvironment;
 class IJS_EventContext;
@@ -34,19 +32,33 @@ class IJS_Runtime {
     JS_Error(int line, int column, const WideString& exception);
   };
 
+  class ScopedEventContext {
+   public:
+    explicit ScopedEventContext(IJS_Runtime* pRuntime);
+    ~ScopedEventContext();
+
+    IJS_EventContext* Get() const { return m_pContext.Get(); }
+    IJS_EventContext* operator->() const { return m_pContext.Get(); }
+
+   private:
+    UnownedPtr<IJS_Runtime> const m_pRuntime;
+    UnownedPtr<IJS_EventContext> m_pContext;
+  };
+
   static void Initialize(unsigned int slot, void* isolate);
   static void Destroy();
   static std::unique_ptr<IJS_Runtime> Create(
       CPDFSDK_FormFillEnvironment* pFormFillEnv);
+
   virtual ~IJS_Runtime();
 
-  virtual CJS_Runtime* AsCJSRuntime() = 0;
   virtual IJS_EventContext* NewEventContext() = 0;
   virtual void ReleaseEventContext(IJS_EventContext* pContext) = 0;
   virtual CPDFSDK_FormFillEnvironment* GetFormFillEnv() const = 0;
   virtual Optional<JS_Error> ExecuteScript(const WideString& script) = 0;
 
 #ifdef PDF_ENABLE_XFA
+  virtual CJS_Runtime* AsCJSRuntime() = 0;
   virtual bool GetValueByNameFromGlobalObject(const ByteStringView& utf8Name,
                                               CFXJSE_Value* pValue) = 0;
   virtual bool SetValueByNameInGlobalObject(const ByteStringView& utf8Name,

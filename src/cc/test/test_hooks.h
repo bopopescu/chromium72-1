@@ -8,8 +8,11 @@
 #include "base/macros.h"
 #include "cc/animation/animation_delegate.h"
 #include "cc/trees/layer_tree_host.h"
-#include "cc/trees/layer_tree_host_client.h"
 #include "cc/trees/layer_tree_host_impl.h"
+
+namespace gfx {
+struct PresentationFeedback;
+}
 
 namespace viz {
 class CompositorFrame;
@@ -17,6 +20,8 @@ class OutputSurface;
 }
 
 namespace cc {
+
+struct ApplyViewportChangesArgs;
 
 // Used by test stubs to notify the test when something interesting happens.
 class TestHooks : public AnimationDelegate {
@@ -30,6 +35,7 @@ class TestHooks : public AnimationDelegate {
   virtual void WillBeginImplFrameOnThread(LayerTreeHostImpl* host_impl,
                                           const viz::BeginFrameArgs& args) {}
   virtual void DidFinishImplFrameOnThread(LayerTreeHostImpl* host_impl) {}
+  virtual void WillSendBeginMainFrameOnThread(LayerTreeHostImpl* host_impl) {}
   virtual void DidSendBeginMainFrameOnThread(LayerTreeHostImpl* host_impl) {}
   virtual void BeginMainFrameAbortedOnThread(LayerTreeHostImpl* host_impl,
                                              CommitEarlyOutReason reason) {}
@@ -59,6 +65,10 @@ class TestHooks : public AnimationDelegate {
       LayerTreeHostImpl* host_impl) {}
   virtual void DidReceiveCompositorFrameAckOnThread(
       LayerTreeHostImpl* host_impl) {}
+  virtual void DidReceivePresentationTimeOnThread(
+      LayerTreeHostImpl* host_impl,
+      uint32_t frame_token,
+      const gfx::PresentationFeedback& feedback) {}
   virtual void DidSetVisibleOnImplTree(LayerTreeHostImpl* host_impl,
                                        bool visible) {}
   virtual void AnimateLayers(LayerTreeHostImpl* host_impl,
@@ -88,18 +98,12 @@ class TestHooks : public AnimationDelegate {
   virtual void DisplayDidDrawAndSwapOnThread() {}
 
   // Main thread hooks.
-  virtual void ApplyViewportDeltas(
-      const gfx::Vector2dF& inner_delta,
-      const gfx::Vector2dF& outer_delta,
-      const gfx::Vector2dF& elastic_overscroll_delta,
-      float scale,
-      float top_controls_delta) {}
+  virtual void ApplyViewportChanges(const ApplyViewportChangesArgs& args) {}
   virtual void BeginMainFrameNotExpectedSoon() {}
   virtual void BeginMainFrame(const viz::BeginFrameArgs& args) {}
   virtual void WillBeginMainFrame() {}
   virtual void DidBeginMainFrame() {}
-  virtual void UpdateLayerTreeHost(
-      LayerTreeHostClient::VisualStateUpdate requested_update) {}
+  virtual void UpdateLayerTreeHost() {}
   virtual void DidInitializeLayerTreeFrameSink() {}
   virtual void DidFailToInitializeLayerTreeFrameSink() {}
   virtual void DidAddAnimation() {}

@@ -11,24 +11,31 @@
 
 #include "content/browser/background_fetch/background_fetch.pb.h"
 #include "content/browser/background_fetch/storage/database_task.h"
-#include "content/common/service_worker/service_worker_status_code.h"
+#include "content/browser/cache_storage/cache_storage_cache_handle.h"
+#include "third_party/blink/public/common/service_worker/service_worker_status_code.h"
 #include "third_party/blink/public/platform/modules/background_fetch/background_fetch.mojom.h"
+#include "third_party/skia/include/core/SkBitmap.h"
 
 namespace content {
 
+struct BackgroundFetchRegistration;
+
 namespace background_fetch {
 
-// Creates Background Fetch metadata entries in the database.
+// Checks if the registration can be created, then writes the Background
+// Fetch metadata in the SW database with corresponding entries in the cache.
 class CreateMetadataTask : public DatabaseTask {
  public:
   using CreateMetadataCallback =
       base::OnceCallback<void(blink::mojom::BackgroundFetchError,
-                              std::unique_ptr<proto::BackgroundFetchMetadata>)>;
+                              const BackgroundFetchRegistration&)>;
 
-  CreateMetadataTask(BackgroundFetchDataManager* data_manager,
+  CreateMetadataTask(DatabaseTaskHost* host,
                      const BackgroundFetchRegistrationId& registration_id,
-                     const std::vector<ServiceWorkerFetchRequest>& requests,
+                     std::vector<blink::mojom::FetchAPIRequestPtr> requests,
                      const BackgroundFetchOptions& options,
+                     const SkBitmap& icon,
+                     bool start_paused,
                      CreateMetadataCallback callback);
 
   ~CreateMetadataTask() override;
@@ -36,21 +43,44 @@ class CreateMetadataTask : public DatabaseTask {
   void Start() override;
 
  private:
+  void DidGetCanCreateRegistration(blink::mojom::BackgroundFetchError error,
+                                   bool can_create);
+  void DidGetIsQuotaAvailable(bool is_available);
+
+  void GetRegistrationUniqueId();
+
   void DidGetUniqueId(const std::vector<std::string>& data,
-                      ServiceWorkerStatusCode status);
+                      blink::ServiceWorkerStatusCode status);
+
+  void DidSerializeIcon(std::string serialized_icon);
 
   void StoreMetadata();
 
-  void DidStoreMetadata(ServiceWorkerStatusCode status);
+  void DidStoreMetadata(
+      blink::ServiceWorkerStatusCode status);
 
   void InitializeMetadataProto();
 
+  void DidOpenCache(CacheStorageCacheHandle handle,
+                    blink::mojom::CacheStorageError error);
+
+  void DidStoreRequests(CacheStorageCacheHandle handle,
+                        blink::mojom::CacheStorageVerboseErrorPtr error);
+
+  void FinishWithError(blink::mojom::BackgroundFetchError error) override;
+
+  std::string HistogramName() const override;
+
   BackgroundFetchRegistrationId registration_id_;
-  std::vector<ServiceWorkerFetchRequest> requests_;
+  std::vector<blink::mojom::FetchAPIRequestPtr> requests_;
   BackgroundFetchOptions options_;
+  SkBitmap icon_;
+  bool start_paused_;
   CreateMetadataCallback callback_;
 
   std::unique_ptr<proto::BackgroundFetchMetadata> metadata_proto_;
+
+  std::string serialized_icon_;
 
   base::WeakPtrFactory<CreateMetadataTask> weak_factory_;  // Keep as last.
 

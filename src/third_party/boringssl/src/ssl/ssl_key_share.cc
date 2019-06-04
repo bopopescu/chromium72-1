@@ -31,7 +31,7 @@
 #include "../crypto/internal.h"
 
 
-namespace bssl {
+BSSL_NAMESPACE_BEGIN
 
 namespace {
 
@@ -211,11 +211,7 @@ class X25519KeyShare : public SSLKeyShare {
   uint8_t private_key_[32];
 };
 
-CONSTEXPR_ARRAY struct {
-  int nid;
-  uint16_t group_id;
-  const char name[8], alias[11];
-} kNamedGroups[] = {
+CONSTEXPR_ARRAY NamedGroup kNamedGroups[] = {
     {NID_secp224r1, SSL_CURVE_SECP224R1, "P-224", "secp224r1"},
     {NID_X9_62_prime256v1, SSL_CURVE_SECP256R1, "P-256", "prime256v1"},
     {NID_secp384r1, SSL_CURVE_SECP384R1, "P-384", "secp384r1"},
@@ -224,6 +220,10 @@ CONSTEXPR_ARRAY struct {
 };
 
 }  // namespace
+
+Span<const NamedGroup> NamedGroups() {
+  return MakeConstSpan(kNamedGroups, OPENSSL_ARRAY_SIZE(kNamedGroups));
+}
 
 UniquePtr<SSLKeyShare> SSLKeyShare::Create(uint16_t group_id) {
   switch (group_id) {
@@ -266,33 +266,33 @@ bool SSLKeyShare::Accept(CBB *out_public_key, Array<uint8_t> *out_secret,
          Finish(out_secret, out_alert, peer_key);
 }
 
-int ssl_nid_to_group_id(uint16_t *out_group_id, int nid) {
+bool ssl_nid_to_group_id(uint16_t *out_group_id, int nid) {
   for (const auto &group : kNamedGroups) {
     if (group.nid == nid) {
       *out_group_id = group.group_id;
-      return 1;
+      return true;
     }
   }
-  return 0;
+  return false;
 }
 
-int ssl_name_to_group_id(uint16_t *out_group_id, const char *name, size_t len) {
+bool ssl_name_to_group_id(uint16_t *out_group_id, const char *name, size_t len) {
   for (const auto &group : kNamedGroups) {
     if (len == strlen(group.name) &&
         !strncmp(group.name, name, len)) {
       *out_group_id = group.group_id;
-      return 1;
+      return true;
     }
     if (len == strlen(group.alias) &&
         !strncmp(group.alias, name, len)) {
       *out_group_id = group.group_id;
-      return 1;
+      return true;
     }
   }
-  return 0;
+  return false;
 }
 
-}  // namespace bssl
+BSSL_NAMESPACE_END
 
 using namespace bssl;
 

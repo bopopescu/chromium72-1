@@ -8,6 +8,8 @@
 
 #include "base/callback.h"
 #include "base/stl_util.h"
+#include "base/strings/strcat.h"
+#include "base/strings/utf_string_conversions.h"
 
 namespace policy {
 
@@ -25,6 +27,8 @@ PolicyMap::Entry PolicyMap::Entry::DeepCopy() const {
   copy.source = source;
   if (value)
     copy.value = value->CreateDeepCopy();
+  copy.error_strings_ = error_strings_;
+  copy.error_message_ids_ = error_message_ids_;
   if (external_data_fetcher) {
     copy.external_data_fetcher.reset(
         new ExternalDataFetcher(*external_data_fetcher));
@@ -47,10 +51,34 @@ bool PolicyMap::Entry::Equals(const PolicyMap::Entry& other) const {
   return level == other.level && scope == other.scope &&
          source == other.source &&  // Necessary for PolicyUIHandler observers.
                                     // They have to update when sources change.
+         error_strings_ == other.error_strings_ &&
+         error_message_ids_ == other.error_message_ids_ &&
          ((!value && !other.value) ||
           (value && other.value && *value == *other.value)) &&
          ExternalDataFetcher::Equals(external_data_fetcher.get(),
                                      other.external_data_fetcher.get());
+}
+
+void PolicyMap::Entry::AddError(base::StringPiece error) {
+  base::StrAppend(&error_strings_, {error, "\n"});
+}
+
+void PolicyMap::Entry::AddError(int message_id) {
+  error_message_ids_.push_back(message_id);
+}
+
+base::string16 PolicyMap::Entry::GetLocalizedErrors(
+    L10nLookupFunction lookup) const {
+  base::string16 error_string = base::UTF8ToUTF16(error_strings_);
+  base::string16 line_feed = base::UTF8ToUTF16("\n");
+  for (int message_id : error_message_ids_) {
+    error_string += lookup.Run(message_id);
+    error_string += line_feed;
+  }
+  // Remove the trailing newline.
+  if (!error_string.empty())
+    error_string.pop_back();
+  return error_string;
 }
 
 PolicyMap::PolicyMap() {}
@@ -60,22 +88,22 @@ PolicyMap::~PolicyMap() {
 }
 
 const PolicyMap::Entry* PolicyMap::Get(const std::string& policy) const {
-  PolicyMapType::const_iterator entry = map_.find(policy);
+  auto entry = map_.find(policy);
   return entry == map_.end() ? nullptr : &entry->second;
 }
 
 PolicyMap::Entry* PolicyMap::GetMutable(const std::string& policy) {
-  PolicyMapType::iterator entry = map_.find(policy);
+  auto entry = map_.find(policy);
   return entry == map_.end() ? nullptr : &entry->second;
 }
 
 const base::Value* PolicyMap::GetValue(const std::string& policy) const {
-  PolicyMapType::const_iterator entry = map_.find(policy);
+  auto entry = map_.find(policy);
   return entry == map_.end() ? nullptr : entry->second.value.get();
 }
 
 base::Value* PolicyMap::GetMutableValue(const std::string& policy) {
-  PolicyMapType::iterator entry = map_.find(policy);
+  auto entry = map_.find(policy);
   return entry == map_.end() ? nullptr : entry->second.value.get();
 }
 
@@ -97,6 +125,14 @@ void PolicyMap::Set(
 
 void PolicyMap::Set(const std::string& policy, Entry entry) {
   map_[policy] = std::move(entry);
+}
+
+void PolicyMap::AddError(const std::string& policy, const std::string& error) {
+  map_[policy].AddError(error);
+}
+
+void PolicyMap::AddError(const std::string& policy, int message_id) {
+  map_[policy].AddError(message_id);
 }
 
 void PolicyMap::SetSourceForAll(PolicySource source) {
@@ -156,8 +192,8 @@ void PolicyMap::LoadFrom(const base::DictionaryValue* policies,
 void PolicyMap::GetDifferingKeys(const PolicyMap& other,
                                  std::set<std::string>* differing_keys) const {
   // Walk over the maps in lockstep, adding everything that is different.
-  const_iterator iter_this(begin());
-  const_iterator iter_other(other.begin());
+  auto iter_this(begin());
+  auto iter_other(other.begin());
   while (iter_this != end() && iter_other != other.end()) {
     const int diff = iter_this->first.compare(iter_other->first);
     if (diff == 0) {
@@ -215,7 +251,7 @@ bool PolicyMap::MapEntryEquals(const PolicyMap::PolicyMapType::value_type& a,
 void PolicyMap::FilterErase(
     const base::Callback<bool(const const_iterator)>& filter,
     bool deletion_value) {
-  PolicyMapType::iterator iter(map_.begin());
+  auto iter(map_.begin());
   while (iter != map_.end()) {
     if (filter.Run(iter) == deletion_value) {
       map_.erase(iter++);

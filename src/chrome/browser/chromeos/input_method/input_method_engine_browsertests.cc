@@ -10,6 +10,7 @@
 #include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/extensions/extension_browsertest.h"
+#include "chrome/browser/ui/ash/chrome_keyboard_controller_client.h"
 #include "content/public/test/browser_test_utils.h"
 #include "content/public/test/test_utils.h"
 #include "extensions/browser/api/virtual_keyboard_private/virtual_keyboard_delegate.h"
@@ -32,7 +33,6 @@
 #include "ui/events/event.h"
 #include "ui/events/keycodes/dom/dom_code.h"
 #include "ui/events/keycodes/dom/keycode_converter.h"
-#include "ui/keyboard/keyboard_util.h"
 
 namespace chromeos {
 namespace input_method {
@@ -44,7 +44,6 @@ const char kToUpperIMEID[] =
     "_ext_ime_iafoklpfplgfnoimmaejoeondnjnlcfpToUpperIME";
 const char kAPIArgumentIMEID[] =
     "_ext_ime_iafoklpfplgfnoimmaejoeondnjnlcfpAPIArgumentIME";
-const char kExtensionID[] = "iafoklpfplgfnoimmaejoeondnjnlcfp";
 
 // InputMethod extension should work on 1)normal extension, 2)normal extension
 // in incognito mode 3)component extension.
@@ -128,25 +127,19 @@ class InputMethodEngineBrowserTest
 class KeyEventDoneCallback {
  public:
   explicit KeyEventDoneCallback(bool expected_argument)
-      : expected_argument_(expected_argument),
-        is_called_(false) {}
+      : expected_argument_(expected_argument) {}
   ~KeyEventDoneCallback() {}
 
   void Run(bool consumed) {
-    if (consumed == expected_argument_) {
-      base::RunLoop::QuitCurrentWhenIdleDeprecated();
-      is_called_ = true;
-    }
+    if (consumed == expected_argument_)
+      run_loop_.Quit();
   }
 
-  void WaitUntilCalled() {
-    while (!is_called_)
-      content::RunMessageLoop();
-  }
+  void WaitUntilCalled() { run_loop_.Run(); }
 
  private:
   bool expected_argument_;
-  bool is_called_;
+  base::RunLoop run_loop_;
 
   DISALLOW_COPY_AND_ASSIGN(KeyEventDoneCallback);
 };
@@ -471,30 +464,18 @@ IN_PROC_BROWSER_TEST_P(InputMethodEngineBrowserTest,
         "    requestId : '0',"
         "    key : 'z',"
         "    code : 'KeyZ',"
-        "  },{"
-        "    type : 'keyup',"
-        "    requestId : '1',"
-        "    key : 'z',"
-        "    code : 'KeyZ',"
         "  }]"
         "});";
-
-    ExtensionTestMessageListener keyevent_listener_down(
-        std::string("onKeyEvent:") + kExtensionID +
-        ":keydown:z:KeyZ:false:false:false:false",
-        false);
-    ExtensionTestMessageListener keyevent_listener_up(
-        std::string("onKeyEvent:") + kExtensionID +
-        ":keyup:z:KeyZ:false:false:false:false",
-        false);
 
     ASSERT_TRUE(content::ExecuteScript(host->host_contents(),
                                        send_key_events_test_script));
 
-    ASSERT_TRUE(keyevent_listener_down.WaitUntilSatisfied());
-    EXPECT_TRUE(keyevent_listener_down.was_satisfied());
-    ASSERT_TRUE(keyevent_listener_up.WaitUntilSatisfied());
-    EXPECT_TRUE(keyevent_listener_up.was_satisfied());
+    const ui::KeyEvent& key_event = mock_input_context->last_sent_key_event();
+    EXPECT_EQ(ui::ET_KEY_PRESSED, key_event.type());
+    EXPECT_EQ(L'z', key_event.GetCharacter());
+    EXPECT_EQ(ui::DomCode::US_Z, key_event.code());
+    EXPECT_EQ(ui::VKEY_Z, key_event.key_code());
+    EXPECT_EQ(0, key_event.flags());
   }
   {
     SCOPED_TRACE("sendKeyEvents test with keyCode");
@@ -505,12 +486,6 @@ IN_PROC_BROWSER_TEST_P(InputMethodEngineBrowserTest,
         "chrome.input.ime.sendKeyEvents({"
         "  contextID: engineBridge.getFocusedContextID().contextID,"
         "  keyData : [{"
-        "    type : 'keydown',"
-        "    requestId : '2',"
-        "    key : 'a',"
-        "    code : 'KeyQ',"
-        "    keyCode : 0x41,"
-        "  },{"
         "    type : 'keyup',"
         "    requestId : '3',"
         "    key : 'a',"
@@ -519,22 +494,15 @@ IN_PROC_BROWSER_TEST_P(InputMethodEngineBrowserTest,
         "  }]"
         "});";
 
-    ExtensionTestMessageListener keyevent_listener_down(
-        std::string("onKeyEvent:") + kExtensionID +
-        ":keydown:a:KeyQ:false:false:false:false",
-        false);
-    ExtensionTestMessageListener keyevent_listener_up(
-        std::string("onKeyEvent:") + kExtensionID +
-        ":keyup:a:KeyQ:false:false:false:false",
-        false);
-
     ASSERT_TRUE(content::ExecuteScript(host->host_contents(),
                                        send_key_events_test_script));
 
-    ASSERT_TRUE(keyevent_listener_down.WaitUntilSatisfied());
-    EXPECT_TRUE(keyevent_listener_down.was_satisfied());
-    ASSERT_TRUE(keyevent_listener_up.WaitUntilSatisfied());
-    EXPECT_TRUE(keyevent_listener_up.was_satisfied());
+    const ui::KeyEvent& key_event = mock_input_context->last_sent_key_event();
+    EXPECT_EQ(ui::ET_KEY_RELEASED, key_event.type());
+    EXPECT_EQ(L'a', key_event.GetCharacter());
+    EXPECT_EQ(ui::DomCode::US_Q, key_event.code());
+    EXPECT_EQ(ui::VKEY_A, key_event.key_code());
+    EXPECT_EQ(0, key_event.flags());
   }
   {
     SCOPED_TRACE("setComposition test");
@@ -1073,12 +1041,14 @@ IN_PROC_BROWSER_TEST_P(InputMethodEngineBrowserTest, RestrictedKeyboard) {
       ui::IMEBridge::Get()->GetCurrentEngineHandler();
   ASSERT_TRUE(engine_handler);
 
-  keyboard::KeyboardConfig keyboard_config = keyboard::GetKeyboardConfig();
+  auto keyboard_config =
+      ChromeKeyboardControllerClient::Get()->GetKeyboardConfig();
   // Turn off these features, which are on by default.
   keyboard_config.auto_correct = false;
   keyboard_config.auto_complete = false;
   keyboard_config.spell_check = false;
-  keyboard::UpdateKeyboardConfig(keyboard_config);
+  ChromeKeyboardControllerClient::Get()->SetKeyboardConfig(keyboard_config);
+
   extensions::ExtensionHost* host =
       extensions::ProcessManager::Get(profile())->GetBackgroundHostForExtension(
           extension_->id());

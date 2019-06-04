@@ -50,21 +50,21 @@ class LayerTreeFrameSinkHolder : public cc::LayerTreeFrameSinkClient,
   base::WeakPtr<LayerTreeFrameSinkHolder> GetWeakPtr();
 
   // Overridden from cc::LayerTreeFrameSinkClient:
-  void SetBeginFrameSource(viz::BeginFrameSource* source) override;
+  void SetBeginFrameSource(viz::BeginFrameSource* source) override {}
   base::Optional<viz::HitTestRegionList> BuildHitTestData() override;
   void ReclaimResources(
       const std::vector<viz::ReturnedResource>& resources) override;
   void SetTreeActivationCallback(const base::Closure& callback) override {}
   void DidReceiveCompositorFrameAck() override;
-  void DidPresentCompositorFrame(uint32_t presentation_token,
-                                 base::TimeTicks time,
-                                 base::TimeDelta refresh,
-                                 uint32_t flags) override;
-  void DidDiscardCompositorFrame(uint32_t presentation_token) override;
+  void DidPresentCompositorFrame(
+      uint32_t presentation_token,
+      const gfx::PresentationFeedback& feedback) override;
   void DidLoseLayerTreeFrameSink() override;
+  void DidNotNeedBeginFrame() override {}
   void OnDraw(const gfx::Transform& transform,
               const gfx::Rect& viewport,
-              bool resourceless_software_draw) override {}
+              bool resourceless_software_draw,
+              bool skip_draw) override {}
   void SetMemoryPolicy(const cc::ManagedMemoryPolicy& policy) override {}
   void SetExternalTilePriorityConstraints(
       const gfx::Rect& viewport_rect,
@@ -90,6 +90,7 @@ class LayerTreeFrameSinkHolder : public cc::LayerTreeFrameSinkClient,
 
   gfx::Size last_frame_size_in_pixels_;
   float last_frame_device_scale_factor_ = 1.0f;
+  base::TimeTicks last_local_surface_id_allocation_time_;
   std::vector<viz::ResourceId> last_frame_resources_;
 
   bool delete_pending_ = false;

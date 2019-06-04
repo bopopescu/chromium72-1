@@ -48,6 +48,7 @@ class VIZ_SERVICE_EXPORT DisplayObserver {
   virtual ~DisplayObserver() {}
 
   virtual void OnDisplayDidFinishFrame(const BeginFrameAck& ack) = 0;
+  virtual void OnDisplayDestroyed() = 0;
 };
 
 // A Display produces a surface that can be used to draw to a physical display
@@ -111,6 +112,7 @@ class VIZ_SERVICE_EXPORT Display : public DisplaySchedulerClient,
       const gpu::TextureInUseResponses& responses) override;
   void DidReceiveCALayerParams(
       const gfx::CALayerParams& ca_layer_params) override;
+  void DidSwapWithSize(const gfx::Size& pixel_size) override;
   void DidReceivePresentationFeedback(
       const gfx::PresentationFeedback& feedback) override;
   void DidFinishLatencyInfo(
@@ -133,7 +135,7 @@ class VIZ_SERVICE_EXPORT Display : public DisplaySchedulerClient,
 
  private:
   void InitializeRenderer();
-  void UpdateRootSurfaceResourcesLocked();
+  void UpdateRootFrameMissing();
 
   // ContextLostObserver implementation.
   void OnContextLost() override;
@@ -142,7 +144,7 @@ class VIZ_SERVICE_EXPORT Display : public DisplaySchedulerClient,
   const RendererSettings settings_;
 
   DisplayClient* client_ = nullptr;
-  base::ObserverList<DisplayObserver> observers_;
+  base::ObserverList<DisplayObserver>::Unchecked observers_;
   SurfaceManager* surface_manager_ = nullptr;
   const FrameSinkId frame_sink_id_;
   SurfaceId current_surface_id_;
@@ -164,11 +166,15 @@ class VIZ_SERVICE_EXPORT Display : public DisplaySchedulerClient,
   std::unique_ptr<DirectRenderer> renderer_;
   SoftwareRenderer* software_renderer_ = nullptr;
   std::vector<ui::LatencyInfo> stored_latency_info_;
+  std::vector<SurfaceId> surfaces_to_ack_on_next_draw_;
 
-  base::circular_deque<std::vector<Surface::PresentedCallback>>
+  base::circular_deque<
+      std::pair<base::TimeTicks, std::vector<Surface::PresentedCallback>>>
       pending_presented_callbacks_;
 
- private:
+  int64_t swapped_trace_id_ = 0;
+  int64_t last_acked_trace_id_ = 0;
+
   DISALLOW_COPY_AND_ASSIGN(Display);
 };
 

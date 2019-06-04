@@ -5,6 +5,8 @@
 #include "content/renderer/service_worker/service_worker_type_converters.h"
 
 #include "base/logging.h"
+#include "mojo/public/cpp/bindings/associated_interface_ptr_info.h"
+#include "mojo/public/cpp/bindings/associated_interface_request.h"
 
 namespace mojo {
 
@@ -72,15 +74,9 @@ blink::WebPaymentMethodData
 TypeConverter<blink::WebPaymentMethodData,
               payments::mojom::PaymentMethodDataPtr>::
     Convert(const payments::mojom::PaymentMethodDataPtr& input) {
+  DCHECK(!input->supported_method.empty());
   blink::WebPaymentMethodData output;
-
-  output.supported_methods =
-      blink::WebVector<blink::WebString>(input->supported_methods.size());
-  for (size_t i = 0; i < input->supported_methods.size(); i++) {
-    output.supported_methods[i] =
-        blink::WebString::FromUTF8(input->supported_methods[i]);
-  }
-
+  output.supported_method = blink::WebString::FromUTF8(input->supported_method);
   output.stringified_data = blink::WebString::FromUTF8(input->stringified_data);
 
   return output;
@@ -111,14 +107,11 @@ blink::WebPaymentDetailsModifier
 TypeConverter<blink::WebPaymentDetailsModifier,
               payments::mojom::PaymentDetailsModifierPtr>::
     Convert(const payments::mojom::PaymentDetailsModifierPtr& input) {
+  DCHECK(!input->method_data->supported_method.empty());
   blink::WebPaymentDetailsModifier output;
 
-  output.supported_methods = blink::WebVector<blink::WebString>(
-      input->method_data->supported_methods.size());
-  for (size_t i = 0; i < input->method_data->supported_methods.size(); i++) {
-    output.supported_methods[i] =
-        blink::WebString::FromUTF8(input->method_data->supported_methods[i]);
-  }
+  output.supported_method =
+      blink::WebString::FromUTF8(input->method_data->supported_method);
 
   output.total = mojo::ConvertTo<blink::WebPaymentItem>(input->total);
 
@@ -135,23 +128,47 @@ TypeConverter<blink::WebPaymentDetailsModifier,
   return output;
 }
 
-blink::WebServiceWorkerContextProxy::BackgroundFetchState
-TypeConverter<blink::WebServiceWorkerContextProxy::BackgroundFetchState,
-              content::mojom::BackgroundFetchState>::
-    Convert(content::mojom::BackgroundFetchState input) {
-  switch (input) {
-    case content::mojom::BackgroundFetchState::PENDING:
-      return blink::WebServiceWorkerContextProxy::BackgroundFetchState::
-          kPending;
-    case content::mojom::BackgroundFetchState::SUCCEEDED:
-      return blink::WebServiceWorkerContextProxy::BackgroundFetchState::
-          kSucceeded;
-    case content::mojom::BackgroundFetchState::FAILED:
-      return blink::WebServiceWorkerContextProxy::BackgroundFetchState::kFailed;
+blink::WebServiceWorkerObjectInfo
+TypeConverter<blink::WebServiceWorkerObjectInfo,
+              blink::mojom::ServiceWorkerObjectInfoPtr>::
+    Convert(const blink::mojom::ServiceWorkerObjectInfoPtr& input) {
+  if (!input) {
+    return blink::WebServiceWorkerObjectInfo(
+        blink::mojom::kInvalidServiceWorkerVersionId,
+        blink::mojom::ServiceWorkerState::kUnknown, blink::WebURL(),
+        mojo::ScopedInterfaceEndpointHandle() /* host_ptr_info */,
+        mojo::ScopedInterfaceEndpointHandle() /* request */);
   }
+  return blink::WebServiceWorkerObjectInfo(
+      input->version_id, input->state, input->url,
+      input->host_ptr_info.PassHandle(), input->request.PassHandle());
+}
 
-  NOTREACHED();
-  return blink::WebServiceWorkerContextProxy::BackgroundFetchState::kPending;
+blink::WebServiceWorkerRegistrationObjectInfo
+TypeConverter<blink::WebServiceWorkerRegistrationObjectInfo,
+              blink::mojom::ServiceWorkerRegistrationObjectInfoPtr>::
+    Convert(const blink::mojom::ServiceWorkerRegistrationObjectInfoPtr& input) {
+  if (!input) {
+    return blink::WebServiceWorkerRegistrationObjectInfo(
+        blink::mojom::kInvalidServiceWorkerRegistrationId, blink::WebURL(),
+        blink::mojom::ScriptType::kClassic,
+        blink::mojom::ServiceWorkerUpdateViaCache::kImports,
+        mojo::ScopedInterfaceEndpointHandle() /* host_ptr_info */,
+        mojo::ScopedInterfaceEndpointHandle() /* request */,
+        blink::mojom::ServiceWorkerObjectInfoPtr()
+            .To<blink::WebServiceWorkerObjectInfo>() /* installing */,
+        blink::mojom::ServiceWorkerObjectInfoPtr()
+            .To<blink::WebServiceWorkerObjectInfo>() /* waiting */,
+        blink::mojom::ServiceWorkerObjectInfoPtr()
+            .To<blink::WebServiceWorkerObjectInfo>() /* active */);
+  }
+  return blink::WebServiceWorkerRegistrationObjectInfo(
+      input->registration_id, input->options->scope, input->options->type,
+      input->options->update_via_cache, input->host_ptr_info.PassHandle(),
+      input->request.PassHandle(),
+      input->installing.To<blink::WebServiceWorkerObjectInfo>(),
+      input->waiting.To<blink::WebServiceWorkerObjectInfo>(),
+      input->active.To<blink::WebServiceWorkerObjectInfo>());
 }
 
 }  // namespace mojo

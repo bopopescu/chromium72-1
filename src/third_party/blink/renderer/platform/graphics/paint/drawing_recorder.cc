@@ -34,17 +34,14 @@ DrawingRecorder::DrawingRecorder(GraphicsContext& context,
   if (context.GetPaintController().DisplayItemConstructionIsDisabled())
     return;
 
-  // Must check DrawingRecorder::useCachedDrawingIfPossible before creating the
+  // Must check DrawingRecorder::UseCachedDrawingIfPossible before creating the
   // DrawingRecorder.
   DCHECK(RuntimeEnabledFeatures::PaintUnderInvalidationCheckingEnabled() ||
          !UseCachedDrawingIfPossible(context_, client_, type_));
 
   DCHECK(DisplayItem::IsDrawingType(display_item_type));
 
-#if DCHECK_IS_ON()
   context.SetInDrawingRecorder(true);
-#endif
-
   context.BeginRecording(FloatRect());
 }
 
@@ -52,9 +49,9 @@ DrawingRecorder::~DrawingRecorder() {
   if (context_.GetPaintController().DisplayItemConstructionIsDisabled())
     return;
 
-#if DCHECK_IS_ON()
   context_.SetInDrawingRecorder(false);
 
+#if DCHECK_IS_ON()
   if (!g_list_modification_check_disabled) {
     DCHECK(initial_display_item_list_size_ ==
            context_.GetPaintController().NewDisplayItemList().size());

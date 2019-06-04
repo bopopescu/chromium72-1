@@ -11,7 +11,7 @@
 #include "base/files/file_path.h"
 #include "base/location.h"
 #include "base/run_loop.h"
-#include "base/threading/thread_task_runner_handle.h"
+#include "base/threading/sequenced_task_runner_handle.h"
 #include "components/browser_sync/test_http_bridge_factory.h"
 #include "components/browser_sync/test_profile_sync_service.h"
 #include "components/sync/driver/glue/sync_backend_host_core.h"
@@ -20,7 +20,7 @@
 #include "components/sync/engine/test_engine_components_factory.h"
 #include "components/sync/protocol/sync.pb.h"
 #include "components/sync/syncable/test_user_share.h"
-#include "google_apis/gaia/gaia_constants.h"
+#include "services/network/test/test_network_connection_tracker.h"
 
 using syncer::SyncBackendHostImpl;
 using syncer::ModelType;
@@ -80,10 +80,10 @@ void SyncEngineForProfileSyncTest::Initialize(InitParams params) {
   params.http_factory_getter = base::Bind(&GetHttpPostProviderFactory);
   params.sync_manager_factory =
       std::make_unique<syncer::SyncManagerFactoryForProfileSyncTest>(
-          std::move(callback_));
+          std::move(callback_),
+          network::TestNetworkConnectionTracker::GetInstance());
   params.credentials.email = "testuser@gmail.com";
   params.credentials.sync_token = "token";
-  params.credentials.scope_set.insert(GaiaConstants::kChromeSyncOAuth2Scope);
   params.restored_key_for_bootstrapping.clear();
 
   // It'd be nice if we avoided creating the EngineComponentsFactory in the
@@ -105,9 +105,9 @@ void SyncEngineForProfileSyncTest::ConfigureDataTypes(ConfigureParams params) {
   // send back the list of newly configured types instead and hope it doesn't
   // break anything.
   // Posted to avoid re-entrancy issues.
-  base::ThreadTaskRunnerHandle::Get()->PostTask(
+  base::SequencedTaskRunnerHandle::Get()->PostTask(
       FROM_HERE,
-      base::Bind(
+      base::BindOnce(
           &SyncEngineForProfileSyncTest::FinishConfigureDataTypesOnFrontendLoop,
           base::Unretained(this), params.to_download, params.to_download,
           syncer::ModelTypeSet(), params.ready_task));
@@ -173,14 +173,14 @@ void AbstractProfileSyncServiceTest::CreateSyncService(
   syncer::SyncApiComponentFactoryMock* components =
       profile_sync_service_bundle_.component_factory();
   auto engine = std::make_unique<SyncEngineForProfileSyncTest>(
-      temp_dir_.GetPath(), sync_service_->GetSyncClient(),
+      temp_dir_.GetPath(), sync_service_->GetSyncClientForTest(),
       profile_sync_service_bundle_.fake_invalidation_service(),
       sync_service_->sync_prefs()->AsWeakPtr(),
       std::move(initialization_success_callback));
   EXPECT_CALL(*components, CreateSyncEngine(_, _, _, _))
       .WillOnce(Return(ByMove(std::move(engine))));
 
-  sync_service_->SetFirstSetupComplete();
+  sync_service_->GetUserSettings()->SetFirstSetupComplete();
 }
 
 base::Callback<syncer::SyncService*(void)>

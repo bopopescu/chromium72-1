@@ -33,9 +33,7 @@
 #include "third_party/blink/renderer/core/execution_context/execution_context.h"
 #include "third_party/blink/renderer/core/html/parser/text_resource_decoder.h"
 #include "third_party/blink/renderer/core/inspector/console_message.h"
-#include "third_party/blink/renderer/core/loader/allowed_by_nosniff.h"
 #include "third_party/blink/renderer/core/loader/resource/script_resource.h"
-#include "third_party/blink/renderer/core/loader/worker_threadable_loader.h"
 #include "third_party/blink/renderer/core/origin_trials/origin_trial_context.h"
 #include "third_party/blink/renderer/core/workers/worker_global_scope.h"
 #include "third_party/blink/renderer/platform/loader/fetch/resource_loader_options.h"
@@ -44,56 +42,53 @@
 #include "third_party/blink/renderer/platform/network/content_security_policy_response_headers.h"
 #include "third_party/blink/renderer/platform/network/http_names.h"
 #include "third_party/blink/renderer/platform/network/network_utils.h"
+#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 #include "third_party/blink/renderer/platform/weborigin/security_origin.h"
 
 namespace blink {
 
 WorkerClassicScriptLoader::WorkerClassicScriptLoader()
-    : response_address_space_(mojom::IPAddressSpace::kPublic) {}
-
-WorkerClassicScriptLoader::~WorkerClassicScriptLoader() {
-  // If |m_threadableLoader| is still working, we have to cancel it here.
-  // Otherwise didFail() of the deleted |this| will be called from
-  // DocumentThreadableLoader::notifyFinished() when the frame will be
-  // destroyed.
-  if (need_to_cancel_)
-    Cancel();
-}
+    : response_address_space_(mojom::IPAddressSpace::kPublic),
+      mime_type_check_mode_(AllowedByNosniff::MimeTypeCheck::kStrict) {}
 
 void WorkerClassicScriptLoader::LoadSynchronously(
     ExecutionContext& execution_context,
     const KURL& url,
-    WebURLRequest::RequestContext request_context,
+    mojom::RequestContextType request_context,
     mojom::IPAddressSpace creation_address_space) {
   url_ = url;
   execution_context_ = &execution_context;
 
+  // Impose strict MIME-type checks on importScripts(). See
+  // https://crbug.com/794548.
+  mime_type_check_mode_ = AllowedByNosniff::MimeTypeCheck::kStrict;
+
   ResourceRequest request(url);
-  request.SetHTTPMethod(HTTPNames::GET);
+  request.SetHTTPMethod(http_names::kGET);
   request.SetExternalRequestStateFromRequestorAddressSpace(
       creation_address_space);
   request.SetRequestContext(request_context);
 
   SECURITY_DCHECK(execution_context.IsWorkerGlobalScope());
 
-  ThreadableLoaderOptions options;
-
   ResourceLoaderOptions resource_loader_options;
   resource_loader_options.parser_disposition =
       ParserDisposition::kNotParserInserted;
+  resource_loader_options.synchronous_policy = kRequestSynchronously;
 
-  WorkerThreadableLoader::LoadResourceSynchronously(
-      ToWorkerGlobalScope(execution_context), request, *this, options,
-      resource_loader_options);
+  threadable_loader_ = MakeGarbageCollected<ThreadableLoader>(
+      execution_context, this, resource_loader_options);
+  threadable_loader_->Start(request);
 }
 
-void WorkerClassicScriptLoader::LoadAsynchronously(
+void WorkerClassicScriptLoader::LoadTopLevelScriptAsynchronously(
     ExecutionContext& execution_context,
     const KURL& url,
-    WebURLRequest::RequestContext request_context,
+    mojom::RequestContextType request_context,
     network::mojom::FetchRequestMode fetch_request_mode,
     network::mojom::FetchCredentialsMode fetch_credentials_mode,
     mojom::IPAddressSpace creation_address_space,
+    bool is_nested_worker,
     base::OnceClosure response_callback,
     base::OnceClosure finished_callback) {
   DCHECK(response_callback || finished_callback);
@@ -101,27 +96,43 @@ void WorkerClassicScriptLoader::LoadAsynchronously(
   finished_callback_ = std::move(finished_callback);
   url_ = url;
   execution_context_ = &execution_context;
+  forbid_cross_origin_redirects_ = true;
+
+  if (execution_context.IsDocument()) {
+    // For worker creation on a document, don't impose strict MIME-type checks
+    // on the top-level worker script for backward compatibility. Note that
+    // there is a plan to deprecate legacy mime types for workers. See
+    // https://crbug.com/794548.
+    mime_type_check_mode_ = AllowedByNosniff::MimeTypeCheck::kLax;
+  } else {
+    DCHECK(execution_context.IsWorkerGlobalScope());
+    if (is_nested_worker) {
+      // For nested workers, impose the strict MIME-type checks because the
+      // feature is new (enabled by default in M69) and there is no backward
+      // compatibility issue.
+      mime_type_check_mode_ = AllowedByNosniff::MimeTypeCheck::kStrict;
+    } else {
+      // For worker creation on a document with off-the-main-thread top-level
+      // worker classic script loading, don't impose strict MIME-type checks for
+      // backward compatibility.
+      // TODO(nhiroki): Always impose strict MIME-type checks on all web
+      // workers (https://crbug.com/794548).
+      DCHECK(RuntimeEnabledFeatures::OffMainThreadWorkerScriptFetchEnabled());
+      mime_type_check_mode_ = AllowedByNosniff::MimeTypeCheck::kLax;
+    }
+  }
 
   ResourceRequest request(url);
-  request.SetHTTPMethod(HTTPNames::GET);
+  request.SetHTTPMethod(http_names::kGET);
   request.SetExternalRequestStateFromRequestorAddressSpace(
       creation_address_space);
   request.SetRequestContext(request_context);
   request.SetFetchRequestMode(fetch_request_mode);
   request.SetFetchCredentialsMode(fetch_credentials_mode);
 
-  ThreadableLoaderOptions options;
-
-  ResourceLoaderOptions resource_loader_options;
-
-  // During create, callbacks may happen which could remove the last reference
-  // to this object, while some of the callchain assumes that the client and
-  // loader wouldn't be deleted within callbacks.
-  // (E.g. see crbug.com/524694 for why we can't easily remove this protect)
-  scoped_refptr<WorkerClassicScriptLoader> protect(this);
   need_to_cancel_ = true;
-  threadable_loader_ = ThreadableLoader::Create(
-      execution_context, this, options, resource_loader_options);
+  threadable_loader_ = MakeGarbageCollected<ThreadableLoader>(
+      execution_context, this, ResourceLoaderOptions());
   threadable_loader_->Start(request);
   if (failed_)
     NotifyFinished();
@@ -141,21 +152,40 @@ void WorkerClassicScriptLoader::DidReceiveResponse(
     NotifyError();
     return;
   }
-  if (!AllowedByNosniff::MimeTypeAsScript(execution_context_, response)) {
+  if (!AllowedByNosniff::MimeTypeAsScript(execution_context_, response,
+                                          mime_type_check_mode_)) {
     NotifyError();
     return;
   }
+
+  if (forbid_cross_origin_redirects_ && url_ != response.Url() &&
+      !SecurityOrigin::AreSameSchemeHostPort(url_, response.Url())) {
+    // Forbid cross-origin redirects to ensure the request and response URLs
+    // have the same SecurityOrigin.
+    execution_context_->AddConsoleMessage(ConsoleMessage::Create(
+        kSecurityMessageSource, kErrorMessageLevel,
+        "Refused to cross-origin redirects of the top-level worker script."));
+    NotifyError();
+    return;
+  }
+
   identifier_ = identifier;
-  response_url_ = response.Url();
+  if (response.WasFetchedViaServiceWorker() &&
+      !response.OriginalURLViaServiceWorker().IsEmpty()) {
+    response_url_ = response.OriginalURLViaServiceWorker();
+  } else {
+    response_url_ = response.Url();
+  }
+
   response_encoding_ = response.TextEncodingName();
   app_cache_id_ = response.AppCacheID();
 
-  referrer_policy_ = response.HttpHeaderField(HTTPNames::Referrer_Policy);
+  referrer_policy_ = response.HttpHeaderField(http_names::kReferrerPolicy);
   ProcessContentSecurityPolicy(response);
   origin_trial_tokens_ = OriginTrialContext::ParseHeaderValue(
-      response.HttpHeaderField(HTTPNames::Origin_Trial));
+      response.HttpHeaderField(http_names::kOriginTrial));
 
-  if (NetworkUtils::IsReservedIPAddress(response.RemoteIPAddress())) {
+  if (network_utils::IsReservedIPAddress(response.RemoteIPAddress())) {
     response_address_space_ =
         SecurityOrigin::Create(response_url_)->IsLocalhost()
             ? mojom::IPAddressSpace::kLocal
@@ -209,7 +239,16 @@ void WorkerClassicScriptLoader::DidFailRedirectCheck() {
   NotifyError();
 }
 
+void WorkerClassicScriptLoader::Trace(Visitor* visitor) {
+  visitor->Trace(threadable_loader_);
+  visitor->Trace(content_security_policy_);
+  visitor->Trace(execution_context_);
+  ThreadableLoaderClient::Trace(visitor);
+}
+
 void WorkerClassicScriptLoader::Cancel() {
+  if (!need_to_cancel_)
+    return;
   need_to_cancel_ = false;
   if (threadable_loader_)
     threadable_loader_->Cancel();
@@ -221,12 +260,12 @@ String WorkerClassicScriptLoader::SourceText() {
 
 void WorkerClassicScriptLoader::NotifyError() {
   failed_ = true;
-  // notifyError() could be called before ThreadableLoader::create() returns
-  // e.g. from didFail(), and in that case m_threadableLoader is not yet set
+  // NotifyError() could be called before ThreadableLoader::Create() returns
+  // e.g. from DidFail(), and in that case threadable_loader_ is not yet set
   // (i.e. still null).
-  // Since the callback invocation in notifyFinished() potentially delete
+  // Since the callback invocation in NotifyFinished() potentially delete
   // |this| object, the callback invocation should be postponed until the
-  // create() call returns. See loadAsynchronously() for the postponed call.
+  // create() call returns. See LoadAsynchronously() for the postponed call.
   if (threadable_loader_)
     NotifyFinished();
 }

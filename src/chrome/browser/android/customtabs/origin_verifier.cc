@@ -13,7 +13,9 @@
 #include "chrome/browser/profiles/profile_android.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "content/public/browser/browser_thread.h"
+#include "content/public/browser/storage_partition.h"
 #include "jni/OriginVerifier_jni.h"
+#include "services/network/public/cpp/simple_url_loader.h"
 
 using base::android::ConvertJavaStringToUTF16;
 using base::android::JavaParamRef;
@@ -21,6 +23,9 @@ using base::android::JavaRef;
 using digital_asset_links::RelationshipCheckResult;
 
 namespace customtabs {
+
+// static variables are zero-initialized.
+int OriginVerifier::clear_browsing_data_call_count_for_tests_;
 
 OriginVerifier::OriginVerifier(JNIEnv* env,
                                const JavaRef<jobject>& obj,
@@ -30,7 +35,8 @@ OriginVerifier::OriginVerifier(JNIEnv* env,
   DCHECK(profile);
   asset_link_handler_ =
       std::make_unique<digital_asset_links::DigitalAssetLinksHandler>(
-          profile->GetRequestContext());
+          content::BrowserContext::GetDefaultStoragePartition(profile)
+              ->GetURLLoaderFactoryForBrowserProcess());
 }
 
 OriginVerifier::~OriginVerifier() = default;
@@ -73,6 +79,19 @@ void OriginVerifier::OnRelationshipCheckComplete(
 void OriginVerifier::Destroy(JNIEnv* env,
                              const base::android::JavaRef<jobject>& obj) {
   delete this;
+}
+
+// static
+void OriginVerifier::ClearBrowsingData() {
+  JNIEnv* env = base::android::AttachCurrentThread();
+
+  Java_OriginVerifier_clearBrowsingData(env);
+  clear_browsing_data_call_count_for_tests_++;
+}
+
+// static
+int OriginVerifier::GetClearBrowsingDataCallCountForTesting() {
+  return clear_browsing_data_call_count_for_tests_;
 }
 
 static jlong JNI_OriginVerifier_Init(

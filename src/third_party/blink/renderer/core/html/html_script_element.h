@@ -33,6 +33,9 @@
 
 namespace blink {
 
+class StringOrTrustedScript;
+class ExceptionState;
+
 class CORE_EXPORT HTMLScriptElement final : public HTMLElement,
                                             public ScriptElementBase {
   DEFINE_WRAPPERTYPEINFO();
@@ -41,8 +44,15 @@ class CORE_EXPORT HTMLScriptElement final : public HTMLElement,
  public:
   static HTMLScriptElement* Create(Document&, const CreateElementFlags);
 
-  String text() { return TextFromChildren(); }
-  void setText(const String&);
+  HTMLScriptElement(Document&, const CreateElementFlags);
+
+  // Returns attributes that should be checked against Trusted Types
+  const HashSet<AtomicString>& GetCheckedAttributeNames() const override;
+
+  void text(StringOrTrustedScript& result);
+  void setText(const StringOrTrustedScript&, ExceptionState&);
+  void setInnerText(const StringOrTrustedScript&, ExceptionState&) override;
+  void setTextContent(const StringOrTrustedScript&, ExceptionState&) override;
 
   KURL Src() const;
 
@@ -55,13 +65,10 @@ class CORE_EXPORT HTMLScriptElement final : public HTMLElement,
   Document& GetDocument() const override;
 
   void Trace(blink::Visitor*) override;
-  void TraceWrappers(ScriptWrappableVisitor*) const override;
 
  private:
-  HTMLScriptElement(Document&, const CreateElementFlags);
-
   void ParseAttribute(const AttributeModificationParams&) override;
-  InsertionNotificationRequest InsertedInto(ContainerNode*) override;
+  InsertionNotificationRequest InsertedInto(ContainerNode&) override;
   void DidNotifySubtreeInsertionsToDocument() override;
   void ChildrenChanged(const ChildrenChange&) override;
   void DidMoveToNewDocument(Document& old_document) override;
@@ -80,6 +87,7 @@ class CORE_EXPORT HTMLScriptElement final : public HTMLElement,
   String EventAttributeValue() const override;
   String CrossOriginAttributeValue() const override;
   String IntegrityAttributeValue() const override;
+  String ReferrerPolicyAttributeValue() const override;
   String TextFromChildren() override;
   bool AsyncAttributeValue() const override;
   bool DeferAttributeValue() const override;

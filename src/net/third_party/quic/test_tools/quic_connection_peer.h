@@ -12,7 +12,7 @@
 #include "net/third_party/quic/platform/api/quic_socket_address.h"
 #include "net/third_party/quic/platform/api/quic_string_piece.h"
 
-namespace net {
+namespace quic {
 
 struct QuicPacketHeader;
 class QuicAlarm;
@@ -31,6 +31,8 @@ namespace test {
 // Peer to make public a number of otherwise private QuicConnection methods.
 class QuicConnectionPeer {
  public:
+  QuicConnectionPeer() = delete;
+
   static void SendAck(QuicConnection* connection);
 
   static void SetSendAlgorithm(QuicConnection* connection,
@@ -87,13 +89,13 @@ class QuicConnectionPeer {
 
   static QuicAlarm* GetAckAlarm(QuicConnection* connection);
   static QuicAlarm* GetPingAlarm(QuicConnection* connection);
-  static QuicAlarm* GetResumeWritesAlarm(QuicConnection* connection);
   static QuicAlarm* GetRetransmissionAlarm(QuicConnection* connection);
   static QuicAlarm* GetSendAlarm(QuicConnection* connection);
   static QuicAlarm* GetTimeoutAlarm(QuicConnection* connection);
   static QuicAlarm* GetMtuDiscoveryAlarm(QuicConnection* connection);
-  static QuicAlarm* GetRetransmittableOnWireAlarm(QuicConnection* connection);
   static QuicAlarm* GetPathDegradingAlarm(QuicConnection* connection);
+  static QuicAlarm* GetProcessUndecryptablePacketsAlarm(
+      QuicConnection* connection);
 
   static QuicPacketWriter* GetWriter(QuicConnection* connection);
   // If |owns_writer| is true, takes ownership of |writer|.
@@ -116,6 +118,8 @@ class QuicConnectionPeer {
                                 QuicPacketNumber number);
   static void SetAckMode(QuicConnection* connection,
                          QuicConnection::AckMode ack_mode);
+  static void SetFastAckAfterQuiescence(QuicConnection* connection,
+                                        bool fast_ack_after_quiescence);
   static void SetAckDecimationDelay(QuicConnection* connection,
                                     float ack_decimation_delay);
   static bool HasRetransmittableFrames(QuicConnection* connection,
@@ -126,13 +130,16 @@ class QuicConnectionPeer {
   static void SetMaxTrackedPackets(QuicConnection* connection,
                                    QuicPacketCount max_tracked_packets);
   static void SetSessionDecidesWhatToWrite(QuicConnection* connection);
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(QuicConnectionPeer);
+  static void SetNegotiatedVersion(QuicConnection* connection);
+  static void SetMaxConsecutiveNumPacketsWithNoRetransmittableFrames(
+      QuicConnection* connection,
+      size_t new_value);
+  static void SetNoVersionNegotiation(QuicConnection* connection,
+                                      bool no_version_negotiation);
 };
 
 }  // namespace test
 
-}  // namespace net
+}  // namespace quic
 
 #endif  // NET_THIRD_PARTY_QUIC_TEST_TOOLS_QUIC_CONNECTION_PEER_H_

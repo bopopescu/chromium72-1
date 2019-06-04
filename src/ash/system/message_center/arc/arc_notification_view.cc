@@ -6,6 +6,7 @@
 
 #include <algorithm>
 
+#include "ash/system/message_center/arc/arc_notification_constants.h"
 #include "ash/system/message_center/arc/arc_notification_content_view.h"
 #include "ash/system/message_center/arc/arc_notification_item.h"
 #include "ui/accessibility/ax_action_data.h"
@@ -14,6 +15,7 @@
 #include "ui/base/ime/text_input_type.h"
 #include "ui/gfx/geometry/size.h"
 #include "ui/message_center/public/cpp/message_center_constants.h"
+#include "ui/message_center/views/notification_background_painter.h"
 #include "ui/message_center/views/notification_control_buttons_view.h"
 #include "ui/views/background.h"
 #include "ui/views/controls/button/image_button.h"
@@ -40,6 +42,7 @@ ArcNotificationView::ArcNotificationView(
       item_(item),
       content_view_(new ArcNotificationContentView(item_, notification, this)) {
   DCHECK_EQ(message_center::NOTIFICATION_TYPE_CUSTOM, notification.type());
+  DCHECK_EQ(kArcNotificationCustomViewType, notification.custom_view_type());
 
   SetProperty(kArcNotificationViewPropertyKey, this);
 
@@ -48,12 +51,15 @@ ArcNotificationView::ArcNotificationView(
   AddChildView(content_view_);
 
   if (content_view_->background()) {
-    background_view()->background()->SetNativeControlColor(
+    background()->SetNativeControlColor(
         content_view_->background()->get_color());
   }
 
   focus_painter_ = views::Painter::CreateSolidFocusPainter(
       message_center::kFocusBorderColor, gfx::Insets(0, 1, 3, 2));
+
+  UpdateCornerRadius(message_center::kNotificationCornerRadius,
+                     message_center::kNotificationCornerRadius);
 }
 
 ArcNotificationView::~ArcNotificationView() {
@@ -72,7 +78,7 @@ void ArcNotificationView::OnContentBlurred() {
 void ArcNotificationView::UpdateWithNotification(
     const message_center::Notification& notification) {
   message_center::MessageView::UpdateWithNotification(notification);
-  content_view_->Update(this, notification);
+  content_view_->Update(notification);
 }
 
 void ArcNotificationView::SetDrawBackgroundAsActive(bool active) {
@@ -81,6 +87,13 @@ void ArcNotificationView::SetDrawBackgroundAsActive(bool active) {
     return;
 
   message_center::MessageView::SetDrawBackgroundAsActive(active);
+}
+
+void ArcNotificationView::UpdateCornerRadius(int top_radius,
+                                             int bottom_radius) {
+  MessageView::UpdateCornerRadius(top_radius, bottom_radius);
+
+  content_view_->UpdateCornerRadius(top_radius, bottom_radius);
 }
 
 void ArcNotificationView::UpdateControlButtonsVisibility() {
@@ -137,12 +150,22 @@ void ArcNotificationView::OnContainerAnimationStarted() {
   content_view_->OnContainerAnimationStarted();
 }
 
+void ArcNotificationView::OnSettingsButtonPressed(const ui::Event& event) {
+  MessageView::OnSettingsButtonPressed(event);
+}
+
+void ArcNotificationView::OnSnoozeButtonPressed(const ui::Event& event) {
+  if (item_)
+    return item_->OpenSnooze();
+}
+
 void ArcNotificationView::OnContainerAnimationEnded() {
   content_view_->OnContainerAnimationEnded();
 }
 
-void ArcNotificationView::OnSlideChanged() {
-  content_view_->OnSlideChanged();
+void ArcNotificationView::OnSlideChanged(bool in_progress) {
+  MessageView::OnSlideChanged(in_progress);
+  content_view_->OnSlideChanged(in_progress);
 }
 
 gfx::Size ArcNotificationView::CalculatePreferredSize() const {
@@ -165,7 +188,7 @@ void ArcNotificationView::Layout() {
 }
 
 bool ArcNotificationView::HasFocus() const {
-  // In case that focus handling is defered to the content view, asking the
+  // In case that focus handling is deferred to the content view, asking the
   // content view about focus.
   return content_view_->IsFocusable() ? content_view_->HasFocus()
                                       : message_center::MessageView::HasFocus();

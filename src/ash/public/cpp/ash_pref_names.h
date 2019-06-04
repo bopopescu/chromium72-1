@@ -23,6 +23,9 @@ ASH_PUBLIC_EXPORT extern const char kAccessibilityVirtualKeyboardEnabled[];
 ASH_PUBLIC_EXPORT extern const char kAccessibilityMonoAudioEnabled[];
 ASH_PUBLIC_EXPORT extern const char kAccessibilityAutoclickEnabled[];
 ASH_PUBLIC_EXPORT extern const char kAccessibilityAutoclickDelayMs[];
+ASH_PUBLIC_EXPORT extern const char kAccessibilityAutoclickEventType[];
+ASH_PUBLIC_EXPORT extern const char kAccessibilityAutoclickRevertToLeftClick[];
+ASH_PUBLIC_EXPORT extern const char kAccessibilityAutoclickMovementThreshold[];
 ASH_PUBLIC_EXPORT extern const char kAccessibilityCaretHighlightEnabled[];
 ASH_PUBLIC_EXPORT extern const char kAccessibilityCursorHighlightEnabled[];
 ASH_PUBLIC_EXPORT extern const char kAccessibilityFocusHighlightEnabled[];
@@ -33,6 +36,16 @@ ASH_PUBLIC_EXPORT extern const char kShouldAlwaysShowAccessibilityMenu[];
 
 ASH_PUBLIC_EXPORT extern const char kDockedMagnifierEnabled[];
 ASH_PUBLIC_EXPORT extern const char kDockedMagnifierScale[];
+ASH_PUBLIC_EXPORT extern const char
+    kDockedMagnifierAcceleratorDialogHasBeenAccepted[];
+ASH_PUBLIC_EXPORT extern const char
+    kHighContrastAcceleratorDialogHasBeenAccepted[];
+ASH_PUBLIC_EXPORT extern const char
+    kScreenMagnifierAcceleratorDialogHasBeenAccepted[];
+ASH_PUBLIC_EXPORT extern const char
+    kDictationAcceleratorDialogHasBeenAccepted[];
+ASH_PUBLIC_EXPORT extern const char
+    kDisplayRotationAcceleratorDialogHasBeenAccepted[];
 
 ASH_PUBLIC_EXPORT extern const char kDisplayMixedMirrorModeParams[];
 ASH_PUBLIC_EXPORT extern const char kDisplayPowerState[];
@@ -48,6 +61,12 @@ ASH_PUBLIC_EXPORT extern const char kShownPaletteWelcomeBubble[];
 ASH_PUBLIC_EXPORT extern const char kEnableStylusTools[];
 ASH_PUBLIC_EXPORT extern const char kLaunchPaletteOnEjectEvent[];
 
+// Lock screen notification settings.
+ASH_PUBLIC_EXPORT extern const char kMessageCenterLockScreenMode[];
+ASH_PUBLIC_EXPORT extern const char kMessageCenterLockScreenModeShow[];
+ASH_PUBLIC_EXPORT extern const char kMessageCenterLockScreenModeHide[];
+ASH_PUBLIC_EXPORT extern const char kMessageCenterLockScreenModeHideSensitive[];
+
 ASH_PUBLIC_EXPORT extern const char kNightLightEnabled[];
 ASH_PUBLIC_EXPORT extern const char kNightLightTemperature[];
 ASH_PUBLIC_EXPORT extern const char kNightLightScheduleType[];
@@ -56,11 +75,13 @@ ASH_PUBLIC_EXPORT extern const char kNightLightCustomEndTime[];
 
 ASH_PUBLIC_EXPORT extern const char kAllowScreenLock[];
 ASH_PUBLIC_EXPORT extern const char kEnableAutoScreenLock[];
+ASH_PUBLIC_EXPORT extern const char kPowerAcScreenBrightnessPercent[];
 ASH_PUBLIC_EXPORT extern const char kPowerAcScreenDimDelayMs[];
 ASH_PUBLIC_EXPORT extern const char kPowerAcScreenOffDelayMs[];
 ASH_PUBLIC_EXPORT extern const char kPowerAcScreenLockDelayMs[];
 ASH_PUBLIC_EXPORT extern const char kPowerAcIdleWarningDelayMs[];
 ASH_PUBLIC_EXPORT extern const char kPowerAcIdleDelayMs[];
+ASH_PUBLIC_EXPORT extern const char kPowerBatteryScreenBrightnessPercent[];
 ASH_PUBLIC_EXPORT extern const char kPowerBatteryScreenDimDelayMs[];
 ASH_PUBLIC_EXPORT extern const char kPowerBatteryScreenOffDelayMs[];
 ASH_PUBLIC_EXPORT extern const char kPowerBatteryScreenLockDelayMs[];
@@ -73,12 +94,14 @@ ASH_PUBLIC_EXPORT extern const char kPowerBatteryIdleAction[];
 ASH_PUBLIC_EXPORT extern const char kPowerLidClosedAction[];
 ASH_PUBLIC_EXPORT extern const char kPowerUseAudioActivity[];
 ASH_PUBLIC_EXPORT extern const char kPowerUseVideoActivity[];
+ASH_PUBLIC_EXPORT extern const char kPowerAllowWakeLocks[];
 ASH_PUBLIC_EXPORT extern const char kPowerAllowScreenWakeLocks[];
 ASH_PUBLIC_EXPORT extern const char kPowerPresentationScreenDimDelayFactor[];
 ASH_PUBLIC_EXPORT extern const char kPowerUserActivityScreenDimDelayFactor[];
 ASH_PUBLIC_EXPORT extern const char kPowerWaitForInitialUserActivity[];
 ASH_PUBLIC_EXPORT extern const char
     kPowerForceNonzeroBrightnessForUserActivity[];
+ASH_PUBLIC_EXPORT extern const char kPowerSmartDimEnabled[];
 
 ASH_PUBLIC_EXPORT extern const char kShelfAlignment[];
 ASH_PUBLIC_EXPORT extern const char kShelfAlignmentLocal[];

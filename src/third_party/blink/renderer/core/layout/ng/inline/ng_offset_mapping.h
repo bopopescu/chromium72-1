@@ -10,6 +10,7 @@
 #include "third_party/blink/renderer/core/dom/node.h"
 #include "third_party/blink/renderer/core/editing/forward.h"
 #include "third_party/blink/renderer/platform/heap/handle.h"
+#include "third_party/blink/renderer/platform/heap/persistent.h"
 #include "third_party/blink/renderer/platform/wtf/allocator.h"
 #include "third_party/blink/renderer/platform/wtf/hash_map.h"
 #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
@@ -37,7 +38,7 @@ enum class NGOffsetMappingUnitType { kIdentity, kCollapsed, kExpanded };
 //   in the dom range is expanded into multiple characters.
 // See design doc https://goo.gl/CJbxky for details.
 class CORE_EXPORT NGOffsetMappingUnit {
-  DISALLOW_NEW_EXCEPT_PLACEMENT_NEW();
+  DISALLOW_NEW();
 
  public:
   NGOffsetMappingUnit(NGOffsetMappingUnitType,
@@ -55,19 +56,25 @@ class CORE_EXPORT NGOffsetMappingUnit {
   unsigned TextContentStart() const { return text_content_start_; }
   unsigned TextContentEnd() const { return text_content_end_; }
 
+  // If the passed unit can be concatenated to |this| to create a bigger unit,
+  // replaces |this| by the result and returns true; Returns false otherwise.
+  bool Concatenate(const NGOffsetMappingUnit&);
+
   unsigned ConvertDOMOffsetToTextContent(unsigned) const;
 
   unsigned ConvertTextContentToFirstDOMOffset(unsigned) const;
   unsigned ConvertTextContentToLastDOMOffset(unsigned) const;
 
  private:
-  const NGOffsetMappingUnitType type_ = NGOffsetMappingUnitType::kIdentity;
+  NGOffsetMappingUnitType type_ = NGOffsetMappingUnitType::kIdentity;
 
-  const Persistent<const Node> owner_;
-  const unsigned dom_start_;
-  const unsigned dom_end_;
-  const unsigned text_content_start_;
-  const unsigned text_content_end_;
+  Persistent<const Node> owner_;
+  unsigned dom_start_;
+  unsigned dom_end_;
+  unsigned text_content_start_;
+  unsigned text_content_end_;
+
+  friend class NGOffsetMappingBuilder;
 };
 
 class NGMappingUnitRange {
@@ -123,6 +130,10 @@ class CORE_EXPORT NGOffsetMapping {
   // a LayoutObject at hand.
   static const NGOffsetMapping* GetFor(const LayoutObject*);
 
+  // Returns the mapping object of the inline formatting context the given
+  // LayoutBlockFlow has.
+  static const NGOffsetMapping* GetForContainingBlockFlow(LayoutBlockFlow*);
+
   // Returns the NGOffsetMappingUnit whose DOM range contains the position.
   // If there are multiple qualifying units, returns the last one.
   const NGOffsetMappingUnit* GetMappingUnitForPosition(const Position&) const;
@@ -131,6 +142,10 @@ class CORE_EXPORT NGOffsetMapping {
   // possibly collapsed) intersections with the passed in DOM range. This API
   // only accepts ranges whose start and end have the same anchor node.
   NGMappingUnitRange GetMappingUnitsForDOMRange(const EphemeralRange&) const;
+
+  // Returns all NGOffsetMappingUnits associated to |node|. Note: |node| should
+  // have associated mapping.
+  NGMappingUnitRange GetMappingUnitsForNode(const Node& node) const;
 
   // Returns the text content offset corresponding to the given position.
   // Returns nullopt when the position is not laid out in this context.
@@ -170,6 +185,13 @@ class CORE_EXPORT NGOffsetMapping {
   Position GetFirstPosition(unsigned) const;
   Position GetLastPosition(unsigned) const;
 
+  // Returns all NGOffsetMappingUnits whose text content ranges has non-empty
+  // (but possibly collapsed) intersection with (start, end). Note that units
+  // that only "touch" |start| or |end| are excluded.
+  NGMappingUnitRange GetMappingUnitsForTextContentOffsetRange(
+      unsigned start,
+      unsigned end) const;
+
   // TODO(xiaochengh): Add offset-to-DOM APIs skipping generated contents.
 
   // ------ APIs inspecting the text content string ------
@@ -192,7 +214,7 @@ class CORE_EXPORT NGOffsetMapping {
   DISALLOW_COPY_AND_ASSIGN(NGOffsetMapping);
 };
 
-CORE_EXPORT const LayoutBlockFlow* NGInlineFormattingContextOf(const Position&);
+CORE_EXPORT LayoutBlockFlow* NGInlineFormattingContextOf(const Position&);
 
 }  // namespace blink
 

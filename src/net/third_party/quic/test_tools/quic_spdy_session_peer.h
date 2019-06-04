@@ -10,7 +10,7 @@
 #include "net/third_party/quic/core/quic_write_blocked_list.h"
 #include "net/third_party/spdy/core/spdy_framer.h"
 
-namespace net {
+namespace quic {
 
 class QuicHeadersStream;
 class QuicSpdySession;
@@ -20,6 +20,8 @@ namespace test {
 
 class QuicSpdySessionPeer {
  public:
+  QuicSpdySessionPeer() = delete;
+
   static QuicHeadersStream* GetHeadersStream(QuicSpdySession* session);
   static void SetHeadersStream(QuicSpdySession* session,
                                QuicHeadersStream* headers_stream);
@@ -54,13 +56,10 @@ class QuicSpdySessionPeer {
   static QuicStreamId GetNthServerInitiatedStreamId(
       const QuicSpdySession& session,
       int n);
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(QuicSpdySessionPeer);
 };
 
 }  // namespace test
 
-}  // namespace net
+}  // namespace quic
 
 #endif  // NET_THIRD_PARTY_QUIC_TEST_TOOLS_QUIC_SPDY_SESSION_PEER_H_

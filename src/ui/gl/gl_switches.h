@@ -14,7 +14,6 @@ namespace gl {
 
 // The GL implementation names that can be passed to --use-gl.
 GL_EXPORT extern const char kGLImplementationDesktopName[];
-GL_EXPORT extern const char kGLImplementationOSMesaName[];
 GL_EXPORT extern const char kGLImplementationAppleName[];
 GL_EXPORT extern const char kGLImplementationEGLName[];
 GL_EXPORT extern const char kGLImplementationANGLEName[];
@@ -30,10 +29,12 @@ GL_EXPORT extern const char kANGLEImplementationD3D11Name[];
 GL_EXPORT extern const char kANGLEImplementationOpenGLName[];
 GL_EXPORT extern const char kANGLEImplementationOpenGLESName[];
 GL_EXPORT extern const char kANGLEImplementationNullName[];
+GL_EXPORT extern const char kANGLEImplementationVulkanName[];
 
 GL_EXPORT extern const char kANGLEImplementationD3D11NULLName[];
 GL_EXPORT extern const char kANGLEImplementationOpenGLNULLName[];
 GL_EXPORT extern const char kANGLEImplementationOpenGLESNULLName[];
+GL_EXPORT extern const char kANGLEImplementationVulkanNULLName[];
 
 }  // namespace gl
 
@@ -45,7 +46,6 @@ GL_EXPORT extern const char kDisableGpuVsync[];
 GL_EXPORT extern const char kEnableGPUServiceLogging[];
 GL_EXPORT extern const char kEnableGPUServiceTracing[];
 GL_EXPORT extern const char kGpuNoContextLost[];
-GL_EXPORT extern const char kDisableDirectComposition[];
 
 GL_EXPORT extern const char kUseANGLE[];
 GL_EXPORT extern const char kUseGL[];
@@ -54,6 +54,7 @@ GL_EXPORT extern const char kUseGpuInTests[];
 GL_EXPORT extern const char kEnableSgiVideoSync[];
 GL_EXPORT extern const char kDisableGLExtensions[];
 GL_EXPORT extern const char kEnableSwapBuffersWithBounds[];
+GL_EXPORT extern const char kDisableDirectComposition[];
 GL_EXPORT extern const char kEnableDirectCompositionLayers[];
 GL_EXPORT extern const char kDisableDirectCompositionLayers[];
 
@@ -67,10 +68,6 @@ GL_EXPORT extern const int kGLSwitchesCopiedFromGpuProcessHostNumSwitches;
 }  // namespace switches
 
 namespace features {
-
-#if defined(OS_WIN)
-GL_EXPORT extern const base::Feature kD3DVsync;
-#endif  // defined(OS_WIN)
 
 GL_EXPORT extern const base::Feature kDirectCompositionUnderlays;
 GL_EXPORT extern const base::Feature kDirectCompositionComplexOverlays;

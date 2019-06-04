@@ -9,22 +9,24 @@
 
 namespace ui {
 
-MojoWebUIControllerBase::MojoWebUIControllerBase(content::WebUI* contents)
-    : content::WebUIController(contents) {
-  contents->SetBindings(content::BINDINGS_POLICY_WEB_UI);
+MojoWebUIController::MojoWebUIController(content::WebUI* contents,
+                                         bool enable_chrome_send)
+    : content::WebUIController(contents),
+      content::WebContentsObserver(contents->GetWebContents()) {
+  int bindings = content::BINDINGS_POLICY_MOJO_WEB_UI;
+  if (enable_chrome_send)
+    bindings |= content::BINDINGS_POLICY_WEB_UI;
+  contents->SetBindings(bindings);
 }
-
-MojoWebUIControllerBase::~MojoWebUIControllerBase() = default;
-
-MojoWebUIController::MojoWebUIController(content::WebUI* contents)
-    : MojoWebUIControllerBase(contents),
-      content::WebContentsObserver(contents->GetWebContents()) {}
 MojoWebUIController::~MojoWebUIController() = default;
 
 void MojoWebUIController::OnInterfaceRequestFromFrame(
     content::RenderFrameHost* render_frame_host,
     const std::string& interface_name,
     mojo::ScopedMessagePipeHandle* interface_pipe) {
+  if (!registry_.CanBindInterface(interface_name))
+    return;
+
   // Right now, this is expected to be called only for main frames.
   if (render_frame_host->GetParent()) {
     LOG(ERROR) << "Terminating renderer for requesting " << interface_name

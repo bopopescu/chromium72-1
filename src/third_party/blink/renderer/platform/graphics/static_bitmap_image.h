@@ -115,7 +115,7 @@ class PLATFORM_EXPORT StaticBitmapImage : public Image {
   void SetOriginClean(bool flag) { is_origin_clean_ = flag; }
   scoped_refptr<StaticBitmapImage> ConvertToColorSpace(
       sk_sp<SkColorSpace>,
-      SkTransferFunctionBehavior);
+      SkColorType = kN32_SkColorType);
 
   static bool ConvertToArrayBufferContents(
       scoped_refptr<StaticBitmapImage> src_image,
@@ -126,8 +126,8 @@ class PLATFORM_EXPORT StaticBitmapImage : public Image {
 
  protected:
   // Helper for sub-classes
-  void DrawHelper(PaintCanvas*,
-                  const PaintFlags&,
+  void DrawHelper(cc::PaintCanvas*,
+                  const cc::PaintFlags&,
                   const FloatRect&,
                   const FloatRect&,
                   ImageClampingMode,
@@ -139,6 +139,8 @@ class PLATFORM_EXPORT StaticBitmapImage : public Image {
   // have to call SetOriginClean().
   bool is_origin_clean_ = true;
 };
+
+DEFINE_IMAGE_TYPE_CASTS(StaticBitmapImage);
 
 }  // namespace blink
 

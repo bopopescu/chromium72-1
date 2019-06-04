@@ -5,7 +5,7 @@
 #include "third_party/blink/renderer/core/css/properties/longhands/direction.h"
 
 namespace blink {
-namespace CSSLonghand {
+namespace css_longhand {
 
 const CSSValue* Direction::CSSValueFromComputedStyleInternal(
     const ComputedStyle& style,
@@ -16,5 +16,11 @@ const CSSValue* Direction::CSSValueFromComputedStyleInternal(
   return CSSIdentifierValue::Create(style.Direction());
 }
 
-}  // namespace CSSLonghand
+void Direction::ApplyValue(StyleResolverState& state,
+                           const CSSValue& value) const {
+  state.Style()->SetDirection(
+      ToCSSIdentifierValue(value).ConvertTo<TextDirection>());
+}
+
+}  // namespace css_longhand
 }  // namespace blink

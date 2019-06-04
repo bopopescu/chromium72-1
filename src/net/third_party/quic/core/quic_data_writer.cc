@@ -7,14 +7,13 @@
 #include <algorithm>
 #include <limits>
 
+#include "net/third_party/quic/core/crypto/quic_random.h"
 #include "net/third_party/quic/core/quic_utils.h"
+#include "net/third_party/quic/platform/api/quic_bug_tracker.h"
 #include "net/third_party/quic/platform/api/quic_flags.h"
-#include "net/third_party/quic/platform/api/quic_logging.h"
+#include "net/third_party/quic/platform/api/quic_str_cat.h"
 
-namespace net {
-
-#define ENDPOINT \
-  (perspective_ == Perspective::IS_SERVER ? "Server: " : "Client: ")
+namespace quic {
 
 QuicDataWriter::QuicDataWriter(size_t size, char* buffer, Endianness endianness)
     : buffer_(buffer), capacity_(size), length_(0), endianness_(endianness) {}
@@ -48,17 +47,6 @@ bool QuicDataWriter::WriteUInt64(uint64_t value) {
     value = QuicEndian::HostToNet64(value);
   }
   return WriteBytes(&value, sizeof(value));
-}
-
-bool QuicDataWriter::WriteUInt8AtOffset(uint8_t value, size_t offset) {
-  if (offset > length_) {
-    return false;
-  }
-  size_t old_length = length_;
-  length_ = offset;
-  bool result = WriteBytes(&value, sizeof(value));
-  length_ = old_length;
-  return result;
 }
 
 bool QuicDataWriter::WriteBytesToUInt64(size_t num_bytes, uint64_t value) {
@@ -193,6 +181,17 @@ bool QuicDataWriter::WriteTag(uint32_t tag) {
   return WriteBytes(&tag, sizeof(tag));
 }
 
+bool QuicDataWriter::WriteRandomBytes(QuicRandom* random, size_t length) {
+  char* dest = BeginWrite(length);
+  if (!dest) {
+    return false;
+  }
+
+  random->RandBytes(dest, length);
+  length_ += length;
+  return true;
+}
+
 // Converts a uint64_t into an IETF/Quic formatted Variable Length
 // Integer. IETF Variable Length Integers have 62 significant bits, so
 // the value to write must be in the range of 0..(2^62)-1.
@@ -282,6 +281,8 @@ bool QuicDataWriter::WriteVarInt62(uint64_t value) {
 // static
 int QuicDataWriter::GetVarInt62Len(uint64_t value) {
   if ((value & kVarInt62ErrorMask) != 0) {
+    QUIC_BUG << "Attempted to encode a value, " << value
+             << ", that is too big for VarInt62";
     return 0;
   }
   if ((value & kVarInt62Mask8Bytes) != 0) {
@@ -309,4 +310,8 @@ bool QuicDataWriter::WriteStringPieceVarInt62(
   return true;
 }
 
-}  // namespace net
+QuicString QuicDataWriter::DebugString() const {
+  return QuicStrCat(" { capacity: ", capacity_, ", length: ", length_, " }");
+}
+
+}  // namespace quic

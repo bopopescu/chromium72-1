@@ -29,6 +29,8 @@ group("monochrome_apk_checker") {
 
   data = [
     "./scripts/monochrome_apk_checker.py",
-    "./scripts/monochrome_apk_checker_wrapper.py",
+    "//testing/scripts/monochrome_apk_checker_wrapper.py",
+    "//testing/scripts/common.py",
+    "//testing/xvfb.py",
   ]
 }

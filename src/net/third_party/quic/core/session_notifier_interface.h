@@ -8,7 +8,7 @@
 #include "net/third_party/quic/core/frames/quic_frame.h"
 #include "net/third_party/quic/core/quic_time.h"
 
-namespace net {
+namespace quic {
 
 // Pure virtual class to be notified when a packet containing a frame is acked
 // or lost.
@@ -35,9 +35,9 @@ class QUIC_EXPORT_PRIVATE SessionNotifierInterface {
   virtual bool IsFrameOutstanding(const QuicFrame& frame) const = 0;
 
   // Returns true if crypto stream is waiting for acks.
-  virtual bool HasPendingCryptoData() const = 0;
+  virtual bool HasUnackedCryptoData() const = 0;
 };
 
-}  // namespace net
+}  // namespace quic
 
 #endif  // NET_THIRD_PARTY_QUIC_CORE_SESSION_NOTIFIER_INTERFACE_H_

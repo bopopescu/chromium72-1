@@ -38,9 +38,7 @@
 
 namespace blink {
 
-class LocalFrame;
 class InspectedFrames;
-class StorageArea;
 
 class MODULES_EXPORT InspectorDOMStorageAgent final
     : public InspectorBaseAgent<protocol::DOMStorage::Metainfo> {
@@ -56,6 +54,7 @@ class MODULES_EXPORT InspectorDOMStorageAgent final
                                   const SecurityOrigin*);
 
  private:
+  void InnerEnable();
 
   // InspectorBaseAgent overrides.
   void Restore() override;
@@ -80,14 +79,13 @@ class MODULES_EXPORT InspectorDOMStorageAgent final
 
   protocol::Response FindStorageArea(
       std::unique_ptr<protocol::DOMStorage::StorageId>,
-      LocalFrame*&,
       StorageArea*&);
   std::unique_ptr<protocol::DOMStorage::StorageId> GetStorageId(
       const SecurityOrigin*,
       bool is_local_storage);
 
   Member<InspectedFrames> inspected_frames_;
-  bool is_enabled_;
+  InspectorAgentState::Boolean enabled_;
 };
 
 }  // namespace blink

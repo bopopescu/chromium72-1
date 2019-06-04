@@ -12,19 +12,6 @@
 
 namespace autofill {
 
-// Helper struct for PasswordFormFillData
-struct UsernamesCollectionKey {
-  UsernamesCollectionKey();
-  ~UsernamesCollectionKey();
-
-  // Defined so that this struct can be used as a key in a std::map.
-  bool operator<(const UsernamesCollectionKey& other) const;
-
-  base::string16 username;
-  base::string16 password;
-  std::string realm;
-};
-
 struct PasswordAndRealm {
   base::string16 password;
   std::string realm;
@@ -35,8 +22,17 @@ struct PasswordAndRealm {
 // form that we are filling.
 struct PasswordFormFillData {
   typedef std::map<base::string16, PasswordAndRealm> LoginCollection;
-  typedef std::map<UsernamesCollectionKey,
-                   std::vector<base::string16> > UsernamesCollection;
+
+  // If |has_renderer_ids| == true then |form_renderer_id| contains the unique
+  // renderer form id. No special values for |has_renderer_ids| == false case
+  // was introduced because the absent of ids is just temprorary situation while
+  // the old form parsing still exists.
+  // If there is no form tag then |form_renderer_id| ==
+  // FormData::kNotSetFormRendererId.
+  // Username and Password elements renderer ids are in
+  // |username_field.unique_renderer_id| and |password_field.unique_renderer_id|
+  // correspondingly.
+  uint32_t form_renderer_id;
 
   // The name of the form.
   base::string16 name;
@@ -53,6 +49,10 @@ struct PasswordFormFillData {
   FormFieldData username_field;
   FormFieldData password_field;
 
+  // True if the server-side classification believes that the field may be
+  // pre-filled with a placeholder in the value attribute.
+  bool username_may_use_prefilled_placeholder = false;
+
   // The signon realm of the preferred user/pass pair.
   std::string preferred_realm;
 
@@ -66,8 +66,10 @@ struct PasswordFormFillData {
   // and our saved representation don't match up.
   bool wait_for_username;
 
-  // True if this form is a change password form.
-  bool is_possible_change_password_form;
+  // True if renderer ids for form, username and password fields are present.
+  // TODO(https://crbug.com/831123): Remove this field when old parsing is
+  // removed and filling by renderer ids is by default.
+  bool has_renderer_ids = false;
 
   PasswordFormFillData();
   PasswordFormFillData(const PasswordFormFillData& other);

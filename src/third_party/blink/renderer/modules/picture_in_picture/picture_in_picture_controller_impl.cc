@@ -4,13 +4,17 @@
 
 #include "third_party/blink/renderer/modules/picture_in_picture/picture_in_picture_controller_impl.h"
 
+#include "third_party/blink/public/mojom/feature_policy/feature_policy.mojom-blink.h"
 #include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/dom/dom_exception.h"
 #include "third_party/blink/renderer/core/dom/events/event.h"
+#include "third_party/blink/renderer/core/events/picture_in_picture_control_event.h"
 #include "third_party/blink/renderer/core/frame/settings.h"
 #include "third_party/blink/renderer/core/html/media/html_video_element.h"
+#include "third_party/blink/renderer/modules/picture_in_picture/enter_picture_in_picture_event.h"
 #include "third_party/blink/renderer/modules/picture_in_picture/picture_in_picture_window.h"
-#include "third_party/blink/renderer/platform/feature_policy/feature_policy.h"
+#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
+#include "third_party/blink/renderer/platform/wtf/functional.h"
 
 namespace blink {
 
@@ -19,7 +23,7 @@ PictureInPictureControllerImpl::~PictureInPictureControllerImpl() = default;
 // static
 PictureInPictureControllerImpl* PictureInPictureControllerImpl::Create(
     Document& document) {
-  return new PictureInPictureControllerImpl(document);
+  return MakeGarbageCollected<PictureInPictureControllerImpl>(document);
 }
 
 // static
@@ -50,10 +54,10 @@ PictureInPictureControllerImpl::IsDocumentAllowed() const {
 
   // If document is not allowed to use the policy-controlled feature named
   // "picture-in-picture", return kDisabledByFeaturePolicy status.
-  if (IsSupportedInFeaturePolicy(
-          blink::mojom::FeaturePolicyFeature::kPictureInPicture) &&
-      !frame->IsFeatureEnabled(
-          blink::mojom::FeaturePolicyFeature::kPictureInPicture)) {
+  if (RuntimeEnabledFeatures::PictureInPictureAPIEnabled() &&
+      !GetSupplementable()->IsFeatureEnabled(
+          blink::mojom::FeaturePolicyFeature::kPictureInPicture,
+          ReportOptions::kReportOnFailure)) {
     return Status::kDisabledByFeaturePolicy;
   }
 
@@ -73,7 +77,7 @@ PictureInPictureControllerImpl::IsElementAllowed(
   if (!element.HasVideo())
     return Status::kVideoTrackNotAvailable;
 
-  if (element.FastHasAttribute(HTMLNames::disablepictureinpictureAttr))
+  if (element.FastHasAttribute(html_names::kDisablepictureinpictureAttr))
     return Status::kDisabledByAttribute;
 
   return Status::kEnabled;
@@ -82,9 +86,19 @@ PictureInPictureControllerImpl::IsElementAllowed(
 void PictureInPictureControllerImpl::EnterPictureInPicture(
     HTMLVideoElement* element,
     ScriptPromiseResolver* resolver) {
-  element->enterPictureInPicture(WTF::Bind(
-      &PictureInPictureControllerImpl::OnEnteredPictureInPicture,
-      WrapPersistent(this), WrapPersistent(element), WrapPersistent(resolver)));
+  if (picture_in_picture_element_ != element) {
+    element->enterPictureInPicture(
+        WTF::Bind(&PictureInPictureControllerImpl::OnEnteredPictureInPicture,
+                  WrapPersistent(this), WrapPersistent(element),
+                  WrapPersistent(resolver)));
+    // If the media element has already been given custom controls, this will
+    // ensure that they get set. Otherwise, this will do nothing.
+    element->SendCustomControlsToPipWindow();
+    return;
+  }
+
+  if (resolver)
+    resolver->Resolve(picture_in_picture_window_);
 }
 
 void PictureInPictureControllerImpl::OnEnteredPictureInPicture(
@@ -92,9 +106,10 @@ void PictureInPictureControllerImpl::OnEnteredPictureInPicture(
     ScriptPromiseResolver* resolver,
     const WebSize& picture_in_picture_window_size) {
   if (IsElementAllowed(*element) == Status::kDisabledByAttribute) {
-    if (resolver)
-      resolver->Reject(DOMException::Create(kInvalidStateError, ""));
-    // TODO(crbug.com/806249): Test that WMPI sends the message.
+    if (resolver) {
+      resolver->Reject(
+          DOMException::Create(DOMExceptionCode::kInvalidStateError, ""));
+    }
     element->exitPictureInPicture(base::DoNothing());
     return;
   }
@@ -103,15 +118,17 @@ void PictureInPictureControllerImpl::OnEnteredPictureInPicture(
 
   picture_in_picture_element_->OnEnteredPictureInPicture();
 
-  picture_in_picture_element_->DispatchEvent(
-      Event::CreateBubble(EventTypeNames::enterpictureinpicture));
-
   // Closes the current Picture-in-Picture window if any.
   if (picture_in_picture_window_)
     picture_in_picture_window_->OnClose();
 
-  picture_in_picture_window_ = new PictureInPictureWindow(
+  picture_in_picture_window_ = MakeGarbageCollected<PictureInPictureWindow>(
       GetSupplementable(), picture_in_picture_window_size);
+
+  picture_in_picture_element_->DispatchEvent(
+      *EnterPictureInPictureEvent::Create(
+          event_type_names::kEnterpictureinpicture,
+          WrapPersistent(picture_in_picture_window_.Get())));
 
   element->GetWebMediaPlayer()->RegisterPictureInPictureWindowResizeCallback(
       WTF::BindRepeating(&PictureInPictureWindow::OnResize,
@@ -127,6 +144,14 @@ void PictureInPictureControllerImpl::ExitPictureInPicture(
   element->exitPictureInPicture(
       WTF::Bind(&PictureInPictureControllerImpl::OnExitedPictureInPicture,
                 WrapPersistent(this), WrapPersistent(resolver)));
+}
+
+void PictureInPictureControllerImpl::SetPictureInPictureCustomControls(
+    HTMLVideoElement* element,
+    const std::vector<PictureInPictureControlInfo>& controls) {
+  element->SetPictureInPictureCustomControls(controls);
+  if (IsPictureInPictureElement(element))
+    element->SendCustomControlsToPipWindow();
 }
 
 void PictureInPictureControllerImpl::OnExitedPictureInPicture(
@@ -146,11 +171,31 @@ void PictureInPictureControllerImpl::OnExitedPictureInPicture(
 
     element->OnExitedPictureInPicture();
     element->DispatchEvent(
-        Event::CreateBubble(EventTypeNames::leavepictureinpicture));
+        *Event::CreateBubble(event_type_names::kLeavepictureinpicture));
   }
 
   if (resolver)
     resolver->Resolve();
+}
+
+void PictureInPictureControllerImpl::OnPictureInPictureControlClicked(
+    const WebString& control_id) {
+  DCHECK(GetSupplementable());
+
+  // Bail out if document is not active.
+  if (!GetSupplementable()->IsActive())
+    return;
+
+  if (RuntimeEnabledFeatures::PictureInPictureControlEnabled() &&
+      picture_in_picture_element_) {
+    picture_in_picture_element_->DispatchEvent(
+        *PictureInPictureControlEvent::Create(
+            event_type_names::kPictureinpicturecontrolclick, control_id));
+  }
+}
+
+Element* PictureInPictureControllerImpl::PictureInPictureElement() const {
+  return picture_in_picture_element_;
 }
 
 Element* PictureInPictureControllerImpl::PictureInPictureElement(
@@ -163,8 +208,7 @@ Element* PictureInPictureControllerImpl::PictureInPictureElement(
 
 bool PictureInPictureControllerImpl::IsPictureInPictureElement(
     const Element* element) const {
-  if (!element)
-    return false;
+  DCHECK(element);
   return element == picture_in_picture_element_;
 }
 

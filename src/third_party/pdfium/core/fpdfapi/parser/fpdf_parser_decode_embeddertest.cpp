@@ -37,16 +37,15 @@ TEST_F(FPDFParserDecodeEmbeddertest, FlateEncode) {
 
   for (size_t i = 0; i < FX_ArraySize(flate_encode_cases); ++i) {
     const pdfium::StrFuncTestData& data = flate_encode_cases[i];
-    unsigned char* buf = nullptr;
+    std::unique_ptr<uint8_t, FxFreeDeleter> buf;
     uint32_t buf_size;
-    EXPECT_TRUE(FlateEncode(data.input, data.input_size, &buf, &buf_size));
+    EXPECT_TRUE(FlateEncode({data.input, data.input_size}, &buf, &buf_size));
     ASSERT_TRUE(buf);
     EXPECT_EQ(data.expected_size, buf_size) << " for case " << i;
     if (data.expected_size != buf_size)
       continue;
-    EXPECT_EQ(0, memcmp(data.expected, buf, data.expected_size))
+    EXPECT_EQ(0, memcmp(data.expected, buf.get(), data.expected_size))
         << " for case " << i;
-    FX_Free(buf);
   }
 }
 
@@ -74,18 +73,17 @@ TEST_F(FPDFParserDecodeEmbeddertest, FlateDecode) {
 
   for (size_t i = 0; i < FX_ArraySize(flate_decode_cases); ++i) {
     const pdfium::DecodeTestData& data = flate_decode_cases[i];
-    unsigned char* buf = nullptr;
+    std::unique_ptr<uint8_t, FxFreeDeleter> buf;
     uint32_t buf_size;
     EXPECT_EQ(data.processed_size,
-              FlateDecode(data.input, data.input_size, &buf, &buf_size))
+              FlateDecode({data.input, data.input_size}, &buf, &buf_size))
         << " for case " << i;
     ASSERT_TRUE(buf);
     EXPECT_EQ(data.expected_size, buf_size) << " for case " << i;
     if (data.expected_size != buf_size)
       continue;
-    EXPECT_EQ(0, memcmp(data.expected, buf, data.expected_size))
+    EXPECT_EQ(0, memcmp(data.expected, buf.get(), data.expected_size))
         << " for case " << i;
-    FX_Free(buf);
   }
 }
 
@@ -121,7 +119,7 @@ TEST_F(FPDFParserDecodeEmbeddertest, Bug_455199) {
 #if _FX_PLATFORM_ == _FX_PLATFORM_APPLE_
   const char kExpectedMd5sum[] = "b90475ca64d1348c3bf5e2b77ad9187a";
 #elif _FX_PLATFORM_ == _FX_PLATFORM_WINDOWS_
-  const char kExpectedMd5sum[] = "e5a6fa28298db07484cd922f3e210c88";
+  const char kExpectedMd5sum[] = "795b7ce1626931aa06af0fa23b7d80bb";
 #else
   const char kExpectedMd5sum[] = "2baa4c0e1758deba1b9c908e1fbd04ed";
 #endif

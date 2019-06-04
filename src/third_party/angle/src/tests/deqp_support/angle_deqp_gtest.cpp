@@ -20,10 +20,23 @@
 #include "common/platform.h"
 #include "common/string_utils.h"
 #include "gpu_test_expectations_parser.h"
+#include "platform/Platform.h"
 #include "system_utils.h"
 
 namespace
 {
+bool gGlobalError = false;
+bool gExpectError = false;
+
+void HandlePlatformError(angle::PlatformMethods *platform, const char *errorMessage)
+{
+    if (!gExpectError)
+    {
+        FAIL() << errorMessage;
+    }
+    gGlobalError = true;
+}
+
 std::string DrawElementsToGoogleTestName(const std::string &dEQPName)
 {
     std::string gTestName = dEQPName.substr(dEQPName.find('.') + 1);
@@ -34,25 +47,31 @@ std::string DrawElementsToGoogleTestName(const std::string &dEQPName)
     return gTestName;
 }
 
-#if defined(ANGLE_PLATFORM_ANDROID)
-const char *gCaseListRelativePath =
-    "/../../sdcard/chromium_tests_root/third_party/deqp/src/android/cts/master/";
-#else
-const char *gCaseListRelativePath = "/../../third_party/deqp/src/android/cts/master/";
-#endif
+const char *gCaseListSearchPaths[] = {
+    "/../../third_party/deqp/src/android/cts/master/",
+    "/../../third_party/angle/third_party/deqp/src/android/cts/master/",
+    "/../../sdcard/chromium_tests_root/third_party/angle/third_party/deqp/src/android/cts/master/",
+};
 
 const char *gTestExpectationsSearchPaths[] = {
-    "/../../src/tests/deqp_support/", "/../../third_party/angle/src/tests/deqp_support/",
-    "/deqp_support/", "/../../sdcard/chromium_tests_root/third_party/angle/src/tests/deqp_support/",
+    "/../../src/tests/deqp_support/",
+    "/../../third_party/angle/src/tests/deqp_support/",
+    "/deqp_support/",
+    "/../../sdcard/chromium_tests_root/third_party/angle/src/tests/deqp_support/",
 };
 
 const char *gCaseListFiles[] = {
-    "gles2-master.txt", "gles3-master.txt", "gles31-master.txt", "egl-master.txt",
+    "gles2-master.txt",
+    "gles3-master.txt",
+    "gles31-master.txt",
+    "egl-master.txt",
 };
 
 const char *gTestExpectationsFiles[] = {
-    "deqp_gles2_test_expectations.txt", "deqp_gles3_test_expectations.txt",
-    "deqp_gles31_test_expectations.txt", "deqp_egl_test_expectations.txt",
+    "deqp_gles2_test_expectations.txt",
+    "deqp_gles3_test_expectations.txt",
+    "deqp_gles31_test_expectations.txt",
+    "deqp_egl_test_expectations.txt",
 };
 
 using APIInfo = std::pair<const char *, gpu::GPUTestConfig::API>;
@@ -89,7 +108,7 @@ const char *GetDefaultAPIName()
 #elif defined(ANGLE_PLATFORM_ANDROID)
     return "angle-gles";
 #else
-#error Unknown platform.
+#    error Unknown platform.
 #endif
 }
 
@@ -119,12 +138,16 @@ void Die()
     exit(EXIT_FAILURE);
 }
 
-Optional<std::string> FindTestExpectationsPath(const std::string &exeDir, size_t testModuleIndex)
+Optional<std::string> FindFileFromPaths(const char *paths[],
+                                        size_t numPaths,
+                                        const std::string &exeDir,
+                                        const std::string &searchFile)
 {
-    for (const char *testPath : gTestExpectationsSearchPaths)
+    for (size_t pathIndex = 0; pathIndex < numPaths; ++pathIndex)
     {
+        const char *testPath = paths[pathIndex];
         std::stringstream testExpectationsPathStr;
-        testExpectationsPathStr << exeDir << testPath << gTestExpectationsFiles[testModuleIndex];
+        testExpectationsPathStr << exeDir << testPath << searchFile;
 
         std::string path = testExpectationsPathStr.str();
         std::ifstream inFile(path.c_str());
@@ -138,6 +161,18 @@ Optional<std::string> FindTestExpectationsPath(const std::string &exeDir, size_t
     return Optional<std::string>::Invalid();
 }
 
+Optional<std::string> FindCaseListPath(const std::string &exeDir, size_t testModuleIndex)
+{
+    return FindFileFromPaths(gCaseListSearchPaths, ArraySize(gCaseListSearchPaths), exeDir,
+                             gCaseListFiles[testModuleIndex]);
+}
+
+Optional<std::string> FindTestExpectationsPath(const std::string &exeDir, size_t testModuleIndex)
+{
+    return FindFileFromPaths(gTestExpectationsSearchPaths, ArraySize(gTestExpectationsSearchPaths),
+                             exeDir, gTestExpectationsFiles[testModuleIndex]);
+}
+
 class dEQPCaseList
 {
   public:
@@ -147,8 +182,7 @@ class dEQPCaseList
     {
         CaseInfo(const std::string &dEQPName, const std::string &gTestName, int expectation)
             : mDEQPName(dEQPName), mGTestName(gTestName), mExpectation(expectation)
-        {
-        }
+        {}
 
         std::string mDEQPName;
         std::string mGTestName;
@@ -180,8 +214,7 @@ class dEQPCaseList
 
 dEQPCaseList::dEQPCaseList(size_t testModuleIndex)
     : mTestModuleIndex(testModuleIndex), mInitialized(false)
-{
-}
+{}
 
 void dEQPCaseList::initialize()
 {
@@ -194,9 +227,12 @@ void dEQPCaseList::initialize()
 
     std::string exeDir = angle::GetExecutableDirectory();
 
-    std::stringstream caseListPathStr;
-    caseListPathStr << exeDir << gCaseListRelativePath << gCaseListFiles[mTestModuleIndex];
-    std::string caseListPath = caseListPathStr.str();
+    Optional<std::string> caseListPath = FindCaseListPath(exeDir, mTestModuleIndex);
+    if (!caseListPath.valid())
+    {
+        std::cerr << "Failed to find case list file." << std::endl;
+        Die();
+    }
 
     Optional<std::string> testExpectationsPath = FindTestExpectationsPath(exeDir, mTestModuleIndex);
     if (!testExpectationsPath.valid())
@@ -233,7 +269,7 @@ void dEQPCaseList::initialize()
         mTestConfig.set_api(GetDefaultAPIInfo()->second);
     }
 
-    std::ifstream caseListStream(caseListPath);
+    std::ifstream caseListStream(caseListPath.value());
     if (caseListStream.fail())
     {
         std::cerr << "Failed to load the case list." << std::endl;
@@ -314,9 +350,17 @@ class dEQPTest : public testing::TestWithParam<size_t>
         const auto &caseInfo = GetCaseList().getCaseInfo(GetParam());
         std::cout << caseInfo.mDEQPName << std::endl;
 
+        gExpectError      = (caseInfo.mExpectation != gpu::GPUTestExpectationsParser::kGpuTestPass);
         TestResult result = deqp_libtester_run(caseInfo.mDEQPName.c_str());
 
         bool testPassed = TestPassed(result);
+
+        // Check the global error flag for unexpected platform errors.
+        if (gGlobalError)
+        {
+            testPassed   = false;
+            gGlobalError = false;
+        }
 
         if (caseInfo.mExpectation == gpu::GPUTestExpectationsParser::kGpuTestPass)
         {
@@ -379,7 +423,8 @@ void dEQPTest<TestModuleIndex>::SetUpTestCase()
     argv.push_back(configArgString.c_str());
 
     // Init the platform.
-    if (!deqp_libtester_init_platform(static_cast<int>(argv.size()), argv.data()))
+    if (!deqp_libtester_init_platform(static_cast<int>(argv.size()), argv.data(),
+                                      reinterpret_cast<void *>(&HandlePlatformError)))
     {
         std::cout << "Aborting test due to dEQP initialization error." << std::endl;
         exit(1);
@@ -410,8 +455,7 @@ void dEQPTest<TestModuleIndex>::TearDownTestCase()
 
 #define ANGLE_INSTANTIATE_DEQP_TEST_CASE(API, N)                             \
     class dEQP : public dEQPTest<N>                                          \
-    {                                                                        \
-    };                                                                       \
+    {};                                                                      \
     TEST_P(dEQP, API) { runTest(); }                                         \
                                                                              \
     INSTANTIATE_TEST_CASE_P(, dEQP, dEQP::GetTestingRange(),                 \

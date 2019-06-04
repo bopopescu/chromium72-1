@@ -39,6 +39,7 @@
 #include "third_party/blink/renderer/core/layout/line/line_width.h"
 #include "third_party/blink/renderer/core/layout/line/trailing_objects.h"
 #include "third_party/blink/renderer/core/layout/line/word_measurement.h"
+#include "third_party/blink/renderer/core/layout/logical_values.h"
 #include "third_party/blink/renderer/core/layout/text_run_constructor.h"
 #include "third_party/blink/renderer/core/paint/paint_layer.h"
 #include "third_party/blink/renderer/platform/fonts/character_range.h"
@@ -207,6 +208,8 @@ class BreakingContext {
   bool at_start_;
   bool ignoring_spaces_;
   bool current_character_is_space_;
+  bool single_leading_space_;
+  unsigned current_start_offset_;  // initial offset for the current text
   bool applied_start_width_;
   bool include_end_width_;
   bool auto_wrap_;
@@ -254,8 +257,8 @@ inline bool RequiresLineBoxForContent(LineLayoutInline flow,
   if (flow.GetDocument().InNoQuirksMode() &&
       (flow.Style(line_info.IsFirstLine())->LineHeight() !=
            parent.Style(line_info.IsFirstLine())->LineHeight() ||
-       flow.Style()->VerticalAlign() != parent.Style()->VerticalAlign() ||
-       !parent.Style()->HasIdenticalAscentDescentAndLineGap(flow.StyleRef())))
+       flow.StyleRef().VerticalAlign() != parent.StyleRef().VerticalAlign() ||
+       !parent.StyleRef().HasIdenticalAscentDescentAndLineGap(flow.StyleRef())))
     return true;
   return false;
 }
@@ -356,12 +359,13 @@ inline void BreakingContext::InitializeForCurrentObject() {
           current_.GetLineLayoutItem().Parent()))
     include_end_width_ = true;
 
-  curr_ws_ = current_.GetLineLayoutItem().IsLayoutInline()
-                 ? current_style_->WhiteSpace()
-                 : current_.GetLineLayoutItem().Parent().Style()->WhiteSpace();
+  curr_ws_ =
+      current_.GetLineLayoutItem().IsLayoutInline()
+          ? current_style_->WhiteSpace()
+          : current_.GetLineLayoutItem().Parent().StyleRef().WhiteSpace();
   last_ws_ = last_object_.IsLayoutInline()
-                 ? last_object_.Style()->WhiteSpace()
-                 : last_object_.Parent().Style()->WhiteSpace();
+                 ? last_object_.StyleRef().WhiteSpace()
+                 : last_object_.Parent().StyleRef().WhiteSpace();
 
   bool is_svg_text = current_.GetLineLayoutItem().IsSVGInlineText();
   auto_wrap_ = !is_svg_text && ComputedStyle::AutoWrap(curr_ws_);
@@ -376,6 +380,12 @@ inline void BreakingContext::InitializeForCurrentObject() {
   // pre-wrap">text <span><span> text</span>' does not collapse.
   if (collapse_white_space_ && !ComputedStyle::CollapseWhiteSpace(last_ws_))
     current_character_is_space_ = false;
+
+  // Since current_ iterates all along the text's length, we need to store the
+  // initial offset of the current handle text so that we can then identify
+  // a single leading white-space as potential breaking opportunities.
+  current_start_offset_ = current_.Offset();
+  single_leading_space_ = false;
 }
 
 inline void BreakingContext::Increment() {
@@ -412,7 +422,7 @@ inline void BreakingContext::HandleBR(EClear& clear) {
       EnsureLineBoxInsideIgnoredSpaces(&line_midpoint_state_, br);
 
     if (!line_info_.IsEmpty())
-      clear = current_style_->Clear();
+      clear = ResolvedClear(*current_style_, block_.StyleRef());
   }
   at_end_ = true;
 }
@@ -481,7 +491,7 @@ inline void BreakingContext::HandleOutOfFlowPositioned(
   // If our original display wasn't an inline type, then we can
   // go ahead and determine our static inline position now.
   LineLayoutBox box(current_.GetLineLayoutItem());
-  bool is_inline_type = box.Style()->IsOriginalDisplayInlineType();
+  bool is_inline_type = box.StyleRef().IsOriginalDisplayInlineType();
   if (!is_inline_type) {
     block_.SetStaticInlinePositionForChild(box, block_.StartOffsetForContent());
   } else {
@@ -573,7 +583,7 @@ inline bool ShouldSkipWhitespaceAfterStartObject(
       LineLayoutText(next).TextLength() > 0) {
     LineLayoutText next_text(next);
     UChar next_char = next_text.CharacterAt(0);
-    if (next_text.Style()->IsCollapsibleWhiteSpace(next_char)) {
+    if (next_text.StyleRef().IsCollapsibleWhiteSpace(next_char)) {
       line_midpoint_state.StartIgnoringSpaces(InlineIterator(nullptr, o, 0));
       return true;
     }
@@ -694,17 +704,17 @@ ALWAYS_INLINE void BreakingContext::SetCurrentCharacterIsSpace(UChar c) {
 }
 
 inline float FirstPositiveWidth(const WordMeasurements& word_measurements) {
-  for (size_t i = 0; i < word_measurements.size(); ++i) {
-    if (word_measurements[i].width > 0)
-      return word_measurements[i].width;
+  for (const WordMeasurement& word_measurement : word_measurements) {
+    if (word_measurement.width > 0)
+      return word_measurement.width;
   }
   return 0;
 }
 
 ALWAYS_INLINE TextDirection
-TextDirectionFromUnicode(WTF::Unicode::CharDirection direction) {
-  return direction == WTF::Unicode::kRightToLeft ||
-                 direction == WTF::Unicode::kRightToLeftArabic
+TextDirectionFromUnicode(WTF::unicode::CharDirection direction) {
+  return direction == WTF::unicode::kRightToLeft ||
+                 direction == WTF::unicode::kRightToLeftArabic
              ? TextDirection::kRtl
              : TextDirection::kLtr;
 }
@@ -718,12 +728,14 @@ ALWAYS_INLINE float TextWidth(
     bool collapse_white_space,
     HashSet<const SimpleFontData*>* fallback_fonts = nullptr,
     FloatRect* glyph_bounds = nullptr) {
-  if ((!from && len == text.TextLength()) || text.Style()->HasTextCombine())
+  if ((!from && len == text.TextLength()) || text.StyleRef().HasTextCombine()) {
     return text.Width(from, len, font, LayoutUnit(x_pos),
-                      text.Style()->Direction(), fallback_fonts, glyph_bounds);
+                      text.StyleRef().Direction(), fallback_fonts,
+                      glyph_bounds);
+  }
 
   TextRun run = ConstructTextRun(font, text, from, len, text.StyleRef());
-  run.SetTabSize(!collapse_white_space, text.Style()->GetTabSize());
+  run.SetTabSize(!collapse_white_space, text.StyleRef().GetTabSize());
   run.SetXPos(x_pos);
   return font.Width(run, fallback_fonts, glyph_bounds);
 }
@@ -832,7 +844,8 @@ ALWAYS_INLINE bool BreakingContext::RewindToFirstMidWordBreak(
                           collapse_white_space_);
   // If the first break opportunity doesn't fit, and if there's a break
   // opportunity in previous runs, break at the opportunity.
-  if (!width_.FitsOnLine(width) && width_.CommittedWidth())
+  if (!width_.FitsOnLine(width) &&
+      (width_.CommittedWidth() || single_leading_space_))
     return false;
   return RewindToMidWordBreak(word_measurement, end, width);
 }
@@ -866,7 +879,8 @@ ALWAYS_INLINE bool BreakingContext::RewindToMidWordBreak(
   x_pos_to_break += LayoutUnit::Epsilon();
   if (run.Rtl())
     x_pos_to_break = word_measurement.width - x_pos_to_break;
-  len = font.OffsetForPosition(run, x_pos_to_break, false);
+  len = font.OffsetForPosition(run, x_pos_to_break, OnlyFullGlyphs,
+                               DontBreakGlyphs);
   int end = start + len;
   if (len) {
     end = break_iterator.PreviousBreakOpportunity(end, start);
@@ -900,14 +914,17 @@ ALWAYS_INLINE bool BreakingContext::Hyphenate(
   float max_prefix_width = width_.AvailableWidth() - width_.CurrentWidth() -
                            hyphen_width - last_space_word_spacing;
 
-  if (max_prefix_width <= Hyphenation::MinimumPrefixWidth(font))
+  if (max_prefix_width <=
+      font.GetFontDescription().MinimumPrefixWidthToHyphenate()) {
     return false;
+  }
 
   TextRun run = ConstructTextRun(font, text, start, len, style);
   run.SetTabSize(!collapse_white_space_, style.GetTabSize());
   run.SetXPos(width_.CurrentWidth());
-  unsigned max_prefix_length =
-      font.OffsetForPosition(run, max_prefix_width, false);
+  // TODO(fserb): Check if this need to be BreakGlyphs.
+  unsigned max_prefix_length = font.OffsetForPosition(
+      run, max_prefix_width, OnlyFullGlyphs, DontBreakGlyphs);
   if (max_prefix_length < Hyphenation::kMinimumPrefixLength)
     return false;
 
@@ -1035,6 +1052,15 @@ inline bool BreakingContext::HandleText(WordMeasurements& word_measurements,
     bool previous_character_is_space = current_character_is_space_;
     UChar c = current_.Current();
     SetCurrentCharacterIsSpace(c);
+
+    // Auto-wrapping text should not wrap in the middle of a word if it has
+    // an opportunity to break at a leading white-space.
+    // TODO (jfernandez): This change is questionable, but it's required to
+    // achieve the expected behavior for 'break-word' (cases 2.1 and 2.2), while
+    // keeping current behavior for 'break-all' (cases 4.1 and 4.2)
+    // https://github.com/w3c/csswg-drafts/issues/2907
+    if (single_leading_space_)
+      can_break_mid_word = break_all;
 
     if (!collapse_white_space_ || !current_character_is_space_) {
       line_info_.SetEmpty(false);
@@ -1339,9 +1365,12 @@ inline void BreakingContext::PrepareForNextCharacter(
     start_of_ignored_spaces_.SetOffset(current_.Offset());
   }
   if (!current_character_is_space_ && previous_character_is_space) {
-    if (auto_wrap_ && current_style_->BreakOnlyAfterWhiteSpace())
+    if (auto_wrap_ && current_style_->BreakOnlyAfterWhiteSpace()) {
       line_break_.MoveTo(current_.GetLineLayoutItem(), current_.Offset(),
                          current_.NextBreakablePosition());
+      if (current_.Offset() == current_start_offset_ + 1)
+        single_leading_space_ = true;
+    }
   }
   if (collapse_white_space_ && current_character_is_space_ && !ignoring_spaces_)
     trailing_objects_.SetTrailingWhitespace(
@@ -1403,7 +1432,7 @@ inline bool BreakingContext::TrailingSpaceExceedsAvailableWidth(
   // If we break only after white-space, consider the current character
   // as candidate width for this line.
   if (width_.FitsOnLine() && current_character_is_space_ &&
-      current_style_->BreakOnlyAfterWhiteSpace() && !can_break_mid_word) {
+      current_style_->BreakOnlyAfterWhiteSpace()) {
     float char_width = TextWidth(layout_text, current_.Offset(), 1, font,
                                  width_.CurrentWidth(), collapse_white_space_,
                                  &word_measurement.fallback_fonts,
@@ -1502,7 +1531,7 @@ inline void BreakingContext::CommitAndUpdateLineBreakIfNeeded() {
     check_for_break = true;
   } else if (next_object_ && current_.GetLineLayoutItem().IsText() &&
              next_object_.IsText() && !next_object_.IsBR() &&
-             (auto_wrap_ || next_object_.Style()->AutoWrap())) {
+             (auto_wrap_ || next_object_.StyleRef().AutoWrap())) {
     if (auto_wrap_ && current_character_is_space_) {
       check_for_break = true;
     } else {

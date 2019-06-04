@@ -8,7 +8,7 @@
 #include <stddef.h>
 
 #include "base/macros.h"
-#include "base/sys_info.h"
+#include "base/system/sys_info.h"
 
 namespace {
 
@@ -35,6 +35,11 @@ bool IsRunningOnIOS10OrLater() {
 
 bool IsRunningOnIOS11OrLater() {
   static const bool is_running_on_or_later = IsRunningOnOrLater(11, 0, 0);
+  return is_running_on_or_later;
+}
+
+bool IsRunningOnIOS12OrLater() {
+  static const bool is_running_on_or_later = IsRunningOnOrLater(12, 0, 0);
   return is_running_on_or_later;
 }
 

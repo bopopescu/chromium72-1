@@ -21,8 +21,8 @@
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
-#include "base/sys_info.h"
-#include "base/task_scheduler/post_task.h"
+#include "base/system/sys_info.h"
+#include "base/task/post_task.h"
 #include "base/threading/thread.h"
 #include "base/threading/thread_restrictions.h"
 #include "base/threading/thread_task_runner_handle.h"
@@ -36,6 +36,7 @@
 #include "chrome/common/pref_names.h"
 #include "components/prefs/pref_service.h"
 #include "components/user_manager/user_manager.h"
+#include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/notification_service.h"
@@ -218,7 +219,7 @@ bool BootTimesRecorder::Stats::UptimeDouble(double* result) const {
 
 void BootTimesRecorder::Stats::RecordStats(const std::string& name) const {
   base::PostTaskWithTraits(
-      FROM_HERE, {base::MayBlock(), base::TaskPriority::BACKGROUND},
+      FROM_HERE, {base::MayBlock(), base::TaskPriority::BEST_EFFORT},
       base::Bind(&BootTimesRecorder::Stats::RecordStatsAsync,
                  base::Owned(new Stats(*this)), name));
 }
@@ -227,7 +228,7 @@ void BootTimesRecorder::Stats::RecordStatsWithCallback(
     const std::string& name,
     const base::Closure& callback) const {
   base::PostTaskWithTraitsAndReply(
-      FROM_HERE, {base::MayBlock(), base::TaskPriority::BACKGROUND},
+      FROM_HERE, {base::MayBlock(), base::TaskPriority::BEST_EFFORT},
       base::Bind(&BootTimesRecorder::Stats::RecordStatsAsync,
                  base::Owned(new Stats(*this)), name),
       callback);
@@ -346,7 +347,7 @@ void BootTimesRecorder::LoginDone(bool is_user_new) {
   }
   // Don't swamp the background thread right away.
   base::PostDelayedTaskWithTraits(
-      FROM_HERE, {base::MayBlock(), base::TaskPriority::BACKGROUND},
+      FROM_HERE, {base::MayBlock(), base::TaskPriority::BEST_EFFORT},
       base::BindOnce(&WriteTimes, kLoginTimes,
                      (is_user_new ? kUmaLoginNewUser : kUmaLogin),
                      kUmaLoginPrefix, login_time_markers_),
@@ -470,11 +471,9 @@ void BootTimesRecorder::AddMarker(std::vector<TimeMarker>* vector,
     // Add the marker on the UI thread.
     // Note that it's safe to use an unretained pointer to the vector because
     // BootTimesRecorder's lifetime exceeds that of the UI thread message loop.
-    BrowserThread::PostTask(
-        BrowserThread::UI, FROM_HERE,
-        base::Bind(&BootTimesRecorder::AddMarker,
-                   base::Unretained(vector),
-                   marker));
+    base::PostTaskWithTraits(FROM_HERE, {BrowserThread::UI},
+                             base::Bind(&BootTimesRecorder::AddMarker,
+                                        base::Unretained(vector), marker));
   }
 }
 

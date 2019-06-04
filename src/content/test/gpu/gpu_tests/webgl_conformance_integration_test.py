@@ -72,6 +72,7 @@ class WebGLConformanceIntegrationTest(gpu_integration_test.GpuIntegrationTest):
 
   _webgl_version = None
   _is_asan = False
+  _crash_count = 0
 
   @classmethod
   def Name(cls):
@@ -79,6 +80,7 @@ class WebGLConformanceIntegrationTest(gpu_integration_test.GpuIntegrationTest):
 
   @classmethod
   def AddCommandlineArgs(cls, parser):
+    super(WebGLConformanceIntegrationTest, cls).AddCommandlineArgs(parser)
     parser.add_option('--webgl-conformance-version',
         help='Version of the WebGL conformance tests to run.',
         default='1.0.4')
@@ -142,6 +144,7 @@ class WebGLConformanceIntegrationTest(gpu_integration_test.GpuIntegrationTest):
         'EXT_shader_texture_lod',
         'EXT_sRGB',
         'EXT_texture_filter_anisotropic',
+        'KHR_parallel_shader_compile',
         'OES_element_index_uint',
         'OES_standard_derivatives',
         'OES_texture_float',
@@ -166,6 +169,7 @@ class WebGLConformanceIntegrationTest(gpu_integration_test.GpuIntegrationTest):
         'EXT_color_buffer_float',
         'EXT_disjoint_timer_query_webgl2',
         'EXT_texture_filter_anisotropic',
+        'KHR_parallel_shader_compile',
         'OES_texture_float_linear',
         'WEBGL_compressed_texture_astc',
         'WEBGL_compressed_texture_etc',
@@ -176,6 +180,7 @@ class WebGLConformanceIntegrationTest(gpu_integration_test.GpuIntegrationTest):
         'WEBGL_debug_renderer_info',
         'WEBGL_debug_shaders',
         'WEBGL_lose_context',
+        'WEBGL_multiview',
       ]
 
   def RunActualGpuTest(self, test_path, *args):
@@ -185,13 +190,19 @@ class WebGLConformanceIntegrationTest(gpu_integration_test.GpuIntegrationTest):
     getattr(self, test_name)(test_path, *args[1:])
 
   def _NavigateTo(self, test_path, harness_script):
+    self._crash_count = self.browser.GetSystemInfo().gpu \
+        .aux_attributes['process_crash_count']
     url = self.UrlOfStaticFilePath(test_path)
     self.tab.Navigate(url, script_to_evaluate_on_commit=harness_script)
 
   def _CheckTestCompletion(self):
     self.tab.action_runner.WaitForJavaScriptCondition(
         'webglTestHarness._finished', timeout=self._GetTestTimeout())
-    if not self._DidWebGLTestSucceed(self.tab):
+    if self._crash_count != self.browser.GetSystemInfo().gpu \
+        .aux_attributes['process_crash_count']:
+      self.fail('GPU process crashed during test.\n' +
+                self._WebGLTestMessages(self.tab))
+    elif not self._DidWebGLTestSucceed(self.tab):
       self.fail(self._WebGLTestMessages(self.tab))
 
   def _RunConformanceTest(self, test_path, *args):
@@ -253,7 +264,10 @@ class WebGLConformanceIntegrationTest(gpu_integration_test.GpuIntegrationTest):
       '--disable-gpu-watchdog',
       # TODO(http://crbug.com/832952): Remove this when WebXR spec is more
       # stable and setCompatibleXRDevice is part of the conformance test.
-      '--disable-blink-features=WebXR'
+      '--disable-blink-features=WebXR',
+      # TODO(crbug.com/830901): see whether disabling this feature
+      # makes the WebGL video upload tests reliable again.
+      '--disable-features=UseSurfaceLayerForVideo',
     ]
     # Note that the overriding of the default --js-flags probably
     # won't interact well with RestartBrowserIfNecessaryWithArgs, but

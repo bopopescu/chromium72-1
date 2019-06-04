@@ -26,9 +26,9 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_LAYOUT_LAYOUT_SCROLLBAR_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_LAYOUT_LAYOUT_SCROLLBAR_H_
 
+#include "third_party/blink/renderer/core/scroll/scrollbar.h"
 #include "third_party/blink/renderer/core/style/computed_style_constants.h"
 #include "third_party/blink/renderer/platform/heap/handle.h"
-#include "third_party/blink/renderer/platform/scroll/scrollbar.h"
 #include "third_party/blink/renderer/platform/wtf/hash_map.h"
 
 namespace blink {
@@ -36,6 +36,7 @@ namespace blink {
 class ComputedStyle;
 class Element;
 class LayoutBox;
+class LayoutObject;
 class LayoutScrollbarPart;
 
 class LayoutScrollbar final : public Scrollbar {
@@ -43,12 +44,20 @@ class LayoutScrollbar final : public Scrollbar {
   static Scrollbar* CreateCustomScrollbar(ScrollableArea*,
                                           ScrollbarOrientation,
                                           Element*);
+
+  LayoutScrollbar(ScrollableArea*, ScrollbarOrientation, Element*);
   ~LayoutScrollbar() override;
 
-  // The LayoutBox that supplies our style information. If the scrollbar is for
-  // a document, this is either the <body> or <html> element. Otherwise, it is
-  // the element that owns our PaintLayerScrollableArea.
-  LayoutBox* StyleSource() const;
+  // Return the thickness that a custom scrollbar would have, without actually
+  // constructing the scrollbar.
+  static int HypotheticalScrollbarThickness(ScrollbarOrientation,
+                                            const LayoutBox& enclosing_box,
+                                            const LayoutObject& style_source);
+
+  // The Element that supplies our style information. If the scrollbar is
+  // for a document, this is either the <body> or <html> element. Otherwise, it
+  // is the element that owns our PaintLayerScrollableArea.
+  Element* StyleSource() const { return style_source_.Get(); }
 
   IntRect ButtonRect(ScrollbarPart) const;
   IntRect TrackRect(int start_length, int end_length) const;
@@ -70,9 +79,6 @@ class LayoutScrollbar final : public Scrollbar {
   void SetVisualRect(const LayoutRect&) final;
 
   void Trace(blink::Visitor*) override;
-
- protected:
-  LayoutScrollbar(ScrollableArea*, ScrollbarOrientation, Element*);
 
  private:
   friend class Scrollbar;

@@ -88,6 +88,7 @@ class ChromeAppListModelUpdater : public AppListModelUpdater {
   void ContextMenuItemSelected(const std::string& id,
                                int command_id,
                                int event_flags) override;
+  syncer::StringOrdinal GetFirstAvailablePosition() const override;
 
   // Methods for AppListSyncableService:
   void AddItemToOemFolder(
@@ -107,6 +108,9 @@ class ChromeAppListModelUpdater : public AppListModelUpdater {
   void OnFolderCreated(ash::mojom::AppListItemMetadataPtr item) override;
   void OnFolderDeleted(ash::mojom::AppListItemMetadataPtr item) override;
   void OnItemUpdated(ash::mojom::AppListItemMetadataPtr item) override;
+  void OnPageBreakItemAdded(const std::string& id,
+                            const syncer::StringOrdinal& position) override;
+  void OnPageBreakItemDeleted(const std::string& id) override;
 
   void SetDelegate(AppListModelUpdaterDelegate* delegate) override;
 

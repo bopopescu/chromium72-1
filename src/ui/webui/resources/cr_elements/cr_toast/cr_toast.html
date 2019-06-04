@@ -1,4 +1,4 @@
-<link rel="import" href="chrome://resources/html/polymer.html">
+<link rel="import" href="../../html/polymer.html">
 
 <link rel="import" href="chrome://resources/polymer/v1_0/paper-styles/color.html">
 
@@ -23,7 +23,6 @@
         transform: translateY(100px);
         transition: opacity 300ms, transform 300ms, visibility 300ms;
         visibility: hidden;
-        white-space: nowrap;
         z-index: 1;
       }
 
@@ -34,11 +33,16 @@
       }
 
       :host ::slotted(paper-button) {
-        -webkit-margin-start: 32px;
-        border: none;
-        color: var(--google-blue-300);
-        min-width: 52px;
-        padding: 8px;
+        background-color: transparent !important;
+        border: none !important;
+        color: var(--google-blue-300) !important;
+        margin-inline-start: 32px !important;
+        min-width: 52px !important;
+        padding: 8px !important;
+      }
+
+      :host ::slotted(paper-button:hover) {
+        background-color: transparent !important;
       }
     </style>
     <slot></slot>

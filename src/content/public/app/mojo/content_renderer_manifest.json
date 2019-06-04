@@ -5,6 +5,8 @@
     "service_manager:connector": {
       "provides": {
         "browser": [
+          "blink.mojom.CodeCacheHost",
+          "blink.mojom.CrashMemoryMetricsReporter",
           "blink.mojom.LeakDetector",
           "blink.mojom.OomIntervention",
           "blink.mojom.WebDatabase",
@@ -30,14 +32,16 @@
         "content_browser": [
           "dwrite_font_proxy",
           "field_trials",
-          "font_loader",
-          "renderer"
+          "renderer",
+          "sandbox_support"
         ],
+        "font_service": [ "font_service" ],
         "metrics": [ "url_keyed_metrics" ],
         "device": [
           "device:power_monitor",
           "device:screen_orientation",
-          "device:time_zone_monitor"
+          "device:time_zone_monitor",
+          "device:wake_lock"
         ],
         "ui": [
           "discardable_memory",
@@ -55,10 +59,6 @@
           "blink.mojom.MediaDevicesListener",
           "blink.mojom.TextSuggestionBackend",
           "content.mojom.ImageDownloader",
-
-          // Neva Media Player Controler.
-          "content::mojom::MediaSuppressor",
-
           "content.mojom.FrameInputHandler",
           "content.mojom.FullscreenVideoElementHandler",
           "content.mojom.MediaStreamDeviceObserver",

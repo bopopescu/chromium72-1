@@ -16,7 +16,7 @@ bool ParsePath(const char* input, String& output) {
   String input_string(input);
   SVGPathStringSource source(input_string);
   SVGPathStringBuilder builder;
-  bool had_error = SVGPathParser::ParsePath(source, builder);
+  bool had_error = svg_path_parser::ParsePath(source, builder);
   output = builder.Result();
   // Coerce a null result to empty.
   if (output.IsNull())
@@ -138,6 +138,19 @@ TEST(SVGPathParserTest, Simple) {
   MALFORMED("M1,1A2,3,4,0,0,5,6 7", "M 1 1 A 2 3 4 0 0 5 6");
   VALID("M1,1A2,3,4,0,0,5,6 7,8,9,0,0,10,11",
         "M 1 1 A 2 3 4 0 0 5 6 A 7 8 9 0 0 10 11");
+
+  // Scientific notation.
+  VALID("M1e2,10e1", "M 100 100");
+  VALID("M100e0,100", "M 100 100");
+  VALID("M1e+2,1000e-1", "M 100 100");
+  VALID("M1e2.5", "M 100 0.5");
+  VALID("M0.00000001e10 100", "M 100 100");
+  VALID("M1e-46,50 h1e38", "M 0 50 h 1.00000e+38");
+  VALID("M0,50 h1e-123456789123456789123", "M 0 50 h 0");
+  MALFORMED("M0,50 h1e39", "M 0 50");
+  MALFORMED("M0,50 h1e123456789123456789123", "M 0 50");
+  MALFORMED("M0,50 h1e-.5", "M 0 50");
+  MALFORMED("M0,50 h1e+.5", "M 0 50");
 }
 
 #undef MALFORMED
@@ -147,7 +160,7 @@ SVGParsingError ParsePathWithError(const char* input) {
   String input_string(input);
   SVGPathStringSource source(input_string);
   SVGPathStringBuilder builder;
-  SVGPathParser::ParsePath(source, builder);
+  svg_path_parser::ParsePath(source, builder);
   return source.ParseError();
 }
 

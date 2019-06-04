@@ -3,10 +3,12 @@
 // found in the LICENSE file.
 
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/blink/public/web/web_find_options.h"
+#include "third_party/blink/public/mojom/frame/find_in_page.mojom-blink.h"
 #include "third_party/blink/public/web/web_script_source.h"
 #include "third_party/blink/renderer/bindings/core/v8/scroll_into_view_options_or_boolean.h"
 #include "third_party/blink/renderer/core/dom/element.h"
+#include "third_party/blink/renderer/core/frame/find_in_page.h"
+#include "third_party/blink/renderer/core/frame/local_dom_window.h"
 #include "third_party/blink/renderer/core/frame/scroll_into_view_options.h"
 #include "third_party/blink/renderer/core/frame/scroll_to_options.h"
 #include "third_party/blink/renderer/core/frame/web_local_frame_impl.h"
@@ -34,8 +36,8 @@ TEST_F(ScrollIntoViewTest, InstantScroll) {
   ASSERT_EQ(Window().scrollY(), 0);
   Element* content = GetDocument().getElementById("content");
   ScrollIntoViewOptionsOrBoolean arg;
-  ScrollIntoViewOptions options;
-  options.setBlock("start");
+  ScrollIntoViewOptions* options = ScrollIntoViewOptions::Create();
+  options->setBlock("start");
   arg.SetScrollIntoViewOptions(options);
   content->scrollIntoView(arg);
 
@@ -151,9 +153,9 @@ TEST_F(ScrollIntoViewTest, SmoothScroll) {
 
   Element* content = GetDocument().getElementById("content");
   ScrollIntoViewOptionsOrBoolean arg;
-  ScrollIntoViewOptions options;
-  options.setBlock("start");
-  options.setBehavior("smooth");
+  ScrollIntoViewOptions* options = ScrollIntoViewOptions::Create();
+  options->setBlock("start");
+  options->setBehavior("smooth");
   arg.SetScrollIntoViewOptions(options);
   Compositor().BeginFrame();
   ASSERT_EQ(Window().scrollY(), 0);
@@ -186,9 +188,9 @@ TEST_F(ScrollIntoViewTest, NestedContainer) {
   Element* container = GetDocument().getElementById("container");
   Element* content = GetDocument().getElementById("content");
   ScrollIntoViewOptionsOrBoolean arg;
-  ScrollIntoViewOptions options;
-  options.setBlock("start");
-  options.setBehavior("smooth");
+  ScrollIntoViewOptions* options = ScrollIntoViewOptions::Create();
+  options->setBlock("start");
+  options->setBehavior("smooth");
   arg.SetScrollIntoViewOptions(options);
   Compositor().BeginFrame();
   ASSERT_EQ(Window().scrollY(), 0);
@@ -239,9 +241,9 @@ TEST_F(ScrollIntoViewTest, NewScrollIntoViewAbortsCurrentAnimation) {
   Element* content1 = GetDocument().getElementById("content1");
   Element* content2 = GetDocument().getElementById("content2");
   ScrollIntoViewOptionsOrBoolean arg;
-  ScrollIntoViewOptions options;
-  options.setBlock("start");
-  options.setBehavior("smooth");
+  ScrollIntoViewOptions* options = ScrollIntoViewOptions::Create();
+  options->setBlock("start");
+  options->setBehavior("smooth");
   arg.SetScrollIntoViewOptions(options);
 
   Compositor().BeginFrame();
@@ -299,9 +301,9 @@ TEST_F(ScrollIntoViewTest, ScrollWindowAbortsCurrentAnimation) {
   Element* container = GetDocument().getElementById("container");
   Element* content = GetDocument().getElementById("content");
   ScrollIntoViewOptionsOrBoolean arg;
-  ScrollIntoViewOptions options;
-  options.setBlock("start");
-  options.setBehavior("smooth");
+  ScrollIntoViewOptions* options = ScrollIntoViewOptions::Create();
+  options->setBlock("start");
+  options->setBehavior("smooth");
   arg.SetScrollIntoViewOptions(options);
   Compositor().BeginFrame();
   ASSERT_EQ(Window().scrollY(), 0);
@@ -315,10 +317,10 @@ TEST_F(ScrollIntoViewTest, ScrollWindowAbortsCurrentAnimation) {
   ASSERT_EQ(Window().scrollY(), 299);
   ASSERT_EQ(container->scrollTop(), 0);
 
-  ScrollToOptions window_option;
-  window_option.setLeft(0);
-  window_option.setTop(0);
-  window_option.setBehavior("smooth");
+  ScrollToOptions* window_option = ScrollToOptions::Create();
+  window_option->setLeft(0);
+  window_option->setTop(0);
+  window_option->setBehavior("smooth");
   Window().scrollTo(window_option);
   Compositor().BeginFrame();  // update run_state_.
   Compositor().BeginFrame();  // Set start_time = now.
@@ -349,11 +351,11 @@ TEST_F(ScrollIntoViewTest, BlockAndInlineSettings) {
 
   Element* content = GetDocument().getElementById("content");
   ScrollIntoViewOptionsOrBoolean arg1, arg2, arg3, arg4;
-  ScrollIntoViewOptions options;
+  ScrollIntoViewOptions* options = ScrollIntoViewOptions::Create();
   ASSERT_EQ(Window().scrollY(), 0);
 
-  options.setBlock("nearest");
-  options.setInlinePosition("nearest");
+  options->setBlock("nearest");
+  options->setInlinePosition("nearest");
   arg1.SetScrollIntoViewOptions(options);
   content->scrollIntoView(arg1);
   ASSERT_EQ(Window().scrollX(),
@@ -361,15 +363,15 @@ TEST_F(ScrollIntoViewTest, BlockAndInlineSettings) {
   ASSERT_EQ(Window().scrollY(),
             content->OffsetTop() + content_height - window_height);
 
-  options.setBlock("start");
-  options.setInlinePosition("start");
+  options->setBlock("start");
+  options->setInlinePosition("start");
   arg2.SetScrollIntoViewOptions(options);
   content->scrollIntoView(arg2);
   ASSERT_EQ(Window().scrollX(), content->OffsetLeft());
   ASSERT_EQ(Window().scrollY(), content->OffsetTop());
 
-  options.setBlock("center");
-  options.setInlinePosition("center");
+  options->setBlock("center");
+  options->setInlinePosition("center");
   arg3.SetScrollIntoViewOptions(options);
   content->scrollIntoView(arg3);
   ASSERT_EQ(Window().scrollX(),
@@ -377,8 +379,8 @@ TEST_F(ScrollIntoViewTest, BlockAndInlineSettings) {
   ASSERT_EQ(Window().scrollY(),
             content->OffsetTop() + (content_height - window_height) / 2);
 
-  options.setBlock("end");
-  options.setInlinePosition("end");
+  options->setBlock("end");
+  options->setInlinePosition("end");
   arg4.SetScrollIntoViewOptions(options);
   content->scrollIntoView(arg4);
   ASSERT_EQ(Window().scrollX(),
@@ -408,8 +410,8 @@ TEST_F(ScrollIntoViewTest, SmoothAndInstantInChain) {
   Element* inner_container = GetDocument().getElementById("inner_container");
   Element* content = GetDocument().getElementById("content");
   ScrollIntoViewOptionsOrBoolean arg;
-  ScrollIntoViewOptions options;
-  options.setBlock("start");
+  ScrollIntoViewOptions* options = ScrollIntoViewOptions::Create();
+  options->setBlock("start");
   arg.SetScrollIntoViewOptions(options);
   Compositor().BeginFrame();
   ASSERT_EQ(Window().scrollY(), 0);
@@ -487,9 +489,10 @@ TEST_F(ScrollIntoViewTest, FindDoesNotScrollOverflowHidden) {
   Compositor().BeginFrame();
   ASSERT_EQ(container->scrollTop(), 0);
   const int kFindIdentifier = 12345;
-  WebFindOptions options;
-  MainFrame().Find(kFindIdentifier, WebString::FromUTF8("hello"), options,
-                   false);
+  auto options = mojom::blink::FindOptions::New();
+  options->run_synchronously_for_testing = true;
+  MainFrame().GetFindInPage()->FindInternal(
+      kFindIdentifier, WebString::FromUTF8("hello"), *options, false);
   ASSERT_EQ(container->scrollTop(), 0);
 }
 
@@ -505,8 +508,8 @@ TEST_F(ScrollIntoViewTest, ApplyRootElementScrollBehaviorToViewport) {
 
   Element* content = GetDocument().getElementById("content");
   ScrollIntoViewOptionsOrBoolean arg;
-  ScrollIntoViewOptions options;
-  options.setBlock("start");
+  ScrollIntoViewOptions* options = ScrollIntoViewOptions::Create();
+  options->setBlock("start");
   arg.SetScrollIntoViewOptions(options);
   Compositor().BeginFrame();
   ASSERT_EQ(Window().scrollY(), 0);

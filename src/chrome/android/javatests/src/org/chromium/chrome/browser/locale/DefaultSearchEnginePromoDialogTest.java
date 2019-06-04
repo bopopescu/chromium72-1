@@ -1,3 +1,4 @@
+// Copyright 2018 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -24,8 +25,8 @@ import org.chromium.chrome.browser.search_engines.TemplateUrlService;
 import org.chromium.chrome.browser.searchwidget.SearchActivity;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
 import org.chromium.chrome.test.util.ActivityUtils;
-import org.chromium.content.browser.test.util.Criteria;
-import org.chromium.content.browser.test.util.CriteriaHelper;
+import org.chromium.content_public.browser.test.util.Criteria;
+import org.chromium.content_public.browser.test.util.CriteriaHelper;
 
 import java.util.List;
 import java.util.concurrent.Callable;
@@ -120,7 +121,7 @@ public class DefaultSearchEnginePromoDialogTest {
             @Override
             public DefaultSearchEnginePromoDialog call() throws Exception {
                 DefaultSearchEnginePromoDialog dialog = new DefaultSearchEnginePromoDialog(
-                        activity, LocaleManager.SEARCH_ENGINE_PROMO_SHOW_EXISTING, null);
+                        activity, LocaleManager.SearchEnginePromoType.SHOW_EXISTING, null);
                 dialog.show();
                 return dialog;
             }

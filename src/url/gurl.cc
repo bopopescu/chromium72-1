@@ -19,8 +19,6 @@
 
 namespace {
 
-static base::LazyInstance<std::string>::Leaky empty_string =
-    LAZY_INSTANCE_INITIALIZER;
 static base::LazyInstance<GURL>::Leaky empty_gurl = LAZY_INSTANCE_INITIALIZER;
 
 }  // namespace
@@ -166,7 +164,7 @@ const std::string& GURL::spec() const {
     return spec_;
 
   DCHECK(false) << "Trying to get the spec of an invalid URL!";
-  return empty_string.Get();
+  return base::EmptyString();
 }
 
 bool GURL::operator<(const GURL& other) const {
@@ -178,7 +176,7 @@ bool GURL::operator>(const GURL& other) const {
 }
 
 // Note: code duplicated below (it's inconvenient to use a template here).
-GURL GURL::Resolve(const std::string& relative) const {
+GURL GURL::Resolve(base::StringPiece relative) const {
   // Not allowed for invalid URLs.
   if (!is_valid_)
     return GURL();
@@ -204,7 +202,7 @@ GURL GURL::Resolve(const std::string& relative) const {
 }
 
 // Note: code duplicated above (it's inconvenient to use a template here).
-GURL GURL::Resolve(const base::string16& relative) const {
+GURL GURL::Resolve(base::StringPiece16 relative) const {
   // Not allowed for invalid URLs.
   if (!is_valid_)
     return GURL();
@@ -428,7 +426,12 @@ base::StringPiece GURL::HostNoBracketsPiece() const {
 }
 
 std::string GURL::GetContent() const {
-  return is_valid_ ? ComponentString(parsed_.GetContent()) : std::string();
+  if (!is_valid_)
+    return std::string();
+  std::string content = ComponentString(parsed_.GetContent());
+  if (!SchemeIs(url::kJavaScriptScheme) && parsed_.ref.len >= 0)
+    content.erase(content.size() - parsed_.ref.len - 1);
+  return content;
 }
 
 bool GURL::HostIsIPAddress() const {

@@ -17,8 +17,8 @@
 #include "base/metrics/histogram_macros.h"
 #include "base/rand_util.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/task/post_task.h"
 #include "base/task_runner.h"
-#include "base/task_scheduler/post_task.h"
 #include "base/time/time.h"
 #include "build/build_config.h"
 #include "chrome/browser/browser_process.h"
@@ -47,16 +47,16 @@
 #include "chrome/common/buildflags.h"
 #include "chrome/common/chrome_constants.h"
 #include "chrome/common/chrome_features.h"
-#include "chrome/common/pdf_uma.h"
+#include "chrome/common/pdf_util.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/common/safe_browsing/file_type_policies.h"
 #include "chrome/grit/generated_resources.h"
-#include "components/download/downloader/in_progress/in_progress_cache_impl.h"
 #include "components/download/public/common/download_interrupt_reasons.h"
 #include "components/download/public/common/download_item.h"
 #include "components/pref_registry/pref_registry_syncable.h"
 #include "components/prefs/pref_member.h"
 #include "components/prefs/pref_service.h"
+#include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/download_item_utils.h"
 #include "content/public/browser/download_manager.h"
@@ -296,10 +296,12 @@ void OnDownloadLocationDetermined(
 ChromeDownloadManagerDelegate::ChromeDownloadManagerDelegate(Profile* profile)
     : profile_(profile),
       next_download_id_(download::DownloadItem::kInvalidId),
+      next_id_retrieved_(false),
       download_prefs_(new DownloadPrefs(profile)),
       disk_access_task_runner_(base::CreateSequencedTaskRunnerWithTraits(
-          {base::MayBlock(), base::TaskPriority::BACKGROUND,
+          {base::MayBlock(), base::TaskPriority::BEST_EFFORT,
            base::TaskShutdownBehavior::CONTINUE_ON_SHUTDOWN})),
+      is_file_picker_showing_(false),
       weak_ptr_factory_(this) {
 #if defined(OS_ANDROID)
   location_dialog_bridge_.reset(new DownloadLocationDialogBridgeImpl);
@@ -356,17 +358,13 @@ void ChromeDownloadManagerDelegate::SetNextId(uint32_t next_id) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
   DCHECK(!profile_->IsOffTheRecord());
 
-  // |download::DownloadItem::kInvalidId| will be returned only when download
+  // |download::DownloadItem::kInvalidId| will be returned only when history
   // database failed to initialize.
-  bool download_db_available = (next_id != download::DownloadItem::kInvalidId);
-  RecordDatabaseAvailability(download_db_available);
-  if (download_db_available) {
+  bool history_db_available = (next_id != download::DownloadItem::kInvalidId);
+  RecordDatabaseAvailability(history_db_available);
+  if (history_db_available)
     next_download_id_ = next_id;
-  } else {
-    // Still download files without download database, all download history in
-    // this browser session will not be persisted.
-    next_download_id_ = download::DownloadItem::kInvalidId + 1;
-  }
+  next_id_retrieved_ = true;
 
   IdCallbackVector callbacks;
   id_callbacks_.swap(callbacks);
@@ -380,11 +378,11 @@ void ChromeDownloadManagerDelegate::GetNextId(
     const content::DownloadIdCallback& callback) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
   if (profile_->IsOffTheRecord()) {
-    content::BrowserContext::GetDownloadManager(
-        profile_->GetOriginalProfile())->GetDelegate()->GetNextId(callback);
+    content::BrowserContext::GetDownloadManager(profile_->GetOriginalProfile())
+        ->GetNextId(callback);
     return;
   }
-  if (next_download_id_ == download::DownloadItem::kInvalidId) {
+  if (!next_id_retrieved_) {
     id_callbacks_.push_back(callback);
     return;
   }
@@ -395,8 +393,10 @@ void ChromeDownloadManagerDelegate::ReturnNextId(
     const content::DownloadIdCallback& callback) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
   DCHECK(!profile_->IsOffTheRecord());
-  DCHECK_NE(download::DownloadItem::kInvalidId, next_download_id_);
-  callback.Run(next_download_id_++);
+  // kInvalidId is returned to indicate the error.
+  callback.Run(next_download_id_);
+  if (next_download_id_ != download::DownloadItem::kInvalidId)
+    ++next_download_id_;
 }
 
 bool ChromeDownloadManagerDelegate::DetermineDownloadTarget(
@@ -412,11 +412,17 @@ bool ChromeDownloadManagerDelegate::DetermineDownloadTarget(
                  weak_ptr_factory_.GetWeakPtr(),
                  download->GetId(),
                  callback);
-  DownloadTargetDeterminer::Start(
-      download,
-      GetPlatformDownloadPath(profile_, download, PLATFORM_TARGET_PATH),
-      kDefaultPlatformConflictAction, download_prefs_.get(), this,
-      target_determined_callback);
+  base::FilePath download_path =
+      GetPlatformDownloadPath(profile_, download, PLATFORM_TARGET_PATH);
+  DownloadPathReservationTracker::FilenameConflictAction action =
+      kDefaultPlatformConflictAction;
+#if defined(OS_ANDROID)
+  if (!download_path.empty())
+    action = DownloadPathReservationTracker::UNIQUIFY;
+#endif
+  DownloadTargetDeterminer::Start(download, download_path, action,
+                                  download_prefs_.get(), this,
+                                  target_determined_callback);
   return true;
 }
 
@@ -502,8 +508,8 @@ bool ChromeDownloadManagerDelegate::IsDownloadReadyForCompletion(
       }
       UMA_HISTOGRAM_ENUMERATION("Download.DangerousFile.Reason",
                                 SB_NOT_AVAILABLE, DANGEROUS_FILE_REASON_MAX);
-      content::BrowserThread::PostTask(content::BrowserThread::UI, FROM_HERE,
-                                       internal_complete_callback);
+      base::PostTaskWithTraits(FROM_HERE, {content::BrowserThread::UI},
+                               internal_complete_callback);
       return false;
     }
   } else if (!state->is_complete()) {
@@ -639,6 +645,15 @@ void ChromeDownloadManagerDelegate::OpenDownload(DownloadItem* download) {
 
   MaybeSendDangerousDownloadOpenedReport(download,
                                          false /* show_download_in_folder */);
+
+#if defined(OS_ANDROID)
+  // TODO(shaktisahu@): Pull out to static helper method once
+  // DownloadManagerService goes away.  Put the helper method in the download
+  // component.
+  DownloadManagerService::GetInstance()->OpenDownload(download,
+                                                      0 /* download source */);
+  return;
+#endif
 
   if (!DownloadItemModel(download).ShouldPreferOpeningInBrowser()) {
     RecordDownloadOpenMethod(DOWNLOAD_OPEN_METHOD_DEFAULT_PLATFORM);
@@ -952,8 +967,56 @@ void ChromeDownloadManagerDelegate::RequestConfirmation(
 #else   // !OS_ANDROID
   // Desktop Chrome displays a file picker for all confirmation needs. We can do
   // better.
-  DownloadFilePicker::ShowFilePicker(download, suggested_path, callback);
+  if (is_file_picker_showing_) {
+    file_picker_callbacks_.emplace_back(
+        base::BindOnce(&ChromeDownloadManagerDelegate::ShowFilePicker,
+                       weak_ptr_factory_.GetWeakPtr(), download->GetGuid(),
+                       suggested_path, callback));
+  } else {
+    is_file_picker_showing_ = true;
+    ShowFilePicker(download->GetGuid(), suggested_path, callback);
+  }
 #endif  // !OS_ANDROID
+}
+
+void ChromeDownloadManagerDelegate::OnConfirmationCallbackComplete(
+    const DownloadTargetDeterminerDelegate::ConfirmationCallback& callback,
+    DownloadConfirmationResult result,
+    const base::FilePath& virtual_path) {
+  callback.Run(result, virtual_path);
+  if (!file_picker_callbacks_.empty()) {
+    base::OnceClosure callback = std::move(file_picker_callbacks_.front());
+    base::ThreadTaskRunnerHandle::Get()->PostTask(
+        FROM_HERE, base::BindOnce(std::move(callback)));
+    file_picker_callbacks_.pop_front();
+  } else {
+    is_file_picker_showing_ = false;
+  }
+}
+
+void ChromeDownloadManagerDelegate::ShowFilePicker(
+    const std::string& guid,
+    const base::FilePath& suggested_path,
+    const DownloadTargetDeterminerDelegate::ConfirmationCallback& callback) {
+  DownloadItem* download = download_manager_->GetDownloadByGuid(guid);
+  if (download) {
+    ShowFilePickerForDownload(download, suggested_path, callback);
+  } else {
+    OnConfirmationCallbackComplete(
+        callback, DownloadConfirmationResult::CANCELED, base::FilePath());
+  }
+}
+
+void ChromeDownloadManagerDelegate::ShowFilePickerForDownload(
+    DownloadItem* download,
+    const base::FilePath& suggested_path,
+    const DownloadTargetDeterminerDelegate::ConfirmationCallback& callback) {
+  DCHECK(download);
+  DownloadFilePicker::ShowFilePicker(
+      download, suggested_path,
+      base::BindRepeating(
+          &ChromeDownloadManagerDelegate::OnConfirmationCallbackComplete,
+          weak_ptr_factory_.GetWeakPtr(), callback));
 }
 
 #if defined(OS_ANDROID)

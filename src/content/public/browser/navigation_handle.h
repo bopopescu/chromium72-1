@@ -75,12 +75,19 @@ class CONTENT_EXPORT NavigationHandle {
   // of the main frame. This remains constant over the navigation lifetime.
   virtual bool IsParentMainFrame() = 0;
 
-  // Whether the navigation was initated by the renderer process. Examples of
+  // Whether the navigation was initiated by the renderer process. Examples of
   // renderer-initiated navigations include:
   //  * <a> link click
   //  * changing window.location.href
   //  * redirect via the <meta http-equiv="refresh"> tag
   //  * using window.history.pushState
+  //
+  // This method returns false for browser-initiated navigations, including:
+  //  * any navigation initiated from the omnibox
+  //  * navigations via suggestions in browser UI
+  //  * navigations via browser UI: Ctrl-R, refresh/forward/back/home buttons
+  //  * using window.history.forward() or window.history.back()
+  //  * any other "explicit" URL navigations, e.g. bookmarks
   virtual bool IsRendererInitiated() = 0;
 
   // Returns the FrameTreeNode ID for the frame in which the navigation is
@@ -99,7 +106,11 @@ class CONTENT_EXPORT NavigationHandle {
 
   // The time the navigation started, recorded either in the renderer or in the
   // browser process. Corresponds to Navigation Timing API.
-  virtual const base::TimeTicks& NavigationStart() = 0;
+  virtual base::TimeTicks NavigationStart() = 0;
+
+  // The time the input leading to the navigation started. Will not be
+  // set if unknown.
+  virtual base::TimeTicks NavigationInputStart() = 0;
 
   // Whether or not the navigation was started within a context menu.
   virtual bool WasStartedFromContextMenu() const = 0;
@@ -162,9 +173,11 @@ class CONTENT_EXPORT NavigationHandle {
   virtual net::Error GetNetErrorCode() = 0;
 
   // Returns the RenderFrameHost this navigation is committing in.  The
-  // RenderFrameHost returned will be the final host for the navigation.  This
-  // can only be accessed after a response has been delivered for processing,
-  // or after the navigation fails with an error page.
+  // RenderFrameHost returned will be the final host for the navigation. (Use
+  // WebContentsObserver::RenderFrameHostChanged() to observe RenderFrameHost
+  // changes that occur during navigation.) This can only be accessed after a
+  // response has been delivered for processing, or after the navigation fails
+  // with an error page.
   virtual RenderFrameHost* GetRenderFrameHost() = 0;
 
   // Whether the navigation happened without changing document. Examples of
@@ -259,6 +272,19 @@ class CONTENT_EXPORT NavigationHandle {
   // Returns true if this navigation was initiated by a form submission.
   virtual bool IsFormSubmission() = 0;
 
+  // Returns true if the target is an inner response of a signed exchange.
+  virtual bool IsSignedExchangeInnerResponse() = 0;
+
+  // Returns true if the navigation response was cached.
+  virtual bool WasResponseCached() = 0;
+
+  // Returns the proxy server used for this navigation, if any.
+  virtual const net::ProxyServer& GetProxyServer() = 0;
+
+  // Returns the value of the hrefTranslate attribute if this navigation was
+  // initiated from a link that had that attribute set.
+  virtual const std::string& GetHrefTranslate() = 0;
+
   // Testing methods ----------------------------------------------------------
   //
   // The following methods should be used exclusively for writing unit tests.
@@ -301,9 +327,10 @@ class CONTENT_EXPORT NavigationHandle {
 
   // Simulates the reception of the network response.
   virtual NavigationThrottle::ThrottleCheckResult
-  CallWillProcessResponseForTesting(
-      RenderFrameHost* render_frame_host,
-      const std::string& raw_response_headers) = 0;
+  CallWillProcessResponseForTesting(RenderFrameHost* render_frame_host,
+                                    const std::string& raw_response_headers,
+                                    bool was_cached,
+                                    const net::ProxyServer& proxy_server) = 0;
 
   // Simulates the navigation being committed.
   virtual void CallDidCommitNavigationForTesting(const GURL& url) = 0;
@@ -311,6 +338,9 @@ class CONTENT_EXPORT NavigationHandle {
   // Simulates the navigation resuming. Most callers should just let the
   // deferring NavigationThrottle do the resuming.
   virtual void CallResumeForTesting() = 0;
+
+  // Returns whether this navigation is currently deferred.
+  virtual bool IsDeferredForTesting() = 0;
 
   // The NavigationData that the embedder returned from
   // ResourceDispatcherHostDelegate::GetNavigationData during commit. This will

@@ -29,13 +29,13 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_PLATFORM_GRAPHICS_GRADIENT_H_
 #define THIRD_PARTY_BLINK_RENDERER_PLATFORM_GRAPHICS_GRADIENT_H_
 
+#include "base/macros.h"
 #include "base/memory/scoped_refptr.h"
 #include "third_party/blink/renderer/platform/graphics/color.h"
 #include "third_party/blink/renderer/platform/graphics/graphics_types.h"
 #include "third_party/blink/renderer/platform/graphics/paint/paint_flags.h"
 #include "third_party/blink/renderer/platform/graphics/paint/paint_shader.h"
 #include "third_party/blink/renderer/platform/platform_export.h"
-#include "third_party/blink/renderer/platform/wtf/noncopyable.h"
 #include "third_party/blink/renderer/platform/wtf/ref_counted.h"
 #include "third_party/blink/renderer/platform/wtf/vector.h"
 #include "third_party/skia/include/core/SkRefCnt.h"
@@ -48,7 +48,6 @@ namespace blink {
 class FloatPoint;
 
 class PLATFORM_EXPORT Gradient : public RefCounted<Gradient> {
-  WTF_MAKE_NONCOPYABLE(Gradient);
 
  public:
   enum class Type { kLinear, kRadial, kConic };
@@ -58,11 +57,17 @@ class PLATFORM_EXPORT Gradient : public RefCounted<Gradient> {
     kUnpremultiplied,
   };
 
+  enum class DegenerateHandling {
+    kAllow,
+    kDisallow,
+  };
+
   static scoped_refptr<Gradient> CreateLinear(
       const FloatPoint& p0,
       const FloatPoint& p1,
       GradientSpreadMethod = kSpreadMethodPad,
-      ColorInterpolation = ColorInterpolation::kUnpremultiplied);
+      ColorInterpolation = ColorInterpolation::kUnpremultiplied,
+      DegenerateHandling = DegenerateHandling::kAllow);
 
   static scoped_refptr<Gradient> CreateRadial(
       const FloatPoint& p0,
@@ -71,7 +76,8 @@ class PLATFORM_EXPORT Gradient : public RefCounted<Gradient> {
       float r1,
       float aspect_ratio = 1,
       GradientSpreadMethod = kSpreadMethodPad,
-      ColorInterpolation = ColorInterpolation::kUnpremultiplied);
+      ColorInterpolation = ColorInterpolation::kUnpremultiplied,
+      DegenerateHandling = DegenerateHandling::kAllow);
 
   static scoped_refptr<Gradient> CreateConic(
       const FloatPoint& position,
@@ -79,14 +85,15 @@ class PLATFORM_EXPORT Gradient : public RefCounted<Gradient> {
       float start_angle,
       float end_angle,
       GradientSpreadMethod = kSpreadMethodPad,
-      ColorInterpolation = ColorInterpolation::kUnpremultiplied);
+      ColorInterpolation = ColorInterpolation::kUnpremultiplied,
+      DegenerateHandling = DegenerateHandling::kAllow);
 
   virtual ~Gradient();
 
   Type GetType() const { return type_; }
 
   struct ColorStop {
-    DISALLOW_NEW_EXCEPT_PLACEMENT_NEW();
+    DISALLOW_NEW();
     float stop;
     Color color;
 
@@ -101,7 +108,7 @@ class PLATFORM_EXPORT Gradient : public RefCounted<Gradient> {
   void ApplyToFlags(PaintFlags&, const SkMatrix& local_matrix);
 
  protected:
-  Gradient(Type, GradientSpreadMethod, ColorInterpolation);
+  Gradient(Type, GradientSpreadMethod, ColorInterpolation, DegenerateHandling);
 
   using ColorBuffer = Vector<SkColor, 8>;
   using OffsetBuffer = Vector<SkScalar, 8>;
@@ -111,6 +118,10 @@ class PLATFORM_EXPORT Gradient : public RefCounted<Gradient> {
                                           uint32_t flags,
                                           const SkMatrix&,
                                           SkColor) const = 0;
+
+  DegenerateHandling GetDegenerateHandling() const {
+    return degenerate_handling_;
+  }
 
  private:
   sk_sp<PaintShader> CreateShaderInternal(const SkMatrix& local_matrix);
@@ -123,11 +134,14 @@ class PLATFORM_EXPORT Gradient : public RefCounted<Gradient> {
   const Type type_;
   const GradientSpreadMethod spread_method_;
   const ColorInterpolation color_interpolation_;
+  const DegenerateHandling degenerate_handling_;
 
   Vector<ColorStop, 2> stops_;
   bool stops_sorted_;
 
   mutable sk_sp<PaintShader> cached_shader_;
+
+  DISALLOW_COPY_AND_ASSIGN(Gradient);
 };
 
 }  // namespace blink

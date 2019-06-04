@@ -2019,3 +2019,58 @@ UI.createInlineButton = function(toolbarButton) {
   shadowRoot.appendChild(toolbar.element);
   return element;
 };
+
+/**
+ * @param {string} text
+ * @param {number} maxLength
+ * @return {!DocumentFragment}
+ */
+UI.createExpandableText = function(text, maxLength) {
+  const fragment = createDocumentFragment();
+  fragment.textContent = text.slice(0, maxLength);
+  const hiddenText = text.slice(maxLength);
+
+  const expandButton = fragment.createChild('span', 'expandable-inline-button');
+  expandButton.setAttribute('data-text', ls`Show ${Number.withThousandsSeparator(hiddenText.length)} more`);
+  expandButton.addEventListener('click', () => {
+    if (expandButton.parentElement)
+      expandButton.parentElement.insertBefore(createTextNode(hiddenText), expandButton);
+    expandButton.remove();
+  });
+
+  const copyButton = fragment.createChild('span', 'expandable-inline-button');
+  copyButton.setAttribute('data-text', ls`Copy`);
+  copyButton.addEventListener('click', () => {
+    InspectorFrontendHost.copyText(text);
+  });
+  return fragment;
+};
+
+/**
+ * @interface
+ */
+UI.Renderer = function() {};
+
+UI.Renderer.prototype = {
+  /**
+   * @param {!Object} object
+   * @param {!UI.Renderer.Options=} options
+   * @return {!Promise<?{node: !Node, tree: ?UI.TreeOutline}>}
+   */
+  render(object, options) {}
+};
+
+/**
+ * @param {?Object} object
+ * @param {!UI.Renderer.Options=} options
+ * @return {!Promise<?{node: !Node, tree: ?UI.TreeOutline}>}
+ */
+UI.Renderer.render = async function(object, options) {
+  if (!object)
+    throw new Error('Can\'t render ' + object);
+  const renderer = await self.runtime.extension(UI.Renderer, object).instance();
+  return renderer ? renderer.render(object, options || {}) : null;
+};
+
+/** @typedef {!{title: (string|!Element|undefined), editable: (boolean|undefined) }} */
+UI.Renderer.Options;

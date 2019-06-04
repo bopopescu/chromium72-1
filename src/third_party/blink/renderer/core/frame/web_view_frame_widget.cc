@@ -7,7 +7,6 @@
 #include "third_party/blink/public/mojom/page/page_visibility_state.mojom-blink.h"
 #include "third_party/blink/renderer/core/exported/web_view_impl.h"
 #include "third_party/blink/renderer/core/frame/web_local_frame_impl.h"
-#include "third_party/blink/renderer/platform/exported/web_active_gesture_animation.h"
 
 namespace blink {
 
@@ -20,13 +19,7 @@ WebViewFrameWidget::WebViewFrameWidget(WebWidgetClient& client,
 WebViewFrameWidget::~WebViewFrameWidget() = default;
 
 void WebViewFrameWidget::Close() {
-  // Note: it's important to use the captured main frame pointer here. During
-  // a frame swap, the swapped frame is detached *after* the frame tree is
-  // updated. If the main frame is being swapped, then
-  // m_webView()->mainFrameImpl() will no longer point to the original frame.
-  web_view_->SetCompositorVisibility(false);
   web_view_ = nullptr;
-
   WebFrameWidgetBase::Close();
 
   // Note: this intentionally does not forward to WebView::close(), to make it
@@ -39,53 +32,56 @@ WebSize WebViewFrameWidget::Size() {
 }
 
 void WebViewFrameWidget::Resize(const WebSize& size) {
-  return web_view_->Resize(size);
+  web_view_->Resize(size);
 }
 
 void WebViewFrameWidget::ResizeVisualViewport(const WebSize& size) {
-  return web_view_->ResizeVisualViewport(size);
+  web_view_->ResizeVisualViewport(size);
 }
 
 void WebViewFrameWidget::DidEnterFullscreen() {
-  return web_view_->DidEnterFullscreen();
+  web_view_->DidEnterFullscreen();
 }
 
 void WebViewFrameWidget::DidExitFullscreen() {
-  return web_view_->DidExitFullscreen();
+  web_view_->DidExitFullscreen();
 }
 
 void WebViewFrameWidget::SetSuppressFrameRequestsWorkaroundFor704763Only(
     bool suppress_frame_requests) {
-  return web_view_->SetSuppressFrameRequestsWorkaroundFor704763Only(
+  web_view_->SetSuppressFrameRequestsWorkaroundFor704763Only(
       suppress_frame_requests);
 }
 void WebViewFrameWidget::BeginFrame(base::TimeTicks last_frame_time) {
-  return web_view_->BeginFrame(last_frame_time);
+  web_view_->BeginFrame(last_frame_time);
 }
 
-void WebViewFrameWidget::UpdateLifecycle(LifecycleUpdate requested_update) {
-  return web_view_->UpdateLifecycle(requested_update);
+void WebViewFrameWidget::RecordEndOfFrameMetrics(
+    base::TimeTicks frame_begin_time) {
+  web_view_->RecordEndOfFrameMetrics(frame_begin_time);
 }
 
-void WebViewFrameWidget::UpdateAllLifecyclePhasesAndCompositeForTesting() {
-  web_view_->UpdateAllLifecyclePhasesAndCompositeForTesting();
+void WebViewFrameWidget::UpdateLifecycle(LifecycleUpdate requested_update,
+                                         LifecycleUpdateReason reason) {
+  web_view_->UpdateLifecycle(requested_update, reason);
 }
 
-void WebViewFrameWidget::Paint(WebCanvas* canvas, const WebRect& view_port) {
-  return web_view_->Paint(canvas, view_port);
+void WebViewFrameWidget::PaintContent(cc::PaintCanvas* canvas,
+                                      const WebRect& view_port) {
+  web_view_->PaintContent(canvas, view_port);
 }
 
 void WebViewFrameWidget::LayoutAndPaintAsync(base::OnceClosure callback) {
-  return web_view_->LayoutAndPaintAsync(std::move(callback));
+  web_view_->LayoutAndPaintAsync(std::move(callback));
 }
 
 void WebViewFrameWidget::CompositeAndReadbackAsync(
     base::OnceCallback<void(const SkBitmap&)> callback) {
-  return web_view_->CompositeAndReadbackAsync(std::move(callback));
+  web_view_->CompositeAndReadbackAsync(std::move(callback));
 }
 
 void WebViewFrameWidget::ThemeChanged() {
-  return web_view_->ThemeChanged();
+  web_view_->ThemeChanged();
 }
 
 WebInputEventResult WebViewFrameWidget::HandleInputEvent(
@@ -98,33 +94,27 @@ WebInputEventResult WebViewFrameWidget::DispatchBufferedTouchEvents() {
 }
 
 void WebViewFrameWidget::SetCursorVisibilityState(bool is_visible) {
-  return web_view_->SetCursorVisibilityState(is_visible);
+  web_view_->SetCursorVisibilityState(is_visible);
 }
 
-void WebViewFrameWidget::ApplyViewportDeltas(
-    const WebFloatSize& visual_viewport_delta,
-    const WebFloatSize& layout_viewport_delta,
-    const WebFloatSize& elastic_overscroll_delta,
-    float scale_factor,
-    float browser_controls_shown_ratio_delta) {
-  return web_view_->ApplyViewportDeltas(
-      visual_viewport_delta, layout_viewport_delta, elastic_overscroll_delta,
-      scale_factor, browser_controls_shown_ratio_delta);
+void WebViewFrameWidget::ApplyViewportChanges(
+    const ApplyViewportChangesArgs& args) {
+  web_view_->ApplyViewportChanges(args);
 }
 
 void WebViewFrameWidget::RecordWheelAndTouchScrollingCount(
     bool has_scrolled_by_wheel,
     bool has_scrolled_by_touch) {
-  return web_view_->RecordWheelAndTouchScrollingCount(has_scrolled_by_wheel,
-                                                      has_scrolled_by_touch);
+  web_view_->RecordWheelAndTouchScrollingCount(has_scrolled_by_wheel,
+                                               has_scrolled_by_touch);
 }
 
 void WebViewFrameWidget::MouseCaptureLost() {
-  return web_view_->MouseCaptureLost();
+  web_view_->MouseCaptureLost();
 }
 
 void WebViewFrameWidget::SetFocus(bool enable) {
-  return web_view_->SetFocus(enable);
+  web_view_->SetFocus(enable);
 }
 
 bool WebViewFrameWidget::SelectionBounds(WebRect& anchor,
@@ -137,7 +127,7 @@ bool WebViewFrameWidget::IsAcceleratedCompositingActive() const {
 }
 
 void WebViewFrameWidget::WillCloseLayerTreeView() {
-  return web_view_->WillCloseLayerTreeView();
+  web_view_->WillCloseLayerTreeView();
 }
 
 SkColor WebViewFrameWidget::BackgroundColor() const {
@@ -148,16 +138,8 @@ WebPagePopup* WebViewFrameWidget::GetPagePopup() const {
   return web_view_->GetPagePopup();
 }
 
-void WebViewFrameWidget::UpdateBrowserControlsState(
-    WebBrowserControlsState constraints,
-    WebBrowserControlsState current,
-    bool animate) {
-  return web_view_->UpdateBrowserControlsState(constraints, current, animate);
-}
-
-void WebViewFrameWidget::SetVisibilityState(
-    mojom::PageVisibilityState visibility_state) {
-  return web_view_->SetVisibilityState(visibility_state, false);
+WebURL WebViewFrameWidget::GetURLForDebugTrace() {
+  return web_view_->GetURLForDebugTrace();
 }
 
 void WebViewFrameWidget::SetBackgroundColorOverride(SkColor color) {
@@ -165,7 +147,7 @@ void WebViewFrameWidget::SetBackgroundColorOverride(SkColor color) {
 }
 
 void WebViewFrameWidget::ClearBackgroundColorOverride() {
-  return web_view_->ClearBackgroundColorOverride();
+  web_view_->ClearBackgroundColorOverride();
 }
 
 void WebViewFrameWidget::SetBaseBackgroundColorOverride(SkColor color) {
@@ -173,7 +155,7 @@ void WebViewFrameWidget::SetBaseBackgroundColorOverride(SkColor color) {
 }
 
 void WebViewFrameWidget::ClearBaseBackgroundColorOverride() {
-  return web_view_->ClearBaseBackgroundColorOverride();
+  web_view_->ClearBaseBackgroundColorOverride();
 }
 
 void WebViewFrameWidget::SetBaseBackgroundColor(SkColor color) {
@@ -189,18 +171,22 @@ bool WebViewFrameWidget::ScrollFocusedEditableElementIntoView() {
   return web_view_->ScrollFocusedEditableElementIntoView();
 }
 
-void WebViewFrameWidget::Initialize() {
-  web_view_->SetCompositorVisibility(true);
+void WebViewFrameWidget::Initialize() {}
+
+void WebViewFrameWidget::SetLayerTreeView(WebLayerTreeView*) {
+  // The WebViewImpl already has its LayerTreeView, the WebWidgetClient
+  // thus does not initialize and set another one here.
+  NOTREACHED();
 }
 
 void WebViewFrameWidget::ScheduleAnimation() {
   web_view_->ScheduleAnimationForWidget();
 }
 
-base::WeakPtr<CompositorMutatorImpl>
-WebViewFrameWidget::EnsureCompositorMutator(
+base::WeakPtr<AnimationWorkletMutatorDispatcherImpl>
+WebViewFrameWidget::EnsureCompositorMutatorDispatcher(
     scoped_refptr<base::SingleThreadTaskRunner>* mutator_task_runner) {
-  return web_view_->EnsureCompositorMutator(mutator_task_runner);
+  return web_view_->EnsureCompositorMutatorDispatcher(mutator_task_runner);
 }
 
 void WebViewFrameWidget::SetRootGraphicsLayer(GraphicsLayer* layer) {
@@ -223,11 +209,11 @@ CompositorAnimationHost* WebViewFrameWidget::AnimationHost() const {
   return web_view_->AnimationHost();
 }
 
-WebHitTestResult WebViewFrameWidget::HitTestResultAt(const WebPoint& point) {
+WebHitTestResult WebViewFrameWidget::HitTestResultAt(const gfx::Point& point) {
   return web_view_->HitTestResultAt(point);
 }
 
-HitTestResult WebViewFrameWidget::CoreHitTestResultAt(const WebPoint& point) {
+HitTestResult WebViewFrameWidget::CoreHitTestResultAt(const gfx::Point& point) {
   return web_view_->CoreHitTestResultAt(point);
 }
 

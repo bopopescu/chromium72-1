@@ -4,21 +4,30 @@
 
 #include <list>
 
+#include "base/bind.h"
 #include "base/run_loop.h"
+#include "base/task/post_task.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/safe_browsing/safe_browsing_blocking_page.h"
 #include "chrome/browser/safe_browsing/test_safe_browsing_service.h"
 #include "chrome/browser/safe_browsing/ui_manager.h"
+#include "chrome/browser/signin/scoped_account_consistency.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/test/base/chrome_render_view_host_test_harness.h"
+#include "chrome/test/base/scoped_testing_local_state.h"
 #include "chrome/test/base/testing_browser_process.h"
 #include "chrome/test/base/testing_profile.h"
+#include "components/metrics/metrics_pref_names.h"
+#include "components/prefs/pref_registry_simple.h"
 #include "components/prefs/pref_service.h"
+#include "components/prefs/testing_pref_service.h"
 #include "components/safe_browsing/browser/threat_details.h"
 #include "components/safe_browsing/common/safe_browsing_prefs.h"
 #include "components/security_interstitials/content/security_interstitial_controller_client.h"
 #include "components/security_interstitials/core/safe_browsing_quiet_error_ui.h"
+#include "components/signin/core/browser/signin_buildflags.h"
 #include "components/strings/grit/components_strings.h"
+#include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/interstitial_page.h"
 #include "content/public/browser/navigation_entry.h"
@@ -28,6 +37,7 @@
 #include "content/public/test/navigation_simulator.h"
 #include "content/public/test/web_contents_tester.h"
 #include "extensions/buildflags/buildflags.h"
+#include "net/url_request/url_request_test_util.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/base/l10n/l10n_util.h"
@@ -97,9 +107,9 @@ class TestSafeBrowsingBlockingPageFactory
       const GURL& main_frame_url,
       const SafeBrowsingBlockingPage::UnsafeResourceList& unsafe_resources)
       override {
-    PrefService* prefs =
-        Profile::FromBrowserContext(web_contents->GetBrowserContext())
-            ->GetPrefs();
+    Profile* profile =
+        Profile::FromBrowserContext(web_contents->GetBrowserContext());
+    PrefService* prefs = profile->GetPrefs();
     bool is_extended_reporting_opt_in_allowed =
         prefs->GetBoolean(prefs::kSafeBrowsingExtendedReportingOptInAllowed);
     bool is_proceed_anyway_disabled =
@@ -108,7 +118,7 @@ class TestSafeBrowsingBlockingPageFactory
         BaseBlockingPage::IsMainPageLoadBlocked(unsafe_resources),
         is_extended_reporting_opt_in_allowed,
         web_contents->GetBrowserContext()->IsOffTheRecord(),
-        IsExtendedReportingEnabled(*prefs), IsScout(*prefs),
+        IsExtendedReportingEnabled(*prefs),
         IsExtendedReportingPolicyManaged(*prefs), is_proceed_anyway_disabled,
         true,  // should_open_links_in_new_tab
         true,  // always_show_back_to_safety
@@ -180,9 +190,9 @@ class TestSafeBrowsingBlockingQuietPageFactory
       const GURL& main_frame_url,
       const SafeBrowsingBlockingPage::UnsafeResourceList& unsafe_resources)
       override {
-    PrefService* prefs =
-        Profile::FromBrowserContext(web_contents->GetBrowserContext())
-            ->GetPrefs();
+    Profile* profile =
+        Profile::FromBrowserContext(web_contents->GetBrowserContext());
+    PrefService* prefs = profile->GetPrefs();
     bool is_extended_reporting_opt_in_allowed =
         prefs->GetBoolean(prefs::kSafeBrowsingExtendedReportingOptInAllowed);
     bool is_proceed_anyway_disabled =
@@ -191,7 +201,7 @@ class TestSafeBrowsingBlockingQuietPageFactory
         BaseBlockingPage::IsMainPageLoadBlocked(unsafe_resources),
         is_extended_reporting_opt_in_allowed,
         web_contents->GetBrowserContext()->IsOffTheRecord(),
-        IsExtendedReportingEnabled(*prefs), IsScout(*prefs),
+        IsExtendedReportingEnabled(*prefs),
         IsExtendedReportingPolicyManaged(*prefs), is_proceed_anyway_disabled,
         true,  // should_open_links_in_new_tab
         true,  // always_show_back_to_safety
@@ -213,7 +223,8 @@ class SafeBrowsingBlockingPageTest : public ChromeRenderViewHostTestHarness {
     CANCEL
   };
 
-  SafeBrowsingBlockingPageTest() {
+  SafeBrowsingBlockingPageTest()
+      : scoped_testing_local_state_(TestingBrowserProcess::GetGlobal()) {
     ResetUserResponse();
     // The safe browsing UI manager does not need a service for this test.
     ui_manager_ = new TestSafeBrowsingUIManager(NULL);
@@ -221,6 +232,13 @@ class SafeBrowsingBlockingPageTest : public ChromeRenderViewHostTestHarness {
 
   void SetUp() override {
     ChromeRenderViewHostTestHarness::SetUp();
+
+    system_request_context_getter_ =
+        base::MakeRefCounted<net::TestURLRequestContextGetter>(
+            base::CreateSingleThreadTaskRunnerWithTraits(
+                {content::BrowserThread::IO}));
+    TestingBrowserProcess::GetGlobal()->SetSystemRequestContext(
+        system_request_context_getter_.get());
 
     SafeBrowsingBlockingPage::RegisterFactory(&factory_);
     ResetUserResponse();
@@ -241,7 +259,8 @@ class SafeBrowsingBlockingPageTest : public ChromeRenderViewHostTestHarness {
 #if BUILDFLAG(ENABLE_EXTENSIONS)
     test_event_router_ = extensions::CreateAndUseTestEventRouter(profile);
     extensions::SafeBrowsingPrivateEventRouterFactory::GetInstance()
-        ->SetTestingFactory(profile, BuildSafeBrowsingPrivateEventRouter);
+        ->SetTestingFactory(
+            profile, base::BindRepeating(&BuildSafeBrowsingPrivateEventRouter));
     observer_ =
         std::make_unique<TestExtensionEventObserver>(test_event_router_);
 #endif
@@ -253,6 +272,8 @@ class SafeBrowsingBlockingPageTest : public ChromeRenderViewHostTestHarness {
     TestingBrowserProcess::GetGlobal()->safe_browsing_service()->ShutDown();
     TestingBrowserProcess::GetGlobal()->SetSafeBrowsingService(nullptr);
     SafeBrowsingBlockingPage::RegisterFactory(NULL);
+    TestingBrowserProcess::GetGlobal()->SetSystemRequestContext(nullptr);
+    system_request_context_getter_ = nullptr;
     // Clean up singleton reference (crbug.com/110594).
     ThreatDetails::RegisterFactory(NULL);
     ChromeRenderViewHostTestHarness::TearDown();
@@ -279,8 +300,14 @@ class SafeBrowsingBlockingPageTest : public ChromeRenderViewHostTestHarness {
   }
 
   void ShowInterstitial(bool is_subresource, const char* url) {
+    ShowInterstitial(is_subresource, url, SB_THREAT_TYPE_URL_MALWARE);
+  }
+
+  void ShowInterstitial(bool is_subresource,
+                        const char* url,
+                        SBThreatType type) {
     security_interstitials::UnsafeResource resource;
-    InitResource(&resource, is_subresource, GURL(url));
+    InitResource(&resource, is_subresource, GURL(url), type);
     SafeBrowsingBlockingPage::ShowBlockingPage(ui_manager_.get(), resource);
   }
 
@@ -322,6 +349,7 @@ class SafeBrowsingBlockingPageTest : public ChromeRenderViewHostTestHarness {
   }
 
   scoped_refptr<TestSafeBrowsingUIManager> ui_manager_;
+  scoped_refptr<net::URLRequestContextGetter> system_request_context_getter_;
 
   // Owned by TestSafeBrowsingBlockingPage.
   MockTestingProfile* mock_profile_;
@@ -334,15 +362,16 @@ class SafeBrowsingBlockingPageTest : public ChromeRenderViewHostTestHarness {
  private:
   void InitResource(security_interstitials::UnsafeResource* resource,
                     bool is_subresource,
-                    const GURL& url) {
+                    const GURL& url,
+                    SBThreatType type) {
     resource->callback =
         base::Bind(&SafeBrowsingBlockingPageTest::OnBlockingPageComplete,
                    base::Unretained(this));
-    resource->callback_thread = content::BrowserThread::GetTaskRunnerForThread(
-        content::BrowserThread::IO);
+    resource->callback_thread = base::CreateSingleThreadTaskRunnerWithTraits(
+        {content::BrowserThread::IO});
     resource->url = url;
     resource->is_subresource = is_subresource;
-    resource->threat_type = SB_THREAT_TYPE_URL_MALWARE;
+    resource->threat_type = type;
     resource->web_contents_getter =
         security_interstitials::UnsafeResource::GetWebContentsGetter(
             web_contents()->GetMainFrame()->GetProcess()->GetID(),
@@ -350,10 +379,10 @@ class SafeBrowsingBlockingPageTest : public ChromeRenderViewHostTestHarness {
     resource->threat_source = safe_browsing::ThreatSource::LOCAL_PVER3;
   }
 
+  ScopedTestingLocalState scoped_testing_local_state_;
   UserResponse user_response_;
   TestSafeBrowsingBlockingPageFactory factory_;
 };
-
 
 // Tests showing a blocking page for a malware page and not proceeding.
 TEST_F(SafeBrowsingBlockingPageTest, MalwarePageDontProceed) {
@@ -471,7 +500,7 @@ TEST_F(SafeBrowsingBlockingPageTest, PageWithMalwareResourceDontProceed) {
   // We did not proceed, we should be back to the first page, the 2nd one should
   // have been removed from the navigation controller.
   ASSERT_EQ(1, controller().GetEntryCount());
-  EXPECT_EQ(kGoogleURL, controller().GetActiveEntry()->GetURL().spec());
+  EXPECT_EQ(kGoogleURL, web_contents()->GetVisibleURL().spec());
 
   // A report should have been sent.
   EXPECT_EQ(1u, ui_manager_->GetThreatDetails()->size());
@@ -508,7 +537,7 @@ TEST_F(SafeBrowsingBlockingPageTest, PageWithMalwareResourceProceed) {
 
   // We did proceed, we should be back to showing the page.
   ASSERT_EQ(1, controller().GetEntryCount());
-  EXPECT_EQ(kPageURL, controller().GetActiveEntry()->GetURL().spec());
+  EXPECT_EQ(kPageURL, web_contents()->GetVisibleURL().spec());
 
   // A report should have been sent.
   EXPECT_EQ(1u, ui_manager_->GetThreatDetails()->size());
@@ -562,7 +591,7 @@ TEST_F(SafeBrowsingBlockingPageTest,
   // We did not proceed, we should be back to the first page, the 2nd one should
   // have been removed from the navigation controller.
   ASSERT_EQ(1, controller().GetEntryCount());
-  EXPECT_EQ(kGoogleURL, controller().GetActiveEntry()->GetURL().spec());
+  EXPECT_EQ(kGoogleURL, web_contents()->GetVisibleURL().spec());
 
   // A report should have been sent.
   EXPECT_EQ(1u, ui_manager_->GetThreatDetails()->size());
@@ -630,7 +659,7 @@ TEST_F(SafeBrowsingBlockingPageTest,
   // We did not proceed, we should be back to the first page, the 2nd one should
   // have been removed from the navigation controller.
   ASSERT_EQ(1, controller().GetEntryCount());
-  EXPECT_EQ(kGoogleURL, controller().GetActiveEntry()->GetURL().spec());
+  EXPECT_EQ(kGoogleURL, web_contents()->GetVisibleURL().spec());
 
   // No report should have been sent -- we don't create a report the
   // second time.
@@ -687,7 +716,7 @@ TEST_F(SafeBrowsingBlockingPageTest, PageWithMultipleMalwareResourceProceed) {
 
   // We did proceed, we should be back to the initial page.
   ASSERT_EQ(1, controller().GetEntryCount());
-  EXPECT_EQ(kPageURL, controller().GetActiveEntry()->GetURL().spec());
+  EXPECT_EQ(kPageURL, web_contents()->GetVisibleURL().spec());
 
   // No report should have been sent -- we don't create a report the
   // second time.
@@ -729,7 +758,7 @@ TEST_F(SafeBrowsingBlockingPageTest, NavigatingBackAndForth) {
   sb_interstitial = GetSafeBrowsingBlockingPage();
   ASSERT_FALSE(sb_interstitial);
   ASSERT_EQ(2, controller().GetEntryCount());
-  EXPECT_EQ(kPageURL, controller().GetActiveEntry()->GetURL().spec());
+  EXPECT_EQ(kPageURL, web_contents()->GetVisibleURL().spec());
 
   // Navigate forward to the malware URL.
   auto forward_navigation = NavigationSimulator::CreateHistoryNavigation(
@@ -746,7 +775,7 @@ TEST_F(SafeBrowsingBlockingPageTest, NavigatingBackAndForth) {
   sb_interstitial = GetSafeBrowsingBlockingPage();
   ASSERT_FALSE(sb_interstitial);
   ASSERT_EQ(2, controller().GetEntryCount());
-  EXPECT_EQ(kBadURL, controller().GetActiveEntry()->GetURL().spec());
+  EXPECT_EQ(kBadURL, web_contents()->GetVisibleURL().spec());
 
   // Two reports should have been sent.
   EXPECT_EQ(2u, ui_manager_->GetThreatDetails()->size());
@@ -931,19 +960,73 @@ TEST_F(SafeBrowsingBlockingPageTest,
   ui_manager_->GetThreatDetails()->clear();
 }
 
+// Tests showing a blocking page for billing.
+TEST_F(SafeBrowsingBlockingPageTest, BillingPage) {
+  // Start a load.
+  controller().LoadURL(GURL(kBadURL), content::Referrer(),
+                       ui::PAGE_TRANSITION_TYPED, std::string());
+
+  // Simulate the load causing a safe browsing interstitial to be shown.
+  ShowInterstitial(false, kBadURL, SB_THREAT_TYPE_BILLING);
+
+  SafeBrowsingBlockingPage* sb_interstitial = GetSafeBrowsingBlockingPage();
+  ASSERT_TRUE(sb_interstitial);
+
+  base::DictionaryValue load_time_data;
+  sb_interstitial->sb_error_ui()->PopulateStringsForHtml(&load_time_data);
+
+  base::string16 str;
+
+  load_time_data.GetString("heading", &str);
+  EXPECT_EQ(str, l10n_util::GetStringUTF16(IDS_BILLING_HEADING));
+  load_time_data.GetString("primaryParagraph", &str);
+  EXPECT_EQ(str, l10n_util::GetStringUTF16(IDS_BILLING_PRIMARY_PARAGRAPH));
+  load_time_data.GetString("primaryButtonText", &str);
+  EXPECT_EQ(str, l10n_util::GetStringUTF16(IDS_BILLING_PRIMARY_BUTTON));
+  load_time_data.GetString("proceedButtonText", &str);
+  EXPECT_EQ(str, l10n_util::GetStringUTF16(IDS_BILLING_PROCEED_BUTTON));
+
+  load_time_data.GetString("openDetails", &str);
+  EXPECT_EQ(str, base::string16());
+  load_time_data.GetString("closeDetails", &str);
+  EXPECT_EQ(str, base::string16());
+  load_time_data.GetString("explanationParagraph", &str);
+  EXPECT_EQ(str, base::string16());
+  load_time_data.GetString("finalParagraph", &str);
+  EXPECT_EQ(str, base::string16());
+
+  bool flag;
+  load_time_data.GetBoolean("billing", &flag);
+  EXPECT_TRUE(flag);
+  load_time_data.GetBoolean("phishing", &flag);
+  EXPECT_FALSE(flag);
+  load_time_data.GetBoolean("overridable", &flag);
+  EXPECT_TRUE(flag);
+  load_time_data.GetBoolean("hide_primary_button", &flag);
+  EXPECT_FALSE(flag);
+}
+
 class SafeBrowsingBlockingQuietPageTest
     : public ChromeRenderViewHostTestHarness {
  public:
   // The decision the user made.
   enum UserResponse { PENDING, OK, CANCEL };
 
-  SafeBrowsingBlockingQuietPageTest() {
+  SafeBrowsingBlockingQuietPageTest()
+      : scoped_testing_local_state_(TestingBrowserProcess::GetGlobal()) {
     // The safe browsing UI manager does not need a service for this test.
     ui_manager_ = new TestSafeBrowsingUIManager(NULL);
   }
 
   void SetUp() override {
     ChromeRenderViewHostTestHarness::SetUp();
+
+    system_request_context_getter_ =
+        base::MakeRefCounted<net::TestURLRequestContextGetter>(
+            base::CreateSingleThreadTaskRunnerWithTraits(
+                {content::BrowserThread::IO}));
+    TestingBrowserProcess::GetGlobal()->SetSystemRequestContext(
+        system_request_context_getter_.get());
 
     SafeBrowsingBlockingPage::RegisterFactory(&factory_);
     SafeBrowsingUIManager::CreateWhitelistForTesting(web_contents());
@@ -968,8 +1051,11 @@ class SafeBrowsingBlockingQuietPageTest
     TestingBrowserProcess::GetGlobal()->safe_browsing_service()->ShutDown();
     TestingBrowserProcess::GetGlobal()->SetSafeBrowsingService(nullptr);
     SafeBrowsingBlockingPage::RegisterFactory(NULL);
+    TestingBrowserProcess::GetGlobal()->SetSystemRequestContext(nullptr);
+    system_request_context_getter_ = nullptr;
     // Clean up singleton reference (crbug.com/110594).
     ThreatDetails::RegisterFactory(NULL);
+
     ChromeRenderViewHostTestHarness::TearDown();
   }
 
@@ -1012,8 +1098,8 @@ class SafeBrowsingBlockingQuietPageTest
     resource->callback =
         base::Bind(&SafeBrowsingBlockingQuietPageTest::OnBlockingPageComplete,
                    base::Unretained(this));
-    resource->callback_thread = content::BrowserThread::GetTaskRunnerForThread(
-        content::BrowserThread::IO);
+    resource->callback_thread = base::CreateSingleThreadTaskRunnerWithTraits(
+        {content::BrowserThread::IO});
     resource->url = url;
     resource->is_subresource = is_subresource;
     resource->threat_type = type;
@@ -1024,8 +1110,10 @@ class SafeBrowsingBlockingQuietPageTest
     resource->threat_source = safe_browsing::ThreatSource::LOCAL_PVER3;
   }
 
+  ScopedTestingLocalState scoped_testing_local_state_;
   UserResponse user_response_;
   TestSafeBrowsingBlockingQuietPageFactory factory_;
+  scoped_refptr<net::URLRequestContextGetter> system_request_context_getter_;
 };
 
 // Tests showing a quiet blocking page for a malware page.

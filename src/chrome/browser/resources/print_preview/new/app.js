@@ -14,7 +14,7 @@ const MAX_SECTIONS_TO_SHOW = 6;
 Polymer({
   is: 'print-preview-app',
 
-  behaviors: [SettingsBehavior],
+  behaviors: [SettingsBehavior, CrContainerShadowBehavior],
 
   properties: {
     /**
@@ -137,6 +137,11 @@ Polymer({
     },
   },
 
+  listeners: {
+    'cr-dialog-open': 'onCrDialogOpen_',
+    'close': 'onCrDialogClose_',
+  },
+
   /** @private {?WebUIListenerTracker} */
   listenerTracker_: null,
 
@@ -161,6 +166,14 @@ Polymer({
   /** @private {boolean} */
   isInKioskAutoPrintMode_: false,
 
+  /** @private {!Array<!CrDialogElement>} */
+  openDialogs_: [],
+
+  /** @override */
+  ready: function() {
+    cr.ui.FocusOutlineManager.forDocument(document);
+  },
+
   /** @override */
   attached: function() {
     this.nativeLayer_ = print_preview.NativeLayer.getInstance();
@@ -181,6 +194,12 @@ Polymer({
         this.destinationStore_,
         print_preview.DestinationStore.EventType.DESTINATION_SELECT,
         this.onDestinationSelect_.bind(this));
+    // <if expr="chromeos">
+    this.tracker_.add(
+        this.destinationStore_,
+        print_preview.DestinationStore.EventType.NO_DESTINATIONS_FOUND,
+        this.onNoDestinationsFound_.bind(this));
+    // </if>
     this.tracker_.add(
         this.destinationStore_,
         print_preview.DestinationStore.EventType
@@ -216,8 +235,20 @@ Polymer({
    * @private
    */
   onKeyDown_: function(e) {
-    // Escape key closes the dialog.
+    // Escape key closes the topmost dialog that is currently open within
+    // Print Preview. If no such dialog exists, then the Print Preview dialog
+    // itself is closed.
     if (e.code == 'Escape' && !hasKeyModifiers(e)) {
+      // Don't close the Print Preview dialog if there is a child dialog open.
+      if (this.openDialogs_.length != 0) {
+        // Manually cancel the dialog, since we call preventDefault() to prevent
+        // views from closing the Print Preview dialog.
+        const dialogToClose = this.openDialogs_[this.openDialogs_.length - 1];
+        dialogToClose.cancel();
+        e.preventDefault();
+        return;
+      }
+
       // On non-mac with toolkit-views, ESC key is handled by C++-side instead
       // of JS-side.
       if (cr.isMac) {
@@ -227,8 +258,8 @@ Polymer({
       return;
     }
 
-    // On Mac, Cmd-. should close the print dialog.
-    if (cr.isMac && e.code == 'Minus' && e.metaKey) {
+    // On Mac, Cmd+Period should close the print dialog.
+    if (cr.isMac && e.code == 'Period' && e.metaKey) {
       this.close_();
       e.preventDefault();
       return;
@@ -238,20 +269,31 @@ Polymer({
     if (e.code == 'KeyP') {
       if ((cr.isMac && e.metaKey && e.altKey && !e.shiftKey && !e.ctrlKey) ||
           (!cr.isMac && e.shiftKey && e.ctrlKey && !e.altKey && !e.metaKey)) {
+        // Don't use system dialog if the link isn't available.
+        const linkContainer = this.$$('print-preview-link-container');
+        if (!linkContainer || !linkContainer.systemDialogLinkAvailable()) {
+          e.preventDefault();
+          return;
+        }
+
         // Don't try to print with system dialog on Windows if the document is
         // not ready, because we send the preview document to the printer on
         // Windows.
-        if (!cr.isWin || this.state == print_preview_new.State.READY)
+        if (!cr.isWindows || this.state == print_preview_new.State.READY)
           this.onPrintWithSystemDialog_();
         e.preventDefault();
         return;
       }
     }
 
-    if (e.code == 'Enter' && this.state == print_preview_new.State.READY) {
+    if ((e.code === 'Enter' || e.code === 'NumpadEnter') &&
+        this.state === print_preview_new.State.READY &&
+        this.openDialogs_.length === 0) {
       const activeElementTag = e.path[0].tagName;
-      if (['BUTTON', 'SELECT', 'A'].includes(activeElementTag))
+      if (['PAPER-BUTTON', 'BUTTON', 'SELECT', 'A', 'CR-CHECKBOX'].includes(
+              activeElementTag)) {
         return;
+      }
 
       this.onPrintRequested_();
       e.preventDefault();
@@ -260,6 +302,29 @@ Polymer({
 
     // Pass certain directional keyboard events to the PDF viewer.
     this.$.previewArea.handleDirectionalKeyEvent(e);
+  },
+
+  /**
+   * @param {!Event} e The cr-dialog-open event.
+   * @private
+   */
+  onCrDialogOpen_: function(e) {
+    this.openDialogs_.push(
+        /** @type {!CrDialogElement} */ (e.composedPath()[0]));
+  },
+
+  /**
+   * @param {!Event} e The close event.
+   * @private
+   */
+  onCrDialogClose_: function(e) {
+    // Note: due to event re-firing in cr_dialog.js, this event will always
+    // appear to be coming from the outermost child dialog.
+    // TODO(rbpotter): Fix event re-firing so that the event comes from the
+    // dialog that has been closed, and add an assertion that the removed
+    // dialog matches e.composedPath()[0].
+    if (e.composedPath()[0].nodeName == 'CR-DIALOG')
+      this.openDialogs_.pop();
   },
 
   /**
@@ -275,6 +340,8 @@ Polymer({
     this.notifyPath('documentInfo_.title');
     this.notifyPath('documentInfo_.pageCount');
     this.$.model.setStickySettings(settings.serializedAppStateStr);
+    this.$.model.setPolicySettings(
+        settings.headerFooter, settings.isHeaderFooterManaged);
     this.measurementSystem_ = new print_preview.MeasurementSystem(
         settings.thousandsDelimeter, settings.decimalDelimeter,
         settings.unitType);
@@ -285,6 +352,14 @@ Polymer({
         this.recentDestinations_);
     this.isInAppKioskMode_ = settings.isInAppKioskMode;
     this.isInKioskAutoPrintMode_ = settings.isInKioskAutoPrintMode;
+
+    // This is only visible in the task manager.
+    let title = document.head.querySelector('title');
+    if (!title) {
+      title = document.createElement('title');
+      document.head.appendChild(title);
+    }
+    title.textContent = settings.documentTitle;
   },
 
   /**
@@ -298,11 +373,11 @@ Polymer({
    */
   onCloudPrintEnable_: function(cloudPrintUrl, appKioskMode) {
     assert(!this.cloudPrintInterface_);
-    this.cloudPrintInterface_ = new cloudprint.CloudPrintInterface(
+    this.cloudPrintInterface_ = cloudprint.getCloudPrintInterface(
         cloudPrintUrl, assert(this.nativeLayer_), assert(this.userInfo_),
         appKioskMode);
     this.tracker_.add(
-        assert(this.cloudPrintInterface_),
+        assert(this.cloudPrintInterface_).getEventTarget(),
         cloudprint.CloudPrintInterfaceEventType.SUBMIT_DONE,
         this.close_.bind(this));
     [cloudprint.CloudPrintInterfaceEventType.SEARCH_FAILED,
@@ -310,7 +385,7 @@ Polymer({
      cloudprint.CloudPrintInterfaceEventType.PRINTER_FAILED,
     ].forEach(eventType => {
       this.tracker_.add(
-          assert(this.cloudPrintInterface_), eventType,
+          assert(this.cloudPrintInterface_).getEventTarget(), eventType,
           this.onCloudPrintError_.bind(this));
     });
 
@@ -334,12 +409,16 @@ Polymer({
 
   /** @private */
   onDestinationUpdated_: function() {
-    this.set(
-        'destination_.capabilities',
-        this.destinationStore_.selectedDestination.capabilities);
+    // Notify observers, since destination_ ==
+    // destinationStore_.selectedDestination and this event indicates
+    // destinationStore_.selectedDestination.capabilities has been updated.
+    this.notifyPath('destination_.capabilities');
 
     if (!this.$.model.initialized())
       this.$.model.applyStickySettings();
+
+    if (this.destination_)
+      this.$.model.applyDestinationSpecificPolicies();
 
     if (this.state == print_preview_new.State.NOT_READY ||
         this.state == print_preview_new.State.INVALID_PRINTER) {
@@ -363,7 +442,12 @@ Polymer({
       this.remove();
       this.nativeLayer_.dialogClose(this.cancelled_);
     } else if (this.state == print_preview_new.State.HIDDEN) {
-      this.nativeLayer_.hidePreview();
+      if (this.destination_.isLocal &&
+          this.destination_.id !==
+              print_preview.Destination.GooglePromotedId.SAVE_AS_PDF) {
+        // Only hide the preview for local, non PDF destinations.
+        this.nativeLayer_.hidePreview();
+      }
     } else if (this.state == print_preview_new.State.PRINTING) {
       if (this.shouldShowMoreSettings_) {
         new print_preview.PrintSettingsUiMetricsContext().record(
@@ -530,7 +614,8 @@ Polymer({
    * Updates printing options according to source document presets.
    * @param {boolean} disableScaling Whether the document disables scaling.
    * @param {number} copies The default number of copies from the document.
-   * @param {number} duplex The default duplex setting from the document.
+   * @param {!print_preview_new.DuplexMode} duplex The default duplex setting
+   *     from the document.
    * @private
    */
   onPrintPresetOptions_: function(disableScaling, copies, duplex) {
@@ -540,8 +625,11 @@ Polymer({
     if (copies > 0 && this.getSetting('copies').available)
       this.setSetting('copies', copies);
 
-    if (duplex >= 0 && this.getSetting('duplex').available)
-      this.setSetting('duplex', duplex);
+    if (duplex !== print_preview_new.DuplexMode.UNKNOWN_DUPLEX_MODE &&
+        this.getSetting('duplex').available) {
+      this.setSetting(
+          'duplex', duplex === print_preview_new.DuplexMode.LONG_EDGE);
+    }
   },
 
   /**
@@ -564,10 +652,24 @@ Polymer({
    * @private
    */
   shouldExpandSettings_: function() {
+    if (this.settingsExpandedByUser_ === undefined ||
+        this.shouldShowMoreSettings_ === undefined) {
+      return false;
+    }
+
     // Expand the settings if the user has requested them expanded or if more
     // settings is not displayed (i.e. less than 6 total settings available).
     return this.settingsExpandedByUser_ || !this.shouldShowMoreSettings_;
   },
+
+  // <if expr="chromeos">
+  /** @private */
+  onNoDestinationsFound_: function() {
+    this.$.state.transitTo(print_preview_new.State.INVALID_PRINTER);
+    this.$.previewArea.setNoDestinationsFound();
+    this.$.destinationSettings.noDestinationsFound = true;
+  },
+  // </if>
 
   /** @private */
   close_: function() {

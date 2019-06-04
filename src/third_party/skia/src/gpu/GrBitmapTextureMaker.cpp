@@ -31,7 +31,6 @@ GrBitmapTextureMaker::GrBitmapTextureMaker(GrContext* context, const SkBitmap& b
 }
 
 sk_sp<GrTextureProxy> GrBitmapTextureMaker::refOriginalTextureProxy(bool willBeMipped,
-                                                                    SkColorSpace* dstColorSpace,
                                                                     AllowedTexGenType onlyIfFast) {
     if (AllowedTexGenType::kCheap == onlyIfFast) {
         return nullptr;
@@ -49,10 +48,10 @@ sk_sp<GrTextureProxy> GrBitmapTextureMaker::refOriginalTextureProxy(bool willBeM
 
     if (!proxy) {
         if (willBeMipped) {
-            proxy = proxyProvider->createMipMapProxyFromBitmap(fBitmap, dstColorSpace);
+            proxy = proxyProvider->createMipMapProxyFromBitmap(fBitmap);
         }
         if (!proxy) {
-            proxy = GrUploadBitmapToTextureProxy(proxyProvider, fBitmap, dstColorSpace);
+            proxy = GrUploadBitmapToTextureProxy(proxyProvider, fBitmap);
         }
         if (proxy) {
             if (fOriginalKey.isValid()) {
@@ -61,7 +60,8 @@ sk_sp<GrTextureProxy> GrBitmapTextureMaker::refOriginalTextureProxy(bool willBeM
             if (!willBeMipped || GrMipMapped::kYes == proxy->mipMapped()) {
                 SkASSERT(proxy->origin() == kTopLeft_GrSurfaceOrigin);
                 if (fOriginalKey.isValid()) {
-                    GrInstallBitmapUniqueKeyInvalidator(fOriginalKey, fBitmap.pixelRef());
+                    GrInstallBitmapUniqueKeyInvalidator(
+                            fOriginalKey, proxyProvider->contextUniqueID(), fBitmap.pixelRef());
                 }
                 return proxy;
             }
@@ -85,7 +85,8 @@ sk_sp<GrTextureProxy> GrBitmapTextureMaker::refOriginalTextureProxy(bool willBeM
                 // time it too will be deleted or recycled.
                 proxyProvider->removeUniqueKeyFromProxy(fOriginalKey, proxy.get());
                 proxyProvider->assignUniqueKeyToProxy(fOriginalKey, mippedProxy.get());
-                GrInstallBitmapUniqueKeyInvalidator(fOriginalKey, fBitmap.pixelRef());
+                GrInstallBitmapUniqueKeyInvalidator(fOriginalKey, proxyProvider->contextUniqueID(),
+                                                    fBitmap.pixelRef());
             }
             return mippedProxy;
         }
@@ -97,23 +98,21 @@ sk_sp<GrTextureProxy> GrBitmapTextureMaker::refOriginalTextureProxy(bool willBeM
     return nullptr;
 }
 
-void GrBitmapTextureMaker::makeCopyKey(const CopyParams& copyParams, GrUniqueKey* copyKey,
-                                       SkColorSpace* dstColorSpace) {
+void GrBitmapTextureMaker::makeCopyKey(const CopyParams& copyParams, GrUniqueKey* copyKey) {
     // Destination color space is irrelevant - we always upload the bitmap's contents as-is
     if (fOriginalKey.isValid()) {
         MakeCopyKeyFromOrigKey(fOriginalKey, copyParams, copyKey);
     }
 }
 
-void GrBitmapTextureMaker::didCacheCopy(const GrUniqueKey& copyKey) {
-    GrInstallBitmapUniqueKeyInvalidator(copyKey, fBitmap.pixelRef());
+void GrBitmapTextureMaker::didCacheCopy(const GrUniqueKey& copyKey, uint32_t contextUniqueID) {
+    GrInstallBitmapUniqueKeyInvalidator(copyKey, contextUniqueID, fBitmap.pixelRef());
 }
 
 SkAlphaType GrBitmapTextureMaker::alphaType() const {
     return fBitmap.alphaType();
 }
 
-sk_sp<SkColorSpace> GrBitmapTextureMaker::getColorSpace(SkColorSpace* dstColorSpace) {
-    // Color space doesn't depend on destination color space - it's just whatever is in the bitmap
-    return fBitmap.refColorSpace();
+SkColorSpace* GrBitmapTextureMaker::colorSpace() const {
+    return fBitmap.colorSpace();
 }

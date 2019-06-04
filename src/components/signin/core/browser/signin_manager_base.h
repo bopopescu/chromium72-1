@@ -44,14 +44,6 @@ class PrefService;
 class SigninClient;
 class SigninErrorController;
 
-namespace password_manager {
-class PasswordStoreSigninNotifierImpl;
-}
-
-namespace user_prefs {
-class PrefRegistrySyncable;
-}
-
 class SigninManagerBase : public KeyedService {
  public:
   class Observer {
@@ -63,30 +55,6 @@ class SigninManagerBase : public KeyedService {
     // This method is not called during a reauth.
     virtual void GoogleSigninSucceeded(const AccountInfo& account_info) {}
 
-    // DEPRECATED: Use the above method instead.
-    virtual void GoogleSigninSucceeded(const std::string& account_id,
-                                       const std::string& username) {}
-
-    // Called when the currently signed-in user for a user has been signed out.
-    virtual void GoogleSignedOut(const AccountInfo& account_info) {}
-
-    // DEPRECATED: Use the above method instead.
-    virtual void GoogleSignedOut(const std::string& account_id,
-                                 const std::string& username) {}
-
-   protected:
-    virtual ~Observer() {}
-
-   private:
-    // Observers that can observer the password of the Google account after a
-    // successful sign-in.
-    friend class PasswordStoreSigninNotifierImpl;
-
-    // SigninManagers that fire |GoogleSigninSucceededWithPassword|
-    // notifications.
-    friend class SigninManager;
-    friend class FakeSigninManager;
-
     // Called when a user signs into Google services such as sync. Also passes
     // the password of the Google account that was used to sign in.
     // This method is not called during a reauth.
@@ -97,19 +65,46 @@ class SigninManagerBase : public KeyedService {
     // Note: The password is always empty on mobile as the user signs in to
     // Chrome with accounts that were added to the device, so Chrome does not
     // have access to the password.
+    // DEPRECATED: password will be empty if login is using DICE workflow; the
+    // method will be removed once all login is using the DICE workflow.
     virtual void GoogleSigninSucceededWithPassword(
-        const std::string& account_id,
-        const std::string& username,
+        const AccountInfo& account_info,
         const std::string& password) {}
+
+    // Called when the currently signed-in user for a user has been signed out.
+    virtual void GoogleSignedOut(const AccountInfo& account_info) {}
+
+   protected:
+    virtual ~Observer() {}
+
+   private:
+    // SigninManagers that fire |GoogleSigninSucceededWithPassword|
+    // notifications.
+    friend class SigninManager;
+    friend class FakeSigninManager;
   };
 
+// On non-ChromeOS platforms, SigninManagerBase should only be instantiated
+// via the derived SigninManager class, as the codewise assumes the
+// invariant that any SigninManagerBase object can be cast to a
+// SigninManager object when not on ChromeOS. Make the constructor private
+// and add SigninManager as a friend to support this.
+// TODO(883648): Eliminate the need to downcast SigninManagerBase to
+// SigninManager and then eliminate this as well.
+#if !defined(OS_CHROMEOS)
+ private:
+#endif
   SigninManagerBase(SigninClient* client,
                     AccountTrackerService* account_tracker_service,
                     SigninErrorController* signin_error_controller);
+#if !defined(OS_CHROMEOS)
+ public:
+#endif
+
   ~SigninManagerBase() override;
 
   // Registers per-profile prefs.
-  static void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry);
+  static void RegisterProfilePrefs(PrefRegistrySimple* registry);
 
   // Registers per-install prefs.
   static void RegisterPrefs(PrefRegistrySimple* registry);
@@ -119,11 +114,9 @@ class SigninManagerBase : public KeyedService {
   bool IsInitialized() const;
 
   // Returns true if a signin to Chrome is allowed (by policy or pref).
-  // TODO(tim): kSigninAllowed is defined for all platforms in pref_names.h.
-  // If kSigninAllowed pref was non-Chrome OS-only, this method wouldn't be
-  // needed, but as is we provide this method to let all interested code
-  // code query the value in one way, versus half using PrefService directly
-  // and the other half using SigninManager.
+  // TODO(crbug.com/806778): this method should not be used externally,
+  // instead the value of the kSigninAllowed preference should be checked.
+  // Once all external code has been modified, this method will be removed.
   virtual bool IsSigninAllowed() const;
 
   // If a user has previously signed in (and has not signed out), this returns
@@ -201,7 +194,7 @@ class SigninManagerBase : public KeyedService {
 
   // List of observers to notify on signin events.
   // Makes sure list is empty on destruction.
-  base::ObserverList<Observer, true> observer_list_;
+  base::ObserverList<Observer, true>::Unchecked observer_list_;
 
   // Helper method to notify all registered diagnostics observers with.
   void NotifyDiagnosticsObservers(
@@ -212,6 +205,11 @@ class SigninManagerBase : public KeyedService {
   friend class FakeSigninManagerBase;
   friend class FakeSigninManager;
 
+  // Added only to allow SigninManager to call the SigninManagerBase
+  // constructor while disallowing any ad-hoc subclassing of
+  // SigninManagerBase.
+  friend class SigninManager;
+
   SigninClient* client_;
   AccountTrackerService* account_tracker_service_;
   SigninErrorController* signin_error_controller_;
@@ -221,8 +219,8 @@ class SigninManagerBase : public KeyedService {
   std::string authenticated_account_id_;
 
   // The list of SigninDiagnosticObservers.
-  base::ObserverList<signin_internals_util::SigninDiagnosticsObserver, true>
-      signin_diagnostics_observers_;
+  base::ObserverList<signin_internals_util::SigninDiagnosticsObserver,
+                     true>::Unchecked signin_diagnostics_observers_;
 
   // The list of callbacks notified on shutdown.
   base::CallbackList<void()> on_shutdown_callback_list_;

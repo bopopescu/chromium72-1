@@ -13,7 +13,7 @@
 #include "net/third_party/quic/platform/api/quic_export.h"
 #include "net/third_party/quic/platform/api/quic_logging.h"
 
-namespace net {
+namespace quic {
 
 namespace test {
 class QuicSustainedBandwidthRecorderPeer;
@@ -26,6 +26,10 @@ class QuicSustainedBandwidthRecorderPeer;
 class QUIC_EXPORT_PRIVATE QuicSustainedBandwidthRecorder {
  public:
   QuicSustainedBandwidthRecorder();
+  QuicSustainedBandwidthRecorder(const QuicSustainedBandwidthRecorder&) =
+      delete;
+  QuicSustainedBandwidthRecorder& operator=(
+      const QuicSustainedBandwidthRecorder&) = delete;
 
   // As long as |in_recovery| is consistently false, multiple calls to this
   // method over a 3 * srtt period results in storage of a valid sustained
@@ -85,10 +89,8 @@ class QUIC_EXPORT_PRIVATE QuicSustainedBandwidthRecorder {
 
   // Timestamp marking the beginning of the latest recording period.
   QuicTime start_time_;
-
-  DISALLOW_COPY_AND_ASSIGN(QuicSustainedBandwidthRecorder);
 };
 
-}  // namespace net
+}  // namespace quic
 
 #endif  // NET_THIRD_PARTY_QUIC_CORE_QUIC_SUSTAINED_BANDWIDTH_RECORDER_H_

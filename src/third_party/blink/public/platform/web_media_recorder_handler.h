@@ -9,14 +9,14 @@
 
 #include "third_party/blink/public/platform/web_common.h"
 
-#include "third_party/blink/public/platform/modules/media_capabilities/web_media_capabilities_info.h"
+#include "third_party/blink/public/platform/modules/media_capabilities/web_media_capabilities_callbacks.h"
+#include "third_party/blink/public/platform/web_string.h"
 
 namespace blink {
 
 class WebMediaRecorderHandlerClient;
 struct WebMediaConfiguration;
 class WebMediaStream;
-class WebString;
 
 // Platform interface of a MediaRecorder.
 class BLINK_PLATFORM_EXPORT WebMediaRecorderHandler {
@@ -47,11 +47,14 @@ class BLINK_PLATFORM_EXPORT WebMediaRecorderHandler {
     return false;
   }
 
+  // What is really being encoded???
+  virtual WebString ActualMimeType() { return WebString(); }
+
   // Implements WICG Media Capabilities encodingInfo() call for local encoding.
   // https://wicg.github.io/media-capabilities/#media-capabilities-interface
   virtual void EncodingInfo(
       const WebMediaConfiguration&,
-      std::unique_ptr<blink::WebMediaCapabilitiesQueryCallbacks>) {}
+      std::unique_ptr<blink::WebMediaCapabilitiesEncodingInfoCallbacks>) {}
 };
 
 }  // namespace blink

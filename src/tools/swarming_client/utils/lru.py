@@ -20,10 +20,13 @@ class LRUDict(object):
 
   Can also store its state as *.json file on disk.
   """
+  @staticmethod
+  def time_fn():
+    """Called to determine current timestamp when adding an entry.
 
-  # Used to determine current timestamp.
-  # Can be substituted in individual LRUDict instances.
-  time_fn = time.time
+    Can be substituted in individual LRUDict instances, especially for tests.
+    """
+    return round(time.time())
 
   def __init__(self):
     # Ordered key -> (value, timestamp) mapping,
@@ -121,21 +124,10 @@ class LRUDict(object):
     self._items[key] = (value, self.time_fn())
     self._dirty = True
 
-  def keys_set(self):
-    """Set of keys of items in this dict."""
-    return set(self._items)
-
   def get(self, key, default=None):
     """Returns value for |key| or |default| if not found."""
     item = self._items.get(key)
     return item[0] if item is not None else default
-
-  def get_timestamp(self, key):
-    """Returns timestamp of last use of |key|.
-
-    Raises KeyError if |key| is not in the dict.
-    """
-    return self._items[key][1]
 
   def touch(self, key):
     """Marks |key| as most recently used.
@@ -172,7 +164,18 @@ class LRUDict(object):
     self._dirty = True
     return item
 
+  def iteritems(self):
+    """Iterator over stored values in order."""
+    for key, (val, _ts) in self._items.iteritems():
+      yield key, val
+
   def itervalues(self):
-    """Iterator over stored values in arbitrary order."""
+    """Iterator over stored values in order."""
     for val, _ in self._items.itervalues():
       yield val
+
+  def transform(self, mutator):
+    """Updates the data format and saves immediately."""
+    for key, (val, timestamp) in self._items.iteritems():
+      self._items[key] = (mutator(key, val), timestamp)
+    self._dirty = True

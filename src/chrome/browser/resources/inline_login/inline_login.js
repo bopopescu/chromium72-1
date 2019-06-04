@@ -93,6 +93,18 @@ cr.define('inline.login', function() {
   }
 
   /**
+   * Sends a message 'lstFetchResults'. This is a specific message  sent when
+   * the inline signin is loaded with reason REASON_FETCH_LST_ONLY. Handlers of
+   * this message would expect a single argument a base::Dictionary value that
+   * contains the values fetched from the gaia sign in endpoint.
+   * @param {string} arg The string representation of the json data returned by
+   *    the sign in dialog after it has finished the sign in process.
+   */
+  function sendLSTFetchResults(arg) {
+    chrome.send('lstFetchResults', [arg]);
+  }
+
+  /**
    * Invoked when failed to get oauth2 refresh token.
    */
   function handleOAuth2TokenFailure() {
@@ -117,7 +129,7 @@ cr.define('inline.login', function() {
 
   function showBackButton() {
     $('navigation-button').icon =
-        isRTL() ? 'icons:arrow-forward' : 'icons:arrow-back';
+        isRTL() ? 'cr:arrow-forward' : 'cr:arrow-back';
 
     $('navigation-button')
         .setAttribute(
@@ -125,7 +137,7 @@ cr.define('inline.login', function() {
   }
 
   function showCloseButton() {
-    $('navigation-button').icon = 'icons:close';
+    $('navigation-button').icon = 'cr:close';
     $('navigation-button').classList.add('enabled');
     $('navigation-button')
         .setAttribute(
@@ -138,6 +150,7 @@ cr.define('inline.login', function() {
 
   return {
     closeDialog: closeDialog,
+    sendLSTFetchResults: sendLSTFetchResults,
     getAuthExtHost: getAuthExtHost,
     handleOAuth2TokenFailure: handleOAuth2TokenFailure,
     initialize: initialize,

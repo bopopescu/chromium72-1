@@ -9,32 +9,25 @@
  */
 
 #include "rtc_base/opensslutility.h"
-
-#include <memory>
-
-#if defined(WEBRTC_POSIX)
-#include <unistd.h>
-#endif
-
 #if defined(WEBRTC_WIN)
 // Must be included first before openssl headers.
 #include "rtc_base/win32.h"  // NOLINT
 #endif                       // WEBRTC_WIN
 
-#include <openssl/bio.h>
-#include <openssl/crypto.h>
+#include <openssl/err.h>
 #include <openssl/x509.h>
 #include <openssl/x509v3.h>
+#include "rtc_base/openssl.h"
+
+#include <stddef.h>
 
 #include "rtc_base/arraysize.h"
-#include "rtc_base/checks.h"
 #include "rtc_base/logging.h"
 #include "rtc_base/numerics/safe_conversions.h"
-#include "rtc_base/openssl.h"
 #include "rtc_base/opensslcertificate.h"
-#ifdef WEBRTC_ENABLE_BUILT_IN_SSL_ROOT_CERTIFICATES
+#ifndef WEBRTC_EXCLUDE_BUILT_IN_SSL_ROOT_CERTS
 #include "rtc_base/sslroots.h"
-#endif  // WEBRTC_ENABLE_BUILT_IN_SSL_ROOT_CERTIFICATES
+#endif  // WEBRTC_EXCLUDE_BUILT_IN_SSL_ROOT_CERTS
 
 namespace rtc {
 namespace openssl {
@@ -109,7 +102,7 @@ void LogSSLErrors(const std::string& prefix) {
   }
 }
 
-#ifdef WEBRTC_ENABLE_BUILT_IN_SSL_ROOT_CERTIFICATES
+#ifndef WEBRTC_EXCLUDE_BUILT_IN_SSL_ROOT_CERTS
 bool LoadBuiltinSSLRootCertificates(SSL_CTX* ctx) {
   int count_of_added_certs = 0;
   for (size_t i = 0; i < arraysize(kSSLCertCertificateList); i++) {
@@ -129,7 +122,7 @@ bool LoadBuiltinSSLRootCertificates(SSL_CTX* ctx) {
   }
   return count_of_added_certs > 0;
 }
-#endif  // WEBRTC_ENABLE_BUILT_IN_SSL_ROOT_CERTIFICATES
+#endif  // WEBRTC_EXCLUDE_BUILT_IN_SSL_ROOT_CERTS
 
 }  // namespace openssl
 }  // namespace rtc

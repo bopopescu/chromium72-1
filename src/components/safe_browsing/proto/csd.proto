@@ -59,6 +59,12 @@ message ChromeUserPopulation {
   }
   optional ProfileManagementStatus profile_management_status = 5
       [default = UNKNOWN];
+
+  // Indicates if user opted in advanced protection program.
+  optional bool is_under_advanced_protection = 6;
+
+  // Indicates if user is in incognito mode.
+  optional bool is_incognito = 7;
 }
 
 message ClientPhishingRequest {
@@ -260,6 +266,26 @@ message LoginReputationClientRequest {
       GSUITE = 2;
     }
     optional SyncAccountType sync_account_type = 4;
+
+    // Type of password being reused.
+    enum ReusedPasswordType {
+      REUSED_PASSWORD_TYPE_UNKNOWN = 0;
+
+      // Password saved in Chrome's password manager.
+      SAVED_PASSWORD = 1;
+
+      // Password used in Chrome sign-in.
+      SIGN_IN_PASSWORD = 2;
+
+      // Other Gaia password used in Chrome's content area other than Chrome's
+      // sign-in password.
+      OTHER_GAIA_PASSWORD = 3;
+
+      // Non-Gaia enterprise password captured from enterprise login page.
+      ENTERPRISE_PASSWORD = 4;
+    }
+    optional ReusedPasswordType reused_password_type = 5
+        [default = REUSED_PASSWORD_TYPE_UNKNOWN];
   }
 
   optional PasswordReuseEvent password_reuse_event = 4;
@@ -272,6 +298,17 @@ message LoginReputationClientRequest {
 
   // If user clicked through safe browsing interstitial on this page.
   optional bool clicked_through_interstitial = 7;
+
+  // The MIME type of the page, e.g. "application/pdf".
+  optional string content_type = 8;
+
+  // Content area height in DIPs. This field should only be filled for extended
+  // reporting users.
+  optional int32 content_area_height = 9;
+
+  // Content area width in DIPs. This field should only be filled for extended
+  // reporting users.
+  optional int32 content_area_width = 10;
 }
 
 // The message is used for client response for login reputation requests.
@@ -449,13 +486,20 @@ message ClientDownloadRequest {
     INVALID_ZIP = 7;
     // A .dmg, .pkg, etc, that Chrome failed to unpack to the point of finding
     // Mach O's.
-    INVALID_MAC_ARCHIVE = 8;
+    MAC_ARCHIVE_FAILED_PARSING = 8;
     // A download request initiated via PPAPI. Typically the requestor is
     // a Flash applet.
     PPAPI_SAVE_REQUEST = 9;
     // A file we don't support, but we've decided to sample and send
     // a light-ping.
     SAMPLED_UNSUPPORTED_FILE = 10;
+    // .rar file containing one of the other executable types.
+    RAR_COMPRESSED_EXECUTABLE = 11;
+    // .rar file containing another archive.
+    RAR_COMPRESSED_ARCHIVE = 12;
+    // .rar file that Chrome failed to unpack to the point of finding
+    // executables or archives.
+    INVALID_RAR = 13;
   }
   optional DownloadType download_type = 10 [default = WIN_EXECUTABLE];
 
@@ -526,6 +570,9 @@ message ClientDownloadRequest {
     optional int64 length = 4;
     optional SignatureInfo signature = 5;
     optional ImageHeaders image_headers = 6;
+
+    // Indicates if the given file is password protected.
+    optional bool is_encrypted = 7;
   }
 
   repeated ArchivedBinary archived_binary = 22;
@@ -613,6 +660,11 @@ message ReferrerChainEntry {
     // chain is empty or partially missing, we will add/append recent navigation
     // events to this list. RECENT_NAVIGATION type is set for these cases.
     RECENT_NAVIGATION = 6;
+
+    // The REFERRER type is used for entries that recede the LANDING_REFERRER in
+    // the referrer chain, when more than two gestures are included in the
+    // referrer chain.
+    REFERRER = 7;
   }
 
   enum NavigationInitiation {
@@ -620,7 +672,9 @@ message ReferrerChainEntry {
     UNDEFINED = 0;
 
     // Navigation is initiated by the browser process. e.g. user enters url into
-    // address bar, or user opens a bookmark.
+    // address bar, or user opens a bookmark. This isn't perfect reliable due to
+    // some edge cases, such as forward/back navigation and opening a link from
+    // context menu.
     BROWSER_INITIATED = 1;
 
     // Navigation is initiated by the renderer process and there is no user
@@ -675,7 +729,12 @@ message ReferrerChainEntry {
   // How this navigation is initiated.
   optional NavigationInitiation navigation_initiation = 10;
 
-  // next available tag number: 11.
+  // Whether we think this entry may have been launched by an external
+  // application. This will have no false negatives, but some false positives
+  // are possible.
+  optional bool maybe_launched_by_external_application = 11;
+
+  // next available tag number: 12.
 }  // End of ReferrerChainEntry
 
 message ClientDownloadResponse {
@@ -1004,6 +1063,7 @@ message ClientSafeBrowsingReportRequest {
     DANGEROUS_DOWNLOAD_OPENED = 13;
     AD_SAMPLE = 14;
     URL_SUSPICIOUS = 15;
+    BILLING = 16;
   }
 
   message HTTPHeader {

@@ -6,6 +6,7 @@ cr.define('extensions', function() {
   'use strict';
 
   /**
+   * @implements {extensions.ActivityLogDelegate}
    * @implements {extensions.ErrorPageDelegate}
    * @implements {extensions.ItemDelegate}
    * @implements {extensions.KeyboardShortcutDelegate}
@@ -64,6 +65,32 @@ cr.define('extensions', function() {
     getExtensionSize(id) {
       return new Promise(function(resolve, reject) {
         chrome.developerPrivate.getExtensionSize(id, resolve);
+      });
+    }
+
+    /** @override */
+    addRuntimeHostPermission(id, host) {
+      return new Promise((resolve, reject) => {
+        chrome.developerPrivate.addHostPermission(id, host, () => {
+          if (chrome.runtime.lastError) {
+            reject(chrome.runtime.lastError.message);
+            return;
+          }
+          resolve();
+        });
+      });
+    }
+
+    /** @override */
+    removeRuntimeHostPermission(id, host) {
+      return new Promise((resolve, reject) => {
+        chrome.developerPrivate.removeHostPermission(id, host, () => {
+          if (chrome.runtime.lastError) {
+            reject(chrome.runtime.lastError.message);
+            return;
+          }
+          resolve();
+        });
       });
     }
 
@@ -179,10 +206,10 @@ cr.define('extensions', function() {
     }
 
     /** @override */
-    setItemAllowedOnAllSites(id, isAllowedOnAllSites) {
+    setItemHostAccess(id, hostAccess) {
       chrome.developerPrivate.updateExtensionConfiguration({
         extensionId: id,
-        runOnAllUrls: isAllowedOnAllSites,
+        hostAccess: hostAccess,
       });
     }
 
@@ -302,15 +329,26 @@ cr.define('extensions', function() {
     /** @override */
     requestFileSource(args) {
       return new Promise(function(resolve, reject) {
-        chrome.developerPrivate.requestFileSource(args, function(code) {
-          resolve(code);
-        });
+        chrome.developerPrivate.requestFileSource(args, resolve);
       });
     }
 
     /** @override */
     showInFolder(id) {
       chrome.developerPrivate.showPath(id);
+    }
+
+    /** @override */
+    getExtensionActivityLog(extensionId) {
+      return new Promise(function(resolve, reject) {
+        chrome.activityLogPrivate.getExtensionActivities(
+            {
+              activityType:
+                  chrome.activityLogPrivate.ExtensionActivityFilter.ANY,
+              extensionId: extensionId
+            },
+            resolve);
+      });
     }
   }
 

@@ -24,7 +24,8 @@ import org.chromium.chrome.browser.util.AccessibilityUtil;
  * When action button is clicked, this manager will call {@link SnackbarController#onAction(Object)}
  * in corresponding listener, and show the next entry. Otherwise if no action is taken by user
  * during {@link #DEFAULT_SNACKBAR_DURATION_MS} milliseconds, it will call
- * {@link SnackbarController#onDismissNoAction(Object)}.
+ * {@link SnackbarController#onDismissNoAction(Object)}. Note, snackbars of
+ * {@link Snackbar#TYPE_PERSISTENT} do not get automatically dismissed after a timeout.
  */
 public class SnackbarManager implements OnClickListener, InfoBarContainer.InfoBarContainerObserver {
     /**
@@ -51,14 +52,14 @@ public class SnackbarManager implements OnClickListener, InfoBarContainer.InfoBa
         default void onAction(Object actionData) { }
 
         /**
-         * Called when the snackbar is dismissed by tiemout or UI enviroment change.
+         * Called when the snackbar is dismissed by timeout or UI environment change.
          * @param actionData Data object associated with the dismissed snackbar entry.
          */
         default void onDismissNoAction(Object actionData) { }
     }
 
-    private static final int DEFAULT_SNACKBAR_DURATION_MS = 3000;
-    private static final int ACCESSIBILITY_MODE_SNACKBAR_DURATION_MS = 6000;
+    public static final int DEFAULT_SNACKBAR_DURATION_MS = 3000;
+    private static final int ACCESSIBILITY_MODE_SNACKBAR_DURATION_MS = 10000;
 
     // Used instead of the constant so tests can override the value.
     private static int sSnackbarDurationMs = DEFAULT_SNACKBAR_DURATION_MS;
@@ -113,7 +114,7 @@ public class SnackbarManager implements OnClickListener, InfoBarContainer.InfoBa
      */
     public void showSnackbar(Snackbar snackbar) {
         if (!mActivityInForeground || mIsDisabledForTesting) return;
-        RecordHistogram.recordSparseSlowlyHistogram("Snackbar.Shown", snackbar.getIdentifier());
+        RecordHistogram.recordSparseHistogram("Snackbar.Shown", snackbar.getIdentifier());
 
         mSnackbars.add(snackbar);
         updateView();
@@ -221,9 +222,11 @@ public class SnackbarManager implements OnClickListener, InfoBarContainer.InfoBa
             }
 
             if (viewChanged) {
-                int durationMs = getDuration(currentSnackbar);
                 mUIThreadHandler.removeCallbacks(mHideRunnable);
-                mUIThreadHandler.postDelayed(mHideRunnable, durationMs);
+                if (!currentSnackbar.isTypePersistent()) {
+                    int durationMs = getDuration(currentSnackbar);
+                    mUIThreadHandler.postDelayed(mHideRunnable, durationMs);
+                }
                 mView.announceforAccessibility();
             }
         }
@@ -232,15 +235,19 @@ public class SnackbarManager implements OnClickListener, InfoBarContainer.InfoBa
 
     private int getDuration(Snackbar snackbar) {
         int durationMs = snackbar.getDuration();
-        if (durationMs == 0) {
-            durationMs = AccessibilityUtil.isAccessibilityEnabled()
-                    ? sAccessibilitySnackbarDurationMs : sSnackbarDurationMs;
+        if (durationMs == 0) durationMs = sSnackbarDurationMs;
+
+        if (AccessibilityUtil.isAccessibilityEnabled()) {
+            durationMs *= 2;
+            if (durationMs < sAccessibilitySnackbarDurationMs)
+                durationMs = sAccessibilitySnackbarDurationMs;
         }
+
         return durationMs;
     }
 
     /**
-     * Disables the snackbar manager. This is only intented for testing purposes.
+     * Disables the snackbar manager. This is only intended for testing purposes.
      */
     @VisibleForTesting
     public void disableForTesting() {

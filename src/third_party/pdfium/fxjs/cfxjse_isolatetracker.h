@@ -7,7 +7,6 @@
 #ifndef FXJS_CFXJSE_ISOLATETRACKER_H_
 #define FXJS_CFXJSE_ISOLATETRACKER_H_
 
-#include "fxjs/cfxjse_runtimedata.h"
 #include "v8/include/v8.h"
 
 class CFXJSE_ScopeUtil_IsolateHandle {
@@ -26,7 +25,7 @@ class CFXJSE_ScopeUtil_IsolateHandle {
   v8::HandleScope m_hscope;
 };
 
-class CFXJSE_ScopeUtil_IsolateHandleRootContext
+class CFXJSE_ScopeUtil_IsolateHandleRootContext final
     : public CFXJSE_ScopeUtil_IsolateHandle {
  public:
   explicit CFXJSE_ScopeUtil_IsolateHandleRootContext(v8::Isolate* pIsolate);

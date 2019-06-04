@@ -6,7 +6,6 @@
  */
 
 #include "GrBackendTextureImageGenerator.h"
-
 #include "GrContext.h"
 #include "GrContextPriv.h"
 #include "GrGpu.h"
@@ -19,9 +18,9 @@
 #include "GrTexture.h"
 #include "GrTexturePriv.h"
 #include "GrTextureProxyPriv.h"
-
 #include "SkGr.h"
 #include "SkMessageBus.h"
+#include "gl/GrGLTexture.h"
 
 GrBackendTextureImageGenerator::RefHelper::~RefHelper() {
     SkASSERT(nullptr == fBorrowedTexture);
@@ -85,8 +84,7 @@ void GrBackendTextureImageGenerator::ReleaseRefHelper_TextureReleaseProc(void* c
 }
 
 sk_sp<GrTextureProxy> GrBackendTextureImageGenerator::onGenerateTexture(
-        GrContext* context, const SkImageInfo& info, const SkIPoint& origin,
-        SkTransferFunctionBehavior, bool willNeedMipMaps) {
+        GrContext* context, const SkImageInfo& info, const SkIPoint& origin, bool willNeedMipMaps) {
     SkASSERT(context);
 
     if (context->contextPriv().getBackend() != fBackendTexture.backend()) {
@@ -135,9 +133,13 @@ sk_sp<GrTextureProxy> GrBackendTextureImageGenerator::onGenerateTexture(
     GrBackendTexture backendTexture = fBackendTexture;
     RefHelper* refHelper = fRefHelper;
 
+    GrBackendFormat format =
+            context->contextPriv().caps()->createFormatFromBackendTexture(backendTexture);
+    SkASSERT(format.isValid());
+
     sk_sp<GrTextureProxy> proxy = proxyProvider->createLazyProxy(
-            [refHelper, releaseProcHelper, semaphore,
-             backendTexture](GrResourceProvider* resourceProvider) {
+            [refHelper, releaseProcHelper, semaphore, backendTexture]
+            (GrResourceProvider* resourceProvider) {
                 if (!resourceProvider) {
                     return sk_sp<GrTexture>();
                 }
@@ -162,7 +164,8 @@ sk_sp<GrTextureProxy> GrBackendTextureImageGenerator::onGenerateTexture(
                     // two texture objects referencing the same GPU object. However, no client can
                     // ever see the original texture, so this should be safe.
                     tex = resourceProvider->wrapBackendTexture(backendTexture,
-                                                               kBorrow_GrWrapOwnership);
+                                                               kBorrow_GrWrapOwnership,
+                                                               true);
                     if (!tex) {
                         return sk_sp<GrTexture>();
                     }
@@ -172,18 +175,11 @@ sk_sp<GrTextureProxy> GrBackendTextureImageGenerator::onGenerateTexture(
                 }
 
                 return tex;
-
             },
-            desc, fSurfaceOrigin, mipMapped, SkBackingFit::kExact, SkBudgeted::kNo);
+            format, desc, fSurfaceOrigin, mipMapped, SkBackingFit::kExact, SkBudgeted::kNo);
 
     if (!proxy) {
         return nullptr;
-    }
-
-    // We can't pass the fact that this creates a wrapped texture into createLazyProxy so we need
-    // to manually call setDoesNotSupportMipMaps.
-    if (GrMipMapped::kNo == mipMapped) {
-        proxy->texPriv().setDoesNotSupportMipMaps();
     }
 
     if (0 == origin.fX && 0 == origin.fY &&
@@ -196,15 +192,17 @@ sk_sp<GrTextureProxy> GrBackendTextureImageGenerator::onGenerateTexture(
         // because Vulkan will want to do the copy as a draw. All other copies would require a
         // layout change in Vulkan and we do not change the layout of borrowed images.
         GrMipMapped mipMapped = willNeedMipMaps ? GrMipMapped::kYes : GrMipMapped::kNo;
-        sk_sp<SkColorSpace> colorSpace;
-        if (GrPixelConfigIsSRGB(desc.fConfig)) {
-            colorSpace = SkColorSpace::MakeSRGB();
+
+        GrBackendFormat format = proxy->backendFormat().makeTexture2D();
+        if (!format.isValid()) {
+            return nullptr;
         }
 
         sk_sp<GrRenderTargetContext> rtContext(
             context->contextPriv().makeDeferredRenderTargetContext(
-                SkBackingFit::kExact, info.width(), info.height(), proxy->config(),
-                std::move(colorSpace), 1, mipMapped, proxy->origin(), nullptr, SkBudgeted::kYes));
+                format, SkBackingFit::kExact, info.width(), info.height(),
+                proxy->config(), nullptr, 1, mipMapped, proxy->origin(), nullptr,
+                SkBudgeted::kYes));
 
         if (!rtContext) {
             return nullptr;

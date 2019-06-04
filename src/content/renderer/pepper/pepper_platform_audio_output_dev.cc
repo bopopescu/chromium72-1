@@ -14,7 +14,7 @@
 #include "build/build_config.h"
 #include "content/child/child_process.h"
 #include "content/common/content_constants_internal.h"
-#include "content/renderer/media/audio_output_ipc_factory.h"
+#include "content/renderer/media/audio/audio_output_ipc_factory.h"
 #include "content/renderer/pepper/audio_helper.h"
 #include "content/renderer/pepper/pepper_audio_output_host.h"
 #include "content/renderer/pepper/pepper_media_device_manager.h"
@@ -180,22 +180,22 @@ void PepperPlatformAudioOutputDev::OnDeviceAuthorized(
 }
 
 void PepperPlatformAudioOutputDev::OnStreamCreated(
-    base::SharedMemoryHandle handle,
+    base::UnsafeSharedMemoryRegion shared_memory_region,
     base::SyncSocket::Handle socket_handle,
     bool playing_automatically) {
-  DCHECK(handle.IsValid());
+  DCHECK(shared_memory_region.IsValid());
 #if defined(OS_WIN)
   DCHECK(socket_handle);
 #else
   DCHECK_NE(-1, socket_handle);
 #endif
-  DCHECK(handle.GetSize());
+  DCHECK_GT(shared_memory_region.GetSize(), 0u);
 
   if (base::ThreadTaskRunnerHandle::Get().get() == main_task_runner_.get()) {
     // Must dereference the client only on the main thread. Shutdown may have
     // occurred while the request was in-flight, so we need to NULL check.
     if (client_)
-      client_->StreamCreated(handle, handle.GetSize(), socket_handle);
+      client_->StreamCreated(std::move(shared_memory_region), socket_handle);
   } else {
     DCHECK(io_task_runner_->BelongsToCurrentThread());
     if (state_ != CREATING_STREAM)
@@ -208,7 +208,8 @@ void PepperPlatformAudioOutputDev::OnStreamCreated(
     main_task_runner_->PostTask(
         FROM_HERE,
         base::BindOnce(&PepperPlatformAudioOutputDev::OnStreamCreated, this,
-                       handle, socket_handle, playing_automatically));
+                       std::move(shared_memory_region), socket_handle,
+                       playing_automatically));
   }
 }
 
@@ -289,9 +290,9 @@ void PepperPlatformAudioOutputDev::RequestDeviceAuthorizationOnIOThread() {
     auth_timeout_action_.reset(new base::OneShotTimer());
     auth_timeout_action_->Start(
         FROM_HERE, auth_timeout_,
-        base::Bind(&PepperPlatformAudioOutputDev::OnDeviceAuthorized, this,
-                   media::OUTPUT_DEVICE_STATUS_ERROR_TIMED_OUT,
-                   media::AudioParameters(), std::string()));
+        base::BindOnce(&PepperPlatformAudioOutputDev::OnDeviceAuthorized, this,
+                       media::OUTPUT_DEVICE_STATUS_ERROR_TIMED_OUT,
+                       media::AudioParameters(), std::string()));
   }
 }
 
@@ -309,7 +310,7 @@ void PepperPlatformAudioOutputDev::CreateStreamOnIOThread(
     case IDLE:
       if (did_receive_auth_.IsSignaled() && device_id_.empty()) {
         state_ = CREATING_STREAM;
-        ipc_->CreateStream(this, params);
+        ipc_->CreateStream(this, params, base::nullopt);
       } else {
         RequestDeviceAuthorizationOnIOThread();
         start_on_authorized_ = true;
@@ -322,7 +323,7 @@ void PepperPlatformAudioOutputDev::CreateStreamOnIOThread(
 
     case AUTHORIZED:
       state_ = CREATING_STREAM;
-      ipc_->CreateStream(this, params);
+      ipc_->CreateStream(this, params, base::nullopt);
       start_on_authorized_ = false;
       break;
 

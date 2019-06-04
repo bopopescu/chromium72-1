@@ -13,6 +13,7 @@
 #include "base/callback.h"
 #include "base/macros.h"
 #include "base/memory/ref_counted.h"
+#include "base/optional.h"
 #include "extensions/browser/updater/extension_installer.h"
 #include "extensions/browser/updater/extension_update_data.h"
 
@@ -47,8 +48,8 @@ class UpdateDataProvider : public base::RefCounted<UpdateDataProvider> {
   // done.
   void Shutdown();
 
-  // Matches update_client::UpdateClient::CrxDataCallback
-  std::vector<std::unique_ptr<update_client::CrxComponent>> GetData(
+  std::vector<base::Optional<update_client::CrxComponent>> GetData(
+      bool install_immediately,
       const ExtensionUpdateDataMap& update_info,
       const std::vector<std::string>& ids);
 
@@ -60,6 +61,7 @@ class UpdateDataProvider : public base::RefCounted<UpdateDataProvider> {
   void RunInstallCallback(const std::string& extension_id,
                           const std::string& public_key,
                           const base::FilePath& unpacked_dir,
+                          bool install_immediately,
                           UpdateClientCallback update_client_callback);
 
   content::BrowserContext* browser_context_;

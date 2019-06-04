@@ -14,7 +14,7 @@
 #include "base/strings/string_split.h"
 #include "base/timer/timer.h"
 #include "base/trace_event/trace_event.h"
-#include "base/trace_event/trace_event_argument.h"
+#include "base/trace_event/traced_value.h"
 #include "components/data_use_measurement/core/data_use_user_data.h"
 #include "content/public/browser/browser_thread.h"
 #include "net/base/load_flags.h"
@@ -531,8 +531,7 @@ void V4GetHashProtocolManager::OnFullHashForApi(
   ThreatMetadata md;
   for (const FullHashInfo& full_hash_info : full_hash_infos) {
     DCHECK_EQ(GetChromeUrlApiId(), full_hash_info.list_id);
-    DCHECK(std::find(full_hashes.begin(), full_hashes.end(),
-                     full_hash_info.full_hash) != full_hashes.end());
+    DCHECK(base::ContainsValue(full_hashes, full_hash_info.full_hash));
     md.api_permissions.insert(full_hash_info.metadata.api_permissions.begin(),
                               full_hash_info.metadata.api_permissions.end());
   }
@@ -703,6 +702,7 @@ void V4GetHashProtocolManager::ParseMetadata(const ThreatMatch& match,
 void V4GetHashProtocolManager::ResetGetHashErrors() {
   gethash_error_count_ = 0;
   gethash_back_off_mult_ = 1;
+  next_gethash_time_ = base::Time();
 }
 
 void V4GetHashProtocolManager::SetClockForTests(base::Clock* clock) {
@@ -789,7 +789,7 @@ void V4GetHashProtocolManager::OnURLLoaderCompleteInternal(
     int net_error,
     int response_code,
     const std::string& data) {
-  PendingHashRequests::iterator it = pending_hash_requests_.find(url_loader);
+  auto it = pending_hash_requests_.find(url_loader);
   DCHECK(it != pending_hash_requests_.end()) << "Request not found";
   V4ProtocolManagerUtil::RecordHttpResponseOrErrorCode(
       "SafeBrowsing.V4GetHash.Network.Result", net_error, response_code);

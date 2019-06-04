@@ -4,7 +4,6 @@
 
 #include "headless/lib/browser/protocol/page_handler.h"
 
-#include "base/base64.h"
 #include "content/public/browser/web_contents.h"
 #include "printing/units.h"
 
@@ -21,12 +20,10 @@ const double kScaleMinVal = 10;
 
 void PDFCreated(std::unique_ptr<PageHandler::PrintToPDFCallback> callback,
                 HeadlessPrintManager::PrintResult print_result,
-                const std::string& data) {
+                scoped_refptr<base::RefCountedMemory> data) {
   std::unique_ptr<base::DictionaryValue> response;
   if (print_result == HeadlessPrintManager::PRINT_SUCCESS) {
-    std::string base_64_data;
-    base::Base64Encode(data, &base_64_data);
-    callback->sendSuccess(base_64_data);
+    callback->sendSuccess(protocol::Binary::fromRefCounted(data));
   } else {
     callback->sendFailure(Response::Error(
         HeadlessPrintManager::PrintResultToString(print_result)));
@@ -100,12 +97,14 @@ void PageHandler::PrintToPDF(Maybe<bool> landscape,
                 paper_height_in_inch * printing::kPointsPerInch);
 
   // Set default margin to 1.0cm = ~2/5 of an inch.
-  double default_margin_in_inch = 1000.0 / printing::kHundrethsMMPerInch;
-  double margin_top_in_inch = margin_top.fromMaybe(default_margin_in_inch);
-  double margin_right_in_inch = margin_right.fromMaybe(default_margin_in_inch);
-  double margin_bottom_in_inch =
-      margin_bottom.fromMaybe(default_margin_in_inch);
-  double margin_left_in_inch = margin_left.fromMaybe(default_margin_in_inch);
+  static constexpr double kDefaultMarginInMM = 10.0;
+  static constexpr double kMMPerInch = printing::kMicronsPerMil;
+  static constexpr double kDefaultMarginInInch =
+      kDefaultMarginInMM / kMMPerInch;
+  double margin_top_in_inch = margin_top.fromMaybe(kDefaultMarginInInch);
+  double margin_right_in_inch = margin_right.fromMaybe(kDefaultMarginInInch);
+  double margin_bottom_in_inch = margin_bottom.fromMaybe(kDefaultMarginInInch);
+  double margin_left_in_inch = margin_left.fromMaybe(kDefaultMarginInInch);
 
   settings.header_template = header_template.fromMaybe("");
   settings.footer_template = footer_template.fromMaybe("");

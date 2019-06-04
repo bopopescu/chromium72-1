@@ -11,6 +11,7 @@
 
 #include "base/macros.h"
 #include "base/process/process_handle.h"
+#include "base/time/time.h"
 #include "chrome/browser/resource_coordinator/test_lifecycle_unit.h"
 #include "chrome/browser/resource_coordinator/time.h"
 #include "chromeos/dbus/fake_debug_daemon_client.h"
@@ -148,7 +149,8 @@ class MockTabManagerDelegate : public TabManagerDelegate {
     return true;
   }
 
-  bool KillTab(LifecycleUnit* lifecycle_unit, DiscardReason reason) override {
+  bool KillTab(LifecycleUnit* lifecycle_unit,
+               ::mojom::LifecycleUnitDiscardReason reason) override {
     killed_tabs_.push_back(lifecycle_unit);
     return true;
   }
@@ -249,8 +251,8 @@ TEST_F(TabManagerDelegateTest, SetOomScoreAdj) {
   // Non-killable part. AdjustOomPrioritiesImpl() does make a focused app/tab
   // kernel-killable, but does not do that for PERSISTENT and PERSISTENT_UI
   // apps.
-  EXPECT_EQ(TabManagerDelegate::kLowestOomScore, oom_score_map[50]);
-  EXPECT_EQ(TabManagerDelegate::kLowestOomScore, oom_score_map[60]);
+  EXPECT_EQ(TabManagerDelegate::kPersistentArcAppOomScore, oom_score_map[50]);
+  EXPECT_EQ(TabManagerDelegate::kPersistentArcAppOomScore, oom_score_map[60]);
 
   // Higher priority part.
   EXPECT_EQ(300, oom_score_map[10]);
@@ -326,8 +328,9 @@ TEST_F(TabManagerDelegateTest, DoNotKillRecentlyKilledArcProcesses) {
 
   memory_stat->SetTargetMemoryToFreeKB(250000);
   memory_stat->SetProcessPss(30, 10000);
-  tab_manager_delegate.LowMemoryKillImpl(DiscardReason::kUrgent,
-                                         std::move(arc_processes));
+  tab_manager_delegate.LowMemoryKillImpl(
+      base::TimeTicks::Now(), ::mojom::LifecycleUnitDiscardReason::URGENT,
+      std::move(arc_processes));
 
   auto killed_arc_processes = tab_manager_delegate.GetKilledArcProcesses();
   EXPECT_EQ(0U, killed_arc_processes.size());
@@ -397,8 +400,9 @@ TEST_F(TabManagerDelegateTest, KillMultipleProcesses) {
   memory_stat->SetProcessPss(20, 30000);
   memory_stat->SetProcessPss(10, 100000);
 
-  tab_manager_delegate.LowMemoryKillImpl(DiscardReason::kProactive,
-                                         std::move(arc_processes));
+  tab_manager_delegate.LowMemoryKillImpl(
+      base::TimeTicks::Now(), ::mojom::LifecycleUnitDiscardReason::PROACTIVE,
+      std::move(arc_processes));
 
   auto killed_arc_processes = tab_manager_delegate.GetKilledArcProcesses();
   auto killed_tabs = tab_manager_delegate.GetKilledTabs();

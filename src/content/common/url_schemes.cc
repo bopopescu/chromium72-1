@@ -10,9 +10,9 @@
 
 #include "base/no_destructor.h"
 #include "base/strings/string_util.h"
+#include "build/build_config.h"
 #include "content/public/common/content_client.h"
 #include "content/public/common/url_constants.h"
-#include "services/network/public/cpp/cors/cors_legacy.h"
 #include "url/url_util.h"
 
 namespace content {
@@ -80,7 +80,7 @@ void RegisterContentSchemes(bool lock_schemes) {
 
   schemes.cors_enabled_schemes.push_back(kChromeUIScheme);
   for (auto& scheme : schemes.cors_enabled_schemes)
-    url::AddCORSEnabledScheme(scheme.c_str());
+    url::AddCorsEnabledScheme(scheme.c_str());
 
   // TODO(mkwst): Investigate whether chrome-error should be included in
   // csp_bypassing_schemes.
@@ -89,6 +89,11 @@ void RegisterContentSchemes(bool lock_schemes) {
 
   for (auto& scheme : schemes.empty_document_schemes)
     url::AddEmptyDocumentScheme(scheme.c_str());
+
+#if defined(OS_ANDROID)
+  if (schemes.allow_non_standard_schemes_in_origins)
+    url::EnableNonStandardSchemesForAndroidWebView();
+#endif
 
   // Prevent future modification of the scheme lists. This is to prevent
   // accidental creation of data races in the program. Add*Scheme aren't
@@ -108,7 +113,6 @@ void RegisterContentSchemes(bool lock_schemes) {
   GetMutableServiceWorkerSchemes() = std::move(schemes.service_worker_schemes);
 
   GetMutableSecureOriginsAndPatterns() = std::move(schemes.secure_origins);
-  network::cors::legacy::RegisterSecureOrigins(GetSecureOriginsAndPatterns());
 }
 
 const std::vector<std::string>& GetSavableSchemes() {

@@ -37,7 +37,8 @@ void PendingTaskAdapter(LazyContextTaskQueue::PendingTask original_task,
   } else {
     std::move(original_task)
         .Run(std::make_unique<LazyContextTaskQueue::ContextInfo>(
-            host->extension()->id(), host->render_process_host(), kMainThreadId,
+            host->extension()->id(), host->render_process_host(),
+            blink::mojom::kInvalidServiceWorkerVersionId, kMainThreadId,
             host->GetURL()));
   }
 }
@@ -45,7 +46,8 @@ void PendingTaskAdapter(LazyContextTaskQueue::PendingTask original_task,
 // Attempts to create a background host for a lazy background page. Returns true
 // if the background host is created.
 bool CreateLazyBackgroundHost(ProcessManager* pm, const Extension* extension) {
-  pm->IncrementLazyKeepaliveCount(extension);
+  pm->IncrementLazyKeepaliveCount(extension, Activity::LIFECYCLE_MANAGEMENT,
+                                  Activity::kCreatePage);
   // Creating the background host may fail, e.g. if the extension isn't enabled
   // in incognito mode.
   return pm->CreateBackgroundHost(extension,
@@ -96,7 +98,7 @@ bool LazyBackgroundTaskQueue::ShouldEnqueueTask(
 }
 
 void LazyBackgroundTaskQueue::AddPendingTaskToDispatchEvent(
-    LazyContextId* context_id,
+    const LazyContextId* context_id,
     LazyContextTaskQueue::PendingTask task) {
   AddPendingTask(context_id->browser_context(), context_id->extension_id(),
                  base::BindOnce(&PendingTaskAdapter, std::move(task)));
@@ -112,7 +114,7 @@ void LazyBackgroundTaskQueue::AddPendingTask(
   }
   PendingTasksList* tasks_list = nullptr;
   PendingTasksKey key(browser_context, extension_id);
-  PendingTasksMap::iterator it = pending_tasks_.find(key);
+  auto it = pending_tasks_.find(key);
   if (it == pending_tasks_.end()) {
     const Extension* extension = ExtensionRegistry::Get(browser_context)
                                      ->enabled_extensions()
@@ -147,7 +149,7 @@ void LazyBackgroundTaskQueue::ProcessPendingTasks(
     return;
 
   PendingTasksKey key(browser_context, extension->id());
-  PendingTasksMap::iterator map_it = pending_tasks_.find(key);
+  auto map_it = pending_tasks_.find(key);
   if (map_it == pending_tasks_.end()) {
     if (BackgroundInfo::HasLazyBackgroundPage(extension))
       CHECK(!host);  // lazy page should not load without any pending tasks
@@ -167,7 +169,8 @@ void LazyBackgroundTaskQueue::ProcessPendingTasks(
   // a failure to load, because the keepalive count is reset in that case.
   if (host && BackgroundInfo::HasLazyBackgroundPage(extension)) {
     ProcessManager::Get(browser_context)
-        ->DecrementLazyKeepaliveCount(extension);
+        ->DecrementLazyKeepaliveCount(extension, Activity::LIFECYCLE_MANAGEMENT,
+                                      Activity::kCreatePage);
   }
 }
 

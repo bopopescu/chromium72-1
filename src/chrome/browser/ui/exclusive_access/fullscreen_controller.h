@@ -103,6 +103,10 @@ class FullscreenController : public ExclusiveAccessControllerBase {
   bool IsFullscreenForTabOrPending(
       const content::WebContents* web_contents) const;
 
+  // Returns true if |web_contents| is in fullscreen mode as a screen-captured
+  // tab. See 'FullscreenWithinTab Note'.
+  bool IsFullscreenWithinTab(const content::WebContents* web_contents) const;
+
   // True if fullscreen was entered because of tab fullscreen (was not
   // previously in user-initiated fullscreen).
   bool IsFullscreenCausedByTab() const;
@@ -124,6 +128,7 @@ class FullscreenController : public ExclusiveAccessControllerBase {
   // Platform Fullscreen ///////////////////////////////////////////////////////
 
   // Overrde from ExclusiveAccessControllerBase.
+  void OnTabDeactivated(content::WebContents* web_contents) override;
   void OnTabDetachedFromView(content::WebContents* web_contents) override;
   void OnTabClosing(content::WebContents* web_contents) override;
   bool HandleUserPressedEscape() override;
@@ -138,6 +143,10 @@ class FullscreenController : public ExclusiveAccessControllerBase {
 
   // Called by Browser::WindowFullscreenStateChanged.
   void WindowFullscreenStateChanged();
+
+  void set_is_tab_fullscreen_for_testing(bool is_tab_fullscreen) {
+    is_tab_fullscreen_for_testing_ = is_tab_fullscreen;
+  }
 
  private:
   friend class FullscreenControllerTest;
@@ -169,9 +178,6 @@ class FullscreenController : public ExclusiveAccessControllerBase {
   // See 'FullscreenWithinTab Note'.
   bool MaybeToggleFullscreenWithinTab(content::WebContents* web_contents,
                                       bool enter_fullscreen);
-  // Returns true if |web_contents| is in fullscreen mode as a screen-captured
-  // tab. See 'FullscreenWithinTab Note'.
-  bool IsFullscreenWithinTab(const content::WebContents* web_contents) const;
 
   // Helper methods that should be used in a TAB context.
   GURL GetRequestingOrigin() const;
@@ -199,9 +205,16 @@ class FullscreenController : public ExclusiveAccessControllerBase {
   // True if this controller has toggled into tab OR browser fullscreen.
   bool toggled_into_fullscreen_;
 
+  // Set in OnTabDeactivated(). Used to see if we're in the middle of
+  // deactivation of a tab.
+  content::WebContents* deactivated_contents_;
+
   // Used in testing to confirm proper behavior for specific, privileged
   // fullscreen cases.
   bool is_privileged_fullscreen_for_testing_;
+
+  // Used in testing to set the state to tab fullscreen.
+  bool is_tab_fullscreen_for_testing_;
 
   base::WeakPtrFactory<FullscreenController> ptr_factory_;
 

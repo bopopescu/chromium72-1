@@ -194,7 +194,7 @@ class BASE_EXPORT RunLoop {
     using RunLoopStack = base::stack<RunLoop*, std::vector<RunLoop*>>;
 
     RunLoopStack active_run_loops_;
-    ObserverList<RunLoop::NestingObserver> nesting_observers_;
+    ObserverList<RunLoop::NestingObserver>::Unchecked nesting_observers_;
 
 #if DCHECK_IS_ON()
     bool allow_running_for_testing_ = true;
@@ -248,6 +248,8 @@ class BASE_EXPORT RunLoop {
   };
 
  private:
+  FRIEND_TEST_ALL_PREFIXES(MessageLoopTypedTest, RunLoopQuitOrderAfter);
+
 #if defined(OS_ANDROID)
   // Android doesn't support the blocking RunLoop::Run, so it calls
   // BeforeRun and AfterRun directly.
@@ -282,6 +284,11 @@ class BASE_EXPORT RunLoop {
   // probing this state via ShouldQuitWhenIdle()). This state is stored here
   // rather than pushed to Delegate to support nested RunLoops.
   bool quit_when_idle_received_ = false;
+
+  // True if use of QuitCurrent*Deprecated() is allowed. Taking a Quit*Closure()
+  // from a RunLoop implicitly sets this to false, so QuitCurrent*Deprecated()
+  // cannot be used while that RunLoop is being Run().
+  bool allow_quit_current_deprecated_ = true;
 
   // RunLoop is not thread-safe. Its state/methods, unless marked as such, may
   // not be accessed from any other sequence than the thread it was constructed

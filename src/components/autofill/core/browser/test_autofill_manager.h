@@ -16,40 +16,24 @@
 
 using base::TimeTicks;
 
-namespace net {
-class URLRequestContextGetter;
-}
-
 namespace autofill {
-
-namespace payments {
-class TestPaymentsClient;
-}  // namespace payments
 
 class AutofillClient;
 class AutofillDriver;
 class FormStructure;
-class TestFormDataImporter;
 class TestPersonalDataManager;
 
 class TestAutofillManager : public AutofillManager {
  public:
-  // Called by AutofillManagerTest and AutofillMetricsTest.
   TestAutofillManager(AutofillDriver* driver,
                       AutofillClient* client,
                       TestPersonalDataManager* personal_data);
-  // Called by CreditCardSaveManagerTest.
-  TestAutofillManager(
-      AutofillDriver* driver,
-      AutofillClient* client,
-      TestPersonalDataManager* personal_data,
-      std::unique_ptr<CreditCardSaveManager> credit_card_save_manager,
-      payments::TestPaymentsClient* payments_client);
   ~TestAutofillManager() override;
 
   // AutofillManager overrides.
   bool IsAutofillEnabled() const override;
-  bool IsCreditCardAutofillEnabled() override;
+  bool IsProfileAutofillEnabled() const override;
+  bool IsCreditCardAutofillEnabled() const override;
   void UploadFormData(const FormStructure& submitted_form,
                       bool observed_submission) override;
   bool MaybeStartVoteUploadProcess(
@@ -57,7 +41,6 @@ class TestAutofillManager : public AutofillManager {
       const base::TimeTicks& timestamp,
       bool observed_submission) override;
   void UploadFormDataAsyncCallback(const FormStructure* submitted_form,
-                                   const base::TimeTicks& load_time,
                                    const base::TimeTicks& interaction_time,
                                    const base::TimeTicks& submission_time,
                                    bool observed_submission) override;
@@ -78,6 +61,8 @@ class TestAutofillManager : public AutofillManager {
 
   void SetAutofillEnabled(bool autofill_enabled);
 
+  void SetProfileEnabled(bool profile_enabled);
+
   void SetCreditCardEnabled(bool credit_card_enabled);
 
   void SetExpectedSubmittedFieldTypes(
@@ -87,11 +72,12 @@ class TestAutofillManager : public AutofillManager {
 
   void SetCallParentUploadFormData(bool value);
 
+  using AutofillManager::is_rich_query_enabled;
+
  private:
-  TestPersonalDataManager* personal_data_;                  // Weak reference.
-  net::URLRequestContextGetter* context_getter_ = nullptr;  // Weak reference.
-  TestFormDataImporter* test_form_data_importer_ = nullptr;
+  TestPersonalDataManager* personal_data_;  // Weak reference.
   bool autofill_enabled_ = true;
+  bool profile_enabled_ = true;
   bool credit_card_enabled_ = true;
   bool call_parent_upload_form_data_ = false;
   base::Optional<bool> expected_observed_submission_;

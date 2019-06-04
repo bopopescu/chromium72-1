@@ -41,7 +41,7 @@ RemoteFrameClientImpl::RemoteFrameClientImpl(WebRemoteFrameImpl* web_frame)
 
 RemoteFrameClientImpl* RemoteFrameClientImpl::Create(
     WebRemoteFrameImpl* web_frame) {
-  return new RemoteFrameClientImpl(web_frame);
+  return MakeGarbageCollected<RemoteFrameClientImpl>(web_frame);
 }
 
 void RemoteFrameClientImpl::Trace(blink::Visitor* visitor) {
@@ -119,16 +119,6 @@ void RemoteFrameClientImpl::Navigate(
   }
 }
 
-void RemoteFrameClientImpl::Reload(
-    FrameLoadType load_type,
-    ClientRedirectPolicy client_redirect_policy) {
-  DCHECK(IsReloadLoadType(load_type));
-  if (web_frame_->Client()) {
-    web_frame_->Client()->Reload(static_cast<WebFrameLoadType>(load_type),
-                                 client_redirect_policy);
-  }
-}
-
 unsigned RemoteFrameClientImpl::BackForwardLength() {
   // TODO(creis,japhet): This method should return the real value for the
   // session history length. For now, return static value for the initial
@@ -161,8 +151,10 @@ void RemoteFrameClientImpl::FrameRectsChanged(
 }
 
 void RemoteFrameClientImpl::UpdateRemoteViewportIntersection(
-    const IntRect& viewport_intersection) {
-  web_frame_->Client()->UpdateRemoteViewportIntersection(viewport_intersection);
+    const IntRect& viewport_intersection,
+    bool occluded_or_obscured) {
+  web_frame_->Client()->UpdateRemoteViewportIntersection(viewport_intersection,
+                                                         occluded_or_obscured);
 }
 
 void RemoteFrameClientImpl::AdvanceFocus(WebFocusType type,
@@ -192,7 +184,7 @@ void RemoteFrameClientImpl::UpdateRenderThrottlingStatus(
 }
 
 uint32_t RemoteFrameClientImpl::Print(const IntRect& rect,
-                                      WebCanvas* canvas) const {
+                                      cc::PaintCanvas* canvas) const {
   return web_frame_->Client()->Print(rect, canvas);
 }
 

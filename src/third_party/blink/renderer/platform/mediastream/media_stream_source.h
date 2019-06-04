@@ -72,7 +72,7 @@ class PLATFORM_EXPORT MediaStreamSource final
     kReadyStateEnded = 2
   };
 
-  enum class EchoCancellationMode { kDisabled, kSoftware, kHardware };
+  enum class EchoCancellationMode { kDisabled, kBrowser, kAec3, kSystem };
 
   static MediaStreamSource* Create(const String& id,
                                    StreamType,
@@ -80,6 +80,13 @@ class PLATFORM_EXPORT MediaStreamSource final
                                    bool remote,
                                    ReadyState = kReadyStateLive,
                                    bool requires_consumer = false);
+
+  MediaStreamSource(const String& id,
+                    StreamType,
+                    const String& name,
+                    bool remote,
+                    ReadyState,
+                    bool requires_consumer);
 
   const String& Id() const { return id_; }
   StreamType GetType() const { return type_; }
@@ -103,10 +110,6 @@ class PLATFORM_EXPORT MediaStreamSource final
                                     bool auto_gain_control,
                                     bool noise_supression);
 
-  void SetConstraints(WebMediaConstraints constraints) {
-    constraints_ = constraints;
-  }
-  WebMediaConstraints Constraints() { return constraints_; }
   void GetSettings(WebMediaStreamTrack::Settings&);
 
   const WebMediaStreamSource::Capabilities& GetCapabilities() {
@@ -133,13 +136,6 @@ class PLATFORM_EXPORT MediaStreamSource final
   void Trace(blink::Visitor*);
 
  private:
-  MediaStreamSource(const String& id,
-                    StreamType,
-                    const String& name,
-                    bool remote,
-                    ReadyState,
-                    bool requires_consumer);
-
   String id_;
   StreamType type_;
   String name_;

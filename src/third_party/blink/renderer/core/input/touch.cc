@@ -27,6 +27,7 @@
 
 #include "third_party/blink/renderer/core/frame/local_frame.h"
 #include "third_party/blink/renderer/core/frame/local_frame_view.h"
+#include "third_party/blink/renderer/core/paint/paint_layer_scrollable_area.h"
 #include "third_party/blink/renderer/platform/geometry/float_point.h"
 
 namespace blink {
@@ -40,15 +41,14 @@ FloatPoint ContentsOffset(LocalFrame* frame) {
   if (!frame_view)
     return FloatPoint();
   float scale = 1.0f / frame->PageZoomFactor();
-  return FloatPoint(
-             frame_view->LayoutViewportScrollableArea()->GetScrollOffset())
+  return FloatPoint(frame_view->LayoutViewport()->GetScrollOffset())
       .ScaledBy(scale);
 }
 
 LayoutPoint PageToAbsolute(LocalFrame* frame, const FloatPoint& page_pos) {
   FloatPoint converted_point;
   if (frame && frame->View())
-    converted_point = frame->View()->DocumentToAbsolute(page_pos);
+    converted_point = frame->View()->DocumentToFrame(page_pos);
   else
     converted_point = page_pos;
 
@@ -99,22 +99,22 @@ Touch::Touch(EventTarget* target,
       region_(region),
       absolute_location_(absolute_location) {}
 
-Touch::Touch(LocalFrame* frame, const TouchInit& initializer)
-    : target_(initializer.target()),
-      identifier_(initializer.identifier()),
-      client_pos_(FloatPoint(initializer.clientX(), initializer.clientY())),
-      screen_pos_(FloatPoint(initializer.screenX(), initializer.screenY())),
-      page_pos_(FloatPoint(initializer.pageX(), initializer.pageY())),
-      radius_(FloatSize(initializer.radiusX(), initializer.radiusY())),
-      rotation_angle_(initializer.rotationAngle()),
-      force_(initializer.force()),
-      region_(initializer.region()),
+Touch::Touch(LocalFrame* frame, const TouchInit* initializer)
+    : target_(initializer->target()),
+      identifier_(initializer->identifier()),
+      client_pos_(FloatPoint(initializer->clientX(), initializer->clientY())),
+      screen_pos_(FloatPoint(initializer->screenX(), initializer->screenY())),
+      page_pos_(FloatPoint(initializer->pageX(), initializer->pageY())),
+      radius_(FloatSize(initializer->radiusX(), initializer->radiusY())),
+      rotation_angle_(initializer->rotationAngle()),
+      force_(initializer->force()),
+      region_(initializer->region()),
       absolute_location_(PageToAbsolute(frame, page_pos_)) {}
 
 Touch* Touch::CloneWithNewTarget(EventTarget* event_target) const {
-  return new Touch(event_target, identifier_, client_pos_, screen_pos_,
-                   page_pos_, radius_, rotation_angle_, force_, region_,
-                   absolute_location_);
+  return MakeGarbageCollected<Touch>(
+      event_target, identifier_, client_pos_, screen_pos_, page_pos_, radius_,
+      rotation_angle_, force_, region_, absolute_location_);
 }
 
 void Touch::Trace(blink::Visitor* visitor) {

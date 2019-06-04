@@ -4,17 +4,12 @@
 
 #include <vector>
 
-#include "base/optional.h"
 #include "base/run_loop.h"
-#include "base/threading/thread_task_runner_handle.h"
+#include "base/test/bind_test_util.h"
 #include "base/time/time.h"
-#include "components/viz/common/features.h"
-#include "components/viz/common/frame_sinks/copy_output_request.h"
-#include "components/viz/common/frame_sinks/copy_output_result.h"
-#include "components/viz/common/quads/compositor_frame.h"
-#include "components/viz/common/quads/render_pass.h"
-#include "components/viz/common/surfaces/local_surface_id.h"
-#include "content/browser/bad_message.h"
+#include "content/browser/renderer_host/input/input_router_impl.h"
+#include "content/browser/renderer_host/input/synthetic_smooth_drag_gesture.h"
+#include "content/browser/renderer_host/input/touch_action_filter.h"
 #include "content/browser/renderer_host/input/touch_emulator.h"
 #include "content/browser/renderer_host/render_widget_host_impl.h"
 #include "content/browser/renderer_host/render_widget_host_input_event_router.h"
@@ -22,85 +17,46 @@
 #include "content/browser/web_contents/web_contents_impl.h"
 #include "content/common/input/synthetic_web_input_event_builders.h"
 #include "content/public/browser/web_contents.h"
+#include "content/public/browser/web_contents_observer.h"
+#include "content/public/test/browser_test_utils.h"
 #include "content/public/test/content_browser_test.h"
 #include "content/public/test/content_browser_test_utils.h"
+#include "content/public/test/test_utils.h"
 #include "content/shell/browser/shell.h"
-#include "content/test/content_browser_test_utils_internal.h"
+#include "net/dns/mock_host_resolver.h"
+#include "net/test/embedded_test_server/embedded_test_server.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/public/platform/web_input_event.h"
 #include "third_party/blink/public/platform/web_mouse_event.h"
-#include "third_party/skia/include/core/SkBitmap.h"
 #include "ui/events/base_event_utils.h"
-#include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/geometry/size.h"
 #include "ui/latency/latency_info.h"
 
 namespace content {
 
-class RenderWidgetHostBrowserTest : public ContentBrowserTest {};
-
-IN_PROC_BROWSER_TEST_F(RenderWidgetHostBrowserTest,
-                       ProhibitsCopyRequestsFromRenderer) {
-  NavigateToURL(shell(), GURL("data:text/html,<!doctype html>"
-                              "<body style='background-color: red;'></body>"));
-
-  // Wait for the view's surface to become available.
-  auto* const view = static_cast<RenderWidgetHostViewBase*>(
-      shell()->web_contents()->GetRenderWidgetHostView());
-  while (!view->IsSurfaceAvailableForCopy()) {
-    base::RunLoop run_loop;
-    base::ThreadTaskRunnerHandle::Get()->PostDelayedTask(
-        FROM_HERE, run_loop.QuitClosure(),
-        base::TimeDelta::FromMilliseconds(250));
-    run_loop.Run();
+// This test enables --site-per-porcess flag.
+class RenderWidgetHostSitePerProcessTest : public ContentBrowserTest {
+ public:
+  void SetUpCommandLine(base::CommandLine* command_line) override {
+    IsolateAllSitesForTesting(command_line);
   }
 
-  // The browser process should be allowed to make a CopyOutputRequest.
-  bool did_receive_copy_result = false;
-  base::RunLoop run_loop;
-  view->CopyFromSurface(gfx::Rect(), gfx::Size(),
-                        base::BindOnce(
-                            [](bool* success, base::OnceClosure quit_closure,
-                               const SkBitmap& bitmap) {
-                              *success = !bitmap.drawsNothing();
-                              std::move(quit_closure).Run();
-                            },
-                            &did_receive_copy_result, run_loop.QuitClosure()));
-  run_loop.Run();
-  ASSERT_TRUE(did_receive_copy_result);
+  void SetUpOnMainThread() override {
+    host_resolver()->AddRule("*", "127.0.0.1");
+    SetupCrossSiteRedirector(embedded_test_server());
+    ASSERT_TRUE(embedded_test_server()->Start());
+  }
 
-  // Create a simulated-from-renderer CompositorFrame with a CopyOutputRequest.
-  viz::CompositorFrame frame;
-  std::unique_ptr<viz::RenderPass> pass = viz::RenderPass::Create();
-  const gfx::Rect output_rect =
-      gfx::Rect(view->GetCompositorViewportPixelSize());
-  pass->SetNew(1 /* render pass id */, output_rect, output_rect,
-               gfx::Transform());
-  bool did_receive_aborted_copy_result = false;
-  pass->copy_requests.push_back(std::make_unique<viz::CopyOutputRequest>(
-      viz::CopyOutputRequest::ResultFormat::RGBA_BITMAP,
-      base::BindOnce(
-          [](bool* got_nothing, std::unique_ptr<viz::CopyOutputResult> result) {
-            *got_nothing = result->IsEmpty();
-          },
-          &did_receive_aborted_copy_result)));
-  frame.render_pass_list.push_back(std::move(pass));
+ protected:
+  WebContentsImpl* web_contents() const {
+    return static_cast<WebContentsImpl*>(shell()->web_contents());
+  }
 
-  // Submit the frame and expect the renderer to be instantly killed.
-  auto* const host = RenderWidgetHostImpl::From(view->GetRenderWidgetHost());
-  RenderProcessHostKillWaiter waiter(host->GetProcess());
-  host->SubmitCompositorFrame(viz::LocalSurfaceId(), std::move(frame),
-                              base::nullopt, 0);
-  base::Optional<bad_message::BadMessageReason> result = waiter.Wait();
-  ASSERT_TRUE(result.has_value());
-  EXPECT_EQ(bad_message::RWH_COPY_REQUEST_ATTEMPT, *result);
-
-  // Check that the copy request result callback received an empty result. In a
-  // normal browser, the requestor (in the render process) might never see a
-  // response to the copy request before the process is killed. Nevertheless,
-  // ensure the result is empty, just in case there is a race.
-  EXPECT_TRUE(did_receive_aborted_copy_result);
-}
+  TouchActionFilter* GetTouchActionFilterForWidget(RenderWidgetHostImpl* rwhi) {
+    return &static_cast<InputRouterImpl*>(rwhi->input_router())
+                ->touch_action_filter_;
+  }
+};
 
 class TestInputEventObserver : public RenderWidgetHost::InputEventObserver {
  public:
@@ -134,8 +90,7 @@ class TestInputEventObserver : public RenderWidgetHost::InputEventObserver {
   blink::WebInputEvent::Type acked_touch_event_type_;
 };
 
-class RenderWidgetHostTouchEmulatorBrowserTest
-    : public RenderWidgetHostBrowserTest {
+class RenderWidgetHostTouchEmulatorBrowserTest : public ContentBrowserTest {
  public:
   RenderWidgetHostTouchEmulatorBrowserTest()
       : view_(nullptr),
@@ -145,7 +100,7 @@ class RenderWidgetHostTouchEmulatorBrowserTest
         simulated_event_time_delta_(base::TimeDelta::FromMilliseconds(100)) {}
 
   void SetUpOnMainThread() override {
-    RenderWidgetHostBrowserTest::SetUpOnMainThread();
+    ContentBrowserTest::SetUpOnMainThread();
 
     NavigateToURL(shell(),
                   GURL("data:text/html,<!doctype html>"
@@ -187,6 +142,58 @@ class RenderWidgetHostTouchEmulatorBrowserTest
   base::TimeTicks last_simulated_event_time_;
   base::TimeDelta simulated_event_time_delta_;
 };
+
+// Synthetic mouse events not allowed on Android.
+#if !defined(OS_ANDROID)
+// This test makes sure that TouchEmulator doesn't emit a GestureScrollEnd without a valid
+// unique_touch_event_id when it sees a GestureFlingStart terminating the underlying mouse
+// scroll sequence. If the GestureScrollEnd is given a unique_touch_event_id of 0, then a
+// crash will occur.
+IN_PROC_BROWSER_TEST_F(RenderWidgetHostTouchEmulatorBrowserTest,
+                       TouchEmulatorPinchWithGestureFling) {
+  auto* touch_emulator = host()->GetTouchEmulator();
+  touch_emulator->Enable(TouchEmulator::Mode::kEmulatingTouchFromMouse,
+                         ui::GestureProviderConfigType::GENERIC_MOBILE);
+  touch_emulator->SetPinchGestureModeForTesting(true);
+
+  TestInputEventObserver observer;
+  host()->AddInputEventObserver(&observer);
+
+  SyntheticSmoothDragGestureParams params;
+  params.start_point = gfx::PointF(10.f, 110.f);
+  params.gesture_source_type = SyntheticGestureParams::MOUSE_INPUT;
+  params.distances.push_back(gfx::Vector2d(0, -10));
+  params.distances.push_back(gfx::Vector2d(0, -10));
+  params.distances.push_back(gfx::Vector2d(0, -10));
+  params.distances.push_back(gfx::Vector2d(0, -10));
+  params.speed_in_pixels_s = 1200;
+
+  std::unique_ptr<SyntheticSmoothDragGesture> gesture(
+      new SyntheticSmoothDragGesture(params));
+
+  InputEventAckWaiter scroll_end_ack_waiter(
+      host(), blink::WebInputEvent::kGestureScrollEnd);
+  base::RunLoop run_loop;
+  host()->QueueSyntheticGesture(
+      std::move(gesture),
+      base::BindOnce(
+          base::BindLambdaForTesting([&](SyntheticGesture::Result result) {
+            EXPECT_EQ(SyntheticGesture::GESTURE_FINISHED, result);
+            run_loop.Quit();
+          })));
+  run_loop.Run();
+  scroll_end_ack_waiter.Wait();
+
+  // Verify that a GestureFlingStart was suppressed by the TouchEmulator, and
+  // that we generated a GestureScrollEnd and routed it without crashing.
+  TestInputEventObserver::EventTypeVector dispatched_events =
+      observer.GetAndResetDispatchedEventTypes();
+  auto it_gse = std::find(dispatched_events.begin(), dispatched_events.end(),
+                          blink::WebInputEvent::kGestureScrollEnd);
+  EXPECT_NE(dispatched_events.end(), it_gse);
+  EXPECT_TRUE(touch_emulator->suppress_next_fling_cancel_for_testing());
+}
+#endif  // !defined(OS_ANDROID)
 
 IN_PROC_BROWSER_TEST_F(RenderWidgetHostTouchEmulatorBrowserTest,
                        TouchEmulator) {
@@ -368,6 +375,57 @@ IN_PROC_BROWSER_TEST_F(RenderWidgetHostTouchEmulatorBrowserTest,
   EXPECT_EQ(blink::WebInputEvent::kGestureScrollEnd, dispatched_events[1]);
 
   host()->RemoveInputEventObserver(&observer);
+}
+
+// Observes the WebContents until a frame finishes loading the contents of a
+// given GURL.
+class DocumentLoadObserver : WebContentsObserver {
+ public:
+  DocumentLoadObserver(WebContents* contents, const GURL& url)
+      : WebContentsObserver(contents), document_origin_(url) {}
+
+  void Wait() {
+    if (loaded_)
+      return;
+    run_loop_.reset(new base::RunLoop());
+    run_loop_->Run();
+  }
+
+ private:
+  void DidFinishLoad(RenderFrameHost* rfh, const GURL& url) override {
+    loaded_ |= (url == document_origin_);
+    if (loaded_ && run_loop_)
+      run_loop_->Quit();
+  }
+
+  bool loaded_ = false;
+  const GURL document_origin_;
+  std::unique_ptr<base::RunLoop> run_loop_;
+
+  DISALLOW_COPY_AND_ASSIGN(DocumentLoadObserver);
+};
+
+// This test verifies that when a cross-process child frame loads, the initial
+// updates for touch event handlers are sent from the renderer.
+IN_PROC_BROWSER_TEST_F(RenderWidgetHostSitePerProcessTest,
+                       OnHasTouchEventHandlers) {
+  GURL main_url(embedded_test_server()->GetURL(
+      "a.com", "/cross_site_iframe_factory.html?a(b)"));
+  GURL::Replacements replacement;
+  replacement.SetHostStr("b.com");
+  replacement.SetQueryStr("b()");
+  GURL target_child_url = main_url.ReplaceComponents(replacement);
+  DocumentLoadObserver child_frame_observer(shell()->web_contents(),
+                                            target_child_url);
+  NavigateToURL(shell(), main_url);
+  child_frame_observer.Wait();
+  auto* filter = GetTouchActionFilterForWidget(web_contents()
+                                                   ->GetFrameTree()
+                                                   ->root()
+                                                   ->child_at(0)
+                                                   ->current_frame_host()
+                                                   ->GetRenderWidgetHost());
+  EXPECT_TRUE(filter->allowed_touch_action().has_value());
 }
 
 }  // namespace content

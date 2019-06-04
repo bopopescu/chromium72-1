@@ -510,7 +510,7 @@ TEST_F(ExtensionScriptAndCaptureVisibleTest, Permissions) {
                                     "extension_wildcard_chrome.json",
                                     Manifest::INTERNAL, Extension::NO_FLAGS,
                                     &error);
-  std::vector<InstallWarning> warnings = extension->install_warnings();
+  const std::vector<InstallWarning>& warnings = extension->install_warnings();
   EXPECT_FALSE(warnings.empty());
   EXPECT_EQ(ErrorUtils::FormatErrorMessage(
                 manifest_errors::kInvalidPermissionScheme,
@@ -1120,9 +1120,8 @@ TEST_F(CaptureVisiblePageTest, URLsCapturableWithEitherActiveTabOrAllURLs) {
       // Normal web page.
       GURL("https://example.com"),
 
-      // TODO(https://crbug.com/853064): IPv6 pages should behave like normal
-      // web pages.
-      // GURL("http://[2607:f8b0:4005:805::200e]"),
+      // IPv6 pages should behave like normal web pages.
+      GURL("http://[2607:f8b0:4005:805::200e]"),
 
       // filesystem: urls with web origins should behave like normal web pages.
       // TODO(https://crbug.com/853392): filesystem: URLs don't work with
@@ -1171,6 +1170,9 @@ TEST_F(CaptureVisiblePageTest, URLsCapturableOnlyWithActiveTab) {
 
       // The NTP.
       GURL("chrome://newtab"),
+
+      // The Chrome Web Store.
+      ExtensionsClient::Get()->GetWebstoreBaseURL(),
   };
 
   for (const GURL& url : test_urls) {

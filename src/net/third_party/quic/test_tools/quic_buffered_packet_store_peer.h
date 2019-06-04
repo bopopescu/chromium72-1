@@ -10,7 +10,7 @@
 #include "net/third_party/quic/core/quic_alarm.h"
 #include "net/third_party/quic/platform/api/quic_clock.h"
 
-namespace net {
+namespace quic {
 
 class QuicBufferedPacketStore;
 
@@ -18,16 +18,15 @@ namespace test {
 
 class QuicBufferedPacketStorePeer {
  public:
+  QuicBufferedPacketStorePeer() = delete;
+
   static QuicAlarm* expiration_alarm(QuicBufferedPacketStore* store);
 
   static void set_clock(QuicBufferedPacketStore* store, const QuicClock* clock);
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(QuicBufferedPacketStorePeer);
 };
 
 }  // namespace test
 
-}  // namespace net
+}  // namespace quic
 
 #endif  // NET_THIRD_PARTY_QUIC_TEST_TOOLS_QUIC_BUFFERED_PACKET_STORE_PEER_H_

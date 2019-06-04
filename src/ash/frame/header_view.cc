@@ -6,67 +6,27 @@
 
 #include <memory>
 
-#include "ash/frame/caption_buttons/caption_button_model.h"
-#include "ash/frame/caption_buttons/frame_back_button.h"
-#include "ash/frame/caption_buttons/frame_caption_button_container_view.h"
-#include "ash/frame/custom_frame_view_ash.h"
-#include "ash/frame/default_frame_header.h"
-#include "ash/public/cpp/config.h"
+#include "ash/frame/non_client_frame_view_ash.h"
+#include "ash/public/cpp/caption_buttons/caption_button_model.h"
+#include "ash/public/cpp/caption_buttons/frame_back_button.h"
+#include "ash/public/cpp/caption_buttons/frame_caption_button_container_view.h"
+#include "ash/public/cpp/default_frame_header.h"
 #include "ash/public/cpp/window_properties.h"
 #include "ash/shell.h"
 #include "ash/wm/tablet_mode/tablet_mode_controller.h"
 #include "ash/wm/window_state.h"
 #include "ui/aura/client/aura_constants.h"
+#include "ui/aura/mus/window_tree_host_mus.h"
 #include "ui/aura/window.h"
+#include "ui/base/ui_base_features.h"
 #include "ui/views/controls/image_view.h"
 #include "ui/views/widget/widget.h"
 
 namespace ash {
 
-namespace {
-
-// An appearance provider that relies on window properties which have been set
-// by the client. Only used in Mash.
-class WindowPropertyAppearanceProvider
-    : public CustomFrameHeader::AppearanceProvider {
- public:
-  explicit WindowPropertyAppearanceProvider(aura::Window* window)
-      : window_(window) {}
-  ~WindowPropertyAppearanceProvider() override = default;
-
-  SkColor GetFrameHeaderColor(bool active) override {
-    return window_->GetProperty(active ? ash::kFrameActiveColorKey
-                                       : ash::kFrameInactiveColorKey);
-  }
-
-  gfx::ImageSkia GetFrameHeaderImage(bool active) override {
-    // TODO(estade): handle !active.
-    gfx::ImageSkia* image = window_->GetProperty(kFrameImageActiveKey);
-    return image ? *image : gfx::ImageSkia();
-  }
-
-  gfx::ImageSkia GetFrameHeaderOverlayImage(bool active) override {
-    // TODO(estade): implement.
-    return gfx::ImageSkia();
-  }
-
-  bool IsTabletMode() override {
-    return Shell::Get()
-        ->tablet_mode_controller()
-        ->IsTabletModeWindowManagerEnabled();
-  }
-
- private:
-  aura::Window* window_;
-
-  DISALLOW_COPY_AND_ASSIGN(WindowPropertyAppearanceProvider);
-};
-
-}  // namespace
-
 // The view used to draw the content (background and title string)
 // of the header. This is a separate view so that it can use
-// differnent scaling strategy than the rest of the frame such
+// different scaling strategy than the rest of the frame such
 // as caption buttons.
 class HeaderView::HeaderContentView : public views::View {
  public:
@@ -92,9 +52,7 @@ class HeaderView::HeaderContentView : public views::View {
   DISALLOW_COPY_AND_ASSIGN(HeaderContentView);
 };
 
-HeaderView::HeaderView(views::Widget* target_widget,
-                       mojom::WindowStyle window_style,
-                       std::unique_ptr<CaptionButtonModel> model)
+HeaderView::HeaderView(views::Widget* target_widget)
     : target_widget_(target_widget),
       avatar_icon_(nullptr),
       header_content_view_(new HeaderContentView(this)),
@@ -104,29 +62,19 @@ HeaderView::HeaderView(views::Widget* target_widget,
   AddChildView(header_content_view_);
 
   caption_button_container_ =
-      new FrameCaptionButtonContainerView(target_widget_, std::move(model));
+      new FrameCaptionButtonContainerView(target_widget_, &caption_controller_);
   caption_button_container_->UpdateCaptionButtonState(false /*=animate*/);
   AddChildView(caption_button_container_);
 
-  if (window_style == mojom::WindowStyle::DEFAULT) {
-    frame_header_ = std::make_unique<DefaultFrameHeader>(
-        target_widget, this, caption_button_container_);
-  } else {
-    DCHECK_EQ(mojom::WindowStyle::BROWSER, window_style);
-    DCHECK_EQ(Config::MASH, Shell::GetAshConfig());
-    appearance_provider_ = std::make_unique<WindowPropertyAppearanceProvider>(
-        target_widget_->GetNativeWindow());
-    // TODO(estade): pass correct value for |incognito|.
-    auto frame_header = std::make_unique<CustomFrameHeader>(
-        target_widget, this, appearance_provider_.get(), false,
-        caption_button_container_);
-    frame_header_ = std::move(frame_header);
-  }
   aura::Window* window = target_widget->GetNativeWindow();
-  frame_header_->SetFrameColors(
-      window->GetProperty(ash::kFrameActiveColorKey),
-      window->GetProperty(ash::kFrameInactiveColorKey));
-  window_observer_.Add(target_widget_->GetNativeWindow());
+  frame_header_ = std::make_unique<DefaultFrameHeader>(
+      target_widget, this, caption_button_container_);
+
+  UpdateBackButton();
+
+  frame_header_->SetFrameColors(window->GetProperty(kFrameActiveColorKey),
+                                window->GetProperty(kFrameInactiveColorKey));
+  window_observer_.Add(window);
   Shell::Get()->tablet_mode_controller()->AddObserver(this);
 }
 
@@ -185,21 +133,7 @@ void HeaderView::UpdateCaptionButtons() {
   caption_button_container_->ResetWindowControls();
   caption_button_container_->UpdateCaptionButtonState(true /*=animate*/);
 
-  bool has_back_button =
-      caption_button_container_->model()->IsVisible(CAPTION_BUTTON_ICON_BACK);
-  FrameCaptionButton* back_button = frame_header_->GetBackButton();
-  if (has_back_button) {
-    if (!back_button) {
-      back_button = new FrameBackButton();
-      AddChildView(back_button);
-      frame_header_->SetBackButton(back_button);
-    }
-    back_button->SetEnabled(caption_button_container_->model()->IsEnabled(
-        CAPTION_BUTTON_ICON_BACK));
-  } else {
-    delete back_button;
-    frame_header_->SetBackButton(nullptr);
-  }
+  UpdateBackButton();
 
   Layout();
 }
@@ -212,10 +146,6 @@ void HeaderView::SetWidthInPixels(int width_in_pixels) {
       width_in_pixels > 0
           ? views::PaintInfo::ScaleType::kUniformScaling
           : views::PaintInfo::ScaleType::kScaleWithEdgeSnapping);
-}
-
-void HeaderView::OnShowStateChanged(ui::WindowShowState show_state) {
-  frame_header_->OnShowStateChanged(show_state);
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -237,40 +167,48 @@ void HeaderView::ChildPreferredSizeChanged(views::View* child) {
 }
 
 void HeaderView::OnTabletModeStarted() {
+  UpdateCaptionButtonsVisibility();
   caption_button_container_->UpdateCaptionButtonState(true /*=animate*/);
   parent()->Layout();
-  if (Shell::Get()->tablet_mode_controller()->ShouldAutoHideTitlebars(
+  if (target_widget_ &&
+      Shell::Get()->tablet_mode_controller()->ShouldAutoHideTitlebars(
           target_widget_)) {
     target_widget_->non_client_view()->Layout();
   }
 }
 
 void HeaderView::OnTabletModeEnded() {
+  UpdateCaptionButtonsVisibility();
   caption_button_container_->UpdateCaptionButtonState(true /*=animate*/);
   parent()->Layout();
-  target_widget_->non_client_view()->Layout();
+  if (target_widget_)
+    target_widget_->non_client_view()->Layout();
 }
 
 void HeaderView::OnWindowPropertyChanged(aura::Window* window,
                                          const void* key,
                                          intptr_t old) {
+  if (!target_widget_)
+    return;
+
   DCHECK_EQ(target_widget_->GetNativeWindow(), window);
-  if (key == kFrameImageActiveKey) {
-    SchedulePaint();
-  } else if (key == aura::client::kAvatarIconKey) {
+  if (key == aura::client::kAvatarIconKey) {
     gfx::ImageSkia* const avatar_icon =
         window->GetProperty(aura::client::kAvatarIconKey);
     SetAvatarIcon(avatar_icon ? *avatar_icon : gfx::ImageSkia());
-  } else if (key == ash::kFrameActiveColorKey ||
-             key == ash::kFrameInactiveColorKey) {
-    frame_header_->SetFrameColors(
-        window->GetProperty(ash::kFrameActiveColorKey),
-        window->GetProperty(ash::kFrameInactiveColorKey));
+  } else if (key == kFrameActiveColorKey || key == kFrameInactiveColorKey) {
+    frame_header_->SetFrameColors(window->GetProperty(kFrameActiveColorKey),
+                                  window->GetProperty(kFrameInactiveColorKey));
+  } else if (key == aura::client::kShowStateKey) {
+    frame_header_->OnShowStateChanged(
+        window->GetProperty(aura::client::kShowStateKey));
   }
 }
 
 void HeaderView::OnWindowDestroying(aura::Window* window) {
   window_observer_.Remove(window);
+  // A HeaderView may outlive the target widget.
+  target_widget_ = nullptr;
 }
 
 views::View* HeaderView::avatar_icon() const {
@@ -282,7 +220,7 @@ void HeaderView::SetShouldPaintHeader(bool paint) {
     return;
 
   should_paint_ = paint;
-  caption_button_container_->SetVisible(should_paint_);
+  UpdateCaptionButtonsVisibility();
   SchedulePaint();
 }
 
@@ -296,7 +234,10 @@ FrameCaptionButton* HeaderView::GetBackButton() {
 
 void HeaderView::OnImmersiveRevealStarted() {
   fullscreen_visible_fraction_ = 0;
-  SetPaintToLayer();
+
+  add_layer_for_immersive_ = !layer();
+  if (add_layer_for_immersive_)
+    SetPaintToLayer();
   // AppWindow may call this before being added to the widget.
   // https://crbug.com/825260.
   if (layer()->parent()) {
@@ -308,19 +249,27 @@ void HeaderView::OnImmersiveRevealStarted() {
 
 void HeaderView::OnImmersiveRevealEnded() {
   fullscreen_visible_fraction_ = 0;
-  DestroyLayer();
+  if (add_layer_for_immersive_)
+    DestroyLayer();
   parent()->Layout();
 }
 
 void HeaderView::OnImmersiveFullscreenEntered() {
   in_immersive_mode_ = true;
+  parent()->InvalidateLayout();
+  // The frame may not have been created yet (during window initialization).
+  if (target_widget_ && target_widget_->non_client_view()->frame_view())
+    target_widget_->non_client_view()->Layout();
 }
 
 void HeaderView::OnImmersiveFullscreenExited() {
   in_immersive_mode_ = false;
   fullscreen_visible_fraction_ = 0;
-  DestroyLayer();
-  parent()->Layout();
+  if (add_layer_for_immersive_)
+    DestroyLayer();
+  parent()->InvalidateLayout();
+  if (target_widget_ && target_widget_->non_client_view()->frame_view())
+    target_widget_->non_client_view()->Layout();
 }
 
 void HeaderView::SetVisibleFraction(double visible_fraction) {
@@ -342,7 +291,7 @@ std::vector<gfx::Rect> HeaderView::GetVisibleBoundsInScreen() const {
 }
 
 void HeaderView::PaintHeaderContent(gfx::Canvas* canvas) {
-  if (!should_paint_)
+  if (!should_paint_ || !target_widget_)
     return;
 
   bool paint_as_active =
@@ -352,6 +301,31 @@ void HeaderView::PaintHeaderContent(gfx::Canvas* canvas) {
   FrameHeader::Mode header_mode =
       paint_as_active ? FrameHeader::MODE_ACTIVE : FrameHeader::MODE_INACTIVE;
   frame_header_->PaintHeader(canvas, header_mode);
+}
+
+void HeaderView::UpdateBackButton() {
+  bool has_back_button =
+      caption_button_container_->model()->IsVisible(CAPTION_BUTTON_ICON_BACK);
+  FrameCaptionButton* back_button = frame_header_->GetBackButton();
+  if (has_back_button) {
+    if (!back_button) {
+      back_button = new FrameBackButton();
+      AddChildView(back_button);
+      frame_header_->SetBackButton(back_button);
+    }
+    back_button->SetEnabled(caption_button_container_->model()->IsEnabled(
+        CAPTION_BUTTON_ICON_BACK));
+  } else {
+    delete back_button;
+    frame_header_->SetBackButton(nullptr);
+  }
+}
+
+void HeaderView::UpdateCaptionButtonsVisibility() {
+  if (!target_widget_)
+    return;
+
+  caption_button_container_->SetVisible(should_paint_);
 }
 
 }  // namespace ash

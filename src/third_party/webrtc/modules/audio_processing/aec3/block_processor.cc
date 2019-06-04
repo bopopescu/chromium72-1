@@ -9,12 +9,16 @@
  */
 #include "modules/audio_processing/aec3/block_processor.h"
 
-#include "api/optional.h"
+#include <utility>
+
+#include "absl/types/optional.h"
 #include "modules/audio_processing/aec3/aec3_common.h"
 #include "modules/audio_processing/aec3/block_processor_metrics.h"
+#include "modules/audio_processing/aec3/delay_estimate.h"
 #include "modules/audio_processing/aec3/echo_path_variability.h"
 #include "modules/audio_processing/logging/apm_data_dumper.h"
 #include "rtc_base/atomicops.h"
+#include "rtc_base/checks.h"
 #include "rtc_base/constructormagic.h"
 #include "rtc_base/logging.h"
 
@@ -58,8 +62,8 @@ class BlockProcessorImpl final : public BlockProcessor {
   BlockProcessorMetrics metrics_;
   RenderDelayBuffer::BufferingEvent render_event_;
   size_t capture_call_counter_ = 0;
-  rtc::Optional<DelayEstimate> estimated_delay_;
-  rtc::Optional<int> echo_remover_delay_;
+  absl::optional<DelayEstimate> estimated_delay_;
+  absl::optional<int> echo_remover_delay_;
   RTC_DISALLOW_IMPLICIT_CONSTRUCTORS(BlockProcessorImpl);
 };
 
@@ -104,7 +108,7 @@ void BlockProcessorImpl::ProcessCapture(
     if (!capture_properly_started_) {
       capture_properly_started_ = true;
       render_buffer_->Reset();
-      delay_controller_->Reset();
+      delay_controller_->Reset(true);
     }
   } else {
     // If no render data has yet arrived, do not process the capture signal.
@@ -119,7 +123,7 @@ void BlockProcessorImpl::ProcessCapture(
       render_properly_started_) {
     echo_path_variability.delay_change =
         EchoPathVariability::DelayAdjustment::kBufferFlush;
-    delay_controller_->Reset();
+    delay_controller_->Reset(true);
     RTC_LOG(LS_WARNING) << "Reset due to render buffer overrun at block  "
                         << capture_call_counter_;
   }
@@ -135,11 +139,11 @@ void BlockProcessorImpl::ProcessCapture(
         estimated_delay_->quality == DelayEstimate::Quality::kRefined) {
       echo_path_variability.delay_change =
           EchoPathVariability::DelayAdjustment::kDelayReset;
-      delay_controller_->Reset();
+      delay_controller_->Reset(true);
       capture_properly_started_ = false;
       render_properly_started_ = false;
 
-      RTC_LOG(LS_WARNING) << "Reset due to render buffer underrrun at block "
+      RTC_LOG(LS_WARNING) << "Reset due to render buffer underrun at block "
                           << capture_call_counter_;
     }
   } else if (render_event_ == RenderDelayBuffer::BufferingEvent::kApiCallSkew) {
@@ -147,7 +151,7 @@ void BlockProcessorImpl::ProcessCapture(
     // echo.
     echo_path_variability.delay_change =
         EchoPathVariability::DelayAdjustment::kDelayReset;
-    delay_controller_->Reset();
+    delay_controller_->Reset(true);
     capture_properly_started_ = false;
     render_properly_started_ = false;
     RTC_LOG(LS_WARNING) << "Reset due to render buffer api skew at block "
@@ -180,7 +184,7 @@ void BlockProcessorImpl::ProcessCapture(
       if (estimated_delay_->quality == DelayEstimate::Quality::kRefined) {
         echo_path_variability.delay_change =
             EchoPathVariability::DelayAdjustment::kDelayReset;
-        delay_controller_->Reset();
+        delay_controller_->Reset(true);
         render_buffer_->Reset();
         capture_properly_started_ = false;
         render_properly_started_ = false;
@@ -189,6 +193,8 @@ void BlockProcessorImpl::ProcessCapture(
       }
     }
   }
+
+  echo_path_variability.clock_drift = delay_controller_->HasClockdrift();
 
   // Remove the echo from the capture signal.
   echo_remover_->ProcessCapture(
@@ -232,7 +238,7 @@ void BlockProcessorImpl::UpdateEchoLeakageStatus(bool leakage_detected) {
 void BlockProcessorImpl::GetMetrics(EchoControl::Metrics* metrics) const {
   echo_remover_->GetMetrics(metrics);
   const int block_size_ms = sample_rate_hz_ == 8000 ? 8 : 4;
-  rtc::Optional<size_t> delay = render_buffer_->Delay();
+  absl::optional<size_t> delay = render_buffer_->Delay();
   metrics->delay_ms = delay ? static_cast<int>(*delay) * block_size_ms : 0;
 }
 

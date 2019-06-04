@@ -27,11 +27,10 @@
 
 #include <memory>
 
-#include "third_party/blink/renderer/bindings/core/v8/exception_messages.h"
-#include "third_party/blink/renderer/bindings/core/v8/exception_state.h"
-#include "third_party/blink/renderer/core/dom/exception_code.h"
 #include "third_party/blink/renderer/modules/webaudio/base_audio_context.h"
 #include "third_party/blink/renderer/modules/webaudio/wave_shaper_options.h"
+#include "third_party/blink/renderer/platform/bindings/exception_messages.h"
+#include "third_party/blink/renderer/platform/bindings/exception_state.h"
 
 namespace blink {
 
@@ -62,11 +61,11 @@ WaveShaperNode* WaveShaperNode::Create(BaseAudioContext& context,
     return nullptr;
   }
 
-  return new WaveShaperNode(context);
+  return MakeGarbageCollected<WaveShaperNode>(context);
 }
 
 WaveShaperNode* WaveShaperNode::Create(BaseAudioContext* context,
-                                       const WaveShaperOptions& options,
+                                       const WaveShaperOptions* options,
                                        ExceptionState& exception_state) {
   WaveShaperNode* node = Create(*context, exception_state);
 
@@ -75,10 +74,10 @@ WaveShaperNode* WaveShaperNode::Create(BaseAudioContext* context,
 
   node->HandleChannelOptions(options, exception_state);
 
-  if (options.hasCurve())
-    node->setCurve(options.curve(), exception_state);
+  if (options->hasCurve())
+    node->setCurve(options->curve(), exception_state);
 
-  node->setOversample(options.oversample());
+  node->setOversample(options->oversample());
 
   return node;
 }
@@ -94,11 +93,16 @@ void WaveShaperNode::SetCurveImpl(const float* curve_data,
 
   if (curve_data && curve_length < 2) {
     exception_state.ThrowDOMException(
-        kInvalidAccessError,
+        DOMExceptionCode::kInvalidAccessError,
         ExceptionMessages::IndexExceedsMinimumBound<unsigned>("curve length",
                                                               curve_length, 2));
     return;
   }
+
+  // This is to synchronize with the changes made in
+  // AudioBasicProcessorNode::CheckNumberOfChannelsForInput() where we can
+  // Initialize() and Uninitialize(), changing the number of kernels.
+  BaseAudioContext::GraphAutoLocker context_locker(context());
 
   GetWaveShaperProcessor()->SetCurve(curve_data, curve_length);
 }

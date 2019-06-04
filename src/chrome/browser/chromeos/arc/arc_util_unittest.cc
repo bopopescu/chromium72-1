@@ -8,27 +8,33 @@
 
 #include "base/command_line.h"
 #include "base/macros.h"
-#include "base/sys_info.h"
+#include "base/system/sys_info.h"
 #include "base/test/icu_test_util.h"
 #include "base/test/scoped_command_line.h"
+#include "base/test/scoped_feature_list.h"
 #include "base/values.h"
 #include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/chromeos/arc/arc_session_manager.h"
-#include "chrome/browser/chromeos/login/supervised/supervised_user_creation_flow.h"
+#include "chrome/browser/chromeos/login/demo_mode/demo_session.h"
+#include "chrome/browser/chromeos/login/oobe_configuration.h"
 #include "chrome/browser/chromeos/login/ui/fake_login_display_host.h"
 #include "chrome/browser/chromeos/login/users/fake_chrome_user_manager.h"
+#include "chrome/browser/chromeos/login/wizard_controller.h"
 #include "chrome/browser/chromeos/policy/browser_policy_connector_chromeos.h"
 #include "chrome/browser/chromeos/profiles/profile_helper.h"
 #include "chrome/browser/chromeos/settings/cros_settings.h"
 #include "chrome/browser/chromeos/settings/device_settings_service.h"
-#include "chrome/browser/chromeos/settings/install_attributes.h"
+#include "chrome/browser/chromeos/settings/stub_install_attributes.h"
 #include "chrome/browser/policy/profile_policy_connector.h"
 #include "chrome/browser/policy/profile_policy_connector_factory.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/supervised_user/supervised_user_constants.h"
 #include "chrome/test/base/testing_browser_process.h"
 #include "chrome/test/base/testing_profile.h"
 #include "chrome/test/base/testing_profile_manager.h"
 #include "chromeos/chromeos_switches.h"
+#include "chromeos/dbus/dbus_thread_manager.h"
+#include "chromeos/dbus/fake_oobe_configuration_client.h"
 #include "components/account_id/account_id.h"
 #include "components/arc/arc_prefs.h"
 #include "components/policy/core/common/cloud/cloud_policy_constants.h"
@@ -151,22 +157,6 @@ class ScopedLogIn {
   DISALLOW_COPY_AND_ASSIGN(ScopedLogIn);
 };
 
-class FakeInstallAttributesManaged : public chromeos::InstallAttributes {
- public:
-  FakeInstallAttributesManaged() : chromeos::InstallAttributes(nullptr) {
-    device_locked_ = true;
-  }
-
-  ~FakeInstallAttributesManaged() {
-    policy::BrowserPolicyConnectorChromeOS::RemoveInstallAttributesForTesting();
-  }
-
-  void SetIsManaged(bool is_managed) {
-    registration_mode_ = is_managed ? policy::DEVICE_MODE_ENTERPRISE
-                                    : policy::DEVICE_MODE_CONSUMER;
-  }
-};
-
 bool IsArcAllowedForProfileOnFirstCall(const Profile* profile) {
   ResetArcAllowedCheckForTesting(profile);
   return IsArcAllowedForProfile(profile);
@@ -190,9 +180,6 @@ class ChromeArcUtilTest : public testing::Test {
     user_manager_enabler_ = std::make_unique<user_manager::ScopedUserManager>(
         std::make_unique<FakeUserManagerWithLocalState>(
             profile_manager_.get()));
-    // Used by FakeChromeUserManager.
-    chromeos::DeviceSettingsService::Initialize();
-    chromeos::CrosSettings::Initialize();
 
     profile_ = profile_manager_->CreateTestingProfile(kTestProfileName);
   }
@@ -202,8 +189,6 @@ class ChromeArcUtilTest : public testing::Test {
     ResetArcAllowedCheckForTesting(profile_);
     profile_manager_->DeleteTestingProfile(kTestProfileName);
     profile_ = nullptr;
-    chromeos::CrosSettings::Shutdown();
-    chromeos::DeviceSettingsService::Shutdown();
     user_manager_enabler_.reset();
     profile_manager_.reset();
     command_line_.reset();
@@ -226,6 +211,7 @@ class ChromeArcUtilTest : public testing::Test {
  private:
   std::unique_ptr<base::test::ScopedCommandLine> command_line_;
   content::TestBrowserThreadBundle thread_bundle_;
+  chromeos::ScopedCrosSettingsTestHelper cros_settings_test_helper_;
   base::ScopedTempDir data_dir_;
   std::unique_ptr<TestingProfileManager> profile_manager_;
   std::unique_ptr<user_manager::ScopedUserManager> user_manager_enabler_;
@@ -364,18 +350,6 @@ TEST_F(ChromeArcUtilTest, IsArcAllowedForProfile_KioskArcSupported) {
   EXPECT_TRUE(IsArcAllowedForProfileOnFirstCall(profile()));
 }
 
-TEST_F(ChromeArcUtilTest, IsArcAllowedForProfile_SupervisedUserFlow) {
-  base::CommandLine::ForCurrentProcess()->InitFromArgv(
-      {"", "--arc-availability=officially-supported"});
-  auto manager_id = AccountId::FromUserEmailGaiaId(
-      profile()->GetProfileUserName(), kTestGaiaId);
-  ScopedLogIn login(GetFakeUserManager(), manager_id);
-  GetFakeUserManager()->SetUserFlow(
-      manager_id, new chromeos::SupervisedUserCreationFlow(manager_id));
-  EXPECT_FALSE(IsArcAllowedForProfileOnFirstCall(profile()));
-  GetFakeUserManager()->ResetUserFlow(manager_id);
-}
-
 // Guest account is interpreted as EphemeralDataUser.
 TEST_F(ChromeArcUtilTest, IsArcAllowedForProfile_GuestAccount) {
   base::CommandLine::ForCurrentProcess()->InitFromArgv(
@@ -435,51 +409,23 @@ TEST_F(ChromeArcUtilTest, IsArcCompatibleFileSystemUsedForProfile) {
   const user_manager::User* user =
       chromeos::ProfileHelper::Get()->GetUserByProfile(profile());
 
-  // Unconfirmed + Old ARC
-  base::SysInfo::SetChromeOSVersionInfoForTest(
-      "CHROMEOS_ARC_ANDROID_SDK_VERSION=23", base::Time::Now());
-  EXPECT_TRUE(IsArcCompatibleFileSystemUsedForUser(user));
-
-  // Unconfirmed + New ARC
-  base::SysInfo::SetChromeOSVersionInfoForTest(
-      "CHROMEOS_ARC_ANDROID_SDK_VERSION=25", base::Time::Now());
+  // Unconfirmed
   EXPECT_FALSE(IsArcCompatibleFileSystemUsedForUser(user));
 
-  // Old FS + Old ARC
+  // Old FS
   user_manager::known_user::SetIntegerPref(
       id, prefs::kArcCompatibleFilesystemChosen, kFileSystemIncompatible);
-  base::SysInfo::SetChromeOSVersionInfoForTest(
-      "CHROMEOS_ARC_ANDROID_SDK_VERSION=23", base::Time::Now());
-  EXPECT_TRUE(IsArcCompatibleFileSystemUsedForUser(user));
-
-  // Old FS + New ARC
-  base::SysInfo::SetChromeOSVersionInfoForTest(
-      "CHROMEOS_ARC_ANDROID_SDK_VERSION=25", base::Time::Now());
   EXPECT_FALSE(IsArcCompatibleFileSystemUsedForUser(user));
 
-  // New FS + Old ARC
+  // New FS
   user_manager::known_user::SetIntegerPref(
       id, prefs::kArcCompatibleFilesystemChosen, kFileSystemCompatible);
-  base::SysInfo::SetChromeOSVersionInfoForTest(
-      "CHROMEOS_ARC_ANDROID_SDK_VERSION=23", base::Time::Now());
   EXPECT_TRUE(IsArcCompatibleFileSystemUsedForUser(user));
 
-  // New FS + New ARC
-  base::SysInfo::SetChromeOSVersionInfoForTest(
-      "CHROMEOS_ARC_ANDROID_SDK_VERSION=25", base::Time::Now());
-  EXPECT_TRUE(IsArcCompatibleFileSystemUsedForUser(user));
-
-  // New FS (User notified) + Old ARC
+  // New FS (User notified)
   user_manager::known_user::SetIntegerPref(
       id, prefs::kArcCompatibleFilesystemChosen,
-      kFileSystemCompatibleAndNotified);
-  base::SysInfo::SetChromeOSVersionInfoForTest(
-      "CHROMEOS_ARC_ANDROID_SDK_VERSION=23", base::Time::Now());
-  EXPECT_TRUE(IsArcCompatibleFileSystemUsedForUser(user));
-
-  // New FS (User notified) + New ARC
-  base::SysInfo::SetChromeOSVersionInfoForTest(
-      "CHROMEOS_ARC_ANDROID_SDK_VERSION=25", base::Time::Now());
+      kFileSystemCompatibleAndNotifiedDeprecated);
   EXPECT_TRUE(IsArcCompatibleFileSystemUsedForUser(user));
 }
 
@@ -598,6 +544,18 @@ TEST_F(ChromeArcUtilTest, IsAssistantAllowedForProfile_SupervisedUser) {
             IsAssistantAllowedForProfile(profile()));
 }
 
+TEST_F(ChromeArcUtilTest, IsAssistantAllowedForProfile_ChildUser) {
+  base::CommandLine::ForCurrentProcess()->InitFromArgv(
+      {"", "--arc-availability=officially-supported",
+       "--enable-voice-interaction"});
+  ScopedLogIn login(GetFakeUserManager(),
+                    AccountId::FromUserEmailGaiaId(
+                        profile()->GetProfileUserName(), kTestGaiaId));
+  profile()->SetSupervisedUserId(supervised_users::kChildAccountSUID);
+  EXPECT_EQ(ash::mojom::AssistantAllowedState::DISALLOWED_BY_CHILD_USER,
+            IsAssistantAllowedForProfile(profile()));
+}
+
 TEST_F(ChromeArcUtilTest, IsAssistantAllowedForProfile_Locale) {
   base::CommandLine::ForCurrentProcess()->InitFromArgv(
       {"", "--arc-availability=officially-supported",
@@ -636,6 +594,33 @@ TEST_F(ChromeArcUtilTest, IsAssistantAllowedForProfile_Managed) {
   profile()->GetTestingPrefService()->RemoveManagedPref(prefs::kArcEnabled);
 
   EXPECT_EQ(ash::mojom::AssistantAllowedState::ALLOWED,
+            IsAssistantAllowedForProfile(profile()));
+}
+
+TEST_F(ChromeArcUtilTest, IsAssistantAllowedForProfile_DemoMode) {
+  base::CommandLine::ForCurrentProcess()->InitFromArgv(
+      {"", "--arc-availability=officially-supported",
+       "--enable-voice-interaction"});
+  chromeos::DemoSession::SetDemoConfigForTesting(
+      chromeos::DemoSession::DemoModeConfig::kOnline);
+  ScopedLogIn login(GetFakeUserManager(),
+                    AccountId::FromUserEmail(profile()->GetProfileUserName()),
+                    user_manager::USER_TYPE_PUBLIC_ACCOUNT);
+  EXPECT_EQ(ash::mojom::AssistantAllowedState::DISALLOWED_BY_DEMO_MODE,
+            IsAssistantAllowedForProfile(profile()));
+
+  chromeos::DemoSession::SetDemoConfigForTesting(
+      chromeos::DemoSession::DemoModeConfig::kNone);
+}
+
+TEST_F(ChromeArcUtilTest, IsAssistantAllowedForProfile_PublicSession) {
+  base::CommandLine::ForCurrentProcess()->InitFromArgv(
+      {"", "--arc-availability=officially-supported",
+       "--enable-voice-interaction"});
+  ScopedLogIn login(GetFakeUserManager(),
+                    AccountId::FromUserEmail(profile()->GetProfileUserName()),
+                    user_manager::USER_TYPE_PUBLIC_ACCOUNT);
+  EXPECT_EQ(ash::mojom::AssistantAllowedState::DISALLOWED_BY_PUBLIC_SESSION,
             IsAssistantAllowedForProfile(profile()));
 }
 
@@ -826,6 +811,54 @@ TEST_F(ChromeArcUtilTest, IsArcStatsReportingEnabled_PublicAccount) {
   EXPECT_FALSE(IsArcStatsReportingEnabled());
 }
 
+TEST_F(ChromeArcUtilTest, ArcStartModeDefault) {
+  auto* command_line = base::CommandLine::ForCurrentProcess();
+  command_line->InitFromArgv({"", "--arc-availability=installed"});
+  EXPECT_TRUE(IsPlayStoreAvailable());
+}
+
+TEST_F(ChromeArcUtilTest, ArcStartModeDefaultPublicSession) {
+  auto* command_line = base::CommandLine::ForCurrentProcess();
+  command_line->InitFromArgv({"", "--arc-availability=installed"});
+  ScopedLogIn login(GetFakeUserManager(),
+                    AccountId::FromUserEmail("public_user@gmail.com"),
+                    user_manager::USER_TYPE_PUBLIC_ACCOUNT);
+  EXPECT_FALSE(IsPlayStoreAvailable());
+}
+
+TEST_F(ChromeArcUtilTest, ArcStartModeDefaultDemoMode) {
+  auto* command_line = base::CommandLine::ForCurrentProcess();
+  command_line->InitFromArgv({"", "--arc-availability=installed"});
+  chromeos::DemoSession::SetDemoConfigForTesting(
+      chromeos::DemoSession::DemoModeConfig::kOnline);
+  ScopedLogIn login(GetFakeUserManager(),
+                    AccountId::FromUserEmail("public_user@gmail.com"),
+                    user_manager::USER_TYPE_PUBLIC_ACCOUNT);
+  EXPECT_FALSE(IsPlayStoreAvailable());
+}
+
+TEST_F(ChromeArcUtilTest, ArcStartModeDefaultDemoModeWithPlayStore) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitWithFeatureState(chromeos::switches::kShowPlayInDemoMode,
+                                    true /* enabled */);
+  auto* command_line = base::CommandLine::ForCurrentProcess();
+  command_line->InitFromArgv({"", "--arc-availability=installed"});
+  chromeos::DemoSession::SetDemoConfigForTesting(
+      chromeos::DemoSession::DemoModeConfig::kOnline);
+  ScopedLogIn login(GetFakeUserManager(),
+                    AccountId::FromUserEmail("public_user@gmail.com"),
+                    user_manager::USER_TYPE_PUBLIC_ACCOUNT);
+  EXPECT_TRUE(IsPlayStoreAvailable());
+}
+
+TEST_F(ChromeArcUtilTest, ArcStartModeWithoutPlayStore) {
+  auto* command_line = base::CommandLine::ForCurrentProcess();
+  command_line->InitFromArgv(
+      {"", "--arc-availability=installed",
+       "--arc-start-mode=always-start-with-no-play-store"});
+  EXPECT_FALSE(IsPlayStoreAvailable());
+}
+
 using ArcMigrationTest = ChromeArcUtilTest;
 
 TEST_F(ArcMigrationTest, IsMigrationAllowedUnmanagedUser) {
@@ -1007,9 +1040,20 @@ INSTANTIATE_TEST_CASE_P(
                                        false /* arc_enabled */,
                                        false /* expect_migration_allowed */}));
 
-class ArcOobeOpaOptInActiveInTest : public ChromeArcUtilTest {
+class ArcOobeTest : public ChromeArcUtilTest {
  public:
-  ArcOobeOpaOptInActiveInTest() = default;
+  ArcOobeTest() {
+    chromeos::DBusThreadManager::GetSetterForTesting();
+    oobe_configuration_ = std::make_unique<chromeos::OobeConfiguration>();
+  }
+
+  ~ArcOobeTest() override {
+    // Fake display host have to be shut down first, as it may access
+    // configuration.
+    fake_login_display_host_.reset();
+    oobe_configuration_.reset();
+    chromeos::DBusThreadManager::Shutdown();
+  }
 
  protected:
   void CreateLoginDisplayHost() {
@@ -1024,10 +1068,13 @@ class ArcOobeOpaOptInActiveInTest : public ChromeArcUtilTest {
   void CloseLoginDisplayHost() { fake_login_display_host_.reset(); }
 
  private:
+  std::unique_ptr<chromeos::OobeConfiguration> oobe_configuration_;
   std::unique_ptr<chromeos::FakeLoginDisplayHost> fake_login_display_host_;
 
-  DISALLOW_COPY_AND_ASSIGN(ArcOobeOpaOptInActiveInTest);
+  DISALLOW_COPY_AND_ASSIGN(ArcOobeTest);
 };
+
+using ArcOobeOpaOptInActiveInTest = ArcOobeTest;
 
 TEST_F(ArcOobeOpaOptInActiveInTest, OobeOptInActive) {
   // OOBE OptIn is active in case of OOBE controller is alive and the ARC ToS
@@ -1094,6 +1141,47 @@ TEST_F(ArcOobeOpaOptInActiveInTest, OptInWizardForAssistantActive) {
   // Assistant wizard can be started for any user session.
   GetFakeUserManager()->set_current_user_new(false);
   EXPECT_TRUE(IsArcOptInWizardForAssistantActive());
+}
+
+using DemoSetupFlowArcOptInTest = ArcOobeTest;
+
+TEST_F(DemoSetupFlowArcOptInTest, NoTermsOfServiceOobeNegotiationNeeded) {
+  base::CommandLine::ForCurrentProcess()->InitFromArgv(
+      {"", "--arc-availability=officially-supported"});
+  DisableDBusForProfileManager();
+  CreateLoginDisplayHost();
+  EXPECT_FALSE(IsArcDemoModeSetupFlow());
+  EXPECT_FALSE(IsArcTermsOfServiceOobeNegotiationNeeded());
+}
+
+TEST_F(DemoSetupFlowArcOptInTest, TermsOfServiceOobeNegotiationNeeded) {
+  base::CommandLine::ForCurrentProcess()->InitFromArgv(
+      {"", "--arc-availability=officially-supported"});
+  DisableDBusForProfileManager();
+  CreateLoginDisplayHost();
+  login_display_host()->StartWizard(
+      chromeos::OobeScreen::SCREEN_OOBE_DEMO_PREFERENCES);
+  login_display_host()
+      ->GetWizardController()
+      ->SimulateDemoModeSetupForTesting();
+  EXPECT_TRUE(IsArcDemoModeSetupFlow());
+  EXPECT_TRUE(IsArcTermsOfServiceOobeNegotiationNeeded());
+}
+
+TEST_F(DemoSetupFlowArcOptInTest,
+       NoPlayStoreNoTermsOfServiceOobeNegotiationNeeded) {
+  base::CommandLine::ForCurrentProcess()->InitFromArgv(
+      {"", "--arc-availability=officially-supported",
+       "--arc-start-mode=always-start-with-no-play-store"});
+  DisableDBusForProfileManager();
+  CreateLoginDisplayHost();
+  login_display_host()->StartWizard(
+      chromeos::OobeScreen::SCREEN_OOBE_DEMO_PREFERENCES);
+  login_display_host()
+      ->GetWizardController()
+      ->SimulateDemoModeSetupForTesting();
+  EXPECT_TRUE(IsArcDemoModeSetupFlow());
+  EXPECT_FALSE(IsArcTermsOfServiceOobeNegotiationNeeded());
 }
 
 }  // namespace util

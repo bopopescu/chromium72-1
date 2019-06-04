@@ -61,6 +61,10 @@ class CastConfigController : public ash::mojom::CastConfig {
   void CastToSink(mojom::CastSinkPtr sink);
   void StopCasting(mojom::CastRoutePtr route);
 
+  const std::vector<mojom::SinkAndRoutePtr>& sinks_and_routes() const {
+    return sinks_and_routes_;
+  }
+
  private:
   // Bindings for the CastConfig interface.
   mojo::BindingSet<mojom::CastConfig> bindings_;
@@ -69,7 +73,7 @@ class CastConfigController : public ash::mojom::CastConfig {
 
   std::vector<mojom::SinkAndRoutePtr> sinks_and_routes_;
 
-  base::ObserverList<CastConfigControllerObserver> observers_;
+  base::ObserverList<CastConfigControllerObserver>::Unchecked observers_;
 
   DISALLOW_COPY_AND_ASSIGN(CastConfigController);
 };

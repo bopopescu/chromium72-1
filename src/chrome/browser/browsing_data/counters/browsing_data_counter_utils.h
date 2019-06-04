@@ -11,9 +11,17 @@
 
 class Profile;
 
+namespace browsing_data_counter_utils {
+
+// Whether the exception about not being signed out of your Google profile
+// should be shown.
+bool ShouldShowCookieException(Profile* profile);
+
 // Constructs the text to be displayed by a counter from the given |result|.
 base::string16 GetChromeCounterTextFromResult(
     const browsing_data::BrowsingDataCounter::Result* result,
     Profile* profile);
+
+}  // namespace browsing_data_counter_utils
 
 #endif  // CHROME_BROWSER_BROWSING_DATA_COUNTERS_BROWSING_DATA_COUNTER_UTILS_H_

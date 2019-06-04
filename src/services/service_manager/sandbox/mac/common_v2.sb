@@ -74,9 +74,16 @@
 (allow process-exec (path (param executable-path)))
 (allow file-read* (path (param executable-path)))
 
-(allow mach-lookup (global-name (string-append (param bundle-id)
-                                               ".rohitfork."
-                                               (param browser-pid))))
+; The browser exposes Mach services at "bundle-id.service-name.browser-pid".
+; This macro is a helper for doing the string concatenation.
+(define (browser-service-name service-name)
+  (global-name (string-append (param bundle-id)
+                              "." service-name "."
+                              (param browser-pid))))
+
+(allow mach-lookup
+  (browser-service-name "FieldTrialMemoryServer")
+  (browser-service-name "rohitfork"))
 
 ; Allow realpath() to work.
 (allow file-read-metadata (subpath "/"))
@@ -85,8 +92,9 @@
 (allow file-read* (subpath (param bundle-path)))
 
 ; Allow reads of system libraries and frameworks.
-(allow file-read-data
+(allow file-read*
   (subpath "/System/Library/Frameworks")
+  (subpath "/System/Library/Preferences/Logging")
   (subpath "/System/Library/PrivateFrameworks")
   (subpath "/usr/lib"))
 
@@ -108,7 +116,7 @@
   (path "/dev/random")
   (path "/dev/urandom"))
 
-(if (= os-version 1013)
+(if (>= os-version 1013)
   (begin (allow file-read* (subpath "/private/var/db/timezone"))
          (allow file-read-data (subpath "/usr/share/zoneinfo.default"))))
 
@@ -126,8 +134,7 @@
 
 ; Reads from /usr.
 (allow file-read-data
-  (subpath "/usr/share/icu")
-  (subpath "/usr/share/locale"))
+  (subpath "/usr/share/icu"))
 
 ; Access to the home directory.
 (allow file-read-data

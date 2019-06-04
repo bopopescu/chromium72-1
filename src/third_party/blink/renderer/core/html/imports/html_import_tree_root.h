@@ -7,7 +7,7 @@
 
 #include "third_party/blink/public/platform/task_type.h"
 #include "third_party/blink/renderer/core/html/imports/html_import.h"
-#include "third_party/blink/renderer/platform/bindings/script_wrappable.h"
+#include "third_party/blink/renderer/platform/bindings/name_client.h"
 #include "third_party/blink/renderer/platform/bindings/trace_wrapper_member.h"
 #include "third_party/blink/renderer/platform/timer.h"
 
@@ -16,10 +16,11 @@ namespace blink {
 class HTMLImportChild;
 class KURL;
 
-class HTMLImportTreeRoot final : public HTMLImport, public TraceWrapperBase {
+class HTMLImportTreeRoot final : public HTMLImport, public NameClient {
  public:
   static HTMLImportTreeRoot* Create(Document*);
 
+  explicit HTMLImportTreeRoot(Document*);
   ~HTMLImportTreeRoot() final;
   void Dispose();
 
@@ -35,14 +36,11 @@ class HTMLImportTreeRoot final : public HTMLImport, public TraceWrapperBase {
   HTMLImportChild* Find(const KURL&) const;
 
   void Trace(blink::Visitor*) override;
-  void TraceWrappers(ScriptWrappableVisitor*) const override;
   const char* NameInHeapSnapshot() const override {
     return "HTMLImportTreeRoot";
   }
 
  private:
-  explicit HTMLImportTreeRoot(Document*);
-
   void RecalcTimerFired(TimerBase*);
 
   TraceWrapperMember<Document> document_;

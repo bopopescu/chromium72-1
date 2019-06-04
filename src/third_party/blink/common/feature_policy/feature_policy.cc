@@ -6,6 +6,7 @@
 
 #include "base/macros.h"
 #include "base/memory/ptr_util.h"
+#include "base/no_destructor.h"
 #include "base/stl_util.h"
 
 namespace blink {
@@ -20,6 +21,7 @@ std::unique_ptr<FeaturePolicy::Allowlist> AllowlistFromDeclaration(
     result->AddAll();
   for (const auto& origin : parsed_declaration.origins)
     result->Add(origin);
+
   return result;
 }
 
@@ -32,11 +34,13 @@ ParsedFeaturePolicyDeclaration::ParsedFeaturePolicyDeclaration(
     mojom::FeaturePolicyFeature feature,
     bool matches_all_origins,
     bool matches_opaque_src,
+    mojom::FeaturePolicyDisposition disposition,
     std::vector<url::Origin> origins)
     : feature(feature),
       matches_all_origins(matches_all_origins),
       matches_opaque_src(matches_opaque_src),
-      origins(origins) {}
+      disposition(disposition),
+      origins(std::move(origins)) {}
 
 ParsedFeaturePolicyDeclaration::ParsedFeaturePolicyDeclaration(
     const ParsedFeaturePolicyDeclaration& rhs) = default;
@@ -48,14 +52,25 @@ ParsedFeaturePolicyDeclaration::~ParsedFeaturePolicyDeclaration() = default;
 
 bool operator==(const ParsedFeaturePolicyDeclaration& lhs,
                 const ParsedFeaturePolicyDeclaration& rhs) {
-  // This method returns true only when the arguments are actually identical,
-  // including the order of elements in the origins vector.
-  // TODO(iclelland): Consider making this return true when comparing equal-
-  // but-not-identical allowlists, or eliminate those comparisons by maintaining
-  // the allowlists in a normalized form.
-  // https://crbug.com/710324
-  return std::tie(lhs.feature, lhs.matches_all_origins, lhs.origins) ==
-         std::tie(rhs.feature, rhs.matches_all_origins, rhs.origins);
+  if (lhs.feature != rhs.feature)
+    return false;
+  if (lhs.disposition != rhs.disposition)
+    return false;
+  if (lhs.matches_all_origins != rhs.matches_all_origins)
+    return false;
+  return lhs.matches_all_origins || (lhs.origins == rhs.origins);
+}
+
+std::unique_ptr<ParsedFeaturePolicy> DirectivesWithDisposition(
+    mojom::FeaturePolicyDisposition disposition,
+    const ParsedFeaturePolicy& policy) {
+  std::unique_ptr<ParsedFeaturePolicy> filtered_policy =
+      std::make_unique<ParsedFeaturePolicy>();
+  for (const auto& directive : policy) {
+    if (directive.disposition == disposition)
+      filtered_policy->push_back(directive);
+  }
+  return filtered_policy;
 }
 
 FeaturePolicy::Allowlist::Allowlist() : matches_all_origins_(false) {}
@@ -65,7 +80,7 @@ FeaturePolicy::Allowlist::Allowlist(const Allowlist& rhs) = default;
 FeaturePolicy::Allowlist::~Allowlist() = default;
 
 void FeaturePolicy::Allowlist::Add(const url::Origin& origin) {
-  origins_.push_back(origin);
+  origins_.insert(origin);
 }
 
 void FeaturePolicy::Allowlist::AddAll() {
@@ -79,20 +94,21 @@ bool FeaturePolicy::Allowlist::Contains(const url::Origin& origin) const {
   // TODO(iclelland): Fix that, possibly by having another flag for
   // 'matches_self', which will explicitly match the policy's origin.
   // https://crbug.com/690520
-  if (matches_all_origins_)
+  if (matches_all_origins_) {
+    DCHECK(origins_.empty());
     return true;
-  for (const auto& targetOrigin : origins_) {
-    if (targetOrigin.IsSameOriginWith(origin))
-      return true;
   }
-  return false;
+
+  if (origin.opaque())
+    return false;
+  return base::ContainsKey(origins_, origin);
 }
 
 bool FeaturePolicy::Allowlist::MatchesAll() const {
   return matches_all_origins_;
 }
 
-const std::vector<url::Origin>& FeaturePolicy::Allowlist::Origins() const {
+const base::flat_set<url::Origin>& FeaturePolicy::Allowlist::Origins() const {
   return origins_;
 }
 
@@ -125,12 +141,8 @@ bool FeaturePolicy::IsFeatureEnabledForOrigin(
       feature_list_.at(feature);
   if (default_policy == FeaturePolicy::FeatureDefault::EnableForAll)
     return true;
-  if (default_policy == FeaturePolicy::FeatureDefault::EnableForSelf) {
-    // TODO(iclelland): Remove the pointer equality check once it is possible to
-    // compare opaque origins successfully against themselves.
-    // https://crbug.com/690520
-    return (&origin_ == &origin) || origin_.IsSameOriginWith(origin);
-  }
+  if (default_policy == FeaturePolicy::FeatureDefault::EnableForSelf)
+    return origin_.IsSameOriginWith(origin);
   return false;
 }
 
@@ -170,10 +182,14 @@ void FeaturePolicy::SetHeaderPolicy(const ParsedFeaturePolicy& parsed_header) {
 
 FeaturePolicy::FeaturePolicy(url::Origin origin,
                              const FeatureList& feature_list)
-    : origin_(origin), feature_list_(feature_list) {}
-
-FeaturePolicy::FeaturePolicy(url::Origin origin)
-    : origin_(origin), feature_list_(GetDefaultFeatureList()) {}
+    : origin_(std::move(origin)), feature_list_(feature_list) {
+  if (origin_.opaque()) {
+    // FeaturePolicy was written expecting opaque Origins to be indistinct, but
+    // this has changed. Split out a new opaque origin here, to defend against
+    // origin-equality.
+    origin_ = origin_.DeriveNewOpaqueOrigin();
+  }
+}
 
 FeaturePolicy::~FeaturePolicy() = default;
 
@@ -189,6 +205,10 @@ std::unique_ptr<FeaturePolicy> FeaturePolicy::CreateFromParentPolicy(
 
   std::unique_ptr<FeaturePolicy> new_policy =
       base::WrapUnique(new FeaturePolicy(origin, features));
+  // For features which are not keys in a container policy, which is the case
+  // here *until* we call AddContainerPolicy at the end of this method,
+  // https://wicg.github.io/feature-policy/#define-inherited-policy-in-container
+  // returns true if |feature| is enabled in |parent_policy| for |origin|.
   for (const auto& feature : features) {
     if (!parent_policy ||
         parent_policy->IsFeatureEnabledForOrigin(feature.first, origin)) {
@@ -206,29 +226,30 @@ void FeaturePolicy::AddContainerPolicy(
     const ParsedFeaturePolicy& container_policy,
     const FeaturePolicy* parent_policy) {
   DCHECK(parent_policy);
+  // For features which are keys in a container policy,
+  // https://wicg.github.io/feature-policy/#define-inherited-policy-in-container
+  // returns true only if |feature| is enabled in |parent| for either |origin|
+  // or |parent|'s origin, and the allowlist for |feature| matches |origin|.
+  //
+  // Roughly, If a feature is enabled in the parent frame, and the parent
+  // chooses to delegate it to the child frame, using the iframe attribute, then
+  // the feature should be enabled in the child frame.
   for (const ParsedFeaturePolicyDeclaration& parsed_declaration :
        container_policy) {
-    // If a feature is enabled in the parent frame, and the parent chooses to
-    // delegate it to the child frame, using the iframe attribute, then the
-    // feature should be enabled in the child frame.
     mojom::FeaturePolicyFeature feature = parsed_declaration.feature;
-    if (feature == mojom::FeaturePolicyFeature::kNotFound)
+    // Do not allow setting a container policy for a feature which is not in the
+    // feature list.
+    auto search = inherited_policies_.find(feature);
+    if (search == inherited_policies_.end())
       continue;
-    // If the parent frame does not enable the feature, then the child frame
-    // must not.
-    inherited_policies_[feature] = false;
-    if (parent_policy->IsFeatureEnabled(feature)) {
-      if (parsed_declaration.matches_opaque_src && origin_.unique()) {
-        // If the child frame has an opaque origin, and the declared container
-        // policy indicates that the feature should be enabled, enable it for
-        // the child frame.
-        inherited_policies_[feature] = true;
-      } else if (AllowlistFromDeclaration(parsed_declaration)
-                     ->Contains(origin_)) {
-        // Otherwise, enbable the feature if the declared container policy
-        // includes the origin of the child frame.
-        inherited_policies_[feature] = true;
-      }
+    bool& inherited_policy = search->second;
+    // If enabled by |parent_policy| for either |origin| or |parent_policy|'s
+    // origin, then enable in the child iff the declared container policy
+    // matches |origin|.
+    if (inherited_policy || parent_policy->IsFeatureEnabled(feature)) {
+      inherited_policy =
+          ((parsed_declaration.matches_opaque_src && origin_.opaque()) ||
+           AllowlistFromDeclaration(parsed_declaration)->Contains(origin_));
     }
   }
 }
@@ -237,65 +258,64 @@ void FeaturePolicy::AddContainerPolicy(
 // See third_party/blink/public/common/feature_policy/feature_policy.h for
 // status of each feature (in spec, implemented, etc).
 const FeaturePolicy::FeatureList& FeaturePolicy::GetDefaultFeatureList() {
-  CR_DEFINE_STATIC_LOCAL(
-      FeatureList, default_feature_list,
-      ({{mojom::FeaturePolicyFeature::kAccelerometer,
-         FeaturePolicy::FeatureDefault::EnableForSelf},
-        {mojom::FeaturePolicyFeature::kAccessibilityEvents,
-         FeaturePolicy::FeatureDefault::EnableForSelf},
-        {mojom::FeaturePolicyFeature::kAmbientLightSensor,
-         FeaturePolicy::FeatureDefault::EnableForSelf},
-        {mojom::FeaturePolicyFeature::kAnimations,
-         FeaturePolicy::FeatureDefault::EnableForAll},
-        {mojom::FeaturePolicyFeature::kAutoplay,
-         FeaturePolicy::FeatureDefault::EnableForSelf},
-        {mojom::FeaturePolicyFeature::kCamera,
-         FeaturePolicy::FeatureDefault::EnableForSelf},
-        {mojom::FeaturePolicyFeature::kDocumentCookie,
-         FeaturePolicy::FeatureDefault::EnableForAll},
-        {mojom::FeaturePolicyFeature::kDocumentDomain,
-         FeaturePolicy::FeatureDefault::EnableForAll},
-        {mojom::FeaturePolicyFeature::kDocumentStreamInsertion,
-         FeaturePolicy::FeatureDefault::EnableForAll},
-        {mojom::FeaturePolicyFeature::kEncryptedMedia,
-         FeaturePolicy::FeatureDefault::EnableForSelf},
-        {mojom::FeaturePolicyFeature::kFullscreen,
-         FeaturePolicy::FeatureDefault::EnableForSelf},
-        {mojom::FeaturePolicyFeature::kGeolocation,
-         FeaturePolicy::FeatureDefault::EnableForSelf},
-        {mojom::FeaturePolicyFeature::kGyroscope,
-         FeaturePolicy::FeatureDefault::EnableForSelf},
-        {mojom::FeaturePolicyFeature::kImageCompression,
-         FeaturePolicy::FeatureDefault::EnableForAll},
-        {mojom::FeaturePolicyFeature::kLegacyImageFormats,
-         FeaturePolicy::FeatureDefault::EnableForAll},
-        {mojom::FeaturePolicyFeature::kMagnetometer,
-         FeaturePolicy::FeatureDefault::EnableForSelf},
-        {mojom::FeaturePolicyFeature::kMaxDownscalingImage,
-         FeaturePolicy::FeatureDefault::EnableForAll},
-        {mojom::FeaturePolicyFeature::kMicrophone,
-         FeaturePolicy::FeatureDefault::EnableForSelf},
-        {mojom::FeaturePolicyFeature::kMidiFeature,
-         FeaturePolicy::FeatureDefault::EnableForSelf},
-        {mojom::FeaturePolicyFeature::kPayment,
-         FeaturePolicy::FeatureDefault::EnableForSelf},
-        {mojom::FeaturePolicyFeature::kPictureInPicture,
-         FeaturePolicy::FeatureDefault::EnableForAll},
-        {mojom::FeaturePolicyFeature::kSpeaker,
-         FeaturePolicy::FeatureDefault::EnableForSelf},
-        {mojom::FeaturePolicyFeature::kSyncScript,
-         FeaturePolicy::FeatureDefault::EnableForAll},
-        {mojom::FeaturePolicyFeature::kSyncXHR,
-         FeaturePolicy::FeatureDefault::EnableForAll},
-        {mojom::FeaturePolicyFeature::kUnsizedMedia,
-         FeaturePolicy::FeatureDefault::EnableForAll},
-        {mojom::FeaturePolicyFeature::kUsb,
-         FeaturePolicy::FeatureDefault::EnableForSelf},
-        {mojom::FeaturePolicyFeature::kVerticalScroll,
-         FeaturePolicy::FeatureDefault::EnableForAll},
-        {mojom::FeaturePolicyFeature::kWebVr,
-         FeaturePolicy::FeatureDefault::EnableForSelf}}));
-  return default_feature_list;
+  static base::NoDestructor<FeatureList> default_feature_list(
+      {{mojom::FeaturePolicyFeature::kAccelerometer,
+        FeaturePolicy::FeatureDefault::EnableForSelf},
+       {mojom::FeaturePolicyFeature::kAccessibilityEvents,
+        FeaturePolicy::FeatureDefault::EnableForSelf},
+       {mojom::FeaturePolicyFeature::kAmbientLightSensor,
+        FeaturePolicy::FeatureDefault::EnableForSelf},
+       {mojom::FeaturePolicyFeature::kAutoplay,
+        FeaturePolicy::FeatureDefault::EnableForSelf},
+       {mojom::FeaturePolicyFeature::kCamera,
+        FeaturePolicy::FeatureDefault::EnableForSelf},
+       {mojom::FeaturePolicyFeature::kDocumentDomain,
+        FeaturePolicy::FeatureDefault::EnableForAll},
+       {mojom::FeaturePolicyFeature::kDocumentWrite,
+        FeaturePolicy::FeatureDefault::EnableForAll},
+       {mojom::FeaturePolicyFeature::kEncryptedMedia,
+        FeaturePolicy::FeatureDefault::EnableForSelf},
+       {mojom::FeaturePolicyFeature::kFullscreen,
+        FeaturePolicy::FeatureDefault::EnableForSelf},
+       {mojom::FeaturePolicyFeature::kGeolocation,
+        FeaturePolicy::FeatureDefault::EnableForSelf},
+       {mojom::FeaturePolicyFeature::kGyroscope,
+        FeaturePolicy::FeatureDefault::EnableForSelf},
+       {mojom::FeaturePolicyFeature::kUnoptimizedImages,
+        FeaturePolicy::FeatureDefault::EnableForAll},
+       {mojom::FeaturePolicyFeature::kLayoutAnimations,
+        FeaturePolicy::FeatureDefault::EnableForAll},
+       {mojom::FeaturePolicyFeature::kLazyLoad,
+        FeaturePolicy::FeatureDefault::EnableForAll},
+       {mojom::FeaturePolicyFeature::kLegacyImageFormats,
+        FeaturePolicy::FeatureDefault::EnableForAll},
+       {mojom::FeaturePolicyFeature::kMagnetometer,
+        FeaturePolicy::FeatureDefault::EnableForSelf},
+       {mojom::FeaturePolicyFeature::kOversizedImages,
+        FeaturePolicy::FeatureDefault::EnableForAll},
+       {mojom::FeaturePolicyFeature::kMicrophone,
+        FeaturePolicy::FeatureDefault::EnableForSelf},
+       {mojom::FeaturePolicyFeature::kMidiFeature,
+        FeaturePolicy::FeatureDefault::EnableForSelf},
+       {mojom::FeaturePolicyFeature::kPayment,
+        FeaturePolicy::FeatureDefault::EnableForSelf},
+       {mojom::FeaturePolicyFeature::kPictureInPicture,
+        FeaturePolicy::FeatureDefault::EnableForAll},
+       {mojom::FeaturePolicyFeature::kSpeaker,
+        FeaturePolicy::FeatureDefault::EnableForSelf},
+       {mojom::FeaturePolicyFeature::kSyncScript,
+        FeaturePolicy::FeatureDefault::EnableForAll},
+       {mojom::FeaturePolicyFeature::kSyncXHR,
+        FeaturePolicy::FeatureDefault::EnableForAll},
+       {mojom::FeaturePolicyFeature::kUnsizedMedia,
+        FeaturePolicy::FeatureDefault::EnableForAll},
+       {mojom::FeaturePolicyFeature::kUsb,
+        FeaturePolicy::FeatureDefault::EnableForSelf},
+       {mojom::FeaturePolicyFeature::kVerticalScroll,
+        FeaturePolicy::FeatureDefault::EnableForAll},
+       {mojom::FeaturePolicyFeature::kWebVr,
+        FeaturePolicy::FeatureDefault::EnableForSelf}});
+  return *default_feature_list;
 }
 
 }  // namespace blink

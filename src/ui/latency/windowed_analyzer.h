@@ -11,7 +11,7 @@
 #include "base/macros.h"
 #include "base/optional.h"
 #include "base/time/time.h"
-#include "base/trace_event/trace_event_argument.h"
+#include "base/trace_event/traced_value.h"
 #include "ui/latency/fixed_point.h"
 
 namespace ui {
@@ -102,8 +102,6 @@ class WindowedAnalyzer {
   FrameRegionResult ComputeWorstMean() const;
   FrameRegionResult ComputeWorstRMS() const;
   FrameRegionResult ComputeWorstSMR() const;
-
-  void AsValueInto(base::trace_event::TracedValue* state) const;
 
  protected:
   struct QueueEntry {

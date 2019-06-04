@@ -5,9 +5,9 @@
 #include "third_party/blink/renderer/core/fetch/headers.h"
 
 #include "third_party/blink/renderer/bindings/core/v8/byte_string_sequence_sequence_or_byte_string_byte_string_record.h"
-#include "third_party/blink/renderer/bindings/core/v8/exception_state.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_iterator_result_value.h"
 #include "third_party/blink/renderer/core/dom/iterator.h"
+#include "third_party/blink/renderer/platform/bindings/exception_state.h"
 #include "third_party/blink/renderer/platform/loader/cors/cors.h"
 #include "third_party/blink/renderer/platform/loader/fetch/fetch_utils.h"
 #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
@@ -40,13 +40,13 @@ class HeadersIterationSource final
 
  private:
   Vector<std::pair<String, String>> headers_;
-  size_t current_;
+  wtf_size_t current_;
 };
 
 }  // namespace
 
 Headers* Headers::Create(ExceptionState&) {
-  return new Headers;
+  return MakeGarbageCollected<Headers>();
 }
 
 Headers* Headers::Create(const HeadersInit& init,
@@ -61,7 +61,7 @@ Headers* Headers::Create(const HeadersInit& init,
 }
 
 Headers* Headers::Create(FetchHeaderList* header_list) {
-  return new Headers(header_list);
+  return MakeGarbageCollected<Headers>(header_list);
 }
 
 Headers* Headers::Clone() const {
@@ -95,12 +95,12 @@ void Headers::append(const String& name,
   }
   // "4. Otherwise, if guard is |request| and |name| is a forbidden header
   //     name, return."
-  if (guard_ == kRequestGuard && CORS::IsForbiddenHeaderName(name))
+  if (guard_ == kRequestGuard && cors::IsForbiddenHeaderName(name))
     return;
   // "5. Otherwise, if guard is |request-no-CORS| and |name|/|value| is not a
-  //     CORS-safelisted header, return."
-  if (guard_ == kRequestNoCORSGuard &&
-      !CORS::IsCORSSafelistedHeader(name, normalized_value)) {
+  //     no-CORS-safelisted header, return."
+  if (guard_ == kRequestNoCorsGuard &&
+      !cors::IsNoCorsSafelistedHeader(name, normalized_value)) {
     return;
   }
   // "6. Otherwise, if guard is |response| and |name| is a forbidden response
@@ -127,12 +127,12 @@ void Headers::remove(const String& name, ExceptionState& exception_state) {
   }
   // "3. Otherwise, if guard is |request| and |name| is a forbidden header
   //     name, return."
-  if (guard_ == kRequestGuard && CORS::IsForbiddenHeaderName(name))
+  if (guard_ == kRequestGuard && cors::IsForbiddenHeaderName(name))
     return;
   // "4. Otherwise, if guard is |request-no-CORS| and |name|/`invalid` is not
-  //     a CORS-safelisted header, return."
-  if (guard_ == kRequestNoCORSGuard &&
-      !CORS::IsCORSSafelistedHeader(name, "invalid")) {
+  //     a no-CORS-safelisted header, return."
+  if (guard_ == kRequestNoCorsGuard &&
+      !cors::IsNoCorsSafelistedHeader(name, "invalid")) {
     return;
   }
   // "5. Otherwise, if guard is |response| and |name| is a forbidden response
@@ -195,12 +195,12 @@ void Headers::set(const String& name,
   }
   // "4. Otherwise, if guard is |request| and |name| is a forbidden header
   //     name, return."
-  if (guard_ == kRequestGuard && CORS::IsForbiddenHeaderName(name))
+  if (guard_ == kRequestGuard && cors::IsForbiddenHeaderName(name))
     return;
   // "5. Otherwise, if guard is |request-no-CORS| and |name|/|value| is not a
-  //     CORS-safelisted header, return."
-  if (guard_ == kRequestNoCORSGuard &&
-      !CORS::IsCORSSafelistedHeader(name, normalized_value)) {
+  //     no-CORS-safelisted header, return."
+  if (guard_ == kRequestNoCorsGuard &&
+      !cors::IsNoCorsSafelistedHeader(name, normalized_value)) {
     return;
   }
   // "6. Otherwise, if guard is |response| and |name| is a forbidden response
@@ -246,7 +246,7 @@ void Headers::FillWith(const Vector<Vector<String>>& object,
   //        TypeError.
   //     2. Append |header|’s first item/|header|’s second item to |headers|.
   //        Rethrow any exception."
-  for (size_t i = 0; i < object.size(); ++i) {
+  for (wtf_size_t i = 0; i < object.size(); ++i) {
     if (object[i].size() != 2) {
       exception_state.ThrowTypeError("Invalid value");
       return;

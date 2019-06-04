@@ -4,7 +4,6 @@
 
 #include "third_party/blink/renderer/modules/payments/payment_request_respond_with_observer.h"
 
-#include <v8.h>
 #include "third_party/blink/public/platform/modules/payments/web_payment_handler_response.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_value.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_binding_for_core.h"
@@ -13,8 +12,10 @@
 #include "third_party/blink/renderer/core/inspector/console_message.h"
 #include "third_party/blink/renderer/modules/payments/payment_handler_response.h"
 #include "third_party/blink/renderer/modules/payments/payment_handler_utils.h"
-#include "third_party/blink/renderer/modules/serviceworkers/service_worker_global_scope_client.h"
-#include "third_party/blink/renderer/modules/serviceworkers/wait_until_observer.h"
+#include "third_party/blink/renderer/modules/service_worker/service_worker_global_scope_client.h"
+#include "third_party/blink/renderer/modules/service_worker/wait_until_observer.h"
+#include "third_party/blink/renderer/platform/bindings/exception_state.h"
+#include "v8/include/v8.h"
 
 namespace blink {
 
@@ -22,7 +23,8 @@ PaymentRequestRespondWithObserver* PaymentRequestRespondWithObserver::Create(
     ExecutionContext* context,
     int event_id,
     WaitUntilObserver* observer) {
-  return new PaymentRequestRespondWithObserver(context, event_id, observer);
+  return MakeGarbageCollected<PaymentRequestRespondWithObserver>(
+      context, event_id, observer);
 }
 
 void PaymentRequestRespondWithObserver::OnResponseRejected(
@@ -32,17 +34,20 @@ void PaymentRequestRespondWithObserver::OnResponseRejected(
 
   WebPaymentHandlerResponse web_data;
   ServiceWorkerGlobalScopeClient::From(GetExecutionContext())
-      ->RespondToPaymentRequestEvent(event_id_, web_data, event_dispatch_time_);
+      ->RespondToPaymentRequestEvent(event_id_, web_data);
 }
 
 void PaymentRequestRespondWithObserver::OnResponseFulfilled(
-    const ScriptValue& value) {
+    const ScriptValue& value,
+    ExceptionState::ContextType context_type,
+    const char* interface_name,
+    const char* property_name) {
   DCHECK(GetExecutionContext());
-  ExceptionState exception_state(value.GetIsolate(),
-                                 ExceptionState::kUnknownContext,
-                                 "PaymentRequestEvent", "respondWith");
-  PaymentHandlerResponse response = ScriptValue::To<PaymentHandlerResponse>(
-      ToIsolate(GetExecutionContext()), value, exception_state);
+  ExceptionState exception_state(value.GetIsolate(), context_type,
+                                 interface_name, property_name);
+  PaymentHandlerResponse* response =
+      NativeValueTraits<PaymentHandlerResponse>::NativeValue(
+          ToIsolate(GetExecutionContext()), value.V8Value(), exception_state);
   if (exception_state.HadException()) {
     exception_state.ClearException();
     OnResponseRejected(mojom::ServiceWorkerResponseError::kNoV8Instance);
@@ -50,7 +55,7 @@ void PaymentRequestRespondWithObserver::OnResponseFulfilled(
   }
 
   // Check payment response validity.
-  if (!response.hasMethodName() || !response.hasDetails()) {
+  if (!response->hasMethodName() || !response->hasDetails()) {
     GetExecutionContext()->AddConsoleMessage(
         ConsoleMessage::Create(kJSMessageSource, kErrorMessageLevel,
                                "'PaymentHandlerResponse.methodName' and "
@@ -61,11 +66,11 @@ void PaymentRequestRespondWithObserver::OnResponseFulfilled(
   }
 
   WebPaymentHandlerResponse web_data;
-  web_data.method_name = response.methodName();
+  web_data.method_name = response->methodName();
 
   v8::Local<v8::String> details_value;
-  if (!v8::JSON::Stringify(response.details().GetContext(),
-                           response.details().V8Value().As<v8::Object>())
+  if (!v8::JSON::Stringify(response->details().GetContext(),
+                           response->details().V8Value().As<v8::Object>())
            .ToLocal(&details_value)) {
     GetExecutionContext()->AddConsoleMessage(ConsoleMessage::Create(
         kJSMessageSource, kErrorMessageLevel,
@@ -76,14 +81,13 @@ void PaymentRequestRespondWithObserver::OnResponseFulfilled(
   }
   web_data.stringified_details = ToCoreString(details_value);
   ServiceWorkerGlobalScopeClient::From(GetExecutionContext())
-      ->RespondToPaymentRequestEvent(event_id_, web_data, event_dispatch_time_);
+      ->RespondToPaymentRequestEvent(event_id_, web_data);
 }
 
 void PaymentRequestRespondWithObserver::OnNoResponse() {
   DCHECK(GetExecutionContext());
   ServiceWorkerGlobalScopeClient::From(GetExecutionContext())
-      ->RespondToPaymentRequestEvent(event_id_, WebPaymentHandlerResponse(),
-                                     event_dispatch_time_);
+      ->RespondToPaymentRequestEvent(event_id_, WebPaymentHandlerResponse());
 }
 
 PaymentRequestRespondWithObserver::PaymentRequestRespondWithObserver(

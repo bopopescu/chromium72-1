@@ -309,14 +309,6 @@ PermissionMessages PermissionsData::GetNewPermissionMessages(
                                                             manifest_type_));
 }
 
-bool PermissionsData::HasWithheldImpliedAllHosts() const {
-  base::AutoLock auto_lock(runtime_lock_);
-  // Since we currently only withhold all_hosts, it's sufficient to check
-  // that either set is not empty.
-  return !withheld_permissions_unsafe_->explicit_hosts().is_empty() ||
-         !withheld_permissions_unsafe_->scriptable_hosts().is_empty();
-}
-
 bool PermissionsData::CanAccessPage(const GURL& document_url,
                                     int tab_id,
                                     std::string* error) const {
@@ -371,7 +363,8 @@ bool PermissionsData::CanCaptureVisiblePage(const GURL& document_url,
   // Check the real origin, in order to account for filesystem:, blob:, etc.
   // (url::Origin grabs the inner origin of these, whereas GURL::GetOrigin()
   // does not.)
-  const GURL origin = url::Origin::Create(document_url).GetURL();
+  url::Origin origin = url::Origin::Create(document_url);
+  const GURL origin_url = origin.GetURL();
   {
     base::AutoLock auto_lock(runtime_lock_);
     // Disallow capturing policy-blocked hosts. No exceptions.
@@ -379,7 +372,8 @@ bool PermissionsData::CanCaptureVisiblePage(const GURL& document_url,
     // blocked host in a different page and then capture that, but it's better
     // than nothing (and policy hosts can set their x-frame options
     // accordingly).
-    if (location_ != Manifest::COMPONENT && IsPolicyBlockedHostUnsafe(origin)) {
+    if (location_ != Manifest::COMPONENT &&
+        IsPolicyBlockedHostUnsafe(origin_url)) {
       if (error)
         *error = extension_misc::kPolicyBlockedScripting;
       return false;
@@ -389,10 +383,15 @@ bool PermissionsData::CanCaptureVisiblePage(const GURL& document_url,
     has_active_tab = tab_permissions &&
                      tab_permissions->HasAPIPermission(APIPermission::kTab);
 
-    const URLPattern all_urls(URLPattern::SCHEME_ALL,
-                              URLPattern::kAllUrlsPattern);
-    has_all_urls =
-        active_permissions_unsafe_->explicit_hosts().ContainsPattern(all_urls);
+    // Check if any of the host permissions match all urls. We don't use
+    // URLPatternSet::ContainsPattern() here because a) the schemes may be
+    // different and b) this is more efficient.
+    for (const auto& pattern : active_permissions_unsafe_->explicit_hosts()) {
+      if (pattern.match_all_urls()) {
+        has_all_urls = true;
+        break;
+      }
+    }
   }
 
   // At least one of activeTab or <all_urls> is always required; no exceptions.
@@ -412,7 +411,7 @@ bool PermissionsData::CanCaptureVisiblePage(const GURL& document_url,
   // If the extension has page access (and has activeTab or <all_urls>, as
   // checked above), allow the capture.
   std::string access_error;
-  if (GetPageAccess(origin, tab_id, &access_error) == PageAccess::kAllowed)
+  if (GetPageAccess(origin_url, tab_id, &access_error) == PageAccess::kAllowed)
     return true;
 
   // The extension doesn't have explicit page access. However, there are a
@@ -428,7 +427,7 @@ bool PermissionsData::CanCaptureVisiblePage(const GURL& document_url,
   // web content.
   // TODO(devlin): Should activeTab/<all_urls> account for the extension's own
   // domain?
-  if (origin.host() == extension_id_)
+  if (origin_url.host() == extension_id_)
     return true;
 
   // The following are special cases that require activeTab explicitly. Normal
@@ -441,12 +440,14 @@ bool PermissionsData::CanCaptureVisiblePage(const GURL& document_url,
   // - chrome:-scheme pages.
   // - Other extension's pages.
   // - data: URLs (which don't have a defined underlying origin).
-  // TODO(devlin): Include the Webstore in this list?
+  // - The Chrome Web Store.
   bool allowed_with_active_tab =
-      origin.SchemeIs(content::kChromeUIScheme) ||
-      origin.SchemeIs(kExtensionScheme) ||
+      origin_url.SchemeIs(content::kChromeUIScheme) ||
+      origin_url.SchemeIs(kExtensionScheme) ||
       // Note: The origin of a data: url is empty, so check the url itself.
-      document_url.SchemeIs(url::kDataScheme);
+      document_url.SchemeIs(url::kDataScheme) ||
+      origin.IsSameOriginWith(
+          url::Origin::Create(ExtensionsClient::Get()->GetWebstoreBaseURL()));
 
   if (!allowed_with_active_tab) {
     if (error)

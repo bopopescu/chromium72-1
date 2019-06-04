@@ -68,7 +68,7 @@ const CJX_MethodSpec CJX_HostPseudoModel::MethodSpecs[] = {
 
 CJX_HostPseudoModel::CJX_HostPseudoModel(CScript_HostPseudoModel* model)
     : CJX_Object(model) {
-  DefineMethods(MethodSpecs, FX_ArraySize(MethodSpecs));
+  DefineMethods(MethodSpecs);
 }
 
 CJX_HostPseudoModel::~CJX_HostPseudoModel() {}
@@ -130,7 +130,7 @@ void CJX_HostPseudoModel::language(CFXJSE_Value* pValue,
     return;
   }
   pValue->SetString(
-      pNotify->GetAppProvider()->GetLanguage().UTF8Encode().AsStringView());
+      pNotify->GetAppProvider()->GetLanguage().ToUTF8().AsStringView());
 }
 
 void CJX_HostPseudoModel::numPages(CFXJSE_Value* pValue,
@@ -160,7 +160,7 @@ void CJX_HostPseudoModel::platform(CFXJSE_Value* pValue,
     return;
   }
   pValue->SetString(
-      pNotify->GetAppProvider()->GetPlatform().UTF8Encode().AsStringView());
+      pNotify->GetAppProvider()->GetPlatform().ToUTF8().AsStringView());
 }
 
 void CJX_HostPseudoModel::title(CFXJSE_Value* pValue,
@@ -181,7 +181,7 @@ void CJX_HostPseudoModel::title(CFXJSE_Value* pValue,
 
   WideString wsTitle;
   hDoc->GetDocEnvironment()->GetTitle(hDoc, wsTitle);
-  pValue->SetString(wsTitle.UTF8Encode().AsStringView());
+  pValue->SetString(wsTitle.ToUTF8().AsStringView());
 }
 
 void CJX_HostPseudoModel::validationsEnabled(CFXJSE_Value* pValue,
@@ -236,40 +236,40 @@ void CJX_HostPseudoModel::name(CFXJSE_Value* pValue,
     return;
   }
   pValue->SetString(
-      pNotify->GetAppProvider()->GetAppName().UTF8Encode().AsStringView());
+      pNotify->GetAppProvider()->GetAppName().ToUTF8().AsStringView());
 }
 
-CJS_Return CJX_HostPseudoModel::gotoURL(
+CJS_Result CJX_HostPseudoModel::gotoURL(
     CFX_V8* runtime,
     const std::vector<v8::Local<v8::Value>>& params) {
   if (!GetDocument()->GetScriptContext()->IsRunAtClient())
-    return CJS_Return(true);
+    return CJS_Result::Success();
 
   if (params.size() != 1)
-    return CJS_Return(JSGetStringFromID(JSMessage::kParamError));
+    return CJS_Result::Failure(JSMessage::kParamError);
 
   CXFA_FFNotify* pNotify = GetDocument()->GetNotify();
   if (!pNotify)
-    return CJS_Return(true);
+    return CJS_Result::Success();
 
   CXFA_FFDoc* hDoc = pNotify->GetHDOC();
   WideString URL = runtime->ToWideString(params[0]);
   hDoc->GetDocEnvironment()->GotoURL(hDoc, URL);
-  return CJS_Return(true);
+  return CJS_Result::Success();
 }
 
-CJS_Return CJX_HostPseudoModel::openList(
+CJS_Result CJX_HostPseudoModel::openList(
     CFX_V8* runtime,
     const std::vector<v8::Local<v8::Value>>& params) {
   if (!GetDocument()->GetScriptContext()->IsRunAtClient())
-    return CJS_Return(true);
+    return CJS_Result::Success();
 
   if (params.size() != 1)
-    return CJS_Return(JSGetStringFromID(JSMessage::kParamError));
+    return CJS_Result::Failure(JSMessage::kParamError);
 
   CXFA_FFNotify* pNotify = GetDocument()->GetNotify();
   if (!pNotify)
-    return CJS_Return(true);
+    return CJS_Result::Success();
 
   CXFA_Node* pNode = nullptr;
   if (params[0]->IsObject()) {
@@ -278,11 +278,11 @@ CJS_Return CJX_HostPseudoModel::openList(
   } else if (params[0]->IsString()) {
     CFXJSE_Engine* pScriptContext = GetDocument()->GetScriptContext();
     if (!pScriptContext)
-      return CJS_Return(true);
+      return CJS_Result::Success();
 
     CXFA_Object* pObject = pScriptContext->GetThisObject();
     if (!pObject)
-      return CJS_Return(true);
+      return CJS_Result::Success();
 
     uint32_t dwFlag = XFA_RESOLVENODE_Children | XFA_RESOLVENODE_Parent |
                       XFA_RESOLVENODE_Siblings;
@@ -291,35 +291,35 @@ CJS_Return CJX_HostPseudoModel::openList(
         pObject, runtime->ToWideString(params[0]).AsStringView(),
         &resolveNodeRS, dwFlag, nullptr);
     if (!iRet || !resolveNodeRS.objects.front()->IsNode())
-      return CJS_Return(true);
+      return CJS_Result::Success();
 
     pNode = resolveNodeRS.objects.front()->AsNode();
   }
 
   CXFA_LayoutProcessor* pDocLayout = GetDocument()->GetLayoutProcessor();
   if (!pDocLayout)
-    return CJS_Return(true);
+    return CJS_Result::Success();
 
   CXFA_FFWidget* hWidget =
       XFA_GetWidgetFromLayoutItem(pDocLayout->GetLayoutItem(pNode));
   if (!hWidget)
-    return CJS_Return(true);
+    return CJS_Result::Success();
 
   CXFA_FFDoc* hDoc = pNotify->GetHDOC();
   hDoc->GetDocEnvironment()->SetFocusWidget(hDoc, hWidget);
   pNotify->OpenDropDownList(hWidget);
-  return CJS_Return(true);
+  return CJS_Result::Success();
 }
 
-CJS_Return CJX_HostPseudoModel::response(
+CJS_Result CJX_HostPseudoModel::response(
     CFX_V8* runtime,
     const std::vector<v8::Local<v8::Value>>& params) {
   if (params.empty() || params.size() > 4)
-    return CJS_Return(JSGetStringFromID(JSMessage::kParamError));
+    return CJS_Result::Failure(JSMessage::kParamError);
 
   CXFA_FFNotify* pNotify = GetDocument()->GetNotify();
   if (!pNotify)
-    return CJS_Return(true);
+    return CJS_Result::Success();
 
   WideString question;
   if (params.size() >= 1)
@@ -339,24 +339,25 @@ CJS_Return CJX_HostPseudoModel::response(
 
   WideString answer =
       pNotify->GetAppProvider()->Response(question, title, defaultAnswer, mark);
-  return CJS_Return(runtime->NewString(answer.UTF8Encode().AsStringView()));
+  return CJS_Result::Success(
+      runtime->NewString(answer.ToUTF8().AsStringView()));
 }
 
-CJS_Return CJX_HostPseudoModel::documentInBatch(
+CJS_Result CJX_HostPseudoModel::documentInBatch(
     CFX_V8* runtime,
     const std::vector<v8::Local<v8::Value>>& params) {
-  return CJS_Return(runtime->NewNumber(0));
+  return CJS_Result::Success(runtime->NewNumber(0));
 }
 
-CJS_Return CJX_HostPseudoModel::resetData(
+CJS_Result CJX_HostPseudoModel::resetData(
     CFX_V8* runtime,
     const std::vector<v8::Local<v8::Value>>& params) {
   if (params.size() > 1)
-    return CJS_Return(JSGetStringFromID(JSMessage::kParamError));
+    return CJS_Result::Failure(JSMessage::kParamError);
 
   CXFA_FFNotify* pNotify = GetDocument()->GetNotify();
   if (!pNotify)
-    return CJS_Return(true);
+    return CJS_Result::Success();
 
   WideString expression;
   if (params.size() >= 1)
@@ -364,7 +365,7 @@ CJS_Return CJX_HostPseudoModel::resetData(
 
   if (expression.IsEmpty()) {
     pNotify->ResetData(nullptr);
-    return CJS_Return(true);
+    return CJS_Result::Success();
   }
 
   int32_t iStart = 0;
@@ -375,11 +376,11 @@ CJS_Return CJX_HostPseudoModel::resetData(
     iStart = FilterName(expression.AsStringView(), iStart, wsName);
     CFXJSE_Engine* pScriptContext = GetDocument()->GetScriptContext();
     if (!pScriptContext)
-      return CJS_Return(true);
+      return CJS_Result::Success();
 
     CXFA_Object* pObject = pScriptContext->GetThisObject();
     if (!pObject)
-      return CJS_Return(true);
+      return CJS_Result::Success();
 
     uint32_t dwFlag = XFA_RESOLVENODE_Children | XFA_RESOLVENODE_Parent |
                       XFA_RESOLVENODE_Siblings;
@@ -395,42 +396,42 @@ CJS_Return CJX_HostPseudoModel::resetData(
   if (!pNode)
     pNotify->ResetData(nullptr);
 
-  return CJS_Return(true);
+  return CJS_Result::Success();
 }
 
-CJS_Return CJX_HostPseudoModel::beep(
+CJS_Result CJX_HostPseudoModel::beep(
     CFX_V8* runtime,
     const std::vector<v8::Local<v8::Value>>& params) {
   if (!GetDocument()->GetScriptContext()->IsRunAtClient())
-    return CJS_Return(true);
+    return CJS_Result::Success();
 
   if (params.size() > 1)
-    return CJS_Return(JSGetStringFromID(JSMessage::kParamError));
+    return CJS_Result::Failure(JSMessage::kParamError);
 
   CXFA_FFNotify* pNotify = GetDocument()->GetNotify();
   if (!pNotify)
-    return CJS_Return(true);
+    return CJS_Result::Success();
 
   uint32_t dwType = 4;
   if (params.size() >= 1)
     dwType = runtime->ToInt32(params[0]);
 
   pNotify->GetAppProvider()->Beep(dwType);
-  return CJS_Return(true);
+  return CJS_Result::Success();
 }
 
-CJS_Return CJX_HostPseudoModel::setFocus(
+CJS_Result CJX_HostPseudoModel::setFocus(
     CFX_V8* runtime,
     const std::vector<v8::Local<v8::Value>>& params) {
   if (!GetDocument()->GetScriptContext()->IsRunAtClient())
-    return CJS_Return(true);
+    return CJS_Result::Success();
 
   if (params.size() != 1)
-    return CJS_Return(JSGetStringFromID(JSMessage::kParamError));
+    return CJS_Result::Failure(JSMessage::kParamError);
 
   CXFA_FFNotify* pNotify = GetDocument()->GetNotify();
   if (!pNotify)
-    return CJS_Return(true);
+    return CJS_Result::Success();
 
   CXFA_Node* pNode = nullptr;
   if (params.size() >= 1) {
@@ -440,11 +441,11 @@ CJS_Return CJX_HostPseudoModel::setFocus(
     } else if (params[0]->IsString()) {
       CFXJSE_Engine* pScriptContext = GetDocument()->GetScriptContext();
       if (!pScriptContext)
-        return CJS_Return(true);
+        return CJS_Result::Success();
 
       CXFA_Object* pObject = pScriptContext->GetThisObject();
       if (!pObject)
-        return CJS_Return(true);
+        return CJS_Result::Success();
 
       uint32_t dwFlag = XFA_RESOLVENODE_Children | XFA_RESOLVENODE_Parent |
                         XFA_RESOLVENODE_Siblings;
@@ -453,46 +454,47 @@ CJS_Return CJX_HostPseudoModel::setFocus(
           pObject, runtime->ToWideString(params[0]).AsStringView(),
           &resolveNodeRS, dwFlag, nullptr);
       if (!iRet || !resolveNodeRS.objects.front()->IsNode())
-        return CJS_Return(true);
+        return CJS_Result::Success();
 
       pNode = resolveNodeRS.objects.front()->AsNode();
     }
   }
   pNotify->SetFocusWidgetNode(pNode);
-  return CJS_Return(true);
+  return CJS_Result::Success();
 }
 
-CJS_Return CJX_HostPseudoModel::getFocus(
+CJS_Result CJX_HostPseudoModel::getFocus(
     CFX_V8* runtime,
     const std::vector<v8::Local<v8::Value>>& params) {
   CXFA_FFNotify* pNotify = GetDocument()->GetNotify();
   if (!pNotify)
-    return CJS_Return(true);
+    return CJS_Result::Success();
 
   CXFA_Node* pNode = pNotify->GetFocusWidgetNode();
   if (!pNode)
-    return CJS_Return(true);
+    return CJS_Result::Success();
 
   CFXJSE_Value* value =
       GetDocument()->GetScriptContext()->GetJSValueFromMap(pNode);
   if (!value)
-    return CJS_Return(runtime->NewNull());
+    return CJS_Result::Success(runtime->NewNull());
 
-  return CJS_Return(value->DirectGetValue().Get(runtime->GetIsolate()));
+  return CJS_Result::Success(
+      value->DirectGetValue().Get(runtime->GetIsolate()));
 }
 
-CJS_Return CJX_HostPseudoModel::messageBox(
+CJS_Result CJX_HostPseudoModel::messageBox(
     CFX_V8* runtime,
     const std::vector<v8::Local<v8::Value>>& params) {
   if (!GetDocument()->GetScriptContext()->IsRunAtClient())
-    return CJS_Return(true);
+    return CJS_Result::Success();
 
   if (params.empty() || params.size() > 4)
-    return CJS_Return(JSGetStringFromID(JSMessage::kParamError));
+    return CJS_Result::Failure(JSMessage::kParamError);
 
   CXFA_FFNotify* pNotify = GetDocument()->GetNotify();
   if (!pNotify)
-    return CJS_Return(true);
+    return CJS_Result::Success();
 
   WideString message;
   if (params.size() >= 1)
@@ -502,43 +504,43 @@ CJS_Return CJX_HostPseudoModel::messageBox(
   if (params.size() >= 2)
     title = runtime->ToWideString(params[1]);
 
-  uint32_t messageType = XFA_MBICON_Error;
+  uint32_t messageType = static_cast<uint32_t>(AlertIcon::kDefault);
   if (params.size() >= 3) {
     messageType = runtime->ToInt32(params[2]);
-    if (messageType > XFA_MBICON_Status)
-      messageType = XFA_MBICON_Error;
+    if (messageType > static_cast<uint32_t>(AlertIcon::kStatus))
+      messageType = static_cast<uint32_t>(AlertIcon::kDefault);
   }
 
-  uint32_t buttonType = XFA_MB_OK;
+  uint32_t buttonType = static_cast<uint32_t>(AlertButton::kDefault);
   if (params.size() >= 4) {
     buttonType = runtime->ToInt32(params[3]);
-    if (buttonType > XFA_MB_YesNoCancel)
-      buttonType = XFA_MB_OK;
+    if (buttonType > static_cast<uint32_t>(AlertButton::kYesNoCancel))
+      buttonType = static_cast<uint32_t>(AlertButton::kDefault);
   }
 
   int32_t iValue = pNotify->GetAppProvider()->MsgBox(message, title,
                                                      messageType, buttonType);
-  return CJS_Return(runtime->NewNumber(iValue));
+  return CJS_Result::Success(runtime->NewNumber(iValue));
 }
 
-CJS_Return CJX_HostPseudoModel::documentCountInBatch(
+CJS_Result CJX_HostPseudoModel::documentCountInBatch(
     CFX_V8* runtime,
     const std::vector<v8::Local<v8::Value>>& params) {
-  return CJS_Return(runtime->NewNumber(0));
+  return CJS_Result::Success(runtime->NewNumber(0));
 }
 
-CJS_Return CJX_HostPseudoModel::print(
+CJS_Result CJX_HostPseudoModel::print(
     CFX_V8* runtime,
     const std::vector<v8::Local<v8::Value>>& params) {
   if (!GetDocument()->GetScriptContext()->IsRunAtClient())
-    return CJS_Return(true);
+    return CJS_Result::Success();
 
   if (params.size() != 8)
-    return CJS_Return(JSGetStringFromID(JSMessage::kParamError));
+    return CJS_Result::Failure(JSMessage::kParamError);
 
   CXFA_FFNotify* pNotify = GetDocument()->GetNotify();
   if (!pNotify)
-    return CJS_Return(true);
+    return CJS_Result::Success();
 
   uint32_t dwOptions = 0;
   if (runtime->ToBoolean(params[0]))
@@ -559,27 +561,27 @@ CJS_Return CJX_HostPseudoModel::print(
 
   CXFA_FFDoc* hDoc = pNotify->GetHDOC();
   hDoc->GetDocEnvironment()->Print(hDoc, nStartPage, nEndPage, dwOptions);
-  return CJS_Return(true);
+  return CJS_Result::Success();
 }
 
-CJS_Return CJX_HostPseudoModel::importData(
+CJS_Result CJX_HostPseudoModel::importData(
     CFX_V8* runtime,
     const std::vector<v8::Local<v8::Value>>& params) {
   if (params.empty() || params.size() > 1)
-    return CJS_Return(JSGetStringFromID(JSMessage::kParamError));
+    return CJS_Result::Failure(JSMessage::kParamError);
 
-  return CJS_Return(true);
+  return CJS_Result::Success();
 }
 
-CJS_Return CJX_HostPseudoModel::exportData(
+CJS_Result CJX_HostPseudoModel::exportData(
     CFX_V8* runtime,
     const std::vector<v8::Local<v8::Value>>& params) {
   if (params.empty() || params.size() > 2)
-    return CJS_Return(JSGetStringFromID(JSMessage::kParamError));
+    return CJS_Result::Failure(JSMessage::kParamError);
 
   CXFA_FFNotify* pNotify = GetDocument()->GetNotify();
   if (!pNotify)
-    return CJS_Return(true);
+    return CJS_Result::Success();
 
   WideString filePath;
   if (params.size() >= 1)
@@ -591,39 +593,39 @@ CJS_Return CJX_HostPseudoModel::exportData(
 
   CXFA_FFDoc* hDoc = pNotify->GetHDOC();
   hDoc->GetDocEnvironment()->ExportData(hDoc, filePath, XDP);
-  return CJS_Return(true);
+  return CJS_Result::Success();
 }
 
-CJS_Return CJX_HostPseudoModel::pageUp(
+CJS_Result CJX_HostPseudoModel::pageUp(
     CFX_V8* runtime,
     const std::vector<v8::Local<v8::Value>>& params) {
   CXFA_FFNotify* pNotify = GetDocument()->GetNotify();
   if (!pNotify)
-    return CJS_Return(true);
+    return CJS_Result::Success();
 
   CXFA_FFDoc* hDoc = pNotify->GetHDOC();
   int32_t nCurPage = hDoc->GetDocEnvironment()->GetCurrentPage(hDoc);
   int32_t nNewPage = 0;
   if (nCurPage <= 1)
-    return CJS_Return(true);
+    return CJS_Result::Success();
 
   nNewPage = nCurPage - 1;
   hDoc->GetDocEnvironment()->SetCurrentPage(hDoc, nNewPage);
-  return CJS_Return(true);
+  return CJS_Result::Success();
 }
 
-CJS_Return CJX_HostPseudoModel::pageDown(
+CJS_Result CJX_HostPseudoModel::pageDown(
     CFX_V8* runtime,
     const std::vector<v8::Local<v8::Value>>& params) {
   CXFA_FFNotify* pNotify = GetDocument()->GetNotify();
   if (!pNotify)
-    return CJS_Return(true);
+    return CJS_Result::Success();
 
   CXFA_FFDoc* hDoc = pNotify->GetHDOC();
   int32_t nCurPage = hDoc->GetDocEnvironment()->GetCurrentPage(hDoc);
   int32_t nPageCount = hDoc->GetDocEnvironment()->CountPages(hDoc);
   if (!nPageCount || nCurPage == nPageCount)
-    return CJS_Return(true);
+    return CJS_Result::Success();
 
   int32_t nNewPage = 0;
   if (nCurPage >= nPageCount)
@@ -632,5 +634,5 @@ CJS_Return CJX_HostPseudoModel::pageDown(
     nNewPage = nCurPage + 1;
 
   hDoc->GetDocEnvironment()->SetCurrentPage(hDoc, nNewPage);
-  return CJS_Return(true);
+  return CJS_Result::Success();
 }

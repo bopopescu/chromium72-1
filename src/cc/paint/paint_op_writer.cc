@@ -4,14 +4,14 @@
 
 #include "cc/paint/paint_op_writer.h"
 
+#include "base/bits.h"
 #include "cc/paint/draw_image.h"
 #include "cc/paint/image_provider.h"
 #include "cc/paint/image_transfer_cache_entry.h"
+#include "cc/paint/paint_cache.h"
 #include "cc/paint/paint_flags.h"
 #include "cc/paint/paint_op_buffer_serializer.h"
 #include "cc/paint/paint_shader.h"
-#include "cc/paint/paint_typeface_transfer_cache_entry.h"
-#include "cc/paint/path_transfer_cache_entry.h"
 #include "cc/paint/transfer_cache_serialize_helper.h"
 #include "third_party/skia/include/core/SkSerialProcs.h"
 #include "third_party/skia/include/core/SkTextBlob.h"
@@ -39,7 +39,7 @@ SkIRect MakeSrcRect(const PaintImage& image) {
 size_t PaintOpWriter::GetFlattenableSize(const SkFlattenable* flattenable) {
   // The first bit is always written to indicate the serialized size of the
   // flattenable, or zero if it doesn't exist.
-  size_t total_size = sizeof(size_t);
+  size_t total_size = sizeof(uint64_t) + alignof(uint64_t);
   if (!flattenable)
     return total_size;
 
@@ -60,7 +60,7 @@ size_t PaintOpWriter::GetImageSize(const PaintImage& image) {
     image_size += sizeof(info.colorType());
     image_size += sizeof(info.width());
     image_size += sizeof(info.height());
-    image_size += sizeof(size_t);
+    image_size += sizeof(uint64_t) + alignof(uint64_t);
     image_size += info.computeMinByteSize();
   }
   return image_size;
@@ -72,7 +72,7 @@ size_t PaintOpWriter::GetRecordSize(const PaintRecord* record) {
   // TODO(khushalsagar): Querying the size of a PaintRecord is not supported.
   // This works only for security constrained serialization which ignores
   // records.
-  return sizeof(size_t);
+  return sizeof(uint64_t);
 }
 
 PaintOpWriter::PaintOpWriter(void* memory,
@@ -93,31 +93,31 @@ PaintOpWriter::~PaintOpWriter() = default;
 template <typename T>
 void PaintOpWriter::WriteSimple(const T& val) {
   static_assert(base::is_trivially_copyable<T>::value, "");
-  EnsureBytes(sizeof(T));
+
+  // Round up each write to 4 bytes.  This is not technically perfect alignment,
+  // but it is about 30% faster to post-align each write to 4 bytes than it is
+  // to pre-align memory to the correct alignment.
+  // TODO(enne): maybe we should do this correctly and DCHECK alignment.
+  static constexpr size_t kAlign = 4;
+  size_t size = base::bits::Align(sizeof(T), kAlign);
+  EnsureBytes(size);
   if (!valid_)
     return;
 
   reinterpret_cast<T*>(memory_)[0] = val;
 
-  memory_ += sizeof(T);
-  remaining_bytes_ -= sizeof(T);
+  memory_ += size;
+  remaining_bytes_ -= size;
 }
-
 void PaintOpWriter::WriteFlattenable(const SkFlattenable* val) {
-  DCHECK(SkIsAlign4(reinterpret_cast<uintptr_t>(memory_)))
-      << "Flattenable must start writing at 4 byte alignment.";
   if (!val) {
     WriteSize(static_cast<size_t>(0u));
     return;
   }
 
-  size_t size_offset = sizeof(size_t);
-  EnsureBytes(size_offset);
+  uint64_t* size_memory = WriteSize(0u);
   if (!valid_)
     return;
-  char* size_memory = memory_;
-  memory_ += size_offset;
-  remaining_bytes_ -= size_offset;
 
   size_t bytes_written = val->serialize(
       memory_, RoundDownToAlignment(remaining_bytes_, kSkiaAlignment));
@@ -125,13 +125,16 @@ void PaintOpWriter::WriteFlattenable(const SkFlattenable* val) {
     valid_ = false;
     return;
   }
-  reinterpret_cast<size_t*>(size_memory)[0] = bytes_written;
+  *size_memory = bytes_written;
   memory_ += bytes_written;
   remaining_bytes_ -= bytes_written;
 }
 
-void PaintOpWriter::WriteSize(size_t size) {
-  WriteSimple(size);
+uint64_t* PaintOpWriter::WriteSize(size_t size) {
+  AlignMemory(8);
+  uint64_t* memory = reinterpret_cast<uint64_t*>(memory_);
+  WriteSimple<uint64_t>(size);
+  return memory;
 }
 
 void PaintOpWriter::Write(SkScalar data) {
@@ -168,13 +171,26 @@ void PaintOpWriter::Write(const SkRRect& rect) {
 
 void PaintOpWriter::Write(const SkPath& path) {
   auto id = path.getGenerationID();
-  auto locked =
-      options_.transfer_cache->LockEntry(TransferCacheEntryType::kPath, id);
-  if (!locked) {
-    options_.transfer_cache->CreateEntry(ClientPathTransferCacheEntry(path));
-    options_.transfer_cache->AssertLocked(TransferCacheEntryType::kPath, id);
-  }
   Write(id);
+
+  uint64_t* bytes_to_skip = WriteSize(0u);
+  if (!valid_)
+    return;
+
+  if (options_.paint_cache->Get(PaintCacheDataType::kPath, id))
+    return;
+  uint64_t bytes_required = path.writeToMemory(nullptr);
+  if (bytes_required > remaining_bytes_) {
+    valid_ = false;
+    return;
+  }
+
+  size_t bytes_written = path.writeToMemory(memory_);
+  DCHECK_EQ(bytes_written, bytes_required);
+  options_.paint_cache->Put(PaintCacheDataType::kPath, id, bytes_written);
+  *bytes_to_skip = bytes_written;
+  memory_ += bytes_written;
+  remaining_bytes_ -= bytes_written;
 }
 
 void PaintOpWriter::Write(const PaintFlags& flags) {
@@ -185,16 +201,10 @@ void PaintOpWriter::Write(const PaintFlags& flags) {
   WriteSimple(flags.blend_mode_);
   WriteSimple(flags.bitfields_uint_);
 
-  // Flattenables must be written starting at a 4 byte boundary, which should be
-  // the case here.
-  AlignMemory(4);
   WriteFlattenable(flags.path_effect_.get());
-  AlignMemory(4);
   WriteFlattenable(flags.mask_filter_.get());
-  AlignMemory(4);
   WriteFlattenable(flags.color_filter_.get());
 
-  AlignMemory(4);
   if (enable_security_constraints_)
     WriteSize(static_cast<size_t>(0u));
   else
@@ -206,16 +216,17 @@ void PaintOpWriter::Write(const PaintFlags& flags) {
 
 void PaintOpWriter::Write(const DrawImage& draw_image,
                           SkSize* scale_adjustment) {
-  // We never ask for subsets during serialization.
   const PaintImage& paint_image = draw_image.paint_image();
-  DCHECK_EQ(paint_image.width(), draw_image.src_rect().width());
-  DCHECK_EQ(paint_image.height(), draw_image.src_rect().height());
 
   // Empty image.
   if (!draw_image.paint_image()) {
     Write(static_cast<uint8_t>(PaintOp::SerializedImageType::kNoImage));
     return;
   }
+
+  // We never ask for subsets during serialization.
+  DCHECK_EQ(paint_image.width(), draw_image.src_rect().width());
+  DCHECK_EQ(paint_image.height(), draw_image.src_rect().height());
 
   // Security constrained serialization inlines the image bitmap.
   if (enable_security_constraints_) {
@@ -247,13 +258,21 @@ void PaintOpWriter::Write(const DrawImage& draw_image,
   base::Optional<uint32_t> id = decoded_draw_image.transfer_cache_entry_id();
   *scale_adjustment = decoded_draw_image.scale_adjustment();
   // In the case of a decode failure, id may not be set. Send an invalid ID.
-  WriteImage(id ? *id : kInvalidImageTransferCacheEntryId);
+  WriteImage(id.value_or(kInvalidImageTransferCacheEntryId),
+             decoded_draw_image.transfer_cache_entry_needs_mips());
 }
 
-void PaintOpWriter::WriteImage(uint32_t transfer_cache_entry_id) {
+void PaintOpWriter::WriteImage(uint32_t transfer_cache_entry_id,
+                               bool needs_mips) {
+  if (transfer_cache_entry_id == kInvalidImageTransferCacheEntryId) {
+    Write(static_cast<uint8_t>(PaintOp::SerializedImageType::kNoImage));
+    return;
+  }
+
   Write(
       static_cast<uint8_t>(PaintOp::SerializedImageType::kTransferCacheEntry));
   Write(transfer_cache_entry_id);
+  Write(needs_mips);
 }
 
 void PaintOpWriter::Write(const sk_sp<SkData>& data) {
@@ -287,20 +306,20 @@ void PaintOpWriter::Write(const SkColorSpace* color_space) {
   remaining_bytes_ -= written;
 }
 
-void PaintOpWriter::Write(const scoped_refptr<PaintTextBlob>& paint_blob) {
-  DCHECK(paint_blob);
+void PaintOpWriter::Write(const sk_sp<SkTextBlob>& blob) {
+  DCHECK(blob);
   if (!valid_)
     return;
 
-  const auto& blob = paint_blob->ToSkTextBlob();
-  size_t size_offset = sizeof(size_t);
-  EnsureBytes(size_offset);
+  AlignMemory(4);
+  uint32_t blob_id = blob->uniqueID();
+  Write(blob_id);
+  uint64_t* size_memory = WriteSize(0u);
   if (!valid_)
     return;
 
-  char* size_memory = memory_;
-  memory_ += size_offset;
-  remaining_bytes_ -= size_offset;
+  if (options_.paint_cache->Get(PaintCacheDataType::kTextBlob, blob_id))
+    return;
 
   auto encodeTypeface = [](SkTypeface* tf, void* ctx) -> sk_sp<SkData> {
     return static_cast<SkStrikeServer*>(ctx)->serializeTypeface(tf);
@@ -316,7 +335,10 @@ void PaintOpWriter::Write(const scoped_refptr<PaintTextBlob>& paint_blob) {
     valid_ = false;
     return;
   }
-  reinterpret_cast<size_t*>(size_memory)[0] = bytes_written;
+
+  options_.paint_cache->Put(PaintCacheDataType::kTextBlob, blob_id,
+                            bytes_written);
+  *size_memory = bytes_written;
   memory_ += bytes_written;
   remaining_bytes_ -= bytes_written;
 }
@@ -325,7 +347,8 @@ sk_sp<PaintShader> PaintOpWriter::TransformShaderIfNecessary(
     const PaintShader* original,
     SkFilterQuality quality,
     uint32_t* paint_image_transfer_cache_entry_id,
-    gfx::SizeF* paint_record_post_scale) {
+    gfx::SizeF* paint_record_post_scale,
+    bool* paint_image_needs_mips) {
   DCHECK(!enable_security_constraints_);
 
   const auto type = original->shader_type();
@@ -334,25 +357,31 @@ sk_sp<PaintShader> PaintOpWriter::TransformShaderIfNecessary(
   if (type == PaintShader::Type::kImage) {
     return original->CreateDecodedImage(ctm, quality, options_.image_provider,
                                         paint_image_transfer_cache_entry_id,
-                                        &quality);
+                                        &quality, paint_image_needs_mips);
   }
 
-  if (type == PaintShader::Type::kPaintRecord) {
+  if (type == PaintShader::Type::kPaintRecord)
     return original->CreateScaledPaintRecord(ctm, paint_record_post_scale);
-  }
 
   return sk_ref_sp<PaintShader>(original);
+}
+
+void PaintOpWriter::Write(SkMatrix matrix) {
+  if (!matrix.isIdentity())
+    matrix.dirtyMatrixTypeCache();
+  WriteSimple(matrix);
 }
 
 void PaintOpWriter::Write(const PaintShader* shader, SkFilterQuality quality) {
   sk_sp<PaintShader> transformed_shader;
   uint32_t paint_image_transfer_cache_id = kInvalidImageTransferCacheEntryId;
   gfx::SizeF paint_record_post_scale(1.f, 1.f);
+  bool paint_image_needs_mips = false;
 
   if (!enable_security_constraints_ && shader) {
     transformed_shader = TransformShaderIfNecessary(
         shader, quality, &paint_image_transfer_cache_id,
-        &paint_record_post_scale);
+        &paint_record_post_scale, &paint_image_needs_mips);
     shader = transformed_shader.get();
   }
 
@@ -375,7 +404,7 @@ void PaintOpWriter::Write(const PaintShader* shader, SkFilterQuality quality) {
   WriteSimple(shader->scaling_behavior_);
   if (shader->local_matrix_) {
     Write(true);
-    WriteSimple(*shader->local_matrix_);
+    Write(*shader->local_matrix_);
   } else {
     Write(false);
   }
@@ -394,7 +423,7 @@ void PaintOpWriter::Write(const PaintShader* shader, SkFilterQuality quality) {
     DCHECK_EQ(scale_adjustment.width(), 1.f);
     DCHECK_EQ(scale_adjustment.height(), 1.f);
   } else {
-    WriteImage(paint_image_transfer_cache_id);
+    WriteImage(paint_image_transfer_cache_id, paint_image_needs_mips);
   }
 
   if (shader->record_) {
@@ -403,6 +432,7 @@ void PaintOpWriter::Write(const PaintShader* shader, SkFilterQuality quality) {
     Write(shader->id_);
     const gfx::Rect playback_rect(
         gfx::ToEnclosingRect(gfx::SkRectToRectF(shader->tile())));
+
     Write(shader->record_.get(), playback_rect, paint_record_post_scale,
           SkMatrix::I());
   } else {
@@ -410,10 +440,10 @@ void PaintOpWriter::Write(const PaintShader* shader, SkFilterQuality quality) {
     Write(false);
   }
 
-  WriteSimple(shader->colors_.size());
+  WriteSize(shader->colors_.size());
   WriteData(shader->colors_.size() * sizeof(SkColor), shader->colors_.data());
 
-  WriteSimple(shader->positions_.size());
+  WriteSize(shader->positions_.size());
   WriteData(shader->positions_.size() * sizeof(SkScalar),
             shader->positions_.data());
   // Explicitly don't write the cached_shader_ because that can be regenerated
@@ -434,11 +464,6 @@ void PaintOpWriter::WriteData(size_t bytes, const void* input) {
   memcpy(memory_, input, bytes);
   memory_ += bytes;
   remaining_bytes_ -= bytes;
-}
-
-void PaintOpWriter::WriteArray(size_t count, const SkPoint* input) {
-  size_t bytes = sizeof(SkPoint) * count;
-  WriteData(bytes, input);
 }
 
 void PaintOpWriter::AlignMemory(size_t alignment) {
@@ -476,7 +501,7 @@ void PaintOpWriter::Write(const PaintFilter* filter) {
   if (!valid_)
     return;
 
-  AlignMemory(4);
+  AlignMemory(kSkiaAlignment);
   switch (filter->type()) {
     case PaintFilter::Type::kNullFilter:
       NOTREACHED();
@@ -688,7 +713,7 @@ void PaintOpWriter::Write(const PaintFlagsPaintFilter& filter) {
 }
 
 void PaintOpWriter::Write(const MatrixPaintFilter& filter) {
-  WriteSimple(filter.matrix());
+  Write(filter.matrix());
   WriteSimple(filter.filter_quality());
   Write(filter.input().get());
 }
@@ -730,32 +755,35 @@ void PaintOpWriter::Write(const PaintRecord* record,
                           const gfx::Rect& playback_rect,
                           const gfx::SizeF& post_scale,
                           const SkMatrix& post_matrix_for_analysis) {
+  AlignMemory(PaintOpBuffer::PaintOpAlign);
+
   // We need to record how many bytes we will serialize, but we don't know this
   // information until we do the serialization. So, skip the amount needed
   // before writing.
-  size_t size_offset = sizeof(size_t);
+  size_t size_offset = sizeof(uint64_t);
   EnsureBytes(size_offset);
   if (!valid_)
     return;
 
-  char* size_memory = memory_;
-
-  memory_ += size_offset;
-  remaining_bytes_ -= size_offset;
-  AlignMemory(PaintOpBuffer::PaintOpAlign);
+  uint64_t* size_memory = WriteSize(0u);
   if (!valid_)
     return;
 
   if (enable_security_constraints_) {
     // We don't serialize PaintRecords when security constraints are enabled.
-    reinterpret_cast<size_t*>(size_memory)[0] = 0u;
     return;
   }
 
+  // Nested records are used for picture shaders and filters which don't support
+  // using lcd text. Make sure we disable it here to match this in the text
+  // analysis canvas.
+  const bool can_use_lcd_text = false;
   SimpleBufferSerializer serializer(
       memory_, remaining_bytes_, options_.image_provider,
-      options_.transfer_cache, options_.strike_server, options_.color_space,
-      options_.can_use_lcd_text);
+      options_.transfer_cache, options_.paint_cache, options_.strike_server,
+      options_.color_space, can_use_lcd_text,
+      options_.context_supports_distance_field_text, options_.max_texture_size,
+      options_.max_texture_bytes);
   serializer.Serialize(record, playback_rect, post_scale,
                        post_matrix_for_analysis);
 
@@ -770,7 +798,7 @@ void PaintOpWriter::Write(const PaintRecord* record,
 
   // Write the size to the size memory, which preceeds the memory for the
   // record.
-  reinterpret_cast<size_t*>(size_memory)[0] = serializer.written();
+  *size_memory = serializer.written();
 
   // The serializer should have failed if it ran out of space. DCHECK to verify
   // that it wrote at most as many bytes as we had left.
@@ -785,7 +813,7 @@ void PaintOpWriter::Write(const SkRegion& region) {
   size_t bytes_written = region.writeToMemory(data.get());
   DCHECK_EQ(bytes_required, bytes_written);
 
-  WriteSimple(bytes_written);
+  WriteSize(bytes_written);
   WriteData(bytes_written, data.get());
 }
 

@@ -13,7 +13,7 @@
 #include <stdint.h>
 #include <vector>
 
-#include "api/optional.h"
+#include "absl/types/optional.h"
 #include "api/units/data_rate.h"
 #include "api/units/data_size.h"
 #include "api/units/time_delta.h"
@@ -30,27 +30,32 @@ struct StreamsConfig {
   StreamsConfig();
   StreamsConfig(const StreamsConfig&);
   ~StreamsConfig();
-  Timestamp at_time = Timestamp::Infinity();
+  Timestamp at_time = Timestamp::PlusInfinity();
   bool requests_alr_probing = false;
-  rtc::Optional<double> pacing_factor;
-  rtc::Optional<DataRate> min_pacing_rate;
-  rtc::Optional<DataRate> max_padding_rate;
-  rtc::Optional<DataRate> max_total_allocated_bitrate;
+  absl::optional<double> pacing_factor;
+  absl::optional<DataRate> min_pacing_rate;
+  absl::optional<DataRate> max_padding_rate;
+  absl::optional<DataRate> max_total_allocated_bitrate;
+  // The send rate of traffic for which feedback is not received.
+  DataRate unacknowledged_rate_allocation = DataRate::Zero();
 };
 
 struct TargetRateConstraints {
   TargetRateConstraints();
   TargetRateConstraints(const TargetRateConstraints&);
   ~TargetRateConstraints();
-  Timestamp at_time = Timestamp::Infinity();
-  rtc::Optional<DataRate> min_data_rate;
-  rtc::Optional<DataRate> max_data_rate;
+  Timestamp at_time = Timestamp::PlusInfinity();
+  absl::optional<DataRate> min_data_rate;
+  absl::optional<DataRate> max_data_rate;
+  // The initial bandwidth estimate to base target rate on. This should be used
+  // as the basis for initial OnTargetTransferRate and OnPacerConfig callbacks.
+  absl::optional<DataRate> starting_rate;
 };
 
 // Send side information
 
 struct NetworkAvailability {
-  Timestamp at_time = Timestamp::Infinity();
+  Timestamp at_time = Timestamp::PlusInfinity();
   bool network_available = false;
 };
 
@@ -58,11 +63,10 @@ struct NetworkRouteChange {
   NetworkRouteChange();
   NetworkRouteChange(const NetworkRouteChange&);
   ~NetworkRouteChange();
-  Timestamp at_time = Timestamp::Infinity();
+  Timestamp at_time = Timestamp::PlusInfinity();
   // The TargetRateConstraints are set here so they can be changed synchronously
   // when network route changes.
   TargetRateConstraints constraints;
-  rtc::Optional<DataRate> starting_rate;
 };
 
 struct PacedPacketInfo {
@@ -82,32 +86,35 @@ struct PacedPacketInfo {
 };
 
 struct SentPacket {
-  Timestamp send_time = Timestamp::Infinity();
+  Timestamp send_time = Timestamp::PlusInfinity();
   DataSize size = DataSize::Zero();
+  DataSize prior_unacked_data = DataSize::Zero();
   PacedPacketInfo pacing_info;
   // Transport independent sequence number, any tracked packet should have a
   // sequence number that is unique over the whole call and increasing by 1 for
   // each packet.
   int64_t sequence_number;
+  // Tracked data in flight when the packet was sent, excluding unacked data.
+  DataSize data_in_flight = DataSize::Zero();
 };
 
 // Transport level feedback
 
 struct RemoteBitrateReport {
-  Timestamp receive_time = Timestamp::Infinity();
+  Timestamp receive_time = Timestamp::PlusInfinity();
   DataRate bandwidth = DataRate::Infinity();
 };
 
 struct RoundTripTimeUpdate {
-  Timestamp receive_time = Timestamp::Infinity();
+  Timestamp receive_time = Timestamp::PlusInfinity();
   TimeDelta round_trip_time = TimeDelta::PlusInfinity();
   bool smoothed = false;
 };
 
 struct TransportLossReport {
-  Timestamp receive_time = Timestamp::Infinity();
-  Timestamp start_time = Timestamp::Infinity();
-  Timestamp end_time = Timestamp::Infinity();
+  Timestamp receive_time = Timestamp::PlusInfinity();
+  Timestamp start_time = Timestamp::PlusInfinity();
+  Timestamp end_time = Timestamp::PlusInfinity();
   uint64_t packets_lost_delta = 0;
   uint64_t packets_received_delta = 0;
 };
@@ -119,8 +126,8 @@ struct PacketResult {
   PacketResult(const PacketResult&);
   ~PacketResult();
 
-  rtc::Optional<SentPacket> sent_packet;
-  Timestamp receive_time = Timestamp::Infinity();
+  SentPacket sent_packet;
+  Timestamp receive_time = Timestamp::PlusInfinity();
 };
 
 struct TransportPacketsFeedback {
@@ -128,10 +135,13 @@ struct TransportPacketsFeedback {
   TransportPacketsFeedback(const TransportPacketsFeedback& other);
   ~TransportPacketsFeedback();
 
-  Timestamp feedback_time = Timestamp::Infinity();
+  Timestamp feedback_time = Timestamp::PlusInfinity();
   DataSize data_in_flight = DataSize::Zero();
   DataSize prior_in_flight = DataSize::Zero();
   std::vector<PacketResult> packet_feedbacks;
+
+  // Arrival times for messages without send time information.
+  std::vector<Timestamp> sendless_arrival_times;
 
   std::vector<PacketResult> ReceivedWithSendInfo() const;
   std::vector<PacketResult> LostWithSendInfo() const;
@@ -141,7 +151,7 @@ struct TransportPacketsFeedback {
 // Network estimation
 
 struct NetworkEstimate {
-  Timestamp at_time = Timestamp::Infinity();
+  Timestamp at_time = Timestamp::PlusInfinity();
   DataRate bandwidth = DataRate::Infinity();
   TimeDelta round_trip_time = TimeDelta::PlusInfinity();
   TimeDelta bwe_period = TimeDelta::PlusInfinity();
@@ -152,7 +162,7 @@ struct NetworkEstimate {
 // Network control
 
 struct PacerConfig {
-  Timestamp at_time = Timestamp::Infinity();
+  Timestamp at_time = Timestamp::PlusInfinity();
   // Pacer should send at most data_window data over time_window duration.
   DataSize data_window = DataSize::Infinity();
   TimeDelta time_window = TimeDelta::PlusInfinity();
@@ -163,14 +173,14 @@ struct PacerConfig {
 };
 
 struct ProbeClusterConfig {
-  Timestamp at_time = Timestamp::Infinity();
+  Timestamp at_time = Timestamp::PlusInfinity();
   DataRate target_data_rate = DataRate::Zero();
   TimeDelta target_duration = TimeDelta::Zero();
   int32_t target_probe_count = 0;
 };
 
 struct TargetTransferRate {
-  Timestamp at_time = Timestamp::Infinity();
+  Timestamp at_time = Timestamp::PlusInfinity();
   // The estimate on which the target rate is based on.
   NetworkEstimate network_estimate;
   DataRate target_rate = DataRate::Zero();
@@ -183,15 +193,15 @@ struct NetworkControlUpdate {
   NetworkControlUpdate();
   NetworkControlUpdate(const NetworkControlUpdate&);
   ~NetworkControlUpdate();
-  rtc::Optional<DataSize> congestion_window;
-  rtc::Optional<PacerConfig> pacer_config;
+  absl::optional<DataSize> congestion_window;
+  absl::optional<PacerConfig> pacer_config;
   std::vector<ProbeClusterConfig> probe_cluster_configs;
-  rtc::Optional<TargetTransferRate> target_rate;
+  absl::optional<TargetTransferRate> target_rate;
 };
 
 // Process control
 struct ProcessInterval {
-  Timestamp at_time = Timestamp::Infinity();
+  Timestamp at_time = Timestamp::PlusInfinity();
 };
 }  // namespace webrtc
 

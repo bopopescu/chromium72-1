@@ -8,6 +8,8 @@
 #include <netinet/tcp.h>
 #include <sys/socket.h>
 
+#include <algorithm>
+
 #include "base/atomicops.h"
 #include "base/bind.h"
 #include "base/files/file_path.h"
@@ -18,7 +20,7 @@
 #include "base/posix/eintr_wrapper.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_piece.h"
-#include "base/task_scheduler/post_task.h"
+#include "base/task/post_task.h"
 #include "base/time/time.h"
 #include "build/build_config.h"
 #include "net/base/address_list.h"
@@ -152,6 +154,16 @@ base::LazyInstance<FastOpenProbe>::Leaky g_fast_open_probe =
 #if defined(HAVE_TCP_INFO)
 // Returns a zero value if the transport RTT is unavailable.
 base::TimeDelta GetTransportRtt(SocketDescriptor fd) {
+  // It is possible for the value returned by getsockopt(TCP_INFO) to be
+  // legitimately zero due to the way the RTT is calculated where fractions are
+  // rounded down. This is specially true for virtualized environments with
+  // paravirtualized clocks.
+  //
+  // If getsockopt(TCP_INFO) succeeds and the tcpi_rtt is zero, this code
+  // assumes that the RTT got rounded down to zero and rounds it back up to this
+  // value so that callers can assume that no packets defy the laws of physics.
+  constexpr uint32_t kMinValidRttMicros = 1;
+
   tcp_info info;
   // Reset |tcpi_rtt| to verify if getsockopt() actually updates |tcpi_rtt|.
   info.tcpi_rtt = 0;
@@ -169,7 +181,8 @@ base::TimeDelta GetTransportRtt(SocketDescriptor fd) {
     return base::TimeDelta();
   }
 
-  return base::TimeDelta::FromMicroseconds(info.tcpi_rtt);
+  return base::TimeDelta::FromMicroseconds(
+      std::max(info.tcpi_rtt, kMinValidRttMicros));
 }
 
 // Returns true if getsockopt() call was successful. Sets
@@ -589,6 +602,10 @@ SocketDescriptor TCPSocketPosix::ReleaseSocketDescriptorForTesting() {
   SocketDescriptor socket_descriptor = socket_->ReleaseConnectedSocket();
   socket_.reset();
   return socket_descriptor;
+}
+
+SocketDescriptor TCPSocketPosix::SocketDescriptorForTesting() const {
+  return socket_->socket_fd();
 }
 
 void TCPSocketPosix::ApplySocketTag(const SocketTag& tag) {

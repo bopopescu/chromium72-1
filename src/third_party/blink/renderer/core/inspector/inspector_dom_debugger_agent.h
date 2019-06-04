@@ -110,6 +110,10 @@ class CORE_EXPORT InspectorDOMDebuggerAgent final
   void Will(const probe::UserCallback&);
   void Did(const probe::UserCallback&);
   void BreakableLocation(const char* name);
+  void DidCreateAudioContext();
+  void DidCloseAudioContext();
+  void DidResumeAudioContext();
+  void DidSuspendAudioContext();
 
   protocol::Response disable() override;
   void Restore() override;
@@ -129,6 +133,8 @@ class CORE_EXPORT InspectorDOMDebuggerAgent final
       const v8_inspector::StringView& object_group_id);
 
  private:
+  String MatchXHRBreakpoints(const String& url) const;
+
   static void EventListenersInfoForTarget(v8::Isolate*,
                                           v8::Local<v8::Value>,
                                           int depth,
@@ -144,10 +150,6 @@ class CORE_EXPORT InspectorDOMDebuggerAgent final
   std::unique_ptr<protocol::DictionaryValue> PreparePauseOnNativeEventData(
       const String& event_name,
       const String* target_name);
-
-  protocol::DictionaryValue* EventListenerBreakpoints();
-  protocol::DictionaryValue* XhrBreakpoints();
-
   void BreakProgramOnDOMEvent(Node* target,
                               int breakpoint_type,
                               bool insertion);
@@ -171,6 +173,10 @@ class CORE_EXPORT InspectorDOMDebuggerAgent final
   Member<InspectorDOMAgent> dom_agent_;
   v8_inspector::V8InspectorSession* v8_session_;
   HeapHashMap<Member<Node>, uint32_t> dom_breakpoints_;
+  InspectorAgentState::Boolean enabled_;
+  InspectorAgentState::Boolean pause_on_all_xhrs_;
+  InspectorAgentState::BooleanMap xhr_breakpoints_;
+  InspectorAgentState::BooleanMap event_listener_breakpoints_;
   DISALLOW_COPY_AND_ASSIGN(InspectorDOMDebuggerAgent);
 };
 

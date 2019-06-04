@@ -11,7 +11,7 @@
 #include "net/third_party/quic/core/crypto/aead_base_decrypter.h"
 #include "net/third_party/quic/platform/api/quic_export.h"
 
-namespace net {
+namespace quic {
 
 // An Aes256GcmDecrypter is a QuicDecrypter that implements the
 // AEAD_AES_256_GCM algorithm specified in RFC 5116 for use in IETF QUIC.
@@ -25,14 +25,13 @@ class QUIC_EXPORT_PRIVATE Aes256GcmDecrypter : public AeadBaseDecrypter {
   };
 
   Aes256GcmDecrypter();
+  Aes256GcmDecrypter(const Aes256GcmDecrypter&) = delete;
+  Aes256GcmDecrypter& operator=(const Aes256GcmDecrypter&) = delete;
   ~Aes256GcmDecrypter() override;
 
   uint32_t cipher_id() const override;
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(Aes256GcmDecrypter);
 };
 
-}  // namespace net
+}  // namespace quic
 
 #endif  // NET_THIRD_PARTY_QUIC_CORE_CRYPTO_AES_256_GCM_DECRYPTER_H_

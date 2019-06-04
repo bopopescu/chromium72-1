@@ -7,7 +7,6 @@
 #include <memory>
 #include "base/memory/scoped_refptr.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/blink/renderer/bindings/core/v8/exception_state.h"
 #include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/dom/element.h"
 #include "third_party/blink/renderer/core/dom/text.h"
@@ -24,7 +23,9 @@
 #include "third_party/blink/renderer/core/layout/layout_block.h"
 #include "third_party/blink/renderer/core/paint/paint_info.h"
 #include "third_party/blink/renderer/core/paint/paint_layer.h"
+#include "third_party/blink/renderer/core/paint/paint_layer_scrollable_area.h"
 #include "third_party/blink/renderer/core/testing/dummy_page_holder.h"
+#include "third_party/blink/renderer/platform/bindings/exception_state.h"
 #include "third_party/blink/renderer/platform/graphics/paint/drawing_recorder.h"
 #include "third_party/blink/renderer/platform/graphics/paint/paint_controller.h"
 #include "third_party/blink/renderer/platform/testing/fake_display_item_client.h"
@@ -50,8 +51,8 @@ class FrameSelectionTest : public EditingTestBase {
   }
 
   Text* AppendTextNode(const String& data);
-  int LayoutCount() const {
-    return GetDummyPageHolder().GetFrameView().LayoutCount();
+  unsigned LayoutCount() const {
+    return GetDummyPageHolder().GetFrameView().LayoutCountForTesting();
   }
 
   PositionWithAffinity CaretPosition() const {
@@ -96,9 +97,9 @@ TEST_F(FrameSelectionTest, FirstEphemeralRangeOf) {
                                    Position(text, 3), Position(text, 6)))
                                .Build(),
                            SetSelectionOptions());
-  sample->setAttribute(HTMLNames::styleAttr, "display:none");
+  sample->setAttribute(html_names::kStyleAttr, "display:none");
   // Move |VisibleSelection| before "abc".
-  UpdateAllLifecyclePhases();
+  UpdateAllLifecyclePhasesForTest();
   const EphemeralRange& range =
       FirstEphemeralRangeOf(Selection().ComputeVisibleSelectionInDOMTree());
   EXPECT_EQ(Position(sample->nextSibling(), 0), range.StartPosition())
@@ -108,7 +109,7 @@ TEST_F(FrameSelectionTest, FirstEphemeralRangeOf) {
 
 TEST_F(FrameSelectionTest, SetValidSelection) {
   Text* text = AppendTextNode("Hello, World!");
-  GetDocument().View()->UpdateAllLifecyclePhases();
+  UpdateAllLifecyclePhasesForTest();
   Selection().SetSelectionAndEndTyping(
       SelectionInDOMTree::Builder()
           .SetBaseAndExtent(Position(text, 0), Position(text, 5))
@@ -118,7 +119,7 @@ TEST_F(FrameSelectionTest, SetValidSelection) {
 
 TEST_F(FrameSelectionTest, PaintCaretShouldNotLayout) {
   Text* text = AppendTextNode("Hello, World!");
-  GetDocument().View()->UpdateAllLifecyclePhases();
+  UpdateAllLifecyclePhasesForTest();
 
   GetDocument().body()->setContentEditable("true", ASSERT_NO_EXCEPTION);
   GetDocument().body()->focus();
@@ -127,12 +128,12 @@ TEST_F(FrameSelectionTest, PaintCaretShouldNotLayout) {
   Selection().SetCaretVisible(true);
   Selection().SetSelectionAndEndTyping(
       SelectionInDOMTree::Builder().Collapse(Position(text, 0)).Build());
-  GetDocument().View()->UpdateAllLifecyclePhases();
+  UpdateAllLifecyclePhasesForTest();
   EXPECT_TRUE(Selection().ComputeVisibleSelectionInDOMTree().IsCaret());
   EXPECT_TRUE(ToLayoutBlock(GetDocument().body()->GetLayoutObject())
                   ->ShouldPaintCursorCaret());
 
-  int start_count = LayoutCount();
+  unsigned start_count = LayoutCount();
   {
     // To force layout in next updateLayout calling, widen view.
     LocalFrameView& frame_view = GetDummyPageHolder().GetFrameView();
@@ -144,12 +145,8 @@ TEST_F(FrameSelectionTest, PaintCaretShouldNotLayout) {
   std::unique_ptr<PaintController> paint_controller = PaintController::Create();
   {
     GraphicsContext context(*paint_controller);
-
-    if (RuntimeEnabledFeatures::SlimmingPaintV175Enabled()) {
-      paint_controller->UpdateCurrentPaintChunkProperties(
-          root_paint_chunk_id_, PropertyTreeState::Root());
-    }
-
+    paint_controller->UpdateCurrentPaintChunkProperties(
+        root_paint_chunk_id_, PropertyTreeState::Root());
     Selection().PaintCaret(context, LayoutPoint());
   }
   paint_controller->CommitNewDisplayItems();
@@ -162,7 +159,7 @@ TEST_F(FrameSelectionTest, PaintCaretShouldNotLayout) {
 TEST_F(FrameSelectionTest, SelectWordAroundCaret) {
   // "Foo Bar  Baz,"
   Text* text = AppendTextNode("Foo Bar&nbsp;&nbsp;Baz,");
-  UpdateAllLifecyclePhases();
+  UpdateAllLifecyclePhasesForTest();
 
   // "Fo|o Bar  Baz,"
   EXPECT_TRUE(SelectWordAroundPosition(Position(text, 2)));
@@ -237,7 +234,7 @@ TEST_F(FrameSelectionTest, ModifyWithUserTriggered) {
 TEST_F(FrameSelectionTest, MoveRangeSelectionTest) {
   // "Foo Bar Baz,"
   Text* text = AppendTextNode("Foo Bar Baz,");
-  UpdateAllLifecyclePhases();
+  UpdateAllLifecyclePhasesForTest();
 
   // Itinitializes with "Foo B|a>r Baz," (| means start and > means end).
   Selection().SetSelectionAndEndTyping(
@@ -307,7 +304,7 @@ TEST_F(FrameSelectionTest, SelectAllWithInputElement) {
 }
 
 TEST_F(FrameSelectionTest, SelectAllWithUnselectableRoot) {
-  Element* select = GetDocument().CreateRawElement(HTMLNames::selectTag);
+  Element* select = GetDocument().CreateRawElement(html_names::kSelectTag);
   GetDocument().ReplaceChild(select, GetDocument().documentElement());
   GetDocument().UpdateStyleAndLayout();
   Selection().SelectAll();
@@ -377,7 +374,7 @@ TEST_F(FrameSelectionTest, BoldCommandPreservesHandle) {
 
 TEST_F(FrameSelectionTest, SelectionOnRangeHidesHandles) {
   Text* text = AppendTextNode("Hello, World!");
-  GetDocument().View()->UpdateAllLifecyclePhases();
+  UpdateAllLifecyclePhasesForTest();
   Selection().SetSelectionAndEndTyping(
       SelectionInDOMTree::Builder()
           .SetBaseAndExtent(Position(text, 0), Position(text, 5))
@@ -1065,19 +1062,43 @@ TEST_F(FrameSelectionTest, SelectionBounds) {
   // bottom is visible. The unclipped selection bounds should not be clipped.
   const int scroll_offset = 500;
   LocalFrameView* frame_view = GetDocument().View();
-  frame_view->LayoutViewportScrollableArea()->SetScrollOffset(
-      ScrollOffset(0, scroll_offset), kProgrammaticScroll);
-  EXPECT_EQ(
-      LayoutRect(0, node_margin_top, node_width, node_height),
-      frame_view->AbsoluteToDocument(Selection().AbsoluteUnclippedBounds()));
+  frame_view->LayoutViewport()->SetScrollOffset(ScrollOffset(0, scroll_offset),
+                                                kProgrammaticScroll);
+  EXPECT_EQ(LayoutRect(0, node_margin_top, node_width, node_height),
+            frame_view->FrameToDocument(Selection().AbsoluteUnclippedBounds()));
 
   // Adjust the page scale factor which changes the selection bounds as seen
   // through the viewport. The unclipped selection bounds should not be clipped.
   const int page_scale_factor = 2;
   GetPage().SetPageScaleFactor(page_scale_factor);
-  EXPECT_EQ(
-      LayoutRect(0, node_margin_top, node_width, node_height),
-      frame_view->AbsoluteToDocument(Selection().AbsoluteUnclippedBounds()));
+  EXPECT_EQ(LayoutRect(0, node_margin_top, node_width, node_height),
+            frame_view->FrameToDocument(Selection().AbsoluteUnclippedBounds()));
+}
+
+TEST_F(FrameSelectionTest, SelectionContainsBidiBoundary) {
+  InsertStyleElement("div{font:10px/10px Ahem}");
+  // Rendered as abcFED
+  Selection().SetSelection(
+      SetSelectionTextToBody("<div dir=ltr>^abc<bdo dir=trl>DEF|</bdo></div>"),
+      SetSelectionOptions());
+
+  // Check the right half of 'c'
+  const LayoutPoint c_right(35, 13);
+  EXPECT_TRUE(Selection().Contains(c_right));
+
+  // Check the left half of "F"
+  const LayoutPoint f_left(45, 13);
+  EXPECT_TRUE(Selection().Contains(f_left));
+}
+
+// This is a regression test for https://crbug.com/927394 where 'copy' operation
+// stopped copying content from inside text controls.
+// Note that this is a non-standard behavior.
+TEST_F(FrameSelectionTest, SelectedTextForClipboardEntersTextControls) {
+  Selection().SetSelection(
+      SetSelectionTextToBody("^foo<input value=\"bar\">baz|"),
+      SetSelectionOptions());
+  EXPECT_EQ("foo\nbar\nbaz", Selection().SelectedTextForClipboard());
 }
 
 }  // namespace blink

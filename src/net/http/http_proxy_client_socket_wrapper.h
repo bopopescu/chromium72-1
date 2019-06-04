@@ -21,7 +21,7 @@
 #include "net/http/http_auth_controller.h"
 #include "net/http/proxy_client_socket.h"
 #include "net/log/net_log_with_source.h"
-#include "net/quic/chromium/quic_stream_factory.h"
+#include "net/quic/quic_stream_factory.h"
 #include "net/socket/next_proto.h"
 #include "net/socket/ssl_client_socket.h"
 #include "net/socket/ssl_client_socket_pool.h"
@@ -66,7 +66,7 @@ class NET_EXPORT_PRIVATE HttpProxyClientSocketWrapper
       SSLClientSocketPool* ssl_pool,
       const scoped_refptr<TransportSocketParams>& transport_params,
       const scoped_refptr<SSLSocketParams>& ssl_params,
-      QuicTransportVersion quic_version,
+      quic::QuicTransportVersion quic_version,
       const std::string& user_agent,
       const HostPortPair& endpoint,
       HttpAuthCache* http_auth_cache,
@@ -86,6 +86,8 @@ class NET_EXPORT_PRIVATE HttpProxyClientSocketWrapper
   LoadState GetConnectLoadState() const;
 
   std::unique_ptr<HttpResponseInfo> GetAdditionalErrorState();
+
+  void SetPriority(RequestPriority priority);
 
   // ProxyClientSocket implementation.
   const HttpResponseInfo* GetConnectResponseInfo() const override;
@@ -115,6 +117,10 @@ class NET_EXPORT_PRIVATE HttpProxyClientSocketWrapper
   int Read(IOBuffer* buf,
            int buf_len,
            CompletionOnceCallback callback) override;
+  int ReadIfReady(IOBuffer* buf,
+                  int buf_len,
+                  CompletionOnceCallback callback) override;
+  int CancelReadIfReady() override;
   int Write(IOBuffer* buf,
             int buf_len,
             CompletionOnceCallback callback,
@@ -191,7 +197,7 @@ class NET_EXPORT_PRIVATE HttpProxyClientSocketWrapper
   const scoped_refptr<TransportSocketParams> transport_params_;
   const scoped_refptr<SSLSocketParams> ssl_params_;
 
-  QuicTransportVersion quic_version_;
+  quic::QuicTransportVersion quic_version_;
 
   const std::string user_agent_;
   const HostPortPair endpoint_;
@@ -214,9 +220,10 @@ class NET_EXPORT_PRIVATE HttpProxyClientSocketWrapper
   // if necessary.
   CompletionOnceCallback connect_callback_;
 
-  SpdyStreamRequest spdy_stream_request_;
+  std::unique_ptr<SpdyStreamRequest> spdy_stream_request_;
 
-  QuicStreamRequest quic_stream_request_;
+  QuicStreamFactory* const quic_stream_factory_;
+  std::unique_ptr<QuicStreamRequest> quic_stream_request_;
   std::unique_ptr<QuicChromiumClientSession::Handle> quic_session_;
 
   scoped_refptr<HttpAuthController> http_auth_controller_;

@@ -20,64 +20,64 @@ constexpr uint8_t kThree[] = {0x03};
 constexpr uint8_t kOneTwoThree[] = {0x01, 0x02, 0x03};
 }  // namespace
 
-TEST(U2fParsingUtils, SpanLess) {
+TEST(U2fParsingUtils, RangeLess) {
   const std::array<int, 4> kOneTwoThreeFour = {1, 2, 3, 4};
 
-  EXPECT_FALSE(SpanLess()(kOne, kOne));
-  EXPECT_TRUE(SpanLess()(kOne, kOneTwo));
-  EXPECT_TRUE(SpanLess()(kOne, kTwo));
-  EXPECT_TRUE(SpanLess()(kOne, kTwoThree));
-  EXPECT_TRUE(SpanLess()(kOne, kThree));
-  EXPECT_TRUE(SpanLess()(kOne, kOneTwoThree));
-  EXPECT_TRUE(SpanLess()(kOne, kOneTwoThreeFour));
+  EXPECT_FALSE(RangeLess()(kOne, kOne));
+  EXPECT_TRUE(RangeLess()(kOne, kOneTwo));
+  EXPECT_TRUE(RangeLess()(kOne, kTwo));
+  EXPECT_TRUE(RangeLess()(kOne, kTwoThree));
+  EXPECT_TRUE(RangeLess()(kOne, kThree));
+  EXPECT_TRUE(RangeLess()(kOne, kOneTwoThree));
+  EXPECT_TRUE(RangeLess()(kOne, kOneTwoThreeFour));
 
-  EXPECT_FALSE(SpanLess()(kOneTwo, kOne));
-  EXPECT_FALSE(SpanLess()(kOneTwo, kOneTwo));
-  EXPECT_TRUE(SpanLess()(kOneTwo, kTwo));
-  EXPECT_TRUE(SpanLess()(kOneTwo, kTwoThree));
-  EXPECT_TRUE(SpanLess()(kOneTwo, kThree));
-  EXPECT_TRUE(SpanLess()(kOneTwo, kOneTwoThree));
-  EXPECT_TRUE(SpanLess()(kOneTwo, kOneTwoThreeFour));
+  EXPECT_FALSE(RangeLess()(kOneTwo, kOne));
+  EXPECT_FALSE(RangeLess()(kOneTwo, kOneTwo));
+  EXPECT_TRUE(RangeLess()(kOneTwo, kTwo));
+  EXPECT_TRUE(RangeLess()(kOneTwo, kTwoThree));
+  EXPECT_TRUE(RangeLess()(kOneTwo, kThree));
+  EXPECT_TRUE(RangeLess()(kOneTwo, kOneTwoThree));
+  EXPECT_TRUE(RangeLess()(kOneTwo, kOneTwoThreeFour));
 
-  EXPECT_FALSE(SpanLess()(kTwo, kOne));
-  EXPECT_FALSE(SpanLess()(kTwo, kOneTwo));
-  EXPECT_FALSE(SpanLess()(kTwo, kTwo));
-  EXPECT_TRUE(SpanLess()(kTwo, kTwoThree));
-  EXPECT_TRUE(SpanLess()(kTwo, kThree));
-  EXPECT_FALSE(SpanLess()(kTwo, kOneTwoThree));
-  EXPECT_FALSE(SpanLess()(kTwo, kOneTwoThreeFour));
+  EXPECT_FALSE(RangeLess()(kTwo, kOne));
+  EXPECT_FALSE(RangeLess()(kTwo, kOneTwo));
+  EXPECT_FALSE(RangeLess()(kTwo, kTwo));
+  EXPECT_TRUE(RangeLess()(kTwo, kTwoThree));
+  EXPECT_TRUE(RangeLess()(kTwo, kThree));
+  EXPECT_FALSE(RangeLess()(kTwo, kOneTwoThree));
+  EXPECT_FALSE(RangeLess()(kTwo, kOneTwoThreeFour));
 
-  EXPECT_FALSE(SpanLess()(kTwoThree, kOne));
-  EXPECT_FALSE(SpanLess()(kTwoThree, kOneTwo));
-  EXPECT_FALSE(SpanLess()(kTwoThree, kTwo));
-  EXPECT_FALSE(SpanLess()(kTwoThree, kTwoThree));
-  EXPECT_TRUE(SpanLess()(kTwoThree, kThree));
-  EXPECT_FALSE(SpanLess()(kTwoThree, kOneTwoThree));
-  EXPECT_FALSE(SpanLess()(kTwoThree, kOneTwoThreeFour));
+  EXPECT_FALSE(RangeLess()(kTwoThree, kOne));
+  EXPECT_FALSE(RangeLess()(kTwoThree, kOneTwo));
+  EXPECT_FALSE(RangeLess()(kTwoThree, kTwo));
+  EXPECT_FALSE(RangeLess()(kTwoThree, kTwoThree));
+  EXPECT_TRUE(RangeLess()(kTwoThree, kThree));
+  EXPECT_FALSE(RangeLess()(kTwoThree, kOneTwoThree));
+  EXPECT_FALSE(RangeLess()(kTwoThree, kOneTwoThreeFour));
 
-  EXPECT_FALSE(SpanLess()(kThree, kOne));
-  EXPECT_FALSE(SpanLess()(kThree, kOneTwo));
-  EXPECT_FALSE(SpanLess()(kThree, kTwo));
-  EXPECT_FALSE(SpanLess()(kThree, kTwoThree));
-  EXPECT_FALSE(SpanLess()(kThree, kThree));
-  EXPECT_FALSE(SpanLess()(kThree, kOneTwoThree));
-  EXPECT_FALSE(SpanLess()(kThree, kOneTwoThreeFour));
+  EXPECT_FALSE(RangeLess()(kThree, kOne));
+  EXPECT_FALSE(RangeLess()(kThree, kOneTwo));
+  EXPECT_FALSE(RangeLess()(kThree, kTwo));
+  EXPECT_FALSE(RangeLess()(kThree, kTwoThree));
+  EXPECT_FALSE(RangeLess()(kThree, kThree));
+  EXPECT_FALSE(RangeLess()(kThree, kOneTwoThree));
+  EXPECT_FALSE(RangeLess()(kThree, kOneTwoThreeFour));
 
-  EXPECT_FALSE(SpanLess()(kOneTwoThree, kOne));
-  EXPECT_FALSE(SpanLess()(kOneTwoThree, kOneTwo));
-  EXPECT_TRUE(SpanLess()(kOneTwoThree, kTwo));
-  EXPECT_TRUE(SpanLess()(kOneTwoThree, kTwoThree));
-  EXPECT_TRUE(SpanLess()(kOneTwoThree, kThree));
-  EXPECT_FALSE(SpanLess()(kOneTwoThree, kOneTwoThree));
-  EXPECT_TRUE(SpanLess()(kOneTwoThree, kOneTwoThreeFour));
+  EXPECT_FALSE(RangeLess()(kOneTwoThree, kOne));
+  EXPECT_FALSE(RangeLess()(kOneTwoThree, kOneTwo));
+  EXPECT_TRUE(RangeLess()(kOneTwoThree, kTwo));
+  EXPECT_TRUE(RangeLess()(kOneTwoThree, kTwoThree));
+  EXPECT_TRUE(RangeLess()(kOneTwoThree, kThree));
+  EXPECT_FALSE(RangeLess()(kOneTwoThree, kOneTwoThree));
+  EXPECT_TRUE(RangeLess()(kOneTwoThree, kOneTwoThreeFour));
 
-  EXPECT_FALSE(SpanLess()(kOneTwoThreeFour, kOne));
-  EXPECT_FALSE(SpanLess()(kOneTwoThreeFour, kOneTwo));
-  EXPECT_TRUE(SpanLess()(kOneTwoThreeFour, kTwo));
-  EXPECT_TRUE(SpanLess()(kOneTwoThreeFour, kTwoThree));
-  EXPECT_TRUE(SpanLess()(kOneTwoThreeFour, kThree));
-  EXPECT_FALSE(SpanLess()(kOneTwoThreeFour, kOneTwoThree));
-  EXPECT_FALSE(SpanLess()(kOneTwoThreeFour, kOneTwoThreeFour));
+  EXPECT_FALSE(RangeLess()(kOneTwoThreeFour, kOne));
+  EXPECT_FALSE(RangeLess()(kOneTwoThreeFour, kOneTwo));
+  EXPECT_TRUE(RangeLess()(kOneTwoThreeFour, kTwo));
+  EXPECT_TRUE(RangeLess()(kOneTwoThreeFour, kTwoThree));
+  EXPECT_TRUE(RangeLess()(kOneTwoThreeFour, kThree));
+  EXPECT_FALSE(RangeLess()(kOneTwoThreeFour, kOneTwoThree));
+  EXPECT_FALSE(RangeLess()(kOneTwoThreeFour, kOneTwoThreeFour));
 }
 
 TEST(U2fParsingUtils, Materialize) {
@@ -85,9 +85,32 @@ TEST(U2fParsingUtils, Materialize) {
   EXPECT_THAT(Materialize(empty), ::testing::IsEmpty());
   EXPECT_THAT(Materialize(base::span<const uint8_t>()), ::testing::IsEmpty());
 
-  EXPECT_THAT(Materialize(kOne), ::testing::ElementsAreArray(kOne));
-  EXPECT_THAT(Materialize(kOneTwoThree),
+  EXPECT_THAT(Materialize(base::span<const uint8_t>(kOne)),
+              ::testing::ElementsAreArray(kOne));
+  EXPECT_THAT(Materialize(base::span<const uint8_t>(kOneTwoThree)),
               ::testing::ElementsAreArray(kOneTwoThree));
+
+  static_assert(std::is_same<std::vector<uint8_t>,
+                             decltype(Materialize(
+                                 base::span<const uint8_t>(kOne)))>::value,
+                "Materialize with a dynamic span should yield a std::vector.");
+}
+
+TEST(U2fParsingUtils, StaticMaterialize) {
+  std::array<uint8_t, 0> empty;
+  EXPECT_THAT(Materialize(empty), ::testing::IsEmpty());
+  EXPECT_THAT(Materialize(base::span<const uint8_t, 0>()),
+              ::testing::IsEmpty());
+
+  EXPECT_THAT(Materialize(base::make_span(kOne)),
+              ::testing::ElementsAreArray(kOne));
+  EXPECT_THAT(Materialize(base::make_span(kOneTwoThree)),
+              ::testing::ElementsAreArray(kOneTwoThree));
+
+  static_assert(
+      std::is_same<std::array<uint8_t, 1>,
+                   decltype(Materialize(base::make_span(kOne)))>::value,
+      "Materialize with a static span should yield a std::array.");
 }
 
 TEST(U2fParsingUtils, MaterializeOrNull) {
@@ -252,6 +275,11 @@ TEST(U2fParsingUtils, SplitSpan) {
 TEST(U2fParsingUtils, CreateSHA256Hash) {
   EXPECT_THAT(CreateSHA256Hash("acme.com"),
               ::testing::ElementsAreArray(test_data::kApplicationParameter));
+}
+
+TEST(U2fParsingUtils, ConvertSpanToStringPiece) {
+  constexpr uint8_t kTestAsciiAbcd[] = {'a', 'b', 'c', 'd'};
+  EXPECT_EQ("abcd", ConvertToStringPiece(kTestAsciiAbcd));
 }
 
 }  // namespace fido_parsing_utils

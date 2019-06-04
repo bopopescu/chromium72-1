@@ -10,9 +10,8 @@
 #include "third_party/blink/renderer/bindings/core/v8/script_promise.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_promise_resolver.h"
 #include "third_party/blink/renderer/core/dom/dom_exception.h"
-#include "third_party/blink/renderer/core/dom/exception_code.h"
 #include "third_party/blink/renderer/core/execution_context/execution_context.h"
-#include "third_party/blink/renderer/modules/serviceworkers/service_worker_registration.h"
+#include "third_party/blink/renderer/modules/service_worker/service_worker_registration.h"
 #include "third_party/blink/renderer/platform/bindings/script_state.h"
 #include "third_party/blink/renderer/platform/heap/persistent.h"
 #include "third_party/blink/renderer/platform/wtf/functional.h"
@@ -26,28 +25,24 @@ SyncManager::SyncManager(ServiceWorkerRegistration* registration)
 
 ScriptPromise SyncManager::registerFunction(ScriptState* script_state,
                                             const String& tag) {
-  // TODO(jkarlin): Wait for the registration to become active instead of
-  // rejecting. See crbug.com/542437.
-  if (!registration_->active())
+  if (!registration_->active()) {
     return ScriptPromise::RejectWithDOMException(
         script_state,
-        DOMException::Create(kAbortError,
+        DOMException::Create(DOMExceptionCode::kInvalidStateError,
                              "Registration failed - no active Service Worker"));
+  }
 
   ScriptPromiseResolver* resolver = ScriptPromiseResolver::Create(script_state);
   ScriptPromise promise = resolver->Promise();
 
   mojom::blink::SyncRegistrationPtr sync_registration =
       mojom::blink::SyncRegistration::New();
-  sync_registration->id = SyncManager::kUnregisteredSyncID;
   sync_registration->tag = tag;
-  sync_registration->network_state =
-      blink::mojom::BackgroundSyncNetworkState::ONLINE;
 
   GetBackgroundSyncServicePtr()->Register(
-      std::move(sync_registration),
-      registration_->WebRegistration()->RegistrationId(),
-      WTF::Bind(SyncManager::RegisterCallback, WrapPersistent(resolver)));
+      std::move(sync_registration), registration_->RegistrationId(),
+      WTF::Bind(&SyncManager::RegisterCallback, WrapPersistent(this),
+                WrapPersistent(resolver)));
 
   return promise;
 }
@@ -57,7 +52,7 @@ ScriptPromise SyncManager::getTags(ScriptState* script_state) {
   ScriptPromise promise = resolver->Promise();
 
   GetBackgroundSyncServicePtr()->GetRegistrations(
-      registration_->WebRegistration()->RegistrationId(),
+      registration_->RegistrationId(),
       WTF::Bind(&SyncManager::GetRegistrationsCallback,
                 WrapPersistent(resolver)));
 
@@ -73,7 +68,6 @@ SyncManager::GetBackgroundSyncServicePtr() {
   return background_sync_service_;
 }
 
-// static
 void SyncManager::RegisterCallback(ScriptPromiseResolver* resolver,
                                    mojom::blink::BackgroundSyncError error,
                                    mojom::blink::SyncRegistrationPtr options) {
@@ -85,27 +79,31 @@ void SyncManager::RegisterCallback(ScriptPromiseResolver* resolver,
         return;
       }
       resolver->Resolve();
+      // Let the service know that the registration promise is resolved so that
+      // it can fire the event.
+      GetBackgroundSyncServicePtr()->DidResolveRegistration(
+          registration_->RegistrationId(), options->tag);
       break;
     case mojom::blink::BackgroundSyncError::NOT_FOUND:
       NOTREACHED();
       break;
     case mojom::blink::BackgroundSyncError::STORAGE:
-      resolver->Reject(
-          DOMException::Create(kUnknownError, "Background Sync is disabled."));
+      resolver->Reject(DOMException::Create(DOMExceptionCode::kUnknownError,
+                                            "Background Sync is disabled."));
       break;
     case mojom::blink::BackgroundSyncError::NOT_ALLOWED:
       resolver->Reject(
-          DOMException::Create(kInvalidAccessError,
+          DOMException::Create(DOMExceptionCode::kInvalidAccessError,
                                "Attempted to register a sync event without a "
                                "window or registration tag too long."));
       break;
     case mojom::blink::BackgroundSyncError::PERMISSION_DENIED:
-      resolver->Reject(
-          DOMException::Create(kPermissionDeniedError, "Permission denied."));
+      resolver->Reject(DOMException::Create(DOMExceptionCode::kNotAllowedError,
+                                            "Permission denied."));
       break;
     case mojom::blink::BackgroundSyncError::NO_SERVICE_WORKER:
-      resolver->Reject(
-          DOMException::Create(kUnknownError, "No service worker is active."));
+      resolver->Reject(DOMException::Create(DOMExceptionCode::kUnknownError,
+                                            "No service worker is active."));
       break;
   }
 }
@@ -133,12 +131,12 @@ void SyncManager::GetRegistrationsCallback(
       NOTREACHED();
       break;
     case mojom::blink::BackgroundSyncError::STORAGE:
-      resolver->Reject(
-          DOMException::Create(kUnknownError, "Background Sync is disabled."));
+      resolver->Reject(DOMException::Create(DOMExceptionCode::kUnknownError,
+                                            "Background Sync is disabled."));
       break;
     case mojom::blink::BackgroundSyncError::NO_SERVICE_WORKER:
-      resolver->Reject(
-          DOMException::Create(kUnknownError, "No service worker is active."));
+      resolver->Reject(DOMException::Create(DOMExceptionCode::kUnknownError,
+                                            "No service worker is active."));
       break;
   }
 }

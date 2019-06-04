@@ -243,7 +243,7 @@ NACL_BROWSER_TEST_F(NaClBrowserTest, MAYBE_SysconfNprocessorsOnln, {
     RunNaClIntegrationTest(path);
 })
 
-IN_PROC_BROWSER_TEST_F(NaClBrowserTestStatic, CrossOriginCORS) {
+IN_PROC_BROWSER_TEST_F(NaClBrowserTestStatic, CrossOriginCors) {
   RunLoadTest(FILE_PATH_LITERAL("cross_origin/cors.html"));
 }
 
@@ -255,7 +255,7 @@ IN_PROC_BROWSER_TEST_F(NaClBrowserTestStatic, SameOriginCookie) {
   RunLoadTest(FILE_PATH_LITERAL("cross_origin/same_origin_cookie.html"));
 }
 
-IN_PROC_BROWSER_TEST_F(NaClBrowserTestStatic, CORSNoCookie) {
+IN_PROC_BROWSER_TEST_F(NaClBrowserTestStatic, CorsNoCookie) {
   RunLoadTest(FILE_PATH_LITERAL("cross_origin/cors_no_cookie.html"));
 }
 
@@ -376,9 +376,9 @@ IN_PROC_BROWSER_TEST_F(NaClBrowserTestPnaclDebugMasked,
       "pnacl_debug_url.html?nmf_file=pnacl_has_debug_flag_off.nmf"));
 }
 
-// NaClBrowserTestPnacl.PnaclErrorHandling is flaky on Linux.
-// http://crbug.com/704980
-#if defined(OS_LINUX)
+// NaClBrowserTestPnacl.PnaclErrorHandling is flaky on Win, Mac, and Linux.
+// http://crbug.com/704980, http://crbug.com/870309
+#if defined(OS_WIN) || defined(OS_MACOSX) || defined(OS_LINUX)
 #define MAYBE_PnaclErrorHandling DISABLED_PnaclErrorHandling
 #else
 #define MAYBE_PnaclErrorHandling PnaclErrorHandling

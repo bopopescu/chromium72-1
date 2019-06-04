@@ -43,7 +43,6 @@
 namespace blink {
 
 using blink::WebLocalizedString;
-using namespace HTMLNames;
 
 static const int kMsecPerMinute = 60 * 1000;
 static const int kMsecPerSecond = 1000;
@@ -191,7 +190,7 @@ bool BaseTemporalInputType::ValueMissing(const String& value) const {
   return GetElement().IsRequired() && value.IsEmpty();
 }
 
-bool BaseTemporalInputType::ShouldShowFocusRingOnMouseFocus() const {
+bool BaseTemporalInputType::MayTriggerVirtualKeyboard() const {
   return true;
 }
 

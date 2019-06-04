@@ -5,6 +5,7 @@
 #include "third_party/blink/renderer/modules/geolocation/geo_notifier.h"
 
 #include "third_party/blink/public/platform/task_type.h"
+#include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/modules/geolocation/geolocation.h"
 #include "third_party/blink/renderer/modules/geolocation/position_error.h"
 #include "third_party/blink/renderer/modules/geolocation/position_options.h"
@@ -16,7 +17,7 @@ namespace blink {
 GeoNotifier::GeoNotifier(Geolocation* geolocation,
                          V8PositionCallback* success_callback,
                          V8PositionErrorCallback* error_callback,
-                         const PositionOptions& options)
+                         const PositionOptions* options)
     : geolocation_(geolocation),
       success_callback_(success_callback),
       error_callback_(error_callback),
@@ -32,20 +33,16 @@ GeoNotifier::GeoNotifier(Geolocation* geolocation,
   DEFINE_STATIC_LOCAL(CustomCountHistogram, timeout_histogram,
                       ("Geolocation.Timeout", 0,
                        1000 * 60 * 10 /* 10 minute max */, 20 /* buckets */));
-  timeout_histogram.Count(options_.timeout());
+  timeout_histogram.Count(options_->timeout());
 }
 
 void GeoNotifier::Trace(blink::Visitor* visitor) {
   visitor->Trace(geolocation_);
+  visitor->Trace(options_);
   visitor->Trace(success_callback_);
   visitor->Trace(error_callback_);
   visitor->Trace(timer_);
   visitor->Trace(fatal_error_);
-}
-
-void GeoNotifier::TraceWrappers(ScriptWrappableVisitor* visitor) const {
-  visitor->TraceWrappers(success_callback_);
-  visitor->TraceWrappers(error_callback_);
 }
 
 void GeoNotifier::SetFatalError(PositionError* error) {
@@ -76,7 +73,8 @@ void GeoNotifier::RunErrorCallback(PositionError* error) {
 }
 
 void GeoNotifier::StartTimer() {
-  timer_->StartOneShot(options_.timeout() / 1000.0, FROM_HERE);
+  timer_->StartOneShot(TimeDelta::FromMilliseconds(options_->timeout()),
+                       FROM_HERE);
 }
 
 void GeoNotifier::StopTimer() {
@@ -92,12 +90,6 @@ void GeoNotifier::Timer::Trace(blink::Visitor* visitor) {
 }
 
 void GeoNotifier::Timer::StartOneShot(TimeDelta interval,
-                                      const base::Location& caller) {
-  DCHECK(notifier_->geolocation_->DoesOwnNotifier(notifier_));
-  timer_.StartOneShot(interval, caller);
-}
-
-void GeoNotifier::Timer::StartOneShot(double interval,
                                       const base::Location& caller) {
   DCHECK(notifier_->geolocation_->DoesOwnNotifier(notifier_));
   timer_.StartOneShot(interval, caller);
@@ -147,7 +139,7 @@ void GeoNotifier::TimerFired(TimerBase*) {
   DEFINE_STATIC_LOCAL(CustomCountHistogram, timeout_expired_histogram,
                       ("Geolocation.TimeoutExpired", 0,
                        1000 * 60 * 10 /* 10 minute max */, 20 /* buckets */));
-  timeout_expired_histogram.Count(options_.timeout());
+  timeout_expired_histogram.Count(options_->timeout());
 
   geolocation_->RequestTimedOut(this);
 }

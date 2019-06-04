@@ -14,7 +14,6 @@
 #include "base/gtest_prod_util.h"
 #include "base/macros.h"
 #include "base/memory/ref_counted.h"
-#include "base/timer/timer.h"
 #include "build/build_config.h"
 #include "chrome/browser/net/reporting_permissions_checker.h"
 #include "chrome/browser/profiles/profile.h"
@@ -43,10 +42,6 @@ class SupervisedUserTestBase;
 
 namespace base {
 class SequencedTaskRunner;
-}
-
-namespace domain_reliability {
-class DomainReliabilityMonitor;
 }
 
 namespace policy {
@@ -87,7 +82,8 @@ class ProfileImpl : public Profile {
   content::SSLHostStateDelegate* GetSSLHostStateDelegate() override;
   content::BrowsingDataRemoverDelegate* GetBrowsingDataRemoverDelegate()
       override;
-  content::PermissionManager* GetPermissionManager() override;
+  content::PermissionControllerDelegate* GetPermissionControllerDelegate()
+      override;
   content::BackgroundFetchDelegate* GetBackgroundFetchDelegate() override;
   content::BackgroundSyncController* GetBackgroundSyncController() override;
   net::URLRequestContextGetter* CreateRequestContext(
@@ -103,7 +99,12 @@ class ProfileImpl : public Profile {
       const base::FilePath& partition_path,
       bool in_memory) override;
   void RegisterInProcessServices(StaticServiceMap* services) override;
+  std::unique_ptr<service_manager::Service> HandleServiceRequest(
+      const std::string& service_name,
+      service_manager::mojom::ServiceRequest request) override;
   std::string GetMediaDeviceIDSalt() override;
+  download::InProgressDownloadManager* RetriveInProgressDownloadManager()
+      override;
 
   // Profile implementation:
   scoped_refptr<base::SequencedTaskRunner> GetIOTaskRunner() override;
@@ -129,12 +130,13 @@ class ProfileImpl : public Profile {
   PrefService* GetOffTheRecordPrefs() override;
   PrefService* GetReadOnlyOffTheRecordPrefs() override;
   net::URLRequestContextGetter* GetRequestContext() override;
-  net::URLRequestContextGetter* GetRequestContextForExtensions() override;
+  base::OnceCallback<net::CookieStore*()> GetExtensionsCookieStoreGetter()
+      override;
+  scoped_refptr<network::SharedURLLoaderFactory> GetURLLoaderFactory() override;
   bool IsSameProfile(Profile* profile) override;
   base::Time GetStartTime() const override;
   base::FilePath last_selected_directory() override;
   void set_last_selected_directory(const base::FilePath& path) override;
-  chrome_browser_net::Predictor* GetNetworkPredictor() override;
   GURL GetHomePage() override;
   bool WasCreatedByVersionOrLater(const std::string& version) override;
   void SetExitType(ExitType exit_type) override;
@@ -186,24 +188,17 @@ class ProfileImpl : public Profile {
   void UpdateNameInStorage();
   void UpdateAvatarInStorage();
   void UpdateIsEphemeralInStorage();
-  void UpdateCTPolicy();
-  void UpdateBlockThirdPartyCookies();
-
-  void ScheduleUpdateCTPolicy();
 
   void GetMediaCacheParameters(base::FilePath* cache_path, int* max_size);
 
-  std::unique_ptr<domain_reliability::DomainReliabilityMonitor>
-  CreateDomainReliabilityMonitor(PrefService* local_state);
-
-  // Creates an instance of the Identity Service for this Profile, populating it
-  // with the appropriate instances of its dependencies.
-  std::unique_ptr<service_manager::Service> CreateIdentityService();
+#if defined(OS_CHROMEOS)
+  std::unique_ptr<service_manager::Service> CreateDeviceSyncService();
+  std::unique_ptr<service_manager::Service> CreateMultiDeviceSetupService();
+#endif  // defined(OS_CHROMEOS)
 
   PrefChangeRegistrar pref_change_registrar_;
 
   base::FilePath path_;
-  base::FilePath base_cache_path_;
 
   // Task runner used for file access in the profile path.
   scoped_refptr<base::SequencedTaskRunner> io_task_runner_;
@@ -279,12 +274,7 @@ class ProfileImpl : public Profile {
 
   Profile::Delegate* delegate_;
 
-  chrome_browser_net::Predictor* predictor_;
-
   ReportingPermissionsCheckerFactory reporting_permissions_checker_factory_;
-
-  // Used to post schedule CT policy updates
-  base::OneShotTimer ct_policy_update_timer_;
 
   DISALLOW_COPY_AND_ASSIGN(ProfileImpl);
 };

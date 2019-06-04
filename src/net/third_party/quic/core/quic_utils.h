@@ -9,19 +9,22 @@
 #include <cstdint>
 
 #include "base/macros.h"
-#include "net/base/iovec.h"
 #include "net/third_party/quic/core/quic_error_codes.h"
 #include "net/third_party/quic/core/quic_types.h"
+#include "net/third_party/quic/core/quic_versions.h"
 #include "net/third_party/quic/platform/api/quic_export.h"
+#include "net/third_party/quic/platform/api/quic_iovec.h"
 #include "net/third_party/quic/platform/api/quic_socket_address.h"
 #include "net/third_party/quic/platform/api/quic_string.h"
 #include "net/third_party/quic/platform/api/quic_string_piece.h"
 #include "net/third_party/quic/platform/api/quic_uint128.h"
 
-namespace net {
+namespace quic {
 
 class QUIC_EXPORT_PRIVATE QuicUtils {
  public:
+  QuicUtils() = delete;
+
   // Returns the 64 bit FNV1a hash of the data.  See
   // http://www.isthe.com/chongo/tech/comp/fnv/index.html#FNV-param
   static uint64_t FNV1a_64_Hash(QuicStringPiece data);
@@ -51,7 +54,7 @@ class QUIC_EXPORT_PRIVATE QuicUtils {
   // Returns TransmissionType as a char*
   static const char* TransmissionTypeToString(TransmissionType type);
 
-  // Returns AddressChangeType as a std::string.
+  // Returns AddressChangeType as a string.
   static QuicString AddressChangeTypeToString(AddressChangeType type);
 
   // Returns SentPacketState as a char*.
@@ -88,10 +91,24 @@ class QUIC_EXPORT_PRIVATE QuicUtils {
   // packet header.
   static bool IsIetfPacketHeader(uint8_t first_byte);
 
- private:
-  DISALLOW_COPY_AND_ASSIGN(QuicUtils);
+  // Returns ID to denote an invalid stream of |version|.
+  static QuicStreamId GetInvalidStreamId(QuicTransportVersion version);
+
+  // Returns crypto stream ID of |version|.
+  static QuicStreamId GetCryptoStreamId(QuicTransportVersion version);
+
+  // Returns headers stream ID of |version|.
+  static QuicStreamId GetHeadersStreamId(QuicTransportVersion version);
+
+  // Returns true if |id| is considered as client initiated stream ID.
+  static bool IsClientInitiatedStreamId(QuicTransportVersion version,
+                                        QuicStreamId id);
+
+  // Returns true if |id| is considered as server initiated stream ID.
+  static bool IsServerInitiatedStreamId(QuicTransportVersion version,
+                                        QuicStreamId id);
 };
 
-}  // namespace net
+}  // namespace quic
 
 #endif  // NET_THIRD_PARTY_QUIC_CORE_QUIC_UTILS_H_

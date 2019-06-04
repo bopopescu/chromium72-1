@@ -51,6 +51,9 @@ class APP_LIST_MODEL_EXPORT AppListItemList {
   // invalid, move the item to the end of the list.
   void SetItemPosition(AppListItem* item, syncer::StringOrdinal new_position);
 
+  // Add a "page break" item right after the specified item in item list.
+  AppListItem* AddPageBreakItemAfter(const AppListItem* previous_item);
+
   // Highlights the given item in the app list. If not present and it is later
   // added, the item will be highlighted after being added.
   void HighlightItemInstalledFromUI(const std::string& id);
@@ -95,9 +98,6 @@ class APP_LIST_MODEL_EXPORT AppListItemList {
   // Deletes item at |index| and signals observers.
   void DeleteItemAt(size_t index);
 
-  // Deletes all items. This is used in profile switches.
-  void DeleteAllItems();
-
   // If |item|->position() is not a valid ordinal, sets |item|->position()
   // to a valid ordinal after the last item in the list.
   void EnsureValidItemPosition(AppListItem* item);
@@ -112,7 +112,7 @@ class APP_LIST_MODEL_EXPORT AppListItemList {
   void FixItemPosition(size_t index);
 
   std::vector<std::unique_ptr<AppListItem>> app_list_items_;
-  base::ObserverList<AppListItemListObserver, true> observers_;
+  base::ObserverList<AppListItemListObserver, true>::Unchecked observers_;
   std::string highlighted_id_;
 
   DISALLOW_COPY_AND_ASSIGN(AppListItemList);

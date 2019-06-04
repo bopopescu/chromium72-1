@@ -12,9 +12,10 @@
 #define RTC_BASE_ASYNCPACKETSOCKET_H_
 
 #include "rtc_base/constructormagic.h"
+#include "rtc_base/deprecation.h"
 #include "rtc_base/dscp.h"
-#include "rtc_base/sigslot.h"
 #include "rtc_base/socket.h"
+#include "rtc_base/third_party/sigslot/sigslot.h"
 #include "rtc_base/timeutils.h"
 
 namespace rtc {
@@ -28,9 +29,9 @@ struct PacketTimeUpdateParams {
   ~PacketTimeUpdateParams();
 
   int rtp_sendtime_extension_id = -1;  // extension header id present in packet.
-  std::vector<char> srtp_auth_key;  // Authentication key.
-  int srtp_auth_tag_len = -1;       // Authentication tag length.
-  int64_t srtp_packet_index = -1;   // Required for Rtp Packet authentication.
+  std::vector<char> srtp_auth_key;     // Authentication key.
+  int srtp_auth_tag_len = -1;          // Authentication tag length.
+  int64_t srtp_packet_index = -1;  // Required for Rtp Packet authentication.
 };
 
 // This structure holds meta information for the packet which is about to send
@@ -50,25 +51,9 @@ struct PacketOptions {
   PacketInfo info_signaled_after_sent;
 };
 
-// This structure will have the information about when packet is actually
-// received by socket.
-struct PacketTime {
-  PacketTime() : timestamp(-1), not_before(-1) {}
-  PacketTime(int64_t timestamp, int64_t not_before)
-      : timestamp(timestamp), not_before(not_before) {}
-
-  int64_t timestamp;   // Receive time after socket delivers the data.
-
-  // Earliest possible time the data could have arrived, indicating the
-  // potential error in the |timestamp| value, in case the system, is busy. For
-  // example, the time of the last select() call.
-  // If unknown, this value will be set to zero.
-  int64_t not_before;
-};
-
-inline PacketTime CreatePacketTime(int64_t not_before) {
-  return PacketTime(TimeMicros(), not_before);
-}
+// TODO(bugs.webrtc.org/9584): Compatibility alias, delete as soon as downstream
+// code is updated.
+typedef int64_t PacketTime;
 
 // Provides the ability to receive packets asynchronously. Sends are not
 // buffered since it is acceptable to drop packets under high load.
@@ -93,8 +78,10 @@ class AsyncPacketSocket : public sigslot::has_slots<> {
   virtual SocketAddress GetRemoteAddress() const = 0;
 
   // Send a packet.
-  virtual int Send(const void *pv, size_t cb, const PacketOptions& options) = 0;
-  virtual int SendTo(const void *pv, size_t cb, const SocketAddress& addr,
+  virtual int Send(const void* pv, size_t cb, const PacketOptions& options) = 0;
+  virtual int SendTo(const void* pv,
+                     size_t cb,
+                     const SocketAddress& addr,
                      const PacketOptions& options) = 0;
 
   // Close the socket.
@@ -114,9 +101,14 @@ class AsyncPacketSocket : public sigslot::has_slots<> {
 
   // Emitted each time a packet is read. Used only for UDP and
   // connected TCP sockets.
-  sigslot::signal5<AsyncPacketSocket*, const char*, size_t,
+  sigslot::signal5<AsyncPacketSocket*,
+                   const char*,
+                   size_t,
                    const SocketAddress&,
-                   const PacketTime&> SignalReadPacket;
+                   // TODO(bugs.webrtc.org/9584): Change to passing the int64_t
+                   // timestamp by value.
+                   const int64_t&>
+      SignalReadPacket;
 
   // Emitted each time a packet is sent.
   sigslot::signal2<AsyncPacketSocket*, const SentPacket&> SignalSentPacket;

@@ -8,6 +8,7 @@
 #include <unordered_map>
 #include <utility>
 
+#include "ash/system/message_center/arc/arc_notification_constants.h"
 #include "ash/system/message_center/arc/arc_notification_content_view.h"
 #include "ash/system/message_center/arc/arc_notification_surface.h"
 #include "ash/system/message_center/arc/arc_notification_surface_manager.h"
@@ -18,17 +19,18 @@
 #include "base/observer_list.h"
 #include "base/strings/utf_string_conversions.h"
 #include "chrome/test/base/testing_profile.h"
+#include "chrome/test/views/chrome_views_test_base.h"
 #include "chromeos/chromeos_switches.h"
 #include "components/arc/arc_bridge_service.h"
 #include "components/arc/common/accessibility_helper.mojom.h"
 #include "components/exo/shell_surface.h"
+#include "components/exo/shell_surface_util.h"
 #include "content/public/test/test_browser_thread_bundle.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/aura/window.h"
 #include "ui/display/display.h"
 #include "ui/display/manager/managed_display_info.h"
 #include "ui/message_center/public/cpp/notification.h"
-#include "ui/views/test/views_test_base.h"
 #include "ui/views/view.h"
 #include "ui/views/widget/widget.h"
 
@@ -47,7 +49,7 @@ constexpr char kNotificationKey[] = "unit.test.notification";
 
 }  // namespace
 
-class ArcAccessibilityHelperBridgeTest : public views::ViewsTestBase {
+class ArcAccessibilityHelperBridgeTest : public ChromeViewsTestBase {
  public:
   class TestArcAccessibilityHelperBridge : public ArcAccessibilityHelperBridge {
    public:
@@ -61,7 +63,7 @@ class ArcAccessibilityHelperBridgeTest : public views::ViewsTestBase {
     ~TestArcAccessibilityHelperBridge() override { window_.reset(); }
 
     void SetActiveWindowId(const std::string& id) {
-      exo::ShellSurface::SetApplicationId(window_.get(), id);
+      exo::SetShellApplicationId(window_.get(), id);
     }
 
    protected:
@@ -111,13 +113,13 @@ class ArcAccessibilityHelperBridgeTest : public views::ViewsTestBase {
 
    private:
     std::map<std::string, ArcNotificationSurface*> surfaces_;
-    base::ObserverList<Observer> observers_;
+    base::ObserverList<Observer>::Unchecked observers_;
   };
 
   ArcAccessibilityHelperBridgeTest() = default;
 
   void SetUp() override {
-    views::ViewsTestBase::SetUp();
+    ChromeViewsTestBase::SetUp();
 
     testing_profile_ = std::make_unique<TestingProfile>();
     bridge_service_ = std::make_unique<ArcBridgeService>();
@@ -135,7 +137,7 @@ class ArcAccessibilityHelperBridgeTest : public views::ViewsTestBase {
     bridge_service_.reset();
     testing_profile_.reset();
 
-    views::ViewsTestBase::TearDown();
+    ChromeViewsTestBase::TearDown();
   }
 
   TestArcAccessibilityHelperBridge* accessibility_helper_bridge() {
@@ -153,13 +155,15 @@ class ArcAccessibilityHelperBridgeTest : public views::ViewsTestBase {
   }
 
   std::unique_ptr<message_center::Notification> CreateNotification() {
-    return std::make_unique<message_center::Notification>(
+    auto notification = std::make_unique<message_center::Notification>(
         message_center::NOTIFICATION_TYPE_CUSTOM, kNotificationKey,
         base::UTF8ToUTF16("title"), base::UTF8ToUTF16("message"), gfx::Image(),
         base::UTF8ToUTF16("display_source"), GURL(),
-        message_center::NotifierId(message_center::NotifierId::ARC_APPLICATION,
-                                   "test_app_id"),
+        message_center::NotifierId(
+            message_center::NotifierType::ARC_APPLICATION, "test_app_id"),
         message_center::RichNotificationData(), nullptr);
+    notification->set_custom_view_type(ash::kArcNotificationCustomViewType);
+    return notification;
   }
 
   std::unique_ptr<ArcNotificationView> CreateArcNotificationView(
@@ -183,11 +187,10 @@ class ArcAccessibilityHelperBridgeTest : public views::ViewsTestBase {
 };
 
 TEST_F(ArcAccessibilityHelperBridgeTest, TaskAndAXTreeLifecycle) {
-  base::CommandLine::ForCurrentProcess()->AppendSwitch(
-      chromeos::switches::kEnableChromeVoxArcSupport);
-
   TestArcAccessibilityHelperBridge* helper_bridge =
       accessibility_helper_bridge();
+  helper_bridge->set_filter_type_all_for_test();
+
   const auto& task_id_to_tree = helper_bridge->task_id_to_tree_for_test();
   ASSERT_EQ(0U, task_id_to_tree.size());
 
@@ -237,6 +240,7 @@ TEST_F(ArcAccessibilityHelperBridgeTest, TaskAndAXTreeLifecycle) {
   // Same task id, different package name.
   event2->node_data.clear();
   event2->node_data.push_back(arc::mojom::AccessibilityNodeInfoData::New());
+  event2->source_id = 3;
   event2->node_data[0]->id = 3;
   event2->node_data[0]->string_properties =
       base::flat_map<arc::mojom::AccessibilityStringProperty, std::string>();
@@ -268,9 +272,6 @@ TEST_F(ArcAccessibilityHelperBridgeTest, TaskAndAXTreeLifecycle) {
 // mojo: notification 2 removed
 // wayland: surface 2 removed
 TEST_F(ArcAccessibilityHelperBridgeTest, NotificationEventArriveFirst) {
-  base::CommandLine::ForCurrentProcess()->AppendSwitch(
-      chromeos::switches::kEnableChromeVoxArcSupport);
-
   TestArcAccessibilityHelperBridge* helper_bridge =
       accessibility_helper_bridge();
   arc_notification_surface_manager_->AddObserver(helper_bridge);
@@ -309,7 +310,7 @@ TEST_F(ArcAccessibilityHelperBridgeTest, NotificationEventArriveFirst) {
       arc::mojom::AccessibilityNotificationStateType::SURFACE_REMOVED);
 
   // Ax tree of the surface should be reset as the tree no longer exists.
-  EXPECT_EQ(-1, test_surface.GetAXTreeId());
+  EXPECT_EQ(ui::AXTreeIDUnknown(), test_surface.GetAXTreeId());
 
   EXPECT_EQ(0U, notification_key_to_tree_.size());
 
@@ -364,9 +365,6 @@ TEST_F(ArcAccessibilityHelperBridgeTest, NotificationEventArriveFirst) {
 // mojo: notification 1 created
 // mojo: notification 1 removed
 TEST_F(ArcAccessibilityHelperBridgeTest, NotificationSurfaceArriveFirst) {
-  base::CommandLine::ForCurrentProcess()->AppendSwitch(
-      chromeos::switches::kEnableChromeVoxArcSupport);
-
   TestArcAccessibilityHelperBridge* helper_bridge =
       accessibility_helper_bridge();
   arc_notification_surface_manager_->AddObserver(helper_bridge);
@@ -404,8 +402,7 @@ TEST_F(ArcAccessibilityHelperBridgeTest, NotificationSurfaceArriveFirst) {
 
 TEST_F(ArcAccessibilityHelperBridgeTest,
        TextSelectionChangeActivateNotificationWidget) {
-  base::CommandLine::ForCurrentProcess()->AppendSwitch(
-      chromeos::switches::kEnableChromeVoxArcSupport);
+  accessibility_helper_bridge()->set_filter_type_all_for_test();
 
   // Prepare notification surface.
   std::unique_ptr<MockArcNotificationSurface> surface =
@@ -460,8 +457,7 @@ TEST_F(ArcAccessibilityHelperBridgeTest,
 }
 
 TEST_F(ArcAccessibilityHelperBridgeTest, TextSelectionChangedFocusContentView) {
-  base::CommandLine::ForCurrentProcess()->AppendSwitch(
-      chromeos::switches::kEnableChromeVoxArcSupport);
+  accessibility_helper_bridge()->set_filter_type_all_for_test();
 
   // Prepare notification surface.
   std::unique_ptr<MockArcNotificationSurface> surface =

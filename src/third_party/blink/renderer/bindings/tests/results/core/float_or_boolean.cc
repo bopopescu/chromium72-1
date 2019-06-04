@@ -3,13 +3,14 @@
 // found in the LICENSE file.
 
 // This file has been auto-generated from the Jinja2 template
-// third_party/blink/renderer/bindings/templates/union_container.cpp.tmpl
+// third_party/blink/renderer/bindings/templates/union_container.cc.tmpl
 // by the script code_generator_v8.py.
 // DO NOT MODIFY!
 
 // clang-format off
 #include "third_party/blink/renderer/bindings/tests/results/core/float_or_boolean.h"
 
+#include "base/stl_util.h"
 #include "third_party/blink/renderer/bindings/core/v8/idl_types.h"
 #include "third_party/blink/renderer/bindings/core/v8/native_value_traits_impl.h"
 #include "third_party/blink/renderer/bindings/core/v8/to_v8_for_core.h"
@@ -59,31 +60,36 @@ FloatOrBoolean& FloatOrBoolean::operator=(const FloatOrBoolean&) = default;
 void FloatOrBoolean::Trace(blink::Visitor* visitor) {
 }
 
-void V8FloatOrBoolean::ToImpl(v8::Isolate* isolate, v8::Local<v8::Value> v8Value, FloatOrBoolean& impl, UnionTypeConversionMode conversionMode, ExceptionState& exceptionState) {
-  if (v8Value.IsEmpty())
+void V8FloatOrBoolean::ToImpl(
+    v8::Isolate* isolate,
+    v8::Local<v8::Value> v8_value,
+    FloatOrBoolean& impl,
+    UnionTypeConversionMode conversion_mode,
+    ExceptionState& exception_state) {
+  if (v8_value.IsEmpty())
     return;
 
-  if (conversionMode == UnionTypeConversionMode::kNullable && IsUndefinedOrNull(v8Value))
+  if (conversion_mode == UnionTypeConversionMode::kNullable && IsUndefinedOrNull(v8_value))
     return;
 
-  if (v8Value->IsBoolean()) {
-    impl.SetBoolean(v8Value.As<v8::Boolean>()->Value());
+  if (v8_value->IsBoolean()) {
+    impl.SetBoolean(v8_value.As<v8::Boolean>()->Value());
     return;
   }
 
-  if (v8Value->IsNumber()) {
-    float cppValue = NativeValueTraits<IDLFloat>::NativeValue(isolate, v8Value, exceptionState);
-    if (exceptionState.HadException())
+  if (v8_value->IsNumber()) {
+    float cpp_value = NativeValueTraits<IDLFloat>::NativeValue(isolate, v8_value, exception_state);
+    if (exception_state.HadException())
       return;
-    impl.SetFloat(cppValue);
+    impl.SetFloat(cpp_value);
     return;
   }
 
   {
-    float cppValue = NativeValueTraits<IDLFloat>::NativeValue(isolate, v8Value, exceptionState);
-    if (exceptionState.HadException())
+    float cpp_value = NativeValueTraits<IDLFloat>::NativeValue(isolate, v8_value, exception_state);
+    if (exception_state.HadException())
       return;
-    impl.SetFloat(cppValue);
+    impl.SetFloat(cpp_value);
     return;
   }
 }
@@ -102,9 +108,10 @@ v8::Local<v8::Value> ToV8(const FloatOrBoolean& impl, v8::Local<v8::Object> crea
   return v8::Local<v8::Value>();
 }
 
-FloatOrBoolean NativeValueTraits<FloatOrBoolean>::NativeValue(v8::Isolate* isolate, v8::Local<v8::Value> value, ExceptionState& exceptionState) {
+FloatOrBoolean NativeValueTraits<FloatOrBoolean>::NativeValue(
+    v8::Isolate* isolate, v8::Local<v8::Value> value, ExceptionState& exception_state) {
   FloatOrBoolean impl;
-  V8FloatOrBoolean::ToImpl(isolate, value, impl, UnionTypeConversionMode::kNotNullable, exceptionState);
+  V8FloatOrBoolean::ToImpl(isolate, value, impl, UnionTypeConversionMode::kNotNullable, exception_state);
   return impl;
 }
 

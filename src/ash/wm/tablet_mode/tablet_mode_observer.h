@@ -24,8 +24,17 @@ class ASH_EXPORT TabletModeObserver {
   // have been restored.
   virtual void OnTabletModeEnded() {}
 
+  // Called when tablet mode blocks or unblocks events. This usually matches,
+  // exiting or entering tablet mode, except when an external mouse is
+  // connected.
+  virtual void OnTabletModeEventsBlockingChanged() {}
+
+  // Called when the tablet mode controller is destroyed, to help manage issues
+  // with observers being destroyed after controllers.
+  virtual void OnTabletControllerDestroyed() {}
+
  protected:
-  virtual ~TabletModeObserver() {}
+  virtual ~TabletModeObserver() = default;
 };
 
 }  // namespace ash

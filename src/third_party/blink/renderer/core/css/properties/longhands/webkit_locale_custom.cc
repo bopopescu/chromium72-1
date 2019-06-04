@@ -9,15 +9,15 @@
 #include "third_party/blink/renderer/core/style/computed_style.h"
 
 namespace blink {
-namespace CSSLonghand {
+namespace css_longhand {
 
 const CSSValue* WebkitLocale::ParseSingleValue(
     CSSParserTokenRange& range,
     const CSSParserContext&,
     const CSSParserLocalContext&) const {
   if (range.Peek().Id() == CSSValueAuto)
-    return CSSPropertyParserHelpers::ConsumeIdent(range);
-  return CSSPropertyParserHelpers::ConsumeString(range);
+    return css_property_parser_helpers::ConsumeIdent(range);
+  return css_property_parser_helpers::ConsumeString(range);
 }
 
 const CSSValue* WebkitLocale::CSSValueFromComputedStyleInternal(
@@ -31,5 +31,16 @@ const CSSValue* WebkitLocale::CSSValueFromComputedStyleInternal(
   return CSSStringValue::Create(style.Locale());
 }
 
-}  // namespace CSSLonghand
+void WebkitLocale::ApplyValue(StyleResolverState& state,
+                              const CSSValue& value) const {
+  if (value.IsIdentifierValue()) {
+    DCHECK_EQ(ToCSSIdentifierValue(value).GetValueID(), CSSValueAuto);
+    state.GetFontBuilder().SetLocale(nullptr);
+  } else {
+    state.GetFontBuilder().SetLocale(
+        LayoutLocale::Get(AtomicString(ToCSSStringValue(value).Value())));
+  }
+}
+
+}  // namespace css_longhand
 }  // namespace blink

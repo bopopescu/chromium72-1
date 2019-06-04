@@ -18,6 +18,7 @@
 #include "base/strings/string16.h"
 #include "base/synchronization/lock.h"
 #include "base/values.h"
+#include "content/browser/media/media_internals_audio_focus_helper.h"
 #include "content/common/content_export.h"
 #include "content/public/browser/notification_observer.h"
 #include "content/public/browser/notification_registrar.h"
@@ -30,6 +31,12 @@
 namespace media {
 struct MediaLogEvent;
 }
+
+namespace media_session {
+namespace mojom {
+enum class AudioFocusType;
+}  // namespace mojom
+}  // namespace media_session
 
 namespace content {
 
@@ -67,12 +74,18 @@ class CONTENT_EXPORT MediaInternals : public media::AudioLogFactory,
   // Replay all saved media events.
   void SendHistoricalMediaEvents();
 
+  // Sends general audio information to each registered UpdateCallback.
+  void SendGeneralAudioInformation();
+
   // Sends all audio cached data to each registered UpdateCallback.
   void SendAudioStreamData();
 
   // Sends all video capture capabilities cached data to each registered
   // UpdateCallback.
   void SendVideoCaptureDeviceCapabilities();
+
+  // Sends all audio focus information to each registered UpdateCallback.
+  void SendAudioFocusState();
 
   // Called to inform of the capabilities enumerated for video devices.
   void UpdateVideoCaptureDeviceCapabilities(
@@ -92,13 +105,23 @@ class CONTENT_EXPORT MediaInternals : public media::AudioLogFactory,
       int render_process_id = -1,
       int render_frame_id = MSG_ROUTING_NONE);
 
+  // Strongly bounds |request| to a new media::mojom::AudioLog instance. Safe to
+  // call from any thread.
+  void CreateMojoAudioLog(AudioComponent component,
+                          int component_id,
+                          media::mojom::AudioLogRequest request,
+                          int render_process_id = -1,
+                          int render_frame_id = MSG_ROUTING_NONE);
+
   void OnProcessTerminatedForTesting(int process_id);
 
  private:
+  // Needs access to SendUpdate.
+  friend class MediaInternalsAudioFocusHelper;
+
+  class AudioLogImpl;
   // Inner class to handle reporting pipelinestatus to UMA
   class MediaInternalsUMAHandler;
-
-  friend class AudioLogImpl;
 
   MediaInternals();
 
@@ -123,6 +146,11 @@ class CONTENT_EXPORT MediaInternals : public media::AudioLogFactory,
                       const std::string& function,
                       const base::DictionaryValue* value);
 
+  std::unique_ptr<AudioLogImpl> CreateAudioLogImpl(AudioComponent component,
+                                                   int component_id,
+                                                   int render_process_id,
+                                                   int render_frame_id);
+
   // Must only be accessed on the UI thread.
   std::vector<UpdateCallback> update_callbacks_;
 
@@ -133,6 +161,8 @@ class CONTENT_EXPORT MediaInternals : public media::AudioLogFactory,
   base::ListValue video_capture_capabilities_cached_data_;
 
   NotificationRegistrar registrar_;
+
+  MediaInternalsAudioFocusHelper audio_focus_helper_;
 
   // All variables below must be accessed under |lock_|.
   base::Lock lock_;

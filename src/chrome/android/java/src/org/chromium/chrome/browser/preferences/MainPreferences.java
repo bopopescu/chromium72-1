@@ -15,17 +15,17 @@ import android.provider.Settings;
 import org.chromium.base.ContextUtils;
 import org.chromium.base.VisibleForTesting;
 import org.chromium.chrome.R;
+import org.chromium.chrome.browser.AppHooks;
 import org.chromium.chrome.browser.ChromeFeatureList;
-import org.chromium.chrome.browser.autofill.PersonalDataManager;
-import org.chromium.chrome.browser.contextual_suggestions.EnabledStateMonitor;
+import org.chromium.chrome.browser.contextual_suggestions.ContextualSuggestionsEnabledStateUtils;
 import org.chromium.chrome.browser.net.spdyproxy.DataReductionProxySettings;
 import org.chromium.chrome.browser.partnercustomizations.HomepageManager;
+import org.chromium.chrome.browser.password_manager.ManagePasswordsReferrer;
 import org.chromium.chrome.browser.preferences.datareduction.DataReductionPreferences;
 import org.chromium.chrome.browser.search_engines.TemplateUrl;
 import org.chromium.chrome.browser.search_engines.TemplateUrlService;
 import org.chromium.chrome.browser.signin.SigninManager;
 import org.chromium.chrome.browser.util.FeatureUtilities;
-import org.chromium.ui.base.DeviceFormFactor;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -35,8 +35,9 @@ import java.util.Map;
  */
 public class MainPreferences extends PreferenceFragment
         implements SigninManager.SignInStateObserver, TemplateUrlService.LoadListener {
+    public static final String PREF_ACCOUNT_SECTION = "account_section";
     public static final String PREF_SIGN_IN = "sign_in";
-    public static final String PREF_AUTOFILL_SETTINGS = "autofill_settings";
+    public static final String PREF_SYNC_AND_SERVICES = "sync_and_services";
     public static final String PREF_SEARCH_ENGINE = "search_engine";
     public static final String PREF_SAVED_PASSWORDS = "saved_passwords";
     public static final String PREF_CONTEXTUAL_SUGGESTIONS = "contextual_suggestions";
@@ -45,6 +46,13 @@ public class MainPreferences extends PreferenceFragment
     public static final String PREF_NOTIFICATIONS = "notifications";
     public static final String PREF_LANGUAGES = "languages";
     public static final String PREF_DOWNLOADS = "downloads";
+    public static final String PREF_DEVELOPER = "developer";
+    public static final String PREF_AUTOFILL_ASSISTANT = "autofill_assistant";
+
+    public static final String AUTOFILL_GUID = "guid";
+    // Needs to be in sync with kSettingsOrigin[] in
+    // chrome/browser/ui/webui/options/autofill_options_handler.cc
+    public static final String SETTINGS_ORIGIN = "Chrome settings";
 
     private final ManagedPreferenceDelegate mManagedPreferenceDelegate;
     private final Map<String, Preference> mAllPreferences = new HashMap<>();
@@ -93,12 +101,20 @@ public class MainPreferences extends PreferenceFragment
 
     private void createPreferences() {
         PreferenceUtils.addPreferencesFromResource(this, R.xml.main_preferences);
-
         cachePreferences();
+
+        if (ChromeFeatureList.isEnabled(ChromeFeatureList.UNIFIED_CONSENT)) {
+            mSignInPreference.setOnStateChangedCallback(this::onSignInPreferenceStateChanged);
+        } else {
+            getPreferenceScreen().removePreference(findPreference(PREF_ACCOUNT_SECTION));
+            getPreferenceScreen().removePreference(findPreference(PREF_SYNC_AND_SERVICES));
+        }
+
         setManagedPreferenceDelegateForPreference(PREF_SEARCH_ENGINE);
-        setManagedPreferenceDelegateForPreference(PREF_AUTOFILL_SETTINGS);
         setManagedPreferenceDelegateForPreference(PREF_SAVED_PASSWORDS);
         setManagedPreferenceDelegateForPreference(PREF_DATA_REDUCTION);
+
+        updatePasswordsPreference();
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             // If we are on Android O+ the Notifications preference should lead to the Android
@@ -142,6 +158,16 @@ public class MainPreferences extends PreferenceFragment
         if (!ChromeFeatureList.isEnabled(ChromeFeatureList.DOWNLOADS_LOCATION_CHANGE)) {
             getPreferenceScreen().removePreference(findPreference(PREF_DOWNLOADS));
         }
+
+        // Developer preferences are only shown when the feature is enabled.
+        if (!ChromeFeatureList.isEnabled(ChromeFeatureList.DEVELOPER_PREFERENCES)) {
+            getPreferenceScreen().removePreference(findPreference(PREF_DEVELOPER));
+        }
+
+        // This checks whether Autofill Assistant is enabled.
+        if (!ChromeFeatureList.isEnabled(ChromeFeatureList.AUTOFILL_ASSISTANT)) {
+            getPreferenceScreen().removePreference(findPreference(PREF_AUTOFILL_ASSISTANT));
+        }
     }
 
     /**
@@ -181,11 +207,12 @@ public class MainPreferences extends PreferenceFragment
             removePreferenceIfPresent(PREF_HOMEPAGE);
         }
 
-        boolean isTablet = DeviceFormFactor.isNonMultiDisplayContextOnTablet(getActivity());
-        if (FeatureUtilities.isContextualSuggestionsBottomSheetEnabled(isTablet)
-                && EnabledStateMonitor.shouldShowSettings()) {
-            Preference contextualSuggesitons = addPreferenceIfAbsent(PREF_CONTEXTUAL_SUGGESTIONS);
-            setOnOffSummary(contextualSuggesitons, EnabledStateMonitor.getEnabledState());
+        if (!ChromeFeatureList.isEnabled(ChromeFeatureList.UNIFIED_CONSENT)
+                && FeatureUtilities.areContextualSuggestionsEnabled(getActivity())
+                && ContextualSuggestionsEnabledStateUtils.shouldShowSettings()) {
+            Preference contextualSuggestions = addPreferenceIfAbsent(PREF_CONTEXTUAL_SUGGESTIONS);
+            setOnOffSummary(contextualSuggestions,
+                    ContextualSuggestionsEnabledStateUtils.getEnabledState());
         } else {
             removePreferenceIfPresent(PREF_CONTEXTUAL_SUGGESTIONS);
         }
@@ -224,6 +251,15 @@ public class MainPreferences extends PreferenceFragment
         searchEnginePreference.setSummary(defaultSearchEngineName);
     }
 
+    private void updatePasswordsPreference() {
+        Preference passwordsPreference = findPreference(PREF_SAVED_PASSWORDS);
+        passwordsPreference.setOnPreferenceClickListener(preference -> {
+            AppHooks.get().createManagePasswordsUIProvider().showManagePasswordsUI(
+                    getActivity(), ManagePasswordsReferrer.CHROME_SETTINGS);
+            return true;
+        });
+    }
+
     private void setOnOffSummary(Preference pref, boolean isOn) {
         pref.setSummary(getResources().getString(isOn ? R.string.text_on : R.string.text_off));
     }
@@ -239,6 +275,15 @@ public class MainPreferences extends PreferenceFragment
     @Override
     public void onSignedOut() {
         updatePreferences();
+    }
+
+    private void onSignInPreferenceStateChanged() {
+        // Remove "Account" section header if the personalized sign-in promo is shown.
+        if (mSignInPreference.getState() == SignInPreference.State.PERSONALIZED_PROMO) {
+            removePreferenceIfPresent(PREF_ACCOUNT_SECTION);
+        } else {
+            addPreferenceIfAbsent(PREF_ACCOUNT_SECTION);
+        }
     }
 
     // TemplateUrlService.LoadListener implementation.
@@ -257,9 +302,6 @@ public class MainPreferences extends PreferenceFragment
         return new ManagedPreferenceDelegate() {
             @Override
             public boolean isPreferenceControlledByPolicy(Preference preference) {
-                if (PREF_AUTOFILL_SETTINGS.equals(preference.getKey())) {
-                    return PersonalDataManager.isAutofillManaged();
-                }
                 if (PREF_SAVED_PASSWORDS.equals(preference.getKey())) {
                     return PrefServiceBridge.getInstance().isRememberPasswordsManaged();
                 }
@@ -274,10 +316,6 @@ public class MainPreferences extends PreferenceFragment
 
             @Override
             public boolean isPreferenceClickDisabledByPolicy(Preference preference) {
-                if (PREF_AUTOFILL_SETTINGS.equals(preference.getKey())) {
-                    return PersonalDataManager.isAutofillManaged()
-                            && !PersonalDataManager.isAutofillEnabled();
-                }
                 if (PREF_SAVED_PASSWORDS.equals(preference.getKey())) {
                     PrefServiceBridge prefs = PrefServiceBridge.getInstance();
                     return prefs.isRememberPasswordsManaged()

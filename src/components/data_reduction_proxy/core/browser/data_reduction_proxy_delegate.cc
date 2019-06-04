@@ -8,15 +8,13 @@
 
 #include "base/command_line.h"
 #include "base/metrics/histogram_macros.h"
-#include "base/time/default_tick_clock.h"
-#include "base/time/tick_clock.h"
+#include "base/stl_util.h"
 #include "components/data_reduction_proxy/core/browser/data_reduction_proxy_bypass_stats.h"
 #include "components/data_reduction_proxy/core/browser/data_reduction_proxy_config.h"
 #include "components/data_reduction_proxy/core/browser/data_reduction_proxy_configurator.h"
 #include "components/data_reduction_proxy/core/browser/data_reduction_proxy_io_data.h"
 #include "components/data_reduction_proxy/core/browser/data_reduction_proxy_request_options.h"
 #include "components/data_reduction_proxy/core/browser/data_reduction_proxy_util.h"
-#include "components/data_reduction_proxy/core/common/data_reduction_proxy_event_creator.h"
 #include "components/data_reduction_proxy/core/common/data_reduction_proxy_params.h"
 #include "components/data_reduction_proxy/core/common/data_reduction_proxy_switches.h"
 #include "net/base/host_port_pair.h"
@@ -37,35 +35,26 @@ static const char kDataReductionCoreProxy[] = "proxy.googlezip.net";
 DataReductionProxyDelegate::DataReductionProxyDelegate(
     DataReductionProxyConfig* config,
     const DataReductionProxyConfigurator* configurator,
-    DataReductionProxyEventCreator* event_creator,
-    DataReductionProxyBypassStats* bypass_stats,
-    net::NetLog* net_log)
+    DataReductionProxyBypassStats* bypass_stats)
     : config_(config),
       configurator_(configurator),
-      event_creator_(event_creator),
       bypass_stats_(bypass_stats),
-      tick_clock_(base::DefaultTickClock::GetInstance()),
-      io_data_(nullptr),
-      net_log_(net_log) {
+      io_data_(nullptr) {
   DCHECK(config_);
   DCHECK(configurator_);
-  DCHECK(event_creator_);
   DCHECK(bypass_stats_);
-  DCHECK(net_log_);
   // Constructed on the UI thread, but should be checked on the IO thread.
   thread_checker_.DetachFromThread();
 }
 
 DataReductionProxyDelegate::~DataReductionProxyDelegate() {
   DCHECK(thread_checker_.CalledOnValidThread());
-  net::NetworkChangeNotifier::RemoveIPAddressObserver(this);
 }
 
 void DataReductionProxyDelegate::InitializeOnIOThread(
     DataReductionProxyIOData* io_data) {
   DCHECK(io_data);
   DCHECK(thread_checker_.CalledOnValidThread());
-  net::NetworkChangeNotifier::AddIPAddressObserver(this);
   io_data_ = io_data;
 }
 
@@ -96,12 +85,10 @@ void DataReductionProxyDelegate::OnResolveProxy(
           : config_->GetProxiesForHttp();
 
   // Remove the proxies that are unsupported for this request.
-  proxies_for_http.erase(
-      std::remove_if(proxies_for_http.begin(), proxies_for_http.end(),
-                     [content_type](const DataReductionProxyServer& proxy) {
-                       return !proxy.SupportsResourceType(content_type);
-                     }),
-      proxies_for_http.end());
+  base::EraseIf(proxies_for_http,
+                [content_type](const DataReductionProxyServer& proxy) {
+                  return !proxy.SupportsResourceType(content_type);
+                });
 
   base::Optional<std::pair<bool /* is_secure_proxy */, bool /*is_core_proxy */>>
       warmup_proxy = config_->GetInFlightWarmupProxyDetails();
@@ -118,14 +105,11 @@ void DataReductionProxyDelegate::OnResolveProxy(
     bool is_core_proxy = warmup_proxy->second;
     // Remove the proxies with properties that do not match the properties of
     // the proxy that is being probed.
-    proxies_for_http.erase(
-        std::remove_if(proxies_for_http.begin(), proxies_for_http.end(),
-                       [is_secure_proxy,
-                        is_core_proxy](const DataReductionProxyServer& proxy) {
-                         return proxy.IsSecureProxy() != is_secure_proxy ||
-                                proxy.IsCoreProxy() != is_core_proxy;
-                       }),
-        proxies_for_http.end());
+    base::EraseIf(proxies_for_http, [is_secure_proxy, is_core_proxy](
+                                        const DataReductionProxyServer& proxy) {
+      return proxy.IsSecureProxy() != is_secure_proxy ||
+             proxy.IsCoreProxy() != is_core_proxy;
+    });
   }
 
   // If the proxy is disabled due to warmup URL fetch failing in the past,
@@ -161,22 +145,8 @@ void DataReductionProxyDelegate::OnResolveProxy(
 void DataReductionProxyDelegate::OnFallback(const net::ProxyServer& bad_proxy,
                                             int net_error) {
   DCHECK(thread_checker_.CalledOnValidThread());
-  if (bad_proxy.is_valid() &&
-      config_->FindConfiguredDataReductionProxy(bad_proxy)) {
-    event_creator_->AddProxyFallbackEvent(net_log_, bad_proxy.ToURI(),
-                                          net_error);
-  }
-
   if (bypass_stats_)
     bypass_stats_->OnProxyFallback(bad_proxy, net_error);
-}
-
-void DataReductionProxyDelegate::SetTickClockForTesting(
-    const base::TickClock* tick_clock) {
-  tick_clock_ = tick_clock;
-  // Update |last_network_change_time_| to the provided tick clock's current
-  // time for testing.
-  last_network_change_time_ = tick_clock_->NowTicks();
 }
 
 void DataReductionProxyDelegate::GetAlternativeProxy(
@@ -236,11 +206,6 @@ void DataReductionProxyDelegate::RecordQuicProxyStatus(
   DCHECK(thread_checker_.CalledOnValidThread());
   UMA_HISTOGRAM_ENUMERATION("DataReductionProxy.Quic.ProxyStatus", status,
                             QUIC_PROXY_STATUS_BOUNDARY);
-}
-
-void DataReductionProxyDelegate::OnIPAddressChanged() {
-  DCHECK(thread_checker_.CalledOnValidThread());
-  last_network_change_time_ = tick_clock_->NowTicks();
 }
 
 }  // namespace data_reduction_proxy

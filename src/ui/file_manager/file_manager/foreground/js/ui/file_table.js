@@ -20,9 +20,9 @@ FileTableColumnModel.prototype.__proto__ =
     cr.ui.table.TableColumnModel.prototype;
 
 /**
- * Minimum width of column.
+ * Minimum width of column. Note that is not marked private as it is used in the
+ * unit tests.
  * @const {number}
- * @private
  */
 FileTableColumnModel.MIN_WIDTH_ = 10;
 
@@ -351,7 +351,7 @@ FileTable.prototype.__proto__ = cr.ui.Table.prototype;
  * @param {!Element} self Table to decorate.
  * @param {!MetadataModel} metadataModel To retrieve
  *     metadata.
- * @param {VolumeManagerWrapper} volumeManager To retrieve volume info.
+ * @param {!VolumeManager} volumeManager To retrieve volume info.
  * @param {!importer.HistoryLoader} historyLoader
  * @param {boolean} fullPage True if it's full page File Manager,
  *                           False if a file open/save dialog.
@@ -899,6 +899,13 @@ FileTable.prototype.renderDate_ = function(entry, columnId, table) {
  * @private
  */
 FileTable.prototype.updateDate_ = function(div, entry) {
+  // For now, Team Drive roots have the incorrect modified date value. Hide it
+  // until we get the proper one (see https://crbug.com/861622).
+  if (util.isTeamDriveRoot(entry)) {
+    div.textContent = '--';
+    return;
+  }
+
   var item = this.metadataModel_.getCache(
       [entry], ['modificationTime', 'modificationByMeTime'])[0];
   var modTime = this.useModificationByMeTime_ ?
@@ -953,7 +960,11 @@ FileTable.prototype.updateListItemsMetadata = function(type, entries) {
       filelist.updateListItemExternalProps(
           listItem,
           this.metadataModel_.getCache(
-              [entry], ['availableOffline', 'customIconUrl', 'shared'])[0],
+              [entry],
+              [
+                'availableOffline', 'customIconUrl', 'shared', 'isMachineRoot',
+                'isExternalMedia'
+              ])[0],
           util.isTeamDriveRoot(entry));
     });
   } else if (type === 'import-history') {
@@ -976,6 +987,7 @@ FileTable.prototype.renderTableRow_ = function(baseRenderFunction, entry) {
   var sizeId = item.id + '-size';
   var dateId = item.id + '-date';
   filelist.decorateListItem(item, entry, this.metadataModel_);
+  item.setAttribute('file-name', entry.name);
   item.querySelector('.entry-name').setAttribute('id', nameId);
   item.querySelector('.size').setAttribute('id', sizeId);
   item.querySelector('.date').setAttribute('id', dateId);

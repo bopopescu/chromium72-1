@@ -7,16 +7,15 @@
 #include <algorithm>
 
 #include "build/build_config.h"
-#include "ui/base/material_design/material_design_controller.h"
 #include "ui/events/keycodes/keyboard_codes.h"
 #include "ui/views/background.h"
 #include "ui/views/border.h"
-#include "ui/views/controls/button/blue_button.h"
 #include "ui/views/controls/button/button.h"
 #include "ui/views/controls/button/checkbox.h"
 #include "ui/views/controls/button/image_button.h"
 #include "ui/views/controls/button/label_button.h"
 #include "ui/views/controls/button/md_text_button.h"
+#include "ui/views/event_utils.h"
 #include "ui/views/layout/grid_layout.h"
 #include "ui/views/layout/layout_provider.h"
 #include "ui/views/style/platform_style.h"
@@ -164,6 +163,13 @@ gfx::Size DialogClientView::GetMaximumSize() const {
   return max_size;
 }
 
+void DialogClientView::VisibilityChanged(View* starting_from, bool is_visible) {
+  ClientView::VisibilityChanged(starting_from, is_visible);
+
+  if (is_visible)
+    view_shown_time_stamp_ = base::TimeTicks::Now();
+}
+
 void DialogClientView::Layout() {
   button_row_container_->SetSize(
       gfx::Size(width(), button_row_container_->GetHeightForWidth(width())));
@@ -234,12 +240,19 @@ void DialogClientView::ButtonPressed(Button* sender, const ui::Event& event) {
   if (!GetDialogDelegate())
     return;
 
+  if (IsPossiblyUnintendedInteraction(view_shown_time_stamp_, event))
+    return;
+
   if (sender == ok_button_)
     AcceptWindow();
   else if (sender == cancel_button_)
     CancelWindow();
   else
     NOTREACHED();
+}
+
+void DialogClientView::ResetViewShownTimeStampForTesting() {
+  view_shown_time_stamp_ = base::TimeTicks();
 }
 
 ////////////////////////////////////////////////////////////////////////////////

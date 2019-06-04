@@ -28,19 +28,18 @@ static const int kMinFramesNeededToScale = 60;  // From quality_scaler.cc.
 static const size_t kDefaultTimeoutMs = 150;
 }  // namespace
 
-#define DO_SYNC(q, block) do {    \
-  rtc::Event event(false, false); \
-  q->PostTask([this, &event] {    \
-    block;                        \
-    event.Set();                  \
-  });                             \
-  RTC_CHECK(event.Wait(1000));    \
+#define DO_SYNC(q, block)        \
+  do {                           \
+    rtc::Event event;            \
+    q->PostTask([this, &event] { \
+      block;                     \
+      event.Set();               \
+    });                          \
+    RTC_CHECK(event.Wait(1000)); \
   } while (0)
-
 
 class MockAdaptationObserver : public AdaptationObserverInterface {
  public:
-  MockAdaptationObserver() : event(false, false) {}
   virtual ~MockAdaptationObserver() {}
 
   void AdaptUp(AdaptReason r) override {
@@ -87,7 +86,7 @@ class QualityScalerTest : public ::testing::Test,
   }
 
   ~QualityScalerTest() {
-    DO_SYNC(q_, {qs_.reset(nullptr);});
+    DO_SYNC(q_, { qs_.reset(nullptr); });
   }
 
   void TriggerScale(ScaleDirection scale_direction) {

@@ -20,12 +20,13 @@
 #include "rtc_base/refcount.h"
 #include "rtc_base/refcountedobject.h"
 #include "rtc_base/scoped_ref_ptr.h"
+#include "rtc_base/system/rtc_export.h"
 
 namespace webrtc {
 
 // A collection of stats.
 // This is accessible as a map from |RTCStats::id| to |RTCStats|.
-class RTCStatsReport : public rtc::RefCountInterface {
+class RTC_EXPORT RTCStatsReport : public rtc::RefCountInterface {
  public:
   typedef std::map<std::string, std::unique_ptr<const RTCStats>> StatsMap;
 
@@ -76,7 +77,7 @@ class RTCStatsReport : public rtc::RefCountInterface {
 
   // Gets the subset of stats that are of type |T|, where |T| is any class
   // descending from |RTCStats|.
-  template<typename T>
+  template <typename T>
   std::vector<const T*> GetStatsOfType() const {
     std::vector<const T*> stats_of_type;
     for (const RTCStats& stats : *this) {

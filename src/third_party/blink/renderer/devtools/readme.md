@@ -45,6 +45,7 @@ The frontend is available through a git subtree mirror on [chromium.googlesource
 * [Debugging protocol docs](https://developer.chrome.com/devtools/docs/debugger-protocol) and [Chrome Debugging Protocol Viewer](http://chromedevtools.github.io/debugger-protocol-viewer/)
 * [awesome-chrome-devtools](https://github.com/paulirish/awesome-chrome-devtools): recommended tools and resources
 * Contributing to DevTools: [bit.ly/devtools-contribution-guide](http://bit.ly/devtools-contribution-guide)
+* Contributing To Chrome DevTools Protocol: [docs.google.com](https://docs.google.com/document/d/1c-COD2kaK__5iMM5SEx-PzNA7HFmgttcYfOHHX0HaOM/edit?usp=sharing)
 
 ### Useful Commands
 
@@ -90,7 +91,7 @@ npm test -- -f --child-processes=16
 npm test -- --time-out-ms=6000000 <test_path>
 ```
 
-> **Tip**: [Learn about the test harness flags](https://chromium.googlesource.com/chromium/src/+/master/docs/testing/layout_tests.md#Test-Harness-Options)
+> **Tip**: [Learn about the test harness flags](https://chromium.googlesource.com/chromium/src/+/master/docs/testing/web_tests.md#Test-Harness-Options)
 
 #### `--fetch-content-shell`
 ```

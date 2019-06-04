@@ -19,10 +19,7 @@ struct ShellTestConfiguration {
   // The URL of the current layout test.
   url.mojom.Url test_url;
 
-  // True if pixel tests are enabled.
-  bool enable_pixel_dumping = true;
-
-  // True if tests can open external URLs
+  // True if tests can open external URLs.
   bool allow_external_pages;
 
   // The expected MD5 hash of the pixel results.
@@ -30,6 +27,10 @@ struct ShellTestConfiguration {
 
   // The initial size of the test window.
   gfx.mojom.Size initial_size;
+
+  // Whether the test is running in protocol mode.
+  // See TestInfo::protocol_mode in browser/layout_test/test_info_extractor.h.
+  bool protocol_mode;
 };
 
 // Results of a CaptureDump call.
@@ -43,12 +44,15 @@ struct LayoutTestDump {
   // Image dump.
   skia.mojom.Bitmap? pixels;
   string actual_pixel_hash;
+
+  // Selection rect dump.
+  gfx.mojom.Rect selection_rect;
 };
 
 interface LayoutTestControl {
   CaptureDump() => (LayoutTestDump result);
 
-  [Sync] CompositeWithRaster() => ();
+  CompositeWithRaster() => ();
 
   // Dumps the frame's contents into a string.
   DumpFrameLayout() => (string frame_layout_dump);

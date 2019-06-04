@@ -16,6 +16,7 @@
 #include "base/containers/flat_map.h"
 #include "base/lazy_instance.h"
 #include "base/macros.h"
+#include "base/no_destructor.h"
 #include "base/process/process.h"
 #include "base/strings/string16.h"
 #include "base/synchronization/lock.h"
@@ -82,6 +83,7 @@ class UI_BASE_EXPORT Clipboard : public base::ThreadChecker {
     bool Equals(const FormatType& other) const;
 
    private:
+    friend class base::NoDestructor<FormatType>;
     friend class Clipboard;
 
     // Platform-specific glue used internally by the Clipboard class. Each
@@ -139,6 +141,10 @@ class UI_BASE_EXPORT Clipboard : public base::ThreadChecker {
   // be two clipboards: one that lives on the UI thread and one that lives on
   // the IO thread.
   static Clipboard* GetForCurrentThread();
+
+  // Removes and transfers ownership of the current thread's clipboard to the
+  // caller. If the clipboard was never initialized, returns nullptr.
+  static std::unique_ptr<Clipboard> TakeForCurrentThread();
 
   // Does any work necessary prior to Chrome shutdown for the current thread.
   // All platforms but Windows have a single clipboard shared accross all

@@ -48,10 +48,6 @@ class DesktopNativeCursorManager;
 class DesktopWindowTreeHost;
 class DropHelper;
 class FocusManagerEventHandler;
-#if defined(USE_NEVA_APPRUNTIME)
-// Added for Neva, required for GetNativeEventDelegate.
-class NativeEventDelegate;
-#endif
 class TooltipManagerAura;
 class WindowReorderer;
 
@@ -106,11 +102,6 @@ class VIEWS_EXPORT DesktopNativeWidgetAura
   // Overridden from internal::NativeWidgetPrivate:
   gfx::NativeWindow GetNativeWindow() const override;
 
-#if defined(USE_NEVA_APPRUNTIME)
-  // Getter for Neva NativeEventDelegate.
-  virtual NativeEventDelegate* GetNativeEventDelegate() const;
-#endif
-
  protected:
   // Overridden from internal::NativeWidgetPrivate:
   void InitNativeWidget(const Widget::InitParams& params) override;
@@ -153,10 +144,9 @@ class VIEWS_EXPORT DesktopNativeWidgetAura
   void SetShape(std::unique_ptr<Widget::ShapeRects> shape) override;
   void Close() override;
   void CloseNow() override;
-  void Show() override;
+  void Show(ui::WindowShowState show_state,
+            const gfx::Rect& restore_bounds) override;
   void Hide() override;
-  void ShowMaximizedWithBounds(const gfx::Rect& restored_bounds) override;
-  void ShowWithWindowState(ui::WindowShowState state) override;
   bool IsVisible() const override;
   void Activate() override;
   void Deactivate() override;
@@ -173,6 +163,7 @@ class VIEWS_EXPORT DesktopNativeWidgetAura
   void SetFullscreen(bool fullscreen) override;
   bool IsFullscreen() const override;
   void SetOpacity(float opacity) override;
+  void SetAspectRatio(const gfx::SizeF& aspect_ratio) override;
   void FlashFrame(bool flash_frame) override;
   void RunShellDrag(View* view,
                     const ui::OSExchangeData& data,
@@ -182,6 +173,7 @@ class VIEWS_EXPORT DesktopNativeWidgetAura
   void SchedulePaintInRect(const gfx::Rect& rect) override;
   void SetCursor(gfx::NativeCursor cursor) override;
   bool IsMouseEventsEnabled() const override;
+  bool IsMouseButtonDown() const override;
   void ClearNativeFocus() override;
   gfx::Rect GetWorkAreaBoundsInScreen() const override;
   Widget::MoveLoopResult RunMoveLoop(
@@ -194,6 +186,7 @@ class VIEWS_EXPORT DesktopNativeWidgetAura
   void SetVisibilityAnimationTransition(
       Widget::VisibilityTransition transition) override;
   bool IsTranslucentWindowOpacitySupported() const override;
+  ui::GestureRecognizer* GetGestureRecognizer() override;
   void OnSizeConstraintsChanged() override;
   void RepostNativeEvent(gfx::NativeEvent native_event) override;
   std::string GetName() const override;
@@ -258,6 +251,9 @@ class VIEWS_EXPORT DesktopNativeWidgetAura
   void UpdateWindowTransparency();
 
   void RootWindowDestroyed();
+
+  // Notify the root view of our widget of a native accessibility event.
+  void NotifyAccessibilityEvent(ax::mojom::Event event_type);
 
   std::unique_ptr<aura::WindowTreeHost> host_;
   DesktopWindowTreeHost* desktop_window_tree_host_;

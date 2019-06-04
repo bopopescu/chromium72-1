@@ -117,7 +117,7 @@ std::string GenerateUniqueExtensionName() {
   return output.str();
 }
 
-void AddBackgroundPermission(ExtensionService* service,
+void AddBackgroundPermission(extensions::ExtensionService* service,
                              Extension* extension) {
   if (BackgroundApplicationListModel::IsBackgroundApp(*extension,
                                                       service->profile())) {
@@ -127,11 +127,11 @@ void AddBackgroundPermission(ExtensionService* service,
   scoped_refptr<Extension> temporary =
       CreateExtension(GenerateUniqueExtensionName(), true);
   extensions::PermissionsUpdater(service->profile())
-      .AddPermissions(extension,
-                      temporary->permissions_data()->active_permissions());
+      .AddPermissionsForTesting(
+          *extension, temporary->permissions_data()->active_permissions());
 }
 
-void RemoveBackgroundPermission(ExtensionService* service,
+void RemoveBackgroundPermission(extensions::ExtensionService* service,
                                 Extension* extension) {
   if (!BackgroundApplicationListModel::IsBackgroundApp(*extension,
                                                        service->profile())) {
@@ -327,7 +327,7 @@ TEST_F(BackgroundApplicationListModelTest, LateExtensionSystemReady) {
 typedef std::set<scoped_refptr<Extension> > ExtensionCollection;
 
 namespace {
-void AddExtension(ExtensionService* service,
+void AddExtension(extensions::ExtensionService* service,
                   ExtensionCollection* extensions,
                   BackgroundApplicationListModel* model,
                   size_t* expected,
@@ -351,13 +351,13 @@ void AddExtension(ExtensionService* service,
   ASSERT_EQ(*expected, model->size());
 }
 
-void RemoveExtension(ExtensionService* service,
+void RemoveExtension(extensions::ExtensionService* service,
                      ExtensionCollection* extensions,
                      BackgroundApplicationListModel* model,
                      size_t* expected,
                      size_t* count) {  // Maybe remove an extension.
   ExtensionRegistry* registry = ExtensionRegistry::Get(service->profile());
-  ExtensionCollection::iterator cursor = extensions->begin();
+  auto cursor = extensions->begin();
   if (cursor == extensions->end()) {
     // Nothing to remove.  Just verify accounting.
     ASSERT_EQ(0U, *count);
@@ -387,13 +387,13 @@ void RemoveExtension(ExtensionService* service,
   }
 }
 
-void TogglePermission(ExtensionService* service,
+void TogglePermission(extensions::ExtensionService* service,
                       ExtensionCollection* extensions,
                       BackgroundApplicationListModel* model,
                       size_t* expected,
                       size_t* count) {
   ExtensionRegistry* registry = ExtensionRegistry::Get(service->profile());
-  ExtensionCollection::iterator cursor = extensions->begin();
+  auto cursor = extensions->begin();
   if (cursor == extensions->end()) {
     // Nothing to toggle.  Just verify accounting.
     ASSERT_EQ(0U, *count);

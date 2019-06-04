@@ -7,7 +7,7 @@
 
 #include "base/macros.h"
 
-namespace net {
+namespace quic {
 
 class QuicDispatcher;
 class QuicServer;
@@ -17,15 +17,14 @@ namespace test {
 
 class QuicServerPeer {
  public:
+  QuicServerPeer() = delete;
+
   static bool SetSmallSocket(QuicServer* server);
   static QuicDispatcher* GetDispatcher(QuicServer* server);
   static void SetReader(QuicServer* server, QuicPacketReader* reader);
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(QuicServerPeer);
 };
 
 }  // namespace test
-}  // namespace net
+}  // namespace quic
 
 #endif  // NET_THIRD_PARTY_QUIC_TEST_TOOLS_QUIC_SERVER_PEER_H_

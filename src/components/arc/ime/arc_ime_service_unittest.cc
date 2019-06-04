@@ -11,14 +11,18 @@
 #include "base/strings/string16.h"
 #include "base/strings/utf_string_conversions.h"
 #include "components/arc/arc_bridge_service.h"
+#include "components/arc/common/ime.mojom.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/aura/test/test_window_delegate.h"
 #include "ui/aura/test/test_windows.h"
 #include "ui/aura/window.h"
 #include "ui/base/ime/composition_text.h"
 #include "ui/base/ime/dummy_input_method.h"
+#include "ui/base/ime/text_input_flags.h"
 #include "ui/events/event.h"
+#include "ui/events/keycodes/dom/dom_code.h"
 #include "ui/events/keycodes/keyboard_codes.h"
+#include "ui/keyboard/keyboard_controller.h"
 
 namespace arc {
 
@@ -60,10 +64,12 @@ class FakeArcImeBridge : public ArcImeBridge {
 
 class FakeInputMethod : public ui::DummyInputMethod {
  public:
-  FakeInputMethod() : client_(nullptr),
-                      count_show_ime_if_needed_(0),
-                      count_cancel_composition_(0),
-                      count_set_focused_text_input_client_(0) {}
+  FakeInputMethod()
+      : client_(nullptr),
+        count_show_ime_if_needed_(0),
+        count_cancel_composition_(0),
+        count_set_focused_text_input_client_(0),
+        count_on_text_input_type_changed_(0) {}
 
   void SetFocusedTextInputClient(ui::TextInputClient* client) override {
     count_set_focused_text_input_client_++;
@@ -74,9 +80,7 @@ class FakeInputMethod : public ui::DummyInputMethod {
     return client_;
   }
 
-  void ShowImeIfNeeded() override {
-    count_show_ime_if_needed_++;
-  }
+  void ShowVirtualKeyboardIfEnabled() override { count_show_ime_if_needed_++; }
 
   void CancelComposition(const ui::TextInputClient* client) override {
     if (client == client_)
@@ -86,6 +90,10 @@ class FakeInputMethod : public ui::DummyInputMethod {
   void DetachTextInputClient(ui::TextInputClient* client) override {
     if (client_ == client)
       client_ = nullptr;
+  }
+
+  void OnTextInputTypeChanged(const ui::TextInputClient* client) override {
+    count_on_text_input_type_changed_++;
   }
 
   int count_show_ime_if_needed() const {
@@ -100,11 +108,16 @@ class FakeInputMethod : public ui::DummyInputMethod {
     return count_set_focused_text_input_client_;
   }
 
+  int count_on_text_input_type_changed() const {
+    return count_on_text_input_type_changed_;
+  }
+
  private:
   ui::TextInputClient* client_;
   int count_show_ime_if_needed_;
   int count_cancel_composition_;
   int count_set_focused_text_input_client_;
+  int count_on_text_input_type_changed_;
 };
 
 // Helper class for testing the window focus tracking feature of ArcImeService,
@@ -114,11 +127,9 @@ class FakeArcWindowDelegate : public ArcImeService::ArcWindowDelegate {
   explicit FakeArcWindowDelegate(ui::InputMethod* input_method)
       : next_id_(0), test_input_method_(input_method) {}
 
-  bool IsExoWindow(const aura::Window* window) const override {
-    return IsArcWindow(window);
-  }
-
-  bool IsArcWindow(const aura::Window* window) const override {
+  bool IsInArcAppWindow(const aura::Window* window) const override {
+    if (!window)
+      return false;
     return arc_window_id_.count(window->id());
   }
 
@@ -164,6 +175,9 @@ class ArcImeServiceTest : public testing::Test {
 
   FakeArcWindowDelegate* fake_window_delegate_;  // Owned by |instance_|
   std::unique_ptr<aura::Window> arc_win_;
+
+  // Needed by ArcImeService.
+  keyboard::KeyboardController keyboard_controller_;
 
  private:
   void SetUp() override {
@@ -220,17 +234,19 @@ TEST_F(ArcImeServiceTest, HasCompositionText) {
   EXPECT_FALSE(instance_->HasCompositionText());
 }
 
-TEST_F(ArcImeServiceTest, ShowImeIfNeeded) {
+TEST_F(ArcImeServiceTest, ShowVirtualKeyboardIfEnabled) {
   instance_->OnWindowFocused(arc_win_.get(), nullptr);
 
-  instance_->OnTextInputTypeChanged(ui::TEXT_INPUT_TYPE_NONE);
+  instance_->OnTextInputTypeChanged(ui::TEXT_INPUT_TYPE_NONE, false,
+                                    mojom::TEXT_INPUT_FLAG_NONE);
   ASSERT_EQ(0, fake_input_method_->count_show_ime_if_needed());
 
   // Text input type change does not imply the show ime request.
-  instance_->OnTextInputTypeChanged(ui::TEXT_INPUT_TYPE_TEXT);
+  instance_->OnTextInputTypeChanged(ui::TEXT_INPUT_TYPE_TEXT, true,
+                                    mojom::TEXT_INPUT_FLAG_NONE);
   EXPECT_EQ(0, fake_input_method_->count_show_ime_if_needed());
 
-  instance_->ShowImeIfNeeded();
+  instance_->ShowVirtualKeyboardIfEnabled();
   EXPECT_EQ(1, fake_input_method_->count_show_ime_if_needed());
 }
 
@@ -246,13 +262,15 @@ TEST_F(ArcImeServiceTest, InsertChar) {
   instance_->OnWindowFocused(arc_win_.get(), nullptr);
 
   // When text input type is NONE, the event is not forwarded.
-  instance_->OnTextInputTypeChanged(ui::TEXT_INPUT_TYPE_NONE);
-  instance_->InsertChar(ui::KeyEvent('a', ui::VKEY_A, 0));
+  instance_->OnTextInputTypeChanged(ui::TEXT_INPUT_TYPE_NONE, false,
+                                    mojom::TEXT_INPUT_FLAG_NONE);
+  instance_->InsertChar(ui::KeyEvent('a', ui::VKEY_A, ui::DomCode::NONE, 0));
   EXPECT_EQ(0, fake_arc_ime_bridge_->count_send_insert_text());
 
   // When the bridge is accepting text inputs, forward the event.
-  instance_->OnTextInputTypeChanged(ui::TEXT_INPUT_TYPE_TEXT);
-  instance_->InsertChar(ui::KeyEvent('a', ui::VKEY_A, 0));
+  instance_->OnTextInputTypeChanged(ui::TEXT_INPUT_TYPE_TEXT, true,
+                                    mojom::TEXT_INPUT_FLAG_NONE);
+  instance_->InsertChar(ui::KeyEvent('a', ui::VKEY_A, ui::DomCode::NONE, 0));
   EXPECT_EQ(1, fake_arc_ime_bridge_->count_send_insert_text());
 }
 
@@ -340,9 +358,9 @@ TEST_F(ArcImeServiceTest, OnKeyboardAppearanceChanged) {
   EXPECT_FALSE(fake_arc_ime_bridge_->last_keyboard_availability());
 
   const gfx::Rect keyboard_bounds(0, 480, 1200, 320);
-  keyboard::KeyboardStateDescriptor desc1{true, false, keyboard_bounds,
-                                          keyboard_bounds, keyboard_bounds};
-  instance_->OnKeyboardAppearanceChanged(desc1);
+  keyboard::KeyboardStateDescriptor desc{true, keyboard_bounds, keyboard_bounds,
+                                         keyboard_bounds};
+  instance_->OnKeyboardAppearanceChanged(desc);
   EXPECT_EQ(keyboard_bounds, fake_arc_ime_bridge_->last_keyboard_bounds());
   EXPECT_TRUE(fake_arc_ime_bridge_->last_keyboard_availability());
 
@@ -354,7 +372,7 @@ TEST_F(ArcImeServiceTest, OnKeyboardAppearanceChanged) {
   instance_->SetOverrideDefaultDeviceScaleFactorForTesting(new_scale_factor);
 
   // Keyboard bounds passed to Android should be changed.
-  instance_->OnKeyboardAppearanceChanged(desc1);
+  instance_->OnKeyboardAppearanceChanged(desc);
   EXPECT_EQ(new_keyboard_bounds, fake_arc_ime_bridge_->last_keyboard_bounds());
   EXPECT_TRUE(fake_arc_ime_bridge_->last_keyboard_availability());
 }
@@ -384,6 +402,26 @@ TEST_F(ArcImeServiceTest, GetCaretBounds) {
   instance_->OnCursorRectChanged(new_cursor_rect, false);  // window coordinates
   EXPECT_EQ(cursor_rect + window_rect.OffsetFromOrigin(),
             instance_->GetCaretBounds());
+}
+
+TEST_F(ArcImeServiceTest, ShouldDoLearning) {
+  instance_->OnWindowFocused(arc_win_.get(), nullptr);
+
+  ASSERT_NE(ui::TEXT_INPUT_TYPE_TEXT, instance_->GetTextInputType());
+  instance_->OnTextInputTypeChanged(ui::TEXT_INPUT_TYPE_TEXT, true,
+                                    mojom::TEXT_INPUT_FLAG_NONE);
+  EXPECT_TRUE(instance_->ShouldDoLearning());
+  EXPECT_EQ(1, fake_input_method_->count_on_text_input_type_changed());
+
+  instance_->OnTextInputTypeChanged(ui::TEXT_INPUT_TYPE_TEXT, false,
+                                    mojom::TEXT_INPUT_FLAG_NONE);
+  EXPECT_FALSE(instance_->ShouldDoLearning());
+  EXPECT_EQ(2, fake_input_method_->count_on_text_input_type_changed());
+
+  instance_->OnTextInputTypeChanged(ui::TEXT_INPUT_TYPE_URL, false,
+                                    mojom::TEXT_INPUT_FLAG_NONE);
+  EXPECT_FALSE(instance_->ShouldDoLearning());
+  EXPECT_EQ(3, fake_input_method_->count_on_text_input_type_changed());
 }
 
 }  // namespace arc

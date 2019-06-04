@@ -27,11 +27,11 @@ const char kTestCrosGaiaIdMigration[] = "test-cros-gaia-id-migration";
 // all stored user keys will be converted to GaiaId)
 const char kTestCrosGaiaIdMigrationStarted[] = "started";
 
-// Controls whether enable assistant for locale.
+// Controls whether to enable assistant for locale.
 const base::Feature kAssistantFeatureForLocale{
     "ChromeOSAssistantForLocale", base::FEATURE_DISABLED_BY_DEFAULT};
 
-// Controls whether enable voice interaction feature.
+// Controls whether to enable voice interaction feature.
 const base::Feature kVoiceInteractionFeature{"ChromeOSVoiceInteraction",
                                              base::FEATURE_DISABLED_BY_DEFAULT};
 
@@ -47,9 +47,15 @@ const base::Feature kInstantTetheringBackgroundAdvertisementSupport{
 const base::Feature kAccountManager{"ChromeOSAccountManager",
                                     base::FEATURE_DISABLED_BY_DEFAULT};
 
-// Controls whether enable Google Assistant feature.
+// Controls whether to enable Google Assistant feature.
 const base::Feature kAssistantFeature{"ChromeOSAssistant",
                                       base::FEATURE_DISABLED_BY_DEFAULT};
+
+const base::Feature kShowLanguageToggleInDemoMode{
+    "ShowLanguageToggleInDemoMode", base::FEATURE_DISABLED_BY_DEFAULT};
+
+const base::Feature kShowPlayInDemoMode{"ShowPlayInDemoMode",
+                                        base::FEATURE_DISABLED_BY_DEFAULT};
 
 // Please keep the order of these switches synchronized with the header file
 // (i.e. in alphabetical order).
@@ -96,6 +102,17 @@ const char kArcAvailable[] = "arc-available";
 // Flag that forces ARC data be cleaned on each start.
 const char kArcDataCleanupOnStart[] = "arc-data-cleanup-on-start";
 
+// Flag that disables ARC app sync flow that installs some apps silently. Used
+// in autotests to resolve racy conditions.
+const char kArcDisableAppSync[] = "arc-disable-app-sync";
+
+// Flag that disables ARC Play Auto Install flow that installs set of predefined
+// apps silently. Used in autotests to resolve racy conditions.
+const char kArcDisablePlayAutoInstall[] = "arc-disable-play-auto-install";
+
+// Flag that forces the OptIn ui to be shown. Used in tests.
+const char kArcForceShowOptInUi[] = "arc-force-show-optin-ui";
+
 // Used in autotest to specifies how to handle packages cache. Can be
 // copy - copy resulting packages.xml to the temporary directory.
 // skip-copy - skip initial packages cache setup and copy resulting packages.xml
@@ -117,14 +134,6 @@ const char kArcTransitionMigrationRequired[] =
 
 // Screenshot testing: specifies the directoru where artifacts will be stored.
 const char kArtifactsDir[] = "artifacts-dir";
-
-// When wallpaper boot animation is not disabled this switch
-// is used to override OOBE/sign in WebUI init type.
-// Possible values: parallel|postpone. Default: parallel.
-const char kAshWebUIInit[] = "ash-webui-init";
-
-// Determines which Google Privacy CA to use for attestation.
-const char kAttestationServer[] = "attestation-server";
 
 // If this flag is set, it indicates that this device is a "Cellular First"
 // device. Cellular First devices use cellular telephone data networks as
@@ -162,9 +171,6 @@ const char kCrosRegionsModeOverride[] = "override";
 
 // Optional value for Data Saver prompt on cellular networks.
 const char kDataSaverPromptDemoMode[] = "demo";
-
-// Forces the stub implementation of dbus clients.
-const char kDbusStub[] = "dbus-stub";
 
 // Indicates that the wallpaper images specified by
 // kAshDefaultWallpaper{Large,Small} are OEM-specific (i.e. they are not
@@ -246,9 +252,6 @@ const char kDisableMultiDisplayLayout[] = "disable-multi-display-layout";
 const char kDisableNetworkPortalNotification[] =
     "disable-network-portal-notification";
 
-// Disables Settings based network configuration dialogs.
-const char kDisableNetworkSettingsConfig[] = "disable-network-settings-config";
-
 // Disables the new Korean IME in chrome://settings/languages.
 const char kDisableNewKoreanIme[] = "disable-new-korean-ime";
 
@@ -297,9 +300,6 @@ const char kDisableVolumeAdjustSound[] = "disable-volume-adjust-sound";
 // Disables wake on wifi features.
 const char kDisableWakeOnWifi[] = "disable-wake-on-wifi";
 
-// Disables zip archiver - unpacker.
-const char kDisableZipArchiverUnpacker[] = "disable-zip-archiver-unpacker";
-
 // DEPRECATED. Please use --arc-availability=officially-supported.
 // Enables starting the ARC instance upon session start.
 const char kEnableArc[] = "enable-arc";
@@ -307,14 +307,18 @@ const char kEnableArc[] = "enable-arc";
 // Enables "hide Skip button" for ARC setup in the OOBE flow.
 const char kEnableArcOobeOptinNoSkip[] = "enable-arc-oobe-optin-no-skip";
 
+// Enables ARC VM.
+const char kEnableArcVm[] = "enable-arcvm";
+
 // Enables using a random url for captive portal detection.
 const char kEnableCaptivePortalRandomUrl[] = "enable-captive-portal-random-url";
 
 // Enables the Cast Receiver.
 const char kEnableCastReceiver[] = "enable-cast-receiver";
 
-// Enables native ChromeVox support for Arc.
-const char kEnableChromeVoxArcSupport[] = "enable-chromevox-arc-support";
+// Enables the experimental chromevox developer option.
+const char kEnableChromevoxDeveloperOption[] =
+    "enable-chromevox-developer-option";
 
 // Enables consumer kiosk mode for Chrome OS.
 const char kEnableConsumerKiosk[] = "enable-consumer-kiosk";
@@ -322,16 +326,8 @@ const char kEnableConsumerKiosk[] = "enable-consumer-kiosk";
 // Enables Data Saver prompt on cellular networks.
 const char kEnableDataSaverPrompt[] = "enable-datasaver-prompt";
 
-// Enables demo mode feature.
-const char kEnableDemoMode[] = "enable-demo-mode";
-
 // Enables encryption migration for user's cryptohome to run latest Arc.
 const char kEnableEncryptionMigration[] = "enable-encryption-migration";
-
-// Shows additional checkboxes in Settings to enable Chrome OS accessibility
-// features that haven't launched yet.
-const char kEnableExperimentalAccessibilityFeatures[] =
-    "enable-experimental-accessibility-features";
 
 // Enables sharing assets for installed default apps.
 const char kEnableExtensionAssetsSharing[] = "enable-extension-assets-sharing";
@@ -342,9 +338,15 @@ const char kEnableFileManagerTouchMode[] = "enable-file-manager-touch-mode";
 // Enables animated transitions during first-run tutorial.
 const char kEnableFirstRunUITransitions[] = "enable-first-run-ui-transitions";
 
+// Enables the marketing opt-in screen in OOBE.
+const char kEnableMarketingOptInScreen[] = "enable-market-opt-in";
+
 // Enables notifications about captive portals in session.
 const char kEnableNetworkPortalNotification[] =
     "enable-network-portal-notification";
+
+// Enables offline demo mode. Demo mode still requires ARC++.
+const char kEnableOfflineDemoMode[] = "enable-offline-demo-mode";
 
 // Enables suggestions while typing on a physical keyboard.
 const char kEnablePhysicalKeyboardAutocorrect[] =
@@ -372,15 +374,6 @@ const char kEnableVideoPlayerChromecastSupport[] =
 
 // Enables the VoiceInteraction support.
 const char kEnableVoiceInteraction[] = "enable-voice-interaction";
-
-// Enables zip archiver - packer.
-const char kEnableZipArchiverPacker[] = "enable-zip-archiver-packer";
-
-// Disables zip archiver - packer.
-const char kDisableZipArchiverPacker[] = "disable-zip-archiver-packer";
-
-// Enables zip archiver - unpacker.
-const char kEnableZipArchiverUnpacker[] = "enable-zip-archiver-unpacker";
 
 // Disables ARC for managed accounts.
 const char kEnterpriseDisableArc[] = "enterprise-disable-arc";
@@ -411,9 +404,29 @@ const char kEnterpriseEnrollmentInitialModulus[] =
 const char kEnterpriseEnrollmentModulusLimit[] =
     "enterprise-enrollment-modulus-limit";
 
+// Interval in seconds between Chrome reading external metrics from
+// /var/lib/metrics/uma-events.
+const char kExternalMetricsCollectionInterval[] =
+    "external-metrics-collection-interval";
+
+// An absolute path to the chroot hosting the DriveFS to use. This is only used
+// when running on Linux, i.e. when IsRunningOnChromeOS() returns false.
+const char kFakeDriveFsLauncherChrootPath[] =
+    "fake-drivefs-launcher-chroot-path";
+
+// A relative path to socket to communicat with the fake DriveFS launcher within
+// the chroot specified by kFakeDriveFsLauncherChrootPath. This is only used
+// when running on Linux, i.e. when IsRunningOnChromeOS() returns false.
+const char kFakeDriveFsLauncherSocketPath[] =
+    "fake-drivefs-launcher-socket-path";
+
 // Passed to Chrome the first time that it's run after the system boots.
 // Not passed on restart after sign out.
 const char kFirstExecAfterBoot[] = "first-exec-after-boot";
+
+// Forces developer tools availability, no matter what values the enterprise
+// policies DeveloperToolsDisabled and DeveloperToolsAvailability are set to.
+const char kForceDevToolsAvailable[] = "force-devtools-available";
 
 // Forces first-run UI to be shown for every login.
 const char kForceFirstRunUI[] = "force-first-run-ui";
@@ -481,7 +494,8 @@ const char kLoginManager[] = "login-manager";
 // to pass user_id hash for primary user.
 const char kLoginProfile[] = "login-profile";
 
-// Specifies the user which is already logged in.
+// Specifies the user which is already logged in. If kStubCrosSettings is set,
+// this user will also be treated as the owner (see kStubCrosSettings).
 const char kLoginUser[] = "login-user";
 
 // The memory pressure threshold selection which is used to decide whether and
@@ -496,9 +510,6 @@ const char kNaturalScrollDefault[] = "enable-natural-scroll-default";
 // initially issued with ecrypfs encryption and have ARC (N+) available. For the
 // devices in other categories this flag must be missing.
 const char kNeedArcMigrationPolicyCheck[] = "need-arc-migration-policy-check";
-
-// Uses the redesigned wallpaper picker.
-const char kNewWallpaperPicker[] = "new-wallpaper-picker";
 
 // An optional comma-separated list of IDs of apps that can be used to take
 // notes. If unset, a hardcoded list is used instead.
@@ -534,43 +545,23 @@ const char kRlzPingDelay[] = "rlz-ping-delay";
 // App window previews when hovering over the shelf.
 const char kShelfHoverPreviews[] = "shelf-hover-previews";
 
-// Overrides network stub behavior. By default, ethernet, wifi and vpn are
-// enabled, and transitions occur instantaneously. Multiple options can be
-// comma separated (no spaces). Note: all options are in the format 'foo=x'.
-// Values are case sensitive and based on Shill names in service_constants.h.
-// See FakeShillManagerClient::SetInitialNetworkState for implementation.
-// Examples:
-//  'clear=1' - Clears all default configurations
-//  'wifi=on' - A wifi network is initially connected ('1' also works)
-//  'wifi=off' - Wifi networks are all initially disconnected ('0' also works)
-//  'wifi=disabled' - Wifi is initially disabled
-//  'wifi=none' - Wifi is unavailable
-//  'wifi=portal' - Wifi connection will be in Portal state
-//  'cellular=1' - Cellular is initially connected
-//  'cellular=LTE' - Cellular is initially connected, technology is LTE
-//  'interactive=3' - Interactive mode, connect/scan/etc requests take 3 secs
-const char kShillStub[] = "shill-stub";
-
 // If true, files in Android internal storage will be shown in Files app.
 const char kShowAndroidFilesInFilesApp[] = "show-android-files-in-files-app";
+
+// If true, files in Android internal storage will be hidden in Files app.
+const char kHideAndroidFilesInFilesApp[] = "hide-android-files-in-files-app";
 
 // If true, the developer tool overlay will be shown for the login/lock screen.
 // This makes it easier to test layout logic.
 const char kShowLoginDevOverlay[] = "show-login-dev-overlay";
 
-// Sends test messages on first call to RequestUpdate (stub only).
-const char kSmsTestMessages[] = "sms-test-messages";
-
 // Indicates that a stub implementation of CrosSettings that stores settings in
 // memory without signing should be used, treating current user as the owner.
-// This also modifies OwnerSettingsServiceChromeOS::HandlesSetting such that no
-// settings are handled by OwnerSettingsServiceChromeOS.
+// The DeviceSettingsProvider class is replaced with StubCrosSettingsProvider
+// for reading the settings from memory, and OwnerSettingsServiceChromeOS is
+// replaced with FakeOwnerSettingsService for writing the settings to memory.
 // This option is for testing the chromeos build of chrome on the desktop only.
 const char kStubCrosSettings[] = "stub-cros-settings";
-
-// Indicates that the system is running in dev mode. The dev mode probing is
-// done by session manager.
-const char kSystemDevMode[] = "system-developer-mode";
 
 // Enables testing for encryption migration UI.
 const char kTestEncryptionMigrationUI[] = "test-encryption-migration-ui";
@@ -578,6 +569,13 @@ const char kTestEncryptionMigrationUI[] = "test-encryption-migration-ui";
 // Overrides Tether with stub service. Provide integer arguments for the number
 // of fake networks desired, e.g. 'tether-stub=2'.
 const char kTetherStub[] = "tether-stub";
+
+// Tells the Chromebook to scan for a tethering host even if there is already a
+// wired connection. This allows end-to-end tests to be deployed over ethernet
+// without that connection preventing scans and thereby blocking the testing of
+// cases with no preexisting connection. Should be used only for testing.
+const char kTetherHostScansIgnoreWiredConnections[] =
+    "tether-host-scans-ignore-wired-connecitons";
 
 // List of locales supported by voice interaction.
 const char kVoiceInteractionLocales[] = "voice-interaction-supported-locales";
@@ -700,18 +698,6 @@ bool IsAssistantEnabled() {
   return IsAssistantFlagsEnabled();
 }
 
-bool IsZipArchiverUnpackerEnabled() {
-  // Enabled by default.
-  return !base::CommandLine::ForCurrentProcess()->HasSwitch(
-      kDisableZipArchiverUnpacker);
-}
-
-bool IsZipArchiverPackerEnabled() {
-  // Enabled by default.
-  return !base::CommandLine::ForCurrentProcess()->HasSwitch(
-      kDisableZipArchiverPacker);
-}
-
 bool IsSigninFrameClientCertsEnabled() {
   return !base::CommandLine::ForCurrentProcess()->HasSwitch(
       kDisableSigninFrameClientCerts);
@@ -720,16 +706,6 @@ bool IsSigninFrameClientCertsEnabled() {
 bool IsSigninFrameClientCertUserSelectionEnabled() {
   return !base::CommandLine::ForCurrentProcess()->HasSwitch(
       kDisableSigninFrameClientCertUserSelection);
-}
-
-bool IsNetworkSettingsConfigEnabled() {
-  return !base::CommandLine::ForCurrentProcess()->HasSwitch(
-      chromeos::switches::kDisableNetworkSettingsConfig);
-}
-
-bool AreExperimentalAccessibilityFeaturesEnabled() {
-  return base::CommandLine::ForCurrentProcess()->HasSwitch(
-      chromeos::switches::kEnableExperimentalAccessibilityFeatures);
 }
 
 bool ShouldHideActiveAppsFromShelf() {
@@ -744,6 +720,15 @@ bool ShouldShowShelfHoverPreviews() {
 bool IsInstantTetheringBackgroundAdvertisingSupported() {
   return base::FeatureList::IsEnabled(
       kInstantTetheringBackgroundAdvertisementSupport);
+}
+
+bool ShouldTetherHostScansIgnoreWiredConnections() {
+  return base::CommandLine::ForCurrentProcess()->HasSwitch(
+      kTetherHostScansIgnoreWiredConnections);
+}
+
+bool ShouldShowPlayStoreInDemoMode() {
+  return base::FeatureList::IsEnabled(kShowPlayInDemoMode);
 }
 
 }  // namespace switches

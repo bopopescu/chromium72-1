@@ -22,12 +22,12 @@ CFWL_WidgetMgr::CFWL_WidgetMgr(CXFA_FFApp* pAdapterNative)
 
 CFWL_WidgetMgr::~CFWL_WidgetMgr() {}
 
-CFWL_Widget* CFWL_WidgetMgr::GetParentWidget(CFWL_Widget* pWidget) const {
+CFWL_Widget* CFWL_WidgetMgr::GetParentWidget(const CFWL_Widget* pWidget) const {
   Item* pItem = GetWidgetMgrItem(pWidget);
   return pItem && pItem->pParent ? pItem->pParent->pWidget : nullptr;
 }
 
-CFWL_Widget* CFWL_WidgetMgr::GetOwnerWidget(CFWL_Widget* pWidget) const {
+CFWL_Widget* CFWL_WidgetMgr::GetOwnerWidget(const CFWL_Widget* pWidget) const {
   Item* pItem = GetWidgetMgrItem(pWidget);
   return pItem && pItem->pOwner ? pItem->pOwner->pWidget : nullptr;
 }
@@ -231,12 +231,10 @@ CFWL_Widget* CFWL_WidgetMgr::GetWidgetAtPoint(CFWL_Widget* parent,
   if (!parent)
     return nullptr;
 
-  CFX_PointF pos;
   CFWL_Widget* child = GetLastChildWidget(parent);
   while (child) {
-    if ((child->GetStates() & FWL_WGTSTATE_Invisible) == 0) {
-      pos = parent->GetMatrix().GetInverse().Transform(point);
-
+    if (child->IsVisible()) {
+      CFX_PointF pos = parent->GetMatrix().GetInverse().Transform(point);
       CFX_RectF bounds = child->GetWidgetRect();
       if (bounds.Contains(pos)) {
         pos -= bounds.TopLeft();
@@ -328,22 +326,16 @@ void CFWL_WidgetMgr::ResetRedrawCounts(CFWL_Widget* pWidget) {
 }
 
 CFWL_WidgetMgr::Item* CFWL_WidgetMgr::GetWidgetMgrItem(
-    CFWL_Widget* pWidget) const {
+    const CFWL_Widget* pWidget) const {
   auto it = m_mapWidgetItem.find(pWidget);
-  return it != m_mapWidgetItem.end() ? static_cast<Item*>(it->second.get())
-                                     : nullptr;
+  return it != m_mapWidgetItem.end() ? it->second.get() : nullptr;
 }
 
 bool CFWL_WidgetMgr::IsAbleNative(CFWL_Widget* pWidget) const {
-  if (!pWidget)
-    return false;
-  if (!pWidget->IsInstance(FWL_CLASS_Form))
+  if (!pWidget || !pWidget->IsForm())
     return false;
 
-  uint32_t dwStyles = pWidget->GetStyles();
-  return ((dwStyles & FWL_WGTSTYLE_WindowTypeMask) ==
-          FWL_WGTSTYLE_OverLapper) ||
-         (dwStyles & FWL_WGTSTYLE_Popup);
+  return pWidget->IsOverLapper() || pWidget->IsPopup();
 }
 
 void CFWL_WidgetMgr::GetAdapterPopupPos(CFWL_Widget* pWidget,
@@ -358,10 +350,11 @@ void CFWL_WidgetMgr::GetAdapterPopupPos(CFWL_Widget* pWidget,
 void CFWL_WidgetMgr::OnProcessMessageToForm(CFWL_Message* pMessage) {
   if (!pMessage)
     return;
-  if (!pMessage->m_pDstTarget)
+
+  CFWL_Widget* pDstWidget = pMessage->GetDstTarget();
+  if (!pDstWidget)
     return;
 
-  CFWL_Widget* pDstWidget = pMessage->m_pDstTarget;
   const CFWL_App* pApp = pDstWidget->GetOwnerApp();
   if (!pApp)
     return;
@@ -411,7 +404,7 @@ void CFWL_WidgetMgr::DrawChild(CFWL_Widget* parent,
   while (pNextChild) {
     CFWL_Widget* child = pNextChild;
     pNextChild = GetNextSiblingWidget(child);
-    if (child->GetStates() & FWL_WGTSTATE_Invisible)
+    if (!child->IsVisible())
       continue;
 
     CFX_RectF rtWidget = child->GetWidgetRect();
@@ -423,13 +416,12 @@ void CFWL_WidgetMgr::DrawChild(CFWL_Widget* parent,
     if (pMatrix)
       widgetMatrix.Concat(*pMatrix);
 
-    widgetMatrix.Translate(rtWidget.left, rtWidget.top, true);
+    widgetMatrix.TranslatePrepend(rtWidget.left, rtWidget.top);
 
     if (IFWL_WidgetDelegate* pDelegate = child->GetDelegate())
       pDelegate->OnDrawWidget(pGraphics, widgetMatrix);
 
     DrawChild(child, clipBounds, pGraphics, &widgetMatrix);
-    child = GetNextSiblingWidget(child);
   }
 }
 

@@ -205,12 +205,12 @@ NonClientFrameView* DialogDelegate::CreateNonClientFrameView(Widget* widget) {
 
 // static
 NonClientFrameView* DialogDelegate::CreateDialogFrameView(Widget* widget) {
+  LayoutProvider* provider = LayoutProvider::Get();
   BubbleFrameView* frame = new BubbleFrameView(
-      LayoutProvider::Get()->GetInsetsMetric(INSETS_DIALOG_TITLE),
-      gfx::Insets());
+      provider->GetInsetsMetric(INSETS_DIALOG_TITLE), gfx::Insets());
   const BubbleBorder::Shadow kShadow = BubbleBorder::DIALOG_SHADOW;
-  std::unique_ptr<BubbleBorder> border(
-      new BubbleBorder(BubbleBorder::FLOAT, kShadow, gfx::kPlaceholderColor));
+  std::unique_ptr<BubbleBorder> border = std::make_unique<BubbleBorder>(
+      BubbleBorder::FLOAT, kShadow, gfx::kPlaceholderColor);
   border->set_use_theme_background_color(true);
   frame->SetBubbleBorder(std::move(border));
   DialogDelegate* delegate = widget->widget_delegate()->AsDialogDelegate();

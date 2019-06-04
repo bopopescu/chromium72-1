@@ -9,7 +9,7 @@
 # verified. Inner bundle components are expected to be signed before this
 # script is called. See sign_versioned_dir.sh.in.
 
-set -eu
+set -eux
 
 # Environment sanitization. Set a known-safe PATH. Clear environment variables
 # that might impact the interpreter's operation. The |bash -p| invocation
@@ -24,19 +24,26 @@ export -n SHELLOPTS
 ME="$(basename "${0}")"
 readonly ME
 
-if [[ ${#} -ne 3 && ${#} -ne 4 ]]; then
-  echo "usage: ${ME} app_path codesign_keychain codesign_id \
-[--development]" >& 2
-  exit 1
-fi
-
-app_path="${1}"
-codesign_keychain="${2}"
-codesign_id="${3}"
+# Note that |is_development| is tested for string length, not value.
 is_development=
 
-if [[ ${#} == 4 && "${4}" == "--development" ]]; then
-  is_development=1
+if [[ ${#} -eq 4 || ${#} -eq 6 ]]; then
+  app_path="${1}"
+  codesign_keychain="${2}"
+  codesign_id="${3}"
+  if [[ "${4}" == "--development" || "${6}" == "--development" ]]; then
+    is_development=1
+  fi
+elif [[ ${#} -ne 5 ]]; then
+  echo "usage: ${ME} app_path codesign_keychain codesign_id \
+provisioning_profile entitlements_plist" >& 2
+  exit 1
+else
+  app_path="${1}"
+  codesign_keychain="${2}"
+  codesign_id="${3}"
+  provisioning_profile="${4}"
+  entitlements_plist="${5}"
 fi
 
 script_dir="$(dirname "${0}")"
@@ -45,7 +52,8 @@ source "${script_dir}/variables.sh"
 # Use custom resource rules for the browser application.
 browser_app_rules="${script_dir}/app_resource_rules.plist"
 
-versioned_dir="${app_path}/Contents/Versions/@VERSION@"
+contents_dir="${app_path}/Contents"
+versioned_dir="${contents_dir}/Versions/@VERSION@"
 
 browser_app="${app_path}"
 framework="${versioned_dir}/@MAC_PRODUCT_NAME@ Framework.framework"
@@ -54,6 +62,11 @@ crashpad_handler="${framework}/Helpers/crashpad_handler"
 helper_app="${versioned_dir}/@MAC_PRODUCT_NAME@ Helper.app"
 app_mode_loader_app="${framework}/Resources/app_mode_loader.app"
 app_mode_loader="${app_mode_loader_app}/Contents/MacOS/app_mode_loader"
+
+# Embed the supplied provisioning profile.
+if [[ -z "${is_development}" ]]; then
+  cp "${provisioning_profile}" "${contents_dir}/embedded.provisionprofile"
+fi
 
 requirement="\
 designated => \
@@ -71,6 +84,7 @@ codesign_cmd=(
   --resource-rules "${browser_app_rules}"
 )
 if [[ -z "${is_development}" ]]; then
+  codesign_cmd+=(--entitlements="${entitlements_plist}")
   codesign_cmd+=( -r="${requirement}" )
 fi
 "${codesign_cmd[@]}"

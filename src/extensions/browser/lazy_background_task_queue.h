@@ -61,7 +61,7 @@ class LazyBackgroundTaskQueue : public KeyedService,
   // Currently AddPendingTask has lots of consumers that depend on
   // ExtensionHost.
   void AddPendingTaskToDispatchEvent(
-      LazyContextId* context_id,
+      const LazyContextId* context_id,
       LazyContextTaskQueue::PendingTask task) override;
 
   // Adds a task to the queue for a given extension. If this is the first
@@ -122,6 +122,8 @@ class LazyBackgroundTaskQueue : public KeyedService,
 
   ScopedObserver<ExtensionRegistry, ExtensionRegistryObserver>
       extension_registry_observer_;
+
+  DISALLOW_COPY_AND_ASSIGN(LazyBackgroundTaskQueue);
 };
 
 }  // namespace extensions

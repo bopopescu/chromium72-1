@@ -20,10 +20,15 @@
 namespace ash {
 
 HoverHighlightView::HoverHighlightView(ViewClickListener* listener)
-    : ActionableView(nullptr, TrayPopupInkDropStyle::FILL_BOUNDS),
-      listener_(listener) {
+    : HoverHighlightView(listener, true) {}
+
+HoverHighlightView::HoverHighlightView(ViewClickListener* listener,
+                                       bool use_unified_theme)
+    : ActionableView(TrayPopupInkDropStyle::FILL_BOUNDS),
+      listener_(listener),
+      use_unified_theme_(use_unified_theme) {
   set_notify_enter_exit_on_child(true);
-  SetInkDropMode(InkDropHostView::InkDropMode::ON);
+  SetInkDropMode(InkDropMode::ON);
 }
 
 HoverHighlightView::~HoverHighlightView() = default;
@@ -76,7 +81,8 @@ void HoverHighlightView::SetSubText(const base::string16& sub_text) {
     tri_view_->AddView(TriView::Container::CENTER, sub_text_label_);
   }
 
-  TrayPopupItemStyle sub_style(TrayPopupItemStyle::FontStyle::CAPTION);
+  TrayPopupItemStyle sub_style(TrayPopupItemStyle::FontStyle::CAPTION,
+                               use_unified_theme_);
   sub_style.set_color_style(TrayPopupItemStyle::ColorStyle::INACTIVE);
   sub_style.SetupLabel(sub_text_label_);
   sub_text_label_->SetText(sub_text);
@@ -130,7 +136,7 @@ void HoverHighlightView::DoAddIconAndLabels(
   text_label_ = TrayPopupUtils::CreateDefaultLabel();
   text_label_->SetText(text);
   text_label_->SetEnabled(enabled());
-  TrayPopupItemStyle style(font_style);
+  TrayPopupItemStyle style(font_style, use_unified_theme_);
   style.SetupLabel(text_label_);
   tri_view_->AddView(TriView::Container::CENTER, text_label_);
   // By default, END container is invisible, so labels in the CENTER should have
@@ -158,7 +164,8 @@ void HoverHighlightView::AddLabelRow(const base::string16& text) {
   text_label_ = TrayPopupUtils::CreateDefaultLabel();
   text_label_->SetText(text);
 
-  TrayPopupItemStyle style(TrayPopupItemStyle::FontStyle::DETAILED_VIEW_LABEL);
+  TrayPopupItemStyle style(TrayPopupItemStyle::FontStyle::DETAILED_VIEW_LABEL,
+                           use_unified_theme_);
   style.SetupLabel(text_label_);
   tri_view_->AddView(TriView::Container::CENTER, text_label_);
 
@@ -187,6 +194,15 @@ void HoverHighlightView::Reset() {
   right_view_ = nullptr;
   tri_view_ = nullptr;
   is_populated_ = false;
+}
+
+void HoverHighlightView::OnSetTooltipText(const base::string16& tooltip_text) {
+  if (text_label_)
+    text_label_->SetTooltipText(tooltip_text);
+  if (sub_text_label_)
+    sub_text_label_->SetTooltipText(tooltip_text);
+  if (left_icon_)
+    left_icon_->set_tooltip_text(tooltip_text);
 }
 
 bool HoverHighlightView::PerformAction(const ui::Event& event) {

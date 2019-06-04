@@ -35,6 +35,7 @@
 
 #include "third_party/blink/renderer/platform/bindings/dom_data_store.h"
 #include "third_party/blink/renderer/platform/bindings/v8_per_isolate_data.h"
+#include "third_party/blink/renderer/platform/weborigin/security_origin.h"
 #include "third_party/blink/renderer/platform/wtf/hash_traits.h"
 #include "third_party/blink/renderer/platform/wtf/std_lib_extras.h"
 
@@ -53,11 +54,6 @@ static WorldMap& GetWorldMap() {
 }
 
 #if DCHECK_IS_ON()
-static bool IsIsolatedWorldId(int world_id) {
-  return DOMWrapperWorld::kMainWorldId < world_id &&
-         world_id < DOMWrapperWorld::kIsolatedWorldIdLimit;
-}
-
 static bool IsMainWorldId(int world_id) {
   return world_id == DOMWrapperWorld::kMainWorldId;
 }
@@ -84,7 +80,6 @@ DOMWrapperWorld::DOMWrapperWorld(v8::Isolate* isolate,
       break;
     case WorldType::kIsolated:
     case WorldType::kInspectorIsolated:
-    case WorldType::kGarbageCollector:
     case WorldType::kRegExp:
     case WorldType::kTesting:
     case WorldType::kForV8ContextSnapshotNonMain:
@@ -123,17 +118,6 @@ void DOMWrapperWorld::Trace(const ScriptWrappable* script_wrappable,
     DOMDataStore& data_store = world->DomDataStore();
     if (data_store.ContainsWrapper(script_wrappable))
       data_store.Trace(script_wrappable, visitor);
-  }
-}
-
-void DOMWrapperWorld::TraceWrappers(const ScriptWrappable* script_wrappable,
-                                    ScriptWrappableVisitor* visitor) {
-  // Marking for worlds other than the main world.
-  DCHECK(ThreadState::Current()->GetIsolate());
-  for (DOMWrapperWorld* world : GetWorldMap().Values()) {
-    DOMDataStore& data_store = world->DomDataStore();
-    if (data_store.ContainsWrapper(script_wrappable))
-      data_store.TraceWrappers(script_wrappable, visitor);
   }
 }
 
@@ -223,35 +207,6 @@ void DOMWrapperWorld::SetNonMainWorldHumanReadableName(
   IsolatedWorldHumanReadableNames().Set(world_id, human_readable_name);
 }
 
-typedef HashMap<int, bool> IsolatedWorldContentSecurityPolicyMap;
-static IsolatedWorldContentSecurityPolicyMap&
-IsolatedWorldContentSecurityPolicies() {
-  DCHECK(IsMainThread());
-  DEFINE_STATIC_LOCAL(IsolatedWorldContentSecurityPolicyMap, map, ());
-  return map;
-}
-
-bool DOMWrapperWorld::IsolatedWorldHasContentSecurityPolicy() {
-  DCHECK(this->IsIsolatedWorld());
-  IsolatedWorldContentSecurityPolicyMap& policies =
-      IsolatedWorldContentSecurityPolicies();
-  IsolatedWorldContentSecurityPolicyMap::iterator it =
-      policies.find(GetWorldId());
-  return it == policies.end() ? false : it->value;
-}
-
-void DOMWrapperWorld::SetIsolatedWorldContentSecurityPolicy(
-    int world_id,
-    const String& policy) {
-#if DCHECK_IS_ON()
-  DCHECK(IsIsolatedWorldId(world_id));
-#endif
-  if (!policy.IsEmpty())
-    IsolatedWorldContentSecurityPolicies().Set(world_id, true);
-  else
-    IsolatedWorldContentSecurityPolicies().erase(world_id);
-}
-
 void DOMWrapperWorld::RegisterDOMObjectHolderInternal(
     std::unique_ptr<DOMObjectHolderBase> holder_base) {
   DCHECK(!dom_object_holders_.Contains(holder_base.get()));
@@ -294,7 +249,6 @@ int DOMWrapperWorld::GenerateWorldIdForType(WorldType world_type) {
         return WorldId::kInvalidWorldId;
       return next_devtools_isolated_world_id++;
     }
-    case WorldType::kGarbageCollector:
     case WorldType::kRegExp:
     case WorldType::kTesting:
     case WorldType::kForV8ContextSnapshotNonMain:

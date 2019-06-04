@@ -45,8 +45,7 @@ RenderFrameProxyHost* RenderFrameProxyHost::FromID(int process_id,
                                                    int routing_id) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
   RoutingIDFrameProxyMap* frames = g_routing_id_frame_proxy_map.Pointer();
-  RoutingIDFrameProxyMap::iterator it = frames->find(
-      RenderFrameProxyHostID(process_id, routing_id));
+  auto it = frames->find(RenderFrameProxyHostID(process_id, routing_id));
   return it == frames->end() ? NULL : it->second;
 }
 
@@ -98,7 +97,7 @@ RenderFrameProxyHost::~RenderFrameProxyHost() {
   if (!destruction_callback_.is_null())
     std::move(destruction_callback_).Run();
 
-  if (GetProcess()->HasConnection()) {
+  if (GetProcess()->IsInitializedAndNotDead()) {
     // TODO(nasko): For now, don't send this IPC for top-level frames, as
     // the top-level RenderFrame will delete the RenderFrameProxy.
     // This can be removed once we don't have a swapped out state on
@@ -172,7 +171,7 @@ bool RenderFrameProxyHost::InitRenderFrameProxy() {
   // RenderFrame.  When that happens, the process will be reinitialized, and
   // all necessary proxies, including any of the ones we skipped here, will be
   // created by CreateProxiesForSiteInstance. See https://crbug.com/476846
-  if (!GetProcess()->HasConnection())
+  if (!GetProcess()->IsInitializedAndNotDead())
     return false;
 
   int parent_routing_id = MSG_ROUTING_NONE;
@@ -209,7 +208,7 @@ bool RenderFrameProxyHost::InitRenderFrameProxy() {
       frame_tree_node_->current_replication_state(),
       frame_tree_node_->devtools_frame_token());
 
-  render_frame_proxy_created_ = true;
+  set_render_frame_proxy_created(true);
 
   // For subframes, initialize the proxy's FrameOwnerProperties only if they
   // differ from default values.
@@ -274,7 +273,9 @@ void RenderFrameProxyHost::OnDetach() {
     bad_message::ReceivedBadMessage(GetProcess(), bad_message::RFPH_DETACH);
     return;
   }
-  frame_tree_node_->frame_tree()->RemoveFrame(frame_tree_node_);
+
+  if (frame_tree_node_->current_frame_host()->is_active())
+    frame_tree_node_->frame_tree()->RemoveFrame(frame_tree_node_);
 }
 
 void RenderFrameProxyHost::OnOpenURL(

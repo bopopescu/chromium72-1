@@ -8,18 +8,18 @@
 #include <string>
 
 #include "base/macros.h"
-#include "net/third_party/quic/core/quic_client_promised_info.h"
+#include "net/third_party/quic/core/http/quic_client_promised_info.h"
 #include "net/third_party/quic/core/quic_packets.h"
 #include "testing/gmock/include/gmock/gmock.h"
 
-namespace net {
+namespace quic {
 namespace test {
 
 class MockQuicClientPromisedInfo : public QuicClientPromisedInfo {
  public:
   MockQuicClientPromisedInfo(QuicSpdyClientSessionBase* session,
                              QuicStreamId id,
-                             std::string url);
+                             QuicString url);
   ~MockQuicClientPromisedInfo() override;
 
   MOCK_METHOD2(HandleClientRequest,
@@ -28,6 +28,6 @@ class MockQuicClientPromisedInfo : public QuicClientPromisedInfo {
 };
 
 }  // namespace test
-}  // namespace net
+}  // namespace quic
 
 #endif  // NET_THIRD_PARTY_QUIC_TEST_TOOLS_MOCK_QUIC_CLIENT_PROMISED_INFO_H_

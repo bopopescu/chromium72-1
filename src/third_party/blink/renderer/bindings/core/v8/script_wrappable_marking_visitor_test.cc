@@ -9,37 +9,135 @@
 #include "third_party/blink/renderer/bindings/core/v8/v8_binding_for_testing.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_gc_controller.h"
 #include "third_party/blink/renderer/core/testing/death_aware_script_wrappable.h"
+#include "third_party/blink/renderer/platform/bindings/name_client.h"
 #include "third_party/blink/renderer/platform/bindings/trace_wrapper_v8_reference.h"
 #include "third_party/blink/renderer/platform/bindings/v8_dom_wrapper.h"
 #include "third_party/blink/renderer/platform/bindings/v8_per_isolate_data.h"
 
 namespace blink {
 
-static void PreciselyCollectGarbage() {
+namespace {
+
+// Temporarily swaps out the underlying ScriptWrappableMarkingVisitor from a
+// given v8::Isolate. Gracefully finalized potentially running garbage
+// collections.
+class TemporaryScriptWrappableVisitorScope {
+  WTF_MAKE_NONCOPYABLE(TemporaryScriptWrappableVisitorScope);
+  STACK_ALLOCATED();
+
+ public:
+  TemporaryScriptWrappableVisitorScope(
+      v8::Isolate* isolate,
+      std::unique_ptr<ScriptWrappableMarkingVisitor> controller)
+      : isolate_(isolate), saved_controller_(std::move(controller)) {
+    // The save and restore logic assumes that V8 is interested in the
+    // wrapper tracing controller.
+    CHECK(!RuntimeEnabledFeatures::HeapUnifiedGarbageCollectionEnabled());
+    SwapWithV8PerIsolateDataVisitor();
+  }
+  ~TemporaryScriptWrappableVisitorScope() { SwapWithV8PerIsolateDataVisitor(); }
+
+  ScriptWrappableMarkingVisitor* CurrentVisitor() {
+    return V8PerIsolateData::From(isolate_)->GetScriptWrappableMarkingVisitor();
+  }
+
+ private:
+  void SwapWithV8PerIsolateDataVisitor() {
+    ScriptWrappableMarkingVisitor* current = CurrentVisitor();
+    if (current)
+      ScriptWrappableMarkingVisitor::PerformCleanup(isolate_);
+
+    V8PerIsolateData::From(isolate_)->SwapScriptWrappableMarkingVisitor(
+        saved_controller_);
+    isolate_->SetEmbedderHeapTracer(CurrentVisitor());
+  }
+
+  v8::Isolate* const isolate_;
+  std::unique_ptr<ScriptWrappableMarkingVisitor> saved_controller_;
+};
+
+class InterceptingScriptWrappableMarkingVisitor
+    : public blink::ScriptWrappableMarkingVisitor {
+ public:
+  InterceptingScriptWrappableMarkingVisitor()
+      : ScriptWrappableMarkingVisitor(ThreadState::Current()),
+        marked_wrappers_(new size_t(0)) {}
+  ~InterceptingScriptWrappableMarkingVisitor() override {
+    delete marked_wrappers_;
+  }
+
+  void Visit(const TraceWrapperV8Reference<v8::Value>&) override {
+    *marked_wrappers_ += 1;
+    // Do not actually mark this visitor, as this would call into v8, which
+    // would require executing an actual GC.
+  }
+
+  size_t NumberOfMarkedWrappers() const { return *marked_wrappers_; }
+
+  void Start() { TracePrologue(); }
+
+  void end() {
+    // Gracefully terminate tracing.
+    AdvanceTracing(std::numeric_limits<double>::infinity());
+    AbortTracingForTermination();
+  }
+
+ private:
+  size_t* marked_wrappers_;  // Indirection required because of const override.
+};
+
+class InterceptingScriptWrappableMarkingVisitorScope
+    : public TemporaryScriptWrappableVisitorScope {
+  WTF_MAKE_NONCOPYABLE(InterceptingScriptWrappableMarkingVisitorScope);
+  STACK_ALLOCATED();
+
+ public:
+  InterceptingScriptWrappableMarkingVisitorScope(v8::Isolate* isolate)
+      : TemporaryScriptWrappableVisitorScope(
+            isolate,
+            std::unique_ptr<InterceptingScriptWrappableMarkingVisitor>(
+                new InterceptingScriptWrappableMarkingVisitor())) {
+    Visitor()->Start();
+  }
+
+  virtual ~InterceptingScriptWrappableMarkingVisitorScope() {
+    Visitor()->end();
+  }
+
+  InterceptingScriptWrappableMarkingVisitor* Visitor() {
+    return reinterpret_cast<InterceptingScriptWrappableMarkingVisitor*>(
+        CurrentVisitor());
+  }
+};
+
+void PreciselyCollectGarbage() {
   ThreadState::Current()->CollectAllGarbage();
 }
 
-static void RunV8Scavenger(v8::Isolate* isolate) {
-  V8GCController::CollectGarbage(isolate, true);
-}
+}  // namespace
 
-static void RunV8FullGc(v8::Isolate* isolate) {
-  V8GCController::CollectGarbage(isolate, false);
-}
+// =============================================================================
+// Wrapper tracing tests for Blink handling. ===================================
+// =============================================================================
 
 TEST(ScriptWrappableMarkingVisitorTest,
      ScriptWrappableMarkingVisitorTracesWrappers) {
+  // Test depends on InterceptingScriptWrappableMarkingVisitorScope which is
+  // specialized for wrapper tracing.
+  if (RuntimeEnabledFeatures::HeapUnifiedGarbageCollectionEnabled())
+    return;
+
   V8TestingScope scope;
-  ScriptWrappableMarkingVisitor* visitor =
-      V8PerIsolateData::From(scope.GetIsolate())
-          ->GetScriptWrappableMarkingVisitor();
+
   DeathAwareScriptWrappable* target = DeathAwareScriptWrappable::Create();
   DeathAwareScriptWrappable* dependency = DeathAwareScriptWrappable::Create();
   target->SetWrappedDependency(dependency);
 
   // The graph needs to be set up before starting tracing as otherwise the
   // conservative write barrier would trigger.
-  visitor->TracePrologue();
+  InterceptingScriptWrappableMarkingVisitorScope intercepting_scope(
+      scope.GetIsolate());
+  ScriptWrappableMarkingVisitor* visitor = intercepting_scope.Visitor();
 
   HeapObjectHeader* target_header = HeapObjectHeader::FromPayload(target);
   HeapObjectHeader* dependency_header =
@@ -54,140 +152,24 @@ TEST(ScriptWrappableMarkingVisitorTest,
   visitor->RegisterV8Reference(pair);
   EXPECT_EQ(visitor->MarkingDeque()->size(), 1ul);
 
-  visitor->AdvanceTracing(
-      0, v8::EmbedderHeapTracer::AdvanceTracingActions(
-             v8::EmbedderHeapTracer::ForceCompletionAction::FORCE_COMPLETION));
+  visitor->AdvanceTracing(std::numeric_limits<double>::infinity());
   EXPECT_EQ(visitor->MarkingDeque()->size(), 0ul);
   EXPECT_TRUE(target_header->IsWrapperHeaderMarked());
   EXPECT_TRUE(dependency_header->IsWrapperHeaderMarked());
-
-  visitor->AbortTracing();
-}
-
-TEST(ScriptWrappableMarkingVisitorTest,
-     OilpanCollectObjectsNotReachableFromV8) {
-  V8TestingScope scope;
-  v8::Isolate* isolate = scope.GetIsolate();
-
-  {
-    v8::HandleScope handle_scope(isolate);
-    DeathAwareScriptWrappable* object = DeathAwareScriptWrappable::Create();
-    DeathAwareScriptWrappable::ObserveDeathsOf(object);
-
-    // Creates new V8 wrapper and associates it with global scope
-    ToV8(object, scope.GetContext()->Global(), isolate);
-  }
-
-  RunV8Scavenger(isolate);
-  RunV8FullGc(isolate);
-  PreciselyCollectGarbage();
-
-  EXPECT_TRUE(DeathAwareScriptWrappable::HasDied());
-}
-
-TEST(ScriptWrappableMarkingVisitorTest,
-     OilpanDoesntCollectObjectsReachableFromV8) {
-  V8TestingScope scope;
-  v8::Isolate* isolate = scope.GetIsolate();
-  v8::HandleScope handle_scope(isolate);
-  DeathAwareScriptWrappable* object = DeathAwareScriptWrappable::Create();
-  DeathAwareScriptWrappable::ObserveDeathsOf(object);
-
-  // Creates new V8 wrapper and associates it with global scope
-  ToV8(object, scope.GetContext()->Global(), isolate);
-
-  RunV8Scavenger(isolate);
-  RunV8FullGc(isolate);
-  PreciselyCollectGarbage();
-
-  EXPECT_FALSE(DeathAwareScriptWrappable::HasDied());
-}
-
-TEST(ScriptWrappableMarkingVisitorTest, V8ReportsLiveObjectsDuringScavenger) {
-  V8TestingScope scope;
-  v8::Isolate* isolate = scope.GetIsolate();
-  v8::HandleScope handle_scope(isolate);
-  DeathAwareScriptWrappable* object = DeathAwareScriptWrappable::Create();
-  DeathAwareScriptWrappable::ObserveDeathsOf(object);
-
-  v8::Local<v8::Value> wrapper =
-      ToV8(object, scope.GetContext()->Global(), isolate);
-  EXPECT_TRUE(wrapper->IsObject());
-  v8::Local<v8::Object> wrapper_object = wrapper->ToObject();
-  // V8 collects wrappers with unmodified maps (as they can be recreated
-  // without loosing any data if needed). We need to create some property on
-  // wrapper so V8 will not see it as unmodified.
-  EXPECT_TRUE(wrapper_object->CreateDataProperty(scope.GetContext(), 1, wrapper)
-                  .IsJust());
-
-  RunV8Scavenger(isolate);
-  PreciselyCollectGarbage();
-
-  EXPECT_FALSE(DeathAwareScriptWrappable::HasDied());
-}
-
-TEST(ScriptWrappableMarkingVisitorTest, V8ReportsLiveObjectsDuringFullGc) {
-  V8TestingScope scope;
-  v8::Isolate* isolate = scope.GetIsolate();
-  v8::HandleScope handle_scope(isolate);
-  DeathAwareScriptWrappable* object = DeathAwareScriptWrappable::Create();
-  DeathAwareScriptWrappable::ObserveDeathsOf(object);
-
-  ToV8(object, scope.GetContext()->Global(), isolate);
-
-  RunV8Scavenger(isolate);
-  RunV8FullGc(isolate);
-  PreciselyCollectGarbage();
-
-  EXPECT_FALSE(DeathAwareScriptWrappable::HasDied());
-}
-
-TEST(ScriptWrappableMarkingVisitorTest, OilpanClearsHeadersWhenObjectDied) {
-  V8TestingScope scope;
-
-  DeathAwareScriptWrappable* object = DeathAwareScriptWrappable::Create();
-  ScriptWrappableMarkingVisitor* visitor =
-      V8PerIsolateData::From(scope.GetIsolate())
-          ->GetScriptWrappableMarkingVisitor();
-  visitor->TracePrologue();
-  auto* header = HeapObjectHeader::FromPayload(object);
-  visitor->headers_to_unmark_.push_back(header);
-
-  PreciselyCollectGarbage();
-
-  EXPECT_FALSE(visitor->headers_to_unmark_.Contains(header));
-  visitor->AbortTracing();
-}
-
-TEST(ScriptWrappableMarkingVisitorTest,
-     OilpanClearsMarkingDequeWhenObjectDied) {
-  V8TestingScope scope;
-
-  DeathAwareScriptWrappable* object = DeathAwareScriptWrappable::Create();
-  ScriptWrappableMarkingVisitor* visitor =
-      V8PerIsolateData::From(scope.GetIsolate())
-          ->GetScriptWrappableMarkingVisitor();
-  visitor->TracePrologue();
-
-  visitor->TraceWrappersWithManualWriteBarrier(object);
-
-  EXPECT_EQ(visitor->MarkingDeque()->front().RawObjectPointer(), object);
-
-  PreciselyCollectGarbage();
-
-  EXPECT_EQ(visitor->MarkingDeque()->front().RawObjectPointer(), nullptr);
-
-  visitor->AbortTracing();
 }
 
 TEST(ScriptWrappableMarkingVisitorTest,
      MarkedObjectDoesNothingOnWriteBarrierHitWhenDependencyIsMarkedToo) {
+  // Test depends on InterceptingScriptWrappableMarkingVisitorScope which is
+  // specialized for wrapper tracing.
+  if (RuntimeEnabledFeatures::HeapUnifiedGarbageCollectionEnabled())
+    return;
+
   V8TestingScope scope;
 
-  ScriptWrappableMarkingVisitor* visitor =
-      V8PerIsolateData::From(scope.GetIsolate())
-          ->GetScriptWrappableMarkingVisitor();
-  visitor->TracePrologue();
+  InterceptingScriptWrappableMarkingVisitorScope intercepting_scope(
+      scope.GetIsolate());
+  ScriptWrappableMarkingVisitor* visitor = intercepting_scope.Visitor();
 
   DeathAwareScriptWrappable* target = DeathAwareScriptWrappable::Create();
   DeathAwareScriptWrappable* dependencies[] = {
@@ -206,17 +188,20 @@ TEST(ScriptWrappableMarkingVisitorTest,
   target->AddWrappedHashMapDependency(dependencies[2], dependencies[3]);
 
   EXPECT_TRUE(visitor->MarkingDeque()->IsEmpty());
-  visitor->AbortTracing();
 }
 
 TEST(ScriptWrappableMarkingVisitorTest,
      MarkedObjectMarksDependencyOnWriteBarrierHitWhenNotMarked) {
+  // Test depends on InterceptingScriptWrappableMarkingVisitorScope which is
+  // specialized for wrapper tracing.
+  if (RuntimeEnabledFeatures::HeapUnifiedGarbageCollectionEnabled())
+    return;
+
   V8TestingScope scope;
 
-  ScriptWrappableMarkingVisitor* visitor =
-      V8PerIsolateData::From(scope.GetIsolate())
-          ->GetScriptWrappableMarkingVisitor();
-  visitor->TracePrologue();
+  InterceptingScriptWrappableMarkingVisitorScope intercepting_scope(
+      scope.GetIsolate());
+  ScriptWrappableMarkingVisitor* visitor = intercepting_scope.Visitor();
 
   DeathAwareScriptWrappable* target = DeathAwareScriptWrappable::Create();
   DeathAwareScriptWrappable* dependencies[] = {
@@ -234,24 +219,19 @@ TEST(ScriptWrappableMarkingVisitorTest,
   for (int i = 0; i < 4; i++) {
     EXPECT_TRUE(visitor->MarkingDequeContains(dependencies[i]));
   }
-
-  visitor->AbortTracing();
 }
 
 namespace {
 
 class HandleContainer
-    : public blink::GarbageCollectedFinalized<HandleContainer>,
-      public blink::TraceWrapperBase {
+    : public blink::GarbageCollectedFinalized<HandleContainer> {
  public:
   static HandleContainer* Create() { return new HandleContainer(); }
   virtual ~HandleContainer() = default;
 
-  void Trace(blink::Visitor* visitor) {}
-  void TraceWrappers(ScriptWrappableVisitor* visitor) const override {
-    visitor->TraceWrappers(handle_.Cast<v8::Value>());
+  void Trace(blink::Visitor* visitor) {
+    visitor->Trace(handle_.Cast<v8::Value>());
   }
-  const char* NameInHeapSnapshot() const override { return "HandleContainer"; }
 
   void SetValue(v8::Isolate* isolate, v8::Local<v8::String> string) {
     handle_.Set(isolate, string);
@@ -263,66 +243,14 @@ class HandleContainer
   TraceWrapperV8Reference<v8::String> handle_;
 };
 
-class InterceptingScriptWrappableMarkingVisitor
-    : public blink::ScriptWrappableMarkingVisitor {
- public:
-  InterceptingScriptWrappableMarkingVisitor(v8::Isolate* isolate)
-      : ScriptWrappableMarkingVisitor(isolate),
-        marked_wrappers_(new size_t(0)) {}
-  ~InterceptingScriptWrappableMarkingVisitor() override {
-    delete marked_wrappers_;
-  }
-
-  void Visit(const TraceWrapperV8Reference<v8::Value>&) override {
-    *marked_wrappers_ += 1;
-    // Do not actually mark this visitor, as this would call into v8, which
-    // would require executing an actual GC.
-  }
-
-  size_t NumberOfMarkedWrappers() const { return *marked_wrappers_; }
-
-  void Start() { TracePrologue(); }
-
-  void end() {
-    // Gracefully terminate tracing.
-    AdvanceTracing(
-        0,
-        v8::EmbedderHeapTracer::AdvanceTracingActions(
-            v8::EmbedderHeapTracer::ForceCompletionAction::FORCE_COMPLETION));
-    AbortTracing();
-  }
-
- private:
-  size_t* marked_wrappers_;  // Indirection required because of const override.
-};
-
-class InterceptingScriptWrappableMarkingVisitorScope
-    : public V8PerIsolateData::TemporaryScriptWrappableVisitorScope {
-  WTF_MAKE_NONCOPYABLE(InterceptingScriptWrappableMarkingVisitorScope);
-  STACK_ALLOCATED();
-
- public:
-  InterceptingScriptWrappableMarkingVisitorScope(v8::Isolate* isolate)
-      : V8PerIsolateData::TemporaryScriptWrappableVisitorScope(
-            isolate,
-            std::unique_ptr<InterceptingScriptWrappableMarkingVisitor>(
-                new InterceptingScriptWrappableMarkingVisitor(isolate))) {
-    Visitor()->Start();
-  }
-
-  virtual ~InterceptingScriptWrappableMarkingVisitorScope() {
-    Visitor()->end();
-  }
-
-  InterceptingScriptWrappableMarkingVisitor* Visitor() {
-    return reinterpret_cast<InterceptingScriptWrappableMarkingVisitor*>(
-        CurrentVisitor());
-  }
-};
-
 }  // namespace
 
 TEST(ScriptWrappableMarkingVisitorTest, WriteBarrierOnUnmarkedContainer) {
+  // Test depends on InterceptingScriptWrappableMarkingVisitorScope which is
+  // specialized for wrapper tracing.
+  if (RuntimeEnabledFeatures::HeapUnifiedGarbageCollectionEnabled())
+    return;
+
   V8TestingScope scope;
   InterceptingScriptWrappableMarkingVisitorScope visitor_scope(
       scope.GetIsolate());
@@ -341,6 +269,11 @@ TEST(ScriptWrappableMarkingVisitorTest, WriteBarrierOnUnmarkedContainer) {
 }
 
 TEST(ScriptWrappableMarkingVisitorTest, WriteBarrierTriggersOnMarkedContainer) {
+  // Test depends on InterceptingScriptWrappableMarkingVisitorScope which is
+  // specialized for wrapper tracing.
+  if (RuntimeEnabledFeatures::HeapUnifiedGarbageCollectionEnabled())
+    return;
+
   V8TestingScope scope;
   InterceptingScriptWrappableMarkingVisitorScope visitor_scope(
       scope.GetIsolate());
@@ -362,9 +295,8 @@ TEST(ScriptWrappableMarkingVisitorTest, VtableAtObjectStart) {
   // at the start of a ScriptWrappableMarkingVisitor object. We do this to
   // mitigate potential problems that could be caused by LTO when passing
   // v8::EmbedderHeapTracer across the API boundary.
-  V8TestingScope scope;
   std::unique_ptr<blink::ScriptWrappableMarkingVisitor> visitor(
-      new ScriptWrappableMarkingVisitor(scope.GetIsolate()));
+      new ScriptWrappableMarkingVisitor(ThreadState::Current()));
   CHECK_EQ(
       static_cast<void*>(visitor.get()),
       static_cast<void*>(dynamic_cast<v8::EmbedderHeapTracer*>(visitor.get())));
@@ -372,6 +304,12 @@ TEST(ScriptWrappableMarkingVisitorTest, VtableAtObjectStart) {
 
 TEST(ScriptWrappableMarkingVisitor, WriteBarrierForScriptWrappable) {
   // Regression test for crbug.com/702490.
+
+  // Test depends on InterceptingScriptWrappableMarkingVisitorScope which is
+  // specialized for wrapper tracing.
+  if (RuntimeEnabledFeatures::HeapUnifiedGarbageCollectionEnabled())
+    return;
+
   V8TestingScope scope;
   InterceptingScriptWrappableMarkingVisitorScope visitor_scope(
       scope.GetIsolate());
@@ -396,10 +334,12 @@ TEST(ScriptWrappableMarkingVisitor, WriteBarrierForScriptWrappable) {
 }
 
 TEST(ScriptWrappableMarkingVisitorTest, WriteBarrierOnHeapVectorSwap1) {
+  // Test depends on InterceptingScriptWrappableMarkingVisitorScope which is
+  // specialized for wrapper tracing.
+  if (RuntimeEnabledFeatures::HeapUnifiedGarbageCollectionEnabled())
+    return;
+
   V8TestingScope scope;
-  ScriptWrappableMarkingVisitor* visitor =
-      V8PerIsolateData::From(scope.GetIsolate())
-          ->GetScriptWrappableMarkingVisitor();
 
   HeapVector<DeathAwareScriptWrappable::Wrapper> vector1;
   DeathAwareScriptWrappable* entry1 = DeathAwareScriptWrappable::Create();
@@ -408,22 +348,24 @@ TEST(ScriptWrappableMarkingVisitorTest, WriteBarrierOnHeapVectorSwap1) {
   DeathAwareScriptWrappable* entry2 = DeathAwareScriptWrappable::Create();
   vector2.push_back(entry2);
 
-  visitor->TracePrologue();
+  InterceptingScriptWrappableMarkingVisitorScope intercepting_scope(
+      scope.GetIsolate());
+  ScriptWrappableMarkingVisitor* visitor = intercepting_scope.Visitor();
 
   EXPECT_TRUE(visitor->MarkingDeque()->IsEmpty());
   swap(vector1, vector2);
 
   EXPECT_TRUE(visitor->MarkingDequeContains(entry1));
   EXPECT_TRUE(visitor->MarkingDequeContains(entry2));
-
-  visitor->AbortTracing();
 }
 
 TEST(ScriptWrappableMarkingVisitorTest, WriteBarrierOnHeapVectorSwap2) {
+  // Test depends on InterceptingScriptWrappableMarkingVisitorScope which is
+  // specialized for wrapper tracing.
+  if (RuntimeEnabledFeatures::HeapUnifiedGarbageCollectionEnabled())
+    return;
+
   V8TestingScope scope;
-  ScriptWrappableMarkingVisitor* visitor =
-      V8PerIsolateData::From(scope.GetIsolate())
-          ->GetScriptWrappableMarkingVisitor();
 
   HeapVector<DeathAwareScriptWrappable::Wrapper> vector1;
   DeathAwareScriptWrappable* entry1 = DeathAwareScriptWrappable::Create();
@@ -432,7 +374,9 @@ TEST(ScriptWrappableMarkingVisitorTest, WriteBarrierOnHeapVectorSwap2) {
   DeathAwareScriptWrappable* entry2 = DeathAwareScriptWrappable::Create();
   vector2.push_back(entry2);
 
-  visitor->TracePrologue();
+  InterceptingScriptWrappableMarkingVisitorScope intercepting_scope(
+      scope.GetIsolate());
+  ScriptWrappableMarkingVisitor* visitor = intercepting_scope.Visitor();
 
   EXPECT_TRUE(visitor->MarkingDeque()->IsEmpty());
   swap(vector1, vector2);
@@ -440,8 +384,6 @@ TEST(ScriptWrappableMarkingVisitorTest, WriteBarrierOnHeapVectorSwap2) {
   // Only entry2 is held alive by TraceWrapperMember, so we only expect this
   // barrier to fire.
   EXPECT_TRUE(visitor->MarkingDequeContains(entry2));
-
-  visitor->AbortTracing();
 }
 
 namespace {
@@ -451,9 +393,7 @@ class Mixin : public GarbageCollectedMixin {
   explicit Mixin(DeathAwareScriptWrappable* wrapper_in_mixin)
       : wrapper_in_mixin_(wrapper_in_mixin) {}
 
-  void TraceWrappers(ScriptWrappableVisitor* visitor) const {
-    visitor->TraceWrappers(wrapper_in_mixin_);
-  }
+  void Trace(Visitor* visitor) override { visitor->Trace(wrapper_in_mixin_); }
 
  protected:
   DeathAwareScriptWrappable::Wrapper wrapper_in_mixin_;
@@ -465,7 +405,7 @@ class ClassWithField {
 };
 
 class Base : public blink::GarbageCollected<Base>,
-             public blink::TraceWrapperBase,
+             public NameClient,  // Force vtable on Base.
              public ClassWithField,
              public Mixin {
   USING_GARBAGE_COLLECTED_MIXIN(Base);
@@ -476,9 +416,9 @@ class Base : public blink::GarbageCollected<Base>,
     return new Base(wrapper_in_base, wrapper_in_mixin);
   }
 
-  void TraceWrappers(ScriptWrappableVisitor* visitor) const override {
-    visitor->TraceWrappers(wrapper_in_base_);
-    Mixin::TraceWrappers(visitor);
+  void Trace(Visitor* visitor) override {
+    visitor->Trace(wrapper_in_base_);
+    Mixin::Trace(visitor);
   }
 
   const char* NameInHeapSnapshot() const override { return "HandleContainer"; }
@@ -497,10 +437,12 @@ class Base : public blink::GarbageCollected<Base>,
 }  // namespace
 
 TEST(ScriptWrappableMarkingVisitorTest, MixinTracing) {
+  // Test depends on InterceptingScriptWrappableMarkingVisitorScope which is
+  // specialized for wrapper tracing.
+  if (RuntimeEnabledFeatures::HeapUnifiedGarbageCollectionEnabled())
+    return;
+
   V8TestingScope scope;
-  ScriptWrappableMarkingVisitor* visitor =
-      V8PerIsolateData::From(scope.GetIsolate())
-          ->GetScriptWrappableMarkingVisitor();
 
   DeathAwareScriptWrappable* base_wrapper = DeathAwareScriptWrappable::Create();
   DeathAwareScriptWrappable* mixin_wrapper =
@@ -513,7 +455,9 @@ TEST(ScriptWrappableMarkingVisitorTest, MixinTracing) {
   // Make sure that mixin does not point to the object header.
   EXPECT_NE(static_cast<void*>(base), static_cast<void*>(mixin));
 
-  visitor->TracePrologue();
+  InterceptingScriptWrappableMarkingVisitorScope intercepting_scope(
+      scope.GetIsolate());
+  ScriptWrappableMarkingVisitor* visitor = intercepting_scope.Visitor();
 
   EXPECT_TRUE(visitor->MarkingDeque()->IsEmpty());
 
@@ -523,9 +467,7 @@ TEST(ScriptWrappableMarkingVisitorTest, MixinTracing) {
   EXPECT_FALSE(visitor->MarkingDeque()->IsEmpty());
   EXPECT_TRUE(visitor->MarkingDequeContains(base));
 
-  visitor->AdvanceTracing(
-      0, v8::EmbedderHeapTracer::AdvanceTracingActions(
-             v8::EmbedderHeapTracer::ForceCompletionAction::FORCE_COMPLETION));
+  visitor->AdvanceTracing(std::numeric_limits<double>::infinity());
   EXPECT_EQ(visitor->MarkingDeque()->size(), 0ul);
   EXPECT_TRUE(base_header->IsWrapperHeaderMarked());
   EXPECT_TRUE(
@@ -534,7 +476,50 @@ TEST(ScriptWrappableMarkingVisitorTest, MixinTracing) {
       HeapObjectHeader::FromPayload(mixin_wrapper)->IsWrapperHeaderMarked());
 
   mixin_handle = nullptr;
-  visitor->AbortTracing();
+}
+
+TEST(ScriptWrappableMarkingVisitorTest, OilpanClearsHeadersWhenObjectDied) {
+  // This test depends on cleanup callbacks that are only fired when wrapper
+  // tracing is enabled.
+  if (RuntimeEnabledFeatures::HeapUnifiedGarbageCollectionEnabled())
+    return;
+
+  V8TestingScope scope;
+
+  DeathAwareScriptWrappable* object = DeathAwareScriptWrappable::Create();
+  InterceptingScriptWrappableMarkingVisitorScope intercepting_scope(
+      scope.GetIsolate());
+  ScriptWrappableMarkingVisitor* visitor = intercepting_scope.Visitor();
+  auto* header = HeapObjectHeader::FromPayload(object);
+  visitor->headers_to_unmark_.push_back(header);
+  object = nullptr;
+
+  PreciselyCollectGarbage();
+
+  EXPECT_FALSE(visitor->headers_to_unmark_.Contains(header));
+}
+
+TEST(ScriptWrappableMarkingVisitorTest,
+     OilpanClearsMarkingDequeWhenObjectDied) {
+  // This test depends on cleanup callbacks that are only fired when wrapper
+  // tracing is enabled.
+  if (RuntimeEnabledFeatures::HeapUnifiedGarbageCollectionEnabled())
+    return;
+
+  V8TestingScope scope;
+
+  DeathAwareScriptWrappable* object = DeathAwareScriptWrappable::Create();
+  InterceptingScriptWrappableMarkingVisitorScope intercepting_scope(
+      scope.GetIsolate());
+  ScriptWrappableMarkingVisitor* visitor = intercepting_scope.Visitor();
+
+  visitor->TraceWithWrappers(object);
+
+  EXPECT_EQ(visitor->MarkingDeque()->front().RawObjectPointer(), object);
+
+  PreciselyCollectGarbage();
+
+  EXPECT_EQ(visitor->MarkingDeque()->front().RawObjectPointer(), nullptr);
 }
 
 }  // namespace blink

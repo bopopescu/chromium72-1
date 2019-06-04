@@ -74,7 +74,7 @@ protected:
 
     void onDraw(SkCanvas* canvas) override {
 
-        canvas->drawColor(sk_tool_utils::color_to_565(SK_ColorGRAY));
+        canvas->drawColor(SK_ColorGRAY);
 
         SkPaint paint;
         paint.setTypeface(emojiFont.typeface);
@@ -82,7 +82,7 @@ protected:
 
         // draw text at different point sizes
         constexpr SkScalar textSizes[] = { 10, 30, 50, };
-        SkPaint::FontMetrics metrics;
+        SkFontMetrics metrics;
         SkScalar y = 0;
         for (const bool& fakeBold : { false, true }) {
             paint.setFakeBoldText(fakeBold);

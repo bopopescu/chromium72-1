@@ -38,7 +38,9 @@ struct VIEWS_EXPORT MenuConfig {
   // Color for the arrow to scroll bookmarks.
   SkColor arrow_color;
 
-  // Menu border sizes.
+  // Menu border sizes. The vertical border size does not apply to menus with
+  // rounded corners - those menus always use the corner radius as the vertical
+  // border size.
   int menu_vertical_border_size;
   int menu_horizontal_border_size;
 
@@ -64,23 +66,17 @@ struct VIEWS_EXPORT MenuConfig {
   int minimum_container_item_height;
   int minimum_menu_width;
 
-  // Margins between the left of the item and the icon.
-  int item_left_margin;
+  // Horizontal padding between components in a menu item.
+  int item_horizontal_padding;
 
-  // Margins between the left of the touchable item and the icon.
-  int touchable_item_left_margin;
+  // Horizontal padding between components in a touchable menu item.
+  int touchable_item_horizontal_padding;
 
   // Padding between the label and submenu arrow.
   int label_to_arrow_padding;
 
   // Padding between the arrow and the edge.
   int arrow_to_edge_padding;
-
-  // Padding between the icon and label.
-  int icon_to_label_padding;
-
-  // Padding between the icon and label for touchable menu items.
-  int touchable_icon_to_label_padding;
 
   // The icon size used for icons in touchable menu items.
   int touchable_icon_size;
@@ -126,10 +122,6 @@ struct VIEWS_EXPORT MenuConfig {
 
   // Height of the scroll arrow.
   int scroll_arrow_height;
-
-  // Padding between the label and minor text. Only used if there is an
-  // accelerator or sublabel.
-  int label_to_minor_text_padding;
 
   // Minimum height of menu item.
   int item_min_height;
@@ -204,6 +196,9 @@ struct VIEWS_EXPORT MenuConfig {
 
   // Whether to show accelerators in context menus.
   bool show_context_menu_accelerators;
+
+  // Whether all types of menus use prefix selection for items.
+  bool all_menus_use_prefix_selection;
 
  private:
   // Configures a MenuConfig as appropriate for the current platform.

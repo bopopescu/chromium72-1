@@ -63,7 +63,8 @@ _TEST_DEPRECATED_PROPERTIES = [
     'masterid',
     'stoppage_alert',
     'code',
-    'command_line'
+    'command_line',
+    'monitored'
 ]
 _TEST_EXCLUDE = _TEST_COMPUTED_PROPERTIES + _TEST_DEPRECATED_PROPERTIES
 
@@ -295,6 +296,8 @@ def _MigrateTestCreateTest(old_test_key, new_test_key):
       graph_data.TestMetadata, old_test_key.get(), new_test_key.id(),
       None, _TEST_EXCLUDE)
 
+  yield new_test_entity.UpdateSheriffAsync()
+
   yield (
       new_test_entity.put_async(),
       _MigrateTestScheduleChildTests(old_test_key, new_test_key))
@@ -415,8 +418,9 @@ def _MigrateAnomalies(old_parent_key, new_parent_key):
   Returns:
     A list of Future objects for Anomaly entities to update.
   """
-  anomalies_to_update = yield anomaly.Anomaly.GetAlertsForTestAsync(
-      old_parent_key, limit=_MAX_DATASTORE_PUTS_PER_PUT_MULTI_CALL)
+  anomalies_to_update, _, _ = yield anomaly.Anomaly.QueryAsync(
+      test=old_parent_key,
+      limit=_MAX_DATASTORE_PUTS_PER_PUT_MULTI_CALL)
   if not anomalies_to_update:
     raise ndb.Return([])
 
@@ -448,6 +452,9 @@ def _MigrateHistogramData(old_parent_key, new_parent_key):
       _MigrateHistogramClassData(
           histogram.Histogram, old_parent_key, new_parent_key),
   )
+
+  if not any(result):
+    yield histogram.SparseDiagnostic.FixDiagnostics(new_parent_key)
 
   raise ndb.Return(any(result))
 

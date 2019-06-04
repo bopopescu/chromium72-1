@@ -38,21 +38,19 @@
 
 namespace blink {
 
-static const double kAnimationFrameDelay = 1.0 / 60;
+static constexpr TimeDelta kAnimationFrameDelay =
+    TimeDelta::FromSecondsD(1.0 / 60);
 
 SVGImageChromeClient::SVGImageChromeClient(SVGImage* image)
     : image_(image),
       animation_timer_(std::make_unique<TaskRunnerTimer<SVGImageChromeClient>>(
-          blink::Platform::Current()
-              ->CurrentThread()
-              ->Scheduler()
-              ->CompositorTaskRunner(),
+          ThreadScheduler::Current()->CompositorTaskRunner(),
           this,
           &SVGImageChromeClient::AnimationTimerFired)),
       timeline_state_(kRunning) {}
 
 SVGImageChromeClient* SVGImageChromeClient::Create(SVGImage* image) {
-  return new SVGImageChromeClient(image);
+  return MakeGarbageCollected<SVGImageChromeClient>(image);
 }
 
 bool SVGImageChromeClient::IsSVGImageChromeClient() const {
@@ -63,11 +61,11 @@ void SVGImageChromeClient::ChromeDestroyed() {
   image_ = nullptr;
 }
 
-void SVGImageChromeClient::InvalidateRect(const IntRect& r) {
-  // If m_image->m_page is null, we're being destructed, don't fire
-  // changedInRect() in that case.
+void SVGImageChromeClient::InvalidateRect(const IntRect&) {
+  // If image_->page_ is null, we're being destructed, so don't fire
+  // |Changed()| in that case.
   if (image_ && image_->GetImageObserver() && image_->page_)
-    image_->GetImageObserver()->ChangedInRect(image_, r);
+    image_->GetImageObserver()->Changed(image_);
 }
 
 void SVGImageChromeClient::SuspendAnimation() {
@@ -91,6 +89,13 @@ void SVGImageChromeClient::ResumeAnimation() {
   ScheduleAnimation(nullptr);
 }
 
+void SVGImageChromeClient::RestoreAnimationIfNeeded() {
+  // If the timeline is not suspended we needn't attempt to restore.
+  if (!IsSuspended())
+    return;
+  image_->RestoreAnimation();
+}
+
 void SVGImageChromeClient::ScheduleAnimation(const LocalFrameView*) {
   // Because a single SVGImage can be shared by multiple pages, we can't key
   // our svg image layout on the page's real animation frame. Therefore, we
@@ -103,9 +108,9 @@ void SVGImageChromeClient::ScheduleAnimation(const LocalFrameView*) {
   // animations, but prefer a fixed, jittery, frame-delay if there're any
   // animations. Checking for pending/active animations could be more
   // stringent.
-  double fire_time = 0;
+  TimeDelta fire_time;
   if (image_->MaybeAnimated()) {
-    if (timeline_state_ >= kSuspended)
+    if (IsSuspended())
       return;
     fire_time = kAnimationFrameDelay;
   }

@@ -26,7 +26,6 @@
 
 #include "third_party/blink/renderer/core/editing/commands/apply_block_element_command.h"
 
-#include "third_party/blink/renderer/bindings/core/v8/exception_state.h"
 #include "third_party/blink/renderer/core/dom/node_computed_style.h"
 #include "third_party/blink/renderer/core/dom/text.h"
 #include "third_party/blink/renderer/core/editing/commands/editing_commands_utilities.h"
@@ -39,10 +38,11 @@
 #include "third_party/blink/renderer/core/html/html_element.h"
 #include "third_party/blink/renderer/core/html_names.h"
 #include "third_party/blink/renderer/core/style/computed_style.h"
+#include "third_party/blink/renderer/platform/bindings/exception_state.h"
 
 namespace blink {
 
-using namespace HTMLNames;
+using namespace html_names;
 
 ApplyBlockElementCommand::ApplyBlockElementCommand(
     Document& document,
@@ -89,14 +89,16 @@ void ApplyBlockElementCommand::DoApply(EditingState* editing_state) {
     if (new_end.IsNotNull())
       builder.Extend(new_end);
     SetEndingSelection(SelectionForUndoStep::From(builder.Build()));
+    ABORT_EDITING_COMMAND_IF(EndingVisibleSelection().VisibleStart().IsNull());
+    ABORT_EDITING_COMMAND_IF(EndingVisibleSelection().VisibleEnd().IsNull());
   }
 
   VisibleSelection selection =
       SelectionForParagraphIteration(EndingVisibleSelection());
   VisiblePosition start_of_selection = selection.VisibleStart();
+  ABORT_EDITING_COMMAND_IF(start_of_selection.IsNull());
   VisiblePosition end_of_selection = selection.VisibleEnd();
-  DCHECK(!start_of_selection.IsNull());
-  DCHECK(!end_of_selection.IsNull());
+  ABORT_EDITING_COMMAND_IF(end_of_selection.IsNull());
   ContainerNode* start_scope = nullptr;
   int start_index = IndexForVisiblePosition(start_of_selection, start_scope);
   ContainerNode* end_scope = nullptr;
@@ -416,7 +418,7 @@ ApplyBlockElementCommand::EndOfNextParagrahSplittingTextNodesIfNeeded(
 HTMLElement* ApplyBlockElementCommand::CreateBlockElement() const {
   HTMLElement* element = CreateHTMLElement(GetDocument(), tag_name_);
   if (inline_style_.length())
-    element->setAttribute(styleAttr, inline_style_);
+    element->setAttribute(kStyleAttr, inline_style_);
   return element;
 }
 

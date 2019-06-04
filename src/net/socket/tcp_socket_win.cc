@@ -384,7 +384,7 @@ int TCPSocketWin::Listen(int backlog) {
 
 int TCPSocketWin::Accept(std::unique_ptr<TCPSocketWin>* socket,
                          IPEndPoint* address,
-                         const CompletionCallback& callback) {
+                         CompletionOnceCallback callback) {
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
   DCHECK(socket);
   DCHECK(address);
@@ -402,7 +402,7 @@ int TCPSocketWin::Accept(std::unique_ptr<TCPSocketWin>* socket,
 
     accept_socket_ = socket;
     accept_address_ = address;
-    accept_callback_ = callback;
+    accept_callback_ = std::move(callback);
   }
 
   return result;
@@ -760,6 +760,10 @@ SocketDescriptor TCPSocketWin::ReleaseSocketDescriptorForTesting() {
   socket_ = INVALID_SOCKET;
   Close();
   return socket_descriptor;
+}
+
+SocketDescriptor TCPSocketWin::SocketDescriptorForTesting() const {
+  return socket_;
 }
 
 int TCPSocketWin::AcceptInternal(std::unique_ptr<TCPSocketWin>* socket,

@@ -16,7 +16,7 @@
 #include "net/third_party/quic/platform/api/quic_bug_tracker.h"
 #include "net/third_party/quic/platform/api/quic_export.h"
 
-namespace net {
+namespace quic {
 
 namespace test {
 class RttStatsPeer;
@@ -25,6 +25,8 @@ class RttStatsPeer;
 class QUIC_EXPORT_PRIVATE RttStats {
  public:
   RttStats();
+  RttStats(const RttStats&) = delete;
+  RttStats& operator=(const RttStats&) = delete;
 
   // Updates the RTT from an incoming ack which is received |send_delta| after
   // the packet is sent and the peer reports the ack being delayed |ack_delay|.
@@ -101,10 +103,8 @@ class QUIC_EXPORT_PRIVATE RttStats {
   QuicTime::Delta max_ack_delay_;
   // Whether to ignore the peer's max ack delay.
   bool ignore_max_ack_delay_;
-
-  DISALLOW_COPY_AND_ASSIGN(RttStats);
 };
 
-}  // namespace net
+}  // namespace quic
 
 #endif  // NET_THIRD_PARTY_QUIC_CORE_CONGESTION_CONTROL_RTT_STATS_H_

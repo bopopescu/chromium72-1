@@ -196,9 +196,9 @@ class BASE_EXPORT PlatformThread {
   // and |thread_handle| is invalidated after this call.
   static void Detach(PlatformThreadHandle thread_handle);
 
-  // Returns true if SetCurrentThreadPriority() can be used to increase the
-  // priority of the current thread.
-  static bool CanIncreaseCurrentThreadPriority();
+  // Returns true if SetCurrentThreadPriority() should be able to increase the
+  // priority of a thread to |priority|.
+  static bool CanIncreaseThreadPriority(ThreadPriority priority);
 
   // Toggles the current thread's priority at runtime.
   //
@@ -231,9 +231,24 @@ class BASE_EXPORT PlatformThread {
                                 ThreadPriority priority);
 #endif
 
+  // Returns the default thread stack size set by chrome. If we do not
+  // explicitly set default size then returns 0.
+  static size_t GetDefaultThreadStackSize();
+
  private:
+  static void SetCurrentThreadPriorityImpl(ThreadPriority priority);
+
   DISALLOW_IMPLICIT_CONSTRUCTORS(PlatformThread);
 };
+
+namespace internal {
+
+// Initializes the "ThreadPriorities" feature. The feature state is only taken
+// into account after this initialization. This initialization must be
+// synchronized with calls to PlatformThread::SetCurrentThreadPriority().
+void InitializeThreadPrioritiesFeature();
+
+}  // namespace internal
 
 }  // namespace base
 

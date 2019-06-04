@@ -30,7 +30,7 @@
 namespace blink {
 
 WaveShaperProcessor::WaveShaperProcessor(float sample_rate,
-                                         size_t number_of_channels)
+                                         unsigned number_of_channels)
     : AudioDSPKernelProcessor(sample_rate, number_of_channels),
       oversample_(kOverSampleNone) {}
 
@@ -58,6 +58,20 @@ void WaveShaperProcessor::SetCurve(const float* curve_data,
   // Copy the curve data, if any, to our internal buffer.
   curve_ = std::make_unique<Vector<float>>(curve_length);
   memcpy(curve_->data(), curve_data, sizeof(float) * curve_length);
+
+  DCHECK_GE(kernels_.size(), 1ULL);
+
+  // Compute the curve output for a zero input, and set the tail time for all
+  // the kernels.
+  WaveShaperDSPKernel* kernel =
+      static_cast<WaveShaperDSPKernel*>(kernels_[0].get());
+  double output = kernel->WaveShaperCurveValue(0.0, curve_data, curve_length);
+  double tail_time = output == 0 ? 0 : std::numeric_limits<double>::infinity();
+
+  for (unsigned k = 0; k < kernels_.size(); ++k) {
+    kernel = static_cast<WaveShaperDSPKernel*>(kernels_[k].get());
+    kernel->SetTailTime(tail_time);
+  }
 }
 
 void WaveShaperProcessor::SetOversample(OverSampleType oversample) {
@@ -77,7 +91,7 @@ void WaveShaperProcessor::SetOversample(OverSampleType oversample) {
 
 void WaveShaperProcessor::Process(const AudioBus* source,
                                   AudioBus* destination,
-                                  size_t frames_to_process) {
+                                  uint32_t frames_to_process) {
   if (!IsInitialized()) {
     destination->Zero();
     return;

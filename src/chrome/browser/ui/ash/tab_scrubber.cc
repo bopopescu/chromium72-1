@@ -10,24 +10,21 @@
 
 #include "ash/shell.h"
 #include "base/metrics/histogram_macros.h"
-#include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_finder.h"
+#include "chrome/browser/ui/browser_list.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
+#include "chrome/browser/ui/views/frame/immersive_mode_controller.h"
 #include "chrome/browser/ui/views/tabs/glow_hover_controller.h"
 #include "chrome/browser/ui/views/tabs/tab.h"
 #include "chrome/browser/ui/views/tabs/tab_strip.h"
-#include "content/public/browser/notification_service.h"
-#include "content/public/browser/notification_source.h"
-#include "ui/aura/window.h"
+#include "chrome/browser/ui/views/tabs/tab_style.h"
 #include "ui/events/event.h"
 #include "ui/events/event_utils.h"
 #include "ui/events/gesture_detection/gesture_configuration.h"
 
 namespace {
-
-const int64_t kActivationDelayMS = 200;
 
 inline float Clamp(float value, float low, float high) {
   return std::min(high, std::max(value, low));
@@ -47,14 +44,29 @@ TabScrubber* TabScrubber::GetInstance() {
 gfx::Point TabScrubber::GetStartPoint(TabStrip* tab_strip,
                                       int index,
                                       TabScrubber::Direction direction) {
-  int initial_tab_offset = Tab::GetPinnedWidth() / 2;
-  // In RTL layouts the tabs are mirrored. We hence use GetMirroredBounds()
-  // which will give us the correct bounds of tabs in RTL layouts as well as
-  // non-RTL layouts (in non-RTL layouts GetMirroredBounds() is the same as
-  // bounds()).
-  gfx::Rect tab_bounds = tab_strip->tab_at(index)->GetMirroredBounds();
-  float x = direction == LEFT ? tab_bounds.x() + initial_tab_offset
-                              : tab_bounds.right() - initial_tab_offset;
+  const Tab* tab = tab_strip->tab_at(index);
+  gfx::Rect tab_bounds = tab->GetMirroredBounds();
+
+  // Start the swipe where the tab contents start/end.  This provides a small
+  // amount of slop inside the tab before a swipe will change tabs.
+  auto contents_insets = tab->tab_style()->GetContentsInsets();
+  int left = contents_insets.left();
+  int right = contents_insets.right();
+
+  // The contents insets are logical rather than physical, so reverse them for
+  // RTL.
+  if (base::i18n::IsRTL())
+    std::swap(left, right);
+
+  // For very narrow tabs, the contents insets may be too large.  Clamp to the
+  // opposite edges of the tab, which should be at (overlap / 2).
+  gfx::Rect tab_edges = tab_bounds;
+  // For odd overlap values, be conservative and inset both edges rounding up.
+  tab_edges.Inset((TabStyle::GetTabOverlap() + 1) / 2, 0);
+  const int x = (direction == LEFT)
+                    ? std::min(tab_bounds.x() + left, tab_edges.right())
+                    : std::max(tab_bounds.right() - right, tab_edges.x());
+
   return gfx::Point(x, tab_bounds.CenterPoint().y());
 }
 
@@ -62,30 +74,16 @@ bool TabScrubber::IsActivationPending() {
   return activate_timer_.IsRunning();
 }
 
-TabScrubber::TabScrubber()
-    : scrubbing_(false),
-      browser_(nullptr),
-      tab_strip_(nullptr),
-      swipe_x_(-1),
-      swipe_y_(-1),
-      swipe_direction_(LEFT),
-      highlighted_tab_(-1),
-      activate_timer_(true, false),
-      activation_delay_(kActivationDelayMS),
-      use_default_activation_delay_(true),
-      weak_ptr_factory_(this) {
+TabScrubber::TabScrubber() {
   // TODO(mash): Add window server API to observe swipe gestures. Observing
   // gestures on browser windows is not sufficient, as this feature works when
-  // the cursor is over the shelf, desktop, etc.
+  // the cursor is over the shelf, desktop, etc. https://crbug.com/796366
   ash::Shell::Get()->AddPreTargetHandler(this);
-  registrar_.Add(this, chrome::NOTIFICATION_BROWSER_CLOSED,
-                 content::NotificationService::AllSources());
+  BrowserList::AddObserver(this);
 }
 
 TabScrubber::~TabScrubber() {
-  // Note: The weak_ptr_factory_ should invalidate  its weak pointers before
-  // any other members are destroyed.
-  weak_ptr_factory_.InvalidateWeakPtrs();
+  BrowserList::RemoveObserver(this);
 }
 
 void TabScrubber::OnScrollEvent(ui::ScrollEvent* event) {
@@ -107,8 +105,7 @@ void TabScrubber::OnScrollEvent(ui::ScrollEvent* event) {
     return;
   }
 
-  BrowserView* browser_view = BrowserView::GetBrowserViewForNativeWindow(
-      browser->window()->GetNativeWindow());
+  BrowserView* browser_view = BrowserView::GetBrowserViewForBrowser(browser);
   TabStrip* tab_strip = browser_view->tabstrip();
 
   if (tab_strip->IsAnimating()) {
@@ -122,11 +119,8 @@ void TabScrubber::OnScrollEvent(ui::ScrollEvent* event) {
   // The event's x_offset doesn't change in an RTL layout. Negative value means
   // left, positive means right.
   float x_offset = event->x_offset();
-  int initial_tab_index = highlighted_tab_ == -1
-                              ? browser->tab_strip_model()->active_index()
-                              : highlighted_tab_;
   if (!scrubbing_) {
-    BeginScrub(browser, browser_view, x_offset);
+    BeginScrub(browser_view, x_offset);
   } else if (highlighted_tab_ == -1) {
     // Has the direction of the swipe changed while scrubbing?
     Direction direction = (x_offset < 0) ? LEFT : RIGHT;
@@ -136,10 +130,7 @@ void TabScrubber::OnScrollEvent(ui::ScrollEvent* event) {
 
   UpdateSwipeX(x_offset);
 
-  Tab* initial_tab = tab_strip_->tab_at(initial_tab_index);
-  gfx::Point tab_point(swipe_x_, swipe_y_);
-  views::View::ConvertPointToTarget(tab_strip_, initial_tab, &tab_point);
-  Tab* new_tab = tab_strip_->GetTabAt(initial_tab, tab_point);
+  Tab* new_tab = tab_strip_->GetTabAt(gfx::Point(swipe_x_, swipe_y_));
   if (!new_tab)
     return;
 
@@ -165,18 +156,17 @@ void TabScrubber::OnScrollEvent(ui::ScrollEvent* event) {
   }
 }
 
-void TabScrubber::Observe(int type,
-                          const content::NotificationSource& source,
-                          const content::NotificationDetails& details) {
-  if (content::Source<Browser>(source).ptr() == browser_) {
-    activate_timer_.Stop();
-    swipe_x_ = -1;
-    swipe_y_ = -1;
-    scrubbing_ = false;
-    highlighted_tab_ = -1;
-    browser_ = nullptr;
-    tab_strip_ = nullptr;
-  }
+void TabScrubber::OnBrowserRemoved(Browser* browser) {
+  if (browser != browser_)
+    return;
+
+  activate_timer_.Stop();
+  swipe_x_ = -1;
+  swipe_y_ = -1;
+  scrubbing_ = false;
+  highlighted_tab_ = -1;
+  browser_ = nullptr;
+  tab_strip_ = nullptr;
 }
 
 void TabScrubber::OnTabAdded(int index) {
@@ -220,15 +210,13 @@ Browser* TabScrubber::GetActiveBrowser() {
   return browser;
 }
 
-void TabScrubber::BeginScrub(Browser* browser,
-                             BrowserView* browser_view,
-                             float x_offset) {
-  DCHECK(browser);
+void TabScrubber::BeginScrub(BrowserView* browser_view, float x_offset) {
   DCHECK(browser_view);
+  DCHECK(browser_view->browser());
 
   tab_strip_ = browser_view->tabstrip();
   scrubbing_ = true;
-  browser_ = browser;
+  browser_ = browser_view->browser();
 
   Direction direction = (x_offset < 0) ? LEFT : RIGHT;
   ScrubDirectionChanged(direction);
@@ -247,8 +235,7 @@ void TabScrubber::FinishScrub(bool activate) {
   activate_timer_.Stop();
 
   if (browser_ && browser_->window()) {
-    BrowserView* browser_view = BrowserView::GetBrowserViewForNativeWindow(
-        browser_->window()->GetNativeWindow());
+    BrowserView* browser_view = BrowserView::GetBrowserViewForBrowser(browser_);
     TabStrip* tab_strip = browser_view->tabstrip();
     if (activate && highlighted_tab_ != -1) {
       Tab* tab = tab_strip->tab_at(highlighted_tab_);
@@ -270,16 +257,13 @@ void TabScrubber::FinishScrub(bool activate) {
 }
 
 void TabScrubber::ScheduleFinishScrubIfNeeded() {
-  int delay = use_default_activation_delay_
-                  ? ui::GestureConfiguration::GetInstance()
-                        ->tab_scrub_activation_delay_in_ms()
-                  : activation_delay_;
-
-  if (delay >= 0) {
-    activate_timer_.Start(FROM_HERE, base::TimeDelta::FromMilliseconds(delay),
-                          base::Bind(&TabScrubber::FinishScrub,
-                                     weak_ptr_factory_.GetWeakPtr(), true));
-  }
+  // Tests use a really long delay to ensure RunLoops don't unnecessarily
+  // trigger the timer running.
+  const base::TimeDelta delay = base::TimeDelta::FromMilliseconds(
+      use_default_activation_delay_ ? 200 : 20000);
+  activate_timer_.Start(FROM_HERE, delay,
+                        base::BindRepeating(&TabScrubber::FinishScrub,
+                                            base::Unretained(this), true));
 }
 
 void TabScrubber::ScrubDirectionChanged(Direction direction) {

@@ -11,10 +11,12 @@
 package org.webrtc;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNotEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
 
 import android.support.test.InstrumentationRegistry;
 import android.support.test.filters.MediumTest;
@@ -43,18 +45,20 @@ import org.junit.runner.RunWith;
 import org.webrtc.Metrics.HistogramInfo;
 import org.webrtc.PeerConnection.IceConnectionState;
 import org.webrtc.PeerConnection.IceGatheringState;
+import org.webrtc.PeerConnection.PeerConnectionState;
 import org.webrtc.PeerConnection.SignalingState;
 
 /** End-to-end tests for PeerConnection.java. */
 @RunWith(BaseJUnit4ClassRunner.class)
 public class PeerConnectionTest {
   private static final int TIMEOUT_SECONDS = 20;
-  private @Nullable TreeSet<String> threadsBeforeTest = null;
+  private @Nullable TreeSet<String> threadsBeforeTest;
 
   @Before
   public void setUp() {
     PeerConnectionFactory.initialize(PeerConnectionFactory.InitializationOptions
                                          .builder(InstrumentationRegistry.getTargetContext())
+                                         .setNativeLibraryName(TestConstants.NATIVE_LIBRARY)
                                          .createInitializationOptions());
   }
 
@@ -62,15 +66,16 @@ public class PeerConnectionTest {
       implements PeerConnection.Observer, VideoSink, DataChannel.Observer, StatsObserver,
                  RTCStatsCollectorCallback, RtpReceiver.Observer {
     private final String name;
-    private int expectedIceCandidates = 0;
-    private int expectedErrors = 0;
-    private int expectedRenegotiations = 0;
-    private int expectedWidth = 0;
-    private int expectedHeight = 0;
-    private int expectedFramesDelivered = 0;
-    private int expectedTracksAdded = 0;
+    private int expectedIceCandidates;
+    private int expectedErrors;
+    private int expectedRenegotiations;
+    private int expectedWidth;
+    private int expectedHeight;
+    private int expectedFramesDelivered;
+    private int expectedTracksAdded;
     private Queue<SignalingState> expectedSignalingChanges = new ArrayDeque<>();
     private Queue<IceConnectionState> expectedIceConnectionChanges = new ArrayDeque<>();
+    private Queue<PeerConnectionState> expectedConnectionChanges = new ArrayDeque<>();
     private Queue<IceGatheringState> expectedIceGatheringChanges = new ArrayDeque<>();
     private Queue<String> expectedAddStreamLabels = new ArrayDeque<>();
     private Queue<String> expectedRemoveStreamLabels = new ArrayDeque<>();
@@ -80,12 +85,12 @@ public class PeerConnectionTest {
     private Queue<DataChannel.Buffer> expectedBuffers = new ArrayDeque<>();
     private Queue<DataChannel.State> expectedStateChanges = new ArrayDeque<>();
     private Queue<String> expectedRemoteDataChannelLabels = new ArrayDeque<>();
-    private int expectedOldStatsCallbacks = 0;
-    private int expectedNewStatsCallbacks = 0;
+    private int expectedOldStatsCallbacks;
+    private int expectedNewStatsCallbacks;
     private List<StatsReport[]> gotStatsReports = new ArrayList<>();
     private final HashSet<MediaStream> gotRemoteStreams = new HashSet<>();
-    private int expectedFirstAudioPacket = 0;
-    private int expectedFirstVideoPacket = 0;
+    private int expectedFirstAudioPacket;
+    private int expectedFirstVideoPacket;
 
     public ObserverExpectations(String name) {
       this.name = name;
@@ -185,11 +190,29 @@ public class PeerConnectionTest {
       assertEquals(expectedIceConnectionChanges.remove(), newState);
     }
 
+    // TODO(bugs.webrtc.org/8491): Remove NoSynchronizedMethodCheck suppression.
+    @SuppressWarnings("NoSynchronizedMethodCheck")
+    public synchronized void expectConnectionChange(PeerConnectionState newState) {
+      expectedConnectionChanges.add(newState);
+    }
+
+    @Override
+    // TODO(bugs.webrtc.org/8491): Remove NoSynchronizedMethodCheck suppression.
+    @SuppressWarnings("NoSynchronizedMethodCheck")
+    public synchronized void onConnectionChange(PeerConnectionState newState) {
+      if (expectedConnectionChanges.isEmpty()) {
+        System.out.println(name + " got an unexpected DTLS connection change " + newState);
+        return;
+      }
+
+      assertEquals(expectedConnectionChanges.remove(), newState);
+    }
+
     @Override
     // TODO(bugs.webrtc.org/8491): Remove NoSynchronizedMethodCheck suppression.
     @SuppressWarnings("NoSynchronizedMethodCheck")
     public synchronized void onIceConnectionReceivingChange(boolean receiving) {
-      System.out.println(name + "Got an ICE connection receiving change " + receiving);
+      System.out.println(name + " got an ICE connection receiving change " + receiving);
     }
 
     // TODO(bugs.webrtc.org/8491): Remove NoSynchronizedMethodCheck suppression.
@@ -530,9 +553,9 @@ public class PeerConnectionTest {
   }
 
   private static class SdpObserverLatch implements SdpObserver {
-    private boolean success = false;
-    private @Nullable SessionDescription sdp = null;
-    private @Nullable String error = null;
+    private boolean success;
+    private @Nullable SessionDescription sdp;
+    private @Nullable String error;
     private CountDownLatch latch = new CountDownLatch(1);
 
     public SdpObserverLatch() {}
@@ -662,6 +685,45 @@ public class PeerConnectionTest {
   }
 
   @Test
+  @SmallTest
+  public void testCreationWithCertificate() throws Exception {
+    PeerConnectionFactory factory = PeerConnectionFactory.builder().createPeerConnectionFactory();
+    PeerConnection.RTCConfiguration config = new PeerConnection.RTCConfiguration(Arrays.asList());
+
+    // Test certificate.
+    RtcCertificatePem originalCert = RtcCertificatePem.generateCertificate();
+    config.certificate = originalCert;
+
+    ObserverExpectations offeringExpectations = new ObserverExpectations("PCTest:offerer");
+    PeerConnection offeringPC = factory.createPeerConnection(config, offeringExpectations);
+
+    RtcCertificatePem restoredCert = offeringPC.getCertificate();
+    assertEquals(originalCert.privateKey, restoredCert.privateKey);
+    assertEquals(originalCert.certificate, restoredCert.certificate);
+  }
+
+  @Test
+  @SmallTest
+  public void testCreationWithCryptoOptions() throws Exception {
+    PeerConnectionFactory factory = PeerConnectionFactory.builder().createPeerConnectionFactory();
+    PeerConnection.RTCConfiguration config = new PeerConnection.RTCConfiguration(Arrays.asList());
+
+    assertNull(config.cryptoOptions);
+
+    CryptoOptions cryptoOptions = CryptoOptions.builder()
+                                      .setEnableGcmCryptoSuites(true)
+                                      .setEnableAes128Sha1_32CryptoCipher(true)
+                                      .setEnableEncryptedRtpHeaderExtensions(true)
+                                      .setRequireFrameEncryption(true)
+                                      .createCryptoOptions();
+    config.cryptoOptions = cryptoOptions;
+
+    ObserverExpectations offeringExpectations = new ObserverExpectations("PCTest:offerer");
+    PeerConnection offeringPC = factory.createPeerConnection(config, offeringExpectations);
+    assertNotNull(offeringPC);
+  }
+
+  @Test
   @MediumTest
   public void testCompleteSession() throws Exception {
     Metrics.enable();
@@ -669,8 +731,11 @@ public class PeerConnectionTest {
     // have those.
     PeerConnectionFactory.Options options = new PeerConnectionFactory.Options();
     options.networkIgnoreMask = 0;
-    PeerConnectionFactory factory =
-        PeerConnectionFactory.builder().setOptions(options).createPeerConnectionFactory();
+    PeerConnectionFactory factory = PeerConnectionFactory.builder()
+                                        .setOptions(options)
+                                        .setVideoEncoderFactory(new SoftwareVideoEncoderFactory())
+                                        .setVideoDecoderFactory(new SoftwareVideoDecoderFactory())
+                                        .createPeerConnectionFactory();
 
     List<PeerConnection.IceServer> iceServers = new ArrayList<>();
     iceServers.add(
@@ -696,7 +761,11 @@ public class PeerConnectionTest {
     final CameraEnumerator enumerator = new Camera1Enumerator(false /* captureToTexture */);
     final VideoCapturer videoCapturer =
         enumerator.createCapturer(enumerator.getDeviceNames()[0], null /* eventsHandler */);
-    final VideoSource videoSource = factory.createVideoSource(videoCapturer);
+    final SurfaceTextureHelper surfaceTextureHelper =
+        SurfaceTextureHelper.create("SurfaceTextureHelper", /* sharedContext= */ null);
+    final VideoSource videoSource = factory.createVideoSource(/* isScreencast= */ false);
+    videoCapturer.initialize(surfaceTextureHelper, InstrumentationRegistry.getTargetContext(),
+        videoSource.getCapturerObserver());
     videoCapturer.startCapture(640, 480, 30);
 
     offeringExpectations.expectRenegotiationNeeded();
@@ -750,12 +819,14 @@ public class PeerConnectionTest {
 
     sdpLatch = new SdpObserverLatch();
     answeringExpectations.expectSignalingChange(SignalingState.STABLE);
+    answeringExpectations.expectConnectionChange(PeerConnectionState.CONNECTING);
     answeringPC.setLocalDescription(sdpLatch, answerSdp);
     assertTrue(sdpLatch.await());
     assertNull(sdpLatch.getSdp());
 
     sdpLatch = new SdpObserverLatch();
     offeringExpectations.expectSignalingChange(SignalingState.HAVE_LOCAL_OFFER);
+    offeringExpectations.expectConnectionChange(PeerConnectionState.CONNECTING);
     offeringPC.setLocalDescription(sdpLatch, offerSdp);
     assertTrue(sdpLatch.await());
     assertNull(sdpLatch.getSdp());
@@ -765,6 +836,9 @@ public class PeerConnectionTest {
 
     offeringExpectations.expectIceConnectionChange(IceConnectionState.CHECKING);
     offeringExpectations.expectIceConnectionChange(IceConnectionState.CONNECTED);
+    offeringExpectations.expectConnectionChange(PeerConnectionState.NEW);
+    offeringExpectations.expectConnectionChange(PeerConnectionState.CONNECTING);
+    offeringExpectations.expectConnectionChange(PeerConnectionState.CONNECTED);
     // TODO(bemasc): uncomment once delivery of ICECompleted is reliable
     // (https://code.google.com/p/webrtc/issues/detail?id=3021).
     //
@@ -772,6 +846,7 @@ public class PeerConnectionTest {
     //     IceConnectionState.COMPLETED);
     answeringExpectations.expectIceConnectionChange(IceConnectionState.CHECKING);
     answeringExpectations.expectIceConnectionChange(IceConnectionState.CONNECTED);
+    answeringExpectations.expectConnectionChange(PeerConnectionState.CONNECTED);
 
     offeringPC.setRemoteDescription(sdpLatch, answerSdp);
     assertTrue(sdpLatch.await());
@@ -844,8 +919,14 @@ public class PeerConnectionTest {
     assertNotNull(rtpParameters);
     assertEquals(1, rtpParameters.encodings.size());
     assertNull(rtpParameters.encodings.get(0).maxBitrateBps);
+    assertNull(rtpParameters.encodings.get(0).minBitrateBps);
+    assertNull(rtpParameters.encodings.get(0).maxFramerate);
+    assertNull(rtpParameters.encodings.get(0).numTemporalLayers);
 
     rtpParameters.encodings.get(0).maxBitrateBps = 300000;
+    rtpParameters.encodings.get(0).minBitrateBps = 100000;
+    rtpParameters.encodings.get(0).maxFramerate = 20;
+    rtpParameters.encodings.get(0).numTemporalLayers = 2;
     assertTrue(videoSender.setParameters(rtpParameters));
 
     // Create a DTMF sender.
@@ -857,6 +938,9 @@ public class PeerConnectionTest {
     // Verify that we can read back the updated value.
     rtpParameters = videoSender.getParameters();
     assertEquals(300000, (int) rtpParameters.encodings.get(0).maxBitrateBps);
+    assertEquals(100000, (int) rtpParameters.encodings.get(0).minBitrateBps);
+    assertEquals(20, (int) rtpParameters.encodings.get(0).maxFramerate);
+    assertEquals(2, (int) rtpParameters.encodings.get(0).numTemporalLayers);
 
     // Test send & receive UTF-8 text.
     answeringExpectations.expectMessage(
@@ -884,6 +968,8 @@ public class PeerConnectionTest {
     answeringExpectations.expectStateChange(DataChannel.State.CLOSED);
     answeringExpectations.dataChannel.close();
     offeringExpectations.dataChannel.close();
+    assertTrue(offeringExpectations.waitForAllExpectationsToBeSatisfied(TIMEOUT_SECONDS));
+    assertTrue(answeringExpectations.waitForAllExpectationsToBeSatisfied(TIMEOUT_SECONDS));
 
     // Test SetBitrate.
     assertTrue(offeringPC.setBitrate(100000, 5000000, 500000000));
@@ -898,6 +984,7 @@ public class PeerConnectionTest {
     videoCapturer.stopCapture();
     videoCapturer.dispose();
     videoSource.dispose();
+    surfaceTextureHelper.dispose();
     factory.dispose();
     System.gc();
   }
@@ -968,12 +1055,14 @@ public class PeerConnectionTest {
 
     sdpLatch = new SdpObserverLatch();
     answeringExpectations.expectSignalingChange(SignalingState.STABLE);
+    answeringExpectations.expectConnectionChange(PeerConnectionState.CONNECTING);
     answeringPC.setLocalDescription(sdpLatch, answerSdp);
     assertTrue(sdpLatch.await());
     assertNull(sdpLatch.getSdp());
 
     sdpLatch = new SdpObserverLatch();
     offeringExpectations.expectSignalingChange(SignalingState.HAVE_LOCAL_OFFER);
+    offeringExpectations.expectConnectionChange(PeerConnectionState.CONNECTING);
     offeringPC.setLocalDescription(sdpLatch, offerSdp);
     assertTrue(sdpLatch.await());
     assertNull(sdpLatch.getSdp());
@@ -982,10 +1071,14 @@ public class PeerConnectionTest {
 
     offeringExpectations.expectIceConnectionChange(IceConnectionState.CHECKING);
     offeringExpectations.expectIceConnectionChange(IceConnectionState.CONNECTED);
+    offeringExpectations.expectConnectionChange(PeerConnectionState.NEW);
+    offeringExpectations.expectConnectionChange(PeerConnectionState.CONNECTING);
+    offeringExpectations.expectConnectionChange(PeerConnectionState.CONNECTED);
     // TODO(bemasc): uncomment once delivery of ICECompleted is reliable
     // (https://code.google.com/p/webrtc/issues/detail?id=3021).
     answeringExpectations.expectIceConnectionChange(IceConnectionState.CHECKING);
     answeringExpectations.expectIceConnectionChange(IceConnectionState.CONNECTED);
+    answeringExpectations.expectConnectionChange(PeerConnectionState.CONNECTED);
 
     offeringPC.setRemoteDescription(sdpLatch, answerSdp);
     assertTrue(sdpLatch.await());
@@ -1045,6 +1138,8 @@ public class PeerConnectionTest {
     answeringExpectations.expectStateChange(DataChannel.State.CLOSED);
     answeringExpectations.dataChannel.close();
     offeringExpectations.dataChannel.close();
+    assertTrue(offeringExpectations.waitForAllExpectationsToBeSatisfied(TIMEOUT_SECONDS));
+    assertTrue(answeringExpectations.waitForAllExpectationsToBeSatisfied(TIMEOUT_SECONDS));
 
     // Free the Java-land objects and collect them.
     shutdownPC(offeringPC, offeringExpectations);
@@ -1062,8 +1157,11 @@ public class PeerConnectionTest {
     // have those.
     PeerConnectionFactory.Options options = new PeerConnectionFactory.Options();
     options.networkIgnoreMask = 0;
-    PeerConnectionFactory factory =
-        PeerConnectionFactory.builder().setOptions(options).createPeerConnectionFactory();
+    PeerConnectionFactory factory = PeerConnectionFactory.builder()
+                                        .setOptions(options)
+                                        .setVideoEncoderFactory(new SoftwareVideoEncoderFactory())
+                                        .setVideoDecoderFactory(new SoftwareVideoDecoderFactory())
+                                        .createPeerConnectionFactory();
 
     List<PeerConnection.IceServer> iceServers = new ArrayList<>();
     iceServers.add(
@@ -1085,7 +1183,11 @@ public class PeerConnectionTest {
     final CameraEnumerator enumerator = new Camera1Enumerator(false /* captureToTexture */);
     final VideoCapturer videoCapturer =
         enumerator.createCapturer(enumerator.getDeviceNames()[0], null /* eventsHandler */);
-    final VideoSource videoSource = factory.createVideoSource(videoCapturer);
+    final SurfaceTextureHelper surfaceTextureHelper =
+        SurfaceTextureHelper.create("SurfaceTextureHelper", /* sharedContext= */ null);
+    final VideoSource videoSource = factory.createVideoSource(/* isScreencast= */ false);
+    videoCapturer.initialize(surfaceTextureHelper, InstrumentationRegistry.getTargetContext(),
+        videoSource.getCapturerObserver());
     videoCapturer.startCapture(640, 480, 30);
 
     // Add offerer media stream.
@@ -1109,6 +1211,7 @@ public class PeerConnectionTest {
     offeringExpectations.expectSignalingChange(SignalingState.HAVE_LOCAL_OFFER);
     offeringExpectations.expectIceCandidates(2);
     offeringExpectations.expectIceGatheringChange(IceGatheringState.COMPLETE);
+    offeringExpectations.expectConnectionChange(PeerConnectionState.CONNECTING);
     offeringPC.setLocalDescription(sdpLatch, offerSdp);
     assertTrue(sdpLatch.await());
     assertNull(sdpLatch.getSdp());
@@ -1140,6 +1243,7 @@ public class PeerConnectionTest {
     answeringExpectations.expectSignalingChange(SignalingState.STABLE);
     answeringExpectations.expectIceCandidates(2);
     answeringExpectations.expectIceGatheringChange(IceGatheringState.COMPLETE);
+    answeringExpectations.expectConnectionChange(PeerConnectionState.CONNECTING);
     answeringPC.setLocalDescription(sdpLatch, answerSdp);
     assertTrue(sdpLatch.await());
     assertNull(sdpLatch.getSdp());
@@ -1151,6 +1255,9 @@ public class PeerConnectionTest {
 
     offeringExpectations.expectIceConnectionChange(IceConnectionState.CHECKING);
     offeringExpectations.expectIceConnectionChange(IceConnectionState.CONNECTED);
+    offeringExpectations.expectConnectionChange(PeerConnectionState.NEW);
+    offeringExpectations.expectConnectionChange(PeerConnectionState.CONNECTING);
+    offeringExpectations.expectConnectionChange(PeerConnectionState.CONNECTED);
     // TODO(bemasc): uncomment once delivery of ICECompleted is reliable
     // (https://code.google.com/p/webrtc/issues/detail?id=3021).
     //
@@ -1158,6 +1265,7 @@ public class PeerConnectionTest {
     //     IceConnectionState.COMPLETED);
     answeringExpectations.expectIceConnectionChange(IceConnectionState.CHECKING);
     answeringExpectations.expectIceConnectionChange(IceConnectionState.CONNECTED);
+    answeringExpectations.expectConnectionChange(PeerConnectionState.CONNECTED);
 
     offeringPC.setRemoteDescription(sdpLatch, answerSdp);
     assertTrue(sdpLatch.await());
@@ -1236,6 +1344,7 @@ public class PeerConnectionTest {
     videoCapturer.stopCapture();
     videoCapturer.dispose();
     videoSource.dispose();
+    surfaceTextureHelper.dispose();
     factory.dispose();
     System.gc();
   }
@@ -1256,7 +1365,10 @@ public class PeerConnectionTest {
   @Test
   @MediumTest
   public void testRemoteStreamUpdatedWhenTracksAddedOrRemoved() throws Exception {
-    PeerConnectionFactory factory = PeerConnectionFactory.builder().createPeerConnectionFactory();
+    PeerConnectionFactory factory = PeerConnectionFactory.builder()
+                                        .setVideoEncoderFactory(new SoftwareVideoEncoderFactory())
+                                        .setVideoDecoderFactory(new SoftwareVideoDecoderFactory())
+                                        .createPeerConnectionFactory();
 
     // This test is fine with no ICE servers.
     List<PeerConnection.IceServer> iceServers = new ArrayList<>();
@@ -1309,7 +1421,11 @@ public class PeerConnectionTest {
     final CameraEnumerator enumerator = new Camera1Enumerator(false /* captureToTexture */);
     final VideoCapturer videoCapturer =
         enumerator.createCapturer(enumerator.getDeviceNames()[0], null /* eventsHandler */);
-    final VideoSource videoSource = factory.createVideoSource(videoCapturer);
+    final SurfaceTextureHelper surfaceTextureHelper =
+        SurfaceTextureHelper.create("SurfaceTextureHelper", /* sharedContext= */ null);
+    final VideoSource videoSource = factory.createVideoSource(/* isScreencast= */ false);
+    videoCapturer.initialize(surfaceTextureHelper, InstrumentationRegistry.getTargetContext(),
+        videoSource.getCapturerObserver());
     VideoTrack videoTrack = factory.createVideoTrack("video", videoSource);
     offeringExpectations.expectRenegotiationNeeded();
     localStream.addTrack(videoTrack);
@@ -1360,7 +1476,103 @@ public class PeerConnectionTest {
     pcUnderTest.dispose();
     videoCapturer.dispose();
     videoSource.dispose();
+    surfaceTextureHelper.dispose();
     factory.dispose();
+  }
+
+  @Test
+  @MediumTest
+  public void testAddingNullVideoSink() {
+    final PeerConnectionFactory factory =
+        PeerConnectionFactory.builder().createPeerConnectionFactory();
+    final VideoSource videoSource = factory.createVideoSource(/* isScreencast= */ false);
+    final VideoTrack videoTrack = factory.createVideoTrack("video", videoSource);
+    try {
+      videoTrack.addSink(/* sink= */ null);
+      fail("Should have thrown an IllegalArgumentException.");
+    } catch (IllegalArgumentException e) {
+      // Expected path.
+    }
+  }
+
+  @Test
+  @MediumTest
+  public void testRemovingNullVideoSink() {
+    final PeerConnectionFactory factory =
+        PeerConnectionFactory.builder().createPeerConnectionFactory();
+    final VideoSource videoSource = factory.createVideoSource(/* isScreencast= */ false);
+    final VideoTrack videoTrack = factory.createVideoTrack("video", videoSource);
+    videoTrack.removeSink(/* sink= */ null);
+  }
+
+  @Test
+  @MediumTest
+  public void testRemovingNonExistantVideoSink() {
+    final PeerConnectionFactory factory =
+        PeerConnectionFactory.builder().createPeerConnectionFactory();
+    final VideoSource videoSource = factory.createVideoSource(/* isScreencast= */ false);
+    final VideoTrack videoTrack = factory.createVideoTrack("video", videoSource);
+    final VideoSink videoSink = new VideoSink() {
+      @Override
+      public void onFrame(VideoFrame frame) {}
+    };
+    videoTrack.removeSink(videoSink);
+  }
+
+  @Test
+  @MediumTest
+  public void testAddingSameVideoSinkMultipleTimes() {
+    final PeerConnectionFactory factory =
+        PeerConnectionFactory.builder().createPeerConnectionFactory();
+    final VideoSource videoSource = factory.createVideoSource(/* isScreencast= */ false);
+    final VideoTrack videoTrack = factory.createVideoTrack("video", videoSource);
+
+    class FrameCounter implements VideoSink {
+      private int count;
+
+      public int getCount() {
+        return count;
+      }
+
+      @Override
+      public void onFrame(VideoFrame frame) {
+        count += 1;
+      }
+    }
+    final FrameCounter frameCounter = new FrameCounter();
+
+    final VideoFrame videoFrame = new VideoFrame(
+        JavaI420Buffer.allocate(/* width= */ 32, /* height= */ 32), /* rotation= */ 0,
+        /* timestampNs= */ 0);
+
+    videoTrack.addSink(frameCounter);
+    videoTrack.addSink(frameCounter);
+    videoSource.getCapturerObserver().onFrameCaptured(videoFrame);
+
+    // Even though we called addSink() multiple times, we should only get one frame out.
+    assertEquals(1, frameCounter.count);
+  }
+
+  @Test
+  @MediumTest
+  public void testAddingAndRemovingVideoSink() {
+    final PeerConnectionFactory factory =
+        PeerConnectionFactory.builder().createPeerConnectionFactory();
+    final VideoSource videoSource = factory.createVideoSource(/* isScreencast= */ false);
+    final VideoTrack videoTrack = factory.createVideoTrack("video", videoSource);
+    final VideoFrame videoFrame = new VideoFrame(
+        JavaI420Buffer.allocate(/* width= */ 32, /* height= */ 32), /* rotation= */ 0,
+        /* timestampNs= */ 0);
+
+    final VideoSink failSink = new VideoSink() {
+      @Override
+      public void onFrame(VideoFrame frame) {
+        fail("onFrame() should not be called on removed sink");
+      }
+    };
+    videoTrack.addSink(failSink);
+    videoTrack.removeSink(failSink);
+    videoSource.getCapturerObserver().onFrameCaptured(videoFrame);
   }
 
   private static void negotiate(PeerConnection offeringPC,
@@ -1439,6 +1651,7 @@ public class PeerConnectionTest {
     assertTrue(expectations.waitForAllExpectationsToBeSatisfied(TIMEOUT_SECONDS));
 
     expectations.expectIceConnectionChange(IceConnectionState.CLOSED);
+    expectations.expectConnectionChange(PeerConnectionState.CLOSED);
     expectations.expectSignalingChange(SignalingState.CLOSED);
     pc.close();
     assertTrue(expectations.waitForAllExpectationsToBeSatisfied(TIMEOUT_SECONDS));

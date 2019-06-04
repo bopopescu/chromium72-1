@@ -76,8 +76,8 @@ overview of this documentation and links back to various portions.
 <!-- XXX: broken link -->
 [new-testing-infra]: https://github.com/luci/luci-py/wiki
 [isolated-testing-infra]: https://www.chromium.org/developers/testing/isolated-testing/infrastructure
-[chromium.gpu]: https://build.chromium.org/p/chromium.gpu/console
-[chromium.gpu.fyi]: https://build.chromium.org/p/chromium.gpu.fyi/console
+[chromium.gpu]: https://ci.chromium.org/p/chromium/g/chromium.gpu/console
+[chromium.gpu.fyi]: https://ci.chromium.org/p/chromium/g/chromium.gpu.fyi/console
 [tools/build workspace]: https://code.google.com/p/chromium/codesearch#chromium/build/scripts/slave/recipe_modules/chromium_tests/chromium_gpu_fyi.py
 [bots-presentation]: https://docs.google.com/presentation/d/1BC6T7pndSqPFnituR7ceG7fMY7WaGqYHhx5i9ECa8EI/edit?usp=sharing
 
@@ -110,16 +110,13 @@ Sends your job to the default set of try servers.
 The GPU tests are part of the default set for Chromium CLs, and are run as part
 of the following tryservers' jobs:
 
-*   [linux_chromium_rel_ng] on the [tryserver.chromium.linux] waterfall
-*   [mac_chromium_rel_ng]   on the [tryserver.chromium.mac]   waterfall
-*   [win_chromium_rel_ng]   on the [tryserver.chromium.win]   waterfall
+*   [linux_chromium_rel_ng], formerly on the `tryserver.chromium.linux` waterfall
+*   [mac_chromium_rel_ng], formerly on the `tryserver.chromium.mac` waterfall
+*   [win_chromium_rel_ng], formerly on the `tryserver.chromium.win` waterfall
 
-[linux_chromium_rel_ng]:    http://build.chromium.org/p/tryserver.chromium.linux/builders/linux_chromium_rel_ng?numbuilds=100
-[mac_chromium_rel_ng]:      http://build.chromium.org/p/tryserver.chromium.mac/builders/mac_chromium_rel_ng?numbuilds=100
-[win_chromium_rel_ng]:      http://build.chromium.org/p/tryserver.chromium.win/builders/win_chromium_rel_ng?numbuilds=100
-[tryserver.chromium.linux]: http://build.chromium.org/p/tryserver.chromium.linux/waterfall?numbuilds=100
-[tryserver.chromium.mac]:   http://build.chromium.org/p/tryserver.chromium.mac/waterfall?numbuilds=100
-[tryserver.chromium.win]:   http://build.chromium.org/p/tryserver.chromium.win/waterfall?numbuilds=100
+[linux_chromium_rel_ng]:    https://ci.chromium.org/p/chromium/builders/luci.chromium.try/linux_chromium_rel_ng?limit=100
+[mac_chromium_rel_ng]:      https://ci.chromium.org/p/chromium/builders/luci.chromium.try/mac_chromium_rel_ng?limit=100
+[win7_chromium_rel_ng]:     https://ci.chromium.org/p/chromium/builders/luci.chromium.try/win7_chromium_rel_ng?limit=100
 
 Scan down through the steps looking for the text "GPU"; that identifies those
 tests run on the GPU bots. For each test the "trigger" step can be ignored; the
@@ -132,7 +129,7 @@ tryserver master you want to reference, for example:
 ```sh
 git cl try -b linux_chromium_rel_ng
 git cl try -b mac_chromium_rel_ng
-git cl try -b win_chromium_rel_ng
+git cl try -b win7_chromium_rel_ng
 ```
 
 Alternatively, the Gerrit UI can be used to send a patch set to these try
@@ -150,6 +147,7 @@ tryservers for code changes to certain sub-directories.
 [linux_optional_gpu_tests_rel]: https://ci.chromium.org/p/chromium/builders/luci.chromium.try/linux_optional_gpu_tests_rel
 [mac_optional_gpu_tests_rel]:   https://ci.chromium.org/p/chromium/builders/luci.chromium.try/mac_optional_gpu_tests_rel
 [win_optional_gpu_tests_rel]:   https://ci.chromium.org/p/chromium/builders/luci.chromium.try/win_optional_gpu_tests_rel
+[luci.chromium.try]:            https://ci.chromium.org/p/chromium/g/luci.chromium.try/builders
 
 Tryservers for the [ANGLE project] are also present on the
 [tryserver.chromium.angle] waterfall. These are invoked from the Gerrit user
@@ -198,19 +196,24 @@ in `src/content/test/gpu/gpu_tests/`. For example:
 *   `run_gpu_integration_test.py screenshot_sync --browser=release`
 *   `run_gpu_integration_test.py trace_test --browser=release`
 
+If you're testing on Android and have built and deployed
+`ChromePublic.apk` to the device, use `--browser=android-chromium` to
+invoke it.
+
 **Note:** If you are on Linux and see this test harness exit immediately with
 `**Non zero exit code**`, it's probably because of some incompatible Python
 packages being installed. Please uninstall the `python-egenix-mxdatetime` and
-`python-logilab-common` packages in this case; see
-[Issue 716241](http://crbug.com/716241).
+`python-logilab-common` packages in this case; see [Issue
+716241](http://crbug.com/716241). This should not be happening any more since
+the GPU tests were switched to use the infra team's `vpython` harness.
 
-You can also run a subset of tests with this harness:
+You can run a subset of tests with this harness:
 
 *   `run_gpu_integration_test.py webgl_conformance --browser=release
     --test-filter=conformance_attribs`
 
 Figuring out the exact command line that was used to invoke the test on the
-bots can be a little tricky. The bots all\* run their tests via Swarming and
+bots can be a little tricky. The bots all run their tests via Swarming and
 isolates, meaning that the invocation of a step like `[trigger]
 webgl_conformance_tests on NVIDIA GPU...` will look like:
 
@@ -229,8 +232,8 @@ argument separator (<code> -- </code>). For a recent invocation of
     '--extra-browser-args=--enable-logging=stderr --js-flags=--expose-gc'
     '--isolated-script-test-output=${ISOLATED_OUTDIR}/output.json'`
 
-You can leave off the --isolated-script-test-output argument, so this would
-leave a full command line of:
+You can leave off the --isolated-script-test-output argument, because that's
+used only by wrapper scripts, so this would leave a full command line of:
 
 *   `run_gpu_integration_test.py
     webgl_conformance --show-stdout '--browser=release' -v
@@ -242,45 +245,51 @@ for documentation on setting this up.
 
 [Cloud Storage Credentials]: gpu_testing_bot_details.md#Cloud-storage-credentials
 
-Pixel tests use reference images from cloud storage, bots pass
-`--upload-refimg-to-cloud-storage` argument, but to run locally you need to pass
-`--download-refimg-from-cloud-storage` argument, as well as other arguments bot
-uses, like `--refimg-cloud-storage-bucket` and `--os-type`.
+### Running the pixel tests locally
 
-Sample command line for Android:
+The pixel tests run in a few different modes:
+
+*   The waterfall bots generate reference images into cloud storage, and pass
+    the `--upload-refimg-to-cloud-storage` command line argument.
+*	The trybots use the reference images that were generated by the waterfall
+    bots. They pass the `--download-refimg-from-cloud-storage` command line
+    argument, as well as other needed ones like `--refimg-cloud-storage-bucket`
+    and `--os-type`.
+*   When run locally, the first time the pixel tests are run, generated
+    *reference* images are placed into
+    `src/content/test/data/gpu/gpu_reference/`. The second and subsequent times,
+    if tests fail, failure images will be placed into
+    `src/content/test/data/gpu/generated`.
+
+It's possible to make your local pixel tests download the reference images from
+cloud storage, if your workstation has the same OS and GPU type as one of the
+bots on the waterfall, and you pass the `--download-refimg-from-cloud-storage`,
+`--refimg-cloud-storage-bucket`, `--os-type` and `--build-revision` command line
+arguments.
+
+Example command line for running the pixel tests locally on a desktop
+platform, where the Chrome build is in out/Release:
+
+*   `run_gpu_integration_test.py pixel --browser=release`
+
+Running against a connected Android device where ChromePublic.apk has
+already been deployed:
+
+*   `run_gpu_integration_test.py pixel --browser=android-chromium`
+
+You can run a subset of the pixel tests via the --test-filter argument, which
+takes a regex:
+
+*   `run_gpu_integration_test.py pixel --browser=release --test-filter=Pixel_WebGL`
+*   `run_gpu_integration_test.py pixel --browser=release --test-filter=\(Pixel_WebGL2\|Pixel_GpuRasterization_BlueBox\)`
+
+More complete example command line for Android:
 
 *   `run_gpu_integration_test.py pixel --show-stdout --browser=android-chromium
     -v --passthrough --extra-browser-args='--enable-logging=stderr
     --js-flags=--expose-gc' --refimg-cloud-storage-bucket
     chromium-gpu-archive/reference-images --os-type android
     --download-refimg-from-cloud-storage`
-
-<!-- XXX: update this section; these isolates don't exist anymore -->
-You can find the isolates for the various tests in
-[src/chrome/](http://src.chromium.org/viewvc/chrome/trunk/src/chrome/):
-
-*   [angle_unittests.isolate](https://chromium.googlesource.com/chromium/src/+/master/chrome/angle_unittests.isolate)
-*   [content_gl_tests.isolate](https://chromium.googlesource.com/chromium/src/+/master/content/content_gl_tests.isolate)
-*   [gl_tests.isolate](https://chromium.googlesource.com/chromium/src/+/master/chrome/gl_tests.isolate)
-*   [gles2_conform_test.isolate](https://chromium.googlesource.com/chromium/src/+/master/chrome/gles2_conform_test.isolate)
-*   [tab_capture_end2end_tests.isolate](https://chromium.googlesource.com/chromium/src/+/master/chrome/tab_capture_end2end_tests.isolate)
-*   [telemetry_gpu_test.isolate](https://chromium.googlesource.com/chromium/src/+/master/chrome/telemetry_gpu_test.isolate)
-
-The isolates contain the full or partial command line for invoking the target.
-The complete command line for any test can be deduced from the contents of the
-isolate plus the stdio output from the test's run on the bot.
-
-Note that for the GN build, the isolates are simply described by build targets,
-and [gn_isolate_map.pyl] describes the mapping between isolate name and build
-target, as well as the command line used to invoke the isolate. Once all
-platforms have switched to GN, the .isolate files will be obsolete and be
-removed.
-
-(\* A few of the one-off GPU configurations on the chromium.gpu.fyi waterfall
-run their tests locally rather than via swarming, in order to decrease the
-number of physical machines needed.)
-
-[gn_isolate_map.pyl]: https://chromium.googlesource.com/chromium/src/+/master/testing/buildbot/gn_isolate_map.pyl
 
 ## Running Binaries from the Bots Locally
 
@@ -358,6 +367,42 @@ See the [Swarming documentation] for instructions on how to upload your binaries
 
 [Swarming documentation]: https://www.chromium.org/developers/testing/isolated-testing/for-swes#TOC-Run-a-test-built-locally-on-Swarming
 
+## Moving Test Binaries from Machine to Machine
+
+To create a zip archive of your personal Chromium build plus all of
+the Telemetry-based GPU tests' dependencies, which you can then move
+to another machine for testing:
+
+1. Build Chrome (into `out/Release` in this example).
+1. `python tools/mb/mb.py zip out/Release/ telemetry_gpu_integration_test out/telemetry_gpu_integration_test.zip`
+
+Then copy telemetry_gpu_integration_test.zip to another machine. Unzip
+it, and cd into the resulting directory. Invoke
+`content/test/gpu/run_gpu_integration_test.py` as above.
+
+This workflow has been tested successfully on Windows with a
+statically-linked Release build of Chrome.
+
+Note: on one macOS machine, this command failed because of a broken
+`strip-json-comments` symlink in
+`src/third_party/catapult/common/node_runner/node_runner/node_modules/.bin`. Deleting
+that symlink allowed it to proceed.
+
+Note also: on the same macOS machine, with a component build, this
+command failed to zip up a working Chromium binary. The browser failed
+to start with the following error:
+
+`[0626/180440.571670:FATAL:chrome_main_delegate.cc(1057)] Check failed: service_manifest_data_pack_.`
+
+In a pinch, this command could be used to bundle up everything, but
+the "out" directory could be deleted from the resulting zip archive,
+and the Chromium binaries moved over to the target machine. Then the
+command line arguments `--browser=exact --browser-executable=[path]`
+can be used to launch that specific browser.
+
+See the [user guide for mb](../../tools/mb/docs/user_guide.md#mb-zip), the
+meta-build system, for more details.
+
 ## Adding New Tests to the GPU Bots
 
 The goal of the GPU bots is to avoid regressions in Chrome's rendering stack.
@@ -388,7 +433,7 @@ single step.
 If you are adding a new test to one of the existing tests (e.g., `pixel_test`),
 all you need to do is make sure that your new test runs correctly via isolates.
 See the documentation from the GPU bot details on [adding new isolated
-tests][new-isolates] for the `GYP_DEFINES` and authentication needed to upload
+tests][new-isolates] for the gn args and authentication needed to upload
 isolates to the isolate server. Most likely the new test will be Telemetry
 based, and included in the `telemetry_gpu_test_run` isolate. You can then
 invoke it via:
@@ -408,27 +453,33 @@ in the Chromium workspace:
 
 These files are autogenerated by the following script:
 
-*   [`generate_buildbot_json.py`](https://chromium.googlesource.com/chromium/src/+/master/content/test/gpu/generate_buildbot_json.py)
+*   [`generate_buildbot_json.py`](https://chromium.googlesource.com/chromium/src/+/master/testing/buildbot/generate_buildbot_json.py)
 
-This script is completely self-contained and should hopefully be
-self-explanatory. The JSON files are parsed by the chromium and chromium_trybot
-recipes, and describe two types of tests:
+This script is documented in
+[`testing/buildbot/README.md`](https://chromium.googlesource.com/chromium/src/+/master/testing/buildbot/README.md). The
+JSON files are parsed by the chromium and chromium_trybot recipes, and describe
+two basic types of tests:
 
 *   GTests: those which use the Googletest and Chromium's `base/test/launcher/`
     frameworks.
-*   Telemetry based tests: those which are built on the Telemetry framework and
-    launch the entire browser.
+*   Isolated scripts: tests whose initial entry point is a Python script which
+    follows a simple convention of command line argument parsing.
+
+The majority of the GPU tests are however:
+
+*   Telemetry based tests: an isolated script test which is built on the
+    Telemetry framework and which launches the entire browser.
 
 A prerequisite of adding a new test to the bots is that that test [run via
-isolates][new-isolates]. Once that is done, modify `generate_buildbot_json.py` to add the
-test to the appropriate set of bots. Be careful when adding large new test
-steps to all of the bots, because the GPU bots are a limited resource and do
-not currently have the capacity to absorb large new test suites. It is safer to
-get new tests running on the chromium.gpu.fyi waterfall first, and expand from
-there to the chromium.gpu waterfall (which will also make them run against
-every Chromium CL by virtue of the `linux_chromium_rel_ng`,
-`mac_chromium_rel_ng` and `win_chromium_rel_ng` tryservers' mirroring of the
-bots on this waterfall – so be careful!).
+isolates][new-isolates]. Once that is done, modify `test_suites.pyl` to add the
+test to the appropriate set of bots. Be careful when adding large new test steps
+to all of the bots, because the GPU bots are a limited resource and do not
+currently have the capacity to absorb large new test suites. It is safer to get
+new tests running on the chromium.gpu.fyi waterfall first, and expand from there
+to the chromium.gpu waterfall (which will also make them run against every
+Chromium CL by virtue of the `linux_chromium_rel_ng`, `mac_chromium_rel_ng`,
+`win7_chromium_rel_ng` and `android-marshmallow-arm64-rel` tryservers' mirroring
+of the bots on this waterfall – so be careful!).
 
 Tryjobs which add new test steps to the chromium.gpu.json file will run those
 new steps during the tryjob, which helps ensure that the new test won't break
@@ -438,6 +489,18 @@ Tryjobs which modify chromium.gpu.fyi.json can be sent to the
 `win_optional_gpu_tests_rel`, `mac_optional_gpu_tests_rel` and
 `linux_optional_gpu_tests_rel` tryservers to help ensure that they won't
 break the FYI bots.
+
+## Debugging Pixel Test Failures on the GPU Bots
+
+If pixel tests fail on the bots, the stdout will contain text like:
+
+`See http://chromium-browser-gpu-tests.commondatastorage.googleapis.com/view_test_results.html?[HASH]`
+
+This link contains all of the failing tests' generated and reference
+images, and is useful for figuring out exactly what went wrong. [Issue
+898649](http://crbug.com/898649) tracks improving this user interface,
+so that the failures can be surfaced directly in the build logs rather
+than having to dig through stdout.
 
 ## Updating and Adding New Pixel Tests to the GPU Bots
 
@@ -459,39 +522,38 @@ correctness. There are a few reasons for this.
     more thought; see [Issue 349262](http://crbug.com/349262).
 
 If a reference image based pixel test's result is going to change because of a
-change in ANGLE or Blink (for example), updating the reference images is a
-slightly tricky process. Here's how to do it:
+change in a third party repository (e.g. in ANGLE), updating the reference
+images is a slightly tricky process. Here's how to do it:
 
-*   Mark the pixel test as failing in the [pixel tests]' [test expectations]
-*   Commit the change to ANGLE, Blink, etc. which will change the test's
-    results
+*   Mark the pixel test as failing **without platform condition** in the
+    [pixel test]'s [test expectations]
+*   Commit the change to the third party repository, etc. which will change the
+    test's results
 *   Note that without the failure expectation, this commit would turn some bots
-    red; a Blink change will turn the GPU bots on the chromium.webkit waterfall
-    red, and an ANGLE change will turn the chromium.gpu.fyi bots red
-*   Wait for Blink/ANGLE/etc. to roll
+    red, e.g. an ANGLE change will turn the chromium.gpu.fyi bots red
+*   Wait for the third party repository to roll into Chromium
 *   Commit a change incrementing the revision number associated with the test
     in the [test pages]
 *   Commit a second change removing the failure expectation, once all of the
     bots on the main waterfall have generated new reference images. This change
     should go through the commit queue cleanly.
 
-[pixel tests]: https://chromium.googlesource.com/chromium/src/+/master/content/test/gpu/gpu_tests/pixel_test_pages.py
-[test expectations]: https://chromium.googlesource.com/chromium/src/+/master/content/test/gpu/gpu_tests/pixel_expectations.py
-[test pages]: https://chromium.googlesource.com/chromium/src/+/master/content/test/gpu/gpu_tests/pixel_test_pages.py
-
 When adding a brand new pixel test that uses a reference image, the steps are
 similar, but simpler:
 
-*   Mark the test as failing in the same commit which introduces the new test
+*   In the same commit which introduces the new test, mark the pixel test as
+    failing **without platform condition** in the [pixel test]'s [test
+    expectations]
 *   Wait for the reference images to be produced by all of the GPU bots on the
     waterfalls (see [chromium-gpu-archive/reference-images])
 *   Commit a change un-marking the test as failing
 
-When making a Chromium-side change which changes the pixel tests' results:
+When making a Chromium-side (including Blink which is now in the same Chromium
+repository) change which changes the pixel tests' results:
 
-*   In your CL, both mark the pixel test as failing in the pixel test's test
-    expectations and increment the test's version number in the page set (see
-    above)
+*   In your CL, both mark the pixel test as failing **without platform
+    condition** in the [pixel test]'s [test expectations] and increment the
+    test's version number associated with the test in the [test pages]
 *   After your CL lands, land another CL removing the failure expectations. If
     this second CL goes through the commit queue cleanly, you know reference
     images were generated properly.
@@ -501,6 +563,9 @@ pixels in the rendered image rather than using a reference image per platform.
 The [GPU rasterization test] is a good example of a recently added test which
 performs such spot checks.
 
+[pixel test]: https://chromium.googlesource.com/chromium/src/+/master/content/test/gpu/gpu_tests/pixel_test_pages.py
+[test expectations]: https://chromium.googlesource.com/chromium/src/+/master/content/test/gpu/gpu_tests/pixel_expectations.py
+[test pages]: https://chromium.googlesource.com/chromium/src/+/master/content/test/gpu/gpu_tests/pixel_test_pages.py
 [cloud storage bucket]: https://console.developers.google.com/storage/chromium-gpu-archive/reference-images
 <!-- XXX: old link -->
 [GPU rasterization test]: http://src.chromium.org/viewvc/chrome/trunk/src/content/test/gpu/gpu_tests/gpu_rasterization.py

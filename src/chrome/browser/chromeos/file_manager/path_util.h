@@ -6,6 +6,7 @@
 #define CHROME_BROWSER_CHROMEOS_FILE_MANAGER_PATH_UTIL_H_
 
 #include <string>
+#include <vector>
 
 #include "base/files/file_path.h"
 #include "storage/browser/fileapi/file_system_url.h"
@@ -20,8 +21,14 @@ namespace util {
 // be used by tests.
 extern const base::FilePath::CharType kRemovableMediaPath[];
 
+// Absolute path for the folder containing Android files.
+extern const base::FilePath::CharType kAndroidFilesPath[];
+
 // Gets the absolute path for the 'Downloads' folder for the |profile|.
 base::FilePath GetDownloadsFolderForProfile(Profile* profile);
+
+// Gets the absolute path for the 'MyFiles' folder for the |profile|.
+base::FilePath GetMyFilesFolderForProfile(Profile* profile);
 
 // Converts |old_path| to |new_path| and returns true, if the old path points
 // to an old location of user folders (in "Downloads" or "Google Drive").
@@ -43,6 +50,27 @@ bool MigratePathFromOldFormat(Profile* profile,
 // The canonical mount point name for "Downloads" folder.
 std::string GetDownloadsMountPointName(Profile* profile);
 
+// The canonical mount point name for ARC "Play files" folder.
+const std::string GetAndroidFilesMountPointName();
+
+// The canonical mount point name for crostini "Linux files" folder.
+std::string GetCrostiniMountPointName(Profile* profile);
+
+// The actual directory the crostini "Linux files" folder is mounted.
+base::FilePath GetCrostiniMountDirectory(Profile* profile);
+
+// The sshfs mount options for crostini "Linux files" mount.
+std::vector<std::string> GetCrostiniMountOptions(
+    const std::string& hostname,
+    const std::string& host_private_key,
+    const std::string& container_public_key);
+
+// Convert a cracked url to a path inside the Crostini VM.
+bool ConvertFileSystemURLToPathInsideCrostini(
+    Profile* profile,
+    const storage::FileSystemURL& file_system_url,
+    base::FilePath* inside);
+
 // DEPRECATED. Use |ConvertToContentUrls| instead.
 // While this function can convert paths under Downloads, /media/removable
 // and /special/drive, this CANNOT convert paths under ARC media directories
@@ -60,6 +88,23 @@ void ConvertToContentUrls(
     const std::vector<storage::FileSystemURL>& file_system_urls,
     ConvertToContentUrlsCallback callback);
 
+// Convert path into a string suitable for display in settings.
+// Replacements:
+// * /home/chronos/user/Downloads                => Downloads
+// * /home/chronos/u-<hash>/Downloads            => Downloads
+// * /special/drive-<hash>/root                  => Google Drive
+// * /special/drive-<hash>/team_drives           => Team Drives
+// * /special/drive-<hash>/Computers             => Computers
+// * /run/arc/sdcard/write/emulated/0            => Play files
+// * /media/fuse/crostini_<hash>_termina_penguin => Linux files
+// * '/' with ' \u203a ' (angled quote sign) for display purposes.
+std::string GetPathDisplayTextForSettings(Profile* profile,
+                                          const std::string& path);
+
+// Extracts |mount_name| and |full_path| from given |absolute_path|.
+bool ExtractMountNameAndFullPath(const base::FilePath& absolute_path,
+                                 std::string* mount_name,
+                                 std::string* full_path);
 }  // namespace util
 }  // namespace file_manager
 

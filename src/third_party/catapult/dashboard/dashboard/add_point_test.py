@@ -16,9 +16,8 @@ from google.appengine.ext import ndb
 
 from dashboard import add_point
 from dashboard import add_point_queue
-from dashboard import layered_cache
 from dashboard import units_to_direction
-from dashboard.common import stored_object
+from dashboard.common import layered_cache
 from dashboard.common import testing_common
 from dashboard.common import utils
 from dashboard.models import anomaly
@@ -505,13 +504,12 @@ class AddPointTest(testing_common.TestCase):
     self.assertFalse(hasattr(row, 'r_two'))
 
   def testPost_UnWhitelistedBots_MarkedInternalOnly(self):
-    stored_object.Set(
-        add_point_queue.BOT_WHITELIST_KEY, ['linux-release', 'win7'])
     parent = graph_data.Master(id='ChromiumPerf').put()
-    parent = graph_data.Bot(
-        id='suddenly_secret', parent=parent, internal_only=False).put()
-    graph_data.TestMetadata(
-        id='ChromiumPerf/suddenly_secret/dromaeo', internal_only=False).put()
+    parent = graph_data.Bot(id='win7', parent=parent, internal_only=False).put()
+    t = graph_data.TestMetadata(
+        id='ChromiumPerf/suddenly_secret/dromaeo', internal_only=False)
+    t.UpdateSheriff()
+    t.put()
 
     data_param = json.dumps([
         {
@@ -752,11 +750,16 @@ class AddPointTest(testing_common.TestCase):
     parent = graph_data.Master(id='ChromiumPerf').put()
     parent = graph_data.Bot(id='win7', parent=parent).put()
     parent = graph_data.TestMetadata(
-        id='ChromiumPerf/win7/scrolling_benchmark').put()
-    graph_data.TestMetadata(
+        id='ChromiumPerf/win7/scrolling_benchmark')
+    parent.UpdateSheriff()
+    parent.put()
+
+    t = graph_data.TestMetadata(
         id='ChromiumPerf/win7/scrolling_benchmark/mean_frame_time',
         units='ms',
-        improvement_direction=anomaly.DOWN).put()
+        improvement_direction=anomaly.DOWN)
+    t.UpdateSheriff()
+    t.put()
 
     data_param = json.dumps([
         {
@@ -791,10 +794,17 @@ class AddPointTest(testing_common.TestCase):
     parent = graph_data.Master(id='ChromiumPerf').put()
     parent = graph_data.Bot(id='win7', parent=parent).put()
     parent = graph_data.TestMetadata(
-        id='ChromiumPerf/win7/scrolling_benchmark').put()
+        id='ChromiumPerf/win7/scrolling_benchmark')
+    parent.UpdateSheriff()
+    parent.put()
+
     frame_time_key = graph_data.TestMetadata(
         id='ChromiumPerf/win7/scrolling_benchmark/frame_time', units='ms',
-        improvement_direction=anomaly.DOWN).put()
+        improvement_direction=anomaly.DOWN)
+    frame_time_key.UpdateSheriff()
+    frame_time_key.put()
+    frame_time_key = frame_time_key.key
+
     # Before sending the new data point, the improvement direction is down.
     test = frame_time_key.get()
     self.assertEqual(anomaly.DOWN, test.improvement_direction)
@@ -826,11 +836,17 @@ class AddPointTest(testing_common.TestCase):
     parent = graph_data.Master(id='ChromiumPerf').put()
     parent = graph_data.Bot(id='win7', parent=parent).put()
     parent = graph_data.TestMetadata(
-        id='ChromiumPerf/win7/scrolling_benchmark').put()
-    graph_data.TestMetadata(
+        id='ChromiumPerf/win7/scrolling_benchmark')
+    parent.UpdateSheriff()
+    parent.put()
+
+    t = graph_data.TestMetadata(
         id='ChromiumPerf/win7/scrolling_benchmark/mean_frame_time',
         units='ms',
-        improvement_direction=anomaly.UNKNOWN).put()
+        improvement_direction=anomaly.UNKNOWN)
+    t.UpdateSheriff()
+    t.put()
+
     point = {
         'master': 'ChromiumPerf',
         'bot': 'win7',
@@ -859,11 +875,16 @@ class AddPointTest(testing_common.TestCase):
     """Tests that adding a point sets the test to be non-deprecated."""
     parent = graph_data.Master(id='ChromiumPerf').put()
     parent = graph_data.Bot(id='win7', parent=parent).put()
-    graph_data.TestMetadata(
-        id='ChromiumPerf/win7/scrolling_benchmark', deprecated=True).put()
-    graph_data.TestMetadata(
+    t = graph_data.TestMetadata(
+        id='ChromiumPerf/win7/scrolling_benchmark', deprecated=True)
+    t.UpdateSheriff()
+    t.put()
+
+    t = graph_data.TestMetadata(
         id='ChromiumPerf/win7/scrolling_benchmark/mean_frame_time',
-        deprecated=True).put()
+        deprecated=True)
+    t.UpdateSheriff()
+    t.put()
 
     point = {
         'master': 'ChromiumPerf',
@@ -1244,6 +1265,7 @@ class AddPointTest(testing_common.TestCase):
     t = graph_data.TestMetadata(
         id='ChromiumPerf/win7/my_test_suite/my_test/http___www.cnn.com_story',
         description='bar')
+    t.UpdateSheriff()
     t.put()
     self.assertEqual(None, t.unescaped_story_name)
     data_param = json.dumps(_SAMPLE_DASHBOARD_JSON_ESCAPE_STORYNAME)

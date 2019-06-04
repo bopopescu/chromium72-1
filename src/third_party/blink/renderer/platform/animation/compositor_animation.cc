@@ -20,12 +20,13 @@ std::unique_ptr<CompositorAnimation> CompositorAnimation::Create() {
 
 std::unique_ptr<CompositorAnimation>
 CompositorAnimation::CreateWorkletAnimation(
+    cc::WorkletAnimationId worklet_animation_id,
     const String& name,
-    std::unique_ptr<CompositorScrollTimeline> scroll_timeline) {
+    std::unique_ptr<CompositorScrollTimeline> scroll_timeline,
+    std::unique_ptr<cc::AnimationOptions> options) {
   return std::make_unique<CompositorAnimation>(cc::WorkletAnimation::Create(
-      cc::AnimationIdProvider::NextAnimationId(),
-      std::string(name.Ascii().data(), name.length()),
-      std::move(scroll_timeline)));
+      worklet_animation_id, std::string(name.Ascii().data(), name.length()),
+      std::move(scroll_timeline), std::move(options)));
 }
 
 CompositorAnimation::CompositorAnimation(
@@ -78,6 +79,15 @@ void CompositorAnimation::PauseKeyframeModel(int keyframe_model_id,
 
 void CompositorAnimation::AbortKeyframeModel(int keyframe_model_id) {
   animation_->AbortKeyframeModel(keyframe_model_id);
+}
+
+void CompositorAnimation::UpdateScrollTimeline(
+    base::Optional<cc::ElementId> element_id,
+    base::Optional<double> start_scroll_offset,
+    base::Optional<double> end_scroll_offset) {
+  cc::ToWorkletAnimation(animation_.get())
+      ->UpdateScrollTimeline(element_id, start_scroll_offset,
+                             end_scroll_offset);
 }
 
 void CompositorAnimation::NotifyAnimationStarted(base::TimeTicks monotonic_time,

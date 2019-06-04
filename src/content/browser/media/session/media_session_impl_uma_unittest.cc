@@ -8,18 +8,18 @@
 #include <memory>
 
 #include "base/metrics/histogram_samples.h"
-#include "base/test/histogram_tester.h"
+#include "base/test/metrics/histogram_tester.h"
 #include "content/browser/media/session/media_session_player_observer.h"
 #include "content/test/test_render_view_host.h"
 #include "content/test/test_web_contents.h"
 #include "media/base/media_content_type.h"
-#include "third_party/blink/public/platform/modules/mediasession/media_session.mojom.h"
+#include "services/media_session/public/mojom/media_session.mojom.h"
 
 namespace content {
 
 using MediaSessionUserAction = MediaSessionUmaHelper::MediaSessionUserAction;
 using SuspendType = MediaSession::SuspendType;
-using MediaSessionAction = blink::mojom::MediaSessionAction;
+using MediaSessionAction = media_session::mojom::MediaSessionAction;
 
 namespace {
 
@@ -48,17 +48,17 @@ class MockMediaSessionPlayerObserver : public MediaSessionPlayerObserver {
 };
 
 struct ActionMappingEntry {
-  blink::mojom::MediaSessionAction action;
+  media_session::mojom::MediaSessionAction action;
   MediaSessionUserAction user_action;
 };
 
 ActionMappingEntry kActionMappings[] = {
-    {MediaSessionAction::PLAY, MediaSessionUserAction::Play},
-    {MediaSessionAction::PAUSE, MediaSessionUserAction::Pause},
-    {MediaSessionAction::PREVIOUS_TRACK, MediaSessionUserAction::PreviousTrack},
-    {MediaSessionAction::NEXT_TRACK, MediaSessionUserAction::NextTrack},
-    {MediaSessionAction::SEEK_BACKWARD, MediaSessionUserAction::SeekBackward},
-    {MediaSessionAction::SEEK_FORWARD, MediaSessionUserAction::SeekForward},
+    {MediaSessionAction::kPlay, MediaSessionUserAction::Play},
+    {MediaSessionAction::kPause, MediaSessionUserAction::Pause},
+    {MediaSessionAction::kPreviousTrack, MediaSessionUserAction::PreviousTrack},
+    {MediaSessionAction::kNextTrack, MediaSessionUserAction::NextTrack},
+    {MediaSessionAction::kSeekBackward, MediaSessionUserAction::SeekBackward},
+    {MediaSessionAction::kSeekForward, MediaSessionUserAction::SeekForward},
 };
 
 }  // anonymous namespace
@@ -73,8 +73,6 @@ class MediaSessionImplUmaTest : public RenderViewHostImplTestHarness {
     contents()->GetMainFrame()->InitializeRenderFrameIfNeeded();
     StartPlayer();
   }
-
-  void TearDown() override { RenderViewHostImplTestHarness::TearDown(); }
 
  protected:
   MediaSessionImpl* GetSession() { return MediaSessionImpl::Get(contents()); }
@@ -96,7 +94,7 @@ class MediaSessionImplUmaTest : public RenderViewHostImplTestHarness {
 };
 
 TEST_F(MediaSessionImplUmaTest, RecordPauseDefaultOnUISuspend) {
-  GetSession()->Suspend(SuspendType::UI);
+  GetSession()->Suspend(SuspendType::kUI);
   std::unique_ptr<base::HistogramSamples> samples(
       GetHistogramSamplesSinceTestStart("Media.Session.UserAction"));
   EXPECT_EQ(1, samples->TotalCount());
@@ -105,22 +103,22 @@ TEST_F(MediaSessionImplUmaTest, RecordPauseDefaultOnUISuspend) {
 }
 
 TEST_F(MediaSessionImplUmaTest, RecordPauseDefaultOnSystemSuspend) {
-  GetSession()->Suspend(SuspendType::SYSTEM);
+  GetSession()->Suspend(SuspendType::kSystem);
   std::unique_ptr<base::HistogramSamples> samples(
       GetHistogramSamplesSinceTestStart("Media.Session.UserAction"));
   EXPECT_EQ(0, samples->TotalCount());
 }
 
 TEST_F(MediaSessionImplUmaTest, RecordPauseDefaultOnContentSuspend) {
-  GetSession()->Suspend(SuspendType::CONTENT);
+  GetSession()->Suspend(SuspendType::kContent);
   std::unique_ptr<base::HistogramSamples> samples(
       GetHistogramSamplesSinceTestStart("Media.Session.UserAction"));
   EXPECT_EQ(0, samples->TotalCount());
 }
 
 TEST_F(MediaSessionImplUmaTest, RecordPauseDefaultOnUIResume) {
-  GetSession()->Suspend(SuspendType::SYSTEM);
-  GetSession()->Resume(SuspendType::UI);
+  GetSession()->Suspend(SuspendType::kSystem);
+  GetSession()->Resume(SuspendType::kUI);
   std::unique_ptr<base::HistogramSamples> samples(
       GetHistogramSamplesSinceTestStart("Media.Session.UserAction"));
   EXPECT_EQ(1, samples->TotalCount());
@@ -129,8 +127,8 @@ TEST_F(MediaSessionImplUmaTest, RecordPauseDefaultOnUIResume) {
 }
 
 TEST_F(MediaSessionImplUmaTest, RecordPauseDefaultOnSystemResume) {
-  GetSession()->Suspend(SuspendType::SYSTEM);
-  GetSession()->Resume(SuspendType::SYSTEM);
+  GetSession()->Suspend(SuspendType::kSystem);
+  GetSession()->Resume(SuspendType::kSystem);
   std::unique_ptr<base::HistogramSamples> samples(
       GetHistogramSamplesSinceTestStart("Media.Session.UserAction"));
   EXPECT_EQ(0, samples->TotalCount());
@@ -138,15 +136,15 @@ TEST_F(MediaSessionImplUmaTest, RecordPauseDefaultOnSystemResume) {
 
 // This should never happen but just check this to be safe.
 TEST_F(MediaSessionImplUmaTest, RecordPauseDefaultOnContentResume) {
-  GetSession()->Suspend(SuspendType::SYSTEM);
-  GetSession()->Resume(SuspendType::CONTENT);
+  GetSession()->Suspend(SuspendType::kSystem);
+  GetSession()->Resume(SuspendType::kContent);
   std::unique_ptr<base::HistogramSamples> samples(
       GetHistogramSamplesSinceTestStart("Media.Session.UserAction"));
   EXPECT_EQ(0, samples->TotalCount());
 }
 
 TEST_F(MediaSessionImplUmaTest, RecordPauseDefaultOnUIStop) {
-  GetSession()->Stop(SuspendType::UI);
+  GetSession()->Stop(SuspendType::kUI);
   std::unique_ptr<base::HistogramSamples> samples(
       GetHistogramSamplesSinceTestStart("Media.Session.UserAction"));
   EXPECT_EQ(1, samples->TotalCount());
@@ -156,7 +154,7 @@ TEST_F(MediaSessionImplUmaTest, RecordPauseDefaultOnUIStop) {
 
 // This should never happen but just check this to be safe.
 TEST_F(MediaSessionImplUmaTest, RecordPauseDefaultOnSystemStop) {
-  GetSession()->Stop(SuspendType::SYSTEM);
+  GetSession()->Stop(SuspendType::kSystem);
   std::unique_ptr<base::HistogramSamples> samples(
       GetHistogramSamplesSinceTestStart("Media.Session.UserAction"));
   EXPECT_EQ(0, samples->TotalCount());

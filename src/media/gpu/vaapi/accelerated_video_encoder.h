@@ -12,12 +12,15 @@
 #include "base/macros.h"
 #include "base/memory/ref_counted.h"
 #include "base/time/time.h"
+#include "media/base/video_bitrate_allocation.h"
 #include "media/base/video_codecs.h"
 #include "media/gpu/codec_picture.h"
+#include "media/video/video_encode_accelerator.h"
 #include "ui/gfx/geometry/size.h"
 
 namespace media {
 
+struct BitstreamBufferMetadata;
 class VaapiEncodeJob;
 class VideoFrame;
 
@@ -83,6 +86,8 @@ class AcceleratedVideoEncoder {
     // Returns the timestamp associated with this job.
     base::TimeDelta timestamp() const { return timestamp_; }
 
+    virtual BitstreamBufferMetadata Metadata(size_t payload_size) const;
+
     virtual VaapiEncodeJob* AsVaapiEncodeJob();
 
    protected:
@@ -112,18 +117,15 @@ class AcceleratedVideoEncoder {
     DISALLOW_COPY_AND_ASSIGN(EncodeJob);
   };
 
-  // Initializes the encoder to encode frames of |visible_size| into a stream
-  // for |profile|, at |initial_bitrate| and |initial_framerate|.
+  // Initializes the encoder with requested parameter set |config|.
   // Returns false if the requested set of parameters is not supported,
   // true on success.
-  virtual bool Initialize(const gfx::Size& visible_size,
-                          VideoCodecProfile profile,
-                          uint32_t initial_bitrate,
-                          uint32_t initial_framerate) = 0;
+  virtual bool Initialize(const VideoEncodeAccelerator::Config& config) = 0;
 
   // Updates current framerate and/or bitrate to |framerate| in FPS
-  // and |bitrate| in bps.
-  virtual bool UpdateRates(uint32_t bitrate, uint32_t framerate) = 0;
+  // and the specified video bitrate allocation.
+  virtual bool UpdateRates(const VideoBitrateAllocation& bitrate_allocation,
+                           uint32_t framerate) = 0;
 
   // Returns coded size for the input buffers required to encode, in pixels;
   // typically visible size adjusted to match codec alignment requirements.
@@ -131,7 +133,7 @@ class AcceleratedVideoEncoder {
 
   // Returns minimum size in bytes for bitstream buffers required to fit output
   // stream buffers produced.
-  virtual size_t GetBitstreamBufferSize() const = 0;
+  virtual size_t GetBitstreamBufferSize() const;
 
   // Returns maximum number of reference frames that may be used by the
   // encoder to encode one frame. The client should be able to provide up to

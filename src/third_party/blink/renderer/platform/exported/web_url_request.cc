@@ -31,19 +31,23 @@
 #include "third_party/blink/public/platform/web_url_request.h"
 
 #include <memory>
+#include "base/time/time.h"
 #include "third_party/blink/public/platform/web_http_body.h"
 #include "third_party/blink/public/platform/web_http_header_visitor.h"
 #include "third_party/blink/public/platform/web_security_origin.h"
 #include "third_party/blink/public/platform/web_url.h"
 #include "third_party/blink/renderer/platform/loader/fetch/resource_request.h"
+#include "third_party/blink/renderer/platform/network/encoded_form_data.h"
+#include "third_party/blink/renderer/platform/weborigin/security_origin.h"
 #include "third_party/blink/renderer/platform/wtf/allocator.h"
 #include "third_party/blink/renderer/platform/wtf/noncopyable.h"
 
 namespace blink {
 
 // The purpose of this struct is to permit allocating a ResourceRequest on the
-// heap, which is otherwise disallowed by DISALLOW_NEW_EXCEPT_PLACEMENT_NEW
-// annotation on ResourceRequest.
+// heap, which is otherwise disallowed by DISALLOW_NEW annotation on
+// ResourceRequest.
+// TODO(keishi): Replace with GCWrapper<ResourceRequest>
 struct WebURLRequest::ResourceRequestContainer {
   ResourceRequestContainer() = default;
   explicit ResourceRequestContainer(const ResourceRequest& r)
@@ -122,7 +126,7 @@ void WebURLRequest::SetCacheMode(mojom::FetchCacheMode cache_mode) {
   resource_request_->SetCacheMode(cache_mode);
 }
 
-double WebURLRequest::TimeoutInterval() const {
+base::TimeDelta WebURLRequest::TimeoutInterval() const {
   return resource_request_->TimeoutInterval();
 }
 
@@ -144,15 +148,17 @@ void WebURLRequest::SetHTTPHeaderField(const WebString& name,
   resource_request_->SetHTTPHeaderField(name, value);
 }
 
-void WebURLRequest::SetHTTPReferrer(const WebString& web_referrer,
-                                    WebReferrerPolicy referrer_policy) {
+void WebURLRequest::SetHTTPReferrer(
+    const WebString& web_referrer,
+    network::mojom::ReferrerPolicy referrer_policy) {
   // WebString doesn't have the distinction between empty and null. We use
   // the null WTFString for referrer.
   DCHECK_EQ(Referrer::NoReferrer(), String());
   String referrer =
       web_referrer.IsEmpty() ? Referrer::NoReferrer() : String(web_referrer);
-  resource_request_->SetHTTPReferrer(
-      Referrer(referrer, static_cast<ReferrerPolicy>(referrer_policy)));
+  // TODO(domfarolino): Stop storing ResourceRequest's generated referrer as a
+  // header and instead use a separate member. See https://crbug.com/850813.
+  resource_request_->SetHTTPReferrer(Referrer(referrer, referrer_policy));
 }
 
 void WebURLRequest::AddHTTPHeaderField(const WebString& name,
@@ -194,7 +200,7 @@ bool WebURLRequest::ReportRawHeaders() const {
   return resource_request_->ReportRawHeaders();
 }
 
-WebURLRequest::RequestContext WebURLRequest::GetRequestContext() const {
+mojom::RequestContextType WebURLRequest::GetRequestContext() const {
   return resource_request_->GetRequestContext();
 }
 
@@ -202,8 +208,8 @@ network::mojom::RequestContextFrameType WebURLRequest::GetFrameType() const {
   return resource_request_->GetFrameType();
 }
 
-WebReferrerPolicy WebURLRequest::GetReferrerPolicy() const {
-  return static_cast<WebReferrerPolicy>(resource_request_->GetReferrerPolicy());
+network::mojom::ReferrerPolicy WebURLRequest::GetReferrerPolicy() const {
+  return resource_request_->GetReferrerPolicy();
 }
 
 void WebURLRequest::SetHTTPOriginIfNeeded(const WebSecurityOrigin& origin) {
@@ -218,7 +224,8 @@ void WebURLRequest::SetHasUserGesture(bool has_user_gesture) {
   resource_request_->SetHasUserGesture(has_user_gesture);
 }
 
-void WebURLRequest::SetRequestContext(RequestContext request_context) {
+void WebURLRequest::SetRequestContext(
+    mojom::RequestContextType request_context) {
   resource_request_->SetRequestContext(request_context);
 }
 
@@ -249,14 +256,6 @@ int WebURLRequest::AppCacheHostID() const {
 
 void WebURLRequest::SetAppCacheHostID(int app_cache_host_id) {
   resource_request_->SetAppCacheHostID(app_cache_host_id);
-}
-
-bool WebURLRequest::DownloadToFile() const {
-  return resource_request_->DownloadToFile();
-}
-
-void WebURLRequest::SetDownloadToFile(bool download_to_file) {
-  resource_request_->SetDownloadToFile(download_to_file);
 }
 
 bool WebURLRequest::PassResponsePipeToClient() const {
@@ -347,6 +346,14 @@ void WebURLRequest::SetExtraData(std::unique_ptr<ExtraData> extra_data) {
   resource_request_->SetExtraData(std::move(extra_data));
 }
 
+bool WebURLRequest::IsDownloadToNetworkCacheOnly() const {
+  return resource_request_->IsDownloadToNetworkCacheOnly();
+}
+
+void WebURLRequest::SetDownloadToNetworkCacheOnly(bool download_to_cache_only) {
+  resource_request_->SetDownloadToNetworkCacheOnly(download_to_cache_only);
+}
+
 ResourceRequest& WebURLRequest::ToMutableResourceRequest() {
   DCHECK(resource_request_);
   return *resource_request_;
@@ -360,14 +367,6 @@ void WebURLRequest::SetPriority(WebURLRequest::Priority priority) {
   resource_request_->SetPriority(static_cast<ResourceLoadPriority>(priority));
 }
 
-bool WebURLRequest::CheckForBrowserSideNavigation() const {
-  return resource_request_->CheckForBrowserSideNavigation();
-}
-
-void WebURLRequest::SetCheckForBrowserSideNavigation(bool check) {
-  resource_request_->SetCheckForBrowserSideNavigation(check);
-}
-
 bool WebURLRequest::WasDiscarded() const {
   return resource_request_->WasDiscarded();
 }
@@ -375,42 +374,18 @@ void WebURLRequest::SetWasDiscarded(bool was_discarded) {
   resource_request_->SetWasDiscarded(was_discarded);
 }
 
-double WebURLRequest::UiStartTime() const {
-  return resource_request_->UiStartTime();
-}
-
-void WebURLRequest::SetUiStartTime(double time_seconds) {
-  resource_request_->SetUIStartTime(time_seconds);
-}
-
 bool WebURLRequest::IsExternalRequest() const {
   return resource_request_->IsExternalRequest();
 }
 
-network::mojom::CORSPreflightPolicy WebURLRequest::GetCORSPreflightPolicy()
+network::mojom::CorsPreflightPolicy WebURLRequest::GetCorsPreflightPolicy()
     const {
-  return resource_request_->CORSPreflightPolicy();
+  return resource_request_->CorsPreflightPolicy();
 }
 
 void WebURLRequest::SetNavigationStartTime(
     base::TimeTicks navigation_start_seconds) {
   resource_request_->SetNavigationStartTime(navigation_start_seconds);
-}
-
-void WebURLRequest::SetIsSameDocumentNavigation(bool is_same_document) {
-  resource_request_->SetIsSameDocumentNavigation(is_same_document);
-}
-
-WebURLRequest::InputToLoadPerfMetricReportPolicy
-WebURLRequest::InputPerfMetricReportPolicy() const {
-  return static_cast<WebURLRequest::InputToLoadPerfMetricReportPolicy>(
-      resource_request_->InputPerfMetricReportPolicy());
-}
-
-void WebURLRequest::SetInputPerfMetricReportPolicy(
-    WebURLRequest::InputToLoadPerfMetricReportPolicy policy) {
-  resource_request_->SetInputPerfMetricReportPolicy(
-      static_cast<blink::InputToLoadPerfMetricReportPolicy>(policy));
 }
 
 base::Optional<WebString> WebURLRequest::GetSuggestedFilename() const {
@@ -424,8 +399,60 @@ bool WebURLRequest::IsAdResource() const {
   return resource_request_->IsAdResource();
 }
 
-const WebContentSecurityPolicyList& WebURLRequest::GetNavigationCSP() const {
+const WebContentSecurityPolicyList& WebURLRequest::GetInitiatorCSP() const {
   return resource_request_->GetInitiatorCSP();
+}
+
+void WebURLRequest::SetUpgradeIfInsecure(bool upgrade_if_insecure) {
+  resource_request_->SetUpgradeIfInsecure(upgrade_if_insecure);
+}
+
+bool WebURLRequest::UpgradeIfInsecure() const {
+  return resource_request_->UpgradeIfInsecure();
+}
+
+bool WebURLRequest::SupportsAsyncRevalidation() const {
+  return resource_request_->AllowsStaleResponse();
+}
+
+bool WebURLRequest::IsRevalidating() const {
+  return resource_request_->IsRevalidating();
+}
+
+const base::Optional<base::UnguessableToken>& WebURLRequest::GetDevToolsToken()
+    const {
+  return resource_request_->GetDevToolsToken();
+}
+
+const WebString WebURLRequest::GetOriginPolicy() const {
+  return resource_request_->GetOriginPolicy();
+}
+
+void WebURLRequest::SetOriginPolicy(const WebString& policy) {
+  resource_request_->SetOriginPolicy(policy);
+}
+
+const WebString WebURLRequest::GetRequestedWithHeader() const {
+  return resource_request_->GetRequestedWithHeader();
+}
+
+void WebURLRequest::SetRequestedWithHeader(const WebString& value) {
+  resource_request_->SetRequestedWithHeader(value);
+}
+
+const WebString WebURLRequest::GetClientDataHeader() const {
+  return resource_request_->GetClientDataHeader();
+}
+
+void WebURLRequest::SetClientDataHeader(const WebString& value) {
+  resource_request_->SetClientDataHeader(value);
+}
+
+const base::UnguessableToken& WebURLRequest::GetFetchWindowId() const {
+  return resource_request_->GetFetchWindowId();
+}
+void WebURLRequest::SetFetchWindowId(const base::UnguessableToken& id) {
+  resource_request_->SetFetchWindowId(id);
 }
 
 const ResourceRequest& WebURLRequest::ToResourceRequest() const {

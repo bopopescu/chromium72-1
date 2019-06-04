@@ -25,10 +25,11 @@
 #include "base/single_thread_task_runner.h"
 #include "base/stl_util.h"
 #include "base/strings/string_util.h"
-#include "base/task_scheduler/post_task.h"
+#include "base/task/post_task.h"
 #include "base/threading/thread_task_runner_handle.h"
 #include "base/time/time.h"
 #include "device/bluetooth/bluez/bluetooth_service_attribute_value_bluez.h"
+#include "device/bluetooth/dbus/bluetooth_gatt_characteristic_client.h"
 #include "device/bluetooth/dbus/bluez_dbus_manager.h"
 #include "device/bluetooth/dbus/fake_bluetooth_adapter_client.h"
 #include "device/bluetooth/dbus/fake_bluetooth_agent_manager_client.h"
@@ -317,7 +318,8 @@ FakeBluetoothDeviceClient::FakeBluetoothDeviceClient()
       connection_rssi_(kUnkownPower),
       transmit_power_(kUnkownPower),
       max_transmit_power_(kUnkownPower),
-      delay_start_discovery_(false) {
+      delay_start_discovery_(false),
+      should_leave_connections_pending_(false) {
   std::unique_ptr<Properties> properties(new Properties(
       base::Bind(&FakeBluetoothDeviceClient::OnPropertyChanged,
                  base::Unretained(this), dbus::ObjectPath(kPairedDevicePath))));
@@ -365,6 +367,10 @@ FakeBluetoothDeviceClient::FakeBluetoothDeviceClient()
 }
 
 FakeBluetoothDeviceClient::~FakeBluetoothDeviceClient() = default;
+
+void FakeBluetoothDeviceClient::LeaveConnectionsPending() {
+  should_leave_connections_pending_ = true;
+}
 
 void FakeBluetoothDeviceClient::Init(
     dbus::Bus* bus,
@@ -416,6 +422,9 @@ void FakeBluetoothDeviceClient::Connect(const dbus::ObjectPath& object_path,
     callback.Run();
     return;
   }
+
+  if (should_leave_connections_pending_)
+    return;
 
   if (properties->paired.value() != true &&
       object_path != dbus::ObjectPath(kConnectUnpairablePath) &&
@@ -623,6 +632,28 @@ void FakeBluetoothDeviceClient::GetServiceRecords(
     return;
   }
   callback.Run(CreateFakeServiceRecords());
+}
+
+void FakeBluetoothDeviceClient::ExecuteWrite(
+    const dbus::ObjectPath& object_path,
+    const base::Closure& callback,
+    const ErrorCallback& error_callback) {
+  for (const auto& prepare_write_request : prepare_write_requests_) {
+    bluez::BluezDBusManager::Get()
+        ->GetBluetoothGattCharacteristicClient()
+        ->WriteValue(prepare_write_request.first, prepare_write_request.second,
+                     base::DoNothing(), base::DoNothing());
+  }
+  prepare_write_requests_.clear();
+  callback.Run();
+}
+
+void FakeBluetoothDeviceClient::AbortWrite(
+    const dbus::ObjectPath& object_path,
+    const base::Closure& callback,
+    const ErrorCallback& error_callback) {
+  prepare_write_requests_.clear();
+  callback.Run();
 }
 
 void FakeBluetoothDeviceClient::BeginDiscoverySimulation(
@@ -1086,7 +1117,7 @@ FakeBluetoothDeviceClient::GetBluetoothDevicesAsDictionaries() const {
 void FakeBluetoothDeviceClient::RemoveDevice(
     const dbus::ObjectPath& adapter_path,
     const dbus::ObjectPath& device_path) {
-  std::vector<dbus::ObjectPath>::iterator listiter =
+  auto listiter =
       std::find(device_list_.begin(), device_list_.end(), device_path);
   if (listiter == device_list_.end())
     return;
@@ -1600,6 +1631,19 @@ void FakeBluetoothDeviceClient::UpdateServiceAndManufacturerData(
   properties->manufacturer_data.ReplaceValue(merged_manufacturer_data);
 }
 
+void FakeBluetoothDeviceClient::UpdateEIR(const dbus::ObjectPath& object_path,
+                                          const std::vector<uint8_t>& eir) {
+  PropertiesMap::const_iterator iter = properties_map_.find(object_path);
+  if (iter == properties_map_.end()) {
+    VLOG(2) << "Fake device does not exist: " << object_path.value();
+    return;
+  }
+  Properties* properties = iter->second.get();
+  DCHECK(properties);
+  properties->eir.set_valid(true);
+  properties->eir.ReplaceValue(eir);
+}
+
 void FakeBluetoothDeviceClient::UpdateConnectionInfo(
     uint16_t connection_rssi,
     uint16_t transmit_power,
@@ -1883,6 +1927,12 @@ void FakeBluetoothDeviceClient::CreateTestDevice(
   device_list_.push_back(device_path);
   for (auto& observer : observers_)
     observer.DeviceAdded(device_path);
+}
+
+void FakeBluetoothDeviceClient::AddPrepareWriteRequest(
+    const dbus::ObjectPath& object_path,
+    const std::vector<uint8_t>& value) {
+  prepare_write_requests_.emplace_back(object_path, value);
 }
 
 }  // namespace bluez

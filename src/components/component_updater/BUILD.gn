@@ -23,12 +23,17 @@ static_library("component_updater") {
     "pref_names.h",
     "timer.cc",
     "timer.h",
+    "timer_update_scheduler.cc",
+    "timer_update_scheduler.h",
+    "update_scheduler.h",
   ]
 
   deps = [
     "//base",
+    "//components/crx_file",
     "//components/update_client",
     "//components/version_info",
+    "//third_party/boringssl:boringssl",
     "//ui/base",
     "//url",
   ]
@@ -72,9 +77,11 @@ source_set("unit_tests") {
     ":component_updater",
     "//base",
     "//base/test:test_support",
+    "//components/crx_file",
     "//components/update_client:test_support",
     "//services/service_manager/public/cpp",
     "//testing/gmock",
     "//testing/gtest",
+    "//third_party/boringssl:boringssl",
   ]
 }

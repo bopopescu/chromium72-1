@@ -37,7 +37,6 @@ import org.webrtc.Camera2Enumerator;
 import org.webrtc.CameraEnumerator;
 import org.webrtc.EglBase;
 import org.webrtc.IceCandidate;
-import org.webrtc.MediaCodecVideoEncoder;
 import org.webrtc.PeerConnection;
 import org.webrtc.PeerConnectionFactory;
 import org.webrtc.SessionDescription;
@@ -85,58 +84,11 @@ public class PeerConnectionClientTest implements PeerConnectionEvents {
   private final Object iceConnectedEvent = new Object();
   private final Object closeEvent = new Object();
 
-  // Mock renderer implementation.
-  private static class MockRenderer implements VideoSink {
-    // These are protected by 'this' since we gets called from worker threads.
-    private String rendererName;
-    private boolean renderFrameCalled = false;
-
-    // Thread-safe in itself.
-    private CountDownLatch doneRendering;
-
-    public MockRenderer(int expectedFrames, String rendererName) {
-      this.rendererName = rendererName;
-      reset(expectedFrames);
-    }
-
-    // Resets render to wait for new amount of video frames.
-    // TODO(bugs.webrtc.org/8491): Remove NoSynchronizedMethodCheck suppression.
-    @SuppressWarnings("NoSynchronizedMethodCheck")
-    public synchronized void reset(int expectedFrames) {
-      renderFrameCalled = false;
-      doneRendering = new CountDownLatch(expectedFrames);
-    }
-
-    @Override
-    // TODO(bugs.webrtc.org/8491): Remove NoSynchronizedMethodCheck suppression.
-    @SuppressWarnings("NoSynchronizedMethodCheck")
-    public synchronized void onFrame(VideoFrame frame) {
-      if (!renderFrameCalled) {
-        if (rendererName != null) {
-          Log.d(TAG,
-              rendererName + " render frame: " + frame.getRotatedWidth() + " x "
-                  + frame.getRotatedHeight());
-        } else {
-          Log.d(TAG, "Render frame: " + frame.getRotatedWidth() + " x " + frame.getRotatedHeight());
-        }
-      }
-      renderFrameCalled = true;
-      doneRendering.countDown();
-    }
-
-    // This method shouldn't hold any locks or touch member variables since it
-    // blocks.
-    public boolean waitForFramesRendered(int timeoutMs) throws InterruptedException {
-      doneRendering.await(timeoutMs, TimeUnit.MILLISECONDS);
-      return (doneRendering.getCount() <= 0);
-    }
-  }
-
   // Mock VideoSink implementation.
   private static class MockSink implements VideoSink {
     // These are protected by 'this' since we gets called from worker threads.
     private String rendererName;
-    private boolean renderFrameCalled = false;
+    private boolean renderFrameCalled;
 
     // Thread-safe in itself.
     private CountDownLatch doneRendering;
@@ -232,6 +184,16 @@ public class PeerConnectionClientTest implements PeerConnectionEvents {
   }
 
   @Override
+  public void onConnected() {
+    Log.d(TAG, "DTLS Connected");
+  }
+
+  @Override
+  public void onDisconnected() {
+    Log.d(TAG, "DTLS Disconnected");
+  }
+
+  @Override
   public void onPeerConnectionClosed() {
     Log.d(TAG, "PeerConnection closed");
     synchronized (closeEvent) {
@@ -306,9 +268,8 @@ public class PeerConnectionClientTest implements PeerConnectionEvents {
     }
   }
 
-  PeerConnectionClient createPeerConnectionClient(MockSink localRenderer,
-      MockRenderer remoteRenderer, PeerConnectionParameters peerConnectionParameters,
-      VideoCapturer videoCapturer) {
+  PeerConnectionClient createPeerConnectionClient(MockSink localRenderer, MockSink remoteRenderer,
+      PeerConnectionParameters peerConnectionParameters, VideoCapturer videoCapturer) {
     List<PeerConnection.IceServer> iceServers = new ArrayList<>();
     SignalingParameters signalingParameters =
         new SignalingParameters(iceServers, true, // iceServers, initiator.
@@ -403,7 +364,8 @@ public class PeerConnectionClientTest implements PeerConnectionEvents {
   public void testSetLocalOfferMakesVideoFlowLocally() throws InterruptedException {
     Log.d(TAG, "testSetLocalOfferMakesVideoFlowLocally");
     MockSink localRenderer = new MockSink(EXPECTED_VIDEO_FRAMES, LOCAL_RENDERER_NAME);
-    pcClient = createPeerConnectionClient(localRenderer, new MockRenderer(0, null),
+    pcClient = createPeerConnectionClient(localRenderer,
+        new MockSink(/* expectedFrames= */ 0, /* rendererName= */ null),
         createParametersForVideoCall(VIDEO_CODEC_VP8),
         createCameraCapturer(false /* captureToTexture */));
 
@@ -425,11 +387,11 @@ public class PeerConnectionClientTest implements PeerConnectionEvents {
       boolean decodeToTexture) throws InterruptedException {
     loopback = true;
     MockSink localRenderer = null;
-    MockRenderer remoteRenderer = null;
+    MockSink remoteRenderer = null;
     if (parameters.videoCallEnabled) {
       Log.d(TAG, "testLoopback for video " + parameters.videoCodec);
       localRenderer = new MockSink(EXPECTED_VIDEO_FRAMES, LOCAL_RENDERER_NAME);
-      remoteRenderer = new MockRenderer(EXPECTED_VIDEO_FRAMES, REMOTE_RENDERER_NAME);
+      remoteRenderer = new MockSink(EXPECTED_VIDEO_FRAMES, REMOTE_RENDERER_NAME);
     } else {
       Log.d(TAG, "testLoopback for audio.");
     }
@@ -528,12 +490,6 @@ public class PeerConnectionClientTest implements PeerConnectionEvents {
       Log.i(TAG, "Encode to textures is not supported. Requires SDK version 19");
       return;
     }
-    // TODO(perkj): If we can always capture to textures, there is no need to check if the
-    // hardware encoder supports to encode from a texture.
-    if (!MediaCodecVideoEncoder.isVp8HwSupportedUsingTextures()) {
-      Log.i(TAG, "VP8 encode to textures is not supported.");
-      return;
-    }
     doLoopbackTest(createParametersForVideoCall(VIDEO_CODEC_VP8),
         createCameraCapturer(true /* captureToTexture */), true /* decodeToTexture */);
   }
@@ -543,12 +499,6 @@ public class PeerConnectionClientTest implements PeerConnectionEvents {
   public void testLoopbackH264CaptureToTexture() throws InterruptedException {
     if (Build.VERSION.SDK_INT < Build.VERSION_CODES.KITKAT) {
       Log.i(TAG, "Encode to textures is not supported. Requires KITKAT");
-      return;
-    }
-    // TODO(perkj): If we can always capture to textures, there is no need to check if the
-    // hardware encoder supports to encode from a texture.
-    if (!MediaCodecVideoEncoder.isH264HwSupportedUsingTextures()) {
-      Log.i(TAG, "H264 encode to textures is not supported.");
       return;
     }
     doLoopbackTest(createParametersForVideoCall(VIDEO_CODEC_H264),
@@ -564,7 +514,7 @@ public class PeerConnectionClientTest implements PeerConnectionEvents {
     loopback = true;
 
     MockSink localRenderer = new MockSink(EXPECTED_VIDEO_FRAMES, LOCAL_RENDERER_NAME);
-    MockRenderer remoteRenderer = new MockRenderer(EXPECTED_VIDEO_FRAMES, REMOTE_RENDERER_NAME);
+    MockSink remoteRenderer = new MockSink(EXPECTED_VIDEO_FRAMES, REMOTE_RENDERER_NAME);
 
     pcClient = createPeerConnectionClient(localRenderer, remoteRenderer,
         createParametersForVideoCall(VIDEO_CODEC_VP8),
@@ -612,7 +562,7 @@ public class PeerConnectionClientTest implements PeerConnectionEvents {
     loopback = true;
 
     MockSink localRenderer = new MockSink(EXPECTED_VIDEO_FRAMES, LOCAL_RENDERER_NAME);
-    MockRenderer remoteRenderer = new MockRenderer(EXPECTED_VIDEO_FRAMES, REMOTE_RENDERER_NAME);
+    MockSink remoteRenderer = new MockSink(EXPECTED_VIDEO_FRAMES, REMOTE_RENDERER_NAME);
 
     pcClient = createPeerConnectionClient(localRenderer, remoteRenderer,
         createParametersForVideoCall(VIDEO_CODEC_VP8),
@@ -661,7 +611,7 @@ public class PeerConnectionClientTest implements PeerConnectionEvents {
     loopback = true;
 
     MockSink localRenderer = new MockSink(EXPECTED_VIDEO_FRAMES, LOCAL_RENDERER_NAME);
-    MockRenderer remoteRenderer = new MockRenderer(EXPECTED_VIDEO_FRAMES, REMOTE_RENDERER_NAME);
+    MockSink remoteRenderer = new MockSink(EXPECTED_VIDEO_FRAMES, REMOTE_RENDERER_NAME);
 
     pcClient = createPeerConnectionClient(localRenderer, remoteRenderer,
         createParametersForVideoCall(VIDEO_CODEC_VP8),

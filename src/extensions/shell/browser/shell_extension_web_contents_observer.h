@@ -22,13 +22,6 @@ class ShellExtensionWebContentsObserver
   // |web_contents|, if it doesn't already exist.
   static void CreateForWebContents(content::WebContents* web_contents);
 
- ///@name USE_NEVA_BROWSER
- ///@{
- protected:
-  void DidFinishNavigation(
-      content::NavigationHandle* navigation_handle) override;
-///@}
-
  private:
   friend class content::WebContentsUserData<ShellExtensionWebContentsObserver>;
 

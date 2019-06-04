@@ -13,6 +13,7 @@
 #include "chrome/browser/chromeos/apps/intent_helper/apps_navigation_types.h"
 #include "chrome/browser/ui/browser_dialogs.h"
 #include "chrome/browser/ui/views/location_bar/location_bar_bubble_delegate_view.h"
+#include "chrome/services/app_service/public/mojom/types.mojom.h"
 #include "ui/base/accelerators/accelerator.h"
 #include "ui/gfx/image/image.h"
 #include "ui/views/controls/button/button.h"
@@ -124,9 +125,15 @@ class IntentPickerBubbleView : public LocationBarBubbleDelegateView,
   // the internal ScrollView.
   IntentPickerLabelButton* GetIntentPickerLabelButtonAt(size_t index);
   void RunCallback(const std::string& launch_name,
-                   chromeos::AppType app_type,
+                   apps::mojom::AppType app_type,
                    chromeos::IntentPickerCloseReason close_reason,
                    bool should_persist);
+
+  // Returns true if this picker has candidates for the user to choose from, and
+  // false otherwise. For instance, if Chrome was the only app candidate
+  // provided, it will have been erased from |app_infos_| and this method would
+  // return false.
+  bool HasCandidates() const;
 
   // Accessory for |scroll_view_|'s contents size.
   size_t GetScrollViewSize() const;

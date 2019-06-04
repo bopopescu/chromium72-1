@@ -9,10 +9,11 @@
 #include <utility>
 
 #include "net/test/gtest_util.h"
+#include "net/third_party/quic/core/http/spdy_utils.h"
 #include "net/third_party/quic/core/quic_utils.h"
-#include "net/third_party/quic/core/spdy_utils.h"
 #include "net/third_party/quic/core/tls_server_handshaker.h"
 #include "net/third_party/quic/platform/api/quic_arraysize.h"
+#include "net/third_party/quic/platform/api/quic_expect_bug.h"
 #include "net/third_party/quic/platform/api/quic_ptr_util.h"
 #include "net/third_party/quic/platform/api/quic_socket_address.h"
 #include "net/third_party/quic/platform/api/quic_test.h"
@@ -33,7 +34,7 @@ using testing::Invoke;
 using testing::Return;
 using testing::StrictMock;
 
-namespace net {
+namespace quic {
 namespace test {
 
 size_t kFakeFrameLen = 60;
@@ -43,9 +44,12 @@ class QuicSimpleServerStreamPeer : public QuicSimpleServerStream {
   QuicSimpleServerStreamPeer(
       QuicStreamId stream_id,
       QuicSpdySession* session,
+      StreamType type,
       QuicSimpleServerBackend* quic_simple_server_backend)
-      : QuicSimpleServerStream(stream_id, session, quic_simple_server_backend) {
-  }
+      : QuicSimpleServerStream(stream_id,
+                               session,
+                               type,
+                               quic_simple_server_backend) {}
 
   ~QuicSimpleServerStreamPeer() override = default;
 
@@ -90,6 +94,7 @@ class MockQuicSimpleServerSession : public QuicSimpleServerSession {
       QuicCompressedCertsCache* compressed_certs_cache,
       QuicSimpleServerBackend* quic_simple_server_backend)
       : QuicSimpleServerSession(DefaultQuicConfig(),
+                                CurrentSupportedVersions(),
                                 connection,
                                 owner,
                                 helper,
@@ -102,13 +107,16 @@ class MockQuicSimpleServerSession : public QuicSimpleServerSession {
         .WillByDefault(testing::Return(QuicConsumedData(0, false)));
   }
 
+  MockQuicSimpleServerSession(const MockQuicSimpleServerSession&) = delete;
+  MockQuicSimpleServerSession& operator=(const MockQuicSimpleServerSession&) =
+      delete;
   ~MockQuicSimpleServerSession() override = default;
 
   MOCK_METHOD3(OnConnectionClosed,
                void(QuicErrorCode error,
                     const QuicString& error_details,
                     ConnectionCloseSource source));
-  MOCK_METHOD1(CreateIncomingDynamicStream, QuicSpdyStream*(QuicStreamId id));
+  MOCK_METHOD1(CreateIncomingStream, QuicSpdyStream*(QuicStreamId id));
   MOCK_METHOD5(WritevData,
                QuicConsumedData(QuicStream* stream,
                                 QuicStreamId id,
@@ -164,9 +172,6 @@ class MockQuicSimpleServerSession : public QuicSimpleServerSession {
   using QuicSession::ActivateStream;
 
   spdy::SpdyHeaderBlock original_request_headers_;
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(MockQuicSimpleServerSession);
 };
 
 class QuicSimpleServerStreamTest : public QuicTestWithParam<ParsedQuicVersion> {
@@ -181,6 +186,7 @@ class QuicSimpleServerStreamTest : public QuicTestWithParam<ParsedQuicVersion> {
             QuicCryptoServerConfig::TESTING,
             QuicRandom::GetInstance(),
             crypto_test_utils::ProofSourceForTesting(),
+            KeyExchangeSource::Default(),
             TlsServerHandshaker::CreateSslCtx())),
         compressed_certs_cache_(
             QuicCompressedCertsCache::kQuicCompressedCertsCacheSize),
@@ -208,9 +214,10 @@ class QuicSimpleServerStreamTest : public QuicTestWithParam<ParsedQuicVersion> {
         kInitialSessionFlowControlWindowForTest);
     stream_ = new QuicSimpleServerStreamPeer(
         QuicSpdySessionPeer::GetNthClientInitiatedStreamId(session_, 0),
-        &session_, &memory_cache_backend_);
+        &session_, BIDIRECTIONAL, &memory_cache_backend_);
     // Register stream_ in dynamic_stream_map_ and pass ownership to session_.
     session_.ActivateStream(QuicWrapUnique(stream_));
+    connection_->AdvanceTime(QuicTime::Delta::FromSeconds(1));
   }
 
   const QuicString& StreamBody() {
@@ -366,8 +373,9 @@ TEST_P(QuicSimpleServerStreamTest, SendResponseWithIllegalResponseStatus2) {
 
 TEST_P(QuicSimpleServerStreamTest, SendPushResponseWith404Response) {
   // Create a new promised stream with even id().
-  QuicSimpleServerStreamPeer* promised_stream =
-      new QuicSimpleServerStreamPeer(2, &session_, &memory_cache_backend_);
+  QuicSimpleServerStreamPeer* promised_stream = new QuicSimpleServerStreamPeer(
+      QuicSpdySessionPeer::GetNthServerInitiatedStreamId(session_, 0),
+      &session_, WRITE_UNIDIRECTIONAL, &memory_cache_backend_);
   session_.ActivateStream(QuicWrapUnique(promised_stream));
 
   // Send a push response with response status 404, which will be regarded as
@@ -457,6 +465,11 @@ TEST_P(QuicSimpleServerStreamTest, SendReponseWithPushResources) {
 }
 
 TEST_P(QuicSimpleServerStreamTest, PushResponseOnClientInitiatedStream) {
+  // EXPECT_QUIC_BUG tests are expensive so only run one instance of them.
+  if (GetParam() != AllSupportedVersions()[0]) {
+    return;
+  }
+
   // Calling PushResponse() on a client initialted stream is never supposed to
   // happen.
   EXPECT_QUIC_BUG(stream_->PushResponse(spdy::SpdyHeaderBlock()),
@@ -469,10 +482,12 @@ TEST_P(QuicSimpleServerStreamTest, PushResponseOnServerInitiatedStream) {
   // and fetch response from cache, and send it out.
 
   // Create a stream with even stream id and test against this stream.
-  const QuicStreamId kServerInitiatedStreamId = 2;
+  const QuicStreamId kServerInitiatedStreamId =
+      QuicSpdySessionPeer::GetNthServerInitiatedStreamId(session_, 0);
   // Create a server initiated stream and pass it to session_.
   QuicSimpleServerStreamPeer* server_initiated_stream =
       new QuicSimpleServerStreamPeer(kServerInitiatedStreamId, &session_,
+                                     WRITE_UNIDIRECTIONAL,
                                      &memory_cache_backend_);
   session_.ActivateStream(QuicWrapUnique(server_initiated_stream));
 
@@ -620,4 +635,4 @@ TEST_P(QuicSimpleServerStreamTest, InvalidHeadersWithFin) {
 
 }  // namespace
 }  // namespace test
-}  // namespace net
+}  // namespace quic

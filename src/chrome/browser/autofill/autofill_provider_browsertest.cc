@@ -46,18 +46,20 @@ class MockAutofillProvider : public TestAutofillProvider {
                     SubmissionSource,
                     base::TimeTicks));
 
-  MOCK_METHOD5(OnQueryFormFieldAutofill,
+  MOCK_METHOD6(OnQueryFormFieldAutofill,
                void(AutofillHandlerProxy* handler,
                     int32_t id,
                     const FormData& form,
                     const FormFieldData& field,
-                    const gfx::RectF& bounding_box));
+                    const gfx::RectF& bounding_box,
+                    bool autoselect_first_suggestion));
 
   void OnQueryFormFieldAutofillImpl(AutofillHandlerProxy* handler,
                                     int32_t id,
                                     const FormData& form,
                                     const FormFieldData& field,
-                                    const gfx::RectF& bounding_box) {
+                                    const gfx::RectF& bounding_box,
+                                    bool autoselect_first_suggestion) {
     queried_form_ = form;
     is_queried_ = true;
   }
@@ -95,6 +97,7 @@ class AutofillProviderBrowserTest : public InProcessBrowserTest {
   }
 
   void SetUpOnMainThread() override {
+    autofill_client_ = std::make_unique<TestAutofillClient>();
     autofill_provider_ = std::make_unique<MockAutofillProvider>();
     embedded_test_server()->AddDefaultHandlers(base::FilePath(kDocRoot));
     // Serve both a.com and b.com (and any other domain).
@@ -112,7 +115,7 @@ class AutofillProviderBrowserTest : public InProcessBrowserTest {
 
     // Replace the ContentAutofillDriverFactory for sub frame.
     ContentAutofillDriverFactory::CreateForWebContentsAndDelegate(
-        web_contents, &autofill_client_, "en-US",
+        web_contents, autofill_client_.get(), "en-US",
         AutofillManager::DISABLE_AUTOFILL_DOWNLOAD_MANAGER,
         autofill_provider_.get());
   }
@@ -131,8 +134,8 @@ class AutofillProviderBrowserTest : public InProcessBrowserTest {
     testing::Mock::VerifyAndClearExpectations(autofill_provider_.get());
   }
 
-  content::RenderViewHost* RenderViewHost() {
-    return WebContents()->GetRenderViewHost();
+  content::RenderFrameHost* GetMainFrame() {
+    return WebContents()->GetMainFrame();
   }
 
   content::WebContents* WebContents() {
@@ -163,7 +166,7 @@ class AutofillProviderBrowserTest : public InProcessBrowserTest {
     ReplaceAutofillDriver();
 
     // If AutofillSingleClick is enabled, there may be multiple queries.
-    EXPECT_CALL(*autofill_provider_, OnQueryFormFieldAutofill(_, _, _, _, _))
+    EXPECT_CALL(*autofill_provider_, OnQueryFormFieldAutofill(_, _, _, _, _, _))
         .WillOnce(Invoke(autofill_provider_.get(),
                          &MockAutofillProvider::OnQueryFormFieldAutofillImpl));
 
@@ -175,7 +178,7 @@ class AutofillProviderBrowserTest : public InProcessBrowserTest {
                                                 "/autofill/label_change.html"));
 
     std::string focus("document.getElementById('address').focus();");
-    ASSERT_TRUE(content::ExecuteScript(RenderViewHost(), focus));
+    ASSERT_TRUE(content::ExecuteScript(GetMainFrame(), focus));
 
     SimulateUserTypingInFocuedField();
     while (!autofill_provider_->is_queried()) {
@@ -191,7 +194,7 @@ class AutofillProviderBrowserTest : public InProcessBrowserTest {
         "document.getElementById('submit_button').click();";
 
     ASSERT_TRUE(
-        content::ExecuteScript(RenderViewHost(), change_label_and_submit));
+        content::ExecuteScript(GetMainFrame(), change_label_and_submit));
     // Need to pay attention for a message that XHR has finished since there
     // is no navigation to wait for.
     content::DOMMessageQueue message_queue;
@@ -214,7 +217,7 @@ class AutofillProviderBrowserTest : public InProcessBrowserTest {
 
  private:
   base::test::ScopedFeatureList scoped_feature_list_;
-  TestAutofillClient autofill_client_;
+  std::unique_ptr<TestAutofillClient> autofill_client_;
 };
 
 IN_PROC_BROWSER_TEST_F(AutofillProviderBrowserTest,
@@ -235,7 +238,7 @@ IN_PROC_BROWSER_TEST_F(AutofillProviderBrowserTest,
       "var iframe = document.getElementById('address_iframe');"
       "var frame_doc = iframe.contentDocument;"
       "frame_doc.getElementById('address_field').focus();");
-  ASSERT_TRUE(content::ExecuteScript(RenderViewHost(), focus));
+  ASSERT_TRUE(content::ExecuteScript(GetMainFrame(), focus));
 
   SimulateUserTypingInFocuedField();
   std::string fill_and_submit =
@@ -243,7 +246,7 @@ IN_PROC_BROWSER_TEST_F(AutofillProviderBrowserTest,
       "var frame_doc = iframe.contentDocument;"
       "frame_doc.getElementById('submit_button').click();";
 
-  ASSERT_TRUE(content::ExecuteScript(RenderViewHost(), fill_and_submit));
+  ASSERT_TRUE(content::ExecuteScript(GetMainFrame(), fill_and_submit));
   std::string message;
   while (message_queue.WaitForMessage(&message)) {
     if (message == "\"SUBMISSION_FINISHED\"")
@@ -270,7 +273,7 @@ IN_PROC_BROWSER_TEST_F(AutofillProviderBrowserTest,
       "var iframe = document.getElementById('address_iframe');"
       "var frame_doc = iframe.contentDocument;"
       "frame_doc.getElementById('address_field').focus();");
-  ASSERT_TRUE(content::ExecuteScript(RenderViewHost(), focus));
+  ASSERT_TRUE(content::ExecuteScript(GetMainFrame(), focus));
 
   SimulateUserTypingInFocuedField();
   std::string fill_and_submit =
@@ -278,7 +281,7 @@ IN_PROC_BROWSER_TEST_F(AutofillProviderBrowserTest,
       "var frame_doc = iframe.contentDocument;"
       "frame_doc.getElementById('submit_button').click();";
 
-  ASSERT_TRUE(content::ExecuteScript(RenderViewHost(), fill_and_submit));
+  ASSERT_TRUE(content::ExecuteScript(GetMainFrame(), fill_and_submit));
   std::string message;
   while (message_queue.WaitForMessage(&message)) {
     if (message == "\"SUBMISSION_FINISHED\"")

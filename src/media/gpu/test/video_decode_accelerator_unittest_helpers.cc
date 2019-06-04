@@ -1,26 +1,25 @@
-// Copyright (c) 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "media/gpu/test/video_decode_accelerator_unittest_helpers.h"
 
+#include <utility>
+
 #include "base/callback_helpers.h"
 #include "base/files/file_util.h"
+#include "base/files/scoped_file.h"
 #include "base/strings/string_split.h"
 #include "base/threading/thread_task_runner_handle.h"
 #include "media/base/video_decoder_config.h"
-#include "media/gpu/format_utils.h"
+#include "media/gpu/macros.h"
 #include "media/gpu/test/rendering_helper.h"
+#include "media/gpu/test/texture_ref.h"
 #include "media/video/h264_parser.h"
 
 #if defined(OS_CHROMEOS)
-#include "ui/gfx/native_pixmap.h"
 #include "ui/ozone/public/ozone_gpu_test_helper.h"
-#include "ui/ozone/public/ozone_platform.h"
-#include "ui/ozone/public/surface_factory_ozone.h"
 #endif
-
-#define VLOGF(level) VLOG(level) << __func__ << "(): "
 
 namespace media {
 namespace test {
@@ -33,6 +32,9 @@ VideoDecodeAcceleratorTestEnvironment::VideoDecodeAcceleratorTestEnvironment(
     bool use_gl_renderer)
     : use_gl_renderer_(use_gl_renderer),
       rendering_thread_("GLRenderingVDAClientThread") {}
+
+VideoDecodeAcceleratorTestEnvironment::
+    ~VideoDecodeAcceleratorTestEnvironment() {}
 
 void VideoDecodeAcceleratorTestEnvironment::SetUp() {
   base::Thread::Options options;
@@ -69,66 +71,16 @@ VideoDecodeAcceleratorTestEnvironment::GetRenderingTaskRunner() const {
   return rendering_thread_.task_runner();
 }
 
-TextureRef::TextureRef(uint32_t texture_id,
-                       const base::Closure& no_longer_needed_cb)
-    : texture_id_(texture_id), no_longer_needed_cb_(no_longer_needed_cb) {}
-
-TextureRef::~TextureRef() {
-  base::ResetAndReturn(&no_longer_needed_cb_).Run();
-}
-
-// static
-scoped_refptr<TextureRef> TextureRef::Create(
-    uint32_t texture_id,
-    const base::Closure& no_longer_needed_cb) {
-  return base::WrapRefCounted(new TextureRef(texture_id, no_longer_needed_cb));
-}
-
-// static
-scoped_refptr<TextureRef> TextureRef::CreatePreallocated(
-    uint32_t texture_id,
-    const base::Closure& no_longer_needed_cb,
-    VideoPixelFormat pixel_format,
-    const gfx::Size& size) {
-  scoped_refptr<TextureRef> texture_ref;
-#if defined(OS_CHROMEOS)
-  texture_ref = TextureRef::Create(texture_id, no_longer_needed_cb);
-  LOG_ASSERT(texture_ref);
-
-  ui::OzonePlatform* platform = ui::OzonePlatform::GetInstance();
-  ui::SurfaceFactoryOzone* factory = platform->GetSurfaceFactoryOzone();
-  gfx::BufferFormat buffer_format =
-      VideoPixelFormatToGfxBufferFormat(pixel_format);
-  texture_ref->pixmap_ =
-      factory->CreateNativePixmap(gfx::kNullAcceleratedWidget, size,
-                                  buffer_format, gfx::BufferUsage::SCANOUT);
-  LOG_ASSERT(texture_ref->pixmap_);
-#endif
-
-  return texture_ref;
-}
-
-gfx::GpuMemoryBufferHandle TextureRef::ExportGpuMemoryBufferHandle() const {
-  gfx::GpuMemoryBufferHandle handle;
-#if defined(OS_CHROMEOS)
-  CHECK(pixmap_);
-  handle.type = gfx::NATIVE_PIXMAP;
-  for (size_t i = 0; i < pixmap_->GetDmaBufFdCount(); i++) {
-    int duped_fd = HANDLE_EINTR(dup(pixmap_->GetDmaBufFd(i)));
-    LOG_ASSERT(duped_fd != -1) << "Failed duplicating dmabuf fd";
-    handle.native_pixmap_handle.fds.emplace_back(
-        base::FileDescriptor(duped_fd, true));
-    handle.native_pixmap_handle.planes.emplace_back(
-        pixmap_->GetDmaBufPitch(i), pixmap_->GetDmaBufOffset(i), i,
-        pixmap_->GetDmaBufModifier(i));
-  }
-#endif
-  return handle;
-}
-
 EncodedDataHelper::EncodedDataHelper(const std::string& data,
                                      VideoCodecProfile profile)
     : data_(data), profile_(profile) {}
+
+EncodedDataHelper::EncodedDataHelper(const std::vector<uint8_t>& stream,
+                                     VideoCodecProfile profile)
+    : EncodedDataHelper(
+          std::string(reinterpret_cast<const char*>(stream.data()),
+                      stream.size()),
+          profile) {}
 
 EncodedDataHelper::~EncodedDataHelper() {
   base::STLClearObject(&data_);

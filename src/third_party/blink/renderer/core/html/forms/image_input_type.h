@@ -41,22 +41,23 @@ namespace blink {
 class ImageInputType final : public BaseButtonInputType {
  public:
   static InputType* Create(HTMLInputElement&);
+  ImageInputType(HTMLInputElement&);
   scoped_refptr<ComputedStyle> CustomStyleForLayoutObject(
       scoped_refptr<ComputedStyle>) override;
 
  private:
-  ImageInputType(HTMLInputElement&);
   const AtomicString& FormControlType() const override;
   bool IsFormDataAppendable() const override;
   void AppendToFormData(FormData&) const override;
   String ResultForDialogSubmit() const override;
   bool SupportsValidation() const override;
   LayoutObject* CreateLayoutObject(const ComputedStyle&) const override;
-  void HandleDOMActivateEvent(Event*) override;
+  void HandleDOMActivateEvent(Event&) override;
   void AltAttributeChanged() override;
   void SrcAttributeChanged() override;
   void ValueAttributeChanged() override;
   void StartResourceLoading() override;
+  void OnAttachWithLayoutObject() override;
   bool ShouldRespectAlignAttribute() override;
   bool CanBeSuccessfulSubmitButton() override;
   bool IsEnumeratable() override;

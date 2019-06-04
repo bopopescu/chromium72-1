@@ -179,14 +179,9 @@ Polymer({
 
     this.focusGrid_.destroy();
 
-    this.debounce('updateFocusGrid', function() {
-      Polymer.dom(this.root)
-          .querySelectorAll('history-synced-device-card')
-          .reduce(
-              function(prev, cur) {
-                return prev.concat(cur.createFocusRows());
-              },
-              [])
+    this.debounce('updateFocusGrid', () => {
+      Array.from(this.shadowRoot.querySelectorAll('history-synced-device-card'))
+          .reduce((prev, cur) => prev.concat(cur.createFocusRows()), [])
           .forEach((row) => {
             this.focusGrid_.addRow(row);
           });
@@ -290,8 +285,13 @@ Polymer({
    * Get called when user's sign in state changes, this will affect UI of synced
    * tabs page. Sign in promo gets displayed when user is signed out, and
    * different messages are shown when there are no synced tabs.
+   * @param {?boolean} current
+   * @param {?boolean} previous
    */
-  signInStateChanged_: function() {
+  signInStateChanged_: function(current, previous) {
+    if (previous === undefined)
+      return;
+
     this.fire('history-view-changed');
 
     // User signed out, clear synced device list and show the sign in promo.

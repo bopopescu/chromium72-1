@@ -62,18 +62,35 @@ WebString WebFormControlElement::FormControlType() const {
 WebString WebFormControlElement::FormControlTypeForAutofill() const {
   if (auto* input = ToHTMLInputElementOrNull(*private_)) {
     if (input->IsTextField() && input->HasBeenPasswordField())
-      return InputTypeNames::password;
+      return input_type_names::kPassword;
   }
 
   return ConstUnwrap<HTMLFormControlElement>()->type();
+}
+
+WebAutofillState WebFormControlElement::GetAutofillState() const {
+  return ConstUnwrap<HTMLFormControlElement>()->GetAutofillState();
 }
 
 bool WebFormControlElement::IsAutofilled() const {
   return ConstUnwrap<HTMLFormControlElement>()->IsAutofilled();
 }
 
-void WebFormControlElement::SetAutofilled(bool autofilled) {
-  Unwrap<HTMLFormControlElement>()->SetAutofilled(autofilled);
+bool WebFormControlElement::UserHasEditedTheField() const {
+  if (auto* input = ToHTMLInputElementOrNull(*private_))
+    return input->UserHasEditedTheField();
+  if (auto* select_element = ToHTMLSelectElementOrNull(*private_))
+    return select_element->UserHasEditedTheField();
+  return true;
+}
+
+void WebFormControlElement::SetUserHasEditedTheFieldForTest() {
+  if (auto* input = ToHTMLInputElementOrNull(*private_))
+    input->SetUserHasEditedTheFieldForTest();
+}
+
+void WebFormControlElement::SetAutofillState(WebAutofillState autofill_state) {
+  Unwrap<HTMLFormControlElement>()->SetAutofillState(autofill_state);
 }
 
 WebString WebFormControlElement::AutofillSection() const {
@@ -118,10 +135,10 @@ void WebFormControlElement::SetAutofillValue(const WebString& value) {
                                             nullptr);
     }
     Unwrap<Element>()->DispatchScopedEvent(
-        Event::CreateBubble(EventTypeNames::keydown));
+        *Event::CreateBubble(event_type_names::kKeydown));
     Unwrap<TextControlElement>()->SetAutofillValue(value);
     Unwrap<Element>()->DispatchScopedEvent(
-        Event::CreateBubble(EventTypeNames::keyup));
+        *Event::CreateBubble(event_type_names::kKeyup));
     if (!Focused()) {
       Unwrap<Element>()->DispatchBlurEvent(nullptr, kWebFocusTypeForward,
                                            nullptr);

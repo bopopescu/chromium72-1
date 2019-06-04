@@ -10,6 +10,7 @@
 #include <utility>
 #include <vector>
 
+#include "ash/public/cpp/notification_utils.h"
 #include "ash/public/cpp/vector_icons/vector_icons.h"
 #include "ash/shell.h"
 #include "base/base64.h"
@@ -22,8 +23,9 @@
 #include "base/metrics/user_metrics.h"
 #include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
-#include "base/task_scheduler/post_task.h"
-#include "base/threading/thread_restrictions.h"
+#include "base/syslog_logging.h"
+#include "base/task/post_task.h"
+#include "base/threading/scoped_blocking_call.h"
 #include "build/build_config.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/chromeos/drive/file_system_util.h"
@@ -41,6 +43,7 @@
 #include "chromeos/login/login_state.h"
 #include "components/drive/chromeos/file_system_interface.h"
 #include "components/prefs/pref_service.h"
+#include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/common/service_manager_connection.h"
 #include "services/data_decoder/public/cpp/decode_image.h"
@@ -112,7 +115,7 @@ void DecodeFileAndCopyToClipboard(
 }
 
 void ReadFileAndCopyToClipboardLocal(const base::FilePath& screenshot_path) {
-  base::AssertBlockingAllowed();
+  base::ScopedBlockingCall scoped_blocking_call(base::BlockingType::WILL_BLOCK);
   scoped_refptr<base::RefCountedString> png_data(new base::RefCountedString());
   if (!base::ReadFileToString(screenshot_path, &(png_data->data()))) {
     LOG(ERROR) << "Failed to read the screenshot file: "
@@ -120,8 +123,8 @@ void ReadFileAndCopyToClipboardLocal(const base::FilePath& screenshot_path) {
     return;
   }
 
-  content::BrowserThread::PostTask(
-      content::BrowserThread::UI, FROM_HERE,
+  base::PostTaskWithTraits(
+      FROM_HERE, {content::BrowserThread::UI},
       base::BindOnce(&DecodeFileAndCopyToClipboard, png_data));
 }
 
@@ -332,7 +335,7 @@ void SaveScreenshot(scoped_refptr<base::TaskRunner> ui_task_runner,
                     scoped_refptr<base::RefCountedMemory> png_data,
                     ScreenshotFileResult result,
                     const base::FilePath& local_path) {
-  DCHECK(!base::MessageLoopForUI::IsCurrent());
+  DCHECK(!base::MessageLoopCurrentForUI::IsSet());
   DCHECK(!screenshot_path.empty());
 
   ScreenshotResult screenshot_result = ScreenshotResult::SUCCESS;
@@ -366,7 +369,7 @@ void SaveScreenshot(scoped_refptr<base::TaskRunner> ui_task_runner,
 void EnsureLocalDirectoryExists(
     const base::FilePath& path,
     ChromeScreenshotGrabber::FileCallback callback) {
-  DCHECK(!base::MessageLoopForUI::IsCurrent());
+  DCHECK(!base::MessageLoopCurrentForUI::IsSet());
   DCHECK(!path.empty());
 
   if (!base::CreateDirectory(path.DirName())) {
@@ -531,13 +534,17 @@ void ChromeScreenshotGrabber::OnScreenshotCompleted(
     return;
 
   if (result != ScreenshotResult::SUCCESS) {
-    content::BrowserThread::PostTask(
-        content::BrowserThread::UI, FROM_HERE,
+    base::PostTaskWithTraits(
+        FROM_HERE, {content::BrowserThread::UI},
         base::BindOnce(
             &ChromeScreenshotGrabber::OnReadScreenshotFileForPreviewCompleted,
             weak_factory_.GetWeakPtr(), result, screenshot_path, gfx::Image()));
     return;
   }
+
+#if defined(OS_CHROMEOS)
+  SYSLOG(INFO) << "Screenshot taken";
+#endif
 
   if (drive::util::IsUnderDriveMountPoint(screenshot_path)) {
     drive::FileSystemInterface* file_system =
@@ -545,8 +552,8 @@ void ChromeScreenshotGrabber::OnScreenshotCompleted(
     if (!file_system) {
       LOG(ERROR) << "Failed to get file system of current profile";
 
-      content::BrowserThread::PostTask(
-          content::BrowserThread::UI, FROM_HERE,
+      base::PostTaskWithTraits(
+          FROM_HERE, {content::BrowserThread::UI},
           base::BindOnce(
               &ChromeScreenshotGrabber::OnReadScreenshotFileForPreviewCompleted,
               weak_factory_.GetWeakPtr(), result, screenshot_path,
@@ -559,8 +566,8 @@ void ChromeScreenshotGrabber::OnScreenshotCompleted(
             &ChromeScreenshotGrabber::ReadScreenshotFileForPreviewDrive,
             weak_factory_.GetWeakPtr(), screenshot_path));
   } else {
-    content::BrowserThread::PostTask(
-        content::BrowserThread::UI, FROM_HERE,
+    base::PostTaskWithTraits(
+        FROM_HERE, {content::BrowserThread::UI},
         base::BindOnce(
             &ChromeScreenshotGrabber::ReadScreenshotFileForPreviewLocal,
             weak_factory_.GetWeakPtr(), screenshot_path, screenshot_path));
@@ -587,16 +594,16 @@ void ChromeScreenshotGrabber::ReadScreenshotFileForPreviewDrive(
   if (error != drive::FILE_ERROR_OK) {
     LOG(ERROR) << "Failed to read the screenshot path on drive: "
                << drive::FileErrorToString(error);
-    content::BrowserThread::PostTask(
-        content::BrowserThread::UI, FROM_HERE,
+    base::PostTaskWithTraits(
+        FROM_HERE, {content::BrowserThread::UI},
         base::BindOnce(
             &ChromeScreenshotGrabber::OnReadScreenshotFileForPreviewCompleted,
             weak_factory_.GetWeakPtr(), ScreenshotResult::SUCCESS,
             screenshot_path, gfx::Image()));
     return;
   }
-  content::BrowserThread::PostTask(
-      content::BrowserThread::UI, FROM_HERE,
+  base::PostTaskWithTraits(
+      FROM_HERE, {content::BrowserThread::UI},
       base::BindOnce(
           &ChromeScreenshotGrabber::ReadScreenshotFileForPreviewLocal,
           weak_factory_.GetWeakPtr(), screenshot_path, screenshot_cache_path));
@@ -680,17 +687,16 @@ void ChromeScreenshotGrabber::OnReadScreenshotFileForPreviewCompleted(
   }
 
   std::unique_ptr<message_center::Notification> notification =
-      message_center::Notification::CreateSystemNotification(
+      ash::CreateSystemNotification(
           image.IsEmpty() ? message_center::NOTIFICATION_TYPE_SIMPLE
                           : message_center::NOTIFICATION_TYPE_IMAGE,
           kNotificationId,
           l10n_util::GetStringUTF16(GetScreenshotNotificationTitle(result)),
           l10n_util::GetStringUTF16(GetScreenshotNotificationText(result)),
-          gfx::Image(),
           l10n_util::GetStringUTF16(IDS_SCREENSHOT_NOTIFICATION_NOTIFIER_NAME),
           GURL(kNotificationOriginUrl),
           message_center::NotifierId(
-              message_center::NotifierId::SYSTEM_COMPONENT,
+              message_center::NotifierType::SYSTEM_COMPONENT,
               kNotifierScreenshot),
           optional_field,
           new ScreenshotGrabberNotificationDelegate(success, GetProfile(),

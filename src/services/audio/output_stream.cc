@@ -9,7 +9,6 @@
 #include "base/bind.h"
 #include "base/threading/sequenced_task_runner_handle.h"
 #include "base/trace_event/trace_event.h"
-#include "services/audio/group_coordinator.h"
 
 namespace audio {
 
@@ -28,28 +27,33 @@ OutputStream::OutputStream(
     media::AudioManager* audio_manager,
     const std::string& output_device_id,
     const media::AudioParameters& params,
-    GroupCoordinator* coordinator,
-    const base::UnguessableToken& group_id)
+    LoopbackCoordinator* coordinator,
+    const base::UnguessableToken& loopback_group_id,
+    StreamMonitorCoordinator* stream_monitor_coordinator,
+    const base::UnguessableToken& processing_id)
     : foreign_socket_(),
       delete_callback_(std::move(delete_callback)),
       binding_(this, std::move(stream_request)),
       observer_(std::move(observer)),
-      log_(media::mojom::ThreadSafeAudioLogPtr::Create(std::move(log))),
+      log_(log ? media::mojom::ThreadSafeAudioLogPtr::Create(std::move(log))
+               : nullptr),
       coordinator_(coordinator),
       // Unretained is safe since we own |reader_|
-      reader_(base::BindRepeating(&media::mojom::AudioLog::OnLogMessage,
-                                  base::Unretained(log_->get())),
+      reader_(log_ ? base::BindRepeating(&media::mojom::AudioLog::OnLogMessage,
+                                         base::Unretained(log_->get()))
+                   : base::DoNothing(),
               params,
               &foreign_socket_),
       controller_(audio_manager,
                   this,
                   params,
                   output_device_id,
-                  group_id,
-                  &reader_),
+                  &reader_,
+                  stream_monitor_coordinator,
+                  processing_id),
+      loopback_group_id_(loopback_group_id),
       weak_factory_(this) {
   DCHECK(binding_.is_bound());
-  DCHECK(observer_.is_bound());
   DCHECK(created_callback);
   DCHECK(delete_callback_);
   DCHECK(coordinator_);
@@ -64,12 +68,14 @@ OutputStream::OutputStream(
   binding_.set_connection_error_handler(error_handler);
 
   // We allow the observer to terminate the stream by closing the message pipe.
-  observer_.set_connection_error_handler(std::move(error_handler));
+  if (observer_)
+    observer_.set_connection_error_handler(std::move(error_handler));
 
-  log_->get()->OnCreated(params, output_device_id);
+  if (log_)
+    log_->get()->OnCreated(params, output_device_id);
 
-  coordinator_->RegisterGroupMember(&controller_);
-  if (!reader_.IsValid() || !controller_.Create(false)) {
+  coordinator_->RegisterMember(loopback_group_id_, &controller_);
+  if (!reader_.IsValid() || !controller_.CreateStream()) {
     // Either SyncReader initialization failed or the controller failed to
     // create the stream. In the latter case, the controller will have called
     // OnControllerError().
@@ -83,7 +89,8 @@ OutputStream::OutputStream(
 OutputStream::~OutputStream() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(owning_sequence_);
 
-  log_->get()->OnClosed();
+  if (log_)
+    log_->get()->OnClosed();
 
   if (observer_)
     observer_.ResetWithReason(
@@ -92,7 +99,7 @@ OutputStream::~OutputStream() {
         std::string());
 
   controller_.Close();
-  coordinator_->UnregisterGroupMember(&controller_);
+  coordinator_->UnregisterMember(loopback_group_id_, &controller_);
 
   if (is_audible_)
     TRACE_EVENT_NESTABLE_ASYNC_END0("audio", "Audible", this);
@@ -108,14 +115,16 @@ void OutputStream::Play() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(owning_sequence_);
 
   controller_.Play();
-  log_->get()->OnStarted();
+  if (log_)
+    log_->get()->OnStarted();
 }
 
 void OutputStream::Pause() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(owning_sequence_);
 
   controller_.Pause();
-  log_->get()->OnStopped();
+  if (log_)
+    log_->get()->OnStopped();
 }
 
 void OutputStream::SetVolume(double volume) {
@@ -130,7 +139,8 @@ void OutputStream::SetVolume(double volume) {
   }
 
   controller_.SetVolume(volume);
-  log_->get()->OnSetVolume(volume);
+  if (log_)
+    log_->get()->OnSetVolume(volume);
 }
 
 void OutputStream::CreateAudioPipe(CreatedCallback created_callback) {
@@ -138,26 +148,19 @@ void OutputStream::CreateAudioPipe(CreatedCallback created_callback) {
   DCHECK(reader_.IsValid());
   TRACE_EVENT_NESTABLE_ASYNC_INSTANT0("audio", "CreateAudioPipe", this);
 
-  const base::SharedMemory* memory = reader_.shared_memory();
-  base::SharedMemoryHandle foreign_memory_handle =
-      base::SharedMemory::DuplicateHandle(memory->handle());
-  mojo::ScopedSharedBufferHandle buffer_handle;
-  mojo::ScopedHandle socket_handle;
-  if (base::SharedMemory::IsHandleValid(foreign_memory_handle)) {
-    buffer_handle = mojo::WrapSharedMemoryHandle(
-        foreign_memory_handle, memory->requested_size(),
-        mojo::UnwrappedSharedMemoryHandleProtection::kReadWrite);
-    socket_handle = mojo::WrapPlatformFile(foreign_socket_.Release());
-  }
-  if (!buffer_handle.is_valid() || !socket_handle.is_valid()) {
+  base::UnsafeSharedMemoryRegion shared_memory_region =
+      reader_.TakeSharedMemoryRegion();
+  mojo::ScopedHandle socket_handle =
+      mojo::WrapPlatformFile(foreign_socket_.Release());
+  if (!shared_memory_region.IsValid() || !socket_handle.is_valid()) {
     std::move(created_callback).Run(nullptr);
     OnError();
     return;
   }
 
   std::move(created_callback)
-      .Run(
-          {base::in_place, std::move(buffer_handle), std::move(socket_handle)});
+      .Run({base::in_place, std::move(shared_memory_region),
+            std::move(socket_handle)});
 }
 
 void OutputStream::OnControllerPlaying() {
@@ -168,7 +171,8 @@ void OutputStream::OnControllerPlaying() {
 
   TRACE_EVENT_NESTABLE_ASYNC_BEGIN0("audio", "Playing", this);
   playing_ = true;
-  observer_->DidStartPlaying();
+  if (observer_)
+    observer_->DidStartPlaying();
   if (OutputController::will_monitor_audio_levels()) {
     DCHECK(!poll_timer_.IsRunning());
     // base::Unretained is safe because |this| owns |poll_timer_|.
@@ -182,7 +186,8 @@ void OutputStream::OnControllerPlaying() {
 
   // In case we don't monitor audio levels, we assume a stream is audible when
   // it's playing.
-  observer_->DidChangeAudibleState(true);
+  if (observer_)
+    observer_->DidChangeAudibleState(true);
 }
 
 void OutputStream::OnControllerPaused() {
@@ -196,7 +201,8 @@ void OutputStream::OnControllerPaused() {
     DCHECK(poll_timer_.IsRunning());
     poll_timer_.Stop();
   }
-  observer_->DidStopPlaying();
+  if (observer_)
+    observer_->DidStopPlaying();
   TRACE_EVENT_NESTABLE_ASYNC_END0("audio", "Playing", this);
 }
 
@@ -208,7 +214,8 @@ void OutputStream::OnControllerError() {
   // torn down.
   poll_timer_.Stop();
 
-  log_->get()->OnError();
+  if (log_)
+    log_->get()->OnError();
 
   if (observer_) {
     observer_.ResetWithReason(
@@ -222,7 +229,8 @@ void OutputStream::OnControllerError() {
 
 void OutputStream::OnLog(base::StringPiece message) {
   // No sequence check: |log_| is thread-safe.
-  log_->get()->OnLogMessage(message.as_string());
+  if (log_)
+    log_->get()->OnLogMessage(message.as_string());
 }
 
 void OutputStream::OnError() {
@@ -252,10 +260,12 @@ void OutputStream::PollAudioLevel() {
 
   if (is_audible_ && !was_audible) {
     TRACE_EVENT_NESTABLE_ASYNC_BEGIN0("audio", "Audible", this);
-    observer_->DidChangeAudibleState(is_audible_);
+    if (observer_)
+      observer_->DidChangeAudibleState(is_audible_);
   } else if (!is_audible_ && was_audible) {
     TRACE_EVENT_NESTABLE_ASYNC_END0("audio", "Audible", this);
-    observer_->DidChangeAudibleState(is_audible_);
+    if (observer_)
+      observer_->DidChangeAudibleState(is_audible_);
   }
 }
 

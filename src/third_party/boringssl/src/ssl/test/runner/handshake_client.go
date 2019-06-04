@@ -19,7 +19,7 @@ import (
 	"net"
 	"time"
 
-	"./ed25519"
+	"boringssl.googlesource.com/boringssl/ssl/test/runner/ed25519"
 )
 
 type clientHandshakeState struct {
@@ -47,6 +47,32 @@ func mapClientHelloVersion(vers uint16, isDTLS bool) uint16 {
 	}
 
 	panic("Unknown ClientHello version.")
+}
+
+func fixClientHellos(hello *clientHelloMsg, in []byte) ([]byte, error) {
+	ret := append([]byte{}, in...)
+	newHello := new(clientHelloMsg)
+	if !newHello.unmarshal(ret) {
+		return nil, errors.New("tls: invalid ClientHello")
+	}
+
+	hello.random = newHello.random
+	hello.sessionId = newHello.sessionId
+
+	// Replace |ret|'s key shares with those of |hello|. For simplicity, we
+	// require their lengths match, which is satisfied by matching the
+	// DefaultCurves setting to the selection in the replacement
+	// ClientHello.
+	bb := newByteBuilder()
+	hello.marshalKeyShares(bb)
+	keyShares := bb.finish()
+	if len(keyShares) != len(newHello.keySharesRaw) {
+		return nil, errors.New("tls: ClientHello key share length is inconsistent with DefaultCurves setting")
+	}
+	// |newHello.keySharesRaw| aliases |ret|.
+	copy(newHello.keySharesRaw, keyShares)
+
+	return ret, nil
 }
 
 func (c *Conn) clientHandshake() error {
@@ -100,7 +126,6 @@ func (c *Conn) clientHandshake() error {
 		pskBinderFirst:          c.config.Bugs.PSKBinderFirst,
 		omitExtensions:          c.config.Bugs.OmitExtensions,
 		emptyExtensions:         c.config.Bugs.EmptyExtensions,
-		dummyPQPaddingLen:       c.config.Bugs.SendDummyPQPaddingLength,
 	}
 
 	if maxVersion >= VersionTLS13 {
@@ -152,6 +177,15 @@ func (c *Conn) clientHandshake() error {
 			hello.secureRenegotiation[0] ^= 0x80
 		} else {
 			hello.secureRenegotiation = c.clientVerify
+		}
+	}
+
+	if c.config.Bugs.DuplicateCompressedCertAlgs {
+		hello.compressedCertAlgs = []uint16{1, 1}
+	} else if len(c.config.CertCompressionAlgs) > 0 {
+		hello.compressedCertAlgs = make([]uint16, 0, len(c.config.CertCompressionAlgs))
+		for id, _ := range c.config.CertCompressionAlgs {
+			hello.compressedCertAlgs = append(hello.compressedCertAlgs, uint16(id))
 		}
 	}
 
@@ -397,7 +431,14 @@ NextCipherSuite:
 			}
 			generatePSKBinders(version, hello, pskCipherSuite, session.masterSecret, []byte{}, []byte{}, c.config)
 		}
-		helloBytes = hello.marshal()
+		if c.config.Bugs.SendClientHelloWithFixes != nil {
+			helloBytes, err = fixClientHellos(hello, c.config.Bugs.SendClientHelloWithFixes)
+			if err != nil {
+				return err
+			}
+		} else {
+			helloBytes = hello.marshal()
+		}
 
 		if c.config.Bugs.PartialClientFinishedWithClientHello {
 			// Include one byte of Finished. We can compute it
@@ -594,22 +635,30 @@ NextCipherSuite:
 		return fmt.Errorf("tls: server sent non-matching version %x vs %x", serverWireVersion, serverHello.vers)
 	}
 
-	// Check for downgrade signals in the server random, per
-	// draft-ietf-tls-tls13-16, section 4.1.3.
-	if c.vers <= VersionTLS12 && c.config.maxVersion(c.isDTLS) >= VersionTLS13 {
-		if bytes.Equal(serverHello.random[len(serverHello.random)-8:], downgradeTLS13) {
-			c.sendAlert(alertProtocolVersion)
-			return errors.New("tls: downgrade from TLS 1.3 detected")
+	_, supportsTLS13 := c.config.isSupportedVersion(VersionTLS13, false)
+	// Check for downgrade signals in the server random, per RFC 8446, section 4.1.3.
+	gotDowngrade := serverHello.random[len(serverHello.random)-8:]
+	if (supportsTLS13 || c.config.Bugs.CheckTLS13DowngradeRandom) && !c.config.Bugs.IgnoreTLS13DowngradeRandom {
+		if c.vers <= VersionTLS12 && c.config.maxVersion(c.isDTLS) >= VersionTLS13 {
+			if bytes.Equal(gotDowngrade, downgradeTLS13) {
+				c.sendAlert(alertProtocolVersion)
+				return errors.New("tls: downgrade from TLS 1.3 detected")
+			}
+		}
+		if c.vers <= VersionTLS11 && c.config.maxVersion(c.isDTLS) >= VersionTLS12 {
+			if bytes.Equal(gotDowngrade, downgradeTLS12) {
+				c.sendAlert(alertProtocolVersion)
+				return errors.New("tls: downgrade from TLS 1.2 detected")
+			}
 		}
 	}
-	if c.vers <= VersionTLS11 && c.config.maxVersion(c.isDTLS) >= VersionTLS12 {
-		if bytes.Equal(serverHello.random[len(serverHello.random)-8:], downgradeTLS12) {
-			c.sendAlert(alertProtocolVersion)
-			return errors.New("tls: downgrade from TLS 1.2 detected")
+
+	if bytes.Equal(gotDowngrade, downgradeJDK11) != c.config.Bugs.ExpectJDK11DowngradeRandom {
+		c.sendAlert(alertProtocolVersion)
+		if c.config.Bugs.ExpectJDK11DowngradeRandom {
+			return errors.New("tls: server did not send a JDK 11 downgrade signal")
 		}
-	}
-	if c.config.Bugs.ExpectDraftTLS13DowngradeRandom && !bytes.Equal(serverHello.random[len(serverHello.random)-8:], downgradeTLS13Draft) {
-		return errors.New("tls: server did not send draft TLS 1.3 anti-downgrade signal")
+		return errors.New("tls: server sent an unexpected JDK 11 downgrade signal")
 	}
 
 	suite := mutualCipherSuite(hello.cipherSuites, serverHello.cipherSuite)
@@ -719,6 +768,9 @@ NextCipherSuite:
 		if sessionCache != nil && hs.session != nil && session != hs.session {
 			if c.config.Bugs.RequireSessionTickets && len(hs.session.sessionTicket) == 0 {
 				return errors.New("tls: new session used session IDs instead of tickets")
+			}
+			if c.config.Bugs.RequireSessionIDs && len(hs.session.sessionId) == 0 {
+				return errors.New("tls: new session used session tickets instead of IDs")
 			}
 			sessionCache.Put(cacheKey, hs.session)
 		}
@@ -864,12 +916,46 @@ func (hs *clientHandshakeState) doTLS13Handshake() error {
 			}
 		}
 
-		certMsg, ok := msg.(*certificateMsg)
-		if !ok {
-			c.sendAlert(alertUnexpectedMessage)
-			return unexpectedMessageError(certMsg, msg)
+		var certMsg *certificateMsg
+
+		if compressedCertMsg, ok := msg.(*compressedCertificateMsg); ok {
+			hs.writeServerHash(compressedCertMsg.marshal())
+
+			alg, ok := c.config.CertCompressionAlgs[compressedCertMsg.algID]
+			if !ok {
+				c.sendAlert(alertBadCertificate)
+				return fmt.Errorf("tls: received certificate compressed with unknown algorithm %x", compressedCertMsg.algID)
+			}
+
+			decompressed := make([]byte, 4+int(compressedCertMsg.uncompressedLength))
+			if !alg.Decompress(decompressed[4:], compressedCertMsg.compressed) {
+				c.sendAlert(alertBadCertificate)
+				return fmt.Errorf("tls: failed to decompress certificate with algorithm %x", compressedCertMsg.algID)
+			}
+
+			certMsg = &certificateMsg{
+				hasRequestContext: true,
+			}
+
+			if !certMsg.unmarshal(decompressed) {
+				c.sendAlert(alertBadCertificate)
+				return errors.New("tls: failed to parse decompressed certificate")
+			}
+
+			if expected := c.config.Bugs.ExpectedCompressedCert; expected != 0 && expected != compressedCertMsg.algID {
+				return fmt.Errorf("tls: expected certificate compressed with algorithm %x, but message used %x", expected, compressedCertMsg.algID)
+			}
+		} else {
+			if certMsg, ok = msg.(*certificateMsg); !ok {
+				c.sendAlert(alertUnexpectedMessage)
+				return unexpectedMessageError(certMsg, msg)
+			}
+			hs.writeServerHash(certMsg.marshal())
+
+			if c.config.Bugs.ExpectedCompressedCert != 0 {
+				return errors.New("tls: uncompressed certificate received")
+			}
 		}
-		hs.writeServerHash(certMsg.marshal())
 
 		// Check for unsolicited extensions.
 		for i, cert := range certMsg.certificates {
@@ -1513,10 +1599,6 @@ func (hs *clientHandshakeState) processServerExtensions(serverExtensions *server
 		c.quicTransportParams = serverExtensions.quicTransportParams
 	}
 
-	if l := c.config.Bugs.ExpectDummyPQPaddingLength; l != 0 && serverExtensions.dummyPQPaddingLen != l {
-		return fmt.Errorf("tls: expected %d-byte dummy PQ padding extension, but got %d bytes", l, serverExtensions.dummyPQPaddingLen)
-	}
-
 	return nil
 }
 
@@ -1628,6 +1710,9 @@ func (hs *clientHandshakeState) readSessionTicket() error {
 
 	if c.vers == VersionSSL30 {
 		return errors.New("tls: negotiated session tickets in SSL 3.0")
+	}
+	if c.config.Bugs.ExpectNoNewSessionTicket {
+		return errors.New("tls: received unexpected NewSessionTicket")
 	}
 
 	msg, err := c.readHandshake()

@@ -17,8 +17,8 @@
 #include <string>
 #include <vector>
 
+#include "absl/types/optional.h"
 #include "api/candidate.h"
-#include "api/optional.h"
 #include "api/rtcerror.h"
 #include "logging/rtc_event_log/events/rtc_event_ice_candidate_pair.h"
 #include "logging/rtc_event_log/events/rtc_event_ice_candidate_pair_config.h"
@@ -36,9 +36,11 @@
 #include "rtc_base/network.h"
 #include "rtc_base/proxyinfo.h"
 #include "rtc_base/ratetracker.h"
-#include "rtc_base/sigslot.h"
 #include "rtc_base/socketaddress.h"
+#include "rtc_base/system/rtc_export.h"
+#include "rtc_base/third_party/sigslot/sigslot.h"
 #include "rtc_base/thread.h"
+#include "rtc_base/weak_ptr.h"
 
 namespace cricket {
 
@@ -48,7 +50,7 @@ class ConnectionRequest;
 extern const char LOCAL_PORT_TYPE[];
 extern const char STUN_PORT_TYPE[];
 extern const char PRFLX_PORT_TYPE[];
-extern const char RELAY_PORT_TYPE[];
+RTC_EXPORT extern const char RELAY_PORT_TYPE[];
 
 // RFC 6544, TCP candidate encoding rules.
 extern const int DISCARD_PORT;
@@ -57,8 +59,8 @@ extern const char TCPTYPE_PASSIVE_STR[];
 extern const char TCPTYPE_SIMOPEN_STR[];
 
 enum RelayType {
-  RELAY_GTURN,   // Legacy google relay service.
-  RELAY_TURN     // Standard (TURN) relay service.
+  RELAY_GTURN,  // Legacy google relay service.
+  RELAY_TURN    // Standard (TURN) relay service.
 };
 
 enum IcePriorityValue {
@@ -80,6 +82,18 @@ enum class IceCandidatePairState {
   FAILED,       // Check for this connection failed.
   // According to spec there should also be a frozen state, but nothing is ever
   // frozen because we have not implemented ICE freezing logic.
+};
+
+enum class MdnsNameRegistrationStatus {
+  // IP concealment with mDNS is not enabled or the name registration process is
+  // not started yet.
+  kNotStarted,
+  // A request to create and register an mDNS name for a local IP address of a
+  // host candidate is sent to the mDNS responder.
+  kInProgress,
+  // The name registration is complete and the created name is returned by the
+  // mDNS responder.
+  kCompleted,
 };
 
 // Stats that we can return about the port of a STUN candidate.
@@ -107,7 +121,7 @@ class CandidateStats {
 
   Candidate candidate;
   // STUN port stats if this candidate is a STUN candidate.
-  rtc::Optional<StunStats> stun_stats;
+  absl::optional<StunStats> stun_stats;
 };
 
 typedef std::vector<CandidateStats> CandidateStatsList;
@@ -152,7 +166,7 @@ struct ConnectionInfo {
   // https://w3c.github.io/webrtc-stats/#dom-rtcicecandidatepairstats-totalroundtriptime
   uint64_t total_round_trip_time_ms;
   // https://w3c.github.io/webrtc-stats/#dom-rtcicecandidatepairstats-currentroundtriptime
-  rtc::Optional<uint32_t> current_round_trip_time_ms;
+  absl::optional<uint32_t> current_round_trip_time_ms;
 };
 
 // Information about all the candidate pairs of a channel.
@@ -179,7 +193,8 @@ typedef std::set<rtc::SocketAddress> ServerAddresses;
 // Represents a local communication mechanism that can be used to create
 // connections to similar mechanisms of the other client.  Subclasses of this
 // one add support for specific mechanisms like local UDP ports.
-class Port : public PortInterface, public rtc::MessageHandler,
+class Port : public PortInterface,
+             public rtc::MessageHandler,
              public sigslot::has_slots<> {
  public:
   // INIT: The state when a port is just created.
@@ -192,14 +207,6 @@ class Port : public PortInterface, public rtc::MessageHandler,
        const std::string& type,
        rtc::PacketSocketFactory* factory,
        rtc::Network* network,
-       const std::string& username_fragment,
-       const std::string& password);
-  // TODO(deadbeef): Delete this constructor once clients are moved off of it.
-  Port(rtc::Thread* thread,
-       const std::string& type,
-       rtc::PacketSocketFactory* factory,
-       rtc::Network* network,
-       const rtc::IPAddress& ip,
        const std::string& username_fragment,
        const std::string& password);
   Port(rtc::Thread* thread,
@@ -311,7 +318,7 @@ class Port : public PortInterface, public rtc::MessageHandler,
                                     const char* data,
                                     size_t size,
                                     const rtc::SocketAddress& remote_addr,
-                                    const rtc::PacketTime& packet_time);
+                                    int64_t packet_time_us);
 
   // Shall the port handle packet from this |remote_addr|.
   // This method is overridden by TurnPort.
@@ -328,8 +335,7 @@ class Port : public PortInterface, public rtc::MessageHandler,
                                 int error_code,
                                 const std::string& reason) override;
 
-  void set_proxy(const std::string& user_agent,
-                 const rtc::ProxyInfo& proxy) {
+  void set_proxy(const std::string& user_agent, const rtc::ProxyInfo& proxy) {
     user_agent_ = user_agent;
     proxy_ = proxy;
   }
@@ -379,7 +385,7 @@ class Port : public PortInterface, public rtc::MessageHandler,
 
   int16_t network_cost() const { return network_cost_; }
 
-  void GetStunStats(rtc::Optional<StunStats>* stats) override{};
+  void GetStunStats(absl::optional<StunStats>* stats) override{};
 
  protected:
   enum { MSG_DESTROY_IF_DEAD = 0, MSG_FIRST_AVAILABLE };
@@ -399,7 +405,7 @@ class Port : public PortInterface, public rtc::MessageHandler,
                   const std::string& type,
                   uint32_t type_preference,
                   uint32_t relay_preference,
-                  bool final);
+                  bool is_final);
 
   void AddAddress(const rtc::SocketAddress& address,
                   const rtc::SocketAddress& base_address,
@@ -411,7 +417,11 @@ class Port : public PortInterface, public rtc::MessageHandler,
                   uint32_t type_preference,
                   uint32_t relay_preference,
                   const std::string& url,
-                  bool final);
+                  bool is_final);
+
+  void FinishAddingAddress(const Candidate& c, bool is_final);
+
+  virtual void PostAddAddress(bool is_final);
 
   // Adds the given connection to the map keyed by the remote candidate address.
   // If an existing connection has the same address, the existing one will be
@@ -421,7 +431,8 @@ class Port : public PortInterface, public rtc::MessageHandler,
   // Called when a packet is received from an unknown address that is not
   // currently a connection.  If this is an authenticated STUN binding request,
   // then we will signal the client.
-  void OnReadPacket(const char* data, size_t size,
+  void OnReadPacket(const char* data,
+                    size_t size,
                     const rtc::SocketAddress& addr,
                     ProtocolType proto);
 
@@ -439,16 +450,20 @@ class Port : public PortInterface, public rtc::MessageHandler,
   // Checks if the address in addr is compatible with the port's ip.
   bool IsCompatibleAddress(const rtc::SocketAddress& addr);
 
-  // Returns default DSCP value.
-  rtc::DiffServCodePoint DefaultDscpValue() const {
-    // No change from what MediaChannel set.
-    return rtc::DSCP_NO_CHANGE;
-  }
+  // Returns DSCP value packets generated by the port itself should use.
+  virtual rtc::DiffServCodePoint StunDscpValue() const;
 
   // Extra work to be done in subclasses when a connection is destroyed.
   virtual void HandleConnectionDestroyed(Connection* conn) {}
 
   void CopyPortInformationToPacketInfo(rtc::PacketInfo* info) const;
+
+  MdnsNameRegistrationStatus mdns_name_registration_status() const {
+    return mdns_name_registration_status_;
+  }
+  void set_mdns_name_registration_status(MdnsNameRegistrationStatus status) {
+    mdns_name_registration_status_ = status;
+  }
 
  private:
   void Construct();
@@ -494,6 +509,10 @@ class Port : public PortInterface, public rtc::MessageHandler,
   int16_t network_cost_;
   State state_ = State::INIT;
   int64_t last_time_all_connections_removed_ = 0;
+  MdnsNameRegistrationStatus mdns_name_registration_status_ =
+      MdnsNameRegistrationStatus::kNotStarted;
+
+  rtc::WeakPtrFactory<Port> weak_factory_;
 
   friend class Connection;
 };
@@ -515,6 +534,9 @@ class Connection : public CandidatePairInterface,
 
   ~Connection() override;
 
+  // A unique ID assigned when the connection is created.
+  uint32_t id() { return id_; }
+
   // The local port where this connection sends and receives packets.
   Port* port() { return port_; }
   const Port* port() const { return port_; }
@@ -529,10 +551,10 @@ class Connection : public CandidatePairInterface,
   uint64_t priority() const;
 
   enum WriteState {
-    STATE_WRITABLE          = 0,  // we have received ping responses recently
-    STATE_WRITE_UNRELIABLE  = 1,  // we have had a few ping failures
-    STATE_WRITE_INIT        = 2,  // we have yet to receive a ping response
-    STATE_WRITE_TIMEOUT     = 3,  // we have had a large number of ping failures
+    STATE_WRITABLE = 0,          // we have received ping responses recently
+    STATE_WRITE_UNRELIABLE = 1,  // we have had a few ping failures
+    STATE_WRITE_INIT = 2,        // we have yet to receive a ping response
+    STATE_WRITE_TIMEOUT = 3,     // we have had a large number of ping failures
   };
 
   WriteState write_state() const { return write_state_; }
@@ -543,9 +565,7 @@ class Connection : public CandidatePairInterface,
   // be false for TCP connections.
   bool connected() const { return connected_; }
   bool weak() const { return !(writable() && receiving() && connected()); }
-  bool active() const {
-    return write_state_ != STATE_WRITE_TIMEOUT;
-  }
+  bool active() const { return write_state_ != STATE_WRITE_TIMEOUT; }
 
   // A connection is dead if it can be safely deleted.
   bool dead(int64_t now) const;
@@ -554,11 +574,11 @@ class Connection : public CandidatePairInterface,
   int rtt() const { return rtt_; }
 
   int unwritable_timeout() const;
-  void set_unwritable_timeout(const rtc::Optional<int>& value_ms) {
+  void set_unwritable_timeout(const absl::optional<int>& value_ms) {
     unwritable_timeout_ = value_ms;
   }
   int unwritable_min_checks() const;
-  void set_unwritable_min_checks(const rtc::Optional<int>& value) {
+  void set_unwritable_min_checks(const absl::optional<int>& value) {
     unwritable_min_checks_ = value;
   }
 
@@ -575,20 +595,19 @@ class Connection : public CandidatePairInterface,
   // The connection can send and receive packets asynchronously.  This matches
   // the interface of AsyncPacketSocket, which may use UDP or TCP under the
   // covers.
-  virtual int Send(const void* data, size_t size,
+  virtual int Send(const void* data,
+                   size_t size,
                    const rtc::PacketOptions& options) = 0;
 
   // Error if Send() returns < 0
   virtual int GetError() = 0;
 
-  sigslot::signal4<Connection*, const char*, size_t, const rtc::PacketTime&>
-      SignalReadPacket;
+  sigslot::signal4<Connection*, const char*, size_t, int64_t> SignalReadPacket;
 
   sigslot::signal1<Connection*> SignalReadyToSend;
 
   // Called when a packet is received on this connection.
-  void OnReadPacket(const char* data, size_t size,
-                    const rtc::PacketTime& packet_time);
+  void OnReadPacket(const char* data, size_t size, int64_t packet_time_us);
 
   // Called when the socket is currently able to send.
   void OnReadyToSend();
@@ -621,12 +640,10 @@ class Connection : public CandidatePairInterface,
   // Public for unit tests.
   uint32_t acked_nomination() const { return acked_nomination_; }
 
-  void set_remote_ice_mode(IceMode mode) {
-    remote_ice_mode_ = mode;
-  }
+  void set_remote_ice_mode(IceMode mode) { remote_ice_mode_ = mode; }
 
   int receiving_timeout() const;
-  void set_receiving_timeout(rtc::Optional<int> receiving_timeout_ms) {
+  void set_receiving_timeout(absl::optional<int> receiving_timeout_ms) {
     receiving_timeout_ = receiving_timeout_ms;
   }
 
@@ -669,8 +686,6 @@ class Connection : public CandidatePairInterface,
   std::string ToSensitiveString() const;
   // Structured description of this candidate pair.
   const webrtc::IceCandidatePairDescription& ToLogDescription();
-  // Integer typed hash value of this candidate pair.
-  uint32_t hash() { return hash_; }
   void set_ice_event_log(webrtc::IceEventLog* ice_event_log) {
     ice_event_log_ = ice_event_log;
   }
@@ -678,7 +693,7 @@ class Connection : public CandidatePairInterface,
   void PrintPingsSinceLastResponse(std::string* pings, size_t max);
 
   bool reported() const { return reported_; }
-  void set_reported(bool reported) { reported_ = reported;}
+  void set_reported(bool reported) { reported_ = reported; }
   // The following two methods are only used for logging in ToString above, and
   // this flag is set true by P2PTransportChannel for its selected candidate
   // pair.
@@ -754,6 +769,7 @@ class Connection : public CandidatePairInterface,
 
   void OnMessage(rtc::Message* pmsg) override;
 
+  uint32_t id_;
   Port* port_;
   size_t local_candidate_index_;
   Candidate remote_candidate_;
@@ -768,6 +784,9 @@ class Connection : public CandidatePairInterface,
   void MaybeUpdateLocalCandidate(ConnectionRequest* request,
                                  StunMessage* response);
 
+  void CopyCandidatesToStatsAndSanitizeIfNecessary();
+
+  void LogCandidatePairConfig(webrtc::IceCandidatePairConfigType type);
   void LogCandidatePairEvent(webrtc::IceCandidatePairEventType type);
 
   WriteState write_state_;
@@ -800,7 +819,7 @@ class Connection : public CandidatePairInterface,
   // https://w3c.github.io/webrtc-stats/#dom-rtcicecandidatepairstats-totalroundtriptime
   uint64_t total_round_trip_time_ms_ = 0;
   // https://w3c.github.io/webrtc-stats/#dom-rtcicecandidatepairstats-currentroundtriptime
-  rtc::Optional<uint32_t> current_round_trip_time_ms_;
+  absl::optional<uint32_t> current_round_trip_time_ms_;
   int64_t last_ping_sent_;      // last time we sent a ping to the other side
   int64_t last_ping_received_;  // last time we received a ping from the other
                                 // side
@@ -811,18 +830,17 @@ class Connection : public CandidatePairInterface,
 
   PacketLossEstimator packet_loss_estimator_;
 
-  rtc::Optional<int> unwritable_timeout_;
-  rtc::Optional<int> unwritable_min_checks_;
+  absl::optional<int> unwritable_timeout_;
+  absl::optional<int> unwritable_min_checks_;
 
   bool reported_;
   IceCandidatePairState state_;
   // Time duration to switch from receiving to not receiving.
-  rtc::Optional<int> receiving_timeout_;
+  absl::optional<int> receiving_timeout_;
   int64_t time_created_ms_;
   int num_pings_sent_ = 0;
 
-  rtc::Optional<webrtc::IceCandidatePairDescription> log_description_;
-  uint32_t hash_;
+  absl::optional<webrtc::IceCandidatePairDescription> log_description_;
   webrtc::IceEventLog* ice_event_log_ = nullptr;
 
   friend class Port;

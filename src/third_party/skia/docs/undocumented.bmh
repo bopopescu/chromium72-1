@@ -2,32 +2,34 @@
 #External
  DirectWrite TrueType Windows Linux Android iOS __ANDROID_API__ AHardwareBuffer
  FreeType FreeType-based Harfbuzz
- Descenders Kerning Unhinted
- LCD RGB sRGB ARGB BGR YUV SDTV HDTV
- YUV_Component_Y YUV_Component_U YUV_Component_V
+ LCD RGB sRGB BGR RGBA ARGB YUV YUVA HSV SDTV HDTV
  Unicode Unicode5 UTF-8 UTF-16 UTF-32 ASCII Unichar
  API
  BMP GIF HEIF ICO JPEG PNG WBMP WebP
- CPU Little_Endian Big_Endian
- GPU GPU-backed OpenGL Vulkan I/O MSAA UV_Mapping Multi_Sample_Anti_Aliasing GPU_Share_Group
+ CPU
+ GPU GPU-backed OpenGL Vulkan VkDevice I/O MSAA
  PDF XPS
  RFC
  NaN NaNs
- Bezier_Curve Coons_Patch Cartesian_Coordinate Euclidean_Distance Euclidean_Space Mip_Map
- C C++ Destructor Subclasses
+ bool U16CPU int int8_t int16_t int32_t int64_t uint8_t uint16_t uint32_t uint64_t size_t
+ nullptr
+ malloc() calloc() assert() std::move()
+ C C++ SIZE_MAX C_FILE FILE
  CSS HTML
- HTML_Gray HTML_DarkGray HTML_LightGray HTML_Silver HTML_Lime HTML_Green HTML_Aqua HTML_Fuchsia
- SVG_lightgray SVG_darkgray
- SkUserConfig  # not external, but still thinking about how markup refers to this
+
+ affine destructor multitexturing representable subclasses descender descenders grayscale kerning
+ unhinted no-parameter
+ 
+ Sa Da Sc Dc 0xAARRGGBB # temporary until figure out what to do
+
+ SkUserConfig.h  # not external, but still thinking about how markup refers to this
  SkXXX.h        # ditto
  SkXXX_Reference # ditto
  Skia           # ditto
  SK_ABORT       # ditto
- SK_API         # ditto
  SK_DEBUG       # ditto
  SK_RELEASE     # ditto
  SK_USE_FREETYPE_EMBOLDEN # ditto
- SK_SUPPORT_LEGACY_PAINT_TEXTDECORATION # ditto
  SK_BUILD_FOR_ANDROID_FRAMEWORK # ditto
  SK_BUILD_FOR_MAC # ditto
  SK_BUILD_FOR_IOS # ditto
@@ -37,7 +39,6 @@
  SK_HAS_WEBP_LIBRARY # ditto
  SK_IGNORE_GPU_DITHER # ditto
  SK_PMCOLOR_BYTE_ORDER # ditto
- SK_WARN_UNUSED_RESULT # ditto
 
 # FreeType related
 FT_LOAD_TARGET_LIGHT
@@ -49,17 +50,104 @@ FT_Load_Glyph
 
 #External ##
 
+# this jargon requires a substitute to space the phrase.
+#Topic Little_Endian
+#Substitute little endian
+##
+
+#Topic Big_Endian
+#Substitute big endian
+##
+
+#Topic YUV_Component_Y
+#Substitute YUV component y
+##
+
+#Topic YUV_Component_U
+#Substitute YUV component u
+##
+
+#Topic YUV_Component_V
+#Substitute YUV component v
+##
+
+#Topic UV_Mapping
+#Substitute UV mapping
+##
+
+#Topic Multi_Sample_Anti_Aliasing
+#Substitute multi-sample anti-aliasing
+##
+
+#Topic GPU_Share_Group
+#Substitute GPU share group
+##
+
+#Topic Bezier_Curve
+#Substitute Bezier cruve
+##
+
+#Topic Coons_Patch
+#Substitute Coons patch
+##
+
+#Topic Cartesian_Coordinate
+#Substitute Cartesian coordinate
+##
+
+#Topic Euclidean_Distance
+#Substitute Euclidean distance
+##
+
+#Topic Euclidean_Space
+#Substitute Euclidean space
+##
+
+#Topic HTML_Gray
+#Substitute HTML gray
+##
+
+#Topic HTML_Silver
+#Substitute HTML silver
+##
+
+#Topic HTML_Lime
+#Substitute HTML lime
+##
+
+#Topic HTML_Green
+#Substitute HTML green
+##
+
+#Topic HTML_Aqua
+#Substitute HTML aqua
+##
+
+#Topic HTML_Fuchsia
+#Substitute HTML fuchsia
+##
+
+#Topic SVG_lightgray
+#Substitute SVG light gray
+##
+
+#Topic SVG_darkgray
+#Substitute SVG dark gray
+##
+
+# start of topics to be documented in the future
+
 #Topic Alias
-#Alias Aliased
-#Alias Aliasing
+#Alias Aliased ##
+#Alias Aliasing ##
 ##
 
 #Topic Arc
-#Alias Arcs
+#Alias Arcs ##
 #Topic ##
 
 #Topic Backend_Semaphore
-#Alias Backend_Semaphores
+#Alias Backend_Semaphores ##
 #Class GrBackendSemaphore
 ##
 ##
@@ -69,19 +157,9 @@ FT_Load_Glyph
 ##
 ##
 
-#Topic Blend_Mode
-#EnumClass SkBlendMode
-    #Const kSrc 1
-    ##
-    #Const kSrcOver 3
-    ##
-    #Const kPlus 12
-    ##
-#EnumClass ##
-#Topic ##
 
 #Topic Circle
-#Alias Circles
+#Alias Circles ##
 #Topic ##
 
 #Topic Clip_Op
@@ -95,8 +173,6 @@ FT_Load_Glyph
 
 #Topic Color_Filter
 #Class SkColorFilter
-#Method void toString(SkString* str) const
-##
 #Class ##
 ##
 
@@ -109,17 +185,11 @@ FT_Load_Glyph
     #Method static bool Equals(const SkColorSpace* src, const SkColorSpace* dst)
     ##
 ##
-#EnumClass SkTransferFunctionBehavior
-#Const kRespect 0
-##
-#Const kIgnore 1
-##
-#EnumClass ##
 ##
 
 #Topic Create_Color_Space_Xform_Canvas
-#Method std::unique_ptr<SkCanvas> SK_API SkCreateColorSpaceXformCanvas(SkCanvas* target,
-                                                                       sk_sp<SkColorSpace> targetCS)
+#Method std::unique_ptr<SkCanvas> SkCreateColorSpaceXformCanvas(SkCanvas* target,
+                                                                sk_sp<SkColorSpace> targetCS)
 ##
 ##
 
@@ -132,7 +202,7 @@ FT_Load_Glyph
 ##
 
 #Topic Curve
-#Alias Curves
+#Alias Curves ##
 ##
 
 #Topic Data
@@ -146,7 +216,7 @@ FT_Load_Glyph
 ##
 
 #Topic Debugging
-#Method SK_API void SkDebugf(const char format[], ...)
+#Method void SkDebugf(const char format[], ...)
 ##
 ##
 
@@ -155,6 +225,19 @@ FT_Load_Glyph
 ##
 #Subtopic Recorder
 #Class SkDeferredDisplayListRecorder
+##
+##
+##
+
+#Topic Deserial_Procs
+#Struct SkDeserialProcs
+#Member SkDeserialPictureProc   fPictureProc
+##
+#Member void*   fPictureCtx
+##
+#Member SkDeserialTypefaceProc   fTypefaceProc
+##
+#Member void*   fTypefaceCtx
 ##
 ##
 ##
@@ -171,11 +254,6 @@ FT_Load_Glyph
     ##
 ##
 #Subtopic PDF
-##
-##
-
-#Topic Draw_Filter
-#Class SkDrawFilter
 ##
 ##
 
@@ -255,18 +333,233 @@ FT_Load_Glyph
 #Subtopic ##
 #Subtopic Engine
 ##
+#Enum SkTextEncoding
+#Const kUTF8_SkTextEncoding 0
+##
+#Const kUTF16_SkTextEncoding 1
+##
+#Const kUTF32_SkTextEncoding 2
+##
+#Const kGlyphID_SkTextEncoding 3
+##
+##
+#Class SkFont
+##
+#EnumClass SkFontHinting
+#Const kNone 0
+#Line # glyph outlines unchanged ##
+    Leaves glyph outlines unchanged from their native representation.
+    With FreeType, this is equivalent to the FT_LOAD_NO_HINTING
+    bit-field constant supplied to FT_Load_Glyph, which indicates that the vector
+    outline being loaded should not be fitted to the pixel grid but simply scaled
+    to 26.6 fractional pixels.
+##
+#Const kSlight 1
+#Line # minimal modification to improve contrast ##
+    Modifies glyph outlines minimally to improve contrast.
+    With FreeType, this is equivalent in spirit to the
+    FT_LOAD_TARGET_LIGHT value supplied to FT_Load_Glyph. It chooses a
+    lighter hinting algorithm for non-monochrome modes.
+    Generated Glyphs may be fuzzy but better resemble their original shape.
+##
+#Const kNormal 2
+#Line # glyph outlines modified to improve contrast ##
+    Modifies glyph outlines to improve contrast. This is the default.
+    With FreeType, this supplies FT_LOAD_TARGET_NORMAL to FT_Load_Glyph,
+    choosing the default hinting algorithm, which is optimized for standard
+    gray-level rendering.
+##
+#Const kFull 3
+#Line # modifies glyph outlines for maximum contrast ##
+    Modifies glyph outlines for maximum contrast. With FreeType, this selects
+    FT_LOAD_TARGET_LCD or FT_LOAD_TARGET_LCD_V if kLCDRenderText_Flag is set.
+    FT_LOAD_TARGET_LCD is a variant of FT_LOAD_TARGET_NORMAL optimized for
+    horizontally decimated LCD displays; FT_LOAD_TARGET_LCD_V is a
+    variant of FT_LOAD_TARGET_NORMAL optimized for vertically decimated LCD displays.
+##
+##
+#Struct SkFontMetrics
+#Line # values computed by Font_Manager using Typeface ##
+
+    SkFontMetrics is filled out by SkPaint::getFontMetrics. SkFontMetrics contents
+    reflect the values
+    computed by Font_Manager using Typeface. Values are set to zero if they are
+    not available.
+
+    All vertical values are relative to the baseline, on a y-axis pointing down.
+    Zero is on the baseline, negative values are above the baseline, and positive
+    values are below the baseline.
+
+    fUnderlineThickness and fUnderlinePosition have a bit set in fFlags if their values
+    are valid, since their value may be zero.
+
+    fStrikeoutThickness and fStrikeoutPosition have a bit set in fFlags if their values
+    are valid, since their value may be zero.
+
+    #Enum FontMetricsFlags
+    #Line # valid Font_Metrics ##
+
+    FontMetricsFlags are set in fFlags when underline and strikeout metrics are valid;
+    the underline or strikeout metric may be valid and zero.
+    Fonts with embedded bitmaps may not have valid underline or strikeout metrics.
+
+        #Const kUnderlineThicknessIsValid_Flag 0x0001
+        #Line # set if fUnderlineThickness is valid ##
+        ##
+        #Const kUnderlinePositionIsValid_Flag  0x0002
+        #Line # set if fUnderlinePosition is valid ##
+        ##
+        #Const kStrikeoutThicknessIsValid_Flag 0x0004
+        #Line # set if fStrikeoutThickness is valid ##
+        ##
+        #Const kStrikeoutPositionIsValid_Flag  0x0008
+        #Line # set if fStrikeoutPosition is valid ##
+        ##
+
+    #Enum ##
+
+    #Member uint32_t    fFlags
+    #Line # is set to FontMetricsFlags when metrics are valid ##
+    ##
+
+    #Member SkScalar    fTop
+    #Line # extent above baseline ##
+        Greatest extent above the baseline for any glyph.
+        Typically less than zero.
+    ##
+
+    #Member SkScalar    fAscent
+    #Line # distance to reserve above baseline ##
+        Recommended distance above the baseline to reserve for a line of text.
+        Typically less than zero.
+    ##
+
+    #Member SkScalar    fDescent
+    #Line # distance to reserve below baseline ##
+        Recommended distance below the baseline to reserve for a line of text.
+        Typically greater than zero.
+    ##
+
+    #Member SkScalar    fBottom
+    #Line # extent below baseline ##
+        Greatest extent below the baseline for any glyph.
+        Typically greater than zero.
+    ##
+
+    #Member SkScalar    fLeading
+    #Line # distance to add between lines ##
+        Recommended distance to add between lines of text.
+        Typically greater than or equal to zero.
+    ##
+
+    #Member SkScalar    fAvgCharWidth
+    #Line # average character width ##
+        Average character width, if it is available.
+        Zero if no average width is stored in the font.
+    ##
+
+    #Member SkScalar    fMaxCharWidth
+    #Line # maximum character width ##
+    ##
+
+    #Member SkScalar    fXMin
+    #Line # minimum x ##
+        Minimum bounding box x-axis value for all Glyphs.
+        Typically less than zero.
+    ##
+
+    #Member SkScalar    fXMax
+    #Line # maximum x ##
+        Maximum bounding box x-axis value for all Glyphs.
+        Typically greater than zero.
+    ##
+
+    #Member SkScalar    fXHeight
+    #Line # height of lower-case 'x' ##
+        May be zero if no lower-case height is stored in the font.
+    ##
+
+    #Member SkScalar    fCapHeight
+    #Line # height of an upper-case letter ##
+        May be zero if no upper-case height is stored in the font.
+    ##
+
+    #Member SkScalar    fUnderlineThickness
+    #Line # underline thickness ##
+        If the metric is valid, the kUnderlineThicknessIsValid_Flag is set in fFlags.
+        If kUnderlineThicknessIsValid_Flag is clear, fUnderlineThickness is zero.
+    ##
+
+    #Member SkScalar    fUnderlinePosition
+    #Line # underline position relative to baseline ##
+       Position of the top of the underline stroke relative to the baseline.
+       Typically positive when valid.
+
+       If the metric is valid, the kUnderlinePositionIsValid_Flag is set in fFlags.
+       If kUnderlinePositionIsValid_Flag is clear, fUnderlinePosition is zero.
+    ##
+
+    #Member SkScalar    fStrikeoutThickness
+    #Line # strikeout thickness ##
+
+        If the metric is valid, the kStrikeoutThicknessIsValid_Flag is set in fFlags.
+        If kStrikeoutThicknessIsValid_Flag is clear, fStrikeoutThickness is zero.
+    ##
+
+    #Member SkScalar    fStrikeoutPosition
+    #Line # strikeout position relative to baseline ##
+        Position of the bottom of the strikeout stroke relative to the baseline.
+        Typically negative when valid.
+
+        If the metric is valid, the kStrikeoutPositionIsValid_Flag is set in fFlags.
+        If kStrikeoutPositionIsValid_Flag is clear, fStrikeoutPosition is zero.
+    ##
+
+    #Method bool hasUnderlineThickness(SkScalar* thickness) const
+    #Line # returns underline thickness if set ##
+
+#NoExample
+        ##
+    ##
+
+    #Method bool hasUnderlinePosition(SkScalar* position) const
+    #Line # returns underline position if set ##
+
+#NoExample
+        ##
+    ##
+
+    #Method bool hasStrikeoutThickness(SkScalar* thickness) const
+    #Line # returns strikeout thickness if set ##
+
+#NoExample
+        ##
+    ##
+
+    #Method bool hasStrikeoutPosition(SkScalar* position) const
+    #Line # returns strikeout position if set ##
+
+#NoExample
+        ##
+    ##
+
+#Struct ##
 #Topic ##
 
 #Topic Font_Manager
 #Topic ##
 
 #Topic Glyph
-#Alias Glyphs
+#Subtopic ID
+##
+#Alias Glyphs ##
 ##
 
 #Topic GPU_Context
 #Substitute GPU context
 #Class GrContext
+#Method void abandonContext()
+##
 #Method void flush()
 ##
 ##
@@ -289,8 +582,6 @@ FT_Load_Glyph
 
 #Topic Image_Filter
 #Class SkImageFilter
-#Method void toString(SkString* str) const
-##
 #Class ##
 #Topic ##
 
@@ -302,6 +593,10 @@ FT_Load_Glyph
 
 #Topic ISize
 #Struct SkISize
+#Method int32_t width() const
+##
+#Method int32_t height() const
+##
 ##
 ##
 
@@ -309,7 +604,7 @@ FT_Load_Glyph
 ##
 
 #Topic Line
-#Alias Lines
+#Alias Lines ##
 #Topic ##
 
 # to be in Topic Malloc_Pixel_Ref
@@ -329,13 +624,21 @@ FT_Load_Glyph
 
 #Topic Mask_Filter
 #Class SkMaskFilter
-#Method void toString(SkString* str) const
-##
 #Class ##
 #Topic ##
 
 # to be in Topic Math
-    #Method static inline bool sk_64_isS32(int64_t value)
+    #Method Luminosity(dstColor)
+    # this permits using Luminosity() in documentation
+    ##
+    #Method Saturation(dstColor)
+    # this permits using Saturation() in documentation
+    ##
+    #Method SetLuminosity(srcSaturation, dstLuminosity)
+    # this permits using SetLuminosity() in documentation
+    ##
+    #Method SetSaturation(srcSaturation, dstSaturation)
+    # this permits using SetSaturation() in documentation
     ##
     #Method SkIntToScalar(x)
     ##
@@ -355,6 +658,23 @@ FT_Load_Glyph
     ##
     #Method template <typename D, typename S> inline bool SkTFitsIn(S s)
     ##
+    #Method float abs(float x)
+    # this permits using abs(x) in documentation
+    ##
+    #Method float max(float x)
+    # this permits using max(x) in documentation
+    ##
+    #Method float min(float x)
+    # this permits using max(x) in documentation
+    ##
+    #Method float sizeof(float x)
+    # this permits using sizeof(x) in documentation
+    ##
+    #Method float sqrt(float x)
+    # this permits using sqrt(x) in documentation
+    ##
+    #Method static inline bool sk_64_isS32(int64_t value)
+    ##
 # end of Topic Math
 
 #Topic Meta_Data
@@ -363,16 +683,17 @@ FT_Load_Glyph
 ##
 
 #Topic Mip_Map
+#Substitute mip map
 ##
 
 #Topic Nine_Patch
 ##
 
-# to be in Topic Number_Types
+# to be in Topic Number_Types ?
     #Typedef uint16_t SkGlyphID
     #Typedef ##
     #Topic Scalar
-    #Alias Scalar
+    #Alias Scalars ##
     #Typedef float SkScalar
     #Typedef ##
     ##
@@ -406,9 +727,6 @@ FT_Load_Glyph
     #Const SK_MaxS32
     to be written
     ##
-    #Const SK_MaxSizeT
-    to be written
-    ##
     #Typedef int32_t SkUnichar
     #Typedef ##
     #Typedef unsigned U8CPU
@@ -420,7 +738,7 @@ FT_Load_Glyph
 ##
 
 #Topic Oval
-#Alias Ovals
+#Alias Ovals ##
 #Topic ##
 
 #Topic Paint_Defaults
@@ -435,13 +753,11 @@ FT_Load_Glyph
 #Topic ##
 
 #Topic Patch
-#Alias Patches
+#Alias Patches ##
 #Topic ##
 
 #Topic Path_Effect
     #Class SkPathEffect
-    #Method void toString(SkString* str) const
-    ##
     #Class ##
 #Topic ##
 
@@ -455,23 +771,17 @@ FT_Load_Glyph
 #Topic PathOps
     #Enum SkPathOp
     ##
-    #Method bool SK_API Op(const SkPath& one, const SkPath& two, SkPathOp op, SkPath* result)
+    #Method bool Op(const SkPath& one, const SkPath& two, SkPathOp op, SkPath* result)
     ##
 #Topic ##
 
-#Topic Picture
-#Class SkPicture
-#Method virtual void playback(SkCanvas*, AbortCallback* = nullptr) const = 0
-##
-##
-#Subtopic Recorder
+#Topic Picture_Recorder
     #Class SkPictureRecorder
         #Method SkCanvas* beginRecording(const SkRect& bounds,
                              SkBBHFactory* bbhFactory = NULL,
                              uint32_t recordFlags = 0)
         ##
     ##
-##
 ##
 
 #Topic Pixel
@@ -495,10 +805,6 @@ FT_Load_Glyph
 #Enum SkPixelGeometry
 ##
 
-# Topic Point_Array
-# Substitute SkPoint arrays
-# Topic ##
-
 #Topic Point3
 #Struct SkPoint3
 ##
@@ -512,7 +818,8 @@ FT_Load_Glyph
 ##
 
 #Topic Premultiply
-#Alias Premultiplied
+#Alias Premultiplied ##
+#Alias Premultiplies ##
 ##
 
 #Topic Raster_Engine
@@ -541,16 +848,13 @@ FT_Load_Glyph
 # end of Topic Rasterizer
 
 #Topic Reference_Count
-#Substitute SkRefCnt
 #Class SkRefCnt
 #Class ##
+##
+
+#Topic Smart_Pointer
 #Class sk_sp
 #Class ##
-#Topic ##
-
-#Topic Region
-#Class SkRegion
-##
 #Topic ##
 
 #Topic Render_Target
@@ -561,17 +865,29 @@ FT_Load_Glyph
 #Topic Right_Side_Bearing
 ##
 
-#Topic Round_Rect
-    #Class SkRRect
-        #Method void dump() const
-        ##
-        #Method void dumpHex() const
-        ##
-    ##
-#Topic ##
-
 #Topic RSXform
 #Struct SkRSXform
+#Member SkScalar fSCos
+##
+#Member SkScalar fSSin
+##
+#Member SkScalar fTx
+##
+#Member SkScalar fTy
+##
+##
+##
+
+#Topic Serial_Procs
+#Struct SkSerialProcs
+#Member SkSerialPictureProc   fPictureProc
+##
+#Member void*   fPictureCtx
+##
+#Member SkSerialTypefaceProc   fTypefaceProc
+##
+#Member void*   fTypefaceCtx
+##
 ##
 ##
 
@@ -588,20 +904,27 @@ FT_Load_Glyph
     #Method static sk_sp<SkShader> MakeBitmapShader(const SkBitmap& src, TileMode tmx, TileMode tmy,
                                             const SkMatrix* localMatrix = nullptr)
     ##
+    #Method static sk_sp<SkShader> MakeCompose(sk_sp<SkShader> dst, sk_sp<SkShader> src,
+                                       SkBlendMode mode, float lerp = 1)
+    ##
 #Class ##
 #Topic ##
 
 #Topic Size
 #Struct SkSize
+#Method int32_t width() const
+##
+#Method int32_t height() const
+##
 ##
 ##
 
 #Topic Sprite
-#Alias Sprites
+#Alias Sprites ##
 #Topic ##
 
-#Topic Stream
-#Class SkWStream
+#Topic Stream_Asset
+#Class SkStreamAsset
 ##
 #Topic ##
 
@@ -634,20 +957,23 @@ FT_Load_Glyph
 ##
 #Subtopic Arc
 ##
+#Subtopic Sweep_Flag
+#Substitute SVG sweep-flag
+##
 ##
 
 #Topic Text
-#Topic ##
-
-#Topic Text_Blob
-#Class SkTextBlob
-#Class ##
 #Topic ##
 
 #Topic Texture
 #Class GrBackendTexture
     #Method bool isValid() const
     ##
+##
+##
+
+#Topic YUV_Planes
+#Class SkYUVAIndex
 ##
 ##
 
@@ -662,13 +988,26 @@ FT_Load_Glyph
 ##
 
 #Topic Typeface
+#Subtopic ID
+#Typedef uint32_t SkFontID
+##
+##
 #Class SkTypeface
+    #Method SkFontID uniqueID() const
+    ##
 #Class ##
 #Topic ##
 
 # to be defined in types
     #Typedef intptr_t GrBackendObject
     #Typedef ##
+
+    #EnumClass GrMipMapped
+    #Const kNo 0
+    ##
+    #Const kYes 1
+    ##
+    #EnumClass ##
 
     #Enum GrSurfaceOrigin
     #Const kBottomLeft_GrSurfaceOrigin 0
@@ -693,11 +1032,13 @@ FT_Load_Glyph
 # end of defined in types
 
 #Topic Unpremultiply
-#Alias Unpremultiplied
+#Alias Unpremultiplied ##
 ##
 
 #Topic Vertices
 #Class SkVertices
+#Class Bone
+##
 ##
 #Subtopic Colors
 ##
@@ -705,8 +1046,7 @@ FT_Load_Glyph
 ##
 #Topic ##
 
-# to be in Topic Read_Buffer
-    #Struct SkReadBuffer
-    #Struct ##
-# end of Topic Read_Buffer
-
+#Topic Xfermode_Image_Filter
+#Class SkXfermodeImageFilter
+##
+##

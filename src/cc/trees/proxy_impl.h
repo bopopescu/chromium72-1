@@ -20,6 +20,8 @@ class LayerTreeHost;
 class ProxyMain;
 class RenderFrameMetadataObserver;
 
+class ScopedCompletionEvent;
+
 // This class aggregates all the interactions that the main side of the
 // compositor needs to have with the impl side.
 // The class is created and lives on the impl thread.
@@ -38,9 +40,8 @@ class CC_EXPORT ProxyImpl : public LayerTreeHostImplClient,
       LayerTreeFrameSink* layer_tree_frame_sink,
       base::WeakPtr<ProxyMain> proxy_main_frame_sink_bound_weak_ptr);
   void InitializeMutatorOnImpl(std::unique_ptr<LayerTreeMutator> mutator);
-  void MainThreadHasStoppedFlingingOnImpl();
   void SetInputThrottledUntilCommitOnImpl(bool is_throttled);
-  void SetDeferCommitsOnImpl(bool defer_commits) const;
+  void SetDeferMainFrameUpdateOnImpl(bool defer_main_frame_update) const;
   void SetNeedsRedrawOnImpl(const gfx::Rect& damage_rect);
   void SetNeedsCommitOnImpl();
   void BeginMainFrameAbortedOnImpl(
@@ -55,7 +56,7 @@ class CC_EXPORT ProxyImpl : public LayerTreeHostImplClient,
                                  base::TimeTicks main_thread_start_time,
                                  bool hold_commit_for_activation);
   void SetURLForUkm(const GURL& url);
-  void ClearHistoryOnNavigation();
+  void ClearHistory();
   void SetRenderFrameObserver(
       std::unique_ptr<RenderFrameMetadataObserver> observer);
 
@@ -97,19 +98,20 @@ class CC_EXPORT ProxyImpl : public LayerTreeHostImplClient,
   void WillPrepareTiles() override;
   void DidPrepareTiles() override;
   void DidCompletePageScaleAnimationOnImplThread() override;
-  void OnDrawForLayerTreeFrameSink(bool resourceless_software_draw) override;
+  void OnDrawForLayerTreeFrameSink(bool resourceless_software_draw,
+                                   bool skip_draw) override;
   void NeedsImplSideInvalidation(bool needs_first_draw_on_activation) override;
   void NotifyImageDecodeRequestFinished() override;
   void DidPresentCompositorFrameOnImplThread(
-      const std::vector<int>& source_frames,
-      base::TimeTicks time,
-      base::TimeDelta refresh,
-      uint32_t flags) override;
+      uint32_t frame_token,
+      std::vector<LayerTreeHost::PresentationTimeCallback> callbacks,
+      const gfx::PresentationFeedback& feedback) override;
 
   // SchedulerClient implementation
   bool WillBeginImplFrame(const viz::BeginFrameArgs& args) override;
   void DidFinishImplFrame() override;
   void DidNotProduceFrame(const viz::BeginFrameAck& ack) override;
+  void WillNotReceiveBeginFrame() override;
   void ScheduledActionSendBeginMainFrame(
       const viz::BeginFrameArgs& args) override;
   DrawResult ScheduledActionDrawIfPossible() override;
@@ -118,11 +120,12 @@ class CC_EXPORT ProxyImpl : public LayerTreeHostImplClient,
   void ScheduledActionActivateSyncTree() override;
   void ScheduledActionBeginLayerTreeFrameSinkCreation() override;
   void ScheduledActionPrepareTiles() override;
-  void ScheduledActionInvalidateLayerTreeFrameSink() override;
+  void ScheduledActionInvalidateLayerTreeFrameSink(bool needs_redraw) override;
   void ScheduledActionPerformImplSideInvalidation() override;
   void SendBeginMainFrameNotExpectedSoon() override;
   void ScheduledActionBeginMainFrameNotExpectedUntil(
       base::TimeTicks time) override;
+  void FrameIntervalUpdated(base::TimeDelta interval) override {}
   size_t CompositedAnimationsCount() const override;
   size_t MainThreadAnimationsCount() const override;
   bool CurrentFrameHadRAF() const override;
@@ -142,10 +145,10 @@ class CC_EXPORT ProxyImpl : public LayerTreeHostImplClient,
   bool commit_completion_waits_for_activation_;
 
   // Set when the main thread is waiting on a commit to complete.
-  CompletionEvent* commit_completion_event_;
+  std::unique_ptr<ScopedCompletionEvent> commit_completion_event_;
 
   // Set when the main thread is waiting for activation to complete.
-  CompletionEvent* activation_completion_event_;
+  std::unique_ptr<ScopedCompletionEvent> activation_completion_event_;
 
   // Set when the next draw should post DidCommitAndDrawFrame to the main
   // thread.
@@ -153,6 +156,8 @@ class CC_EXPORT ProxyImpl : public LayerTreeHostImplClient,
 
   bool inside_draw_;
   bool input_throttled_until_commit_;
+
+  bool send_compositor_frame_ack_;
 
   TaskRunnerProvider* task_runner_provider_;
 

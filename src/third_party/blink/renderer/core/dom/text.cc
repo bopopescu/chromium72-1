@@ -22,10 +22,8 @@
 
 #include "third_party/blink/renderer/core/dom/text.h"
 
-#include "third_party/blink/renderer/bindings/core/v8/exception_state.h"
 #include "third_party/blink/renderer/core/css/resolver/style_resolver.h"
 #include "third_party/blink/renderer/core/dom/events/scoped_event_queue.h"
-#include "third_party/blink/renderer/core/dom/exception_code.h"
 #include "third_party/blink/renderer/core/dom/first_letter_pseudo_element.h"
 #include "third_party/blink/renderer/core/dom/layout_tree_builder.h"
 #include "third_party/blink/renderer/core/dom/layout_tree_builder_traversal.h"
@@ -41,17 +39,18 @@
 #include "third_party/blink/renderer/core/svg/svg_foreign_object_element.h"
 #include "third_party/blink/renderer/core/svg_names.h"
 #include "third_party/blink/renderer/platform/bindings/dom_data_store.h"
+#include "third_party/blink/renderer/platform/bindings/exception_state.h"
 #include "third_party/blink/renderer/platform/wtf/text/cstring.h"
 #include "third_party/blink/renderer/platform/wtf/text/string_builder.h"
 
 namespace blink {
 
 Text* Text::Create(Document& document, const String& data) {
-  return new Text(document, data, kCreateText);
+  return MakeGarbageCollected<Text>(document, data, kCreateText);
 }
 
 Text* Text::CreateEditingText(Document& document, const String& data) {
-  return new Text(document, data, kCreateEditingText);
+  return MakeGarbageCollected<Text>(document, data, kCreateEditingText);
 }
 
 Node* Text::MergeNextSiblingNodesIfPossible() {
@@ -106,8 +105,9 @@ Text* Text::splitText(unsigned offset, ExceptionState& exception_state) {
   // the number of 16-bit units in data.
   if (offset > length()) {
     exception_state.ThrowDOMException(
-        kIndexSizeError, "The offset " + String::Number(offset) +
-                             " is larger than the Text node's length.");
+        DOMExceptionCode::kIndexSizeError,
+        "The offset " + String::Number(offset) +
+            " is larger than the Text node's length.");
     return nullptr;
   }
 
@@ -288,7 +288,7 @@ bool Text::TextLayoutObjectIsNeeded(const AttachContext& context,
   if (style.Display() == EDisplay::kNone)
     return false;
 
-  if (!ContainsOnlyWhitespace())
+  if (!ContainsOnlyWhitespaceOrEmpty())
     return true;
 
   if (!CanHaveWhitespaceChildren(parent, style, context))

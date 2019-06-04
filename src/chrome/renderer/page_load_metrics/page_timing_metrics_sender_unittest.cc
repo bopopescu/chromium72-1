@@ -13,19 +13,19 @@
 namespace page_load_metrics {
 
 // Thin wrapper around PageTimingMetricsSender that provides access to the
-// MockTimer instance.
+// MockOneShotTimer instance.
 class TestPageTimingMetricsSender : public PageTimingMetricsSender {
  public:
   explicit TestPageTimingMetricsSender(
       std::unique_ptr<PageTimingSender> page_timing_sender,
       mojom::PageLoadTimingPtr initial_timing)
-      : PageTimingMetricsSender(
-            std::move(page_timing_sender),
-            std::unique_ptr<base::Timer>(new base::MockTimer(false, false)),
-            std::move(initial_timing)) {}
+      : PageTimingMetricsSender(std::move(page_timing_sender),
+                                std::make_unique<base::MockOneShotTimer>(),
+                                std::move(initial_timing),
+                                std::make_unique<PageResourceDataUse>()) {}
 
-  base::MockTimer* mock_timer() const {
-    return reinterpret_cast<base::MockTimer*>(timer());
+  base::MockOneShotTimer* mock_timer() const {
+    return static_cast<base::MockOneShotTimer*>(timer());
   }
 };
 
@@ -338,6 +338,28 @@ TEST_F(PageTimingMetricsSenderTest, SendMultipleCssPropertiesTwice) {
   // SendTiming call.
   metrics_sender_->mock_timer()->Fire();
   validator_.VerifyExpectedFeatures();
+}
+
+TEST_F(PageTimingMetricsSenderTest, SendPageRenderData) {
+  mojom::PageLoadTiming timing;
+  InitPageLoadTimingForTest(&timing);
+
+  // We need to send the PageLoadTiming here even though it is not really
+  // related to the PageRenderData.  This is because metrics_sender_ sends
+  // its last_timing_ when the mock timer fires, causing the validator to
+  // look for a matching expectation.
+  metrics_sender_->Send(timing.Clone());
+  validator_.ExpectPageLoadTiming(timing);
+
+  metrics_sender_->DidObserveLayoutJank(0.5);
+  metrics_sender_->DidObserveLayoutJank(0.5);
+  metrics_sender_->DidObserveLayoutJank(0.5);
+
+  mojom::PageRenderData render_data(1.5);
+  validator_.UpdateExpectPageRenderData(render_data);
+
+  metrics_sender_->mock_timer()->Fire();
+  validator_.VerifyExpectedRenderData();
 }
 
 }  // namespace page_load_metrics

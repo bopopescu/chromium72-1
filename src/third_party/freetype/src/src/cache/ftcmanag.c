@@ -1,19 +1,19 @@
-/***************************************************************************/
-/*                                                                         */
-/*  ftcmanag.c                                                             */
-/*                                                                         */
-/*    FreeType Cache Manager (body).                                       */
-/*                                                                         */
-/*  Copyright 2000-2018 by                                                 */
-/*  David Turner, Robert Wilhelm, and Werner Lemberg.                      */
-/*                                                                         */
-/*  This file is part of the FreeType project, and may only be used,       */
-/*  modified, and distributed under the terms of the FreeType project      */
-/*  license, LICENSE.TXT.  By continuing to use, modify, or distribute     */
-/*  this file you indicate that you have read the license and              */
-/*  understand and accept it fully.                                        */
-/*                                                                         */
-/***************************************************************************/
+/****************************************************************************
+ *
+ * ftcmanag.c
+ *
+ *   FreeType Cache Manager (body).
+ *
+ * Copyright 2000-2018 by
+ * David Turner, Robert Wilhelm, and Werner Lemberg.
+ *
+ * This file is part of the FreeType project, and may only be used,
+ * modified, and distributed under the terms of the FreeType project
+ * license, LICENSE.TXT.  By continuing to use, modify, or distribute
+ * this file you indicate that you have read the license and
+ * understand and accept it fully.
+ *
+ */
 
 
 #include <ft2build.h>
@@ -28,7 +28,7 @@
 
 
 #undef  FT_COMPONENT
-#define FT_COMPONENT  trace_cache
+#define FT_COMPONENT  cache
 
 
   static FT_Error

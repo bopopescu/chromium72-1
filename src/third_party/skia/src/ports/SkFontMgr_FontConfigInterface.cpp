@@ -17,6 +17,7 @@
 #include "SkTypeface.h"
 #include "SkTypefaceCache.h"
 #include "SkResourceCache.h"
+#include <new>
 
 SkStreamAsset* SkTypeface_FCI::onOpenStream(int* ttcIndex) const {
     *ttcIndex =  this->getIdentity().fTTCIndex;
@@ -190,9 +191,28 @@ protected:
         return new SkFontStyleSet_FCI();
     }
 
-    SkTypeface* onMatchFamilyStyle(const char familyName[], const SkFontStyle&) const override {
-        SK_ABORT("Not implemented.");
-        return nullptr;
+    SkTypeface* onMatchFamilyStyle(const char requestedFamilyName[],
+                                   const SkFontStyle& requestedStyle) const override
+    {
+        SkAutoMutexAcquire ama(fMutex);
+
+        SkFontConfigInterface::FontIdentity identity;
+        SkString outFamilyName;
+        SkFontStyle outStyle;
+        if (!fFCI->matchFamilyName(requestedFamilyName, requestedStyle,
+                                   &identity, &outFamilyName, &outStyle))
+        {
+            return nullptr;
+        }
+
+        // Check if a typeface with this FontIdentity is already in the FontIdentity cache.
+        SkTypeface* face = fTFCache.findByProcAndRef(find_by_FontIdentity, &identity);
+        if (!face) {
+            face = SkTypeface_FCI::Create(fFCI, identity, std::move(outFamilyName), outStyle);
+            // Add this FontIdentity to the FontIdentity cache.
+            fTFCache.add(face);
+        }
+        return face;
     }
 
     SkTypeface* onMatchFamilyStyleCharacter(const char familyName[], const SkFontStyle&,
@@ -207,9 +227,8 @@ protected:
         return nullptr;
     }
 
-    sk_sp<SkTypeface> onMakeFromData(sk_sp<SkData>, int ttcIndex) const override {
-        SK_ABORT("Not implemented.");
-        return nullptr;
+    sk_sp<SkTypeface> onMakeFromData(sk_sp<SkData> data, int ttcIndex) const override {
+        return this->onMakeFromStreamIndex(SkMemoryStream::Make(std::move(data)), ttcIndex);
     }
 
     sk_sp<SkTypeface> onMakeFromStreamIndex(std::unique_ptr<SkStreamAsset> stream,

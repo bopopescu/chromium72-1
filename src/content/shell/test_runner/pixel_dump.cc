@@ -16,8 +16,8 @@
 #include "base/trace_event/trace_event.h"
 #include "cc/paint/paint_flags.h"
 #include "cc/paint/skia_paint_canvas.h"
+#include "content/shell/common/layout_test/layout_test_utils.h"
 #include "content/shell/test_runner/layout_test_runtime_flags.h"
-#include "mojo/public/cpp/system/data_pipe_drainer.h"
 #include "services/service_manager/public/cpp/connector.h"
 // FIXME: Including platform_canvas.h here is a layering violation.
 #include "skia/ext/platform_canvas.h"
@@ -30,37 +30,11 @@
 #include "third_party/blink/public/web/web_local_frame.h"
 #include "third_party/blink/public/web/web_page_popup.h"
 #include "third_party/blink/public/web/web_print_params.h"
-#include "ui/gfx/codec/png_codec.h"
 #include "ui/gfx/geometry/point.h"
 
 namespace test_runner {
 
 namespace {
-
-class BitmapDataPipeDrainer : public mojo::DataPipeDrainer::Client {
- public:
-  BitmapDataPipeDrainer(mojo::ScopedDataPipeConsumerHandle handle,
-                        base::OnceCallback<void(const SkBitmap&)> callback)
-      : callback_(std::move(callback)), drainer_(this, std::move(handle)) {}
-
-  void OnDataAvailable(const void* data, size_t num_bytes) override {
-    const unsigned char* ptr = static_cast<const unsigned char*>(data);
-    data_.insert(data_.end(), ptr, ptr + num_bytes);
-  }
-
-  void OnDataComplete() override {
-    SkBitmap bitmap;
-    if (!gfx::PNGCodec::Decode(data_.data(), data_.size(), &bitmap))
-      bitmap.reset();
-    std::move(callback_).Run(bitmap);
-    delete this;
-  }
-
- private:
-  base::OnceCallback<void(const SkBitmap&)> callback_;
-  mojo::DataPipeDrainer drainer_;
-  std::vector<unsigned char> data_;
-};
 
 class CaptureCallback : public base::RefCountedThreadSafe<CaptureCallback> {
  public:
@@ -87,17 +61,7 @@ void DrawSelectionRect(
     const blink::WebRect& wr,
     base::OnceCallback<void(const SkBitmap&)> original_callback,
     const SkBitmap& bitmap) {
-  // Render a red rectangle bounding selection rect
-  cc::SkiaPaintCanvas canvas(bitmap);
-  cc::PaintFlags flags;
-  flags.setColor(0xFFFF0000);  // Fully opaque red
-  flags.setStyle(cc::PaintFlags::kStroke_Style);
-  flags.setAntiAlias(true);
-  flags.setStrokeWidth(1.0f);
-  SkIRect rect;  // Bounding rect
-  rect.set(wr.x, wr.y, wr.x + wr.width, wr.y + wr.height);
-  canvas.drawIRect(rect, flags);
-
+  content::layout_test_utils::DrawSelectionRect(bitmap, wr);
   std::move(original_callback).Run(bitmap);
 }
 
@@ -105,7 +69,8 @@ void CapturePixelsForPrinting(
     blink::WebLocalFrame* web_frame,
     base::OnceCallback<void(const SkBitmap&)> callback) {
   auto* frame_widget = web_frame->LocalRoot()->FrameWidget();
-  frame_widget->UpdateAllLifecyclePhases();
+  frame_widget->UpdateAllLifecyclePhases(
+      blink::WebWidget::LifecycleUpdateReason::kTest);
 
   blink::WebSize page_size_in_pixels = frame_widget->Size();
 
@@ -214,26 +179,19 @@ void CopyImageAtAndCapturePixels(
   blink::Platform::Current()->GetConnector()->BindInterface(
       blink::Platform::Current()->GetBrowserServiceName(), &clipboard);
 
-  uint64_t sequence_number_before;
+  uint64_t sequence_number_before = 0;
   clipboard->GetSequenceNumber(ui::CLIPBOARD_TYPE_COPY_PASTE,
                                &sequence_number_before);
   web_frame->CopyImageAt(blink::WebPoint(x, y));
-  uint64_t sequence_number_after;
-  clipboard->GetSequenceNumber(ui::CLIPBOARD_TYPE_COPY_PASTE,
-                               &sequence_number_after);
-  if (sequence_number_before == sequence_number_after) {
-    std::move(callback).Run(SkBitmap());
-    return;
+  uint64_t sequence_number_after = 0;
+  while (sequence_number_before == sequence_number_after) {
+    clipboard->GetSequenceNumber(ui::CLIPBOARD_TYPE_COPY_PASTE,
+                                 &sequence_number_after);
   }
 
-  blink::mojom::SerializedBlobPtr serialized_blob;
-  clipboard->ReadImage(ui::CLIPBOARD_TYPE_COPY_PASTE, &serialized_blob);
-  blink::mojom::BlobPtr blob(std::move(serialized_blob->blob));
-  mojo::DataPipe pipe;
-  blob->ReadAll(std::move(pipe.producer_handle), nullptr);
-  // Self-destructs after draining the pipe.
-  new BitmapDataPipeDrainer(std::move(pipe.consumer_handle),
-                            std::move(callback));
+  SkBitmap bitmap;
+  clipboard->ReadImage(ui::CLIPBOARD_TYPE_COPY_PASTE, &bitmap);
+  std::move(callback).Run(bitmap);
 }
 
 }  // namespace test_runner

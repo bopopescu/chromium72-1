@@ -31,6 +31,7 @@
 #include "third_party/blink/renderer/platform/heap/handle.h"
 #include "third_party/blink/renderer/platform/loader/fetch/resource.h"
 #include "third_party/blink/renderer/platform/timer.h"
+#include "third_party/blink/renderer/platform/wtf/time.h"
 
 namespace blink {
 
@@ -64,6 +65,10 @@ class CORE_EXPORT ImageResource final
   static ImageResource* Create(const ResourceRequest&);
   static ImageResource* CreateForTest(const KURL&);
 
+  ImageResource(const ResourceRequest&,
+                const ResourceLoaderOptions&,
+                ImageResourceContent*,
+                bool is_placeholder);
   ~ImageResource() override;
 
   ImageResourceContent* GetContent();
@@ -78,9 +83,7 @@ class CORE_EXPORT ImageResource final
 
   void AllClientsAndObserversRemoved() override;
 
-  bool CanReuse(
-      const FetchParameters&,
-      scoped_refptr<const SecurityOrigin> new_source_origin) const override;
+  MatchStatus CanReuse(const FetchParameters&) const override;
   bool CanUseCacheValidator() const override;
 
   scoped_refptr<const SharedBuffer> ResourceBuffer() const override;
@@ -100,6 +103,7 @@ class CORE_EXPORT ImageResource final
   void MultipartDataReceived(const char*, size_t) final;
 
   bool ShouldShowPlaceholder() const;
+  bool ShouldShowLazyImagePlaceholder() const;
 
   // If the ImageResource came from a user agent CSS stylesheet then we should
   // flag it so that it can persist beyond navigation.
@@ -119,11 +123,6 @@ class CORE_EXPORT ImageResource final
 
   class ImageResourceInfoImpl;
   class ImageResourceFactory;
-
-  ImageResource(const ResourceRequest&,
-                const ResourceLoaderOptions&,
-                ImageResourceContent*,
-                bool is_placeholder);
 
   // Only for ImageResourceInfoImpl.
   void DecodeError(bool all_data_received);
@@ -176,7 +175,7 @@ class CORE_EXPORT ImageResource final
   };
   PlaceholderOption placeholder_option_;
 
-  double last_flush_time_ = 0.;
+  TimeTicks last_flush_time_;
 
   bool is_during_finish_as_error_ = false;
 

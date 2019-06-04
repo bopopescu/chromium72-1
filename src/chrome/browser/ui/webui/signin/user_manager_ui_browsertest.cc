@@ -2,12 +2,13 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "base/bind.h"
 #include "base/command_line.h"
 #include "base/run_loop.h"
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
-#include "base/test/histogram_tester.h"
+#include "base/test/metrics/histogram_tester.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/profiles/profile_window.h"
 #include "chrome/browser/profiles/profiles_state.h"
@@ -22,7 +23,7 @@
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/testing_browser_process.h"
 #include "chrome/test/base/ui_test_utils.h"
-#include "components/signin/core/browser/profile_management_switches.h"
+#include "components/signin/core/browser/account_consistency_method.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/test/browser_test_utils.h"
 #include "testing/gmock/include/gmock/gmock.h"
@@ -142,6 +143,7 @@ class UserManagerUIAuthenticatedUserBrowserTest
 
 IN_PROC_BROWSER_TEST_F(UserManagerUIAuthenticatedUserBrowserTest, Reauth) {
   Init();
+  signin_util::SetForceSigninForTesting(true);
   entry_->SetLocalAuthCredentials("1mock_credentials");
 
   LaunchAuthenticatedUser("email@mock.com");
@@ -163,7 +165,7 @@ IN_PROC_BROWSER_TEST_F(UserManagerUIAuthenticatedUserBrowserTest,
   entry_->SetSupervisedUserId("supervised_user_id");
   MockLoginUIService* service = static_cast<MockLoginUIService*>(
       LoginUIServiceFactory::GetInstance()->SetTestingFactoryAndUse(
-          profile_, CreateLoginUIService));
+          profile_, base::BindRepeating(&CreateLoginUIService)));
   EXPECT_CALL(*service, DisplayLoginResult(_, _, _));
 
   LaunchAuthenticatedUser("");
@@ -180,7 +182,7 @@ IN_PROC_BROWSER_TEST_F(UserManagerUIAuthenticatedUserBrowserTest,
   entry_->SetActiveTimeToNow();
   MockLoginUIService* service = static_cast<MockLoginUIService*>(
       LoginUIServiceFactory::GetInstance()->SetTestingFactoryAndUse(
-          profile_, CreateLoginUIService));
+          profile_, base::BindRepeating(&CreateLoginUIService)));
   EXPECT_CALL(*service, SetProfileBlockingErrorMessage());
 
   LaunchAuthenticatedUser("");

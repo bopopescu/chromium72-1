@@ -8,7 +8,7 @@
 var util = {};
 
 /**
- * @param {!IconSet} iconSet Set of icons.
+ * @param {!chrome.fileManagerPrivate.IconSet} iconSet Set of icons.
  * @return {string} CSS value.
  */
 util.iconSetToCSSBackgroundImageValue = function(iconSet) {
@@ -212,6 +212,23 @@ util.bytesToString = function(bytes) {
                'SIZE_TB',
                'SIZE_PB'];
 
+  // TODO(crbug.com/909997): remove this if clause when translations are fixed.
+  if (window.postProcessedLoadTimeData_ !== true) {
+    const language = loadTimeData.getString('language');
+
+    // Replace invalid Hindi SIZE units translations, crbug.com/908767.
+    if (language === 'hi') {
+      loadTimeData.overrideValues({
+        'SIZE_KB': '$1 केबी',
+        'SIZE_MB': '$1 एमबी',
+      });
+    }
+
+    if (typeof language === 'string') {
+      window.postProcessedLoadTimeData_ = true;
+    }
+  }
+
   // Minimum values for the units above.
   var STEPS = [0,
                Math.pow(2, 10),
@@ -390,16 +407,6 @@ util.runningInBrowser = function() {
 };
 
 /**
- * Attach page load handler.
- * @param {function()} handler Application-specific load handler.
- */
-util.addPageLoadHandler = function(handler) {
-  document.addEventListener('DOMContentLoaded', function() {
-    handler();
-  });
-};
-
-/**
  * Save app launch data to the local storage.
  */
 util.saveAppState = function() {
@@ -538,24 +545,6 @@ util.AppCache.cleanup_ = function(map) {
 };
 
 /**
- * Returns true if the board of the device matches the given prefix. Caution:
- * There are cases in which the name of one board is a prefix for a different
- * (only slightly related) board: E.g. daisy and daisy-spring, peach-pi and
- * peach-pit, and maybe others. See also base::GetLsbReleaseBoard().
- * @param {string} boardPrefix The board prefix to match against. (ex.
- *     "x86-mario". Prefix is used as the actual board name comes with suffix
- *     like "x86-mario-something".
- * @return {boolean} True if the board of the device matches the given prefix.
- */
-util.boardIs = function(boardPrefix) {
-  // The board name should be lower-cased, but making it case-insensitive for
-  // backward compatibility just in case.
-  var board = str('CHROMEOS_RELEASE_BOARD');
-  var pattern = new RegExp('^' + boardPrefix, 'i');
-  return board.match(pattern) != null;
-};
-
-/**
  * Adds an isFocused method to the current window object.
  */
 util.addIsFocusedMethod = function() {
@@ -649,16 +638,23 @@ Object.freeze(util.EntryChangedKind);
 
 /**
  * Obtains whether an entry is fake or not.
- * @param {(!Entry|!FakeEntry)} entry Entry or a fake entry.
+ * @param {(!Entry|!FilesAppEntry)} entry Entry or a fake entry.
  * @return {boolean} True if the given entry is fake.
+ * @suppress {missingProperties} Closure compiler doesn't allow to call isNative
+ * on Entry which is native and thus doesn't define this property, however we
+ * handle undefined accordingly.
+ * TODO(lucmult): Remove @suppress once all entries are sub-type of
+ * FilesAppEntry.
  */
 util.isFakeEntry = function(entry) {
-  return !('getParent' in entry);
+  return (
+      entry.getParent === undefined ||
+      (entry.isNativeType !== undefined && !entry.isNativeType));
 };
 
 /**
  * Obtains whether an entry is the root directory of a Team Drive.
- * @param {(!Entry|!FakeEntry)|null} entry Entry or a fake entry.
+ * @param {Entry|FilesAppEntry} entry Entry or a fake entry.
  * @return {boolean} True if the given entry is root of a Team Drive.
  */
 util.isTeamDriveRoot = function(entry) {
@@ -684,7 +680,7 @@ util.isTeamDrivesGrandRoot = function(entry) {
 
 /**
  * Obtains whether an entry is descendant of the Team Drives directory.
- * @param {(!Entry|!FakeEntry)} entry Entry or a fake entry.
+ * @param {!Entry|!FilesAppEntry} entry Entry or a fake entry.
  * @return {boolean} True if the given entry is under Team Drives.
  */
 util.isTeamDriveEntry = function(entry) {
@@ -712,12 +708,39 @@ util.getTeamDriveName = function(entry) {
 
 /**
  * Returns true if the given entry is the root folder of recent files.
- * @param {(!Entry|!FakeEntry)} entry Entry or a fake entry.
+ * @param {!Entry|!FilesAppEntry} entry Entry or a fake entry.
  * @returns {boolean}
  */
 util.isRecentRoot = function(entry) {
   return util.isFakeEntry(entry) &&
       entry.rootType == VolumeManagerCommon.RootType.RECENT;
+};
+
+/**
+ * Obtains whether an entry is the root directory of a Computer.
+ * @param {Entry|FilesAppEntry} entry Entry or a fake entry.
+ * @return {boolean} True if the given entry is root of a Computer.
+ */
+util.isComputersRoot = function(entry) {
+  if (entry === null)
+    return false;
+  if (!entry.fullPath)
+    return false;
+  var tree = entry.fullPath.split('/');
+  return tree.length == 3 && util.isComputersEntry(entry);
+};
+
+/**
+ * Obtains whether an entry is descendant of the My Computers directory.
+ * @param {!Entry|!FilesAppEntry} entry Entry or a fake entry.
+ * @return {boolean} True if the given entry is under My Computers.
+ */
+util.isComputersEntry = function(entry) {
+  if (!entry.fullPath)
+    return false;
+  var tree = entry.fullPath.split('/');
+  return tree[0] == '' &&
+      tree[1] == VolumeManagerCommon.COMPUTERS_DIRECTORY_NAME;
 };
 
 /**
@@ -772,8 +795,10 @@ util.UserDOMError.prototype = {
 
 /**
  * Compares two entries.
- * @param {Entry|FakeEntry} entry1 The entry to be compared. Can be a fake.
- * @param {Entry|FakeEntry} entry2 The entry to be compared. Can be a fake.
+ * @param {Entry|FilesAppEntry} entry1 The entry to be compared. Can
+ * be a fake.
+ * @param {Entry|FilesAppEntry} entry2 The entry to be compared. Can
+ * be a fake.
  * @return {boolean} True if the both entry represents a same file or
  *     directory. Returns true if both entries are null.
  */
@@ -849,8 +874,8 @@ util.collator = new Intl.Collator(
 
 /**
  * Compare by name. The 2 entries must be in same directory.
- * @param {Entry} entry1 First entry.
- * @param {Entry} entry2 Second entry.
+ * @param {Entry|FilesAppEntry} entry1 First entry.
+ * @param {Entry|FilesAppEntry} entry2 Second entry.
  * @return {number} Compare result.
  */
 util.compareName = function(entry1, entry2) {
@@ -859,8 +884,8 @@ util.compareName = function(entry1, entry2) {
 
 /**
  * Compare by path.
- * @param {Entry} entry1 First entry.
- * @param {Entry} entry2 Second entry.
+ * @param {Entry|FilesAppEntry} entry1 First entry.
+ * @param {Entry|FilesAppEntry} entry2 Second entry.
  * @return {number} Compare result.
  */
 util.comparePath = function(entry1, entry2) {
@@ -868,10 +893,47 @@ util.comparePath = function(entry1, entry2) {
 };
 
 /**
+ * @param {!Array<Entry|FilesAppEntry>} bottomEntries entries that should be
+ * grouped in the bottom, used for sorting Linux and Play files entries after
+ * other folders in MyFiles.
+ * return {function(Entry|FilesAppEntry, Entry|FilesAppEntry) to compare entries
+ * by name.
+ */
+util.compareNameAndGroupBottomEntries = function(bottomEntries) {
+  const childrenMap = new Map();
+  bottomEntries.forEach((entry) => {
+    childrenMap.set(entry.toURL(), entry);
+  });
+
+  /**
+   * Compare entries putting entries from |bottomEntries| in the bottom and
+   * sort by name within entries that are the same type in regards to
+   * |bottomEntries|.
+   * @param {Entry|FilesAppEntry} entry1 First entry.
+   * @param {Entry|FilesAppEntry} entry2 First entry.
+   */
+  function compare_(entry1, entry2) {
+    // Bottom entry here means Linux or Play files, which should appear after
+    // all native entries.
+    const isBottomlEntry1 = childrenMap.has(entry1.toURL()) ? 1 : 0;
+    const isBottomlEntry2 = childrenMap.has(entry2.toURL()) ? 1 : 0;
+
+    // When there are the same type, just compare by name.
+    if (isBottomlEntry1 === isBottomlEntry2)
+      return util.compareName(entry1, entry2);
+
+    return isBottomlEntry1 - isBottomlEntry2;
+  }
+
+  return compare_;
+};
+
+/**
  * Checks if {@code entry} is an immediate child of {@code directory}.
  *
  * @param {Entry} entry The presumptive child.
- * @param {DirectoryEntry|FakeEntry} directory The presumptive parent.
+ * @param {DirectoryEntry|FilesAppEntry} directory The presumptive
+ *     parent.
  * @return {!Promise<boolean>} Resolves with true if {@code directory} is
  *     parent of {@code entry}.
  */
@@ -894,14 +956,40 @@ util.isChildEntry = function(entry, directory) {
  * Checks if the child entry is a descendant of another entry. If the entries
  * point to the same file or directory, then returns false.
  *
- * @param {!DirectoryEntry|!FakeEntry} ancestorEntry The ancestor directory
- *     entry. Can be a fake.
- * @param {!Entry|!FakeEntry} childEntry The child entry. Can be a fake.
+ * @param {!DirectoryEntry|!FilesAppEntry} ancestorEntry The ancestor
+ *     directory entry. Can be a fake.
+ * @param {!Entry|!FilesAppEntry} childEntry The child entry. Can be a fake.
  * @return {boolean} True if the child entry is contained in the ancestor path.
  */
 util.isDescendantEntry = function(ancestorEntry, childEntry) {
   if (!ancestorEntry.isDirectory)
     return false;
+
+  // For EntryList and VolumeEntry they can contain entries from different
+  // files systems, so we should check its getUIChildren.
+  const entryList = util.toEntryList(ancestorEntry);
+  if (entryList.getUIChildren) {
+    // VolumeEntry has to check to root entry descendant entry.
+    const nativeEntry = entryList.getNativeEntry();
+    if (nativeEntry &&
+        util.isSameFileSystem(nativeEntry.filesystem, childEntry.filesystem)) {
+      return util.isDescendantEntry(
+          /** @type {!DirectoryEntry} */ (nativeEntry), childEntry);
+    }
+
+    return entryList.getUIChildren().some(ancestorChild => {
+      if (util.isSameEntry(ancestorChild, childEntry))
+        return true;
+
+      // root entry might not be resolved yet.
+      const volumeEntry =
+          /** @type {DirectoryEntry} */ (ancestorChild.getNativeEntry());
+      return volumeEntry &&
+          (util.isSameEntry(volumeEntry, childEntry) ||
+           util.isDescendantEntry(volumeEntry, childEntry));
+    });
+  }
+
   if (!util.isSameFileSystem(ancestorEntry.filesystem, childEntry.filesystem))
     return false;
   if (util.isSameEntry(ancestorEntry, childEntry))
@@ -1093,7 +1181,7 @@ util.splitExtension = function(path) {
 util.getRootTypeLabel = function(locationInfo) {
   switch (locationInfo.rootType) {
     case VolumeManagerCommon.RootType.DOWNLOADS:
-      return str('DOWNLOADS_DIRECTORY_LABEL');
+      return locationInfo.volumeInfo.label;
     case VolumeManagerCommon.RootType.DRIVE:
       return str('DRIVE_MY_DRIVE_LABEL');
     case VolumeManagerCommon.RootType.TEAM_DRIVE:
@@ -1108,16 +1196,23 @@ util.getRootTypeLabel = function(locationInfo) {
     // By this reason, we return the label of the Team Drives grand root here.
     case VolumeManagerCommon.RootType.TEAM_DRIVES_GRAND_ROOT:
       return str('DRIVE_TEAM_DRIVES_LABEL');
+    case VolumeManagerCommon.RootType.COMPUTER:
+    case VolumeManagerCommon.RootType.COMPUTERS_GRAND_ROOT:
+      return str('DRIVE_COMPUTERS_LABEL');
     case VolumeManagerCommon.RootType.DRIVE_OFFLINE:
       return str('DRIVE_OFFLINE_COLLECTION_LABEL');
     case VolumeManagerCommon.RootType.DRIVE_SHARED_WITH_ME:
       return str('DRIVE_SHARED_WITH_ME_COLLECTION_LABEL');
     case VolumeManagerCommon.RootType.DRIVE_RECENT:
       return str('DRIVE_RECENT_COLLECTION_LABEL');
+    case VolumeManagerCommon.RootType.DRIVE_FAKE_ROOT:
+      return str('DRIVE_DIRECTORY_LABEL');
     case VolumeManagerCommon.RootType.RECENT:
       return str('RECENT_ROOT_LABEL');
     case VolumeManagerCommon.RootType.CROSTINI:
       return str('LINUX_FILES_ROOT_LABEL');
+    case VolumeManagerCommon.RootType.MY_FILES:
+      return str('MY_FILES_ROOT_LABEL');
     case VolumeManagerCommon.RootType.MEDIA_VIEW:
       var mediaViewRootType =
           VolumeManagerCommon.getMediaViewRootTypeFromVolumeId(
@@ -1149,7 +1244,7 @@ util.getRootTypeLabel = function(locationInfo) {
  * Returns the localized name of the entry.
  *
  * @param {EntryLocation} locationInfo
- * @param {!Entry} entry The entry to be retrieve the name of.
+ * @param {!Entry|!FakeEntry} entry The entry to be retrieve the name of.
  * @return {?string} The localized name.
  */
 util.getEntryLabel = function(locationInfo, entry) {
@@ -1285,9 +1380,9 @@ util.validateExternalDriveName = function(name, volumeInfo) {
 };
 
 /**
- * Adds a foregorund listener to the background page components.
- * The lisner will be removed when the foreground window is closed.
- * @param {!cr.EventTarget} target
+ * Adds a foreground listener to the background page components.
+ * The listener will be removed when the foreground window is closed.
+ * @param {!EventTarget} target
  * @param {string} type
  * @param {Function} handler
  */
@@ -1358,13 +1453,18 @@ util.isTouchModeEnabled = function() {
  * @param {function()} successCallback Called when the read is completed.
  * @param {function(DOMError)} errorCallback Called when an error occurs.
  * @param {function():boolean} shouldStop Callback to check if the read process
- *     should stop or not. When this callback is called and it returns false,
+ *     should stop or not. When this callback is called and it returns true,
  *     the remaining recursive reads will be aborted.
+ * @param {number=} opt_maxDepth Max depth to delve directories recursively.
+ *     If 0 is specified, only the rootEntry will be read. If -1 is specified
+ *     or opt_maxDepth is unspecified, the depth of recursion is unlimited.
  */
 util.readEntriesRecursively = function(
-    rootEntry, entriesCallback, successCallback, errorCallback, shouldStop) {
+    rootEntry, entriesCallback, successCallback, errorCallback, shouldStop,
+    opt_maxDepth) {
   var numRunningTasks = 0;
   var error = null;
+  const maxDepth = opt_maxDepth === undefined ? -1 : opt_maxDepth;
   var maybeRunCallback = function() {
     if (numRunningTasks === 0) {
       if (shouldStop())
@@ -1375,7 +1475,7 @@ util.readEntriesRecursively = function(
         successCallback();
     }
   };
-  var processEntry = function(entry) {
+  var processEntry = function(entry, depth) {
     var onError = function(fileError) {
       if (!error)
         error = fileError;
@@ -1390,8 +1490,8 @@ util.readEntriesRecursively = function(
       }
       entriesCallback(entries);
       for (var i = 0; i < entries.length; i++) {
-        if (entries[i].isDirectory)
-          processEntry(entries[i]);
+        if (entries[i].isDirectory && (maxDepth === -1 || depth < maxDepth))
+          processEntry(entries[i], depth + 1);
       }
       // Read remaining entries.
       reader.readEntries(onSuccess, onError);
@@ -1402,7 +1502,7 @@ util.readEntriesRecursively = function(
     reader.readEntries(onSuccess, onError);
   };
 
-  processEntry(rootEntry);
+  processEntry(rootEntry, 0);
 };
 
 /**
@@ -1417,4 +1517,63 @@ util.doIfPrimaryContext = function(callback) {
       callback();
     }
   });
+};
+
+/**
+ * Casts an Entry to a FilesAppEntry, to access a FilesAppEntry-specific
+ * property without Closure compiler complaining.
+ * TODO(lucmult): Wrap Entry in a FilesAppEntry derived class and remove
+ * this function. https://crbug.com/835203.
+ * @param {Entry|FilesAppEntry} entry
+ * @return {FilesAppEntry}
+ */
+util.toFilesAppEntry = function(entry) {
+  return /** @type {FilesAppEntry} */ (entry);
+};
+
+/**
+ * Casts an Entry to a EntryList, to access a FilesAppEntry-specific
+ * property without Closure compiler complaining.
+ * @param {Entry|FilesAppEntry} entry
+ * @return {EntryList}
+ */
+util.toEntryList = function(entry) {
+  return /** @type {EntryList} */ (entry);
+};
+
+/**
+ * Returns true if entry is FileSystemEntry or FileSystemDirectoryEntry, it
+ * returns false if it's FakeEntry or any one of the FilesAppEntry types.
+ * TODO(lucmult): Wrap Entry in a FilesAppEntry derived class and remove
+ * this function. https://crbug.com/835203.
+ * @param {Entry|FilesAppEntry} entry
+ * @return {boolean}
+ */
+util.isNativeEntry = function(entry) {
+  entry = util.toFilesAppEntry(entry);
+  // Only FilesAppEntry types has |type_name| attribute.
+  return entry.type_name === undefined;
+};
+
+/**
+ * For FilesAppEntry types that wraps a native entry, returns the native entry
+ * to be able to send to fileManagerPrivate API.
+ * @param {Entry|FilesAppEntry} entry
+ * @return {Entry|FilesAppEntry}
+ */
+util.unwrapEntry = function(entry) {
+  if (!entry)
+    return entry;
+
+  const nativeEntry = entry.getNativeEntry && entry.getNativeEntry();
+  if (nativeEntry)
+    return nativeEntry;
+
+  return entry;
+};
+
+/** @return {boolean} */
+util.isMyFilesVolumeEnabled = function() {
+  return loadTimeData.valueExists('MY_FILES_VOLUME_ENABLED') &&
+      loadTimeData.getBoolean('MY_FILES_VOLUME_ENABLED');
 };

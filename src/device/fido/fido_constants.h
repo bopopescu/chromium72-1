@@ -27,6 +27,8 @@ enum class FidoReturnCode : uint8_t {
   // authenticator), but none of the provided credentials were recognized by
   // the authenticator.
   kUserConsentButCredentialNotRecognized,
+  // The user explicitly refused to provide consent.
+  kUserConsentDenied,
 };
 
 enum class ProtocolVersion {
@@ -34,6 +36,49 @@ enum class ProtocolVersion {
   kU2f,
   kUnknown,
 };
+
+// Length of the U2F challenge parameter:
+// https://goo.gl/y75WrX#registration-request-message---u2f_register
+constexpr size_t kU2fChallengeParamLength = 32;
+
+// Length of the U2F application parameter:
+// https://goo.gl/y75WrX#registration-request-message---u2f_register
+constexpr size_t kU2fApplicationParamLength = 32;
+
+// Offset of the length of the U2F registration key handle:
+// https://goo.gl/y75WrX#registration-response-message-success
+constexpr size_t kU2fKeyHandleLengthOffset = 66;
+
+// Offset of the U2F registration key handle:
+// https://goo.gl/y75WrX#registration-response-message-success
+constexpr size_t kU2fKeyHandleOffset = 67;
+
+// Length of the SHA-256 hash of the JSON-serialized client data:
+// https://www.w3.org/TR/webauthn/#collectedclientdata-hash-of-the-serialized-client-data
+constexpr size_t kClientDataHashLength = 32;
+
+// Length of the SHA-256 hash of the RP ID asssociated with the credential:
+// https://www.w3.org/TR/webauthn/#sec-authenticator-data
+constexpr size_t kRpIdHashLength = 32;
+
+static_assert(kU2fApplicationParamLength == kRpIdHashLength,
+              "kU2fApplicationParamLength must be equal to kRpIdHashLength.");
+
+// Length of the flags:
+// https://www.w3.org/TR/webauthn/#sec-authenticator-data
+constexpr size_t kFlagsLength = 1;
+
+// Length of the signature counter, 32-bit unsigned big-endian integer:
+// https://www.w3.org/TR/webauthn/#sec-authenticator-data
+constexpr size_t kSignCounterLength = 4;
+
+// Length of the AAGUID of the authenticator:
+// https://www.w3.org/TR/webauthn/#sec-attested-credential-data
+constexpr size_t kAaguidLength = 16;
+
+// Length of the byte length L of Credential ID, 16-bit unsigned big-endian
+// integer: https://www.w3.org/TR/webauthn/#sec-attested-credential-data
+constexpr size_t kCredentialIdLengthLength = 2;
 
 // CTAP protocol device response code, as specified in
 // https://fidoalliance.org/specs/fido-v2.0-rd-20170927/fido-client-to-authenticator-protocol-v2.0-rd-20170927.html#authenticator-api
@@ -47,17 +92,14 @@ enum class CtapDeviceResponseCode : uint8_t {
   kCtap1ErrChannelBusy = 0x06,
   kCtap1ErrLockRequired = 0x0A,
   kCtap1ErrInvalidChannel = 0x0B,
-  kCtap2ErrCBORParsing = 0x10,
-  kCtap2ErrUnexpectedType = 0x11,
+  kCtap2ErrCBORUnexpectedType = 0x11,
   kCtap2ErrInvalidCBOR = 0x12,
-  kCtap2ErrInvalidCBORType = 0x13,
   kCtap2ErrMissingParameter = 0x14,
   kCtap2ErrLimitExceeded = 0x15,
   kCtap2ErrUnsupportedExtension = 0x16,
   kCtap2ErrTooManyElements = 0x17,
   kCtap2ErrExtensionNotSupported = 0x18,
   kCtap2ErrCredentialExcluded = 0x19,
-  kCtap2ErrCredentialNotValid = 0x20,
   kCtap2ErrProcesssing = 0x21,
   kCtap2ErrInvalidCredential = 0x22,
   kCtap2ErrUserActionPending = 0x23,
@@ -101,17 +143,14 @@ constexpr std::array<CtapDeviceResponseCode, 51> GetCtapResponseCodeList() {
           CtapDeviceResponseCode::kCtap1ErrChannelBusy,
           CtapDeviceResponseCode::kCtap1ErrLockRequired,
           CtapDeviceResponseCode::kCtap1ErrInvalidChannel,
-          CtapDeviceResponseCode::kCtap2ErrCBORParsing,
-          CtapDeviceResponseCode::kCtap2ErrUnexpectedType,
+          CtapDeviceResponseCode::kCtap2ErrCBORUnexpectedType,
           CtapDeviceResponseCode::kCtap2ErrInvalidCBOR,
-          CtapDeviceResponseCode::kCtap2ErrInvalidCBORType,
           CtapDeviceResponseCode::kCtap2ErrMissingParameter,
           CtapDeviceResponseCode::kCtap2ErrLimitExceeded,
           CtapDeviceResponseCode::kCtap2ErrUnsupportedExtension,
           CtapDeviceResponseCode::kCtap2ErrTooManyElements,
           CtapDeviceResponseCode::kCtap2ErrExtensionNotSupported,
           CtapDeviceResponseCode::kCtap2ErrCredentialExcluded,
-          CtapDeviceResponseCode::kCtap2ErrCredentialNotValid,
           CtapDeviceResponseCode::kCtap2ErrProcesssing,
           CtapDeviceResponseCode::kCtap2ErrInvalidCredential,
           CtapDeviceResponseCode::kCtap2ErrUserActionPending,
@@ -174,8 +213,21 @@ enum class FidoBleDeviceCommand : uint8_t {
   kPing = 0x81,
   kKeepAlive = 0x82,
   kMsg = 0x83,
+  kControl = 0x84,
   kCancel = 0xBE,
   kError = 0xBF,
+};
+
+// Relevant LE Discoverable Mode bits. Reference:
+// Bluetooth Core Specification Supplement, Part A, section 1.3
+constexpr uint8_t kLeLimitedDiscoverableModeBit = 0;
+constexpr uint8_t kLeGeneralDiscoverableModeBit = 1;
+
+// Fido Service Data Flags as specified in
+// https://fidoalliance.org/specs/fido-v2.0-id-20180227/fido-client-to-authenticator-protocol-v2.0-id-20180227.html#ble-pairing-authnr-considerations
+enum class FidoServiceDataFlags : uint8_t {
+  kPairingMode = 0x80,
+  kPasskeyEntry = 0x40,
 };
 
 // Authenticator API commands supported by CTAP devices, as specified in
@@ -202,6 +254,16 @@ enum class U2fApduInstruction : uint8_t {
 };
 
 enum class CredentialType { kPublicKey };
+
+// Authenticator attachment constraint passed on from the relying party as a
+// parameter for AuthenticatorSelectionCriteria. |kAny| is equivalent to the
+// (optional) attachment field not being present.
+// https://w3c.github.io/webauthn/#attachment
+enum class AuthenticatorAttachment {
+  kAny,
+  kPlatform,
+  kCrossPlatform,
+};
 
 // User verification constraint passed on from the relying party as a parameter
 // for AuthenticatorSelectionCriteria and for CtapGetAssertion request.
@@ -238,6 +300,12 @@ COMPONENT_EXPORT(DEVICE_FIDO) extern const char kUserVerificationMapKey[];
 COMPONENT_EXPORT(DEVICE_FIDO) extern const char kUserPresenceMapKey[];
 COMPONENT_EXPORT(DEVICE_FIDO) extern const char kClientPinMapKey[];
 COMPONENT_EXPORT(DEVICE_FIDO) extern const char kPlatformDeviceMapKey[];
+COMPONENT_EXPORT(DEVICE_FIDO) extern const char kEntityIdMapKey[];
+COMPONENT_EXPORT(DEVICE_FIDO) extern const char kEntityNameMapKey[];
+COMPONENT_EXPORT(DEVICE_FIDO) extern const char kDisplayNameMapKey[];
+COMPONENT_EXPORT(DEVICE_FIDO) extern const char kIconUrlMapKey[];
+COMPONENT_EXPORT(DEVICE_FIDO) extern const char kCredentialTypeMapKey[];
+COMPONENT_EXPORT(DEVICE_FIDO) extern const char kCredentialAlgorithmMapKey[];
 
 // HID transport specific constants.
 COMPONENT_EXPORT(DEVICE_FIDO) extern const size_t kHidPacketSize;
@@ -272,10 +340,13 @@ COMPONENT_EXPORT(DEVICE_FIDO) extern const uint8_t kP1CheckOnly;
 // return with this registration.
 COMPONENT_EXPORT(DEVICE_FIDO) extern const uint8_t kP1IndividualAttestation;
 COMPONENT_EXPORT(DEVICE_FIDO) extern const size_t kMaxKeyHandleLength;
-COMPONENT_EXPORT(DEVICE_FIDO) extern const size_t kU2fParameterLength;
 
 // Maximum wait time before client error outs on device.
 COMPONENT_EXPORT(DEVICE_FIDO) extern const base::TimeDelta kDeviceTimeout;
+
+// Wait time before polling device for U2F register/sign operation again when
+// device times out waiting for user presence.
+COMPONENT_EXPORT(DEVICE_FIDO) extern const base::TimeDelta kU2fRetryDelay;
 
 // Interval wait time before retrying reading on HID connection when
 // CTAPHID_KEEPALIVE message has been received.
@@ -295,6 +366,29 @@ COMPONENT_EXPORT(DEVICE_FIDO)
 extern const char kPublicKey[];
 
 const char* CredentialTypeToString(CredentialType type);
+
+// Values used to construct/validate handshake messages for Cable handshake
+// protocol.
+COMPONENT_EXPORT(DEVICE_FIDO) extern const char kCableHandshakeKeyInfo[];
+COMPONENT_EXPORT(DEVICE_FIDO) extern const char kCableDeviceEncryptionKeyInfo[];
+COMPONENT_EXPORT(DEVICE_FIDO)
+extern const char kCableAuthenticatorHelloMessage[];
+COMPONENT_EXPORT(DEVICE_FIDO) extern const char kCableClientHelloMessage[];
+
+// TODO(hongjunchoi): Add url to the official spec once it's standardized.
+COMPONENT_EXPORT(DEVICE_FIDO) extern const char kCtap2Version[];
+COMPONENT_EXPORT(DEVICE_FIDO) extern const char kU2fVersion[];
+
+COMPONENT_EXPORT(DEVICE_FIDO) extern const char kExtensionHmacSecret[];
+
+// Maximum number of seconds the browser waits for Bluetooth authenticator to
+// send packets that advertises that the device is in pairing mode before
+// setting pairing mode to false. The interval time is set to 2 seconds, which
+// is equivalent to the maximum Bluetooth error wait interval set by the CTAP
+// spec.
+// https://fidoalliance.org/specs/fido-v2.0-rd-20170927/fido-client-to-authenticator-protocol-v2.0-rd-20170927.html#BTCORE
+COMPONENT_EXPORT(DEVICE_FIDO)
+extern const base::TimeDelta kBleDevicePairingModeWaitingInterval;
 
 }  // namespace device
 

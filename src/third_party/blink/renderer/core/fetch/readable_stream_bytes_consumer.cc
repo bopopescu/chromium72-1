@@ -27,8 +27,12 @@ class ReadableStreamBytesConsumer::OnFulfilled final : public ScriptFunction {
   static v8::Local<v8::Function> CreateFunction(
       ScriptState* script_state,
       ReadableStreamBytesConsumer* consumer) {
-    return (new OnFulfilled(script_state, consumer))->BindToV8Function();
+    return (MakeGarbageCollected<OnFulfilled>(script_state, consumer))
+        ->BindToV8Function();
   }
+
+  OnFulfilled(ScriptState* script_state, ReadableStreamBytesConsumer* consumer)
+      : ScriptFunction(script_state), consumer_(consumer) {}
 
   ScriptValue Call(ScriptValue v) override {
     bool done;
@@ -62,9 +66,6 @@ class ReadableStreamBytesConsumer::OnFulfilled final : public ScriptFunction {
   }
 
  private:
-  OnFulfilled(ScriptState* script_state, ReadableStreamBytesConsumer* consumer)
-      : ScriptFunction(script_state), consumer_(consumer) {}
-
   Member<ReadableStreamBytesConsumer> consumer_;
 };
 
@@ -73,8 +74,12 @@ class ReadableStreamBytesConsumer::OnRejected final : public ScriptFunction {
   static v8::Local<v8::Function> CreateFunction(
       ScriptState* script_state,
       ReadableStreamBytesConsumer* consumer) {
-    return (new OnRejected(script_state, consumer))->BindToV8Function();
+    return (MakeGarbageCollected<OnRejected>(script_state, consumer))
+        ->BindToV8Function();
   }
+
+  OnRejected(ScriptState* script_state, ReadableStreamBytesConsumer* consumer)
+      : ScriptFunction(script_state), consumer_(consumer) {}
 
   ScriptValue Call(ScriptValue v) override {
     consumer_->OnRejected();
@@ -87,9 +92,6 @@ class ReadableStreamBytesConsumer::OnRejected final : public ScriptFunction {
   }
 
  private:
-  OnRejected(ScriptState* script_state, ReadableStreamBytesConsumer* consumer)
-      : ScriptFunction(script_state), consumer_(consumer) {}
-
   Member<ReadableStreamBytesConsumer> consumer_;
 };
 
@@ -98,7 +100,6 @@ ReadableStreamBytesConsumer::ReadableStreamBytesConsumer(
     ScriptValue stream_reader)
     : reader_(script_state->GetIsolate(), stream_reader.V8Value()),
       script_state_(script_state) {
-  reader_.SetPhantom();
 }
 
 ReadableStreamBytesConsumer::~ReadableStreamBytesConsumer() {}
@@ -122,14 +123,14 @@ BytesConsumer::Result ReadableStreamBytesConsumer::BeginRead(
   }
   if (!is_reading_) {
     is_reading_ = true;
-    ScriptState::Scope scope(script_state_.get());
-    ScriptValue reader(script_state_.get(),
+    ScriptState::Scope scope(script_state_);
+    ScriptValue reader(script_state_,
                        reader_.NewLocal(script_state_->GetIsolate()));
     // The owner must retain the reader.
     DCHECK(!reader.IsEmpty());
-    ReadableStreamOperations::DefaultReaderRead(script_state_.get(), reader)
-        .Then(OnFulfilled::CreateFunction(script_state_.get(), this),
-              OnRejected::CreateFunction(script_state_.get(), this));
+    ReadableStreamOperations::DefaultReaderRead(script_state_, reader)
+        .Then(OnFulfilled::CreateFunction(script_state_, this),
+              OnRejected::CreateFunction(script_state_, this));
   }
   return Result::kShouldWait;
 }
@@ -172,8 +173,10 @@ BytesConsumer::Error ReadableStreamBytesConsumer::GetError() const {
 }
 
 void ReadableStreamBytesConsumer::Trace(blink::Visitor* visitor) {
+  visitor->Trace(reader_);
   visitor->Trace(client_);
   visitor->Trace(pending_buffer_);
+  visitor->Trace(script_state_);
   BytesConsumer::Trace(visitor);
 }
 

@@ -5,10 +5,11 @@
 #include "chrome/browser/browsing_data/site_data_size_collector.h"
 
 #include "base/files/file_util.h"
-#include "base/task_scheduler/post_task.h"
+#include "base/task/post_task.h"
 #include "chrome/common/chrome_constants.h"
 #include "chrome/common/pref_names.h"
 #include "content/public/browser/browser_thread.h"
+#include "content/public/browser/storage_usage_info.h"
 #include "content/public/common/content_constants.h"
 
 namespace {
@@ -147,7 +148,7 @@ void SiteDataSizeCollector::OnCookiesModelInfoLoaded(
   base::FilePath cookie_file_path = default_storage_partition_path_
       .Append(chrome::kCookieFilename);
   base::PostTaskWithTraitsAndReplyWithResult(
-      FROM_HERE, {base::MayBlock(), base::TaskPriority::BACKGROUND},
+      FROM_HERE, {base::MayBlock(), base::TaskPriority::BEST_EFFORT},
       base::Bind(&GetFileSizeBlocking, cookie_file_path),
       base::Bind(&SiteDataSizeCollector::OnStorageSizeFetched,
                  weak_ptr_factory_.GetWeakPtr()));
@@ -172,11 +173,11 @@ void SiteDataSizeCollector::OnLocalStorageModelInfoLoaded(
 }
 
 void SiteDataSizeCollector::OnIndexedDBModelInfoLoaded(
-    const std::list<content::IndexedDBInfo>& indexed_db_info_list) {
+    const std::list<content::StorageUsageInfo>& indexed_db_info_list) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
   int64_t total_size = 0;
   for (const auto& indexed_db_info : indexed_db_info_list)
-    total_size += indexed_db_info.size;
+    total_size += indexed_db_info.total_size_bytes;
   OnStorageSizeFetched(total_size);
 }
 
@@ -202,7 +203,7 @@ void SiteDataSizeCollector::OnChannelIDModelInfoLoaded(
   base::FilePath channel_id_file_path = default_storage_partition_path_
       .Append(chrome::kChannelIDFilename);
   base::PostTaskWithTraitsAndReplyWithResult(
-      FROM_HERE, {base::MayBlock(), base::TaskPriority::BACKGROUND},
+      FROM_HERE, {base::MayBlock(), base::TaskPriority::BEST_EFFORT},
       base::Bind(&GetFileSizeBlocking, channel_id_file_path),
       base::Bind(&SiteDataSizeCollector::OnStorageSizeFetched,
                  weak_ptr_factory_.GetWeakPtr()));
@@ -239,7 +240,7 @@ void SiteDataSizeCollector::OnFlashLSOInfoLoaded(
   base::FilePath pepper_data_dir_path = default_storage_partition_path_
       .Append(content::kPepperDataDirname);
   base::PostTaskWithTraitsAndReplyWithResult(
-      FROM_HERE, {base::MayBlock(), base::TaskPriority::BACKGROUND},
+      FROM_HERE, {base::MayBlock(), base::TaskPriority::BEST_EFFORT},
       base::Bind(&base::ComputeDirectorySize, pepper_data_dir_path),
       base::Bind(&SiteDataSizeCollector::OnStorageSizeFetched,
                  weak_ptr_factory_.GetWeakPtr()));

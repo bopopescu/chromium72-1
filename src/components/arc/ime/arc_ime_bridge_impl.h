@@ -38,11 +38,13 @@ class ArcImeBridgeImpl : public ArcImeBridge, public mojom::ImeHost {
                                         bool is_available) override;
 
   // mojom::ImeHost overrides:
-  void OnTextInputTypeChanged(mojom::TextInputType type) override;
+  void OnTextInputTypeChanged(ui::TextInputType type,
+                              bool is_personalized_learning_allowed,
+                              int32_t flags) override;
   void OnCursorRectChanged(const gfx::Rect& rect,
                            bool screen_coordinates) override;
   void OnCancelComposition() override;
-  void ShowImeIfNeeded() override;
+  void ShowVirtualKeyboardIfEnabled() override;
   void OnCursorRectChangedWithSurroundingText(const gfx::Rect& rect,
                                               const gfx::Range& text_range,
                                               const std::string& text_in_range,

@@ -7,6 +7,7 @@
 
 #include <stdint.h>
 
+#include <limits>
 #include <string>
 #include <type_traits>
 
@@ -21,6 +22,7 @@
 #include "cc/paint/paint_canvas.h"
 #include "cc/paint/paint_export.h"
 #include "cc/paint/paint_flags.h"
+#include "cc/paint/skottie_wrapper.h"
 #include "cc/paint/transfer_cache_deserialize_helper.h"
 #include "cc/paint/transfer_cache_serialize_helper.h"
 #include "third_party/skia/include/core/SkColor.h"
@@ -37,6 +39,8 @@ class SkStrikeServer;
 // PaintOpBuffer is a reimplementation of SkLiteDL.
 // See: third_party/skia/src/core/SkLiteDL.h.
 namespace cc {
+class ClientPaintCache;
+class ServicePaintCache;
 
 class CC_PAINT_EXPORT ThreadsafeMatrix : public SkMatrix {
  public:
@@ -81,6 +85,7 @@ enum class PaintOpType : uint8_t {
   DrawRecord,
   DrawRect,
   DrawRRect,
+  DrawSkottie,
   DrawTextBlob,
   Noop,
   Restore,
@@ -142,22 +147,32 @@ class CC_PAINT_EXPORT PaintOp {
   struct CC_PAINT_EXPORT SerializeOptions {
     SerializeOptions(ImageProvider* image_provider,
                      TransferCacheSerializeHelper* transfer_cache,
+                     ClientPaintCache* paint_cache,
                      SkCanvas* canvas,
                      SkStrikeServer* strike_server,
                      SkColorSpace* color_space,
                      bool can_use_lcd_text,
+                     bool context_supports_distance_field_text,
+                     int max_texture_size,
+                     size_t max_texture_bytes,
                      const SkMatrix& original_ctm);
+    SerializeOptions(const SerializeOptions&);
+    SerializeOptions& operator=(const SerializeOptions&);
 
     // Required.
     ImageProvider* image_provider = nullptr;
     TransferCacheSerializeHelper* transfer_cache = nullptr;
+    ClientPaintCache* paint_cache = nullptr;
     SkCanvas* canvas = nullptr;
     SkStrikeServer* strike_server = nullptr;
     SkColorSpace* color_space = nullptr;
     bool can_use_lcd_text = false;
+    bool context_supports_distance_field_text = true;
+    int max_texture_size = 0;
+    size_t max_texture_bytes = 0.f;
+    SkMatrix original_ctm = SkMatrix::I();
 
     // Optional.
-    SkMatrix original_ctm = SkMatrix::I();
     // The flags to use when serializing this op. This can be used to override
     // the flags serialized with the op. Valid only for PaintOpWithFlags.
     const PaintFlags* flags_to_serialize = nullptr;
@@ -165,10 +180,14 @@ class CC_PAINT_EXPORT PaintOp {
 
   struct CC_PAINT_EXPORT DeserializeOptions {
     DeserializeOptions(TransferCacheDeserializeHelper* transfer_cache,
+                       ServicePaintCache* paint_cache,
                        SkStrikeClient* strike_client);
     TransferCacheDeserializeHelper* transfer_cache = nullptr;
-    uint32_t raster_color_space_id = gfx::ColorSpace::kInvalidId;
+    ServicePaintCache* paint_cache = nullptr;
     SkStrikeClient* strike_client = nullptr;
+    uint32_t raster_color_space_id = gfx::ColorSpace::kInvalidId;
+    // Do a DumpWithoutCrashing when serialization fails.
+    bool crash_dump_on_failure = false;
   };
 
   // Indicates how PaintImages are serialized.
@@ -591,7 +610,10 @@ class CC_PAINT_EXPORT DrawOvalOp final : public PaintOpWithFlags {
                               const PaintFlags* flags,
                               SkCanvas* canvas,
                               const PlaybackParams& params);
-  bool IsValid() const { return flags.IsValid() && oval.isFinite(); }
+  bool IsValid() const {
+    // Reproduce SkRRect::isValid without converting.
+    return flags.IsValid() && oval.isFinite() && oval.isSorted();
+  }
   static bool AreEqual(const PaintOp* left, const PaintOp* right);
   HAS_SERIALIZATION_FUNCTIONS();
 
@@ -683,11 +705,34 @@ class CC_PAINT_EXPORT DrawRRectOp final : public PaintOpWithFlags {
   DrawRRectOp() : PaintOpWithFlags(kType) {}
 };
 
+class CC_PAINT_EXPORT DrawSkottieOp final : public PaintOp {
+ public:
+  static constexpr PaintOpType kType = PaintOpType::DrawSkottie;
+  static constexpr bool kIsDrawOp = true;
+  DrawSkottieOp(scoped_refptr<SkottieWrapper> skottie, SkRect dst, float t);
+  ~DrawSkottieOp();
+  static void Raster(const DrawSkottieOp* op,
+                     SkCanvas* canvas,
+                     const PlaybackParams& params);
+  bool IsValid() const {
+    return !!skottie && !dst.isEmpty() && t >= 0 && t <= 1.f;
+  }
+  static bool AreEqual(const PaintOp* left, const PaintOp* right);
+  HAS_SERIALIZATION_FUNCTIONS();
+
+  scoped_refptr<SkottieWrapper> skottie;
+  SkRect dst;
+  float t;
+
+ private:
+  DrawSkottieOp();
+};
+
 class CC_PAINT_EXPORT DrawTextBlobOp final : public PaintOpWithFlags {
  public:
   static constexpr PaintOpType kType = PaintOpType::DrawTextBlob;
   static constexpr bool kIsDrawOp = true;
-  DrawTextBlobOp(scoped_refptr<PaintTextBlob> blob,
+  DrawTextBlobOp(sk_sp<SkTextBlob> blob,
                  SkScalar x,
                  SkScalar y,
                  const PaintFlags& flags);
@@ -700,7 +745,7 @@ class CC_PAINT_EXPORT DrawTextBlobOp final : public PaintOpWithFlags {
   static bool AreEqual(const PaintOp* left, const PaintOp* right);
   HAS_SERIALIZATION_FUNCTIONS();
 
-  scoped_refptr<PaintTextBlob> blob;
+  sk_sp<SkTextBlob> blob;
   SkScalar x;
   SkScalar y;
 
@@ -866,9 +911,7 @@ using LargestPaintOp =
 class CC_PAINT_EXPORT PaintOpBuffer : public SkRefCnt {
  public:
   enum { kInitialBufferSize = 4096 };
-  // It's not necessarily the case that the op with the maximum alignment
-  // requirements is also the biggest op, but for now that's true.
-  static constexpr size_t PaintOpAlign = alignof(DrawDRRectOp);
+  static constexpr size_t PaintOpAlign = 8;
   static inline size_t ComputeOpSkip(size_t sizeof_op) {
     return MathUtil::UncheckedRoundUp(sizeof_op, PaintOpBuffer::PaintOpAlign);
   }
@@ -921,8 +964,9 @@ class CC_PAINT_EXPORT PaintOpBuffer : public SkRefCnt {
   void push(Args&&... args) {
     static_assert(std::is_convertible<T, PaintOp>::value, "T not a PaintOp.");
     static_assert(alignof(T) <= PaintOpAlign, "");
-
-    size_t skip = ComputeOpSkip(sizeof(T));
+    static_assert(sizeof(T) < std::numeric_limits<uint16_t>::max(),
+                  "Cannot fit op code in skip");
+    uint16_t skip = static_cast<uint16_t>(ComputeOpSkip(sizeof(T)));
     T* op = reinterpret_cast<T*>(AllocatePaintOp(skip));
 
     new (op) T{std::forward<Args>(args)...};

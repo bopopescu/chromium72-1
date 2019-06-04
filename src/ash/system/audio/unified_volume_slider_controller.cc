@@ -15,7 +15,12 @@ using chromeos::CrasAudioHandler;
 
 namespace ash {
 
-UnifiedVolumeSliderController::UnifiedVolumeSliderController() = default;
+UnifiedVolumeSliderController::UnifiedVolumeSliderController(
+    UnifiedVolumeSliderController::Delegate* delegate)
+    : delegate_(delegate) {
+  DCHECK(delegate);
+}
+
 UnifiedVolumeSliderController::~UnifiedVolumeSliderController() = default;
 
 views::View* UnifiedVolumeSliderController::CreateView() {
@@ -26,12 +31,16 @@ views::View* UnifiedVolumeSliderController::CreateView() {
 
 void UnifiedVolumeSliderController::ButtonPressed(views::Button* sender,
                                                   const ui::Event& event) {
-  bool mute_on = !CrasAudioHandler::Get()->IsOutputMuted();
-  if (mute_on)
-    base::RecordAction(base::UserMetricsAction("StatusArea_Audio_Muted"));
-  else
-    base::RecordAction(base::UserMetricsAction("StatusArea_Audio_Unmuted"));
-  CrasAudioHandler::Get()->SetOutputMute(mute_on);
+  if (sender == slider_->button()) {
+    bool mute_on = !CrasAudioHandler::Get()->IsOutputMuted();
+    if (mute_on)
+      base::RecordAction(base::UserMetricsAction("StatusArea_Audio_Muted"));
+    else
+      base::RecordAction(base::UserMetricsAction("StatusArea_Audio_Unmuted"));
+    CrasAudioHandler::Get()->SetOutputMute(mute_on);
+  } else if (sender == slider_->more_button()) {
+    delegate_->OnAudioSettingsButtonClicked();
+  }
 }
 
 void UnifiedVolumeSliderController::SliderValueChanged(
@@ -52,11 +61,9 @@ void UnifiedVolumeSliderController::SliderValueChanged(
   CrasAudioHandler::Get()->SetOutputVolumePercent(level);
 
   // If the volume is above certain level and it's muted, it should be unmuted.
-  // If the volume is below certain level and it's unmuted, it should be muted.
-  if (CrasAudioHandler::Get()->IsOutputMuted() ==
+  if (CrasAudioHandler::Get()->IsOutputMuted() &&
       level > CrasAudioHandler::Get()->GetOutputDefaultVolumeMuteThreshold()) {
-    CrasAudioHandler::Get()->SetOutputMute(
-        !CrasAudioHandler::Get()->IsOutputMuted());
+    CrasAudioHandler::Get()->SetOutputMute(false);
   }
 }
 

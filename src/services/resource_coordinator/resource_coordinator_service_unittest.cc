@@ -6,6 +6,7 @@
 
 #include "base/macros.h"
 #include "base/run_loop.h"
+#include "base/test/scoped_task_environment.h"
 #include "mojo/public/cpp/bindings/binding.h"
 #include "services/resource_coordinator/public/cpp/frame_resource_coordinator.h"
 #include "services/resource_coordinator/public/cpp/page_resource_coordinator.h"
@@ -13,15 +14,23 @@
 #include "services/resource_coordinator/public/cpp/system_resource_coordinator.h"
 #include "services/resource_coordinator/public/mojom/coordination_unit_provider.mojom.h"
 #include "services/resource_coordinator/public/mojom/service_constants.mojom.h"
-#include "services/service_manager/public/cpp/service.h"
-#include "services/service_manager/public/cpp/service_test.h"
+#include "services/resource_coordinator/resource_coordinator_service.h"
+#include "services/service_manager/public/cpp/test/test_connector_factory.h"
+#include "testing/gtest/include/gtest/gtest.h"
 
 namespace resource_coordinator {
 
-class ResourceCoordinatorTest : public service_manager::test::ServiceTest {
+class ResourceCoordinatorTest : public testing::Test {
  public:
   ResourceCoordinatorTest()
-      : service_manager::test::ServiceTest("resource_coordinator_unittests") {}
+      : service_(
+            test_connector_factory_.RegisterInstance(mojom::kServiceName)) {
+    // The resource_coordinator service may attempt to connect to the metrics
+    // service. Allow these requests to be silently ignored rather than
+    // bringing up or simulating the metrics service just for unit tests.
+    test_connector_factory_.set_ignore_unknown_service_requests(true);
+  }
+
   ~ResourceCoordinatorTest() override {}
 
   void GetIDCallback(const CoordinationUnitID& cu_id) {
@@ -54,12 +63,15 @@ class ResourceCoordinatorTest : public service_manager::test::ServiceTest {
   }
 
  protected:
-  void SetUp() override {
-    service_manager::test::ServiceTest::SetUp();
-    connector()->StartService(mojom::kServiceName);
+  service_manager::Connector* connector() {
+    return test_connector_factory_.GetDefaultConnector();
   }
 
  private:
+  base::test::ScopedTaskEnvironment task_environment_;
+  service_manager::TestConnectorFactory test_connector_factory_;
+  ResourceCoordinatorService service_;
+
   base::RunLoop* loop_ = nullptr;
 
   DISALLOW_COPY_AND_ASSIGN(ResourceCoordinatorTest);
@@ -71,13 +83,15 @@ TEST_F(ResourceCoordinatorTest, ResourceCoordinatorInstantiate) {
   connector()->BindInterface(mojom::kServiceName, mojo::MakeRequest(&provider));
 
   // Create and test a dummy FrameCU.
-  CoordinationUnitID frame_id(CoordinationUnitType::kFrame, "");
+  CoordinationUnitID frame_id(CoordinationUnitType::kFrame,
+                              CoordinationUnitID::RANDOM_ID);
   mojom::FrameCoordinationUnitPtr frame_cu;
   provider->CreateFrameCoordinationUnit(mojo::MakeRequest(&frame_cu), frame_id);
   TestCU(frame_cu);
 
   // Create and test a dummy PageCU.
-  CoordinationUnitID page_id(CoordinationUnitType::kPage, "");
+  CoordinationUnitID page_id(CoordinationUnitType::kPage,
+                             CoordinationUnitID::RANDOM_ID);
   mojom::PageCoordinationUnitPtr page_cu;
   provider->CreatePageCoordinationUnit(mojo::MakeRequest(&page_cu), page_id);
   TestCU(page_cu);
@@ -88,7 +102,8 @@ TEST_F(ResourceCoordinatorTest, ResourceCoordinatorInstantiate) {
   TestCU(system_cu);
 
   // Create and test a dummy ProcessCU.
-  CoordinationUnitID process_id(CoordinationUnitType::kProcess, "");
+  CoordinationUnitID process_id(CoordinationUnitType::kProcess,
+                                CoordinationUnitID::RANDOM_ID);
   mojom::ProcessCoordinationUnitPtr process_cu;
   provider->CreateProcessCoordinationUnit(mojo::MakeRequest(&process_cu),
                                           process_id);

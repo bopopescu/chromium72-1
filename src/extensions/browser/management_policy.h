@@ -49,7 +49,8 @@ class ManagementPolicy {
 
     // A human-readable name for this provider, for use in debug messages.
     // Implementers should return an empty string in non-debug builds, to save
-    // executable size.
+    // executable size, and should not call this in builds without DCHECKs
+    // enabled.
     virtual std::string GetDebugPolicyProviderName() const = 0;
 
     // Providers should return false if a user may not install the |extension|,
@@ -59,6 +60,12 @@ class ManagementPolicy {
     // name or the semantics. crbug.com/461747
     virtual bool UserMayLoad(const Extension* extension,
                              base::string16* error) const;
+
+    // Returns false if the user should not be allowed to install the given
+    // |extension|. By default, this forwards to UserMayLoad() (since a user
+    // should not be able to install an extension they cannot load).
+    virtual bool UserMayInstall(const Extension* extension,
+                                base::string16* error) const;
 
     // Providers should return false if a user may not enable, disable, or
     // uninstall the |extension|, or change its usage options (incognito
@@ -117,6 +124,11 @@ class ManagementPolicy {
   // DISABLE_BLOCKED_BY_POLICY.
   // TODO(treib,pam): Misleading name; see comment in Provider. crbug.com/461747
   bool UserMayLoad(const Extension* extension, base::string16* error) const;
+
+  // Returns false if the user should not be allowed to install the given
+  // |extension|. By default, this forwards to UserMayLoad() (since a user
+  // should not be able to install an extension they cannot load).
+  bool UserMayInstall(const Extension* extension, base::string16* error) const;
 
   // Returns true if the user is permitted to enable, disable, or uninstall the
   // given extension, or change the extension's usage options (incognito mode,

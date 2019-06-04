@@ -23,7 +23,7 @@
   <div class="flex-container">
     <div class="flex">
       <div class="search-container">
-        <input type="text" id="search" placeholder="Search flags" tabindex="1">
+        <input type="text" id="search" placeholder="Search flags" tabindex="1" autocomplete="off">
         <button class="clear-search" title="Clear search" tabindex="2"></button>
       </div>
     </div>
@@ -205,10 +205,10 @@
         <div class="flex">
 <if expr="not is_ios">
           <button class="experiment-restart-button" type="button" tabindex="9">
-<if expr="not is_chromeos">
+<if expr="not chromeos">
           Relaunch Now
 </if>
-<if expr="is_chromeos">
+<if expr="chromeos">
           Restart Now
 </if>
           </button>

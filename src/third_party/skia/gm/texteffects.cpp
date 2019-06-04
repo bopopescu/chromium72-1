@@ -7,13 +7,17 @@
 
 #include "gm.h"
 #include "sk_tool_utils.h"
+
 #include "SkBlurMask.h"
 #include "SkBlurMaskFilter.h"
 #include "SkReadBuffer.h"
 #include "SkTextBlob.h"
+#include "SkTo.h"
 #include "SkWriteBuffer.h"
 
 #include "Sk2DPathEffect.h"
+
+#ifdef SK_SUPPORT_LEGACY_TEXTINTERCEPTS
 
 static SkPath create_underline(const SkTDArray<SkScalar>& intersections,
         SkScalar last, SkScalar finalPos,
@@ -282,3 +286,5 @@ DEF_SIMPLE_GM(fancyunderlinebars, canvas, 1500, 460) {
         canvas->translate(0, textSize * 1.3f);
     }
 }
+#endif
+

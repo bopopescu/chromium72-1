@@ -13,10 +13,10 @@
 #include "base/location.h"
 #include "base/message_loop/message_loop.h"
 #include "base/run_loop.h"
-#include "base/single_thread_task_runner.h"
+#include "base/sequenced_task_runner.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/test/test_timeouts.h"
-#include "base/threading/thread_task_runner_handle.h"
+#include "base/threading/sequenced_task_runner_handle.h"
 #include "components/sync/base/cancelation_signal.h"
 #include "components/sync/base/extensions_activity.h"
 #include "components/sync/base/model_type_test_util.h"
@@ -81,15 +81,15 @@ void PumpLoop() {
   // Do it this way instead of RunAllPending to pump loop exactly once
   // (necessary in the presence of timers; see comment in
   // QuitLoopNow).
-  base::ThreadTaskRunnerHandle::Get()->PostTask(FROM_HERE,
-                                                base::Bind(&QuitLoopNow));
+  base::SequencedTaskRunnerHandle::Get()->PostTask(
+      FROM_HERE, base::BindOnce(&QuitLoopNow));
   RunLoop();
 }
 
 void PumpLoopFor(TimeDelta time) {
   // Allow the loop to run for the specified amount of time.
-  base::ThreadTaskRunnerHandle::Get()->PostDelayedTask(
-      FROM_HERE, base::Bind(&QuitLoopNow), time);
+  base::SequencedTaskRunnerHandle::Get()->PostDelayedTask(
+      FROM_HERE, base::BindOnce(&QuitLoopNow), time);
   RunLoop();
 }
 
@@ -202,9 +202,9 @@ class SyncSchedulerImplTest : public testing::Test {
 
   // This stops the scheduler synchronously.
   void StopSyncScheduler() {
-    base::ThreadTaskRunnerHandle::Get()->PostTask(
-        FROM_HERE, base::Bind(&SyncSchedulerImplTest::DoQuitLoopNow,
-                              weak_ptr_factory_.GetWeakPtr()));
+    base::SequencedTaskRunnerHandle::Get()->PostTask(
+        FROM_HERE, base::BindOnce(&SyncSchedulerImplTest::DoQuitLoopNow,
+                                  weak_ptr_factory_.GetWeakPtr()));
     RunLoop();
   }
 
@@ -228,11 +228,10 @@ class SyncSchedulerImplTest : public testing::Test {
   ModelTypeSet GetThrottledTypes() {
     ModelTypeSet throttled_types;
     ModelTypeSet blocked_types = scheduler_->nudge_tracker_.GetBlockedTypes();
-    for (ModelTypeSet::Iterator type_it = blocked_types.First(); type_it.Good();
-         type_it.Inc()) {
-      if (scheduler_->nudge_tracker_.GetTypeBlockingMode(type_it.Get()) ==
+    for (ModelType type : blocked_types) {
+      if (scheduler_->nudge_tracker_.GetTypeBlockingMode(type) ==
           WaitInterval::THROTTLED) {
-        throttled_types.Put(type_it.Get());
+        throttled_types.Put(type);
       }
     }
     return throttled_types;
@@ -241,11 +240,10 @@ class SyncSchedulerImplTest : public testing::Test {
   ModelTypeSet GetBackedOffTypes() {
     ModelTypeSet backed_off_types;
     ModelTypeSet blocked_types = scheduler_->nudge_tracker_.GetBlockedTypes();
-    for (ModelTypeSet::Iterator type_it = blocked_types.First(); type_it.Good();
-         type_it.Inc()) {
-      if (scheduler_->nudge_tracker_.GetTypeBlockingMode(type_it.Get()) ==
+    for (ModelType type : blocked_types) {
+      if (scheduler_->nudge_tracker_.GetTypeBlockingMode(type) ==
           WaitInterval::EXPONENTIAL_BACKOFF) {
-        backed_off_types.Put(type_it.Get());
+        backed_off_types.Put(type);
       }
     }
     return backed_off_types;
@@ -405,15 +403,12 @@ TEST_F(SyncSchedulerImplTest, Config) {
   StartSyncConfiguration();
 
   CallbackCounter ready_counter;
-  CallbackCounter retry_counter;
   ConfigurationParams params(
       sync_pb::SyncEnums::RECONFIGURATION, model_types,
-      base::Bind(&CallbackCounter::Callback, base::Unretained(&ready_counter)),
-      base::Bind(&CallbackCounter::Callback, base::Unretained(&retry_counter)));
+      base::Bind(&CallbackCounter::Callback, base::Unretained(&ready_counter)));
   scheduler()->ScheduleConfiguration(params);
   PumpLoop();
   ASSERT_EQ(1, ready_counter.times_called());
-  ASSERT_EQ(0, retry_counter.times_called());
 }
 
 // Simulate a failure and make sure the config request is retried.
@@ -433,21 +428,17 @@ TEST_F(SyncSchedulerImplTest, ConfigWithBackingOff) {
                       RecordSyncShare(&times, false)));
 
   CallbackCounter ready_counter;
-  CallbackCounter retry_counter;
   ConfigurationParams params(
       sync_pb::SyncEnums::RECONFIGURATION, model_types,
-      base::Bind(&CallbackCounter::Callback, base::Unretained(&ready_counter)),
-      base::Bind(&CallbackCounter::Callback, base::Unretained(&retry_counter)));
+      base::Bind(&CallbackCounter::Callback, base::Unretained(&ready_counter)));
   scheduler()->ScheduleConfiguration(params);
   RunLoop();
   ASSERT_EQ(0, ready_counter.times_called());
-  ASSERT_EQ(1, retry_counter.times_called());
 
   // RunLoop() will trigger TryCanaryJob which will retry configuration.
   // Since retry_task was already called it shouldn't be called again.
   RunLoop();
   ASSERT_EQ(0, ready_counter.times_called());
-  ASSERT_EQ(1, retry_counter.times_called());
 
   Mock::VerifyAndClearExpectations(syncer());
 
@@ -478,15 +469,12 @@ TEST_F(SyncSchedulerImplTest, ConfigWithStop) {
                       RecordSyncShare(&times, false)));
 
   CallbackCounter ready_counter;
-  CallbackCounter retry_counter;
   ConfigurationParams params(
       sync_pb::SyncEnums::RECONFIGURATION, model_types,
-      base::Bind(&CallbackCounter::Callback, base::Unretained(&ready_counter)),
-      base::Bind(&CallbackCounter::Callback, base::Unretained(&retry_counter)));
+      base::Bind(&CallbackCounter::Callback, base::Unretained(&ready_counter)));
   scheduler()->ScheduleConfiguration(params);
   PumpLoop();
   ASSERT_EQ(0, ready_counter.times_called());
-  ASSERT_EQ(0, retry_counter.times_called());
 }
 
 // Verify that in the absence of valid auth token the command will fail.
@@ -499,15 +487,12 @@ TEST_F(SyncSchedulerImplTest, ConfigNoAuthToken) {
   StartSyncConfiguration();
 
   CallbackCounter ready_counter;
-  CallbackCounter retry_counter;
   ConfigurationParams params(
       sync_pb::SyncEnums::RECONFIGURATION, model_types,
-      base::Bind(&CallbackCounter::Callback, base::Unretained(&ready_counter)),
-      base::Bind(&CallbackCounter::Callback, base::Unretained(&retry_counter)));
+      base::Bind(&CallbackCounter::Callback, base::Unretained(&ready_counter)));
   scheduler()->ScheduleConfiguration(params);
   PumpLoop();
   ASSERT_EQ(0, ready_counter.times_called());
-  ASSERT_EQ(1, retry_counter.times_called());
 }
 
 // Verify that in the absence of valid auth token the command will pass if local
@@ -526,15 +511,12 @@ TEST_F(SyncSchedulerImplTest, ConfigNoAuthTokenLocalSync) {
   StartSyncConfiguration();
 
   CallbackCounter ready_counter;
-  CallbackCounter retry_counter;
   ConfigurationParams params(
       sync_pb::SyncEnums::RECONFIGURATION, model_types,
-      base::Bind(&CallbackCounter::Callback, base::Unretained(&ready_counter)),
-      base::Bind(&CallbackCounter::Callback, base::Unretained(&retry_counter)));
+      base::Bind(&CallbackCounter::Callback, base::Unretained(&ready_counter)));
   scheduler()->ScheduleConfiguration(params);
   PumpLoop();
   ASSERT_EQ(1, ready_counter.times_called());
-  ASSERT_EQ(0, retry_counter.times_called());
 }
 
 // Issue a nudge when the config has failed. Make sure both the config and
@@ -553,15 +535,12 @@ TEST_F(SyncSchedulerImplTest, NudgeWithConfigWithBackingOff) {
       .WillOnce(DoAll(Invoke(test_util::SimulateConfigureFailed),
                       RecordSyncShare(&times, false)));
   CallbackCounter ready_counter;
-  CallbackCounter retry_counter;
   ConfigurationParams params(
       sync_pb::SyncEnums::RECONFIGURATION, model_types,
-      base::Bind(&CallbackCounter::Callback, base::Unretained(&ready_counter)),
-      base::Bind(&CallbackCounter::Callback, base::Unretained(&retry_counter)));
+      base::Bind(&CallbackCounter::Callback, base::Unretained(&ready_counter)));
   scheduler()->ScheduleConfiguration(params);
   RunLoop();
   ASSERT_EQ(0, ready_counter.times_called());
-  ASSERT_EQ(1, retry_counter.times_called());
   Mock::VerifyAndClearExpectations(syncer());
 
   // Ask for a nudge while dealing with repeated configure failure.
@@ -631,7 +610,7 @@ TEST_F(SyncSchedulerImplTest, NudgeCoalescingWithDifferentTimings) {
   TimeDelta delay = TimeDelta::FromDays(1);
 
   std::map<ModelType, TimeDelta> delay_map;
-  delay_map[types1.First().Get()] = delay;
+  delay_map[*(types1.begin())] = delay;
   scheduler()->OnReceivedCustomNudgeDelays(delay_map);
   scheduler()->ScheduleLocalNudge(types1, FROM_HERE);
   scheduler()->ScheduleLocalNudge(types2, FROM_HERE);
@@ -838,15 +817,12 @@ TEST_F(SyncSchedulerImplTest, ThrottlingDoesThrottle) {
   StartSyncConfiguration();
 
   CallbackCounter ready_counter;
-  CallbackCounter retry_counter;
   ConfigurationParams params(
       sync_pb::SyncEnums::RECONFIGURATION, types,
-      base::Bind(&CallbackCounter::Callback, base::Unretained(&ready_counter)),
-      base::Bind(&CallbackCounter::Callback, base::Unretained(&retry_counter)));
+      base::Bind(&CallbackCounter::Callback, base::Unretained(&ready_counter)));
   scheduler()->ScheduleConfiguration(params);
   PumpLoop();
   ASSERT_EQ(0, ready_counter.times_called());
-  ASSERT_EQ(1, retry_counter.times_called());
 }
 
 TEST_F(SyncSchedulerImplTest, ThrottlingExpiresFromPoll) {
@@ -922,15 +898,12 @@ TEST_F(SyncSchedulerImplTest, ThrottlingExpiresFromConfigure) {
   StartSyncConfiguration();
 
   CallbackCounter ready_counter;
-  CallbackCounter retry_counter;
   ConfigurationParams params(
       sync_pb::SyncEnums::RECONFIGURATION, types,
-      base::Bind(&CallbackCounter::Callback, base::Unretained(&ready_counter)),
-      base::Bind(&CallbackCounter::Callback, base::Unretained(&retry_counter)));
+      base::Bind(&CallbackCounter::Callback, base::Unretained(&ready_counter)));
   scheduler()->ScheduleConfiguration(params);
   PumpLoop();
   EXPECT_EQ(0, ready_counter.times_called());
-  EXPECT_EQ(1, retry_counter.times_called());
   EXPECT_TRUE(scheduler()->IsGlobalThrottle());
 
   RunLoop();
@@ -1255,15 +1228,12 @@ TEST_F(SyncSchedulerImplTest, ConfigurationMode) {
                       RecordSyncShare(&times, true)))
       .RetiresOnSaturation();
   CallbackCounter ready_counter;
-  CallbackCounter retry_counter;
   ConfigurationParams params(
       sync_pb::SyncEnums::RECONFIGURATION, config_types,
-      base::Bind(&CallbackCounter::Callback, base::Unretained(&ready_counter)),
-      base::Bind(&CallbackCounter::Callback, base::Unretained(&retry_counter)));
+      base::Bind(&CallbackCounter::Callback, base::Unretained(&ready_counter)));
   scheduler()->ScheduleConfiguration(params);
   RunLoop();
   ASSERT_EQ(1, ready_counter.times_called());
-  ASSERT_EQ(0, retry_counter.times_called());
 
   Mock::VerifyAndClearExpectations(syncer());
 
@@ -1347,11 +1317,9 @@ TEST_F(BackoffTriggersSyncSchedulerImplTest, FailGetEncryptionKey) {
 
   ModelTypeSet types(THEMES);
   CallbackCounter ready_counter;
-  CallbackCounter retry_counter;
   ConfigurationParams params(
       sync_pb::SyncEnums::RECONFIGURATION, types,
-      base::Bind(&CallbackCounter::Callback, base::Unretained(&ready_counter)),
-      base::Bind(&CallbackCounter::Callback, base::Unretained(&retry_counter)));
+      base::Bind(&CallbackCounter::Callback, base::Unretained(&ready_counter)));
   scheduler()->ScheduleConfiguration(params);
   RunLoop();
 
@@ -1396,15 +1364,12 @@ TEST_F(SyncSchedulerImplTest, BackoffDropsJobs) {
   StartSyncConfiguration();
 
   CallbackCounter ready_counter;
-  CallbackCounter retry_counter;
   ConfigurationParams params(
       sync_pb::SyncEnums::RECONFIGURATION, types,
-      base::Bind(&CallbackCounter::Callback, base::Unretained(&ready_counter)),
-      base::Bind(&CallbackCounter::Callback, base::Unretained(&retry_counter)));
+      base::Bind(&CallbackCounter::Callback, base::Unretained(&ready_counter)));
   scheduler()->ScheduleConfiguration(params);
   PumpLoop();
   ASSERT_EQ(0, ready_counter.times_called());
-  ASSERT_EQ(1, retry_counter.times_called());
 }
 
 // Test that backoff is shaping traffic properly with consecutive errors.
@@ -1551,7 +1516,7 @@ TEST_F(SyncSchedulerImplTest, StartWhenNotConnected) {
   base::RunLoop().RunUntilIdle();
 
   scheduler()->OnConnectionStatusChange(
-      net::NetworkChangeNotifier::CONNECTION_WIFI);
+      network::mojom::ConnectionType::CONNECTION_WIFI);
   connection()->SetServerReachable();
   connection()->UpdateConnectionStatus();
   base::RunLoop().RunUntilIdle();
@@ -1577,7 +1542,7 @@ TEST_F(SyncSchedulerImplTest, SyncShareNotCalledWhenDisconnected) {
   // Simulate a disconnect signal. The scheduler should not retry the previously
   // failed nudge.
   scheduler()->OnConnectionStatusChange(
-      net::NetworkChangeNotifier::CONNECTION_NONE);
+      network::mojom::ConnectionType::CONNECTION_NONE);
   base::RunLoop().RunUntilIdle();
 }
 
@@ -1602,7 +1567,7 @@ TEST_F(SyncSchedulerImplTest, ServerConnectionChangeDuringBackoff) {
 
   // Before we run the scheduled canary, trigger a server connection change.
   scheduler()->OnConnectionStatusChange(
-      net::NetworkChangeNotifier::CONNECTION_WIFI);
+      network::mojom::ConnectionType::CONNECTION_WIFI);
   connection()->SetServerReachable();
   connection()->UpdateConnectionStatus();
   base::RunLoop().RunUntilIdle();
@@ -1635,7 +1600,7 @@ TEST_F(SyncSchedulerImplTest, ConnectionChangeCanaryPreemptedByNudge) {
 
   // Before we run the scheduled canary, trigger a server connection change.
   scheduler()->OnConnectionStatusChange(
-      net::NetworkChangeNotifier::CONNECTION_WIFI);
+      network::mojom::ConnectionType::CONNECTION_WIFI);
   PumpLoop();
   connection()->SetServerReachable();
   connection()->UpdateConnectionStatus();
@@ -1655,17 +1620,15 @@ TEST_F(SyncSchedulerImplTest, DoubleCanaryInConfigure) {
 
   ModelTypeSet model_types(THEMES);
   CallbackCounter ready_counter;
-  CallbackCounter retry_counter;
   ConfigurationParams params(
       sync_pb::SyncEnums::RECONFIGURATION, model_types,
-      base::Bind(&CallbackCounter::Callback, base::Unretained(&ready_counter)),
-      base::Bind(&CallbackCounter::Callback, base::Unretained(&retry_counter)));
+      base::Bind(&CallbackCounter::Callback, base::Unretained(&ready_counter)));
   scheduler()->ScheduleConfiguration(params);
 
   scheduler()->OnConnectionStatusChange(
-      net::NetworkChangeNotifier::CONNECTION_WIFI);
+      network::mojom::ConnectionType::CONNECTION_WIFI);
   scheduler()->OnConnectionStatusChange(
-      net::NetworkChangeNotifier::CONNECTION_WIFI);
+      network::mojom::ConnectionType::CONNECTION_WIFI);
 
   PumpLoop();  // Run the nudge, that will fail and schedule a quick retry.
 }

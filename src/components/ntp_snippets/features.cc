@@ -5,6 +5,7 @@
 #include "components/ntp_snippets/features.h"
 
 #include "base/feature_list.h"
+#include "base/metrics/field_trial_params.h"
 #include "base/time/clock.h"
 #include "components/ntp_snippets/category_rankers/click_based_category_ranker.h"
 #include "components/ntp_snippets/category_rankers/constant_category_ranker.h"
@@ -20,22 +21,17 @@ const base::Feature kRemoteSuggestionsBackendFeature{
 
 // Keep sorted, and keep nullptr at the end.
 const base::Feature* const kAllFeatures[] = {
-    &kArticleSuggestionsExpandableHeader,
     &kArticleSuggestionsFeature,
     &kBookmarkSuggestionsFeature,
     &kBreakingNewsPushFeature,
     &kCategoryOrder,
     &kCategoryRanker,
     &kContentSuggestionsDebugLog,
-    &kForeignSessionsSuggestionsFeature,
     &kIncreasedVisibility,
     &kKeepPrefetchedContentSuggestions,
     &kNotificationsFeature,
     &kPublisherFaviconsFromNewServerFeature,
     &kRemoteSuggestionsBackendFeature};
-
-const base::Feature kArticleSuggestionsExpandableHeader{
-    "NTPArticleSuggestionsExpandableHeader", base::FEATURE_DISABLED_BY_DEFAULT};
 
 const base::Feature kArticleSuggestionsFeature{
     "NTPArticleSuggestions", base::FEATURE_ENABLED_BY_DEFAULT};
@@ -46,9 +42,6 @@ const base::Feature kBookmarkSuggestionsFeature{
 const base::Feature kIncreasedVisibility{"NTPSnippetsIncreasedVisibility",
                                          base::FEATURE_ENABLED_BY_DEFAULT};
 
-const base::Feature kForeignSessionsSuggestionsFeature{
-    "NTPForeignSessionsSuggestions", base::FEATURE_DISABLED_BY_DEFAULT};
-
 const base::Feature kBreakingNewsPushFeature{"BreakingNewsPush",
                                              base::FEATURE_DISABLED_BY_DEFAULT};
 
@@ -57,7 +50,7 @@ const base::Feature kCategoryRanker{"ContentSuggestionsCategoryRanker",
 
 const base::Feature kPublisherFaviconsFromNewServerFeature{
     "ContentSuggestionsFaviconsFromNewServer",
-    base::FEATURE_DISABLED_BY_DEFAULT};
+    base::FEATURE_ENABLED_BY_DEFAULT};
 
 const base::Feature kRemoteSuggestionsEmulateM58FetchingSchedule{
     "RemoteSuggestionsEmulateM58FetchingSchedule",
@@ -164,6 +157,20 @@ std::vector<const base::Feature*> GetAllFeatures() {
   // Skip the last feature as it's a nullptr.
   return std::vector<const base::Feature*>(
       kAllFeatures, kAllFeatures + arraysize(kAllFeatures));
+}
+
+// Default referrer for the content suggestions.
+const char kDefaultReferrerUrl[] =
+    "https://www.googleapis.com/auth/chrome-content-suggestions";
+
+// Provides ability to customize the referrer URL.
+// When specifying a referrer through a field trial, it must contain a path.
+// In case of default value above the path is empty, but it is specified.
+base::FeatureParam<std::string> kArticleSuggestionsReferrerURLParam{
+    &kArticleSuggestionsFeature, "referrer_url", kDefaultReferrerUrl};
+
+std::string GetContentSuggestionsReferrerURL() {
+  return kArticleSuggestionsReferrerURLParam.Get();
 }
 
 }  // namespace ntp_snippets

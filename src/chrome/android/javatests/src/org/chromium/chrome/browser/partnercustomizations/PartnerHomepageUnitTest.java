@@ -72,25 +72,29 @@ public class PartnerHomepageUnitTest {
     @Test
     @SmallTest
     @Feature({"Homepage"})
+    @DisabledTest(message = "crbug.com/901769")
     public void testHomepageFeatureFlag() throws InterruptedException {
         // Checks that #isHomepageProviderAvailableAndEnabled returned false
         Assert.assertNull(PartnerBrowserCustomizations.getHomePageUrl());
 
         FeatureUtilities.resetHomePageButtonForceEnabledForTests();
-        ChromePreferenceManager.getInstance().setHomePageButtonForceEnabled(true);
+        ChromePreferenceManager.getInstance().writeBoolean(
+                ChromePreferenceManager.HOME_PAGE_BUTTON_FORCE_ENABLED_KEY, true);
         Assert.assertTrue(HomepageManager.isHomepageEnabled());
         Assert.assertEquals(UrlConstants.NTP_NON_NATIVE_URL, HomepageManager.getHomepageUri());
 
         mHomepageManager.setPrefHomepageEnabled(false);
         Assert.assertFalse(HomepageManager.isHomepageEnabled());
-
         FeatureUtilities.resetHomePageButtonForceEnabledForTests();
-        ChromePreferenceManager.getInstance().setHomePageButtonForceEnabled(false);
+
+        ChromePreferenceManager.getInstance().writeBoolean(
+                ChromePreferenceManager.HOME_PAGE_BUTTON_FORCE_ENABLED_KEY, false);
         mHomepageManager.setPrefHomepageEnabled(true);
         Assert.assertFalse(HomepageManager.isHomepageEnabled());
 
         // Test that a cached value (homepage enabled = false) is being read.
-        ChromePreferenceManager.getInstance().setHomePageButtonForceEnabled(true);
+        ChromePreferenceManager.getInstance().writeBoolean(
+                ChromePreferenceManager.HOME_PAGE_BUTTON_FORCE_ENABLED_KEY, true);
         mHomepageManager.setPrefHomepageEnabled(true);
         Assert.assertFalse(HomepageManager.isHomepageEnabled());
 

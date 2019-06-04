@@ -31,8 +31,8 @@ using EntityDataPtr = ProtoValuePtr<EntityData, EntityDataTraits>;
 using EntityDataList = std::vector<EntityDataPtr>;
 
 // A light-weight container for sync entity data which represents either
-// local data created on the ModelTypeSyncBridge side or remote data created
-// on ModelTypeWorker.
+// local data created on the local model side or remote data created on
+// ModelTypeWorker.
 // EntityData is supposed to be wrapped and passed by reference.
 struct EntityData {
  public:
@@ -52,6 +52,16 @@ struct EntityData {
   // except bookmarks. Sent to the server as
   // SyncEntity::client_defined_unique_tag.
   std::string client_tag_hash;
+
+  // A GUID that identifies the the sync client who initially committed this
+  // entity. It's relevant only for bookmarks. See the definition in sync.proto
+  // for more details.
+  std::string originator_cache_guid;
+
+  // The local item id of this entry from the client that initially committed
+  // this entity. It's relevant only for bookmarks. See the definition in
+  // sync.proto for more details.
+  std::string originator_client_item_id;
 
   // This tag identifies this item as being a uniquely instanced item.  An item
   // can't have both a client_defined_unique_tag and a
@@ -93,6 +103,14 @@ struct EntityData {
   // when entity id is updated with commit response while EntityData for next
   // local change is cached in ProcessorEntityTracker.
   EntityDataPtr UpdateId(const std::string& new_id) const WARN_UNUSED_RESULT;
+
+  // Makes a copy of EntityData and updates its client tag hash to
+  // |new_client_tag_hash|. This is needed when a Wallet entity id is updated
+  // and it has no client_tag_hash.
+  // TODO(crbug.com/874001): Remove this when we have a longer term fix for
+  // wallet data.
+  EntityDataPtr UpdateClientTagHash(
+      const std::string& new_client_tag_hash) const WARN_UNUSED_RESULT;
 
   // Makes a copy of EntityData and updates its specifics to |new_specifics|.
   // This is needed when specifics is updated after decryption in the

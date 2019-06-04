@@ -16,6 +16,7 @@
 #include "gpu/command_buffer/client/shared_memory_limits.h"
 #include "gpu/ipc/common/surface_handle.h"
 #include "gpu/ipc/gl_in_process_context.h"
+#include "gpu/ipc/test_gpu_thread_holder.h"
 #include "media/base/video_frame.h"
 #include "media/base/video_util.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -43,17 +44,15 @@ class YUVReadbackTest : public testing::Test {
     attributes.sample_buffers = 1;
     attributes.bind_generates_resource = false;
 
-    context_ = gpu::GLInProcessContext::CreateWithoutInit();
-    auto result =
-        context_->Initialize(nullptr,                 /* service */
-                             nullptr,                 /* surface */
-                             true,                    /* offscreen */
-                             gpu::kNullSurfaceHandle, /* window */
-                             attributes, gpu::SharedMemoryLimits(),
-                             nullptr, /* gpu_memory_buffer_manager */
-                             nullptr, /* image_factory */
-                             nullptr /* gpu_channel_manager_delegate */,
-                             base::ThreadTaskRunnerHandle::Get());
+    context_ = std::make_unique<gpu::GLInProcessContext>();
+    auto result = context_->Initialize(
+        gpu::GetTestGpuThreadHolder()->GetTaskExecutor(), nullptr, /* surface */
+        true,                    /* offscreen */
+        gpu::kNullSurfaceHandle, /* window */
+        attributes, gpu::SharedMemoryLimits(),
+        nullptr, /* gpu_memory_buffer_manager */
+        nullptr, /* image_factory */
+        base::ThreadTaskRunnerHandle::Get());
     DCHECK_EQ(result, gpu::ContextResult::kSuccess);
     gl_ = context_->GetImplementation();
     gpu::ContextSupport* support = context_->GetImplementation();
@@ -356,9 +355,8 @@ class YUVReadbackTest : public testing::Test {
                     GL_UNSIGNED_BYTE, input_pixels.getPixels());
 
     gpu::Mailbox mailbox;
-    gl_->GenMailboxCHROMIUM(mailbox.name);
-    EXPECT_FALSE(mailbox.IsZero());
     gl_->ProduceTextureDirectCHROMIUM(src_texture, mailbox.name);
+    EXPECT_FALSE(mailbox.IsZero());
 
     gpu::SyncToken sync_token;
     gl_->GenSyncTokenCHROMIUM(sync_token.GetData());
@@ -484,7 +482,7 @@ TEST_F(YUVReadbackTest, YUVReadbackOptTest) {
     // This test uses the gpu.service/gpu_decoder tracing events to detect how
     // many scaling passes are actually performed by the YUV readback pipeline.
     StartTracing(TRACE_DISABLED_BY_DEFAULT(
-        "gpu.service") "," TRACE_DISABLED_BY_DEFAULT("gpu_decoder"));
+        "gpu.service") "," TRACE_DISABLED_BY_DEFAULT("gpu.decoder"));
 
     // Run a test with no size scaling, just planerization.
     TestYUVReadback(800, 400, 800, 400, 0, 0, 1, false, use_mrt == 1,
